@@ -6233,16 +6233,59 @@ emitMethodArgDispatch e method argOps =
   let groups = implGroupsForMethod e method
   match groups
     [] => emitDefaultArgTag e method argOps
-    _ => match argTagUncovered e method
-      -- no inheriting head: the arm set the entries give IS the whole answer, and
-      -- every branch below is the pre-#1046 one (byte-identical IR).
-      [] => match groups
-        [g] => emitImplCallSat e (implFnName (groupSymTag g) method) argOps (methodArityOfTag e method (groupTag g)) LTInt
-        _ => emitArgTagDispatch e method groups argOps
-      -- #1046: at least one DECLARED impl of this interface inherits the default
-      -- rather than defining [method], so it contributes no entry and is missing
-      -- from `groups`.  A runtime test is required even at one group.
-      uncovered => emitArgTagDispatchWith e method groups uncovered argOps
+    _ => emitArgTagRoute e method groups (argTagUncovered e method) (argTagUncoveredRaw e method) argOps
+
+-- #1075: the route decision reads BOTH the emittable inheriting heads and the RAW
+-- ones, because "no arm can be emitted for this head" is NOT the same answer as "no
+-- head inherits the default", and collapsing the two re-created #1046 exactly.
+--
+-- [emittable] is [raw] filtered by `argDefaultEmittable`.  A primitive head (`Int`)
+-- that inherits the default owns no runtime constructors, so it is dropped from
+-- [emittable] and cannot carry a `@mdk_default_<method>_<tag>` arm.  Before this fix
+-- the empty [emittable] alone selected the pre-#1046 branch, whose single-group arm is
+-- an UNCONDITIONAL direct call with no tag test — so an `Int` receiver silently ran the
+-- one impl that happens to define the method, exit 0, at every opt level.  Measured:
+-- `meow|meow` where `medaka run` and the semantics both say `woof|meow`.
+--
+-- The correction is to keep the tag-tested CHAIN whenever any head inherits, even when
+-- none of the inheriting heads can be given an arm.  The chain still tests only the
+-- heads it can test; the untestable ones reach the terminal `@mdk_dispatch_no_impl`
+-- trap, which is loud.  That is the property `argDefaultEmittable`'s own comment already
+-- claimed and did not have: a dropped head falls to the trap, it does not fold back into
+-- a silent direct call.  Dispatching an `Int` receiver CORRECTLY needs primitive-typed
+-- arg-tag discrimination, which is a separate change (#1075 stays open for it).
+--
+-- Byte-identity: [raw] is empty for every method whose every declared impl defines it,
+-- so those sites take the same branch as before.  With [raw] non-empty and [emittable]
+-- empty at >=2 groups, `emitArgTagDispatchWith … []` emits exactly what
+-- `emitArgTagDispatch` did.  Only the single-group case changes shape.
+emitArgTagRoute : Emit -> String -> List ImplGroup -> List String -> List String -> List String -> (String, LTy)
+-- no inheriting head at all: the arm set the entries give IS the whole answer, and
+-- every branch here is the pre-#1046 one (byte-identical IR).
+emitArgTagRoute e method groups [] [] argOps =
+  emitArgTagCovered e method groups argOps
+-- heads inherit the default but none can carry an arm — chain anyway, so the
+-- untestable heads reach the loud terminal instead of the shortcut.
+emitArgTagRoute e method groups [] _ argOps =
+  emitArgTagDispatchWith e method groups [] argOps
+-- #1046: at least one DECLARED impl of this interface inherits the default rather than
+-- defining [method], so it contributes no entry and is missing from `groups`.  A runtime
+-- test is required even at one group.
+emitArgTagRoute e method groups uncovered _ argOps =
+  emitArgTagDispatchWith e method groups uncovered argOps
+
+-- the fully-covered route: the pre-#1046 shape, split out only so `emitArgTagRoute`
+-- does not match on a parameter it also passes through.
+emitArgTagCovered : Emit -> String -> List ImplGroup -> List String -> (String, LTy)
+emitArgTagCovered e method [g] argOps =
+  emitImplCallSat
+    e
+    (implFnName (groupSymTag g) method)
+    argOps
+    (methodArityOfTag e method (groupTag g))
+    LTInt
+emitArgTagCovered e method groups argOps =
+  emitArgTagDispatch e method groups argOps
 
 -- #1046: the interface's declared-impl route keys that no ENTRY of [method] covers
 -- — the method-less impls, which inherit the interface default.  `implGroupsForMethod`
@@ -6261,9 +6304,16 @@ emitMethodArgDispatch e method argOps =
 -- Empty for every program in which each declared impl defines the method, which is
 -- why the IR of such a program is byte-identical.
 argTagUncovered : Emit -> String -> List String
-argTagUncovered e method = match defaultFor e method
+argTagUncovered e method =
+  filterList (argDefaultEmittable e method) (argTagUncoveredRaw e method)
+
+-- #1075: the same set BEFORE `argDefaultEmittable` drops the heads no arm can be built
+-- for.  Non-empty means "some declared impl inherits the default", which is the fact the
+-- route decision needs; `argTagUncovered` answers the narrower "and we can emit its arm".
+argTagUncoveredRaw : Emit -> String -> List String
+argTagUncoveredRaw e method = match defaultFor e method
   None => []
-  Some _ => filterList (argDefaultEmittable e method) (tagsMinus (ifaceTags e (methodIfaceOfInput e method)) (implEntryTags e (implsOf e method)))
+  Some _ => tagsMinus (ifaceTags e (methodIfaceOfInput e method)) (implEntryTags e (implsOf e method))
 
 -- can a `@mdk_default_<method>_<tag>` arm actually be CALLED from an arg-tag site?
 -- Three ways it cannot, each of which would make the arm worse than no arm:

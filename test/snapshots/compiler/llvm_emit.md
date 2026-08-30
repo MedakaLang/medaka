@@ -1,5 +1,5 @@
 # META
-source_lines=12313
+source_lines=12363
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -6237,16 +6237,59 @@ emitMethodArgDispatch e method argOps =
   let groups = implGroupsForMethod e method
   match groups
     [] => emitDefaultArgTag e method argOps
-    _ => match argTagUncovered e method
-      -- no inheriting head: the arm set the entries give IS the whole answer, and
-      -- every branch below is the pre-#1046 one (byte-identical IR).
-      [] => match groups
-        [g] => emitImplCallSat e (implFnName (groupSymTag g) method) argOps (methodArityOfTag e method (groupTag g)) LTInt
-        _ => emitArgTagDispatch e method groups argOps
-      -- #1046: at least one DECLARED impl of this interface inherits the default
-      -- rather than defining [method], so it contributes no entry and is missing
-      -- from `groups`.  A runtime test is required even at one group.
-      uncovered => emitArgTagDispatchWith e method groups uncovered argOps
+    _ => emitArgTagRoute e method groups (argTagUncovered e method) (argTagUncoveredRaw e method) argOps
+
+-- #1075: the route decision reads BOTH the emittable inheriting heads and the RAW
+-- ones, because "no arm can be emitted for this head" is NOT the same answer as "no
+-- head inherits the default", and collapsing the two re-created #1046 exactly.
+--
+-- [emittable] is [raw] filtered by `argDefaultEmittable`.  A primitive head (`Int`)
+-- that inherits the default owns no runtime constructors, so it is dropped from
+-- [emittable] and cannot carry a `@mdk_default_<method>_<tag>` arm.  Before this fix
+-- the empty [emittable] alone selected the pre-#1046 branch, whose single-group arm is
+-- an UNCONDITIONAL direct call with no tag test — so an `Int` receiver silently ran the
+-- one impl that happens to define the method, exit 0, at every opt level.  Measured:
+-- `meow|meow` where `medaka run` and the semantics both say `woof|meow`.
+--
+-- The correction is to keep the tag-tested CHAIN whenever any head inherits, even when
+-- none of the inheriting heads can be given an arm.  The chain still tests only the
+-- heads it can test; the untestable ones reach the terminal `@mdk_dispatch_no_impl`
+-- trap, which is loud.  That is the property `argDefaultEmittable`'s own comment already
+-- claimed and did not have: a dropped head falls to the trap, it does not fold back into
+-- a silent direct call.  Dispatching an `Int` receiver CORRECTLY needs primitive-typed
+-- arg-tag discrimination, which is a separate change (#1075 stays open for it).
+--
+-- Byte-identity: [raw] is empty for every method whose every declared impl defines it,
+-- so those sites take the same branch as before.  With [raw] non-empty and [emittable]
+-- empty at >=2 groups, `emitArgTagDispatchWith … []` emits exactly what
+-- `emitArgTagDispatch` did.  Only the single-group case changes shape.
+emitArgTagRoute : Emit -> String -> List ImplGroup -> List String -> List String -> List String -> (String, LTy)
+-- no inheriting head at all: the arm set the entries give IS the whole answer, and
+-- every branch here is the pre-#1046 one (byte-identical IR).
+emitArgTagRoute e method groups [] [] argOps =
+  emitArgTagCovered e method groups argOps
+-- heads inherit the default but none can carry an arm — chain anyway, so the
+-- untestable heads reach the loud terminal instead of the shortcut.
+emitArgTagRoute e method groups [] _ argOps =
+  emitArgTagDispatchWith e method groups [] argOps
+-- #1046: at least one DECLARED impl of this interface inherits the default rather than
+-- defining [method], so it contributes no entry and is missing from `groups`.  A runtime
+-- test is required even at one group.
+emitArgTagRoute e method groups uncovered _ argOps =
+  emitArgTagDispatchWith e method groups uncovered argOps
+
+-- the fully-covered route: the pre-#1046 shape, split out only so `emitArgTagRoute`
+-- does not match on a parameter it also passes through.
+emitArgTagCovered : Emit -> String -> List ImplGroup -> List String -> (String, LTy)
+emitArgTagCovered e method [g] argOps =
+  emitImplCallSat
+    e
+    (implFnName (groupSymTag g) method)
+    argOps
+    (methodArityOfTag e method (groupTag g))
+    LTInt
+emitArgTagCovered e method groups argOps =
+  emitArgTagDispatch e method groups argOps
 
 -- #1046: the interface's declared-impl route keys that no ENTRY of [method] covers
 -- — the method-less impls, which inherit the interface default.  `implGroupsForMethod`
@@ -6265,9 +6308,16 @@ emitMethodArgDispatch e method argOps =
 -- Empty for every program in which each declared impl defines the method, which is
 -- why the IR of such a program is byte-identical.
 argTagUncovered : Emit -> String -> List String
-argTagUncovered e method = match defaultFor e method
+argTagUncovered e method =
+  filterList (argDefaultEmittable e method) (argTagUncoveredRaw e method)
+
+-- #1075: the same set BEFORE `argDefaultEmittable` drops the heads no arm can be built
+-- for.  Non-empty means "some declared impl inherits the default", which is the fact the
+-- route decision needs; `argTagUncovered` answers the narrower "and we can emit its arm".
+argTagUncoveredRaw : Emit -> String -> List String
+argTagUncoveredRaw e method = match defaultFor e method
   None => []
-  Some _ => filterList (argDefaultEmittable e method) (tagsMinus (ifaceTags e (methodIfaceOfInput e method)) (implEntryTags e (implsOf e method)))
+  Some _ => tagsMinus (ifaceTags e (methodIfaceOfInput e method)) (implEntryTags e (implsOf e method))
 
 -- can a `@mdk_default_<method>_<tag>` arm actually be CALLED from an arg-tag site?
 -- Three ways it cannot, each of which would make the arm worse than no arm:
@@ -13336,9 +13386,18 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DFunDef false "tagsMinus" ((PList) PWild) (EListLit))
 (DFunDef false "tagsMinus" ((PCons (PVar "t") (PVar "rest")) (PVar "covered")) (EIf (EApp (EApp (EVar "contains") (EVar "t")) (EVar "covered")) (EApp (EApp (EVar "tagsMinus") (EVar "rest")) (EVar "covered")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "t") (EApp (EApp (EVar "tagsMinus") (EVar "rest")) (EVar "covered"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "emitMethodArgDispatch" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy"))))))
-(DFunDef false "emitMethodArgDispatch" ((PVar "e") (PVar "method") (PVar "argOps")) (EBlock (DoLet false false (PVar "groups") (EApp (EApp (EVar "implGroupsForMethod") (EVar "e")) (EVar "method"))) (DoExpr (EMatch (EVar "groups") (arm (PList) () (EApp (EApp (EApp (EVar "emitDefaultArgTag") (EVar "e")) (EVar "method")) (EVar "argOps"))) (arm PWild () (EMatch (EApp (EApp (EVar "argTagUncovered") (EVar "e")) (EVar "method")) (arm (PList) () (EMatch (EVar "groups") (arm (PList (PVar "g")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitImplCallSat") (EVar "e")) (EApp (EApp (EVar "implFnName") (EApp (EVar "groupSymTag") (EVar "g"))) (EVar "method"))) (EVar "argOps")) (EApp (EApp (EApp (EVar "methodArityOfTag") (EVar "e")) (EVar "method")) (EApp (EVar "groupTag") (EVar "g")))) (EVar "LTInt"))) (arm PWild () (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatch") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "argOps"))))) (arm (PVar "uncovered") () (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatchWith") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "uncovered")) (EVar "argOps")))))))))
+(DFunDef false "emitMethodArgDispatch" ((PVar "e") (PVar "method") (PVar "argOps")) (EBlock (DoLet false false (PVar "groups") (EApp (EApp (EVar "implGroupsForMethod") (EVar "e")) (EVar "method"))) (DoExpr (EMatch (EVar "groups") (arm (PList) () (EApp (EApp (EApp (EVar "emitDefaultArgTag") (EVar "e")) (EVar "method")) (EVar "argOps"))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagRoute") (EVar "e")) (EVar "method")) (EVar "groups")) (EApp (EApp (EVar "argTagUncovered") (EVar "e")) (EVar "method"))) (EApp (EApp (EVar "argTagUncoveredRaw") (EVar "e")) (EVar "method"))) (EVar "argOps")))))))
+(DTypeSig false "emitArgTagRoute" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy")))))))))
+(DFunDef false "emitArgTagRoute" ((PVar "e") (PVar "method") (PVar "groups") (PList) (PList) (PVar "argOps")) (EApp (EApp (EApp (EApp (EVar "emitArgTagCovered") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "argOps")))
+(DFunDef false "emitArgTagRoute" ((PVar "e") (PVar "method") (PVar "groups") (PList) PWild (PVar "argOps")) (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatchWith") (EVar "e")) (EVar "method")) (EVar "groups")) (EListLit)) (EVar "argOps")))
+(DFunDef false "emitArgTagRoute" ((PVar "e") (PVar "method") (PVar "groups") (PVar "uncovered") PWild (PVar "argOps")) (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatchWith") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "uncovered")) (EVar "argOps")))
+(DTypeSig false "emitArgTagCovered" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy")))))))
+(DFunDef false "emitArgTagCovered" ((PVar "e") (PVar "method") (PList (PVar "g")) (PVar "argOps")) (EApp (EApp (EApp (EApp (EApp (EVar "emitImplCallSat") (EVar "e")) (EApp (EApp (EVar "implFnName") (EApp (EVar "groupSymTag") (EVar "g"))) (EVar "method"))) (EVar "argOps")) (EApp (EApp (EApp (EVar "methodArityOfTag") (EVar "e")) (EVar "method")) (EApp (EVar "groupTag") (EVar "g")))) (EVar "LTInt")))
+(DFunDef false "emitArgTagCovered" ((PVar "e") (PVar "method") (PVar "groups") (PVar "argOps")) (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatch") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "argOps")))
 (DTypeSig false "argTagUncovered" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "argTagUncovered" ((PVar "e") (PVar "method")) (EMatch (EApp (EApp (EVar "defaultFor") (EVar "e")) (EVar "method")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" PWild) () (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "argDefaultEmittable") (EVar "e")) (EVar "method"))) (EApp (EApp (EVar "tagsMinus") (EApp (EApp (EVar "ifaceTags") (EVar "e")) (EApp (EApp (EVar "methodIfaceOfInput") (EVar "e")) (EVar "method")))) (EApp (EApp (EVar "implEntryTags") (EVar "e")) (EApp (EApp (EVar "implsOf") (EVar "e")) (EVar "method"))))))))
+(DFunDef false "argTagUncovered" ((PVar "e") (PVar "method")) (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "argDefaultEmittable") (EVar "e")) (EVar "method"))) (EApp (EApp (EVar "argTagUncoveredRaw") (EVar "e")) (EVar "method"))))
+(DTypeSig false "argTagUncoveredRaw" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "argTagUncoveredRaw" ((PVar "e") (PVar "method")) (EMatch (EApp (EApp (EVar "defaultFor") (EVar "e")) (EVar "method")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" PWild) () (EApp (EApp (EVar "tagsMinus") (EApp (EApp (EVar "ifaceTags") (EVar "e")) (EApp (EApp (EVar "methodIfaceOfInput") (EVar "e")) (EVar "method")))) (EApp (EApp (EVar "implEntryTags") (EVar "e")) (EApp (EApp (EVar "implsOf") (EVar "e")) (EVar "method")))))))
 (DTypeSig false "argDefaultEmittable" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "argDefaultEmittable" ((PVar "e") (PVar "method") (PVar "tag")) (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "ctorsOfType") (EVar "e")) (EVar "tag"))) (EBinOp "<=" (EApp (EVar "listLen") (EApp (EApp (EVar "methodConstraintIfacesOf") (EVar "e")) (EVar "method"))) (ELit (LInt 0)))) (EBinOp "<=" (EApp (EApp (EApp (EVar "innerDefaultReqCount") (EVar "e")) (EVar "method")) (EVar "tag")) (ELit (LInt 0)))))
 (DTypeSig false "emitDefaultArgTag" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy"))))))
@@ -15656,9 +15715,18 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DFunDef false "tagsMinus" ((PList) PWild) (EListLit))
 (DFunDef false "tagsMinus" ((PCons (PVar "t") (PVar "rest")) (PVar "covered")) (EIf (EApp (EApp (EVar "contains") (EVar "t")) (EVar "covered")) (EApp (EApp (EVar "tagsMinus") (EVar "rest")) (EVar "covered")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "t") (EApp (EApp (EVar "tagsMinus") (EVar "rest")) (EVar "covered"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "emitMethodArgDispatch" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy"))))))
-(DFunDef false "emitMethodArgDispatch" ((PVar "e") (PVar "method") (PVar "argOps")) (EBlock (DoLet false false (PVar "groups") (EApp (EApp (EVar "implGroupsForMethod") (EVar "e")) (EVar "method"))) (DoExpr (EMatch (EVar "groups") (arm (PList) () (EApp (EApp (EApp (EVar "emitDefaultArgTag") (EVar "e")) (EVar "method")) (EVar "argOps"))) (arm PWild () (EMatch (EApp (EApp (EVar "argTagUncovered") (EVar "e")) (EVar "method")) (arm (PList) () (EMatch (EVar "groups") (arm (PList (PVar "g")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitImplCallSat") (EVar "e")) (EApp (EApp (EVar "implFnName") (EApp (EVar "groupSymTag") (EVar "g"))) (EVar "method"))) (EVar "argOps")) (EApp (EApp (EApp (EVar "methodArityOfTag") (EVar "e")) (EVar "method")) (EApp (EVar "groupTag") (EVar "g")))) (EVar "LTInt"))) (arm PWild () (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatch") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "argOps"))))) (arm (PVar "uncovered") () (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatchWith") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "uncovered")) (EVar "argOps")))))))))
+(DFunDef false "emitMethodArgDispatch" ((PVar "e") (PVar "method") (PVar "argOps")) (EBlock (DoLet false false (PVar "groups") (EApp (EApp (EVar "implGroupsForMethod") (EVar "e")) (EVar "method"))) (DoExpr (EMatch (EVar "groups") (arm (PList) () (EApp (EApp (EApp (EVar "emitDefaultArgTag") (EVar "e")) (EVar "method")) (EVar "argOps"))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagRoute") (EVar "e")) (EVar "method")) (EVar "groups")) (EApp (EApp (EVar "argTagUncovered") (EVar "e")) (EVar "method"))) (EApp (EApp (EVar "argTagUncoveredRaw") (EVar "e")) (EVar "method"))) (EVar "argOps")))))))
+(DTypeSig false "emitArgTagRoute" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy")))))))))
+(DFunDef false "emitArgTagRoute" ((PVar "e") (PVar "method") (PVar "groups") (PList) (PList) (PVar "argOps")) (EApp (EApp (EApp (EApp (EVar "emitArgTagCovered") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "argOps")))
+(DFunDef false "emitArgTagRoute" ((PVar "e") (PVar "method") (PVar "groups") (PList) PWild (PVar "argOps")) (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatchWith") (EVar "e")) (EVar "method")) (EVar "groups")) (EListLit)) (EVar "argOps")))
+(DFunDef false "emitArgTagRoute" ((PVar "e") (PVar "method") (PVar "groups") (PVar "uncovered") PWild (PVar "argOps")) (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatchWith") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "uncovered")) (EVar "argOps")))
+(DTypeSig false "emitArgTagCovered" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy")))))))
+(DFunDef false "emitArgTagCovered" ((PVar "e") (PVar "method") (PList (PVar "g")) (PVar "argOps")) (EApp (EApp (EApp (EApp (EApp (EVar "emitImplCallSat") (EVar "e")) (EApp (EApp (EVar "implFnName") (EApp (EVar "groupSymTag") (EVar "g"))) (EVar "method"))) (EVar "argOps")) (EApp (EApp (EApp (EVar "methodArityOfTag") (EVar "e")) (EVar "method")) (EApp (EVar "groupTag") (EVar "g")))) (EVar "LTInt")))
+(DFunDef false "emitArgTagCovered" ((PVar "e") (PVar "method") (PVar "groups") (PVar "argOps")) (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatch") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "argOps")))
 (DTypeSig false "argTagUncovered" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "argTagUncovered" ((PVar "e") (PVar "method")) (EMatch (EApp (EApp (EVar "defaultFor") (EVar "e")) (EVar "method")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" PWild) () (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "argDefaultEmittable") (EVar "e")) (EVar "method"))) (EApp (EApp (EVar "tagsMinus") (EApp (EApp (EVar "ifaceTags") (EVar "e")) (EApp (EApp (EVar "methodIfaceOfInput") (EVar "e")) (EVar "method")))) (EApp (EApp (EVar "implEntryTags") (EVar "e")) (EApp (EApp (EVar "implsOf") (EVar "e")) (EVar "method"))))))))
+(DFunDef false "argTagUncovered" ((PVar "e") (PVar "method")) (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "argDefaultEmittable") (EVar "e")) (EVar "method"))) (EApp (EApp (EVar "argTagUncoveredRaw") (EVar "e")) (EVar "method"))))
+(DTypeSig false "argTagUncoveredRaw" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "argTagUncoveredRaw" ((PVar "e") (PVar "method")) (EMatch (EApp (EApp (EVar "defaultFor") (EVar "e")) (EVar "method")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" PWild) () (EApp (EApp (EVar "tagsMinus") (EApp (EApp (EVar "ifaceTags") (EVar "e")) (EApp (EApp (EVar "methodIfaceOfInput") (EVar "e")) (EVar "method")))) (EApp (EApp (EVar "implEntryTags") (EVar "e")) (EApp (EApp (EVar "implsOf") (EVar "e")) (EVar "method")))))))
 (DTypeSig false "argDefaultEmittable" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "argDefaultEmittable" ((PVar "e") (PVar "method") (PVar "tag")) (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "ctorsOfType") (EVar "e")) (EVar "tag"))) (EBinOp "<=" (EApp (EVar "listLen") (EApp (EApp (EVar "methodConstraintIfacesOf") (EVar "e")) (EVar "method"))) (ELit (LInt 0)))) (EBinOp "<=" (EApp (EApp (EApp (EVar "innerDefaultReqCount") (EVar "e")) (EVar "method")) (EVar "tag")) (ELit (LInt 0)))))
 (DTypeSig false "emitDefaultArgTag" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy"))))))
