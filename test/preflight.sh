@@ -52,6 +52,15 @@ mdk_warn_if_tmp_full
 BASE_ARG="${1:-}"
 cd "$ROOT" || exit 1
 
+# Normalize the changed-path set once, then feed every derivation pass from the
+# same newline-delimited file. A path can therefore never become shell syntax or
+# collide with a here-document delimiter. The trap owns the only scratch path.
+CHANGED_PATHS="$(mktemp "${TMPDIR:-/tmp}/medaka-preflight-changed.XXXXXX")" || {
+  echo "preflight: mktemp failed while preparing changed paths" >&2
+  exit 1
+}
+trap 'rm -f "$CHANGED_PATHS"' EXIT HUP INT TERM
+
 # ── Where the changed-file list comes from ───────────────────────────────────
 #
 # Normally: git, relative to $BASE. But CI cannot use that. On a `pull_request`
@@ -69,7 +78,7 @@ if [ -n "${PREFLIGHT_CHANGED_FILE:-}" ]; then
     echo "preflight: PREFLIGHT_CHANGED_FILE='$PREFLIGHT_CHANGED_FILE' does not exist."
     exit 1
   }
-  changed="$(cat "$PREFLIGHT_CHANGED_FILE")"
+  LC_ALL=C sort -u "$PREFLIGHT_CHANGED_FILE" | grep -v '^$' > "$CHANGED_PATHS"
   BASE="(PREFLIGHT_CHANGED_FILE)"
 else
   # ── Which base ref? NOT `main`. ────────────────────────────────────────────
@@ -159,17 +168,21 @@ else
   # nothing is committed yet), so `preflight` printed "no changes vs main — nothing to do"
   # and exited 0 over a staged rewrite of the compiler. That is the same silent-green
   # failure as the gate-existence check below, one step earlier in the pipe.
-  changed="$(git diff --name-only "$BASE"...HEAD 2>/dev/null; git diff --name-only 2>/dev/null; git diff --name-only --cached 2>/dev/null; git ls-files -o --exclude-standard 2>/dev/null)"
+  {
+    git diff --name-only "$BASE"...HEAD 2>/dev/null
+    git diff --name-only 2>/dev/null
+    git diff --name-only --cached 2>/dev/null
+    git ls-files -o --exclude-standard 2>/dev/null
+  } | LC_ALL=C sort -u | grep -v '^$' > "$CHANGED_PATHS"
 fi
-changed="$(printf '%s\n' "$changed" | sort -u | grep -v '^$')"
 
-if [ -z "$changed" ]; then
+if [ ! -s "$CHANGED_PATHS" ]; then
   echo "preflight: no changes vs $BASE — nothing to do."
   exit 0
 fi
 
 echo "── changed vs $BASE ──────────────────────────────────────────"
-printf '%s\n' "$changed" | sed 's/^/  /'
+sed 's/^/  /' "$CHANGED_PATHS"
 echo
 
 # ── changed path → gate patterns ─────────────────────────────────────────────
@@ -1044,9 +1057,7 @@ while IFS= read -r f; do
         esac
       fi ;;
   esac
-done <<PREFLIGHT_CHANGED_PATHS
-$changed
-PREFLIGHT_CHANGED_PATHS
+done < "$CHANGED_PATHS"
 
 # ── the snapshot corpus is not a fixture dir; it is the SOURCE TREE ──────────
 # Every compiler/**.mdk and stdlib/*.mdk is IN the snapshot corpus (each one carries its
@@ -1089,9 +1100,7 @@ while IFS= read -r f; do
   case "$f" in
     compiler/*.mdk|compiler/*/*.mdk|stdlib/core.mdk|stdlib/runtime.mdk) add 'diff_compiler_selfproc' ;;
   esac
-done <<PREFLIGHT_CHANGED_PATHS
-$changed
-PREFLIGHT_CHANGED_PATHS
+done < "$CHANGED_PATHS"
 
 # ── the control-byte ratchet applies to EVERY tracked source file (#1987 F4) ──
 # diff_compiler_source_bytes.sh scans the whole tree (`git ls-files`, filtered by
@@ -1114,7 +1123,7 @@ PREFLIGHT_CHANGED_PATHS
 # ⚠️ This makes source_bytes the one gate a `<project>/` change derives from OUTSIDE
 # `<project>/test/`. test/diff_compiler_project_enrolment.sh's PREFLIGHT leg knows
 # about it BY NAME (see its UNIVERSAL_GATES) — any OTHER stray gate still fails there.
-if [ -n "$changed" ]; then
+if [ -s "$CHANGED_PATHS" ]; then
   add 'diff_compiler_source_bytes'
 fi
 
@@ -1154,9 +1163,7 @@ while IFS= read -r f; do
     [ -f "$ROOT/$f" ] || continue
     case " $inlang_run " in *" $f "*) ;; *) inlang_run="$inlang_run $f" ;; esac
   done
-done <<PREFLIGHT_CHANGED_PATHS
-$changed
-PREFLIGHT_CHANGED_PATHS
+done < "$CHANGED_PATHS"
 
 # ── resolve gates → the ORACLES they actually need ───────────────────────────
 #

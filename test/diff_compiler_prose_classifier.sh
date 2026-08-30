@@ -68,35 +68,40 @@ fi
 # side of each one. `test/README.md` and `testfile.md` straddle the
 # must-stay-first `test/*` arm; `LICENSE.md`/`LICENSED.md`/`LICENSEE` straddle
 # `LICENSE|LICENSE.*`; `docs/spec/SYNTAX.md` vs `docs/spec/SYNTAX.md.bak` is
-# the executable-spec carve-out and the path that only LOOKS like it.
-probes='
-test/gates.toml
-test/README.md
-test/wasm/run.sh
-test/parse_fixtures/rare_constructs.mdk
-testfile.md
-docs/spec/SYNTAX.md
-docs/spec/SYNTAX.md.bak
-docs/spec/LAYOUT-SEMANTICS.md
-docs/README.md
-docs/ops/CI-ARCHITECTURE.md
-docs/ops/notes.txt
-LICENSE
-LICENSE.txt
-LICENSE.md
-LICENSED.md
-LICENSEE
-README.md
-AGENTS.md
-PLAN.md
-Makefile
-compiler/tools/gate_cmd.mdk
-stdlib/core.mdk
-runtime/medaka_rt.c
-sqlite/test/select_oracle.sh
-playground/e2e/run.sh
-.github/workflows/ci.yml
-'
+# the executable-spec carve-out and the path that only LOOKS like it. Guide
+# probes exercise a real space-bearing child, a nested page, its extension
+# boundary, and the neighbouring-prefix boundary.
+printf '%s\n' \
+  'test/gates.toml' \
+  'test/README.md' \
+  'test/wasm/run.sh' \
+  'test/parse_fixtures/rare_constructs.mdk' \
+  'testfile.md' \
+  'docs/spec/SYNTAX.md' \
+  'docs/spec/SYNTAX.md.bak' \
+  'docs/spec/LAYOUT-SEMANTICS.md' \
+  'docs/README.md' \
+  'docs/ops/CI-ARCHITECTURE.md' \
+  'docs/ops/notes.txt' \
+  'docs/guide/0. Introduction.md' \
+  'docs/guide/nested/Deep Guide.md' \
+  'docs/guide/notes.txt' \
+  'docs/guidebook/0. Introduction.md' \
+  'LICENSE' \
+  'LICENSE.txt' \
+  'LICENSE.md' \
+  'LICENSED.md' \
+  'LICENSEE' \
+  'README.md' \
+  'AGENTS.md' \
+  'PLAN.md' \
+  'Makefile' \
+  'compiler/tools/gate_cmd.mdk' \
+  'stdlib/core.mdk' \
+  'runtime/medaka_rt.c' \
+  'sqlite/test/select_oracle.sh' \
+  'playground/e2e/run.sh' \
+  '.github/workflows/ci.yml' > "$TMP/probes"
 
 # ci.yml's copy: source the extracted block once per probe, with a stub
 # `nondoc` standing in for the detect job's (which also appends to a runner
@@ -105,7 +110,7 @@ nondoc() { docs_only=false; }
 
 fail=0
 n=0
-for f in $probes; do
+while IFS= read -r f; do
   n=$((n + 1))
   docs_only=true
   # shellcheck disable=SC1090
@@ -125,7 +130,7 @@ for f in $probes; do
     printf '  MISMATCH %s: ci.yml says %s, isProsePath says %s\n' "$f" "$ci_says" "$gate_says"
     fail=$((fail + 1))
   fi
-done
+done < "$TMP/probes"
 
 echo
 if [ "$fail" -eq 0 ]; then

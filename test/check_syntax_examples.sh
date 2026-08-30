@@ -25,10 +25,9 @@
 #   ```  / ```sh / ...    anything else (plain fence, `sh`, prose) is not a
 #                          Medaka example and is ignored.
 #
-# A block with NO exact closing ``` fence would leave `in_block` set at EOF;
-# that block is silently dropped rather than mis-checked. This has not
-# happened in practice (every selected block is well-formed) but is documented
-# here in case a future edit introduces one.
+# Fence info strings are parsed as a whole. Any other `medaka*` or `mdk*`
+# spelling is rejected, and EOF before the exact closing ``` fence is a
+# failure, so a typo or truncated example cannot silently leave the corpus.
 #
 # MUST NOT SILENTLY NO-OP: if any selected document checks zero examples, that
 # is a FAILURE (exit 1), not a quiet pass.
@@ -53,6 +52,7 @@ WORK="$(mktemp -d)" || { echo "check_syntax_examples: mktemp -d failed" >&2; exi
 trap 'rm -rf "$WORK"' EXIT INT TERM
 
 FENCE='```'
+NOCHECK_PREFIX="${FENCE}medaka-nocheck: "
 
 checked=0
 failed=0
@@ -150,39 +150,36 @@ check_document() {
     lineno=$((lineno + 1))
     if [ "$in_block" -eq 0 ]; then
       case "$line" in
-        ${FENCE}medaka-nocheck*)
-          reason="$(printf '%s\n' "$line" | sed 's/^```medaka-nocheck[: ]*//')"
-          echo "SKIPPED (nocheck) $doc_label:$lineno: ${reason:-no reason given}"
-          skipped=$((skipped + 1))
-          doc_skipped=$((doc_skipped + 1))
-          if [ -z "$reason" ]; then
-            failed=$((failed + 1))
-            doc_failed=$((doc_failed + 1))
-            fail_report="$fail_report
-=== FAIL: $doc_label:$lineno (medaka-nocheck requires a reason) ==="
-          fi
-          in_block=1
-          tag="nocheck"
-          ;;
-        ${FENCE}medaka-project)
-          in_block=1
-          tag="project"
-          block_start=$lineno
-          : > "$blockfile"
-          ;;
-        ${FENCE}medaka)
+        "$FENCE"medaka)
           in_block=1
           tag="medaka"
           block_start=$lineno
           : > "$blockfile"
           ;;
-        ${FENCE}mdk)
+        "$FENCE"medaka-project)
+          in_block=1
+          tag="project"
+          block_start=$lineno
+          : > "$blockfile"
+          ;;
+        "$NOCHECK_PREFIX"[![:space:]]*)
+          reason="${line#"$NOCHECK_PREFIX"}"
+          echo "SKIPPED (nocheck) $doc_label:$lineno: $reason"
+          skipped=$((skipped + 1))
+          doc_skipped=$((doc_skipped + 1))
+          in_block=1
+          tag="nocheck"
+          block_start=$lineno
+          ;;
+        ${FENCE}medaka*|${FENCE}mdk*)
+          info="${line#"$FENCE"}"
           failed=$((failed + 1))
           doc_failed=$((doc_failed + 1))
           fail_report="$fail_report
-=== FAIL: $doc_label:$lineno (legacy mdk fence; retag as medaka, medaka-project, or medaka-nocheck: reason) ==="
+=== FAIL: $doc_label:$lineno (invalid Medaka fence info string '$info'; expected medaka, medaka-project, or medaka-nocheck: reason) ==="
           in_block=1
-          tag="legacy"
+          tag="invalid"
+          block_start=$lineno
           ;;
         *)
           ;;
@@ -193,17 +190,24 @@ check_document() {
         case "$tag" in
           medaka) check_medaka_block "$blockfile" "$block_start" ;;
           project) check_project_block "$blockfile" "$block_start" ;;
-          nocheck|legacy) ;;
+          nocheck|invalid) ;;
         esac
         tag=""
       else
         case "$tag" in
-          nocheck|legacy) ;;
+          nocheck|invalid) ;;
           *) printf '%s\n' "$line" >> "$blockfile" ;;
         esac
       fi
     fi
   done < "$doc"
+
+  if [ "$in_block" -eq 1 ]; then
+    failed=$((failed + 1))
+    doc_failed=$((doc_failed + 1))
+    fail_report="$fail_report
+=== FAIL: $doc_label:$block_start (unterminated $tag fence; expected exact closing fence) ==="
+  fi
 
   echo "$doc_label: checked $doc_checked examples ($doc_skipped skipped, $doc_failed failed)"
   if [ "$doc_checked" -eq 0 ]; then
@@ -213,11 +217,15 @@ check_document() {
 }
 
 check_document "$ROOT/docs/spec/SYNTAX.md"
-for doc in "$ROOT"/docs/guide/*.md; do
-  [ -e "$doc" ] || continue
-  [ "$(basename "$doc")" = "OUTLINE.md" ] && continue
+guide_docs="$WORK/guide_docs"
+if ! find "$ROOT/docs/guide" -type f -name '*.md' ! -path "$ROOT/docs/guide/OUTLINE.md" -print > "$guide_docs.unsorted"; then
+  echo "check_syntax_examples: failed to enumerate guide documents" >&2
+  exit 1
+fi
+LC_ALL=C sort "$guide_docs.unsorted" > "$guide_docs"
+while IFS= read -r doc; do
   check_document "$doc"
-done
+done < "$guide_docs"
 
 echo "---"
 echo "checked $checked examples ($skipped skipped, $failed failed, $zero_docs documents with zero checked)"
