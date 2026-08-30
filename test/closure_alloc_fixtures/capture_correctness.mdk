@@ -1,0 +1,18 @@
+-- CAPTURE CORRECTNESS: a `where`-bound helper that DOES capture a value from
+-- its enclosing scope, called at three distinct call sites in the same run
+-- with three different captured values. This is the direct regression test
+-- for the sprint's aliasing-safety claim (#2237, review finding F2): a
+-- shared/hoisted constant cell must never leak into the genuinely-capturing
+-- path. If `go`'s closure cell were ever wrongly shared across the three
+-- `outer` calls below, the calls would not independently compute 11/12/13.
+outer : Int -> Int
+outer n = go 10
+  where
+    go x = x + n
+
+main =
+  let a0 = allocBytes ()
+  let r = outer 1 + outer 2 * 1000 + outer 3 * 1000000
+  let a1 = allocBytes ()
+  println "capture-correctness result=\{debug r}"
+  println "capture-correctness allocBytes=\{debug (a1 - a0)}"

@@ -1,5 +1,5 @@
 # META
-source_lines=12215
+source_lines=12222
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -7390,8 +7390,15 @@ emitClosureAllocA e lamName arity captureWords =
 -- cannot be back-patched, so that path keeps its per-entry alloc by design).
 -- `__mdk_apply` only reads the cell; a PAP is a separate freshly-allocated cell.
 --
--- Deduped by initializer content in its own cache (NOT `dictConstCache` — different
+-- Cached by initializer content in its own cache (NOT `dictConstCache` — different
 -- value domain, and sharing it would let a dict and a closure alias one global).
+-- ⚠️ In practice this cache can never HIT: `lamName` is always minted from
+-- `freshId` at the call site (`emitGroupBind`'s `mdk_lam<id>`, each eta-wrapper's
+-- `mdk_eta_<name>_<id>` / `mdk_etac_<name>_<id>`), so `initBody`'s `ptrtoint`
+-- operand is globally unique per closure and no two initializers can ever match.
+-- Measured cost of the miss-only lookups: negligible (~159 `@mdk_cc_` globals,
+-- ~12k string comparisons in a full `llvm_emit_main` build) — not worth removing
+-- or restructuring, but the cache is dead weight, not working dedup.
 emitConstClosureCell : Emit -> String -> Int -> String
 emitConstClosureCell e lamName arity =
   let codePtr = "ptrtoint (ptr @" ++ lamName ++ " to i64)"

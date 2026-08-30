@@ -97,13 +97,19 @@ check_threshold() {
 build_one flat && check_probe flat flat 33000000
 build_one where_nocapture && check_probe where_nocapture where-nocapture 33000000
 build_one eta && check_probe eta eta 2000000
+# CAPTURE CORRECTNESS (#2237 review finding F2): a genuinely-capturing
+# `where` helper, called at three distinct call sites with three different
+# captured values in the same run. VALUE assertion only — no
+# check_threshold call, since a capturing closure legitimately allocates on
+# every call and that is not what this fixture pins.
+build_one capture_correctness && check_probe capture_correctness capture-correctness 13012011
 
 check_threshold flat flat-alloc-baseline
 check_threshold where_nocapture where-nocapture-alloc
 check_threshold eta eta-closure-alloc
 
-if [ "$checked" -lt 6 ]; then
-  echo "FAIL anti-rot floor: checked $checked, expected at least 6"
+if [ "$checked" -lt 8 ]; then
+  echo "FAIL anti-rot floor: checked $checked, expected at least 8"
   fail=$((fail + 1))
 fi
 
