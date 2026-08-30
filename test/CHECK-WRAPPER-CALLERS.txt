@@ -7,7 +7,6 @@
 # SAME commit, or the gate reds. See the gate's own header for why this exists
 # (E-1 #1115, S-migrate-tool-consumers-remainder).
 compiler/driver/diagnostics.mdk : checkOneDiags
-compiler/driver/main_autoprint.mdk : checkOneDiags
 compiler/entries/check_batch.mdk : checkOneToLinesWithRuntime
 compiler/entries/check_flat_diags_main.mdk : checkProgramDiags
 compiler/entries/check_match_main.mdk : checkMatchToLines
