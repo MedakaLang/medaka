@@ -140,7 +140,11 @@ jobs:
           job-name: "perf_scaling DEEP (the N=16000 bands ci.yml cannot afford)"
           gate-label: "perf_scaling DEEP"
 
-  # Charter clause: N1 (docs/ops/CI-ARCHITECTURE.md §3.6 — cost above threshold — irreducible wall-clock cost would pole a merge-tier shard).
+  # NOTE: this gate ALSO runs at merge tier (test/gates.toml, shard "gates_2") — the
+  # earlier N1 (cost-above-threshold) citation for demoting it off merge was factually
+  # wrong (its own baseline cost is ~11s, nowhere near pole-worthy) and was reverted.
+  # Whether this nightly copy is redundant duplication worth dropping is an open
+  # question for Val, not decided here (F5, tier-three-charter end-of-sprint review).
   eval-scaling:
     name: "eval_scaling (interpreter O(n^2) detector — #887, nightly)"
     runs-on: ubuntu-latest

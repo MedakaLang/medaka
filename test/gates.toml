@@ -1969,9 +1969,9 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_eval_scaling"
 area = "eval"
-shard = "other-job"
+shard = "gates_2"
 project = "compiler"
-tiers = ["nightly"]
+tiers = ["merge", "nightly"]
 cost = "heavy"
 kind = "exec"
 run = "test/diff_compiler_eval_scaling.sh"

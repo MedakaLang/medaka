@@ -904,7 +904,7 @@ while IFS= read -r f; do
     # file whose gate-relevant content is exactly one question, "which gates
     # does nightly run, and how". That question is now `tiers` in the registry,
     # and this is the gate that checks it.
-    .github/workflows/nightly.yml) add 'diff_compiler_tier_drift' ;;
+    .github/workflows/nightly.yml) add 'diff_compiler_ci_shard_coverage'; add 'diff_compiler_tier_drift' ;;
     docs/guide/*.md)               add 'check_syntax_examples' ;;
     # Third ledger, same structural blind spot (#1608). Its rows pin a WRONG VALUE
     # rather than a divergence — see its own header — but the masking path is
