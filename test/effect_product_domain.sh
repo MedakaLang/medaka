@@ -63,17 +63,19 @@ expect_ok     "$FIX/prod_compat_prefix.mdk" "PROD backward-compat (Prefix Net un
 PLUG="$FIX/prod_policy_plugin.mdk"
 cp_accept_out="$(perl -e 'alarm 90; exec @ARGV' -- "$M" check-policy "$PLUG" \
   --allow 'Net=Host="idp.example.com/*";Method={GET,POST},FFI' --fn transform 2>&1)"
-if echo "$cp_accept_out" | grep -q '^accepted'; then
-  echo "ok   PROD check-policy accept (policy product admits)"; pass=$((pass+1))
+cp_accept_rc=$?
+if [ "$cp_accept_rc" -eq 0 ] && echo "$cp_accept_out" | grep -q '^accepted'; then
+  echo "ok   PROD check-policy accept (policy product admits, rc=0)"; pass=$((pass+1))
 else
-  echo "FAIL PROD check-policy accept:"; echo "$cp_accept_out" | head -2; fail=$((fail+1)); fi
+  echo "FAIL PROD check-policy accept (rc=$cp_accept_rc, want rc=0 + accepted):"; echo "$cp_accept_out" | head -2; fail=$((fail+1)); fi
 
 cp_reject_out="$(perl -e 'alarm 90; exec @ARGV' -- "$M" check-policy "$PLUG" \
   --allow 'Net=Host="idp.example.com/*";Method={GET}' --fn transform 2>&1)"
-if echo "$cp_reject_out" | grep -q '^rejected'; then
-  echo "ok   PROD check-policy reject (policy Method too narrow)"; pass=$((pass+1))
+cp_reject_rc=$?
+if [ "$cp_reject_rc" -eq 1 ] && echo "$cp_reject_out" | grep -q '^rejected'; then
+  echo "ok   PROD check-policy reject (policy Method too narrow, rc=1)"; pass=$((pass+1))
 else
-  echo "FAIL PROD check-policy reject:"; echo "$cp_reject_out" | head -2; fail=$((fail+1)); fi
+  echo "FAIL PROD check-policy reject (rc=$cp_reject_rc, want rc=1 + rejected):"; echo "$cp_reject_out" | head -2; fail=$((fail+1)); fi
 
 echo "effect_product_domain: $pass/$fail"
 [ "$fail" -eq 0 ]
