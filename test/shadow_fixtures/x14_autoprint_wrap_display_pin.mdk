@@ -1,0 +1,33 @@
+-- X14 (#2185's own defect class, RE-OPENED as fix-round F1, S0) the `display`
+-- twin of x12. x12/x13 pin that the auto-print wrap's synthesized reference is
+-- not capturable by an interface method named `println`; slice 1 satisfied them
+-- by RESPELLING the wrap as `putStrLn (display <e>)` -- which merely MOVED the
+-- capture onto `display`, a name users declare constantly for `Pretty`-style
+-- interfaces. This row grades the SAME question at the name the respelling
+-- introduced, so no future respelling can pay for the pin again.
+--
+-- MEASURED ON THE SPRINT HEAD a17281e6 (cold-built in this worktree,
+-- MEDAKA_STRICT=1): check and build both ACCEPT (exit 0) and the BUILT BINARY
+-- prints `HIJACKED` -- the wrap's synthesized `display` silently dispatched
+-- through THIS module's `impl Ifc Int`. No diagnostic; a right-looking wrong
+-- ANSWER at exit 0 (S0 shape), on a program whose source text never writes
+-- `display` at a call site at all.
+--
+-- FIXED shape: the wrap synthesizes NO name resolved in the user's scope. It
+-- calls the PRELUDE's own `println` declaration, re-bound under a name a
+-- Medaka identifier can never spell (`autoPrintPinCore`,
+-- compiler/driver/main_autoprint.mdk), so the `display` its body reaches is
+-- resolved in the PRELUDE's scope -- exactly as a user-written `main =
+-- println 7` already was. The built binary must print 7.
+--
+-- `run` REJECTs BY DESIGN (#1681, mirrors x7/x11/x12/x13): `main` is a non-Unit
+-- VALUE and `medaka run` never applies or prints one -- graded BUILD_EXACT for
+-- the same reason. Value hand-derived from the literal `main = 7` (the impl's
+-- "HIJACKED" must NEVER appear here), not captured.
+interface Ifc c where
+  display : c -> String
+
+impl Ifc Int where
+  display n = "HIJACKED"
+
+main = 7

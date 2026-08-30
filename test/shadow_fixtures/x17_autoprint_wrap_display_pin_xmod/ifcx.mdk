@@ -1,0 +1,8 @@
+-- x17's interface module: the `display`-named interface and its impl live HERE,
+-- not in the entry module, so the entry's view of the name comes through an
+-- import clause rather than an own declaration. See main.mdk.
+export interface Ifc c where
+  display : c -> String
+
+impl Ifc Int where
+  display n = "HIJACKED"

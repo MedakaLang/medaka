@@ -1,0 +1,47 @@
+-- X16 (fix-round F1, §6.5) the `putStrLn` twin of x12/x14 -- and the row that
+-- records WHY `putStrLn` is not, and cannot be, fixed by pinning the auto-print
+-- wrap.
+--
+-- The wrap half IS fixed: slice 1's wrap synthesized a bare `EVar "putStrLn"`
+-- into the ENTRY module, and `markVar` unions PROGRAM interface-method names
+-- into the set it consults, so the interface below captured the wrap's outer
+-- call. No `putStrLn` reference is synthesized in user scope any more -- the
+-- wrap calls the prelude's own `println` declaration under an unspellable
+-- re-binding (`autoPrintPinCore`, compiler/driver/main_autoprint.mdk).
+--
+-- 🚨 WHAT THIS ROW NOW PINS IS A DIFFERENT, PRE-EXISTING DEFECT that the wrap
+-- fix does not reach and was never in front of it: `markVar`'s `methods` set is
+-- PROGRAM-GLOBAL, so a user interface method named `putStrLn` also captures the
+-- PRELUDE's OWN body -- `println x = putStrLn (display x)`, stdlib/core.mdk.
+-- Unlike `display`, `putStrLn` is a plain runtime extern and the prelude
+-- declares NO interface method of that name, so there is no prelude
+-- declaration for the entry module's method table to prefer: the user's is the
+-- only candidate, and the prelude's own call routes to it.
+--
+-- MEASURED, with the wrap taken out of the picture entirely -- a UNIT main and
+-- a USER-WRITTEN `println` call, so `shouldAutoPrintMain` is False and nothing
+-- is ever wrapped:
+--     interface Ifc c where
+--       putStrLn : c -> Int
+--     impl Ifc Int where
+--       putStrLn n = n + 1000
+--     main = println 7
+-- `medaka build` (MEDAKA_STRICT=1) exits 1 with
+--   `error: emitter failed compiling …`
+--   `runtime error [E-PANIC]: no impl of method 'putStrLn' for type 'Unit'`
+-- -- byte-identical to what this fixture produces. The wrap is not involved.
+--
+-- So this row is graded ACCEPT|REJECT|REJECT|NONE: it pins the CURRENT state,
+-- including the `check` ACCEPTs / `build` panics split, and it self-drains --
+-- the day the prelude's own body stops being capturable, build starts ACCEPTing
+-- and this row goes RED, which is the signal to re-grade it to
+-- ACCEPT|REJECT|ACCEPT|BUILD_EXACT|7 (the value `main` actually holds).
+-- Severity is S1, not S0: it is a loud emitter panic at exit 1, not a
+-- right-looking wrong answer.
+interface Ifc c where
+  putStrLn : c -> Int
+
+impl Ifc Int where
+  putStrLn n = n + 1000
+
+main = 7
