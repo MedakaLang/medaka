@@ -493,9 +493,9 @@ echo "  ok: $cross_write_n crossRun.value.* write target(s), $driver_write_n dri
 # months).
 echo "checking #1111 three-way engine module-driver frame parity ..."
 
-ceval_body=$(body_of "$CIE" '^cevalModules preludeDecls modules =')
-withA_body=$(body_of "$EV" '^evalModulesWith extraExterns preludeDecls modules =')
-withB_body=$(body_of "$EV" '^evalModulesRootEnvWith extraExterns preludeDecls modules =')
+ceval_body=$(body_of "$CIE" '^cevalModules preludeDecls0 modules0 =')
+withA_body=$(body_of "$EV" '^evalModulesWith extraExterns preludeDecls0 modules0 =')
+withB_body=$(body_of "$EV" '^evalModulesRootEnvWith extraExterns preludeDecls0 modules0 =')
 
 frame_check() {
   # $1 = driver label, $2 = body text
