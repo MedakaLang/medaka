@@ -7,7 +7,8 @@
 #
 # Fence-tagging convention (the info string after a CommonMark fence opener):
 #   ```medaka             a COMPLETE, self-contained, checkable file. Checked
-#                          verbatim with `medaka check`.
+#                          after CommonMark content de-indentation with
+#                          `medaka check`.
 #   ```medaka-project     a multi-file example. Content is split on lines of
 #                          the exact form `-- file: NAME.mdk` into that many
 #                          files inside one synthetic project (with a
@@ -223,6 +224,7 @@ check_document() {
   block_start=0
   block_fence_char=""
   block_fence_count=0
+  block_content_indent=0
   lineno=0
 
   while IFS= read -r line || [ -n "$line" ]; do
@@ -233,6 +235,7 @@ check_document() {
         block_start=$lineno
         block_fence_char=$OPEN_CHAR
         block_fence_count=$OPEN_COUNT
+        block_content_indent=$open_indent
         case "$OPEN_INFO" in
         medaka)
           tag="medaka"
@@ -273,7 +276,17 @@ check_document() {
       else
         case "$tag" in
           nocheck|invalid|other) ;;
-          *) printf '%s\n' "$line" >> "$blockfile" ;;
+          medaka|project)
+            content_line=$line
+            content_indent=0
+            while [ "$content_indent" -lt "$block_content_indent" ]; do
+              case "$content_line" in
+                " "*) content_line=${content_line# }; content_indent=$((content_indent + 1)) ;;
+                *) break ;;
+              esac
+            done
+            printf '%s\n' "$content_line" >> "$blockfile"
+            ;;
         esac
       fi
     fi
