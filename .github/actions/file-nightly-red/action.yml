@@ -1,0 +1,110 @@
+name: 'File nightly red'
+description: >-
+  Shared failure-announcement step for nightly.yml (#2181 deliverable 2,
+  #2305): on a nightly job going red, files or updates ONE `known-red`-labeled
+  GitHub issue naming the gate, the run URL, and the commit range since that
+  job's LAST GREEN nightly run (not a bisected culprit — just "since it last
+  passed", per gh run list --workflow=nightly.yml over that job's own
+  per-run conclusion). A second red for the same job updates the existing
+  issue (dedup by exact title match against open issues) rather than opening
+  a duplicate — the same pattern the fuzz-diff job's own tracking-issue step
+  already uses, just retargeted from a findings-count trigger to `if:
+  failure()`.
+
+  Call this as the LAST step of a nightly job, with `if: failure()`. The
+  calling job needs `permissions: { contents: read, issues: write, actions:
+  read }` (actions:read to list/inspect prior nightly runs' per-job
+  conclusions) and must already have checked out the repo (same constraint as
+  setup-medaka — a composite action needs the repo present before it can run,
+  so it cannot own checkout itself).
+
+inputs:
+  job-name:
+    description: >-
+      The exact job `name:` as it appears in this workflow's run (the string
+      the GitHub API returns for that job) — used to find this job's most
+      recent SUCCESSFUL nightly run, which bounds the commit range.
+    required: true
+  gate-label:
+    description: >-
+      Short human label for the failing gate, used verbatim in the issue
+      title (`known-red: <gate-label>`) — keep it stable across runs so the
+      dedup-by-title match keeps working.
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - name: File or update the known-red tracking issue
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+        JOB_NAME: ${{ inputs.job-name }}
+        GATE_LABEL: ${{ inputs.gate-label }}
+        RUN_ID: ${{ github.run_id }}
+        RUN_SHA: ${{ github.sha }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        set -eu
+        TITLE="known-red: ${GATE_LABEL}"
+
+        # Full history is needed for `git log <last-green>..<here>` — the
+        # caller's checkout is typically fetch-depth:1 (nightly.yml never sets
+        # fetch-depth itself). Best-effort deepen; a shallow/failed fetch
+        # degrades to "commit log unavailable", never a hard failure — this
+        # step is announcing an ALREADY-red job, so it must not itself go red
+        # over a history-depth footgun.
+        git fetch --unshallow >/dev/null 2>&1 || git fetch --deepen=1000 >/dev/null 2>&1 || true
+
+        # This job's most recent SUCCESSFUL nightly run — NOT the same as
+        # `gh run list --status=success`, which grades the WHOLE workflow run
+        # (every job in it), and nightly.yml's jobs are independent: one job
+        # can be green inside an overall-red run. Walk recent completed runs
+        # newest-first and read THIS job's own conclusion from each.
+        last_good_sha=""
+        for run_id in $(gh run list --workflow=nightly.yml --limit=30 --json databaseId,status \
+            --jq '.[] | select(.status == "completed") | .databaseId'); do
+          [ "$run_id" = "$RUN_ID" ] && continue
+          concl="$(gh api "repos/${GH_REPO}/actions/runs/${run_id}/jobs" --paginate \
+            --jq ".jobs[] | select(.name == \"${JOB_NAME}\") | .conclusion" | head -1)"
+          if [ "$concl" = "success" ]; then
+            last_good_sha="$(gh api "repos/${GH_REPO}/actions/runs/${run_id}" --jq '.head_sha')"
+            break
+          fi
+        done
+
+        if [ -n "$last_good_sha" ]; then
+          range_desc="\`${last_good_sha}\`..\`${RUN_SHA}\`"
+          commit_log="$(git log --oneline "${last_good_sha}..${RUN_SHA}" -- 2>/dev/null || true)"
+        else
+          range_desc="(no prior green nightly run of this job found in the last 30 nightly runs)"
+          commit_log=""
+        fi
+
+        BODY_FILE="$(mktemp)"
+        {
+          echo "Nightly job **${JOB_NAME}** failed."
+          echo ""
+          echo "Run: ${RUN_URL}"
+          echo ""
+          echo "Commit range since this job's last green nightly run: ${range_desc}"
+          if [ -n "$commit_log" ]; then
+            echo ""
+            echo '```'
+            echo "$commit_log"
+            echo '```'
+          fi
+          echo ""
+          echo "See docs/ops/CI-ARCHITECTURE.md \"revert-to-green\" for what to do next."
+        } > "$BODY_FILE"
+
+        existing="$(gh issue list --state open --limit 100 --json number,title \
+          --jq ".[] | select(.title == \"$TITLE\") | .number" | head -1)"
+        if [ -n "$existing" ]; then
+          gh issue comment "$existing" --body-file "$BODY_FILE"
+          echo "updated existing known-red issue #$existing"
+        else
+          gh issue create --title "$TITLE" --label "known-red" --body-file "$BODY_FILE"
+          echo "opened new known-red issue"
+        fi

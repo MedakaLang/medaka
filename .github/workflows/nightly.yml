@@ -64,6 +64,10 @@ jobs:
     name: check_removed_constructs (tree-wide scan)
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write
+      actions: read
     steps:
       - uses: actions/checkout@v4
 
@@ -82,10 +86,21 @@ jobs:
           MEDAKA_ROOT: ${{ github.workspace }}
         run: bash test/check_removed_constructs.sh
 
+      - name: File or update the known-red issue on failure
+        if: failure()
+        uses: ./.github/actions/file-nightly-red
+        with:
+          job-name: "check_removed_constructs (tree-wide scan)"
+          gate-label: "check_removed_constructs"
+
   perf-scaling-deep:
     name: "perf_scaling DEEP (the N=16000 bands ci.yml cannot afford)"
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
+      issues: write
+      actions: read
     steps:
       - uses: actions/checkout@v4
 
@@ -116,10 +131,21 @@ jobs:
           PERF_DEEP: "1"
         run: sh test/diff_compiler_perf_scaling.sh
 
+      - name: File or update the known-red issue on failure
+        if: failure()
+        uses: ./.github/actions/file-nightly-red
+        with:
+          job-name: "perf_scaling DEEP (the N=16000 bands ci.yml cannot afford)"
+          gate-label: "perf_scaling DEEP"
+
   eval-scaling:
     name: "eval_scaling (interpreter O(n^2) detector — #887, nightly)"
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write
+      actions: read
     steps:
       - uses: actions/checkout@v4
 
@@ -149,6 +175,13 @@ jobs:
           MEDAKA_ROOT: ${{ github.workspace }}
         run: sh test/diff_compiler_eval_scaling.sh
 
+      - name: File or update the known-red issue on failure
+        if: failure()
+        uses: ./.github/actions/file-nightly-red
+        with:
+          job-name: "eval_scaling (interpreter O(n^2) detector — #887, nightly)"
+          gate-label: "eval_scaling"
+
   fuzz-diff:
     name: fuzz_diff (bounded nightly sweep; findings are FILED, not failed)
     runs-on: ubuntu-latest
@@ -156,6 +189,7 @@ jobs:
     permissions:
       contents: read
       issues: write
+      actions: read
     steps:
       - uses: actions/checkout@v4
 
@@ -280,10 +314,26 @@ jobs:
             echo "opened a new tracking issue"
           fi
 
+      # Distinct from the findings-tracking step above: this fires only when the
+      # JOB ITSELF failed (a step exited nonzero and wasn't handled — e.g. the
+      # "ran ZERO Tier-A cases" infra-failure exit in the fuzz step above), which
+      # was previously silent. A fuzz FINDING never reaches this step (that path
+      # is `exit 0`).
+      - name: File or update the known-red issue on job failure
+        if: failure()
+        uses: ./.github/actions/file-nightly-red
+        with:
+          job-name: "fuzz_diff (bounded nightly sweep; findings are FILED, not failed)"
+          gate-label: "fuzz_diff (infra failure)"
+
   playground-e2e:
     name: "playground_e2e (Playwright vs the built CM6 playground — #72 pt.4)"
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    permissions:
+      contents: read
+      issues: write
+      actions: read
     steps:
       - uses: actions/checkout@v4
 
@@ -365,12 +415,23 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+      - name: File or update the known-red issue on failure
+        if: failure()
+        uses: ./.github/actions/file-nightly-red
+        with:
+          job-name: "playground_e2e (Playwright vs the built CM6 playground — #72 pt.4)"
+          gate-label: "playground_e2e"
+
   pds-repo-vectors-eval-engine:
     name: "pds/nightly/repo_vectors_eval_engine.sh (eval interpreter == native on the repo transcript — #2208)"
     runs-on: ubuntu-latest
     # ~18 min of interpreter, plus checkout/toolchain/build. 40 matches the
     # signing-parity job below; this one has no wasm arm to install for.
     timeout-minutes: 40
+    permissions:
+      contents: read
+      issues: write
+      actions: read
     steps:
       - uses: actions/checkout@v4
 
@@ -398,10 +459,21 @@ jobs:
           MEDAKA_ROOT: ${{ github.workspace }}
         run: sh pds/nightly/repo_vectors_eval_engine.sh
 
+      - name: File or update the known-red issue on failure
+        if: failure()
+        uses: ./.github/actions/file-nightly-red
+        with:
+          job-name: "pds/nightly/repo_vectors_eval_engine.sh (eval interpreter == native on the repo transcript — #2208)"
+          gate-label: "pds repo_vectors_eval_engine"
+
   pds-signing-parity:
     name: "pds/nightly/signing_parity.sh (full ECDSA corpus parity, native+Wasm — #1962)"
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    permissions:
+      contents: read
+      issues: write
+      actions: read
     steps:
       - uses: actions/checkout@v4
 
@@ -431,6 +503,13 @@ jobs:
         env:
           MEDAKA_ROOT: ${{ github.workspace }}
         run: sh pds/nightly/signing_parity.sh
+
+      - name: File or update the known-red issue on failure
+        if: failure()
+        uses: ./.github/actions/file-nightly-red
+        with:
+          job-name: "pds/nightly/signing_parity.sh (full ECDSA corpus parity, native+Wasm — #1962)"
+          gate-label: "pds signing_parity"
 
   # ── The must-fail CENSUS (#569) — the half of the ratchet a GATE cannot run. ────
   #
@@ -471,6 +550,7 @@ jobs:
     permissions:
       contents: read
       issues: write
+      actions: read
     steps:
       - uses: actions/checkout@v4
 
@@ -551,6 +631,17 @@ jobs:
             echo "opened a new tracking issue"
           fi
 
+      # Distinct from the census-findings step above: fires only when the JOB
+      # ITSELF failed (the script's own infra-failure exit 1, or an unhandled
+      # step failure) — previously silent. A census FINDING never reaches this
+      # step (that path is `exit 0`, per #593).
+      - name: File or update the known-red issue on job failure
+        if: failure()
+        uses: ./.github/actions/file-nightly-red
+        with:
+          job-name: "must_fail_census (tracker vs corpus; findings are FILED, not failed — #569)"
+          gate-label: "must_fail_census (infra failure)"
+
   # ── ci-shard-cost-drift: the same self-draining shape as must-fail-census (#1935) ──
   #
   # `.github/workflows/ci.yml` used to carry hand-written per-shard cost numbers in its
@@ -576,6 +667,7 @@ jobs:
     permissions:
       contents: read
       issues: write
+      actions: read
     steps:
       - uses: actions/checkout@v4
 
@@ -698,6 +790,16 @@ jobs:
             gh issue create --title "$TITLE" --label "ws:testing" --body-file "$BODY_FILE"
             echo "opened a new tracking issue"
           fi
+
+      # Distinct from the drift-findings step above: fires only when the JOB
+      # ITSELF failed (scripts/ci_shard_cost.sh's own infra-failure exit), which
+      # was previously silent. A drift FINDING never reaches this step.
+      - name: File or update the known-red issue on job failure
+        if: failure()
+        uses: ./.github/actions/file-nightly-red
+        with:
+          job-name: "ci_shard_cost drift (pole shard / 1.5x median; findings are FILED, not failed — #1935)"
+          gate-label: "ci_shard_cost (infra failure)"
 
   gate-cost-autoadvance:
     name: "gate cost baseline auto-advance (#2180 baseline leg, S-1-baseline-autoadvance)"

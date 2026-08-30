@@ -255,7 +255,7 @@ FIX.** Closing an issue as already-fixed is a good outcome; say so.
 |------|-----------|
 | `.claude/workstreams/` | Per-workstream **domain knowledge**: the traps, the collision map, and *why each bug class recurs*. **Not the backlog** (that is the issue tracker) — read the one matching your labels **before** you start. |
 | `.claude/ORCHESTRATING.md` | Orchestration playbook. Its #1 lesson: *the gap docs lie — reproduce before you trust them.* |
-| `gh issue list --label known-red` | **Known-red gates.** Check BEFORE diagnosing a failing gate — it is usually not your break. One issue per expected-red gate, closed when the gate is green again. |
+| `gh issue list --label known-red` | **Known-red gates.** Check BEFORE diagnosing a failing gate — it is usually not your break. One issue per expected-red gate, closed when the gate is green again. Nightly (tier-3) jobs file/update these automatically on failure — mechanism + the revert-to-green norm: `docs/ops/CI-ARCHITECTURE.md` §3.6. |
 | `.claude/skills/` | Task playbooks (table at the bottom of this file). |
 
 ## Build & test

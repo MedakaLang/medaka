@@ -315,6 +315,26 @@ whose failure means a wrong answer shipped — stay tier 2 regardless of cost). 
 nightly job cites its qualifying clause; every tracked test/census script has an
 explicit home (queue-tier, nightly-tier, or listed on-demand tool).
 
+**What "revert to green" means here.** A tier-3 job going red files (or updates) one
+`known-red`-labeled issue naming the gate, the failing run's URL, and the commit range
+since that job's own last green nightly run (`.github/actions/file-nightly-red` — a
+composite action shared by every nightly job so N jobs don't carry N copies of the
+same filing shell; walks `gh run list --workflow=nightly.yml` per-job, not per-run,
+since nightly's jobs are independent and one can be green inside an overall-red run).
+The default response is to **revert the change that regressed it, not to fix forward
+under the open issue** — nightly is unblocking-by-design (§4: it never gates a merge),
+so a red tier-3 job accumulates silently for as long as anyone lets it, and the
+cheapest way to stop that accumulation is to put the tree back on the commit that was
+last known green and re-diagnose off-queue. Fix-forward is the exception, taken only
+when the regressing commit is not itself revertable in isolation (e.g. it shares a
+commit with unrelated already-merged work) or when the fix is already in hand and
+faster than a revert + re-land. Either way, the `known-red` issue is the record: it
+closes when the job is next green, whichever path got it there — a fix-forward PR
+should say so in its body, and a revert should close it via the normal closing-keyword
+path. A second red for the same job before the issue closes updates that issue rather
+than opening a duplicate, so `gh issue list --label known-red` always reflects the
+CURRENT red set, never a historical log of every past occurrence.
+
 ## 4. What deliberately does NOT change
 
 - The merge queue is the authority; preflight and PR CI are filters
