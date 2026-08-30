@@ -508,7 +508,26 @@ deKindNewtypeFixture : Decl
 deKindPrivateFixture : Decl
 deKindRow0 : DeclEnvModule
 deKindRow1 : DeclEnvModule
-deSeedChainProbe : (Map String (List (TabKey, List Kind)), Map String (Map String (List String)))
+deNameIdxAlpha : Decl
+deNameIdxAt : Map String (Map String Unit) -> String -> List String
+deNameIdxBeta : Decl
+deNameIdxChain : Map String (Map String Unit)
+deNameIdxChainNoUnrelated : Map String (Map String Unit)
+deNameIdxModA : DeclEnvModule
+deNameIdxModB : DeclEnvModule
+deNameIdxModC : DeclEnvModule
+deNameIdxModD : DeclEnvModule
+deNameIdxSharedA : Decl
+deNameIdxSharedB : Decl
+deRecordIdentTyNames : List (Ident, String, List Field) -> List String
+deRecordOrderEnv : DataEnv
+deRecordOrderFixtureA : Decl
+deRecordOrderFixtureB : Decl
+deSeedChainKinds : Map String (List (TabKey, List Kind))
+deSeedChainNames : Map String (Map String Unit)
+deSeedChainOwners : Map String (Map String (List String))
+deSeedChainProbe : (Map String (List (TabKey, List Kind)), Map String (Map String (List String)), Map String (Map String Unit))
+deSeedNameParity : String -> Bool
 deSeedRowN : DeclEnvModule
 declBodyVars : String -> List Decl -> List String
 declBodyVarsOf : String -> Decl -> List String
@@ -541,7 +560,7 @@ declEnvRowAtomsEntries : Int -> DeclEnvModule -> List (TabKey, List (List Atom))
 declEnvRowKindEntries : Int -> DeclEnvModule -> List (TabKey, List Kind)
 declEnvRowPolarityEntries : Int -> DeclEnvModule -> List (TabKey, List Polarity) -> List (TabKey, List Polarity)
 declEnvRowVisible : Int -> DeclEnvModule -> List Decl
-declEnvSeedChain : List DeclEnvModule -> List (TabKey, List Kind) -> Map String (List String) -> Map String (List (TabKey, List Kind)) -> Map String (Map String (List String)) -> (Map String (List (TabKey, List Kind)), Map String (Map String (List String)))
+declEnvSeedChain : List DeclEnvModule -> List (TabKey, List Kind) -> Map String (List String) -> Map String Unit -> Map String (List (TabKey, List Kind)) -> Map String (Map String (List String)) -> Map String (Map String Unit) -> (Map String (List (TabKey, List Kind)), Map String (Map String (List String)), Map String (Map String Unit))
 declEnvSeedDataUniverse : String -> DeclEnvs -> Unit
 declEnvVariantFieldOwners : List Variant -> Map String (List String) -> Map String (List String)
 declEnvVariantOwnerModules : String -> List Variant -> Map String (List String) -> Map String (List String)
@@ -622,8 +641,8 @@ dictParams : String -> Int -> List Pat
 dictParamsFrom : String -> Int -> Int -> List Pat
 dictParamsGo : String -> Int -> Int -> List Pat
 dictPass : List String -> List Decl -> List Decl
-dictPassDecl : List String -> List String -> Decl -> Decl
-dictPassLetBind : List String -> LetBind -> LetBind
+dictPassDecl : Map String Unit -> List String -> Decl -> Decl
+dictPassLetBind : Map String Unit -> LetBind -> LetBind
 dictPassModulesIfEnabled : List String -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
 dictPassModulesScoped : List String -> List ((String, String), List Int) -> List Decl -> List (String, List Decl) -> List (String, List Decl) -> List (String, List Decl)
 dictVarSatisfiesIface : String -> Int -> List (String, Mono) -> Bool
@@ -1814,8 +1833,8 @@ rewriteArgLetBind : ArgRw -> Map String Unit -> LetBind -> LetBind
 rewriteArgScoped : ArgRw -> Map String Unit -> Expr -> Expr
 rewriteArgStmts : ArgRw -> Map String Unit -> List DoStmt -> List DoStmt
 rewriteBinopExpr : Expr -> Expr
-rewriteRPDict : List String -> List String -> Expr -> Expr
-rewriteRPDictArg : List String -> List String -> List String -> Expr -> Expr
+rewriteRPDict : Map String Unit -> Map String Unit -> Expr -> Expr
+rewriteRPDictArg : Map String Unit -> Map String Unit -> Map String Unit -> Expr -> Expr
 rootIdOf : Mono -> Int
 rootVarId : Mono -> Int
 routeLocalSym : Route -> String

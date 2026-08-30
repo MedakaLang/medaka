@@ -93,7 +93,6 @@ import frontend.ast.{
   tabKeyEq,
   tabKeyName,
   lookupTab,
-  tabHasName,
 }
 -- #1111 Stage A-2 unit A-2.3: the TYPE-namespace re-key.  `aliasTableRef` /
 -- `dataParamKindsRef` (and their `universe*` cross-run halves) are keyed by
@@ -153,6 +152,7 @@ import support.ordmap.{
   omHasKey,
   omKeys,
   omFromPairs,
+  omFromNames,
   omMapValues,
   omSize,
 }
@@ -3029,6 +3029,7 @@ data DeclEnvs = DeclEnvs {
     deImpls : ImplEnv,
     deIfaces : ClassEnv,  -- A-3.3 (#1519) built it; A-3.5c (#1557) made it LIVE — three readers, see the `CE` block
     deKindsBefore : OrdMap (List (TabKey, List Kind)),
+    deNameIndexBefore : OrdMap (OrdMap Unit),  -- #2158: `deKindsBefore`'s BARE-NAME twin, the SAME rows' `tabKeyName`s as a membership set — see `declEnvSeedChain`
     dePolaritiesBefore : OrdMap (List (TabKey, List Polarity)),  -- #1119 D-2: `deKindsBefore`'s VARIANCE twin — see `declEnvPolarityChain`
     deAtomsBefore : OrdMap (List (TabKey, List (List Atom))),  -- #2110 S2-1: `deKindsBefore`'s ATOM-GUARANTEE twin — see `declEnvRowAtomsChain`
     deOwnersBefore : OrdMap (OrdMap (List String)),
@@ -3050,6 +3051,7 @@ emptyDeclEnvs = DeclEnvs {
   deImpls = emptyImplEnv,
   deIfaces = emptyClassEnv,
   deKindsBefore = omEmpty,
+  deNameIndexBefore = omEmpty,
   dePolaritiesBefore = omEmpty,
   deAtomsBefore = omEmpty,
   deOwnersBefore = omEmpty,
@@ -3070,7 +3072,8 @@ buildDeclEnvs coreDecls modules =
   -- whole graph so the per-module read is one `omLookup` and allocates nothing.  The
   -- `""` seeds mirror `declEnvOrdIndex`'s: the core pass arrives under that spelling
   -- and its seed is empty because nothing precedes ordinal 0.  See `declEnvSeedChain`.
-  let seeds = declEnvSeedChain mods [] omEmpty (omInsert "" [] omEmpty) (omInsert "" omEmpty omEmpty)
+  let (seedKinds, seedOwners, seedNames) =
+    declEnvSeedChain mods [] omEmpty omEmpty (omInsert "" [] omEmpty) (omInsert "" omEmpty omEmpty) (omInsert "" omEmpty omEmpty)
   -- #1675: BOTH definer projections come out of ONE fold.  They are derived from the
   -- same uncollapsed row list — `deDefiners` keeps the first row per name, `deAmbigValues`
   -- records the names where keeping the first was a CHOICE between two definitions — so
@@ -3102,7 +3105,11 @@ buildDeclEnvs coreDecls modules =
     -- over the SAME `mods` (per-module rows, ordinal-tagged), composing rather
     -- than interacting with the other two initialisers for the identical reason.
     deIfaces = buildClassEnv mods,
-    deKindsBefore = fst seeds,
+    deKindsBefore = seedKinds,
+    -- #2158: the BARE-NAME seed, out of the SAME fold and the same `kacc` rows —
+    -- see `declEnvSeedChain`'s third-accumulator note for why it is folded in
+    -- there rather than walked separately like the two chains below.
+    deNameIndexBefore = seedNames,
     -- #1119 D-2: the VARIANCE seed.  It is a SEPARATE walk rather than a third
     -- accumulator threaded through `declEnvSeedChain` because it is the only one
     -- of the three that has to READ ITS OWN ACCUMULATOR while building it —
@@ -3124,7 +3131,7 @@ buildDeclEnvs coreDecls modules =
     -- everything strictly before [m]" stamping, same `""` seed for the core
     -- pass.
     deAtomsBefore = declEnvRowAtomsChain mods [] (omInsert "" [] omEmpty),
-    deOwnersBefore = snd seeds,
+    deOwnersBefore = seedOwners,
     -- #1597: the two halves of the field-owner REACHABILITY filter.  Both are
     -- whole-graph and reader-independent (the reader is applied at the READ, in
     -- `fieldOwnerNames`), so they are built here once alongside the seeds.
@@ -3493,15 +3500,42 @@ declEnvKindEntries (_::rest) = declEnvKindEntries rest
 -- payload is always a synthesised `ConPos`), which is why there is no arm for it,
 -- and `DAttrib` unwraps and recurses, mirroring `registerData` (#1228/#1586 — see
 -- the note on `declEnvKindEntries`, including which reader actually reaches it).
-declEnvSeedChain : List DeclEnvModule -> List (TabKey, List Kind) -> OrdMap (List String) -> OrdMap (List (TabKey, List Kind)) -> OrdMap (OrdMap (List String)) -> (OrdMap (List (TabKey, List Kind)), OrdMap (OrdMap (List String)))
-declEnvSeedChain [] _ _ km om = (km, om)
-declEnvSeedChain (m::rest) kacc oacc km om =
+-- ── #2158: THE BARE-NAME ACCUMULATOR, A THIRD ONE IN *THIS* FOLD ─────────
+-- `nacc`/`nm` is `kacc`/`km`'s membership-set shadow: the `tabKeyName` of every
+-- key `kacc` holds, as an `OrdMap Unit`, stamped under the same module id at the
+-- same point in the walk.  `noImplHintFor` asks a bare-name MEMBERSHIP question
+-- of `dataParamKindsRef` and nothing else does, so answering it needs a set, not
+-- the list.
+--
+-- 🚨 IT IS FOLDED IN HERE RATHER THAN GIVEN ITS OWN WALK, AND THE DIFFERENCE IS
+-- MEASURED, NOT STYLISTIC.  #2158 first shipped as a per-module REBUILD in
+-- `declEnvSeedDataUniverse` (`omFromNames (map … dataParamKindsRef.value)`), and
+-- that list is `deKindsBefore[mid]`, whose length grows with the module ordinal —
+-- an O(M² log M) term paid unconditionally on every compile.  `stage_ir_scaling`'s
+-- `modules:typecheck` row went 2.219 → 2.500 (ceiling 2.45) on that one line.  The
+-- accumulator below pays O(entries log entries) for the WHOLE graph instead, and
+-- the read is one `omLookup`.
+--
+-- ⚠️ NOT `declEnvPolarityChain`'s SEPARATE-WALK SHAPE, and that is the
+-- discriminator to check before adding a fourth: the polarity chain needs its own
+-- walk because `declEnvRowPolarityEntries` READS `pacc` while building it.  This
+-- accumulator is WRITE-ONLY — insert and forget, exactly like `oacc` — so it
+-- composes into the existing fold with no new read edge.  It also shares `kents`
+-- with the kind half rather than re-deriving the projection, which is what keeps
+-- the two provably the same rows: the name set is `kacc`'s key set by
+-- construction, not by a parallel definition that could drift.
+declEnvSeedChain : List DeclEnvModule -> List (TabKey, List Kind) -> OrdMap (List String) -> OrdMap Unit -> OrdMap (List (TabKey, List Kind)) -> OrdMap (OrdMap (List String)) -> OrdMap (OrdMap Unit) -> (OrdMap (List (TabKey, List Kind)), OrdMap (OrdMap (List String)), OrdMap (OrdMap Unit))
+declEnvSeedChain [] _ _ _ km om nm = (km, om, nm)
+declEnvSeedChain (m::rest) kacc oacc nacc km om nm =
+  let kents = declEnvRowKindEntries (m.demOrd + 1) m
   declEnvSeedChain
     rest
-    (declEnvRowKindEntries (m.demOrd + 1) m ++ kacc)
+    (kents ++ kacc)
     (declEnvDeclFieldOwners (declEnvRowVisible (m.demOrd + 1) m) oacc)
+    (omFromNames (map (p => tabKeyName (fst p)) kents) nacc)
     (omInsert m.demId kacc km)
     (omInsert m.demId oacc om)
+    (omInsert m.demId nacc nm)
 
 -- ── #1119 D-2: the VARIANCE seed chain (#1098, #1121) ────────────────────
 -- `declEnvSeedChain`'s kind half, one table over: the same ordinal-ascending
@@ -3923,6 +3957,19 @@ declEnvDirectImports edges mid = fromOption [] (omLookup mid edges)
 declEnvSeedDataUniverse : String -> DeclEnvs -> Unit
 declEnvSeedDataUniverse mid envs =
   perRun.value.dataParamKindsRef := fromOption [] (omLookup mid envs.deKindsBefore)
+  -- #2158: the BARE-NAME half of the same seed, read under the same key and from
+  -- the same fold (`declEnvSeedChain`'s third accumulator), so it holds exactly
+  -- the `tabKeyName`s of the line above's keys by construction.
+  -- 🚨 THIS USED TO REBUILD THE INDEX HERE — `omFromNames (map … kindsRef.value)`
+  -- — and that was an O(M² log M) term, since the list it folded is
+  -- `deKindsBefore[mid]`, whose length grows with the module ordinal.  Do not
+  -- restore it: a rebuild off a per-module prefix list is quadratic by
+  -- construction, and `stage_ir_scaling`'s `modules:typecheck` row is what
+  -- catches it (2.219 → 2.500 against a 2.45 ceiling when it last landed).
+  -- A MISS is fail-SILENT and STRICTLY BENIGN, unlike the kind half's: an empty
+  -- index makes `noImplHintFor` withhold the "add deriving / write an impl"
+  -- hint, so the reject still happens with its unhinted message.
+  perRun.value.dataParamNameIndexRef := fromOption omEmpty (omLookup mid envs.deNameIndexBefore)
   -- #1119 D-2: the VARIANCE half of the same seed, read under the same key.  A
   -- MISS here is fail-SILENT in the same direction the kind half is (an absent
   -- row makes `unifyN`'s variance gate abstain, i.e. today's leniency) — it can
@@ -4041,14 +4088,37 @@ deKindRow1 = declEnvModule 1 "m" deKindFixtureDecls
 --   * A ONE-row chain could not discriminate any of that (prefix and final
 --     accumulator coincide at the only row), which is why the probe carries two
 --     rows with DISTINCT ids rather than reusing `deKindRow0`/`deKindRow1`.
--- > listLen (fromOption [] (omLookup "m" (fst deSeedChainProbe)))
+-- > listLen (fromOption [] (omLookup "m" deSeedChainKinds))
 -- 0
--- > fromOption [] (omLookup "x" (fromOption omEmpty (omLookup "m" (snd deSeedChainProbe))))
+-- > fromOption [] (omLookup "x" (fromOption omEmpty (omLookup "m" deSeedChainOwners)))
 -- []
--- > listLen (fromOption [] (omLookup "n" (fst deSeedChainProbe)))
+-- > listLen (fromOption [] (omLookup "n" deSeedChainKinds))
 -- 3
--- > fromOption [] (omLookup "x" (fromOption omEmpty (omLookup "n" (snd deSeedChainProbe))))
+-- > fromOption [] (omLookup "x" (fromOption omEmpty (omLookup "n" deSeedChainOwners)))
 -- ["Pt"]
+
+-- #2158: the THIRD accumulator, on the SAME probe, so the own-row exclusion is
+-- asserted on it too — row "m" is first, so its name index is EMPTY even though
+-- "m" itself declares `Pt`/`Opq`/`Wrap`; row "n" sees exactly "m"'s three
+-- kind-public names and NOT its own identical copies.  (`Priv` is absent from
+-- both for the separate reason `declEnvRowKindEntries`' cross-module arm drops
+-- a private decl — see the kind-count doctests above.)
+-- > omKeys (fromOption omEmpty (omLookup "m" deSeedChainNames))
+-- []
+-- > omKeys (fromOption omEmpty (omLookup "n" deSeedChainNames))
+-- ["Opq", "Pt", "Wrap"]
+
+-- 🚨 THE PARITY ASSERTION, AND IT IS THE ONE THAT PINS THE FIX.  #2158 first
+-- shipped the name index as a per-module REBUILD in `declEnvSeedDataUniverse`
+-- (`omFromNames (map (p => tabKeyName (fst p)) kindsRef.value) omEmpty`), which
+-- was quadratic in the module count.  The accumulator replaced it, so what must
+-- stay true is that the accumulated set and the rebuilt set AGREE on every row.
+-- This states that as an equation over the probe rather than as prose, so a
+-- future edit to either half that breaks the agreement is loud here.
+-- > deSeedNameParity "m"
+-- True
+-- > deSeedNameParity "n"
+-- True
 
 -- Row "n" carries the SAME decls as `deKindRow0` at ordinal 1 under a DIFFERENT
 -- module id.  Same decls is deliberate: it makes the own-row contribution and the
@@ -4057,9 +4127,164 @@ deKindRow1 = declEnvModule 1 "m" deKindFixtureDecls
 deSeedRowN : DeclEnvModule
 deSeedRowN = declEnvModule 1 "n" deKindFixtureDecls
 
-deSeedChainProbe : (OrdMap (List (TabKey, List Kind)), OrdMap (OrdMap (List String)))
-deSeedChainProbe =
-  declEnvSeedChain [deKindRow0, deSeedRowN] [] omEmpty omEmpty omEmpty
+deSeedChainProbe : (OrdMap (List (TabKey, List Kind)), OrdMap (OrdMap (List String)), OrdMap (OrdMap Unit))
+deSeedChainProbe = declEnvSeedChain
+  [deKindRow0, deSeedRowN]
+  []
+  omEmpty
+  omEmpty
+  omEmpty
+  omEmpty
+  omEmpty
+
+deSeedChainKinds : OrdMap (List (TabKey, List Kind))
+deSeedChainKinds =
+  let (km, _, _) = deSeedChainProbe
+  km
+
+deSeedChainOwners : OrdMap (OrdMap (List String))
+deSeedChainOwners =
+  let (_, om, _) = deSeedChainProbe
+  om
+
+deSeedChainNames : OrdMap (OrdMap Unit)
+deSeedChainNames =
+  let (_, _, nm) = deSeedChainProbe
+  nm
+
+-- The accumulated name set for [mid] vs. the retired rebuild, computed here off
+-- the SAME row's kind seed.  `omKeys` is sorted ascending, so this compares KEY
+-- SETS and is blind to tree shape and to insertion order — which is exactly the
+-- equivalence class the only reader (`noImplHintFor`'s `omHasKey`) can observe.
+deSeedNameParity : String -> Bool
+deSeedNameParity mid =
+  let accumulated = omKeys (fromOption omEmpty (omLookup mid deSeedChainNames))
+  let rebuilt = omKeys (omFromNames (map (p => tabKeyName (fst p)) (fromOption [] (omLookup mid deSeedChainKinds))) omEmpty)
+  accumulated == rebuilt
+
+-- ── #2158 F7: THE NAME INDEX AS A PROGRAM-GLOBAL TABLE (T-GLOBAL-TABLE) ──────
+-- `deNameIndexBefore` is a new whole-graph table, so `compiler/AGENTS.md`'s
+-- T-GLOBAL-TABLE bar applies: the fixture that matters is not "the feature
+-- works", it is "the feature is present and code that never touches it is
+-- unaffected".  The four rows below are built for that shape specifically —
+-- `deSeedChainProbe` above cannot state it, because both of its rows declare the
+-- same data types, so nothing there distinguishes "row X contributed" from "row X
+-- was skipped".
+--
+--   * `modA` declares `Alpha` and `Shared`.
+--   * `modB` declares `Beta` and its OWN `Shared` — same declared NAME, different
+--     module.  That pair is deliberate: the index is bare-name by construction
+--     (`tabKeyName`, matching the `tabHasName` scan it replaced — see the
+--     `PerRun` field's comment), so the two `Shared` declarations must collapse
+--     to ONE key.  A future edit that made the index identity-keyed would show up
+--     as two entries here, which is the point of asserting the key LIST rather
+--     than a membership Bool.
+--   * `modC` and `modD` declare NO data type at all — just a value binding.  They
+--     are the "unrelated code" half: their presence must leave every other row's
+--     index untouched, and they must contribute nothing to any later row's.
+deNameIdxAlpha : Decl
+deNameIdxAlpha = DData {
+  dataVis = VisPublic,
+  dataName = "Alpha",
+  dataParams = [],
+  dataCtors = [Variant "MkAlpha" (ConPos [tyConBuiltin "Int" None])],
+  dataDerives = [],
+  dataOrigin = OriginModule "modA",
+}
+
+deNameIdxSharedA : Decl
+deNameIdxSharedA = DData {
+  dataVis = VisPublic,
+  dataName = "Shared",
+  dataParams = [],
+  dataCtors = [Variant "MkSharedA" (ConPos [tyConBuiltin "Int" None])],
+  dataDerives = [],
+  dataOrigin = OriginModule "modA",
+}
+
+deNameIdxBeta : Decl
+deNameIdxBeta = DData {
+  dataVis = VisPublic,
+  dataName = "Beta",
+  dataParams = [],
+  dataCtors = [Variant "MkBeta" (ConPos [tyConBuiltin "Int" None])],
+  dataDerives = [],
+  dataOrigin = OriginModule "modB",
+}
+
+deNameIdxSharedB : Decl
+deNameIdxSharedB = DData {
+  dataVis = VisPublic,
+  dataName = "Shared",
+  dataParams = [],
+  dataCtors = [Variant "MkSharedB" (ConPos [tyConBuiltin "Int" None])],
+  dataDerives = [],
+  dataOrigin = OriginModule "modB",
+}
+
+deNameIdxModA : DeclEnvModule
+deNameIdxModA = declEnvModule 0 "modA" [deNameIdxAlpha, deNameIdxSharedA]
+
+deNameIdxModB : DeclEnvModule
+deNameIdxModB = declEnvModule 1 "modB" [deNameIdxBeta, deNameIdxSharedB]
+
+-- No data declaration anywhere in these two — a plain value binding, the
+-- "unrelated code" T-GLOBAL-TABLE asks for.
+deNameIdxModC : DeclEnvModule
+deNameIdxModC =
+  declEnvModule 2 "modC" [DFunDef True "modCHelper" [] (ELit (LInt 1))]
+
+deNameIdxModD : DeclEnvModule
+deNameIdxModD =
+  declEnvModule 3 "modD" [DFunDef True "modDHelper" [] (ELit (LInt 2))]
+
+deNameIdxChain : OrdMap (OrdMap Unit)
+deNameIdxChain =
+  let (_, _, nm) = declEnvSeedChain [deNameIdxModA, deNameIdxModB, deNameIdxModC, deNameIdxModD] [] omEmpty omEmpty omEmpty omEmpty omEmpty
+  nm
+
+-- The SAME chain with the two data-free rows removed.  Comparing against this is
+-- what turns "unrelated code is unaffected" into an assertion rather than a hope.
+deNameIdxChainNoUnrelated : OrdMap (OrdMap Unit)
+deNameIdxChainNoUnrelated =
+  let (_, _, nm) = declEnvSeedChain [deNameIdxModA, deNameIdxModB] [] omEmpty omEmpty omEmpty omEmpty omEmpty
+  nm
+
+deNameIdxAt : OrdMap (OrdMap Unit) -> String -> List String
+deNameIdxAt nm mid = omKeys (fromOption omEmpty (omLookup mid nm))
+
+-- ── doctests ─────────────────────────────────────────────────────────────
+-- (a) A name declared in an EARLIER module is visible at a later module's seed.
+--     `modB` sees `modA`'s two names and no others.
+-- > deNameIdxAt deNameIdxChain "modB"
+-- ["Alpha", "Shared"]
+
+-- (b) A name declared in the SAME module is NOT — own registrations go on TOP of
+--     the universe later, via `recordParamKinds` under `registerAllData … prog0`.
+--     `modB` declares `Beta`; `Beta` is absent from `modB`'s own seed and present
+--     one row later.
+-- > omHasKey "Beta" (fromOption omEmpty (omLookup "modB" deNameIdxChain))
+-- False
+-- > omHasKey "Beta" (fromOption omEmpty (omLookup "modC" deNameIdxChain))
+-- True
+
+--     …and the first row's seed is empty, own-row exclusion at the boundary.
+-- > deNameIdxAt deNameIdxChain "modA"
+-- []
+
+-- (c) Unrelated code — `modC`/`modD` declare no data type at all.  They
+--     contribute NOTHING (the two rows' indexes are equal, so the row between
+--     them added no name), and their presence perturbs NOTHING (`modA`/`modB`
+--     read identically in a chain that does not contain them at all).
+--     `Shared` appears ONCE across both declaring modules: bare-name by design.
+-- > deNameIdxAt deNameIdxChain "modC"
+-- ["Alpha", "Beta", "Shared"]
+-- > deNameIdxAt deNameIdxChain "modD" == deNameIdxAt deNameIdxChain "modC"
+-- True
+-- > deNameIdxAt deNameIdxChainNoUnrelated "modA" == deNameIdxAt deNameIdxChain "modA"
+-- True
+-- > deNameIdxAt deNameIdxChainNoUnrelated "modB" == deNameIdxAt deNameIdxChain "modB"
+-- True
 
 -- ── A-3.2a (#1112): the `DataEnv` slice ─────────────────────────────────────
 -- ⚠️ This banner read "CONSTRUCTION ONLY, NOT LIVE" and that lapsed with A-3.2b
@@ -4246,7 +4471,9 @@ emptyDataEnv = DataEnv {
 -- the declaring module's ORDINAL, and the flattened list has no ordinal in it —
 -- the same reason `buildImplEnv` has always read rows (see `buildDeclEnvs`).
 buildDataEnv : List DeclEnvModule -> DataEnv
-buildDataEnv rows = dataEnvFromRowsGo rows emptyDataEnv
+buildDataEnv rows =
+  let env = dataEnvFromRowsGo rows emptyDataEnv
+  DataEnv { env | deRecordIdents = omMapValues reverseL env.deRecordIdents, deFieldOwnerIdents = omMapValues reverseL env.deFieldOwnerIdents }
 
 dataEnvFromRowsGo : List DeclEnvModule -> DataEnv -> DataEnv
 dataEnvFromRowsGo [] acc = acc
@@ -4337,9 +4564,16 @@ addCtorIdentRaw tyName o cn payload env = match mkIdent NsCtor o cn
       ConNamed fields _ => addRecordIdentRaw tyName cn ident fields env2
       ConPos _ => env2
 
+-- ✅ FIXED (#2147): both `deRecordIdents` and `deFieldOwnerIdents` buckets used
+-- to be `++ [x]` per insert — O(bucket²) over the build. Now conses onto each
+-- key's bucket (reversing that bucket's visible order immediately, since these
+-- are keyed `OrdMap (List ...)` buckets read-modify-written throughout the
+-- whole fold, not one flat list reversed once at the end); `buildDataEnv`
+-- restores order with one `omMapValues reverseL` pass over each map, once,
+-- when the fold finishes. Values are byte-identical, only the fold is linear.
 addRecordIdentRaw : String -> String -> Ident -> List Field -> DataEnv -> DataEnv
 addRecordIdentRaw tyName cn ident fields env =
-  let next = fromOption [] (omLookup cn env.deRecordIdents) ++ [(ident, tyName, fields)]
+  let next = (ident, tyName, fields) :: fromOption [] (omLookup cn env.deRecordIdents)
   addFieldOwnerIdents
     ident
     cn
@@ -4349,7 +4583,7 @@ addRecordIdentRaw tyName cn ident fields env =
 addFieldOwnerIdents : Ident -> String -> List Field -> DataEnv -> DataEnv
 addFieldOwnerIdents _ _ [] env = env
 addFieldOwnerIdents ident cn ((Field fn _)::rest) env =
-  let next = fromOption [] (omLookup fn env.deFieldOwnerIdents) ++ [(ident, cn)]
+  let next = (ident, cn) :: fromOption [] (omLookup fn env.deFieldOwnerIdents)
   addFieldOwnerIdents
     ident
     cn
@@ -4632,6 +4866,52 @@ distinctIdentsIn2 : List (Ident, String) -> Bool
 distinctIdentsIn2 [(i1, _), (i2, _)] = i1 /= i2
 distinctIdentsIn2 _ = False
 
+-- ── #2147 residual: `deRecordIdents`' BUCKET ORDER, NOW PINNED ───────────────
+-- `deFieldOwnerIdents` has had an ORDERED assertion since A-3.2a (the `["Pt",
+-- "Vec"]` doctest below states a list, not a length).  `deRecordIdents` — its
+-- sibling under the same `omMapValues reverseL` finalisation in `buildDataEnv`,
+-- rewritten from `++ [x]` to cons-and-reverse by #2147 — had only its VALUES
+-- covered, never its ORDER.  So the one property #2147 had to preserve was the
+-- one nothing asserted: drop `deRecordIdents`' half of that `omMapValues
+-- reverseL` and every existing assertion in this file still passes.
+--
+-- The fixture needs 2+ entries under ONE key, and `deRecordIdents` is keyed by
+-- CONSTRUCTOR name, so it takes two records sharing a ctor name under different
+-- TYPE names — which is also what makes the assertion discriminating, since the
+-- type name is then the thing that distinguishes first from second.
+deRecordOrderFixtureA : Decl
+deRecordOrderFixtureA = DData {
+  dataVis = VisPublic,
+  dataName = "P1",
+  dataParams = [],
+  dataCtors = [Variant "Pt" (ConNamed [Field "x" (tyConBuiltin "Int" None)] False)],
+  dataDerives = [],
+  dataOrigin = OriginModule "m",
+}
+
+deRecordOrderFixtureB : Decl
+deRecordOrderFixtureB = DData {
+  dataVis = VisPublic,
+  dataName = "P2",
+  dataParams = [],
+  dataCtors = [Variant "Pt" (ConNamed [Field "y" (tyConBuiltin "Int" None)] False)],
+  dataDerives = [],
+  dataOrigin = OriginModule "n",
+}
+
+-- Two modules in ORDINAL order, so "P1" is declared strictly before "P2".
+deRecordOrderEnv : DataEnv
+deRecordOrderEnv = buildDataEnv
+  [
+    declEnvModule 0 "m" [deRecordOrderFixtureA],
+    declEnvModule 1 "n" [deRecordOrderFixtureB],
+  ]
+
+deRecordIdentTyNames : List (Ident, String, List Field) -> List String
+deRecordIdentTyNames [] = []
+deRecordIdentTyNames ((_, tyName, _)::rest) =
+  tyName :: deRecordIdentTyNames rest
+
 -- ── doctests ─────────────────────────────────────────────────────────────
 -- > map snd (fromOption [] (omLookup "x" deFieldOwnerCollisionEnv.deFieldOwnerIdents))
 -- ["Pt", "Vec"]
@@ -4646,6 +4926,16 @@ distinctIdentsIn2 _ = False
 -- ["Pt", "Pt"]
 -- > distinctIdentsIn2 (fromOption [] (omLookup "x" deFieldOwnerSameNameEnv.deFieldOwnerIdents))
 -- True
+
+-- #2147's order half, on `deRecordIdents` rather than `deFieldOwnerIdents`:
+-- DECLARATION order within the bucket, "P1" (module ordinal 0) before "P2"
+-- (ordinal 1).  Remove `deRecordIdents`' `omMapValues reverseL` in
+-- `buildDataEnv` and this reads `["P2", "P1"]`; the length assertion beside it
+-- does not move, which is precisely why a length was never enough.
+-- > deRecordIdentTyNames (fromOption [] (omLookup "Pt" deRecordOrderEnv.deRecordIdents))
+-- ["P1", "P2"]
+-- > listLen (fromOption [] (omLookup "Pt" deRecordOrderEnv.deRecordIdents))
+-- 2
 
 -- 🚨 THE BLANK LINE ABOVE IS LOAD-BEARING — DO NOT CLOSE THE GAP.  A doctest's
 -- EXPECTED OUTPUT runs to the end of the contiguous comment run, so without it
@@ -4857,7 +5147,8 @@ emptyImplEnv = ImplEnv {
 buildImplEnv : List DeclEnvModule -> ImplEnv
 buildImplEnv mods =
   let env = buildImplEnvGo mods 0 emptyImplEnv
-  ImplEnv { env | ieUnivSnaps = ieBuildSnaps env.ieRows }
+  let env2 = ImplEnv { env | ieRows = reverseL env.ieRows }
+  ImplEnv { env2 | ieUnivSnaps = ieBuildSnaps env2.ieRows }
 
 buildImplEnvGo : List DeclEnvModule -> Int -> ImplEnv -> ImplEnv
 buildImplEnvGo [] _ env = env
@@ -4896,18 +5187,23 @@ buildImplEnvGo (m::rest) seq env =
 -- ("derive a NAME from (module id, interface identity, head) — content, not
 -- position"), one path further.
 --
--- 🚨 LINEAR BY DESIGN, AND THAT IS WHY IT DOES NOT CALL `ieAddRows`.  `ieInsertRow`
--- does `env.ieRows ++ [r]` per row — O(rows²) over the build, self-documented as
--- OWED at `ieInsertRow` — and `compiler/AGENTS.md` forbids importing a known
--- quadratic into a new path ("thirteen quadratics, all the same shape").  The rows
--- are already in hand as one forward-ordered list here, so `ieRows` is SET once and
+-- 🚨 LINEAR BY DESIGN, AND THAT IS WHY IT DOES NOT CALL `ieAddRows`.  The rows are
+-- already in hand as one forward-ordered list here, so `ieRows` is SET once and
 -- only the three index buckets are folded, through the SAME `ieInsertRowKeys` /
--- `ieInsertRowAt` the Module arm uses.  `ieInsertRow` is left exactly as it is: it
--- is the Module arm's shared path, and RUN-B-007's declaration-index ruling depends
--- on `ieRows` and every bucket being ASCENDING by `instRefSeq`, so a cons+reverse
--- rewrite of that function would put a load-bearing order on the line for no gain
--- here.  This construction yields the same value `ieAddRows rows emptyImplEnv`
--- would: appending left-to-right produces `rows`, and the bucket writer is
+-- `ieInsertRowAt` the Module arm uses — no per-row `ieRows` write at all, and
+-- therefore no reverse to owe.
+--
+-- ⚠️ THIS PARAGRAPH USED TO ARGUE AGAINST A CONS+REVERSE REWRITE OF
+-- `ieInsertRow` ("would put a load-bearing order on the line for no gain here"),
+-- ON THE PREMISE THAT `ieInsertRow` APPENDED (`env.ieRows ++ [r]`, O(rows²)).
+-- #2146 did that rewrite: `ieInsertRow` now conses and `buildImplEnv` does one
+-- `reverseL` at the end.  RUN-B-007's declaration-index ruling still depends on
+-- `ieRows` and every bucket being ASCENDING by `instRefSeq` — that is unchanged
+-- and still load-bearing — but it is now `buildImplEnv`'s final `reverseL` that
+-- discharges it on the Module arm, not the shape of `ieInsertRow`.  See
+-- `ieAddRows`'s 🚨 for what a caller inserting into a BUILT `ImplEnv` owes as a
+-- result.  This construction still yields the same value `ieAddRows rows
+-- emptyImplEnv` (followed by that reverse) would, and the bucket writer is
 -- unchanged and still `mregAppendK` (forward order within a bucket).
 --
 -- ⚠️ `ieUnivSnaps` IS RE-DERIVED, per `ieAddRows`'s 🚨: it is a second
@@ -5013,6 +5309,22 @@ implRowsOf mid ord seq ((iface, tys, reqs, ms)::rest) =
 -- So: if you need to insert into a built `ImplEnv`, RE-DERIVE the snapshots
 -- (`ieUnivSnaps = ieBuildSnaps env.ieRows`) once at the end of your fold, exactly as
 -- `buildImplEnv` does. Do not add a second maintainer, and do not insert without one.
+--
+-- 🚨 AND SINCE #2146 THAT IS TWO STEPS, NOT ONE — `REVERSE FIRST`.  `ieInsertRow`
+-- now PREPENDS (`r :: env.ieRows`), so a fold over it leaves `ieRows` in reverse
+-- build order; `buildImplEnv` restores it with one `reverseL` and only then calls
+-- `ieBuildSnaps`.  A caller that re-derives off the un-reversed rows builds
+-- snapshots whose per-ordinal prefixes are the SUFFIXES — silently wrong in
+-- exactly the direction this whole note is about, and worse than not re-deriving
+-- at all.  The full sequence, mirroring `buildImplEnv` line for line:
+--
+--     let env2 = ImplEnv { env | ieRows = reverseL env.ieRows }
+--     ImplEnv { env2 | ieUnivSnaps = ieBuildSnaps env2.ieRows }
+--
+-- INERT TODAY (this function still has exactly one caller, `buildImplEnvGo`,
+-- which is inside `buildImplEnv` and does both steps) — written down anyway,
+-- because it is the instruction the NEXT caller reads, and the reverse is the
+-- half a reader of the old two-line version would not know to add.
 ieAddRows : List ImplRow -> ImplEnv -> ImplEnv
 ieAddRows [] env = env
 ieAddRows (r::rest) env = ieAddRows rest (ieInsertRow r env)
@@ -5026,19 +5338,16 @@ ieAddRows (r::rest) env = ieAddRows rest (ieInsertRow r env)
 -- interface.  ONLY interface-keyed indexes belong here; anything else DOUBLE-FILES.
 -- The once-per-row seam is `ieFileRow` — read its header before adding a bucket.
 --
--- ⚠️ OWED, RECORDED RATHER THAN FIXED UNDER REVIEW: `env.ieRows ++ [r]` is an
--- append PER ROW, i.e. O(rows²) over the build.  It is small today — a tree-wide
--- `impl` count in the low hundreds — but it is precisely the shape
--- `compiler/AGENTS.md` forbids ("thirteen quadratics, all the same shape"), and
--- §9.8 item 8's timing A/B is still OWED, so nothing has actually measured its
--- cost.  The fix is one line: cons and `reverseL` once in `buildImplEnv`, which
--- preserves build order.  Deliberately not done in a review round that is
--- otherwise comment-only, so that the byte-identical claim keeps its evidence.
+-- ✅ FIXED (#2146): `env.ieRows` used to be `++ [r]`, an append PER ROW —
+-- O(rows²) over the build, exactly the shape `compiler/AGENTS.md` forbids
+-- ("thirteen quadratics, all the same shape"). Now conses (`r :: env.ieRows`);
+-- `buildImplEnv` does the one `reverseL` at the end, once, which restores build
+-- order — the values are byte-identical, only the fold is linear now.
 -- 🚨 DOES NOT MAINTAIN `ieUnivSnaps` — the table `ieUniverseAt` actually reads.  Only
 -- `buildImplEnv` derives that, after all inserts are done.  Full hazard, and what to do
 -- if you need to insert into a built `ImplEnv`, at `ieAddRows` above.
 ieInsertRow : ImplRow -> ImplEnv -> ImplEnv
-ieInsertRow r env = ieFileRow r { env | ieRows = env.ieRows ++ [r] }
+ieInsertRow r env = ieFileRow r { env | ieRows = r::env.ieRows }
 
 -- ── ARCH B-2.1-a3 (Stage B sprint): THE ONE ONCE-PER-ROW FILING SEAM ──────────
 -- 🚨 EVERY PER-ROW INDEX GOES HERE, AND THE REASON IS A CORRECTNESS CONSTRAINT,
@@ -7945,6 +8254,7 @@ data PerRun = PerRun {
     recordByNameRef : Ref (OrdMap RecordInfo),  -- (local `let`/`where` helpers), reset at each body start: an occurrence resolving
     fieldOwnersRef : Ref (OrdMap (List String)),  -- to one is a LOCAL shadow, never a method occurrence, so no method obligation is recorded for it (round-2 adversarial break 3).
     dataParamKindsRef : Ref (List (TabKey, List Kind)),  -- A tyvar-id watermark was tried first and is UNSAFE: freshness-skipping
+    dataParamNameIndexRef : Ref (OrdMap Unit),  -- #2158: `tabKeyName`-only index over dataParamKindsRef's keys, kept in lockstep at every write site (freshPerRun / declEnvSeedDataUniverse / recordParamKinds) so `noImplHintFor`'s bare-name membership test is O(1)-ish instead of an O(n) `tabHasName` scan. Same bare-name semantics as `tabHasName` — collapses TkIdent/TkBare and module identity by design (#1111 A-2.3), not a stricter key.
     dataParamPolarityRef : Ref (List (TabKey, List Polarity)),  -- #1119 D-2: `dataParamKindsRef`'s VARIANCE twin — same key, same prepend/first-match discipline.  Read ONLY through `paramPolaritiesOf` (which seeds the two write channels).
     dataParamRowAtomsRef : Ref (List (TabKey, List (List Atom))),  -- #2110: the ATOM-GUARANTEE twin of the two above — per KRow parameter, the atoms this declaration charges at EVERY occurrence of that parameter.  Read ONLY through `paramRowAtomsOf`.
     aliasTableRef : Ref (List (TabKey, (List String, Ty))),  -- broke a top-level literal's fromInt obligation and surfaced a phantom
@@ -8061,6 +8371,7 @@ freshPerRun _ = PerRun {
   recordByNameRef = Ref omEmpty,
   fieldOwnersRef = Ref omEmpty,
   dataParamKindsRef = Ref [],
+  dataParamNameIndexRef = Ref omEmpty,
   dataParamPolarityRef = Ref [],
   dataParamRowAtomsRef = Ref [],
   aliasTableRef = Ref [],
@@ -15838,6 +16149,13 @@ recordParamKinds : TyConOrigin -> String -> List Kind -> Unit
 recordParamKinds o name kinds =
   let entry = (tyTabKey o name, kinds)
   perRun.value.dataParamKindsRef := entry::perRun.value.dataParamKindsRef.value
+  -- #2158: keep the name-only index in lockstep — an insert here because this
+  -- call only ADDS one key, where `declEnvSeedDataUniverse` REPLACES the whole
+  -- table (it reads its module's whole prefix out of `deNameIndexBefore` in one
+  -- `omLookup`).  A duplicate name insert is a harmless no-op (Set semantics),
+  -- which is what makes "own registrations on TOP of the universe" work here
+  -- without the index needing the list's ordering.
+  perRun.value.dataParamNameIndexRef := omInsert name () perRun.value.dataParamNameIndexRef.value
 
 -- A data param is KRow iff its name appears in a field's effect-tail position
 -- (`<e>`); else KType (the common case).  Inferred from usage — no syntax.
@@ -17675,17 +17993,30 @@ anyMember (x::xs) ys = contains x ys || anyMember xs ys
 -- constrained-fn occurrence (a name in [dictNames]) to EDictAt — both carry a
 -- fresh ref the typechecker fills.  The two name sets are disjoint (interface
 -- methods vs top-level functions).
+--
+-- ⚠️ #2189: THE THREE NAME SETS ARE INDEXED, NOT SCANNED.  [rpNames]/[dictNames]
+-- grow with the program (one entry per interface method / per `=>`-constrained
+-- top-level fn), and the rewrite visits EVERY `EVar` node — so a `contains n
+-- rpNames` List-as-set walk here is O(occurrences x names) = O(N^2), the same
+-- shape #975 drained out of the marker and #1031 drained out of `bound` in
+-- `rewriteArgScoped` below.  Build each set ONCE per prepass (`omFromNames`) and
+-- probe it with `omHasKey`.  Membership semantics are identical, so the rewrite is
+-- byte-for-byte parity.
 prePassDict : List String -> List String -> List Decl -> List Decl
 prePassDict rpNames dictNames prog =
-  mapProg (rewriteRPDict rpNames dictNames) prog
+  mapProg
+    (rewriteRPDict
+      (omFromNames rpNames omEmpty)
+      (omFromNames dictNames omEmpty))
+    prog
 
 -- [rpNames] here is the union of return-position methods AND method-level-
 -- constrained methods (foldMap): both must become EMethodAt so eval can narrow by
 -- the t-route and/or fold on the method-level dicts.
-rewriteRPDict : List String -> List String -> Expr -> Expr
+rewriteRPDict : OrdMap Unit -> OrdMap Unit -> Expr -> Expr
 rewriteRPDict rpNames dictNames (EVar n)
-  | contains n rpNames = EMethodAt n (Ref RNone) (Ref []) (Ref [])
-  | contains n dictNames = EDictAt n (Ref [])
+  | omHasKey n rpNames = EMethodAt n (Ref RNone) (Ref []) (Ref [])
+  | omHasKey n dictNames = EDictAt n (Ref [])
   | otherwise = EVar n
 rewriteRPDict _ _ e = e
 
@@ -17718,17 +18049,32 @@ rewriteRPDict _ _ e = e
 -- [shadowMap] (P0-18) is the mangle definer-shadow map — non-empty only on the emit
 -- path (argNames non-empty).  The scope-blind `mapProg` path (argNames == []) never
 -- has mangled shadows, so it ignores it and stays byte-identical.
+--
+-- ⚠️ #2189: the three name sets are INDEXED here for the same reason they are in
+-- `prePassDict` above — see that comment.  The `argNames == []` dispatch stays on
+-- the LIST, so the scope-blind/scope-aware arm choice is unchanged.
 prePassDictArg : List String -> List String -> List String -> List (String, String) -> List Decl -> List Decl
 prePassDictArg rpNames dictNames [] _ prog =
-  mapProg (rewriteRPDictArg rpNames dictNames []) prog
+  mapProg
+    (rewriteRPDictArg
+      (omFromNames rpNames omEmpty)
+      (omFromNames dictNames omEmpty)
+      omEmpty)
+    prog
 prePassDictArg rpNames dictNames argNames shadowMap prog =
-  map (prePassDeclScoped (ArgRw rpNames dictNames argNames shadowMap)) prog
+  map
+    (prePassDeclScoped (ArgRw
+      (omFromNames rpNames omEmpty)
+      (omFromNames dictNames omEmpty)
+      (omFromNames argNames omEmpty)
+      shadowMap))
+    prog
 
-rewriteRPDictArg : List String -> List String -> List String -> Expr -> Expr
+rewriteRPDictArg : OrdMap Unit -> OrdMap Unit -> OrdMap Unit -> Expr -> Expr
 rewriteRPDictArg rpNames dictNames argNames (EVar n)
-  | contains n rpNames = EMethodAt n (Ref RNone) (Ref []) (Ref [])
-  | contains n argNames = EMethodAt n (Ref RNone) (Ref []) (Ref [])
-  | contains n dictNames = EDictAt n (Ref [])
+  | omHasKey n rpNames = EMethodAt n (Ref RNone) (Ref []) (Ref [])
+  | omHasKey n argNames = EMethodAt n (Ref RNone) (Ref []) (Ref [])
+  | omHasKey n dictNames = EDictAt n (Ref [])
   | otherwise = EVar n
 rewriteRPDictArg _ _ _ e = e
 
@@ -17737,8 +18083,11 @@ rewriteRPDictArg _ _ _ e = e
 -- position methods, dn = constrained-fn dict names, an = arg-position methods).
 -- rp = return-position methods, dn = constrained-fn dict names, an = arg-position
 -- methods, sm = the P0-18 mangle definer-shadow map (mangledSymbol ↦ bareMethod).
+-- ⚠️ #2189: rp/dn/an are OrdMap-backed SETS, not `List String` scanned by
+-- `contains` — the same treatment `bound` already gets below, and for the same
+-- reason: they grow with the program while the rewrite visits every EVar.
 data ArgRw =
-  | ArgRw (List String) (List String) (List String) (List (String, String))
+  | ArgRw (OrdMap Unit) (OrdMap Unit) (OrdMap Unit) (List (String, String))
 
 -- rewrite a decl body with its own parameters seeded into the bound set.  Mirrors
 -- desugar's mapDecl coverage exactly (DFunDef / DInterface / DImpl / DProp /
@@ -17824,11 +18173,11 @@ rewriteArgScoped (ArgRw rp dn an sm) bound (EVar n)
     match lookupAssoc n sm
       Some bare => EMethodAt bare (Ref (RLocal n [])) (Ref []) (Ref [])
       None => EVar n
-  | contains n rp && not (omHasKey n bound) =
+  | omHasKey n rp && not (omHasKey n bound) =
     EMethodAt n (Ref RNone) (Ref []) (Ref [])
-  | contains n an && not (omHasKey n bound) =
+  | omHasKey n an && not (omHasKey n bound) =
     EMethodAt n (Ref RNone) (Ref []) (Ref [])
-  | contains n dn && not (omHasKey n bound) = EDictAt n (Ref [])
+  | omHasKey n dn && not (omHasKey n bound) = EDictAt n (Ref [])
   | otherwise = EVar n
 -- binders
 rewriteArgScoped rw bound (ELam ps body) =
@@ -24408,10 +24757,14 @@ firstTvar a b id = match findTvarInMono a id
 -- parameter per constraint (arity from funConstraintsRef, populated during
 -- inference), matching the dicts EDictAt applies at call sites.  Multi-clause
 -- functions are several DFunDef decls; each clause gets the same leading params.
+-- ⚠️ #2189: [names] is the dict-passed set, which grows with the program, and this
+-- maps over EVERY decl — so `contains n names` inside `dictPassDecl` was
+-- O(decls x names).  Index it ONCE here; `dictPassDecl`/`dictPassLetBind` probe
+-- with `omHasKey`.  Membership semantics unchanged.
 dictPass : List String -> List Decl -> List Decl
 dictPass names prog =
   map
-    (dictPassDecl names (returnPosMethodNames prog))
+    (dictPassDecl (omFromNames names omEmpty) (returnPosMethodNames prog))
     (mapProg rewriteBinopExpr prog)
 
 -- Phase 151 / Gap G: rewrite each *stamped* comparison/equality EBinOp into its
@@ -24503,9 +24856,9 @@ unopMethodApp op e routeRef =
   let split = binopRouteSplit !routeRef
   EApp (EMethodAt method (Ref (fst split)) (Ref (snd split)) (Ref [])) e
 
-dictPassDecl : List String -> List String -> Decl -> Decl
+dictPassDecl : OrdMap Unit -> List String -> Decl -> Decl
 dictPassDecl names _ (DFunDef pub n pats body)
-  | contains n names = DFunDef pub n (dictParams n (dictArityOf n) ++ pats) body
+  | omHasKey n names = DFunDef pub n (dictParams n (dictArityOf n) ++ pats) body
   | otherwise = DFunDef pub n pats body
 -- Top-level `let rec … with …` (DLetGroup): each binding is dict-passed exactly
 -- like a DFunDef — a constrained member gets `dictParams n (dictArityOf n)`
@@ -24539,9 +24892,9 @@ dictPassDecl _ _ d = d
 -- `dictArityOf n` is 0 for an unconstrained member (no change), matching the
 -- oracle's `if k = 0 then (n, clauses)` guard.  Gated on `names` (the constrained
 -- set) so an unconstrained member with a coincidental arity entry is untouched.
-dictPassLetBind : List String -> LetBind -> LetBind
+dictPassLetBind : OrdMap Unit -> LetBind -> LetBind
 dictPassLetBind names (LetBind n clauses)
-  | contains n names =
+  | omHasKey n names =
     LetBind n (map (prependDictClause n (dictArityOf n)) clauses)
   | otherwise = LetBind n clauses
 
@@ -27652,10 +28005,11 @@ noImplFoundMsg iface args = "No impl of \{iface} for \{ppPredArgsShared args}"
 -- Stage A-2 ledger counts.
 -- That costs nothing real: the question this asks is "is a type by this name
 -- user-declared anywhere?", used ONLY to decide whether `add 'deriving X'` is
--- applicable advice rather than a dead end for a builtin.  `tabHasName`
--- returns no value, so it cannot select the wrong module's row; the worst a
--- collision can do is offer applicable advice for the right reason under the
--- wrong module's declaration.
+-- applicable advice rather than a dead end for a builtin.  `omHasKey` (over
+-- `dataParamNameIndexRef`, which #2158 put in front of the old `tabHasName`
+-- scan — same bare-name question, same answer) returns no value, so it cannot
+-- select the wrong module's row; the worst a collision can do is offer
+-- applicable advice for the right reason under the wrong module's declaration.
 noImplHint : String -> List Mono -> Option String
 noImplHint iface [arg] = match headTyconNameMono arg
   Some n => noImplHintFor iface n
@@ -27664,7 +28018,12 @@ noImplHint _ _ = None
 
 noImplHintFor : String -> String -> Option String
 noImplHintFor iface n
-  | tabHasName n perRun.value.dataParamKindsRef.value =
+  -- #2158: was `tabHasName n perRun.value.dataParamKindsRef.value`, an O(n)
+  -- linear scan re-run per no-impl diagnostic. `dataParamNameIndexRef` is the
+  -- same bare-name membership question (built from `tabKeyName` over exactly
+  -- the same keys, kept in lockstep at every dataParamKindsRef write site —
+  -- see the field's comment on `PerRun`), answered via `omHasKey` instead.
+  | omHasKey n perRun.value.dataParamNameIndexRef.value =
     Some (noImplAdvice iface n)
   | otherwise = None
 
