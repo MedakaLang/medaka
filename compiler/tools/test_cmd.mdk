@@ -47,7 +47,7 @@
 -- Previously this was the synthetic literal `"__user__"`, hardcoded at all four
 -- single-file call sites below.
 
-import frontend.ast.{Decl, DData, DInterface, Expr}
+import frontend.ast.{Decl, DData, DInterface, DProp, Expr(..), Loc(..)}
 import frontend.parser.{parse, parseLocated, parseResult}
 import frontend.desugar.{desugar}
 import driver.loader.{
@@ -338,7 +338,7 @@ driveAll : List Engine -> List Decl -> List Decl -> String -> String -> List Str
 driveAll engines runtimeDecls coreDecls target tsrc roots cases filterOpt =
   let userDecls = desugar (parse tsrc)
   let doctestsOk = runDoctests engines runtimeDecls coreDecls target tsrc userDecls roots filterOpt
-  let propsOk = runProps runtimeDecls coreDecls target userDecls roots cases filterOpt
+  let propsOk = runProps runtimeDecls coreDecls target tsrc userDecls roots cases filterOpt
   let testsOk = runTestDecls runtimeDecls coreDecls target tsrc userDecls roots filterOpt
   doctestsOk && propsOk && testsOk
 
@@ -565,12 +565,37 @@ reportDoctests target result =
 -- Only runs (and prints) if the file declares props — mirrors the OCaml short
 -- circuit (`Prop_runner.run_all` returns true with no output when none).
 
-runProps : List Decl -> List Decl -> String -> List Decl -> List String -> Int -> Option String -> <IO> Bool
-runProps runtimeDecls coreDecls target userDecls roots cases filterOpt
+-- #2293/#2295 (a): raw-parse line lookup for `prop "…"` decls — same
+-- rationale as `testLineTests` below (the elaborated body loses its ELoc, so
+-- recover each prop's line from a POSITION-preserving reparse). Matched by
+-- name (not position, unlike (b)'s `test "…"` fix): the packet scopes props
+-- to the same name-matched mechanism `test "…"` used to use, not to (b)'s
+-- duplicate-name repair — a duplicate prop name is not this slice's problem.
+propLineTests : String -> List (String, Int)
+propLineTests tsrc = collectPropLines (desugar (parseLocated tsrc))
+
+collectPropLines : List Decl -> List (String, Int)
+collectPropLines [] = []
+collectPropLines ((DProp _ name _ body)::rest) =
+  (name, exprLineLocal body) :: collectPropLines rest
+collectPropLines (_::rest) = collectPropLines rest
+
+-- Peel a transparent ELoc wrapper to recover a body's source line. Intentional
+-- cross-file duplicate of `test_runner.mdk`'s private (unexported) `exprLine`
+-- — tiny helper, not worth exporting across a module boundary for one caller.
+-- lint-disable-next-line rule-duplicate-body
+exprLineLocal : Expr -> Int
+exprLineLocal (ELoc (Loc _ l _ _ _) _) = l
+exprLineLocal (EApp f _) = exprLineLocal f
+exprLineLocal (EAnnot e _) = exprLineLocal e
+exprLineLocal (EHeadAnnot e _) = exprLineLocal e
+exprLineLocal _ = 0
+
+runProps : List Decl -> List Decl -> String -> String -> List Decl -> List String -> Int -> Option String -> <IO> Bool
+runProps runtimeDecls coreDecls target tsrc userDecls roots cases filterOpt
   | not (hasProps userDecls) = True
-  | hasUseDecls userDecls =
-    runPropsMulti runtimeDecls coreDecls target userDecls roots cases filterOpt
-  | otherwise = runPropsSingle runtimeDecls coreDecls target userDecls roots cases filterOpt
+  | hasUseDecls userDecls = runPropsMulti runtimeDecls coreDecls target tsrc userDecls roots cases filterOpt
+  | otherwise = runPropsSingle runtimeDecls coreDecls target tsrc userDecls roots cases filterOpt
 
 -- Single-file (no-import) prop path, DRIVER-COLLAPSE Phase 1+3: same multi-module
 -- path as runPropsMulti, with the degenerate 1-module list [(rootId, userDecls)].
@@ -582,8 +607,8 @@ runProps runtimeDecls coreDecls target userDecls roots cases filterOpt
 -- the file's own `=>`-constrained fns (set's `fromList`/`wellFormed`) get their
 -- leading dict argument, mirroring runPropsMulti's elaboratedRootProps (which
 -- inferPropBodies typed in-module).
-runPropsSingle : List Decl -> List Decl -> String -> List Decl -> List String -> Int -> Option String -> <IO> Bool
-runPropsSingle runtimeDecls coreDecls target userDecls roots cases filterOpt =
+runPropsSingle : List Decl -> List Decl -> String -> String -> List Decl -> List String -> Int -> Option String -> <IO> Bool
+runPropsSingle runtimeDecls coreDecls target tsrc userDecls roots cases filterOpt =
   let userNames = funNamesOf userDecls
   let livePrelude = if programIsCore userDecls then
     []
@@ -595,10 +620,10 @@ runPropsSingle runtimeDecls coreDecls target userDecls roots cases filterOpt =
   let rootProps = match lookupModuleDecls rootId (snd elaborated)
     Some decls => decls
     None => userDecls
-  runAllProps cases filterOpt env rootProps
+  runAllProps cases filterOpt target (propLineTests tsrc) env rootProps
 
-runPropsMulti : List Decl -> List Decl -> String -> List Decl -> List String -> Int -> Option String -> <IO> Bool
-runPropsMulti runtimeDecls coreDecls target userDecls roots cases filterOpt = match loadProgram target roots
+runPropsMulti : List Decl -> List Decl -> String -> String -> List Decl -> List String -> Int -> Option String -> <IO> Bool
+runPropsMulti runtimeDecls coreDecls target tsrc userDecls roots cases filterOpt = match loadProgram target roots
   Err e =>
     let _ = ePutStrLn e
     False
@@ -606,7 +631,7 @@ runPropsMulti runtimeDecls coreDecls target userDecls roots cases filterOpt = ma
     let elaborated = elaborateModules runtimeDecls coreDecls (map desugarPair mods)
     let env = evalModulesRootEnvWith (testCapableExterns ()) (fst elaborated) (snd elaborated)
     let rootProps = elaboratedRootProps target (snd elaborated) userDecls
-    runAllProps cases filterOpt env rootProps
+    runAllProps cases filterOpt target (propLineTests tsrc) env rootProps
 -- DRIVER-COLLAPSE Phase 2: the eval-dict layer now promotes the file's own
 -- `=>`-constrained fns (set's `wellFormed`/`fromList`, etc.), so the bindings in
 -- [env] take a leading dict ARGUMENT.  A prop body calls those fns, so its call
@@ -709,17 +734,25 @@ runTestDeclsMulti runtimeDecls coreDecls target tsrc userDecls roots filterOpt =
 
 -- The elaborated (dict-passed) body loses its leading ELoc (the marker rewrites
 -- the leftmost method EVar into a dict node), so take each test's line from the
--- RAW parsed decls (matched by unique test name) and keep the elaborated body.
+-- RAW parsed decls.
+--
+-- #2295 (b): matched by POSITION, not by test NAME. The old name match
+-- collapsed two same-named `test "…"` decls onto one line and reported line 0
+-- for any name it failed to find (which could also happen silently on a
+-- rename mismatch between the two decl lists). `raw` and the elaborated
+-- `DTest` list both come from the SAME source (`testLineTests tsrc` and
+-- `collectTests rootTests` respectively) via the same desugar pipeline that
+-- neither reorders nor drops/duplicates DTest decls, so the Nth raw entry and
+-- the Nth elaborated entry are the SAME source `test "…"` decl regardless of
+-- what either is named — a position match survives duplicate names, and a raw
+-- list at least as long as the elaborated one (the normal case) never falls
+-- back to `0`.
 attachRawLines : List (String, Int, Expr) -> List (String, Int, Expr) -> List (String, Int, Expr)
 attachRawLines _ [] = []
-attachRawLines raw ((name, _, body)::rest) =
-  (name, lookupRawLine name raw, body) :: attachRawLines raw rest
-
-lookupRawLine : String -> List (String, Int, Expr) -> Int
-lookupRawLine _ [] = 0
-lookupRawLine name ((n, l, _)::rest)
-  | n == name = l
-  | otherwise = lookupRawLine name rest
+attachRawLines [] ((name, _, body)::rest) =
+  (name, 0, body) :: attachRawLines [] rest
+attachRawLines ((_, l, _)::rawRest) ((name, _, body)::rest) =
+  (name, l, body) :: attachRawLines rawRest rest
 
 -- Reuses the doctest reporting SHAPE (`ok`/`FAIL <f>:<line>: <name>`, then the
 -- `<f>: P/T passed[ (F failed, E errors)]` summary + exit code, P0-6).  Like the
@@ -740,6 +773,13 @@ runTestLoop : String -> List (String, Value e) -> List (String, Int, Expr) -> In
 runTestLoop _ _ [] passed failed errors = (passed, failed, errors)
 runTestLoop target env ((name, line, body)::rest) passed failed errors =
   let loc = "\{target}:\{intToString line}"
+  -- #2293: name the test BEFORE evaluating its body. Panics are uncatchable
+  -- by design (settled: isolation only, never catchability), so this print is
+  -- the runner's only chance to attribute a mid-run process death — if the
+  -- process dies inside `runOneTest` below, this line is the last thing on
+  -- stdout, and the disappearance of every test after it is explained rather
+  -- than mysterious.
+  let _ = putStrLn "  running \{loc}: \{name}"
   match runOneTest env body
     Pass =>
       let _ = putStrLn "  ok   \{loc}: \{name}"
@@ -781,23 +821,29 @@ testFailSuffix failed errors
 --
 -- ⚠️ Results are under the INTERPRETER (eval) — a native-only miscompile is
 -- invisible here (see #81); the CALLER must present them as "passes under eval",
--- never an unqualified pass.  The `test "…"` phase is intentionally NOT reported
--- (medaka_test covers doctests + props, per #252 — unchanged by #1443, which is
--- scoped to typecheck-gate parity only); a file's `test "…"` decls are run only
--- by the human `medaka test`.
+-- never an unqualified pass.
+--
+-- #2295 (d): the return tuple now carries a 4th element, the `test "…"` phase's
+-- structured results (`testDeclsReport`, above) — §4 of this slice's packet
+-- licenses extending this shape (not reverting it).  `medaka mcp`'s
+-- `medaka_test` (#252/#1443) deliberately IGNORES this 4th element and keeps
+-- reporting only doctests+props, unchanged; `medaka test --json` (the CLI,
+-- #2295) is the new consumer that folds it in, so the JSON and human `medaka
+-- test` arms agree on ALL THREE phases' counts for one target.
 export
-runTestReport : List Engine -> String -> String -> String -> String -> String -> <IO> (Option String, List (Engine, RunResult), List PropResult)
+runTestReport : List Engine -> String -> String -> String -> String -> String -> <IO> (Option String, List (Engine, RunResult), List PropResult, List (String, Int, ExResult))
 runTestReport engines runtimeSrc coreSrc target tsrc stdlibDir =
   let runtimeDecls = desugar (parse runtimeSrc)
   let coreDecls = desugar (parse coreSrc)
   let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]
   let userDecls = desugar (parse tsrc)
   match typecheckGateResult target roots runtimeSrc coreSrc tsrc userDecls
-    Some errText => (Some errText, [], [])
+    Some errText => (Some errText, [], [], [])
     None =>
       let doctestRuns = doctestReport engines runtimeDecls coreDecls target tsrc userDecls roots
-      let propResults = propsReport runtimeDecls coreDecls target userDecls roots
-      (None, doctestRuns, propResults)
+      let propResults = propsReport runtimeDecls coreDecls target tsrc userDecls roots
+      let testResults = testDeclsReport runtimeDecls coreDecls target tsrc userDecls roots
+      (None, doctestRuns, propResults, testResults)
 
 -- Doctest phase as pure data: extraction + runChosenOn per requested engine,
 -- minus reportDoctests' printing.  A file with zero doctests yields the empty
@@ -834,17 +880,18 @@ doctestReportGo (e::rest) runtimeDecls coreDecls target tsrc userDecls roots exa
 
 -- Prop phase as pure data: same single-file/multi-module split as runProps, but
 -- calling runAllPropsResults (silent) instead of runAllProps (printing).
-propsReport : List Decl -> List Decl -> String -> List Decl -> List String -> <IO> List PropResult
-propsReport runtimeDecls coreDecls target userDecls roots
+propsReport : List Decl -> List Decl -> String -> String -> List Decl -> List String -> <IO> List PropResult
+propsReport runtimeDecls coreDecls target tsrc userDecls roots
   | not (hasProps userDecls) = []
   | hasUseDecls userDecls =
-    propsReportMulti runtimeDecls coreDecls target userDecls roots
-  | otherwise = propsReportSingle runtimeDecls coreDecls target userDecls roots
+    propsReportMulti runtimeDecls coreDecls target tsrc userDecls roots
+  | otherwise =
+    propsReportSingle runtimeDecls coreDecls target tsrc userDecls roots
 
 -- Keyed by the loader-derived `rootId` (ARCH E-5, #1521/#1223), not the retired
 -- synthetic `"__user__"` literal — see the ARCH E-5 note near runSingle above.
-propsReportSingle : List Decl -> List Decl -> String -> List Decl -> List String -> <IO> List PropResult
-propsReportSingle runtimeDecls coreDecls target userDecls roots =
+propsReportSingle : List Decl -> List Decl -> String -> String -> List Decl -> List String -> <IO> List PropResult
+propsReportSingle runtimeDecls coreDecls target tsrc userDecls roots =
   let userNames = funNamesOf userDecls
   let livePrelude = if programIsCore userDecls then
     []
@@ -858,13 +905,63 @@ propsReportSingle runtimeDecls coreDecls target userDecls roots =
     None => userDecls
   -- MCP's medaka_test has no --cases/--filter of its own (#2295 is scoped to
   -- the CLI); keep this structured path's behavior unchanged.
-  runAllPropsResults 100 None env rootProps
+  runAllPropsResults 100 None (propLineTests tsrc) env rootProps
 
-propsReportMulti : List Decl -> List Decl -> String -> List Decl -> List String -> <IO> List PropResult
-propsReportMulti runtimeDecls coreDecls target userDecls roots = match loadProgram target roots
+propsReportMulti : List Decl -> List Decl -> String -> String -> List Decl -> List String -> <IO> List PropResult
+propsReportMulti runtimeDecls coreDecls target tsrc userDecls roots = match loadProgram target roots
   Err _ => []
   Ok mods =>
     let elaborated = elaborateModules runtimeDecls coreDecls (map desugarPair mods)
     let env = evalModulesRootEnvWith (testCapableExterns ()) (fst elaborated) (snd elaborated)
     let rootProps = elaboratedRootProps target (snd elaborated) userDecls
-    runAllPropsResults 100 None env rootProps
+    runAllPropsResults 100 None (propLineTests tsrc) env rootProps
+
+-- ── test-decl phase as pure data (#2295 (d)) ────────────────────────────────
+-- Symmetric with `propsReport` above: the same single-file/multi-module split
+-- `runTestDecls` uses, but collecting a `(name, line, ExResult)` per `test
+-- "…"` decl instead of printing.  Exists so `medaka test --json` can report
+-- the SAME `test "…"` counts the human runner does — `runTestReport`'s
+-- structured contract (medaka mcp's medaka_test, #1443) deliberately excludes
+-- this phase (see the comment above `runTestReport`), so this is a second,
+-- CLI-only consumer of the same discovery/eval machinery, not a change to
+-- what medaka_test reports.
+testDeclsReport : List Decl -> List Decl -> String -> String -> List Decl -> List String -> <IO> List (String, Int, ExResult)
+testDeclsReport runtimeDecls coreDecls target tsrc userDecls roots
+  | not (hasTests userDecls) = []
+  | hasUseDecls userDecls =
+    testDeclsReportMulti runtimeDecls coreDecls target tsrc userDecls roots
+  | otherwise =
+    testDeclsReportSingle runtimeDecls coreDecls target tsrc userDecls roots
+
+testDeclsReportSingle : List Decl -> List Decl -> String -> String -> List Decl -> List String -> <IO> List (String, Int, ExResult)
+testDeclsReportSingle runtimeDecls coreDecls target tsrc userDecls roots =
+  let userNames = funNamesOf userDecls
+  let livePrelude = if programIsCore userDecls then
+    []
+  else
+    dropShadowedExp userNames coreDecls
+  let rootId = singleRootId roots target
+  let elaborated = elaborateModules runtimeDecls livePrelude [(rootId, userDecls)]
+  let env = evalModulesRootEnvWith (testCapableExterns ()) (fst elaborated) (snd elaborated)
+  let rootTests = match lookupModuleDecls rootId (snd elaborated)
+    Some decls => decls
+    None => userDecls
+  runTestsCollect
+    env
+    (attachRawLines (testLineTests tsrc) (collectTests rootTests))
+
+testDeclsReportMulti : List Decl -> List Decl -> String -> String -> List Decl -> List String -> <IO> List (String, Int, ExResult)
+testDeclsReportMulti runtimeDecls coreDecls target tsrc userDecls roots = match loadProgram target roots
+  Err _ => []
+  Ok mods =>
+    let elaborated = elaborateModules runtimeDecls coreDecls (map desugarPair mods)
+    let env = evalModulesRootEnvWith (testCapableExterns ()) (fst elaborated) (snd elaborated)
+    let rootTests = elaboratedRootProps target (snd elaborated) userDecls
+    runTestsCollect
+      env
+      (attachRawLines (testLineTests tsrc) (collectTests rootTests))
+
+runTestsCollect : List (String, Value e) -> List (String, Int, Expr) -> <IO> List (String, Int, ExResult)
+runTestsCollect _ [] = []
+runTestsCollect env ((name, line, body)::rest) =
+  (name, line, runOneTest env body) :: runTestsCollect env rest

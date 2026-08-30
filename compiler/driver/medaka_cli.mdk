@@ -127,6 +127,7 @@ import json.{
   Json,
   JInt,
   JString,
+  JBool,
   JArray,
   JObject,
   JNull,
@@ -151,9 +152,27 @@ import eval.eval.{
   pendingRunDiags,
   progArgsRef,
 }
-import tools.test_cmd.{runTest}
-import tools.prop_runner.{seedPropRng}
-import tools.doctest.{Engine(..)}
+import tools.test_cmd.{runTest, runTestReport}
+import tools.prop_runner.{
+  seedPropRng,
+  PropResult,
+  propResultName,
+  propResultPassed,
+  propResultDetail,
+}
+import tools.doctest.{
+  Engine(..),
+  Example,
+  ExResult(..),
+  RunResult,
+  runPassed,
+  runFailed,
+  runErrors,
+  runDetails,
+  exampleLine,
+  exampleInput,
+  engineName,
+}
 import tools.repl.{initSession, replLoop}
 import tools.lsp.{runServer}
 import tools.mcp.{runMcpServer}
@@ -2206,7 +2225,7 @@ testHelpText = stringConcat
     "medaka test — Run doctests + property tests\n",
     "\n",
     "Usage:\n",
-    "  medaka test [--native | --engines eval,native] [--filter <substring>]\n",
+    "  medaka test [--native | --engines eval,native] [--json] [--filter <substring>]\n",
     "              [--seed <n>] [--cases <n>] [file.mdk | dir]\n",
     "\n",
     "  --native            run doctests through a compiled native binary\n",
@@ -2214,6 +2233,11 @@ testHelpText = stringConcat
     "                      --engines native)\n",
     "  --engines e1,e2,...  run the listed engine set (known: eval, native);\n",
     "                      exit code is the AND across engines\n",
+    "  --json               emit a {\"file\":...,\"doctests\":...,\"properties\":...,\n",
+    "                      \"tests\":...,\"summary\":...} JSON object instead of\n",
+    "                      human text (single file.mdk target only; agrees with\n",
+    "                      the human report's pass/fail counts on all three\n",
+    "                      phases)\n",
     "  --filter <substring> restrict to doctests/`test \"…\"`/`prop \"…\"` whose\n",
     "                      name (or, for a doctest, input expression) contains\n",
     "                      <substring>\n",
@@ -2241,10 +2265,11 @@ validateTestFlags : List String -> Result String Unit
 validateTestFlags [] = Ok ()
 validateTestFlags (a::rest)
   | a == "--native" = validateTestFlags rest
+  | a == "--json" = validateTestFlags rest
   | contains a testValueFlags = match rest
     [] => Err "\{a} requires a value"
     _::rest2 => validateTestFlags rest2
-  | startsWith "--" a = Err "unrecognized flag '\{a}' (known: --native, --engines, --filter, --seed, --cases)"
+  | startsWith "--" a = Err "unrecognized flag '\{a}' (known: --native, --json, --engines, --filter, --seed, --cases)"
   | otherwise = validateTestFlags rest
 
 -- `--cases <n>`/`--seed <n>` must parse as integers — same "named + located"
@@ -2282,14 +2307,19 @@ runTestCmd argv = match validateTestFlags argv
             Some n => n
             None => 100
           let filterOpt = testFlagValue "--filter" argv
+          let jsonMode = hasFlag "--json" argv
           match testTargets argv
             [] =>
-              let _ = ePutStrLn "usage: medaka test [--native | --engines eval,native] [--filter <substring>] [--seed <n>] [--cases <n>] [file.mdk | dir]"
+              let _ = ePutStrLn "usage: medaka test [--native | --engines eval,native] [--json] [--filter <substring>] [--seed <n>] [--cases <n>] [file.mdk | dir]"
               exit 1
-            [target] => match listDir target
+            [target] => if jsonMode then runTestJsonCmd engines target
+            else match listDir target
               Err _ => runTestOne engines cases filterOpt target
               Ok _ => runTestManyTargets engines cases filterOpt [target]
-            targets => runTestManyTargets engines cases filterOpt targets
+            targets => if jsonMode then
+              let _ = ePutStrLn "medaka test --json: exactly one file.mdk target is supported"
+              exit 1
+            else runTestManyTargets engines cases filterOpt targets
 
 -- `--engines <list>` and `--native` are MUTUALLY EXCLUSIVE — not "--engines
 -- silently wins". Letting one silently override the other reproduces, in
@@ -2349,6 +2379,7 @@ testTargets : List String -> List String
 testTargets [] = []
 testTargets ("--engines"::_::rest) = testTargets rest
 testTargets ("--native"::rest) = testTargets rest
+testTargets ("--json"::rest) = testTargets rest
 testTargets ("--filter"::_::rest) = testTargets rest
 testTargets ("--seed"::_::rest) = testTargets rest
 testTargets ("--cases"::_::rest) = testTargets rest
@@ -2367,6 +2398,165 @@ runTestOne engines cases filterOpt target =
   let roots = entrySearchRoots (dirOf2 target) ++ [stdlibDir]
   let ok = runTest engines rtPath corePath target roots cases filterOpt
   if ok then () else exit 1
+
+-- ── test --json (#2295 (d)) ──────────────────────────────────────────────────
+-- `medaka test --json <file.mdk>`: structured counterpart of the human
+-- `medaka test` report, matching `medaka lint --json`'s flag convention (one
+-- JSON object to stdout, exit 1 iff the run failed).  Single-file only for
+-- now (mirrors this slice's scope — the directory/multi-target walk stays
+-- human-text-only).
+--
+-- Built on `runTestReport` rather than `mcp.mdk`'s `testReportJson`: that
+-- function's envelope deliberately excludes the `test "…"` phase (#1443,
+-- #252 scope), and this slice's acceptance requires the JSON and human arms
+-- to agree INCLUDING that phase — so a CLI-side renderer that folds in the
+-- `test "…"` results `runTestReport` now also returns is needed; adapting
+-- `testReportJson` in place would have changed medaka_test's (unrelated,
+-- settled) contract.  `--filter`/`--seed`/`--cases` are NOT threaded through
+-- here yet (`runTestReport` doesn't take them) — out of this slice's scope,
+-- noted in the report rather than silently limiting them to look supported.
+runTestJsonCmd : List Engine -> String -> <IO> Unit
+runTestJsonCmd engines target =
+  let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+  let rtPath = root ++ "/stdlib/runtime.mdk"
+  let corePath = root ++ "/stdlib/core.mdk"
+  let stdlibDir = root ++ "/stdlib"
+  match readPreludeFile rtPath
+    Err e =>
+      let _ = ePutStrLn e
+      exit 1
+    Ok rsrc => match readPreludeFile corePath
+      Err e =>
+        let _ = ePutStrLn e
+        exit 1
+      Ok csrc => match readFile target
+        Err e =>
+          let _ = ePutStrLn e
+          exit 1
+        Ok tsrc =>
+          let (typeError, runs, props, tests) = runTestReport engines rsrc csrc target tsrc stdlibDir
+          let _ = putStr (stringify (cliTestReportJson target typeError runs props tests))
+          if cliTestReportOk typeError runs props tests then () else exit 1
+
+cliTestReportOk : Option String -> List (Engine, RunResult) -> List PropResult -> List (String, Int, ExResult) -> Bool
+cliTestReportOk typeError runs props tests = isNone typeError
+  && cliAllDoctestRunsOk runs
+  && cliAllPropsPass props
+  && cliAllTestsPass tests
+
+cliAllDoctestRunsOk : List (Engine, RunResult) -> Bool
+cliAllDoctestRunsOk [] = True
+cliAllDoctestRunsOk ((_, run)::rest) = runFailed run == 0
+  && runErrors run == 0
+  && cliAllDoctestRunsOk rest
+
+cliAllPropsPass : List PropResult -> Bool
+cliAllPropsPass [] = True
+cliAllPropsPass (p::rest) = propResultPassed p && cliAllPropsPass rest
+
+cliAllTestsPass : List (String, Int, ExResult) -> Bool
+cliAllTestsPass [] = True
+cliAllTestsPass ((_, _, Pass)::rest) = cliAllTestsPass rest
+cliAllTestsPass (_::_) = False
+
+cliPrimaryDoctestRun : List (Engine, RunResult) -> RunResult
+cliPrimaryDoctestRun [] = RunResult 0 0 0 0 []
+cliPrimaryDoctestRun ((_, run)::_) = run
+
+cliCountPassProps : List PropResult -> Int
+cliCountPassProps [] = 0
+cliCountPassProps (p::rest) =
+  (if propResultPassed p then 1 else 0) + cliCountPassProps rest
+
+cliCountFailProps : List PropResult -> Int
+cliCountFailProps [] = 0
+cliCountFailProps (p::rest) =
+  (if propResultPassed p then 0 else 1) + cliCountFailProps rest
+
+cliCountPassTests : List (String, Int, ExResult) -> Int
+cliCountPassTests [] = 0
+cliCountPassTests ((_, _, Pass)::rest) = 1 + cliCountPassTests rest
+cliCountPassTests (_::rest) = cliCountPassTests rest
+
+cliCountFailTests : List (String, Int, ExResult) -> Int
+cliCountFailTests [] = 0
+cliCountFailTests ((_, _, Pass)::rest) = cliCountFailTests rest
+cliCountFailTests (_::rest) = 1 + cliCountFailTests rest
+
+cliExResultFields : ExResult -> List (String, Json)
+cliExResultFields Pass = [("status", JString "pass")]
+cliExResultFields (Fail expected actual) = [
+  ("status", JString "fail"),
+  ("expected", JString expected),
+  ("actual", JString actual),
+]
+cliExResultFields (Errored msg) =
+  [("status", JString "error"), ("detail", JString msg)]
+
+cliExampleJson : (Example, ExResult) -> Json
+cliExampleJson (ex, res) =
+  jObject
+    ([("line", JInt (exampleLine ex)), ("input", JString (exampleInput ex))] ++ cliExResultFields res)
+
+cliDoctestsJson : RunResult -> Json
+cliDoctestsJson run = jObject
+  [
+    ("total", JInt (runPassed run + runFailed run + runErrors run)),
+    ("passed", JInt (runPassed run)),
+    ("failed", JInt (runFailed run)),
+    ("errors", JInt (runErrors run)),
+    ("examples", jArray (map cliExampleJson (runDetails run))),
+  ]
+
+cliPropJson : PropResult -> Json
+-- Structurally identical to mcp.mdk's `propJson` — both render the same
+-- `PropResult` shape for their own JSON envelope, and neither module imports
+-- the other (mcp.mdk is a CLI-independent server surface); not worth a shared
+-- module for one 5-line function.
+-- lint-disable-next-line rule-duplicate-body
+cliPropJson p = jObject
+  [
+    ("name", JString (propResultName p)),
+    ("status", JString (if propResultPassed p then "pass" else "fail")),
+    ("detail", JString (propResultDetail p)),
+  ]
+
+cliTestJson : (String, Int, ExResult) -> Json
+cliTestJson (name, line, result) =
+  jObject
+    ([("name", JString name), ("line", JInt line)] ++ cliExResultFields result)
+
+cliTypeErrorField : Option String -> List (String, Json)
+cliTypeErrorField None = []
+cliTypeErrorField (Some errText) = [("typeError", JString errText)]
+
+-- The full envelope: doctests + properties (same shape `medaka_test`'s
+-- `testReportJson` uses) PLUS a `tests` array for `test "…"` decls, and a
+-- `summary` folding all three phases together — this is the field
+-- `testReportJson` cannot provide (it never runs this phase, by its own
+-- documented scope), and the one this slice's acceptance check depends on.
+cliTestReportJson : String -> Option String -> List (Engine, RunResult) -> List PropResult -> List (String, Int, ExResult) -> Json
+cliTestReportJson path typeError runs props tests =
+  jObject
+    ([("file", JString path)] ++ cliTypeErrorField typeError ++ [
+      ("doctests", cliDoctestsJson (cliPrimaryDoctestRun runs)),
+      ("properties", jArray (map cliPropJson props)),
+      ("tests", jArray (map cliTestJson tests)),
+      (
+        "summary",
+        jObject [
+          (
+            "passed",
+            JInt (runPassed (cliPrimaryDoctestRun runs) + cliCountPassProps props + cliCountPassTests tests),
+          ),
+          (
+            "failed",
+            JInt (runFailed (cliPrimaryDoctestRun runs) + runErrors (cliPrimaryDoctestRun runs) + cliCountFailProps props + cliCountFailTests tests),
+          ),
+          ("ok", JBool (cliTestReportOk typeError runs props tests)),
+        ],
+      ),
+    ])
 
 -- Directory/project/multi-target path: expand every target to concrete .mdk
 -- files (SAME walk as lint/fmt), then run+aggregate. An empty resolved set

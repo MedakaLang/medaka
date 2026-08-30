@@ -174,7 +174,7 @@ genUserOrFail : List (String, TyDef) -> List (String, Ty) -> Ty -> <e> Value e
 genUserOrFail tydefs subst ty = match tySpine ty
   Some (name, args) => match lookupAssoc name tydefs
     Some tydef => genUser tydefs subst name tydef args
-    None => panic ("prop_runner: no Arbitrary instance for type '" ++ name ++ "'. Add 'deriving (Arbitrary)' or an explicit impl.")
+    None => panic ("prop_runner: no generator for type '" ++ name ++ "'. Define an explicit generator (there is no 'Arbitrary' deriver).")
   None => panic "prop_runner: cannot generate values for type"
 
 genUser : List (String, TyDef) -> List (String, Ty) -> String -> TyDef -> List Ty -> <e> Value e
@@ -255,9 +255,25 @@ public export data PropOutcome v =
   | PropPassed
   | PropFailed Int (List (String, v)) Bool
 
-runProp : List (String, TyDef) -> List (String, Value e) -> Decl -> Int -> <IO> Bool
-runProp tydefs evalEnv (DProp _ name params body) maxTests =
-  let _ = putStr ("Testing " ++ escStrLocal name ++ " ... ")
+-- #2293/#2295 (a): every prop's output now carries `file:line` — the same
+-- caller-supplied line-lookup a `test "…"` decl uses (name-matched against a
+-- POSITION-preserving reparse; test_cmd.mdk's `propLineTests`), since a
+-- `DProp`'s elaborated body loses its ELoc the same way a DTest's does.  `0`
+-- (name not found in the lookup) omits the location rather than printing a
+-- misleading `:0`.
+lineOfPropName : String -> List (String, Int) -> Int
+lineOfPropName name propLines = match lookupAssoc name propLines
+  Some l => l
+  None => 0
+
+propLocPrefix : String -> Int -> String
+propLocPrefix _ 0 = ""
+propLocPrefix target line = "\{target}:\{intToString line}: "
+
+runProp : List (String, TyDef) -> List (String, Value e) -> Decl -> Int -> String -> List (String, Int) -> <IO> Bool
+runProp tydefs evalEnv (DProp _ name params body) maxTests target propLines =
+  let line = lineOfPropName name propLines
+  let _ = putStr "\{propLocPrefix target line}Testing \{escStrLocal name} ... "
   -- #2295: capture the prop's OWN RNG state at the moment it starts drawing
   -- (before any generation for this prop happens) — reseeding to this exact
   -- value via `--seed` reproduces this prop's draws byte-for-byte regardless
@@ -277,7 +293,7 @@ runProp tydefs evalEnv (DProp _ name params body) maxTests =
       let _ = putStrLn "  Counterexample:"
       let _ = printCounterexample shrunk
       False
-runProp tydefs evalEnv _ maxTests = True
+runProp tydefs evalEnv _ maxTests target propLines = True
 
 findFailure : List (String, TyDef) -> List (String, Value e) -> List PropParam -> Expr -> Int -> Int -> <e> PropOutcome (Value e)
 findFailure tydefs evalEnv params body maxTests run
@@ -409,23 +425,27 @@ propNameMatches _ _ = False
 -- `cases` overrides the hardcoded 100-draw sample count (`medaka test --cases
 -- <n>`, #2295); `filterOpt` restricts to props whose name contains a
 -- substring (`--filter`).
+-- `target`/`propLines` (#2293/#2295 (a)): the file path and a name-keyed
+-- line lookup (test_cmd.mdk's `propLineTests`) so every prop's output carries
+-- `file:line` — see `runProp`.
 export
-runAllProps : Int -> Option String -> List (String, Value e) -> List Decl -> <IO> Bool
-runAllProps cases filterOpt evalEnv program =
+runAllProps : Int -> Option String -> String -> List (String, Int) -> List (String, Value e) -> List Decl -> <IO> Bool
+runAllProps cases filterOpt target propLines evalEnv program =
   let props = filterPropsByName filterOpt (filterProps program)
   if isEmptyL props then True
   else
     let tydefs = buildTyDefs program
-    let results = runEach cases tydefs evalEnv props
+    let results = runEach cases target propLines tydefs evalEnv props
     let nPass = countTrue results
     let nFail = listLen results - nPass
     let _ = putStrLn "\n\{intToString nPass} passed, \{intToString nFail} failed"
     nFail == 0
 
-runEach : Int -> List (String, TyDef) -> List (String, Value e) -> List Decl -> <IO> List Bool
-runEach _ _ _ [] = []
-runEach cases tydefs evalEnv (p::rest) =
-  runProp tydefs evalEnv p cases :: runEach cases tydefs evalEnv rest
+runEach : Int -> String -> List (String, Int) -> List (String, TyDef) -> List (String, Value e) -> List Decl -> <IO> List Bool
+runEach _ _ _ _ _ [] = []
+runEach cases target propLines tydefs evalEnv (p::rest) =
+  runProp tydefs evalEnv p cases target propLines ::
+    runEach cases target propLines tydefs evalEnv rest
 
 countTrue : List Bool -> Int
 countTrue [] = 0
@@ -459,37 +479,45 @@ propResultDetail (PropResult _ _ d) = d
 -- Same `cases`/`filterOpt` knobs as `runAllProps` (F-3: both hardcoded-100
 -- sites move together, or `--cases` would silently affect only the human
 -- `medaka test` path and not this structured/MCP one).
+-- `propLines` (#2293/#2295 (a)): threaded into `PropResult`'s failing-case
+-- detail string the same way `runProp` threads it into its printed output —
+-- see `lineOfPropName`.  No file path here: this structured path (medaka
+-- mcp's medaka_test, and `medaka test --json`) already reports `file` once
+-- at the top level, so only the line is folded into `detail`.
 export
-runAllPropsResults : Int -> Option String -> List (String, Value e) -> List Decl -> <IO> List PropResult
-runAllPropsResults cases filterOpt evalEnv program =
+runAllPropsResults : Int -> Option String -> List (String, Int) -> List (String, Value e) -> List Decl -> <IO> List PropResult
+runAllPropsResults cases filterOpt propLines evalEnv program =
   let props = filterPropsByName filterOpt (filterProps program)
   if isEmptyL props then []
   else
     let tydefs = buildTyDefs program
-    runEachResult cases tydefs evalEnv props
+    runEachResult cases propLines tydefs evalEnv props
 
-runEachResult : Int -> List (String, TyDef) -> List (String, Value e) -> List Decl -> <IO> List PropResult
-runEachResult _ _ _ [] = []
-runEachResult cases tydefs evalEnv ((DProp _ name params body)::rest) =
-  propResultOf cases name (findFailure tydefs evalEnv params body cases 1) ::
-    runEachResult cases tydefs evalEnv rest
-runEachResult cases tydefs evalEnv (_::rest) =
-  runEachResult cases tydefs evalEnv rest
+runEachResult : Int -> List (String, Int) -> List (String, TyDef) -> List (String, Value e) -> List Decl -> <IO> List PropResult
+runEachResult _ _ _ _ [] = []
+runEachResult cases propLines tydefs evalEnv ((DProp _ name params body)::rest) = propResultOf cases (lineOfPropName name propLines) name (findFailure tydefs evalEnv params body cases 1) :: runEachResult cases propLines tydefs evalEnv rest
+runEachResult cases propLines tydefs evalEnv (_::rest) =
+  runEachResult cases propLines tydefs evalEnv rest
 
-propResultOf : Int -> String -> PropOutcome (Value e) -> PropResult
-propResultOf cases name PropPassed =
+propResultOf : Int -> Int -> String -> PropOutcome (Value e) -> PropResult
+propResultOf cases _line name PropPassed =
   PropResult name True "\{intToString cases} tests passed"
-propResultOf _cases name (PropFailed run shrunk fuelExhausted) = PropResult
+propResultOf _cases line name (PropFailed run shrunk fuelExhausted) = PropResult
   name
   False
   (stringConcat
     [
+      lineDetailPrefix line,
       "failed after ",
       intToString run,
       if run == 1 then " test; counterexample: " else " tests; counterexample: ",
       renderCounterexample shrunk,
       if fuelExhausted then " (WARNING: shrink fuel exhausted, counterexample may not be minimal — see #1307)" else "",
     ])
+
+lineDetailPrefix : Int -> String
+lineDetailPrefix 0 = ""
+lineDetailPrefix line = "line \{intToString line}: "
 
 renderCounterexample : List (String, Value e) -> String
 renderCounterexample [] = ""
