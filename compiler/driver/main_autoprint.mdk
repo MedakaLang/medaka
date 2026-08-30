@@ -118,6 +118,7 @@ wrapMainDecl d = d
 -- captured.  (`sanitizeId` is applied to the MODULE id, not the name, so this
 -- reaches the backends verbatim as the tail of `mdk_<core>__0autoprintln`;
 -- digits are legal there, unlike `#`/`$`.)
+export
 autoPrintPinName : String
 autoPrintPinName = "0autoprintln"
 

@@ -1,5 +1,5 @@
 # META
-source_lines=243
+source_lines=244
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/main_autoprint.mdk — shared composite-`main` auto-print wrap.
@@ -122,6 +122,7 @@ wrapMainDecl d = d
 -- captured.  (`sanitizeId` is applied to the MODULE id, not the name, so this
 -- reaches the backends verbatim as the tail of `mdk_<core>__0autoprintln`;
 -- digits are legal there, unlike `#`/`$`.)
+export
 autoPrintPinName : String
 autoPrintPinName = "0autoprintln"
 
@@ -276,7 +277,7 @@ underivedMainDiags _ _ _ = []
 (DFunDef false "wrapMainDecl" ((PCon "DFunDef" (PVar "vis") (PLit (LString "main")) (PList) (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "vis")) (ELit (LString "main"))) (EListLit)) (EApp (EVar "wrapPrintln") (EVar "body"))))
 (DFunDef false "wrapMainDecl" ((PCon "DAttrib" (PVar "a") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "a")) (EApp (EVar "wrapMainDecl") (EVar "d"))))
 (DFunDef false "wrapMainDecl" ((PVar "d")) (EVar "d"))
-(DTypeSig false "autoPrintPinName" (TyCon "String"))
+(DTypeSig true "autoPrintPinName" (TyCon "String"))
 (DFunDef false "autoPrintPinName" () (ELit (LString "0autoprintln")))
 (DTypeSig true "autoPrintPinCore" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "autoPrintPinCore" ((PVar "coreDecls")) (EBinOp "++" (EVar "coreDecls") (EApp (EVar "pinnedPrintlnDecls") (EVar "coreDecls"))))
@@ -323,7 +324,7 @@ underivedMainDiags _ _ _ = []
 (DFunDef false "wrapMainDecl" ((PCon "DFunDef" (PVar "vis") (PLit (LString "main")) (PList) (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "vis")) (ELit (LString "main"))) (EListLit)) (EApp (EVar "wrapPrintln") (EVar "body"))))
 (DFunDef false "wrapMainDecl" ((PCon "DAttrib" (PVar "a") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "a")) (EApp (EVar "wrapMainDecl") (EVar "d"))))
 (DFunDef false "wrapMainDecl" ((PVar "d")) (EVar "d"))
-(DTypeSig false "autoPrintPinName" (TyCon "String"))
+(DTypeSig true "autoPrintPinName" (TyCon "String"))
 (DFunDef false "autoPrintPinName" () (ELit (LString "0autoprintln")))
 (DTypeSig true "autoPrintPinCore" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "autoPrintPinCore" ((PVar "coreDecls")) (EBinOp "++" (EVar "coreDecls") (EApp (EVar "pinnedPrintlnDecls") (EVar "coreDecls"))))

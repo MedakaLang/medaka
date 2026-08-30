@@ -49,6 +49,8 @@ import backend.llvm_emit.{emitProgram, emitProgramWithStats, makeEmitInput}
 import ir.dce.{dceFilter}
 import entries.entry_support.{driveModules, runEmitWith}
 import support.timer.{statsEnabled, emitStats}
+import support.util.{endsWith, filterList}
+import driver.main_autoprint.{autoPrintPinName}
 
 -- The entry-module path is argv[2] (`<runtime> <core> <entry> [root ...]`); hand it
 -- to the emitter so a main-less program's diagnostic names the file (issue #397).
@@ -84,9 +86,22 @@ emitHalfOfEnv = match getEnv "MEDAKA_EMIT_HALF"
 -- Lowering core.mdk's decls ON THEIR OWN is what makes this a question of where a
 -- decl was DEFINED rather than a guess at its emitted name.  Only ever run in mode
 -- 2, so the default emit path is untouched (and pays nothing for it).
+--
+-- 🚨 EXCLUDES the auto-print pin (`autoPrintPinCore`, main_autoprint.mdk): `coreD`
+-- here is THIS BUILD's own elaborated core decl list, which carries the pin
+-- whenever the wrap fired for THIS program's main — but `--emit-prelude-obj`
+-- compiles the real stdlib/core.mdk alone, with no main in play, so the shared
+-- prelude.o never contains it. Declaring it as prelude-owned linked an
+-- undefined `mdk_core__0autoprintln` on every wrap-firing build under the
+-- MEDAKA_PRELUDE_OBJ fast path. The pin is cheap (one small fn), so the fix is
+-- to always DEFINE it in the program half instead of asking the shared object
+-- for it.
 preludeSymsOf : List Decl -> (List String, List (String, String))
 preludeSymsOf coreD = match lowerProgramEmit coreD
-  CProgram groups _ _ impls => (map cbindNameOf groups, implKeysOf impls)
+  CProgram groups _ _ impls => (
+    filterList (n => not (endsWith autoPrintPinName n)) (map cbindNameOf groups),
+    implKeysOf impls,
+  )
 
 cbindNameOf : CBind -> String
 cbindNameOf (CBind n _) = n
