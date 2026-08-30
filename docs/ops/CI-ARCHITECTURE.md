@@ -315,6 +315,56 @@ whose failure means a wrong answer shipped — stay tier 2 regardless of cost). 
 nightly job cites its qualifying clause; every tracked test/census script has an
 explicit home (queue-tier, nightly-tier, or listed on-demand tool).
 
+**The charter — qualifying clauses.** A job/gate needs at least one to sit in
+`nightly.yml` rather than `merge_group`; each `.github/workflows/nightly.yml` job
+carries a comment naming the clause(s) it claims.
+
+- **N1 — cost above threshold.** Its irreducible wall-clock cost (an N band that
+  cannot clear in seconds, a full corpus sweep, a tree-wide scan) would make it the
+  pole of a merge-tier shard or push a shard past the ~12 min band the rest of the
+  suite holds to. Evidence is a measured number (e.g. #1962's 14m→36m), not a guess.
+- **N2 — breadth beyond queue needs.** Exercises a THIRD axis of agreement (a third
+  engine, a corpus the queue's narrower one already implies correctness for) whose
+  loss would not desound the merge tier's own guarantee — the queue's own arms
+  already gate the same code path some other way.
+- **N3 — external-tool dependency.** Needs something the required-checks path
+  cannot assume hermetically (system Chrome, a non-toolchain external service) or
+  writes to repo-external state (the GitHub API) in a way unsuited to a check that
+  must be reproducible from the diff alone.
+- **N4 — advisory / non-blocking by construction.** The job's output is a finding
+  to file, not a pass/fail correctness verdict on the diff under test (a fuzzer
+  whose green run proves nothing; a census reconciling tracker state against a
+  corpus; a drift/cost report; a data-baseline auto-advance) — a required check
+  must be caused by the diff it gates (`nightly.yml`'s `must-fail-census` job
+  states this explicitly for its own case), and none of these produce a verdict
+  on the diff under test.
+- **NEVER — the soundness floor.** A gate whose failure means a wrong answer
+  shipped with no error (typecheck, the must-fail *gate* as opposed to its
+  *census*, the self-compile fixpoint) stays tier 2 regardless of cost, breadth, or
+  tooling — there is no clause that licenses moving it. Cost pressure on a
+  soundness-class gate is a shard-rebalance problem ([W-SHARD-DERIVED]), never a
+  tier-3 candidate.
+
+**What "revert to green" means here.** A tier-3 job going red files (or updates) one
+`known-red`-labeled issue naming the gate, the failing run's URL, and the commit range
+since that job's own last green nightly run (`.github/actions/file-nightly-red` — a
+composite action shared by every nightly job so N jobs don't carry N copies of the
+same filing shell; walks `gh run list --workflow=nightly.yml` per-job, not per-run,
+since nightly's jobs are independent and one can be green inside an overall-red run).
+The default response is to **revert the change that regressed it, not to fix forward
+under the open issue** — nightly is unblocking-by-design (§4: it never gates a merge),
+so a red tier-3 job accumulates silently for as long as anyone lets it, and the
+cheapest way to stop that accumulation is to put the tree back on the commit that was
+last known green and re-diagnose off-queue. Fix-forward is the exception, taken only
+when the regressing commit is not itself revertable in isolation (e.g. it shares a
+commit with unrelated already-merged work) or when the fix is already in hand and
+faster than a revert + re-land. Either way, the `known-red` issue is the record: it
+closes when the job is next green, whichever path got it there — a fix-forward PR
+should say so in its body, and a revert should close it via the normal closing-keyword
+path. A second red for the same job before the issue closes updates that issue rather
+than opening a duplicate, so `gh issue list --label known-red` always reflects the
+CURRENT red set, never a historical log of every past occurrence.
+
 ## 4. What deliberately does NOT change
 
 - The merge queue is the authority; preflight and PR CI are filters

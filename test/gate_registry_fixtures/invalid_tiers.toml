@@ -1,0 +1,32 @@
+# test/gate_registry_fixtures/invalid_tiers.toml — SYNTHETIC, hand-written.
+#
+# Check 9's fixture (#2181, S-tier-is-data), the same shape as invalid_cost.toml:
+# byte-identical to valid_cost.toml except the `tiers` line, which here mixes
+# `ondemand` with a real run. That combination is the one a hand edit reaches
+# for most naturally — "it runs on merge, and you can also run it yourself" —
+# and it is exactly the claim `ondemand` cannot make: `ondemand` means NOTHING
+# invokes the gate, so test/diff_compiler_tier_drift.sh must derive an empty run
+# set for it, which a `merge` beside it contradicts. Without check 9 the
+# registry would carry a self-contradicting row that only the drift gate could
+# report, and it would report it as workflow drift rather than as the typo it is.
+
+[[gate]]
+name = "tidy"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tiers = ["merge", "ondemand"]
+cost = "cheap"
+kind = "exec"
+run = "test/tidy.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[shard]]
+name = "a"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/a.txt"
+pinned_gates = []
