@@ -1,5 +1,5 @@
 # META
-source_lines=465
+source_lines=506
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted property-test runner — port of lib/prop_runner.ml.
@@ -28,29 +28,46 @@ import frontend.ast.{
   Field(..),
   ConPayload(..),
 }
-import eval.eval.{
-  Value(..),
-  EvalEnv(..),
-  eval,
-  extendEnv,
-  force,
-  ppValue,
-  rngStateRef,
-}
+import eval.eval.{Value(..), EvalEnv(..), eval, extendEnv, force, ppValue}
 import support.util.{listLen, lookupAssoc, reverseL, isEmptyL, filterList, zipL}
+
+-- `medaka test --filter <substring>`: does `needle` occur anywhere in
+-- `haystack`? Same tiny definition as `test_cmd.mdk`'s copy — not shared via
+-- support/util.mdk to keep this slice's snapshot bless scoped to the files it
+-- names.
+substringMatch : String -> String -> Bool
+substringMatch needle haystack = isSome (stringIndexOf needle haystack)
 
 -- ── RNG wrappers (call the eval externs through tiny Medaka shims) ───────────
 -- The externs are bound by name in the eval frame, but prop_runner runs OUTSIDE
--- the evaluated program — so we re-implement the same LCG draws here over the
--- shared `rngStateRef`, keeping generation in this module rather than threading
--- an eval env through every generator.
+-- the evaluated program — so we re-implement the same LCG draws here over a
+-- PRIVATE ref (`propRngStateRef`), NOT `eval.mdk`'s `rngStateRef`.
+--
+-- #2295/#2316 F-4: `rngStateRef` is the SAME ref the evaluated program's own
+-- `randomInt`/`randomBool` externs draw from — sharing it here would mean
+-- `medaka test --seed <n>` perturbs the interpreter's supposedly-independent
+-- random draws for a program under test, which contradicts the settled "the
+-- interpreter is a pure deterministic oracle" decision (a --seed run of one
+-- prop must not change what a DIFFERENT prop or the program itself draws).
+-- Same initial value (123456789) as `rngStateRef`, so an UNSEEDED run is
+-- byte-identical to before this split whenever the program under test makes no
+-- random draws of its own (the overwhelming majority of props) — this is a
+-- behavior-preserving refactor except for the exact perturbation case it closes.
+propRngStateRef : Ref Int
+propRngStateRef = Ref 123456789
+
+-- `--seed <n>`: reseed the prop runner's own RNG before running. Never touches
+-- `rngStateRef`.
+export
+seedPropRng : Int -> Unit
+seedPropRng n = propRngStateRef := n
 
 rngNextLocal : Unit -> Int
 -- Intentional cross-file duplicate of the same helper in eval.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
 -- lint-disable-next-line rule-duplicate-body
 rngNextLocal _ =
-  let s = (!rngStateRef * 1103515245 + 12345) % 2147483648
-  rngStateRef := s
+  let s = (!propRngStateRef * 1103515245 + 12345) % 2147483648
+  propRngStateRef := s
   s
 
 randIntRange : Int -> Int -> Int
@@ -245,6 +262,11 @@ public export data PropOutcome v =
 runProp : List (String, TyDef) -> List (String, Value e) -> Decl -> Int -> <IO> Bool
 runProp tydefs evalEnv (DProp _ name params body) maxTests =
   let _ = putStr ("Testing " ++ escStrLocal name ++ " ... ")
+  -- #2295: capture the prop's OWN RNG state at the moment it starts drawing
+  -- (before any generation for this prop happens) — reseeding to this exact
+  -- value via `--seed` reproduces this prop's draws byte-for-byte regardless
+  -- of what ran before it, so it is the number to print on failure.
+  let seedAtStart = !propRngStateRef
   match findFailure tydefs evalEnv params body maxTests 1
     PropPassed =>
       let _ = putStrLn ("OK (" ++ intToString maxTests ++ " tests)")
@@ -255,6 +277,7 @@ runProp tydefs evalEnv (DProp _ name params body) maxTests =
         putStrLn "  WARNING: shrink fuel exhausted after \{intToString shrinkFuel} steps; the counterexample below may not be minimal, and a shrink arm is probably cycling (see #1307)."
       else
         ()
+      let _ = putStrLn "  Seed: \{intToString seedAtStart} (rerun with: medaka test --seed \{intToString seedAtStart} --filter \{escStrLocal name} <file>)"
       let _ = putStrLn "  Counterexample:"
       let _ = printCounterexample shrunk
       False
@@ -374,26 +397,39 @@ filterDecls p (d::rest)
   | p d = d :: filterDecls p rest
   | otherwise = filterDecls p rest
 
+-- `medaka test --filter <substring>` (#2295): keep only props whose name
+-- contains `substring`. `None` (no `--filter` given) is a no-op.
+filterPropsByName : Option String -> List Decl -> List Decl
+filterPropsByName None decls = decls
+filterPropsByName (Some sub) decls = filterDecls (propNameMatches sub) decls
+
+propNameMatches : String -> Decl -> Bool
+propNameMatches sub (DProp _ name _ _) = substringMatch sub name
+propNameMatches _ _ = False
+
 -- Run every prop; print the trailing summary; return True iff all passed.
 -- Output exactly mirrors lib/prop_runner.ml's run_all (no leading line; one
 -- `Testing … OK/FAILED` per prop; a blank line then `N passed, M failed`).
+-- `cases` overrides the hardcoded 100-draw sample count (`medaka test --cases
+-- <n>`, #2295); `filterOpt` restricts to props whose name contains a
+-- substring (`--filter`).
 export
-runAllProps : List (String, Value e) -> List Decl -> <IO> Bool
-runAllProps evalEnv program =
-  let props = filterProps program
+runAllProps : Int -> Option String -> List (String, Value e) -> List Decl -> <IO> Bool
+runAllProps cases filterOpt evalEnv program =
+  let props = filterPropsByName filterOpt (filterProps program)
   if isEmptyL props then True
   else
     let tydefs = buildTyDefs program
-    let results = runEach tydefs evalEnv props
+    let results = runEach cases tydefs evalEnv props
     let nPass = countTrue results
     let nFail = listLen results - nPass
     let _ = putStrLn "\n\{intToString nPass} passed, \{intToString nFail} failed"
     nFail == 0
 
-runEach : List (String, TyDef) -> List (String, Value e) -> List Decl -> <IO> List Bool
-runEach _ _ [] = []
-runEach tydefs evalEnv (p::rest) =
-  runProp tydefs evalEnv p 100 :: runEach tydefs evalEnv rest
+runEach : Int -> List (String, TyDef) -> List (String, Value e) -> List Decl -> <IO> List Bool
+runEach _ _ _ [] = []
+runEach cases tydefs evalEnv (p::rest) =
+  runProp tydefs evalEnv p cases :: runEach cases tydefs evalEnv rest
 
 countTrue : List Bool -> Int
 countTrue [] = 0
@@ -424,25 +460,30 @@ propResultDetail : PropResult -> String
 propResultDetail (PropResult _ _ d) = d
 
 -- Run every prop and return one PropResult each, in source order.  No output.
+-- Same `cases`/`filterOpt` knobs as `runAllProps` (F-3: both hardcoded-100
+-- sites move together, or `--cases` would silently affect only the human
+-- `medaka test` path and not this structured/MCP one).
 export
-runAllPropsResults : List (String, Value e) -> List Decl -> <IO> List PropResult
-runAllPropsResults evalEnv program =
-  let props = filterProps program
+runAllPropsResults : Int -> Option String -> List (String, Value e) -> List Decl -> <IO> List PropResult
+runAllPropsResults cases filterOpt evalEnv program =
+  let props = filterPropsByName filterOpt (filterProps program)
   if isEmptyL props then []
   else
     let tydefs = buildTyDefs program
-    runEachResult tydefs evalEnv props
+    runEachResult cases tydefs evalEnv props
 
-runEachResult : List (String, TyDef) -> List (String, Value e) -> List Decl -> <IO> List PropResult
-runEachResult _ _ [] = []
-runEachResult tydefs evalEnv ((DProp _ name params body)::rest) =
-  propResultOf name (findFailure tydefs evalEnv params body 100 1) ::
-    runEachResult tydefs evalEnv rest
-runEachResult tydefs evalEnv (_::rest) = runEachResult tydefs evalEnv rest
+runEachResult : Int -> List (String, TyDef) -> List (String, Value e) -> List Decl -> <IO> List PropResult
+runEachResult _ _ _ [] = []
+runEachResult cases tydefs evalEnv ((DProp _ name params body)::rest) =
+  propResultOf cases name (findFailure tydefs evalEnv params body cases 1) ::
+    runEachResult cases tydefs evalEnv rest
+runEachResult cases tydefs evalEnv (_::rest) =
+  runEachResult cases tydefs evalEnv rest
 
-propResultOf : String -> PropOutcome (Value e) -> PropResult
-propResultOf name PropPassed = PropResult name True "100 tests passed"
-propResultOf name (PropFailed run shrunk fuelExhausted) = PropResult
+propResultOf : Int -> String -> PropOutcome (Value e) -> PropResult
+propResultOf cases name PropPassed =
+  PropResult name True "\{intToString cases} tests passed"
+propResultOf _cases name (PropFailed run shrunk fuelExhausted) = PropResult
   name
   False
   (stringConcat
@@ -469,10 +510,16 @@ anyDecl _ [] = False
 anyDecl p (d::rest) = p d || anyDecl p rest
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "Expr" false) (mem "DProp" false) (mem "DData" false) (mem "DNewtype" false) (mem "PropParam" false) (mem "Ty" true) (mem "Variant" true) (mem "Field" true) (mem "ConPayload" true))))
-(DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "eval" false) (mem "extendEnv" false) (mem "force" false) (mem "ppValue" false) (mem "rngStateRef" false))))
+(DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "eval" false) (mem "extendEnv" false) (mem "force" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "zipL" false))))
+(DTypeSig false "substringMatch" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "substringMatch" ((PVar "needle") (PVar "haystack")) (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (EVar "needle")) (EVar "haystack"))))
+(DTypeSig false "propRngStateRef" (TyApp (TyCon "Ref") (TyCon "Int")))
+(DFunDef false "propRngStateRef" () (EApp (EVar "Ref") (ELit (LInt 123456789))))
+(DTypeSig true "seedPropRng" (TyFun (TyCon "Int") (TyCon "Unit")))
+(DFunDef false "seedPropRng" ((PVar "n")) (EApp (EApp (EVar "setRef") (EVar "propRngStateRef")) (EVar "n")))
 (DTypeSig false "rngNextLocal" (TyFun (TyCon "Unit") (TyCon "Int")))
-(DFunDef false "rngNextLocal" (PWild) (EBlock (DoLet false false (PVar "s") (EBinOp "%" (EBinOp "+" (EBinOp "*" (EUnOp "!" (EVar "rngStateRef")) (ELit (LInt 1103515245))) (ELit (LInt 12345))) (ELit (LInt 2147483648)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "rngStateRef")) (EVar "s"))) (DoExpr (EVar "s"))))
+(DFunDef false "rngNextLocal" (PWild) (EBlock (DoLet false false (PVar "s") (EBinOp "%" (EBinOp "+" (EBinOp "*" (EUnOp "!" (EVar "propRngStateRef")) (ELit (LInt 1103515245))) (ELit (LInt 12345))) (ELit (LInt 2147483648)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "propRngStateRef")) (EVar "s"))) (DoExpr (EVar "s"))))
 (DTypeSig false "randIntRange" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "randIntRange" ((PVar "lo") (PVar "hi")) (EBlock (DoLet false false (PVar "range") (EBinOp "+" (EBinOp "-" (EVar "hi") (EVar "lo")) (ELit (LInt 1)))) (DoExpr (EIf (EBinOp "<=" (EVar "range") (ELit (LInt 0))) (EVar "lo") (EBinOp "+" (EVar "lo") (EBinOp "%" (EApp (EVar "rngNextLocal") (ELit LUnit)) (EVar "range")))))))
 (DTypeSig false "randBoolL" (TyFun (TyCon "Unit") (TyCon "Bool")))
@@ -545,7 +592,7 @@ anyDecl p (d::rest) = p d || anyDecl p rest
 (DFunDef false "checkProp" ((PVar "evalEnv") (PVar "body") (PVar "inputs")) (EBlock (DoLet false false (PVar "env") (EApp (EApp (EVar "extendEnv") (EApp (EVar "EvalEnv") (EListLit (EListLit)))) (EBinOp "++" (EVar "inputs") (EVar "evalEnv")))) (DoExpr (EMatch (EApp (EVar "force") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "body"))) (arm (PCon "VBool" (PVar "b")) () (EVar "b")) (arm PWild () (EVar "False"))))))
 (DData Public "PropOutcome" ("v") ((variant "PropPassed" (ConPos)) (variant "PropFailed" (ConPos (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "v"))) (TyCon "Bool")))) ())
 (DTypeSig false "runProp" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyDef"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyCon "Decl") (TyFun (TyCon "Int") (TyEffect ("IO") None (TyCon "Bool")))))))
-(DFunDef false "runProp" ((PVar "tydefs") (PVar "evalEnv") (PCon "DProp" PWild (PVar "name") (PVar "params") (PVar "body")) (PVar "maxTests")) (EBlock (DoLet false false PWild (EApp (EVar "putStr") (EBinOp "++" (EBinOp "++" (ELit (LString "Testing ")) (EApp (EVar "escStrLocal") (EVar "name"))) (ELit (LString " ... "))))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "findFailure") (EVar "tydefs")) (EVar "evalEnv")) (EVar "params")) (EVar "body")) (EVar "maxTests")) (ELit (LInt 1))) (arm (PCon "PropPassed") () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "OK (")) (EApp (EVar "intToString") (EVar "maxTests"))) (ELit (LString " tests)"))))) (DoExpr (EVar "True")))) (arm (PCon "PropFailed" (PVar "run") (PVar "shrunk") (PVar "fuelExhausted")) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "FAILED after ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "run")))) (ELit (LString ""))) (EApp (EVar "display") (EIf (EBinOp "==" (EVar "run") (ELit (LInt 1))) (ELit (LString " test")) (ELit (LString " tests"))))) (ELit (LString ""))))) (DoLet false false PWild (EIf (EVar "fuelExhausted") (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "  WARNING: shrink fuel exhausted after ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "shrinkFuel")))) (ELit (LString " steps; the counterexample below may not be minimal, and a shrink arm is probably cycling (see #1307).")))) (ELit LUnit))) (DoLet false false PWild (EApp (EVar "putStrLn") (ELit (LString "  Counterexample:")))) (DoLet false false PWild (EApp (EVar "printCounterexample") (EVar "shrunk"))) (DoExpr (EVar "False"))))))))
+(DFunDef false "runProp" ((PVar "tydefs") (PVar "evalEnv") (PCon "DProp" PWild (PVar "name") (PVar "params") (PVar "body")) (PVar "maxTests")) (EBlock (DoLet false false PWild (EApp (EVar "putStr") (EBinOp "++" (EBinOp "++" (ELit (LString "Testing ")) (EApp (EVar "escStrLocal") (EVar "name"))) (ELit (LString " ... "))))) (DoLet false false (PVar "seedAtStart") (EUnOp "!" (EVar "propRngStateRef"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "findFailure") (EVar "tydefs")) (EVar "evalEnv")) (EVar "params")) (EVar "body")) (EVar "maxTests")) (ELit (LInt 1))) (arm (PCon "PropPassed") () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "OK (")) (EApp (EVar "intToString") (EVar "maxTests"))) (ELit (LString " tests)"))))) (DoExpr (EVar "True")))) (arm (PCon "PropFailed" (PVar "run") (PVar "shrunk") (PVar "fuelExhausted")) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "FAILED after ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "run")))) (ELit (LString ""))) (EApp (EVar "display") (EIf (EBinOp "==" (EVar "run") (ELit (LInt 1))) (ELit (LString " test")) (ELit (LString " tests"))))) (ELit (LString ""))))) (DoLet false false PWild (EIf (EVar "fuelExhausted") (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "  WARNING: shrink fuel exhausted after ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "shrinkFuel")))) (ELit (LString " steps; the counterexample below may not be minimal, and a shrink arm is probably cycling (see #1307).")))) (ELit LUnit))) (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  Seed: ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "seedAtStart")))) (ELit (LString " (rerun with: medaka test --seed "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "seedAtStart")))) (ELit (LString " --filter "))) (EApp (EVar "display") (EApp (EVar "escStrLocal") (EVar "name")))) (ELit (LString " <file>)"))))) (DoLet false false PWild (EApp (EVar "putStrLn") (ELit (LString "  Counterexample:")))) (DoLet false false PWild (EApp (EVar "printCounterexample") (EVar "shrunk"))) (DoExpr (EVar "False"))))))))
 (DFunDef false "runProp" ((PVar "tydefs") (PVar "evalEnv") PWild (PVar "maxTests")) (EVar "True"))
 (DTypeSig false "findFailure" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyDef"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "PropParam")) (TyFun (TyCon "Expr") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "PropOutcome") (TyApp (TyCon "Value") (TyVar "e")))))))))))
 (DFunDef false "findFailure" ((PVar "tydefs") (PVar "evalEnv") (PVar "params") (PVar "body") (PVar "maxTests") (PVar "run")) (EIf (EBinOp ">" (EVar "run") (EVar "maxTests")) (EVar "PropPassed") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "inputs") (EApp (EApp (EVar "genInputs") (EVar "tydefs")) (EVar "params"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "findFailureStep") (EVar "tydefs")) (EVar "evalEnv")) (EVar "params")) (EVar "body")) (EVar "maxTests")) (EVar "run")) (EVar "inputs")) (EApp (EApp (EApp (EVar "checkProp") (EVar "evalEnv")) (EVar "body")) (EVar "inputs"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -585,11 +632,17 @@ anyDecl p (d::rest) = p d || anyDecl p rest
 (DTypeSig false "filterDecls" (TyFun (TyFun (TyCon "Decl") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "filterDecls" (PWild (PList)) (EListLit))
 (DFunDef false "filterDecls" ((PVar "p") (PCons (PVar "d") (PVar "rest"))) (EIf (EApp (EVar "p") (EVar "d")) (EBinOp "::" (EVar "d") (EApp (EApp (EVar "filterDecls") (EVar "p")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "filterDecls") (EVar "p")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "runAllProps" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyCon "Bool")))))
-(DFunDef false "runAllProps" ((PVar "evalEnv") (PVar "program")) (EBlock (DoLet false false (PVar "props") (EApp (EVar "filterProps") (EVar "program"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "props")) (EVar "True") (EBlock (DoLet false false (PVar "tydefs") (EApp (EVar "buildTyDefs") (EVar "program"))) (DoLet false false (PVar "results") (EApp (EApp (EApp (EVar "runEach") (EVar "tydefs")) (EVar "evalEnv")) (EVar "props"))) (DoLet false false (PVar "nPass") (EApp (EVar "countTrue") (EVar "results"))) (DoLet false false (PVar "nFail") (EBinOp "-" (EApp (EVar "listLen") (EVar "results")) (EVar "nPass"))) (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "\n")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "nPass")))) (ELit (LString " passed, "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "nFail")))) (ELit (LString " failed"))))) (DoExpr (EBinOp "==" (EVar "nFail") (ELit (LInt 0)))))))))
-(DTypeSig false "runEach" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyDef"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "Bool")))))))
-(DFunDef false "runEach" (PWild PWild (PList)) (EListLit))
-(DFunDef false "runEach" ((PVar "tydefs") (PVar "evalEnv") (PCons (PVar "p") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "runProp") (EVar "tydefs")) (EVar "evalEnv")) (EVar "p")) (ELit (LInt 100))) (EApp (EApp (EApp (EVar "runEach") (EVar "tydefs")) (EVar "evalEnv")) (EVar "rest"))))
+(DTypeSig false "filterPropsByName" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
+(DFunDef false "filterPropsByName" ((PCon "None") (PVar "decls")) (EVar "decls"))
+(DFunDef false "filterPropsByName" ((PCon "Some" (PVar "sub")) (PVar "decls")) (EApp (EApp (EVar "filterDecls") (EApp (EVar "propNameMatches") (EVar "sub"))) (EVar "decls")))
+(DTypeSig false "propNameMatches" (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyCon "Bool"))))
+(DFunDef false "propNameMatches" ((PVar "sub") (PCon "DProp" PWild (PVar "name") PWild PWild)) (EApp (EApp (EVar "substringMatch") (EVar "sub")) (EVar "name")))
+(DFunDef false "propNameMatches" (PWild PWild) (EVar "False"))
+(DTypeSig true "runAllProps" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyCon "Bool")))))))
+(DFunDef false "runAllProps" ((PVar "cases") (PVar "filterOpt") (PVar "evalEnv") (PVar "program")) (EBlock (DoLet false false (PVar "props") (EApp (EApp (EVar "filterPropsByName") (EVar "filterOpt")) (EApp (EVar "filterProps") (EVar "program")))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "props")) (EVar "True") (EBlock (DoLet false false (PVar "tydefs") (EApp (EVar "buildTyDefs") (EVar "program"))) (DoLet false false (PVar "results") (EApp (EApp (EApp (EApp (EVar "runEach") (EVar "cases")) (EVar "tydefs")) (EVar "evalEnv")) (EVar "props"))) (DoLet false false (PVar "nPass") (EApp (EVar "countTrue") (EVar "results"))) (DoLet false false (PVar "nFail") (EBinOp "-" (EApp (EVar "listLen") (EVar "results")) (EVar "nPass"))) (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "\n")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "nPass")))) (ELit (LString " passed, "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "nFail")))) (ELit (LString " failed"))))) (DoExpr (EBinOp "==" (EVar "nFail") (ELit (LInt 0)))))))))
+(DTypeSig false "runEach" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyDef"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "Bool"))))))))
+(DFunDef false "runEach" (PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "runEach" ((PVar "cases") (PVar "tydefs") (PVar "evalEnv") (PCons (PVar "p") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "runProp") (EVar "tydefs")) (EVar "evalEnv")) (EVar "p")) (EVar "cases")) (EApp (EApp (EApp (EApp (EVar "runEach") (EVar "cases")) (EVar "tydefs")) (EVar "evalEnv")) (EVar "rest"))))
 (DTypeSig false "countTrue" (TyFun (TyApp (TyCon "List") (TyCon "Bool")) (TyCon "Int")))
 (DFunDef false "countTrue" ((PList)) (ELit (LInt 0)))
 (DFunDef false "countTrue" ((PCons (PCon "True") (PVar "rest"))) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "countTrue") (EVar "rest"))))
@@ -601,15 +654,15 @@ anyDecl p (d::rest) = p d || anyDecl p rest
 (DFunDef false "propResultPassed" ((PCon "PropResult" PWild (PVar "p") PWild)) (EVar "p"))
 (DTypeSig true "propResultDetail" (TyFun (TyCon "PropResult") (TyCon "String")))
 (DFunDef false "propResultDetail" ((PCon "PropResult" PWild PWild (PVar "d"))) (EVar "d"))
-(DTypeSig true "runAllPropsResults" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "PropResult"))))))
-(DFunDef false "runAllPropsResults" ((PVar "evalEnv") (PVar "program")) (EBlock (DoLet false false (PVar "props") (EApp (EVar "filterProps") (EVar "program"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "props")) (EListLit) (EBlock (DoLet false false (PVar "tydefs") (EApp (EVar "buildTyDefs") (EVar "program"))) (DoExpr (EApp (EApp (EApp (EVar "runEachResult") (EVar "tydefs")) (EVar "evalEnv")) (EVar "props"))))))))
-(DTypeSig false "runEachResult" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyDef"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "PropResult")))))))
-(DFunDef false "runEachResult" (PWild PWild (PList)) (EListLit))
-(DFunDef false "runEachResult" ((PVar "tydefs") (PVar "evalEnv") (PCons (PCon "DProp" PWild (PVar "name") (PVar "params") (PVar "body")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "propResultOf") (EVar "name")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "findFailure") (EVar "tydefs")) (EVar "evalEnv")) (EVar "params")) (EVar "body")) (ELit (LInt 100))) (ELit (LInt 1)))) (EApp (EApp (EApp (EVar "runEachResult") (EVar "tydefs")) (EVar "evalEnv")) (EVar "rest"))))
-(DFunDef false "runEachResult" ((PVar "tydefs") (PVar "evalEnv") (PCons PWild (PVar "rest"))) (EApp (EApp (EApp (EVar "runEachResult") (EVar "tydefs")) (EVar "evalEnv")) (EVar "rest")))
-(DTypeSig false "propResultOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "PropOutcome") (TyApp (TyCon "Value") (TyVar "e"))) (TyCon "PropResult"))))
-(DFunDef false "propResultOf" ((PVar "name") (PCon "PropPassed")) (EApp (EApp (EApp (EVar "PropResult") (EVar "name")) (EVar "True")) (ELit (LString "100 tests passed"))))
-(DFunDef false "propResultOf" ((PVar "name") (PCon "PropFailed" (PVar "run") (PVar "shrunk") (PVar "fuelExhausted"))) (EApp (EApp (EApp (EVar "PropResult") (EVar "name")) (EVar "False")) (EApp (EVar "stringConcat") (EListLit (ELit (LString "failed after ")) (EApp (EVar "intToString") (EVar "run")) (EIf (EBinOp "==" (EVar "run") (ELit (LInt 1))) (ELit (LString " test; counterexample: ")) (ELit (LString " tests; counterexample: "))) (EApp (EVar "renderCounterexample") (EVar "shrunk")) (EIf (EVar "fuelExhausted") (ELit (LString " (WARNING: shrink fuel exhausted, counterexample may not be minimal — see #1307)")) (ELit (LString "")))))))
+(DTypeSig true "runAllPropsResults" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "PropResult"))))))))
+(DFunDef false "runAllPropsResults" ((PVar "cases") (PVar "filterOpt") (PVar "evalEnv") (PVar "program")) (EBlock (DoLet false false (PVar "props") (EApp (EApp (EVar "filterPropsByName") (EVar "filterOpt")) (EApp (EVar "filterProps") (EVar "program")))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "props")) (EListLit) (EBlock (DoLet false false (PVar "tydefs") (EApp (EVar "buildTyDefs") (EVar "program"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "runEachResult") (EVar "cases")) (EVar "tydefs")) (EVar "evalEnv")) (EVar "props"))))))))
+(DTypeSig false "runEachResult" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyDef"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "PropResult"))))))))
+(DFunDef false "runEachResult" (PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "runEachResult" ((PVar "cases") (PVar "tydefs") (PVar "evalEnv") (PCons (PCon "DProp" PWild (PVar "name") (PVar "params") (PVar "body")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EVar "propResultOf") (EVar "cases")) (EVar "name")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "findFailure") (EVar "tydefs")) (EVar "evalEnv")) (EVar "params")) (EVar "body")) (EVar "cases")) (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EVar "runEachResult") (EVar "cases")) (EVar "tydefs")) (EVar "evalEnv")) (EVar "rest"))))
+(DFunDef false "runEachResult" ((PVar "cases") (PVar "tydefs") (PVar "evalEnv") (PCons PWild (PVar "rest"))) (EApp (EApp (EApp (EApp (EVar "runEachResult") (EVar "cases")) (EVar "tydefs")) (EVar "evalEnv")) (EVar "rest")))
+(DTypeSig false "propResultOf" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "PropOutcome") (TyApp (TyCon "Value") (TyVar "e"))) (TyCon "PropResult")))))
+(DFunDef false "propResultOf" ((PVar "cases") (PVar "name") (PCon "PropPassed")) (EApp (EApp (EApp (EVar "PropResult") (EVar "name")) (EVar "True")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "cases")))) (ELit (LString " tests passed")))))
+(DFunDef false "propResultOf" ((PVar "_cases") (PVar "name") (PCon "PropFailed" (PVar "run") (PVar "shrunk") (PVar "fuelExhausted"))) (EApp (EApp (EApp (EVar "PropResult") (EVar "name")) (EVar "False")) (EApp (EVar "stringConcat") (EListLit (ELit (LString "failed after ")) (EApp (EVar "intToString") (EVar "run")) (EIf (EBinOp "==" (EVar "run") (ELit (LInt 1))) (ELit (LString " test; counterexample: ")) (ELit (LString " tests; counterexample: "))) (EApp (EVar "renderCounterexample") (EVar "shrunk")) (EIf (EVar "fuelExhausted") (ELit (LString " (WARNING: shrink fuel exhausted, counterexample may not be minimal — see #1307)")) (ELit (LString "")))))))
 (DTypeSig false "renderCounterexample" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyCon "String")))
 (DFunDef false "renderCounterexample" ((PList)) (ELit (LString "")))
 (DFunDef false "renderCounterexample" ((PList (PTuple (PVar "x") (PVar "v")))) (EApp (EVar "stringConcat") (EListLit (EVar "x") (ELit (LString " = ")) (EApp (EVar "ppValue") (EVar "v")))))
@@ -621,10 +674,16 @@ anyDecl p (d::rest) = p d || anyDecl p rest
 (DFunDef false "anyDecl" ((PVar "p") (PCons (PVar "d") (PVar "rest"))) (EBinOp "||" (EApp (EVar "p") (EVar "d")) (EApp (EApp (EVar "anyDecl") (EVar "p")) (EVar "rest"))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "Expr" false) (mem "DProp" false) (mem "DData" false) (mem "DNewtype" false) (mem "PropParam" false) (mem "Ty" true) (mem "Variant" true) (mem "Field" true) (mem "ConPayload" true))))
-(DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "eval" false) (mem "extendEnv" false) (mem "force" false) (mem "ppValue" false) (mem "rngStateRef" false))))
+(DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "eval" false) (mem "extendEnv" false) (mem "force" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "zipL" false))))
+(DTypeSig false "substringMatch" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "substringMatch" ((PVar "needle") (PVar "haystack")) (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (EVar "needle")) (EVar "haystack"))))
+(DTypeSig false "propRngStateRef" (TyApp (TyCon "Ref") (TyCon "Int")))
+(DFunDef false "propRngStateRef" () (EApp (EVar "Ref") (ELit (LInt 123456789))))
+(DTypeSig true "seedPropRng" (TyFun (TyCon "Int") (TyCon "Unit")))
+(DFunDef false "seedPropRng" ((PVar "n")) (EApp (EApp (EVar "setRef") (EVar "propRngStateRef")) (EVar "n")))
 (DTypeSig false "rngNextLocal" (TyFun (TyCon "Unit") (TyCon "Int")))
-(DFunDef false "rngNextLocal" (PWild) (EBlock (DoLet false false (PVar "s") (EBinOp "%" (EBinOp "+" (EBinOp "*" (EUnOp "!" (EVar "rngStateRef")) (ELit (LInt 1103515245))) (ELit (LInt 12345))) (ELit (LInt 2147483648)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "rngStateRef")) (EVar "s"))) (DoExpr (EVar "s"))))
+(DFunDef false "rngNextLocal" (PWild) (EBlock (DoLet false false (PVar "s") (EBinOp "%" (EBinOp "+" (EBinOp "*" (EUnOp "!" (EVar "propRngStateRef")) (ELit (LInt 1103515245))) (ELit (LInt 12345))) (ELit (LInt 2147483648)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "propRngStateRef")) (EVar "s"))) (DoExpr (EVar "s"))))
 (DTypeSig false "randIntRange" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "randIntRange" ((PVar "lo") (PVar "hi")) (EBlock (DoLet false false (PVar "range") (EBinOp "+" (EBinOp "-" (EVar "hi") (EVar "lo")) (ELit (LInt 1)))) (DoExpr (EIf (EBinOp "<=" (EVar "range") (ELit (LInt 0))) (EVar "lo") (EBinOp "+" (EVar "lo") (EBinOp "%" (EApp (EVar "rngNextLocal") (ELit LUnit)) (EVar "range")))))))
 (DTypeSig false "randBoolL" (TyFun (TyCon "Unit") (TyCon "Bool")))
@@ -697,7 +756,7 @@ anyDecl p (d::rest) = p d || anyDecl p rest
 (DFunDef false "checkProp" ((PVar "evalEnv") (PVar "body") (PVar "inputs")) (EBlock (DoLet false false (PVar "env") (EApp (EApp (EVar "extendEnv") (EApp (EVar "EvalEnv") (EListLit (EListLit)))) (EBinOp "++" (EVar "inputs") (EVar "evalEnv")))) (DoExpr (EMatch (EApp (EVar "force") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "body"))) (arm (PCon "VBool" (PVar "b")) () (EVar "b")) (arm PWild () (EVar "False"))))))
 (DData Public "PropOutcome" ("v") ((variant "PropPassed" (ConPos)) (variant "PropFailed" (ConPos (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "v"))) (TyCon "Bool")))) ())
 (DTypeSig false "runProp" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyDef"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyCon "Decl") (TyFun (TyCon "Int") (TyEffect ("IO") None (TyCon "Bool")))))))
-(DFunDef false "runProp" ((PVar "tydefs") (PVar "evalEnv") (PCon "DProp" PWild (PVar "name") (PVar "params") (PVar "body")) (PVar "maxTests")) (EBlock (DoLet false false PWild (EApp (EVar "putStr") (EBinOp "++" (EBinOp "++" (ELit (LString "Testing ")) (EApp (EVar "escStrLocal") (EVar "name"))) (ELit (LString " ... "))))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "findFailure") (EVar "tydefs")) (EVar "evalEnv")) (EVar "params")) (EVar "body")) (EVar "maxTests")) (ELit (LInt 1))) (arm (PCon "PropPassed") () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "OK (")) (EApp (EVar "intToString") (EVar "maxTests"))) (ELit (LString " tests)"))))) (DoExpr (EVar "True")))) (arm (PCon "PropFailed" (PVar "run") (PVar "shrunk") (PVar "fuelExhausted")) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "FAILED after ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "run")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EIf (EBinOp "==" (EVar "run") (ELit (LInt 1))) (ELit (LString " test")) (ELit (LString " tests"))))) (ELit (LString ""))))) (DoLet false false PWild (EIf (EVar "fuelExhausted") (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "  WARNING: shrink fuel exhausted after ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "shrinkFuel")))) (ELit (LString " steps; the counterexample below may not be minimal, and a shrink arm is probably cycling (see #1307).")))) (ELit LUnit))) (DoLet false false PWild (EApp (EVar "putStrLn") (ELit (LString "  Counterexample:")))) (DoLet false false PWild (EApp (EVar "printCounterexample") (EVar "shrunk"))) (DoExpr (EVar "False"))))))))
+(DFunDef false "runProp" ((PVar "tydefs") (PVar "evalEnv") (PCon "DProp" PWild (PVar "name") (PVar "params") (PVar "body")) (PVar "maxTests")) (EBlock (DoLet false false PWild (EApp (EVar "putStr") (EBinOp "++" (EBinOp "++" (ELit (LString "Testing ")) (EApp (EVar "escStrLocal") (EVar "name"))) (ELit (LString " ... "))))) (DoLet false false (PVar "seedAtStart") (EUnOp "!" (EVar "propRngStateRef"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "findFailure") (EVar "tydefs")) (EVar "evalEnv")) (EVar "params")) (EVar "body")) (EVar "maxTests")) (ELit (LInt 1))) (arm (PCon "PropPassed") () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "OK (")) (EApp (EVar "intToString") (EVar "maxTests"))) (ELit (LString " tests)"))))) (DoExpr (EVar "True")))) (arm (PCon "PropFailed" (PVar "run") (PVar "shrunk") (PVar "fuelExhausted")) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "FAILED after ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "run")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EIf (EBinOp "==" (EVar "run") (ELit (LInt 1))) (ELit (LString " test")) (ELit (LString " tests"))))) (ELit (LString ""))))) (DoLet false false PWild (EIf (EVar "fuelExhausted") (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "  WARNING: shrink fuel exhausted after ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "shrinkFuel")))) (ELit (LString " steps; the counterexample below may not be minimal, and a shrink arm is probably cycling (see #1307).")))) (ELit LUnit))) (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  Seed: ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "seedAtStart")))) (ELit (LString " (rerun with: medaka test --seed "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "seedAtStart")))) (ELit (LString " --filter "))) (EApp (EMethodRef "display") (EApp (EVar "escStrLocal") (EVar "name")))) (ELit (LString " <file>)"))))) (DoLet false false PWild (EApp (EVar "putStrLn") (ELit (LString "  Counterexample:")))) (DoLet false false PWild (EApp (EVar "printCounterexample") (EVar "shrunk"))) (DoExpr (EVar "False"))))))))
 (DFunDef false "runProp" ((PVar "tydefs") (PVar "evalEnv") PWild (PVar "maxTests")) (EVar "True"))
 (DTypeSig false "findFailure" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyDef"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "PropParam")) (TyFun (TyCon "Expr") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "PropOutcome") (TyApp (TyCon "Value") (TyVar "e")))))))))))
 (DFunDef false "findFailure" ((PVar "tydefs") (PVar "evalEnv") (PVar "params") (PVar "body") (PVar "maxTests") (PVar "run")) (EIf (EBinOp ">" (EVar "run") (EVar "maxTests")) (EVar "PropPassed") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "inputs") (EApp (EApp (EVar "genInputs") (EVar "tydefs")) (EVar "params"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "findFailureStep") (EVar "tydefs")) (EVar "evalEnv")) (EVar "params")) (EVar "body")) (EVar "maxTests")) (EVar "run")) (EVar "inputs")) (EApp (EApp (EApp (EVar "checkProp") (EVar "evalEnv")) (EVar "body")) (EVar "inputs"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -737,11 +796,17 @@ anyDecl p (d::rest) = p d || anyDecl p rest
 (DTypeSig false "filterDecls" (TyFun (TyFun (TyCon "Decl") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "filterDecls" (PWild (PList)) (EListLit))
 (DFunDef false "filterDecls" ((PVar "p") (PCons (PVar "d") (PVar "rest"))) (EIf (EApp (EVar "p") (EVar "d")) (EBinOp "::" (EVar "d") (EApp (EApp (EVar "filterDecls") (EVar "p")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "filterDecls") (EVar "p")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "runAllProps" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyCon "Bool")))))
-(DFunDef false "runAllProps" ((PVar "evalEnv") (PVar "program")) (EBlock (DoLet false false (PVar "props") (EApp (EVar "filterProps") (EVar "program"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "props")) (EVar "True") (EBlock (DoLet false false (PVar "tydefs") (EApp (EVar "buildTyDefs") (EVar "program"))) (DoLet false false (PVar "results") (EApp (EApp (EApp (EVar "runEach") (EVar "tydefs")) (EVar "evalEnv")) (EVar "props"))) (DoLet false false (PVar "nPass") (EApp (EVar "countTrue") (EVar "results"))) (DoLet false false (PVar "nFail") (EBinOp "-" (EApp (EVar "listLen") (EVar "results")) (EVar "nPass"))) (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "\n")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "nPass")))) (ELit (LString " passed, "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "nFail")))) (ELit (LString " failed"))))) (DoExpr (EBinOp "==" (EVar "nFail") (ELit (LInt 0)))))))))
-(DTypeSig false "runEach" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyDef"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "Bool")))))))
-(DFunDef false "runEach" (PWild PWild (PList)) (EListLit))
-(DFunDef false "runEach" ((PVar "tydefs") (PVar "evalEnv") (PCons (PVar "p") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "runProp") (EVar "tydefs")) (EVar "evalEnv")) (EVar "p")) (ELit (LInt 100))) (EApp (EApp (EApp (EVar "runEach") (EVar "tydefs")) (EVar "evalEnv")) (EVar "rest"))))
+(DTypeSig false "filterPropsByName" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
+(DFunDef false "filterPropsByName" ((PCon "None") (PVar "decls")) (EVar "decls"))
+(DFunDef false "filterPropsByName" ((PCon "Some" (PVar "sub")) (PVar "decls")) (EApp (EApp (EVar "filterDecls") (EApp (EVar "propNameMatches") (EMethodRef "sub"))) (EVar "decls")))
+(DTypeSig false "propNameMatches" (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyCon "Bool"))))
+(DFunDef false "propNameMatches" ((PVar "sub") (PCon "DProp" PWild (PVar "name") PWild PWild)) (EApp (EApp (EVar "substringMatch") (EMethodRef "sub")) (EVar "name")))
+(DFunDef false "propNameMatches" (PWild PWild) (EVar "False"))
+(DTypeSig true "runAllProps" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyCon "Bool")))))))
+(DFunDef false "runAllProps" ((PVar "cases") (PVar "filterOpt") (PVar "evalEnv") (PVar "program")) (EBlock (DoLet false false (PVar "props") (EApp (EApp (EVar "filterPropsByName") (EVar "filterOpt")) (EApp (EVar "filterProps") (EVar "program")))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "props")) (EVar "True") (EBlock (DoLet false false (PVar "tydefs") (EApp (EVar "buildTyDefs") (EVar "program"))) (DoLet false false (PVar "results") (EApp (EApp (EApp (EApp (EVar "runEach") (EVar "cases")) (EVar "tydefs")) (EVar "evalEnv")) (EVar "props"))) (DoLet false false (PVar "nPass") (EApp (EVar "countTrue") (EVar "results"))) (DoLet false false (PVar "nFail") (EBinOp "-" (EApp (EVar "listLen") (EVar "results")) (EVar "nPass"))) (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "\n")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "nPass")))) (ELit (LString " passed, "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "nFail")))) (ELit (LString " failed"))))) (DoExpr (EBinOp "==" (EVar "nFail") (ELit (LInt 0)))))))))
+(DTypeSig false "runEach" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyDef"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "Bool"))))))))
+(DFunDef false "runEach" (PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "runEach" ((PVar "cases") (PVar "tydefs") (PVar "evalEnv") (PCons (PVar "p") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "runProp") (EVar "tydefs")) (EVar "evalEnv")) (EVar "p")) (EVar "cases")) (EApp (EApp (EApp (EApp (EVar "runEach") (EVar "cases")) (EVar "tydefs")) (EVar "evalEnv")) (EVar "rest"))))
 (DTypeSig false "countTrue" (TyFun (TyApp (TyCon "List") (TyCon "Bool")) (TyCon "Int")))
 (DFunDef false "countTrue" ((PList)) (ELit (LInt 0)))
 (DFunDef false "countTrue" ((PCons (PCon "True") (PVar "rest"))) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "countTrue") (EVar "rest"))))
@@ -753,15 +818,15 @@ anyDecl p (d::rest) = p d || anyDecl p rest
 (DFunDef false "propResultPassed" ((PCon "PropResult" PWild (PVar "p") PWild)) (EVar "p"))
 (DTypeSig true "propResultDetail" (TyFun (TyCon "PropResult") (TyCon "String")))
 (DFunDef false "propResultDetail" ((PCon "PropResult" PWild PWild (PVar "d"))) (EVar "d"))
-(DTypeSig true "runAllPropsResults" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "PropResult"))))))
-(DFunDef false "runAllPropsResults" ((PVar "evalEnv") (PVar "program")) (EBlock (DoLet false false (PVar "props") (EApp (EVar "filterProps") (EVar "program"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "props")) (EListLit) (EBlock (DoLet false false (PVar "tydefs") (EApp (EVar "buildTyDefs") (EVar "program"))) (DoExpr (EApp (EApp (EApp (EVar "runEachResult") (EVar "tydefs")) (EVar "evalEnv")) (EVar "props"))))))))
-(DTypeSig false "runEachResult" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyDef"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "PropResult")))))))
-(DFunDef false "runEachResult" (PWild PWild (PList)) (EListLit))
-(DFunDef false "runEachResult" ((PVar "tydefs") (PVar "evalEnv") (PCons (PCon "DProp" PWild (PVar "name") (PVar "params") (PVar "body")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "propResultOf") (EVar "name")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "findFailure") (EVar "tydefs")) (EVar "evalEnv")) (EVar "params")) (EVar "body")) (ELit (LInt 100))) (ELit (LInt 1)))) (EApp (EApp (EApp (EVar "runEachResult") (EVar "tydefs")) (EVar "evalEnv")) (EVar "rest"))))
-(DFunDef false "runEachResult" ((PVar "tydefs") (PVar "evalEnv") (PCons PWild (PVar "rest"))) (EApp (EApp (EApp (EVar "runEachResult") (EVar "tydefs")) (EVar "evalEnv")) (EVar "rest")))
-(DTypeSig false "propResultOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "PropOutcome") (TyApp (TyCon "Value") (TyVar "e"))) (TyCon "PropResult"))))
-(DFunDef false "propResultOf" ((PVar "name") (PCon "PropPassed")) (EApp (EApp (EApp (EVar "PropResult") (EVar "name")) (EVar "True")) (ELit (LString "100 tests passed"))))
-(DFunDef false "propResultOf" ((PVar "name") (PCon "PropFailed" (PVar "run") (PVar "shrunk") (PVar "fuelExhausted"))) (EApp (EApp (EApp (EVar "PropResult") (EVar "name")) (EVar "False")) (EApp (EVar "stringConcat") (EListLit (ELit (LString "failed after ")) (EApp (EVar "intToString") (EVar "run")) (EIf (EBinOp "==" (EVar "run") (ELit (LInt 1))) (ELit (LString " test; counterexample: ")) (ELit (LString " tests; counterexample: "))) (EApp (EVar "renderCounterexample") (EVar "shrunk")) (EIf (EVar "fuelExhausted") (ELit (LString " (WARNING: shrink fuel exhausted, counterexample may not be minimal — see #1307)")) (ELit (LString "")))))))
+(DTypeSig true "runAllPropsResults" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "PropResult"))))))))
+(DFunDef false "runAllPropsResults" ((PVar "cases") (PVar "filterOpt") (PVar "evalEnv") (PVar "program")) (EBlock (DoLet false false (PVar "props") (EApp (EApp (EVar "filterPropsByName") (EVar "filterOpt")) (EApp (EVar "filterProps") (EVar "program")))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "props")) (EListLit) (EBlock (DoLet false false (PVar "tydefs") (EApp (EVar "buildTyDefs") (EVar "program"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "runEachResult") (EVar "cases")) (EVar "tydefs")) (EVar "evalEnv")) (EVar "props"))))))))
+(DTypeSig false "runEachResult" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TyDef"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "PropResult"))))))))
+(DFunDef false "runEachResult" (PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "runEachResult" ((PVar "cases") (PVar "tydefs") (PVar "evalEnv") (PCons (PCon "DProp" PWild (PVar "name") (PVar "params") (PVar "body")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EVar "propResultOf") (EVar "cases")) (EVar "name")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "findFailure") (EVar "tydefs")) (EVar "evalEnv")) (EVar "params")) (EVar "body")) (EVar "cases")) (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EVar "runEachResult") (EVar "cases")) (EVar "tydefs")) (EVar "evalEnv")) (EVar "rest"))))
+(DFunDef false "runEachResult" ((PVar "cases") (PVar "tydefs") (PVar "evalEnv") (PCons PWild (PVar "rest"))) (EApp (EApp (EApp (EApp (EVar "runEachResult") (EVar "cases")) (EVar "tydefs")) (EVar "evalEnv")) (EVar "rest")))
+(DTypeSig false "propResultOf" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "PropOutcome") (TyApp (TyCon "Value") (TyVar "e"))) (TyCon "PropResult")))))
+(DFunDef false "propResultOf" ((PVar "cases") (PVar "name") (PCon "PropPassed")) (EApp (EApp (EApp (EVar "PropResult") (EVar "name")) (EVar "True")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "cases")))) (ELit (LString " tests passed")))))
+(DFunDef false "propResultOf" ((PVar "_cases") (PVar "name") (PCon "PropFailed" (PVar "run") (PVar "shrunk") (PVar "fuelExhausted"))) (EApp (EApp (EApp (EVar "PropResult") (EVar "name")) (EVar "False")) (EApp (EVar "stringConcat") (EListLit (ELit (LString "failed after ")) (EApp (EVar "intToString") (EVar "run")) (EIf (EBinOp "==" (EVar "run") (ELit (LInt 1))) (ELit (LString " test; counterexample: ")) (ELit (LString " tests; counterexample: "))) (EApp (EVar "renderCounterexample") (EVar "shrunk")) (EIf (EVar "fuelExhausted") (ELit (LString " (WARNING: shrink fuel exhausted, counterexample may not be minimal — see #1307)")) (ELit (LString "")))))))
 (DTypeSig false "renderCounterexample" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyCon "String")))
 (DFunDef false "renderCounterexample" ((PList)) (ELit (LString "")))
 (DFunDef false "renderCounterexample" ((PList (PTuple (PVar "x") (PVar "v")))) (EApp (EVar "stringConcat") (EListLit (EVar "x") (ELit (LString " = ")) (EApp (EVar "ppValue") (EVar "v")))))

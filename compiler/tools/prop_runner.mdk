@@ -24,29 +24,46 @@ import frontend.ast.{
   Field(..),
   ConPayload(..),
 }
-import eval.eval.{
-  Value(..),
-  EvalEnv(..),
-  eval,
-  extendEnv,
-  force,
-  ppValue,
-  rngStateRef,
-}
+import eval.eval.{Value(..), EvalEnv(..), eval, extendEnv, force, ppValue}
 import support.util.{listLen, lookupAssoc, reverseL, isEmptyL, filterList, zipL}
+
+-- `medaka test --filter <substring>`: does `needle` occur anywhere in
+-- `haystack`? Same tiny definition as `test_cmd.mdk`'s copy — not shared via
+-- support/util.mdk to keep this slice's snapshot bless scoped to the files it
+-- names.
+substringMatch : String -> String -> Bool
+substringMatch needle haystack = isSome (stringIndexOf needle haystack)
 
 -- ── RNG wrappers (call the eval externs through tiny Medaka shims) ───────────
 -- The externs are bound by name in the eval frame, but prop_runner runs OUTSIDE
--- the evaluated program — so we re-implement the same LCG draws here over the
--- shared `rngStateRef`, keeping generation in this module rather than threading
--- an eval env through every generator.
+-- the evaluated program — so we re-implement the same LCG draws here over a
+-- PRIVATE ref (`propRngStateRef`), NOT `eval.mdk`'s `rngStateRef`.
+--
+-- #2295/#2316 F-4: `rngStateRef` is the SAME ref the evaluated program's own
+-- `randomInt`/`randomBool` externs draw from — sharing it here would mean
+-- `medaka test --seed <n>` perturbs the interpreter's supposedly-independent
+-- random draws for a program under test, which contradicts the settled "the
+-- interpreter is a pure deterministic oracle" decision (a --seed run of one
+-- prop must not change what a DIFFERENT prop or the program itself draws).
+-- Same initial value (123456789) as `rngStateRef`, so an UNSEEDED run is
+-- byte-identical to before this split whenever the program under test makes no
+-- random draws of its own (the overwhelming majority of props) — this is a
+-- behavior-preserving refactor except for the exact perturbation case it closes.
+propRngStateRef : Ref Int
+propRngStateRef = Ref 123456789
+
+-- `--seed <n>`: reseed the prop runner's own RNG before running. Never touches
+-- `rngStateRef`.
+export
+seedPropRng : Int -> Unit
+seedPropRng n = propRngStateRef := n
 
 rngNextLocal : Unit -> Int
 -- Intentional cross-file duplicate of the same helper in eval.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
 -- lint-disable-next-line rule-duplicate-body
 rngNextLocal _ =
-  let s = (!rngStateRef * 1103515245 + 12345) % 2147483648
-  rngStateRef := s
+  let s = (!propRngStateRef * 1103515245 + 12345) % 2147483648
+  propRngStateRef := s
   s
 
 randIntRange : Int -> Int -> Int
@@ -241,6 +258,11 @@ public export data PropOutcome v =
 runProp : List (String, TyDef) -> List (String, Value e) -> Decl -> Int -> <IO> Bool
 runProp tydefs evalEnv (DProp _ name params body) maxTests =
   let _ = putStr ("Testing " ++ escStrLocal name ++ " ... ")
+  -- #2295: capture the prop's OWN RNG state at the moment it starts drawing
+  -- (before any generation for this prop happens) — reseeding to this exact
+  -- value via `--seed` reproduces this prop's draws byte-for-byte regardless
+  -- of what ran before it, so it is the number to print on failure.
+  let seedAtStart = !propRngStateRef
   match findFailure tydefs evalEnv params body maxTests 1
     PropPassed =>
       let _ = putStrLn ("OK (" ++ intToString maxTests ++ " tests)")
@@ -251,6 +273,7 @@ runProp tydefs evalEnv (DProp _ name params body) maxTests =
         putStrLn "  WARNING: shrink fuel exhausted after \{intToString shrinkFuel} steps; the counterexample below may not be minimal, and a shrink arm is probably cycling (see #1307)."
       else
         ()
+      let _ = putStrLn "  Seed: \{intToString seedAtStart} (rerun with: medaka test --seed \{intToString seedAtStart} --filter \{escStrLocal name} <file>)"
       let _ = putStrLn "  Counterexample:"
       let _ = printCounterexample shrunk
       False
@@ -370,26 +393,39 @@ filterDecls p (d::rest)
   | p d = d :: filterDecls p rest
   | otherwise = filterDecls p rest
 
+-- `medaka test --filter <substring>` (#2295): keep only props whose name
+-- contains `substring`. `None` (no `--filter` given) is a no-op.
+filterPropsByName : Option String -> List Decl -> List Decl
+filterPropsByName None decls = decls
+filterPropsByName (Some sub) decls = filterDecls (propNameMatches sub) decls
+
+propNameMatches : String -> Decl -> Bool
+propNameMatches sub (DProp _ name _ _) = substringMatch sub name
+propNameMatches _ _ = False
+
 -- Run every prop; print the trailing summary; return True iff all passed.
 -- Output exactly mirrors lib/prop_runner.ml's run_all (no leading line; one
 -- `Testing … OK/FAILED` per prop; a blank line then `N passed, M failed`).
+-- `cases` overrides the hardcoded 100-draw sample count (`medaka test --cases
+-- <n>`, #2295); `filterOpt` restricts to props whose name contains a
+-- substring (`--filter`).
 export
-runAllProps : List (String, Value e) -> List Decl -> <IO> Bool
-runAllProps evalEnv program =
-  let props = filterProps program
+runAllProps : Int -> Option String -> List (String, Value e) -> List Decl -> <IO> Bool
+runAllProps cases filterOpt evalEnv program =
+  let props = filterPropsByName filterOpt (filterProps program)
   if isEmptyL props then True
   else
     let tydefs = buildTyDefs program
-    let results = runEach tydefs evalEnv props
+    let results = runEach cases tydefs evalEnv props
     let nPass = countTrue results
     let nFail = listLen results - nPass
     let _ = putStrLn "\n\{intToString nPass} passed, \{intToString nFail} failed"
     nFail == 0
 
-runEach : List (String, TyDef) -> List (String, Value e) -> List Decl -> <IO> List Bool
-runEach _ _ [] = []
-runEach tydefs evalEnv (p::rest) =
-  runProp tydefs evalEnv p 100 :: runEach tydefs evalEnv rest
+runEach : Int -> List (String, TyDef) -> List (String, Value e) -> List Decl -> <IO> List Bool
+runEach _ _ _ [] = []
+runEach cases tydefs evalEnv (p::rest) =
+  runProp tydefs evalEnv p cases :: runEach cases tydefs evalEnv rest
 
 countTrue : List Bool -> Int
 countTrue [] = 0
@@ -420,25 +456,30 @@ propResultDetail : PropResult -> String
 propResultDetail (PropResult _ _ d) = d
 
 -- Run every prop and return one PropResult each, in source order.  No output.
+-- Same `cases`/`filterOpt` knobs as `runAllProps` (F-3: both hardcoded-100
+-- sites move together, or `--cases` would silently affect only the human
+-- `medaka test` path and not this structured/MCP one).
 export
-runAllPropsResults : List (String, Value e) -> List Decl -> <IO> List PropResult
-runAllPropsResults evalEnv program =
-  let props = filterProps program
+runAllPropsResults : Int -> Option String -> List (String, Value e) -> List Decl -> <IO> List PropResult
+runAllPropsResults cases filterOpt evalEnv program =
+  let props = filterPropsByName filterOpt (filterProps program)
   if isEmptyL props then []
   else
     let tydefs = buildTyDefs program
-    runEachResult tydefs evalEnv props
+    runEachResult cases tydefs evalEnv props
 
-runEachResult : List (String, TyDef) -> List (String, Value e) -> List Decl -> <IO> List PropResult
-runEachResult _ _ [] = []
-runEachResult tydefs evalEnv ((DProp _ name params body)::rest) =
-  propResultOf name (findFailure tydefs evalEnv params body 100 1) ::
-    runEachResult tydefs evalEnv rest
-runEachResult tydefs evalEnv (_::rest) = runEachResult tydefs evalEnv rest
+runEachResult : Int -> List (String, TyDef) -> List (String, Value e) -> List Decl -> <IO> List PropResult
+runEachResult _ _ _ [] = []
+runEachResult cases tydefs evalEnv ((DProp _ name params body)::rest) =
+  propResultOf cases name (findFailure tydefs evalEnv params body cases 1) ::
+    runEachResult cases tydefs evalEnv rest
+runEachResult cases tydefs evalEnv (_::rest) =
+  runEachResult cases tydefs evalEnv rest
 
-propResultOf : String -> PropOutcome (Value e) -> PropResult
-propResultOf name PropPassed = PropResult name True "100 tests passed"
-propResultOf name (PropFailed run shrunk fuelExhausted) = PropResult
+propResultOf : Int -> String -> PropOutcome (Value e) -> PropResult
+propResultOf cases name PropPassed =
+  PropResult name True "\{intToString cases} tests passed"
+propResultOf _cases name (PropFailed run shrunk fuelExhausted) = PropResult
   name
   False
   (stringConcat

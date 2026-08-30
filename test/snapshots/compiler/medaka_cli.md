@@ -1,5 +1,5 @@
 # META
-source_lines=3311
+source_lines=3386
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/medaka_cli.mdk — the native `medaka` CLI dispatcher (Phase C
@@ -60,6 +60,7 @@ import support.util.{
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omFromNames}
 import support.path.{baseOf, chopExt, joinPath}
 import support.timer.{perfEnabled, now, emitPhase, emitTotal}
+import string.{toInt}
 import frontend.ast.{Decl(..), Expr(..), Loc(..), Pat, LetBind(..)}
 import frontend.parser.{
   parse,
@@ -155,6 +156,7 @@ import eval.eval.{
   progArgsRef,
 }
 import tools.test_cmd.{runTest}
+import tools.prop_runner.{seedPropRng}
 import tools.doctest.{Engine(..)}
 import tools.repl.{initSession, replLoop}
 import tools.lsp.{runServer}
@@ -351,7 +353,7 @@ usage _ = putStrLn (stringConcat
     "  medaka run [--release] <file.mdk>   Type-check and run a program\n",
     "  medaka build <file.mdk> [-o <out>] [--keep-ir]  Compile to a native binary (LLVM + clang)\n",
     "  medaka check [--json] <file.mdk>    Type-check without running\n",
-    "  medaka test [--native | --engines eval,native] [file.mdk]    Run doctests + prop tests (--native runs doctests through a compiled native binary INSTEAD of the interpreter; --engines runs the listed set, exit is the AND)\n",
+    "  medaka test [--native | --engines eval,native] [--filter <substring>] [--seed <n>] [--cases <n>] [file.mdk]    Run doctests + prop tests (--native runs doctests through a compiled native binary INSTEAD of the interpreter; --engines runs the listed set, exit is the AND)\n",
     "  medaka doc [file.mdk]     Generate Markdown documentation\n",
     "  medaka lint [paths...]    Lint files/dirs (style rules; --fix, --cache, --disable/--only/--deny=<rules,...>)\n",
     "  medaka codemod <name> [flags] [paths...]  Apply a named source-preserving AST transform (--write/--stdout)\n",
@@ -2208,31 +2210,90 @@ testHelpText = stringConcat
     "medaka test — Run doctests + property tests\n",
     "\n",
     "Usage:\n",
-    "  medaka test [--native | --engines eval,native] [file.mdk | dir]\n",
+    "  medaka test [--native | --engines eval,native] [--filter <substring>]\n",
+    "              [--seed <n>] [--cases <n>] [file.mdk | dir]\n",
     "\n",
     "  --native            run doctests through a compiled native binary\n",
     "                      instead of the interpreter (shorthand for\n",
     "                      --engines native)\n",
     "  --engines e1,e2,...  run the listed engine set (known: eval, native);\n",
     "                      exit code is the AND across engines\n",
+    "  --filter <substring> restrict to doctests/`test \"…\"`/`prop \"…\"` whose\n",
+    "                      name (or, for a doctest, input expression) contains\n",
+    "                      <substring>\n",
+    "  --seed <n>           seed the property-test RNG (printed on every prop\n",
+    "                      failure so the counterexample is replayable); never\n",
+    "                      affects a program under test's own random draws\n",
+    "  --cases <n>           run each property with <n> generated cases\n",
+    "                      instead of the default 100\n",
     "\n",
     "--native and --engines are mutually exclusive. With neither, the default\n",
     "is the interpreter (eval) alone. A file.mdk or dir target is required.\n",
   ]
 
+-- #2316: any `--`-prefixed token must be one of the known `medaka test`
+-- flags. The old `testTargets` fallthrough (`startsWith "--" x = testTargets
+-- rest`) dropped ANY unrecognized `--`-shaped token unconditionally — so
+-- `--engines=native` (the `=`-form, which nothing here parses as `--engines`)
+-- silently vanished, `parseTestEngines` saw no `--engines`/`--native` at all,
+-- and the run defaulted to the interpreter and exited 0 with no diagnostic.
+-- Reject anything `--`-shaped that isn't one of these up front instead.
+testValueFlags : List String
+testValueFlags = ["--engines", "--filter", "--seed", "--cases"]
+
+validateTestFlags : List String -> Result String Unit
+validateTestFlags [] = Ok ()
+validateTestFlags (a::rest)
+  | a == "--native" = validateTestFlags rest
+  | contains a testValueFlags = match rest
+    [] => Err "\{a} requires a value"
+    _::rest2 => validateTestFlags rest2
+  | startsWith "--" a = Err "unrecognized flag '\{a}' (known: --native, --engines, --filter, --seed, --cases)"
+  | otherwise = validateTestFlags rest
+
+-- `--cases <n>`/`--seed <n>` must parse as integers — same "named + located"
+-- rejection style as an unknown engine name (`parseEngineNames`), not a
+-- silent fall-through to the default.
+parseTestIntFlag : String -> List String -> Result String (Option Int)
+parseTestIntFlag flag argv = match testFlagValue flag argv
+  None => Ok None
+  Some s => match toInt s
+    Some n => Ok (Some n)
+    None => Err "\{flag} requires an integer value, got '\{s}'"
+
 runTestCmd : List String -> <IO> Unit
-runTestCmd argv = match parseTestEngines argv
+runTestCmd argv = match validateTestFlags argv
   Err msg =>
     let _ = ePutStrLn "medaka test: \{msg}"
     exit 1
-  Ok engines => match testTargets argv
-    [] =>
-      let _ = ePutStrLn "usage: medaka test [--native | --engines eval,native] [file.mdk | dir]"
+  Ok () => match parseTestEngines argv
+    Err msg =>
+      let _ = ePutStrLn "medaka test: \{msg}"
       exit 1
-    [target] => match listDir target
-      Err _ => runTestOne engines target
-      Ok _ => runTestManyTargets engines [target]
-    targets => runTestManyTargets engines targets
+    Ok engines => match parseTestIntFlag "--cases" argv
+      Err msg =>
+        let _ = ePutStrLn "medaka test: \{msg}"
+        exit 1
+      Ok casesOpt => match parseTestIntFlag "--seed" argv
+        Err msg =>
+          let _ = ePutStrLn "medaka test: \{msg}"
+          exit 1
+        Ok seedOpt =>
+          let _ = match seedOpt
+            Some s => seedPropRng s
+            None => ()
+          let cases = match casesOpt
+            Some n => n
+            None => 100
+          let filterOpt = testFlagValue "--filter" argv
+          match testTargets argv
+            [] =>
+              let _ = ePutStrLn "usage: medaka test [--native | --engines eval,native] [--filter <substring>] [--seed <n>] [--cases <n>] [file.mdk | dir]"
+              exit 1
+            [target] => match listDir target
+              Err _ => runTestOne engines cases filterOpt target
+              Ok _ => runTestManyTargets engines cases filterOpt [target]
+            targets => runTestManyTargets engines cases filterOpt targets
 
 -- `--engines <list>` and `--native` are MUTUALLY EXCLUSIVE — not "--engines
 -- silently wins". Letting one silently override the other reproduces, in
@@ -2282,27 +2343,33 @@ testFlagValue name (a::v::rest) =
   else
     testFlagValue name (v::rest)
 
--- Non-flag args for `medaka test`, minus `--native` and the VALUE of
--- `--engines` (the shared `dropFlags` doesn't know about a value-taking
--- flag). Mirrors `snapshotTargets`/`lintTargets`.
+-- Non-flag args for `medaka test`, minus `--native` and the VALUE of every
+-- value-taking flag (the shared `dropFlags` doesn't know about a value-taking
+-- flag). Mirrors `snapshotTargets`/`lintTargets`. By the time this runs,
+-- `validateTestFlags` has already rejected any `--`-shaped token that isn't
+-- one of these, so the final wildcard arm below is unreachable in practice —
+-- kept only as a safety net, not a silent-drop path.
 testTargets : List String -> List String
 testTargets [] = []
 testTargets ("--engines"::_::rest) = testTargets rest
 testTargets ("--native"::rest) = testTargets rest
+testTargets ("--filter"::_::rest) = testTargets rest
+testTargets ("--seed"::_::rest) = testTargets rest
+testTargets ("--cases"::_::rest) = testTargets rest
 testTargets (x::rest)
   | startsWith "--" x = testTargets rest
   | otherwise = x :: testTargets rest
 
 -- Original single-file path, unchanged: read <MEDAKA_ROOT>/stdlib sources,
 -- build search roots, run `runTest`, exit 1 on any failure/read-error.
-runTestOne : List Engine -> String -> <IO> Unit
-runTestOne engines target =
+runTestOne : List Engine -> Int -> Option String -> String -> <IO> Unit
+runTestOne engines cases filterOpt target =
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let rtPath = root ++ "/stdlib/runtime.mdk"
   let corePath = root ++ "/stdlib/core.mdk"
   let stdlibDir = root ++ "/stdlib"
   let roots = entrySearchRoots (dirOf2 target) ++ [stdlibDir]
-  let ok = runTest engines rtPath corePath target roots
+  let ok = runTest engines rtPath corePath target roots cases filterOpt
   if ok then () else exit 1
 
 -- Directory/project/multi-target path: expand every target to concrete .mdk
@@ -2310,8 +2377,8 @@ runTestOne engines target =
 -- (empty dir, or a dir with no .mdk files) is reported and left at exit 0 —
 -- "nothing to test" is not a failure, mirroring runTest's own vacuous-pass
 -- convention for a single zero-doctest file.
-runTestManyTargets : List Engine -> List String -> <IO> Unit
-runTestManyTargets engines targets =
+runTestManyTargets : List Engine -> Int -> Option String -> List String -> <IO> Unit
+runTestManyTargets engines cases filterOpt targets =
   let files = flatMap expandLintTarget targets
   match files
     [] =>
@@ -2322,19 +2389,27 @@ runTestManyTargets engines targets =
       let rtPath = root ++ "/stdlib/runtime.mdk"
       let corePath = root ++ "/stdlib/core.mdk"
       let stdlibDir = root ++ "/stdlib"
-      if testFilesGo engines rtPath corePath stdlibDir files False then
+      if testFilesGo engines rtPath corePath stdlibDir cases filterOpt files False then
         exit 1
       else
         ()
 
 -- Fold `runTest` over an expanded file list, aggregating whether ANY file
 -- failed (tests failed, or the file itself couldn't be read/parsed).
-testFilesGo : List Engine -> String -> String -> String -> List String -> Bool -> <IO> Bool
-testFilesGo _ _ _ _ [] acc = acc
-testFilesGo engines rtPath corePath stdlibDir (f::rest) acc =
+testFilesGo : List Engine -> String -> String -> String -> Int -> Option String -> List String -> Bool -> <IO> Bool
+testFilesGo _ _ _ _ _ _ [] acc = acc
+testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f::rest) acc =
   let roots = entrySearchRoots (dirOf2 f) ++ [stdlibDir]
-  let ok = runTest engines rtPath corePath f roots
-  testFilesGo engines rtPath corePath stdlibDir rest (acc || not ok)
+  let ok = runTest engines rtPath corePath f roots cases filterOpt
+  testFilesGo
+    engines
+    rtPath
+    corePath
+    stdlibDir
+    cases
+    filterOpt
+    rest
+    (acc || not ok)
 
 -- ── doc ───────────────────────────────────────────────────────────────────
 -- Mirrors bin/main.ml's `doc` arm + lib/doc.ml: read the target file, parse
@@ -3324,6 +3399,7 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omFromNames" false))))
 (DUse false (UseGroup ("support" "path") ((mem "baseOf" false) (mem "chopExt" false) (mem "joinPath" false))))
 (DUse false (UseGroup ("support" "timer") ((mem "perfEnabled" false) (mem "now" false) (mem "emitPhase" false) (mem "emitTotal" false))))
+(DUse false (UseGroup ("string") ((mem "toInt" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" false) (mem "LetBind" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false) (mem "parseResult" false) (mem "ParseError" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "Positions" false))))
 (DUse false (UseGroup ("frontend" "parse_cache") ((mem "parsePrelude" false))))
@@ -3335,6 +3411,7 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("types" "typecheck") ((mem "elaborateModules" false) (mem "resetTypeErrorsSticky" false) (mem "hadTypeErrors" false) (mem "mainTypeIsAsync" false) (mem "mainTypeIsUnit" false) (mem "setStdlibOwnership" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "evalModulesOutputRun" false) (mem "evalModulesOutputAsync" false) (mem "currentEvalFile" false) (mem "modulePathMap" false) (mem "runJsonMode" false) (mem "pendingRunDiags" false) (mem "progArgsRef" false))))
 (DUse false (UseGroup ("tools" "test_cmd") ((mem "runTest" false))))
+(DUse false (UseGroup ("tools" "prop_runner") ((mem "seedPropRng" false))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "Engine" true))))
 (DUse false (UseGroup ("tools" "repl") ((mem "initSession" false) (mem "replLoop" false))))
 (DUse false (UseGroup ("tools" "lsp") ((mem "runServer" false))))
@@ -3363,7 +3440,7 @@ runMcpServerFromEnv _ =
 (DFunDef false "dispatchSub" ((PVar "help") PWild (PCons (PLit (LString "-h")) PWild)) (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EVar "help"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 0))))))
 (DFunDef false "dispatchSub" (PWild (PVar "run") (PVar "rest")) (EApp (EVar "run") (EVar "rest")))
 (DTypeSig false "usage" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "usage" (PWild) (EApp (EVar "putStrLn") (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka. A functional language compiler\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka                    Show this message\n")) (ELit (LString "  medaka run [--release] <file.mdk>   Type-check and run a program\n")) (ELit (LString "  medaka build <file.mdk> [-o <out>] [--keep-ir]  Compile to a native binary (LLVM + clang)\n")) (ELit (LString "  medaka check [--json] <file.mdk>    Type-check without running\n")) (ELit (LString "  medaka test [--native | --engines eval,native] [file.mdk]    Run doctests + prop tests (--native runs doctests through a compiled native binary INSTEAD of the interpreter; --engines runs the listed set, exit is the AND)\n")) (ELit (LString "  medaka doc [file.mdk]     Generate Markdown documentation\n")) (ELit (LString "  medaka lint [paths...]    Lint files/dirs (style rules; --fix, --cache, --disable/--only/--deny=<rules,...>)\n")) (ELit (LString "  medaka codemod <name> [flags] [paths...]  Apply a named source-preserving AST transform (--write/--stdout)\n")) (ELit (LString "  medaka snapshot [--check|--new|--bless] [paths...]  Per-stage snapshot tests (--out <dir>, --stages <a,b,..>)\n")) (ELit (LString "  medaka fmt [paths...]     Report unformatted files (default; use --write to rewrite in place)\n")) (ELit (LString "  medaka new <name>         Scaffold a new project directory\n")) (ELit (LString "  medaka repl               Start an interactive REPL (reads stdin until EOF or :quit)\n")) (ELit (LString "  medaka lsp                Run the language server over stdio\n")) (ELit (LString "  medaka mcp                Run the MCP server over stdio (JSON-RPC for agents)\n")) (ELit (LString "  medaka check-policy <file.mdk> [--allow L1,L2,...] [--fn name]  Check a plugin's inferred effects against an allow-list\n")) (ELit (LString "  medaka manifest <file.mdk> [--fn name]  Emit the verified capability manifest as TOML\n")) (ELit (LString "  medaka gate list [<selector>...] [--json]  Query the gate registry (test/gates.toml)\n")) (ELit (LString "  medaka gate run [<selector>...] [--dry-run]  Run the selected gates\n")) (ELit (LString "  medaka help               Show this message\n")) (ELit (LString "  medaka --version          Show the compiler version\n"))))))
+(DFunDef false "usage" (PWild) (EApp (EVar "putStrLn") (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka. A functional language compiler\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka                    Show this message\n")) (ELit (LString "  medaka run [--release] <file.mdk>   Type-check and run a program\n")) (ELit (LString "  medaka build <file.mdk> [-o <out>] [--keep-ir]  Compile to a native binary (LLVM + clang)\n")) (ELit (LString "  medaka check [--json] <file.mdk>    Type-check without running\n")) (ELit (LString "  medaka test [--native | --engines eval,native] [--filter <substring>] [--seed <n>] [--cases <n>] [file.mdk]    Run doctests + prop tests (--native runs doctests through a compiled native binary INSTEAD of the interpreter; --engines runs the listed set, exit is the AND)\n")) (ELit (LString "  medaka doc [file.mdk]     Generate Markdown documentation\n")) (ELit (LString "  medaka lint [paths...]    Lint files/dirs (style rules; --fix, --cache, --disable/--only/--deny=<rules,...>)\n")) (ELit (LString "  medaka codemod <name> [flags] [paths...]  Apply a named source-preserving AST transform (--write/--stdout)\n")) (ELit (LString "  medaka snapshot [--check|--new|--bless] [paths...]  Per-stage snapshot tests (--out <dir>, --stages <a,b,..>)\n")) (ELit (LString "  medaka fmt [paths...]     Report unformatted files (default; use --write to rewrite in place)\n")) (ELit (LString "  medaka new <name>         Scaffold a new project directory\n")) (ELit (LString "  medaka repl               Start an interactive REPL (reads stdin until EOF or :quit)\n")) (ELit (LString "  medaka lsp                Run the language server over stdio\n")) (ELit (LString "  medaka mcp                Run the MCP server over stdio (JSON-RPC for agents)\n")) (ELit (LString "  medaka check-policy <file.mdk> [--allow L1,L2,...] [--fn name]  Check a plugin's inferred effects against an allow-list\n")) (ELit (LString "  medaka manifest <file.mdk> [--fn name]  Emit the verified capability manifest as TOML\n")) (ELit (LString "  medaka gate list [<selector>...] [--json]  Query the gate registry (test/gates.toml)\n")) (ELit (LString "  medaka gate run [<selector>...] [--dry-run]  Run the selected gates\n")) (ELit (LString "  medaka help               Show this message\n")) (ELit (LString "  medaka --version          Show the compiler version\n"))))))
 (DTypeSig false "notYet" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "notYet" ((PVar "sub")) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka: subcommand '")) (EVar "sub")) (ELit (LString "' not yet in native CLI"))))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))))
 (DTypeSig false "ppParseError" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "ParseError") (TyCon "String")))))
@@ -3588,9 +3665,16 @@ runMcpServerFromEnv _ =
 (DTypeSig false "runProgramOutput" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyCon "String")))))
 (DFunDef false "runProgramOutput" ((PVar "preludeDecls") (PVar "modules")) (EMatch (EApp (EVar "mainTypeIsAsync") (ELit LUnit)) (arm (PCon "True") () (EApp (EApp (EVar "evalModulesOutputAsync") (EVar "preludeDecls")) (EVar "modules"))) (arm (PCon "False") () (EApp (EApp (EVar "evalModulesOutputRun") (EVar "preludeDecls")) (EVar "modules")))))
 (DTypeSig false "testHelpText" (TyCon "String"))
-(DFunDef false "testHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka test — Run doctests + property tests\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka test [--native | --engines eval,native] [file.mdk | dir]\n")) (ELit (LString "\n")) (ELit (LString "  --native            run doctests through a compiled native binary\n")) (ELit (LString "                      instead of the interpreter (shorthand for\n")) (ELit (LString "                      --engines native)\n")) (ELit (LString "  --engines e1,e2,...  run the listed engine set (known: eval, native);\n")) (ELit (LString "                      exit code is the AND across engines\n")) (ELit (LString "\n")) (ELit (LString "--native and --engines are mutually exclusive. With neither, the default\n")) (ELit (LString "is the interpreter (eval) alone. A file.mdk or dir target is required.\n")))))
+(DFunDef false "testHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka test — Run doctests + property tests\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka test [--native | --engines eval,native] [--filter <substring>]\n")) (ELit (LString "              [--seed <n>] [--cases <n>] [file.mdk | dir]\n")) (ELit (LString "\n")) (ELit (LString "  --native            run doctests through a compiled native binary\n")) (ELit (LString "                      instead of the interpreter (shorthand for\n")) (ELit (LString "                      --engines native)\n")) (ELit (LString "  --engines e1,e2,...  run the listed engine set (known: eval, native);\n")) (ELit (LString "                      exit code is the AND across engines\n")) (ELit (LString "  --filter <substring> restrict to doctests/`test \"…\"`/`prop \"…\"` whose\n")) (ELit (LString "                      name (or, for a doctest, input expression) contains\n")) (ELit (LString "                      <substring>\n")) (ELit (LString "  --seed <n>           seed the property-test RNG (printed on every prop\n")) (ELit (LString "                      failure so the counterexample is replayable); never\n")) (ELit (LString "                      affects a program under test's own random draws\n")) (ELit (LString "  --cases <n>           run each property with <n> generated cases\n")) (ELit (LString "                      instead of the default 100\n")) (ELit (LString "\n")) (ELit (LString "--native and --engines are mutually exclusive. With neither, the default\n")) (ELit (LString "is the interpreter (eval) alone. A file.mdk or dir target is required.\n")))))
+(DTypeSig false "testValueFlags" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "testValueFlags" () (EListLit (ELit (LString "--engines")) (ELit (LString "--filter")) (ELit (LString "--seed")) (ELit (LString "--cases"))))
+(DTypeSig false "validateTestFlags" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))
+(DFunDef false "validateTestFlags" ((PList)) (EApp (EVar "Ok") (ELit LUnit)))
+(DFunDef false "validateTestFlags" ((PCons (PVar "a") (PVar "rest"))) (EIf (EBinOp "==" (EVar "a") (ELit (LString "--native"))) (EApp (EVar "validateTestFlags") (EVar "rest")) (EIf (EApp (EApp (EVar "contains") (EVar "a")) (EVar "testValueFlags")) (EMatch (EVar "rest") (arm (PList) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "a"))) (ELit (LString " requires a value"))))) (arm (PCons PWild (PVar "rest2")) () (EApp (EVar "validateTestFlags") (EVar "rest2")))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "--"))) (EVar "a")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "unrecognized flag '")) (EApp (EVar "display") (EVar "a"))) (ELit (LString "' (known: --native, --engines, --filter, --seed, --cases)")))) (EIf (EVar "otherwise") (EApp (EVar "validateTestFlags") (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DTypeSig false "parseTestIntFlag" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))))))
+(DFunDef false "parseTestIntFlag" ((PVar "flag") (PVar "argv")) (EMatch (EApp (EApp (EVar "testFlagValue") (EVar "flag")) (EVar "argv")) (arm (PCon "None") () (EApp (EVar "Ok") (EVar "None"))) (arm (PCon "Some" (PVar "s")) () (EMatch (EApp (EVar "toInt") (EVar "s")) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "Ok") (EApp (EVar "Some") (EVar "n")))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "flag"))) (ELit (LString " requires an integer value, got '"))) (EApp (EVar "display") (EVar "s"))) (ELit (LString "'")))))))))
 (DTypeSig false "runTestCmd" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "runTestCmd" ((PVar "argv")) (EMatch (EApp (EVar "parseTestEngines") (EVar "argv")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "engines")) () (EMatch (EApp (EVar "testTargets") (EVar "argv")) (arm (PList) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (ELit (LString "usage: medaka test [--native | --engines eval,native] [file.mdk | dir]")))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PList (PVar "target")) () (EMatch (EApp (EVar "listDir") (EVar "target")) (arm (PCon "Err" PWild) () (EApp (EApp (EVar "runTestOne") (EVar "engines")) (EVar "target"))) (arm (PCon "Ok" PWild) () (EApp (EApp (EVar "runTestManyTargets") (EVar "engines")) (EListLit (EVar "target")))))) (arm (PVar "targets") () (EApp (EApp (EVar "runTestManyTargets") (EVar "engines")) (EVar "targets")))))))
+(DFunDef false "runTestCmd" ((PVar "argv")) (EMatch (EApp (EVar "validateTestFlags") (EVar "argv")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PLit LUnit)) () (EMatch (EApp (EVar "parseTestEngines") (EVar "argv")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "engines")) () (EMatch (EApp (EApp (EVar "parseTestIntFlag") (ELit (LString "--cases"))) (EVar "argv")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "casesOpt")) () (EMatch (EApp (EApp (EVar "parseTestIntFlag") (ELit (LString "--seed"))) (EVar "argv")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "seedOpt")) () (EBlock (DoLet false false PWild (EMatch (EVar "seedOpt") (arm (PCon "Some" (PVar "s")) () (EApp (EVar "seedPropRng") (EVar "s"))) (arm (PCon "None") () (ELit LUnit)))) (DoLet false false (PVar "cases") (EMatch (EVar "casesOpt") (arm (PCon "Some" (PVar "n")) () (EVar "n")) (arm (PCon "None") () (ELit (LInt 100))))) (DoLet false false (PVar "filterOpt") (EApp (EApp (EVar "testFlagValue") (ELit (LString "--filter"))) (EVar "argv"))) (DoExpr (EMatch (EApp (EVar "testTargets") (EVar "argv")) (arm (PList) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (ELit (LString "usage: medaka test [--native | --engines eval,native] [--filter <substring>] [--seed <n>] [--cases <n>] [file.mdk | dir]")))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PList (PVar "target")) () (EMatch (EApp (EVar "listDir") (EVar "target")) (arm (PCon "Err" PWild) () (EApp (EApp (EApp (EApp (EVar "runTestOne") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "target"))) (arm (PCon "Ok" PWild) () (EApp (EApp (EApp (EApp (EVar "runTestManyTargets") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EListLit (EVar "target")))))) (arm (PVar "targets") () (EApp (EApp (EApp (EApp (EVar "runTestManyTargets") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "targets")))))))))))))))
 (DTypeSig false "parseTestEngines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Engine")))))
 (DFunDef false "parseTestEngines" ((PVar "argv")) (EMatch (ETuple (EApp (EApp (EVar "testFlagValue") (ELit (LString "--engines"))) (EVar "argv")) (EApp (EApp (EVar "hasFlag") (ELit (LString "--native"))) (EVar "argv"))) (arm (PTuple (PCon "Some" PWild) (PCon "True")) () (EApp (EVar "Err") (ELit (LString "--native and --engines are mutually exclusive; --native is shorthand for --engines native")))) (arm (PTuple (PCon "Some" (PVar "spec")) (PCon "False")) () (EApp (EVar "parseEngineList") (EVar "spec"))) (arm (PTuple (PCon "None") (PCon "True")) () (EApp (EVar "Ok") (EListLit (EVar "EngNative")))) (arm (PTuple (PCon "None") (PCon "False")) () (EApp (EVar "Ok") (EListLit (EVar "EngInterp"))))))
 (DTypeSig false "parseEngineList" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Engine")))))
@@ -3610,14 +3694,17 @@ runMcpServerFromEnv _ =
 (DFunDef false "testTargets" ((PList)) (EListLit))
 (DFunDef false "testTargets" ((PCons (PLit (LString "--engines")) (PCons PWild (PVar "rest")))) (EApp (EVar "testTargets") (EVar "rest")))
 (DFunDef false "testTargets" ((PCons (PLit (LString "--native")) (PVar "rest"))) (EApp (EVar "testTargets") (EVar "rest")))
+(DFunDef false "testTargets" ((PCons (PLit (LString "--filter")) (PCons PWild (PVar "rest")))) (EApp (EVar "testTargets") (EVar "rest")))
+(DFunDef false "testTargets" ((PCons (PLit (LString "--seed")) (PCons PWild (PVar "rest")))) (EApp (EVar "testTargets") (EVar "rest")))
+(DFunDef false "testTargets" ((PCons (PLit (LString "--cases")) (PCons PWild (PVar "rest")))) (EApp (EVar "testTargets") (EVar "rest")))
 (DFunDef false "testTargets" ((PCons (PVar "x") (PVar "rest"))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "--"))) (EVar "x")) (EApp (EVar "testTargets") (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "x") (EApp (EVar "testTargets") (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "runTestOne" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))
-(DFunDef false "runTestOne" ((PVar "engines") (PVar "target")) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf2") (EVar "target"))) (EListLit (EVar "stdlibDir")))) (DoLet false false (PVar "ok") (EApp (EApp (EApp (EApp (EApp (EVar "runTest") (EVar "engines")) (EVar "rtPath")) (EVar "corePath")) (EVar "target")) (EVar "roots"))) (DoExpr (EIf (EVar "ok") (ELit LUnit) (EApp (EVar "exit") (ELit (LInt 1)))))))
-(DTypeSig false "runTestManyTargets" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit")))))
-(DFunDef false "runTestManyTargets" ((PVar "engines") (PVar "targets")) (EBlock (DoLet false false (PVar "files") (EApp (EApp (EVar "flatMap") (EVar "expandLintTarget")) (EVar "targets"))) (DoExpr (EMatch (EVar "files") (arm (PList) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (ELit (LString "medaka test: no .mdk files found")))) (DoExpr (ELit LUnit)))) (arm PWild () (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EApp (EApp (EVar "testFilesGo") (EVar "engines")) (EVar "rtPath")) (EVar "corePath")) (EVar "stdlibDir")) (EVar "files")) (EVar "False")) (EApp (EVar "exit") (ELit (LInt 1))) (ELit LUnit)))))))))
-(DTypeSig false "testFilesGo" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyEffect ("IO") None (TyCon "Bool")))))))))
-(DFunDef false "testFilesGo" (PWild PWild PWild PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "testFilesGo" ((PVar "engines") (PVar "rtPath") (PVar "corePath") (PVar "stdlibDir") (PCons (PVar "f") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf2") (EVar "f"))) (EListLit (EVar "stdlibDir")))) (DoLet false false (PVar "ok") (EApp (EApp (EApp (EApp (EApp (EVar "runTest") (EVar "engines")) (EVar "rtPath")) (EVar "corePath")) (EVar "f")) (EVar "roots"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "testFilesGo") (EVar "engines")) (EVar "rtPath")) (EVar "corePath")) (EVar "stdlibDir")) (EVar "rest")) (EBinOp "||" (EVar "acc") (EApp (EVar "not") (EVar "ok")))))))
+(DTypeSig false "runTestOne" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))))
+(DFunDef false "runTestOne" ((PVar "engines") (PVar "cases") (PVar "filterOpt") (PVar "target")) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf2") (EVar "target"))) (EListLit (EVar "stdlibDir")))) (DoLet false false (PVar "ok") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTest") (EVar "engines")) (EVar "rtPath")) (EVar "corePath")) (EVar "target")) (EVar "roots")) (EVar "cases")) (EVar "filterOpt"))) (DoExpr (EIf (EVar "ok") (ELit LUnit) (EApp (EVar "exit") (ELit (LInt 1)))))))
+(DTypeSig false "runTestManyTargets" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit")))))))
+(DFunDef false "runTestManyTargets" ((PVar "engines") (PVar "cases") (PVar "filterOpt") (PVar "targets")) (EBlock (DoLet false false (PVar "files") (EApp (EApp (EVar "flatMap") (EVar "expandLintTarget")) (EVar "targets"))) (DoExpr (EMatch (EVar "files") (arm (PList) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (ELit (LString "medaka test: no .mdk files found")))) (DoExpr (ELit LUnit)))) (arm PWild () (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "testFilesGo") (EVar "engines")) (EVar "rtPath")) (EVar "corePath")) (EVar "stdlibDir")) (EVar "cases")) (EVar "filterOpt")) (EVar "files")) (EVar "False")) (EApp (EVar "exit") (ELit (LInt 1))) (ELit LUnit)))))))))
+(DTypeSig false "testFilesGo" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyEffect ("IO") None (TyCon "Bool")))))))))))
+(DFunDef false "testFilesGo" (PWild PWild PWild PWild PWild PWild (PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "testFilesGo" ((PVar "engines") (PVar "rtPath") (PVar "corePath") (PVar "stdlibDir") (PVar "cases") (PVar "filterOpt") (PCons (PVar "f") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf2") (EVar "f"))) (EListLit (EVar "stdlibDir")))) (DoLet false false (PVar "ok") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTest") (EVar "engines")) (EVar "rtPath")) (EVar "corePath")) (EVar "f")) (EVar "roots")) (EVar "cases")) (EVar "filterOpt"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "testFilesGo") (EVar "engines")) (EVar "rtPath")) (EVar "corePath")) (EVar "stdlibDir")) (EVar "cases")) (EVar "filterOpt")) (EVar "rest")) (EBinOp "||" (EVar "acc") (EApp (EVar "not") (EVar "ok")))))))
 (DTypeSig false "docHelpText" (TyCon "String"))
 (DFunDef false "docHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka doc — Generate Markdown documentation for a file\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka doc <file.mdk>\n")) (ELit (LString "\n")) (ELit (LString "Prints Markdown for every PUBLIC declaration (with inferred type\n")) (ELit (LString "schemes) in <file.mdk> to stdout. Single-file only.\n")))))
 (DTypeSig false "runDocCmd" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
@@ -3771,6 +3858,7 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omFromNames" false))))
 (DUse false (UseGroup ("support" "path") ((mem "baseOf" false) (mem "chopExt" false) (mem "joinPath" false))))
 (DUse false (UseGroup ("support" "timer") ((mem "perfEnabled" false) (mem "now" false) (mem "emitPhase" false) (mem "emitTotal" false))))
+(DUse false (UseGroup ("string") ((mem "toInt" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" false) (mem "LetBind" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false) (mem "parseResult" false) (mem "ParseError" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "Positions" false))))
 (DUse false (UseGroup ("frontend" "parse_cache") ((mem "parsePrelude" false))))
@@ -3782,6 +3870,7 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("types" "typecheck") ((mem "elaborateModules" false) (mem "resetTypeErrorsSticky" false) (mem "hadTypeErrors" false) (mem "mainTypeIsAsync" false) (mem "mainTypeIsUnit" false) (mem "setStdlibOwnership" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "evalModulesOutputRun" false) (mem "evalModulesOutputAsync" false) (mem "currentEvalFile" false) (mem "modulePathMap" false) (mem "runJsonMode" false) (mem "pendingRunDiags" false) (mem "progArgsRef" false))))
 (DUse false (UseGroup ("tools" "test_cmd") ((mem "runTest" false))))
+(DUse false (UseGroup ("tools" "prop_runner") ((mem "seedPropRng" false))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "Engine" true))))
 (DUse false (UseGroup ("tools" "repl") ((mem "initSession" false) (mem "replLoop" false))))
 (DUse false (UseGroup ("tools" "lsp") ((mem "runServer" false))))
@@ -3810,7 +3899,7 @@ runMcpServerFromEnv _ =
 (DFunDef false "dispatchSub" ((PVar "help") PWild (PCons (PLit (LString "-h")) PWild)) (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EVar "help"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 0))))))
 (DFunDef false "dispatchSub" (PWild (PVar "run") (PVar "rest")) (EApp (EVar "run") (EVar "rest")))
 (DTypeSig false "usage" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "usage" (PWild) (EApp (EVar "putStrLn") (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka. A functional language compiler\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka                    Show this message\n")) (ELit (LString "  medaka run [--release] <file.mdk>   Type-check and run a program\n")) (ELit (LString "  medaka build <file.mdk> [-o <out>] [--keep-ir]  Compile to a native binary (LLVM + clang)\n")) (ELit (LString "  medaka check [--json] <file.mdk>    Type-check without running\n")) (ELit (LString "  medaka test [--native | --engines eval,native] [file.mdk]    Run doctests + prop tests (--native runs doctests through a compiled native binary INSTEAD of the interpreter; --engines runs the listed set, exit is the AND)\n")) (ELit (LString "  medaka doc [file.mdk]     Generate Markdown documentation\n")) (ELit (LString "  medaka lint [paths...]    Lint files/dirs (style rules; --fix, --cache, --disable/--only/--deny=<rules,...>)\n")) (ELit (LString "  medaka codemod <name> [flags] [paths...]  Apply a named source-preserving AST transform (--write/--stdout)\n")) (ELit (LString "  medaka snapshot [--check|--new|--bless] [paths...]  Per-stage snapshot tests (--out <dir>, --stages <a,b,..>)\n")) (ELit (LString "  medaka fmt [paths...]     Report unformatted files (default; use --write to rewrite in place)\n")) (ELit (LString "  medaka new <name>         Scaffold a new project directory\n")) (ELit (LString "  medaka repl               Start an interactive REPL (reads stdin until EOF or :quit)\n")) (ELit (LString "  medaka lsp                Run the language server over stdio\n")) (ELit (LString "  medaka mcp                Run the MCP server over stdio (JSON-RPC for agents)\n")) (ELit (LString "  medaka check-policy <file.mdk> [--allow L1,L2,...] [--fn name]  Check a plugin's inferred effects against an allow-list\n")) (ELit (LString "  medaka manifest <file.mdk> [--fn name]  Emit the verified capability manifest as TOML\n")) (ELit (LString "  medaka gate list [<selector>...] [--json]  Query the gate registry (test/gates.toml)\n")) (ELit (LString "  medaka gate run [<selector>...] [--dry-run]  Run the selected gates\n")) (ELit (LString "  medaka help               Show this message\n")) (ELit (LString "  medaka --version          Show the compiler version\n"))))))
+(DFunDef false "usage" (PWild) (EApp (EVar "putStrLn") (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka. A functional language compiler\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka                    Show this message\n")) (ELit (LString "  medaka run [--release] <file.mdk>   Type-check and run a program\n")) (ELit (LString "  medaka build <file.mdk> [-o <out>] [--keep-ir]  Compile to a native binary (LLVM + clang)\n")) (ELit (LString "  medaka check [--json] <file.mdk>    Type-check without running\n")) (ELit (LString "  medaka test [--native | --engines eval,native] [--filter <substring>] [--seed <n>] [--cases <n>] [file.mdk]    Run doctests + prop tests (--native runs doctests through a compiled native binary INSTEAD of the interpreter; --engines runs the listed set, exit is the AND)\n")) (ELit (LString "  medaka doc [file.mdk]     Generate Markdown documentation\n")) (ELit (LString "  medaka lint [paths...]    Lint files/dirs (style rules; --fix, --cache, --disable/--only/--deny=<rules,...>)\n")) (ELit (LString "  medaka codemod <name> [flags] [paths...]  Apply a named source-preserving AST transform (--write/--stdout)\n")) (ELit (LString "  medaka snapshot [--check|--new|--bless] [paths...]  Per-stage snapshot tests (--out <dir>, --stages <a,b,..>)\n")) (ELit (LString "  medaka fmt [paths...]     Report unformatted files (default; use --write to rewrite in place)\n")) (ELit (LString "  medaka new <name>         Scaffold a new project directory\n")) (ELit (LString "  medaka repl               Start an interactive REPL (reads stdin until EOF or :quit)\n")) (ELit (LString "  medaka lsp                Run the language server over stdio\n")) (ELit (LString "  medaka mcp                Run the MCP server over stdio (JSON-RPC for agents)\n")) (ELit (LString "  medaka check-policy <file.mdk> [--allow L1,L2,...] [--fn name]  Check a plugin's inferred effects against an allow-list\n")) (ELit (LString "  medaka manifest <file.mdk> [--fn name]  Emit the verified capability manifest as TOML\n")) (ELit (LString "  medaka gate list [<selector>...] [--json]  Query the gate registry (test/gates.toml)\n")) (ELit (LString "  medaka gate run [<selector>...] [--dry-run]  Run the selected gates\n")) (ELit (LString "  medaka help               Show this message\n")) (ELit (LString "  medaka --version          Show the compiler version\n"))))))
 (DTypeSig false "notYet" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "notYet" ((PVar "sub")) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka: subcommand '")) (EMethodRef "sub")) (ELit (LString "' not yet in native CLI"))))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))))
 (DTypeSig false "ppParseError" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "ParseError") (TyCon "String")))))
@@ -4035,9 +4124,16 @@ runMcpServerFromEnv _ =
 (DTypeSig false "runProgramOutput" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyCon "String")))))
 (DFunDef false "runProgramOutput" ((PVar "preludeDecls") (PVar "modules")) (EMatch (EApp (EVar "mainTypeIsAsync") (ELit LUnit)) (arm (PCon "True") () (EApp (EApp (EVar "evalModulesOutputAsync") (EVar "preludeDecls")) (EVar "modules"))) (arm (PCon "False") () (EApp (EApp (EVar "evalModulesOutputRun") (EVar "preludeDecls")) (EVar "modules")))))
 (DTypeSig false "testHelpText" (TyCon "String"))
-(DFunDef false "testHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka test — Run doctests + property tests\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka test [--native | --engines eval,native] [file.mdk | dir]\n")) (ELit (LString "\n")) (ELit (LString "  --native            run doctests through a compiled native binary\n")) (ELit (LString "                      instead of the interpreter (shorthand for\n")) (ELit (LString "                      --engines native)\n")) (ELit (LString "  --engines e1,e2,...  run the listed engine set (known: eval, native);\n")) (ELit (LString "                      exit code is the AND across engines\n")) (ELit (LString "\n")) (ELit (LString "--native and --engines are mutually exclusive. With neither, the default\n")) (ELit (LString "is the interpreter (eval) alone. A file.mdk or dir target is required.\n")))))
+(DFunDef false "testHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka test — Run doctests + property tests\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka test [--native | --engines eval,native] [--filter <substring>]\n")) (ELit (LString "              [--seed <n>] [--cases <n>] [file.mdk | dir]\n")) (ELit (LString "\n")) (ELit (LString "  --native            run doctests through a compiled native binary\n")) (ELit (LString "                      instead of the interpreter (shorthand for\n")) (ELit (LString "                      --engines native)\n")) (ELit (LString "  --engines e1,e2,...  run the listed engine set (known: eval, native);\n")) (ELit (LString "                      exit code is the AND across engines\n")) (ELit (LString "  --filter <substring> restrict to doctests/`test \"…\"`/`prop \"…\"` whose\n")) (ELit (LString "                      name (or, for a doctest, input expression) contains\n")) (ELit (LString "                      <substring>\n")) (ELit (LString "  --seed <n>           seed the property-test RNG (printed on every prop\n")) (ELit (LString "                      failure so the counterexample is replayable); never\n")) (ELit (LString "                      affects a program under test's own random draws\n")) (ELit (LString "  --cases <n>           run each property with <n> generated cases\n")) (ELit (LString "                      instead of the default 100\n")) (ELit (LString "\n")) (ELit (LString "--native and --engines are mutually exclusive. With neither, the default\n")) (ELit (LString "is the interpreter (eval) alone. A file.mdk or dir target is required.\n")))))
+(DTypeSig false "testValueFlags" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "testValueFlags" () (EListLit (ELit (LString "--engines")) (ELit (LString "--filter")) (ELit (LString "--seed")) (ELit (LString "--cases"))))
+(DTypeSig false "validateTestFlags" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))
+(DFunDef false "validateTestFlags" ((PList)) (EApp (EVar "Ok") (ELit LUnit)))
+(DFunDef false "validateTestFlags" ((PCons (PVar "a") (PVar "rest"))) (EIf (EBinOp "==" (EVar "a") (ELit (LString "--native"))) (EApp (EVar "validateTestFlags") (EVar "rest")) (EIf (EApp (EApp (EVar "contains") (EVar "a")) (EVar "testValueFlags")) (EMatch (EVar "rest") (arm (PList) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "a"))) (ELit (LString " requires a value"))))) (arm (PCons PWild (PVar "rest2")) () (EApp (EVar "validateTestFlags") (EVar "rest2")))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "--"))) (EVar "a")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "unrecognized flag '")) (EApp (EMethodRef "display") (EVar "a"))) (ELit (LString "' (known: --native, --engines, --filter, --seed, --cases)")))) (EIf (EVar "otherwise") (EApp (EVar "validateTestFlags") (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DTypeSig false "parseTestIntFlag" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))))))
+(DFunDef false "parseTestIntFlag" ((PVar "flag") (PVar "argv")) (EMatch (EApp (EApp (EVar "testFlagValue") (EVar "flag")) (EVar "argv")) (arm (PCon "None") () (EApp (EVar "Ok") (EVar "None"))) (arm (PCon "Some" (PVar "s")) () (EMatch (EApp (EVar "toInt") (EVar "s")) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "Ok") (EApp (EVar "Some") (EVar "n")))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "flag"))) (ELit (LString " requires an integer value, got '"))) (EApp (EMethodRef "display") (EVar "s"))) (ELit (LString "'")))))))))
 (DTypeSig false "runTestCmd" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "runTestCmd" ((PVar "argv")) (EMatch (EApp (EVar "parseTestEngines") (EVar "argv")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "engines")) () (EMatch (EApp (EVar "testTargets") (EVar "argv")) (arm (PList) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (ELit (LString "usage: medaka test [--native | --engines eval,native] [file.mdk | dir]")))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PList (PVar "target")) () (EMatch (EApp (EVar "listDir") (EVar "target")) (arm (PCon "Err" PWild) () (EApp (EApp (EVar "runTestOne") (EVar "engines")) (EVar "target"))) (arm (PCon "Ok" PWild) () (EApp (EApp (EVar "runTestManyTargets") (EVar "engines")) (EListLit (EVar "target")))))) (arm (PVar "targets") () (EApp (EApp (EVar "runTestManyTargets") (EVar "engines")) (EVar "targets")))))))
+(DFunDef false "runTestCmd" ((PVar "argv")) (EMatch (EApp (EVar "validateTestFlags") (EVar "argv")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PLit LUnit)) () (EMatch (EApp (EVar "parseTestEngines") (EVar "argv")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "engines")) () (EMatch (EApp (EApp (EVar "parseTestIntFlag") (ELit (LString "--cases"))) (EVar "argv")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "casesOpt")) () (EMatch (EApp (EApp (EVar "parseTestIntFlag") (ELit (LString "--seed"))) (EVar "argv")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "seedOpt")) () (EBlock (DoLet false false PWild (EMatch (EVar "seedOpt") (arm (PCon "Some" (PVar "s")) () (EApp (EVar "seedPropRng") (EVar "s"))) (arm (PCon "None") () (ELit LUnit)))) (DoLet false false (PVar "cases") (EMatch (EVar "casesOpt") (arm (PCon "Some" (PVar "n")) () (EVar "n")) (arm (PCon "None") () (ELit (LInt 100))))) (DoLet false false (PVar "filterOpt") (EApp (EApp (EVar "testFlagValue") (ELit (LString "--filter"))) (EVar "argv"))) (DoExpr (EMatch (EApp (EVar "testTargets") (EVar "argv")) (arm (PList) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (ELit (LString "usage: medaka test [--native | --engines eval,native] [--filter <substring>] [--seed <n>] [--cases <n>] [file.mdk | dir]")))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PList (PVar "target")) () (EMatch (EApp (EVar "listDir") (EVar "target")) (arm (PCon "Err" PWild) () (EApp (EApp (EApp (EApp (EVar "runTestOne") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "target"))) (arm (PCon "Ok" PWild) () (EApp (EApp (EApp (EApp (EVar "runTestManyTargets") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EListLit (EVar "target")))))) (arm (PVar "targets") () (EApp (EApp (EApp (EApp (EVar "runTestManyTargets") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "targets")))))))))))))))
 (DTypeSig false "parseTestEngines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Engine")))))
 (DFunDef false "parseTestEngines" ((PVar "argv")) (EMatch (ETuple (EApp (EApp (EVar "testFlagValue") (ELit (LString "--engines"))) (EVar "argv")) (EApp (EApp (EVar "hasFlag") (ELit (LString "--native"))) (EVar "argv"))) (arm (PTuple (PCon "Some" PWild) (PCon "True")) () (EApp (EVar "Err") (ELit (LString "--native and --engines are mutually exclusive; --native is shorthand for --engines native")))) (arm (PTuple (PCon "Some" (PVar "spec")) (PCon "False")) () (EApp (EVar "parseEngineList") (EVar "spec"))) (arm (PTuple (PCon "None") (PCon "True")) () (EApp (EVar "Ok") (EListLit (EVar "EngNative")))) (arm (PTuple (PCon "None") (PCon "False")) () (EApp (EVar "Ok") (EListLit (EVar "EngInterp"))))))
 (DTypeSig false "parseEngineList" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Engine")))))
@@ -4057,14 +4153,17 @@ runMcpServerFromEnv _ =
 (DFunDef false "testTargets" ((PList)) (EListLit))
 (DFunDef false "testTargets" ((PCons (PLit (LString "--engines")) (PCons PWild (PVar "rest")))) (EApp (EVar "testTargets") (EVar "rest")))
 (DFunDef false "testTargets" ((PCons (PLit (LString "--native")) (PVar "rest"))) (EApp (EVar "testTargets") (EVar "rest")))
+(DFunDef false "testTargets" ((PCons (PLit (LString "--filter")) (PCons PWild (PVar "rest")))) (EApp (EVar "testTargets") (EVar "rest")))
+(DFunDef false "testTargets" ((PCons (PLit (LString "--seed")) (PCons PWild (PVar "rest")))) (EApp (EVar "testTargets") (EVar "rest")))
+(DFunDef false "testTargets" ((PCons (PLit (LString "--cases")) (PCons PWild (PVar "rest")))) (EApp (EVar "testTargets") (EVar "rest")))
 (DFunDef false "testTargets" ((PCons (PVar "x") (PVar "rest"))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "--"))) (EVar "x")) (EApp (EVar "testTargets") (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "x") (EApp (EVar "testTargets") (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "runTestOne" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))
-(DFunDef false "runTestOne" ((PVar "engines") (PVar "target")) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf2") (EVar "target"))) (EListLit (EVar "stdlibDir")))) (DoLet false false (PVar "ok") (EApp (EApp (EApp (EApp (EApp (EVar "runTest") (EVar "engines")) (EVar "rtPath")) (EVar "corePath")) (EVar "target")) (EVar "roots"))) (DoExpr (EIf (EVar "ok") (ELit LUnit) (EApp (EVar "exit") (ELit (LInt 1)))))))
-(DTypeSig false "runTestManyTargets" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit")))))
-(DFunDef false "runTestManyTargets" ((PVar "engines") (PVar "targets")) (EBlock (DoLet false false (PVar "files") (EApp (EApp (EDictApp "flatMap") (EVar "expandLintTarget")) (EVar "targets"))) (DoExpr (EMatch (EVar "files") (arm (PList) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (ELit (LString "medaka test: no .mdk files found")))) (DoExpr (ELit LUnit)))) (arm PWild () (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EApp (EApp (EVar "testFilesGo") (EVar "engines")) (EVar "rtPath")) (EVar "corePath")) (EVar "stdlibDir")) (EVar "files")) (EVar "False")) (EApp (EVar "exit") (ELit (LInt 1))) (ELit LUnit)))))))))
-(DTypeSig false "testFilesGo" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyEffect ("IO") None (TyCon "Bool")))))))))
-(DFunDef false "testFilesGo" (PWild PWild PWild PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "testFilesGo" ((PVar "engines") (PVar "rtPath") (PVar "corePath") (PVar "stdlibDir") (PCons (PVar "f") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf2") (EVar "f"))) (EListLit (EVar "stdlibDir")))) (DoLet false false (PVar "ok") (EApp (EApp (EApp (EApp (EApp (EVar "runTest") (EVar "engines")) (EVar "rtPath")) (EVar "corePath")) (EVar "f")) (EVar "roots"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "testFilesGo") (EVar "engines")) (EVar "rtPath")) (EVar "corePath")) (EVar "stdlibDir")) (EVar "rest")) (EBinOp "||" (EVar "acc") (EApp (EVar "not") (EVar "ok")))))))
+(DTypeSig false "runTestOne" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))))
+(DFunDef false "runTestOne" ((PVar "engines") (PVar "cases") (PVar "filterOpt") (PVar "target")) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf2") (EVar "target"))) (EListLit (EVar "stdlibDir")))) (DoLet false false (PVar "ok") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTest") (EVar "engines")) (EVar "rtPath")) (EVar "corePath")) (EVar "target")) (EVar "roots")) (EVar "cases")) (EVar "filterOpt"))) (DoExpr (EIf (EVar "ok") (ELit LUnit) (EApp (EVar "exit") (ELit (LInt 1)))))))
+(DTypeSig false "runTestManyTargets" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit")))))))
+(DFunDef false "runTestManyTargets" ((PVar "engines") (PVar "cases") (PVar "filterOpt") (PVar "targets")) (EBlock (DoLet false false (PVar "files") (EApp (EApp (EDictApp "flatMap") (EVar "expandLintTarget")) (EVar "targets"))) (DoExpr (EMatch (EVar "files") (arm (PList) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (ELit (LString "medaka test: no .mdk files found")))) (DoExpr (ELit LUnit)))) (arm PWild () (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "testFilesGo") (EVar "engines")) (EVar "rtPath")) (EVar "corePath")) (EVar "stdlibDir")) (EVar "cases")) (EVar "filterOpt")) (EVar "files")) (EVar "False")) (EApp (EVar "exit") (ELit (LInt 1))) (ELit LUnit)))))))))
+(DTypeSig false "testFilesGo" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyEffect ("IO") None (TyCon "Bool")))))))))))
+(DFunDef false "testFilesGo" (PWild PWild PWild PWild PWild PWild (PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "testFilesGo" ((PVar "engines") (PVar "rtPath") (PVar "corePath") (PVar "stdlibDir") (PVar "cases") (PVar "filterOpt") (PCons (PVar "f") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf2") (EVar "f"))) (EListLit (EVar "stdlibDir")))) (DoLet false false (PVar "ok") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTest") (EVar "engines")) (EVar "rtPath")) (EVar "corePath")) (EVar "f")) (EVar "roots")) (EVar "cases")) (EVar "filterOpt"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "testFilesGo") (EVar "engines")) (EVar "rtPath")) (EVar "corePath")) (EVar "stdlibDir")) (EVar "cases")) (EVar "filterOpt")) (EVar "rest")) (EBinOp "||" (EVar "acc") (EApp (EVar "not") (EVar "ok")))))))
 (DTypeSig false "docHelpText" (TyCon "String"))
 (DFunDef false "docHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka doc — Generate Markdown documentation for a file\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka doc <file.mdk>\n")) (ELit (LString "\n")) (ELit (LString "Prints Markdown for every PUBLIC declaration (with inferred type\n")) (ELit (LString "schemes) in <file.mdk> to stdout. Single-file only.\n")))))
 (DTypeSig false "runDocCmd" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))

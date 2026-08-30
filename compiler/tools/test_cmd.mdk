@@ -107,8 +107,15 @@ import driver.diagnostics.{
   Diag,
   diagIsError,
 }
-import support.util.{listLen, joinNl, isNonEmptyL}
+import support.util.{listLen, joinNl, isNonEmptyL, filterList}
 import support.path.{dirOf}
+
+-- `medaka test --filter <substring>`: does `needle` occur anywhere in
+-- `haystack`? Same tiny definition as `prop_runner.mdk`'s copy — not shared
+-- via support/util.mdk to keep this slice's snapshot bless scoped to the
+-- files it names.
+substringMatch : String -> String -> Bool
+substringMatch needle haystack = isSome (stringIndexOf needle haystack)
 
 export
 rootsOrDefault : String -> List String -> List String
@@ -126,9 +133,12 @@ rootsOrDefault _ roots = roots
 -- behavior), `[EngNative]` under `medaka test --native` (SWAPS the engine,
 -- doesn't add one), or an explicit `--engines eval,native` list. It has NO
 -- effect on the prop/`test "…"` phases, which remain interpreter-only.
+-- `cases` overrides the prop sample count (`--cases`, default 100 at the CLI);
+-- `filterOpt` restricts doctests/`test "…"`/`prop "…"` to names containing a
+-- substring (`--filter`, #2295).
 export
-runTest : List Engine -> String -> String -> String -> List String -> <IO> Bool
-runTest engines runtimeP coreP target roots = match readPreludeFile runtimeP
+runTest : List Engine -> String -> String -> String -> List String -> Int -> Option String -> <IO> Bool
+runTest engines runtimeP coreP target roots cases filterOpt = match readPreludeFile runtimeP
   Err e =>
     let _ = ePutStrLn e
     False
@@ -159,7 +169,7 @@ runTest engines runtimeP coreP target roots = match readPreludeFile runtimeP
             Some errText =>
               let _ = ePutStrLn (typecheckGateFail target errText)
               False
-            None => driveAll engines (desugar (parse rsrc)) (desugar (parse csrc)) target tsrc roots
+            None => driveAll engines (desugar (parse rsrc)) (desugar (parse csrc)) target tsrc roots cases filterOpt
 
 -- ── typecheck gate (issues #260, #1229) ──────────────────────────────────────
 -- `medaka test` used to GREEN-LIGHT a module whose DOCTESTS `medaka check`
@@ -324,20 +334,28 @@ skipReasonDecls userDecls
   | hasTests userDecls = "`test \"…\"` decls"
   | otherwise = "`prop \"…\"` decls"
 
-driveAll : List Engine -> List Decl -> List Decl -> String -> String -> List String -> <IO> Bool
-driveAll engines runtimeDecls coreDecls target tsrc roots =
+driveAll : List Engine -> List Decl -> List Decl -> String -> String -> List String -> Int -> Option String -> <IO> Bool
+driveAll engines runtimeDecls coreDecls target tsrc roots cases filterOpt =
   let userDecls = desugar (parse tsrc)
-  let doctestsOk = runDoctests engines runtimeDecls coreDecls target tsrc userDecls roots
-  let propsOk = runProps runtimeDecls coreDecls target userDecls roots
-  let testsOk = runTestDecls runtimeDecls coreDecls target tsrc userDecls roots
+  let doctestsOk = runDoctests engines runtimeDecls coreDecls target tsrc userDecls roots filterOpt
+  let propsOk = runProps runtimeDecls coreDecls target userDecls roots cases filterOpt
+  let testsOk = runTestDecls runtimeDecls coreDecls target tsrc userDecls roots filterOpt
   doctestsOk && propsOk && testsOk
 
 -- ── doctest phase ────────────────────────────────────────────────────────────
 
-runDoctests : List Engine -> List Decl -> List Decl -> String -> String -> List Decl -> List String -> <IO> Bool
-runDoctests engines runtimeDecls coreDecls target tsrc userDecls roots =
+-- `medaka test --filter <substring>` (#2295) keeps only examples whose input
+-- expression contains the substring — doctests have no separate "name", the
+-- input line IS the identity a reader would filter by.
+filterExamplesByName : Option String -> List Example -> List Example
+filterExamplesByName None examples = examples
+filterExamplesByName (Some sub) examples =
+  filterList (ex => substringMatch sub (exampleInput ex)) examples
+
+runDoctests : List Engine -> List Decl -> List Decl -> String -> String -> List Decl -> List String -> Option String -> <IO> Bool
+runDoctests engines runtimeDecls coreDecls target tsrc userDecls roots filterOpt =
   let _ = putStrLn ("running doctests in " ++ target)
-  let examples = extractExamples (collectComments tsrc)
+  let examples = filterExamplesByName filterOpt (extractExamples (collectComments tsrc))
   match examples
     [] =>
       let _ = putStrLn "  (no doctests found)"
@@ -547,12 +565,12 @@ reportDoctests target result =
 -- Only runs (and prints) if the file declares props — mirrors the OCaml short
 -- circuit (`Prop_runner.run_all` returns true with no output when none).
 
-runProps : List Decl -> List Decl -> String -> List Decl -> List String -> <IO> Bool
-runProps runtimeDecls coreDecls target userDecls roots
+runProps : List Decl -> List Decl -> String -> List Decl -> List String -> Int -> Option String -> <IO> Bool
+runProps runtimeDecls coreDecls target userDecls roots cases filterOpt
   | not (hasProps userDecls) = True
   | hasUseDecls userDecls =
-    runPropsMulti runtimeDecls coreDecls target userDecls roots
-  | otherwise = runPropsSingle runtimeDecls coreDecls target userDecls roots
+    runPropsMulti runtimeDecls coreDecls target userDecls roots cases filterOpt
+  | otherwise = runPropsSingle runtimeDecls coreDecls target userDecls roots cases filterOpt
 
 -- Single-file (no-import) prop path, DRIVER-COLLAPSE Phase 1+3: same multi-module
 -- path as runPropsMulti, with the degenerate 1-module list [(rootId, userDecls)].
@@ -564,8 +582,8 @@ runProps runtimeDecls coreDecls target userDecls roots
 -- the file's own `=>`-constrained fns (set's `fromList`/`wellFormed`) get their
 -- leading dict argument, mirroring runPropsMulti's elaboratedRootProps (which
 -- inferPropBodies typed in-module).
-runPropsSingle : List Decl -> List Decl -> String -> List Decl -> List String -> <IO> Bool
-runPropsSingle runtimeDecls coreDecls target userDecls roots =
+runPropsSingle : List Decl -> List Decl -> String -> List Decl -> List String -> Int -> Option String -> <IO> Bool
+runPropsSingle runtimeDecls coreDecls target userDecls roots cases filterOpt =
   let userNames = funNamesOf userDecls
   let livePrelude = if programIsCore userDecls then
     []
@@ -577,10 +595,10 @@ runPropsSingle runtimeDecls coreDecls target userDecls roots =
   let rootProps = match lookupModuleDecls rootId (snd elaborated)
     Some decls => decls
     None => userDecls
-  runAllProps env rootProps
+  runAllProps cases filterOpt env rootProps
 
-runPropsMulti : List Decl -> List Decl -> String -> List Decl -> List String -> <IO> Bool
-runPropsMulti runtimeDecls coreDecls target userDecls roots = match loadProgram target roots
+runPropsMulti : List Decl -> List Decl -> String -> List Decl -> List String -> Int -> Option String -> <IO> Bool
+runPropsMulti runtimeDecls coreDecls target userDecls roots cases filterOpt = match loadProgram target roots
   Err e =>
     let _ = ePutStrLn e
     False
@@ -588,7 +606,7 @@ runPropsMulti runtimeDecls coreDecls target userDecls roots = match loadProgram 
     let elaborated = elaborateModules runtimeDecls coreDecls (map desugarPair mods)
     let env = evalModulesRootEnvWith (testCapableExterns ()) (fst elaborated) (snd elaborated)
     let rootProps = elaboratedRootProps target (snd elaborated) userDecls
-    runAllProps env rootProps
+    runAllProps cases filterOpt env rootProps
 -- DRIVER-COLLAPSE Phase 2: the eval-dict layer now promotes the file's own
 -- `=>`-constrained fns (set's `wellFormed`/`fromList`, etc.), so the bindings in
 -- [env] take a leading dict ARGUMENT.  A prop body calls those fns, so its call
@@ -630,23 +648,31 @@ lookupModuleDecls rootId ((mid, decls)::rest)
 -- DTest bodies from the ELABORATED root module so their `expectEqual`/… call sites
 -- carry the dict argument (`import test`'s constrained assertions).
 
-runTestDecls : List Decl -> List Decl -> String -> String -> List Decl -> List String -> <IO> Bool
-runTestDecls runtimeDecls coreDecls target tsrc userDecls roots
+runTestDecls : List Decl -> List Decl -> String -> String -> List Decl -> List String -> Option String -> <IO> Bool
+runTestDecls runtimeDecls coreDecls target tsrc userDecls roots filterOpt
   | not (hasTests userDecls) = True
-  | hasUseDecls userDecls =
-    runTestDeclsMulti runtimeDecls coreDecls target tsrc userDecls roots
-  | otherwise =
-    runTestDeclsSingle runtimeDecls coreDecls target tsrc userDecls roots
+  | hasUseDecls userDecls = runTestDeclsMulti runtimeDecls coreDecls target tsrc userDecls roots filterOpt
+  | otherwise = runTestDeclsSingle runtimeDecls coreDecls target tsrc userDecls roots filterOpt
 
 -- Line map keyed by test name, from a POSITION-populating reparse of the source
 -- (the bare `parse` used elsewhere leaves placeholder line-1 locs).
 testLineTests : String -> List (String, Int, Expr)
 testLineTests tsrc = collectTests (desugar (parseLocated tsrc))
 
+-- `medaka test --filter <substring>` (#2295): keep only `test "…"` decls whose
+-- name contains the substring.
+filterTestsByName : Option String -> List (String, Int, Expr) -> List (String, Int, Expr)
+filterTestsByName None tests = tests
+filterTestsByName (Some sub) tests =
+  filterList (t => substringMatch sub (fst3 t)) tests
+
+fst3 : (a, b, c) -> a
+fst3 (a, _, _) = a
+
 -- Keyed by the loader-derived `rootId` (ARCH E-5, #1521/#1223), not the retired
 -- synthetic `"__user__"` literal — see the ARCH E-5 note near runSingle above.
-runTestDeclsSingle : List Decl -> List Decl -> String -> String -> List Decl -> List String -> <IO> Bool
-runTestDeclsSingle runtimeDecls coreDecls target tsrc userDecls roots =
+runTestDeclsSingle : List Decl -> List Decl -> String -> String -> List Decl -> List String -> Option String -> <IO> Bool
+runTestDeclsSingle runtimeDecls coreDecls target tsrc userDecls roots filterOpt =
   let userNames = funNamesOf userDecls
   let livePrelude = if programIsCore userDecls then
     []
@@ -661,10 +687,12 @@ runTestDeclsSingle runtimeDecls coreDecls target tsrc userDecls roots =
   reportTests
     target
     env
-    (attachRawLines (testLineTests tsrc) (collectTests rootTests))
+    (filterTestsByName
+      filterOpt
+      (attachRawLines (testLineTests tsrc) (collectTests rootTests)))
 
-runTestDeclsMulti : List Decl -> List Decl -> String -> String -> List Decl -> List String -> <IO> Bool
-runTestDeclsMulti runtimeDecls coreDecls target tsrc userDecls roots = match loadProgram target roots
+runTestDeclsMulti : List Decl -> List Decl -> String -> String -> List Decl -> List String -> Option String -> <IO> Bool
+runTestDeclsMulti runtimeDecls coreDecls target tsrc userDecls roots filterOpt = match loadProgram target roots
   Err e =>
     let _ = ePutStrLn e
     False
@@ -675,7 +703,9 @@ runTestDeclsMulti runtimeDecls coreDecls target tsrc userDecls roots = match loa
     reportTests
       target
       env
-      (attachRawLines (testLineTests tsrc) (collectTests rootTests))
+      (filterTestsByName
+        filterOpt
+        (attachRawLines (testLineTests tsrc) (collectTests rootTests)))
 
 -- The elaborated (dict-passed) body loses its leading ELoc (the marker rewrites
 -- the leftmost method EVar into a dict node), so take each test's line from the
@@ -826,7 +856,9 @@ propsReportSingle runtimeDecls coreDecls target userDecls roots =
   let rootProps = match lookupModuleDecls rootId (snd elaborated)
     Some decls => decls
     None => userDecls
-  runAllPropsResults env rootProps
+  -- MCP's medaka_test has no --cases/--filter of its own (#2295 is scoped to
+  -- the CLI); keep this structured path's behavior unchanged.
+  runAllPropsResults 100 None env rootProps
 
 propsReportMulti : List Decl -> List Decl -> String -> List Decl -> List String -> <IO> List PropResult
 propsReportMulti runtimeDecls coreDecls target userDecls roots = match loadProgram target roots
@@ -835,4 +867,4 @@ propsReportMulti runtimeDecls coreDecls target userDecls roots = match loadProgr
     let elaborated = elaborateModules runtimeDecls coreDecls (map desugarPair mods)
     let env = evalModulesRootEnvWith (testCapableExterns ()) (fst elaborated) (snd elaborated)
     let rootProps = elaboratedRootProps target (snd elaborated) userDecls
-    runAllPropsResults env rootProps
+    runAllPropsResults 100 None env rootProps
