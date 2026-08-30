@@ -50,6 +50,7 @@ parseCacheLimit : Int
 parseCachedLocated : Ref (List (String, List Decl)) -> String -> Result ParseError (List Decl)
 parsedModule : (String -> Result ParseError (List Decl)) -> String -> String -> String -> Result LoadError (String, String, List Decl)
 projectTrustedMods : String -> List String -> String -> List (String, List Decl) -> <IO> List String
+rawValAfterEq : String -> String
 readDeps : String -> <IO> List (String, String)
 readForeignLibs : String -> <IO> List (String, String)
 readModuleProgF : (String -> Result ParseError (List Decl)) -> (String -> Option String) -> List (String, String) -> List String -> String -> <IO> Result LoadError (String, String, List Decl)
