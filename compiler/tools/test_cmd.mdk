@@ -231,13 +231,33 @@ runTest engines runtimeP coreP target roots = match readPreludeFile runtimeP
 -- and by `test/diff_compiler_ported.sh`, and a line injected into that stream
 -- would be graded as report text.  `diff_compiler_ported.sh` classifies stderr by
 -- `^runtime error \[E-PANIC\]`, which this note cannot match.
+-- The exemption PREDICATE alone, with no side effect — shared by `doctestGate`
+-- (the printing CLI arm) and `typecheckGateResult` (the silent, data-returning
+-- arm `runTestReport`/`medaka mcp`'s `medaka_test` uses, #1443).  Doctest
+-- presence still wins over the `test`/`prop` exemption (same precedence as
+-- before the factor-out).
+typecheckExempt : List Decl -> String -> Bool
+typecheckExempt userDecls tsrc
+  | isNonEmptyL (extractExamples (collectComments tsrc)) = False
+  | otherwise = hasProps userDecls || hasTests userDecls
+
 doctestGate : String -> List String -> String -> String -> String -> List Decl -> <IO> Option String
 doctestGate target roots rsrc csrc tsrc userDecls
-  | isNonEmptyL (extractExamples (collectComments tsrc)) =
-    typecheckErrors target roots rsrc csrc tsrc userDecls
-  | hasProps userDecls || hasTests userDecls =
+  | typecheckExempt userDecls tsrc =
     let _ = ePutStrLn (typecheckSkipNotice target userDecls)
     None
+  | otherwise = typecheckErrors target roots rsrc csrc tsrc userDecls
+
+-- Same decision as `doctestGate`, minus the stderr announcement — for a
+-- non-printing caller (`runTestReport`) that has no stderr channel of its own
+-- to put the exemption notice on (#1443).  An exempted module still skips the
+-- type check and returns `None` here, silently; a module that fails the type
+-- check still returns `Some <located error text>`, exactly as `doctestGate`
+-- would report it to a human.
+export
+typecheckGateResult : String -> List String -> String -> String -> String -> List Decl -> <IO> Option String
+typecheckGateResult target roots rsrc csrc tsrc userDecls
+  | typecheckExempt userDecls tsrc = None
   | otherwise = typecheckErrors target roots rsrc csrc tsrc userDecls
 
 -- Type-check the module the way `medaka check` does, routing by import-presence
@@ -719,21 +739,35 @@ testFailSuffix failed errors
 -- here (mirroring runTest), and the module-search roots are derived exactly as
 -- the CLI does (entry dir + project root, then stdlib).
 --
+-- #1443: routed through the SAME `typecheckGateResult`/`doctestGate` decision
+-- `runTest` gates on, so a module that fails the type check can no longer
+-- report a green (empty, `"ok":true`) summary here — the located type-error
+-- text is returned as the first element instead, and neither doctests nor
+-- props run (mirrors `runTest`, which never reaches `driveAll` on a gate
+-- failure).  A correctly EXEMPTED module (`test`/`prop`-bearing, no doctest)
+-- still runs doctests+props normally with `None` here — same as `doctestGate`
+-- exempts it for the CLI — just without the CLI's stderr notice, since this
+-- path has no stderr channel of its own (see `typecheckGateResult`).
+--
 -- ⚠️ Results are under the INTERPRETER (eval) — a native-only miscompile is
 -- invisible here (see #81); the CALLER must present them as "passes under eval",
 -- never an unqualified pass.  The `test "…"` phase is intentionally NOT reported
--- (medaka_test covers doctests + props, per #252); a file's `test "…"` decls are
--- run only by the human `medaka test`.
+-- (medaka_test covers doctests + props, per #252 — unchanged by #1443, which is
+-- scoped to typecheck-gate parity only); a file's `test "…"` decls are run only
+-- by the human `medaka test`.
 export
-runTestReport : List Engine -> String -> String -> String -> String -> String -> <IO> (List (Engine, RunResult), List PropResult)
+runTestReport : List Engine -> String -> String -> String -> String -> String -> <IO> (Option String, List (Engine, RunResult), List PropResult)
 runTestReport engines runtimeSrc coreSrc target tsrc stdlibDir =
   let runtimeDecls = desugar (parse runtimeSrc)
   let coreDecls = desugar (parse coreSrc)
   let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]
   let userDecls = desugar (parse tsrc)
-  let doctestRuns = doctestReport engines runtimeDecls coreDecls target tsrc userDecls roots
-  let propResults = propsReport runtimeDecls coreDecls target userDecls roots
-  (doctestRuns, propResults)
+  match typecheckGateResult target roots runtimeSrc coreSrc tsrc userDecls
+    Some errText => (Some errText, [], [])
+    None =>
+      let doctestRuns = doctestReport engines runtimeDecls coreDecls target tsrc userDecls roots
+      let propResults = propsReport runtimeDecls coreDecls target userDecls roots
+      (None, doctestRuns, propResults)
 
 -- Doctest phase as pure data: extraction + runChosenOn per requested engine,
 -- minus reportDoctests' printing.  A file with zero doctests yields the empty

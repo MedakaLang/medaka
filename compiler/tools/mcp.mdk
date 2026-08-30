@@ -1272,10 +1272,16 @@ primaryDoctestRun : List (Engine, RunResult) -> RunResult
 primaryDoctestRun [] = RunResult 0 0 0 0 []
 primaryDoctestRun ((_, run)::_) = run
 
--- The run OVERALL passed iff EVERY engine's doctest run and every property
--- passed.  Drives both the `summary.ok` field and the result's `isError` flag.
-testReportOk : List (Engine, RunResult) -> List PropResult -> Bool
-testReportOk runs props = allDoctestRunsOk runs && allPropsPass props
+-- The run OVERALL passed iff the module type-checked (or was exempted, #1443)
+-- AND every engine's doctest run and every property passed.  Drives both the
+-- `summary.ok` field and the result's `isError` flag.  A `Some` type error
+-- means doctests/props never ran (mirrors `runTestReport`'s gate short-
+-- circuit), so it alone forces `False` regardless of `runs`/`props` (both are
+-- empty in that case anyway).
+testReportOk : Option String -> List (Engine, RunResult) -> List PropResult -> Bool
+testReportOk typeError runs props = isNone typeError
+  && allDoctestRunsOk runs
+  && allPropsPass props
 
 allDoctestRunsOk : List (Engine, RunResult) -> Bool
 allDoctestRunsOk [] = True
@@ -1297,19 +1303,35 @@ primaryEngineName : List Engine -> String
 primaryEngineName [] = "unknown"
 primaryEngineName (e::_) = engineName e
 
+-- #1443: present iff `runTestReport`'s typecheck gate rejected the module —
+-- `doctests`/`properties`/`summary` are then the untouched empty defaults
+-- (mirrors the CLI's `runTest`, which never reaches `driveAll` on a gate
+-- failure either), and `typeError` carries the SAME located error text
+-- `medaka test`/`medaka check` would print for this file.
+typeErrorField : Option String -> List (String, Json)
+typeErrorField None = []
+typeErrorField (Some errText) = [("typeError", JString errText)]
+
 -- The full structured result body.  `engine`/`note` carry the interpreter
 -- caveat INTO the payload (not just the tool description) so a consumer that
 -- never read the description is still told what these results cover — and,
 -- like the description, both are DERIVED from the engines that actually ran
--- (`doctestRunEngineNames runs`), not a hand-written literal.
-testReportJson : String -> List (Engine, RunResult) -> List PropResult -> Json
-testReportJson path runs props =
-  let engines = doctestRunEngineNames runs
+-- (`doctestRunEngineNames runs`) when the module type-checked, or from the
+-- engines that WOULD have run (`mcpTestEngines`) when a type error short-
+-- circuited the run before any engine touched it (`runs` is `[]` there, so
+-- `doctestRunEngineNames runs` would wrongly read "unknown").
+testReportJson : String -> Option String -> List (Engine, RunResult) -> List PropResult -> Json
+testReportJson path typeError runs props =
+  let engines = if isNone typeError then
+    doctestRunEngineNames runs
+  else
+    mcpTestEngines
   jObject
-    [
+    ([
       ("file", JString path),
       ("engine", JString (primaryEngineName engines)),
       ("note", JString (mcpTestCaveat engines)),
+    ] ++ typeErrorField typeError ++ [
       ("doctests", doctestsJson (primaryDoctestRun runs)),
       ("properties", jArray (map propJson props)),
       (
@@ -1323,14 +1345,15 @@ testReportJson path runs props =
             "failed",
             JInt (runFailed (primaryDoctestRun runs) + runErrors (primaryDoctestRun runs) + countFailProps props),
           ),
-          ("ok", JBool (testReportOk runs props)),
+          ("ok", JBool (testReportOk typeError runs props)),
         ],
       ),
-    ]
+    ])
 
 -- medaka_test handler: read `file`, run its doctests + props through the
 -- non-printing structured reporter (tools.test_cmd.runTestReport), and return
--- the per-example/per-property JSON.  isError=true iff any example/property
+-- the per-example/per-property JSON.  isError=true iff the module failed the
+-- SAME typecheck gate `medaka test` gates on (#1443) or any example/property
 -- failed (mirrors medaka_check's convention: isError flags a bad OUTCOME, with
 -- the detail in the structured content).  A missing/unreadable file is an
 -- argument error, not a crash.  Which engine(s) ran is reported per `engine`/
@@ -1341,10 +1364,10 @@ runTestTool runtimeSrc coreSrc stdlibDir args = match fieldStr "file" args
   Some path => match readFile path
     Err e => toolArgError (stringConcat ["medaka_test: cannot read file '", path, "': ", e])
     Ok tsrc =>
-      let (runs, props) = runTestReport mcpTestEngines runtimeSrc coreSrc path tsrc stdlibDir
+      let (typeError, runs, props) = runTestReport mcpTestEngines runtimeSrc coreSrc path tsrc stdlibDir
       toolTextResult
-        (stringify (testReportJson path runs props))
-        (not (testReportOk runs props))
+        (stringify (testReportJson path typeError runs props))
+        (not (testReportOk typeError runs props))
 
 -- ── tools/call handler ───────────────────────────────────────────────────────
 
