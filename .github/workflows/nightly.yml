@@ -806,13 +806,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
-      # contents: write ONLY — no pull-requests: write. Spike measurement
+      # contents: write — no pull-requests: write. Spike measurement
       # (S-1-baseline-autoadvance, Q2): a GITHUB_TOKEN-authored `gh pr create`
       # fails outright here ("GitHub Actions is not permitted to create or
       # approve pull requests"), a repo/org policy that a job-level
       # `pull-requests: write` grant does not override. So this job's ceiling
       # is landing a branch, never opening the PR itself.
       contents: write
+      # issues: write + actions: read — needed by the file-nightly-red
+      # composite action (S-autoadvance-notify, #2181 deliverable 2): it
+      # files/updates a known-red issue on failure and needs actions:read to
+      # walk this job's prior nightly runs for the commit range.
+      issues: write
+      actions: read
     steps:
       - uses: actions/checkout@v4
 
@@ -841,8 +847,14 @@ jobs:
 
       # The human/agent step this job cannot take itself (see the permissions
       # comment above): open the PR from whatever branch was just pushed, if
-      # any.
+      # any. Explicit `if: success()` (the GitHub Actions default for a step
+      # with no `if:` — unchanged behavior) so it reads correctly next to the
+      # failure step below, which is the actual fix (S-autoadvance-notify,
+      # #2181 deliverable 2): previously this step had no `if:` guard at all,
+      # so a failure in "Collect + ingest + rebalance" skipped it silently —
+      # the branch got pushed (or not) with nobody told either way.
       - name: Report the one remaining manual step (if a branch landed)
+        if: success()
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -863,3 +875,16 @@ jobs:
             echo "gh pr create --repo ${GH_REPO} --head $branch --base main --fill"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # The failure counterpart to the step above (S-autoadvance-notify,
+      # #2181 deliverable 2): "Collect + ingest + rebalance" failing used to
+      # skip straight past the report step with nobody told. Consumes the
+      # shared failure-announcement mechanism landed by S-nightly-red-protocol
+      # — same pattern as every other nightly job's failure step — rather
+      # than hand-rolling a second `gh issue create` path here.
+      - name: File or update the known-red issue on failure
+        if: failure()
+        uses: ./.github/actions/file-nightly-red
+        with:
+          job-name: "gate cost baseline auto-advance (#2180 baseline leg, S-1-baseline-autoadvance)"
+          gate-label: "gate-cost-autoadvance"

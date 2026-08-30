@@ -51,6 +51,22 @@
 #   --base-branch B    branch the new landing branch is cut FROM and the one
 #                       the human-merge command above targets (default: the
 #                       current branch's upstream, else "main")
+#   --stale-threshold N  file-count delta above which an already-pushed,
+#                       still-unmerged "${BRANCH_PREFIX}-*" branch is judged
+#                       too stale to land (default 20). See STALENESS GUARD
+#                       below.
+#
+# STALENESS GUARD (S-autoadvance-notify, #2181 deliverable 2): if nobody has
+# merged the most recent previously-pushed "${BRANCH_PREFIX}-*" branch and
+# --base-branch has since drifted more than --stale-threshold files away from
+# it, this script refuses to push ANOTHER advance branch on top and says so —
+# rather than silently compounding an already-stale, unreviewed pile (F3: a
+# 2026-08-30 branch sat unmerged after its own job's report step got skipped
+# by a failure, and by the time anyone looked it was 179 files / +2659/-15239
+# against main — landing it then would have reverted unrelated work). 20 is
+# comfortably above the routine per-run touch (at most 3 generated files:
+# gate_cost_baseline.json, gates.toml, ci.yml) and comfortably below F3's
+# magnitude.
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -61,6 +77,7 @@ BRANCH_PREFIX="cost-baseline-autoadvance"
 DRY=0
 REMOTE="origin"
 BASE_BRANCH=""
+STALE_THRESHOLD=20
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -69,6 +86,7 @@ while [ "$#" -gt 0 ]; do
     --dry-run)        DRY=1; shift ;;
     --push-remote)    REMOTE="$2"; shift 2 ;;
     --base-branch)    BASE_BRANCH="$2"; shift 2 ;;
+    --stale-threshold) STALE_THRESHOLD="$2"; shift 2 ;;
     -h|--help)
       sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
@@ -236,6 +254,32 @@ fi
 echo "gate_cost_collect: changes to land:"
 # shellcheck disable=SC2086
 git -C "$ROOT" diff --stat -- $to_land
+
+# ── staleness guard: refuse to push another advance while an existing, ─────
+#    unmerged "${BRANCH_PREFIX}-*" branch has already drifted too far from
+#    BASE_BRANCH to land cleanly. See the STALENESS GUARD header comment.
+# shellcheck disable=SC2086
+prior_branch="$(git -C "$ROOT" ls-remote --heads "$REMOTE" "${BRANCH_PREFIX}-*" 2>/dev/null \
+  | awk '{print $2}' | sed 's#^refs/heads/##' | sort | tail -1)"
+if [ -n "$prior_branch" ]; then
+  if git -C "$ROOT" fetch --depth=1 "$REMOTE" "$prior_branch" >/dev/null 2>&1; then
+    prior_sha="$(git -C "$ROOT" rev-parse FETCH_HEAD)"
+    if git -C "$ROOT" fetch --depth=1 "$REMOTE" "$BASE_BRANCH" >/dev/null 2>&1; then
+      base_sha="$(git -C "$ROOT" rev-parse FETCH_HEAD)"
+      stale_files="$(git -C "$ROOT" diff --numstat "$prior_sha" "$base_sha" 2>/dev/null | wc -l | tr -d ' ')"
+      if [ -z "$stale_files" ]; then stale_files=0; fi
+      if [ "$stale_files" -gt "$STALE_THRESHOLD" ]; then
+        echo "gate_cost_collect: refusing to push a new advance branch — an existing unmerged branch '$prior_branch' has already drifted $stale_files files from '$BASE_BRANCH' (threshold $STALE_THRESHOLD files). A human needs to land or delete '$prior_branch' before this job can safely push another advance on top of it."
+        exit 1
+      fi
+      echo "gate_cost_collect: staleness check — '$prior_branch' is $stale_files file(s) from '$BASE_BRANCH' (threshold $STALE_THRESHOLD) — OK to push another advance."
+    else
+      echo "gate_cost_collect: staleness check — could not fetch '$BASE_BRANCH' from '$REMOTE' to compare; proceeding without the guard."
+    fi
+  else
+    echo "gate_cost_collect: staleness check — could not fetch prior branch '$prior_branch' from '$REMOTE' to compare; proceeding without the guard."
+  fi
+fi
 
 if [ "$DRY" = "1" ]; then
   echo "gate_cost_collect: --dry-run — not committing or pushing."
