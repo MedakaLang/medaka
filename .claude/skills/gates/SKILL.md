@@ -119,6 +119,19 @@ open rows from the per-gate costs in `test/gate_cost_baseline.json`, honouring e
 `wasm_arm` toolchain constraint and `full_cores` closure and an enforced pole/floor budget
 (the pole against the best pole any assignment could reach — #2216, `GATE-REGISTRY-DESIGN.md` §13).
 
+🚨 **[W-SHARD-NEUTRAL] The eight executor rows are named `gates_1`…`gates_8` and mean nothing**
+(#2178, 2026-08-30). The thematic names — `gates (frontend)`, `gates (sqlite)`, `gates (tools)`
+… — are RETIRED as status-check contexts; a doc, comment or incident note that still names one
+is describing the pre-rename tree, not telling you where anything runs. A row name is not
+allowed to describe its contents *because it cannot*: membership is derived from measured cost
+and moves whenever the baseline does. **What a red gate was ABOUT comes from the registry's
+`area` field**, which the `gates` job reads via `medaka gate list --json` and prints as the
+failure annotation and job-summary table. Read the area, not the row. To find the row a
+specific gate is on today, derive it — never memorise it:
+```sh
+./medaka gate list --json | jq -r '.[]|select(.name=="<gate>")|"\(.shard)\t\(.area)"'
+```
+
 A new `[[gate]]` still needs SOME `shard` string — the schema requires the field and it
 cannot be left pending. Write any row name you like (or `other-job` if a job outside the
 `gates` matrix runs it) — but 🚨 **`medaka gate balance` HARD-REFUSES (exit 1) on a
@@ -148,7 +161,7 @@ baseline derives — that is what catches it, and its message names the offendin
 
 🚨 Never trust a shard-cost ranking in prose; derive it, every time:
 ```sh
-gh run view <id> --json jobs --jq '.jobs[]|select(.name|startswith("gates"))|{name,s:((.completedAt|fromdate)-(.startedAt|fromdate))}'
+gh run view <id> --json jobs --jq '.jobs[]|select(.name|test("^gates_[0-9]+$"))|{name,s:((.completedAt|fromdate)-(.startedAt|fromdate))}'
 ```
 The registry's own view of the same question, with no network:
 `medaka gate balance --check` prints the projected per-row totals, the pole, the median and

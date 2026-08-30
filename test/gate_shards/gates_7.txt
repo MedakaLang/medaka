@@ -8,6 +8,7 @@ no extra toolchain, fully open to the packer. It can take any gate that
 does not require the Wasm toolchain, and the balancer fills it to the
 same target load as every other open row.
 
-The row NAME is a required status-check context (`gates (types)`), so
-renaming it is a ruleset change, not an edit here — and it carries no
-thematic meaning: rows are filled by measured cost, never by theme.
+The row NAME is a required status-check context (`gates_7`), so renaming it
+is a ruleset change, not an edit here. It is a bare executor number by
+construction (#2178): a name that cannot describe contents cannot lie
+about them. What failed is reported by AREA, from the registry.
