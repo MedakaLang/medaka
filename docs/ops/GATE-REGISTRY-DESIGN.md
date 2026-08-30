@@ -950,3 +950,68 @@ The median is still printed and no longer enforces anything: it is the one numbe
 says at a glance how far the typical row sits from the pole. It is **not** a component
 of the floor — a median is a property of the suite, and mixing one back in would
 restore the perversity.
+
+## 14. The budget governor: `medaka gate budget` (#2180, S-5)
+
+Three-clause required, cheap, text-only gate (`test/diff_compiler_gate_budget.sh`,
+enrolled `shard = "other-job"` for §13's own "cannot certify a number it can move"
+reason). Reds when:
+
+- **(a) uncosted.** A schedulable gate has no cost baseline entry (`balUncosted`'s
+  condition). The contract's literal clause (a) — "a registry entry lacks a cost
+  declaration" — cannot occur: `cost` is a REQUIRED TOML field, checked at parse time
+  (`reqStr i "cost" e`), so a registry missing it never reaches this gate. `balUncosted`
+  is the state that both occurs and matters: a declared class the packer still cannot
+  price.
+- **(b) over-class.** A gate's measured cost (`medianMs`) has eaten into the
+  tolerance-adjusted timeout its declared `cost` class implies (`timeoutFor`: cheap
+  300s / medium 900s / heavy 3600s). The tolerance is the SAME 1.125 as §13's budget
+  (1 + max(S-2's mean |error| 12.0%, bias 12.5%)) — one measured slack, used everywhere
+  a noisy `medianMs` is compared to a hard line, because `medianMs` can UNDERSTATE a
+  gate's true cost by that much. Concretely: a gate reds this clause once
+  `medianMs > timeoutMs / 1.125`. This is not aspirational metadata — `cost` is what
+  gets the gate KILLED, so "declared class no longer matches reality" is measurable
+  exactly here, and nowhere is it phrased as "cheap should mean under 10 seconds"; that
+  phrasing in §2's schema comment is aspirational and not what this clause enforces.
+  Landing this gate found one live instance: `diff_compiler_dict_semantics` measured
+  482.2s against a `cheap` (300s) declaration — re-classed to `medium` in the same
+  commit that added the gate, not overridden away.
+- **(c) pole/floor.** The projected `pole/floor` — the SAME number §13's
+  `gate balance --check` derives, from `balCands`/`balRows`/`balTarget` — exceeds
+  `balTargetMilli` (1.125). `balCands` already excludes `other-job` gates from packing
+  entirely, so an `other-job` gate's (nonexistent) cost cannot move this number, this
+  gate's own registry entry included — a governor able to inflate the number it grades
+  by existing would be certifying the wrong thing.
+
+### The override: a commit-message trailer, not a PR-body field
+
+A `merge_group` run has no PR body — the queue tests a synthetic merge commit, not the
+PR. The one thing it can always see is the checked-out commit's own message
+(`git log -1 --pretty=%B`, ordinary git behaviour, no GitHub-specific API). So any
+clause may be accepted on purpose with a trailer:
+
+```
+Gate-Budget-Override: <token>  [free-text reason, never machine-checked]
+```
+
+where `<token>` is `uncosted:<gate-name>`, `over-class:<gate-name>`, or the literal
+`pole-floor` — one line per violation accepted. `gate_cmd.mdk` never touches git itself
+(it stays testable on plain strings via `--commit-message`); `test/diff_compiler_gate_budget.sh`
+is the one place that runs `git log -1 --pretty=%B` and hands the result through. The
+failing gate prints the exact trailer to paste for each unacknowledged violation, so the
+remedy is inline for a reader with no other context, and every acceptance is a `grep`-able
+line in `git log` forever — an auditable artifact, not silent creep.
+
+### Why a job and not a `gates` matrix row
+
+Same shape and same reason as §13's `gate-balance` job: this gate grades a number
+(the projected pole/floor) that a packing bug could move if the gate itself were
+packed, so it cannot be a member of the set it certifies.
+
+### Not yet required
+
+`ci-gen-drift` is the one context of this family actually in the required-checks
+ruleset today; `gate-cost`, `gate-balance`, and this gate's `gate-budget` job are not.
+Adding a required context is a separate, non-atomic `gh api` ruleset edit
+(AGENTS.md [W-REQUIRED-CHECKS]) — out of scope for this slice; see its report for the
+exact command.

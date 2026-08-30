@@ -257,6 +257,15 @@ GHC's perf-notes model applied to CI cost:
 - Budget is per-gate cost + projected pole — never raw shard wall, so "gate got
   slower" is distinguishable from "gate got rebalanced onto a busier shard".
 
+**AS LANDED (S-5, epic #2182, `docs/ops/GATE-REGISTRY-DESIGN.md` §14):**
+`medaka gate budget`, run by `test/diff_compiler_gate_budget.sh` as its own `gate-budget:`
+job (`shard = "other-job"`, same "cannot certify a number it can move" reason as
+`gate-balance`). The override is a `Gate-Budget-Override: <token>` trailer on the commit
+message — the one thing a `merge_group` run can always see, since it has no PR body — read
+via `git log -1 --pretty=%B` by the `.sh` wrapper (`gate_cmd.mdk` itself touches no git
+state). Not yet in the required-checks ruleset, the same state `gate-cost`/`gate-balance`
+are still in — a separate, non-atomic `gh api` edit.
+
 ### 3.6 Tiers (#2181)
 
 | Tier | Runs | Contents | Failure protocol |

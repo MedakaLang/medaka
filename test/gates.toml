@@ -1688,7 +1688,7 @@ area = "infra"
 shard = "sqlite"
 project = "compiler"
 tier = "merge"
-cost = "cheap"
+cost = "medium"
 kind = "exec"
 run = "test/diff_compiler_dict_semantics.sh"
 oracles = []
@@ -3494,6 +3494,34 @@ run = "test/diff_compiler_gate_balance.sh"
 oracles = []
 sources = ["compiler/tools/gate_cmd.mdk", "compiler/tools/gate_cost.mdk", "test/diff_compiler_gate_balance.sh", "test/gate_cost_baseline.json", "test/gates.toml"]
 corpus = ["test/gate_balance_fixtures"]
+toolchain = []
+
+# #2180's governor (S-5, epic #2182): reds when (a) a schedulable gate has no
+# cost baseline entry, (b) a gate's measured cost has eaten into the
+# tolerance-adjusted timeout its declared `cost` class implies, or (c) the
+# projected pole/floor (the same number `gate balance --check` derives)
+# exceeds S-4's budget. Any violation is acceptable on purpose via a
+# `Gate-Budget-Override: <token>` trailer on the commit message (read by the
+# `.sh` wrapper via `git log -1 --pretty=%B`, since a `merge_group` run has no
+# PR body). Text-only, no build beyond ./medaka existing; needs no oracle.
+#
+# shard="other-job", mirroring diff_compiler_gate_balance immediately above:
+# `other-job` gates never enter packing and structurally cannot appear in the
+# cost baseline, which is exactly what clause (c) must be true of ITSELF —
+# a governor that could move its own pole/floor by existing would be
+# certifying the wrong thing.
+[[gate]]
+name = "diff_compiler_gate_budget"
+area = "infra"
+shard = "other-job"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/diff_compiler_gate_budget.sh"
+oracles = []
+sources = ["compiler/tools/gate_cmd.mdk", "compiler/tools/gate_cost.mdk", "test/diff_compiler_gate_budget.sh", "test/gate_cost_baseline.json", "test/gates.toml"]
+corpus = []
 toolchain = []
 
 

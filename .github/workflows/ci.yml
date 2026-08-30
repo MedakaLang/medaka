@@ -1436,3 +1436,34 @@ jobs:
 
       - name: Shard balancer — idempotence, constraints, cost refusals
         run: sh test/diff_compiler_gate_balance.sh
+
+  # ── The budget governor (#2180, S-5) ─────────────────────────────────────────
+  # Its own job, mirroring `gate-balance` immediately above: it needs ./medaka
+  # (it drives `medaka gate budget`) and the checked-out commit's own message
+  # (there is no PR body in a `merge_group` run), nothing else.
+  #
+  # ⚠️ A JOB AND NOT A `gates` MATRIX ROW, for the same reason `gate-balance`
+  # is one: this gate grades the projected pole/floor, so it must not be able
+  # to move the number it grades by entering packing itself — that is also
+  # why its registry entry is `shard = "other-job"`.
+  #
+  # NOT YET in the required-checks ruleset (same state `ci-gen-drift` started
+  # in, and the same state `gate-cost`/`gate-balance` are still in as of this
+  # slice) — adding a required context is a separate, non-atomic `gh api`
+  # ruleset edit; see this slice's report for the exact command and why it
+  # was not run in this PR.
+  gate-budget:
+    needs: [detect, build]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup medaka (toolchain + downloaded binary)
+        uses: ./.github/actions/setup-medaka
+        with:
+          binary: artifact
+
+      - name: Budget governor — uncosted / over-class / pole-floor, with override
+        run: sh test/diff_compiler_gate_budget.sh

@@ -470,6 +470,8 @@ gateHelpText = stringConcat
     "  medaka gate explain <path> [--prose] [--registry <path>]\n",
     "  medaka gate ci      [--check] [--registry <path>] [--workflow <path>]\n",
     "  medaka gate balance [--check] [--registry <path>] [--baseline <path>]\n",
+    "  medaka gate budget  [--registry <path>] [--baseline <path>]\n",
+    "                      [--commit-message <text>]\n",
     "\n",
     "Selectors (conjunction — a gate must match all of them):\n",
     "  name:<glob>      gate name, e.g. name:diff_compiler_*\n",
@@ -551,6 +553,18 @@ gateHelpText = stringConcat
     "`NONDOC`, and reads no registry. It exists so that\n",
     "test/diff_compiler_prose_classifier.sh can diff this classifier against\n",
     "the one .github/workflows/ci.yml's `detect` job runs (#2200).\n",
+    "\n",
+    "`gate budget` is #2180's governor: text-only, no build. Reds when (a) a\n",
+    "schedulable gate has no cost baseline entry, (b) a gate's measured cost\n",
+    "has eaten into the tolerance-adjusted timeout its declared `cost` class\n",
+    "implies, or (c) the projected pole/floor (the same number `gate balance\n",
+    "--check` derives) exceeds S-4's budget. Any violation may be accepted on\n",
+    "purpose with a `Gate-Budget-Override: <token>` trailer on the commit\n",
+    "message (there is no PR body in a merge_group run) — the failing gate\n",
+    "prints the exact trailer to paste.\n",
+    "\n",
+    "  --commit-message <text>  budget: the commit message to scan for\n",
+    "                     `Gate-Budget-Override:` trailers. Omit for none.\n",
   ]
 
 -- Parsed `gate list` argv.
@@ -667,16 +681,17 @@ export
 runGateCmd : List String -> <IO> Unit
 runGateCmd [] =
   emit (Err
-    "usage: medaka gate <list|run|verify|explain|ci|balance> [<selector>...] [--json]")
+    "usage: medaka gate <list|run|verify|explain|ci|balance|budget> [<selector>...] [--json]")
 runGateCmd ("list"::rest) = emit (listOutput rest)
 runGateCmd ("run"::rest) = runRunCmdBody rest
 runGateCmd ("verify"::rest) = verifyCmdBody rest
 runGateCmd ("explain"::rest) = explainCmdBody rest
 runGateCmd ("ci"::rest) = ciCmdBody rest
 runGateCmd ("balance"::rest) = balCmdBody rest
+runGateCmd ("budget"::rest) = budgetCmdBody rest
 runGateCmd (sub::_) =
   emit (Err
-    "medaka gate: unknown subcommand '\{sub}' (expected: list, run, verify, explain, ci, balance)")
+    "medaka gate: unknown subcommand '\{sub}' (expected: list, run, verify, explain, ci, balance, budget)")
 
 -- ── `gate run` ──────────────────────────────────────────────────────────────
 --
@@ -4000,6 +4015,279 @@ balCmdBody argv = match parseBalArgs argv BalArgs { registry = None, baseline = 
               emit (balCheckResult regPath regSrc out head)
             else
               balWrite regPath regSrc out head
+
+-- ── `gate budget` — #2180's governor (S-5) ──────────────────────────────────
+--
+-- A required, cheap, TEXT-ONLY gate — no build, `gate verify`'s shape — that
+-- reds on any of three clauses:
+--
+--   (a) a schedulable gate has no cost baseline entry (`balUncosted`'s
+--       condition). The sprint contract's literal clause (a) — "a registry
+--       entry lacks a cost declaration" — cannot occur: `cost` is a REQUIRED
+--       TOML field (`reqStr i "cost" e`) and a registry missing it fails to
+--       PARSE, long before this gate runs. `balUncosted`'s "a schedulable
+--       gate the packer cannot price" is the state that both can occur and
+--       matters.
+--   (b) a gate's measured cost has eaten into the tolerance-adjusted timeout
+--       its declared `cost` class implies (`timeoutFor`). The class is not
+--       free-floating metadata — it is what kills the gate — so "declared
+--       class no longer matches reality" is measurable exactly here.
+--   (c) the projected `pole/floor` (S-4's metric, `balTargetMilli`) exceeds
+--       budget on the SAME assignment `gate balance --check` derives —
+--       computed from `balCands`/`balRows`/`balTarget`, which already skip
+--       `other-job` gates, so an `other-job` gate's (nonexistent) cost never
+--       contributes here either.
+--
+-- Any clause may be accepted on purpose with a structured, greppable
+-- acknowledgment: a trailer line on the commit message. There is no PR body
+-- in a `merge_group` run, so the checked-out commit's OWN message is the one
+-- thing the queue can always see (`git log -1 --pretty=%B` on the checked-out
+-- SHA — ordinary git behaviour, not a GitHub-specific API, so it needs no
+-- separate verification against GitHub policy). The `.sh` gate script reads
+-- it and passes it via `--commit-message`; this module touches no git state
+-- itself, so every clause stays testable on plain strings.
+
+-- The exact trailer a reader pastes: `Gate-Budget-Override: <token>`, one per
+-- violation accepted, free text after the token (a human reason) never
+-- machine-checked. Multiple lines are read one violation per line.
+budgetOverridePrefix : String
+budgetOverridePrefix = "Gate-Budget-Override: "
+
+budgetOverrideTokens : String -> List String
+budgetOverrideTokens msg = budgetTokensFromLines (splitNl msg)
+
+budgetTokensFromLines : List String -> List String
+budgetTokensFromLines [] = []
+budgetTokensFromLines (l::ls)
+  | startsWith budgetOverridePrefix (stringTrim l) = budgetFirstWord (stringTrim (budgetDropPrefix budgetOverridePrefix (stringTrim l))) :: budgetTokensFromLines ls
+  | otherwise = budgetTokensFromLines ls
+
+budgetDropPrefix : String -> String -> String
+budgetDropPrefix pre s = stringSlice (stringLength pre) (stringLength s) s
+
+budgetFirstWord : String -> String
+budgetFirstWord s = match splitOnChar ' ' s
+  [] => s
+  w::_ => w
+
+budgetAcked : String -> String -> Bool
+budgetAcked commitMessage token =
+  contains token (budgetOverrideTokens commitMessage)
+
+budgetCountUnacked : String -> List String -> Int
+budgetCountUnacked _ [] = 0
+budgetCountUnacked commitMessage (t::ts)
+  | budgetAcked commitMessage t = budgetCountUnacked commitMessage ts
+  | otherwise = 1 + budgetCountUnacked commitMessage ts
+
+-- ── Clause (a) ───────────────────────────────────────────────────────────────
+
+budgetUncostedNames : List GateCost -> List Gate -> List String
+budgetUncostedNames _ [] = []
+budgetUncostedNames base (g::gs)
+  | g.shard == balOtherJob = budgetUncostedNames base gs
+  | otherwise = match costOf g.run base
+    Some _ => budgetUncostedNames base gs
+    None => g.name :: budgetUncostedNames base gs
+
+budgetUncostedTokens : List String -> List String
+budgetUncostedTokens [] = []
+budgetUncostedTokens (n::ns) = "uncosted:\{n}" :: budgetUncostedTokens ns
+
+budgetUncostedLines : String -> List String -> List String
+budgetUncostedLines _ [] = []
+budgetUncostedLines commitMessage (n::ns) =
+  let tok = "uncosted:\{n}"
+  let ack = if budgetAcked commitMessage tok then " [ACKNOWLEDGED]" else ""
+  stringConcat [
+    n,
+    ack,
+    " — remedy: re-ingest the baseline (test/gate_cost_ingest.sh) so this",
+    " gate gets a sample; the `cost` field is present, the packer just has",
+    " no price yet, so there is nothing to declare or split here.",
+    " To accept unpriced on purpose, paste:\n    Gate-Budget-Override: ",
+    tok,
+    "\n",
+  ] :: budgetUncostedLines commitMessage ns
+
+-- ── Clause (b) ───────────────────────────────────────────────────────────────
+--
+-- The tolerance is deliberately the SAME constant as clause (c)'s
+-- (`balTargetMilli`, 1.125 = 1 + max(S-2's mean |error| 12.0%, bias 12.5%)):
+-- one measured slack, used everywhere a noisy estimate is compared to a hard
+-- line. `medianMs` can UNDERSTATE a gate's true cost by that much (S-2), so
+-- comparing the raw measurement against the raw timeout would let a gate that
+-- is actually over its own kill timeout read as compliant on a lucky sample.
+budgetTimeoutMs : String -> Int
+budgetTimeoutMs cost = timeoutFor 0 cost * 1000
+
+budgetToleratedMs : String -> Int
+budgetToleratedMs cost = budgetTimeoutMs cost * 1000 / balTargetMilli
+
+-- Schedulable, COSTED gates whose measured cost exceeds the tolerance-
+-- adjusted ceiling for their declared class. Uncosted gates are clause (a)'s
+-- alone — never double-reported here.
+budgetOverClassGates : List GateCost -> List Gate -> List Gate
+budgetOverClassGates _ [] = []
+budgetOverClassGates base (g::gs)
+  | g.shard == balOtherJob = budgetOverClassGates base gs
+  | otherwise = match costOf g.run base
+    None => budgetOverClassGates base gs
+    Some ms if ms > budgetToleratedMs g.cost =>
+      g :: budgetOverClassGates base gs
+    _ => budgetOverClassGates base gs
+
+budgetOverClassTokens : List Gate -> List String
+budgetOverClassTokens [] = []
+budgetOverClassTokens (g::gs) =
+  "over-class:\{g.name}" :: budgetOverClassTokens gs
+
+-- `timeoutFor`'s coupling is stated inline: re-classing a gate is not a free
+-- label change, it changes when CI kills it.
+budgetTimeoutRemedy : String
+budgetTimeoutRemedy = "Re-classing a gate changes its CI kill timeout (cheap=300s / medium=900s / heavy=3600s, `timeoutFor`) — pick deliberately, not just to silence this gate."
+
+budgetOverClassLines : List GateCost -> String -> List Gate -> List String
+budgetOverClassLines _ _ [] = []
+budgetOverClassLines base commitMessage (g::gs) =
+  -- `ms` is always `Some` here — `budgetOverClassGates` only keeps gates
+  -- `costOf` already resolved; the 0 fallback is unreachable, not a real cost.
+  let ms = match costOf g.run base
+    Some m => m
+    None => 0
+  let tok = "over-class:\{g.name}"
+  let ack = if budgetAcked commitMessage tok then " [ACKNOWLEDGED]" else ""
+  stringConcat [
+    "\{g.name} (\{g.cost}, measured \{balSecs ms}, tolerance-adjusted ceiling ",
+    balSecs (budgetToleratedMs g.cost), " of a \{intToString (timeoutFor 0 g.cost)}s timeout)", ack,
+    " — remedy: declare a higher `cost` class, split the gate into cheaper",
+    " pieces, or demote it with `tier = \"nightly\"` so it leaves the",
+    " merge-required path. ", budgetTimeoutRemedy,
+    " To accept the current cost on purpose, paste:\n    Gate-Budget-Override: ", tok, "\n",
+  ] :: budgetOverClassLines base commitMessage gs
+
+-- ── Clause (c) ───────────────────────────────────────────────────────────────
+--
+-- The SAME projection `gate balance --check` computes — `balCands` already
+-- excludes `other-job` gates from packing entirely, so their (nonexistent)
+-- cost cannot move this number by construction.
+budgetPoleFactor : List Gate -> List Shard -> List GateCost -> List RunRecord -> Result String (Option Int)
+budgetPoleFactor gates shs base runs =
+  let cs = balCands base gates
+  match balTarget True cs (balRows runs shs)
+    Err m => Err m
+    Ok (_, rows) =>
+      let factor = balFactorMilli cs rows
+      if factor <= balTargetMilli then Ok None else Ok (Some factor)
+
+budgetPoleFloorLines : String -> Option Int -> List String
+budgetPoleFloorLines _ None = []
+budgetPoleFloorLines commitMessage (Some factor) =
+  let tok = "pole-floor"
+  let ack = if budgetAcked commitMessage tok then " [ACKNOWLEDGED]" else ""
+  stringConcat [
+    "projected pole/floor \{balMilli factor} exceeds the budget \{balMilli balTargetMilli} (S-4)",
+    ack,
+    " — remedy: run `medaka gate balance` to see which row or gate needs to",
+    " shrink, split the pole gate, or demote a heavy gate to",
+    " `tier = \"nightly\"`. To accept the current pole/floor on purpose, paste:\n    Gate-Budget-Override: ",
+    tok,
+    "\n",
+  ] :: []
+
+-- ── Assembling the report ────────────────────────────────────────────────────
+
+budgetIndent : List String -> List String
+budgetIndent [] = []
+budgetIndent (x::xs) = "  \{x}" :: budgetIndent xs
+
+budgetSection : String -> List String -> String
+budgetSection _ [] = ""
+budgetSection title lines = "\{title}: \{intToString (listLen lines)}\n\{joinNl (budgetIndent lines)}\n\n"
+
+budgetReport : List GateCost -> String -> List String -> List Gate -> Option Int -> Result String String
+budgetReport base commitMessage uncosted overClass poleFactorOpt =
+  let aLines = budgetUncostedLines commitMessage uncosted
+  let bLines = budgetOverClassLines base commitMessage overClass
+  let cLines = budgetPoleFloorLines commitMessage poleFactorOpt
+  let aUnacked = budgetCountUnacked commitMessage (budgetUncostedTokens uncosted)
+  let bUnacked = budgetCountUnacked commitMessage (budgetOverClassTokens overClass)
+  let cCount = match poleFactorOpt
+    None => 0
+    Some _ => 1
+  let cUnacked = if cCount == 0 then
+    0
+  else if budgetAcked commitMessage "pole-floor" then
+    0
+  else
+    1
+  let total = listLen uncosted + listLen overClass + cCount
+  let unacked = aUnacked + bUnacked + cUnacked
+  let body = stringConcat [
+    budgetSection "no cost baseline entry (clause a)" aLines,
+    budgetSection "over declared class, tolerance-adjusted (clause b)" bLines,
+    budgetSection "projected pole/floor over budget (clause c)" cLines,
+  ]
+  if total == 0 then
+    Ok "medaka gate budget: OK — 0 violations.\n"
+  else if unacked == 0 then
+    Ok "\{body}medaka gate budget: \{intToString total} violation(s), all acknowledged by commit-message trailer — OK.\n"
+  else
+    Err "\{body}medaka gate budget: FAIL — \{intToString unacked} of \{intToString total} violation(s) not acknowledged. Paste the `Gate-Budget-Override:` trailer(s) shown above onto your commit message to accept them on purpose.\n"
+
+budgetOutput : String -> String -> String -> String -> Result String String
+budgetOutput regPath regSrc baseSrc commitMessage = match parseRegistry regSrc
+  Err m => Err "medaka gate budget: \{m}"
+  Ok gates => match parseShards regSrc
+    Err m => Err "medaka gate budget: \{m}"
+    Ok shs => match parseCostBaseline baseSrc
+      Err m => Err "medaka gate budget: \{m}"
+      Ok base => match parseCostRuns baseSrc
+        Err m => Err "medaka gate budget: \{m}"
+        Ok runs => match balUnknownRows shs gates
+          u::us => Err "medaka gate budget: \{regPath}: gate(s) name a shard with no [[shard]] row: \{joinSpace (u::us)}\n"
+          [] =>
+            let uncosted = budgetUncostedNames base gates
+            let overClass = budgetOverClassGates base gates
+            match budgetPoleFactor gates shs base runs
+              Err m => Err "medaka gate budget: \{m}\n"
+              Ok poleFactorOpt => budgetReport base commitMessage uncosted overClass poleFactorOpt
+
+data BudgetArgs =
+  | BudgetArgs {
+      registry : Option String,
+      baseline : Option String,
+      commitMessage : String,
+    }
+
+parseBudgetArgs : List String -> BudgetArgs -> Result String BudgetArgs
+parseBudgetArgs [] acc = Ok acc
+parseBudgetArgs ("--registry"::p::rest) acc =
+  parseBudgetArgs rest BudgetArgs { acc | registry = Some p }
+parseBudgetArgs ("--registry"::[]) _ =
+  Err "medaka gate budget: --registry needs a path"
+parseBudgetArgs ("--baseline"::p::rest) acc =
+  parseBudgetArgs rest BudgetArgs { acc | baseline = Some p }
+parseBudgetArgs ("--baseline"::[]) _ =
+  Err "medaka gate budget: --baseline needs a path"
+parseBudgetArgs ("--commit-message"::p::rest) acc =
+  parseBudgetArgs rest BudgetArgs { acc | commitMessage = p }
+parseBudgetArgs ("--commit-message"::[]) _ =
+  Err "medaka gate budget: --commit-message needs a value"
+parseBudgetArgs (a::_) _ = Err "medaka gate budget: unknown flag: \{a}"
+
+budgetCmdBody : List String -> <IO> Unit
+budgetCmdBody argv = match parseBudgetArgs argv BudgetArgs { registry = None, baseline = None, commitMessage = "" }
+  Err m => emit (Err m)
+  Ok a =>
+    let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+    let regPath = registryPath a.registry
+    let basePath = balBaselinePath a.baseline root
+    match readFile regPath
+      Err m => emit (Err "medaka gate budget: cannot read registry: \{m}")
+      Ok regSrc => match readFile basePath
+        Err m => emit (Err "medaka gate budget: cannot read cost baseline \{basePath}: \{m}")
+        Ok baseSrc => emit (budgetOutput regPath regSrc baseSrc a.commitMessage)
 
 -- ── Properties ──────────────────────────────────────────────────────────────
 
