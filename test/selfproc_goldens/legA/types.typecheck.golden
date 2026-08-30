@@ -751,7 +751,6 @@ enclPreds : String -> List (Int, Predicate)
 enclSlot : String -> Mono -> Option Int
 enclSlotIds : String -> List Int
 enclSlotIndex : Option Predicate -> Int -> String -> Option Int
-enclosingRigidScopeInPlay : Unit -> Bool
 endsWithStr : String -> String -> Bool
 enforceStandaloneDomainAt : TcEnv -> String -> Mono -> Option Loc -> Int -> Unit
 entail : Map String (List ImplEntry) -> String -> Mono -> String -> EntailKind -> (Route, List Route)
@@ -1345,7 +1344,6 @@ locEq : Loc -> Loc -> Bool
 locSameFileAsError : Option Loc -> Bool
 localPinIds : Int -> Int -> List Int
 localPinPairs : Int -> Int -> List (Int, String)
-localPinPairsGated : Int -> Int -> List (Int, String)
 lookupAssocI : Int -> List (Int, a) -> Option a
 lookupAssocS : String -> List (String, List IfaceRef) -> Option (List IfaceRef)
 lookupAssocSL2 : String -> List (String, List Int) -> Option (List Int)

@@ -1,0 +1,68 @@
+issue: 1046
+what: ⚠️ RE-VERBED 2026-08-26 (#1986 rung 2).  READ THIS BEFORE GRADING THE ROW.
+what: THIS ROW NO LONGER PINS #1046's EMITTER DEFECT.  It pins the CURRENT
+what: state of #1046's only known repro, and it says so out loud rather than
+what: quietly grading green on a program that no longer reaches the bug.
+what: WHAT #1046 IS: a cross-module interface with a DEFAULT method, where
+what: `Dog`'s impl is METHOD-LESS (inherits the default) and `Cat`'s impl
+what: OVERRIDES it, reached through a LOCAL LAMBDA -- the ARG-TAG path, not
+what: the dict path.  `implGroupsForMethod` (llvm_emit.mdk) is entry-derived,
+what: so the method-less `Dog` impl contributes no entry to `speak`'s impl
+what: group; only `Cat`'s group survives, `emitMethodArgDispatch`'s
+what: single-group `[g]` arm fires, and it emits an UNCONDITIONAL direct call
+what: with NO TAG TEST -- every receiver, `Dog` included, got `Cat`'s body.
+what: The pinned observation used to be `build-run` printing `meow|meow`.
+what: WHY IT MOVED: #1986 rung 1 (sprint dispatch-must-not-guess, slices
+what: 2a/2b) made a constrained local's PIN visible on the check path.  The
+what: shared local `f`, used at BOTH `Dog` and `Cat`, is now REJECTED at
+what: check with a located T-LOCAL-CONSTRAINED-MONO, per DICT-SEMANTICS §4.1
+what: G4 ("an implementation that cannot yet abstract locals must REJECT the
+what: multi-type use with a located diagnostic").  `medaka build` therefore
+what: never runs the emitter, and the `build-run` verb graded MALFORMED.
+what: WHAT IS AND IS NOT SETTLED: the arg-tag emitter mechanism this issue
+what: names is UNTOUCHED.  It is this REPRO that stopped reaching it.
+what: MEASURED at the re-verb, first-hand, three shapes that ought to reach
+what: the arg-tag path and no longer do -- `let f = v => speak v` used at ONE
+what: type, two single-type locals, and an unsigned top-level HOF
+what: (`apply2 g x = g x`) applied to `speak` at both types.  All three
+what: build and print the CORRECT `woof|meow`.  No user-facing shape reaching
+what: `emitMethodArgDispatch`'s single-group arm was found.  So #1046 STAYS
+what: OPEN, re-graded as LATENT pending either a new repro or a decision that
+what: the mechanism is unreachable.  ⚠️ DO NOT CLOSE #1046 ON THIS ROW.
+cmd: check-json main.mdk
+exit: 1
+diag-code: T-LOCAL-CONSTRAINED-MONO 14:6-14:7
+control: build-run control.mdk
+why-verb: `check-json` with `diag-code` (code + range, message NOT asserted --
+why-verb: TESTING-DESIGN §4.5's default) is the narrowest thing this program
+why-verb: still observes.  `build-run` cannot be used: `medaka build` now
+why-verb: exits 1 before emitting, which the harness grades MALFORMED (a hard
+why-verb: error), not as an observation.  `run` and `build` would each pin the
+why-verb: same rejection less precisely.
+why-drains: THIS ROW HAS EXACTLY ONE DRAIN DIRECTION AND IT IS THE RIGHT ONE:
+why-drains: the day locals ARE dict-abstracted (#1082 / DICT §11 G1), this
+why-drains: program becomes LEGAL again, the diagnostic disappears, the row
+why-drains: goes RED -- and whoever lands that change is then standing exactly
+why-drains: where #1046's emitter defect becomes reachable again and MUST
+why-drains: reconstruct the `meow|meow` observation before touching this row.
+why-drains: That is the whole reason the fixture was re-verbed instead of
+why-drains: deleted: deleting it would have removed the tripwire that fires at
+why-drains: the one moment the original bug can return.
+why-control: control.mdk is byte-identical to main.mdk except the ONE shared
+why-control: local lambda is split into TWO single-type locals -- the exact
+why-control: dimension main's rejection keys on.  `impl Speak Dog` stays
+why-control: METHOD-LESS, so a green control proves the rejection is about the
+why-control: two-type merge and not about method-less impls or arg-tag
+why-control: dispatch in general.  MEASURED: build exit 0, binary exit 0,
+why-control: stdout `woof|meow` (the harness asserts the exit only).
+why-note: the ORIGINAL pin, preserved verbatim so a future reconstructor does
+why-note: not have to dig it out of git history:
+why-note:   cmd: build-run main.mdk / exit: 0 / stdout-line: meow|meow
+why-note: root cause per the issue body: `emitMethodArgDispatch`
+why-note: (llvm_emit.mdk:5158-5163) branches on `implGroupsForMethod`, which is
+why-note: `filterGroupsByMethod method (groupImpls (implEntriesOf e))` --
+why-note: entry-derived, so a method-less impl (no entry) vanishes from the
+why-note: group count entirely.  With exactly one surviving group it takes the
+why-note: `[g] => emitImplCallSat ...` shortcut: an unconditional direct call,
+why-note: no tag test.  Same lost fact as sibling issues #1024 and #948, a
+why-note: different code path.

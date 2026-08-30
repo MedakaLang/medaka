@@ -1,0 +1,16 @@
+-- issue #1046: a cross-module interface with a DEFAULT method, where `Dog`'s impl is
+-- METHOD-LESS (inherits the default) and `Cat`'s impl OVERRIDES it, reached through a
+-- LOCAL LAMBDA (the arg-tag path). `implGroupsForMethod` is entry-derived, so the
+-- method-less `Dog` impl contributes no entry to the method's impl group; only `Cat`'s
+-- group survives, the emitter's `[g]` single-group arm fires, and it emits an
+-- UNCONDITIONAL direct call with no tag test at all -- every receiver gets `Cat`'s body.
+-- check and eval are both fine; only the native build is wrong.
+import iface.{Speak(..), speak}
+data Dog = Dog
+data Cat = Cat
+impl Speak Dog where              -- METHOD-LESS: inherits the default
+impl Speak Cat where
+  speak _ = "meow"
+main =
+  let f = v => speak v
+  println (f Dog ++ "|" ++ f Cat)

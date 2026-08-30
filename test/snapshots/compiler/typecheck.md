@@ -1,5 +1,5 @@
 # META
-source_lines=37992
+source_lines=37952
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -17220,46 +17220,6 @@ localPinPairs callN0 dictN0 = methodConstrainedPairs ()
   ++ methodOccArgPairs ()
   ++ dictForwardedPairs callN0 dictN0
 
--- #2032 rung 3 — IS AN ENCLOSING RIGID SIGNATURE IN PLAY?
---
--- The G4 licence (DICT-SEMANTICS §4.1) is about a constrained local COLLAPSING an
--- enclosing signature's own rigid variables.  Where there is no such signature, there is
--- nothing for the local to collapse: `main = let f = v => speak v` used at two GROUND
--- types is a plain arg-tag dispatch the emitter serves, and rejecting it is an
--- over-reject.  This is the scope-shaped predicate that separates the two families; a
--- per-VAR test cannot, because at the local's generalization point the "must reject"
--- and "must accept" shapes are literally the same program (the parameter var is fresh,
--- local and method-constrained in both), and `deferrableVarIds` is not populated until
--- registerSchemeObligations, which runs AFTER the enclosing body.  Both axes were
--- measured and falsified — see the sprint report for #2032.
---
---   groupConstraintMonosRef  processSCC's publication of the GROUP's declared `=>`
---                            constraints, live exactly for the duration of body
---                            inference, derived from preunifySigsEx and therefore
---                            identical on the `check` and the run/build path (#2026).
---   inRigidityBodyRef        True inside an IMPL or DEFAULT-method body.  Included
---                            unconditionally so the gate can only ever KEEP an existing
---                            pin inside a method body, never drop one.
-enclosingRigidScopeInPlay : Unit -> Bool
-enclosingRigidScopeInPlay _ = isNonEmptyL perRun.value.groupConstraintMonosRef.value
-  || perRun.value.inRigidityBodyRef.value
-
--- #2032: the pairs the FOUR genRestricted sites (via pinLocalIfDictForwarded) consult.
--- With an enclosing rigid scope in play this is the full three-channel union — the G4
--- rejection, unchanged.  Without one, only the DICT channel survives: that channel is
--- the NULL-dict/SIGSEGV case (#866/#1021), which is a routing impossibility rather than
--- a dispatch-capability question, so it is never gated.
---
--- ⚠️ The `where`/`let`-GROUP site processLetGroup deliberately does NOT go through this:
--- #1040's shape (a `where`-group collision under `top : String`) has no enclosing
--- constrained signature and must keep rejecting unconditionally.
-localPinPairsGated : Int -> Int -> List (Int, String)
-localPinPairsGated callN0 dictN0 =
-  if enclosingRigidScopeInPlay () then
-    localPinPairs callN0 dictN0
-  else
-    dictForwardedPairs callN0 dictN0
-
 -- #866: the pin decision AND the note pinnedLocalExplain needs, in one pass, so the
 -- two can never disagree about whether a binding was pinned.  [name]/[loc]
 -- describe the BINDING (what the user must change), not the use site that will later
@@ -17276,7 +17236,7 @@ pinLocalIfDictForwarded callN0 dictN0 name loc t =
     name
     loc
     (freeGenVars perRun.value.currentLevel.value t)
-    (localPinPairsGated callN0 dictN0)
+    (localPinPairs callN0 dictN0)
     t
 
 -- Shared by all five pin sites: record one note per dict-forwarded var that is free
@@ -40876,12 +40836,8 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "localPinIds" ((PVar "callN0") (PVar "dictN0")) (EBinOp "++" (EBinOp "++" (EApp (EVar "methodConstrainedIds") (ELit LUnit)) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "methodOccArgPairs") (ELit LUnit)))) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EVar "dictForwardedPairs") (EVar "callN0")) (EVar "dictN0")))))
 (DTypeSig false "localPinPairs" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))))))
 (DFunDef false "localPinPairs" ((PVar "callN0") (PVar "dictN0")) (EBinOp "++" (EBinOp "++" (EApp (EVar "methodConstrainedPairs") (ELit LUnit)) (EApp (EVar "methodOccArgPairs") (ELit LUnit))) (EApp (EApp (EVar "dictForwardedPairs") (EVar "callN0")) (EVar "dictN0"))))
-(DTypeSig false "enclosingRigidScopeInPlay" (TyFun (TyCon "Unit") (TyCon "Bool")))
-(DFunDef false "enclosingRigidScopeInPlay" (PWild) (EBinOp "||" (EApp (EVar "isNonEmptyL") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "groupConstraintMonosRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "inRigidityBodyRef") "value")))
-(DTypeSig false "localPinPairsGated" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))))))
-(DFunDef false "localPinPairsGated" ((PVar "callN0") (PVar "dictN0")) (EIf (EApp (EVar "enclosingRigidScopeInPlay") (ELit LUnit)) (EApp (EApp (EVar "localPinPairs") (EVar "callN0")) (EVar "dictN0")) (EApp (EApp (EVar "dictForwardedPairs") (EVar "callN0")) (EVar "dictN0"))))
 (DTypeSig false "pinLocalIfDictForwarded" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Mono") (TyCon "Bool")))))))
-(DFunDef false "pinLocalIfDictForwarded" ((PVar "callN0") (PVar "dictN0") (PVar "name") (PVar "loc") (PVar "t")) (EApp (EApp (EApp (EApp (EApp (EVar "recordPinnedLocals") (EVar "name")) (EVar "loc")) (EApp (EApp (EVar "freeGenVars") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentLevel") "value")) (EVar "t"))) (EApp (EApp (EVar "localPinPairsGated") (EVar "callN0")) (EVar "dictN0"))) (EVar "t")))
+(DFunDef false "pinLocalIfDictForwarded" ((PVar "callN0") (PVar "dictN0") (PVar "name") (PVar "loc") (PVar "t")) (EApp (EApp (EApp (EApp (EApp (EVar "recordPinnedLocals") (EVar "name")) (EVar "loc")) (EApp (EApp (EVar "freeGenVars") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentLevel") "value")) (EVar "t"))) (EApp (EApp (EVar "localPinPairs") (EVar "callN0")) (EVar "dictN0"))) (EVar "t")))
 (DTypeSig false "recordPinnedLocals" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))) (TyFun (TyCon "Mono") (TyCon "Bool")))))))
 (DFunDef false "recordPinnedLocals" ((PVar "name") (PVar "loc") (PVar "free") (PVar "pairs") (PVar "t")) (EBlock (DoLet false false (PVar "hits") (EApp (EVar "dedupPairsById") (EApp (EApp (EVar "filterList") (ELam ((PVar "p")) (EApp (EApp (EVar "containsI") (EApp (EVar "fst") (EVar "p"))) (EVar "free")))) (EVar "pairs")))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "hits")) (EVar "False") (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pinnedLocals")) (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "p")) (ETuple (EApp (EApp (EVar "tvarMonoOfIn") (EVar "t")) (EApp (EVar "fst") (EVar "p"))) (EVar "name") (EApp (EVar "snd") (EVar "p")) (EVar "loc")))) (EVar "hits")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pinnedLocals") "value")))) (DoExpr (EVar "True")))))))
 (DTypeSig false "recordPinnedLocalsGeneric" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Mono") (TyCon "Bool")))))))
@@ -46928,12 +46884,8 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "localPinIds" ((PVar "callN0") (PVar "dictN0")) (EBinOp "++" (EBinOp "++" (EApp (EVar "methodConstrainedIds") (ELit LUnit)) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "methodOccArgPairs") (ELit LUnit)))) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EApp (EVar "dictForwardedPairs") (EVar "callN0")) (EVar "dictN0")))))
 (DTypeSig false "localPinPairs" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))))))
 (DFunDef false "localPinPairs" ((PVar "callN0") (PVar "dictN0")) (EBinOp "++" (EBinOp "++" (EApp (EVar "methodConstrainedPairs") (ELit LUnit)) (EApp (EVar "methodOccArgPairs") (ELit LUnit))) (EApp (EApp (EVar "dictForwardedPairs") (EVar "callN0")) (EVar "dictN0"))))
-(DTypeSig false "enclosingRigidScopeInPlay" (TyFun (TyCon "Unit") (TyCon "Bool")))
-(DFunDef false "enclosingRigidScopeInPlay" (PWild) (EBinOp "||" (EApp (EVar "isNonEmptyL") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "groupConstraintMonosRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "inRigidityBodyRef") "value")))
-(DTypeSig false "localPinPairsGated" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))))))
-(DFunDef false "localPinPairsGated" ((PVar "callN0") (PVar "dictN0")) (EIf (EApp (EVar "enclosingRigidScopeInPlay") (ELit LUnit)) (EApp (EApp (EVar "localPinPairs") (EVar "callN0")) (EVar "dictN0")) (EApp (EApp (EVar "dictForwardedPairs") (EVar "callN0")) (EVar "dictN0"))))
 (DTypeSig false "pinLocalIfDictForwarded" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Mono") (TyCon "Bool")))))))
-(DFunDef false "pinLocalIfDictForwarded" ((PVar "callN0") (PVar "dictN0") (PVar "name") (PVar "loc") (PVar "t")) (EApp (EApp (EApp (EApp (EApp (EVar "recordPinnedLocals") (EVar "name")) (EVar "loc")) (EApp (EApp (EVar "freeGenVars") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentLevel") "value")) (EVar "t"))) (EApp (EApp (EVar "localPinPairsGated") (EVar "callN0")) (EVar "dictN0"))) (EVar "t")))
+(DFunDef false "pinLocalIfDictForwarded" ((PVar "callN0") (PVar "dictN0") (PVar "name") (PVar "loc") (PVar "t")) (EApp (EApp (EApp (EApp (EApp (EVar "recordPinnedLocals") (EVar "name")) (EVar "loc")) (EApp (EApp (EVar "freeGenVars") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentLevel") "value")) (EVar "t"))) (EApp (EApp (EVar "localPinPairs") (EVar "callN0")) (EVar "dictN0"))) (EVar "t")))
 (DTypeSig false "recordPinnedLocals" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))) (TyFun (TyCon "Mono") (TyCon "Bool")))))))
 (DFunDef false "recordPinnedLocals" ((PVar "name") (PVar "loc") (PVar "free") (PVar "pairs") (PVar "t")) (EBlock (DoLet false false (PVar "hits") (EApp (EVar "dedupPairsById") (EApp (EApp (EVar "filterList") (ELam ((PVar "p")) (EApp (EApp (EVar "containsI") (EApp (EVar "fst") (EVar "p"))) (EVar "free")))) (EVar "pairs")))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "hits")) (EVar "False") (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pinnedLocals")) (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (ETuple (EApp (EApp (EVar "tvarMonoOfIn") (EVar "t")) (EApp (EVar "fst") (EVar "p"))) (EVar "name") (EApp (EVar "snd") (EVar "p")) (EVar "loc")))) (EVar "hits")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pinnedLocals") "value")))) (DoExpr (EVar "True")))))))
 (DTypeSig false "recordPinnedLocalsGeneric" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Mono") (TyCon "Bool")))))))

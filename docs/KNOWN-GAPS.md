@@ -119,6 +119,52 @@ for this rejection entirely — see
 [`compiler/TYPECHECK-ARCH-BUG-FIT.md`](../compiler/TYPECHECK-ARCH-BUG-FIT.md)
 family C for the mechanism and the falsifiable prediction for when that lands.
 
+## Known over-reject: a plain ground-type local also gets pinned
+
+**Status of this entry:** a deliberate, reviewed, documented trade-off — see
+[#2032](https://github.com/MedakaLang/medaka/issues/2032) for the fix order
+that would let this narrow.
+
+**What triggers it.** The predicate above is broader than the first entry's
+literal scope. It also rejects a local that forwards to a method call and is
+then used at two plain **ground** types, with **no enclosing polymorphic
+signature at all** — nothing here needs an abstract dictionary, and the local
+already looks fully monomorphic:
+
+```
+let s = v => debug v
+println (s 1)
+println (s True)
+```
+
+with two `impl Debug` instances in scope (one for `Int`, one for `Bool`).
+This rejects today with the same `T-LOCAL-CONSTRAINED-MONO`, even though
+nothing here collapses a rigid signature variable — the local is pinned to
+one method's dispatch decision the moment its body reaches a constrained
+method call, regardless of whether an enclosing rigid scope is even present.
+
+**Why this is shipping as a known gap rather than being narrowed.** A
+sharper predicate (`enclosingRigidScopeInPlay`, scoped only to the case an
+enclosing `=>`-constrained group or method/impl body is actually live) was
+implemented and measured: it correctly separates this shape from the first
+entry's genuine G4 case, but it also releases the pin on
+[#1046](https://github.com/MedakaLang/medaka/issues/1046)'s shape — an
+**out-of-scope, still-open emitter defect** where a method-less `impl`
+collapses two impls' arg-tag dispatch groups into one. Releasing the pin
+there reintroduces a **silent wrong answer** with no diagnostic on any
+engine, which is strictly worse than this over-reject. The narrowing is
+therefore blocked on #1046 landing first, not on any remaining typechecker
+work; see #2032 for the exact fix order (fix #1046's emitter defect, then
+land the preserved narrowing). A regression fixture demonstrating the
+over-reject (and the correct, narrower accept it should someday produce) was
+measured during the fix round but was not committed to the tree this sprint —
+also tracked as part of this same documented trade-off, to be landed
+alongside the eventual narrowing.
+
+**Workaround.** Same as the first entry — hoist the forwarding local to a
+top-level binding — or, if hoisting is undesirable, split the one local into
+two differently-named locals, one per use site.
+
 ## `<FFI>` is a reachability label, not a memory-safety guarantee
 
 **What it is.** Calling a foreign function ends the compiler's memory-safety
