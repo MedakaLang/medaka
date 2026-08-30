@@ -1,0 +1,20 @@
+-- X17 (fix-round F1, CROSS-MODULE) x14 with the colliding `display` interface
+-- and its impl moved into an IMPORTED module. The entry module declares
+-- nothing; its only view of the name is the `import ifcx.{Ifc, display}`
+-- clause. This is the axis a single-file row cannot see: the entry-module
+-- method table's own-declaration rung and its imported rungs are DIFFERENT
+-- rungs (`ownMethodIdent` vs `methodCandImported`, compiler/types/typecheck.mdk),
+-- so a fix that only stops an OWN declaration from capturing the wrap would
+-- pass x14 and still ship the S0 here.
+--
+-- MEASURED ON THE SPRINT HEAD a17281e6 (cold-built in this worktree,
+-- MEDAKA_STRICT=1): build ACCEPTs and the BUILT BINARY prints `HIJACKED`,
+-- exactly as the single-file x14 does.
+--
+-- FIXED shape: the wrap resolves no name in the entry module's scope on either
+-- axis (`autoPrintPinCore`, compiler/driver/main_autoprint.mdk) -- the built
+-- binary must print 7. `run` REJECTs BY DESIGN (#1681: a non-Unit VALUE main)
+-- -- graded BUILD_EXACT. Value hand-derived from the literal `main = 7`.
+import ifcx.{Ifc, display}
+
+main = 7

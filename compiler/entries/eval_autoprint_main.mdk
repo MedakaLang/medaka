@@ -25,7 +25,11 @@
 import frontend.ast.{Decl}
 import types.typecheck.{elaborateModules}
 import eval.eval.{evalModulesOutput}
-import driver.main_autoprint.{autoPrintWrapModules, shouldAutoPrintMain}
+import driver.main_autoprint.{
+  autoPrintWrapModules,
+  autoPrintPinCore,
+  shouldAutoPrintMain,
+}
 import entries.entry_support.{driveModules}
 
 main = driveModules runElab
@@ -37,8 +41,9 @@ main = driveModules runElab
 runElab : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
 runElab runtimeDecls coreDecls modules =
   let _ = elaborateModules runtimeDecls coreDecls modules
-  let modulesW = match shouldAutoPrintMain coreDecls modules
-    True => autoPrintWrapModules modules
-    False => modules
-  let elaborated = elaborateModules runtimeDecls coreDecls modulesW
+  let fired = shouldAutoPrintMain coreDecls modules
+  let modulesW = if fired then autoPrintWrapModules modules else modules
+  -- the wrap's callee is a PRELUDE re-binding (autoPrintPinCore, #2185 / F1 / F2).
+  let coreW = if fired then autoPrintPinCore coreDecls else coreDecls
+  let elaborated = elaborateModules runtimeDecls coreW modulesW
   putStr (evalModulesOutput (fst elaborated) (snd elaborated))

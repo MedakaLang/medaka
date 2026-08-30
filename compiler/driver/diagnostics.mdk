@@ -79,6 +79,7 @@ import support.path.{dirOf}
 import driver.main_autoprint.{
   shouldAutoPrintMain,
   autoPrintWrapModules,
+  autoPrintPinCore,
   underivedMainDiags,
 }
 import support.util.{
@@ -658,7 +659,7 @@ autoPrintObligationDiags : List Decl -> List Decl -> List Decl -> List Diag
 autoPrintObligationDiags runtimeP coreP desugared =
   let modules = [("__main__", desugared)]
   if shouldAutoPrintMain coreP modules then
-    map diagOfTypeError (underivedMainDiags runtimeP coreP (autoPrintWrapModules modules))
+    map diagOfTypeError (underivedMainDiags runtimeP (autoPrintPinCore coreP) (autoPrintWrapModules modules))
   else
     []
 

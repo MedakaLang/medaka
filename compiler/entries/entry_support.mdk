@@ -21,6 +21,7 @@ import backend.private_mangle.{mangleUnits}
 import driver.main_autoprint.{
   shouldAutoPrintMain,
   autoPrintWrapModules,
+  autoPrintPinCore,
   underivedMainDiags,
 }
 
@@ -176,10 +177,13 @@ runEmitWith emitTail runtimeDecls coreDecls modules =
   let (coreMangled, modulesMangled) = mangleUnits coreDecls modules
   let (coreD, modules2) = elaborateModules runtimeDecls coreMangled modulesMangled
   if shouldAutoPrintMain coreDecls modules then
+    -- the wrap's callee is a PRELUDE re-binding, so the core decl list has to
+    -- carry it — see main_autoprint.autoPrintPinCore (#2185 / F1 / F2).
+    let coreW = autoPrintPinCore coreDecls
     let modulesW = autoPrintWrapModules modules
-    match underivedMainDiags runtimeDecls coreDecls modulesW
+    match underivedMainDiags runtimeDecls coreW modulesW
       d::_ => failWith (tcMsg d)
-      [] => emitModulesWith emitTail runtimeDecls coreDecls modulesW
+      [] => emitModulesWith emitTail runtimeDecls coreW modulesW
   else emitTail runtimeDecls coreD modules2
 
 -- Mangle + elaborate + emit a (possibly wrapped) module list from scratch.

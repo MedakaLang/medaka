@@ -24,13 +24,23 @@
 #                          ORDINARY non-Unit-main W-MAIN-SHAPE exit (byte-
 #                          identical to `main = 7` with no interface anywhere)
 #                          -- not a shadow-resolution artifact. `build` still
-#                          accepts and prints `1`, but that `1` is itself a
-#                          live, filed bug (#2185: the compiler's own
-#                          auto-print wrap resolving to the user's shadowing
-#                          method), not a benign or expected accept. Not part
-#                          of the #2153 family; kept as its own bucket rather
-#                          than folded into either of the other two, per the
-#                          packet's own note that `println` is special-cased.
+#                          accepts and prints `1` -- FIXED as of S-autoprint-
+#                          prelude-pin (#2185): the compiler's own auto-print
+#                          wrap no longer resolves through the user's shadowing
+#                          `println` method (`driver/main_autoprint.mdk` wraps
+#                          via `putStrLn (display <e>)`, never spelling the
+#                          name `println`, so it cannot be captured). The `1`
+#                          here is now the SAME correct prelude auto-print path
+#                          every other row exercises -- this row's `1` is a
+#                          coincidence of the probe's own `impl Ifc Int where
+#                          println v = v` identity impl (`println (println 1)`
+#                          also legitimately dispatches through the user's OWN
+#                          interface, which is expected S1-PRELUDE (a)
+#                          shadow semantics, unrelated to the wrap). Kept as its
+#                          own bucket rather than folded into PASS because the
+#                          `run` outcome is still categorically different (an
+#                          ordinary non-Unit-main reject, not a check/run/build
+#                          full accept) -- not part of the #2153 family.
 #
 # THIS LEDGER IS THE RATCHET: a PASS row that regresses to anything else is a
 # gate failure, full stop -- see the gate's own header for how a name moving

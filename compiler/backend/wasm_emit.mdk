@@ -341,6 +341,14 @@ data WasmEmit = WasmEmit {
     nextLambdaId : Ref Int,
     liftedDefinitions : Ref (List (List String)),
     liftedDefinitionNames : Ref (OrdMap Unit),
+    -- S-4: the capture-free closure globals this emission hoisted.  `constClosIdx`
+    -- maps an initializer's TEXT to its global name (the dedup key — an OrdMap, not
+    -- a List-as-map, so N distinct cells cost N log N and not N²); `constClosCells`
+    -- keeps them in emission order for the module's global section.  See
+    -- `wConstClos` for the mechanism.
+    constClosIdx : Ref (OrdMap String),
+    constClosCells : Ref (List (String, String)),
+    nextConstClosId : Ref Int,
     functionReferences : Ref (List String),
     functionReferenceNames : Ref (OrdMap Unit),
     trapImportNeeded : Ref Bool,
@@ -402,6 +410,9 @@ freshWasmEmit mode = WasmEmit {
   nextLambdaId = Ref 0,
   liftedDefinitions = Ref [],
   liftedDefinitionNames = Ref omEmpty,
+  constClosIdx = Ref omEmpty,
+  constClosCells = Ref [],
+  nextConstClosId = Ref 0,
   functionReferences = Ref [],
   functionReferenceNames = Ref omEmpty,
   trapImportNeeded = Ref False,
@@ -1124,6 +1135,63 @@ addLiftedNamed emit name def =
   else
     let _ = setRef emit.liftedDefinitionNames (omInsert name () !emit.liftedDefinitionNames)
     addLifted emit def
+
+-- ── S-4: capture-free closure hoisting (the WasmGC peer of S-1/S-2's LLVM cells) ──
+-- A `$clos` struct whose capture set is EMPTY has fields that are ALL constant: the
+-- code pointer is `ref.func $lam`, the arity is an `i32.const`, and the env is a
+-- zero-length `array.new_fixed $argarr 0`.  Such a struct is identical at every entry
+-- to the enclosing function, so it need not be rebuilt per entry: emit it ONCE as an
+-- IMMUTABLE module global and read it with a single `global.get`.
+--
+-- This is NOT a port of the LLVM mechanism — that one hoists a flat `[2 x i64]`
+-- `internal constant` cell and hands back a `ptrtoint` constant-expression (F8).  The
+-- WasmGC representation is a GC struct, so the analogue is a global whose INITIALIZER
+-- is a `struct.new`, which needs wasm-GC constant expressions.  Confirmed accepted by
+-- this project's whole toolchain before the mechanism was written: `wasm-tools parse`,
+-- `wasm-tools validate --features=all`, and the Node engine `test/wasm/run.js` uses
+-- all accept `(global $g (ref $clos) (struct.new $clos (ref.func $l) (i32.const N)
+-- (array.new_fixed $argarr 0)))` and read back field `$arity` correctly.  There is no
+-- prior const-initialized global in this file (every other one is `mut` + a runtime
+-- store), so that probe — not precedent — is what licenses this.
+--
+-- `ref.func` inside a global initializer self-declares the function reference (the
+-- validator's `refs` set is collected from module fields OUTSIDE function bodies,
+-- globals included), so no `(elem declare)` entry is required for validity — but the
+-- call sites keep their existing `noteFuncRef` anyway, since the lifted code function
+-- is also reachable through ordinary code paths.
+--
+-- SOUND because a `$clos` struct is never mutated after construction on any path: its
+-- three fields are IMMUTABLE in the type (`$clos` declares no `mut` field), so unlike
+-- LLVM there is not even a back-patch to reason about.  The knot for a mutually- or
+-- self-recursive let-group is tied by RECONSTRUCTION inside each lifted member's
+-- prologue (`emitLgLifted`'s `memberRebuilds`), which this does not touch.
+--
+-- Deduped by initializer TEXT: two references to the same capture-free closure share
+-- one global.  That is observationally safe here for the same reason it is in LLVM —
+-- a closure value has no identity in this language (no reference equality on
+-- functions), and `$mdk_apply`/`$mdk_pap` only READ the struct, allocating any partial
+-- application into a fresh cell.
+wConstClos : WasmEmit -> String -> Int -> List String
+wConstClos emit lamName arity =
+  let initBody = "(struct.new $clos (ref.func \{lamName}) (i32.const \{intToString arity}) (array.new_fixed $argarr 0))"
+  match omLookup initBody !emit.constClosIdx
+    Some g => ["global.get " ++ g]
+    None =>
+      let g = "$mdk_cc_" ++ intToString !emit.nextConstClosId
+      let _ = setRef emit.nextConstClosId (!emit.nextConstClosId + 1)
+      let _ = setRef emit.constClosIdx (omInsert initBody g !emit.constClosIdx)
+      let _ = setRef emit.constClosCells ((g, initBody) :: !emit.constClosCells)
+      ["global.get " ++ g]
+
+-- the hoisted globals, in emission order.  Drained by emitRefProgram AFTER every body
+-- has been emitted (the same after-body discipline `dataSegs` / `trapImport` use), so
+-- this must be bound late even though the lines are placed with the other globals.
+wConstClosGlobalLines : WasmEmit -> List String
+wConstClosGlobalLines emit =
+  map oneConstClosGlobal (reverseL !emit.constClosCells)
+
+oneConstClosGlobal : (String, String) -> String
+oneConstClosGlobal (g, initBody) = "  (global \{g} (ref $clos) \{initBody})"
 
 noteFuncRef : WasmEmit -> String -> Unit
 noteFuncRef emit nm =
@@ -2562,7 +2630,12 @@ emitRefProgram prog groups =
   -- effectively always on there; the typed corpus (no prelude) only pays when a
   -- numbered trap is actually emitted.
   let trapIntRt = if (progEmit prog).trapIntNeeded.value then trapIntRuntimeLines else []
-  joinNl (header ++ typeSection ++ imports ++ trapImport ++ elemDecl ++ globals
+  -- S-4: the capture-free closure globals (wConstClos), accumulated during fn / impl /
+  -- default / init body emission.  Bound HERE, after every body-emit binding above, for
+  -- the same reason `trapImport` and `dataSegs` are; their LINES are placed with the
+  -- other globals below, which the text format permits independently of binding order.
+  let constClosGlobals = wConstClosGlobalLines (progEmit prog)
+  joinNl (header ++ typeSection ++ imports ++ trapImport ++ elemDecl ++ globals ++ constClosGlobals
             ++ fns ++ implFns ++ defaultDefs ++ lifted ++ applyRt ++ ioRt ++ strLeafRt ++ strConcatRt ++ appendRt ++ valueCmpRt ++ valueArithRt
             ++ stderrRt ++ rngRt ++ hashRt ++ hashStrRt
             ++ floatRemRt ++ floatRt ++ hashFloatRt ++ randomFloatRt ++ strSearchRt
@@ -5155,8 +5228,9 @@ emitVarRefPlain prog env d x =
   else if isUnimplStrExternW x then floatExternStub x
   else if progFnMemberW prog x then
     let _ = noteFuncRef (progEmit prog) ("$mdk_w_" ++ x)
-    ["ref.func $mdk_w_" ++ x, "i32.const " ++ intToString (progFnArity prog x),
-     "array.new_fixed $argarr 0", "struct.new $clos"]
+    -- S-4: captureless by construction (a top-level fn's wrapper closes over nothing)
+    -- ⇒ one hoisted module global, not a fresh `$clos` on every evaluation of `x`.
+    wConstClos (progEmit prog) ("$mdk_w_" ++ x) (progFnArity prog x)
   -- W9: a bare prelude reference synthesized post-mangle (string-interp / `/=`) →
   -- resolve to its `core__`-mangled def and emit the closure wrapper for it.
   else if canonFn prog x /= x then emitVarRef prog env d (canonFn prog x)
@@ -5180,12 +5254,8 @@ emitExternEtaClosure prog name =
   let lamName = "$mdk_ext_" ++ name
   let _ = noteFuncRef (progEmit prog) lamName
   let _ = addLiftedNamed (progEmit prog) lamName (emitExternEtaDefine prog lamName name arity)
-  [
-    "ref.func " ++ lamName,
-    "i32.const " ++ intToString arity,
-    "array.new_fixed $argarr 0",
-    "struct.new $clos",
-  ]
+  -- S-4: an extern eta captures nothing (the comment above says so) ⇒ hoisted global.
+  wConstClos (progEmit prog) lamName arity
 
 -- The depth-0 `$__aex*`/`$__raarr*` array-intrinsic scratch locals (a flat copy of the
 -- useArray block in w7LocalsAtDepth at depth 0) that an ARRAY-extern eta (func …)
@@ -5238,12 +5308,8 @@ emitCtorEtaClosure prog ctor =
   let lamName = "$mdk_wctor_" ++ gname ctor
   let _ = noteFuncRef (progEmit prog) lamName
   let _ = addLiftedNamed (progEmit prog) lamName (emitCtorEtaDefine prog lamName ctor arity)
-  [
-    "ref.func " ++ lamName,
-    "i32.const " ++ intToString arity,
-    "array.new_fixed $argarr 0",
-    "struct.new $clos",
-  ]
+  -- S-4: a ctor eta is captureless ⇒ hoisted global, not a per-reference `$clos`.
+  wConstClos (progEmit prog) lamName arity
 
 emitCtorEtaDefine : Prog -> String -> String -> Int -> List String
 emitCtorEtaDefine prog lamName ctor arity =
@@ -7531,9 +7597,14 @@ emitClosure prog env d pats body =
   let _ = noteFuncRef (progEmit prog) lamName
   let _ = addLifted (progEmit prog) (emitLamDefine prog lamName pats captured body)
   -- build the closure struct at the use site: ref.func, arity, env array of captures.
-  let capInstrs = flatMap (c => ["local.get $" ++ gname c]) captured
-  ["ref.func " ++ lamName, "i32.const " ++ intToString (listLen pats)]
-    ++ capInstrs ++ ["array.new_fixed $argarr " ++ intToString (listLen captured), "struct.new $clos"]
+  -- S-4: with NO captures every operand is constant, so hoist the struct to a module
+  -- global (wConstClos) instead of rebuilding it on each evaluation of the `CLam`.
+  match captured
+    [] => wConstClos (progEmit prog) lamName (listLen pats)
+    _ =>
+      let capInstrs = flatMap (c => ["local.get $" ++ gname c]) captured
+      ["ref.func " ++ lamName, "i32.const " ++ intToString (listLen pats)]
+        ++ capInstrs ++ ["array.new_fixed $argarr " ++ intToString (listLen captured), "struct.new $clos"]
 
 -- the lifted lambda body.  Prologue: bind each captured var from self's $env (cast
 -- self to $clos, get $env, array.get i, non-null) into its local; bind each param
@@ -7685,8 +7756,39 @@ emitLetGroupRef prog env d binds body =
     -- at the use site: compute the value bindings into their locals (each visible to the
     -- next), rebuild every FUNCTION member's closure, then emit the body with all bound.
     let valInit = emitLgValBinds prog env d valBinds
-    let rebuilds = flatMap (b => rebuildLgClosure prog gid groupCaps b) fnBinds
+    let rebuilds = useSiteRebuilds prog gid groupCaps fnBinds
     valInit ++ rebuilds ++ emitRefTail2 prog (names ++ valNames ++ env) d body
+
+-- S-4: the USE-SITE closure rebuilds for a let-group.  A member whose group capture
+-- set is EMPTY and which does not FORWARD-reference a later sibling builds a `$clos`
+-- out of nothing but constants, so it reads one hoisted module global (wConstClos)
+-- instead of rebuilding the struct on every entry to the enclosing function.
+--
+-- The forward-reference guard is the direct analogue of the LLVM emitter's routing
+-- (`emitLetGroup` sends a binding that `refsLater` to `emitLetGroupKnot`, and only the
+-- non-forward-referencing arm reaches the `emitGroupBind` hoist).  Self-recursion is
+-- NOT a forward reference and stays eligible — the capture-free `where go … = … go …`
+-- worker is exactly the shape this is for.  On THIS backend the guard is conservative
+-- rather than load-bearing: `groupCaps` never contains a sibling's name (siblings are
+-- subtracted when it is computed) and every `$clos` field is immutable, so the wasm
+-- knot is tied by RECONSTRUCTION inside `emitLgLifted`'s prologue — which this never
+-- touches — and not by patching the use-site struct.
+useSiteRebuilds : Prog -> Int -> List String -> List CBind -> List String
+useSiteRebuilds _ _ _ [] = []
+useSiteRebuilds prog gid groupCaps (b::rest) =
+  let laterNames = map lgBindName rest
+  let hoistable = listLen groupCaps == 0 && not (anyOfList laterNames (freeVarsClauses [] b))
+  let here = if hoistable then
+    constLgClosure prog gid b
+  else
+    rebuildLgClosure prog gid groupCaps b
+  here ++ useSiteRebuilds prog gid groupCaps rest
+
+-- the hoisted-global form of rebuildLgClosure: same lifted code function, same arity,
+-- an empty env — read from one module global and stored into the member's local.
+constLgClosure : Prog -> Int -> CBind -> List String
+constLgClosure prog gid (CBind name clauses) = wConstClos (progEmit prog) "$mdk_lg\{intToString gid}_\{gname name}" (clauseArityOf clauses)
+  ++ ["local.set $" ++ gname name]
 
 -- P1: a CLetGroup member that is a nullary VALUE binding, not a local function.
 isLgValBind : CBind -> Bool

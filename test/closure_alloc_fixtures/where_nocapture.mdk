@@ -1,0 +1,22 @@
+-- WHERE, NO CAPTURE: helper is still a local `where` binding, but takes the
+-- invariant as a parameter so it closes over NOTHING from the enclosing scope.
+-- Distinguishes "where costs" from "capture costs".
+workWhere2 : Int -> Int
+workWhere2 lim = go lim 0 0
+  where
+    go l i acc
+      | i >= l = acc
+      | otherwise = go l (i + 1) (acc + i)
+
+loopWhere2 : Int -> Int -> Int -> Int -> Int
+loopWhere2 n k lim acc
+  | k >= n = acc
+  | lim >= 10 = loopWhere2 n (k + 1) 1 (acc + workWhere2 lim)
+  | otherwise = loopWhere2 n (k + 1) (lim + 1) (acc + workWhere2 lim)
+
+main =
+  let a0 = allocBytes ()
+  let r = loopWhere2 2000000 0 1 0
+  let a1 = allocBytes ()
+  println "where-nocapture result=\{debug r}"
+  println "where-nocapture allocBytes=\{debug (a1 - a0)}"

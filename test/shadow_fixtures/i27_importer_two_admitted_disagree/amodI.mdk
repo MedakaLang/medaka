@@ -1,0 +1,8 @@
+export interface IA a where
+  mth : a -> Int -> Int
+
+impl IA String where
+  mth s n = 55
+
+export af : Int -> Int
+af n = n

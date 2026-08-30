@@ -154,6 +154,33 @@ after the first** — the very first build on a machine is slightly slower than
 the old baseline (it pays the one-time cache-population cost), see the note
 under `## Table` above.
 
+### Capture-free closure allocation (capture-free-closures sprint, #2237)
+
+A separate finding from the same allocator-vs-collector framing above:
+`workFlat`/`workWhere`/`workWhere2`/`eta` probes
+(`test/closure_alloc_fixtures/`), 2,000,000 calls each, `allocBytes()`
+(`stdlib/runtime.mdk`, an extern backed by `GC_get_total_bytes()`), pinned
+`MEDAKA_STRICT=1`:
+
+| case | before (S-1/S-2's base, `b6d029cd`) | after (S-1+S-2) |
+|---|---:|---:|
+| top-level fn, invariant threaded explicitly (`flat`) | 32 B (baseline; one-time) | 32 B |
+| `where`-binding closing over nothing (`where-nocapture`) | 63,996,384 B (32 B × 2,000,000 calls) | 32 B |
+| top-level fn passed as a bare value in a tight loop (`eta`) | 63,996,384 B (32 B × 2,000,000 calls) | 32 B |
+
+**Verdict:** before S-1/S-2, a capture-free `where`-binding or an eta-closure
+allocated a fresh 32-byte closure cell on EVERY call, indistinguishable in
+cost from a genuinely capturing closure — capture was never the driver of
+the cost, allocating a closure cell at all was. S-1 (static-cell hoisting)
+and S-2 (eta-closure sweep) hoist the cell to a one-time constant global for
+the capture-free case, collapsing per-call cost to the same one-time 32 B as
+the flat baseline — a >2,000,000x reduction in bytes allocated for this
+workload shape. Pinned by `test/diff_compiler_closure_alloc.sh` (#2237,
+S-3), with a generous `< 10,000` byte threshold rather than an exact `32` so
+the gate isn't brittle to incidental allocator bookkeeping. Source
+measurements: the sprint's `reports/S-1-static-cell.md` §Evidence and
+`reports/S-2-capture-free-sweep.md` §Evidence (not part of the repo).
+
 ## Before / after this sprint
 
 Pre-sprint = S-1's original harness run, sha `93a40382` (before S-2's build-object

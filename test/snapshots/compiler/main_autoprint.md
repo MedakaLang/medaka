@@ -1,5 +1,5 @@
 # META
-source_lines=169
+source_lines=249
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/main_autoprint.mdk — shared composite-`main` auto-print wrap.
@@ -8,11 +8,15 @@ stages=DESUGAR,MARK
 -- `deriving Display` ADT, …) used to CRASH the emitter (`emitPrint` panics on a
 -- non-scalar `main`).  This module implements the uniform fix from
 -- compiler/COMPOSITE-MAIN-AUTOPRINT-DESIGN.md §10: rewrite the entry decl
---   main = <e>   ⟶   main = println <e>
--- (`println` renders via `display` → raw strings, `(a, b)` tuples, `[1, 2, 3]`
--- lists, derived ctors) so the value flows through the ordinary polymorphic print
--- path every backend already compiles.  The wrapped `main : <IO> Unit` suppresses
--- the emitter's own scalar auto-print (installMainIsUnitHint True), so a value is
+--   main = <e>   ⟶   main = 0autoprintln <e>
+-- where `0autoprintln` is the PRELUDE's own `println` declaration re-bound under
+-- a name no user program can spell (`autoPrintPinCore`; `display` renders → raw
+-- strings, `(a, b)` tuples, `[1, 2, 3]` lists, derived ctors).  See
+-- `autoPrintPinCore`'s own comment for why no SPELLING of this call — `println`,
+-- or `putStrLn (display …)` — can be safe (#2185, and its F1/F2 recurrence)
+-- so the value flows through the ordinary polymorphic print path every
+-- backend already compiles.  The wrapped `main : <IO> Unit` suppresses the
+-- emitter's own scalar auto-print (installMainIsUnitHint True), so a value is
 -- printed exactly ONCE.
 --
 -- SCOPE / re-mint safety: the wrap fires ONLY on a bare zero-arg non-Unit/non-Async
@@ -57,7 +61,7 @@ findMainParams ((DFunDef _ "main" ps _)::_) = Some ps
 findMainParams (_::rest) = findMainParams rest
 
 -- True iff a top-level `println` binding is in scope (defined by the prelude).
--- The wrap rewrites `main = <e>` → `main = println <e>`, so it MUST NOT fire when
+-- The wrap re-binds THAT declaration (`autoPrintPinCore`), so it MUST NOT fire when
 -- `println` is undefined — e.g. the emit gates that pass an EMPTY core prelude
 -- (test/diff_compiler_llvm_modules.sh) to exercise the emitter's own scalar
 -- auto-print.  A real `medaka build` always passes core.mdk (which defines
@@ -84,7 +88,7 @@ shouldAutoPrintMain coreDecls modules =
         _ => False
 
 -- True iff the decl is `main`'s explicit type signature (`main : T`), possibly
--- @attr-wrapped.  When the wrap fires the body becomes `main = println <e>`
+-- @attr-wrapped.  When the wrap fires the body becomes `main = 0autoprintln <e>`
 -- (: `<IO> Unit`), so a stale explicit `main : <non-Unit>` sig would make the
 -- re-check report a `<non-Unit> vs Unit` mismatch → empty IR → build failure.
 -- The wrap drops it (the signature was only ever consulted to detect the
@@ -94,8 +98,9 @@ isMainTypeSig (DAttrib _ d) = isMainTypeSig d
 isMainTypeSig (DTypeSig _ "main" _) = True
 isMainTypeSig _ = False
 
--- Rewrite the entry module's `main = <e>` decl to `main = println <e>`, and drop
--- any explicit `main : T` signature (now stale — see isMainTypeSig).
+-- Rewrite the entry module's `main = <e>` decl to `main = 0autoprintln <e>`, and
+-- drop any explicit `main : T` signature (now stale — see isMainTypeSig).
+-- ⚠️ The caller MUST pair this with `autoPrintPinCore` on the core decl list.
 export
 autoPrintWrapModules : List (String, List Decl) -> List (String, List Decl)
 autoPrintWrapModules [] = []
@@ -109,14 +114,89 @@ wrapMainDecl (DFunDef vis "main" [] body) =
 wrapMainDecl (DAttrib a d) = DAttrib a (wrapMainDecl d)
 wrapMainDecl d = d
 
--- `main = <e>` → `main = println <e>`, re-attaching the body's own source span
--- (its outer `ELoc`, from `parseLocated`) around the synthetic application so the
--- auto-print Display obligation reports AT the main body — not at `{0,0}` — on the
--- check/LSP path (underivedMainDiags).  `ELoc` is transparent to every backend, so
--- the emitted IR is unchanged.  An un-located body (plain `parse`) wraps bare.
+-- The auto-print wrap's own entry point: an UNSPELLABLE name under which the
+-- prelude's own `println` declaration is re-bound (see `autoPrintPinCore`).  A
+-- Medaka identifier can never begin with a digit, so no user declaration — top
+-- level, interface method, or local — can be spelled this way, which is what
+-- makes a reference to it uncapturable rather than merely unlikely to be
+-- captured.  (`sanitizeId` is applied to the MODULE id, not the name, so this
+-- reaches the backends verbatim as the tail of `mdk_<core>__0autoprintln`;
+-- digits are legal there, unlike `#`/`$`.)
+export
+autoPrintPinName : String
+autoPrintPinName = "0autoprintln"
+
+-- Re-bind the PRELUDE's own `println` under `autoPrintPinName`, by COPYING its
+-- declarations out of the core decl list the caller already holds.
+--
+-- 🚨 #2185 / F1 / F2 — WHY A PRELUDE-SIDE RE-BINDING AND NOT A RESPELLING.
+-- Slice 1 "fixed" #2185 by respelling the wrap from `EVar "println"` to
+-- `EApp (EVar "putStrLn") (EApp (EVar "display") …)`.  Both spellings are bare
+-- `EVar`s synthesized INTO THE ENTRY MODULE, and every bare name synthesized
+-- there is resolved against the ENTRY MODULE's scope — where a user's own
+-- `interface Ifc c where display : c -> String` outranks the prelude's `Display`
+-- (`ownMethodIdent`, `overrideScopedMethods` in `compiler/types/typecheck.mdk`:
+-- an OWN declaration wins outright).  So the identical S0 simply moved from
+-- `println` to `display`, a name users declare constantly, plus an S1 false
+-- reject (`No impl of Ifc for Int`) on a program that declares such an
+-- interface and never implements it.  There is no safe SPELLING; the wrap has
+-- to stop resolving in the user's scope at all.
+--
+-- MEASURED (the discriminator this fix is built on): a user-written
+-- `main = println 7` beside `interface Ifc c where display : c -> String` +
+-- `impl Ifc Int` prints `7`, not `HIJACKED` — the prelude's `println` body
+-- (`putStrLn (display x)`, stdlib/core.mdk) resolves its `display` in the
+-- PRELUDE's scope, where `Display` is the one own declaration and no user
+-- interface can outrank it.  Only the synthesized occurrence was ever broken.
+--
+-- So the wrap now denotes THAT declaration: this copies the prelude's
+-- `println : Display a => a -> <IO> Unit` signature and body verbatim under an
+-- unspellable name and appends them to the core decl list, and `wrapPrintln`
+-- emits `EVar autoPrintPinName`.  The copied body is a PRELUDE decl, so its
+-- `display`/`putStrLn` are prelude-scoped exactly as `println`'s own are, and
+-- the reference cannot be captured because the name cannot be declared.  No
+-- name the wrap synthesizes is resolved in user scope any more — including
+-- `putStrLn`, whose (narrower) capture vector goes with it.
+--
+-- Verbatim copies, not a hand-built AST: the signature carries the constraint
+-- that puts the name in `markWith`'s `constrained` set (so the occurrence marks
+-- `EDictApp`, precisely as `println`'s own occurrences do) and no second
+-- spelling of `Display a => a -> <IO> Unit` is minted that could drift from the
+-- prelude's.
+--
+-- Fires ONLY when the wrap fires (`shouldAutoPrintMain`, which already requires
+-- `definesPrintln`), so a program with a Unit/Async/function `main` — the
+-- compiler's own graph included — gets an unchanged core decl list and the
+-- self-compile fixpoint is untouched.
+export
+autoPrintPinCore : List Decl -> List Decl
+autoPrintPinCore coreDecls = coreDecls ++ pinnedPrintlnDecls coreDecls
+
+pinnedPrintlnDecls : List Decl -> List Decl
+pinnedPrintlnDecls [] = []
+pinnedPrintlnDecls ((DAttrib _ d)::rest) = pinnedPrintlnDecls (d::rest)
+pinnedPrintlnDecls ((DTypeSig pub "println" ty)::rest) =
+  DTypeSig pub autoPrintPinName ty :: pinnedPrintlnDecls rest
+pinnedPrintlnDecls ((DFunDef pub "println" ps body)::rest) =
+  DFunDef pub autoPrintPinName ps body :: pinnedPrintlnDecls rest
+pinnedPrintlnDecls (_::rest) = pinnedPrintlnDecls rest
+
+-- `main = <e>` → `main = 0autoprintln <e>`, re-attaching the body's own source
+-- span (its outer `ELoc`, from `parseLocated`) around the synthetic application
+-- so the auto-print Display obligation reports AT the main body — not at
+-- `{0,0}` — on the check/LSP path (underivedMainDiags).  `ELoc` is transparent
+-- to every backend, so the emitted IR is unchanged.  An un-located body (plain
+-- `parse`) wraps bare.
+--
+-- The callee is the prelude's own `println` declaration re-bound under an
+-- unspellable name — see `autoPrintPinCore` above for why no SPELLING of this
+-- call (`println`, or `putStrLn (display …)`) can be safe.  Every caller that
+-- calls `autoPrintWrapModules` MUST also pass `autoPrintPinCore coreDecls` as
+-- the core decl list, or the name is unbound.
 wrapPrintln : Expr -> Expr
-wrapPrintln (ELoc l inner) = ELoc l (EApp (EVar "println") (ELoc l inner))
-wrapPrintln body = EApp (EVar "println") body
+wrapPrintln (ELoc l inner) =
+  ELoc l (EApp (EVar autoPrintPinName) (ELoc l inner))
+wrapPrintln body = EApp (EVar autoPrintPinName) body
 
 -- Re-run the CHECK gate on the wrapped program to surface an underived-ADT main
 -- as the clean `No impl of Display …` type error.  Gated to a SINGLE loaded
@@ -202,9 +282,19 @@ underivedMainDiags _ _ _ = []
 (DFunDef false "wrapMainDecl" ((PCon "DFunDef" (PVar "vis") (PLit (LString "main")) (PList) (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "vis")) (ELit (LString "main"))) (EListLit)) (EApp (EVar "wrapPrintln") (EVar "body"))))
 (DFunDef false "wrapMainDecl" ((PCon "DAttrib" (PVar "a") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "a")) (EApp (EVar "wrapMainDecl") (EVar "d"))))
 (DFunDef false "wrapMainDecl" ((PVar "d")) (EVar "d"))
+(DTypeSig true "autoPrintPinName" (TyCon "String"))
+(DFunDef false "autoPrintPinName" () (ELit (LString "0autoprintln")))
+(DTypeSig true "autoPrintPinCore" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
+(DFunDef false "autoPrintPinCore" ((PVar "coreDecls")) (EBinOp "++" (EVar "coreDecls") (EApp (EVar "pinnedPrintlnDecls") (EVar "coreDecls"))))
+(DTypeSig false "pinnedPrintlnDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
+(DFunDef false "pinnedPrintlnDecls" ((PList)) (EListLit))
+(DFunDef false "pinnedPrintlnDecls" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "pinnedPrintlnDecls") (EBinOp "::" (EVar "d") (EVar "rest"))))
+(DFunDef false "pinnedPrintlnDecls" ((PCons (PCon "DTypeSig" (PVar "pub") (PLit (LString "println")) (PVar "ty")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EVar "DTypeSig") (EVar "pub")) (EVar "autoPrintPinName")) (EVar "ty")) (EApp (EVar "pinnedPrintlnDecls") (EVar "rest"))))
+(DFunDef false "pinnedPrintlnDecls" ((PCons (PCon "DFunDef" (PVar "pub") (PLit (LString "println")) (PVar "ps") (PVar "body")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "autoPrintPinName")) (EVar "ps")) (EVar "body")) (EApp (EVar "pinnedPrintlnDecls") (EVar "rest"))))
+(DFunDef false "pinnedPrintlnDecls" ((PCons PWild (PVar "rest"))) (EApp (EVar "pinnedPrintlnDecls") (EVar "rest")))
 (DTypeSig false "wrapPrintln" (TyFun (TyCon "Expr") (TyCon "Expr")))
-(DFunDef false "wrapPrintln" ((PCon "ELoc" (PVar "l") (PVar "inner"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "println")))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EVar "inner")))))
-(DFunDef false "wrapPrintln" ((PVar "body")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "println")))) (EVar "body")))
+(DFunDef false "wrapPrintln" ((PCon "ELoc" (PVar "l") (PVar "inner"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EVar "autoPrintPinName"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EVar "inner")))))
+(DFunDef false "wrapPrintln" ((PVar "body")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EVar "autoPrintPinName"))) (EVar "body")))
 (DTypeSig true "underivedMainDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "TcDiag"))))))
 (DFunDef false "underivedMainDiags" ((PVar "runtimeDecls") (PVar "coreDecls") (PList (PTuple (PVar "mid") (PVar "entryDecls")))) (EBlock (DoLet false false PWild (EApp (EVar "setCoherenceUserDecls") (EVar "entryDecls"))) (DoLet false false (PTuple (PVar "tcErrs") PWild) (EApp (EApp (EApp (EVar "checkOneDiagsSynthetic") (EVar "runtimeDecls")) (EVar "coreDecls")) (ETuple (EVar "mid") (EVar "entryDecls")))) (DoExpr (EVar "tcErrs"))))
 (DFunDef false "underivedMainDiags" (PWild PWild PWild) (EListLit))
@@ -239,9 +329,19 @@ underivedMainDiags _ _ _ = []
 (DFunDef false "wrapMainDecl" ((PCon "DFunDef" (PVar "vis") (PLit (LString "main")) (PList) (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "vis")) (ELit (LString "main"))) (EListLit)) (EApp (EVar "wrapPrintln") (EVar "body"))))
 (DFunDef false "wrapMainDecl" ((PCon "DAttrib" (PVar "a") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "a")) (EApp (EVar "wrapMainDecl") (EVar "d"))))
 (DFunDef false "wrapMainDecl" ((PVar "d")) (EVar "d"))
+(DTypeSig true "autoPrintPinName" (TyCon "String"))
+(DFunDef false "autoPrintPinName" () (ELit (LString "0autoprintln")))
+(DTypeSig true "autoPrintPinCore" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
+(DFunDef false "autoPrintPinCore" ((PVar "coreDecls")) (EBinOp "++" (EVar "coreDecls") (EApp (EVar "pinnedPrintlnDecls") (EVar "coreDecls"))))
+(DTypeSig false "pinnedPrintlnDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
+(DFunDef false "pinnedPrintlnDecls" ((PList)) (EListLit))
+(DFunDef false "pinnedPrintlnDecls" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "pinnedPrintlnDecls") (EBinOp "::" (EVar "d") (EVar "rest"))))
+(DFunDef false "pinnedPrintlnDecls" ((PCons (PCon "DTypeSig" (PVar "pub") (PLit (LString "println")) (PVar "ty")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EVar "DTypeSig") (EVar "pub")) (EVar "autoPrintPinName")) (EVar "ty")) (EApp (EVar "pinnedPrintlnDecls") (EVar "rest"))))
+(DFunDef false "pinnedPrintlnDecls" ((PCons (PCon "DFunDef" (PVar "pub") (PLit (LString "println")) (PVar "ps") (PVar "body")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "autoPrintPinName")) (EVar "ps")) (EVar "body")) (EApp (EVar "pinnedPrintlnDecls") (EVar "rest"))))
+(DFunDef false "pinnedPrintlnDecls" ((PCons PWild (PVar "rest"))) (EApp (EVar "pinnedPrintlnDecls") (EVar "rest")))
 (DTypeSig false "wrapPrintln" (TyFun (TyCon "Expr") (TyCon "Expr")))
-(DFunDef false "wrapPrintln" ((PCon "ELoc" (PVar "l") (PVar "inner"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "println")))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EVar "inner")))))
-(DFunDef false "wrapPrintln" ((PVar "body")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "println")))) (EVar "body")))
+(DFunDef false "wrapPrintln" ((PCon "ELoc" (PVar "l") (PVar "inner"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EVar "autoPrintPinName"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EVar "inner")))))
+(DFunDef false "wrapPrintln" ((PVar "body")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EVar "autoPrintPinName"))) (EVar "body")))
 (DTypeSig true "underivedMainDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "TcDiag"))))))
 (DFunDef false "underivedMainDiags" ((PVar "runtimeDecls") (PVar "coreDecls") (PList (PTuple (PVar "mid") (PVar "entryDecls")))) (EBlock (DoLet false false PWild (EApp (EVar "setCoherenceUserDecls") (EVar "entryDecls"))) (DoLet false false (PTuple (PVar "tcErrs") PWild) (EApp (EApp (EApp (EVar "checkOneDiagsSynthetic") (EVar "runtimeDecls")) (EVar "coreDecls")) (ETuple (EVar "mid") (EVar "entryDecls")))) (DoExpr (EVar "tcErrs"))))
 (DFunDef false "underivedMainDiags" (PWild PWild PWild) (EListLit))

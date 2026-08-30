@@ -1,0 +1,20 @@
+-- ETA: a named top-level function passed as a bare VALUE (not applied directly)
+-- on every iteration of a tight loop -- exercises emitEtaClosure's per-call
+-- closure-cell allocation path (S-2 target).
+addOne : Int -> Int
+addOne x = x + 1
+
+apply1 : (Int -> Int) -> Int -> Int
+apply1 f x = f x
+
+loop : Int -> Int -> Int
+loop n acc
+  | n <= 0 = acc
+  | otherwise = loop (n - 1) (apply1 addOne acc)
+
+main =
+  let a0 = allocBytes ()
+  let r = loop 2000000 0
+  let a1 = allocBytes ()
+  println "eta result=\{debug r}"
+  println "eta allocBytes=\{debug (a1 - a0)}"

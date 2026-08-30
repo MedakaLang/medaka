@@ -1,0 +1,24 @@
+-- X15 (fix-round F2, S1) x14's NO-IMPL sibling, and x13's `display` twin: the
+-- same `Ifc` interface declares a method literally named `display`, but NO impl
+-- exists anywhere and nothing ever calls it. Declaring an unimplemented,
+-- uncalled interface must cost a program nothing.
+--
+-- MEASURED ON THE SPRINT HEAD a17281e6 (cold-built in this worktree,
+-- MEDAKA_STRICT=1): check/build REJECT (exit 1) with `No impl of Ifc for Int`
+-- -- slice 1's respelled wrap synthesized a `display` occurrence into THIS
+-- module, where the user's own declaration outranks the prelude's `Display`, so
+-- the compiler demanded an impl of an interface the program never uses. A
+-- FALSE REJECT of a program that builds clean at b6d029cd (S1): the respelling
+-- did not merely move the S0 of x12, it also added this loud break at the
+-- shape x13 pins for `println`.
+--
+-- FIXED shape: the wrap resolves no name in the user's scope at all
+-- (`autoPrintPinCore`, compiler/driver/main_autoprint.mdk), so `Ifc` is never
+-- consulted -- check/build must ACCEPT and the built binary must print 7.
+-- `run` REJECTs BY DESIGN regardless (#1681, mirrors x7/x11/x12/x13/x14: a
+-- non-Unit VALUE main) -- graded BUILD_EXACT for the same reason. Value
+-- hand-derived from the literal `main = 7`, not captured.
+interface Ifc c where
+  display : c -> Int
+
+main = 7

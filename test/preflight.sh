@@ -569,7 +569,16 @@ for f in $changed; do
       # S-arity-census: derives call/define arity skew from emitted LLVM IR —
       # typecheck.mdk's usesImplDict decides whether a dict param exists at all
       # (the #1648 half), so a types/* change can move it without touching backend/*.
-      add 'diff_compiler_call_arity' ;;
+      add 'diff_compiler_call_arity'
+      # #2186: a compiler/types/* change can silently drain a must-fail pin
+      # (an ill-typed program that used to be rejected starts being accepted)
+      # without touching diff_compiler_must_fail.sh's own sources or corpus
+      # (test/gates.toml's row keys it to test/diff_compiler_must_fail.sh and
+      # test/must_fail_fixtures only) — so gates.toml's corpus-membership
+      # mapping under-selects it and a local preflight run misses the exact
+      # defect class this arm exists to catch. Q1's incidental drain reaching
+      # the review round undetected by a local run is the concrete incident.
+      add 'diff_compiler_must_fail' ;;
 
     # ── THE THREE ENGINES ─────────────────────────────────────────────────────
     #

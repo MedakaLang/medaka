@@ -1,0 +1,29 @@
+-- I28 (#2188) S2-DECL (d) bullet 2 -- TWO admitted declarations that AGREE.
+-- The module graph is the recovered #1664 corpus VERBATIM (amodI/zmodI/fmodI copied from
+-- `git show 23472016^:test/must_fail_fixtures/1664-decl-agreeing-both-admitted/`, the pin
+-- that was drained and deleted 2026-08-29); this entry is that fixture's own `main.mdk`
+-- with its #1664-specific header replaced.
+--
+-- Both `IA` and `IZ` are admitted (each is named in its OWN import clause, so S1-NS (a)'s
+-- TYPE arm admits both), and both denote the SAME thing:
+--   * `IA.mth : a -> Int -> Int` dispatches at argument 0, head String -- and amodI
+--     declares NO `impl IA String`, so IA falls to the imported standalone.
+--   * `IZ.mth : Int -> b -> Int` dispatches at argument 1, head Int -- and no
+--     `impl IZ Int` exists anywhere, so IZ falls to the imported standalone too.
+-- Two admitted, one denotation => (d) bullet 2, ACCEPT, and the denotation is
+-- `fmodI.mth = 99`. VALUE HAND-DERIVED from the declared signatures, and independently
+-- derived first-hand by the deleted pin's own claim.txt before this fixture existed.
+--
+-- ⚠️ `impl IZ String` IS IN THE GRAPH and must stay: its body returns 7, which is
+-- NEITHER declaration's denotation here. A 7 on any verb is the S2-DECL (c) violation
+-- #1664 pinned (an impl answering a query it was never asked), not a value drift.
+-- `fmodI.mth` is the load-bearing standalone shadow -- without it `mth` is not a shadow
+-- at all and none of this machinery is reached.
+--
+-- The order-swapped companion pins S2-DECL (e): this cell must not move when the two
+-- interface import clauses are swapped.
+import fmodI.{mth}
+import amodI.{IA, af}
+import zmodI.{IZ, zf}
+
+main = println (mth "abc" 5 + af 0 + zf 0)

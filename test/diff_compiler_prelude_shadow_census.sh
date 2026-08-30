@@ -61,11 +61,15 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 pass=0; fail=0; asserts=0
 
-# Derive the standalone top-level function names from stdlib/core.mdk: an
-# `export` line ALONE on its own line, immediately followed by a
-# `name : type` signature line. `export interface`/`export impl`/`export
-# data` all put that keyword on the SAME line as `export`, so this pattern
-# only ever matches a standalone function/value declaration.
+# Derive the standalone top-level function names from stdlib/core.mdk, in
+# either of two shapes: (1) an `export` line ALONE on its own line,
+# immediately followed by a `name : type` signature line, or (2) the
+# single-line form `export name : type`. `export interface`/`export impl`/
+# `export data` all put that keyword directly followed by something other
+# than `name :` (an interface/impl/type name with no colon right after it),
+# so neither pattern ever matches those. #2187: the coverage self-audit
+# below reuses this SAME derivation, so a name only one of the two shapes
+# could reach still had to be recognized HERE, not patched over downstream.
 names="$(awk '
 {
   if (prevWasExport==1) {
@@ -77,7 +81,12 @@ names="$(awk '
     prevWasExport=0
   }
   t=$0; gsub(/^[ \t]+|[ \t]+$/,"",t)
-  if (t=="export") prevWasExport=1
+  if (t=="export") { prevWasExport=1; next }
+  if (t ~ /^export[ \t]+[a-zA-Z_][A-Za-z0-9_'"'"']*[ \t]*:/) {
+    rest=t; sub(/^export[ \t]+/,"",rest)
+    match(rest, /^[a-zA-Z_][A-Za-z0-9_'"'"']*/)
+    print substr(rest, RSTART, RLENGTH)
+  }
 }' "$CORE")"
 
 # --- Coverage self-audit (both directions), same shape as
