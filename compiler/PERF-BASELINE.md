@@ -152,7 +152,28 @@ rt-object cache turns every build after the first into a cache hit instead of
 a full inline `medaka_rt.c` recompile, **1.59s → 0.80s (2.0x) on every build
 after the first** — the very first build on a machine is slightly slower than
 the old baseline (it pays the one-time cache-population cost), see the note
-under `## Table` above.
+under `## Table` above and "The first-ever build" under the targets section.
+
+**Cache design RATIFIED 2026-08-30 (Val), three decisions:**
+
+1. **ON by default** — the steady-state 2.0x win outweighs the ~0.1–0.3s the
+   first-ever build gives up. See "The first-ever build" for the argument and
+   the rejected alternative.
+2. **Per-USER, shared across projects**, at `$MEDAKA_CACHE_DIR` →
+   `$XDG_CACHE_HOME/medaka` → `$HOME/.cache/medaka`. The object is a pure
+   function of `medaka_rt.c` × the C compiler × the flags — identical for every
+   project on the machine — so a per-project `.medaka/` would store N identical
+   copies and litter user repositories for no benefit. Follows XDG convention.
+3. **A cache HIT is sanity-checked before it is trusted** (#2233 item 2,
+   `rtObjUsable` in `compiler/driver/build_cmd.mdk`). `medaka_rt.c` owns
+   `int main`, so an object that does not define it is unusable whatever its
+   size; a crash mid-writeback used to leave such an object in place and fail
+   the NEXT build with `undefined reference to 'main'`, an error pointing
+   nowhere near the cache and with no self-repair. A rejected entry is now
+   recompiled over, so it self-heals. Fail-open in both directions: a box with
+   no `nm` ACCEPTS (rejecting would silently disable the cache there).
+   ⚠️ Eviction and a `medaka cache clear` verb remain unbuilt — the other half
+   of #2233, deliberately not ratified as release-required.
 
 ### Capture-free closure allocation (capture-free-closures sprint, #2237)
 
@@ -344,43 +365,91 @@ per-module repeat of the prelude cost would be obvious in this data and is not p
 correct reading, per S-3's own edit to #983, is "3x per invocation" (confirmed, partially
 fixed — 2 of 3 typechecks remain per this sprint's contract scope), not "3x per module."
 
-## Proposed per-verb targets — UNCONFIRMED, PENDING VAL
+## Per-verb targets — RATIFIED 2026-08-30 (Val)
 
-No target for any verb has been agreed by Val as of this writing (see #2040's
-acceptance: "a stated target per verb, agreed BEFORE the run" — that agreement
-has not happened, so #2040 stays open/re-scoped rather than closing; see the
-issue drafts below). What follows is a **proposal**, not a decision: rationale
-per verb, derived from what a user visibly waits on, plus a verdict against
-the post-sprint numbers above so the shape of a miss is visible now rather
-than after confirmation.
+**These are agreed targets, not a proposal.** Ratified by Val on 2026-08-30,
+discharging #2040's acceptance ("a stated target per verb"). Seven were adopted
+as proposed; two were TIGHTENED at ratification — see "What changed at
+ratification" below.
+
+**Three rules were settled with them, and they govern how every row here is
+read:**
+
+1. **The bar is `warm`. `cold` is recorded, not graded.** Warm is the edit loop
+   — the number a user meets hundreds of times a day — so it is what a target
+   binds. `cold` stays in the Table above as evidence, and a cold regression is
+   a finding worth chasing, but it is not a target miss.
+2. **A target is a documented bar, checked by hand at release — NOT a gate.**
+   Wall-clock cannot gate in CI: that is #1879 (this box and CI disagreeing on
+   the same commit) and the whole reason this epic moved to `Ir` as its primary
+   metric. Any verb whose floor we want actually ENFORCED needs an absolute `Ir`
+   ceiling, the way `prelude-floor` S-5 built one for the hello-world `check`
+   floor. Writing a wall-clock number here that no machine reads is a bar, and
+   this section says so rather than implying otherwise.
+3. **A target with 2x+ headroom is a formality, not a bar** — see the two
+   tightenings below.
 
 **Re-measured by S-4 on the post-S-1..S-3 (+ resync) binary, sha `ce504eee`** — the
 `post-sprint` column and verdicts below supersede the numbers an earlier slice recorded
 before the sprint branch was resynced onto `origin/main`; targets/rationale are unchanged.
 
-| verb | workload | proposed target (warm) | rationale | post-sprint | verdict |
+| verb | workload | target (warm) | rationale | post-sprint | verdict |
 |---|---|---|---|---:|---|
 | `new` | either | < 0.1s | scaffolding a project must feel instantaneous; both workloads already 10x under this | 0.01s | **HIT** |
-| `check` | hello | < 0.25s | the inner edit-loop floor; S-3 found ~98% of this is prelude parse/typecheck redundancy, a fixed cost independent of program size — 0.25s leaves headroom above that floor without hiding it | 0.10s | **HIT** |
+| `check` | hello | **< 0.15s** (tightened from < 0.25s) | the inner edit-loop floor. The 0.25s proposal was drafted against the PRE-sprint floor (0.21s); `prelude-floor` then halved it to 0.10s, leaving 2.5x slack — enough to give the entire prelude win back and still show green. 0.15s keeps ~1.5x working headroom over the measured floor while actually protecting what was paid for | 0.10s | **HIT** |
 | `check` | project | < 0.5s | "the one people compare against other languages" (#2040) on a 0.1.0-scale (3.6k line) project; chosen as roughly 2x the hello floor, since a 9-file project pays multi-module loader/resolve cost hello does not | 0.47s warm / 0.50s cold | **HIT (warm); at boundary (cold)** |
-| `build` | hello | < 1.0s | clang-bound (#2040); post-cache this is now typecheck+emit+one clang invocation on a tiny .c+.ll pair | 0.83s | **HIT** |
+| `build` | hello | < 1.0s **(warm rt-object cache)** | clang-bound (#2040); post-cache this is now typecheck+emit+one clang invocation on a tiny .c+.ll pair. ⚠️ **Explicitly a warm-cache target** — a genuinely first-ever build (empty cache) costs ~1.7–1.9s and does NOT meet it; see "The first-ever build" below | 0.83s | **HIT (warm cache)** |
 | `build` | project | < 2.0s | scaling the hello target by workload size the same way `check` does; `build` is clang-bound so this is more clang-time-dependent than compiler-controlled | 1.73s | **HIT** |
 | `run` | hello | < 0.2s | interpreter path, same order as `check` hello since both share the front end and `run` skips clang entirely | 0.13s | **HIT** |
 | `run` | project | < 0.7s | scaled the same way as `check project` | 0.56s | **HIT** |
-| `test` | hello | < 0.2s | doctests+props over a near-empty file; dominated by the same prelude floor as `check` | 0.10s | **HIT** |
+| `test` | hello | **< 0.15s** (tightened from < 0.2s) | doctests+props over a near-empty file; dominated by the same prelude floor as `check`, so it inherits `check`/hello's tightening for the same reason — 2x slack at 0.10s measured | 0.10s | **HIT** |
 | `test` | project | < 0.4s | scaled the same way as `check project` | 0.33s | **HIT** |
 
-**The one prior miss, `check`/`project`, is now resolved to a HIT on `warm` (0.47s vs a
-proposed 0.5s target) and sits exactly at the boundary on `cold` (0.50s).** This is S-1/S-3's
-memoization discharging #2235 in the ordinary case (warm cache/second+ invocation, the
-normal edit-loop shape); the `cold` column is the very first check of a session and is
-inherently noisier (this harness's own caveat: page-cache-cold-ish, not `drop_caches`-cold).
-**All nine measured cells now read HIT or at-boundary** against the proposed targets — no
-named miss remains to carry forward as a Wave 2 item from this table. This does NOT mean
-#2040 is discharged: the before/after table above shows `build`/`run`/`test` improved little
-or not at all on the `project` workload (the redundant-prelude fix reached only `check`'s
-call sites), so their current HITs reflect the *original* (pre-sprint) targets being
-comfortably loose, not a sprint win on those verbs specifically.
+**The one prior miss, `check`/`project`, is a HIT on `warm` (0.47s vs the 0.5s target) and
+sits exactly at the boundary on `cold` (0.50s).** Under ratification rule 1 the `warm` figure
+is the graded one, so this is a HIT — but at 1.06x it is the ONLY target on this table without
+comfortable slack, and the first place to look if `check` ever regresses. This is S-1/S-3's
+memoization discharging #2235 in the ordinary case (warm cache/second+ invocation, the normal
+edit-loop shape); the `cold` column is the very first check of a session and is inherently
+noisier (this harness's own caveat: page-cache-cold-ish, not `drop_caches`-cold).
+
+### What changed at ratification
+
+Seven targets were adopted exactly as proposed. Two were **tightened**, both for the same
+reason: they were drafted against the pre-sprint floor, `prelude-floor` then halved that floor,
+and the untightened numbers would have let the entire prelude win be given back while still
+reading green.
+
+| verb | workload | proposed | ratified | measured | slack that would have remained |
+|---|---|---|---|---:|---|
+| `check` | hello | < 0.25s | **< 0.15s** | 0.10s | 2.5x |
+| `test` | hello | < 0.2s | **< 0.15s** | 0.10s | 2.0x |
+
+⚠️ **All nine cells read HIT, and that is a weaker statement than it looks.** The before/after
+table above shows `build`/`run`/`test` improved little or not at all on the `project` workload
+— the redundant-prelude fix reached only `check`'s call sites (#2234's unfixed half). Their
+HITs therefore reflect targets that are comfortably loose on those verbs, **not** a sprint win
+on them. Do not read this table as "the latency work is done."
+
+### The first-ever build
+
+`build`'s target is explicitly a **warm-rt-object-cache** target, and the distinction matters
+because it is the one place this epic's own standard ("judged in the first five minutes") and
+its measurements point in opposite directions:
+
+| `build` hello | wall |
+|---|---:|
+| genuinely first-ever (empty cache) | **~1.7–1.9s** |
+| pre-sprint, no cache at all | ~1.6s |
+| every build after the first (the target's subject) | **0.83s** |
+
+The rt-object cache made the *first* build slightly slower — it pays one-time cache population
+on top of the old inline compile — and every subsequent build roughly twice as fast.
+**Ratified deliberately (Val, 2026-08-30): the cache stays ON by default**, because nobody
+builds exactly once, and the steady-state win is the larger effect by far. What is NOT accepted
+is stating `< 1.0s` without that qualifier, which would imply a first-time user meets a bar
+they miss by ~2x. If the first impression is later judged worth protecting, the lever is
+populating the cache during `medaka new` or at install time — **not** disabling the cache.
 ## LSP editor-loop latency (#2040 residual, #962)
 
 First committed numbers for the two editor-loop metrics #2040 names
