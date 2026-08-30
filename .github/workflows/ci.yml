@@ -93,9 +93,10 @@ jobs:
   #
   # ⚠️ THE RULE: `test/**` is NEVER docs (it holds functional goldens, not prose —
   # a naive `**.md` filter would skip the gates that exist to catch a bad golden
-  # re-cut). `docs/spec/SYNTAX.md` is likewise never docs — it is an executable
-  # spec that `check_syntax_examples.sh` runs, and shipped false for months once
-  # while nothing checked it. Both arms must come first in the case below.
+  # re-cut). `docs/spec/SYNTAX.md` and `docs/guide/*.md` are likewise never docs
+  # — they are executable documentation that `check_syntax_examples.sh` runs,
+  # and shipped false for months once while nothing checked them. These arms
+  # must come first in the case below.
   # Everything else ending in `.md` is prose. Scoped to the `.md` EXTENSION on
   # purpose — `.claude/`/`compiler/`/`runtime/` also hold executable non-`.md`
   # files that must fall through to the catch-all as NOT docs.
@@ -231,8 +232,9 @@ jobs:
               # test/ is NEVER docs — this arm must stay first. See the job header.
               test/*) nondoc "$f" ;;
 
-              # SYNTAX.md is an executable spec, not prose. See the job header.
+              # Syntax references and guide chapters are executable docs, not prose.
               docs/spec/SYNTAX.md) nondoc "$f" ;;
+              docs/guide/*.md) nondoc "$f" ;;
 
               docs/*) : ;;
               LICENSE|LICENSE.*) : ;;

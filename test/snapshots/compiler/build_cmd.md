@@ -1,5 +1,5 @@
 # META
-source_lines=1108
+source_lines=1086
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/build_cmd.mdk — `medaka build` ported to self-hosted Medaka
@@ -28,7 +28,8 @@ stages=DESUGAR,MARK
 -- unemittable construct → `panic: … gap …`) or empty IR aborts the build with
 -- the emitter's own diagnostic surfaced.
 
-import support.util.{reverseL, stringTrim, joinWith}
+import support.util.{stringTrim, joinWith}
+import string.{words}
 import support.timer.{perfEnabled, now, emitPhase}
 import driver.loader.{entrySearchRoots, findProjectRootOrSelf, readForeignLibs}
 import support.path.{dirOf, chopExt, joinPath}
@@ -49,29 +50,6 @@ public export data BuildTarget = TNative | TWasm
 appendNote : String -> BuildResult -> BuildResult
 appendNote note (BuildOk m) = BuildOk (m ++ note)
 appendNote note (BuildErr m) = BuildErr (m ++ note)
-
--- ---- small string helpers (externs only — keeps this module self-contained) ----
-
--- Strip leading/trailing ASCII whitespace: stringTrim (from support/util.mdk).
-
-isWS : String -> Bool
-isWS c = c == " " || c == "\n" || c == "\t" || c == "\r"
-
--- Split a whitespace-separated flag string into a list of non-empty tokens.
-splitWS : String -> List String
-splitWS s = splitWSGo (stringTrim s) 0 0 []
-
-splitWSGo : String -> Int -> Int -> List String -> List String
-splitWSGo s i start acc =
-  let n = stringLength s
-  if i >= n then if i > start then reverseL (stringSlice start i s :: acc) else reverseL acc
-  else
-    if isWS (stringSlice i (i + 1) s) then
-      let acc2 = if i > start then stringSlice start i s :: acc else acc
-      splitWSGo s (i + 1) (i + 1) acc2
-    else splitWSGo s (i + 1) start acc
-
--- dirname / basename / chop-extension / join now live in support/path.mdk.
 
 -- ---- environment / asset resolution ----
 
@@ -246,7 +224,7 @@ sweepStaleTempDirs _ =
     "+360",
   ]
   match runCommand "find" findArgs
-    Ok (_, out, _) => sweepEachStale (splitWS out)
+    Ok (_, out, _) => sweepEachStale (words out)
     Err _ => ()
 
 sweepEachStale : List String -> <IO> Unit
@@ -263,7 +241,7 @@ detectGC cc tmpDir = match runCommand "pkg-config" ["--exists", "bdw-gc"]
   Ok (0, _, _) =>
     let cflags = gcQuery "pkg-config" ["--cflags", "bdw-gc"]
     let libs = gcQuery "pkg-config" ["--libs", "bdw-gc"]
-    Some (splitWS cflags, splitWS libs)
+    Some (words cflags, words libs)
   _ => detectGCBrew cc tmpDir
 
 gcQuery : String -> List String -> <IO> String
@@ -1111,7 +1089,8 @@ emitRtObj cc root outObjPath = match makeTempDir ()
     let _ = cleanupTempDir tmpDir
     res
 # DESUGAR
-(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "stringTrim" false) (mem "joinWith" false))))
+(DUse false (UseGroup ("support" "util") ((mem "stringTrim" false) (mem "joinWith" false))))
+(DUse false (UseGroup ("string") ((mem "words" false))))
 (DUse false (UseGroup ("support" "timer") ((mem "perfEnabled" false) (mem "now" false) (mem "emitPhase" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "entrySearchRoots" false) (mem "findProjectRootOrSelf" false) (mem "readForeignLibs" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "chopExt" false) (mem "joinPath" false))))
@@ -1123,12 +1102,6 @@ emitRtObj cc root outObjPath = match makeTempDir ()
 (DTypeSig false "appendNote" (TyFun (TyCon "String") (TyFun (TyCon "BuildResult") (TyCon "BuildResult"))))
 (DFunDef false "appendNote" ((PVar "note") (PCon "BuildOk" (PVar "m"))) (EApp (EVar "BuildOk") (EBinOp "++" (EVar "m") (EVar "note"))))
 (DFunDef false "appendNote" ((PVar "note") (PCon "BuildErr" (PVar "m"))) (EApp (EVar "BuildErr") (EBinOp "++" (EVar "m") (EVar "note"))))
-(DTypeSig false "isWS" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isWS" ((PVar "c")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LString " "))) (EBinOp "==" (EVar "c") (ELit (LString "\n")))) (EBinOp "==" (EVar "c") (ELit (LString "\t")))) (EBinOp "==" (EVar "c") (ELit (LString "\r")))))
-(DTypeSig false "splitWS" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "splitWS" ((PVar "s")) (EApp (EApp (EApp (EApp (EVar "splitWSGo") (EApp (EVar "stringTrim") (EVar "s"))) (ELit (LInt 0))) (ELit (LInt 0))) (EListLit)))
-(DTypeSig false "splitWSGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "splitWSGo" ((PVar "s") (PVar "i") (PVar "start") (PVar "acc")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EIf (EBinOp ">" (EVar "i") (EVar "start")) (EApp (EVar "reverseL") (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (EVar "start")) (EVar "i")) (EVar "s")) (EVar "acc"))) (EApp (EVar "reverseL") (EVar "acc"))) (EIf (EApp (EVar "isWS") (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "s"))) (EBlock (DoLet false false (PVar "acc2") (EIf (EBinOp ">" (EVar "i") (EVar "start")) (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (EVar "start")) (EVar "i")) (EVar "s")) (EVar "acc")) (EVar "acc"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "splitWSGo") (EVar "s")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc2")))) (EApp (EApp (EApp (EApp (EVar "splitWSGo") (EVar "s")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "start")) (EVar "acc")))))))
 (DTypeSig true "envOr" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String")))))
 (DFunDef false "envOr" ((PVar "name") (PVar "dflt")) (EMatch (EApp (EVar "getEnv") (EVar "name")) (arm (PCon "Some" (PVar "v")) () (EIf (EBinOp "==" (EVar "v") (ELit (LString ""))) (EVar "dflt") (EVar "v"))) (arm (PCon "None") () (EVar "dflt"))))
 (DTypeSig true "exeDir" (TyEffect ("IO") None (TyCon "String")))
@@ -1149,12 +1122,12 @@ emitRtObj cc root outObjPath = match makeTempDir ()
 (DTypeSig true "cleanupTempDir" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "cleanupTempDir" ((PVar "dir")) (EMatch (EApp (EVar "listDir") (EVar "dir")) (arm (PCon "Err" PWild) () (ELit LUnit)) (arm (PCon "Ok" (PVar "entries")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "removeEntries") (EVar "dir")) (EVar "entries"))) (DoLet false false PWild (EApp (EVar "removeDir") (EVar "dir"))) (DoExpr (ELit LUnit))))))
 (DTypeSig false "sweepStaleTempDirs" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "sweepStaleTempDirs" (PWild) (EBlock (DoLet false false (PVar "findArgs") (EListLit (ELit (LString "/tmp")) (ELit (LString "-maxdepth")) (ELit (LString "1")) (ELit (LString "-type")) (ELit (LString "d")) (ELit (LString "-name")) (ELit (LString "medaka_build_*")) (ELit (LString "-mmin")) (ELit (LString "+360")))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "find"))) (EVar "findArgs")) (arm (PCon "Ok" (PTuple PWild (PVar "out") PWild)) () (EApp (EVar "sweepEachStale") (EApp (EVar "splitWS") (EVar "out")))) (arm (PCon "Err" PWild) () (ELit LUnit))))))
+(DFunDef false "sweepStaleTempDirs" (PWild) (EBlock (DoLet false false (PVar "findArgs") (EListLit (ELit (LString "/tmp")) (ELit (LString "-maxdepth")) (ELit (LString "1")) (ELit (LString "-type")) (ELit (LString "d")) (ELit (LString "-name")) (ELit (LString "medaka_build_*")) (ELit (LString "-mmin")) (ELit (LString "+360")))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "find"))) (EVar "findArgs")) (arm (PCon "Ok" (PTuple PWild (PVar "out") PWild)) () (EApp (EVar "sweepEachStale") (EApp (EVar "words") (EVar "out")))) (arm (PCon "Err" PWild) () (ELit LUnit))))))
 (DTypeSig false "sweepEachStale" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "sweepEachStale" ((PList)) (ELit LUnit))
 (DFunDef false "sweepEachStale" ((PCons (PVar "d") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EVar "cleanupTempDir") (EVar "d"))) (DoExpr (EApp (EVar "sweepEachStale") (EVar "rest")))))
 (DTypeSig false "detectGC" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "detectGC" ((PVar "cc") (PVar "tmpDir")) (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "pkg-config"))) (EListLit (ELit (LString "--exists")) (ELit (LString "bdw-gc")))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild)) () (EBlock (DoLet false false (PVar "cflags") (EApp (EApp (EVar "gcQuery") (ELit (LString "pkg-config"))) (EListLit (ELit (LString "--cflags")) (ELit (LString "bdw-gc"))))) (DoLet false false (PVar "libs") (EApp (EApp (EVar "gcQuery") (ELit (LString "pkg-config"))) (EListLit (ELit (LString "--libs")) (ELit (LString "bdw-gc"))))) (DoExpr (EApp (EVar "Some") (ETuple (EApp (EVar "splitWS") (EVar "cflags")) (EApp (EVar "splitWS") (EVar "libs"))))))) (arm PWild () (EApp (EApp (EVar "detectGCBrew") (EVar "cc")) (EVar "tmpDir")))))
+(DFunDef false "detectGC" ((PVar "cc") (PVar "tmpDir")) (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "pkg-config"))) (EListLit (ELit (LString "--exists")) (ELit (LString "bdw-gc")))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild)) () (EBlock (DoLet false false (PVar "cflags") (EApp (EApp (EVar "gcQuery") (ELit (LString "pkg-config"))) (EListLit (ELit (LString "--cflags")) (ELit (LString "bdw-gc"))))) (DoLet false false (PVar "libs") (EApp (EApp (EVar "gcQuery") (ELit (LString "pkg-config"))) (EListLit (ELit (LString "--libs")) (ELit (LString "bdw-gc"))))) (DoExpr (EApp (EVar "Some") (ETuple (EApp (EVar "words") (EVar "cflags")) (EApp (EVar "words") (EVar "libs"))))))) (arm PWild () (EApp (EApp (EVar "detectGCBrew") (EVar "cc")) (EVar "tmpDir")))))
 (DTypeSig false "gcQuery" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "String")))))
 (DFunDef false "gcQuery" ((PVar "prog") (PVar "args")) (EMatch (EApp (EApp (EVar "runCommand") (EVar "prog")) (EVar "args")) (arm (PCon "Ok" (PTuple PWild (PVar "out") PWild)) () (EApp (EVar "stringTrim") (EVar "out"))) (arm (PCon "Err" PWild) () (ELit (LString "")))))
 (DTypeSig false "detectGCBrew" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
@@ -1230,7 +1203,8 @@ emitRtObj cc root outObjPath = match makeTempDir ()
 (DTypeSig true "emitRtObj" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "BuildResult"))))))
 (DFunDef false "emitRtObj" ((PVar "cc") (PVar "root") (PVar "outObjPath")) (EMatch (EApp (EVar "makeTempDir") (ELit LUnit)) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "BuildErr") (EBinOp "++" (EBinOp "++" (ELit (LString "error: could not create a scratch directory for the runtime compile: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "tmpDir")) () (EBlock (DoLet false false (PVar "res") (EMatch (EApp (EApp (EVar "detectGC") (EVar "cc")) (EVar "tmpDir")) (arm (PCon "None") () (EApp (EVar "BuildErr") (ELit (LString "error: libgc (bdw-gc) not found — install bdw-gc (brew install bdw-gc) or set GC_PREFIX/pkg-config")))) (arm (PCon "Some" (PTuple (PVar "gcCflags") (PVar "_gcLibs"))) () (EBlock (DoLet false false (PVar "optFlag") (EVar "clangOptFlag")) (DoLet false false (PVar "rtC") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "runtime/medaka_rt.c")))) (DoLet false false (PVar "ccArgs") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EVar "optFlag") (ELit (LString "-pthread"))) (EVar "gcSectionsCflags")) (EVar "gcCflags")) (EListLit (ELit (LString "-c")) (EVar "rtC") (ELit (LString "-o")) (EVar "outObjPath")))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (EVar "cc")) (EVar "ccArgs")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "BuildErr") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: could not run clang (")) (EApp (EVar "display") (EVar "cc"))) (ELit (LString "): "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild)) () (EApp (EVar "BuildOk") (EBinOp "++" (EBinOp "++" (ELit (LString "compiled runtime object -> ")) (EApp (EVar "display") (EVar "outObjPath"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple PWild PWild (PVar "ccErr"))) () (EApp (EVar "BuildErr") (EBinOp "++" (EBinOp "++" (ELit (LString "error: clang failed compiling runtime object\n")) (EApp (EVar "display") (EVar "ccErr"))) (ELit (LString ""))))))))))) (DoLet false false PWild (EApp (EVar "cleanupTempDir") (EVar "tmpDir"))) (DoExpr (EVar "res"))))))
 # MARK
-(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "stringTrim" false) (mem "joinWith" false))))
+(DUse false (UseGroup ("support" "util") ((mem "stringTrim" false) (mem "joinWith" false))))
+(DUse false (UseGroup ("string") ((mem "words" false))))
 (DUse false (UseGroup ("support" "timer") ((mem "perfEnabled" false) (mem "now" false) (mem "emitPhase" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "entrySearchRoots" false) (mem "findProjectRootOrSelf" false) (mem "readForeignLibs" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "chopExt" false) (mem "joinPath" false))))
@@ -1242,12 +1216,6 @@ emitRtObj cc root outObjPath = match makeTempDir ()
 (DTypeSig false "appendNote" (TyFun (TyCon "String") (TyFun (TyCon "BuildResult") (TyCon "BuildResult"))))
 (DFunDef false "appendNote" ((PVar "note") (PCon "BuildOk" (PVar "m"))) (EApp (EVar "BuildOk") (EBinOp "++" (EVar "m") (EVar "note"))))
 (DFunDef false "appendNote" ((PVar "note") (PCon "BuildErr" (PVar "m"))) (EApp (EVar "BuildErr") (EBinOp "++" (EVar "m") (EVar "note"))))
-(DTypeSig false "isWS" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isWS" ((PVar "c")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LString " "))) (EBinOp "==" (EVar "c") (ELit (LString "\n")))) (EBinOp "==" (EVar "c") (ELit (LString "\t")))) (EBinOp "==" (EVar "c") (ELit (LString "\r")))))
-(DTypeSig false "splitWS" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "splitWS" ((PVar "s")) (EApp (EApp (EApp (EApp (EVar "splitWSGo") (EApp (EVar "stringTrim") (EVar "s"))) (ELit (LInt 0))) (ELit (LInt 0))) (EListLit)))
-(DTypeSig false "splitWSGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "splitWSGo" ((PVar "s") (PVar "i") (PVar "start") (PVar "acc")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EIf (EBinOp ">" (EVar "i") (EVar "start")) (EApp (EVar "reverseL") (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (EVar "start")) (EVar "i")) (EVar "s")) (EVar "acc"))) (EApp (EVar "reverseL") (EVar "acc"))) (EIf (EApp (EVar "isWS") (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "s"))) (EBlock (DoLet false false (PVar "acc2") (EIf (EBinOp ">" (EVar "i") (EVar "start")) (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (EVar "start")) (EVar "i")) (EVar "s")) (EVar "acc")) (EVar "acc"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "splitWSGo") (EVar "s")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc2")))) (EApp (EApp (EApp (EApp (EVar "splitWSGo") (EVar "s")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "start")) (EVar "acc")))))))
 (DTypeSig true "envOr" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String")))))
 (DFunDef false "envOr" ((PVar "name") (PVar "dflt")) (EMatch (EApp (EVar "getEnv") (EVar "name")) (arm (PCon "Some" (PVar "v")) () (EIf (EBinOp "==" (EVar "v") (ELit (LString ""))) (EVar "dflt") (EVar "v"))) (arm (PCon "None") () (EVar "dflt"))))
 (DTypeSig true "exeDir" (TyEffect ("IO") None (TyCon "String")))
@@ -1268,12 +1236,12 @@ emitRtObj cc root outObjPath = match makeTempDir ()
 (DTypeSig true "cleanupTempDir" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "cleanupTempDir" ((PVar "dir")) (EMatch (EApp (EVar "listDir") (EVar "dir")) (arm (PCon "Err" PWild) () (ELit LUnit)) (arm (PCon "Ok" (PVar "entries")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "removeEntries") (EVar "dir")) (EVar "entries"))) (DoLet false false PWild (EApp (EVar "removeDir") (EVar "dir"))) (DoExpr (ELit LUnit))))))
 (DTypeSig false "sweepStaleTempDirs" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "sweepStaleTempDirs" (PWild) (EBlock (DoLet false false (PVar "findArgs") (EListLit (ELit (LString "/tmp")) (ELit (LString "-maxdepth")) (ELit (LString "1")) (ELit (LString "-type")) (ELit (LString "d")) (ELit (LString "-name")) (ELit (LString "medaka_build_*")) (ELit (LString "-mmin")) (ELit (LString "+360")))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "find"))) (EVar "findArgs")) (arm (PCon "Ok" (PTuple PWild (PVar "out") PWild)) () (EApp (EVar "sweepEachStale") (EApp (EVar "splitWS") (EVar "out")))) (arm (PCon "Err" PWild) () (ELit LUnit))))))
+(DFunDef false "sweepStaleTempDirs" (PWild) (EBlock (DoLet false false (PVar "findArgs") (EListLit (ELit (LString "/tmp")) (ELit (LString "-maxdepth")) (ELit (LString "1")) (ELit (LString "-type")) (ELit (LString "d")) (ELit (LString "-name")) (ELit (LString "medaka_build_*")) (ELit (LString "-mmin")) (ELit (LString "+360")))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "find"))) (EVar "findArgs")) (arm (PCon "Ok" (PTuple PWild (PVar "out") PWild)) () (EApp (EVar "sweepEachStale") (EApp (EVar "words") (EVar "out")))) (arm (PCon "Err" PWild) () (ELit LUnit))))))
 (DTypeSig false "sweepEachStale" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "sweepEachStale" ((PList)) (ELit LUnit))
 (DFunDef false "sweepEachStale" ((PCons (PVar "d") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EVar "cleanupTempDir") (EVar "d"))) (DoExpr (EApp (EVar "sweepEachStale") (EVar "rest")))))
 (DTypeSig false "detectGC" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "detectGC" ((PVar "cc") (PVar "tmpDir")) (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "pkg-config"))) (EListLit (ELit (LString "--exists")) (ELit (LString "bdw-gc")))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild)) () (EBlock (DoLet false false (PVar "cflags") (EApp (EApp (EVar "gcQuery") (ELit (LString "pkg-config"))) (EListLit (ELit (LString "--cflags")) (ELit (LString "bdw-gc"))))) (DoLet false false (PVar "libs") (EApp (EApp (EVar "gcQuery") (ELit (LString "pkg-config"))) (EListLit (ELit (LString "--libs")) (ELit (LString "bdw-gc"))))) (DoExpr (EApp (EVar "Some") (ETuple (EApp (EVar "splitWS") (EVar "cflags")) (EApp (EVar "splitWS") (EVar "libs"))))))) (arm PWild () (EApp (EApp (EVar "detectGCBrew") (EVar "cc")) (EVar "tmpDir")))))
+(DFunDef false "detectGC" ((PVar "cc") (PVar "tmpDir")) (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "pkg-config"))) (EListLit (ELit (LString "--exists")) (ELit (LString "bdw-gc")))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild)) () (EBlock (DoLet false false (PVar "cflags") (EApp (EApp (EVar "gcQuery") (ELit (LString "pkg-config"))) (EListLit (ELit (LString "--cflags")) (ELit (LString "bdw-gc"))))) (DoLet false false (PVar "libs") (EApp (EApp (EVar "gcQuery") (ELit (LString "pkg-config"))) (EListLit (ELit (LString "--libs")) (ELit (LString "bdw-gc"))))) (DoExpr (EApp (EVar "Some") (ETuple (EApp (EVar "words") (EVar "cflags")) (EApp (EVar "words") (EVar "libs"))))))) (arm PWild () (EApp (EApp (EVar "detectGCBrew") (EVar "cc")) (EVar "tmpDir")))))
 (DTypeSig false "gcQuery" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "String")))))
 (DFunDef false "gcQuery" ((PVar "prog") (PVar "args")) (EMatch (EApp (EApp (EVar "runCommand") (EVar "prog")) (EVar "args")) (arm (PCon "Ok" (PTuple PWild (PVar "out") PWild)) () (EApp (EVar "stringTrim") (EVar "out"))) (arm (PCon "Err" PWild) () (ELit (LString "")))))
 (DTypeSig false "detectGCBrew" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))

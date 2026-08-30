@@ -41,6 +41,7 @@ Tutorial-style onboarding, not a spec. Not yet cross-linked into this index's st
 | [`0. Introduction.md`](guide/0. Introduction.md) | Introduction | — |
 | [`1. Quick Start.md`](guide/1. Quick Start.md) | Quick Start | — |
 | [`2. Expressions.md`](guide/2. Expressions.md) | Expressions | — |
+| [`Haskell and OCaml Delta.md`](guide/Haskell and OCaml Delta.md) | Medaka for Haskell and OCaml Readers | — |
 | [`OUTLINE.md`](guide/OUTLINE.md) | Medaka Guide — Outline | — |
 
 ### design — open/partial work
@@ -141,7 +142,7 @@ What's in the standard library, what's planned, module-by-module status.
 | [`TRMC-DESIGN.md`](../compiler/TRMC-DESIGN.md) | TRMC-DESIGN.md — tail-recursion-modulo-cons for the native LLVM backend | IMPLEMENTED |
 | [`TUPLE-TYPE-CONSTRUCTOR-DESIGN.md`](../compiler/TUPLE-TYPE-CONSTRUCTOR-DESIGN.md) | Tuple as a real type constructor — design doc | IMPLEMENTED |
 | [`TYPE-ALIAS-EXPANSION-DESIGN.md`](../compiler/TYPE-ALIAS-EXPANSION-DESIGN.md) | Type-Alias Expansion — Design | IMPLEMENTED |
-| [`TYPE-AWARE-LINT-DESIGN.md`](../compiler/TYPE-AWARE-LINT-DESIGN.md) | Type-Aware Lint Tier — Design | PARTLY SHIPPED, and RE-COSTED |
+| [`TYPE-AWARE-LINT-DESIGN.md`](../compiler/TYPE-AWARE-LINT-DESIGN.md) | Type-Aware Lint Tier — Design | PARTLY SHIPPED and RE-COSTED; TIER 1 UNBLOCKED, TIER 2 STILL BLOCKED |
 | [`TYPE-ERROR-SPAN-DESIGN.md`](../compiler/TYPE-ERROR-SPAN-DESIGN.md) | Type-error span precision — design | IMPLEMENTED |
 | [`TYPECHECK-ARCH-BUG-FIT.md`](../compiler/TYPECHECK-ARCH-BUG-FIT.md) | Typechecker target architecture — per-bug fit ledger | CURRENT |
 | [`TYPECHECK-ARCHITECTURE.md`](../compiler/TYPECHECK-ARCHITECTURE.md) | Typechecker Architecture — the derived map | CURRENT |
