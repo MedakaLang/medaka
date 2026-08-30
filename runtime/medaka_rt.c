@@ -406,6 +406,46 @@ static long long mdk_utf8_cp_count(const char *p, long long n) {
   return c;
 }
 
+/* Validate one complete byte range as canonical UTF-8 encoding Unicode scalar
+ * values.  This is stricter than mdk_utf8_cp_count: the latter is a fast cache
+ * builder for bytes already known to be valid, while this predicate is the
+ * trust-boundary check for bytes supplied by foreign C code. */
+static int mdk_utf8_is_valid(const char *p, size_t n) {
+  size_t i = 0;
+  while (i < n) {
+    unsigned char b0 = (unsigned char)p[i];
+    if (b0 <= 0x7F) {
+      i++;
+    } else if (b0 >= 0xC2 && b0 <= 0xDF) {
+      if (i + 1 >= n || ((unsigned char)p[i + 1] & 0xC0) != 0x80)
+        return 0;
+      i += 2;
+    } else if (b0 >= 0xE0 && b0 <= 0xEF) {
+      if (i + 2 >= n || ((unsigned char)p[i + 2] & 0xC0) != 0x80)
+        return 0;
+      unsigned char b1 = (unsigned char)p[i + 1];
+      if ((b0 == 0xE0 && (b1 < 0xA0 || b1 > 0xBF)) ||
+          (b0 == 0xED && (b1 < 0x80 || b1 > 0x9F)) ||
+          (b0 != 0xE0 && b0 != 0xED && (b1 & 0xC0) != 0x80))
+        return 0;
+      i += 3;
+    } else if (b0 >= 0xF0 && b0 <= 0xF4) {
+      if (i + 3 >= n || ((unsigned char)p[i + 2] & 0xC0) != 0x80 ||
+          ((unsigned char)p[i + 3] & 0xC0) != 0x80)
+        return 0;
+      unsigned char b1 = (unsigned char)p[i + 1];
+      if ((b0 == 0xF0 && (b1 < 0x90 || b1 > 0xBF)) ||
+          (b0 == 0xF4 && (b1 < 0x80 || b1 > 0x8F)) ||
+          (b0 != 0xF0 && b0 != 0xF4 && (b1 & 0xC0) != 0x80))
+        return 0;
+      i += 4;
+    } else {
+      return 0;
+    }
+  }
+  return 1;
+}
+
 /* Build a boxed String cell from `byte_len` raw UTF-8 bytes; return the value
  * word (cell pointer as i64, low bit 0).  The single GC allocation every
  * String-returning extern (and the emitter's string literals) routes through. */
@@ -984,7 +1024,15 @@ void mdk_ffi_array_int_in(long long arr, const void *buf) {
  * says a foreign call cannot fail INTO Medaka. */
 long long mdk_ffi_str_in(const char *s) {
   if (s == NULL) return mdk_str_lit("", 0);
-  return mdk_str_lit(s, (long long)strlen(s));
+  size_t n = strlen(s);
+  if (!mdk_utf8_is_valid(s, n)) {
+    static const char msg[] =
+      "foreign call returned a String that is not valid UTF-8: a String must "
+      "contain only canonical UTF-8 encodings of Unicode scalar values "
+      "(compiler/FFI-ABI.md section 2.3)";
+    mdk_panic(mdk_str_lit(msg, (long long)(sizeof msg - 1)));
+  }
+  return mdk_str_lit(s, (long long)n);
 }
 
 /* Char scalar externs (native extern catalog slice 8).

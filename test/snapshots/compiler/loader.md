@@ -1,5 +1,5 @@
 # META
-source_lines=1202
+source_lines=1214
 stages=DESUGAR,MARK
 # SOURCE
 -- Port of lib/loader.ml: parse a root .mdk file's transitive imports and return
@@ -233,14 +233,19 @@ keyEqGo line i n =
 
 -- the substring after the first `=` (trimmed + unquoted); "" if there is no `=`.
 valAfterEq : String -> String
-valAfterEq line = valEqGo line 0 (stringLength line)
+valAfterEq line = unquote (rawValAfterEq line)
+
+-- The trimmed but still quoted value.  `scanAllowInternal` needs this form so
+-- that a quoted string cannot impersonate the canonical unquoted boolean.
+rawValAfterEq : String -> String
+rawValAfterEq line = valEqGo line 0 (stringLength line)
 
 valEqGo : String -> Int -> Int -> String
 valEqGo line i n =
   if i >= n then
     ""
   else if stringSlice i (i + 1) line == "=" then
-    unquote (stringTrim (stringSlice (i + 1) n line))
+    stringTrim (stringSlice (i + 1) n line)
   else
     valEqGo line (i + 1) n
 
@@ -327,14 +332,16 @@ collectLibsIn : String -> List String -> List (String, String)
 collectLibsIn root [] = []
 collectLibsIn root (line::rest) =
   let t = stringTrim line
-  if startsWith "[" t then collectLibs root (line::rest)
+  if t == "" || startsWith "#" t then collectLibsIn root rest
   else
-    let k = keyBeforeEq t
-    if k == "" then collectLibsIn root rest
+    if startsWith "[" t then collectLibs root (line::rest)
     else
-      let v = valAfterEq t
-      let dir = if v == "" then "" else joinPathL root v
-      (k, dir) :: collectLibsIn root rest
+      let k = keyBeforeEq t
+      if k == "" then collectLibsIn root rest
+      else
+        let v = valAfterEq t
+        let dir = if v == "" then "" else joinPathL root v
+        (k, dir) :: collectLibsIn root rest
 
 -- read + parse `<root>/medaka.toml`'s [foreign-libraries]; [] if missing/none.
 -- Returns (libName, searchDir) with searchDir == "" when none was given.
@@ -999,7 +1006,9 @@ manifestAllowsInternal root =
     Ok src => scanAllowInternal False (splitNl src)
   else False
 
--- Scan a medaka.toml's lines for `allow-internal = true`.  `inDeps` tracks
+-- Scan a medaka.toml's lines for `allow-internal = true`.  The grant requires
+-- that exact unquoted boolean token; an optional trailing `#` comment is inert.
+-- Quoted strings and every other value decline the privilege.  `inDeps` tracks
 -- whether we are currently inside `[dependencies]`, whose entries are SKIPPED: a
 -- dep line is `name = "path"`, so a package literally named `allow-internal`
 -- must not read as the opt-in.  Every OTHER section is accepted rather than one
@@ -1012,14 +1021,17 @@ scanAllowInternal : Bool -> List String -> Bool
 scanAllowInternal _ [] = False
 scanAllowInternal inDeps (line::rest) =
   let t = stringTrim line
-  if startsWith "[" t then
-    scanAllowInternal (t == "[dependencies]") rest
-  else if inDeps then
-    scanAllowInternal inDeps rest
-  else if keyBeforeEq t == "allow-internal" then
-    valAfterEq t == "true"
+  let header = match splitOnChar "#" t
+    h::_ => stringTrim h
+    [] => t
+  if startsWith "[" header then scanAllowInternal (header == "[dependencies]") rest
   else
-    scanAllowInternal inDeps rest
+    if inDeps then scanAllowInternal inDeps rest
+    else
+      if keyBeforeEq t == "allow-internal" then match splitOnChar "#" (rawValAfterEq t)
+        value::_ => stringTrim value == "true"
+        [] => False
+      else scanAllowInternal inDeps rest
 
 trustedModsGo : List (String, String) -> List String -> List String -> List String -> <IO> List String
 trustedModsGo _ _ _ [] = []
@@ -1253,9 +1265,11 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DTypeSig false "keyEqGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "keyEqGo" ((PVar "line") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit (LString "")) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "line")) (ELit (LString "="))) (EApp (EVar "stringTrim") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "line"))) (EApp (EApp (EApp (EVar "keyEqGo") (EVar "line")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))))
 (DTypeSig false "valAfterEq" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "valAfterEq" ((PVar "line")) (EApp (EApp (EApp (EVar "valEqGo") (EVar "line")) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "line"))))
+(DFunDef false "valAfterEq" ((PVar "line")) (EApp (EVar "unquote") (EApp (EVar "rawValAfterEq") (EVar "line"))))
+(DTypeSig false "rawValAfterEq" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "rawValAfterEq" ((PVar "line")) (EApp (EApp (EApp (EVar "valEqGo") (EVar "line")) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "line"))))
 (DTypeSig false "valEqGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
-(DFunDef false "valEqGo" ((PVar "line") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit (LString "")) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "line")) (ELit (LString "="))) (EApp (EVar "unquote") (EApp (EVar "stringTrim") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EVar "line")))) (EApp (EApp (EApp (EVar "valEqGo") (EVar "line")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))))
+(DFunDef false "valEqGo" ((PVar "line") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit (LString "")) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "line")) (ELit (LString "="))) (EApp (EVar "stringTrim") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EVar "line"))) (EApp (EApp (EApp (EVar "valEqGo") (EVar "line")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))))
 (DTypeSig false "collectDeps" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "collectDeps" ((PVar "root") (PList)) (EListLit))
 (DFunDef false "collectDeps" ((PVar "root") (PCons (PVar "line") (PVar "rest"))) (EBlock (DoLet false false (PVar "t") (EApp (EVar "stringTrim") (EVar "line"))) (DoExpr (EIf (EBinOp "==" (EVar "t") (ELit (LString "[dependencies]"))) (EApp (EApp (EVar "collectDepsIn") (EVar "root")) (EVar "rest")) (EApp (EApp (EVar "collectDeps") (EVar "root")) (EVar "rest"))))))
@@ -1271,7 +1285,7 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DFunDef false "collectLibs" ((PVar "root") (PCons (PVar "line") (PVar "rest"))) (EBlock (DoLet false false (PVar "t") (EApp (EVar "stringTrim") (EVar "line"))) (DoExpr (EIf (EBinOp "==" (EVar "t") (ELit (LString "[foreign-libraries]"))) (EApp (EApp (EVar "collectLibsIn") (EVar "root")) (EVar "rest")) (EApp (EApp (EVar "collectLibs") (EVar "root")) (EVar "rest"))))))
 (DTypeSig false "collectLibsIn" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "collectLibsIn" ((PVar "root") (PList)) (EListLit))
-(DFunDef false "collectLibsIn" ((PVar "root") (PCons (PVar "line") (PVar "rest"))) (EBlock (DoLet false false (PVar "t") (EApp (EVar "stringTrim") (EVar "line"))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "["))) (EVar "t")) (EApp (EApp (EVar "collectLibs") (EVar "root")) (EBinOp "::" (EVar "line") (EVar "rest"))) (EBlock (DoLet false false (PVar "k") (EApp (EVar "keyBeforeEq") (EVar "t"))) (DoExpr (EIf (EBinOp "==" (EVar "k") (ELit (LString ""))) (EApp (EApp (EVar "collectLibsIn") (EVar "root")) (EVar "rest")) (EBlock (DoLet false false (PVar "v") (EApp (EVar "valAfterEq") (EVar "t"))) (DoLet false false (PVar "dir") (EIf (EBinOp "==" (EVar "v") (ELit (LString ""))) (ELit (LString "")) (EApp (EApp (EVar "joinPathL") (EVar "root")) (EVar "v")))) (DoExpr (EBinOp "::" (ETuple (EVar "k") (EVar "dir")) (EApp (EApp (EVar "collectLibsIn") (EVar "root")) (EVar "rest"))))))))))))
+(DFunDef false "collectLibsIn" ((PVar "root") (PCons (PVar "line") (PVar "rest"))) (EBlock (DoLet false false (PVar "t") (EApp (EVar "stringTrim") (EVar "line"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "t") (ELit (LString ""))) (EApp (EApp (EVar "startsWith") (ELit (LString "#"))) (EVar "t"))) (EApp (EApp (EVar "collectLibsIn") (EVar "root")) (EVar "rest")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "["))) (EVar "t")) (EApp (EApp (EVar "collectLibs") (EVar "root")) (EBinOp "::" (EVar "line") (EVar "rest"))) (EBlock (DoLet false false (PVar "k") (EApp (EVar "keyBeforeEq") (EVar "t"))) (DoExpr (EIf (EBinOp "==" (EVar "k") (ELit (LString ""))) (EApp (EApp (EVar "collectLibsIn") (EVar "root")) (EVar "rest")) (EBlock (DoLet false false (PVar "v") (EApp (EVar "valAfterEq") (EVar "t"))) (DoLet false false (PVar "dir") (EIf (EBinOp "==" (EVar "v") (ELit (LString ""))) (ELit (LString "")) (EApp (EApp (EVar "joinPathL") (EVar "root")) (EVar "v")))) (DoExpr (EBinOp "::" (ETuple (EVar "k") (EVar "dir")) (EApp (EApp (EVar "collectLibsIn") (EVar "root")) (EVar "rest")))))))))))))
 (DTypeSig true "readForeignLibs" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "readForeignLibs" ((PVar "root")) (EBlock (DoLet false false (PVar "tomlPath") (EApp (EVar "stringConcat") (EListLit (EVar "root") (ELit (LString "/medaka.toml"))))) (DoExpr (EIf (EApp (EVar "fileExists") (EVar "tomlPath")) (EMatch (EApp (EVar "readFile") (EVar "tomlPath")) (arm (PCon "Err" PWild) () (EListLit)) (arm (PCon "Ok" (PVar "src")) () (EApp (EApp (EVar "collectLibs") (EVar "root")) (EApp (EVar "splitNl") (EVar "src"))))) (EListLit)))))
 (DTypeSig false "resolveDepFile" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))))
@@ -1371,7 +1385,7 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DFunDef false "manifestAllowsInternal" ((PVar "root")) (EBlock (DoLet false false (PVar "tomlPath") (EApp (EVar "stringConcat") (EListLit (EVar "root") (ELit (LString "/medaka.toml"))))) (DoExpr (EIf (EApp (EVar "fileExists") (EVar "tomlPath")) (EMatch (EApp (EVar "readFile") (EVar "tomlPath")) (arm (PCon "Err" PWild) () (EVar "False")) (arm (PCon "Ok" (PVar "src")) () (EApp (EApp (EVar "scanAllowInternal") (EVar "False")) (EApp (EVar "splitNl") (EVar "src"))))) (EVar "False")))))
 (DTypeSig false "scanAllowInternal" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "scanAllowInternal" (PWild (PList)) (EVar "False"))
-(DFunDef false "scanAllowInternal" ((PVar "inDeps") (PCons (PVar "line") (PVar "rest"))) (EBlock (DoLet false false (PVar "t") (EApp (EVar "stringTrim") (EVar "line"))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "["))) (EVar "t")) (EApp (EApp (EVar "scanAllowInternal") (EBinOp "==" (EVar "t") (ELit (LString "[dependencies]")))) (EVar "rest")) (EIf (EVar "inDeps") (EApp (EApp (EVar "scanAllowInternal") (EVar "inDeps")) (EVar "rest")) (EIf (EBinOp "==" (EApp (EVar "keyBeforeEq") (EVar "t")) (ELit (LString "allow-internal"))) (EBinOp "==" (EApp (EVar "valAfterEq") (EVar "t")) (ELit (LString "true"))) (EApp (EApp (EVar "scanAllowInternal") (EVar "inDeps")) (EVar "rest"))))))))
+(DFunDef false "scanAllowInternal" ((PVar "inDeps") (PCons (PVar "line") (PVar "rest"))) (EBlock (DoLet false false (PVar "t") (EApp (EVar "stringTrim") (EVar "line"))) (DoLet false false (PVar "header") (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LString "#"))) (EVar "t")) (arm (PCons (PVar "h") PWild) () (EApp (EVar "stringTrim") (EVar "h"))) (arm (PList) () (EVar "t")))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "["))) (EVar "header")) (EApp (EApp (EVar "scanAllowInternal") (EBinOp "==" (EVar "header") (ELit (LString "[dependencies]")))) (EVar "rest")) (EIf (EVar "inDeps") (EApp (EApp (EVar "scanAllowInternal") (EVar "inDeps")) (EVar "rest")) (EIf (EBinOp "==" (EApp (EVar "keyBeforeEq") (EVar "t")) (ELit (LString "allow-internal"))) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LString "#"))) (EApp (EVar "rawValAfterEq") (EVar "t"))) (arm (PCons (PVar "value") PWild) () (EBinOp "==" (EApp (EVar "stringTrim") (EVar "value")) (ELit (LString "true")))) (arm (PList) () (EVar "False"))) (EApp (EApp (EVar "scanAllowInternal") (EVar "inDeps")) (EVar "rest"))))))))
 (DTypeSig false "trustedModsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "trustedModsGo" (PWild PWild PWild (PList)) (EListLit))
 (DFunDef false "trustedModsGo" ((PVar "deps") (PVar "roots") (PVar "trustedRoots") (PCons (PVar "m") (PVar "ms"))) (EMatch (EApp (EApp (EApp (EVar "findModuleFile") (EVar "deps")) (EVar "roots")) (EVar "m")) (arm (PCon "Some" (PTuple PWild (PVar "owningRoot"))) () (EIf (EApp (EApp (EVar "contains") (EApp (EVar "canonicalizePath") (EVar "owningRoot"))) (EVar "trustedRoots")) (EBinOp "::" (EVar "m") (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "trustedRoots")) (EVar "ms"))) (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "trustedRoots")) (EVar "ms")))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "trustedRoots")) (EVar "ms")))))
@@ -1453,9 +1467,11 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DTypeSig false "keyEqGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "keyEqGo" ((PVar "line") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit (LString "")) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "line")) (ELit (LString "="))) (EApp (EVar "stringTrim") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "line"))) (EApp (EApp (EApp (EVar "keyEqGo") (EVar "line")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))))
 (DTypeSig false "valAfterEq" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "valAfterEq" ((PVar "line")) (EApp (EApp (EApp (EVar "valEqGo") (EVar "line")) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "line"))))
+(DFunDef false "valAfterEq" ((PVar "line")) (EApp (EVar "unquote") (EApp (EVar "rawValAfterEq") (EVar "line"))))
+(DTypeSig false "rawValAfterEq" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "rawValAfterEq" ((PVar "line")) (EApp (EApp (EApp (EVar "valEqGo") (EVar "line")) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "line"))))
 (DTypeSig false "valEqGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
-(DFunDef false "valEqGo" ((PVar "line") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit (LString "")) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "line")) (ELit (LString "="))) (EApp (EVar "unquote") (EApp (EVar "stringTrim") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EVar "line")))) (EApp (EApp (EApp (EVar "valEqGo") (EVar "line")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))))
+(DFunDef false "valEqGo" ((PVar "line") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit (LString "")) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "line")) (ELit (LString "="))) (EApp (EVar "stringTrim") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EVar "line"))) (EApp (EApp (EApp (EVar "valEqGo") (EVar "line")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))))
 (DTypeSig false "collectDeps" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "collectDeps" ((PVar "root") (PList)) (EListLit))
 (DFunDef false "collectDeps" ((PVar "root") (PCons (PVar "line") (PVar "rest"))) (EBlock (DoLet false false (PVar "t") (EApp (EVar "stringTrim") (EVar "line"))) (DoExpr (EIf (EBinOp "==" (EVar "t") (ELit (LString "[dependencies]"))) (EApp (EApp (EVar "collectDepsIn") (EVar "root")) (EVar "rest")) (EApp (EApp (EVar "collectDeps") (EVar "root")) (EVar "rest"))))))
@@ -1471,7 +1487,7 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DFunDef false "collectLibs" ((PVar "root") (PCons (PVar "line") (PVar "rest"))) (EBlock (DoLet false false (PVar "t") (EApp (EVar "stringTrim") (EVar "line"))) (DoExpr (EIf (EBinOp "==" (EVar "t") (ELit (LString "[foreign-libraries]"))) (EApp (EApp (EVar "collectLibsIn") (EVar "root")) (EVar "rest")) (EApp (EApp (EVar "collectLibs") (EVar "root")) (EVar "rest"))))))
 (DTypeSig false "collectLibsIn" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "collectLibsIn" ((PVar "root") (PList)) (EListLit))
-(DFunDef false "collectLibsIn" ((PVar "root") (PCons (PVar "line") (PVar "rest"))) (EBlock (DoLet false false (PVar "t") (EApp (EVar "stringTrim") (EVar "line"))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "["))) (EVar "t")) (EApp (EApp (EVar "collectLibs") (EVar "root")) (EBinOp "::" (EVar "line") (EVar "rest"))) (EBlock (DoLet false false (PVar "k") (EApp (EVar "keyBeforeEq") (EVar "t"))) (DoExpr (EIf (EBinOp "==" (EVar "k") (ELit (LString ""))) (EApp (EApp (EVar "collectLibsIn") (EVar "root")) (EVar "rest")) (EBlock (DoLet false false (PVar "v") (EApp (EVar "valAfterEq") (EVar "t"))) (DoLet false false (PVar "dir") (EIf (EBinOp "==" (EVar "v") (ELit (LString ""))) (ELit (LString "")) (EApp (EApp (EVar "joinPathL") (EVar "root")) (EVar "v")))) (DoExpr (EBinOp "::" (ETuple (EVar "k") (EVar "dir")) (EApp (EApp (EVar "collectLibsIn") (EVar "root")) (EVar "rest"))))))))))))
+(DFunDef false "collectLibsIn" ((PVar "root") (PCons (PVar "line") (PVar "rest"))) (EBlock (DoLet false false (PVar "t") (EApp (EVar "stringTrim") (EVar "line"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "t") (ELit (LString ""))) (EApp (EApp (EVar "startsWith") (ELit (LString "#"))) (EVar "t"))) (EApp (EApp (EVar "collectLibsIn") (EVar "root")) (EVar "rest")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "["))) (EVar "t")) (EApp (EApp (EVar "collectLibs") (EVar "root")) (EBinOp "::" (EVar "line") (EVar "rest"))) (EBlock (DoLet false false (PVar "k") (EApp (EVar "keyBeforeEq") (EVar "t"))) (DoExpr (EIf (EBinOp "==" (EVar "k") (ELit (LString ""))) (EApp (EApp (EVar "collectLibsIn") (EVar "root")) (EVar "rest")) (EBlock (DoLet false false (PVar "v") (EApp (EVar "valAfterEq") (EVar "t"))) (DoLet false false (PVar "dir") (EIf (EBinOp "==" (EVar "v") (ELit (LString ""))) (ELit (LString "")) (EApp (EApp (EVar "joinPathL") (EVar "root")) (EVar "v")))) (DoExpr (EBinOp "::" (ETuple (EVar "k") (EVar "dir")) (EApp (EApp (EVar "collectLibsIn") (EVar "root")) (EVar "rest")))))))))))))
 (DTypeSig true "readForeignLibs" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "readForeignLibs" ((PVar "root")) (EBlock (DoLet false false (PVar "tomlPath") (EApp (EVar "stringConcat") (EListLit (EVar "root") (ELit (LString "/medaka.toml"))))) (DoExpr (EIf (EApp (EVar "fileExists") (EVar "tomlPath")) (EMatch (EApp (EVar "readFile") (EVar "tomlPath")) (arm (PCon "Err" PWild) () (EListLit)) (arm (PCon "Ok" (PVar "src")) () (EApp (EApp (EVar "collectLibs") (EVar "root")) (EApp (EVar "splitNl") (EVar "src"))))) (EListLit)))))
 (DTypeSig false "resolveDepFile" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))))
@@ -1571,7 +1587,7 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DFunDef false "manifestAllowsInternal" ((PVar "root")) (EBlock (DoLet false false (PVar "tomlPath") (EApp (EVar "stringConcat") (EListLit (EVar "root") (ELit (LString "/medaka.toml"))))) (DoExpr (EIf (EApp (EVar "fileExists") (EVar "tomlPath")) (EMatch (EApp (EVar "readFile") (EVar "tomlPath")) (arm (PCon "Err" PWild) () (EVar "False")) (arm (PCon "Ok" (PVar "src")) () (EApp (EApp (EVar "scanAllowInternal") (EVar "False")) (EApp (EVar "splitNl") (EVar "src"))))) (EVar "False")))))
 (DTypeSig false "scanAllowInternal" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "scanAllowInternal" (PWild (PList)) (EVar "False"))
-(DFunDef false "scanAllowInternal" ((PVar "inDeps") (PCons (PVar "line") (PVar "rest"))) (EBlock (DoLet false false (PVar "t") (EApp (EVar "stringTrim") (EVar "line"))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "["))) (EVar "t")) (EApp (EApp (EVar "scanAllowInternal") (EBinOp "==" (EVar "t") (ELit (LString "[dependencies]")))) (EVar "rest")) (EIf (EVar "inDeps") (EApp (EApp (EVar "scanAllowInternal") (EVar "inDeps")) (EVar "rest")) (EIf (EBinOp "==" (EApp (EVar "keyBeforeEq") (EVar "t")) (ELit (LString "allow-internal"))) (EBinOp "==" (EApp (EVar "valAfterEq") (EVar "t")) (ELit (LString "true"))) (EApp (EApp (EVar "scanAllowInternal") (EVar "inDeps")) (EVar "rest"))))))))
+(DFunDef false "scanAllowInternal" ((PVar "inDeps") (PCons (PVar "line") (PVar "rest"))) (EBlock (DoLet false false (PVar "t") (EApp (EVar "stringTrim") (EVar "line"))) (DoLet false false (PVar "header") (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LString "#"))) (EVar "t")) (arm (PCons (PVar "h") PWild) () (EApp (EVar "stringTrim") (EVar "h"))) (arm (PList) () (EVar "t")))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "["))) (EVar "header")) (EApp (EApp (EVar "scanAllowInternal") (EBinOp "==" (EVar "header") (ELit (LString "[dependencies]")))) (EVar "rest")) (EIf (EVar "inDeps") (EApp (EApp (EVar "scanAllowInternal") (EVar "inDeps")) (EVar "rest")) (EIf (EBinOp "==" (EApp (EVar "keyBeforeEq") (EVar "t")) (ELit (LString "allow-internal"))) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LString "#"))) (EApp (EVar "rawValAfterEq") (EVar "t"))) (arm (PCons (PVar "value") PWild) () (EBinOp "==" (EApp (EVar "stringTrim") (EVar "value")) (ELit (LString "true")))) (arm (PList) () (EVar "False"))) (EApp (EApp (EVar "scanAllowInternal") (EVar "inDeps")) (EVar "rest"))))))))
 (DTypeSig false "trustedModsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "trustedModsGo" (PWild PWild PWild (PList)) (EListLit))
 (DFunDef false "trustedModsGo" ((PVar "deps") (PVar "roots") (PVar "trustedRoots") (PCons (PVar "m") (PVar "ms"))) (EMatch (EApp (EApp (EApp (EVar "findModuleFile") (EVar "deps")) (EVar "roots")) (EVar "m")) (arm (PCon "Some" (PTuple PWild (PVar "owningRoot"))) () (EIf (EApp (EApp (EVar "contains") (EApp (EVar "canonicalizePath") (EVar "owningRoot"))) (EVar "trustedRoots")) (EBinOp "::" (EVar "m") (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "trustedRoots")) (EVar "ms"))) (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "trustedRoots")) (EVar "ms")))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "trustedRoots")) (EVar "ms")))))
