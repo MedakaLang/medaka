@@ -6216,16 +6216,23 @@ tagsMinus (t::rest) covered
 -- ── arg-position (arg-tag) dispatch at a call site ─────────────────
 -- A bare CVar naming an impl method, applied to args.  The impl is chosen by the
 -- discriminating argument's runtime constructor TYPE (mirrors eval's
--- filterByTag → runtimeTypeTag).  Two shapes:
---   • ONE impl group (the method has impls at a single type) — no runtime test is
---     needed: a well-typed call always reaches that impl, so emit a DIRECT call
---     (covers single-impl + the multi-clause-body fixture; the multi-clause
+-- filterByTag → runtimeTypeTag).  The route is decided by `emitArgTagRoute`, keyed
+-- on whether any declared impl inherits the method from the interface default
+-- (#1046) rather than by group count alone:
+--   • ONE impl group AND no impl inherits the default (fully covered) — no runtime
+--     test is needed: a well-typed call always reaches that impl, so emit a DIRECT
+--     call (covers single-impl + the multi-clause-body fixture; the multi-clause
 --     fall-through lives INSIDE the impl fn's decision tree, note (n)/(o)).
---   • SEVERAL impl groups (impls at distinct types) — load the discriminating
---     argument's cell tag and emit an if-chain: for each group, test whether the
---     loaded ctor tag is one the group's TYPE owns (OR over its constructors'
---     hashName, via ctorsOfType), and on a match call that group's impl fn.  An
---     exhausted chain is `unreachable` (the typechecker proved a real impl).
+--   • otherwise — SEVERAL impl groups, or exactly one group with at least one
+--     inheriting impl missing from it — load the discriminating argument's cell tag
+--     and emit an if-chain: for each group, test whether the loaded ctor tag is one
+--     the group's TYPE owns (OR over its constructors' hashName, via ctorsOfType),
+--     and on a match call that group's impl fn; each inheriting head that can be
+--     given a `@mdk_default_<method>_<tag>` arm gets one appended to the chain
+--     (`emitArgDefaultChain`).  An exhausted chain calls the terminal
+--     `@mdk_dispatch_no_impl` trap — loud at run time, not `unreachable` (the
+--     typechecker proves a real impl exists, but not that this site can emit an arm
+--     for every head that reaches it, e.g. E19's untestable-tag gap).
 --     The discriminating arg may be an IMMEDIATE nullary ctor, so the tag is read
 --     via `loadDiscriminant` (low-bit branch), not a bare `loadTag` (note (p)).
 emitMethodArgDispatch : Emit -> String -> List String -> (String, LTy)
