@@ -1,0 +1,9 @@
+-- A user-declared foreign extern must name FFI in its terminal effect row.
+-- check-policy must reject this during ordinary analysis rather than accepting
+-- the written Net capability and then panicking when the interpreter reaches it.
+-- lint-disable-file rule-dead-code, rule-missing-signature
+effect Net Prefix
+
+extern ffiFetch : String -> <Net "idp.example.com/api"> String
+
+transform x = ffiFetch x
