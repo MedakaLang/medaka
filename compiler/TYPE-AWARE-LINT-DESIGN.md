@@ -1,31 +1,43 @@
 # Type-Aware Lint Tier — Design
 
-**Status:** PARTLY SHIPPED, and RE-COSTED. Re-derived 2026-08-19 against `main` at
-`8b7b5517` (worktree level with `origin/main`); every file:line below was checked at that
-commit. This supersedes the 2026-06-29 read-only pass, which was stale in **both**
-directions — it understated what had shipped and overstated what Tier 2 costs.
+**Status:** PARTLY SHIPPED and RE-COSTED; TIER 1 UNBLOCKED, TIER 2 STILL BLOCKED. Re-derived 2026-08-30
+against `main` at `33c7247a` (worktree level with `origin/main`). The body was previously
+derived 2026-08-19 at `8b7b5517`; §4.2 and §10.1 have been rewritten at `33c7247a` because
+the Flat-consumer set they described has since drained — every other file:line below still
+carries its `8b7b5517` provenance and should be re-derived before it is relied on. This
+supersedes the 2026-06-29 read-only pass, which was stale in **both** directions.
 
 | Tier | State |
 |------|-------|
 | **Tier 0** — constructor/datatype facts, no typecheck | **SHIPPED.** `lint.mdk` imports `frontend.exhaust.{Oracle, buildOracle, oGetCtors, oGetCtorType}`; `Rule`'s doc-comment describes the Oracle as *"used by the irrefutability logic to recognise single-constructor patterns"* — catalog rule (a), landed. |
-| **Tier 1** — name-keyed inferred schemes | **NOT BUILT.** No `types.typecheck` import in `lint.mdk`. Design below stands, but see §10.1 — the recipe as written taxes the rearchitecture arc. |
-| **Tier 2** — `typeOfLoc` over arbitrary sub-expressions | **NOT BUILT.** Re-costed from *large* to **medium**, plus one irreducible approximation. See §2.3 and §10. |
+| **Tier 1** — name-keyed inferred schemes | **NOT BUILT, but UNBLOCKED** (2026-08-30). No `types.typecheck` import in `lint.mdk`. §10.1's hold is **discharged** — E-1 (#1115) shipped the one-module Module-arm seam Tier 1 needs, so the recipe no longer taxes the arc. Cost is now §4's perf/cache/load-closure debts, not a dependency. |
+| **Tier 2** — `typeOfLoc` over arbitrary sub-expressions | **NOT BUILT, still blocked.** Re-costed from *large* to **medium**, plus one irreducible approximation. #1752 (§2.3/§10.3) and the §2.4/§3 go/no-go both stand. See §2.3 and §10. |
 
 ⚠️ **Read §10 before scheduling any of this.** The remaining work couples to the
 typechecker rearchitecture arc (#1122) in three places, and one of the couplings
 (§10.2) is a silent-wrongness hazard for anyone who builds the harvest without knowing it.
+
+⚠️ **Tier 1 and Tier 2 are no longer in the same scheduling state, and this doc should not
+be read as gating them together.** Tier 1 is buildable today and has a filed customer
+(#2248 Miss 2 — a signature-match `rule-stdlib-reimpl` that survives a rename). Tier 2 has
+no demonstrated customer and two live blockers. Tracker: **#1754**.
 
 This doc scopes a *type-aware* rule tier for `medaka lint` (`compiler/tools/lint.mdk`),
 analogous to `typescript-eslint`'s type-checked rules: rules keep matching the
 **raw (pre-desugar) surface AST** for shape, but may **query a side-table of
 resolve/type facts** (a "type oracle") harvested by running the pipeline once.
 
-**Tracker home: #1754** (Tier 1 + Tier 2; filed 2026-08-19, DEPENDENCY-BLOCKED —
-explicitly not slot-fillable). Its arc-side dependency is **#1752** (scope
-`currentLoc`), which is arc work on its own merits, is *not* owned by this doc,
-and **must not be prioritised on this tier's behalf** — the dependency is one-way.
-Tier 1 additionally waits on the Stage E Flat-consumer migration (**#1115**; the
-`CheckMode` deletion in #1116 is downstream of it) for the reason in §10.1.
+**Tracker home: #1754** (Tier 1 + Tier 2; filed 2026-08-19, re-derived 2026-08-30).
+**Tier 2's** arc-side dependency is **#1752** (scope `currentLoc`), which is arc
+work on its own merits, is *not* owned by this doc, and **must not be prioritised
+on this tier's behalf** — the dependency is one-way.
+
+**Tier 1's** dependency was the Stage E Flat-consumer migration (**#1115**), and
+it has **drained**: #1115 closed and shipped the one-module Module-arm wrappers
+Tier 1 harvests through (§4.2, §10.1). Tier 1 is schedulable. The `CheckMode`
+deletion (**#1116**) is downstream of #1115 and is deferred past 0.1.0, but Tier 1
+does not wait on it — see §10.1's scope note on what "drained" does and does not
+claim.
 
 ---
 
@@ -251,15 +263,32 @@ off, because it is just a syntactic scan of constructors.
 ### 4.2 Tier 1 — name-keyed schemes (one pipeline run; reuses LSP harvest)
 
 Run the existing non-aborting analysis once and harvest schemes the same way the
-LSP does:
+LSP does.
 
-- **Single file:** mirror `docSchemes` (`lsp.mdk:479-486`): `desugar` runtime +
-  core + user, call
-  `checkProgramSchemesWithRuntime : List Decl -> List Decl -> <Mut> List (String, Scheme)`
-  (`typecheck.mdk:7460`) → that is `schemeOfTop`. Then read
-  `currentLocalSchemes ()` (`typecheck.mdk:1458`) → `schemeOfLocal`. Runtime/core
-  sources are read exactly as `runCheckCmd` does (`medaka_cli.mdk:115-128`:
-  `MEDAKA_ROOT` + `stdlib/runtime.mdk`/`core.mdk`).
+🚨 **Rewritten 2026-08-30 at `33c7247a`. The previous recipe said "mirror
+`docSchemes` → `checkProgramSchemesWithRuntime`" — that is a FLAT-path entry
+point, and following it today would add the tree's only second Flat consumer
+back after E-1 finished removing them (§10.1).** Call the Module-arm one-module
+wrappers instead. `docSchemes` itself has already been migrated onto them
+(`lsp.mdk:710-719` now calls `checkOneSchemeFull`), so "mirror `docSchemes`" and the
+recipe below no longer differ — but the old wording named the Flat function
+explicitly and would have been copied.
+
+- **Single file:** `desugar` runtime + core + user, then call
+  `checkOneSchemeFull : List Decl -> List Decl -> (String, List Decl) -> (List (String, Scheme), List (String, Scheme))`
+  (`typecheck.mdk:36786`) → `(preludeSchemes, ownSchemes)`, which is `schemeOfTop`
+  in exactly the two halves a rule needs (concatenate `own ++ prelude` so a user
+  redefinition shadows the prelude's binding of the same name — the precedence
+  every current consumer wants, and the reason the halves are handed back
+  separate rather than pre-concatenated). Then read `currentLocalSchemes ()`
+  (`typecheck.mdk:1458`) → `schemeOfLocal`. Runtime/core sources are read exactly
+  as `runCheckCmd` does (`medaka_cli.mdk:115-128`: `MEDAKA_ROOT` +
+  `stdlib/runtime.mdk`/`core.mdk`).
+
+  Use `checkOneScheme` (`:36766`) instead if the terminal module's OWN schemes
+  suffice; `checkOneSchemeFull` exists precisely for consumers that look names up
+  by bare name with no idea whether the name is the user's or the prelude's,
+  which is a lint rule's situation.
 - **Project:** use the loader + diagnostics path —
   `checkModules : List Decl -> List Decl -> List (String,List Decl) -> <Mut> List (String,List (String,Scheme))`
   (`typecheck.mdk:9807`), fed by `loadProgramFilesE`/`loadProgramFilesLocatedE`
@@ -270,11 +299,15 @@ LSP does:
 - **`typechecked` flag:** harvest errors via
   `checkProgramDiags : … -> <Mut> (List (String,Option Loc), List (String,Option Loc))`
   (`typecheck.mdk:9314`) or the boolean `checkErrorsWithRuntime`
-  (`typecheck.mdk:9279`). Set `typechecked = (errors == [])`. Crucially,
-  `checkProgramSchemesWithRuntime` returns **best-effort schemes even when the
-  file has type errors** (it only fails to produce an env if the file doesn't
-  *parse* — `docSchemes` returns `None` only on `parseResult == Err`,
-  `lsp.mdk:480`), so Tier 1 degrades gracefully: see §5.
+  (`typecheck.mdk:9279`), or — preferred, and matching the wrappers above —
+  `checkOneDiags : List Decl -> List Decl -> (String, List Decl) -> (List TcDiag, List TcDiag)`
+  (`typecheck.mdk:36795`), whose `(errs, warns)` shape matches `checkProgramDiags`
+  exactly so a call site can swap targets with no shape change. Set
+  `typechecked = (errors == [])`. Crucially, the scheme harvest returns
+  **best-effort schemes even when the file has type errors** (it only fails to
+  produce an env if the file doesn't *parse* — `docSchemes` returns `None` only
+  on `parseResult == Err`, `lsp.mdk:715-716`), so Tier 1 degrades gracefully:
+  see §5.
 
 **`Loc` bridging in Tier 1: none needed.** Every Tier-1 query is keyed by the
 *name* the rule already extracted from the raw decl (the function name, the
@@ -366,8 +399,8 @@ This is a **third pass** in the lint run, after the per-file `Rule` pass and the
 | `compiler/tools/lint.mdk` | New `record TypedRule`, `record TypeOracle`, `isIrrefutableArm`, `lintTypedProgram`/`runTypedRuleOn`, the typed-rule fns + `allTypedRules` registry. (`Rule`/`CrossFileRule` untouched.) |
 | `compiler/tools/lint.mdk` | New `import frontend.exhaust.{Oracle(..), buildOracle, oGetCtors, oGetCtorType, oGetCtorFields}` and `import types.typecheck.{Scheme(..), Mono(..)}` (Tier 1). |
 | `compiler/driver/medaka_cli.mdk` | In `runLintCmd` (`:764-781`): `let typeAware = hasFlag "--type-aware" argv` (`:765-769`; `lintTargets` at `:942` already strips any `--`-prefixed token, so no change there). When set, build the `TypeOracle` (Tier 0 always; Tier 1 via the harvest below) and call `lintTypedProgram` after the existing per-file/cross-file passes. |
-| `compiler/driver/medaka_cli.mdk` | New oracle-build helper near the lint helpers (`lintOneFileReport` `:899`, `parseLintFiles` `:813`): single-file mirrors `docSchemes` (`lsp.mdk:479-486`) + `currentLocalSchemes`; project mirrors `checkModules` fed by `loadProgramFilesE`. Reads runtime/core like `runCheckCmd` (`:115-128`). |
-| (reuse, no edit) | `compiler/frontend/exhaust.mdk` `buildOracle`/accessors (`:108-190`); `compiler/types/typecheck.mdk` `checkProgramSchemesWithRuntime` (`:7460`), `currentLocalSchemes` (`:1458`), `checkProgramDiags` (`:9314`), `checkModules` (`:9807`); `compiler/driver/diagnostics.mdk` `analyzeProject` (`:340`). |
+| `compiler/driver/medaka_cli.mdk` | New oracle-build helper near the lint helpers (`lintOneFileReport` `:899`, `parseLintFiles` `:813`): single-file calls `checkOneSchemeFull` + `currentLocalSchemes`; project calls `checkModules` fed by `loadProgramFilesE`. Reads runtime/core like `runCheckCmd` (`:115-128`). |
+| (reuse, no edit) | `compiler/frontend/exhaust.mdk` `buildOracle`/accessors (`:108-190`); `compiler/types/typecheck.mdk` `checkOneSchemeFull` (`:36786`), `checkOneDiags` (`:36795`), `currentLocalSchemes` (`:1458`), `checkModules` (`:9807`); `compiler/driver/diagnostics.mdk` `analyzeProject` (`:340`). ⚠️ **Not** `checkProgramSchemesWithRuntime`/`checkProgramDiags` — those are the Flat entry points this table named before 2026-08-30; see §10.1. |
 
 No seed re-mint expected: `lint` is outside the self-compile graph (per
 MEMORY.md "medaka lint" note — adding rules surfaced emitter gaps but the tool
@@ -406,6 +439,29 @@ false-positives. **Oracle query:** `orc.schemeOfTop name` (Tier 1, name-keyed �
 no `Loc` needed) compared structurally against the known stdlib scheme for that
 name (e.g. `reverse : List a -> List a`). Fire only when the signatures unify.
 `needsTypecheck = True` → auto-skipped on type-error files.
+
+> 🎯 **This is Tier 1's first filed customer: #2248 Miss 2** (added 2026-08-30).
+> That issue reports `stdlib/toml.mdk:53-58`'s `listReverse` reimplementing
+> `list.reverse` and going undetected, because `stdlibNames` is matched
+> **name-exact** — so any rename defeats the rule, and the issue argues renaming
+> is the *common* shape, since an agent often renames precisely to dodge a clash
+> it half-anticipates. The two fix-shapes #2248 proposes on its own are a prefix
+> heuristic and a syntactic shape match, and it flags the latter's limit itself:
+> *"lint has no type environment, so a shape rule cannot confirm the argument is
+> a `List`; it would be a heuristic with false positives and should ship as a
+> warning, not an autofix."*
+>
+> The signature match above is the clean answer to exactly that: it survives a
+> rename, needs **no `Loc` join**, can ship as an error rather than a warning
+> (a signature match is a fact, not a heuristic), and satisfies #2248's own
+> acceptance bar that whatever replaces the curated `stdlibNames` list be
+> *derived from the stdlib rather than hand-maintained*.
+>
+> ⚠️ #2248's **Miss 1** (`ruleStdlibReimpl` blanket-skips everything under
+> `stdlib/` via `isStdlibPath`, so a stdlib module that merely *consumes*
+> `reverse` is exempted along with the one that *defines* it) is **Tier 0** and
+> is **not** blocked on this doc. Narrowing that exemption from a path to a
+> `(path, name)` ownership pair should land independently and first.
 
 **(d) Redundant conversion / wrapping.** Two flavors:
 - *Syntactic sub-case (Tier 0/none):* `map id xs`, `xs |> map id` — detect the
@@ -466,7 +522,7 @@ Re-costed 2026-08-19. Changes from the 2026-06-29 pass are marked.
 | Piece | Cost | Note |
 |---|---|---|
 | Tier 0 framework + rule (a) | **small** | ✅ **shipped** — was the estimate, is now the record |
-| Tier 1 (name-keyed schemes) + rules (b)(c) | **medium** | unchanged in size; **sequencing changed** — see §10.1 |
+| Tier 1 (name-keyed schemes) + rules (b)(c) | **medium** | unchanged in size; **sequencing UNBLOCKED 2026-08-30** — §10.1's hold is discharged, so this row is now the whole cost |
 | Tier 2 · the `(Loc, Mono)` recorder | **small** | ⬇️ **revised from "large"** — `currentLoc` exists, `Mono` is union-find, no zonk (§2.3) |
 | Tier 2 · scoped spans (#1752) | **medium** | ⬇️ **reattributed** — arc work, three other consumers, not lint's to schedule |
 | Tier 2 · approximate raw↔core join | **irreducible** | ⬆️ **promoted to the go/no-go** (§2.4) |
@@ -476,10 +532,26 @@ Re-costed 2026-08-19. Changes from the 2026-06-29 pass are marked.
 piece, defer it") reached the right conclusion for a wrong reason. Tier 2's
 *machinery* is cheaper than believed — most of it already exists for diagnostics.
 What should defer it is not cost but **order and evidence**: the span semantics
-belong to the arc and are filed there (#1752, §10.3), Tier 1's current recipe
-taxes Stage E (§10.1), and no rule has yet been named that survives §2.4's
-approximate join. **Fix the order, then re-ask the question** — do not treat
-"Tier 2 is expensive" as the standing reason, because it is no longer true.
+belong to the arc and are filed there (#1752, §10.3), and no rule has yet been
+named that survives §2.4's approximate join. **Fix the order, then re-ask the
+question** — do not treat "Tier 2 is expensive" as the standing reason, because
+it is no longer true.
+
+**Amended 2026-08-30.** This paragraph originally listed a third reason — *"Tier 1's
+current recipe taxes Stage E (§10.1)"* — which has since been **discharged** and is
+struck above. Two consequences:
+
+- The two tiers have **come apart**. Tier 1's deferral reason is gone entirely;
+  Tier 2 keeps both of its own (#1752, and §2.4's unanswered join). Do not carry
+  a single "this doc is blocked" verdict forward.
+- On the **evidence** half, the ledger has moved *against* Tier 2. Two type-aware
+  rule requests were filed 2026-08-30 under epic #2246, and neither needs Tier 2:
+  #2247 (`Result`/`Option` clones) is **Tier 0** — its discriminator, *"a clone
+  has no instances,"* is a declaration-level syntactic test — and #2248 Miss 2
+  (renamed stdlib reimplementations) is **Tier 1**, answered exactly by §7a's
+  signature match. Tier 1 now has a filed, motivated customer; **Tier 2 still has
+  none**, which is a datum for #1754's done-when (b), not an argument to build it
+  speculatively.
 
 ---
 
@@ -493,37 +565,68 @@ with one exception (§10.3) that is genuinely arc work and is filed as such.
 direction** (#1660). Treat component dispositions cited below as claims to
 re-derive at implementation time, not as settled facts.
 
-### 10.1 Tier 1's current recipe taxes Stage E-1 (#1115) — sequencing, not design
+### 10.1 Tier 1's Stage E-1 (#1115) dependency — DISCHARGED 2026-08-30
 
-§4.2 says to build the single-file harvest by mirroring `docSchemes`
-(`lsp.mdk`). That is a **Flat-path** consumer. Component E's stated target is
-"One driver … The target deletes `CheckMode` entirely," and its migration is
+**Historical form of this section (2026-08-19, `8b7b5517`).** §4.2 told the
+implementer to build the single-file harvest by mirroring `docSchemes`
+(`lsp.mdk`), which was then a **Flat-path** consumer. Component E's stated target
+is *"One driver … The target deletes `CheckMode` entirely,"* and its migration is
 explicitly *consumer-by-consumer*, naming "the repl, LSP hover/single-file env,
 playground, single-file doctests, `snapshot`/`check_policy`/`doc`" as consumers
-"whose golden families pin Flat behavior."
+*"whose golden families pin Flat behavior."* Building Tier 1 as written would
+therefore have **added a new consumer to the set E-1 had to drain**, and pinned
+another golden family to Flat behaviour on the way out. The recommendation was to
+hold Tier 1 until #1115 drained.
 
-Building Tier 1 as written therefore **adds a new consumer to the set E-1 has to
-drain**, and pins another golden family to Flat behavior on the way.
+The census then read: `tools/repl.mdk`, `tools/lsp.mdk`, `tools/check_policy.mdk`,
+`tools/doc.mdk`, `entries/playground_main.mdk`, `entries/origin_agreement_main.mdk`
+— **Tier 1 would have been the seventh.** That section closed by saying *"re-derive
+the set before relying on it; do not read the list above as durable either."* That
+warning was correct, and the set has moved.
 
-**The owning unit is #1115 (E-1)** — *"migrate every Flat-path consumer to the
-1-module Module path … one PR per consumer, each with its own golden
-accounting."* #1116 (E-2) deletes `CheckMode` and is **downstream**: its own body
-depends on *"E-1 (no Flat consumers left except the promotion fallback)."*
+#### Re-derived at `33c7247a`
 
-Census at `8b7b5517` — the live Flat consumers (callers of
-`checkProgramSeededSplit` / `checkProgramSeeded` / `checkProgramSchemes` /
-`checkProgramSchemesWithRuntime` outside `typecheck.mdk`) are `tools/repl.mdk`,
-`tools/lsp.mdk`, `tools/check_policy.mdk`, `tools/doc.mdk`,
-`entries/playground_main.mdk`, and `entries/origin_agreement_main.mdk`. **Tier 1
-as designed would be the seventh.** ⚠️ The last of those is not in E-1's written
-enumeration — it landed 2026-08-02, four days after the set was written (reported
-on #1115). Re-derive the set before relying on it; do not read the list above as
-durable either.
+```sh
+grep -rn 'checkProgramSeededSplit\|checkProgramSeeded\|checkProgramSchemes' \
+  --include=*.mdk . | grep -v '^\./compiler/types/typecheck.mdk'
+```
 
-**Recommendation: hold Tier 1 until #1115 drains**, then write the harvest once
-against the single driver. If it must land sooner, write it against whatever seam
-E-1 is migrating consumers *to*, and say so in the PR, rather than cloning
-`docSchemes`.
+**One live call site outside `typecheck.mdk`: `entries/origin_agreement_main.mdk:282`**
+(`checkProgramSchemesWithRuntime`, imported at `:137`). Every other hit in the tree is a
+comment. That site is **not** a consumer awaiting migration — it is the deliberate flat
+arm of the origin-agreement differential, whose entire job is to compare the two drivers
+(`test/diff_compiler_origin_agreement.sh:366`: *"the flat drivers still route through
+`checkProgramSeededSplit`"*). It should stay.
+
+The other five have migrated onto E-1's one-module Module-arm wrappers:
+`lsp.mdk`'s `docSchemes` (`:710-719`) now calls `checkOneSchemeFull`; `repl.mdk`
+imports `checkOneDiags`/`checkOneScheme` (`:33-39`); `doc.mdk` imports
+`checkOneScheme` (`:39`); `check_policy.mdk` and `playground_main.mdk` likewise.
+
+**Both of §4.2's harvest routes are already Module-arm.** §4.2 routes through
+`diagnostics.analyze`/`analyzeProject`, and `driver/diagnostics.mdk:51-63` imports
+`checkOneDiags`, `checkModulesDiags`, `checkModules`, `entryOwnSchemes` — no Flat
+entry point at all. Tier 1 needs no new driver, single-file or project.
+
+**Consequence: the hold is discharged.** Tier 1 adds no new Flat consumer and pins
+no golden family to Flat behaviour. §4.2 has been rewritten to name
+`checkOneSchemeFull` directly rather than "mirror `docSchemes`" — the two now
+denote the same thing, but the old wording named the Flat function explicitly and
+would have been copied.
+
+#### ⚠️ Scope of the "drained" claim — what it does NOT say
+
+**The Flat path is not gone.** `CheckMode`/`Flat` is alive inside `typecheck.mdk`:
+the probe entries `checkToLines` / `checkMatchToLines` route through
+`checkProgramSchemes` / `checkProgramSeededSplit` / `checkProgramSeeded`
+(`typecheck.mdk:33258`, `:33329`, `:33398`), and the whole `Flat` arm of
+`checkBodyImpl` remains. **#1116 (E-2) is open and deferred past 0.1.0.**
+
+The claim here is exactly the one this section originally made and no wider: *the
+external consumer set E-1 was draining is drained.* Tier 1's dependency was on
+that set, not on `CheckMode`'s deletion — #1116's own body depends on *"E-1 (no
+Flat consumers left except the promotion fallback)"*, i.e. E-2 is downstream of
+the condition Tier 1 needed, not a peer of it.
 
 ### 10.2 The harvest read-point is dictated by E — and getting it wrong is silent
 
