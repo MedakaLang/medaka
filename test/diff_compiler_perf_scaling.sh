@@ -1939,10 +1939,16 @@ TIME_STAGES="parse exhaust-guards desugar resolve mark typecheck elaborate dce m
 # later. None of these three is anywhere near the 3.0 threshold the way
 # `modules:typecheck` straddles it — every r2 above clears 3.0 by 55%+ — so
 # there is no flap here to special-case; TFIXED uses the file's 2.60 convention.
-# Ceilings: `parse` 7.0 clears the observed top (5.61, this box's first,
-# noisier single-sample run — see the commit that added this row) by ~25%;
-# `fmt` 6.5 clears 4.95 by ~31% (matching `xref:emit`'s ~35%-over-top margin
-# convention); `lint` 9.5 clears 7.25 by ~31%. DEEP-only/nightly placement
+# Ceilings, each margin quoted over that stage's OWN observed top r2 across the
+# four samples in S-4's report (parse 4.15/4.45/4.69/4.79, fmt
+# 4.77/4.95/4.96/5.23, lint 4.59/4.76/6.48/7.25): `parse` 7.0 clears 4.79 by
+# ~46%; `fmt` 6.5 clears 5.23 by ~24%; `lint` 9.5 clears 7.25 by ~31% (in the
+# range of `xref:emit`'s ~35%-over-top margin convention).  ⚠️ The `parse` and
+# `fmt` figures here previously read 5.61 and 4.95: 5.61 matches NO `parse`
+# sample in S-4's report nor 60d400868's own commit message (it is a
+# transplanted load-vs-check wall ratio from elsewhere in the epic), and 4.95
+# was a middle `fmt` sample rather than that stage's top.  Neither ceiling
+# constant moves — only the prose justifying it. DEEP-only/nightly placement
 # ([G14]): a single N=16000 run alone costs ~26s and K=5 timing runs at three
 # sizes cost roughly 3 more minutes total, the same order as `xref`'s DEEP band
 # — a flappy-cost arm like this does not belong gating a PR merge.

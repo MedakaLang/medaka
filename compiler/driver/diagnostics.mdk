@@ -1064,13 +1064,6 @@ rawDeclsOfMod (_, _, prog) = prog
 midToDesugaredPair : (String, String, List Decl) -> (String, List Decl)
 midToDesugaredPair (mid, _, prog) = (mid, desugar prog)
 
--- (mid, rawDecls) → (mid, desugared decls) — the 2-tuple sibling of
--- `midToDesugaredPair`, for module lists that have already dropped the file
--- path (`loadProgramE`'s result, e.g.), needed by the `mainShapeWarnings` call in
--- `checkJsonFile`'s multi-module arm.
-desugarModPair : (String, List Decl) -> (String, List Decl)
-desugarModPair (mid, prog) = (mid, desugar prog)
-
 -- Whenever `import` is present the multi-module path runs BOTH resolve and
 -- typecheck over the same file, and an unbound name is a resolve-phase fact —
 -- resolve already reported it (with the did-you-mean / import hint) before
@@ -1601,8 +1594,12 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
             let entryRaw = match lookupAssoc src !parseCacheRef
               Some decls => decls
               None => parseLocated src
-            let modsDFull = map desugarModPair mods
-            mainShapeWarnings [] [] modsDFull entryRaw
+            -- #2246/S-1 (F-converge): `mainShapeWarnings` ignores its first THREE
+            -- parameters unconditionally (see its definition above), so the
+            -- whole-graph desugar this used to compute was dead work on every
+            -- clean multi-module `check --json`.  Pass `[]`, matching the
+            -- single-module arm's `[] [] []`.
+            mainShapeWarnings [] [] [] entryRaw
           let triples = map readDiagSrc results
           let root = dirOf stdlibDir
           let relTriples = map (relDiagTriple root) triples
