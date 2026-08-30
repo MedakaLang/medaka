@@ -498,7 +498,7 @@ gateHelpText = stringConcat
     "directions, so they are neither packed nor hand-assignable. A gate needing\n",
     "wasm-tools/node only lands on a\n",
     "row with wasm_arm = true. It refuses rather than pack from a missing cost,\n",
-    "and fails when the assignment it would emit misses its pole/median target.\n",
+    "and fails when the assignment it would emit misses its pole/floor budget.\n",
     "\n",
     "`gate run` only:\n",
     "  --dry-run          print the resolved invocation plan; execute nothing\n",
@@ -2240,19 +2240,52 @@ ciCmdBody argv = match parseCiArgs argv CiArgs { registry = None, workflow = Non
 --
 -- The `gates` job's wall-clock is its SLOWEST row (the pole); its billed
 -- runner-time is `rows × pole`.  So the waste a balancer can actually remove
--- is the gap between the pole and the typical row, and the objective is the
--- POLE, reported as the `pole / median` factor.
+-- is the gap between the pole and the best pole any assignment could reach —
+-- the FLOOR — and the enforced statement is `pole / floor` (`balFactorMilli`).
 --
--- The enforced target is `pole / median <= 1.25` (`balTargetMilli`): at most a
--- fifth of the gates job's billed time is a runner idling because its row
--- finished early.  It is a target and not a wish — `balance` and `balance
--- --check` both FAIL when the assignment they would emit misses it.
+-- 🚨 IT USED TO BE `pole / median`, AND THAT METRIC WAS PERVERSE IN BOTH
+-- DIRECTIONS (S-4, #2216).  Its denominator is a property of the SUITE, not of
+-- the packing, so it moved for reasons the balancer neither caused nor could
+-- repair:
 --
--- ⚠️ The pole has a floor no packing can go under: the single most expensive
--- gate.  Gates are indivisible, so `pole >= max(cost)`, and when one gate
--- alone exceeds the target the refusal says so in those words rather than
--- blaming the packing — a "rebalance harder" message pointed at a gate that
--- needs to get FASTER would send the next reader looking in the wrong place.
+--   * The pole is one indivisible gate.  A 16-20% slowdown in that ONE gate
+--     raises the pole while the median stands still, so `ci-gen-drift` — a
+--     REQUIRED check — goes red with no repair available to anyone who did not
+--     write that gate.  `dominating_gate.toml` was that case as a fixture, and
+--     it was committed as a REFUSAL.
+--   * Worse, the same metric reds when the suite gets FASTER.  Speed up every
+--     non-pole gate by 4× and the median falls while the pole does not, so
+--     `pole / median` RISES.  `nonpole_speedup.toml` is that measured: an
+--     optimally packed 7-gate suite scoring 3.333 against a target of 1.250.
+--
+-- The floor is the ACHIEVABLE pole: the largest of three quantities, each of
+-- which the pole provably cannot go below (`balFloor`) —
+--
+--   1. the most expensive single gate (gates are indivisible, so whichever row
+--      holds it has a makespan at least that big);
+--   2. the heaviest CLOSED row's makespan (the packer moves nothing onto a
+--      `full_cores` row or off it, so that row's load is fixed input);
+--   3. the open gates' total work divided by the open rows' worker SLOTS — a
+--      row's capacity is its recorded `rjobs` parallel workers, not one
+--      (`balJobsFor`), so `sum(rjobs) × pole >= total work`.
+--
+-- So `pole / floor >= 1.000` always, it is 1.000 exactly when the packing is
+-- optimal, and it moves ONLY when the packing changes: both perverse cases
+-- above score 1.000 under it, and the classic LPT worst case
+-- (`lpt_packing_gap.toml`) still scores 1.222 and is still refused.  It is a
+-- budget and not a wish — `balance` and `balance --check` both FAIL when the
+-- assignment they would emit misses it.
+--
+-- ⚠️ The floor is a LOWER BOUND, not always an achievable makespan: 500 + three
+-- 300s over three rows floors at 500 and cannot finish before 600.  So a miss
+-- can still be indivisibility rather than packing, and `balEnforce` keeps two
+-- messages so a reader is never sent to "rebalance harder" when the answer is
+-- "this gate has to get FASTER".
+--
+-- ⚠️ ONE VALID FLOOR TERM IS DELIBERATELY OMITTED: the wasm-constrained gates'
+-- own work over the wasm rows' slots.  Leaving a valid term out makes the floor
+-- SMALLER and the ratio LARGER, i.e. strictly stricter, so it cannot manufacture
+-- a false green; add it if a wasm-only red ever turns out to be unrepairable.
 --
 -- ── A row's score is its MAKESPAN, and it predicts real wall clock ──────────
 --
@@ -2332,34 +2365,50 @@ export
 balOtherJob : String
 balOtherJob = "other-job"
 
-{- | The enforced `pole / median` ceiling, in thousandths.  See "The objective".
+{- | The enforced `pole / floor` budget, in thousandths.  See "The objective"
+   for what the floor is and why the denominator stopped being the median.
 
-   HELD AT 1.250 UNDER THE MAKESPAN MODEL, DELIBERATELY, NOT BY REFLEX.  The
-   number did not move, but what it constrains did, in two ways worth stating
-   because both are easy to read backwards:
+   1.125 IS DERIVED FROM A MEASUREMENT, NOT CHOSEN.  The arithmetic, in full,
+   so a future reader can redo it rather than trust it:
 
-   (a) It now bounds a ratio of PREDICTED REAL WALL CLOCKS, not of relative
-       scores.  "At most a fifth of the gates job's billed time is a runner
-       idling" was an aspiration under the sum; under the makespan it is a
-       claim about seconds, and it is checkable against `balCalibLines`.
+     * The metric's own optimum is 1.000, by construction — `balFloor` is a
+       lower bound on the pole, so the ratio cannot go below one and the whole
+       budget is PACKING SLACK.  There is no achieved-value term to leave room
+       for, which is exactly what the old `pole / median` ceiling had to do.
 
-   (b) The SAME number is a STRICTER constraint than it was.  Dividing a row of
-       many small gates by its workers roughly halves it, while a row whose
-       cost is one indivisible gate does not shrink at all — so the pole's floor
-       (`max(cost)`) stays put while the median falls, and the ratio rises.
-       Measured on the run this slice ingested, the identical assignment scores
-       1.073 as a sum and 1.083 as a makespan.
+     * What the budget must absorb is therefore only re-ingest NOISE: the
+       baseline's `medianMs` values move on every scheduled ingest, and both
+       the pole and the floor are recomputed from them.  S-2 measured that
+       noise out-of-sample rather than guessing at it — leave-one-run-out over
+       the 3 runs in `runs[]`, across 202 of 202 schedulable gates, printed on
+       every run by `balOosBlock`: per-run errors -21.1% / -6.1% / -9.0%, mean
+       |error| 12.0%, systematic bias -12.5% (the median is deliberately
+       low-side robust — `gate_cost.packStat`).
 
-   Tightening it further was considered and rejected on the measurement, not on
-   principle: the derived assignment achieves 1.083, and the pole is a SINGLE
-   gate (`diff_compiler_dict_semantics`, 482.2s) against a ~445s median.  A
-   ceiling set near the achieved figure would convert ordinary re-ingest noise
-   in that one gate into a hard refusal — and `balEnforce` would correctly
-   report it as "this gate has to get FASTER", a repair no rebalance can make.
-   A target that fires when nothing is repackable is a target that gets
-   overridden, and 1.250 leaves the slack that keeps it meaningful. -}
+     * Budget = 1 + max(mean |error|, |bias|) = 1 + max(0.120, 0.125) = 1.125.
+       The LARGER of the two terms, because they are two ways of being wrong
+       about the same prediction and a budget has to cover the worse one.
+
+   ⚠️ THAT IS THE CONSERVATIVE DIRECTION, KNOWINGLY.  Much of the measured error
+   is COMMON MODE — a run that is 12% slow is slow in the numerator and the
+   denominator alike — and a common-mode factor cancels in a ratio, so 12.5% is
+   an upper bound on the noise this metric can actually inherit, not an
+   estimate of it.  Erring high is deliberate: the failure mode of a too-tight
+   budget is a red `ci-gen-drift` with no repair available, which is the exact
+   defect (#2216) this metric exists to remove.  Erring high costs only
+   sensitivity to a packing that is bad by less than an eighth.
+
+   ⚠️ IT IS STILL A REAL CONSTRAINT, WHICH IS WHY IT WAS NOT ROUNDED UP FURTHER.
+   LPT's worst case is `4/3 - 1/(3m)` — 1.222 at three rows, 1.292 at the
+   registry's eight — so a genuinely worst-case packing misses 1.125 and is
+   refused.  `lpt_packing_gap.toml` pins that at 1.222.
+
+   Achieved on the committed registry at the time this landed: 1.000 (pole
+   482.2s = `diff_compiler_dict_semantics` alone, which is also the floor), so
+   the full 12.5% is headroom and no re-ingest noise in that one gate can red
+   it — under the retired metric the same gate's cost WAS the red. -}
 balTargetMilli : Int
-balTargetMilli = 1250
+balTargetMilli = 1125
 
 -- Hysteresis threshold, as a percentage of the pole. 🚨 It no longer decides
 -- WHETHER a gate moves (S-4, #2178, see `balBandNote` below) — the emitted
@@ -2394,7 +2443,8 @@ balMarginPct = 5
    parity, its opposite, and a name-hashed sign), counting gates whose derived
    `shard` moved: 89 / 128 / 127 without the preference, 0 / 4 / 0 with it, at
    an achieved pole identical to three significant figures in all three (the
-   pole/median factor moved by at most 0.005).  Table and method:
+   printed factor moved by at most 0.005, measured as pole/median, the metric
+   S-4 of #2216 retired).  Table and method:
    `docs/ops/GATE-REGISTRY-DESIGN.md` §12.
 
    The pole is not free in general: a slack of p% lets a placement land on a row
@@ -2899,7 +2949,8 @@ balRowIsWasm n (r::rs)
          repacks the other seven rows around the extra load, and the result is
          a fixed point of itself.
      (b) move `diff_compiler_engines` OFF `engines`.  Same adoption — and the
-         projection printed is BETTER (pole/median 1.005 against 1.073),
+         projection printed is BETTER (pole/median 1.005 against 1.073, under
+         the metric #2216 retired),
          because idling a whole runner and stacking the suite's heaviest gate
          onto a shared one is what a cost objective blind to the pin prefers.
 
@@ -3064,9 +3115,14 @@ balMergeInts (x::xs) (y::ys)
   | otherwise = y :: balMergeInts (x::xs) ys
 
 -- The median row load: the mean of the two middle values for an even row
--- count, the middle value for an odd one.  Median rather than mean because
--- the mean is dragged by the pole it is being compared against, which would
--- flatter every packing that has one.
+-- count, the middle value for an odd one.
+--
+-- ⚠️ DESCRIPTIVE ONLY SINCE S-4 (#2216) — it enforces nothing.  It was the
+-- denominator of the old `pole / median` target and is kept because it is the
+-- one number that tells a reader at a glance how far the typical row sits from
+-- the pole, which the per-row table shows but does not summarise.  It is NOT a
+-- component of `balFloor`: a median is a property of the suite, and mixing one
+-- into the floor would put the perversity this slice removed straight back.
 balMedian : List Row -> Int
 balMedian rs =
   let v = balSortInts (balLoads rs)
@@ -3084,13 +3140,93 @@ balNth i (x::xs)
   | i <= 0 = x
   | otherwise = balNth (i - 1) xs
 
--- `pole / median` in thousandths.  Integer arithmetic throughout: the factor
+-- ── The floor: the achievable pole ──────────────────────────────────────────
+--
+-- The largest of three lower bounds on the pole, each proved in "The
+-- objective" above.  A floor of 0 (no rows, no gates) is reported as a factor
+-- of 0 by `balFactorMilli`, matching what the old ratio did with a zero
+-- median: there is nothing to grade, and `balEnforce` must not divide by it.
+
+-- Term 1: the most expensive single gate.  Over ALL gates, closed-row members
+-- included — whichever row holds it, that row's makespan is at least its cost.
+balFloorGateMs : List Cand -> Int
+balFloorGateMs cs = (balMaxCand cs).cms
+
+-- Term 2: the heaviest closed row's makespan.  A `full_cores` row's membership
+-- is declared, not packed (`balSeedClosed`), so its load is fixed input and the
+-- pole is at least that.  Blaming the packer for it would be the same category
+-- error as blaming it for one indivisible gate.
+balFloorClosedMs : List Row -> Int
+balFloorClosedMs [] = 0
+balFloorClosedMs (r::rs)
+  | r.rclosed = maxI r.rload (balFloorClosedMs rs)
+  | otherwise = balFloorClosedMs rs
+
+balFloorClosedRow : List Row -> String
+balFloorClosedRow rs = balFloorClosedRowGo rs "" (-1)
+
+balFloorClosedRowGo : List Row -> String -> Int -> String
+balFloorClosedRowGo [] n _ = n
+balFloorClosedRowGo (r::rs) n best
+  | r.rclosed && r.rload > best = balFloorClosedRowGo rs r.rname r.rload
+  | otherwise = balFloorClosedRowGo rs n best
+
+-- The open gates' total work.  Closed-row members are excluded on BOTH sides of
+-- the capacity term (here and in `balOpenSlots`): they cannot move, so they are
+-- neither work the packer has to place nor capacity it has to place it on.
+balOpenWork : List Cand -> List Row -> Int
+balOpenWork [] _ = 0
+balOpenWork (c::cs) rs
+  | balIsClosed c.curRow rs = balOpenWork cs rs
+  | otherwise = c.cms + balOpenWork cs rs
+
+-- The open rows' worker slots.  `rjobs`, not 1: a row runs its gates through
+-- `run_gates.sh`'s pool, so its capacity per unit of wall clock is its recorded
+-- worker count (`balJobsFor`), and counting rows instead of slots would inflate
+-- this term by roughly `jobs`×.
+balOpenSlots : List Row -> Int
+balOpenSlots [] = 0
+balOpenSlots (r::rs)
+  | r.rclosed = balOpenSlots rs
+  | otherwise = r.rjobs + balOpenSlots rs
+
+-- Term 3: total open work spread perfectly over every open worker slot.
+balFloorCapMs : List Cand -> List Row -> Int
+balFloorCapMs cs rs =
+  let s = balOpenSlots rs
+  if s <= 0 then 0 else balOpenWork cs rs / s
+
+balFloor : List Cand -> List Row -> Int
+balFloor cs rs =
+  maxI (balFloorGateMs cs) (maxI (balFloorClosedMs rs) (balFloorCapMs cs rs))
+
+-- True when the floor is set by one indivisible gate rather than by capacity or
+-- by a closed row — the discriminator `balEnforce` needs to choose between "this
+-- is the packing" and "this gate has to get FASTER".  Ties go to the gate: when
+-- the terms are equal, the gate is the one a reader can act on.
+balFloorIsGate : List Cand -> List Row -> Bool
+balFloorIsGate cs rs = balFloorGateMs cs >= balFloor cs rs
+
+-- Where the floor comes from, in one line, on every run.  A bound with no
+-- stated provenance is a number a reader has to reverse-engineer before they
+-- can act on the ratio built from it.
+balFloorLine : List Cand -> List Row -> String
+balFloorLine cs rs
+  | balFloor cs rs <= 0 = ""
+  | balFloorIsGate cs rs = stringConcat [
+    "  floor: the achievable pole — set by '\{(balMaxCand cs).cname}' alone (\{balSecs (balFloorGateMs cs)}), which is indivisible.\n",
+    "         Moving the FLOOR means that gate has to get FASTER (or be split).\n",
+  ]
+  | balFloorClosedMs rs >= balFloor cs rs = "  floor: the achievable pole — set by the closed row '\{balFloorClosedRow rs}' (\{balSecs (balFloorClosedMs rs)}), whose membership the packer cannot change.\n"
+  | otherwise = "  floor: the achievable pole — set by \{balSecs (balOpenWork cs rs)} of open work over \{intToString (balOpenSlots rs)} open worker slots.\n"
+
+-- `pole / floor` in thousandths.  Integer arithmetic throughout: the factor
 -- is compared against a threshold and printed, and a float would make both
 -- the comparison and the printed digits platform-sensitive for no gain.
-balFactorMilli : List Row -> Int
-balFactorMilli rs =
-  let m = balMedian rs
-  if m <= 0 then 0 else balPole rs * 1000 / m
+balFactorMilli : List Cand -> List Row -> Int
+balFactorMilli cs rs =
+  let f = balFloor cs rs
+  if f <= 0 then 0 else balPole rs * 1000 / f
 
 balMaxCand : List Cand -> Cand
 balMaxCand [] =
@@ -3302,7 +3438,7 @@ balStabLine cs rows0 ps rows = match balTarget False cs rows0
     " (incumbent slack \{intToString balStabPct}% of a row's load)",
     "; pole \{balSecs (balPole rows)} against \{balSecs (balPole lrows)} unstabilized",
     " (\{balDelta (balPole rows - balPole lrows)}),",
-    " pole/median \{balMilli (balFactorMilli rows)} against \{balMilli (balFactorMilli lrows)}\n",
+    " pole/floor \{balMilli (balFactorMilli cs rows)} against \{balMilli (balFactorMilli cs lrows)}\n",
   ]
 
 -- Gates the preference actually HELD: still on the row they were committed to,
@@ -3520,7 +3656,8 @@ balReport label cs rs ps runs = stringConcat
     "  \{label}: \{intToString (listLen cs)} schedulable gates over \{intToString (listLen rs)} rows\n",
     "  predicted row wall clock (makespan of the per-gate baseline medians over the row's recorded workers; * = borrowed/defaulted worker count):\n",
     joinNl (balRowLines rs runs),
-    "\n  pole \{balSecs (balPole rs)} (\{balPoleRow rs})   median \{balSecs (balMedian rs)}   pole/median \{balMilli (balFactorMilli rs)}\n",
+    "\n  pole \{balSecs (balPole rs)} (\{balPoleRow rs})   median \{balSecs (balMedian rs)}   floor \{balSecs (balFloor cs rs)}   pole/floor \{balMilli (balFactorMilli cs rs)}\n",
+    balFloorLine cs rs,
     "  gates whose row changes: \{intToString (balMoved ps)}\n",
   ]
 
@@ -3611,21 +3748,50 @@ balMoveLine ps = match balFirstMove ps
   None => ""
   Some p => "  first divergence: '\{p.pname}' is committed on row '\{p.pfrom}' but derives to '\{p.pto}'.\n"
 
--- The enforcement.  Distinguishes the two ways the target can be missed,
--- because they need different repairs: a packing this command could fix, or
--- one gate that has to get faster before any packing can.
+{- | The enforcement.  Distinguishes the two ways the budget can be missed,
+   because they need different repairs: a packing this command could fix, or
+   one gate that has to get faster before any packing can.
+
+   ⚠️ THE SPLIT IS NOW ON WHAT SETS THE FLOOR, NOT ON WHETHER ONE GATE BLOWS THE
+   TARGET (S-4, #2216) — and that is a narrowing, deliberately.  Under
+   `pole / median` the indivisible-gate branch fired whenever one gate was
+   expensive relative to the typical row, which is a fact about the SUITE and
+   was the perverse red (`nonpole_speedup.toml`): that case now scores 1.000 and
+   is not a refusal at all, because the floor moved up with the gate.
+
+   What survives is the case where it is still true: the floor is a lower bound
+   and not always an achievable makespan (500 + three 300s over three rows floors
+   at 500 and cannot beat 600), so a miss whose floor is gate-set is a miss
+   indivisibility caused.  The message keeps the sentence that made the old one
+   worth reading — a reader must leave it knowing the gate has to get FASTER
+   (or be split), not just that a number is renamed — while stating honestly
+   that a repack may still close part of the gap.  Pointing a reader at
+   "rebalance harder" when the answer is "this gate must get faster" costs them
+   the whole investigation; pointing them the other way costs the same. -}
 balEnforce : List Cand -> List Row -> Option String
 balEnforce cs rs
-  | balFactorMilli rs <= balTargetMilli = None
-  | balMedian rs > 0 && (balMaxCand cs).cms * 1000 / balMedian rs > balTargetMilli = Some (stringConcat ["medaka gate balance: no packing can meet the pole/median target of ", balMilli balTargetMilli, " (best reachable here: ", balMilli (balFactorMilli rs), ").\n", "  '\{(balMaxCand cs).cname}' alone costs \{balSecs (balMaxCand cs).cms}, against a median row of \{balSecs (balMedian rs)}.\n", "  Gates are indivisible, so the pole can never go below the most expensive\n", "  gate.  This is a gate that has to get FASTER (or be split); repacking\n", "  cannot reach the target while it stands.\n"])
-  | otherwise = Some (stringConcat [
-    "medaka gate balance: the emitted assignment misses the pole/median target of ",
+  | balFactorMilli cs rs <= balTargetMilli = None
+  | balFloorIsGate cs rs = Some (stringConcat [
+    "medaka gate balance: the emitted assignment misses the pole/floor budget of ",
     balMilli balTargetMilli,
     " (it is ",
-    balMilli (balFactorMilli rs),
+    balMilli (balFactorMilli cs rs),
     ").\n",
-    "  No single gate explains it, so this is the packing: the target rows are\n",
-    "  reachable in principle and the heuristic did not find them.\n",
+    "  The floor is '\{(balMaxCand cs).cname}' alone, at \{balSecs (balMaxCand cs).cms}, against a pole of \{balSecs (balPole rs)}.\n",
+    "  Gates are indivisible, so the pole can never go below the most expensive\n",
+    "  gate, and the rest of this gap is what would not fit around it.  This is\n",
+    "  a gate that has to get FASTER (or be split); repacking cannot move the\n",
+    "  floor while it stands.\n",
+  ])
+  | otherwise = Some (stringConcat [
+    "medaka gate balance: the emitted assignment misses the pole/floor budget of ",
+    balMilli balTargetMilli,
+    " (it is ",
+    balMilli (balFactorMilli cs rs),
+    ").\n",
+    "  No single gate explains it — the floor is \{balSecs (balFloor cs rs)} and no gate costs that\n",
+    "  much — so this is the packing: rows within budget exist and the heuristic\n",
+    "  did not find them.\n",
   ])
 
 -- ── Writing the assignment back ─────────────────────────────────────────────
@@ -3769,8 +3935,8 @@ balCompute regPath gates shs base runs regSrc =
         balStabLine cs (balRows runs shs) ps rows,
         "  hysteresis: a move needs a pole gain of more than \{intToString balMarginPct}%",
         balBandNote illegal gains moved,
-        "\n  target pole/median \{balMilli balTargetMilli}",
-        if balFactorMilli rows <= balTargetMilli then " — MET\n" else " — MISSED\n",
+        "\n  budget pole/floor \{balMilli balTargetMilli}",
+        if balFactorMilli cs rows <= balTargetMilli then " — MET\n" else " — MISSED\n",
         balMoveLine ps,
         -- Scored against `curRows`, never `rows`: the recorded wall clock came
         -- from the COMMITTED assignment, so comparing it to the DERIVED one

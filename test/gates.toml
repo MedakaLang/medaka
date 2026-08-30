@@ -35,7 +35,7 @@
 #
 # from the per-gate costs in test/gate_cost_baseline.json, subject to each
 # row's toolchain (`wasm_arm`) and closure (`full_cores`) flags, and to an
-# enforced pole/median budget. Run those two commands, in that order, and
+# enforced pole/floor budget. Run those two commands, in that order, and
 # commit both files together — committing one without the other reds the
 # required test/diff_compiler_ci_shard_coverage.sh by construction.
 #
@@ -3468,9 +3468,12 @@ toolchain = []
 # first draft damped exactly that and exited 0. (3) A schedulable gate with no
 # row in the cost baseline is a REFUSAL, never a zero (the baseline is keyed by
 # run_gates.sh's gate label, not the registry's `name`, and the two agree only
-# for gates under test/). (4) When one indivisible gate alone blows the
-# pole/median target the refusal names that gate rather than blaming the
-# packing. Plus a `--check` that the committed shard assignment IS the
+# for gates under test/). (4) When the pole/floor budget is missed against a
+# floor set by one indivisible gate, the refusal names that gate and says it
+# has to get FASTER rather than blaming the packing. (5) The budget grades the
+# PACKING and not the suite: speeding up every non-pole gate must not red it
+# (it did, under the retired pole/median), while a real packing failure still
+# must. Plus a `--check` that the committed shard assignment IS the
 # balancer's output. Oracle-free; needs only ./medaka.
 #
 # shard="other-job" because it tests SCHEDULING and so must not be scheduled by

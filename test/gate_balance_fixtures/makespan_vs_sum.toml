@@ -25,9 +25,9 @@
 # balancer scoring by makespan must move exactly one gate — and a balancer that
 # regressed to the sum would report "already balanced" and exit 0.
 #
-# pole/median under the makespan model is 100 / ((100+80)/2) = 1.111, inside the
-# enforced 1.250, so the target is MET and the run reaches the assignment rather
-# than short-circuiting into `balEnforce`'s refusal.
+# pole/floor under the makespan model is 100 / 100 = 1.000 — the floor is `big`
+# alone — inside the enforced 1.125, so the budget is MET and the run reaches
+# the assignment rather than short-circuiting into `balEnforce`'s refusal.
 #
 # Both rows also record a `rowElapsedMs`, so this fixture exercises the
 # calibration block's real arm (`balCalibLine`) rather than its "no recorded

@@ -31,11 +31,11 @@
 #      rest at zero — and a zero-cost gate is piled onto whichever row is
 #      lightest. The `uncosted_gate` fixture pins the refusal.
 #
-#   4. THE TARGET IS ENFORCED, AND ITS REFUSAL NAMES THE RIGHT CAUSE. Gates are
+#   4. THE BUDGET IS ENFORCED, AND ITS REFUSAL NAMES THE RIGHT CAUSE. Gates are
 #      indivisible, so the pole can never fall below the single most expensive
-#      gate. When that alone blows the pole/median target the message must say
-#      so — pointing a reader at "repack harder" when the answer is "this gate
-#      must get faster" costs them the whole investigation.
+#      gate. When the floor is that gate and the packer still cannot reach it,
+#      the message must say so — pointing a reader at "repack harder" when the
+#      answer is "this gate must get faster" costs them the whole investigation.
 #
 #   5. A CLOSED ROW'S MEMBERSHIP IS DECLARED AND CHECKED, NOT OBSERVED (#2205,
 #      review finding F3). The packer never moves a gate onto a `full_cores`
@@ -44,7 +44,7 @@
 #      a hand edit in either direction was ADOPTED by the next run and reported
 #      "already balanced" for ever after. The `pin_intruder` and `pin_deserter`
 #      fixtures are those two edits, in registries that are otherwise perfectly
-#      healthy — legal, fully costed, pole/median 1.000, and with the derived
+#      healthy — legal, fully costed, pole/floor 1.000, and with the derived
 #      open-row assignment equal to the committed one — because that is what
 #      made the real injections invisible. `pin_on_open_row` pins the schema's
 #      other half: a `pinned_gates` list on a row the packer owns is a
@@ -76,6 +76,20 @@
 #      emit the derived value, leaving `--check` nothing to police; this one
 #      derives a different value from a wider input, so the fixed-point
 #      assertions in 1 and 12 are what keep them distinguishable.
+#
+#   8. THE ENFORCED STATEMENT IS ABOUT THE PACKING, NOT ABOUT THE SUITE (#2216).
+#      `pole / median` moved for reasons the balancer neither caused nor could
+#      repair, in BOTH directions: one gate getting 20% slower reds a REQUIRED
+#      check with no repair available, and — the perverse half — speeding up
+#      every non-pole gate reds it too, because the denominator falls while the
+#      pole does not. `pole / floor` divides by the best pole any assignment of
+#      this gate set onto these rows could reach, so it is 1.000 exactly when
+#      the packing is optimal and moves only when the packing does. Both halves
+#      are pinned as fixtures because either alone is satisfiable by a metric
+#      that is merely more lenient: `nonpole_speedup` must be GREEN (it was red
+#      at 3.333 under the retired metric) and `lpt_packing_gap` must be RED (a
+#      real packing failure, at the classic LPT worst case for three rows), and
+#      `dominating_gate` holds the seam between them.
 #
 # Plus: the committed test/gates.toml IS the balancer's own output
 # (`--check`), so a hand-edited `shard` field cannot ride in unnoticed.
@@ -126,7 +140,7 @@ _bal() {
 for stem in wasm_only_row dominating_gate uncosted_gate \
             pin_intruder pin_deserter pin_on_open_row makespan_vs_sum \
             thin_evidence calib_staleness outlier_immunity \
-            stability_preference; do
+            stability_preference nonpole_speedup lpt_packing_gap; do
   cp "$FIX/$stem.toml" "$TMP/$stem.toml"
 done
 
@@ -166,8 +180,9 @@ fi
 
 # The projection is the number a reader acts on; assert it is present and that
 # the enforced target is stated, not merely computed.
-if grep -q 'pole/median' "$out" && grep -q 'target pole/median' "$out"; then
-  ok "--check prints the projected pole, median and enforced target"
+if grep -q 'pole/floor' "$out" && grep -q 'budget pole/floor' "$out" \
+   && grep -q '^  floor: the achievable pole — set by ' "$out"; then
+  ok "--check prints the projected pole, floor, its provenance and the enforced budget"
 else
   bad "--check did not print its projection"
   sed -e 's/^/        /' "$out"
@@ -224,13 +239,19 @@ else
 fi
 
 # ── 4. one dominating gate: refuse, and blame the gate, not the packing ───────
+#
+# The refusal must survive the #2216 metric change in RECOGNISABLE form: a
+# reader who hits it has to leave knowing the gate must get FASTER (or be
+# split), which is the one repair a rebalance cannot make. So this is graded on
+# that sentence and on the gate's name, not merely on the exit code.
 if _bal dominating_gate "$TMP/d.txt"; then
-  bad "a packing with pole/median 6.6 was accepted"
+  bad "a packing with pole/floor 1.200 was accepted"
   sed -e 's/^/        /' "$TMP/d.txt"
 else
-  if grep -q 'no packing can meet the pole/median target' "$TMP/d.txt" \
-     && grep -q "'monolith' alone costs" "$TMP/d.txt"; then
-    ok "a dominating gate is refused, and the message names that gate"
+  if grep -q 'misses the pole/floor budget' "$TMP/d.txt" \
+     && grep -q "The floor is 'monolith' alone" "$TMP/d.txt" \
+     && grep -q 'has to get FASTER (or be split)' "$TMP/d.txt"; then
+    ok "a dominating gate is refused, the message names that gate and says it must get faster"
   else
     bad "refused, but not with the indivisible-gate explanation"
     sed -e 's/^/        /' "$TMP/d.txt"
@@ -570,6 +591,61 @@ if _bal stability_preference "$TMP/sp.txt"; then
 else
   bad "the balancer failed on the stability_preference fixture"
   sed -e 's/^/        /' "$TMP/sp.txt"
+fi
+
+# ── 13. the enforced statement grades the PACKING, not the suite (S-4, #2216) ─
+#
+# `pole / median` was perverse in both directions, and the perverse half is the
+# one no exit code ever caught: the suite gets FASTER and the metric gets WORSE,
+# because the denominator is a property of the gate set rather than of the
+# packing. `nonpole_speedup` is an OPTIMALLY packed 7-gate suite whose six
+# non-pole gates have been sped up 4x; measured against the pre-#2216 binary it
+# scores pole/median 3.333 and is REFUSED, with the indivisible-gate message —
+# a red on `ci-gen-drift`, a REQUIRED check, with no repair available to anyone.
+# Under `pole / floor` the same registry is 1.000 and green.
+#
+# ⚠️ A metric that were merely MORE LENIENT would pass that half too, so the
+# second fixture is the discriminator: `lpt_packing_gap` is a genuine packing
+# failure — the classic LPT worst case at three rows, 4/3 - 1/(3m) = 11/9 — and
+# must still be REFUSED, at 1.222 against the 1.125 budget, with the message
+# that blames the packing rather than a gate. Together they say the metric
+# moved axis, not threshold.
+if _bal nonpole_speedup "$TMP/ns.txt"; then
+  if grep -q 'pole/floor 1.000' "$TMP/ns.txt" \
+     && grep -q "set by 'pole_gate' alone" "$TMP/ns.txt"; then
+    ok "an optimal packing behind one indivisible gate scores 1.000, however fast the rest gets"
+  else
+    bad "nonpole_speedup did not score 1.000 against a gate-set floor"
+    sed -e 's/^/        /' "$TMP/ns.txt"
+  fi
+  if grep -q 'budget pole/floor 1.125 — MET' "$TMP/ns.txt"; then
+    ok "the suite getting faster no longer misses the budget (it did: pole/median 3.333)"
+  else
+    bad "nonpole_speedup missed the budget — the metric is still a ratio against the suite"
+    sed -e 's/^/        /' "$TMP/ns.txt"
+  fi
+else
+  bad "the balancer refused nonpole_speedup — a correctly packed suite"
+  sed -e 's/^/        /' "$TMP/ns.txt"
+fi
+
+if _bal lpt_packing_gap "$TMP/lg.txt"; then
+  bad "a packing 22% above its own achievable floor was accepted"
+  sed -e 's/^/        /' "$TMP/lg.txt"
+else
+  if grep -q 'misses the pole/floor budget of 1.125 (it is 1.222)' "$TMP/lg.txt" \
+     && grep -q 'No single gate explains it' "$TMP/lg.txt"; then
+    ok "a real packing failure is still refused, and blamed on the packing"
+  else
+    bad "lpt_packing_gap was refused, but not with the packing explanation"
+    sed -e 's/^/        /' "$TMP/lg.txt"
+  fi
+  if grep -q '^  floor: the achievable pole — set by .* of open work over 3 open worker slots' "$TMP/lg.txt"; then
+    ok "the capacity term is stated in worker SLOTS, not in rows"
+  else
+    bad "the floor's provenance is missing or is not the capacity term"
+    sed -e 's/^/        /' "$TMP/lg.txt"
+  fi
 fi
 
 if [ "$fail" -eq 0 ]; then

@@ -1,0 +1,16 @@
+{
+  "schema": "gate-cost-baseline/1",
+  "note": "SYNTHETIC fixture baseline for test/diff_compiler_gate_balance.sh. Hand-written, not ingested. The six `quick*` gates are AFTER a 4x speedup; the pole gate is untouched.",
+  "generated": "2026-08-30T00:00:00Z",
+  "maxSamples": 9,
+  "runs": [],
+  "gates": [
+    {"name": "pole_gate", "medianMs": 1000, "samples": 1, "ms": [1000]},
+    {"name": "quick1", "medianMs": 100, "samples": 1, "ms": [100]},
+    {"name": "quick2", "medianMs": 100, "samples": 1, "ms": [100]},
+    {"name": "quick3", "medianMs": 100, "samples": 1, "ms": [100]},
+    {"name": "quick4", "medianMs": 100, "samples": 1, "ms": [100]},
+    {"name": "quick5", "medianMs": 100, "samples": 1, "ms": [100]},
+    {"name": "quick6", "medianMs": 100, "samples": 1, "ms": [100]}
+  ]
+}

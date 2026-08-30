@@ -198,7 +198,8 @@ pinned_gates = ["pds/test/protocol_all_engines", "diff_compiler_engines", "diff_
   (review finding F3 of #2178, tracked as #2205). The worse half was moving the
   pinned gate OFF: a cost objective blind to the pin PREFERS that, because
   idling a whole runner and stacking the suite's heaviest gate onto a shared one
-  improves pole/median (measured: 1.005 against 1.073).
+  improved the printed factor (measured: pole/median 1.005 against 1.073, under
+  the metric §13 retired).
 
   So it is declared per row and checked against the registry in BOTH directions
   — a member not declared, and a declaration not a member — which is what makes
@@ -335,11 +336,11 @@ own place in the bootstrap, for no gain — §5's circularity is unchanged eithe
   `medaka gate balance` (`compiler/tools/gate_cmd.mdk`) packs every schedulable
   gate onto the open rows from the per-gate costs in
   `test/gate_cost_baseline.json`, subject to each row's `wasm_arm` toolchain
-  constraint and `full_cores` closure and to an enforced pole/median budget, and
+  constraint and `full_cores` closure and to an enforced pole/floor budget (§13), and
   writes the `shard` values back; `make gen-ci` (`medaka gate ci`) then
   regenerates ci.yml's matrix from them. The landed rebalance moved 164 of 202
   gates and, under the SUM-of-medians model in use at the time, took the pole
-  from 1143.6s to 948.9s (pole/median 1.26 -> 1.073); that model was itself
+  from 1143.6s to 948.9s (pole/median, then the enforced metric, 1.26 -> 1.073); that model was itself
   superseded soon after (#2207, "real-wall-shards"): CI does not run a row's
   gates one after another, `test/run_gates.sh` fans them out through an
   `xargs -P $JOBS` pool, so what CI actually pays for a row is the MAKESPAN
@@ -350,9 +351,10 @@ own place in the bootstrap, for no gain — §5's circularity is unchanged eithe
   baseline and CURRENT assignment, and it moves with re-ingests and
   rebalances rather than sitting at a number this doc can pin. Read it live
   with `medaka gate balance --check`, which prints every row's makespan, the
-  pole, the median and the enforced pole/median target; a gate is still
-  indivisible, so a row holding one dominating gate still floors the pole at
-  that gate's own cost.
+  pole, the median, the FLOOR and the enforced pole/floor budget (§13); a gate
+  is still indivisible, so a row holding one dominating gate still floors the
+  pole at that gate's own cost — which since #2216 is a term in the metric's
+  denominator rather than a red no one can repair.
 
   Since S-1 (#2208) each `runs[]` provenance row (`RunRecord`,
   `compiler/tools/gate_cost.mdk`) also carries the row's own `jobs` (workers
@@ -754,7 +756,7 @@ cost: the assignment is a function of noisy medians, and ordinary measurement no
 moves it. **Measured on the committed 202-gate registry**, perturbing every gate's
 `medianMs` (and each of its `ms` samples) by ±2% and re-deriving:
 
-| perturbation shape | churn before | churn after | pole before → after | pole/median before → after |
+| perturbation shape | churn before | churn after | pole before → after | pole/median before → after (§13 retired this metric; the figures are the S-3 measurement as taken) |
 |---|---|---|---|---|
 | index parity (even `+2%`, odd `−2%`) | 89 / 202 | **0** | 491.9s → 491.9s | 1.077 → 1.077 |
 | opposite parity | 128 / 202 | **4** | 472.6s → 472.6s | 1.036 → 1.041 |
@@ -830,9 +832,13 @@ time with the preference **off** and prints both sides:
 
 ```
   stability: 89 of 202 gates held on their committed row (incumbent slack 5% of a
-  row's load); pole 491.9s against 491.9s unstabilized (+0.0s), pole/median 1.077
+  row's load); pole 491.9s against 491.9s unstabilized (+0.0s), pole/floor 1.077
   against 1.077
 ```
+
+(The trailing factor is `pole/floor` since §13; the numbers above are the S-3 run's,
+which measured `pole/median`. The pole columns are unaffected — the metric change
+moved the denominator, never the packing.)
 
 On an unperturbed, already-balanced registry both numbers are **zero**, and that is
 the healthy reading rather than a broken comparison: the committed assignment *is*
@@ -854,3 +860,93 @@ incumbent row had become by the time LPT reached them: `held` is placed while it
 is 2.6% heavier than the lightest and stays; `mover` is placed once its row is 7.7%
 heavier and moves. The hold costs exactly 2.0s of pole (210.0s against bare LPT's
 208.0s), and the gate asserts that number, so the trade cannot silently grow.
+
+## 13. The enforced statement grades the PACKING, not the suite (#2216, S-4)
+
+`pole / median` was the enforced target from #2178 until this. Its numerator is a
+property of the packing; its **denominator is a property of the suite**, and that
+mismatch made it move for reasons the balancer neither caused nor could repair —
+in both directions.
+
+**The slowdown direction.** The pole is one indivisible gate
+(`diff_compiler_dict_semantics`, 482.2s). A 16–20% regression in that one gate raises
+the pole and leaves the median where it is, so `medaka gate balance --check` refuses,
+and `ci-gen-drift` — a REQUIRED context — goes red on every PR until someone who did
+not write that gate makes it faster. No rebalance can help; the tool said so itself,
+in the branch that printed *"this gate has to get FASTER"*.
+
+**The speedup direction, which is the perverse one.** Make every non-pole gate four
+times faster and `pole / median` **rises**, because the denominator falls and the
+numerator does not. `test/gate_balance_fixtures/nonpole_speedup.toml` is that measured
+against the pre-#2216 binary: an optimally packed seven-gate suite, refused at 3.333
+against a target of 1.250, with the indivisible-gate message. A metric that reds
+because the suite improved cannot be enforced; it can only be overridden.
+
+### The floor
+
+The replacement divides the pole by the **achievable pole** — the best pole any
+assignment of this gate set onto these rows could reach. `balFloor` takes the largest
+of three terms, each a bound the pole provably cannot go under:
+
+1. **the most expensive single gate.** Gates are indivisible, so whichever row holds
+   it has a makespan at least that big.
+2. **the heaviest CLOSED row's makespan.** A `full_cores` row's membership is declared
+   (`pinned_gates`, §7) and the packer moves nothing onto it or off it, so its load is
+   fixed input.
+3. **the open gates' total work over the open rows' worker SLOTS.** A row's capacity
+   per unit of wall clock is its recorded `rjobs` workers, not one (`balJobsFor`,
+   #2208), so `sum(rjobs) × pole >= total open work`. Counting rows instead of slots
+   would inflate this term by roughly `jobs`×.
+
+So `pole / floor >= 1.000` always, it is exactly 1.000 when the packing is optimal,
+and it moves **only when the packing does**. Both perverse cases above score 1.000.
+
+One valid term is deliberately omitted: the wasm-constrained gates' own work over the
+wasm rows' slots. Leaving a valid term out makes the floor smaller and the ratio
+larger — strictly stricter — so it cannot manufacture a false green.
+
+⚠️ **The floor is a lower bound, not always an achievable makespan.** 500 + three 300s
+over three rows floors at 500 and cannot finish before 600. So a miss can still be
+indivisibility rather than packing, and `balEnforce` keeps two messages: when the floor
+is gate-set it names that gate and says it has to get FASTER (or be split);
+otherwise it blames the packing. `dominating_gate.toml` pins the first (1.200,
+re-priced for this slice — a dominating gate *alone* is no longer a refusal) and
+`lpt_packing_gap.toml` the second (1.222, the classic LPT worst case at three rows).
+
+### The budget: 1.125, derived rather than chosen
+
+The metric's optimum is 1.000 by construction, so the whole budget is packing slack
+and there is no achieved-value term to leave room for. What it must absorb is
+re-ingest **noise**, and §10 measured that out-of-sample rather than guessing:
+leave-one-run-out over the 3 runs in `runs[]` across 202 of 202 schedulable gates,
+per-run errors −21.1% / −6.1% / −9.0%, **mean |error| 12.0%, systematic bias −12.5%**.
+
+    budget = 1 + max(mean |error|, |bias|) = 1 + max(0.120, 0.125) = 1.125
+
+The larger of the two, because they are two ways of being wrong about the same
+prediction. That is knowingly conservative — much of the measured error is common
+mode, and a common-mode factor cancels in a ratio, so 12.5% is an upper bound on the
+noise this metric can inherit rather than an estimate of it. Erring high is deliberate:
+the failure mode of a too-tight budget is a red `ci-gen-drift` with no repair
+available, which is the defect this section exists to remove.
+
+It is still a real constraint. LPT's worst case is `4/3 − 1/(3m)`: 1.222 at three rows,
+1.292 at the registry's eight — so a genuinely worst-case packing misses 1.125 and is
+refused. Achieved on the committed registry when this landed: **1.000** (pole 482.2s =
+`diff_compiler_dict_semantics` alone, which is also the floor), so the full 12.5% is
+headroom.
+
+### What the report prints
+
+```
+  pole 482.2s (sqlite)   median 453.4s   floor 482.2s   pole/floor 1.000
+  floor: the achievable pole — set by 'diff_compiler_dict_semantics' alone (482.2s), which is indivisible.
+         Moving the FLOOR means that gate has to get FASTER (or be split).
+  ...
+  budget pole/floor 1.125 — MET
+```
+
+The median is still printed and no longer enforces anything: it is the one number that
+says at a glance how far the typical row sits from the pole. It is **not** a component
+of the floor — a median is a property of the suite, and mixing one back in would
+restore the perversity.
