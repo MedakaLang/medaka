@@ -21,6 +21,7 @@ import types.typecheck.{
   preludeArgPosDictNames,
   mainTypeIsUnit,
   mainTypeIsFloat,
+  checkedFfiExternTypeNames,
 }
 import eval.eval.{funNamesOf, dropShadowedExp}
 import ir.core_ir_lower.{
@@ -32,7 +33,7 @@ import ir.core_ir_lower.{
   methodConstraintIfaces,
   ctorFieldTypeNames,
   declSigTypeNames,
-  ffiExternTypeNames,
+  validateFfiExternTypeNames,
 }
 import ir.core_ir.{CProgram(..), CBind(..), CClause(..), CExpr(..)}
 import backend.llvm_emit.{emitProgram, emitProgramRecord, makeEmitInput}
@@ -94,7 +95,6 @@ runEmit runtimeDecls preludeDecls userDecls =
   let livePrelude = dropShadowedExp userNames preludeDecls
   let combined = livePrelude ++ userDecls
   let dictNames = preludeReturnPosDictNames livePrelude combined ++ preludeArgPosDictNames livePrelude combined ++ constrainedSigNames userDecls
-  let input = makeEmitInput (returnsSelfTable combined) (selfFnParamTable combined) (methodIfaceTable combined) (methodConstraintIfaces combined) (ctorFieldTypeNames combined) (declSigTypeNames runtimeDecls ++ declSigTypeNames combined) (mainTypeIsUnit ()) (mainTypeIsFloat ()) 0 [] [] "" (declaredRecordFieldOrders combined) (ffiExternTypeNames runtimeDecls combined)
-  emitProgram
-    input
-    (lowerProgramEmit (elaborateDict runtimeDecls dictNames userNames combined))
+  let elaborated = elaborateDict runtimeDecls dictNames userNames combined
+  let input = makeEmitInput (returnsSelfTable combined) (selfFnParamTable combined) (methodIfaceTable combined) (methodConstraintIfaces combined) (ctorFieldTypeNames combined) (declSigTypeNames runtimeDecls ++ declSigTypeNames combined) (mainTypeIsUnit ()) (mainTypeIsFloat ()) 0 [] [] "" (declaredRecordFieldOrders combined) (validateFfiExternTypeNames (checkedFfiExternTypeNames combined))
+  emitProgram input (lowerProgramEmit elaborated)

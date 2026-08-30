@@ -1,5 +1,5 @@
 # META
-source_lines=2325
+source_lines=2344
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -2175,6 +2175,14 @@ declSigTypeEntries _ = []
 -- same two decl lists the emit drivers already hold, and carried to the emitter
 -- as `EmitInput.ffiExternIndex`.
 --
+-- #2174/#2135: this raw-AST producer now remains only for the snapshot tool's
+-- intentionally untyped emitter stage.  Every typed LLVM/Wasm driver obtains its
+-- rows from `types.typecheck.checkedFfiExternTypeNames{,Modules}`, which expands
+-- through the typechecker's canonical alias carrier and subtracts builtins through
+-- the catalog map seeded by `noteBuiltinExternNames`.  It then calls
+-- `validateFfiExternTypeNames` below for this table's whole-program injectivity
+-- guard.  Do not route a typed emitter back through this syntactic head walk.
+--
 -- 🚨 THE BUILTIN-NAME EXEMPTION, emitter side.  A local `extern` whose name is a
 -- `stdlib/runtime.mdk` catalog name is emitted through the BUILTIN's codegen
 -- (`isAnyExtern` in `emitApp`'s ladder dispatches by exact NAME), regardless of
@@ -2188,7 +2196,18 @@ declSigTypeEntries _ = []
 export
 ffiExternTypeNames : List Decl -> List Decl -> List (String, (List String, String))
 ffiExternTypeNames runtimeDecls userDecls =
-  let rows = ffiExternRows (externDeclNamesOf runtimeDecls) userDecls
+  validateFfiExternTypeNames (ffiExternRows
+    (externDeclNamesOf runtimeDecls)
+    userDecls)
+
+-- The canonical typed producer lives in `types.typecheck`, but this guard is a
+-- property of the FINISHED bare-name-keyed emitter table rather than of one
+-- module's typecheck.  Keeping the validator here lets both the typed carrier and
+-- the untyped snapshot fallback share the existing one-symbol/one-signature
+-- refusal without asking typecheck to import lowering (which would be a cycle).
+export
+validateFfiExternTypeNames : List (String, (List String, String)) -> List (String, (List String, String))
+validateFfiExternTypeNames rows =
   -- 🚨 THE INDEX IS BARE-NAME KEYED ACROSS THE WHOLE PROGRAM, so a name declared
   -- twice with two different signatures is a contradiction the index cannot hold
   -- ([T-GLOBAL-TABLE]).  Guard it HERE, in the wrapper, and not inside
@@ -2989,7 +3008,9 @@ nodeTag _ = "?"
 (DFunDef false "declSigTypeEntries" ((PCon "DAttrib" PWild (PVar "inner"))) (EApp (EVar "declSigTypeEntries") (EVar "inner")))
 (DFunDef false "declSigTypeEntries" (PWild) (EListLit))
 (DTypeSig true "ffiExternTypeNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))))
-(DFunDef false "ffiExternTypeNames" ((PVar "runtimeDecls") (PVar "userDecls")) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "ffiExternRows") (EApp (EVar "externDeclNamesOf") (EVar "runtimeDecls"))) (EVar "userDecls"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternRowsDistinct") (EVar "omEmpty")) (EVar "rows"))) (DoExpr (EVar "rows"))))
+(DFunDef false "ffiExternTypeNames" ((PVar "runtimeDecls") (PVar "userDecls")) (EApp (EVar "validateFfiExternTypeNames") (EApp (EApp (EVar "ffiExternRows") (EApp (EVar "externDeclNamesOf") (EVar "runtimeDecls"))) (EVar "userDecls"))))
+(DTypeSig true "validateFfiExternTypeNames" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))))
+(DFunDef false "validateFfiExternTypeNames" ((PVar "rows")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternRowsDistinct") (EVar "omEmpty")) (EVar "rows"))) (DoExpr (EVar "rows"))))
 (DTypeSig false "ffiCheckExternRowsDistinct" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))) (TyCon "Unit"))))
 (DFunDef false "ffiCheckExternRowsDistinct" (PWild (PList)) (ELit LUnit))
 (DFunDef false "ffiCheckExternRowsDistinct" ((PVar "seen") (PCons (PTuple (PVar "n") (PVar "sh")) (PVar "rest"))) (EBlock (DoLet false false (PVar "k") (EApp (EVar "ffiRowShapeKey") (EVar "sh"))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "seen")) (arm (PCon "None") () (EApp (EApp (EVar "ffiCheckExternRowsDistinct") (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "k")) (EVar "seen"))) (EVar "rest"))) (arm (PCon "Some" (PVar "prev")) ((GBool (EBinOp "==" (EVar "prev") (EVar "k")))) (EApp (EApp (EVar "ffiCheckExternRowsDistinct") (EVar "seen")) (EVar "rest"))) (arm (PCon "Some" (PVar "prev")) () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "foreign declaration collision: the C symbol `")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "` is declared twice with different signatures.\ncolliding symbol: "))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "\ndeclaration 1: "))) (EApp (EVar "display") (EVar "prev"))) (ELit (LString "\ndeclaration 2: "))) (EApp (EVar "display") (EVar "k"))) (ELit (LString "\nA foreign declaration's name IS the C symbol it links to, so both declarations name ONE C function and only one of these two signatures can describe it. The other module's calls would be marshalled through the wrong signature -- a wrong value at exit 0, or a memory fault. Give the two declarations the same signature, or declare the differing one against a differently-named C symbol.")))))))))
@@ -3714,7 +3735,9 @@ nodeTag _ = "?"
 (DFunDef false "declSigTypeEntries" ((PCon "DAttrib" PWild (PVar "inner"))) (EApp (EVar "declSigTypeEntries") (EVar "inner")))
 (DFunDef false "declSigTypeEntries" (PWild) (EListLit))
 (DTypeSig true "ffiExternTypeNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))))
-(DFunDef false "ffiExternTypeNames" ((PVar "runtimeDecls") (PVar "userDecls")) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "ffiExternRows") (EApp (EVar "externDeclNamesOf") (EVar "runtimeDecls"))) (EVar "userDecls"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternRowsDistinct") (EVar "omEmpty")) (EVar "rows"))) (DoExpr (EVar "rows"))))
+(DFunDef false "ffiExternTypeNames" ((PVar "runtimeDecls") (PVar "userDecls")) (EApp (EVar "validateFfiExternTypeNames") (EApp (EApp (EVar "ffiExternRows") (EApp (EVar "externDeclNamesOf") (EVar "runtimeDecls"))) (EVar "userDecls"))))
+(DTypeSig true "validateFfiExternTypeNames" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))))
+(DFunDef false "validateFfiExternTypeNames" ((PVar "rows")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternRowsDistinct") (EVar "omEmpty")) (EVar "rows"))) (DoExpr (EVar "rows"))))
 (DTypeSig false "ffiCheckExternRowsDistinct" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))) (TyCon "Unit"))))
 (DFunDef false "ffiCheckExternRowsDistinct" (PWild (PList)) (ELit LUnit))
 (DFunDef false "ffiCheckExternRowsDistinct" ((PVar "seen") (PCons (PTuple (PVar "n") (PVar "sh")) (PVar "rest"))) (EBlock (DoLet false false (PVar "k") (EApp (EVar "ffiRowShapeKey") (EVar "sh"))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "seen")) (arm (PCon "None") () (EApp (EApp (EVar "ffiCheckExternRowsDistinct") (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "k")) (EVar "seen"))) (EVar "rest"))) (arm (PCon "Some" (PVar "prev")) ((GBool (EBinOp "==" (EVar "prev") (EVar "k")))) (EApp (EApp (EVar "ffiCheckExternRowsDistinct") (EVar "seen")) (EVar "rest"))) (arm (PCon "Some" (PVar "prev")) () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "foreign declaration collision: the C symbol `")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "` is declared twice with different signatures.\ncolliding symbol: "))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "\ndeclaration 1: "))) (EApp (EMethodRef "display") (EVar "prev"))) (ELit (LString "\ndeclaration 2: "))) (EApp (EMethodRef "display") (EVar "k"))) (ELit (LString "\nA foreign declaration's name IS the C symbol it links to, so both declarations name ONE C function and only one of these two signatures can describe it. The other module's calls would be marshalled through the wrong signature -- a wrong value at exit 0, or a memory fault. Give the two declarations the same signature, or declare the differing one against a differently-named C symbol.")))))))))

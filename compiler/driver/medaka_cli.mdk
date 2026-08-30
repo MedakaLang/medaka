@@ -195,7 +195,6 @@ import tools.codemod.{
 }
 import tools.check_policy.{
   runCheckPolicy,
-  runAcceptedPlugin,
   PolicyArgs(..),
   parsePolicyArgs,
   PolicyOutcome(..),
@@ -2412,16 +2411,13 @@ runCheckPolicyCmd argv = match parsePolicyArgs argv
             let _ = ePutStrLn msg
             exit 1
           Ok tsrc =>
-            -- Print the accept/reject HEADER first (OCaml prints `✅ accepted`
-            -- to stdout before running the plugin); on accept, then run the plugin
-            -- (a panic on an unstubbed extern surfaces post-header, like OCaml).
+            -- runCheckPolicy forces the accepted-plugin evaluation before it
+            -- returns, so an evaluation panic cannot leak an acceptance verdict.
             match runCheckPolicy rsrc csrc tsrc allow fn
               PolicyReject report =>
                 let _ = putStr report
                 exit 1
-              PolicyAccept header pluginFn coreD rtD userD =>
-                let _ = putStr header
-                putStr (runAcceptedPlugin pluginFn coreD rtD userD)
+              PolicyAccept report => putStr report
 
 -- ── manifest ─────────────────────────────────────────────────────────────────
 -- WS-1c of EFFECTS-CONFORMANCE-ROADMAP.md.  Emit a module's verified capability

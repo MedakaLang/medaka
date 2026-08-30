@@ -1,0 +1,5 @@
+-- check-policy must consume the ordinary compiler-analysis verdict before it
+-- inspects the inferred effect row or evaluates the requested entry.
+-- lint-disable-file rule-dead-code
+transform : String -> String
+transform x = x + 1
