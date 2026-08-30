@@ -1,10 +1,16 @@
 #!/bin/sh
 # diff_compiler_rt_obj.sh — PROOF GATE for the MEDAKA_RT_OBJ build fast path.
 #
-# `medaka build` normally compiles runtime/medaka_rt.c inline on every build. The
-# CI fast path precompiles that runtime ONCE (`medaka build --emit-rt-obj <path>`)
-# and links the object via MEDAKA_RT_OBJ, so the heavy gates (diff_compiler_engines,
-# build_construct_coverage, build_oracles) skip ~0.6s of redundant clang per build.
+# `medaka build` can link the C runtime three ways: compile runtime/medaka_rt.c
+# INLINE (now only when the object cache is off — see MEDAKA_NO_OBJ_CACHE below);
+# link an object named explicitly by MEDAKA_RT_OBJ, precompiled once via
+# `medaka build --emit-rt-obj <path>` (how the heavy gates — diff_compiler_engines,
+# build_construct_coverage, build_oracles — skip ~0.76s of redundant clang per
+# build); or, since #133, link an AUTO-CACHED object that build_cmd.mdk manages
+# itself, which is what an ordinary user build does by default.  All three must
+# produce the same binary; this gate pins the inline-vs-explicit pair, which is
+# the one that could actually diverge (the cached object is compiled by the same
+# `cachedRtObj` code path with the same flags).
 #
 # That is only sound if the two link paths — inline `medaka_rt.c` vs prebuilt
 # `medaka_rt.o` — produce the SAME binary. A one-time manual check (36/36 fixtures)
@@ -73,7 +79,15 @@ for OPT in -O0 -O2; do
     label="$(basename "$src" .mdk)"
     inline="$W/$label$OPT.inline"
     prebuilt="$W/$label$OPT.prebuilt"
-    if ! MEDAKA_CLANG_OPT="$OPT" "$MEDAKA" build --allow-internal "$src" -o "$inline" >/dev/null 2>&1; then
+    # MEDAKA_NO_OBJ_CACHE=1 IS LOAD-BEARING, NOT BELT-AND-BRACES. Since the
+    # automatic runtime-object cache landed (#133, build_cmd.mdk `cachedRtObj`),
+    # a build with MEDAKA_RT_OBJ unset no longer compiles medaka_rt.c inline —
+    # it silently links a CACHED object. Without this the "inline" arm below is
+    # a second prebuilt-object arm, the gate compares an object against an
+    # object, and it passes VACUOUSLY while proving nothing about the inline
+    # path it exists to protect. This is the one place in the suite that still
+    # exercises the inline compile, so it must opt out of the cache explicitly.
+    if ! MEDAKA_NO_OBJ_CACHE=1 MEDAKA_CLANG_OPT="$OPT" "$MEDAKA" build --allow-internal "$src" -o "$inline" >/dev/null 2>&1; then
       echo "FAIL: inline build failed ($label $OPT)"; fail=$((fail+1)); continue
     fi
     if ! MEDAKA_RT_OBJ="$rtobj" MEDAKA_CLANG_OPT="$OPT" "$MEDAKA" build --allow-internal "$src" -o "$prebuilt" >/dev/null 2>&1; then
