@@ -1,6 +1,6 @@
 # Type-Aware Lint Tier — Design
 
-**Status:** PARTLY SHIPPED, RE-COSTED, and **Tier 1 UNBLOCKED**. Re-derived 2026-08-30
+**Status:** PARTLY SHIPPED and RE-COSTED; TIER 1 UNBLOCKED, TIER 2 STILL BLOCKED. Re-derived 2026-08-30
 against `main` at `33c7247a` (worktree level with `origin/main`). The body was previously
 derived 2026-08-19 at `8b7b5517`; §4.2 and §10.1 have been rewritten at `33c7247a` because
 the Flat-consumer set they described has since drained — every other file:line below still
