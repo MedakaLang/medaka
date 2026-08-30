@@ -99,10 +99,10 @@ jobs:
 
       # ⚠️ THIS JOB IS THE OTHER HALF OF A REQUIRED GATE, NOT AN EXTRA.
       #
-      # ci.yml's `gates (types)` runs this gate in QUICK mode (PERF_DEEP unset), which
+      # ci.yml's `gates` matrix runs this gate in QUICK mode (PERF_DEEP unset), which
       # keeps every backend row but drops the two bands sized for a single slow-to-clear
       # stage: xref @ 16000 (`resolve`, the #78 detector) and manydefs @ 16000 (`lint`).
-      # Those bands cost ~476 s at K=5 and made `gates (types)` the CI critical path at
+      # Those bands cost ~476 s at K=5 and made the shard holding them the critical path at
       # 12 min. They are irreducible — you cannot hold N=16000 at K=5 and be fast — so
       # they run here instead of not at all.
       #
@@ -611,7 +611,9 @@ jobs:
           fi
 
           # Space-safe: the full value after "pole-name: " to end of line (job display
-          # names contain spaces, e.g. "gates (sqlite)") — not the first token.
+          # names can contain spaces — the `gates` rows no longer do since #2178, but
+          # `soundness`/`wasm`/`inlang` peers and any future job are free to) — not the
+          # first token.
           prev_pole=""
           if [ -n "$existing_body" ]; then
             prev_pole="$(printf '%s\n' "$existing_body" | sed -n 's/^pole-name: //p' | head -1)"

@@ -180,10 +180,12 @@ hold without 227 chances to disagree with itself:
 
 ```toml
 [[shard]]
-name         = "engines"
+name         = "gates_1"                         # a NEUTRAL executor number (#2178): a row
+                                                 # name may not describe its contents, because
+                                                 # membership is derived from measured cost
 full_cores   = true                              # ci.yml's `full_cores: "1"` matrix key
 wasm_arm     = true                              # ci.yml's `wasm_arm: "1"` matrix key
-rationale    = "test/gate_shards/engines.txt"    # PATH to the row's placement prose
+rationale    = "test/gate_shards/gates_1.txt"    # PATH to the row's placement prose
 pinned_gates = ["pds/test/protocol_all_engines", "diff_compiler_engines", "diff_compiler_rejection_parity"]
 ```
 

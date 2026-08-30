@@ -331,9 +331,9 @@ under a green gate for months** — **allocation is blind to a pure scan by cons
 - ✅ **Correctness regression is well-gated already** — `test/diff_compiler_engines.sh` (346
   fixtures × 3 engines) + the self-draining ledger. See §7.
 - ⚠️ **`AGENTS.md`: "If you add a gate, ask where it is skipped."** A new perf assertion must be
-  enrolled in a CI shard (`diff_compiler_ci_shard_coverage.sh` catches non-enrolment) and **must
-  print `checked N` with `N == 0` a FAILURE**. Do not add it to `gates (engines)` (~5.8 min, the
-  critical path).
+  enrolled in `test/gates.toml` (`diff_compiler_ci_shard_coverage.sh` catches non-enrolment) and
+  **must print `checked N` with `N == 0` a FAILURE**. Which executor row it lands on is DERIVED
+  from measured cost (#2178) — not a choice, and not something to state here.
 
 ---
 
@@ -626,8 +626,8 @@ the question: one DID, and its filename is why nobody read it.**
 - `emit_support.mdk` gains `eagerReachMap` / `bindEagerReach`; `bindFreeVars` (native) and
   `bindEagerVars` (wasm) delegate. `import support.ordmap` + `support.scc` into `emit_support`.
 - **Ships with its OWN scaling assertion** (§3.4): deep-chain + wide-SCC fixture, emit-stage time
-  ratio ≈2.0, `GC_INITIAL_HEAP_SIZE=2147483648` pinned, min-of-k, enrolled in a shard that is
-  **not** `gates (engines)`, printing `checked N` with `N == 0` = FAILURE.
+  ratio ≈2.0, `GC_INITIAL_HEAP_SIZE=2147483648` pinned, min-of-k, enrolled in `test/gates.toml`
+  (the balancer picks the executor row), printing `checked N` with `N == 0` = FAILURE.
 - **Drains `test/engine_divergence.txt:121`** (`llvm/eager_global_call_hidden` → PROMOTE).
 - ⚠️ **Emitter measurement discipline is MANDATORY here** — `benchmark-emitter` skill:
   `FORCE_EMITTER_REBUILD=1 make medaka`, the two-rebuild rule. *"An agent measured its own 2.2×

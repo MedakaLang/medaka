@@ -36,9 +36,10 @@
 # and the host wiring around it is what the wasm gates already exercise, so byte-identity
 # of the block plus those gates is what WH3 actually needs.
 #
-# Cheap on purpose: no compiler, no toolchain, no oracle — a text diff. It is in a
-# REQUIRED `gates (frontend)` shard rather than the (advisory) `wasm` job precisely so a
-# shim-only PR cannot go green while breaking parity. Add a new shared block by wrapping
+# Cheap on purpose: no compiler, no toolchain, no oracle — a text diff. It is enrolled in
+# the REQUIRED `gates` matrix rather than the (advisory) `wasm` job precisely so a
+# shim-only PR cannot go green while breaking parity. WHICH `gates_N` row holds it is a
+# derived output of measured cost (#2178) and is not a fact to state here. Add a new shared block by wrapping
 # it in the markers in EVERY file below; this gate then covers it automatically.
 set -u
 
