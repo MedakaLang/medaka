@@ -1,0 +1,9 @@
+-- Import-bearing entry whose `main` is genuinely NON-Unit (Int).  Used by the
+-- cross-request `medaka mcp` fixture that pins F1's FALSE-NEGATIVE direction:
+-- a check of this project in a process whose PREVIOUS request checked a clean
+-- Unit main must still report W-MAIN-SHAPE.  Before the fix, `checkJsonFile`'s
+-- multi-module arm had no producer of `mainSchemeRef` at all, so this warning
+-- silently vanished behind the earlier request's leftover Unit scheme.
+import lib.{bump}
+
+main = bump 1

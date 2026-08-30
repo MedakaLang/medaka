@@ -1423,10 +1423,24 @@ mainNonUnitWarning decls = match findMainFunDef decls
 --     `analyzeLocatedG` alone.  This is the caller the deletion nearly broke: see
 --     `checkOneDiagsSynthetic` (types/typecheck.mdk) for the auto-print-wrap residue
 --     that used to be masked by the elaborate this comment replaces.
---   * `checkJsonSingle` / `checkJsonFile` (below) — `analyzeFrom` / `analyzeProject`.
--- `rtD`/`coreD`/`modsDFull` are retained in the signature: they are what a future
--- caller with no prior typecheck of its own would need, and every call site already
--- has them in hand.
+--   * `checkJsonSingle` (below) — `analyzeLocatedG` → `analyzeFrom`.
+--   * `checkJsonFile` multi-module (below) — `analyzeProject` → `typecheckPass` →
+--     `checkModulesDiags`.  ⚠️ This bullet used to name `analyzeProject` flatly and
+--     was WRONG: until #2246 that chain wrote the ref NOWHERE, which is the F1 hole
+--     S-3's deletion of the extra `elaborateModules` left behind (fresh process ⇒
+--     `None` ⇒ W-MAIN-SHAPE fired on a clean Unit main; long-lived `mcp`/`lsp`
+--     process ⇒ a previous request's scheme masked a real non-Unit warning).  It is
+--     a true producer NOW because `checkModulesDiags`'s fold carries the SET-OR-CLEAR
+--     write (`cmDiagsCollect`/`setMainSchemeIfEntry`, types/typecheck.mdk), mirroring
+--     `checkModulesEntryFullSplit`'s.
+-- `rtD`/`coreD`/`modsDFull` are retained in the SIGNATURE (they are what a future
+-- caller with no prior typecheck of its own would need) but are IGNORED by the body,
+-- unconditionally.  ⚠️ #2246: two call sites therefore pass `[] [] []` rather than
+-- computing values nothing reads — `checkRoute`'s single-module arm and
+-- `typecheckGateRoute`'s single-module arm (both medaka_cli.mdk), where the
+-- `desugar (parsePrelude …)` / `desugar (parse …)` pair existed SOLELY to feed these
+-- three.  The other three sites (below ×2, `checkRoute` multi-module) already have
+-- `rtD`/`coreD`/`modsD` in hand for other purposes, so passing them costs nothing.
 export
 mainShapeWarnings : List Decl -> List Decl -> List (String, List Decl) -> List Decl -> List Diag
 mainShapeWarnings _ _ _ entryDecls = match mainArityWarning entryDecls

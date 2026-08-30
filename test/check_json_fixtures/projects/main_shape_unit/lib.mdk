@@ -1,0 +1,5 @@
+-- Imported sibling for the #2246 main-shape false-positive lock; its only job is to
+-- make the entry a MULTI-module graph, so `check --json` takes the `analyzeProject`
+-- arm rather than `checkJsonSingle`.
+export bump : Int -> Int
+bump x = x + 1

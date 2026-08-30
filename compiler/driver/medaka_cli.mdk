@@ -696,10 +696,14 @@ checkRoute typesMode allowInternal trusted _ _ rsrc csrc tsrc target [(mid, decl
       -- scheme assertions are unaffected. `--types` keeps the historical
       -- unadorned full dump (still the byte-identical escape hatch).
       let _ = if typesMode then () else putStrLn (checkOkLine target filtered)
-      -- 0.1.0 beginner-footgun warning (main-shape, see below): reuse the same
-      -- elaborateModules the multi-module route calls just for mainSchemeRef —
-      -- runCheck's own single-file path never populates it.
-      let mainWarns = mainShapeWarnings (desugar (parsePrelude rsrc)) (desugar (parsePrelude csrc)) [(mid, desugar decls)] decls
+      -- 0.1.0 beginner-footgun warning (main-shape, see below).  `mainShapeWarnings`
+      -- runs NO elaboration of its own (it has been pure since S-3/#2234) — it reads
+      -- `driverState.value.mainSchemeRef`, which on THIS arm was already populated by
+      -- the `analyzeLocatedG` above (line ~674, via `checkOneDiags` →
+      -- `checkModulesEntryFullSplit`).  Its first three parameters are IGNORED, so
+      -- they are passed empty rather than computed: the `desugar (parsePrelude …)`
+      -- pair this used to build was dead work on every clean single-file check.
+      let mainWarns = mainShapeWarnings [] [] [] decls
       let _ = emitLocatedWarnings tsrc target (warns ++ mainWarns)
       ()
     _ =>
@@ -747,10 +751,11 @@ checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target m
           -- bill of health.  Say so instead of staying silent; `--json` already
           -- reports them per-file.
           let _ = emitHiddenDiagNote hiddenCount
-          -- 0.1.0 main-shape warning (see below): runCheckModules/
-          -- checkModulesHasErrors never call elaborateModules, so mainSchemeRef
-          -- is never populated on this route either — mainShapeWarnings runs
-          -- it itself (only when the cheap syntactic arity check finds nothing).
+          -- 0.1.0 main-shape warning (see below).  `mainShapeWarnings` runs no
+          -- elaboration of its own (pure since S-3/#2234); this route's producer of
+          -- `mainSchemeRef` is `runCheckModules` above → `checkModulesEntryReport`
+          -- (tools/check.mdk) = `checkModulesEntryFullSplit` (types/typecheck.mdk),
+          -- whose SET-OR-CLEAR write on the terminal module fills the ref.
           let mainWarns = match lastModPair mods
             Some (emid, edecls) => mainShapeWarnings rtD coreD modsD edecls
             None => []
@@ -1761,8 +1766,12 @@ typecheckGateRoute allowInternal trusted _ _ rsrc csrc tsrc target [(mid, decls)
       -- all (defect 4 of the matrix) — fold it in beside the coherence
       -- warning, same rendering path (`renderTripleWarnings`), same order
       -- (`check`'s `warns ++ mainWarns`).  `mainShapeWarnings` re-elaborates
-      -- only if the free arity check finds nothing, matching checkRoute.
-      let mainWarns = mainShapeWarnings (desugar (parse rsrc)) (desugar (parse csrc)) [(mid, desugar decls)] decls
+      -- NOTHING (it has been pure since S-3/#2234): this arm's producer of
+      -- `mainSchemeRef` is the `analyzeLocatedG` above (line ~1756), exactly as on
+      -- `checkRoute`'s single-module arm.  Its first three parameters are IGNORED,
+      -- so they are passed empty rather than computed — the `desugar (parse …)` pair
+      -- this used to build was dead work on every `medaka build`/`run`.
+      let mainWarns = mainShapeWarnings [] [] [] decls
       let allWarns = cohWarnTriples tsrc target diags ++ nonEmptyTriples [(target, tsrc, mainWarns)]
       TGOk (flatMap renderTripleWarnings allWarns)
     _ => TGErr (joinNl (map (ppDiagCliLines (srcLinesArr tsrc) target) errs))
