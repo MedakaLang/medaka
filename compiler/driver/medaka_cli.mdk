@@ -69,6 +69,7 @@ import frontend.parser.{
   parseErrorMessage,
   Positions,
 }
+import frontend.parse_cache.{parsePrelude}
 import frontend.desugar.{desugar}
 import frontend.resolve.{resolveModulesToHumaneByPath}
 import driver.loader.{
@@ -699,15 +700,15 @@ checkRoute typesMode allowInternal trusted _ _ rsrc csrc tsrc target [(mid, decl
       -- 0.1.0 beginner-footgun warning (main-shape, see below): reuse the same
       -- elaborateModules the multi-module route calls just for mainSchemeRef —
       -- runCheck's own single-file path never populates it.
-      let mainWarns = mainShapeWarnings (desugar (parse rsrc)) (desugar (parse csrc)) [(mid, desugar decls)] decls
+      let mainWarns = mainShapeWarnings (desugar (parsePrelude rsrc)) (desugar (parsePrelude csrc)) [(mid, desugar decls)] decls
       let _ = emitLocatedWarnings tsrc target (warns ++ mainWarns)
       ()
     _ =>
       let _ = ePutStrLn (joinNl (map (ppDiagCliLines (srcLinesArr tsrc) target) errs))
       exit 1
 checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target mods =
-  let rtD = desugar (parse rsrc)
-  let coreD = desugar (parse csrc)
+  let rtD = desugar (parsePrelude rsrc)
+  let coreD = desugar (parsePrelude csrc)
   let modsD = map desugarPair mods
   -- RESOLVE-phase errors (e.g. importing a name a module does not export —
   -- PrivateNameAccess) go to STDERR + exit 1, mirroring the single-file arm's

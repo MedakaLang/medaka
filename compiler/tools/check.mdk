@@ -24,6 +24,7 @@
 
 import frontend.ast.{Decl}
 import frontend.parser.{parse}
+import frontend.parse_cache.{parsePrelude}
 import frontend.desugar.{desugar}
 import support.util.{joinNl}
 import frontend.resolve.{
@@ -50,8 +51,8 @@ runCheck : String -> String -> String -> String
 runCheck rsrc csrc tsrc =
   let raw = parse tsrc
   let desugared = desugar raw
-  let runtimeP = parse rsrc
-  let coreP = parse csrc
+  let runtimeP = parsePrelude rsrc
+  let coreP = parsePrelude csrc
   let importErrs = singleFileImportErrors desugared
   let importDiags = joinNl (map ppResError importErrs)
   routeImportCheck importDiags runtimeP coreP raw desugared
@@ -101,8 +102,8 @@ checkHasErrors : String -> String -> String -> Bool
 checkHasErrors rsrc csrc tsrc =
   let raw = parse tsrc
   let desugared = desugar raw
-  let runtimeP = parse rsrc
-  let coreP = parse csrc
+  let runtimeP = parsePrelude rsrc
+  let coreP = parsePrelude csrc
   let importErrs = singleFileImportErrors desugared
   match importErrs
     _::_ => True

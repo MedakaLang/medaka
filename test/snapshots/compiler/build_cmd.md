@@ -1,5 +1,5 @@
 # META
-source_lines=1068
+source_lines=1079
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/build_cmd.mdk — `medaka build` ported to self-hosted Medaka
@@ -33,6 +33,7 @@ import support.timer.{perfEnabled, now, emitPhase}
 import driver.loader.{entrySearchRoots, findProjectRootOrSelf, readForeignLibs}
 import support.path.{dirOf, chopExt, joinPath}
 import frontend.parser.{parseResult}
+import frontend.parse_cache.{notePreludeParse}
 import driver.diagnostics.{parseErrDiag, ppDiagCliSrc}
 
 -- A build either succeeds (writing the binary) or fails with a message.
@@ -124,15 +125,25 @@ defaultMedakaEmitter = joinPath exeDir "medaka_emitter"
 -- `parseResult`) and, on failure, return the SAME located `file:L:C:` diagnostic
 -- `medaka check` prints for a user file — rendered through the shared
 -- `parseErrDiag`/`ppDiagCliSrc` machinery — plus a context line naming it as the
--- prelude.  Same shape as the #892 fix for `medaka test`.  (One extra prelude
--- parse on the happy path; the source is re-parsed downstream regardless.)
+-- prelude.  Same shape as the #892 fix for `medaka test`.
+--
+-- #2234: that validating parse is no longer EXTRA.  Its decls used to be
+-- discarded (`Ok _ => Ok src`) and the source re-parsed three more times
+-- downstream — 54.15% of a hello-world `medaka check` went on parsing the two
+-- prelude files four times each.  The `Ok` payload is now published to the
+-- prelude parse memo (`frontend/parse_cache.mdk`), so this validation IS the one
+-- parse and every downstream `parsePrelude` hits it.  Keep the return type as the
+-- SOURCE text: eleven call-site pairs and the whole `analyzeFrom` surface consume
+-- it as a String, and the memo reaches them without re-signing any of them.
 export
 readPreludeFile : String -> <IO> Result String String
 readPreludeFile path = match readFile path
   Err e => Err "error: cannot read the stdlib prelude at \"\{path}\" (\{e})\n  set MEDAKA_ROOT to your medaka repo/install root, run from the project root, or place stdlib/ next to the medaka binary"
   Ok src => match parseResult src
     Err pe => Err "\{ppDiagCliSrc src path (parseErrDiag path pe)}\n  (while loading the implicit prelude)"
-    Ok _ => Ok src
+    Ok decls =>
+      let _ = notePreludeParse src decls
+      Ok src
 
 -- ---- the trailing-Unit auto-print trim ----
 -- The interpreter auto-prints main's Unit as a trailing "()\n"; the emitter's
@@ -1076,6 +1087,7 @@ emitRtObj cc root outObjPath = match makeTempDir ()
 (DUse false (UseGroup ("driver" "loader") ((mem "entrySearchRoots" false) (mem "findProjectRootOrSelf" false) (mem "readForeignLibs" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "chopExt" false) (mem "joinPath" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseResult" false))))
+(DUse false (UseGroup ("frontend" "parse_cache") ((mem "notePreludeParse" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "parseErrDiag" false) (mem "ppDiagCliSrc" false))))
 (DData Public "BuildResult" () ((variant "BuildOk" (ConPos (TyCon "String"))) (variant "BuildErr" (ConPos (TyCon "String")))) ())
 (DData Public "BuildTarget" () ((variant "TNative" (ConPos)) (variant "TWasm" (ConPos))) ())
@@ -1097,7 +1109,7 @@ emitRtObj cc root outObjPath = match makeTempDir ()
 (DTypeSig true "defaultMedakaEmitter" (TyEffect ("IO") None (TyCon "String")))
 (DFunDef false "defaultMedakaEmitter" () (EApp (EApp (EVar "joinPath") (EVar "exeDir")) (ELit (LString "medaka_emitter"))))
 (DTypeSig true "readPreludeFile" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
-(DFunDef false "readPreludeFile" ((PVar "path")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: cannot read the stdlib prelude at \"")) (EApp (EVar "display") (EVar "path"))) (ELit (LString "\" ("))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ")\n  set MEDAKA_ROOT to your medaka repo/install root, run from the project root, or place stdlib/ next to the medaka binary"))))) (arm (PCon "Ok" (PVar "src")) () (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" (PVar "pe")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "src")) (EVar "path")) (EApp (EApp (EVar "parseErrDiag") (EVar "path")) (EVar "pe"))))) (ELit (LString "\n  (while loading the implicit prelude)"))))) (arm (PCon "Ok" PWild) () (EApp (EVar "Ok") (EVar "src")))))))
+(DFunDef false "readPreludeFile" ((PVar "path")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: cannot read the stdlib prelude at \"")) (EApp (EVar "display") (EVar "path"))) (ELit (LString "\" ("))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ")\n  set MEDAKA_ROOT to your medaka repo/install root, run from the project root, or place stdlib/ next to the medaka binary"))))) (arm (PCon "Ok" (PVar "src")) () (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" (PVar "pe")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "src")) (EVar "path")) (EApp (EApp (EVar "parseErrDiag") (EVar "path")) (EVar "pe"))))) (ELit (LString "\n  (while loading the implicit prelude)"))))) (arm (PCon "Ok" (PVar "decls")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "notePreludeParse") (EVar "src")) (EVar "decls"))) (DoExpr (EApp (EVar "Ok") (EVar "src")))))))))
 (DTypeSig false "stripTrailingUnit" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "stripTrailingUnit" ((PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 3))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 3)))) (EVar "n")) (EVar "s")) (ELit (LString "()\n")))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EVar "n") (ELit (LInt 3)))) (EVar "s")) (EVar "s")))))
 (DTypeSig true "makeTempDir" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
@@ -1192,6 +1204,7 @@ emitRtObj cc root outObjPath = match makeTempDir ()
 (DUse false (UseGroup ("driver" "loader") ((mem "entrySearchRoots" false) (mem "findProjectRootOrSelf" false) (mem "readForeignLibs" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "chopExt" false) (mem "joinPath" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseResult" false))))
+(DUse false (UseGroup ("frontend" "parse_cache") ((mem "notePreludeParse" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "parseErrDiag" false) (mem "ppDiagCliSrc" false))))
 (DData Public "BuildResult" () ((variant "BuildOk" (ConPos (TyCon "String"))) (variant "BuildErr" (ConPos (TyCon "String")))) ())
 (DData Public "BuildTarget" () ((variant "TNative" (ConPos)) (variant "TWasm" (ConPos))) ())
@@ -1213,7 +1226,7 @@ emitRtObj cc root outObjPath = match makeTempDir ()
 (DTypeSig true "defaultMedakaEmitter" (TyEffect ("IO") None (TyCon "String")))
 (DFunDef false "defaultMedakaEmitter" () (EApp (EApp (EVar "joinPath") (EVar "exeDir")) (ELit (LString "medaka_emitter"))))
 (DTypeSig true "readPreludeFile" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
-(DFunDef false "readPreludeFile" ((PVar "path")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: cannot read the stdlib prelude at \"")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString "\" ("))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ")\n  set MEDAKA_ROOT to your medaka repo/install root, run from the project root, or place stdlib/ next to the medaka binary"))))) (arm (PCon "Ok" (PVar "src")) () (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" (PVar "pe")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "src")) (EVar "path")) (EApp (EApp (EVar "parseErrDiag") (EVar "path")) (EVar "pe"))))) (ELit (LString "\n  (while loading the implicit prelude)"))))) (arm (PCon "Ok" PWild) () (EApp (EVar "Ok") (EVar "src")))))))
+(DFunDef false "readPreludeFile" ((PVar "path")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: cannot read the stdlib prelude at \"")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString "\" ("))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ")\n  set MEDAKA_ROOT to your medaka repo/install root, run from the project root, or place stdlib/ next to the medaka binary"))))) (arm (PCon "Ok" (PVar "src")) () (EMatch (EApp (EVar "parseResult") (EVar "src")) (arm (PCon "Err" (PVar "pe")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "src")) (EVar "path")) (EApp (EApp (EVar "parseErrDiag") (EVar "path")) (EVar "pe"))))) (ELit (LString "\n  (while loading the implicit prelude)"))))) (arm (PCon "Ok" (PVar "decls")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "notePreludeParse") (EVar "src")) (EVar "decls"))) (DoExpr (EApp (EVar "Ok") (EVar "src")))))))))
 (DTypeSig false "stripTrailingUnit" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "stripTrailingUnit" ((PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 3))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 3)))) (EVar "n")) (EVar "s")) (ELit (LString "()\n")))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EVar "n") (ELit (LInt 3)))) (EVar "s")) (EVar "s")))))
 (DTypeSig true "makeTempDir" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))

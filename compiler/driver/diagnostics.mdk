@@ -27,6 +27,7 @@ import frontend.parser.{
   parseErrorCol,
   parseErrorMessage,
 }
+import frontend.parse_cache.{parsePrelude}
 import frontend.desugar.{desugar, checkDerives}
 import frontend.resolve.{
   ResError,
@@ -612,8 +613,8 @@ analyzeLocatedG modName allowInternal runtimeSrc coreSrc progSrc =
 analyzeFrom : String -> String -> String -> List Decl -> List String -> List Diag
 analyzeFrom modName runtimeSrc coreSrc raw internalGuard =
   let desugared = desugar raw
-  let runtimeP = desugar (parse runtimeSrc)
-  let coreP = desugar (parse coreSrc)
+  let runtimeP = desugar (parsePrelude runtimeSrc)
+  let coreP = desugar (parsePrelude coreSrc)
   -- Oracle superset = target + prelude (runtime + core) so exhaustiveness of a
   -- multi-clause function over a prelude ADT (Result/Option/…) isn't false-flagged.
   let guardWarns = checkGuardExhaustivenessWith (raw ++ runtimeP ++ coreP) raw
@@ -1478,7 +1479,7 @@ checkJsonSingle modName allowInternal rsrc csrc target src = match parseResult s
     -- program (`elaborateModules` inside `mainShapeWarnings` is not free).
     let mainWarns = if hasErr then [] else
       let entryRaw = parseLocated src
-      mainShapeWarnings (desugar (parse rsrc)) (desugar (parse csrc)) [(target, desugar entryRaw)] entryRaw
+      mainShapeWarnings (desugar (parsePrelude rsrc)) (desugar (parsePrelude csrc)) [(target, desugar entryRaw)] entryRaw
     (cjAllToJson [(target, src, diags ++ mainWarns)], hasErr)
 
 -- File check → JSON.  Reads `target`, then routes exactly like runCheckJsonCmd:
@@ -1554,7 +1555,7 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
               Some decls => decls
               None => parseLocated src
             let modsDFull = map desugarModPair mods
-            mainShapeWarnings (desugar (parse rsrc)) (desugar (parse csrc)) modsDFull entryRaw
+            mainShapeWarnings (desugar (parsePrelude rsrc)) (desugar (parsePrelude csrc)) modsDFull entryRaw
           let triples = map readDiagSrc results
           let root = dirOf stdlibDir
           let relTriples = map (relDiagTriple root) triples
