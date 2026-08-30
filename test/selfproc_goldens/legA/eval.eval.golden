@@ -77,6 +77,7 @@ defaultEntry : EvalEnv (Value a) -> String -> List String -> IfaceMethod -> List
 defaultNamesOf : String -> IfaceMethod -> List String
 dictOfRoute : EvalEnv (Value a) -> Route -> Value a
 dispatchPositionsOf : Ty -> List String -> List Int
+displayCtorName : String -> String
 doSetRef : Ref (Value a) -> Value a -> Value a
 driveAsyncMain : List (String, Value a) -> Value a
 dropShadowed : List String -> List Decl -> List Decl
@@ -430,6 +431,7 @@ statTuple : (Int, Bool, Bool, Float) -> Value a
 storeMemo : Ref (Option (Value a)) -> Value a -> Value a
 stringIndexCp : String -> Int -> Value a
 stripBody : Value a -> Value a -> Value a
+stripModPrefix : String -> Int -> Int -> String
 stripResolved : Value a -> Value a
 subClampZero : Int -> Int -> Int
 sumInts : List Int -> Int
@@ -456,6 +458,7 @@ unIntArray : Value a -> Array Int
 unString : Value a -> String
 unitResultToValue : Result String Unit -> Value a
 updateEvalLoc : Loc -> Unit
+upperInitialName : String -> Bool
 useImports : List (String, ModExports (Value a)) -> Decl -> List (String, Ref (Value a))
 useModuleId : UsePath -> String
 vIntArray : Array Int -> Value a

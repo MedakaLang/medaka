@@ -1,3 +1,0 @@
-public export data TQ = Zz Int      -- a public ctor Zz, arity 1
-export unQ : TQ -> Int
-unQ (Zz a) = a

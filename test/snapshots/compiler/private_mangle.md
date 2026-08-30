@@ -1,5 +1,5 @@
 # META
-source_lines=1285
+source_lines=1425
 stages=DESUGAR,MARK
 # SOURCE
 -- UNIVERSAL PER-MODULE NAME MANGLING for the flat multi-module EMIT path.
@@ -161,6 +161,130 @@ mangleUnits coreDecls modules =
   let coreOut = mangleUnitU exportsPerUnit ctorExportsPerUnit ("core", coreDecls)
   let modsOut = map (mangleModule exportsPerUnit ctorExportsPerUnit) modules
   (coreOut, modsOut)
+
+-- ── ctor-collision-only mangling for the UNTYPED eval drivers (#1292) ─────────
+-- `eval.runtimeTypeTag` tags a `VCon` by looking its BARE constructor name up in
+-- the program-global `ctorToTypeRef` table, so two modules declaring a same-named
+-- constructor collapse to ONE entry and every value of the loser's type is tagged
+-- with the winner's TYPE — silently dispatching to the wrong impl (#1292, S0).
+-- The emit path fixed this bug class in 2026-06-13 with `mangleUnits` above; this
+-- is the same rename, narrowed to what an INTERPRETER can afford:
+--
+--   * CONSTRUCTORS ONLY.  Renaming top-level functions is unnecessary here (eval
+--     resolves them through per-module frames, not a flat symbol table) and would
+--     put the whole function namespace at risk for no gain.
+--   * ONLY NAMES THAT ACTUALLY COLLIDE across units.  `mangleUnits` renames
+--     unconditionally, which is invisible on the emit path because the gates diff
+--     program OUTPUT — an argument that does NOT transfer to eval, where
+--     `ppValue (VCon name …)` prints the constructor name AS the output.  With the
+--     rename restricted to colliding names, a program with no cross-unit
+--     constructor collision (i.e. every program the corpus contains today) is
+--     returned BYTE-IDENTICAL, by construction.
+--   * `Pass`/`Fail` are EXEMPT (`evalMangleExemptCtor`).  See its comment.
+--
+-- Idempotent: after one pass the surviving names are `<mid>__<Ctor>`, distinct per
+-- unit, so a second pass finds no collision and returns its input unchanged.  That
+-- is what lets the drivers apply it defensively while `tools/test_cmd.mdk` applies
+-- it EARLIER (it must: the `test`/prop phases pull their bodies out of the same
+-- elaborated module list they hand the driver, so the bodies have to be renamed by
+-- the same pass, not merely evaluated in a renamed env).
+--
+-- ⚠️ NOT a total fix for #1292.  Two residuals stay live, both recorded rather than
+-- silently inherited:
+--   * a program that collides on the spellings `Pass`/`Fail` (the exemption);
+--   * an alias-qualified constructor reference (`import m as A` … `A.Ctor`) —
+--     `useCtorPathEntries`' `UseAlias` arm contributes no entry, so such a
+--     reference is left bare while the definition is renamed.  Colliding-ctor
+--     programs only; it fails LOUDLY (unbound) rather than silently.
+export
+mangleCtorCollisions : List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
+mangleCtorCollisions coreDecls modules =
+  let allUnits = ("core", coreDecls)::modules
+  let collided = collidingCtorNames allUnits
+  if omSize collided == 0 then (coreDecls, modules)
+  else
+    let ctorExportsPerUnit = map unitCtorExportEntry allUnits
+    let coreOut = mangleCtorUnitU collided ctorExportsPerUnit ("core", coreDecls)
+    let modsOut = map (mangleCtorModule collided ctorExportsPerUnit) modules
+    (coreOut, modsOut)
+
+-- pair-shaped convenience wrapper: `elaborateModules` returns exactly this pair,
+-- and every caller that needs the renamed decls back (not just a renamed env)
+-- wraps its result.
+export
+mangleCtorCollisionsPair : (List Decl, List (String, List Decl)) -> (List Decl, List (String, List Decl))
+mangleCtorCollisionsPair (coreDecls, modules) =
+  mangleCtorCollisions coreDecls modules
+
+-- the constructor names DECLARED by two or more distinct units, as a set.
+-- Per-unit `dedup` first, so one unit declaring a name twice (which is a resolve
+-- error, not a cross-module collision) never enters the set on its own.
+collidingCtorNames : List (String, List Decl) -> OrdMap Unit
+collidingCtorNames units =
+  collidedGo (flatMap unitMangleCtorNames units) omEmpty omEmpty
+
+collidedGo : List String -> OrdMap Unit -> OrdMap Unit -> OrdMap Unit
+collidedGo [] _ dup = dup
+collidedGo (n::rest) seen dup
+  | omHasKey n seen = collidedGo rest seen (omInsert n () dup)
+  | otherwise = collidedGo rest (omInsert n () seen) dup
+
+-- ⚠️ DATA constructors only -- `unitLocalCtorNames`' `DNewtype` arm is deliberately
+-- NOT consulted here.  A newtype constructor is not importable by ANY spelling (see
+-- `unitCtorExportEntry`'s #1305 note), so counting one as a collision would rename a
+-- DATA constructor that has no cross-module ambiguity at all: measured, that turned
+-- `test/eval_modules_fixtures/ctor_type_member_newtype_not_bound` (kmodv's
+-- `data KT = Wrap Int Int` beside nmodv's `newtype NT = Wrap Int`) from `1 / 9` to
+-- an unbound-variable exit.  #1292's newtype half is explicitly out of scope.
+unitMangleCtorNames : (String, List Decl) -> List String
+unitMangleCtorNames (_, decls) =
+  dedup (filterList evalMangleCandidate (flatMap localDataCtorNames decls))
+
+localDataCtorNames : Decl -> List String
+localDataCtorNames (DData { dataCtors = variants }) =
+  map variantCtorName variants
+localDataCtorNames (DAttrib _ d) = localDataCtorNames d
+localDataCtorNames _ = []
+
+evalMangleCandidate : String -> Bool
+evalMangleCandidate n = not (evalMangleExemptCtor n)
+
+-- Constructors the INTERPRETER ITSELF matches by bare spelling, on top of the
+-- emitter's fixed-tag set.  A tree-wide `grep -n 'VCon "' compiler/ --include=*.mdk`
+-- finds exactly one such pair beyond `isReservedCtor`'s list: `tools/test_runner.mdk`
+-- reads a `test "…"` body's result as `VCon "Pass" []` / `VCon "Fail" [_]`
+-- (stdlib `test.mdk`'s `Expectation`).  Renaming those would send every test in a
+-- program that happens to declare a colliding `Pass`/`Fail` down `runOneTest`'s
+-- `other => Errored` arm.
+--
+-- ⚠️ A BARE-NAME list, deliberately — the module-scoped alternative ("exempt only
+-- stdlib's `Pass`/`Fail`") has no input at this seam: `loader.moduleIdOfPath`
+-- discards which ROOT a module came from, so a stdlib `test.mdk` and a user
+-- `test.mdk` both arrive as the byte-identical mid `"test"`.  The cost is that
+-- #1292 stays live for programs colliding on those two spellings — strictly no
+-- worse than today, where EVERY spelling collides.
+--
+-- Kept SEPARATE from `isReservedCtor` rather than added to it: `isReservedCtor` is
+-- the EMITTER's fixed-tag set, and widening it would stop `mangleUnits` renaming a
+-- genuine `Pass`/`Fail` collision on the emit path, un-fixing a bug the emit path
+-- has already fixed.
+evalMangleExemptCtor : String -> Bool
+evalMangleExemptCtor n = isReservedCtor n || n == "Pass" || n == "Fail"
+
+mangleCtorModule : OrdMap Unit -> List (String, List (String, List String)) -> (String, List Decl) -> (String, List Decl)
+mangleCtorModule collided ctorExportsPerUnit (mid, decls) =
+  (mid, mangleCtorUnitU collided ctorExportsPerUnit (mid, decls))
+
+-- `mangleUnitU`'s constructor half, with the map filtered down to colliding keys
+-- and the function half omitted entirely.
+mangleCtorUnitU : OrdMap Unit -> List (String, List (String, List String)) -> (String, List Decl) -> List Decl
+mangleCtorUnitU collided ctorExportsPerUnit (mid, decls) =
+  let rmList = filterList (renameKeyCollides collided) (buildUnitCtorRenameMap mid ctorExportsPerUnit decls)
+  let rm = omFromPairs (reverseL rmList) omEmpty
+  if isEmptyL rmList then decls else map (renameDecl rm) decls
+
+renameKeyCollides : OrdMap Unit -> (String, String) -> Bool
+renameKeyCollides collided (n, _) = omHasKey n collided
 
 -- ── emitted-symbol injectivity guard (X-L.H / #348 / #748; drains #1677) ──────
 -- `mangledName` is `"\{sanitizeId mid}__\{name}"`, and `sanitizeId` is MANY-TO-ONE
@@ -1105,6 +1229,21 @@ renameScoped rm bound (EVarId n _)
     Some n2 => EVar n2
     None => EVar n
   | otherwise = EVar n
+-- #1292: `EVarAt` is NOT a leaf for the eval-side entry point.  `mangleUnits` runs
+-- PRE-annotate on the emit path, so this arm is dead there — but
+-- `mangleCtorCollisions` runs on trees `types/annotate.annotateProgram` has already
+-- rewritten `EVar n` -> `EVarAt n addr` (`entries/core_ir_modules_main.mdk`
+-- annotates every module before `cevalModules`), and BOTH consumers still look the
+-- name up BY NAME (`eval.eval (EVarAt x addr)` falls through to `lookupAtAddr x`;
+-- `core_ir_lower.lower (EVarAt x addr) = CVar x addr` and `core_ir_eval.ceval
+-- (CVar x _) = lookupEnv env x`).  Leaving the name un-renamed here would leave a
+-- constructor reference pointing at a cell the rename has moved.  The ADDRESS is
+-- preserved: renaming a binding changes no frame's composition or ordering.
+renameScoped rm bound (EVarAt n addr)
+  | not (omHasKey n bound) = match omLookup n rm
+    Some n2 => EVarAt n2 addr
+    None => EVarAt n addr
+  | otherwise = EVarAt n addr
 -- binders
 renameScoped rm bound (ELam ps body) =
   ELam
@@ -1184,7 +1323,8 @@ renameScoped rm bound (EMapLit n kvs) = EMapLit n (map (renameKv rm bound) kvs)
 renameScoped rm bound (ESetLit n es) =
   ESetLit n (map (renameScoped rm bound) es)
 renameScoped rm bound (EAsPat x sub) = EAsPat x (renameScoped rm bound sub)
--- leaves (ELit / EMethodRef / EDictApp / EVarAt / EMethodAt / EDictAt / SecBare)
+-- leaves (ELit / EMethodRef / EDictApp / EMethodAt / EDictAt / SecBare) -- EVarAt
+-- is handled above, not here: it carries a renameable NAME (see its arm).
 renameScoped _ _ e = e
 
 renameField : OrdMap String -> OrdMap Unit -> FieldAssign -> FieldAssign
@@ -1293,6 +1433,31 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omFromPairs" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omEmpty" false) (mem "omSize" false))))
 (DTypeSig true "mangleUnits" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
 (DFunDef false "mangleUnits" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "allUnits") (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false PWild (EApp (EVar "symbolInjectivityGuard") (EVar "allUnits"))) (DoLet false false (PVar "exportsPerUnit") (EApp (EApp (EVar "buildExportsPerUnit") (EListLit)) (EVar "allUnits"))) (DoLet false false (PVar "ctorExportsPerUnit") (EApp (EApp (EVar "map") (EVar "unitCtorExportEntry")) (EVar "allUnits"))) (DoLet false false (PVar "coreOut") (EApp (EApp (EApp (EVar "mangleUnitU") (EVar "exportsPerUnit")) (EVar "ctorExportsPerUnit")) (ETuple (ELit (LString "core")) (EVar "coreDecls")))) (DoLet false false (PVar "modsOut") (EApp (EApp (EVar "map") (EApp (EApp (EVar "mangleModule") (EVar "exportsPerUnit")) (EVar "ctorExportsPerUnit"))) (EVar "modules"))) (DoExpr (ETuple (EVar "coreOut") (EVar "modsOut")))))
+(DTypeSig true "mangleCtorCollisions" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
+(DFunDef false "mangleCtorCollisions" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "allUnits") (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PVar "collided") (EApp (EVar "collidingCtorNames") (EVar "allUnits"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "omSize") (EVar "collided")) (ELit (LInt 0))) (ETuple (EVar "coreDecls") (EVar "modules")) (EBlock (DoLet false false (PVar "ctorExportsPerUnit") (EApp (EApp (EVar "map") (EVar "unitCtorExportEntry")) (EVar "allUnits"))) (DoLet false false (PVar "coreOut") (EApp (EApp (EApp (EVar "mangleCtorUnitU") (EVar "collided")) (EVar "ctorExportsPerUnit")) (ETuple (ELit (LString "core")) (EVar "coreDecls")))) (DoLet false false (PVar "modsOut") (EApp (EApp (EVar "map") (EApp (EApp (EVar "mangleCtorModule") (EVar "collided")) (EVar "ctorExportsPerUnit"))) (EVar "modules"))) (DoExpr (ETuple (EVar "coreOut") (EVar "modsOut"))))))))
+(DTypeSig true "mangleCtorCollisionsPair" (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))
+(DFunDef false "mangleCtorCollisionsPair" ((PTuple (PVar "coreDecls") (PVar "modules"))) (EApp (EApp (EVar "mangleCtorCollisions") (EVar "coreDecls")) (EVar "modules")))
+(DTypeSig false "collidingCtorNames" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))
+(DFunDef false "collidingCtorNames" ((PVar "units")) (EApp (EApp (EApp (EVar "collidedGo") (EApp (EApp (EVar "flatMap") (EVar "unitMangleCtorNames")) (EVar "units"))) (EVar "omEmpty")) (EVar "omEmpty")))
+(DTypeSig false "collidedGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
+(DFunDef false "collidedGo" ((PList) PWild (PVar "dup")) (EVar "dup"))
+(DFunDef false "collidedGo" ((PCons (PVar "n") (PVar "rest")) (PVar "seen") (PVar "dup")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "seen")) (EApp (EApp (EApp (EVar "collidedGo") (EVar "rest")) (EVar "seen")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "dup"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "collidedGo") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "seen"))) (EVar "dup")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "unitMangleCtorNames" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "unitMangleCtorNames" ((PTuple PWild (PVar "decls"))) (EApp (EVar "dedup") (EApp (EApp (EVar "filterList") (EVar "evalMangleCandidate")) (EApp (EApp (EVar "flatMap") (EVar "localDataCtorNames")) (EVar "decls")))))
+(DTypeSig false "localDataCtorNames" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "localDataCtorNames" ((PRec "DData" ((rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EVar "map") (EVar "variantCtorName")) (EVar "variants")))
+(DFunDef false "localDataCtorNames" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "localDataCtorNames") (EVar "d")))
+(DFunDef false "localDataCtorNames" (PWild) (EListLit))
+(DTypeSig false "evalMangleCandidate" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "evalMangleCandidate" ((PVar "n")) (EApp (EVar "not") (EApp (EVar "evalMangleExemptCtor") (EVar "n"))))
+(DTypeSig false "evalMangleExemptCtor" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "evalMangleExemptCtor" ((PVar "n")) (EBinOp "||" (EBinOp "||" (EApp (EVar "isReservedCtor") (EVar "n")) (EBinOp "==" (EVar "n") (ELit (LString "Pass")))) (EBinOp "==" (EVar "n") (ELit (LString "Fail")))))
+(DTypeSig false "mangleCtorModule" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))
+(DFunDef false "mangleCtorModule" ((PVar "collided") (PVar "ctorExportsPerUnit") (PTuple (PVar "mid") (PVar "decls"))) (ETuple (EVar "mid") (EApp (EApp (EApp (EVar "mangleCtorUnitU") (EVar "collided")) (EVar "ctorExportsPerUnit")) (ETuple (EVar "mid") (EVar "decls")))))
+(DTypeSig false "mangleCtorUnitU" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyCon "Decl"))))))
+(DFunDef false "mangleCtorUnitU" ((PVar "collided") (PVar "ctorExportsPerUnit") (PTuple (PVar "mid") (PVar "decls"))) (EBlock (DoLet false false (PVar "rmList") (EApp (EApp (EVar "filterList") (EApp (EVar "renameKeyCollides") (EVar "collided"))) (EApp (EApp (EApp (EVar "buildUnitCtorRenameMap") (EVar "mid")) (EVar "ctorExportsPerUnit")) (EVar "decls")))) (DoLet false false (PVar "rm") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "rmList"))) (EVar "omEmpty"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "rmList")) (EVar "decls") (EApp (EApp (EVar "map") (EApp (EVar "renameDecl") (EVar "rm"))) (EVar "decls"))))))
+(DTypeSig false "renameKeyCollides" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "renameKeyCollides" ((PVar "collided") (PTuple (PVar "n") PWild)) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "collided")))
 (DTypeSig false "symbolInjectivityGuard" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Unit")))
 (DFunDef false "symbolInjectivityGuard" ((PVar "allUnits")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "checkSymbolsInjective") (ELit (LString "function"))) (EApp (EApp (EVar "flatMap") (EVar "unitFnSymbolPairs")) (EVar "allUnits"))) (EVar "omEmpty"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkSymbolsInjective") (ELit (LString "constructor"))) (EApp (EApp (EVar "flatMap") (EVar "unitCtorSymbolPairs")) (EVar "allUnits"))) (EVar "omEmpty"))) (DoExpr (ELit LUnit))))
 (DTypeSig false "unitFnSymbolPairs" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
@@ -1528,6 +1693,7 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DTypeSig false "renameScoped" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EVar" (PVar "n"))) (EIf (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "rm")) (arm (PCon "Some" (PVar "n2")) () (EApp (EVar "EVar") (EVar "n2"))) (arm (PCon "None") () (EApp (EVar "EVar") (EVar "n")))) (EIf (EVar "otherwise") (EApp (EVar "EVar") (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EVarId" (PVar "n") PWild)) (EIf (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "rm")) (arm (PCon "Some" (PVar "n2")) () (EApp (EVar "EVar") (EVar "n2"))) (arm (PCon "None") () (EApp (EVar "EVar") (EVar "n")))) (EIf (EVar "otherwise") (EApp (EVar "EVar") (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EVarAt" (PVar "n") (PVar "addr"))) (EIf (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "rm")) (arm (PCon "Some" (PVar "n2")) () (EApp (EApp (EVar "EVarAt") (EVar "n2")) (EVar "addr"))) (arm (PCon "None") () (EApp (EApp (EVar "EVarAt") (EVar "n")) (EVar "addr")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "EVarAt") (EVar "n")) (EVar "addr")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ELam" (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "ELam") (EApp (EApp (EVar "renamePatsPM") (EVar "rm")) (EVar "ps"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EApp (EVar "boundInsertPM") (EApp (EVar "patVarsListPM") (EVar "ps"))) (EVar "bound"))) (EVar "body"))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ELet" (PVar "m") (PVar "r") (PVar "p") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PVar "pv") (EApp (EVar "patVarsPM") (EVar "p"))) (DoLet false false (PVar "b1") (EIf (EVar "r") (EApp (EApp (EVar "boundInsertPM") (EVar "pv")) (EVar "bound")) (EVar "bound"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "r")) (EApp (EApp (EVar "renamePat") (EVar "rm")) (EVar "p"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "b1")) (EVar "e1"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EApp (EVar "boundInsertPM") (EVar "pv")) (EVar "bound"))) (EVar "e2"))))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ELetGroup" (PVar "binds") (PVar "e2"))) (EBlock (DoLet false false (PVar "bnd") (EApp (EApp (EVar "boundInsertPM") (EApp (EVar "letBindNamesPM") (EVar "binds"))) (EVar "bound"))) (DoExpr (EApp (EApp (EVar "ELetGroup") (EApp (EApp (EVar "map") (EApp (EApp (EVar "renameLetBind") (EVar "rm")) (EVar "bnd"))) (EVar "binds"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bnd")) (EVar "e2"))))))
@@ -1623,6 +1789,31 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omFromPairs" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omEmpty" false) (mem "omSize" false))))
 (DTypeSig true "mangleUnits" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
 (DFunDef false "mangleUnits" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "allUnits") (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false PWild (EApp (EVar "symbolInjectivityGuard") (EVar "allUnits"))) (DoLet false false (PVar "exportsPerUnit") (EApp (EApp (EVar "buildExportsPerUnit") (EListLit)) (EVar "allUnits"))) (DoLet false false (PVar "ctorExportsPerUnit") (EApp (EApp (EMethodRef "map") (EVar "unitCtorExportEntry")) (EVar "allUnits"))) (DoLet false false (PVar "coreOut") (EApp (EApp (EApp (EVar "mangleUnitU") (EVar "exportsPerUnit")) (EVar "ctorExportsPerUnit")) (ETuple (ELit (LString "core")) (EVar "coreDecls")))) (DoLet false false (PVar "modsOut") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "mangleModule") (EVar "exportsPerUnit")) (EVar "ctorExportsPerUnit"))) (EVar "modules"))) (DoExpr (ETuple (EVar "coreOut") (EVar "modsOut")))))
+(DTypeSig true "mangleCtorCollisions" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
+(DFunDef false "mangleCtorCollisions" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "allUnits") (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PVar "collided") (EApp (EVar "collidingCtorNames") (EVar "allUnits"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "omSize") (EVar "collided")) (ELit (LInt 0))) (ETuple (EVar "coreDecls") (EVar "modules")) (EBlock (DoLet false false (PVar "ctorExportsPerUnit") (EApp (EApp (EMethodRef "map") (EVar "unitCtorExportEntry")) (EVar "allUnits"))) (DoLet false false (PVar "coreOut") (EApp (EApp (EApp (EVar "mangleCtorUnitU") (EVar "collided")) (EVar "ctorExportsPerUnit")) (ETuple (ELit (LString "core")) (EVar "coreDecls")))) (DoLet false false (PVar "modsOut") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "mangleCtorModule") (EVar "collided")) (EVar "ctorExportsPerUnit"))) (EVar "modules"))) (DoExpr (ETuple (EVar "coreOut") (EVar "modsOut"))))))))
+(DTypeSig true "mangleCtorCollisionsPair" (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))
+(DFunDef false "mangleCtorCollisionsPair" ((PTuple (PVar "coreDecls") (PVar "modules"))) (EApp (EApp (EVar "mangleCtorCollisions") (EVar "coreDecls")) (EVar "modules")))
+(DTypeSig false "collidingCtorNames" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))
+(DFunDef false "collidingCtorNames" ((PVar "units")) (EApp (EApp (EApp (EVar "collidedGo") (EApp (EApp (EDictApp "flatMap") (EVar "unitMangleCtorNames")) (EVar "units"))) (EVar "omEmpty")) (EVar "omEmpty")))
+(DTypeSig false "collidedGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
+(DFunDef false "collidedGo" ((PList) PWild (PVar "dup")) (EVar "dup"))
+(DFunDef false "collidedGo" ((PCons (PVar "n") (PVar "rest")) (PVar "seen") (PVar "dup")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "seen")) (EApp (EApp (EApp (EVar "collidedGo") (EVar "rest")) (EVar "seen")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "dup"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "collidedGo") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "seen"))) (EVar "dup")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "unitMangleCtorNames" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "unitMangleCtorNames" ((PTuple PWild (PVar "decls"))) (EApp (EVar "dedup") (EApp (EApp (EVar "filterList") (EVar "evalMangleCandidate")) (EApp (EApp (EDictApp "flatMap") (EVar "localDataCtorNames")) (EVar "decls")))))
+(DTypeSig false "localDataCtorNames" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "localDataCtorNames" ((PRec "DData" ((rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EMethodRef "map") (EVar "variantCtorName")) (EVar "variants")))
+(DFunDef false "localDataCtorNames" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "localDataCtorNames") (EVar "d")))
+(DFunDef false "localDataCtorNames" (PWild) (EListLit))
+(DTypeSig false "evalMangleCandidate" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "evalMangleCandidate" ((PVar "n")) (EApp (EVar "not") (EApp (EVar "evalMangleExemptCtor") (EVar "n"))))
+(DTypeSig false "evalMangleExemptCtor" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "evalMangleExemptCtor" ((PVar "n")) (EBinOp "||" (EBinOp "||" (EApp (EVar "isReservedCtor") (EVar "n")) (EBinOp "==" (EVar "n") (ELit (LString "Pass")))) (EBinOp "==" (EVar "n") (ELit (LString "Fail")))))
+(DTypeSig false "mangleCtorModule" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))
+(DFunDef false "mangleCtorModule" ((PVar "collided") (PVar "ctorExportsPerUnit") (PTuple (PVar "mid") (PVar "decls"))) (ETuple (EVar "mid") (EApp (EApp (EApp (EVar "mangleCtorUnitU") (EVar "collided")) (EVar "ctorExportsPerUnit")) (ETuple (EVar "mid") (EVar "decls")))))
+(DTypeSig false "mangleCtorUnitU" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyCon "Decl"))))))
+(DFunDef false "mangleCtorUnitU" ((PVar "collided") (PVar "ctorExportsPerUnit") (PTuple (PVar "mid") (PVar "decls"))) (EBlock (DoLet false false (PVar "rmList") (EApp (EApp (EVar "filterList") (EApp (EVar "renameKeyCollides") (EVar "collided"))) (EApp (EApp (EApp (EVar "buildUnitCtorRenameMap") (EVar "mid")) (EVar "ctorExportsPerUnit")) (EVar "decls")))) (DoLet false false (PVar "rm") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "rmList"))) (EVar "omEmpty"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "rmList")) (EVar "decls") (EApp (EApp (EMethodRef "map") (EApp (EVar "renameDecl") (EVar "rm"))) (EVar "decls"))))))
+(DTypeSig false "renameKeyCollides" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "renameKeyCollides" ((PVar "collided") (PTuple (PVar "n") PWild)) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "collided")))
 (DTypeSig false "symbolInjectivityGuard" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Unit")))
 (DFunDef false "symbolInjectivityGuard" ((PVar "allUnits")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "checkSymbolsInjective") (ELit (LString "function"))) (EApp (EApp (EDictApp "flatMap") (EVar "unitFnSymbolPairs")) (EVar "allUnits"))) (EVar "omEmpty"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkSymbolsInjective") (ELit (LString "constructor"))) (EApp (EApp (EDictApp "flatMap") (EVar "unitCtorSymbolPairs")) (EVar "allUnits"))) (EVar "omEmpty"))) (DoExpr (ELit LUnit))))
 (DTypeSig false "unitFnSymbolPairs" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
@@ -1858,6 +2049,7 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DTypeSig false "renameScoped" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EVar" (PVar "n"))) (EIf (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "rm")) (arm (PCon "Some" (PVar "n2")) () (EApp (EVar "EVar") (EVar "n2"))) (arm (PCon "None") () (EApp (EVar "EVar") (EVar "n")))) (EIf (EVar "otherwise") (EApp (EVar "EVar") (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EVarId" (PVar "n") PWild)) (EIf (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "rm")) (arm (PCon "Some" (PVar "n2")) () (EApp (EVar "EVar") (EVar "n2"))) (arm (PCon "None") () (EApp (EVar "EVar") (EVar "n")))) (EIf (EVar "otherwise") (EApp (EVar "EVar") (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EVarAt" (PVar "n") (PVar "addr"))) (EIf (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "rm")) (arm (PCon "Some" (PVar "n2")) () (EApp (EApp (EVar "EVarAt") (EVar "n2")) (EVar "addr"))) (arm (PCon "None") () (EApp (EApp (EVar "EVarAt") (EVar "n")) (EVar "addr")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "EVarAt") (EVar "n")) (EVar "addr")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ELam" (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "ELam") (EApp (EApp (EVar "renamePatsPM") (EVar "rm")) (EVar "ps"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EApp (EVar "boundInsertPM") (EApp (EVar "patVarsListPM") (EVar "ps"))) (EVar "bound"))) (EVar "body"))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ELet" (PVar "m") (PVar "r") (PVar "p") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PVar "pv") (EApp (EVar "patVarsPM") (EVar "p"))) (DoLet false false (PVar "b1") (EIf (EVar "r") (EApp (EApp (EVar "boundInsertPM") (EVar "pv")) (EVar "bound")) (EVar "bound"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "r")) (EApp (EApp (EVar "renamePat") (EVar "rm")) (EVar "p"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "b1")) (EVar "e1"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EApp (EVar "boundInsertPM") (EVar "pv")) (EVar "bound"))) (EVar "e2"))))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ELetGroup" (PVar "binds") (PVar "e2"))) (EBlock (DoLet false false (PVar "bnd") (EApp (EApp (EVar "boundInsertPM") (EApp (EVar "letBindNamesPM") (EVar "binds"))) (EVar "bound"))) (DoExpr (EApp (EApp (EVar "ELetGroup") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "renameLetBind") (EVar "rm")) (EVar "bnd"))) (EVar "binds"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bnd")) (EVar "e2"))))))
