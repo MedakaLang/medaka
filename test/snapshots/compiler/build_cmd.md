@@ -1,5 +1,5 @@
 # META
-source_lines=1079
+source_lines=1108
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/build_cmd.mdk — `medaka build` ported to self-hosted Medaka
@@ -769,10 +769,11 @@ missingLibMsg projRoot name dir =
 -- atomic), then `mv` it into place.  A racing build either sees the old absence
 -- and does the same work, or sees the finished object — never a partial one.
 --
--- ⚠️ FAIL-OPEN, ALWAYS.  Every failure path here returns "" and the caller
--- compiles medaka_rt.c inline exactly as before.  No cache problem — unset HOME,
--- unwritable cache dir, missing sha256sum, a failed mv — may ever fail a build
--- that would otherwise succeed.
+-- ⚠️ FAIL-OPEN, ALWAYS.  Every failure path here ends in either "" (the caller
+-- compiles medaka_rt.c inline exactly as before) or a fresh compile over the bad
+-- entry.  No cache problem — unset HOME, unwritable cache dir, missing
+-- sha256sum, a failed mv, a truncated object (rtObjUsable) — may ever fail a
+-- build that would otherwise succeed.
 --
 -- Escape hatches: MEDAKA_NO_OBJ_CACHE (any non-empty value) disables it;
 -- MEDAKA_CACHE_DIR relocates it; an explicit MEDAKA_RT_OBJ still wins outright,
@@ -834,10 +835,38 @@ cachedRtObj cc rtC optFlag gcCflags tmpDir =
     if key == "" then ""
     else
       let objPath = joinPath dir "rt-\{key}.o"
-      if fileExists objPath then
-        objPath
-      else
-        populateRtObj cc rtC optFlag gcCflags dir objPath
+      let hit = if fileExists objPath then rtObjUsable objPath else False
+      if hit then objPath else populateRtObj cc rtC optFlag gcCflags dir objPath
+
+-- Sanity-check a cache HIT before trusting it (#2233 item 2).  The population
+-- path is already write-then-rename, so a truncated object needs a crash or
+-- power loss mid-writeback — but if that happens the object still EXISTS at the
+-- expected path, and the next build fails with `undefined reference to 'main'`,
+-- an error pointing nowhere near the cache and with no self-repair.
+-- medaka_rt.c owns `int main` (see its bottom), so an object that does not
+-- define it is not a usable runtime object whatever its size — which makes the
+-- symbol a sharper check than a size floor a truncated object could still pass.
+--
+-- ⚠️ FAIL-OPEN IN BOTH DIRECTIONS, and the two directions differ deliberately:
+--   * no `nm` on the box            -> ACCEPT.  Rejecting would silently disable
+--     the cache everywhere nm is absent — a far bigger regression than the narrow
+--     corruption case this guards.
+--   * `nm` runs but cannot read the object, or reads it and finds no `main`
+--                                   -> REJECT.  The caller then repopulates over
+--     it (mktemp + `mv -f`), so a corrupted entry SELF-REPAIRS rather than
+--     needing a manual clear.
+-- Matches both `T main` (ELF) and `T _main` (Mach-O's leading underscore), per
+-- [B-DUAL-PLATFORM].
+rtObjUsable : String -> <IO> Bool
+rtObjUsable objPath =
+  let script = stringConcat [
+    "command -v nm >/dev/null 2>&1 || exit 0\n",
+    "syms=$(nm \"$1\" 2>/dev/null) || exit 1\n",
+    "printf '%s\\n' \"$syms\" | grep -qE ' T _?main$'\n",
+  ]
+  match runCommand "sh" ["-c", script, "sh", objPath]
+    Ok (0, _, _) => True
+    _ => False
 
 -- Cache MISS: compile medaka_rt.c with EXACTLY the flags clangLinkGo would have
 -- applied to it inline (and exactly the flags emitRtObj uses — the same one
@@ -1179,7 +1208,9 @@ emitRtObj cc root outObjPath = match makeTempDir ()
 (DTypeSig false "rtObjCacheKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))))))
 (DFunDef false "rtObjCacheKey" ((PVar "cc") (PVar "rtC") (PVar "optFlag") (PVar "gcCflags") (PVar "tmpDir")) (EBlock (DoLet false false (PVar "flagsPath") (EApp (EApp (EVar "joinPath") (EVar "tmpDir")) (ELit (LString "rtobj_flags")))) (DoLet false false (PVar "flagsText") (EBinOp "++" (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EBinOp "++" (EBinOp "++" (EListLit (EVar "optFlag") (ELit (LString "-pthread"))) (EVar "gcSectionsCflags")) (EVar "gcCflags"))) (ELit (LString "\n")))) (DoExpr (EMatch (EApp (EApp (EVar "writeFile") (EVar "flagsPath")) (EVar "flagsText")) (arm (PCon "Err" PWild) () (ELit (LString ""))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PVar "script") (EApp (EVar "stringConcat") (EListLit (ELit (LString "{ printf '%s\\n' \"$1\"; \"$1\" --version 2>/dev/null; cat \"$2\"; cat \"$3\"; } | ")) (ELit (LString "{ if command -v sha256sum >/dev/null 2>&1; then sha256sum; ")) (ELit (LString "elif command -v shasum >/dev/null 2>&1; then shasum -a 256; ")) (ELit (LString "else cksum; fi; } | cut -d' ' -f1"))))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "sh"))) (EListLit (ELit (LString "-c")) (EVar "script") (ELit (LString "sh")) (EVar "cc") (EVar "flagsPath") (EVar "rtC"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EApp (EVar "stringTrim") (EVar "out"))) (arm PWild () (ELit (LString "")))))))))))
 (DTypeSig false "cachedRtObj" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))))))
-(DFunDef false "cachedRtObj" ((PVar "cc") (PVar "rtC") (PVar "optFlag") (PVar "gcCflags") (PVar "tmpDir")) (EBlock (DoLet false false (PVar "dir") (EApp (EVar "objCacheDir") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "dir") (ELit (LString ""))) (ELit (LString "")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EApp (EApp (EApp (EVar "rtObjCacheKey") (EVar "cc")) (EVar "rtC")) (EVar "optFlag")) (EVar "gcCflags")) (EVar "tmpDir"))) (DoExpr (EIf (EBinOp "==" (EVar "key") (ELit (LString ""))) (ELit (LString "")) (EBlock (DoLet false false (PVar "objPath") (EApp (EApp (EVar "joinPath") (EVar "dir")) (EBinOp "++" (EBinOp "++" (ELit (LString "rt-")) (EApp (EVar "display") (EVar "key"))) (ELit (LString ".o"))))) (DoExpr (EIf (EApp (EVar "fileExists") (EVar "objPath")) (EVar "objPath") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "populateRtObj") (EVar "cc")) (EVar "rtC")) (EVar "optFlag")) (EVar "gcCflags")) (EVar "dir")) (EVar "objPath"))))))))))))
+(DFunDef false "cachedRtObj" ((PVar "cc") (PVar "rtC") (PVar "optFlag") (PVar "gcCflags") (PVar "tmpDir")) (EBlock (DoLet false false (PVar "dir") (EApp (EVar "objCacheDir") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "dir") (ELit (LString ""))) (ELit (LString "")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EApp (EApp (EApp (EVar "rtObjCacheKey") (EVar "cc")) (EVar "rtC")) (EVar "optFlag")) (EVar "gcCflags")) (EVar "tmpDir"))) (DoExpr (EIf (EBinOp "==" (EVar "key") (ELit (LString ""))) (ELit (LString "")) (EBlock (DoLet false false (PVar "objPath") (EApp (EApp (EVar "joinPath") (EVar "dir")) (EBinOp "++" (EBinOp "++" (ELit (LString "rt-")) (EApp (EVar "display") (EVar "key"))) (ELit (LString ".o"))))) (DoLet false false (PVar "hit") (EIf (EApp (EVar "fileExists") (EVar "objPath")) (EApp (EVar "rtObjUsable") (EVar "objPath")) (EVar "False"))) (DoExpr (EIf (EVar "hit") (EVar "objPath") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "populateRtObj") (EVar "cc")) (EVar "rtC")) (EVar "optFlag")) (EVar "gcCflags")) (EVar "dir")) (EVar "objPath"))))))))))))
+(DTypeSig false "rtObjUsable" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))
+(DFunDef false "rtObjUsable" ((PVar "objPath")) (EBlock (DoLet false false (PVar "script") (EApp (EVar "stringConcat") (EListLit (ELit (LString "command -v nm >/dev/null 2>&1 || exit 0\n")) (ELit (LString "syms=$(nm \"$1\" 2>/dev/null) || exit 1\n")) (ELit (LString "printf '%s\\n' \"$syms\" | grep -qE ' T _?main$'\n"))))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "sh"))) (EListLit (ELit (LString "-c")) (EVar "script") (ELit (LString "sh")) (EVar "objPath"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild)) () (EVar "True")) (arm PWild () (EVar "False"))))))
 (DTypeSig false "populateRtObj" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String")))))))))
 (DFunDef false "populateRtObj" ((PVar "cc") (PVar "rtC") (PVar "optFlag") (PVar "gcCflags") (PVar "dir") (PVar "objPath")) (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "mkdir"))) (EListLit (ELit (LString "-p")) (EVar "dir"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild)) () (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "mktemp"))) (EListLit (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "rtobj_XXXXXX"))))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "tOut") PWild)) () (EBlock (DoLet false false (PVar "tmpObj") (EApp (EVar "stringTrim") (EVar "tOut"))) (DoExpr (EIf (EBinOp "==" (EVar "tmpObj") (ELit (LString ""))) (ELit (LString "")) (EBlock (DoLet false false (PVar "ccArgs") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EVar "optFlag") (ELit (LString "-pthread"))) (EVar "gcSectionsCflags")) (EVar "gcCflags")) (EListLit (ELit (LString "-c")) (EVar "rtC") (ELit (LString "-o")) (EVar "tmpObj")))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (EVar "cc")) (EVar "ccArgs")) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild)) () (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "mv"))) (EListLit (ELit (LString "-f")) (EVar "tmpObj") (EVar "objPath"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild)) () (EVar "objPath")) (arm PWild () (EBlock (DoLet false false PWild (EApp (EVar "removeFile") (EVar "tmpObj"))) (DoExpr (ELit (LString ""))))))) (arm PWild () (EBlock (DoLet false false PWild (EApp (EVar "removeFile") (EVar "tmpObj"))) (DoExpr (ELit (LString "")))))))))))) (arm PWild () (ELit (LString ""))))) (arm PWild () (ELit (LString "")))))
 (DTypeSig false "rtObjNote" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
@@ -1296,7 +1327,9 @@ emitRtObj cc root outObjPath = match makeTempDir ()
 (DTypeSig false "rtObjCacheKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))))))
 (DFunDef false "rtObjCacheKey" ((PVar "cc") (PVar "rtC") (PVar "optFlag") (PVar "gcCflags") (PVar "tmpDir")) (EBlock (DoLet false false (PVar "flagsPath") (EApp (EApp (EVar "joinPath") (EVar "tmpDir")) (ELit (LString "rtobj_flags")))) (DoLet false false (PVar "flagsText") (EBinOp "++" (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EBinOp "++" (EBinOp "++" (EListLit (EVar "optFlag") (ELit (LString "-pthread"))) (EVar "gcSectionsCflags")) (EVar "gcCflags"))) (ELit (LString "\n")))) (DoExpr (EMatch (EApp (EApp (EVar "writeFile") (EVar "flagsPath")) (EVar "flagsText")) (arm (PCon "Err" PWild) () (ELit (LString ""))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PVar "script") (EApp (EVar "stringConcat") (EListLit (ELit (LString "{ printf '%s\\n' \"$1\"; \"$1\" --version 2>/dev/null; cat \"$2\"; cat \"$3\"; } | ")) (ELit (LString "{ if command -v sha256sum >/dev/null 2>&1; then sha256sum; ")) (ELit (LString "elif command -v shasum >/dev/null 2>&1; then shasum -a 256; ")) (ELit (LString "else cksum; fi; } | cut -d' ' -f1"))))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "sh"))) (EListLit (ELit (LString "-c")) (EVar "script") (ELit (LString "sh")) (EVar "cc") (EVar "flagsPath") (EVar "rtC"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EApp (EVar "stringTrim") (EVar "out"))) (arm PWild () (ELit (LString "")))))))))))
 (DTypeSig false "cachedRtObj" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))))))
-(DFunDef false "cachedRtObj" ((PVar "cc") (PVar "rtC") (PVar "optFlag") (PVar "gcCflags") (PVar "tmpDir")) (EBlock (DoLet false false (PVar "dir") (EApp (EVar "objCacheDir") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "dir") (ELit (LString ""))) (ELit (LString "")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EApp (EApp (EApp (EVar "rtObjCacheKey") (EVar "cc")) (EVar "rtC")) (EVar "optFlag")) (EVar "gcCflags")) (EVar "tmpDir"))) (DoExpr (EIf (EBinOp "==" (EVar "key") (ELit (LString ""))) (ELit (LString "")) (EBlock (DoLet false false (PVar "objPath") (EApp (EApp (EVar "joinPath") (EVar "dir")) (EBinOp "++" (EBinOp "++" (ELit (LString "rt-")) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString ".o"))))) (DoExpr (EIf (EApp (EVar "fileExists") (EVar "objPath")) (EVar "objPath") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "populateRtObj") (EVar "cc")) (EVar "rtC")) (EVar "optFlag")) (EVar "gcCflags")) (EVar "dir")) (EVar "objPath"))))))))))))
+(DFunDef false "cachedRtObj" ((PVar "cc") (PVar "rtC") (PVar "optFlag") (PVar "gcCflags") (PVar "tmpDir")) (EBlock (DoLet false false (PVar "dir") (EApp (EVar "objCacheDir") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "dir") (ELit (LString ""))) (ELit (LString "")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EApp (EApp (EApp (EVar "rtObjCacheKey") (EVar "cc")) (EVar "rtC")) (EVar "optFlag")) (EVar "gcCflags")) (EVar "tmpDir"))) (DoExpr (EIf (EBinOp "==" (EVar "key") (ELit (LString ""))) (ELit (LString "")) (EBlock (DoLet false false (PVar "objPath") (EApp (EApp (EVar "joinPath") (EVar "dir")) (EBinOp "++" (EBinOp "++" (ELit (LString "rt-")) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString ".o"))))) (DoLet false false (PVar "hit") (EIf (EApp (EVar "fileExists") (EVar "objPath")) (EApp (EVar "rtObjUsable") (EVar "objPath")) (EVar "False"))) (DoExpr (EIf (EVar "hit") (EVar "objPath") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "populateRtObj") (EVar "cc")) (EVar "rtC")) (EVar "optFlag")) (EVar "gcCflags")) (EVar "dir")) (EVar "objPath"))))))))))))
+(DTypeSig false "rtObjUsable" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))
+(DFunDef false "rtObjUsable" ((PVar "objPath")) (EBlock (DoLet false false (PVar "script") (EApp (EVar "stringConcat") (EListLit (ELit (LString "command -v nm >/dev/null 2>&1 || exit 0\n")) (ELit (LString "syms=$(nm \"$1\" 2>/dev/null) || exit 1\n")) (ELit (LString "printf '%s\\n' \"$syms\" | grep -qE ' T _?main$'\n"))))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "sh"))) (EListLit (ELit (LString "-c")) (EVar "script") (ELit (LString "sh")) (EVar "objPath"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild)) () (EVar "True")) (arm PWild () (EVar "False"))))))
 (DTypeSig false "populateRtObj" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String")))))))))
 (DFunDef false "populateRtObj" ((PVar "cc") (PVar "rtC") (PVar "optFlag") (PVar "gcCflags") (PVar "dir") (PVar "objPath")) (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "mkdir"))) (EListLit (ELit (LString "-p")) (EVar "dir"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild)) () (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "mktemp"))) (EListLit (EApp (EApp (EVar "joinPath") (EVar "dir")) (ELit (LString "rtobj_XXXXXX"))))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "tOut") PWild)) () (EBlock (DoLet false false (PVar "tmpObj") (EApp (EVar "stringTrim") (EVar "tOut"))) (DoExpr (EIf (EBinOp "==" (EVar "tmpObj") (ELit (LString ""))) (ELit (LString "")) (EBlock (DoLet false false (PVar "ccArgs") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EVar "optFlag") (ELit (LString "-pthread"))) (EVar "gcSectionsCflags")) (EVar "gcCflags")) (EListLit (ELit (LString "-c")) (EVar "rtC") (ELit (LString "-o")) (EVar "tmpObj")))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (EVar "cc")) (EVar "ccArgs")) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild)) () (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "mv"))) (EListLit (ELit (LString "-f")) (EVar "tmpObj") (EVar "objPath"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild)) () (EVar "objPath")) (arm PWild () (EBlock (DoLet false false PWild (EApp (EVar "removeFile") (EVar "tmpObj"))) (DoExpr (ELit (LString ""))))))) (arm PWild () (EBlock (DoLet false false PWild (EApp (EVar "removeFile") (EVar "tmpObj"))) (DoExpr (ELit (LString "")))))))))))) (arm PWild () (ELit (LString ""))))) (arm PWild () (ELit (LString "")))))
 (DTypeSig false "rtObjNote" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))

@@ -157,6 +157,60 @@ for OPT in -O0 -O2; do
   fi
 done
 
+# FOURTH ARM — a CORRUPTED cache entry must SELF-REPAIR, not brick the next build
+# (#2233 item 2, build_cmd.mdk's `rtObjUsable`).
+#
+# runtime/medaka_rt.c owns `int main`, so a cached object that does not define it
+# is not a usable runtime object.  Before the guard, such an object was handed
+# straight to the linker and the build died with `undefined reference to 'main'`
+# — an error pointing nowhere near the cache, and with no self-repair: the entry
+# stayed corrupt until a human deleted it.
+#
+# ⚠️ THE CORRUPT ENTRY HERE IS A VALID OBJECT THAT SIMPLY LACKS `main`, NOT A
+# TRUNCATED FILE, and the distinction is the whole point of the arm.  A truncated
+# file dies at "file format not recognized", which a mere size floor would also
+# catch; an object that is well-formed and merely missing the symbol is the shape
+# ONLY a symbol check sees.  Truncate instead and this arm silently stops testing
+# what it claims to.
+repair_dir="$W/objcache_repair"
+repair_src="$ROOT/test/construct_fixtures/tuple_neq.mdk"
+if [ ! -f "$repair_src" ]; then
+  echo "FAIL: missing self-repair fixture $repair_src"; fail=$((fail+1))
+else
+  mkdir -p "$repair_dir"
+  if ! MEDAKA_RT_OBJ= MEDAKA_NO_OBJ_CACHE= MEDAKA_CACHE_DIR="$repair_dir" \
+       "$MEDAKA" build --allow-internal "$repair_src" -o "$W/repair_seed" >/dev/null 2>&1; then
+    echo "FAIL: self-repair arm could not populate the cache"; fail=$((fail+1))
+  else
+    victim="$(ls "$repair_dir"/rt-*.o 2>/dev/null | head -1)"
+    if [ -z "$victim" ]; then
+      echo "FAIL: self-repair arm found no cached object to corrupt — cache failed open, arm is vacuous"
+      fail=$((fail+1))
+    else
+      printf 'int mdk_not_main(void) { return 0; }\n' > "$W/nomain.c"
+      if ! "$CC" -c "$W/nomain.c" -o "$victim" 2>/dev/null; then
+        echo "FAIL: self-repair arm could not build the no-main object"; fail=$((fail+1))
+      # Prove the corruption is the shape we mean: readable, and WITHOUT main.
+      # If nm is absent the guard fail-opens by design, so the arm cannot run.
+      elif ! command -v nm >/dev/null 2>&1; then
+        printf 'ok   self-repair arm SKIPPED — no nm on PATH (rtObjUsable fail-opens without it)\n'
+      elif [ "$(nm "$victim" 2>/dev/null | grep -cE ' T _?main$')" -ne 0 ]; then
+        echo "FAIL: self-repair arm's corrupt object still defines main — it is not corrupt"
+        fail=$((fail+1))
+      elif ! MEDAKA_RT_OBJ= MEDAKA_NO_OBJ_CACHE= MEDAKA_CACHE_DIR="$repair_dir" \
+             "$MEDAKA" build --allow-internal "$repair_src" -o "$W/repair_out" >/dev/null 2>&1; then
+        echo "FAIL: a corrupt cache entry BRICKED the build — rtObjUsable did not reject it (#2233)"
+        fail=$((fail+1))
+      elif [ "$(nm "$victim" 2>/dev/null | grep -cE ' T _?main$')" -eq 0 ]; then
+        echo "FAIL: build succeeded but the cache entry was NOT repaired — it fell open to the inline compile instead of recompiling the entry"
+        fail=$((fail+1))
+      else
+        printf 'ok   self-repair arm       corrupt cache entry rejected, recompiled, build green\n'
+      fi
+    fi
+  fi
+fi
+
 # ZERO-COMPARISON guard (docs/ops/TESTING-DESIGN.md §2.3): a gate that compared
 # nothing has proven nothing.
 [ "$checked" -gt 0 ] || { echo "the sample built nothing — the gate proved nothing"; exit 2; }

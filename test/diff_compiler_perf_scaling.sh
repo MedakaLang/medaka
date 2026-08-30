@@ -1893,8 +1893,55 @@ TIME_STAGES="parse exhaust-guards desugar resolve mark typecheck elaborate dce m
 # #956 (the TIME-arm fragility issue); self-drains when the lint cost is made linear.
 # One entry per line so draining a single row is a conflict-free one-line deletion
 # (see #880 follow-up; the vars are word-split by `for k in $VAR`, newlines are IFS).
+# modules:typecheck (TIME) — the multi-module typecheck stage is SUPERLINEAR in TIME on
+# the `modules` shape, in BOTH environments. It is #1879 (OPEN, `verified`), it is NOT
+# fixed by this entry, and the DETERMINISTIC pin of record is and stays
+# `test/diff_compiler_stage_ir_scaling.sh`'s `modules:typecheck` KNOWN_SLOW row
+# (KNOWN_CEIL 2.45 / KNOWN_FIXED 2.10, Ir instruction counts). What is ledgered here is
+# the WALL-CLOCK RESTATEMENT of that same curve, which flaps across its trip point.
+#
+# 🚨 THIS ROW IS LEDGERED BECAUSE A PARAGRAPH IN THIS FILE WAS FALSIFIED, not because the
+# box got noisier. That paragraph (at the modules TIME verdict, now corrected) said the
+# arm was "a property of this box ... while CI passes on the same commit", and told the
+# reader to re-run. CI does not pass on it. PR #2245 hit it in all three of its
+# merge-queue attempts, on a commit touching nothing near typecheck, and PR #2260 was
+# bounced by the same row hours later. "Re-run or re-enqueue" was advice to play a
+# lottery with the merge queue, and two PRs paid for it.
+#
+# THE BAND — seven samples, two environments, TIME-only:
+#     this box (min-of-K, heap pinned, load ~1.6-2.1), N=100->200->400, three batches:
+#       0.2077 -> 0.4548 -> 1.2272   r1=2.19 r2=2.70   (climbing clause)
+#       0.2427 -> 0.4579 -> 1.4195   r1=1.89 r2=3.10   (threshold clause)
+#       0.2346 -> 0.4878 -> 1.5108   r1=2.08 r2=3.10   (threshold clause)
+#     CI merge queue (PR #2245 job 99250452312; the PR #2260 bounce):   r2=2.77, 3.21
+#     #1879's own two original samples:                                 r2=2.86, 2.88
+#     the verdict block's own record of the flap, and three runs under this ledger:
+#                                                   r2=2.43, 2.67, 2.50, 2.49, 2.22
+#   ⇒ combined r2 band 2.22 - 3.21, straddling the 3.0 THRESHOLD clause — which is why the
+#   same row reports under two different clause names run to run, and why its LOW end, not
+#   its median, is what sets TFIXED. Two clauses, one bug.
+#
+# THAT ANSWERS #1879'S OWN OPEN DISCRIMINATOR: "if CI's r2 is also ~2.87, the bug is in
+# how the verdict reaches run_gates.sh's exit code; if CI's r2 is ~2.0, the curve
+# genuinely differs by environment." Neither. CI reads 2.77/3.21 — the SAME band as the
+# box. There is no reporting bug and no environment split.
+#
+# ALLOCATION IS BLIND TO IT: flat 2.03x / 2.06x on all three batches, printing `ok` for
+# this very row while the same run's TIME arm read 3.10x. Nor is it a floor artifact —
+# 1.23-1.51 s at N=400 against this arm's 200 ms floor.
+#
+# ⚠️ WHY LEDGERING IS NOT A WIDENING HERE ([W-QUIETER]). The bound is not relaxed, it is
+# made two-sided and self-draining: over 4.2 this arm reds on WORSENING, under 2.00 it
+# reds DEMANDING PROMOTION, and the Ir arm's hard 2.45 ceiling on the same curve is
+# untouched. What stops is a flapping duplicate blocking unrelated PRs. Ceiling 4.2
+# clears the observed top (3.21) by ~31%, the margin the other TIME rows here carry
+# (manydefs:lint 4.3 over 3.37, ~28%; xref:emit 5.6 over 4.15, ~35%).
+#
+# One entry per line so draining a single row is a conflict-free one-line deletion
+# (see #880 follow-up; the vars are word-split by `for k in $VAR`, newlines are IFS).
 KNOWN_SLOW_TIME="
 manydefs:lint
+modules:typecheck
 "
 KNOWN_TCEIL_match_typecheck="4.6";    KNOWN_TFIXED_match_typecheck="2.60"
 KNOWN_TCEIL_listlit_typecheck="4.8";  KNOWN_TFIXED_listlit_typecheck="2.60"
@@ -1923,6 +1970,42 @@ KNOWN_TCEIL_manydefs_lint="4.3";      KNOWN_TFIXED_manydefs_lint="2.60"
 # file-wide convention): drop under it and #349/#350/#352 are fixed and this entry
 # must be promoted out.
 KNOWN_TCEIL_xref_emit="5.6";          KNOWN_TFIXED_xref_emit="2.60"
+# modules:typecheck (TIME) — see the block above KNOWN_SLOW_TIME for the sample band.
+# Ceiling 4.2 clears its top (3.21) by ~31%.
+#
+# ⚠️ TFIXED IS 2.00, NOT the 2.60 file convention, AND THAT IS THE WHOLE POINT OF THIS ROW.
+# This is the flappiest arm in the file. Ten samples of the SAME live quadratic, same
+# band, same tree, span r2 = 2.22 to 3.21 — the two lowest (2.22, 2.43) came from runs
+# whose neighbours read 2.50 and 2.67. A 2.60 TFIXED would therefore FALSE-PROMOTE about
+# half the time: red the gate with "the bug is FIXED — remove the row" while
+# `stage_ir_scaling` is still counting the quadratic on the same curve. That is a worse
+# failure than the one this entry exists to stop, because it reads as a fix.
+#
+# 2.00 is chosen against the observed FLOOR (2.22), not the median, with ~10% of margin,
+# and it still drains: a linearised stage reads AT OR UNDER 2.0 on this arm, because the
+# per-run fixed overhead dilutes the ratio downward (the same argument this file makes for
+# `emit`'s constant). ⚠️ But the drain of record is not here — it is `stage_ir_scaling`'s
+# KNOWN_FIXED_modules_typecheck = 2.10, on deterministic instruction counts. This arm's
+# job is to catch WORSENING and to stop lying; the deterministic arm decides "fixed".
+#
+# OBSERVED RED, both arms, this box, 2026-08-30 (#2160 rule 1 — an arm nobody has watched
+# fail is not a pin). Driven by editing the pair, because this file assigns its ledger
+# constants unconditionally and so cannot be driven from the environment:
+#
+#   $ KNOWN_TCEIL_modules_typecheck="1.00" KNOWN_TFIXED_modules_typecheck="0.50"  (in-file)
+#   $ PERF_ONLY=modules sh test/diff_compiler_perf_scaling.sh
+#              time typecheck: ** KNOWN-SLOW, AND GOT WORSE ** r1=1.97 r2=2.49 \
+#                  (ceiling 1.00, N=100->200->400)
+#   exit=1
+#
+#   $ KNOWN_TCEIL_modules_typecheck="9.00" KNOWN_TFIXED_modules_typecheck="3.00"  (in-file)
+#              time typecheck: ** PROMOTE: now scales LINEARLY ** r2=2.22 (< 3.00, N=100->200->400)
+#                      Remove "modules:typecheck" from KNOWN_SLOW_TIME — the bug is FIXED.
+#   exit=1
+#
+# ⚠️ That second run is also where the 2.22 floor came from — the arm that proved the
+# PROMOTE branch works is the same one that proved 2.60 would have fired it spuriously.
+KNOWN_TCEIL_modules_typecheck="4.2";  KNOWN_TFIXED_modules_typecheck="2.00"
 
 is_known_time() {
   # PERF_LEDGER_EXTRA_TIME: add-only deliberate-red seam — see PERF_LEDGER_EXTRA.
@@ -2776,9 +2859,12 @@ clause_of() {
 # (TIME) **" whose reader was left to infer a 3.0x threshold breach that never happened
 # (r2 = 2.64). The clause is now named in the line that reports it.
 #
-# 🚨 DO NOT TREAT #1879 AS A REGRESSION IF YOU SEE THAT ROW RED. It is OPEN, `verified`,
-# and is a property of this box: perf_scaling's modules typecheck TIME arm is
-# superlinear here while CI passes on the same commit. Re-run or re-enqueue; the fix is
+# 🚨 THE SENTENCE THAT USED TO STAND HERE WAS FALSE, and it cost two PRs. It said #1879
+# was "a property of this box ... while CI passes on the same commit", and told you to
+# re-run or re-enqueue. CI does NOT pass on it: the merge queue reads r2 = 2.77 and 3.21,
+# the same band this box reads, and bounced PR #2245 three times and PR #2260 once. That
+# row is now LEDGERED (KNOWN_SLOW_TIME, "modules:typecheck") against a measured band, so
+# it no longer reds in-band and no longer hides worsening either. The fix is still
 # #1879's, not yours.
 _cc_t="$(clause_of threshold 3.0)"; _cc_c="$(clause_of climbing)"
 case "$_cc_t" in
@@ -3635,12 +3721,15 @@ fi   # end PERF_ONLY unit: llvm-dispatch
 # (KNOWN_SUPERLINEAR + KNOWN_SLOW_TIME)"). #154 PR-C drained both rows in 2026-07-16 and
 # neither was re-added. It could not be re-added here anyway: this shape is NOT in the
 # SHAPES loop, so `is_known`/`is_known_time` are never consulted for it — its ALLOC and
-# TIME verdicts below are open-coded, with no ledger arm at all. That is precisely why
-# the pin for the LIVE sub-threshold quadratic this shape carries (#1879) lives on
-# `test/diff_compiler_stage_ir_scaling.sh`'s `modules:typecheck` KNOWN_SLOW row instead:
-# that arm HAS a self-draining ledger and a deterministic measure, and this one has
-# neither. Do not "fix" a red here by widening a threshold or flooring the stage out —
-# see the TIME verdict block below.
+# ALLOC verdict below is open-coded with no ledger arm. ⚠️ THE TIME VERDICT NO LONGER IS:
+# it grew one (KNOWN_SLOW_TIME / KNOWN_TCEIL_modules_typecheck), because #1879 kept
+# bouncing unrelated PRs out of the merge queue and an open-coded arm has no honest way
+# to hold a known defect — only "red forever" or "widened away". The DETERMINISTIC pin
+# for that quadratic still lives on `test/diff_compiler_stage_ir_scaling.sh`'s
+# `modules:typecheck` KNOWN_SLOW row, whose measure is instruction counts rather than
+# wall-clock; this arm's ledger is the wall-clock restatement of the same curve.
+# Do not "fix" a red here by widening a threshold or flooring the stage out — see the
+# TIME verdict block below.
 MOD_N="${PERF_MOD_N:-100}"
 MOD_K="${PERF_MOD_K:-8}"
 mn1="$MOD_N"; mn2=$((MOD_N * 2)); mn3=$((MOD_N * 4))
@@ -3821,22 +3910,39 @@ case "$MBASE_ALLOC$ma1$ma2$ma3" in
     # it is re-decided every run from the live number, but do not read it as a description of
     # what happens: every run at PERF_MOD_N=100 grades.
     #
-    # 🚦 THE ARM OF RECORD FOR #1879 IS NO LONGER THIS ONE.  What this grade sees is real —
-    # a live O(modules^2) term, confirmed on three independent channels (Ir, heap-pinned
-    # ALLOC, min-of-5 TIME) — but it sits so close to the climbing clause's trip point that
-    # the verdict FLAPS run to run (r2=2.43 passing by 0.02 one run, 2.67 failing the next).
-    # A flapping verdict on a real defect is the worst of both.  The pin is now
-    # `test/diff_compiler_stage_ir_scaling.sh`'s `modules:typecheck` KNOWN_SLOW row: same
-    # curve, deterministic instruction counts, a ceiling that fails on worsening and a fixed
-    # point that fails demanding promotion.  This TIME grade is deliberately LEFT LIVE and
-    # UNWIDENED — quieting a loud defect is a severity increase ([W-QUIETER]) — but a red
-    # here is now diagnosed against that Ir row rather than filed as a new finding.
+    # 🚦 THE ARM OF RECORD FOR #1879 IS NOT THIS ONE.  What this grade sees is real — a live
+    # O(modules^2) term, confirmed on three independent channels (Ir, heap-pinned ALLOC,
+    # min-of-5 TIME) — but it sits so close to the climbing clause's trip point that the
+    # verdict FLAPS run to run (r2=2.43 passing by 0.02 one run, 2.67 failing the next).
+    # The pin of record is `test/diff_compiler_stage_ir_scaling.sh`'s `modules:typecheck`
+    # KNOWN_SLOW row: same curve, deterministic instruction counts, a ceiling that fails on
+    # worsening and a fixed point that fails demanding promotion.
+    #
+    # ⚠️ THIS BLOCK USED TO SAY THE TIME GRADE WAS "deliberately LEFT LIVE and UNWIDENED",
+    # on the [W-QUIETER] argument.  That held only while the flapping was believed local to
+    # this box.  It is not: the merge queue reads the same band (r2 = 2.77, 3.21) and bounced
+    # PR #2245 three times and PR #2260 once, none of which touched typecheck.  So this arm
+    # is now LEDGERED instead — see KNOWN_SLOW_TIME's `modules:typecheck` block for the
+    # seven-sample band and for why that is two-sided rather than a widening: over the 4.2
+    # ceiling it reds on WORSENING, under TFIXED it reds DEMANDING PROMOTION, and the Ir
+    # arm's hard 2.45 ceiling on the same curve is untouched.  Still do not "fix" a red here
+    # by raising THRESH or flooring the stage out.
     if [ -z "$mt1" ] || [ -z "$mt2" ] || [ -z "$mt3" ]; then
       echo "           time typecheck: NO MEASUREMENT from the profiler (harness bug)"
       fail=$((fail+1))
     else
+      # ⚠️ A LEDGERED STAGE MAY NOT SKIP — same contract as grade_time_stage: dropping under
+      # the floor is not an absence of signal for a KNOWN_SLOW_TIME row, it IS the signal
+      # that the stage got too fast to measure, which is what "fixed" looks like.
+      mledger=0
+      is_known_time "modules:typecheck" && mledger=1
       below="$(awk -v v="$mt3" -v f="$TIME_FLOOR" 'BEGIN{print (v + 0 < f + 0) ? 1 : 0}')"
-      if [ "$below" = "1" ]; then
+      if [ "$below" = "1" ] && [ "$mledger" = "1" ]; then
+        ms3="$(awk -v v="$mt3" 'BEGIN{printf "%.0f", v*1000}')"
+        fail=$((fail+1))
+        printf '           time typecheck: ** PROMOTE: now under the time floor ** %s ms at N=%s\n' "$ms3" "$mn3"
+        printf '           Remove "modules:typecheck" from KNOWN_SLOW_TIME — this arm can no longer see the bug.\n'
+      elif [ "$below" = "1" ]; then
         ms3="$(awk -v v="$mt3" 'BEGIN{printf "%.0f", v*1000}')"
         msf="$(awk -v f="$TIME_FLOOR" 'BEGIN{printf "%.0f", f*1000}')"
         # ⚠️ NOT "(linear since #154 PR-C)", which is what this line used to assert: the Ir
@@ -3859,7 +3965,31 @@ case "$MBASE_ALLOC$ma1$ma2$ma3" in
         tbad="$(echo "$tverdict" | cut -d' ' -f1)"
         twhy="$(echo "$tverdict" | cut -d' ' -f2)"
         tclause="$(clause_of "$twhy")"
-        if [ "$tbad" = "1" ]; then
+        if [ "$mledger" = "1" ]; then
+          # `:-` under `set -u` (:109) — an unset ceiling would kill the gate mid-run with
+          # exit 2, which run_gates.sh reads as a skip candidate. Same hazard, same guard,
+          # as grade_time_stage's ledger arm.
+          eval "mtceil=\${KNOWN_TCEIL_modules_typecheck:-}"
+          eval "mtfixed=\${KNOWN_TFIXED_modules_typecheck:-}"
+          if [ -z "$mtceil" ] || [ -z "$mtfixed" ]; then
+            fail=$((fail+1))
+            printf '           time typecheck: ** MALFORMED LEDGER ROW ** no KNOWN_TCEIL_modules_typecheck / KNOWN_TFIXED_modules_typecheck pair.\n'
+            printf '           A ledger row without both halves cannot drain itself — that is a skip-list, not a pin.\n'
+          elif [ "$(awk -v r="$mtr2" -v c="$mtceil" 'BEGIN{print (r > c) ? 1 : 0}')" = "1" ]; then
+            fail=$((fail+1))
+            printf '           time typecheck: ** KNOWN-SLOW, AND GOT WORSE ** r1=%s r2=%s (ceiling %s, N=%s->%s->%s)\n' \
+              "$mtr1" "$mtr2" "$mtceil" "$mn1" "$mn2" "$mn3"
+          elif [ "$(awk -v r="$mtr2" -v f="$mtfixed" 'BEGIN{print (r < f) ? 1 : 0}')" = "1" ]; then
+            fail=$((fail+1))
+            printf '           time typecheck: ** PROMOTE: now scales LINEARLY ** r2=%s (< %s, N=%s->%s->%s)\n' \
+              "$mtr2" "$mtfixed" "$mn1" "$mn2" "$mn3"
+            printf '           Remove "modules:typecheck" from KNOWN_SLOW_TIME — the bug is FIXED.\n'
+          else
+            known=$((known+1))
+            printf '           time typecheck: known-slow (TIME) r1=%s r2=%s N=%s->%s->%s — ledgered (#1879), alloc is blind to it\n' \
+              "$mtr1" "$mtr2" "$mn1" "$mn2" "$mn3"
+          fi
+        elif [ "$tbad" = "1" ]; then
           fail=$((fail+1))
           printf '           time typecheck: ** SUPERLINEAR (TIME) ** %ss -> %ss -> %ss  r1=%s r2=%s (%s)\n' \
             "$mt1" "$mt2" "$mt3" "$mtr1" "$mtr2" "$tclause"
