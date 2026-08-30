@@ -1117,8 +1117,8 @@ done < "$CHANGED_PATHS"
 #
 # Unconditional by design, and cheap by construction: the gate re-scans the whole
 # tree regardless of what changed, so there is nothing to narrow — the only honest
-# derivation is "any change at all". Guarded on $changed being non-empty so an
-# empty diff still derives an empty gate set.
+# derivation is "any change at all". Guarded by `-s "$CHANGED_PATHS"` so an
+# empty changed-path file still derives an empty gate set.
 #
 # ⚠️ This makes source_bytes the one gate a `<project>/` change derives from OUTSIDE
 # `<project>/test/`. test/diff_compiler_project_enrolment.sh's PREFLIGHT leg knows
@@ -1329,8 +1329,8 @@ fi
 # exit directly above, which said so loudly.
 #
 # It no longer does. The coverage floor adds an unconditional
-# `add 'diff_compiler_source_bytes'` for ANY non-empty $changed, so $pats is never
-# empty when there IS a diff and that exit is unreachable for a real change. Without
+# `add 'diff_compiler_source_bytes'` for any non-empty CHANGED_PATHS file, so $pats
+# is never empty when there IS a diff and that exit is unreachable for a real change. Without
 # this block a Makefile-only diff runs one whole-tree safety-net gate, prints a clean
 # green, and says NOTHING about the fact that not one per-file-targeted gate was
 # derived for it — the same "green while testing nothing" shape the header warns
