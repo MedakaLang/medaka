@@ -1617,8 +1617,9 @@ case " $gates $local_skipped " in
                              DOES touch it — skipped HERE for cost only; CI's PR run
                              derives it and RUNS it." ;;
   *)
-    engines_line="  diff_compiler_engines      not derived for this diff — so the PR's \`gates (engines)\`
-                             shard will no-op too. It runs FULL in the merge queue." ;;
+    engines_line="  diff_compiler_engines      not derived for this diff — so whichever \`gates_N\` row
+                             holds it will no-op on the PR too. It runs FULL in the merge
+                             queue." ;;
 esac
 
 cat <<EOF

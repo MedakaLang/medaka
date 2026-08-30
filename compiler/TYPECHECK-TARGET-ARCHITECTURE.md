@@ -961,9 +961,9 @@ orders merges, and the plan does not pretend otherwise.
   wired either as a passing gate or a `must_fail` pin when the engine is
   known-wrong. Starts from the existing shadow matrix gate (the model) and the
   `run_check_agreement` family. **Includes CI wiring as an explicit subtask**:
-  a new `test/*.sh` matching no shard pattern silently never runs, and shard
-  placement is by cost — `gates (types)` is the measured pole, so placement is
-  chosen from a fresh run-cost read, not by theme.
+  a gate absent from `test/gates.toml` silently never runs, and shard placement
+  is not a choice at all: since #2178 `shard` is derived from measured cost by
+  `medaka gate balance`. Enrol the gate; the balancer places it.
 - **S-2. Owed spec paragraphs.** (a) Cross-module identity of types / aliases /
   records / interfaces / methods (DICT §8 I-series extension — the decided
   Haskell/Rust model, the use-site ambiguity rule, **and the C4 candidacy

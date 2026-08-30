@@ -56,7 +56,7 @@ the scan never fired). The audit below is organized by these three axes.
 | **Shapes** | bindings, match, listlit, nesting, xref, comments, manydefs, modules; stage-ir-scaling adds `vchain` (value-global init chain, #1030) |
 | **Graded stages** | parse, exhaust-guards, desugar, resolve, mark, typecheck, fmt, lint, lower, emit, wasm-emit, mangle, dce, trmc |
 | **Metrics** | GC allocation (deterministic), per-stage wall-time (min-of-K, heap-pinned), refindex op-count, whole-process `Ir`, per-stage `Ir` |
-| **Wiring** | per-PR QUICK in `gates (types)`; nightly DEEP (`PERF_DEEP=1`) restores the N=16000 `xref`/`manydefs` bands; references-scaling in `tools`, tmc-parity in `backend`, ir-scaling in `sqlite`, stage-ir-scaling in `types` |
+| **Wiring** | per-PR QUICK in the required `gates` matrix; nightly DEEP (`PERF_DEEP=1`) restores the N=16000 `xref`/`manydefs` bands. WHICH `gates_N` executor row holds each of perf-scaling / references-scaling / tmc-parity / ir-scaling / stage-ir-scaling is derived from measured cost (#2178) — read it from `test/gates.toml`, never from this table |
 | **Reports but gates NOTHING** | `test/bench.sh` (unwired, macOS-only, prints RSS but never asserts) |
 
 That is genuinely strong. The holes are specific.
@@ -266,8 +266,8 @@ RSS the same way. Noisy ⇒ nightly, ratio/min-of-K, wide margins — never a pe
 
 - **Per-PR (QUICK):** P1 (resolve — cheap and the biggest hole), P2, the six §5 shapes at small N,
   M1 (op-count is cheap — one run, no min-of-K), M2. All deterministic or op-count based, so they
-  add little wall-clock. Keep them in `gates (types)` or spread to a shard with room (schedule by
-  cost, not theme).
+  add little wall-clock. Do not pick a shard for them: `shard` is a derived output of measured
+  cost (#2178), so enrol in `test/gates.toml` and let `medaka gate balance` place them.
 - **Nightly (DEEP):** P3 (eval), P4 (LSP), M3, the large-N bands, and the low-risk §5 shapes.
 - Any new `test/diff_compiler_*.sh` must be **enrolled in a shard pattern** or it silently never
   runs (`test/diff_compiler_ci_shard_coverage.sh` enforces this) — and must print `checked N` with

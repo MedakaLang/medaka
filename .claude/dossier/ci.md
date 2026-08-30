@@ -64,7 +64,7 @@ branch per entry and cannot combine builds, so the merge_group run is a fixed co
 runner-bound (jobs wait 40-105s for a runner; 20 concurrent, ~11 per run), so the duplicate is
 what saturates us. The PR half is the half that can shrink:
 
-- `pull_request` — each `gates (…)` shard runs only the intersection of its pattern with the gate
+- `pull_request` — each `gates` matrix row runs only the intersection of its pattern with the gate
   set `detect` derives from the diff (via `PREFLIGHT_DRY=1 test/preflight.sh` — the same
   derivation agents run locally, not a second copy of it).
 - `merge_group` — every shard runs its full pattern. Unchanged. Always.
@@ -479,9 +479,14 @@ correct instruction on an S0 fix (#570), then reappeared verbatim on #576's 7-sh
 #450's own analysis: the only sound fix is conclusion granularity (`neutral`/`skipped`), and that
 touches the merge-queue's required-status-check contract (a required check reporting non-success
 can block the queue) — unverified from a worktree with no live PR to test against, so deliberately
-not attempted. Same reasoning rules out renaming the job itself: `name: gates (${{ matrix.name
-}})` IS the required context the ruleset matches, so making it conditional would leave the "real"
-required context permanently "Expected" on every no-op run.
+not attempted. Same reasoning rules out making the job's name CONDITIONAL: the job `name:` IS the
+required context the ruleset matches, so a conditional name would leave the "real" required
+context permanently "Expected" on every no-op run.
+
+⚠️ That is an argument against a CONDITIONAL name, not against renaming — read it as the latter
+and you conclude the rows can never be renamed at all. #2178 renamed all eight
+(`gates (<theme>)` → `gates_1`…`gates_8`, 2026-08-30) by paying the ruleset-migration cost the
+argument above is really about; see § *Renaming a required matrix context* below.
 
 So the conclusion and context stay untouched; what moves is the WORDING at every surface a
 human/agent looks at without opening a log line-by-line — the annotation title and the job summary
@@ -673,3 +678,42 @@ Two counts in this file had rotted and were fixed by deriving rather than restat
   (`diff_wasm.sh`, `diff_wasm_typed.sh`, `diff_playground_input.sh`, `diff_wasm_modules.sh`,
   `diff_sqlite.sh`, `diff_gzip.sh`, `build_wasm_cmd.sh`). Re-derive by grepping the job's own
   `run:` step, never hand-count.
+
+
+## Renaming a required matrix context (#2178, 2026-08-30)
+
+Eight of the fourteen required contexts were the `gates` job's matrix rows, spelled
+`gates (<theme>)`. They were renamed to `gates_1`…`gates_8` — neutral executor numbers,
+because which gates a row holds has been a DERIVED output of measured cost since #2178 and a
+descriptive name is therefore free to drift out of agreement with the contents with no gate able
+to catch it (`gates (sqlite)` held zero sqlite gates for months).
+
+**The hazard.** A ruleset edit is not atomic with a commit, and a required context that no job
+produces does not fail the queue — it blocks it, permanently, as "Expected — waiting for status
+to be reported". Renaming the rows and swapping the ruleset are two writes in two systems, and
+either order leaves a window where the required set names contexts nothing produces.
+
+**The shape that closes it.** Three steps, with an alias layer spanning the middle one:
+
+1. **PR A** renames the matrix rows *and* adds eight `gates_alias_*` jobs whose DISPLAY names are
+   the eight retired `gates (<theme>)` strings. Each gates on `needs.gates.result` — the roll-up
+   of all eight rows — so an alias is green only when EVERY row is. That is strictly stronger
+   than the per-row context it stands in for, which is what makes the window safe rather than
+   merely unblocked. They run no gates and cost seconds.
+2. **The ruleset swap**, once PR A is on `main`: required set gains the eight new contexts
+   and drops the eight `gates (…)`. Both sets are being produced at this moment, so neither
+   ordering of the two writes can deadlock.
+3. **PR B** deletes the eight alias jobs.
+
+**Two things the rename costs, both self-healing.** `gate balance`'s calibration column keys the
+baseline's recorded run rows by shard NAME, so every row reads `(no recorded run)` until the
+first post-rename cost ingest — fail-open by construction, and it does not move the packing
+(measured at the rename: `gates whose row changes: 0`, because every row had recorded the same
+`jobs = 2`, so `balJobsFor`'s fallback returns what the lookup would have). The per-shard oracle
+cache key embeds `matrix.name`, so all eight caches miss once.
+
+**What a row name may NOT do now.** Describe its contents. `medaka gate verify`'s name-safety
+class is also why the spelling uses an underscore rather than a hyphen: it allows only letters, digits,
+`_`, `.` and `/` in a registry name (the rule exists because gate names are emitted into
+`pattern:` and re-read as unquoted shell words), and bending the name to the existing rule beat
+widening a safety check for a cosmetic gain (Val, 2026-08-30).

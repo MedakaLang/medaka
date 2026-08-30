@@ -59,8 +59,14 @@ trap 'rm -rf "$tmp"' EXIT
 
 n=0
 for id in $run_ids; do
+  # `gates (…)` aliases are EXCLUDED. During the #2178 context migration the eight
+  # retired `gates (<theme>)` contexts are produced by no-op alias jobs that only
+  # mirror the `gates` roll-up (see ci.yml). They cost seconds, so leaving them in
+  # would drag the MEDIAN down and make the nightly "1.5x the median" drift filer
+  # report crossings that are an artefact of the migration rather than a cost
+  # change. They disappear with the aliases; the filter is harmless afterwards.
   if gh run view "$id" --repo "$REPO" --json jobs \
-       --jq '.jobs[] | select(.conclusion == "success") | "\(.name)\t\(((.completedAt | fromdateiso8601) - (.startedAt | fromdateiso8601)))"' \
+       --jq '.jobs[] | select(.conclusion == "success") | select(.name | startswith("gates (") | not) | "\(.name)\t\(((.completedAt | fromdateiso8601) - (.startedAt | fromdateiso8601)))"' \
        >> "$tmp/durations.tsv" 2>/dev/null; then
     n=$((n + 1))
   fi
