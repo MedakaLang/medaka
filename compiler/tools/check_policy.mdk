@@ -43,6 +43,7 @@ import frontend.ast.{
 }
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
+import tools.check.{checkHasErrors}
 import types.typecheck.{
   Scheme(..),
   Mono(..),
@@ -507,59 +508,57 @@ lookupValue k ((n, v)::rest) = if k == n then Some v else lookupValue k rest
 -- behaviour while keeping IO at the CLI boundary.  rtSrc/coreSrc are the prelude
 -- sources (runtime.mdk/core.mdk); src is the plugin file.
 -- The outcome of a policy check.  Accept carries the header and the desugared
--- decls needed to RUN the plugin (deferred so the CLI can print the header to
--- stdout BEFORE the run — which may panic on an unstubbed extern, exactly like
--- the OCaml arm prints the accept line then lets the eval panic hit stderr).
--- Reject carries the full report; the run never happens.
-public export data PolicyOutcome =
-  | PolicyAccept String String (List Decl) (List Decl) (List Decl)  -- header fn coreD rtD userD
-  | PolicyReject String
+-- plugin output.  The run is forced before PolicyAccept is constructed, so a
+-- panic cannot print an acceptance verdict for an invocation that never
+-- completed.  Reject carries the full report; the run never happens.
+public export data PolicyOutcome = PolicyAccept String | PolicyReject String
 
 export
 runCheckPolicy : String -> String -> String -> String -> String -> PolicyOutcome
 runCheckPolicy rtSrc coreSrc src allowStr fnName =
-  let policy = parsePolicy allowStr
-  let rawUser = parse src
-  let userD = desugar rawUser
-  let rtD = desugar (parse rtSrc)
-  let coreD = desugar (parse coreSrc)
-  let callGraph = buildCallGraph userD
-  -- Module arm, via the full-environment entry (S-full-env-scheme-entry, #1116).
-  -- `--fn <name>` is arbitrary CLI input looked up DIRECTLY in effTable
-  -- (lookupAssoc fnName), never routed through buildCallGraph's userD-restricted
-  -- traversal, so the schemes MUST include prelude names: `--fn println` missing
-  -- from the table would make the policy check silently ACCEPT an <IO> function as
-  -- pure. `checkOneScheme` alone returns only the terminal module's OWN schemes,
-  -- which is why this site was parked on the Flat wrapper until #1116 grew
-  -- `checkOneSchemeFull`. OWN FIRST: `lookupAssoc` is a first-match scan, so a
-  -- plugin that redefines a prelude name must win its own lookup.
-  let (preludeSchemes, ownSchemes) = checkOneSchemeFull rtD coreD ("__user__", userD)
-  let schemes = ownSchemes ++ preludeSchemes
-  let effTable = fnEffectsTable schemes
-  let fnEffects = match lookupAssoc fnName effTable
-    None => []
-    Some e => e
-  let forbidden = forbiddenLabels fnEffects policy
-  match forbidden
-    [] =>
-      let effStr = if listIsEmpty fnEffects then
-        "pure"
-      else
-        "<" ++ joinWith ", " (atomLabels fnEffects) ++ ">"
-      let header = "accepted. \{fnName} requires only \{effStr}\n"
-      PolicyAccept header fnName coreD rtD userD
-    _ =>
-      let chain = findChain callGraph effTable fnName (firstOf forbidden)
-      let header = "rejected. \{fnName} requires <\{joinWith ", " (atomLabels fnEffects)}>. Not permitted by policy {\{joinWith ", " (policyLabels policy)}}\n"
-      let via = "   reached via: " ++ joinWith " → " chain ++ "\n"
-      PolicyReject (header ++ via)
-
--- Run the accepted plugin and return the captured run output (LOG lines + the
--- transform-result line).  Called by the CLI AFTER it has printed the accept
--- header, so a panic on an unstubbed extern surfaces post-header (oracle parity).
-export
-runAcceptedPlugin : String -> List Decl -> List Decl -> List Decl -> String
-runAcceptedPlugin fnName coreD rtD userD = runPlugin fnName rtD coreD userD
+  if checkHasErrors rtSrc coreSrc src then
+    PolicyReject "rejected. compiler analysis failed before policy evaluation\n"
+  else
+    let policy = parsePolicy allowStr
+    let rawUser = parse src
+    let userD = desugar rawUser
+    let rtD = desugar (parse rtSrc)
+    let coreD = desugar (parse coreSrc)
+    let callGraph = buildCallGraph userD
+    -- Module arm, via the full-environment entry (S-full-env-scheme-entry, #1116).
+    -- `--fn <name>` is arbitrary CLI input looked up DIRECTLY in effTable
+    -- (lookupAssoc fnName), never routed through buildCallGraph's userD-restricted
+    -- traversal, so the schemes MUST include prelude names: `--fn println` missing
+    -- from the table would make the policy check silently ACCEPT an <IO> function as
+    -- pure. `checkOneScheme` alone returns only the terminal module's OWN schemes,
+    -- which is why this site was parked on the Flat wrapper until #1116 grew
+    -- `checkOneSchemeFull`. OWN FIRST: `lookupAssoc` is a first-match scan, so a
+    -- plugin that redefines a prelude name must win its own lookup.
+    let (preludeSchemes, ownSchemes) = checkOneSchemeFull rtD coreD ("__user__", userD)
+    let schemes = ownSchemes ++ preludeSchemes
+    let effTable = fnEffectsTable schemes
+    -- Existence is checked against the complete scheme list, not effTable:
+    -- fnEffectsTable deliberately omits verified-pure bindings, so using it as
+    -- a name index would reject a real pure entry exactly like an absent one.
+    match lookupAssoc fnName schemes
+      None => PolicyReject "rejected. no '\{fnName}' entry found\n"
+      Some fnScheme =>
+        let fnEffects = schemeEffects fnScheme
+        let forbidden = forbiddenLabels fnEffects policy
+        match forbidden
+          [] =>
+            let effStr = if listIsEmpty fnEffects then
+              "pure"
+            else
+              "<" ++ joinWith ", " (atomLabels fnEffects) ++ ">"
+            let header = "accepted. \{fnName} requires only \{effStr}\n"
+            let pluginOutput = runPlugin fnName rtD coreD userD
+            PolicyAccept (header ++ pluginOutput)
+          _ =>
+            let chain = findChain callGraph effTable fnName (firstOf forbidden)
+            let header = "rejected. \{fnName} requires <\{joinWith ", " (atomLabels fnEffects)}>. Not permitted by policy {\{joinWith ", " (policyLabels policy)}}\n"
+            let via = "   reached via: " ++ joinWith " → " chain ++ "\n"
+            PolicyReject (header ++ via)
 
 firstOf : List String -> String
 firstOf [] = ""
