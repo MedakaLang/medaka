@@ -212,11 +212,32 @@ runTest engines runtimeP coreP target roots = match readPreludeFile runtimeP
 -- the guards were reordered.  Derive that set the same block-aware way:
 --   for f in $(git ls-files '*.mdk'); do grep -qE '^[[:space:]]*(-- )?> ' "$f" || continue
 --     grep -qE '^[[:space:]]*(prop|test) "' "$f" && echo "$f"; done
+--
+-- ── issue #1680: the exemption must not be SILENT ────────────────────────────
+-- The exemption above is settled and stays.  What was wrong is that it was
+-- INVISIBLE: `medaka test` on
+--     f : Int -> Int
+--     test "t" = f "x" == 3
+-- skipped the type checker without saying so and then died with a bare
+-- `runtime error [E-PANIC]: unknown op '+'` — a type error rendered as an
+-- interpreter crash, with nothing in the output connecting the two.  So the
+-- exempted arm now ANNOUNCES itself on stderr (`typecheckSkipNotice`) before the
+-- run proceeds: which module was not type-checked, which disjunct of the
+-- predicate exempted it, and the `medaka check` command that WILL type-check it.
+-- This is deliberately a note, not a failure — exit codes are unchanged, because
+-- test/ported/*.mdk and sqlite/test/*_test.mdk must keep exiting 0.
+-- ⚠️ It goes to STDERR, not stdout: the doctest/prop/test reports on stdout are
+-- parsed for counts by `sqlite/test/inlang_test_oracle.sh` (`grep -c '^  ok   '`)
+-- and by `test/diff_compiler_ported.sh`, and a line injected into that stream
+-- would be graded as report text.  `diff_compiler_ported.sh` classifies stderr by
+-- `^runtime error \[E-PANIC\]`, which this note cannot match.
 doctestGate : String -> List String -> String -> String -> String -> List Decl -> <IO> Option String
 doctestGate target roots rsrc csrc tsrc userDecls
   | isNonEmptyL (extractExamples (collectComments tsrc)) =
     typecheckErrors target roots rsrc csrc tsrc userDecls
-  | hasProps userDecls || hasTests userDecls = None
+  | hasProps userDecls || hasTests userDecls =
+    let _ = ePutStrLn (typecheckSkipNotice target userDecls)
+    None
   | otherwise = typecheckErrors target roots rsrc csrc tsrc userDecls
 
 -- Type-check the module the way `medaka check` does, routing by import-presence
@@ -265,6 +286,23 @@ renderFileErrors (path, src, diags) =
 
 typecheckGateFail : String -> String -> String
 typecheckGateFail target errText = "type error in \{target} — `medaka test` requires it to `medaka check` first:\n\{errText}"
+
+-- The announcement for the `test "…"`/`prop "…"` exemption (issue #1680).  Names
+-- the module, the disjunct of `hasProps || hasTests` that exempted it, and the
+-- command that DOES type-check it, so an ensuing interpreter panic is readable as
+-- the possible uncaught type error it may be.
+typecheckSkipNotice : String -> List Decl -> String
+typecheckSkipNotice target userDecls = "note: typechecking was skipped for \{target}\n  reason: the module declares \{skipReasonDecls userDecls} and no doctests, so `medaka test` exempts it from the type checker (issue #1229) — those phases exist to exercise eval on constructs `medaka check` rejects.\n  a runtime error below may therefore be an uncaught TYPE error.\n  to type-check it: medaka check \{target}"
+
+-- Which disjunct of the exemption predicate fired.  Both are reported when both
+-- hold: the two are independent reasons and a reader debugging one should not be
+-- told only about the other.
+skipReasonDecls : List Decl -> String
+skipReasonDecls userDecls
+  | hasTests userDecls && hasProps userDecls =
+    "`test \"…\"` and `prop \"…\"` decls"
+  | hasTests userDecls = "`test \"…\"` decls"
+  | otherwise = "`prop \"…\"` decls"
 
 driveAll : List Engine -> List Decl -> List Decl -> String -> String -> List String -> <IO> Bool
 driveAll engines runtimeDecls coreDecls target tsrc roots =
