@@ -141,7 +141,7 @@ What's in the standard library, what's planned, module-by-module status.
 | [`TRMC-DESIGN.md`](../compiler/TRMC-DESIGN.md) | TRMC-DESIGN.md — tail-recursion-modulo-cons for the native LLVM backend | IMPLEMENTED |
 | [`TUPLE-TYPE-CONSTRUCTOR-DESIGN.md`](../compiler/TUPLE-TYPE-CONSTRUCTOR-DESIGN.md) | Tuple as a real type constructor — design doc | IMPLEMENTED |
 | [`TYPE-ALIAS-EXPANSION-DESIGN.md`](../compiler/TYPE-ALIAS-EXPANSION-DESIGN.md) | Type-Alias Expansion — Design | IMPLEMENTED |
-| [`TYPE-AWARE-LINT-DESIGN.md`](../compiler/TYPE-AWARE-LINT-DESIGN.md) | Type-Aware Lint Tier — Design | PARTLY SHIPPED, and RE-COSTED |
+| [`TYPE-AWARE-LINT-DESIGN.md`](../compiler/TYPE-AWARE-LINT-DESIGN.md) | Type-Aware Lint Tier — Design | PARTLY SHIPPED and RE-COSTED; TIER 1 UNBLOCKED, TIER 2 STILL BLOCKED |
 | [`TYPE-ERROR-SPAN-DESIGN.md`](../compiler/TYPE-ERROR-SPAN-DESIGN.md) | Type-error span precision — design | IMPLEMENTED |
 | [`TYPECHECK-ARCH-BUG-FIT.md`](../compiler/TYPECHECK-ARCH-BUG-FIT.md) | Typechecker target architecture — per-bug fit ledger | CURRENT |
 | [`TYPECHECK-ARCHITECTURE.md`](../compiler/TYPECHECK-ARCHITECTURE.md) | Typechecker Architecture — the derived map | CURRENT |
