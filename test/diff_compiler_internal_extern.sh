@@ -32,15 +32,15 @@
 #                          the privilege, silently, exit 0.
 #  12. project-allow-flag: the same project with `--allow-internal` → clean.
 #                          Proves the flag is not a no-op on the project route.
-#  13–20. manifest-matrix: only canonical unquoted `true` grants the privilege;
+#  13–21. manifest-matrix: only canonical unquoted `true` grants the privilege;
 #                          both `[package]` and `[project]` work, and a trailing
 #                          comment is inert. Quoted true, false, malformed text,
 #                          dependency-name collisions, and comment text reject.
-#  21. test-exemption: `medaka test` executes the existing internal-primitive
+#  22. test-exemption: `medaka test` executes the existing internal-primitive
 #                      regression corpus without an enforcement flag.
-#  22. doc-exemption: `medaka doc` extracts a scheme for a declaration that
+#  23. doc-exemption: `medaka doc` extracts a scheme for a declaration that
 #                      references an internal primitive; it executes no code.
-#  23. compiler-self-check: `medaka check compiler/support/util.mdk` (11 real
+#  24. compiler-self-check: `medaka check compiler/support/util.mdk` (11 real
 #                          arrayGetUnsafe call sites) with no flag → clean.
 #                          #42's cell, bought by `compiler/medaka.toml`'s key.
 #
@@ -234,7 +234,7 @@ case "$clean" in
      else fail=$((fail+1)); printf 'FAIL project-allow-flag (exit %d: [%s])%s\n' "$code" "$out" "$(mdk_stale_suffix "$out")"; fi ;;
 esac
 
-# 13–20. Manifest trust matrix.  Each row runs the same real project and differs
+# 13–21. Manifest trust matrix.  Each row runs the same real project and differs
 # only in its manifest text, so an acceptance/rejection split is attributable to
 # the scanner rather than module shape or path ownership.
 manifest_case() {
@@ -298,13 +298,19 @@ manifest_case dep-name-not-optin reject '[package]
 name = "probe"
 
 [dependencies]
-allow-internal = "true"'
+allow-internal = true'
+
+manifest_case dep-header-comment reject '[package]
+name = "probe"
+
+[dependencies] # dependency table
+allow-internal = true'
 
 manifest_case comment-not-optin reject '[package]
 name = "probe"
 # allow-internal = true'
 
-# 21. test-exemption: `medaka test` is an execution/regression surface, not the
+# 22. test-exemption: `medaka test` is an execution/regression surface, not the
 #     internal-extern enforcement surface.  This existing corpus really reaches
 #     arrayGetUnsafe and must run without an `--allow-internal` flag.
 out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" test "$ROOT/test/ported/test_eval_internal_prims_ported.mdk" 2>&1)"
@@ -316,7 +322,7 @@ case "$clean" in
   *) fail=$((fail+1)); printf 'FAIL test-exemption ([%s])%s\n' "$out" "$(mdk_stale_suffix "$out")" ;;
 esac
 
-# 22. doc-exemption: doc only parses and infers schemes; it never executes user
+# 23. doc-exemption: doc only parses and infers schemes; it never executes user
 #     code and therefore must not grow a runtime trust flag.  The declaration's
 #     body references an internal primitive while the extracted signature stays
 #     available without an internal-only diagnostic.
@@ -336,7 +342,7 @@ case "$clean" in
   *) fail=$((fail+1)); printf 'FAIL doc-exemption ([%s])%s\n' "$out" "$(mdk_stale_suffix "$out")" ;;
 esac
 
-# 23. compiler-self-check: #42's cell.  `medaka check` on a compiler-project file
+# 24. compiler-self-check: #42's cell.  `medaka check` on a compiler-project file
 #     that really does call the kernels (compiler/support/util.mdk has 11
 #     arrayGetUnsafe call sites) must stay clean with NO flag — that is what
 #     `compiler/medaka.toml`'s own `allow-internal = true` buys, and it is the
