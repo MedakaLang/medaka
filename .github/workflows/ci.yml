@@ -1386,13 +1386,21 @@ jobs:
           bash test/build_wasm_cmd.sh          || rc=1
           exit $rc
 
-  # The gates-matrix GENERATED region's own drift gate (#2177, S-3). ADVISORY
-  # ONLY (not yet in the required-checks ruleset — adding a required context
-  # needs a separate, non-atomic `gh api` ruleset edit; see
-  # docs/ops/CI-ARCHITECTURE.md §3.2 and this slice's report for the exact
-  # command). Own job, not folded into `soundness`, because unlike that job's
-  # doc gates this one needs the built binary (`medaka gate ci` is in-binary)
-  # — `needs`/`if:` shape copied from `compiler-soundness`/`wasm` above.
+  # The gates-matrix GENERATED region's own drift gate (#2177, S-3). 🚨 REQUIRED
+  # — this comment said "ADVISORY ONLY (not yet in the required-checks ruleset)"
+  # until 2026-08-30, by which point the promotion had already happened and the
+  # comment had not followed; the ruleset edit is deliberately NOT atomic with a
+  # commit, which is exactly how a claim like that goes stale unnoticed. Do not
+  # trust this line either — derive the set:
+  #   gh api repos/MedakaLang/medaka/rulesets --jq '.[]|select(.enforcement=="active")|.id'
+  #   gh api repos/MedakaLang/medaka/rulesets/<id> \
+  #     --jq '.rules[]|select(.type=="required_status_checks")|.parameters.required_status_checks[].context'
+  # It matters because "is a red `ci-gen-drift` blocking?" is answered here
+  # first, and the wrong answer costs a merge. See docs/ops/CI-ARCHITECTURE.md
+  # §3.2 for the promotion command. Own job, not folded into `soundness`,
+  # because unlike that job's doc gates this one needs the built binary
+  # (`medaka gate ci` is in-binary) — `needs`/`if:` shape copied from
+  # `compiler-soundness`/`wasm` above.
   ci-gen-drift:
     needs: [detect, build]
     if: ${{ !cancelled() }}
@@ -1401,12 +1409,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # ⚠️ STEP-guarded on `docs_only`, never job-guarded — this is a REQUIRED
+      # context and a skipped job does not report. Same shape and reason as
+      # `build` and the `gates` matrix above. WHY the guard is needed at all:
+      # `build` skips its own upload on a docs-only run, so `medaka-binaries`
+      # DOES NOT EXIST there — `needs: build` is satisfied by a job that
+      # succeeded having produced nothing, and an unguarded download here dies
+      # with "Artifact not found", reddening a required check on every prose-only
+      # PR (#2269). WHY skipping the gate is sound rather than a hole: `detect`
+      # is a prose ALLOWLIST, so `docs_only=true` already entails that neither
+      # the generated matrix region nor `test/gates.toml` changed — there is
+      # nothing for this gate to prove on such a run.
       - name: Setup medaka (toolchain + downloaded binary)
+        if: needs.detect.outputs.docs_only != 'true'
         uses: ./.github/actions/setup-medaka
         with:
           binary: artifact
 
       - name: Generated gates-matrix region must not drift or be hand-edited
+        if: needs.detect.outputs.docs_only != 'true'
         run: sh test/diff_compiler_ci_gen_drift.sh
 
   # ── The per-gate cost transport (#2178, S-1-S-cost-record) ───────────────────
@@ -1449,12 +1470,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Step-guarded on `docs_only` for the same reason as `ci-gen-drift` above
+      # (#2269): `build` uploads no artifact on a prose-only run, and
+      # `docs_only=true` already entails `test/gates.toml` and
+      # `test/gate_cost_baseline.json` are untouched, so the balancer has
+      # nothing to check. Not a required context today, but guarded anyway —
+      # a red advisory check on every doc PR is noise that trains readers to
+      # ignore it.
       - name: Setup medaka (toolchain + downloaded binary)
+        if: needs.detect.outputs.docs_only != 'true'
         uses: ./.github/actions/setup-medaka
         with:
           binary: artifact
 
       - name: Shard balancer — idempotence, constraints, cost refusals
+        if: needs.detect.outputs.docs_only != 'true'
         run: sh test/diff_compiler_gate_balance.sh
 
   # ── The budget governor (#2180, S-5) ─────────────────────────────────────────
@@ -1496,7 +1526,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Step-guarded on `docs_only`, same as `ci-gen-drift` / `gate-balance`
+      # above (#2269). All THREE steps carry the guard, not just the download:
+      # the override-channel resolution below exists only to feed the gate step,
+      # so running it alone would do targeted fetches to populate an env var
+      # nothing then reads.
       - name: Setup medaka (toolchain + downloaded binary)
+        if: needs.detect.outputs.docs_only != 'true'
         uses: ./.github/actions/setup-medaka
         with:
           binary: artifact
@@ -1506,6 +1542,7 @@ jobs:
       # `${{ }}` inside `run:` is textual substitution and an attacker-authored
       # branch name or message would be shell, not data.
       - name: Resolve the authored commit message(s) — the override channel
+        if: needs.detect.outputs.docs_only != 'true'
         env:
           EVENT: ${{ github.event_name }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
@@ -1598,6 +1635,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Budget governor — uncosted / over-class / pole-floor, with override
+        if: needs.detect.outputs.docs_only != 'true'
         run: sh test/diff_compiler_gate_budget.sh
 
   # ── TRANSITIONAL: the eight retired `gates (<theme>)` required contexts ──────
