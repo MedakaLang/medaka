@@ -233,6 +233,50 @@ _smp="$(sed -n 's/^    {"name": "gate_a".*"samples": \([0-9]*\),.*$/\1/p' "$B")"
 [ "$_smp" = "5" ] && ok "all five samples retained raw in the file" \
                   || bad "samples was '$_smp', expected 5"
 
+# ── each sample carries ITS OWN run (FR-1, #2222 review S0-1) ────────────────
+#
+# The five reports above were ingested in runId order 5001..5005 and each
+# contributed one sample, so `sampleRuns` must read back in exactly that
+# order beside `ms`. This is what retires the positional inference the review
+# found: the reader no longer has to deduce which run a sample came from from
+# how many samples there happen to be, and a `sampleRuns` that drifted out of
+# step with `ms` would put that bug back one layer down.
+_srun="$(sed -n 's/^    {"name": "gate_a".*"sampleRuns": \[\([^]]*\)\].*$/\1/p' "$B")"
+if [ "$_srun" = '"5001", "5002", "5003", "5004", "5005"' ]; then
+  ok "each retained sample records the run it came from, in ms order"
+else
+  bad "sampleRuns was [$_srun], expected the five runIds 5001..5005 in order"
+fi
+
+# A baseline written BEFORE the field existed must carry forward UNATTRIBUTED,
+# never backfilled. The provenance of those samples was not recorded and is
+# not recoverable from the file, so inventing one — even a plausible one, even
+# by position — is the defect rather than the repair. New samples ingested on
+# top of it still carry their real runId, so the two are distinguishable in
+# the same array.
+BL="$TMP/legacy.json"
+cat >"$BL" <<'LEGACY_EOF'
+{
+  "schema": "gate-cost-baseline/1",
+  "note": "pre-FR-1 shape: ms with no sampleRuns",
+  "generated": "2026-01-01T00:00:00Z",
+  "maxSamples": 9,
+  "runs": [
+  ],
+  "gates": [
+    {"name": "gate_a", "medianMs": 100, "samples": 2, "ms": [100, 110]}
+  ]
+}
+LEGACY_EOF
+sh "$INGEST" --baseline "$BL" "$TMP/s1.json" >/dev/null 2>&1 \
+  || bad "ingest failed folding a report into a pre-FR-1 baseline"
+_lsr="$(sed -n 's/^    {"name": "gate_a".*"sampleRuns": \[\([^]]*\)\].*$/\1/p' "$BL")"
+if [ "$_lsr" = '"", "", "5001"' ]; then
+  ok "legacy samples carry forward unattributed; only the new sample names its run"
+else
+  bad "legacy carry-forward produced sampleRuns [$_lsr], expected [\"\", \"\", \"5001\"]"
+fi
+
 # jobs/parallel/rowElapsedMs (#2208) round-trip into the runs[] entry for the
 # run they came from, recorded per-run (not merged/averaged across runs).
 _run5001="$(grep '"runId": "5001"' "$B")"
@@ -301,6 +345,50 @@ else
   else
     ok "every committed medianMs is the lower median of its own retained samples"
   fi
+fi
+
+# ── 6. the gate-SET digest is a mirror pair, and it is order-independent ──────
+#
+# `_digest` here and `gate_cost.gateSetDigest` on the Medaka side are two
+# implementations of one rule (S-2, #2223). A drift between them shows up in
+# production as a permanent, unexplained [STALE] annotation on every
+# calibration line — loud, but loud in the way that trains a reader to ignore
+# the annotation. The constant below is the one
+# test/gate_balance_fixtures/calib_staleness.json records for row `c`, and
+# test/diff_compiler_gate_balance.sh asserts the Medaka side against that same
+# fixture, so the two gates pin the two halves against one number.
+_rep() { printf '%s\n' '{' '  "schema": "gate-cost/1",' '  "gates": [' "$@" '  ]' '}'; }
+_rep '    {"name": "swapped_out", "ms": 10, "ok": true}' >"$TMP/dg1.json"
+_d1="$(sh "$ROOT/test/gate_cost_ingest.sh" --digest "$TMP/dg1.json")"
+if [ "$_d1" = "1926625894" ]; then
+  ok "the ingester's gate-set digest matches the value calib_staleness pins"
+else
+  bad "gate-set digest drifted: got '$_d1', calib_staleness.json records 1926625894"
+fi
+
+# A sum, so the report's pattern-resolution order and the registry's enrolment
+# order must produce the same digest — they are not the same order, and a
+# digest that depended on it would fire STALE on every row forever.
+_rep '    {"name": "alpha", "ms": 1, "ok": true}' \
+     '    {"name": "beta", "ms": 1, "ok": true}' >"$TMP/dg2.json"
+_rep '    {"name": "beta", "ms": 1, "ok": true}' \
+     '    {"name": "alpha", "ms": 1, "ok": true}' >"$TMP/dg3.json"
+_d2="$(sh "$ROOT/test/gate_cost_ingest.sh" --digest "$TMP/dg2.json")"
+_d3="$(sh "$ROOT/test/gate_cost_ingest.sh" --digest "$TMP/dg3.json")"
+if [ "$_d2" = "$_d3" ] && [ -n "$_d2" ]; then
+  ok "the gate-set digest ignores the order gates are reported in"
+else
+  bad "the gate-set digest depends on report order ($_d2 vs $_d3)"
+fi
+
+# ...and it must still SEPARATE a same-size swap, which is the whole point.
+_rep '    {"name": "alpha", "ms": 1, "ok": true}' \
+     '    {"name": "gamma", "ms": 1, "ok": true}' >"$TMP/dg4.json"
+_d4="$(sh "$ROOT/test/gate_cost_ingest.sh" --digest "$TMP/dg4.json")"
+if [ "$_d2" != "$_d4" ]; then
+  ok "the gate-set digest separates a same-size swap"
+else
+  bad "swapping one gate for another left the digest unchanged ($_d2)"
 fi
 
 echo

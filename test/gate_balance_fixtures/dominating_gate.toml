@@ -1,15 +1,29 @@
 # test/gate_balance_fixtures/dominating_gate.toml — SYNTHETIC, hand-written.
 #
-# DEGENERATE CASE 2: one gate so expensive no packing can hide it.
+# DEGENERATE CASE 2: one gate so expensive no packing can hide it, and work
+# that will not fit around it.
 #
-# `monolith` costs 1000ms against four small gates. Gates are indivisible, so
-# the pole is at least 1000ms whatever the packer does, while the median row
-# stays near 150ms — a pole/median of ~6.7, far outside the enforced 1.25.
+# `monolith` costs 1000ms; `small1..3` cost 600ms each, on three open serial
+# rows (`pin` is closed and carries 100ms). Gates are indivisible, so:
 #
-# The balancer must FAIL here, and its message must say the reason is one gate
-# that has to get faster rather than a packing it could have found. A balancer
-# that silently emitted this assignment would be certifying a matrix in which
-# three of four runners idle for 85% of the job.
+#   floor = max(1000, closed 100, open work 2800 / 3 slots = 933) = 1000
+#   LPT   = {monolith} | {small1, small3} | {small2}  ->  pole 1200
+#   pole/floor = 1.200, against the 1.125 budget: MISSED
+#
+# and 1200 is not LPT being unlucky — it is the OPTIMUM for this gate set, so
+# no repacking exists. The balancer must FAIL here, and its message must say
+# the reason is one gate that has to get faster rather than a packing it could
+# have found. A balancer that silently emitted this assignment would be
+# certifying a matrix in which two of three runners idle for half the job.
+#
+# ⚠️ RE-PRICED FOR S-4 (#2216), AND THE RE-PRICING IS THE POINT. The three
+# small gates used to cost 100ms, which under the retired `pole / median`
+# metric was a refusal all by itself: 1000 / 150 = 6.7. Under `pole / floor` a
+# dominating gate ALONE can no longer be a refusal — the floor rises with it,
+# so the ratio is 1.000 and the report merely names it (that case is now
+# `nonpole_speedup.toml`, which is green on purpose). What still refuses, and
+# what this fixture now pins, is the residue: a floor set by one indivisible
+# gate and a pole the packer cannot bring down to it.
 
 [[gate]]
 name = "monolith"

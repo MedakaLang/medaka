@@ -1,0 +1,30 @@
+# test/gate_balance_fixtures/budget_uncosted.toml — SYNTHETIC, hand-written.
+#
+# Pins clause (a) of `medaka gate budget` (test/diff_compiler_gate_budget.sh,
+# FR-4, review finding S2-2 against S-5, epic #2182) IN ISOLATION: a single
+# schedulable gate with no entry in the paired baseline. `costOf` misses it,
+# and `budgetPoleFactor`'s `balCands` filters an uncosted gate out of the
+# packing entirely (S-5's own regression check), so this fixture reds on
+# clause (a) alone — there is no clause (b)/(c) violation riding along to
+# confuse which clause the assertion is actually pinning.
+
+[[gate]]
+name = "lonely"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/lonely.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[shard]]
+name = "a"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/a.txt"
+pinned_gates = []

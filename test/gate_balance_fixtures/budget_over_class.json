@@ -1,0 +1,10 @@
+{
+  "schema": "gate-cost-baseline/1",
+  "note": "SYNTHETIC fixture baseline for test/diff_compiler_gate_budget.sh. Hand-written, not ingested. 'sluggish' measured at 280.0s: over the tolerance-adjusted 266.6s ceiling for its declared cheap class, but under the raw 300s kill timeout.",
+  "generated": "2026-08-30T00:00:00Z",
+  "maxSamples": 9,
+  "runs": [],
+  "gates": [
+    {"name": "sluggish", "medianMs": 280000, "samples": 1, "ms": [280000]}
+  ]
+}

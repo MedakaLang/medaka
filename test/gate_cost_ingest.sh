@@ -19,7 +19,7 @@
 # caused it, the numbers are pinned at review time rather than re-fetched into a
 # different answer, and the balancer has no network dependency and no token.
 #
-# ── WHY THE MEDIAN, NOT THE MEAN ─────────────────────────────────────────────
+# ── WHY THE MEDIAN, NOT THE MEAN — NOW MEASURED, NOT ASSERTED ────────────────
 # One runner hiccup — a cold cache, a noisy neighbour, a retried step — is a
 # single wild sample, and a mean lets it move a gate's placement. The median
 # ignores it entirely unless it is the majority behaviour, which is exactly the
@@ -28,6 +28,29 @@
 # so an outlier is visible in review rather than averaged into invisibility.
 # For an even sample count the LOWER median is taken: deterministic, integral,
 # and no float rounding to churn a diff.
+#
+# That paragraph was an ARGUMENT until S-2 (#2222); it is now a measurement.
+# Four candidate families (median, upper quantile, spread-widened, mean) were
+# compared LEAVE-ONE-RUN-OUT over this file's own recorded runs, and the result
+# splits by axis: on central tendency every alternative beats the median (it is
+# systematically LOW, by a measured -12.6% of a row's predicted total), and on
+# the tail the median wins — which is the axis a packer schedules on. One gate
+# here, `pds_test_repo_vectors`, carries a 50.7x hiccup sample; at this file's
+# own sample count the median is the ONLY candidate that prices it correctly
+# (18725ms, against the mean's 327242 and the max's 948919). The bias is the
+# price of that robustness and is REPORTED rather than corrected: an uplift
+# factor is a function of the sample count it was fitted at.
+# `medaka gate balance` prints the current figure on every run. Derivation,
+# protocol and the full table: docs/ops/GATE-REGISTRY-DESIGN.md §8.
+# ⚠️ The -12.6% is S-2's DATED measurement, taken under the positional run
+# attribution FR-1 replaced with the recorded `sampleRuns` below; the balancer
+# reports "not derivable" until enough attributed ingests have landed to
+# re-take it. The choice of statistic does not rest on that alignment; the
+# percentage does.
+#
+# ⚠️ `median()` below and `packStat` in compiler/tools/gate_cost.mdk are two
+# implementations of ONE rule. They must not drift; `balOosBlock` counts the
+# rows where they disagree and says so in the balancer's own output.
 #
 # ── THE ADMISSION CHECK IS LOAD-BEARING, AND IT IS THE POINT ─────────────────
 # ci.yml narrows the gate set for `pull_request` and for that event alone
@@ -48,6 +71,18 @@
 # A FAILING gate contributes no sample: its `ms` is the cost of failing, which
 # is not the cost of running, and a red gate is often red because it stopped
 # early. Its run is still recorded in `runs` so the provenance is honest.
+#
+# ── EACH SAMPLE CARRIES ITS OWN RUN (FR-1, #2222 review S0-1) ────────────────
+# Every `gates[]` row emits `sampleRuns`, the runId of each retained sample,
+# same length and same order as `ms`. It is written because the two retention
+# windows below are INDEPENDENT: `--max-runs` trims `runs[]` by total ROW
+# count and `--max-samples` trims each gate's `ms` by SAMPLE count, per gate,
+# with nothing tying them together. A reader that infers "ms[i] came from the
+# i-th retained run" from a count coincidence is therefore wrong exactly when
+# a gate has missed a run — silently, and with a confident number. Samples
+# carried over from a baseline written before this field stay UNATTRIBUTED
+# (empty string): their provenance was never recorded and guessing it back is
+# the defect, not the repair.
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -66,6 +101,42 @@ usage() {
   exit "${1:-1}"
 }
 
+# The row's gate-SET digest (S-2, #2223) — the awk mirror of
+# `gateSetDigest`/`gateNameHash` in compiler/tools/gate_cost.mdk, over the same
+# gate names the `gates` COUNT counts (every entry in the report, passing or
+# not).  The two implementations must agree exactly; a drift shows up in
+# production as a permanent [STALE] annotation on every calibration line, so
+# `--digest` below exists to let a gate check the pair.
+#
+# A SUM, so it is order-independent: a report lists gates in
+# pattern-resolution order and the registry lists them in enrolment order, and
+# those are not the same order.  Reduced mod 2^31-1 at every step so the
+# running value stays inside the integers a double represents exactly
+# (2147483646 * 131 is ~2.8e11, well under 2^53) — awk has no other integer.
+# ASCII only, which is all a gate key can contain: it is a repository path with
+# the slashes flattened.
+#
+# Defined ABOVE the argument loop, not beside `_prov`/`_top` with the other
+# readers, because `--digest` calls it from inside that loop.
+_digest() {
+  awk '
+    BEGIN {
+      M = 2147483647
+      for (i = 32; i < 127; i++) CODE[sprintf("%c", i)] = i
+      acc = 0
+    }
+    /^    \{"name": "/ {
+      match($0, /"name": "[^"]*"/)
+      s = substr($0, RSTART + 9, RLENGTH - 10)
+      h = 7
+      n = length(s)
+      for (i = 1; i <= n; i++) h = (h * 131 + CODE[substr(s, i, 1)]) % M
+      acc = (acc + h) % M
+    }
+    END { printf "%d\n", acc }
+  ' "$1"
+}
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --baseline)     BASELINE="$2"; shift 2 ;;
@@ -74,6 +145,16 @@ while [ "$#" -gt 0 ]; do
     --max-samples)  MAX_SAMPLES="$2"; shift 2 ;;
     --max-runs)     MAX_RUNS="$2"; shift 2 ;;
     --dry-run)      DRY=1; shift ;;
+    # Print the gate-SET digest of a report and exit, computing NOTHING else.
+    # Exists so test/diff_compiler_gate_cost.sh can check this awk against
+    # `gate_cost.gateSetDigest` on the Medaka side: the two are a mirror pair
+    # and a drift between them would show up in production as a permanent,
+    # unexplained [STALE] annotation on every calibration line — loud, but
+    # loud in a way that trains a reader to ignore the annotation. It bypasses
+    # the admission checks deliberately: it reads nothing but gate NAMES and
+    # writes nothing at all, so no report it is pointed at can reach the
+    # committed baseline through it.
+    --digest)       _digest "$2"; exit 0 ;;
     -h|--help)      usage 0 ;;
     -*)             echo "gate_cost_ingest: unknown option '$1'"; usage 1 ;;
     *)              reports="$reports $1"; shift ;;
@@ -96,6 +177,7 @@ _prov() { sed -n "s/^    \"$2\": \"\\(.*\\)\",\\{0,1\\}\$/\\1/p" "$1" | head -n 
 # quoted-string regex does not match them. Value is everything up to the first
 # comma, since there is no closing quote to anchor on (#2208).
 _top() { sed -n "s/^  \"$2\": \\([^,]*\\),\\{0,1\\}\$/\\1/p" "$1" | head -n 1; }
+
 
 for r in $reports; do
   if [ ! -f "$r" ]; then
@@ -161,13 +243,19 @@ for r in $reports; do
   jobs="$(_top "$r" jobs)"
   parallel="$(_top "$r" parallel)"
   rowms="$(_top "$r" rowElapsedMs)"
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  gdig="$(_digest "$r")"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$key" "$rid" "$att" "$shd" "$ev" "$sha" "$ref" "$dat" "$ngates" \
-    "$jobs" "$parallel" "$rowms" >>"$TMP/runs.tsv"
-  # name / ms, for the gates that actually PASSED.
+    "$jobs" "$parallel" "$rowms" "$gdig" >>"$TMP/runs.tsv"
+  # name / ms, for the gates that actually PASSED. The RUN this sample came
+  # from rides along as a fourth column (FR-1, #2222 review S0-1): it is
+  # already in hand here, and discarding it is what forced the reader to infer
+  # attribution from array POSITION — an inference that is wrong whenever the
+  # independent `--max-runs` and `--max-samples` trims disagree. Recorded, not
+  # derived.
   sed -n 's/^    {"name": "\([^"]*\)".*"ms": \([0-9][0-9]*\),.*"ok": true.*$/\1\t\2/p' \
     "$r" | while IFS='	' read -r gn gms; do
-      printf '%s\t%s\t%s\n' "$key" "$gn" "$gms" >>"$TMP/samples.tsv"
+      printf '%s\t%s\t%s\t%s\n' "$key" "$gn" "$gms" "$rid" >>"$TMP/samples.tsv"
     done
 done
 
@@ -207,9 +295,24 @@ BEGIN {
     if (sect == "gates" && line ~ /^    \{"name": /) {
       match(line, /"name": "[^"]*"/); g = substr(line, RSTART + 9, RLENGTH - 10)
       match(line, /"ms": \[[^]]*\]/); arr = substr(line, RSTART + 7, RLENGTH - 8)
-      if (!(g in gseen)) { gseen[g] = 1; ngate++; gorder[ngate] = g; gms[g] = "" }
+      # The samples carried over from the OLD file keep whatever attribution
+      # that file recorded, and NOTHING MORE. A baseline written before FR-1
+      # has no "sampleRuns" at all, and its samples stay unattributed ("-")
+      # forever: their provenance was never written down and is not
+      # recoverable from the file, so inventing one here would be exactly the
+      # positional guess this field exists to retire. New samples ingested
+      # from here on carry their real runId.
+      sr = ""
+      if (match(line, /"sampleRuns": \[[^]]*\]/)) sr = substr(line, RSTART + 15, RLENGTH - 16)
+      if (!(g in gseen)) { gseen[g] = 1; ngate++; gorder[ngate] = g; gms[g] = ""; gsr[g] = "" }
       n = split(arr, parts, /, */)
-      for (i = 1; i <= n; i++) if (parts[i] != "") gms[g] = gms[g] (gms[g] == "" ? "" : " ") parts[i]
+      ns = split(sr, sparts, /, */)
+      for (i = 1; i <= n; i++) if (parts[i] != "") {
+        gms[g] = gms[g] (gms[g] == "" ? "" : " ") parts[i]
+        t = "-"
+        if (ns == n) { t = sparts[i]; gsub(/"/, "", t); if (t == "") t = "-" }
+        gsr[g] = gsr[g] (gsr[g] == "" ? "" : " ") t
+      }
     }
   }
   close(oldf)
@@ -228,8 +331,12 @@ BEGIN {
     jobsv = (f[10] == "" ? "null" : f[10] + 0)
     parv  = (f[11] == "" ? "null" : f[11])
     remv  = (f[12] == "" ? "null" : f[12] + 0)
-    runjson[k] = sprintf("    {\"key\": \"%s\", \"runId\": \"%s\", \"runAttempt\": \"%s\", \"shard\": \"%s\", \"event\": \"%s\", \"sha\": \"%s\", \"ref\": \"%s\", \"date\": \"%s\", \"jobs\": %s, \"parallel\": %s, \"rowElapsedMs\": %s, \"gates\": %s}",
-                         jesc(f[1]), jesc(f[2]), jesc(f[3]), jesc(f[4]), jesc(f[5]), jesc(f[6]), jesc(f[7]), jesc(f[8]), jobsv, parv, remv, f[9] + 0)
+    # gatesDigest (S-2, #2223) rides beside `gates` for the same reason and
+    # with the same optionality: it is what makes a same-COUNT gate-set SWAP
+    # visible to `balCalibStaleness`, which a count alone cannot see.
+    digv  = (f[13] == "" ? "null" : f[13] + 0)
+    runjson[k] = sprintf("    {\"key\": \"%s\", \"runId\": \"%s\", \"runAttempt\": \"%s\", \"shard\": \"%s\", \"event\": \"%s\", \"sha\": \"%s\", \"ref\": \"%s\", \"date\": \"%s\", \"jobs\": %s, \"parallel\": %s, \"rowElapsedMs\": %s, \"gates\": %s, \"gatesDigest\": %s}",
+                         jesc(f[1]), jesc(f[2]), jesc(f[3]), jesc(f[4]), jesc(f[5]), jesc(f[6]), jesc(f[7]), jesc(f[8]), jobsv, parv, remv, f[9] + 0, digv)
     accepted[k] = 1
   }
   close(runsf)
@@ -238,8 +345,10 @@ BEGIN {
     split(line, f, "\t")
     if (!(f[1] in accepted)) continue
     g = f[2]
-    if (!(g in gseen)) { gseen[g] = 1; ngate++; gorder[ngate] = g; gms[g] = "" }
+    if (!(g in gseen)) { gseen[g] = 1; ngate++; gorder[ngate] = g; gms[g] = ""; gsr[g] = "" }
     gms[g] = gms[g] (gms[g] == "" ? "" : " ") (f[3] + 0)
+    rr = f[4]; if (rr == "") rr = "-"
+    gsr[g] = gsr[g] (gsr[g] == "" ? "" : " ") rr
   }
   close(sampf)
 
@@ -267,14 +376,25 @@ BEGIN {
   for (i = 1; i <= ngate; i++) {
     g = gorder[i]
     n = split(gms[g], sv, " ")
+    ns = split(gsr[g], srv, " ")
     lo = n - maxs + 1; if (lo < 1) lo = 1
     m = 0
     for (j = lo; j <= n; j++) { m++; SORTV[m] = sv[j] + 0 }
     if (m == 0) continue
-    lst = ""
-    for (j = 1; j <= m; j++) lst = lst (j == 1 ? "" : ", ") (sv[lo + j - 1] + 0)
-    printf "%s    {\"name\": \"%s\", \"medianMs\": %d, \"samples\": %d, \"ms\": [%s]}",
-           sep, jesc(g), median(m), m, lst
+    # `sampleRuns` is trimmed by the SAME window as `ms` and emitted in the
+    # same order, which is the whole contract the reader relies on: element i
+    # of one describes element i of the other. It is NOT trimmed by, or
+    # reconciled against, the independent `--max-runs` trim of `runs[]` — that
+    # those two counters are unrelated is precisely why the attribution has to
+    # be carried per sample instead of inferred from a count.
+    lst = ""; slst = ""
+    for (j = 1; j <= m; j++) {
+      lst = lst (j == 1 ? "" : ", ") (sv[lo + j - 1] + 0)
+      t = (ns == n ? srv[lo + j - 1] : "-")
+      slst = slst (j == 1 ? "" : ", ") "\"" (t == "-" ? "" : jesc(t)) "\""
+    }
+    printf "%s    {\"name\": \"%s\", \"medianMs\": %d, \"samples\": %d, \"ms\": [%s], \"sampleRuns\": [%s]}",
+           sep, jesc(g), median(m), m, lst, slst
     sep = ",\n"
   }
   if (sep != "") printf "\n"

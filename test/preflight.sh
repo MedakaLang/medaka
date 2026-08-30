@@ -853,6 +853,18 @@ for f in $changed; do
                                    add 'diff_compiler_gate_cost'
                                    add 'diff_compiler_gate_balance'
                                    add 'diff_compiler_ci_gen_drift' ;;
+    # FR-3 (fix round, S1-1/S3-5): the nightly auto-advance TOOL (in
+    # CI-COVERAGE-TOOLS.txt, so it is not a gate candidate either). It shares
+    # the ingest/balance/gen-ci gates above (it calls all three), plus the two
+    # checks that police its OWN classification: `medaka gate verify`'s
+    # unenrolled-script scan and the CI-reachability ledger — the gap that let
+    # this exact file go unclassified until the fix round caught it.
+    test/gate_cost_collect.sh)
+                                   add 'diff_compiler_gate_cost'
+                                   add 'diff_compiler_gate_balance'
+                                   add 'diff_compiler_ci_gen_drift'
+                                   add 'diff_compiler_gate_registry'
+                                   add 'diff_compiler_ci_shard_coverage' ;;
     # S2-5 (end-of-sprint review, #2177): the generated file itself had no arm
     # at all, so a change here fell through to the catch-all — the two gates
     # that actually police its generated content are the ones that read it.

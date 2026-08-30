@@ -1,0 +1,10 @@
+{
+  "schema": "gate-cost-baseline/1",
+  "note": "SYNTHETIC fixture baseline for test/diff_compiler_gate_budget.sh. Hand-written, not ingested. 'tidy' measures 10.0s -- well inside the cheap-class tolerance-adjusted ceiling, and alone on its one row (pole/floor 1.000).",
+  "generated": "2026-08-30T00:00:00Z",
+  "maxSamples": 9,
+  "runs": [],
+  "gates": [
+    {"name": "tidy", "medianMs": 10000, "samples": 1, "ms": [10000]}
+  ]
+}
