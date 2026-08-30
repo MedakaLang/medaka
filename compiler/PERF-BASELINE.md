@@ -2,10 +2,9 @@
 
 **Status:** the `## Table` section is GENERATED — its content is the stdout of
 `sh test/perf_baseline.sh` (see `## Reproduction`). Everything from
-`## Before / after this sprint` onward is a hand-authored comparison,
-added by slice `S-4-targets-and-verdict` of the `first-five-minutes` sprint,
-and does NOT regenerate from a single command — it pins S-1's original
-(pre-sprint) run alongside a fresh post-sprint run of the same script.
+`## Where the time goes` onward is a hand-authored section that does NOT
+regenerate from this script and must be preserved across a regeneration —
+see `## Reproduction`'s splice instructions, not a raw redirect.
 Do not hand-edit the `## Table` section; edit test/perf_baseline.sh's
 echo/comment text instead, then re-run the reproduction command.
 
@@ -28,7 +27,11 @@ times the CLI VERBS themselves end to end — the number a human waiting on
 
 **cold** = the first invocation of that verb+workload cell in this run of the
 script, no warm-up. This is page-cache-cold-ISH first touch, NOT a
-`drop_caches`-cold start (that needs root and was not requested).
+`drop_caches`-cold start (that needs root and was not requested), and — for
+`build` specifically — NOT an empty rt-object-cache start either: this script
+does not clear S-2's persistent $MEDAKA_CACHE_DIR before measuring, so on a
+dev box that has built before, `build`'s cold column is cache-warm, not
+genuinely first-ever. See the note under the Table.
 **warm** = min-of-N after one discarded warm-up run (same convention as
 test/bench.sh's `time_min`).
 
@@ -51,9 +54,9 @@ percent. A larger drift is a finding, not something to smooth over.
 ## Table
 
 host: Linux 6.12.95+deb13-amd64 x86_64
-sha: c895844b4c70aa73d4d8a2bae0d68acd3720c70a
+sha: 98f4815325960b5ef6279cfb1bd75bf9e89962d3
 timer: gnu (/usr/bin/time -v)
-load:  04:45:39 up 48 days,  7:16,  5 users,  load average: 0.64, 1.81, 2.39
+load:  05:16:45 up 48 days,  7:47,  5 users,  load average: 3.38, 2.77, 2.27
 N=3 warm runs (min-of-N, 1 discarded warm-up); cold = first invocation, no warm-up
 Ir runs: cachegrind --cache-sim=no --branch-sim=no, GC_INITIAL_HEAP_SIZE=1073741824 pinned
 
@@ -61,20 +64,95 @@ Ir runs: cachegrind --cache-sim=no --branch-sim=no, GC_INITIAL_HEAP_SIZE=1073741
 |-------|----------|-------|-------|-------------|-----|
 | new   | hello   | 0.01s | 0.01s | bytes=20480 | 7MB |
 | new   | project | 0.01s | 0.01s | bytes=20480 | 7MB |
-| check | hello   | 0.19s | 0.19s | Ir=1383205845 | 27MB |
-| check | project | 0.66s | 0.59s | Ir=3962844357 | 43MB |
-| build | hello   | 0.83s | 0.85s | Ir=1026016963 | 92MB |
-| build | project | 1.64s | 1.59s | Ir=3374982713 | 96MB |
-| run   | hello   | 0.14s | 0.14s | Ir=1021223209 | 27MB |
-| run   | project | 0.59s | 0.54s | Ir=3671965588 | 43MB |
-| test  | hello   | 0.14s | 0.12s | Ir=782773226 | 18MB |
-| test  | project | 0.29s | 0.3s | Ir=1982480596 | 43MB |
+| check | hello   | 0.22s | 0.33s | Ir=1383205823 | 27MB |
+| check | project | 0.7s | 0.71s | Ir=3962842015 | 43MB |
+| build | hello   | 0.93s | 0.9s | Ir=1026016138 | 92MB |
+| build | project | 1.87s | 1.69s | Ir=3374986796 | 96MB |
+| run   | hello   | 0.17s | 0.17s | Ir=1021223209 | 27MB |
+| run   | project | 0.64s | 0.69s | Ir=3671967914 | 43MB |
+| test  | hello   | 0.17s | 0.14s | Ir=782773226 | 19MB |
+| test  | project | 0.32s | 0.35s | Ir=1982480596 | 35MB |
+
+**Note on `build`'s `cold` column:** this run does not empty S-2's
+persistent rt-object-cache ($MEDAKA_CACHE_DIR / $XDG_CACHE_HOME/medaka /
+$HOME/.cache/medaka) first, so the number above is cache-warm-from-earlier-
+development, not a genuinely first-ever build. Measured directly with the
+cache dir removed, same box: a genuinely first-ever `build` costs ~1.7-1.9s
+— slightly MORE than the pre-sprint (no-cache) baseline of ~1.6s, since it
+now also pays the one-time cache-population cost on top of the old inline
+compile. Every build after the first is the number in the Table above.
 
 ## Reproduction
 
+The `## Table` section above (and everything before it, down through this
+`## Reproduction` block) is GENERATED — its content is this script's stdout.
+`## Where the time goes` onward in the committed doc is hand-authored and
+must survive a regeneration, so splice rather than overwrite:
+
 ```sh
-sh test/perf_baseline.sh > compiler/PERF-BASELINE.md
+sh test/perf_baseline.sh > /tmp/perf_baseline_generated.md
+awk '/^## Where the time goes/,0' compiler/PERF-BASELINE.md > /tmp/perf_baseline_handauthored.md
+cat /tmp/perf_baseline_generated.md /tmp/perf_baseline_handauthored.md > compiler/PERF-BASELINE.md
 ```
+
+## Where the time goes
+
+The sprint's headline finding, decomposed and committed here so it outlives
+the sprint directory (the source measurements live in the sprint's ephemeral
+`reports/S-2-build-floor.md` §6.1 and `reports/S-3-check-floor.md` §6.1/§6.2,
+which are not part of the repo).
+
+### `check` (hello-world, ~0.23s floor)
+
+Instruction attribution (Callgrind, heap pinned, `--separate-callers=3`,
+1,597,372,412 Ir total) of `medaka check` on a one-line program:
+
+| term | Ir | share |
+|---|---:|---:|
+| Prelude lex+parse, done **four times** | 885.0M | 55.4% |
+| Typecheck, done **three times** (`checkOneDiags`, `cleanReport`, `elaborateModules`) | 677.8M | 42.4% |
+| The user's own one-line file (`parseLocated`, with spans) | 0.2M | 0.013% |
+
+**Verdict:** ~98% of a hello-world `medaka check` is redundant prelude work —
+`stdlib/runtime.mdk`+`stdlib/core.mdk` parsed 4x and typechecked 3x on every
+invocation, not user code. This is a caching/dedup fix, not an algorithmic
+one; #followups propose sharing the parse (~40%) and, harder, the typecheck
+(~42%) across `checkRoute`'s three consumers.
+
+Boehm's real share, same workload, two Callgrind runs (heap pinned vs.
+unpinned so collection is forced) isolate the collector from the allocator:
+
+| | total Ir | libgc Ir | libgc share |
+|---|---:|---:|---:|
+| unpinned (38 collections) | 1,687,622,644 | 878,529,475 | 52.06% |
+| pinned (0 collections) | 1,597,372,412 | 790,804,807 | 49.51% |
+
+Difference (90.25M Ir, 87.7M inside libgc) **is** the collector; the rest of
+libgc's share is the allocator fast path. So: **collector = 5.3pp of
+instructions (38 collections); allocator = 46.8pp — nine times the
+collector.**
+
+**Verdict:** #124's "`check` is GC-bound" is upheld in kind on this workload
+(52% vs. #124's 62% on a larger program, different instrument), but now
+decomposed — nine-tenths of Boehm's share is the ALLOCATOR, not the
+collector, so a fix should target allocating less, not collecting less.
+
+### `build` (hello-world)
+
+`MEDAKA_PERF=1 medaka build` sub-row split, same workload, three cache states:
+
+| state | typecheck | emit-ir | gc-probe | rt-obj | clang | **total** |
+|---|---:|---:|---:|---:|---:|---:|
+| cache disabled (old default shape) | 0.174s | 0.122s | 0.006s | 0.00004s (inline) | 1.282s | **1.591s** |
+| warm cache (new default, steady state) | 0.169s | 0.116s | 0.007s | 0.025s (cache hit) | 0.480s | **0.805s** |
+| cold cache (first build on a machine) | — | — | — | 0.832s (cache miss, builds+writes) | — | **1.699s** |
+
+**Verdict:** `clang` dominates a cache-disabled build (81% of the total); S-2's
+rt-object cache turns every build after the first into a cache hit instead of
+a full inline `medaka_rt.c` recompile, **1.59s → 0.80s (2.0x) on every build
+after the first** — the very first build on a machine is slightly slower than
+the old baseline (it pays the one-time cache-population cost), see the note
+under `## Table` above.
 
 ## Before / after this sprint
 

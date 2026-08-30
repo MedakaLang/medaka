@@ -13,7 +13,12 @@
 # Usage:
 #   sh test/perf_baseline.sh                 # N=3 warm runs per cell
 #   sh test/perf_baseline.sh -n 5             # min-of-5 warm runs
-#   sh test/perf_baseline.sh > compiler/PERF-BASELINE.md   # regenerate the doc
+#   sh test/perf_baseline.sh > /tmp/perf_baseline_generated.md   # regenerate the
+#     GENERATED prefix of compiler/PERF-BASELINE.md (through "## Reproduction")
+#     only — see that section's own splice instructions to fold it back in
+#     without clobbering the doc's hand-authored sections ("## Where the time
+#     goes" onward). Do NOT redirect straight over compiler/PERF-BASELINE.md —
+#     that destroys the hand-authored sections.
 #
 # Workloads:
 #   hello    test/native_cli_fixtures/run/hello.mdk  (1 file, existing fixture
@@ -206,9 +211,13 @@ measure_cell() {
 
 echo "# PERF-BASELINE.md — absolute CLI-verb latency baseline"
 echo
-echo "**Status:** GENERATED — this entire file is the stdout of \`sh test/perf_baseline.sh\`."
-echo "Regenerate with: \`sh test/perf_baseline.sh > compiler/PERF-BASELINE.md\` (one command)."
-echo "Do not hand-edit below this line; edit test/perf_baseline.sh's echo/comment text instead."
+echo "**Status:** the \`## Table\` section is GENERATED — its content is the stdout of"
+echo "\`sh test/perf_baseline.sh\` (see \`## Reproduction\`). Everything from"
+echo "\`## Where the time goes\` onward is a hand-authored section that does NOT"
+echo "regenerate from this script and must be preserved across a regeneration —"
+echo "see \`## Reproduction\`'s splice instructions, not a raw redirect."
+echo "Do not hand-edit the \`## Table\` section; edit test/perf_baseline.sh's"
+echo "echo/comment text instead, then re-run the reproduction command."
 echo
 echo "## What this measures"
 echo
@@ -229,7 +238,11 @@ echo "\`medaka check\` actually experiences."
 echo
 echo "**cold** = the first invocation of that verb+workload cell in this run of the"
 echo "script, no warm-up. This is page-cache-cold-ISH first touch, NOT a"
-echo "\`drop_caches\`-cold start (that needs root and was not requested)."
+echo "\`drop_caches\`-cold start (that needs root and was not requested), and — for"
+echo "\`build\` specifically — NOT an empty rt-object-cache start either: this script"
+echo "does not clear S-2's persistent \$MEDAKA_CACHE_DIR before measuring, so on a"
+echo "dev box that has built before, \`build\`'s cold column is cache-warm, not"
+echo "genuinely first-ever. See the note under the Table."
 echo "**warm** = min-of-N after one discarded warm-up run (same convention as"
 echo "test/bench.sh's \`time_min\`)."
 echo
@@ -266,8 +279,25 @@ for verb in new check build run test; do
   done
 done
 echo
+echo "**Note on \`build\`'s \`cold\` column:** this run does not empty S-2's"
+echo "persistent rt-object-cache (\$MEDAKA_CACHE_DIR / \$XDG_CACHE_HOME/medaka /"
+echo "\$HOME/.cache/medaka) first, so the number above is cache-warm-from-earlier-"
+echo "development, not a genuinely first-ever build. Measured directly with the"
+echo "cache dir removed, same box: a genuinely first-ever \`build\` costs ~1.7-1.9s"
+echo "— slightly MORE than the pre-sprint (no-cache) baseline of ~1.6s, since it"
+echo "now also pays the one-time cache-population cost on top of the old inline"
+echo "compile. Every build after the first is the number in the Table above."
+echo
 echo "## Reproduction"
 echo
+echo "The \`## Table\` section above (and everything before it, down through this"
+echo "\`## Reproduction\` block) is GENERATED — its content is this script's stdout."
+echo "\`## Where the time goes\` onward in the committed doc is hand-authored and"
+echo "must survive a regeneration, so splice rather than overwrite:"
+echo
 echo '```sh'
-echo "sh test/perf_baseline.sh > compiler/PERF-BASELINE.md"
+echo "sh test/perf_baseline.sh > /tmp/perf_baseline_generated.md"
+echo "awk '/^## Where the time goes/,0' compiler/PERF-BASELINE.md > /tmp/perf_baseline_handauthored.md"
+echo "cat /tmp/perf_baseline_generated.md /tmp/perf_baseline_handauthored.md > compiler/PERF-BASELINE.md"
 echo '```'
+echo
