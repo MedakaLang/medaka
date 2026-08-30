@@ -81,6 +81,7 @@ import driver.diagnostics.{
 import driver.main_autoprint.{
   shouldAutoPrintMain,
   autoPrintWrapModules,
+  autoPrintPinCore,
   underivedMainDiags,
 }
 import json.{
@@ -289,11 +290,13 @@ doEmit rsrc csrc tsrc entry roots warnTriples = match loadProgramE entry roots
     let (coreMangled, modulesMangled) = mangleUnits core modules
     let _ = elaborateModules rt coreMangled modulesMangled
     if shouldAutoPrintMain core modules then
+      -- coreW carries the wrap's prelude-pinned callee (autoPrintPinCore, #2185).
+      let coreW = autoPrintPinCore core
       let modulesW = autoPrintWrapModules modules
-      match underivedMainDiags rt core modulesW
+      match underivedMainDiags rt coreW modulesW
         [] =>
           let _ = emitWatMarker warnTriples
-          runEmit rt core modulesW
+          runEmit rt coreW modulesW
         errs => emitDiagnostics (cjAllToJson [(entry, tsrc, map diagOfTypeError errs)])
     else
       let _ = emitWatMarker warnTriples

@@ -1,0 +1,30 @@
+-- I27 (#2188) S2-DECL (d) bullet 3 -- TWO admitted declarations that DISAGREE.
+-- Its sibling i28 is this same graph with `impl IA String` removed; that ONE impl is the
+-- whole delta between the agreeing cell and this one, and it is what the deleted #1664
+-- pin's own claim.txt named as the construction of the disagreeing arm it did not cover.
+--
+-- Both `IA` and `IZ` are admitted (each named in its own import clause -- S1-NS (a)'s
+-- TYPE arm), and they denote DIFFERENT things:
+--   * `IA.mth : a -> Int -> Int` dispatches at argument 0, head String, and
+--     `impl IA String` EXISTS => IA denotes that impl (55).
+--   * `IZ.mth : Int -> b -> Int` dispatches at argument 1, head Int, and no
+--     `impl IZ Int` exists anywhere => IZ denotes the imported standalone (99).
+-- Two admitted, two denotations => (d) bullet 3: a LOCATED REJECT at the occurrence.
+-- Not 55, not 99, not 7: with two admitted candidates and no discriminator written in
+-- the source, any value here would be a tie-break "supplied from outside the program the
+-- author can write down" (SHADOW-SEMANTICS.md, S2-DECL (d)).
+--
+-- 🚨 WHY THIS CELL PINS A VERDICT AND NOT A VALUE, and why that is not weaker here: at
+-- base 7e5ec5e7 this program COMPILED, and printed 99 with these import clauses in this
+-- order and 55 with them swapped -- on run AND on the shipped binary. A value pin could
+-- have been satisfied by either half of an order-dependent coin flip. The order-swapped
+-- companion is the S2-DECL (e) half; the two rows together say "rejects, and rejects
+-- either way round".
+--
+-- `fmodI.mth` is the load-bearing standalone shadow: without it `mth` is not a shadow and
+-- none of the S2-DECL machinery is reached.
+import fmodI.{mth}
+import amodI.{IA, af}
+import zmodI.{IZ, zf}
+
+main = println (mth "abc" 5 + af 0 + zf 0)

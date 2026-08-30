@@ -1,0 +1,26 @@
+-- X13 (#2185, S0, §4b LICENSED FLIP) x12's NO-IMPL sibling: the SAME `Ifc`
+-- interface declares a method literally named `println`, but NO impl exists
+-- anywhere in the program. The unimplemented interface is otherwise wholly
+-- irrelevant -- nothing ever calls it (the same "declared and never called
+-- costs nothing" shape x6 pins for the ordinary user-occurrence case) -- so
+-- the wrap's synthesized reference must be unaffected by its mere existence.
+--
+-- MEASURED ON THE BASE BINARY (93a40382, cold-built in this worktree,
+-- MEDAKA_STRICT=1): check/run/build ALL REJECT (exit 1), `No impl of Ifc for
+-- Int`, order-invariant -- the wrap's synthesized `println` was marked as a
+-- dispatch against THIS module's `Ifc`, found no impl at Int, and the whole
+-- program that never once writes the word `println` failed to build over an
+-- interface it never uses.
+--
+-- FIXED shape (this slice, Val-licensed 2026-08-30 to flip reject -> accept):
+-- the wrap no longer spells the name `println` (`putStrLn (display <e>)`), so
+-- it cannot route through `Ifc` at all -- check/run/build must ALL ACCEPT and
+-- the built binary must print 1, the value `main` actually holds. `run`
+-- REJECTs BY DESIGN regardless (#1681, mirrors x7/x11/x12: `main` is a
+-- non-Unit VALUE and `medaka run` never applies or prints one) -- graded
+-- BUILD_EXACT for the same reason. Value hand-derived from the literal
+-- `main = 1`, not captured.
+interface Ifc c where
+  println : c -> Int
+
+main = 1

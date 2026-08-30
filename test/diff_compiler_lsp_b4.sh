@@ -284,5 +284,72 @@ sys.exit(0 if ok else 1)
 PY
 check "inlayHint unsignatured-only, pos+label == OCaml" "$?"
 
+# ── #2092: a local that shadows a PRELUDE name must hover as the LOCAL ──────
+# `hoverScheme` asks the env (own top-level ++ the WHOLE prelude) first, so
+# before the fix `let count = 5` hovered as the prelude's
+# `count : Foldable b => (a -> Bool) -> b a -> Int` at every cursor position in
+# the buffer — silently the wrong type, no error (#2092, S0).  The expected
+# values below are decided from the SOURCE, not captured: `count` bound to `5`
+# is an `Int`, and a bare `count` with no local in scope is the prelude's
+# Foldable-constrained standalone.  No golden: these are direct assertions, so
+# a regression cannot be blessed away.
+SHADOW_TEXT='main =\n  let count = 5\n  println count\n'
+SHADOW_OPEN='{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///b4shadow.mdk","languageId":"medaka","version":1,"text":"'"$SHADOW_TEXT"'"}}}'
+# line 2 "  println count": cols 10..14 are `count` (the USE, not the binder).
+SHADOW_HOV='{"jsonrpc":"2.0","id":7,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///b4shadow.mdk"},"position":{"line":2,"character":11}}}'
+# line 1 "  let count = 5": cols 6..10 are `count` (the BINDER itself).
+SHADOW_BND='{"jsonrpc":"2.0","id":8,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///b4shadow.mdk"},"position":{"line":1,"character":7}}}'
+build_in "$INIT" "$SHADOW_OPEN" "$SHADOW_HOV" "$SHADOW_BND" "$EXIT"
+drive_self
+python3 - "$TMP/self.json" <<'PY'
+import sys, json
+def val(fn, i):
+    for l in open(fn):
+        if not l.strip(): continue
+        o = json.loads(l)
+        if o.get("id") == i:
+            r = o.get("result")
+            return None if r is None else r.get("contents", {}).get("value")
+    return None
+use, binder = val(sys.argv[1], 7), val(sys.argv[1], 8)
+ok = all(v is not None and "count : Int" in v and "Foldable" not in v
+         for v in (use, binder))
+if not ok:
+    print("  use=%r binder=%r" % (use, binder), file=sys.stderr)
+sys.exit(0 if ok else 1)
+PY
+check "#2092 hover: local shadowing prelude 'count' → 'count : Int'" "$?"
+
+# ── #2092 control: NO local in scope → the PRELUDE's scheme, unchanged ──────
+# Proves the fix is POSITION-scoped, not "locals always win".  The second
+# buffer also carries a `count` binder in an EARLIER top-level decl, so a
+# name-only (position-blind) preference would wrongly answer `Int` here.
+NOLOC_TEXT='main = println (count (x => x > 1) [1, 2, 3])\n'
+NOLOC_OPEN='{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///b4noloc.mdk","languageId":"medaka","version":1,"text":"'"$NOLOC_TEXT"'"}}}'
+NOLOC_HOV='{"jsonrpc":"2.0","id":9,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///b4noloc.mdk"},"position":{"line":0,"character":17}}}'
+XDECL_TEXT='f =\n  let count = 5\n  println count\n\nmain = println (count (x => x > 1) [1, 2, 3])\n'
+XDECL_OPEN='{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///b4xdecl.mdk","languageId":"medaka","version":1,"text":"'"$XDECL_TEXT"'"}}}'
+XDECL_HOV='{"jsonrpc":"2.0","id":10,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///b4xdecl.mdk"},"position":{"line":4,"character":17}}}'
+build_in "$INIT" "$NOLOC_OPEN" "$NOLOC_HOV" "$XDECL_OPEN" "$XDECL_HOV" "$EXIT"
+drive_self
+python3 - "$TMP/self.json" <<'PY'
+import sys, json
+def val(fn, i):
+    for l in open(fn):
+        if not l.strip(): continue
+        o = json.loads(l)
+        if o.get("id") == i:
+            r = o.get("result")
+            return None if r is None else r.get("contents", {}).get("value")
+    return None
+noloc, xdecl = val(sys.argv[1], 9), val(sys.argv[1], 10)
+ok = all(v is not None and "Foldable" in v and "count : Int\n" not in v
+         for v in (noloc, xdecl))
+if not ok:
+    print("  noloc=%r xdecl=%r" % (noloc, xdecl), file=sys.stderr)
+sys.exit(0 if ok else 1)
+PY
+check "#2092 control: no local in scope → prelude 'count' scheme" "$?"
+
 printf '\n%d ok, %d failing\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

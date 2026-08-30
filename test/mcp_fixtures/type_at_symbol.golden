@@ -1,5 +1,5 @@
 {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"medaka","version":"0.1.0-preview"}}}
-{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"'total' is ambiguous on line 12 — 3 matches:\n  col 0: total : Int -> Int -> Int\n  col 6: total : Int -> Int -> Int\n  col 20: total : Int -> Int -> Int"}],"isError":false}}
+{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"'total' is ambiguous on line 12 — 3 matches:\n  col 0: total : Int -> Int -> Int\n  col 6: total : Int\n  col 20: total : Int"}],"isError":false}}
 {"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"'extra' is ambiguous on line 12 — 2 matches:\n  col 12: extra : Int\n  col 28: extra : Int"}],"isError":false}}
 {"jsonrpc":"2.0","id":4,"result":{"content":[{"type":"text","text":"bump : Int -> Int"}],"isError":false}}
 {"jsonrpc":"2.0","id":5,"result":{"content":[{"type":"text","text":"no identifier named 'missing' on line 12 of 'test/mcp_fixtures/symbol_addr.mdk' — identifiers on this line: total (col 0), total (col 6), extra (col 12), total (col 20), extra (col 28)"}],"isError":false}}
