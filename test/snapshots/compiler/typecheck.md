@@ -1,5 +1,5 @@
 # META
-source_lines=37880
+source_lines=37952
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -36460,12 +36460,54 @@ checkModuleFullDiags mid seedVars accData accAll prog =
 -- a same-named function from a non-imported module win by load order (e.g.
 -- string.reverse shadowing the list.reverse a module imports → spurious errors).
 -- worker: ISOLATED per-module diagnostics harvest (checkModuleFullDiags — see its
--- doc above).  Surfaces this module's own `schemes` (for pubV) plus its (errs, warns)
--- payload.  IMPORT-SCOPED seed exactly like cmCheckWorker; NOT a flat union.
-cmDiagsWorker : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), (List TcDiag, List TcDiag))
+-- doc above).  Surfaces this module's own `schemes` (for pubV) plus its
+-- (schemes, errs, warns) payload.  IMPORT-SCOPED seed exactly like cmCheckWorker;
+-- NOT a flat union.
+-- ⚠️ #2246: the payload carries `schemes` a SECOND time — exactly as `cmEntryWorker`
+-- does, and for exactly the same reason.  `foldModules` hands the worker's FIRST
+-- component to the NEXT module (it is the fold's seed, never `collect`'s), so the
+-- only way the terminal module's own bindings reach `cmDiagsCollect` — which owes
+-- `mainSchemeRef` its SET-OR-CLEAR write — is inside the payload.  Costs nothing:
+-- `checkModuleFullDiags` already computed them.
+cmDiagsWorker : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), (List (String, Scheme), List TcDiag, List TcDiag))
 cmDiagsWorker mid seed accData accAll prog =
   let (schemes, errs, warns) = checkModuleFullDiags mid seed accData accAll prog
-  (schemes, (errs, warns))
+  (schemes, (schemes, errs, warns))
+
+-- collect for checkModulesDiags: strips the payload's `schemes` back off so the
+-- returned list shape stays `(mid, (errs, warns))` — `checkModulesDiags`'s exported
+-- signature (a selfproc LEG A row) is UNCHANGED by #2246 — but first, on the
+-- TERMINAL module only, records that module's `main` scheme.
+--
+-- #2246: this is the multi-module `analyzeProject` path's ONLY producer of
+-- `mainSchemeRef`.  S-3 (#2234) made `mainShapeWarnings` pure — it now READS the ref
+-- rather than re-elaborating — which was correct for every caller that had a
+-- producer, but `checkJsonFile`'s multi-module arm (driver/diagnostics.mdk) had NONE:
+-- `analyzeProject` → `typecheckPass` → here, and nothing on that chain wrote it.
+-- Both directions of that hole are pinned:
+--   * fresh process — the ref is `None`, `mainTypeIsUnit ()` answers False on `None`,
+--     so W-MAIN-SHAPE FIRED on a clean Unit main (false positive on every
+--     `check --json` / MCP `medaka_check` of a multi-module project);
+--   * long-lived process (`medaka mcp`, `medaka lsp`) — the ref held whatever an
+--     EARLIER request left, so a genuinely non-Unit `main` had its real warning
+--     SILENTLY VANISH behind a previous request's Unit scheme.  [W-QUIETER]: that
+--     direction is the more dangerous one.
+-- SET-OR-CLEAR in ONE write, never a conditional/partial one: `lookupAssoc` yields
+-- `None` when the terminal module has no `main`, and writing that `None` is what
+-- clears a previous run's leftover.  Mirrors `checkModulesEntryFullSplit`'s write
+-- (same last-wins entry-module rule; dependency-first order puts the entry last).
+cmDiagsCollect : Bool -> String -> (List (String, Scheme), List TcDiag, List TcDiag) -> List (String, (List TcDiag, List TcDiag)) -> List (String, (List TcDiag, List TcDiag))
+cmDiagsCollect isLast mid (schemes, errs, warns) rest =
+  let _ = setMainSchemeIfEntry isLast schemes
+  (mid, (errs, warns))::rest
+
+-- The SET-OR-CLEAR write itself, on the terminal (entry) module only.  Split out of
+-- `cmDiagsCollect` so the "never a partial write" property is one two-clause
+-- function rather than an inline conditional.
+setMainSchemeIfEntry : Bool -> List (String, Scheme) -> Unit
+setMainSchemeIfEntry False _ = ()
+setMainSchemeIfEntry True schemes =
+  driverState.value.mainSchemeRef := lookupAssoc "main" schemes
 
 export
 checkModulesDiags : List Decl -> List Decl -> List (String, List Decl) -> List (String, (List TcDiag, List TcDiag))
@@ -36484,7 +36526,7 @@ checkModulesDiags runtimeDecls coreDecls0 modules0 =
     True
     True
     cmDiagsWorker
-    (_last mid ew rest => (mid, ew) :: rest)
+    cmDiagsCollect
     []
     (runtimeSeed ++ coreSchemes)
     coreSchemes
@@ -36758,6 +36800,36 @@ checkOneDiags : List Decl -> List Decl -> (String, List Decl) -> (List TcDiag, L
 checkOneDiags runtimeDecls coreDecls (rootId, prog) =
   let (_, errs, warns) = checkModulesEntryFull runtimeDecls coreDecls [(rootId, prog)]
   (errs, warns)
+
+-- `checkOneDiags` for a SYNTHETIC program — one this driver derived from the user's
+-- rather than one the user wrote — with `mainSchemeRef` SAVED AND RESTORED across it.
+--
+-- WHY THIS EXISTS.  `checkModulesEntryFullSplit` records the entry module's `main`
+-- scheme in `mainSchemeRef` (#2155, see the SET-OR-CLEAR comment there), which is the
+-- sole input to `mainTypeIsUnit`/`mainTypeIsAsync`/`mainTypeIsFloat`.  That is right
+-- for a check of the user's OWN program and wrong for a check of a program this
+-- compiler invented: `underivedMainDiags` (driver/main_autoprint.mdk) re-checks the
+-- auto-print WRAP (`main = 5` ⟶ `main = println 5`), whose `main` is `<IO> Unit` by
+-- construction.  Letting that write through means every later reader of
+-- `mainTypeIsUnit ()` is told the user's non-Unit `main` is Unit — the exact predicate
+-- `mainNonUnitWarning` consults to decide whether to warn.
+--
+-- The clobber was real but MASKED: `mainShapeWarnings` used to re-run a whole
+-- `elaborateModules` immediately afterwards purely for `mainSchemeRef`, which
+-- overwrote the residue before anything read it.  Removing that redundant third
+-- prelude typecheck (S-3, #2234) is what makes the residue observable, so the two
+-- changes must travel together — with the save/restore alone, deleting the elaborate
+-- silently DELETED the `W-MAIN-SHAPE` warning on `medaka build` and on
+-- `medaka check --json` (measured: 8 warning sites before, 6 after, both single-file;
+-- multi-module is unaffected because `underivedMainDiags` only matches a singleton
+-- module list and returns [] otherwise).
+export
+checkOneDiagsSynthetic : List Decl -> List Decl -> (String, List Decl) -> (List TcDiag, List TcDiag)
+checkOneDiagsSynthetic runtimeDecls coreDecls prog =
+  let savedMain = driverState.value.mainSchemeRef.value
+  let res = checkOneDiags runtimeDecls coreDecls prog
+  driverState.value.mainSchemeRef := savedMain
+  res
 
 -- S-migrate-check-route (E-1 #1115): thin ONE-MODULE String/Bool wrappers, matching
 -- `checkToLinesWithRuntime`'s / `checkErrorsWithRuntime`'s (runtimeDecls, coreProg,
@@ -43772,10 +43844,15 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkModules" ((PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "coreDecls") (PVar "modules")) (EApp (EApp (EVar "stampGraphTyOrigins") (EVar "coreDecls0")) (EVar "modules0"))) (DoLet false false (PTuple (PVar "runtimeSeed") (PVar "coreSchemes")) (EApp (EApp (EApp (EVar "checkModulesPreamble") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldModules") (EVar "False")) (EVar "False")) (EVar "cmCheckWorker")) (ELam ((PVar "_last") (PVar "mid") (PVar "schemes") (PVar "rest")) (EBinOp "::" (ETuple (EVar "mid") (EVar "schemes")) (EVar "rest")))) (EListLit)) (EBinOp "++" (EVar "runtimeSeed") (EVar "coreSchemes"))) (EVar "coreSchemes")) (EListLit)) (EListLit)) (EListLit)) (EVar "modules")))))
 (DTypeSig true "checkModuleFullDiags" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))))
 (DFunDef false "checkModuleFullDiags" ((PVar "mid") (PVar "seedVars") (PVar "accData") (PVar "accAll") (PVar "prog")) (EBlock (DoLet false false (PVar "declEnvsHere") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoLet false false PWild (EApp (EVar "seedCheckRun") (EBinOp "++" (EBinOp "++" (EVar "prog") (EApp (EApp (EApp (EVar "importedCtorTypeDeclsFirstWins") (EVar "prog")) (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (EFieldAccess (EVar "declEnvsHere") "deModules"))) (EVar "accData")))) (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullImpl") (EVar "mid")) (EVar "seedVars")) (EVar "accData")) (EVar "accAll")) (EVar "prog"))) (DoLet false false (PVar "ceHere") (EFieldAccess (EVar "declEnvsHere") "deIfaces")) (DoLet false false (PVar "ordHere") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runFinalChecks") (EVar "prog")) (EBinOp "++" (EBinOp "++" (EVar "accAll") (EVar "accData")) (EVar "prog"))) (EVar "ceHere")) (EVar "ceHere")) (EFieldAccess (EVar "declEnvsHere") "deImpls")) (EFieldAccess (EVar "declEnvsHere") "deImpls")) (EVar "ordHere")) (EVar "True"))) (DoExpr (ETuple (EVar "schemes") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors") "items") "value")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value"))))))
-(DTypeSig false "cmDiagsWorker" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))))
-(DFunDef false "cmDiagsWorker" ((PVar "mid") (PVar "seed") (PVar "accData") (PVar "accAll") (PVar "prog")) (EBlock (DoLet false false (PTuple (PVar "schemes") (PVar "errs") (PVar "warns")) (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullDiags") (EVar "mid")) (EVar "seed")) (EVar "accData")) (EVar "accAll")) (EVar "prog"))) (DoExpr (ETuple (EVar "schemes") (ETuple (EVar "errs") (EVar "warns"))))))
+(DTypeSig false "cmDiagsWorker" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))))
+(DFunDef false "cmDiagsWorker" ((PVar "mid") (PVar "seed") (PVar "accData") (PVar "accAll") (PVar "prog")) (EBlock (DoLet false false (PTuple (PVar "schemes") (PVar "errs") (PVar "warns")) (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullDiags") (EVar "mid")) (EVar "seed")) (EVar "accData")) (EVar "accAll")) (EVar "prog"))) (DoExpr (ETuple (EVar "schemes") (ETuple (EVar "schemes") (EVar "errs") (EVar "warns"))))))
+(DTypeSig false "cmDiagsCollect" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))))
+(DFunDef false "cmDiagsCollect" ((PVar "isLast") (PVar "mid") (PTuple (PVar "schemes") (PVar "errs") (PVar "warns")) (PVar "rest")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setMainSchemeIfEntry") (EVar "isLast")) (EVar "schemes"))) (DoExpr (EBinOp "::" (ETuple (EVar "mid") (ETuple (EVar "errs") (EVar "warns"))) (EVar "rest")))))
+(DTypeSig false "setMainSchemeIfEntry" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyCon "Unit"))))
+(DFunDef false "setMainSchemeIfEntry" ((PCon "False") PWild) (ELit LUnit))
+(DFunDef false "setMainSchemeIfEntry" ((PCon "True") (PVar "schemes")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef")) (EApp (EApp (EVar "lookupAssoc") (ELit (LString "main"))) (EVar "schemes"))))
 (DTypeSig true "checkModulesDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))))
-(DFunDef false "checkModulesDiags" ((PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "coreDecls") (PVar "modules")) (EApp (EApp (EVar "stampGraphTyOrigins") (EVar "coreDecls0")) (EVar "modules0"))) (DoLet false false (PTuple (PVar "runtimeSeed") (PVar "coreSchemes")) (EApp (EApp (EApp (EVar "checkModulesPreamble") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PVar "perMod") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldModules") (EVar "True")) (EVar "True")) (EVar "cmDiagsWorker")) (ELam ((PVar "_last") (PVar "mid") (PVar "ew") (PVar "rest")) (EBinOp "::" (ETuple (EVar "mid") (EVar "ew")) (EVar "rest")))) (EListLit)) (EBinOp "++" (EVar "runtimeSeed") (EVar "coreSchemes"))) (EVar "coreSchemes")) (EListLit)) (EApp (EVar "publicDataDecls") (EVar "coreDecls"))) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EMatch (EApp (EVar "globalCoherenceConflict") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value") "deImpls")) (arm (PTuple (PVar "hard") (PVar "soft")) () (EApp (EApp (EVar "attachEntryWarnOpt") (EVar "soft")) (EApp (EApp (EVar "attachEntryDiagOpt") (EVar "hard")) (EVar "perMod"))))))))
+(DFunDef false "checkModulesDiags" ((PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "coreDecls") (PVar "modules")) (EApp (EApp (EVar "stampGraphTyOrigins") (EVar "coreDecls0")) (EVar "modules0"))) (DoLet false false (PTuple (PVar "runtimeSeed") (PVar "coreSchemes")) (EApp (EApp (EApp (EVar "checkModulesPreamble") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PVar "perMod") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldModules") (EVar "True")) (EVar "True")) (EVar "cmDiagsWorker")) (EVar "cmDiagsCollect")) (EListLit)) (EBinOp "++" (EVar "runtimeSeed") (EVar "coreSchemes"))) (EVar "coreSchemes")) (EListLit)) (EApp (EVar "publicDataDecls") (EVar "coreDecls"))) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EMatch (EApp (EVar "globalCoherenceConflict") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value") "deImpls")) (arm (PTuple (PVar "hard") (PVar "soft")) () (EApp (EApp (EVar "attachEntryWarnOpt") (EVar "soft")) (EApp (EApp (EVar "attachEntryDiagOpt") (EVar "hard")) (EVar "perMod"))))))))
 (DTypeSig false "attachEntryDiagOpt" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))
 (DFunDef false "attachEntryDiagOpt" ((PCon "None") (PVar "perMod")) (EVar "perMod"))
 (DFunDef false "attachEntryDiagOpt" ((PCon "Some" (PVar "msg")) (PVar "perMod")) (EApp (EApp (EVar "attachEntryDiag") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (ELit (LString "T-CONFLICTING-IMPL"))) (ELit (LInt 1))) (EVar "None")) (EVar "msg")) (EVar "None")) (EVar "None"))) (EVar "perMod")))
@@ -43815,6 +43892,8 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkOneSchemeFull" ((PVar "runtimeDecls") (PVar "coreDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EBlock (DoLet false false (PTuple (PVar "coreSchemes") (PVar "schemes") PWild PWild) (EApp (EApp (EApp (EVar "checkModulesEntryFullSplit") (EVar "runtimeDecls")) (EVar "coreDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog"))))) (DoExpr (ETuple (EVar "coreSchemes") (EVar "schemes")))))
 (DTypeSig true "checkOneDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))
 (DFunDef false "checkOneDiags" ((PVar "runtimeDecls") (PVar "coreDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EBlock (DoLet false false (PTuple PWild (PVar "errs") (PVar "warns")) (EApp (EApp (EApp (EVar "checkModulesEntryFull") (EVar "runtimeDecls")) (EVar "coreDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog"))))) (DoExpr (ETuple (EVar "errs") (EVar "warns")))))
+(DTypeSig true "checkOneDiagsSynthetic" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))
+(DFunDef false "checkOneDiagsSynthetic" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "prog")) (EBlock (DoLet false false (PVar "savedMain") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef") "value")) (DoLet false false (PVar "res") (EApp (EApp (EApp (EVar "checkOneDiags") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "prog"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef")) (EVar "savedMain"))) (DoExpr (EVar "res"))))
 (DTypeSig true "checkOneToLinesWithRuntime" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))))
 (DFunDef false "checkOneToLinesWithRuntime" ((PVar "runtimeDecls") (PVar "coreProg") (PVar "userProg")) (EApp (EApp (EApp (EVar "checkModulesEntryReport") (EVar "runtimeDecls")) (EVar "coreProg")) (EListLit (ETuple (ELit (LString "__user__")) (EVar "userProg")))))
 (DTypeSig true "checkOneErrorsWithRuntime" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))))
@@ -49813,10 +49892,15 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkModules" ((PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "coreDecls") (PVar "modules")) (EApp (EApp (EVar "stampGraphTyOrigins") (EVar "coreDecls0")) (EVar "modules0"))) (DoLet false false (PTuple (PVar "runtimeSeed") (PVar "coreSchemes")) (EApp (EApp (EApp (EVar "checkModulesPreamble") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldModules") (EVar "False")) (EVar "False")) (EVar "cmCheckWorker")) (ELam ((PVar "_last") (PVar "mid") (PVar "schemes") (PVar "rest")) (EBinOp "::" (ETuple (EVar "mid") (EVar "schemes")) (EVar "rest")))) (EListLit)) (EBinOp "++" (EVar "runtimeSeed") (EVar "coreSchemes"))) (EVar "coreSchemes")) (EListLit)) (EListLit)) (EListLit)) (EVar "modules")))))
 (DTypeSig true "checkModuleFullDiags" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))))
 (DFunDef false "checkModuleFullDiags" ((PVar "mid") (PVar "seedVars") (PVar "accData") (PVar "accAll") (PVar "prog")) (EBlock (DoLet false false (PVar "declEnvsHere") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoLet false false PWild (EApp (EVar "seedCheckRun") (EBinOp "++" (EBinOp "++" (EVar "prog") (EApp (EApp (EApp (EVar "importedCtorTypeDeclsFirstWins") (EVar "prog")) (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (EFieldAccess (EVar "declEnvsHere") "deModules"))) (EVar "accData")))) (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullImpl") (EVar "mid")) (EVar "seedVars")) (EVar "accData")) (EVar "accAll")) (EVar "prog"))) (DoLet false false (PVar "ceHere") (EFieldAccess (EVar "declEnvsHere") "deIfaces")) (DoLet false false (PVar "ordHere") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runFinalChecks") (EVar "prog")) (EBinOp "++" (EBinOp "++" (EVar "accAll") (EVar "accData")) (EVar "prog"))) (EVar "ceHere")) (EVar "ceHere")) (EFieldAccess (EVar "declEnvsHere") "deImpls")) (EFieldAccess (EVar "declEnvsHere") "deImpls")) (EVar "ordHere")) (EVar "True"))) (DoExpr (ETuple (EVar "schemes") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors") "items") "value")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value"))))))
-(DTypeSig false "cmDiagsWorker" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))))
-(DFunDef false "cmDiagsWorker" ((PVar "mid") (PVar "seed") (PVar "accData") (PVar "accAll") (PVar "prog")) (EBlock (DoLet false false (PTuple (PVar "schemes") (PVar "errs") (PVar "warns")) (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullDiags") (EVar "mid")) (EVar "seed")) (EVar "accData")) (EVar "accAll")) (EVar "prog"))) (DoExpr (ETuple (EVar "schemes") (ETuple (EVar "errs") (EVar "warns"))))))
+(DTypeSig false "cmDiagsWorker" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))))
+(DFunDef false "cmDiagsWorker" ((PVar "mid") (PVar "seed") (PVar "accData") (PVar "accAll") (PVar "prog")) (EBlock (DoLet false false (PTuple (PVar "schemes") (PVar "errs") (PVar "warns")) (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullDiags") (EVar "mid")) (EVar "seed")) (EVar "accData")) (EVar "accAll")) (EVar "prog"))) (DoExpr (ETuple (EVar "schemes") (ETuple (EVar "schemes") (EVar "errs") (EVar "warns"))))))
+(DTypeSig false "cmDiagsCollect" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))))
+(DFunDef false "cmDiagsCollect" ((PVar "isLast") (PVar "mid") (PTuple (PVar "schemes") (PVar "errs") (PVar "warns")) (PVar "rest")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setMainSchemeIfEntry") (EVar "isLast")) (EVar "schemes"))) (DoExpr (EBinOp "::" (ETuple (EVar "mid") (ETuple (EVar "errs") (EVar "warns"))) (EVar "rest")))))
+(DTypeSig false "setMainSchemeIfEntry" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyCon "Unit"))))
+(DFunDef false "setMainSchemeIfEntry" ((PCon "False") PWild) (ELit LUnit))
+(DFunDef false "setMainSchemeIfEntry" ((PCon "True") (PVar "schemes")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef")) (EApp (EApp (EVar "lookupAssoc") (ELit (LString "main"))) (EVar "schemes"))))
 (DTypeSig true "checkModulesDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))))
-(DFunDef false "checkModulesDiags" ((PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "coreDecls") (PVar "modules")) (EApp (EApp (EVar "stampGraphTyOrigins") (EVar "coreDecls0")) (EVar "modules0"))) (DoLet false false (PTuple (PVar "runtimeSeed") (PVar "coreSchemes")) (EApp (EApp (EApp (EVar "checkModulesPreamble") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PVar "perMod") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldModules") (EVar "True")) (EVar "True")) (EVar "cmDiagsWorker")) (ELam ((PVar "_last") (PVar "mid") (PVar "ew") (PVar "rest")) (EBinOp "::" (ETuple (EVar "mid") (EVar "ew")) (EVar "rest")))) (EListLit)) (EBinOp "++" (EVar "runtimeSeed") (EVar "coreSchemes"))) (EVar "coreSchemes")) (EListLit)) (EApp (EVar "publicDataDecls") (EVar "coreDecls"))) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EMatch (EApp (EVar "globalCoherenceConflict") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value") "deImpls")) (arm (PTuple (PVar "hard") (PVar "soft")) () (EApp (EApp (EVar "attachEntryWarnOpt") (EVar "soft")) (EApp (EApp (EVar "attachEntryDiagOpt") (EVar "hard")) (EVar "perMod"))))))))
+(DFunDef false "checkModulesDiags" ((PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "coreDecls") (PVar "modules")) (EApp (EApp (EVar "stampGraphTyOrigins") (EVar "coreDecls0")) (EVar "modules0"))) (DoLet false false (PTuple (PVar "runtimeSeed") (PVar "coreSchemes")) (EApp (EApp (EApp (EVar "checkModulesPreamble") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PVar "perMod") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldModules") (EVar "True")) (EVar "True")) (EVar "cmDiagsWorker")) (EVar "cmDiagsCollect")) (EListLit)) (EBinOp "++" (EVar "runtimeSeed") (EVar "coreSchemes"))) (EVar "coreSchemes")) (EListLit)) (EApp (EVar "publicDataDecls") (EVar "coreDecls"))) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EMatch (EApp (EVar "globalCoherenceConflict") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value") "deImpls")) (arm (PTuple (PVar "hard") (PVar "soft")) () (EApp (EApp (EVar "attachEntryWarnOpt") (EVar "soft")) (EApp (EApp (EVar "attachEntryDiagOpt") (EVar "hard")) (EVar "perMod"))))))))
 (DTypeSig false "attachEntryDiagOpt" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))
 (DFunDef false "attachEntryDiagOpt" ((PCon "None") (PVar "perMod")) (EVar "perMod"))
 (DFunDef false "attachEntryDiagOpt" ((PCon "Some" (PVar "msg")) (PVar "perMod")) (EApp (EApp (EVar "attachEntryDiag") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (ELit (LString "T-CONFLICTING-IMPL"))) (ELit (LInt 1))) (EVar "None")) (EVar "msg")) (EVar "None")) (EVar "None"))) (EVar "perMod")))
@@ -49856,6 +49940,8 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkOneSchemeFull" ((PVar "runtimeDecls") (PVar "coreDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EBlock (DoLet false false (PTuple (PVar "coreSchemes") (PVar "schemes") PWild PWild) (EApp (EApp (EApp (EVar "checkModulesEntryFullSplit") (EVar "runtimeDecls")) (EVar "coreDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog"))))) (DoExpr (ETuple (EVar "coreSchemes") (EVar "schemes")))))
 (DTypeSig true "checkOneDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))
 (DFunDef false "checkOneDiags" ((PVar "runtimeDecls") (PVar "coreDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EBlock (DoLet false false (PTuple PWild (PVar "errs") (PVar "warns")) (EApp (EApp (EApp (EVar "checkModulesEntryFull") (EVar "runtimeDecls")) (EVar "coreDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog"))))) (DoExpr (ETuple (EVar "errs") (EVar "warns")))))
+(DTypeSig true "checkOneDiagsSynthetic" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))
+(DFunDef false "checkOneDiagsSynthetic" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "prog")) (EBlock (DoLet false false (PVar "savedMain") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef") "value")) (DoLet false false (PVar "res") (EApp (EApp (EApp (EVar "checkOneDiags") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "prog"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef")) (EVar "savedMain"))) (DoExpr (EVar "res"))))
 (DTypeSig true "checkOneToLinesWithRuntime" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))))
 (DFunDef false "checkOneToLinesWithRuntime" ((PVar "runtimeDecls") (PVar "coreProg") (PVar "userProg")) (EApp (EApp (EApp (EVar "checkModulesEntryReport") (EVar "runtimeDecls")) (EVar "coreProg")) (EListLit (ETuple (ELit (LString "__user__")) (EVar "userProg")))))
 (DTypeSig true "checkOneErrorsWithRuntime" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))))

@@ -1,0 +1,3 @@
+-- Imported sibling for the cross-request main-shape mcp fixture.
+export bump : Int -> Int
+bump x = x + 1

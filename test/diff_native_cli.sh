@@ -365,6 +365,29 @@ else
     else fail=$((fail+1)); printf 'FAIL build/%s\n' "$base"
       printf '  want: [%s]\n  got:  [%s]\n' "$want" "$got"; fi
   done
+
+  # ── build: non-Unit main shape (#2246) ────────────────────────────────────
+  # The `build`-routed sibling of the run/main_shape_nonunit case above, on the
+  # SAME fixture (`main = 3 + 1`).  `medaka build` reaches the warning through
+  # typecheckGateRoute's single-module arm (compiler/driver/medaka_cli.mdk),
+  # whose `mainShapeWarnings` call #2246 changed: the first three arguments are
+  # ignored by that function unconditionally, so the two `desugar (parse …)`
+  # prelude re-parses that used to compute them were deleted and `[] [] []` is
+  # passed instead.  That edit is only inert if this warning still fires — and
+  # nothing else in this gate covered the build route's main-shape surface, so
+  # a regression to "silently no warning" (the [W-QUIETER] direction) would have
+  # been invisible.  Pin all three halves: exit 0, the warning on STDERR, and a
+  # binary actually produced (the warning must not become an error).
+  nub_f="$FIX/run/main_shape_nonunit.mdk"
+  nub_err="$TMP/nat_main_shape_nonunit_build.err"
+  ( export MEDAKA_ROOT="$ROOT"; export MEDAKA_EMITTER="$EMITTER"; bound "$MEDAKA" build "$nub_f" -o "$TMP/nat_build_nonunit" ) >/dev/null 2>"$nub_err"
+  nub_status=$?
+  if [ "$nub_status" -eq 0 ] && [ -x "$TMP/nat_build_nonunit" ] &&
+     grep -q "must be a value of type Unit" "$nub_err"; then
+    pass=$((pass+1)); printf 'ok   build/main_shape_nonunit (exit 0, W-MAIN-SHAPE on stderr)\n'
+  else
+    fail=$((fail+1)); printf 'FAIL build/main_shape_nonunit (want exit 0 + binary + W-MAIN-SHAPE on stderr, got exit %s stderr [%s])\n' "$nub_status" "$(cat "$nub_err" 2>/dev/null)"
+  fi
 fi
 
 # error/* — RETIRED with the OCaml oracle (native canonical; oracle-coupled leg

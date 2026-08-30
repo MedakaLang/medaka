@@ -76,6 +76,10 @@ test/error_quality_fixtures/capture   captures the error-quality baseline .out g
 # ── measurement (no pass/fail verdict) ──
 test/bench                     perf harness. Reports numbers; asserts nothing.
 test/perf_baseline             CLI-verb latency harness. Reports numbers; asserts nothing.
+                                (The real assertion derived from its `check`/hello Ir
+                                co-metric lives nearby, as a GATE, not here:
+                                test/diff_compiler_check_ir_floor.sh — S-5-floor-ratchet,
+                                epic #2036. This script itself still asserts nothing.)
 test/profile_compiler          per-stage time/allocation profiler.
 test/tmc_census                emits the TMC census that diff_compiler_tmc_parity CONSUMES.
 test/wasm/w1                   a scratch wasm probe.

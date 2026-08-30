@@ -36456,12 +36456,54 @@ checkModuleFullDiags mid seedVars accData accAll prog =
 -- a same-named function from a non-imported module win by load order (e.g.
 -- string.reverse shadowing the list.reverse a module imports → spurious errors).
 -- worker: ISOLATED per-module diagnostics harvest (checkModuleFullDiags — see its
--- doc above).  Surfaces this module's own `schemes` (for pubV) plus its (errs, warns)
--- payload.  IMPORT-SCOPED seed exactly like cmCheckWorker; NOT a flat union.
-cmDiagsWorker : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), (List TcDiag, List TcDiag))
+-- doc above).  Surfaces this module's own `schemes` (for pubV) plus its
+-- (schemes, errs, warns) payload.  IMPORT-SCOPED seed exactly like cmCheckWorker;
+-- NOT a flat union.
+-- ⚠️ #2246: the payload carries `schemes` a SECOND time — exactly as `cmEntryWorker`
+-- does, and for exactly the same reason.  `foldModules` hands the worker's FIRST
+-- component to the NEXT module (it is the fold's seed, never `collect`'s), so the
+-- only way the terminal module's own bindings reach `cmDiagsCollect` — which owes
+-- `mainSchemeRef` its SET-OR-CLEAR write — is inside the payload.  Costs nothing:
+-- `checkModuleFullDiags` already computed them.
+cmDiagsWorker : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), (List (String, Scheme), List TcDiag, List TcDiag))
 cmDiagsWorker mid seed accData accAll prog =
   let (schemes, errs, warns) = checkModuleFullDiags mid seed accData accAll prog
-  (schemes, (errs, warns))
+  (schemes, (schemes, errs, warns))
+
+-- collect for checkModulesDiags: strips the payload's `schemes` back off so the
+-- returned list shape stays `(mid, (errs, warns))` — `checkModulesDiags`'s exported
+-- signature (a selfproc LEG A row) is UNCHANGED by #2246 — but first, on the
+-- TERMINAL module only, records that module's `main` scheme.
+--
+-- #2246: this is the multi-module `analyzeProject` path's ONLY producer of
+-- `mainSchemeRef`.  S-3 (#2234) made `mainShapeWarnings` pure — it now READS the ref
+-- rather than re-elaborating — which was correct for every caller that had a
+-- producer, but `checkJsonFile`'s multi-module arm (driver/diagnostics.mdk) had NONE:
+-- `analyzeProject` → `typecheckPass` → here, and nothing on that chain wrote it.
+-- Both directions of that hole are pinned:
+--   * fresh process — the ref is `None`, `mainTypeIsUnit ()` answers False on `None`,
+--     so W-MAIN-SHAPE FIRED on a clean Unit main (false positive on every
+--     `check --json` / MCP `medaka_check` of a multi-module project);
+--   * long-lived process (`medaka mcp`, `medaka lsp`) — the ref held whatever an
+--     EARLIER request left, so a genuinely non-Unit `main` had its real warning
+--     SILENTLY VANISH behind a previous request's Unit scheme.  [W-QUIETER]: that
+--     direction is the more dangerous one.
+-- SET-OR-CLEAR in ONE write, never a conditional/partial one: `lookupAssoc` yields
+-- `None` when the terminal module has no `main`, and writing that `None` is what
+-- clears a previous run's leftover.  Mirrors `checkModulesEntryFullSplit`'s write
+-- (same last-wins entry-module rule; dependency-first order puts the entry last).
+cmDiagsCollect : Bool -> String -> (List (String, Scheme), List TcDiag, List TcDiag) -> List (String, (List TcDiag, List TcDiag)) -> List (String, (List TcDiag, List TcDiag))
+cmDiagsCollect isLast mid (schemes, errs, warns) rest =
+  let _ = setMainSchemeIfEntry isLast schemes
+  (mid, (errs, warns))::rest
+
+-- The SET-OR-CLEAR write itself, on the terminal (entry) module only.  Split out of
+-- `cmDiagsCollect` so the "never a partial write" property is one two-clause
+-- function rather than an inline conditional.
+setMainSchemeIfEntry : Bool -> List (String, Scheme) -> Unit
+setMainSchemeIfEntry False _ = ()
+setMainSchemeIfEntry True schemes =
+  driverState.value.mainSchemeRef := lookupAssoc "main" schemes
 
 export
 checkModulesDiags : List Decl -> List Decl -> List (String, List Decl) -> List (String, (List TcDiag, List TcDiag))
@@ -36480,7 +36522,7 @@ checkModulesDiags runtimeDecls coreDecls0 modules0 =
     True
     True
     cmDiagsWorker
-    (_last mid ew rest => (mid, ew) :: rest)
+    cmDiagsCollect
     []
     (runtimeSeed ++ coreSchemes)
     coreSchemes
@@ -36754,6 +36796,36 @@ checkOneDiags : List Decl -> List Decl -> (String, List Decl) -> (List TcDiag, L
 checkOneDiags runtimeDecls coreDecls (rootId, prog) =
   let (_, errs, warns) = checkModulesEntryFull runtimeDecls coreDecls [(rootId, prog)]
   (errs, warns)
+
+-- `checkOneDiags` for a SYNTHETIC program — one this driver derived from the user's
+-- rather than one the user wrote — with `mainSchemeRef` SAVED AND RESTORED across it.
+--
+-- WHY THIS EXISTS.  `checkModulesEntryFullSplit` records the entry module's `main`
+-- scheme in `mainSchemeRef` (#2155, see the SET-OR-CLEAR comment there), which is the
+-- sole input to `mainTypeIsUnit`/`mainTypeIsAsync`/`mainTypeIsFloat`.  That is right
+-- for a check of the user's OWN program and wrong for a check of a program this
+-- compiler invented: `underivedMainDiags` (driver/main_autoprint.mdk) re-checks the
+-- auto-print WRAP (`main = 5` ⟶ `main = println 5`), whose `main` is `<IO> Unit` by
+-- construction.  Letting that write through means every later reader of
+-- `mainTypeIsUnit ()` is told the user's non-Unit `main` is Unit — the exact predicate
+-- `mainNonUnitWarning` consults to decide whether to warn.
+--
+-- The clobber was real but MASKED: `mainShapeWarnings` used to re-run a whole
+-- `elaborateModules` immediately afterwards purely for `mainSchemeRef`, which
+-- overwrote the residue before anything read it.  Removing that redundant third
+-- prelude typecheck (S-3, #2234) is what makes the residue observable, so the two
+-- changes must travel together — with the save/restore alone, deleting the elaborate
+-- silently DELETED the `W-MAIN-SHAPE` warning on `medaka build` and on
+-- `medaka check --json` (measured: 8 warning sites before, 6 after, both single-file;
+-- multi-module is unaffected because `underivedMainDiags` only matches a singleton
+-- module list and returns [] otherwise).
+export
+checkOneDiagsSynthetic : List Decl -> List Decl -> (String, List Decl) -> (List TcDiag, List TcDiag)
+checkOneDiagsSynthetic runtimeDecls coreDecls prog =
+  let savedMain = driverState.value.mainSchemeRef.value
+  let res = checkOneDiags runtimeDecls coreDecls prog
+  driverState.value.mainSchemeRef := savedMain
+  res
 
 -- S-migrate-check-route (E-1 #1115): thin ONE-MODULE String/Bool wrappers, matching
 -- `checkToLinesWithRuntime`'s / `checkErrorsWithRuntime`'s (runtimeDecls, coreProg,

@@ -1,0 +1,18 @@
+-- #2246 regression lock, FALSE-POSITIVE direction.  A clean MULTI-MODULE project
+-- whose `main` is a plain Unit value must report ZERO diagnostics through
+-- `check --json` (the `analyzeProject` route).
+--
+-- Until #2246 this golden was impossible: S-3 (#2234) deleted the extra
+-- `elaborateModules` that used to populate `mainSchemeRef` for `checkJsonFile`'s
+-- multi-module arm, and nothing on the `analyzeProject` → `typecheckPass` →
+-- `checkModulesDiags` chain replaced it.  In a fresh process the ref is `None`,
+-- `mainTypeIsUnit ()` answers False on `None`, and W-MAIN-SHAPE fired here — a
+-- false positive on every `check --json` / MCP `medaka_check` of a multi-module
+-- project with a perfectly good Unit main.
+--
+-- ⚠️ MULTI-MODULE ON PURPOSE: the single-module arm has always had a producer
+-- (`analyzeLocatedG`), so a single-file version of this fixture is green either
+-- way and proves nothing.
+import lib.{bump}
+
+main = println (bump 1)
