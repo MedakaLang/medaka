@@ -1488,6 +1488,8 @@ jobs:
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
           MG_BASE: ${{ github.event.merge_group.base_sha }}
           MG_HEAD: ${{ github.event.merge_group.head_sha }}
+          MG_REF: ${{ github.event.merge_group.head_ref }}
+          GH_SHA: ${{ github.sha }}
         run: |
           set -u
           echo "event: $EVENT"
@@ -1502,7 +1504,25 @@ jobs:
           base=""; head=""
           case "$EVENT" in
             pull_request*) base="$PR_BASE"; head="$PR_HEAD" ;;
-            merge_group)   base="$MG_BASE"; head="$MG_HEAD" ;;
+            merge_group)
+              # `pull_request.{base,head}.sha` are long-standing documented
+              # fields; the `merge_group` payload's are NOT enumerated in
+              # GitHub's webhook docs, so this arm must not DEPEND on their
+              # names. Verified live instead: a merge_group run's `github.sha`
+              # IS the queue's auto-merge commit (measured — the run for PR
+              # #2212 resolved to 93a40382), and the queue branch is named
+              # `gh-readonly-queue/<base-branch>/pr-<N>-<base-sha>`, so the
+              # base is recoverable from the ref when the field is not.
+              head="$MG_HEAD"
+              [ -n "$head" ] || head="$GH_SHA"
+              base="$MG_BASE"
+              if [ -z "$base" ]; then
+                cand="${MG_REF##*-}"
+                case "$cand" in
+                  [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) base="$cand" ;;
+                esac
+              fi
+              ;;
           esac
 
           # `push` / `workflow_dispatch` / `schedule` check out the author's
