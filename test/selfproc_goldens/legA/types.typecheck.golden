@@ -496,6 +496,7 @@ ctorSiblingWithholds : String -> String -> Bool
 currentDoOrigin : Ref (Option Loc)
 currentLoc : Ref (Option Loc)
 currentLocalSchemes : Unit -> List (String, Scheme)
+currentLocalSchemesLoc : Unit -> List (String, Option Loc, Scheme)
 currentMethodMismatch : Ref (Option String)
 currentSeedSchemes : Unit -> List (String, Scheme)
 cyclicSuperIfaceMsg : List String -> String
@@ -686,6 +687,7 @@ drenderN : Param -> String
 driverState : Ref DriverState
 dropCtorIdentCand : Ident -> List (Ident, String, Scheme) -> List (Ident, String, Scheme)
 dropFirst : Int -> List a -> List a
+dropLocalLocs : List (String, Option Loc, Scheme) -> List (String, Scheme)
 dropMethodIdentCand : Ident -> List (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> List (Ident, (IfaceRef, List String, Ty, List (String, List Kind)))
 dropN : Int -> List a -> List a
 dropRecordIdentCand : Ident -> List (Ident, String, RecordInfo) -> List (Ident, String, RecordInfo)
@@ -1190,7 +1192,7 @@ inferParamKinds : List String -> List Variant -> List Kind
 inferParamPolarities : List (TabKey, List Polarity) -> List String -> List Variant -> List Polarity
 inferParamRowAtoms : List String -> List Variant -> List (List Atom)
 inferPat : TcEnv -> Pat -> (Mono, List (String, Scheme))
-inferPatAs : TcEnv -> String -> Pat -> (Mono, List (String, Scheme))
+inferPatAs : TcEnv -> String -> Loc -> Pat -> (Mono, List (String, Scheme))
 inferPatCon : TcEnv -> String -> List Pat -> (Mono, List (String, Scheme))
 inferPatConWith : TcEnv -> Scheme -> List Pat -> (Mono, List (String, Scheme))
 inferPatCons : TcEnv -> Pat -> Pat -> (Mono, List (String, Scheme))
@@ -1363,7 +1365,7 @@ mainTypeIsFloat : Unit -> Bool
 mainTypeIsUnit : Unit -> Bool
 mangledHeadCandidates : String -> String -> List (String, RecordInfo)
 mangledHeadCandidatesGo : String -> List String -> List (String, RecordInfo)
-mapLocalSchemes : List (String, Mono) -> List (String, Scheme)
+mapLocalSchemes : List (String, Option Loc, Mono) -> List (String, Option Loc, Scheme)
 markModules : List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
 markNumlitOpTaint : Mono -> Unit
 matchCol0Type : Mono -> Option TabKey
@@ -1697,7 +1699,7 @@ recordIfaceObligation : BuiltinClass -> Mono -> Unit
 recordImplObligation : String -> Mono -> Mono
 recordImporterShadowDicts : TcEnv -> String -> List (Ref Route) -> Mono -> Unit
 recordImporterShadowDictsAt : TcEnv -> String -> List (Ref Route) -> List Mono -> Mono -> Unit
-recordLocalBind : String -> Mono -> Unit
+recordLocalBind : String -> Option Loc -> Mono -> Unit
 recordMethodDicts : String -> Ref (List Route) -> List (Int, Mono) -> Unit
 recordMethodLevelObls : List String -> Ty -> Mono -> Unit
 recordMethodLevelSlotObls : List (String, IfaceRef) -> List (String, Mono) -> Unit

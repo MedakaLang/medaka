@@ -6699,15 +6699,35 @@ mkMethodOccObl iface typarams mty occ prov loc = UObligation {
 -- through functions — the form every other tools→typecheck import already uses.
 export
 currentLocalSchemes : Unit -> List (String, Scheme)
-currentLocalSchemes _ = perRun.value.localSchemesOut.value
+currentLocalSchemes _ = dropLocalLocs perRun.value.localSchemesOut.value
+
+-- #2092: the same list WITH each binder's own `Loc` (`None` where the binding
+-- site had no location to give).  The bare-name pairs above cannot answer
+-- "is the cursor inside THIS binding's scope?" — they carry no position at all,
+-- so the LSP's `hoverScheme` had to consult them AFTER the (prelude-bearing)
+-- env, and a local shadowing a prelude name never got a chance to answer.
+-- Position-aware consumers read this; the bare-name view stays for the
+-- consumers (completion tiers) that genuinely want every local regardless of
+-- where the cursor is.
+export
+currentLocalSchemesLoc : Unit -> List (String, Option Loc, Scheme)
+currentLocalSchemesLoc _ = perRun.value.localSchemesOut.value
+
+dropLocalLocs : List (String, Option Loc, Scheme) -> List (String, Scheme)
+dropLocalLocs [] = []
+dropLocalLocs ((n, _, s)::rest) = (n, s) :: dropLocalLocs rest
 
 export
 currentSeedSchemes : Unit -> List (String, Scheme)
 currentSeedSchemes _ = perRun.value.seedSchemesOut.value
 
-recordLocalBind : String -> Mono -> Unit
-recordLocalBind name v =
-  perRun.value.localBindRefs := (name, v)::perRun.value.localBindRefs.value
+-- `loc` is the BINDER's own source span (#2092) — `None` only where the binding
+-- site genuinely has none to give.  Discarding it is what made the hover tier
+-- order unfixable: without a position there is no way to tell a local that is
+-- in scope at the cursor from one bound in an unrelated declaration.
+recordLocalBind : String -> Option Loc -> Mono -> Unit
+recordLocalBind name loc v =
+  perRun.value.localBindRefs := (name, loc, v)::perRun.value.localBindRefs.value
 
 -- dict-passing state (the typed pipeline's `=>`-constraint layer):
 --   activeDictVars   : constraint tyvar id → the dict parameter name a method
@@ -8290,8 +8310,8 @@ data PerRun = PerRun {
     numlitUntainted : Ref (List (Mono, Loc)),
     numlitOpLocs : Ref (List Loc),
     numlitCtxTags : Ref (List (Loc, String)),
-    localBindRefs : Ref (List (String, Mono)),
-    localSchemesOut : Ref (List (String, Scheme)),
+    localBindRefs : Ref (List (String, Option Loc, Mono)),
+    localSchemesOut : Ref (List (String, Option Loc, Scheme)),
     seedSchemesOut : Ref (List (String, Scheme)),
     pendingArgStamps : Ref (List PendingEntry),
     activeDictVars : Ref (List (Int, String)),
@@ -9030,9 +9050,9 @@ generalize t =
 -- the LSP hover fallback (see localBindRefs).  Runs at the end of inference when
 -- currentLevel is back at the top, so a still-free local var quantifies cleanly
 -- to `a`; a ground var (e.g. a `let` bound to a String) renders concretely.
-mapLocalSchemes : List (String, Mono) -> List (String, Scheme)
+mapLocalSchemes : List (String, Option Loc, Mono) -> List (String, Option Loc, Scheme)
 mapLocalSchemes [] = []
-mapLocalSchemes ((n, m)::rest) = (n, generalize m) :: mapLocalSchemes rest
+mapLocalSchemes ((n, l, m)::rest) = (n, l, generalize m) :: mapLocalSchemes rest
 
 -- ── value restriction (T1) ────────────────────────────────────────────────
 -- A binding RHS is *non-expansive* (a syntactic value) iff it cannot allocate a
@@ -10164,9 +10184,9 @@ monoScheme t = Forall [] [] t
 
 -- ── pattern inference: returns the pattern's type + the bindings it adds ───
 inferPat : TcEnv -> Pat -> (Mono, List (String, Scheme))
-inferPat _ (PVar x _) =
+inferPat _ (PVar x xloc) =
   let v = freshVar ()
-  let _ = recordLocalBind x v
+  let _ = recordLocalBind x (Some xloc) v
   (v, [(x, monoScheme v)])
 inferPat _ PWild = (freshVar (), [])
 inferPat _ (PLit l) = (litType l, [])
@@ -10174,7 +10194,7 @@ inferPat env (PCon name pats) = inferPatCon env name pats
 inferPat env (PTuple pats) = inferPatTuple env pats
 inferPat env (PCons h t) = inferPatCons env h t
 inferPat env (PList pats) = inferPatList env pats
-inferPat env (PAs x _ p) = inferPatAs env x p
+inferPat env (PAs x xloc p) = inferPatAs env x xloc p
 inferPat env (PRec name fields _) = inferPatRec env name fields
 inferPat _ (PRng lo hi _) = inferPatRng lo hi
 inferPat _ _ = panic "typecheck: unsupported pattern"
@@ -10290,10 +10310,10 @@ inferPatList env pats =
   let _ = unifyAll elem (fst pr)
   (TApp (tconBuiltin "List") elem, snd pr)
 
-inferPatAs : TcEnv -> String -> Pat -> (Mono, List (String, Scheme))
-inferPatAs env x p =
+inferPatAs : TcEnv -> String -> Loc -> Pat -> (Mono, List (String, Scheme))
+inferPatAs env x xloc p =
   let pr = inferPat env p
-  let _ = recordLocalBind x (fst pr)
+  let _ = recordLocalBind x (Some xloc) (fst pr)
   (fst pr, (x, monoScheme (fst pr)) :: snd pr)
 
 unifyAll : Mono -> List Mono -> Unit
@@ -11618,7 +11638,7 @@ blockRecLet env x xloc e =
   let addedObls = wWindow perRun.value.implObls oblN0
   let _ = defaultAmbiguousNum addedObls t1  -- PLAN.md #11
   let _ = registerAmbiguousConstraints addedObls [t1]  -- RETPOS soundness
-  let _ = recordLocalBind x t1  -- LSP hover (block rec-let bypasses inferPat)
+  let _ = recordLocalBind x xloc t1  -- LSP hover (block rec-let bypasses inferPat)
   let sch = genRestricted (not (pinLocalIfDictForwarded callN0 dictN0 x xloc t1)) t1  -- #866
   let _ = registerLocalScheme x sch oblN0 callN0 dictN0
   seedAlphaLets (extendLocalVar env x sch) x e  -- WS-2: α scope-seed
@@ -11634,7 +11654,7 @@ blockLet env (PVar x xloc) e =
   let addedObls = wWindow perRun.value.implObls oblN0
   let _ = defaultAmbiguousNum addedObls t   -- PLAN.md #11
   let _ = registerAmbiguousConstraints addedObls [t]   -- RETPOS soundness
-  let _ = recordLocalBind x t   -- LSP hover (block let bypasses inferPat)
+  let _ = recordLocalBind x (Some xloc) t   -- LSP hover (block let bypasses inferPat)
   let sch = genRestricted (isNonexpansive env e && not (pinLocalIfDictForwarded callN0 dictN0 x (Some xloc) t)) t  -- #866
   let _ = registerLocalScheme x sch oblN0 callN0 dictN0
   -- WS-2: α scope-seed — bindings are immutable, so the prefix is stable.
@@ -15693,7 +15713,7 @@ inferRecLet env x xloc e1 e2 =
   let addedObls = wWindow perRun.value.implObls oblN0
   let _ = defaultAmbiguousNum addedObls t1  -- PLAN.md #11
   let _ = registerAmbiguousConstraints addedObls [t1]  -- RETPOS soundness
-  let _ = recordLocalBind x t1  -- LSP hover (recursive PVar let bypasses inferPat)
+  let _ = recordLocalBind x xloc t1  -- LSP hover (recursive PVar let bypasses inferPat)
   let sch = genRestricted (not (pinLocalIfDictForwarded callN0 dictN0 x xloc t1)) t1  -- #866
   let _ = registerLocalScheme x sch oblN0 callN0 dictN0
   infer (seedAlphaLets (extendLocalVar env x sch) x e1) e2  -- WS-2: α scope-seed
@@ -15762,7 +15782,7 @@ inferLetSimple env pat e1 e2 =
 
 inferLetBody : TcEnv -> Pat -> Mono -> Expr -> Expr -> Int -> Int -> Int -> Mono
 inferLetBody env (PVar x xloc) t1 e1 e2 oblN0 callN0 dictN0 =
-  let _ = recordLocalBind x t1  -- LSP hover (PVar let bypasses inferPat)
+  let _ = recordLocalBind x (Some xloc) t1  -- LSP hover (PVar let bypasses inferPat)
   let sch = genRestricted (isNonexpansive env e1 && not (pinLocalIfDictForwarded callN0 dictN0 x (Some xloc) t1)) t1  -- #866
   let _ = registerLocalScheme x sch oblN0 callN0 dictN0
   infer (seedAlphaLets (extendLocalVar env x sch) x e1) e2  -- WS-2: α scope-seed
