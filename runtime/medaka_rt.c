@@ -773,8 +773,20 @@ long long mdk_string_concat(long long list) {
        not 0b10 - a per-BYTE predicate with no cross-byte state - so its count over
        the concatenation of two byte spans is always the sum of its counts over each
        span, for ill-formed UTF-8 as much as well-formed.  Each operand cell already
-       stores that count at word 2 (every cell is minted by mdk_str_lit, which is the
-       only producer), so the sum is exactly what a rescan would have returned.
+       stores a cp_count at word 2, so the sum is exactly what a rescan would have
+       returned - PROVIDED every producer of a String cell stores a count that agrees
+       with mdk_utf8_cp_count's definition.  That, not "only one producer", is the
+       real invariant, and there are THREE producers, all of which satisfy it:
+         - mdk_str_lit (below), which calls mdk_utf8_cp_count outright;
+         - this function, whose result is a sum of two conforming counts (induction);
+         - the EMITTER, which mints a String-literal cell as a module-scope constant
+           (`@.strc.N`, llvm_emit.mdk `emitLit (LString s)`) with the count computed
+           at compile time as `arrayLength (stringToChars s)` - i.e. one per decoded
+           codepoint, which for the byte encoding of that same literal is exactly the
+           number of non-continuation bytes mdk_utf8_cp_count would count.
+       Adding a FOURTH producer that stores anything else (a UTF-16 unit count, a
+       grapheme count, a lazily-filled 0) silently breaks this function, without
+       touching it.
    Atomic allocation is retained (the cell is a header plus raw bytes, never a
    pointer), and every byte of it is written here, so GC_malloc_atomic not zeroing is
    irrelevant - matching mdk_str_lit's own contract. */

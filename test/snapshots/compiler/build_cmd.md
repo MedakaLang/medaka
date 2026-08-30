@@ -1,5 +1,5 @@
 # META
-source_lines=1050
+source_lines=1068
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/build_cmd.mdk — `medaka build` ported to self-hosted Medaka
@@ -731,8 +731,26 @@ missingLibMsg projRoot name dir =
 -- fingerprint cannot see: medaka_rt.c's own contents, the clang binary and its
 -- version, MEDAKA_CLANG_OPT, and detectGC's discovered cflags.  Keying on the
 -- compiler fingerprint would be silently wrong the moment medaka_rt.c changed
--- without a compiler-source edit alongside it.  We hash exactly the inputs:
--- the cc name, `cc --version`, the full compile flag list, and the .c source.
+-- without a compiler-source edit alongside it.  What we hash, exactly and only:
+-- the cc name, `cc --version`, the full compile flag list (opt level + -pthread
+-- + gcSectionsCflags + detectGC's cflags), and the CONTENTS of medaka_rt.c.
+--
+-- ⚠️ KNOWN GAPS in that key — it is NOT a complete function of everything the
+-- object depends on, and this comment used to read as though it were.  Inputs
+-- that can change the emitted object WITHOUT changing the key:
+--   * the include search path from the environment (CPATH, C_INCLUDE_PATH) — a
+--     different gc.h found for the same cc/flags;
+--   * an IN-PLACE upgrade of a system header or of libgc that leaves the cc
+--     version string untouched (the .c source and flags are unchanged, so the
+--     key is too — headers are not hashed, only medaka_rt.c itself);
+--   * on macOS, SDKROOT / MACOSX_DEPLOYMENT_TARGET, which retarget the compile
+--     without appearing in the flag list we hash.
+-- Each is low-probability on a developer box and none is silent-wrongness in the
+-- usual sense (a stale object still links and runs; it is stale, not wrong-for-
+-- this-program).  Widening the key to cover them is real design work — hashing a
+-- preprocessed translation unit, or the resolved header set — and is tracked as
+-- a follow-up rather than bolted on here.  The escape hatch in the meantime is
+-- MEDAKA_NO_OBJ_CACHE=1, or deleting the cache directory.
 --
 -- ⚠️ CONCURRENCY [G-BUILD-RACE].  The cache is written the same way the rest of
 -- this driver writes shared paths: compile into an `mktemp`-allocated file
