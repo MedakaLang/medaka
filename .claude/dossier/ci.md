@@ -705,6 +705,24 @@ either order leaves a window where the required set names contexts nothing produ
    ordering of the two writes can deadlock.
 3. **PR B** deletes the eight alias jobs.
 
+**COMPLETED 2026-08-30**, all three steps: PR #2260 (step 1, `b35268c0`), the ruleset swap
+(step 2, ruleset `18885875` — verified by read-back, 14 required contexts, `gates_1`…`gates_8`
+in and the eight `gates (…)` out, enforcement active), PR #2274 (step 3). ⚠️ **The required
+set is now `gates_1`…`gates_8`; `gates (<theme>)` no longer exists in either system.** A
+`gates (…)` job name surviving anywhere in tooling is reading HISTORICAL runs, not live ones —
+`scripts/ci_shard_cost.sh` still filters them out for exactly that reason, and that filter may
+not be dropped until no admissible run predates the alias deletion.
+
+⚠️ **The middle step cost more than the plan said.** Step 1 sat blocked for hours behind an
+unrelated red: `diff_compiler_perf_scaling`'s `modules:typecheck` TIME row (#1879) bounced
+PR #2260 out of the queue, having already bounced PR #2245 three times. The gate's own comment
+asserted that row was "a property of this box ... while CI passes on the same commit. Re-run or
+re-enqueue" — false; CI reads the same 2.22–3.21 band. Fixed by PR #2268 (the `modules` TIME
+verdict had no ledger arm at all, being open-coded outside the SHAPES loop). **The lesson for
+the next 3-step migration: check `gh issue list --label known-red` and the queue's recent
+bounce history BEFORE step 1, because the alias window is not free — it is a window in which
+two required sets must both stay green.**
+
 **Two things the rename costs, both self-healing.** `gate balance`'s calibration column keys the
 baseline's recorded run rows by shard NAME, so every row reads `(no recorded run)` until the
 first post-rename cost ingest — fail-open by construction, and it does not move the packing
