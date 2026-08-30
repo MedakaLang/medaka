@@ -24,7 +24,8 @@
 -- unemittable construct → `panic: … gap …`) or empty IR aborts the build with
 -- the emitter's own diagnostic surfaced.
 
-import support.util.{reverseL, stringTrim, joinWith}
+import support.util.{stringTrim, joinWith}
+import string.{words}
 import support.timer.{perfEnabled, now, emitPhase}
 import driver.loader.{entrySearchRoots, findProjectRootOrSelf, readForeignLibs}
 import support.path.{dirOf, chopExt, joinPath}
@@ -45,29 +46,6 @@ public export data BuildTarget = TNative | TWasm
 appendNote : String -> BuildResult -> BuildResult
 appendNote note (BuildOk m) = BuildOk (m ++ note)
 appendNote note (BuildErr m) = BuildErr (m ++ note)
-
--- ---- small string helpers (externs only — keeps this module self-contained) ----
-
--- Strip leading/trailing ASCII whitespace: stringTrim (from support/util.mdk).
-
-isWS : String -> Bool
-isWS c = c == " " || c == "\n" || c == "\t" || c == "\r"
-
--- Split a whitespace-separated flag string into a list of non-empty tokens.
-splitWS : String -> List String
-splitWS s = splitWSGo (stringTrim s) 0 0 []
-
-splitWSGo : String -> Int -> Int -> List String -> List String
-splitWSGo s i start acc =
-  let n = stringLength s
-  if i >= n then if i > start then reverseL (stringSlice start i s :: acc) else reverseL acc
-  else
-    if isWS (stringSlice i (i + 1) s) then
-      let acc2 = if i > start then stringSlice start i s :: acc else acc
-      splitWSGo s (i + 1) (i + 1) acc2
-    else splitWSGo s (i + 1) start acc
-
--- dirname / basename / chop-extension / join now live in support/path.mdk.
 
 -- ---- environment / asset resolution ----
 
@@ -242,7 +220,7 @@ sweepStaleTempDirs _ =
     "+360",
   ]
   match runCommand "find" findArgs
-    Ok (_, out, _) => sweepEachStale (splitWS out)
+    Ok (_, out, _) => sweepEachStale (words out)
     Err _ => ()
 
 sweepEachStale : List String -> <IO> Unit
@@ -259,7 +237,7 @@ detectGC cc tmpDir = match runCommand "pkg-config" ["--exists", "bdw-gc"]
   Ok (0, _, _) =>
     let cflags = gcQuery "pkg-config" ["--cflags", "bdw-gc"]
     let libs = gcQuery "pkg-config" ["--libs", "bdw-gc"]
-    Some (splitWS cflags, splitWS libs)
+    Some (words cflags, words libs)
   _ => detectGCBrew cc tmpDir
 
 gcQuery : String -> List String -> <IO> String
