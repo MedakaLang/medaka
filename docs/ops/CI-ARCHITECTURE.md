@@ -1,10 +1,21 @@
 # CI-ARCHITECTURE.md — target architecture for Medaka's CI
 
-**Status:** DESIGN — adopted 2026-08-28 (Val), epic #2182 (sub-issues #2176–#2181).
-Nothing here is built yet except the `gates (pds)` required-check fix (done directly on
-ruleset 18885875, 2026-08-28). This doc is the design authority for the epic; the
-sub-issue bodies are scope ledgers that point back here. Companion:
+**Status:** PARTLY BUILT — adopted 2026-08-28 (Val), epic #2182 (sub-issues
+#2176–#2181). This doc is the design authority for the epic; the sub-issue bodies are
+scope ledgers that point back here. Companion:
 [GATE-REGISTRY-DESIGN.md](GATE-REGISTRY-DESIGN.md) (the registry format).
+
+Per-section status — derive the authoritative version from the issues
+(`gh issue view 2182`), never from this table alone:
+
+| § | Sub-issue | State |
+|---|---|---|
+| 3.1 registry + `medaka gate` | #2176 | BUILT |
+| 3.2 generated `ci.yml` | #2177 | BUILT (`ci-gen-drift` is a required context) |
+| 3.3 identity ⊥ scheduling | #2178 | BUILT — derived assignment, area-reported failures, and the neutral executor names |
+| 3.4 graph-scoped project suites | #2179 | NOT STARTED |
+| 3.5 cost ratchet | #2180 | BUILT. ⚠️ Its `gate-budget` job is NOT in the required-check set (derived from ruleset 18885875, 2026-08-30) — a red budget does not block a merge. `ci-gen-drift` IS required, and it runs `medaka gate balance --check`, so a hand-edited assignment is blocked; an over-budget one is not. |
+| 3.6 tier-3 charter | #2181 | NOT STARTED |
 
 ---
 
@@ -191,7 +202,11 @@ suite) to avoid narrowing an unrelated ci.yml hand-edit's coverage.
   and annotations say "backend: diff_compiler_ir_size failed", never "gates-3 failed".
 - **Shard assignment is a derived output**: a balancer packs gates into N executors
   from per-gate timings recorded by the driver on green merge_group runs. Executor
-  names go neutral (`gates-1`…`gates-N`) so no name can lie about contents.
+  names go neutral so no name can lie about contents. **AS BUILT the spelling is
+  `gates_1`…`gates_8`, with an underscore**, not the `gates-N` this section first
+  proposed: `medaka gate verify`'s name-safety class allows only letters, digits, `_`,
+  `.` and `/` in a registry name, and bending the name to the existing rule was
+  preferred over widening a safety check for a cosmetic gain (Val, 2026-08-30).
 - Assignments are **committed** (generated), not computed per-run — a rebalance is a
   reviewable diff. ⚠️ **AS BUILT, the hysteresis band annotates rather than decides**
   (S-4-S-derived-assignment, #2178): the emitted assignment is always the balancer's
@@ -203,7 +218,20 @@ suite) to avoid narrowing an unrelated ci.yml hand-edit's coverage.
   that gate in `test/gates.toml` too; the repair is two mechanical commands.
 - The required-context rename is a 3-step ruleset migration (add new contexts → swap →
   delete old); a ruleset edit is not atomic with a commit — plan it as its own PR
-  pair. Oracle-cache keys keep the derive-from-pattern property or re-key
+  pair. **AS EXECUTED** (2026-08-30): PR A renamed the matrix rows AND added eight
+  `gates_alias_*` jobs whose display names are the eight retired `gates (<theme>)`
+  contexts, each gating on `needs.gates.result` — the roll-up of all eight rows, so an
+  alias is green only when EVERY row is, which is strictly stronger than the per-row
+  context it stands in for. That makes the window between PR A and the ruleset swap
+  safe in both directions: the old required contexts keep reporting, and nothing the
+  old set would have caught can slip through. The ruleset then swaps to the eight
+  `gates_N` contexts, and PR B deletes the aliases. **All three steps COMPLETED
+  2026-08-30**: PR #2260, the ruleset swap (`18885875`, verified by read-back — 14
+  required contexts, the eight `gates (…)` gone), PR #2274. The required set is now
+  `gates_1`…`gates_8`. ⚠️ The rename blanks
+  `gate balance`'s calibration column (it keys the recorded run rows by shard name, and
+  no run has reported under the new names yet) — fail-open by construction, self-heals
+  on the first post-rename cost ingest. Oracle-cache keys keep the derive-from-pattern property or re-key
   deliberately (see `.claude/dossier/ci.md` § oracle cache keying).
 
 ### 3.4 Dependency graph + project scoping in the queue (#2179)
