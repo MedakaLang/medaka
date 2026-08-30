@@ -42,6 +42,11 @@
 # factor is a function of the sample count it was fitted at.
 # `medaka gate balance` prints the current figure on every run. Derivation,
 # protocol and the full table: docs/ops/GATE-REGISTRY-DESIGN.md §8.
+# ⚠️ The -12.6% is S-2's DATED measurement, taken under the positional run
+# attribution FR-1 replaced with the recorded `sampleRuns` below; the balancer
+# reports "not derivable" until enough attributed ingests have landed to
+# re-take it. The choice of statistic does not rest on that alignment; the
+# percentage does.
 #
 # ⚠️ `median()` below and `packStat` in compiler/tools/gate_cost.mdk are two
 # implementations of ONE rule. They must not drift; `balOosBlock` counts the
@@ -66,6 +71,18 @@
 # A FAILING gate contributes no sample: its `ms` is the cost of failing, which
 # is not the cost of running, and a red gate is often red because it stopped
 # early. Its run is still recorded in `runs` so the provenance is honest.
+#
+# ── EACH SAMPLE CARRIES ITS OWN RUN (FR-1, #2222 review S0-1) ────────────────
+# Every `gates[]` row emits `sampleRuns`, the runId of each retained sample,
+# same length and same order as `ms`. It is written because the two retention
+# windows below are INDEPENDENT: `--max-runs` trims `runs[]` by total ROW
+# count and `--max-samples` trims each gate's `ms` by SAMPLE count, per gate,
+# with nothing tying them together. A reader that infers "ms[i] came from the
+# i-th retained run" from a count coincidence is therefore wrong exactly when
+# a gate has missed a run — silently, and with a confident number. Samples
+# carried over from a baseline written before this field stay UNATTRIBUTED
+# (empty string): their provenance was never recorded and guessing it back is
+# the defect, not the repair.
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -230,10 +247,15 @@ for r in $reports; do
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$key" "$rid" "$att" "$shd" "$ev" "$sha" "$ref" "$dat" "$ngates" \
     "$jobs" "$parallel" "$rowms" "$gdig" >>"$TMP/runs.tsv"
-  # name / ms, for the gates that actually PASSED.
+  # name / ms, for the gates that actually PASSED. The RUN this sample came
+  # from rides along as a fourth column (FR-1, #2222 review S0-1): it is
+  # already in hand here, and discarding it is what forced the reader to infer
+  # attribution from array POSITION — an inference that is wrong whenever the
+  # independent `--max-runs` and `--max-samples` trims disagree. Recorded, not
+  # derived.
   sed -n 's/^    {"name": "\([^"]*\)".*"ms": \([0-9][0-9]*\),.*"ok": true.*$/\1\t\2/p' \
     "$r" | while IFS='	' read -r gn gms; do
-      printf '%s\t%s\t%s\n' "$key" "$gn" "$gms" >>"$TMP/samples.tsv"
+      printf '%s\t%s\t%s\t%s\n' "$key" "$gn" "$gms" "$rid" >>"$TMP/samples.tsv"
     done
 done
 
@@ -273,9 +295,24 @@ BEGIN {
     if (sect == "gates" && line ~ /^    \{"name": /) {
       match(line, /"name": "[^"]*"/); g = substr(line, RSTART + 9, RLENGTH - 10)
       match(line, /"ms": \[[^]]*\]/); arr = substr(line, RSTART + 7, RLENGTH - 8)
-      if (!(g in gseen)) { gseen[g] = 1; ngate++; gorder[ngate] = g; gms[g] = "" }
+      # The samples carried over from the OLD file keep whatever attribution
+      # that file recorded, and NOTHING MORE. A baseline written before FR-1
+      # has no "sampleRuns" at all, and its samples stay unattributed ("-")
+      # forever: their provenance was never written down and is not
+      # recoverable from the file, so inventing one here would be exactly the
+      # positional guess this field exists to retire. New samples ingested
+      # from here on carry their real runId.
+      sr = ""
+      if (match(line, /"sampleRuns": \[[^]]*\]/)) sr = substr(line, RSTART + 15, RLENGTH - 16)
+      if (!(g in gseen)) { gseen[g] = 1; ngate++; gorder[ngate] = g; gms[g] = ""; gsr[g] = "" }
       n = split(arr, parts, /, */)
-      for (i = 1; i <= n; i++) if (parts[i] != "") gms[g] = gms[g] (gms[g] == "" ? "" : " ") parts[i]
+      ns = split(sr, sparts, /, */)
+      for (i = 1; i <= n; i++) if (parts[i] != "") {
+        gms[g] = gms[g] (gms[g] == "" ? "" : " ") parts[i]
+        t = "-"
+        if (ns == n) { t = sparts[i]; gsub(/"/, "", t); if (t == "") t = "-" }
+        gsr[g] = gsr[g] (gsr[g] == "" ? "" : " ") t
+      }
     }
   }
   close(oldf)
@@ -308,8 +345,10 @@ BEGIN {
     split(line, f, "\t")
     if (!(f[1] in accepted)) continue
     g = f[2]
-    if (!(g in gseen)) { gseen[g] = 1; ngate++; gorder[ngate] = g; gms[g] = "" }
+    if (!(g in gseen)) { gseen[g] = 1; ngate++; gorder[ngate] = g; gms[g] = ""; gsr[g] = "" }
     gms[g] = gms[g] (gms[g] == "" ? "" : " ") (f[3] + 0)
+    rr = f[4]; if (rr == "") rr = "-"
+    gsr[g] = gsr[g] (gsr[g] == "" ? "" : " ") rr
   }
   close(sampf)
 
@@ -337,14 +376,25 @@ BEGIN {
   for (i = 1; i <= ngate; i++) {
     g = gorder[i]
     n = split(gms[g], sv, " ")
+    ns = split(gsr[g], srv, " ")
     lo = n - maxs + 1; if (lo < 1) lo = 1
     m = 0
     for (j = lo; j <= n; j++) { m++; SORTV[m] = sv[j] + 0 }
     if (m == 0) continue
-    lst = ""
-    for (j = 1; j <= m; j++) lst = lst (j == 1 ? "" : ", ") (sv[lo + j - 1] + 0)
-    printf "%s    {\"name\": \"%s\", \"medianMs\": %d, \"samples\": %d, \"ms\": [%s]}",
-           sep, jesc(g), median(m), m, lst
+    # `sampleRuns` is trimmed by the SAME window as `ms` and emitted in the
+    # same order, which is the whole contract the reader relies on: element i
+    # of one describes element i of the other. It is NOT trimmed by, or
+    # reconciled against, the independent `--max-runs` trim of `runs[]` — that
+    # those two counters are unrelated is precisely why the attribution has to
+    # be carried per sample instead of inferred from a count.
+    lst = ""; slst = ""
+    for (j = 1; j <= m; j++) {
+      lst = lst (j == 1 ? "" : ", ") (sv[lo + j - 1] + 0)
+      t = (ns == n ? srv[lo + j - 1] : "-")
+      slst = slst (j == 1 ? "" : ", ") "\"" (t == "-" ? "" : jesc(t)) "\""
+    }
+    printf "%s    {\"name\": \"%s\", \"medianMs\": %d, \"samples\": %d, \"ms\": [%s], \"sampleRuns\": [%s]}",
+           sep, jesc(g), median(m), m, lst, slst
     sep = ",\n"
   }
   if (sep != "") printf "\n"

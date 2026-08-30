@@ -233,6 +233,50 @@ _smp="$(sed -n 's/^    {"name": "gate_a".*"samples": \([0-9]*\),.*$/\1/p' "$B")"
 [ "$_smp" = "5" ] && ok "all five samples retained raw in the file" \
                   || bad "samples was '$_smp', expected 5"
 
+# ── each sample carries ITS OWN run (FR-1, #2222 review S0-1) ────────────────
+#
+# The five reports above were ingested in runId order 5001..5005 and each
+# contributed one sample, so `sampleRuns` must read back in exactly that
+# order beside `ms`. This is what retires the positional inference the review
+# found: the reader no longer has to deduce which run a sample came from from
+# how many samples there happen to be, and a `sampleRuns` that drifted out of
+# step with `ms` would put that bug back one layer down.
+_srun="$(sed -n 's/^    {"name": "gate_a".*"sampleRuns": \[\([^]]*\)\].*$/\1/p' "$B")"
+if [ "$_srun" = '"5001", "5002", "5003", "5004", "5005"' ]; then
+  ok "each retained sample records the run it came from, in ms order"
+else
+  bad "sampleRuns was [$_srun], expected the five runIds 5001..5005 in order"
+fi
+
+# A baseline written BEFORE the field existed must carry forward UNATTRIBUTED,
+# never backfilled. The provenance of those samples was not recorded and is
+# not recoverable from the file, so inventing one — even a plausible one, even
+# by position — is the defect rather than the repair. New samples ingested on
+# top of it still carry their real runId, so the two are distinguishable in
+# the same array.
+BL="$TMP/legacy.json"
+cat >"$BL" <<'LEGACY_EOF'
+{
+  "schema": "gate-cost-baseline/1",
+  "note": "pre-FR-1 shape: ms with no sampleRuns",
+  "generated": "2026-01-01T00:00:00Z",
+  "maxSamples": 9,
+  "runs": [
+  ],
+  "gates": [
+    {"name": "gate_a", "medianMs": 100, "samples": 2, "ms": [100, 110]}
+  ]
+}
+LEGACY_EOF
+sh "$INGEST" --baseline "$BL" "$TMP/s1.json" >/dev/null 2>&1 \
+  || bad "ingest failed folding a report into a pre-FR-1 baseline"
+_lsr="$(sed -n 's/^    {"name": "gate_a".*"sampleRuns": \[\([^]]*\)\].*$/\1/p' "$BL")"
+if [ "$_lsr" = '"", "", "5001"' ]; then
+  ok "legacy samples carry forward unattributed; only the new sample names its run"
+else
+  bad "legacy carry-forward produced sampleRuns [$_lsr], expected [\"\", \"\", \"5001\"]"
+fi
+
 # jobs/parallel/rowElapsedMs (#2208) round-trip into the runs[] entry for the
 # run they came from, recorded per-run (not merged/averaged across runs).
 _run5001="$(grep '"runId": "5001"' "$B")"

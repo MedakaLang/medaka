@@ -1,0 +1,76 @@
+# test/gate_balance_fixtures/oos_attributed.toml — SYNTHETIC, hand-written.
+#
+# THE OUT-OF-SAMPLE FOLD, ON PROVENANCE THAT IS RECORDED RATHER THAN GUESSED
+# (FR-1, #2222 review S0-1).
+#
+# `oos_attributed.json` gives every run in `runs[]` an explicit per-sample
+# runId, so every fold `balOosBlock` prints is hand-calculable from the file —
+# which is the whole point of the pair: before FR-1 the block inferred which
+# run a sample came from out of its POSITION in `ms`, and there was no fixture
+# that could tell a right alignment from a wrong one, because both produce a
+# confident number.
+#
+# `g3` is the discriminator inside the fixture. It carries attribution for
+# runs 1 and 3 but NOT run 2, so it must be excluded and the header must read
+# "2 of 3 schedulable gates" — a block that folded it in on position would say
+# 3 of 3 and quietly grade run 2's estimate against run 3's measurement.
+#
+# The sample values are deliberately far apart. A fixture whose samples are
+# all within a few percent of each other cannot distinguish a correct fold
+# from a misaligned one: every permutation gives about the same answer.
+
+[[gate]]
+name = "g1"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/g1.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "g2"
+area = "fixture"
+shard = "b"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/g2.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "g3"
+area = "fixture"
+shard = "b"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/g3.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[shard]]
+name = "a"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/a.txt"
+pinned_gates = []
+
+[[shard]]
+name = "b"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/b.txt"
+pinned_gates = []

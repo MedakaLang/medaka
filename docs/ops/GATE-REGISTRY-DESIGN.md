@@ -627,12 +627,26 @@ gate's statistic is recomputed from the OTHER runs' samples only, and the sum of
 those estimates is scored against the held-out run's actual total. No estimate is
 ever graded against a sample that helped produce it.
 
-Leaving out a *sample* is leaving out a *run* because of a coverage argument, not an
-assumption. A gate receives **at most one sample per run** (one report per
-runId+shard; a gate sits on one shard within a run), so a gate whose `samples` equals
-the number of distinct `runId`s in `runs[]` received **exactly one from each**, and
-`ms[i]` is run `i` in the ingester's append order. `balOosBlock` tests that condition
-per gate and excludes — and counts — any gate failing it, rather than folding it in.
+Leaving out a *sample* requires knowing **which run that sample came from**, and
+since FR-1 (#2222 review S0-1) that is **read, never inferred**. Each `gates[]` row
+carries `sampleRuns`: one `runId` per element of `ms`, same length and same order,
+empty where unknown. A gate is folded into the table below only if exactly one of its
+`sampleRuns` entries matches each recorded `runId`; zero matches, ambiguous matches,
+and unattributed samples all exclude it.
+
+> ⚠️ **S-2 inferred this from a count, and the inference is unsound.** The argument
+> was: a gate receives at most one sample per run, so a gate whose `samples` equals
+> the number of distinct `runId`s in `runs[]` received exactly one from each, and
+> `ms[i]` is run `i` in append order. The premise is true; the conclusion does not
+> follow. `test/gate_cost_ingest.sh` trims `runs[]` by **row** count (`--max-runs`,
+> one row per `runId:runAttempt:shard`) and each gate's `ms` by **sample** count
+> (`--max-samples`), independently, per gate — nothing ties the two counters
+> together. One more ingest in which a gate fails once puts that gate back at an
+> equal count with the alignment wrong, and every fold then grades one run's estimate
+> against a different run's measurement, at exit 0, with no warning. The pinned
+> repro is `test/gate_balance_fixtures/oos_misaligned.{toml,json}`, whose `ms` arrays
+> are byte-identical to `oos_attributed`'s precisely because the old computation
+> could not tell the two files apart.
 
 ### The one command
 
@@ -641,25 +655,47 @@ medaka gate balance --check          # the block is printed in ORDINARY output
 ```
 
 Reproduced by any reader from committed data, and re-derived on every run so it
-cannot rot. As of the three runs in the committed baseline:
+cannot rot. On a baseline whose samples are attributed, it reads:
 
 ```
   out-of-sample error of the packing statistic (leave-one-run-out over the 3 runs in runs[],
-  across the 202 of 202 schedulable gates carrying one sample per run):
-    run 33257658611   predicted   5269.6s   actual   6682.5s    -21.1%
-    run 33271853727   predicted   5365.1s   actual   5717.5s     -6.1%
-    run 33277615482   predicted   5379.1s   actual   5917.6s     -9.0%
-    mean |error| 12.0%   systematic bias -12.5%
+  across the 2 of 3 schedulable gates carrying a run-attributed sample from every run):
+    run 1             predicted      0.2s   actual      0.1s   +100.0%
+    run 2             predicted      0.1s   actual      0.2s    -50.0%
+    run 3             predicted      0.1s   actual      0.3s    -66.6%
+    mean |error| 72.2%   systematic bias -33.3%
 ```
+
+(that is `oos_attributed`, whose every fold is hand-derivable from the fixture; the
+live figure is whatever the committed baseline currently supports.)
 
 ⚠️ **This is an UPPER BOUND on the production error, not an estimate of it.** Holding
 out one of N samples trains the statistic at N-1, one below what the committed file
 schedules from, and fewer samples is strictly worse. Read it as "no worse than this".
 
+🚨 **On the tree as of FR-1 the block prints `not derivable`, and that is correct.**
+`sampleRuns` did not exist when the committed baseline's samples were ingested, and
+their provenance was never written down, so there is nothing to recover — backfilling
+it by position would be the exact defect FR-1 removed. The line states the counts it
+refuses on:
+
+```
+  out-of-sample error of the packing statistic: not derivable — 0 of 606 retained samples
+  carry run attribution, and no schedulable gate carries an exactly attributed sample from
+  each of the 3 recorded runs
+```
+
+It becomes a number again once enough attributed ingests have landed.
+
 ### Why the median won — the table
 
 Per **row** (each row's predicted total against the held-out run's actual for that
-same row), 8 rows × 3 held-out runs = 24 folds:
+same row), 8 rows × 3 held-out runs = 24 folds. ⚠️ Like §13's budget, this whole
+table — the −12.6% included — is the **S-2 measurement as it was taken**, under the
+positional attribution FR-1 retired. The choice of statistic it settled stands (the
+`pds_test_repo_vectors` outlier argument below does not depend on the fold
+alignment at all); the exact percentages are dated and want re-deriving from
+attributed samples.
 
 | candidate | median APE | p90 APE | folds >25% | bias |
 |---|---|---|---|---|
@@ -921,6 +957,16 @@ re-ingest **noise**, and §10 measured that out-of-sample rather than guessing:
 leave-one-run-out over the 3 runs in `runs[]` across 202 of 202 schedulable gates,
 per-run errors −21.1% / −6.1% / −9.0%, **mean |error| 12.0%, systematic bias −12.5%**.
 
+> 🚨 **Those five numbers are one dated measurement, not a figure the tool
+> re-derives.** They were taken at S-2 on the baseline as it then stood, by a
+> `balOosBlock` that inferred each sample's run from its position in `ms`; FR-1
+> (#2222 review S0-1) showed that inference unsound and replaced it with recorded
+> per-sample attribution, so the block now reports `not derivable` for any baseline
+> whose samples predate `sampleRuns` — including the one these numbers came from.
+> The budget stands on the S-2 observation as history. **Re-derive it, and 1.125
+> with it, once `medaka gate balance` prints a figure from attributed samples
+> again** — and cite that run, not this paragraph.
+
     budget = 1 + max(mean |error|, |bias|) = 1 + max(0.120, 0.125) = 1.125
 
 The larger of the two, because they are two ways of being wrong about the same
@@ -966,7 +1012,8 @@ reason). Reds when:
 - **(b) over-class.** A gate's measured cost (`medianMs`) has eaten into the
   tolerance-adjusted timeout its declared `cost` class implies (`timeoutFor`: cheap
   300s / medium 900s / heavy 3600s). The tolerance is the SAME 1.125 as §13's budget
-  (1 + max(S-2's mean |error| 12.0%, bias 12.5%)) — one measured slack, used everywhere
+  (1 + max(S-2's mean |error| 12.0%, bias 12.5%) — a dated measurement, see §13's
+  note) — one measured slack, used everywhere
   a noisy `medianMs` is compared to a hard line, because `medianMs` can UNDERSTATE a
   gate's true cost by that much. Concretely: a gate reds this clause once
   `medianMs > timeoutMs / 1.125`. This is not aspirational metadata — `cost` is what

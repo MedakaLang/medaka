@@ -493,17 +493,96 @@ fi
 # ingests. Asserted against the REAL baseline, not a fixture, because the
 # claim is about the committed data; and asserted as a SHAPE (a signed
 # percentage), never a pinned number, since a re-ingest legitimately moves it.
+#
+# ⚠️ THE ASSERTION IS A DISJUNCTION SINCE FR-1 (#2222 review S0-1), and the
+# disjunction is the point rather than a weakening. The figure is derivable
+# only from samples that carry a recorded runId, and `sampleRuns` was added by
+# FR-1: every sample in the committed baseline predates it, so on today's tree
+# the honest output is the explicit "not derivable" line, and it becomes a
+# number again once enough attributed ingests have landed. What must NEVER
+# appear is a third thing — a number inferred from a sample's POSITION in
+# `ms`, which is what the block printed before FR-1 and what the oos_misaligned
+# fixture below pins. So: a well-formed number OR a stated refusal, and the
+# refusal has to carry its own attribution counts rather than being a bare
+# absence a reader would have to guess at.
 if grep -q '^  out-of-sample error of the packing statistic (leave-one-run-out over the [0-9]* runs' "$out"; then
-  ok "the balancer states its packing statistic's out-of-sample error"
+  if grep -q '^    mean |error| [0-9]*\.[0-9]%   systematic bias [-+][0-9]*\.[0-9]%' "$out"; then
+    ok "the balancer states its out-of-sample error, with a magnitude and a signed bias"
+  else
+    bad "the out-of-sample summary line is missing its mean |error| / systematic bias"
+    grep -n 'out-of-sample' -A 5 "$out" | sed -e 's/^/        /'
+  fi
+elif grep -q '^  out-of-sample error of the packing statistic: not derivable — [0-9]* of [0-9]* retained samples carry run attribution' "$out"; then
+  ok "the balancer refuses the out-of-sample figure explicitly, with its attribution counts"
 else
-  bad "no out-of-sample error block in ordinary balancer output"
+  bad "the balancer neither derived nor explicitly refused its out-of-sample error"
   sed -e 's/^/        /' "$out"
 fi
-if grep -q '^    mean |error| [0-9]*\.[0-9]%   systematic bias [-+][0-9]*\.[0-9]%' "$out"; then
-  ok "the out-of-sample summary carries both a magnitude and a signed bias"
+
+# ── 11b. the fold is RUN-ATTRIBUTED, not positional (FR-1, #2222 review S0-1) ─
+#
+# The three fixtures share one `ms` shape — g1/m1/l1 = [100, 200, 300] and
+# g2/m2/l2 = [10, 20, 30] over three recorded runs — because the block the
+# review found computed from `ms` and the run COUNT alone. It therefore printed
+# the SAME mean |error| 72.2% / bias -33.3% for all three, and only one of them
+# is a file that figure is true of. That coincidence is what makes the trio a
+# discriminator rather than three separate smoke tests: any reader that falls
+# back to position reproduces 72.2% on the two files where it means nothing.
+#
+# The expected numbers below are hand-derived from the fixture, not captured
+# from the tool ([WT-GOLDEN-ENSHRINES]): predicted 220/110/110 against actual
+# 110/220/330 gives per-fold +100.0% / -50.0% / -66.6%, mean |error|
+# (1000 + 500 + 666)/3 per-mille = 72.2%, and bias (440 - 660)/660 = -33.3%.
+for stem in oos_attributed oos_misaligned oos_legacy; do
+  cp "$FIX/$stem.toml" "$TMP/$stem.toml"
+done
+
+_bal oos_attributed "$TMP/oosa.txt"
+if grep -q '^  out-of-sample error of the packing statistic (leave-one-run-out over the 3 runs in runs\[\], across the 2 of 3 schedulable gates' "$TMP/oosa.txt" \
+   && grep -q '^    run 1 .* predicted .*0\.2s .* actual .*0\.1s .*+100\.0%$' "$TMP/oosa.txt" \
+   && grep -q '^    run 2 .* predicted .*0\.1s .* actual .*0\.2s .*-50\.0%$' "$TMP/oosa.txt" \
+   && grep -q '^    run 3 .* predicted .*0\.1s .* actual .*0\.3s .*-66\.6%$' "$TMP/oosa.txt" \
+   && grep -q '^    mean |error| 72\.2%   systematic bias -33\.3%' "$TMP/oosa.txt"; then
+  ok "an exactly attributed baseline folds to the hand-derived value, excluding the gate short a run"
 else
-  bad "the out-of-sample summary line is missing its mean |error| / systematic bias"
-  grep -n 'out-of-sample' -A 5 "$out" | sed -e 's/^/        /'
+  bad "the out-of-sample fold on a fully attributed baseline is not the hand-derived value"
+  sed -e 's/^/        /' "$TMP/oosa.txt"
+fi
+
+# The count coincidence itself: `samples` equals the number of retained runIds
+# for both gates, and the alignment is still wrong (runs 1/2/4 against retained
+# runs 2/3/4). Attribution EXISTS here — 6 of 6 — so the refusal cannot be
+# passing merely because the field is absent, which is the legacy case below.
+_bal oos_misaligned "$TMP/oosm.txt"
+if grep -q '^  out-of-sample error of the packing statistic: not derivable — 6 of 6 retained samples carry run attribution, and no schedulable gate carries an exactly attributed sample from each of the 3 recorded runs$' "$TMP/oosm.txt"; then
+  ok "a count coincidence with the wrong alignment refuses, and says how much attribution it had"
+else
+  bad "the count-coincidence fixture did not produce an explicit refusal"
+  sed -e 's/^/        /' "$TMP/oosm.txt"
+fi
+if grep -q 'mean |error|' "$TMP/oosm.txt"; then
+  bad "the count-coincidence fixture printed an out-of-sample figure — the positional inference is back"
+  grep -n 'mean |error|' "$TMP/oosm.txt" | sed -e 's/^/        /'
+else
+  ok "the count-coincidence fixture printed no figure at all"
+fi
+
+# A pre-FR-1 baseline: no `sampleRuns` key anywhere. It must PARSE (the field
+# is optional on read), still schedule, and refuse with 0-of-N rather than
+# crash or guess.
+_bal oos_legacy "$TMP/oosl.txt"
+_legacy_rc=$?
+if [ "$_legacy_rc" -le 1 ] && grep -q 'pole/floor' "$TMP/oosl.txt"; then
+  ok "a baseline with no sampleRuns field parses and still schedules"
+else
+  bad "a baseline with no sampleRuns field failed to parse or to schedule (rc=$_legacy_rc)"
+  sed -e 's/^/        /' "$TMP/oosl.txt"
+fi
+if grep -q '^  out-of-sample error of the packing statistic: not derivable — 0 of 6 retained samples carry run attribution' "$TMP/oosl.txt"; then
+  ok "a legacy baseline reports zero attributed samples rather than a positional guess"
+else
+  bad "the legacy baseline did not report its out-of-sample error as not derivable at 0 attributed"
+  sed -e 's/^/        /' "$TMP/oosl.txt"
 fi
 # A drift between the ingester's awk `median()` and `gate_cost.packStat` would
 # mean the tool scores by a rule the committed file was not written with. The

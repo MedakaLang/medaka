@@ -47,9 +47,41 @@ import support.util.{joinWith, listLen, splitOnChar, startsWith}
    every honest estimate of that error has to recompute the statistic from a
    SUBSET of a gate's samples and score it against the sample left out.  A
    `medianMs` alone can only be validated against the samples that defined
-   it, which is the in-sample residual that means nothing. -}
+   it, which is the in-sample residual that means nothing.
+
+   `sampleRuns` is WHICH RUN each of those samples came from — the same
+   length as `ms`, same order, one `runId` per element, and the empty string
+   where that is not recorded (FR-1, #2222 review S0-1).
+
+   ⚠️ IT EXISTS BECAUSE THE POSITION OF A SAMPLE DOES NOT IDENTIFY ITS RUN.
+   S-2 inferred the attribution instead of recording it: `ms[i]` was read as
+   "the sample from the i-th retained run" whenever a gate's `samples` equalled
+   the number of distinct runIds in `runs[]`.  That equality is a COINCIDENCE,
+   not an invariant.  `test/gate_cost_ingest.sh` trims `runs[]` by total ROW
+   count (`MAX_RUNS`, one row per `runId:runAttempt:shard`) and trims each
+   gate's `ms` by SAMPLE count (`MAX_SAMPLES`), independently, per gate;
+   nothing ties the two counters together.  A gate that failed one run and was
+   sampled in an older one lands back at the same COUNT with the wrong
+   ALIGNMENT, and a leave-one-run-out fold computed off it grades one run's
+   estimate against another run's measurement — silently, at exit 0.  So the
+   attribution is now carried, not derived, and a sample without it is
+   UNATTRIBUTED rather than positionally guessed.
+
+   ⚠️ THE FIELD IS OPTIONAL ON READ, AND LEGACY SAMPLES STAY UNATTRIBUTED.
+   Every baseline written before FR-1 lacks it, and the provenance of those
+   samples is not recoverable from the file — it was never written down.
+   Backfilling them by position would be exactly the inference this field
+   removes, so a missing `sampleRuns` parses as all-empty (every sample
+   unattributed) and the reader that needs attribution reports that it has
+   none rather than inventing it. -}
 public export data GateCost =
-  | GateCost { name : String, medianMs : Int, samples : Int, ms : List Int }
+  | GateCost {
+      name : String,
+      medianMs : Int,
+      samples : Int,
+      ms : List Int,
+      sampleRuns : List String,
+    }
 
 {- | The baseline's key for a gate, from that gate's `run` script path.
 
@@ -115,7 +147,9 @@ costEntry i e = match asString (orNull (lookup "name" e))
         -- array makes every such derivation quietly wrong.
         Ok raw if listLen raw /= sc =>
           Err "gate cost baseline: gates[\{intToString i}] '\{n}': samples is \{intToString sc} but 'ms' holds \{intToString (listLen raw)} value(s)"
-        Ok raw => Ok GateCost { name = n, medianMs = ms, samples = sc, ms = raw }
+        Ok raw =>
+          map (rids => GateCost { name = n, medianMs = ms, samples = sc, ms = raw, sampleRuns = rids })
+            (costSampleRuns i n e (listLen raw))
 
 -- The retained raw samples of one `gates[]` entry.  Required, not optional:
 -- every baseline this reader has ever accepted carries them (the ingester has
@@ -135,6 +169,46 @@ costSampleInts i n arr k len acc
     None => Err "gate cost baseline: gates[\{intToString i}] '\{n}': ms[\{intToString k}] is not an integer"
     Some v if v < 0 => Err "gate cost baseline: gates[\{intToString i}] '\{n}': ms[\{intToString k}] is negative (\{intToString v})"
     Some v => costSampleInts i n arr (k + 1) len (v::acc)
+
+-- The per-sample run attribution of one `gates[]` entry — OPTIONAL, unlike
+-- `ms`, and the asymmetry is deliberate.  `ms` has been written by every
+-- ingester that ever produced a baseline, so its absence is a schema error;
+-- `sampleRuns` was added by FR-1 and every baseline committed before it
+-- legitimately lacks the field.  Absent (or explicitly null) therefore reads
+-- as "this file predates the field" -> every sample UNATTRIBUTED, which is
+-- the true statement about it; see the `GateCost` doc-comment for why
+-- reconstructing it by position is the defect rather than the fix.
+--
+-- PRESENT-BUT-WRONG is still an error: a `sampleRuns` whose length does not
+-- match `ms` cannot be a per-sample attribution of those samples under any
+-- reading, and silently truncating or padding it would put the alignment bug
+-- back in a new place.
+costSampleRuns : Int -> String -> Json -> Int -> Result String (List String)
+costSampleRuns i n e want = match lookup "sampleRuns" e
+  None => Ok (blankRuns want)
+  Some JNull => Ok (blankRuns want)
+  Some j => match asArray j
+    None => Err "gate cost baseline: gates[\{intToString i}] '\{n}': 'sampleRuns' is present but is not an array"
+    Some arr if arrayLength arr /= want => Err "gate cost baseline: gates[\{intToString i}] '\{n}': 'sampleRuns' holds \{intToString (arrayLength arr)} entr(ies) but 'ms' holds \{intToString want}"
+    Some arr => costSampleRunStrs i n arr 0 want []
+
+costSampleRunStrs : Int -> String -> Array Json -> Int -> Int -> List String -> Result String (List String)
+costSampleRunStrs i n arr k len acc
+  | k >= len = Ok (reverseStrs acc [])
+  | otherwise = match asString (arrayGetUnsafe k arr)
+    None => Err "gate cost baseline: gates[\{intToString i}] '\{n}': sampleRuns[\{intToString k}] is not a string"
+    Some v => costSampleRunStrs i n arr (k + 1) len (v::acc)
+
+-- `n` unattributed slots — the empty string is the sentinel, and it can never
+-- collide with a real runId (Actions' `github.run_id` is a nonempty decimal).
+blankRuns : Int -> List String
+blankRuns n
+  | n <= 0 = []
+  | otherwise = "" :: blankRuns (n - 1)
+
+reverseStrs : List String -> List String -> List String
+reverseStrs [] acc = acc
+reverseStrs (x::xs) acc = reverseStrs xs (x::acc)
 
 reverseInts : List Int -> List Int -> List Int
 reverseInts [] acc = acc
@@ -196,6 +270,14 @@ parseCostBaseline src = match parse src
        mean says 327242 (17x), the max says 948919 (50x), and
        `median + 0.25*spread` says 252434 (13x).  A 949-second misprice on
        one gate is enough to dominate an entire row.
+
+   ⚠️ The -12.6% is S-2's DATED measurement, not a figure re-derived here: it was
+   taken under the positional run attribution FR-1 replaced with a recorded one
+   (`GateCost.sampleRuns`), so `balOosBlock` reports "not derivable" until enough
+   attributed ingests have landed to re-take it.  The CHOICE of statistic does not
+   rest on that alignment — the `pds_test_repo_vectors` outlier pricing above is a
+   fact about one gate's samples, whichever run each came from — but the percentage
+   does.
 
    So the -12.6% is the PRICE OF ROBUSTNESS, not a defect to correct: it is
    reported (in the balancer's ordinary output, and here) rather than

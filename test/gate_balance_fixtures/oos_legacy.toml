@@ -1,0 +1,65 @@
+# test/gate_balance_fixtures/oos_legacy.toml — SYNTHETIC, hand-written.
+#
+# A BASELINE WRITTEN BEFORE `sampleRuns` EXISTED (FR-1, #2222 review S0-1).
+#
+# `oos_legacy.json` has no `sampleRuns` key on any gate row — the shape of
+# every baseline committed before FR-1, including the live
+# `test/gate_cost_baseline.json` at the time of that change. Three things must
+# hold and this pair pins all three:
+#
+#   1. it PARSES. The field is optional on read, so an old file is readable
+#      and the balancer still schedules from it.
+#   2. the out-of-sample block reports NOT DERIVABLE, and says the reason in
+#      counts — "0 of 6 retained samples carry run attribution" — rather than
+#      as a bare absence a reader would have to guess at.
+#   3. it does NOT report a number. The samples themselves are identical to
+#      `oos_attributed.json`'s, so a reader that fell back to position would
+#      print that fixture's 72.2% / -33.3% here, which is exactly the
+#      behaviour FR-1 removed.
+#
+# The distinction against `oos_misaligned` is the count in point 2: THIS file
+# has no attribution at all (0 of 6), that one has complete attribution that
+# does not span the retained runs (6 of 6). Both refuse; a reader can tell
+# which situation they are in without opening the baseline.
+
+[[gate]]
+name = "l1"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/l1.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "l2"
+area = "fixture"
+shard = "b"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/l2.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[shard]]
+name = "a"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/a.txt"
+pinned_gates = []
+
+[[shard]]
+name = "b"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/b.txt"
+pinned_gates = []

@@ -1,5 +1,5 @@
 # META
-source_lines=4304
+source_lines=4398
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_cmd.mdk — `medaka gate`, the gate-registry driver (#2176, epic #2182).
@@ -2399,10 +2399,22 @@ balOtherJob = "other-job"
        baseline's `medianMs` values move on every scheduled ingest, and both
        the pole and the floor are recomputed from them.  S-2 measured that
        noise out-of-sample rather than guessing at it — leave-one-run-out over
-       the 3 runs in `runs[]`, across 202 of 202 schedulable gates, printed on
-       every run by `balOosBlock`: per-run errors -21.1% / -6.1% / -9.0%, mean
-       |error| 12.0%, systematic bias -12.5% (the median is deliberately
-       low-side robust — `gate_cost.packStat`).
+       the 3 runs in `runs[]`, across 202 of 202 schedulable gates: per-run
+       errors -21.1% / -6.1% / -9.0%, mean |error| 12.0%, systematic bias
+       -12.5% (the median is deliberately low-side robust —
+       `gate_cost.packStat`).
+
+       ⚠️ THOSE FIVE NUMBERS ARE ONE HISTORICAL MEASUREMENT, NOT A FIGURE THE
+       TOOL RE-DERIVES.  They were taken on the baseline as it stood at S-2,
+       by a `balOosBlock` that inferred each sample's run from its POSITION;
+       FR-1 (#2222 review S0-1) showed that inference is unsound in general
+       and replaced it with a recorded per-sample runId, so the block now
+       reports "not derivable" on any baseline whose samples predate
+       `sampleRuns` — which includes the one these numbers came from.  The
+       budget below therefore stands on the S-2 measurement as a dated
+       observation.  Re-derive it, and this constant with it, once enough
+       attributed ingests have landed for `balOosBlock` to print a figure
+       again.
 
      * Budget = 1 + max(mean |error|, |bias|) = 1 + max(0.120, 0.125) = 1.125.
        The LARGER of the two terms, because they are two ways of being wrong
@@ -3347,13 +3359,16 @@ balRowLines (r::rs) runs =
        figure on every run rather than leaving this prose to rot; and
      * gates that FAILED, which contribute wall clock to the row but, by the
        ingester's rule, no sample to the baseline.  Whether this is currently
-       vacuous is DERIVED, not asserted here: it is vacuous exactly when every
-       gate is at `samples` == the number of distinct runIds in `runs[]`, the
-       same coverage condition `balOosLines` tests and reports, since a gate
-       that failed a run is a gate short one sample.  (An earlier version of
-       this comment pinned that state as a fact — "every gate ... at
-       `samples: 2` across both ingested runIds" — and it was stale within two
-       ingests.  Hence the derivation.)
+       vacuous is DERIVED, not asserted here: `balOosBlock` reports how many
+       schedulable gates carry a run-attributed sample from EVERY recorded
+       run, and it is vacuous exactly when that count is all of them, since a
+       gate that failed a run is a gate short that run's sample.  ⚠️ On a
+       baseline predating `sampleRuns` that count is 0 for want of
+       attribution, not for want of samples, and `balOosBlock` says which —
+       do not read its "not derivable" line as evidence that gates failed.
+       (An earlier version of this comment pinned the state as a fact —
+       "every gate ... at `samples: 2` across both ingested runIds" — and it
+       was stale within two ingests.  Hence the derivation.)
 
    The gate's own shebang syntax pre-check is NOT a cause: `test/run_gates.sh`
    starts the clock BEFORE that check runs (search "clock starts BEFORE the
@@ -3524,17 +3539,46 @@ balThinLine base = "  \{intToString (balThinCount base)} of \{intToString (listL
    estimates is scored against the held-out run's actual total.  No estimate
    is ever graded against a sample that helped produce it.
 
-   ⚠️ WHY LEAVING OUT A SAMPLE IS LEAVING OUT A RUN.  The baseline records no
-   per-sample run attribution — `ms` is a bare array.  It does not need to.
-   A gate receives AT MOST one sample per run (one report per runId+shard, and
-   a gate sits on one shard within a run), so a gate whose `samples` equals the
-   number of distinct runIds in `runs[]` received EXACTLY one from each, and
-   `ms[i]` is run `i` in the ingester's append order.  That coverage condition
-   is what this block tests per gate; a gate failing it (one that failed a run,
-   or predates a retained sample window) is excluded and counted in the header
-   rather than folded in on an assumption.  A gate short a sample is also
-   exactly the case the `balCalibLines` residual blames on failed gates, so
-   the two accounts stay consistent.
+   ⚠️ LEAVING OUT A RUN REQUIRES KNOWING WHICH SAMPLE CAME FROM IT, AND THAT
+   IS READ, NEVER INFERRED (FR-1, #2222 review S0-1).  Until FR-1 this block
+   inferred it: `ms[i]` was taken to be the i-th retained run's sample whenever
+   a gate's `samples` equalled the number of distinct runIds in `runs[]`, on
+   the argument that a gate receives at most one sample per run.  The premise
+   is true and the conclusion does not follow.  `test/gate_cost_ingest.sh`
+   trims `runs[]` by total ROW count (`MAX_RUNS`, one row per
+   `runId:runAttempt:shard`) and each gate's `ms` by SAMPLE count
+   (`MAX_SAMPLES`), independently, per gate — the two counters are unrelated,
+   and they agreed only because the committed file happened to hold exactly
+   3 runs x 8 shards with no gate having ever missed one.  One gate failing
+   one run puts that gate's count back to equal with the ALIGNMENT wrong, and
+   every fold then grades one run's estimate against a different run's
+   measurement, at exit 0, with no warning.
+
+   So the join is now by runId, exactly: a gate contributes its sample for
+   fold `i` only if exactly one of its `sampleRuns` entries equals the i-th
+   recorded runId.  Zero matches (a failed gate, a sample older than the
+   retained run window, or a legacy sample with no attribution at all) and
+   ambiguous matches (two samples claiming one runId) both EXCLUDE the gate
+   rather than positioning it.
+
+   ⚠️ THE ADMITTED SET IS THE SAME ACROSS EVERY FOLD, DELIBERATELY.  A gate
+   missing run 2's sample could still be folded into runs 1 and 3, but then
+   each row of the table below would be a sum over a different set of gates
+   and the `predicted`/`actual` columns would not be comparable row to row —
+   a reader would be looking at three totals of three different things.  So
+   the admission is all-or-nothing per gate: a gate is folded in only if it
+   carries an exactly attributed sample for EVERY recorded run, and the
+   header states how many gates that is out of how many are schedulable.
+
+   ⚠️ AND IF NOTHING QUALIFIES, THERE IS NO NUMBER.  A baseline whose samples
+   predate `sampleRuns` (every baseline committed before FR-1) has no
+   attribution to join on, so this block prints what it does not know and how
+   many samples that verdict rests on.  It never falls back to the count-based
+   inference: the whole defect was a plausible number where an absence
+   belonged.
+
+   A gate short a sample is also exactly the case the `balCalibLines` residual
+   blames on failed gates, so the two accounts stay consistent.
 
    ⚠️ THE FIGURE IS AN UPPER BOUND ON THE PRODUCTION ERROR, NOT AN ESTIMATE OF
    IT.  Holding out one of N samples trains the statistic at N-1, one below
@@ -3546,13 +3590,13 @@ balOosBlock base cs runs =
   let nr = listLen ids
   if nr < 2 then "  out-of-sample error of the packing statistic: not derivable (\{intToString nr} recorded run(s); predicting one run from the others needs at least two)\n"
   else
-    let vs = balOosVecs base cs nr
+    let vs = balOosVecs base cs ids
     let ne = listLen vs
     if ne == 0 then
-      "  out-of-sample error of the packing statistic: not derivable (no schedulable gate carries one sample per recorded run)\n"
+      "  out-of-sample error of the packing statistic: not derivable — \{intToString (balAttrKnown base cs)} of \{intToString (balAttrTotal base cs)} retained samples carry run attribution, and no schedulable gate carries an exactly attributed sample from each of the \{intToString nr} recorded runs\n"
     else
       stringConcat [
-        "  out-of-sample error of the packing statistic (leave-one-run-out over the \{intToString nr} runs in runs[], across the \{intToString ne} of \{intToString (listLen cs)} schedulable gates carrying one sample per run):\n",
+        "  out-of-sample error of the packing statistic (leave-one-run-out over the \{intToString nr} runs in runs[], across the \{intToString ne} of \{intToString (listLen cs)} schedulable gates carrying a run-attributed sample from every run):\n",
         joinNl (balOosFolds vs ids 0 nr),
         "\n",
         balOosSummary vs nr,
@@ -3596,16 +3640,66 @@ balStatDrift (c::cs)
   | packStat c.ms == c.medianMs = balStatDrift cs
   | otherwise = 1 + balStatDrift cs
 
--- The sample vectors of the schedulable gates that satisfy the coverage
--- condition.  A gate the baseline has no row for is already a hard error
--- upstream (`balUncosted`), so the `None` arm here is unreachable in a real
--- run and drops rather than guesses.
-balOosVecs : List GateCost -> List Cand -> Int -> List (List Int)
+-- The sample vectors of the schedulable gates that carry an exactly
+-- run-attributed sample for every recorded run, each REORDERED into `ids`
+-- order so that index i genuinely is run i — which is the property the whole
+-- block turns on and the property the old count check did not establish.  A
+-- gate the baseline has no row for is already a hard error upstream
+-- (`balUncosted`), so the `None` arm here is unreachable in a real run and
+-- drops rather than guesses.
+balOosVecs : List GateCost -> List Cand -> List String -> List (List Int)
 balOosVecs _ [] _ = []
-balOosVecs base (c::cs) nr = match costRowOf c.crun base
-  None => balOosVecs base cs nr
-  Some g if g.samples /= nr => balOosVecs base cs nr
-  Some g => g.ms :: balOosVecs base cs nr
+balOosVecs base (c::cs) ids = match costRowOf c.crun base
+  None => balOosVecs base cs ids
+  Some g => match balOosVecFor g ids
+    None => balOosVecs base cs ids
+    Some v => v :: balOosVecs base cs ids
+
+-- `Some v` only when EVERY id resolves; one miss drops the whole gate, per
+-- the "same admitted set across every fold" rule in `balOosBlock`.
+balOosVecFor : GateCost -> List String -> Option (List Int)
+balOosVecFor _ [] = Some []
+balOosVecFor g (r::rs) = match balSampleForRun r g.ms g.sampleRuns None
+  None => None
+  Some v => map (v :: _) (balOosVecFor g rs)
+
+-- The one sample of `g` attributed to run `r`, or `None` if there are zero or
+-- more than one.  TWO is as disqualifying as zero: a runId that appears twice
+-- in one gate's `sampleRuns` (a re-run recorded under a second runAttempt,
+-- say) leaves no fact about which of the two samples "is" that run, and
+-- picking either would be the same guess in a smaller costume.  An
+-- unattributed sample carries the empty string and matches no real runId, so
+-- legacy rows fall out here without a special case.
+balSampleForRun : String -> List Int -> List String -> Option Int -> Option Int
+balSampleForRun _ [] _ acc = acc
+balSampleForRun _ _ [] acc = acc
+balSampleForRun r (m::ms) (s::ss) acc
+  | s /= r = balSampleForRun r ms ss acc
+  | otherwise = match acc
+    None => balSampleForRun r ms ss (Some m)
+    Some _ => None
+
+-- How many retained samples across the schedulable gates carry ANY run
+-- attribution, and how many there are in total.  Printed together in the
+-- not-derivable line so the reader can tell "this baseline predates the
+-- field" (0 of N) from "attribution exists but no gate spans every run".
+balAttrKnown : List GateCost -> List Cand -> Int
+balAttrKnown _ [] = 0
+balAttrKnown base (c::cs) = match costRowOf c.crun base
+  None => balAttrKnown base cs
+  Some g => balCountAttr g.sampleRuns + balAttrKnown base cs
+
+balCountAttr : List String -> Int
+balCountAttr [] = 0
+balCountAttr (s::ss)
+  | s == "" = balCountAttr ss
+  | otherwise = 1 + balCountAttr ss
+
+balAttrTotal : List GateCost -> List Cand -> Int
+balAttrTotal _ [] = 0
+balAttrTotal base (c::cs) = match costRowOf c.crun base
+  None => balAttrTotal base cs
+  Some g => listLen g.ms + balAttrTotal base cs
 
 balOosPred : List (List Int) -> Int -> Int
 balOosPred [] _ = 0
@@ -5048,7 +5142,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DTypeSig false "balThinLine" (TyFun (TyApp (TyCon "List") (TyCon "GateCost")) (TyCon "String")))
 (DFunDef false "balThinLine" ((PVar "base")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "balThinCount") (EVar "base"))))) (ELit (LString " of "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "base"))))) (ELit (LString " gates are scheduled off a single sample (samples < "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "balThinSamples")))) (ELit (LString ")\n"))))
 (DTypeSig false "balOosBlock" (TyFun (TyApp (TyCon "List") (TyCon "GateCost")) (TyFun (TyApp (TyCon "List") (TyCon "Cand")) (TyFun (TyApp (TyCon "List") (TyCon "RunRecord")) (TyCon "String")))))
-(DFunDef false "balOosBlock" ((PVar "base") (PVar "cs") (PVar "runs")) (EBlock (DoLet false false (PVar "ids") (EApp (EApp (EVar "balRunIds") (EVar "runs")) (EListLit))) (DoLet false false (PVar "nr") (EApp (EVar "listLen") (EVar "ids"))) (DoExpr (EIf (EBinOp "<" (EVar "nr") (ELit (LInt 2))) (EBinOp "++" (EBinOp "++" (ELit (LString "  out-of-sample error of the packing statistic: not derivable (")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "nr")))) (ELit (LString " recorded run(s); predicting one run from the others needs at least two)\n"))) (EBlock (DoLet false false (PVar "vs") (EApp (EApp (EApp (EVar "balOosVecs") (EVar "base")) (EVar "cs")) (EVar "nr"))) (DoLet false false (PVar "ne") (EApp (EVar "listLen") (EVar "vs"))) (DoExpr (EIf (EBinOp "==" (EVar "ne") (ELit (LInt 0))) (ELit (LString "  out-of-sample error of the packing statistic: not derivable (no schedulable gate carries one sample per recorded run)\n")) (EApp (EVar "stringConcat") (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  out-of-sample error of the packing statistic (leave-one-run-out over the ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "nr")))) (ELit (LString " runs in runs[], across the "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "ne")))) (ELit (LString " of "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "cs"))))) (ELit (LString " schedulable gates carrying one sample per run):\n"))) (EApp (EVar "joinNl") (EApp (EApp (EApp (EApp (EVar "balOosFolds") (EVar "vs")) (EVar "ids")) (ELit (LInt 0))) (EVar "nr"))) (ELit (LString "\n")) (EApp (EApp (EVar "balOosSummary") (EVar "vs")) (EVar "nr")) (EApp (EVar "balOosDriftLine") (EVar "base")))))))))))
+(DFunDef false "balOosBlock" ((PVar "base") (PVar "cs") (PVar "runs")) (EBlock (DoLet false false (PVar "ids") (EApp (EApp (EVar "balRunIds") (EVar "runs")) (EListLit))) (DoLet false false (PVar "nr") (EApp (EVar "listLen") (EVar "ids"))) (DoExpr (EIf (EBinOp "<" (EVar "nr") (ELit (LInt 2))) (EBinOp "++" (EBinOp "++" (ELit (LString "  out-of-sample error of the packing statistic: not derivable (")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "nr")))) (ELit (LString " recorded run(s); predicting one run from the others needs at least two)\n"))) (EBlock (DoLet false false (PVar "vs") (EApp (EApp (EApp (EVar "balOosVecs") (EVar "base")) (EVar "cs")) (EVar "ids"))) (DoLet false false (PVar "ne") (EApp (EVar "listLen") (EVar "vs"))) (DoExpr (EIf (EBinOp "==" (EVar "ne") (ELit (LInt 0))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  out-of-sample error of the packing statistic: not derivable — ")) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EApp (EVar "balAttrKnown") (EVar "base")) (EVar "cs"))))) (ELit (LString " of "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EApp (EVar "balAttrTotal") (EVar "base")) (EVar "cs"))))) (ELit (LString " retained samples carry run attribution, and no schedulable gate carries an exactly attributed sample from each of the "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "nr")))) (ELit (LString " recorded runs\n"))) (EApp (EVar "stringConcat") (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  out-of-sample error of the packing statistic (leave-one-run-out over the ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "nr")))) (ELit (LString " runs in runs[], across the "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "ne")))) (ELit (LString " of "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "cs"))))) (ELit (LString " schedulable gates carrying a run-attributed sample from every run):\n"))) (EApp (EVar "joinNl") (EApp (EApp (EApp (EApp (EVar "balOosFolds") (EVar "vs")) (EVar "ids")) (ELit (LInt 0))) (EVar "nr"))) (ELit (LString "\n")) (EApp (EApp (EVar "balOosSummary") (EVar "vs")) (EVar "nr")) (EApp (EVar "balOosDriftLine") (EVar "base")))))))))))
 (DTypeSig false "balOosFolds" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "balOosFolds" ((PVar "vs") (PVar "ids") (PVar "i") (PVar "nr")) (EIf (EBinOp ">=" (EVar "i") (EVar "nr")) (EListLit) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "p") (EApp (EApp (EVar "balOosPred") (EVar "vs")) (EVar "i"))) (DoLet false false (PVar "a") (EApp (EApp (EVar "balOosAct") (EVar "vs")) (EVar "i"))) (DoExpr (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "    run ")) (EApp (EVar "display") (EApp (EApp (EVar "balPadR") (ELit (LInt 13))) (EApp (EApp (EVar "balNthStr") (EVar "i")) (EVar "ids"))))) (ELit (LString " predicted "))) (EApp (EVar "display") (EApp (EApp (EVar "balPadL") (ELit (LInt 9))) (EApp (EVar "balSecs") (EVar "p"))))) (ELit (LString "   actual "))) (EApp (EVar "display") (EApp (EApp (EVar "balPadL") (ELit (LInt 9))) (EApp (EVar "balSecs") (EVar "a"))))) (ELit (LString "   "))) (EApp (EVar "display") (EApp (EApp (EVar "balPadL") (ELit (LInt 7))) (EApp (EApp (EVar "balPct1") (EBinOp "-" (EVar "p") (EVar "a"))) (EVar "a"))))) (ELit (LString ""))) (EApp (EApp (EApp (EApp (EVar "balOosFolds") (EVar "vs")) (EVar "ids")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "nr"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "balOosSummary" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyCon "Int") (TyCon "String"))))
@@ -5058,9 +5152,25 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DTypeSig false "balStatDrift" (TyFun (TyApp (TyCon "List") (TyCon "GateCost")) (TyCon "Int")))
 (DFunDef false "balStatDrift" ((PList)) (ELit (LInt 0)))
 (DFunDef false "balStatDrift" ((PCons (PVar "c") (PVar "cs"))) (EIf (EBinOp "==" (EApp (EVar "packStat") (EFieldAccess (EVar "c") "ms")) (EFieldAccess (EVar "c") "medianMs")) (EApp (EVar "balStatDrift") (EVar "cs")) (EIf (EVar "otherwise") (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "balStatDrift") (EVar "cs"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "balOosVecs" (TyFun (TyApp (TyCon "List") (TyCon "GateCost")) (TyFun (TyApp (TyCon "List") (TyCon "Cand")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int")))))))
+(DTypeSig false "balOosVecs" (TyFun (TyApp (TyCon "List") (TyCon "GateCost")) (TyFun (TyApp (TyCon "List") (TyCon "Cand")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int")))))))
 (DFunDef false "balOosVecs" (PWild (PList) PWild) (EListLit))
-(DFunDef false "balOosVecs" ((PVar "base") (PCons (PVar "c") (PVar "cs")) (PVar "nr")) (EMatch (EApp (EApp (EVar "costRowOf") (EFieldAccess (EVar "c") "crun")) (EVar "base")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "balOosVecs") (EVar "base")) (EVar "cs")) (EVar "nr"))) (arm (PCon "Some" (PVar "g")) ((GBool (EBinOp "/=" (EFieldAccess (EVar "g") "samples") (EVar "nr")))) (EApp (EApp (EApp (EVar "balOosVecs") (EVar "base")) (EVar "cs")) (EVar "nr"))) (arm (PCon "Some" (PVar "g")) () (EBinOp "::" (EFieldAccess (EVar "g") "ms") (EApp (EApp (EApp (EVar "balOosVecs") (EVar "base")) (EVar "cs")) (EVar "nr"))))))
+(DFunDef false "balOosVecs" ((PVar "base") (PCons (PVar "c") (PVar "cs")) (PVar "ids")) (EMatch (EApp (EApp (EVar "costRowOf") (EFieldAccess (EVar "c") "crun")) (EVar "base")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "balOosVecs") (EVar "base")) (EVar "cs")) (EVar "ids"))) (arm (PCon "Some" (PVar "g")) () (EMatch (EApp (EApp (EVar "balOosVecFor") (EVar "g")) (EVar "ids")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "balOosVecs") (EVar "base")) (EVar "cs")) (EVar "ids"))) (arm (PCon "Some" (PVar "v")) () (EBinOp "::" (EVar "v") (EApp (EApp (EApp (EVar "balOosVecs") (EVar "base")) (EVar "cs")) (EVar "ids"))))))))
+(DTypeSig false "balOosVecFor" (TyFun (TyCon "GateCost") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Int"))))))
+(DFunDef false "balOosVecFor" (PWild (PList)) (EApp (EVar "Some") (EListLit)))
+(DFunDef false "balOosVecFor" ((PVar "g") (PCons (PVar "r") (PVar "rs"))) (EMatch (EApp (EApp (EApp (EApp (EVar "balSampleForRun") (EVar "r")) (EFieldAccess (EVar "g") "ms")) (EFieldAccess (EVar "g") "sampleRuns")) (EVar "None")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "v")) () (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "v") (EVar "_s")))) (EApp (EApp (EVar "balOosVecFor") (EVar "g")) (EVar "rs"))))))
+(DTypeSig false "balSampleForRun" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "Int")))))))
+(DFunDef false "balSampleForRun" (PWild (PList) PWild (PVar "acc")) (EVar "acc"))
+(DFunDef false "balSampleForRun" (PWild PWild (PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "balSampleForRun" ((PVar "r") (PCons (PVar "m") (PVar "ms")) (PCons (PVar "s") (PVar "ss")) (PVar "acc")) (EIf (EBinOp "/=" (EVar "s") (EVar "r")) (EApp (EApp (EApp (EApp (EVar "balSampleForRun") (EVar "r")) (EVar "ms")) (EVar "ss")) (EVar "acc")) (EIf (EVar "otherwise") (EMatch (EVar "acc") (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "balSampleForRun") (EVar "r")) (EVar "ms")) (EVar "ss")) (EApp (EVar "Some") (EVar "m")))) (arm (PCon "Some" PWild) () (EVar "None"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "balAttrKnown" (TyFun (TyApp (TyCon "List") (TyCon "GateCost")) (TyFun (TyApp (TyCon "List") (TyCon "Cand")) (TyCon "Int"))))
+(DFunDef false "balAttrKnown" (PWild (PList)) (ELit (LInt 0)))
+(DFunDef false "balAttrKnown" ((PVar "base") (PCons (PVar "c") (PVar "cs"))) (EMatch (EApp (EApp (EVar "costRowOf") (EFieldAccess (EVar "c") "crun")) (EVar "base")) (arm (PCon "None") () (EApp (EApp (EVar "balAttrKnown") (EVar "base")) (EVar "cs"))) (arm (PCon "Some" (PVar "g")) () (EBinOp "+" (EApp (EVar "balCountAttr") (EFieldAccess (EVar "g") "sampleRuns")) (EApp (EApp (EVar "balAttrKnown") (EVar "base")) (EVar "cs"))))))
+(DTypeSig false "balCountAttr" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Int")))
+(DFunDef false "balCountAttr" ((PList)) (ELit (LInt 0)))
+(DFunDef false "balCountAttr" ((PCons (PVar "s") (PVar "ss"))) (EIf (EBinOp "==" (EVar "s") (ELit (LString ""))) (EApp (EVar "balCountAttr") (EVar "ss")) (EIf (EVar "otherwise") (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "balCountAttr") (EVar "ss"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "balAttrTotal" (TyFun (TyApp (TyCon "List") (TyCon "GateCost")) (TyFun (TyApp (TyCon "List") (TyCon "Cand")) (TyCon "Int"))))
+(DFunDef false "balAttrTotal" (PWild (PList)) (ELit (LInt 0)))
+(DFunDef false "balAttrTotal" ((PVar "base") (PCons (PVar "c") (PVar "cs"))) (EMatch (EApp (EApp (EVar "costRowOf") (EFieldAccess (EVar "c") "crun")) (EVar "base")) (arm (PCon "None") () (EApp (EApp (EVar "balAttrTotal") (EVar "base")) (EVar "cs"))) (arm (PCon "Some" (PVar "g")) () (EBinOp "+" (EApp (EVar "listLen") (EFieldAccess (EVar "g") "ms")) (EApp (EApp (EVar "balAttrTotal") (EVar "base")) (EVar "cs"))))))
 (DTypeSig false "balOosPred" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "balOosPred" ((PList) PWild) (ELit (LInt 0)))
 (DFunDef false "balOosPred" ((PCons (PVar "v") (PVar "vs")) (PVar "i")) (EBinOp "+" (EApp (EVar "packStat") (EApp (EApp (EVar "balDropNth") (EVar "i")) (EVar "v"))) (EApp (EApp (EVar "balOosPred") (EVar "vs")) (EVar "i"))))
@@ -5955,7 +6065,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DTypeSig false "balThinLine" (TyFun (TyApp (TyCon "List") (TyCon "GateCost")) (TyCon "String")))
 (DFunDef false "balThinLine" ((PVar "base")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "balThinCount") (EVar "base"))))) (ELit (LString " of "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "base"))))) (ELit (LString " gates are scheduled off a single sample (samples < "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "balThinSamples")))) (ELit (LString ")\n"))))
 (DTypeSig false "balOosBlock" (TyFun (TyApp (TyCon "List") (TyCon "GateCost")) (TyFun (TyApp (TyCon "List") (TyCon "Cand")) (TyFun (TyApp (TyCon "List") (TyCon "RunRecord")) (TyCon "String")))))
-(DFunDef false "balOosBlock" ((PVar "base") (PVar "cs") (PVar "runs")) (EBlock (DoLet false false (PVar "ids") (EApp (EApp (EVar "balRunIds") (EVar "runs")) (EListLit))) (DoLet false false (PVar "nr") (EApp (EVar "listLen") (EVar "ids"))) (DoExpr (EIf (EBinOp "<" (EVar "nr") (ELit (LInt 2))) (EBinOp "++" (EBinOp "++" (ELit (LString "  out-of-sample error of the packing statistic: not derivable (")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "nr")))) (ELit (LString " recorded run(s); predicting one run from the others needs at least two)\n"))) (EBlock (DoLet false false (PVar "vs") (EApp (EApp (EApp (EVar "balOosVecs") (EVar "base")) (EVar "cs")) (EVar "nr"))) (DoLet false false (PVar "ne") (EApp (EVar "listLen") (EVar "vs"))) (DoExpr (EIf (EBinOp "==" (EVar "ne") (ELit (LInt 0))) (ELit (LString "  out-of-sample error of the packing statistic: not derivable (no schedulable gate carries one sample per recorded run)\n")) (EApp (EVar "stringConcat") (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  out-of-sample error of the packing statistic (leave-one-run-out over the ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "nr")))) (ELit (LString " runs in runs[], across the "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "ne")))) (ELit (LString " of "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "cs"))))) (ELit (LString " schedulable gates carrying one sample per run):\n"))) (EApp (EVar "joinNl") (EApp (EApp (EApp (EApp (EVar "balOosFolds") (EVar "vs")) (EVar "ids")) (ELit (LInt 0))) (EVar "nr"))) (ELit (LString "\n")) (EApp (EApp (EVar "balOosSummary") (EVar "vs")) (EVar "nr")) (EApp (EVar "balOosDriftLine") (EVar "base")))))))))))
+(DFunDef false "balOosBlock" ((PVar "base") (PVar "cs") (PVar "runs")) (EBlock (DoLet false false (PVar "ids") (EApp (EApp (EVar "balRunIds") (EVar "runs")) (EListLit))) (DoLet false false (PVar "nr") (EApp (EVar "listLen") (EVar "ids"))) (DoExpr (EIf (EBinOp "<" (EVar "nr") (ELit (LInt 2))) (EBinOp "++" (EBinOp "++" (ELit (LString "  out-of-sample error of the packing statistic: not derivable (")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "nr")))) (ELit (LString " recorded run(s); predicting one run from the others needs at least two)\n"))) (EBlock (DoLet false false (PVar "vs") (EApp (EApp (EApp (EVar "balOosVecs") (EVar "base")) (EVar "cs")) (EVar "ids"))) (DoLet false false (PVar "ne") (EApp (EVar "listLen") (EVar "vs"))) (DoExpr (EIf (EBinOp "==" (EVar "ne") (ELit (LInt 0))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  out-of-sample error of the packing statistic: not derivable — ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EApp (EVar "balAttrKnown") (EVar "base")) (EVar "cs"))))) (ELit (LString " of "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EApp (EVar "balAttrTotal") (EVar "base")) (EVar "cs"))))) (ELit (LString " retained samples carry run attribution, and no schedulable gate carries an exactly attributed sample from each of the "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "nr")))) (ELit (LString " recorded runs\n"))) (EApp (EVar "stringConcat") (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  out-of-sample error of the packing statistic (leave-one-run-out over the ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "nr")))) (ELit (LString " runs in runs[], across the "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "ne")))) (ELit (LString " of "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "cs"))))) (ELit (LString " schedulable gates carrying a run-attributed sample from every run):\n"))) (EApp (EVar "joinNl") (EApp (EApp (EApp (EApp (EVar "balOosFolds") (EVar "vs")) (EVar "ids")) (ELit (LInt 0))) (EVar "nr"))) (ELit (LString "\n")) (EApp (EApp (EVar "balOosSummary") (EVar "vs")) (EVar "nr")) (EApp (EVar "balOosDriftLine") (EVar "base")))))))))))
 (DTypeSig false "balOosFolds" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "balOosFolds" ((PVar "vs") (PVar "ids") (PVar "i") (PVar "nr")) (EIf (EBinOp ">=" (EVar "i") (EVar "nr")) (EListLit) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "p") (EApp (EApp (EVar "balOosPred") (EVar "vs")) (EVar "i"))) (DoLet false false (PVar "a") (EApp (EApp (EVar "balOosAct") (EVar "vs")) (EVar "i"))) (DoExpr (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "    run ")) (EApp (EMethodRef "display") (EApp (EApp (EVar "balPadR") (ELit (LInt 13))) (EApp (EApp (EVar "balNthStr") (EVar "i")) (EVar "ids"))))) (ELit (LString " predicted "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "balPadL") (ELit (LInt 9))) (EApp (EVar "balSecs") (EVar "p"))))) (ELit (LString "   actual "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "balPadL") (ELit (LInt 9))) (EApp (EVar "balSecs") (EVar "a"))))) (ELit (LString "   "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "balPadL") (ELit (LInt 7))) (EApp (EApp (EVar "balPct1") (EBinOp "-" (EVar "p") (EVar "a"))) (EVar "a"))))) (ELit (LString ""))) (EApp (EApp (EApp (EApp (EVar "balOosFolds") (EVar "vs")) (EVar "ids")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "nr"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "balOosSummary" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyCon "Int") (TyCon "String"))))
@@ -5965,9 +6075,25 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DTypeSig false "balStatDrift" (TyFun (TyApp (TyCon "List") (TyCon "GateCost")) (TyCon "Int")))
 (DFunDef false "balStatDrift" ((PList)) (ELit (LInt 0)))
 (DFunDef false "balStatDrift" ((PCons (PVar "c") (PVar "cs"))) (EIf (EBinOp "==" (EApp (EVar "packStat") (EFieldAccess (EVar "c") "ms")) (EFieldAccess (EVar "c") "medianMs")) (EApp (EVar "balStatDrift") (EVar "cs")) (EIf (EVar "otherwise") (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "balStatDrift") (EVar "cs"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "balOosVecs" (TyFun (TyApp (TyCon "List") (TyCon "GateCost")) (TyFun (TyApp (TyCon "List") (TyCon "Cand")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int")))))))
+(DTypeSig false "balOosVecs" (TyFun (TyApp (TyCon "List") (TyCon "GateCost")) (TyFun (TyApp (TyCon "List") (TyCon "Cand")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int")))))))
 (DFunDef false "balOosVecs" (PWild (PList) PWild) (EListLit))
-(DFunDef false "balOosVecs" ((PVar "base") (PCons (PVar "c") (PVar "cs")) (PVar "nr")) (EMatch (EApp (EApp (EVar "costRowOf") (EFieldAccess (EVar "c") "crun")) (EVar "base")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "balOosVecs") (EVar "base")) (EVar "cs")) (EVar "nr"))) (arm (PCon "Some" (PVar "g")) ((GBool (EBinOp "/=" (EFieldAccess (EVar "g") "samples") (EVar "nr")))) (EApp (EApp (EApp (EVar "balOosVecs") (EVar "base")) (EVar "cs")) (EVar "nr"))) (arm (PCon "Some" (PVar "g")) () (EBinOp "::" (EFieldAccess (EVar "g") "ms") (EApp (EApp (EApp (EVar "balOosVecs") (EVar "base")) (EVar "cs")) (EVar "nr"))))))
+(DFunDef false "balOosVecs" ((PVar "base") (PCons (PVar "c") (PVar "cs")) (PVar "ids")) (EMatch (EApp (EApp (EVar "costRowOf") (EFieldAccess (EVar "c") "crun")) (EVar "base")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "balOosVecs") (EVar "base")) (EVar "cs")) (EVar "ids"))) (arm (PCon "Some" (PVar "g")) () (EMatch (EApp (EApp (EVar "balOosVecFor") (EVar "g")) (EVar "ids")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "balOosVecs") (EVar "base")) (EVar "cs")) (EVar "ids"))) (arm (PCon "Some" (PVar "v")) () (EBinOp "::" (EVar "v") (EApp (EApp (EApp (EVar "balOosVecs") (EVar "base")) (EVar "cs")) (EVar "ids"))))))))
+(DTypeSig false "balOosVecFor" (TyFun (TyCon "GateCost") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Int"))))))
+(DFunDef false "balOosVecFor" (PWild (PList)) (EApp (EVar "Some") (EListLit)))
+(DFunDef false "balOosVecFor" ((PVar "g") (PCons (PVar "r") (PVar "rs"))) (EMatch (EApp (EApp (EApp (EApp (EVar "balSampleForRun") (EVar "r")) (EFieldAccess (EVar "g") "ms")) (EFieldAccess (EVar "g") "sampleRuns")) (EVar "None")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "v")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "v") (EVar "_s")))) (EApp (EApp (EVar "balOosVecFor") (EVar "g")) (EVar "rs"))))))
+(DTypeSig false "balSampleForRun" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "Int")))))))
+(DFunDef false "balSampleForRun" (PWild (PList) PWild (PVar "acc")) (EVar "acc"))
+(DFunDef false "balSampleForRun" (PWild PWild (PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "balSampleForRun" ((PVar "r") (PCons (PVar "m") (PVar "ms")) (PCons (PVar "s") (PVar "ss")) (PVar "acc")) (EIf (EBinOp "/=" (EVar "s") (EVar "r")) (EApp (EApp (EApp (EApp (EVar "balSampleForRun") (EVar "r")) (EVar "ms")) (EVar "ss")) (EVar "acc")) (EIf (EVar "otherwise") (EMatch (EVar "acc") (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "balSampleForRun") (EVar "r")) (EVar "ms")) (EVar "ss")) (EApp (EVar "Some") (EVar "m")))) (arm (PCon "Some" PWild) () (EVar "None"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "balAttrKnown" (TyFun (TyApp (TyCon "List") (TyCon "GateCost")) (TyFun (TyApp (TyCon "List") (TyCon "Cand")) (TyCon "Int"))))
+(DFunDef false "balAttrKnown" (PWild (PList)) (ELit (LInt 0)))
+(DFunDef false "balAttrKnown" ((PVar "base") (PCons (PVar "c") (PVar "cs"))) (EMatch (EApp (EApp (EVar "costRowOf") (EFieldAccess (EVar "c") "crun")) (EVar "base")) (arm (PCon "None") () (EApp (EApp (EVar "balAttrKnown") (EVar "base")) (EVar "cs"))) (arm (PCon "Some" (PVar "g")) () (EBinOp "+" (EApp (EVar "balCountAttr") (EFieldAccess (EVar "g") "sampleRuns")) (EApp (EApp (EVar "balAttrKnown") (EVar "base")) (EVar "cs"))))))
+(DTypeSig false "balCountAttr" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Int")))
+(DFunDef false "balCountAttr" ((PList)) (ELit (LInt 0)))
+(DFunDef false "balCountAttr" ((PCons (PVar "s") (PVar "ss"))) (EIf (EBinOp "==" (EVar "s") (ELit (LString ""))) (EApp (EVar "balCountAttr") (EVar "ss")) (EIf (EVar "otherwise") (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "balCountAttr") (EVar "ss"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "balAttrTotal" (TyFun (TyApp (TyCon "List") (TyCon "GateCost")) (TyFun (TyApp (TyCon "List") (TyCon "Cand")) (TyCon "Int"))))
+(DFunDef false "balAttrTotal" (PWild (PList)) (ELit (LInt 0)))
+(DFunDef false "balAttrTotal" ((PVar "base") (PCons (PVar "c") (PVar "cs"))) (EMatch (EApp (EApp (EVar "costRowOf") (EFieldAccess (EVar "c") "crun")) (EVar "base")) (arm (PCon "None") () (EApp (EApp (EVar "balAttrTotal") (EVar "base")) (EVar "cs"))) (arm (PCon "Some" (PVar "g")) () (EBinOp "+" (EApp (EVar "listLen") (EFieldAccess (EVar "g") "ms")) (EApp (EApp (EVar "balAttrTotal") (EVar "base")) (EVar "cs"))))))
 (DTypeSig false "balOosPred" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "balOosPred" ((PList) PWild) (ELit (LInt 0)))
 (DFunDef false "balOosPred" ((PCons (PVar "v") (PVar "vs")) (PVar "i")) (EBinOp "+" (EApp (EVar "packStat") (EApp (EApp (EVar "balDropNth") (EVar "i")) (EVar "v"))) (EApp (EApp (EVar "balOosPred") (EVar "vs")) (EVar "i"))))
