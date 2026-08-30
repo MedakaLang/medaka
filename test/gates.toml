@@ -135,8 +135,16 @@
 #
 # ⚠️ A bare `nightly` beside a bare `merge` is a positive claim of DUPLICATION
 # — the two runs are the identical invocation. `diff_compiler_eval_scaling`
-# carries exactly that today, deliberately: recording the duplication is this
-# slice's job; deciding whether to demote, dedupe or keep it is not.
+# carried exactly that at S-tier-is-data landing, deliberately: recording the
+# duplication was that slice's job; deciding whether to demote, dedupe or keep
+# it was explicitly deferred. S-charter-and-inventory (#2181) made the call:
+# DEMOTED to `tiers = ["nightly"]` — the merge-path run was the identical
+# invocation already covered nightly (no `/mode` delta, unlike
+# `diff_compiler_perf_scaling`'s genuine `nightly/PERF_DEEP=1` breadth arm),
+# so the merge-tier copy paid full cost for zero additional coverage. Charter
+# clause N1 (docs/ops/CI-ARCHITECTURE.md §3.6): cost above threshold, the
+# gate's own nightly job comment already called it "lower per-PR value" before
+# this slice made it structural.
 #
 # ⚠️ DERIVED-AND-CHECKED, not a judgment call. `test/diff_compiler_tier_drift.sh`
 # re-derives every entry's run set from .github/workflows/*.yml (real `run:`
@@ -1961,9 +1969,9 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_eval_scaling"
 area = "eval"
-shard = "gates_2"
+shard = "other-job"
 project = "compiler"
-tiers = ["merge", "nightly"]
+tiers = ["nightly"]
 cost = "heavy"
 kind = "exec"
 run = "test/diff_compiler_eval_scaling.sh"

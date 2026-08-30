@@ -315,6 +315,36 @@ whose failure means a wrong answer shipped — stay tier 2 regardless of cost). 
 nightly job cites its qualifying clause; every tracked test/census script has an
 explicit home (queue-tier, nightly-tier, or listed on-demand tool).
 
+**The charter — qualifying clauses.** A job/gate needs at least one to sit in
+`nightly.yml` rather than `merge_group`; each `.github/workflows/nightly.yml` job
+carries a comment naming the clause(s) it claims.
+
+- **N1 — cost above threshold.** Its irreducible wall-clock cost (an N band that
+  cannot clear in seconds, a full corpus sweep, a tree-wide scan) would make it the
+  pole of a merge-tier shard or push a shard past the ~12 min band the rest of the
+  suite holds to. Evidence is a measured number (e.g. #1962's 14m→36m), not a guess.
+- **N2 — breadth beyond queue needs.** Exercises a THIRD axis of agreement (a third
+  engine, a corpus the queue's narrower one already implies correctness for) whose
+  loss would not desound the merge tier's own guarantee — the queue's own arms
+  already gate the same code path some other way.
+- **N3 — external-tool dependency.** Needs something the required-checks path
+  cannot assume hermetically (system Chrome, a non-toolchain external service) or
+  writes to repo-external state (the GitHub API) in a way unsuited to a check that
+  must be reproducible from the diff alone.
+- **N4 — advisory / non-blocking by construction.** The job's output is a finding
+  to file, not a pass/fail correctness verdict on the diff under test (a fuzzer
+  whose green run proves nothing; a census reconciling tracker state against a
+  corpus; a drift/cost report; a data-baseline auto-advance) — a required check
+  must be caused by the diff it gates (`nightly.yml`'s `must-fail-census` job
+  states this explicitly for its own case), and none of these produce a verdict
+  on the diff under test.
+- **NEVER — the soundness floor.** A gate whose failure means a wrong answer
+  shipped with no error (typecheck, the must-fail *gate* as opposed to its
+  *census*, the self-compile fixpoint) stays tier 2 regardless of cost, breadth, or
+  tooling — there is no clause that licenses moving it. Cost pressure on a
+  soundness-class gate is a shard-rebalance problem ([W-SHARD-DERIVED]), never a
+  tier-3 candidate.
+
 **What "revert to green" means here.** A tier-3 job going red files (or updates) one
 `known-red`-labeled issue naming the gate, the failing run's URL, and the commit range
 since that job's own last green nightly run (`.github/actions/file-nightly-red` — a
