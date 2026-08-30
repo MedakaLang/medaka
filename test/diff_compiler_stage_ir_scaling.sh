@@ -311,6 +311,25 @@ XREF_N="${STAGE_IR_XREF_N:-125}"
 VCHAIN_N="${STAGE_IR_VCHAIN_N:-125}"
 CONSTR_N="${STAGE_IR_CONSTR_N:-300}"
 WIDEIFACE_N="${STAGE_IR_WIDEIFACE_N:-125}"
+# S-5-scoperefs-attribution (#2172): per-stage attribution, NOT a re-grade of
+# ir_scaling.sh's module-level scoperefs row (KNOWN_CEIL_scoperefs=3.26 at
+# IR_SCOPEREFS_N=3000 — a different gate, different cost budget). Callgrind here
+# already costs ~1 min per shape at N=35/70/140 (measured, this box), so the band
+# is picked for the smallest N that shows a CLEARLY superlinear stage without
+# crossing this gate's own THRESH=3.0 (attribution only — landing an over-3.0
+# verdict here would fail the gate on an #2172 fix this slice is explicitly not
+# making). At 35/70/140 (this box): dce r1=2.929 r2=2.649, trmc r1=2.723
+# r2=2.886 — both visibly above the ~2.0-2.3 baseline every other stage reads at
+# this band, confirmed genuinely quadratic (not band noise) by a spot-check at
+# 250/500/1000 where both cross 3.0 (dce r2=3.632, trmc r2=3.526). See
+# S-5-scoperefs-attribution's report for the full derivation table.
+#
+# PLACEMENT DECISION (per [W-SHARD-DERIVED]/contract §7.3): this shape rides the gate's
+# existing per-PR cadence — test/gates.toml's `diff_compiler_stage_ir_scaling` entry is
+# `tier = "merge"` (every PR/merge-queue run, same as its five sibling shapes in this
+# file), not `nightly` or `ondemand`. No special-case override was needed or added; the
+# ~1 min/shape callgrind cost at this band was accepted as part of that existing tier.
+SCOPEREFS_N="${STAGE_IR_SCOPEREFS_N:-35}"
 
 # ── the multi-module band ────────────────────────────────────────────────────
 #
@@ -723,6 +742,24 @@ want() {
   for _w in $STAGE_IR_ONLY; do [ "$_w" = "$1" ] && return 0; done
   return 1
 }
+
+# gen_scoperefs is SHARED with test/diff_compiler_ir_scaling.sh (#2172 attribution,
+# S-5-scoperefs-attribution), sourced from test/perf_shapes.sh — unlike the shapes
+# below, which are local transcriptions from perf_scaling.sh (#2066's charter names
+# a generator a public contract only where a change to it must move ANOTHER gate's
+# ledgered ceiling in lockstep; here it must move ir_scaling.sh's KNOWN_CEIL_scoperefs
+# in lockstep, which is exactly that case). Same missing-library guard as
+# ir_scaling.sh: `.` is a POSIX special builtin, so a moved/renamed library would
+# otherwise die silently inside the `.` with no line of ours on stdout.
+# (perf_scaling.sh ALSO sources this library, for gen_xref/gen_manyifaces, but is not a
+# third consumer of this shape — it shadows the bare name `gen_scoperefs` with its own,
+# unrelated local `gen_scoperefs_resolve`; see perf_shapes.sh's header on that generator.)
+[ -r "$ROOT/test/perf_shapes.sh" ] || {
+  echo "FAIL: cannot read $ROOT/test/perf_shapes.sh — the shared shape library (#2066) is missing."
+  echo "  Both scoperefs consumers source it; without it neither can generate the shape."
+  exit 1
+}
+. "$ROOT/test/perf_shapes.sh"
 
 # ── the shapes (verbatim from test/diff_compiler_perf_scaling.sh) ────────────
 
@@ -1294,6 +1331,7 @@ grade_shape xref "$XREF_N"
 grade_shape vchain "$VCHAIN_N"
 grade_shape constrained "$CONSTR_N"
 grade_shape wideiface "$WIDEIFACE_N"
+grade_shape scoperefs "$SCOPEREFS_N"
 grade_modules
 
 # ⚠️ ZERO GRADED IS A FAILURE UNDER NARROWING TOO. This guard USED TO be SKIPPED

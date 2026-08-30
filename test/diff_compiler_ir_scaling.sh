@@ -591,13 +591,25 @@ DIAGBUCKET_N="${IR_DIAGBUCKET_N:-300}"
 # untouched (the OrdMap index costs nothing measurable) and 74 Ir per message pair
 # — one String comparison — is gone.
 #
-# ⚠️ THE RESIDUAL b = 165 IS A SECOND, DIFFERENT QUADRATIC, NOT #2068 LEFTOVER.
-# `noImplHintFor` calls `tabHasName` (compiler/frontend/ast.mdk:464), a linear
-# List scan over `dataParamKindsRef`, once per no-impl DETECTION — O(data-types x
-# no-impl-errors), and THIS shape scales both axes together. Discriminated by
-# measurement: the same route with ONE data type and N interfaces (so
-# `dataParamKindsRef` stays size 1) fits b = 79 instead of 165. Filed separately.
-# If that one is fixed, the numbers above move; re-derive rather than trusting them.
+# ⚠️ THE RESIDUAL b = 165 WAS A SECOND, DIFFERENT QUADRATIC, NOT #2068 LEFTOVER —
+# now FIXED (#2158). `noImplHintFor` used to call `tabHasName`
+# (compiler/frontend/ast.mdk:464), a linear List scan over `dataParamKindsRef`,
+# once per no-impl DETECTION — O(data-types x no-impl-errors), and THIS shape
+# scaled both axes together. Discriminated by measurement: the same route with
+# ONE data type and N interfaces (so `dataParamKindsRef` stayed size 1) fit
+# b = 79 instead of 165.
+#
+# #2158 replaced the scan with `dataParamNameIndexRef`, a name-keyed `OrdMap`
+# built and kept in lockstep with `dataParamKindsRef` at each of its three write
+# sites (freshPerRun / declEnvSeedDataUniverse / recordParamKinds), so
+# `noImplHintFor` is an `omHasKey` lookup instead of a re-scan. Re-measured
+# post-fix on this box: net Ir at N = 400/800/1600 was 871409915 / 1774831855 /
+# 3621459149, fitting net(N) = a*N + b*N^2 over 400->1600 gives a = 2.15e6,
+# b ~= 71 — down from 165 (lineage: 239 [pre-#2068] -> 165 [pre-#2158] -> ~71
+# [post-#2158]). The residual b is NOT zero: this shape still walks `perRun`
+# state proportional to N somewhere else (e.g. diagnostic accumulation shared
+# with the `errs`/`diagbucket` bands above), so a further quadratic may remain;
+# re-derive rather than trusting this number if the surrounding code moves.
 #
 # What this band IS for: keeping a deterministic ladder on the plain
 # `pushTypeErrorOnceAt` route (the route #2068's first, invalid measurement never
@@ -617,8 +629,13 @@ MIN_NET_FRAC="${IR_MIN_NET_FRAC:-0.05}"
 
 # ── the shapes ───────────────────────────────────────────────────────────────
 #
-# gen_xref / gen_manyifaces are SHARED with test/diff_compiler_perf_scaling.sh, sourced
-# from test/perf_shapes.sh. They used to be TRANSCRIBED here (#2066): two byte-different
+# gen_xref / gen_manyifaces are SHARED with test/diff_compiler_perf_scaling.sh, and
+# gen_scoperefs is additionally SHARED with test/diff_compiler_stage_ir_scaling.sh
+# (per-stage #2172 attribution, S-5-scoperefs-attribution) — all sourced from
+# test/perf_shapes.sh. (test/diff_compiler_perf_scaling.sh also sources this library, but
+# does NOT consume its `gen_scoperefs` — it shadows the name with its own, textually
+# different local `gen_scoperefs_resolve` for the unrelated #78 P-1 resolve detector; see
+# perf_shapes.sh's header on that generator.) They used to be TRANSCRIBED here (#2066): two byte-different
 # copies of the same two programs, with nothing comparing them, so the two gates could
 # have drifted into measuring different shapes while both stayed green and their ratios
 # went on being quoted side by side. Read the header of perf_shapes.sh before editing a
@@ -661,32 +678,6 @@ gen_errs() {
       gi=$((gi + 1))
     done
     printf 'main = println 1\n'
-  } >> "$gf"
-}
-
-# The #1031 regression pin (local, per F3 — NOT shared with perf_scaling's
-# generators). One `main` with N sequential `let` bindings (a deep local scope,
-# each new binding one frame deeper than the last), whose tail expression sums
-# EVERY bound name — so almost all of the N lookups are non-innermost, and each
-# must walk back through the frames between its binding site and the tail. That
-# is exactly the shape the four #1031 sites scan a List to resolve.
-gen_scoperefs() {
-  gn=$1; gf=$2; : > "$gf"
-  {
-    printf 'main =\n'
-    gi=0
-    while [ "$gi" -lt "$gn" ]; do
-      printf '  let x%s = %s\n' "$gi" "$gi"
-      gi=$((gi + 1))
-    done
-    printf '  println ('
-    gi=0
-    while [ "$gi" -lt "$gn" ]; do
-      if [ "$gi" -gt 0 ]; then printf ' + '; fi
-      printf 'x%s' "$gi"
-      gi=$((gi + 1))
-    done
-    printf ')\n'
   } >> "$gf"
 }
 

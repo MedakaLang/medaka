@@ -99,3 +99,42 @@ gen_manyifaces() {
     printf 'main = println h0\n'
   } >> "$gf"
 }
+
+# gen_scoperefs — THE #1031 REGRESSION PIN, shared per #2066/#2172 (S-5-scoperefs-attribution).
+#
+# One `main` with N sequential `let` bindings (a deep local scope, each new binding one
+# frame deeper than the last), whose tail expression sums EVERY bound name — so almost all
+# of the N lookups are non-innermost, and each must walk back through the frames between
+# its binding site and the tail. That is exactly the shape the four #1031 sites scan a List
+# to resolve. Used by test/diff_compiler_ir_scaling.sh (module-level Ir, ledgered
+# KNOWN_SUPERLINEAR/KNOWN_CEIL_scoperefs, #2172) and by
+# test/diff_compiler_stage_ir_scaling.sh (per-stage Ir attribution for the same #2172
+# quadratic) — both must grade the IDENTICAL program, so this generator is the single
+# source for it.
+#
+# ⚠️ NAME COLLISION, not a third consumer: test/diff_compiler_perf_scaling.sh also sources
+# this file (for gen_xref/gen_manyifaces) but defines its OWN, textually different function
+# also named `gen_scoperefs` for the #78 P-1 resolve SCOPE-scan detector — a shell function
+# defined after a `.`-sourced one of the same name SHADOWS it, so that file's local
+# definition wins today by luck of definition order, not by design. Do not "de-duplicate"
+# by deleting the local one in that file; see its own header comment
+# (`gen_scoperefs_resolve`) before touching either.
+gen_scoperefs() {
+  gn=$1; gf=$2; : > "$gf"
+  {
+    printf 'main =\n'
+    gi=0
+    while [ "$gi" -lt "$gn" ]; do
+      printf '  let x%s = %s\n' "$gi" "$gi"
+      gi=$((gi + 1))
+    done
+    printf '  println ('
+    gi=0
+    while [ "$gi" -lt "$gn" ]; do
+      if [ "$gi" -gt 0 ]; then printf ' + '; fi
+      printf 'x%s' "$gi"
+      gi=$((gi + 1))
+    done
+    printf ')\n'
+  } >> "$gf"
+}
