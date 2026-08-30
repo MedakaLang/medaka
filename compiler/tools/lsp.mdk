@@ -67,6 +67,7 @@ import frontend.parser.{
   declPosChildLocs,
 }
 import frontend.lexer.{Token(..), tokenizeWithOffsetPairs}
+import frontend.parse_cache.{parsePrelude}
 import support.char.{isIdentChar, isDigit}
 import support.util.{maxI, utf8Len, joinWith}
 import io.{stripCR}
@@ -698,8 +699,8 @@ docSchemes : String -> String -> String -> Option (List (String, Scheme))
 docSchemes runtimeSrc coreSrc src = match parseResult src
   Err _ => None
   Ok userRaw =>
-    let runtimeDecls = desugar (unwrapDecls (parseResult runtimeSrc))
-    let coreDecls = desugar (unwrapDecls (parseResult coreSrc))
+    let runtimeDecls = desugar (parsePrelude runtimeSrc)
+    let coreDecls = desugar (parsePrelude coreSrc)
     let userDecls = desugar userRaw
     let (preludeSchemes, ownSchemes) = checkOneSchemeFull runtimeDecls coreDecls ("__user__", userDecls)
     Some (ownSchemes ++ preludeSchemes)

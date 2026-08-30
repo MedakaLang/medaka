@@ -240,3 +240,67 @@ loader/resolve path on a 9-file project is the standing cost this harness's
 `check`-hello-only; `check`-project has not been profiled the same way). This
 is exactly the shape #2040 asks every miss to produce — a named Wave 2 item,
 not a shrug.
+
+## LSP editor-loop latency (#2040 residual, #962)
+
+First committed numbers for the two editor-loop metrics #2040 names
+(`prelude-floor` S-2). Method: a Python harness drives `medaka lsp` over its
+real stdio JSON-RPC framing (Content-Length, same protocol
+`test/diff_compiler_lsp*.sh` uses) — no gate/CLI shortcut — timing wall-clock
+`time.perf_counter()` around the actual request/response or request/
+notification pair, one fresh `medaka lsp` subprocess per trial, N=7 trials,
+min-of-N and median reported (min isolates steady-state cost from scheduler
+noise; median shown alongside since N is small). Box: this sprint's build box
+(`.claude/workstreams` "shared box", not isolated). Two workloads:
+
+- **open-file → first-diagnostic**: time from sending `textDocument/didOpen`
+  (a one-line program with a type error) to receiving the
+  `textDocument/publishDiagnostics` notification.
+- **keystroke → hover**: time from sending `textDocument/didChange` (a
+  full-document resync simulating one keystroke) — after draining that
+  didChange's own diagnostics — to receiving the `textDocument/hover`
+  response for a hover request sent immediately after, over the identifier
+  `double` in `double x = x + x\nmain = println (double 3)\n`.
+
+| workload | min (s) | median (s) | N |
+|---|---:|---:|---:|
+| open-file → first-diagnostic | 0.058 | 0.064 | 7 |
+| keystroke → hover | 0.062 | 0.067 | 7 |
+
+**Before/after this slice**, same harness, same box, re-run rather than
+re-derived (the "before" run used the pre-slice binary, `docSchemes` in
+`compiler/tools/lsp.mdk` calling `parseResult` on the prelude sources
+directly instead of the S-1 memo):
+
+| workload | before (min) | after (min) | note |
+|---|---:|---:|---|
+| open-file → first-diagnostic | 0.053 | 0.058 | unchanged (within noise) — this path (`analyzeLocated` → `analyzeFrom`) already routed through S-1's `parsePrelude` memo *before* this slice; S-1 already discharged it |
+| keystroke → hover | 0.097 | 0.062 | **~37% faster** — `docSchemes` (hover/completion/inlayHint env build, `lsp.mdk:701-702`) was the one remaining site still calling `parseResult` on the raw prelude source on every request; this slice routes it through `parsePrelude` too |
+
+**Verdict:** S-1's memo did NOT fully discharge #2040/#962 on its own —
+`analyzeLocated`'s diagnostics path was already covered (confirmed by the
+unchanged before/after number above), but `docSchemes` was not, and it is the
+env build behind hover/completion/inlayHint. This slice wires that one
+remaining site onto the existing memo; the LSP's third prelude-parsing path,
+`analyzeProject`/`publishProjectDiagnostics` (multi-module diagnostics,
+`lsp.mdk:1602`), already had its own independent once-per-session memo
+(`preludeDesugared`, keyed on a `Ref` threaded from the LSP's own
+`projectParseCache`, pre-dating this sprint) and needed no change.
+`buildRefIndexProject`'s `seedPrelude` (`compiler/tools/refindex.mdk`, the
+`textDocument/references` path) still re-parses the prelude every request via
+`parseWithPositionsOpt` — a LOCATED parse, explicitly out of scope per
+`parse_cache.mdk`'s "WHAT THIS IS NOT FOR" (only the non-located `parse` is
+memoized); left untouched, noted as a candidate for a future slice, not part
+of this one's §5.
+
+**Parity, not a behavior change**: `docSchemes` returns `List (String,
+Scheme)` (`(name, type scheme)` pairs) with no `Loc`/span field anywhere in
+its result — unlike `analyzeLocated`'s `Diag`s, nothing it produces can carry
+a stale or zero-span prelude location, so swapping its prelude source from
+`parseResult`+`unwrapDecls` to the memoized `parsePrelude` changes no
+observable output. `parsePrelude`'s own doc comment establishes `parse` and
+`parseResult`'s `Ok` payload are the same decls for prelude source (a strict
+refinement, `parseResult` only adds a pre-scan `parse` skips) — moot here
+regardless, since `stdlib/core.mdk`/`stdlib/runtime.mdk` always parse
+successfully and `docSchemes`'s own `unwrapDecls` already treated a
+theoretical `Err` on the prelude as `[]` defensively.
