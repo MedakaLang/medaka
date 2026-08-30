@@ -7,6 +7,26 @@
 # set that no longer exists. Row `b` carries ONE committed gate and its
 # recorded run also remembers ONE, so it must print with no annotation —
 # proving the mechanism is a real comparison, not a flag that always fires.
+#
+# Rows `c` and `d` are the SET half of the same question (S-2, #2223). Both are
+# recorded at exactly the count they carry now, so the count comparison above
+# reports clean for both and cannot tell them apart — which is the bug: the
+# commonest rebalance is a SWAP, and a swap does not move a count. Row `c` had
+# its one gate swapped (`swapped_out` left, `swapped_in` arrived), so its
+# recorded `gatesDigest` is `swapped_out`'s and must not match; row `d` still
+# carries the `stayed` it was recorded with, so its digest must match and its
+# line must stay unannotated.
+#
+# The two digests in calib_staleness.json are a three-way agreement check, not
+# two magic numbers: `gate_cost.gateSetDigest` computes the committed side,
+# `_digest` in test/gate_cost_ingest.sh computed the recorded side, and row `d`
+# starts failing the moment those two implementations disagree.
+#
+# `c` and `d` are CLOSED rows (`full_cores = true`) so the packer neither adds
+# to nor removes from them: their membership is the fixture's input, and the
+# only thing under test is what the calibration line says about it. On an open
+# row the packer would decide the membership and the fixture would be asserting
+# the packer's arithmetic instead of the staleness comparison.
 
 [[gate]]
 name = "small1"
@@ -50,6 +70,34 @@ sources = []
 corpus = []
 toolchain = []
 
+[[gate]]
+name = "swapped_in"
+area = "fixture"
+shard = "c"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/swapped_in.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "stayed"
+area = "fixture"
+shard = "d"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/stayed.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
 [[shard]]
 name = "a"
 full_cores = false
@@ -63,3 +111,17 @@ full_cores = false
 wasm_arm = false
 rationale = "test/gate_shards/b.txt"
 pinned_gates = []
+
+[[shard]]
+name = "c"
+full_cores = true
+wasm_arm = false
+rationale = "test/gate_shards/c.txt"
+pinned_gates = ["swapped_in"]
+
+[[shard]]
+name = "d"
+full_cores = true
+wasm_arm = false
+rationale = "test/gate_shards/d.txt"
+pinned_gates = ["stayed"]

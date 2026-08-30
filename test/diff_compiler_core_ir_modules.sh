@@ -19,9 +19,11 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SELF="$ROOT/test/bin/core_ir_modules_main"
+MEDAKA="$ROOT/medaka"
 CORE="$ROOT/stdlib/core.mdk"
 FIXDIR="$ROOT/test/eval_modules_fixtures"
 [ -x "$SELF" ] || { echo "build oracles first: FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one $(basename "$SELF") (missing $SELF)"; exit 2; }
+[ -x "$MEDAKA" ] || { echo "build native first: make medaka (missing $MEDAKA)"; exit 2; }
 strip_unit() { sed '${/^()$/d;}'; }  # drop native runtime's trailing Unit auto-print
 
 pass=0; fail=0
@@ -41,5 +43,58 @@ for dir in "$FIXDIR"/*/; do
     printf '  self: %s\n' "$self"
   fi
 done
+
+# #2133: AST eval and Core-IR eval must classify a reached user extern with the
+# same deliberate engine wall.  A separate same-process probe runs an
+# unreachable-extern program followed by a pure one, proving the mutable name
+# classifier is both seeded and reset rather than leaking between evaluations.
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+cat > "$TMP/ffi_reached.mdk" <<'EOF'
+extern ffiBlocked : Int -> <FFI> Int
+
+main = println (ffiBlocked 1)
+EOF
+cat > "$TMP/ffi_unreachable.mdk" <<'EOF'
+extern ffiBlocked : Int -> <FFI> Int
+
+main = println 7
+EOF
+cat > "$TMP/pure.mdk" <<'EOF'
+main = println 9
+EOF
+
+ast_out="$(MEDAKA_STRICT=1 "$MEDAKA" run "$TMP/ffi_reached.mdk" 2>&1)"
+ast_code=$?
+case "$ast_out" in
+  *"user-declared FFI extern"*"tree-walking interpreter cannot make a foreign C call"*)
+    if [ "$ast_code" -eq 1 ]; then
+      pass=$((pass+1)); printf 'ok   ffi-engine-wall-ast (exit 1)\n'
+    else
+      fail=$((fail+1)); printf 'FAIL ffi-engine-wall-ast (wall but exit %d)\n' "$ast_code"
+    fi ;;
+  *) fail=$((fail+1)); printf 'FAIL ffi-engine-wall-ast ([%s])\n' "$ast_out" ;;
+esac
+
+core_out="$(MEDAKA_STRICT=1 "$SELF" "$CORE" "$TMP/ffi_reached.mdk" "$TMP" 2>&1)"
+core_code=$?
+case "$core_out" in
+  *"user-declared FFI extern"*"tree-walking interpreter cannot make a foreign C call"*)
+    if [ "$core_code" -eq 1 ]; then
+      pass=$((pass+1)); printf 'ok   ffi-engine-wall-core-ir (exit 1)\n'
+    else
+      fail=$((fail+1)); printf 'FAIL ffi-engine-wall-core-ir (wall but exit %d)\n' "$core_code"
+    fi ;;
+  *) fail=$((fail+1)); printf 'FAIL ffi-engine-wall-core-ir ([%s])\n' "$core_out" ;;
+esac
+
+reset_out="$(MEDAKA_STRICT=1 "$SELF" "$CORE" --ffi-reset-control "$TMP/ffi_unreachable.mdk" "$TMP/pure.mdk" "$TMP" 2>&1)"
+reset_code=$?
+if [ "$reset_code" -eq 0 ] && [ "$reset_out" = "9" ]; then
+  pass=$((pass+1)); printf 'ok   ffi-state-reset-same-process (unreachable extern -> pure)\n'
+else
+  fail=$((fail+1)); printf 'FAIL ffi-state-reset-same-process (exit %d: [%s])\n' "$reset_code" "$reset_out"
+fi
+
 printf '\n%d ok, %d failing\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

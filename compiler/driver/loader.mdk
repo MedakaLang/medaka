@@ -229,14 +229,19 @@ keyEqGo line i n =
 
 -- the substring after the first `=` (trimmed + unquoted); "" if there is no `=`.
 valAfterEq : String -> String
-valAfterEq line = valEqGo line 0 (stringLength line)
+valAfterEq line = unquote (rawValAfterEq line)
+
+-- The trimmed but still quoted value.  `scanAllowInternal` needs this form so
+-- that a quoted string cannot impersonate the canonical unquoted boolean.
+rawValAfterEq : String -> String
+rawValAfterEq line = valEqGo line 0 (stringLength line)
 
 valEqGo : String -> Int -> Int -> String
 valEqGo line i n =
   if i >= n then
     ""
   else if stringSlice i (i + 1) line == "=" then
-    unquote (stringTrim (stringSlice (i + 1) n line))
+    stringTrim (stringSlice (i + 1) n line)
   else
     valEqGo line (i + 1) n
 
@@ -323,14 +328,16 @@ collectLibsIn : String -> List String -> List (String, String)
 collectLibsIn root [] = []
 collectLibsIn root (line::rest) =
   let t = stringTrim line
-  if startsWith "[" t then collectLibs root (line::rest)
+  if t == "" || startsWith "#" t then collectLibsIn root rest
   else
-    let k = keyBeforeEq t
-    if k == "" then collectLibsIn root rest
+    if startsWith "[" t then collectLibs root (line::rest)
     else
-      let v = valAfterEq t
-      let dir = if v == "" then "" else joinPathL root v
-      (k, dir) :: collectLibsIn root rest
+      let k = keyBeforeEq t
+      if k == "" then collectLibsIn root rest
+      else
+        let v = valAfterEq t
+        let dir = if v == "" then "" else joinPathL root v
+        (k, dir) :: collectLibsIn root rest
 
 -- read + parse `<root>/medaka.toml`'s [foreign-libraries]; [] if missing/none.
 -- Returns (libName, searchDir) with searchDir == "" when none was given.
@@ -995,7 +1002,9 @@ manifestAllowsInternal root =
     Ok src => scanAllowInternal False (splitNl src)
   else False
 
--- Scan a medaka.toml's lines for `allow-internal = true`.  `inDeps` tracks
+-- Scan a medaka.toml's lines for `allow-internal = true`.  The grant requires
+-- that exact unquoted boolean token; an optional trailing `#` comment is inert.
+-- Quoted strings and every other value decline the privilege.  `inDeps` tracks
 -- whether we are currently inside `[dependencies]`, whose entries are SKIPPED: a
 -- dep line is `name = "path"`, so a package literally named `allow-internal`
 -- must not read as the opt-in.  Every OTHER section is accepted rather than one
@@ -1008,14 +1017,17 @@ scanAllowInternal : Bool -> List String -> Bool
 scanAllowInternal _ [] = False
 scanAllowInternal inDeps (line::rest) =
   let t = stringTrim line
-  if startsWith "[" t then
-    scanAllowInternal (t == "[dependencies]") rest
-  else if inDeps then
-    scanAllowInternal inDeps rest
-  else if keyBeforeEq t == "allow-internal" then
-    valAfterEq t == "true"
+  let header = match splitOnChar "#" t
+    h::_ => stringTrim h
+    [] => t
+  if startsWith "[" header then scanAllowInternal (header == "[dependencies]") rest
   else
-    scanAllowInternal inDeps rest
+    if inDeps then scanAllowInternal inDeps rest
+    else
+      if keyBeforeEq t == "allow-internal" then match splitOnChar "#" (rawValAfterEq t)
+        value::_ => stringTrim value == "true"
+        [] => False
+      else scanAllowInternal inDeps rest
 
 trustedModsGo : List (String, String) -> List String -> List String -> List String -> <IO> List String
 trustedModsGo _ _ _ [] = []

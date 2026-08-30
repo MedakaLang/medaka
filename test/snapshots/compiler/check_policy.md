@@ -1,5 +1,5 @@
 # META
-source_lines=743
+source_lines=742
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/check_policy.mdk — the native `medaka check-policy` capability
@@ -47,6 +47,7 @@ import frontend.ast.{
 }
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
+import tools.check.{checkHasErrors}
 import types.typecheck.{
   Scheme(..),
   Mono(..),
@@ -511,59 +512,57 @@ lookupValue k ((n, v)::rest) = if k == n then Some v else lookupValue k rest
 -- behaviour while keeping IO at the CLI boundary.  rtSrc/coreSrc are the prelude
 -- sources (runtime.mdk/core.mdk); src is the plugin file.
 -- The outcome of a policy check.  Accept carries the header and the desugared
--- decls needed to RUN the plugin (deferred so the CLI can print the header to
--- stdout BEFORE the run — which may panic on an unstubbed extern, exactly like
--- the OCaml arm prints the accept line then lets the eval panic hit stderr).
--- Reject carries the full report; the run never happens.
-public export data PolicyOutcome =
-  | PolicyAccept String String (List Decl) (List Decl) (List Decl)  -- header fn coreD rtD userD
-  | PolicyReject String
+-- plugin output.  The run is forced before PolicyAccept is constructed, so a
+-- panic cannot print an acceptance verdict for an invocation that never
+-- completed.  Reject carries the full report; the run never happens.
+public export data PolicyOutcome = PolicyAccept String | PolicyReject String
 
 export
 runCheckPolicy : String -> String -> String -> String -> String -> PolicyOutcome
 runCheckPolicy rtSrc coreSrc src allowStr fnName =
-  let policy = parsePolicy allowStr
-  let rawUser = parse src
-  let userD = desugar rawUser
-  let rtD = desugar (parse rtSrc)
-  let coreD = desugar (parse coreSrc)
-  let callGraph = buildCallGraph userD
-  -- Module arm, via the full-environment entry (S-full-env-scheme-entry, #1116).
-  -- `--fn <name>` is arbitrary CLI input looked up DIRECTLY in effTable
-  -- (lookupAssoc fnName), never routed through buildCallGraph's userD-restricted
-  -- traversal, so the schemes MUST include prelude names: `--fn println` missing
-  -- from the table would make the policy check silently ACCEPT an <IO> function as
-  -- pure. `checkOneScheme` alone returns only the terminal module's OWN schemes,
-  -- which is why this site was parked on the Flat wrapper until #1116 grew
-  -- `checkOneSchemeFull`. OWN FIRST: `lookupAssoc` is a first-match scan, so a
-  -- plugin that redefines a prelude name must win its own lookup.
-  let (preludeSchemes, ownSchemes) = checkOneSchemeFull rtD coreD ("__user__", userD)
-  let schemes = ownSchemes ++ preludeSchemes
-  let effTable = fnEffectsTable schemes
-  let fnEffects = match lookupAssoc fnName effTable
-    None => []
-    Some e => e
-  let forbidden = forbiddenLabels fnEffects policy
-  match forbidden
-    [] =>
-      let effStr = if listIsEmpty fnEffects then
-        "pure"
-      else
-        "<" ++ joinWith ", " (atomLabels fnEffects) ++ ">"
-      let header = "accepted. \{fnName} requires only \{effStr}\n"
-      PolicyAccept header fnName coreD rtD userD
-    _ =>
-      let chain = findChain callGraph effTable fnName (firstOf forbidden)
-      let header = "rejected. \{fnName} requires <\{joinWith ", " (atomLabels fnEffects)}>. Not permitted by policy {\{joinWith ", " (policyLabels policy)}}\n"
-      let via = "   reached via: " ++ joinWith " → " chain ++ "\n"
-      PolicyReject (header ++ via)
-
--- Run the accepted plugin and return the captured run output (LOG lines + the
--- transform-result line).  Called by the CLI AFTER it has printed the accept
--- header, so a panic on an unstubbed extern surfaces post-header (oracle parity).
-export
-runAcceptedPlugin : String -> List Decl -> List Decl -> List Decl -> String
-runAcceptedPlugin fnName coreD rtD userD = runPlugin fnName rtD coreD userD
+  if checkHasErrors rtSrc coreSrc src then
+    PolicyReject "rejected. compiler analysis failed before policy evaluation\n"
+  else
+    let policy = parsePolicy allowStr
+    let rawUser = parse src
+    let userD = desugar rawUser
+    let rtD = desugar (parse rtSrc)
+    let coreD = desugar (parse coreSrc)
+    let callGraph = buildCallGraph userD
+    -- Module arm, via the full-environment entry (S-full-env-scheme-entry, #1116).
+    -- `--fn <name>` is arbitrary CLI input looked up DIRECTLY in effTable
+    -- (lookupAssoc fnName), never routed through buildCallGraph's userD-restricted
+    -- traversal, so the schemes MUST include prelude names: `--fn println` missing
+    -- from the table would make the policy check silently ACCEPT an <IO> function as
+    -- pure. `checkOneScheme` alone returns only the terminal module's OWN schemes,
+    -- which is why this site was parked on the Flat wrapper until #1116 grew
+    -- `checkOneSchemeFull`. OWN FIRST: `lookupAssoc` is a first-match scan, so a
+    -- plugin that redefines a prelude name must win its own lookup.
+    let (preludeSchemes, ownSchemes) = checkOneSchemeFull rtD coreD ("__user__", userD)
+    let schemes = ownSchemes ++ preludeSchemes
+    let effTable = fnEffectsTable schemes
+    -- Existence is checked against the complete scheme list, not effTable:
+    -- fnEffectsTable deliberately omits verified-pure bindings, so using it as
+    -- a name index would reject a real pure entry exactly like an absent one.
+    match lookupAssoc fnName schemes
+      None => PolicyReject "rejected. no '\{fnName}' entry found\n"
+      Some fnScheme =>
+        let fnEffects = schemeEffects fnScheme
+        let forbidden = forbiddenLabels fnEffects policy
+        match forbidden
+          [] =>
+            let effStr = if listIsEmpty fnEffects then
+              "pure"
+            else
+              "<" ++ joinWith ", " (atomLabels fnEffects) ++ ">"
+            let header = "accepted. \{fnName} requires only \{effStr}\n"
+            let pluginOutput = runPlugin fnName rtD coreD userD
+            PolicyAccept (header ++ pluginOutput)
+          _ =>
+            let chain = findChain callGraph effTable fnName (firstOf forbidden)
+            let header = "rejected. \{fnName} requires <\{joinWith ", " (atomLabels fnEffects)}>. Not permitted by policy {\{joinWith ", " (policyLabels policy)}}\n"
+            let via = "   reached via: " ++ joinWith " → " chain ++ "\n"
+            PolicyReject (header ++ via)
 
 firstOf : List String -> String
 firstOf [] = ""
@@ -749,6 +748,7 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Pat" true) (mem "Lit" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "LetBind" true) (mem "FunClause" true) (mem "FieldAssign" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
+(DUse false (UseGroup ("tools" "check") ((mem "checkHasErrors" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "Scheme" true) (mem "Mono" true) (mem "EffRow" true) (mem "Atom" true) (mem "Param" true) (mem "checkOneSchemeFull" false) (mem "normalize" false) (mem "tupleSpine" false) (mem "effrowLabels" false) (mem "atomLabel" false) (mem "atomParam" false) (mem "dsub" false) (mem "drender" false) (mem "decodeProductParam" false) (mem "decodeSetParam" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "evalModulesRootEnv" false) (mem "apply" false) (mem "outputRef" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("support" "util") ((mem "sortUniqS" false) (mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "lookupAssoc" false))))
@@ -910,11 +910,9 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DTypeSig false "lookupValue" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "lookupValue" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupValue" ((PVar "k") (PCons (PTuple (PVar "n") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "n")) (EApp (EVar "Some") (EVar "v")) (EApp (EApp (EVar "lookupValue") (EVar "k")) (EVar "rest"))))
-(DData Public "PolicyOutcome" () ((variant "PolicyAccept" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))) (variant "PolicyReject" (ConPos (TyCon "String")))) ())
+(DData Public "PolicyOutcome" () ((variant "PolicyAccept" (ConPos (TyCon "String"))) (variant "PolicyReject" (ConPos (TyCon "String")))) ())
 (DTypeSig true "runCheckPolicy" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "PolicyOutcome")))))))
-(DFunDef false "runCheckPolicy" ((PVar "rtSrc") (PVar "coreSrc") (PVar "src") (PVar "allowStr") (PVar "fnName")) (EBlock (DoLet false false (PVar "policy") (EApp (EVar "parsePolicy") (EVar "allowStr"))) (DoLet false false (PVar "rawUser") (EApp (EVar "parse") (EVar "src"))) (DoLet false false (PVar "userD") (EApp (EVar "desugar") (EVar "rawUser"))) (DoLet false false (PVar "rtD") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "rtSrc")))) (DoLet false false (PVar "coreD") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "coreSrc")))) (DoLet false false (PVar "callGraph") (EApp (EVar "buildCallGraph") (EVar "userD"))) (DoLet false false (PTuple (PVar "preludeSchemes") (PVar "ownSchemes")) (EApp (EApp (EApp (EVar "checkOneSchemeFull") (EVar "rtD")) (EVar "coreD")) (ETuple (ELit (LString "__user__")) (EVar "userD")))) (DoLet false false (PVar "schemes") (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))) (DoLet false false (PVar "effTable") (EApp (EVar "fnEffectsTable") (EVar "schemes"))) (DoLet false false (PVar "fnEffects") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fnName")) (EVar "effTable")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "e")) () (EVar "e")))) (DoLet false false (PVar "forbidden") (EApp (EApp (EVar "forbiddenLabels") (EVar "fnEffects")) (EVar "policy"))) (DoExpr (EMatch (EVar "forbidden") (arm (PList) () (EBlock (DoLet false false (PVar "effStr") (EIf (EApp (EVar "listIsEmpty") (EVar "fnEffects")) (ELit (LString "pure")) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "atomLabels") (EVar "fnEffects")))) (ELit (LString ">"))))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "accepted. ")) (EApp (EVar "display") (EVar "fnName"))) (ELit (LString " requires only "))) (EApp (EVar "display") (EVar "effStr"))) (ELit (LString "\n")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "PolicyAccept") (EVar "header")) (EVar "fnName")) (EVar "coreD")) (EVar "rtD")) (EVar "userD"))))) (arm PWild () (EBlock (DoLet false false (PVar "chain") (EApp (EApp (EApp (EApp (EVar "findChain") (EVar "callGraph")) (EVar "effTable")) (EVar "fnName")) (EApp (EVar "firstOf") (EVar "forbidden")))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "rejected. ")) (EApp (EVar "display") (EVar "fnName"))) (ELit (LString " requires <"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "atomLabels") (EVar "fnEffects"))))) (ELit (LString ">. Not permitted by policy {"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "policyLabels") (EVar "policy"))))) (ELit (LString "}\n")))) (DoLet false false (PVar "via") (EBinOp "++" (EBinOp "++" (ELit (LString "   reached via: ")) (EApp (EApp (EVar "joinWith") (ELit (LString " → "))) (EVar "chain"))) (ELit (LString "\n")))) (DoExpr (EApp (EVar "PolicyReject") (EBinOp "++" (EVar "header") (EVar "via"))))))))))
-(DTypeSig true "runAcceptedPlugin" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String"))))))
-(DFunDef false "runAcceptedPlugin" ((PVar "fnName") (PVar "coreD") (PVar "rtD") (PVar "userD")) (EApp (EApp (EApp (EApp (EVar "runPlugin") (EVar "fnName")) (EVar "rtD")) (EVar "coreD")) (EVar "userD")))
+(DFunDef false "runCheckPolicy" ((PVar "rtSrc") (PVar "coreSrc") (PVar "src") (PVar "allowStr") (PVar "fnName")) (EIf (EApp (EApp (EApp (EVar "checkHasErrors") (EVar "rtSrc")) (EVar "coreSrc")) (EVar "src")) (EApp (EVar "PolicyReject") (ELit (LString "rejected. compiler analysis failed before policy evaluation\n"))) (EBlock (DoLet false false (PVar "policy") (EApp (EVar "parsePolicy") (EVar "allowStr"))) (DoLet false false (PVar "rawUser") (EApp (EVar "parse") (EVar "src"))) (DoLet false false (PVar "userD") (EApp (EVar "desugar") (EVar "rawUser"))) (DoLet false false (PVar "rtD") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "rtSrc")))) (DoLet false false (PVar "coreD") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "coreSrc")))) (DoLet false false (PVar "callGraph") (EApp (EVar "buildCallGraph") (EVar "userD"))) (DoLet false false (PTuple (PVar "preludeSchemes") (PVar "ownSchemes")) (EApp (EApp (EApp (EVar "checkOneSchemeFull") (EVar "rtD")) (EVar "coreD")) (ETuple (ELit (LString "__user__")) (EVar "userD")))) (DoLet false false (PVar "schemes") (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))) (DoLet false false (PVar "effTable") (EApp (EVar "fnEffectsTable") (EVar "schemes"))) (DoExpr (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fnName")) (EVar "schemes")) (arm (PCon "None") () (EApp (EVar "PolicyReject") (EBinOp "++" (EBinOp "++" (ELit (LString "rejected. no '")) (EApp (EVar "display") (EVar "fnName"))) (ELit (LString "' entry found\n"))))) (arm (PCon "Some" (PVar "fnScheme")) () (EBlock (DoLet false false (PVar "fnEffects") (EApp (EVar "schemeEffects") (EVar "fnScheme"))) (DoLet false false (PVar "forbidden") (EApp (EApp (EVar "forbiddenLabels") (EVar "fnEffects")) (EVar "policy"))) (DoExpr (EMatch (EVar "forbidden") (arm (PList) () (EBlock (DoLet false false (PVar "effStr") (EIf (EApp (EVar "listIsEmpty") (EVar "fnEffects")) (ELit (LString "pure")) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "atomLabels") (EVar "fnEffects")))) (ELit (LString ">"))))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "accepted. ")) (EApp (EVar "display") (EVar "fnName"))) (ELit (LString " requires only "))) (EApp (EVar "display") (EVar "effStr"))) (ELit (LString "\n")))) (DoLet false false (PVar "pluginOutput") (EApp (EApp (EApp (EApp (EVar "runPlugin") (EVar "fnName")) (EVar "rtD")) (EVar "coreD")) (EVar "userD"))) (DoExpr (EApp (EVar "PolicyAccept") (EBinOp "++" (EVar "header") (EVar "pluginOutput")))))) (arm PWild () (EBlock (DoLet false false (PVar "chain") (EApp (EApp (EApp (EApp (EVar "findChain") (EVar "callGraph")) (EVar "effTable")) (EVar "fnName")) (EApp (EVar "firstOf") (EVar "forbidden")))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "rejected. ")) (EApp (EVar "display") (EVar "fnName"))) (ELit (LString " requires <"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "atomLabels") (EVar "fnEffects"))))) (ELit (LString ">. Not permitted by policy {"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "policyLabels") (EVar "policy"))))) (ELit (LString "}\n")))) (DoLet false false (PVar "via") (EBinOp "++" (EBinOp "++" (ELit (LString "   reached via: ")) (EApp (EApp (EVar "joinWith") (ELit (LString " → "))) (EVar "chain"))) (ELit (LString "\n")))) (DoExpr (EApp (EVar "PolicyReject") (EBinOp "++" (EVar "header") (EVar "via")))))))))))))))
 (DTypeSig false "firstOf" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "firstOf" ((PList)) (ELit (LString "")))
 (DFunDef false "firstOf" ((PCons (PVar "x") PWild)) (EVar "x"))
@@ -973,6 +971,7 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Pat" true) (mem "Lit" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "LetBind" true) (mem "FunClause" true) (mem "FieldAssign" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
+(DUse false (UseGroup ("tools" "check") ((mem "checkHasErrors" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "Scheme" true) (mem "Mono" true) (mem "EffRow" true) (mem "Atom" true) (mem "Param" true) (mem "checkOneSchemeFull" false) (mem "normalize" false) (mem "tupleSpine" false) (mem "effrowLabels" false) (mem "atomLabel" false) (mem "atomParam" false) (mem "dsub" false) (mem "drender" false) (mem "decodeProductParam" false) (mem "decodeSetParam" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "evalModulesRootEnv" false) (mem "apply" false) (mem "outputRef" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("support" "util") ((mem "sortUniqS" false) (mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "lookupAssoc" false))))
@@ -1134,11 +1133,9 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DTypeSig false "lookupValue" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "lookupValue" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupValue" ((PVar "k") (PCons (PTuple (PVar "n") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "n")) (EApp (EVar "Some") (EVar "v")) (EApp (EApp (EVar "lookupValue") (EVar "k")) (EVar "rest"))))
-(DData Public "PolicyOutcome" () ((variant "PolicyAccept" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))) (variant "PolicyReject" (ConPos (TyCon "String")))) ())
+(DData Public "PolicyOutcome" () ((variant "PolicyAccept" (ConPos (TyCon "String"))) (variant "PolicyReject" (ConPos (TyCon "String")))) ())
 (DTypeSig true "runCheckPolicy" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "PolicyOutcome")))))))
-(DFunDef false "runCheckPolicy" ((PVar "rtSrc") (PVar "coreSrc") (PVar "src") (PVar "allowStr") (PVar "fnName")) (EBlock (DoLet false false (PVar "policy") (EApp (EVar "parsePolicy") (EVar "allowStr"))) (DoLet false false (PVar "rawUser") (EApp (EVar "parse") (EVar "src"))) (DoLet false false (PVar "userD") (EApp (EVar "desugar") (EVar "rawUser"))) (DoLet false false (PVar "rtD") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "rtSrc")))) (DoLet false false (PVar "coreD") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "coreSrc")))) (DoLet false false (PVar "callGraph") (EApp (EVar "buildCallGraph") (EVar "userD"))) (DoLet false false (PTuple (PVar "preludeSchemes") (PVar "ownSchemes")) (EApp (EApp (EApp (EVar "checkOneSchemeFull") (EVar "rtD")) (EVar "coreD")) (ETuple (ELit (LString "__user__")) (EVar "userD")))) (DoLet false false (PVar "schemes") (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))) (DoLet false false (PVar "effTable") (EApp (EVar "fnEffectsTable") (EVar "schemes"))) (DoLet false false (PVar "fnEffects") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fnName")) (EVar "effTable")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "e")) () (EVar "e")))) (DoLet false false (PVar "forbidden") (EApp (EApp (EVar "forbiddenLabels") (EVar "fnEffects")) (EVar "policy"))) (DoExpr (EMatch (EVar "forbidden") (arm (PList) () (EBlock (DoLet false false (PVar "effStr") (EIf (EApp (EVar "listIsEmpty") (EVar "fnEffects")) (ELit (LString "pure")) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "atomLabels") (EVar "fnEffects")))) (ELit (LString ">"))))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "accepted. ")) (EApp (EMethodRef "display") (EVar "fnName"))) (ELit (LString " requires only "))) (EApp (EMethodRef "display") (EVar "effStr"))) (ELit (LString "\n")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "PolicyAccept") (EVar "header")) (EVar "fnName")) (EVar "coreD")) (EVar "rtD")) (EVar "userD"))))) (arm PWild () (EBlock (DoLet false false (PVar "chain") (EApp (EApp (EApp (EApp (EVar "findChain") (EVar "callGraph")) (EVar "effTable")) (EVar "fnName")) (EApp (EVar "firstOf") (EVar "forbidden")))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "rejected. ")) (EApp (EMethodRef "display") (EVar "fnName"))) (ELit (LString " requires <"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "atomLabels") (EVar "fnEffects"))))) (ELit (LString ">. Not permitted by policy {"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "policyLabels") (EVar "policy"))))) (ELit (LString "}\n")))) (DoLet false false (PVar "via") (EBinOp "++" (EBinOp "++" (ELit (LString "   reached via: ")) (EApp (EApp (EVar "joinWith") (ELit (LString " → "))) (EVar "chain"))) (ELit (LString "\n")))) (DoExpr (EApp (EVar "PolicyReject") (EBinOp "++" (EVar "header") (EVar "via"))))))))))
-(DTypeSig true "runAcceptedPlugin" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String"))))))
-(DFunDef false "runAcceptedPlugin" ((PVar "fnName") (PVar "coreD") (PVar "rtD") (PVar "userD")) (EApp (EApp (EApp (EApp (EVar "runPlugin") (EVar "fnName")) (EVar "rtD")) (EVar "coreD")) (EVar "userD")))
+(DFunDef false "runCheckPolicy" ((PVar "rtSrc") (PVar "coreSrc") (PVar "src") (PVar "allowStr") (PVar "fnName")) (EIf (EApp (EApp (EApp (EVar "checkHasErrors") (EVar "rtSrc")) (EVar "coreSrc")) (EVar "src")) (EApp (EVar "PolicyReject") (ELit (LString "rejected. compiler analysis failed before policy evaluation\n"))) (EBlock (DoLet false false (PVar "policy") (EApp (EVar "parsePolicy") (EVar "allowStr"))) (DoLet false false (PVar "rawUser") (EApp (EVar "parse") (EVar "src"))) (DoLet false false (PVar "userD") (EApp (EVar "desugar") (EVar "rawUser"))) (DoLet false false (PVar "rtD") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "rtSrc")))) (DoLet false false (PVar "coreD") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "coreSrc")))) (DoLet false false (PVar "callGraph") (EApp (EVar "buildCallGraph") (EVar "userD"))) (DoLet false false (PTuple (PVar "preludeSchemes") (PVar "ownSchemes")) (EApp (EApp (EApp (EVar "checkOneSchemeFull") (EVar "rtD")) (EVar "coreD")) (ETuple (ELit (LString "__user__")) (EVar "userD")))) (DoLet false false (PVar "schemes") (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))) (DoLet false false (PVar "effTable") (EApp (EVar "fnEffectsTable") (EVar "schemes"))) (DoExpr (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fnName")) (EVar "schemes")) (arm (PCon "None") () (EApp (EVar "PolicyReject") (EBinOp "++" (EBinOp "++" (ELit (LString "rejected. no '")) (EApp (EMethodRef "display") (EVar "fnName"))) (ELit (LString "' entry found\n"))))) (arm (PCon "Some" (PVar "fnScheme")) () (EBlock (DoLet false false (PVar "fnEffects") (EApp (EVar "schemeEffects") (EVar "fnScheme"))) (DoLet false false (PVar "forbidden") (EApp (EApp (EVar "forbiddenLabels") (EVar "fnEffects")) (EVar "policy"))) (DoExpr (EMatch (EVar "forbidden") (arm (PList) () (EBlock (DoLet false false (PVar "effStr") (EIf (EApp (EVar "listIsEmpty") (EVar "fnEffects")) (ELit (LString "pure")) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "atomLabels") (EVar "fnEffects")))) (ELit (LString ">"))))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "accepted. ")) (EApp (EMethodRef "display") (EVar "fnName"))) (ELit (LString " requires only "))) (EApp (EMethodRef "display") (EVar "effStr"))) (ELit (LString "\n")))) (DoLet false false (PVar "pluginOutput") (EApp (EApp (EApp (EApp (EVar "runPlugin") (EVar "fnName")) (EVar "rtD")) (EVar "coreD")) (EVar "userD"))) (DoExpr (EApp (EVar "PolicyAccept") (EBinOp "++" (EVar "header") (EVar "pluginOutput")))))) (arm PWild () (EBlock (DoLet false false (PVar "chain") (EApp (EApp (EApp (EApp (EVar "findChain") (EVar "callGraph")) (EVar "effTable")) (EVar "fnName")) (EApp (EVar "firstOf") (EVar "forbidden")))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "rejected. ")) (EApp (EMethodRef "display") (EVar "fnName"))) (ELit (LString " requires <"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "atomLabels") (EVar "fnEffects"))))) (ELit (LString ">. Not permitted by policy {"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EVar "policyLabels") (EVar "policy"))))) (ELit (LString "}\n")))) (DoLet false false (PVar "via") (EBinOp "++" (EBinOp "++" (ELit (LString "   reached via: ")) (EApp (EApp (EVar "joinWith") (ELit (LString " → "))) (EVar "chain"))) (ELit (LString "\n")))) (DoExpr (EApp (EVar "PolicyReject") (EBinOp "++" (EVar "header") (EVar "via")))))))))))))))
 (DTypeSig false "firstOf" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "firstOf" ((PList)) (ELit (LString "")))
 (DFunDef false "firstOf" ((PCons (PVar "x") PWild)) (EVar "x"))

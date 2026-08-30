@@ -31,11 +31,11 @@
 #      rest at zero — and a zero-cost gate is piled onto whichever row is
 #      lightest. The `uncosted_gate` fixture pins the refusal.
 #
-#   4. THE TARGET IS ENFORCED, AND ITS REFUSAL NAMES THE RIGHT CAUSE. Gates are
+#   4. THE BUDGET IS ENFORCED, AND ITS REFUSAL NAMES THE RIGHT CAUSE. Gates are
 #      indivisible, so the pole can never fall below the single most expensive
-#      gate. When that alone blows the pole/median target the message must say
-#      so — pointing a reader at "repack harder" when the answer is "this gate
-#      must get faster" costs them the whole investigation.
+#      gate. When the floor is that gate and the packer still cannot reach it,
+#      the message must say so — pointing a reader at "repack harder" when the
+#      answer is "this gate must get faster" costs them the whole investigation.
 #
 #   5. A CLOSED ROW'S MEMBERSHIP IS DECLARED AND CHECKED, NOT OBSERVED (#2205,
 #      review finding F3). The packer never moves a gate onto a `full_cores`
@@ -44,7 +44,7 @@
 #      a hand edit in either direction was ADOPTED by the next run and reported
 #      "already balanced" for ever after. The `pin_intruder` and `pin_deserter`
 #      fixtures are those two edits, in registries that are otherwise perfectly
-#      healthy — legal, fully costed, pole/median 1.000, and with the derived
+#      healthy — legal, fully costed, pole/floor 1.000, and with the derived
 #      open-row assignment equal to the committed one — because that is what
 #      made the real injections invisible. `pin_on_open_row` pins the schema's
 #      other half: a `pinned_gates` list on a row the packer owns is a
@@ -62,6 +62,34 @@
 #      catch a regression to the sum; `makespan_vs_sum` is built so they
 #      disagree about exactly one gate, and is committed with the SUM's answer
 #      so a regression reports "already balanced" and exits 0.
+#
+#   7. THE INCUMBENT PREFERENCE HOLDS, AND IS BOUNDED (#2218). Scheduled
+#      re-ingests made re-derivation routine, and an ordinary +/-2% perturbation
+#      of the baseline moved 89-128 of the 202 committed gates. `balPickStable`
+#      lets a gate stay where it is committed when its row is legal, open and
+#      within `balStabPct` of the lightest legal row. Both halves fail silently
+#      and each hides the other: an unbounded preference freezes the matrix
+#      against real cost change and still reports a healthy pole, and an absent
+#      one just goes back to churning. `stability_preference` carries one gate
+#      of each kind, differing only in how heavy their incumbent row had become.
+#      This is NOT the hysteresis band #2178 reverted — that one declined to
+#      emit the derived value, leaving `--check` nothing to police; this one
+#      derives a different value from a wider input, so the fixed-point
+#      assertions in 1 and 12 are what keep them distinguishable.
+#
+#   8. THE ENFORCED STATEMENT IS ABOUT THE PACKING, NOT ABOUT THE SUITE (#2216).
+#      `pole / median` moved for reasons the balancer neither caused nor could
+#      repair, in BOTH directions: one gate getting 20% slower reds a REQUIRED
+#      check with no repair available, and — the perverse half — speeding up
+#      every non-pole gate reds it too, because the denominator falls while the
+#      pole does not. `pole / floor` divides by the best pole any assignment of
+#      this gate set onto these rows could reach, so it is 1.000 exactly when
+#      the packing is optimal and moves only when the packing does. Both halves
+#      are pinned as fixtures because either alone is satisfiable by a metric
+#      that is merely more lenient: `nonpole_speedup` must be GREEN (it was red
+#      at 3.333 under the retired metric) and `lpt_packing_gap` must be RED (a
+#      real packing failure, at the classic LPT worst case for three rows), and
+#      `dominating_gate` holds the seam between them.
 #
 # Plus: the committed test/gates.toml IS the balancer's own output
 # (`--check`), so a hand-edited `shard` field cannot ride in unnoticed.
@@ -111,7 +139,8 @@ _bal() {
 
 for stem in wasm_only_row dominating_gate uncosted_gate \
             pin_intruder pin_deserter pin_on_open_row makespan_vs_sum \
-            thin_evidence calib_staleness; do
+            thin_evidence calib_staleness outlier_immunity \
+            stability_preference nonpole_speedup lpt_packing_gap; do
   cp "$FIX/$stem.toml" "$TMP/$stem.toml"
 done
 
@@ -151,8 +180,9 @@ fi
 
 # The projection is the number a reader acts on; assert it is present and that
 # the enforced target is stated, not merely computed.
-if grep -q 'pole/median' "$out" && grep -q 'target pole/median' "$out"; then
-  ok "--check prints the projected pole, median and enforced target"
+if grep -q 'pole/floor' "$out" && grep -q 'budget pole/floor' "$out" \
+   && grep -q '^  floor: the achievable pole — set by ' "$out"; then
+  ok "--check prints the projected pole, floor, its provenance and the enforced budget"
 else
   bad "--check did not print its projection"
   sed -e 's/^/        /' "$out"
@@ -209,13 +239,19 @@ else
 fi
 
 # ── 4. one dominating gate: refuse, and blame the gate, not the packing ───────
+#
+# The refusal must survive the #2216 metric change in RECOGNISABLE form: a
+# reader who hits it has to leave knowing the gate must get FASTER (or be
+# split), which is the one repair a rebalance cannot make. So this is graded on
+# that sentence and on the gate's name, not merely on the exit code.
 if _bal dominating_gate "$TMP/d.txt"; then
-  bad "a packing with pole/median 6.6 was accepted"
+  bad "a packing with pole/floor 1.200 was accepted"
   sed -e 's/^/        /' "$TMP/d.txt"
 else
-  if grep -q 'no packing can meet the pole/median target' "$TMP/d.txt" \
-     && grep -q "'monolith' alone costs" "$TMP/d.txt"; then
-    ok "a dominating gate is refused, and the message names that gate"
+  if grep -q 'misses the pole/floor budget' "$TMP/d.txt" \
+     && grep -q "The floor is 'monolith' alone" "$TMP/d.txt" \
+     && grep -q 'has to get FASTER (or be split)' "$TMP/d.txt"; then
+    ok "a dominating gate is refused, the message names that gate and says it must get faster"
   else
     bad "refused, but not with the indivisible-gate explanation"
     sed -e 's/^/        /' "$TMP/d.txt"
@@ -369,9 +405,194 @@ if _bal calib_staleness "$TMP/s.txt"; then
     bad "row 'b' calibration line was annotated STALE when it should not be"
     sed -e 's/^/        /' "$TMP/s.txt"
   fi
+
+  # ── 9b. ...and a COUNT is not a SET (S-2, #2223) ───────────────────────────
+  #
+  # The commonest rebalance is a SWAP, and a swap does not move a count — so
+  # rows `c` and `d` are BOTH recorded at exactly the count they carry now and
+  # the check above cannot tell them apart. Only the recorded `gatesDigest`
+  # separates them: `c` had its one gate swapped out for another, `d` still has
+  # the gate it was recorded with. The observed bug was a -96% residual
+  # printing entirely clean, which reads as "the model is calibrated" when it
+  # means "the model is being graded against a gate set that no longer exists".
+  #
+  # Row `d` is also the mirror check on the digest itself: it is unannotated
+  # only if `gate_cost.gateSetDigest` and `_digest` in test/gate_cost_ingest.sh
+  # (which produced the recorded number) agree exactly. A drift between those
+  # two turns every calibration line permanently STALE in production.
+  if grep -q '^    c  *recorded.*\[STALE: the same 1 gates by COUNT but a DIFFERENT SET' "$TMP/s.txt"; then
+    ok "a row whose recorded gate SET differs at EQUAL count is annotated STALE"
+  else
+    bad "row 'c' calibration line missing the same-count-different-set annotation"
+    sed -e 's/^/        /' "$TMP/s.txt"
+  fi
+  if grep -q '^    d  *recorded' "$TMP/s.txt" && ! grep -q '^    d  *recorded.*\[STALE' "$TMP/s.txt"; then
+    ok "a row whose recorded gate set matches committed is NOT annotated"
+  else
+    bad "row 'd' was annotated STALE — the set digest always fires, or the awk and Medaka digests have drifted"
+    sed -e 's/^/        /' "$TMP/s.txt"
+  fi
 else
   bad "the balancer failed on the calib_staleness fixture"
   sed -e 's/^/        /' "$TMP/s.txt"
+fi
+
+# ── 10. the PACKING STATISTIC is the median, and that is load-bearing ─────────
+#
+# Retained on a measurement, not by default (S-2, #2222): four candidate
+# families were compared leave-one-run-out and the median lost on central
+# tendency (it is low by a measured -12.6%) and won on the tail, which is the
+# axis a packer schedules on. `outlier_immunity` is that trade as a fixture.
+#
+# `wild` carries one hiccup sample 90x its own median — the shape
+# `pds_test_repo_vectors` carries for real in the committed baseline at 50.7x.
+# The median prices it at 10 and every unbiased alternative near 306, and the
+# two disagree about the ASSIGNMENT: under the median `wild` shares a row with
+# `heavy`, and under any statistic one hiccup can move it takes a row alone.
+# The assertion is that sharing, which is tie-break-independent.
+#
+# The second arm is the red half, and it is why this is a divergence pin rather
+# than a bare value: the SAME registry against a baseline whose `wild` is
+# priced at the mean must MOVE a gate. Without it, a fixture that merely
+# passes proves nothing about which statistic produced it.
+if _bal outlier_immunity "$TMP/o.txt"; then
+  got="$(awk '/^name = "wild"$/{f=1} f && /^shard = /{print; exit}' "$TMP/outlier_immunity.toml")"
+  heavy="$(awk '/^name = "heavy"$/{f=1} f && /^shard = /{print; exit}' "$TMP/outlier_immunity.toml")"
+  if [ -n "$got" ] && [ "$got" = "$heavy" ]; then
+    ok "one hiccup sample does not move a gate's placement ('wild' shares $got with 'heavy')"
+  else
+    bad "'wild' was placed apart from 'heavy' (wild: $got, heavy: $heavy) — the packing statistic is letting an outlier through"
+    sed -e 's/^/        /' "$TMP/o.txt"
+  fi
+
+  # Same registry, `wild` re-priced at the MEAN of its own samples (306): the
+  # assignment must now change, proving the fixture above discriminates.
+  sed 's/"name": "wild", "medianMs": 10/"name": "wild", "medianMs": 306/' \
+    "$FIX/outlier_immunity.json" >"$TMP/outlier_mean.json"
+  cp "$FIX/outlier_immunity.toml" "$TMP/outlier_mean.toml"
+  MEDAKA_ROOT="$ROOT" "$MEDAKA" gate balance \
+    --registry "$TMP/outlier_mean.toml" \
+    --baseline "$TMP/outlier_mean.json" --check >"$TMP/om.txt" 2>&1
+  if grep -q '^  rebalanced' "$TMP/om.txt"; then
+    ok "pricing that gate at the mean instead moves it — the fixture discriminates"
+  else
+    bad "the mean-priced arm did not rebalance; outlier_immunity is not pinning a divergence"
+    sed -e 's/^/        /' "$TMP/om.txt"
+  fi
+else
+  bad "the balancer failed on the outlier_immunity fixture"
+  sed -e 's/^/        /' "$TMP/o.txt"
+fi
+
+# ── 11. the out-of-sample error is STATED, in ordinary output ─────────────────
+#
+# Before S-2 the balancer scheduled on `medianMs` with no stated error: every
+# number in its report was a point estimate presented as exact. The figure is
+# derived on every run precisely so it cannot rot the way the two prose claims
+# about the baseline's sample state did, both of which were stale within two
+# ingests. Asserted against the REAL baseline, not a fixture, because the
+# claim is about the committed data; and asserted as a SHAPE (a signed
+# percentage), never a pinned number, since a re-ingest legitimately moves it.
+#
+# ⚠️ THE ASSERTION IS A DISJUNCTION SINCE FR-1 (#2222 review S0-1), and the
+# disjunction is the point rather than a weakening. The figure is derivable
+# only from samples that carry a recorded runId, and `sampleRuns` was added by
+# FR-1: every sample in the committed baseline predates it, so on today's tree
+# the honest output is the explicit "not derivable" line, and it becomes a
+# number again once enough attributed ingests have landed. What must NEVER
+# appear is a third thing — a number inferred from a sample's POSITION in
+# `ms`, which is what the block printed before FR-1 and what the oos_misaligned
+# fixture below pins. So: a well-formed number OR a stated refusal, and the
+# refusal has to carry its own attribution counts rather than being a bare
+# absence a reader would have to guess at.
+if grep -q '^  out-of-sample error of the packing statistic (leave-one-run-out over the [0-9]* runs' "$out"; then
+  if grep -q '^    mean |error| [0-9]*\.[0-9]%   systematic bias [-+][0-9]*\.[0-9]%' "$out"; then
+    ok "the balancer states its out-of-sample error, with a magnitude and a signed bias"
+  else
+    bad "the out-of-sample summary line is missing its mean |error| / systematic bias"
+    grep -n 'out-of-sample' -A 5 "$out" | sed -e 's/^/        /'
+  fi
+elif grep -q '^  out-of-sample error of the packing statistic: not derivable — [0-9]* of [0-9]* retained samples carry run attribution' "$out"; then
+  ok "the balancer refuses the out-of-sample figure explicitly, with its attribution counts"
+else
+  bad "the balancer neither derived nor explicitly refused its out-of-sample error"
+  sed -e 's/^/        /' "$out"
+fi
+
+# ── 11b. the fold is RUN-ATTRIBUTED, not positional (FR-1, #2222 review S0-1) ─
+#
+# The three fixtures share one `ms` shape — g1/m1/l1 = [100, 200, 300] and
+# g2/m2/l2 = [10, 20, 30] over three recorded runs — because the block the
+# review found computed from `ms` and the run COUNT alone. It therefore printed
+# the SAME mean |error| 72.2% / bias -33.3% for all three, and only one of them
+# is a file that figure is true of. That coincidence is what makes the trio a
+# discriminator rather than three separate smoke tests: any reader that falls
+# back to position reproduces 72.2% on the two files where it means nothing.
+#
+# The expected numbers below are hand-derived from the fixture, not captured
+# from the tool ([WT-GOLDEN-ENSHRINES]): predicted 220/110/110 against actual
+# 110/220/330 gives per-fold +100.0% / -50.0% / -66.6%, mean |error|
+# (1000 + 500 + 666)/3 per-mille = 72.2%, and bias (440 - 660)/660 = -33.3%.
+for stem in oos_attributed oos_misaligned oos_legacy; do
+  cp "$FIX/$stem.toml" "$TMP/$stem.toml"
+done
+
+_bal oos_attributed "$TMP/oosa.txt"
+if grep -q '^  out-of-sample error of the packing statistic (leave-one-run-out over the 3 runs in runs\[\], across the 2 of 3 schedulable gates' "$TMP/oosa.txt" \
+   && grep -q '^    run 1 .* predicted .*0\.2s .* actual .*0\.1s .*+100\.0%$' "$TMP/oosa.txt" \
+   && grep -q '^    run 2 .* predicted .*0\.1s .* actual .*0\.2s .*-50\.0%$' "$TMP/oosa.txt" \
+   && grep -q '^    run 3 .* predicted .*0\.1s .* actual .*0\.3s .*-66\.6%$' "$TMP/oosa.txt" \
+   && grep -q '^    mean |error| 72\.2%   systematic bias -33\.3%' "$TMP/oosa.txt"; then
+  ok "an exactly attributed baseline folds to the hand-derived value, excluding the gate short a run"
+else
+  bad "the out-of-sample fold on a fully attributed baseline is not the hand-derived value"
+  sed -e 's/^/        /' "$TMP/oosa.txt"
+fi
+
+# The count coincidence itself: `samples` equals the number of retained runIds
+# for both gates, and the alignment is still wrong (runs 1/2/4 against retained
+# runs 2/3/4). Attribution EXISTS here — 6 of 6 — so the refusal cannot be
+# passing merely because the field is absent, which is the legacy case below.
+_bal oos_misaligned "$TMP/oosm.txt"
+if grep -q '^  out-of-sample error of the packing statistic: not derivable — 6 of 6 retained samples carry run attribution, and no schedulable gate carries an exactly attributed sample from each of the 3 recorded runs$' "$TMP/oosm.txt"; then
+  ok "a count coincidence with the wrong alignment refuses, and says how much attribution it had"
+else
+  bad "the count-coincidence fixture did not produce an explicit refusal"
+  sed -e 's/^/        /' "$TMP/oosm.txt"
+fi
+if grep -q 'mean |error|' "$TMP/oosm.txt"; then
+  bad "the count-coincidence fixture printed an out-of-sample figure — the positional inference is back"
+  grep -n 'mean |error|' "$TMP/oosm.txt" | sed -e 's/^/        /'
+else
+  ok "the count-coincidence fixture printed no figure at all"
+fi
+
+# A pre-FR-1 baseline: no `sampleRuns` key anywhere. It must PARSE (the field
+# is optional on read), still schedule, and refuse with 0-of-N rather than
+# crash or guess.
+_bal oos_legacy "$TMP/oosl.txt"
+_legacy_rc=$?
+if [ "$_legacy_rc" -le 1 ] && grep -q 'pole/floor' "$TMP/oosl.txt"; then
+  ok "a baseline with no sampleRuns field parses and still schedules"
+else
+  bad "a baseline with no sampleRuns field failed to parse or to schedule (rc=$_legacy_rc)"
+  sed -e 's/^/        /' "$TMP/oosl.txt"
+fi
+if grep -q '^  out-of-sample error of the packing statistic: not derivable — 0 of 6 retained samples carry run attribution' "$TMP/oosl.txt"; then
+  ok "a legacy baseline reports zero attributed samples rather than a positional guess"
+else
+  bad "the legacy baseline did not report its out-of-sample error as not derivable at 0 attributed"
+  sed -e 's/^/        /' "$TMP/oosl.txt"
+fi
+# A drift between the ingester's awk `median()` and `gate_cost.packStat` would
+# mean the tool scores by a rule the committed file was not written with. The
+# balancer counts the rows where they disagree; on a healthy tree it says
+# nothing, so the WARNING's ABSENCE is the assertion.
+if grep -q 'the ingester and gate_cost.packStat have drifted' "$out"; then
+  bad "the committed baseline's medianMs values are not what gate_cost.packStat derives"
+  grep -n 'drifted' "$out" | sed -e 's/^/        /'
+else
+  ok "every committed medianMs is reproduced by gate_cost.packStat"
 fi
 
 # The real registry's own closed row, asserted by NAME and not by count: the
@@ -383,6 +604,127 @@ if grep -q '^pinned_gates = \["pds/test/protocol_all_engines", "diff_compiler_en
 else
   bad "test/gates.toml's engines row does not declare the expected three pinned gates"
   grep -n 'pinned_gates' "$TMP/real_before.toml" | sed -e 's/^/        /'
+fi
+
+# ── 12. the incumbent preference HOLDS, and is BOUNDED (S-3, #2218) ───────────
+#
+# `balPickStable` lets a gate stay on its committed row when that row is legal,
+# open, and no more than `balStabPct` (5%) heavier than the lightest legal row.
+# Both halves of that are load-bearing and each hides the other's failure: a
+# preference that always held would freeze the matrix against real cost change,
+# and one that never held would leave an ordinary +/-2% re-ingest moving 89-128
+# of the 202 committed gates (the measurement in `balStabPct`'s own comment).
+#
+# `stability_preference` puts one of each in one registry, differing in exactly
+# one respect — how heavy their incumbent row had become by the time LPT reached
+# them. `held` is placed while row `a` is 2.6% heavier than `b` and stays; `mover`
+# is placed once `a` is 7.7% heavier and moves. So this section fails if the
+# preference is absent, absolute, or retuned by more than a couple of points.
+#
+# ⚠️ The mirror case is section 3's, and it must keep passing alongside this one:
+# there the incumbent is ILLEGAL and is overridden however cheap the repair.
+# Cost is what a preference may weigh; legality is not a cost.
+if _bal stability_preference "$TMP/sp.txt"; then
+  held="$(awk '/^name = "held"$/{f=1} f && /^shard = /{print; exit}' "$TMP/stability_preference.toml")"
+  mover="$(awk '/^name = "mover"$/{f=1} f && /^shard = /{print; exit}' "$TMP/stability_preference.toml")"
+  if [ "$held" = 'shard = "a"' ]; then
+    ok "a legal incumbent inside the slack is held where bare LPT would move it"
+  else
+    bad "'held' did not stay on its committed row: $held"
+    sed -e 's/^/        /' "$TMP/sp.txt"
+  fi
+  if [ "$mover" = 'shard = "b"' ]; then
+    ok "an incumbent row outside the slack loses the preference and the gate moves"
+  else
+    bad "'mover' stayed on its committed row — the preference is unbounded: $mover"
+    sed -e 's/^/        /' "$TMP/sp.txt"
+  fi
+
+  # The trade is stated, not implied. Graded on both numbers: the count of gates
+  # actually held (1, not the 2 gates the two packings disagree about — holding
+  # `held` is what pushed `mover` off `a`), and the pole the hold cost.
+  if grep -q '^  stability: 1 of 4 gates held on their committed row' "$TMP/sp.txt"; then
+    ok "the report states how many gates the preference held"
+  else
+    bad "the stability count is missing or wrong"
+    grep -n 'stability' "$TMP/sp.txt" | sed -e 's/^/        /'
+  fi
+  if grep -q 'pole 210.0s against 208.0s unstabilized (+2.0s)' "$TMP/sp.txt"; then
+    ok "the report prices the hold against the bare-LPT pole it gave up"
+  else
+    bad "the stability line does not state the pole it traded away"
+    grep -n 'stability' "$TMP/sp.txt" | sed -e 's/^/        /'
+  fi
+
+  # Re-running on the preference's own output must settle. This is the property
+  # the REVERTED #2178 band failed differently — it never emitted a single value
+  # to settle on — and the one that keeps `--check` policing something.
+  cp "$TMP/stability_preference.toml" "$TMP/sp_prev.toml"
+  if _bal stability_preference "$TMP/sp2.txt" \
+     && cmp -s "$TMP/sp_prev.toml" "$TMP/stability_preference.toml"; then
+    ok "the stabilized assignment is a fixed point of itself"
+  else
+    bad "the stabilized assignment moved again on a second run"
+    diff "$TMP/sp_prev.toml" "$TMP/stability_preference.toml" | sed -e 's/^/        /' | head -20
+  fi
+else
+  bad "the balancer failed on the stability_preference fixture"
+  sed -e 's/^/        /' "$TMP/sp.txt"
+fi
+
+# ── 13. the enforced statement grades the PACKING, not the suite (S-4, #2216) ─
+#
+# `pole / median` was perverse in both directions, and the perverse half is the
+# one no exit code ever caught: the suite gets FASTER and the metric gets WORSE,
+# because the denominator is a property of the gate set rather than of the
+# packing. `nonpole_speedup` is an OPTIMALLY packed 7-gate suite whose six
+# non-pole gates have been sped up 4x; measured against the pre-#2216 binary it
+# scores pole/median 3.333 and is REFUSED, with the indivisible-gate message —
+# a red on `ci-gen-drift`, a REQUIRED check, with no repair available to anyone.
+# Under `pole / floor` the same registry is 1.000 and green.
+#
+# ⚠️ A metric that were merely MORE LENIENT would pass that half too, so the
+# second fixture is the discriminator: `lpt_packing_gap` is a genuine packing
+# failure — the classic LPT worst case at three rows, 4/3 - 1/(3m) = 11/9 — and
+# must still be REFUSED, at 1.222 against the 1.125 budget, with the message
+# that blames the packing rather than a gate. Together they say the metric
+# moved axis, not threshold.
+if _bal nonpole_speedup "$TMP/ns.txt"; then
+  if grep -q 'pole/floor 1.000' "$TMP/ns.txt" \
+     && grep -q "set by 'pole_gate' alone" "$TMP/ns.txt"; then
+    ok "an optimal packing behind one indivisible gate scores 1.000, however fast the rest gets"
+  else
+    bad "nonpole_speedup did not score 1.000 against a gate-set floor"
+    sed -e 's/^/        /' "$TMP/ns.txt"
+  fi
+  if grep -q 'budget pole/floor 1.125 — MET' "$TMP/ns.txt"; then
+    ok "the suite getting faster no longer misses the budget (it did: pole/median 3.333)"
+  else
+    bad "nonpole_speedup missed the budget — the metric is still a ratio against the suite"
+    sed -e 's/^/        /' "$TMP/ns.txt"
+  fi
+else
+  bad "the balancer refused nonpole_speedup — a correctly packed suite"
+  sed -e 's/^/        /' "$TMP/ns.txt"
+fi
+
+if _bal lpt_packing_gap "$TMP/lg.txt"; then
+  bad "a packing 22% above its own achievable floor was accepted"
+  sed -e 's/^/        /' "$TMP/lg.txt"
+else
+  if grep -q 'misses the pole/floor budget of 1.125 (it is 1.222)' "$TMP/lg.txt" \
+     && grep -q 'No single gate explains it' "$TMP/lg.txt"; then
+    ok "a real packing failure is still refused, and blamed on the packing"
+  else
+    bad "lpt_packing_gap was refused, but not with the packing explanation"
+    sed -e 's/^/        /' "$TMP/lg.txt"
+  fi
+  if grep -q '^  floor: the achievable pole — set by .* of open work over 3 open worker slots' "$TMP/lg.txt"; then
+    ok "the capacity term is stated in worker SLOTS, not in rows"
+  else
+    bad "the floor's provenance is missing or is not the capacity term"
+    sed -e 's/^/        /' "$TMP/lg.txt"
+  fi
 fi
 
 if [ "$fail" -eq 0 ]; then

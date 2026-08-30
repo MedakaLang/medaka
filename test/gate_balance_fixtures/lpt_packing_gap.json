@@ -1,0 +1,16 @@
+{
+  "schema": "gate-cost-baseline/1",
+  "note": "SYNTHETIC fixture baseline for test/diff_compiler_gate_balance.sh. Hand-written, not ingested. The classic LPT worst-case shape at three rows.",
+  "generated": "2026-08-30T00:00:00Z",
+  "maxSamples": 9,
+  "runs": [],
+  "gates": [
+    {"name": "big1", "medianMs": 500, "samples": 1, "ms": [500]},
+    {"name": "big2", "medianMs": 500, "samples": 1, "ms": [500]},
+    {"name": "mid1", "medianMs": 400, "samples": 1, "ms": [400]},
+    {"name": "mid2", "medianMs": 400, "samples": 1, "ms": [400]},
+    {"name": "small1", "medianMs": 300, "samples": 1, "ms": [300]},
+    {"name": "small2", "medianMs": 300, "samples": 1, "ms": [300]},
+    {"name": "small3", "medianMs": 300, "samples": 1, "ms": [300]}
+  ]
+}

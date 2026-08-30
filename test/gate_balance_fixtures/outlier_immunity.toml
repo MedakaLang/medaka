@@ -1,0 +1,100 @@
+# test/gate_balance_fixtures/outlier_immunity.toml — SYNTHETIC, hand-written.
+#
+# Discriminating fixture for the PACKING STATISTIC (S-2, #2222).
+#
+# Every other fixture here has each gate at a single sample, where every
+# candidate statistic — median, mean, max, spread-widened — returns the same
+# number. So none of them can tell which statistic the balancer is using, and
+# a change of statistic would pass the whole suite. This one is built so they
+# disagree, and so the disagreement reaches the ASSIGNMENT rather than only a
+# printed value.
+#
+# `wild` carries `ms = [900, 10, 10]`: one runner hiccup 90x its own usual
+# cost, the shape `pds_test_repo_vectors` carries for real in the committed
+# baseline (a 50.7x sample). The statistics split on it:
+#
+#     median  10      mean  306      max  900      median+0.25*spread  232
+#
+# With jobs = 1 a row's makespan is its sum, so the packings are:
+#
+#   MEDIAN (committed here).  Costs desc: heavy 90, mid 60, light 30, wild 10.
+#   LPT fills the lighter row each time -> one row carries {heavy, wild} = 100
+#   and the other {mid, light} = 90.  `wild` SHARES a row.
+#
+#   ANY UNBIASED ALTERNATIVE.  Costs desc: wild 306, heavy 90, mid 60,
+#   light 30.  `wild` takes an empty row and nothing else fits under it, so it
+#   ends up ALONE at 306 against the other row's 180.
+#
+# So the assertion is "`wild` and `heavy` are on the SAME row", which is
+# tie-break-independent: no statistic that lets one hiccup through can put
+# them together, and the median cannot pull them apart.
+
+[[gate]]
+name = "heavy"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tier = "merge"
+cost = "medium"
+kind = "exec"
+run = "test/heavy.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "mid"
+area = "fixture"
+shard = "b"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/mid.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "light"
+area = "fixture"
+shard = "b"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/light.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "wild"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/wild.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[shard]]
+name = "a"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/a.txt"
+pinned_gates = []
+
+[[shard]]
+name = "b"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/b.txt"
+pinned_gates = []

@@ -1,0 +1,33 @@
+# test/gate_balance_fixtures/budget_over_class.toml — SYNTHETIC, hand-written.
+#
+# Pins clause (b) of `medaka gate budget` (test/diff_compiler_gate_budget.sh,
+# FR-4, review finding S2-2 against S-5, epic #2182) IN ISOLATION: a single
+# schedulable, COSTED gate whose measured cost exceeds the TOLERANCE-ADJUSTED
+# ceiling for its declared class — not the raw kill timeout. `sluggish`
+# measures 280.0s against a declared `cheap` class (300s kill timeout,
+# `timeoutFor`); the raw timeout is not yet exceeded, but the tolerance-
+# adjusted ceiling (300s / 1.125 = 266.6s, the same `balTargetMilli` clause
+# (c) enforces) is — pinning that clause (b) compares against the
+# tolerance-adjusted number, not the bare timeout, is the point of this
+# fixture (a fixture over the raw 300s would not distinguish the two).
+
+[[gate]]
+name = "sluggish"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/sluggish.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[shard]]
+name = "a"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/a.txt"
+pinned_gates = []

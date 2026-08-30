@@ -1,0 +1,18 @@
+{
+  "schema": "gate-cost-baseline/1",
+  "note": "SYNTHETIC fixture baseline for test/diff_compiler_gate_balance.sh (FR-1, #2222 review S0-1). Hand-written, not ingested. NO gate row carries a sampleRuns key — the shape of every baseline committed before FR-1. It must parse, it must still schedule, and its out-of-sample block must report 'not derivable — 0 of 6 retained samples carry run attribution' rather than the 72.2% / -33.3% that reading these same ms arrays by position would produce.",
+  "generated": "2026-08-30T00:00:00Z",
+  "maxSamples": 9,
+  "runs": [
+    {"key": "1:1:a", "runId": "1", "runAttempt": "1", "shard": "a", "event": "workflow_dispatch", "sha": "0000000000000000000000000000000000000000", "ref": "refs/heads/main", "date": "2026-08-30T00:00:00Z", "jobs": 2, "parallel": true, "rowElapsedMs": 120, "gates": 1},
+    {"key": "1:1:b", "runId": "1", "runAttempt": "1", "shard": "b", "event": "workflow_dispatch", "sha": "0000000000000000000000000000000000000000", "ref": "refs/heads/main", "date": "2026-08-30T00:00:00Z", "jobs": 2, "parallel": true, "rowElapsedMs": 40, "gates": 1},
+    {"key": "2:1:a", "runId": "2", "runAttempt": "1", "shard": "a", "event": "workflow_dispatch", "sha": "0000000000000000000000000000000000000000", "ref": "refs/heads/main", "date": "2026-08-30T01:00:00Z", "jobs": 2, "parallel": true, "rowElapsedMs": 220, "gates": 1},
+    {"key": "2:1:b", "runId": "2", "runAttempt": "1", "shard": "b", "event": "workflow_dispatch", "sha": "0000000000000000000000000000000000000000", "ref": "refs/heads/main", "date": "2026-08-30T01:00:00Z", "jobs": 2, "parallel": true, "rowElapsedMs": 40, "gates": 1},
+    {"key": "3:1:a", "runId": "3", "runAttempt": "1", "shard": "a", "event": "workflow_dispatch", "sha": "0000000000000000000000000000000000000000", "ref": "refs/heads/main", "date": "2026-08-30T02:00:00Z", "jobs": 2, "parallel": true, "rowElapsedMs": 320, "gates": 1},
+    {"key": "3:1:b", "runId": "3", "runAttempt": "1", "shard": "b", "event": "workflow_dispatch", "sha": "0000000000000000000000000000000000000000", "ref": "refs/heads/main", "date": "2026-08-30T02:00:00Z", "jobs": 2, "parallel": true, "rowElapsedMs": 40, "gates": 1}
+  ],
+  "gates": [
+    {"name": "l1", "medianMs": 200, "samples": 3, "ms": [100, 200, 300]},
+    {"name": "l2", "medianMs": 20, "samples": 3, "ms": [10, 20, 30]}
+  ]
+}

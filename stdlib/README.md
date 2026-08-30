@@ -33,4 +33,9 @@ Follow that; this file does not duplicate it.
 - A handful of unsafe externs (`arrayGetUnsafe`, `arraySetUnsafe`, `arrayBlit`,
   `arrayFill`, `bytesToFloat64`) are restricted to trusted roots — see
   `internalExterns` in `compiler/frontend/resolve.mdk` and the `--allow-internal`
-  CLI flag — if your primitive is similarly unsafe, follow that pattern.
+  CLI flag — if your primitive is similarly unsafe, follow that pattern. A
+  project may also opt in from either its `[package]` or `[project]` manifest
+  section with the canonical unquoted boolean `allow-internal = true`. An
+  optional trailing `#` comment is permitted; quoted `"true"`, `false`, malformed
+  values, comment text, and a dependency named `allow-internal` do not grant the
+  privilege.

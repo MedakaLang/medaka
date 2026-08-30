@@ -162,3 +162,49 @@ param_case_f "ws2-helper-reject"   "$HELP" "Net=idp.example.com/*" 1 "rejected"
 echo ""
 printf '%d param ok, %d param failing\n' "$ppass" "$pfail"
 [ "$pfail" -eq 0 ] || exit 1
+
+# ── Fail-closed analysis, entry, and evaluation routes (#2127/#2047) ───────
+fpass=0; ffail=0
+
+# refuse_case LABEL FIXTURE ALLOW FN EXPECTED_SUBSTRING
+refuse_case() {
+  rlabel="$1"; rfix="$2"; rallow="$3"; rfn="$4"; rsub="$5"
+  rmdk="$ROOT/$rfix"
+  rtmp="$(mktemp)"
+  perl -e 'alarm 90; exec @ARGV' \
+      "$NATIVE" check-policy "$rmdk" --allow "$rallow" --fn "$rfn" > "$rtmp" 2>&1
+  rrc=$?
+  if [ "$rrc" -ne 0 ] && ! grep -qF "accepted." "$rtmp" && grep -qF "$rsub" "$rtmp"; then
+    fpass=$((fpass+1)); printf 'ok   %s (rc=%s, no accepted verdict)\n' "$rlabel" "$rrc"
+  else
+    ffail=$((ffail+1)); printf 'FAIL %s (rc=%s, want nonzero + <%s> + no accepted verdict)\n' "$rlabel" "$rrc" "$rsub"
+    sed 's/^/  /' "$rtmp"
+  fi
+  rm -f "$rtmp"
+}
+
+echo ""
+echo "-- fail-closed analysis, entry, and evaluation --"
+refuse_case "analysis-type-error" "test/check_policy_fixtures/type_error_plugin.mdk" "Panic" transform "rejected. compiler analysis failed"
+refuse_case "analysis-unlabelled-ffi" "test/check_policy_fixtures/ffi_unlabelled_plugin.mdk" "FFI,Net" transform "rejected. compiler analysis failed"
+refuse_case "missing-entry-2047" "test/check_policy_fixtures/missing_entry_plugin.mdk" "Cache,Log" transform "rejected. no 'transform' entry found"
+refuse_case "evaluation-panic" "test/check_policy_fixtures/panic_plugin.mdk" "Panic" transform "policy evaluation boom"
+
+# The #2047 control flips only entry presence in the same fixture and must still
+# reach a genuine acceptance verdict at exit 0.
+control_tmp="$(mktemp)"
+perl -e 'alarm 90; exec @ARGV' \
+    "$NATIVE" check-policy "$ROOT/test/check_policy_fixtures/missing_entry_plugin.mdk" \
+    --allow "Cache,Log" --fn rewriteHeader > "$control_tmp" 2>&1
+control_rc=$?
+if [ "$control_rc" -eq 0 ] && grep -qF "accepted. rewriteHeader" "$control_tmp"; then
+  fpass=$((fpass+1)); printf 'ok   missing-entry-2047-control (rc=0, accepted)\n'
+else
+  ffail=$((ffail+1)); printf 'FAIL missing-entry-2047-control (rc=%s, want rc=0 + accepted verdict)\n' "$control_rc"
+  sed 's/^/  /' "$control_tmp"
+fi
+rm -f "$control_tmp"
+
+echo ""
+printf '%d fail-closed ok, %d fail-closed failing\n' "$fpass" "$ffail"
+[ "$ffail" -eq 0 ] || exit 1

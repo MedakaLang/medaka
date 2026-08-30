@@ -1436,3 +1436,146 @@ jobs:
 
       - name: Shard balancer — idempotence, constraints, cost refusals
         run: sh test/diff_compiler_gate_balance.sh
+
+  # ── The budget governor (#2180, S-5) ─────────────────────────────────────────
+  # Its own job, mirroring `gate-balance` immediately above: it needs ./medaka
+  # (it drives `medaka gate budget`) and an AUTHORED commit message from the
+  # change under test (there is no PR body in a `merge_group` run), nothing
+  # else.
+  #
+  # ⚠️ AUTHORED, NOT `git log -1` ON HEAD (FR-2, review finding S1-2). The
+  # `actions/checkout@v4` above takes no `ref:`, so on `pull_request` it checks
+  # out `refs/pull/N/merge` and on `merge_group` the queue's auto-merge commit
+  # — a SYNTHETIC merge commit in both cases, whose message is GitHub
+  # boilerplate ("Merge pull request #N from ...") and never the text an author
+  # pasted the `Gate-Budget-Override:` trailer into. Reading HEAD's message on
+  # those two events — the only two that gate a merge — made the override
+  # mechanism unreadable, i.e. an un-overridable governor. The resolve step
+  # below re-derives the real authored range from the EVENT PAYLOAD's SHAs and
+  # exports it; `test/diff_compiler_gate_budget.sh` prefers that over HEAD.
+  #
+  # ⚠️ A JOB AND NOT A `gates` MATRIX ROW, for the same reason `gate-balance`
+  # is one: this gate grades the projected pole/floor, so it must not be able
+  # to move the number it grades by entering packing itself — that is also
+  # why its registry entry is `shard = "other-job"`.
+  #
+  # NOT YET in the required-checks ruleset (same state `ci-gen-drift` started
+  # in, and the same state `gate-cost`/`gate-balance` are still in as of this
+  # slice) — adding a required context is a separate, non-atomic `gh api`
+  # ruleset edit; see this slice's report for the exact command and why it
+  # was not run in this PR.
+  gate-budget:
+    needs: [detect, build]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    # `cost = "cheap"` in test/gates.toml declares a 300s (`timeoutFor`) kill
+    # timeout; this job's own ceiling must not silently permit more than that
+    # (FR-5, review finding S3-6). 5 minutes (300s) matches; this gate is
+    # text-only with no build, so it's ample headroom over an actual run.
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup medaka (toolchain + downloaded binary)
+        uses: ./.github/actions/setup-medaka
+        with:
+          binary: artifact
+
+      # Resolves the override channel BEFORE the gate runs. Every payload field
+      # is read through `env:` rather than interpolated into the script body —
+      # `${{ }}` inside `run:` is textual substitution and an attacker-authored
+      # branch name or message would be shell, not data.
+      - name: Resolve the authored commit message(s) — the override channel
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          MG_BASE: ${{ github.event.merge_group.base_sha }}
+          MG_HEAD: ${{ github.event.merge_group.head_sha }}
+          MG_REF: ${{ github.event.merge_group.head_ref }}
+          GH_SHA: ${{ github.sha }}
+        run: |
+          set -u
+          echo "event: $EVENT"
+
+          # HEAD's own message, printed for CONTRAST, not for use. On
+          # `pull_request`/`merge_group` this is the synthetic merge commit's
+          # boilerplate. Printing it beside the resolved text is what makes a
+          # future regression of S1-2 visible in the log instead of silent.
+          echo "--- checked-out HEAD $(git rev-parse HEAD) (SYNTHETIC on pull_request/merge_group):"
+          git log -1 --pretty=%B HEAD
+
+          base=""; head=""
+          case "$EVENT" in
+            pull_request*) base="$PR_BASE"; head="$PR_HEAD" ;;
+            merge_group)
+              # `pull_request.{base,head}.sha` are long-standing documented
+              # fields; the `merge_group` payload's are NOT enumerated in
+              # GitHub's webhook docs, so this arm must not DEPEND on their
+              # names. Verified live instead: a merge_group run's `github.sha`
+              # IS the queue's auto-merge commit (measured — the run for PR
+              # #2212 resolved to 93a40382), and the queue branch is named
+              # `gh-readonly-queue/<base-branch>/pr-<N>-<base-sha>`, so the
+              # base is recoverable from the ref when the field is not.
+              head="$MG_HEAD"
+              [ -n "$head" ] || head="$GH_SHA"
+              base="$MG_BASE"
+              if [ -z "$base" ]; then
+                cand="${MG_REF##*-}"
+                case "$cand" in
+                  [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) base="$cand" ;;
+                esac
+              fi
+              ;;
+          esac
+
+          # `push` / `workflow_dispatch` / `schedule` check out the author's
+          # real commit, so HEAD's message IS the authored one. Leave the
+          # variable UNSET (not empty) and the gate keeps today's `git log -1`
+          # behaviour verbatim on those events.
+          if [ -z "$head" ]; then
+            echo "--- '$EVENT' checks out the real commit — leaving GATE_BUDGET_COMMIT_MSG unset (gate reads HEAD)."
+            exit 0
+          fi
+
+          # Same targeted-fetch pattern the `detect` job uses: make specific
+          # commit objects reachable regardless of this job's own shallow
+          # checkout. depth=50, not depth=1, because we want the RANGE
+          # base..head — every authored commit in the PR, or every PR batched
+          # into this merge group — not just one commit.
+          git cat-file -e "$head" 2>/dev/null || git fetch --no-tags --depth=50 origin "$head" 2>/dev/null || true
+          git cat-file -e "$base" 2>/dev/null || git fetch --no-tags --depth=50 origin "$base" 2>/dev/null || true
+
+          msg=""
+          if git cat-file -e "$head" 2>/dev/null && git cat-file -e "$base" 2>/dev/null; then
+            msg="$(git log --pretty=%B "$base..$head" 2>/dev/null || true)"
+          fi
+          if [ -z "$msg" ] && git cat-file -e "$head" 2>/dev/null; then
+            # Range unavailable (base unreachable, or a shallow boundary cut it
+            # short). On `merge_group` the head is ITSELF the auto-merge commit,
+            # so the authored message lives on its SECOND PARENT — measured on
+            # this repo: 93a40382 is "Merge pull request #2212 from ...", and
+            # 93a40382^2 = 1c1b48f3 carries the real text.
+            if [ "$EVENT" = "merge_group" ] && git cat-file -e "$head^2" 2>/dev/null; then
+              msg="$(git log -1 --pretty=%B "$head^2" 2>/dev/null || true)"
+            else
+              msg="$(git log -1 --pretty=%B "$head" 2>/dev/null || true)"
+            fi
+          fi
+
+          echo "--- resolved authored message(s) for $base..$head:"
+          printf '%s\n' "$msg"
+
+          # Exported even when EMPTY: set-but-empty means "resolved, no override
+          # text", which the gate honours as fail-CLOSED. Only an entirely
+          # ABSENT variable licenses the HEAD fallback, so a resolution failure
+          # here can never silently re-open the synthetic-merge hole.
+          delim="GATE_BUDGET_MSG_EOF_$(printf '%s' "$msg" | sha1sum | cut -c1-20)"
+          {
+            echo "GATE_BUDGET_COMMIT_MSG<<$delim"
+            printf '%s\n' "$msg"
+            echo "$delim"
+          } >> "$GITHUB_ENV"
+
+      - name: Budget governor — uncosted / over-class / pole-floor, with override
+        run: sh test/diff_compiler_gate_budget.sh

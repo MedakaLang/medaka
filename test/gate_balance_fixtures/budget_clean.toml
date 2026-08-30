@@ -1,0 +1,29 @@
+# test/gate_balance_fixtures/budget_clean.toml — SYNTHETIC, hand-written.
+#
+# THE ZERO-VIOLATION CASE for `medaka gate budget`
+# (test/diff_compiler_gate_budget.sh, FR-4, review finding S2-2 against S-5,
+# epic #2182): one schedulable gate, costed, comfortably inside its declared
+# class's tolerance-adjusted ceiling, and alone on its one open row so
+# pole/floor is exactly 1.000 — a well-formed registry must pass with zero
+# violations reported.
+
+[[gate]]
+name = "tidy"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/tidy.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[shard]]
+name = "a"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/a.txt"
+pinned_gates = []
