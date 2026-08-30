@@ -19,33 +19,40 @@ map of the docs that follow.
 ## 1. Quickstart — "Your first program"
 Working program running in the playground in five minutes.
 - Introduce: `main = ...` entry point; **`main` must be a zero-arg value, not
-  `main () = ...`** (silent no-op); `println`; comments.
+  `main () = ...`** (a loud, located `W-MAIN-SHAPE` rejection; write
+  `main = ...`); `println`; comments.
 - Defer: modules, types, structure.
 
 ## 2. Values, Bindings & Types — "The shape of an expression"
-- Introduce: literals; `let ... in`; immutability by default; **`let mut`
-  (mutation is opt-in and visible)**; annotations/signatures; **inference means
-  you rarely write types, but signatures document**; everything-is-an-expression.
-- Defer: `Ref`, mutation mechanics (untracked — no effect), constrained signatures.
+- Introduce: literals; `let ... in`; immutable bindings; mutable state through
+  **`Ref` cells, with `:=` to write and `!` to read**; annotations/signatures;
+  **inference means you rarely write types, but signatures document**;
+  everything-is-an-expression.
+- Defer: `Ref` internals, constrained signatures.
 
 ## 3. Functions — "Defining and composing behavior"
 - Introduce: definitions; **multiple clauses with pattern-matching heads**;
   guards (`| cond = ...`, `otherwise`); lambdas (`x y => body`, **not curried**);
-  `where`; **pipe `|>`, compose `>> <<`, sections `(+1)`/`(2 * _)`, backtick infix**.
-- Defer: `function` keyword (one sentence), point-free zealotry.
+  `where`; prefix application (`f x y`); **pipe `|>`, compose `>> <<`, and
+  sections `(+1)`/`(2 * _)`**; `x => match x ...` when a lambda immediately
+  eliminates its argument.
+- Defer: point-free zealotry.
 
 ## 4. Data Modeling — "Types that describe your domain" *(centerpiece)*
-- Introduce: `data` sum types (payloads, type params); `record`; **pattern
-  matching as the eliminator**; **exhaustiveness checking**; `Option`/`Result`
-  as the null/exception replacement; `deriving`; functional update `{ p | f = v }`.
+- Introduce: `data` sum types (payloads, type params); record-shaped declarations
+  such as `data Person = { name : String }` (the word `record` is an ordinary
+  identifier, not a declaration keyword); **pattern matching as the eliminator**;
+  **exhaustiveness checking**; `Option`/`Result` as the null/exception replacement;
+  `deriving`; functional update `{ p | f = v }`.
 - Defer: `newtype` (a paragraph), nested-update depth, exhaustiveness internals.
 
 ## 5. Interfaces — "Ad-hoc polymorphism, Medaka-style"
 - Introduce: `interface` + `impl`; the working vocabulary (`Eq`/`Ord`/`Debug`/
   `Display`/`Num`); **constraints via `=>`**; default methods; conditional impls
-  (`impl Eq (List a) requires Eq a`); how `deriving` connects here.
-- Introduce lightly: named instances (`@Additive`), `requires` at interface site.
-- Defer: dict-passing internals, coherence, higher-kinded interfaces, `default impl`.
+  (`impl Eq (List a) requires Eq a`); how `deriving` connects here; automatic
+  selection of the most-specific ordinary `impl` when candidates overlap.
+- Introduce lightly: `requires` at interface site.
+- Defer: dict-passing internals, coherence, higher-kinded interfaces.
 
 ## 6. Working with Data — "Collections and the standard library"
 - Introduce: `List` vs `Array` (when to reach for which); `Map`/`Set` + literals;
@@ -56,10 +63,11 @@ Working program running in the playground in five minutes.
 ## 7. Effects & IO — "Doing things in the world" *(the signature chapter)*
 Lead with the surprise.
 - Introduce: **imperative IO is a bare indented block, not `do`** (IO is not a
-  monad here); `let mut`, reassignment, `Ref`/`:=` (mutation is untracked — no
-  effect label); **effect rows `<IO>`, `<Clock, IO>`** as the "what can this
-  touch" contract — every effect label is a host capability; capabilities at a
-  high level. Contrast with Haskell `IO a` and with unrestricted side effects.
+  monad here); immutable bindings with mutable `Ref` cells, written with `:=`
+  and read with `!` (mutation is untracked — no effect label); **effect rows
+  `<IO>`, `<Clock, IO>`** as the "what can this touch" contract — every effect
+  label is a host capability; capabilities at a high level. Contrast with
+  Haskell `IO a` and with unrestricted side effects.
 - Defer: custom `effect` labels, capability platform, effect variables/open rows.
 
 ## 8. `do` and Monads — "Chaining computations that might fail or accumulate"
