@@ -71,19 +71,19 @@ running doctests in stdlib/core.mdk
 
 stdlib/core.mdk: 69/69 passed
 Testing "neq is the negation of eq" ... OK (100 tests)
-Testing "compare agrees with lt/gt/eq" ... OK (100 tests)
+stdlib/core.mdk:1653: Testing "compare agrees with lt/gt/eq" ... OK (100 tests)
 Testing "clamp keeps values inside the interval" ... OK (100 tests)
-Testing "filter . filter p == filter p" ... OK (100 tests)
+stdlib/core.mdk:1663: Testing "filter . filter p == filter p" ... OK (100 tests)
 Testing "length matches a counting fold" ... OK (100 tests)
 Testing "any/all duality" ... OK (100 tests)
 Testing "fromOption d (Some x) == x" ... OK (100 tests)
-Testing "toResult/fromResult round-trip on Some" ... OK (100 tests)
-Testing "Ord (List a) is reflexive" ... OK (100 tests)
-Testing "discard replaces the payload with Unit" ... OK (100 tests)
+stdlib/core.mdk:1675: Testing "toResult/fromResult round-trip on Some" ... OK (100 tests)
+stdlib/core.mdk:1677: Testing "Ord (List a) is reflexive" ... OK (100 tests)
+stdlib/core.mdk:1682: Testing "discard replaces the payload with Unit" ... OK (100 tests)
 Testing "on agrees with its hand expansion" ... OK (100 tests)
-Testing "map2 on Some matches direct application" ... OK (100 tests)
-Testing "map3 on Some matches direct application" ... OK (100 tests)
-Testing "mapFirst on Result generalizes mapErr" ... OK (100 tests)
-Testing "foldThen with Some agrees with a pure fold" ... OK (100 tests)
+stdlib/core.mdk:1688: Testing "map2 on Some matches direct application" ... OK (100 tests)
+stdlib/core.mdk:1691: Testing "map3 on Some matches direct application" ... OK (100 tests)
+stdlib/core.mdk:1693: Testing "mapFirst on Result generalizes mapErr" ... OK (100 tests)
+stdlib/core.mdk:1697: Testing "foldThen with Some agrees with a pure fold" ... OK (100 tests)
 
 15 passed, 0 failed

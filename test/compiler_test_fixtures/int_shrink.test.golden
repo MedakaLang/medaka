@@ -1,6 +1,7 @@
 running doctests in test/compiler_test_fixtures/int_shrink.mdk
   (no doctests found)
-Testing "int_shrink: deliberately false over Int (#1307)" ... FAILED after 1 test
+test/compiler_test_fixtures/int_shrink.mdk:20: Testing "int_shrink: deliberately false over Int (#1307)" ... FAILED after 1 test
+  Seed: 123456789 (rerun with: medaka test --seed 123456789 --filter "int_shrink: deliberately false over Int (#1307)" <file>)
   Counterexample:
     a = 0
 
