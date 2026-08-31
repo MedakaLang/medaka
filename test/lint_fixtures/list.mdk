@@ -1,0 +1,13 @@
+-- OWNERSHIP fixture for rule-stdlib-reimpl (#2248 Miss 1, S-ownership-exemption).
+-- This fixture's own file id is `list` (`modIdOf` = basename minus `.mdk`), the
+-- same module id the real stdlib uses for `list.reverse`. Before this slice the
+-- rule had no ownership concept at all: any file whose path did not literally
+-- contain a "stdlib" path segment (this one doesn't -- it lives under
+-- test/lint_fixtures/) fired on ANY name+signature match, so this exact
+-- `reverse` would have been a false positive. Ownership (the linted file's own
+-- module == the matched candidate's module) must suppress it -- the true
+-- owner's canonical definition is never a "reimplementation" of itself.
+export
+reverse : List a -> List a
+reverse [] = []
+reverse (x::xs) = reverse xs ++ [x]

@@ -1,5 +1,5 @@
 # META
-source_lines=4642
+source_lines=4663
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -496,12 +496,20 @@ restampSeverity sev f =
 
 -- Is the target file part of the stdlib itself?  A `stdlib` path SEGMENT (so
 -- `stdlib/core.mdk`, `./stdlib/list.mdk`, `/abs/medaka/stdlib/map.mdk` all match,
--- but `test/lint_fixtures/foo.mdk` does not).  Style rules that flag USER code
--- reimplementing / hand-rolling what the stdlib canonically provides
--- (`rule-stdlib-reimpl`, `rule-hand-rolled-derivable`) must skip stdlib-owned
--- files: those definitions ARE the canonical stdlib, or are hand-written for a
--- deliberate reason (bootstrap ordering, ctor/class name clash, or a non-
--- structural instance whose `deriving` would be semantically WRONG).
+-- but `test/lint_fixtures/foo.mdk` does not).
+--
+-- `rule-hand-rolled-derivable` uses this blanket path test as-is: a hand-
+-- written `impl Eq/Ord/Debug` anywhere inside the stdlib is legitimate
+-- regardless of which stdlib file it lives in or which type it's for
+-- (bootstrap ordering, a ctor/class name clash, or a non-structural instance
+-- whose `deriving` would be semantically WRONG) — the exemption there is
+-- "this is stdlib code," not "this file owns this particular name."
+--
+-- `rule-stdlib-reimpl` does NOT use this: its exemption is per (path, name)
+-- OWNERSHIP, not per path — see `ownsStdlibName` below.  A blanket path skip
+-- would wrongly exempt a stdlib file that only CONSUMES a name it doesn't own
+-- (`stdlib/toml.mdk` reimplementing `list.reverse` as `listReverse`) right
+-- alongside the file that legitimately defines it.
 isStdlibPath : String -> Bool
 isStdlibPath path = contains "stdlib" (splitOnChar '/' path)
 
@@ -1523,21 +1531,25 @@ tyHeadName _ = None
 -- that matched: `listReverse : List a -> List a` selects `list.reverse` out of
 -- the three rather than being defeated by whichever entry happened to be first.
 --
--- Skip stdlib-owned files: inside the stdlib these top-level names ARE the
--- canonical definitions the rule points USER code at, so flagging them is a pure
--- false positive.
+-- Skip only the TRUE OWNER of a name, not every stdlib file: `stdlib/list.mdk`
+-- defining `reverse` is the canonical definition the rule points other code
+-- at, so it must not fire on itself — but `stdlib/toml.mdk` defining
+-- `listReverse` does not OWN `list.reverse`, so a blanket "this path is under
+-- stdlib/" skip would wrongly exempt it too (#2248 Miss 1).  Ownership is
+-- decided per matched candidate, not per file: `path`'s own module
+-- (`modIdOf path`) is threaded through so a candidate whose module IS that
+-- file is never offered as a match (`firstMatchingModule` below).
 ruleStdlibReimpl : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
-ruleStdlibReimpl idx path _ pos prog
-  | isStdlibPath path = []
-  | otherwise =
+ruleStdlibReimpl idx path _ pos prog =
     -- both hoisted out of the per-def loop: `stdlibIndexNames` sorts the whole
     -- key set on every call, and the signature map is one pass over the file.
+    let ownMod = modIdOf path
     let names = stdlibIndexNames idx
     let sigs = sigTyMapOf prog
     -- dedupe by name so a multi-clause function (consecutive DFunDefs) fires once,
     -- keeping the FIRST clause's location.
     flatMap
-      (reimplHit idx names sigs)
+      (reimplHit idx ownMod names sigs)
       (dedupeNamesLoc (flatMap topDefNameL (declLocList pos prog)))
 
 topDefNameL : (Decl, Option Loc) -> List (String, Option Loc)
@@ -1552,11 +1564,14 @@ dedupeNamesLoc xs = dedupBy fst xs
 
 -- One def's findings: at most one, naming the stdlib module whose declared
 -- signature this def's own declared signature alpha-matches.  No signature in
--- this file for the name ⇒ nothing to compare ⇒ no finding.
-reimplHit : StdlibIndex -> List String -> HashMap String Ty -> (String, Option Loc) -> List Finding
-reimplHit idx names sigs (name, loc) = match get name sigs
+-- this file for the name ⇒ nothing to compare ⇒ no finding.  `ownMod` is the
+-- linted file's own module id (`modIdOf path`) — a candidate owned by `ownMod`
+-- is the true owner's canonical definition, never a "reimplementation" of
+-- itself.
+reimplHit : StdlibIndex -> String -> List String -> HashMap String Ty -> (String, Option Loc) -> List Finding
+reimplHit idx ownMod names sigs (name, loc) = match get name sigs
   None => []
-  Some ty => match firstMatchingExport idx (tyCanon ty) (filterList (relaxesOnto name) names)
+  Some ty => match firstMatchingExport idx ownMod (tyCanon ty) (filterList (relaxesOnto name) names)
     None => []
     Some (modName, stdName) => [stdlibFinding name modName stdName loc]
 
@@ -1571,18 +1586,24 @@ relaxesOnto user std =
   stringLength s >= 4 && (startsWith s u || endsWith s u)
 
 -- The first (module, stdlib name) whose declared signature canonicalises to
--- `canon`, over the relaxed candidate names in index order.
-firstMatchingExport : StdlibIndex -> String -> List String -> Option (String, String)
-firstMatchingExport _ _ [] = None
-firstMatchingExport idx canon (std::rest) = match firstMatchingModule canon (stdlibEntriesOf idx std)
+-- `canon`, over the relaxed candidate names in index order — never the
+-- linted file's own module (`ownMod`), which is the true owner rather than a
+-- reimplementation of itself.
+firstMatchingExport : StdlibIndex -> String -> String -> List String -> Option (String, String)
+firstMatchingExport _ _ _ [] = None
+firstMatchingExport idx ownMod canon (std::rest) = match firstMatchingModule ownMod canon (stdlibEntriesOf idx std)
   Some modName => Some (modName, std)
-  None => firstMatchingExport idx canon rest
+  None => firstMatchingExport idx ownMod canon rest
 
-firstMatchingModule : String -> List (String, Ty) -> Option String
-firstMatchingModule _ [] = None
-firstMatchingModule canon ((modName, ty)::rest)
+-- Skip a candidate OWNED by `ownMod` (the linted file's own module) before
+-- testing the signature at all: the true owner's definition can never be a
+-- "reimplementation" of itself, regardless of what its signature canonicalises to.
+firstMatchingModule : String -> String -> List (String, Ty) -> Option String
+firstMatchingModule _ _ [] = None
+firstMatchingModule ownMod canon ((modName, ty)::rest)
+  | modName == ownMod = firstMatchingModule ownMod canon rest
   | tyCanon ty == canon = Some modName
-  | otherwise = firstMatchingModule canon rest
+  | otherwise = firstMatchingModule ownMod canon rest
 
 -- name → the `Ty` its top-level `DTypeSig` declares.  Built by walking the
 -- reversed decl list with an unconditional `set`, so the FIRST signature in the
@@ -5049,23 +5070,23 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "tyHeadName" ((PCon "TyApp" (PVar "f") PWild)) (EApp (EVar "tyHeadName") (EVar "f")))
 (DFunDef false "tyHeadName" (PWild) (EVar "None"))
 (DTypeSig false "ruleStdlibReimpl" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleStdlibReimpl" ((PVar "idx") (PVar "path") PWild (PVar "pos") (PVar "prog")) (EIf (EApp (EVar "isStdlibPath") (EVar "path")) (EListLit) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "names") (EApp (EVar "stdlibIndexNames") (EVar "idx"))) (DoLet false false (PVar "sigs") (EApp (EVar "sigTyMapOf") (EVar "prog"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "reimplHit") (EVar "idx")) (EVar "names")) (EVar "sigs"))) (EApp (EVar "dedupeNamesLoc") (EApp (EApp (EVar "flatMap") (EVar "topDefNameL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "ruleStdlibReimpl" ((PVar "idx") (PVar "path") PWild (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "ownMod") (EApp (EVar "modIdOf") (EVar "path"))) (DoLet false false (PVar "names") (EApp (EVar "stdlibIndexNames") (EVar "idx"))) (DoLet false false (PVar "sigs") (EApp (EVar "sigTyMapOf") (EVar "prog"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EApp (EVar "reimplHit") (EVar "idx")) (EVar "ownMod")) (EVar "names")) (EVar "sigs"))) (EApp (EVar "dedupeNamesLoc") (EApp (EApp (EVar "flatMap") (EVar "topDefNameL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))))))
 (DTypeSig false "topDefNameL" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))
 (DFunDef false "topDefNameL" ((PTuple (PCon "DFunDef" PWild (PVar "name") PWild PWild) (PVar "loc"))) (EListLit (ETuple (EVar "name") (EVar "loc"))))
 (DFunDef false "topDefNameL" ((PTuple (PCon "DAttrib" PWild (PVar "d")) (PVar "loc"))) (EApp (EVar "topDefNameL") (ETuple (EVar "d") (EVar "loc"))))
 (DFunDef false "topDefNameL" (PWild) (EListLit))
 (DTypeSig false "dedupeNamesLoc" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))
 (DFunDef false "dedupeNamesLoc" ((PVar "xs")) (EApp (EApp (EVar "dedupBy") (EVar "fst")) (EVar "xs")))
-(DTypeSig false "reimplHit" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Ty")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding")))))))
-(DFunDef false "reimplHit" ((PVar "idx") (PVar "names") (PVar "sigs") (PTuple (PVar "name") (PVar "loc"))) (EMatch (EApp (EApp (EVar "get") (EVar "name")) (EVar "sigs")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "ty")) () (EMatch (EApp (EApp (EApp (EVar "firstMatchingExport") (EVar "idx")) (EApp (EVar "tyCanon") (EVar "ty"))) (EApp (EApp (EVar "filterList") (EApp (EVar "relaxesOnto") (EVar "name"))) (EVar "names"))) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "modName") (PVar "stdName"))) () (EListLit (EApp (EApp (EApp (EApp (EVar "stdlibFinding") (EVar "name")) (EVar "modName")) (EVar "stdName")) (EVar "loc"))))))))
+(DTypeSig false "reimplHit" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Ty")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DFunDef false "reimplHit" ((PVar "idx") (PVar "ownMod") (PVar "names") (PVar "sigs") (PTuple (PVar "name") (PVar "loc"))) (EMatch (EApp (EApp (EVar "get") (EVar "name")) (EVar "sigs")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "ty")) () (EMatch (EApp (EApp (EApp (EApp (EVar "firstMatchingExport") (EVar "idx")) (EVar "ownMod")) (EApp (EVar "tyCanon") (EVar "ty"))) (EApp (EApp (EVar "filterList") (EApp (EVar "relaxesOnto") (EVar "name"))) (EVar "names"))) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "modName") (PVar "stdName"))) () (EListLit (EApp (EApp (EApp (EApp (EVar "stdlibFinding") (EVar "name")) (EVar "modName")) (EVar "stdName")) (EVar "loc"))))))))
 (DTypeSig false "relaxesOnto" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "relaxesOnto" ((PVar "user") (PVar "std")) (EBlock (DoLet false false (PVar "s") (EApp (EVar "stringToLower") (EVar "std"))) (DoLet false false (PVar "u") (EApp (EVar "stringToLower") (EVar "user"))) (DoExpr (EBinOp "&&" (EBinOp ">=" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 4))) (EBinOp "||" (EApp (EApp (EVar "startsWith") (EVar "s")) (EVar "u")) (EApp (EApp (EVar "endsWith") (EVar "s")) (EVar "u")))))))
-(DTypeSig false "firstMatchingExport" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))))
-(DFunDef false "firstMatchingExport" (PWild PWild (PList)) (EVar "None"))
-(DFunDef false "firstMatchingExport" ((PVar "idx") (PVar "canon") (PCons (PVar "std") (PVar "rest"))) (EMatch (EApp (EApp (EVar "firstMatchingModule") (EVar "canon")) (EApp (EApp (EVar "stdlibEntriesOf") (EVar "idx")) (EVar "std"))) (arm (PCon "Some" (PVar "modName")) () (EApp (EVar "Some") (ETuple (EVar "modName") (EVar "std")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "firstMatchingExport") (EVar "idx")) (EVar "canon")) (EVar "rest")))))
-(DTypeSig false "firstMatchingModule" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "firstMatchingModule" (PWild (PList)) (EVar "None"))
-(DFunDef false "firstMatchingModule" ((PVar "canon") (PCons (PTuple (PVar "modName") (PVar "ty")) (PVar "rest"))) (EIf (EBinOp "==" (EApp (EVar "tyCanon") (EVar "ty")) (EVar "canon")) (EApp (EVar "Some") (EVar "modName")) (EIf (EVar "otherwise") (EApp (EApp (EVar "firstMatchingModule") (EVar "canon")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "firstMatchingExport" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))))))))
+(DFunDef false "firstMatchingExport" (PWild PWild PWild (PList)) (EVar "None"))
+(DFunDef false "firstMatchingExport" ((PVar "idx") (PVar "ownMod") (PVar "canon") (PCons (PVar "std") (PVar "rest"))) (EMatch (EApp (EApp (EApp (EVar "firstMatchingModule") (EVar "ownMod")) (EVar "canon")) (EApp (EApp (EVar "stdlibEntriesOf") (EVar "idx")) (EVar "std"))) (arm (PCon "Some" (PVar "modName")) () (EApp (EVar "Some") (ETuple (EVar "modName") (EVar "std")))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "firstMatchingExport") (EVar "idx")) (EVar "ownMod")) (EVar "canon")) (EVar "rest")))))
+(DTypeSig false "firstMatchingModule" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyApp (TyCon "Option") (TyCon "String"))))))
+(DFunDef false "firstMatchingModule" (PWild PWild (PList)) (EVar "None"))
+(DFunDef false "firstMatchingModule" ((PVar "ownMod") (PVar "canon") (PCons (PTuple (PVar "modName") (PVar "ty")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "modName") (EVar "ownMod")) (EApp (EApp (EApp (EVar "firstMatchingModule") (EVar "ownMod")) (EVar "canon")) (EVar "rest")) (EIf (EBinOp "==" (EApp (EVar "tyCanon") (EVar "ty")) (EVar "canon")) (EApp (EVar "Some") (EVar "modName")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "firstMatchingModule") (EVar "ownMod")) (EVar "canon")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "sigTyMapOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Ty"))))
 (DFunDef false "sigTyMapOf" ((PVar "prog")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "sigTyInto") (EApp (EVar "reverseL") (EApp (EApp (EVar "flatMap") (EVar "topSigPairL")) (EVar "prog")))) (EVar "m"))) (DoExpr (EVar "m"))))
 (DTypeSig false "sigTyInto" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Ty")) (TyCon "Unit"))))
@@ -6613,23 +6634,23 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "tyHeadName" ((PCon "TyApp" (PVar "f") PWild)) (EApp (EVar "tyHeadName") (EVar "f")))
 (DFunDef false "tyHeadName" (PWild) (EVar "None"))
 (DTypeSig false "ruleStdlibReimpl" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleStdlibReimpl" ((PVar "idx") (PVar "path") PWild (PVar "pos") (PVar "prog")) (EIf (EApp (EVar "isStdlibPath") (EVar "path")) (EListLit) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "names") (EApp (EVar "stdlibIndexNames") (EVar "idx"))) (DoLet false false (PVar "sigs") (EApp (EVar "sigTyMapOf") (EVar "prog"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "reimplHit") (EVar "idx")) (EVar "names")) (EVar "sigs"))) (EApp (EVar "dedupeNamesLoc") (EApp (EApp (EDictApp "flatMap") (EVar "topDefNameL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "ruleStdlibReimpl" ((PVar "idx") (PVar "path") PWild (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "ownMod") (EApp (EVar "modIdOf") (EVar "path"))) (DoLet false false (PVar "names") (EApp (EVar "stdlibIndexNames") (EVar "idx"))) (DoLet false false (PVar "sigs") (EApp (EVar "sigTyMapOf") (EVar "prog"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EApp (EVar "reimplHit") (EVar "idx")) (EVar "ownMod")) (EVar "names")) (EVar "sigs"))) (EApp (EVar "dedupeNamesLoc") (EApp (EApp (EDictApp "flatMap") (EVar "topDefNameL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))))))
 (DTypeSig false "topDefNameL" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))
 (DFunDef false "topDefNameL" ((PTuple (PCon "DFunDef" PWild (PVar "name") PWild PWild) (PVar "loc"))) (EListLit (ETuple (EVar "name") (EVar "loc"))))
 (DFunDef false "topDefNameL" ((PTuple (PCon "DAttrib" PWild (PVar "d")) (PVar "loc"))) (EApp (EVar "topDefNameL") (ETuple (EVar "d") (EVar "loc"))))
 (DFunDef false "topDefNameL" (PWild) (EListLit))
 (DTypeSig false "dedupeNamesLoc" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))
 (DFunDef false "dedupeNamesLoc" ((PVar "xs")) (EApp (EApp (EVar "dedupBy") (EVar "fst")) (EVar "xs")))
-(DTypeSig false "reimplHit" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Ty")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding")))))))
-(DFunDef false "reimplHit" ((PVar "idx") (PVar "names") (PVar "sigs") (PTuple (PVar "name") (PVar "loc"))) (EMatch (EApp (EApp (EVar "get") (EVar "name")) (EVar "sigs")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "ty")) () (EMatch (EApp (EApp (EApp (EVar "firstMatchingExport") (EVar "idx")) (EApp (EVar "tyCanon") (EVar "ty"))) (EApp (EApp (EVar "filterList") (EApp (EVar "relaxesOnto") (EVar "name"))) (EVar "names"))) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "modName") (PVar "stdName"))) () (EListLit (EApp (EApp (EApp (EApp (EVar "stdlibFinding") (EVar "name")) (EVar "modName")) (EVar "stdName")) (EVar "loc"))))))))
+(DTypeSig false "reimplHit" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Ty")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DFunDef false "reimplHit" ((PVar "idx") (PVar "ownMod") (PVar "names") (PVar "sigs") (PTuple (PVar "name") (PVar "loc"))) (EMatch (EApp (EApp (EVar "get") (EVar "name")) (EVar "sigs")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "ty")) () (EMatch (EApp (EApp (EApp (EApp (EVar "firstMatchingExport") (EVar "idx")) (EVar "ownMod")) (EApp (EVar "tyCanon") (EVar "ty"))) (EApp (EApp (EVar "filterList") (EApp (EVar "relaxesOnto") (EVar "name"))) (EVar "names"))) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "modName") (PVar "stdName"))) () (EListLit (EApp (EApp (EApp (EApp (EVar "stdlibFinding") (EVar "name")) (EVar "modName")) (EVar "stdName")) (EVar "loc"))))))))
 (DTypeSig false "relaxesOnto" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "relaxesOnto" ((PVar "user") (PVar "std")) (EBlock (DoLet false false (PVar "s") (EApp (EVar "stringToLower") (EVar "std"))) (DoLet false false (PVar "u") (EApp (EVar "stringToLower") (EVar "user"))) (DoExpr (EBinOp "&&" (EBinOp ">=" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 4))) (EBinOp "||" (EApp (EApp (EVar "startsWith") (EVar "s")) (EVar "u")) (EApp (EApp (EVar "endsWith") (EVar "s")) (EVar "u")))))))
-(DTypeSig false "firstMatchingExport" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))))
-(DFunDef false "firstMatchingExport" (PWild PWild (PList)) (EVar "None"))
-(DFunDef false "firstMatchingExport" ((PVar "idx") (PVar "canon") (PCons (PVar "std") (PVar "rest"))) (EMatch (EApp (EApp (EVar "firstMatchingModule") (EVar "canon")) (EApp (EApp (EVar "stdlibEntriesOf") (EVar "idx")) (EVar "std"))) (arm (PCon "Some" (PVar "modName")) () (EApp (EVar "Some") (ETuple (EVar "modName") (EVar "std")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "firstMatchingExport") (EVar "idx")) (EVar "canon")) (EVar "rest")))))
-(DTypeSig false "firstMatchingModule" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "firstMatchingModule" (PWild (PList)) (EVar "None"))
-(DFunDef false "firstMatchingModule" ((PVar "canon") (PCons (PTuple (PVar "modName") (PVar "ty")) (PVar "rest"))) (EIf (EBinOp "==" (EApp (EVar "tyCanon") (EVar "ty")) (EVar "canon")) (EApp (EVar "Some") (EVar "modName")) (EIf (EVar "otherwise") (EApp (EApp (EVar "firstMatchingModule") (EVar "canon")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "firstMatchingExport" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))))))))
+(DFunDef false "firstMatchingExport" (PWild PWild PWild (PList)) (EVar "None"))
+(DFunDef false "firstMatchingExport" ((PVar "idx") (PVar "ownMod") (PVar "canon") (PCons (PVar "std") (PVar "rest"))) (EMatch (EApp (EApp (EApp (EVar "firstMatchingModule") (EVar "ownMod")) (EVar "canon")) (EApp (EApp (EVar "stdlibEntriesOf") (EVar "idx")) (EVar "std"))) (arm (PCon "Some" (PVar "modName")) () (EApp (EVar "Some") (ETuple (EVar "modName") (EVar "std")))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "firstMatchingExport") (EVar "idx")) (EVar "ownMod")) (EVar "canon")) (EVar "rest")))))
+(DTypeSig false "firstMatchingModule" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyApp (TyCon "Option") (TyCon "String"))))))
+(DFunDef false "firstMatchingModule" (PWild PWild (PList)) (EVar "None"))
+(DFunDef false "firstMatchingModule" ((PVar "ownMod") (PVar "canon") (PCons (PTuple (PVar "modName") (PVar "ty")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "modName") (EVar "ownMod")) (EApp (EApp (EApp (EVar "firstMatchingModule") (EVar "ownMod")) (EVar "canon")) (EVar "rest")) (EIf (EBinOp "==" (EApp (EVar "tyCanon") (EVar "ty")) (EVar "canon")) (EApp (EVar "Some") (EVar "modName")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "firstMatchingModule") (EVar "ownMod")) (EVar "canon")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "sigTyMapOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Ty"))))
 (DFunDef false "sigTyMapOf" ((PVar "prog")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "sigTyInto") (EApp (EVar "reverseL") (EApp (EApp (EDictApp "flatMap") (EVar "topSigPairL")) (EVar "prog")))) (EVar "m"))) (DoExpr (EVar "m"))))
 (DTypeSig false "sigTyInto" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Ty")) (TyCon "Unit"))))
