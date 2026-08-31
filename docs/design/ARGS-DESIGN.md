@@ -73,7 +73,7 @@ flag       : String -> Args -> Bool
 flagValue  : String -> Args -> Option String    -- FIRST occurrence
 lastValue  : String -> Args -> Option String    -- LAST occurrence
 flagValues : String -> Args -> List String      -- all occurrences, argv order
-rosterOf   : ArgSpec -> List String             -- `--`-prefixed names ONLY (see §4)
+rosterOf   : ArgSpec -> List String             -- every name, shorts included (see §4)
 unknownFlagMessage  : ArgSpec -> String -> String
 missingValueMessage : ArgSpec -> String -> String
 invalidValueMessage : ArgSpec -> String -> String -> String
@@ -93,21 +93,30 @@ under a migration that is supposed to be inert. Converging them is a later, deli
 
 ---
 
-## 4. 🚨 `rosterOf` filters to `--`-prefixed names
+## 4. Short flags are first-class in the spec AND in every rendering
 
 `FlagSpec.names` carries **every** spelling as a complete token including its dashes
 (`["--write", "-w"]`) from the first day — short and long are members of *one* spec, not a
 `short : Option Char` field (which forces two shapes on every renderer) and not separate
 aliased specs (which split one flag's help into two rows that then drift, the very defect this
-closes).
+closes). `rosterOf` renders all of them, in declaration order.
 
-But the **rendering** stays `--`-only until the migration is complete. Putting shorts into
-`rosterOf` changes the `(known: …)` text of every verb that has one, so
-`make cli-conformance-census` would stop being byte-identical and the "migrations are
-observably inert" property would fail. The tree has exactly four short flags — `-h`, `-v`,
-`-w` (the only alias of a long flag) and `-o` — so the widening is small, deliberate, and gets
-its own change with its own test. **Spec carries shorts from slice 1; the rendering widens
-later.**
+**Retired: the "`rosterOf` filters to `--` now, a later slice widens it" sequencing plan.**
+This section used to defer short-flag *rendering* to a later slice, on the premise that no verb
+exposes a short flag in its `(known: …)` sentence yet, so filtering kept the migration
+observably inert. That premise was false of the tree it was written against: `fmt` already
+renders `-w` (`fmtBoolFlags`) and `build` already renders `-o` (`buildValueFlags`), because
+`checkCliFlags` prints `boolFlags ++ valueFlags` verbatim. The filter was therefore a silent
+*narrowing* of two verbs' rejection sentences, not a deferral — it broke inertness rather than
+preserving it. Slice `S-args-parity-fix` (#2355) deleted it. Two related invariants that
+outlived the plan:
+
+* An unknown flag's `(known: …)` set names every parseable spelling, `Internal` flags and short
+  aliases included — a sentence that refuses to name a flag the parser accepts is a lie.
+* Classification is not the same question. A `--`-prefixed token is always flag-shaped and so
+  rejects if unclaimed; a SINGLE-dash token is flag-shaped only when the spec declares it, so an
+  undeclared `-zzz` stays a positional exactly as `cliFlagGo` leaves it today. Rejecting
+  leading-dash positionals is `runRunCmd`'s AS-FILENAME question (#219), decided there.
 
 ---
 

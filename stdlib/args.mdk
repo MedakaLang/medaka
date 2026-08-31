@@ -180,7 +180,7 @@ internal f = { f | visibility = Internal }
      unknown flags rejected.
 
    > rosterOf (spec "fmt" [switch ["--write", "-w"] "rewrite in place"])
-   ["--write"] -}
+   ["--write", "-w"] -}
 export
 spec : String -> List FlagSpec -> ArgSpec
 spec v fs = ArgSpec {
@@ -213,28 +213,23 @@ canonical f = match f.names
   n::_ => n
   [] => ""
 
-{- | The `(known: …)` set, in declaration order.
+{- | The `(known: …)` set, in declaration order: EVERY name of every flag,
+     short spellings included.
 
-   🚨 Filtered to `--`-prefixed names ONLY.  `names` carries short spellings
-   from the first day, but widening this rendering changes the `(known: …)`
-   text of every verb with a short flag, so it happens once, deliberately, as
-   its own change — not as a side effect of a migration.
+   An earlier draft filtered this to `--`-prefixed names on the theory that no
+   verb exposed a short flag yet.  That premise was false — `fmt` renders `-w`
+   and `build` renders `-o` in their `(known: …)` sentences today — so the
+   filter was a silent narrowing, not a deferral, and it is gone.
 
    > rosterOf (spec "run" [switch ["--json"] "j", switch ["--release", "-r"] "r"])
-   ["--json", "--release"] -}
+   ["--json", "--release", "-r"] -}
 export
 rosterOf : ArgSpec -> List String
 rosterOf sp = rosterGo sp.flags
 
 rosterGo : List FlagSpec -> List String
 rosterGo [] = []
-rosterGo (f::rest) = longNames f.names ++ rosterGo rest
-
-longNames : List String -> List String
-longNames [] = []
-longNames (n::rest)
-  | startsWith "--" n = n :: longNames rest
-  | otherwise = longNames rest
+rosterGo (f::rest) = f.names ++ rosterGo rest
 
 -- | Render a name set the way every rejection sentence does: a verb with no
 --   flags at all says `none`, not an empty parenthesis.
@@ -246,7 +241,7 @@ knownSet ns = join ", " ns
      exactly one place.
 
    > unknownFlagMessage (spec "fmt" [switch ["--write", "-w"] "w"]) "--zzz"
-   "medaka fmt: unrecognized flag '--zzz' (known: --write)"
+   "medaka fmt: unrecognized flag '--zzz' (known: --write, -w)"
    > unknownFlagMessage (spec "doc" []) "--zzz"
    "medaka doc: unrecognized flag '--zzz' (known: none)" -}
 export
@@ -365,9 +360,16 @@ usageExitCode = 1
    C2 — an unclaimed `--`-shaped token, and a value flag with nothing after it:
 
    > map (_ => "ok") (parseArgs (spec "fmt" [switch ["--write", "-w"] "w"]) ["--zzz"])
-   Err "medaka fmt: unrecognized flag '--zzz' (known: --write)"
+   Err "medaka fmt: unrecognized flag '--zzz' (known: --write, -w)"
    > map (_ => "ok") (parseArgs (spec "fmt" [value ["--out"] "PATH" "o"]) ["--out"])
    Err "medaka fmt: --out requires a value"
+
+   C2 stops at `--`.  An UNDECLARED single-dash token is not a flag-shaped
+   token at all — it is a positional, exactly as the CLI treats it today, so
+   that a filename beginning with `-` is not rejected here:
+
+   > map (a => a.positionals) (parseArgs (spec "check" [switch ["--json"] "j"]) ["-zzz", "f.mdk"])
+   Ok ["-zzz", "f.mdk"]
 
    Positionals, in order, unclaimed by any flag:
 
@@ -427,16 +429,36 @@ scanArgs : ArgSpec -> List String -> Scan
 scanArgs _ [] = Ok ([], [], [])
 scanArgs sp (t::rest)
   | t == "--" && isAfterSeparator sp.trailing = Ok ([], [], rest)
-  | isFlagToken t = scanFlag sp t rest
+  | isFlagToken sp t = scanFlag sp t rest
   | isRaw sp.trailing = Ok ([], [t], rest)
   | otherwise = consPositional t (scanArgs sp rest)
 
--- A `-`-shaped token: `-` alone is a conventional stdin/stdout placeholder and
--- is a positional, but `--` is not — under `TrailingReject`/`TrailingRaw` it
--- has no meaning, and falling here is what makes it reject like any other
--- unclaimed token.
-isFlagToken : String -> Bool
-isFlagToken t = startsWith "-" t && stringLength t > 1
+-- A `-`-shaped token.  `--`-prefixed tokens are ALWAYS flag-shaped, claimed or
+-- not, so an unknown one rejects: `-` alone is a conventional stdin/stdout
+-- placeholder and is a positional, but `--` is not — under
+-- `TrailingReject`/`TrailingRaw` it has no meaning, and falling here is what
+-- makes it reject like any other unclaimed token.
+--
+-- A SINGLE-dash token is flag-shaped only when the spec actually declares it
+-- (in either C1 spelling, so `-o` and `-o=x` both qualify).  An undeclared
+-- `-zzz` is left to the positional/raw path rather than rejected, because a
+-- short token is also how a filename starting with `-` reaches the CLI; the
+-- decision to reject those is `runRunCmd`'s AS-FILENAME check, not this one.
+isFlagToken : ArgSpec -> String -> Bool
+isFlagToken sp t
+  | startsWith "--" t = True
+  | startsWith "-" t && stringLength t > 1 = isDeclaredShort sp t
+  | otherwise = False
+
+isDeclaredShort : ArgSpec -> String -> Bool
+isDeclaredShort sp t = match splitEq t
+  Some (nm, _) => declares nm sp.flags
+  None => declares t sp.flags
+
+declares : String -> List FlagSpec -> Bool
+declares nm fs = match findFlag nm fs
+  Some _ => True
+  None => False
 
 isAfterSeparator : Trailing -> Bool
 isAfterSeparator TrailingAfterSeparator = True

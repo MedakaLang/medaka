@@ -1275,7 +1275,7 @@ cost (`[T-STDLIB-IMPORT]`); adding one means re-measuring.
 `withTrailing`/`withUnknown`; renderings `canonical`/`flagLabel`/`rosterOf`/
 `helpBlockOf`/`unknownFlagMessage`/`missingValueMessage`/`invalidValueMessage`/
 `usageExitCode`; `parseArgs`; queries `flag`/`flagValue`/`lastValue`/
-`flagValues`. 39 doctests.
+`flagValues`. 40 doctests.
 
 ---
 
