@@ -77,10 +77,13 @@ ergonomic layer over the `runtime.mdk` IO externs.
 - **`boolToString` does not exist** (#79). `intToString`/`floatToString` are both externs; `Bool` has no
   sibling. This is not cosmetic: a shadow bug surfaced as the panic `intToString: not an Int`. **A
   `boolToString` would have made that bug LOUDER, not silent.**
-- **Two `startsWith`s with OPPOSITE argument orders** (#79) — `util.startsWith pre s` vs
-  `wasm_emit.startsWithStr s p`. **Both are `String -> String -> Bool`, so the typechecker cannot help
-  you.** An agent wrote them in the wrong order, got a silent `False`, and found out four minutes into
-  a full rebuild.
+- **Worked example of the class: two `startsWith`s with OPPOSITE argument orders** (#79) —
+  `util.startsWith pre s` vs. `wasm_emit.startsWithStr s p`. **Both were `String -> String ->
+  Bool`, so the typechecker could not help.** An agent wrote them in the wrong order, got a
+  silent `False`, and found out four minutes into a full rebuild. `startsWithStr` was
+  consolidated away onto `support/util.mdk`'s single `startsWith` by the `support-util-drain`
+  sprint (`d7cf28c33`) — this specific instance is fixed, kept here as the shape of trap to
+  watch for when two helpers share a signature but disagree on argument order.
 
 **When two functions have the same type and opposite meanings, the type system is not a safety net —
 it is camouflage.**

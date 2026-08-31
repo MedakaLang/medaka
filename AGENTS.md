@@ -610,8 +610,34 @@ Each of these was paid for in an incident — pointers, not post-mortems.
   sh test/diff_compiler_snapshot_frontend.sh --bless <the source file you moved>
   git diff -- test/selfproc_goldens/legA test/snapshots   # must be additive-only
   ```
-- **[T-STDLIB-IMPORT]** The compiler MAY import `stdlib/`, per module — weigh it: `core`-instance
-  modules (e.g. `list`) near-free; a module with a NEW type (e.g. `map`) costly. ⚠️ Don't delegate
+- **[T-STDLIB-IMPORT]** The compiler MAY import `stdlib/`, per module — MEASURED (#2352, on
+  `medaka check compiler/driver/medaka_cli.mdk`, median of 5 warm runs + cachegrind Ir,
+  `GC_INITIAL_HEAP_SIZE` pinned): a **selective** `list`/`string` import
+  (7-8 real, non-vestigial names) into `typecheck.mdk`/`llvm_emit.mdk`/`parser.mdk` moves wall
+  time by -1% to +9% and Ir by -0.6% to +1.1% vs. an 89.1B-Ir/16.6s baseline (two identical-
+  source `make medaka` rebuilds on this shared box varied 34% with zero code changes, so
+  self-compile wall time is NOT a usable signal for this; `check` wall-time + Ir is). The
+  **near-free license rests on the Ir figures** (-0.6% to +1.1%, genuinely flat) — the +9%
+  check-wall delta is measurement variance the methodology hasn't shown to be signal, not
+  evidence treated as noise. **DECISION: license `core`-instance modules (`list`/`string`) as
+  near-free, but SELECTIVE ONLY (`import mod.{names}`) — never `.*`-import two modules that
+  export colliding names into the same scope.** The general hazard is any two wildcard-imported
+  modules with overlapping export names (e.g. `import list.*` + `import string.*` both export
+  `startsWith` → `Ambiguous occurrence` compile error); `list`/`string` vs.
+  `support.util`/`support.char` (colliding on `contains`, `startsWith`, `isUpper`) is the
+  compiler's own concrete instance of this general rule, not the whole rule. This is not a
+  bootstrap-generation-specific failure mode: `compiler/entries/llvm_emit_modules_main.mdk`
+  (the exact program `test/build_native_medaka.sh` runs) applies no diagnostic gate of any
+  class — it emits IR at exit 0 for an ambiguous import exactly as it does for a plain type
+  error. That's the already-documented `[W-SOUNDNESS]` gap ("`make medaka` does not gate on
+  type errors"), already covered by CI's `compiler-soundness` job — not a new defect, and no
+  code fix was needed here. Separately, a module with a NEW type (e.g.
+  `map`) IS measurably costly relative to its own baseline: a bare `import map` (zero usage)
+  roughly DOUBLED both wall time (0.11s→0.21s) and Ir (608M→1.25B) on a trivial throwaway
+  program — real fixed overhead from `map`'s type + impls entering dispatch scope
+  ([P-IMPORT-BINDS]), though in absolute terms ~0.1s/~640M Ir is a small fraction of the
+  compiler's own ~16.6s/89B-Ir self-check, so a single `map` import into a hot module is
+  licensed too, just don't assume it's free on a small/fast-path module. ⚠️ Don't delegate
   hot monomorphic helpers to prelude Foldable methods (`elem`/`any`/`all`/`length`). Migrating
   `support/`→stdlib: a polymorphic empty must be a **nullary constructor**; harnesses need
   `$STDLIB` too.

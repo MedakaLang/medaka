@@ -97,6 +97,7 @@ import json.{
 }
 import support.path.{dirOf}
 import support.char.{isIdentChar, isDigit}
+import support.util.{startsWith}
 import types.typecheck.{
   elaborateModules,
   constrainedSigNames,
@@ -518,11 +519,6 @@ lookupSchemeL _ [] = None
 lookupSchemeL name ((n, s)::rest)
   | name == n = Some s
   | otherwise = lookupSchemeL name rest
-
-startsWith : String -> String -> Bool
-startsWith p n =
-  let pl = stringLength p
-  if pl == 0 then True else stringLength n >= pl && stringSlice 0 pl n == p
 
 anyName : List String -> String -> Bool
 anyName [] _ = False
