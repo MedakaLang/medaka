@@ -380,7 +380,25 @@ KNOWN_SUPERLINEAR="scoperefs"
 # which still fails #2063's partial-#2044 reading (r2=3.392) and every reading
 # worse than it. FIXED sits between the flat shapes' ~2.07 and the ledgered
 # 3.159, far enough above the former that ordinary drift cannot trip it:
-KNOWN_CEIL_scoperefs="${KNOWN_CEIL_scoperefs:-3.26}";  KNOWN_FIXED_scoperefs="${KNOWN_FIXED_scoperefs:-2.60}"
+#
+# ── 2026-08-31 re-derivation (sprint felt-latency #2270, packet
+# F2-scoperefs-ceiling-rederive, issue #2326). The sprint's own real win —
+# removing an input-size-proportional redundant reparse cost — lowered
+# absolute scoperefs Ir at every N (net Ir strictly decreased end to end), but
+# lowered it proportionally MORE at N=6000 than at N=12000, which mechanically
+# RAISED r2 even though nothing on the scoperefs code path (#1031/#2172)
+# changed: zero scoperefs-adjacent lines touched this sprint. Baselines:
+#   old (pre-existing, this comment)           r2=3.159
+#   pre-sprint main tip b35268c0 (fresh measure) r2=3.091  PASS (< 3.26)
+#   sprint head 57e8b8dc (fresh measure, CI x2)  r2=3.300
+#   this packet's own fresh re-measure           r1=3.066 r2=3.298
+# Re-deriving by this file's OWN documented method (same 1.031 drift-width
+# multiplier as above, unchanged): 3.300 * 1.031 = 3.4023 -> 3.41 (the
+# packet's number); this packet's own fresh 3.298 gives 3.298 * 1.031 =
+# 3.400 -> 3.41, identical after rounding. KNOWN_FIXED_scoperefs is
+# unchanged: 2.60 still sits between the flat shapes' ~2.07 and the new
+# 3.30-3.41 ledgered band, same as before.
+KNOWN_CEIL_scoperefs="${KNOWN_CEIL_scoperefs:-3.41}";  KNOWN_FIXED_scoperefs="${KNOWN_FIXED_scoperefs:-2.60}"
 
 # Add-only deliberate-red seam. Default empty, set NOWHERE in the tree, and it
 # can only ADD rows — it can never suppress a real one. It exists so the ledger
@@ -465,6 +483,10 @@ IR_ONLY="${IR_ONLY:-}"
 #      $ IR_ONLY=scoperefs sh test/diff_compiler_ir_scaling.sh
 #      known scoperefs: r1=2.900 r2=3.159 (ledgered, ceiling 3.26) — see KNOWN_SUPERLINEAR
 #      exit=0
+#      (2026-08-31: this exact reading is HISTORICAL — sprint felt-latency
+#      #2270 re-derived the ceiling to 3.41 against a new baseline r2=3.30;
+#      see KNOWN_CEIL_scoperefs's own comment above for the full derivation.
+#      A fresh run today reads e.g. "r1=3.066 r2=3.298 (ceiling 3.41)".)
 #
 # KNOWN_CEIL_scoperefs / KNOWN_FIXED_scoperefs are `:-`-defaulted for exactly arms
 # 3 and 4: a band nobody can drive past is a band nobody has tested.
