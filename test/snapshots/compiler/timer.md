@@ -1,5 +1,5 @@
 # META
-source_lines=196
+source_lines=220
 stages=DESUGAR,MARK
 # SOURCE
 -- Per-stage wall-clock timing helpers for the self-hosted pipeline.
@@ -63,6 +63,30 @@ takePerfSink _ =
 revLines : List String -> List String -> List String
 revLines [] acc = acc
 revLines (x::xs) acc = revLines xs (x::acc)
+
+-- Drain the sink to stderr as prose — `flushStaleNoticeProse`'s
+-- (`medaka_cli.mdk`) sibling for the OTHER deferred `run --json` notice, and
+-- the same shape.  The sink is armed for the whole of `runRunCmd`, but only
+-- the paths that reach an envelope emitter drain it there; the error arms
+-- exit through `runAbort`, which emits human prose rather than the envelope,
+-- so without this call every staged `[perf]` line dies at process exit —
+-- `MEDAKA_PERF=1 medaka run --json <file-with-a-compile-error>` silently doing
+-- nothing, which is a severity INCREASE ([W-QUIETER]), not a channel choice.
+-- Routed on every path, dropped on none.
+--
+-- A no-op when the sink is empty, which it always is unless BOTH `--json` and
+-- `MEDAKA_PERF` are on ⇒ every other invocation stays byte-identical.  Drains
+-- (via `takePerfSink`) rather than peeks, so a later envelope on the same run
+-- could not re-emit these lines.
+export
+flushPerfSinkProse : Unit -> <IO> Unit
+flushPerfSinkProse _ = putTimerLines (takePerfSink ())
+
+putTimerLines : List String -> <IO> Unit
+putTimerLines [] = ()
+putTimerLines (l::ls) =
+  let _ = ePutStrLn l
+  putTimerLines ls
 
 -- True when MEDAKA_PERF is set to any value in the environment.
 export
@@ -210,6 +234,11 @@ emitPhaseAO True label elapsed allocDelta ops opDelta =
 (DTypeSig false "revLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "revLines" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "revLines" ((PCons (PVar "x") (PVar "xs")) (PVar "acc")) (EApp (EApp (EVar "revLines") (EVar "xs")) (EBinOp "::" (EVar "x") (EVar "acc"))))
+(DTypeSig true "flushPerfSinkProse" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
+(DFunDef false "flushPerfSinkProse" (PWild) (EApp (EVar "putTimerLines") (EApp (EVar "takePerfSink") (ELit LUnit))))
+(DTypeSig false "putTimerLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
+(DFunDef false "putTimerLines" ((PList)) (ELit LUnit))
+(DFunDef false "putTimerLines" ((PCons (PVar "l") (PVar "ls"))) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "l"))) (DoExpr (EApp (EVar "putTimerLines") (EVar "ls")))))
 (DTypeSig true "perfEnabled" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Bool"))))
 (DFunDef false "perfEnabled" ((PLit LUnit)) (EMatch (EApp (EVar "getEnv") (ELit (LString "MEDAKA_PERF"))) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "statsEnabled" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Bool"))))
@@ -256,6 +285,11 @@ emitPhaseAO True label elapsed allocDelta ops opDelta =
 (DTypeSig false "revLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "revLines" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "revLines" ((PCons (PVar "x") (PVar "xs")) (PVar "acc")) (EApp (EApp (EVar "revLines") (EVar "xs")) (EBinOp "::" (EVar "x") (EVar "acc"))))
+(DTypeSig true "flushPerfSinkProse" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
+(DFunDef false "flushPerfSinkProse" (PWild) (EApp (EVar "putTimerLines") (EApp (EVar "takePerfSink") (ELit LUnit))))
+(DTypeSig false "putTimerLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
+(DFunDef false "putTimerLines" ((PList)) (ELit LUnit))
+(DFunDef false "putTimerLines" ((PCons (PVar "l") (PVar "ls"))) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "l"))) (DoExpr (EApp (EVar "putTimerLines") (EVar "ls")))))
 (DTypeSig true "perfEnabled" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Bool"))))
 (DFunDef false "perfEnabled" ((PLit LUnit)) (EMatch (EApp (EVar "getEnv") (ELit (LString "MEDAKA_PERF"))) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "statsEnabled" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Bool"))))

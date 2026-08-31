@@ -1,5 +1,5 @@
 # META
-source_lines=4051
+source_lines=4065
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/medaka_cli.mdk — the native `medaka` CLI dispatcher (Phase C
@@ -64,7 +64,14 @@ import support.util.{
 }
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omFromNames}
 import support.path.{baseOf, chopExt, joinPath}
-import support.timer.{perfEnabled, now, emitPhase, emitTotal, perfSinkOn}
+import support.timer.{
+  perfEnabled,
+  now,
+  emitPhase,
+  emitTotal,
+  perfSinkOn,
+  flushPerfSinkProse,
+}
 import string.{toInt}
 import frontend.ast.{Decl(..), Expr(..), Loc(..), Pat, LetBind(..)}
 import frontend.parser.{
@@ -352,14 +359,21 @@ flushStaleNoticeProse _ = match !pendingStaleNotice
     pendingStaleNotice := None
     ePutStrLn msg
 
--- `run`'s error exit: report `msg` and leave with 1, first flushing any
--- deferred staleness prose.  These arms emit human diagnostics rather than the
--- JSON envelope even under `--json` (pre-existing; see the report's Notes), so
--- one more prose line is not a channel regression — whereas losing the warning
--- would be.
+-- `run`'s error exit: report `msg` and leave with 1, first flushing BOTH
+-- deferred notices as prose — the staleness verdict and, under `--json`, the
+-- `[perf]` lines `runRunCmd` armed `support.timer`'s sink to buffer.  These
+-- arms emit human diagnostics rather than the JSON envelope even under
+-- `--json` (pre-existing; see the report's Notes), so there is no envelope for
+-- either notice to ride, and prose is the only channel left; two more prose
+-- lines are not a channel regression — whereas losing them is ([W-QUIETER]).
+-- Order mirrors plain `run`: staleness (emitted at startup there) first, then
+-- the `[perf]` lines (emitted as each phase ends), then the error.  Both
+-- flushes are no-ops when nothing was staged, so every non-`--json` run and
+-- every run without MEDAKA_PERF is byte-identical.
 runAbort : String -> <IO> Unit
 runAbort msg =
   let _ = flushStaleNoticeProse ()
+  let _ = flushPerfSinkProse ()
   let _ = ePutStrLn msg
   exit 1
 
@@ -4063,7 +4077,7 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinNl" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "endsWith" false) (mem "anyList" false) (mem "filterList" false) (mem "contains" false) (mem "sortUniqS" false) (mem "schemeLineName" false) (mem "stringTrim" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omFromNames" false))))
 (DUse false (UseGroup ("support" "path") ((mem "baseOf" false) (mem "chopExt" false) (mem "joinPath" false))))
-(DUse false (UseGroup ("support" "timer") ((mem "perfEnabled" false) (mem "now" false) (mem "emitPhase" false) (mem "emitTotal" false) (mem "perfSinkOn" false))))
+(DUse false (UseGroup ("support" "timer") ((mem "perfEnabled" false) (mem "now" false) (mem "emitPhase" false) (mem "emitTotal" false) (mem "perfSinkOn" false) (mem "flushPerfSinkProse" false))))
 (DUse false (UseGroup ("string") ((mem "toInt" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" false) (mem "LetBind" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false) (mem "parseResult" false) (mem "ParseError" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "Positions" false))))
@@ -4102,7 +4116,7 @@ runMcpServerFromEnv _ =
 (DTypeSig false "flushStaleNoticeProse" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "flushStaleNoticeProse" (PWild) (EMatch (EUnOp "!" (EVar "pendingStaleNotice")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "msg")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "pendingStaleNotice")) (EVar "None"))) (DoExpr (EApp (EVar "ePutStrLn") (EVar "msg")))))))
 (DTypeSig false "runAbort" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "runAbort" ((PVar "msg")) (EBlock (DoLet false false PWild (EApp (EVar "flushStaleNoticeProse") (ELit LUnit))) (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))))
+(DFunDef false "runAbort" ((PVar "msg")) (EBlock (DoLet false false PWild (EApp (EVar "flushStaleNoticeProse") (ELit LUnit))) (DoLet false false PWild (EApp (EVar "flushPerfSinkProse") (ELit LUnit))) (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))))
 (DTypeSig false "main" (TyEffect ("IO") None (TyCon "Unit")))
 (DFunDef false "main" () (EBlock (DoLet false false PWild (EApp (EVar "checkSourceStaleness") (EApp (EVar "args") (ELit LUnit)))) (DoExpr (EApp (EVar "runCli") (ELit LUnit)))))
 (DTypeSig false "runCli" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
@@ -4649,7 +4663,7 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinNl" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "endsWith" false) (mem "anyList" false) (mem "filterList" false) (mem "contains" false) (mem "sortUniqS" false) (mem "schemeLineName" false) (mem "stringTrim" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omFromNames" false))))
 (DUse false (UseGroup ("support" "path") ((mem "baseOf" false) (mem "chopExt" false) (mem "joinPath" false))))
-(DUse false (UseGroup ("support" "timer") ((mem "perfEnabled" false) (mem "now" false) (mem "emitPhase" false) (mem "emitTotal" false) (mem "perfSinkOn" false))))
+(DUse false (UseGroup ("support" "timer") ((mem "perfEnabled" false) (mem "now" false) (mem "emitPhase" false) (mem "emitTotal" false) (mem "perfSinkOn" false) (mem "flushPerfSinkProse" false))))
 (DUse false (UseGroup ("string") ((mem "toInt" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" false) (mem "LetBind" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false) (mem "parseResult" false) (mem "ParseError" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "Positions" false))))
@@ -4688,7 +4702,7 @@ runMcpServerFromEnv _ =
 (DTypeSig false "flushStaleNoticeProse" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "flushStaleNoticeProse" (PWild) (EMatch (EUnOp "!" (EVar "pendingStaleNotice")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "msg")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "pendingStaleNotice")) (EVar "None"))) (DoExpr (EApp (EVar "ePutStrLn") (EVar "msg")))))))
 (DTypeSig false "runAbort" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "runAbort" ((PVar "msg")) (EBlock (DoLet false false PWild (EApp (EVar "flushStaleNoticeProse") (ELit LUnit))) (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))))
+(DFunDef false "runAbort" ((PVar "msg")) (EBlock (DoLet false false PWild (EApp (EVar "flushStaleNoticeProse") (ELit LUnit))) (DoLet false false PWild (EApp (EVar "flushPerfSinkProse") (ELit LUnit))) (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))))
 (DTypeSig false "main" (TyEffect ("IO") None (TyCon "Unit")))
 (DFunDef false "main" () (EBlock (DoLet false false PWild (EApp (EVar "checkSourceStaleness") (EApp (EVar "args") (ELit LUnit)))) (DoExpr (EApp (EVar "runCli") (ELit LUnit)))))
 (DTypeSig false "runCli" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))

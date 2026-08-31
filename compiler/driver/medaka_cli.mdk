@@ -60,7 +60,14 @@ import support.util.{
 }
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omFromNames}
 import support.path.{baseOf, chopExt, joinPath}
-import support.timer.{perfEnabled, now, emitPhase, emitTotal, perfSinkOn}
+import support.timer.{
+  perfEnabled,
+  now,
+  emitPhase,
+  emitTotal,
+  perfSinkOn,
+  flushPerfSinkProse,
+}
 import string.{toInt}
 import frontend.ast.{Decl(..), Expr(..), Loc(..), Pat, LetBind(..)}
 import frontend.parser.{
@@ -348,14 +355,21 @@ flushStaleNoticeProse _ = match !pendingStaleNotice
     pendingStaleNotice := None
     ePutStrLn msg
 
--- `run`'s error exit: report `msg` and leave with 1, first flushing any
--- deferred staleness prose.  These arms emit human diagnostics rather than the
--- JSON envelope even under `--json` (pre-existing; see the report's Notes), so
--- one more prose line is not a channel regression — whereas losing the warning
--- would be.
+-- `run`'s error exit: report `msg` and leave with 1, first flushing BOTH
+-- deferred notices as prose — the staleness verdict and, under `--json`, the
+-- `[perf]` lines `runRunCmd` armed `support.timer`'s sink to buffer.  These
+-- arms emit human diagnostics rather than the JSON envelope even under
+-- `--json` (pre-existing; see the report's Notes), so there is no envelope for
+-- either notice to ride, and prose is the only channel left; two more prose
+-- lines are not a channel regression — whereas losing them is ([W-QUIETER]).
+-- Order mirrors plain `run`: staleness (emitted at startup there) first, then
+-- the `[perf]` lines (emitted as each phase ends), then the error.  Both
+-- flushes are no-ops when nothing was staged, so every non-`--json` run and
+-- every run without MEDAKA_PERF is byte-identical.
 runAbort : String -> <IO> Unit
 runAbort msg =
   let _ = flushStaleNoticeProse ()
+  let _ = flushPerfSinkProse ()
   let _ = ePutStrLn msg
   exit 1
 
