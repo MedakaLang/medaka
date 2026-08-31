@@ -1583,11 +1583,71 @@ ruleStdlibReimpl idx path _ pos prog =
     let ownMod = if isStdlibPath path then Some (modIdOf path) else None
     let names = stdlibIndexNames idx
     let sigs = sigTyMapOf prog
+    -- every NAME this file itself declares in a type-ish namespace (#2327
+    -- finding 2) — see `localTyNamesOf`.
+    let locals = nameSetOf (flatMap localTyNamesL prog)
     -- dedupe by name so a multi-clause function (consecutive DFunDefs) fires once,
     -- keeping the FIRST clause's location.
     flatMap
-      (reimplHit idx ownMod names sigs)
+      (reimplHit idx ownMod names sigs locals)
       (dedupeNamesLoc (flatMap topDefNameL (declLocList pos prog)))
+
+-- ── homonym guard (#2327 finding 2) ───────────────────────────────────────────
+-- `tyCanon` compares type constructors, constraint heads and effect labels by
+-- BARE NAME — it has no resolver, so it cannot tell stdlib's `Set` from a `Set`
+-- the linted file declares itself.  Without a guard, a file that defines its own
+-- `data Set a` and an `insertSet : Ord a => a -> Set a -> Set a` alpha-matches
+-- `set.insert` and is told to "use the stdlib version" — advice that is not
+-- merely noisy but TYPE-INCORRECT, since the two `Set`s are unrelated types.
+--
+-- This is exactly the bare-name-across-modules hazard the stdlib INDEX is keyed
+-- to avoid for stdlib VALUE names; it was never applied to the TYPE names inside
+-- signature comparison.
+--
+-- The guard is declared-signature-only (no resolve/typecheck is available to a
+-- lint rule): if a candidate's own signature mentions a name this file declares
+-- locally, that name cannot be the stdlib one — a file that defines its own
+-- `Set` is talking about its own `Set` — so the candidate is skipped before any
+-- signature comparison happens.  It is a PRE-FILTER; `tyCanon` itself is
+-- untouched.
+--
+-- ⚠️ Audit the three namespaces as a SET, not one member: `tyCanon` emits a bare
+-- name in exactly three places — `#n` for a `TyCon`, `[h …]` for a constraint
+-- HEAD, and a row atom for an effect LABEL.  So a local declaration in ANY of
+-- the three namespaces can shadow a stdlib name inside a canonical string, and
+-- all three declaring forms must be collected here: types (`DData`, `DNewtype`,
+-- `DTypeAlias`), interfaces (`DInterface`, the constraint heads), and effects
+-- (`DEffect`, the row labels).
+localTyNamesL : Decl -> List String
+localTyNamesL (DData { dataName = n }) = [n]
+localTyNamesL (DNewtype { newtypeName = n }) = [n]
+localTyNamesL (DTypeAlias { tyAliasName = n }) = [n]
+localTyNamesL (DInterface { name = n }) = [n]
+localTyNamesL (DEffect _ n _) = [n]
+localTyNamesL (DAttrib _ d) = localTyNamesL d
+localTyNamesL _ = []
+
+-- Every bare name a declared `Ty` contributes to its canonical string: type
+-- constructor names, constraint heads, and effect-row labels.  Kept in lockstep
+-- with `tyCanonIn`/`constrCanon`/`rowAtomCanon` — a new bare-name-emitting arm
+-- there needs an arm here.
+tyNamesOf : Ty -> List String
+tyNamesOf (TyVar _) = []
+tyNamesOf (TyCon { tyConName = n }) = [n]
+tyNamesOf (TyApp f x) = tyNamesOf f ++ tyNamesOf x
+tyNamesOf (TyFun a b) = tyNamesOf a ++ tyNamesOf b
+tyNamesOf (TyTuple ts) = flatMap tyNamesOf ts
+tyNamesOf (TyEffect es _ t) = map fst es ++ tyNamesOf t
+tyNamesOf (TyRow es _ _) = map fst es
+tyNamesOf (TyConstrained cs t) = flatMap constrTyNames cs ++ tyNamesOf t
+
+constrTyNames : Constraint -> List String
+constrTyNames (Constraint { constraintHead = h, constraintArgs = args }) =
+  h :: flatMap tyNamesOf args
+
+-- Does this signature mention any name the linted file declares itself?
+mentionsLocalTy : HashMap String Unit -> Ty -> Bool
+mentionsLocalTy locals ty = anyList (n => has n locals) (tyNamesOf ty)
 
 topDefNameL : (Decl, Option Loc) -> List (String, Option Loc)
 topDefNameL (DFunDef _ name _ _, loc) = [(name, loc)]
@@ -1605,10 +1665,14 @@ dedupeNamesLoc xs = dedupBy fst xs
 -- linted file's own module id when the file is under `stdlib/`, else `None` —
 -- a candidate owned by `ownMod` is the true owner's canonical definition,
 -- never a "reimplementation" of itself.
-reimplHit : StdlibIndex -> Option String -> List String -> HashMap String Ty -> (String, Option Loc) -> List Finding
-reimplHit idx ownMod names sigs (name, loc) = match get name sigs
+-- `locals` is the homonym guard (`localTyNamesL`): a signature naming a type,
+-- interface or effect this very file declares cannot be talking about stdlib's
+-- name of the same spelling, so it is skipped before comparison.
+reimplHit : StdlibIndex -> Option String -> List String -> HashMap String Ty -> HashMap String Unit -> (String, Option Loc) -> List Finding
+reimplHit idx ownMod names sigs locals (name, loc) = match get name sigs
   None => []
-  Some ty => match firstMatchingExport idx ownMod (tyCanon ty) (filterList (relaxesOnto name) names)
+  Some ty => if mentionsLocalTy locals ty then []
+  else match firstMatchingExport idx ownMod (tyCanon ty) (filterList (relaxesOnto name) names)
     None => []
     Some (modName, stdName) => [stdlibFinding name modName stdName loc]
 

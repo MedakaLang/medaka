@@ -1,5 +1,5 @@
 # META
-source_lines=4711
+source_lines=4775
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -1587,11 +1587,71 @@ ruleStdlibReimpl idx path _ pos prog =
     let ownMod = if isStdlibPath path then Some (modIdOf path) else None
     let names = stdlibIndexNames idx
     let sigs = sigTyMapOf prog
+    -- every NAME this file itself declares in a type-ish namespace (#2327
+    -- finding 2) — see `localTyNamesOf`.
+    let locals = nameSetOf (flatMap localTyNamesL prog)
     -- dedupe by name so a multi-clause function (consecutive DFunDefs) fires once,
     -- keeping the FIRST clause's location.
     flatMap
-      (reimplHit idx ownMod names sigs)
+      (reimplHit idx ownMod names sigs locals)
       (dedupeNamesLoc (flatMap topDefNameL (declLocList pos prog)))
+
+-- ── homonym guard (#2327 finding 2) ───────────────────────────────────────────
+-- `tyCanon` compares type constructors, constraint heads and effect labels by
+-- BARE NAME — it has no resolver, so it cannot tell stdlib's `Set` from a `Set`
+-- the linted file declares itself.  Without a guard, a file that defines its own
+-- `data Set a` and an `insertSet : Ord a => a -> Set a -> Set a` alpha-matches
+-- `set.insert` and is told to "use the stdlib version" — advice that is not
+-- merely noisy but TYPE-INCORRECT, since the two `Set`s are unrelated types.
+--
+-- This is exactly the bare-name-across-modules hazard the stdlib INDEX is keyed
+-- to avoid for stdlib VALUE names; it was never applied to the TYPE names inside
+-- signature comparison.
+--
+-- The guard is declared-signature-only (no resolve/typecheck is available to a
+-- lint rule): if a candidate's own signature mentions a name this file declares
+-- locally, that name cannot be the stdlib one — a file that defines its own
+-- `Set` is talking about its own `Set` — so the candidate is skipped before any
+-- signature comparison happens.  It is a PRE-FILTER; `tyCanon` itself is
+-- untouched.
+--
+-- ⚠️ Audit the three namespaces as a SET, not one member: `tyCanon` emits a bare
+-- name in exactly three places — `#n` for a `TyCon`, `[h …]` for a constraint
+-- HEAD, and a row atom for an effect LABEL.  So a local declaration in ANY of
+-- the three namespaces can shadow a stdlib name inside a canonical string, and
+-- all three declaring forms must be collected here: types (`DData`, `DNewtype`,
+-- `DTypeAlias`), interfaces (`DInterface`, the constraint heads), and effects
+-- (`DEffect`, the row labels).
+localTyNamesL : Decl -> List String
+localTyNamesL (DData { dataName = n }) = [n]
+localTyNamesL (DNewtype { newtypeName = n }) = [n]
+localTyNamesL (DTypeAlias { tyAliasName = n }) = [n]
+localTyNamesL (DInterface { name = n }) = [n]
+localTyNamesL (DEffect _ n _) = [n]
+localTyNamesL (DAttrib _ d) = localTyNamesL d
+localTyNamesL _ = []
+
+-- Every bare name a declared `Ty` contributes to its canonical string: type
+-- constructor names, constraint heads, and effect-row labels.  Kept in lockstep
+-- with `tyCanonIn`/`constrCanon`/`rowAtomCanon` — a new bare-name-emitting arm
+-- there needs an arm here.
+tyNamesOf : Ty -> List String
+tyNamesOf (TyVar _) = []
+tyNamesOf (TyCon { tyConName = n }) = [n]
+tyNamesOf (TyApp f x) = tyNamesOf f ++ tyNamesOf x
+tyNamesOf (TyFun a b) = tyNamesOf a ++ tyNamesOf b
+tyNamesOf (TyTuple ts) = flatMap tyNamesOf ts
+tyNamesOf (TyEffect es _ t) = map fst es ++ tyNamesOf t
+tyNamesOf (TyRow es _ _) = map fst es
+tyNamesOf (TyConstrained cs t) = flatMap constrTyNames cs ++ tyNamesOf t
+
+constrTyNames : Constraint -> List String
+constrTyNames (Constraint { constraintHead = h, constraintArgs = args }) =
+  h :: flatMap tyNamesOf args
+
+-- Does this signature mention any name the linted file declares itself?
+mentionsLocalTy : HashMap String Unit -> Ty -> Bool
+mentionsLocalTy locals ty = anyList (n => has n locals) (tyNamesOf ty)
 
 topDefNameL : (Decl, Option Loc) -> List (String, Option Loc)
 topDefNameL (DFunDef _ name _ _, loc) = [(name, loc)]
@@ -1609,10 +1669,14 @@ dedupeNamesLoc xs = dedupBy fst xs
 -- linted file's own module id when the file is under `stdlib/`, else `None` —
 -- a candidate owned by `ownMod` is the true owner's canonical definition,
 -- never a "reimplementation" of itself.
-reimplHit : StdlibIndex -> Option String -> List String -> HashMap String Ty -> (String, Option Loc) -> List Finding
-reimplHit idx ownMod names sigs (name, loc) = match get name sigs
+-- `locals` is the homonym guard (`localTyNamesL`): a signature naming a type,
+-- interface or effect this very file declares cannot be talking about stdlib's
+-- name of the same spelling, so it is skipped before comparison.
+reimplHit : StdlibIndex -> Option String -> List String -> HashMap String Ty -> HashMap String Unit -> (String, Option Loc) -> List Finding
+reimplHit idx ownMod names sigs locals (name, loc) = match get name sigs
   None => []
-  Some ty => match firstMatchingExport idx ownMod (tyCanon ty) (filterList (relaxesOnto name) names)
+  Some ty => if mentionsLocalTy locals ty then []
+  else match firstMatchingExport idx ownMod (tyCanon ty) (filterList (relaxesOnto name) names)
     None => []
     Some (modName, stdName) => [stdlibFinding name modName stdName loc]
 
@@ -5123,15 +5187,36 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "tyHeadName" ((PCon "TyApp" (PVar "f") PWild)) (EApp (EVar "tyHeadName") (EVar "f")))
 (DFunDef false "tyHeadName" (PWild) (EVar "None"))
 (DTypeSig false "ruleStdlibReimpl" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleStdlibReimpl" ((PVar "idx") (PVar "path") PWild (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "ownMod") (EIf (EApp (EVar "isStdlibPath") (EVar "path")) (EApp (EVar "Some") (EApp (EVar "modIdOf") (EVar "path"))) (EVar "None"))) (DoLet false false (PVar "names") (EApp (EVar "stdlibIndexNames") (EVar "idx"))) (DoLet false false (PVar "sigs") (EApp (EVar "sigTyMapOf") (EVar "prog"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EApp (EVar "reimplHit") (EVar "idx")) (EVar "ownMod")) (EVar "names")) (EVar "sigs"))) (EApp (EVar "dedupeNamesLoc") (EApp (EApp (EVar "flatMap") (EVar "topDefNameL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))))))
+(DFunDef false "ruleStdlibReimpl" ((PVar "idx") (PVar "path") PWild (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "ownMod") (EIf (EApp (EVar "isStdlibPath") (EVar "path")) (EApp (EVar "Some") (EApp (EVar "modIdOf") (EVar "path"))) (EVar "None"))) (DoLet false false (PVar "names") (EApp (EVar "stdlibIndexNames") (EVar "idx"))) (DoLet false false (PVar "sigs") (EApp (EVar "sigTyMapOf") (EVar "prog"))) (DoLet false false (PVar "locals") (EApp (EVar "nameSetOf") (EApp (EApp (EVar "flatMap") (EVar "localTyNamesL")) (EVar "prog")))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EApp (EApp (EVar "reimplHit") (EVar "idx")) (EVar "ownMod")) (EVar "names")) (EVar "sigs")) (EVar "locals"))) (EApp (EVar "dedupeNamesLoc") (EApp (EApp (EVar "flatMap") (EVar "topDefNameL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))))))
+(DTypeSig false "localTyNamesL" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "localTyNamesL" ((PRec "DData" ((rf "dataName" (PVar "n"))) false)) (EListLit (EVar "n")))
+(DFunDef false "localTyNamesL" ((PRec "DNewtype" ((rf "newtypeName" (PVar "n"))) false)) (EListLit (EVar "n")))
+(DFunDef false "localTyNamesL" ((PRec "DTypeAlias" ((rf "tyAliasName" (PVar "n"))) false)) (EListLit (EVar "n")))
+(DFunDef false "localTyNamesL" ((PRec "DInterface" ((rf "name" (PVar "n"))) false)) (EListLit (EVar "n")))
+(DFunDef false "localTyNamesL" ((PCon "DEffect" PWild (PVar "n") PWild)) (EListLit (EVar "n")))
+(DFunDef false "localTyNamesL" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "localTyNamesL") (EVar "d")))
+(DFunDef false "localTyNamesL" (PWild) (EListLit))
+(DTypeSig false "tyNamesOf" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "tyNamesOf" ((PCon "TyVar" PWild)) (EListLit))
+(DFunDef false "tyNamesOf" ((PRec "TyCon" ((rf "tyConName" (PVar "n"))) false)) (EListLit (EVar "n")))
+(DFunDef false "tyNamesOf" ((PCon "TyApp" (PVar "f") (PVar "x"))) (EBinOp "++" (EApp (EVar "tyNamesOf") (EVar "f")) (EApp (EVar "tyNamesOf") (EVar "x"))))
+(DFunDef false "tyNamesOf" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "tyNamesOf") (EVar "a")) (EApp (EVar "tyNamesOf") (EVar "b"))))
+(DFunDef false "tyNamesOf" ((PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "flatMap") (EVar "tyNamesOf")) (EVar "ts")))
+(DFunDef false "tyNamesOf" ((PCon "TyEffect" (PVar "es") PWild (PVar "t"))) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "fst")) (EVar "es")) (EApp (EVar "tyNamesOf") (EVar "t"))))
+(DFunDef false "tyNamesOf" ((PCon "TyRow" (PVar "es") PWild PWild)) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "es")))
+(DFunDef false "tyNamesOf" ((PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "constrTyNames")) (EVar "cs")) (EApp (EVar "tyNamesOf") (EVar "t"))))
+(DTypeSig false "constrTyNames" (TyFun (TyCon "Constraint") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "constrTyNames" ((PRec "Constraint" ((rf "constraintHead" (PVar "h")) (rf "constraintArgs" (PVar "args"))) false)) (EBinOp "::" (EVar "h") (EApp (EApp (EVar "flatMap") (EVar "tyNamesOf")) (EVar "args"))))
+(DTypeSig false "mentionsLocalTy" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyCon "Ty") (TyCon "Bool"))))
+(DFunDef false "mentionsLocalTy" ((PVar "locals") (PVar "ty")) (EApp (EApp (EVar "anyList") (ELam ((PVar "n")) (EApp (EApp (EVar "has") (EVar "n")) (EVar "locals")))) (EApp (EVar "tyNamesOf") (EVar "ty"))))
 (DTypeSig false "topDefNameL" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))
 (DFunDef false "topDefNameL" ((PTuple (PCon "DFunDef" PWild (PVar "name") PWild PWild) (PVar "loc"))) (EListLit (ETuple (EVar "name") (EVar "loc"))))
 (DFunDef false "topDefNameL" ((PTuple (PCon "DAttrib" PWild (PVar "d")) (PVar "loc"))) (EApp (EVar "topDefNameL") (ETuple (EVar "d") (EVar "loc"))))
 (DFunDef false "topDefNameL" (PWild) (EListLit))
 (DTypeSig false "dedupeNamesLoc" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))
 (DFunDef false "dedupeNamesLoc" ((PVar "xs")) (EApp (EApp (EVar "dedupBy") (EVar "fst")) (EVar "xs")))
-(DTypeSig false "reimplHit" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Ty")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "reimplHit" ((PVar "idx") (PVar "ownMod") (PVar "names") (PVar "sigs") (PTuple (PVar "name") (PVar "loc"))) (EMatch (EApp (EApp (EVar "get") (EVar "name")) (EVar "sigs")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "ty")) () (EMatch (EApp (EApp (EApp (EApp (EVar "firstMatchingExport") (EVar "idx")) (EVar "ownMod")) (EApp (EVar "tyCanon") (EVar "ty"))) (EApp (EApp (EVar "filterList") (EApp (EVar "relaxesOnto") (EVar "name"))) (EVar "names"))) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "modName") (PVar "stdName"))) () (EListLit (EApp (EApp (EApp (EApp (EVar "stdlibFinding") (EVar "name")) (EVar "modName")) (EVar "stdName")) (EVar "loc"))))))))
+(DTypeSig false "reimplHit" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Ty")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding")))))))))
+(DFunDef false "reimplHit" ((PVar "idx") (PVar "ownMod") (PVar "names") (PVar "sigs") (PVar "locals") (PTuple (PVar "name") (PVar "loc"))) (EMatch (EApp (EApp (EVar "get") (EVar "name")) (EVar "sigs")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "ty")) () (EIf (EApp (EApp (EVar "mentionsLocalTy") (EVar "locals")) (EVar "ty")) (EListLit) (EMatch (EApp (EApp (EApp (EApp (EVar "firstMatchingExport") (EVar "idx")) (EVar "ownMod")) (EApp (EVar "tyCanon") (EVar "ty"))) (EApp (EApp (EVar "filterList") (EApp (EVar "relaxesOnto") (EVar "name"))) (EVar "names"))) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "modName") (PVar "stdName"))) () (EListLit (EApp (EApp (EApp (EApp (EVar "stdlibFinding") (EVar "name")) (EVar "modName")) (EVar "stdName")) (EVar "loc")))))))))
 (DTypeSig false "relaxesOnto" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "relaxesOnto" ((PVar "user") (PVar "std")) (EBlock (DoLet false false (PVar "s") (EApp (EVar "stringToLower") (EVar "std"))) (DoLet false false (PVar "u") (EApp (EVar "stringToLower") (EVar "user"))) (DoExpr (EBinOp "&&" (EBinOp ">=" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 4))) (EBinOp "||" (EApp (EApp (EVar "startsWith") (EVar "s")) (EVar "u")) (EApp (EApp (EVar "endsWith") (EVar "s")) (EVar "u")))))))
 (DTypeSig false "firstMatchingExport" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))))))))
@@ -6695,15 +6780,36 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "tyHeadName" ((PCon "TyApp" (PVar "f") PWild)) (EApp (EVar "tyHeadName") (EVar "f")))
 (DFunDef false "tyHeadName" (PWild) (EVar "None"))
 (DTypeSig false "ruleStdlibReimpl" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleStdlibReimpl" ((PVar "idx") (PVar "path") PWild (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "ownMod") (EIf (EApp (EVar "isStdlibPath") (EVar "path")) (EApp (EVar "Some") (EApp (EVar "modIdOf") (EVar "path"))) (EVar "None"))) (DoLet false false (PVar "names") (EApp (EVar "stdlibIndexNames") (EVar "idx"))) (DoLet false false (PVar "sigs") (EApp (EVar "sigTyMapOf") (EVar "prog"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EApp (EVar "reimplHit") (EVar "idx")) (EVar "ownMod")) (EVar "names")) (EVar "sigs"))) (EApp (EVar "dedupeNamesLoc") (EApp (EApp (EDictApp "flatMap") (EVar "topDefNameL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))))))
+(DFunDef false "ruleStdlibReimpl" ((PVar "idx") (PVar "path") PWild (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "ownMod") (EIf (EApp (EVar "isStdlibPath") (EVar "path")) (EApp (EVar "Some") (EApp (EVar "modIdOf") (EVar "path"))) (EVar "None"))) (DoLet false false (PVar "names") (EApp (EVar "stdlibIndexNames") (EVar "idx"))) (DoLet false false (PVar "sigs") (EApp (EVar "sigTyMapOf") (EVar "prog"))) (DoLet false false (PVar "locals") (EApp (EVar "nameSetOf") (EApp (EApp (EDictApp "flatMap") (EVar "localTyNamesL")) (EVar "prog")))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EApp (EApp (EVar "reimplHit") (EVar "idx")) (EVar "ownMod")) (EVar "names")) (EVar "sigs")) (EVar "locals"))) (EApp (EVar "dedupeNamesLoc") (EApp (EApp (EDictApp "flatMap") (EVar "topDefNameL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))))))
+(DTypeSig false "localTyNamesL" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "localTyNamesL" ((PRec "DData" ((rf "dataName" (PVar "n"))) false)) (EListLit (EVar "n")))
+(DFunDef false "localTyNamesL" ((PRec "DNewtype" ((rf "newtypeName" (PVar "n"))) false)) (EListLit (EVar "n")))
+(DFunDef false "localTyNamesL" ((PRec "DTypeAlias" ((rf "tyAliasName" (PVar "n"))) false)) (EListLit (EVar "n")))
+(DFunDef false "localTyNamesL" ((PRec "DInterface" ((rf "name" (PVar "n"))) false)) (EListLit (EVar "n")))
+(DFunDef false "localTyNamesL" ((PCon "DEffect" PWild (PVar "n") PWild)) (EListLit (EVar "n")))
+(DFunDef false "localTyNamesL" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "localTyNamesL") (EVar "d")))
+(DFunDef false "localTyNamesL" (PWild) (EListLit))
+(DTypeSig false "tyNamesOf" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "tyNamesOf" ((PCon "TyVar" PWild)) (EListLit))
+(DFunDef false "tyNamesOf" ((PRec "TyCon" ((rf "tyConName" (PVar "n"))) false)) (EListLit (EVar "n")))
+(DFunDef false "tyNamesOf" ((PCon "TyApp" (PVar "f") (PVar "x"))) (EBinOp "++" (EApp (EVar "tyNamesOf") (EVar "f")) (EApp (EVar "tyNamesOf") (EVar "x"))))
+(DFunDef false "tyNamesOf" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "tyNamesOf") (EVar "a")) (EApp (EVar "tyNamesOf") (EVar "b"))))
+(DFunDef false "tyNamesOf" ((PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EDictApp "flatMap") (EVar "tyNamesOf")) (EVar "ts")))
+(DFunDef false "tyNamesOf" ((PCon "TyEffect" (PVar "es") PWild (PVar "t"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "es")) (EApp (EVar "tyNamesOf") (EVar "t"))))
+(DFunDef false "tyNamesOf" ((PCon "TyRow" (PVar "es") PWild PWild)) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "es")))
+(DFunDef false "tyNamesOf" ((PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "constrTyNames")) (EVar "cs")) (EApp (EVar "tyNamesOf") (EVar "t"))))
+(DTypeSig false "constrTyNames" (TyFun (TyCon "Constraint") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "constrTyNames" ((PRec "Constraint" ((rf "constraintHead" (PVar "h")) (rf "constraintArgs" (PVar "args"))) false)) (EBinOp "::" (EVar "h") (EApp (EApp (EDictApp "flatMap") (EVar "tyNamesOf")) (EVar "args"))))
+(DTypeSig false "mentionsLocalTy" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyCon "Ty") (TyCon "Bool"))))
+(DFunDef false "mentionsLocalTy" ((PVar "locals") (PVar "ty")) (EApp (EApp (EVar "anyList") (ELam ((PVar "n")) (EApp (EApp (EVar "has") (EVar "n")) (EVar "locals")))) (EApp (EVar "tyNamesOf") (EVar "ty"))))
 (DTypeSig false "topDefNameL" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))
 (DFunDef false "topDefNameL" ((PTuple (PCon "DFunDef" PWild (PVar "name") PWild PWild) (PVar "loc"))) (EListLit (ETuple (EVar "name") (EVar "loc"))))
 (DFunDef false "topDefNameL" ((PTuple (PCon "DAttrib" PWild (PVar "d")) (PVar "loc"))) (EApp (EVar "topDefNameL") (ETuple (EVar "d") (EVar "loc"))))
 (DFunDef false "topDefNameL" (PWild) (EListLit))
 (DTypeSig false "dedupeNamesLoc" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))
 (DFunDef false "dedupeNamesLoc" ((PVar "xs")) (EApp (EApp (EVar "dedupBy") (EVar "fst")) (EVar "xs")))
-(DTypeSig false "reimplHit" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Ty")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "reimplHit" ((PVar "idx") (PVar "ownMod") (PVar "names") (PVar "sigs") (PTuple (PVar "name") (PVar "loc"))) (EMatch (EApp (EApp (EVar "get") (EVar "name")) (EVar "sigs")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "ty")) () (EMatch (EApp (EApp (EApp (EApp (EVar "firstMatchingExport") (EVar "idx")) (EVar "ownMod")) (EApp (EVar "tyCanon") (EVar "ty"))) (EApp (EApp (EVar "filterList") (EApp (EVar "relaxesOnto") (EVar "name"))) (EVar "names"))) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "modName") (PVar "stdName"))) () (EListLit (EApp (EApp (EApp (EApp (EVar "stdlibFinding") (EVar "name")) (EVar "modName")) (EVar "stdName")) (EVar "loc"))))))))
+(DTypeSig false "reimplHit" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Ty")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding")))))))))
+(DFunDef false "reimplHit" ((PVar "idx") (PVar "ownMod") (PVar "names") (PVar "sigs") (PVar "locals") (PTuple (PVar "name") (PVar "loc"))) (EMatch (EApp (EApp (EVar "get") (EVar "name")) (EVar "sigs")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "ty")) () (EIf (EApp (EApp (EVar "mentionsLocalTy") (EVar "locals")) (EVar "ty")) (EListLit) (EMatch (EApp (EApp (EApp (EApp (EVar "firstMatchingExport") (EVar "idx")) (EVar "ownMod")) (EApp (EVar "tyCanon") (EVar "ty"))) (EApp (EApp (EVar "filterList") (EApp (EVar "relaxesOnto") (EVar "name"))) (EVar "names"))) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "modName") (PVar "stdName"))) () (EListLit (EApp (EApp (EApp (EApp (EVar "stdlibFinding") (EVar "name")) (EVar "modName")) (EVar "stdName")) (EVar "loc")))))))))
 (DTypeSig false "relaxesOnto" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "relaxesOnto" ((PVar "user") (PVar "std")) (EBlock (DoLet false false (PVar "s") (EApp (EVar "stringToLower") (EVar "std"))) (DoLet false false (PVar "u") (EApp (EVar "stringToLower") (EVar "user"))) (DoExpr (EBinOp "&&" (EBinOp ">=" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 4))) (EBinOp "||" (EApp (EApp (EVar "startsWith") (EVar "s")) (EVar "u")) (EApp (EApp (EVar "endsWith") (EVar "s")) (EVar "u")))))))
 (DTypeSig false "firstMatchingExport" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))))))))
