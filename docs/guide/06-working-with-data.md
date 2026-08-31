@@ -24,8 +24,7 @@ import array as A
 
 main =
   let xs = [3, 1, 2]
-  println (0 :: xs)
-
+  println (0::xs)
   let arr = A.fromList xs
   A.set 0 99 arr
   println arr
@@ -82,7 +81,8 @@ main =
   println ([1, 2, 3, 4] |> map (x => x * x))
   println ([1, 2, 3, 4] |> filter (x => x > 2))
   println ([1, 2, 3, 4] |> fold (+) 0)
-  println ([1, 2, 3, 4] |> map (x => x * x) |> filter (x => x > 5) |> fold (+) 0)
+  println
+    ([1, 2, 3, 4] |> map (x => x * x) |> filter (x => x > 5) |> fold (+) 0)
 ```
 
 ```medaka-expect
@@ -154,10 +154,10 @@ import map.{Map, get}
 import set.{Set, has, size}
 
 main =
-  println (get "b" (Map { "a" => 1, "b" => 2 }))
-  println (get "z" (Map { "a" => 1, "b" => 2 }))
-  println (has 2 (Set { 1, 2, 3 }))
-  println (size (Set { 1, 2, 2, 3 }))
+  println (get "b" Map { "a" => 1, "b" => 2 })
+  println (get "z" Map { "a" => 1, "b" => 2 })
+  println (has 2 Set { 1, 2, 3 })
+  println (size Set { 1, 2, 2, 3 })
 ```
 
 ```medaka-expect
@@ -226,34 +226,50 @@ import map.{Map, get, toList, insertWith}
 data Category = Food | Housing | Books deriving (Eq, Ord, Debug)
 
 data Expense =
-  { date     : String
-  , payee    : String
-  , amount   : Float
-  , category : Category
-  }
+  | { date : String, payee : String, amount : Float, category : Category }
 
 impl Display Category where
-  display Food    = "food"
+  display Food = "food"
   display Housing = "housing"
-  display Books   = "books"
+  display Books = "books"
 
 ledger : List Expense
-ledger =
-  [ Expense { date = "2026-08-01", payee = "Cafe Fish", amount = 4.50, category = Food }
-  , Expense { date = "2026-08-02", payee = "Landlord", amount = 1200.0, category = Housing }
-  , Expense { date = "2026-08-04", payee = "Cafe Fish", amount = 3.25, category = Food }
-  , Expense { date = "2026-08-09", payee = "Bookshop", amount = 18.0, category = Books }
-  ]
+ledger = [
+  Expense {
+    date = "2026-08-01",
+    payee = "Cafe Fish",
+    amount = 4.5,
+    category = Food,
+  },
+  Expense {
+    date = "2026-08-02",
+    payee = "Landlord",
+    amount = 1200.0,
+    category = Housing,
+  },
+  Expense {
+    date = "2026-08-04",
+    payee = "Cafe Fish",
+    amount = 3.25,
+    category = Food,
+  },
+  Expense {
+    date = "2026-08-09",
+    payee = "Bookshop",
+    amount = 18.0,
+    category = Books,
+  },
+]
 
 total : List Expense -> Float
 total xs = xs |> map (e => e.amount) |> fold (+) 0.0
 
 byCategory : List Expense -> Map Category Float
-byCategory xs = fold (m e => insertWith (+) e.category e.amount m) (Map { }) xs
+byCategory xs = fold (m e => insertWith (+) e.category e.amount m) Map {  } xs
 
 printAll : Display a => List a -> <IO> Unit
 printAll [] = ()
-printAll (x :: xs) =
+printAll (x::xs) =
   println x
   printAll xs
 

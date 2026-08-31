@@ -29,14 +29,11 @@ Constructors carry payloads by listing the types they hold, and a longer declara
 is conventionally written one alternative per line:
 
 ```medaka
-data Expense =
-  | Coffee Float
-  | Rent Float
-  | Book String Float
+data Expense = Coffee Float | Rent Float | Book String Float
 
 cost : Expense -> Float
 cost (Coffee c) = c
-cost (Rent r)   = r
+cost (Rent r) = r
 cost (Book _ p) = p
 
 main = println (cost (Book "SICP" 35.0))
@@ -54,9 +51,7 @@ A `data` declaration can take type parameters, written lowercase after the type 
 That is all it takes to define your own generic container:
 
 ```medaka
-data Tree a
-  = Leaf
-  | Node (Tree a) a (Tree a)
+data Tree a = Leaf | Node (Tree a) a (Tree a)
 
 insert : Ord a => a -> Tree a -> Tree a
 insert v Leaf = Node Leaf v Leaf
@@ -123,16 +118,16 @@ the chapter:
 data Category = Food | Housing | Books | Other deriving (Eq, Debug)
 
 data Expense =
-  { date     : String
-  , payee    : String
-  , amount   : Float
-  , category : Category
-  }
-  deriving (Eq, Debug)
+  | { date : String, payee : String, amount : Float, category : Category }
+deriving (Eq, Debug)
 
 coffee : Expense
-coffee =
-  Expense { date = "2026-08-31", payee = "Cafe Fish", amount = 4.50, category = Food }
+coffee = Expense {
+  date = "2026-08-31",
+  payee = "Cafe Fish",
+  amount = 4.5,
+  category = Food,
+}
 
 main =
   println coffee.payee
@@ -191,17 +186,18 @@ data Expense = { payee : String, amount : Float, category : Category }
 rate : Category -> Float
 rate c = match c
   Housing => 0.0
-  Books   => 0.5
-  _       => 1.0
+  Books => 0.5
+  _ => 1.0
 
 tag : Expense -> String
 tag (Expense { category = Housing, amount }) = "rent of \{amount}"
-tag (Expense { payee, amount })              = "\{payee} charged \{amount}"
+tag (Expense { payee, amount }) = "\{payee} charged \{amount}"
 
 main =
   println (rate Books)
-  println (tag (Expense { payee = "Landlord", amount = 1200.0, category = Housing }))
-  println (tag (Expense { payee = "Cafe Fish", amount = 4.5, category = Food }))
+  println (tag
+    Expense { payee = "Landlord", amount = 1200.0, category = Housing })
+  println (tag Expense { payee = "Cafe Fish", amount = 4.5, category = Food })
 ```
 
 ```medaka-expect
@@ -226,10 +222,7 @@ Here is what all of this buys. When you match on a sum type and forget a case, t
 compiler tells you which one:
 
 ```medaka
-data Shape
-  = Circle Float
-  | Rect Float Float
-  | Triangle Float Float
+data Shape = Circle Float | Rect Float Float | Triangle Float Float
 
 area : Shape -> Float
 area s = match s
@@ -242,7 +235,7 @@ main = println (area (Triangle 3.0 4.0))
 Checking that program reports:
 
 ```
-warning: shape.mdk:9:14: non-exhaustive match of 'Shape'. Missing case:
+warning: shape.mdk:6:14: non-exhaustive match of 'Shape'. Missing case:
 'Triangle _ _'; add a 'Triangle _ _ => …' arm, or a '_' wildcard arm to catch
 the rest.
 ```
@@ -257,7 +250,7 @@ reported, one by one, with the case it now needs.
 > which point the program stops:
 >
 > ```
-> ./shape.mdk:7:15: runtime error [E-NONEXHAUSTIVE-MATCH]: non-exhaustive match
+> ./shape.mdk:4:15: runtime error [E-NONEXHAUSTIVE-MATCH]: non-exhaustive match
 > ```
 >
 > So do not treat a green `check` as proof that your matches are complete — read
@@ -284,30 +277,31 @@ not".
 data Expense = { payee : String, amount : Float }
 
 ledger : List Expense
-ledger =
-  [ Expense { payee = "Cafe Fish", amount = 4.50 }
-  , Expense { payee = "Landlord", amount = 1200.0 }
-  ]
+ledger = [
+  Expense { payee = "Cafe Fish", amount = 4.5 },
+  Expense { payee = "Landlord", amount = 1200.0 },
+]
 
 findPayee : String -> List Expense -> Option Expense
 findPayee _ [] = None
-findPayee who (e :: rest) =
-  if e.payee == who then Some e else findPayee who rest
+findPayee who (e::rest) = if e.payee == who then Some e else findPayee who rest
 
 report : Option Expense -> String
-report None     = "no such payee"
+report None = "no such payee"
 report (Some e) = "\{e.payee}: \{e.amount}"
 
 validate : Expense -> Result String Expense
 validate e
   | e.amount <= 0.0 = Err "amount must be positive"
-  | e.payee == ""   = Err "payee is required"
-  | otherwise       = Ok e
+  | e.payee == "" = Err "payee is required"
+  | otherwise = Ok e
 
 main =
   println (report (findPayee "Landlord" ledger))
   println (report (findPayee "Nobody" ledger))
-  println (report (map (e => { e | amount = 0.0 }) (findPayee "Cafe Fish" ledger)))
+  println (report (map
+    (e => { e | amount = 0.0 })
+    (findPayee "Cafe Fish" ledger)))
 ```
 
 ```medaka-expect
@@ -331,11 +325,8 @@ these are mechanical, and `deriving` writes them from the type's own structure.
 data Category = Food | Housing | Books | Other deriving (Eq, Ord, Debug)
 
 data Expense =
-  { payee    : String
-  , amount   : Float
-  , category : Category
-  }
-  deriving (Eq, Debug)
+  | { payee : String, amount : Float, category : Category }
+deriving (Eq, Debug)
 
 main =
   let a = Expense { payee = "Cafe Fish", amount = 4.5, category = Food }
@@ -378,11 +369,11 @@ data Address = { city : String, street : String }
 data Merchant = { name : String, address : Address }
 
 main =
-  let m = Merchant
-    { name = "Cafe Fish"
-    , address = Address { city = "Portland", street = "Ash" }
-    }
-  let moved = { m | address.city = "Seattle" }
+  let m = Merchant {
+    name = "Cafe Fish",
+    address = Address { city = "Portland", street = "Ash" },
+  }
+  let moved = { m | address = { m.address | city = "Seattle" } }
   println moved.address.city
   println m.address.city
 ```

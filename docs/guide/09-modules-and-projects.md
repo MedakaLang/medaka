@@ -28,15 +28,15 @@ export hello = "hello"
 export bye = "bye"
 
 -- file: main_single.mdk
-import greet.hello                  -- one name
+import greet.hello  -- one name
 main = println hello
 
 -- file: main_group.mdk
-import greet.{hello, bye}           -- several names
+import greet.{hello, bye}  -- several names
 main = println (hello ++ " / " ++ bye)
 
 -- file: main_wildcard.mdk
-import greet.*                      -- every export
+import greet.*  -- every export
 main = println hello
 ```
 
@@ -119,8 +119,8 @@ export paint = "red"
 export paint = "blue"
 
 -- file: main.mdk
-import red as R                     -- module alias: refer to R.paint
-import blue.{paint as bluePaint}    -- member alias: rename one import
+import red as R  -- module alias: refer to R.paint
+import blue.{paint as bluePaint}  -- member alias: rename one import
 
 main = println (R.paint ++ "/" ++ bluePaint)
 ```
@@ -148,14 +148,18 @@ its constructors private — an **abstract** export.
 
 ```medaka-project
 -- file: account.mdk
-public export data Point = Point Int Int   -- type + constructors, fully public
+public export data Point =
+  | Point Int Int  -- type + constructors, fully public
 
-export data Account = Account Int          -- type only; constructors stay private
+export data Account =
+  | Account Int  -- type only; constructors stay private
 
-export mkAccount : Int -> Account
+export
+mkAccount : Int -> Account
 mkAccount n = Account n
 
-export balanceOf : Account -> Int
+export
+balanceOf : Account -> Int
 balanceOf (Account n) = n
 
 -- file: main.mdk

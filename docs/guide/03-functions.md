@@ -57,18 +57,15 @@ tried top to bottom. This is the preferred way to take a data type apart.
 Here is `cost` from the introduction, in full:
 
 ```medaka
-data Expense =
-  | Coffee Float
-  | Rent Float
-  | Book String Float
+data Expense = Coffee Float | Rent Float | Book String Float
 
 cost : Expense -> Float
 cost (Coffee c) = c
-cost (Rent r)   = r
+cost (Rent r) = r
 cost (Book _ p) = p
 
 main =
-  println (cost (Coffee 4.50))
+  println (cost (Coffee 4.5))
   println (cost (Book "SICP" 35.0))
 ```
 
@@ -92,13 +89,13 @@ each with its own body, tried in order; `otherwise` is the conventional catch-al
 band : Float -> String
 band amount
   | amount < budget / 10.0 = "small"
-  | amount < budget        = "medium"
-  | otherwise              = "large"
+  | amount < budget = "medium"
+  | otherwise = "large"
   where
     budget = 100.0
 
 main =
-  println (band 4.50)
+  println (band 4.5)
   println (band 35.0)
   println (band 1200.0)
 ```
@@ -132,7 +129,7 @@ the guards' indentation. Locals may be functions with their own clauses:
 report : Float -> String
 report amount = "\{amount} is \{label (amount > 100.0)}"
   where
-    label True  = "a lot"
+    label True = "a lot"
     label False = "fine"
 
 main = println (report 4.5)
@@ -202,14 +199,11 @@ is `x => 2 * x` — the `_` marks the missing operand when it is the right-hand 
 and a bare `(+)` or `(==)` is the operator itself as an ordinary function.
 
 ```medaka
-data Expense =
-  | Coffee Float
-  | Rent Float
-  | Book String Float
+data Expense = Coffee Float | Rent Float | Book String Float
 
 cost : Expense -> Float
 cost (Coffee c) = c
-cost (Rent r)   = r
+cost (Rent r) = r
 cost (Book _ p) = p
 
 isBig : Float -> Bool
@@ -218,14 +212,14 @@ isBig = (> 100.0)
 verdict : Expense -> String
 verdict = cost >> isBig >> label
   where
-    label True  = "a big one"
+    label True = "a big one"
     label False = "pocket change"
 
 main =
-  let expenses = [Coffee 4.50, Rent 1200.0, Book "SICP" 35.0]
+  let expenses = [Coffee 4.5, Rent 1200.0, Book "SICP" 35.0]
   println (expenses |> map cost |> fold (+) 0.0)
   println (expenses |> map cost |> filter (> 100.0))
-  println (verdict (Coffee 4.50))
+  println (verdict (Coffee 4.5))
   println (verdict (Rent 1200.0))
 ```
 
@@ -250,8 +244,8 @@ passed to `map`, say.
 describe : Option Int -> String
 describe = x => match x
   Some n if n > 100 => "a big \{n}"
-  Some n            => "just \{n}"
-  None              => "nothing"
+  Some n => "just \{n}"
+  None => "nothing"
 
 main = println (map describe [Some 5, Some 500, None])
 ```

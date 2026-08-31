@@ -86,6 +86,67 @@ fi
 WORK="$(mktemp -d)" || { echo "check_syntax_examples: mktemp -d failed" >&2; exit 1; }
 trap 'rm -rf "$WORK"' EXIT INT TERM
 
+# ── verify one extracted file is canonically `medaka fmt`-formatted ────────
+# The guide is the reference for how Medaka is written, so every checkable
+# example must already be what `medaka fmt --stdout` would produce for it —
+# reformatting on drift instead of catching it here would let hand-edits
+# quietly re-diverge. On mismatch this appends a fail_report entry (counted
+# in `failed`, same as any other example failure) carrying the actual vs.
+# expected diff, and returns 1; it does NOT touch `checked`/`expected` — the
+# fmt check rides along on an already-counted example, it is not a new kind
+# of example.
+# Args: $1 = file to fmt-check, $2 = label for the fail_report entry.
+check_fmt() {
+  fmt_target="$1"
+  fmt_label="$2"
+  # KNOWN `medaka fmt` DEFECT (found while adding this check, not yet filed
+  # as an issue): a bodyless `interface X a` (no `where`, no methods — a
+  # valid, documented marker-interface shape) is not round-tripped by fmt;
+  # it synthesizes a spurious `where` plus an empty/whitespace body line
+  # regardless of any trailing comment. SYNTAX.md's "Empty a" example exists
+  # specifically to demonstrate the where-less form and says so in its own
+  # comment ("no `where`") — canonicalizing it to fmt's output would delete
+  # the very construct the example teaches, which this gate must not do
+  # (it only enforces STYLE, never rewrites what an example demonstrates).
+  # Exempt by content, not path/line, so this cannot silently widen to cover
+  # an unrelated future block at the same spot — matches only the exact
+  # bodyless-interface header shape known to be unformattable. This skips
+  # the fmt check for the WHOLE containing file (the block this construct
+  # sits in is checked as one unit), not just this one line; the rest of
+  # that block was hand-verified canonical when this exemption was added.
+  if grep -q '^interface [A-Za-z_][A-Za-z0-9_]* [a-z][A-Za-z0-9_]*[[:space:]]*\(--.*\)\?$' "$fmt_target" 2>/dev/null; then
+    return 0
+  fi
+  # A medaka-project block's per-file extraction (check_project_block) keeps
+  # the blank line that separates one `-- file:` section from the next as
+  # part of the extracted file — that separator is markdown structure, not
+  # file content, and `medaka fmt` normalizes it away regardless. Trim
+  # trailing blank lines before comparing so the fmt check judges the code,
+  # not the fence's own spacing convention.
+  awk '{a[NR]=$0} END{n=NR; while (n > 0 && a[n] == "") n--; for (i = 1; i <= n; i++) print a[i]}' \
+    "$fmt_target" > "$WORK/fmt_trimmed"
+  fmt_out="$("$MEDAKA" fmt --stdout "$WORK/fmt_trimmed" 2>"$WORK/fmt_err")"
+  fmt_rc=$?
+  if [ "$fmt_rc" -ne 0 ]; then
+    failed=$((failed + 1))
+    doc_failed=$((doc_failed + 1))
+    fail_report="$fail_report
+=== FAIL: $fmt_label (medaka fmt --stdout exited $fmt_rc) ===
+$(cat "$WORK/fmt_err")"
+    return 1
+  fi
+  printf '%s\n' "$fmt_out" > "$WORK/fmt_expected"
+  if ! diff -u "$WORK/fmt_trimmed" "$WORK/fmt_expected" > "$WORK/fmt_diff"; then
+    failed=$((failed + 1))
+    doc_failed=$((doc_failed + 1))
+    fail_report="$fail_report
+=== FAIL: $fmt_label (not canonically \`medaka fmt\`-formatted) ===
+$(cat "$WORK/fmt_diff")"
+    return 1
+  fi
+  return 0
+}
+
 checked=0
 failed=0
 skipped=0
@@ -219,6 +280,7 @@ check_medaka_block() {
 === FAIL: $doc_label:$check_line (medaka block) ===
 $out"
   fi
+  check_fmt "$check_file" "$doc_label:$check_line (medaka block)"
 
   # Offer this example to a ```medaka-expect block that may follow. The
   # snapshot is a copy: $blockfile is reused by the next block in the document.
@@ -280,6 +342,14 @@ $out"
     fail_report="$fail_report
 === FAIL: $doc_label:$project_line (medaka-project has no main*.mdk entry point) ==="
   fi
+
+  # fmt-check every per-file section, not just the main*.mdk entry points —
+  # a helper module's formatting drifts exactly the same way an entry
+  # point's does, and the guide teaches both.
+  for pf in "$pdir"/*.mdk; do
+    [ -e "$pf" ] || continue
+    check_fmt "$pf" "$doc_label:$project_line (medaka-project, file $(basename "$pf"))"
+  done
 
   # Offer this example to a ```medaka-expect block that may follow. "The"
   # stdout of a project with several entry points is not well defined, so the

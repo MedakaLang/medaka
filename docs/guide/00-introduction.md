@@ -38,18 +38,15 @@ and assumes you can read a type signature.
 Here's a small sample:
 
 ```medaka
-data Expense =
-  | Coffee Float
-  | Rent Float
-  | Book String Float
+data Expense = Coffee Float | Rent Float | Book String Float
 
 cost : Expense -> Float
 cost (Coffee c) = c
-cost (Rent r)   = r
+cost (Rent r) = r
 cost (Book _ p) = p
 
 main =
-  let expenses = [Coffee 4.50, Rent 1200.0, Book "SICP" 35.0]
+  let expenses = [Coffee 4.5, Rent 1200.0, Book "SICP" 35.0]
   let total = expenses |> map cost |> sum
   println "You logged \{length expenses} expenses."
   println "Total spent: $\{total}"

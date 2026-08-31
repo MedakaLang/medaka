@@ -13,10 +13,10 @@ value is declared with a name and `=`.
 int = 5
 float = 3.14
 bool = True
-string = "hello 👋" -- strings are utf8 by default
-pair = (False, 7) -- tuples
-list = [1, 2, 3] -- a linked list
-array = [|"a", "b", "c"|] -- an in-memory array
+string = "hello 👋"  -- strings are utf8 by default
+pair = (False, 7)  -- tuples
+list = [1, 2, 3]  -- a linked list
+array = [|"a", "b", "c"|]  -- an in-memory array
 
 main = println list
 ```
@@ -93,7 +93,7 @@ declares a fresh binding, and the old one is simply out of reach from there on.
 ```medaka
 main =
   let x = 1
-  let x = x + 1 -- a new binding; the `x` on the right is still the old one
+  let x = x + 1  -- a new binding; the `x` on the right is still the old one
   println x
 ```
 
@@ -109,10 +109,10 @@ can change. `:=` writes the cell and `!` reads it.
 
 ```medaka
 main =
-  let count = Ref 0 -- an immutable binding of a mutable cell
-  count := 42       -- `:=` writes
+  let count = Ref 0  -- an immutable binding of a mutable cell
+  count := 42  -- `:=` writes
   count := !count + 1
-  println !count    -- `!` reads
+  println !count  -- `!` reads
 ```
 
 ```medaka-expect
@@ -147,9 +147,9 @@ int = 4
 pairWithFloat : (String, Float)
 pairWithFloat = ("abc", 1.23)
 
-annotatedInExpression = (5 : Int)
+annotatedInExpression = 5 : Int
 
-list = let nums : List Int = [1, 2, 3] in if True then nums else []
+list = let nums = [1, 2, 3] : List Int in if True then nums else []
 ```
 
 Lowercase names in a signature are type variables — they stand for "any type", and the

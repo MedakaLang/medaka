@@ -108,16 +108,12 @@ import list.{get}
 data Category = Food | Housing | Books deriving (Debug)
 
 data Expense =
-  { date     : String
-  , payee    : String
-  , amount   : Float
-  , category : Category
-  }
+  | { date : String, payee : String, amount : Float, category : Category }
 
 impl Display Category where
-  display Food    = "food"
+  display Food = "food"
   display Housing = "housing"
-  display Books   = "books"
+  display Books = "books"
 
 impl Display Expense where
   display e = "\{e.date}  \{e.payee}  $\{e.amount}  (\{e.category})"
@@ -125,33 +121,34 @@ impl Display Expense where
 field : Int -> List String -> Result String String
 field i parts = match get i parts
   Some s => Ok (trim s)
-  None   => Err "missing field \{i}"
+  None => Err "missing field \{i}"
 
 amountOf : String -> Result String Float
 amountOf s = match toFloat s
   Some f => Ok f
-  None   => Err "not a number: \{s}"
+  None => Err "not a number: \{s}"
 
 categoryOf : String -> Result String Category
-categoryOf "food"    = Ok Food
+categoryOf "food" = Ok Food
 categoryOf "housing" = Ok Housing
-categoryOf "books"   = Ok Books
-categoryOf other     = Err "unknown category: \{other}"
+categoryOf "books" = Ok Books
+categoryOf other = Err "unknown category: \{other}"
 
 parseExpense : String -> Result String Expense
 parseExpense line = do
   let parts = split "," line
-  date     <- field 0 parts
-  payee    <- field 1 parts
-  raw      <- field 2 parts
-  amount   <- amountOf raw
-  catName  <- field 3 parts
+  date <- field 0 parts
+  payee <- field 1 parts
+  raw <- field 2 parts
+  amount <- amountOf raw
+  catName <- field 3 parts
   category <- categoryOf catName
-  pure (Expense { date = date, payee = payee, amount = amount, category = category })
+  pure
+    Expense { date = date, payee = payee, amount = amount, category = category }
 
 report : String -> <IO> Unit
 report line = match parseExpense line
-  Ok e  => println e
+  Ok e => println e
   Err m => println "skipped: \{m}"
 
 main =

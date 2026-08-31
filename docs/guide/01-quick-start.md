@@ -68,7 +68,7 @@ contains a block comment.
 
 ```medaka
 -- A single-line comment.
-main = println (2 + 5) -- ...which can also sit at the end of a line.
+main = println (2 + 5)  -- ...which can also sit at the end of a line.
 ```
 
 ```medaka-expect

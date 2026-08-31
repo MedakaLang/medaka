@@ -43,13 +43,12 @@ interface Discount a where
   waived : a -> Bool
 
 impl Discount Card where
-  rate Silver   = 0.05
-  rate Gold     = 0.10
-  rate Platinum = 0.20
-
+  rate Silver = 0.05
+  rate Gold = 0.1
+  rate Platinum = 0.2
   waived c
     | rate c > 0.15 = True
-    | otherwise     = False
+    | otherwise = False
 
 main =
   println (rate Gold)
@@ -126,25 +125,25 @@ one way in a log line and another way in a stack trace:
 data Category = Food | Housing | Books | Other deriving (Debug)
 
 data Expense =
-  { date     : String
-  , payee    : String
-  , amount   : Float
-  , category : Category
-  }
-  deriving (Debug)
+  | { date : String, payee : String, amount : Float, category : Category }
+deriving (Debug)
 
 impl Display Category where
-  display Food    = "food"
+  display Food = "food"
   display Housing = "housing"
-  display Books   = "books"
-  display Other   = "other"
+  display Books = "books"
+  display Other = "other"
 
 impl Display Expense where
   display e = "\{e.date}  \{e.payee}  $\{e.amount}  (\{e.category})"
 
 main =
-  let coffee =
-    Expense { date = "2026-08-31", payee = "Cafe Fish", amount = 4.50, category = Food }
+  let coffee = Expense {
+    date = "2026-08-31",
+    payee = "Cafe Fish",
+    amount = 4.5,
+    category = Food,
+  }
   println coffee
   println (debug coffee)
 ```
@@ -285,14 +284,15 @@ impl Render (List a) where
   render xs = "a list of \{length xs} thing(s)"
 
 impl Render (List Expense) where
-  render xs =
-    "a ledger of \{length xs} expense(s), totalling $\{fold (acc e => acc + e.amount) 0.0 xs}"
+  render xs = "a ledger of \{length xs} expense(s), totalling $\{fold (acc e => acc + e.amount) 0.0 xs}"
 
 main =
   println (render [True, False])
-  println (render [ Expense { payee = "Cafe Fish", amount = 4.50 }
-                  , Expense { payee = "Landlord", amount = 1200.0 }
-                  ])
+  println (render
+    [
+      Expense { payee = "Cafe Fish", amount = 4.5 },
+      Expense { payee = "Landlord", amount = 1200.0 },
+    ])
 ```
 
 ```medaka-expect
