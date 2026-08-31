@@ -38,6 +38,20 @@ import json.{Json, JString, JInt, JFloat, JBool, jArray, jObject, stringify}
 import driver.build_cmd.{envOr, defaultMedakaRoot}
 import driver.loader.{readDeps}
 import support.path.{joinPath}
+import args.{
+  ArgSpec,
+  Args,
+  Trailing(..),
+  spec,
+  switch,
+  value,
+  withTrailing,
+  parseArgs,
+  flag,
+  flagValue,
+  unknownFlagMessage,
+  missingValueMessage,
+}
 import tools.gate_cost.{
   GateCost,
   RunRecord,
@@ -667,25 +681,42 @@ data ListArgs =
       selectors : List String,
     }
 
-parseListArgs : List String -> ListArgs -> Result String ListArgs
-parseListArgs [] acc =
-  Ok ListArgs { acc | selectors = reverseStrs acc.selectors [] }
-parseListArgs ("--json"::rest) acc =
-  parseListArgs rest ListArgs { acc | json = True }
-parseListArgs ("--shards"::rest) acc =
-  parseListArgs rest ListArgs { acc | shards = True }
-parseListArgs ("--registry"::p::rest) acc =
-  parseListArgs rest ListArgs { acc | registry = Some p }
-parseListArgs ("--registry"::[]) _ =
-  Err "medaka gate list: --registry needs a path"
-parseListArgs (a::rest) acc
-  | stringLength a > 0 && stringSlice 0 1 a == "-" = Err "medaka gate list: unrecognized flag '\{a}' (known: --json, --shards, --registry)"
-  | otherwise =
-    parseListArgs rest ListArgs { acc | selectors = a::acc.selectors }
+-- S-3 (#2355): every subcommand's argv walk and its C2 unrecognized-flag
+-- sentence now come from `stdlib/args.mdk` — `unknownFlagMessage` is the
+-- ONE writer of that sentence tree-wide.  `args.mdk`'s own missing-value
+-- wording ("<flag> requires a value") is uniform and NOT what this file has
+-- always said; `missingValueOverride` below rewrites it back to the
+-- pre-existing bespoke text verbatim, per verb, deliberately not normalized
+-- this slice.
+missingValueOverride : ArgSpec -> List (String, String) -> String -> String
+missingValueOverride _ [] msg = msg
+missingValueOverride sp ((flg, custom)::rest) msg =
+  if msg == missingValueMessage sp flg then
+    custom
+  else
+    missingValueOverride sp rest msg
 
-reverseStrs : List String -> List String -> List String
-reverseStrs [] acc = acc
-reverseStrs (x::xs) acc = reverseStrs xs (x::acc)
+listArgSpec : ArgSpec
+listArgSpec = spec
+  "gate list"
+  [
+    switch ["--json"] "emit machine-readable JSON",
+    switch ["--shards"] "print each entry's shard placement",
+    value ["--registry"] "PATH" "override the gate registry path",
+  ]
+
+listMissingValue : List (String, String)
+listMissingValue = [("--registry", "medaka gate list: --registry needs a path")]
+
+parseListArgs : List String -> Result String ListArgs
+parseListArgs argv = match parseArgs listArgSpec argv
+  Err m => Err (missingValueOverride listArgSpec listMissingValue m)
+  Ok a => Ok ListArgs {
+    json = flag "--json" a,
+    shards = flag "--shards" a,
+    registry = flagValue "--registry" a,
+    selectors = a.positionals,
+  }
 
 parseSelectors : List String -> List Selector -> Result String (List Selector)
 parseSelectors [] acc = Ok (reverseSels acc [])
@@ -711,7 +742,7 @@ registryPath None =
 -- command a SINGLE exit site (`emit`), so no error path can grow a
 -- print-without-exit or an exit-without-print.
 listOutput : List String -> <IO> Result String String
-listOutput argv = match parseListArgs argv ListArgs { json = False, shards = False, registry = None, selectors = [] }
+listOutput argv = match parseListArgs argv
   Err m => Err m
   Ok a => match parseSelectors a.selectors []
     Err m => Err "medaka gate list: \{m}"
@@ -1301,46 +1332,60 @@ data RunArgs =
       noStaleCheck : Bool,
     }
 
-parseRunArgs : List String -> RunArgs -> Result String RunArgs
-parseRunArgs [] acc =
-  Ok RunArgs { acc | selectors = reverseStrs acc.selectors [] }
-parseRunArgs ("--dry-run"::rest) acc =
-  parseRunArgs rest RunArgs { acc | dryRun = True }
-parseRunArgs ("--json"::rest) acc =
-  parseRunArgs rest RunArgs { acc | json = True }
-parseRunArgs ("--no-stale-check"::rest) acc =
-  parseRunArgs rest RunArgs { acc | noStaleCheck = True }
-parseRunArgs ("--registry"::p::rest) acc =
-  parseRunArgs rest RunArgs { acc | registry = Some p }
-parseRunArgs ("--registry"::[]) _ =
-  Err "medaka gate run: --registry needs a path"
-parseRunArgs ("--report"::p::rest) acc =
-  parseRunArgs rest RunArgs { acc | report = Some p }
-parseRunArgs ("--report"::[]) _ = Err "medaka gate run: --report needs a path"
-parseRunArgs ("--timeout"::v::rest) acc = match parseDecChecked v
-  None => Err "medaka gate run: --timeout needs a whole number of seconds, got '\{v}'"
-  Some n => parseRunArgs rest RunArgs { acc | timeoutSecs = n }
-parseRunArgs ("--timeout"::[]) _ =
-  Err "medaka gate run: --timeout needs a number of seconds"
-parseRunArgs ("--jobs"::v::rest) acc = match parseDecChecked v
-  None => Err "medaka gate run: --jobs needs a whole number, got '\{v}'"
-  Some n => parseRunArgs rest RunArgs { acc | jobs = n }
-parseRunArgs ("--jobs"::[]) _ = Err "medaka gate run: --jobs needs a number"
-parseRunArgs (a::rest) acc
-  | stringLength a > 0 && stringSlice 0 1 a == "-" = Err "medaka gate run: unrecognized flag '\{a}' (known: --dry-run, --json, --no-stale-check, --registry, --report, --timeout, --jobs)"
-  | otherwise = parseRunArgs rest RunArgs { acc | selectors = a::acc.selectors }
+runArgSpec : ArgSpec
+runArgSpec = spec
+  "gate run"
+  [
+    switch ["--dry-run"] "print what would run, without running it",
+    switch ["--json"] "emit the machine-readable timing report",
+    switch ["--no-stale-check"] "skip the stale-oracle refusal",
+    value ["--registry"] "PATH" "override the gate registry path",
+    value ["--report"] "PATH" "write the timing report here",
+    value ["--timeout"] "N" "per-gate timeout, in seconds",
+    value ["--jobs"] "N" "worker count (reported only; gates run sequentially)",
+  ]
 
-emptyRunArgs : RunArgs
-emptyRunArgs = RunArgs {
-  registry = None,
-  selectors = [],
-  dryRun = False,
-  json = False,
-  report = None,
-  timeoutSecs = 0,
-  jobs = 1,
-  noStaleCheck = False,
-}
+runMissingValue : List (String, String)
+runMissingValue = [
+  ("--registry", "medaka gate run: --registry needs a path"),
+  ("--report", "medaka gate run: --report needs a path"),
+  ("--timeout", "medaka gate run: --timeout needs a number of seconds"),
+  ("--jobs", "medaka gate run: --jobs needs a number"),
+]
+
+-- `--timeout`/`--jobs` stay plain `value` flags (not `args.mdk`'s `intValue`)
+-- so the pre-existing bespoke invalid-integer wording survives untouched —
+-- `intValue`'s own sentence ("expected an integer, got 'x'") is not one of
+-- this slice's six C2 sites and is not licensed to normalize.
+runTimeout : Args -> Result String Int
+runTimeout a = match flagValue "--timeout" a
+  None => Ok 0
+  Some v => match parseDecChecked v
+    None => Err "medaka gate run: --timeout needs a whole number of seconds, got '\{v}'"
+    Some n => Ok n
+
+runJobs : Args -> Result String Int
+runJobs a = match flagValue "--jobs" a
+  None => Ok 1
+  Some v => match parseDecChecked v
+    None => Err "medaka gate run: --jobs needs a whole number, got '\{v}'"
+    Some n => Ok n
+
+parseRunArgs : List String -> Result String RunArgs
+parseRunArgs argv = match parseArgs runArgSpec argv
+  Err m => Err (missingValueOverride runArgSpec runMissingValue m)
+  Ok a => match runTimeout a
+    Err m => Err m
+    Ok timeoutSecs => map (jobs => RunArgs {
+      registry = flagValue "--registry" a,
+      selectors = a.positionals,
+      dryRun = flag "--dry-run" a,
+      json = flag "--json" a,
+      report = flagValue "--report" a,
+      timeoutSecs = timeoutSecs,
+      jobs = jobs,
+      noStaleCheck = flag "--no-stale-check" a,
+    }) (runJobs a)
 
 -- The selection half, shared with `list`: read the registry, apply the
 -- selectors, and treat a zero-gate selection as a HARD ERROR.  A mistyped
@@ -1410,7 +1455,7 @@ runSelected a gs =
     None => finishRun a (runGatesLoop env gs [])
 
 runRunCmdBody : List String -> <IO> Unit
-runRunCmdBody argv = match parseRunArgs argv emptyRunArgs
+runRunCmdBody argv = match parseRunArgs argv
   Err m => emit (Err m)
   Ok a => match parseSelectors a.selectors []
     Err m => emit (Err "medaka gate run: \{m}")
@@ -1856,17 +1901,28 @@ verifyOutput root gates shs = match verifyClasses root gates shs
 -- "print to stderr and exit 1" path is exactly what we want here too.
 data VerifyArgs = VerifyArgs { registry : Option String }
 
-parseVerifyArgs : List String -> VerifyArgs -> Result String VerifyArgs
-parseVerifyArgs [] acc = Ok acc
-parseVerifyArgs ("--registry"::p::rest) acc =
-  parseVerifyArgs rest VerifyArgs { acc | registry = Some p }
-parseVerifyArgs ("--registry"::[]) _ =
-  Err "medaka gate verify: --registry needs a path"
-parseVerifyArgs (a::_) _ =
-  Err "medaka gate verify: unrecognized flag '\{a}' (known: --registry)"
+verifyArgSpec : ArgSpec
+verifyArgSpec = spec
+  "gate verify"
+  [value ["--registry"] "PATH" "override the gate registry path"]
+
+verifyMissingValue : List (String, String)
+verifyMissingValue =
+  [("--registry", "medaka gate verify: --registry needs a path")]
+
+-- `verify` takes no positionals at all (unlike `list`/`run`/`reach`) — a
+-- leftover token, dash-shaped or not, was always rejected the same way as an
+-- unclaimed flag, so a stray positional gets the SAME `unknownFlagMessage`
+-- rendering `args.mdk`'s own unclaimed-token path would have produced.
+parseVerifyArgs : List String -> Result String VerifyArgs
+parseVerifyArgs argv = match parseArgs verifyArgSpec argv
+  Err m => Err (missingValueOverride verifyArgSpec verifyMissingValue m)
+  Ok a => match a.positionals
+    [] => Ok VerifyArgs { registry = flagValue "--registry" a }
+    p::_ => Err (unknownFlagMessage verifyArgSpec p)
 
 verifyCmdBody : List String -> <IO> Unit
-verifyCmdBody argv = match parseVerifyArgs argv VerifyArgs { registry = None }
+verifyCmdBody argv = match parseVerifyArgs argv
   Err m => emit (Err m)
   Ok a =>
     let path = registryPath a.registry
@@ -2108,22 +2164,36 @@ explainOutput path gates =
 data ExplainArgs =
   | ExplainArgs { registry : Option String, path : Option String, prose : Bool }
 
-parseExplainArgs : List String -> ExplainArgs -> Result String ExplainArgs
-parseExplainArgs [] acc = Ok acc
-parseExplainArgs ("--registry"::p::rest) acc =
-  parseExplainArgs rest ExplainArgs { acc | registry = Some p }
-parseExplainArgs ("--registry"::[]) _ =
-  Err "medaka gate explain: --registry needs a path"
-parseExplainArgs ("--prose"::rest) acc =
-  parseExplainArgs rest ExplainArgs { acc | prose = True }
-parseExplainArgs (a::rest) acc
-  | stringLength a > 0 && stringSlice 0 1 a == "-" = Err "medaka gate explain: unrecognized flag '\{a}' (known: --registry, --prose)"
-  | otherwise = match acc.path
-    Some _ => Err "medaka gate explain: expected exactly one <path> argument"
-    None => parseExplainArgs rest ExplainArgs { acc | path = Some a }
+explainArgSpec : ArgSpec
+explainArgSpec = spec
+  "gate explain"
+  [
+    value ["--registry"] "PATH" "override the gate registry path",
+    switch ["--prose"] "print only the PROSE/NONDOC verdict",
+  ]
+
+explainMissingValue : List (String, String)
+explainMissingValue =
+  [("--registry", "medaka gate explain: --registry needs a path")]
+
+parseExplainArgs : List String -> Result String ExplainArgs
+parseExplainArgs argv = match parseArgs explainArgSpec argv
+  Err m => Err (missingValueOverride explainArgSpec explainMissingValue m)
+  Ok a => match a.positionals
+    [] => Ok ExplainArgs {
+      registry = flagValue "--registry" a,
+      path = None,
+      prose = flag "--prose" a,
+    }
+    [p] => Ok ExplainArgs {
+      registry = flagValue "--registry" a,
+      path = Some p,
+      prose = flag "--prose" a,
+    }
+    _ => Err "medaka gate explain: expected exactly one <path> argument"
 
 explainCmdBody : List String -> <IO> Unit
-explainCmdBody argv = match parseExplainArgs argv ExplainArgs { registry = None, path = None, prose = False }
+explainCmdBody argv = match parseExplainArgs argv
   Err m => emit (Err m)
   Ok a => match a.path
     None => emit (Err "usage: medaka gate explain <path> [--prose] [--registry <path>]")
@@ -2379,26 +2449,50 @@ data ReachArgs =
 -- `--` ends flag parsing, so ANY string can be handed over as a path: a changed
 -- path the classifier does not understand must fail OPEN (below), and that
 -- promise would be worth nothing if a leading `-` could turn it into exit 1.
-parseReachArgs : List String -> ReachArgs -> Result String ReachArgs
-parseReachArgs [] acc = Ok ReachArgs { acc | paths = reverseL acc.paths }
-parseReachArgs ("--"::rest) acc =
-  Ok ReachArgs { acc | paths = reverseL acc.paths ++ rest }
-parseReachArgs ("--registry"::p::rest) acc =
-  parseReachArgs rest ReachArgs { acc | registry = Some p }
-parseReachArgs ("--registry"::[]) _ =
-  Err "medaka gate reach: --registry needs a path"
-parseReachArgs ("--root"::p::rest) acc =
-  parseReachArgs rest ReachArgs { acc | root = Some p }
-parseReachArgs ("--root"::[]) _ = Err "medaka gate reach: --root needs a path"
-parseReachArgs ("--paths-from"::p::rest) acc =
-  parseReachArgs rest ReachArgs { acc | pathsFrom = Some p }
-parseReachArgs ("--paths-from"::[]) _ =
-  Err "medaka gate reach: --paths-from needs a path"
-parseReachArgs ("--json"::rest) acc =
-  parseReachArgs rest ReachArgs { acc | json = True }
-parseReachArgs (a::rest) acc
-  | stringLength a > 0 && stringSlice 0 1 a == "-" = Err "medaka gate reach: unrecognized flag '\{a}' (known: --registry, --root, --paths-from, --json; use `--` before a path starting with '-')"
-  | otherwise = parseReachArgs rest ReachArgs { acc | paths = a::acc.paths }
+-- `args.mdk`'s `TrailingAfterSeparator` is exactly this policy: it consumes
+-- the first bare `--` and hands everything after it back verbatim in `rest`.
+reachArgSpec : ArgSpec
+reachArgSpec = withTrailing
+  TrailingAfterSeparator
+  (spec
+    "gate reach"
+    [
+      value ["--registry"] "PATH" "override the gate registry path",
+      value ["--root"] "PATH" "override MEDAKA_ROOT",
+      value ["--paths-from"] "PATH" "read changed paths from a file",
+      switch ["--json"] "emit JSON",
+    ])
+
+-- `reach` is the tree's only verb whose unrecognized-flag sentence carries an
+-- extra hint after the shared `(known: …)` tail — appended here, on top of
+-- the one-writer `unknownFlagMessage` rendering, not baked into it.  Since
+-- `reach` declares no `OneOf`/`IntValue` flags, `invalidValueMessage` can
+-- never fire, so any `Err` that survives the missing-value rewrites below
+-- must be the unrecognized-flag one.
+parseReachArgs : List String -> Result String ReachArgs
+parseReachArgs argv = match parseArgs reachArgSpec argv
+  Err m => Err (reachRewriteErr m)
+  Ok a => Ok ReachArgs {
+    registry = flagValue "--registry" a,
+    root = flagValue "--root" a,
+    json = flag "--json" a,
+    pathsFrom = flagValue "--paths-from" a,
+    paths = a.positionals ++ a.rest,
+  }
+
+reachRewriteErr : String -> String
+reachRewriteErr msg
+  | msg == missingValueMessage reachArgSpec "--registry" =
+    "medaka gate reach: --registry needs a path"
+  | msg == missingValueMessage reachArgSpec "--root" =
+    "medaka gate reach: --root needs a path"
+  | msg == missingValueMessage reachArgSpec "--paths-from" =
+    "medaka gate reach: --paths-from needs a path"
+  | otherwise =
+    -- The hint lands INSIDE the `(known: …)` parenthetical, matching the
+    -- pre-migration wording exactly — splice before `unknownFlagMessage`'s
+    -- trailing `)` rather than appending after it.
+    stringSlice 0 (stringLength msg - 1) msg ++ "; use `--` before a path starting with '-')"
 
 -- Blank lines are dropped from a `--paths-from` FILE and nowhere else.  `git
 -- diff --name-only` ends in a newline, so its last line is always empty, and
@@ -2425,7 +2519,7 @@ reachRoot (Some p) = p
 reachRoot None = envOr "MEDAKA_ROOT" defaultMedakaRoot
 
 reachCmdBody : List String -> <IO> Unit
-reachCmdBody argv = match parseReachArgs argv ReachArgs { registry = None, root = None, json = False, pathsFrom = None, paths = [] }
+reachCmdBody argv = match parseReachArgs argv
   Err m => emit (Err m)
   Ok a =>
     let rpath = registryPath a.registry
@@ -4862,26 +4956,42 @@ data BudgetArgs =
       commitMessage : String,
     }
 
-parseBudgetArgs : List String -> BudgetArgs -> Result String BudgetArgs
-parseBudgetArgs [] acc = Ok acc
-parseBudgetArgs ("--registry"::p::rest) acc =
-  parseBudgetArgs rest BudgetArgs { acc | registry = Some p }
-parseBudgetArgs ("--registry"::[]) _ =
-  Err "medaka gate budget: --registry needs a path"
-parseBudgetArgs ("--baseline"::p::rest) acc =
-  parseBudgetArgs rest BudgetArgs { acc | baseline = Some p }
-parseBudgetArgs ("--baseline"::[]) _ =
-  Err "medaka gate budget: --baseline needs a path"
-parseBudgetArgs ("--commit-message"::p::rest) acc =
-  parseBudgetArgs rest BudgetArgs { acc | commitMessage = p }
-parseBudgetArgs ("--commit-message"::[]) _ =
-  Err "medaka gate budget: --commit-message needs a value"
-parseBudgetArgs (a::_) _ =
-  Err
-    "medaka gate budget: unrecognized flag '\{a}' (known: --registry, --baseline, --commit-message)"
+budgetArgSpec : ArgSpec
+budgetArgSpec = spec
+  "gate budget"
+  [
+    value ["--registry"] "PATH" "override the gate registry path",
+    value ["--baseline"] "PATH" "override the cost baseline path",
+    value ["--commit-message"] "TEXT" "commit message to scan for a Gate-Budget-Override trailer",
+  ]
+
+budgetMissingValue : List (String, String)
+budgetMissingValue = [
+  ("--registry", "medaka gate budget: --registry needs a path"),
+  ("--baseline", "medaka gate budget: --baseline needs a path"),
+  ("--commit-message", "medaka gate budget: --commit-message needs a value"),
+]
+
+budgetCommitMessage : Args -> String
+budgetCommitMessage a = match flagValue "--commit-message" a
+  Some v => v
+  None => ""
+
+-- `budget`, like `verify`, takes no positionals — a leftover token is
+-- rejected the same way an unclaimed flag would be.
+parseBudgetArgs : List String -> Result String BudgetArgs
+parseBudgetArgs argv = match parseArgs budgetArgSpec argv
+  Err m => Err (missingValueOverride budgetArgSpec budgetMissingValue m)
+  Ok a => match a.positionals
+    [] => Ok BudgetArgs {
+      registry = flagValue "--registry" a,
+      baseline = flagValue "--baseline" a,
+      commitMessage = budgetCommitMessage a,
+    }
+    p::_ => Err (unknownFlagMessage budgetArgSpec p)
 
 budgetCmdBody : List String -> <IO> Unit
-budgetCmdBody argv = match parseBudgetArgs argv BudgetArgs { registry = None, baseline = None, commitMessage = "" }
+budgetCmdBody argv = match parseBudgetArgs argv
   Err m => emit (Err m)
   Ok a =>
     let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
