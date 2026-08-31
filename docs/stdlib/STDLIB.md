@@ -1251,6 +1251,32 @@ top-level binding of that name poisons module inference),
 nonzero divisor up to 2^64−1, via schoolbook bit-by-bit long division). 29
 doctests (incl. wraparound + long-division cases).
 
+## Module 25 — `args` ✅ implemented (2026-08-31, issue #2355)
+
+`stdlib/args.mdk` — one command-line argument parser, expressed as a
+**first-order value**. Pure, no externs, imports only `string`. Not
+auto-prelude — `import args`. Design and rejected alternatives:
+[`ARGS-DESIGN.md`](../design/ARGS-DESIGN.md); the sentence wording it renders is
+ratified in [`CLI-CONFORMANCE.md`](../ops/CLI-CONFORMANCE.md).
+
+A verb's whole argument vocabulary is an `ArgSpec` — a `List FlagSpec` plus a
+trailing-section policy and an unknown-token policy. `rosterOf`, `helpBlockOf`,
+`unknownFlagMessage` and `parseArgs` are four *renderings* of that one value, so
+what a verb parses, what its help advertises and what its rejection names as
+`(known: …)` cannot drift apart.
+
+**Deliberately NO `deriving` and NO `impl`** on any type in this module, and no
+`map`/`hash_map` import — all three are load-bearing for its measured import
+cost (`[T-STDLIB-IMPORT]`); adding one means re-measuring.
+
+**Exports:** `Arity` (`Switch`/`Value`/`ValueList`/`OneOf`/`IntValue`),
+`Visibility`, `Unknown`, `Trailing`, `FlagSpec`, `ArgSpec`, `Args`; builders
+`switch`/`value`/`valueList`/`oneOf`/`intValue`/`internal`/`spec`/
+`withTrailing`/`withUnknown`; renderings `canonical`/`flagLabel`/`rosterOf`/
+`helpBlockOf`/`unknownFlagMessage`/`missingValueMessage`/`invalidValueMessage`/
+`usageExitCode`; `parseArgs`; queries `flag`/`flagValue`/`lastValue`/
+`flagValues`. 39 doctests.
+
 ---
 
 ## Capability stratification audit (Phase 146, 2026-06-06)
@@ -1307,6 +1333,7 @@ an effect label).
 | 7 io | `io.mdk` | H (`<IO>`) | Entirely host-capability; not available without the `<IO>` grant |
 | 8 mut_array | `mut_array.mdk` | M | `push`/`pop`/`set`/`swap`/`clear`/`mapInPlace` mutate in place, untracked; capacity/length queries pure |
 | 9 json | `json.mdk` | P | `parse`/`stringify` are fully pure; transiently allocates arrays but the mutation never escapes |
+| 25 args | `args.mdk` | P | Fully pure; a CLI spec is data, parsing is a fold over it |
 | 10 test | `test.mdk` | P + H | `Expectation` ADT + assertion helpers are P; `runTests` → `<IO>` (prints results to stdout) |
 
 **P+M kernel:** modules 1–9 (excluding io) cover the full capability-free

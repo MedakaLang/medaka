@@ -50,6 +50,7 @@ Live design docs: **OPEN** = not started, **PARTIAL** = in progress. Read before
 
 | Doc | What it is | Status |
 |-----|------------|--------|
+| [`ARGS-DESIGN.md`](design/ARGS-DESIGN.md) | ARGS-DESIGN.md — one argument parser for sixteen verbs | DECIDED |
 | [`ASYNC-RUNTIME-DESIGN.md`](design/ASYNC-RUNTIME-DESIGN.md) | Async runtime v2 — the ASYNC-DESIGN §5 swap | DESIGN LOCKED |
 | [`AT-IMPL-PORT-DESIGN.md`](design/AT-IMPL-PORT-DESIGN.md) | `@Impl` Named-Instance-Selection Hint — Native Port Design | SUPERSEDED |
 | [`ATPROTO-PDS-CONSTANT-TIME.md`](design/ATPROTO-PDS-CONSTANT-TIME.md) | atproto PDS field/scalar constant-time reduction contract | implemented and landed for #1724 |
