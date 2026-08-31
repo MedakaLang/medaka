@@ -68,7 +68,7 @@ import frontend.parser.{
   declPosChildLocs,
 }
 import frontend.lexer.{Token(..), tokenizeWithOffsetPairs}
-import frontend.parse_cache.{parsePrelude}
+import frontend.desugar_cache.{desugaredPrelude}
 import support.char.{isIdentChar, isDigit}
 import support.util.{maxI, utf8Len, joinWith}
 import io.{stripCR}
@@ -709,8 +709,8 @@ defZipLocOr None p = jRange (declPosLine p - 1) 0 (declPosEndLine p - 1) 0
 -- the live loc-state at typecheck time is this buffer's.
 docSchemes : String -> String -> String -> Option (List (String, Scheme))
 docSchemes runtimeSrc coreSrc src =
-  let runtimeDecls = desugar (parsePrelude runtimeSrc)
-  let coreDecls = desugar (parsePrelude coreSrc)
+  let runtimeDecls = desugaredPrelude runtimeSrc
+  let coreDecls = desugaredPrelude coreSrc
   match parseLocatedResult src
     Err _ => None
     Ok userRaw =>

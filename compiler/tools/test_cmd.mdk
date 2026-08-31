@@ -50,6 +50,7 @@
 import frontend.ast.{Decl, DData, DInterface, Expr}
 import frontend.parser.{parse, parseLocated, parseResult}
 import frontend.desugar.{desugar}
+import frontend.desugar_cache.{desugaredPrelude}
 import driver.loader.{
   loadProgram,
   entrySearchRoots,
@@ -160,7 +161,10 @@ runTest engines runtimeP coreP target roots = match readPreludeFile runtimeP
             Some errText =>
               let _ = ePutStrLn (typecheckGateFail target errText)
               False
-            None => driveAll engines (desugar (parse rsrc)) (desugar (parse csrc)) target tsrc roots
+            -- S-1/#2234 (F-converge): the prelude halves go through the
+            -- content-keyed `desugaredPrelude` memo; only the USER source is
+            -- parsed+desugared fresh here.
+            None => driveAll engines (desugaredPrelude rsrc) (desugaredPrelude csrc) target tsrc roots
 
 -- ── typecheck gate (issues #260, #1229) ──────────────────────────────────────
 -- `medaka test` used to GREEN-LIGHT a module whose DOCTESTS `medaka check`
@@ -702,8 +706,9 @@ testFailSuffix failed errors
 export
 runTestReport : List Engine -> String -> String -> String -> String -> String -> <IO> (List (Engine, RunResult), List PropResult)
 runTestReport engines runtimeSrc coreSrc target tsrc stdlibDir =
-  let runtimeDecls = desugar (parse runtimeSrc)
-  let coreDecls = desugar (parse coreSrc)
+  -- S-1/#2234 (F-converge): content-keyed prelude memo (see `runTest` above).
+  let runtimeDecls = desugaredPrelude runtimeSrc
+  let coreDecls = desugaredPrelude coreSrc
   let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]
   let userDecls = desugar (parse tsrc)
   let doctestRuns = doctestReport engines runtimeDecls coreDecls target tsrc userDecls roots

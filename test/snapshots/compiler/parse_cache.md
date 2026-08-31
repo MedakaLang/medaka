@@ -1,5 +1,5 @@
 # META
-source_lines=86
+source_lines=89
 stages=DESUGAR,MARK
 # SOURCE
 -- Source-keyed memoization of the IMPLICIT PRELUDE parse (#2234).
@@ -83,6 +83,9 @@ dropKeyP k ((k2, v)::rest)
   | k == k2 = dropKeyP k rest
   | otherwise = (k2, v) :: dropKeyP k rest
 
+-- Exported so sibling per-tier caches (e.g. desugar_cache.mdk) can reuse the
+-- same MRU-truncation helper rather than duplicating it (rule-duplicate-body).
+export
 takeFirstN : Int -> List a -> List a
 takeFirstN _ [] = []
 takeFirstN n (x::xs)
@@ -103,7 +106,7 @@ takeFirstN n (x::xs)
 (DTypeSig false "dropKeyP" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))
 (DFunDef false "dropKeyP" (PWild (PList)) (EListLit))
 (DFunDef false "dropKeyP" ((PVar "k") (PCons (PTuple (PVar "k2") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "k2")) (EApp (EApp (EVar "dropKeyP") (EVar "k")) (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "k2") (EVar "v")) (EApp (EApp (EVar "dropKeyP") (EVar "k")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "takeFirstN" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
+(DTypeSig true "takeFirstN" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "takeFirstN" (PWild (PList)) (EListLit))
 (DFunDef false "takeFirstN" ((PVar "n") (PCons (PVar "x") (PVar "xs"))) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EListLit) (EIf (EVar "otherwise") (EBinOp "::" (EVar "x") (EApp (EApp (EVar "takeFirstN") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "xs"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 # MARK
@@ -121,6 +124,6 @@ takeFirstN n (x::xs)
 (DTypeSig false "dropKeyP" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))
 (DFunDef false "dropKeyP" (PWild (PList)) (EListLit))
 (DFunDef false "dropKeyP" ((PVar "k") (PCons (PTuple (PVar "k2") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "k2")) (EApp (EApp (EVar "dropKeyP") (EVar "k")) (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "k2") (EVar "v")) (EApp (EApp (EVar "dropKeyP") (EVar "k")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "takeFirstN" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
+(DTypeSig true "takeFirstN" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "takeFirstN" (PWild (PList)) (EListLit))
 (DFunDef false "takeFirstN" ((PVar "n") (PCons (PVar "x") (PVar "xs"))) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EListLit) (EIf (EVar "otherwise") (EBinOp "::" (EVar "x") (EApp (EApp (EVar "takeFirstN") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "xs"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
