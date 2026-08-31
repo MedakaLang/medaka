@@ -583,6 +583,11 @@ while IFS= read -r f; do
       # typecheck.mdk's usesImplDict decides whether a dict param exists at all
       # (the #1648 half), so a types/* change can move it without touching backend/*.
       add 'diff_compiler_call_arity'
+      # S-1-perf-gates-on-pr (#2330/#2262): check_ir_floor measures cachegrind Ir
+      # for `medaka check` over the full lex->parse->resolve->typecheck pipeline —
+      # typecheck.mdk is squarely in what it guards, and it was reaching zero
+      # compiler-source arms before this change (F1/F2, contract).
+      add 'diff_compiler_check_ir_floor'
       # #2186: a compiler/types/* change can silently drain a must-fail pin
       # (an ill-typed program that used to be rejected starts being accepted)
       # without touching diff_compiler_must_fail.sh's own sources or corpus
@@ -646,7 +651,12 @@ while IFS= read -r f; do
       # S-arity-census: derives call/define arity skew from emitted LLVM IR —
       # core_ir_lower.mdk's methodArgTys decides declared arity for the #1034 half,
       # so an ir/* change can move it without touching backend/*.
-      add 'diff_compiler_call_arity' ;;
+      add 'diff_compiler_call_arity'
+      # S-1-perf-gates-on-pr (#2330/#2262): ir_size measures emitted LLVM text-IR
+      # line count + linear-scaling ratio, driven by core_ir_lower.mdk (feeds the
+      # emitter) — it was reaching zero compiler-source arms before this change
+      # (F1/F2, contract).
+      add 'diff_compiler_ir_size' ;;
 
     # ── backend: the FIXPOINT is the decisive gate; do not defer it to CI ──
     #
@@ -669,6 +679,13 @@ while IFS= read -r f; do
       # S-arity-census: derives call/define arity skew from emitted LLVM IR —
       # the exact instrument a backend change could silently defeat.
       add 'diff_compiler_call_arity'
+      # S-1-perf-gates-on-pr (#2330/#2262): closure_alloc pins llvm_emit.mdk's
+      # closure-hoisting fix directly (gates.toml:3614 declares llvm_emit.mdk as
+      # its source), but diff_compiler_llvm* above does not glob-match it — it was
+      # reaching zero compiler-source arms before this change (F1/F2, contract).
+      # ir_size is driven by compiler/backend/* (emits the text-IR it counts) too.
+      add 'diff_compiler_closure_alloc'
+      add 'diff_compiler_ir_size'
       need_fixpoint=1 ;;
 
     # #1131: driver/loader.mdk is a cited DICT-SEMANTICS site.
