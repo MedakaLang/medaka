@@ -110,13 +110,16 @@ now parse the flag on either spelling instead of misreading it as a filename or 
 > medaka <verb>: unrecognized flag '<token>' (known: <a>, <b>, <c>)
 > ```
 
-**Rationale.** Naming the valid set is what turns a rejection into a fix. The tree currently
-carries **five** wordings for the same event — `unknown flag: X` (`fmt`, `run`, `gate list`),
-`unknown option 'X'` (`new`, `repl`, `lsp`), `unknown argument 'X'` (`mcp`, `codemod
-effect-labels`), `unknown codemod 'X'` / `unknown subcommand 'X'` (`codemod`, `gate`), and
-`unrecognized flag 'X' (known: …)` (`test`). Only the last one tells the user what to type
-next, and it is also the newest — landed by the `test-vehicle-floor` sprint as the #2316 fix.
-It is the reference implementation, not a defect to normalise away.
+**Rationale.** Naming the valid set is what turns a rejection into a fix. **At the time this
+convention was ratified** the tree carried **five** wordings for the same event — `unknown
+flag: X` (`fmt`, `run`, `gate list`), `unknown option 'X'` (`new`, `repl`, `lsp`), `unknown
+argument 'X'` (`mcp`, `codemod effect-labels`), `unknown codemod 'X'` / `unknown subcommand
+'X'` (`codemod`, `gate`), and `unrecognized flag 'X' (known: …)` (`test`) — only the last of
+which told the user what to type next. It was also the newest wording, landed by the
+`test-vehicle-floor` sprint as the #2316 fix, and became the reference implementation this
+convention generalises. **`S-unknown-flag-floor` and `S-help-truthfulness` have since unified
+every verb onto this wording** (§5a); the five-wordings state above is history, not the
+present tree — re-derive with `make cli-conformance-census` to see the current, unified set.
 
 > ⚠️ **Two live behaviours C2 must not destroy**, both verified:
 >
@@ -464,6 +467,14 @@ silently checks nine verbs of sixteen while reading as complete is worse than th
 * A help text can also evade B by citing a flag WITHOUT the `medaka ` prefix. `runHelpText`'s
   replacement sentence does exactly that ("There is no `build --release`") — correctly, since
   the claim is a negative, but the loophole is real for a positive one.
+* **Single-dash flags are graded in neither direction.** `cli_help_flags_of` and
+  `cli_known_flags_of` both pattern-match `--`-prefixed tokens only, so a single-dash flag
+  like `fmt`'s `-w` or `build`'s `-o` — both real, both documented — is invisible to
+  properties A and C alike. No false pass is known to exist from this today, but it is a
+  genuine gap, found by the end-of-sprint review and not by any slice; see the residual
+  filing on single-dash flags (§2's C2 scope is also `--`-shaped only, so the AS-FILENAME
+  defect this sprint exists to drain still reproduces via `-foo` instead of `--foo` on
+  several verbs — same root cause, same residual).
 
 ---
 
