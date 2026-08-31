@@ -1,5 +1,5 @@
 # META
-source_lines=9711
+source_lines=9745
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-prefer-assign-op
@@ -1339,39 +1339,73 @@ assertEmittedClosureW text =
   let called = collectCalledNamesW lines
   checkCalledNamesW defined called
 
+-- ⚠️ ACCUMULATOR-PASSING, DELIBERATELY (#392 follow-up).  The three walkers
+-- below (`collectCalledNamesGoW`, `collectDefinedNamesGoW`, `identsAfterAllGoW`)
+-- used to build their result AFTER the recursive call returned (`idents ++
+-- recurse rest` / `name :: recurse ...`), i.e. one live stack frame per WAT line
+-- and per `call $` occurrence within a line.  That is fine on the native path
+-- (a 256 MB GC-aware worker thread, runtime/medaka_rt.c) but FATAL on the wasm
+-- path: `compiler/entries/playground_main.mdk` compiles this very code to
+-- WasmGC, and the guest then runs on the HOST JS engine's ~1 MB stack, so the
+-- check's own depth is proportional to the emitted module's text size.  It
+-- overflowed at 15,739 lines -- i.e. on `main = 42`, the smallest program there
+-- is -- taking every browser compile down with `Maximum call stack size
+-- exceeded`.  Threading an accumulator makes each self-call a TRUE tail call,
+-- which W4's TCO (§4.2) emits as `return_call`: constant stack, any module size.
+-- Keep them tail-recursive.  The `Rev` suffix marks the reversed intermediate:
+-- each `xxxRevW` returns its names LAST-FIRST, and the single `reverseL` at the
+-- public entry restores the exact pre-rewrite order (per line, and across
+-- lines), so the collected lists are element-for-element identical to what the
+-- non-tail version produced.
 collectCalledNamesW : List String -> List String
-collectCalledNamesW [] = []
-collectCalledNamesW (line::rest) =
+collectCalledNamesW lines = reverseL (collectCalledNamesGoW lines [])
+
+collectCalledNamesGoW : List String -> List String -> List String
+collectCalledNamesGoW [] acc = acc
+collectCalledNamesGoW (line::rest) acc =
   if startsWith ";;" (stringTrimLeft line) then
-    collectCalledNamesW rest
+    collectCalledNamesGoW rest acc
   else
-    identsAfterAllW "call $" 6 line ++ collectCalledNamesW rest
+    collectCalledNamesGoW rest (identsAfterAllRevW "call $" 6 line ++ acc)
 
 -- `(func $NAME` appears exactly once per defining line -- a plain top-level
 -- function's own def line AND an import's `(import "env" "..." (func $NAME
 -- ...))` line alike -- so one needle covers both (a) and (b) of the closure
 -- requirement.
 collectDefinedNamesW : List String -> List String
-collectDefinedNamesW [] = []
-collectDefinedNamesW (line::rest) = identsAfterAllW "(func $" 7 line
-  ++ collectDefinedNamesW rest
+collectDefinedNamesW lines = reverseL (collectDefinedNamesGoW lines [])
+
+collectDefinedNamesGoW : List String -> List String -> List String
+collectDefinedNamesGoW [] acc = acc
+collectDefinedNamesGoW (line::rest) acc =
+  collectDefinedNamesGoW rest (identsAfterAllRevW "(func $" 7 line ++ acc)
 
 -- every occurrence of `needle` in `line`, mapped to the identifier
 -- immediately following it (skipping `skipLen` chars of the needle itself,
--- e.g. `call $` -> 6, so the scan resumes right after the `$`).
-identsAfterAllW : String -> Int -> String -> List String
-identsAfterAllW needle skipLen line = identsAfterAllGoW needle skipLen line 0
+-- e.g. `call $` -> 6, so the scan resumes right after the `$`), in REVERSE
+-- order of occurrence.  The callers above prepend this onto their own reversed
+-- accumulator, so one `reverseL` at the public entry un-reverses both levels at
+-- once: acc = revLn ++ ... ++ revL1, and `reverseL acc` = L1 ++ ... ++ Ln,
+-- exactly the old `L1 ++ ... ++ Ln`.
+identsAfterAllRevW : String -> Int -> String -> List String
+identsAfterAllRevW needle skipLen line =
+  identsAfterAllGoW needle skipLen line 0 []
 
-identsAfterAllGoW : String -> Int -> String -> Int -> List String
-identsAfterAllGoW needle skipLen line from =
+identsAfterAllGoW : String -> Int -> String -> Int -> List String -> List String
+identsAfterAllGoW needle skipLen line from acc =
   let n = stringLength line
-  if from >= n then []
+  if from >= n then acc
   else match stringIndexOf needle (stringSlice from n line)
-    None => []
+    None => acc
     Some rel =>
       let hit = from + rel
       let name = identAfterW line (hit + skipLen)
-      name :: identsAfterAllGoW needle skipLen line (hit + stringLength needle)
+      identsAfterAllGoW
+        needle
+        skipLen
+        line
+        (hit + stringLength needle)
+        (name::acc)
 
 -- read a bare identifier (word chars only -- `$` already consumed) forward
 -- from `from` until a non-identifier char or end of line.
@@ -9936,15 +9970,19 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "assertEmittedClosureW" (TyFun (TyCon "String") (TyCon "Unit")))
 (DFunDef false "assertEmittedClosureW" ((PVar "text")) (EBlock (DoLet false false (PVar "lines") (EApp (EVar "splitNl") (EVar "text"))) (DoLet false false (PVar "defined") (EApp (EApp (EVar "omFromNames") (EApp (EVar "collectDefinedNamesW") (EVar "lines"))) (EVar "omEmpty"))) (DoLet false false (PVar "called") (EApp (EVar "collectCalledNamesW") (EVar "lines"))) (DoExpr (EApp (EApp (EVar "checkCalledNamesW") (EVar "defined")) (EVar "called")))))
 (DTypeSig false "collectCalledNamesW" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "collectCalledNamesW" ((PList)) (EListLit))
-(DFunDef false "collectCalledNamesW" ((PCons (PVar "line") (PVar "rest"))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString ";;"))) (EApp (EVar "stringTrimLeft") (EVar "line"))) (EApp (EVar "collectCalledNamesW") (EVar "rest")) (EBinOp "++" (EApp (EApp (EApp (EVar "identsAfterAllW") (ELit (LString "call $"))) (ELit (LInt 6))) (EVar "line")) (EApp (EVar "collectCalledNamesW") (EVar "rest")))))
+(DFunDef false "collectCalledNamesW" ((PVar "lines")) (EApp (EVar "reverseL") (EApp (EApp (EVar "collectCalledNamesGoW") (EVar "lines")) (EListLit))))
+(DTypeSig false "collectCalledNamesGoW" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "collectCalledNamesGoW" ((PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "collectCalledNamesGoW" ((PCons (PVar "line") (PVar "rest")) (PVar "acc")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString ";;"))) (EApp (EVar "stringTrimLeft") (EVar "line"))) (EApp (EApp (EVar "collectCalledNamesGoW") (EVar "rest")) (EVar "acc")) (EApp (EApp (EVar "collectCalledNamesGoW") (EVar "rest")) (EBinOp "++" (EApp (EApp (EApp (EVar "identsAfterAllRevW") (ELit (LString "call $"))) (ELit (LInt 6))) (EVar "line")) (EVar "acc")))))
 (DTypeSig false "collectDefinedNamesW" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "collectDefinedNamesW" ((PList)) (EListLit))
-(DFunDef false "collectDefinedNamesW" ((PCons (PVar "line") (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EVar "identsAfterAllW") (ELit (LString "(func $"))) (ELit (LInt 7))) (EVar "line")) (EApp (EVar "collectDefinedNamesW") (EVar "rest"))))
-(DTypeSig false "identsAfterAllW" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "identsAfterAllW" ((PVar "needle") (PVar "skipLen") (PVar "line")) (EApp (EApp (EApp (EApp (EVar "identsAfterAllGoW") (EVar "needle")) (EVar "skipLen")) (EVar "line")) (ELit (LInt 0))))
-(DTypeSig false "identsAfterAllGoW" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "identsAfterAllGoW" ((PVar "needle") (PVar "skipLen") (PVar "line") (PVar "from")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "line"))) (DoExpr (EIf (EBinOp ">=" (EVar "from") (EVar "n")) (EListLit) (EMatch (EApp (EApp (EVar "stringIndexOf") (EVar "needle")) (EApp (EApp (EApp (EVar "stringSlice") (EVar "from")) (EVar "n")) (EVar "line"))) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "rel")) () (EBlock (DoLet false false (PVar "hit") (EBinOp "+" (EVar "from") (EVar "rel"))) (DoLet false false (PVar "name") (EApp (EApp (EVar "identAfterW") (EVar "line")) (EBinOp "+" (EVar "hit") (EVar "skipLen")))) (DoExpr (EBinOp "::" (EVar "name") (EApp (EApp (EApp (EApp (EVar "identsAfterAllGoW") (EVar "needle")) (EVar "skipLen")) (EVar "line")) (EBinOp "+" (EVar "hit") (EApp (EVar "stringLength") (EVar "needle")))))))))))))
+(DFunDef false "collectDefinedNamesW" ((PVar "lines")) (EApp (EVar "reverseL") (EApp (EApp (EVar "collectDefinedNamesGoW") (EVar "lines")) (EListLit))))
+(DTypeSig false "collectDefinedNamesGoW" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "collectDefinedNamesGoW" ((PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "collectDefinedNamesGoW" ((PCons (PVar "line") (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "collectDefinedNamesGoW") (EVar "rest")) (EBinOp "++" (EApp (EApp (EApp (EVar "identsAfterAllRevW") (ELit (LString "(func $"))) (ELit (LInt 7))) (EVar "line")) (EVar "acc"))))
+(DTypeSig false "identsAfterAllRevW" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "identsAfterAllRevW" ((PVar "needle") (PVar "skipLen") (PVar "line")) (EApp (EApp (EApp (EApp (EApp (EVar "identsAfterAllGoW") (EVar "needle")) (EVar "skipLen")) (EVar "line")) (ELit (LInt 0))) (EListLit)))
+(DTypeSig false "identsAfterAllGoW" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
+(DFunDef false "identsAfterAllGoW" ((PVar "needle") (PVar "skipLen") (PVar "line") (PVar "from") (PVar "acc")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "line"))) (DoExpr (EIf (EBinOp ">=" (EVar "from") (EVar "n")) (EVar "acc") (EMatch (EApp (EApp (EVar "stringIndexOf") (EVar "needle")) (EApp (EApp (EApp (EVar "stringSlice") (EVar "from")) (EVar "n")) (EVar "line"))) (arm (PCon "None") () (EVar "acc")) (arm (PCon "Some" (PVar "rel")) () (EBlock (DoLet false false (PVar "hit") (EBinOp "+" (EVar "from") (EVar "rel"))) (DoLet false false (PVar "name") (EApp (EApp (EVar "identAfterW") (EVar "line")) (EBinOp "+" (EVar "hit") (EVar "skipLen")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "identsAfterAllGoW") (EVar "needle")) (EVar "skipLen")) (EVar "line")) (EBinOp "+" (EVar "hit") (EApp (EVar "stringLength") (EVar "needle")))) (EBinOp "::" (EVar "name") (EVar "acc")))))))))))
 (DTypeSig false "identAfterW" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
 (DFunDef false "identAfterW" ((PVar "line") (PVar "from")) (EApp (EApp (EApp (EApp (EVar "identAfterGoW") (EVar "line")) (EVar "from")) (EApp (EVar "stringLength") (EVar "line"))) (EVar "from")))
 (DTypeSig false "identAfterGoW" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String"))))))
@@ -12172,15 +12210,19 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "assertEmittedClosureW" (TyFun (TyCon "String") (TyCon "Unit")))
 (DFunDef false "assertEmittedClosureW" ((PVar "text")) (EBlock (DoLet false false (PVar "lines") (EApp (EVar "splitNl") (EVar "text"))) (DoLet false false (PVar "defined") (EApp (EApp (EVar "omFromNames") (EApp (EVar "collectDefinedNamesW") (EVar "lines"))) (EVar "omEmpty"))) (DoLet false false (PVar "called") (EApp (EVar "collectCalledNamesW") (EVar "lines"))) (DoExpr (EApp (EApp (EVar "checkCalledNamesW") (EVar "defined")) (EVar "called")))))
 (DTypeSig false "collectCalledNamesW" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "collectCalledNamesW" ((PList)) (EListLit))
-(DFunDef false "collectCalledNamesW" ((PCons (PVar "line") (PVar "rest"))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString ";;"))) (EApp (EVar "stringTrimLeft") (EVar "line"))) (EApp (EVar "collectCalledNamesW") (EVar "rest")) (EBinOp "++" (EApp (EApp (EApp (EVar "identsAfterAllW") (ELit (LString "call $"))) (ELit (LInt 6))) (EVar "line")) (EApp (EVar "collectCalledNamesW") (EVar "rest")))))
+(DFunDef false "collectCalledNamesW" ((PVar "lines")) (EApp (EVar "reverseL") (EApp (EApp (EVar "collectCalledNamesGoW") (EVar "lines")) (EListLit))))
+(DTypeSig false "collectCalledNamesGoW" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "collectCalledNamesGoW" ((PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "collectCalledNamesGoW" ((PCons (PVar "line") (PVar "rest")) (PVar "acc")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString ";;"))) (EApp (EVar "stringTrimLeft") (EVar "line"))) (EApp (EApp (EVar "collectCalledNamesGoW") (EVar "rest")) (EVar "acc")) (EApp (EApp (EVar "collectCalledNamesGoW") (EVar "rest")) (EBinOp "++" (EApp (EApp (EApp (EVar "identsAfterAllRevW") (ELit (LString "call $"))) (ELit (LInt 6))) (EVar "line")) (EVar "acc")))))
 (DTypeSig false "collectDefinedNamesW" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "collectDefinedNamesW" ((PList)) (EListLit))
-(DFunDef false "collectDefinedNamesW" ((PCons (PVar "line") (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EVar "identsAfterAllW") (ELit (LString "(func $"))) (ELit (LInt 7))) (EVar "line")) (EApp (EVar "collectDefinedNamesW") (EVar "rest"))))
-(DTypeSig false "identsAfterAllW" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "identsAfterAllW" ((PVar "needle") (PVar "skipLen") (PVar "line")) (EApp (EApp (EApp (EApp (EVar "identsAfterAllGoW") (EVar "needle")) (EVar "skipLen")) (EVar "line")) (ELit (LInt 0))))
-(DTypeSig false "identsAfterAllGoW" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "identsAfterAllGoW" ((PVar "needle") (PVar "skipLen") (PVar "line") (PVar "from")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "line"))) (DoExpr (EIf (EBinOp ">=" (EVar "from") (EVar "n")) (EListLit) (EMatch (EApp (EApp (EVar "stringIndexOf") (EVar "needle")) (EApp (EApp (EApp (EVar "stringSlice") (EVar "from")) (EVar "n")) (EVar "line"))) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "rel")) () (EBlock (DoLet false false (PVar "hit") (EBinOp "+" (EVar "from") (EVar "rel"))) (DoLet false false (PVar "name") (EApp (EApp (EVar "identAfterW") (EVar "line")) (EBinOp "+" (EVar "hit") (EVar "skipLen")))) (DoExpr (EBinOp "::" (EVar "name") (EApp (EApp (EApp (EApp (EVar "identsAfterAllGoW") (EVar "needle")) (EVar "skipLen")) (EVar "line")) (EBinOp "+" (EVar "hit") (EApp (EVar "stringLength") (EVar "needle")))))))))))))
+(DFunDef false "collectDefinedNamesW" ((PVar "lines")) (EApp (EVar "reverseL") (EApp (EApp (EVar "collectDefinedNamesGoW") (EVar "lines")) (EListLit))))
+(DTypeSig false "collectDefinedNamesGoW" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "collectDefinedNamesGoW" ((PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "collectDefinedNamesGoW" ((PCons (PVar "line") (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "collectDefinedNamesGoW") (EVar "rest")) (EBinOp "++" (EApp (EApp (EApp (EVar "identsAfterAllRevW") (ELit (LString "(func $"))) (ELit (LInt 7))) (EVar "line")) (EVar "acc"))))
+(DTypeSig false "identsAfterAllRevW" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "identsAfterAllRevW" ((PVar "needle") (PVar "skipLen") (PVar "line")) (EApp (EApp (EApp (EApp (EApp (EVar "identsAfterAllGoW") (EVar "needle")) (EVar "skipLen")) (EVar "line")) (ELit (LInt 0))) (EListLit)))
+(DTypeSig false "identsAfterAllGoW" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
+(DFunDef false "identsAfterAllGoW" ((PVar "needle") (PVar "skipLen") (PVar "line") (PVar "from") (PVar "acc")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "line"))) (DoExpr (EIf (EBinOp ">=" (EVar "from") (EVar "n")) (EVar "acc") (EMatch (EApp (EApp (EVar "stringIndexOf") (EVar "needle")) (EApp (EApp (EApp (EVar "stringSlice") (EVar "from")) (EVar "n")) (EVar "line"))) (arm (PCon "None") () (EVar "acc")) (arm (PCon "Some" (PVar "rel")) () (EBlock (DoLet false false (PVar "hit") (EBinOp "+" (EVar "from") (EVar "rel"))) (DoLet false false (PVar "name") (EApp (EApp (EVar "identAfterW") (EVar "line")) (EBinOp "+" (EVar "hit") (EVar "skipLen")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "identsAfterAllGoW") (EVar "needle")) (EVar "skipLen")) (EVar "line")) (EBinOp "+" (EVar "hit") (EApp (EVar "stringLength") (EVar "needle")))) (EBinOp "::" (EVar "name") (EVar "acc")))))))))))
 (DTypeSig false "identAfterW" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
 (DFunDef false "identAfterW" ((PVar "line") (PVar "from")) (EApp (EApp (EApp (EApp (EVar "identAfterGoW") (EVar "line")) (EVar "from")) (EApp (EVar "stringLength") (EVar "line"))) (EVar "from")))
 (DTypeSig false "identAfterGoW" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String"))))))
