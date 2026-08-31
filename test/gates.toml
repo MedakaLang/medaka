@@ -3450,6 +3450,26 @@ sources = []
 corpus = ["test/llvm_fixtures", "test/wasm/fixtures_typed"]
 toolchain = ["wasm-tools", "node>=24", "clang"]
 
+# S5 (#2359 closure, epic #2036 G1/G2, #2377): absolute ceilings on emitted
+# .wasm bytes + the emitted-vs-reachable function-count ratio, across all
+# three wasm corpora. `merge` tier (not nightly-only): this is a regression
+# check meant to catch an S1-S4 revert going forward, not a one-off
+# measurement, and its cost is `medium` (same class as its `wasm/diff_wasm_*`
+# siblings, all corpora already built for those gates in the same job).
+[[gate]]
+name = "wasm/diff_wasm_emitted_size"
+area = "wasm"
+shard = "other-job"
+project = "compiler"
+tiers = ["merge"]
+cost = "medium"
+kind = "exec"
+run = "test/wasm/diff_wasm_emitted_size.sh"
+oracles = []
+sources = []
+corpus = ["test/wasm/fixtures", "test/wasm/fixtures_typed", "test/wasm/fixtures_modules"]
+toolchain = ["wasm-tools", "node>=24"]
+
 # The gate registry's own drift gate (#2176 S-4) — `area = "infra"` alongside
 # diff_compiler_ci_shard_coverage, its closest sibling: both police the map
 # between what exists on disk and what a consumer believes exists, rather
