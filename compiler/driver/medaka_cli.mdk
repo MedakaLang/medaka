@@ -3074,6 +3074,8 @@ runDocTargets (target::_) =
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let rtPath = root ++ "/stdlib/runtime.mdk"
   let corePath = root ++ "/stdlib/core.mdk"
+  let stdlibDir = root ++ "/stdlib"
+  let roots = entrySearchRoots (dirOf2 target) ++ [stdlibDir]
   match readPreludeFile rtPath
     Err msg =>
       let _ = ePutStrLn msg
@@ -3086,7 +3088,7 @@ runDocTargets (target::_) =
         Err msg =>
           let _ = ePutStrLn msg
           exit 1
-        Ok tsrc => putStr (runDoc rsrc csrc tsrc target)
+        Ok tsrc => putStr (runDoc rsrc csrc tsrc target roots)
 
 -- ── check-policy ───────────────────────────────────────────────────────────
 -- WS-1a of EFFECTS-CONFORMANCE-ROADMAP.md.  Mirrors bin/main.ml's `check-policy`

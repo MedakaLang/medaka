@@ -1,5 +1,5 @@
 # META
-source_lines=402
+source_lines=404
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/doc.mdk — the native `medaka doc` documentation extractor.
@@ -39,10 +39,10 @@ import frontend.ast.{
   Require(..),
   LetBind(..),
 }
-import frontend.desugar.{desugar}
-import types.typecheck.{Scheme(..), ppScheme, checkOneScheme}
+import types.typecheck.{Scheme(..), ppScheme}
 import support.util.{joinWith, reverseL, escStr, stringTrim, splitNl}
 import support.path.{baseOf, chopExt}
+import driver.diagnostics.{projectEntrySchemes}
 
 -- ── doc_entry ──────────────────────────────────────────────────────────────
 -- de_name / de_sig (never empty) / de_doc (stripped doc prose, may be "").
@@ -372,46 +372,48 @@ renderEntry (DocEntry name sig doc) =
 --
 -- runtimeSrc / coreSrc are the prelude sources (runtime.mdk + core.mdk), read
 -- by the caller from MEDAKA_ROOT; src is the target file; filename gives the
--- module-name basename.
+-- module-name basename; roots are the import search roots (mirrors `check`'s
+-- `entrySearchRoots (dirOf2 target) ++ [stdlibDir]`, medaka_cli.mdk:583) so an
+-- import-bearing target resolves its siblings before inferring schemes.
 export
-runDoc : String -> String -> String -> String -> String
-runDoc runtimeSrc coreSrc src filename =
+runDoc : String -> String -> String -> String -> List String -> <IO> String
+runDoc runtimeSrc coreSrc src filename roots =
   let parsed = parseWithPositions src
   let rawDecls = fst parsed
   let positions = positionsDecls (snd parsed)
   let comments = collectComments src
-  let schemes = docSchemesFor runtimeSrc coreSrc rawDecls
+  let schemes = docSchemesFor runtimeSrc coreSrc filename roots rawDecls
   let moduleName = chopExt (baseOf filename)
   let entries = extractEntries rawDecls positions schemes comments
   renderMarkdown moduleName entries
 
--- Inferred schemes via the single-module typecheck path (mirror lsp.docSchemes /
--- bin/main.ml: desugar prelude + user, checkOneScheme).  The
--- typechecker reports errors in-band rather than raising; compiler
--- checkOneScheme still returns the schemes it inferred for the user's own
--- declarations, so doc gets inferred types for the names that DID typecheck
--- (OCaml falls to [] on a hard error — divergence only for files with type
--- errors, which are not the doc happy path). Unlike lsp.mdk's completion
--- consumer, this call site only ever looks up schemes BY NAME for names the
--- caller already knows it declared (extractEntries/renderSig, never a full-
--- environment enumeration) — checkOneScheme's Module-arm omission of prelude
--- schemes (it never adds coreSchemes into the returned list) is therefore
--- inert here (S-migrate-tool-consumers-remainder, per S-migrate-tool-consumers's
--- lsp.mdk finding).
-docSchemesFor : String -> String -> List Decl -> List (String, Scheme)
-docSchemesFor runtimeSrc coreSrc rawUser =
-  let runtimeDecls = desugar (fst (parseWithPositions runtimeSrc))
-  let coreDecls = desugar (fst (parseWithPositions coreSrc))
-  let userDecls = desugar rawUser
-  checkOneScheme runtimeDecls coreDecls ("__user__", userDecls)
+-- Inferred schemes via the SAME multi-module loader path `check`/`run`/LSP
+-- project-hover use (`projectEntrySchemes`, driver.diagnostics) — loads the
+-- import graph rooted at `filename`, typechecks it, and returns the entry
+-- module's own top-level schemes with siblings resolved.  #213: the prior
+-- single-module `checkOneScheme runtimeDecls coreDecls ("__user__", rawUser)`
+-- left any name imported from a non-core sibling unbound during the check, so
+-- an inferred (no `DTypeSig`) entry whose signature depended on an import
+-- rendered wrong or missing.  A fresh `Ref []` cache/parseCache per call is
+-- correct here — `doc` is a single CLI invocation, no cross-call reuse.
+-- `projectEntrySchemes` returns `None` only on a LOAD error (missing/cyclic
+-- import), never on a type error; a no-import file cannot hit a load error,
+-- so falling back to `[]` on `None` changes nothing for the no-import case.
+-- Unlike lsp.mdk's completion consumer, this call site only ever looks up
+-- schemes BY NAME for names the caller already knows it declared
+-- (extractEntries/renderSig, never a full-environment enumeration).
+docSchemesFor : String -> String -> String -> List String -> List Decl -> <IO> List (String, Scheme)
+docSchemesFor runtimeSrc coreSrc filename roots rawUser = match projectEntrySchemes (Ref []) (Ref []) (_ => None) filename roots runtimeSrc coreSrc
+  None => []
+  Some schemes => schemes
 # DESUGAR
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "commentLine" false) (mem "commentText" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositions" false) (mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Ty" true) (mem "Constraint" true) (mem "DataVis" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "IfaceMethod" true) (mem "Require" true) (mem "LetBind" true))))
-(DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "Scheme" true) (mem "ppScheme" false) (mem "checkOneScheme" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "Scheme" true) (mem "ppScheme" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "stringTrim" false) (mem "splitNl" false))))
 (DUse false (UseGroup ("support" "path") ((mem "baseOf" false) (mem "chopExt" false))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "projectEntrySchemes" false))))
 (DData Private "DocEntry" () ((variant "DocEntry" (ConPos (TyCon "String") (TyCon "String") (TyCon "String")))) ())
 (DTypeSig false "dlen" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "dlen" ((PVar "s")) (EApp (EVar "stringLength") (EVar "s")))
@@ -518,18 +520,18 @@ docSchemesFor runtimeSrc coreSrc rawUser =
 (DFunDef false "renderMarkdown" ((PVar "moduleName") (PVar "entries")) (EApp (EVar "stringConcat") (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "# ")) (EVar "moduleName")) (ELit (LString "\n\n"))) (EApp (EApp (EVar "map") (EVar "renderEntry")) (EVar "entries")))))
 (DTypeSig false "renderEntry" (TyFun (TyCon "DocEntry") (TyCon "String")))
 (DFunDef false "renderEntry" ((PCon "DocEntry" (PVar "name") (PVar "sig") (PVar "doc"))) (EBlock (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (ELit (LString "## `")) (EVar "name")) (ELit (LString "`\n\n")))) (DoLet false false (PVar "sigBlock") (EBinOp "++" (EBinOp "++" (ELit (LString "```\n")) (EVar "sig")) (ELit (LString "\n```\n")))) (DoLet false false (PVar "docBlock") (EIf (EBinOp "==" (EVar "doc") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (EBinOp "++" (ELit (LString "\n")) (EVar "doc")) (ELit (LString "\n"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "header"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "sigBlock"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "docBlock"))) (ELit (LString "\n"))))))
-(DTypeSig true "runDoc" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))))
-(DFunDef false "runDoc" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src") (PVar "filename")) (EBlock (DoLet false false (PVar "parsed") (EApp (EVar "parseWithPositions") (EVar "src"))) (DoLet false false (PVar "rawDecls") (EApp (EVar "fst") (EVar "parsed"))) (DoLet false false (PVar "positions") (EApp (EVar "positionsDecls") (EApp (EVar "snd") (EVar "parsed")))) (DoLet false false (PVar "comments") (EApp (EVar "collectComments") (EVar "src"))) (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EVar "docSchemesFor") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "rawDecls"))) (DoLet false false (PVar "moduleName") (EApp (EVar "chopExt") (EApp (EVar "baseOf") (EVar "filename")))) (DoLet false false (PVar "entries") (EApp (EApp (EApp (EApp (EVar "extractEntries") (EVar "rawDecls")) (EVar "positions")) (EVar "schemes")) (EVar "comments"))) (DoExpr (EApp (EApp (EVar "renderMarkdown") (EVar "moduleName")) (EVar "entries")))))
-(DTypeSig false "docSchemesFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
-(DFunDef false "docSchemesFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "rawUser")) (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugar") (EApp (EVar "fst") (EApp (EVar "parseWithPositions") (EVar "runtimeSrc"))))) (DoLet false false (PVar "coreDecls") (EApp (EVar "desugar") (EApp (EVar "fst") (EApp (EVar "parseWithPositions") (EVar "coreSrc"))))) (DoLet false false (PVar "userDecls") (EApp (EVar "desugar") (EVar "rawUser"))) (DoExpr (EApp (EApp (EApp (EVar "checkOneScheme") (EVar "runtimeDecls")) (EVar "coreDecls")) (ETuple (ELit (LString "__user__")) (EVar "userDecls"))))))
+(DTypeSig true "runDoc" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "String"))))))))
+(DFunDef false "runDoc" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src") (PVar "filename") (PVar "roots")) (EBlock (DoLet false false (PVar "parsed") (EApp (EVar "parseWithPositions") (EVar "src"))) (DoLet false false (PVar "rawDecls") (EApp (EVar "fst") (EVar "parsed"))) (DoLet false false (PVar "positions") (EApp (EVar "positionsDecls") (EApp (EVar "snd") (EVar "parsed")))) (DoLet false false (PVar "comments") (EApp (EVar "collectComments") (EVar "src"))) (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EApp (EApp (EVar "docSchemesFor") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "filename")) (EVar "roots")) (EVar "rawDecls"))) (DoLet false false (PVar "moduleName") (EApp (EVar "chopExt") (EApp (EVar "baseOf") (EVar "filename")))) (DoLet false false (PVar "entries") (EApp (EApp (EApp (EApp (EVar "extractEntries") (EVar "rawDecls")) (EVar "positions")) (EVar "schemes")) (EVar "comments"))) (DoExpr (EApp (EApp (EVar "renderMarkdown") (EVar "moduleName")) (EVar "entries")))))
+(DTypeSig false "docSchemesFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))))
+(DFunDef false "docSchemesFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "filename") (PVar "roots") (PVar "rawUser")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectEntrySchemes") (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (ELam (PWild) (EVar "None"))) (EVar "filename")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "schemes")) () (EVar "schemes"))))
 # MARK
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "commentLine" false) (mem "commentText" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositions" false) (mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Ty" true) (mem "Constraint" true) (mem "DataVis" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "IfaceMethod" true) (mem "Require" true) (mem "LetBind" true))))
-(DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "Scheme" true) (mem "ppScheme" false) (mem "checkOneScheme" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "Scheme" true) (mem "ppScheme" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "stringTrim" false) (mem "splitNl" false))))
 (DUse false (UseGroup ("support" "path") ((mem "baseOf" false) (mem "chopExt" false))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "projectEntrySchemes" false))))
 (DData Private "DocEntry" () ((variant "DocEntry" (ConPos (TyCon "String") (TyCon "String") (TyCon "String")))) ())
 (DTypeSig false "dlen" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "dlen" ((PVar "s")) (EApp (EVar "stringLength") (EVar "s")))
@@ -636,7 +638,7 @@ docSchemesFor runtimeSrc coreSrc rawUser =
 (DFunDef false "renderMarkdown" ((PVar "moduleName") (PVar "entries")) (EApp (EVar "stringConcat") (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "# ")) (EVar "moduleName")) (ELit (LString "\n\n"))) (EApp (EApp (EMethodRef "map") (EVar "renderEntry")) (EVar "entries")))))
 (DTypeSig false "renderEntry" (TyFun (TyCon "DocEntry") (TyCon "String")))
 (DFunDef false "renderEntry" ((PCon "DocEntry" (PVar "name") (PVar "sig") (PVar "doc"))) (EBlock (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (ELit (LString "## `")) (EVar "name")) (ELit (LString "`\n\n")))) (DoLet false false (PVar "sigBlock") (EBinOp "++" (EBinOp "++" (ELit (LString "```\n")) (EVar "sig")) (ELit (LString "\n```\n")))) (DoLet false false (PVar "docBlock") (EIf (EBinOp "==" (EVar "doc") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (EBinOp "++" (ELit (LString "\n")) (EVar "doc")) (ELit (LString "\n"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "header"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "sigBlock"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "docBlock"))) (ELit (LString "\n"))))))
-(DTypeSig true "runDoc" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))))
-(DFunDef false "runDoc" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src") (PVar "filename")) (EBlock (DoLet false false (PVar "parsed") (EApp (EVar "parseWithPositions") (EVar "src"))) (DoLet false false (PVar "rawDecls") (EApp (EVar "fst") (EVar "parsed"))) (DoLet false false (PVar "positions") (EApp (EVar "positionsDecls") (EApp (EVar "snd") (EVar "parsed")))) (DoLet false false (PVar "comments") (EApp (EVar "collectComments") (EVar "src"))) (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EVar "docSchemesFor") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "rawDecls"))) (DoLet false false (PVar "moduleName") (EApp (EVar "chopExt") (EApp (EVar "baseOf") (EVar "filename")))) (DoLet false false (PVar "entries") (EApp (EApp (EApp (EApp (EVar "extractEntries") (EVar "rawDecls")) (EVar "positions")) (EVar "schemes")) (EVar "comments"))) (DoExpr (EApp (EApp (EVar "renderMarkdown") (EVar "moduleName")) (EVar "entries")))))
-(DTypeSig false "docSchemesFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
-(DFunDef false "docSchemesFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "rawUser")) (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugar") (EApp (EVar "fst") (EApp (EVar "parseWithPositions") (EVar "runtimeSrc"))))) (DoLet false false (PVar "coreDecls") (EApp (EVar "desugar") (EApp (EVar "fst") (EApp (EVar "parseWithPositions") (EVar "coreSrc"))))) (DoLet false false (PVar "userDecls") (EApp (EVar "desugar") (EVar "rawUser"))) (DoExpr (EApp (EApp (EApp (EVar "checkOneScheme") (EVar "runtimeDecls")) (EVar "coreDecls")) (ETuple (ELit (LString "__user__")) (EVar "userDecls"))))))
+(DTypeSig true "runDoc" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "String"))))))))
+(DFunDef false "runDoc" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src") (PVar "filename") (PVar "roots")) (EBlock (DoLet false false (PVar "parsed") (EApp (EVar "parseWithPositions") (EVar "src"))) (DoLet false false (PVar "rawDecls") (EApp (EVar "fst") (EVar "parsed"))) (DoLet false false (PVar "positions") (EApp (EVar "positionsDecls") (EApp (EVar "snd") (EVar "parsed")))) (DoLet false false (PVar "comments") (EApp (EVar "collectComments") (EVar "src"))) (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EApp (EApp (EVar "docSchemesFor") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "filename")) (EVar "roots")) (EVar "rawDecls"))) (DoLet false false (PVar "moduleName") (EApp (EVar "chopExt") (EApp (EVar "baseOf") (EVar "filename")))) (DoLet false false (PVar "entries") (EApp (EApp (EApp (EApp (EVar "extractEntries") (EVar "rawDecls")) (EVar "positions")) (EVar "schemes")) (EVar "comments"))) (DoExpr (EApp (EApp (EVar "renderMarkdown") (EVar "moduleName")) (EVar "entries")))))
+(DTypeSig false "docSchemesFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))))
+(DFunDef false "docSchemesFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "filename") (PVar "roots") (PVar "rawUser")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectEntrySchemes") (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (ELam (PWild) (EVar "None"))) (EVar "filename")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "schemes")) () (EVar "schemes"))))

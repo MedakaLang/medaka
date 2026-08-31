@@ -35,10 +35,10 @@ import frontend.ast.{
   Require(..),
   LetBind(..),
 }
-import frontend.desugar.{desugar}
-import types.typecheck.{Scheme(..), ppScheme, checkOneScheme}
+import types.typecheck.{Scheme(..), ppScheme}
 import support.util.{joinWith, reverseL, escStr, stringTrim, splitNl}
 import support.path.{baseOf, chopExt}
+import driver.diagnostics.{projectEntrySchemes}
 
 -- ── doc_entry ──────────────────────────────────────────────────────────────
 -- de_name / de_sig (never empty) / de_doc (stripped doc prose, may be "").
@@ -368,35 +368,37 @@ renderEntry (DocEntry name sig doc) =
 --
 -- runtimeSrc / coreSrc are the prelude sources (runtime.mdk + core.mdk), read
 -- by the caller from MEDAKA_ROOT; src is the target file; filename gives the
--- module-name basename.
+-- module-name basename; roots are the import search roots (mirrors `check`'s
+-- `entrySearchRoots (dirOf2 target) ++ [stdlibDir]`, medaka_cli.mdk:583) so an
+-- import-bearing target resolves its siblings before inferring schemes.
 export
-runDoc : String -> String -> String -> String -> String
-runDoc runtimeSrc coreSrc src filename =
+runDoc : String -> String -> String -> String -> List String -> <IO> String
+runDoc runtimeSrc coreSrc src filename roots =
   let parsed = parseWithPositions src
   let rawDecls = fst parsed
   let positions = positionsDecls (snd parsed)
   let comments = collectComments src
-  let schemes = docSchemesFor runtimeSrc coreSrc rawDecls
+  let schemes = docSchemesFor runtimeSrc coreSrc filename roots rawDecls
   let moduleName = chopExt (baseOf filename)
   let entries = extractEntries rawDecls positions schemes comments
   renderMarkdown moduleName entries
 
--- Inferred schemes via the single-module typecheck path (mirror lsp.docSchemes /
--- bin/main.ml: desugar prelude + user, checkOneScheme).  The
--- typechecker reports errors in-band rather than raising; compiler
--- checkOneScheme still returns the schemes it inferred for the user's own
--- declarations, so doc gets inferred types for the names that DID typecheck
--- (OCaml falls to [] on a hard error — divergence only for files with type
--- errors, which are not the doc happy path). Unlike lsp.mdk's completion
--- consumer, this call site only ever looks up schemes BY NAME for names the
--- caller already knows it declared (extractEntries/renderSig, never a full-
--- environment enumeration) — checkOneScheme's Module-arm omission of prelude
--- schemes (it never adds coreSchemes into the returned list) is therefore
--- inert here (S-migrate-tool-consumers-remainder, per S-migrate-tool-consumers's
--- lsp.mdk finding).
-docSchemesFor : String -> String -> List Decl -> List (String, Scheme)
-docSchemesFor runtimeSrc coreSrc rawUser =
-  let runtimeDecls = desugar (fst (parseWithPositions runtimeSrc))
-  let coreDecls = desugar (fst (parseWithPositions coreSrc))
-  let userDecls = desugar rawUser
-  checkOneScheme runtimeDecls coreDecls ("__user__", userDecls)
+-- Inferred schemes via the SAME multi-module loader path `check`/`run`/LSP
+-- project-hover use (`projectEntrySchemes`, driver.diagnostics) — loads the
+-- import graph rooted at `filename`, typechecks it, and returns the entry
+-- module's own top-level schemes with siblings resolved.  #213: the prior
+-- single-module `checkOneScheme runtimeDecls coreDecls ("__user__", rawUser)`
+-- left any name imported from a non-core sibling unbound during the check, so
+-- an inferred (no `DTypeSig`) entry whose signature depended on an import
+-- rendered wrong or missing.  A fresh `Ref []` cache/parseCache per call is
+-- correct here — `doc` is a single CLI invocation, no cross-call reuse.
+-- `projectEntrySchemes` returns `None` only on a LOAD error (missing/cyclic
+-- import), never on a type error; a no-import file cannot hit a load error,
+-- so falling back to `[]` on `None` changes nothing for the no-import case.
+-- Unlike lsp.mdk's completion consumer, this call site only ever looks up
+-- schemes BY NAME for names the caller already knows it declared
+-- (extractEntries/renderSig, never a full-environment enumeration).
+docSchemesFor : String -> String -> String -> List String -> List Decl -> <IO> List (String, Scheme)
+docSchemesFor runtimeSrc coreSrc filename roots rawUser = match projectEntrySchemes (Ref []) (Ref []) (_ => None) filename roots runtimeSrc coreSrc
+  None => []
+  Some schemes => schemes
