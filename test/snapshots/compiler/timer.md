@@ -1,5 +1,5 @@
 # META
-source_lines=149
+source_lines=196
 stages=DESUGAR,MARK
 # SOURCE
 -- Per-stage wall-clock timing helpers for the self-hosted pipeline.
@@ -16,7 +16,53 @@ stages=DESUGAR,MARK
 --   ...
 --   let _   = emitTotal on (tEnd - tStart)
 --
--- All timing output goes to stderr so stdout is not disturbed.
+-- All timing output goes to stderr so stdout is not disturbed — with ONE
+-- documented exception, the sink below: `medaka run --json`'s machine channel
+-- IS stderr (its stdout belongs to the user program), so for that single verb
+-- this module's premise inverts and stderr is what must stay undisturbed.
+
+-- ── the `run --json` routing sink (C4, docs/ops/CLI-CONFORMANCE.md §4) ──────
+-- When ARMED, every `[perf]`/`[stats]` line this module would have written to
+-- stderr is BUFFERED instead, and `medaka run --json` folds the buffer into its
+-- one JSON envelope as a `perf` array.  Routed, never suppressed
+-- ([W-QUIETER]): dropping the lines under `--json` would make `MEDAKA_PERF=1`
+-- silently do nothing on the one verb whose channel needed the fix.
+--
+-- DISARMED by default, so the other fifteen verbs — and `medaka run` without
+-- `--json` — write exactly the bytes they wrote before, which is what
+-- `diff_compiler_perf_scaling.sh` and `profile_compiler.sh` parse with
+-- `awk -F'\t'`.  Only `runRunCmd` arms it, and only under `--json`.
+export
+perfSinkOn : Ref Bool
+perfSinkOn = Ref False
+
+-- Buffered lines, newest first (`takePerfSink` reverses).
+perfSinkLines : Ref (List String)
+perfSinkLines = Ref []
+
+-- The single routing decision for every line this module emits.  Every emitter
+-- below goes through here rather than calling `ePutStrLn` itself, so the sink
+-- cannot be half-applied and the line FORMAT stays defined in exactly one place
+-- per emitter.
+emitTimerLine : String -> <IO> Unit
+emitTimerLine line =
+  if !perfSinkOn then
+    perfSinkLines := line :: !perfSinkLines
+  else
+    ePutStrLn line
+
+-- Drain the sink, oldest line first.  Draining (rather than peeking) keeps a
+-- second read from re-emitting lines the envelope already carries.
+export
+takePerfSink : Unit -> <e> List String
+takePerfSink _ =
+  let ls = !perfSinkLines
+  perfSinkLines := []
+  revLines ls []
+
+revLines : List String -> List String -> List String
+revLines [] acc = acc
+revLines (x::xs) acc = revLines xs (x::acc)
 
 -- True when MEDAKA_PERF is set to any value in the environment.
 export
@@ -45,7 +91,8 @@ statsEnabled () = match getEnv "MEDAKA_STATS"
 export
 emitStat : Bool -> String -> Int -> <IO> Unit
 emitStat False _ _ = ()
-emitStat True label count = ePutStrLn "[stats] \{label}\t\{intToString count}"
+emitStat True label count =
+  emitTimerLine "[stats] \{label}\t\{intToString count}"
 
 -- Emit a whole list of (label, count) pairs — the call shape
 -- `llvm_emit.mdk`'s `emitProgramWithStats` returns. No-op (per element) when
@@ -98,14 +145,14 @@ export
 emitPhase : Bool -> String -> Float -> String -> <IO> Unit
 emitPhase False _ _ _ = ()
 emitPhase True label elapsed ops =
-  ePutStrLn "[perf] \{label}\t\{floatToString elapsed}s\t\{ops}"
+  emitTimerLine "[perf] \{label}\t\{floatToString elapsed}s\t\{ops}"
 
 -- Emit the total pipeline time to stderr.  No-op when on = False.
 export
 emitTotal : Bool -> Float -> <IO> Unit
 emitTotal False _ = ()
 emitTotal True elapsed =
-  ePutStrLn ("[perf] total\t" ++ floatToString elapsed ++ "s")
+  emitTimerLine ("[perf] total\t" ++ floatToString elapsed ++ "s")
 
 -- Count total declarations across a list of (moduleId, decls) pairs.
 -- Used by drivers as a cheap proxy for "work units" without modifying stages.
@@ -130,7 +177,7 @@ export
 emitTotalA : Bool -> Float -> Float -> <IO> Unit
 emitTotalA False _ _ = ()
 emitTotalA True elapsed allocTotal =
-  ePutStrLn
+  emitTimerLine
     "[perf] total\t\{floatToString elapsed}s\t\{floatToString (allocTotal / 1048576.0)}MB\t"
 
 -- Extended phase emit that ALSO appends the deterministic per-stage OP-COUNT delta
@@ -149,16 +196,27 @@ export
 emitPhaseAO : Bool -> String -> Float -> Float -> String -> Int -> <IO> Unit
 emitPhaseAO False _ _ _ _ _ = ()
 emitPhaseAO True label elapsed allocDelta ops opDelta =
-  ePutStrLn
+  emitTimerLine
     "[perf] \{label}\t\{floatToString elapsed}s\t\{floatToString (allocDelta / 1048576.0)}MB\t\{ops}\t\{intToString opDelta}"
 # DESUGAR
+(DTypeSig true "perfSinkOn" (TyApp (TyCon "Ref") (TyCon "Bool")))
+(DFunDef false "perfSinkOn" () (EApp (EVar "Ref") (EVar "False")))
+(DTypeSig false "perfSinkLines" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "perfSinkLines" () (EApp (EVar "Ref") (EListLit)))
+(DTypeSig false "emitTimerLine" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
+(DFunDef false "emitTimerLine" ((PVar "line")) (EIf (EUnOp "!" (EVar "perfSinkOn")) (EApp (EApp (EVar "setRef") (EVar "perfSinkLines")) (EBinOp "::" (EVar "line") (EUnOp "!" (EVar "perfSinkLines")))) (EApp (EVar "ePutStrLn") (EVar "line"))))
+(DTypeSig true "takePerfSink" (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "takePerfSink" (PWild) (EBlock (DoLet false false (PVar "ls") (EUnOp "!" (EVar "perfSinkLines"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "perfSinkLines")) (EListLit))) (DoExpr (EApp (EApp (EVar "revLines") (EVar "ls")) (EListLit)))))
+(DTypeSig false "revLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "revLines" ((PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "revLines" ((PCons (PVar "x") (PVar "xs")) (PVar "acc")) (EApp (EApp (EVar "revLines") (EVar "xs")) (EBinOp "::" (EVar "x") (EVar "acc"))))
 (DTypeSig true "perfEnabled" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Bool"))))
 (DFunDef false "perfEnabled" ((PLit LUnit)) (EMatch (EApp (EVar "getEnv") (ELit (LString "MEDAKA_PERF"))) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "statsEnabled" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Bool"))))
 (DFunDef false "statsEnabled" ((PLit LUnit)) (EMatch (EApp (EVar "getEnv") (ELit (LString "MEDAKA_STATS"))) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "emitStat" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyEffect ("IO") None (TyCon "Unit"))))))
 (DFunDef false "emitStat" ((PCon "False") PWild PWild) (ELit LUnit))
-(DFunDef false "emitStat" ((PCon "True") (PVar "label") (PVar "count")) (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[stats] ")) (EApp (EVar "display") (EVar "label"))) (ELit (LString "\t"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "count")))) (ELit (LString "")))))
+(DFunDef false "emitStat" ((PCon "True") (PVar "label") (PVar "count")) (EApp (EVar "emitTimerLine") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[stats] ")) (EApp (EVar "display") (EVar "label"))) (ELit (LString "\t"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "count")))) (ELit (LString "")))))
 (DTypeSig true "emitStats" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyEffect ("IO") None (TyCon "Unit")))))
 (DFunDef false "emitStats" (PWild (PList)) (ELit LUnit))
 (DFunDef false "emitStats" ((PVar "on") (PCons (PTuple (PVar "label") (PVar "count")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "emitStat") (EVar "on")) (EVar "label")) (EVar "count"))) (DoExpr (EApp (EApp (EVar "emitStats") (EVar "on")) (EVar "rest")))))
@@ -168,10 +226,10 @@ emitPhaseAO True label elapsed allocDelta ops opDelta =
 (DFunDef false "now" ((PLit LUnit)) (EApp (EVar "wallTimeSec") (ELit LUnit)))
 (DTypeSig true "emitPhase" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "Float") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))))
 (DFunDef false "emitPhase" ((PCon "False") PWild PWild PWild) (ELit LUnit))
-(DFunDef false "emitPhase" ((PCon "True") (PVar "label") (PVar "elapsed") (PVar "ops")) (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[perf] ")) (EApp (EVar "display") (EVar "label"))) (ELit (LString "\t"))) (EApp (EVar "display") (EApp (EVar "floatToString") (EVar "elapsed")))) (ELit (LString "s\t"))) (EApp (EVar "display") (EVar "ops"))) (ELit (LString "")))))
+(DFunDef false "emitPhase" ((PCon "True") (PVar "label") (PVar "elapsed") (PVar "ops")) (EApp (EVar "emitTimerLine") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[perf] ")) (EApp (EVar "display") (EVar "label"))) (ELit (LString "\t"))) (EApp (EVar "display") (EApp (EVar "floatToString") (EVar "elapsed")))) (ELit (LString "s\t"))) (EApp (EVar "display") (EVar "ops"))) (ELit (LString "")))))
 (DTypeSig true "emitTotal" (TyFun (TyCon "Bool") (TyFun (TyCon "Float") (TyEffect ("IO") None (TyCon "Unit")))))
 (DFunDef false "emitTotal" ((PCon "False") PWild) (ELit LUnit))
-(DFunDef false "emitTotal" ((PCon "True") (PVar "elapsed")) (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "[perf] total\t")) (EApp (EVar "floatToString") (EVar "elapsed"))) (ELit (LString "s")))))
+(DFunDef false "emitTotal" ((PCon "True") (PVar "elapsed")) (EApp (EVar "emitTimerLine") (EBinOp "++" (EBinOp "++" (ELit (LString "[perf] total\t")) (EApp (EVar "floatToString") (EVar "elapsed"))) (ELit (LString "s")))))
 (DTypeSig true "totalDecls" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyVar "a")))) (TyCon "Int")))
 (DFunDef false "totalDecls" ((PList)) (ELit (LInt 0)))
 (DFunDef false "totalDecls" ((PCons (PTuple PWild (PVar "ds")) (PVar "rest"))) (EBinOp "+" (EApp (EVar "countList") (EVar "ds")) (EApp (EVar "totalDecls") (EVar "rest"))))
@@ -182,18 +240,29 @@ emitPhaseAO True label elapsed allocDelta ops opDelta =
 (DFunDef false "allocSnap" ((PLit LUnit)) (EApp (EVar "allocBytes") (ELit LUnit)))
 (DTypeSig true "emitTotalA" (TyFun (TyCon "Bool") (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyEffect ("IO") None (TyCon "Unit"))))))
 (DFunDef false "emitTotalA" ((PCon "False") PWild PWild) (ELit LUnit))
-(DFunDef false "emitTotalA" ((PCon "True") (PVar "elapsed") (PVar "allocTotal")) (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[perf] total\t")) (EApp (EVar "display") (EApp (EVar "floatToString") (EVar "elapsed")))) (ELit (LString "s\t"))) (EApp (EVar "display") (EApp (EVar "floatToString") (EBinOp "/" (EVar "allocTotal") (ELit (LFloat 1048576.0)))))) (ELit (LString "MB\t")))))
+(DFunDef false "emitTotalA" ((PCon "True") (PVar "elapsed") (PVar "allocTotal")) (EApp (EVar "emitTimerLine") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[perf] total\t")) (EApp (EVar "display") (EApp (EVar "floatToString") (EVar "elapsed")))) (ELit (LString "s\t"))) (EApp (EVar "display") (EApp (EVar "floatToString") (EBinOp "/" (EVar "allocTotal") (ELit (LFloat 1048576.0)))))) (ELit (LString "MB\t")))))
 (DTypeSig true "emitPhaseAO" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyEffect ("IO") None (TyCon "Unit")))))))))
 (DFunDef false "emitPhaseAO" ((PCon "False") PWild PWild PWild PWild PWild) (ELit LUnit))
-(DFunDef false "emitPhaseAO" ((PCon "True") (PVar "label") (PVar "elapsed") (PVar "allocDelta") (PVar "ops") (PVar "opDelta")) (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[perf] ")) (EApp (EVar "display") (EVar "label"))) (ELit (LString "\t"))) (EApp (EVar "display") (EApp (EVar "floatToString") (EVar "elapsed")))) (ELit (LString "s\t"))) (EApp (EVar "display") (EApp (EVar "floatToString") (EBinOp "/" (EVar "allocDelta") (ELit (LFloat 1048576.0)))))) (ELit (LString "MB\t"))) (EApp (EVar "display") (EVar "ops"))) (ELit (LString "\t"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "opDelta")))) (ELit (LString "")))))
+(DFunDef false "emitPhaseAO" ((PCon "True") (PVar "label") (PVar "elapsed") (PVar "allocDelta") (PVar "ops") (PVar "opDelta")) (EApp (EVar "emitTimerLine") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[perf] ")) (EApp (EVar "display") (EVar "label"))) (ELit (LString "\t"))) (EApp (EVar "display") (EApp (EVar "floatToString") (EVar "elapsed")))) (ELit (LString "s\t"))) (EApp (EVar "display") (EApp (EVar "floatToString") (EBinOp "/" (EVar "allocDelta") (ELit (LFloat 1048576.0)))))) (ELit (LString "MB\t"))) (EApp (EVar "display") (EVar "ops"))) (ELit (LString "\t"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "opDelta")))) (ELit (LString "")))))
 # MARK
+(DTypeSig true "perfSinkOn" (TyApp (TyCon "Ref") (TyCon "Bool")))
+(DFunDef false "perfSinkOn" () (EApp (EVar "Ref") (EVar "False")))
+(DTypeSig false "perfSinkLines" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "perfSinkLines" () (EApp (EVar "Ref") (EListLit)))
+(DTypeSig false "emitTimerLine" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
+(DFunDef false "emitTimerLine" ((PVar "line")) (EIf (EUnOp "!" (EVar "perfSinkOn")) (EApp (EApp (EVar "setRef") (EVar "perfSinkLines")) (EBinOp "::" (EVar "line") (EUnOp "!" (EVar "perfSinkLines")))) (EApp (EVar "ePutStrLn") (EVar "line"))))
+(DTypeSig true "takePerfSink" (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "takePerfSink" (PWild) (EBlock (DoLet false false (PVar "ls") (EUnOp "!" (EVar "perfSinkLines"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "perfSinkLines")) (EListLit))) (DoExpr (EApp (EApp (EVar "revLines") (EVar "ls")) (EListLit)))))
+(DTypeSig false "revLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "revLines" ((PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "revLines" ((PCons (PVar "x") (PVar "xs")) (PVar "acc")) (EApp (EApp (EVar "revLines") (EVar "xs")) (EBinOp "::" (EVar "x") (EVar "acc"))))
 (DTypeSig true "perfEnabled" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Bool"))))
 (DFunDef false "perfEnabled" ((PLit LUnit)) (EMatch (EApp (EVar "getEnv") (ELit (LString "MEDAKA_PERF"))) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "statsEnabled" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Bool"))))
 (DFunDef false "statsEnabled" ((PLit LUnit)) (EMatch (EApp (EVar "getEnv") (ELit (LString "MEDAKA_STATS"))) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "emitStat" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyEffect ("IO") None (TyCon "Unit"))))))
 (DFunDef false "emitStat" ((PCon "False") PWild PWild) (ELit LUnit))
-(DFunDef false "emitStat" ((PCon "True") (PVar "label") (PVar "count")) (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[stats] ")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString "\t"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EDictApp "count")))) (ELit (LString "")))))
+(DFunDef false "emitStat" ((PCon "True") (PVar "label") (PVar "count")) (EApp (EVar "emitTimerLine") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[stats] ")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString "\t"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EDictApp "count")))) (ELit (LString "")))))
 (DTypeSig true "emitStats" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyEffect ("IO") None (TyCon "Unit")))))
 (DFunDef false "emitStats" (PWild (PList)) (ELit LUnit))
 (DFunDef false "emitStats" ((PVar "on") (PCons (PTuple (PVar "label") (PVar "count")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "emitStat") (EVar "on")) (EVar "label")) (EDictApp "count"))) (DoExpr (EApp (EApp (EVar "emitStats") (EVar "on")) (EVar "rest")))))
@@ -203,10 +272,10 @@ emitPhaseAO True label elapsed allocDelta ops opDelta =
 (DFunDef false "now" ((PLit LUnit)) (EApp (EVar "wallTimeSec") (ELit LUnit)))
 (DTypeSig true "emitPhase" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "Float") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))))
 (DFunDef false "emitPhase" ((PCon "False") PWild PWild PWild) (ELit LUnit))
-(DFunDef false "emitPhase" ((PCon "True") (PVar "label") (PVar "elapsed") (PVar "ops")) (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[perf] ")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString "\t"))) (EApp (EMethodRef "display") (EApp (EVar "floatToString") (EVar "elapsed")))) (ELit (LString "s\t"))) (EApp (EMethodRef "display") (EVar "ops"))) (ELit (LString "")))))
+(DFunDef false "emitPhase" ((PCon "True") (PVar "label") (PVar "elapsed") (PVar "ops")) (EApp (EVar "emitTimerLine") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[perf] ")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString "\t"))) (EApp (EMethodRef "display") (EApp (EVar "floatToString") (EVar "elapsed")))) (ELit (LString "s\t"))) (EApp (EMethodRef "display") (EVar "ops"))) (ELit (LString "")))))
 (DTypeSig true "emitTotal" (TyFun (TyCon "Bool") (TyFun (TyCon "Float") (TyEffect ("IO") None (TyCon "Unit")))))
 (DFunDef false "emitTotal" ((PCon "False") PWild) (ELit LUnit))
-(DFunDef false "emitTotal" ((PCon "True") (PVar "elapsed")) (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "[perf] total\t")) (EApp (EVar "floatToString") (EVar "elapsed"))) (ELit (LString "s")))))
+(DFunDef false "emitTotal" ((PCon "True") (PVar "elapsed")) (EApp (EVar "emitTimerLine") (EBinOp "++" (EBinOp "++" (ELit (LString "[perf] total\t")) (EApp (EVar "floatToString") (EVar "elapsed"))) (ELit (LString "s")))))
 (DTypeSig true "totalDecls" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyVar "a")))) (TyCon "Int")))
 (DFunDef false "totalDecls" ((PList)) (ELit (LInt 0)))
 (DFunDef false "totalDecls" ((PCons (PTuple PWild (PVar "ds")) (PVar "rest"))) (EBinOp "+" (EApp (EVar "countList") (EVar "ds")) (EApp (EVar "totalDecls") (EVar "rest"))))
@@ -217,7 +286,7 @@ emitPhaseAO True label elapsed allocDelta ops opDelta =
 (DFunDef false "allocSnap" ((PLit LUnit)) (EApp (EVar "allocBytes") (ELit LUnit)))
 (DTypeSig true "emitTotalA" (TyFun (TyCon "Bool") (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyEffect ("IO") None (TyCon "Unit"))))))
 (DFunDef false "emitTotalA" ((PCon "False") PWild PWild) (ELit LUnit))
-(DFunDef false "emitTotalA" ((PCon "True") (PVar "elapsed") (PVar "allocTotal")) (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[perf] total\t")) (EApp (EMethodRef "display") (EApp (EVar "floatToString") (EVar "elapsed")))) (ELit (LString "s\t"))) (EApp (EMethodRef "display") (EApp (EVar "floatToString") (EBinOp "/" (EVar "allocTotal") (ELit (LFloat 1048576.0)))))) (ELit (LString "MB\t")))))
+(DFunDef false "emitTotalA" ((PCon "True") (PVar "elapsed") (PVar "allocTotal")) (EApp (EVar "emitTimerLine") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[perf] total\t")) (EApp (EMethodRef "display") (EApp (EVar "floatToString") (EVar "elapsed")))) (ELit (LString "s\t"))) (EApp (EMethodRef "display") (EApp (EVar "floatToString") (EBinOp "/" (EVar "allocTotal") (ELit (LFloat 1048576.0)))))) (ELit (LString "MB\t")))))
 (DTypeSig true "emitPhaseAO" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyEffect ("IO") None (TyCon "Unit")))))))))
 (DFunDef false "emitPhaseAO" ((PCon "False") PWild PWild PWild PWild PWild) (ELit LUnit))
-(DFunDef false "emitPhaseAO" ((PCon "True") (PVar "label") (PVar "elapsed") (PVar "allocDelta") (PVar "ops") (PVar "opDelta")) (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[perf] ")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString "\t"))) (EApp (EMethodRef "display") (EApp (EVar "floatToString") (EVar "elapsed")))) (ELit (LString "s\t"))) (EApp (EMethodRef "display") (EApp (EVar "floatToString") (EBinOp "/" (EVar "allocDelta") (ELit (LFloat 1048576.0)))))) (ELit (LString "MB\t"))) (EApp (EMethodRef "display") (EVar "ops"))) (ELit (LString "\t"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "opDelta")))) (ELit (LString "")))))
+(DFunDef false "emitPhaseAO" ((PCon "True") (PVar "label") (PVar "elapsed") (PVar "allocDelta") (PVar "ops") (PVar "opDelta")) (EApp (EVar "emitTimerLine") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[perf] ")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString "\t"))) (EApp (EMethodRef "display") (EApp (EVar "floatToString") (EVar "elapsed")))) (ELit (LString "s\t"))) (EApp (EMethodRef "display") (EApp (EVar "floatToString") (EBinOp "/" (EVar "allocDelta") (ELit (LFloat 1048576.0)))))) (ELit (LString "MB\t"))) (EApp (EMethodRef "display") (EVar "ops"))) (ELit (LString "\t"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "opDelta")))) (ELit (LString "")))))

@@ -60,7 +60,7 @@ import support.util.{
 }
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omFromNames}
 import support.path.{baseOf, chopExt, joinPath}
-import support.timer.{perfEnabled, now, emitPhase, emitTotal}
+import support.timer.{perfEnabled, now, emitPhase, emitTotal, perfSinkOn}
 import string.{toInt}
 import frontend.ast.{Decl(..), Expr(..), Loc(..), Pat, LetBind(..)}
 import frontend.parser.{
@@ -111,6 +111,8 @@ import driver.diagnostics.{
   cjDiagnostic,
   cjFileEntry,
   cjAllToJson,
+  flushRunEnvelope,
+  pendingStaleNotice,
   readDiagSrc,
   parseErrCode,
   parseErrHelpFix,
@@ -303,19 +305,63 @@ sourceStalenessVerdict _ =
       None => None
       Some live => if live == baked then None else Some compilerDir
 
-checkSourceStaleness : Unit -> <IO> Unit
-checkSourceStaleness _ = match sourceStalenessVerdict ()
+-- C4 (docs/ops/CLI-CONFORMANCE.md §4): `run --json` is the ONE invocation whose
+-- MACHINE channel is stderr — `run`'s stdout belongs to the user program — and
+-- this warning is written to stderr.  Emitting it as prose there corrupts the
+-- envelope; SILENCING it would hide a stale binary from every MCP/LSP consumer,
+-- a severity INCREASE dressed as a fix ([W-QUIETER]).  So on that one path the
+-- verdict is DEFERRED into `pendingStaleNotice` and rides INSIDE the envelope
+-- as a `staleBinary` field — the same shape `attachStaleness` already uses for
+-- MCP results.  Every `run --json` arm that leaves WITHOUT an envelope flushes
+-- it back out as prose (`runAbort`), so it is relocated on every path, dropped
+-- on none.
+--
+-- MEDAKA_STRICT keeps its hard stop and keeps printing prose: it exits before
+-- any envelope can exist, so prose is the only channel there is.
+checkSourceStaleness : List String -> <IO> Unit
+checkSourceStaleness argv = match sourceStalenessVerdict ()
   None => ()
   Some compilerDir =>
     let msg = "warning: this ./medaka was built from compiler source that differs from " ++ compilerDir ++ " — it may be stale; rebuild with 'make medaka'."
     if envOr "MEDAKA_STRICT" "" /= "" then
       let _ = ePutStrLn msg
       exit 1
-    else ePutStrLn msg
+    else if runJsonInvocation argv then pendingStaleNotice := Some msg else ePutStrLn msg
+
+-- Is this argv `medaka run … --json …`?  The predicate is deliberately the
+-- BYTE-IDENTICAL one `runRunCmd` uses to compute its own `jsonMode`
+-- (`hasFlag "--json"` over the whole post-verb argv, program passthrough args
+-- included).  If the two ever disagreed, a deferred notice would be staged for
+-- an invocation that never emits an envelope — i.e. suppression — so they are
+-- kept the same predicate on purpose, imprecision included.
+runJsonInvocation : List String -> Bool
+runJsonInvocation ("run"::rest) = hasFlag "--json" rest
+runJsonInvocation _ = False
+
+-- Print a deferred staleness notice as prose and clear it.  Called from every
+-- exit that is NOT the envelope: `run`'s error arms (via `runAbort`) and
+-- `dispatchSub`'s `--help`.  A no-op whenever nothing was deferred.
+flushStaleNoticeProse : Unit -> <IO> Unit
+flushStaleNoticeProse _ = match !pendingStaleNotice
+  None => ()
+  Some msg =>
+    pendingStaleNotice := None
+    ePutStrLn msg
+
+-- `run`'s error exit: report `msg` and leave with 1, first flushing any
+-- deferred staleness prose.  These arms emit human diagnostics rather than the
+-- JSON envelope even under `--json` (pre-existing; see the report's Notes), so
+-- one more prose line is not a channel regression — whereas losing the warning
+-- would be.
+runAbort : String -> <IO> Unit
+runAbort msg =
+  let _ = flushStaleNoticeProse ()
+  let _ = ePutStrLn msg
+  exit 1
 
 main : <IO> Unit
 main =
-  let _ = checkSourceStaleness ()
+  let _ = checkSourceStaleness (args ())
   runCli ()
 
 runCli : Unit -> <IO> Unit
@@ -358,9 +404,11 @@ runCli _ = match args ()
 -- to `medaka run prog.mdk --help`).
 dispatchSub : String -> (List String -> <IO> Unit) -> List String -> <IO> Unit
 dispatchSub help _ ("--help"::_) =
+  let _ = flushStaleNoticeProse ()
   let _ = putStrLn help
   exit 0
 dispatchSub help _ ("-h"::_) =
+  let _ = flushStaleNoticeProse ()
   let _ = putStrLn help
   exit 0
 dispatchSub _ run rest = run rest
@@ -1348,13 +1396,13 @@ assertFmtOneMode argv = match fmtModeConflict argv
 runFmtArgs : List String -> <IO> Unit
 runFmtArgs argv = match parseFmtArgs argv FmtCheck []
   Err msg =>
-    -- C2/C3: an unrecognized flag exits 1, like every other verb's.  The
-    -- `no .mdk files found` / bare-usage exit 2 below is C3's, slice S-3.
+    -- C2/C3: an unrecognized flag exits 1, like every other verb's -- as do
+    -- the bare-usage and `no .mdk files found` arms below (C3: 2 is RESERVED).
     let _ = ePutStrLn msg
     exit 1
   Ok (_, []) =>
     let _ = ePutStrLn "Usage: medaka fmt [--check | --stdout | --write] <path>..."
-    exit 2
+    exit 1
   -- `listDir` Err = literal file (EXACT original single-file behavior); Ok =
   -- a directory, recursively expanded.
   Ok (mode, [target]) => match listDir target
@@ -1367,13 +1415,13 @@ runFmtArgs argv = match parseFmtArgs argv FmtCheck []
 fmtManyTargets : FmtMode -> List String -> <IO> Unit
 fmtManyTargets FmtStdout _ =
   let _ = ePutStrLn "medaka fmt: --stdout requires exactly one file"
-  exit 2
+  exit 1
 fmtManyTargets mode targets =
   let files = flatMap expandLintTarget targets
   match files
     [] =>
       let _ = ePutStrLn "medaka fmt: no .mdk files found"
-      exit 2
+      exit 1
     _ =>
       let (hadErr, changed) = fmtFilesGo mode files (False, 0)
       let _ = match mode
@@ -1467,7 +1515,7 @@ fmtOne : FmtMode -> String -> <IO> Unit
 fmtOne mode file = match readFile file
   Err msg =>
     let _ = ePutStrLn "\{file}: \{msg}"
-    exit 2
+    exit 1
   -- PARSE-ERROR-LOCATION Stage 1: surface a located parse error before
   -- formatSource's panicking `parse` fires a bare `parse error`.
   Ok src => match parseResult src
@@ -1486,7 +1534,7 @@ fmtOne mode file = match readFile file
         else match writeFile file formatted
           Err msg =>
             let _ = ePutStrLn "\{file}: \{msg}"
-            exit 2
+            exit 1
           Ok _ => putStrLn "formatted 1 file"
 
 -- ── codemod ────────────────────────────────────────────────────────────────
@@ -1530,42 +1578,59 @@ codemodHelpText = stringConcat
 runCodemodCmd : List String -> <IO> Unit
 runCodemodCmd [] = listCodemodsAndExit ()
 runCodemodCmd (name::rest) = match findCodemod name
+  -- C3/C4: an unrecognized first token used to produce ONE message — "unknown
+  -- codemod '<tok>'" — for two different mistakes, and `medaka codemod <dir>`
+  -- got the wrong one: a path was read as a codemod NAME, so a directory (empty
+  -- or not) was reported as a typo'd codemod rather than as the missing name it
+  -- is.  Discriminate on whether the token names something on disk.  Note this
+  -- is deliberately NOT an emptiness check: `medaka codemod src/` is the SAME
+  -- mistake whether or not `src/` holds `.mdk` files, and reporting "no .mdk
+  -- files found" for a full directory would be a lie.  Both arms land on
+  -- (stderr, 1) with the usage listing.
   None =>
-    let _ = ePutStrLn "medaka codemod: unknown codemod '\{name}'"
+    let _ = if lintTargetExists name then
+        ePutStrLn "medaka codemod: missing codemod name — '\{name}' is a path, and a codemod name must come first"
+      else
+        ePutStrLn "medaka codemod: unknown codemod '\{name}'"
     listCodemodsAndExit ()
   Some cm => match splitCodemodArgv rest CmDry [] []
     Err msg =>
       let _ = ePutStrLn msg
-      exit 2
+      exit 1
     Ok (mode, cargs, targets) => match codemodMk cm cargs
       Err msg =>
         let _ = ePutStrLn "medaka codemod \{name}: \{msg}"
-        exit 2
+        exit 1
       Ok xf =>
         let files = flatMap expandLintTarget targets
         match files
           [] =>
             let _ = ePutStrLn "medaka codemod: no .mdk files found"
-            exit 2
+            exit 1
           _ => match mode
             CmStdout => match files
               [one] => codemodStdout xf (codemodWarnDecls cm cargs) one
               _ =>
                 let _ = ePutStrLn "medaka codemod: --stdout requires exactly one file"
-                exit 2
+                exit 1
             _ =>
               if codemodFilesGo mode xf (codemodWarnDecls cm cargs) files False then
                 exit 1
               else
                 ()
 
+-- C4: every caller of this is an ERROR path (bare `medaka codemod`, or a first
+-- token that is neither a known codemod nor usable as one), so the usage block
+-- is a diagnostic, not an answer — stderr, not stdout.  `medaka codemod --help`
+-- is handled upstream by `dispatchSub` and still prints help to stdout at exit
+-- 0, which is where the "listing as an answer" case lives.
 listCodemodsAndExit : Unit -> <IO> Unit
 listCodemodsAndExit _ =
-  let _ = putStrLn "Usage: medaka codemod <name> [flags] [--write|--stdout] <paths...>"
-  let _ = putStrLn ""
-  let _ = putStrLn "Available codemods:"
-  let _ = putStrLn codemodListing
-  exit 2
+  let _ = ePutStrLn "Usage: medaka codemod <name> [flags] [--write|--stdout] <paths...>"
+  let _ = ePutStrLn ""
+  let _ = ePutStrLn "Available codemods:"
+  let _ = ePutStrLn codemodListing
+  exit 1
 
 -- Split the post-name argv into (mode, codemod-flags, paths).  --write/--stdout
 -- are consumed as modes; any other `--flag` is a codemod flag that consumes the
@@ -1612,7 +1677,7 @@ codemodStdout : (Decl -> (Decl, Bool)) -> (List Decl -> List String) -> String -
 codemodStdout xf warnFn file = match readFile file
   Err msg =>
     let _ = ePutStrLn "\{file}: \{msg}"
-    exit 2
+    exit 1
   Ok src => match codemodSource xf src
     Err e =>
       let _ = ePutStrLn (ppParseError src file e)
@@ -1685,8 +1750,8 @@ runNewCmd [arg] =
   else
     if stringLength arg > 0 && stringSlice 0 1 arg == "-" then
       -- C2: one wording, and the REJECTION exits 1.  `new` takes no flags at
-      -- all, so its known set is empty.  (The bare `medaka new` usage-error
-      -- exit 2 below is C3's convergence, slice S-3, not this one's.)
+      -- all, so its known set is empty.  (The bare `medaka new` usage error
+      -- below exits 1 too -- C3's convergence, no verb exits 2.)
       let _ = ePutStrLn (unknownFlagErr "new" arg [])
       let _ = ePutStrLn newUsageLine
       exit 1
@@ -1695,7 +1760,7 @@ runNewCmd [arg] =
       if code == 0 then () else exit code
 runNewCmd _ =
   let _ = ePutStrLn newUsageLine
-  exit 2
+  exit 1
 
 -- ── build ─────────────────────────────────────────────────────────────────
 -- Mirrors bin/main.ml's `build` arm (Build_cmd.run) + build_main.mdk: parse
@@ -2169,8 +2234,15 @@ finishBuildArgs _ _ _ = Err "error: medaka build takes exactly one input file"
 -- eval/main_not_value.mdk`'s `.json.out` golden moves from caret art to a
 -- `Diag` JSON envelope (`test/diff_compiler_eval_json.sh`, re-captured) — that
 -- was the bug (#1236 defect 3), not a blessed behaviour to preserve.
-finishRunEval : String -> Bool -> (List Decl, List (String, List Decl)) -> List (String, List Decl) -> List (String, String, List Diag) -> <IO> Unit
-finishRunEval target jsonMode elaborated mods cohWarns =
+-- `postPerf` closes over the caller's phase timestamps and emits the `eval` and
+-- `total` `[perf]` lines.  It is a PARAMETER, not something the caller runs
+-- afterwards, because under `--json` those lines are buffered into the envelope
+-- (C4) and the envelope is flushed on the next line — a caller emitting them
+-- after this function returned would stage them into an already-drained sink
+-- and lose them.  Under plain `run` it is the same two calls in the same order,
+-- just one stack frame in.
+finishRunEval : String -> Bool -> (List Decl, List (String, List Decl)) -> List (String, List Decl) -> List (String, String, List Diag) -> (Unit -> <IO> Unit) -> <IO> Unit
+finishRunEval target jsonMode elaborated mods cohWarns postPerf =
   -- 0.1.0 main-shape warning: elaborateModules already ran over the WHOLE graph,
   -- so mainSchemeRef is already populated — no extra typecheck pass needed.
   let mainWarns = match lastModPair mods
@@ -2193,6 +2265,8 @@ finishRunEval target jsonMode elaborated mods cohWarns =
   currentEvalFile := target
   runJsonMode := jsonMode
   let _ = putStr (runProgramOutput (fst elaborated) (snd elaborated))
+  -- The `eval`/`total` timings, BEFORE the envelope — see `postPerf`'s note.
+  let _ = postPerf ()
   -- Reached only when the program did NOT panic (`panic` is a noreturn C abort), so
   -- this and `runtimePanic`'s merge are mutually exclusive — the envelope is emitted
   -- exactly once, never twice and never zero times.
@@ -2208,11 +2282,13 @@ finishRunEval target jsonMode elaborated mods cohWarns =
     [] => ()
     _::_ => exit 1
 
+-- C4: the envelope now also carries whatever the two deferred human writers
+-- staged (`staleBinary`, `perf`), so the emptiness test moved INTO
+-- `flushRunEnvelope` — "no diagnostics" is no longer the same question as
+-- "nothing to say".  With neither notice staged the bytes are unchanged.
 flushPendingRunDiags : Bool -> <IO> Unit
 flushPendingRunDiags False = ()
-flushPendingRunDiags True = match !pendingRunDiags
-  [] => ()
-  ts => ePutStrLn (cjAllToJson ts)
+flushPendingRunDiags True = flushRunEnvelope !pendingRunDiags
 
 runHelpText : String
 runHelpText = stringConcat
@@ -2238,15 +2314,30 @@ runHelpText = stringConcat
 runBoolFlags : List String
 runBoolFlags = ["--json", "--allow-internal", "--release"]
 
+-- The `eval` + `total` phase lines, as a named partially-applied function so the
+-- deeply-indented `finishRunEval` call sites stay one flat line.  `finishRunEval`
+-- runs this itself, immediately before flushing the envelope — see its `postPerf`
+-- note for why the caller must not run it afterwards.
+runEvalPerf : Bool -> String -> Float -> Float -> Unit -> <IO> Unit
+runEvalPerf perfOn target perfT0 perfTCheck _ =
+  let perfTEval = now ()
+  let _ = emitPhase perfOn "eval" (perfTEval - perfTCheck) target
+  emitTotal perfOn (perfTEval - perfT0)
+
 runRunCmd : List String -> <IO> Unit
 runRunCmd argv =
   let perfOn = perfEnabled ()
   let perfT0 = now ()
   let jsonMode = hasFlag "--json" argv
+  -- C4: under `--json` stderr is this verb's MACHINE channel, so `MEDAKA_PERF`'s
+  -- `[perf]` lines must not be written to it as prose.  Arm `timer.mdk`'s sink
+  -- and they are buffered instead, then folded into the ONE envelope as a `perf`
+  -- array ([W-QUIETER]: routed, not silenced).  Disarmed for plain `run`, which
+  -- is what `profile_compiler.sh` and the perf gates invoke.
+  perfSinkOn := (jsonMode && perfOn)
   match dropFlags argv
     [] =>
-      let _ = ePutStrLn "usage: medaka run [--release] [--json] <file.mdk>"
-      exit 1
+      runAbort "usage: medaka run [--release] [--json] <file.mdk>"
     -- #219: a leading-`-` token `dropFlags` didn't recognize (e.g. `-e`) used
     -- to fall through as the entry `target`, so the loader rejected it as
     -- "unknown module: -e" — a message that sends the reader debugging a
@@ -2262,8 +2353,7 @@ runRunCmd argv =
       -- `--`-shaped or not (`medaka run argv.mdk -- --foo` must still deliver
       -- ["--", "--foo"]), so `run` must NOT route its whole argv through
       -- `assertCliFlags` the way the other verbs do.
-      let _ = ePutStrLn (unknownFlagErr "run" target runBoolFlags)
-      exit 1
+      runAbort (unknownFlagErr "run" target runBoolFlags)
     target::progArgs =>
       let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
       let rtPath = root ++ "/stdlib/runtime.mdk"
@@ -2277,12 +2367,10 @@ runRunCmd argv =
       progArgsRef := progArgs
       match readPreludeFile rtPath
         Err msg =>
-          let _ = ePutStrLn msg
-          exit 1
+          runAbort msg
         Ok rsrc => match readPreludeFile corePath
           Err msg =>
-            let _ = ePutStrLn msg
-            exit 1
+            runAbort msg
           -- Parse the user modules with parseLocated (real ELoc spans) so a
           -- runtime error (E-*) can report a correct file:L:C.  Plain loadProgram
           -- uses placeholder-loc `parse`, which collapses every span to 1:0.
@@ -2294,16 +2382,14 @@ runRunCmd argv =
           -- unaffected.
           Ok csrc => match parseResult (readFileSafe target)
             Err e =>
-              let _ = ePutStrLn (ppParseError (readFileSafe target) target e)
-              exit 1
+              runAbort (ppParseError (readFileSafe target) target e)
             -- #186/#1360: keep the loader's per-module PATHS instead of dropping
             -- them at the load site.  They were already being carried here and
             -- discarded one line later, which is why every imported module's
             -- resolve error had to fall back to the entry file's path.
             Ok _ => match loadProgramFilesLocatedE (_ => None) target roots
               Err lerr =>
-                let _ = ePutStrLn (moduleLoadErrText (readFileSafe target) target stdlibDir lerr)
-                exit 1
+                runAbort (moduleLoadErrText (readFileSafe target) target stdlibDir lerr)
               Ok modsWithPath =>
                 let mods = map dropModPath modsWithPath
                 let pathMap = map modIdToPath modsWithPath
@@ -2359,13 +2445,9 @@ runRunCmd argv =
                         let elaborated = elaborateModules rtD coreD modsD
                         let perfTCheck = now ()
                         let _ = emitPhase perfOn "check" (perfTCheck - perfTLoad) target
-                        let _ = finishRunEval target jsonMode elaborated mods (cohWarnTriples tsrc target diags)
-                        let perfTEval = now ()
-                        let _ = emitPhase perfOn "eval" (perfTEval - perfTCheck) target
-                        emitTotal perfOn (perfTEval - perfT0)
+                        finishRunEval target jsonMode elaborated mods (cohWarnTriples tsrc target diags) (runEvalPerf perfOn target perfT0 perfTCheck)
                       _ =>
-                        let _ = ePutStrLn (joinNl (map (ppDiagCliLines (srcLinesArr tsrc) target) errs))
-                        exit 1
+                        runAbort (joinNl (map (ppDiagCliLines (srcLinesArr tsrc) target) errs))
                   _ =>
                     -- Multi-module: gate on `locatedProjectErrors` — the SAME
                     -- analyzeProject predicate `checkRoute`'s multi-module arm uses —
@@ -2389,8 +2471,7 @@ runRunCmd argv =
                       -- errors-only accessor discarded (see its own note).
                       "" => match locatedProjectDiags allowInternal trusted target roots rsrc csrc
                         (Some errText, _, _) =>
-                          let _ = ePutStrLn errText
-                          exit 1
+                          runAbort errText
                         (None, projWarns, _) =>
                           let _ = resetTypeErrorsSticky ()
                           let elaborated = elaborateModules rtD coreD modsD
@@ -2398,18 +2479,13 @@ runRunCmd argv =
                             True =>
                               -- Belt-and-braces: anything only the emit/eval
                               -- elaboration can see still aborts before eval.
-                              let _ = ePutStrLn (locatedOrGeneric allowInternal trusted target roots rsrc csrc)
-                              exit 1
+                              runAbort (locatedOrGeneric allowInternal trusted target roots rsrc csrc)
                             False =>
                               let perfTCheck = now ()
                               let _ = emitPhase perfOn "check" (perfTCheck - perfTLoad) target
-                              let _ = finishRunEval target jsonMode elaborated mods projWarns
-                              let perfTEval = now ()
-                              let _ = emitPhase perfOn "eval" (perfTEval - perfTCheck) target
-                              emitTotal perfOn (perfTEval - perfT0)
+                              finishRunEval target jsonMode elaborated mods projWarns (runEvalPerf perfOn target perfT0 perfTCheck)
                       _ =>
-                        let _ = ePutStrLn resDiags
-                        exit 1
+                        runAbort resDiags
 -- G1 (SOUNDNESS): typecheck the WHOLE module graph and abort before
 -- eval on ANY type error.  elaborateModules route-stamps via the
 -- per-module typecheck (checkModuleFullImpl), which pushes into the
@@ -2812,17 +2888,21 @@ cliTestReportJson path typeError runs props tests typecheckSkipped =
     ([("file", JString path)] ++ cliTypeErrorField typeError ++ cliTypecheckSkippedField typecheckSkipped ++ [("doctests", cliDoctestsJson (cliPrimaryDoctestRun runs)), ("properties", jArray (map cliPropJson props)), ("tests", jArray (map cliTestJson tests)), ("summary", jObject [("passed", JInt (runPassed (cliPrimaryDoctestRun runs) + cliCountPassProps props + cliCountPassTests tests)), ("failed", JInt (runFailed (cliPrimaryDoctestRun runs) + runErrors (cliPrimaryDoctestRun runs) + cliCountFailProps props + cliCountFailTests tests)), ("ok", JBool (cliTestReportOk typeError runs props tests))])])
 
 -- Directory/project/multi-target path: expand every target to concrete .mdk
--- files (SAME walk as lint/fmt), then run+aggregate. An empty resolved set
--- (empty dir, or a dir with no .mdk files) is reported and left at exit 0 —
--- "nothing to test" is not a failure, mirroring runTest's own vacuous-pass
--- convention for a single zero-doctest file.
+-- files (SAME walk as lint/fmt), then run+aggregate.  C3
+-- (docs/ops/CLI-CONFORMANCE.md §3): an empty resolved set (empty dir, or a dir
+-- with no .mdk files) is a USAGE ERROR — `(stderr, 1)`, the ONE pair every verb
+-- now uses for "no .mdk files found" — and no longer the vacuous exit-0 pass it
+-- used to be.  A test command that ran zero tests and exited 0 is precisely the
+-- "didn't run looks like passed" failure the test arc exists to close.
+-- `runTest`'s single-file zero-doctest pass is a DIFFERENT case and unchanged:
+-- there a file was resolved and examined, and it had nothing to assert.
 runTestManyTargets : List Engine -> Int -> Option String -> List String -> <IO> Unit
 runTestManyTargets engines cases filterOpt targets =
   let files = flatMap expandLintTarget targets
   match files
     [] =>
-      let _ = putStrLn "medaka test: no .mdk files found"
-      ()
+      let _ = ePutStrLn "medaka test: no .mdk files found"
+      exit 1
     _ =>
       let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
       let rtPath = root ++ "/stdlib/runtime.mdk"
@@ -2969,8 +3049,13 @@ runCheckPolicyArgs argv = match parsePolicyArgs argv
             -- runCheckPolicy forces the accepted-plugin evaluation before it
             -- returns, so an evaluation panic cannot leak an acceptance verdict.
             match runCheckPolicy rsrc csrc tsrc allow fn
+              -- C4 (docs/ops/CLI-CONFORMANCE.md §4): stdout carries the ANSWER,
+              -- stderr everything else.  The ACCEPT report is the answer and
+              -- stays on stdout; the REJECTION report is the reason for a
+              -- nonzero exit — a diagnostic — and moves to stderr, where every
+              -- sibling verb already reports failure.  Exit code unchanged.
               PolicyReject report =>
-                let _ = putStr report
+                let _ = ePutStr report
                 exit 1
               PolicyAccept report => putStr report
 
@@ -3107,6 +3192,14 @@ runLintCmd argv0 =
   let fileArgs = lintTargets argv
   let _ = assertLintTargetsExist fileArgs
   let files = resolveLintTargets fileArgs
+  -- C3 (docs/ops/CLI-CONFORMANCE.md §3): `lint`'s empty-target cell was the
+  -- worst of the three — it printed NOTHING and exited 0, so a directory that
+  -- resolved to no .mdk files was byte-indistinguishable from a clean lint of a
+  -- real corpus.  Converge on the one pair every verb uses: (stderr, 1).  This
+  -- sits BEFORE the `--json` branch deliberately: a machine consumer must learn
+  -- that its target set was empty too, and an error on stderr leaves stdout's
+  -- one-JSON-document rule intact (C4).
+  let _ = assertLintTargetsNonEmpty files
   -- The stdlib reference index: every exported stdlib name with its DECLARED
   -- signature, for the rules that ask what the stdlib actually provides.  Built
   -- exactly ONCE per `medaka lint` invocation and threaded down — a rule's
@@ -3328,6 +3421,17 @@ lintTargetExists t = match listDir t
   Ok _ => True
   Err _ => fileExists t
 
+-- C3's "found nothing is a failure" arm for `lint`, mirroring `fmt`'s and
+-- `codemod`'s wording exactly so the three verbs answer the empty case with one
+-- message as well as one (stream, code) pair.  Distinct from
+-- `assertLintTargetsExist`, which rejects a target that does not exist at all:
+-- this one fires when every named target DID exist and simply held no `.mdk`.
+assertLintTargetsNonEmpty : List String -> <IO> Unit
+assertLintTargetsNonEmpty (_::_) = ()
+assertLintTargetsNonEmpty [] =
+  let _ = ePutStrLn "medaka lint: no .mdk files found"
+  exit 1
+
 assertLintTargetsExist : List String -> <IO> Unit
 assertLintTargetsExist [] = ()
 assertLintTargetsExist targets =
@@ -3525,7 +3629,7 @@ lintFileFresh idx target src hash wantOccs =
     decls,
   )
 
--- Fix a single file in-place.  Returns True only on I/O error (write errors exit 2).
+-- Fix a single file in-place.  Returns True only on I/O error (write errors exit 1).
 lintOneFileFix : List String -> List String -> String -> <IO> Bool
 lintOneFileFix onlyNames disableNames target = match readFile target
   Err msg =>
@@ -3540,7 +3644,7 @@ lintOneFileFix onlyNames disableNames target = match readFile target
     else match writeFile target newSrc
       Err msg =>
         let _ = ePutStrLn "\{target}: \{msg}"
-        let _ = exit 2
+        let _ = exit 1
         True
       Ok _ =>
         let _ = putStrLn "fixed \{intToString n} finding(s) in \{target}"

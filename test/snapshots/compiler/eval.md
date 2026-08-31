@@ -1,5 +1,5 @@
 # META
-source_lines=4369
+source_lines=4383
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, port of lib/eval.ml's tree-walking
@@ -77,7 +77,13 @@ import backend.private_mangle.{mangleCtorCollisions}
 -- CHANNEL-DESIGN.md Fork C). diagnostics.mdk sits above frontend/types in the
 -- pipeline and does not import eval.mdk (no cycle) — verified by grep before
 -- adding this import.
-import driver.diagnostics.{Diag(..), Severity(..), cjAllToJson}
+import driver.diagnostics.{
+  Diag(..),
+  Severity(..),
+  cjAllToJsonWith,
+  flushRunEnvelope,
+  runEnvelopeFields,
+}
 -- The uint64 limb library the RNG/hash externs are built on lives in stdlib
 -- (`bits64`) now — the compiler is a first-class consumer of it (issue #223).
 -- It exports only a `U64` type ALIAS over a tuple, so the import drags no new
@@ -2586,7 +2592,8 @@ updateEvalLoc (Loc f sl sc el ec)
 -- formatted INTO the panic string here (Fork B option iii).  The text prefix
 -- mirrors resolve.mdk's ppResErrorLocatedF: `file:L:C:` with a 0-based column.
 -- Stage 4: when `runJsonMode` is set, format the SAME `Diag` through the
--- exact `cjAllToJson` serializer `medaka check --json` uses (driver.diagnostics),
+-- exact serializer `medaka check --json` uses (driver.diagnostics'
+-- `cjAllToJsonWith`, which is `cjAllToJson` plus C4's envelope notices),
 -- so the envelope ({"files":[{"file":...,"diagnostics":[{code,kind,message,
 -- range,severity,source}]}]}) is byte-shape-identical to a compile-time
 -- diagnostic. `cjRangeOfLoc` ignores its `src` argument (range comes purely
@@ -2605,7 +2612,7 @@ runtimePanic code msg = match !currentEvalLoc
       -- error ride ONE envelope (see that Ref's note).  Empty on every path that did
       -- not stage anything, which makes this byte-identical to the old single-triple
       -- call for every fixture that has no warning.
-      panic "\{fmtSentinel}\{cjAllToJson (!pendingRunDiags ++ [(ff, "", [diag])])}"
+      panic "\{fmtSentinel}\{cjAllToJsonWith (runEnvelopeFields ()) (!pendingRunDiags ++ [(ff, "", [diag])])}"
     else panic "\{fmtSentinel}\{ff}:\{intToString sl}:\{intToString sc}: runtime error [\{code}]: \{msg}"
 
 -- 0x01 marker (see runtimePanic / mdk_panic): a preformatted runtime diagnostic
@@ -4105,8 +4112,15 @@ pSleepMsIO _ = panic "sleepMs: expected Int"
 -- @mdk_exit — a real process exit with the given code. (mdk_exit itself now
 -- also flushes the run-stdout stash first — see its comment in
 -- runtime/medaka_rt.c — so output printed before the exit call is not lost.)
-pExit : Value e -> <e> Value e
+pExit : Value e -> <Stderr | e> Value e
 pExit (VInt n) =
+  -- C4: a user program that calls `exit` mid-run is the ONE path to process
+  -- exit that reaches NEITHER envelope emitter (`flushPendingRunDiags` needs
+  -- `runProgramOutput` to return; `runtimePanic` needs a panic).  Flush here so
+  -- a `run --json` staleness/perf notice is RELOCATED into the envelope rather
+  -- than dropped ([W-QUIETER]).  No-op unless `--json` armed it, and no-op when
+  -- there is nothing staged, so every other caller is byte-identical.
+  let _ = if !runJsonMode then flushRunEnvelope (!pendingRunDiags) else ()
   let _ = exit n
   VUnit
 pExit _ = panic "exit: not an Int"
@@ -4377,7 +4391,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false))))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "mangleCtorCollisions" false))))
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "Severity" true) (mem "cjAllToJson" false))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "Severity" true) (mem "cjAllToJsonWith" false) (mem "flushRunEnvelope" false) (mem "runEnvelopeFields" false))))
 (DUse false (UseGroup ("bits64") ((mem "add64" false) (mem "sub64" false) (mem "mulLow64" false) (mem "xor64" false) (mem "shr64" false) (mem "mod64" false) (mem "ofInt" false) (mem "isZero" false) (mem "limbAt" false))))
 (DData Public "Value" ("e") ((variant "VInt" (ConPos (TyCon "Int"))) (variant "VFloat" (ConPos (TyCon "Float"))) (variant "VString" (ConPos (TyCon "String"))) (variant "VChar" (ConPos (TyCon "String"))) (variant "VBool" (ConPos (TyCon "Bool"))) (variant "VUnit" (ConPos)) (variant "VTuple" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VList" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VArray" (ConPos (TyApp (TyCon "Array") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VCon" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VRecord" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VRef" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VClosure" (ConPos (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (variant "VClosureF" (ConPos (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VPrim" (ConPos (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VMulti" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VThunk" (ConPos (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VFallthrough" (ConPos)) (variant "VTypedImpl" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int") (TyApp (TyCon "Value") (TyVar "e")))) (variant "VDict" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))) ())
 (DData Public "EvalEnv" ("v") ((variant "EvalEnv" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyVar "v")))))))) ())
@@ -5270,7 +5284,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "updateEvalLoc" (TyFun (TyCon "Loc") (TyCon "Unit")))
 (DFunDef false "updateEvalLoc" ((PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec"))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "sl") (ELit (LInt 1))) (EBinOp "==" (EVar "sc") (ELit (LInt 0)))) (EBinOp "==" (EVar "el") (ELit (LInt 1)))) (EBinOp "==" (EVar "ec") (ELit (LInt 0)))) (ELit LUnit) (EIf (EVar "otherwise") (EApp (EApp (EVar "setRef") (EVar "currentEvalLoc")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "runtimePanic" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyVar "a"))))
-(DFunDef false "runtimePanic" ((PVar "code") (PVar "msg")) (EMatch (EUnOp "!" (EVar "currentEvalLoc")) (arm (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")) () (EBlock (DoLet false false (PVar "ff") (EIf (EBinOp "==" (EVar "f") (ELit (LString ""))) (EUnOp "!" (EVar "currentEvalFile")) (EVar "f"))) (DoExpr (EIf (EUnOp "!" (EVar "runJsonMode")) (EBlock (DoLet false false (PVar "diag") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (EVar "code")) (EVar "msg")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "ff")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec")))) (EVar "None")) (EVar "None"))) (DoExpr (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "fmtSentinel"))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "cjAllToJson") (EBinOp "++" (EUnOp "!" (EVar "pendingRunDiags")) (EListLit (ETuple (EVar "ff") (ELit (LString "")) (EListLit (EVar "diag")))))))) (ELit (LString "")))))) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "fmtSentinel"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "ff"))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "sl")))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "sc")))) (ELit (LString ": runtime error ["))) (EApp (EVar "display") (EVar "code"))) (ELit (LString "]: "))) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))))))))
+(DFunDef false "runtimePanic" ((PVar "code") (PVar "msg")) (EMatch (EUnOp "!" (EVar "currentEvalLoc")) (arm (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")) () (EBlock (DoLet false false (PVar "ff") (EIf (EBinOp "==" (EVar "f") (ELit (LString ""))) (EUnOp "!" (EVar "currentEvalFile")) (EVar "f"))) (DoExpr (EIf (EUnOp "!" (EVar "runJsonMode")) (EBlock (DoLet false false (PVar "diag") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (EVar "code")) (EVar "msg")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "ff")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec")))) (EVar "None")) (EVar "None"))) (DoExpr (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "fmtSentinel"))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EApp (EVar "cjAllToJsonWith") (EApp (EVar "runEnvelopeFields") (ELit LUnit))) (EBinOp "++" (EUnOp "!" (EVar "pendingRunDiags")) (EListLit (ETuple (EVar "ff") (ELit (LString "")) (EListLit (EVar "diag")))))))) (ELit (LString "")))))) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "fmtSentinel"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "ff"))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "sl")))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "sc")))) (ELit (LString ": runtime error ["))) (EApp (EVar "display") (EVar "code"))) (ELit (LString "]: "))) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))))))))
 (DTypeSig false "fmtSentinel" (TyCon "String"))
 (DFunDef false "fmtSentinel" () (ELit (LString "\u{01}")))
 (DTypeSig false "appendOutput" (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
@@ -5764,8 +5778,8 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "pSleepMsIO" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("Clock") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pSleepMsIO" ((PCon "VInt" (PVar "n"))) (EBlock (DoLet false false PWild (EApp (EVar "sleepMs") (EVar "n"))) (DoExpr (EVar "VUnit"))))
 (DFunDef false "pSleepMsIO" (PWild) (EApp (EVar "panic") (ELit (LString "sleepMs: expected Int"))))
-(DTypeSig false "pExit" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "pExit" ((PCon "VInt" (PVar "n"))) (EBlock (DoLet false false PWild (EApp (EVar "exit") (EVar "n"))) (DoExpr (EVar "VUnit"))))
+(DTypeSig false "pExit" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("Stderr") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
+(DFunDef false "pExit" ((PCon "VInt" (PVar "n"))) (EBlock (DoLet false false PWild (EIf (EUnOp "!" (EVar "runJsonMode")) (EApp (EVar "flushRunEnvelope") (EUnOp "!" (EVar "pendingRunDiags"))) (ELit LUnit))) (DoLet false false PWild (EApp (EVar "exit") (EVar "n"))) (DoExpr (EVar "VUnit"))))
 (DFunDef false "pExit" (PWild) (EApp (EVar "panic") (ELit (LString "exit: not an Int"))))
 (DTypeSig false "pAllocBytesIO" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("IO") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pAllocBytesIO" (PWild) (EApp (EVar "VFloat") (EApp (EVar "allocBytes") (ELit LUnit))))
@@ -5862,7 +5876,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false))))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "mangleCtorCollisions" false))))
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "Severity" true) (mem "cjAllToJson" false))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "Severity" true) (mem "cjAllToJsonWith" false) (mem "flushRunEnvelope" false) (mem "runEnvelopeFields" false))))
 (DUse false (UseGroup ("bits64") ((mem "add64" false) (mem "sub64" false) (mem "mulLow64" false) (mem "xor64" false) (mem "shr64" false) (mem "mod64" false) (mem "ofInt" false) (mem "isZero" false) (mem "limbAt" false))))
 (DData Public "Value" ("e") ((variant "VInt" (ConPos (TyCon "Int"))) (variant "VFloat" (ConPos (TyCon "Float"))) (variant "VString" (ConPos (TyCon "String"))) (variant "VChar" (ConPos (TyCon "String"))) (variant "VBool" (ConPos (TyCon "Bool"))) (variant "VUnit" (ConPos)) (variant "VTuple" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VList" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VArray" (ConPos (TyApp (TyCon "Array") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VCon" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VRecord" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VRef" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VClosure" (ConPos (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (variant "VClosureF" (ConPos (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VPrim" (ConPos (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VMulti" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VThunk" (ConPos (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VFallthrough" (ConPos)) (variant "VTypedImpl" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int") (TyApp (TyCon "Value") (TyVar "e")))) (variant "VDict" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))) ())
 (DData Public "EvalEnv" ("v") ((variant "EvalEnv" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyVar "v")))))))) ())
@@ -6755,7 +6769,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "updateEvalLoc" (TyFun (TyCon "Loc") (TyCon "Unit")))
 (DFunDef false "updateEvalLoc" ((PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec"))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "sl") (ELit (LInt 1))) (EBinOp "==" (EVar "sc") (ELit (LInt 0)))) (EBinOp "==" (EVar "el") (ELit (LInt 1)))) (EBinOp "==" (EVar "ec") (ELit (LInt 0)))) (ELit LUnit) (EIf (EVar "otherwise") (EApp (EApp (EVar "setRef") (EVar "currentEvalLoc")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "runtimePanic" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyVar "a"))))
-(DFunDef false "runtimePanic" ((PVar "code") (PVar "msg")) (EMatch (EUnOp "!" (EVar "currentEvalLoc")) (arm (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")) () (EBlock (DoLet false false (PVar "ff") (EIf (EBinOp "==" (EVar "f") (ELit (LString ""))) (EUnOp "!" (EVar "currentEvalFile")) (EVar "f"))) (DoExpr (EIf (EUnOp "!" (EVar "runJsonMode")) (EBlock (DoLet false false (PVar "diag") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (EVar "code")) (EVar "msg")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "ff")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec")))) (EVar "None")) (EVar "None"))) (DoExpr (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "fmtSentinel"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "cjAllToJson") (EBinOp "++" (EUnOp "!" (EVar "pendingRunDiags")) (EListLit (ETuple (EVar "ff") (ELit (LString "")) (EListLit (EVar "diag")))))))) (ELit (LString "")))))) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "fmtSentinel"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "ff"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "sl")))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "sc")))) (ELit (LString ": runtime error ["))) (EApp (EMethodRef "display") (EVar "code"))) (ELit (LString "]: "))) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))))))))
+(DFunDef false "runtimePanic" ((PVar "code") (PVar "msg")) (EMatch (EUnOp "!" (EVar "currentEvalLoc")) (arm (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")) () (EBlock (DoLet false false (PVar "ff") (EIf (EBinOp "==" (EVar "f") (ELit (LString ""))) (EUnOp "!" (EVar "currentEvalFile")) (EVar "f"))) (DoExpr (EIf (EUnOp "!" (EVar "runJsonMode")) (EBlock (DoLet false false (PVar "diag") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (EVar "code")) (EVar "msg")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "ff")) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec")))) (EVar "None")) (EVar "None"))) (DoExpr (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "fmtSentinel"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EApp (EVar "cjAllToJsonWith") (EApp (EVar "runEnvelopeFields") (ELit LUnit))) (EBinOp "++" (EUnOp "!" (EVar "pendingRunDiags")) (EListLit (ETuple (EVar "ff") (ELit (LString "")) (EListLit (EVar "diag")))))))) (ELit (LString "")))))) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "fmtSentinel"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "ff"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "sl")))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "sc")))) (ELit (LString ": runtime error ["))) (EApp (EMethodRef "display") (EVar "code"))) (ELit (LString "]: "))) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))))))))
 (DTypeSig false "fmtSentinel" (TyCon "String"))
 (DFunDef false "fmtSentinel" () (ELit (LString "\u{01}")))
 (DTypeSig false "appendOutput" (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
@@ -7249,8 +7263,8 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "pSleepMsIO" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("Clock") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pSleepMsIO" ((PCon "VInt" (PVar "n"))) (EBlock (DoLet false false PWild (EApp (EVar "sleepMs") (EVar "n"))) (DoExpr (EVar "VUnit"))))
 (DFunDef false "pSleepMsIO" (PWild) (EApp (EVar "panic") (ELit (LString "sleepMs: expected Int"))))
-(DTypeSig false "pExit" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "pExit" ((PCon "VInt" (PVar "n"))) (EBlock (DoLet false false PWild (EApp (EVar "exit") (EVar "n"))) (DoExpr (EVar "VUnit"))))
+(DTypeSig false "pExit" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("Stderr") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
+(DFunDef false "pExit" ((PCon "VInt" (PVar "n"))) (EBlock (DoLet false false PWild (EIf (EUnOp "!" (EVar "runJsonMode")) (EApp (EVar "flushRunEnvelope") (EUnOp "!" (EVar "pendingRunDiags"))) (ELit LUnit))) (DoLet false false PWild (EApp (EVar "exit") (EVar "n"))) (DoExpr (EVar "VUnit"))))
 (DFunDef false "pExit" (PWild) (EApp (EVar "panic") (ELit (LString "exit: not an Int"))))
 (DTypeSig false "pAllocBytesIO" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect ("IO") (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pAllocBytesIO" (PWild) (EApp (EVar "VFloat") (EApp (EVar "allocBytes") (ELit LUnit))))

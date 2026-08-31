@@ -90,6 +90,7 @@ import support.util.{
   filterList,
   contains,
 }
+import support.timer.{takePerfSink}
 import json.{Json, JInt, JString, JArray, JNull, jObject, stringify}
 
 -- ── types ──────────────────────────────────────────────────────────────────
@@ -1268,8 +1269,66 @@ cjTriple (path, src, diags) = cjFileEntry path src diags
 -- Needs sources for whole-doc range fallback.
 export
 cjAllToJson : List (String, String, List Diag) -> String
-cjAllToJson triples = stringify (jObject
-  [("files", JArray (arrayFromList (map cjTriple triples)))])
+cjAllToJson triples = cjAllToJsonWith [] triples
+
+-- `cjAllToJson` plus caller-supplied top-level fields, appended AFTER "files"
+-- so the schema every existing consumer reads is unchanged and the extras are
+-- purely additive.  C4 (docs/ops/CLI-CONFORMANCE.md §4): `medaka run --json`'s
+-- machine channel is STDERR (its stdout belongs to the user program), which it
+-- shares with two human-readable writers — `MEDAKA_PERF=1`'s `[perf]` lines and
+-- the `[B-STDERR]` staleness warning.  Those writers are ROUTED INTO this
+-- envelope, never silenced: suppressing the staleness warning under `--json`
+-- would make a stale binary invisible to every machine consumer, which is a
+-- severity INCREASE ([W-QUIETER]), not a fix.  Same shape as `attachStaleness`
+-- (compiler/tools/mcp.mdk), which already splices a `staleBinary` field onto an
+-- MCP tool result rather than inventing a second channel.
+export
+cjAllToJsonWith : List (String, Json) -> List (String, String, List Diag) -> String
+cjAllToJsonWith extra triples =
+  stringify (jObject
+    ([("files", JArray (arrayFromList (map cjTriple triples)))] ++ extra))
+
+-- ── run --json envelope notices ─────────────────────────────────────────────
+-- Staged here rather than in eval.mdk (which owns `pendingRunDiags`) because
+-- BOTH envelope emitters must see them and only one of them is in eval.mdk:
+-- the clean-exit flush lives in medaka_cli.mdk (`flushPendingRunDiags`) and the
+-- runtime-panic one in eval.mdk (`runtimePanic`).  driver.diagnostics is the
+-- module both already import, and putting them here adds no top-level binding
+-- to a LEG-A-golden module.
+--
+-- Both are set ONLY on the `run --json` path; every other verb and every
+-- non-JSON `run` leaves them empty and its output byte-identical.
+
+-- The `[B-STALENESS]` verdict, deferred so it lands INSIDE the envelope instead
+-- of ahead of it as prose.  `None` = fresh binary (or not `run --json`).
+export
+pendingStaleNotice : Ref (Option String)
+pendingStaleNotice = Ref None
+
+-- The extra top-level envelope fields the deferred notices amount to: the
+-- staleness verdict staged above, plus whatever `MEDAKA_PERF=1` buffered into
+-- `support.timer`'s sink (verbatim `[perf]` lines — the identical strings the
+-- consumer would have seen on stderr, just inside the document).  Empty when
+-- neither fired ⇒ the envelope is byte-identical to today's.
+export
+runEnvelopeFields : Unit -> <e> List (String, Json)
+runEnvelopeFields _ =
+  let staleF = match !pendingStaleNotice
+    None => []
+    Some msg => [("staleBinary", JString msg)]
+  let perfF = match takePerfSink ()
+    [] => []
+    ls => [("perf", JArray (arrayFromList (map (l => JString l) ls)))]
+  staleF ++ perfF
+
+-- Emit the ONE `run --json` envelope on stderr — or nothing at all when there
+-- is nothing to say (no diagnostics AND no notices), which keeps a clean run on
+-- a fresh binary byte-identical to before this convention landed.
+export
+flushRunEnvelope : List (String, String, List Diag) -> <Stderr | e> Unit
+flushRunEnvelope triples = match (triples, runEnvelopeFields ())
+  ([], []) => ()
+  (ts, extra) => ePutStrLn (cjAllToJsonWith extra ts)
 
 -- Read each file's source for the range fallback.  On read error, use "" so
 -- diagnostics still serialize (the error itself is in the diag list).
