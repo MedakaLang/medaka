@@ -8,6 +8,10 @@
 --     -> types.typecheck.elaborateModules  (REAL core.mdk prelude + dict-passing)
 --     -> ir.core_ir_lower.lowerProgramEmit
 --     -> ir.dce.dceFilter  (prunes the real prelude to reached decls)
+--     -> backend.wasm_reach.wasmReachFilter  (#2359: drops the impl bodies —
+--        and the plain bindings only they reached — that no dispatchable method
+--        name in this program can reach; see that module's header for the exact
+--        notion of reachable)
 --     -> backend.wasm_emit.emitProgram
 --
 -- so typeclass dispatch flows through the REAL `core.mdk` prelude (Eq/Ord/Num/
@@ -43,6 +47,7 @@ import ir.core_ir_lower.{
 }
 import ir.dce.{dceFilter}
 import backend.wasm_emit.{emitProgram, makeWasmEmitInputWithFfi}
+import backend.wasm_reach.{wasmReachFilter}
 import entries.entry_support.{driveModules, runEmitWith}
 
 main : <IO> Unit
@@ -63,4 +68,4 @@ emitTail runtimeDecls coreD modules2 =
   let allDecls = dceFilter allDecls0
   let _ = preludeReturnPosDictNames coreD allDecls ++ preludeArgPosDictNames coreD allDecls ++ constrainedSigNames allDecls
   let input = makeWasmEmitInputWithFfi (methodIfaceTable allDecls) (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls) (ctorFieldTypeNames allDecls) (mainTypeIsFloat ()) (declaredRecordFieldOrders allDecls) (validateFfiExternTypeNames (checkedFfiExternTypeNamesModules modules2))
-  putStr (emitProgram input (lowerProgramEmit allDecls))
+  putStr (emitProgram input (wasmReachFilter (lowerProgramEmit allDecls)))
