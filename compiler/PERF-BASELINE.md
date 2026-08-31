@@ -54,24 +54,24 @@ percent. A larger drift is a finding, not something to smooth over.
 ## Table
 
 host: Linux 6.12.95+deb13-amd64 x86_64
-sha: ce504eee58f0f9848c1abf40792d9b6750b192da
+sha: eceac4d32fb54113d8601e7b5eb547c842426816
 timer: gnu (/usr/bin/time -v)
-load:  08:37:28 up 48 days, 11:08,  7 users,  load average: 1.35, 4.11, 3.47
+load:  06:41:17 up 49 days,  9:12,  5 users,  load average: 0.26, 0.41, 0.65
 N=3 warm runs (min-of-N, 1 discarded warm-up); cold = first invocation, no warm-up
 Ir runs: cachegrind --cache-sim=no --branch-sim=no, GC_INITIAL_HEAP_SIZE=1073741824 pinned
 
 | verb  | workload | cold  | warm  | co-metric   | RSS |
 |-------|----------|-------|-------|-------------|-----|
-| new   | hello   | 0.01s | 0.01s | bytes=20480 | 7MB |
+| new   | hello   | 0.02s | 0.01s | bytes=20480 | 7MB |
 | new   | project | 0.01s | 0.01s | bytes=20480 | 7MB |
-| check | hello   | 0.12s | 0.1s | Ir=625431278 | 18MB |
-| check | project | 0.5s | 0.47s | Ir=3044719683 | 43MB |
-| build | hello   | 0.73s | 0.83s | Ir=621128808 | 92MB |
-| build | project | 1.64s | 1.73s | Ir=3375080908 | 96MB |
-| run   | hello   | 0.14s | 0.13s | Ir=844785956 | 27MB |
-| run   | project | 0.57s | 0.56s | Ir=3672111497 | 43MB |
-| test  | hello   | 0.1s | 0.1s | Ir=606358888 | 18MB |
-| test  | project | 0.28s | 0.33s | Ir=1982497117 | 34MB |
+| check | hello   | 0.1s | 0.1s | Ir=607787726 | 18MB |
+| check | project | 0.46s | 0.45s | Ir=3008239029 | 34MB |
+| build | hello   | 0.83s | 0.78s | Ir=431905906 | 92MB |
+| build | project | 1.65s | 1.64s | Ir=3158252907 | 96MB |
+| run   | hello   | 0.13s | 0.11s | Ir=650344791 | 19MB |
+| run   | project | 0.68s | 0.57s | Ir=3454138342 | 43MB |
+| test  | hello   | 0.08s | 0.07s | Ir=417422466 | 19MB |
+| test  | project | 0.32s | 0.3s | Ir=1785035950 | 36MB |
 
 **Note on `build`'s `cold` column:** this run does not empty S-2's
 persistent rt-object-cache ($MEDAKA_CACHE_DIR / $XDG_CACHE_HOME/medaka /
