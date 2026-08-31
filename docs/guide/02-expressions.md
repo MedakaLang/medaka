@@ -144,7 +144,8 @@ list = let nums : List Int = [1, 2, 3] in if True then nums else []
 
 Lowercase names in a signature are type variables — they stand for "any type", and the
 function must work for all of them. A constraint before `=>` narrows that to "any type
-that implements this interface", which is the subject of chapter 5.
+that implements this interface", which is the subject of
+[chapter 5](05-interfaces.md).
 
 ```medaka
 identityOf : a -> a
@@ -178,5 +179,5 @@ quiet please
 Effects get their own chapter later; for now it is enough to know that the row is part
 of the type and is checked like the rest of it.
 
-Next up is chapter 3, functions — defining behavior, matching on arguments, and
-composing the results.
+Next up is [chapter 3, functions](03-functions.md) — defining behavior, matching on
+arguments, and composing the results.
