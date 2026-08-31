@@ -836,8 +836,8 @@ while IFS= read -r f; do
       # the help/parse-arm agreement this gate asserts.
       add 'diff_compiler_cli_help_conformance'
       # #2354 (F1): the same file holds every verb's unknown-flag rejection arm
-      # AND the `assertCliFlags` call sites the reject-floor gate derives its
-      # covered set from, so a change here moves both of that gate's inputs.
+      # AND the `requireArgs <verb>ArgSpec` call sites the reject-floor gate derives
+      # its covered set from, so a change here moves both of that gate's inputs.
       add 'diff_compiler_cli_reject_floor'
       add 'diff_compiler_analyze_project' ;;
     compiler/tools/lint*.mdk)      add 'diff_compiler_lint*' ;;
