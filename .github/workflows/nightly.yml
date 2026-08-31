@@ -140,55 +140,6 @@ jobs:
           job-name: "perf_scaling DEEP (the N=16000 bands ci.yml cannot afford)"
           gate-label: "perf_scaling DEEP"
 
-  # NOTE: this gate ALSO runs at merge tier (test/gates.toml, shard "gates_2") — the
-  # earlier N1 (cost-above-threshold) citation for demoting it off merge was factually
-  # wrong (its own baseline cost is ~11s, nowhere near pole-worthy) and was reverted.
-  # Whether this nightly copy is redundant duplication worth dropping is an open
-  # question for Val, not decided here (F5, tier-three-charter end-of-sprint review).
-  eval-scaling:
-    name: "eval_scaling (interpreter O(n^2) detector — #887, nightly)"
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    permissions:
-      contents: read
-      issues: write
-      actions: read
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup medaka (toolchain + build)
-        uses: ./.github/actions/setup-medaka
-        with:
-          binary: build
-
-      - name: Build the oracle eval_scaling needs
-        run: FORCE=1 sh test/build_oracles.sh --for 'diff_compiler_eval_scaling'
-
-      # ⚠️ NIGHTLY-ONLY, DELIBERATELY (PERF-CI-COVERAGE.md §4 P3). The interpreter is
-      # not on the `medaka build` critical path, so this is lower per-PR value than
-      # the front-end/backend perf_scaling gate. It runs BOTH interpreters
-      # (compiler/eval/eval.mdk tree-walker + compiler/ir/core_ir_eval.mdk Core-IR
-      # evaluator) over tail-recursion / list-builder / big-match shapes and grades
-      # the DETERMINISTIC signals only — allocation (primary) + op-count (secondary,
-      # with a self-draining ledger for the Core-IR lowering O(arms^2) it surfaced).
-      # No wall-time arm: the interpreters' latency is super-linear-by-construction on
-      # deep recursion (see the gate header), which would be a permanent false-red.
-      #
-      # PLAIN pass/fail: a RED means either a NEW interpreter quadratic landed, or the
-      # ledgered Core-IR lowering quadratic (dedupHeads) was FIXED and needs promoting
-      # out of KNOWN_SLOW_OPS — read the failing row before touching the ledger.
-      - name: eval_scaling (both interpreters, deterministic metrics)
-        env:
-          MEDAKA_ROOT: ${{ github.workspace }}
-        run: sh test/diff_compiler_eval_scaling.sh
-
-      - name: File or update the known-red issue on failure
-        if: failure() || cancelled()
-        uses: ./.github/actions/file-nightly-red
-        with:
-          job-name: "eval_scaling (interpreter O(n^2) detector — #887, nightly)"
-          gate-label: "eval_scaling"
-
   # Charter clause: N4 (docs/ops/CI-ARCHITECTURE.md §3.6 — advisory / non-blocking by construction — files a finding rather than gating the diff).
   fuzz-diff:
     name: fuzz_diff (bounded nightly sweep; findings are FILED, not failed)
@@ -826,6 +777,17 @@ jobs:
       # approve pull requests"), a repo/org policy that a job-level
       # `pull-requests: write` grant does not override. So this job's ceiling
       # is landing a branch, never opening the PR itself.
+      #
+      # ⚠️ Do NOT try to add `workflows: write` here to make this job push
+      # ci.yml. There is no such permission key — the valid set is actions,
+      # artifact-metadata, attestations, checks, code-quality, contents,
+      # deployments, discussions, id-token, issues, packages, pages,
+      # pull-requests, security-events, statuses, vulnerability-alerts. The
+      # `workflow` scope exists only for PATs and App tokens, so pushing
+      # ci.yml from CI would mean storing a long-lived credential that can
+      # rewrite this repo's merge authority. test/gate_cost_collect.sh
+      # therefore lands DATA ONLY and leaves `make gen-ci` to the human who
+      # opens the PR (who must exist anyway, per the paragraph above).
       contents: write
       # issues: write + actions: read — needed by the file-nightly-red
       # composite action (S-autoadvance-notify, #2181 deliverable 2): it
