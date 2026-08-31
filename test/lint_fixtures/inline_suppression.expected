@@ -4,5 +4,4 @@ warning: [rule-dead-code] private top-level 'take' is unreachable from exports/m
 warning: [rule-match-on-param] function 'describe' matches on parameter 'm' — use a multi-clause function definition
 warning: [rule-missing-signature] top-level 'classify' has no type signature. Add a `classify : …` declaration
 warning: [rule-missing-signature] top-level 'describe' has no type signature. Add a `describe : …` declaration
-warning: [rule-missing-signature] top-level 'take' has no type signature. Add a `take : …` declaration
-warning: [rule-stdlib-reimpl] top-level 'take' shadows a stdlib function — use the stdlib version
+warning: [rule-stdlib-reimpl] top-level 'take' reimplements stdlib 'list.take' (same declared signature) — use the stdlib version

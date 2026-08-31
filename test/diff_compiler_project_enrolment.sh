@@ -34,7 +34,12 @@
 #   CI         some ci.yml shard pattern resolves to a gate under `<project>/test/`.
 #   PREFLIGHT  a changed file under `<project>/` derives at least one gate, every
 #              derived gate lives under `<project>/test/` (except the named
-#              UNIVERSAL_GATES below), and it produces no UNMAPPED and no FULL line.
+#              UNIVERSAL_GATES or a graph-derived EXTRA gate, both below), and it
+#              produces no UNMAPPED and no FULL line.
+#   REACH      preflight's shell-derived project-graph set agrees with `./medaka
+#              gate reach --json`'s canonical answer, on one representative path
+#              per project plus the parsec→sqlite dependency case. This is the
+#              FOURTH assertion — see "THE GRAPH EXCEPTION" below.
 #
 # THE ONE EXCEPTION. `UNIVERSAL_GATES` (in the PREFLIGHT leg) names gates that are
 # repo-wide by design — they scan the whole tracked tree and have no per-file
@@ -45,9 +50,24 @@
 # mechanism — a stray gate that is stray for any other reason must still fail this
 # leg, which is the whole point of the check.
 #
+# THE GRAPH EXCEPTION. preflight's generic project arm now also widens across the
+# project GRAPH: a dependency edge (from a manifest's `[dependencies]`, e.g.
+# sqlite depends on parsec) runs the CONSUMER's gates when the DEPENDENCY changes,
+# and a corpus edge (from `test/gates.toml`'s `corpus =`/`project =` fields, e.g.
+# `wasm/diff_gzip` reads the `gzip` project's fixtures) runs that gate on ANY
+# change to the project whose corpus it consumes — not just a change under that
+# project's own `test/`. So "outside `<project>/test/`" is no longer proof of
+# drift by itself; EXTRA_MAP (below) computes, from the SAME manifests and
+# `test/gates.toml` fields, which extra gates are legitimate for each project, and
+# the stray check subtracts those before judging. A gate that is stray for any
+# OTHER reason still fails.
+#
 # The PREFLIGHT leg deliberately RUNS preflight rather than reading its source: the
 # thing that matters is the derivation's OUTPUT, and a gate that greps for a case
-# arm would be a fourth hand-maintained copy of the map it is policing.
+# arm would be a fourth hand-maintained copy of the map it is policing. EXTRA_MAP
+# is a tolerance list, not a second source of truth — the REACH leg is what
+# actually polices preflight's derivation against the canonical `medaka gate
+# reach` answer.
 #
 # Usage:  sh test/diff_compiler_project_enrolment.sh
 # Exit:   0 every project is enrolled in all three; 1 a project is missing one.
@@ -67,6 +87,84 @@ if [ -z "$PROJECTS" ]; then
   echo "      derivation broke, not that enrolment is perfect — refusing to certify."
   exit 1
 fi
+
+# ── EXTRA_MAP: "<project> <extra-gate-or-test-prefix>" pairs the PREFLIGHT leg's
+# stray check tolerates — derived from manifests' `[dependencies]` and
+# `test/gates.toml`'s `corpus =`/`project =` fields, the same two sources
+# test/preflight.sh's generic project arm reads. Lines ending in `/test/` are a
+# whole consumer project's gate tree (dependency edge); other lines are one exact
+# gate path (corpus edge).
+EXTRA_MAP="$(python3 - "$ROOT" "$PROJECTS" <<'PY'
+import sys, re, pathlib
+
+root = sys.argv[1]
+projects = sys.argv[2].split()
+
+dep_edges = []  # (consumer, dependency)
+for p in projects:
+    mf = pathlib.Path(root) / p / "medaka.toml"
+    if not mf.exists():
+        continue
+    in_deps = False
+    for line in mf.read_text().splitlines():
+        line = line.strip()
+        if line.startswith('[dependencies]'):
+            in_deps = True
+            continue
+        if line.startswith('['):
+            in_deps = False
+            continue
+        if not in_deps or '=' not in line:
+            continue
+        name = line.split('=', 1)[0].strip()
+        if name:
+            dep_edges.append((p, name))
+
+# corpus edges: gate -> project, only project="compiler" gates (a gate owned by
+# a library project already lives under that project's own test/).
+gt = pathlib.Path(root) / "test" / "gates.toml"
+corpus_edges = []
+cur_name = cur_project = cur_corpus = None
+def flush():
+    if cur_name and cur_project == "compiler" and cur_corpus:
+        for c in cur_corpus:
+            if c in projects:
+                corpus_edges.append((cur_name, c))
+for line in gt.read_text().splitlines():
+    line = line.strip()
+    if line == "[[gate]]":
+        flush()
+        cur_name = cur_project = cur_corpus = None
+        continue
+    if line.startswith('name = "'):
+        cur_name = line[len('name = "'):-1]
+    elif line.startswith('project = "'):
+        cur_project = line[len('project = "'):-1]
+    elif line.startswith('corpus = ['):
+        inner = line[len('corpus = ['):-1]
+        cur_corpus = re.findall(r'"([^"]*)"', inner)
+flush()
+
+def consumers_of(target):
+    seen = {target}
+    changed = True
+    while changed:
+        changed = False
+        for c, d in dep_edges:
+            if d in seen and c not in seen:
+                seen.add(c)
+                changed = True
+    return seen
+
+for p in projects:
+    aff = consumers_of(p)
+    for a in aff:
+        print(f"{p} {a}/test/")
+    for gate, corpus_p in corpus_edges:
+        if corpus_p in aff:
+            print(f"{p} test/{gate}.sh")
+PY
+)"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT INT TERM
@@ -175,6 +273,18 @@ PY
   UNIVERSAL_GATES='test/diff_compiler_source_bytes.sh'
   stray="$(printf '%s\n' "$derived" | grep -v '^$' | grep -v "^$p/test/" \
              | grep -vxF "$UNIVERSAL_GATES" || true)"
+  # Subtract graph-derived EXTRA gates — see "THE GRAPH EXCEPTION" in this
+  # script's header. Lines ending in `/test/` allow a whole consumer project's
+  # gate tree (dependency edge); other lines are one exact corpus-edge gate path.
+  if [ -n "$stray" ]; then
+    extra="$(printf '%s\n' "$EXTRA_MAP" | awk -v p="$p" '$1==p{print $2}')"
+    for ex in $extra; do
+      case "$ex" in
+        */test/) stray="$(printf '%s\n' "$stray" | grep -v "^${ex}" || true)" ;;
+        *)       stray="$(printf '%s\n' "$stray" | grep -vxF "$ex" || true)" ;;
+      esac
+    done
+  fi
   if [ -z "$derived" ]; then
     echo "  PREFLIGHT  FAIL — a change under $p/ derives ZERO gates."
     echo "             Every such change then reads as UNMAPPED to ci.yml's detect job,"
@@ -191,6 +301,59 @@ PY
     fails=$((fails + 1))
   else
     echo "  PREFLIGHT  ok — $(printf '%s\n' "$derived" | grep -c .) gate(s), all under $p/test/ or in the named universal set, no UNMAPPED/FULL"
+  fi
+
+  # ── REACH ──────────────────────────────────────────────────────────────────
+  # The fourth assertion: preflight's shell-derived project-graph set (THE GRAPH
+  # EXCEPTION, above) must agree with `./medaka gate reach --json`'s canonical
+  # answer for the SAME changed path — this is what lets preflight's manifest/
+  # gates.toml reimplementation drift out of sync with the reference without
+  # going unnoticed. Needs a built `./medaka` (this gate runs inside
+  # test/run_gates.sh, after `make medaka`).
+  if [ ! -x "$ROOT/medaka" ]; then
+    echo "  REACH      FAIL — no built $ROOT/medaka (this gate needs one; run_gates.sh builds it first)."
+    fails=$((fails + 1))
+  else
+    reach_json="$(MEDAKA_STRICT=1 "$ROOT/medaka" gate reach --json -- "$p/lib/__enrolment_probe__.mdk" 2>"$WORK/reach.err")"
+    reach_projects="$(printf '%s' "$reach_json" \
+      | python3 -c 'import json,sys
+try:
+    print(" ".join(sorted(json.load(sys.stdin)["projects"])))
+except Exception:
+    pass' 2>/dev/null)"
+    if [ -z "$reach_projects" ]; then
+      echo "  REACH      FAIL — \`medaka gate reach --json -- $p/lib/__enrolment_probe__.mdk\` produced no usable output:"
+      sed 's/^/             /' "$WORK/reach.err"
+      fails=$((fails + 1))
+    else
+      # Build preflight's equivalent project set from $derived: $p itself, every
+      # OTHER project whose test/ prefix shows up (a dependency-edge widening),
+      # and "compiler" if anything else survived the UNIVERSAL_GATES filter (a
+      # corpus edge — `reach` names the gate's OWNING project, "compiler", not
+      # the library project the gate reads, so this is the correct comparison,
+      # not a looser one).
+      shell_set="$p"
+      for pr2 in $PROJECTS; do
+        case "$pr2" in "$p") continue ;; esac
+        printf '%s\n' "$derived" | grep -q "^$pr2/test/" && shell_set="$shell_set $pr2"
+      done
+      other="$(printf '%s\n' "$derived" | grep -v '^$' || true)"
+      for pr2 in $PROJECTS; do
+        other="$(printf '%s\n' "$other" | grep -v "^$pr2/test/" || true)"
+      done
+      other="$(printf '%s\n' "$other" | grep -vxF "$UNIVERSAL_GATES" || true)"
+      [ -n "$other" ] && shell_set="$shell_set compiler"
+      shell_norm="$(printf '%s\n' $shell_set | sort -u | tr '\n' ' ' | sed 's/ *$//')"
+      reach_norm="$(printf '%s\n' $reach_projects | sort -u | tr '\n' ' ' | sed 's/ *$//')"
+      if [ "$shell_norm" != "$reach_norm" ]; then
+        echo "  REACH      FAIL — preflight's derived project set disagrees with \`medaka gate reach\`:"
+        echo "             preflight: $shell_norm"
+        echo "             reach:     $reach_norm"
+        fails=$((fails + 1))
+      else
+        echo "  REACH      ok — preflight agrees with \`medaka gate reach\`: $shell_norm"
+      fi
+    fi
   fi
 done
 

@@ -97,6 +97,13 @@ test: medaka
 	## `medaka test <file>` does. Listed here so `DataEnv`'s doctests (the
 	## deFieldOwnerIdents identity-collision case) actually execute somewhere.
 	./medaka test compiler/types/typecheck.mdk
+	## S-reach-derive (#2179): same reason. `gate reach`'s fail-open rules live in
+	## pure functions with doctests (reachIsFailOpen/reachProjects), and NOTHING
+	## else runs this file's doctests — no gate script invokes `medaka test` on
+	## compiler/tools/*, so without this line the fail-open coverage would be
+	## fixtures that never execute. It also picks up the isProsePath/underDir/
+	## modePartOf doctests already in the file, which were equally unrun.
+	./medaka test compiler/tools/gate_cmd.mdk
 
 ## gates   — the FULL differential gate suite (all 82 test/diff_compiler_*.sh, in
 ##           parallel). Needs `make medaka` AND pre-built oracles:

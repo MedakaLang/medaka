@@ -371,6 +371,99 @@ _projects="$(git -C "$ROOT" ls-files '*medaka.toml' 2>/dev/null \
   | grep -v '^test/' | grep -v '^compiler/' \
   | sed 's|/medaka\.toml$||' | sort -u | tr '\n' ' ')"
 
+# ── PROJECT-GRAPH EDGES (dependency + corpus) ─────────────────────────────────
+#
+# The generic project arm below used to answer "what changed?" with ONLY the
+# changed project's own gates — but a project can be reached transitively two
+# ways, and the arm was blind to both:
+#
+#   DEPENDENCY edge (project → project, from `[dependencies]` in a manifest):
+#   sqlite/medaka.toml declares `parsec = "../parsec"`, so a parsec/ change can
+#   break sqlite's build without touching a single sqlite/ file. The edge runs
+#   the CONSUMER's gates when the DEPENDENCY changes — sqlite's, on a parsec
+#   change, not the reverse.
+#
+#   CORPUS edge (project → gate, from `test/gates.toml`'s `corpus =`/`project =`
+#   fields): a `project = "compiler"` gate whose `corpus` names a library
+#   project (today `wasm/diff_gzip` → `gzip`, `wasm/diff_sqlite` → `sqlite`)
+#   reads that project's fixtures directly, so a change anywhere in that
+#   project must also run the gate — not just a change under its `test/`.
+#
+# Manifests and `test/gates.toml` only, per the FS-derived rule this file
+# already uses for `$_projects` — NOT an import-name grep (`stdlib/byteparser.mdk`
+# collides with project `byteparser/` and would fabricate phantom edges).
+# `./medaka gate reach --json -- <path>` (compiler/tools/gate_cmd.mdk) is the
+# reference implementation these two derivations must agree with; read the
+# manifests/registry directly, as it does, rather than reverse-engineering its
+# source.
+_dep_edges=""     # lines: "<consumer-project> <dependency-project>"
+for _pr in $_projects; do
+  _mf="$ROOT/$_pr/medaka.toml"
+  [ -f "$_mf" ] || continue
+  _in_deps=0
+  while IFS= read -r _ln; do
+    case "$_ln" in
+      '[dependencies]'*) _in_deps=1; continue ;;
+      '['*) _in_deps=0 ;;
+    esac
+    [ "$_in_deps" -eq 1 ] || continue
+    _depname="$(printf '%s\n' "$_ln" | sed -n 's/^\([A-Za-z0-9_-][A-Za-z0-9_-]*\)[[:space:]]*=.*/\1/p')"
+    [ -n "$_depname" ] && _dep_edges="$_dep_edges
+$_pr $_depname"
+  done < "$_mf"
+done
+
+_corpus_edges=""  # lines: "<gate-name> <project>", gate name may contain '/'
+_cur_gate=""
+while IFS= read -r _ln; do
+  case "$_ln" in
+    'name = "'*)
+      _cur_gate="$(printf '%s\n' "$_ln" | sed -n 's/^name = "\(.*\)"$/\1/p')" ;;
+    'corpus = ['*)
+      _cval="$(printf '%s\n' "$_ln" | sed -n 's/^corpus = \[\(.*\)\]$/\1/p')"
+      for _cp in $_projects; do
+        case ",$_cval," in
+          *"\"$_cp\""*) _corpus_edges="$_corpus_edges
+$_cur_gate $_cp" ;;
+        esac
+      done ;;
+  esac
+done < "$ROOT/test/gates.toml"
+
+# Transitive closure over dependency edges only, starting from project $1 —
+# every project reachable by "who consumes this?" hops. Bounded by
+# `$_projects`'s size (six today), so a fixed small number of passes suffices;
+# a pass that adds nothing new stops the loop early.
+_affected_projects() {
+  _ap_seed="$1"
+  _ap_set=" $_ap_seed "
+  _ap_pass=0
+  while [ "$_ap_pass" -lt 8 ]; do
+    _ap_added=0
+    for _ap_pr in $_projects; do
+      case "$_ap_set" in *" $_ap_pr "*) continue ;; esac
+      for _ap_dep in $(printf '%s\n' "$_dep_edges" | awk -v c="$_ap_pr" '$1==c{print $2}'); do
+        case "$_ap_set" in
+          *" $_ap_dep "*) _ap_set="$_ap_set$_ap_pr "; _ap_added=1 ;;
+        esac
+      done
+    done
+    [ "$_ap_added" -eq 1 ] || break
+    _ap_pass=$((_ap_pass + 1))
+  done
+  printf '%s' "$_ap_set"
+}
+
+# Gates from the transitive corpus edges of every project reflected in a
+# space-padded set string (as `_affected_projects` returns).
+_corpus_gates_for_set() {
+  _cg_set="$1"
+  for _cg_pr in $_projects; do
+    case "$_cg_set" in *" $_cg_pr "*) : ;; *) continue ;; esac
+    printf '%s\n' "$_corpus_edges" | awk -v p="$_cg_pr" '$2==p{print $1}'
+  done
+}
+
 # Gates that live-reference changed path $1 — the same direct/one-hop scan
 # `_gates_for_fixture_dir` uses, but keyed on a PATH rather than on a fixture
 # directory, walking the path AND every one of its ancestor directories. Stops
@@ -1078,7 +1171,17 @@ while IFS= read -r f; do
         case "$f" in "$_pr"/*) _proj="$_pr"; break ;; esac
       done
       if [ -n "$_proj" ]; then
-        add "$_proj/test/*"
+        # Widen across the dependency graph (project → project, e.g. a parsec/
+        # change also runs sqlite's gates, since sqlite depends on parsec) and
+        # the corpus graph (project → gate, e.g. it also runs wasm/diff_gzip on
+        # any gzip/ change) — see the "PROJECT-GRAPH EDGES" block above.
+        _proj_set="$(_affected_projects "$_proj")"
+        for _ap in $_proj_set; do
+          add "$_ap/test/*"
+        done
+        for _cg in $(_corpus_gates_for_set "$_proj_set"); do
+          add "$_cg"
+        done
       else
         case "$f" in
           demo/*|playground/*)

@@ -2,4 +2,4 @@ warning: [rule-dead-code] private top-level 'classify' is unreachable from expor
 warning: [rule-dead-code] private top-level 'reverse' is unreachable from exports/main/doctests — remove it (dead code)
 warning: [rule-hand-rolled-derivable] hand-written `impl Eq` for 'Shape' — use `deriving (Eq)`
 warning: [rule-match-on-param] function 'classify' matches on parameter 'n' — use a multi-clause function definition
-warning: [rule-stdlib-reimpl] top-level 'reverse' shadows a stdlib function — use the stdlib version
+warning: [rule-stdlib-reimpl] top-level 'reverse' reimplements stdlib 'list.reverse' (same declared signature) — use the stdlib version

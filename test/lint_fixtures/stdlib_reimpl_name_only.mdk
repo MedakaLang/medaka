@@ -1,0 +1,10 @@
+-- NEGATIVE fixture: an EXACT stdlib name whose declared signature matches none
+-- of that name's stdlib candidates.  `reverse` is declared by array, list and
+-- string; `Matrix -> Matrix` is none of them, so a domain type's own `reverse`
+-- is not a reimplementation of anything and must not be flagged.
+export
+data Matrix = Matrix (List (List Int))
+
+export
+reverse : Matrix -> Matrix
+reverse m = m

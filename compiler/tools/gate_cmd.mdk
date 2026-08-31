@@ -36,6 +36,7 @@
 import toml.{Toml, parse, getString, getArray, getBool, tableCount, tableEntry}
 import json.{Json, JString, JInt, JFloat, JBool, jArray, jObject, stringify}
 import driver.build_cmd.{envOr, defaultMedakaRoot}
+import driver.loader.{readDeps}
 import support.path.{joinPath}
 import tools.gate_cost.{
   GateCost,
@@ -543,6 +544,8 @@ gateHelpText = stringConcat
     "                      [--registry <path>]\n",
     "  medaka gate verify  [--registry <path>]\n",
     "  medaka gate explain <path> [--prose] [--registry <path>]\n",
+    "  medaka gate reach   [<changed-path>...] [--paths-from <file>] [--json]\n",
+    "                      [--registry <path>] [--root <path>]\n",
     "  medaka gate ci      [--check] [--registry <path>] [--workflow <path>]\n",
     "  medaka gate balance [--check] [--registry <path>] [--baseline <path>]\n",
     "  medaka gate budget  [--registry <path>] [--baseline <path>]\n",
@@ -633,6 +636,14 @@ gateHelpText = stringConcat
     "`NONDOC`, and reads no registry. It exists so that\n",
     "test/diff_compiler_prose_classifier.sh can diff this classifier against\n",
     "the one .github/workflows/ci.yml's `detect` job runs (#2200).\n",
+    "\n",
+    "`gate reach <changed-path>...` is the QUEUE's project scoping (#2179):\n",
+    "which projects must run their gates for an entry touching those paths.\n",
+    "A path under <project>/ selects that project, plus every project whose\n",
+    "medaka.toml [dependencies] reaches it, plus the owning project of every\n",
+    "gate whose `corpus` names a selected project. An empty list, a compiler/\n",
+    "or stdlib/ path, and any path no project directory claims all FAIL OPEN\n",
+    "to every project: this command never answers `nothing`.\n",
     "\n",
     "`gate budget` is #2180's governor: text-only, no build. Reds when (a) a\n",
     "schedulable gate has no cost baseline entry, (b) a gate's measured cost\n",
@@ -761,17 +772,18 @@ export
 runGateCmd : List String -> <IO> Unit
 runGateCmd [] =
   emit (Err
-    "usage: medaka gate <list|run|verify|explain|ci|balance|budget> [<selector>...] [--json]")
+    "usage: medaka gate <list|run|verify|explain|reach|ci|balance|budget> [<selector>...] [--json]")
 runGateCmd ("list"::rest) = emit (listOutput rest)
 runGateCmd ("run"::rest) = runRunCmdBody rest
 runGateCmd ("verify"::rest) = verifyCmdBody rest
 runGateCmd ("explain"::rest) = explainCmdBody rest
+runGateCmd ("reach"::rest) = reachCmdBody rest
 runGateCmd ("ci"::rest) = ciCmdBody rest
 runGateCmd ("balance"::rest) = balCmdBody rest
 runGateCmd ("budget"::rest) = budgetCmdBody rest
 runGateCmd (sub::_) =
   emit (Err
-    "medaka gate: unknown subcommand '\{sub}' (expected: list, run, verify, explain, ci, balance, budget)")
+    "medaka gate: unknown subcommand '\{sub}' (expected: list, run, verify, explain, reach, ci, balance, budget)")
 
 -- ── `gate run` ──────────────────────────────────────────────────────────────
 --
@@ -2125,6 +2137,314 @@ explainCmdBody argv = match parseExplainArgs argv ExplainArgs { registry = None,
         Ok src => match parseRegistry src
           Err m => emit (Err "medaka gate explain: \{m}")
           Ok gates => putStr (explainOutput tok gates)
+
+-- ── `gate reach` — which PROJECTS must a queue entry run gates for? ─────────
+--
+-- (#2179, epic #2182.)  `medaka gate reach <changed-path>...` answers the
+-- question the merge queue asks before it narrows anything: given the paths a
+-- queue entry touches, WHICH PROJECTS' gates have to run?  Three rules, and the
+-- fourth line below is the one that keeps the answer safe:
+--
+--   1. DIRECT — a path under `<project>/` selects that project.
+--   2. REVERSE DEPENDENCY — a selected project pulls in every project that
+--      DECLARES it, transitively.  The edges come from the manifests'
+--      `[dependencies]` sections, read with the LOADER's own `readDeps`, which
+--      is the only path a cross-project import resolves through
+--      (`driver/loader.mdk`: `resolveDepFile` consults declared dep names and
+--      nothing else; its `findInRoots` fallback ranges only over the entry's own
+--      dir, its project root, and the stdlib root).  NEVER from import names:
+--      `stdlib/byteparser.mdk` and the project `byteparser/` share a module
+--      name, so a `grep '^import byteparser'` graph invents
+--      `gzip -> byteparser`, `pds -> byteparser`, `sqlite -> byteparser` and
+--      `byteparser -> byteparser` edges no manifest declares.  Dep VALUES are
+--      compared realpath-canonicalized rather than matched by the manifest KEY,
+--      so `parsec = "../parsec"` and `pc = "../parsec"` are ONE edge —
+--      `loader.revLookupRoot` draws exactly the same line for the same reason.
+--   3. CORPUS — a gate whose `corpus` names a PROJECT reads that project's tree
+--      as its fixture corpus (`wasm/diff_gzip` -> `gzip`, `wasm/diff_sqlite` ->
+--      `sqlite`, both owned by `compiler`).  Those are reverse edges no manifest
+--      can show, so a selected corpus project pulls its gates' OWNING project
+--      back in.  Rules 2 and 3 are run to a JOINT fixpoint, not in two passes:
+--      the corpus rule can select a project the dependency rule then widens
+--      from, and stopping after one round of each would be a narrowing whose
+--      correctness depended on today's edge set.
+--
+-- 🚨 FAIL-OPEN IS THE POINT.  An EMPTY changed-path list, a path under
+-- `compiler/` or `stdlib/`, and any path no project directory claims all select
+-- the WHOLE universe.  A narrowing derivation that answers "nothing" on input it
+-- does not understand certifies coverage that never ran — the same reason
+-- `explain`'s layer 1 fails open (design doc §2), and the reason `compiler` is
+-- deliberately NOT a direct-hit directory here: a compiler change is precisely
+-- the change that can break every project's gates at once.
+
+{- | The project that owns the compiler's own gates.  Named rather than
+   inlined because `reach` treats it as a SENTINEL, not as a directory: see the
+   fail-open note above. -}
+compilerProject : String
+compilerProject = "compiler"
+
+-- The non-compiler projects whose directory contains `path`.
+directHits : List String -> String -> List String
+directHits [] _ = []
+directHits (p::ps) path
+  | p == compilerProject = directHits ps path
+  | underDir p path = p :: directHits ps path
+  | otherwise = directHits ps path
+
+concatHits : List String -> List String -> List String
+concatHits _ [] = []
+concatHits univ (path::rest) = directHits univ path ++ concatHits univ rest
+
+allHit : List String -> List String -> Bool
+allHit _ [] = True
+allHit univ (path::rest) = not (isEmptyStrs (directHits univ path))
+  && allHit univ rest
+
+{- | Must the answer for this changed-path list be the WHOLE project universe?
+   True for an empty list, and true as soon as ONE path lies under no project
+   directory — a `compiler/` or `stdlib/` path, a `test/` path, a doc, an
+   absolute path, an empty string.
+
+   > reachIsFailOpen ["a", "b"] []
+   True
+
+   > reachIsFailOpen ["a", "b"] ["a/src/x.mdk"]
+   False
+
+   > reachIsFailOpen ["a", "b", "compiler"] ["compiler/frontend/lexer.mdk"]
+   True
+
+   > reachIsFailOpen ["a", "b"] ["README.md"]
+   True
+
+   > reachIsFailOpen ["a", "b"] ["a/src/x.mdk", ""]
+   True
+
+   > reachIsFailOpen ["a", "b"] ["/etc/passwd"]
+   True -}
+export
+reachIsFailOpen : List String -> List String -> Bool
+reachIsFailOpen univ paths
+  | isEmptyStrs paths = True
+  | otherwise = not (allHit univ paths)
+
+anyIn : List String -> List String -> Bool
+anyIn [] _ = False
+anyIn (x::xs) sel = contains x sel || anyIn xs sel
+
+-- One relation step: every LHS whose RHS meets the current selection.  Used for
+-- BOTH edge kinds — the manifest edges (project -> its declared deps) and the
+-- corpus edges (gate-owning project -> the projects in its `corpus`) are the
+-- same shape and the same rule, so they share one traversal.
+edgeAdds : List (String, List String) -> List String -> List String
+edgeAdds [] _ = []
+edgeAdds ((lhs, rhs)::rest) sel
+  | anyIn rhs sel = lhs :: edgeAdds rest sel
+  | otherwise = edgeAdds rest sel
+
+-- Joint fixpoint over both edge relations.  `fuel` bounds the walk by the size
+-- of the universe: the selection is a subset of it and grows by at least one on
+-- every non-final round, so it cannot loop even on a cyclic edge set.
+closeGo : Int -> List (String, List String) -> List (String, List String) -> List String -> List String
+closeGo fuel deps ces sel
+  | fuel <= 0 = sel
+  | otherwise =
+    let nxt = sortUniqS (sel ++ edgeAdds deps sel ++ edgeAdds ces sel)
+    if listLen nxt == listLen sel then sel else closeGo (fuel - 1) deps ces nxt
+
+{- | The projects a queue entry touching `paths` must run gates for: `univ` is
+   the project universe (every `project` value in the registry), `deps` the
+   manifest edges (project -> the projects it declares), `ces` the registry's
+   corpus edges (gate-owning project -> the projects its `corpus` names).
+   Sorted and deduplicated.
+
+   The one real manifest edge in the committed tree is `sqlite -> parsec`, so a
+   parsec change must run sqlite's gates too — and sqlite is a corpus project, so
+   `compiler` comes back in behind it:
+
+   > reachProjects ["compiler", "gzip", "parsec", "sqlite"] [("sqlite", ["parsec"])] [("compiler", ["gzip", "sqlite"])] ["parsec/src/x.mdk"]
+   ["compiler", "parsec", "sqlite"]
+
+   A project nothing declares selects only itself, plus the owner of any gate
+   whose corpus IS that project:
+
+   > reachProjects ["compiler", "gzip", "parsec", "sqlite"] [("sqlite", ["parsec"])] [("compiler", ["gzip", "sqlite"])] ["gzip/src/x.mdk"]
+   ["compiler", "gzip"]
+
+   > reachProjects ["compiler", "gzip", "parsec", "sqlite"] [("sqlite", ["parsec"])] [] ["gzip/src/x.mdk"]
+   ["gzip"]
+
+   Fail-open: an empty list, a `compiler/` path, an unmapped path and malformed
+   input all select the whole universe rather than erroring or selecting nothing.
+
+   > reachProjects ["compiler", "gzip", "parsec", "sqlite"] [] [] []
+   ["compiler", "gzip", "parsec", "sqlite"]
+
+   > reachProjects ["compiler", "gzip", "parsec", "sqlite"] [] [] ["compiler/frontend/lexer.mdk"]
+   ["compiler", "gzip", "parsec", "sqlite"]
+
+   > reachProjects ["compiler", "gzip", "parsec", "sqlite"] [] [] ["README.md"]
+   ["compiler", "gzip", "parsec", "sqlite"]
+
+   > reachProjects ["compiler", "gzip", "parsec", "sqlite"] [] [] ["gzip/src/x.mdk", ""]
+   ["compiler", "gzip", "parsec", "sqlite"] -}
+export
+reachProjects : List String -> List (String, List String) -> List (String, List String) -> List String -> List String
+reachProjects univ deps ces paths =
+  let all = sortUniqS univ
+  if reachIsFailOpen all paths then
+    all
+  else
+    closeGo (listLen all + 1) deps ces (sortUniqS (concatHits all paths))
+
+-- ── `gate reach`: building the two edge sets from the tree ──────────────────
+
+{- | Every `project` value in the registry, sorted and deduplicated.  DERIVED,
+   never listed: a project enrolled tomorrow appears here the moment its floor
+   gate does ([W-PROJECT-BY-MANIFEST] makes that enrolment mandatory). -}
+export
+projectUniverse : List Gate -> List String
+projectUniverse gs = sortUniqS (map (g => g.project) gs)
+
+{- | The registry's corpus edges as (owning project, the corpus values that name
+   a PROJECT).  A `corpus` naming a fixture directory (`test/…`) is not a project
+   edge and is dropped; a gate left with none contributes no edge at all. -}
+export
+corpusProjectEdges : List String -> List Gate -> List (String, List String)
+corpusProjectEdges _ [] = []
+corpusProjectEdges univ (g::gs) =
+  let cs = filterList (c => contains c univ) g.corpus
+  let rest = corpusProjectEdges univ gs
+  if isEmptyStrs cs then rest else (g.project, cs)::rest
+
+-- realpath-compare one manifest-resolved dep root against each project dir, so
+-- `sqlite/../parsec` and `parsec` are recognised as the same directory.
+projectForRoot : String -> List String -> String -> <IO> Option String
+projectForRoot _ [] _ = None
+projectForRoot root (q::qs) dr =
+  if canonicalizePath (joinPath root q) == canonicalizePath dr then
+    Some q
+  else
+    projectForRoot root qs dr
+
+depRootsOf : List (String, String) -> List String
+depRootsOf [] = []
+depRootsOf ((_, r)::rest) = r :: depRootsOf rest
+
+depProjectsGo : String -> List String -> List String -> <IO> List String
+depProjectsGo _ _ [] = []
+depProjectsGo root univ (dr::rest) = match projectForRoot root univ dr
+  Some q => q :: depProjectsGo root univ rest
+  None => depProjectsGo root univ rest
+
+-- The projects `p`'s own medaka.toml declares in `[dependencies]`.  A dep
+-- pointing outside the project universe (a vendored path, say) is dropped: it
+-- has no gates of its own to run.
+depProjectsOf : String -> List String -> String -> <IO> List String
+depProjectsOf root univ p =
+  sortUniqS (depProjectsGo root univ (depRootsOf (readDeps (joinPath root p))))
+
+{- | The manifest dependency edges over the project universe. -}
+projectDepEdges : String -> List String -> List String -> <IO> List (String, List String)
+projectDepEdges _ _ [] = []
+projectDepEdges root univ (p::ps) =
+  let ds = depProjectsOf root univ p
+  let rest = projectDepEdges root univ ps
+  if isEmptyStrs ds then rest else (p, ds)::rest
+
+renderProjects : List String -> String
+renderProjects [] = ""
+renderProjects (p::ps) = "\{p}\n" ++ renderProjects ps
+
+{- | `--json`: the selection, whether it FAILED OPEN, and the changed-path list
+   it was derived from.  `failOpen` is in the payload because the text rendering
+   deliberately prints names and nothing else (it is read by `grep` and by a
+   shell `for`), and a consumer that cannot tell a derived answer from a
+   widened one cannot tell a narrowing bug from a safe default. -}
+reachJson : Bool -> List String -> List String -> String
+reachJson failOpen paths projects = stringify (jObject [
+    ("projects", jArray (map JString projects)),
+    ("failOpen", JBool failOpen),
+    ("changed", jArray (map JString paths)),
+  ])
+  ++ "\n"
+
+data ReachArgs =
+  | ReachArgs {
+      registry : Option String,
+      root : Option String,
+      json : Bool,
+      pathsFrom : Option String,
+      paths : List String,
+    }
+
+-- `--` ends flag parsing, so ANY string can be handed over as a path: a changed
+-- path the classifier does not understand must fail OPEN (below), and that
+-- promise would be worth nothing if a leading `-` could turn it into exit 1.
+parseReachArgs : List String -> ReachArgs -> Result String ReachArgs
+parseReachArgs [] acc = Ok ReachArgs { acc | paths = reverseL acc.paths }
+parseReachArgs ("--"::rest) acc =
+  Ok ReachArgs { acc | paths = reverseL acc.paths ++ rest }
+parseReachArgs ("--registry"::p::rest) acc =
+  parseReachArgs rest ReachArgs { acc | registry = Some p }
+parseReachArgs ("--registry"::[]) _ =
+  Err "medaka gate reach: --registry needs a path"
+parseReachArgs ("--root"::p::rest) acc =
+  parseReachArgs rest ReachArgs { acc | root = Some p }
+parseReachArgs ("--root"::[]) _ = Err "medaka gate reach: --root needs a path"
+parseReachArgs ("--paths-from"::p::rest) acc =
+  parseReachArgs rest ReachArgs { acc | pathsFrom = Some p }
+parseReachArgs ("--paths-from"::[]) _ =
+  Err "medaka gate reach: --paths-from needs a path"
+parseReachArgs ("--json"::rest) acc =
+  parseReachArgs rest ReachArgs { acc | json = True }
+parseReachArgs (a::rest) acc
+  | stringLength a > 0 && stringSlice 0 1 a == "-" = Err "medaka gate reach: unknown flag: \{a} (use `--` before a path starting with '-')"
+  | otherwise = parseReachArgs rest ReachArgs { acc | paths = a::acc.paths }
+
+-- Blank lines are dropped from a `--paths-from` FILE and nowhere else.  `git
+-- diff --name-only` ends in a newline, so its last line is always empty, and
+-- classifying that would make every invocation fail open and the command
+-- useless.  An empty POSITIONAL argument is NOT dropped: that one the caller
+-- actually passed, and input this command cannot classify must widen, not vanish.
+nonBlankPaths : List String -> List String
+nonBlankPaths xs = filterList nonBlank xs
+
+-- The changed-path list.  An unreadable `--paths-from` file FAILS OPEN (an
+-- empty list selects the whole universe) rather than dying: this command sits
+-- in front of a narrowing decision, so every unknown must widen.
+reachPaths : ReachArgs -> <IO> List String
+reachPaths a = match a.pathsFrom
+  None => a.paths
+  Some f => match readFile f
+    Err m =>
+      let _ = ePutStrLn "medaka gate reach: cannot read \{f} (\{m}) — failing open to every project"
+      []
+    Ok src => a.paths ++ nonBlankPaths (splitNl src)
+
+reachRoot : Option String -> <IO> String
+reachRoot (Some p) = p
+reachRoot None = envOr "MEDAKA_ROOT" defaultMedakaRoot
+
+reachCmdBody : List String -> <IO> Unit
+reachCmdBody argv = match parseReachArgs argv ReachArgs { registry = None, root = None, json = False, pathsFrom = None, paths = [] }
+  Err m => emit (Err m)
+  Ok a =>
+    let rpath = registryPath a.registry
+    match readFile rpath
+      Err m => emit (Err "medaka gate reach: cannot read registry: \{m}")
+      Ok src => match parseRegistry src
+        Err m => emit (Err "medaka gate reach: \{m}")
+        Ok gates =>
+          let univ = projectUniverse gates
+          let paths = reachPaths a
+          let ces = corpusProjectEdges univ gates
+          let deps = projectDepEdges (reachRoot a.root) univ univ
+          let sel = reachProjects univ deps ces paths
+          if a.json then
+            putStr (reachJson (reachIsFailOpen univ paths) paths sel)
+          else
+            putStr (renderProjects sel)
 
 -- ── `gate ci` — regenerate ci.yml's generated regions ───────────────────────
 --

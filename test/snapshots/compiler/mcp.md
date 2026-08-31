@@ -1,5 +1,5 @@
 # META
-source_lines=1486
+source_lines=1497
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/mcp.mdk — the `medaka mcp` MCP (Model Context Protocol) server.
@@ -68,7 +68,12 @@ import frontend.parser.{
   parseErrorMessage,
 }
 import tools.fmt.{formatSource}
-import tools.lint.{lintFileDiagTriple, splitLintNames}
+import tools.lint.{
+  lintFileDiagTriple,
+  splitLintNames,
+  buildStdlibIndex,
+  StdlibIndex,
+}
 import tools.test_cmd.{runTestReport}
 import tools.doctest.{
   Example,
@@ -1134,11 +1139,15 @@ lintNameListArg key args = match fieldStr key args
 -- explicit-recursion idiom `medaka_cli.mdk`'s `lintFilesToDiagTriples` uses —
 -- `map` over an effectful function is not how this codebase sequences an
 -- `<IO>` list traversal).
-lintPathsToDiagTriples : List String -> List String -> List String -> List String -> <IO> List (String, String, List Diag)
-lintPathsToDiagTriples _ _ _ [] = []
-lintPathsToDiagTriples disable only deny (p::rest) =
-  lintFileDiagTriple disable only deny p ::
-    lintPathsToDiagTriples disable only deny rest
+--
+-- `idx` is the stdlib reference index, built ONCE by the caller and threaded:
+-- it is the same value for every path in the request, and rebuilding it per
+-- path would re-parse the whole stdlib once per target file.
+lintPathsToDiagTriples : StdlibIndex -> List String -> List String -> List String -> List String -> <IO> List (String, String, List Diag)
+lintPathsToDiagTriples _ _ _ _ [] = []
+lintPathsToDiagTriples idx disable only deny (p::rest) =
+  lintFileDiagTriple idx disable only deny p ::
+    lintPathsToDiagTriples idx disable only deny rest
 
 anyTripleHasErr : List (String, String, List Diag) -> Bool
 anyTripleHasErr [] = False
@@ -1164,7 +1173,9 @@ runLintTool _runtimeSrc _coreSrc _stdlibDir args = match pathsArg args
     let disable = lintNameListArg "disable" args
     let only = lintNameListArg "only" args
     let deny = lintNameListArg "deny" args
-    let triples = lintPathsToDiagTriples disable only deny paths
+    -- once per REQUEST, not per path (see lintPathsToDiagTriples)
+    let idx = buildStdlibIndex
+    let triples = lintPathsToDiagTriples idx disable only deny paths
     toolTextResult (cjAllToJson triples) (anyTripleHasErr triples)
 
 -- ── medaka_test tool ──────────────────────────────────────────────────────────
@@ -1495,7 +1506,7 @@ unit = ()
 (DUse false (UseGroup ("tools" "lsp") ((mem "typeAtPoint" false) (mem "documentSymbols" false) (mem "definitionResult" false) (mem "referencesResult" false) (mem "emptyDocs" false) (mem "docsPut" false) (mem "uriOfPath" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatSource" false))))
-(DUse false (UseGroup ("tools" "lint") ((mem "lintFileDiagTriple" false) (mem "splitLintNames" false))))
+(DUse false (UseGroup ("tools" "lint") ((mem "lintFileDiagTriple" false) (mem "splitLintNames" false) (mem "buildStdlibIndex" false) (mem "StdlibIndex" false))))
 (DUse false (UseGroup ("tools" "test_cmd") ((mem "runTestReport" false))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "Example" false) (mem "ExResult" true) (mem "RunResult" false) (mem "Engine" true) (mem "engineName" false) (mem "exampleInput" false) (mem "exampleLine" false) (mem "runPassed" false) (mem "runFailed" false) (mem "runErrors" false) (mem "runDetails" false))))
 (DUse false (UseGroup ("tools" "prop_runner") ((mem "PropResult" false) (mem "propResultName" false) (mem "propResultPassed" false) (mem "propResultDetail" false))))
@@ -1646,9 +1657,9 @@ unit = ()
 (DFunDef false "allJsonStrings" ((PCons (PVar "j") (PVar "rest"))) (EMatch (ETuple (EApp (EVar "asString") (EVar "j")) (EApp (EVar "allJsonStrings") (EVar "rest"))) (arm (PTuple (PCon "Some" (PVar "s")) (PCon "Some" (PVar "ss"))) () (EApp (EVar "Some") (EBinOp "::" (EVar "s") (EVar "ss")))) (arm PWild () (EVar "None"))))
 (DTypeSig false "lintNameListArg" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "lintNameListArg" ((PVar "key") (PVar "args")) (EMatch (EApp (EApp (EVar "fieldStr") (EVar "key")) (EVar "args")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PLit (LString ""))) () (EListLit)) (arm (PCon "Some" (PVar "s")) () (EApp (EVar "splitLintNames") (EVar "s")))))
-(DTypeSig false "lintPathsToDiagTriples" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))
-(DFunDef false "lintPathsToDiagTriples" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "lintPathsToDiagTriples" ((PVar "disable") (PVar "only") (PVar "deny") (PCons (PVar "p") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "lintFileDiagTriple") (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "p")) (EApp (EApp (EApp (EApp (EVar "lintPathsToDiagTriples") (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "rest"))))
+(DTypeSig false "lintPathsToDiagTriples" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))))
+(DFunDef false "lintPathsToDiagTriples" (PWild PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "lintPathsToDiagTriples" ((PVar "idx") (PVar "disable") (PVar "only") (PVar "deny") (PCons (PVar "p") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "lintFileDiagTriple") (EVar "idx")) (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "p")) (EApp (EApp (EApp (EApp (EApp (EVar "lintPathsToDiagTriples") (EVar "idx")) (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "rest"))))
 (DTypeSig false "anyTripleHasErr" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyCon "Bool")))
 (DFunDef false "anyTripleHasErr" ((PList)) (EVar "False"))
 (DFunDef false "anyTripleHasErr" ((PCons (PTuple PWild PWild (PVar "diags")) (PVar "rest"))) (EBinOp "||" (EApp (EVar "anyDiagErr") (EVar "diags")) (EApp (EVar "anyTripleHasErr") (EVar "rest"))))
@@ -1656,7 +1667,7 @@ unit = ()
 (DFunDef false "anyDiagErr" ((PList)) (EVar "False"))
 (DFunDef false "anyDiagErr" ((PCons (PVar "d") (PVar "rest"))) (EBinOp "||" (EApp (EVar "diagIsError") (EVar "d")) (EApp (EVar "anyDiagErr") (EVar "rest"))))
 (DTypeSig false "runLintTool" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyEffect ("IO") None (TyCon "Json")))))))
-(DFunDef false "runLintTool" ((PVar "_runtimeSrc") (PVar "_coreSrc") (PVar "_stdlibDir") (PVar "args")) (EMatch (EApp (EVar "pathsArg") (EVar "args")) (arm (PCon "None") () (EApp (EVar "toolArgError") (ELit (LString "medaka_lint: missing or invalid argument — require 'paths' (array of strings)")))) (arm (PCon "Some" (PVar "paths")) () (EBlock (DoLet false false (PVar "disable") (EApp (EApp (EVar "lintNameListArg") (ELit (LString "disable"))) (EVar "args"))) (DoLet false false (PVar "only") (EApp (EApp (EVar "lintNameListArg") (ELit (LString "only"))) (EVar "args"))) (DoLet false false (PVar "deny") (EApp (EApp (EVar "lintNameListArg") (ELit (LString "deny"))) (EVar "args"))) (DoLet false false (PVar "triples") (EApp (EApp (EApp (EApp (EVar "lintPathsToDiagTriples") (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "paths"))) (DoExpr (EApp (EApp (EVar "toolTextResult") (EApp (EVar "cjAllToJson") (EVar "triples"))) (EApp (EVar "anyTripleHasErr") (EVar "triples"))))))))
+(DFunDef false "runLintTool" ((PVar "_runtimeSrc") (PVar "_coreSrc") (PVar "_stdlibDir") (PVar "args")) (EMatch (EApp (EVar "pathsArg") (EVar "args")) (arm (PCon "None") () (EApp (EVar "toolArgError") (ELit (LString "medaka_lint: missing or invalid argument — require 'paths' (array of strings)")))) (arm (PCon "Some" (PVar "paths")) () (EBlock (DoLet false false (PVar "disable") (EApp (EApp (EVar "lintNameListArg") (ELit (LString "disable"))) (EVar "args"))) (DoLet false false (PVar "only") (EApp (EApp (EVar "lintNameListArg") (ELit (LString "only"))) (EVar "args"))) (DoLet false false (PVar "deny") (EApp (EApp (EVar "lintNameListArg") (ELit (LString "deny"))) (EVar "args"))) (DoLet false false (PVar "idx") (EVar "buildStdlibIndex")) (DoLet false false (PVar "triples") (EApp (EApp (EApp (EApp (EApp (EVar "lintPathsToDiagTriples") (EVar "idx")) (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "paths"))) (DoExpr (EApp (EApp (EVar "toolTextResult") (EApp (EVar "cjAllToJson") (EVar "triples"))) (EApp (EVar "anyTripleHasErr") (EVar "triples"))))))))
 (DTypeSig false "mcpTestEngines" (TyApp (TyCon "List") (TyCon "Engine")))
 (DFunDef false "mcpTestEngines" () (EListLit (EVar "EngInterp")))
 (DTypeSig false "mcpTestEngineHasNative" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyCon "Bool")))
@@ -1731,7 +1742,7 @@ unit = ()
 (DUse false (UseGroup ("tools" "lsp") ((mem "typeAtPoint" false) (mem "documentSymbols" false) (mem "definitionResult" false) (mem "referencesResult" false) (mem "emptyDocs" false) (mem "docsPut" false) (mem "uriOfPath" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatSource" false))))
-(DUse false (UseGroup ("tools" "lint") ((mem "lintFileDiagTriple" false) (mem "splitLintNames" false))))
+(DUse false (UseGroup ("tools" "lint") ((mem "lintFileDiagTriple" false) (mem "splitLintNames" false) (mem "buildStdlibIndex" false) (mem "StdlibIndex" false))))
 (DUse false (UseGroup ("tools" "test_cmd") ((mem "runTestReport" false))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "Example" false) (mem "ExResult" true) (mem "RunResult" false) (mem "Engine" true) (mem "engineName" false) (mem "exampleInput" false) (mem "exampleLine" false) (mem "runPassed" false) (mem "runFailed" false) (mem "runErrors" false) (mem "runDetails" false))))
 (DUse false (UseGroup ("tools" "prop_runner") ((mem "PropResult" false) (mem "propResultName" false) (mem "propResultPassed" false) (mem "propResultDetail" false))))
@@ -1882,9 +1893,9 @@ unit = ()
 (DFunDef false "allJsonStrings" ((PCons (PVar "j") (PVar "rest"))) (EMatch (ETuple (EApp (EVar "asString") (EVar "j")) (EApp (EVar "allJsonStrings") (EVar "rest"))) (arm (PTuple (PCon "Some" (PVar "s")) (PCon "Some" (PVar "ss"))) () (EApp (EVar "Some") (EBinOp "::" (EVar "s") (EVar "ss")))) (arm PWild () (EVar "None"))))
 (DTypeSig false "lintNameListArg" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "lintNameListArg" ((PVar "key") (PVar "args")) (EMatch (EApp (EApp (EVar "fieldStr") (EVar "key")) (EVar "args")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PLit (LString ""))) () (EListLit)) (arm (PCon "Some" (PVar "s")) () (EApp (EVar "splitLintNames") (EVar "s")))))
-(DTypeSig false "lintPathsToDiagTriples" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))
-(DFunDef false "lintPathsToDiagTriples" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "lintPathsToDiagTriples" ((PVar "disable") (PVar "only") (PVar "deny") (PCons (PVar "p") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "lintFileDiagTriple") (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "p")) (EApp (EApp (EApp (EApp (EVar "lintPathsToDiagTriples") (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "rest"))))
+(DTypeSig false "lintPathsToDiagTriples" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))))
+(DFunDef false "lintPathsToDiagTriples" (PWild PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "lintPathsToDiagTriples" ((PVar "idx") (PVar "disable") (PVar "only") (PVar "deny") (PCons (PVar "p") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "lintFileDiagTriple") (EVar "idx")) (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "p")) (EApp (EApp (EApp (EApp (EApp (EVar "lintPathsToDiagTriples") (EVar "idx")) (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "rest"))))
 (DTypeSig false "anyTripleHasErr" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyCon "Bool")))
 (DFunDef false "anyTripleHasErr" ((PList)) (EVar "False"))
 (DFunDef false "anyTripleHasErr" ((PCons (PTuple PWild PWild (PVar "diags")) (PVar "rest"))) (EBinOp "||" (EApp (EVar "anyDiagErr") (EVar "diags")) (EApp (EVar "anyTripleHasErr") (EVar "rest"))))
@@ -1892,7 +1903,7 @@ unit = ()
 (DFunDef false "anyDiagErr" ((PList)) (EVar "False"))
 (DFunDef false "anyDiagErr" ((PCons (PVar "d") (PVar "rest"))) (EBinOp "||" (EApp (EVar "diagIsError") (EVar "d")) (EApp (EVar "anyDiagErr") (EVar "rest"))))
 (DTypeSig false "runLintTool" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyEffect ("IO") None (TyCon "Json")))))))
-(DFunDef false "runLintTool" ((PVar "_runtimeSrc") (PVar "_coreSrc") (PVar "_stdlibDir") (PVar "args")) (EMatch (EApp (EVar "pathsArg") (EVar "args")) (arm (PCon "None") () (EApp (EVar "toolArgError") (ELit (LString "medaka_lint: missing or invalid argument — require 'paths' (array of strings)")))) (arm (PCon "Some" (PVar "paths")) () (EBlock (DoLet false false (PVar "disable") (EApp (EApp (EVar "lintNameListArg") (ELit (LString "disable"))) (EVar "args"))) (DoLet false false (PVar "only") (EApp (EApp (EVar "lintNameListArg") (ELit (LString "only"))) (EVar "args"))) (DoLet false false (PVar "deny") (EApp (EApp (EVar "lintNameListArg") (ELit (LString "deny"))) (EVar "args"))) (DoLet false false (PVar "triples") (EApp (EApp (EApp (EApp (EVar "lintPathsToDiagTriples") (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "paths"))) (DoExpr (EApp (EApp (EVar "toolTextResult") (EApp (EVar "cjAllToJson") (EVar "triples"))) (EApp (EVar "anyTripleHasErr") (EVar "triples"))))))))
+(DFunDef false "runLintTool" ((PVar "_runtimeSrc") (PVar "_coreSrc") (PVar "_stdlibDir") (PVar "args")) (EMatch (EApp (EVar "pathsArg") (EVar "args")) (arm (PCon "None") () (EApp (EVar "toolArgError") (ELit (LString "medaka_lint: missing or invalid argument — require 'paths' (array of strings)")))) (arm (PCon "Some" (PVar "paths")) () (EBlock (DoLet false false (PVar "disable") (EApp (EApp (EVar "lintNameListArg") (ELit (LString "disable"))) (EVar "args"))) (DoLet false false (PVar "only") (EApp (EApp (EVar "lintNameListArg") (ELit (LString "only"))) (EVar "args"))) (DoLet false false (PVar "deny") (EApp (EApp (EVar "lintNameListArg") (ELit (LString "deny"))) (EVar "args"))) (DoLet false false (PVar "idx") (EVar "buildStdlibIndex")) (DoLet false false (PVar "triples") (EApp (EApp (EApp (EApp (EApp (EVar "lintPathsToDiagTriples") (EVar "idx")) (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "paths"))) (DoExpr (EApp (EApp (EVar "toolTextResult") (EApp (EVar "cjAllToJson") (EVar "triples"))) (EApp (EVar "anyTripleHasErr") (EVar "triples"))))))))
 (DTypeSig false "mcpTestEngines" (TyApp (TyCon "List") (TyCon "Engine")))
 (DFunDef false "mcpTestEngines" () (EListLit (EVar "EngInterp")))
 (DTypeSig false "mcpTestEngineHasNative" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyCon "Bool")))

@@ -2026,6 +2026,10 @@ implMethodDoc (ImplMethod n pats body) = Cat
 -- parenthesizes by precedence level (0 top, 1 fun-lhs, 2 app-arg), with no
 -- leading space in app, etc.
 
+-- Exported for `tools/lint.mdk`'s stdlib reference index, which renders a
+-- stdlib binding's DECLARED signature (a raw `Ty` off a `DTypeSig`) — this
+-- printer, not `types/typecheck.ppTy`, because that one drops effect rows.
+export
 ppTy : Ty -> String
 ppTy t = ppTyPrec 0 t
 

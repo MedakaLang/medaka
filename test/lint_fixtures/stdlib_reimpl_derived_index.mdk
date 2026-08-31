@@ -1,0 +1,18 @@
+-- 🚨 POSITIVE fixture, and the one that proves the stdlib index is DERIVED from
+-- `stdlib/` rather than re-hardcoded (#2327 finding 4, contract E2).
+--
+-- Every OTHER positive rule-stdlib-reimpl golden in this corpus resolves to
+-- `reverse` or `take` — both members of the retired 15-name curated list
+-- (reverse take drop map filter flatMap concatMap foldl foldr length elem
+-- intercalate intersperse zip zipWith), and both in module `list`.  So a
+-- regression that silently reverted the rule to a 15-name literal would keep
+-- the whole corpus green and E2 would be unfalsifiable.
+--
+-- `trimSpaces` closes that hole from BOTH directions: `trim` is not in the
+-- retired 15, and `string` is not `list`.  The finding is only reachable by
+-- reading the real `stdlib/string.mdk` export table, so this fixture goes red
+-- the moment the index stops being derived.  Do not "fix" it by repointing it
+-- at a `list` name.
+export
+trimSpaces : String -> String
+trimSpaces s = s

@@ -13,7 +13,7 @@ Per-section status — derive the authoritative version from the issues
 | 3.1 registry + `medaka gate` | #2176 | BUILT |
 | 3.2 generated `ci.yml` | #2177 | BUILT (`ci-gen-drift` is a required context) |
 | 3.3 identity ⊥ scheduling | #2178 | BUILT — derived assignment, area-reported failures, and the neutral executor names |
-| 3.4 graph-scoped project suites | #2179 | NOT STARTED |
+| 3.4 graph-scoped project suites | #2179 | BUILT — `medaka gate reach`, preflight-widened locally, and `merge_group`-scoped in `ci.yml` (`detect.project_reach`). The compiler half still never narrows. |
 | 3.5 cost ratchet | #2180 | BUILT. ⚠️ Its `gate-budget` job is NOT in the required-check set (derived from ruleset 18885875, 2026-08-30) — a red budget does not block a merge. `ci-gen-drift` IS required, and it runs `medaka gate balance --check`, so a hand-edited assignment is blocked; an over-budget one is not. |
 | 3.6 tier-3 charter | #2181 | NOT STARTED |
 
@@ -234,11 +234,11 @@ suite) to avoid narrowing an unrelated ci.yml hand-edit's coverage.
   on the first post-rename cost ingest. Oracle-cache keys keep the derive-from-pattern property or re-key
   deliberately (see `.claude/dossier/ci.md` § oracle cache keying).
 
-### 3.4 Dependency graph + project scoping in the queue (#2179)
+### 3.4 Dependency graph + project scoping in the queue (#2179) — AS LANDED
 
 **Queue posture (decision, Val 2026-08-28):** the merge queue **never narrows the
 compiler suite** — full compiler gates + soundness + compiler-soundness + wasm +
-seed-health on every entry, exactly as today. The July 2026 silent-merge incidents
+seed-health on every entry, exactly as before. The July 2026 silent-merge incidents
 (two independently-green branches merging into a broken tree) that earned the
 "queue runs everything" policy were all compiler-infra collisions; that half stays
 load-bearing, and queue-narrowing the compiler suite is explicitly **out of scope**
@@ -246,24 +246,64 @@ load-bearing, and queue-narrowing the compiler suite is explicitly **out of scop
 suites**: an entry runs a project's gates only when the graph says the diff can reach
 that project.
 
-Mechanism:
+Mechanism, as it actually landed. Note it is **not** the `medaka manifest`
+extension this section originally proposed: the graph never needed the loader's
+module-level import data, and the two things that reach a project are declared in
+files the queue can read without a compiler.
 
-- The compiler already computes the module dependency graph
-  (compiler/driver/loader.mdk); a CLI surface (extend `medaka manifest`) emits it for
-  all project roots. The graph is derived from the language's own import data, so it
-  cannot rot relative to the code (the Pants/`gta` property).
-- Selection = changed files → reverse closure over that graph → affected projects,
-  **plus declared reverse edges imports cannot see**: project files used as
-  compiler-gate corpora. Known at adoption: sqlite and gzip sources feed
-  test/wasm/diff_sqlite.sh and test/wasm/diff_gzip.sh in the required `wasm` job.
-  These live in the registry's fixture-corpus field — derived, never hand-listed.
+- **`medaka gate reach <changed-path>...`** (`compiler/tools/gate_cmd.mdk`) is the
+  reference implementation and the human-facing surface. Three rules:
+  1. **Direct** — a path under `<project>/` selects that project.
+  2. **Reverse dependency** — a selected project pulls in every project that
+     *declares* it, transitively. The edges come from the manifests'
+     `[dependencies]` sections, read through the loader's own `readDeps` and
+     compared realpath-canonicalized, so `parsec = "../parsec"` and
+     `pc = "../parsec"` are one edge. **Never** from import names:
+     `stdlib/byteparser.mdk` and the project `byteparser/` share a module name, so
+     an `import`-grep graph fabricates four edges no manifest declares.
+  3. **Corpus** — a gate whose registry `corpus` names a project reads that
+     project's tree as its fixtures (`wasm/diff_gzip` → `gzip`,
+     `wasm/diff_sqlite` → `sqlite`, both owned by `compiler`), so a selected
+     corpus project pulls its gates' *owning* project back in. Rules 2 and 3 run
+     to a **joint** fixpoint, not two passes.
+- **`test/preflight.sh`** derives the same graph binary-free, from the same two
+  files, and widens the local gate set with it — so `make preflight` on a
+  `parsec/` change runs sqlite's oracles and `wasm/diff_sqlite` too.
+- **`ci.yml`'s `detect` job** publishes one output, `project_reach`: either the
+  literal `full` or the space-separated projects the entry can reach. It consumes
+  `preflight.sh` (`PREFLIGHT_DRY=1`), *not* `medaka gate reach` — `detect` runs
+  upstream of the `build:` job, so no `./medaka` exists at that point in the run.
+  The `gates` shards then drop any gate whose registry `project` is neither
+  `compiler` nor in `project_reach`. `narrow`/`gates` — the PR-only, per-gate
+  narrowing — stay `false`/empty on `merge_group`, deliberately: the compiler
+  suite's never-narrowed guarantee is keyed on them.
 - Never workflow-level `paths:` filters on required checks (deadlocks required
   contexts; `paths:` does not work with `merge_group`). Selection is an
   always-running detect-style job gating *steps* — the T-4b shape ci.yml already
   uses.
-- **Fail-open, enumerated**: selector error → full; graph emission failure → full;
-  changed path unmapped by graph and prose-allowlist alike → full. Backstops: the
-  nightly full run and the revert-to-green norm (§3.6).
+- **Fail-open, enumerated.** Every one of these answers `full`: not a
+  `merge_group` event · `detect` resolved no changed files · no manifest-bearing
+  project resolved · **any changed path outside every project directory** ·
+  preflight exiting nonzero · preflight printing `FULL` or `UNMAPPED` · a derived
+  gate whose registry `project` cannot be resolved · a project-only diff that
+  derived zero project gates. The fourth is what keeps the narrowing from
+  narrowing itself out of the jobs it is changing: a diff touching `ci.yml`,
+  `test/gates.toml` or `test/preflight.sh` is by construction a full run.
+  Backstops: the nightly full run and the revert-to-green norm (§3.6).
+- **Two rules, not one — reconciled, not merged.** "What is a project" has two
+  independent derivations: a manifest scan (`git ls-files '*medaka.toml'` minus
+  `compiler/` and `test/` — used by `preflight.sh`, `test/diff_compiler_
+  project_enrolment.sh`'s PREFLIGHT leg, and `ci.yml`'s `reach` step) and the
+  gate registry's own `project` field (`projectUniverse`, `medaka gate reach
+  --json`). They agree today over every manifest-bearing project — the
+  enrolment gate's REACH leg cross-checks that on every run — but `gate reach`
+  narrows on a registry `project` value with no manifest directory (e.g. a
+  hypothetical `demo`), and the manifest scan resolves a project `gate reach`
+  would not, so neither is a strict subset of the other. `ci.yml`'s copy is a
+  FOURTH text occurrence of the manifest-scan half specifically, written to be
+  textually identical to preflight's for exactly that reason — the enrolment
+  gate does not yet know about it. Open follow-up: teach the enrolment gate the
+  fourth leg, and decide whether the two derivations should be unified.
 - **Eject-readiness test**: a project whose CI is registry-scoped, graph-selected,
   and self-contained under `<project>/test/` extracts to its own repo trivially.
   "Could this project's CI leave the monorepo tomorrow?" is a standing design test.

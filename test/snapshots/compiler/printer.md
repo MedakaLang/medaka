@@ -1,5 +1,5 @@
 # META
-source_lines=2099
+source_lines=2103
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted pretty printer for Medaka — a port of lib/printer.ml, producing
@@ -2030,6 +2030,10 @@ implMethodDoc (ImplMethod n pats body) = Cat
 -- parenthesizes by precedence level (0 top, 1 fun-lhs, 2 app-arg), with no
 -- leading space in app, etc.
 
+-- Exported for `tools/lint.mdk`'s stdlib reference index, which renders a
+-- stdlib binding's DECLARED signature (a raw `Ty` off a `DTypeSig`) — this
+-- printer, not `types/typecheck.ppTy`, because that one drops effect rows.
+export
 ppTy : Ty -> String
 ppTy t = ppTyPrec 0 t
 
@@ -2810,7 +2814,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "oneReq" ((PRec "Require" ((rf "requireHead" (PVar "iface")) (rf "requireArgs" (PVar "args"))) false)) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "iface"))) (EApp (EVar "concatD") (EApp (EApp (EVar "map") (ELam ((PVar "t")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "printTypeAtom") (EVar "t"))))) (EVar "args")))))
 (DTypeSig false "implMethodDoc" (TyFun (TyCon "ImplMethod") (TyCon "Doc")))
 (DFunDef false "implMethodDoc" ((PCon "ImplMethod" (PVar "n") (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "Cat") (EApp (EVar "concatD") (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "printPatAtom") (EVar "p"))))) (EVar "pats")))) (EApp (EVar "printDefRhs") (EVar "body")))))
-(DTypeSig false "ppTy" (TyFun (TyCon "Ty") (TyCon "String")))
+(DTypeSig true "ppTy" (TyFun (TyCon "Ty") (TyCon "String")))
 (DFunDef false "ppTy" ((PVar "t")) (EApp (EApp (EVar "ppTyPrec") (ELit (LInt 0))) (EVar "t")))
 (DTypeSig false "ppTyPrec" (TyFun (TyCon "Int") (TyFun (TyCon "Ty") (TyCon "String"))))
 (DFunDef false "ppTyPrec" (PWild (PRec "TyCon" ((rf "tyConName" (PVar "s"))) false)) (EApp (EVar "tyConSurface") (EVar "s")))
@@ -3553,7 +3557,7 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "oneReq" ((PRec "Require" ((rf "requireHead" (PVar "iface")) (rf "requireArgs" (PVar "args"))) false)) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "iface"))) (EApp (EVar "concatD") (EApp (EApp (EMethodRef "map") (ELam ((PVar "t")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "printTypeAtom") (EVar "t"))))) (EVar "args")))))
 (DTypeSig false "implMethodDoc" (TyFun (TyCon "ImplMethod") (TyCon "Doc")))
 (DFunDef false "implMethodDoc" ((PCon "ImplMethod" (PVar "n") (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "Cat") (EApp (EVar "concatD") (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "printPatAtom") (EVar "p"))))) (EVar "pats")))) (EApp (EVar "printDefRhs") (EVar "body")))))
-(DTypeSig false "ppTy" (TyFun (TyCon "Ty") (TyCon "String")))
+(DTypeSig true "ppTy" (TyFun (TyCon "Ty") (TyCon "String")))
 (DFunDef false "ppTy" ((PVar "t")) (EApp (EApp (EVar "ppTyPrec") (ELit (LInt 0))) (EVar "t")))
 (DTypeSig false "ppTyPrec" (TyFun (TyCon "Int") (TyFun (TyCon "Ty") (TyCon "String"))))
 (DFunDef false "ppTyPrec" (PWild (PRec "TyCon" ((rf "tyConName" (PVar "s"))) false)) (EApp (EVar "tyConSurface") (EVar "s")))

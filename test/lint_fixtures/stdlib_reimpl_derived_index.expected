@@ -1,0 +1,1 @@
+warning: [rule-stdlib-reimpl] top-level 'trimSpaces' reimplements stdlib 'string.trim' (same declared signature) — use the stdlib version
