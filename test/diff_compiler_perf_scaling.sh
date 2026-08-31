@@ -2227,9 +2227,19 @@ OP_FLOOR="${PERF_OP_FLOOR:-1000}"
 #         this row's promotion) 164 961 -> 205 361 -> 286 161, r1=1.245 r2=1.393 —
 #         linear. De-ledgered.
 #
-#   conlocal:elaborate — issue #2189, and it is STILL LEDGERED, in KNOWN_SLOW_OPS
+#   conlocal:elaborate — issue #2030, and it is STILL LEDGERED, in KNOWN_SLOW_OPS
 #         below — but for a DIFFERENT reason than when it was first written, and the
-#         residual is now LOCALISED. History: the row was first ledgered at
+#         residual is now LOCALISED.
+#         ⚠️ THE OWNING ISSUE MOVED, AND THIS LINE USED TO NAME THE OLD ONE. It read
+#         "issue #2189" until 2026-08-31 (#2331 item 4, sprint hold-the-gains S-2).
+#         #2189 is CLOSED: its bulk — the `elaborateDict` AST prepass probing
+#         `rpNames`/`argNames`/`dictNames` with `util.contains` — was fixed and is
+#         gone, as the paragraph below already says. What is left is `localPinPairs`,
+#         which is #2030's term and #2030 is OPEN. A row whose only citation is a
+#         CLOSED issue reads as a stale skip-list entry to the next reader; the drain
+#         condition below is #2030's, so the citation is #2030's too. #2189 still
+#         appears below in its HISTORICAL role, which is correct.
+#         History: the row was first ledgered at
 #         3 162 359 -> 8 788 559 -> 28 200 959 (r1=2.78 r2=3.21) when #2173 flipped
 #         this arm to grade r2 alone.
 #         ⚠️ THIS NOTE ALSO USED TO SAY THE OPPOSITE — "NOT LEDGERED, but WATCH … a
@@ -2369,6 +2379,15 @@ KNOWN_OCEIL_conlocal_typecheck="4.3"; KNOWN_OFIXED_conlocal_typecheck="2.60"
 # invalidates the ceiling: RE-DERIVE from a fresh ladder, do not scale. This is
 # the #2172 lesson (KNOWN_CEIL_scoperefs=3.26 is a 3000-only number; at 6000 the
 # same tree reads 3.438) written down before it bites again.
+#
+# ── 2026-08-31, sprint hold-the-gains S-2 (#2331): THE SPRINT-WIDE HEADROOM
+# CONVENTION WAS DELIBERATELY NOT APPLIED HERE. That convention is "10% over a
+# freshly measured r2, capped below the measured reading of the defect the row
+# guards" (see NOTES.md; S-3 and S-4 apply it). It is a FALLBACK for rows with no
+# cost model. THIS row has one — the coefficient-growth derivation above — and the
+# paragraph above already states why a flat percentage is the wrong instrument for
+# an already-quadratic row. 3.31 stands, re-derived and unchanged. Do not "unify"
+# it with the flat-percentage rows; that would loosen it from 3.31 toward 3.5+.
 KNOWN_OCEIL_conlocal_elaborate="3.31";   KNOWN_OFIXED_conlocal_elaborate="2.60"
 # reexports:resolve was HERE (op ceiling 8.9) — the cubic (r2=7.92) counted `util.contains`
 # scans over a re-export export list that grows with depth. #925/#926 FIXED it: the three

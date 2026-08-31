@@ -398,6 +398,53 @@ KNOWN_SUPERLINEAR="scoperefs"
 # 3.400 -> 3.41, identical after rounding. KNOWN_FIXED_scoperefs is
 # unchanged: 2.60 still sits between the flat shapes' ~2.07 and the new
 # 3.30-3.41 ledgered band, same as before.
+#
+# ── 🚨 2026-08-31 REVERT MEASUREMENT (sprint hold-the-gains, S-2, #2331 Case 1).
+# READ THIS BEFORE YOU TRUST THIS CEILING TO CATCH ANYTHING.
+#
+# Every derivation above this line sets CEIL as a MARGIN OVER THE CURRENT READING
+# and never once measured what the DEFECT reads. #2331 asked for that measurement.
+# It has now been made, and the answer is that THIS ROW DOES NOT DISCRIMINATE A
+# #1031 REINTRODUCTION AT THIS BAND.
+#
+# METHOD — synthetic reintroduction, not a true revert. `git apply -R` of
+# 54f54bef6's resolve.mdk + typecheck.mdk hunks does not apply (four sprints of
+# later work sit on both files; --3way applies only WITH CONFLICTS), so the
+# pre-#1031 List-as-a-set shape was PLANTED at the two sites of that commit that
+# `check` actually reaches — `ir_of` runs `medaka check`, so private_mangle /
+# llvm_emit / wasm_emit and b32b083f8's emit_support fifth site are all off the
+# measured path:
+#   resolve.mdk    stampBindingIds's scope env OrdMap Int -> List (String, Int);
+#                  lookupBindId omLookup -> lookupAssoc; insertZero omInsert ->
+#                  cons-prepend (later name still wins — same shadowing).
+#   typecheck.mdk  rewriteArgScoped's `bound` OrdMap Unit -> List String;
+#                  boundInsert -> `ns ++ b`; the four `omHasKey n bound` probes ->
+#                  `contains n bound`. rp/an/dn stay indexed (#2189, a different fix).
+# Built, smoke-tested, measured, reverted. Both arms, same box, same day:
+#
+#   FIXED (this tree)               r1=3.066  r2=3.300
+#   #1031 REINTRODUCED (synthetic)  r1=3.186  r2=3.356    <- and it PASSES at 3.41
+#
+# THE SEPARATION IS 1.7%. The ceiling would have to sit in 3.300 < CEIL < 3.356 to
+# tell the two apart. That window is NARROWER than the 3.1% constant-factor drift
+# width this very comment derives above, and narrower than the drift this row has
+# actually shown across trees (3.159 -> 3.091 -> 3.300 over three sprints, ~3.3%,
+# every step from an UNRELATED compiler change — felt-latency alone moved it 6.8%,
+# four times the whole window). A ceiling inside it is a false-red generator that
+# gets "repaired" by raising the ceiling, which is the exact drift loop #2331
+# exists to stop.
+#
+# ⇒ 3.41 IS NOT RAISED AND NOT LOWERED, and it is now honestly labelled: it bounds
+# THE LEDGERED #2172 COST GETTING WORSE, and it does NOT pin #1031. Do not read a
+# green `scoperefs` as evidence that #1031 has not been reintroduced — it is not
+# evidence either way, the same status test/diff_compiler_ir_scaling.sh's own
+# `diagbucket` row carries for #1019.
+#
+# THE LEVER IS THE BAND, NOT THE CEILING. Ratios climb with N on a quadratic row,
+# so a wider band separates the two arms; at IR_SCOPEREFS_N=6000 this tree already
+# reads 3.438 where 3000 reads 3.30. Measuring BOTH arms at 6000/12000/24000 is ~4x
+# this run and was past S-2's foreground budget. That is the follow-up, and #2331
+# stays OPEN for it. Do NOT discharge #2331 by moving this number.
 KNOWN_CEIL_scoperefs="${KNOWN_CEIL_scoperefs:-3.41}";  KNOWN_FIXED_scoperefs="${KNOWN_FIXED_scoperefs:-2.60}"
 
 # Add-only deliberate-red seam. Default empty, set NOWHERE in the tree, and it
@@ -506,6 +553,16 @@ MANYIFACES_N="${IR_MANYIFACES_N:-100}"
 # threshold block), so a narrow band grades the quadratic at its weakest and the
 # pin would be a soft one. 400/800/1600 is where the pre-fix reading was
 # measured (r1 3.215 r2 3.574) and where the fix reads ~2.03/~2.03.
+#
+# ⚠️ #2063 ASKED FOR THIS BAND TO BE WIDENED AND IT MUST NOT BE (2026-08-31, sprint
+# hold-the-gains S-2). #2063's defect is that a PARTIAL #2044 revert reads
+# r1=2.967 r2=3.392 and "the gate's 'both doublings must exceed threshold' rule does
+# not fire". THAT RULE NO LONGER EXISTS — e68356238 (#2160 phase 1) replaced it with
+# r2 alone (see the verdict-rule block in grade_shape), so 3.392 > 3.0 FAILS today.
+# `over` is a pure function of r2 and THRESH. Widening the band would triple this
+# shape's cachegrind cost to repair a defect that is already repaired. Measured on
+# this tree at the unchanged band: r1=2.061 r2=2.061 — flat, so the band is not the
+# weak point either. #2063 is fixed-but-open, not thin-margin.
 ERRS_N="${IR_ERRS_N:-400}"
 # scoperefs: a deep local scope where the tail references EVERY bound name, most
 # of them non-innermost — the #1031 shape (resolve/typecheck/mangle/emit each
@@ -535,6 +592,15 @@ ERRS_N="${IR_ERRS_N:-400}"
 # a DECLARED ledger row in KNOWN_SUPERLINEAR, graded against its own measured
 # ceiling. Re-measured on this box 2026-08-28, three runs: r1=2.900 r2=3.159,
 # identical to 3 decimals every time.
+#
+# ⚠️ #2100 IS FIXED-BUT-OPEN, and this knob is NOT what is left of it (2026-08-31,
+# sprint hold-the-gains S-2). #2100's defect was "passing only because grade_shape
+# requires BOTH r1 and r2 over threshold"; e68356238 flipped that to r2 alone AND
+# this shape became a declared KNOWN_SUPERLINEAR row graded against its own ceiling,
+# which is both of the things the issue asked for. SCOPEREFS_N was NOT widened here.
+# What IS still owed on this shape is a WIDER BAND — but for #2331, not #2100, and
+# for a different reason: see the revert measurement at KNOWN_CEIL_scoperefs, which
+# shows the ceiling cannot tell a #1031 reintroduction from this tree at N=3000.
 SCOPEREFS_N="${IR_SCOPEREFS_N:-3000}"
 # diagbucket — see gen_diagbucket below for the shape.
 #

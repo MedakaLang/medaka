@@ -627,6 +627,34 @@ typecheck=mdk_types_typecheck__checkModules"
 KNOWN_SLOW="
 modules:typecheck
 "
+#
+# ── 🚨 2026-08-31, sprint hold-the-gains S-2 (#2331 Case 2): THIS CEILING DOES NOT
+# CATCH A #2146/#2147 REVERT, AND THAT IS NOW MEASURED RATHER THAN SUSPECTED.
+#
+# The 2.217 above is the CALIBRATION reading, and the calibration run CONTAINED both
+# defects: it was taken in 869d85483 (2026-08-28 05:19) and the #2146/#2147 fix
+# landed in b6b61ed8d (2026-08-29 21:36).
+#   Derive: git log --format='%h %ci' -L 630,630:test/diff_compiler_stage_ir_scaling.sh
+# So "CEILING 2.45 clears the measured r2=2.217 by ~10%" above is clearing the
+# DEFECT'S OWN READING by 10% — a full revert lands at ~2.217, under 2.45, GREEN.
+#
+# Re-measured post-fix on this box, this tree (STAGE_IR_ONLY=modules):
+#
+#   typecheck net 325911341 -> 707869343 -> 1537319318   r1=2.172  r2=2.172
+#
+# FIXED reads 2.172; the DEFECT reads 2.217. The separation is 2.1%, so the ceiling
+# would have to sit in 2.172 < CEIL < 2.217 to tell them apart. The sprint's own
+# headroom convention (10% over a freshly measured r2) gives 2.39; the tree's other
+# convention (20%) gives 2.61; BOTH are above 2.217 and so is the shipped 2.45.
+# No percentage headroom rule discharges this. A ceiling inside a 2.1% window on a
+# row whose siblings spread 2.041-2.089 in the same run is a false-red generator.
+#
+# ⇒ 2.45 IS NOT RAISED AND NOT LOWERED. Raising is [W-QUIETER]; lowering into the
+# window trades a silent miss for a flap that gets "repaired" by raising it again.
+# What this row honestly bounds is THE LEDGERED FOUR-SITE COST GETTING WORSE (the
+# attribution above), not a #2146/#2147 reintroduction. Do not read it as the
+# latter, and do not discharge #2331 by moving this number — the lever is the band
+# (N=25/50/100, K=8), which needs a fresh two-arm ladder nobody has paid for yet.
 KNOWN_CEIL_modules_typecheck="2.45";  KNOWN_FIXED_modules_typecheck="2.10"
 
 # ── OBSERVED RED (#2160 rule 1) ──────────────────────────────────────────────
