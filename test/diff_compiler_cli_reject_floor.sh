@@ -12,7 +12,7 @@
 # with custom parsing genuinely has nothing for C to compare — but it means the
 # gate CANNOT pin C2:
 #
-#     delete a verb's `assertCliFlags` call and the verb stops rejecting
+#     delete a verb's `requireArgs` call and the verb stops rejecting
 #     unknown flags entirely; its roster disappears with it; Property C moves
 #     the verb from `covered` to `UNCOVERED` and the suite stays GREEN.
 #
@@ -33,10 +33,11 @@
 #   R  REJECTION FLOOR. Every verb the binary's own usage block lists — minus a
 #      declared, self-draining exemption set — must reject `--<bogus>` and exit
 #      EXACTLY 1. Never accepted (rc 0), never swallowed as a positional.
-#   K  ROSTER FLOOR. Every verb whose SOURCE carries an `assertCliFlags` call
-#      must print a `(known: …)` roster in that rejection. This is precisely the
-#      fact Property C treats as optional; here its absence is a FAIL.
-#   S  REACH. Every source-derived `assertCliFlags` verb must appear in the
+#   K  ROSTER FLOOR. Every verb whose SOURCE hands its `ArgSpec` to
+#      `requireArgs` must print a `(known: …)` roster in that rejection. This is
+#      precisely the fact Property C treats as optional; here its absence is a
+#      FAIL.
+#   S  REACH. Every source-derived `requireArgs` verb must appear in the
 #      usage block, so no covered verb can escape R by being invisible to the
 #      derivation. Without S, deleting a verb's usage line would silently
 #      narrow R — the same fail-open shape in a new place.
@@ -48,7 +49,8 @@
 # ── NOTHING IS ENCODED EXCEPT THE EXEMPTIONS, AND THOSE SELF-DRAIN ───────────
 #
 # No roster of verbs or flags appears in this file. Verbs come out of the binary
-# (`cli_verbs`), the covered set out of the source (`assertCliFlags "<verb>"`),
+# (`cli_verbs`), the covered set out of the source (`requireArgs <verb>ArgSpec`
+# resolved through that spec's own `spec "<verb>"` head — see the derivation),
 # and the "is this a rejection" classifier is the ONE already-shared
 # `cli_rejects_as_unknown` in test/cli_conformance_lib.sh — extended here by
 # nobody, so the five accepted wordings cannot be half-updated in two consumers.
@@ -139,19 +141,66 @@ probe_shape() {
 
 VERBS=$(cli_verbs)
 
-# The covered set, from SOURCE. `assertCliFlags "<verb>"` is a call; the
-# definition and its type signature carry no quoted verb, and neither do the
-# comments naming the helper, so this pattern sees calls only. Swept over all of
-# compiler/ rather than one file so a call that moves house is still found.
-SRC_VERBS=$(grep -rh 'assertCliFlags "' "$ROOT/compiler" 2>/dev/null \
-            | sed -n 's/.*assertCliFlags "\([a-z][a-z0-9-]*\)".*/\1/p' | sort -u | tr '\n' ' ')
+# The covered set, from SOURCE, in TWO steps since S-cli-onto-args (#2355)
+# migrated every covered verb onto stdlib/args.mdk: the old
+# `assertCliFlags "<verb>" …` call carried the verb name as a literal at the
+# call site, and `requireArgs <verb>ArgSpec argv` carries a SPEC NAME instead.
+#
+#   step 1  which `…ArgSpec` values are actually passed to `requireArgs`
+#   step 2  each of those specs' own `spec "<verb>"` head — the single place
+#           the verb name is written
+#
+# Two steps rather than one is what keeps this derived rather than encoded: the
+# tree also carries specs that exist ONLY to render the rejection sentence, for
+# verbs that share the wording but not the floor (they parse their argv their
+# own way), and those must not be counted as covered. Step 1 is what excludes
+# them — a spec is covered iff it is handed to `requireArgs`, which is the same
+# thing as "this verb's whole argv goes through the shared parse". Note the
+# spec's NAME need not contain the verb (`check-policy`'s is `policyArgSpec`);
+# only step 2's `spec "<verb>"` head names verbs, which is the point.
+# Swept over all of compiler/ rather than one file so a call that
+# moves house is still found. The `ArgSpec` suffix is required by the pattern,
+# so `requireArgs`'s own definition line (`requireArgs sp argv = …`) and its
+# signature contribute nothing.
+SRC_SPECS=$(grep -rh 'requireArgs ' "$ROOT/compiler" 2>/dev/null \
+            | sed -n 's/.*requireArgs \([a-zA-Z][a-zA-Z0-9_]*ArgSpec\).*/\1/p' | sort -u)
+# ⚠️ Step 2 reads a WINDOW, not one line, because `medaka fmt` decides where a
+# wide `<name> = spec "<verb>" [ … ]` body breaks: it leaves a short one whole
+# (`docArgSpec = spec "doc" []`) and pushes a long one's argument to the next
+# line (`checkArgSpec = spec` / `  "check" [`). A single-line pattern here
+# resolved 2 of 9 specs and the gate still said PASS — a fail-open caught only
+# because the covered COUNT was compared against the pre-migration one. The
+# SPECS-vs-VERBS reconciliation below is what makes that comparison automatic.
+SRC_VERBS=$(for _s in $SRC_SPECS; do
+              grep -rhA3 "^$_s = spec" "$ROOT/compiler" 2>/dev/null \
+                | sed -n 's/.*"\([a-z][a-z0-9-]*\)".*/\1/p' | head -n 1
+            done | sort -u | tr '\n' ' ')
 
 echo "== medaka CLI unknown-flag rejection floor (convention C2) =="
 echo "   binary : $MEDAKA"
 echo "   token  : $BOGUS"
 echo "   verbs  : $VERBS"
-echo "   covered: $SRC_VERBS  (verbs with an \`assertCliFlags\` call, from source)"
+echo "   covered: $SRC_VERBS  (verbs whose spec reaches \`requireArgs\`, from source)"
 echo "   exempt : $EXEMPT"
+echo
+
+# ── D: the derivation resolved EVERY spec it found ──────────────────────────
+#
+# K and S iterate SRC_VERBS, so a step-2 pattern that quietly resolves only
+# some of step 1's specs shrinks the covered set and both properties still
+# report PASS over what is left — the same fail-open shape this whole gate
+# exists to close, one level further in. Reconcile the two counts instead of
+# trusting the pattern.
+echo "-- D: every spec handed to \`requireArgs\` resolved to a verb --"
+d_specs=$(printf '%s\n' $SRC_SPECS | grep -c . || true)
+d_verbs=$(printf '%s\n' $SRC_VERBS | grep -c . || true)
+if [ "$d_specs" -eq 0 ]; then
+  fail "D no \`requireArgs <name>ArgSpec\` call found anywhere under compiler/ — the shared parse helper has been removed or renamed. Update this gate's step-1 pattern in the same commit if that was deliberate."
+elif [ "$d_specs" -ne "$d_verbs" ]; then
+  fail "D step 1 found $d_specs spec(s) [$SRC_SPECS] but step 2 resolved only $d_verbs verb name(s) [$SRC_VERBS] — the \`<name> = spec \"<verb>\"\` window pattern missed one, so K and S are silently narrowed. Fix the pattern, do not adjust the counts."
+else
+  echo "   D: $d_specs spec(s) -> $d_verbs verb name(s), one each."
+fi
 echo
 
 # ── R: every non-exempt verb rejects, exit code exactly 1 ────────────────────
@@ -222,11 +271,11 @@ echo
 # This is the exact fact Property C of diff_compiler_cli_help_conformance.sh
 # reports as `UNCOVERED` when it is missing. Here its absence is a FAIL, which
 # is the whole reason this gate exists.
-echo "-- K: every \`assertCliFlags\` verb prints a \`(known: …)\` roster --"
+echo "-- K: every \`requireArgs\` verb prints a \`(known: …)\` roster --"
 k_ok=0
 k_n=0
 if [ -z "$SRC_VERBS" ]; then
-  fail "K no \`assertCliFlags \"<verb>\"\` call found anywhere under compiler/ — the shared rejection helper has been removed or renamed. That is the regression this gate exists to catch, not a derivation bug: if the helper was deliberately renamed, update this gate's pattern in the same commit."
+  fail "K no \`requireArgs <verb>ArgSpec\` call resolving to a \`spec \"<verb>\"\` head found anywhere under compiler/ — the shared rejection helper has been removed or renamed. That is the regression this gate exists to catch, not a derivation bug: if the helper was deliberately renamed, update this gate's two-step pattern in the same commit."
 fi
 for v in $SRC_VERBS; do
   k_n=$((k_n + 1))
@@ -237,7 +286,7 @@ for v in $SRC_VERBS; do
       echo "   $v: $PR_MSG"
       ;;
     *)
-      fail "K source calls \`assertCliFlags \"$v\"\`, but \`medaka $v $BOGUS\` prints no \`(known: …)\` roster [$PR_VERDICT rc$PR_RC]: ${PR_MSG:-<silent>}"
+      fail "K source hands \`$v\`'s spec to \`requireArgs\`, but \`medaka $v $BOGUS\` prints no \`(known: …)\` roster [$PR_VERDICT rc$PR_RC]: ${PR_MSG:-<silent>}"
       ;;
   esac
 done
@@ -250,10 +299,10 @@ s_ok=0
 for v in $SRC_VERBS; do
   case " $VERBS " in
     *" $v "*) s_ok=$((s_ok + 1)) ;;
-    *) fail "S source calls \`assertCliFlags \"$v\"\`, but \`medaka help\` never lists \`$v\` — R cannot see it, so its rejection is unfloored." ;;
+    *) fail "S source hands \`$v\`'s spec to \`requireArgs\`, but \`medaka help\` never lists \`$v\` — R cannot see it, so its rejection is unfloored." ;;
   esac
   if is_exempt "$v"; then
-    fail "S \`$v\` has an \`assertCliFlags\` call AND sits in this gate's EXEMPT list — a covered verb must never be exempt."
+    fail "S \`$v\` has a \`requireArgs\` call AND sits in this gate's EXEMPT list — a covered verb must never be exempt."
   fi
 done
 echo "   S: $s_ok of $k_n covered verbs are visible to R."

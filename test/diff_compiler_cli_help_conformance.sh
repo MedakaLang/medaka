@@ -34,7 +34,8 @@
 # A and B are execution-derived: run the verb with the flag, read the answer.
 # C cannot be — nothing you can RUN enumerates the flags nobody thought to try —
 # so it reads the roster each verb prints in its own unknown-flag rejection
-# (`assertCliFlags`, compiler/driver/medaka_cli.mdk, landed by
+# (`unknownFlagMessage`, stdlib/args.mdk, rendered from the verb's own
+# `ArgSpec` in compiler/driver/medaka_cli.mdk; landed by
 # S-unknown-flag-floor). That is still the BINARY's answer, not a source-grep
 # guess: source-grep cannot attribute a flag to a verb, because the parse arms
 # live in per-verb helpers across three files.
@@ -61,7 +62,7 @@
 #     documented as accepted-and-ignored in its own help, so it is CONFORMING
 #     dead surface and this gate must not flag it.
 #   * C covers only the verbs that PRINT a roster. A verb with no
-#     `assertCliFlags` call is listed as `NO ROSTER (uncovered)` in the report
+#     rejection roster is listed as `NO ROSTER (uncovered)` in the report
 #     and asserted on in neither direction of C. `(known: none)` — a genuinely
 #     flagless verb — is covered vacuously and correctly.
 #   * `build` shells out to clang, so its probes are the slow ones; NO_BUILD=1

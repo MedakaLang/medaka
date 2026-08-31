@@ -28,7 +28,8 @@
 #                  indented line (mid-sentence `--flag` is prose, not a flag)
 #   parsed       ← RUNNING the verb with the flag and classifying the result
 #   known roster ← the `(known: …)` list the verb's OWN unknown-flag rejection
-#                  prints (`assertCliFlags`, compiler/driver/medaka_cli.mdk) —
+#                  prints (`unknownFlagMessage`, stdlib/args.mdk, over the
+#                  verb's own `ArgSpec`) —
 #                  the binary stating its parse arms in its own words
 #   subcommands  ← the sub-taking verb's own `(expected: …)` rejection wording
 #
@@ -132,14 +133,14 @@ cli_help_text_of() { cli_probe "$1" --help; cat "$CLI_OUT"; }
 
 # ── cli_known_flags_of <verb> ────────────────────────────────────────────────
 #
-# The roster the verb states IN ITS OWN WORDS: `assertCliFlags` renders
+# The roster the verb states IN ITS OWN WORDS: `unknownFlagMessage` renders
 # `(known: --a, --b, --c)` in every unknown-flag rejection. This is the binary's
 # statement of its parse arms — the only non-source-grep answer to "which flags
 # does this verb actually have", and the direction the execution probes cannot
 # reach (running a flag can show one EXISTS; nothing you can run enumerates the
 # ones you did not think to try).
 #
-# Bound, stated rather than hidden: a verb with no `assertCliFlags` call prints
+# Bound, stated rather than hidden: a verb that renders no rejection roster prints
 # no roster and yields the empty string — cli_known_flags_of cannot distinguish
 # "no flags" from "no roster", so callers that need that distinction must treat
 # an empty result as UNCOVERED, not as "zero flags". `(known: none)` — the

@@ -246,7 +246,7 @@ echo
 # text promising something the arms do not have. Nothing you can RUN enumerates
 # the flags nobody thought to try, so the reverse — an arm the help never
 # mentions — was invisible to this census until the verbs learned to state their
-# own roster. `assertCliFlags` renders `(known: --a, --b, --c)` in every
+# own roster. `unknownFlagMessage` renders `(known: --a, --b, --c)` in every
 # unknown-flag rejection (S-unknown-flag-floor), so the binary now answers this
 # direction too, in its own words. ALSO GATED.
 echo "── parsed-but-not-advertised (each flag the verb's own roster names) ──"
