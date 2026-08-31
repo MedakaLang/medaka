@@ -1,12 +1,20 @@
--- OWNERSHIP fixture for rule-stdlib-reimpl (#2248 Miss 1, S-ownership-exemption).
--- This fixture's own file id is `list` (`modIdOf` = basename minus `.mdk`), the
--- same module id the real stdlib uses for `list.reverse`. Before this slice the
--- rule had no ownership concept at all: any file whose path did not literally
--- contain a "stdlib" path segment (this one doesn't -- it lives under
--- test/lint_fixtures/) fired on ANY name+signature match, so this exact
--- `reverse` would have been a false positive. Ownership (the linted file's own
--- module == the matched candidate's module) must suppress it -- the true
--- owner's canonical definition is never a "reimplementation" of itself.
+-- OWNERSHIP fixture for rule-stdlib-reimpl (#2248 Miss 1, F1-ownership-basename-fix).
+-- This file's BASENAME is `list` -- the same module id the real stdlib uses for
+-- `list.reverse` -- but the file is NOT under `stdlib/`. It therefore owns
+-- nothing, and the rule MUST fire.
+--
+-- That is the whole point of the fixture. The ownership exemption originally
+-- shipped keyed on `modIdOf path` ALONE, with no `isStdlibPath` conjunct, which
+-- re-created #2248 Miss 1 one level down: any file anywhere named `list.mdk`
+-- became blanket-exempt from every `list` export. This fixture was then written
+-- with an EMPTY golden, enshrining that bug as the expected answer. Ownership
+-- needs both conjuncts -- under `stdlib/` AND the matching module id -- so the
+-- expectation here is a finding, not silence.
+--
+-- NOTE: the positive half (the true owner, `stdlib/list.mdk`, staying silent on
+-- its own `reverse`) is NOT expressible in this corpus: `diff_compiler_lint.sh`
+-- globs `test/lint_fixtures/*.mdk` flat, and no path under that directory has a
+-- `stdlib` path segment. It is covered by the contract's E1 check instead.
 export
 reverse : List a -> List a
 reverse [] = []

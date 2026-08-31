@@ -502,7 +502,7 @@ restampSeverity sev f =
 -- "this is stdlib code," not "this file owns this particular name."
 --
 -- `rule-stdlib-reimpl` does NOT use this: its exemption is per (path, name)
--- OWNERSHIP, not per path — see `ownsStdlibName` below.  A blanket path skip
+-- OWNERSHIP, not per path — see `firstMatchingModule` below.  A blanket path skip
 -- would wrongly exempt a stdlib file that only CONSUMES a name it doesn't own
 -- (`stdlib/toml.mdk` reimplementing `list.reverse` as `listReverse`) right
 -- alongside the file that legitimately defines it.
@@ -1568,11 +1568,19 @@ tyHeadName _ = None
 -- decided per matched candidate, not per file: `path`'s own module
 -- (`modIdOf path`) is threaded through so a candidate whose module IS that
 -- file is never offered as a match (`firstMatchingModule` below).
+--
+-- Ownership needs BOTH conjuncts.  A basename match alone is not ownership:
+-- `/tmp/whatever/list.mdk` is not `stdlib/list.mdk`, and keying the exemption
+-- on `modIdOf path` ALONE re-created #2248 Miss 1 one level down — any file
+-- anywhere named `list.mdk` became blanket-exempt from every `list` export.
+-- So the linted file must ALSO actually be under `stdlib/` (`isStdlibPath`)
+-- before it can own anything; outside stdlib the owner is `None` and no
+-- candidate is ever skipped.
 ruleStdlibReimpl : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
 ruleStdlibReimpl idx path _ pos prog =
     -- both hoisted out of the per-def loop: `stdlibIndexNames` sorts the whole
     -- key set on every call, and the signature map is one pass over the file.
-    let ownMod = modIdOf path
+    let ownMod = if isStdlibPath path then Some (modIdOf path) else None
     let names = stdlibIndexNames idx
     let sigs = sigTyMapOf prog
     -- dedupe by name so a multi-clause function (consecutive DFunDefs) fires once,
@@ -1594,10 +1602,10 @@ dedupeNamesLoc xs = dedupBy fst xs
 -- One def's findings: at most one, naming the stdlib module whose declared
 -- signature this def's own declared signature alpha-matches.  No signature in
 -- this file for the name ⇒ nothing to compare ⇒ no finding.  `ownMod` is the
--- linted file's own module id (`modIdOf path`) — a candidate owned by `ownMod`
--- is the true owner's canonical definition, never a "reimplementation" of
--- itself.
-reimplHit : StdlibIndex -> String -> List String -> HashMap String Ty -> (String, Option Loc) -> List Finding
+-- linted file's own module id when the file is under `stdlib/`, else `None` —
+-- a candidate owned by `ownMod` is the true owner's canonical definition,
+-- never a "reimplementation" of itself.
+reimplHit : StdlibIndex -> Option String -> List String -> HashMap String Ty -> (String, Option Loc) -> List Finding
 reimplHit idx ownMod names sigs (name, loc) = match get name sigs
   None => []
   Some ty => match firstMatchingExport idx ownMod (tyCanon ty) (filterList (relaxesOnto name) names)
@@ -1618,7 +1626,7 @@ relaxesOnto user std =
 -- `canon`, over the relaxed candidate names in index order — never the
 -- linted file's own module (`ownMod`), which is the true owner rather than a
 -- reimplementation of itself.
-firstMatchingExport : StdlibIndex -> String -> String -> List String -> Option (String, String)
+firstMatchingExport : StdlibIndex -> Option String -> String -> List String -> Option (String, String)
 firstMatchingExport _ _ _ [] = None
 firstMatchingExport idx ownMod canon (std::rest) = match firstMatchingModule ownMod canon (stdlibEntriesOf idx std)
   Some modName => Some (modName, std)
@@ -1627,12 +1635,19 @@ firstMatchingExport idx ownMod canon (std::rest) = match firstMatchingModule own
 -- Skip a candidate OWNED by `ownMod` (the linted file's own module) before
 -- testing the signature at all: the true owner's definition can never be a
 -- "reimplementation" of itself, regardless of what its signature canonicalises to.
-firstMatchingModule : String -> String -> List (String, Ty) -> Option String
+-- `ownMod` is `None` for any file outside `stdlib/`, which owns nothing.
+firstMatchingModule : Option String -> String -> List (String, Ty) -> Option String
 firstMatchingModule _ _ [] = None
 firstMatchingModule ownMod canon ((modName, ty)::rest)
-  | modName == ownMod = firstMatchingModule ownMod canon rest
+  | ownsModule ownMod modName = firstMatchingModule ownMod canon rest
   | tyCanon ty == canon = Some modName
   | otherwise = firstMatchingModule ownMod canon rest
+
+-- The linted file owns a candidate module iff it HAS an owning module id at all
+-- (i.e. it is under `stdlib/`) and that id is the candidate's.
+ownsModule : Option String -> String -> Bool
+ownsModule None _ = False
+ownsModule (Some own) modName = modName == own
 
 -- name → the `Ty` its top-level `DTypeSig` declares.  Built by walking the
 -- reversed decl list with an unconditional `set`, so the FIRST signature in the
