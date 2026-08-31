@@ -404,8 +404,10 @@ KNOWN_SUPERLINEAR="scoperefs"
 #
 # Every derivation above this line sets CEIL as a MARGIN OVER THE CURRENT READING
 # and never once measured what the DEFECT reads. #2331 asked for that measurement.
-# It has now been made, and the answer is that THIS ROW DOES NOT DISCRIMINATE A
-# #1031 REINTRODUCTION AT THIS BAND.
+# It has now been made ONCE, with a SYNTHETIC proxy, and THAT PROXY does not
+# discriminate at this band. Read the 2026-08-31 CORRECTION at the end of this
+# block before taking that as a verdict on #1031 itself: a second, stronger
+# reading of the same question already sits in this file and points the other way.
 #
 # METHOD — synthetic reintroduction, not a true revert. `git apply -R` of
 # 54f54bef6's resolve.mdk + typecheck.mdk hunks does not apply (four sprints of
@@ -425,26 +427,79 @@ KNOWN_SUPERLINEAR="scoperefs"
 #   FIXED (this tree)               r1=3.066  r2=3.300
 #   #1031 REINTRODUCED (synthetic)  r1=3.186  r2=3.356    <- and it PASSES at 3.41
 #
-# THE SEPARATION IS 1.7%. The ceiling would have to sit in 3.300 < CEIL < 3.356 to
-# tell the two apart. That window is NARROWER than the 3.1% constant-factor drift
-# width this very comment derives above, and narrower than the drift this row has
-# actually shown across trees (3.159 -> 3.091 -> 3.300 over three sprints, ~3.3%,
-# every step from an UNRELATED compiler change — felt-latency alone moved it 6.8%,
-# four times the whole window). A ceiling inside it is a false-red generator that
-# gets "repaired" by raising the ceiling, which is the exact drift loop #2331
-# exists to stop.
+# THE PROXY'S SEPARATION IS 1.7% (3.356 / 3.300). For the ceiling to tell THESE TWO
+# ARMS apart it would have to sit in 3.300 < CEIL < 3.356. That window is NARROWER
+# than the 3.1% constant-factor drift width this very comment derives above, and
+# narrower than the drift this row has actually shown across trees (3.159 -> 3.091
+# -> 3.300 over three sprints, ~3.3%, every step from an UNRELATED compiler change —
+# felt-latency alone moved it 6.8%, four times the whole window). A ceiling inside
+# THAT window is a false-red generator that gets "repaired" by raising the ceiling,
+# which is the exact drift loop #2331 exists to stop.
 #
-# ⇒ 3.41 IS NOT RAISED AND NOT LOWERED, and it is now honestly labelled: it bounds
-# THE LEDGERED #2172 COST GETTING WORSE, and it does NOT pin #1031. Do not read a
-# green `scoperefs` as evidence that #1031 has not been reintroduced — it is not
-# evidence either way, the same status test/diff_compiler_ir_scaling.sh's own
-# `diagbucket` row carries for #1019.
+# ── 🚨 2026-08-31 CORRECTION (sprint hold-the-gains, F-1; end-of-sprint review
+# finding S2-1). THE PARAGRAPH ABOVE MEASURES THE PROXY, NOT #1031. As first
+# written this block concluded flatly that "this row does not discriminate a #1031
+# reintroduction at this band". That reaches past its evidence, because a SECOND,
+# STRONGER reading of the same question is already recorded in this file, at this
+# same band, and it points the other way.
 #
-# THE LEVER IS THE BAND, NOT THE CEILING. Ratios climb with N on a quadratic row,
-# so a wider band separates the two arms; at IR_SCOPEREFS_N=6000 this tree already
-# reads 3.438 where 3000 reads 3.30. Measuring BOTH arms at 6000/12000/24000 is ~4x
-# this run and was past S-2's foreground budget. That is the follow-up, and #2331
-# stays OPEN for it. Do NOT discharge #2331 by moving this number.
+# THE OTHER READING is the TRUE, full-strength pre-#1031 revert kept at
+# SCOPEREFS_N below (grep 'base (pre-fix)'). It is real pre-fix code, not a plant,
+# and both arms come from one run of this same shape at N=3000/6000/12000:
+#
+#   TRUE PRE-FIX  (54f54bef6 base, 2026-08-27)  r1=3.118  r2=3.308
+#   TRUE POST-FIX (54f54bef6 head, same run)    r1=2.896  r2=3.161
+#
+#   separation = 3.308 / 3.161 = +4.65% on r2  (+4.72% against the 3.159 this file
+#   records from its own later 2026-08-28 re-measure of the head arm) — i.e. ~2.7x
+#   the synthetic's 1.70%.
+#
+# Carry that proportional separation onto today's fixed reading and it lands ABOVE
+# the shipped ceiling:  3.300 * 1.0465 = 3.4535  (this packet's fresh 3.298 gives
+# 3.4514). ON THE TRUE-STRENGTH NUMBER, 3.41 PLAUSIBLY WOULD CATCH A FULL
+# REINTRODUCTION. That is the opposite of what this block originally asserted.
+#
+# WHY THE TWO DISAGREE, as far as it is established. The synthetic reproduces the
+# pre-fix ASYMPTOTICS but not the pre-fix CODE: it plants a FLAT cons list
+# (`List (String, Int)`, one `lookupAssoc` scan) where the real pre-fix
+# `lookupBindId` walked a `List BScope` — and on THIS shape, where every `let` is
+# its own ELet (`stampLet` cons'd `zeroFrame [x_i] :: env`), that was N SINGLETON
+# frames: a constructor dispatch plus a nested `lookupAssoc` call PER ELEMENT
+# WALKED. Same O(depth) per lookup, materially larger constant. The ~2.7x gap is
+# consistent with that; it is not attributed beyond it.
+#   ⚠️ It is NOT explained by a missing second quadratic term. The only other
+#   pre-fix append is `paramZeroFrames pats ++ env` in stampExpr's ELam arm and
+#   stampClause — and `++` copies its LEFT operand only (runtime/medaka_rt.c
+#   `mdk_list_append` walks `xs`, shares `ys`), so it is O(#params), not O(|env|);
+#   this shape has no lambdas and no multi-clause let-group binders anyway.
+#
+# ⚠️ AND NEITHER NUMBER SETTLES THE QUESTION. The true revert is CROSS-TREE — a
+# different commit, four sprints and an unrelated 6.8% constant-factor shift ago —
+# so transposing its percentage onto today's reading is exactly the move this file
+# refuses when someone else makes it. The synthetic is same-box/same-day but is a
+# proxy of unmeasured fidelity. #1031's TRUE severity has NOT been re-measured on
+# today's tree.
+#
+# ⇒ WHAT IS HONEST TO SAY, and what this block now says: the synthetic
+# reintroduction measured here does not discriminate at this band; a stronger
+# cross-tree signal suggests 3.41 plausibly might; the question is OPEN. Do not
+# read a green `scoperefs` as PROOF that #1031 has not been reintroduced — and do
+# not read this block as proof that the row is blind to it either. Only the first
+# of those two claims was ever supported.
+#
+# ⇒ 3.41 IS NOT RAISED AND NOT LOWERED, on either number. Raising it on the
+# synthetic is the drift loop #2331 exists to stop; lowering it into a 1.7% window
+# is a false-red generator. What this row CERTAINLY bounds is THE LEDGERED #2172
+# COST GETTING WORSE.
+#
+# THE LEVER IS THE BAND — AND NOW ALSO THE FIDELITY OF THE REVERTED ARM. Ratios
+# climb with N on a quadratic row, so a wider band separates the arms; at
+# IR_SCOPEREFS_N=6000 this tree already reads 3.438 where 3000 reads 3.30.
+# Measuring BOTH arms at 6000/12000/24000 is ~4x this run and was past S-2's
+# foreground budget. #2331 stays OPEN for that AND for a FAITHFUL same-tree
+# reintroduction (restore the `List BScope` frame list in stampBindingIds, not a
+# flat list), so the answer stops depending on a cross-tree percentage. Do NOT
+# discharge #2331 by moving this number.
 KNOWN_CEIL_scoperefs="${KNOWN_CEIL_scoperefs:-3.41}";  KNOWN_FIXED_scoperefs="${KNOWN_FIXED_scoperefs:-2.60}"
 
 # Add-only deliberate-red seam. Default empty, set NOWHERE in the tree, and it

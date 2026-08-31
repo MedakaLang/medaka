@@ -585,8 +585,32 @@ while IFS= read -r f; do
       add 'diff_compiler_call_arity'
       # S-1-perf-gates-on-pr (#2330/#2262): check_ir_floor measures cachegrind Ir
       # for `medaka check` over the full lex->parse->resolve->typecheck pipeline —
-      # typecheck.mdk is squarely in what it guards, and it was reaching zero
-      # compiler-source arms before this change (F1/F2, contract).
+      # typecheck.mdk is squarely in what it guards.
+      #
+      # ⚠️ THIS LINE IS REDUNDANT TODAY AND IS KEPT ONLY AS A PIN (2026-08-31, F-1,
+      # end-of-sprint review finding S2-3). It shipped with the claim that
+      # check_ir_floor "was reaching zero compiler-source arms before this change";
+      # THAT CLAIM IS FALSE and is removed here. `add 'diff_compiler_check*'` at the
+      # head of this same arm ALREADY glob-matches diff_compiler_check_ir_floor, and
+      # so do the compiler/frontend/{resolve,marker}.mdk, compiler/driver/* and
+      # compiler/tools/* arms. Measured by neutralizing this line and re-deriving:
+      # the gate is selected either way, and a sweep of all 58 non-support,
+      # non-entries compiler/*.mdk files with this line disabled still reaches
+      # check_ir_floor from 21 of them.
+      #   Reproduce: comment this line out, then
+      #     echo compiler/types/typecheck.mdk > /tmp/chg.txt
+      #     PREFLIGHT_CHANGED_FILE=/tmp/chg.txt PREFLIGHT_DRY=1 sh test/preflight.sh \
+      #       | grep check_ir_floor
+      # (The general form of the false claim — the contract's F2, "no perf gate is
+      # reachable from a compiler-source PR" — was derived by grepping gate NAMES,
+      # which is blind to glob matches. Its two SIBLINGS in this commit are sound:
+      # ir_size on compiler/ir/* and closure_alloc + ir_size on compiler/backend/*
+      # each reach ZERO compiler-source arms when neutralized, verified by the same
+      # sweep. That is S-1's real new coverage.)
+      #
+      # Kept rather than deleted for the same reason compiler/tools/gate_cost.mdk's
+      # arm below re-states `diff_compiler_check*` explicitly: a later narrowing of
+      # this arm's glob must not silently drop the gate. It costs one dedup'd entry.
       add 'diff_compiler_check_ir_floor'
       # #2186: a compiler/types/* change can silently drain a must-fail pin
       # (an ill-typed program that used to be rejected starts being accepted)

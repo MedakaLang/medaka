@@ -655,7 +655,22 @@ guardwild:emit
 #
 #   typecheck net 325911341 -> 707869343 -> 1537319318   r1=2.172  r2=2.172
 #
-# FIXED reads 2.172; the DEFECT reads 2.217. The separation is 2.1%, so the ceiling
+# FIXED reads 2.172; the DEFECT reads 2.217.
+#
+# ⚠️ THE TWO ARE NOT EQUAL-STRENGTH EVIDENCE, and the separation below must be read
+# with that in mind (2026-08-31, F-1, end-of-sprint review finding S2-2). 2.172 is
+# a FRESH, SAME-TREE, SAME-BOX reading taken for this comment. 2.217 is a RELAYED
+# CROSS-TREE number: it is the 869d85483 calibration reading (2026-08-28), three
+# days and an unrelated sprint of compiler change earlier, and it is quoted here
+# WITHOUT re-measurement. Using it that way is licensed — the dates alone establish
+# that the calibration run contained both defects, which is the only property the
+# argument below needs, and the sprint contract's F4 rule permits a relayed reading
+# for exactly that kind of use — but a 2.1% "separation" computed across two trees
+# is not the same object as a 2.1% separation measured within one. A same-tree
+# two-arm revert of #2146/#2147 has NOT been run; it is part of what #2331 stays
+# open for.
+#
+# The separation is 2.1%, so the ceiling
 # would have to sit in 2.172 < CEIL < 2.217 to tell them apart. The sprint's own
 # headroom convention (10% over a freshly measured r2) gives 2.39; the tree's other
 # convention (20%) gives 2.61; BOTH are above 2.217 and so is the shipped 2.45.
