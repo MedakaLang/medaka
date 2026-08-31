@@ -755,7 +755,11 @@ while IFS= read -r f; do
       add 'diff_compiler_eval*'; add 'diff_compiler_snapshot*'; add 'diff_compiler_core_ir*'
       add 'diff_compiler_ported'; add 'diff_compiler_test'; add 'diff_compiler_capability_matrix'
       add 'diff_compiler_engines'
-      add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'; add 'diff_compiler_prelude_shadow_census' ;;
+      add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'; add 'diff_compiler_prelude_shadow_census'
+      # F-S3-6/F-2-mechanical-fixes: gates.toml now declares compiler/eval/eval.mdk
+      # a source of diff_compiler_check_ir_floor (it grades the `run`/`test` verbs,
+      # both driven by this file) — same reasoning as closure_alloc/ir_size above.
+      add 'diff_compiler_check_ir_floor' ;;
 
     # #1131: ir/core_ir_lower.mdk (SHADOW) and ir/core_ir.mdk (DICT) are both
     # cited sites under compiler/ir/*.

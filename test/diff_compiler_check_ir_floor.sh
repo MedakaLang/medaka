@@ -119,7 +119,12 @@ measure_ir() {
   valgrind --tool=cachegrind --cache-sim=no --branch-sim=no \
     --cachegrind-out-file="$WORK/cg.$_verb.out" \
     "$@" >/dev/null 2>"$WORK/vg.$_verb.err"
+  _vg_status=$?
   unset GC_INITIAL_HEAP_SIZE
+  if [ "$_vg_status" -ne 0 ]; then
+    printf 'measure_ir: wrapped `medaka %s` exited %s under valgrind — not grading a corrupted Ir count.\n' "$_verb" "$_vg_status" >&2
+    return 1
+  fi
   grep -a 'I  *refs:' "$WORK/vg.$_verb.err" | sed 's/.*I *refs: *//' | tr -d ' ,'
 }
 

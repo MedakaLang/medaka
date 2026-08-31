@@ -522,7 +522,7 @@ TIME_HEAP="${PERF_TIME_HEAP:-2147483648}"
 KNOWN_SUPERLINEAR="
 guardwild
 "
-KNOWN_CEIL_guardwild="3.68";  KNOWN_FIXED_guardwild="2.60"
+KNOWN_CEIL_guardwild="${KNOWN_CEIL_guardwild:-3.68}";  KNOWN_FIXED_guardwild="${KNOWN_FIXED_guardwild:-2.60}"
 
 # ── PERF_LEDGER_EXTRA: the DELIBERATE-RED SEAM for the ledger branches (#2150) ──
 #
@@ -807,6 +807,17 @@ gen_guardwild() {
   # what the ledger row below records. The guards are load-bearing twice over: an
   # UNguarded `_` arm would make every later arm unreachable, so only a guarded
   # catch-all can sit ahead of a constructor arm at all.
+  #
+  # ⚠️ That does NOT make every row in the generated program reachable. The FINAL
+  # guarded wildcard, `_ if k == (N-1)`, IS flagged unreachable by `medaka check`
+  # regardless of its guard — verified first-hand on the N=5 shape (`unreachable
+  # match arm. This pattern is already covered by an earlier arm`, on that last
+  # row). The cause is exhaustiveness, not the guard mechanism: every constructor
+  # of `T` is already matched by an earlier `Ci => i` arm by the time the match
+  # reaches the trailing row, so nothing can still reach it, guarded or not. Every
+  # EARLIER guarded wildcard row is genuinely reachable (that is what the guard
+  # buys — see above); only the last is dead, harmlessly (`check`-only diagnostic;
+  # lowering still compiles the row exactly as generated).
   #
   # ⚠️ It does NOT lift the `exhaust-guards` stage (#2333) — see the waiver in
   # test/PERF-STAGE-WAIVERS.txt for the measurement and why no shape can.

@@ -734,8 +734,8 @@ KNOWN_CEIL_modules_typecheck="2.45";  KNOWN_FIXED_modules_typecheck="2.10"
 # UNGRADED-as-red here rather than quietly floored: the band was chosen for cost, the
 # consequence is recorded on this line, and raising STAGE_IR_GUARDWILD_N to 50 is
 # expected to red `typecheck` and to need a third row at ceiling ~3.59.
-KNOWN_CEIL_guardwild_lower="4.05";  KNOWN_FIXED_guardwild_lower="2.60"
-KNOWN_CEIL_guardwild_emit="4.35";   KNOWN_FIXED_guardwild_emit="2.60"
+KNOWN_CEIL_guardwild_lower="${KNOWN_CEIL_guardwild_lower:-4.05}";  KNOWN_FIXED_guardwild_lower="${KNOWN_FIXED_guardwild_lower:-2.60}"
+KNOWN_CEIL_guardwild_emit="${KNOWN_CEIL_guardwild_emit:-4.35}";   KNOWN_FIXED_guardwild_emit="${KNOWN_FIXED_guardwild_emit:-2.60}"
 
 # ── OBSERVED RED (#2160 rule 1) ──────────────────────────────────────────────
 #
@@ -897,6 +897,20 @@ gen_match() {
 # `map (padWildRow a) wilds` merge of the column-0 wildcard rows — Θ(wildcards) per
 # branch, and here both counts are Θ(N). The guards are load-bearing: an UNguarded
 # `_` ahead of a constructor arm would make that arm unreachable.
+#
+# ⚠️ One arm in the actual generated program IS flagged unreachable regardless: the
+# FINAL guarded wildcard, `_ if k == (N-1)`. Verified first-hand with `medaka check`
+# on the N=5 shape — `unreachable match arm. This pattern is already covered by an
+# earlier arm`, pointing at that last `_ if k == 4 => 4` row. The reason has nothing
+# to do with the guard itself: by the time the match reaches that row every
+# constructor of `T` has already been matched by an earlier `Ci => i` arm, so the
+# type is exhausted and no value can still reach a trailing row, guarded or not.
+# Every EARLIER guarded wildcard row IS reachable (the guard is what keeps it from
+# swallowing the constructor arms below it, per the paragraph above) — only the last
+# one is dead, as a consequence of exhaustiveness, not of the guard mechanism this
+# shape exists to exercise. Harmless to what this generator measures: it is a
+# `check`-only diagnostic, and `compileRows`/lowering still compile the row exactly
+# as generated (no shape change from this comment fix).
 #
 # The perf_scaling.sh twin grades the same curve on NET ALLOCATION (ledger row
 # KNOWN_CEIL_guardwild); this gate is the one that grades `lower` ITSELF, which is
