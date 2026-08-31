@@ -90,6 +90,19 @@ test/fmt_clean_census          derived fmt-clean report (#1794, `make fmt-clean-
                                 gate, to avoid surfacing tree-wide pre-existing formatting
                                 debt as a sudden required-check failure (see the script header).
 
+test/cli_conformance_census    derived CLI conformance census (#2354, S-conformance-table,
+                                `make cli-conformance-census`): re-derives
+                                docs/ops/CLI-CONFORMANCE.md's machine-checkable columns —
+                                unknown-flag disposition, usage-error exit codes, stream
+                                discipline, --json channel, help/parse-arm agreement — by
+                                EXECUTING every verb of the built ./medaka. Always exits 0
+                                and asserts nothing: every non-conforming cell it reports
+                                today is a known OPEN defect that the cli-one-program
+                                sprint's later slices drain, so a gate here would be red
+                                from the day it landed. The ENFORCING gate is S-4's
+                                help/parse-arm agreement gate; this is the map that slice
+                                works from. See the script header.
+
 # ── sqlite (the GATES are sqlite/test/*_oracle.sh — those are in the `sqlite` shard) ──
 # Self-described, in its own header: "it is a status report, not a gate". It prints
 # OPEN/FIXED per known compiler bug and exits 0 unconditionally. Asserts nothing.
