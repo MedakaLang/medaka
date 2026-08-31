@@ -61,10 +61,13 @@
 -- keeps ALL of its impls at ALL types, even the ones a whole-program optimizer can
 -- prove unreachable from the concrete dict witnesses in play.
 --
--- SCOPE: called ONLY from `compiler/entries/wasm_emit_modules_main.mdk`.  The
--- prelude-free W1–W4 (`wasm_emit_main`) and typed W5 (`wasm_emit_typed_main`)
--- entries build their own minimal impl sets and are left byte-identical, as is the
--- LLVM path.
+-- SCOPE: called from the two entries that run the REAL multi-module front end —
+-- `compiler/entries/wasm_emit_modules_main.mdk` (the native modules emitter) and
+-- `compiler/entries/playground_main.mdk` (the in-browser combined diagnostics+emit
+-- compiler), which run the identical `lowerProgramEmit` → `emitProgram` shape and
+-- so must prune identically.  The prelude-free W1–W4 (`wasm_emit_main`) and typed
+-- W5 (`wasm_emit_typed_main`) entries build their own minimal impl sets and are
+-- left byte-identical, as is the LLVM path.
 
 import frontend.ast.{Route(..)}
 import ir.core_ir.{
