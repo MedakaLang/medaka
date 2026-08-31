@@ -1,43 +1,44 @@
 running doctests in stdlib/args.mdk
-  ok   stdlib/args.mdk:116: canonical (switch ["--write", "-w"] "rewrite in place")
-  ok   stdlib/args.mdk:125: flagLabel (value ["--out", "-o"] "PATH" "where to write")
-  ok   stdlib/args.mdk:135: flagLabel (valueList ["--stages"] "STAGES" "stages to render")
-  ok   stdlib/args.mdk:149: flagLabel (oneOf ["--engine"] ["eval", "native"] "which engine")
-  ok   stdlib/args.mdk:162: flagLabel (intValue ["--jobs"] "N" "worker count")
-  ok   stdlib/args.mdk:173: helpBlockOf (spec "check" [internal (switch ["--allow-internal"] "x")])
-  ok   stdlib/args.mdk:182: rosterOf (spec "fmt" [switch ["--write", "-w"] "rewrite in place"])
-  ok   stdlib/args.mdk:208: canonical (switch ["-w"] "rewrite in place")
-  ok   stdlib/args.mdk:224: rosterOf (spec "run" [switch ["--json"] "j", switch ["--release", "-r"] "r"])
-  ok   stdlib/args.mdk:243: unknownFlagMessage (spec "fmt" [switch ["--write", "-w"] "w"]) "--zzz"
-  ok   stdlib/args.mdk:245: unknownFlagMessage (spec "doc" []) "--zzz"
-  ok   stdlib/args.mdk:254: missingValueMessage (spec "build" [value ["-o"] "PATH" "out"]) "-o"
-  ok   stdlib/args.mdk:264: invalidValueMessage (spec "test" [oneOf ["--engine"] ["eval", "native"] "e"]) "--engine" "zzz"
-  ok   stdlib/args.mdk:266: invalidValueMessage (spec "gate" [intValue ["--jobs"] "N" "j"]) "--jobs" "x"
-  ok   stdlib/args.mdk:284: helpBlockOf (spec "fmt" [switch ["--write", "-w"] "rewrite in place", value ["--out"] "PATH" "where to write"])
-  ok   stdlib/args.mdk:294: flagLabel (switch ["--check"] "check only")
-  ok   stdlib/args.mdk:331: usageExitCode
-  ok   stdlib/args.mdk:344: map (a => flag "--write" a) (parseArgs (spec "fmt" [switch ["--write", "-w"] "w"]) ["--write"])
-  ok   stdlib/args.mdk:346: map (a => flag "--write" a) (parseArgs (spec "fmt" [switch ["--write", "-w"] "w"]) ["-w"])
-  ok   stdlib/args.mdk:351: map (a => flagValue "--out" a) (parseArgs (spec "fmt" [value ["--out", "-o"] "PATH" "o"]) ["--out", "x"])
-  ok   stdlib/args.mdk:353: map (a => flagValue "--out" a) (parseArgs (spec "fmt" [value ["--out", "-o"] "PATH" "o"]) ["--out=x"])
-  ok   stdlib/args.mdk:355: map (a => flagValue "--out" a) (parseArgs (spec "fmt" [value ["--out", "-o"] "PATH" "o"]) ["-o", "x"])
-  ok   stdlib/args.mdk:357: map (a => flagValue "--out" a) (parseArgs (spec "fmt" [value ["--out", "-o"] "PATH" "o"]) ["-o=x"])
-  ok   stdlib/args.mdk:362: map (_ => "ok") (parseArgs (spec "fmt" [switch ["--write", "-w"] "w"]) ["--zzz"])
-  ok   stdlib/args.mdk:364: map (_ => "ok") (parseArgs (spec "fmt" [value ["--out"] "PATH" "o"]) ["--out"])
-  ok   stdlib/args.mdk:371: map (a => a.positionals) (parseArgs (spec "check" [switch ["--json"] "j"]) ["-zzz", "f.mdk"])
-  ok   stdlib/args.mdk:376: map (a => a.positionals) (parseArgs (spec "fmt" [switch ["--write"] "w"]) ["a.mdk", "--write", "b.mdk"])
-  ok   stdlib/args.mdk:382: map (a => flagValue "--engine" a) (parseArgs (spec "test" [oneOf ["--engine"] ["eval", "native"] "e"]) ["--engine", "native"])
-  ok   stdlib/args.mdk:384: map (_ => "ok") (parseArgs (spec "test" [oneOf ["--engine"] ["eval", "native"] "e"]) ["--engine=zzz"])
-  ok   stdlib/args.mdk:386: map (a => flagValue "--jobs" a) (parseArgs (spec "gate" [intValue ["--jobs"] "N" "j"]) ["--jobs", "-3"])
-  ok   stdlib/args.mdk:388: map (_ => "ok") (parseArgs (spec "gate" [intValue ["--jobs"] "N" "j"]) ["--jobs", "x"])
-  ok   stdlib/args.mdk:394: map (_ => "ok") (parseArgs (spec "fmt" [switch ["--write"] "w"]) ["--"])
-  ok   stdlib/args.mdk:401: map (a => a.rest) (parseArgs (withTrailing TrailingRaw (spec "run" [switch ["--json"] "j"])) ["p.mdk", "--", "--foo"])
-  ok   stdlib/args.mdk:403: map (a => a.rest) (parseArgs (withTrailing TrailingRaw (spec "run" [switch ["--json"] "j"])) ["--json", "p.mdk", "--zzz"])
-  ok   stdlib/args.mdk:408: map (a => a.rest) (parseArgs (withTrailing TrailingAfterSeparator (spec "gate" [switch ["--json"] "j"])) ["--json", "--", "--x", "--"])
-  ok   stdlib/args.mdk:414: map (a => flagValue "--anything" a) (parseArgs (withUnknown CollectUnknown (spec "codemod" [])) ["--anything", "v"])
-  ok   stdlib/args.mdk:553: map (a => flag "--write" a) (parseArgs (spec "fmt" [switch ["--write", "-w"] "w"]) [])
-  ok   stdlib/args.mdk:565: map (a => flagValue "--out" a) (parseArgs (spec "fmt" [value ["--out"] "P" "o"]) ["--out", "a", "--out", "b"])
-  ok   stdlib/args.mdk:580: map (a => lastValue "--out" a) (parseArgs (spec "fmt" [value ["--out"] "P" "o"]) ["--out", "a", "--out", "b"])
-  ok   stdlib/args.mdk:594: map (a => flagValues "--out" a) (parseArgs (spec "fmt" [value ["--out"] "P" "o"]) ["--out", "a", "--out", "b"])
+  ok   stdlib/args.mdk:133: canonical (switch ["--write", "-w"] "rewrite in place")
+  ok   stdlib/args.mdk:142: flagLabel (value ["--out", "-o"] "PATH" "where to write")
+  ok   stdlib/args.mdk:152: flagLabel (valueList ["--stages"] "STAGES" "stages to render")
+  ok   stdlib/args.mdk:166: flagLabel (oneOf ["--engine"] ["eval", "native"] "which engine")
+  ok   stdlib/args.mdk:179: flagLabel (intValue ["--jobs"] "N" "worker count")
+  ok   stdlib/args.mdk:190: helpBlockOf (spec "check" [internal (switch ["--allow-internal"] "x")])
+  ok   stdlib/args.mdk:199: rosterOf (spec "fmt" [switch ["--write", "-w"] "rewrite in place"])
+  ok   stdlib/args.mdk:224: parseArgs (withStrictDash (spec "x" [])) ["-foo"]
+  ok   stdlib/args.mdk:235: canonical (switch ["-w"] "rewrite in place")
+  ok   stdlib/args.mdk:251: rosterOf (spec "run" [switch ["--json"] "j", switch ["--release", "-r"] "r"])
+  ok   stdlib/args.mdk:270: unknownFlagMessage (spec "fmt" [switch ["--write", "-w"] "w"]) "--zzz"
+  ok   stdlib/args.mdk:272: unknownFlagMessage (spec "doc" []) "--zzz"
+  ok   stdlib/args.mdk:281: missingValueMessage (spec "build" [value ["-o"] "PATH" "out"]) "-o"
+  ok   stdlib/args.mdk:291: invalidValueMessage (spec "test" [oneOf ["--engine"] ["eval", "native"] "e"]) "--engine" "zzz"
+  ok   stdlib/args.mdk:293: invalidValueMessage (spec "gate" [intValue ["--jobs"] "N" "j"]) "--jobs" "x"
+  ok   stdlib/args.mdk:311: helpBlockOf (spec "fmt" [switch ["--write", "-w"] "rewrite in place", value ["--out"] "PATH" "where to write"])
+  ok   stdlib/args.mdk:321: flagLabel (switch ["--check"] "check only")
+  ok   stdlib/args.mdk:358: usageExitCode
+  ok   stdlib/args.mdk:371: map (a => flag "--write" a) (parseArgs (spec "fmt" [switch ["--write", "-w"] "w"]) ["--write"])
+  ok   stdlib/args.mdk:373: map (a => flag "--write" a) (parseArgs (spec "fmt" [switch ["--write", "-w"] "w"]) ["-w"])
+  ok   stdlib/args.mdk:378: map (a => flagValue "--out" a) (parseArgs (spec "fmt" [value ["--out", "-o"] "PATH" "o"]) ["--out", "x"])
+  ok   stdlib/args.mdk:380: map (a => flagValue "--out" a) (parseArgs (spec "fmt" [value ["--out", "-o"] "PATH" "o"]) ["--out=x"])
+  ok   stdlib/args.mdk:382: map (a => flagValue "--out" a) (parseArgs (spec "fmt" [value ["--out", "-o"] "PATH" "o"]) ["-o", "x"])
+  ok   stdlib/args.mdk:384: map (a => flagValue "--out" a) (parseArgs (spec "fmt" [value ["--out", "-o"] "PATH" "o"]) ["-o=x"])
+  ok   stdlib/args.mdk:389: map (_ => "ok") (parseArgs (spec "fmt" [switch ["--write", "-w"] "w"]) ["--zzz"])
+  ok   stdlib/args.mdk:391: map (_ => "ok") (parseArgs (spec "fmt" [value ["--out"] "PATH" "o"]) ["--out"])
+  ok   stdlib/args.mdk:398: map (a => a.positionals) (parseArgs (spec "check" [switch ["--json"] "j"]) ["-zzz", "f.mdk"])
+  ok   stdlib/args.mdk:403: map (a => a.positionals) (parseArgs (spec "fmt" [switch ["--write"] "w"]) ["a.mdk", "--write", "b.mdk"])
+  ok   stdlib/args.mdk:409: map (a => flagValue "--engine" a) (parseArgs (spec "test" [oneOf ["--engine"] ["eval", "native"] "e"]) ["--engine", "native"])
+  ok   stdlib/args.mdk:411: map (_ => "ok") (parseArgs (spec "test" [oneOf ["--engine"] ["eval", "native"] "e"]) ["--engine=zzz"])
+  ok   stdlib/args.mdk:413: map (a => flagValue "--jobs" a) (parseArgs (spec "gate" [intValue ["--jobs"] "N" "j"]) ["--jobs", "-3"])
+  ok   stdlib/args.mdk:415: map (_ => "ok") (parseArgs (spec "gate" [intValue ["--jobs"] "N" "j"]) ["--jobs", "x"])
+  ok   stdlib/args.mdk:421: map (_ => "ok") (parseArgs (spec "fmt" [switch ["--write"] "w"]) ["--"])
+  ok   stdlib/args.mdk:428: map (a => a.rest) (parseArgs (withTrailing TrailingRaw (spec "run" [switch ["--json"] "j"])) ["p.mdk", "--", "--foo"])
+  ok   stdlib/args.mdk:430: map (a => a.rest) (parseArgs (withTrailing TrailingRaw (spec "run" [switch ["--json"] "j"])) ["--json", "p.mdk", "--zzz"])
+  ok   stdlib/args.mdk:435: map (a => a.rest) (parseArgs (withTrailing TrailingAfterSeparator (spec "gate" [switch ["--json"] "j"])) ["--json", "--", "--x", "--"])
+  ok   stdlib/args.mdk:441: map (a => flagValue "--anything" a) (parseArgs (withUnknown CollectUnknown (spec "codemod" [])) ["--anything", "v"])
+  ok   stdlib/args.mdk:583: map (a => flag "--write" a) (parseArgs (spec "fmt" [switch ["--write", "-w"] "w"]) [])
+  ok   stdlib/args.mdk:595: map (a => flagValue "--out" a) (parseArgs (spec "fmt" [value ["--out"] "P" "o"]) ["--out", "a", "--out", "b"])
+  ok   stdlib/args.mdk:610: map (a => lastValue "--out" a) (parseArgs (spec "fmt" [value ["--out"] "P" "o"]) ["--out", "a", "--out", "b"])
+  ok   stdlib/args.mdk:624: map (a => flagValues "--out" a) (parseArgs (spec "fmt" [value ["--out"] "P" "o"]) ["--out", "a", "--out", "b"])
 
-stdlib/args.mdk: 40/40 passed
+stdlib/args.mdk: 41/41 passed
