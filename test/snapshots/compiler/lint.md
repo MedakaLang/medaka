@@ -1,5 +1,5 @@
 # META
-source_lines=4663
+source_lines=4696
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -626,6 +626,39 @@ lintStdlibDir = match getEnv "MEDAKA_ROOT"
 
 exeStdlibDir : Unit -> <IO> String
 exeStdlibDir _ = "\{dirOf (executablePath ())}/stdlib"
+
+-- ── cache-staleness guard for `--cache` ─────────────────────────────────────
+-- `rule-stdlib-reimpl` (and only it, among `allRules`) reads content
+-- `--cache`'s key never sees: `buildStdlibIndex` parses the STDLIB SOURCE TREE
+-- from disk at runtime, not the running binary `lint_cache.ruleSetStamp`
+-- hashes. Editing `stdlib/list.mdk` changes what this rule reports for an
+-- UNCHANGED compiler/sqlite file, so a cached shard for that file would
+-- silently keep serving the pre-edit answer forever — a wrong hit, exactly
+-- the failure mode `lint_cache.mdk`'s module doc forbids. Folded into the
+-- cache stamp by the caller (`lintCacheCtx`, `medaka_cli.mdk`) alongside
+-- `ruleSetStamp`, so any stdlib edit invalidates every shard, the same way a
+-- rule-logic change does (#2327).
+export
+stdlibFingerprint : <IO> String
+stdlibFingerprint = match listDir lintStdlibDir
+  Err _ => ""
+  Ok entries =>
+    let names = stdlibMdkNames entries
+    let joined = stdlibFingerprintGo lintStdlibDir names
+    -- Hashed down to a fixed-size digest rather than stored raw: this string
+    -- lands in EVERY shard's `stamp` field (`lint_cache.storeEntries`), so
+    -- keeping it compact matters the same way `contentHashOf`'s two-lane
+    -- digest does. `listLen names` guards against the all-files-missing
+    -- degenerate case ("" for both an empty stdlib and a 0-file listDir)
+    -- collapsing into the same fingerprint as a genuinely absent stdlib.
+    "\{hashString joined}.\{listLen names}"
+
+stdlibFingerprintGo : String -> List String -> <IO> String
+stdlibFingerprintGo _ [] = ""
+stdlibFingerprintGo dir (n::rest) =
+  let path = "\{dir}/\{n}"
+  let h = hashString (readFileSafe path)
+  "\{n}:\{h};\{stdlibFingerprintGo dir rest}"
 
 -- (module, name, declared type) for every exported signature in the stdlib's
 -- top-level `.mdk` files.  A directory that will not list yields [] — the
@@ -4801,6 +4834,11 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "lintStdlibDir" () (EMatch (EApp (EVar "getEnv") (ELit (LString "MEDAKA_ROOT"))) (arm (PCon "Some" (PVar "v")) () (EIf (EBinOp "==" (EVar "v") (ELit (LString ""))) (EApp (EVar "exeStdlibDir") (ELit LUnit)) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "v"))) (ELit (LString "/stdlib"))))) (arm (PCon "None") () (EApp (EVar "exeStdlibDir") (ELit LUnit)))))
 (DTypeSig false "exeStdlibDir" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "String"))))
 (DFunDef false "exeStdlibDir" (PWild) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "dirOf") (EApp (EVar "executablePath") (ELit LUnit))))) (ELit (LString "/stdlib"))))
+(DTypeSig true "stdlibFingerprint" (TyEffect ("IO") None (TyCon "String")))
+(DFunDef false "stdlibFingerprint" () (EMatch (EApp (EVar "listDir") (EVar "lintStdlibDir")) (arm (PCon "Err" PWild) () (ELit (LString ""))) (arm (PCon "Ok" (PVar "entries")) () (EBlock (DoLet false false (PVar "names") (EApp (EVar "stdlibMdkNames") (EVar "entries"))) (DoLet false false (PVar "joined") (EApp (EApp (EVar "stdlibFingerprintGo") (EVar "lintStdlibDir")) (EVar "names"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "hashString") (EVar "joined")))) (ELit (LString "."))) (EApp (EVar "display") (EApp (EVar "listLen") (EVar "names")))) (ELit (LString ""))))))))
+(DTypeSig false "stdlibFingerprintGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "String")))))
+(DFunDef false "stdlibFingerprintGo" (PWild (PList)) (ELit (LString "")))
+(DFunDef false "stdlibFingerprintGo" ((PVar "dir") (PCons (PVar "n") (PVar "rest"))) (EBlock (DoLet false false (PVar "path") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "dir"))) (ELit (LString "/"))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "")))) (DoLet false false (PVar "h") (EApp (EVar "hashString") (EApp (EVar "readFileSafe") (EVar "path")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "n"))) (ELit (LString ":"))) (EApp (EVar "display") (EVar "h"))) (ELit (LString ";"))) (EApp (EVar "display") (EApp (EApp (EVar "stdlibFingerprintGo") (EVar "dir")) (EVar "rest")))) (ELit (LString ""))))))
 (DTypeSig false "stdlibSigTriples" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ty"))))))
 (DFunDef false "stdlibSigTriples" ((PVar "dir")) (EMatch (EApp (EVar "listDir") (EVar "dir")) (arm (PCon "Err" PWild) () (EListLit)) (arm (PCon "Ok" (PVar "entries")) () (EApp (EApp (EVar "flatMap") (EApp (EVar "stdlibFileSigs") (EVar "dir"))) (EApp (EVar "stdlibMdkNames") (EVar "entries"))))))
 (DTypeSig false "groupStdlibSigs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ty"))) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))))))
@@ -6365,6 +6403,11 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "lintStdlibDir" () (EMatch (EApp (EVar "getEnv") (ELit (LString "MEDAKA_ROOT"))) (arm (PCon "Some" (PVar "v")) () (EIf (EBinOp "==" (EVar "v") (ELit (LString ""))) (EApp (EVar "exeStdlibDir") (ELit LUnit)) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString "/stdlib"))))) (arm (PCon "None") () (EApp (EVar "exeStdlibDir") (ELit LUnit)))))
 (DTypeSig false "exeStdlibDir" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "String"))))
 (DFunDef false "exeStdlibDir" (PWild) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "dirOf") (EApp (EVar "executablePath") (ELit LUnit))))) (ELit (LString "/stdlib"))))
+(DTypeSig true "stdlibFingerprint" (TyEffect ("IO") None (TyCon "String")))
+(DFunDef false "stdlibFingerprint" () (EMatch (EApp (EVar "listDir") (EVar "lintStdlibDir")) (arm (PCon "Err" PWild) () (ELit (LString ""))) (arm (PCon "Ok" (PVar "entries")) () (EBlock (DoLet false false (PVar "names") (EApp (EVar "stdlibMdkNames") (EVar "entries"))) (DoLet false false (PVar "joined") (EApp (EApp (EVar "stdlibFingerprintGo") (EVar "lintStdlibDir")) (EVar "names"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "hashString") (EVar "joined")))) (ELit (LString "."))) (EApp (EMethodRef "display") (EApp (EVar "listLen") (EVar "names")))) (ELit (LString ""))))))))
+(DTypeSig false "stdlibFingerprintGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "String")))))
+(DFunDef false "stdlibFingerprintGo" (PWild (PList)) (ELit (LString "")))
+(DFunDef false "stdlibFingerprintGo" ((PVar "dir") (PCons (PVar "n") (PVar "rest"))) (EBlock (DoLet false false (PVar "path") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "dir"))) (ELit (LString "/"))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "")))) (DoLet false false (PVar "h") (EApp (EVar "hashString") (EApp (EVar "readFileSafe") (EVar "path")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EVar "h"))) (ELit (LString ";"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "stdlibFingerprintGo") (EVar "dir")) (EVar "rest")))) (ELit (LString ""))))))
 (DTypeSig false "stdlibSigTriples" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ty"))))))
 (DFunDef false "stdlibSigTriples" ((PVar "dir")) (EMatch (EApp (EVar "listDir") (EVar "dir")) (arm (PCon "Err" PWild) () (EListLit)) (arm (PCon "Ok" (PVar "entries")) () (EApp (EApp (EDictApp "flatMap") (EApp (EVar "stdlibFileSigs") (EVar "dir"))) (EApp (EVar "stdlibMdkNames") (EVar "entries"))))))
 (DTypeSig false "groupStdlibSigs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ty"))) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))))))

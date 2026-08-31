@@ -1,5 +1,5 @@
 # META
-source_lines=3364
+source_lines=3377
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/medaka_cli.mdk — the native `medaka` CLI dispatcher (Phase C
@@ -190,6 +190,7 @@ import tools.lint.{
   isFindingError,
   lintFileDiagTriple,
   splitLintNames,
+  stdlibFingerprint,
 }
 import tools.lint_cache.{
   LintEntry(..),
@@ -2641,6 +2642,17 @@ runLintCmd argv =
 -- medaka.toml sits, and lands the cache at the repo root, which is what the
 -- pre-commit hook wants).  A cache dir that resolves somewhere unexpected costs
 -- misses, never wrong answers.
+--
+-- The stamp folds in `stdlib.stdlibFingerprint` alongside `ruleSetStamp`
+-- (#2327): `rule-stdlib-reimpl` reads the STDLIB SOURCE TREE from disk at
+-- runtime (`buildStdlibIndex`), content `ruleSetStamp`'s binary hash never
+-- observes. Without this, editing `stdlib/list.mdk` would leave every OTHER
+-- file's cached findings silently answering with the pre-edit stdlib —
+-- exactly the "wrong hit" `lint_cache.mdk`'s invariant forbids. Folding it
+-- into every shard's stamp (rather than skipping caching only for this one
+-- rule) is the smaller fix: shards are per-FILE, not per-rule, so declining
+-- caching "for this rule" would mean declining it for every file, which is
+-- declining it outright.
 lintCacheCtx : Bool -> Bool -> <IO> Option (String, String)
 lintCacheCtx False _ = None
 lintCacheCtx True True = None
@@ -2648,11 +2660,12 @@ lintCacheCtx True False
   | not crossFileCacheSound = None
   | otherwise =
     let root = findProjectRootOrSelf (canonicalizePath ".")
-    let stamp = ruleSetStamp ()
+    let binStamp = ruleSetStamp ()
     -- An empty stamp means the binary could not be read, so the rule set cannot
     -- be identified — the one input that makes a hit meaningful is missing.
     -- Decline rather than share a cache across unknown rule sets.
-    if stamp == "" then None else Some (cacheDirOf root, stamp)
+    if binStamp == "" then None
+    else Some (cacheDirOf root, "\{binStamp}.\{stdlibFingerprint}")
 
 -- `medaka lint --json`: run the lint pipeline over every resolved target file
 -- and emit the SAME `{"files":[{"file":...,"diagnostics":[...]}]}` envelope
@@ -3393,7 +3406,7 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("tools" "lsp") ((mem "runServer" false))))
 (DUse false (UseGroup ("tools" "mcp") ((mem "runMcpServer" false))))
 (DUse false (UseGroup ("tools" "doc") ((mem "runDoc" false))))
-(DUse false (UseGroup ("tools" "lint") ((mem "allRules" false) (mem "lintProgram" false) (mem "StdlibIndex" false) (mem "buildStdlibIndex" false) (mem "applySuppressions" false) (mem "applySuppressionsMulti" false) (mem "applySuppressionsDirs" false) (mem "applySuppressionsMultiDirs" false) (mem "collectDirectives" false) (mem "findingToDiag" false) (mem "Finding" false) (mem "Directive" false) (mem "applyFixes" false) (mem "runCrossFileRules" false) (mem "runCrossFileRulesFromOccs" false) (mem "crossFileCacheSound" false) (mem "fileDupOccs" false) (mem "parseLintFlagList" false) (mem "applyFindingFilters" false) (mem "applyFindingDeny" false) (mem "isFindingError" false) (mem "lintFileDiagTriple" false) (mem "splitLintNames" false))))
+(DUse false (UseGroup ("tools" "lint") ((mem "allRules" false) (mem "lintProgram" false) (mem "StdlibIndex" false) (mem "buildStdlibIndex" false) (mem "applySuppressions" false) (mem "applySuppressionsMulti" false) (mem "applySuppressionsDirs" false) (mem "applySuppressionsMultiDirs" false) (mem "collectDirectives" false) (mem "findingToDiag" false) (mem "Finding" false) (mem "Directive" false) (mem "applyFixes" false) (mem "runCrossFileRules" false) (mem "runCrossFileRulesFromOccs" false) (mem "crossFileCacheSound" false) (mem "fileDupOccs" false) (mem "parseLintFlagList" false) (mem "applyFindingFilters" false) (mem "applyFindingDeny" false) (mem "isFindingError" false) (mem "lintFileDiagTriple" false) (mem "splitLintNames" false) (mem "stdlibFingerprint" false))))
 (DUse false (UseGroup ("tools" "lint_cache") ((mem "LintEntry" true) (mem "contentHashOf" false) (mem "ruleSetStamp" false) (mem "cacheDirOf" false) (mem "loadEntry" false) (mem "storeEntries" false))))
 (DUse false (UseGroup ("tools" "codemod") ((mem "findCodemod" false) (mem "codemodMk" false) (mem "codemodWarnDecls" false) (mem "codemodListing" false) (mem "codemodSource" false))))
 (DUse false (UseGroup ("tools" "check_policy") ((mem "runCheckPolicy" false) (mem "PolicyArgs" true) (mem "parsePolicyArgs" false) (mem "PolicyOutcome" true) (mem "runManifest" false) (mem "parseManifestArgs" false) (mem "ManifestArgs" true))))
@@ -3690,7 +3703,7 @@ runMcpServerFromEnv _ =
 (DTypeSig false "lintCacheCtx" (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))))
 (DFunDef false "lintCacheCtx" ((PCon "False") PWild) (EVar "None"))
 (DFunDef false "lintCacheCtx" ((PCon "True") (PCon "True")) (EVar "None"))
-(DFunDef false "lintCacheCtx" ((PCon "True") (PCon "False")) (EIf (EApp (EVar "not") (EVar "crossFileCacheSound")) (EVar "None") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "root") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "canonicalizePath") (ELit (LString "."))))) (DoLet false false (PVar "stamp") (EApp (EVar "ruleSetStamp") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "stamp") (ELit (LString ""))) (EVar "None") (EApp (EVar "Some") (ETuple (EApp (EVar "cacheDirOf") (EVar "root")) (EVar "stamp")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "lintCacheCtx" ((PCon "True") (PCon "False")) (EIf (EApp (EVar "not") (EVar "crossFileCacheSound")) (EVar "None") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "root") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "canonicalizePath") (ELit (LString "."))))) (DoLet false false (PVar "binStamp") (EApp (EVar "ruleSetStamp") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "binStamp") (ELit (LString ""))) (EVar "None") (EApp (EVar "Some") (ETuple (EApp (EVar "cacheDirOf") (EVar "root")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "binStamp"))) (ELit (LString "."))) (EApp (EVar "display") (EVar "stdlibFingerprint"))) (ELit (LString "")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "runLintJsonCmd" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))))))
 (DFunDef false "runLintJsonCmd" ((PVar "idx") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "files")) (EBlock (DoLet false false (PVar "triples") (EApp (EApp (EApp (EApp (EApp (EVar "lintFilesToDiagTriples") (EVar "idx")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "files"))) (DoLet false false PWild (EApp (EVar "putStr") (EApp (EVar "cjAllToJson") (EVar "triples")))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (EVar "cjLintTripleHasErr")) (EVar "triples")) (EApp (EVar "exit") (ELit (LInt 1))) (ELit LUnit)))))
 (DTypeSig false "lintFilesToDiagTriples" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))))
@@ -3840,7 +3853,7 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("tools" "lsp") ((mem "runServer" false))))
 (DUse false (UseGroup ("tools" "mcp") ((mem "runMcpServer" false))))
 (DUse false (UseGroup ("tools" "doc") ((mem "runDoc" false))))
-(DUse false (UseGroup ("tools" "lint") ((mem "allRules" false) (mem "lintProgram" false) (mem "StdlibIndex" false) (mem "buildStdlibIndex" false) (mem "applySuppressions" false) (mem "applySuppressionsMulti" false) (mem "applySuppressionsDirs" false) (mem "applySuppressionsMultiDirs" false) (mem "collectDirectives" false) (mem "findingToDiag" false) (mem "Finding" false) (mem "Directive" false) (mem "applyFixes" false) (mem "runCrossFileRules" false) (mem "runCrossFileRulesFromOccs" false) (mem "crossFileCacheSound" false) (mem "fileDupOccs" false) (mem "parseLintFlagList" false) (mem "applyFindingFilters" false) (mem "applyFindingDeny" false) (mem "isFindingError" false) (mem "lintFileDiagTriple" false) (mem "splitLintNames" false))))
+(DUse false (UseGroup ("tools" "lint") ((mem "allRules" false) (mem "lintProgram" false) (mem "StdlibIndex" false) (mem "buildStdlibIndex" false) (mem "applySuppressions" false) (mem "applySuppressionsMulti" false) (mem "applySuppressionsDirs" false) (mem "applySuppressionsMultiDirs" false) (mem "collectDirectives" false) (mem "findingToDiag" false) (mem "Finding" false) (mem "Directive" false) (mem "applyFixes" false) (mem "runCrossFileRules" false) (mem "runCrossFileRulesFromOccs" false) (mem "crossFileCacheSound" false) (mem "fileDupOccs" false) (mem "parseLintFlagList" false) (mem "applyFindingFilters" false) (mem "applyFindingDeny" false) (mem "isFindingError" false) (mem "lintFileDiagTriple" false) (mem "splitLintNames" false) (mem "stdlibFingerprint" false))))
 (DUse false (UseGroup ("tools" "lint_cache") ((mem "LintEntry" true) (mem "contentHashOf" false) (mem "ruleSetStamp" false) (mem "cacheDirOf" false) (mem "loadEntry" false) (mem "storeEntries" false))))
 (DUse false (UseGroup ("tools" "codemod") ((mem "findCodemod" false) (mem "codemodMk" false) (mem "codemodWarnDecls" false) (mem "codemodListing" false) (mem "codemodSource" false))))
 (DUse false (UseGroup ("tools" "check_policy") ((mem "runCheckPolicy" false) (mem "PolicyArgs" true) (mem "parsePolicyArgs" false) (mem "PolicyOutcome" true) (mem "runManifest" false) (mem "parseManifestArgs" false) (mem "ManifestArgs" true))))
@@ -4137,7 +4150,7 @@ runMcpServerFromEnv _ =
 (DTypeSig false "lintCacheCtx" (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))))
 (DFunDef false "lintCacheCtx" ((PCon "False") PWild) (EVar "None"))
 (DFunDef false "lintCacheCtx" ((PCon "True") (PCon "True")) (EVar "None"))
-(DFunDef false "lintCacheCtx" ((PCon "True") (PCon "False")) (EIf (EApp (EVar "not") (EVar "crossFileCacheSound")) (EVar "None") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "root") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "canonicalizePath") (ELit (LString "."))))) (DoLet false false (PVar "stamp") (EApp (EVar "ruleSetStamp") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "stamp") (ELit (LString ""))) (EVar "None") (EApp (EVar "Some") (ETuple (EApp (EVar "cacheDirOf") (EVar "root")) (EVar "stamp")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "lintCacheCtx" ((PCon "True") (PCon "False")) (EIf (EApp (EVar "not") (EVar "crossFileCacheSound")) (EVar "None") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "root") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "canonicalizePath") (ELit (LString "."))))) (DoLet false false (PVar "binStamp") (EApp (EVar "ruleSetStamp") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "binStamp") (ELit (LString ""))) (EVar "None") (EApp (EVar "Some") (ETuple (EApp (EVar "cacheDirOf") (EVar "root")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "binStamp"))) (ELit (LString "."))) (EApp (EMethodRef "display") (EVar "stdlibFingerprint"))) (ELit (LString "")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "runLintJsonCmd" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))))))
 (DFunDef false "runLintJsonCmd" ((PVar "idx") (PVar "disableNames") (PVar "onlyNames") (PVar "denyNames") (PVar "files")) (EBlock (DoLet false false (PVar "triples") (EApp (EApp (EApp (EApp (EApp (EVar "lintFilesToDiagTriples") (EVar "idx")) (EVar "disableNames")) (EVar "onlyNames")) (EVar "denyNames")) (EVar "files"))) (DoLet false false PWild (EApp (EVar "putStr") (EApp (EVar "cjAllToJson") (EVar "triples")))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (EVar "cjLintTripleHasErr")) (EVar "triples")) (EApp (EVar "exit") (ELit (LInt 1))) (ELit LUnit)))))
 (DTypeSig false "lintFilesToDiagTriples" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))))))

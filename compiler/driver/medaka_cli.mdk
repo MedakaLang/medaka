@@ -186,6 +186,7 @@ import tools.lint.{
   isFindingError,
   lintFileDiagTriple,
   splitLintNames,
+  stdlibFingerprint,
 }
 import tools.lint_cache.{
   LintEntry(..),
@@ -2637,6 +2638,17 @@ runLintCmd argv =
 -- medaka.toml sits, and lands the cache at the repo root, which is what the
 -- pre-commit hook wants).  A cache dir that resolves somewhere unexpected costs
 -- misses, never wrong answers.
+--
+-- The stamp folds in `stdlib.stdlibFingerprint` alongside `ruleSetStamp`
+-- (#2327): `rule-stdlib-reimpl` reads the STDLIB SOURCE TREE from disk at
+-- runtime (`buildStdlibIndex`), content `ruleSetStamp`'s binary hash never
+-- observes. Without this, editing `stdlib/list.mdk` would leave every OTHER
+-- file's cached findings silently answering with the pre-edit stdlib —
+-- exactly the "wrong hit" `lint_cache.mdk`'s invariant forbids. Folding it
+-- into every shard's stamp (rather than skipping caching only for this one
+-- rule) is the smaller fix: shards are per-FILE, not per-rule, so declining
+-- caching "for this rule" would mean declining it for every file, which is
+-- declining it outright.
 lintCacheCtx : Bool -> Bool -> <IO> Option (String, String)
 lintCacheCtx False _ = None
 lintCacheCtx True True = None
@@ -2644,11 +2656,12 @@ lintCacheCtx True False
   | not crossFileCacheSound = None
   | otherwise =
     let root = findProjectRootOrSelf (canonicalizePath ".")
-    let stamp = ruleSetStamp ()
+    let binStamp = ruleSetStamp ()
     -- An empty stamp means the binary could not be read, so the rule set cannot
     -- be identified — the one input that makes a hit meaningful is missing.
     -- Decline rather than share a cache across unknown rule sets.
-    if stamp == "" then None else Some (cacheDirOf root, stamp)
+    if binStamp == "" then None
+    else Some (cacheDirOf root, "\{binStamp}.\{stdlibFingerprint}")
 
 -- `medaka lint --json`: run the lint pipeline over every resolved target file
 -- and emit the SAME `{"files":[{"file":...,"diagnostics":[...]}]}` envelope
