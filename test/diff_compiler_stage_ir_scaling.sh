@@ -311,6 +311,17 @@ XREF_N="${STAGE_IR_XREF_N:-125}"
 VCHAIN_N="${STAGE_IR_VCHAIN_N:-125}"
 CONSTR_N="${STAGE_IR_CONSTR_N:-300}"
 WIDEIFACE_N="${STAGE_IR_WIDEIFACE_N:-125}"
+# `guardwild` (#2125) is banded LOWER than its siblings, and the reason is a property
+# no other shape here has: its lowered decision tree is Θ(N²) NODES for a Θ(N) source
+# file, so `emit` renders a quadratic program and the wall cost of a single profile
+# grows as N² even before Callgrind's multiplier. See GUARDWILD_N in
+# diff_compiler_perf_scaling.sh for the measured native cost curve (0.33 s at N=50,
+# 2.86 s at N=400). The band below is derived, not inherited — see the OBSERVED
+# margins and the band-choice note beside KNOWN_CEIL_guardwild_lower. ⚠️ It is also
+# NOT the band perf_scaling.sh's twin uses (PERF_GUARDWILD_N=100): each gate's band is
+# sized against its own instrument's cost, and the ceilings on both sides are
+# band-specific, so the two knobs move independently and neither number transfers.
+GUARDWILD_N="${STAGE_IR_GUARDWILD_N:-25}"
 # S-5-scoperefs-attribution (#2172): per-stage attribution, NOT a re-grade of
 # ir_scaling.sh's module-level scoperefs row (KNOWN_CEIL_scoperefs=3.26 at
 # IR_SCOPEREFS_N=3000 — a different gate, different cost budget). Callgrind here
@@ -626,8 +637,105 @@ typecheck=mdk_types_typecheck__checkModules"
 # there is diagnosed against THIS row.
 KNOWN_SLOW="
 modules:typecheck
+guardwild:lower
+guardwild:emit
 "
+#
+# ── 🚨 2026-08-31, sprint hold-the-gains S-2 (#2331 Case 2): THIS CEILING DOES NOT
+# CATCH A #2146/#2147 REVERT, AND THAT IS NOW MEASURED RATHER THAN SUSPECTED.
+#
+# The 2.217 above is the CALIBRATION reading, and the calibration run CONTAINED both
+# defects: it was taken in 869d85483 (2026-08-28 05:19) and the #2146/#2147 fix
+# landed in b6b61ed8d (2026-08-29 21:36).
+#   Derive: git log --format='%h %ci' -L 630,630:test/diff_compiler_stage_ir_scaling.sh
+# So "CEILING 2.45 clears the measured r2=2.217 by ~10%" above is clearing the
+# DEFECT'S OWN READING by 10% — a full revert lands at ~2.217, under 2.45, GREEN.
+#
+# Re-measured post-fix on this box, this tree (STAGE_IR_ONLY=modules):
+#
+#   typecheck net 325911341 -> 707869343 -> 1537319318   r1=2.172  r2=2.172
+#
+# FIXED reads 2.172; the DEFECT reads 2.217.
+#
+# ⚠️ THE TWO ARE NOT EQUAL-STRENGTH EVIDENCE, and the separation below must be read
+# with that in mind (2026-08-31, F-1, end-of-sprint review finding S2-2). 2.172 is
+# a FRESH, SAME-TREE, SAME-BOX reading taken for this comment. 2.217 is a RELAYED
+# CROSS-TREE number: it is the 869d85483 calibration reading (2026-08-28), three
+# days and an unrelated sprint of compiler change earlier, and it is quoted here
+# WITHOUT re-measurement. Using it that way is licensed — the dates alone establish
+# that the calibration run contained both defects, which is the only property the
+# argument below needs, and the sprint contract's F4 rule permits a relayed reading
+# for exactly that kind of use — but a 2.1% "separation" computed across two trees
+# is not the same object as a 2.1% separation measured within one. A same-tree
+# two-arm revert of #2146/#2147 has NOT been run; it is part of what #2331 stays
+# open for.
+#
+# The separation is 2.1%, so the ceiling
+# would have to sit in 2.172 < CEIL < 2.217 to tell them apart. The sprint's own
+# headroom convention (10% over a freshly measured r2) gives 2.39; the tree's other
+# convention (20%) gives 2.61; BOTH are above 2.217 and so is the shipped 2.45.
+# No percentage headroom rule discharges this. A ceiling inside a 2.1% window on a
+# row whose siblings spread 2.041-2.089 in the same run is a false-red generator.
+#
+# ⇒ 2.45 IS NOT RAISED AND NOT LOWERED. Raising is [W-QUIETER]; lowering into the
+# window trades a silent miss for a flap that gets "repaired" by raising it again.
+# What this row honestly bounds is THE LEDGERED FOUR-SITE COST GETTING WORSE (the
+# attribution above), not a #2146/#2147 reintroduction. Do not read it as the
+# latter, and do not discharge #2331 by moving this number — the lever is the band
+# (N=25/50/100, K=8), which needs a fresh two-arm ladder nobody has paid for yet.
 KNOWN_CEIL_modules_typecheck="2.45";  KNOWN_FIXED_modules_typecheck="2.10"
+
+# ── guardwild:lower / guardwild:emit — #2125, the residual of #408's fix ──────
+#
+# WHAT THESE ROWS PIN. #408 was `buildConSwitch` calling `specializeCon c a rows` once
+# per distinct head, each call scanning the whole matrix. Its fix buckets the rows in
+# ONE pass (`conBuckets`) — but the wildcard rows cannot be bucketed, because a
+# column-0 wildcard belongs to EVERY branch. `wildTailRows` collects them once and
+# `conBranch` then merges `map (padWildRow a) wilds` into each branch, which is Θ(W)
+# per head. #2125 is the observation that this leaves the fix Θ(N) per branch whenever
+# W itself scales, and `gen_guardwild` is the first shape in the tree where it does:
+# interleaving `Ci => i` with `_ if k == i => i` makes both the head count and the
+# wildcard-row count Θ(N).
+#
+# ⚠️ READ THESE AS QUADRATIC-AWARE CEILINGS, NOT AS "NEARLY FIXED" NUMBERS. Branch
+# `Ci` genuinely must test the `i` guards ordered ahead of it, so the LOWERED TREE has
+# sum(i) = Θ(N²) nodes and `emit` renders every one. A ~2.0 reading on either row would
+# mean the tree stopped being built, not that the cost was optimised away — which is
+# exactly why both rows carry a KNOWN_FIXED that a real linearisation must cross rather
+# than a threshold-adjacent ceiling. Draining #2125 means a lowering that stops
+# materialising one full copy of the guard chain per head (sharing it, or compiling the
+# guard column separately), i.e. a codegen change; it is NOT a data-structure swap of
+# the kind that drained #408, #906, #970 and the other rows in this file's history.
+#
+# MEASURED, this box, at the shipped band (N=25/50/100, Callgrind Ir is deterministic
+# so these are exact, not min-of-K):
+#     lower  net 4348134 -> 14817404 ->  54546012   r1 3.408  r2 3.681
+#     emit   net 34342774 -> 129609545 -> 512033423 r1 3.774  r2 3.951
+# OBSERVED RED before ledgering, verbatim:
+#     $ STAGE_IR_ONLY=guardwild STAGE_IR_GUARDWILD_N=25 sh test/diff_compiler_stage_ir_scaling.sh
+#       lower     ** SUPERLINEAR (stage Ir) ** r1=3.408 r2=3.681 (threshold 3.0, r2 alone)
+#       emit      ** SUPERLINEAR (stage Ir) ** r1=3.774 r2=3.951 (threshold 3.0, r2 alone)
+#     FAIL: 10 stage-ratio(s) graded, 2 over the line.
+#
+# CEILINGS are S-2's convention — 10% over the freshly measured r2 (3.681 -> 4.05,
+# 3.951 -> 4.35) — and both stay well under the ~8 a CUBIC would read, so the regression
+# these rows actually bound (wilds being re-derived per branch, i.e. #408 coming back on
+# top of #2125) still reds them. FIXED 2.60 sits above the ~2.0-2.2 every linear row in
+# this file reads and far below the observed 3.68/3.95, so neither a band wobble nor an
+# unrelated compiler change can false-PROMOTE them.
+#
+# ⚠️ BAND CHOICE, STATED PLAINLY BECAUSE IT LOOKS LIKE BAND-SHOPPING AND IS NOT. At
+# 25/50/100 this shape costs 57 s of Callgrind (measured, `time` on the narrowed run) —
+# the ~1 min/shape budget SCOPEREFS_N was also sized to. At 50/100/200 it costs ~4 min,
+# and a THIRD row crosses the line there: `typecheck` reads r1=2.725 r2=3.262 (against
+# 2.401/2.726 at the shipped band). That row is the SAME intrinsic Θ(N²) one stage
+# earlier — exhaust's `useful` over a matrix carrying Θ(N) wildcard rows AND Θ(N)
+# constructor rows — not a separate defect, and it is deliberately left UNLEDGERED and
+# UNGRADED-as-red here rather than quietly floored: the band was chosen for cost, the
+# consequence is recorded on this line, and raising STAGE_IR_GUARDWILD_N to 50 is
+# expected to red `typecheck` and to need a third row at ceiling ~3.59.
+KNOWN_CEIL_guardwild_lower="${KNOWN_CEIL_guardwild_lower:-4.05}";  KNOWN_FIXED_guardwild_lower="${KNOWN_FIXED_guardwild_lower:-2.60}"
+KNOWN_CEIL_guardwild_emit="${KNOWN_CEIL_guardwild_emit:-4.35}";   KNOWN_FIXED_guardwild_emit="${KNOWN_FIXED_guardwild_emit:-2.60}"
 
 # ── OBSERVED RED (#2160 rule 1) ──────────────────────────────────────────────
 #
@@ -775,6 +883,54 @@ gen_match() {
   # `main` CALLS `toInt` — load-bearing. `main = println 1` roots nothing, dceFilter
   # prunes `toInt` outright, and every backend stage then times an empty program.
   printf 'main = println (toInt C0)\n' >> "$gf"
+}
+
+# gen_match's GUARDED-WILDCARD sibling (issue #2125, the residual of #408's fix).
+# The match INTERLEAVES a constructor arm `Ci => i` with a guarded catch-all arm
+# `_ if k == i => i`, N times.
+#
+# ⚠️ THE INTERLEAVING IS THE SHAPE. A block of guarded `_` arms followed by the
+# constructor arms measures nothing: `compileRows` tests `allWild pats` on the FIRST
+# row before `buildConSwitch` is ever reached, so a leading run of guarded wildcards
+# is peeled one row at a time and the con-switch sees no wildcard row at all. What
+# this shape reaches instead is `conBranch`, which hands EVERY head its own
+# `map (padWildRow a) wilds` merge of the column-0 wildcard rows — Θ(wildcards) per
+# branch, and here both counts are Θ(N). The guards are load-bearing: an UNguarded
+# `_` ahead of a constructor arm would make that arm unreachable.
+#
+# ⚠️ One arm in the actual generated program IS flagged unreachable regardless: the
+# FINAL guarded wildcard, `_ if k == (N-1)`. Verified first-hand with `medaka check`
+# on the N=5 shape — `unreachable match arm. This pattern is already covered by an
+# earlier arm`, pointing at that last `_ if k == 4 => 4` row. The reason has nothing
+# to do with the guard itself: by the time the match reaches that row every
+# constructor of `T` has already been matched by an earlier `Ci => i` arm, so the
+# type is exhausted and no value can still reach a trailing row, guarded or not.
+# Every EARLIER guarded wildcard row IS reachable (the guard is what keeps it from
+# swallowing the constructor arms below it, per the paragraph above) — only the last
+# one is dead, as a consequence of exhaustiveness, not of the guard mechanism this
+# shape exists to exercise. Harmless to what this generator measures: it is a
+# `check`-only diagnostic, and `compileRows`/lowering still compile the row exactly
+# as generated (no shape change from this comment fix).
+#
+# The perf_scaling.sh twin grades the same curve on NET ALLOCATION (ledger row
+# KNOWN_CEIL_guardwild); this gate is the one that grades `lower` ITSELF, which is
+# where #408 was found and where its residual lives — #408 was invisible to both the
+# op and the alloc arm because a bucket miss is an alloc-free `c2 == c`.
+gen_guardwild() {
+  gn=$1; gf=$2; : > "$gf"
+  printf 'data T =\n' >> "$gf"
+  gi=0; while [ "$gi" -lt "$gn" ]; do
+    if [ "$gi" -eq 0 ]; then printf '  C%s\n' "$gi"; else printf '  | C%s\n' "$gi"; fi
+    gi=$((gi + 1))
+  done >> "$gf"
+  printf 'toInt : T -> Int -> Int\ntoInt v k = match v\n' >> "$gf"
+  gi=0; while [ "$gi" -lt "$gn" ]; do
+    printf '  C%s => %s\n' "$gi" "$gi"
+    printf '  _ if k == %s => %s\n' "$gi" "$gi"
+    gi=$((gi + 1))
+  done >> "$gf"
+  # Same rooting rule as gen_match, same reason.
+  printf 'main = println (toInt C0 0)\n' >> "$gf"
 }
 
 gen_xref() {
@@ -1331,6 +1487,7 @@ grade_shape xref "$XREF_N"
 grade_shape vchain "$VCHAIN_N"
 grade_shape constrained "$CONSTR_N"
 grade_shape wideiface "$WIDEIFACE_N"
+grade_shape guardwild "$GUARDWILD_N"
 grade_shape scoperefs "$SCOPEREFS_N"
 grade_modules
 
