@@ -59,6 +59,8 @@ wasm-tools parse "$WAT" -o "$WASM"
 echo "  ASSEMBLE_OK"
 wasm-tools validate --features=all "$WASM"
 echo "  VALIDATE_OK"
+wasm-tools strip --all "$WASM" -o "$WASM"   # drop the debug name section (same as wasmAssemble)
+echo "  STRIP_OK"
 rm -f "$WAT"   # keep dist lean; WAT is huge and regenerable
 
 # ── stage the stdlib sources the browser vfs will feed ───────────────────────────
