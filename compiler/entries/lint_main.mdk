@@ -2,7 +2,10 @@
 -- not interpreted:
 --
 --   FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one lint_main
---   test/bin/lint_main <source.mdk>            # what diff_compiler_lint.sh runs
+--   MEDAKA_ROOT="$ROOT" test/bin/lint_main <source.mdk>   # what diff_compiler_lint.sh
+--   runs — the gate exports MEDAKA_ROOT before invoking the binary. A bare
+--   invocation without MEDAKA_ROOT set silently reports NOTHING (the stdlib
+--   reference index builds empty), it does not error.
 --
 -- ⚠️ `medaka run compiler/entries/lint_main.mdk <source.mdk>` — the form this
 -- header used to advertise — no longer works.  This entry now builds the stdlib

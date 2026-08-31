@@ -235,7 +235,7 @@ derivableRule = Rule {
 stdlibReimplRule : Rule
 stdlibReimplRule = Rule {
   name = ruleNameStdlibReimpl,
-  descr = "top-level function shadows a common stdlib/prelude name (STYLE §7a)",
+  descr = "top-level function reimplements a stdlib function under a different name (same declared signature) (STYLE §7a)",
   severity = SevWarning,
   enabled = True,
   check = ruleStdlibReimpl,

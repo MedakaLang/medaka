@@ -239,7 +239,7 @@ derivableRule = Rule {
 stdlibReimplRule : Rule
 stdlibReimplRule = Rule {
   name = ruleNameStdlibReimpl,
-  descr = "top-level function shadows a common stdlib/prelude name (STYLE §7a)",
+  descr = "top-level function reimplements a stdlib function under a different name (same declared signature) (STYLE §7a)",
   severity = SevWarning,
   enabled = True,
   check = ruleStdlibReimpl,
@@ -4841,7 +4841,7 @@ duplicateBodySameFileRule = Rule {
 (DTypeSig false "derivableRule" (TyCon "Rule"))
 (DFunDef false "derivableRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameDerivable")) (fa "descr" (ELit (LString "hand-written Eq/Ord/Debug impl that could be `deriving` (STYLE §6)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleDerivable")) (fa "fix" (EVar "None")))))
 (DTypeSig false "stdlibReimplRule" (TyCon "Rule"))
-(DFunDef false "stdlibReimplRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameStdlibReimpl")) (fa "descr" (ELit (LString "top-level function shadows a common stdlib/prelude name (STYLE §7a)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleStdlibReimpl")) (fa "fix" (EVar "None")))))
+(DFunDef false "stdlibReimplRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameStdlibReimpl")) (fa "descr" (ELit (LString "top-level function reimplements a stdlib function under a different name (same declared signature) (STYLE §7a)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleStdlibReimpl")) (fa "fix" (EVar "None")))))
 (DTypeSig false "bindThenDestructureRule" (TyCon "Rule"))
 (DFunDef false "bindThenDestructureRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameBindThenDestructure")) (fa "descr" (ELit (LString "do-bind then immediately destructures the bound var with an irrefutable single-arm `match`. Inline the pattern into the bind"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleBindThenDestructure")) (fa "fix" (EApp (EVar "Some") (EVar "bindThenDestructureFix"))))))
 (DTypeSig false "lambdaSectionRule" (TyCon "Rule"))
@@ -6434,7 +6434,7 @@ duplicateBodySameFileRule = Rule {
 (DTypeSig false "derivableRule" (TyCon "Rule"))
 (DFunDef false "derivableRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameDerivable")) (fa "descr" (ELit (LString "hand-written Eq/Ord/Debug impl that could be `deriving` (STYLE §6)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleDerivable")) (fa "fix" (EVar "None")))))
 (DTypeSig false "stdlibReimplRule" (TyCon "Rule"))
-(DFunDef false "stdlibReimplRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameStdlibReimpl")) (fa "descr" (ELit (LString "top-level function shadows a common stdlib/prelude name (STYLE §7a)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleStdlibReimpl")) (fa "fix" (EVar "None")))))
+(DFunDef false "stdlibReimplRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameStdlibReimpl")) (fa "descr" (ELit (LString "top-level function reimplements a stdlib function under a different name (same declared signature) (STYLE §7a)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleStdlibReimpl")) (fa "fix" (EVar "None")))))
 (DTypeSig false "bindThenDestructureRule" (TyCon "Rule"))
 (DFunDef false "bindThenDestructureRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameBindThenDestructure")) (fa "descr" (ELit (LString "do-bind then immediately destructures the bound var with an irrefutable single-arm `match`. Inline the pattern into the bind"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleBindThenDestructure")) (fa "fix" (EApp (EVar "Some") (EVar "bindThenDestructureFix"))))))
 (DTypeSig false "lambdaSectionRule" (TyCon "Rule"))

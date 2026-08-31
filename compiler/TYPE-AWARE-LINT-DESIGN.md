@@ -472,11 +472,13 @@ gives 940 net-new findings, 650 of them ambiguous — unshippable, let alone as
 `SevError`. What actually shipped (S2/S3) is **Tier 0, not Tier 1**: a
 declared-signature *filter* on a NAME-RELAXED candidate set (`ruleStdlibReimpl`,
 `compiler/tools/lint.mdk`) — no typecheck, no `orc.schemeOfTop`, no `Loc`
-bridging at all. The filter narrows 1,866 name-relaxed candidates to ~74 (this
-sprint's measured live count over `compiler stdlib sqlite`); it is precision on
-top of a name heuristic, not a type fact standing alone, and it ships as
-`SevWarning` — ungated, since the tree carries 74 pre-existing findings across
-32 files that this sprint's #2327 drain issue tracks, not `SevError`. See §9's
+bridging at all. It is precision on top of a name heuristic, not a type fact
+standing alone — F7 measured a DIFFERENT relaxation choice (case-insensitive
+prefix/suffix, len ≥ 4) narrowing 1,866 name candidates to 60 survivors, not
+the relaxation S2/S3 shipped, so the two counts are not comparable — and the
+rule ships as `SevWarning` — ungated, since the tree carries 76 pre-existing
+findings across 33 files that this sprint's #2327 drain issue tracks, not
+`SevError`. See §9's
 own 2026-08-31 correction for how this reclassifies the "Tier 1 customer" claim.
 
 **(d) Redundant conversion / wrapping.** Two flavors:
@@ -574,9 +576,13 @@ Tier 1 ... Tier 1 now has a filed, motivated customer"* is **measured false** �
 Miss 2 was answered by a **Tier 0** mechanism (a declared-signature filter over
 a name-relaxed candidate set, `compiler/tools/lint.mdk`'s `ruleStdlibReimpl`),
 not by `orc.schemeOfTop`/Tier 1's typed-scheme machinery at all. Measured
-2026-08-31: the shipped declared-signature filter answers Miss 2 in ~0.055s
-(no typecheck) against Tier 1's own ~7.7s cost estimate for a comparable pass,
-and does so **more faithfully** than a Tier-1 route would have — `ppScheme`
+2026-08-31 (F3, re-measured on the shipped binary — a prior version of this
+correction cited ~0.055s, which was the PRE-sprint rule's cost: it reported
+nothing and built no index, so it measured a different program): the shipped
+declared-signature filter answers Miss 2 in ~0.25s (`medaka lint` on a small
+file, `MEDAKA_STRICT=1`, no typecheck) against Tier 1's own ~7.7s cost
+estimate for a comparable pass, and does so **more faithfully** than a Tier-1
+route would have — `ppScheme`
 erases effect rows (32 of `stdlib/list.mdk`'s own 77 signatures differ under
 it; see §7a's rule doc), so comparing *rendered schemes* would have been the
 wrong comparison even set up correctly. Net effect: Tier 1 does **not** have a
