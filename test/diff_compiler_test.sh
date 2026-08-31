@@ -245,9 +245,13 @@ nh_out="$(run_t "$TIMEOUT" "$RUN" "$RUNTIME" "$CORE" "$nh" "$ROOT/test/compiler_
 nh_expected="running doctests in test/compiler_test_fixtures/hash_negative_hash.mdk
   (no doctests found)
 running tests in test/compiler_test_fixtures/hash_negative_hash.mdk
+  running test/compiler_test_fixtures/hash_negative_hash.mdk:32: hash_map: negative hash finds its key (#416)
   ok   test/compiler_test_fixtures/hash_negative_hash.mdk:32: hash_map: negative hash finds its key (#416)
+  running test/compiler_test_fixtures/hash_negative_hash.mdk:35: hash_set: negative hash finds its element (#416)
   ok   test/compiler_test_fixtures/hash_negative_hash.mdk:35: hash_set: negative hash finds its element (#416)
+  running test/compiler_test_fixtures/hash_negative_hash.mdk:38: hash_map: intMinBound hash (#416)
   ok   test/compiler_test_fixtures/hash_negative_hash.mdk:38: hash_map: intMinBound hash (#416)
+  running test/compiler_test_fixtures/hash_negative_hash.mdk:40: hash_set: intMinBound hash (#416)
   ok   test/compiler_test_fixtures/hash_negative_hash.mdk:40: hash_set: intMinBound hash (#416)
 
 test/compiler_test_fixtures/hash_negative_hash.mdk: 4/4 passed"
@@ -280,8 +284,11 @@ cc_out="$(run_t "$TIMEOUT" "$RUN" "$RUNTIME" "$CORE" "$cc" "$ROOT/test/compiler_
 cc_expected="running doctests in test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk
   (no doctests found)
 running tests in test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk
+  running test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk:25: amod's own Box tags TA
   ok   test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk:25: amod's own Box tags TA
+  running test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk:27: the imported bmod Box tags TB
   ok   test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk:27: the imported bmod Box tags TB
+  running test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk:29: a Pass/Fail collision does not break the test runner
   ok   test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk:29: a Pass/Fail collision does not break the test runner
 
 test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk: 3/3 passed"
