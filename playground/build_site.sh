@@ -3,7 +3,7 @@
 #
 # Produces playground/site/ containing exactly what a static CDN needs:
 #   index.html
-#   favicon.svg
+#   favicon.svg  og-card.png
 #   main.js
 #   editor.js  medaka_lang.js  medaka_tokenizer.js  diagnostics_map.js
 #   language-worker.js
@@ -48,6 +48,7 @@ mkdir -p "$SITE/vendor/wat2wasm" "$SITE/vendor/codemirror" "$SITE/dist"
 # Static page + JS glue (editor modules included)
 cp "$SCRIPT_DIR/index.html"          "$SITE/"
 cp "$SCRIPT_DIR/favicon.svg"         "$SITE/"
+cp "$SCRIPT_DIR/og-card.png"         "$SITE/"
 cp "$SCRIPT_DIR/main.js"             "$SITE/"
 cp "$SCRIPT_DIR/editor.js"           "$SITE/"
 cp "$SCRIPT_DIR/medaka_lang.js"      "$SITE/"

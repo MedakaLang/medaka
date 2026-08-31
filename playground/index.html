@@ -8,14 +8,19 @@
   <meta name="theme-color" content="#0b0e14">
   <link rel="icon" href="./favicon.svg" type="image/svg+xml">
 
-  <!-- Link preview. og:image is still absent: it needs a real raster card
-       (SVG is not honoured by most scrapers). Without it this renders as a
-       text-only summary card, which is correct, just plainer. -->
+  <!-- Link preview. og:image must be an ABSOLUTE url — scrapers do not
+       resolve relative ones — so it is pinned to the production origin and
+       will not render a card when served from any other host. Regenerate the
+       image with: python3 playground/build_og_card.py -->
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://medaka-lang.dev/">
+  <meta property="og:image" content="https://medaka-lang.dev/og-card.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="medaka — a pragmatic functional language. A Medaka program defining a Shape type and computing areas.">
   <meta property="og:title" content="Medaka Playground">
   <meta property="og:description" content="Write Medaka and run it in your browser. The real compiler — type checker, WasmGC backend and all — runs client-side; nothing is sent to a server.">
-  <meta name="twitter:card" content="summary">
+  <meta name="twitter:card" content="summary_large_image">
   <!-- Resolve the `codemirror` bare specifier to the vendored single-ESM bundle
        (no serve-time bundler; mirrors how wat2wasm is vendored). Must precede
        any module script. -->
