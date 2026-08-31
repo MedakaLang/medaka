@@ -807,6 +807,9 @@ while IFS= read -r f; do
       # ir_size is driven by compiler/backend/* (emits the text-IR it counts) too.
       add 'diff_compiler_closure_alloc'
       add 'diff_compiler_ir_size'
+      # F-3-backend-arm-gap: gates.toml's diff_compiler_check_ir_floor.sources lists
+      # llvm_emit.mdk (F-2/F-S3-6) — same reasoning as F-S3-7's compiler/eval/* addition.
+      add 'diff_compiler_check_ir_floor'
       need_fixpoint=1 ;;
 
     # #1131: driver/loader.mdk is a cited DICT-SEMANTICS site.
