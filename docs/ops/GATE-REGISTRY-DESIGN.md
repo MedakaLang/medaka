@@ -84,7 +84,17 @@ shard       = "frontend"       # ci.yml `gates` matrix ROW: engines|sqlite|pds|f
                                #   types|eval|backend|tools, or `other-job` for a gate
                                #   some OTHER workflow job schedules (#2177)
 project     = "compiler"       # compiler | sqlite | gzip | pds | mq | parsec | byteparser
-tier        = "merge"          # merge | nightly | ondemand
+tiers       = ["merge"]        # the SET OF RUNS this gate has (#2181). Each element is
+                               #   a RUN TOKEN `<tier>` or `<tier>/<mode>`, where <tier>
+                               #   is merge|nightly|ondemand and <mode> is the INVOCATION
+                               #   DELTA — the comma-joined, sorted KEY=VALUE env the
+                               #   invoking step sets, e.g. "nightly/PERF_DEEP=1". A gate
+                               #   can run at several tiers, which the old single `tier`
+                               #   string could not say; two committed entries did, and
+                               #   were silently wrong for it. Sorted, unique, non-empty;
+                               #   `ondemand` appears alone and never with a mode.
+                               #   Shape checked by `gate verify`; agreement with the
+                               #   workflows by test/diff_compiler_tier_drift.sh.
 cost        = "cheap"          # cheap|medium|heavy — the CI kill timeout `timeoutFor`
                                #   enforces: cheap 300s / medium 900s / heavy 3600s. No
                                #   fourth class; this is also what `gate budget` clause
@@ -262,6 +272,9 @@ in `compiler/tools/gate_cmd.mdk` beside `compiler/tools/test_cmd.mdk`:
 
 **Selector language (LANDED).** Boring, as designed: a selector is `field:pattern`
 where `field` ∈ `name`/`area`/`project`/`tier` and `pattern` is a glob (`*`, `?`); a
+`tier:` glob matches a gate when it matches any of its run tokens in full or that
+token's tier part alone, so `tier:nightly` selects every nightly run including
+`nightly/PERF_DEEP=1`, and `tier:nightly/PERF_DEEP=1` selects only that mode; a
 bare token is sugar for `name:<token>`; several selectors on one line are a
 conjunction. No general query language. Source-path matching is NOT part of the
 selector language and is not meant to be: it is `gate explain <path>`'s job, because a
@@ -379,8 +392,11 @@ own place in the bootstrap, for no gain — §5's circularity is unchanged eithe
 
   The tier axis (`merge` | `nightly` | `ondemand`) is the other lever on the
   pole besides re-ingesting: a gate whose failure is a breadth check rather
-  than a soundness one can be moved to `nightly` and stop costing the queue
-  anything at all, rather than merely being packed onto a lighter row.
+  than a soundness one can be moved to `tiers = ["nightly"]` and stop costing
+  the queue anything at all, rather than merely being packed onto a lighter
+  row. ⚠️ Moving it means REPLACING the merge token, not adding a nightly one:
+  `tiers = ["merge", "nightly"]` is a gate that runs in BOTH, which costs the
+  queue exactly what it did before.
   `pds/nightly/repo_vectors_eval_engine.sh` (#2208, "S-2-pds-pole") is that
   mechanism in use: the interpreter's agreement with the compiled engines on
   the representative corpus used to be `pds/test/repo_vectors.sh`'s own pole
