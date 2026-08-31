@@ -679,8 +679,7 @@ parseListArgs ("--registry"::p::rest) acc =
 parseListArgs ("--registry"::[]) _ =
   Err "medaka gate list: --registry needs a path"
 parseListArgs (a::rest) acc
-  | stringLength a > 0 && stringSlice 0 1 a == "-" =
-    Err "medaka gate list: unknown flag: \{a}"
+  | stringLength a > 0 && stringSlice 0 1 a == "-" = Err "medaka gate list: unrecognized flag '\{a}' (known: --json, --shards, --registry)"
   | otherwise =
     parseListArgs rest ListArgs { acc | selectors = a::acc.selectors }
 
@@ -1328,8 +1327,7 @@ parseRunArgs ("--jobs"::v::rest) acc = match parseDecChecked v
   Some n => parseRunArgs rest RunArgs { acc | jobs = n }
 parseRunArgs ("--jobs"::[]) _ = Err "medaka gate run: --jobs needs a number"
 parseRunArgs (a::rest) acc
-  | stringLength a > 0 && stringSlice 0 1 a == "-" =
-    Err "medaka gate run: unknown flag: \{a}"
+  | stringLength a > 0 && stringSlice 0 1 a == "-" = Err "medaka gate run: unrecognized flag '\{a}' (known: --dry-run, --json, --no-stale-check, --registry, --report, --timeout, --jobs)"
   | otherwise = parseRunArgs rest RunArgs { acc | selectors = a::acc.selectors }
 
 emptyRunArgs : RunArgs
@@ -1864,7 +1862,8 @@ parseVerifyArgs ("--registry"::p::rest) acc =
   parseVerifyArgs rest VerifyArgs { acc | registry = Some p }
 parseVerifyArgs ("--registry"::[]) _ =
   Err "medaka gate verify: --registry needs a path"
-parseVerifyArgs (a::_) _ = Err "medaka gate verify: unknown flag: \{a}"
+parseVerifyArgs (a::_) _ =
+  Err "medaka gate verify: unrecognized flag '\{a}' (known: --registry)"
 
 verifyCmdBody : List String -> <IO> Unit
 verifyCmdBody argv = match parseVerifyArgs argv VerifyArgs { registry = None }
@@ -2118,8 +2117,7 @@ parseExplainArgs ("--registry"::[]) _ =
 parseExplainArgs ("--prose"::rest) acc =
   parseExplainArgs rest ExplainArgs { acc | prose = True }
 parseExplainArgs (a::rest) acc
-  | stringLength a > 0 && stringSlice 0 1 a == "-" =
-    Err "medaka gate explain: unknown flag: \{a}"
+  | stringLength a > 0 && stringSlice 0 1 a == "-" = Err "medaka gate explain: unrecognized flag '\{a}' (known: --registry, --prose)"
   | otherwise = match acc.path
     Some _ => Err "medaka gate explain: expected exactly one <path> argument"
     None => parseExplainArgs rest ExplainArgs { acc | path = Some a }
@@ -2399,7 +2397,7 @@ parseReachArgs ("--paths-from"::[]) _ =
 parseReachArgs ("--json"::rest) acc =
   parseReachArgs rest ReachArgs { acc | json = True }
 parseReachArgs (a::rest) acc
-  | stringLength a > 0 && stringSlice 0 1 a == "-" = Err "medaka gate reach: unknown flag: \{a} (use `--` before a path starting with '-')"
+  | stringLength a > 0 && stringSlice 0 1 a == "-" = Err "medaka gate reach: unrecognized flag '\{a}' (known: --registry, --root, --paths-from, --json; use `--` before a path starting with '-')"
   | otherwise = parseReachArgs rest ReachArgs { acc | paths = a::acc.paths }
 
 -- Blank lines are dropped from a `--paths-from` FILE and nowhere else.  `git
@@ -4878,7 +4876,9 @@ parseBudgetArgs ("--commit-message"::p::rest) acc =
   parseBudgetArgs rest BudgetArgs { acc | commitMessage = p }
 parseBudgetArgs ("--commit-message"::[]) _ =
   Err "medaka gate budget: --commit-message needs a value"
-parseBudgetArgs (a::_) _ = Err "medaka gate budget: unknown flag: \{a}"
+parseBudgetArgs (a::_) _ =
+  Err
+    "medaka gate budget: unrecognized flag '\{a}' (known: --registry, --baseline, --commit-message)"
 
 budgetCmdBody : List String -> <IO> Unit
 budgetCmdBody argv = match parseBudgetArgs argv BudgetArgs { registry = None, baseline = None, commitMessage = "" }

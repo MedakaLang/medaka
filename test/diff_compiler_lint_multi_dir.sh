@@ -61,13 +61,40 @@ else
   fail=$((fail+1)); printf 'FAIL %s (expected exit 1 + "do not exist", got exit=%s out=%s)\n' "$name" "$status" "$out"
 fi
 
-name="1173/deny-space-form-rejected"
+# #1173 originally REJECTED the space form outright, because `lintTargets` left
+# the rule name behind as an ordinary lint TARGET with the flag applied to
+# nothing.  CLI-CONFORMANCE.md C1 supersedes that ruling: both spellings are
+# accepted by every value-taking flag of every verb.  So the assertion becomes
+# the STRONGER one -- the space form must be HONOURED, not merely un-rejected.
+# #1173's actual harm (the silent drop) is what this now pins: `rule-dead-code`
+# fires on dirA/one.mdk, so promoting it must flip the exit code 0 -> 1, and it
+# must do so IDENTICALLY in both spellings.  A space form that was accepted and
+# then dropped would exit 0 here and fail this check.
 probe="$FIXDIR/dirA"
-out="$("$MEDAKA" lint --json --deny rule-match-on-param "$probe" 2>&1)"; status=$?
-if [ "$status" -eq 1 ] && printf '%s' "$out" | grep -q -- '--deny'; then
+
+name="C1/deny-space-form-honoured"
+eq_out="$("$MEDAKA" lint --deny=rule-dead-code "$probe" 2>&1)"; eq_status=$?
+sp_out="$("$MEDAKA" lint --deny rule-dead-code "$probe" 2>&1)"; sp_status=$?
+if [ "$eq_status" -eq 1 ] && [ "$sp_status" -eq 1 ] && [ "$eq_out" = "$sp_out" ]; then
   pass=$((pass+1)); printf 'ok   %s\n' "$name"
 else
-  fail=$((fail+1)); printf 'FAIL %s (expected exit 1 rejecting bare --deny, got exit=%s out=%s)\n' "$name" "$status" "$out"
+  fail=$((fail+1))
+  printf 'FAIL %s (both spellings must promote to error and agree; = form exit=%s, space form exit=%s)\n' \
+    "$name" "$eq_status" "$sp_status"
+  printf '  = form: %s\n  space : %s\n' "$eq_out" "$sp_out"
+fi
+
+name="C1/only-space-form-not-a-target"
+# The rule name must never be read as a PATH: `--only <rule>` over a dir whose
+# only finding is rule-dead-code keeps that finding (it is not filtered away by
+# a bogus rule set) and reports no missing target.
+out="$("$MEDAKA" lint --only rule-dead-code "$probe" 2>&1)"; status=$?
+if [ "$status" -eq 0 ] \
+  && ! printf '%s' "$out" | grep -q 'do not exist' \
+  && printf '%s' "$out" | grep -q 'rule-dead-code'; then
+  pass=$((pass+1)); printf 'ok   %s\n' "$name"
+else
+  fail=$((fail+1)); printf 'FAIL %s (exit=%s out=%s)\n' "$name" "$status" "$out"
 fi
 
 name="1173/deny-equals-form-still-works"
