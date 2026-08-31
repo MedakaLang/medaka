@@ -985,9 +985,13 @@ write `test "…" = …` declarations, then `medaka test your_file.mdk`.
 `expectEqual`, `expectNotEqual`, `expectTrue`, `expectFalse`,
 `expectLessThan`, `expectGreaterThan`, `expectAll`, `runTests`.
 
-**`runExpectation`** (extern, not re-exported) catches OCaml-level
-`Eval_error`/`Impl_no_match` so one crashing test body never silences
-the tests that follow — the crash becomes `Fail "message"`.
+There is no `runExpectation` extern that catches a crashing test body —
+panics are uncatchable by design (isolation only, never catchability; see
+`no-catchable-panics-isolation`). A `test "…"` body that panics kills the
+whole `medaka test` process; the runner's mitigation is attribution, not
+recovery — it prints which test it was about to run immediately before
+evaluating each body, so the tests that vanish after a crash are explained
+rather than mysterious (compiler/tools/test_cmd.mdk's `runTestLoop`).
 
 - 16 doctests (one per assertion function).
 - **v2 follow-up (deferred):** conditional auto-import — inject the test
@@ -1377,7 +1381,7 @@ of thing, and conflating them is the source of the confusion:
 | | `panic : String -> a` | `exit : Int -> <…> Unit` |
 |---|---|---|
 | Kind | **trap / abort** (partiality) | **process termination** (process control) |
-| Catchable in-runtime | yes — `runExpectation` catches `Eval_error`/`Impl_no_match` | no — terminates the process |
+| Catchable in-runtime | no — there is no `runExpectation` extern; a panicking body kills the process, and the runner can only attribute the crash to the test/prop/doctest it was about to run (not recover from it) | no — terminates the process |
 | Can the host withhold it? | **no** — the host can only choose what happens *on* abort, not make abort not-happen | **yes** — a plugin that can kill the host process is a real sandbox-escape concern |
 | Belongs in the manifest? | no | yes |
 

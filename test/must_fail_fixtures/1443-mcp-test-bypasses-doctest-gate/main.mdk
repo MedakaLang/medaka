@@ -1,5 +1,0 @@
--- #1443: zero doctests AND does not typecheck (`nosuchvariable` is unbound).
--- The CLI `medaka test` rejects this at exit 1 through `doctestGate` (#1229);
--- the MCP `medaka_test` tool routes through `runTestReport`, which never
--- reaches that gate, and reports `"ok":true` / `isError:false`.
-main = println nosuchvariable
