@@ -29,6 +29,14 @@
 #   g  IMPORT-BEARING, zero doctests, ill-typed            exit 1 + located diagnostic
 #   h  `prop "…"` decls, ill-typed   exit 0 + the prop actually RUNS    <- the exemption
 #
+# ...and five more (issue #1680) pinning that the exemption is no longer SILENT:
+#
+#   i  hasTests exemption            the note, naming the `test "…"` disjunct
+#   k  hasProps exemption            the note, naming the `prop "…"` disjunct
+#   l  #1680's own repro             the note AND the panic it explains, one run
+#   j  doctest + `test "…"` decl     NO note (doctest wins; the module IS checked)
+#   m  clean module, no tests        NO note (the gated arm; nothing was skipped)
+#
 # Cells b/c/d are the regression guard for the fix, and they matter more than they
 # look: this change turns a path that reported NOTHING into one that reports SOMETHING,
 # so every pre-existing fixture in the tree covers only the old empty case and NONE of
@@ -134,6 +142,31 @@ illTyped = nosuchvariable
 prop "addition commutes" (x : Int) (y : Int) = x + y == y + x
 EOF
 
+# i: issue #1680's own repro, verbatim. The exemption swallowed the type error and the
+# run died at `f "x"` with a bare `unknown op '+'` panic and NOTHING linking the two.
+# The exemption stays; the silence does not.
+cat > "$TMP/i_1680_repro.mdk" <<'EOF'
+f : Int -> Int
+f x = x + 1
+
+test "t" = f "x" == 3
+EOF
+
+# j: a module carrying BOTH a doctest and a `test "…"` decl. Doctest presence WINS
+# (the first guard), so this module IS type-checked — and therefore must NOT announce
+# a skip. It is the negative control for the announcement: a version that printed the
+# note unconditionally would pass every positive cell below and fail only here.
+cat > "$TMP/j_doctest_beats_testdecl.mdk" <<'EOF'
+import test.{expectEqual}
+
+-- > triple 3
+-- 9
+triple : Int -> Int
+triple x = x * 3
+
+test "triple two" = expectEqual 6 (triple 2)
+EOF
+
 # f: a directory whose members are a passing-doctest file and a zero-doctest ill-typed
 # file. The aggregate run must be nonzero — the issue's "directory variant".
 mkdir -p "$TMP/dir"
@@ -182,6 +215,35 @@ run_case() {
   pass=$((pass+1))
 }
 
+# The inverse of run_case: every pattern must be ABSENT. Presence-only assertions
+# cannot pin the announcement's SCOPE — a build that printed the note on every run
+# would satisfy cells i/k and still be wrong, and the way it would be wrong (telling
+# a user that a module WAS type-checked was not) is exactly the misreport this cell
+# family exists to prevent.
+refute_case() {
+  name="$1"; target="$2"; want_code="$3"; shift 3
+  out="$TMP/$name.out"
+  "$MEDAKA" test "$target" > "$out" 2>&1
+  got_code=$?
+
+  if [ "$got_code" -ne "$want_code" ]; then
+    printf 'FAIL %s: exit %d (expected %d)\n' "$name" "$got_code" "$want_code"
+    sed 's/^/  | /' "$out"
+    fail=$((fail+1)); return
+  fi
+
+  for unwanted in "$@"; do
+    if grep -qF -- "$unwanted" "$out"; then
+      printf 'FAIL %s: exit %d as expected, but output CONTAINS [%s] and must not\n' "$name" "$got_code" "$unwanted"
+      sed 's/^/  | /' "$out"
+      fail=$((fail+1)); return
+    fi
+  done
+
+  printf 'ok   %s (exit %d)\n' "$name" "$got_code"
+  pass=$((pass+1))
+}
+
 # A rejection must name BOTH the check-first remedy and the underlying diagnostic:
 # an exit 1 with no explanation would be a different (and also bad) outcome.
 run_case 'a zero-doctest ill-typed' "$TMP/a_nodoc_broken.mdk" 1 \
@@ -204,6 +266,43 @@ run_case 'e exemption preserved (hasTests)' "$TMP/e_exempt_via_testdecl.mdk" 0 \
 
 run_case 'h exemption preserved (hasProps)' "$TMP/h_exempt_via_prop.mdk" 0 \
   'OK (100 tests)' '1 passed, 0 failed'
+
+# ── issue #1680: the exemption ANNOUNCES itself ──────────────────────────────
+# Cells e/h above pin that the exempted module still RUNS. These pin that it also
+# SAYS SO. Same [W-QUIETER]-inverse caveat as cells b/c/d: this turns a path that
+# printed nothing into one that prints something, so no pre-existing fixture in the
+# tree can fail on a bad version of it and these are written from the intended
+# semantics, not captured from the binary.
+#
+#   i  hasTests exemption   the note, naming the `test "…"` disjunct
+#   k  hasProps exemption   the note, naming the `prop "…"` disjunct
+#   l  #1680's own repro    the note PRECEDES the panic it explains
+#   j  doctest + test decl  NO note (doctest presence wins; the module IS checked)
+#   m  clean, no tests      NO note (the gated arm; nothing was skipped)
+#
+# Cells j and m are the ones that make the announcement's SCOPE observable. i/k/l
+# alone are all satisfied by a build that announces unconditionally — which would
+# claim every type-checked module went unchecked.
+run_case 'i announcement on the hasTests exemption' "$TMP/e_exempt_via_testdecl.mdk" 0 \
+  'note: typechecking was skipped for' '`test "…"` decls' 'to type-check it: medaka check' \
+  '1/1 passed'
+
+run_case 'k announcement on the hasProps exemption' "$TMP/h_exempt_via_prop.mdk" 0 \
+  'note: typechecking was skipped for' '`prop "…"` decls' 'to type-check it: medaka check' \
+  'OK (100 tests)'
+
+# #1680's headline symptom is the UNEXPLAINED panic, so this cell asserts both halves
+# are present in one run: the panic still happens (the exemption is intact) and the
+# note that explains it does too.
+run_case 'l 1680 repro: the panic is explained' "$TMP/i_1680_repro.mdk" 1 \
+  'note: typechecking was skipped for' 'may therefore be an uncaught TYPE error' \
+  "runtime error [E-PANIC]: unknown op '+'"
+
+refute_case 'j doctest wins: no skip announced' "$TMP/j_doctest_beats_testdecl.mdk" 0 \
+  'typechecking was skipped'
+
+refute_case 'm gated clean module: no skip announced' "$TMP/b_nodoc_clean.mdk" 0 \
+  'typechecking was skipped'
 
 run_case 'f directory with ill-typed member' "$TMP/dir" 1 \
   'requires it to `medaka check` first'
