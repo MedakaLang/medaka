@@ -44,6 +44,9 @@ Tutorial-style onboarding, not a spec. Not yet cross-linked into this index's st
 | [`03-functions.md`](guide/03-functions.md) | Functions | — |
 | [`04-data-modeling.md`](guide/04-data-modeling.md) | Data Modeling | — |
 | [`05-interfaces.md`](guide/05-interfaces.md) | Interfaces | — |
+| [`06-working-with-data.md`](guide/06-working-with-data.md) | Working with Data | — |
+| [`07-effects-and-io.md`](guide/07-effects-and-io.md) | Effects & IO | — |
+| [`08-do-and-monads.md`](guide/08-do-and-monads.md) | `do` and Monads | — |
 | [`OUTLINE.md`](guide/OUTLINE.md) | Medaka Guide — Outline | — |
 | [`haskell-ocaml-delta.md`](guide/haskell-ocaml-delta.md) | Medaka for Haskell and OCaml Readers | — |
 

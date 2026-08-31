@@ -26,8 +26,8 @@ main = println list
 ```
 
 `List` and `Array` are different types with different costs, not two spellings of one
-idea — `[1, 2, 3]` builds a cons list, `[|1, 2, 3|]` an array. Chapter 6 covers when to
-reach for which; until then the examples use lists.
+idea — `[1, 2, 3]` builds a cons list, `[|1, 2, 3|]` an array. [Chapter 6](06-working-with-data.md)
+covers when to reach for which; until then the examples use lists.
 
 ## Everything is an expression
 
@@ -176,8 +176,8 @@ main = shout "quiet please"
 quiet please
 ```
 
-Effects get their own chapter later; for now it is enough to know that the row is part
-of the type and is checked like the rest of it.
+Effects get their own chapter — [chapter 7](07-effects-and-io.md) — and for now it is
+enough to know that the row is part of the type and is checked like the rest of it.
 
 Next up is [chapter 3, functions](03-functions.md) — defining behavior, matching on
 arguments, and composing the results.

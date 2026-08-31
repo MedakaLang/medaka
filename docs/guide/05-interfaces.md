@@ -325,7 +325,8 @@ above derived `Debug` and hand-wrote `Display` for exactly that reason.
 
 ---
 
-You can now describe data and give it behavior. Chapter 6 turns to the collections
+You can now describe data and give it behavior.
+[Chapter 6](06-working-with-data.md) turns to the collections
 and combinators you will use to actually push that data around — `List` versus
 `Array`, `Map` and `Set`, and the `map`/`filter`/`fold` vocabulary that has been
 quietly appearing in these examples all along.

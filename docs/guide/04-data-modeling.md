@@ -312,8 +312,9 @@ no such payee
 Cafe Fish: 0.0
 ```
 
-That last line is a preview of chapter 6: `Option` is mappable, so you can transform
-the value inside without unwrapping it. Chapter 8 goes further and shows how to chain
+That last line is a preview of [chapter 6](06-working-with-data.md): `Option` is
+mappable, so you can transform the value inside without unwrapping it.
+[Chapter 8](08-do-and-monads.md) goes further and shows how to chain
 several fallible steps with `do` — but the shape you have now, match and handle, is
 what most code actually does.
 
