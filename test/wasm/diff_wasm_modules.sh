@@ -56,7 +56,16 @@ if [ "${1:-}" = "--one" ]; then
   if ! "$MEDAKA" build "$entry" -o "$obin" >"$WORKDIR/$name.build.err" 2>&1; then
     msg="$(printf 'FAIL %s (oracle build)\n%s' "$name" "$(cat "$WORKDIR/$name.build.err")")"; st=1
   elif ! "$EMITBIN" "$RUNTIME" "$CORE" "$entry" "$root" > "$wat" 2>"$WORKDIR/$name.emit.err"; then
-    msg="$(printf 'GAP  %s (emit) %s' "$name" "$(head -1 "$WORKDIR/$name.emit.err" | sed 's/.*gap — //')")"; st=2
+    # Only a message produced by wasm_emit.mdk's own `gap` helper (the literal
+    # substring "wasm_emit gap — ", emitted by every documented known-gap panic)
+    # is a tolerated GAP. Any other emit-time panic (e.g. a hard closure-check
+    # panic, S4) is a real FAIL — classifying it as GAP would silently hide the
+    # exact regression class this gate exists to catch loudly.
+    if grep -q 'wasm_emit gap — ' "$WORKDIR/$name.emit.err"; then
+      msg="$(printf 'GAP  %s (emit) %s' "$name" "$(head -1 "$WORKDIR/$name.emit.err" | sed 's/.*gap — //')")"; st=2
+    else
+      msg="$(printf 'FAIL %s (emit)\n%s' "$name" "$(cat "$WORKDIR/$name.emit.err")")"; st=1
+    fi
   elif ! wasm-tools parse "$wat" -o "$wasm" 2>"$WORKDIR/$name.parse.err"; then
     msg="$(printf 'FAIL %s (wasm-tools parse)\n%s' "$name" "$(head -2 "$WORKDIR/$name.parse.err")")"; st=1
   elif ! wasm-tools validate --features=all "$wasm" 2>"$WORKDIR/$name.val.err"; then

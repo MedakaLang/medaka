@@ -15,7 +15,7 @@
 #
 # ── "reachable" is S1's notion, not a re-derived one ─────────────────────────
 # `backend/wasm_reach.mdk`'s `wasmReachFilter` (landed S1) is the ONLY thing
-# in this compiler that pos+/impls the WasmGC MODULES emit path to what a
+# in this compiler that PRUNES the WasmGC MODULES emit path to what a
 # program's dispatchable method names can actually reach — see that module's
 # header for the exact rule.  Re-deriving reachability independently here
 # (e.g. via a fresh `wasm-opt --remove-unused-module-elements` run) would
@@ -37,9 +37,11 @@
 # DCE).  There is no "reachable" notion to re-derive there without inventing
 # one S1 never computed — which the contract's constraint forbids — so their
 # ratio is the mechanically true fact for an unfiltered path: emitted /
-# emitted = 1.0 exactly.  Asserted (not skipped) as a canary: if either entry
-# is ever wired to a reachability filter, this line stops being a tautology
-# and starts being a real ceiling.
+# emitted = 1.0 exactly.  Asserted (not skipped) as a fixed tautology print —
+# it computes nothing today, and would only start being a real ceiling if one
+# of these entries were ever wired to an actual reachability filter, which
+# would require real code changes at that point (not just this line "starting
+# to be real" on its own).
 #
 # ── toolchain ─────────────────────────────────────────────────────────────
 # wasm-tools + node>=24 ONLY (no wasm-opt/binaryen — not in any gate's
@@ -78,6 +80,28 @@ PLAIN_FUNCS_CEIL=2600
 
 TYPED_BYTES_CEIL=20500
 TYPED_FUNCS_CEIL=110
+
+# ── exact per-corpus fixture-count floors (F2/S1-2 closure) ────────────────
+# These corpus sizes are fixed and every prior sprint measurement (S1-S5's own
+# reports) found 0 gap on all three. `checked == 0` alone only catches "compared
+# NOTHING" — it stays green when SOME fixtures silently degrade to gap while
+# every ceiling above still improves (fewer bytes/funcs/ratio look like a win
+# when they're actually fixtures dropping out). A gap appearing at all here is
+# itself the regression signal this gate exists to catch.
+MODULES_OK_EXACT=43
+PLAIN_OK_EXACT=157
+TYPED_OK_EXACT=9
+
+# ── F1's wasm-opt-derived function-count floor (F2/S2-4) ───────────────────
+# 1,518 — a FIXED historical reference number from F1's research pass (the
+# whole 43-fixture modules corpus, aggregate), not a fresh reachability
+# computation (that would violate the S1^S5 shared-decision constraint — see
+# the header note above). Used only as the denominator for a second,
+# function-level ratio the contract's §7 exit criterion 2 literally asks for
+# ("emitted-vs-reachable FUNCTION ratio") — the existing reach-ratio is a UNIT
+# ratio (S1's own notion), not this.
+F1_MODULES_FUNCS_FLOOR=1518
+MODULES_F1_RATIO_CEIL_X1000=2200   # emitted-funcs/F1-floor * 1000, headroom over measured
 
 command -v wasm-tools >/dev/null 2>&1 || { echo "wasm-tools not on PATH — skipping S5 emitted-size gate"; exit 2; }
 NODE=node
@@ -161,6 +185,19 @@ fi
 
 echo "S5 emitted-size — modules: $mod_ok ok / $mod_gap gap, plain: $plain_ok ok / $plain_gap gap, typed: $typed_ok ok / $typed_gap gap"
 
+check_exact() {
+  label="$1"; actual="$2"; expect="$3"
+  if [ "$actual" -ne "$expect" ]; then
+    echo "FAIL  $label = $actual, expected exactly $expect (a fixture silently degraded to gap)"
+    fail=1
+  else
+    echo "ok    $label = $actual (expected exactly $expect)"
+  fi
+}
+check_exact "modules ok-count" "$mod_ok"   "$MODULES_OK_EXACT"
+check_exact "plain ok-count"   "$plain_ok" "$PLAIN_OK_EXACT"
+check_exact "typed ok-count"   "$typed_ok" "$TYPED_OK_EXACT"
+
 check_ceil() {
   label="$1"; actual="$2"; ceil="$3"
   if [ "$actual" -gt "$ceil" ]; then
@@ -175,7 +212,14 @@ check_ceil() {
 check_ceil "modules bytes"        "$mod_bytes"  "$MODULES_BYTES_CEIL"
 check_ceil "modules funcs"        "$mod_funcs"  "$MODULES_FUNCS_CEIL"
 mod_ratio_x1000=$(( mod_reach_total > 0 ? (mod_reach_kept * 1000) / mod_reach_total : 1000 ))
-check_ceil "modules reach-ratio*1000 (kept=$mod_reach_kept/total=$mod_reach_total)" "$mod_ratio_x1000" "$MODULES_RATIO_CEIL_X1000"
+check_ceil "modules unit-kept-ratio*1000 (kept=$mod_reach_kept/total=$mod_reach_total)" "$mod_ratio_x1000" "$MODULES_RATIO_CEIL_X1000"
+# Function-level ratio the contract's §7 exit criterion 2 literally names
+# ("emitted-vs-reachable FUNCTION ratio") — distinct from the unit-kept-ratio
+# above (which moves only with how much of S1's INPUT the filter keeps, and
+# barely varies since the prelude dominates the denominator). Compares actual
+# emitted function count against F1's fixed, already-measured floor.
+mod_f1_ratio_x1000=$(( (mod_funcs * 1000) / F1_MODULES_FUNCS_FLOOR ))
+check_ceil "modules emitted/F1-floor-ratio*1000 (funcs=$mod_funcs/F1-floor=$F1_MODULES_FUNCS_FLOOR)" "$mod_f1_ratio_x1000" "$MODULES_F1_RATIO_CEIL_X1000"
 
 check_ceil "plain bytes"          "$plain_bytes" "$PLAIN_BYTES_CEIL"
 check_ceil "plain funcs"          "$plain_funcs" "$PLAIN_FUNCS_CEIL"
