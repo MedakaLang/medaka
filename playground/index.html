@@ -4,6 +4,23 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Medaka Playground</title>
+  <meta name="description" content="Write Medaka and run it in your browser. The real compiler — type checker, WasmGC backend and all — runs client-side; nothing is sent to a server.">
+  <meta name="theme-color" content="#0b0e14">
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml">
+
+  <!-- Link preview. og:image must be an ABSOLUTE url — scrapers do not
+       resolve relative ones — so it is pinned to the production origin and
+       will not render a card when served from any other host. Regenerate the
+       image with: python3 playground/build_og_card.py -->
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://medaka-lang.dev/">
+  <meta property="og:image" content="https://medaka-lang.dev/og-card.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="medaka — a pragmatic functional language. A Medaka program defining a Shape type and computing areas.">
+  <meta property="og:title" content="Medaka Playground">
+  <meta property="og:description" content="Write Medaka and run it in your browser. The real compiler — type checker, WasmGC backend and all — runs client-side; nothing is sent to a server.">
+  <meta name="twitter:card" content="summary_large_image">
   <!-- Resolve the `codemirror` bare specifier to the vendored single-ESM bundle
        (no serve-time bundler; mirrors how wat2wasm is vendored). Must precede
        any module script. -->
@@ -272,12 +289,12 @@
         <span class="name">medaka</span>
       </div>
       <span class="tag">a pragmatic functional language</span>
-      <div class="links"><a href="#">Quickstart</a><a href="#">Stdlib</a><a href="#">GitHub</a></div>
+      <div class="links"><a href="https://github.com/MedakaLang/medaka/blob/main/docs/guide/1.%20Quick%20Start.md" target="_blank" rel="noopener">Quickstart</a><a href="https://github.com/MedakaLang/medaka/blob/main/docs/stdlib/STDLIB.md" target="_blank" rel="noopener">Stdlib</a><a href="https://github.com/MedakaLang/medaka" target="_blank" rel="noopener">GitHub</a></div>
     </div>
 
     <div id="funnel-strip">
       <span><b>This is the real compiler, not a demo</b> — everything type-checks, compiles to WasmGC, and runs right here in your browser. For project builds, file I/O, and editor tooling:</span>
-      <a href="#">Get the native compiler &rarr;</a>
+      <a href="https://github.com/MedakaLang/medaka#building" target="_blank" rel="noopener">Get the native compiler &rarr;</a>
       <button id="funnel-dismiss" aria-label="dismiss">&#10005;</button>
     </div>
 
