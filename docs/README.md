@@ -40,7 +40,7 @@ Tutorial-style onboarding, not a spec. Not yet cross-linked into this index's st
 |-----|------------|--------|
 | [`00-introduction.md`](guide/00-introduction.md) | Introduction | — |
 | [`01-quick-start.md`](guide/01-quick-start.md) | Quick Start | — |
-| [`02-expressions.md`](guide/02-expressions.md) | Expressions | — |
+| [`02-expressions.md`](guide/02-expressions.md) | Values, Bindings & Types | — |
 | [`OUTLINE.md`](guide/OUTLINE.md) | Medaka Guide — Outline | — |
 | [`haskell-ocaml-delta.md`](guide/haskell-ocaml-delta.md) | Medaka for Haskell and OCaml Readers | — |
 

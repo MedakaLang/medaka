@@ -1,23 +1,39 @@
 # Introduction
 
-Medaka is a declarative functional language designed to be practical
-for everyday use. Inspired by strong functional languages that have come before it, Medaka
-seeks to offer a sleek, simplified, modern take on functional programming.
+Medaka is a declarative functional language designed to be practical for everyday
+use. It takes the ideas that make functional programming worth doing — algebraic
+data types, exhaustive pattern matching, type inference, ad-hoc polymorphism — and
+packages them in a small, cohesive language with a compiler, a formatter, a linter,
+a test runner, and a language server in one binary.
+
+This guide is for people who already know how to program. It teaches *Medaka's way*
+of doing things rather than programming from first principles, so it moves quickly
+and assumes you can read a type signature.
 
 > **Already comfortable with Haskell or OCaml?** Start with the
 > [Haskell and OCaml delta sheet](haskell-ocaml-delta.md), then return
 > here for the main guide.
 
-Medaka offers the following language features:
+## What you get
 
-- Strong static typing based on the Hindley–Milner type system (similar to Haskell and OCaml).
-- Haskell-inspired declarative syntax that makes writing functional code easy.
-- Ad-hoc polymorphism through typeclasses (called `interface`s in Medaka). (Similar
-  to `trait`s if you're coming from Rust.)
-- Backends that support native compilation through LLVM and edge/in-browser compilation
-  through WebAssembly.
-- A powerful effects system for tracking a program's side effects and capabilities.
-- Dev tooling and ergonomics designed to make working in the language easy.
+- **Strong static typing** with Hindley–Milner inference. You rarely write a type;
+  you write signatures because they document, not because the compiler needs them.
+- **Declarative syntax** in the Haskell tradition — significant indentation, no
+  braces, definitions by pattern-matching clauses.
+- **Ad-hoc polymorphism through `interface`s** (typeclasses by another name; `trait`s
+  if you're coming from Rust), including constrained and conditional implementations.
+- **An effect system that lives in the type.** A signature says what a function is
+  allowed to touch: `readFile : String -> <IO> String`, `fetch : String -> <Clock, IO> String`.
+  The row is checked, not decorative — annotate a printing function as pure and the
+  compiler tells you it "declared with `<>` but also performs `<IO>`". Effect labels
+  name host capabilities, which is what makes a Medaka signature a contract about the
+  outside world and not just about values.
+- **Two backends.** `medaka build` compiles to a native binary through LLVM and
+  `clang`; a WebAssembly backend runs the same compiler in the browser, which is how
+  [the playground](https://medaka-lang.dev) works with no server behind it.
+- **Tooling in the box.** `medaka check`, `run`, `build`, `fmt`, `lint`, `test`
+  (doctests and property tests), `repl`, and `lsp` are all subcommands of the one
+  binary — there is nothing to assemble before you start.
 
 Here's a small sample:
 
@@ -45,6 +61,24 @@ It prints:
 You logged 3 expenses.
 Total spent: $1239.5
 ```
+
+Nothing in that program is explained yet, and that is deliberate — it is a taste, not
+a lesson. A sum type with three variants, a function defined as three clauses that
+match on them, a pipeline built with `|>`, string interpolation with `\{ }`, and an
+indented block of statements for the IO at the end. Every one of those gets its own
+chapter. The expense tracker comes back as the guide's running example once there is
+enough language to build it properly.
+
+## Where to go next
+
+- **[Quick Start](01-quick-start.md)** — your first running program, in about five minutes.
+- **[Values, Bindings & Types](02-expressions.md)** — literals, bindings, mutation, and
+  what a type signature buys you.
+- **[Medaka for Haskell and OCaml readers](haskell-ocaml-delta.md)** — the deltas, if you
+  already have the concepts and just need the spellings.
+
+Every example in this guide is extracted and run against the compiler on every commit,
+so what you read here is what the current compiler actually does.
 
 ## Why Medaka?
 
