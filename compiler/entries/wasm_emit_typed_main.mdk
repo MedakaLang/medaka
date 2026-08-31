@@ -53,6 +53,7 @@ import ir.core_ir_lower.{
 import backend.wasm_emit.{
   WasmEmitInput,
   emitProgram,
+  emitProgramUnchecked,
   emitProgramRecord,
   emitProgramGaps,
   makeWasmEmitInput,
@@ -134,14 +135,20 @@ reemitInput runtimePath pPath uPath = match readFile runtimePath
         let pRecords = declaredRecordFieldOrders pDecls
         let pInput = makeWasmEmitInput pMethods pSigs pCtors False pRecords
         let p1 = emitProgram pInput pProgram
-        let methodWat = emitProgram (makeWasmEmitInput (methodIfaceTable uDecls) pSigs pCtors False pRecords) pProgram
-        let sigWat = emitProgram (makeWasmEmitInput pMethods (declSigTypeNames runtimeDecls ++ declSigTypeNames uDecls) pCtors False pRecords) pProgram
-        let ctorWat = emitProgram (makeWasmEmitInput pMethods pSigs (ctorFieldTypeNames uDecls) False pRecords) pProgram
-        let recordWat = emitProgram (makeWasmEmitInput pMethods pSigs pCtors False (declaredRecordFieldOrders uDecls)) pProgram
+        -- these four deliberately pair P's REAL program with a MISMATCHED
+        -- (U-derived or dummy) table -- never a real compile combination, so
+        -- routed through the unchecked emit (see emitProgramUnchecked's doc).
+        let methodWat = emitProgramUnchecked (makeWasmEmitInput (methodIfaceTable uDecls) pSigs pCtors False pRecords) pProgram
+        let sigWat = emitProgramUnchecked (makeWasmEmitInput pMethods (declSigTypeNames runtimeDecls ++ declSigTypeNames uDecls) pCtors False pRecords) pProgram
+        let ctorWat = emitProgramUnchecked (makeWasmEmitInput pMethods pSigs (ctorFieldTypeNames uDecls) False pRecords) pProgram
+        let recordWat = emitProgramUnchecked (makeWasmEmitInput pMethods pSigs pCtors False (declaredRecordFieldOrders uDecls)) pProgram
         let mainDecls = desugar (parse "data Dummy = Dummy\n\nmain = 1\n")
         let mainProgram = typedProgram runtimeDecls [] mainDecls
         let mainBase = emitProgram (typedInput runtimeDecls [] mainDecls) mainProgram
-        let mainWat = emitProgram (makeWasmEmitInput [] (declSigTypeNames runtimeDecls ++ declSigTypeNames mainDecls) (ctorFieldTypeNames mainDecls) True (declaredRecordFieldOrders mainDecls)) mainProgram
+        -- mainIsFloat=True here is deliberately mismatched against the Float-free
+        -- Dummy program (proves the flag alone moves the output, P_NE_MAIN) --
+        -- unchecked for the same reason as the four above.
+        let mainWat = emitProgramUnchecked (makeWasmEmitInput [] (declSigTypeNames runtimeDecls ++ declSigTypeNames mainDecls) (ctorFieldTypeNames mainDecls) True (declaredRecordFieldOrders mainDecls)) mainProgram
         let pLast = emitProgram pInput pProgram
         let _ = putStrLn (if p1 == pLast then "P_EQ_PLAST" else "P_NE_PLAST")
         let _ = putStrLn (if p1 /= methodWat then "P_NE_METHOD" else "P_EQ_METHOD")

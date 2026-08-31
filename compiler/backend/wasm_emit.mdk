@@ -231,6 +231,8 @@ import support.util.{
   noneHeadTag,
   dedupBy,
   startsWith,
+  splitNl,
+  stringTrimLeft,
 }
 import ir.core_ir_lower.{ifaceIdsAtTag, ifaceMethodArityKey, ifaceWordOfKey}
 import backend.trmc_analysis.{
@@ -1220,6 +1222,24 @@ export
 emitProgram : WasmEmitInput -> CProgram -> String
 emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp
 
+-- The X-W.H1/H2 same-process input/state-isolation harnesses (`reemitInput` and
+-- peers, compiler/entries/wasm_emit_typed_main.mdk) deliberately re-emit ONE
+-- lowered `CProgram` under MISMATCHED `WasmEmitInput` fields (P's real program
+-- with U's sig/ctor/method/mainIsFloat table) specifically to prove each field
+-- independently influences the physical plan (`P_NE_SIG` etc). Such a
+-- combination never occurs in a real compile (there sigs/ctors/methods/
+-- mainIsFloat are always derived from the SAME decls as the program), can
+-- legitimately desync a gating decision that reads the mismatched table (e.g.
+-- `inputMainIsFloat` forcing a Float auto-print with no Float anywhere in the
+-- program's own body), and is never assembled by wasm-tools -- so it is not
+-- this check's business, same reasoning as `emitProgramGaps` below. Exported
+-- for that harness ONLY; every real caller (build/run, every fixture-driven
+-- gate) stays on the checked `emitProgram`.
+export
+emitProgramUnchecked : WasmEmitInput -> CProgram -> String
+emitProgramUnchecked input cp =
+  emitProgramCore (freshWasmEmit WGapStrict) input cp
+
 -- Record mode is a complete ordinary emission with a fresh event lifecycle.
 -- It is intentionally separate from the all-binding/no-main census below.
 export
@@ -1230,7 +1250,20 @@ emitProgramRecord input cp =
   (text, gapEventsOfW emit)
 
 emitProgramWith : WasmEmit -> WasmEmitInput -> CProgram -> String
-emitProgramWith emit input (CProgram groups ctorArs ctorTypes impls) =
+emitProgramWith emit input cp =
+  let text = emitProgramCore emit input cp
+  -- WGapRecord is the tolerant/census mode (mirrors emitProgramGaps below): it
+  -- continues past an unsupported node by RECORDING a gap event instead of
+  -- aborting, so its assembled text is intentionally allowed to be incomplete/
+  -- self-inconsistent -- not a real module, so not this check's business.
+  -- Only WGapStrict (the real, on-by-default production path) is asserted.
+  let _ = match emit.gapMode
+    WGapStrict => assertEmittedClosureW text
+    WGapRecord => ()
+  text
+
+emitProgramCore : WasmEmit -> WasmEmitInput -> CProgram -> String
+emitProgramCore emit input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef emit.useStr (programUsesStr groups)
   -- W7: scan the program for collection usage (gates type-section decls + forces
   -- ref-mode — every collection is a boxed (ref eq) value).  The scan only ever
@@ -1260,6 +1293,106 @@ emitProgramWith emit input (CProgram groups ctorArs ctorTypes impls) =
   let prog = Prog index typeNames valNames useClos impls input emit
   if useRef then emitRefProgram prog groups
   else emitScalarProgram emit fnNames valNames groups
+
+-- ── emit-time closure check (#392) ──────────────────────────────────────────
+-- The runtime-line gating graph (which WAT helper block a program's use-flags
+-- pull in) is hand-maintained; S1-S3 each narrowed it (fewer impls, per-operator
+-- splits, dropped names), and a wrongly-narrowed gate used to surface only as a
+-- downstream `wasm-tools validate` "unknown func $x" on whichever fixture
+-- happened to exercise the gap (#388: `$mdk_value_mod` called `$mdk_float_rem`
+-- with only `useValueArith` set, silently broke 21 int-only fixtures). Run on
+-- every emit (not a flag) so a gate that gets narrowed wrong fails HERE, in
+-- process, naming the missing symbol, instead of downstream and silently.
+--
+-- Operates on the FINAL assembled text, granularity-agnostic to whatever flags
+-- gated what -- it only asserts every directly-named callee resolves within
+-- this module, either as a `(func $name ...)` definition or an
+-- `(import "env" "..." (func $name ...))` declaration (see
+-- `stderrByteImportLines`, wasm_preamble.mdk, for the import text shape).
+-- `call_ref`/`return_call_ref` are exempt: they dispatch dynamically through a
+-- `(ref $codety)` table value, never naming a callee symbol directly, and
+-- their literal text never matches the `call $` needle below (`call_ref`/
+-- `return_call_ref` both have `_ref` where this needle expects a space).
+--
+-- NOT one call per line: wasm_emit.mdk's own call sites are each their own
+-- list element (flat, unfolded -- operands already on the stack), but the
+-- hand-written runtime blocks in wasm_preamble.mdk are FOLDED s-expr WAT
+-- with a call site anywhere inside a line, sometimes several per line (e.g.
+-- valueAddRuntimeLines' `(call $mdk_box_int (i64.add (call $mdk_unbox_int
+-- ...) (call $mdk_unbox_int ...)))`) -- an earlier draft of this check that
+-- assumed startsWith missed exactly this shape. So this scans every line for
+-- ALL occurrences of the `call $` needle, not just a line-leading one.
+-- `return_call $NAME` is caught by the SAME needle -- "return_call $NAME"
+-- literally contains "call $NAME" as a substring (right after `return_`), so
+-- no separate needle is needed.
+-- A string literal can never spoof either needle: `escWatBytes` hex-escapes
+-- EVERY byte of a data segment (`oneDataSeg`), so no literal ASCII ever
+-- reaches the assembled text from user data.
+assertEmittedClosureW : String -> Unit
+assertEmittedClosureW text =
+  let lines = splitNl text
+  let defined = omFromNames (collectDefinedNamesW lines) omEmpty
+  let called = collectCalledNamesW lines
+  checkCalledNamesW defined called
+
+collectCalledNamesW : List String -> List String
+collectCalledNamesW [] = []
+collectCalledNamesW (line::rest) =
+  if startsWith ";;" (stringTrimLeft line) then
+    collectCalledNamesW rest
+  else
+    identsAfterAllW "call $" 6 line ++ collectCalledNamesW rest
+
+-- `(func $NAME` appears exactly once per defining line -- a plain top-level
+-- function's own def line AND an import's `(import "env" "..." (func $NAME
+-- ...))` line alike -- so one needle covers both (a) and (b) of the closure
+-- requirement.
+collectDefinedNamesW : List String -> List String
+collectDefinedNamesW [] = []
+collectDefinedNamesW (line::rest) = identsAfterAllW "(func $" 7 line
+  ++ collectDefinedNamesW rest
+
+-- every occurrence of `needle` in `line`, mapped to the identifier
+-- immediately following it (skipping `skipLen` chars of the needle itself,
+-- e.g. `call $` -> 6, so the scan resumes right after the `$`).
+identsAfterAllW : String -> Int -> String -> List String
+identsAfterAllW needle skipLen line = identsAfterAllGoW needle skipLen line 0
+
+identsAfterAllGoW : String -> Int -> String -> Int -> List String
+identsAfterAllGoW needle skipLen line from =
+  let n = stringLength line
+  if from >= n then []
+  else match stringIndexOf needle (stringSlice from n line)
+    None => []
+    Some rel =>
+      let hit = from + rel
+      let name = identAfterW line (hit + skipLen)
+      name :: identsAfterAllGoW needle skipLen line (hit + stringLength needle)
+
+-- read a bare identifier (word chars only -- `$` already consumed) forward
+-- from `from` until a non-identifier char or end of line.
+identAfterW : String -> Int -> String
+identAfterW line from = identAfterGoW line from (stringLength line) from
+
+identAfterGoW : String -> Int -> Int -> Int -> String
+identAfterGoW line i n from =
+  if i >= n then
+    stringSlice from n line
+  else if isIdentCharW (stringSlice i (i + 1) line) then
+    identAfterGoW line (i + 1) n from
+  else
+    stringSlice from i line
+
+isIdentCharW : String -> Bool
+isIdentCharW c = c /= " " && c /= "(" && c /= ")" && c /= "\""
+
+checkCalledNamesW : OrdMap Unit -> List String -> Unit
+checkCalledNamesW _ [] = ()
+checkCalledNamesW defined (name::rest) =
+  if omHasKey name defined then
+    checkCalledNamesW defined rest
+  else
+    panic ("wasm emit: call to undefined/unimported $" ++ name ++ " -- a runtime-line gate is missing this helper's dependency (#392)")
 
 -- ── gap census driver ────────────────────────────────────────────────────────
 -- The WasmGC peer of llvm_emit's emitProgramGaps: emit EVERY binding (fns +
