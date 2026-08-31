@@ -130,5 +130,36 @@ The playground is a **pure static site** — no compile server, no container, no
 backend of any kind at runtime. Upload `playground/site/` (built by
 `build_site.sh`) to any static CDN: GitHub Pages, Cloudflare Pages, Netlify, etc.
 
+**Production is Cloudflare Pages, project `medaka`, at
+<https://medaka-lang.dev> (also `medaka.pages.dev`).** To publish:
+
+```sh
+bash playground/deploy_cloudflare.sh          # build if needed, then deploy
+bash playground/deploy_cloudflare.sh --create # first time only: create the project
+```
+
+Credentials come from `~/.cf-medaka.env` (mode 600, outside the repo), holding
+`CLOUDFLARE_API_TOKEN` — scoped to **Account · Cloudflare Pages · Edit**, nothing
+more — and `CLOUDFLARE_ACCOUNT_ID`. The script refuses to run if that file is
+missing or world-readable, and redacts the token from all wrangler output.
+
+⚠️ **The deploy always passes `--branch` explicitly.** Left to itself, wrangler
+infers the branch from git, so deploying from a topic branch publishes a
+**preview**: it prints "Deployment complete" and a url, exits 0, and the
+production origin keeps serving 404. Set `CF_PAGES_BRANCH` only to publish a
+preview on purpose.
+
+⚠️ **`og:image` in `index.html` is an absolute `https://medaka-lang.dev/…` url**
+— scrapers don't resolve relative ones — so no link-preview card renders when the
+page is served from any other origin (a `*.pages.dev` preview included). That is
+expected, not a bug.
+
+To verify a deploy, point the e2e spec at the live origin instead of the local
+server — it takes the base url as its first argument:
+
+```sh
+cd playground/e2e && node tests/playground.spec.mjs https://medaka-lang.dev /tmp/shots
+```
+
 See `PLAYGROUND-DESIGN.md` §6.1 for the hosting rationale and the superseded
 container-based plan.

@@ -43,3 +43,7 @@ _build/
 # hash, rooted at the project root. Regenerable by definition — a missing or stale
 # shard is a cache MISS, which just re-lints the file.
 /.medaka/
+
+# Wrangler's local cache, created by playground/deploy_cloudflare.sh. Regenerable, and
+# it can hold account metadata — never commit it.
+/.wrangler/
