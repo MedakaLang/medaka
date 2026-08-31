@@ -246,7 +246,7 @@ echo
 # text promising something the arms do not have. Nothing you can RUN enumerates
 # the flags nobody thought to try, so the reverse — an arm the help never
 # mentions — was invisible to this census until the verbs learned to state their
-# own roster. `assertCliFlags` renders `(known: --a, --b, --c)` in every
+# own roster. `unknownFlagMessage` renders `(known: --a, --b, --c)` in every
 # unknown-flag rejection (S-unknown-flag-floor), so the binary now answers this
 # direction too, in its own words. ALSO GATED.
 echo "── parsed-but-not-advertised (each flag the verb's own roster names) ──"
@@ -255,7 +255,14 @@ for v in $VERBS; do
   case "$v" in help|version) continue ;; esac
   case "$v" in build) [ "$DO_BUILD" = 1 ] || continue ;; esac
   known=$(cli_known_flags_of "$v")
-  [ -n "$known" ] || { printf '%-14s %-22s %s\n' "$v" "-" "NO ROSTER (uncovered)"; continue; }
+  if [ -z "$known" ]; then
+    if [ "$(cli_had_roster)" = 1 ]; then
+      printf '%-14s %-22s %s\n' "$v" "-" "(roster present, zero flags)"
+    else
+      printf '%-14s %-22s %s\n' "$v" "-" "NO ROSTER (uncovered)"
+    fi
+    continue
+  fi
   helptext=$(cli_help_text_of "$v")
   for f in $known; do
     printf '%s' "$helptext" | grep -q -- "$f" \

@@ -3668,7 +3668,7 @@ cost = "medium"
 kind = "exec"
 run = "test/diff_compiler_cli_help_conformance.sh"
 oracles = []
-sources = ["test/diff_compiler_cli_help_conformance.sh", "test/cli_conformance_lib.sh", "compiler/driver/medaka_cli.mdk", "compiler/tools/gate_cmd.mdk"]
+sources = ["test/diff_compiler_cli_help_conformance.sh", "test/cli_conformance_lib.sh", "compiler/driver/medaka_cli.mdk", "compiler/tools/gate_cmd.mdk", "stdlib/args.mdk"]
 corpus = []
 toolchain = ["clang"]
 
@@ -3676,15 +3676,15 @@ toolchain = ["clang"]
 # S-unknown-flag-floor; fix-round F1). The help-conformance gate above asserts
 # help/parse-arm AGREEMENT and is deliberately fail-open where a verb states
 # nothing — its Property C reports a rosterless verb as `C UNCOVERED`, not FAIL.
-# That is correct for C and fatal for C2: deleting a verb's `assertCliFlags` call
+# That is correct for C and fatal for C2: deleting a verb's `requireArgs` call
 # stops it rejecting unknown flags AND removes its roster, so C moves the verb to
 # `UNCOVERED` and the suite stays GREEN. Demonstrated, not argued — see the F1
 # report. This gate asserts the BEHAVIOUR instead, and goes RED for it:
 #   R every verb in the usage block (minus a self-draining exemption set)
 #     rejects `--<bogus>` with rc EXACTLY 1, and never exits 0
-#   K every `assertCliFlags` verb prints its `(known: …)` roster
+#   K every `requireArgs` verb prints its `(known: …)` roster
 #   S every covered verb is visible in the usage block, so R can see it
-# R's verb list comes from the usage block, NOT from `assertCliFlags`, on purpose:
+# R's verb list comes from the usage block, NOT from `requireArgs`, on purpose:
 # a floor derived from the thing it floors cannot detect that thing's deletion.
 # No `build` probe shells out to clang here (only unknown-flag rejection, which
 # short-circuits before any compile), so this is `cheap`, unlike the gate above —
@@ -3705,7 +3705,7 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_cli_reject_floor.sh"
 oracles = []
-sources = ["test/diff_compiler_cli_reject_floor.sh", "test/cli_conformance_lib.sh", "compiler/driver/medaka_cli.mdk", "compiler/tools/gate_cmd.mdk"]
+sources = ["test/diff_compiler_cli_reject_floor.sh", "test/cli_conformance_lib.sh", "compiler/driver/medaka_cli.mdk", "compiler/tools/gate_cmd.mdk", "stdlib/args.mdk"]
 corpus = []
 toolchain = ["clang"]
 

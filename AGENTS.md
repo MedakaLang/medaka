@@ -87,7 +87,9 @@ Support files:
 `stdlib/` modules: `runtime.mdk` (extern catalog), `core.mdk` (**only auto-prelude**),
 `list`/`string`/`array`, `map`/`set` (ordered trees), `hash_map`/`hash_set` (mutable hash),
 `mut_array` (growable vector), `json`, `byteparser`/`bytebuilder`, `io.mdk` (ergonomic layer
-over `runtime.mdk` IO).
+over `runtime.mdk` IO), `args` (one CLI argument parser — a verb's flag vocabulary is a VALUE
+that the `(known: …)` roster and the parser are unified renderings of;
+`docs/design/ARGS-DESIGN.md`).
 
 Import forms: `import map.{Map, get}` (selective), `import map.*` (all exported), `import
 map as M` → `M.get` (**values only** — an alias-qualified name in *type* position is a parse
