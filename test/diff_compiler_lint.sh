@@ -14,6 +14,17 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 RUN="$ROOT/test/bin/lint_main"
 FIXDIR="$ROOT/test/lint_fixtures"
 
+# 🚨 PIN THE STDLIB THE ORACLE READS.  `lint_main` builds the stdlib reference
+# index (`tools.lint.buildStdlibIndex`) from `$MEDAKA_ROOT/stdlib`, falling back
+# to its OWN directory when the var is unset -- and its own directory is
+# `test/bin`, which has no `stdlib/`. So an unpinned run silently indexes NOTHING
+# and every index-consuming rule (`rule-stdlib-reimpl`) goes quiet, while
+# run_gates.sh (which exports MEDAKA_ROOT=$ROOT) sees the real 396-name index.
+# That is two different goldens for one gate depending on how it was invoked.
+# Pin it here so `sh test/diff_compiler_lint.sh` and the CI shard agree.
+MEDAKA_ROOT="$ROOT"
+export MEDAKA_ROOT
+
 [ -x "$RUN" ] || { echo "build oracles first: FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one $(basename "$RUN") (missing $RUN)"; exit 2; }
 
 # Drop the native value entry's trailing "()" (Unit return; runtime/medaka_rt.c).

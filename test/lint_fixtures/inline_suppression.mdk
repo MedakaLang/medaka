@@ -27,5 +27,8 @@ describe m = match m
 -- same-line, ALL rules (no rule names): trailing directive silences reverse
 reverse xs = xs -- lint-disable-line
 
--- NOT suppressed: this stdlib-reimpl finding must survive into the golden
-take xs = xs
+-- NOT suppressed: this stdlib-reimpl finding must survive into the golden.
+-- It needs its own SIGNATURE: rule-stdlib-reimpl compares declared signatures,
+-- so an unsigned binding is rule-missing-signature's business, not its.
+take : Int -> List a -> List a
+take _ xs = xs

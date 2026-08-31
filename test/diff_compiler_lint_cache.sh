@@ -17,6 +17,13 @@
 #   4. forged stale entry    — wrong hash is ignored, output still correct
 #   5. rule-set change       — a foreign stamp invalidates every entry
 #   6. concurrency           — parallel runs stay correct and leave no torn shard
+#   7. STDLIB edit invalidation — a stdlib-tree edit invalidates every entry too
+#      (#2327): `rule-stdlib-reimpl` reads the stdlib SOURCE TREE from disk at
+#      runtime (`buildStdlibIndex`), which neither `contentHashOf` (per-file) nor
+#      the old `ruleSetStamp` (the BINARY's bytes) observes. A target file whose
+#      own content never changes can still gain a NEW finding when the stdlib
+#      gains a colliding export — exactly the shape scenario 5 pins for a
+#      rule-logic change, but for stdlib content instead of compiler content.
 #
 # Scenarios 1-3 also assert the CACHE HIT COUNT, via the one thing a hit is
 # observable through without adding CLI surface: a hit writes no shard, a miss
@@ -376,6 +383,67 @@ if [ "$leaked" -eq 0 ]; then
   ok "6c no staging dirs leaked"
 else
   bad "6c no staging dirs leaked" "$leaked staging dir(s) left in $CACHE"
+fi
+
+
+# ── 7. STDLIB EDIT INVALIDATION (#2327) ──────────────────────────────────────
+# `rule-stdlib-reimpl` reads `MEDAKA_ROOT/stdlib` at runtime — content neither
+# `contentHashOf` (per-file) nor the binary-hash half of the stamp observes. A
+# custom MEDAKA_ROOT with a minimal stdlib lets this scenario edit "the stdlib"
+# without touching the repo's own tree, and stays isolated from scenarios 1-6
+# (own cache root, own corpus, own env var).
+STDROOT7="$WORK/stdroot7"
+mkdir -p "$STDROOT7/stdlib" "$WORK/corpus7"
+cat > "$STDROOT7/stdlib/probe.mdk" <<'EOF'
+export
+probeFnUnrelated : Int -> Int
+probeFnUnrelated x = x
+EOF
+cat > "$WORK/corpus7/target.mdk" <<'EOF'
+probeFnNew : Int -> Int
+probeFnNew x = x + 1
+EOF
+
+lint_plain7()  { MEDAKA_ROOT="$STDROOT7" "$MEDAKA" lint corpus7 > "$1" 2>&1; printf '%s\n' "$?" >> "$1"; }
+lint_cached7() { MEDAKA_ROOT="$STDROOT7" "$MEDAKA" lint --cache corpus7 > "$1" 2>&1; printf '%s\n' "$?" >> "$1"; }
+
+rm -rf "$CACHE"
+lint_cached7 "$WORK/warm7_pre.txt"
+if grep -q 'rule-stdlib-reimpl' "$WORK/warm7_pre.txt"; then
+  bad "7a precondition: no finding before the stdlib declares a colliding export" \
+      "fired before the stdlib even declares 'probeFnNew' — scenario 7 would be vacuous"
+else
+  ok "7a precondition: no finding before the stdlib declares a colliding export"
+fi
+
+# The stdlib now gains an export with the SAME NAME AND DECLARED SIGNATURE as
+# corpus7/target.mdk's def. target.mdk ITSELF is byte-for-byte unchanged, so a
+# content-hash-only cache key would HIT and silently keep serving "no finding".
+cat > "$STDROOT7/stdlib/probe.mdk" <<'EOF'
+export
+probeFnUnrelated : Int -> Int
+probeFnUnrelated x = x
+
+export
+probeFnNew : Int -> Int
+probeFnNew x = x
+EOF
+
+lint_cached7 "$WORK/warm7.txt"
+lint_plain7 "$WORK/cold7.txt"
+
+if same "$WORK/cold7.txt" "$WORK/warm7.txt"; then
+  ok "7b stdlib edit: warm == uncached after the stdlib gains a colliding export"
+else
+  bad "7b stdlib edit: warm == uncached after the stdlib gains a colliding export" \
+      "$(diff "$WORK/cold7.txt" "$WORK/warm7.txt" | head -5)"
+fi
+
+if grep -q 'rule-stdlib-reimpl' "$WORK/warm7.txt"; then
+  ok "7c cached run reflects the stdlib edit (finding now fires though target.mdk never changed)"
+else
+  bad "7c cached run reflects the stdlib edit" \
+      "target.mdk's own content never changed (content-hash cache-HIT), but the stdlib now declares a colliding export — a stale cache key would still report nothing here"
 fi
 
 printf '\n%d ok, %d failing\n' "$pass" "$fail"

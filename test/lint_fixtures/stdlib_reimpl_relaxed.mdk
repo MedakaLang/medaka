@@ -1,0 +1,13 @@
+-- Positive fixture for rule-stdlib-reimpl under NAME RELAXATION (#2248 Miss 2).
+-- `listReverse` is not itself a stdlib name, but it ENDS WITH one, and its
+-- DECLARED signature is exactly `list.reverse`'s — so the rule must fire on it
+-- even though the old name-exact 15-name curated list could never have seen it.
+--
+-- It also pins the AMBIGUITY half: `reverse` is declared by THREE stdlib modules
+-- (array/list/string) with three different signatures, so the finding is only
+-- reachable by matching ANY candidate rather than "the" signature of the name.
+-- The message must name `list.reverse`, not the array or string one.
+export
+listReverse : List a -> List a
+listReverse [] = []
+listReverse (x::xs) = listReverse xs ++ [x]

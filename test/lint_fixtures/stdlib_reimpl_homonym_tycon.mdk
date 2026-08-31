@@ -1,0 +1,18 @@
+-- 🚨 NEGATIVE fixture for the TYPE-CONSTRUCTOR HOMONYM guard (#2327 finding 2).
+--
+-- `tyCanon` compares type constructors by BARE NAME — it has no resolver — so
+-- this file's own `Set` canonicalises identically to stdlib's `set.Set`, and
+-- `insertSet` relaxes onto the stdlib name `insert`.  Before the guard, the rule
+-- fired here and told the author to "use the stdlib version" of a function whose
+-- type does not even mention the same `Set`: not merely noisy but TYPE-INCORRECT
+-- advice, the same bare-name-across-modules hazard the stdlib index is keyed to
+-- avoid for stdlib VALUE names.
+--
+-- A file that declares its own `Set` is talking about its own `Set`, so the rule
+-- must stay silent.  Do not "fix" this fixture by renaming the local type.
+export
+data Set a = Empty | Node a (Set a) (Set a)
+
+export
+insertSet : Ord a => a -> Set a -> Set a
+insertSet _ s = s

@@ -463,6 +463,24 @@ name (e.g. `reverse : List a -> List a`). Fire only when the signatures unify.
 > is **not** blocked on this doc. Narrowing that exemption from a path to a
 > `(path, name)` ownership pair should land independently and first.
 
+**Corrected 2026-08-31 (`stdlib-reimpl-detection` sprint, S-ratchet-and-holes,
+#2327).** The blockquote's *"a signature match is a fact, not a heuristic ...
+can ship as an error rather than a warning"* is **measured false**. Signature
+equality as the CANDIDATE GENERATOR (no name relation at all — matching every
+declared signature in a tree against every stdlib signature) was tried and
+gives 940 net-new findings, 650 of them ambiguous — unshippable, let alone as
+`SevError`. What actually shipped (S2/S3) is **Tier 0, not Tier 1**: a
+declared-signature *filter* on a NAME-RELAXED candidate set (`ruleStdlibReimpl`,
+`compiler/tools/lint.mdk`) — no typecheck, no `orc.schemeOfTop`, no `Loc`
+bridging at all. It is precision on top of a name heuristic, not a type fact
+standing alone — F7 measured a DIFFERENT relaxation choice (case-insensitive
+prefix/suffix, len ≥ 4) narrowing 1,866 name candidates to 60 survivors, not
+the relaxation S2/S3 shipped, so the two counts are not comparable — and the
+rule ships as `SevWarning` — ungated, since the tree carries 76 pre-existing
+findings across 33 files that this sprint's #2327 drain issue tracks, not
+`SevError`. See §9's
+own 2026-08-31 correction for how this reclassifies the "Tier 1 customer" claim.
+
 **(d) Redundant conversion / wrapping.** Two flavors:
 - *Syntactic sub-case (Tier 0/none):* `map id xs`, `xs |> map id` — detect the
   function arg is the bare `EVar "id"`; no types needed (offer as a plain `Rule`,
@@ -552,6 +570,24 @@ struck above. Two consequences:
   signature match. Tier 1 now has a filed, motivated customer; **Tier 2 still has
   none**, which is a datum for #1754's done-when (b), not an argument to build it
   speculatively.
+
+**Corrected 2026-08-31 (S-ratchet-and-holes, #2327).** *"#2248 Miss 2 ... is
+Tier 1 ... Tier 1 now has a filed, motivated customer"* is **measured false** —
+Miss 2 was answered by a **Tier 0** mechanism (a declared-signature filter over
+a name-relaxed candidate set, `compiler/tools/lint.mdk`'s `ruleStdlibReimpl`),
+not by `orc.schemeOfTop`/Tier 1's typed-scheme machinery at all. Measured
+2026-08-31 (F3, re-measured on the shipped binary — a prior version of this
+correction cited ~0.055s, which was the PRE-sprint rule's cost: it reported
+nothing and built no index, so it measured a different program): the shipped
+declared-signature filter answers Miss 2 in ~0.25s (`medaka lint` on a small
+file, `MEDAKA_STRICT=1`, no typecheck) against Tier 1's own ~7.7s cost
+estimate for a comparable pass, and does so **more faithfully** than a Tier-1
+route would have — `ppScheme`
+erases effect rows (32 of `stdlib/list.mdk`'s own 77 signatures differ under
+it; see §7a's rule doc), so comparing *rendered schemes* would have been the
+wrong comparison even set up correctly. Net effect: Tier 1 does **not** have a
+filed customer from #2248 after all; re-derive whether anything else in this
+doc's catalog still needs it before treating Tier 1 as motivated.
 
 ---
 

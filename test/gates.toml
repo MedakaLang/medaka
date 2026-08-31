@@ -2242,7 +2242,7 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_lint_cache.sh"
 oracles = []
-sources = ["compiler/tools/lint*.mdk", "test/diff_compiler_lint_cache.sh"]
+sources = ["compiler/tools/lint*.mdk", "compiler/driver/medaka_cli.mdk", "test/diff_compiler_lint_cache.sh"]
 corpus = ["test/lint_fixtures"]
 toolchain = []
 
@@ -2256,7 +2256,7 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_lint_crossfile.sh"
 oracles = []
-sources = ["compiler/tools/lint*.mdk", "test/diff_compiler_lint_crossfile.sh"]
+sources = ["compiler/tools/lint*.mdk", "compiler/driver/medaka_cli.mdk", "test/diff_compiler_lint_crossfile.sh"]
 corpus = ["test/lint_crossfile_fixtures"]
 toolchain = []
 
@@ -2284,7 +2284,7 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_lint_multi_dir.sh"
 oracles = []
-sources = ["compiler/tools/lint*.mdk", "test/diff_compiler_lint_multi_dir.sh"]
+sources = ["compiler/tools/lint*.mdk", "compiler/driver/medaka_cli.mdk", "test/diff_compiler_lint_multi_dir.sh"]
 corpus = ["test/lint_multi_dir_fixtures"]
 toolchain = []
 
@@ -2298,7 +2298,7 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_lint_multi.sh"
 oracles = []
-sources = ["compiler/tools/lint*.mdk", "test/diff_compiler_lint_multi.sh"]
+sources = ["compiler/tools/lint*.mdk", "compiler/driver/medaka_cli.mdk", "test/diff_compiler_lint_multi.sh"]
 corpus = ["test/lint_multi_fixtures"]
 toolchain = []
 

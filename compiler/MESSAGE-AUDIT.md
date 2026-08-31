@@ -253,7 +253,6 @@ drifts**: 11 rules use `— rewrite as '…'`; the outliers are flagged.
 | rule-match-on-param | `function '\{name}' matches on parameter '\{p}' — consider a multi-clause function definition` | :777 | tone (hedge "consider") | `— use a multi-clause function definition` |
 | rule-hand-rolled-derivable | `hand-written `impl \{iface}` for '\{tyName}' — consider `deriving (\{iface})` instead` | :1056 | tone (hedge) | `— use `deriving (\{iface})`` |
 | rule-duplicate-body | `function '\{occName}' has a body structurally identical to a definition in \{others} — consider consolidating into a shared module` | :3530 | tone (hedge) | `— consolidate into a shared module` |
-| rule-stdlib-reimpl | `top-level '\{name}' shadows a stdlib function — prefer the stdlib version` | :1142 | inconsistent (verb "prefer") | `— use the stdlib version` |
 | rule-bool-simplify | `redundant boolean expression — simplify to '\{rewritten}'` | :2784 | inconsistent (verb "simplify to") | `— rewrite as '\{rewritten}'` |
 | rule-dead-code | `private top-level '\{name}' is unreachable from exports/main/doctests — dead code (remove it)` | :3242 | inconsistent (fix in parenthetical, not em-dash imperative) | `— remove it (dead code)` |
 | rule-andthen-pure-map | `monadic bind wraps a pure transformation of its result — rewrite as '\{rewritten}' (functor law: m >>= (pure . f) ≡ fmap f m)` | :2141 | tone (theory parenthetical is chatty) | drop the law; keep it in the rule `descr` |
@@ -264,8 +263,10 @@ drifts**: 11 rules use `— rewrite as '…'`; the outliers are flagged.
 Clean rules (dominant form): rule-destructure-in-param, rule-missing-signature,
 rule-bind-then-destructure, rule-lambda-section, rule-if-max-min,
 rule-concat-to-interp, rule-not-eq, rule-rem-parity, rule-double-reverse,
-rule-when-unless, rule-complement-predicate, rule-bind-chain-to-do, and the
-check-policy trace/no-binding lines.
+rule-when-unless, rule-complement-predicate, rule-bind-chain-to-do,
+rule-stdlib-reimpl (`top-level '\{name}' reimplements stdlib
+'\{modName}.\{stdName}' (same declared signature) — use the stdlib version`,
+lint.mdk:1740), and the check-policy trace/no-binding lines.
 
 ---
 
