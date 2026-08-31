@@ -835,6 +835,10 @@ while IFS= read -r f; do
       # AND the parse arms they describe, so a change here can move either side of
       # the help/parse-arm agreement this gate asserts.
       add 'diff_compiler_cli_help_conformance'
+      # #2354 (F1): the same file holds every verb's unknown-flag rejection arm
+      # AND the `assertCliFlags` call sites the reject-floor gate derives its
+      # covered set from, so a change here moves both of that gate's inputs.
+      add 'diff_compiler_cli_reject_floor'
       add 'diff_compiler_analyze_project' ;;
     compiler/tools/lint*.mdk)      add 'diff_compiler_lint*' ;;
     compiler/tools/fmt.mdk|compiler/tools/printer.mdk) add 'diff_compiler_fmt'; add 'diff_compiler_snapshot*' ;;
@@ -883,6 +887,9 @@ while IFS= read -r f; do
       # `(known: …)` rosters both live here, and both are inputs to the CLI
       # help/parse-arm agreement gate.
       add 'diff_compiler_cli_help_conformance'
+      # #2354 (F1): `gate`'s own unknown-subcommand rejection lives here, and the
+      # reject-floor gate asserts it — `gate` is one of the verbs R floors.
+      add 'diff_compiler_cli_reject_floor'
       # #2181 (S-tier-is-data): `tiers` is read here, and `gate verify`'s
       # shape check for it lives here too.
       add 'diff_compiler_tier_drift'
@@ -992,11 +999,13 @@ while IFS= read -r f; do
                                    add 'diff_compiler_ir_scaling' ;;
     # ── #2354: the shared CLI-derivation library, same shape as perf_shapes above ──
     # test/cli_conformance_lib.sh is `.`-sourced by the census (a TOOL, no gate) and by
-    # diff_compiler_cli_help_conformance (a GATE), so neither the gate-script arm above
-    # nor the one-hop `sh "$ROOT/test/…` scrape can reach it. Derive the consumer set
-    # before editing: `grep -rln cli_conformance_lib.sh test/`.
+    # TWO gates — diff_compiler_cli_help_conformance and diff_compiler_cli_reject_floor
+    # (#2354 F1) — so neither the gate-script arm above nor the one-hop
+    # `sh "$ROOT/test/…` scrape can reach it. Derive the consumer set before editing:
+    # `grep -rln cli_conformance_lib.sh test/`.
     test/cli_conformance_lib.sh|test/cli_conformance_census.sh)
-                                   add 'diff_compiler_cli_help_conformance' ;;
+                                   add 'diff_compiler_cli_help_conformance'
+                                   add 'diff_compiler_cli_reject_floor' ;;
     test/IMPORT-ORDER-LEDGER.txt)  add 'diff_compiler_import_order' ;;
     # Same argument again: the sidecar emitter-verdict ledger is also a loose file
     # under test/ that `_fixture_dir_for` cannot see, and it feeds the SAME gate

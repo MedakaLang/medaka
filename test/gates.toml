@@ -3672,6 +3672,43 @@ sources = ["test/diff_compiler_cli_help_conformance.sh", "test/cli_conformance_l
 corpus = []
 toolchain = ["clang"]
 
+# The ACCEPTANCE FLOOR for convention C2, unknown-flag rejection (#2354,
+# S-unknown-flag-floor; fix-round F1). The help-conformance gate above asserts
+# help/parse-arm AGREEMENT and is deliberately fail-open where a verb states
+# nothing — its Property C reports a rosterless verb as `C UNCOVERED`, not FAIL.
+# That is correct for C and fatal for C2: deleting a verb's `assertCliFlags` call
+# stops it rejecting unknown flags AND removes its roster, so C moves the verb to
+# `UNCOVERED` and the suite stays GREEN. Demonstrated, not argued — see the F1
+# report. This gate asserts the BEHAVIOUR instead, and goes RED for it:
+#   R every verb in the usage block (minus a self-draining exemption set)
+#     rejects `--<bogus>` with rc EXACTLY 1, and never exits 0
+#   K every `assertCliFlags` verb prints its `(known: …)` roster
+#   S every covered verb is visible in the usage block, so R can see it
+# R's verb list comes from the usage block, NOT from `assertCliFlags`, on purpose:
+# a floor derived from the thing it floors cannot detect that thing's deletion.
+# No `build` probe shells out to clang here (only unknown-flag rejection, which
+# short-circuits before any compile), so this is `cheap`, unlike the gate above —
+# but it reads compiler/driver/medaka_cli.mdk with `grep`, so `clang` stays in
+# `toolchain` only insofar as the binary it probes must exist.
+# ⚠️ `shard` below is a GUESS, as every brand-new gate's must be ([W-SHARD-DERIVED],
+# #2178): it has no row in test/gate_cost_baseline.json yet, so `medaka gate
+# balance` HARD-REFUSES to place it until an unnarrowed CI run measures it, and
+# `ci-gen-drift` reds until the follow-up `medaka gate balance && make gen-ci`
+# commit. Do not hand-tune this value to make the shards look balanced.
+[[gate]]
+name = "diff_compiler_cli_reject_floor"
+area = "cli"
+shard = "gates_2"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+run = "test/diff_compiler_cli_reject_floor.sh"
+oracles = []
+sources = ["test/diff_compiler_cli_reject_floor.sh", "test/cli_conformance_lib.sh", "compiler/driver/medaka_cli.mdk", "compiler/tools/gate_cmd.mdk"]
+corpus = []
+toolchain = ["clang"]
+
 # ── the `gates` matrix rows (S-1, #2177) ─────────────────────────────────────
 #
 # One `[[shard]]` per row of ci.yml's `gates` job matrix, in matrix order.
