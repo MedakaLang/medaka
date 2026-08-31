@@ -836,36 +836,55 @@ testFailSuffix failed errors
 -- invisible here (see #81); the CALLER must present them as "passes under eval",
 -- never an unqualified pass.
 --
--- #2295 (d): the return tuple now carries a 4th element, the `test "…"` phase's
+-- #2295 (d): the return tuple carries a 4th element, the `test "…"` phase's
 -- structured results (`testDeclsReport`, above) — §4 of this slice's packet
--- licenses extending this shape (not reverting it).  `medaka mcp`'s
--- `medaka_test` (#252/#1443) deliberately IGNORES this 4th element and keeps
--- reporting only doctests+props, unchanged; `medaka test --json` (the CLI,
--- #2295) is the new consumer that folds it in, so the JSON and human `medaka
--- test` arms agree on ALL THREE phases' counts for one target.
+-- licenses extending this shape (not reverting it) — plus a 5th, whether the
+-- module was exempted from typechecking (`typecheckExempt`, F7: #1680/#1443's
+-- skip marker used to be human-arm-stderr-only, invisible to `--json`/MCP).
+--
+-- `cases`/`filterOpt` (F1) and `includeTestDecls` (F3) are per-caller: `medaka
+-- mcp`'s `medaka_test` (#252/#1443) passes `(100, None, False)` — unchanged
+-- counts/filtering (MCP has no --cases/--filter of its own) AND, as of F3,
+-- the test-decl phase is no longer EVALUATED AT ALL on this path (previously
+-- it always ran and only its result was discarded, so a panicking `test "…"`
+-- decl could still kill the MCP server even though medaka_test never reports
+-- test decls).  `medaka test --json` (the CLI, #2295) passes the user's own
+-- `--cases`/`--filter` and `True`, so the JSON and human `medaka test` arms
+-- agree on ALL THREE phases' counts for one target.
 export
-runTestReport : List Engine -> String -> String -> String -> String -> String -> <IO> (Option String, List (Engine, RunResult), List PropResult, List (String, Int, ExResult))
-runTestReport engines runtimeSrc coreSrc target tsrc stdlibDir =
+runTestReport : List Engine -> String -> String -> String -> String -> String -> Int -> Option String -> Bool -> <IO> (Option String, List (Engine, RunResult), List PropResult, List (String, Int, ExResult), Bool)
+runTestReport engines runtimeSrc coreSrc target tsrc stdlibDir cases filterOpt includeTestDecls =
   let runtimeDecls = desugar (parse runtimeSrc)
   let coreDecls = desugar (parse coreSrc)
   let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]
   let userDecls = desugar (parse tsrc)
   match typecheckGateResult target roots runtimeSrc coreSrc tsrc userDecls
-    Some errText => (Some errText, [], [], [])
+    Some errText => (Some errText, [], [], [], False)
     None =>
-      let doctestRuns = doctestReport engines runtimeDecls coreDecls target tsrc userDecls roots
-      let propResults = propsReport runtimeDecls coreDecls target tsrc userDecls roots
-      let testResults = testDeclsReport runtimeDecls coreDecls target tsrc userDecls roots
-      (None, doctestRuns, propResults, testResults)
+      let doctestRuns = doctestReport engines runtimeDecls coreDecls target tsrc userDecls roots filterOpt
+      let propResults = propsReport runtimeDecls coreDecls target tsrc userDecls roots cases filterOpt
+      let testResults = if includeTestDecls then
+        testDeclsReport runtimeDecls coreDecls target tsrc userDecls roots filterOpt
+      else
+        []
+      (
+        None,
+        doctestRuns,
+        propResults,
+        testResults,
+        typecheckExempt userDecls tsrc,
+      )
 
 -- Doctest phase as pure data: extraction + runChosenOn per requested engine,
 -- minus reportDoctests' printing.  A file with zero doctests yields the empty
 -- RunResult for every engine.  Positionally tagged by engine so a caller
 -- (e.g. `medaka mcp`'s medaka_test) can derive an "engine" label instead of
--- hardcoding one.
-doctestReport : List Engine -> List Decl -> List Decl -> String -> String -> List Decl -> List String -> <IO> List (Engine, RunResult)
-doctestReport engines runtimeDecls coreDecls target tsrc userDecls roots =
-  let examples = extractExamples (collectComments tsrc)
+-- hardcoding one.  `filterOpt` mirrors `runDoctests`' `filterExamplesByName`
+-- (F1: `medaka test --json --filter` was silently ignoring this) — MCP's
+-- medaka_test still passes `None` (unchanged behavior, #2295 scoped to CLI).
+doctestReport : List Engine -> List Decl -> List Decl -> String -> String -> List Decl -> List String -> Option String -> <IO> List (Engine, RunResult)
+doctestReport engines runtimeDecls coreDecls target tsrc userDecls roots filterOpt =
+  let examples = filterExamplesByName filterOpt (extractExamples (collectComments tsrc))
   match examples
     [] => emptyDoctestRuns engines
     _ =>
@@ -893,18 +912,19 @@ doctestReportGo (e::rest) runtimeDecls coreDecls target tsrc userDecls roots exa
 
 -- Prop phase as pure data: same single-file/multi-module split as runProps, but
 -- calling runAllPropsResults (silent) instead of runAllProps (printing).
-propsReport : List Decl -> List Decl -> String -> String -> List Decl -> List String -> <IO> List PropResult
-propsReport runtimeDecls coreDecls target tsrc userDecls roots
+-- `cases`/`filterOpt` mirror `runProps`' own parameters (F1: `medaka test
+-- --json --cases`/`--filter` were silently ignored) — MCP's medaka_test still
+-- passes `(100, None)` (unchanged behavior, #2295 is scoped to the CLI).
+propsReport : List Decl -> List Decl -> String -> String -> List Decl -> List String -> Int -> Option String -> <IO> List PropResult
+propsReport runtimeDecls coreDecls target tsrc userDecls roots cases filterOpt
   | not (hasProps userDecls) = []
-  | hasUseDecls userDecls =
-    propsReportMulti runtimeDecls coreDecls target tsrc userDecls roots
-  | otherwise =
-    propsReportSingle runtimeDecls coreDecls target tsrc userDecls roots
+  | hasUseDecls userDecls = propsReportMulti runtimeDecls coreDecls target tsrc userDecls roots cases filterOpt
+  | otherwise = propsReportSingle runtimeDecls coreDecls target tsrc userDecls roots cases filterOpt
 
 -- Keyed by the loader-derived `rootId` (ARCH E-5, #1521/#1223), not the retired
 -- synthetic `"__user__"` literal — see the ARCH E-5 note near runSingle above.
-propsReportSingle : List Decl -> List Decl -> String -> String -> List Decl -> List String -> <IO> List PropResult
-propsReportSingle runtimeDecls coreDecls target tsrc userDecls roots =
+propsReportSingle : List Decl -> List Decl -> String -> String -> List Decl -> List String -> Int -> Option String -> <IO> List PropResult
+propsReportSingle runtimeDecls coreDecls target tsrc userDecls roots cases filterOpt =
   let userNames = funNamesOf userDecls
   let livePrelude = if programIsCore userDecls then
     []
@@ -916,18 +936,16 @@ propsReportSingle runtimeDecls coreDecls target tsrc userDecls roots =
   let rootProps = match lookupModuleDecls rootId (snd elaborated)
     Some decls => decls
     None => userDecls
-  -- MCP's medaka_test has no --cases/--filter of its own (#2295 is scoped to
-  -- the CLI); keep this structured path's behavior unchanged.
-  runAllPropsResults 100 None (propLineTests tsrc) env rootProps
+  runAllPropsResults cases filterOpt (propLineTests tsrc) env rootProps
 
-propsReportMulti : List Decl -> List Decl -> String -> String -> List Decl -> List String -> <IO> List PropResult
-propsReportMulti runtimeDecls coreDecls target tsrc userDecls roots = match loadProgram target roots
+propsReportMulti : List Decl -> List Decl -> String -> String -> List Decl -> List String -> Int -> Option String -> <IO> List PropResult
+propsReportMulti runtimeDecls coreDecls target tsrc userDecls roots cases filterOpt = match loadProgram target roots
   Err _ => []
   Ok mods =>
     let elaborated = elaborateModulesMangled runtimeDecls coreDecls (map desugarPair mods)
     let env = evalModulesRootEnvWith (testCapableExterns ()) (fst elaborated) (snd elaborated)
     let rootProps = elaboratedRootProps target (snd elaborated) userDecls
-    runAllPropsResults 100 None (propLineTests tsrc) env rootProps
+    runAllPropsResults cases filterOpt (propLineTests tsrc) env rootProps
 
 -- ── test-decl phase as pure data (#2295 (d)) ────────────────────────────────
 -- Symmetric with `propsReport` above: the same single-file/multi-module split
@@ -935,19 +953,18 @@ propsReportMulti runtimeDecls coreDecls target tsrc userDecls roots = match load
 -- "…"` decl instead of printing.  Exists so `medaka test --json` can report
 -- the SAME `test "…"` counts the human runner does — `runTestReport`'s
 -- structured contract (medaka mcp's medaka_test, #1443) deliberately excludes
--- this phase (see the comment above `runTestReport`), so this is a second,
--- CLI-only consumer of the same discovery/eval machinery, not a change to
--- what medaka_test reports.
-testDeclsReport : List Decl -> List Decl -> String -> String -> List Decl -> List String -> <IO> List (String, Int, ExResult)
-testDeclsReport runtimeDecls coreDecls target tsrc userDecls roots
+-- this phase entirely (see `runTestReport`'s `includeTestDecls` parameter),
+-- so this is a second, CLI-only consumer of the same discovery/eval
+-- machinery, not a change to what medaka_test reports.  `filterOpt` mirrors
+-- `runTestDecls`' `filterTestsByName` (F1).
+testDeclsReport : List Decl -> List Decl -> String -> String -> List Decl -> List String -> Option String -> <IO> List (String, Int, ExResult)
+testDeclsReport runtimeDecls coreDecls target tsrc userDecls roots filterOpt
   | not (hasTests userDecls) = []
-  | hasUseDecls userDecls =
-    testDeclsReportMulti runtimeDecls coreDecls target tsrc userDecls roots
-  | otherwise =
-    testDeclsReportSingle runtimeDecls coreDecls target tsrc userDecls roots
+  | hasUseDecls userDecls = testDeclsReportMulti runtimeDecls coreDecls target tsrc userDecls roots filterOpt
+  | otherwise = testDeclsReportSingle runtimeDecls coreDecls target tsrc userDecls roots filterOpt
 
-testDeclsReportSingle : List Decl -> List Decl -> String -> String -> List Decl -> List String -> <IO> List (String, Int, ExResult)
-testDeclsReportSingle runtimeDecls coreDecls target tsrc userDecls roots =
+testDeclsReportSingle : List Decl -> List Decl -> String -> String -> List Decl -> List String -> Option String -> <IO> List (String, Int, ExResult)
+testDeclsReportSingle runtimeDecls coreDecls target tsrc userDecls roots filterOpt =
   let userNames = funNamesOf userDecls
   let livePrelude = if programIsCore userDecls then
     []
@@ -961,10 +978,12 @@ testDeclsReportSingle runtimeDecls coreDecls target tsrc userDecls roots =
     None => userDecls
   runTestsCollect
     env
-    (attachRawLines (testLineTests tsrc) (collectTests rootTests))
+    (filterTestsByName
+      filterOpt
+      (attachRawLines (testLineTests tsrc) (collectTests rootTests)))
 
-testDeclsReportMulti : List Decl -> List Decl -> String -> String -> List Decl -> List String -> <IO> List (String, Int, ExResult)
-testDeclsReportMulti runtimeDecls coreDecls target tsrc userDecls roots = match loadProgram target roots
+testDeclsReportMulti : List Decl -> List Decl -> String -> String -> List Decl -> List String -> Option String -> <IO> List (String, Int, ExResult)
+testDeclsReportMulti runtimeDecls coreDecls target tsrc userDecls roots filterOpt = match loadProgram target roots
   Err _ => []
   Ok mods =>
     let elaborated = elaborateModulesMangled runtimeDecls coreDecls (map desugarPair mods)
@@ -972,7 +991,9 @@ testDeclsReportMulti runtimeDecls coreDecls target tsrc userDecls roots = match 
     let rootTests = elaboratedRootProps target (snd elaborated) userDecls
     runTestsCollect
       env
-      (attachRawLines (testLineTests tsrc) (collectTests rootTests))
+      (filterTestsByName
+        filterOpt
+        (attachRawLines (testLineTests tsrc) (collectTests rootTests)))
 
 runTestsCollect : List (String, Value e) -> List (String, Int, Expr) -> <IO> List (String, Int, ExResult)
 runTestsCollect _ [] = []

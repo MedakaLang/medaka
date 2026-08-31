@@ -1317,6 +1317,19 @@ typeErrorField : Option String -> List (String, Json)
 typeErrorField None = []
 typeErrorField (Some errText) = [("typeError", JString errText)]
 
+-- F7 (#1680/#1443): a distinct boolean field, present only when True — the
+-- human `medaka test` arm announces this on stderr (`typecheckSkipNotice`,
+-- tools.test_cmd.mdk); this is the machine-readable equivalent for a caller
+-- of medaka_test, which has no stderr channel of its own to read that
+-- announcement from.  Kept SEPARATE from the existing `note` field above
+-- (the interpreter-engine caveat) rather than folded into it — `note` is a
+-- fixed single-purpose string already described in the tool's own
+-- description; overloading it with a second, unrelated fact would make both
+-- harder for a machine consumer to parse reliably.
+typecheckSkippedField : Bool -> List (String, Json)
+typecheckSkippedField False = []
+typecheckSkippedField True = [("typecheckSkipped", JBool True)]
+
 -- The full structured result body.  `engine`/`note` carry the interpreter
 -- caveat INTO the payload (not just the tool description) so a consumer that
 -- never read the description is still told what these results cover — and,
@@ -1325,8 +1338,8 @@ typeErrorField (Some errText) = [("typeError", JString errText)]
 -- engines that WOULD have run (`mcpTestEngines`) when a type error short-
 -- circuited the run before any engine touched it (`runs` is `[]` there, so
 -- `doctestRunEngineNames runs` would wrongly read "unknown").
-testReportJson : String -> Option String -> List (Engine, RunResult) -> List PropResult -> Json
-testReportJson path typeError runs props =
+testReportJson : String -> Option String -> List (Engine, RunResult) -> List PropResult -> Bool -> Json
+testReportJson path typeError runs props typecheckSkipped =
   let engines = if isNone typeError then
     doctestRunEngineNames runs
   else
@@ -1336,7 +1349,7 @@ testReportJson path typeError runs props =
       ("file", JString path),
       ("engine", JString (primaryEngineName engines)),
       ("note", JString (mcpTestCaveat engines)),
-    ] ++ typeErrorField typeError ++ [
+    ] ++ typeErrorField typeError ++ typecheckSkippedField typecheckSkipped ++ [
       ("doctests", doctestsJson (primaryDoctestRun runs)),
       ("properties", jArray (map propJson props)),
       (
@@ -1369,13 +1382,17 @@ runTestTool runtimeSrc coreSrc stdlibDir args = match fieldStr "file" args
   Some path => match readFile path
     Err e => toolArgError (stringConcat ["medaka_test: cannot read file '", path, "': ", e])
     Ok tsrc =>
-      -- #2295 (d): `runTestReport` now also returns the `test "…"` phase's
+      -- #2295 (d): `runTestReport` also returns the `test "…"` phase's
       -- structured results (a 4th tuple element, for `medaka test --json`'s
-      -- benefit) — this tool deliberately ignores it, unchanged (medaka_test
-      -- covers doctests + props only, per #252/#1443).
-      let (typeError, runs, props, _testResults) = runTestReport mcpTestEngines runtimeSrc coreSrc path tsrc stdlibDir
+      -- benefit) and (F7) whether the module was typecheck-exempt (a 5th) —
+      -- this tool deliberately ignores the former (medaka_test covers
+      -- doctests + props only, per #252/#1443) by passing `includeTestDecls =
+      -- False`, which (F3) also means the test-decl phase is never EVALUATED
+      -- here, not merely unreported — a panicking `test "…"` decl in the
+      -- target file can no longer crash the MCP server on this path.
+      let (typeError, runs, props, _testResults, typecheckSkipped) = runTestReport mcpTestEngines runtimeSrc coreSrc path tsrc stdlibDir 100 None False
       toolTextResult
-        (stringify (testReportJson path typeError runs props))
+        (stringify (testReportJson path typeError runs props typecheckSkipped))
         (not (testReportOk typeError runs props))
 
 -- ── tools/call handler ───────────────────────────────────────────────────────

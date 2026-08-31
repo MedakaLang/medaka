@@ -2312,7 +2312,7 @@ runTestCmd argv = match validateTestFlags argv
             [] =>
               let _ = ePutStrLn "usage: medaka test [--native | --engines eval,native] [--json] [--filter <substring>] [--seed <n>] [--cases <n>] [file.mdk | dir]"
               exit 1
-            [target] => if jsonMode then runTestJsonCmd engines target
+            [target] => if jsonMode then runTestJsonCmd engines cases filterOpt target
             else match listDir target
               Err _ => runTestOne engines cases filterOpt target
               Ok _ => runTestManyTargets engines cases filterOpt [target]
@@ -2412,11 +2412,12 @@ runTestOne engines cases filterOpt target =
 -- to agree INCLUDING that phase — so a CLI-side renderer that folds in the
 -- `test "…"` results `runTestReport` now also returns is needed; adapting
 -- `testReportJson` in place would have changed medaka_test's (unrelated,
--- settled) contract.  `--filter`/`--seed`/`--cases` are NOT threaded through
--- here yet (`runTestReport` doesn't take them) — out of this slice's scope,
--- noted in the report rather than silently limiting them to look supported.
-runTestJsonCmd : List Engine -> String -> <IO> Unit
-runTestJsonCmd engines target =
+-- settled) contract.  F1: `cases`/`filterOpt` ARE now threaded through (they
+-- used to be silently dropped here, so `--json --filter`/`--cases` reported
+-- on ALL tests regardless) — `--seed` already reached this path unchanged,
+-- via `seedPropRng` in `runTestCmd` before this function is ever called.
+runTestJsonCmd : List Engine -> Int -> Option String -> String -> <IO> Unit
+runTestJsonCmd engines cases filterOpt target =
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let rtPath = root ++ "/stdlib/runtime.mdk"
   let corePath = root ++ "/stdlib/core.mdk"
@@ -2434,8 +2435,8 @@ runTestJsonCmd engines target =
           let _ = ePutStrLn e
           exit 1
         Ok tsrc =>
-          let (typeError, runs, props, tests) = runTestReport engines rsrc csrc target tsrc stdlibDir
-          let _ = putStr (stringify (cliTestReportJson target typeError runs props tests))
+          let (typeError, runs, props, tests, typecheckSkipped) = runTestReport engines rsrc csrc target tsrc stdlibDir cases filterOpt True
+          let _ = putStrLn (stringify (cliTestReportJson target typeError runs props tests typecheckSkipped))
           if cliTestReportOk typeError runs props tests then () else exit 1
 
 cliTestReportOk : Option String -> List (Engine, RunResult) -> List PropResult -> List (String, Int, ExResult) -> Bool
@@ -2530,33 +2531,22 @@ cliTypeErrorField : Option String -> List (String, Json)
 cliTypeErrorField None = []
 cliTypeErrorField (Some errText) = [("typeError", JString errText)]
 
+-- F7 (#1680/#1443): present only when True — see `mcp.mdk`'s
+-- `typecheckSkippedField` (the CLI JSON envelope's own twin of the human
+-- arm's stderr `typecheckSkipNotice`).
+cliTypecheckSkippedField : Bool -> List (String, Json)
+cliTypecheckSkippedField False = []
+cliTypecheckSkippedField True = [("typecheckSkipped", JBool True)]
+
 -- The full envelope: doctests + properties (same shape `medaka_test`'s
 -- `testReportJson` uses) PLUS a `tests` array for `test "…"` decls, and a
 -- `summary` folding all three phases together — this is the field
 -- `testReportJson` cannot provide (it never runs this phase, by its own
 -- documented scope), and the one this slice's acceptance check depends on.
-cliTestReportJson : String -> Option String -> List (Engine, RunResult) -> List PropResult -> List (String, Int, ExResult) -> Json
-cliTestReportJson path typeError runs props tests =
+cliTestReportJson : String -> Option String -> List (Engine, RunResult) -> List PropResult -> List (String, Int, ExResult) -> Bool -> Json
+cliTestReportJson path typeError runs props tests typecheckSkipped =
   jObject
-    ([("file", JString path)] ++ cliTypeErrorField typeError ++ [
-      ("doctests", cliDoctestsJson (cliPrimaryDoctestRun runs)),
-      ("properties", jArray (map cliPropJson props)),
-      ("tests", jArray (map cliTestJson tests)),
-      (
-        "summary",
-        jObject [
-          (
-            "passed",
-            JInt (runPassed (cliPrimaryDoctestRun runs) + cliCountPassProps props + cliCountPassTests tests),
-          ),
-          (
-            "failed",
-            JInt (runFailed (cliPrimaryDoctestRun runs) + runErrors (cliPrimaryDoctestRun runs) + cliCountFailProps props + cliCountFailTests tests),
-          ),
-          ("ok", JBool (cliTestReportOk typeError runs props tests)),
-        ],
-      ),
-    ])
+    ([("file", JString path)] ++ cliTypeErrorField typeError ++ cliTypecheckSkippedField typecheckSkipped ++ [("doctests", cliDoctestsJson (cliPrimaryDoctestRun runs)), ("properties", jArray (map cliPropJson props)), ("tests", jArray (map cliTestJson tests)), ("summary", jObject [("passed", JInt (runPassed (cliPrimaryDoctestRun runs) + cliCountPassProps props + cliCountPassTests tests)), ("failed", JInt (runFailed (cliPrimaryDoctestRun runs) + runErrors (cliPrimaryDoctestRun runs) + cliCountFailProps props + cliCountFailTests tests)), ("ok", JBool (cliTestReportOk typeError runs props tests))])])
 
 -- Directory/project/multi-target path: expand every target to concrete .mdk
 -- files (SAME walk as lint/fmt), then run+aggregate. An empty resolved set
