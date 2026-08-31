@@ -68,6 +68,12 @@ $ medaka test --filter=zzz ok.mdk
 medaka test: unrecognized flag '--filter=zzz' (known: …)   # loud — the conforming shape
 ```
 
+> ⚠️ **Pre-C1 transcript.** The four lines above were captured before S-2 landed C1. Re-run
+> today, all four now parse cleanly on both spellings — including the `test` line, which is no
+> longer a rejection: `medaka test --filter=zzz ok.mdk` now behaves identically to `--filter
+> zzz`. Left in place because it is still the correct illustration of *why* C1 was ratified
+> (the three silent misreads it foreclosed); do not read it as current `test` behavior.
+
 Accepting both spellings everywhere removes all three silent misreads at once and breaks
 nothing. `lint` already models the loud half of this convention in the direction it does not
 support, and its message is the wording to mirror:
@@ -85,7 +91,10 @@ one C1 generalises.
 
 **Non-conforming cells:** `check-policy --allow=`, `manifest --fn=`, `snapshot --stages=` /
 `--out=` / `--root=`, `codemod --strip=` / `--rename=`, `build -o=`, `lint --deny ` /
-`--only ` / `--disable ` (space form). → **slice S-2**, in the shared rejection helper.
+`--only ` / `--disable ` (space form). → **slice S-2** ✅ **DRAINED** — re-verified directly:
+`check-policy --allow IO`/`--allow=IO`, `manifest --fn main`/`--fn=main`, `lint --deny
+rule-not-eq`/`--deny=rule-not-eq`, `build -o=<path>`, and `snapshot --check --stages=parse` all
+now parse the flag on either spelling instead of misreading it as a filename or dropping it.
 
 ---
 
@@ -136,17 +145,24 @@ It is the reference implementation, not a defect to normalise away.
 | `AS-FILENAME` | not rejected — the token became a positional and the verb tried to `open()` it | ❌ **S0-shaped** |
 | `SILENT-ACCEPT` | exit 0, nothing printed — indistinguishable from a clean run | ❌ **the worst cell** |
 
-**Non-conforming cells:** `lint` (SILENT-ACCEPT), `check` / `doc` / `check-policy` /
-`manifest` (AS-FILENAME), `build` / `new` / `snapshot` (REJECT-VAGUE), plus `snapshot`'s
-*second* hole — with a mode supplied, any unknown flag is dropped without a word:
+**Non-conforming cells (AS OF THE PRE-SPRINT BASELINE):** `lint` (SILENT-ACCEPT), `check` /
+`doc` / `check-policy` / `manifest` (AS-FILENAME), `build` / `new` / `snapshot` (REJECT-VAGUE),
+plus `snapshot`'s *second* hole — with a mode supplied, any unknown flag was dropped without a
+word:
 
 ```
 $ medaka snapshot --check --zzz-not-a-flag ok.mdk
 ok.mdk: FAIL no snapshot at ok.md …          # ran normally; --zzz never mentioned
 ```
 
-→ **slice S-2**, through ONE shared rejection helper (each verb supplies its name and its
-known-flag set; the helper owns the check, the wording and the exit code).
+→ **slice S-2** ✅ **DRAINED**, through ONE shared rejection helper (each verb supplies its name
+and its known-flag set; the helper owns the check, the wording and the exit code). Re-verified
+against the current binary: every one of the sixteen verbs now falls in the `REJECT-NAMED`
+class except `new`, which stays `REJECT-VAGUE` (it takes no flags at all, only a `<name>`
+positional, so there is no known-flag set for the shared helper to name — see the residual
+list, §5a). `snapshot`'s second hole is closed too: `medaka snapshot --check --zzz-not-a-flag
+ok.mdk` now answers `medaka snapshot: unrecognized flag '--zzz-not-a-flag' (known: --check,
+--new, --bless, --isolate, --worker, --out, --root, --stages)`, rc 1.
 
 ---
 
@@ -191,9 +207,13 @@ is the same defect one degree worse. Both must become `(stderr, 1)`.
 > converged afterwards, S-2's fixtures would pin the wrong number and S-3 would re-bless
 > goldens it should never have touched.
 
-**Non-conforming cells:** `fmt` (2 on usage error and on empty target set), `codemod` (2),
-`new` (2), `test` (0 on empty target set), `lint` (0 on empty target set, 0 on unknown flag).
-→ **slice S-3**.
+**Non-conforming cells (AS OF THE PRE-SPRINT BASELINE):** `fmt` (2 on usage error and on empty
+target set), `codemod` (2), `new` (2), `test` (0 on empty target set), `lint` (0 on empty
+target set, 0 on unknown flag). → **slice S-3** ✅ **DRAINED** — re-verified against the
+current binary: `fmt`, `codemod` and `new` now exit **1** on both a usage error and an unknown
+flag; `test`'s and `lint`'s empty-target-set case are now `(stderr, 1)`, matching every other
+verb (`sh test/cli_conformance_census.sh`, "usage-error exit code + stream" and
+"empty-directory target" sections, current run).
 
 ---
 
@@ -221,7 +241,8 @@ is the same defect one degree worse. Both must become `(stderr, 1)`.
 unavailable to it however well-formed its JSON is — and a verb that mixes prose into the
 answer stream is worse, because the consumer parses *most* of the time.
 
-**Measured violations.**
+**Measured violations (AS OF THE PRE-SPRINT BASELINE — all four ✅ DRAINED by slice S-3;
+re-verified against the current binary below each).**
 
 *(a) `run --json`'s channel is corrupted by two different writers.* Both reproduce:
 
@@ -242,6 +263,21 @@ warning: this ./medaka was built from compiler source that differs from
 is clean — see §6, exemplar **X9**. The `--json` corruption is real and it lives on `run`,
 where the envelope shares stderr with the prose. Fixing the wrong verb would have left it.
 
+✅ **DRAINED by S-3 — routed, not suppressed.** Both writers now land INSIDE the JSON envelope
+as extra fields, re-verified:
+
+```
+$ MEDAKA_PERF=1 medaka run --json panic2.mdk 2>&1 >/dev/null
+{"files":[{"file":"panic2.mdk","diagnostics":[{"code":"E-DIV-ZERO", …}]}],"perf":["[perf] load\t0.036s\tpanic2.mdk","[perf] check\t0.065s\tpanic2.mdk"]}
+
+$ MEDAKA_ROOT=/tmp/fakeroot medaka run --json panic2.mdk 2>&1 >/dev/null
+{"files":[{"file":"panic2.mdk","diagnostics":[{"code":"E-DIV-ZERO", …}]}],"staleBinary":"warning: this ./medaka was built from compiler source that differs from /tmp/fakeroot/compiler — it may be stale; rebuild with 'make medaka'."}
+```
+
+stderr now carries exactly one JSON document on both paths. (`MEDAKA_STRICT=1` combined with
+`MEDAKA_ROOT` still hard-exits before any envelope is produced, per `[B-STALENESS]` — that is
+strict mode doing its job, not a residual of this defect.)
+
 *(b) `check-policy` puts its verdict — the thing it was asked for and the reason for its
 nonzero exit — on stdout, while every sibling verb reports failure on stderr:*
 
@@ -251,13 +287,21 @@ rejected. no 'transform' entry found          # ← stdout
 rc=1
 ```
 
+✅ **DRAINED by S-3** — re-verified: `medaka check-policy ok.mdk` now prints `rejected. no
+'transform' entry found` to **stderr**, stdout empty, rc 1.
+
 *(c) `codemod` prints its usage error to stdout* (`medaka codemod` with no arguments: exit 2,
 usage on stdout, stderr empty).
 
+✅ **DRAINED by S-3** — re-verified: `medaka codemod` with no arguments now prints its usage
+block to **stderr**, stdout empty, rc **1**.
+
 *(d) `test`'s "no .mdk files found" is on stdout* — see §3.
 
-→ **slice S-3.** The `run --json` routing choice (envelope-embed vs. documented third channel)
-is S-3's to make and to name in its report; C4 fixes only that it must not be suppression.
+✅ **DRAINED by S-3** — see §3's re-verification above: now `(stderr, 1)`.
+
+→ **slice S-3**, closed. The `run --json` routing choice landed as envelope-embed (extra
+`perf`/`staleBinary` fields), not a documented third channel.
 
 ---
 
@@ -270,40 +314,55 @@ Derived by `make cli-conformance-census` at base `cfa6aee8a`. ✅ conforms · �
 
 Probe: `medaka <verb> --zzz-not-a-flag ok.mdk` (disposition), `medaka <verb>` (usage error).
 
+**Re-derived against the current binary (post S-2/S-3/S-4) — this table no longer matches the
+pre-sprint baseline captured when it was first written; every cell below is current.**
+
 | Verb | Unknown flag → | rc | stream | C2 | Usage error rc | C3 |
 |---|---|---|---|---|---|---|
-| `check` | `usage: medaka check […] <file.mdk>` (REJECT-VAGUE) | 1 | stderr | ❌ | 1 | ✅ |
-| `fmt` | `medaka fmt: unknown flag: --zzz…` | 2 | stderr | ⚠️ names token, not set | 2 | ❌ |
-| `new` | `Usage: medaka new <name>` (REJECT-VAGUE) | 2 | stderr | ❌ | 2 | ❌ |
-| `build` | `error: medaka build takes exactly one input file` (REJECT-VAGUE) | 1 | stderr | ❌ | 1 | ✅ |
-| `run` | `medaka run: unknown flag: --zzz…` | 1 | stderr | ⚠️ names token, not set | 1 | ✅ |
+| `check` | `medaka check: unrecognized flag '--zzz…' (known: --json, --types, --allow-internal)` | 1 | stderr | ✅ | 1 | ✅ |
+| `fmt` | `medaka fmt: unrecognized flag '--zzz…' (known: --check, --stdout, --write, -w)` | 1 | stderr | ✅ | 1 | ✅ |
+| `new` | `Usage: medaka new <name>` (REJECT-VAGUE) | 1 | stderr | ❌ (no flags to name — `new` takes only a `<name>` positional) | 1 | ✅ |
+| `build` | `medaka build: unrecognized flag '--zzz…' (known: --keep-ir, --allow-internal, --json, …)` | 1 | stderr | ✅ | 1 | ✅ |
+| `run` | `medaka run: unrecognized flag '--zzz…' (known: --json, --allow-internal, --release)` | 1 | stderr | ✅ | 1 | ✅ |
 | `test` | `medaka test: unrecognized flag '--zzz…' (known: --native, --json, --engines, --filter, --seed, --cases)` | 1 | stderr | ✅ **reference** | 1 | ✅ |
-| `snapshot` | `medaka snapshot: pass --check … or --bless` (REJECT-VAGUE); **with a mode present, silently dropped** | 1 | stderr | ❌ | 1 | ✅ |
-| `doc` | `No such file or directory` (**AS-FILENAME**) | 1 | stderr | ❌ **S0-shaped** | 1 | ✅ |
-| `lint` | *(nothing at all)* (**SILENT-ACCEPT**) | 0 | — | ❌ **worst cell** | 1 | ✅ |
-| `codemod` | `medaka codemod: unknown codemod '--zzz…'` | 2 | both | ⚠️ names token, not set | 2 (**stdout**) | ❌ |
-| `check-policy` | `No such file or directory` (**AS-FILENAME**) | 1 | stderr | ❌ **S0-shaped** | 1 | ✅ |
-| `manifest` | `No such file or directory` (**AS-FILENAME**) | 1 | stderr | ❌ **S0-shaped** | 1 | ✅ |
+| `snapshot` | `medaka snapshot: unrecognized flag '--zzz…' (known: --check, --new, --bless, --isolate, --worker, --out, --root, --stages)` | 1 | stderr | ✅ | 1 | ✅ |
+| `doc` | `medaka doc: unrecognized flag '--zzz…' (known: none)` | 1 | stderr | ✅ | 1 | ✅ |
+| `lint` | `medaka lint: unrecognized flag '--zzz…' (known: --fix, --json, --cache, --disable, --only, …)` | 1 | stderr | ✅ | 1 | ✅ |
+| `codemod` | `medaka codemod: unknown codemod '--zzz…'` | 1 | stderr | ✅ (names the token; the sub-name arm doesn't have a flag set to name, same shape as `gate`) | 1 | ✅ |
+| `check-policy` | `medaka check-policy: unrecognized flag '--zzz…' (known: --allow, --fn)` | 1 | stderr | ✅ | 1 | ✅ |
+| `manifest` | `medaka manifest: unrecognized flag '--zzz…' (known: --fn)` | 1 | stderr | ✅ | 1 | ✅ |
 | `gate` | `medaka gate: unknown subcommand '--zzz…' (expected: list, run, verify, explain, reach, ci, balance, budget)` | 1 | stderr | ✅ | 1 | ✅ |
-| `repl` | `medaka repl: unknown option '--zzz…'` + help | 1 | stderr | ⚠️ names token, not set | 0 (starts a session) | — |
-| `lsp` | `medaka lsp: unknown option '--zzz…'` + help | 1 | stderr | ⚠️ names token, not set | 0 (starts the server) | — |
+| `repl` | `medaka repl: unrecognized flag '--zzz…' (known: none)` | 1 | stderr | ✅ | 0 (starts a session) | — |
+| `lsp` | `medaka lsp: unrecognized flag '--zzz…' (known: none)` | 1 | stderr | ✅ | 0 (starts the server) | — |
 | `mcp` | `medaka mcp: unknown argument '--zzz…' (mcp takes no arguments; try 'medaka mcp --help')` | 1 | stderr | ✅ | 0 (starts the server) | — |
 | bare / `help` / `--help` / `-h` | prints usage | 0 | stdout | — | — | ✅ |
 | `--version` / `-v` / `version` | `medaka 0.1.0-preview` | 0 | stdout | — | — | ✅ |
 
+`new` is the sole residual C2 cell, and it is qualitatively different from the pre-sprint
+baseline's list: it is not silent, not a filename misread, and does name the command's shape —
+it simply has no flag vocabulary for the shared helper to enumerate. See the residual filings
+below for whether this is worth its own issue.
+
 ### 5b. Empty target set (C3) — probe `medaka <verb> empty/`
+
+**Re-derived against the current binary — every row below is current, not the pre-sprint
+baseline.**
 
 | Verb | Message | stream | rc | C3 |
 |---|---|---|---|---|
-| `fmt` | `medaka fmt: no .mdk files found` | stderr | 2 | ❌ (code) |
-| `test` | `medaka test: no .mdk files found` | **stdout** | **0** | ❌ **both** |
-| `lint` | *(nothing)* | — | **0** | ❌ **both** |
-| `codemod` | `medaka codemod: unknown codemod 'empty'` | both | 2 | ❌ (a directory is read as a codemod NAME) |
-| `check` / `doc` / `check-policy` / `manifest` | `Is a directory` | stderr | 1 | ⚠️ raw `errno` text, no verb prefix, no path |
-| `run` | `unknown module: empty — available modules: array, async, …` | stderr | 1 | ⚠️ a missing/wrong path is reported as a missing MODULE |
+| `fmt` | `medaka fmt: no .mdk files found` | stderr | 1 | ✅ |
+| `test` | `medaka test: no .mdk files found` | stderr | 1 | ✅ |
+| `lint` | `medaka lint: no .mdk files found` | stderr | 1 | ✅ |
+| `codemod` | `medaka codemod: missing codemod name — 'empty' is a path, and a codemod name must come first` | stderr | 1 | ✅ (no longer reads the directory as a codemod NAME) |
+| `check` / `doc` / `check-policy` / `manifest` | `Is a directory` | stderr | 1 | ⚠️ raw `errno` text, no verb prefix, no path (residual — see below) |
+| `run` | `unknown module: empty — available modules: array, async, …` | stderr | 1 | ⚠️ a missing/wrong path is reported as a missing MODULE (residual — see below) |
 | `snapshot` | usage line | stderr | 1 | ✅ |
 
 ### 5c. `--json` availability and channel (C4) — probe `medaka <verb> --json bad.mdk`
+
+**Re-derived against the current binary.** The probe target (`bad.mdk`) doesn't exist, so for
+`run` this exercises the module-resolution error path, not a compile-error path — `run --json`
+on an actual compile error is covered separately in §4(a), now DRAINED.
 
 | Verb | Channel | rc | Verdict |
 |---|---|---|---|
@@ -311,19 +370,20 @@ Probe: `medaka <verb> --zzz-not-a-flag ok.mdk` (disposition), `medaka <verb>` (u
 | `build` | stdout | 1 | ✅ |
 | `lint` | stdout | 0 | ✅ |
 | `test` | stdout | 1 | ✅ |
-| `run` | **stderr** | 1 | ⚠️ deliberate (stdout is the program's) — but the channel is **not pure**, §4(a) |
-| `doc` | none | 0 | ❌ **accepted and silently ignored** (`dropFlags` eats it; plain Markdown is printed) |
-| `check-policy` | none | 1 | ❌ `--json` is read as the FILENAME |
-| `manifest` | none | 1 | ❌ `--json` is read as the FILENAME |
-| `snapshot` | none | 1 | ❌ accepted and silently ignored |
-| `fmt` | none | 2 | ✅ honestly rejected (`unknown flag: --json`) |
-| `codemod` | none | 2 | ✅ honestly rejected |
+| `run` | none (prose only on this probe path) | 1 | ⚠️ deliberate that stdout is the program's; on this specific probe `--json` is accepted and ignored because the failure is a module-resolution error, not a diagnosable file — see §4(a) for the compile-error path, now routed cleanly to stderr |
+| `doc` | none | 1 | ✅ honestly rejected (`medaka doc: unrecognized flag '--json' (known: none)`) — was accepted-and-ignored |
+| `check-policy` | none | 1 | ✅ honestly rejected (`medaka check-policy: unrecognized flag '--json' (known: --allow, --fn)`) — was read as the FILENAME |
+| `manifest` | none | 1 | ✅ honestly rejected (`medaka manifest: unrecognized flag '--json' (known: --fn)`) — was read as the FILENAME |
+| `snapshot` | none | 1 | ✅ honestly rejected (`medaka snapshot: unrecognized flag '--json' (known: …)`) — was accepted and silently ignored |
+| `fmt` | none | 1 | ✅ honestly rejected (`medaka fmt: unrecognized flag '--json' (known: …)`) |
+| `codemod` | none | 1 | ✅ honestly rejected |
 | `gate` | none | 1 | ✅ honestly rejected at top level — `--json` is a per-subcommand flag. `medaka gate list --json` emits the registry array on stdout, rc 0. (`gate run --json` writes the run report; `--dry-run` short-circuits before it, so it is not exercised by this probe.) |
 
 ⚠️ One further silent drop, inside a conforming cell: **`check --types` is ignored under
 `--json`.** `medaka check --types ok.mdk` prints `main : Unit`; `medaka check --json --types
 ok.mdk` prints the same envelope as without `--types`. No message, no note in
-`checkHelpText`. → S-4 (document it) or S-2 (reject the combination).
+`checkHelpText`. Still true after S-2/S-3/S-4 (re-verified) — neither slice touched it.
+→ **slice S-5 residual filing.**
 
 ### 5d. `--help` (C4) — probe `medaka <verb> --help`
 
@@ -364,9 +424,9 @@ build                --release              NOT-PARSED     error: medaka build t
 | `snapshot --root`, `snapshot --worker` | parsed, absent from `snapshotHelpText` entirely | ✅ **DRAINED by S-help-truthfulness** — both now documented; `--worker` is marked INTERNAL (the supervisor re-spawns this binary with it) rather than presented as user-facing. Now GATED, property C of `test/diff_compiler_cli_help_conformance.sh`. |
 | top-level `usage` vs `checkHelpText` | usage advertised `medaka check [--json]`; the verb also parses `--types` and `--allow-internal` | ✅ **DRAINED by S-help-truthfulness** — usage now reads `medaka check [--json] [--types] [--allow-internal] <file.mdk>`. The `run` line had the same shape (it advertised ONLY the no-op `--release`) and was fixed with it. **NOT gated**: under-documentation in the top-level block is invisible to properties A/B/C — see §5g. |
 | top-level `usage` vs `docHelpText` | usage said `medaka doc [file.mdk]` (optional); help says `medaka doc <file.mdk>`; the binary **requires** it | ✅ **DRAINED by S-help-truthfulness** — usage now reads `medaka doc <file.mdk>`, and `runDocTargets`'s own empty-argv usage line (which said `[file.mdk]` too, contradicting its sibling arm) with it. **NOT gated**: positional arity is not a flag, so no property sees it — §5g. |
-| `doc <a> <b>` | second and later positionals silently ignored, exit 0 | ❌ silent drop. → S-2 |
-| `lint --only=nosuchrule` / `--disable=nosuchrule` | unknown rule name silently accepted, exit 0 | ❌ silent no-op. → S-2 |
-| `fmt --write --stdout` | mutually exclusive modes both accepted; `--stdout` wins, no write, exit 0 | ❌ (`snapshot` rejects its own mode conflict — the right model). → S-2 |
+| `doc <a> <b>` | second and later positionals silently ignored, exit 0 | ✅ **DRAINED by S-unknown-flag-floor** — `medaka doc a.mdk b.mdk` now answers `usage: medaka doc <file.mdk> (doc takes exactly one file)`, rc 1. |
+| `lint --only=nosuchrule` / `--disable=nosuchrule` | unknown rule name silently accepted, exit 0 | ✅ **DRAINED by S-unknown-flag-floor** — both now answer `medaka lint: unknown rule <name> (known: …)`, rc 1. |
+| `fmt --write --stdout` | mutually exclusive modes both accepted; `--stdout` wins, no write, exit 0 | ✅ **DRAINED by S-unknown-flag-floor** — now `medaka fmt: --stdout --write are mutually exclusive — pick one.`, rc 1 (`snapshot`'s own mode-conflict rejection was already the right model, now mirrored here). |
 | `gate run --jobs <n>` | accepted, ignored, **documented as such** | ✅ conforming dead surface (E6) |
 
 ### 5g. What is now GATED, and what still is not
@@ -428,7 +488,7 @@ would have misdirected a fix).
 | **X10** | "no `.mdk` files found" is three different contracts (`test` 0/stdout, `lint` silent/0, `fmt` msg/2) | **CONFIRMED** | see §5b — reproduced exactly, all three |
 | **X11** | `notYet` (`:399-401`) tells the user a subcommand is "not yet in native CLI" | **CONFIRMED — now FIXED (S-help-truthfulness)** | `medaka bogusverb` → stderr `medaka: subcommand 'bogusverb' not yet in native CLI`, rc 1. Reachable for **any** unmatched token, including a `--`-shaped one: `medaka --zz` → the same message, which is also why `--zz` never reaches a flag check. |
 | **X12** | #2301's headline: "`medaka test` exposes **two flags total**" | **STALE** | `medaka test --zzz-not-a-flag ok.mdk` names six: `--native, --json, --engines, --filter, --seed, --cases`. `test-vehicle-floor` landed the other four and closed #2316. `medaka test` is now the **most** conformant verb in the tree. |
-| **X13** | `lint` guards only value-taking flags and uses `--flag=v`; `test` uses `--flag v`; the two syntaxes coexist | **CONFIRMED** | `medaka lint --deny=rule-unused-import ok.mdk` → rc 0; `medaka lint --deny rule-unused-import ok.mdk` → rc 1 with the "not supported … rejected instead" message. `medaka test --filter zzz ok.mdk` → rc 0; `medaka test --filter=zzz ok.mdk` → rc 1 `unrecognized flag`. |
+| **X13** | `lint` guards only value-taking flags and uses `--flag=v`; `test` uses `--flag v`; the two syntaxes coexist | **CONFIRMED at the time, now STALE — DRAINED by C1 (S-unknown-flag-floor)** | Original repro: `medaka lint --deny=rule-unused-import ok.mdk` → rc 0; `medaka lint --deny rule-unused-import ok.mdk` → rc 1 with the "not supported … rejected instead" message; `medaka test --filter zzz ok.mdk` → rc 0; `medaka test --filter=zzz ok.mdk` → rc 1 `unrecognized flag`. **Current binary**: both spellings now succeed on both verbs — `medaka lint --deny rule-not-eq ok.mdk` → rc 0, and `medaka test --filter=zzz ok.mdk` → rc 0 (`running doctests …`). C1 applied to `test` itself closed the second half; §5a's `test` row and §3's `test` row describe only the (still-accurate) unknown-flag/empty-target-set dimensions, not this one. |
 | **X14** | Six verbs reject unknown flags, at three wordings | **CORRECTED — five wordings, and one more verb** | `mcp` also rejects (`unknown argument 'X' (mcp takes no arguments; …)`), and `codemod`/`gate` reject via a *sub-name* arm (`unknown codemod 'X'`, `unknown subcommand 'X'`). A `grep` for `unknown flag\|unknown option` — the derivation behind the "three wordings" claim — cannot see any of those three. S-2's unification target set is therefore larger than the contract's §4 row implies; the census's disposition column (§5a) is the complete list. |
 
 ---
