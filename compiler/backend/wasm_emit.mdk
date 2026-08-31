@@ -283,7 +283,12 @@ import backend.wasm_preamble.{
   strConcatRuntimeLines,
   appendRuntimeLines,
   valueEqRuntimeLines,
-  valueArithRuntimeLines,
+  valueAddRuntimeLines,
+  valueSubRuntimeLines,
+  valueMulRuntimeLines,
+  valueDivRuntimeLines,
+  valueModRuntimeLines,
+  valueCmpNumRuntimeLines,
   rngStateGlobalLines,
   rngRuntimeLines,
   hashRuntimeLines,
@@ -383,7 +388,12 @@ data WasmEmit = WasmEmit {
     useStrLeaf : Ref Bool,
     useFloat : Ref Bool,
     useStrSearch : Ref Bool,
-    useValueArith : Ref Bool,
+    useValueAdd : Ref Bool,
+    useValueSub : Ref Bool,
+    useValueMul : Ref Bool,
+    useValueDiv : Ref Bool,
+    useValueMod : Ref Bool,
+    useValueCmpNum : Ref Bool,
     useIO : Ref Bool,
     tupleArities : Ref (List Int),
     floatGlobals : Ref (List String),
@@ -442,7 +452,12 @@ freshWasmEmit mode = WasmEmit {
   useStrLeaf = Ref False,
   useFloat = Ref False,
   useStrSearch = Ref False,
-  useValueArith = Ref False,
+  useValueAdd = Ref False,
+  useValueSub = Ref False,
+  useValueMul = Ref False,
+  useValueDiv = Ref False,
+  useValueMod = Ref False,
+  useValueCmpNum = Ref False,
   useIO = Ref False,
   tupleArities = Ref [],
   floatGlobals = Ref [],
@@ -2582,9 +2597,20 @@ emitRefProgram prog groups =
   -- useStrSearch in emitValueCmpRef).
   let valueCmpRt = if (progEmit prog).useValueCmp.value then valueEqRuntimeLines else []
   -- A0: runtime value-tag-dispatched arithmetic helpers ($mdk_value_add/…), emitted only
-  -- when a poly-`Num` operand is routed to them (A1).  Reference $float/$boxint (always
-  -- declared) + $mdk_unbox_int/$mdk_box_int (always in ioRuntimeLines).
-  let valueArithRt = if (progEmit prog).useValueArith.value then valueArithRuntimeLines else []
+  -- when a poly-`Num` operand actually routes to THAT operator's helper (A1). Split
+  -- per-operator (S2/#2359 correction) so e.g. a program using only `-` doesn't also
+  -- define $mdk_value_add/mul/div/mod. Reference $float/$boxint (always declared) +
+  -- $mdk_unbox_int/$mdk_box_int (always in ioRuntimeLines).
+  let valueAddRt = if (progEmit prog).useValueAdd.value then valueAddRuntimeLines else []
+  let valueSubRt = if (progEmit prog).useValueSub.value then valueSubRuntimeLines else []
+  let valueMulRt = if (progEmit prog).useValueMul.value then valueMulRuntimeLines else []
+  let valueDivRt = if (progEmit prog).useValueDiv.value then valueDivRuntimeLines else []
+  let valueModRt = if (progEmit prog).useValueMod.value then valueModRuntimeLines else []
+  -- A1 (poly-`Ord`-on-Float, string-free): the num-only cmp sextet (eq_num/cmp_num/
+  -- lt_num/le_num/gt_num/ge_num), gated as ONE block (mirrors valueCmpRt's precedent
+  -- for the $str-capable sibling) — independent of which arith op(s), if any, are
+  -- also demanded in this emission.
+  let valueCmpNumRt = if (progEmit prog).useValueCmpNum.value then valueCmpNumRuntimeLines else []
   let stderrRt = if (progEmit prog).useEPut.value then stderrRuntimeLines else []
   let rngRt = if (progEmit prog).useRng.value then rngRuntimeLines else []
   let hashRt = if (progEmit prog).useHash.value then hashRuntimeLines else []
@@ -2593,9 +2619,10 @@ emitRefProgram prog groups =
   -- randomFloat helpers (gated separately since they need mix64 / next_u64) + the
   -- string index-of / compare runtime.
   -- #345 $mdk_float_rem backs the monomorphic Float `%` (useFloat) AND the num-poly
-  -- `%` value-dispatch arm ($mdk_value_mod, useValueArith) — emit it when EITHER is on,
-  -- so an int-only value-arith program doesn't reference a missing $mdk_float_rem.
-  let floatRemRt = if (progEmit prog).useFloat.value || (progEmit prog).useValueArith.value then floatRemRuntimeLines else []
+  -- `%` value-dispatch arm ($mdk_value_mod, useValueMod) — emit it when EITHER is on,
+  -- so an int-only value-arith program (e.g. only poly `+`) doesn't reference a
+  -- missing $mdk_float_rem.
+  let floatRemRt = if (progEmit prog).useFloat.value || (progEmit prog).useValueMod.value then floatRemRuntimeLines else []
   let floatRt = if (progEmit prog).useFloat.value then floatRuntimeLines else []
   let hashFloatRt = if (progEmit prog).useFloatHash.value then hashFloatRuntimeLines else []
   let randomFloatRt = if (progEmit prog).useFloatRng.value then randomFloatRuntimeLines else []
@@ -2637,7 +2664,8 @@ emitRefProgram prog groups =
   -- other globals below, which the text format permits independently of binding order.
   let constClosGlobals = wConstClosGlobalLines (progEmit prog)
   joinNl (header ++ typeSection ++ imports ++ trapImport ++ elemDecl ++ globals ++ constClosGlobals
-            ++ fns ++ implFns ++ defaultDefs ++ lifted ++ applyRt ++ ioRt ++ strLeafRt ++ strConcatRt ++ appendRt ++ valueCmpRt ++ valueArithRt
+            ++ fns ++ implFns ++ defaultDefs ++ lifted ++ applyRt ++ ioRt ++ strLeafRt ++ strConcatRt ++ appendRt ++ valueCmpRt
+            ++ valueAddRt ++ valueSubRt ++ valueMulRt ++ valueDivRt ++ valueModRt ++ valueCmpNumRt
             ++ stderrRt ++ rngRt ++ hashRt ++ hashStrRt
             ++ floatRemRt ++ floatRt ++ hashFloatRt ++ randomFloatRt ++ strSearchRt
             ++ strCodecRt ++ charFromCodeRt ++ charClassRt ++ ioHostRt ++ ioArgsRt ++ fileBytesRt ++ floatStrRt
@@ -5368,26 +5396,26 @@ emitBinRef prog env d op l r tag =
     let _ = setRef (progEmit prog).useStrLeaf True
     emitValueCmpRef prog env d op l r
   else if isCmpOp op && isPolyNumBinop (progEmit prog) l r then
-    -- #371: valueArithRuntimeLines is spliced in WHOLE whenever useValueArith is
-    -- set (wasm_emit.mdk's `valueArithRt` binding) — and it now UNCONDITIONALLY
-    -- defines $mdk_value_div/$mdk_value_mod with a baked-in coded divisor-zero
-    -- guard (wasm_preamble.mdk) referencing the $mdk_write_err_byte host import,
-    -- even for a program that only ever uses poly-`Num` `==`/`<`/etc (this branch).
-    -- So trapImportNeeded must be forced here too, not just at arith branch below
-    -- — else a poly-cmp-only program parses with "unknown func: $mdk_write_err_byte"
-    -- (the import undeclared) because the unused div/mod bodies still reference it.
-    let _ = setRef (progEmit prog).useValueArith True
-    let _ = setRef (progEmit prog).trapImportNeeded True
+    -- S2/#2359 correction of #371: this branch only ever calls into the num-only
+    -- cmp sextet (emitValueCmpNumRef below) — never $mdk_value_div/$mdk_value_mod
+    -- — so it demands ONLY useValueCmpNum, not the arith family, and never needs
+    -- to force trapImportNeeded (div/mod's divisor-zero guard is the only thing
+    -- in this whole family that touches $mdk_write_err_byte).
+    let _ = setRef (progEmit prog).useValueCmpNum True
     emitValueCmpNumRef prog env d op l r
   -- A1 (poly-`Num`-on-Float): arithmetic whose operand is a polymorphic `Num` param
   -- routes through the runtime value-tag-dispatched $mdk_value_add/… helper (A0) instead
   -- of the trapping inline int primitive.  The static Int/Float fast paths are unchanged.
-  -- #371: same trap-import note as the isCmpOp branch above — $mdk_value_div/
-  -- $mdk_value_mod's guard is baked into valueArithRuntimeLines UNCONDITIONALLY, so
-  -- ANY poly-`Num` arith op (not just `/`/`%`) must force the host import.
-  else if isArithOp op && isPolyNumBinop (progEmit prog) l r then
-    let _ = setRef (progEmit prog).useValueArith True
+  -- S2/#2359 correction of #371: only the SPECIFIC operator's helper is demanded
+  -- (setValueArithFlag below), and trapImportNeeded is forced ONLY on the div/mod
+  -- arm — $mdk_value_div/$mdk_value_mod's divisor-zero guard is the only thing in
+  -- this family referencing $mdk_write_err_byte; add/sub/mul never do.
+  else if isArithOp op && (op == "/" || op == "%") && isPolyNumBinop (progEmit prog) l r then
+    let _ = setValueArithFlag (progEmit prog) op
     let _ = setRef (progEmit prog).trapImportNeeded True
+    emitRefExpr prog env d l ++ emitRefExpr prog env d r ++ ["call $mdk_value_" ++ valueArithName op]
+  else if isArithOp op && isPolyNumBinop (progEmit prog) l r then
+    let _ = setValueArithFlag (progEmit prog) op
     emitRefExpr prog env d l ++ emitRefExpr prog env d r ++ ["call $mdk_value_" ++ valueArithName op]
   else
     -- layer-17 §2.1: Int arithmetic/comparison computes in i64 over the box/unbox
@@ -5420,6 +5448,17 @@ valueArithName "*" = "mul"
 valueArithName "/" = "div"
 valueArithName "%" = "mod"
 valueArithName op = panic ("wasm A0: not a value-arith op '" ++ op ++ "'")
+
+-- S2/#2359: set ONLY the ref for the operator actually demanded, so
+-- valueArithRt (wasm_emit.mdk) splices in just that operator's helper instead
+-- of the whole add/sub/mul/div/mod family.
+setValueArithFlag : WasmEmit -> String -> Unit
+setValueArithFlag emit "+" = setRef emit.useValueAdd True
+setValueArithFlag emit "-" = setRef emit.useValueSub True
+setValueArithFlag emit "*" = setRef emit.useValueMul True
+setValueArithFlag emit "/" = setRef emit.useValueDiv True
+setValueArithFlag emit "%" = setRef emit.useValueMod True
+setValueArithFlag _ op = panic ("wasm A0: not a value-arith op '" ++ op ++ "'")
 
 -- ── B5: coded runtime-trap helpers (RUNTIME-TRAP-UNIFY-DESIGN §3 (5), §7 forks 1-2) ──
 -- The WasmGC peer of the native traps: emit the same coded stderr line the interpreter
@@ -5491,7 +5530,9 @@ emitValueCmpRef prog env d op l r =
 -- A1 (poly-`Ord`-on-Float, string-free program): the num-only peer of emitValueCmpRef.
 -- `==`/`/=` go through $mdk_value_eq_num (-> i31 Bool); ordering through $mdk_value_cmp_num
 -- (-> i32 -1/0/1).  Both dispatch $float vs int (i31/$boxint) ONLY — no $str — so they
--- need no pre-scan-set type; gated by useValueArith alongside the arith helpers.
+-- need no pre-scan-set type; gated by its own useValueCmpNum flag (S2/#2359 —
+-- independent of the per-operator arith flags, since this branch never touches
+-- $mdk_value_add/sub/mul/div/mod).
 emitValueCmpNumRef : Prog -> List String -> Int -> String -> CExpr -> CExpr -> List String
 emitValueCmpNumRef prog env d op l r =
   let lv = emitRefExpr prog env d l
