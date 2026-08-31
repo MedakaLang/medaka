@@ -16,10 +16,12 @@
 #      and dedupes by runId:runAttempt:shard — re-collecting the same run
 #      twice is a no-op, by that script's own key, not by anything here);
 #   4. if the baseline file changed, re-derive the shard assignment with
-#      `medaka gate balance && make gen-ci` (ALWAYS both, same commit — a
-#      hand-balanced baseline with a stale ci.yml reds the required
-#      `ci-gen-drift` check);
-#   5. if anything changed (baseline / test/gates.toml / ci.yml), commit and
+#      `medaka gate balance`, then run `make gen-ci` to PROVE generation
+#      succeeds — and restore ci.yml, which this job cannot push (see the
+#      block at step 4 in the body: `workflows` is not a grantable Actions
+#      permission). Regenerating it is the one manual step, and the required
+#      `ci-gen-drift` check reds until it happens;
+#   5. if anything changed (baseline / test/gates.toml — never ci.yml), commit and
 #      push to a FRESH branch — never `main`, never the sprint branch this
 #      script itself might be running from — for a human or agent to review
 #      and merge by hand. If nothing changed, exit 0 having pushed nothing:
@@ -210,6 +212,37 @@ if [ "$gen_rc" != 0 ]; then
   exit "$gen_rc"
 fi
 
+# ── ci.yml is REGENERATED to check it can be, then RESTORED. Never landed. ──
+#
+# GITHUB_TOKEN cannot push a change to a file under .github/workflows/. This is
+# not a permissions oversight that a job-level grant can fix: `workflows` is NOT
+# a valid key in an Actions `permissions:` block (the set is actions,
+# artifact-metadata, attestations, checks, code-quality, contents, deployments,
+# discussions, id-token, issues, packages, pages, pull-requests,
+# security-events, statuses, vulnerability-alerts). The nightly job therefore
+# failed every time the schedule moved, with:
+#
+#   ! [remote rejected] cost-baseline-autoadvance-... (refusing to allow a
+#     GitHub App to create or update workflow `.github/workflows/ci.yml`
+#     without `workflows` permission)
+#
+# The only ways to push ci.yml from CI are a PAT or App token carrying the
+# `workflow` scope, stored as a repo secret — a long-lived credential able to
+# rewrite the file that defines this repo's merge authority. Not worth it for a
+# nightly convenience.
+#
+# So the job lands only the two DATA files. ci.yml is a pure function of
+# test/gates.toml, and regenerating it is one command that the person opening
+# the PR runs anyway (GitHub Actions may not open PRs on this repo either, so a
+# human is always in this loop). Running gen-ci above and discarding the result
+# is deliberate: it proves generation SUCCEEDS before we land a gates.toml that
+# would otherwise strand `ci-gen-drift` red with no diagnosis.
+ci_yml_moved=""
+if [ -n "$(git -C "$ROOT" status --porcelain -- .github/workflows/ci.yml)" ]; then
+  ci_yml_moved=1
+fi
+git -C "$ROOT" checkout -- .github/workflows/ci.yml
+
 # ── 5. land the result on a fresh branch, or report the clean no-op ────────
 #
 # By this point step 3 has already returned early on "zero new samples", so
@@ -232,7 +265,9 @@ fi
 #                                            did change, rather than assume it
 #                                            can't happen
 baseline_changed="$(git -C "$ROOT" status --porcelain -- test/gate_cost_baseline.json)"
-schedule_changed="$(git -C "$ROOT" status --porcelain -- test/gates.toml .github/workflows/ci.yml)"
+# gates.toml ALONE — ci.yml was restored above and is never landed by this job.
+# `$ci_yml_moved` records whether it would have moved, for the report only.
+schedule_changed="$(git -C "$ROOT" status --porcelain -- test/gates.toml)"
 
 if [ -z "$baseline_changed" ] && [ -z "$schedule_changed" ]; then
   echo "gate_cost_collect: nothing changed after ingest + re-derive — no-op, nothing to land."
@@ -241,7 +276,7 @@ fi
 
 to_land=""
 [ -n "$baseline_changed" ] && to_land="$to_land test/gate_cost_baseline.json"
-[ -n "$schedule_changed" ] && to_land="$to_land test/gates.toml .github/workflows/ci.yml"
+[ -n "$schedule_changed" ] && to_land="$to_land test/gates.toml"
 
 if [ -n "$baseline_changed" ] && [ -z "$schedule_changed" ]; then
   echo "gate_cost_collect: baseline advanced but the derived assignment did not move — landing the baseline-only advance."
@@ -294,9 +329,17 @@ git -C "$ROOT" commit -m "gate cost: auto-advance baseline from CI artifacts ($(
 
 Collected via test/gate_cost_collect.sh from admissible (workflow_dispatch/
 merge_group/push/schedule) successful CI runs, ingested with
-test/gate_cost_ingest.sh, and re-derived with 'medaka gate balance' +
-'make gen-ci' (same commit, per AGENTS.md [W-SHARD-DERIVED]) when the
-derived assignment moved."
+test/gate_cost_ingest.sh, and re-derived with 'medaka gate balance'.
+
+DATA ONLY — .github/workflows/ci.yml is deliberately NOT in this commit:
+GITHUB_TOKEN cannot push a workflow file, and 'workflows' is not a grantable
+Actions permission. Regeneration is one command and it is REQUIRED before
+this branch can go green:
+
+    make gen-ci && git commit -a --amend --no-edit
+
+Until that runs, the required 'ci-gen-drift' check reds by construction and
+its own error message names this exact fix."
 
 git -C "$ROOT" push "$REMOTE" "$BRANCH"
 push_rc=$?
@@ -308,6 +351,15 @@ fi
 echo ""
 echo "gate_cost_collect: pushed $BRANCH. Actions cannot open the PR itself"
 echo "  (repo policy: 'GitHub Actions is not permitted to create or approve"
-echo "  pull requests' — measured in S-1-baseline-autoadvance's spike Q2)."
-echo "  One command lands it as a reviewable diff:"
+echo "  pull requests' — measured in S-1-baseline-autoadvance's spike Q2),"
+echo "  and cannot push ci.yml at all (no grantable 'workflows' permission)."
+if [ -n "$ci_yml_moved" ]; then
+  echo "  ⚠️ The derived assignment MOVED, so ci.yml must be regenerated —"
+  echo "  'ci-gen-drift' reds until it is. Two commands land this:"
+else
+  echo "  The derived assignment did not move, but regenerate anyway so the"
+  echo "  branch is verified against its own generator. Two commands land this:"
+fi
+echo "    git fetch origin $BRANCH && git checkout $BRANCH"
+echo "    make gen-ci && git commit -a --amend --no-edit && git push -f"
 echo "    gh pr create --head $BRANCH --base $BASE_BRANCH --fill"
