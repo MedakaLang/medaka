@@ -75,7 +75,8 @@ most contributors never need to run this.
 
 ### Build the playground compiler wasm
 
-Produces `playground/dist/playground.wasm` (~2.6 MB) and copies
+Produces `playground/dist/playground.wasm` (~6.0 MB as of 2026-08-31 — derive it
+with `ls -l playground/dist/playground.wasm`, don't trust this figure) and copies
 `stdlib/runtime.mdk` + `stdlib/core.mdk` into `playground/dist/`:
 
 ```sh
@@ -153,6 +154,12 @@ preview on purpose.
 — scrapers don't resolve relative ones — so no link-preview card renders when the
 page is served from any other origin (a `*.pages.dev` preview included). That is
 expected, not a bug.
+
+⚠️ **A deploy does not pick up a new compiler on its own.** The site serves
+whatever `build_site.sh` last copied, so after any change that moves
+`playground.wasm` — a compiler fix, a wasm size win — someone has to re-run
+the deploy by hand. The wasm is the page's dominant download and the whole
+playground blocks on it.
 
 To verify a deploy, point the e2e spec at the live origin instead of the local
 server — it takes the base url as its first argument:
