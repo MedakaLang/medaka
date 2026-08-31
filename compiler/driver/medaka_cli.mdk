@@ -389,7 +389,7 @@ runCli _ = match args ()
   "repl"::rest => runReplCmd rest
   "lsp"::rest => runLspCmd rest
   "mcp"::rest => runMcpCmd rest
-  sub::_ => notYet sub
+  sub::_ => unknownSubcommand sub
 
 -- #1348: `medaka <sub> --help`/`-h` used to fall straight into the
 -- subcommand's own argv parsing, which (for every subcommand below) treats
@@ -423,11 +423,11 @@ usage _ = putStrLn (stringConcat
     "\n",
     "Usage:\n",
     "  medaka                    Show this message\n",
-    "  medaka run [--release] <file.mdk>   Type-check and run a program\n",
+    "  medaka run [--json] [--allow-internal] [--release] <file.mdk> [args...]   Type-check and run a program\n",
     "  medaka build <file.mdk> [-o <out>] [--keep-ir]  Compile to a native binary (LLVM + clang)\n",
-    "  medaka check [--json] <file.mdk>    Type-check without running\n",
+    "  medaka check [--json] [--types] [--allow-internal] <file.mdk>    Type-check without running\n",
     "  medaka test [--native | --engines eval,native] [--filter <substring>] [--seed <n>] [--cases <n>] [file.mdk]    Run doctests + prop tests (--native runs doctests through a compiled native binary INSTEAD of the interpreter; --engines runs the listed set, exit is the AND)\n",
-    "  medaka doc [file.mdk]     Generate Markdown documentation\n",
+    "  medaka doc <file.mdk>     Generate Markdown documentation (one file; required)\n",
     "  medaka lint [paths...]    Lint files/dirs (style rules; --fix, --cache, --disable/--only/--deny=<rules,...>)\n",
     "  medaka codemod <name> [flags] [paths...]  Apply a named source-preserving AST transform (--write/--stdout)\n",
     "  medaka snapshot [--check|--new|--bless] [paths...]  Per-stage snapshot tests (--out <dir>, --stages <a,b,..>)\n",
@@ -444,10 +444,23 @@ usage _ = putStrLn (stringConcat
     "  medaka --version          Show the compiler version\n",
   ])
 
--- ── deferred subcommands ──────────────────────────────────────────────────
-notYet : String -> <IO> Unit
-notYet sub =
-  let _ = ePutStrLn ("medaka: subcommand '" ++ sub ++ "' not yet in native CLI")
+-- ── unmatched subcommand ──────────────────────────────────────────────────
+-- S-help-truthfulness (#2354): this used to say "not yet in native CLI",
+-- which was true only while there WAS another CLI — the OCaml reference
+-- compiler, removed 2026-06-26.  Since then the sentence has promised every
+-- user that some other implementation already has the verb they typed.
+--
+-- Derivation of what reaches it: `dispatch` above matches every verb by
+-- literal, so this arm is reached by exactly the tokens that are NOT verbs —
+-- a typo, a removed verb, or a `--`-shaped token in verb position
+-- (`medaka --zz`).  For EVERY input it can receive, "not yet" was false; the
+-- verb does not exist, and no other CLI has it either.  So the honest answer
+-- is the ratified REJECT-NAMED disposition (docs/ops/CLI-CONFORMANCE.md C2):
+-- name the offending token and point at the roster.
+unknownSubcommand : String -> <IO> Unit
+unknownSubcommand sub =
+  let _ = ePutStrLn ("medaka: unknown subcommand '" ++ sub ++ "'")
+  let _ = ePutStrLn "  run `medaka help` for the list of subcommands"
   exit 1
 
 -- ── check ─────────────────────────────────────────────────────────────────
@@ -1770,10 +1783,13 @@ runNewCmd _ =
 -- getcwd/executable_name extern.  MEDAKA defaults to "./medaka" so a build with
 -- no MEDAKA set re-invokes THIS native binary as the emitter host (no OCaml).
 -- `build`'s whole flag vocabulary, as `buildUsage` documents it.  `--release`
--- is deliberately ABSENT: `runHelpText` cross-references it as if `build` had
--- it, but no arm here parses it (exemplar X7) — under C2 that reads back as a
--- named rejection listing what build really takes, instead of the
--- argument-COUNT error it used to produce.
+-- is deliberately ABSENT — a native build is always optimized, so there is no
+-- mode to select.  `runHelpText` used to cross-reference it as if `build` had
+-- it (exemplar X7); S-help-truthfulness fixed the SENTENCE rather than adding
+-- an arm, and test/diff_compiler_cli_help_conformance.sh property B now keeps
+-- any help text from citing a `medaka <verb> --flag` that verb does not parse.
+-- Under C2 a typed `build --release` reads back as a named rejection listing
+-- what build really takes, instead of the argument-COUNT error it once gave.
 buildBoolFlags : List String
 buildBoolFlags = ["--keep-ir", "--allow-internal", "--json"]
 
@@ -2298,11 +2314,17 @@ runHelpText = stringConcat
     "Usage:\n",
     "  medaka run [--json] [--allow-internal] [--release] <file.mdk> [args...]\n",
     "\n",
-    "  --json            emit the Diag JSON envelope for a compile-time error or\n",
-    "                    a runtime panic, instead of human text\n",
+    "  --json            emit the Diag JSON envelope instead of human text, for\n",
+    "                    a runtime panic, a warning, or a clean run. KNOWN GAP:\n",
+    "                    a COMPILE-TIME failure (load, parse, type, usage) still\n",
+    "                    prints human text on stderr and exits 1 with no\n",
+    "                    envelope, so a consumer must handle both. `medaka check\n",
+    "                    --json` envelopes compile-time diagnostics correctly.\n",
     "  --allow-internal  permit internal-only externs outside stdlib/\n",
-    "  --release         accepted, ignored (no-op for the interpreter path;\n",
-    "                    kept for symmetry with `medaka build --release`)\n",
+    "  --release         accepted, ignored — the interpreter has no release mode.\n",
+    "                    There is no `build --release`; a native build is always\n",
+    "                    optimized. Kept so a `--release` in a shared script does\n",
+    "                    not make `medaka run` fail.\n",
     "\n",
     "Args after <file.mdk> are passed through to the program's own `args`.\n",
     "Inline-eval (`-e <expr>`) is NOT supported — pass a file.\n",
@@ -2337,7 +2359,7 @@ runRunCmd argv =
   perfSinkOn := (jsonMode && perfOn)
   match dropFlags argv
     [] =>
-      runAbort "usage: medaka run [--release] [--json] <file.mdk>"
+      runAbort "usage: medaka run [--json] [--allow-internal] [--release] <file.mdk> [args...]"
     -- #219: a leading-`-` token `dropFlags` didn't recognize (e.g. `-e`) used
     -- to fall through as the entry `target`, so the loader rejected it as
     -- "unknown module: -e" — a message that sends the reader debugging a
@@ -2963,7 +2985,7 @@ runDocCmd argv =
 -- usage error — mirrors `check`'s own extra-positional arm.
 runDocTargets : List String -> <IO> Unit
 runDocTargets [] =
-  let _ = ePutStrLn "usage: medaka doc [file.mdk]"
+  let _ = ePutStrLn "usage: medaka doc <file.mdk>"
   exit 1
 runDocTargets (_::_::_) =
   let _ = ePutStrLn "usage: medaka doc <file.mdk> (doc takes exactly one file)"
@@ -3741,8 +3763,16 @@ snapshotHelpText = stringConcat
     "            explicit targets (no whole-suite bless)\n",
     "\n",
     "  --out <dir>       snapshot directory (default derived from MEDAKA_ROOT)\n",
-    "  --stages a,b,...   restrict to the named stages (default: every stage)\n",
-    "  --isolate          run one process per fixture (debug aid for a crasher)\n",
+    "  --root <dir>      compiler/stdlib root, overriding MEDAKA_ROOT\n",
+    "  --stages a,b,...  restrict to the named stages (default: every stage)\n",
+    "  --isolate         run one process per fixture (debug aid for a crasher)\n",
+    "\n",
+    "  --worker          INTERNAL, not for direct use: the supervisor re-spawns\n",
+    "                    this binary with --worker to render one batch in a child\n",
+    "                    process, so a fixture that crashes the renderer does not\n",
+    "                    take the run down. Documented because the verb parses it\n",
+    "                    (an undocumented arm is a lie by omission), not because\n",
+    "                    you should type it.\n",
     "\n",
     "A path may be a file or directory (recursively expanded).\n",
   ]

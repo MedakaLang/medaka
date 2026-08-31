@@ -3643,6 +3643,35 @@ sources = ["test/diff_compiler_check_ir_floor.sh", "compiler/backend/llvm_emit.m
 corpus = []
 toolchain = ["clang", "valgrind"]
 
+# Every help/usage string must describe the CLI that actually exists (#2354,
+# S-help-truthfulness). Asserts three agreement properties, all derived from the
+# BINARY through test/cli_conformance_lib.sh — the same derivation
+# test/cli_conformance_census.sh maps with, so the gate and the census cannot
+# give two answers to one question:
+#   A advertised ⊆ parsed        (a help text promising a flag the arms lack)
+#   B cross-references resolve   (a help text citing ANOTHER verb's missing flag)
+#   C parsed ⊆ advertised        (an arm no help text mentions)
+# `build` probes shell out to clang, so this is `medium`, not `cheap`, and needs
+# clang in `toolchain`.
+# ⚠️ `shard` below is a GUESS, as every brand-new gate's must be ([W-SHARD-DERIVED],
+# #2178): it has no row in test/gate_cost_baseline.json yet, so `medaka gate
+# balance` HARD-REFUSES to place it until an unnarrowed CI run measures it, and
+# `ci-gen-drift` reds until the follow-up `medaka gate balance && make gen-ci`
+# commit. Do not hand-tune this value to make the shards look balanced.
+[[gate]]
+name = "diff_compiler_cli_help_conformance"
+area = "cli"
+shard = "gates_2"
+project = "compiler"
+tiers = ["merge"]
+cost = "medium"
+kind = "exec"
+run = "test/diff_compiler_cli_help_conformance.sh"
+oracles = []
+sources = ["test/diff_compiler_cli_help_conformance.sh", "test/cli_conformance_lib.sh", "compiler/driver/medaka_cli.mdk", "compiler/tools/gate_cmd.mdk"]
+corpus = []
+toolchain = ["clang"]
+
 # ── the `gates` matrix rows (S-1, #2177) ─────────────────────────────────────
 #
 # One `[[shard]]` per row of ci.yml's `gates` job matrix, in matrix order.

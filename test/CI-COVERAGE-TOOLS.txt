@@ -217,3 +217,17 @@ test/perf_shapes               shell library, not a script (#2066): sourced by
                                .github/workflows/ci.yml`). The generators lived in BOTH gates as
                                hand-kept copies until #2066, which is the drift this file's
                                existence now prevents rather than merely records.
+test/cli_conformance_lib       shell library, not a script (#2354, S-help-truthfulness): the ONE
+                               implementation of "ask the built ./medaka what its own CLI surface
+                               is" — verb list, per-verb advertised flags, per-verb parsed flags,
+                               each verb's own `(known: …)` roster, sub-name handling, and the
+                               `medaka <verb> --flag` cross-references in help prose. Sourced by
+                               test/cli_conformance_census.sh (the MAP — asserts nothing) and
+                               test/diff_compiler_cli_help_conformance.sh (the GATE — asserts the
+                               three agreement properties). Defines functions only; running it does
+                               nothing observable, so there is nothing for a shard to assert. Its
+                               behavior IS asserted — by that gate, which is enrolled in
+                               test/gates.toml with a shard. Exists for the same reason
+                               test/perf_shapes does: the census derived all of this first, and a
+                               gate that re-derived it independently would be a second, possibly
+                               wrong answer to a question the binary answers exactly.

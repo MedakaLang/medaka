@@ -360,14 +360,50 @@ build                --release              NOT-PARSED     error: medaka build t
 
 | Site | Behaviour | Disposition |
 |---|---|---|
-| `notYet` (`medaka_cli.mdk:399-401`) | `medaka: subcommand 'X' not yet in native CLI` | ❌ **false** — there has been no other CLI since 2026-06-26. → S-4 |
-| `snapshot --root`, `snapshot --worker` | parsed (`:3396`, `:3408`), absent from `snapshotHelpText` entirely | ❌ undocumented. → S-4 |
-| top-level `usage` vs `checkHelpText` | usage advertises `medaka check [--json]`; the verb also parses `--types` and `--allow-internal` | ⚠️ under-documented. → S-4 |
-| top-level `usage` vs `docHelpText` | usage says `medaka doc [file.mdk]` (optional); help says `medaka doc <file.mdk>`; the binary **requires** it (`medaka doc` → exit 1) | ❌ contradiction. → S-4 |
+| `notYet` (`medaka_cli.mdk`) | `medaka: subcommand 'X' not yet in native CLI` | ✅ **DRAINED by S-help-truthfulness** — renamed `unknownSubcommand`; now `medaka: unknown subcommand 'X'` + `run \`medaka help\` for the list of subcommands`, rc 1. Derivation of reach: `dispatch` matches every verb by literal, so this arm receives exactly the NON-verbs — for every input it can get, "not yet" was false. |
+| `snapshot --root`, `snapshot --worker` | parsed, absent from `snapshotHelpText` entirely | ✅ **DRAINED by S-help-truthfulness** — both now documented; `--worker` is marked INTERNAL (the supervisor re-spawns this binary with it) rather than presented as user-facing. Now GATED, property C of `test/diff_compiler_cli_help_conformance.sh`. |
+| top-level `usage` vs `checkHelpText` | usage advertised `medaka check [--json]`; the verb also parses `--types` and `--allow-internal` | ✅ **DRAINED by S-help-truthfulness** — usage now reads `medaka check [--json] [--types] [--allow-internal] <file.mdk>`. The `run` line had the same shape (it advertised ONLY the no-op `--release`) and was fixed with it. **NOT gated**: under-documentation in the top-level block is invisible to properties A/B/C — see §5g. |
+| top-level `usage` vs `docHelpText` | usage said `medaka doc [file.mdk]` (optional); help says `medaka doc <file.mdk>`; the binary **requires** it | ✅ **DRAINED by S-help-truthfulness** — usage now reads `medaka doc <file.mdk>`, and `runDocTargets`'s own empty-argv usage line (which said `[file.mdk]` too, contradicting its sibling arm) with it. **NOT gated**: positional arity is not a flag, so no property sees it — §5g. |
 | `doc <a> <b>` | second and later positionals silently ignored, exit 0 | ❌ silent drop. → S-2 |
 | `lint --only=nosuchrule` / `--disable=nosuchrule` | unknown rule name silently accepted, exit 0 | ❌ silent no-op. → S-2 |
 | `fmt --write --stdout` | mutually exclusive modes both accepted; `--stdout` wins, no write, exit 0 | ❌ (`snapshot` rejects its own mode conflict — the right model). → S-2 |
 | `gate run --jobs <n>` | accepted, ignored, **documented as such** | ✅ conforming dead surface (E6) |
+
+### 5g. What is now GATED, and what still is not
+
+`test/diff_compiler_cli_help_conformance.sh` (S-help-truthfulness, #2354) is the enforcing
+gate for the help/parse-arm columns above. It shares ONE derivation with this doc's census —
+`test/cli_conformance_lib.sh`, sourced by both — so the map and the gate cannot give two
+answers to the same question. It asserts three properties, all derived from the binary:
+
+| | Property | Catches | Derived from |
+|---|---|---|---|
+| **A** | advertised ⊆ parsed | a help text promising a flag the arms lack | running the verb with each flag its own `--help` names |
+| **B** | cross-references resolve | a help text citing ANOTHER verb's missing flag (X7) | running each `medaka <verb> --flag` phrase found in ANY help text against the verb it names |
+| **C** | parsed ⊆ advertised | an arm no help text mentions (`snapshot --root`/`--worker`) | each verb's own `(known: …)` roster, printed by `assertCliFlags` |
+
+**Coverage is REPORTED on every run, per verb, including what is uncovered** — a gate that
+silently checks nine verbs of sixteen while reading as complete is worse than the drift.
+
+**What NO property sees**, stated so nobody reads the green as broader than it is:
+
+* **C covers only the verbs that print a roster.** `codemod`, `doc`, `lsp`, `mcp`, `new` and
+  `repl` have no `assertCliFlags` call, so they are listed `NO ROSTER (uncovered)` rather
+  than counted as passing. Closing that is the natural follow-up (#2354 residual).
+* **Positional arity is not a flag.** `medaka doc [file.mdk]` vs `<file.mdk>` — the §5f row
+  above — is a claim about a POSITIONAL, and no property can reach it.
+* **Under-documentation in the top-level `usage` block is not a lie**, only an omission, and
+  the block is deliberately abbreviated. Property B checks that what usage DOES cite resolves;
+  nothing checks that it cites everything.
+* **Prose semantics.** `run --help`'s `--json` paragraph describes WHEN an envelope appears.
+  That the compile-error half of it was false (now written down as a KNOWN GAP in the help
+  text itself) is not a flag-existence question, and A/B/C are blind to it.
+* **A and B ask "is this flag rejected as unknown", not "is it honoured."** An
+  accepted-but-ignored flag reads as parsed — which is why `gate run --jobs`, conforming dead
+  surface under E6, is correctly not flagged.
+* A help text can also evade B by citing a flag WITHOUT the `medaka ` prefix. `runHelpText`'s
+  replacement sentence does exactly that ("There is no `build --release`") — correctly, since
+  the claim is a negative, but the loophole is real for a positive one.
 
 ---
 
@@ -386,11 +422,11 @@ would have misdirected a fix).
 | **X4** | `medaka doc --foo ok.mdk` → `No such file or directory`, exit 1 | **CONFIRMED** | `medaka doc --zzz-not-a-flag ok.mdk` → stderr `No such file or directory`, rc 1 (`doc` reads only the first positional, so the flag *is* the target here) |
 | **X5** | `medaka lint --foo ok.mdk` → nothing at all, exit 0 | **CONFIRMED — the worst cell** | `medaka lint --zzz-not-a-flag ok.mdk` → no stdout, no stderr, rc 0 |
 | **X6** | `check`/`doc` share `dropFlags` (`:833-839`), last arm passes unknown tokens through as positionals | **CONFIRMED** | `grep -n dropFlags compiler/driver/medaka_cli.mdk` → definition `:833-839`, consumers `check :459`, `run :2041`, `doc :2668`. ⚠️ **`run` is a consumer but is NOT vulnerable**: `runRunCmd` re-checks the first positional for a leading `-` (`:2054`, the #219 fix) and rejects it — which is why `run` is REJECT-NAMED and `check`/`doc` are AS-FILENAME. |
-| **X7** | `runHelpText` documents `--release` as "kept for symmetry with `medaka build --release`"; `build` has no such arm, so `medaka build --release ok.mdk -o out` dies with `takes exactly one input file`, exit 1 | **CONFIRMED** | `medaka build --release ok.mdk -o /tmp/outbin` → stderr `error: medaka build takes exactly one input file`, rc 1. Found *mechanically* by the census's cross-reference column, not by reading. |
+| **X7** | `runHelpText` documents `--release` as "kept for symmetry with `medaka build --release`"; `build` has no such arm, so `medaka build --release ok.mdk -o out` dies with `takes exactly one input file`, exit 1 | **CONFIRMED — now FIXED and GATED (S-help-truthfulness)** | `medaka build --release ok.mdk -o /tmp/outbin` → stderr `error: medaka build takes exactly one input file`, rc 1. Found *mechanically* by the census's cross-reference column, not by reading. **Drained by fixing the SENTENCE, not by adding a `build --release` arm** (a native build is always optimized — there is no mode to select); `--release` on `run` is unchanged and still accepted. That column is now an assertion, property B of `test/diff_compiler_cli_help_conformance.sh`. |
 | **X8** | The top-level `usage` (`:377`) advertises `medaka run [--release]` too | **CORRECTED — not a defect** | `medaka run --release ok.mdk` → stdout `1`, rc 0. `run` really does accept `--release` (`dropFlags` strips it). The false claim is the *cross-reference* to `build --release` in `runHelpText`, not the top-level usage line. A fix that deleted `[--release]` from `:377` would remove a true statement and leave the false one. |
 | **X9** | The `--json` stdout-purity defect (adversarial pass, 2026-08-30) | **STALE on `check` — LIVE on `run`** | `MEDAKA_PERF=1 medaka check --json ok.mdk` → stdout exactly `{"files":[{"file":"ok.mdk","diagnostics":[]}]}`, **stderr empty**, rc 0 — no defect, confirming the contract's negative result. But `run --json` answers on **stderr**, and there the `[perf]` writer and the staleness warning both land in front of the envelope — see §4(a) for the two pasted transcripts. |
 | **X10** | "no `.mdk` files found" is three different contracts (`test` 0/stdout, `lint` silent/0, `fmt` msg/2) | **CONFIRMED** | see §5b — reproduced exactly, all three |
-| **X11** | `notYet` (`:399-401`) tells the user a subcommand is "not yet in native CLI" | **CONFIRMED** | `medaka bogusverb` → stderr `medaka: subcommand 'bogusverb' not yet in native CLI`, rc 1. Reachable for **any** unmatched token, including a `--`-shaped one: `medaka --zz` → the same message, which is also why `--zz` never reaches a flag check. |
+| **X11** | `notYet` (`:399-401`) tells the user a subcommand is "not yet in native CLI" | **CONFIRMED — now FIXED (S-help-truthfulness)** | `medaka bogusverb` → stderr `medaka: subcommand 'bogusverb' not yet in native CLI`, rc 1. Reachable for **any** unmatched token, including a `--`-shaped one: `medaka --zz` → the same message, which is also why `--zz` never reaches a flag check. |
 | **X12** | #2301's headline: "`medaka test` exposes **two flags total**" | **STALE** | `medaka test --zzz-not-a-flag ok.mdk` names six: `--native, --json, --engines, --filter, --seed, --cases`. `test-vehicle-floor` landed the other four and closed #2316. `medaka test` is now the **most** conformant verb in the tree. |
 | **X13** | `lint` guards only value-taking flags and uses `--flag=v`; `test` uses `--flag v`; the two syntaxes coexist | **CONFIRMED** | `medaka lint --deny=rule-unused-import ok.mdk` → rc 0; `medaka lint --deny rule-unused-import ok.mdk` → rc 1 with the "not supported … rejected instead" message. `medaka test --filter zzz ok.mdk` → rc 0; `medaka test --filter=zzz ok.mdk` → rc 1 `unrecognized flag`. |
 | **X14** | Six verbs reject unknown flags, at three wordings | **CORRECTED — five wordings, and one more verb** | `mcp` also rejects (`unknown argument 'X' (mcp takes no arguments; …)`), and `codemod`/`gate` reject via a *sub-name* arm (`unknown codemod 'X'`, `unknown subcommand 'X'`). A `grep` for `unknown flag\|unknown option` — the derivation behind the "three wordings" claim — cannot see any of those three. S-2's unification target set is therefore larger than the contract's §4 row implies; the census's disposition column (§5a) is the complete list. |
