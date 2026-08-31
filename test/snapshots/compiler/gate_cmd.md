@@ -1,5 +1,5 @@
 # META
-source_lines=5018
+source_lines=5040
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_cmd.mdk — `medaka gate`, the gate-registry driver (#2176, epic #2182).
@@ -50,6 +50,7 @@ import args.{
   switch,
   value,
   withTrailing,
+  withStrictDash,
   parseArgs,
   flag,
   flagValue,
@@ -700,14 +701,17 @@ missingValueOverride sp ((flg, custom)::rest) msg =
   else
     missingValueOverride sp rest msg
 
+-- `withStrictDash` (F1, review finding, #2355): an undeclared `-x` used to
+-- fall through as a positional pre-migration; base rejected any leading-`-`
+-- token here, so this restores that floor via the S-5 knob.
 listArgSpec : ArgSpec
-listArgSpec = spec
+listArgSpec = withStrictDash (spec
   "gate list"
   [
     switch ["--json"] "emit machine-readable JSON",
     switch ["--shards"] "print each entry's shard placement",
     value ["--registry"] "PATH" "override the gate registry path",
-  ]
+  ])
 
 listMissingValue : List (String, String)
 listMissingValue = [("--registry", "medaka gate list: --registry needs a path")]
@@ -1336,8 +1340,11 @@ data RunArgs =
       noStaleCheck : Bool,
     }
 
+-- `withStrictDash` (F1, review finding, #2355): an undeclared `-x` used to
+-- fall through as a positional pre-migration; base rejected any leading-`-`
+-- token here, so this restores that floor via the S-5 knob.
 runArgSpec : ArgSpec
-runArgSpec = spec
+runArgSpec = withStrictDash (spec
   "gate run"
   [
     switch ["--dry-run"] "print what would run, without running it",
@@ -1347,7 +1354,7 @@ runArgSpec = spec
     value ["--report"] "PATH" "write the timing report here",
     value ["--timeout"] "N" "per-gate timeout, in seconds",
     value ["--jobs"] "N" "worker count (reported only; gates run sequentially)",
-  ]
+  ])
 
 runMissingValue : List (String, String)
 runMissingValue = [
@@ -1905,10 +1912,13 @@ verifyOutput root gates shs = match verifyClasses root gates shs
 -- "print to stderr and exit 1" path is exactly what we want here too.
 data VerifyArgs = VerifyArgs { registry : Option String }
 
+-- `withStrictDash` (F1, review finding, #2355): an undeclared `-x` used to
+-- fall through as a positional pre-migration; base rejected any leading-`-`
+-- token here, so this restores that floor via the S-5 knob.
 verifyArgSpec : ArgSpec
-verifyArgSpec = spec
+verifyArgSpec = withStrictDash (spec
   "gate verify"
-  [value ["--registry"] "PATH" "override the gate registry path"]
+  [value ["--registry"] "PATH" "override the gate registry path"])
 
 verifyMissingValue : List (String, String)
 verifyMissingValue =
@@ -2168,13 +2178,16 @@ explainOutput path gates =
 data ExplainArgs =
   | ExplainArgs { registry : Option String, path : Option String, prose : Bool }
 
+-- `withStrictDash` (F1, review finding, #2355): an undeclared `-x` used to
+-- fall through as a positional pre-migration; base rejected any leading-`-`
+-- token here, so this restores that floor via the S-5 knob.
 explainArgSpec : ArgSpec
-explainArgSpec = spec
+explainArgSpec = withStrictDash (spec
   "gate explain"
   [
     value ["--registry"] "PATH" "override the gate registry path",
     switch ["--prose"] "print only the PROSE/NONDOC verdict",
-  ]
+  ])
 
 explainMissingValue : List (String, String)
 explainMissingValue =
@@ -2455,8 +2468,14 @@ data ReachArgs =
 -- promise would be worth nothing if a leading `-` could turn it into exit 1.
 -- `args.mdk`'s `TrailingAfterSeparator` is exactly this policy: it consumes
 -- the first bare `--` and hands everything after it back verbatim in `rest`.
+-- `withStrictDash` (F1, review finding, #2355): an undeclared `-x` used to
+-- fall through as a positional pre-migration; base rejected any leading-`-`
+-- token here, so this restores that floor via the S-5 knob. Composes with
+-- `withTrailing` below — the `--` escape hatch still hands anything after it
+-- to `rest` verbatim, dash-shaped or not; strictDash only governs tokens
+-- BEFORE the separator.
 reachArgSpec : ArgSpec
-reachArgSpec = withTrailing
+reachArgSpec = withStrictDash (withTrailing
   TrailingAfterSeparator
   (spec
     "gate reach"
@@ -2465,7 +2484,7 @@ reachArgSpec = withTrailing
       value ["--root"] "PATH" "override MEDAKA_ROOT",
       value ["--paths-from"] "PATH" "read changed paths from a file",
       switch ["--json"] "emit JSON",
-    ])
+    ]))
 
 -- `reach` is the tree's only verb whose unrecognized-flag sentence carries an
 -- extra hint after the shared `(known: …)` tail — appended here, on top of
@@ -4960,14 +4979,17 @@ data BudgetArgs =
       commitMessage : String,
     }
 
+-- `withStrictDash` (F1, review finding, #2355): an undeclared `-x` used to
+-- fall through as a positional pre-migration; base rejected any leading-`-`
+-- token here, so this restores that floor via the S-5 knob.
 budgetArgSpec : ArgSpec
-budgetArgSpec = spec
+budgetArgSpec = withStrictDash (spec
   "gate budget"
   [
     value ["--registry"] "PATH" "override the gate registry path",
     value ["--baseline"] "PATH" "override the cost baseline path",
     value ["--commit-message"] "TEXT" "commit message to scan for a Gate-Budget-Override trailer",
-  ]
+  ])
 
 budgetMissingValue : List (String, String)
 budgetMissingValue = [
@@ -5026,7 +5048,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "envOr" false) (mem "defaultMedakaRoot" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "readDeps" false))))
 (DUse false (UseGroup ("support" "path") ((mem "joinPath" false))))
-(DUse false (UseGroup ("args") ((mem "ArgSpec" false) (mem "Args" false) (mem "Trailing" true) (mem "spec" false) (mem "switch" false) (mem "value" false) (mem "withTrailing" false) (mem "parseArgs" false) (mem "flag" false) (mem "flagValue" false) (mem "unknownFlagMessage" false) (mem "missingValueMessage" false))))
+(DUse false (UseGroup ("args") ((mem "ArgSpec" false) (mem "Args" false) (mem "Trailing" true) (mem "spec" false) (mem "switch" false) (mem "value" false) (mem "withTrailing" false) (mem "withStrictDash" false) (mem "parseArgs" false) (mem "flag" false) (mem "flagValue" false) (mem "unknownFlagMessage" false) (mem "missingValueMessage" false))))
 (DUse false (UseGroup ("tools" "gate_cost") ((mem "GateCost" false) (mem "RunRecord" false) (mem "baselineKey" false) (mem "costOf" false) (mem "costRowOf" false) (mem "gateSetDigest" false) (mem "latestRunForShard" false) (mem "packStat" false) (mem "parseCostBaseline" false) (mem "parseCostRuns" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "endsWith" false) (mem "filterList" false) (mem "joinNl" false) (mem "joinWith" false) (mem "listLen" false) (mem "maxI" false) (mem "minI" false) (mem "parseDecChecked" false) (mem "reverseL" false) (mem "sortUniqS" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "startsWith" false) (mem "stringTrim" false))))
 (DData Public "Gate" () ((variant "Gate" (ConNamed (field "name" (TyCon "String")) (field "area" (TyCon "String")) (field "shard" (TyCon "String")) (field "project" (TyCon "String")) (field "tiers" (TyApp (TyCon "List") (TyCon "String"))) (field "cost" (TyCon "String")) (field "kind" (TyCon "String")) (field "run" (TyCon "String")) (field "oracles" (TyApp (TyCon "List") (TyCon "String"))) (field "sources" (TyApp (TyCon "List") (TyCon "String"))) (field "corpus" (TyApp (TyCon "List") (TyCon "String"))) (field "toolchain" (TyApp (TyCon "List") (TyCon "String")))))) ())
@@ -5117,7 +5139,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "missingValueOverride" (PWild (PList) (PVar "msg")) (EVar "msg"))
 (DFunDef false "missingValueOverride" ((PVar "sp") (PCons (PTuple (PVar "flg") (PVar "custom")) (PVar "rest")) (PVar "msg")) (EIf (EBinOp "==" (EVar "msg") (EApp (EApp (EVar "missingValueMessage") (EVar "sp")) (EVar "flg"))) (EVar "custom") (EApp (EApp (EApp (EVar "missingValueOverride") (EVar "sp")) (EVar "rest")) (EVar "msg"))))
 (DTypeSig false "listArgSpec" (TyCon "ArgSpec"))
-(DFunDef false "listArgSpec" () (EApp (EApp (EVar "spec") (ELit (LString "gate list"))) (EListLit (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--json")))) (ELit (LString "emit machine-readable JSON"))) (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--shards")))) (ELit (LString "print each entry's shard placement"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--registry")))) (ELit (LString "PATH"))) (ELit (LString "override the gate registry path"))))))
+(DFunDef false "listArgSpec" () (EApp (EVar "withStrictDash") (EApp (EApp (EVar "spec") (ELit (LString "gate list"))) (EListLit (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--json")))) (ELit (LString "emit machine-readable JSON"))) (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--shards")))) (ELit (LString "print each entry's shard placement"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--registry")))) (ELit (LString "PATH"))) (ELit (LString "override the gate registry path")))))))
 (DTypeSig false "listMissingValue" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "listMissingValue" () (EListLit (ETuple (ELit (LString "--registry")) (ELit (LString "medaka gate list: --registry needs a path")))))
 (DTypeSig false "parseListArgs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "ListArgs"))))
@@ -5259,7 +5281,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "dryLines" ((PVar "env") (PCons (PVar "g") (PVar "gs"))) (EBinOp "++" (EApp (EApp (EVar "dryLine") (EVar "env")) (EVar "g")) (EApp (EApp (EVar "dryLines") (EVar "env")) (EVar "gs"))))
 (DData Private "RunArgs" () ((variant "RunArgs" (ConNamed (field "registry" (TyApp (TyCon "Option") (TyCon "String"))) (field "selectors" (TyApp (TyCon "List") (TyCon "String"))) (field "dryRun" (TyCon "Bool")) (field "json" (TyCon "Bool")) (field "report" (TyApp (TyCon "Option") (TyCon "String"))) (field "timeoutSecs" (TyCon "Int")) (field "jobs" (TyCon "Int")) (field "noStaleCheck" (TyCon "Bool"))))) ())
 (DTypeSig false "runArgSpec" (TyCon "ArgSpec"))
-(DFunDef false "runArgSpec" () (EApp (EApp (EVar "spec") (ELit (LString "gate run"))) (EListLit (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--dry-run")))) (ELit (LString "print what would run, without running it"))) (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--json")))) (ELit (LString "emit the machine-readable timing report"))) (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--no-stale-check")))) (ELit (LString "skip the stale-oracle refusal"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--registry")))) (ELit (LString "PATH"))) (ELit (LString "override the gate registry path"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--report")))) (ELit (LString "PATH"))) (ELit (LString "write the timing report here"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--timeout")))) (ELit (LString "N"))) (ELit (LString "per-gate timeout, in seconds"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--jobs")))) (ELit (LString "N"))) (ELit (LString "worker count (reported only; gates run sequentially)"))))))
+(DFunDef false "runArgSpec" () (EApp (EVar "withStrictDash") (EApp (EApp (EVar "spec") (ELit (LString "gate run"))) (EListLit (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--dry-run")))) (ELit (LString "print what would run, without running it"))) (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--json")))) (ELit (LString "emit the machine-readable timing report"))) (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--no-stale-check")))) (ELit (LString "skip the stale-oracle refusal"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--registry")))) (ELit (LString "PATH"))) (ELit (LString "override the gate registry path"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--report")))) (ELit (LString "PATH"))) (ELit (LString "write the timing report here"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--timeout")))) (ELit (LString "N"))) (ELit (LString "per-gate timeout, in seconds"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--jobs")))) (ELit (LString "N"))) (ELit (LString "worker count (reported only; gates run sequentially)")))))))
 (DTypeSig false "runMissingValue" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "runMissingValue" () (EListLit (ETuple (ELit (LString "--registry")) (ELit (LString "medaka gate run: --registry needs a path"))) (ETuple (ELit (LString "--report")) (ELit (LString "medaka gate run: --report needs a path"))) (ETuple (ELit (LString "--timeout")) (ELit (LString "medaka gate run: --timeout needs a number of seconds"))) (ETuple (ELit (LString "--jobs")) (ELit (LString "medaka gate run: --jobs needs a number")))))
 (DTypeSig false "runTimeout" (TyFun (TyCon "Args") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))
@@ -5407,7 +5429,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "verifyOutput" ((PVar "root") (PVar "gates") (PVar "shs")) (EMatch (EApp (EApp (EApp (EVar "verifyClasses") (EVar "root")) (EVar "gates")) (EVar "shs")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate verify: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "\n"))))) (arm (PCon "Ok" (PVar "classes")) () (EBlock (DoLet false false (PVar "n") (EApp (EVar "totalViolations") (EVar "classes"))) (DoLet false false (PVar "body") (EApp (EVar "renderClasses") (EVar "classes"))) (DoExpr (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EApp (EVar "Ok") (EBinOp "++" (EVar "body") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate verify: OK — ")) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "gates"))))) (ELit (LString " entries, 0 violations.\n"))))) (EApp (EVar "Err") (EBinOp "++" (EVar "body") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate verify: FAIL — ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " violation(s) across "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "gates"))))) (ELit (LString " entries.\n")))))))))))
 (DData Private "VerifyArgs" () ((variant "VerifyArgs" (ConNamed (field "registry" (TyApp (TyCon "Option") (TyCon "String")))))) ())
 (DTypeSig false "verifyArgSpec" (TyCon "ArgSpec"))
-(DFunDef false "verifyArgSpec" () (EApp (EApp (EVar "spec") (ELit (LString "gate verify"))) (EListLit (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--registry")))) (ELit (LString "PATH"))) (ELit (LString "override the gate registry path"))))))
+(DFunDef false "verifyArgSpec" () (EApp (EVar "withStrictDash") (EApp (EApp (EVar "spec") (ELit (LString "gate verify"))) (EListLit (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--registry")))) (ELit (LString "PATH"))) (ELit (LString "override the gate registry path")))))))
 (DTypeSig false "verifyMissingValue" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "verifyMissingValue" () (EListLit (ETuple (ELit (LString "--registry")) (ELit (LString "medaka gate verify: --registry needs a path")))))
 (DTypeSig false "parseVerifyArgs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "VerifyArgs"))))
@@ -5479,7 +5501,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "explainOutput" ((PVar "path") (PVar "gates")) (EBlock (DoLet false false (PVar "wt") (EApp (EVar "renderWholeTree") (EApp (EVar "wholeTreeGates") (EVar "gates")))) (DoLet false false (PVar "tok") (EApp (EApp (EVar "tokenSection") (EVar "path")) (EVar "gates"))) (DoLet false false (PVar "hits") (EApp (EApp (EVar "explainPathHits") (EVar "path")) (EVar "gates"))) (DoExpr (EMatch (EApp (EApp (EVar "blastHit") (EVar "blastRadiusPrefixes")) (EVar "path")) (arm (PCon "Some" (PVar "p")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  FULL      blast-radius:")) (EApp (EVar "display") (EVar "p"))) (ELit (LString "\n"))) (EVar "blastNote")) (EVar "wt")) (EVar "tok"))) (arm (PCon "None") () (EIf (EApp (EVar "isEmptyHits") (EVar "hits")) (EBinOp "++" (EBinOp "++" (EIf (EApp (EVar "isProsePath") (EVar "path")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  UNMAPPED  ")) (EApp (EVar "display") (EVar "path"))) (ELit (LString "\n"))) (EVar "proseNote")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  UNMAPPED  ")) (EApp (EVar "display") (EVar "path"))) (ELit (LString "\n  FULL      unmatched-non-prose:"))) (EApp (EVar "display") (EVar "path"))) (ELit (LString "\n"))) (EVar "failOpenNote"))) (EVar "wt")) (EVar "tok")) (EBinOp "++" (EBinOp "++" (EApp (EVar "renderGateLines") (EVar "hits")) (EVar "wt")) (EVar "tok"))))))))
 (DData Private "ExplainArgs" () ((variant "ExplainArgs" (ConNamed (field "registry" (TyApp (TyCon "Option") (TyCon "String"))) (field "path" (TyApp (TyCon "Option") (TyCon "String"))) (field "prose" (TyCon "Bool"))))) ())
 (DTypeSig false "explainArgSpec" (TyCon "ArgSpec"))
-(DFunDef false "explainArgSpec" () (EApp (EApp (EVar "spec") (ELit (LString "gate explain"))) (EListLit (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--registry")))) (ELit (LString "PATH"))) (ELit (LString "override the gate registry path"))) (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--prose")))) (ELit (LString "print only the PROSE/NONDOC verdict"))))))
+(DFunDef false "explainArgSpec" () (EApp (EVar "withStrictDash") (EApp (EApp (EVar "spec") (ELit (LString "gate explain"))) (EListLit (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--registry")))) (ELit (LString "PATH"))) (ELit (LString "override the gate registry path"))) (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--prose")))) (ELit (LString "print only the PROSE/NONDOC verdict")))))))
 (DTypeSig false "explainMissingValue" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "explainMissingValue" () (EListLit (ETuple (ELit (LString "--registry")) (ELit (LString "medaka gate explain: --registry needs a path")))))
 (DTypeSig false "parseExplainArgs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "ExplainArgs"))))
@@ -5535,7 +5557,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "reachJson" ((PVar "failOpen") (PVar "paths") (PVar "projects")) (EBinOp "++" (EApp (EVar "stringify") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "projects")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EVar "JString")) (EVar "projects")))) (ETuple (ELit (LString "failOpen")) (EApp (EVar "JBool") (EVar "failOpen"))) (ETuple (ELit (LString "changed")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EVar "JString")) (EVar "paths"))))))) (ELit (LString "\n"))))
 (DData Private "ReachArgs" () ((variant "ReachArgs" (ConNamed (field "registry" (TyApp (TyCon "Option") (TyCon "String"))) (field "root" (TyApp (TyCon "Option") (TyCon "String"))) (field "json" (TyCon "Bool")) (field "pathsFrom" (TyApp (TyCon "Option") (TyCon "String"))) (field "paths" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig false "reachArgSpec" (TyCon "ArgSpec"))
-(DFunDef false "reachArgSpec" () (EApp (EApp (EVar "withTrailing") (EVar "TrailingAfterSeparator")) (EApp (EApp (EVar "spec") (ELit (LString "gate reach"))) (EListLit (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--registry")))) (ELit (LString "PATH"))) (ELit (LString "override the gate registry path"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--root")))) (ELit (LString "PATH"))) (ELit (LString "override MEDAKA_ROOT"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--paths-from")))) (ELit (LString "PATH"))) (ELit (LString "read changed paths from a file"))) (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--json")))) (ELit (LString "emit JSON")))))))
+(DFunDef false "reachArgSpec" () (EApp (EVar "withStrictDash") (EApp (EApp (EVar "withTrailing") (EVar "TrailingAfterSeparator")) (EApp (EApp (EVar "spec") (ELit (LString "gate reach"))) (EListLit (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--registry")))) (ELit (LString "PATH"))) (ELit (LString "override the gate registry path"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--root")))) (ELit (LString "PATH"))) (ELit (LString "override MEDAKA_ROOT"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--paths-from")))) (ELit (LString "PATH"))) (ELit (LString "read changed paths from a file"))) (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--json")))) (ELit (LString "emit JSON"))))))))
 (DTypeSig false "parseReachArgs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "ReachArgs"))))
 (DFunDef false "parseReachArgs" ((PVar "argv")) (EMatch (EApp (EApp (EVar "parseArgs") (EVar "reachArgSpec")) (EVar "argv")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EApp (EVar "reachRewriteErr") (EVar "m")))) (arm (PCon "Ok" (PVar "a")) () (EApp (EVar "Ok") (ERecordCreate "ReachArgs" ((fa "registry" (EApp (EApp (EVar "flagValue") (ELit (LString "--registry"))) (EVar "a"))) (fa "root" (EApp (EApp (EVar "flagValue") (ELit (LString "--root"))) (EVar "a"))) (fa "json" (EApp (EApp (EVar "flag") (ELit (LString "--json"))) (EVar "a"))) (fa "pathsFrom" (EApp (EApp (EVar "flagValue") (ELit (LString "--paths-from"))) (EVar "a"))) (fa "paths" (EBinOp "++" (EFieldAccess (EVar "a") "positionals") (EFieldAccess (EVar "a") "rest")))))))))
 (DTypeSig false "reachRewriteErr" (TyFun (TyCon "String") (TyCon "String")))
@@ -6025,7 +6047,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "budgetOutput" ((PVar "regPath") (PVar "regSrc") (PVar "baseSrc") (PVar "commitMessage")) (EMatch (EApp (EVar "parseRegistry") (EVar "regSrc")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate budget: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "gates")) () (EMatch (EApp (EVar "parseShards") (EVar "regSrc")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate budget: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "shs")) () (EMatch (EApp (EVar "parseCostBaseline") (EVar "baseSrc")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate budget: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "base")) () (EMatch (EApp (EVar "parseCostRuns") (EVar "baseSrc")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate budget: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "runs")) () (EMatch (EApp (EApp (EVar "balUnknownRows") (EVar "shs")) (EVar "gates")) (arm (PCons (PVar "u") (PVar "us")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate budget: ")) (EApp (EVar "display") (EVar "regPath"))) (ELit (LString ": gate(s) name a shard with no [[shard]] row: "))) (EApp (EVar "display") (EApp (EVar "joinSpace") (EBinOp "::" (EVar "u") (EVar "us"))))) (ELit (LString "\n"))))) (arm (PList) () (EBlock (DoLet false false (PVar "uncosted") (EApp (EApp (EVar "budgetUncostedNames") (EVar "base")) (EVar "gates"))) (DoLet false false (PVar "overClass") (EApp (EApp (EVar "budgetOverClassGates") (EVar "base")) (EVar "gates"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "budgetPoleFactor") (EVar "gates")) (EVar "shs")) (EVar "base")) (EVar "runs")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate budget: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "\n"))))) (arm (PCon "Ok" (PVar "poleFactorOpt")) () (EApp (EApp (EApp (EApp (EApp (EVar "budgetReport") (EVar "base")) (EVar "commitMessage")) (EVar "uncosted")) (EVar "overClass")) (EVar "poleFactorOpt")))))))))))))))))
 (DData Private "BudgetArgs" () ((variant "BudgetArgs" (ConNamed (field "registry" (TyApp (TyCon "Option") (TyCon "String"))) (field "baseline" (TyApp (TyCon "Option") (TyCon "String"))) (field "commitMessage" (TyCon "String"))))) ())
 (DTypeSig false "budgetArgSpec" (TyCon "ArgSpec"))
-(DFunDef false "budgetArgSpec" () (EApp (EApp (EVar "spec") (ELit (LString "gate budget"))) (EListLit (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--registry")))) (ELit (LString "PATH"))) (ELit (LString "override the gate registry path"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--baseline")))) (ELit (LString "PATH"))) (ELit (LString "override the cost baseline path"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--commit-message")))) (ELit (LString "TEXT"))) (ELit (LString "commit message to scan for a Gate-Budget-Override trailer"))))))
+(DFunDef false "budgetArgSpec" () (EApp (EVar "withStrictDash") (EApp (EApp (EVar "spec") (ELit (LString "gate budget"))) (EListLit (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--registry")))) (ELit (LString "PATH"))) (ELit (LString "override the gate registry path"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--baseline")))) (ELit (LString "PATH"))) (ELit (LString "override the cost baseline path"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--commit-message")))) (ELit (LString "TEXT"))) (ELit (LString "commit message to scan for a Gate-Budget-Override trailer")))))))
 (DTypeSig false "budgetMissingValue" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "budgetMissingValue" () (EListLit (ETuple (ELit (LString "--registry")) (ELit (LString "medaka gate budget: --registry needs a path"))) (ETuple (ELit (LString "--baseline")) (ELit (LString "medaka gate budget: --baseline needs a path"))) (ETuple (ELit (LString "--commit-message")) (ELit (LString "medaka gate budget: --commit-message needs a value")))))
 (DTypeSig false "budgetCommitMessage" (TyFun (TyCon "Args") (TyCon "String")))
@@ -6044,7 +6066,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "envOr" false) (mem "defaultMedakaRoot" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "readDeps" false))))
 (DUse false (UseGroup ("support" "path") ((mem "joinPath" false))))
-(DUse false (UseGroup ("args") ((mem "ArgSpec" false) (mem "Args" false) (mem "Trailing" true) (mem "spec" false) (mem "switch" false) (mem "value" false) (mem "withTrailing" false) (mem "parseArgs" false) (mem "flag" false) (mem "flagValue" false) (mem "unknownFlagMessage" false) (mem "missingValueMessage" false))))
+(DUse false (UseGroup ("args") ((mem "ArgSpec" false) (mem "Args" false) (mem "Trailing" true) (mem "spec" false) (mem "switch" false) (mem "value" false) (mem "withTrailing" false) (mem "withStrictDash" false) (mem "parseArgs" false) (mem "flag" false) (mem "flagValue" false) (mem "unknownFlagMessage" false) (mem "missingValueMessage" false))))
 (DUse false (UseGroup ("tools" "gate_cost") ((mem "GateCost" false) (mem "RunRecord" false) (mem "baselineKey" false) (mem "costOf" false) (mem "costRowOf" false) (mem "gateSetDigest" false) (mem "latestRunForShard" false) (mem "packStat" false) (mem "parseCostBaseline" false) (mem "parseCostRuns" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "endsWith" false) (mem "filterList" false) (mem "joinNl" false) (mem "joinWith" false) (mem "listLen" false) (mem "maxI" false) (mem "minI" false) (mem "parseDecChecked" false) (mem "reverseL" false) (mem "sortUniqS" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "startsWith" false) (mem "stringTrim" false))))
 (DData Public "Gate" () ((variant "Gate" (ConNamed (field "name" (TyCon "String")) (field "area" (TyCon "String")) (field "shard" (TyCon "String")) (field "project" (TyCon "String")) (field "tiers" (TyApp (TyCon "List") (TyCon "String"))) (field "cost" (TyCon "String")) (field "kind" (TyCon "String")) (field "run" (TyCon "String")) (field "oracles" (TyApp (TyCon "List") (TyCon "String"))) (field "sources" (TyApp (TyCon "List") (TyCon "String"))) (field "corpus" (TyApp (TyCon "List") (TyCon "String"))) (field "toolchain" (TyApp (TyCon "List") (TyCon "String")))))) ())
@@ -6135,7 +6157,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "missingValueOverride" (PWild (PList) (PVar "msg")) (EVar "msg"))
 (DFunDef false "missingValueOverride" ((PVar "sp") (PCons (PTuple (PVar "flg") (PVar "custom")) (PVar "rest")) (PVar "msg")) (EIf (EBinOp "==" (EVar "msg") (EApp (EApp (EVar "missingValueMessage") (EVar "sp")) (EVar "flg"))) (EVar "custom") (EApp (EApp (EApp (EVar "missingValueOverride") (EVar "sp")) (EVar "rest")) (EVar "msg"))))
 (DTypeSig false "listArgSpec" (TyCon "ArgSpec"))
-(DFunDef false "listArgSpec" () (EApp (EApp (EVar "spec") (ELit (LString "gate list"))) (EListLit (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--json")))) (ELit (LString "emit machine-readable JSON"))) (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--shards")))) (ELit (LString "print each entry's shard placement"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--registry")))) (ELit (LString "PATH"))) (ELit (LString "override the gate registry path"))))))
+(DFunDef false "listArgSpec" () (EApp (EVar "withStrictDash") (EApp (EApp (EVar "spec") (ELit (LString "gate list"))) (EListLit (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--json")))) (ELit (LString "emit machine-readable JSON"))) (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--shards")))) (ELit (LString "print each entry's shard placement"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--registry")))) (ELit (LString "PATH"))) (ELit (LString "override the gate registry path")))))))
 (DTypeSig false "listMissingValue" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "listMissingValue" () (EListLit (ETuple (ELit (LString "--registry")) (ELit (LString "medaka gate list: --registry needs a path")))))
 (DTypeSig false "parseListArgs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "ListArgs"))))
@@ -6277,7 +6299,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "dryLines" ((PVar "env") (PCons (PVar "g") (PVar "gs"))) (EBinOp "++" (EApp (EApp (EVar "dryLine") (EVar "env")) (EVar "g")) (EApp (EApp (EVar "dryLines") (EVar "env")) (EVar "gs"))))
 (DData Private "RunArgs" () ((variant "RunArgs" (ConNamed (field "registry" (TyApp (TyCon "Option") (TyCon "String"))) (field "selectors" (TyApp (TyCon "List") (TyCon "String"))) (field "dryRun" (TyCon "Bool")) (field "json" (TyCon "Bool")) (field "report" (TyApp (TyCon "Option") (TyCon "String"))) (field "timeoutSecs" (TyCon "Int")) (field "jobs" (TyCon "Int")) (field "noStaleCheck" (TyCon "Bool"))))) ())
 (DTypeSig false "runArgSpec" (TyCon "ArgSpec"))
-(DFunDef false "runArgSpec" () (EApp (EApp (EVar "spec") (ELit (LString "gate run"))) (EListLit (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--dry-run")))) (ELit (LString "print what would run, without running it"))) (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--json")))) (ELit (LString "emit the machine-readable timing report"))) (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--no-stale-check")))) (ELit (LString "skip the stale-oracle refusal"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--registry")))) (ELit (LString "PATH"))) (ELit (LString "override the gate registry path"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--report")))) (ELit (LString "PATH"))) (ELit (LString "write the timing report here"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--timeout")))) (ELit (LString "N"))) (ELit (LString "per-gate timeout, in seconds"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--jobs")))) (ELit (LString "N"))) (ELit (LString "worker count (reported only; gates run sequentially)"))))))
+(DFunDef false "runArgSpec" () (EApp (EVar "withStrictDash") (EApp (EApp (EVar "spec") (ELit (LString "gate run"))) (EListLit (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--dry-run")))) (ELit (LString "print what would run, without running it"))) (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--json")))) (ELit (LString "emit the machine-readable timing report"))) (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--no-stale-check")))) (ELit (LString "skip the stale-oracle refusal"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--registry")))) (ELit (LString "PATH"))) (ELit (LString "override the gate registry path"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--report")))) (ELit (LString "PATH"))) (ELit (LString "write the timing report here"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--timeout")))) (ELit (LString "N"))) (ELit (LString "per-gate timeout, in seconds"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--jobs")))) (ELit (LString "N"))) (ELit (LString "worker count (reported only; gates run sequentially)")))))))
 (DTypeSig false "runMissingValue" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "runMissingValue" () (EListLit (ETuple (ELit (LString "--registry")) (ELit (LString "medaka gate run: --registry needs a path"))) (ETuple (ELit (LString "--report")) (ELit (LString "medaka gate run: --report needs a path"))) (ETuple (ELit (LString "--timeout")) (ELit (LString "medaka gate run: --timeout needs a number of seconds"))) (ETuple (ELit (LString "--jobs")) (ELit (LString "medaka gate run: --jobs needs a number")))))
 (DTypeSig false "runTimeout" (TyFun (TyCon "Args") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))
@@ -6425,7 +6447,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "verifyOutput" ((PVar "root") (PVar "gates") (PVar "shs")) (EMatch (EApp (EApp (EApp (EVar "verifyClasses") (EVar "root")) (EVar "gates")) (EVar "shs")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate verify: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "\n"))))) (arm (PCon "Ok" (PVar "classes")) () (EBlock (DoLet false false (PVar "n") (EApp (EVar "totalViolations") (EVar "classes"))) (DoLet false false (PVar "body") (EApp (EVar "renderClasses") (EVar "classes"))) (DoExpr (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EApp (EVar "Ok") (EBinOp "++" (EVar "body") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate verify: OK — ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "gates"))))) (ELit (LString " entries, 0 violations.\n"))))) (EApp (EVar "Err") (EBinOp "++" (EVar "body") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate verify: FAIL — ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " violation(s) across "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "gates"))))) (ELit (LString " entries.\n")))))))))))
 (DData Private "VerifyArgs" () ((variant "VerifyArgs" (ConNamed (field "registry" (TyApp (TyCon "Option") (TyCon "String")))))) ())
 (DTypeSig false "verifyArgSpec" (TyCon "ArgSpec"))
-(DFunDef false "verifyArgSpec" () (EApp (EApp (EVar "spec") (ELit (LString "gate verify"))) (EListLit (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--registry")))) (ELit (LString "PATH"))) (ELit (LString "override the gate registry path"))))))
+(DFunDef false "verifyArgSpec" () (EApp (EVar "withStrictDash") (EApp (EApp (EVar "spec") (ELit (LString "gate verify"))) (EListLit (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--registry")))) (ELit (LString "PATH"))) (ELit (LString "override the gate registry path")))))))
 (DTypeSig false "verifyMissingValue" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "verifyMissingValue" () (EListLit (ETuple (ELit (LString "--registry")) (ELit (LString "medaka gate verify: --registry needs a path")))))
 (DTypeSig false "parseVerifyArgs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "VerifyArgs"))))
@@ -6497,7 +6519,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "explainOutput" ((PVar "path") (PVar "gates")) (EBlock (DoLet false false (PVar "wt") (EApp (EVar "renderWholeTree") (EApp (EVar "wholeTreeGates") (EVar "gates")))) (DoLet false false (PVar "tok") (EApp (EApp (EVar "tokenSection") (EVar "path")) (EVar "gates"))) (DoLet false false (PVar "hits") (EApp (EApp (EVar "explainPathHits") (EVar "path")) (EVar "gates"))) (DoExpr (EMatch (EApp (EApp (EVar "blastHit") (EVar "blastRadiusPrefixes")) (EVar "path")) (arm (PCon "Some" (PVar "p")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  FULL      blast-radius:")) (EApp (EMethodRef "display") (EVar "p"))) (ELit (LString "\n"))) (EVar "blastNote")) (EVar "wt")) (EVar "tok"))) (arm (PCon "None") () (EIf (EApp (EVar "isEmptyHits") (EVar "hits")) (EBinOp "++" (EBinOp "++" (EIf (EApp (EVar "isProsePath") (EVar "path")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  UNMAPPED  ")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString "\n"))) (EVar "proseNote")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  UNMAPPED  ")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString "\n  FULL      unmatched-non-prose:"))) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString "\n"))) (EVar "failOpenNote"))) (EVar "wt")) (EVar "tok")) (EBinOp "++" (EBinOp "++" (EApp (EVar "renderGateLines") (EVar "hits")) (EVar "wt")) (EVar "tok"))))))))
 (DData Private "ExplainArgs" () ((variant "ExplainArgs" (ConNamed (field "registry" (TyApp (TyCon "Option") (TyCon "String"))) (field "path" (TyApp (TyCon "Option") (TyCon "String"))) (field "prose" (TyCon "Bool"))))) ())
 (DTypeSig false "explainArgSpec" (TyCon "ArgSpec"))
-(DFunDef false "explainArgSpec" () (EApp (EApp (EVar "spec") (ELit (LString "gate explain"))) (EListLit (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--registry")))) (ELit (LString "PATH"))) (ELit (LString "override the gate registry path"))) (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--prose")))) (ELit (LString "print only the PROSE/NONDOC verdict"))))))
+(DFunDef false "explainArgSpec" () (EApp (EVar "withStrictDash") (EApp (EApp (EVar "spec") (ELit (LString "gate explain"))) (EListLit (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--registry")))) (ELit (LString "PATH"))) (ELit (LString "override the gate registry path"))) (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--prose")))) (ELit (LString "print only the PROSE/NONDOC verdict")))))))
 (DTypeSig false "explainMissingValue" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "explainMissingValue" () (EListLit (ETuple (ELit (LString "--registry")) (ELit (LString "medaka gate explain: --registry needs a path")))))
 (DTypeSig false "parseExplainArgs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "ExplainArgs"))))
@@ -6553,7 +6575,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "reachJson" ((PVar "failOpen") (PVar "paths") (PVar "projects")) (EBinOp "++" (EApp (EVar "stringify") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "projects")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EVar "JString")) (EVar "projects")))) (ETuple (ELit (LString "failOpen")) (EApp (EVar "JBool") (EVar "failOpen"))) (ETuple (ELit (LString "changed")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EVar "JString")) (EVar "paths"))))))) (ELit (LString "\n"))))
 (DData Private "ReachArgs" () ((variant "ReachArgs" (ConNamed (field "registry" (TyApp (TyCon "Option") (TyCon "String"))) (field "root" (TyApp (TyCon "Option") (TyCon "String"))) (field "json" (TyCon "Bool")) (field "pathsFrom" (TyApp (TyCon "Option") (TyCon "String"))) (field "paths" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig false "reachArgSpec" (TyCon "ArgSpec"))
-(DFunDef false "reachArgSpec" () (EApp (EApp (EVar "withTrailing") (EVar "TrailingAfterSeparator")) (EApp (EApp (EVar "spec") (ELit (LString "gate reach"))) (EListLit (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--registry")))) (ELit (LString "PATH"))) (ELit (LString "override the gate registry path"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--root")))) (ELit (LString "PATH"))) (ELit (LString "override MEDAKA_ROOT"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--paths-from")))) (ELit (LString "PATH"))) (ELit (LString "read changed paths from a file"))) (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--json")))) (ELit (LString "emit JSON")))))))
+(DFunDef false "reachArgSpec" () (EApp (EVar "withStrictDash") (EApp (EApp (EVar "withTrailing") (EVar "TrailingAfterSeparator")) (EApp (EApp (EVar "spec") (ELit (LString "gate reach"))) (EListLit (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--registry")))) (ELit (LString "PATH"))) (ELit (LString "override the gate registry path"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--root")))) (ELit (LString "PATH"))) (ELit (LString "override MEDAKA_ROOT"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--paths-from")))) (ELit (LString "PATH"))) (ELit (LString "read changed paths from a file"))) (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--json")))) (ELit (LString "emit JSON"))))))))
 (DTypeSig false "parseReachArgs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "ReachArgs"))))
 (DFunDef false "parseReachArgs" ((PVar "argv")) (EMatch (EApp (EApp (EVar "parseArgs") (EVar "reachArgSpec")) (EVar "argv")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EApp (EVar "reachRewriteErr") (EVar "m")))) (arm (PCon "Ok" (PVar "a")) () (EApp (EVar "Ok") (ERecordCreate "ReachArgs" ((fa "registry" (EApp (EApp (EVar "flagValue") (ELit (LString "--registry"))) (EVar "a"))) (fa "root" (EApp (EApp (EVar "flagValue") (ELit (LString "--root"))) (EVar "a"))) (fa "json" (EApp (EApp (EVar "flag") (ELit (LString "--json"))) (EVar "a"))) (fa "pathsFrom" (EApp (EApp (EVar "flagValue") (ELit (LString "--paths-from"))) (EVar "a"))) (fa "paths" (EBinOp "++" (EFieldAccess (EVar "a") "positionals") (EFieldAccess (EVar "a") "rest")))))))))
 (DTypeSig false "reachRewriteErr" (TyFun (TyCon "String") (TyCon "String")))
@@ -7043,7 +7065,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "budgetOutput" ((PVar "regPath") (PVar "regSrc") (PVar "baseSrc") (PVar "commitMessage")) (EMatch (EApp (EVar "parseRegistry") (EVar "regSrc")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate budget: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "gates")) () (EMatch (EApp (EVar "parseShards") (EVar "regSrc")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate budget: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "shs")) () (EMatch (EApp (EVar "parseCostBaseline") (EVar "baseSrc")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate budget: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "base")) () (EMatch (EApp (EVar "parseCostRuns") (EVar "baseSrc")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate budget: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "runs")) () (EMatch (EApp (EApp (EVar "balUnknownRows") (EVar "shs")) (EVar "gates")) (arm (PCons (PVar "u") (PVar "us")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate budget: ")) (EApp (EMethodRef "display") (EVar "regPath"))) (ELit (LString ": gate(s) name a shard with no [[shard]] row: "))) (EApp (EMethodRef "display") (EApp (EVar "joinSpace") (EBinOp "::" (EVar "u") (EVar "us"))))) (ELit (LString "\n"))))) (arm (PList) () (EBlock (DoLet false false (PVar "uncosted") (EApp (EApp (EVar "budgetUncostedNames") (EVar "base")) (EVar "gates"))) (DoLet false false (PVar "overClass") (EApp (EApp (EVar "budgetOverClassGates") (EVar "base")) (EVar "gates"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "budgetPoleFactor") (EVar "gates")) (EVar "shs")) (EVar "base")) (EVar "runs")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate budget: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "\n"))))) (arm (PCon "Ok" (PVar "poleFactorOpt")) () (EApp (EApp (EApp (EApp (EApp (EVar "budgetReport") (EVar "base")) (EVar "commitMessage")) (EVar "uncosted")) (EVar "overClass")) (EVar "poleFactorOpt")))))))))))))))))
 (DData Private "BudgetArgs" () ((variant "BudgetArgs" (ConNamed (field "registry" (TyApp (TyCon "Option") (TyCon "String"))) (field "baseline" (TyApp (TyCon "Option") (TyCon "String"))) (field "commitMessage" (TyCon "String"))))) ())
 (DTypeSig false "budgetArgSpec" (TyCon "ArgSpec"))
-(DFunDef false "budgetArgSpec" () (EApp (EApp (EVar "spec") (ELit (LString "gate budget"))) (EListLit (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--registry")))) (ELit (LString "PATH"))) (ELit (LString "override the gate registry path"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--baseline")))) (ELit (LString "PATH"))) (ELit (LString "override the cost baseline path"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--commit-message")))) (ELit (LString "TEXT"))) (ELit (LString "commit message to scan for a Gate-Budget-Override trailer"))))))
+(DFunDef false "budgetArgSpec" () (EApp (EVar "withStrictDash") (EApp (EApp (EVar "spec") (ELit (LString "gate budget"))) (EListLit (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--registry")))) (ELit (LString "PATH"))) (ELit (LString "override the gate registry path"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--baseline")))) (ELit (LString "PATH"))) (ELit (LString "override the cost baseline path"))) (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--commit-message")))) (ELit (LString "TEXT"))) (ELit (LString "commit message to scan for a Gate-Budget-Override trailer")))))))
 (DTypeSig false "budgetMissingValue" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "budgetMissingValue" () (EListLit (ETuple (ELit (LString "--registry")) (ELit (LString "medaka gate budget: --registry needs a path"))) (ETuple (ELit (LString "--baseline")) (ELit (LString "medaka gate budget: --baseline needs a path"))) (ETuple (ELit (LString "--commit-message")) (ELit (LString "medaka gate budget: --commit-message needs a value")))))
 (DTypeSig false "budgetCommitMessage" (TyFun (TyCon "Args") (TyCon "String")))

@@ -494,8 +494,14 @@ silently checks nine verbs of sixteen while reading as complete is worse than th
   undeclared `-foo` exactly like `--foo`, e.g. `medaka check -foo` → `medaka check:
   unrecognized flag '-foo' (known: --json, --types, --allow-internal)`, rc 1. `fmt` and `run`
   already rejected single-dash unknowns their own way (unaffected); `new`'s leading-dash check
-  already covered it too (§5a). `codemod`'s per-codemod vocabulary and `gate`'s subcommand
-  arms are unchanged (out of this slice's scope, §4).
+  already covered it too (§5a). `codemod`'s per-codemod vocabulary is unchanged (out of scope).
+  `gate`'s six migrated subcommand arms (`list`, `run`, `verify`, `explain`, `reach`, `budget`)
+  were an S-3 regression this fixed left open — S-5 did not touch `gate_cmd.mdk` — and are now
+  DRAINED too (F1, review finding, #2355): the same `withStrictDash` opt-in restores the
+  base-behaviour floor there, e.g. `medaka gate reach -paths-from x --json` →
+  `unrecognized flag '-paths-from' (known: --registry, --root, --paths-from, --json; use
+  \`--\` before a path starting with '-')`, rc 1. `gate ci`/`gate balance` remain unmigrated
+  onto `args.mdk` entirely (residual issue #1, filed separately) and so stay out of scope here.
 
 ---
 
@@ -556,6 +562,7 @@ makes it more tempting, not less; note findings there rather than acting on them
 | **S-3** `S-exit-and-stream-floor` | §3 in full (2→1, one `(stderr, 1)` for the empty target set) and §4 in full (`run --json` channel purity by ROUTING not suppressing; `check-policy` and `codemod` stdout/stderr) |
 | **S-4** `S-help-truthfulness` | §5e and §5f's documentation rows (`notYet`, `snapshot --root`/`--worker`, the `check` and `doc` usage/help disagreements, the `build --release` cross-reference), plus the mechanical agreement gate. Import this document's census rather than re-deriving the flag rosters — that is the single-implementation obligation the contract names. |
 | **S-5** `S-cli-residual-filings` | anything above still marked ❌ after S-2..S-4, filed **per class** (one issue per conformance row, naming every offending verb), ranked by first-hour reachability |
+| **F1** `fix-gate-strictdash` | §5's single-dash-flags paragraph, `gate`'s six migrated subcommands (`list`, `run`, `verify`, `explain`, `reach`, `budget`) — the S-3 migration onto `args.mdk` silently dropped their single-dash rejection floor; `withStrictDash` restores it, matching S-5's fix for the eight `medaka_cli.mdk` verbs |
 
 ---
 

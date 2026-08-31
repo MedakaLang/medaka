@@ -88,7 +88,7 @@ Support files:
 `list`/`string`/`array`, `map`/`set` (ordered trees), `hash_map`/`hash_set` (mutable hash),
 `mut_array` (growable vector), `json`, `byteparser`/`bytebuilder`, `io.mdk` (ergonomic layer
 over `runtime.mdk` IO), `args` (one CLI argument parser — a verb's flag vocabulary is a VALUE
-that help, the `(known: …)` roster and the parser are all renderings of;
+that the `(known: …)` roster and the parser are unified renderings of;
 `docs/design/ARGS-DESIGN.md`).
 
 Import forms: `import map.{Map, get}` (selective), `import map.*` (all exported), `import

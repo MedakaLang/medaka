@@ -1,5 +1,5 @@
 # META
-source_lines=633
+source_lines=636
 stages=DESUGAR,MARK
 # SOURCE
 -- args.mdk — one command-line argument parser, as a first-order value
@@ -8,10 +8,12 @@ stages=DESUGAR,MARK
 -- ────────────
 -- See `docs/design/ARGS-DESIGN.md` for the decision and the rejected shapes.
 -- The one-line version: a flag specification is a VALUE (`List FlagSpec`
--- inside an `ArgSpec`), never a combinator tree.  `rosterOf`, `helpBlockOf`,
--- `unknownFlagMessage` and `parseArgs` are four renderings of that one value,
--- so a verb's help text, its `(known: …)` set and what it actually parses
--- cannot drift apart — that drift is the defect this module exists to close.
+-- inside an `ArgSpec`), never a combinator tree.  `rosterOf` and
+-- `unknownFlagMessage`/`parseArgs` are unified renderings of that one value,
+-- so a verb's `(known: …)` set and what it actually parses cannot drift
+-- apart — that drift is the defect this module exists to close.
+-- `helpBlockOf` and `flagLabel` exist as part of the frozen API surface
+-- (F1, review finding, #2355) but have no live consumer yet.
 --
 -- Why not an `optparse-applicative`-style free applicative: it needs
 -- existential quantification and Medaka has none (probed — the `b` in
@@ -57,9 +59,10 @@ public export data Visibility = Public | Internal
 
 {- | What happens to a `--`-shaped token that no `FlagSpec` claims.
 
-   `RejectUnknown` is the C2 default.  `CollectUnknown` exists for `codemod`,
-   whose flag vocabulary is per-codemod and therefore not statically knowable:
-   an unclaimed token is recorded in `given`, consuming the following token as
+   `RejectUnknown` is the C2 default.  `CollectUnknown` exists for a future
+   `codemod` migration (not yet done — F1, review finding, #2355), whose flag
+   vocabulary is per-codemod and therefore not statically knowable: an
+   unclaimed token is recorded in `given`, consuming the following token as
    its value. -}
 public export data Unknown = RejectUnknown | CollectUnknown
 

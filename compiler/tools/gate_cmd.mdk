@@ -46,6 +46,7 @@ import args.{
   switch,
   value,
   withTrailing,
+  withStrictDash,
   parseArgs,
   flag,
   flagValue,
@@ -696,14 +697,17 @@ missingValueOverride sp ((flg, custom)::rest) msg =
   else
     missingValueOverride sp rest msg
 
+-- `withStrictDash` (F1, review finding, #2355): an undeclared `-x` used to
+-- fall through as a positional pre-migration; base rejected any leading-`-`
+-- token here, so this restores that floor via the S-5 knob.
 listArgSpec : ArgSpec
-listArgSpec = spec
+listArgSpec = withStrictDash (spec
   "gate list"
   [
     switch ["--json"] "emit machine-readable JSON",
     switch ["--shards"] "print each entry's shard placement",
     value ["--registry"] "PATH" "override the gate registry path",
-  ]
+  ])
 
 listMissingValue : List (String, String)
 listMissingValue = [("--registry", "medaka gate list: --registry needs a path")]
@@ -1332,8 +1336,11 @@ data RunArgs =
       noStaleCheck : Bool,
     }
 
+-- `withStrictDash` (F1, review finding, #2355): an undeclared `-x` used to
+-- fall through as a positional pre-migration; base rejected any leading-`-`
+-- token here, so this restores that floor via the S-5 knob.
 runArgSpec : ArgSpec
-runArgSpec = spec
+runArgSpec = withStrictDash (spec
   "gate run"
   [
     switch ["--dry-run"] "print what would run, without running it",
@@ -1343,7 +1350,7 @@ runArgSpec = spec
     value ["--report"] "PATH" "write the timing report here",
     value ["--timeout"] "N" "per-gate timeout, in seconds",
     value ["--jobs"] "N" "worker count (reported only; gates run sequentially)",
-  ]
+  ])
 
 runMissingValue : List (String, String)
 runMissingValue = [
@@ -1901,10 +1908,13 @@ verifyOutput root gates shs = match verifyClasses root gates shs
 -- "print to stderr and exit 1" path is exactly what we want here too.
 data VerifyArgs = VerifyArgs { registry : Option String }
 
+-- `withStrictDash` (F1, review finding, #2355): an undeclared `-x` used to
+-- fall through as a positional pre-migration; base rejected any leading-`-`
+-- token here, so this restores that floor via the S-5 knob.
 verifyArgSpec : ArgSpec
-verifyArgSpec = spec
+verifyArgSpec = withStrictDash (spec
   "gate verify"
-  [value ["--registry"] "PATH" "override the gate registry path"]
+  [value ["--registry"] "PATH" "override the gate registry path"])
 
 verifyMissingValue : List (String, String)
 verifyMissingValue =
@@ -2164,13 +2174,16 @@ explainOutput path gates =
 data ExplainArgs =
   | ExplainArgs { registry : Option String, path : Option String, prose : Bool }
 
+-- `withStrictDash` (F1, review finding, #2355): an undeclared `-x` used to
+-- fall through as a positional pre-migration; base rejected any leading-`-`
+-- token here, so this restores that floor via the S-5 knob.
 explainArgSpec : ArgSpec
-explainArgSpec = spec
+explainArgSpec = withStrictDash (spec
   "gate explain"
   [
     value ["--registry"] "PATH" "override the gate registry path",
     switch ["--prose"] "print only the PROSE/NONDOC verdict",
-  ]
+  ])
 
 explainMissingValue : List (String, String)
 explainMissingValue =
@@ -2451,8 +2464,14 @@ data ReachArgs =
 -- promise would be worth nothing if a leading `-` could turn it into exit 1.
 -- `args.mdk`'s `TrailingAfterSeparator` is exactly this policy: it consumes
 -- the first bare `--` and hands everything after it back verbatim in `rest`.
+-- `withStrictDash` (F1, review finding, #2355): an undeclared `-x` used to
+-- fall through as a positional pre-migration; base rejected any leading-`-`
+-- token here, so this restores that floor via the S-5 knob. Composes with
+-- `withTrailing` below — the `--` escape hatch still hands anything after it
+-- to `rest` verbatim, dash-shaped or not; strictDash only governs tokens
+-- BEFORE the separator.
 reachArgSpec : ArgSpec
-reachArgSpec = withTrailing
+reachArgSpec = withStrictDash (withTrailing
   TrailingAfterSeparator
   (spec
     "gate reach"
@@ -2461,7 +2480,7 @@ reachArgSpec = withTrailing
       value ["--root"] "PATH" "override MEDAKA_ROOT",
       value ["--paths-from"] "PATH" "read changed paths from a file",
       switch ["--json"] "emit JSON",
-    ])
+    ]))
 
 -- `reach` is the tree's only verb whose unrecognized-flag sentence carries an
 -- extra hint after the shared `(known: …)` tail — appended here, on top of
@@ -4956,14 +4975,17 @@ data BudgetArgs =
       commitMessage : String,
     }
 
+-- `withStrictDash` (F1, review finding, #2355): an undeclared `-x` used to
+-- fall through as a positional pre-migration; base rejected any leading-`-`
+-- token here, so this restores that floor via the S-5 knob.
 budgetArgSpec : ArgSpec
-budgetArgSpec = spec
+budgetArgSpec = withStrictDash (spec
   "gate budget"
   [
     value ["--registry"] "PATH" "override the gate registry path",
     value ["--baseline"] "PATH" "override the cost baseline path",
     value ["--commit-message"] "TEXT" "commit message to scan for a Gate-Budget-Override trailer",
-  ]
+  ])
 
 budgetMissingValue : List (String, String)
 budgetMissingValue = [
