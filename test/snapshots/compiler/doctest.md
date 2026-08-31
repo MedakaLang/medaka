@@ -1,5 +1,5 @@
 # META
-source_lines=428
+source_lines=423
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted doctest extraction + running — port of lib/doctest.ml.
@@ -139,12 +139,7 @@ slen s = stringLength s
 substr3 : Int -> Int -> String -> String
 substr3 a b s = stringSlice a b s
 
--- True if `s` starts with `p`
-startsWith : String -> String -> Bool
-startsWith p s =
-  let lp = slen p
-  if slen s < lp then False else substr3 0 lp s == p
-
+-- startsWith → support/util.mdk (imported above).
 -- trim → stringTrim (support/util.mdk, imported above).
 
 -- splitNl → support/util.mdk (imported above; #242 dedup of the splitNl cluster).
@@ -468,8 +463,6 @@ isUse _ = False
 (DFunDef false "slen" ((PVar "s")) (EApp (EVar "stringLength") (EVar "s")))
 (DTypeSig false "substr3" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "substr3" ((PVar "a") (PVar "b") (PVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (EVar "a")) (EVar "b")) (EVar "s")))
-(DTypeSig false "startsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "startsWith" ((PVar "p") (PVar "s")) (EBlock (DoLet false false (PVar "lp") (EApp (EVar "slen") (EVar "p"))) (DoExpr (EIf (EBinOp "<" (EApp (EVar "slen") (EVar "s")) (EVar "lp")) (EVar "False") (EBinOp "==" (EApp (EApp (EApp (EVar "substr3") (ELit (LInt 0))) (EVar "lp")) (EVar "s")) (EVar "p"))))))
 (DTypeSig false "clText" (TyFun (TyTuple (TyCon "Int") (TyCon "String")) (TyCon "String")))
 (DFunDef false "clText" ((PTuple PWild (PVar "t"))) (EVar "t"))
 (DTypeSig false "clLine" (TyFun (TyTuple (TyCon "Int") (TyCon "String")) (TyCon "Int")))
@@ -612,8 +605,6 @@ isUse _ = False
 (DFunDef false "slen" ((PVar "s")) (EApp (EVar "stringLength") (EVar "s")))
 (DTypeSig false "substr3" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "substr3" ((PVar "a") (PVar "b") (PVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (EVar "a")) (EVar "b")) (EVar "s")))
-(DTypeSig false "startsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "startsWith" ((PVar "p") (PVar "s")) (EBlock (DoLet false false (PVar "lp") (EApp (EVar "slen") (EVar "p"))) (DoExpr (EIf (EBinOp "<" (EApp (EVar "slen") (EVar "s")) (EVar "lp")) (EVar "False") (EBinOp "==" (EApp (EApp (EApp (EVar "substr3") (ELit (LInt 0))) (EVar "lp")) (EVar "s")) (EVar "p"))))))
 (DTypeSig false "clText" (TyFun (TyTuple (TyCon "Int") (TyCon "String")) (TyCon "String")))
 (DFunDef false "clText" ((PTuple PWild (PVar "t"))) (EVar "t"))
 (DTypeSig false "clLine" (TyFun (TyTuple (TyCon "Int") (TyCon "String")) (TyCon "Int")))

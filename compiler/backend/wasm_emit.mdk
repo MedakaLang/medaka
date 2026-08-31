@@ -230,6 +230,7 @@ import support.util.{
   maxI,
   noneHeadTag,
   dedupBy,
+  startsWith,
 }
 import ir.core_ir_lower.{ifaceIdsAtTag, ifaceMethodArityKey, ifaceWordOfKey}
 import backend.trmc_analysis.{
@@ -5146,22 +5147,17 @@ hexDigitW d =
 -- label" ref, which this lazily-assembled emitter cannot thread reliably (the strings
 -- are forced at final assembly, long after any setRef).
 isFtSentinel : String -> Bool
-isFtSentinel x = x == "__fallthrough__" || startsWithStr x ftPrefix
+isFtSentinel x = x == "__fallthrough__" || startsWith ftPrefix x
 
 ftSentinelInstrs : String -> List String
 ftSentinelInstrs x =
-  if startsWithStr x ftPrefix then
+  if startsWith ftPrefix x then
     ["br " ++ dropPrefix x ftPrefix]
   else
     ["unreachable"]
 
 emitFtSentinel : String -> Option (List String)
 emitFtSentinel x = if isFtSentinel x then Some (ftSentinelInstrs x) else None
-
--- prefix test / drop (compiler-local; no-stdlib).
-startsWithStr : String -> String -> Bool
-startsWithStr s p = stringLength s >= stringLength p
-  && stringSlice 0 (stringLength p) s == p
 
 dropPrefix : String -> String -> String
 dropPrefix s p = stringSlice (stringLength p) (stringLength s) s
@@ -6943,7 +6939,7 @@ wTrmcImplTry prog method headTag key arity clauses =
     None
 
 wIsDictParamName : String -> Bool
-wIsDictParamName x = startsWithStr x "$dict"
+wIsDictParamName x = startsWith "$dict" x
 
 -- the fn's distinct (ctorName, selfFieldIdx) leaf-ctor pairs, in first-seen
 -- clause/leaf order (deterministic).  Cons-tail leaves report ("Cons", 1).
@@ -7191,7 +7187,7 @@ wDispIsRoot (DispGroup root _) name = root == name
 -- `impl_<tag>_<method>` on both backends).
 wTmcMarker : String -> String -> String
 wTmcMarker sym mode =
-  let name = if startsWithStr sym "mdk_" then dropPrefix sym "mdk_" else sym
+  let name = if startsWith "mdk_" sym then dropPrefix sym "mdk_" else sym
   "  ;; tmc: \{name} \{mode}"
 
 -- emit a group ROOT: the reset wrapper `$root` (zero the dest globals, return_call the
@@ -8883,7 +8879,7 @@ tupleCtorName : Int -> String
 tupleCtorName n = "Tup" ++ intToString n
 
 isTupleCtorName : String -> Bool
-isTupleCtorName name = startsWithStr name "Tup"
+isTupleCtorName name = startsWith "Tup" name
   && allDigitsFrom (stringToChars name) 3
 
 -- the synthetic type a synthetic ctor belongs to.
@@ -9051,7 +9047,7 @@ ctorsOfType prog ty = ctorsOfTypeDispatchW (ctorsOfTypeUser prog) ty
 
 -- a synthetic tuple type name "$Tuple<n>" and its arity.
 isTupleType : String -> Bool
-isTupleType ty = startsWithStr ty "$Tuple"
+isTupleType ty = startsWith "$Tuple" ty
 
 tupleTypeArity : String -> Int
 tupleTypeArity ty = trailingIntOf ty
@@ -9435,7 +9431,7 @@ gname n =
   -- The `__wparg<digits>` family is reserved for synthetic positional fn params
   -- (synthParams).  A source var spelled identically would collide with a sibling
   -- positional param's wasm local — escape it so user vars stay distinct.
-  if startsWithStr n "__wparg" && allDigitsFrom (stringToChars n) 7 then "u__" ++ n
+  if startsWith "__wparg" n && allDigitsFrom (stringToChars n) 7 then "u__" ++ n
   else n
 
 notIn : List String -> String -> Bool

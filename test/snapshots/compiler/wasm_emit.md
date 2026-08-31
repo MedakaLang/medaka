@@ -1,5 +1,5 @@
 # META
-source_lines=9541
+source_lines=9537
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-prefer-assign-op
@@ -234,6 +234,7 @@ import support.util.{
   maxI,
   noneHeadTag,
   dedupBy,
+  startsWith,
 }
 import ir.core_ir_lower.{ifaceIdsAtTag, ifaceMethodArityKey, ifaceWordOfKey}
 import backend.trmc_analysis.{
@@ -5150,22 +5151,17 @@ hexDigitW d =
 -- label" ref, which this lazily-assembled emitter cannot thread reliably (the strings
 -- are forced at final assembly, long after any setRef).
 isFtSentinel : String -> Bool
-isFtSentinel x = x == "__fallthrough__" || startsWithStr x ftPrefix
+isFtSentinel x = x == "__fallthrough__" || startsWith ftPrefix x
 
 ftSentinelInstrs : String -> List String
 ftSentinelInstrs x =
-  if startsWithStr x ftPrefix then
+  if startsWith ftPrefix x then
     ["br " ++ dropPrefix x ftPrefix]
   else
     ["unreachable"]
 
 emitFtSentinel : String -> Option (List String)
 emitFtSentinel x = if isFtSentinel x then Some (ftSentinelInstrs x) else None
-
--- prefix test / drop (compiler-local; no-stdlib).
-startsWithStr : String -> String -> Bool
-startsWithStr s p = stringLength s >= stringLength p
-  && stringSlice 0 (stringLength p) s == p
 
 dropPrefix : String -> String -> String
 dropPrefix s p = stringSlice (stringLength p) (stringLength s) s
@@ -6947,7 +6943,7 @@ wTrmcImplTry prog method headTag key arity clauses =
     None
 
 wIsDictParamName : String -> Bool
-wIsDictParamName x = startsWithStr x "$dict"
+wIsDictParamName x = startsWith "$dict" x
 
 -- the fn's distinct (ctorName, selfFieldIdx) leaf-ctor pairs, in first-seen
 -- clause/leaf order (deterministic).  Cons-tail leaves report ("Cons", 1).
@@ -7195,7 +7191,7 @@ wDispIsRoot (DispGroup root _) name = root == name
 -- `impl_<tag>_<method>` on both backends).
 wTmcMarker : String -> String -> String
 wTmcMarker sym mode =
-  let name = if startsWithStr sym "mdk_" then dropPrefix sym "mdk_" else sym
+  let name = if startsWith "mdk_" sym then dropPrefix sym "mdk_" else sym
   "  ;; tmc: \{name} \{mode}"
 
 -- emit a group ROOT: the reset wrapper `$root` (zero the dest globals, return_call the
@@ -8887,7 +8883,7 @@ tupleCtorName : Int -> String
 tupleCtorName n = "Tup" ++ intToString n
 
 isTupleCtorName : String -> Bool
-isTupleCtorName name = startsWithStr name "Tup"
+isTupleCtorName name = startsWith "Tup" name
   && allDigitsFrom (stringToChars name) 3
 
 -- the synthetic type a synthetic ctor belongs to.
@@ -9055,7 +9051,7 @@ ctorsOfType prog ty = ctorsOfTypeDispatchW (ctorsOfTypeUser prog) ty
 
 -- a synthetic tuple type name "$Tuple<n>" and its arity.
 isTupleType : String -> Bool
-isTupleType ty = startsWithStr ty "$Tuple"
+isTupleType ty = startsWith "$Tuple" ty
 
 tupleTypeArity : String -> Int
 tupleTypeArity ty = trailingIntOf ty
@@ -9439,7 +9435,7 @@ gname n =
   -- The `__wparg<digits>` family is reserved for synthetic positional fn params
   -- (synthParams).  A source var spelled identically would collide with a sibling
   -- positional param's wasm local — escape it so user vars stay distinct.
-  if startsWithStr n "__wparg" && allDigitsFrom (stringToChars n) 7 then "u__" ++ n
+  if startsWith "__wparg" n && allDigitsFrom (stringToChars n) 7 then "u__" ++ n
   else n
 
 notIn : List String -> String -> Bool
@@ -9548,7 +9544,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CField" true))))
 (DUse false (UseGroup ("list") ((mem "replicate" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omEmpty" false))))
-(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false) (mem "noneHeadTag" false) (mem "dedupBy" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false) (mem "noneHeadTag" false) (mem "dedupBy" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ifaceIdsAtTag" false) (mem "ifaceMethodArityKey" false) (mem "ifaceWordOfKey" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "trmcEligible" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailIsCons" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "detectDispatchGroups" false) (mem "dispSpineParts" false) (mem "dispIsSatRootCall" false) (mem "dictUniformClauses" false) (mem "dropFirstN" false) (mem "clauseArityOf" false) (mem "clauseBodyOf" false) (mem "armBody" false) (mem "lastStmtExpr" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "dictTag" false) (mem "hashName" false) (mem "injectiveIdent" false))))
@@ -10676,13 +10672,11 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "hexDigitW" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "hexDigitW" ((PVar "d")) (EIf (EBinOp "<" (EVar "d") (ELit (LInt 10))) (EApp (EVar "intToString") (EVar "d")) (EIf (EBinOp "==" (EVar "d") (ELit (LInt 10))) (ELit (LString "a")) (EIf (EBinOp "==" (EVar "d") (ELit (LInt 11))) (ELit (LString "b")) (EIf (EBinOp "==" (EVar "d") (ELit (LInt 12))) (ELit (LString "c")) (EIf (EBinOp "==" (EVar "d") (ELit (LInt 13))) (ELit (LString "d")) (EIf (EBinOp "==" (EVar "d") (ELit (LInt 14))) (ELit (LString "e")) (ELit (LString "f")))))))))
 (DTypeSig false "isFtSentinel" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isFtSentinel" ((PVar "x")) (EBinOp "||" (EBinOp "==" (EVar "x") (ELit (LString "__fallthrough__"))) (EApp (EApp (EVar "startsWithStr") (EVar "x")) (EVar "ftPrefix"))))
+(DFunDef false "isFtSentinel" ((PVar "x")) (EBinOp "||" (EBinOp "==" (EVar "x") (ELit (LString "__fallthrough__"))) (EApp (EApp (EVar "startsWith") (EVar "ftPrefix")) (EVar "x"))))
 (DTypeSig false "ftSentinelInstrs" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "ftSentinelInstrs" ((PVar "x")) (EIf (EApp (EApp (EVar "startsWithStr") (EVar "x")) (EVar "ftPrefix")) (EListLit (EBinOp "++" (ELit (LString "br ")) (EApp (EApp (EVar "dropPrefix") (EVar "x")) (EVar "ftPrefix")))) (EListLit (ELit (LString "unreachable")))))
+(DFunDef false "ftSentinelInstrs" ((PVar "x")) (EIf (EApp (EApp (EVar "startsWith") (EVar "ftPrefix")) (EVar "x")) (EListLit (EBinOp "++" (ELit (LString "br ")) (EApp (EApp (EVar "dropPrefix") (EVar "x")) (EVar "ftPrefix")))) (EListLit (ELit (LString "unreachable")))))
 (DTypeSig false "emitFtSentinel" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "emitFtSentinel" ((PVar "x")) (EIf (EApp (EVar "isFtSentinel") (EVar "x")) (EApp (EVar "Some") (EApp (EVar "ftSentinelInstrs") (EVar "x"))) (EVar "None")))
-(DTypeSig false "startsWithStr" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "startsWithStr" ((PVar "s") (PVar "p")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "stringLength") (EVar "s")) (EApp (EVar "stringLength") (EVar "p"))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "p"))) (EVar "s")) (EVar "p"))))
 (DTypeSig false "dropPrefix" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "dropPrefix" ((PVar "s") (PVar "p")) (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "p"))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")))
 (DTypeSig false "emitVarRef" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
@@ -11078,7 +11072,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "wTrmcImplTry" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))))))
 (DFunDef false "wTrmcImplTry" ((PVar "prog") (PVar "method") (PVar "headTag") (PVar "key") (PVar "arity") (PVar "clauses")) (EBlock (DoLet false false (PVar "self") (EApp (EApp (EVar "SelfByMethod") (EVar "method")) (EVar "headTag"))) (DoLet false false (PVar "pairs") (EApp (EApp (EVar "map") (EVar "clauseToPair")) (EVar "clauses"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp ">" (EVar "arity") (ELit (LInt 0))) (EApp (EVar "dictUniformClauses") (EVar "clauses"))) (EApp (EApp (EApp (EApp (EApp (EVar "trmcEligible") (ELam ((PVar "c")) (EApp (EApp (EVar "isCtor") (EVar "prog")) (EVar "c")))) (ELam ((PVar "c")) (EApp (EApp (EVar "ctorArity") (EVar "prog")) (EVar "c")))) (EVar "self")) (EVar "arity")) (EVar "pairs"))) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitWasmTrmcCore") (EVar "prog")) (EApp (EApp (EApp (EVar "implFnSym") (EVar "prog")) (EVar "key")) (EVar "method"))) (EVar "self")) (EApp (EApp (EApp (EVar "implFnSym") (EVar "prog")) (EVar "key")) (EVar "method"))) (EVar "arity")) (EVar "clauses")) (EApp (EApp (EApp (EApp (EVar "wTrmcCtorSet") (EVar "prog")) (EVar "self")) (EVar "arity")) (EVar "pairs")))) (EVar "None")))))
 (DTypeSig false "wIsDictParamName" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "wIsDictParamName" ((PVar "x")) (EApp (EApp (EVar "startsWithStr") (EVar "x")) (ELit (LString "$dict"))))
+(DFunDef false "wIsDictParamName" ((PVar "x")) (EApp (EApp (EVar "startsWith") (ELit (LString "$dict"))) (EVar "x")))
 (DTypeSig false "wTrmcCtorSet" (TyFun (TyCon "Prog") (TyFun (TyCon "SelfRef") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))))
 (DFunDef false "wTrmcCtorSet" ((PVar "prog") (PVar "self") (PVar "arity") (PVar "pairs")) (EApp (EApp (EVar "wTrmcDedupCtors") (EApp (EApp (EVar "flatMap") (ELam ((PVar "pr")) (EApp (EApp (EApp (EApp (EVar "wTrmcCtorTailsOf") (EVar "prog")) (EVar "self")) (EVar "arity")) (EApp (EVar "snd") (EVar "pr"))))) (EVar "pairs"))) (EListLit)))
 (DTypeSig false "wTrmcDedupCtors" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))
@@ -11125,7 +11119,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "wDispIsRoot" (TyFun (TyCon "DispGroup") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "wDispIsRoot" ((PCon "DispGroup" (PVar "root") PWild) (PVar "name")) (EBinOp "==" (EVar "root") (EVar "name")))
 (DTypeSig false "wTmcMarker" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "wTmcMarker" ((PVar "sym") (PVar "mode")) (EBlock (DoLet false false (PVar "name") (EIf (EApp (EApp (EVar "startsWithStr") (EVar "sym")) (ELit (LString "mdk_"))) (EApp (EApp (EVar "dropPrefix") (EVar "sym")) (ELit (LString "mdk_"))) (EVar "sym"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ;; tmc: ")) (EApp (EVar "display") (EVar "name"))) (ELit (LString " "))) (EApp (EVar "display") (EVar "mode"))) (ELit (LString ""))))))
+(DFunDef false "wTmcMarker" ((PVar "sym") (PVar "mode")) (EBlock (DoLet false false (PVar "name") (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "mdk_"))) (EVar "sym")) (EApp (EApp (EVar "dropPrefix") (EVar "sym")) (ELit (LString "mdk_"))) (EVar "sym"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ;; tmc: ")) (EApp (EVar "display") (EVar "name"))) (ELit (LString " "))) (EApp (EVar "display") (EVar "mode"))) (ELit (LString ""))))))
 (DTypeSig false "emitWDispRoot" (TyFun (TyCon "Prog") (TyFun (TyCon "DispGroup") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "emitWDispRoot" ((PVar "prog") (PVar "grp") (PVar "arity") (PVar "clauses")) (EBlock (DoLet false false (PVar "name") (EApp (EVar "dispRootOf") (EVar "grp"))) (DoLet false false (PVar "params") (EApp (EVar "synthParams") (EVar "arity"))) (DoLet false false (PVar "loopName") (EApp (EVar "wDispLoopName") (EVar "name"))) (DoLet false false (PVar "resetWrapper") (EApp (EApp (EApp (EApp (EVar "wDispResetWrapper") (EVar "name")) (EVar "loopName")) (EVar "params")) (EVar "arity"))) (DoLet false false (PVar "inner") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitWDispMemberFn") (EVar "prog")) (EVar "grp")) (EVar "loopName")) (EVar "name")) (EVar "arity")) (EVar "clauses"))) (DoExpr (EBinOp "::" (EApp (EApp (EVar "wTmcMarker") (EVar "name")) (ELit (LString "group-root"))) (EBinOp "++" (EVar "resetWrapper") (EVar "inner"))))))
 (DTypeSig false "wDispResetWrapper" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
@@ -11486,7 +11480,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "tupleCtorName" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "tupleCtorName" ((PVar "n")) (EBinOp "++" (ELit (LString "Tup")) (EApp (EVar "intToString") (EVar "n"))))
 (DTypeSig false "isTupleCtorName" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isTupleCtorName" ((PVar "name")) (EBinOp "&&" (EApp (EApp (EVar "startsWithStr") (EVar "name")) (ELit (LString "Tup"))) (EApp (EApp (EVar "allDigitsFrom") (EApp (EVar "stringToChars") (EVar "name"))) (ELit (LInt 3)))))
+(DFunDef false "isTupleCtorName" ((PVar "name")) (EBinOp "&&" (EApp (EApp (EVar "startsWith") (ELit (LString "Tup"))) (EVar "name")) (EApp (EApp (EVar "allDigitsFrom") (EApp (EVar "stringToChars") (EVar "name"))) (ELit (LInt 3)))))
 (DTypeSig false "syntheticCtorType" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "syntheticCtorType" ((PLit (LString "Cons"))) (ELit (LString "List")))
 (DFunDef false "syntheticCtorType" ((PLit (LString "Nil"))) (ELit (LString "List")))
@@ -11535,7 +11529,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "ctorsOfType" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "ctorsOfType" ((PVar "prog") (PVar "ty")) (EApp (EApp (EVar "ctorsOfTypeDispatchW") (EApp (EVar "ctorsOfTypeUser") (EVar "prog"))) (EVar "ty")))
 (DTypeSig false "isTupleType" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isTupleType" ((PVar "ty")) (EApp (EApp (EVar "startsWithStr") (EVar "ty")) (ELit (LString "$Tuple"))))
+(DFunDef false "isTupleType" ((PVar "ty")) (EApp (EApp (EVar "startsWith") (ELit (LString "$Tuple"))) (EVar "ty")))
 (DTypeSig false "tupleTypeArity" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "tupleTypeArity" ((PVar "ty")) (EApp (EVar "trailingIntOf") (EVar "ty")))
 (DTypeSig false "ctorsOfTypeUser" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
@@ -11679,7 +11673,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "gname" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "gname" ((PLit (LString "self"))) (ELit (LString "u__self")))
 (DFunDef false "gname" ((PLit (LString "args"))) (ELit (LString "u__args")))
-(DFunDef false "gname" ((PVar "n")) (EIf (EBinOp "&&" (EApp (EApp (EVar "startsWithStr") (EVar "n")) (ELit (LString "__wparg"))) (EApp (EApp (EVar "allDigitsFrom") (EApp (EVar "stringToChars") (EVar "n"))) (ELit (LInt 7)))) (EBinOp "++" (ELit (LString "u__")) (EVar "n")) (EVar "n")))
+(DFunDef false "gname" ((PVar "n")) (EIf (EBinOp "&&" (EApp (EApp (EVar "startsWith") (ELit (LString "__wparg"))) (EVar "n")) (EApp (EApp (EVar "allDigitsFrom") (EApp (EVar "stringToChars") (EVar "n"))) (ELit (LInt 7)))) (EBinOp "++" (ELit (LString "u__")) (EVar "n")) (EVar "n")))
 (DTypeSig false "notIn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "notIn" ((PVar "xs") (PVar "x")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "x")) (EVar "xs"))))
 (DTypeSig false "dedupKeep" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -11754,7 +11748,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CField" true))))
 (DUse false (UseGroup ("list") ((mem "replicate" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omEmpty" false))))
-(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false) (mem "noneHeadTag" false) (mem "dedupBy" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false) (mem "noneHeadTag" false) (mem "dedupBy" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ifaceIdsAtTag" false) (mem "ifaceMethodArityKey" false) (mem "ifaceWordOfKey" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "trmcEligible" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailIsCons" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "detectDispatchGroups" false) (mem "dispSpineParts" false) (mem "dispIsSatRootCall" false) (mem "dictUniformClauses" false) (mem "dropFirstN" false) (mem "clauseArityOf" false) (mem "clauseBodyOf" false) (mem "armBody" false) (mem "lastStmtExpr" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "dictTag" false) (mem "hashName" false) (mem "injectiveIdent" false))))
@@ -12882,13 +12876,11 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "hexDigitW" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "hexDigitW" ((PVar "d")) (EIf (EBinOp "<" (EVar "d") (ELit (LInt 10))) (EApp (EVar "intToString") (EVar "d")) (EIf (EBinOp "==" (EVar "d") (ELit (LInt 10))) (ELit (LString "a")) (EIf (EBinOp "==" (EVar "d") (ELit (LInt 11))) (ELit (LString "b")) (EIf (EBinOp "==" (EVar "d") (ELit (LInt 12))) (ELit (LString "c")) (EIf (EBinOp "==" (EVar "d") (ELit (LInt 13))) (ELit (LString "d")) (EIf (EBinOp "==" (EVar "d") (ELit (LInt 14))) (ELit (LString "e")) (ELit (LString "f")))))))))
 (DTypeSig false "isFtSentinel" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isFtSentinel" ((PVar "x")) (EBinOp "||" (EBinOp "==" (EVar "x") (ELit (LString "__fallthrough__"))) (EApp (EApp (EVar "startsWithStr") (EVar "x")) (EVar "ftPrefix"))))
+(DFunDef false "isFtSentinel" ((PVar "x")) (EBinOp "||" (EBinOp "==" (EVar "x") (ELit (LString "__fallthrough__"))) (EApp (EApp (EVar "startsWith") (EVar "ftPrefix")) (EVar "x"))))
 (DTypeSig false "ftSentinelInstrs" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "ftSentinelInstrs" ((PVar "x")) (EIf (EApp (EApp (EVar "startsWithStr") (EVar "x")) (EVar "ftPrefix")) (EListLit (EBinOp "++" (ELit (LString "br ")) (EApp (EApp (EVar "dropPrefix") (EVar "x")) (EVar "ftPrefix")))) (EListLit (ELit (LString "unreachable")))))
+(DFunDef false "ftSentinelInstrs" ((PVar "x")) (EIf (EApp (EApp (EVar "startsWith") (EVar "ftPrefix")) (EVar "x")) (EListLit (EBinOp "++" (ELit (LString "br ")) (EApp (EApp (EVar "dropPrefix") (EVar "x")) (EVar "ftPrefix")))) (EListLit (ELit (LString "unreachable")))))
 (DTypeSig false "emitFtSentinel" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "emitFtSentinel" ((PVar "x")) (EIf (EApp (EVar "isFtSentinel") (EVar "x")) (EApp (EVar "Some") (EApp (EVar "ftSentinelInstrs") (EVar "x"))) (EVar "None")))
-(DTypeSig false "startsWithStr" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "startsWithStr" ((PVar "s") (PVar "p")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "stringLength") (EVar "s")) (EApp (EVar "stringLength") (EVar "p"))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "p"))) (EVar "s")) (EVar "p"))))
 (DTypeSig false "dropPrefix" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "dropPrefix" ((PVar "s") (PVar "p")) (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "p"))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")))
 (DTypeSig false "emitVarRef" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
@@ -13284,7 +13276,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "wTrmcImplTry" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))))))
 (DFunDef false "wTrmcImplTry" ((PVar "prog") (PVar "method") (PVar "headTag") (PVar "key") (PVar "arity") (PVar "clauses")) (EBlock (DoLet false false (PVar "self") (EApp (EApp (EVar "SelfByMethod") (EVar "method")) (EVar "headTag"))) (DoLet false false (PVar "pairs") (EApp (EApp (EMethodRef "map") (EVar "clauseToPair")) (EVar "clauses"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp ">" (EVar "arity") (ELit (LInt 0))) (EApp (EVar "dictUniformClauses") (EVar "clauses"))) (EApp (EApp (EApp (EApp (EApp (EVar "trmcEligible") (ELam ((PVar "c")) (EApp (EApp (EVar "isCtor") (EVar "prog")) (EVar "c")))) (ELam ((PVar "c")) (EApp (EApp (EVar "ctorArity") (EVar "prog")) (EVar "c")))) (EVar "self")) (EVar "arity")) (EVar "pairs"))) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitWasmTrmcCore") (EVar "prog")) (EApp (EApp (EApp (EVar "implFnSym") (EVar "prog")) (EVar "key")) (EVar "method"))) (EVar "self")) (EApp (EApp (EApp (EVar "implFnSym") (EVar "prog")) (EVar "key")) (EVar "method"))) (EVar "arity")) (EVar "clauses")) (EApp (EApp (EApp (EApp (EVar "wTrmcCtorSet") (EVar "prog")) (EVar "self")) (EVar "arity")) (EVar "pairs")))) (EVar "None")))))
 (DTypeSig false "wIsDictParamName" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "wIsDictParamName" ((PVar "x")) (EApp (EApp (EVar "startsWithStr") (EVar "x")) (ELit (LString "$dict"))))
+(DFunDef false "wIsDictParamName" ((PVar "x")) (EApp (EApp (EVar "startsWith") (ELit (LString "$dict"))) (EVar "x")))
 (DTypeSig false "wTrmcCtorSet" (TyFun (TyCon "Prog") (TyFun (TyCon "SelfRef") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))))
 (DFunDef false "wTrmcCtorSet" ((PVar "prog") (PVar "self") (PVar "arity") (PVar "pairs")) (EApp (EApp (EVar "wTrmcDedupCtors") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "pr")) (EApp (EApp (EApp (EApp (EVar "wTrmcCtorTailsOf") (EVar "prog")) (EVar "self")) (EVar "arity")) (EApp (EVar "snd") (EVar "pr"))))) (EVar "pairs"))) (EListLit)))
 (DTypeSig false "wTrmcDedupCtors" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))
@@ -13331,7 +13323,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "wDispIsRoot" (TyFun (TyCon "DispGroup") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "wDispIsRoot" ((PCon "DispGroup" (PVar "root") PWild) (PVar "name")) (EBinOp "==" (EVar "root") (EVar "name")))
 (DTypeSig false "wTmcMarker" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "wTmcMarker" ((PVar "sym") (PVar "mode")) (EBlock (DoLet false false (PVar "name") (EIf (EApp (EApp (EVar "startsWithStr") (EVar "sym")) (ELit (LString "mdk_"))) (EApp (EApp (EVar "dropPrefix") (EVar "sym")) (ELit (LString "mdk_"))) (EVar "sym"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ;; tmc: ")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EVar "mode"))) (ELit (LString ""))))))
+(DFunDef false "wTmcMarker" ((PVar "sym") (PVar "mode")) (EBlock (DoLet false false (PVar "name") (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "mdk_"))) (EVar "sym")) (EApp (EApp (EVar "dropPrefix") (EVar "sym")) (ELit (LString "mdk_"))) (EVar "sym"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ;; tmc: ")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EVar "mode"))) (ELit (LString ""))))))
 (DTypeSig false "emitWDispRoot" (TyFun (TyCon "Prog") (TyFun (TyCon "DispGroup") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "emitWDispRoot" ((PVar "prog") (PVar "grp") (PVar "arity") (PVar "clauses")) (EBlock (DoLet false false (PVar "name") (EApp (EVar "dispRootOf") (EVar "grp"))) (DoLet false false (PVar "params") (EApp (EVar "synthParams") (EVar "arity"))) (DoLet false false (PVar "loopName") (EApp (EVar "wDispLoopName") (EVar "name"))) (DoLet false false (PVar "resetWrapper") (EApp (EApp (EApp (EApp (EVar "wDispResetWrapper") (EVar "name")) (EVar "loopName")) (EVar "params")) (EVar "arity"))) (DoLet false false (PVar "inner") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitWDispMemberFn") (EVar "prog")) (EVar "grp")) (EVar "loopName")) (EVar "name")) (EVar "arity")) (EVar "clauses"))) (DoExpr (EBinOp "::" (EApp (EApp (EVar "wTmcMarker") (EVar "name")) (ELit (LString "group-root"))) (EBinOp "++" (EVar "resetWrapper") (EVar "inner"))))))
 (DTypeSig false "wDispResetWrapper" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
@@ -13692,7 +13684,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "tupleCtorName" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "tupleCtorName" ((PVar "n")) (EBinOp "++" (ELit (LString "Tup")) (EApp (EVar "intToString") (EVar "n"))))
 (DTypeSig false "isTupleCtorName" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isTupleCtorName" ((PVar "name")) (EBinOp "&&" (EApp (EApp (EVar "startsWithStr") (EVar "name")) (ELit (LString "Tup"))) (EApp (EApp (EVar "allDigitsFrom") (EApp (EVar "stringToChars") (EVar "name"))) (ELit (LInt 3)))))
+(DFunDef false "isTupleCtorName" ((PVar "name")) (EBinOp "&&" (EApp (EApp (EVar "startsWith") (ELit (LString "Tup"))) (EVar "name")) (EApp (EApp (EVar "allDigitsFrom") (EApp (EVar "stringToChars") (EVar "name"))) (ELit (LInt 3)))))
 (DTypeSig false "syntheticCtorType" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "syntheticCtorType" ((PLit (LString "Cons"))) (ELit (LString "List")))
 (DFunDef false "syntheticCtorType" ((PLit (LString "Nil"))) (ELit (LString "List")))
@@ -13741,7 +13733,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "ctorsOfType" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "ctorsOfType" ((PVar "prog") (PVar "ty")) (EApp (EApp (EVar "ctorsOfTypeDispatchW") (EApp (EVar "ctorsOfTypeUser") (EVar "prog"))) (EVar "ty")))
 (DTypeSig false "isTupleType" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isTupleType" ((PVar "ty")) (EApp (EApp (EVar "startsWithStr") (EVar "ty")) (ELit (LString "$Tuple"))))
+(DFunDef false "isTupleType" ((PVar "ty")) (EApp (EApp (EVar "startsWith") (ELit (LString "$Tuple"))) (EVar "ty")))
 (DTypeSig false "tupleTypeArity" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "tupleTypeArity" ((PVar "ty")) (EApp (EVar "trailingIntOf") (EVar "ty")))
 (DTypeSig false "ctorsOfTypeUser" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
@@ -13885,7 +13877,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "gname" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "gname" ((PLit (LString "self"))) (ELit (LString "u__self")))
 (DFunDef false "gname" ((PLit (LString "args"))) (ELit (LString "u__args")))
-(DFunDef false "gname" ((PVar "n")) (EIf (EBinOp "&&" (EApp (EApp (EVar "startsWithStr") (EVar "n")) (ELit (LString "__wparg"))) (EApp (EApp (EVar "allDigitsFrom") (EApp (EVar "stringToChars") (EVar "n"))) (ELit (LInt 7)))) (EBinOp "++" (ELit (LString "u__")) (EVar "n")) (EVar "n")))
+(DFunDef false "gname" ((PVar "n")) (EIf (EBinOp "&&" (EApp (EApp (EVar "startsWith") (ELit (LString "__wparg"))) (EVar "n")) (EApp (EApp (EVar "allDigitsFrom") (EApp (EVar "stringToChars") (EVar "n"))) (ELit (LInt 7)))) (EBinOp "++" (ELit (LString "u__")) (EVar "n")) (EVar "n")))
 (DTypeSig false "notIn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "notIn" ((PVar "xs") (PVar "x")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "x")) (EVar "xs"))))
 (DTypeSig false "dedupKeep" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
