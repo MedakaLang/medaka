@@ -676,6 +676,35 @@ while IFS= read -r f; do
       # typecheck.mdk's usesImplDict decides whether a dict param exists at all
       # (the #1648 half), so a types/* change can move it without touching backend/*.
       add 'diff_compiler_call_arity'
+      # S-1-perf-gates-on-pr (#2330/#2262): check_ir_floor measures cachegrind Ir
+      # for `medaka check` over the full lex->parse->resolve->typecheck pipeline —
+      # typecheck.mdk is squarely in what it guards.
+      #
+      # ⚠️ THIS LINE IS REDUNDANT TODAY AND IS KEPT ONLY AS A PIN (2026-08-31, F-1,
+      # end-of-sprint review finding S2-3). It shipped with the claim that
+      # check_ir_floor "was reaching zero compiler-source arms before this change";
+      # THAT CLAIM IS FALSE and is removed here. `add 'diff_compiler_check*'` at the
+      # head of this same arm ALREADY glob-matches diff_compiler_check_ir_floor, and
+      # so do the compiler/frontend/{resolve,marker}.mdk, compiler/driver/* and
+      # compiler/tools/* arms. Measured by neutralizing this line and re-deriving:
+      # the gate is selected either way, and a sweep of all 58 non-support,
+      # non-entries compiler/*.mdk files with this line disabled still reaches
+      # check_ir_floor from 21 of them.
+      #   Reproduce: comment this line out, then
+      #     echo compiler/types/typecheck.mdk > /tmp/chg.txt
+      #     PREFLIGHT_CHANGED_FILE=/tmp/chg.txt PREFLIGHT_DRY=1 sh test/preflight.sh \
+      #       | grep check_ir_floor
+      # (The general form of the false claim — the contract's F2, "no perf gate is
+      # reachable from a compiler-source PR" — was derived by grepping gate NAMES,
+      # which is blind to glob matches. Its two SIBLINGS in this commit are sound:
+      # ir_size on compiler/ir/* and closure_alloc + ir_size on compiler/backend/*
+      # each reach ZERO compiler-source arms when neutralized, verified by the same
+      # sweep. That is S-1's real new coverage.)
+      #
+      # Kept rather than deleted for the same reason compiler/tools/gate_cost.mdk's
+      # arm below re-states `diff_compiler_check*` explicitly: a later narrowing of
+      # this arm's glob must not silently drop the gate. It costs one dedup'd entry.
+      add 'diff_compiler_check_ir_floor'
       # #2186: a compiler/types/* change can silently drain a must-fail pin
       # (an ill-typed program that used to be rejected starts being accepted)
       # without touching diff_compiler_must_fail.sh's own sources or corpus
@@ -726,7 +755,11 @@ while IFS= read -r f; do
       add 'diff_compiler_eval*'; add 'diff_compiler_snapshot*'; add 'diff_compiler_core_ir*'
       add 'diff_compiler_ported'; add 'diff_compiler_test'; add 'diff_compiler_capability_matrix'
       add 'diff_compiler_engines'
-      add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'; add 'diff_compiler_prelude_shadow_census' ;;
+      add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'; add 'diff_compiler_prelude_shadow_census'
+      # F-S3-6/F-2-mechanical-fixes: gates.toml now declares compiler/eval/eval.mdk
+      # a source of diff_compiler_check_ir_floor (it grades the `run`/`test` verbs,
+      # both driven by this file) — same reasoning as closure_alloc/ir_size above.
+      add 'diff_compiler_check_ir_floor' ;;
 
     # #1131: ir/core_ir_lower.mdk (SHADOW) and ir/core_ir.mdk (DICT) are both
     # cited sites under compiler/ir/*.
@@ -739,7 +772,12 @@ while IFS= read -r f; do
       # S-arity-census: derives call/define arity skew from emitted LLVM IR —
       # core_ir_lower.mdk's methodArgTys decides declared arity for the #1034 half,
       # so an ir/* change can move it without touching backend/*.
-      add 'diff_compiler_call_arity' ;;
+      add 'diff_compiler_call_arity'
+      # S-1-perf-gates-on-pr (#2330/#2262): ir_size measures emitted LLVM text-IR
+      # line count + linear-scaling ratio, driven by core_ir_lower.mdk (feeds the
+      # emitter) — it was reaching zero compiler-source arms before this change
+      # (F1/F2, contract).
+      add 'diff_compiler_ir_size' ;;
 
     # ── backend: the FIXPOINT is the decisive gate; do not defer it to CI ──
     #
@@ -762,6 +800,16 @@ while IFS= read -r f; do
       # S-arity-census: derives call/define arity skew from emitted LLVM IR —
       # the exact instrument a backend change could silently defeat.
       add 'diff_compiler_call_arity'
+      # S-1-perf-gates-on-pr (#2330/#2262): closure_alloc pins llvm_emit.mdk's
+      # closure-hoisting fix directly (gates.toml:3614 declares llvm_emit.mdk as
+      # its source), but diff_compiler_llvm* above does not glob-match it — it was
+      # reaching zero compiler-source arms before this change (F1/F2, contract).
+      # ir_size is driven by compiler/backend/* (emits the text-IR it counts) too.
+      add 'diff_compiler_closure_alloc'
+      add 'diff_compiler_ir_size'
+      # F-3-backend-arm-gap: gates.toml's diff_compiler_check_ir_floor.sources lists
+      # llvm_emit.mdk (F-2/F-S3-6) — same reasoning as F-S3-7's compiler/eval/* addition.
+      add 'diff_compiler_check_ir_floor'
       need_fixpoint=1 ;;
 
     # #1131: driver/loader.mdk is a cited DICT-SEMANTICS site.

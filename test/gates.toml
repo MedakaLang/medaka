@@ -3639,7 +3639,7 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_check_ir_floor.sh"
 oracles = []
-sources = ["test/diff_compiler_check_ir_floor.sh"]
+sources = ["test/diff_compiler_check_ir_floor.sh", "compiler/backend/llvm_emit.mdk", "compiler/eval/eval.mdk", "compiler/tools/test_cmd.mdk"]
 corpus = []
 toolchain = ["clang", "valgrind"]
 
