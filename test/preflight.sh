@@ -734,6 +734,9 @@ while IFS= read -r f; do
       # #2178 (S-3-S-balancer): `medaka gate balance` lives here too, so a
       # change to this file moves the balancer's own gate.
       add 'diff_compiler_gate_balance'
+      # #2181 (S-tier-is-data): `tiers` is read here, and `gate verify`'s
+      # shape check for it lives here too.
+      add 'diff_compiler_tier_drift'
       add 'diff_compiler_check*' ;;
     # #2178 (S-3-S-balancer): the cost-baseline READER the balancer joins on.
     # Same shadowing rule as gate_cmd.mdk above — it is also an ordinary
@@ -854,7 +857,9 @@ while IFS= read -r f; do
     # here is now the ONLY thing that decides shard membership.)
     # (#2178, S-3-S-balancer adds the balancer: `shard` is the field it derives,
     # so the registry is both its input and the file it rewrites.)
-    test/gates.toml)               add 'diff_compiler_gate_registry'; add 'diff_compiler_ci_gen_drift'; add 'diff_compiler_ci_shard_coverage'; add 'diff_compiler_gate_balance' ;;
+    # (#2181, S-tier-is-data adds the tier gate: `tiers` is edited here and is
+    # checked against the workflows, so the registry is its declared side.)
+    test/gates.toml)               add 'diff_compiler_gate_registry'; add 'diff_compiler_ci_gen_drift'; add 'diff_compiler_ci_shard_coverage'; add 'diff_compiler_gate_balance'; add 'diff_compiler_tier_drift' ;;
     # #2177 (S-3-generation-drift-gate): the per-shard rationale files that feed
     # `medaka gate ci`'s generated gates-matrix region. Not read by anything
     # else — a loose file under test/ that someone edits ALONE when adding a
@@ -890,7 +895,16 @@ while IFS= read -r f; do
     # S2-5 (end-of-sprint review, #2177): the generated file itself had no arm
     # at all, so a change here fell through to the catch-all — the two gates
     # that actually police its generated content are the ones that read it.
-    .github/workflows/ci.yml)      add 'diff_compiler_ci_gen_drift'; add 'diff_compiler_ci_shard_coverage' ;;
+    # (#2181, S-tier-is-data adds the tier gate: ci.yml is one of the two files
+    # the registry's `tiers` field is checked against, so editing a `run:` step
+    # here can move which tier a gate runs at.)
+    .github/workflows/ci.yml)      add 'diff_compiler_ci_gen_drift'; add 'diff_compiler_ci_shard_coverage'; add 'diff_compiler_tier_drift' ;;
+    # #2181 (S-tier-is-data): nightly.yml had NO arm at all, so a change to it
+    # fell through to the unmapped fail-open — the most expensive answer for a
+    # file whose gate-relevant content is exactly one question, "which gates
+    # does nightly run, and how". That question is now `tiers` in the registry,
+    # and this is the gate that checks it.
+    .github/workflows/nightly.yml) add 'diff_compiler_ci_shard_coverage'; add 'diff_compiler_tier_drift' ;;
     docs/guide/*.md)               add 'check_syntax_examples' ;;
     # Third ledger, same structural blind spot (#1608). Its rows pin a WRONG VALUE
     # rather than a divergence — see its own header — but the masking path is
