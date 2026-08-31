@@ -70,7 +70,7 @@ import frontend.parser.{
 import frontend.lexer.{Token(..), tokenizeWithOffsetPairs}
 import frontend.desugar_cache.{desugaredPrelude}
 import support.char.{isIdentChar, isDigit}
-import support.util.{maxI, utf8Len, joinWith}
+import support.util.{maxI, utf8Len, joinWith, startsWith}
 import io.{stripCR}
 import frontend.desugar.{desugar}
 import types.typecheck.{
@@ -1053,11 +1053,7 @@ prefixStart arr lineStart i
   | isIdentChar (arrayGetUnsafe (i - 1) arr) = prefixStart arr lineStart (i - 1)
   | otherwise = i
 
--- True when string n has prefix p (mirror plen==0 || prefix match).
-startsWith : String -> String -> Bool
-startsWith p n =
-  let pl = stringLength p
-  if pl == 0 then True else stringLength n >= pl && stringSlice 0 pl n == p
+-- startsWith → support/util.mdk (imported above).
 
 -- Filter env to names matching the prefix, deduplicating (first occurrence
 -- wins).  Mirror filter_completions.

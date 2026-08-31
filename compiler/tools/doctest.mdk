@@ -135,12 +135,7 @@ slen s = stringLength s
 substr3 : Int -> Int -> String -> String
 substr3 a b s = stringSlice a b s
 
--- True if `s` starts with `p`
-startsWith : String -> String -> Bool
-startsWith p s =
-  let lp = slen p
-  if slen s < lp then False else substr3 0 lp s == p
-
+-- startsWith → support/util.mdk (imported above).
 -- trim → stringTrim (support/util.mdk, imported above).
 
 -- splitNl → support/util.mdk (imported above; #242 dedup of the splitNl cluster).
