@@ -1,5 +1,5 @@
 # META
-source_lines=535
+source_lines=564
 stages=DESUGAR,MARK
 # SOURCE
 -- Shared internal helpers for the self-hosted compiler stages.  compiler
@@ -13,12 +13,25 @@ stages=DESUGAR,MARK
 import support.ordmap.{OrdMap, omLookup, omInsert, omEmpty}
 import support.opcount.{opBump}
 import list.{reverse, zip}
-import string.{join}
+import string.{join, split, startsWith as stdStartsWith}
 
 -- `opBump` counts one scan step for the perf gate's OP-COUNT arm (#884); it is a
 -- pure write-only side channel (see support/opcount.mdk) and is a NO-OP unless a
 -- profiler driver turned counting on, so it cannot change the emitted IR for any
 -- input and does not perturb the `||` short-circuit below.
+--
+-- DECLINED for delegation to the prelude `Foldable` methods (`elem`/`length`/
+-- `any`/`all` in stdlib/core.mdk) per S-util-delegate (#2352/#2278) and the
+-- standing AGENTS.md [T-STDLIB-IMPORT] anti-pattern ("Don't delegate hot
+-- monomorphic helpers to prelude Foldable methods"): `core.mdk`'s `any`/`all`/
+-- `elem` are all built on `fold`, and `fold`'s own doc comment says outright
+-- "These do *not* short-circuit because `fold` itself doesn't" — delegating
+-- would turn `contains`'s early-exit `||` scan into an unconditional full
+-- scan, which is a real behavior/complexity change (not parity), and it would
+-- also make `opBump` impossible to fire "once per scan step" (it can only
+-- fire once per element visited if the caller controls the recursion, and a
+-- `fold`-based body doesn't expose that) — silently blinding the OP-COUNT
+-- arm's #986/#990 quadratic regression detectors. Kept hand-rolled, unchanged.
 export
 contains : String -> List String -> Bool
 contains _ [] = False
@@ -26,6 +39,8 @@ contains x (y::ys) =
   let _ = opBump ()
   x == y || contains x ys
 
+-- DECLINED (Foldable dispatch, see `contains` above — AGENTS.md names `length`
+-- explicitly). Kept hand-rolled, unchanged.
 export
 listLen : List a -> Int
 listLen [] = 0
@@ -35,17 +50,33 @@ export
 reverseL : List a -> List a
 reverseL xs = reverse xs
 
+-- DECLINED (Foldable dispatch + no short-circuit, see `contains` above).
+-- Kept hand-rolled, unchanged.
 export
 anyList : (a -> Bool) -> List a -> Bool
 anyList _ [] = False
 anyList p (x::xs) = p x || anyList p xs
 
+-- DECLINED (Foldable dispatch + no short-circuit, see `contains` above).
+-- Kept hand-rolled, unchanged.
 export
 allList : (a -> Bool) -> List a -> Bool
 allList _ [] = True
 allList p (x::xs) = p x && allList p xs
 
--- first value bound to a String key in an association list
+-- first value bound to a String key in an association list.
+--
+-- DECLINED for delegation to `list.lookup` (stdlib/list.mdk:258) per
+-- S-util-delegate (#2352/#2278): `list.lookup` short-circuits and is not
+-- Foldable-dispatched (no issue there), but it has no `opBump` call, and
+-- `stdlib/list.mdk` is out of scope to edit (packet §5). `test/
+-- diff_compiler_perf_scaling.sh`'s wasm-dispatch OP-COUNT row (~line 3636)
+-- depends on `lookupAssoc` opBump-ing once per scan step to grade #986's
+-- quadratic regression detector ("Only the deterministic OP-COUNT sees it:
+-- `lookupAssoc` `opBump`s once per scan step") — a straight delegation would
+-- drop that instrumentation and silently blind the gate, contradicting this
+-- packet's own §4 fact that opBump "MUST still fire ... or the perf gate's
+-- OP-COUNT arm ... goes silently blind." Kept hand-rolled, unchanged.
 export
 lookupAssoc : String -> List (String, b) -> Option b
 lookupAssoc _ [] = None
@@ -86,18 +117,12 @@ splitNlGo chars n start i
 
 -- Split a string on a given character.  Like splitNl but parameterised on the
 -- separator.  An empty string yields [""] (one empty segment); a trailing
--- separator yields a final empty string.
+-- separator yields a final empty string.  Delegates to stdlib `string.split`
+-- (single-character String -> List String), boxing the `Char` as a 1-char
+-- `String` via `charToStr` since stdlib has no `Char`-keyed split.
 export
 splitOnChar : Char -> String -> List String
-splitOnChar sep s =
-  let chars = stringToChars s
-  splitOnCharGo chars sep (arrayLength chars) 0 0
-
-splitOnCharGo : Array Char -> Char -> Int -> Int -> Int -> List String
-splitOnCharGo chars sep n start i
-  | i >= n = [stringFromChars (arraySubChars chars start n)]
-  | arrayGetUnsafe i chars == sep = stringFromChars (arraySubChars chars start i) :: splitOnCharGo chars sep n (i + 1) (i + 1)
-  | otherwise = splitOnCharGo chars sep n start (i + 1)
+splitOnChar sep s = split (charToStr sep) s
 
 -- Join dotted path components with "." in O(total length) (see joinWith).
 export
@@ -306,12 +331,16 @@ editLastInt [] = 0
 editLastInt [x] = x
 editLastInt (_::xs) = editLastInt xs
 
--- prefix/suffix tests: (prefix/suffix, string) argument order.
+-- prefix/suffix tests: (prefix/suffix, string) argument order.  `startsWith`
+-- delegates to stdlib `string.startsWith` (aliased `stdStartsWith` to avoid
+-- shadowing this export's own name) — stdlib's `stringSlice 0 (length prefix)
+-- s == prefix` relies on `stringSlice`'s documented CLAMP behavior (core.mdk's
+-- `impl Slice String`) to fall short of `prefix` in length whenever `prefix`
+-- is longer than `s`, so the comparison still fails without a separate
+-- length pre-check; verified equivalent to the old short-circuiting form.
 export
 startsWith : String -> String -> Bool
-startsWith pre s =
-  let n = stringLength pre
-  n <= stringLength s && stringSlice 0 n s == pre
+startsWith pre s = stdStartsWith pre s
 
 export
 endsWith : String -> String -> Bool
@@ -541,7 +570,7 @@ noneHeadTag = "__none__"
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omLookup" false) (mem "omInsert" false) (mem "omEmpty" false))))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false) (mem "zip" false))))
-(DUse false (UseGroup ("string") ((mem "join" false))))
+(DUse false (UseGroup ("string") ((mem "join" false) (mem "split" false) (mem "startsWith" false "stdStartsWith"))))
 (DTypeSig true "contains" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "contains" (PWild (PList)) (EVar "False"))
 (DFunDef false "contains" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EBlock (DoLet false false PWild (EApp (EVar "opBump") (ELit LUnit))) (DoExpr (EBinOp "||" (EBinOp "==" (EVar "x") (EVar "y")) (EApp (EApp (EVar "contains") (EVar "x")) (EVar "ys"))))))
@@ -568,9 +597,7 @@ noneHeadTag = "__none__"
 (DTypeSig false "splitNlGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "splitNlGo" ((PVar "chars") (PVar "n") (PVar "start") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit (EApp (EVar "stringFromChars") (EApp (EApp (EApp (EVar "arraySubChars") (EVar "chars")) (EVar "start")) (EVar "n")))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars")) (ELit (LChar "\n"))) (EBinOp "::" (EApp (EVar "stringFromChars") (EApp (EApp (EApp (EVar "arraySubChars") (EVar "chars")) (EVar "start")) (EVar "i"))) (EApp (EApp (EApp (EApp (EVar "splitNlGo") (EVar "chars")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "splitNlGo") (EVar "chars")) (EVar "n")) (EVar "start")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig true "splitOnChar" (TyFun (TyCon "Char") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "splitOnChar" ((PVar "sep") (PVar "s")) (EBlock (DoLet false false (PVar "chars") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "splitOnCharGo") (EVar "chars")) (EVar "sep")) (EApp (EVar "arrayLength") (EVar "chars"))) (ELit (LInt 0))) (ELit (LInt 0))))))
-(DTypeSig false "splitOnCharGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Char") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "splitOnCharGo" ((PVar "chars") (PVar "sep") (PVar "n") (PVar "start") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit (EApp (EVar "stringFromChars") (EApp (EApp (EApp (EVar "arraySubChars") (EVar "chars")) (EVar "start")) (EVar "n")))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars")) (EVar "sep")) (EBinOp "::" (EApp (EVar "stringFromChars") (EApp (EApp (EApp (EVar "arraySubChars") (EVar "chars")) (EVar "start")) (EVar "i"))) (EApp (EApp (EApp (EApp (EApp (EVar "splitOnCharGo") (EVar "chars")) (EVar "sep")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "splitOnCharGo") (EVar "chars")) (EVar "sep")) (EVar "n")) (EVar "start")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "splitOnChar" ((PVar "sep") (PVar "s")) (EApp (EApp (EVar "split") (EApp (EVar "charToStr") (EVar "sep"))) (EVar "s")))
 (DTypeSig true "joinDot" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "joinDot" ((PVar "xs")) (EApp (EApp (EVar "joinWith") (ELit (LString "."))) (EVar "xs")))
 (DTypeSig true "dedupBy" (TyFun (TyFun (TyVar "a") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
@@ -633,7 +660,7 @@ noneHeadTag = "__none__"
 (DFunDef false "editLastInt" ((PList (PVar "x"))) (EVar "x"))
 (DFunDef false "editLastInt" ((PCons PWild (PVar "xs"))) (EApp (EVar "editLastInt") (EVar "xs")))
 (DTypeSig true "startsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "startsWith" ((PVar "pre") (PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "pre"))) (DoExpr (EBinOp "&&" (EBinOp "<=" (EVar "n") (EApp (EVar "stringLength") (EVar "s"))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "n")) (EVar "s")) (EVar "pre"))))))
+(DFunDef false "startsWith" ((PVar "pre") (PVar "s")) (EApp (EApp (EVar "stdStartsWith") (EVar "pre")) (EVar "s")))
 (DTypeSig true "endsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "endsWith" ((PVar "suf") (PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoLet false false (PVar "k") (EApp (EVar "stringLength") (EVar "suf"))) (DoExpr (EBinOp "&&" (EBinOp "<=" (EVar "k") (EVar "n")) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (EVar "k"))) (EVar "n")) (EVar "s")) (EVar "suf"))))))
 (DTypeSig true "schemeLineName" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
@@ -702,7 +729,7 @@ noneHeadTag = "__none__"
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omLookup" false) (mem "omInsert" false) (mem "omEmpty" false))))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false) (mem "zip" false))))
-(DUse false (UseGroup ("string") ((mem "join" false))))
+(DUse false (UseGroup ("string") ((mem "join" false) (mem "split" false) (mem "startsWith" false "stdStartsWith"))))
 (DTypeSig true "contains" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "contains" (PWild (PList)) (EVar "False"))
 (DFunDef false "contains" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EBlock (DoLet false false PWild (EApp (EVar "opBump") (ELit LUnit))) (DoExpr (EBinOp "||" (EBinOp "==" (EVar "x") (EVar "y")) (EApp (EApp (EVar "contains") (EVar "x")) (EVar "ys"))))))
@@ -729,9 +756,7 @@ noneHeadTag = "__none__"
 (DTypeSig false "splitNlGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "splitNlGo" ((PVar "chars") (PVar "n") (PVar "start") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit (EApp (EVar "stringFromChars") (EApp (EApp (EApp (EVar "arraySubChars") (EVar "chars")) (EVar "start")) (EVar "n")))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars")) (ELit (LChar "\n"))) (EBinOp "::" (EApp (EVar "stringFromChars") (EApp (EApp (EApp (EVar "arraySubChars") (EVar "chars")) (EVar "start")) (EVar "i"))) (EApp (EApp (EApp (EApp (EVar "splitNlGo") (EVar "chars")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "splitNlGo") (EVar "chars")) (EVar "n")) (EVar "start")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig true "splitOnChar" (TyFun (TyCon "Char") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "splitOnChar" ((PVar "sep") (PVar "s")) (EBlock (DoLet false false (PVar "chars") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "splitOnCharGo") (EVar "chars")) (EVar "sep")) (EApp (EVar "arrayLength") (EVar "chars"))) (ELit (LInt 0))) (ELit (LInt 0))))))
-(DTypeSig false "splitOnCharGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Char") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "splitOnCharGo" ((PVar "chars") (PVar "sep") (PVar "n") (PVar "start") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit (EApp (EVar "stringFromChars") (EApp (EApp (EApp (EVar "arraySubChars") (EVar "chars")) (EVar "start")) (EVar "n")))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars")) (EVar "sep")) (EBinOp "::" (EApp (EVar "stringFromChars") (EApp (EApp (EApp (EVar "arraySubChars") (EVar "chars")) (EVar "start")) (EVar "i"))) (EApp (EApp (EApp (EApp (EApp (EVar "splitOnCharGo") (EVar "chars")) (EVar "sep")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "splitOnCharGo") (EVar "chars")) (EVar "sep")) (EVar "n")) (EVar "start")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "splitOnChar" ((PVar "sep") (PVar "s")) (EApp (EApp (EVar "split") (EApp (EVar "charToStr") (EVar "sep"))) (EVar "s")))
 (DTypeSig true "joinDot" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "joinDot" ((PVar "xs")) (EApp (EApp (EVar "joinWith") (ELit (LString "."))) (EVar "xs")))
 (DTypeSig true "dedupBy" (TyFun (TyFun (TyVar "a") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
@@ -794,7 +819,7 @@ noneHeadTag = "__none__"
 (DFunDef false "editLastInt" ((PList (PVar "x"))) (EVar "x"))
 (DFunDef false "editLastInt" ((PCons PWild (PVar "xs"))) (EApp (EVar "editLastInt") (EVar "xs")))
 (DTypeSig true "startsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "startsWith" ((PVar "pre") (PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "pre"))) (DoExpr (EBinOp "&&" (EBinOp "<=" (EVar "n") (EApp (EVar "stringLength") (EVar "s"))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "n")) (EVar "s")) (EVar "pre"))))))
+(DFunDef false "startsWith" ((PVar "pre") (PVar "s")) (EApp (EApp (EVar "stdStartsWith") (EVar "pre")) (EVar "s")))
 (DTypeSig true "endsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "endsWith" ((PVar "suf") (PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoLet false false (PVar "k") (EApp (EVar "stringLength") (EVar "suf"))) (DoExpr (EBinOp "&&" (EBinOp "<=" (EVar "k") (EVar "n")) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (EVar "k"))) (EVar "n")) (EVar "s")) (EVar "suf"))))))
 (DTypeSig true "schemeLineName" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
