@@ -273,7 +273,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_prose_classifier"
 area = "infra"
-shard = "gates_2"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -336,7 +336,7 @@ toolchain = ["wasm-tools", "node>=24"]
 [[gate]]
 name = "sqlite/test/select_oracle"
 area = "engines"
-shard = "gates_3"
+shard = "gates_2"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -807,7 +807,7 @@ toolchain = ["node>=24"]
 [[gate]]
 name = "sqlite/test/aggregate_oracle"
 area = "engines"
-shard = "gates_3"
+shard = "gates_2"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -947,7 +947,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/multipage_oracle"
 area = "engines"
-shard = "gates_6"
+shard = "gates_7"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -989,7 +989,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/oracle"
 area = "engines"
-shard = "gates_6"
+shard = "gates_3"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -1773,7 +1773,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_draft_semantic"
 area = "infra"
-shard = "gates_2"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2137,7 +2137,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_index_oob"
 area = "infra"
-shard = "gates_6"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2487,7 +2487,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_os_entropy"
 area = "infra"
-shard = "gates_3"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3661,7 +3661,7 @@ toolchain = ["clang", "valgrind"]
 [[gate]]
 name = "diff_compiler_cli_help_conformance"
 area = "cli"
-shard = "gates_2"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
