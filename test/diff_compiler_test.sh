@@ -102,6 +102,7 @@ if [ "$#" -gt 0 ]; then
 else
   scoped=0
   files="$ROOT/stdlib/core.mdk \
+         $ROOT/stdlib/args.mdk \
          $ROOT/stdlib/json.mdk \
          $ROOT/stdlib/toml.mdk \
          $ROOT/stdlib/list.mdk \

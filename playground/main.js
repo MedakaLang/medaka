@@ -261,7 +261,7 @@ function applyDiagnostics(files) {
 // math, fs, net, time, io, test.  Keep in sync with EXTRA_MODULES in
 // build_playground_wasm.sh (these are fetched from dist/<id>.mdk).
 const EXTRA_MODULES = [
-  'array', 'async', 'base64', 'bytebuilder', 'byteparser', 'hash_map',
+  'args', 'array', 'async', 'base64', 'bytebuilder', 'byteparser', 'hash_map',
   'hash_set', 'hex', 'json', 'list', 'map', 'mut_array', 'nonempty',
   'option', 'path', 'result', 'set', 'string', 'toml', 'validation',
 ];

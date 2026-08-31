@@ -69,6 +69,26 @@ import support.timer.{
   flushPerfSinkProse,
 }
 import string.{toInt}
+-- S-cli-onto-args (#2355): the ONE argument parser.  Every verb's flag
+-- vocabulary below is an `ArgSpec` value, so its `(known: …)` roster, its
+-- rejection sentences and what it actually parses are three renderings of one
+-- declaration instead of three hand-kept lists.  `docs/design/ARGS-DESIGN.md`.
+import args.{
+  ArgSpec,
+  Args(..),
+  spec,
+  switch,
+  value,
+  internal,
+  parseArgs,
+  flag,
+  flagValue,
+  lastValue,
+  flagValues,
+  unknownFlagMessage,
+  usageExitCode,
+  withStrictDash,
+}
 import frontend.ast.{Decl(..), Expr(..), Loc(..), Pat, LetBind(..)}
 import frontend.parser.{
   parse,
@@ -210,7 +230,6 @@ import tools.lint.{
   runCrossFileRulesFromOccs,
   crossFileCacheSound,
   fileDupOccs,
-  parseLintFlagList,
   allRuleNames,
   applyFindingFilters,
   applyFindingDeny,
@@ -237,10 +256,8 @@ import tools.codemod.{
 import tools.check_policy.{
   runCheckPolicy,
   PolicyArgs(..),
-  parsePolicyArgs,
   PolicyOutcome(..),
   runManifest,
-  parseManifestArgs,
   ManifestArgs(..),
 }
 
@@ -337,12 +354,12 @@ checkSourceStaleness argv = match sourceStalenessVerdict ()
 
 -- Is this argv `medaka run … --json …`?  The predicate is deliberately the
 -- BYTE-IDENTICAL one `runRunCmd` uses to compute its own `jsonMode`
--- (`hasFlag "--json"` over the whole post-verb argv, program passthrough args
+-- (`runFlagGiven "--json"` over the whole post-verb argv, program passthrough args
 -- included).  If the two ever disagreed, a deferred notice would be staged for
 -- an invocation that never emits an envelope — i.e. suppression — so they are
 -- kept the same predicate on purpose, imprecision included.
 runJsonInvocation : List String -> Bool
-runJsonInvocation ("run"::rest) = hasFlag "--json" rest
+runJsonInvocation ("run"::rest) = runFlagGiven "--json" rest
 runJsonInvocation _ = False
 
 -- Print a deferred staleness notice as prose and clear it.  Called from every
@@ -521,31 +538,43 @@ checkHelpText = stringConcat
     "  --json            emit the {\"files\":[...]} structured-diagnostics\n",
     "                    envelope instead of human text\n",
     "  --types           show the full inferred-scheme dump, prelude included\n",
-    "                    (default: only your own top-level bindings)\n",
+    "                    (default: only your own top-level bindings; no effect\n",
+    "                    under --json — the envelope carries diagnostics, not\n",
+    "                    scheme dumps)\n",
     "  --allow-internal  permit internal-only externs outside stdlib/\n",
   ]
 
 -- C2: `check`'s whole flag vocabulary, as `checkHelpText` documents it.
--- `--release` is deliberately NOT here: `dropFlags` strips it for every
--- consumer, so `medaka check --release` used to be accepted by accident, but
--- nothing documents it for `check` and `runCheckCmd` never reads it.
-checkBoolFlags : List String
-checkBoolFlags = ["--json", "--types", "--allow-internal"]
+-- `--release` is deliberately NOT here: the old shared `dropFlags` stripped it
+-- for every consumer, so `medaka check --release` used to be accepted by
+-- accident, but nothing documents it for `check` and `runCheckCmd` never reads
+-- it.  (It has been REJECTED, not stripped, since the C2 floor landed: the
+-- flag check ran before the strip.)
+-- `withStrictDash` (S-5, #2355 residual A): `check`'s file positional is what
+-- an undeclared `-foo` used to fall into (AS-FILENAME, exemplar X3) — an
+-- undeclared single-dash token is now C2-rejected like `--foo` is.
+checkArgSpec : ArgSpec
+checkArgSpec = withStrictDash (spec
+  "check"
+  [
+    switch ["--json"] "emit the structured-diagnostics envelope",
+    switch ["--types"] "show the full inferred-scheme dump",
+    switch ["--allow-internal"] "permit internal-only externs outside stdlib/",
+  ])
 
 runCheckCmd : List String -> <IO> Unit
 runCheckCmd argv =
-  -- C2: BEFORE dropFlags, whose last arm passes any unrecognized token
-  -- through as a positional — which is how `medaka check --zzz` became an
+  -- C2: the parse is the floor.  An unrecognized `--`-shaped token never
+  -- reaches the positional list, which is how `medaka check --zzz` became an
   -- attempt to open a FILE named `--zzz` (AS-FILENAME, docs/ops/
   -- CLI-CONFORMANCE.md §5a, exemplar X3).
-  let _ = assertCliFlags "check" checkBoolFlags [] argv
+  let a = requireArgs checkArgSpec argv
   let perfOn = perfEnabled ()
   let perfT0 = now ()
-  let jsonMode = hasFlag "--json" argv
-  let allowInternal = hasFlag "--allow-internal" argv
-  let typesMode = hasFlag "--types" argv
-  let argv2 = dropFlags argv
-  match argv2
+  let jsonMode = flag "--json" a
+  let allowInternal = flag "--allow-internal" a
+  let typesMode = flag "--types" a
+  match a.positionals
     [target] =>
       let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
       let rtPath = root ++ "/stdlib/runtime.mdk"
@@ -560,7 +589,17 @@ runCheckCmd argv =
           Err msg =>
             let _ = ePutStrLn msg
             exit 1
-          Ok csrc => if jsonMode then runCheckJsonCmd allowInternal rsrc csrc target stdlibDir
+          Ok csrc => if jsonMode then
+            -- E: `--types` requests a human-text scheme dump; the `--json`
+            -- envelope has no field for one (structured diagnostics only), so
+            -- rather than silently drop the flag (the S-2/S-3/S-4 residual),
+            -- name the no-op on stderr — stdout stays the plain JSON envelope,
+            -- byte-identical to `--json` alone (diff_native_cli/--json goldens
+            -- unaffected).
+            let _ = if typesMode
+              then ePutStrLn "medaka check: --types has no effect under --json (envelope has no scheme-dump field)"
+              else ()
+            runCheckJsonCmd allowInternal rsrc csrc target stdlibDir
           else match readFile target
             Err msg =>
               let _ = ePutStrLn msg
@@ -913,25 +952,45 @@ lastModPair [] = None
 lastModPair [p] = Some p
 lastModPair (_::rest) = lastModPair rest
 
--- Drop check's non-positional flags (--release is silently ignored; --json is
--- handled by the caller via hasFlag before dropFlags strips it). `medaka
--- test`'s own flags (--native, --engines <list>) are NOT here — `--engines`
--- takes a value dropFlags doesn't know how to skip, so `medaka test` filters
--- its own argv via `testTargets` instead (below).
-dropFlags : List String -> List String
-dropFlags [] = []
-dropFlags ("--json"::rest) = dropFlags rest
-dropFlags ("--release"::rest) = dropFlags rest
-dropFlags ("--allow-internal"::rest) = dropFlags rest
-dropFlags ("--types"::rest) = dropFlags rest
-dropFlags (x::rest) = x :: dropFlags rest
+-- ── `run`'s argv filter — TrailingRaw semantics (S-5, #2355 residual B) ────
+-- S-cli-onto-args (#2355) migrated every other verb onto `stdlib/args.mdk`.
+-- `run` keeps a LOCAL filter (not `args.mdk`'s own `TrailingRaw`) because
+-- `run` still needs its own C2 rejection wording/ordering (the leading-dash
+-- check in `runRunCmd`), but the SEMANTICS are now `args.mdk`'s TrailingRaw:
+-- flag scanning stops at the first token that isn't one of run's own known
+-- flags, and everything from there on — the entry file plus every token
+-- after it — passes through completely untouched.
+--
+-- 🚨 FORMER KNOWN DEFECT, now fixed.  `runArgvFilter` used to filter the
+-- WHOLE argv, so a `--json`/`--release`/`--allow-internal`/`--types` token
+-- belonging to the USER PROGRAM (`medaka run argv.mdk --json`) was silently
+-- eaten before it reached `progArgsRef` — contradicts docs/ops/
+-- CLI-CONFORMANCE.md §4 D-2(b) ("everything after the first positional is
+-- the program's argv"). Now it stops recursing at the first non-flag token
+-- and returns the remainder verbatim, so `medaka run argv.mdk --json a b`
+-- delivers `["--json", "a", "b"]` to the program.
+--
+-- `--types` is `check`'s flag, not `run`'s (`runRunCmd` never reads it), but
+-- it was in the shared filter's arm list before the entry file and removing
+-- it here would be a behaviour change on the PRE-positional prefix, so it
+-- stays consumed there.
+runArgvFilter : List String -> List String
+runArgvFilter [] = []
+runArgvFilter ("--json"::rest) = runArgvFilter rest
+runArgvFilter ("--release"::rest) = runArgvFilter rest
+runArgvFilter ("--allow-internal"::rest) = runArgvFilter rest
+runArgvFilter ("--types"::rest) = runArgvFilter rest
+runArgvFilter argv = argv
 
--- True if the flag appears anywhere in argv.
-hasFlag : String -> List String -> Bool
-hasFlag _ [] = False
-hasFlag flag (x::rest)
-  | x == flag = True
-  | otherwise = hasFlag flag rest
+-- True if the flag appears in `run`'s PRE-positional prefix ONLY — the same
+-- prefix `runArgvFilter` consumes, program passthrough args (after the first
+-- positional) excluded.  `runJsonInvocation` is required to match this
+-- byte-for-byte (see its note); both now agree on the fixed, precise scope.
+runFlagGiven : String -> List String -> Bool
+runFlagGiven _ [] = False
+runFlagGiven nm (x::rest)
+  | x == "--json" || x == "--release" || x == "--allow-internal" || x == "--types" = x == nm || runFlagGiven nm rest
+  | otherwise = False
 
 -- ── C1/C2: the one flag floor every verb shares ────────────────────────────
 -- docs/ops/CLI-CONFORMANCE.md §2 (RATIFIED).  Every verb rejects an
@@ -950,89 +1009,40 @@ hasFlag flag (x::rest)
 -- of ten near-copies drifting apart (the tree carried FIVE wordings for this
 -- one event).
 --
--- C1 (§1) rides along, because the two conventions are the same scan:
--- `valueFlags` are recognised in BOTH spellings, so `--flag v` consumes its
--- value (never mistaking the value for a positional or for an unknown flag)
--- and `--flag=v` is the same flag.  A verb whose own parser understands only
--- one spelling normalises argv first via `expandEqFlags` (=-form -> space
--- form) or `collapseEqFlags` (space form -> =-form); neither spelling is ever
--- silently dropped or reinterpreted.
+-- C1 (§1) rides along, because the two conventions are the same scan: a
+-- value-taking flag is recognised in BOTH spellings, so `--flag v` consumes
+-- its value (never mistaking the value for a positional or for an unknown
+-- flag) and `--flag=v` is the same flag.  Neither spelling is ever silently
+-- dropped or reinterpreted.
+--
+-- S-cli-onto-args (#2355): the scan, the sentences and the `(known: …)`
+-- rendering all moved to `stdlib/args.mdk`, and every `<verb>ArgSpec` below is
+-- the ONE declaration they are rendered from.  The per-verb `expandEqFlags` /
+-- `collapseEqFlags` argv rewrites are gone with it — `args.mdk` accepts both
+-- C1 spellings uniformly, so no verb has to normalise argv into the one
+-- spelling its own parser happened to read.
 
--- `--flag=value` split, but ONLY for a flag in `names` — an unlisted token
--- keeps its `=` (a positional path may legitimately contain one, and an
--- unknown `--zzz=1` must be reported whole, not as `--zzz`).
-flagEqSplit : List String -> String -> Option (String, String)
-flagEqSplit names tok = flagEqGo names tok 0 (stringLength tok)
-
-flagEqGo : List String -> String -> Int -> Int -> Option (String, String)
-flagEqGo names tok i n =
-  if i >= n then None
-  else
-    if stringSlice i (i + 1) tok == "=" then
-      let nm = stringSlice 0 i tok
-      if contains nm names then Some (nm, stringSlice (i + 1) n tok) else None
-    else flagEqGo names tok (i + 1) n
-
--- C1, direction 1: rewrite `--flag=v` into `--flag`, `v` for each named
--- value-taking flag, so a parser that reads only the space form accepts both.
-expandEqFlags : List String -> List String -> List String
-expandEqFlags _ [] = []
-expandEqFlags names (x::rest) = match flagEqSplit names x
-  Some (nm, v) => nm :: v :: expandEqFlags names rest
-  None => x :: expandEqFlags names rest
-
--- C1, direction 2: rewrite `--flag v` into `--flag=v` for each named
--- value-taking flag, so a parser that reads only the `=` form accepts both.
--- `lint` is the consumer: `parseLintFlagList` keys on the `--flag=` prefix,
--- and the pre-commit hook depends on that spelling.
-collapseEqFlags : List String -> List String -> List String
-collapseEqFlags _ [] = []
-collapseEqFlags _ [x] = [x]
-collapseEqFlags names (a::v::rest) =
-  if contains a names then
-    "\{a}=\{v}" :: collapseEqFlags names rest
-  else
-    a :: collapseEqFlags names (v::rest)
-
--- True if `tok` is the `=` spelling of one of `names`.
-isEqForm : List String -> String -> Bool
-isEqForm names tok = match flagEqSplit names tok
-  Some _ => True
-  None => False
-
--- The ratified sentence, rendered in exactly one place.  A verb with no flags
--- at all (`doc`) renders `none` rather than an empty parenthesis.
-unknownFlagErr : String -> String -> List String -> String
-unknownFlagErr verb tok known =
-  let set = if known == [] then "none" else joinWith ", " known
-  "medaka \{verb}: unrecognized flag '\{tok}' (known: \{set})"
-
--- Scan argv for a `--`-shaped token that is not one of `boolFlags` /
--- `valueFlags`.  A value flag consumes the following token in the space form
--- so a VALUE is never scanned as a flag; the `=` form carries its own value.
-checkCliFlags : String -> List String -> List String -> List String -> Result String Unit
-checkCliFlags verb boolFlags valueFlags argv =
-  cliFlagGo verb boolFlags valueFlags (boolFlags ++ valueFlags) argv
-
-cliFlagGo : String -> List String -> List String -> List String -> List String -> Result String Unit
-cliFlagGo _ _ _ _ [] = Ok ()
-cliFlagGo verb bs vs known (a::rest)
-  | contains a bs = cliFlagGo verb bs vs known rest
-  | contains a vs = match rest
-    [] => Err "medaka \{verb}: \{a} requires a value"
-    _::rest2 => cliFlagGo verb bs vs known rest2
-  | isEqForm vs a = cliFlagGo verb bs vs known rest
-  | startsWith "--" a = Err (unknownFlagErr verb a known)
-  | otherwise = cliFlagGo verb bs vs known rest
-
--- IO wrapper: the rejection goes to stderr and exits 1 (C3 — ratified for
--- every rejection this helper owns, whatever the verb's other exit codes do).
-assertCliFlags : String -> List String -> List String -> List String -> <IO> Unit
-assertCliFlags verb boolFlags valueFlags argv = match checkCliFlags verb boolFlags valueFlags argv
-  Ok _ => ()
+-- The IO shape every migrated verb calls.  `requireArgs <verb>ArgSpec argv`
+-- replaces the old `assertCliFlags "<verb>" bools values argv` at every site:
+-- one call, one declaration, and the parsed `Args` handed back instead of
+-- discarded (the old helper VALIDATED and then let each verb re-scan raw argv
+-- with its own reader, which is how the two could disagree).
+--
+-- Rejections go to stderr and exit `usageExitCode` (C3 — ratified for every
+-- rejection this helper owns, whatever the verb's other exit codes do).
+--
+-- ⚠️ `test/diff_compiler_cli_reject_floor.sh` derives its COVERED-VERB set from
+-- the `requireArgs <name>ArgSpec` call sites here plus each spec's own
+-- `spec "<verb>"` head.  Renaming this function, or the `…ArgSpec` suffix,
+-- leaves both properties K and S uncovered-but-green — update that derivation
+-- in the same commit.
+requireArgs : ArgSpec -> List String -> <IO> Args
+requireArgs sp argv = match parseArgs sp argv
+  Ok a => a
   Err msg =>
     let _ = ePutStrLn msg
-    exit 1
+    let _ = exit usageExitCode
+    Args { given = [], positionals = [], rest = [] }
 
 -- ── check --json ───────────────────────────────────────────────────────────
 -- Mirrors OCaml's `check --json` (bin/main.ml line ~863):
@@ -1093,8 +1103,8 @@ cjBuildFailedJson target msg = cjAllToJson
 -- gate JSON as its success marker, mirroring `check --json`'s clean output —
 -- no separate "built X -> Y" prose on this channel, so a machine consumer sees
 -- exactly one shape regardless of outcome.
-runBuildJsonCmd : List String -> Bool -> String -> String -> String -> Option String -> BuildTarget -> <IO> Unit
-runBuildJsonCmd argv allowInternal root stdlibDir input outOpt target = match readFile input
+runBuildJsonCmd : Args -> Bool -> String -> String -> String -> Option String -> BuildTarget -> <IO> Unit
+runBuildJsonCmd a allowInternal root stdlibDir input outOpt target = match readFile input
   Err e =>
     let _ = println (cjFileNotFoundJson input e)
     exit 1
@@ -1117,7 +1127,7 @@ runBuildJsonCmd argv allowInternal root stdlibDir input outOpt target = match re
           else
             let medaka = envOr "MEDAKA" "medaka"
             let cc = envOr "CC" "clang"
-            let keepIrCli = hasFlag "--keep-ir" argv
+            let keepIrCli = flag "--keep-ir" a
             let outPath = match outOpt
               Some o => o
               None => defaultOutPath target input
@@ -1406,8 +1416,12 @@ fmtHelpText = stringConcat
 
 runFmtCmd : List String -> <IO> Unit
 runFmtCmd argv =
+  -- ORDER IS LOAD-BEARING and preserved: the mode-conflict check runs on RAW
+  -- argv, BEFORE the parse, so `medaka fmt --write --stdout --zzz` still
+  -- reports the conflict rather than the unknown flag.  Moving it after
+  -- `requireArgs` would swap those two messages.
   let _ = assertFmtOneMode argv
-  runFmtArgs argv
+  runFmtArgs (requireArgs fmtArgSpec argv)
 
 -- §5f, mirroring `snapshotMode`: two modes at once is a person who does not
 -- know which one they meant, and guessing for them is how an intended
@@ -1420,22 +1434,49 @@ assertFmtOneMode argv = match fmtModeConflict argv
     let _ = ePutStrLn "medaka fmt: \{joinWith " " many} are mutually exclusive — pick one."
     exit 1
 
-runFmtArgs : List String -> <IO> Unit
-runFmtArgs argv = match parseFmtArgs argv FmtCheck []
-  Err msg =>
-    -- C2/C3: an unrecognized flag exits 1, like every other verb's -- as do
-    -- the bare-usage and `no .mdk files found` arms below (C3: 2 is RESERVED).
-    let _ = ePutStrLn msg
+runFmtArgs : Args -> <IO> Unit
+runFmtArgs a =
+  -- C2: `fmt`'s classification is `-`-prefix, not `--`-prefix — PRE-EXISTING
+  -- and deliberate, because `-w` is a real fmt flag, so a bare `-x` is a flag
+  -- typo here and not a path.  `args.mdk` deliberately leaves an UNDECLARED
+  -- single-dash token as a positional (a filename may start with `-`), so the
+  -- extra half of fmt's rule is applied here rather than lost.
+  let _ = assertFmtNoDashTargets a.positionals
+  match (fmtModeOf a, a.positionals)
+    (_, []) =>
+      let _ = ePutStrLn "Usage: medaka fmt [--check | --stdout | --write] <path>..."
+      exit 1
+    -- `listDir` Err = literal file (EXACT original single-file behavior); Ok =
+    -- a directory, recursively expanded.
+    (mode, [target]) => match listDir target
+      Err _ => fmtOne mode target
+      Ok _ => fmtManyTargets mode [target]
+    (mode, targets) => fmtManyTargets mode targets
+
+-- C2/C3: an unrecognized flag exits 1, like every other verb's -- as do the
+-- bare-usage and `no .mdk files found` arms above (C3: 2 is RESERVED).
+assertFmtNoDashTargets : List String -> <IO> Unit
+assertFmtNoDashTargets [] = ()
+assertFmtNoDashTargets (x::rest) =
+  if stringLength x > 0 && stringSlice 0 1 x == "-" then
+    let _ = ePutStrLn (unknownFlagMessage fmtArgSpec x)
     exit 1
-  Ok (_, []) =>
-    let _ = ePutStrLn "Usage: medaka fmt [--check | --stdout | --write] <path>..."
-    exit 1
-  -- `listDir` Err = literal file (EXACT original single-file behavior); Ok =
-  -- a directory, recursively expanded.
-  Ok (mode, [target]) => match listDir target
-    Err _ => fmtOne mode target
-    Ok _ => fmtManyTargets mode [target]
-  Ok (mode, targets) => fmtManyTargets mode targets
+  else assertFmtNoDashTargets rest
+
+-- The three modes are LAST-WINS (`parseFmtArgs`'s pre-migration behaviour:
+-- each arm overwrote `mode`).  `Args.given` keeps argv order and records the
+-- CANONICAL name whichever spelling was typed, so `-w` lands here as
+-- `--write`.  Default is `FmtCheck`.
+fmtModeOf : Args -> FmtMode
+fmtModeOf a = fmtModeGo a.given FmtCheck
+
+fmtModeGo : List (String, Option String) -> FmtMode -> FmtMode
+fmtModeGo [] m = m
+fmtModeGo ((k, _)::rest) m
+  | k == "--check" = fmtModeGo rest FmtCheck
+  | k == "--stdout" = fmtModeGo rest FmtStdout
+  | k == "--write" = fmtModeGo rest FmtWrite
+  | otherwise = fmtModeGo rest m
 
 -- Multiple targets and/or a directory target: expand to concrete .mdk files
 -- and format each, aggregating. `--stdout` only makes sense for one file.
@@ -1509,34 +1550,29 @@ fmtOneReport mode file = match readFile file
             (True, False)
           Ok _ => (False, True)
 
-fmtBoolFlags : List String
-fmtBoolFlags = ["--check", "--stdout", "--write", "-w"]
+fmtArgSpec : ArgSpec
+fmtArgSpec = spec
+  "fmt"
+  [
+    switch ["--check"] "report unformatted files; write nothing",
+    switch ["--stdout"] "print the formatted source of one file",
+    switch ["--write", "-w"] "rewrite the file in place",
+  ]
 
 -- §5f: `--write` and `--stdout` are mutually exclusive MODES, but both used to
 -- be accepted with `--stdout` silently winning — so `medaka fmt --write
 -- --stdout f.mdk` wrote nothing and exited 0, which reads as a successful
 -- rewrite.  `snapshot` already refuses its own mode conflict rather than
 -- guessing (`snapshotMode`); this mirrors that message.
+-- Reads RAW argv (not the parsed `Args`) on purpose — see `runFmtCmd`'s
+-- ORDER note.  `contains` is the same "appears anywhere in argv" test the
+-- retired `hasFlag` performed, spelled with the helper the file already
+-- imports.
 fmtModeConflict : List String -> List String
 fmtModeConflict argv =
-  let writeOn = hasFlag "--write" argv || hasFlag "-w" argv
-  let named = filterList (f => hasFlag f argv) ["--check", "--stdout"]
+  let writeOn = contains "--write" argv || contains "-w" argv
+  let named = filterList (f => contains f argv) ["--check", "--stdout"]
   if writeOn then named ++ ["--write"] else named
-
-parseFmtArgs : List String -> FmtMode -> List String -> Result String (FmtMode, List String)
-parseFmtArgs [] mode acc = Ok (mode, reverseL acc)
-parseFmtArgs ("--check"::rest) _ acc = parseFmtArgs rest FmtCheck acc
-parseFmtArgs ("--stdout"::rest) _ acc = parseFmtArgs rest FmtStdout acc
-parseFmtArgs ("--write"::rest) _ acc = parseFmtArgs rest FmtWrite acc
-parseFmtArgs ("-w"::rest) _ acc = parseFmtArgs rest FmtWrite acc
--- C2: the `-`-prefix (not `--`-prefix) test is deliberate and PRE-EXISTING —
--- `-w` is a real fmt flag, so a bare `-x` is a flag typo here, not a path.
--- Only the WORDING moves to the shared helper.
-parseFmtArgs (x::rest) mode acc =
-  if stringLength x > 0 && stringSlice 0 1 x == "-" then
-    Err (unknownFlagErr "fmt" x fmtBoolFlags)
-  else
-    parseFmtArgs rest mode (x::acc)
 
 fmtOne : FmtMode -> String -> <IO> Unit
 fmtOne mode file = match readFile file
@@ -1771,6 +1807,14 @@ emitWarnLines file (w::ws) =
 newUsageLine : String
 newUsageLine = "Usage: medaka new <name>"
 
+-- `new` takes no flags at all, so its roster renders `none`.  Declared as a
+-- spec (rather than an empty name list at the call site) so the sentence has
+-- exactly one writer, like every other verb's.  Not routed through
+-- `requireArgs`: `new` rejects a leading-`-` token and takes a bare NAME, not
+-- a flag-and-positional argv.
+newArgSpec : ArgSpec
+newArgSpec = spec "new" []
+
 runNewCmd : List String -> <IO> Unit
 runNewCmd [arg] =
   if arg == "--help" || arg == "-h" then putStrLn newUsageLine
@@ -1779,15 +1823,24 @@ runNewCmd [arg] =
       -- C2: one wording, and the REJECTION exits 1.  `new` takes no flags at
       -- all, so its known set is empty.  (The bare `medaka new` usage error
       -- below exits 1 too -- C3's convergence, no verb exits 2.)
-      let _ = ePutStrLn (unknownFlagErr "new" arg [])
+      let _ = ePutStrLn (unknownFlagMessage newArgSpec arg)
       let _ = ePutStrLn newUsageLine
       exit 1
     else
       let code = newProject arg
       if code == 0 then () else exit code
-runNewCmd _ =
-  let _ = ePutStrLn newUsageLine
-  exit 1
+runNewCmd args =
+  -- Arity mismatch (0 or 2+ args): still C2-name a leading-dash token before
+  -- falling back to the generic usage line, so `medaka new --zzz ok.mdk`
+  -- doesn't read as REJECT-VAGUE just because it also has too many args.
+  match filterList (startsWith "-") args
+    (flagTok :: _) =>
+      let _ = ePutStrLn (unknownFlagMessage newArgSpec flagTok)
+      let _ = ePutStrLn newUsageLine
+      exit 1
+    [] =>
+      let _ = ePutStrLn newUsageLine
+      exit 1
 
 -- ── build ─────────────────────────────────────────────────────────────────
 -- Mirrors bin/main.ml's `build` arm (Build_cmd.run) + build_main.mdk: parse
@@ -1804,29 +1857,44 @@ runNewCmd _ =
 -- any help text from citing a `medaka <verb> --flag` that verb does not parse.
 -- Under C2 a typed `build --release` reads back as a named rejection listing
 -- what build really takes, instead of the argument-COUNT error it once gave.
-buildBoolFlags : List String
-buildBoolFlags = ["--keep-ir", "--allow-internal", "--json"]
-
-buildValueFlags : List String
-buildValueFlags = ["-o", "--target", "--emit-rt-obj", "--emit-prelude-obj"]
+-- Declaration ORDER is the `(known: …)` roster order (`rosterOf` renders every
+-- name of every flag in declaration order), so it reproduces the old
+-- `buildBoolFlags ++ buildValueFlags` rendering exactly.
+-- `withStrictDash` (S-5, #2355 residual A): an undeclared `-x` used to fall
+-- through as the input file (AS-FILENAME); now C2-rejected like `--x`.
+buildArgSpec : ArgSpec
+buildArgSpec = withStrictDash (spec "build" [
+  switch ["--keep-ir"] "keep the emitted IR beside the output",
+  switch ["--allow-internal"] "permit internal-only externs outside stdlib/",
+  switch ["--json"] "emit the structured-diagnostics envelope",
+  value ["-o"] "PATH" "output path for the binary",
+  -- `value`, not `oneOf`: the rejection sentence for a bad target is
+  -- `parseTarget`'s own `error: unknown --target '…' (expected native|wasm)`,
+  -- and this slice keeps every hand-written sentence verbatim.
+  value ["--target"] "native|wasm" "backend to emit for",
+  value ["--emit-rt-obj"] "PATH" "precompile the C runtime to an object",
+  value ["--emit-prelude-obj"] "PATH" "precompile the prelude to an object",
+])
 
 runBuildCmd : List String -> <IO> Unit
-runBuildCmd argv0 =
-  -- C1: `-o=out` / `--target=wasm` / `--emit-rt-obj=<p>` used to fall through
-  -- as an extra positional ("takes exactly one input file") or be dropped.
-  let argv = expandEqFlags buildValueFlags argv0
-  if hasFlag "--help" argv || hasFlag "-h" argv then buildUsage ()
+runBuildCmd argv =
+  -- `--help`/`-h` is read off RAW argv, before the parse: neither is a
+  -- declared `build` flag, so routing it through `requireArgs` would turn
+  -- `medaka build --help` into an unknown-flag rejection.
+  if contains "--help" argv || contains "-h" argv then buildUsage ()
   else
+    -- C1: `-o=out` / `--target=wasm` / `--emit-rt-obj=<p>` used to fall
+    -- through as an extra positional ("takes exactly one input file") or be
+    -- dropped; `args.mdk` takes both spellings.
     -- C2: REJECT-VAGUE — an unknown flag became a second positional and was
     -- reported as an argument-count error naming neither the flag nor the set.
-    let _ = assertCliFlags "build" buildBoolFlags buildValueFlags argv
-    runBuildModes argv
+    runBuildModes (requireArgs buildArgSpec argv)
 
 -- The mode dispatch (--emit-rt-obj / --emit-prelude-obj / --json / plain),
 -- split out so the flag floor above is a flat prologue rather than another
 -- level of `else` around this whole match.
-runBuildModes : List String -> <IO> Unit
-runBuildModes argv = match snapFlagValue "--emit-rt-obj" argv
+runBuildModes : Args -> <IO> Unit
+runBuildModes a = match flagValue "--emit-rt-obj" a
     -- `medaka build --emit-rt-obj <path>`: precompile runtime/medaka_rt.c to a
     -- reusable object with EXACTLY the flags a normal link would apply, then exit.
     -- No input .mdk is required (or read) in this mode — it compiles only the C
@@ -1840,7 +1908,7 @@ runBuildModes argv = match snapFlagValue "--emit-rt-obj" argv
         BuildErr msg =>
           let _ = ePutStrLn msg
           exit 1
-    None => match snapFlagValue "--emit-prelude-obj" argv
+    None => match flagValue "--emit-prelude-obj" a
       -- `medaka build --emit-prelude-obj <path>`: precompile stdlib/core.mdk to a
       -- reusable object with EXACTLY the flags a normal link would apply, then exit
       -- (issue #118 — the same trick as --emit-rt-obj, one level up: the prelude is
@@ -1856,7 +1924,7 @@ runBuildModes argv = match snapFlagValue "--emit-rt-obj" argv
           BuildErr msg =>
             let _ = ePutStrLn msg
             exit 1
-      -- #1078: `--json` is now a recognized flag (stripped by parseBuildGo,
+      -- #1078: `--json` is now a recognized flag (claimed by `buildArgSpec`,
       -- above) rather than a phantom second positional. Dispatch to a
       -- dedicated function per mode rather than inlining the branch here —
       -- `runBuildJsonCmd` reuses `checkJsonFile` (the SAME structured pass
@@ -1864,16 +1932,16 @@ runBuildModes argv = match snapFlagValue "--emit-rt-obj" argv
       -- emit/clang failure in the same `{"files":[...]}` `Diag` envelope, so
       -- one JSON shape covers every failure mode, front-end or backend; the
       -- plain-text arm (`runBuildPlainCmd`) is the pre-#1078 body, unchanged.
-      None => if hasFlag "--json" argv then runBuildJsonEntry argv else runBuildPlainCmd argv
+      None => if flag "--json" a then runBuildJsonEntry a else runBuildPlainCmd a
 
 -- The pre-#1078 plain-text `medaka build` body (parse args → typecheck gate →
 -- emit+clang), split out of `runBuildCmd` so the `--json` dispatch above
 -- doesn't have to interleave two argument-parsing arms at one indent level.
-runBuildPlainCmd : List String -> <IO> Unit
-runBuildPlainCmd argv =
+runBuildPlainCmd : Args -> <IO> Unit
+runBuildPlainCmd a =
   let perfOn = perfEnabled ()
   let perfT0 = now ()
-  match parseBuildArgs argv
+  match parseBuildArgs a
     Err msg =>
       let _ = ePutStrLn msg
       exit 1
@@ -1885,8 +1953,8 @@ runBuildPlainCmd argv =
       let medaka = envOr "MEDAKA" "medaka"
       let cc = envOr "CC" "clang"
       let inputAbs = input
-      let allowInternal = hasFlag "--allow-internal" argv
-      let keepIrCli = hasFlag "--keep-ir" argv
+      let allowInternal = flag "--allow-internal" a
+      let keepIrCli = flag "--keep-ir" a
       let outPath = match outOpt
         Some o => o
         None => defaultOutPath target input
@@ -1917,16 +1985,16 @@ runBuildPlainCmd argv =
 -- (`cjBuildFailedJson`, target "" — genuinely span-less, no input file was
 -- even identified) rather than plain text, so a `--json` caller never has to
 -- fall back to scraping stderr prose for THIS failure mode either.
-runBuildJsonEntry : List String -> <IO> Unit
-runBuildJsonEntry argv = match parseBuildArgs argv
+runBuildJsonEntry : Args -> <IO> Unit
+runBuildJsonEntry a = match parseBuildArgs a
   Err msg =>
     let _ = println (cjBuildFailedJson "" msg)
     exit 1
   Ok (input, outOpt, target) =>
     let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
     let stdlibDir = root ++ "/stdlib"
-    let allowInternal = hasFlag "--allow-internal" argv
-    runBuildJsonCmd argv allowInternal root stdlibDir input outOpt target
+    let allowInternal = flag "--allow-internal" a
+    runBuildJsonCmd a allowInternal root stdlibDir input outOpt target
 
 -- `medaka build --help` / `-h`: a subcommand-local usage, since the global
 -- `usage()` (only matched when --help/-h is argv[0]) never sees this — dispatch
@@ -2162,35 +2230,26 @@ typecheckGateRoute allowInternal trusted pathMap roots rsrc csrc tsrc target mod
             TGOk (flatMap renderTripleWarnings allWarns)
     _ => TGErr resDiags
 
--- Parse `[-o <out>] [--target <native|wasm>]`; first remaining positional is the
--- input.  Default target is TNative (the LLVM/clang path) — purely additive, the
--- no-`--target` behaviour is unchanged.
-parseBuildArgs : List String -> Result String (String, Option String, BuildTarget)
-parseBuildArgs argv = parseBuildGo argv [] None TNative
-
-parseBuildGo : List String -> List String -> Option String -> BuildTarget -> Result String (String, Option String, BuildTarget)
-parseBuildGo [] acc out target = finishBuildArgs (reverseL acc) out target
-parseBuildGo ("-o"::v::rest) acc out target =
-  parseBuildGo rest acc (Some v) target
-parseBuildGo ["-o"] _ _ _ = Err "error: -o requires an argument"
-parseBuildGo ("--target"::v::rest) acc out _ = match parseTarget v
+-- Read `[-o <out>] [--target <native|wasm>]` off the parsed argv; the
+-- positionals are the input.  Default target is TNative (the LLVM/clang path).
+--
+-- BOTH flags are LAST-WINS, reproducing the pre-migration `parseBuildGo`
+-- (each arm overwrote its accumulator), and EVERY `--target` occurrence is
+-- still validated, not just the winner — `--target zzz --target native` was a
+-- hard error before this slice and stays one.  `--keep-ir`/`--allow-internal`/
+-- `--json` are read separately by their own call sites and are simply not
+-- positionals any more, which is what the old "strip it here so it doesn't
+-- fall through to finishBuildArgs" arms existed to arrange (#1078).
+parseBuildArgs : Args -> Result String (String, Option String, BuildTarget)
+parseBuildArgs a = match buildTargetOf (flagValues "--target" a) TNative
   Err msg => Err msg
-  Ok t => parseBuildGo rest acc out t
-parseBuildGo ["--target"] _ _ _ =
-  Err "error: --target requires an argument (native|wasm)"
-parseBuildGo ("--allow-internal"::rest) acc out target =
-  parseBuildGo rest acc out target
--- --keep-ir: read separately via hasFlag in runBuildCmd (same convention as
--- --allow-internal above) — just strip it here so it doesn't fall through to
--- finishBuildArgs and get mistaken for the input file.
-parseBuildGo ("--keep-ir"::rest) acc out target =
-  parseBuildGo rest acc out target
--- #1078: `--json` used to fall through to `finishBuildArgs` and get counted as
--- a second positional ("takes exactly one input file") — a flag error read as
--- an argument-count error. Strip it here, same convention as --allow-internal/
--- --keep-ir above; `runBuildCmd` reads it separately via `hasFlag`.
-parseBuildGo ("--json"::rest) acc out target = parseBuildGo rest acc out target
-parseBuildGo (x::rest) acc out target = parseBuildGo rest (x::acc) out target
+  Ok target => finishBuildArgs a.positionals (lastValue "-o" a) target
+
+buildTargetOf : List String -> BuildTarget -> Result String BuildTarget
+buildTargetOf [] acc = Ok acc
+buildTargetOf (v::rest) _ = match parseTarget v
+  Err msg => Err msg
+  Ok t => buildTargetOf rest t
 
 parseTarget : String -> Result String BuildTarget
 parseTarget "native" = Ok TNative
@@ -2219,7 +2278,7 @@ finishBuildArgs _ _ _ = Err "error: medaka build takes exactly one input file"
 -- @main's prologue), so a program run this way observes the CLI's own argv —
 -- unlike the OCaml driver, which slices argv[3..].  This only matters for
 -- programs that read `args ()`; the common `main = …` case is unaffected.  The
--- first positional after dropFlags is the entry; any further positionals are
+-- first positional after `runArgvFilter` is the entry; any further positionals are
 -- the program's intended args (passthrough; observed via the native extern).
 --
 -- Shared eval tail: once the gate has ruled the program CLEAN and the whole
@@ -2345,10 +2404,20 @@ runHelpText = stringConcat
   ]
 
 -- `run`'s flag vocabulary, as `runHelpText` documents it.  `--types` is also
--- stripped by the shared `dropFlags` but is `check`'s flag, not `run`'s, and
+-- stripped by `runArgvFilter` but is `check`'s flag, not `run`'s, and
 -- `runRunCmd` never reads it — it is not advertised here.
-runBoolFlags : List String
-runBoolFlags = ["--json", "--allow-internal", "--release"]
+--
+-- Declared as an `ArgSpec` so the C2 sentence has the same one writer every
+-- other verb's does, but `run` deliberately does NOT call `requireArgs`: see
+-- `runArgvFilter`'s note and `runRunCmd`'s first-positional check.
+runArgSpec : ArgSpec
+runArgSpec = spec
+  "run"
+  [
+    switch ["--json"] "emit the structured-diagnostics envelope on stderr",
+    switch ["--allow-internal"] "permit internal-only externs outside stdlib/",
+    switch ["--release"] "accepted and ignored (eval is never optimized)",
+  ]
 
 -- The `eval` + `total` phase lines, as a named partially-applied function so the
 -- deeply-indented `finishRunEval` call sites stay one flat line.  `finishRunEval`
@@ -2364,14 +2433,14 @@ runRunCmd : List String -> <IO> Unit
 runRunCmd argv =
   let perfOn = perfEnabled ()
   let perfT0 = now ()
-  let jsonMode = hasFlag "--json" argv
+  let jsonMode = runFlagGiven "--json" argv
   -- C4: under `--json` stderr is this verb's MACHINE channel, so `MEDAKA_PERF`'s
   -- `[perf]` lines must not be written to it as prose.  Arm `timer.mdk`'s sink
   -- and they are buffered instead, then folded into the ONE envelope as a `perf`
   -- array ([W-QUIETER]: routed, not silenced).  Disarmed for plain `run`, which
   -- is what `profile_compiler.sh` and the perf gates invoke.
   perfSinkOn := (jsonMode && perfOn)
-  match dropFlags argv
+  match runArgvFilter argv
     [] =>
       runAbort "usage: medaka run [--json] [--allow-internal] [--release] <file.mdk> [args...]"
     -- #219: a leading-`-` token `dropFlags` didn't recognize (e.g. `-e`) used
@@ -2389,14 +2458,14 @@ runRunCmd argv =
       -- `--`-shaped or not (`medaka run argv.mdk -- --foo` must still deliver
       -- ["--", "--foo"]), so `run` must NOT route its whole argv through
       -- `assertCliFlags` the way the other verbs do.
-      runAbort (unknownFlagErr "run" target runBoolFlags)
+      runAbort (unknownFlagMessage runArgSpec target)
     target::progArgs =>
       let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
       let rtPath = root ++ "/stdlib/runtime.mdk"
       let corePath = root ++ "/stdlib/core.mdk"
       let stdlibDir = root ++ "/stdlib"
       let roots = entrySearchRoots (dirOf2 target) ++ [stdlibDir]
-      let allowInternal = hasFlag "--allow-internal" argv
+      let allowInternal = runFlagGiven "--allow-internal" argv
       -- publish the args AFTER the target for the run-path `args` extern
       -- (eval.mdk's pArgs reads this Ref): `medaka run prog.mdk a b` ⇒ ["a","b"],
       -- matching what the same program's compiled binary sees.
@@ -2618,34 +2687,50 @@ testHelpText = stringConcat
   ]
 
 -- #2316: any `--`-prefixed token must be one of the known `medaka test`
--- flags. The old `testTargets` fallthrough (`startsWith "--" x = testTargets
--- rest`) dropped ANY unrecognized `--`-shaped token unconditionally — so
--- `--engines=native` (the `=`-form, which nothing here parses as `--engines`)
--- silently vanished, `parseTestEngines` saw no `--engines`/`--native` at all,
--- and the run defaulted to the interpreter and exited 0 with no diagnostic.
--- Reject anything `--`-shaped that isn't one of these up front instead.
-testValueFlags : List String
-testValueFlags = ["--engines", "--filter", "--seed", "--cases"]
-
-testBoolFlags : List String
-testBoolFlags = ["--native", "--json"]
+-- flags. The pre-#2316 `testTargets` fallthrough (`startsWith "--" x =
+-- testTargets rest`) dropped ANY unrecognized `--`-shaped token
+-- unconditionally — so `--engines=native` (the `=`-form, which nothing then
+-- parsed as `--engines`) silently vanished, `parseTestEngines` saw no
+-- `--engines`/`--native` at all, and the run defaulted to the interpreter and
+-- exited 0 with no diagnostic.  The spec below is what rejects it now.
+-- Declaration order is the roster order, reproducing the old
+-- `testBoolFlags ++ testValueFlags` rendering.
+--
+-- `--seed`/`--cases` are `value`, not `intValue`, and `--engines` is `value`,
+-- not `oneOf`: their rejection sentences are `parseTestIntFlag`'s and
+-- `parseEngineNames`'s own hand-written ones, and this slice keeps every one
+-- of them verbatim (convergence onto `args.mdk`'s `invalidValueMessage` is a
+-- later decision, not this slice's).
+-- `withStrictDash` (S-5, #2355 residual A): an undeclared `-x` used to fall
+-- through as a target path (AS-FILENAME); now C2-rejected like `--x`.
+testArgSpec : ArgSpec
+testArgSpec = withStrictDash (spec
+  "test"
+  [
+    switch ["--native"] "shorthand for --engines native",
+    switch ["--json"] "emit the structured-diagnostics envelope",
+    value ["--engines"] "eval,native" "engines to run each example under",
+    value ["--filter"] "SUBSTRING" "run only matching examples",
+    value ["--seed"] "N" "seed the property RNG",
+    value ["--cases"] "N" "property cases per test",
+  ])
 
 -- `--cases <n>`/`--seed <n>` must parse as integers — same "named + located"
 -- rejection style as an unknown engine name (`parseEngineNames`), not a
 -- silent fall-through to the default.
-parseTestIntFlag : String -> List String -> Result String (Option Int)
-parseTestIntFlag flag argv = match testFlagValue flag argv
+parseTestIntFlag : String -> Args -> Result String (Option Int)
+parseTestIntFlag nm a = match flagValue nm a
   None => Ok None
   Some s => match toInt s
     Some n => Ok (Some n)
-    None => Err "\{flag} requires an integer value, got '\{s}'"
+    None => Err "\{nm} requires an integer value, got '\{s}'"
 
 -- `--cases 0`/`--cases -3` parse as integers but `findFailure`'s `run >
 -- maxTests` guard makes any `n <= 0` an instant vacuous pass (0 draws,
 -- exit 0) — reject non-positive `--cases` the same "named + located" way
 -- as an unparseable one, instead of silently degrading to a vacuous green.
-parseTestCasesFlag : List String -> Result String (Option Int)
-parseTestCasesFlag argv = match parseTestIntFlag "--cases" argv
+parseTestCasesFlag : Args -> Result String (Option Int)
+parseTestCasesFlag a = match parseTestIntFlag "--cases" a
   Err msg => Err msg
   Ok None => Ok None
   Ok (Some n) =>
@@ -2656,21 +2741,20 @@ parseTestCasesFlag argv = match parseTestIntFlag "--cases" argv
 
 runTestCmd : List String -> <IO> Unit
 runTestCmd argv0 =
-  -- C1: `testFlagValue`/`testTargets` read the space form only, so
-  -- `--filter=zzz` was rejected as an unknown flag (loud, but still one of
+  -- C1: the old `testFlagValue`/`testTargets` pair read the space form only,
+  -- so `--filter=zzz` was rejected as an unknown flag (loud, but still one of
   -- the two spellings C1 requires every value flag to take).  #2316's own
-  -- check is now the shared `assertCliFlags` — same sentence, one writer.
-  let argv = expandEqFlags testValueFlags argv0
-  let _ = assertCliFlags "test" testBoolFlags testValueFlags argv
-  match parseTestEngines argv
+  -- check and that normalisation are both `args.mdk`'s job now.
+  let a = requireArgs testArgSpec argv0
+  match parseTestEngines a
     Err msg =>
       let _ = ePutStrLn "medaka test: \{msg}"
       exit 1
-    Ok engines => match parseTestCasesFlag argv
+    Ok engines => match parseTestCasesFlag a
       Err msg =>
         let _ = ePutStrLn "medaka test: \{msg}"
         exit 1
-      Ok casesOpt => match parseTestIntFlag "--seed" argv
+      Ok casesOpt => match parseTestIntFlag "--seed" a
         Err msg =>
           let _ = ePutStrLn "medaka test: \{msg}"
           exit 1
@@ -2681,9 +2765,9 @@ runTestCmd argv0 =
           let cases = match casesOpt
             Some n => n
             None => 100
-          let filterOpt = testFlagValue "--filter" argv
-          let jsonMode = hasFlag "--json" argv
-          match testTargets argv
+          let filterOpt = flagValue "--filter" a
+          let jsonMode = flag "--json" a
+          match a.positionals
             [] =>
               let _ = ePutStrLn "usage: medaka test [--native | --engines eval,native] [--json] [--filter <substring>] [--seed <n>] [--cases <n>] [file.mdk | dir]"
               exit 1
@@ -2704,8 +2788,8 @@ runTestCmd argv0 =
 -- has no way to know --native was ignored. So both together is a hard error
 -- naming both flags, not a silent pick.  With neither given, the default is
 -- `[EngInterp]`.
-parseTestEngines : List String -> Result String (List Engine)
-parseTestEngines argv = match (testFlagValue "--engines" argv, hasFlag "--native" argv)
+parseTestEngines : Args -> Result String (List Engine)
+parseTestEngines a = match (flagValue "--engines" a, flag "--native" a)
   (Some _, True) => Err "--native and --engines are mutually exclusive; --native is shorthand for --engines native"
   (Some spec, False) => parseEngineList spec
   (None, True) => Ok [EngNative]
@@ -2732,35 +2816,11 @@ engineOfName "eval" = Some EngInterp
 engineOfName "native" = Some EngNative
 engineOfName _ = None
 
--- `--flag value` (space-separated, unlike lint's `--flag=v1,v2`) — same shape
--- as `medaka snapshot`'s `snapFlagValue`, kept local since neither module
--- exports its copy.
-testFlagValue : String -> List String -> Option String
-testFlagValue _ [] = None
-testFlagValue _ [_] = None
-testFlagValue name (a::v::rest) =
-  if a == name then
-    Some v
-  else
-    testFlagValue name (v::rest)
-
--- Non-flag args for `medaka test`, minus `--native` and the VALUE of every
--- value-taking flag (the shared `dropFlags` doesn't know about a value-taking
--- flag). Mirrors `snapshotTargets`/`lintTargets`. By the time this runs,
--- `validateTestFlags` has already rejected any `--`-shaped token that isn't
--- one of these, so the final wildcard arm below is unreachable in practice —
--- kept only as a safety net, not a silent-drop path.
-testTargets : List String -> List String
-testTargets [] = []
-testTargets ("--engines"::_::rest) = testTargets rest
-testTargets ("--native"::rest) = testTargets rest
-testTargets ("--json"::rest) = testTargets rest
-testTargets ("--filter"::_::rest) = testTargets rest
-testTargets ("--seed"::_::rest) = testTargets rest
-testTargets ("--cases"::_::rest) = testTargets rest
-testTargets (x::rest)
-  | startsWith "--" x = testTargets rest
-  | otherwise = x :: testTargets rest
+-- `testFlagValue`/`testTargets` are gone: `Args.positionals` is exactly the
+-- non-flag args minus every value-taking flag's VALUE, and `flagValue` is the
+-- first-occurrence read they performed.  Their final `startsWith "--"` arms
+-- were already unreachable (the flag floor ran first), so nothing that could
+-- silently drop a token survives.
 
 -- Original single-file path, unchanged: read <MEDAKA_ROOT>/stdlib sources,
 -- build search roots, run `runTest`, exit 1 on any failure/read-error.
@@ -2985,14 +3045,20 @@ docHelpText = stringConcat
     "schemes) in <file.mdk> to stdout. Single-file only.\n",
   ]
 
+-- `doc` documents no flags at all, so its roster renders `none`.
+-- `withStrictDash` (S-5, #2355 residual A): an undeclared `-x` used to fall
+-- through as the target file (AS-FILENAME, exemplar X4); now C2-rejected.
+docArgSpec : ArgSpec
+docArgSpec = withStrictDash (spec "doc" [])
+
 runDocCmd : List String -> <IO> Unit
 runDocCmd argv =
-  -- C2: same AS-FILENAME hole `check` had (`dropFlags` passes an unknown
-  -- token through as the target).  `doc` documents no flags at all, so its
-  -- known set is empty — `--json`/`--types`/`--release`, which `dropFlags`
-  -- silently ate here (§5c: "accepted and silently ignored"), are unknown.
-  let _ = assertCliFlags "doc" [] [] argv
-  runDocTargets (dropFlags argv)
+  -- C2: same AS-FILENAME hole `check` had (the old shared `dropFlags` passed
+  -- an unknown token through as the target).  `--json`/`--types`/`--release`,
+  -- which that filter silently ate here (§5c: "accepted and silently
+  -- ignored"), are unknown to `doc` and rejected as such.
+  let a = requireArgs docArgSpec argv
+  runDocTargets a.positionals
 
 -- §5f: `medaka doc <a> <b>` used to render <a> and silently ignore every
 -- later positional at exit 0.  `doc` is single-file, so a second target is a
@@ -3047,53 +3113,77 @@ checkPolicyHelpText = stringConcat
     "sample request. Exit 0 on accept, 1 on reject.\n",
   ]
 
--- `--allow`/`--fn` take values; `parsePolicyGo` reads only the space form, so
--- `--allow=IO` used to fall through as the FIRST POSITIONAL and become the
--- filename (AS-FILENAME, C1's §1 opening transcript).  Normalise to the
--- spelling that parser reads, then reject anything still unrecognized.
-policyValueFlags : List String
-policyValueFlags = ["--allow", "--fn"]
+-- `--allow`/`--fn` take values; `check_policy.mdk`'s own `parsePolicyGo` reads
+-- only the space form, so `--allow=IO` used to fall through as the FIRST
+-- POSITIONAL and become the filename (AS-FILENAME, C1's §1 opening
+-- transcript).  Both spellings now reach the same key, and the `PolicyArgs`
+-- triple is built HERE from the parse rather than by re-scanning raw argv —
+-- `parsePolicyArgs` itself belongs to `tools.check_policy` and is left alone
+-- (S-3's file, not this slice's).
+-- `withStrictDash` (S-5, #2355 residual A): an undeclared `-x` used to fall
+-- through as the target file (AS-FILENAME); now C2-rejected like `--x`.
+policyArgSpec : ArgSpec
+policyArgSpec = withStrictDash (spec
+  "check-policy"
+  [
+    value ["--allow"] "L1,L2,..." "effect labels the plugin may use",
+    value ["--fn"] "NAME" "the function whose effect row is checked",
+  ])
 
 runCheckPolicyCmd : List String -> <IO> Unit
 runCheckPolicyCmd argv0 =
-  let argv = expandEqFlags policyValueFlags argv0
-  let _ = assertCliFlags "check-policy" [] policyValueFlags argv
-  runCheckPolicyArgs argv
+  let a = requireArgs policyArgSpec argv0
+  -- LAST-WINS on both values and FIRST positional as the file, exactly as
+  -- `parsePolicyGo` resolved them; defaults are its defaults.
+  runCheckPolicyArgs (PolicyArgs
+    (firstPositional a)
+    (optDefault (lastValue "--allow" a) "Cache,Log")
+    (optDefault (lastValue "--fn" a) "transform"))
 
-runCheckPolicyArgs : List String -> <IO> Unit
-runCheckPolicyArgs argv = match parsePolicyArgs argv
-  PolicyArgs None _ _ =>
-    let _ = ePutStrLn "usage: medaka check-policy <file.mdk> [--allow L1,L2,...] [--fn name]"
-    exit 1
-  PolicyArgs (Some target) allow fn =>
-    let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
-    let rtPath = root ++ "/stdlib/runtime.mdk"
-    let corePath = root ++ "/stdlib/core.mdk"
-    match readPreludeFile rtPath
+-- The first positional, or `None` — the shape `parsePolicyGo`/`parseManifestGo`
+-- produced by keeping the first bare token and ignoring every later one.
+firstPositional : Args -> Option String
+firstPositional a = match a.positionals
+  [] => None
+  f::_ => Some f
+
+optDefault : Option String -> String -> String
+optDefault (Some v) _ = v
+optDefault None d = d
+
+runCheckPolicyArgs : PolicyArgs -> <IO> Unit
+runCheckPolicyArgs (PolicyArgs None _ _) =
+  let _ = ePutStrLn "usage: medaka check-policy <file.mdk> [--allow L1,L2,...] [--fn name]"
+  exit 1
+runCheckPolicyArgs (PolicyArgs (Some target) allow fn) =
+  let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+  let rtPath = root ++ "/stdlib/runtime.mdk"
+  let corePath = root ++ "/stdlib/core.mdk"
+  match readPreludeFile rtPath
+    Err msg =>
+      let _ = ePutStrLn msg
+      exit 1
+    Ok rsrc => match readPreludeFile corePath
       Err msg =>
         let _ = ePutStrLn msg
         exit 1
-      Ok rsrc => match readPreludeFile corePath
+      Ok csrc => match readFile target
         Err msg =>
           let _ = ePutStrLn msg
           exit 1
-        Ok csrc => match readFile target
-          Err msg =>
-            let _ = ePutStrLn msg
-            exit 1
-          Ok tsrc =>
-            -- runCheckPolicy forces the accepted-plugin evaluation before it
-            -- returns, so an evaluation panic cannot leak an acceptance verdict.
-            match runCheckPolicy rsrc csrc tsrc allow fn
-              -- C4 (docs/ops/CLI-CONFORMANCE.md §4): stdout carries the ANSWER,
-              -- stderr everything else.  The ACCEPT report is the answer and
-              -- stays on stdout; the REJECTION report is the reason for a
-              -- nonzero exit — a diagnostic — and moves to stderr, where every
-              -- sibling verb already reports failure.  Exit code unchanged.
-              PolicyReject report =>
-                let _ = ePutStr report
-                exit 1
-              PolicyAccept report => putStr report
+        Ok tsrc =>
+          -- runCheckPolicy forces the accepted-plugin evaluation before it
+          -- returns, so an evaluation panic cannot leak an acceptance verdict.
+          match runCheckPolicy rsrc csrc tsrc allow fn
+            -- C4 (docs/ops/CLI-CONFORMANCE.md §4): stdout carries the ANSWER,
+            -- stderr everything else.  The ACCEPT report is the answer and
+            -- stays on stdout; the REJECTION report is the reason for a
+            -- nonzero exit — a diagnostic — and moves to stderr, where every
+            -- sibling verb already reports failure.  Exit code unchanged.
+            PolicyReject report =>
+              let _ = ePutStr report
+              exit 1
+            PolicyAccept report => putStr report
 
 -- ── manifest ─────────────────────────────────────────────────────────────────
 -- WS-1c of EFFECTS-CONFORMANCE-ROADMAP.md.  Emit a module's verified capability
@@ -3128,37 +3218,41 @@ manifestHelpText = stringConcat
   ]
 
 -- Same C1 fix as check-policy: `--fn=main` used to become the filename.
-manifestValueFlags : List String
-manifestValueFlags = ["--fn"]
+-- `withStrictDash` (S-5, #2355 residual A): an undeclared `-x` used to fall
+-- through as the target file (AS-FILENAME); now C2-rejected like `--x`.
+manifestArgSpec : ArgSpec
+manifestArgSpec = withStrictDash (spec
+  "manifest"
+  [value ["--fn"] "NAME" "the function whose effect row is emitted"])
 
 runManifestCmd : List String -> <IO> Unit
 runManifestCmd argv0 =
-  let argv = expandEqFlags manifestValueFlags argv0
-  let _ = assertCliFlags "manifest" [] manifestValueFlags argv
-  runManifestArgs argv
+  let a = requireArgs manifestArgSpec argv0
+  runManifestArgs (ManifestArgs
+    (firstPositional a)
+    (optDefault (lastValue "--fn" a) "main"))
 
-runManifestArgs : List String -> <IO> Unit
-runManifestArgs argv = match parseManifestArgs argv
-  ManifestArgs None _ =>
-    let _ = ePutStrLn "usage: medaka manifest <file.mdk> [--fn name]"
-    exit 1
-  ManifestArgs (Some target) fn =>
-    let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
-    let rtPath = root ++ "/stdlib/runtime.mdk"
-    let corePath = root ++ "/stdlib/core.mdk"
-    match readPreludeFile rtPath
+runManifestArgs : ManifestArgs -> <IO> Unit
+runManifestArgs (ManifestArgs None _) =
+  let _ = ePutStrLn "usage: medaka manifest <file.mdk> [--fn name]"
+  exit 1
+runManifestArgs (ManifestArgs (Some target) fn) =
+  let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+  let rtPath = root ++ "/stdlib/runtime.mdk"
+  let corePath = root ++ "/stdlib/core.mdk"
+  match readPreludeFile rtPath
+    Err msg =>
+      let _ = ePutStrLn msg
+      exit 1
+    Ok rsrc => match readPreludeFile corePath
       Err msg =>
         let _ = ePutStrLn msg
         exit 1
-      Ok rsrc => match readPreludeFile corePath
+      Ok csrc => match readFile target
         Err msg =>
           let _ = ePutStrLn msg
           exit 1
-        Ok csrc => match readFile target
-          Err msg =>
-            let _ = ePutStrLn msg
-            exit 1
-          Ok tsrc => putStr (runManifest rsrc csrc tsrc fn)
+        Ok tsrc => putStr (runManifest rsrc csrc tsrc fn)
 
 -- ── lint ──────────────────────────────────────────────────────────────────
 -- Parse target file(s) and run lint rules over the raw pre-desugar AST.
@@ -3205,27 +3299,45 @@ lintHelpText = stringConcat
     "Exit 0 unless a SevError finding exists.\n",
   ]
 
-lintBoolFlags : List String
-lintBoolFlags = ["--fix", "--json", "--cache"]
+-- Declaration order is the roster order, reproducing the old
+-- `lintBoolFlags ++ lintValueFlags` rendering.
+-- `withStrictDash` (S-5, #2355 residual A): an undeclared `-x` used to fall
+-- through as a target path ("these targets do not exist"); now C2-rejected.
+lintArgSpec : ArgSpec
+lintArgSpec = withStrictDash (spec
+  "lint"
+  [
+    switch ["--fix"] "rewrite fixable findings in place",
+    switch ["--json"] "emit the structured-diagnostics envelope",
+    switch ["--cache"] "reuse per-file results for unchanged files",
+    value ["--disable"] "r1,r2,..." "suppress findings from the named rules",
+    value ["--only"] "r1,..." "keep only findings from the named rules",
+    value ["--deny"] "r1,..." "promote findings from the named rules to error",
+  ])
 
 runLintCmd : List String -> <IO> Unit
 runLintCmd argv0 =
   -- C1: `parseLintFlagList` keys on the `--flag=` prefix (the spelling the
-  -- pre-commit hook uses), so normalise the space form INTO it rather than
-  -- rejecting it — `--deny rule-x` used to leave `rule-x` behind as an
-  -- ordinary lint TARGET with the flag applied to nothing.
-  let argv = collapseEqFlags lintValueFlags argv0
+  -- pre-commit hook uses) and the old `collapseEqFlags` rewrote the space form
+  -- INTO it — `--deny rule-x` used to leave `rule-x` behind as an ordinary
+  -- lint TARGET with the flag applied to nothing.  `args.mdk` accepts BOTH
+  -- spellings and hands back one value, so the rewrite is gone and the split
+  -- goes straight through `splitLintNames` (the same splitter
+  -- `parseLintFlagList` used, so the comma handling is unchanged, empty-string
+  -- edge included).  `.githooks/pre-commit:164` uses `--deny=…` and
+  -- `test/diff_compiler_snapshot_types_user.sh:93` uses `--disable …`; both
+  -- still land on the same names.
   -- C2: `lint`'s SILENT-ACCEPT cell — `lintTargets` skipped every `--`-shaped
   -- token, so `medaka lint --zzz ok.mdk` printed nothing and exited 0,
   -- indistinguishable from a clean run.
-  let _ = assertCliFlags "lint" lintBoolFlags lintValueFlags argv
-  let disableNames = parseLintFlagList "--disable=" argv
-  let onlyNames = parseLintFlagList "--only=" argv
-  let denyNames = parseLintFlagList "--deny=" argv
+  let a = requireArgs lintArgSpec argv0
+  let disableNames = lintNamesOf "--disable" a
+  let onlyNames = lintNamesOf "--only" a
+  let denyNames = lintNamesOf "--deny" a
   let _ = assertLintRuleNames (disableNames ++ onlyNames ++ denyNames)
-  let fixMode = hasFlag "--fix" argv
-  let jsonMode = hasFlag "--json" argv
-  let fileArgs = lintTargets argv
+  let fixMode = flag "--fix" a
+  let jsonMode = flag "--json" a
+  let fileArgs = a.positionals
   let _ = assertLintTargetsExist fileArgs
   let files = resolveLintTargets fileArgs
   -- C3 (docs/ops/CLI-CONFORMANCE.md §3): `lint`'s empty-target cell was the
@@ -3248,7 +3360,7 @@ runLintCmd argv0 =
     let multiFile = match files
       (_::_::_) => True
       _ => False
-    let cacheCtx = lintCacheCtx (hasFlag "--cache" argv) fixMode
+    let cacheCtx = lintCacheCtx (flag "--cache" a) fixMode
     -- `parsed` carries each readable target's (path, src, Positions, decls) out of
     -- the per-file pass so the cross-file tier reuses them instead of re-reading
     -- and re-parsing every file (#394).  It is EMPTY under --cache, where a hit
@@ -3421,18 +3533,24 @@ parsedToTriple (path, _, pos, decls) = (path, pos, decls)
 parsedToSrc : (String, String, Positions, List Decl) -> (String, String)
 parsedToSrc (path, src, _, _) = (path, src)
 
--- #1173 rejected the SPACE form of these three outright, because
--- `lintTargets` skips any `--`-prefixed token without consuming a following
--- value, so `--deny rule-name` left `rule-name` behind as an ordinary lint
--- TARGET with the flag applied to nothing and no diagnostic saying so.
--- CLI-CONFORMANCE.md C1 supersedes that ruling: BOTH spellings are accepted
--- by every value-taking flag of every verb, so `runLintCmd` normalises
--- `--deny rule-x` into `--deny=rule-x` (`collapseEqFlags`) before
--- `parseLintFlagList` sees it.  #1173's actual harm — the silent drop — is
--- what C1 forbids; the one-spelling rule was only ever the cheap way to
+-- #1173 rejected the SPACE form of `--disable`/`--only`/`--deny` outright,
+-- because the old `lintTargets` skipped any `--`-prefixed token without
+-- consuming a following value, so `--deny rule-name` left `rule-name` behind
+-- as an ordinary lint TARGET with the flag applied to nothing and no
+-- diagnostic saying so.  CLI-CONFORMANCE.md C1 supersedes that ruling: BOTH
+-- spellings are accepted by every value-taking flag of every verb, and
+-- `lintArgSpec` declares all three as value-taking, so neither spelling can
+-- leave a value behind as a target.  #1173's actual harm — the silent drop —
+-- is what C1 forbids; the one-spelling rule was only ever the cheap way to
 -- prevent it.
-lintValueFlags : List String
-lintValueFlags = ["--disable", "--only", "--deny"]
+--
+-- The comma split is `splitLintNames`, the SAME splitter `parseLintFlagList`
+-- applied to the text after `--flag=`, so `--disable=` (empty value) still
+-- yields `[""]` and is still rejected by name — unchanged, deliberately.
+lintNamesOf : String -> Args -> List String
+lintNamesOf nm a = match flagValue nm a
+  None => []
+  Some v => splitLintNames v
 
 -- §5f: an unknown rule name in `--only=`/`--disable=`/`--deny=` used to be
 -- accepted silently.  `--only=rule-nosuchrule` then matched NO rule, filtered
@@ -3686,13 +3804,6 @@ lintOneFileFix onlyNames disableNames target = match readFile target
         let _ = putStrLn "fixed \{intToString n} finding(s) in \{target}"
         False
 
--- All non-flag args in order (flags all start with --).
-lintTargets : List String -> List String
-lintTargets [] = []
-lintTargets (x::rest)
-  | startsWith "--" x = lintTargets rest
-  | otherwise = x :: lintTargets rest
-
 -- ── snapshot ──────────────────────────────────────────────────────────────
 -- `medaka snapshot [--check | --new | --bless] [--out <dir>] [--isolate] <paths...>`
 --
@@ -3751,9 +3862,9 @@ assertSnapshotTargetsExist files =
 
 -- Lock 1, on its own, with its own message.  A `--bless` naming nothing is refused BEFORE
 -- target expansion, so the refusal cannot be confused with "your glob matched no files".
-assertBlessIsScoped : List String -> List String -> <IO> Unit
-assertBlessIsScoped argv targets =
-  if not (hasFlag "--bless" argv) || targets /= [] then ()
+assertBlessIsScoped : Bool -> List String -> <IO> Unit
+assertBlessIsScoped blessOn targets =
+  if not blessOn || targets /= [] then ()
   else
     let _ = ePutStrLn "medaka snapshot: --bless requires explicit targets — there is no whole-suite bless."
     let _ = ePutStrLn "  Name what you are approving, e.g.:"
@@ -3794,48 +3905,62 @@ snapshotHelpText = stringConcat
 -- `--worker` is INTERNAL (the supervisor re-spawns this binary with it) but it
 -- is still a flag this verb parses, so it belongs in the known set — omitting
 -- it would make the crash-resume mechanism reject itself.
-snapshotBoolFlags : List String
-snapshotBoolFlags = ["--check", "--new", "--bless", "--isolate", "--worker"]
-
-snapshotValueFlags : List String
-snapshotValueFlags = ["--out", "--root", "--stages"]
+-- Declaration order is the roster order, reproducing the old
+-- `snapshotBoolFlags ++ snapshotValueFlags` rendering.  `--worker` is marked
+-- `internal`: it is a flag this verb genuinely parses (so it must stay in the
+-- roster — omitting it would make the crash-resume mechanism reject itself)
+-- but it is not for direct use.
+-- `withStrictDash` (S-5, #2355 residual A): an undeclared `-x` used to fall
+-- through as a target path ("these targets do not exist"); now C2-rejected.
+snapshotArgSpec : ArgSpec
+snapshotArgSpec = withStrictDash (spec
+  "snapshot"
+  [
+    switch ["--check"] "compare against the existing snapshot; write nothing",
+    switch ["--new"] "create a MISSING snapshot; never touch an existing one",
+    switch ["--bless"] "rewrite an EXISTING snapshot; requires explicit targets",
+    switch ["--isolate"] "run one process per fixture",
+    internal (switch ["--worker"] "INTERNAL: render one batch in a child process"),
+    value ["--out"] "DIR" "snapshot directory",
+    value ["--root"] "DIR" "compiler/stdlib root, overriding MEDAKA_ROOT",
+    value ["--stages"] "a,b,..." "restrict to the named stages",
+  ])
 
 runSnapshotCmd : List String -> <IO> Unit
 runSnapshotCmd argv0 =
-  -- C1: `snapFlagValue` reads only the space form, so `--stages=parse` was
-  -- SILENTLY DROPPED — every stage rendered and nothing said so.
-  let argv = expandEqFlags snapshotValueFlags argv0
+  -- C1: the old `snapFlagValue` read only the space form, so `--stages=parse`
+  -- was SILENTLY DROPPED — every stage rendered and nothing said so.
   -- C2: `snapshotTargets` skipped every unrecognized `--`-shaped token, so an
   -- unknown flag was either swallowed by the mode-missing usage line
   -- (REJECT-VAGUE) or, WITH a mode present, dropped without a word.
-  let _ = assertCliFlags "snapshot" snapshotBoolFlags snapshotValueFlags argv
-  let root = match snapFlagValue "--root" argv
+  let a = requireArgs snapshotArgSpec argv0
+  let root = match flagValue "--root" a
     Some r => r
     None => envOr "MEDAKA_ROOT" defaultMedakaRoot
-  let sel = snapshotStages argv
-  let targets = snapshotTargets argv
-  let _ = assertBlessIsScoped argv targets
+  let sel = snapshotStages a
+  let targets = a.positionals
+  let _ = assertBlessIsScoped (flag "--bless" a) targets
   let files = flatMap expandLintTarget targets
   let _ = assertSnapshotTargetsExist files
   if files == [] then
     let _ = ePutStrLn "usage: medaka snapshot [--check|--new|--bless] [--out <dir>] [--stages <a,b,…>] <paths...>"
     exit 1
   else
-    if hasFlag "--worker" argv then runSnapshotWorker root sel files
-    else match snapshotMode argv
+    if flag "--worker" a then runSnapshotWorker root sel files
+    else match snapshotMode a
       None =>
         let _ = ePutStrLn "medaka snapshot: pass --check (verify), --new (create missing snapshots) or --bless (rewrite existing ones)"
         exit 1
       Some mode =>
-        let ok = runSnapshotSupervisor root mode (hasFlag "--isolate" argv) (snapFlagValue "--out" argv) sel files
+        let ok = runSnapshotSupervisor root mode (flag "--isolate" a) (flagValue "--out" a) sel files
         if ok then () else exit 1
 
 -- Exactly one mode, and it is mandatory.  Two modes at once is a hard error rather than
 -- a precedence rule: `--check --bless` is a person who does not know which one they
 -- meant, and guessing for them is how a verify run turns into a rewrite run.
-snapshotMode : List String -> <IO> Option SnapMode
-snapshotMode argv =
-  let modes = filterList (f => hasFlag f argv) ["--check", "--new", "--bless"]
+snapshotMode : Args -> <IO> Option SnapMode
+snapshotMode a =
+  let modes = filterList (f => flag f a) ["--check", "--new", "--bless"]
   match modes
     ["--check"] => Some SnapCheck
     ["--new"] => Some SnapNew
@@ -3850,8 +3975,8 @@ snapshotMode argv =
 -- tools/snapshot.mdk).  Absent == every stage.  A typo'd stage name EXITS rather than
 -- being dropped: silently rendering fewer sections than asked for would report a clean
 -- pass over a stage that never ran.
-snapshotStages : List String -> <IO> List String
-snapshotStages argv = match snapFlagValue "--stages" argv
+snapshotStages : Args -> <IO> List String
+snapshotStages a = match flagValue "--stages" a
   None => []
   Some spec => match parseStages spec
     Ok names => names
@@ -3860,25 +3985,9 @@ snapshotStages argv = match snapFlagValue "--stages" argv
       let _ = exit 1
       []
 
--- Non-flag args, minus the VALUE of the value-taking flags (--out/--root/--stages).
-snapshotTargets : List String -> List String
-snapshotTargets [] = []
-snapshotTargets ("--out"::_::rest) = snapshotTargets rest
-snapshotTargets ("--root"::_::rest) = snapshotTargets rest
-snapshotTargets ("--stages"::_::rest) = snapshotTargets rest
-snapshotTargets (x::rest)
-  | startsWith "--" x = snapshotTargets rest
-  | otherwise = x :: snapshotTargets rest
-
--- `--flag value` (space-separated, unlike lint's `--flag=v1,v2`).
-snapFlagValue : String -> List String -> Option String
-snapFlagValue _ [] = None
-snapFlagValue _ [_] = None
-snapFlagValue name (a::v::rest) =
-  if a == name then
-    Some v
-  else
-    snapFlagValue name (v::rest)
+-- `snapshotTargets`/`snapFlagValue` are gone: `Args.positionals` is exactly
+-- the non-flag args minus every value-taking flag's VALUE, and `flagValue` is
+-- the first-occurrence read `snapFlagValue` performed.
 
 -- dirname on a POSIX path (mirrors build_cmd.dirOf, kept local to avoid an extra
 -- import of a non-exported helper).
@@ -3901,6 +4010,12 @@ dirGo2 path i =
 -- Usage text for `medaka repl --help` / `-h` — mirrors lspUsageLine's shape
 -- (#321), adapted to describe the interactive session instead of a stdio
 -- protocol server.
+-- `repl` takes no flags.  Not routed through `requireArgs`: it rejects ANY
+-- argument, flag-shaped or not, so its rule is a positional-shape rule and
+-- only the SENTENCE is shared.
+replArgSpec : ArgSpec
+replArgSpec = spec "repl" []
+
 replUsageLine : String
 replUsageLine = stringConcat
   [
@@ -3946,7 +4061,7 @@ runReplCmd ("-h"::_) =
   exit 0
 runReplCmd (bad::_) =
   -- C2: `repl` takes no flags, so its known set is empty.
-  let _ = ePutStrLn (unknownFlagErr "repl" bad [])
+  let _ = ePutStrLn (unknownFlagMessage replArgSpec bad)
   let _ = ePutStrLn replUsageLine
   exit 1
 
@@ -3960,6 +4075,10 @@ runReplCmd (bad::_) =
 -- Server Protocol. A plain String (not a function) so it can be printed to
 -- either stdout (help) or stderr (error), matching newUsageLine's shape
 -- (#582) rather than mcpUsage's stdout-only one (#299).
+-- `lsp` takes no flags either; same shape as `replArgSpec`.
+lspArgSpec : ArgSpec
+lspArgSpec = spec "lsp" []
+
 lspUsageLine : String
 lspUsageLine = stringConcat
   [
@@ -3978,7 +4097,7 @@ lspUsageLine = stringConcat
 -- correct (that's the actual protocol); only an explicit/unknown arg needs
 -- handling before the server starts. Structurally mirrors runMcpCmd (#299,
 -- same file) since lsp — like mcp — takes no positional arguments in normal
--- use; the rejection wording is the shared C2 one (`unknownFlagErr`), as
+-- use; the rejection wording is the shared C2 one (`unknownFlagMessage`), as
 -- runNewCmd's now is too.
 runLspCmd : List String -> <IO> Unit
 runLspCmd [] = runLspServerFromEnv ()
@@ -3990,7 +4109,7 @@ runLspCmd ("-h"::_) =
   exit 0
 runLspCmd (bad::_) =
   -- C2: `lsp` takes no flags either.
-  let _ = ePutStrLn (unknownFlagErr "lsp" bad [])
+  let _ = ePutStrLn (unknownFlagMessage lspArgSpec bad)
   let _ = ePutStrLn lspUsageLine
   exit 1
 

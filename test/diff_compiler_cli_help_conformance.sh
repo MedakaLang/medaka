@@ -34,7 +34,8 @@
 # A and B are execution-derived: run the verb with the flag, read the answer.
 # C cannot be — nothing you can RUN enumerates the flags nobody thought to try —
 # so it reads the roster each verb prints in its own unknown-flag rejection
-# (`assertCliFlags`, compiler/driver/medaka_cli.mdk, landed by
+# (`unknownFlagMessage`, stdlib/args.mdk, rendered from the verb's own
+# `ArgSpec` in compiler/driver/medaka_cli.mdk; landed by
 # S-unknown-flag-floor). That is still the BINARY's answer, not a source-grep
 # guess: source-grep cannot attribute a flag to a verb, because the parse arms
 # live in per-verb helpers across three files.
@@ -61,7 +62,7 @@
 #     documented as accepted-and-ignored in its own help, so it is CONFORMING
 #     dead surface and this gate must not flag it.
 #   * C covers only the verbs that PRINT a roster. A verb with no
-#     `assertCliFlags` call is listed as `NO ROSTER (uncovered)` in the report
+#     rejection roster is listed as `NO ROSTER (uncovered)` in the report
 #     and asserted on in neither direction of C. `(known: none)` — a genuinely
 #     flagless verb — is covered vacuously and correctly.
 #   * `build` shells out to clang, so its probes are the slow ones; NO_BUILD=1
@@ -158,8 +159,15 @@ for v in $VERBS; do
   if skip_build "$v"; then c_uncov="$c_uncov $v(NO_BUILD)"; continue; fi
   known=$(cli_known_flags_of "$v")
   if [ -z "$known" ]; then
-    # Cannot distinguish "no flags" from "no roster" — so this is UNCOVERED, and
-    # says so, rather than counting as a pass.
+    if [ "$(cli_had_roster)" = 1 ]; then
+      # A real `(known: none)` roster — the verb genuinely takes no flags.
+      # Nothing to check, but it IS covered: don't count it as uncovered.
+      echo "   $v: (roster present, zero flags)"
+      continue
+    fi
+    # No `(known: …)` substring at all — cannot distinguish "no flags" from
+    # "no roster" — so this is UNCOVERED, and says so, rather than counting
+    # as a pass.
     c_uncov="$c_uncov $v"
     continue
   fi
