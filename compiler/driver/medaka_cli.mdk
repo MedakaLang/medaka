@@ -2282,6 +2282,20 @@ parseTestIntFlag flag argv = match testFlagValue flag argv
     Some n => Ok (Some n)
     None => Err "\{flag} requires an integer value, got '\{s}'"
 
+-- `--cases 0`/`--cases -3` parse as integers but `findFailure`'s `run >
+-- maxTests` guard makes any `n <= 0` an instant vacuous pass (0 draws,
+-- exit 0) — reject non-positive `--cases` the same "named + located" way
+-- as an unparseable one, instead of silently degrading to a vacuous green.
+parseTestCasesFlag : List String -> Result String (Option Int)
+parseTestCasesFlag argv = match parseTestIntFlag "--cases" argv
+  Err msg => Err msg
+  Ok None => Ok None
+  Ok (Some n) =>
+    if n <= 0 then
+      Err "--cases requires a positive integer value, got '\{intToString n}'"
+    else
+      Ok (Some n)
+
 runTestCmd : List String -> <IO> Unit
 runTestCmd argv = match validateTestFlags argv
   Err msg =>
@@ -2291,7 +2305,7 @@ runTestCmd argv = match validateTestFlags argv
     Err msg =>
       let _ = ePutStrLn "medaka test: \{msg}"
       exit 1
-    Ok engines => match parseTestIntFlag "--cases" argv
+    Ok engines => match parseTestCasesFlag argv
       Err msg =>
         let _ = ePutStrLn "medaka test: \{msg}"
         exit 1
