@@ -30,13 +30,17 @@ name: CI
 # (#2179 — see `project_reach` below). `push`/`schedule`/`workflow_dispatch`: every
 # shard runs its full pattern, unconditionally, always.
 #
-# ⚠️ WHAT NEVER NARROWS, ON ANY EVENT: every gate the registry marks
+# ⚠️ WHAT NEVER NARROWS ON `merge_group` (it still narrows on `pull_request`,
+# same as everything else — see T-15 above): every gate the registry marks
 # `project = "compiler"` — the whole compiler gate suite — plus `soundness`,
-# `compiler-soundness`, `wasm` and `seed-health`. The queue's whole value is
-# testing the MERGED result — two independently-green branches have auto-merged
-# into a broken tree with zero git conflicts more than once, and no per-PR check
-# can see that. Those incidents were ALL compiler-infra collisions, which is why
-# that half stays load-bearing and queue-narrowing the compiler suite is out of
+# `compiler-soundness`, `wasm` and `seed-health`. Only `soundness` is
+# unconditional on EVERY event; the other three are still `pull_request`-
+# narrowed by their own `docs_only`/`compiler_touched`/corpora guards, exactly
+# like the compiler gate shards. The queue's whole value is testing the MERGED
+# result — two independently-green branches have auto-merged into a broken
+# tree with zero git conflicts more than once, and no per-PR check can see
+# that. Those incidents were ALL compiler-infra collisions, which is why that
+# half stays load-bearing and queue-narrowing the compiler suite is out of
 # scope (Val, 2026-08-28; docs/ops/CI-ARCHITECTURE.md §3.4). `soundness` is the
 # backstop for a different hole: all gate shards pass on an ill-typed compiler
 # (`make medaka` does not gate on type errors).
@@ -563,10 +567,15 @@ jobs:
 
           # "What is a project in this monorepo?" — a directory with a
           # `medaka.toml`, outside `compiler/` and outside `test/` (those
-          # manifests are loader FIXTURES). Byte-for-byte the rule
-          # test/preflight.sh, test/diff_compiler_project_enrolment.sh and
-          # `medaka gate reach` all use.
-          # ⚠️ This is a FOURTH copy of that rule, and the enrolment gate does not
+          # manifests are loader FIXTURES). Byte-for-byte the manifest-scan
+          # rule test/preflight.sh and test/diff_compiler_project_enrolment.sh's
+          # PREFLIGHT leg both use.
+          # ⚠️ NOT the same derivation `medaka gate reach --json` uses: that
+          # binary's project universe is the registry's `project` field
+          # (`projectUniverse`, compiler/tools/gate_cmd.mdk), not a manifest
+          # scan — two sources, reconciled only by the enrolment gate's REACH
+          # leg comparing them, never merged into one. This is also a FOURTH
+          # copy of the manifest-scan half, and the enrolment gate does not
           # (yet) know about it — it re-derives the registry/preflight/floor-gate
           # legs, not this one. It is written to be textually identical to
           # preflight's so a reviewer can diff the two by eye; if it ever needs to

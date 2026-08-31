@@ -290,13 +290,20 @@ files the queue can read without a compiler.
   narrowing itself out of the jobs it is changing: a diff touching `ci.yml`,
   `test/gates.toml` or `test/preflight.sh` is by construction a full run.
   Backstops: the nightly full run and the revert-to-green norm (§3.6).
-- **One rule, now four copies.** "What is a project" is `git ls-files
-  '*medaka.toml'` minus `compiler/` and `test/`, in `gate reach`, in
-  `preflight.sh`, in `test/diff_compiler_project_enrolment.sh` and now in
-  `ci.yml`'s `reach` step. The enrolment gate re-derives and compares the first
-  three on every run; **it does not yet know about `ci.yml`'s copy**, which is
-  written to be textually identical to preflight's for exactly that reason. Open
-  follow-up: teach the enrolment gate the fourth leg.
+- **Two rules, not one — reconciled, not merged.** "What is a project" has two
+  independent derivations: a manifest scan (`git ls-files '*medaka.toml'` minus
+  `compiler/` and `test/` — used by `preflight.sh`, `test/diff_compiler_
+  project_enrolment.sh`'s PREFLIGHT leg, and `ci.yml`'s `reach` step) and the
+  gate registry's own `project` field (`projectUniverse`, `medaka gate reach
+  --json`). They agree today over every manifest-bearing project — the
+  enrolment gate's REACH leg cross-checks that on every run — but `gate reach`
+  narrows on a registry `project` value with no manifest directory (e.g. a
+  hypothetical `demo`), and the manifest scan resolves a project `gate reach`
+  would not, so neither is a strict subset of the other. `ci.yml`'s copy is a
+  FOURTH text occurrence of the manifest-scan half specifically, written to be
+  textually identical to preflight's for exactly that reason — the enrolment
+  gate does not yet know about it. Open follow-up: teach the enrolment gate the
+  fourth leg, and decide whether the two derivations should be unified.
 - **Eject-readiness test**: a project whose CI is registry-scoped, graph-selected,
   and self-contained under `<project>/test/` extracts to its own repo trivially.
   "Could this project's CI leave the monorepo tomorrow?" is a standing design test.

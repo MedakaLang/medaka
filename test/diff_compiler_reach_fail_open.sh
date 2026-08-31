@@ -37,6 +37,19 @@
 # shape "preflight succeeded, said nothing about FULL/UNMAPPED, but derived
 # zero library-project gates" — and shows the step still answers `full`.
 #
+# ── HONESTY NOTE: arms 1 and 3 have teeth; arm 2 cannot ─────────────────────
+#
+# Arms 1 (derivation failure) and 3 (empty selection) each have a paired
+# "gut the fail-open branch, same fault, does the reason text vanish" check —
+# a check that cannot fail proves nothing. Arm 2 (unmapped path) does NOT,
+# and cannot: rule-1's "outside every project" loop and preflight's own
+# UNMAPPED derivation are the SAME set/prefix test over the SAME input (see
+# the file header), so they are provably redundant on every unmapped path —
+# gutting either one alone leaves the other still answering `full` for the
+# identical fault, which would make a single-branch teeth check pass for the
+# wrong reason. That redundancy is defense in depth, verified as such below
+# (arm 2's second check), not a gap this gate can close by asserting harder.
+#
 # Usage:  sh test/diff_compiler_reach_fail_open.sh
 # Exit:   0 all arms behave (green baseline narrows; every fault answers
 #         `full`, with the derivation-failure fault-handling code path shown
@@ -196,8 +209,9 @@ case "$out2" in
 esac
 
 # corroborate that this path is genuinely UNMAPPED as far as preflight itself
-# is concerned (not merely "outside" by some unrelated rule) —
-# demonstrates the two guards agree, they are not independent claims.
+# is concerned (not merely "outside" by some unrelated rule) — this IS this
+# arm's teeth: it shows the redundancy (see file header) is real, not
+# assumed. No branch-deletion teeth check follows, by construction (header).
 : > "$WORK/pf_changed.txt"
 printf 'zzz_unmapped_probe_dir/nothing.mdk\n' > "$WORK/pf_changed.txt"
 pf_out="$(PREFLIGHT_DRY=1 PREFLIGHT_CHANGED_FILE="$WORK/pf_changed.txt" sh test/preflight.sh 2>&1)"
