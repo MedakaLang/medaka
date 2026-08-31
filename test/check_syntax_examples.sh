@@ -30,7 +30,13 @@
 #                          this block's content, ignoring only a trailing
 #                          newline. An expectation is OPT-IN: a Medaka block
 #                          with no following medaka-expect stays check-only,
-#                          exactly as before — it is NOT skipped. A
+#                          exactly as before — it is NOT skipped. It is,
+#                          however, REPORTED: every such block prints a
+#                          `CHECKED-ONLY (no stdout expectation)` line and is
+#                          counted separately in the summary, so "type-checks
+#                          but its output is unverified" is a visible
+#                          category rather than an indistinguishable share of
+#                          the `checked` total. A
 #                          medaka-expect block with no preceding Medaka block
 #                          is a FAILURE, so a misplaced or orphaned
 #                          expectation cannot silently assert nothing. On a
@@ -84,6 +90,7 @@ checked=0
 failed=0
 skipped=0
 expected=0
+checkonly=0
 zero_docs=0
 fail_report=""
 doc_index=0
@@ -174,6 +181,25 @@ is_matching_fence_closer() {
     *[![:space:]]*) return 1 ;;
     *) return 0 ;;
   esac
+}
+
+# ── report an example that acquired no ```medaka-expect ────────────────────
+# A ```medaka / ```medaka-project block whose expectation window closes with no
+# expectation attached is CHECK-ONLY: it type-checks, but nothing verifies what
+# it prints. That is neither a skip nor a failure, so it used to be invisible —
+# indistinguishable from a stdout-compared block inside the `checked` total.
+# Report it, and count it, the way `medaka-nocheck` reasons are reported.
+# Called wherever the window closes: at any subsequent fence opener, and at
+# end of document.
+flush_pending() {
+  if [ -n "$pending_kind" ]; then
+    echo "CHECKED-ONLY (no stdout expectation) $doc_label:$pending_line"
+    checkonly=$((checkonly + 1))
+    doc_checkonly=$((doc_checkonly + 1))
+  fi
+  pending_kind=""
+  pending_prog=""
+  pending_why=""
 }
 
 # ── check one self-contained ```medaka block ────────────────────────────────
@@ -286,9 +312,18 @@ check_expect_block() {
     return
   fi
 
+  # Hermeticity: a documented example may write to a CWD-RELATIVE path (the
+  # file-IO chapter's `logPath = "expenses.log"` does). Inheriting the caller's
+  # CWD then drops that file in the repo root on every gate run. Execute in a
+  # fresh scratch directory instead, so such a write lands under $WORK and is
+  # reaped by the EXIT trap. $pending_prog and $WORK are absolute, so neither
+  # the program nor medaka.toml root walk-up is affected by the move.
+  run_cwd="$WORK/rundir_${doc_index}_$pending_line"
+  mkdir -p "$run_cwd"
+
   # Command substitution strips trailing newlines from BOTH sides, which is
   # exactly the one difference an expectation should not be sensitive to.
-  run_out="$("$MEDAKA" run "$pending_prog" 2>"$WORK/run_err.$doc_index")"
+  run_out="$(cd "$run_cwd" && "$MEDAKA" run "$pending_prog" 2>"$WORK/run_err.$doc_index")"
   run_rc=$?
   want="$(cat "$expect_file")"
   if [ -z "$want" ]; then
@@ -337,6 +372,7 @@ check_document() {
   doc_failed=0
   doc_skipped=0
   doc_expected=0
+  doc_checkonly=0
   blockfile="$WORK/block_$doc_index.mdk"
   expectfile="$WORK/expect_$doc_index.txt"
   pending_kind=""
@@ -403,7 +439,7 @@ check_document() {
         # window in which an expectation could attach to the last example.
         case "$OPEN_INFO" in
           medaka-expect) ;;
-          *) pending_kind=""; pending_prog=""; pending_why="" ;;
+          *) flush_pending ;;
         esac
       fi
     else
@@ -439,6 +475,9 @@ check_document() {
     fi
   done < "$doc"
 
+  # End of document closes the last expectation window too.
+  flush_pending
+
   if [ "$in_block" -eq 1 ]; then
     case "$tag" in
       medaka|project|expect|nocheck|invalid)
@@ -451,7 +490,7 @@ check_document() {
     esac
   fi
 
-  echo "$doc_label: checked $doc_checked examples ($doc_skipped skipped, $doc_expected stdout-compared, $doc_failed failed)"
+  echo "$doc_label: checked $doc_checked examples ($doc_skipped skipped, $doc_expected stdout-compared, $doc_checkonly check-only, $doc_failed failed)"
   if [ "$doc_checked" -eq 0 ]; then
     zero_docs=$((zero_docs + 1))
     echo "check_syntax_examples: FAILURE — $doc_label checked 0 examples; every selected document must contribute" >&2
@@ -470,7 +509,7 @@ while IFS= read -r doc; do
 done < "$guide_docs"
 
 echo "---"
-echo "checked $checked examples ($skipped skipped, $expected stdout-compared, $failed failed, $zero_docs documents with zero checked)"
+echo "checked $checked examples ($skipped skipped, $expected stdout-compared, $checkonly check-only, $failed failed, $zero_docs documents with zero checked)"
 
 if [ -n "$fail_report" ]; then
   printf '%s\n' "$fail_report"
