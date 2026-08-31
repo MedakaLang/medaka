@@ -9,12 +9,17 @@ Structure: **Foundations** (1–3) → **Medaka's worldview** (4–6) →
 
 ---
 
-## 0. Landing — "What is Medaka?"
-Positioning in ~1 screen. Pitch, a 15-line taste example, who this is for,
-map of the docs that follow.
+## 0. Introduction — "What is Medaka?"
+*File slug and H1 both landed as `00-introduction.md` / "Introduction" — simpler
+than "Landing" and this is the authority now, not the header above.*
+Positioning, a "what you get" feature list, a 15-line taste example, who this is
+for, and a map of the docs that follow.
 - Introduce: the pitch; a personality example (ADT + match + pipe + interp +
   bare IO block), unexplained; "you know programming, we teach Medaka."
-- Defer: everything.
+- Also carries: a short "Why Medaka?" origin/motivation essay, placed after the
+  taste example — not in the original plan, but a reasonable editorial addition
+  rather than drift worth fighting.
+- Defer: everything else.
 
 ## 1. Quickstart — "Your first program"
 Working program running in the playground in five minutes.
