@@ -513,3 +513,47 @@ refinement, `parseResult` only adds a pre-scan `parse` skips) — moot here
 regardless, since `stdlib/core.mdk`/`stdlib/runtime.mdk` always parse
 successfully and `docSchemes`'s own `unwrapDecls` already treated a
 theoretical `Err` on the prelude as `[]` defensively.
+
+## Before/after the `felt-latency` sprint — project workload, `Ir` (C1, #2036)
+
+Discharges the sprint contract's exit criterion C1: a **measured `Ir` reduction on the
+*project* workload** for `build`/`run`/`test`, using `test/perf_baseline.sh` (the same
+harness/co-metric as every other table in this file), not the depth-16,000 synthetic
+fixture every other measurement in this sprint used. Pre-sprint =
+`b35268c01225401b813171aa75d2484ceb53ba28` (main's tip at sprint start, per STATUS.md).
+Post-sprint = this sprint's head at packet time, `57e8b8dc80c6bfb33d578cb0a35693f09f879fde`
+(S-3-impl-v2 prelude-typecheck-once + F-converge-remaining-prelude-sites, the fix round that
+converged the remaining `run`/`build`/`test` call sites the `prelude-floor` sprint's own
+table above flagged as NOT yet converted). Two separate worktrees, one per commit, each
+`make medaka`'d cleanly from a cold bootstrap; neither built with `MEDAKA_STRICT=1` (a
+cross-tree perf comparison, not a correctness probe — see this packet's §4).
+
+```
+git worktree add --detach <before-tree> b35268c01225401b813171aa75d2484ceb53ba28
+sh <before-tree>/test/build_native_medaka.sh
+sh <before-tree>/test/perf_baseline.sh -n 5 > before.md
+# (AFTER tree = this sprint branch's own head, already built)
+sh test/perf_baseline.sh -n 5 > after.md
+```
+
+| verb  | workload | warm (pre) | warm (post) | Δwarm | Ir (pre) | Ir (post) | ΔIr |
+|-------|----------|-----------:|------------:|--------:|-----------------:|------------------:|-----------:|
+| check | project | 0.50s | 0.47s |  -6.0% | 3,007,911,611 | 3,008,256,837 |  +0.01% |
+| build | project | 1.71s | 1.66s |  -2.9% | 3,336,028,651 | 3,158,206,729 |  -5.33% |
+| run   | project | 0.54s | 0.53s |  -1.9% | 3,631,244,384 | 3,454,038,427 |  -4.88% |
+| test  | project | 0.29s | 0.27s |  -6.9% | 1,963,040,904 | 1,785,112,993 |  -9.06% |
+
+**Verdict: C1 discharged — a real, measured `Ir` reduction on `build`/`run`/`test` for the
+real project workload, ~177-178M instructions off each (5.3%/4.9%/9.1% respectively),
+consistent to within 0.4% of each other in absolute instruction count** (177,821,922 /
+177,205,957 / 177,927,911) — the signature of one fixed per-invocation redundant-prelude-
+parse/typecheck cost collapsing, the same shape the `prelude-floor` table above documented
+for `check`. `check`/project itself shows no `Ir` movement here (+0.01%, noise-level) — it
+was already converted by the *earlier* `prelude-floor` sprint (see the table above, where
+`check` was the verb that moved and `build`/`run`/`test` did not); this sprint's fix round
+closed exactly the complementary gap that table called out as the "obvious next win."
+Wall-clock (`warm`) moves in the same direction on all four rows but is noise-level on this
+9-file/3,650-line workload (a few percent, within this box's run-to-run jitter) — `Ir` is
+the metric that actually shows the effect cleanly here, which is the whole reason C1 asks
+for it specifically rather than accepting the wall-clock evidence already on file from this
+sprint's synthetic-fixture measurements.

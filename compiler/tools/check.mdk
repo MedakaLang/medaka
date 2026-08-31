@@ -48,8 +48,17 @@ import types.typecheck.{
 -- and so compiler/entries/check_main.mdk + compiler/medaka_cli.mdk can drive it.
 export
 runCheck : String -> String -> String -> String
-runCheck rsrc csrc tsrc =
-  let raw = parse tsrc
+runCheck rsrc csrc tsrc = runCheckFromDecls rsrc csrc (parse tsrc)
+
+-- S-3/#164: `runCheck`'s body, parameterised over the already-parsed target
+-- program — so a caller that already has `raw` in hand (e.g. `checkRoute`'s
+-- single-module clean arm, which gets it real-span from the loader) does not
+-- have to have `runCheck` re-parse `tsrc` from source.  `runCheck` itself
+-- keeps its exact signature/behaviour (placeholder-loc `parse`) for every
+-- other caller.
+export
+runCheckFromDecls : String -> String -> List Decl -> String
+runCheckFromDecls rsrc csrc raw =
   let desugared = desugar raw
   let runtimeP = parsePrelude rsrc
   let coreP = parsePrelude csrc

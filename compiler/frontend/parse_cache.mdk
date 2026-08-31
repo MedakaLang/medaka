@@ -79,6 +79,9 @@ dropKeyP k ((k2, v)::rest)
   | k == k2 = dropKeyP k rest
   | otherwise = (k2, v) :: dropKeyP k rest
 
+-- Exported so sibling per-tier caches (e.g. desugar_cache.mdk) can reuse the
+-- same MRU-truncation helper rather than duplicating it (rule-duplicate-body).
+export
 takeFirstN : Int -> List a -> List a
 takeFirstN _ [] = []
 takeFirstN n (x::xs)

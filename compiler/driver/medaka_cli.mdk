@@ -15,7 +15,12 @@
 -- subcommand falls through to the catch-all, which prints "not yet in native
 -- CLI" and exits 1.
 
-import tools.check.{runCheck, checkHasErrors, runCheckModules}
+import tools.check.{
+  runCheck,
+  runCheckFromDecls,
+  checkHasErrors,
+  runCheckModules,
+}
 import tools.snapshot.{
   runSnapshotWorker,
   runSnapshotSupervisor,
@@ -70,9 +75,9 @@ import frontend.parser.{
   parseErrorMessage,
   Positions,
 }
-import frontend.parse_cache.{parsePrelude}
+import frontend.desugar_cache.{desugaredPrelude}
 import frontend.desugar.{desugar}
-import frontend.resolve.{resolveModulesToHumaneByPath}
+import frontend.resolve.{resolveModulesToHumaneByPath, internalGuardFor}
 import driver.loader.{
   LoadError,
   LoadMsg,
@@ -92,6 +97,7 @@ import driver.diagnostics.{
   analyzeProject,
   analyzeLocated,
   analyzeLocatedG,
+  analyzeFrom,
   ppDiagCli,
   ppDiagCliSrc,
   ppDiagCliLines,
@@ -692,7 +698,13 @@ checkRoute typesMode allowInternal trusted _ _ rsrc csrc tsrc target [(mid, decl
   -- arm) flagged its OWN legitimate internal-extern calls as errors unless
   -- the flag was passed every time, even with MEDAKA_ROOT correctly set.
   -- Honour `trusted` here too, matching the multi-module arm below.
-  let diags = analyzeLocatedG mid (allowInternal || contains mid trusted) rsrc csrc tsrc
+  -- S-3/#164: this arm already has the loader's parsed, real-span `decls` for
+  -- this single module (`loadProgramFilesLocatedE` parsed it via
+  -- `parseLocatedResult`, the same machinery `analyzeLocatedG`'s internal
+  -- `parseLocated tsrc` would redundantly repeat) — call `analyzeFrom`
+  -- directly with `decls` instead of going through `analyzeLocatedG`, to skip
+  -- that re-parse.  Every OTHER `analyzeLocatedG` caller is untouched.
+  let diags = analyzeFrom mid rsrc csrc decls (internalGuardFor (allowInternal || contains mid trusted))
   let errs = filter isDiagError diags
   match errs
     [] =>
@@ -703,7 +715,11 @@ checkRoute typesMode allowInternal trusted _ _ rsrc csrc tsrc target [(mid, decl
       -- lines and re-emit them from `diags` (which carries the real Loc the
       -- --json path already reports).  See ERROR-QUALITY.md (Located dimension).
       let warns = filter isDiagWarn diags
-      let dump = stripWarningLines (runCheck rsrc csrc tsrc)
+      -- S-3/#164: same rationale as `analyzeFrom` above — `decls` is already
+      -- the real-span parse of `tsrc` from the loader, so skip `runCheck`'s
+      -- internal placeholder-loc `parse tsrc` and feed `decls` straight into
+      -- the extracted decls-accepting body.
+      let dump = stripWarningLines (runCheckFromDecls rsrc csrc decls)
       let filtered = userSchemeLines decls dump
       let report = if typesMode then dump else filtered
       let _ = putStrLn report
@@ -731,8 +747,8 @@ checkRoute typesMode allowInternal trusted _ _ rsrc csrc tsrc target [(mid, decl
       let _ = ePutStrLn (joinNl (map (ppDiagCliLines (srcLinesArr tsrc) target) errs))
       exit 1
 checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target mods =
-  let rtD = desugar (parsePrelude rsrc)
-  let coreD = desugar (parsePrelude csrc)
+  let rtD = desugaredPrelude rsrc
+  let coreD = desugaredPrelude csrc
   let modsD = map desugarPair mods
   -- RESOLVE-phase errors (e.g. importing a name a module does not export —
   -- PrivateNameAccess) go to STDERR + exit 1, mirroring the single-file arm's
@@ -1779,7 +1795,15 @@ typecheckGateRoute : Bool -> List String -> List (String, String) -> List String
 typecheckGateRoute allowInternal trusted _ _ rsrc csrc tsrc target [(mid, decls)] =
   -- Same fix as checkRoute's single-module arm: honour the caller-computed
   -- `trusted` (owning-root) signal here too, not just `--allow-internal`.
-  let diags = analyzeLocatedG mid (allowInternal || contains mid trusted) rsrc csrc tsrc
+  -- S-3/#164 (F-converge): the SAME conversion `checkRoute`'s single-module arm
+  -- already carries, applied to `build`'s structurally identical twin.  This arm
+  -- already holds the loader's parsed, real-span `decls` for this one module
+  -- (`loadProgramFilesLocatedE` → `parseLocatedResult`), so calling `analyzeFrom`
+  -- directly skips the redundant `parseLocated tsrc` inside `analyzeLocatedG` and
+  -- picks up `desugaredPrelude` for the prelude halves.  Same predicate, same
+  -- diagnostics: `analyzeLocatedG mid g rsrc csrc tsrc` IS
+  -- `analyzeFrom mid rsrc csrc (parseLocated tsrc) (internalGuardFor g)`.
+  let diags = analyzeFrom mid rsrc csrc decls (internalGuardFor (allowInternal || contains mid trusted))
   let errs = filter isDiagError diags
   match errs
     [] =>
@@ -1797,8 +1821,11 @@ typecheckGateRoute allowInternal trusted _ _ rsrc csrc tsrc target [(mid, decls)
       TGOk (flatMap renderTripleWarnings allWarns)
     _ => TGErr (joinNl (map (ppDiagCliLines (srcLinesArr tsrc) target) errs))
 typecheckGateRoute allowInternal trusted pathMap roots rsrc csrc tsrc target mods =
-  let rtD = desugar (parse rsrc)
-  let coreD = desugar (parse csrc)
+  -- S-1/#2234 (F-converge): live use (they feed `resolveModulesToHumaneByPath`
+  -- below), so this is a cache hit, not a deletion — `desugaredPrelude` is the
+  -- content-keyed memo of exactly `desugar (parsePrelude src)`.
+  let rtD = desugaredPrelude rsrc
+  let coreD = desugaredPrelude csrc
   let modsD = map desugarPair mods
   -- #186/#1360: attribute each module's resolve errors to its OWN file, via the
   -- loader's modId → path map — the SAME `resolveModulesToHumaneByPath` seam
@@ -2072,8 +2099,10 @@ runRunCmd argv =
                 -- evaluator so a RUNTIME error raised inside an imported module
                 -- reports THAT module's file instead of the entry's.
                 modulePathMap := pathMap
-                let rtD = desugar (parse rsrc)
-                let coreD = desugar (parse csrc)
+                -- S-1/#2234 (F-converge): same content-keyed prelude memo `check`
+                -- already routes through; consumed live by `elaborateModules` below.
+                let rtD = desugaredPrelude rsrc
+                let coreD = desugaredPrelude csrc
                 let modsD = map desugarPair mods
                 let trusted = projectTrustedMods target roots stdlibDir mods
                 -- #2072: the FFI-stamp discriminator, published to typecheck alongside the
@@ -2090,14 +2119,26 @@ runRunCmd argv =
                 -- than check's: it missed constraint/no-impl/coherence errors
                 -- (so run silently executed ill-typed programs) AND spuriously
                 -- fired on some check-clean programs (standalone-fn-shadows-iface).
-                match modsD
-                  [(runMid, _)] =>
+                -- S-3/#164 (F-converge): match on the RAW `mods` rather than the
+                -- desugared `modsD` so this arm can hand `analyzeFrom` the loader's
+                -- own raw, real-span decls (`analyzeFrom` desugars internally, and
+                -- its guard-exhaustiveness/`checkDerives` passes need the RAW tree).
+                -- `desugarPair` preserves the module id and `map` preserves length,
+                -- so the routing decision and `runMid` are unchanged.
+                match mods
+                  [(runMid, runDecls)] =>
                     -- Single-file: gate on the SAME located analysis `check`
                     -- uses (analyzeLocatedG → checkImplObligations et al.) and
                     -- render byte-identical caret diagnostics via ppDiagCliSrc,
                     -- instead of the opaque "type error in <file>" message (P1-8).
                     let tsrc = readFileSafe target
-                    let diags = analyzeLocatedG runMid allowInternal rsrc csrc tsrc
+                    -- S-3/#164 (F-converge): `analyzeFrom` with the loader's decls,
+                    -- skipping `analyzeLocatedG`'s redundant `parseLocated tsrc`.
+                    -- ⚠️ Predicate preserved EXACTLY: unlike `typecheckGateRoute`'s
+                    -- single-module arm, `run`'s never consulted the `trusted` set —
+                    -- only the bare `--allow-internal` flag.  That asymmetry is
+                    -- pre-existing; this parity slice does not change it.
+                    let diags = analyzeFrom runMid rsrc csrc runDecls (internalGuardFor allowInternal)
                     let errs = filter isDiagError diags
                     match errs
                       [] =>
@@ -3452,8 +3493,10 @@ runReplCmd [] =
         let _ = ePutStrLn msg
         exit 1
       Ok csrc =>
-        let runtimeDecls = desugar (parse rsrc)
-        let preludeDecls = desugar (parse csrc)
+        -- S-1/#2234 (F-converge): content-keyed prelude memo, same as every other
+        -- verb's route; consumed live by `initSession` below.
+        let runtimeDecls = desugaredPrelude rsrc
+        let preludeDecls = desugaredPrelude csrc
         let _ = initSession runtimeDecls preludeDecls
         replLoop ()
 runReplCmd ("--help"::_) =
