@@ -2625,6 +2625,20 @@ corpus = ["test/native_fixtures"]
 toolchain = []
 
 [[gate]]
+name = "diff_compiler_reach_fail_open"
+area = "infra"
+shard = "gates_2"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+run = "test/diff_compiler_reach_fail_open.sh"
+oracles = []
+sources = [".github/workflows/ci.yml", "test/preflight.sh", "test/gates.toml", "test/diff_compiler_reach_fail_open.sh"]
+corpus = []
+toolchain = []
+
+[[gate]]
 name = "diff_compiler_references_correctness"
 area = "infra"
 shard = "gates_6"
