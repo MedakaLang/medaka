@@ -3,6 +3,7 @@
 #
 # Produces playground/site/ containing exactly what a static CDN needs:
 #   index.html
+#   favicon.svg  og-card.png
 #   main.js
 #   editor.js  medaka_lang.js  medaka_tokenizer.js  diagnostics_map.js
 #   language-worker.js
@@ -14,8 +15,8 @@
 #   vendor/wat2wasm/wat2wasm.d.ts   (if present)
 #   vendor/codemirror/codemirror.js
 #   dist/playground.wasm
-#   dist/runtime.mdk
-#   dist/core.mdk
+#   dist/runtime.mdk  dist/core.mdk
+#   dist/<m>.mdk      for every EXTRA_MODULES entry in main.js (array, list, …)
 #
 # Runs build_playground_wasm.sh first if dist/playground.wasm is missing.
 # playground/site/ is gitignored — do NOT commit it.
@@ -46,6 +47,8 @@ mkdir -p "$SITE/vendor/wat2wasm" "$SITE/vendor/codemirror" "$SITE/dist"
 
 # Static page + JS glue (editor modules included)
 cp "$SCRIPT_DIR/index.html"          "$SITE/"
+cp "$SCRIPT_DIR/favicon.svg"         "$SITE/"
+cp "$SCRIPT_DIR/og-card.png"         "$SITE/"
 cp "$SCRIPT_DIR/main.js"             "$SITE/"
 cp "$SCRIPT_DIR/editor.js"           "$SITE/"
 cp "$SCRIPT_DIR/medaka_lang.js"      "$SITE/"
@@ -65,10 +68,31 @@ cp "$SCRIPT_DIR/vendor/wat2wasm/wat2wasm_bg.wasm" "$SITE/vendor/wat2wasm/"
 # Committed CodeMirror 6 single-ESM bundle (see build_editor.sh)
 cp "$SCRIPT_DIR/vendor/codemirror/codemirror.js" "$SITE/vendor/codemirror/"
 
-# Compiler wasm + stdlib sources
+# Compiler wasm + stdlib sources.
+#
+# Copy EVERY .mdk build_playground_wasm.sh staged, not a hardcoded subset: the
+# page fetches runtime.mdk + core.mdk *and* the ~20 EXTRA_MODULES it lists in
+# main.js, so `import array` in a user program needs dist/array.mdk present. A
+# hand-maintained list here silently drops modules added to main.js later —
+# which is exactly how dist/array.mdk went missing and every `import` 404'd at
+# Run time.
 cp "$DIST/playground.wasm" "$SITE/dist/"
-cp "$DIST/runtime.mdk"     "$SITE/dist/"
-cp "$DIST/core.mdk"        "$SITE/dist/"
+cp "$DIST"/*.mdk           "$SITE/dist/"
+
+# ── Verify the site can actually serve what the page asks for ───────────────
+# Derived from main.js, so this check cannot drift from the page's real needs.
+missing=""
+for m in $(sed -n '/^const EXTRA_MODULES = \[/,/\];/p' "$SCRIPT_DIR/main.js" \
+             | grep -o "'[a-z_0-9]*'" | tr -d "'"); do
+  [ -f "$SITE/dist/$m.mdk" ] || missing="$missing $m.mdk"
+done
+for f in runtime.mdk core.mdk; do
+  [ -f "$SITE/dist/$f" ] || missing="$missing $f"
+done
+if [ -n "$missing" ]; then
+  echo "FAIL: main.js fetches these at runtime but they are not in site/dist:$missing" >&2
+  exit 1
+fi
 
 # ── Report ───────────────────────────────────────────────────────────────────
 echo

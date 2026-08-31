@@ -541,6 +541,51 @@ Writing a diagnostic: `compiler/ERROR-QUALITY.md` + `compiler/DIAGNOSTIC-CODES-D
 
 **Playground e2e:** `cd playground/e2e && ./run.sh`. Needs node v24+,
 `playground/dist/playground.wasm` pre-built. See `playground/e2e/README.md`.
+The spec takes a base url as its first argument, so it also verifies a LIVE
+origin: `node tests/playground.spec.mjs https://medaka-lang.dev /tmp/shots`.
+
+## The website — <https://medaka-lang.dev>
+
+**The playground IS the website** (Cloudflare Pages, project `medaka`; also
+`medaka.pages.dev`). Pure static — the compiler runs client-side as WasmGC, so
+there is no backend to deploy. Full procedure, credential handling, and the two
+traps below: `playground/README.md` § Deploying.
+
+```sh
+bash playground/deploy_cloudflare.sh    # builds site/ if needed, then publishes
+```
+
+🚨 **[WEB-PREVIEW-SILENT] The deploy must pass `--branch` explicitly** (the script
+does; don't remove it). Wrangler otherwise infers the branch from git, so
+deploying from a topic branch publishes a **PREVIEW** — it prints *"Deployment
+complete"* and a url, **exits 0**, and the production origin keeps serving 404.
+The output is indistinguishable from a real deploy. Verify the ORIGIN, never the
+exit code:
+```sh
+curl -sS -o /dev/null -w '%{http_code}\n' https://medaka-lang.dev/dist/array.mdk   # 200
+```
+
+🚨 **[WEB-SITE-FILE-LIST] `build_site.sh` copies an EXPLICIT file list**, and the
+page fetches ~24 assets at startup (`runtime`/`core` + the ~20 `EXTRA_MODULES` in
+`main.js`, the two wasm blobs, `favicon.svg`, `og-card.png`). A new asset that is
+not added to that list is silently absent from the deploy — this shipped a site
+that 404'd on **every** stdlib import. The script now derives the expected set
+from `main.js` and fails closed; keep that check.
+
+⚠️ **[WEB-OG-ABSOLUTE] `og:image` in `index.html` is an ABSOLUTE
+`https://medaka-lang.dev/…` url** — scrapers don't resolve relative ones — so no
+link-preview card renders from any other origin, `*.pages.dev` previews included.
+Expected, not a bug. Regenerate the card with `python3 playground/build_og_card.py`
+(headless Chrome; reads the fish from `favicon.svg` and the token colours from
+`medaka_lang.js`).
+
+⚠️ **[WEB-SH-IS-A-GATE] A new `.sh` under `playground/` is EXECUTED by
+`make preflight`** — `_gate_candidates()` (`test/preflight.sh`) treats every
+tracked `.sh` as a gate and subtracts only what `test/CI-COVERAGE-TOOLS.txt`
+lists. `deploy_cloudflare.sh` was missing that entry and preflight **ran a live
+production deploy** on a diff that only touched `playground/README.md`. Ledger any
+new script there, and prove it by measuring the SIDE EFFECT (deployment count),
+not the gate list.
 
 ## Traps
 

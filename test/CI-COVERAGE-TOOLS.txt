@@ -114,6 +114,14 @@ playground/build_compiler_wasm   builds the compiler-to-wasm bundle.
 playground/build_editor          builds the CM6 editor bundle.
 playground/build_playground_wasm builds playground/dist/playground.wasm.
 playground/build_site            assembles the static playground site.
+playground/deploy_cloudflare     publishes playground/site/ to Cloudflare Pages (project `medaka`,
+                                 https://medaka-lang.dev). Running it proves nothing about the
+                                 compiler — it is a deploy, and it needs credentials no runner has.
+                                 🚨 It MUST stay listed here: `_gate_candidates()` in preflight.sh
+                                 subtracts this file from the gate universe, and without the entry
+                                 preflight treats any `playground/*.sh` as a gate and EXECUTES it —
+                                 observed doing a real production deploy on a `make preflight` that
+                                 only touched playground/README.md.
 
 # ── one-off spikes / dev-environment setup (not part of any suite) ──
 dist/linux-spike/spike         D0 Linux native-build spike (Docker). A historical experiment.
