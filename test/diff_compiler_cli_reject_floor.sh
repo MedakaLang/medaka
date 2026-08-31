@@ -70,7 +70,7 @@
 # prints which one it was.
 #
 # Usage:  sh test/diff_compiler_cli_reject_floor.sh
-# Exit:   0 R/K/S all hold; 1 a floor breach; 2 no ./medaka built.
+# Exit:   0 R/K/S/U all hold; 1 a floor breach; 2 no ./medaka built.
 
 set -u
 
@@ -308,12 +308,171 @@ done
 echo "   S: $s_ok of $k_n covered verbs are visible to R."
 echo
 
+# ── U: every flag-literal argv arm outside stdlib/args.mdk is either routed
+#      through requireArgs/parseArgs, or a declared, self-draining exemption ─
+#
+# R/K/S floor the sixteen verbs' BEHAVIOUR and the verbs already migrated onto
+# \`requireArgs\`. Neither can see a verb (or a codemod, or an undocumented
+# \`gate\` subcommand) that still walks its own argv by hand with a flag
+# literal — S-cli-onto-args (#2355) migrated most call sites onto
+# stdlib/args.mdk, but "most" is a claim about behaviour R/K/S already check;
+# it is not a claim R/K/S can make about the SOURCE. U is that source-level
+# property: every function clause outside stdlib/args.mdk whose pattern head
+# is a List-cons on a literal \`-\`/\`--\` flag token either calls
+# \`requireArgs\`/\`parseArgs\` (S-2/S-3's shapes, §4) somewhere in its verb's
+# call chain, or is named — with a one-line reason — in the exemption list
+# below. A \`match\`-arm dispatch table line (always ends \`=>\`, and rejects
+# nothing itself — e.g. \`runCli\`'s top-level verb router) is excluded by
+# the shape of the pattern, never by name.
+#
+# \`compiler/entries/*.mdk\` is a second category: standalone harness programs
+# invoked directly via \`medaka run compiler/entries/<file>.mdk\` by
+# test/build scripts, never a \`medaka <verb>\` dispatched from
+# \`medaka_cli.mdk\` — outside docs/ops/CLI-CONFORMANCE.md's sixteen-verb
+# scope entirely (§4's \`fuzz_gen_main.mdk\` lead). Exempted BY FILE, and U'
+# below verifies each is still not referenced from \`medaka_cli.mdk\` — if one
+# is later wired into the CLI, that reference is what catches it.
+echo "-- U: unrouted flag-literal argv arms outside stdlib/args.mdk --"
+
+# Raw scan 1: compiler/driver + compiler/tools (NOT entries/), function
+# clauses only — a dispatch-table \`match\` arm always ends \`=>\` and is
+# excluded by that shape.
+U_NONENTRY=$(grep -rEn '"-{1,2}[a-zA-Z][a-zA-Z0-9_-]*"::' "$ROOT/compiler" --include=*.mdk 2>/dev/null \
+             | grep -v '/compiler/entries/' \
+             | grep -v '=>' \
+             | sed -E "s#^$ROOT/##" \
+             | sed -E 's/^([^:]+):[0-9]+:[[:space:]]*([A-Za-z_][A-Za-z0-9_]*).*/\1:\2/' \
+             | sort -u | tr '\n' ' ')
+
+# Raw scan 2: compiler/entries/*.mdk, ANY flag-literal cons arm (\`=>\`
+# included — each of these files IS its own tiny dispatch table; there is no
+# separate per-verb parser to distinguish it from), deduped BY FILE.
+U_ENTRIES=$(grep -rEln '"-{1,2}[a-zA-Z][a-zA-Z0-9_-]*"::' "$ROOT/compiler/entries" --include=*.mdk 2>/dev/null \
+            | sed -E "s#^$ROOT/##" \
+            | sort -u | tr '\n' ' ')
+
+# The exemption list. Each entry is \`<path>:<function>\` (non-entries) or
+# \`<path>\` (entries, whole file) — one reason each.
+#
+#   dispatchSub    — the shared central --help/-h interceptor used by every
+#                     dispatchSub-routed verb before its own requireArgs-based
+#                     parse; recognizes only --help/-h and passes every other
+#                     token through unchanged. Not a C2 rejection arm.
+#   runReplCmd/     — zero-flag verbs. Each has a --help/-h shortcut plus a
+#   runLspCmd/        rejection arm rendered via unknownFlagMessage
+#   runMcpCmd         <verb>ArgSpec (an args.mdk value) rather than a
+#                     requireArgs call, because the verb short-circuits into
+#                     an interactive/server loop before there is a flag
+#                     position to route generically.
+#   runArgvFilter   — run's own known-flag filter. Deliberately NOT routed
+#                     through requireArgs/parseArgs by design (source
+#                     comment at its call site: routing run's whole argv
+#                     through the shared parse would break program-passthrough
+#                     args after the target file); the unknown-flag case is
+#                     still rejected downstream via unknownFlagMessage
+#                     runArgSpec in runRunCmd.
+#   splitCodemodArgv/ — codemod's own flag/path split, and the effect-labels
+#   parseEffectArgs     codemod's own vocabulary (--strip/--rename). A
+#                     codemod's flag vocabulary is per-codemod and not
+#                     statically knowable (§4); contract-scoped migration
+#                     wasn't named in S-2/S-3's actual landed scope.
+#   parsePolicyGo/  — DEAD CODE: medaka_cli.mdk builds PolicyArgs/
+#   parseManifestGo    ManifestArgs itself now (verified: grep -rn
+#                     parsePolicyArgs\\|parseManifestArgs compiler/ shows no
+#                     caller beyond their own definitions and one doc
+#                     comment). A cleanup finding, not a live unrouted arm.
+#   parseCiArgs/    — medaka gate ci / medaka gate balance: undocumented,
+#   parseBalArgs       maintainer-only subcommands, not part of the sixteen-
+#                     verb medaka help surface docs/ops/CLI-CONFORMANCE.md
+#                     scopes.
+EXEMPT2="
+compiler/driver/medaka_cli.mdk:dispatchSub
+compiler/driver/medaka_cli.mdk:runReplCmd
+compiler/driver/medaka_cli.mdk:runLspCmd
+compiler/driver/medaka_cli.mdk:runMcpCmd
+compiler/driver/medaka_cli.mdk:runArgvFilter
+compiler/driver/medaka_cli.mdk:splitCodemodArgv
+compiler/tools/codemod.mdk:parseEffectArgs
+compiler/tools/check_policy.mdk:parsePolicyGo
+compiler/tools/check_policy.mdk:parseManifestGo
+compiler/tools/gate_cmd.mdk:parseCiArgs
+compiler/tools/gate_cmd.mdk:parseBalArgs
+"
+# entries/*.mdk — standalone harness programs, not a medaka <verb> (§4).
+# NOTE: this gate's cons-pattern (`"--foo"::rest`) does not reach an exact
+# LIST-LITERAL match arm (`["--isolation", ...] => ...`, the shape
+# compiler/entries/llvm_emit_typed_main.mdk and wasm_emit_typed_main.mdk's
+# 4-token `--reemit-input` arm use) — those are genuine argv arms too, same
+# out-of-CLI-scope category, just outside this derivation's pattern. Left as
+# a documented gap (see the report) rather than widened here, so U' only
+# names entries this scan actually detects.
+EXEMPT2_ENTRIES="
+compiler/entries/build_main.mdk
+compiler/entries/core_ir_modules_main.mdk
+compiler/entries/fuzz_gen_main.mdk
+compiler/entries/refindex_main.mdk
+compiler/entries/wasm_emit_typed_main.mdk
+"
+
+is_exempt2() {
+  for _e in $EXEMPT2; do
+    [ "$_e" = "$1" ] && return 0
+  done
+  return 1
+}
+is_exempt2_entries() {
+  for _e in $EXEMPT2_ENTRIES; do
+    [ "$_e" = "$1" ] && return 0
+  done
+  return 1
+}
+
+u_leftover=0
+for site in $U_NONENTRY; do
+  if ! is_exempt2 "$site"; then
+    fail "U \`$site\` has an unrouted flag-literal argv arm (a List-cons pattern on a \`-\`/\`--\` literal) that calls neither \`requireArgs\` nor \`parseArgs\` and is not in this gate's declared exemption list — either route it through stdlib/args.mdk or add it to EXEMPT2 with a one-line reason."
+    u_leftover=$((u_leftover + 1))
+  fi
+done
+for f in $U_ENTRIES; do
+  if ! is_exempt2_entries "$f"; then
+    fail "U \`$f\` (compiler/entries/) has an unrouted flag-literal argv arm and is not in this gate's declared EXEMPT2_ENTRIES list — confirm whether it is CLI-reachable and either route it or exempt it with a one-line reason."
+    u_leftover=$((u_leftover + 1))
+  fi
+done
+u_n1=$(printf '%s\n' $U_NONENTRY | grep -c . || true)
+u_n2=$(printf '%s\n' $U_ENTRIES | grep -c . || true)
+echo "   U: $u_n1 non-entries site(s), $u_n2 entries file(s) scanned; $u_leftover unexplained."
+echo
+
+# ── U': declared U exemptions still match a real unrouted arm ────────────────
+echo "-- U': declared U exemptions still necessary --"
+for e in $EXEMPT2; do
+  case " $U_NONENTRY " in
+    *" $e "*) ;;
+    *) fail "U' \`$e\` is declared exempt from U but no longer matches any unrouted flag-literal arm — delete the stale exemption (it may now be routed, or the arm may be gone)." ;;
+  esac
+done
+for e in $EXEMPT2_ENTRIES; do
+  case " $U_ENTRIES " in
+    *" $e "*) ;;
+    *) fail "U' \`$e\` is declared exempt from U (entries) but no longer matches any unrouted flag-literal arm — delete the stale exemption." ;;
+  esac
+  eb=$(basename "$e" .mdk)
+  # Non-comment reference only — a `-- ... build_main.mdk` prose mention
+  # (there is one, deliberately) must not trip this.
+  if grep -v '^[[:space:]]*--' "$ROOT/compiler/driver/medaka_cli.mdk" 2>/dev/null | grep -q "$eb"; then
+    fail "U' \`$e\` is exempted as a non-CLI-reachable harness entry point, but \`compiler/driver/medaka_cli.mdk\` now references \`$eb\` outside a comment — it may have been wired into the CLI dispatch; verify and update the exemption."
+  fi
+done
+echo
+
 # `wc -l`, not `grep -c`: grep EXITS 1 on an empty file, so a `|| echo 0`
 # fallback appends a SECOND zero and every later numeric test dies on
 # "Illegal number: 0\n0" — a counting bug that reports FAIL on a clean run.
 n=$(wc -l < "$FAILS" | tr -d ' ')
 if [ "$n" -eq 0 ]; then
-  echo "PASS diff_compiler_cli_reject_floor: R/K/S all hold."
+  echo "PASS diff_compiler_cli_reject_floor: R/K/S/U all hold."
   exit 0
 fi
 echo "FAIL diff_compiler_cli_reject_floor: $n floor breach(es) above."
