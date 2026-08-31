@@ -5,7 +5,7 @@ for everyday use. Inspired by strong functional languages that have come before 
 seeks to offer a sleek, simplified, modern take on functional programming.
 
 > **Already comfortable with Haskell or OCaml?** Start with the
-> [Haskell and OCaml delta sheet](<Haskell and OCaml Delta.md>), then return
+> [Haskell and OCaml delta sheet](haskell-ocaml-delta.md), then return
 > here for the main guide.
 
 Medaka offers the following language features:
@@ -37,6 +37,13 @@ main =
   let total = expenses |> map cost |> sum
   println "You logged \{length expenses} expenses."
   println "Total spent: $\{total}"
+```
+
+It prints:
+
+```medaka-expect
+You logged 3 expenses.
+Total spent: $1239.5
 ```
 
 ## Why Medaka?

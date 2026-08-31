@@ -15,6 +15,12 @@ every example in this guide right in your browser.
 main = println "Hello world!"
 ```
 
+Running it prints:
+
+```medaka-expect
+Hello world!
+```
+
 As you can see in the previous example, single line comments in Medaka begin with `--`.
 Medaka also supports block comments.
 
@@ -23,4 +29,8 @@ Medaka also supports block comments.
    It can span multiple lines.
    This will print 7 to stdout. -}
 main = println (2 + 5)
+```
+
+```medaka-expect
+7
 ```

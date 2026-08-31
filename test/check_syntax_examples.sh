@@ -5,6 +5,13 @@
 # This gate extracts every tagged Medaka example and runs it through `medaka
 # check`, so a stale/wrong example fails CI instead of silently rotting.
 #
+# An example may ALSO declare the stdout it produces (see ```medaka-expect
+# below). Such an example is additionally EXECUTED with `medaka run` and its
+# actual stdout diffed against the declaration, so a guide that says "this
+# prints 7" fails CI when it no longer does. Prose claims about output are the
+# half `medaka check` cannot see: a program that type-checks perfectly can
+# still print the wrong thing.
+#
 # Fence-tagging convention (the info string after a CommonMark fence opener):
 #   ```medaka             a COMPLETE, self-contained, checkable file. Checked
 #                          after CommonMark content de-indentation with
@@ -14,6 +21,25 @@
 #                          files inside one synthetic project (with a
 #                          generated medaka.toml); every file matching
 #                          `main*.mdk` is checked as an entry point.
+#   ```medaka-expect      the expected stdout of the IMMEDIATELY PRECEDING
+#                          ```medaka / ```medaka-project block — "immediately"
+#                          meaning no other fenced block may intervene (prose
+#                          between the two is fine and expected, e.g. "Its
+#                          output is:"). The preceding example is run with
+#                          `medaka run` and its actual stdout compared against
+#                          this block's content, ignoring only a trailing
+#                          newline. An expectation is OPT-IN: a Medaka block
+#                          with no following medaka-expect stays check-only,
+#                          exactly as before — it is NOT skipped. A
+#                          medaka-expect block with no preceding Medaka block
+#                          is a FAILURE, so a misplaced or orphaned
+#                          expectation cannot silently assert nothing. On a
+#                          medaka-project block the expectation requires
+#                          exactly one main*.mdk entry point (otherwise
+#                          "the" stdout is ambiguous), which is likewise a
+#                          FAILURE rather than a skip. The block renders as a
+#                          plain code block in Markdown, so the declaration is
+#                          also what the reader sees.
 #   ```medaka-nocheck: reason
 #                          genuinely not checkable as a standalone example
 #                          (a bare grammar fragment / type-signature-only
@@ -36,8 +62,8 @@
 # is a FAILURE (exit 1), not a quiet pass.
 #
 # Usage: sh test/check_syntax_examples.sh
-# Exit:  0 if every checked example passed and every selected document checked
-#        at least one example
+# Exit:  0 if every checked example passed, every declared stdout matched, and
+#        every selected document checked at least one example
 #        1 otherwise (including "found nothing to check" and "binary missing")
 
 set -u
@@ -57,9 +83,22 @@ trap 'rm -rf "$WORK"' EXIT INT TERM
 checked=0
 failed=0
 skipped=0
+expected=0
 zero_docs=0
 fail_report=""
 doc_index=0
+
+# The example a ```medaka-expect block would attach to, if one comes next.
+# pending_kind is "" once anything other than a medaka-expect fence opener has
+# been seen, which is what makes "immediately preceding" enforceable in one
+# streaming pass. pending_prog is the runnable file; it is "" when the
+# preceding block exists but cannot be run unambiguously (a medaka-project
+# block whose main*.mdk entry point is not unique), and pending_why then
+# carries the reason to report.
+pending_kind=""
+pending_prog=""
+pending_line=0
+pending_why=""
 
 # Parse a CommonMark fence opener. On success, OPEN_CHAR, OPEN_COUNT, and
 # OPEN_INFO describe it. At most three literal leading spaces are accepted.
@@ -154,6 +193,14 @@ check_medaka_block() {
 === FAIL: $doc_label:$check_line (medaka block) ===
 $out"
   fi
+
+  # Offer this example to a ```medaka-expect block that may follow. The
+  # snapshot is a copy: $blockfile is reused by the next block in the document.
+  pending_kind="medaka"
+  pending_prog="$WORK/pending_${doc_index}_$check_line.mdk"
+  pending_line="$check_line"
+  pending_why=""
+  cp "$check_file" "$pending_prog"
 }
 
 # ── check one ```medaka-project (multi-file) block ─────────────────────────
@@ -180,9 +227,13 @@ check_project_block() {
   done < "$project_file"
 
   any_main=0
+  main_count=0
+  sole_main=""
   for mf in "$pdir"/main*.mdk; do
     [ -e "$mf" ] || continue
     any_main=1
+    main_count=$((main_count + 1))
+    sole_main="$mf"
     checked=$((checked + 1))
     doc_checked=$((doc_checked + 1))
     out="$("$MEDAKA" check "$mf" --json 2>&1)"
@@ -203,6 +254,73 @@ $out"
     fail_report="$fail_report
 === FAIL: $doc_label:$project_line (medaka-project has no main*.mdk entry point) ==="
   fi
+
+  # Offer this example to a ```medaka-expect block that may follow. "The"
+  # stdout of a project with several entry points is not well defined, so the
+  # offer carries a reason instead of a program in that case; declaring an
+  # expectation on it then FAILS rather than quietly checking nothing.
+  pending_kind="project"
+  pending_line="$project_line"
+  if [ "$main_count" -eq 1 ]; then
+    pending_prog="$sole_main"
+    pending_why=""
+  else
+    pending_prog=""
+    pending_why="medaka-expect needs exactly one main*.mdk entry point to run; this medaka-project block has $main_count"
+  fi
+}
+
+# ── run the pending example and diff its stdout against a ```medaka-expect ──
+check_expect_block() {
+  expect_file="$1"
+  expect_start="$2"
+  expected=$((expected + 1))
+  doc_expected=$((doc_expected + 1))
+
+  if [ -z "$pending_prog" ]; then
+    failed=$((failed + 1))
+    doc_failed=$((doc_failed + 1))
+    fail_report="$fail_report
+=== FAIL: $doc_label:$expect_start (medaka-expect for the block at :$pending_line — $pending_why) ==="
+    pending_kind=""
+    return
+  fi
+
+  # Command substitution strips trailing newlines from BOTH sides, which is
+  # exactly the one difference an expectation should not be sensitive to.
+  run_out="$("$MEDAKA" run "$pending_prog" 2>"$WORK/run_err.$doc_index")"
+  run_rc=$?
+  want="$(cat "$expect_file")"
+  if [ -z "$want" ]; then
+    want_lines=0
+  else
+    want_lines=$(printf '%s\n' "$want" | wc -l | tr -d ' ')
+  fi
+
+  if [ "$run_rc" -ne 0 ]; then
+    failed=$((failed + 1))
+    doc_failed=$((doc_failed + 1))
+    fail_report="$fail_report
+=== FAIL: $doc_label:$pending_line (medaka run exited $run_rc; expectation at :$expect_start) ===
+--- stderr ---
+$(cat "$WORK/run_err.$doc_index")
+--- stdout ---
+$run_out"
+  elif [ "$run_out" != "$want" ]; then
+    failed=$((failed + 1))
+    doc_failed=$((doc_failed + 1))
+    fail_report="$fail_report
+=== FAIL: $doc_label:$pending_line (stdout does not match the medaka-expect block at :$expect_start) ===
+--- expected ---
+$want
+--- actual ---
+$run_out"
+  else
+    echo "RAN (stdout matched) $doc_label:$pending_line: $want_lines line(s), expectation at :$expect_start"
+  fi
+
+  pending_kind=""
+  pending_prog=""
 }
 
 check_document() {
@@ -218,7 +336,13 @@ check_document() {
   doc_checked=0
   doc_failed=0
   doc_skipped=0
+  doc_expected=0
   blockfile="$WORK/block_$doc_index.mdk"
+  expectfile="$WORK/expect_$doc_index.txt"
+  pending_kind=""
+  pending_prog=""
+  pending_line=0
+  pending_why=""
   in_block=0
   tag=""
   block_start=0
@@ -245,6 +369,18 @@ check_document() {
           tag="project"
           : > "$blockfile"
           ;;
+        medaka-expect)
+          if [ -n "$pending_kind" ]; then
+            tag="expect"
+            : > "$expectfile"
+          else
+            failed=$((failed + 1))
+            doc_failed=$((doc_failed + 1))
+            fail_report="$fail_report
+=== FAIL: $doc_label:$lineno (orphan medaka-expect: no medaka/medaka-project block immediately precedes it) ==="
+            tag="invalid"
+          fi
+          ;;
         "medaka-nocheck: "[![:space:]]*)
           reason=${OPEN_INFO#"medaka-nocheck: "}
           echo "SKIPPED (nocheck) $doc_label:$lineno: $reason"
@@ -256,12 +392,18 @@ check_document() {
           failed=$((failed + 1))
           doc_failed=$((doc_failed + 1))
           fail_report="$fail_report
-=== FAIL: $doc_label:$lineno (invalid Medaka fence info string '$OPEN_INFO'; expected medaka, medaka-project, or medaka-nocheck: reason) ==="
+=== FAIL: $doc_label:$lineno (invalid Medaka fence info string '$OPEN_INFO'; expected medaka, medaka-project, medaka-expect, or medaka-nocheck: reason) ==="
           tag="invalid"
           ;;
         *)
           tag="other"
           ;;
+        esac
+        # "Immediately preceding" is enforced here: ANY other fence ends the
+        # window in which an expectation could attach to the last example.
+        case "$OPEN_INFO" in
+          medaka-expect) ;;
+          *) pending_kind=""; pending_prog=""; pending_why="" ;;
         esac
       fi
     else
@@ -270,13 +412,14 @@ check_document() {
         case "$tag" in
           medaka) check_medaka_block "$blockfile" "$block_start" ;;
           project) check_project_block "$blockfile" "$block_start" ;;
+          expect) check_expect_block "$expectfile" "$block_start" ;;
           nocheck|invalid|other) ;;
         esac
         tag=""
       else
         case "$tag" in
           nocheck|invalid|other) ;;
-          medaka|project)
+          medaka|project|expect)
             content_line=$line
             content_indent=0
             while [ "$content_indent" -lt "$block_content_indent" ]; do
@@ -285,7 +428,11 @@ check_document() {
                 *) break ;;
               esac
             done
-            printf '%s\n' "$content_line" >> "$blockfile"
+            if [ "$tag" = "expect" ]; then
+              printf '%s\n' "$content_line" >> "$expectfile"
+            else
+              printf '%s\n' "$content_line" >> "$blockfile"
+            fi
             ;;
         esac
       fi
@@ -294,7 +441,7 @@ check_document() {
 
   if [ "$in_block" -eq 1 ]; then
     case "$tag" in
-      medaka|project|nocheck|invalid)
+      medaka|project|expect|nocheck|invalid)
         failed=$((failed + 1))
         doc_failed=$((doc_failed + 1))
         fail_report="$fail_report
@@ -304,7 +451,7 @@ check_document() {
     esac
   fi
 
-  echo "$doc_label: checked $doc_checked examples ($doc_skipped skipped, $doc_failed failed)"
+  echo "$doc_label: checked $doc_checked examples ($doc_skipped skipped, $doc_expected stdout-compared, $doc_failed failed)"
   if [ "$doc_checked" -eq 0 ]; then
     zero_docs=$((zero_docs + 1))
     echo "check_syntax_examples: FAILURE — $doc_label checked 0 examples; every selected document must contribute" >&2
@@ -323,7 +470,7 @@ while IFS= read -r doc; do
 done < "$guide_docs"
 
 echo "---"
-echo "checked $checked examples ($skipped skipped, $failed failed, $zero_docs documents with zero checked)"
+echo "checked $checked examples ($skipped skipped, $expected stdout-compared, $failed failed, $zero_docs documents with zero checked)"
 
 if [ -n "$fail_report" ]; then
   printf '%s\n' "$fail_report"
@@ -339,5 +486,5 @@ if [ "$failed" -gt 0 ]; then
   exit 1
 fi
 
-echo "check_syntax_examples: PASSED ($checked/$checked)"
+echo "check_syntax_examples: PASSED ($checked/$checked checked, $expected/$expected stdout expectations matched)"
 exit 0

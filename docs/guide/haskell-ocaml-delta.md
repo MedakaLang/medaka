@@ -2,7 +2,7 @@
 
 This is a delta sheet, not a second tutorial. It names the places where
 Haskell or OCaml instincts are most likely to mislead you; the rest of the
-[main guide](<0. Introduction.md>) remains the default route. A Python-first
+[main guide](00-introduction.md) remains the default route. A Python-first
 (tier-1) route is deliberately deferred until real reader evidence shows what
 it needs—it is not an unfinished guide hidden elsewhere.
 
@@ -47,7 +47,7 @@ main =
 
 Its output is:
 
-```text
+```medaka-expect
 specific
 2
 ```

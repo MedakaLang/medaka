@@ -38,11 +38,11 @@ Tutorial-style onboarding, not a spec. Not yet cross-linked into this index's st
 
 | Doc | What it is | Status |
 |-----|------------|--------|
-| [`0. Introduction.md`](guide/0. Introduction.md) | Introduction | — |
-| [`1. Quick Start.md`](guide/1. Quick Start.md) | Quick Start | — |
-| [`2. Expressions.md`](guide/2. Expressions.md) | Expressions | — |
-| [`Haskell and OCaml Delta.md`](guide/Haskell and OCaml Delta.md) | Medaka for Haskell and OCaml Readers | — |
+| [`00-introduction.md`](guide/00-introduction.md) | Introduction | — |
+| [`01-quick-start.md`](guide/01-quick-start.md) | Quick Start | — |
+| [`02-expressions.md`](guide/02-expressions.md) | Expressions | — |
 | [`OUTLINE.md`](guide/OUTLINE.md) | Medaka Guide — Outline | — |
+| [`haskell-ocaml-delta.md`](guide/haskell-ocaml-delta.md) | Medaka for Haskell and OCaml Readers | — |
 
 ### design — open/partial work
 

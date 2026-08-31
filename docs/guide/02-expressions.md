@@ -17,6 +17,10 @@ array = [|"a", "b", "c"|] -- an in-memory array
 main = println list
 ```
 
+```medaka-expect
+[1, 2, 3]
+```
+
 Top-level declarations can't be reassigned.
 
 ```medaka-nocheck: intentionally invalid duplicate declaration example
@@ -47,6 +51,10 @@ main =
   let a = Ref 1
   a := 2
   println !a
+```
+
+```medaka-expect
+2
 ```
 
 Here `!` means dereference, not Boolean negation. Use `not` to negate a Boolean.
