@@ -355,6 +355,37 @@ CONSFAM_N="${PERF_CONSFAM_N:-200}"
 # KNOWN_OCEIL_conlocal_mark and both must be re-derived, not scaled.
 CONLOCAL_N="${PERF_CONLOCAL_N:-400}"
 
+# `guardwild` (issues #2333, #2125) samples at 100/200/400, NOT the default
+# 250/500/1000, and the band is FORCED from BOTH sides. It is the only shape here
+# whose PROGRAM SIZE is linear in N while its lowered decision TREE is quadratic in
+# N (see gen_guardwild): branch `Ci` legitimately carries the `i` guarded wildcard
+# rows that precede it, so the tree has sum(i) = Θ(N²) nodes and `emit` renders
+# every one of them. MEASURED total profiler wall/alloc on this box (single
+# deterministic run, wasm off):
+#     N= 50   0.33 s   195 MB
+#     N=100   0.44 s   274 MB
+#     N=200   0.97 s   526 MB
+#     N=400   2.86 s  1415 MB
+#
+# CEILING SIDE — cost. 100/200/400 costs ~4.3 s per shared run; 200/400/800 would
+# cost ~25 s and ~5 GB of peak allocation for the same verdict. Do not raise it
+# without re-pricing.
+#
+# FLOOR SIDE — the smaller band DILUTES THE SIGNAL PAST THE VERDICT LINE, and this
+# is why 50 was rejected rather than merely un-preferred. MEASURED, same tree,
+# same box, net alloc after BASE_ALLOC subtraction:
+#     50/100/200    48.2 -> 127.2 ->  380.0 MB   r1 2.64  r2 2.99   reads "ok"
+#    100/200/400   127.1 -> 380.0 -> 1268.3 MB   r1 2.99  r2 3.34   ** SUPERLINEAR
+# The 50-band's r2=2.99 against a 3.0 threshold is not a linear reading, it is the
+# SAME quadratic one hundredth under the line — a band that certifies the defect as
+# fine and flaps red on any unrelated allocation drift. 100 is the smallest base
+# that states the verdict with margin.
+#
+# ⚠️ THE CEILINGS BELOW ARE BAND-SPECIFIC: moving this knob invalidates
+# KNOWN_CEIL_guardwild / KNOWN_FIXED_guardwild, which must then be re-derived, not
+# scaled (the two rows above are the same curve resampled — 50's r2 IS 100's r1).
+GUARDWILD_N="${PERF_GUARDWILD_N:-100}"
+
 # `nestedparens` (#164, S-4) samples at 4000/8000/16000 — S-3's own per-stage
 # isolation band (`profile_main`, no CLI redundancy). Sized to match the exact
 # depths S-3 measured the substrate at, not the default 250/500/1000: `parse`
@@ -458,16 +489,50 @@ TIME_HEAP="${PERF_TIME_HEAP:-2147483648}"
 #           net-alloc, FLAT and linear to N=1600 (r2 2.02 @ 100/200/400, 2.02 @ 200/400/800,
 #           2.04 @ 400/800/1600; 91 -> 183 -> 370 -> 748 -> 1528 MB), and typecheck TIME
 #           dropped under the 200ms floor. PROMOTED OUT 2026-07-16 — now a HARD linear gate.
-# No currently-ledgered superlinear shapes: every entry has drained. is_known() below
-# stays (a future regression can re-ledger a shape without re-adding the plumbing).
-KNOWN_SUPERLINEAR=""
+#   guardwild — LOWERING a match that interleaves constructor arms with GUARDED
+#           column-0 wildcard arms (issue #2125, the residual of #408's fix). The
+#           entry is LIVE, and unlike every drained row above it is not a claim
+#           that someone forgot to fix a scan: `conBranch`
+#           (compiler/ir/core_ir_lower.mdk) hands every constructor branch its own
+#           copy of the column-0 wildcard rows via `map (padWildRow a) wilds`, and
+#           at this shape both the head count and the wildcard-row count are Θ(N),
+#           so the work — AND THE LOWERED TREE ITSELF — is Θ(N²). Branch `Ci`
+#           genuinely has to test the `i` guards that precede it, so a linear
+#           reading here would mean the tree stopped being built correctly, not
+#           that the cost was optimised away. That is why the ceiling is
+#           QUADRATIC-AWARE rather than a 3.0-ish "nearly fixed" number, exactly as
+#           KNOWN_ACEIL_reexports_resolve is (see its note: same reasoning, alloc
+#           arm, intrinsic O(N²) corpus). MEASURED on this box, net alloc after
+#           BASE_ALLOC subtraction, N=100/200/400:
+#               127.1 -> 380.0 -> 1268.3 MB   r1 2.99  r2 3.34
+#           OBSERVED RED before ledgering, verbatim:
+#               $ PERF_ONLY=guardwild PERF_GUARDWILD_N=100 sh test/diff_compiler_perf_scaling.sh
+#               guardwild  100  127.1 MB  380.0 MB  1268.3 MB  2.99  3.34 \
+#                 ** SUPERLINEAR (ALLOC) ** (r2 > 3.0x)
+#           CEILING 3.68 = the measured r2 (3.34) + 10% (S-2's headroom convention),
+#           and it is capped well below the 4.0 a pure quadratic converges to, so a
+#           CUBIC regression — the thing that would mean `wilds` started being
+#           re-derived per branch instead of once — still reds this row. FIXED 2.60
+#           is the file-wide convention and sits under the linear-ish readings the
+#           50-band produces, so a band shrink cannot false-PROMOTE it.
+#           ⚠️ DRAINING THIS ROW IS NOT A MATTER OF MAKING A SCAN FASTER. #2125 is
+#           discharged only by a lowering that stops materialising one branch per
+#           head with the full wildcard tail (e.g. sharing the guard chain), which
+#           is a codegen change, not a data-structure swap.
+KNOWN_SUPERLINEAR="
+guardwild
+"
+KNOWN_CEIL_guardwild="3.68";  KNOWN_FIXED_guardwild="2.60"
 
 # ── PERF_LEDGER_EXTRA: the DELIBERATE-RED SEAM for the ledger branches (#2150) ──
 #
 # The ledger branches are the hardest code in this file to observe red, because they
-# only run when a row is BOTH ledgered AND doing something the ledger did not predict —
-# and KNOWN_SUPERLINEAR is currently EMPTY (every entry drained). An unobservable branch
-# is exactly what #2160 exists to stop shipping, so there has to be a way in.
+# only run when a row is BOTH ledgered AND doing something the ledger did not predict.
+# When these knobs were built KNOWN_SUPERLINEAR was EMPTY (every entry had drained); it
+# now carries exactly one live row (`guardwild`, #2125), which is still not a way to
+# observe the MALFORMED / GOT-WORSE / PROMOTE branches without editing the ledger. An
+# unobservable branch is exactly what #2160 exists to stop shipping, so there has to be
+# a way in.
 #
 # These three variables APPEND to the three ledgers. They are:
 #   * ADD-ONLY — nothing can remove a real ledger entry through them, so they cannot be
@@ -715,6 +780,51 @@ gen_matchlits() {
   # main CALLS classify — same reason gen_match roots toInt: `main = println 1`
   # roots nothing, so DCE prunes classify and the exhaust work never runs.
   printf 'main = println (classify 0)\n' >> "$f"
+}
+
+gen_guardwild() {
+  n=$1; f=$2; : > "$f"
+  # The GUARDED-WILDCARD sibling of gen_match (issues #2333, #2125). One data decl
+  # with N constructors and ONE match that INTERLEAVES, N times, a constructor arm
+  # `Ci => i` with a guarded catch-all arm `_ if k == i => i`.
+  #
+  # ⚠️ THE INTERLEAVING IS THE WHOLE SHAPE — a block of guarded `_` arms FOLLOWED
+  # by the constructor arms measures nothing, and this was MEASURED, not reasoned:
+  # `compileRows` (compiler/ir/core_ir_lower.mdk) tests `allWild pats` on the FIRST
+  # row before it ever reaches `buildConSwitch`, so a leading run of guarded `_`
+  # rows is peeled off one row at a time into a CTGuard chain and the con-switch
+  # never sees a single wildcard row. That variant reads DEAD LINEAR: lower's net
+  # alloc 4.35 -> 17.1 -> 66.6 MB is the INTERLEAVED shape at N=100/200/400
+  # (r1 3.93, r2 3.89), against 0.85 -> 1.69 -> 3.50 MB (r ~2.0) for the
+  # block-then-ctors variant at the same N.
+  #
+  # What the interleaving reaches is #2125 — the residual of #408's fix. #408
+  # stopped `buildConSwitch` from re-filtering the whole matrix once per head;
+  # `conBuckets` now buckets in one pass. But `wildTailRows` collects the
+  # column-0 wildcard rows ONCE and `conBranch` hands EVERY branch its own
+  # `map (padWildRow a) wilds` merge — Θ(wildcards) per branch. With both the
+  # head count and the wildcard-row count growing as Θ(N) that is Θ(N²), which is
+  # what the ledger row below records. The guards are load-bearing twice over: an
+  # UNguarded `_` arm would make every later arm unreachable, so only a guarded
+  # catch-all can sit ahead of a constructor arm at all.
+  #
+  # ⚠️ It does NOT lift the `exhaust-guards` stage (#2333) — see the waiver in
+  # test/PERF-STAGE-WAIVERS.txt for the measurement and why no shape can.
+  printf 'data T =\n' >> "$f"
+  i=0; while [ "$i" -lt "$n" ]; do
+    if [ "$i" -eq 0 ]; then printf '  C%s\n' "$i"; else printf '  | C%s\n' "$i"; fi
+    i=$((i+1))
+  done >> "$f"
+  printf 'toInt : T -> Int -> Int\ntoInt v k = match v\n' >> "$f"
+  i=0; while [ "$i" -lt "$n" ]; do
+    printf '  C%s => %s\n' "$i" "$i"
+    printf '  _ if k == %s => %s\n' "$i" "$i"
+    i=$((i+1))
+  done >> "$f"
+  # ⚠️ `main` CALLS `toInt` — same load-bearing reason as gen_match/gen_matchlits:
+  # `main = println 1` roots nothing, dceFilter prunes `toInt`, and the backend
+  # stages would time an empty program (i.e. grade NOTHING) while still looking ok.
+  printf 'main = println (toInt C0 0)\n' >> "$f"
 }
 
 gen_listlit() {
@@ -1593,9 +1703,11 @@ stage_times_min_modules() {
 # util.lookupAssoc, threaded through the profiler's emitPhaseAO 5th column). Unlike
 # TIME this needs NO min-of-K, NO heap pin, and NO floor: GC-free integer counts are
 # byte-for-byte reproducible, so ONE run yields the true per-stage op delta. That is
-# the whole point — a deterministic signal grades the small stages (mark / desugar /
-# exhaust-guards) that TIME physically cannot, because it is never contaminated by
-# runner noise and so needs no 200ms floor to protect it.
+# the whole point — a deterministic signal grades the small stages (`mark` above all)
+# that TIME physically cannot, because it is never contaminated by runner noise and so
+# needs no 200ms floor to protect it. (`exhaust-guards` was named here too until #2333
+# measured it: it can reach NO counted op at all, so it is waived rather than graded —
+# see the OP_STAGES note below.)
 #
 # The per-stage op deltas are extracted (ops_from) from the SAME wasm-off run the ALLOC
 # arm already makes each size — see the profile_run/alloc_from/ops_from block above.
@@ -1700,7 +1812,18 @@ stage_times_min_modules() {
 # grade_time_stage, so a profiler that stops emitting the row still hard-fails with
 # "NO MEASUREMENT". This list is "stages graded at the shape's own band"; wasm-emit is
 # the one stage that is not, because it cannot afford resolve's N.
-TIME_STAGES="parse exhaust-guards desugar resolve mark typecheck elaborate dce mangle fmt lint lower emit"
+# ⚠️ `exhaust-guards` IS DELIBERATELY ABSENT FROM BOTH THIS LIST AND OP_STAGES, and
+# it is WAIVED in test/PERF-STAGE-WAIVERS.txt rather than graded here. It is not an
+# oversight and it is not a coverage gap — see that waiver for the measurement. The
+# short version, because a reader who does not know it will "fix" this line: the
+# stage's counted-op total is STRUCTURALLY ZERO (`compiler/frontend/exhaust.mdk`
+# reaches `util.contains` from exactly one place, `firstMissing`, on the missing-
+# CONSTRUCTOR-witness path, which no guard shape enters), and its wall time is 0.3-2.6
+# ms on every shape measured, three orders under the ${TIME_FLOOR}s floor. Both arms
+# printed SKIP on every shape for as long as the rows existed. It IS graded, per stage,
+# by test/diff_compiler_stage_ir_scaling.sh's callgrind Ir arm, which reads it 2.13-2.25
+# across match/xref/vchain — the `load` waiver's precedent exactly.
+TIME_STAGES="parse desugar resolve mark typecheck elaborate dce mangle fmt lint lower emit"
 
 # ── KNOWN SLOW (TIME) — a ledger, NOT a skip-list ────────────────────────────
 #
@@ -2092,10 +2215,25 @@ is_known_time() {
 # whose absolute time never clears the 200ms floor on ANY shape — `mark` above all —
 # so TIME grades NOTHING there while OP grades them from a single run.
 #
-# `desugar`/`exhaust-guards` are in the list for completeness: they currently do ZERO
-# counted ops (they call neither util.contains nor util.lookupAssoc), so they always
-# self-skip below OP_FLOOR — but the plumbing is here the day either starts scanning.
-OP_STAGES="desugar resolve mark typecheck exhaust-guards elaborate dce mangle"
+# `desugar` is in the list for completeness: it currently does ZERO counted ops (it
+# calls neither util.contains nor util.lookupAssoc), so it always self-skips below
+# OP_FLOOR — but the plumbing is here the day it starts scanning.
+#
+# ⚠️ `exhaust-guards` USED TO SIT BESIDE IT ON THAT ARGUMENT AND NO LONGER DOES (#2333).
+# "The plumbing is here the day it starts scanning" is a claim about a stage that COULD
+# start scanning. `exhaust-guards` cannot on any guard-bearing input: `exhaust.mdk` calls
+# `util.contains` from exactly one site (`firstMissing`, reached only from
+# `missingCtorPat` on the missing-CONSTRUCTOR-witness path) and `util.lookupAssoc` from
+# none, while the guard-totality path — `checkGroup` -> `checkGroupCovered` -> `useful` —
+# touches neither. MEASURED, three separate guard constructs, N=200, this box:
+#     match-arm `if` guards       (N guarded `_` arms + catch-all)   ops 0
+#     equation guards             (one clause, N `| cond = e` arms)  ops 0
+#     N guarded-partial groups    (N functions, 2 guard arms each)   ops 0
+# The row was therefore not "waiting for plumbing", it was unreachable, and a stage
+# that prints SKIP on every shape forever is grading nothing while reading as covered.
+# It is now WAIVED in test/PERF-STAGE-WAIVERS.txt and graded on the callgrind Ir arm
+# instead; see the note above TIME_STAGES.
+OP_STAGES="desugar resolve mark typecheck elaborate dce mangle"
 
 # TOOSMALL guard (mirrors the alloc arm's d1<1.0, NOT TIME's noise floor — op counts
 # are deterministic, so this is an ABSOLUTE-count guard, not a noise guard). A stage
@@ -3043,7 +3181,7 @@ unset _cc_t _cc_c
 # until this same slice's #1017 marker.mdk fix drained it as a side effect (now watch-
 # only, reads linear). Its ~13 s is the whole reason #2030's pin is here and not on the
 # callgrind Ir gate, which needs 415 s for the same verdict.
-SHAPES="bindings match listlit nesting xref comments marksweep manyifaces widerecords typos consfam conlocal"
+SHAPES="bindings match listlit nesting xref comments marksweep manyifaces widerecords typos consfam conlocal guardwild"
 if [ "$PERF_DEEP" = "1" ]; then
   SHAPES="$SHAPES manydefs nestedparens"
 else
@@ -3067,6 +3205,7 @@ for shape in $SHAPES; do
     widerecords) base_n="$WIDERECORDS_N" ;;
     consfam)    base_n="$CONSFAM_N" ;;
     conlocal)   base_n="$CONLOCAL_N" ;;
+    guardwild)  base_n="$GUARDWILD_N" ;;
     nestedparens) base_n="$NESTEDPARENS_N" ;;
     *)          base_n="$N" ;;
   esac
@@ -3117,6 +3256,24 @@ for shape in $SHAPES; do
     ;;
     conlocal)
     time_lines="           time: (OP-ONLY shape — TIME min-of-K arm skipped, #2030. \`mark\` is under the ${TIME_FLOOR}s floor as usual; \`typecheck\` is OVER it here yet still reads r1 2.56 r2 2.78 at this band, i.e. TIME would certify as ok the row the op arm ledgers. The op arm below is this shape's only correct arm.)
+"
+    ;;
+    guardwild)
+    # ⚠️ ALLOC-ONLY, and for a THIRD reason again — neither #883/#884's "the graded
+    # stage is under the floor" nor #2030's "TIME is over the floor but wrong-banded".
+    # Here the TIME arm is over the floor on exactly ONE stage and it is REDUNDANT AND
+    # UNSTABLE. MEASURED at the shipped band (min-of-5, heap pinned), every other stage
+    # SKIPs under the 200ms floor and `emit` reads r1=2.73 r2=4.19 — which the TIME
+    # rule (`r1 > 3.0 && r2 > 3.0`, both doublings) reports as `ok`. So the arm costs
+    # 3 x ${PERF_K} profiler runs (~22 s at this band, five times the shape's whole
+    # ALLOC cost) to print one number that (a) grades a quadratic as fine today and (b)
+    # flips the shape red with no ledger row the moment `emit`'s r1 drifts past 3.0.
+    # The SAME Θ(N²) is graded deterministically by the ALLOC ledger row below
+    # (KNOWN_CEIL_guardwild) and per-stage, on `lower` itself, by
+    # test/diff_compiler_stage_ir_scaling.sh's callgrind Ir arm (`guardwild:lower`).
+    # Two correct arms already hold this shape; a third that is wrong-ruled is a flap
+    # source, not coverage.
+    time_lines="           time: (ALLOC-ONLY shape — TIME min-of-K arm skipped, #2125. Every stage but \`emit\` is under the ${TIME_FLOOR}s floor at this band, and \`emit\`'s r1=2.73 r2=4.19 reads \`ok\` under the both-doublings TIME rule while the ALLOC ledger row and stage_ir_scaling's \`guardwild:lower\` Ir row both grade the same quadratic. See the case arm in this file for the full reasoning.)
 "
     ;;
     *)
@@ -4800,7 +4957,7 @@ If the failure says SUPERLINEAR (TIME) or SUPERLINEAR (OPS) while allocation rea
 "ok", that is not a contradiction — it is the point. A pure O(n^2) TRAVERSAL (scan a
 list / linear-search a scope once per lookup) costs time and op-count quadratically
 while allocating nothing extra, so allocation cannot see it. SUPERLINEAR (OPS) further
-catches it on the SMALL stages (mark/desugar/exhaust-guards) whose absolute time never
+catches it on the SMALL stages (mark, and desugar the day it starts scanning) whose absolute time never
 clears the 200ms floor, where the TIME arm grades nothing at all. All three signals are
 real; none subsumes the others.
 
