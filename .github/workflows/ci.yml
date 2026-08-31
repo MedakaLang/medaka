@@ -23,20 +23,39 @@ name: CI
 # Per-shard `test/bin/*` oracle caches remain below; never add a partial
 # `restore-keys` fallback, which would turn stale oracles into plausible greens.
 #
-# ── The PR run is NARROWED. The merge_group run is NOT. (T-15) ─────────────────
+# ── The PR run is NARROWED by GATE. The merge_group run, only by PROJECT. (T-15)
 # `pull_request`: each `gates_N` shard runs only the intersection of its pattern
-# with the gate set `detect` derives from the diff. `merge_group` and `push`: every
+# with the gate set `detect` derives from the diff. `merge_group`: every shard runs
+# its full pattern MINUS the library-project gates the diff provably cannot reach
+# (#2179 — see `project_reach` below). `push`/`schedule`/`workflow_dispatch`: every
 # shard runs its full pattern, unconditionally, always.
 #
-# ⚠️ NEVER NARROW `merge_group`, AND NEVER NARROW `soundness`. The queue's whole
-# value is testing the MERGED result — two independently-green branches have
-# auto-merged into a broken tree with zero git conflicts more than once, and no
-# per-PR check can see that. `soundness` is the backstop for a different hole: all
-# gate shards pass on an ill-typed compiler (`make medaka` does not gate on type
-# errors). Both stay full, on every event, forever. Narrowing fails SAFE in every
-# direction (preflight erroring, reporting whole-suite blast radius, or having no
-# opinion about a changed path all widen back to everything) — see the `gateset`
-# step. Incident history: dossier `ci.md`.
+# ⚠️ WHAT NEVER NARROWS ON `merge_group` (it still narrows on `pull_request`,
+# same as everything else — see T-15 above): every gate the registry marks
+# `project = "compiler"` — the whole compiler gate suite — plus `soundness`,
+# `compiler-soundness`, `wasm` and `seed-health`. Only `soundness` is
+# unconditional on EVERY event; the other three are still `pull_request`-
+# narrowed by their own `docs_only`/`compiler_touched`/corpora guards, exactly
+# like the compiler gate shards. The queue's whole value is testing the MERGED
+# result — two independently-green branches have auto-merged into a broken
+# tree with zero git conflicts more than once, and no per-PR check can see
+# that. Those incidents were ALL compiler-infra collisions, which is why that
+# half stays load-bearing and queue-narrowing the compiler suite is out of
+# scope (Val, 2026-08-28; docs/ops/CI-ARCHITECTURE.md §3.4). `soundness` is the
+# backstop for a different hole: all gate shards pass on an ill-typed compiler
+# (`make medaka` does not gate on type errors).
+#
+# ⚠️ WHAT NOW NARROWS ON `merge_group`: the LIBRARY-PROJECT gates only — a gate
+# whose registry `project` is one of the manifest-bearing projects outside
+# `compiler/` (byteparser, gzip, mq, parsec, pds, sqlite). Same shape as the
+# `pull_request` narrowing above and the same derivation (`test/preflight.sh`),
+# but keyed on PROJECT, not on gate: an entry runs a project's gates unless the
+# project graph proves the diff cannot reach that project. Narrowing fails SAFE in
+# every direction, on both events (preflight erroring, reporting whole-suite blast
+# radius, having no opinion about a changed path, a changed path outside every
+# project directory, or a gate whose project the registry cannot resolve all widen
+# back to everything) — see the `gateset` and `reach` steps. Incident history:
+# dossier `ci.md`.
 #
 # ── `push: main` REMOVED — the queue already covers it (#1927) ─────────────────
 # Every commit reaching `main` was already tested by a `merge_group` run at that
@@ -141,14 +160,38 @@ jobs:
       narrow: ${{ steps.gateset.outputs.narrow }}
       gates: ${{ steps.gateset.outputs.gates }}
       oracle_key: ${{ steps.gateset.outputs.oracle_key }}
+      # #2179 (project scoping in the queue), epic #2182. The ONLY output that
+      # narrows a `merge_group` run, and it narrows LIBRARY-PROJECT gates only —
+      # see the file header. Either the literal string `full` (run everything,
+      # today's behaviour) or a space-separated list of project names whose gates
+      # this queue entry must run. It is deliberately NOT `narrow`/`gates`: those
+      # two carry the PR-only, per-GATE narrowing, and the compiler suite's
+      # never-narrowed guarantee is keyed on them staying `false`/empty for
+      # `merge_group`. A single output cannot mean both things without one
+      # consumer eventually inheriting the wrong one.
+      project_reach: ${{ steps.reach.outputs.project_reach }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Classify changed files
         id: classify
+        # #2179. Payload fields are read through `env:`, never interpolated into the
+        # script body — `${{ }}` inside `run:` is textual substitution, so an
+        # attacker-authored ref would be shell rather than data. Same rule (and the
+        # same three fields) as the gate-budget override step at the bottom of this
+        # file. `github.event_name` and `github.sha` are GitHub-controlled, not
+        # author-controlled, but go through `env:` too so the arm has one idiom.
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          MG_BASE: ${{ github.event.merge_group.base_sha }}
+          MG_HEAD: ${{ github.event.merge_group.head_sha }}
+          MG_REF: ${{ github.event.merge_group.head_ref }}
+          GH_SHA: ${{ github.sha }}
         run: |
           set -u
-          event="${{ github.event_name }}"
+          event="$EVENT"
           # Consumed by `gateset` below; created unconditionally so that step never
           # has to distinguish "no non-docs files" from "the classifier bailed early".
           : > "$RUNNER_TEMP/changed.txt"
@@ -160,7 +203,15 @@ jobs:
           # here would silently SKIP the heavy steps on push, on merge_group, and on
           # every diff this step could not resolve. That is the one direction this
           # classifier is never allowed to fail in.
+          # #2179 made this reachable TWICE on one run (the merge_group arm below
+          # publishes up front and then keeps going), and a repeated key in
+          # $GITHUB_OUTPUT is last-wins — harmless here only because the values are
+          # identical. Guarded anyway: "published once" is the property, not "the
+          # duplicate happens to agree".
+          published=false
           full_run() {
+            [ "$published" = "false" ] || return 0
+            published=true
             {
               echo "docs_only=false"
               echo "compiler_touched=true"
@@ -170,14 +221,51 @@ jobs:
             } >> "$GITHUB_OUTPUT"
           }
 
-          if [ "$event" != "pull_request" ]; then
+          # #2179. `merge_group` keeps EVERY output above at its full-run value —
+          # docs_only=false and all four escape lists true, exactly as before — but
+          # still needs `changed.txt`, because the `reach` step below derives the
+          # library-project scoping from it. So this arm publishes the full-run
+          # outputs and then FALLS THROUGH to the diff resolution instead of
+          # exiting; the per-file classifier at the bottom is skipped (its `case`
+          # arms only feed outputs already pinned to their full-run values), and
+          # the final `>> "$GITHUB_OUTPUT"` block is skipped with it. Every other
+          # non-`pull_request` event keeps the unconditional early exit.
+          if [ "$event" = "merge_group" ]; then
+            full_run
+            echo "merge_group — the compiler suite runs FULL; resolving the diff only to scope LIBRARY-PROJECT gates (#2179)."
+            # `pull_request.{base,head}.sha` are long-standing documented fields;
+            # the `merge_group` payload's are NOT enumerated in GitHub's webhook
+            # docs, so this must not DEPEND on their names. Same fallback ladder,
+            # and the same measurement, as the gate-budget override step at the
+            # bottom of this file: `github.sha` IS the queue's auto-merge commit,
+            # and the queue branch is `gh-readonly-queue/<base>/pr-<N>-<base-sha>`,
+            # so the base is recoverable from the ref when the field is not.
+            head="$MG_HEAD"
+            [ -n "$head" ] || head="$GH_SHA"
+            base="$MG_BASE"
+            if [ -z "$base" ]; then
+              cand="${MG_REF##*-}"
+              case "$cand" in
+                [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) base="$cand" ;;
+                *) base="" ;;
+              esac
+            fi
+          elif [ "$event" != "pull_request" ]; then
             full_run
             echo "not a pull_request event ($event) — running the full suite."
             exit 0
+          else
+            base="$PR_BASE"
+            head="$PR_HEAD"
           fi
 
-          base="${{ github.event.pull_request.base.sha }}"
-          head="${{ github.event.pull_request.head.sha }}"
+          # Leaving `changed.txt` EMPTY is the fail-open signal every consumer
+          # already reads (`gateset` full()s on it, and so does `reach`), so an
+          # unresolvable merge_group base/head widens rather than narrows.
+          if [ -z "$base" ] || [ -z "$head" ]; then
+            echo "could not resolve base/head for '$event' — leaving changed.txt empty (every consumer widens to the full suite)."
+            exit 0
+          fi
 
           git cat-file -e "$base" 2>/dev/null || git fetch --no-tags --depth=1 origin "$base" 2>/dev/null || true
           git cat-file -e "$head" 2>/dev/null || git fetch --no-tags --depth=1 origin "$head" 2>/dev/null || true
@@ -200,6 +288,19 @@ jobs:
 
           # See the job header for why this is an ALLOWLIST, not a **.md denylist.
           printf '%s\n' "$changed" > "$RUNNER_TEMP/changed.txt"
+
+          # #2179. STOP HERE on merge_group. `changed.txt` is the only thing that
+          # arm wants; the classifier below exists solely to compute docs_only and
+          # the four escape lists, all of which `full_run` has already pinned to
+          # their full-run values for this event. Running it would let a docs-only
+          # queue entry publish docs_only=true and SKIP the heavy jobs — a
+          # behaviour change nobody asked for, and the opposite of what the queue
+          # is for.
+          if [ "$event" = "merge_group" ]; then
+            echo "merge_group — $(printf '%s\n' "$changed" | grep -c .) changed file(s) recorded for project scoping; every classifier output stays at its full-run value."
+            exit 0
+          fi
+
           docs_only=true
           # #1931 — see the job `outputs:` block for what each of these means and why
           # the build-closure predicate stays narrow while the escape lists stay
@@ -329,9 +430,13 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "classified: docs_only=$docs_only compiler_touched=$compiler_touched wasm_corpora=$wasm_corpora inlang_corpora=$inlang_corpora soundness_corpora=$soundness_corpora"
 
-      # ── T-15: narrow the `pull_request` run. NEVER the `merge_group` run. ────────
-      # Only the `pull_request` half shrinks — narrowing `merge_group` would trade
-      # away the one property that justifies the queue (testing the MERGED result).
+      # ── T-15: narrow by GATE on `pull_request`. NEVER on `merge_group`. ─────────
+      # Only the `pull_request` half shrinks HERE — a per-gate narrowing of
+      # `merge_group` would trade away the one property that justifies the queue
+      # (testing the MERGED result). The queue's own, much coarser scoping lives in
+      # the `reach` step below and touches LIBRARY-PROJECT gates only (#2179); it
+      # deliberately does not reuse `narrow`/`gates`, which must stay
+      # `false`/empty on `merge_group` for exactly the reason in this paragraph.
       # `soundness`/`seed-health` likewise stay FULL on every event (#1932: so does
       # `compiler-soundness`, which is step-narrowed by `detect` but never by the
       # gate-set derivation below). Preflight is a
@@ -365,7 +470,7 @@ jobs:
           }
 
           event="${{ github.event_name }}"
-          [ "$event" = "pull_request" ] || full "event is '$event', not pull_request — the merge_group/push run is ALWAYS the full suite."
+          [ "$event" = "pull_request" ] || full "event is '$event', not pull_request — no per-GATE narrowing here (merge_group scopes LIBRARY-PROJECT gates only, in the \`reach\` step below; push/schedule narrow nothing at all)."
           [ "${{ steps.classify.outputs.docs_only }}" != "true" ] || full "docs-only change — every heavy step is skipped anyway."
           [ -s "$RUNNER_TEMP/changed.txt" ] || full "no changed files resolved (conservative default)."
 
@@ -405,7 +510,133 @@ jobs:
           echo "gates=$gates" >> "$GITHUB_OUTPUT"
           echo "oracle_key=pr-$key" >> "$GITHUB_OUTPUT"
           echo "▶ NARROWED pull_request run: $(printf '%s\n' $gates | grep -c .) gate(s)."
-          echo "  The merge_group run of this same PR still executes the FULL suite on the MERGED tree."
+          echo "  The merge_group run of this same PR still executes the FULL COMPILER suite on the MERGED tree (its library-project gates are scoped by \`reach\` below)."
+
+      # ── #2179: scope the QUEUE by PROJECT. Never by gate. ────────────────────
+      # Epic #2182, docs/ops/CI-ARCHITECTURE.md §3.4. This is the first and only
+      # thing that narrows a `merge_group` run, and what it narrows is the
+      # LIBRARY-PROJECT gates: an entry that provably cannot reach `pds/` should
+      # not spend twenty minutes proving pds still works. Everything the registry
+      # marks `project = "compiler"` — the whole compiler suite, plus the
+      # separately-guarded `soundness`, `compiler-soundness`, `wasm` and
+      # `seed-health` jobs — runs unconditionally, exactly as before. See the file
+      # header for the decision and why that half stays load-bearing.
+      #
+      # THE DERIVATION IS NOT REIMPLEMENTED HERE. `medaka gate reach`
+      # (compiler/tools/gate_cmd.mdk) is the reference implementation of "which
+      # projects can this diff reach", but no `./medaka` exists at this point in
+      # the run — `detect` is upstream of the `build:` job by construction — so
+      # this step reproduces its ANSWER from the two binary-free derivations that
+      # already agree with it: the manifest-derived project set, and
+      # `test/preflight.sh`'s dependency/corpus-widened gate derivation (the same
+      # `PREFLIGHT_DRY=1` shape `gateset` above uses). Do not add a `./medaka gate
+      # reach` shellout to this job; do add a case to
+      # test/diff_compiler_project_enrolment.sh if these three ever drift.
+      #
+      # Rule 1 (DIRECT + fail-open) is the `allHit` half of `gate reach`, and it is
+      # what makes this safe: unless EVERY changed path in the entry sits under a
+      # library project directory, the answer is `full`. A change to ci.yml, to
+      # test/gates.toml, to test/preflight.sh — to anything that decides this
+      # narrowing — therefore widens rather than narrows, so the narrowing can
+      # never narrow itself out of the jobs it is changing (the same invariant
+      # `compiler_touched`'s `.github/**` arm carries above).
+      # Rules 2 (reverse dependency: a parsec change runs sqlite's gates) and 3
+      # (corpus: a gzip change runs the compiler's wasm/diff_gzip) come from
+      # preflight, which already walks both graphs.
+      #
+      # FAIL-OPEN, ENUMERATED — every one of these answers `full`:
+      #   not a merge_group event · detect resolved no changed files · no
+      #   manifest-bearing project resolved · any changed path outside every
+      #   project directory · preflight exiting nonzero · preflight printing
+      #   `FULL` or `UNMAPPED` · a derived gate whose registry project cannot be
+      #   resolved · a project-only diff that somehow derived zero project gates.
+      - name: Derive the project reach for this queue entry
+        id: reach
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -u
+          full() {
+            echo "project_reach=full" >> "$GITHUB_OUTPUT"
+            echo "▶ FULL PROJECT REACH — every gate in every shard runs: $1"
+            exit 0
+          }
+
+          [ "$EVENT" = "merge_group" ] || full "event is '$EVENT'; project scoping is a merge_group-only narrowing (pull_request narrows by GATE, in the step above)."
+          [ -s "$RUNNER_TEMP/changed.txt" ] || full "detect resolved no changed files (conservative default)."
+
+          # "What is a project in this monorepo?" — a directory with a
+          # `medaka.toml`, outside `compiler/` and outside `test/` (those
+          # manifests are loader FIXTURES). Byte-for-byte the manifest-scan
+          # rule test/preflight.sh and test/diff_compiler_project_enrolment.sh's
+          # PREFLIGHT leg both use.
+          # ⚠️ NOT the same derivation `medaka gate reach --json` uses: that
+          # binary's project universe is the registry's `project` field
+          # (`projectUniverse`, compiler/tools/gate_cmd.mdk), not a manifest
+          # scan — two sources, reconciled only by the enrolment gate's REACH
+          # leg comparing them, never merged into one. This is also a FOURTH
+          # copy of the manifest-scan half, and the enrolment gate does not
+          # (yet) know about it — it re-derives the registry/preflight/floor-gate
+          # legs, not this one. It is written to be textually identical to
+          # preflight's so a reviewer can diff the two by eye; if it ever needs to
+          # differ, teach the enrolment gate about it first.
+          projects="$(git ls-files '*medaka.toml' 2>/dev/null \
+            | grep -v '^test/' | grep -v '^compiler/' \
+            | sed 's|/medaka\.toml$||' | sort -u | tr '\n' ' ')"
+          [ -n "$projects" ] || full "no manifest-bearing project resolved — that is a broken derivation, not an empty tree."
+          echo "manifest-bearing projects: $projects"
+
+          # Rule 1, fail-open half. See the banner above.
+          outside=""
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            hit=false
+            for p in $projects; do
+              case "$f" in "$p"/*) hit=true; break ;; esac
+            done
+            [ "$hit" = "true" ] || outside="$outside $f"
+          done < "$RUNNER_TEMP/changed.txt"
+          [ -z "$outside" ] || full "this entry touches paths outside every library project:$outside"
+
+          if ! PREFLIGHT_DRY=1 PREFLIGHT_CHANGED_FILE="$RUNNER_TEMP/changed.txt" \
+                 sh test/preflight.sh > "$RUNNER_TEMP/reach.txt" 2>&1; then
+            cat "$RUNNER_TEMP/reach.txt"
+            full "test/preflight.sh FAILED to derive a gate set (see above) — refusing to narrow on a broken derivation."
+          fi
+          cat "$RUNNER_TEMP/reach.txt"
+          echo
+
+          if grep -q '^  FULL ' "$RUNNER_TEMP/reach.txt"; then
+            full "preflight reports whole-suite blast radius:$(awk '$1=="FULL"{printf " %s", $2}' "$RUNNER_TEMP/reach.txt")"
+          fi
+          if grep -q '^  UNMAPPED ' "$RUNNER_TEMP/reach.txt"; then
+            full "preflight has no opinion about:$(awk '$1=="UNMAPPED"{printf " %s", $2}' "$RUNNER_TEMP/reach.txt")"
+          fi
+
+          # gate path -> owning project, straight out of the registry. `run =` is
+          # the repo-relative gate path, which is exactly the form preflight's
+          # `GATE` lines and the shard planner below both speak. Same parse as the
+          # planner's; both read test/gates.toml rather than keeping a list.
+          awk '
+            /^\[\[gate\]\]/     { if (r != "" && p != "") print r, p; r=""; p="" }
+            /^run *= *"/        { r = $0; sub(/^run *= *"/, "", r); sub(/".*$/, "", r) }
+            /^project *= *"/    { p = $0; sub(/^project *= *"/, "", p); sub(/".*$/, "", p) }
+            END                 { if (r != "" && p != "") print r, p }
+          ' test/gates.toml > "$RUNNER_TEMP/gate_projects.txt"
+
+          reach=""
+          for g in $(awk '$1=="GATE"{print $2}' "$RUNNER_TEMP/reach.txt"); do
+            p="$(awk -v g="$g" '$1==g{print $2; exit}' "$RUNNER_TEMP/gate_projects.txt")"
+            [ -n "$p" ] || full "gate '$g' has no resolvable \`project\` in test/gates.toml — refusing to narrow on an incomplete registry."
+            [ "$p" != "compiler" ] || continue
+            case " $reach " in *" $p "*) ;; *) reach="$reach $p" ;; esac
+          done
+          reach="${reach# }"
+          [ -n "$reach" ] || full "every path is inside a library project, yet preflight derived ZERO library-project gates — that must never be read as 'nothing to test'."
+
+          echo "project_reach=$reach" >> "$GITHUB_OUTPUT"
+          echo "▶ merge_group PROJECT REACH: $reach"
+          echo "  The full compiler gate suite (registry \`project = \"compiler\"\`) runs regardless, as do soundness, compiler-soundness, wasm and seed-health."
 
   # ── Build ./medaka ONCE per run, not ten times (#1928) ───────────────────────
   # `make medaka` is a pure function of the checkout, so it runs once here and the
@@ -563,7 +794,7 @@ jobs:
             # is a ruleset change, not an edit here. It is a bare executor number by
             # construction (#2178): a name that cannot describe contents cannot lie
             # about them. What failed is reported by AREA, from the registry.
-            pattern: "'diff_compiler_parse_result' 'diff_compiler_eval_modules' 'diff_compiler_ci_shard_coverage' 'diff_compiler_prose_classifier' 'gzip/test/deflate_oracle' 'parsec/test/check' 'pds/test/encodings_vectors' 'pds/test/rfc6979_vectors' 'pds/test/secp256k1_public_key' 'pds/test/trust_boundary_guards' 'pds/test/vector_provenance' 'sqlite/test/typed_oracle' 'bootstrap_lex' 'bootstrap_resolve' 'check_build_oracles_for_consistency' 'cross_project_deps' 'cross_project_twonames' 'diff_compiler_capability_matrix' 'diff_compiler_check_batch' 'diff_compiler_check_modules' 'diff_compiler_check_policy' 'diff_compiler_check_wrapper_callers' 'diff_compiler_ci_guard_failsafe' 'diff_compiler_core_ir_modules' 'diff_compiler_core_ir' 'diff_compiler_core_ir_typed' 'diff_compiler_dict_semantics' 'diff_compiler_doc' 'diff_compiler_draft_semantic' 'diff_compiler_effect_hole' 'diff_compiler_effect_polarity' 'diff_compiler_eval_dict_batch' 'diff_compiler_eval_json' 'diff_compiler_eval_typed_batch' 'diff_compiler_exhaust' 'diff_compiler_fmt_write_safety' 'diff_compiler_index' 'diff_compiler_lint_crossfile' 'diff_compiler_lint_multi' 'diff_compiler_lint' 'diff_compiler_llvm_typed' 'diff_compiler_lsp_b3' 'diff_compiler_lsp_b4' 'diff_compiler_lsp' 'diff_compiler_origin_agreement' 'diff_compiler_parse_error_loc' 'diff_compiler_preflight_base' 'diff_compiler_prelude_shadow_census' 'diff_compiler_references_scaling' 'diff_compiler_references_tool' 'diff_compiler_resolve_batch' 'diff_compiler_resolve_modules' 'diff_compiler_resolve' 'diff_compiler_run_check_agreement' 'diff_compiler_shadow_semantics' 'diff_compiler_snapshot_bless' 'diff_compiler_snapshot_eval_errors' 'diff_compiler_snapshot_eval' 'diff_compiler_snapshot_types' 'diff_compiler_snapshot_types_user' 'diff_compiler_source_bytes' 'diff_compiler_test_typecheck' 'diff_compiler_wasm_shim_parity' 'effect_param_domain' 'effect_product_domain' 'effect_set_domain' 'manifest_emit' 'native_fixtures/run' 'diff_compiler_gate_registry' 'diff_compiler_check_ir_floor'"
+            pattern: "'diff_compiler_parse_result' 'diff_compiler_eval_modules' 'diff_compiler_ci_shard_coverage' 'diff_compiler_prose_classifier' 'gzip/test/deflate_oracle' 'parsec/test/check' 'pds/test/constant_time_public_key' 'pds/test/encodings_vectors' 'pds/test/opaque_field_scalar' 'pds/test/rfc6979_vectors' 'pds/test/secp256k1_public_key' 'pds/test/trust_boundary_guards' 'pds/test/vector_provenance' 'sqlite/test/left_join_oracle' 'sqlite/test/typed_oracle' 'bootstrap_lex' 'bootstrap_resolve' 'check_build_oracles_for_consistency' 'cross_project_deps' 'cross_project_twonames' 'diff_compiler_capability_matrix' 'diff_compiler_check_batch' 'diff_compiler_check_modules' 'diff_compiler_check_policy' 'diff_compiler_check_wrapper_callers' 'diff_compiler_ci_guard_failsafe' 'diff_compiler_core_ir' 'diff_compiler_core_ir_typed' 'diff_compiler_diagnostics' 'diff_compiler_dict_semantics' 'diff_compiler_dispatch_shape' 'diff_compiler_doc' 'diff_compiler_draft_semantic' 'diff_compiler_effect_polarity' 'diff_compiler_eval_dict_batch' 'diff_compiler_eval_json' 'diff_compiler_eval_typed_batch' 'diff_compiler_eval_typed_modules' 'diff_compiler_exhaust' 'diff_compiler_index' 'diff_compiler_let_refute' 'diff_compiler_lint_cache' 'diff_compiler_lint_crossfile' 'diff_compiler_lint_multi' 'diff_compiler_lint' 'diff_compiler_llvm_typed' 'diff_compiler_lsp_b4' 'diff_compiler_lsp' 'diff_compiler_mcp' 'diff_compiler_origin_agreement' 'diff_compiler_parse_error_loc' 'diff_compiler_ported' 'diff_compiler_preflight_base' 'diff_compiler_prelude_shadow_census' 'diff_compiler_reach_fail_open' 'diff_compiler_references_scaling' 'diff_compiler_resolve_batch' 'diff_compiler_resolve_modules' 'diff_compiler_resolve' 'diff_compiler_run_check_agreement' 'diff_compiler_shadow_semantics' 'diff_compiler_snapshot_eval_errors' 'diff_compiler_snapshot_eval' 'diff_compiler_snapshot_types' 'diff_compiler_snapshot_types_user' 'diff_compiler_source_bytes' 'diff_compiler_test_typecheck' 'diff_compiler_wasm_shim_parity' 'effect_param_domain' 'effect_product_domain' 'effect_set_domain' 'manifest_emit' 'native_fixtures/run' 'diff_compiler_gate_registry' 'diff_compiler_closure_alloc' 'diff_compiler_check_ir_floor'"
           - name: gates_3
             # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
             # (`medaka gate balance`, #2178) from test/gate_cost_baseline.json and
@@ -586,7 +817,7 @@ jobs:
             # is a ruleset change, not an edit here. It is a bare executor number by
             # construction (#2178): a name that cannot describe contents cannot lie
             # about them. What failed is reported by AREA, from the registry.
-            pattern: "'lsp_harness' 'sqlite/test/select_oracle' 'gzip/test/inflate_oracle' 'pds/test/constant_time_signing' 'pds/test/ecdsa_vectors' 'pds/test/field_vectors' 'pds/test/scalar_vectors' 'sqlite/test/aggregate_oracle' 'sqlite/test/delete_negative_oracle' 'sqlite/test/groupby_oracle' 'sqlite/test/update_expr_oracle' 'sqlite/test/update_oracle' 'diff_compiler_core_ir_run' 'diff_compiler_eval_run' 'diff_compiler_ir_scaling' 'diff_compiler_let_refute' 'diff_compiler_os_entropy' 'diff_compiler_run_stdout_flush' 'diff_compiler_stack_overflow' 'diff_compiler_test' 'effect_builtin_param_domain' 'selfcompile_build_fixpoint'"
+            pattern: "'lsp_harness' 'sqlite/test/select_oracle' 'gzip/test/inflate_oracle' 'pds/test/constant_time_signing' 'pds/test/ecdsa_vectors' 'pds/test/scalar_vectors' 'sqlite/test/aggregate_oracle' 'sqlite/test/delete_negative_oracle' 'sqlite/test/groupby_oracle' 'sqlite/test/update_expr_oracle' 'sqlite/test/update_oracle' 'build_construct_coverage' 'diff_compiler_core_ir_run' 'diff_compiler_eval_run' 'diff_compiler_ir_scaling' 'diff_compiler_os_entropy' 'diff_compiler_run_stdout_flush' 'diff_compiler_stack_overflow' 'diff_compiler_test' 'effect_builtin_param_domain' 'selfcompile_build_fixpoint'"
             wasm_arm: "1"
           - name: gates_4
             # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
@@ -635,7 +866,7 @@ jobs:
             # is a ruleset change, not an edit here. It is a bare executor number by
             # construction (#2178): a name that cannot describe contents cannot lie
             # about them. What failed is reported by AREA, from the registry.
-            pattern: "'build_cmd' 'pds/test/sha256_vectors' 'pds/test/signing_corpus' 'sqlite/test/delete_oracle' 'sqlite/test/dml_oracle' 'sqlite/test/index_write_oracle' 'sqlite/test/join_oracle' 'sqlite/test/left_join_oracle' 'sqlite/test/multipage_oracle' 'sqlite/test/multipage_write_oracle' 'sqlite/test/multitable_write_oracle' 'sqlite/test/oracle' 'sqlite/test/overflow_oracle' 'sqlite/test/sql_oracle' 'bootstrap_eval' 'diff_compiler_build' 'diff_compiler_check_cli_modules' 'diff_compiler_codemod' 'diff_compiler_core_ir_roundtrip' 'diff_compiler_core_ir_typed_modules' 'diff_compiler_diagnostics' 'diff_compiler_eval_list' 'diff_compiler_eval' 'diff_compiler_fixture_corpus_coverage' 'diff_compiler_flat_vs_onemodule' 'diff_compiler_iface_order' 'diff_compiler_index_oob' 'diff_compiler_internal_extern' 'diff_compiler_ir_size' 'diff_compiler_llvm_ffi' 'diff_compiler_llvm_modules' 'diff_compiler_llvm_typed_ir' 'diff_compiler_new' 'diff_compiler_perf_scaling' 'diff_compiler_prelude_obj' 'diff_compiler_project_enrolment' 'diff_compiler_references_correctness' 'diff_compiler_selfproc' 'diff_compiler_snapshot_core_ir' 'diff_compiler_snapshot_wasm_input' 'diff_compiler_test_native' 'diff_native_cli' 'diff_native_stack' 'pr_helper_test' 'selfcompile_emit' 'selfcompile_lex'"
+            pattern: "'build_cmd' 'pds/test/sha256_vectors' 'pds/test/signing_corpus' 'sqlite/test/delete_oracle' 'sqlite/test/dml_oracle' 'sqlite/test/index_write_oracle' 'sqlite/test/join_oracle' 'sqlite/test/multipage_oracle' 'sqlite/test/multipage_write_oracle' 'sqlite/test/multitable_write_oracle' 'sqlite/test/oracle' 'sqlite/test/sql_oracle' 'sqlite/test/writer_api_oracle' 'sqlite/test/writer_oracle' 'bootstrap_eval' 'diff_compiler_build' 'diff_compiler_check_cli_modules' 'diff_compiler_codemod' 'diff_compiler_core_ir_roundtrip' 'diff_compiler_core_ir_typed_modules' 'diff_compiler_eval_list' 'diff_compiler_eval' 'diff_compiler_fixture_corpus_coverage' 'diff_compiler_flat_vs_onemodule' 'diff_compiler_iface_order' 'diff_compiler_index_oob' 'diff_compiler_internal_extern' 'diff_compiler_ir_size' 'diff_compiler_llvm_ffi' 'diff_compiler_llvm_modules' 'diff_compiler_llvm_typed_ir' 'diff_compiler_new' 'diff_compiler_perf_scaling' 'diff_compiler_prelude_obj' 'diff_compiler_project_enrolment' 'diff_compiler_references_correctness' 'diff_compiler_selfproc' 'diff_compiler_snapshot_core_ir' 'diff_compiler_snapshot_wasm_input' 'diff_compiler_test_native' 'diff_native_cli' 'diff_native_stack' 'pr_helper_test' 'selfcompile_emit' 'selfcompile_lex'"
           - name: gates_7
             # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
             # (`medaka gate balance`, #2178) from test/gate_cost_baseline.json and
@@ -651,7 +882,7 @@ jobs:
             # is a ruleset change, not an edit here. It is a bare executor number by
             # construction (#2178): a name that cannot describe contents cannot lie
             # about them. What failed is reported by AREA, from the registry.
-            pattern: "'byteparser/test/check' 'mq/test/check' 'pds/test/secp256k1_point_vectors' 'sqlite/test/distinct_oracle' 'sqlite/test/inlang_test_oracle' 'sqlite/test/projection_oracle' 'sqlite/test/writer_api_oracle' 'sqlite/test/writer_oracle' 'bootstrap_typecheck' 'build_construct_coverage' 'check_syntax_examples' 'diff_compiler_analyze_project' 'diff_compiler_anf_identity' 'diff_compiler_call_arity' 'diff_compiler_check_match' 'diff_compiler_core_ir_list' 'diff_compiler_core_ir_prelude' 'diff_compiler_effect_param' 'diff_compiler_eval_list_batch' 'diff_compiler_eval_prelude_batch' 'diff_compiler_eval_prelude' 'diff_compiler_eval_run_batch' 'diff_compiler_fmt_roundtrip' 'diff_compiler_fmt' 'diff_compiler_lex_files' 'diff_compiler_lint_fix' 'diff_compiler_lint_multi_dir' 'diff_compiler_parse_errors' 'diff_compiler_perf_stage_census' 'diff_compiler_repl' 'diff_compiler_rt_obj' 'diff_compiler_snapshot_prelude' 'diff_compiler_tmc_parity' 'diff_compiler_tier_drift'"
+            pattern: "'byteparser/test/check' 'mq/test/check' 'pds/test/field_vectors' 'pds/test/secp256k1_point_vectors' 'sqlite/test/distinct_oracle' 'sqlite/test/inlang_test_oracle' 'sqlite/test/overflow_oracle' 'sqlite/test/projection_oracle' 'bootstrap_typecheck' 'check_syntax_examples' 'diff_compiler_analyze_project' 'diff_compiler_anf_identity' 'diff_compiler_call_arity' 'diff_compiler_check_match' 'diff_compiler_core_ir_list' 'diff_compiler_core_ir_modules' 'diff_compiler_core_ir_prelude' 'diff_compiler_effect_hole' 'diff_compiler_effect_param' 'diff_compiler_eval_list_batch' 'diff_compiler_eval_prelude_batch' 'diff_compiler_eval_prelude' 'diff_compiler_eval_run_batch' 'diff_compiler_fmt_roundtrip' 'diff_compiler_fmt' 'diff_compiler_fmt_write_safety' 'diff_compiler_lex_files' 'diff_compiler_lint_fix' 'diff_compiler_lint_multi_dir' 'diff_compiler_lsp_b3' 'diff_compiler_parse_errors' 'diff_compiler_perf_stage_census' 'diff_compiler_references_tool' 'diff_compiler_repl' 'diff_compiler_rt_obj' 'diff_compiler_snapshot_bless' 'diff_compiler_snapshot_prelude' 'diff_compiler_tmc_parity' 'diff_compiler_tier_drift'"
           - name: gates_8
             # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
             # (`medaka gate balance`, #2178) from test/gate_cost_baseline.json and
@@ -670,7 +901,7 @@ jobs:
             # is a ruleset change, not an edit here. It is a bare executor number by
             # construction (#2178): a name that cannot describe contents cannot lie
             # about them. What failed is reported by AREA, from the registry.
-            pattern: "'pds/test/car_vectors' 'pds/test/constant_time_parity' 'pds/test/constant_time_public_key' 'pds/test/constant_time_reductions' 'pds/test/dagcbor_cid_vectors' 'pds/test/did_key_all_engines' 'pds/test/mst_vectors' 'pds/test/opaque_field_scalar' 'pds/test/repo_vectors' 'sqlite/test/rowid_roundtrip_oracle' 'diff_compiler_check_json' 'diff_compiler_check' 'diff_compiler_dispatch_shape' 'diff_compiler_entry_exit_codes' 'diff_compiler_eval_scaling' 'diff_compiler_eval_typed_modules' 'diff_compiler_import_order' 'diff_compiler_lint_cache' 'diff_compiler_llvm' 'diff_compiler_llvm_symbol_collision' 'diff_compiler_mcp' 'diff_compiler_ported' 'diff_compiler_run_entry_subdir' 'diff_compiler_slice_oob' 'diff_compiler_snapshot_frontend' 'diff_compiler_typecheck_errors' 'diff_net' 'diff_compiler_closure_alloc'"
+            pattern: "'pds/test/car_vectors' 'pds/test/constant_time_parity' 'pds/test/constant_time_reductions' 'pds/test/dagcbor_cid_vectors' 'pds/test/did_key_all_engines' 'pds/test/mst_vectors' 'pds/test/repo_vectors' 'sqlite/test/rowid_roundtrip_oracle' 'diff_compiler_check_json' 'diff_compiler_check' 'diff_compiler_entry_exit_codes' 'diff_compiler_eval_scaling' 'diff_compiler_import_order' 'diff_compiler_llvm' 'diff_compiler_llvm_symbol_collision' 'diff_compiler_run_entry_subdir' 'diff_compiler_slice_oob' 'diff_compiler_snapshot_frontend' 'diff_compiler_typecheck_errors' 'diff_net'"
             wasm_arm: "1"
           # GENERATED:END gates-matrix
     # The job name IS the required status-check context. It is a bare executor
@@ -707,6 +938,10 @@ jobs:
           DOCS_ONLY: ${{ needs.detect.outputs.docs_only }}
           NARROW: ${{ needs.detect.outputs.narrow }}
           DERIVED: ${{ needs.detect.outputs.gates }}
+          EVENT: ${{ github.event_name }}
+          # #2179 — `full`, or the space-separated projects this queue entry can
+          # reach. See `detect`'s `reach` step and the file header.
+          PROJECT_REACH: ${{ needs.detect.outputs.project_reach }}
         run: |
           set -u
 
@@ -739,10 +974,44 @@ jobs:
             for g in $shard; do
               case " $DERIVED " in *" $g "*) run="$run $g" ;; esac
             done
-            why="pull_request — narrowed to the gates this diff touches (merge_group runs ALL of them)"
+            why="pull_request — narrowed to the gates this diff touches (merge_group runs every COMPILER gate, and this shard's library-project gates only if the diff reaches them)"
           else
             run="$shard"
-            why="FULL suite (event: ${{ github.event_name }})"
+            why="FULL suite (event: $EVENT)"
+
+            # ── #2179: the ONLY narrowing a merge_group run ever does. ──────────
+            # It drops LIBRARY-PROJECT gates only. A gate is dropped iff all three
+            # hold: the event is merge_group; `reach` derived a real project list
+            # rather than `full`; and the gate's registry `project` resolves to a
+            # name that is neither `compiler` nor in that list. Every other case —
+            # including a gate whose project the registry cannot resolve — keeps
+            # the gate. Failing open here is not a courtesy: a dropped gate is a
+            # gate that reported green having never run, on the MERGED tree, which
+            # is the one place this suite exists to be trusted.
+            if [ "$EVENT" = "merge_group" ] && [ "$PROJECT_REACH" != "full" ] && [ -n "$PROJECT_REACH" ]; then
+              # Same parse as `detect`'s `reach` step: `run =` is the repo-relative
+              # gate path, which is the form `$shard` holds. Read from the registry
+              # rather than inferred from the path, so a project gate that ever
+              # moves out from under `<project>/test/` still resolves.
+              awk '
+                /^\[\[gate\]\]/     { if (r != "" && p != "") print r, p; r=""; p="" }
+                /^run *= *"/        { r = $0; sub(/^run *= *"/, "", r); sub(/".*$/, "", r) }
+                /^project *= *"/    { p = $0; sub(/^project *= *"/, "", p); sub(/".*$/, "", p) }
+                END                 { if (r != "" && p != "") print r, p }
+              ' test/gates.toml > "$RUNNER_TEMP/gate_projects.txt"
+
+              kept=""
+              for g in $run; do
+                gp="$(awk -v g="$g" '$1==g{print $2; exit}' "$RUNNER_TEMP/gate_projects.txt")"
+                if [ -z "$gp" ] || [ "$gp" = "compiler" ]; then
+                  kept="$kept $g"
+                  continue
+                fi
+                case " $PROJECT_REACH " in *" $gp "*) kept="$kept $g" ;; esac
+              done
+              run="$kept"
+              why="merge_group — every COMPILER gate runs; library-project gates scoped to reachable projects ($PROJECT_REACH)"
+            fi
           fi
 
           skipped=""
@@ -766,7 +1035,22 @@ jobs:
           if [ -z "$pats" ]; then
             echo "has_work=false" >> "$GITHUB_OUTPUT"
             echo
-            echo "▶ ${{ matrix.name }} — no gates for this diff (runs FULL in merge_group). Reporting SUCCESS — the check still reports, which is what keeps the PR mergeable."
+
+            # ⚠️ TWO different empties, and they are NOT interchangeable (#2179).
+            # On `pull_request` the honest thing to say is "the merge queue will
+            # run these"; on `merge_group` that sentence is a LIE — the queue IS
+            # the run, and this shard's gates were scoped out of it because the
+            # entry cannot reach their projects. Nothing downstream runs them.
+            # Saying so is the whole reason this block exists.
+            if [ "$EVENT" = "merge_group" ]; then
+              headline="${{ matrix.name }} — every gate here belongs to a project this entry cannot reach"
+              detail="${{ matrix.name }} reported SUCCESS WITHOUT RUNNING. Every gate in this shard is owned by a library project outside this entry's reach (${PROJECT_REACH}), so it was scoped out by #2179 and NOTHING downstream runs it. 'green' here does NOT mean these gates ran."
+            else
+              headline="${{ matrix.name }} — no gates for this diff (runs FULL in merge_group)"
+              detail="${{ matrix.name }} matched no gate for this diff and reported SUCCESS WITHOUT RUNNING. Real coverage for these gates runs in the merge queue (merge_group), not on this PR. 'green' here does NOT mean these gates ran."
+            fi
+
+            echo "▶ $headline. Reporting SUCCESS — the check still reports, which is what keeps the PR mergeable."
 
             # Make the no-op VISIBLE where humans/agents actually look, not just in a
             # log nobody opens for a green check: a "gates_N — pass" check is, by
@@ -775,16 +1059,26 @@ jobs:
             # Conclusion and context stay untouched (changing either touches the
             # merge queue's required-status-check contract); what moves is the
             # WORDING at the annotation title and job summary. Incident: dossier `ci.md`.
-            echo "::warning title=${{ matrix.name }} — no gates for this diff (runs FULL in merge_group)::${{ matrix.name }} matched no gate for this diff and reported SUCCESS WITHOUT RUNNING. Real coverage for these gates runs in the merge queue (merge_group), not on this PR. 'green' here does NOT mean these gates ran."
+            echo "::warning title=${headline}::${detail}"
             {
-              echo "### ${{ matrix.name }} — no gates for this diff (runs FULL in merge_group)"
+              echo "### $headline"
               echo
-              echo "This shard's pattern matched no gate touched by this diff, so it reported"
-              echo "SUCCESS having run nothing (by design — see \`ci.yml\` around the \`plan\`"
-              echo "step). Real coverage for this shard's gates runs when this PR enters the"
-              echo "merge queue (\`merge_group\` event), where every shard runs its FULL pattern"
-              echo "unconditionally. Treat this check's green as \"did not block\", not \"ran and"
-              echo "passed\"."
+              if [ "$EVENT" = "merge_group" ]; then
+                echo "Every gate in this shard is owned by a library project that this queue"
+                echo "entry's diff cannot reach (reach: \`${PROJECT_REACH}\`), so the shard reported"
+                echo "SUCCESS having run nothing — by design, see \`ci.yml\`'s header and the"
+                echo "\`reach\` step in \`detect\`. Unlike the \`pull_request\` case, there is no later"
+                echo "run that covers these gates: the queue IS the run. Treat this check's green"
+                echo "as \"out of reach\", not \"ran and passed\". The full COMPILER suite ran"
+                echo "unconditionally on this same entry, in the other shards."
+              else
+                echo "This shard's pattern matched no gate touched by this diff, so it reported"
+                echo "SUCCESS having run nothing (by design — see \`ci.yml\` around the \`plan\`"
+                echo "step). Real coverage for this shard's gates runs when this PR enters the"
+                echo "merge queue (\`merge_group\` event), where every compiler gate runs"
+                echo "unconditionally. Treat this check's green as \"did not block\", not \"ran and"
+                echo "passed\"."
+              fi
             } >> "$GITHUB_STEP_SUMMARY"
           else
             echo "has_work=true" >> "$GITHUB_OUTPUT"

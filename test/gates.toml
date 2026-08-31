@@ -493,7 +493,7 @@ toolchain = ["wasm-tools", "node>=24"]
 [[gate]]
 name = "pds/test/constant_time_public_key"
 area = "engines"
-shard = "gates_8"
+shard = "gates_2"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -591,7 +591,7 @@ toolchain = []
 [[gate]]
 name = "pds/test/field_vectors"
 area = "engines"
-shard = "gates_3"
+shard = "gates_7"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -633,7 +633,7 @@ toolchain = ["wasm-tools", "node>=24"]
 [[gate]]
 name = "pds/test/opaque_field_scalar"
 area = "engines"
-shard = "gates_8"
+shard = "gates_2"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -933,7 +933,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/left_join_oracle"
 area = "engines"
-shard = "gates_6"
+shard = "gates_2"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -1003,7 +1003,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/overflow_oracle"
 area = "engines"
-shard = "gates_6"
+shard = "gates_7"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -1101,7 +1101,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/writer_api_oracle"
 area = "engines"
-shard = "gates_7"
+shard = "gates_6"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -1115,7 +1115,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/writer_oracle"
 area = "engines"
-shard = "gates_7"
+shard = "gates_6"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -1185,7 +1185,7 @@ toolchain = []
 [[gate]]
 name = "build_construct_coverage"
 area = "backend"
-shard = "gates_7"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "heavy"
@@ -1619,7 +1619,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_core_ir_modules"
 area = "eval"
-shard = "gates_2"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1717,7 +1717,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_diagnostics"
 area = "types"
-shard = "gates_6"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1745,7 +1745,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_dispatch_shape"
 area = "eval"
-shard = "gates_8"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1787,7 +1787,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_effect_hole"
 area = "infra"
-shard = "gates_2"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2011,7 +2011,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_eval_typed_modules"
 area = "eval"
-shard = "gates_8"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2095,7 +2095,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_fmt_write_safety"
 area = "frontend"
-shard = "gates_2"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2207,7 +2207,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_let_refute"
 area = "infra"
-shard = "gates_3"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2235,7 +2235,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_lint_cache"
 area = "tools"
-shard = "gates_8"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2403,7 +2403,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_lsp_b3"
 area = "tools"
-shard = "gates_2"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -2445,7 +2445,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_mcp"
 area = "tools"
-shard = "gates_8"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -2557,7 +2557,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_ported"
 area = "infra"
-shard = "gates_8"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2625,6 +2625,20 @@ corpus = ["test/native_fixtures"]
 toolchain = []
 
 [[gate]]
+name = "diff_compiler_reach_fail_open"
+area = "infra"
+shard = "gates_2"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+run = "test/diff_compiler_reach_fail_open.sh"
+oracles = []
+sources = [".github/workflows/ci.yml", "test/preflight.sh", "test/gates.toml", "test/diff_compiler_reach_fail_open.sh"]
+corpus = []
+toolchain = []
+
+[[gate]]
 name = "diff_compiler_references_correctness"
 area = "infra"
 shard = "gates_6"
@@ -2655,7 +2669,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_references_tool"
 area = "infra"
-shard = "gates_2"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2837,7 +2851,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_snapshot_bless"
 area = "frontend"
-shard = "gates_2"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3604,7 +3618,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_closure_alloc"
 area = "backend"
-shard = "gates_8"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
