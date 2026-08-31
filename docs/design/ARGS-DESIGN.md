@@ -206,9 +206,22 @@ also runnable.
 Once roster and help are folds over one `ArgSpec`, the help-conformance properties
 **A** (advertised ⊆ parsed) and **C** (parsed ⊆ advertised) are **true by construction** for
 every migrated verb — regression detectors, not live disagreement finders. C's
-`NO ROSTER (uncovered)` class (`codemod`, `doc`, `lsp`, `mcp`, `new`, `repl`) disappears, since
-a verb with an `ArgSpec` has a roster whether or not it has flags. ⇒ **the enforcing gate
-should key on the one call shape (`parseArgs`), not on agreement.**
+`NO ROSTER (uncovered)` class (`codemod`, `doc`, `lsp`, `mcp`, `new`, `repl`) was predicted to
+disappear, since a verb with an `ArgSpec` has a roster whether or not it has flags. ⇒ **the
+enforcing gate should key on the one call shape (`parseArgs`), not on agreement.**
+
+**Partially true, not fully** (S-5, #2355 residual C — derived, not guessed): `doc`, `lsp`,
+`new` and `repl` DO have an `ArgSpec` and DO render a roster via `unknownFlagMessage` — it's
+just an empty one, `(known: none)`. The prediction's premise ("a verb with an `ArgSpec` has a
+roster") was right about those four; what was wrong was the CENSUS's own derivation, which
+couldn't tell `(known: none)` (a real, empty roster) apart from no `(known: …)` substring at
+all (`cli_known_flags_of` returned the empty string for both). Fixed by having it also report
+whether it SAW a roster (`cli_had_roster`), not just what was in it. `codemod` and `mcp`
+genuinely have no `ArgSpec`-shaped rejection — their own hand-written wording
+("unknown codemod 'X'" / "unknown argument 'X'") carries no `(known: …)` substring at all — so
+they stay `NO ROSTER (uncovered)` until (if ever) they migrate onto `parseArgs` themselves,
+which is a bigger change than this residual (`codemod`'s vocabulary is per-codemod and not
+statically knowable — S-2/S-3's exemption list, still current).
 
 ---
 

@@ -88,12 +88,26 @@ public export data FlagSpec =
 
 -- | One verb's whole argument vocabulary.  This is the value everything else
 --   in this module is a rendering of.
+--
+-- `strictDash` (S-5, #2355 residual A): whether an UNDECLARED single-dash
+-- token (`-foo`, not `--foo`) is flag-shaped at all. `False` (the default,
+-- via `spec`) is `isFlagToken`'s original lenient reading — an undeclared
+-- `-x` is left to the positional/raw path, because a short token is also how
+-- a filename starting with `-` reaches the CLI (the AS-FILENAME hole this
+-- flag exists to let a verb opt OUT of). `True` (`withStrictDash`) makes an
+-- undeclared `-x` flag-shaped like `--x` is: it flows into the SAME
+-- `unknown` policy (`RejectUnknown`'s `unknownFlagMessage`, by default) that
+-- an unclaimed `--`-shaped token already gets. Opt in per-verb, never
+-- tree-wide by changing `isFlagToken`'s default — a verb that genuinely
+-- wants positionals starting with `-` (a filename literally named `-` stays
+-- exempt either way: `stringLength t > 1` guards that) keeps `False`.
 public export data ArgSpec =
   | ArgSpec {
       verb : String,
       flags : List FlagSpec,
       trailing : Trailing,
       unknown : Unknown,
+      strictDash : Bool,
     }
 
 {- | The result of a successful parse.
@@ -188,6 +202,7 @@ spec v fs = ArgSpec {
   flags = fs,
   trailing = TrailingReject,
   unknown = RejectUnknown,
+  strictDash = False,
 }
 
 -- | Give a spec a trailing-section policy.
@@ -199,6 +214,15 @@ withTrailing t sp = { sp | trailing = t }
 export
 withUnknown : Unknown -> ArgSpec -> ArgSpec
 withUnknown u sp = { sp | unknown = u }
+
+{- | Opt a spec into treating an UNDECLARED single-dash token as flag-shaped
+     (C2-rejectable) rather than a positional. See `ArgSpec.strictDash`.
+
+   > parseArgs (withStrictDash (spec "x" [])) ["-foo"]
+   Err "medaka x: unrecognized flag '-foo' (known: none)" -}
+export
+withStrictDash : ArgSpec -> ArgSpec
+withStrictDash sp = { sp | strictDash = True }
 
 -- ── Renderings of the spec ─────────────────────────────────────────────────
 
@@ -439,15 +463,18 @@ scanArgs sp (t::rest)
 -- `TrailingReject`/`TrailingRaw` it has no meaning, and falling here is what
 -- makes it reject like any other unclaimed token.
 --
--- A SINGLE-dash token is flag-shaped only when the spec actually declares it
--- (in either C1 spelling, so `-o` and `-o=x` both qualify).  An undeclared
--- `-zzz` is left to the positional/raw path rather than rejected, because a
--- short token is also how a filename starting with `-` reaches the CLI; the
--- decision to reject those is `runRunCmd`'s AS-FILENAME check, not this one.
+-- A SINGLE-dash token is flag-shaped when the spec declares it (in either C1
+-- spelling, so `-o` and `-o=x` both qualify) OR the spec opted into
+-- `strictDash` (S-5, #2355 residual A) — an undeclared `-zzz` is otherwise
+-- left to the positional/raw path rather than rejected, because a short
+-- token is also how a filename starting with `-` reaches the CLI; a verb
+-- that wants those rejected instead (rather than handling it itself, the way
+-- `runRunCmd`'s AS-FILENAME check used to) opts in with `withStrictDash`.
 isFlagToken : ArgSpec -> String -> Bool
 isFlagToken sp t
   | startsWith "--" t = True
   | startsWith "-" t && stringLength t > 1 = isDeclaredShort sp t
+    || sp.strictDash
   | otherwise = False
 
 isDeclaredShort : ArgSpec -> String -> Bool

@@ -161,11 +161,14 @@ ok.mdk: FAIL no snapshot at ok.md …          # ran normally; --zzz never menti
 → **slice S-2** ✅ **DRAINED**, through ONE shared rejection helper (each verb supplies its name
 and its known-flag set; the helper owns the check, the wording and the exit code). Re-verified
 against the current binary: every one of the sixteen verbs now falls in the `REJECT-NAMED`
-class except `new`, which stays `REJECT-VAGUE` (it takes no flags at all, only a `<name>`
-positional, so there is no known-flag set for the shared helper to name — see the residual
-list, §5a). `snapshot`'s second hole is closed too: `medaka snapshot --check --zzz-not-a-flag
-ok.mdk` now answers `medaka snapshot: unrecognized flag '--zzz-not-a-flag' (known: --check,
---new, --bless, --isolate, --worker, --out, --root, --stages)`, rc 1.
+class, **`new` included** — ✅ **DRAINED by S-5**: `runNewCmd`'s arity-mismatch arm (0 or 2+
+args) now scans for a leading-dash token and C2-names it before falling back to the generic
+usage line, so `medaka new --zzz ok.mdk` (the census's own 2-positional probe shape) no longer
+reads as `REJECT-VAGUE` just because it also has too many args; the genuine single-arg case
+(`medaka new --zzz`) already rejected this way since S-2. `snapshot`'s second hole is closed
+too: `medaka snapshot --check --zzz-not-a-flag ok.mdk` now answers `medaka snapshot:
+unrecognized flag '--zzz-not-a-flag' (known: --check, --new, --bless, --isolate, --worker,
+--out, --root, --stages)`, rc 1.
 
 ---
 
@@ -317,14 +320,14 @@ Derived by `make cli-conformance-census` at base `cfa6aee8a`. ✅ conforms · �
 
 Probe: `medaka <verb> --zzz-not-a-flag ok.mdk` (disposition), `medaka <verb>` (usage error).
 
-**Re-derived against the current binary (post S-2/S-3/S-4) — this table no longer matches the
-pre-sprint baseline captured when it was first written; every cell below is current.**
+**Re-derived against the current binary (post S-2/S-3/S-4/S-5) — this table no longer matches
+the pre-sprint baseline captured when it was first written; every cell below is current.**
 
 | Verb | Unknown flag → | rc | stream | C2 | Usage error rc | C3 |
 |---|---|---|---|---|---|---|
 | `check` | `medaka check: unrecognized flag '--zzz…' (known: --json, --types, --allow-internal)` | 1 | stderr | ✅ | 1 | ✅ |
 | `fmt` | `medaka fmt: unrecognized flag '--zzz…' (known: --check, --stdout, --write, -w)` | 1 | stderr | ✅ | 1 | ✅ |
-| `new` | `Usage: medaka new <name>` (REJECT-VAGUE) | 1 | stderr | ❌ (no flags to name — `new` takes only a `<name>` positional) | 1 | ✅ |
+| `new` | `medaka new: unrecognized flag '--zzz…' (known: none)` | 1 | stderr | ✅ **DRAINED by S-5** (was REJECT-VAGUE — `runNewCmd`'s 2+-arg arm now C2-names a leading-dash token before its generic usage line) | 1 | ✅ |
 | `build` | `medaka build: unrecognized flag '--zzz…' (known: --keep-ir, --allow-internal, --json, …)` | 1 | stderr | ✅ | 1 | ✅ |
 | `run` | `medaka run: unrecognized flag '--zzz…' (known: --json, --allow-internal, --release)` | 1 | stderr | ✅ | 1 | ✅ |
 | `test` | `medaka test: unrecognized flag '--zzz…' (known: --native, --json, --engines, --filter, --seed, --cases)` | 1 | stderr | ✅ **reference** | 1 | ✅ |
@@ -341,10 +344,7 @@ pre-sprint baseline captured when it was first written; every cell below is curr
 | bare / `help` / `--help` / `-h` | prints usage | 0 | stdout | — | — | ✅ |
 | `--version` / `-v` / `version` | `medaka 0.1.0-preview` | 0 | stdout | — | — | ✅ |
 
-`new` is the sole residual C2 cell, and it is qualitatively different from the pre-sprint
-baseline's list: it is not silent, not a filename misread, and does name the command's shape —
-it simply has no flag vocabulary for the shared helper to enumerate. See the residual filings
-below for whether this is worth its own issue.
+There is no residual C2 cell left in this table — `new` was the last one and S-5 drained it.
 
 ### 5b. Empty target set (C3) — probe `medaka <verb> empty/`
 
@@ -382,11 +382,14 @@ on an actual compile error is covered separately in §4(a), now DRAINED.
 | `codemod` | none | 1 | ✅ honestly rejected |
 | `gate` | none | 1 | ✅ honestly rejected at top level — `--json` is a per-subcommand flag. `medaka gate list --json` emits the registry array on stdout, rc 0. (`gate run --json` writes the run report; `--dry-run` short-circuits before it, so it is not exercised by this probe.) |
 
-⚠️ One further silent drop, inside a conforming cell: **`check --types` is ignored under
-`--json`.** `medaka check --types ok.mdk` prints `main : Unit`; `medaka check --json --types
-ok.mdk` prints the same envelope as without `--types`. No message, no note in
-`checkHelpText`. Still true after S-2/S-3/S-4 (re-verified) — neither slice touched it.
-→ **slice S-5 residual filing.**
+✅ **DRAINED by S-5.** `check --types` under `--json` used to be a silent drop: `medaka check
+--types ok.mdk` printed `main : Unit`; `medaka check --json --types ok.mdk` printed the same
+envelope as without `--types`, no message, no note in `checkHelpText`. The envelope has no
+field for a human-text scheme dump, so composing the two was a bigger design decision than
+this residual warranted — instead the no-op is now EXPLICIT: `medaka check --json --types
+ok.mdk` writes `medaka check: --types has no effect under --json (envelope has no scheme-dump
+field)` to stderr before the (byte-identical) JSON envelope on stdout, and `checkHelpText`
+documents it under `--types`.
 
 ### 5d. `--help` (C4) — probe `medaka <verb> --help`
 
@@ -450,9 +453,16 @@ silently checks nine verbs of sixteen while reading as complete is worse than th
 
 **What NO property sees**, stated so nobody reads the green as broader than it is:
 
-* **C covers only the verbs that print a roster.** `codemod`, `doc`, `lsp`, `mcp`, `new` and
-  `repl` have no `assertCliFlags` call, so they are listed `NO ROSTER (uncovered)` rather
-  than counted as passing. Closing that is the natural follow-up (#2354 residual).
+* **C covers only the verbs whose rejection carries a real `(known: …)` roster.**
+  ✅ **Narrowed by S-5**: `doc`, `lsp`, `new` and `repl` all route their unknown-flag rejection
+  through `unknownFlagMessage`, which renders `(known: none)` for a genuinely flagless spec —
+  that IS a roster (an empty one), so `cli_known_flags_of` now distinguishes it (via
+  `cli_had_roster`) from a verb with no roster at all, and these four are listed `(roster
+  present, zero flags)` and counted as covered, not `NO ROSTER (uncovered)`. Only `codemod`
+  (its own "unknown codemod 'X'" wording, no `(known: …)` substring) and `mcp` (its own
+  "unknown argument 'X'" wording) remain genuinely `NO ROSTER (uncovered)` — neither goes
+  through `unknownFlagMessage` at all, so there is nothing in the message to derive a roster
+  from without inventing one (residual filing candidate).
 * **Positional arity is not a flag.** `medaka doc [file.mdk]` vs `<file.mdk>` — the §5f row
   above — is a claim about a POSITIONAL, and no property can reach it.
 * **Under-documentation in the top-level `usage` block is not a lie**, only an omission, and
@@ -471,10 +481,21 @@ silently checks nine verbs of sixteen while reading as complete is worse than th
   `cli_known_flags_of` both pattern-match `--`-prefixed tokens only, so a single-dash flag
   like `fmt`'s `-w` or `build`'s `-o` — both real, both documented — is invisible to
   properties A and C alike. No false pass is known to exist from this today, but it is a
-  genuine gap, found by the end-of-sprint review and not by any slice; see the residual
-  filing on single-dash flags (§2's C2 scope is also `--`-shaped only, so the AS-FILENAME
-  defect this sprint exists to drain still reproduces via `-foo` instead of `--foo` on
-  several verbs — same root cause, same residual).
+  genuine gap, found by the end-of-sprint review and not by any slice; still OPEN after S-5
+  (this slice widened the REJECTION floor for undeclared single-dash tokens, not the census's
+  grading of *declared* ones) — a residual filing candidate.
+
+  ✅ **The AS-FILENAME half is DRAINED by S-5**, though: an undeclared single-dash token
+  (`-foo`, not a declared short flag) used to fall through as a positional on `check`, `doc`,
+  `build`, `manifest`, `check-policy`, `test`, `lint` and `snapshot` — §2's C2 scope was
+  `--`-shaped only, so this reproduced the same AS-FILENAME defect via `-foo` instead of
+  `--foo`. `stdlib/args.mdk` now carries a per-verb opt-in (`ArgSpec.strictDash` /
+  `withStrictDash`, ArgSpec value, opt-in not tree-wide): those eight specs now C2-reject an
+  undeclared `-foo` exactly like `--foo`, e.g. `medaka check -foo` → `medaka check:
+  unrecognized flag '-foo' (known: --json, --types, --allow-internal)`, rc 1. `fmt` and `run`
+  already rejected single-dash unknowns their own way (unaffected); `new`'s leading-dash check
+  already covered it too (§5a). `codemod`'s per-codemod vocabulary and `gate`'s subcommand
+  arms are unchanged (out of this slice's scope, §4).
 
 ---
 

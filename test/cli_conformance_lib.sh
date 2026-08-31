@@ -140,32 +140,54 @@ cli_help_text_of() { cli_probe "$1" --help; cat "$CLI_OUT"; }
 # reach (running a flag can show one EXISTS; nothing you can run enumerates the
 # ones you did not think to try).
 #
-# Bound, stated rather than hidden: a verb that renders no rejection roster prints
-# no roster and yields the empty string — cli_known_flags_of cannot distinguish
-# "no flags" from "no roster", so callers that need that distinction must treat
-# an empty result as UNCOVERED, not as "zero flags". `(known: none)` — the
-# rendering for a genuinely flagless verb — yields empty too, and correctly so:
-# there is nothing to check.
+# Bound, stated rather than hidden: a verb whose rejection has NO `(known: …)`
+# substring at all (a custom message shape, e.g. `codemod`'s "unknown codemod
+# 'X'" or `mcp`'s "unknown argument 'X'") yields the empty string, and callers
+# that need to distinguish that from "zero flags" must treat an empty result
+# WITH `$CLI_HAD_ROSTER` still 0 as UNCOVERED. `(known: none)` — the rendering
+# for a genuinely flagless verb that DOES go through `unknownFlagMessage` (e.g.
+# `doc`, `lsp`, `repl`, `new`) — also yields an empty flag list, but is a real,
+# checked roster of zero flags: `cli_known_flags_of` sets `$CLI_HAD_ROSTER=1` in
+# that case so callers don't count it as uncovered just because there was
+# nothing to list.
 #
 # The list is cut at the first `;`, because a roster may be followed by prose
 # inside the same parentheses (`gate reach` appends "; use `--` before a path
 # starting with '-'"), and then filtered to `--`-shaped tokens. Both are shape
 # rules, not a list of which verbs do it.
+# `$CLI_HAD_ROSTER` cannot be an ordinary shell-variable side channel here:
+# every caller invokes this via `known=$(cli_known_flags_of "$v")`, a command
+# substitution — a SUBSHELL — so a plain variable assignment inside this
+# function never reaches the caller. Persisted to a file in `$CLI_WORK`
+# instead (the same trick `cli_probe` already uses for $CLI_OUT/$CLI_ERR),
+# which the subshell shares with its parent because it's the filesystem, not
+# the process's variable table. Read it back with `cli_had_roster` AFTER the
+# `$(...)` call completes.
 cli_known_flags_of() {
   _kf_verb=$1
   _kf_all=""
+  echo 0 > "$CLI_WORK/had_roster"
   for _kf_s in $(cli_subs_of "$_kf_verb"); do
     if [ "$_kf_s" = @none ]; then
       cli_probe "$_kf_verb" --zzz-not-a-flag ok.mdk
     else
       cli_probe "$_kf_verb" "$_kf_s" --zzz-not-a-flag ok.mdk
     fi
-    _kf_line=$(cli_msg | sed -n 's/.*(known: \([^)]*\)).*/\1/p' | head -n 1)
+    _kf_msg=$(cli_msg)
+    case "$_kf_msg" in
+      *"(known: "*) echo 1 > "$CLI_WORK/had_roster" ;;
+    esac
+    _kf_line=$(printf '%s' "$_kf_msg" | sed -n 's/.*(known: \([^)]*\)).*/\1/p' | head -n 1)
     _kf_line=${_kf_line%%;*}
     _kf_all="$_kf_all $(printf '%s' "$_kf_line" | tr -d ',')"
   done
   printf '%s\n' $_kf_all | grep '^--[a-z]' | sort -u
 }
+
+# Whether the LAST `cli_known_flags_of` call saw a real `(known: …)` roster
+# (even an empty one, `(known: none)`) rather than no roster at all. Read
+# this AFTER `known=$(cli_known_flags_of "$v")`, never before.
+cli_had_roster() { cat "$CLI_WORK/had_roster" 2>/dev/null || echo 0; }
 
 # ── cli_flag_verdict <verb> <flag> ───────────────────────────────────────────
 #

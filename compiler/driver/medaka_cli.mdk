@@ -87,6 +87,7 @@ import args.{
   flagValues,
   unknownFlagMessage,
   usageExitCode,
+  withStrictDash,
 }
 import frontend.ast.{Decl(..), Expr(..), Loc(..), Pat, LetBind(..)}
 import frontend.parser.{
@@ -537,7 +538,9 @@ checkHelpText = stringConcat
     "  --json            emit the {\"files\":[...]} structured-diagnostics\n",
     "                    envelope instead of human text\n",
     "  --types           show the full inferred-scheme dump, prelude included\n",
-    "                    (default: only your own top-level bindings)\n",
+    "                    (default: only your own top-level bindings; no effect\n",
+    "                    under --json — the envelope carries diagnostics, not\n",
+    "                    scheme dumps)\n",
     "  --allow-internal  permit internal-only externs outside stdlib/\n",
   ]
 
@@ -547,14 +550,17 @@ checkHelpText = stringConcat
 -- accident, but nothing documents it for `check` and `runCheckCmd` never reads
 -- it.  (It has been REJECTED, not stripped, since the C2 floor landed: the
 -- flag check ran before the strip.)
+-- `withStrictDash` (S-5, #2355 residual A): `check`'s file positional is what
+-- an undeclared `-foo` used to fall into (AS-FILENAME, exemplar X3) — an
+-- undeclared single-dash token is now C2-rejected like `--foo` is.
 checkArgSpec : ArgSpec
-checkArgSpec = spec
+checkArgSpec = withStrictDash (spec
   "check"
   [
     switch ["--json"] "emit the structured-diagnostics envelope",
     switch ["--types"] "show the full inferred-scheme dump",
     switch ["--allow-internal"] "permit internal-only externs outside stdlib/",
-  ]
+  ])
 
 runCheckCmd : List String -> <IO> Unit
 runCheckCmd argv =
@@ -583,7 +589,17 @@ runCheckCmd argv =
           Err msg =>
             let _ = ePutStrLn msg
             exit 1
-          Ok csrc => if jsonMode then runCheckJsonCmd allowInternal rsrc csrc target stdlibDir
+          Ok csrc => if jsonMode then
+            -- E: `--types` requests a human-text scheme dump; the `--json`
+            -- envelope has no field for one (structured diagnostics only), so
+            -- rather than silently drop the flag (the S-2/S-3/S-4 residual),
+            -- name the no-op on stderr — stdout stays the plain JSON envelope,
+            -- byte-identical to `--json` alone (diff_native_cli/--json goldens
+            -- unaffected).
+            let _ = if typesMode
+              then ePutStrLn "medaka check: --types has no effect under --json (envelope has no scheme-dump field)"
+              else ()
+            runCheckJsonCmd allowInternal rsrc csrc target stdlibDir
           else match readFile target
             Err msg =>
               let _ = ePutStrLn msg
@@ -936,40 +952,45 @@ lastModPair [] = None
 lastModPair [p] = Some p
 lastModPair (_::rest) = lastModPair rest
 
--- ── `run`'s argv filter — DELIBERATELY PRESERVED, defect included ─────────
+-- ── `run`'s argv filter — TrailingRaw semantics (S-5, #2355 residual B) ────
 -- S-cli-onto-args (#2355) migrated every other verb onto `stdlib/args.mdk`.
--- `run` keeps a LOCAL filter because `args.mdk`'s `TrailingRaw` would change
--- observable behaviour, and this slice is a parity slice.
+-- `run` keeps a LOCAL filter (not `args.mdk`'s own `TrailingRaw`) because
+-- `run` still needs its own C2 rejection wording/ordering (the leading-dash
+-- check in `runRunCmd`), but the SEMANTICS are now `args.mdk`'s TrailingRaw:
+-- flag scanning stops at the first token that isn't one of run's own known
+-- flags, and everything from there on — the entry file plus every token
+-- after it — passes through completely untouched.
 --
--- 🚨 KNOWN DEFECT, left standing on purpose.  This filters the WHOLE argv, so
--- a `--json`/`--release`/`--allow-internal`/`--types` token that belongs to
--- the USER PROGRAM (`medaka run argv.mdk --json`) is silently eaten before it
--- reaches `progArgsRef` — the program never sees it.  `TrailingRaw` fixes
--- this by construction (flag scanning stops at the first positional, so
--- everything after the entry file reaches the callee untouched), and that is
--- S-5's change, together with the [W-QUIETER]-shaped test built from
--- `docs/ops/CLI-CONFORMANCE.md` rather than from this diff.  Until then the
--- two `run` predicates below reproduce today's semantics exactly.
+-- 🚨 FORMER KNOWN DEFECT, now fixed.  `runArgvFilter` used to filter the
+-- WHOLE argv, so a `--json`/`--release`/`--allow-internal`/`--types` token
+-- belonging to the USER PROGRAM (`medaka run argv.mdk --json`) was silently
+-- eaten before it reached `progArgsRef` — contradicts docs/ops/
+-- CLI-CONFORMANCE.md §4 D-2(b) ("everything after the first positional is
+-- the program's argv"). Now it stops recursing at the first non-flag token
+-- and returns the remainder verbatim, so `medaka run argv.mdk --json a b`
+-- delivers `["--json", "a", "b"]` to the program.
 --
 -- `--types` is `check`'s flag, not `run`'s (`runRunCmd` never reads it), but
--- it was in the shared filter's arm list and removing it here would be a
--- behaviour change, so it stays.
+-- it was in the shared filter's arm list before the entry file and removing
+-- it here would be a behaviour change on the PRE-positional prefix, so it
+-- stays consumed there.
 runArgvFilter : List String -> List String
 runArgvFilter [] = []
 runArgvFilter ("--json"::rest) = runArgvFilter rest
 runArgvFilter ("--release"::rest) = runArgvFilter rest
 runArgvFilter ("--allow-internal"::rest) = runArgvFilter rest
 runArgvFilter ("--types"::rest) = runArgvFilter rest
-runArgvFilter (x::rest) = x :: runArgvFilter rest
+runArgvFilter argv = argv
 
--- True if the flag appears anywhere in `run`'s argv, program passthrough args
--- included — the imprecise half of the same defect, and the predicate
--- `runJsonInvocation` is required to match byte-for-byte (see its note).
+-- True if the flag appears in `run`'s PRE-positional prefix ONLY — the same
+-- prefix `runArgvFilter` consumes, program passthrough args (after the first
+-- positional) excluded.  `runJsonInvocation` is required to match this
+-- byte-for-byte (see its note); both now agree on the fixed, precise scope.
 runFlagGiven : String -> List String -> Bool
 runFlagGiven _ [] = False
 runFlagGiven nm (x::rest)
-  | x == nm = True
-  | otherwise = runFlagGiven nm rest
+  | x == "--json" || x == "--release" || x == "--allow-internal" || x == "--types" = x == nm || runFlagGiven nm rest
+  | otherwise = False
 
 -- ── C1/C2: the one flag floor every verb shares ────────────────────────────
 -- docs/ops/CLI-CONFORMANCE.md §2 (RATIFIED).  Every verb rejects an
@@ -1808,9 +1829,18 @@ runNewCmd [arg] =
     else
       let code = newProject arg
       if code == 0 then () else exit code
-runNewCmd _ =
-  let _ = ePutStrLn newUsageLine
-  exit 1
+runNewCmd args =
+  -- Arity mismatch (0 or 2+ args): still C2-name a leading-dash token before
+  -- falling back to the generic usage line, so `medaka new --zzz ok.mdk`
+  -- doesn't read as REJECT-VAGUE just because it also has too many args.
+  match filterList (startsWith "-") args
+    (flagTok :: _) =>
+      let _ = ePutStrLn (unknownFlagMessage newArgSpec flagTok)
+      let _ = ePutStrLn newUsageLine
+      exit 1
+    [] =>
+      let _ = ePutStrLn newUsageLine
+      exit 1
 
 -- ── build ─────────────────────────────────────────────────────────────────
 -- Mirrors bin/main.ml's `build` arm (Build_cmd.run) + build_main.mdk: parse
@@ -1830,8 +1860,10 @@ runNewCmd _ =
 -- Declaration ORDER is the `(known: …)` roster order (`rosterOf` renders every
 -- name of every flag in declaration order), so it reproduces the old
 -- `buildBoolFlags ++ buildValueFlags` rendering exactly.
+-- `withStrictDash` (S-5, #2355 residual A): an undeclared `-x` used to fall
+-- through as the input file (AS-FILENAME); now C2-rejected like `--x`.
 buildArgSpec : ArgSpec
-buildArgSpec = spec "build" [
+buildArgSpec = withStrictDash (spec "build" [
   switch ["--keep-ir"] "keep the emitted IR beside the output",
   switch ["--allow-internal"] "permit internal-only externs outside stdlib/",
   switch ["--json"] "emit the structured-diagnostics envelope",
@@ -1842,7 +1874,7 @@ buildArgSpec = spec "build" [
   value ["--target"] "native|wasm" "backend to emit for",
   value ["--emit-rt-obj"] "PATH" "precompile the C runtime to an object",
   value ["--emit-prelude-obj"] "PATH" "precompile the prelude to an object",
-]
+])
 
 runBuildCmd : List String -> <IO> Unit
 runBuildCmd argv =
@@ -2669,8 +2701,10 @@ testHelpText = stringConcat
 -- `parseEngineNames`'s own hand-written ones, and this slice keeps every one
 -- of them verbatim (convergence onto `args.mdk`'s `invalidValueMessage` is a
 -- later decision, not this slice's).
+-- `withStrictDash` (S-5, #2355 residual A): an undeclared `-x` used to fall
+-- through as a target path (AS-FILENAME); now C2-rejected like `--x`.
 testArgSpec : ArgSpec
-testArgSpec = spec
+testArgSpec = withStrictDash (spec
   "test"
   [
     switch ["--native"] "shorthand for --engines native",
@@ -2679,7 +2713,7 @@ testArgSpec = spec
     value ["--filter"] "SUBSTRING" "run only matching examples",
     value ["--seed"] "N" "seed the property RNG",
     value ["--cases"] "N" "property cases per test",
-  ]
+  ])
 
 -- `--cases <n>`/`--seed <n>` must parse as integers — same "named + located"
 -- rejection style as an unknown engine name (`parseEngineNames`), not a
@@ -3012,8 +3046,10 @@ docHelpText = stringConcat
   ]
 
 -- `doc` documents no flags at all, so its roster renders `none`.
+-- `withStrictDash` (S-5, #2355 residual A): an undeclared `-x` used to fall
+-- through as the target file (AS-FILENAME, exemplar X4); now C2-rejected.
 docArgSpec : ArgSpec
-docArgSpec = spec "doc" []
+docArgSpec = withStrictDash (spec "doc" [])
 
 runDocCmd : List String -> <IO> Unit
 runDocCmd argv =
@@ -3084,13 +3120,15 @@ checkPolicyHelpText = stringConcat
 -- triple is built HERE from the parse rather than by re-scanning raw argv —
 -- `parsePolicyArgs` itself belongs to `tools.check_policy` and is left alone
 -- (S-3's file, not this slice's).
+-- `withStrictDash` (S-5, #2355 residual A): an undeclared `-x` used to fall
+-- through as the target file (AS-FILENAME); now C2-rejected like `--x`.
 policyArgSpec : ArgSpec
-policyArgSpec = spec
+policyArgSpec = withStrictDash (spec
   "check-policy"
   [
     value ["--allow"] "L1,L2,..." "effect labels the plugin may use",
     value ["--fn"] "NAME" "the function whose effect row is checked",
-  ]
+  ])
 
 runCheckPolicyCmd : List String -> <IO> Unit
 runCheckPolicyCmd argv0 =
@@ -3180,10 +3218,12 @@ manifestHelpText = stringConcat
   ]
 
 -- Same C1 fix as check-policy: `--fn=main` used to become the filename.
+-- `withStrictDash` (S-5, #2355 residual A): an undeclared `-x` used to fall
+-- through as the target file (AS-FILENAME); now C2-rejected like `--x`.
 manifestArgSpec : ArgSpec
-manifestArgSpec = spec
+manifestArgSpec = withStrictDash (spec
   "manifest"
-  [value ["--fn"] "NAME" "the function whose effect row is emitted"]
+  [value ["--fn"] "NAME" "the function whose effect row is emitted"])
 
 runManifestCmd : List String -> <IO> Unit
 runManifestCmd argv0 =
@@ -3261,8 +3301,10 @@ lintHelpText = stringConcat
 
 -- Declaration order is the roster order, reproducing the old
 -- `lintBoolFlags ++ lintValueFlags` rendering.
+-- `withStrictDash` (S-5, #2355 residual A): an undeclared `-x` used to fall
+-- through as a target path ("these targets do not exist"); now C2-rejected.
 lintArgSpec : ArgSpec
-lintArgSpec = spec
+lintArgSpec = withStrictDash (spec
   "lint"
   [
     switch ["--fix"] "rewrite fixable findings in place",
@@ -3271,7 +3313,7 @@ lintArgSpec = spec
     value ["--disable"] "r1,r2,..." "suppress findings from the named rules",
     value ["--only"] "r1,..." "keep only findings from the named rules",
     value ["--deny"] "r1,..." "promote findings from the named rules to error",
-  ]
+  ])
 
 runLintCmd : List String -> <IO> Unit
 runLintCmd argv0 =
@@ -3868,8 +3910,10 @@ snapshotHelpText = stringConcat
 -- `internal`: it is a flag this verb genuinely parses (so it must stay in the
 -- roster — omitting it would make the crash-resume mechanism reject itself)
 -- but it is not for direct use.
+-- `withStrictDash` (S-5, #2355 residual A): an undeclared `-x` used to fall
+-- through as a target path ("these targets do not exist"); now C2-rejected.
 snapshotArgSpec : ArgSpec
-snapshotArgSpec = spec
+snapshotArgSpec = withStrictDash (spec
   "snapshot"
   [
     switch ["--check"] "compare against the existing snapshot; write nothing",
@@ -3880,7 +3924,7 @@ snapshotArgSpec = spec
     value ["--out"] "DIR" "snapshot directory",
     value ["--root"] "DIR" "compiler/stdlib root, overriding MEDAKA_ROOT",
     value ["--stages"] "a,b,..." "restrict to the named stages",
-  ]
+  ])
 
 runSnapshotCmd : List String -> <IO> Unit
 runSnapshotCmd argv0 =

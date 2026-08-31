@@ -171,8 +171,13 @@ SRC_SPECS=$(grep -rh 'requireArgs ' "$ROOT/compiler" 2>/dev/null \
 # resolved 2 of 9 specs and the gate still said PASS — a fail-open caught only
 # because the covered COUNT was compared against the pre-migration one. The
 # SPECS-vs-VERBS reconciliation below is what makes that comparison automatic.
+#
+# `withStrictDash (spec "<verb>" …)` (S-5, #2355 residual A) inserts one more
+# token between `=` and `spec` for a spec opted into it — the `\(withStrictDash (\)\?`
+# group tolerates that wrapper without requiring it, so this still matches
+# both `<name> = spec "<verb>"` and `<name> = withStrictDash (spec "<verb>"`.
 SRC_VERBS=$(for _s in $SRC_SPECS; do
-              grep -rhA3 "^$_s = spec" "$ROOT/compiler" 2>/dev/null \
+              grep -rhA3 "^$_s = \(withStrictDash (\)\?spec" "$ROOT/compiler" 2>/dev/null \
                 | sed -n 's/.*"\([a-z][a-z0-9-]*\)".*/\1/p' | head -n 1
             done | sort -u | tr '\n' ' ')
 

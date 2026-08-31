@@ -255,7 +255,14 @@ for v in $VERBS; do
   case "$v" in help|version) continue ;; esac
   case "$v" in build) [ "$DO_BUILD" = 1 ] || continue ;; esac
   known=$(cli_known_flags_of "$v")
-  [ -n "$known" ] || { printf '%-14s %-22s %s\n' "$v" "-" "NO ROSTER (uncovered)"; continue; }
+  if [ -z "$known" ]; then
+    if [ "$(cli_had_roster)" = 1 ]; then
+      printf '%-14s %-22s %s\n' "$v" "-" "(roster present, zero flags)"
+    else
+      printf '%-14s %-22s %s\n' "$v" "-" "NO ROSTER (uncovered)"
+    fi
+    continue
+  fi
   helptext=$(cli_help_text_of "$v")
   for f in $known; do
     printf '%s' "$helptext" | grep -q -- "$f" \

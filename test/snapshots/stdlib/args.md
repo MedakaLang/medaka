@@ -1,5 +1,5 @@
 # META
-source_lines=606
+source_lines=633
 stages=DESUGAR,MARK
 # SOURCE
 -- args.mdk — one command-line argument parser, as a first-order value
@@ -92,12 +92,26 @@ public export data FlagSpec =
 
 -- | One verb's whole argument vocabulary.  This is the value everything else
 --   in this module is a rendering of.
+--
+-- `strictDash` (S-5, #2355 residual A): whether an UNDECLARED single-dash
+-- token (`-foo`, not `--foo`) is flag-shaped at all. `False` (the default,
+-- via `spec`) is `isFlagToken`'s original lenient reading — an undeclared
+-- `-x` is left to the positional/raw path, because a short token is also how
+-- a filename starting with `-` reaches the CLI (the AS-FILENAME hole this
+-- flag exists to let a verb opt OUT of). `True` (`withStrictDash`) makes an
+-- undeclared `-x` flag-shaped like `--x` is: it flows into the SAME
+-- `unknown` policy (`RejectUnknown`'s `unknownFlagMessage`, by default) that
+-- an unclaimed `--`-shaped token already gets. Opt in per-verb, never
+-- tree-wide by changing `isFlagToken`'s default — a verb that genuinely
+-- wants positionals starting with `-` (a filename literally named `-` stays
+-- exempt either way: `stringLength t > 1` guards that) keeps `False`.
 public export data ArgSpec =
   | ArgSpec {
       verb : String,
       flags : List FlagSpec,
       trailing : Trailing,
       unknown : Unknown,
+      strictDash : Bool,
     }
 
 {- | The result of a successful parse.
@@ -192,6 +206,7 @@ spec v fs = ArgSpec {
   flags = fs,
   trailing = TrailingReject,
   unknown = RejectUnknown,
+  strictDash = False,
 }
 
 -- | Give a spec a trailing-section policy.
@@ -203,6 +218,15 @@ withTrailing t sp = { sp | trailing = t }
 export
 withUnknown : Unknown -> ArgSpec -> ArgSpec
 withUnknown u sp = { sp | unknown = u }
+
+{- | Opt a spec into treating an UNDECLARED single-dash token as flag-shaped
+     (C2-rejectable) rather than a positional. See `ArgSpec.strictDash`.
+
+   > parseArgs (withStrictDash (spec "x" [])) ["-foo"]
+   Err "medaka x: unrecognized flag '-foo' (known: none)" -}
+export
+withStrictDash : ArgSpec -> ArgSpec
+withStrictDash sp = { sp | strictDash = True }
 
 -- ── Renderings of the spec ─────────────────────────────────────────────────
 
@@ -443,15 +467,18 @@ scanArgs sp (t::rest)
 -- `TrailingReject`/`TrailingRaw` it has no meaning, and falling here is what
 -- makes it reject like any other unclaimed token.
 --
--- A SINGLE-dash token is flag-shaped only when the spec actually declares it
--- (in either C1 spelling, so `-o` and `-o=x` both qualify).  An undeclared
--- `-zzz` is left to the positional/raw path rather than rejected, because a
--- short token is also how a filename starting with `-` reaches the CLI; the
--- decision to reject those is `runRunCmd`'s AS-FILENAME check, not this one.
+-- A SINGLE-dash token is flag-shaped when the spec declares it (in either C1
+-- spelling, so `-o` and `-o=x` both qualify) OR the spec opted into
+-- `strictDash` (S-5, #2355 residual A) — an undeclared `-zzz` is otherwise
+-- left to the positional/raw path rather than rejected, because a short
+-- token is also how a filename starting with `-` reaches the CLI; a verb
+-- that wants those rejected instead (rather than handling it itself, the way
+-- `runRunCmd`'s AS-FILENAME check used to) opts in with `withStrictDash`.
 isFlagToken : ArgSpec -> String -> Bool
 isFlagToken sp t
   | startsWith "--" t = True
   | startsWith "-" t && stringLength t > 1 = isDeclaredShort sp t
+    || sp.strictDash
   | otherwise = False
 
 isDeclaredShort : ArgSpec -> String -> Bool
@@ -615,7 +642,7 @@ valuesGo nm ((k, v)::rest)
 (DData Public "Unknown" () ((variant "RejectUnknown" (ConPos)) (variant "CollectUnknown" (ConPos))) ())
 (DData Public "Trailing" () ((variant "TrailingReject" (ConPos)) (variant "TrailingRaw" (ConPos)) (variant "TrailingAfterSeparator" (ConPos))) ())
 (DData Public "FlagSpec" () ((variant "FlagSpec" (ConNamed (field "names" (TyApp (TyCon "List") (TyCon "String"))) (field "arity" (TyCon "Arity")) (field "summary" (TyCon "String")) (field "visibility" (TyCon "Visibility"))))) ())
-(DData Public "ArgSpec" () ((variant "ArgSpec" (ConNamed (field "verb" (TyCon "String")) (field "flags" (TyApp (TyCon "List") (TyCon "FlagSpec"))) (field "trailing" (TyCon "Trailing")) (field "unknown" (TyCon "Unknown"))))) ())
+(DData Public "ArgSpec" () ((variant "ArgSpec" (ConNamed (field "verb" (TyCon "String")) (field "flags" (TyApp (TyCon "List") (TyCon "FlagSpec"))) (field "trailing" (TyCon "Trailing")) (field "unknown" (TyCon "Unknown")) (field "strictDash" (TyCon "Bool"))))) ())
 (DData Public "Args" () ((variant "Args" (ConNamed (field "given" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))) (field "positionals" (TyApp (TyCon "List") (TyCon "String"))) (field "rest" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig true "switch" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "FlagSpec"))))
 (DFunDef false "switch" ((PVar "ns") (PVar "s")) (ERecordCreate "FlagSpec" ((fa "names" (EVar "ns")) (fa "arity" (EVar "Switch")) (fa "summary" (EVar "s")) (fa "visibility" (EVar "Public")))))
@@ -630,11 +657,13 @@ valuesGo nm ((k, v)::rest)
 (DTypeSig true "internal" (TyFun (TyCon "FlagSpec") (TyCon "FlagSpec")))
 (DFunDef false "internal" ((PVar "f")) (ERecordUpdate (EVar "f") ((fa "visibility" (EVar "Internal")))))
 (DTypeSig true "spec" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "FlagSpec")) (TyCon "ArgSpec"))))
-(DFunDef false "spec" ((PVar "v") (PVar "fs")) (ERecordCreate "ArgSpec" ((fa "verb" (EVar "v")) (fa "flags" (EVar "fs")) (fa "trailing" (EVar "TrailingReject")) (fa "unknown" (EVar "RejectUnknown")))))
+(DFunDef false "spec" ((PVar "v") (PVar "fs")) (ERecordCreate "ArgSpec" ((fa "verb" (EVar "v")) (fa "flags" (EVar "fs")) (fa "trailing" (EVar "TrailingReject")) (fa "unknown" (EVar "RejectUnknown")) (fa "strictDash" (EVar "False")))))
 (DTypeSig true "withTrailing" (TyFun (TyCon "Trailing") (TyFun (TyCon "ArgSpec") (TyCon "ArgSpec"))))
 (DFunDef false "withTrailing" ((PVar "t") (PVar "sp")) (ERecordUpdate (EVar "sp") ((fa "trailing" (EVar "t")))))
 (DTypeSig true "withUnknown" (TyFun (TyCon "Unknown") (TyFun (TyCon "ArgSpec") (TyCon "ArgSpec"))))
 (DFunDef false "withUnknown" ((PVar "u") (PVar "sp")) (ERecordUpdate (EVar "sp") ((fa "unknown" (EVar "u")))))
+(DTypeSig true "withStrictDash" (TyFun (TyCon "ArgSpec") (TyCon "ArgSpec")))
+(DFunDef false "withStrictDash" ((PVar "sp")) (ERecordUpdate (EVar "sp") ((fa "strictDash" (EVar "True")))))
 (DTypeSig true "canonical" (TyFun (TyCon "FlagSpec") (TyCon "String")))
 (DFunDef false "canonical" ((PVar "f")) (EMatch (EFieldAccess (EVar "f") "names") (arm (PCons (PVar "n") PWild) () (EVar "n")) (arm (PList) () (ELit (LString "")))))
 (DTypeSig true "rosterOf" (TyFun (TyCon "ArgSpec") (TyApp (TyCon "List") (TyCon "String"))))
@@ -677,7 +706,7 @@ valuesGo nm ((k, v)::rest)
 (DFunDef false "scanArgs" (PWild (PList)) (EApp (EVar "Ok") (ETuple (EListLit) (EListLit) (EListLit))))
 (DFunDef false "scanArgs" ((PVar "sp") (PCons (PVar "t") (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "t") (ELit (LString "--"))) (EApp (EVar "isAfterSeparator") (EFieldAccess (EVar "sp") "trailing"))) (EApp (EVar "Ok") (ETuple (EListLit) (EListLit) (EVar "rest"))) (EIf (EApp (EApp (EVar "isFlagToken") (EVar "sp")) (EVar "t")) (EApp (EApp (EApp (EVar "scanFlag") (EVar "sp")) (EVar "t")) (EVar "rest")) (EIf (EApp (EVar "isRaw") (EFieldAccess (EVar "sp") "trailing")) (EApp (EVar "Ok") (ETuple (EListLit) (EListLit (EVar "t")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "consPositional") (EVar "t")) (EApp (EApp (EVar "scanArgs") (EVar "sp")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "isFlagToken" (TyFun (TyCon "ArgSpec") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "isFlagToken" ((PVar "sp") (PVar "t")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "--"))) (EVar "t")) (EVar "True") (EIf (EBinOp "&&" (EApp (EApp (EVar "startsWith") (ELit (LString "-"))) (EVar "t")) (EBinOp ">" (EApp (EVar "stringLength") (EVar "t")) (ELit (LInt 1)))) (EApp (EApp (EVar "isDeclaredShort") (EVar "sp")) (EVar "t")) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "isFlagToken" ((PVar "sp") (PVar "t")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "--"))) (EVar "t")) (EVar "True") (EIf (EBinOp "&&" (EApp (EApp (EVar "startsWith") (ELit (LString "-"))) (EVar "t")) (EBinOp ">" (EApp (EVar "stringLength") (EVar "t")) (ELit (LInt 1)))) (EBinOp "||" (EApp (EApp (EVar "isDeclaredShort") (EVar "sp")) (EVar "t")) (EFieldAccess (EVar "sp") "strictDash")) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "isDeclaredShort" (TyFun (TyCon "ArgSpec") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "isDeclaredShort" ((PVar "sp") (PVar "t")) (EMatch (EApp (EVar "splitEq") (EVar "t")) (arm (PCon "Some" (PTuple (PVar "nm") PWild)) () (EApp (EApp (EVar "declares") (EVar "nm")) (EFieldAccess (EVar "sp") "flags"))) (arm (PCon "None") () (EApp (EApp (EVar "declares") (EVar "t")) (EFieldAccess (EVar "sp") "flags")))))
 (DTypeSig false "declares" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "FlagSpec")) (TyCon "Bool"))))
@@ -739,7 +768,7 @@ valuesGo nm ((k, v)::rest)
 (DData Public "Unknown" () ((variant "RejectUnknown" (ConPos)) (variant "CollectUnknown" (ConPos))) ())
 (DData Public "Trailing" () ((variant "TrailingReject" (ConPos)) (variant "TrailingRaw" (ConPos)) (variant "TrailingAfterSeparator" (ConPos))) ())
 (DData Public "FlagSpec" () ((variant "FlagSpec" (ConNamed (field "names" (TyApp (TyCon "List") (TyCon "String"))) (field "arity" (TyCon "Arity")) (field "summary" (TyCon "String")) (field "visibility" (TyCon "Visibility"))))) ())
-(DData Public "ArgSpec" () ((variant "ArgSpec" (ConNamed (field "verb" (TyCon "String")) (field "flags" (TyApp (TyCon "List") (TyCon "FlagSpec"))) (field "trailing" (TyCon "Trailing")) (field "unknown" (TyCon "Unknown"))))) ())
+(DData Public "ArgSpec" () ((variant "ArgSpec" (ConNamed (field "verb" (TyCon "String")) (field "flags" (TyApp (TyCon "List") (TyCon "FlagSpec"))) (field "trailing" (TyCon "Trailing")) (field "unknown" (TyCon "Unknown")) (field "strictDash" (TyCon "Bool"))))) ())
 (DData Public "Args" () ((variant "Args" (ConNamed (field "given" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))) (field "positionals" (TyApp (TyCon "List") (TyCon "String"))) (field "rest" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig true "switch" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "FlagSpec"))))
 (DFunDef false "switch" ((PVar "ns") (PVar "s")) (ERecordCreate "FlagSpec" ((fa "names" (EVar "ns")) (fa "arity" (EVar "Switch")) (fa "summary" (EVar "s")) (fa "visibility" (EVar "Public")))))
@@ -754,11 +783,13 @@ valuesGo nm ((k, v)::rest)
 (DTypeSig true "internal" (TyFun (TyCon "FlagSpec") (TyCon "FlagSpec")))
 (DFunDef false "internal" ((PVar "f")) (ERecordUpdate (EVar "f") ((fa "visibility" (EVar "Internal")))))
 (DTypeSig true "spec" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "FlagSpec")) (TyCon "ArgSpec"))))
-(DFunDef false "spec" ((PVar "v") (PVar "fs")) (ERecordCreate "ArgSpec" ((fa "verb" (EVar "v")) (fa "flags" (EVar "fs")) (fa "trailing" (EVar "TrailingReject")) (fa "unknown" (EVar "RejectUnknown")))))
+(DFunDef false "spec" ((PVar "v") (PVar "fs")) (ERecordCreate "ArgSpec" ((fa "verb" (EVar "v")) (fa "flags" (EVar "fs")) (fa "trailing" (EVar "TrailingReject")) (fa "unknown" (EVar "RejectUnknown")) (fa "strictDash" (EVar "False")))))
 (DTypeSig true "withTrailing" (TyFun (TyCon "Trailing") (TyFun (TyCon "ArgSpec") (TyCon "ArgSpec"))))
 (DFunDef false "withTrailing" ((PVar "t") (PVar "sp")) (ERecordUpdate (EVar "sp") ((fa "trailing" (EVar "t")))))
 (DTypeSig true "withUnknown" (TyFun (TyCon "Unknown") (TyFun (TyCon "ArgSpec") (TyCon "ArgSpec"))))
 (DFunDef false "withUnknown" ((PVar "u") (PVar "sp")) (ERecordUpdate (EVar "sp") ((fa "unknown" (EVar "u")))))
+(DTypeSig true "withStrictDash" (TyFun (TyCon "ArgSpec") (TyCon "ArgSpec")))
+(DFunDef false "withStrictDash" ((PVar "sp")) (ERecordUpdate (EVar "sp") ((fa "strictDash" (EVar "True")))))
 (DTypeSig true "canonical" (TyFun (TyCon "FlagSpec") (TyCon "String")))
 (DFunDef false "canonical" ((PVar "f")) (EMatch (EFieldAccess (EVar "f") "names") (arm (PCons (PVar "n") PWild) () (EVar "n")) (arm (PList) () (ELit (LString "")))))
 (DTypeSig true "rosterOf" (TyFun (TyCon "ArgSpec") (TyApp (TyCon "List") (TyCon "String"))))
@@ -801,7 +832,7 @@ valuesGo nm ((k, v)::rest)
 (DFunDef false "scanArgs" (PWild (PList)) (EApp (EVar "Ok") (ETuple (EListLit) (EListLit) (EListLit))))
 (DFunDef false "scanArgs" ((PVar "sp") (PCons (PVar "t") (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "t") (ELit (LString "--"))) (EApp (EVar "isAfterSeparator") (EFieldAccess (EVar "sp") "trailing"))) (EApp (EVar "Ok") (ETuple (EListLit) (EListLit) (EVar "rest"))) (EIf (EApp (EApp (EVar "isFlagToken") (EVar "sp")) (EVar "t")) (EApp (EApp (EApp (EVar "scanFlag") (EVar "sp")) (EVar "t")) (EVar "rest")) (EIf (EApp (EVar "isRaw") (EFieldAccess (EVar "sp") "trailing")) (EApp (EVar "Ok") (ETuple (EListLit) (EListLit (EVar "t")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "consPositional") (EVar "t")) (EApp (EApp (EVar "scanArgs") (EVar "sp")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "isFlagToken" (TyFun (TyCon "ArgSpec") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "isFlagToken" ((PVar "sp") (PVar "t")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "--"))) (EVar "t")) (EVar "True") (EIf (EBinOp "&&" (EApp (EApp (EVar "startsWith") (ELit (LString "-"))) (EVar "t")) (EBinOp ">" (EApp (EVar "stringLength") (EVar "t")) (ELit (LInt 1)))) (EApp (EApp (EVar "isDeclaredShort") (EVar "sp")) (EVar "t")) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "isFlagToken" ((PVar "sp") (PVar "t")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "--"))) (EVar "t")) (EVar "True") (EIf (EBinOp "&&" (EApp (EApp (EVar "startsWith") (ELit (LString "-"))) (EVar "t")) (EBinOp ">" (EApp (EVar "stringLength") (EVar "t")) (ELit (LInt 1)))) (EBinOp "||" (EApp (EApp (EVar "isDeclaredShort") (EVar "sp")) (EVar "t")) (EFieldAccess (EVar "sp") "strictDash")) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "isDeclaredShort" (TyFun (TyCon "ArgSpec") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "isDeclaredShort" ((PVar "sp") (PVar "t")) (EMatch (EApp (EVar "splitEq") (EVar "t")) (arm (PCon "Some" (PTuple (PVar "nm") PWild)) () (EApp (EApp (EVar "declares") (EVar "nm")) (EFieldAccess (EVar "sp") "flags"))) (arm (PCon "None") () (EApp (EApp (EVar "declares") (EVar "t")) (EFieldAccess (EVar "sp") "flags")))))
 (DTypeSig false "declares" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "FlagSpec")) (TyCon "Bool"))))

@@ -159,8 +159,15 @@ for v in $VERBS; do
   if skip_build "$v"; then c_uncov="$c_uncov $v(NO_BUILD)"; continue; fi
   known=$(cli_known_flags_of "$v")
   if [ -z "$known" ]; then
-    # Cannot distinguish "no flags" from "no roster" — so this is UNCOVERED, and
-    # says so, rather than counting as a pass.
+    if [ "$(cli_had_roster)" = 1 ]; then
+      # A real `(known: none)` roster — the verb genuinely takes no flags.
+      # Nothing to check, but it IS covered: don't count it as uncovered.
+      echo "   $v: (roster present, zero flags)"
+      continue
+    fi
+    # No `(known: …)` substring at all — cannot distinguish "no flags" from
+    # "no roster" — so this is UNCOVERED, and says so, rather than counting
+    # as a pass.
     c_uncov="$c_uncov $v"
     continue
   fi
