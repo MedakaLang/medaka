@@ -1,14 +1,25 @@
--- Entry point for the self-hosted lint pass:
+-- Entry point for the self-hosted lint pass — THE LINT GATE'S ORACLE.  Built,
+-- not interpreted:
 --
---   medaka run compiler/entries/lint_main.mdk <source.mdk>
+--   FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one lint_main
+--   test/bin/lint_main <source.mdk>            # what diff_compiler_lint.sh runs
 --
--- parses the target (NO desugar — the lint rules detect surface shapes that
+-- ⚠️ `medaka run compiler/entries/lint_main.mdk <source.mdk>` — the form this
+-- header used to advertise — no longer works.  This entry now builds the stdlib
+-- reference index (`tools.lint.buildStdlibIndex`, needed so the gate oracle and
+-- the `medaka lint` CLI feed their rules the SAME inputs), and lexing all 29
+-- stdlib files under the tree-walking interpreter exceeds its 25000-frame depth
+-- cap: `frontend/lexer.mdk: runtime error [E-STACK-OVERFLOW]`.  Nothing in the
+-- tree ran this entry interpreted, so this costs no caller — but do not put the
+-- `medaka run` form back into a script without solving that first.
+--
+-- Parses the target (NO desugar — the lint rules detect surface shapes that
 -- desugar lowers away), runs every rule in the registry, and prints one finding
 -- per line as `<severity>: [<rule>] <message>` (location-stripped; the golden
 -- harness sorts).  Mirror of compiler/entries/exhaust_main.mdk.
 
 import frontend.parser.{parseWithPositionsLocated}
-import tools.lint.{lintToLines}
+import tools.lint.{lintToLines, buildStdlibIndex}
 
 main = match args ()
   [targetPath] => withTarget targetPath
@@ -22,5 +33,10 @@ withTarget targetPath = match readFile targetPath
     -- keys off each Finding's real location, so a nested exprRuleFindings hit
     -- needs its own span rather than the enclosing decl's to suppress right.
     let (decls, pos) = parseWithPositionsLocated targetSrc
-    putStr (lintToLines targetSrc targetPath pos decls)
+    -- The stdlib reference index, built ONCE here (a rule's `check` is pure, so
+    -- it cannot read the stdlib itself).  This entry is the LINT GATE'S ORACLE:
+    -- if it ran on an empty index while the CLI ran on a real one, the gate
+    -- would go green on output the CLI never produces.  Both build the same way.
+    let idx = buildStdlibIndex
+    putStr (lintToLines idx targetSrc targetPath pos decls)
   Err msg => ePutStrLn msg

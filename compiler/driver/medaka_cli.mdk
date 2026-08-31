@@ -165,6 +165,8 @@ import tools.doc.{runDoc}
 import tools.lint.{
   allRules,
   lintProgram,
+  StdlibIndex,
+  buildStdlibIndex,
   applySuppressions,
   applySuppressionsMulti,
   applySuppressionsDirs,
@@ -2581,7 +2583,14 @@ runLintCmd argv =
   let fileArgs = lintTargets argv
   let _ = assertLintTargetsExist fileArgs
   let files = resolveLintTargets fileArgs
-  if jsonMode then runLintJsonCmd disableNames onlyNames denyNames files
+  -- The stdlib reference index: every exported stdlib name with its DECLARED
+  -- signature, for the rules that ask what the stdlib actually provides.  Built
+  -- exactly ONCE per `medaka lint` invocation and threaded down — a rule's
+  -- `check` is pure, and rebuilding it per target file would re-parse the whole
+  -- stdlib once per file.  It self-disables to empty when the stdlib cannot be
+  -- read (see `buildStdlibIndex`), the same way `lintCacheCtx` declines below.
+  let stdlibIdx = buildStdlibIndex
+  if jsonMode then runLintJsonCmd stdlibIdx disableNames onlyNames denyNames files
   else
     let multiFile = match files
       (_::_::_) => True
@@ -2593,7 +2602,7 @@ runLintCmd argv =
     -- has no parse to hand on — that path reaches the cross-file tier through the
     -- entries' cached occurrences instead (see runCrossFileReportCached).
     let (perFileErr, entries, parsed) =
-      lintFilesGo fixMode multiFile disableNames onlyNames denyNames cacheCtx files False
+      lintFilesGo stdlibIdx fixMode multiFile disableNames onlyNames denyNames cacheCtx files False
     -- Cross-file rules only run in the multi-file REPORT path; a single target or
     -- --fix produces nothing (need ≥2 files), keeping single-file output identical.
     let crossErr =
@@ -2650,20 +2659,20 @@ lintCacheCtx True False
 -- is per-file, mirroring `check --json`'s own per-file shape); `--fix` is
 -- ignored here.  Exit 1 iff any diagnostic is a hard error (severity 1) —
 -- matches `runCheckJsonCmd`'s convention.
-runLintJsonCmd : List String -> List String -> List String -> List String -> <IO> Unit
-runLintJsonCmd disableNames onlyNames denyNames files =
-  let triples = lintFilesToDiagTriples disableNames onlyNames denyNames files
+runLintJsonCmd : StdlibIndex -> List String -> List String -> List String -> List String -> <IO> Unit
+runLintJsonCmd idx disableNames onlyNames denyNames files =
+  let triples = lintFilesToDiagTriples idx disableNames onlyNames denyNames files
   let _ = putStr (cjAllToJson triples)
   if anyList cjLintTripleHasErr triples then exit 1 else ()
 
 -- Sequence `lintFileDiagTriple` over every target file, in order.  Mirrors
 -- `lintFilesGo`'s explicit recursion — this codebase sequences an `<IO>`
 -- list traversal by hand, not via `map` over an effectful function.
-lintFilesToDiagTriples : List String -> List String -> List String -> List String -> <IO> List (String, String, List Diag)
-lintFilesToDiagTriples _ _ _ [] = []
-lintFilesToDiagTriples disable only deny (f::rest) =
-  lintFileDiagTriple disable only deny f ::
-    lintFilesToDiagTriples disable only deny rest
+lintFilesToDiagTriples : StdlibIndex -> List String -> List String -> List String -> List String -> <IO> List (String, String, List Diag)
+lintFilesToDiagTriples _ _ _ _ [] = []
+lintFilesToDiagTriples idx disable only deny (f::rest) =
+  lintFileDiagTriple idx disable only deny f ::
+    lintFilesToDiagTriples idx disable only deny rest
 
 cjLintTripleHasErr : (String, String, List Diag) -> Bool
 cjLintTripleHasErr (_, _, diags) = anyList diagIsError diags
@@ -2880,12 +2889,13 @@ filterNonDot (n::rest)
 --
 -- The per-file printing order is unchanged: each file's report is emitted
 -- (strictly) before the recursion.
-lintFilesGo : Bool -> Bool -> List String -> List String -> List String -> Option (String, String) -> List String -> Bool -> <IO> (Bool, List LintEntry, List (String, String, Positions, List Decl))
-lintFilesGo _ _ _ _ _ _ [] acc = (acc, [], [])
-lintFilesGo fixMode multiFile disableNames onlyNames denyNames cacheCtx (f::rest) acc =
+lintFilesGo : StdlibIndex -> Bool -> Bool -> List String -> List String -> List String -> Option (String, String) -> List String -> Bool -> <IO> (Bool, List LintEntry, List (String, String, Positions, List Decl))
+lintFilesGo _ _ _ _ _ _ _ [] acc = (acc, [], [])
+lintFilesGo idx fixMode multiFile disableNames onlyNames denyNames cacheCtx (f::rest) acc =
   if fixMode then
     let hadErr = lintOneFileFix onlyNames disableNames f
     lintFilesGo
+      idx
       fixMode
       multiFile
       disableNames
@@ -2895,8 +2905,8 @@ lintFilesGo fixMode multiFile disableNames onlyNames denyNames cacheCtx (f::rest
       rest
       (acc || hadErr)
   else
-    let (hadErr, entries, parsed) = lintOneFileReport multiFile disableNames onlyNames denyNames cacheCtx f
-    let (restErr, restEntries, restParsed) = lintFilesGo fixMode multiFile disableNames onlyNames denyNames cacheCtx rest (acc || hadErr)
+    let (hadErr, entries, parsed) = lintOneFileReport idx multiFile disableNames onlyNames denyNames cacheCtx f
+    let (restErr, restEntries, restParsed) = lintFilesGo idx fixMode multiFile disableNames onlyNames denyNames cacheCtx rest (acc || hadErr)
     (restErr, entries ++ restEntries, parsed ++ restParsed)
 
 -- Lint a single file in report mode.
@@ -2911,13 +2921,13 @@ lintFilesGo fixMode multiFile disableNames onlyNames denyNames cacheCtx (f::rest
 -- `readLintSrcs` (a THIRD read of the same bytes) after this pass had already read
 -- and parsed each file. Memory-neutral: runCrossFileReport already materialised
 -- every triple at once.
-lintOneFileReport : Bool -> List String -> List String -> List String -> Option (String, String) -> String -> <IO> (Bool, List LintEntry, List (String, String, Positions, List Decl))
-lintOneFileReport multiFile disableNames onlyNames denyNames cacheCtx target = match readFile target
+lintOneFileReport : StdlibIndex -> Bool -> List String -> List String -> List String -> Option (String, String) -> String -> <IO> (Bool, List LintEntry, List (String, String, Positions, List Decl))
+lintOneFileReport idx multiFile disableNames onlyNames denyNames cacheCtx target = match readFile target
   Err msg =>
     let _ = ePutStrLn msg
     (True, [], [])
   Ok src =>
-    let (entry, parsed) = lintEntryOf cacheCtx target src
+    let (entry, parsed) = lintEntryOf idx cacheCtx target src
     -- Suppress findings silenced by inline `-- lint-disable-*` directives before
     -- applying the CLI flag filters (--only/--disable/--deny).  Both the cached
     -- and uncached paths render from THIS one expression over the entry, so a
@@ -2941,16 +2951,16 @@ lintOneFileReport multiFile disableNames onlyNames denyNames cacheCtx target = m
 -- agree on the format version, the rule-set stamp, the path, AND the content
 -- hash.  Anything else is a miss.  `lint_cache.decodeEntry` owns that check;
 -- this function only decides when to ask.
-lintEntryOf : Option (String, String) -> String -> String -> <IO> (LintEntry, List (String, String, Positions, List Decl))
-lintEntryOf None target src =
-  let (entry, pos, decls) = lintFileFresh target src "" False
+lintEntryOf : StdlibIndex -> Option (String, String) -> String -> String -> <IO> (LintEntry, List (String, String, Positions, List Decl))
+lintEntryOf idx None target src =
+  let (entry, pos, decls) = lintFileFresh idx target src "" False
   (entry, [(target, src, pos, decls)])
-lintEntryOf (Some (cacheDir, stamp)) target src =
+lintEntryOf idx (Some (cacheDir, stamp)) target src =
   let hash = contentHashOf src
   match loadEntry cacheDir stamp target hash
     Some hit => (hit, [])
     None =>
-      let (entry, _, _) = lintFileFresh target src hash True
+      let (entry, _, _) = lintFileFresh idx target src hash True
       (entry, [])
 
 -- Parse and lint a file for real: the miss path, and the whole of the uncached
@@ -2965,14 +2975,14 @@ lintEntryOf (Some (cacheDir, stamp)) target src =
 -- filled only on the path that consumes it (--cache, via
 -- runCrossFileReportCached); the uncached path leaves it empty and keeps
 -- reaching the tier through the parses, exactly as before #395.
-lintFileFresh : String -> String -> String -> Bool -> <IO> (LintEntry, Positions, List Decl)
-lintFileFresh target src hash wantOccs =
+lintFileFresh : StdlibIndex -> String -> String -> String -> Bool -> <IO> (LintEntry, Positions, List Decl)
+lintFileFresh idx target src hash wantOccs =
   let (decls, pos) = parseWithPositionsLocated src
   (
     LintEntry {
       path = target,
       contentHash = hash,
-      findings = lintProgram allRules target src pos decls,
+      findings = lintProgram idx allRules target src pos decls,
       dupOccs = if wantOccs then fileDupOccs (target, pos, decls) else [],
       directives = collectDirectives src,
       dirty = True,

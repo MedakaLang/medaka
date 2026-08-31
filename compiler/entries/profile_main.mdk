@@ -34,7 +34,7 @@
 import frontend.ast.{Decl}
 import ir.core_ir.{CProgram}
 import frontend.parser.{parse, parseWithPositions}
-import tools.lint.{lintProgram, allRules}
+import tools.lint.{lintProgram, allRules, emptyStdlibIndex}
 import frontend.desugar.{desugar}
 import frontend.resolve.{resolveToLines}
 import frontend.marker.{markWithPrelude}
@@ -342,10 +342,32 @@ runStaged on targetPath rsrc csrc tsrc =
   let lparsed = parseWithPositions tsrc
   let lprog = fst lparsed
   let lpos = snd lparsed
+  -- The stdlib reference index the rules now take.  DELIBERATELY EMPTY HERE, and
+  -- the one lint call site in the tree that does not get a real one.
+  --
+  -- This driver is run INTERPRETED (`medaka run compiler/entries/profile_main.mdk`
+  -- — its own usage line above, and how `test/profile_compiler.sh` invokes it),
+  -- and `buildStdlibIndex` lexes all 29 stdlib files.  Under the tree-walking
+  -- interpreter that blows the 25000-frame depth cap outright:
+  --
+  --   MEDAKA_PERF=1 medaka run compiler/entries/profile_main.mdk \
+  --     stdlib/runtime.mdk stdlib/core.mdk <target>
+  --   -> frontend/lexer.mdk: runtime error [E-STACK-OVERFLOW]
+  --
+  -- so a real index here would not slow this driver down, it would DELETE it.
+  -- (`test/bin/profile_main`, the compiled oracle every perf gate actually uses,
+  -- is unaffected — this is purely the interpreted path.)
+  --
+  -- Costs nothing TODAY: no rule reads the index yet, so `lintProgram` does
+  -- exactly the same work either way and the `lint` stage's number is unchanged.
+  -- ⚠️ THE MOMENT A RULE CONSULTS THE INDEX THIS UNDER-MEASURES IT, and the fix
+  -- is not to swap in `buildStdlibIndex` (see above) — it is to give this driver
+  -- an index that does not cost a stdlib lex, or to stop running it interpreted.
+  let lidx = emptyStdlibIndex
   let tL0 = now ()
   let aL0 = allocSnap ()
   let oL0 = opSnap ()
-  let _ = lintProgram allRules "target.mdk" tsrc lpos lprog
+  let _ = lintProgram lidx allRules "target.mdk" tsrc lpos lprog
   let tL1 = now ()
   let _ = emitPhaseAO on "lint" (tL1 - tL0) (allocSnap () - aL0) declsOp (opSnap () - oL0)
   emitTotalA on (tL1 - tTotal) (allocSnap () - aTotal)

@@ -73,12 +73,14 @@ import support.util.{
   joinWith,
   sortUniqS,
   startsWith,
+  endsWith,
   stringTrim,
   lookupAssoc,
   dedupBy,
 }
-import hash_map.{HashMap, new, set, has, findWithDefault}
-import tools.printer.{declToString, exprToString}
+import hash_map.{HashMap, new, set, has, keys, size, findWithDefault}
+import tools.printer.{declToString, exprToString, ppTy}
+import support.path.{dirOf, modIdOf}
 import support.char.{isAlnum, isLower, isUpper}
 import ir.sexp.{exprSexp, patSexp}
 import frontend.exhaust.{Oracle, buildOracle, oGetCtors, oGetCtorType}
@@ -96,7 +98,11 @@ public export data Finding =
       loc : Option Loc,
     }
 
--- A registered rule.  `check` is the whole pass for that rule: the target file
+-- A registered rule.  `check` is the whole pass for that rule: the STDLIB INDEX
+-- (`StdlibIndex`, below — every exported stdlib name with its declared
+-- signature, so a rule can ask what the stdlib actually provides instead of
+-- consulting a curated list; it is a plain value, so `check` stays PURE even
+-- though building the index needs `<IO>`) + the target file
 -- PATH (so a rule may scope itself, e.g. skip stdlib-owned files) + Positions
 -- (for per-decl source locations) + raw decls → hits.  `fix`, when `Some f`, is a
 -- per-decl autofixer: given the syntactic constructor
@@ -111,7 +117,7 @@ public export data Rule =
       descr : String,
       severity : Severity,
       enabled : Bool,
-      check : String -> String -> Positions -> List Decl -> List Finding,
+      check : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding,
       fix : Option (Oracle -> Decl -> Option (List Decl)),
     }
 
@@ -465,14 +471,17 @@ allCrossFileRules = [duplicateBodyRule]
 -- location.  Each rule's findings are re-stamped with the rule's (possibly
 -- CLI-overridden) severity so a `--deny` promotion propagates without the rule
 -- knowing about flags.
+-- `idx` is the stdlib reference index, built ONCE by the IO caller (see
+-- `buildStdlibIndex`) and handed to every rule; a caller with no stdlib to read
+-- passes `emptyStdlibIndex` and the rules simply learn nothing from it.
 export
-lintProgram : List Rule -> String -> String -> Positions -> List Decl -> List Finding
-lintProgram rules path src pos prog =
-  flatMap (runRuleOn path src pos prog) rules
+lintProgram : StdlibIndex -> List Rule -> String -> String -> Positions -> List Decl -> List Finding
+lintProgram idx rules path src pos prog =
+  flatMap (runRuleOn idx path src pos prog) rules
 
-runRuleOn : String -> String -> Positions -> List Decl -> Rule -> List Finding
-runRuleOn path src pos prog r
-  | r.enabled = map (restampSeverity r.severity) (r.check path src pos prog)
+runRuleOn : StdlibIndex -> String -> String -> Positions -> List Decl -> Rule -> List Finding
+runRuleOn idx path src pos prog r
+  | r.enabled = map (restampSeverity r.severity) (r.check idx path src pos prog)
   | otherwise = []
 
 restampSeverity : Severity -> Finding -> Finding
@@ -489,6 +498,176 @@ restampSeverity sev f =
 -- structural instance whose `deriving` would be semantically WRONG).
 isStdlibPath : String -> Bool
 isStdlibPath path = contains "stdlib" (splitOnChar '/' path)
+
+-- ── the stdlib reference index ────────────────────────────────────────────────
+-- A name → DECLARED-SIGNATURE map for every exported stdlib binding, built by
+-- PARSING `<MEDAKA_ROOT>/stdlib/*.mdk` and reading each exported `DTypeSig`.
+-- It is the reference a style rule consults instead of a hand-curated name
+-- list: the stdlib is the source of truth, so the index cannot drift from it.
+--
+-- Signatures come from the SOURCE, never from the typechecker's `ppScheme`:
+-- lint runs on the RAW pre-desugar AST with no type environment at all (there
+-- is no inferred scheme to read), and what a hand-rolled user binding has to be
+-- compared against is what the stdlib author WROTE.
+--
+-- 🚨 A STDLIB NAME IS NOT UNIQUE, so the index maps a name to a LIST of
+-- (module, type), never to one type.  Measured on this tree: 55 of the 396
+-- exported names are declared in more than one stdlib module, and `reverse` is
+-- declared in THREE — `array.reverse : Array a -> Array a`,
+-- `list.reverse : List a -> List a`, `string.reverse : String -> String`.
+-- A flat `HashMap String Ty` silently keeps whichever file `listDir` yielded
+-- last: `reverse` then reads back as `String -> String`, and every List-shaped
+-- question about it gets a String-shaped answer with no error anywhere.  That
+-- is the bare-name-keyed-table failure mode AGENTS.md's [T-GLOBAL-TABLE] names,
+-- and it is invisible to any check that only asks whether a name is PRESENT —
+-- this index was written flat first and the flat version passed exactly that
+-- test while answering `reverse` wrong.  Consumers must therefore say WHICH
+-- module they mean (`stdlibSigIn`) or handle every candidate
+-- (`stdlibEntriesOf`); there is deliberately no "the signature of X" accessor,
+-- because for 55 names there is no such thing.  `stdlibAmbiguousNames` is that
+-- set, derived — never a list written down here.
+--
+-- ⚠️ `Rule.check` is PURE and reading the stdlib needs `<IO>`, so the index is
+-- never built inside a rule.  Each IO entry point builds it ONCE and passes it
+-- down through `lintProgram` as `check`'s first argument.
+--
+-- DEGRADATION.  Every failure mode — `MEDAKA_ROOT` unset and the exe-relative
+-- fallback wrong, no `stdlib/` directory, an unreadable or unparseable member —
+-- yields an EMPTY index (or one missing that member), never a crash and never a
+-- wrong entry.  Same self-disabling shape `lintCacheCtx` uses for
+-- `crossFileCacheSound` (`driver/medaka_cli.mdk`): a degraded run costs findings
+-- it could have made, never findings it should not have made.
+--
+-- POSITIONAL, not a named-field record, and read ONLY through the helpers
+-- below — the same native field-scanner reason `Rule` documents.
+public export data StdlibIndex =
+  | StdlibIndex (HashMap String (List (String, Ty)))
+
+-- The degraded index.  Also what a caller passes when it deliberately wants no
+-- stdlib knowledge (no such caller today; every entry point builds a real one).
+export
+emptyStdlibIndex : StdlibIndex
+emptyStdlibIndex = StdlibIndex (new ())
+
+-- How many distinct exported NAMES the index carries (not declarations — a name
+-- declared in two modules counts once).  0 means degraded, or an empty stdlib;
+-- it is the number an entry point prints to say what it actually got.
+export
+stdlibIndexSize : StdlibIndex -> Int
+stdlibIndexSize (StdlibIndex m) = size m
+
+-- Every stdlib module declaring `name`, with the type each one declares, in
+-- stdlib-file order.  `[]` = not a stdlib export (or the index is degraded);
+-- more than one element = the name is ambiguous and the CALLER must decide.
+export
+stdlibEntriesOf : StdlibIndex -> String -> List (String, Ty)
+stdlibEntriesOf (StdlibIndex m) name = findWithDefault [] name m
+
+-- The type `<module>.<name>` declares, e.g. `stdlibSigIn idx "list" "reverse"`
+-- = `List a -> List a`.  The unambiguous accessor: it names the module, so it
+-- cannot be answered by a same-named binding somewhere else in the stdlib.
+export
+stdlibSigIn : StdlibIndex -> String -> String -> Option Ty
+stdlibSigIn idx modName name = lookupAssoc modName (stdlibEntriesOf idx name)
+
+-- …rendered.  `printer.ppTy` is the precedence type printer, so `list.reverse`
+-- reads back as exactly the `List a -> List a` its source declares.
+export
+stdlibSigTextIn : StdlibIndex -> String -> String -> Option String
+stdlibSigTextIn idx modName name = map ppTy (stdlibSigIn idx modName name)
+
+-- Every name the index knows, sorted.  The derived successor to the curated
+-- `stdlibNames` list below; nothing consumes it yet (S2 retires that list).
+export
+stdlibIndexNames : StdlibIndex -> List String
+stdlibIndexNames (StdlibIndex m) = sortUniqS (keys m)
+
+-- The names declared by MORE THAN ONE stdlib module, sorted.  Exported because
+-- it is the set every consumer has to have an answer for — a rule that treats a
+-- stdlib name as having one signature is wrong for exactly these.
+export
+stdlibAmbiguousNames : StdlibIndex -> List String
+stdlibAmbiguousNames idx =
+  filterList (n => listLen (stdlibEntriesOf idx n) > 1) (stdlibIndexNames idx)
+
+-- THE one IO entry point.  Call it ONCE per process and thread the result: it
+-- parses the whole stdlib, which is cheap once and wasteful per file.
+export
+buildStdlibIndex : <IO> StdlibIndex
+buildStdlibIndex =
+  StdlibIndex (groupStdlibSigs (stdlibSigTriples lintStdlibDir))
+
+-- `<MEDAKA_ROOT>/stdlib`, resolved exactly as the CLI resolves it (`envOr
+-- "MEDAKA_ROOT" defaultMedakaRoot`, `driver/build_cmd.mdk`) — an unset or empty
+-- var falls back to the running executable's own directory, so a relocated
+-- `medaka` still finds its stdlib.  Restated locally rather than imported so the
+-- lint graph — and with it `entries/lint_main.mdk`, the gate oracle — does not
+-- pull in `driver/build_cmd.mdk`.  Same reason `tools/lsp.mdk` keeps its own.
+lintStdlibDir : <IO> String
+lintStdlibDir = match getEnv "MEDAKA_ROOT"
+  Some v => if v == "" then exeStdlibDir () else "\{v}/stdlib"
+  None => exeStdlibDir ()
+
+exeStdlibDir : Unit -> <IO> String
+exeStdlibDir _ = "\{dirOf (executablePath ())}/stdlib"
+
+-- (module, name, declared type) for every exported signature in the stdlib's
+-- top-level `.mdk` files.  A directory that will not list yields [] — the
+-- degradation path, silent by design (lint printing compiler-internal chatter to
+-- stdout would break every caller that diffs its output, exactly as
+-- `lintCacheCtx` argues for `--cache`).
+stdlibSigTriples : String -> <IO> List (String, String, Ty)
+stdlibSigTriples dir = match listDir dir
+  Err _ => []
+  Ok entries => flatMap (stdlibFileSigs dir) (stdlibMdkNames entries)
+
+-- Group the flat triples by NAME, preserving stdlib-file order within a name.
+-- Appending rather than overwriting is the whole point: `set` alone would keep
+-- one module's `reverse` and drop the other's without a word.
+groupStdlibSigs : List (String, String, Ty) -> HashMap String (List (String, Ty))
+groupStdlibSigs triples =
+  let m = new ()
+  let _ = groupStdlibSigsInto triples m
+  m
+
+groupStdlibSigsInto : List (String, String, Ty) -> HashMap String (List (String, Ty)) -> Unit
+groupStdlibSigsInto [] _ = ()
+groupStdlibSigsInto ((modName, name, ty)::rest) m =
+  let _ = set name (findWithDefault [] name m ++ [(modName, ty)]) m
+  groupStdlibSigsInto rest m
+
+-- Top-level `.mdk` members only, dot-entries dropped, sorted for determinism.
+-- Deliberately NOT recursive: the stdlib is flat, and anything nested under the
+-- same root is somebody else's tree, not stdlib API.
+stdlibMdkNames : List String -> List String
+stdlibMdkNames names = sortUniqS (filterList isStdlibMember names)
+
+isStdlibMember : String -> Bool
+isStdlibMember n = endsWith ".mdk" n && not (startsWith "." n)
+
+-- One stdlib file's exported signatures, stamped with the module name the rest
+-- of the compiler uses for it (the basename, no `.mdk` — `list`, `string`, …).
+-- `readFileSafe` yields "" on any read error and "" parses to [], so an
+-- unreadable member drops out of the index instead of failing the whole build.
+stdlibFileSigs : String -> String -> <IO> List (String, String, Ty)
+stdlibFileSigs dir fileName =
+  let modName = modIdOf fileName
+  let (decls, _) = parseWithPositions (readFileSafe "\{dir}/\{fileName}")
+  flatMap (d => stampModule modName (exportedSigPair d)) decls
+
+stampModule : String -> List (String, Ty) -> List (String, String, Ty)
+stampModule modName pairs = map (p => (modName, fst p, snd p)) pairs
+
+-- Only EXPORTED declarations: an unexported stdlib helper is not a name user
+-- code can be reimplementing.  `DExtern` carries a declared type the same way,
+-- so an `export extern` counts — today `stdlib/runtime.mdk` writes its externs
+-- bare (prelude-global, not `export`-marked), so that arm matches nothing yet;
+-- it is here so the index does not silently need a second edit if that changes.
+exportedSigPair : Decl -> List (String, Ty)
+exportedSigPair (DTypeSig True name ty) = [(name, ty)]
+exportedSigPair (DExtern True name ty) = [(name, ty)]
+exportedSigPair (DAttrib _ d) = exportedSigPair d
+exportedSigPair _ = []
 
 -- ── autofix driver (Task A3) ───────────────────────────────────────────────────
 -- The CLI calls this for `--fix`.  It is the ONLY place that touches the new
@@ -704,12 +883,17 @@ findingToDiag f =
 -- behaviour on a missing target.  Uses `parseWithPositionsLocated` (#649) so a
 -- `Finding` at a nested sub-expression (`exprRuleFindings`) carries THAT
 -- expression's own location, not the enclosing decl's.
+-- `idx` is the stdlib reference index.  It is a PARAMETER rather than something
+-- this function builds, because both callers (`medaka lint --json`'s
+-- `runLintJsonCmd` and `mcp.mdk`'s `medaka_lint`) sequence this over a LIST of
+-- paths — building the index here would re-parse the whole stdlib once per
+-- target file instead of once per process.
 export
-lintFileDiagTriple : List String -> List String -> List String -> String -> <IO> (String, String, List Diag)
-lintFileDiagTriple disable only deny path =
+lintFileDiagTriple : StdlibIndex -> List String -> List String -> List String -> String -> <IO> (String, String, List Diag)
+lintFileDiagTriple idx disable only deny path =
   let src = readFileSafe path
   let (decls, pos) = parseWithPositionsLocated src
-  let allFindings = applySuppressions src (lintProgram allRules path src pos decls)
+  let allFindings = applySuppressions src (lintProgram idx allRules path src pos decls)
   let findings = applyFindingFilters disable only deny allFindings
   (path, src, map findingToDiag findings)
 
@@ -718,12 +902,15 @@ lintFileDiagTriple disable only deny path =
 -- raw source text: findings are produced by `lintProgram`, then filtered through
 -- the inline-suppression directives (`-- lint-disable-*`) recovered from `src`'s
 -- comment side channel (see `applySuppressions`).
+-- `idx` is the stdlib reference index, built by the caller
+-- (`entries/lint_main.mdk` — THE gate oracle — builds a real one, so the gate
+-- and the CLI see the same rule inputs).
 export
-lintToLines : String -> String -> Positions -> List Decl -> String
-lintToLines src path pos prog =
+lintToLines : StdlibIndex -> String -> String -> Positions -> List Decl -> String
+lintToLines idx src path pos prog =
   joinNl (map
     findingLine
-    (applySuppressions src (lintProgram allRules path src pos prog)))
+    (applySuppressions src (lintProgram idx allRules path src pos prog)))
 
 findingLine : Finding -> String
 findingLine f = "\{ppSeverity f.severity}: [\{f.rule}] \{f.message}"
@@ -935,8 +1122,8 @@ declPosToLoc p = let l = declPosLine p in Loc "" l 1 l 1
 -- A `DFunDef _ name pats body` (or an impl method) whose body is a `match` with
 -- ≥2 arms over an `EVar p` where `p` is a bare `PVar p` parameter.  Single-arm
 -- matches are skipped (STYLE's "when not to convert").
-ruleMatchOnParam : String -> String -> Positions -> List Decl -> List Finding
-ruleMatchOnParam _ _ pos prog = flatMap matchParamDeclL (declLocList pos prog)
+ruleMatchOnParam : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleMatchOnParam _ _ _ pos prog = flatMap matchParamDeclL (declLocList pos prog)
 
 matchParamDeclL : (Decl, Option Loc) -> List Finding
 matchParamDeclL (d, loc) = matchParamDecl loc d
@@ -1114,8 +1301,8 @@ boundaryAt cs j
 -- not declared in this file) is treated as NOT provably irrefutable → SKIP.  This
 -- is deliberately conservative: false negatives are fine, false positives corrupt
 -- code (they could turn a total match into a partial function clause).
-ruleDestructureInParam : String -> String -> Positions -> List Decl -> List Finding
-ruleDestructureInParam _ _ pos prog =
+ruleDestructureInParam : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleDestructureInParam _ _ _ pos prog =
   let orc = buildOracle prog
   flatMap (destructureDeclL orc) (declLocList pos prog)
 
@@ -1228,8 +1415,8 @@ derivableIfaces = ["Eq", "Ord", "Debug"]
 -- USER code we additionally require the type to have a `data`/`record`
 -- declaration whose constructors are visible in the linted file (`oGetCtors`
 -- returns `Some`) — a primitive has none, so `impl Eq for Int` is never flagged.
-ruleDerivable : String -> String -> Positions -> List Decl -> List Finding
-ruleDerivable path _ pos prog
+ruleDerivable : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleDerivable _ path _ pos prog
   | isStdlibPath path = []
   | otherwise =
     let orc = buildOracle prog
@@ -1311,8 +1498,8 @@ stdlibNames = [
 -- Skip stdlib-owned files: inside the stdlib these top-level names ARE the
 -- canonical definitions the rule points USER code at, so flagging them is a pure
 -- false positive.  Off the stdlib root the rule fires as before.
-ruleStdlibReimpl : String -> String -> Positions -> List Decl -> List Finding
-ruleStdlibReimpl path _ pos prog
+ruleStdlibReimpl : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleStdlibReimpl _ path _ pos prog
   | isStdlibPath path = []
   | otherwise =
     -- dedupe by name so a multi-clause function (consecutive DFunDefs) fires once,
@@ -1353,8 +1540,8 @@ stdlibFinding (name, loc) = Finding {
 -- `List Decl` walk never sees them; `prop`/`test`/`extern` are their own decl
 -- kinds, not `DFunDef`, so they are excluded automatically.  `main` is exempt by
 -- name (entry-point boilerplate).  Multi-clause defs dedupe to one finding.
-ruleMissingSignature : String -> String -> Positions -> List Decl -> List Finding
-ruleMissingSignature _ _ pos prog =
+ruleMissingSignature : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleMissingSignature _ _ _ pos prog =
   -- HashMap-as-set: `contains n sigNames` over the signed-name LIST was O(signs)
   -- per def, i.e. O(defs x signs) across the filterList — and in the common case
   -- where most defs ARE signed, signs grows with defs, so this was quadratic. It
@@ -1408,8 +1595,8 @@ missingSigFinding (name, loc) = Finding {
 -- of that name is an unconditional self-call: a single non-self clause is a
 -- candidate base case (`f [] = 0` beside `f xs = f (tail xs)`), so the whole name
 -- is spared.  Purely syntactic, no false-fire risk beyond genuinely-looping code.
-ruleSelfShadowExtern : String -> String -> Positions -> List Decl -> List Finding
-ruleSelfShadowExtern _ _ pos prog =
+ruleSelfShadowExtern : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleSelfShadowExtern _ _ _ pos prog =
   selfShadowFindings (flatMap selfShadowClauseL (declLocList pos prog))
 
 selfShadowFindings : List (String, List Pat, Expr, Option Loc) -> List Finding
@@ -1548,8 +1735,8 @@ splitTail2 stmts = match reverseL stmts
   _ => None
 
 -- ── check ────────────────────────────────────────────────────────────────────
-ruleBindThenDestructure : String -> String -> Positions -> List Decl -> List Finding
-ruleBindThenDestructure _ _ pos prog =
+ruleBindThenDestructure : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleBindThenDestructure _ _ _ pos prog =
   let orc = buildOracle prog
   flatMap (bindDestructureDeclL orc) (declLocList pos prog)
 
@@ -1887,8 +2074,8 @@ lamSection2 x y (EBinOp op a b _)
 lamSection2 _ _ _ = None
 
 -- ── check ─────────────────────────────────────────────────────────────────────
-ruleLambdaSection : String -> String -> Positions -> List Decl -> List Finding
-ruleLambdaSection _ _ pos prog =
+ruleLambdaSection : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleLambdaSection _ _ _ pos prog =
   flatMap lambdaSectionDeclL (declLocList pos prog)
 
 lambdaSectionDeclL : (Decl, Option Loc) -> List Finding
@@ -2117,8 +2304,8 @@ ifMaxMinOf cond t el = match unwrapLoc cond
   _ => None
 
 -- ── check ─────────────────────────────────────────────────────────────────────
-ruleIfMaxMin : String -> String -> Positions -> List Decl -> List Finding
-ruleIfMaxMin _ _ pos prog = flatMap ifMaxMinDeclL (declLocList pos prog)
+ruleIfMaxMin : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleIfMaxMin _ _ _ pos prog = flatMap ifMaxMinDeclL (declLocList pos prog)
 
 ifMaxMinDeclL : (Decl, Option Loc) -> List Finding
 ifMaxMinDeclL (d, loc) = map (ifMaxMinFinding loc) (declIfMaxMinHits d)
@@ -2365,8 +2552,8 @@ andThenPureMapBody m x (EApp pureHd arg)
 andThenPureMapBody _ _ _ = None
 
 -- ── check ─────────────────────────────────────────────────────────────────────
-ruleAndThenPureMap : String -> String -> Positions -> List Decl -> List Finding
-ruleAndThenPureMap _ _ pos prog =
+ruleAndThenPureMap : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleAndThenPureMap _ _ _ pos prog =
   flatMap andThenPureMapDeclL (declLocList pos prog)
 
 andThenPureMapDeclL : (Decl, Option Loc) -> List Finding
@@ -2917,8 +3104,8 @@ collectConcatHits e = match concatChainOf e
   Some e2 => e2 :: flatMap collectConcatHits (concatOperands e)
   None => flatMap collectConcatHits (childExprs e)
 
-ruleConcatToInterp : String -> String -> Positions -> List Decl -> List Finding
-ruleConcatToInterp _ _ pos prog =
+ruleConcatToInterp : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleConcatToInterp _ _ _ pos prog =
   flatMap concatToInterpDeclL (declLocList pos prog)
 
 concatToInterpDeclL : (Decl, Option Loc) -> List Finding
@@ -2979,8 +3166,8 @@ notEqOf e = match notArgOf e
     _ => None
   None => None
 
-ruleNotEq : String -> String -> Positions -> List Decl -> List Finding
-ruleNotEq _ _ pos prog = exprRuleFindings noExcl notEqOf notEqFinding pos prog
+ruleNotEq : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleNotEq _ _ _ pos prog = exprRuleFindings noExcl notEqOf notEqFinding pos prog
 
 notEqFinding : Option Loc -> Expr -> Finding
 notEqFinding loc rewritten = Finding {
@@ -3029,8 +3216,8 @@ boolSimplifyEq op a b
 boolEqResult : String -> Expr -> Bool -> Expr
 boolEqResult op v constIsTrue = if op == "==" == constIsTrue then v else mkNot v
 
-ruleBoolSimplify : String -> String -> Positions -> List Decl -> List Finding
-ruleBoolSimplify _ _ pos prog =
+ruleBoolSimplify : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleBoolSimplify _ _ _ pos prog =
   exprRuleFindings noExcl boolSimplifyOf boolSimplifyFinding pos prog
 
 boolSimplifyFinding : Option Loc -> Expr -> Finding
@@ -3072,8 +3259,8 @@ remParityFrom _ _ = None
 parityFn : String -> String
 parityFn op = if op == "==" then "isEven" else "isOdd"
 
-ruleRemParity : String -> String -> Positions -> List Decl -> List Finding
-ruleRemParity _ _ pos prog =
+ruleRemParity : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleRemParity _ _ _ pos prog =
   exprRuleFindings remParityExcl remParityOf remParityFinding pos prog
 
 remParityFinding : Option Loc -> Expr -> Finding
@@ -3096,8 +3283,8 @@ doubleReverseOf (EApp hd1 arg1)
     _ => None
 doubleReverseOf _ = None
 
-ruleDoubleReverse : String -> String -> Positions -> List Decl -> List Finding
-ruleDoubleReverse _ _ pos prog =
+ruleDoubleReverse : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleDoubleReverse _ _ _ pos prog =
   exprRuleFindings noExcl doubleReverseOf doubleReverseFinding pos prog
 
 doubleReverseFinding : Option Loc -> Expr -> Finding
@@ -3193,8 +3380,8 @@ isAssignWrite : Expr -> Bool
 isAssignWrite (EBinOp ":=" _ _ _) = True
 isAssignWrite _ = False
 
-ruleForPreferAssign : String -> String -> Positions -> List Decl -> List Finding
-ruleForPreferAssign _ _ pos prog =
+ruleForPreferAssign : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleForPreferAssign _ _ _ pos prog =
   exprRuleFindings noExcl preferAssignOf preferAssignFinding pos prog
 
 -- The message is shape-directed: a `setRef` hit renders its `:=` replacement (the
@@ -3242,8 +3429,8 @@ whenUnlessOf (EIf c t el)
   | otherwise = None
 whenUnlessOf _ = None
 
-ruleWhenUnless : String -> String -> Positions -> List Decl -> List Finding
-ruleWhenUnless _ _ pos prog =
+ruleWhenUnless : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleWhenUnless _ _ _ pos prog =
   exprRuleFindings whenUnlessExcl whenUnlessOf whenUnlessFinding pos prog
 
 whenUnlessFinding : Option Loc -> Expr -> Finding
@@ -3305,8 +3492,8 @@ complementPredOf e = do
   comp <- complementOf name
   Some (renameSpineHead comp (unwrapLoc inner))
 
-ruleComplementPredicate : String -> String -> Positions -> List Decl -> List Finding
-ruleComplementPredicate _ _ pos prog =
+ruleComplementPredicate : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleComplementPredicate _ _ _ pos prog =
   exprRuleFindings
     complementExcl
     complementPredOf
@@ -3411,8 +3598,8 @@ matchToMapOf (EMatch scrut arms) = match arms
   _ => None
 matchToMapOf _ = None
 
-ruleMatchToMap : String -> String -> Positions -> List Decl -> List Finding
-ruleMatchToMap _ _ pos prog =
+ruleMatchToMap : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleMatchToMap _ _ _ pos prog =
   exprRuleFindings noExcl matchToMapOf matchToMapFinding pos prog
 
 matchToMapFinding : Option Loc -> Expr -> Finding
@@ -3547,8 +3734,8 @@ bindChainDeclHeads _ = []
 bindChainImplHeads : ImplMethod -> List Expr
 bindChainImplHeads (ImplMethod _ _ body) = bindChainHeads body
 
-ruleBindChainToDo : String -> String -> Positions -> List Decl -> List Finding
-ruleBindChainToDo _ _ pos prog = flatMap bindChainDeclL (declLocList pos prog)
+ruleBindChainToDo : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleBindChainToDo _ _ _ pos prog = flatMap bindChainDeclL (declLocList pos prog)
 
 bindChainDeclL : (Decl, Option Loc) -> List Finding
 bindChainDeclL (d, loc) = map (bindChainFinding loc) (bindChainDeclHeads d)
@@ -3590,8 +3777,8 @@ bindChainFinding loc _ = Finding {
 -- Operator-named bindings are NOT flagged (their call sites use operator syntax,
 -- not name tokens, so a token scan can't see the reference → risk of false
 -- "dead").  `fix = None` (suggest-only — deletion is by hand).
-ruleDeadCode : String -> String -> Positions -> List Decl -> List Finding
-ruleDeadCode _ src pos prog =
+ruleDeadCode : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleDeadCode _ _ src pos prog =
   let reach = reachableNames src prog
   map deadFinding (filterList (deadPair reach) (privateDefLocs pos prog))
 
@@ -4197,8 +4384,8 @@ sameFileOccOfDecl (d, loc) = match d
   DAttrib _ inner => sameFileOccOfDecl (inner, loc)
   _ => []
 
-ruleDuplicateBodySameFile : String -> String -> Positions -> List Decl -> List Finding
-ruleDuplicateBodySameFile _ _ pos decls =
+ruleDuplicateBodySameFile : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleDuplicateBodySameFile _ _ _ pos decls =
   let occs = flatMap sameFileOccOfDecl (declLocList pos decls)
   let groups = sameFileGroupByKey occs
   let live = filterList (k => listLen (findWithDefault [] k groups) >= 2) (sameFileDistinctKeys occs)

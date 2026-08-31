@@ -64,7 +64,12 @@ import frontend.parser.{
   parseErrorMessage,
 }
 import tools.fmt.{formatSource}
-import tools.lint.{lintFileDiagTriple, splitLintNames}
+import tools.lint.{
+  lintFileDiagTriple,
+  splitLintNames,
+  buildStdlibIndex,
+  StdlibIndex,
+}
 import tools.test_cmd.{runTestReport}
 import tools.doctest.{
   Example,
@@ -1130,11 +1135,15 @@ lintNameListArg key args = match fieldStr key args
 -- explicit-recursion idiom `medaka_cli.mdk`'s `lintFilesToDiagTriples` uses —
 -- `map` over an effectful function is not how this codebase sequences an
 -- `<IO>` list traversal).
-lintPathsToDiagTriples : List String -> List String -> List String -> List String -> <IO> List (String, String, List Diag)
-lintPathsToDiagTriples _ _ _ [] = []
-lintPathsToDiagTriples disable only deny (p::rest) =
-  lintFileDiagTriple disable only deny p ::
-    lintPathsToDiagTriples disable only deny rest
+--
+-- `idx` is the stdlib reference index, built ONCE by the caller and threaded:
+-- it is the same value for every path in the request, and rebuilding it per
+-- path would re-parse the whole stdlib once per target file.
+lintPathsToDiagTriples : StdlibIndex -> List String -> List String -> List String -> List String -> <IO> List (String, String, List Diag)
+lintPathsToDiagTriples _ _ _ _ [] = []
+lintPathsToDiagTriples idx disable only deny (p::rest) =
+  lintFileDiagTriple idx disable only deny p ::
+    lintPathsToDiagTriples idx disable only deny rest
 
 anyTripleHasErr : List (String, String, List Diag) -> Bool
 anyTripleHasErr [] = False
@@ -1160,7 +1169,9 @@ runLintTool _runtimeSrc _coreSrc _stdlibDir args = match pathsArg args
     let disable = lintNameListArg "disable" args
     let only = lintNameListArg "only" args
     let deny = lintNameListArg "deny" args
-    let triples = lintPathsToDiagTriples disable only deny paths
+    -- once per REQUEST, not per path (see lintPathsToDiagTriples)
+    let idx = buildStdlibIndex
+    let triples = lintPathsToDiagTriples idx disable only deny paths
     toolTextResult (cjAllToJson triples) (anyTripleHasErr triples)
 
 -- ── medaka_test tool ──────────────────────────────────────────────────────────
