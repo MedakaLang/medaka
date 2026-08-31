@@ -1,5 +1,0 @@
--- #1443 control: main.mdk with the ONE variable changed -- the unbound name is
--- replaced by a bound one. Must check clean at exit 0, which is what proves the
--- unbound name is genuinely the only reason main.mdk does not typecheck, i.e.
--- that the MCP tool's `"ok":true` really is a green on a NON-typechecking file.
-main = println 1

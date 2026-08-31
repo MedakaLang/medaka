@@ -1,2 +1,0 @@
-{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
-{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "medaka_test", "arguments": {"file": "test/must_fail_fixtures/1443-mcp-test-bypasses-doctest-gate/main.mdk"}}}
