@@ -73,6 +73,40 @@ bad()  { fail=$((fail + 1)); echo "FAIL $1"; }
 # through unchanged.
 run_t() { perl -e 'alarm shift; exec @ARGV' "$@"; }
 
+# ── Per-input time budget (#2275) ────────────────────────────────────────────
+#
+# This helper used to be a flat `run_t 60` for every case, across a corpus
+# spanning 0 bytes to the 15,899,967-byte seed. That constant was ~1.19x the
+# largest case's real time and reddened `gates_8` on a slow runner:
+#
+#   deflate of the 15.9 MB seed, this box, quiet, warm binary, 3 runs:
+#     49.8s / 49.8s / 50.9s   (~318 KB/s)
+#
+# A GitHub runner is materially slower than this box — the run that failed had
+# `gates_4` at 11m21s against its usual ~6m, i.e. ~1.9x — so 60s could not hold.
+#
+# The budget is now derived from the INPUT SIZE against a deliberately
+# pessimistic floor rate, so it states its assumption instead of hiding it:
+#
+#   budget = 30s fixed  +  1s per 100 KB of input
+#
+# For the seed that is 30 + 158 = 188s, ~3.7x the measured time — room for a
+# runner several times slower than this box, while still bounding a real hang.
+# For every small case it is ~30s, unchanged in spirit from the old constant.
+#
+# ⚠️ If deflate gets FASTER, this budget does not need revisiting; if it gets
+# SLOWER, the right response is to ask why (~318 KB/s is itself worth a look —
+# tracked separately as the perf half of #2275), not to raise the floor rate.
+budget_for() {
+  # $1 = input size in bytes
+  echo $(( 30 + $1 / 100000 ))
+}
+
+# The system `gunzip -t` step is orders of magnitude faster than our deflater
+# (system gunzip of this same seed is well under a second), so it keeps a flat,
+# generous constant rather than a derived one.
+SYS_BUDGET=60
+
 # The real proof: deflate with OURS, gunzip with the SYSTEM tool, cmp
 # against the original. `desc`/`src` identify the case; `max_overhead`, if
 # given (bytes), additionally asserts the compressed size never exceeds
@@ -85,20 +119,27 @@ run_t() { perl -e 'alarm shift; exec @ARGV' "$@"; }
 check_gunzip() {
   desc="$1"; src="$2"; max_overhead="${3:-}"
 
-  run_t 60 "$DEFLATE_BIN" "$src" "$TMP/out.gz" >/dev/null 2>&1
+  insz_pre=$(wc -c < "$src")
+  budget=$(budget_for "$insz_pre")
+
+  run_t "$budget" "$DEFLATE_BIN" "$src" "$TMP/out.gz" >/dev/null 2>&1
   rc=$?
   if [ "$rc" -eq 142 ]; then
-    bad "$desc — deflate_demo HUNG (timed out)"
+    # NOT "HUNG" — a budget breach is a cost verdict, not a liveness one, and
+    # calling it a hang sends the reader hunting an infinite loop that is not
+    # there (#2275). Say which number was exceeded so the next reader can tell
+    # a slow runner from a real regression without re-deriving the budget.
+    bad "$desc — deflate_demo exceeded its ${budget}s budget for $insz_pre bytes (see budget_for; NOT necessarily a hang — a slow runner reads the same)"
     return
   elif [ "$rc" -ne 0 ]; then
     bad "$desc — deflate_demo exited $rc"
     return
   fi
 
-  run_t 60 gunzip -t "$TMP/out.gz" >/dev/null 2>&1
+  run_t "$SYS_BUDGET" gunzip -t "$TMP/out.gz" >/dev/null 2>&1
   grc=$?
   if [ "$grc" -eq 142 ]; then
-    bad "$desc — system gunzip -t HUNG on our output"
+    bad "$desc — system gunzip -t exceeded its ${SYS_BUDGET}s budget on our output"
     return
   elif [ "$grc" -ne 0 ]; then
     bad "$desc — system gunzip -t REJECTED our output (rc=$grc); not RFC-conformant"
@@ -135,11 +176,13 @@ check_gunzip() {
 check_self_roundtrip() {
   desc="$1"; src="$2"
 
-  run_t 60 "$DEFLATE_BIN" "$src" "$TMP/self.gz" >/dev/null 2>&1 || {
+  budget=$(budget_for "$(wc -c < "$src")")
+
+  run_t "$budget" "$DEFLATE_BIN" "$src" "$TMP/self.gz" >/dev/null 2>&1 || {
     bad "$desc (self round-trip) — deflate_demo failed"
     return
   }
-  run_t 60 "$INFLATE_BIN" "$TMP/self.gz" "$TMP/self.out" >/dev/null 2>&1
+  run_t "$budget" "$INFLATE_BIN" "$TMP/self.gz" "$TMP/self.out" >/dev/null 2>&1
   rc=$?
   if [ "$rc" -ne 0 ]; then
     bad "$desc (self round-trip, SELF-CONSISTENCY ONLY) — our OWN inflate_demo rejected our OWN deflate_demo's output (rc=$rc)"
@@ -219,7 +262,7 @@ sys.stdout.buffer.write(data)
 check_gunzip "just over the 32768-byte window boundary" "$TMP/window.bin"
 check_self_roundtrip "just over the 32768-byte window boundary" "$TMP/window.bin"
 
-# The committed seed itself: ~11.8 MB of real, already-in-the-repo data —
+# The committed seed itself: 15,899,967 bytes of real, already-in-the-repo data —
 # no fixture to add, and a genuinely large real-world input (matches the
 # design doc's "self-referential" case for the inflate oracle; there is no
 # gzip-of-a-gzip equivalent here, so this just re-compresses the SEED'S OWN
