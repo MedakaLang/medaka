@@ -150,8 +150,12 @@ These are decisions, not suggestions. Read them rather than re-inventing them.
    and every cited path must resolve. Refer to a not-yet-written chapter by
    number and name in plain prose ("chapter 6 covers…"), and convert it to a real
    link in the slice that creates the file.
-8. **`async`/`Async` is not mentioned anywhere in the guide**, not even to say it
-   is out of scope. It is excluded from the documented 0.1.0 surface.
+8. **`async`/`Async` is not mentioned anywhere in reader-facing chapter prose**, not
+   even to say it is out of scope. It is excluded from the documented 0.1.0 surface.
+   This outline's own scope notes are the one licensed exception: they name `Async`
+   in the per-chapter "Defer" lines and in the out-of-scope list above, because that
+   is how the exclusion gets recorded. Nothing in `docs/guide/*.md` other than this
+   file may mention it.
 9. **`docs/spec/SYNTAX.md` is ground truth**, over this outline and over any
    existing guide prose. Where they disagree, the binary decides and the guide
    gets corrected. `docs/spec/language-design.md` describes unimplemented

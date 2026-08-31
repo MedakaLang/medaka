@@ -82,9 +82,13 @@ main =
 be ordered. [Chapter 5](05-interfaces.md) is about where those constraints come
 from.
 
-The stdlib's `Option` and `List` are exactly this shape and nothing more —
-`Option a = Some a | None`, and a list is a chain of cons cells. There is no
-privileged built-in data kind hiding behind them.
+The stdlib's `Option` and `Result` are exactly this shape and nothing more — they are
+ordinary `data` declarations you could have written yourself, `public export data
+Option a = Some a | None` and `public export data Result e a = Ok a | Err e` in
+[`stdlib/core.mdk`](../../stdlib/core.mdk). Nothing about a sum type from the stdlib
+is more privileged than one of yours. (`List` is the exception: it *is* a compiler
+builtin, with literal and `::` syntax of its own, so there is no `data List` to read.
+It still behaves like the cons-cell sum type it looks like.)
 
 ## Records: a bundle of named fields
 

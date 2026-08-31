@@ -143,7 +143,10 @@ main = println (report 4.5)
 ```
 
 `where` can also trail the body line — `f x = g x where` followed by an indented
-block. Use whichever reads better; the formatter keeps both.
+block. Both spellings parse, but they are not two styles the formatter respects:
+`medaka fmt --write` normalizes the trailing form to the one above, moving `where`
+onto its own line and indenting the block under it. Write whichever you like and
+let `fmt` settle it.
 
 ## Lambdas
 

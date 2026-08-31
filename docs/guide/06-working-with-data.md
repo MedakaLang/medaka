@@ -52,8 +52,17 @@ length 1 has no answer. That pattern — a total function returning `Option` ins
 a partial one that crashes — runs through the whole standard library.
 
 That example also shows the other thing you will need constantly: `array` and `list`
-export a lot of the same names (`get`, `set`, `take`, `drop`, `sort`), so importing
-both unqualified would be ambiguous. `import array as A` gives you a prefix instead.
+export a lot of the same names (`get`, `take`, `drop`, `sort`, `sortBy`), so the two
+modules cannot both be wildcard-imported and used unqualified. `import list.*` next to
+`import array.*` is accepted on its own — the collision is not the import, it is the
+*use*, and it is reported at the reference:
+
+```
+probe.mdk:4:16: Ambiguous occurrence: 'get' is exported by both `list` and `array`.
+Qualify, or select with `import <mod>.{get}`
+```
+
+`import array as A` gives you a prefix instead, and sidesteps the question entirely.
 
 > ⚠️ **A module alias works for values, not for types.** `import map as M` lets you
 > write `M.get`, but `M.Map String Int` in a *type* is a parse error. Import the type
@@ -295,7 +304,9 @@ hand-roll a parser.
 
 ---
 
-Every example in this chapter has been pure: same input, same output, nothing
-touched outside the program. The next chapter is about the other kind of code —
+Almost every function in this chapter has been pure: same input, same output, nothing
+touched outside the program. The exception is anything that printed: every `main` above,
+and `printAll`, whose signature had to say so — `Display a => List a -> <IO> Unit`. That
+`<IO>` is not decoration. The next chapter is about the other kind of code —
 [chapter 7, effects and IO](07-effects-and-io.md) — and it starts by contradicting
 something you probably expect.

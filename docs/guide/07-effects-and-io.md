@@ -49,9 +49,16 @@ is sugar for `Option`, `Result`, and other *monadic* chaining, and it does not
 sequence IO. The compiler says so directly:
 
 ```
-error: probe.mdk:5:7: `do` requires a Thenable impl (e.g. `Option`/`Result`). For IO
-sequencing use a bare indented block, not `do`
+error: probe.mdk:3:12: this `do` block needs a Thenable value here (like `Option` or
+`Result`), but got Unit. If Unit isn't itself monadic, use 'let' instead of '<-' to
+bind it.
+  |
+3 |     println "step one"
+  |             ^
 ```
+
+(A second, cascading "Ambiguous instance for `Display`" error follows it, pointing at
+the `do` keyword; fixing the first makes it go away too.)
 
 Side by side, so the difference is concrete. The bare block sequences three effects
 and produces `Unit`:

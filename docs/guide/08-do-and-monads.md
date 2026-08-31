@@ -167,7 +167,7 @@ skipped: missing field 3
 ```
 
 `parseExpense` reads top to bottom as six ordinary steps. The failure paths are not
-written anywhere, and there are five of them: each `<-` is a place the block can stop
+written anywhere, and there are six of them: each `<-` is a place the block can stop
 and hand its `Err` to the caller, with the message the failing step produced. The
 second and third lines of output are two different steps failing.
 

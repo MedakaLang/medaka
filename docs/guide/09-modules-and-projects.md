@@ -53,9 +53,18 @@ import greet
 ```
 
 > ⚠️ **A bare `import` binds no names, but it is not a no-op.** `import greet` alone does not put
-> `hello` or `bye` in scope — you would still need to write `greet.hello`, which does not even
-> parse (only aliased imports support the `Module.name` qualifier; see below). What a bare import
-> *does* do is bring that module's `impl`s into the dispatch table for the rest of the file. If
+> `hello` or `bye` in scope, and reaching for `greet.hello` does not rescue it — only *aliased*
+> imports support the `Module.name` qualifier (see below), so the module name itself is not a
+> value and the reference fails to resolve:
+>
+> ```
+> ./main.mdk:3:15: Unbound variable: greet. 'greet' is an imported module, not a value — a
+> bare 'import greet' binds no names. Bind what you need: 'import greet.{name, ...}', or
+> 'import greet as M' then 'M.name'
+> ```
+>
+> What a bare import *does* do is bring that module's `impl`s into the dispatch table for the
+> rest of the file. If
 > `greet.mdk` defines `impl Display Message`, importing `greet` — even with no names — is what
 > makes `display someMessage` resolve, for any `Message` value already in scope some other way.
 
@@ -88,7 +97,10 @@ fails, because the only `impl Display Widget` in the program is one nothing has 
 about:
 
 ```
-error: main.mdk:3:16: No impl of Display for Widget; add 'deriving Display' to the 'Widget' type, or write an 'impl Display Widget'.
+error: ./main.mdk:3:16: No impl of Display for Widget; add 'deriving Display' to the 'Widget' type, or write an 'impl Display Widget'.
+  |
+3 | main = println (display (Widget 5))
+  |                 ^
 ```
 
 Any import form — bare, selective, wildcard, or aliased — has this effect; it isn't a special
@@ -161,7 +173,7 @@ exported `Account` — `import account.{Account(..)}` — and the compiler refus
 code even runs, rather than letting you write an unbuildable pattern match:
 
 ```
-error: main.mdk:1:16: 'Account' exports no constructors from module 'account' (exported abstractly). Remove `(..)` or export with `public export`
+./main.mdk:1:16: 'Account' exports no constructors from module 'account' (exported abstractly). Remove `(..)` or export with `public export`
 ```
 
 This is the module-boundary version of the encapsulation [chapter 4](04-data-modeling.md) covered
@@ -211,6 +223,10 @@ and `main.mdk` is a working, if minimal, starting point:
 ```medaka
 main : <IO> Unit
 main = println "Hello, Medaka"
+```
+
+```medaka-expect
+Hello, Medaka
 ```
 
 There's no mandated subdirectory layout — a small project keeps every `.mdk` file flat next to

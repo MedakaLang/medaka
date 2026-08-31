@@ -119,10 +119,29 @@ makes the file runnable with `medaka run` too, which is how this guide's own exa
 produce the `6` above.
 
 By default `test` runs everything through the interpreter (`eval`); `--native` (or
-`--engines native`) compiles to a native binary first and runs doctests/tests through that
-instead — useful for catching an eval/native divergence, but slower. `--filter <substring>`
-narrows to doctests, `test "…"`s, and `prop "…"`s whose name (or, for a doctest, its input
-expression) contains the substring.
+`--engines native`) compiles to a native binary first and runs doctests through that instead
+— useful for catching an eval/native divergence, but slower. It has a precondition worth
+knowing before you reach for it: the native doctest runner synthesizes its own `main`, so it
+refuses any file that already defines one. Run `medaka test --native total.mdk` on the file
+above and every doctest errors out:
+
+```
+  ERROR total.mdk:5: total [1, 2, 3]
+        native doctest runner: SKIPPED total.mdk — it already defines a top-level `main`,
+        which the synthesized doctest entry point would collide with. No example was
+        executed natively.
+  ERROR total.mdk:7: total []
+        native doctest runner: SKIPPED total.mdk — it already defines a top-level `main`,
+        which the synthesized doctest entry point would collide with. No example was
+        executed natively.
+
+total.mdk: 0/2 passed (0 failed, 2 errors)
+```
+
+Move the doctested functions into a `main`-free module and `--native` works on that. (`prop`s
+and `test "…"`s are unaffected — they run either way.) `--filter <substring>` narrows to
+doctests, `test "…"`s, and `prop "…"`s whose name (or, for a doctest, its input expression)
+contains the substring.
 
 ## `repl` — quick experiments
 

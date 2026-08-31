@@ -45,8 +45,18 @@ main =
 big
 ```
 
-This is why there is no ternary operator and no `return`: an `if` with no `else` would
-have nothing to evaluate to, so `else` is not optional.
+This is why there is no ternary operator and no `return`: the `if` *is* the conditional
+expression. `else` may be left off, but then the `if` has nothing to evaluate to on the
+false side, so it evaluates to `()` and the `then` branch must be `Unit` too — an
+else-less `if` is for side effects, never for producing a value. Dropping the `else`
+above is a type error, not a shorter way to write the same thing:
+
+```
+error: probe.mdk:3:28: Type mismatch: String vs Unit
+  |
+3 |   let label = if n > 5 then "big"
+  |                             ^
+```
 
 ## Bindings are immutable
 

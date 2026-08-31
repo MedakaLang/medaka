@@ -71,14 +71,29 @@ enough language to build it properly.
 
 ## Where to go next
 
+Start at the top and read straight through — the chapters build on each other:
+
 - **[Quick Start](01-quick-start.md)** — your first running program, in about five minutes.
 - **[Values, Bindings & Types](02-expressions.md)** — literals, bindings, mutation, and
   what a type signature buys you.
+- **[Functions](03-functions.md)**, **[Data Modeling](04-data-modeling.md)**, and
+  **[Interfaces](05-interfaces.md)** — the core of the language: clauses and pattern
+  matching, `data` and records, and how `interface`/`impl` replace inheritance.
+- **[Working with Data](06-working-with-data.md)**, **[Effects & IO](07-effects-and-io.md)**,
+  and **[`do` and Monads](08-do-and-monads.md)** — the collections you will reach for, why
+  effects show up in the type, and what `do` is actually for (it is not IO).
+- **[Modules & Projects](09-modules-and-projects.md)** and
+  **[Tooling & Workflow](10-tooling-and-workflow.md)** — splitting a program across files,
+  and the `check`/`fmt`/`lint`/`test` loop you will run while writing.
+
+And one side road, at whatever point it helps:
+
 - **[Medaka for Haskell and OCaml readers](haskell-ocaml-delta.md)** — the deltas, if you
   already have the concepts and just need the spellings.
 
-Every example in this guide is extracted and run against the compiler on every commit,
-so what you read here is what the current compiler actually does.
+Every example in this guide is extracted and type-checked by CI before a change can merge,
+and the ones with output shown beneath them are executed and compared against exactly that
+output — so what you read here is what the current compiler actually does.
 
 ## Why Medaka?
 
