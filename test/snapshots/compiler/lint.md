@@ -1,5 +1,5 @@
 # META
-source_lines=4775
+source_lines=4797
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -469,6 +469,28 @@ duplicateBodyRule = CrossFileRule {
 export
 allCrossFileRules : List CrossFileRule
 allCrossFileRules = [duplicateBodyRule]
+
+-- Every registered rule name, per-file and cross-file, as plain Strings.
+-- CLI-CONFORMANCE.md §5f: `medaka lint --only=nosuchrule` used to be accepted
+-- silently — a typo'd rule name filtered EVERY finding away and the run exited
+-- 0 looking clean.  The CLI validates `--only=`/`--disable=`/`--deny=` against
+-- this list; ALL Rule-record access stays inside this module (the header's
+-- field-scanner rule), so the CLI receives only these Strings.
+export
+-- Deduped, and in registry order: `rule-duplicate-body` is registered TWICE
+-- (a same-file `Rule` and the cross-file `CrossFileRule` under one name), and
+-- printing it twice in the known set reads as a bug in the list.
+allRuleNames : List String
+allRuleNames =
+  let perFile = map ruleNameOf allRules
+  perFile
+    ++ filterList (n => not (contains n perFile)) (map crossRuleNameOf allCrossFileRules)
+
+ruleNameOf : Rule -> String
+ruleNameOf r = r.name
+
+crossRuleNameOf : CrossFileRule -> String
+crossRuleNameOf r = r.name
 
 -- ── runner ───────────────────────────────────────────────────────────────────
 
@@ -4884,6 +4906,12 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "duplicateBodyRule" () (ERecordCreate "CrossFileRule" ((fa "name" (EVar "ruleNameDuplicateBody")) (fa "descr" (ELit (LString "top-level function body is structurally identical to one in another file (copy-paste; consolidate)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleDuplicateBody")))))
 (DTypeSig true "allCrossFileRules" (TyApp (TyCon "List") (TyCon "CrossFileRule")))
 (DFunDef false "allCrossFileRules" () (EListLit (EVar "duplicateBodyRule")))
+(DTypeSig true "allRuleNames" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "allRuleNames" () (EBlock (DoLet false false (PVar "perFile") (EApp (EApp (EVar "map") (EVar "ruleNameOf")) (EVar "allRules"))) (DoExpr (EBinOp "++" (EVar "perFile") (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "n")) (EVar "perFile"))))) (EApp (EApp (EVar "map") (EVar "crossRuleNameOf")) (EVar "allCrossFileRules")))))))
+(DTypeSig false "ruleNameOf" (TyFun (TyCon "Rule") (TyCon "String")))
+(DFunDef false "ruleNameOf" ((PVar "r")) (EFieldAccess (EVar "r") "name"))
+(DTypeSig false "crossRuleNameOf" (TyFun (TyCon "CrossFileRule") (TyCon "String")))
+(DFunDef false "crossRuleNameOf" ((PVar "r")) (EFieldAccess (EVar "r") "name"))
 (DTypeSig true "lintProgram" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding")))))))))
 (DFunDef false "lintProgram" ((PVar "idx") (PVar "rules") (PVar "path") (PVar "src") (PVar "pos") (PVar "prog")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EApp (EApp (EVar "runRuleOn") (EVar "idx")) (EVar "path")) (EVar "src")) (EVar "pos")) (EVar "prog"))) (EVar "rules")))
 (DTypeSig false "runRuleOn" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Rule") (TyApp (TyCon "List") (TyCon "Finding")))))))))
@@ -6477,6 +6505,12 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "duplicateBodyRule" () (ERecordCreate "CrossFileRule" ((fa "name" (EVar "ruleNameDuplicateBody")) (fa "descr" (ELit (LString "top-level function body is structurally identical to one in another file (copy-paste; consolidate)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleDuplicateBody")))))
 (DTypeSig true "allCrossFileRules" (TyApp (TyCon "List") (TyCon "CrossFileRule")))
 (DFunDef false "allCrossFileRules" () (EListLit (EVar "duplicateBodyRule")))
+(DTypeSig true "allRuleNames" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "allRuleNames" () (EBlock (DoLet false false (PVar "perFile") (EApp (EApp (EMethodRef "map") (EVar "ruleNameOf")) (EVar "allRules"))) (DoExpr (EBinOp "++" (EVar "perFile") (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "n")) (EVar "perFile"))))) (EApp (EApp (EMethodRef "map") (EVar "crossRuleNameOf")) (EVar "allCrossFileRules")))))))
+(DTypeSig false "ruleNameOf" (TyFun (TyCon "Rule") (TyCon "String")))
+(DFunDef false "ruleNameOf" ((PVar "r")) (EFieldAccess (EVar "r") "name"))
+(DTypeSig false "crossRuleNameOf" (TyFun (TyCon "CrossFileRule") (TyCon "String")))
+(DFunDef false "crossRuleNameOf" ((PVar "r")) (EFieldAccess (EVar "r") "name"))
 (DTypeSig true "lintProgram" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding")))))))))
 (DFunDef false "lintProgram" ((PVar "idx") (PVar "rules") (PVar "path") (PVar "src") (PVar "pos") (PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EApp (EApp (EVar "runRuleOn") (EVar "idx")) (EVar "path")) (EVar "src")) (EVar "pos")) (EVar "prog"))) (EVar "rules")))
 (DTypeSig false "runRuleOn" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Rule") (TyApp (TyCon "List") (TyCon "Finding")))))))))

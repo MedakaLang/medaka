@@ -466,6 +466,28 @@ export
 allCrossFileRules : List CrossFileRule
 allCrossFileRules = [duplicateBodyRule]
 
+-- Every registered rule name, per-file and cross-file, as plain Strings.
+-- CLI-CONFORMANCE.md §5f: `medaka lint --only=nosuchrule` used to be accepted
+-- silently — a typo'd rule name filtered EVERY finding away and the run exited
+-- 0 looking clean.  The CLI validates `--only=`/`--disable=`/`--deny=` against
+-- this list; ALL Rule-record access stays inside this module (the header's
+-- field-scanner rule), so the CLI receives only these Strings.
+export
+-- Deduped, and in registry order: `rule-duplicate-body` is registered TWICE
+-- (a same-file `Rule` and the cross-file `CrossFileRule` under one name), and
+-- printing it twice in the known set reads as a bug in the list.
+allRuleNames : List String
+allRuleNames =
+  let perFile = map ruleNameOf allRules
+  perFile
+    ++ filterList (n => not (contains n perFile)) (map crossRuleNameOf allCrossFileRules)
+
+ruleNameOf : Rule -> String
+ruleNameOf r = r.name
+
+crossRuleNameOf : CrossFileRule -> String
+crossRuleNameOf r = r.name
+
 -- ── runner ───────────────────────────────────────────────────────────────────
 
 -- Run the enabled rules over a program, collecting every finding.  `pos` carries

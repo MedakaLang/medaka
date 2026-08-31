@@ -1,5 +1,5 @@
 # META
-source_lines=1609
+source_lines=1668
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/diagnostics.mdk — structured error pipeline (Phase A.4)
@@ -94,6 +94,7 @@ import support.util.{
   filterList,
   contains,
 }
+import support.timer.{takePerfSink}
 import json.{Json, JInt, JString, JArray, JNull, jObject, stringify}
 
 -- ── types ──────────────────────────────────────────────────────────────────
@@ -1272,8 +1273,66 @@ cjTriple (path, src, diags) = cjFileEntry path src diags
 -- Needs sources for whole-doc range fallback.
 export
 cjAllToJson : List (String, String, List Diag) -> String
-cjAllToJson triples = stringify (jObject
-  [("files", JArray (arrayFromList (map cjTriple triples)))])
+cjAllToJson triples = cjAllToJsonWith [] triples
+
+-- `cjAllToJson` plus caller-supplied top-level fields, appended AFTER "files"
+-- so the schema every existing consumer reads is unchanged and the extras are
+-- purely additive.  C4 (docs/ops/CLI-CONFORMANCE.md §4): `medaka run --json`'s
+-- machine channel is STDERR (its stdout belongs to the user program), which it
+-- shares with two human-readable writers — `MEDAKA_PERF=1`'s `[perf]` lines and
+-- the `[B-STDERR]` staleness warning.  Those writers are ROUTED INTO this
+-- envelope, never silenced: suppressing the staleness warning under `--json`
+-- would make a stale binary invisible to every machine consumer, which is a
+-- severity INCREASE ([W-QUIETER]), not a fix.  Same shape as `attachStaleness`
+-- (compiler/tools/mcp.mdk), which already splices a `staleBinary` field onto an
+-- MCP tool result rather than inventing a second channel.
+export
+cjAllToJsonWith : List (String, Json) -> List (String, String, List Diag) -> String
+cjAllToJsonWith extra triples =
+  stringify (jObject
+    ([("files", JArray (arrayFromList (map cjTriple triples)))] ++ extra))
+
+-- ── run --json envelope notices ─────────────────────────────────────────────
+-- Staged here rather than in eval.mdk (which owns `pendingRunDiags`) because
+-- BOTH envelope emitters must see them and only one of them is in eval.mdk:
+-- the clean-exit flush lives in medaka_cli.mdk (`flushPendingRunDiags`) and the
+-- runtime-panic one in eval.mdk (`runtimePanic`).  driver.diagnostics is the
+-- module both already import, and putting them here adds no top-level binding
+-- to a LEG-A-golden module.
+--
+-- Both are set ONLY on the `run --json` path; every other verb and every
+-- non-JSON `run` leaves them empty and its output byte-identical.
+
+-- The `[B-STALENESS]` verdict, deferred so it lands INSIDE the envelope instead
+-- of ahead of it as prose.  `None` = fresh binary (or not `run --json`).
+export
+pendingStaleNotice : Ref (Option String)
+pendingStaleNotice = Ref None
+
+-- The extra top-level envelope fields the deferred notices amount to: the
+-- staleness verdict staged above, plus whatever `MEDAKA_PERF=1` buffered into
+-- `support.timer`'s sink (verbatim `[perf]` lines — the identical strings the
+-- consumer would have seen on stderr, just inside the document).  Empty when
+-- neither fired ⇒ the envelope is byte-identical to today's.
+export
+runEnvelopeFields : Unit -> <e> List (String, Json)
+runEnvelopeFields _ =
+  let staleF = match !pendingStaleNotice
+    None => []
+    Some msg => [("staleBinary", JString msg)]
+  let perfF = match takePerfSink ()
+    [] => []
+    ls => [("perf", JArray (arrayFromList (map (l => JString l) ls)))]
+  staleF ++ perfF
+
+-- Emit the ONE `run --json` envelope on stderr — or nothing at all when there
+-- is nothing to say (no diagnostics AND no notices), which keeps a clean run on
+-- a fresh binary byte-identical to before this convention landed.
+export
+flushRunEnvelope : List (String, String, List Diag) -> <Stderr | e> Unit
+flushRunEnvelope triples = match (triples, runEnvelopeFields ())
+  ([], []) => ()
+  (ts, extra) => ePutStrLn (cjAllToJsonWith extra ts)
 
 -- Read each file's source for the range fallback.  On read error, use "" so
 -- diagnostics still serialize (the error itself is in the diag list).
@@ -1625,6 +1684,7 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "shouldAutoPrintMain" false) (mem "autoPrintWrapModules" false) (mem "autoPrintPinCore" false) (mem "underivedMainDiags" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "lookupAssoc" false) (mem "startsWith" false) (mem "anyList" false) (mem "filterList" false) (mem "contains" false))))
+(DUse false (UseGroup ("support" "timer") ((mem "takePerfSink" false))))
 (DUse false (UseGroup ("json") ((mem "Json" false) (mem "JInt" false) (mem "JString" false) (mem "JArray" false) (mem "JNull" false) (mem "jObject" false) (mem "stringify" false))))
 (DData Public "Severity" () ((variant "SevError" (ConPos)) (variant "SevWarning" (ConPos))) ())
 (DData Public "Fix" () ((variant "Fix" (ConPos (TyCon "Loc") (TyCon "String")))) ())
@@ -1809,7 +1869,15 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
 (DTypeSig false "cjTriple" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyCon "Json")))
 (DFunDef false "cjTriple" ((PTuple (PVar "path") (PVar "src") (PVar "diags"))) (EApp (EApp (EApp (EVar "cjFileEntry") (EVar "path")) (EVar "src")) (EVar "diags")))
 (DTypeSig true "cjAllToJson" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyCon "String")))
-(DFunDef false "cjAllToJson" ((PVar "triples")) (EApp (EVar "stringify") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "files")) (EApp (EVar "JArray") (EApp (EVar "arrayFromList") (EApp (EApp (EVar "map") (EVar "cjTriple")) (EVar "triples")))))))))
+(DFunDef false "cjAllToJson" ((PVar "triples")) (EApp (EApp (EVar "cjAllToJsonWith") (EListLit)) (EVar "triples")))
+(DTypeSig true "cjAllToJsonWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyCon "String"))))
+(DFunDef false "cjAllToJsonWith" ((PVar "extra") (PVar "triples")) (EApp (EVar "stringify") (EApp (EVar "jObject") (EBinOp "++" (EListLit (ETuple (ELit (LString "files")) (EApp (EVar "JArray") (EApp (EVar "arrayFromList") (EApp (EApp (EVar "map") (EVar "cjTriple")) (EVar "triples")))))) (EVar "extra")))))
+(DTypeSig true "pendingStaleNotice" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "pendingStaleNotice" () (EApp (EVar "Ref") (EVar "None")))
+(DTypeSig true "runEnvelopeFields" (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json"))))))
+(DFunDef false "runEnvelopeFields" (PWild) (EBlock (DoLet false false (PVar "staleF") (EMatch (EUnOp "!" (EVar "pendingStaleNotice")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "msg")) () (EListLit (ETuple (ELit (LString "staleBinary")) (EApp (EVar "JString") (EVar "msg"))))))) (DoLet false false (PVar "perfF") (EMatch (EApp (EVar "takePerfSink") (ELit LUnit)) (arm (PList) () (EListLit)) (arm (PVar "ls") () (EListLit (ETuple (ELit (LString "perf")) (EApp (EVar "JArray") (EApp (EVar "arrayFromList") (EApp (EApp (EVar "map") (ELam ((PVar "l")) (EApp (EVar "JString") (EVar "l")))) (EVar "ls"))))))))) (DoExpr (EBinOp "++" (EVar "staleF") (EVar "perfF")))))
+(DTypeSig true "flushRunEnvelope" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect ("Stderr") (Some "e") (TyCon "Unit"))))
+(DFunDef false "flushRunEnvelope" ((PVar "triples")) (EMatch (ETuple (EVar "triples") (EApp (EVar "runEnvelopeFields") (ELit LUnit))) (arm (PTuple (PList) (PList)) () (ELit LUnit)) (arm (PTuple (PVar "ts") (PVar "extra")) () (EApp (EVar "ePutStrLn") (EApp (EApp (EVar "cjAllToJsonWith") (EVar "extra")) (EVar "ts"))))))
 (DTypeSig true "readDiagSrc" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyEffect ("IO") None (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))
 (DFunDef false "readDiagSrc" ((PTuple (PVar "path") (PVar "diags"))) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Ok" (PVar "src")) () (ETuple (EVar "path") (EVar "src") (EVar "diags"))) (arm (PCon "Err" PWild) () (ETuple (EVar "path") (ELit (LString "")) (EVar "diags")))))
 (DTypeSig true "relDiagPath" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
@@ -1871,6 +1939,7 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "shouldAutoPrintMain" false) (mem "autoPrintWrapModules" false) (mem "autoPrintPinCore" false) (mem "underivedMainDiags" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "lookupAssoc" false) (mem "startsWith" false) (mem "anyList" false) (mem "filterList" false) (mem "contains" false))))
+(DUse false (UseGroup ("support" "timer") ((mem "takePerfSink" false))))
 (DUse false (UseGroup ("json") ((mem "Json" false) (mem "JInt" false) (mem "JString" false) (mem "JArray" false) (mem "JNull" false) (mem "jObject" false) (mem "stringify" false))))
 (DData Public "Severity" () ((variant "SevError" (ConPos)) (variant "SevWarning" (ConPos))) ())
 (DData Public "Fix" () ((variant "Fix" (ConPos (TyCon "Loc") (TyCon "String")))) ())
@@ -2055,7 +2124,15 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
 (DTypeSig false "cjTriple" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyCon "Json")))
 (DFunDef false "cjTriple" ((PTuple (PVar "path") (PVar "src") (PVar "diags"))) (EApp (EApp (EApp (EVar "cjFileEntry") (EVar "path")) (EVar "src")) (EVar "diags")))
 (DTypeSig true "cjAllToJson" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyCon "String")))
-(DFunDef false "cjAllToJson" ((PVar "triples")) (EApp (EVar "stringify") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "files")) (EApp (EVar "JArray") (EApp (EVar "arrayFromList") (EApp (EApp (EMethodRef "map") (EVar "cjTriple")) (EVar "triples")))))))))
+(DFunDef false "cjAllToJson" ((PVar "triples")) (EApp (EApp (EVar "cjAllToJsonWith") (EListLit)) (EVar "triples")))
+(DTypeSig true "cjAllToJsonWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyCon "String"))))
+(DFunDef false "cjAllToJsonWith" ((PVar "extra") (PVar "triples")) (EApp (EVar "stringify") (EApp (EVar "jObject") (EBinOp "++" (EListLit (ETuple (ELit (LString "files")) (EApp (EVar "JArray") (EApp (EVar "arrayFromList") (EApp (EApp (EMethodRef "map") (EVar "cjTriple")) (EVar "triples")))))) (EVar "extra")))))
+(DTypeSig true "pendingStaleNotice" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "pendingStaleNotice" () (EApp (EVar "Ref") (EVar "None")))
+(DTypeSig true "runEnvelopeFields" (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json"))))))
+(DFunDef false "runEnvelopeFields" (PWild) (EBlock (DoLet false false (PVar "staleF") (EMatch (EUnOp "!" (EVar "pendingStaleNotice")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "msg")) () (EListLit (ETuple (ELit (LString "staleBinary")) (EApp (EVar "JString") (EVar "msg"))))))) (DoLet false false (PVar "perfF") (EMatch (EApp (EVar "takePerfSink") (ELit LUnit)) (arm (PList) () (EListLit)) (arm (PVar "ls") () (EListLit (ETuple (ELit (LString "perf")) (EApp (EVar "JArray") (EApp (EVar "arrayFromList") (EApp (EApp (EMethodRef "map") (ELam ((PVar "l")) (EApp (EVar "JString") (EVar "l")))) (EVar "ls"))))))))) (DoExpr (EBinOp "++" (EVar "staleF") (EVar "perfF")))))
+(DTypeSig true "flushRunEnvelope" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyEffect ("Stderr") (Some "e") (TyCon "Unit"))))
+(DFunDef false "flushRunEnvelope" ((PVar "triples")) (EMatch (ETuple (EVar "triples") (EApp (EVar "runEnvelopeFields") (ELit LUnit))) (arm (PTuple (PList) (PList)) () (ELit LUnit)) (arm (PTuple (PVar "ts") (PVar "extra")) () (EApp (EVar "ePutStrLn") (EApp (EApp (EVar "cjAllToJsonWith") (EVar "extra")) (EVar "ts"))))))
 (DTypeSig true "readDiagSrc" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyEffect ("IO") None (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))
 (DFunDef false "readDiagSrc" ((PTuple (PVar "path") (PVar "diags"))) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Ok" (PVar "src")) () (ETuple (EVar "path") (EVar "src") (EVar "diags"))) (arm (PCon "Err" PWild) () (ETuple (EVar "path") (ELit (LString "")) (EVar "diags")))))
 (DTypeSig true "relDiagPath" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))

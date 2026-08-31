@@ -293,7 +293,7 @@ pEPutStr : Value a -> <Stderr> Value a
 pEPutStrLn : Value a -> <Stderr> Value a
 pEnableRunStdoutFlush : Value a -> Value a
 pExecutablePath : Value a -> <Env> Value a
-pExit : Value a -> Value a
+pExit : Value a -> <Stderr> Value a
 pExp : Value a -> Value a
 pFileExists : Value a -> <FileRead> Value a
 pFloatRem : Value a -> Value a -> Value a

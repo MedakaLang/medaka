@@ -313,10 +313,15 @@ if [ "$TEST_WIRED" = 1 ]; then
     fail=$((fail+1)); printf 'FAIL test/dir exit code: expected nonzero, got 0\n'
   fi
 
-  # Empty dir: "no .mdk files" is reported, and — since nothing ran and
-  # nothing failed — this is a vacuous pass (exit 0), mirroring runTest's own
-  # zero-doctest-file convention. Uses a throwaway tmp dir (not a committed
-  # fixture — nothing to walk means nothing to bless).
+  # Empty dir: "no .mdk files" is reported on STDERR at exit 1.  C3
+  # (docs/ops/CLI-CONFORMANCE.md §3) ratified "found nothing is a usage error",
+  # one (stderr, 1) pair for every verb, and named `test`'s old vacuous exit-0
+  # pass as the load-bearing case: a test command that ran zero tests and exited
+  # 0 is the "didn't run looks like passed" failure the test arc exists to
+  # close.  This assertion used to pin exit 0; it now pins the convention.
+  # runTest's single-file zero-doctest pass is a DIFFERENT case and unchanged.
+  # Uses a throwaway tmp dir (not a committed fixture — nothing to walk means
+  # nothing to bless).
   empty_dir="$(mktemp -d)"
   empty_got="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" test "$empty_dir" 2>&1)"
   empty_code=0
@@ -324,10 +329,10 @@ if [ "$TEST_WIRED" = 1 ]; then
   rmdir "$empty_dir"
   case "$empty_got" in
     *"no .mdk files found"*)
-      if [ "$empty_code" -eq 0 ]; then
-        pass=$((pass+1)); printf 'ok   test/empty-dir (message + exit 0)\n'
+      if [ "$empty_code" -eq 1 ]; then
+        pass=$((pass+1)); printf 'ok   test/empty-dir (message + exit 1)\n'
       else
-        fail=$((fail+1)); printf 'FAIL test/empty-dir: expected exit 0, got %d\n' "$empty_code"
+        fail=$((fail+1)); printf 'FAIL test/empty-dir: expected exit 1, got %d\n' "$empty_code"
       fi
       ;;
     *)

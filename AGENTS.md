@@ -67,7 +67,7 @@ Support files:
 | `compiler/driver/loader.mdk` | Multi-file dep walk, topo sort, cycle detection; `medaka.toml` root walk-up |
 | `compiler/driver/diagnostics.mdk` | Accumulating error pipeline — no exit-on-error |
 | `compiler/driver/build_cmd.mdk` | `medaka build` — Core IR → LLVM emit → clang |
-| `compiler/driver/medaka_cli.mdk` | CLI: `check`/`fmt`/`new`/`build`/`run`/`test`/`doc`/`lint`/`manifest`/`repl`/`lsp` |
+| `compiler/driver/medaka_cli.mdk` | CLI: `check`/`fmt`/`new`/`build`/`run`/`test`/`doc`/`lint`/`manifest`/`repl`/`lsp`. Argument-handling conventions (unknown-flag rejection, exit codes, stream discipline, `--json`) are ratified in `docs/ops/CLI-CONFORMANCE.md` — the single normative source, re-derivable with `make cli-conformance-census` |
 | `compiler/ir/core_ir.mdk` + siblings | Core IR types; lowering `core_ir_lower.mdk`, S-expr `core_ir_sexp.mdk`, DCE `dce.mdk`, interpreter `core_ir_eval.mdk` |
 | `compiler/backend/llvm_emit.mdk` | LLVM text IR emitter |
 | `compiler/backend/wasm_emit.mdk` | WasmGC text IR emitter (2nd backend) |

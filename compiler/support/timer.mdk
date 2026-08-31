@@ -12,7 +12,77 @@
 --   ...
 --   let _   = emitTotal on (tEnd - tStart)
 --
--- All timing output goes to stderr so stdout is not disturbed.
+-- All timing output goes to stderr so stdout is not disturbed — with ONE
+-- documented exception, the sink below: `medaka run --json`'s machine channel
+-- IS stderr (its stdout belongs to the user program), so for that single verb
+-- this module's premise inverts and stderr is what must stay undisturbed.
+
+-- ── the `run --json` routing sink (C4, docs/ops/CLI-CONFORMANCE.md §4) ──────
+-- When ARMED, every `[perf]`/`[stats]` line this module would have written to
+-- stderr is BUFFERED instead, and `medaka run --json` folds the buffer into its
+-- one JSON envelope as a `perf` array.  Routed, never suppressed
+-- ([W-QUIETER]): dropping the lines under `--json` would make `MEDAKA_PERF=1`
+-- silently do nothing on the one verb whose channel needed the fix.
+--
+-- DISARMED by default, so the other fifteen verbs — and `medaka run` without
+-- `--json` — write exactly the bytes they wrote before, which is what
+-- `diff_compiler_perf_scaling.sh` and `profile_compiler.sh` parse with
+-- `awk -F'\t'`.  Only `runRunCmd` arms it, and only under `--json`.
+export
+perfSinkOn : Ref Bool
+perfSinkOn = Ref False
+
+-- Buffered lines, newest first (`takePerfSink` reverses).
+perfSinkLines : Ref (List String)
+perfSinkLines = Ref []
+
+-- The single routing decision for every line this module emits.  Every emitter
+-- below goes through here rather than calling `ePutStrLn` itself, so the sink
+-- cannot be half-applied and the line FORMAT stays defined in exactly one place
+-- per emitter.
+emitTimerLine : String -> <IO> Unit
+emitTimerLine line =
+  if !perfSinkOn then
+    perfSinkLines := line :: !perfSinkLines
+  else
+    ePutStrLn line
+
+-- Drain the sink, oldest line first.  Draining (rather than peeking) keeps a
+-- second read from re-emitting lines the envelope already carries.
+export
+takePerfSink : Unit -> <e> List String
+takePerfSink _ =
+  let ls = !perfSinkLines
+  perfSinkLines := []
+  revLines ls []
+
+revLines : List String -> List String -> List String
+revLines [] acc = acc
+revLines (x::xs) acc = revLines xs (x::acc)
+
+-- Drain the sink to stderr as prose — `flushStaleNoticeProse`'s
+-- (`medaka_cli.mdk`) sibling for the OTHER deferred `run --json` notice, and
+-- the same shape.  The sink is armed for the whole of `runRunCmd`, but only
+-- the paths that reach an envelope emitter drain it there; the error arms
+-- exit through `runAbort`, which emits human prose rather than the envelope,
+-- so without this call every staged `[perf]` line dies at process exit —
+-- `MEDAKA_PERF=1 medaka run --json <file-with-a-compile-error>` silently doing
+-- nothing, which is a severity INCREASE ([W-QUIETER]), not a channel choice.
+-- Routed on every path, dropped on none.
+--
+-- A no-op when the sink is empty, which it always is unless BOTH `--json` and
+-- `MEDAKA_PERF` are on ⇒ every other invocation stays byte-identical.  Drains
+-- (via `takePerfSink`) rather than peeks, so a later envelope on the same run
+-- could not re-emit these lines.
+export
+flushPerfSinkProse : Unit -> <IO> Unit
+flushPerfSinkProse _ = putTimerLines (takePerfSink ())
+
+putTimerLines : List String -> <IO> Unit
+putTimerLines [] = ()
+putTimerLines (l::ls) =
+  let _ = ePutStrLn l
+  putTimerLines ls
 
 -- True when MEDAKA_PERF is set to any value in the environment.
 export
@@ -41,7 +111,8 @@ statsEnabled () = match getEnv "MEDAKA_STATS"
 export
 emitStat : Bool -> String -> Int -> <IO> Unit
 emitStat False _ _ = ()
-emitStat True label count = ePutStrLn "[stats] \{label}\t\{intToString count}"
+emitStat True label count =
+  emitTimerLine "[stats] \{label}\t\{intToString count}"
 
 -- Emit a whole list of (label, count) pairs — the call shape
 -- `llvm_emit.mdk`'s `emitProgramWithStats` returns. No-op (per element) when
@@ -94,14 +165,14 @@ export
 emitPhase : Bool -> String -> Float -> String -> <IO> Unit
 emitPhase False _ _ _ = ()
 emitPhase True label elapsed ops =
-  ePutStrLn "[perf] \{label}\t\{floatToString elapsed}s\t\{ops}"
+  emitTimerLine "[perf] \{label}\t\{floatToString elapsed}s\t\{ops}"
 
 -- Emit the total pipeline time to stderr.  No-op when on = False.
 export
 emitTotal : Bool -> Float -> <IO> Unit
 emitTotal False _ = ()
 emitTotal True elapsed =
-  ePutStrLn ("[perf] total\t" ++ floatToString elapsed ++ "s")
+  emitTimerLine ("[perf] total\t" ++ floatToString elapsed ++ "s")
 
 -- Count total declarations across a list of (moduleId, decls) pairs.
 -- Used by drivers as a cheap proxy for "work units" without modifying stages.
@@ -126,7 +197,7 @@ export
 emitTotalA : Bool -> Float -> Float -> <IO> Unit
 emitTotalA False _ _ = ()
 emitTotalA True elapsed allocTotal =
-  ePutStrLn
+  emitTimerLine
     "[perf] total\t\{floatToString elapsed}s\t\{floatToString (allocTotal / 1048576.0)}MB\t"
 
 -- Extended phase emit that ALSO appends the deterministic per-stage OP-COUNT delta
@@ -145,5 +216,5 @@ export
 emitPhaseAO : Bool -> String -> Float -> Float -> String -> Int -> <IO> Unit
 emitPhaseAO False _ _ _ _ _ = ()
 emitPhaseAO True label elapsed allocDelta ops opDelta =
-  ePutStrLn
+  emitTimerLine
     "[perf] \{label}\t\{floatToString elapsed}s\t\{floatToString (allocDelta / 1048576.0)}MB\t\{ops}\t\{intToString opDelta}"

@@ -13,7 +13,7 @@
 MEDAKA_SCRATCH ?= /var/tmp/medaka-scratch
 export TMPDIR := $(shell mkdir -p $(MEDAKA_SCRATCH) 2>/dev/null && echo $(MEDAKA_SCRATCH) || echo /tmp)
 
-.PHONY: medaka emitter seed bootstrap seed-health check-self test gates snapshot-check preflight ci clean help docs-links docs-index gen-ci agent-doc-symbols pr-helper-test fmt-clean-census
+.PHONY: medaka emitter seed bootstrap seed-health check-self test gates snapshot-check preflight ci clean help docs-links docs-index gen-ci agent-doc-symbols pr-helper-test fmt-clean-census cli-conformance-census
 
 ## medaka  — build the native OCaml-free `medaka` CLI (CANONICAL).
 ##           WARM (./medaka_emitter present): 2-stage rebuild from current source,
@@ -193,6 +193,14 @@ agent-doc-symbols:
 ##           into CI — see the script header for why).
 fmt-clean-census: medaka
 	sh test/fmt_clean_census.sh
+
+## cli-conformance-census — re-derive docs/ops/CLI-CONFORMANCE.md's machine-checkable
+##           columns (unknown-flag disposition, exit codes, stream discipline,
+##           --json channel, help/parse-arm agreement) by EXECUTING every verb.
+##           Derived, not hand-maintained. Needs a built ./medaka. Always exits 0:
+##           a census, not a gate — see test/cli_conformance_census.sh's header.
+cli-conformance-census: medaka
+	sh test/cli_conformance_census.sh
 
 ## clean   — remove native build artifacts (keeps the checked-in seed)
 clean:

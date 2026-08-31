@@ -71,6 +71,7 @@ Cross-cutting process docs: how the test suite is organized, how a build ships, 
 | Doc | What it is | Status |
 |-----|------------|--------|
 | [`CI-ARCHITECTURE.md`](ops/CI-ARCHITECTURE.md) | CI-ARCHITECTURE.md — target architecture for Medaka's CI | PARTLY BUILT |
+| [`CLI-CONFORMANCE.md`](ops/CLI-CONFORMANCE.md) | CLI-CONFORMANCE.md — the ratified `medaka` command-line contract | RATIFIED |
 | [`DISTRIBUTION-DESIGN.md`](ops/DISTRIBUTION-DESIGN.md) | DISTRIBUTION-DESIGN.md — shipping a native `medaka` binary to strangers | PARTIAL |
 | [`GATE-REGISTRY-DESIGN.md`](ops/GATE-REGISTRY-DESIGN.md) | GATE-REGISTRY-DESIGN.md — the gate registry format and `medaka gate` driver | LANDED |
 | [`MCP.md`](ops/MCP.md) | MCP.md — `medaka mcp`, the LSP-for-agents | IMPLEMENTED |
