@@ -1,6 +1,6 @@
 # Modules & Projects
 
-Every example so far has lived in one file. Real programs don't: [chapter 8](08-do-and-monads.md)'s
+Every example so far has lived in one file. Real programs don't: [chapter 8](08-do-and-thenables.md)'s
 `report`/`parseExpense` split naturally into "the parsing logic" and "the thing that runs it," and
 a codebase that grows keeps splitting along those lines. This chapter is about the seam: how a
 file becomes a module, how one module reaches into another, and how a directory becomes a project

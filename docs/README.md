@@ -46,7 +46,7 @@ Tutorial-style onboarding, not a spec. Not yet cross-linked into this index's st
 | [`05-interfaces.md`](guide/05-interfaces.md) | Interfaces | — |
 | [`06-working-with-data.md`](guide/06-working-with-data.md) | Working with Data | — |
 | [`07-effects-and-io.md`](guide/07-effects-and-io.md) | Effects & IO | — |
-| [`08-do-and-monads.md`](guide/08-do-and-monads.md) | `do` and Monads | — |
+| [`08-do-and-thenables.md`](guide/08-do-and-thenables.md) | `do` and Thenables | — |
 | [`09-modules-and-projects.md`](guide/09-modules-and-projects.md) | Modules & Projects | — |
 | [`10-tooling-and-workflow.md`](guide/10-tooling-and-workflow.md) | Tooling & Workflow | — |
 | [`OUTLINE.md`](guide/OUTLINE.md) | Medaka Guide — Outline | — |

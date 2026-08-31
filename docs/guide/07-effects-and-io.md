@@ -1,8 +1,8 @@
 # Effects & IO
 
 Here is the surprise, up front: **in Medaka, imperative IO is a bare indented block.**
-Not `do`. Not a monad. You write the statements one under the other and they happen in
-that order.
+Not `do`. Not a wrapper type. You write the statements one under the other and they
+happen in that order.
 
 ```medaka
 main =
@@ -44,8 +44,8 @@ month closed
 ```
 
 If you are coming from Haskell, ML, or Scala, the instinct is to reach for `do`. Do
-not. `do` exists in Medaka and [chapter 8](08-do-and-monads.md) is about it, but it
-is sugar for `Option`, `Result`, and other *monadic* chaining, and it does not
+not. `do` exists in Medaka and [chapter 8](08-do-and-thenables.md) is about it, but it
+is sugar for chaining `Option`, `Result`, and other `Thenable` values, and it does not
 sequence IO. The compiler says so directly:
 
 ```
@@ -104,7 +104,7 @@ Same keyword-free layout, entirely different job. One is *when things happen*; t
 other is *what happens if a step declines to produce a value*.
 
 > ⚠️ **`<-` is only legal inside a `do` block.** It is the one construct that reliably
-> leaks from the monadic world into the IO one, because it is what every other
+> leaks from the `Thenable` world into the IO one, because it is what every other
 > language's IO block is built from. In a bare block it is a located error naming the
 > fix:
 >
@@ -115,9 +115,9 @@ other is *what happens if a step declines to produce a value*.
 
 ## The effect row is the contract
 
-If IO is not tracked by a monad, what stops any function anywhere from printing? The
-type does. A signature may carry an **effect row** — a comma-separated list of labels
-in angle brackets, sitting where the arrow's effects belong.
+If IO is not tracked by a wrapper type, what stops any function anywhere from
+printing? The type does. A signature may carry an **effect row** — a comma-separated
+list of labels in angle brackets, sitting where the arrow's effects belong.
 
 ```medaka
 double : Int -> Int
@@ -285,4 +285,4 @@ touch might not work. Neither one implies the other.
 
 Turning those lines into `Expense` values is a chain of steps that can each fail —
 which is exactly the job `do` was built for, and exactly where
-[chapter 8](08-do-and-monads.md) picks up.
+[chapter 8](08-do-and-thenables.md) picks up.

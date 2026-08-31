@@ -179,7 +179,7 @@ checked source into machine code, are out of scope for this guide.
 
 ---
 
-That's the whole tour: a language ([chapters 1](01-quick-start.md)–[8](08-do-and-monads.md)), how
+That's the whole tour: a language ([chapters 1](01-quick-start.md)–[8](08-do-and-thenables.md)), how
 to arrange it in files (chapter 9), and the tools that check, format, and test what you wrote
 (this chapter). From here, [`docs/spec/SYNTAX.md`](../spec/SYNTAX.md) is the precise reference for
 what the compiler accepts, and the [stdlib docs](../stdlib/STDLIB.md) cover what ships beyond the

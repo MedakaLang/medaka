@@ -1,4 +1,4 @@
-# `do` and Monads
+# `do` and Thenables
 
 [Chapter 7](07-effects-and-io.md) made the negative case: `do` is not how you write
 IO. This chapter makes the positive one. `do` is sugar for chaining computations that
@@ -177,7 +177,7 @@ the decision at the edge is the normal arrangement, and it is why chapter 7's fi
 reading and this chapter's parsing compose without either one knowing about the
 other.
 
-## `do` abstracts over any monad
+## `do` abstracts over any `Thenable`
 
 `do` is not built into `Option` or `Result`. It is sugar over two interface methods —
 `andThen` from `Thenable` and `pure` from `Applicative` — so a function written with

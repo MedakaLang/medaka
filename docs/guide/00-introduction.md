@@ -80,8 +80,8 @@ Start at the top and read straight through — the chapters build on each other:
   **[Interfaces](05-interfaces.md)** — the core of the language: clauses and pattern
   matching, `data` and records, and how `interface`/`impl` replace inheritance.
 - **[Working with Data](06-working-with-data.md)**, **[Effects & IO](07-effects-and-io.md)**,
-  and **[`do` and Monads](08-do-and-monads.md)** — the collections you will reach for, why
-  effects show up in the type, and what `do` is actually for (it is not IO).
+  and **[`do` and Thenables](08-do-and-thenables.md)** — the collections you will reach
+  for, why effects show up in the type, and what `do` is actually for (it is not IO).
 - **[Modules & Projects](09-modules-and-projects.md)** and
   **[Tooling & Workflow](10-tooling-and-workflow.md)** — splitting a program across files,
   and the `check`/`fmt`/`lint`/`test` loop you will run while writing.

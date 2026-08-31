@@ -72,18 +72,18 @@ scope below is the authority, not the slug).*
 ## 7. Effects & IO — "Doing things in the world" *(the signature chapter)*
 Lead with the surprise.
 - Introduce: **imperative IO is a bare indented block, not `do`** (IO is not a
-  monad here); immutable bindings with mutable `Ref` cells, written with `:=`
-  and read with `!` (mutation is untracked — no effect label); **effect rows
+  wrapper type here); immutable bindings with mutable `Ref` cells, written
+  with `:=` and read with `!` (mutation is untracked — no effect label); **effect rows
   `<IO>`, `<Clock, IO>`** as the "what can this touch" contract — every effect
   label is a host capability; capabilities at a high level. Contrast with
   Haskell `IO a` and with unrestricted side effects.
 - Defer: custom `effect` labels, capability platform, effect variables/open rows.
 
-## 8. `do` and Monads — "Chaining computations that might fail or accumulate"
+## 8. `do` and Thenables — "Chaining computations that might fail or accumulate"
 Deliberately AFTER effects, so `do` is never mistaken for "how you do IO."
 - Introduce: `do` over `Option`/`Result` (short-circuit chains); `<-`; `pure`;
-  "`do` abstracts over any monad."
-- Defer: writing your own monad, laws, `Async`.
+  "`do` abstracts over any `Thenable`."
+- Defer: writing your own `Thenable`, laws, `Async`.
 
 ## 9. Modules & Projects — "Organizing a real codebase"
 - Introduce: `import` forms; `export` / `public export` / abstract export;
