@@ -1,0 +1,13 @@
+-- 🚨 NEGATIVE fixture, and the one that proves the SIGNATURE FILTER does real
+-- work.  `initList` relaxes onto the stdlib name `init` by prefix, so the name
+-- half of rule-stdlib-reimpl accepts it — but `list.init` really declares
+-- `List a -> Option (List a)`, not `List a -> List a`, so the rule must stay
+-- silent.
+--
+-- If the declared-signature filter is ever dropped, name relaxation alone fires
+-- on 1,866 definitions tree-wide; THIS fixture is what goes red first.  Do not
+-- "fix" it by deleting it, and do not give it a signature that happens to match.
+export
+initList : List a -> List a
+initList [] = []
+initList (x::xs) = x :: initList xs
