@@ -1,5 +1,5 @@
 # META
-source_lines=37948
+source_lines=37995
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -6558,6 +6558,7 @@ data DriverState =
       sigNameSetRef : Ref (OrdMap Unit),
       sigTyMapRef : Ref (OrdMap Ty),
       implInferEnabled : Ref Bool,
+      localPinDisabledRef : Ref Bool,
     }
 
 -- INITIAL construction only (NOT a per-module reset): each field reproduces its former
@@ -6591,6 +6592,7 @@ freshDriverState _ = DriverState {
   sigNameSetRef = Ref omEmpty,
   sigTyMapRef = Ref omEmpty,
   implInferEnabled = Ref False,
+  localPinDisabledRef = Ref False,
 }
 
 -- The single module-level cell holding the residual driver/module/group survivors.
@@ -17028,20 +17030,21 @@ schemeMono (Forall _ _ t) = t
 -- method-usage mono, so it still generalizes; only dispatch-constrained vars (which
 -- compiler cannot dict-pass per-where-helper anyway) are pinned, matching their
 -- single enclosing-typed use.
-methodConstrainedIds : Unit -> List Int
-methodConstrainedIds _ = flatMap
-  (s => monoUnboundIds (argStampMono s))
-  perRun.value.pendingArgStamps.value
-
-argStampMono : PendingEntry -> Mono
-argStampMono (PendingEntry _ _ am _ _ _) = am
-
--- #866: the same ids methodConstrainedIds yields, paired with the INTERFACE of the
--- method that discriminates on them, so a binding pinned by the METHOD channel gets the
--- same explanatory diagnostic as one pinned by the dict channel.  NOTE-ONLY — the pin
--- set itself still comes from methodConstrainedIds, so an entry whose method has no
--- registered interface silently contributes no note (and falls back to the plain
--- mismatch) rather than dropping out of the pin and changing what typechecks.
+--
+-- #866 pairs each such id with the INTERFACE of the method that discriminates on it, so
+-- a binding pinned by the METHOD channel gets the same explanatory diagnostic as one
+-- pinned by the dict channel.  The interface is NOTE-ONLY: an entry whose method has no
+-- registered interface contributes `""` (see argStampPairs) and so silently contributes
+-- no note, falling back to the plain mismatch, rather than dropping out of the pin and
+-- changing what typechecks.
+--
+-- #2445 S-1: this used to have an id-only twin, `methodConstrainedIds`, which
+-- `localPinIds` called directly.  `localPinIds` is now `map fst` of `localPinPairs` — the
+-- equality both functions' comments already asserted, made structural so the unpin hatch
+-- has ONE read site — which left the twin (and its `argStampMono` accessor) with no
+-- caller, so they are gone.  Nothing about the CHANNEL changed: this is the same
+-- `flatMap` over the same `pendingArgStamps`, in the same order, and `map fst` of it is
+-- byte-for-byte what the twin returned.
 methodConstrainedPairs : Unit -> List (Int, String)
 methodConstrainedPairs _ =
   flatMap argStampPairs perRun.value.pendingArgStamps.value
@@ -17055,7 +17058,7 @@ argStampPairs (PendingEntry name _ am _ _ _) =
   map (id => (id, optionOr "" (ifaceOfMethodName name))) (monoUnboundIds am)
 
 -- #2026: the ENTRY-POINT-NEUTRAL half of the method pin channel, and the reason this
--- file now has one.  `methodConstrainedIds`/`-Pairs` above read `pendingArgStamps`,
+-- file now has one.  `methodConstrainedPairs` above reads `pendingArgStamps`,
 -- which `inferMethodAt` fills — and `EMethodAt` nodes are minted only by the MARK pass
 -- reached from `elaborateModules`, i.e. only on the run/build path.  `check` routes the
 -- SAME occurrences through `inferVarPlainId`, so that channel is EMPTY there and
@@ -17072,15 +17075,15 @@ argStampPairs (PendingEntry name _ am _ _ _) =
 -- from it without the mark pass: take the method's dispatch-argument index exactly as
 -- `argDispatchOfMethod` does (`firstDispatchIdx (dispatchTyparams typarams)` over
 -- `methodArgs`), then `nthArgMono` that index out of the occurrence mono — which is
--- `argStampMono`'s definition, term for term.
+-- the `am` field `argStampPairs` destructures, term for term.
 --
--- UNIONED with, not substituted for, `methodConstrainedIds`: a few emit-path arg stamps
+-- UNIONED with, not substituted for, `methodConstrainedPairs`: a few emit-path arg stamps
 -- have no obligation behind them (a standalone shadow short-circuits
 -- `recordImplObligation`; `inferDefinerShadowApp` stamps directly), so replacing would
 -- silently narrow the emit-path pin.  Duplicated ids are free — `recordPinnedLocals`
 -- dedups by tyvar id.
 --
--- Read UNWINDOWED, like `methodConstrainedIds` and for the same reason: a helper's pin
+-- Read UNWINDOWED, like `methodConstrainedPairs` and for the same reason: a helper's pin
 -- must see dispatch sites anywhere in the module, not only inside its own group's
 -- inference.  Hence `wAll` (no per-binding copy of the channel).
 methodOccArgPairs : Unit -> List (Int, String)
@@ -17106,13 +17109,13 @@ methodOccArgIdPairsAt iface typarams mty occ = match firstDispatchIdx (dispatchT
     None => []
     Some am => map (id => (id, iface)) (monoUnboundIds am)
 
--- #866 — a SIBLING of methodConstrainedIds above, NOT the same pin.  Both decline a
+-- #866 — a SIBLING of methodConstrainedPairs above, NOT the same pin.  Both decline a
 -- local generalization for the same underlying reason, and since #1986 rung 1 the sets
 -- are unioned by [localPinPairs] for ALL FIVE local-generalization sites (before that,
 -- only processLetGroup unioned them).  They are still not the same shape and should not
 -- be read as such:
 --
---   methodConstrainedIds   ONE channel (pendingArgStamps), read UNWINDOWED — the whole
+--   methodConstrainedPairs ONE channel (pendingArgStamps), read UNWINDOWED — the whole
 --                          module's arg-position METHOD dispatch sites.
 --   dictForwardedIds       TWO channels (dictApps + the call-obligation window), each
 --                          WINDOWED to this binding's own inference.  Two because the
@@ -17197,12 +17200,13 @@ monoIdsWithIface (m, iface) = map (id => (id, iface)) (monoUnboundIds m)
 -- dedups by tyvar id.
 --
 -- [localPinIds] and [localPinPairs] are the SAME SET viewed two ways, not two
--- predicates: methodConstrainedPairs yields exactly methodConstrainedIds' ids (both are
--- `monoUnboundIds (argStampMono e)` over the same pendingArgStamps, in the same order,
--- one merely paired with the discriminating interface), and the other two channels are
--- id-projected from the very same calls.  So `localPinIds == map fst localPinPairs` as
--- a list, and the pin decision and the explanatory note cannot disagree about a
--- binding.  At the group site this is a re-view of the set that was already computed
+-- predicates — and since #2445 S-1 that is STRUCTURAL rather than asserted:
+-- [localPinIds] is literally `map fst` of [localPinPairs].  It used to be a parallel
+-- spelling over an id-only twin of each channel, and the claim that the two agreed was
+-- prose (true, but prose).  Making it structural is what lets the unpin hatch have ONE
+-- read site, and it means the pin decision and the explanatory note cannot disagree
+-- about a binding even in principle.  At the group site this is a re-view of the set
+-- that was already computed
 -- there, not a widening of it; the widening is at the four genRestricted sites, which
 -- previously saw the dict channel alone.
 --
@@ -17210,15 +17214,47 @@ monoIdsWithIface (m, iface) = map (id => (id, iface)) (monoUnboundIds m)
 -- entry-point-neutral and is required (a helper's pin must see dispatch sites anywhere
 -- in the module).  At the group site that cost is paid once per GROUP; at the four
 -- genRestricted sites it is once per BINDING.  See the report Notes for #1986 rung 1.
+-- #2445 S-1 — THE TEST-ONLY UNPIN HATCH, and the slice's ONE hatch-read site.
+--
+-- ARMED only by `setLocalPinDisabled True`, which only `medaka_cli`'s `main` calls, and
+-- only when `MEDAKA_ARGTAG_UNPIN` is set to a NON-EMPTY value.  Armed, every channel is
+-- dropped and NO local binding is pinned, so the four `genRestricted` sites and the
+-- group site all generalize exactly as they would if the pin did not exist.  That makes
+-- the region `T-LOCAL-CONSTRAINED-MONO` currently masks (`docs/KNOWN-GAPS.md`, "Known
+-- over-reject") reachable for enumeration by
+-- `test/diff_compiler_argtag_matrix.sh` — previously reachable only by cherry-picking
+-- the reverted `5cb748c7`.
+--
+-- ⚠️ NOT A SUPPORTED FLAG.  Armed, the compiler knowingly accepts programs the emitter
+-- cannot dispatch (see the census: whole classes are UNDECIDABLE BY CONSTRUCTION on the
+-- arg-tag route, and answer WRONGLY rather than loudly).  It exists to make that region
+-- observable and graded, never to be set by a user.
+--
+-- ⚠️ EMPTY IS OFF, deliberately, exactly as `support/timer`'s `perfWasmEnabled` argues:
+-- `getEnv` is C `getenv`, so `MEDAKA_ARGTAG_UNPIN=` reads `Some ""` and an "any value"
+-- rule would ARM the hatch on the natural `MEDAKA_ARGTAG_UNPIN="$flag"` spelling with an
+-- unset flag.  An off-switch that fails OPEN — here, into silently accepting unsound
+-- programs — is not an off-switch.  The env read itself lives in the driver (`<IO>`);
+-- this side is a plain `Ref Bool`, default False, so an entry point that never calls the
+-- setter behaves exactly as it did before this slice.
+--
+-- [localPinIds] is now literally `map fst` of [localPinPairs], which the block comment
+-- above already asserted it was equal to.  That is a mechanical re-spelling, not a
+-- widening — the deleted id-only twin was `flatMap (monoUnboundIds . the entry's `am`)
+-- over the SAME `pendingArgStamps` in the SAME order that `methodConstrainedPairs`
+-- walks, and `argStampPairs` pairs exactly `monoUnboundIds am` with an interface name,
+-- so `map fst` of the pairs is byte-for-byte what the twin returned; the other two
+-- channels were already `map fst` of theirs.  Doing it this way is what keeps the hatch
+-- to ONE read site instead of two that could drift apart.
 localPinIds : Int -> Int -> List Int
-localPinIds callN0 dictN0 = methodConstrainedIds ()
-  ++ map fst (methodOccArgPairs ())
-  ++ map fst (dictForwardedPairs callN0 dictN0)
+localPinIds callN0 dictN0 = map fst (localPinPairs callN0 dictN0)
 
 localPinPairs : Int -> Int -> List (Int, String)
-localPinPairs callN0 dictN0 = methodConstrainedPairs ()
-  ++ methodOccArgPairs ()
-  ++ dictForwardedPairs callN0 dictN0
+localPinPairs callN0 dictN0
+  | driverState.value.localPinDisabledRef.value = []
+  | otherwise = methodConstrainedPairs ()
+    ++ methodOccArgPairs ()
+    ++ dictForwardedPairs callN0 dictN0
 
 -- #866: the pin decision AND the note pinnedLocalExplain needs, in one pass, so the
 -- two can never disagree about whether a binding was pinned.  [name]/[loc]
@@ -22302,6 +22338,17 @@ setStdlibOwnership : Bool -> List String -> Unit
 setStdlibOwnership flatEntry mods =
   driverState.value.flatEntryIsStdlibRef := flatEntry
   driverState.value.stdlibOwnedModsRef := mods
+
+-- #2445 S-1: arm/disarm the TEST-ONLY unpin hatch.  The whole argument for it, and the
+-- reason empty must read as OFF, is on [localPinPairs] — the one site that reads this.
+-- The env read cannot live there because `getEnv` performs `<Env …>` and every
+-- generalization site on the path to it is pure, so the driver reads the variable and
+-- this hands the answer across the effect boundary, the same shape `setStdlibOwnership`
+-- above uses for its own driver-supplied fact.  Default False, so any entry point that
+-- never calls this — every `compiler/entries/*` probe included — keeps the pin.
+export
+setLocalPinDisabled : Bool -> Unit
+setLocalPinDisabled off = driverState.value.localPinDisabledRef := off
 
 -- ── instance-`requires` impl-dict routing (Phase 83/84 single-level) ────────
 -- One parametric impl that carries a `requires`: its head tag (the tycon eval
@@ -38916,9 +38963,9 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "ceFunctorEnv" () (EApp (EVar "buildClassEnv") (EListLit (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 0))) (ELit (LString "fmod"))) (EListLit (EVar "ceFunctorIface"))))))
 (DTypeSig false "ceFunctorKey" (TyCon "RegKey"))
 (DFunDef false "ceFunctorKey" () (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EApp (EVar "OriginModule") (ELit (LString "fmod")))) (ELit (LString "Functor")))))
-(DData Private "DriverState" () ((variant "DriverState" (ConNamed (field "effectDomains" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))))) (field "graphMethodExportsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident")))))) (field "graphIfaceMethodsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))) (field "graphCtorExportsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")))))) (field "declEnvsRef" (TyApp (TyCon "Ref") (TyCon "DeclEnvs"))) (field "abstractRecordTypesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "argDispatchIdxByIdRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "IfaceRef") (TyCon "String")) (TyCon "Int"))))) (field "dictEligibleRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "dictEligibleSetRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "mangledShadowMapRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (field "mangledFunDefsPresentRef" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "userIfaceNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "coherenceUserDecls" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Decl")))) (field "stdlibOwnedModsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "flatEntryIsStdlibRef" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "builtinExternNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))))) (field "superDeclsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Decl")))) (field "standaloneValuesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "methodDispatchIdxByIdRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "IfaceRef") (TyCon "String")) (TyCon "Int"))))) (field "matchOracle" (TyApp (TyCon "Ref") (TyCon "Oracle"))) (field "matchWarnings" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "TcDiag")))) (field "promotionHarvestRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "mainSchemeRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Scheme")))) (field "sigNameSetRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "sigTyMapRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Ty")))) (field "implInferEnabled" (TyApp (TyCon "Ref") (TyCon "Bool")))))) ())
+(DData Private "DriverState" () ((variant "DriverState" (ConNamed (field "effectDomains" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))))) (field "graphMethodExportsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident")))))) (field "graphIfaceMethodsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))) (field "graphCtorExportsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")))))) (field "declEnvsRef" (TyApp (TyCon "Ref") (TyCon "DeclEnvs"))) (field "abstractRecordTypesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "argDispatchIdxByIdRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "IfaceRef") (TyCon "String")) (TyCon "Int"))))) (field "dictEligibleRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "dictEligibleSetRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "mangledShadowMapRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (field "mangledFunDefsPresentRef" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "userIfaceNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "coherenceUserDecls" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Decl")))) (field "stdlibOwnedModsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "flatEntryIsStdlibRef" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "builtinExternNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))))) (field "superDeclsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Decl")))) (field "standaloneValuesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "methodDispatchIdxByIdRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "IfaceRef") (TyCon "String")) (TyCon "Int"))))) (field "matchOracle" (TyApp (TyCon "Ref") (TyCon "Oracle"))) (field "matchWarnings" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "TcDiag")))) (field "promotionHarvestRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "mainSchemeRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Scheme")))) (field "sigNameSetRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "sigTyMapRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Ty")))) (field "implInferEnabled" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "localPinDisabledRef" (TyApp (TyCon "Ref") (TyCon "Bool")))))) ())
 (DTypeSig false "freshDriverState" (TyFun (TyCon "Unit") (TyCon "DriverState")))
-(DFunDef false "freshDriverState" (PWild) (ERecordCreate "DriverState" ((fa "effectDomains" (EApp (EVar "Ref") (EListLit))) (fa "graphMethodExportsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "graphIfaceMethodsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "graphCtorExportsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "declEnvsRef" (EApp (EVar "Ref") (EVar "emptyDeclEnvs"))) (fa "abstractRecordTypesRef" (EApp (EVar "Ref") (EListLit))) (fa "argDispatchIdxByIdRef" (EApp (EVar "Ref") (EListLit))) (fa "dictEligibleRef" (EApp (EVar "Ref") (EListLit))) (fa "dictEligibleSetRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "mangledShadowMapRef" (EApp (EVar "Ref") (EListLit))) (fa "mangledFunDefsPresentRef" (EApp (EVar "Ref") (EVar "False"))) (fa "userIfaceNamesRef" (EApp (EVar "Ref") (EListLit))) (fa "coherenceUserDecls" (EApp (EVar "Ref") (EListLit))) (fa "stdlibOwnedModsRef" (EApp (EVar "Ref") (EListLit))) (fa "flatEntryIsStdlibRef" (EApp (EVar "Ref") (EVar "False"))) (fa "builtinExternNamesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "superDeclsRef" (EApp (EVar "Ref") (EListLit))) (fa "standaloneValuesRef" (EApp (EVar "Ref") (EListLit))) (fa "methodDispatchIdxByIdRef" (EApp (EVar "Ref") (EListLit))) (fa "matchOracle" (EApp (EVar "Ref") (EApp (EVar "buildOracle") (EListLit)))) (fa "matchWarnings" (EApp (EVar "Ref") (EListLit))) (fa "promotionHarvestRef" (EApp (EVar "Ref") (EListLit))) (fa "mainSchemeRef" (EApp (EVar "Ref") (EVar "None"))) (fa "sigNameSetRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "sigTyMapRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "implInferEnabled" (EApp (EVar "Ref") (EVar "False"))))))
+(DFunDef false "freshDriverState" (PWild) (ERecordCreate "DriverState" ((fa "effectDomains" (EApp (EVar "Ref") (EListLit))) (fa "graphMethodExportsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "graphIfaceMethodsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "graphCtorExportsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "declEnvsRef" (EApp (EVar "Ref") (EVar "emptyDeclEnvs"))) (fa "abstractRecordTypesRef" (EApp (EVar "Ref") (EListLit))) (fa "argDispatchIdxByIdRef" (EApp (EVar "Ref") (EListLit))) (fa "dictEligibleRef" (EApp (EVar "Ref") (EListLit))) (fa "dictEligibleSetRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "mangledShadowMapRef" (EApp (EVar "Ref") (EListLit))) (fa "mangledFunDefsPresentRef" (EApp (EVar "Ref") (EVar "False"))) (fa "userIfaceNamesRef" (EApp (EVar "Ref") (EListLit))) (fa "coherenceUserDecls" (EApp (EVar "Ref") (EListLit))) (fa "stdlibOwnedModsRef" (EApp (EVar "Ref") (EListLit))) (fa "flatEntryIsStdlibRef" (EApp (EVar "Ref") (EVar "False"))) (fa "builtinExternNamesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "superDeclsRef" (EApp (EVar "Ref") (EListLit))) (fa "standaloneValuesRef" (EApp (EVar "Ref") (EListLit))) (fa "methodDispatchIdxByIdRef" (EApp (EVar "Ref") (EListLit))) (fa "matchOracle" (EApp (EVar "Ref") (EApp (EVar "buildOracle") (EListLit)))) (fa "matchWarnings" (EApp (EVar "Ref") (EListLit))) (fa "promotionHarvestRef" (EApp (EVar "Ref") (EListLit))) (fa "mainSchemeRef" (EApp (EVar "Ref") (EVar "None"))) (fa "sigNameSetRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "sigTyMapRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "implInferEnabled" (EApp (EVar "Ref") (EVar "False"))) (fa "localPinDisabledRef" (EApp (EVar "Ref") (EVar "False"))))))
 (DTypeSig false "driverState" (TyApp (TyCon "Ref") (TyCon "DriverState")))
 (DFunDef false "driverState" () (EApp (EVar "Ref") (EApp (EVar "freshDriverState") (ELit LUnit))))
 (DTypeSig false "pushPendingObl" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyFun (TyCon "Mono") (TyFun (TyCon "Provenance") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit"))))))))
@@ -40806,10 +40853,6 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "inferLetBinds" ((PVar "env") (PCons (PTuple (PCon "LetBind" PWild (PVar "clauses")) (PTuple PWild (PVar "sch"))) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "unify") (EApp (EVar "schemeMono") (EVar "sch"))) (EApp (EApp (EVar "inferClauses") (EVar "env")) (EApp (EApp (EVar "map") (EVar "funClausePair")) (EVar "clauses"))))) (DoExpr (EApp (EApp (EVar "inferLetBinds") (EVar "env")) (EVar "rest")))))
 (DTypeSig false "schemeMono" (TyFun (TyCon "Scheme") (TyCon "Mono")))
 (DFunDef false "schemeMono" ((PCon "Forall" PWild PWild (PVar "t"))) (EVar "t"))
-(DTypeSig false "methodConstrainedIds" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "Int"))))
-(DFunDef false "methodConstrainedIds" (PWild) (EApp (EApp (EVar "flatMap") (ELam ((PVar "s")) (EApp (EVar "monoUnboundIds") (EApp (EVar "argStampMono") (EVar "s"))))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingArgStamps") "value")))
-(DTypeSig false "argStampMono" (TyFun (TyCon "PendingEntry") (TyCon "Mono")))
-(DFunDef false "argStampMono" ((PCon "PendingEntry" PWild PWild (PVar "am") PWild PWild PWild)) (EVar "am"))
 (DTypeSig false "methodConstrainedPairs" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
 (DFunDef false "methodConstrainedPairs" (PWild) (EApp (EApp (EVar "flatMap") (EVar "argStampPairs")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingArgStamps") "value")))
 (DTypeSig false "argStampPairs" (TyFun (TyCon "PendingEntry") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
@@ -40829,9 +40872,9 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "monoIdsWithIface" (TyFun (TyTuple (TyCon "Mono") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
 (DFunDef false "monoIdsWithIface" ((PTuple (PVar "m") (PVar "iface"))) (EApp (EApp (EVar "map") (ELam ((PVar "id")) (ETuple (EVar "id") (EVar "iface")))) (EApp (EVar "monoUnboundIds") (EVar "m"))))
 (DTypeSig false "localPinIds" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int")))))
-(DFunDef false "localPinIds" ((PVar "callN0") (PVar "dictN0")) (EBinOp "++" (EBinOp "++" (EApp (EVar "methodConstrainedIds") (ELit LUnit)) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "methodOccArgPairs") (ELit LUnit)))) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EVar "dictForwardedPairs") (EVar "callN0")) (EVar "dictN0")))))
+(DFunDef false "localPinIds" ((PVar "callN0") (PVar "dictN0")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EVar "localPinPairs") (EVar "callN0")) (EVar "dictN0"))))
 (DTypeSig false "localPinPairs" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))))))
-(DFunDef false "localPinPairs" ((PVar "callN0") (PVar "dictN0")) (EBinOp "++" (EBinOp "++" (EApp (EVar "methodConstrainedPairs") (ELit LUnit)) (EApp (EVar "methodOccArgPairs") (ELit LUnit))) (EApp (EApp (EVar "dictForwardedPairs") (EVar "callN0")) (EVar "dictN0"))))
+(DFunDef false "localPinPairs" ((PVar "callN0") (PVar "dictN0")) (EIf (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "localPinDisabledRef") "value") (EListLit) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (EApp (EVar "methodConstrainedPairs") (ELit LUnit)) (EApp (EVar "methodOccArgPairs") (ELit LUnit))) (EApp (EApp (EVar "dictForwardedPairs") (EVar "callN0")) (EVar "dictN0"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "pinLocalIfDictForwarded" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Mono") (TyCon "Bool")))))))
 (DFunDef false "pinLocalIfDictForwarded" ((PVar "callN0") (PVar "dictN0") (PVar "name") (PVar "loc") (PVar "t")) (EApp (EApp (EApp (EApp (EApp (EVar "recordPinnedLocals") (EVar "name")) (EVar "loc")) (EApp (EApp (EVar "freeGenVars") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentLevel") "value")) (EVar "t"))) (EApp (EApp (EVar "localPinPairs") (EVar "callN0")) (EVar "dictN0"))) (EVar "t")))
 (DTypeSig false "recordPinnedLocals" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))) (TyFun (TyCon "Mono") (TyCon "Bool")))))))
@@ -41714,6 +41757,8 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "setCoherenceUserDecls" ((PVar "ds")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "coherenceUserDecls")) (EVar "ds")))
 (DTypeSig true "setStdlibOwnership" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit"))))
 (DFunDef false "setStdlibOwnership" ((PVar "flatEntry") (PVar "mods")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "flatEntryIsStdlibRef")) (EVar "flatEntry"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "stdlibOwnedModsRef")) (EVar "mods")))))
+(DTypeSig true "setLocalPinDisabled" (TyFun (TyCon "Bool") (TyCon "Unit")))
+(DFunDef false "setLocalPinDisabled" ((PVar "off")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "localPinDisabledRef")) (EVar "off")))
 (DData Public "ImplEntry" () ((variant "ImplEntry" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyCon "Require")) (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "String")))) ())
 (DTypeAlias true "ImplBuckets" () (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "ImplEntry"))))
 (DTypeSig false "bucketOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyVar "a"))) (TyApp (TyCon "List") (TyVar "a")))))
@@ -44964,9 +45009,9 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "ceFunctorEnv" () (EApp (EVar "buildClassEnv") (EListLit (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 0))) (ELit (LString "fmod"))) (EListLit (EVar "ceFunctorIface"))))))
 (DTypeSig false "ceFunctorKey" (TyCon "RegKey"))
 (DFunDef false "ceFunctorKey" () (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EApp (EVar "OriginModule") (ELit (LString "fmod")))) (ELit (LString "Functor")))))
-(DData Private "DriverState" () ((variant "DriverState" (ConNamed (field "effectDomains" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))))) (field "graphMethodExportsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident")))))) (field "graphIfaceMethodsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))) (field "graphCtorExportsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")))))) (field "declEnvsRef" (TyApp (TyCon "Ref") (TyCon "DeclEnvs"))) (field "abstractRecordTypesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "argDispatchIdxByIdRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "IfaceRef") (TyCon "String")) (TyCon "Int"))))) (field "dictEligibleRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "dictEligibleSetRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "mangledShadowMapRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (field "mangledFunDefsPresentRef" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "userIfaceNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "coherenceUserDecls" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Decl")))) (field "stdlibOwnedModsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "flatEntryIsStdlibRef" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "builtinExternNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))))) (field "superDeclsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Decl")))) (field "standaloneValuesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "methodDispatchIdxByIdRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "IfaceRef") (TyCon "String")) (TyCon "Int"))))) (field "matchOracle" (TyApp (TyCon "Ref") (TyCon "Oracle"))) (field "matchWarnings" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "TcDiag")))) (field "promotionHarvestRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "mainSchemeRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Scheme")))) (field "sigNameSetRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "sigTyMapRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Ty")))) (field "implInferEnabled" (TyApp (TyCon "Ref") (TyCon "Bool")))))) ())
+(DData Private "DriverState" () ((variant "DriverState" (ConNamed (field "effectDomains" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))))) (field "graphMethodExportsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident")))))) (field "graphIfaceMethodsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))) (field "graphCtorExportsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")))))) (field "declEnvsRef" (TyApp (TyCon "Ref") (TyCon "DeclEnvs"))) (field "abstractRecordTypesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "argDispatchIdxByIdRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "IfaceRef") (TyCon "String")) (TyCon "Int"))))) (field "dictEligibleRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "dictEligibleSetRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "mangledShadowMapRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (field "mangledFunDefsPresentRef" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "userIfaceNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "coherenceUserDecls" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Decl")))) (field "stdlibOwnedModsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "flatEntryIsStdlibRef" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "builtinExternNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))))) (field "superDeclsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Decl")))) (field "standaloneValuesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "methodDispatchIdxByIdRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "IfaceRef") (TyCon "String")) (TyCon "Int"))))) (field "matchOracle" (TyApp (TyCon "Ref") (TyCon "Oracle"))) (field "matchWarnings" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "TcDiag")))) (field "promotionHarvestRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "mainSchemeRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Scheme")))) (field "sigNameSetRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "sigTyMapRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Ty")))) (field "implInferEnabled" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "localPinDisabledRef" (TyApp (TyCon "Ref") (TyCon "Bool")))))) ())
 (DTypeSig false "freshDriverState" (TyFun (TyCon "Unit") (TyCon "DriverState")))
-(DFunDef false "freshDriverState" (PWild) (ERecordCreate "DriverState" ((fa "effectDomains" (EApp (EVar "Ref") (EListLit))) (fa "graphMethodExportsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "graphIfaceMethodsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "graphCtorExportsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "declEnvsRef" (EApp (EVar "Ref") (EVar "emptyDeclEnvs"))) (fa "abstractRecordTypesRef" (EApp (EVar "Ref") (EListLit))) (fa "argDispatchIdxByIdRef" (EApp (EVar "Ref") (EListLit))) (fa "dictEligibleRef" (EApp (EVar "Ref") (EListLit))) (fa "dictEligibleSetRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "mangledShadowMapRef" (EApp (EVar "Ref") (EListLit))) (fa "mangledFunDefsPresentRef" (EApp (EVar "Ref") (EVar "False"))) (fa "userIfaceNamesRef" (EApp (EVar "Ref") (EListLit))) (fa "coherenceUserDecls" (EApp (EVar "Ref") (EListLit))) (fa "stdlibOwnedModsRef" (EApp (EVar "Ref") (EListLit))) (fa "flatEntryIsStdlibRef" (EApp (EVar "Ref") (EVar "False"))) (fa "builtinExternNamesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "superDeclsRef" (EApp (EVar "Ref") (EListLit))) (fa "standaloneValuesRef" (EApp (EVar "Ref") (EListLit))) (fa "methodDispatchIdxByIdRef" (EApp (EVar "Ref") (EListLit))) (fa "matchOracle" (EApp (EVar "Ref") (EApp (EVar "buildOracle") (EListLit)))) (fa "matchWarnings" (EApp (EVar "Ref") (EListLit))) (fa "promotionHarvestRef" (EApp (EVar "Ref") (EListLit))) (fa "mainSchemeRef" (EApp (EVar "Ref") (EVar "None"))) (fa "sigNameSetRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "sigTyMapRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "implInferEnabled" (EApp (EVar "Ref") (EVar "False"))))))
+(DFunDef false "freshDriverState" (PWild) (ERecordCreate "DriverState" ((fa "effectDomains" (EApp (EVar "Ref") (EListLit))) (fa "graphMethodExportsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "graphIfaceMethodsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "graphCtorExportsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "declEnvsRef" (EApp (EVar "Ref") (EVar "emptyDeclEnvs"))) (fa "abstractRecordTypesRef" (EApp (EVar "Ref") (EListLit))) (fa "argDispatchIdxByIdRef" (EApp (EVar "Ref") (EListLit))) (fa "dictEligibleRef" (EApp (EVar "Ref") (EListLit))) (fa "dictEligibleSetRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "mangledShadowMapRef" (EApp (EVar "Ref") (EListLit))) (fa "mangledFunDefsPresentRef" (EApp (EVar "Ref") (EVar "False"))) (fa "userIfaceNamesRef" (EApp (EVar "Ref") (EListLit))) (fa "coherenceUserDecls" (EApp (EVar "Ref") (EListLit))) (fa "stdlibOwnedModsRef" (EApp (EVar "Ref") (EListLit))) (fa "flatEntryIsStdlibRef" (EApp (EVar "Ref") (EVar "False"))) (fa "builtinExternNamesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "superDeclsRef" (EApp (EVar "Ref") (EListLit))) (fa "standaloneValuesRef" (EApp (EVar "Ref") (EListLit))) (fa "methodDispatchIdxByIdRef" (EApp (EVar "Ref") (EListLit))) (fa "matchOracle" (EApp (EVar "Ref") (EApp (EVar "buildOracle") (EListLit)))) (fa "matchWarnings" (EApp (EVar "Ref") (EListLit))) (fa "promotionHarvestRef" (EApp (EVar "Ref") (EListLit))) (fa "mainSchemeRef" (EApp (EVar "Ref") (EVar "None"))) (fa "sigNameSetRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "sigTyMapRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "implInferEnabled" (EApp (EVar "Ref") (EVar "False"))) (fa "localPinDisabledRef" (EApp (EVar "Ref") (EVar "False"))))))
 (DTypeSig false "driverState" (TyApp (TyCon "Ref") (TyCon "DriverState")))
 (DFunDef false "driverState" () (EApp (EVar "Ref") (EApp (EVar "freshDriverState") (ELit LUnit))))
 (DTypeSig false "pushPendingObl" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyFun (TyCon "Mono") (TyFun (TyCon "Provenance") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit"))))))))
@@ -46854,10 +46899,6 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "inferLetBinds" ((PVar "env") (PCons (PTuple (PCon "LetBind" PWild (PVar "clauses")) (PTuple PWild (PVar "sch"))) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "unify") (EApp (EVar "schemeMono") (EVar "sch"))) (EApp (EApp (EVar "inferClauses") (EVar "env")) (EApp (EApp (EMethodRef "map") (EVar "funClausePair")) (EVar "clauses"))))) (DoExpr (EApp (EApp (EVar "inferLetBinds") (EVar "env")) (EVar "rest")))))
 (DTypeSig false "schemeMono" (TyFun (TyCon "Scheme") (TyCon "Mono")))
 (DFunDef false "schemeMono" ((PCon "Forall" PWild PWild (PVar "t"))) (EVar "t"))
-(DTypeSig false "methodConstrainedIds" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "Int"))))
-(DFunDef false "methodConstrainedIds" (PWild) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "s")) (EApp (EVar "monoUnboundIds") (EApp (EVar "argStampMono") (EVar "s"))))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingArgStamps") "value")))
-(DTypeSig false "argStampMono" (TyFun (TyCon "PendingEntry") (TyCon "Mono")))
-(DFunDef false "argStampMono" ((PCon "PendingEntry" PWild PWild (PVar "am") PWild PWild PWild)) (EVar "am"))
 (DTypeSig false "methodConstrainedPairs" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
 (DFunDef false "methodConstrainedPairs" (PWild) (EApp (EApp (EDictApp "flatMap") (EVar "argStampPairs")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingArgStamps") "value")))
 (DTypeSig false "argStampPairs" (TyFun (TyCon "PendingEntry") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
@@ -46877,9 +46918,9 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "monoIdsWithIface" (TyFun (TyTuple (TyCon "Mono") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
 (DFunDef false "monoIdsWithIface" ((PTuple (PVar "m") (PVar "iface"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "id")) (ETuple (EVar "id") (EVar "iface")))) (EApp (EVar "monoUnboundIds") (EVar "m"))))
 (DTypeSig false "localPinIds" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int")))))
-(DFunDef false "localPinIds" ((PVar "callN0") (PVar "dictN0")) (EBinOp "++" (EBinOp "++" (EApp (EVar "methodConstrainedIds") (ELit LUnit)) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "methodOccArgPairs") (ELit LUnit)))) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EApp (EVar "dictForwardedPairs") (EVar "callN0")) (EVar "dictN0")))))
+(DFunDef false "localPinIds" ((PVar "callN0") (PVar "dictN0")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EApp (EVar "localPinPairs") (EVar "callN0")) (EVar "dictN0"))))
 (DTypeSig false "localPinPairs" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))))))
-(DFunDef false "localPinPairs" ((PVar "callN0") (PVar "dictN0")) (EBinOp "++" (EBinOp "++" (EApp (EVar "methodConstrainedPairs") (ELit LUnit)) (EApp (EVar "methodOccArgPairs") (ELit LUnit))) (EApp (EApp (EVar "dictForwardedPairs") (EVar "callN0")) (EVar "dictN0"))))
+(DFunDef false "localPinPairs" ((PVar "callN0") (PVar "dictN0")) (EIf (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "localPinDisabledRef") "value") (EListLit) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (EApp (EVar "methodConstrainedPairs") (ELit LUnit)) (EApp (EVar "methodOccArgPairs") (ELit LUnit))) (EApp (EApp (EVar "dictForwardedPairs") (EVar "callN0")) (EVar "dictN0"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "pinLocalIfDictForwarded" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Mono") (TyCon "Bool")))))))
 (DFunDef false "pinLocalIfDictForwarded" ((PVar "callN0") (PVar "dictN0") (PVar "name") (PVar "loc") (PVar "t")) (EApp (EApp (EApp (EApp (EApp (EVar "recordPinnedLocals") (EVar "name")) (EVar "loc")) (EApp (EApp (EVar "freeGenVars") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentLevel") "value")) (EVar "t"))) (EApp (EApp (EVar "localPinPairs") (EVar "callN0")) (EVar "dictN0"))) (EVar "t")))
 (DTypeSig false "recordPinnedLocals" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))) (TyFun (TyCon "Mono") (TyCon "Bool")))))))
@@ -47762,6 +47803,8 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "setCoherenceUserDecls" ((PVar "ds")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "coherenceUserDecls")) (EVar "ds")))
 (DTypeSig true "setStdlibOwnership" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit"))))
 (DFunDef false "setStdlibOwnership" ((PVar "flatEntry") (PVar "mods")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "flatEntryIsStdlibRef")) (EVar "flatEntry"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "stdlibOwnedModsRef")) (EVar "mods")))))
+(DTypeSig true "setLocalPinDisabled" (TyFun (TyCon "Bool") (TyCon "Unit")))
+(DFunDef false "setLocalPinDisabled" ((PVar "off")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "localPinDisabledRef")) (EVar "off")))
 (DData Public "ImplEntry" () ((variant "ImplEntry" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyCon "Require")) (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "String")))) ())
 (DTypeAlias true "ImplBuckets" () (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "ImplEntry"))))
 (DTypeSig false "bucketOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyVar "a"))) (TyApp (TyCon "List") (TyVar "a")))))

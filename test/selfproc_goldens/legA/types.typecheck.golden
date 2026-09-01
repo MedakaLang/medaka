@@ -142,7 +142,6 @@ argOnlyEffVarMsg : String -> String -> String -> String
 argPerformableOccs : List (String, List Kind) -> Bool -> Ty -> List (String, List Atom)
 argPosAgreeEncl : List Mono -> List Mono -> Bool
 argReqRoute : Map String (List ImplEntry) -> String -> String -> List (String, Mono) -> List Ty -> Int -> Int -> Route
-argStampMono : PendingEntry -> Mono
 argStampPairs : PendingEntry -> List (Int, String)
 armDictSites : Arm -> List (Ref (List Route))
 armEVars : Arm -> List String
@@ -1404,7 +1403,6 @@ mergeSubstPreferConcrete : List (String, Mono) -> List (String, Mono) -> List (S
 methodArgs : Ty -> List Ty
 methodCandAdmitted : List Decl -> String -> (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Bool
 methodCandImported : List Decl -> String -> (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Bool
-methodConstrainedIds : Unit -> List Int
 methodConstrainedPairs : Unit -> List (Int, String)
 methodConstraintNameOf : List String -> IfaceMethod -> List String
 methodConstraintNames : List Decl -> List String
@@ -1930,6 +1928,7 @@ setDictEligible : List String -> Unit
 setFunConstraintEntry : String -> List CSlot -> Option (List (List Mono)) -> Unit
 setFunConstraintTables : (List (String, List Int), List (String, List IfaceRef)) -> Unit
 setLocIfSome : Option Loc -> Unit
+setLocalPinDisabled : Bool -> Unit
 setMainSchemeIfEntry : Bool -> List (String, Scheme) -> Unit
 setMethodConstraintEntry : String -> List Int -> List Int -> Unit
 setNumlitFloats : Unit -> Unit
