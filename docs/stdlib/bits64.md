@@ -41,6 +41,30 @@ data U64
 A `uint64` as four 16-bit limbs, least-significant first: the value is
 `l0 + l1*2^16 + l2*2^32 + l3*2^48`, each limb in `[0, 2^16)`.
 
+## `Eq U64`
+
+```
+impl Eq U64
+```
+
+## `Debug U64`
+
+```
+impl Debug U64
+```
+
+## `Display U64`
+
+```
+impl Display U64
+```
+
+## `Hashable U64`
+
+```
+impl Hashable U64
+```
+
 ## `zero`
 
 ```

@@ -89,7 +89,7 @@ interface; the impls below exist so generic `Eq a => ...` code works.
 ## `neq`
 
 ```
-neq : a -> a -> Bool
+neq : Eq a => a -> a -> Bool
 ```
 
 Negation of `eq`.  Standalone so impls cannot make it disagree with `eq`.
@@ -210,7 +210,7 @@ any of them for performance or to encode special semantics (e.g. NaN).
 ## `clamp`
 
 ```
-clamp : a -> a -> a -> a
+clamp : Ord a => a -> a -> a -> a
 ```
 
 `clamp lo hi x` constrains `x` into the inclusive interval `[lo, hi]`.
@@ -649,7 +649,7 @@ impl Hashable (a, b, c, d, e) requires Hashable a, Hashable b, Hashable c, Hasha
 ## `println`
 
 ```
-println : a -> <IO> Unit
+println : Display a => a -> <IO> Unit
 ```
 
 Human-facing output (Phase 111).  `println`/`print` render via `Display`
@@ -664,7 +664,7 @@ Medaka where dict-passing works (an extern can't receive a dictionary).
 ## `print`
 
 ```
-print : a -> <IO> Unit
+print : Display a => a -> <IO> Unit
 ```
 
 ## `Num`
@@ -774,7 +774,7 @@ impl Mappable (Result e)
 ## `mapConst`
 
 ```
-mapConst : a -> b c -> b a
+mapConst : Mappable f => b -> f a -> f b
 ```
 
 Replace every element of a wrapped value with a constant, keeping the
@@ -823,7 +823,7 @@ alternative — a `Validation`-style applicative — can coexist.
 ## `map2`
 
 ```
-map2 : (a -> b -> c) -> d a -> d b -> d c
+map2 : Applicative f => (a -> b -> c) -> f a -> f b -> f c
 ```
 
 Lift a binary function over two applicative values — Haskell's `liftA2`.
@@ -843,7 +843,7 @@ None
 ## `map3`
 
 ```
-map3 : (a -> b -> c -> d) -> e a -> e b -> e c -> e d
+map3 : Applicative f => (a -> b -> c -> d) -> f a -> f b -> f c -> f d
 ```
 
 Lift a ternary function over three applicative values — Haskell's `liftA3`.
@@ -872,7 +872,7 @@ Haskell's `>>=` with arguments swapped to match the readable
 ## `flatMap`
 
 ```
-flatMap : (a -> b c) -> b a -> b c
+flatMap : Thenable m => (a -> <e> m b) -> m a -> <e> m b
 ```
 
 `andThen` with arguments flipped — the Haskell/Scala `flatMap`.
@@ -880,7 +880,7 @@ flatMap : (a -> b c) -> b a -> b c
 ## `flat`
 
 ```
-flat : a (a b) -> a b
+flat : Thenable m => m (m a) -> m a
 ```
 
 Collapse one layer of nesting.  Haskell calls this `join`.
@@ -888,7 +888,7 @@ Collapse one layer of nesting.  Haskell calls this `join`.
 ## `when`
 
 ```
-when : Bool -> a Unit -> a Unit
+when : Thenable m => Bool -> m Unit -> m Unit
 ```
 
 Run an action only when the condition holds.
@@ -896,7 +896,7 @@ Run an action only when the condition holds.
 ## `unless`
 
 ```
-unless : Bool -> a Unit -> a Unit
+unless : Thenable m => Bool -> m Unit -> m Unit
 ```
 
 Run an action only when the condition is false.  Dual of `when`.
@@ -904,7 +904,7 @@ Run an action only when the condition is false.  Dual of `when`.
 ## `foldThen`
 
 ```
-foldThen : (a -> b -> c a) -> a -> List b -> c a
+foldThen : Thenable m => (b -> a -> <e> m b) -> b -> List a -> <e> m b
 ```
 
 Monadic left fold: thread an accumulator through an effectful step, in
@@ -921,7 +921,7 @@ Some 6
 ## `repeatThen`
 
 ```
-repeatThen : Int -> a b -> a (List b)
+repeatThen : Thenable m => Int -> m a -> m (List a)
 ```
 
 Run an action `n` times and collect the results in order.  `n <= 0`
@@ -938,7 +938,7 @@ Some [7, 7, 7]
 ## `filterThen`
 
 ```
-filterThen : (a -> b Bool) -> List a -> b (List a)
+filterThen : Thenable m => (a -> <e> m Bool) -> List a -> <e> m (List a)
 ```
 
 Keep the elements for which an effectful predicate returns `True`, in
@@ -955,7 +955,7 @@ Some [2, 3]
 ## `forEach`
 
 ```
-forEach : (a -> b Unit) -> List a -> b Unit
+forEach : Thenable m => (a -> <e> m Unit) -> List a -> <e> m Unit
 ```
 
 Run an effectful action for each element, in order, discarding the
@@ -978,7 +978,7 @@ Some ()
 ## `runEach`
 
 ```
-runEach : List (a b) -> a Unit
+runEach : Thenable m => List (m a) -> m Unit
 ```
 
 Run each action in a list, in order, discarding the results.  Haskell's
@@ -1049,7 +1049,7 @@ impl Alternative Option
 ## `guard`
 
 ```
-guard : Bool -> a Unit
+guard : Alternative f => Bool -> f Unit
 ```
 
 `guard True` succeeds with `pure ()`; `guard False` is the failing
@@ -1304,7 +1304,7 @@ lint-disable-next-line rule-match-on-param
 ## `any`
 
 ```
-any : (a -> Bool) -> b a -> Bool
+any : Foldable t => (a -> <e> Bool) -> t a -> <e> Bool
 ```
 
 True when at least one element satisfies the predicate.
@@ -1322,7 +1322,7 @@ False
 ## `all`
 
 ```
-all : (a -> Bool) -> b a -> Bool
+all : Foldable t => (a -> <e> Bool) -> t a -> <e> Bool
 ```
 
 True when every element satisfies the predicate.  Vacuously true on
@@ -1341,7 +1341,7 @@ True
 ## `find`
 
 ```
-find : (a -> Bool) -> b a -> Option a
+find : Foldable t => (a -> <e> Bool) -> t a -> <e> Option a
 ```
 
 First element satisfying the predicate, or `None` if none do.
@@ -1351,7 +1351,7 @@ overwrite the answer.
 ## `count`
 
 ```
-count : (a -> Bool) -> b a -> Int
+count : Foldable t => (a -> <e> Bool) -> t a -> <e> Int
 ```
 
 Number of elements satisfying the predicate.
@@ -1359,7 +1359,7 @@ Number of elements satisfying the predicate.
 ## `sum`
 
 ```
-sum : a b -> b
+sum : (Foldable t, Num a) => t a -> a
 ```
 
 Sum of a numeric foldable.  Identity is `0`; in practice this only
@@ -1369,7 +1369,7 @@ dispatch through `Num.add` for user-defined numeric types.
 ## `product`
 
 ```
-product : a b -> b
+product : (Foldable t, Num a) => t a -> a
 ```
 
 Product of a numeric foldable.  Identity is `1`.  Same caveat as `sum`.
@@ -1377,7 +1377,7 @@ Product of a numeric foldable.  Identity is `1`.  Same caveat as `sum`.
 ## `elem`
 
 ```
-elem : a -> b a -> Bool
+elem : (Foldable t, Eq a) => a -> t a -> Bool
 ```
 
 True when the value appears in the container (by `Eq`).
@@ -1385,7 +1385,7 @@ True when the value appears in the container (by `Eq`).
 ## `notElem`
 
 ```
-notElem : a -> b a -> Bool
+notElem : (Foldable t, Eq a) => a -> t a -> Bool
 ```
 
 True when the value does *not* appear in the container.  `not . elem`.
@@ -1393,7 +1393,7 @@ True when the value does *not* appear in the container.  `not . elem`.
 ## `maximum`
 
 ```
-maximum : a b -> Option b
+maximum : (Foldable t, Ord a) => t a -> Option a
 ```
 
 Largest element by `Ord`, or `None` when the container is empty.  Generic
@@ -1412,7 +1412,7 @@ None
 ## `minimum`
 
 ```
-minimum : a b -> Option b
+minimum : (Foldable t, Ord a) => t a -> Option a
 ```
 
 Smallest element by `Ord`, or `None` when empty.  Generic, like `maximum`.
@@ -1503,7 +1503,7 @@ Unwrap with a default for `None`.
 ## `option`
 
 ```
-option : a -> (b -> a) -> Option b -> a
+option : b -> (a -> <e> b) -> Option a -> <e> b
 ```
 
 Eliminate an `Option` by supplying a default for `None` and a function
@@ -1525,7 +1525,7 @@ Lived in a published one-entry `option` module until the
 ## `toResult`
 
 ```
-toResult : a -> Option b -> Result a b
+toResult : e -> Option a -> Result e a
 ```
 
 Turn an `Option` into a `Result`, supplying the error for `None`.
@@ -1533,7 +1533,7 @@ Turn an `Option` into a `Result`, supplying the error for `None`.
 ## `fromResult`
 
 ```
-fromResult : Result a b -> Option b
+fromResult : Result e a -> Option a
 ```
 
 Forget the error: `Ok x → Some x`, `Err _ → None`.
@@ -1543,7 +1543,7 @@ Named to match the "from-Result" intuition; this is the inverse of
 ## `isOk`
 
 ```
-isOk : Result a b -> Bool
+isOk : Result e a -> Bool
 ```
 
 True if the result is `Ok`.
@@ -1551,7 +1551,7 @@ True if the result is `Ok`.
 ## `isErr`
 
 ```
-isErr : Result a b -> Bool
+isErr : Result e a -> Bool
 ```
 
 True if the result is `Err`.
@@ -1559,7 +1559,7 @@ True if the result is `Err`.
 ## `resultOr`
 
 ```
-resultOr : a -> Result b a -> a
+resultOr : a -> Result e a -> a
 ```
 
 Unwrap with a default for `Err`.  Named distinctly from
@@ -1568,7 +1568,7 @@ Unwrap with a default for `Err`.  Named distinctly from
 ## `result`
 
 ```
-result : (a -> b) -> (c -> b) -> Result a c -> b
+result : (e -> <eff> c) -> (a -> <eff> c) -> Result e a -> <eff> c
 ```
 
 Eliminate a `Result` by supplying a handler for `Err` and a handler for
@@ -1590,7 +1590,7 @@ Lived in a published one-entry `result` module until the
 ## `mapErr`
 
 ```
-mapErr : (a -> b) -> Result a c -> Result b c
+mapErr : (e -> f) -> Result e a -> Result f a
 ```
 
 Apply a function to the `Err` side, leaving `Ok` alone.  The `Ok`
@@ -1646,7 +1646,7 @@ a callback's input (`map (const 0) xs == replicate (length xs) 0`).
 ## `flip`
 
 ```
-flip : (a -> b -> c) -> b -> a -> c
+flip : (a -> b -> <e> c) -> b -> a -> <e> c
 ```
 
 Swap the first two arguments of a binary function.
@@ -1654,7 +1654,7 @@ Swap the first two arguments of a binary function.
 ## `on`
 
 ```
-on : (a -> a -> b) -> (c -> a) -> c -> c -> b
+on : (b -> b -> <e> c) -> (a -> b) -> a -> a -> <e> c
 ```
 
 Apply a binary function `f` to two arguments after running each through a
@@ -1672,7 +1672,7 @@ Lt
 ## `curry`
 
 ```
-curry : ((a, b) -> c) -> a -> b -> c
+curry : ((a, b) -> <e> c) -> a -> b -> <e> c
 ```
 
 Turn a function on a pair into a function of two arguments.  The inverse
@@ -1689,7 +1689,7 @@ of `uncurry`.  (Medaka tuples aren't auto-curried, so this is not free.)
 ## `uncurry`
 
 ```
-uncurry : (a -> b -> c) -> (a, b) -> c
+uncurry : (a -> b -> <e> c) -> (a, b) -> <e> c
 ```
 
 Turn a two-argument function into a function on a pair.  The inverse of
@@ -1706,7 +1706,7 @@ Turn a two-argument function into a function on a pair.  The inverse of
 ## `discard`
 
 ```
-discard : a b -> a Unit
+discard : Mappable f => f a -> f Unit
 ```
 
 Run a wrapped computation for its structure/effect and discard the result,
@@ -1723,7 +1723,7 @@ Some ()
 ## `compose`
 
 ```
-compose : (a -> b) -> (c -> a) -> c -> b
+compose : (b -> <e> c) -> (a -> <e> b) -> a -> <e> c
 ```
 
 Right-to-left function composition: `(compose g f) x == g (f x)`.
@@ -1732,7 +1732,7 @@ Spelled `<<` as an operator.
 ## `pipe`
 
 ```
-pipe : (a -> b) -> (b -> c) -> a -> c
+pipe : (a -> <e> b) -> (b -> <e> c) -> a -> <e> c
 ```
 
 Left-to-right function composition: `(pipe f g) x == g (f x)`.
@@ -1741,7 +1741,7 @@ Spelled `>>` as an operator.
 ## `apply`
 
 ```
-apply : (a -> b) -> a -> b
+apply : (a -> <e> b) -> a -> <e> b
 ```
 
 Function application as a function.  Mainly useful for higher-order
@@ -1832,6 +1832,18 @@ deriving type (serialisation, hashing, pretty-printing, …).
 `RRecord` carries a record type's name and its named fields.  The
 remaining constructors are primitive leaves.
 
+## `Eq Rep`
+
+```
+impl Eq Rep
+```
+
+## `Debug Rep`
+
+```
+impl Debug Rep
+```
+
 ## `RField`
 
 ```
@@ -1840,6 +1852,18 @@ data RField
 ```
 
 A named field inside an `RRecord`.
+
+## `Eq RField`
+
+```
+impl Eq RField
+```
+
+## `Debug RField`
+
+```
+impl Debug RField
+```
 
 ## `Generic`
 

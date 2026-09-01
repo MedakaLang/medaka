@@ -159,6 +159,30 @@ playground/build_guide           renders docs/guide/*.md into playground/site-gu
                                  will consume, and asserts nothing. The ASSERTIONS about its
                                  output live in playground/guide_render_test.mjs — invocable
                                  standalone today, wired into preflight/CI by S-site-wiring.
+playground/build_stdlib_docs     renders docs/stdlib/*.md into playground/site-stdlib/ via
+                                 playground/render_docs.mjs (#2384, S-stdlib-renders). The exact
+                                 sibling of build_guide above, over the same render machine, and
+                                 the same classification: a build step that produces a staging dir
+                                 for build_site.sh and asserts nothing. The ASSERTIONS about its
+                                 output live in playground/guide_render_test.mjs, which grades the
+                                 stdlib render (index-link resolution, doctest-footer suppression,
+                                 design-doc exclusion) alongside the guide's.
+playground/verify_stdlib_deploy  checks a LIVE origin's /stdlib/ against this checkout's
+                                 docs/stdlib (#2384, S-prove-the-origin): the bare route, the
+                                 entry-link count, the published page set, every one of the
+                                 index's ~905 deep links (page status AND #anchor), the
+                                 stylesheet and the back link. NOT a gate, for two independent
+                                 reasons: it needs the NETWORK, and its subject is a DEPLOYED
+                                 origin — a thing no CI runner controls and that no commit can
+                                 make true. Run by hand immediately after
+                                 playground/deploy_cloudflare.sh, whose [WEB-PREVIEW-SILENT]
+                                 failure mode (exits 0, publishes a preview, production keeps
+                                 404ing) is exactly what it exists to catch. 🚨 It MUST stay
+                                 listed here for the same reason deploy_cloudflare below does:
+                                 `_gate_candidates()` in preflight.sh treats any unlisted
+                                 `playground/*.sh` as a gate and EXECUTES it — which here would
+                                 mean `make preflight` reaching out to medaka-lang.dev and
+                                 grading a production origin nobody asked it to grade.
 playground/deploy_cloudflare     publishes playground/site/ to Cloudflare Pages (project `medaka`,
                                  https://medaka-lang.dev). Running it proves nothing about the
                                  compiler — it is a deploy, and it needs credentials no runner has.
