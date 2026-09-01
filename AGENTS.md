@@ -653,8 +653,14 @@ Each of these was paid for in an incident — pointers, not post-mortems.
   what it says. When relocating a paragraph out of source rather than
   deleting it outright, the pointer left behind MUST name the destination as
   a **repo-relative path** (e.g. `compiler/STAGE2-DESIGN.md` §4), never a
-  bare prose description, so `make docs-links` can verify the destination
-  still exists — an unreachable relocation is a deletion with extra steps.
+  bare prose description — this is currently unverified by any gate
+  (`test/check_doc_links.sh` builds its corpus from `git ls-files '*.md'`,
+  markdown only, so a pointer left in an `.mdk` source comment is never
+  scanned; `test/check_agent_doc_symbols.sh` likewise treats `.md` files as
+  the citing corpus and `.mdk`/`.c` source only as the resolution target, not
+  as a source of citations to check) — a stale relocation pointer is caught
+  only by a human, enforced by review, not by a gate. An unreachable
+  relocation is a deletion with extra steps.
   `make comment-census` (`test/comment_register_census.sh`, #2281) derives a
   current on-demand report of these registers; it is not a gate.
 - ⚠️ **[T-SHARED-CORPUS]** A fixture directory is a SHARED CORPUS — add/move/delete enrolls you
