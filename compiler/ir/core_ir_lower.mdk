@@ -1711,7 +1711,7 @@ nativeDictTagSpace = "native (LLVM) i64 dict-witness word `hashName` -- BOTH bac
 -- the deliberate direction: a loud refusal on a rare program beats a silent wrong
 -- dispatch under `--target wasm`, and the fix (rename one type) clears both.
 wasmDictTagSpace : String
-wasmDictTagSpace = "wasm (WasmGC) 30-bit i31 dict tag `dictTag` (`hashName` masked to the low 30 bits) -- the full i64 tags are DISTINCT, so native codegen would be correct here and this refusal over-approximates; it is refused anyway because this seam serves both backends"
+wasmDictTagSpace = "wasm (WasmGC) 30-bit i31 dict tag `dictTag` (`hashName` masked to the low 30 bits) -- the full i64 tags are DISTINCT, so native codegen would be correct here; refused anyway because a wasm-target build cannot rule out this narrower width"
 
 -- every route word a dict witness for this impl can carry, paired with the impl's
 -- own identity (its canonical dispatch key, which is unique per declared impl) and

@@ -206,12 +206,12 @@ else
   "$EMITBIN" --isolation "$RUNTIME" "$ISO/hu_p.mdk" "$ISO/hu_pu.mdk" > "$ISO/hu_isolation.ll" 2> "$ISO/hu_isolation.err"
   hu_isolation_rc=$?
   if [ "$hu_isolation_rc" -ne 0 ]; then
-    printf 'FAIL: same-process EmitInput isolation control (HasUnit)\n%s\n' "$(cat "$ISO/hu_isolation.err")"
+    printf 'FAIL: same-process LowerState/memo-CAF isolation control (HasUnit)\n%s\n' "$(cat "$ISO/hu_isolation.err")"
     exit 1
   fi
   hu_isolation_verdict="$(cat "$ISO/hu_isolation.ll")"
   [ "$hu_isolation_verdict" = "LLVM_EMIT_ISOLATION_OK" ] || {
-    printf 'FAIL: same-process EmitInput isolation verdict was %s (HasUnit)\n' "$hu_isolation_verdict"
+    printf 'FAIL: same-process LowerState/memo-CAF isolation verdict was %s (HasUnit)\n' "$hu_isolation_verdict"
     exit 1
   }
   for n in hu_p hu_pu; do

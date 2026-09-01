@@ -719,7 +719,7 @@ declRetLookupW prog name = match progInput prog
   WasmEmitInputData _ _ _ declIndex _ _ _ _ _ _ _ _ _ => omLookup name declIndex
 
 -- #2076: the wasm peer of `llvm_emit.mdk`'s `ffiSigOf`/`isFfiExtern` — is `name`
--- a USER-declared FFI extern?  Built from `makeWasmEmitInputWithFfi`'s
+-- a USER-declared FFI extern?  Built from `makeWasmEmitInputFull`'s
 -- `ffiExternTypes` (empty for every other caller of `makeWasmEmitInput`, so this
 -- always answers False for the ~25 single-file test-harness entries that never
 -- pass one).  Consulted by `emitAppRef`/`emitTailAppRef`'s CVar-head ladder, in
