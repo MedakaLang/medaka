@@ -1744,6 +1744,15 @@ arbitraryList : (Unit -> <Rand> a) -> Int -> <Rand> List a
 
 Generate a list of up to `maxLen` elements using `gen`.
 
+## `Arbitrary (Option a)`
+
+```
+impl Arbitrary (Option a) requires Arbitrary a
+```
+
+Half the draws are `None`.  `shrink` collapses a `Some` to `None`, which
+is the only strictly smaller `Option` there is.
+
 ## `Rep`
 
 ```

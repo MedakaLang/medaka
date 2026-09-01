@@ -36,6 +36,7 @@
    ordinary accessors work on it unchanged. -}
 
 import string.{trim, lines, toInt, startsWith, drop, indexOf, contains}
+import core.{Display}
 
 -- ── Value type ──────────────────────────────────────────────────────────────
 
@@ -731,6 +732,59 @@ export impl Debug TomlValue where
 export impl Debug Toml where
   debug (Toml kvs) = stringConcat ["Toml [", debugKvList kvs, "]"]
 
+{- ── Display (sheet row A-5) ──────────────────────────────────────────────
+
+   ⚠️ This is NOT a TOML renderer.  Emitting a document `parse` could read
+   back is row H-4, which is DEFERRED behind #2240 (the `toml`-onto-`parsec`
+   consolidation); shipping one here under the `Display` name would be that
+   deferred work wearing a disguise.  What `Display` owes is a stable,
+   legible rendering of the VALUE, in the same `T { … }` shape `Display (Map
+   k v)` and `Display (Set a)` use.
+
+   Values keep TOML's own spelling for their SCALARS (a string is quoted, a
+   bool is `true`/`false`) so that the four variants stay distinguishable --
+   an unquoted `TStr "1"` would render exactly like `TInt 1`, and a `Display`
+   that collapses two distinct values into one text is not a rendering of the
+   value.  That injectivity is the law under test. -}
+
+displayTomlValue : TomlValue -> String
+displayTomlValue (TStr s) = debug s
+displayTomlValue (TArr xs) = debugStrList xs
+displayTomlValue (TInt n) = intToString n
+displayTomlValue (TBool b) = if b then "true" else "false"
+
+displayKvPair : (String, TomlValue) -> String
+displayKvPair (k, v) = stringConcat [k, " = ", displayTomlValue v]
+
+displayKvList : List (String, TomlValue) -> String
+displayKvList [] = ""
+displayKvList (p::[]) = displayKvPair p
+displayKvList (p::ps) = stringConcat [displayKvPair p, ", ", displayKvList ps]
+
+{- | A `TomlValue` in TOML's own scalar spelling.
+
+   > display (TStr "hi")
+   "\"hi\""
+   > display (TInt 42)
+   "42"
+   > display (TBool True)
+   "true"
+   > display (TArr ["a", "b"])
+   "[\"a\", \"b\"]" -}
+export impl Display TomlValue where
+  display = displayTomlValue
+
+{- | A whole document as `Toml { key = value, … }` (empty -> `Toml {}`),
+   mirroring `Display (Map k v)`'s `Map { … }`.
+
+   > display (Toml [("a.b", TInt 1), ("c", TBool False)])
+   "Toml { a.b = 1, c = false }"
+   > display (Toml [])
+   "Toml {}" -}
+export impl Display Toml where
+  display (Toml []) = "Toml {}"
+  display (Toml kvs) = stringConcat ["Toml { ", displayKvList kvs, " }"]
+
 -- ── Property tests ───────────────────────────────────────────────────────────
 
 -- Build a `[package]` document whose `version` is the given (safely-quotable)
@@ -776,3 +830,39 @@ mkGates k = stringConcat
 prop "array-of-tables entries stay separate" (k : Int) = parseTableCount "gate" (mkGates k) == 2
   && parseTableEntryStr "gate" 0 "name" (mkGates k) == Some ("g" ++ intToString k)
   && parseTableEntryStr "gate" 1 "name" (mkGates k) == Some ("h" ++ intToString k)
+
+-- ── Instance laws (sheet row A-5) ───────────────────────────────────────
+
+-- LAW: `Display TomlValue` is INJECTIVE across the four variants -- a
+-- rendering that cannot tell a quoted `TStr "1"` from an `TInt 1` is not a
+-- rendering of the value.  This is the clause that pins the TOML scalar
+-- spelling (quotes, lowercase bools) rather than the prelude's.
+prop "Display TomlValue separates the four variants" (n : Int) (b : Bool) =
+  let s = intToString n
+  let vs = [TStr s, TArr [s], TInt n, TBool b]
+  allDistinct (map display vs)
+
+allDistinct : List String -> Bool
+allDistinct [] = True
+allDistinct (x::rest) = all (x /= _) rest && allDistinct rest
+
+-- LAW: `Display Toml` agrees with `Eq Toml` -- equal documents render
+-- identically, and documents differing in any entry render differently, so
+-- the text is a faithful stand-in for the value in a test failure.
+prop "Display Toml agrees with Eq Toml" (k : String) (n : Int) =
+  let a = Toml [(k, TInt n)]
+  let b = Toml [(k, TInt n)]
+  let c = Toml [(k, TInt (n + 1))]
+  let d = Toml [(k ++ "x", TInt n)]
+  display a == display b
+    && eq a b
+    && not (display a == display c)
+    && not (display a == display d)
+
+-- LAW: every key and every value reaches the output (nothing is silently
+-- dropped as the entry list grows).
+prop "Display Toml renders every entry" (k : String) (n : Int) =
+  let one = display (Toml [(k, TInt n)])
+  let two = display (Toml [(k, TInt n), (k ++ "2", TInt n)])
+  stringLength two > stringLength one
+    && contains (displayTomlValue (TInt n)) two

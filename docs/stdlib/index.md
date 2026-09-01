@@ -33,7 +33,7 @@
 - [`lastValue`](args.md#lastvalue)
 - [`flagValues`](args.md#flagvalues)
 
-## `array` (42 entries)
+## `array` (45 entries)
 
 - [`singleton`](array.md#singleton)
 - [`make`](array.md#make)
@@ -67,13 +67,16 @@
 - [`findIndex`](array.md#findindex)
 - [`foldWithIndex`](array.md#foldwithindex)
 - [`forEachWithIndex`](array.md#foreachwithindex)
+- [`mapWithIndex`](array.md#mapwithindex)
 - [`Mappable Array`](array.md#mappable-array)
 - [`Foldable Array`](array.md#foldable-array)
 - [`Semigroup (Array a)`](array.md#semigroup-array-a)
 - [`Monoid (Array a)`](array.md#monoid-array-a)
 - [`Debug (Array a)`](array.md#debug-array-a)
 - [`Eq (Array a)`](array.md#eq-array-a)
+- [`Ord (Array a)`](array.md#ord-array-a)
 - [`Display (Array a)`](array.md#display-array-a)
+- [`Hashable (Array a)`](array.md#hashable-array-a)
 - [`Index (Array a) Int a`](array.md#index-array-a-int-a)
 - [`IndexMut (Array a) Int a`](array.md#indexmut-array-a-int-a)
 - [`Slice (Array a)`](array.md#slice-array-a)
@@ -160,7 +163,7 @@
 - [`leFloat64`](byteparser.md#lefloat64)
 - [`runByteParser`](byteparser.md#runbyteparser)
 
-## `core` (169 entries)
+## `core` (170 entries)
 
 - [`Ordering`](core.md#ordering)
 - [`Option`](core.md#option)
@@ -323,6 +326,7 @@
 - [`Arbitrary Char`](core.md#arbitrary-char)
 - [`arbitraryString`](core.md#arbitrarystring)
 - [`arbitraryList`](core.md#arbitrarylist)
+- [`Arbitrary (Option a)`](core.md#arbitrary-option-a)
 - [`Rep`](core.md#rep)
 - [`RField`](core.md#rfield)
 - [`Generic`](core.md#generic)
@@ -343,7 +347,7 @@
 - [`isFile`](fs.md#isfile)
 - [`fileSize`](fs.md#filesize)
 
-## `hash_map` (16 entries)
+## `hash_map` (18 entries)
 
 - [`HashMap`](hash_map.md#hashmap)
 - [`new`](hash_map.md#new)
@@ -361,8 +365,10 @@
 - [`values`](hash_map.md#values)
 - [`Eq (HashMap k v)`](hash_map.md#eq-hashmap-k-v)
 - [`Debug (HashMap k v)`](hash_map.md#debug-hashmap-k-v)
+- [`Display (HashMap k v)`](hash_map.md#display-hashmap-k-v)
+- [`Index (HashMap k v) k v`](hash_map.md#index-hashmap-k-v-k-v)
 
-## `hash_set` (10 entries)
+## `hash_set` (11 entries)
 
 - [`HashSet`](hash_set.md#hashset)
 - [`new`](hash_set.md#new)
@@ -374,6 +380,7 @@
 - [`Foldable HashSet`](hash_set.md#foldable-hashset)
 - [`Eq (HashSet a)`](hash_set.md#eq-hashset-a)
 - [`Debug (HashSet a)`](hash_set.md#debug-hashset-a)
+- [`Display (HashSet a)`](hash_set.md#display-hashset-a)
 
 ## `hex` (5 entries)
 
@@ -392,7 +399,7 @@
 - [`readLines`](io.md#readlines)
 - [`getEnvOr`](io.md#getenvor)
 
-## `json` (15 entries)
+## `json` (16 entries)
 
 - [`Json`](json.md#json)
 - [`jArray`](json.md#jarray)
@@ -406,11 +413,12 @@
 - [`asFloat`](json.md#asfloat)
 - [`asBool`](json.md#asbool)
 - [`asArray`](json.md#asarray)
+- [`asObject`](json.md#asobject)
 - [`Eq Json`](json.md#eq-json)
 - [`Debug Json`](json.md#debug-json)
 - [`Display Json`](json.md#display-json)
 
-## `list` (92 entries)
+## `list` (93 entries)
 
 - [`Filterable`](list.md#filterable)
 - [`filter`](list.md#filter)
@@ -504,8 +512,9 @@
 - [`Foldable List`](list.md#foldable-list)
 - [`Traversable List`](list.md#traversable-list)
 - [`Filterable List`](list.md#filterable-list)
+- [`Arbitrary (List a)`](list.md#arbitrary-list-a)
 
-## `map` (39 entries)
+## `map` (41 entries)
 
 - [`Map`](map.md#map)
 - [`singleton`](map.md#singleton)
@@ -537,7 +546,9 @@
 - [`unionWith`](map.md#unionwith)
 - [`difference`](map.md#difference)
 - [`intersectionWith`](map.md#intersectionwith)
+- [`intersection`](map.md#intersection)
 - [`Mappable (Map k)`](map.md#mappable-map-k)
+- [`Filterable (Map k)`](map.md#filterable-map-k)
 - [`Eq (Map k v)`](map.md#eq-map-k-v)
 - [`Ord (Map k v)`](map.md#ord-map-k-v)
 - [`Debug (Map k v)`](map.md#debug-map-k-v)
@@ -563,7 +574,7 @@
 - [`lcmInt`](math.md#lcmint)
 - [`powInt`](math.md#powint)
 
-## `mut_array` (20 entries)
+## `mut_array` (25 entries)
 
 - [`MutArray`](mut_array.md#mutarray)
 - [`new`](mut_array.md#new)
@@ -582,9 +593,14 @@
 - [`swap`](mut_array.md#swap)
 - [`clear`](mut_array.md#clear)
 - [`mapInPlace`](mut_array.md#mapinplace)
+- [`insertAt`](mut_array.md#insertat)
+- [`removeAt`](mut_array.md#removeat)
+- [`sortBy`](mut_array.md#sortby)
+- [`sort`](mut_array.md#sort)
 - [`Foldable MutArray`](mut_array.md#foldable-mutarray)
 - [`Eq (MutArray a)`](mut_array.md#eq-mutarray-a)
 - [`Debug (MutArray a)`](mut_array.md#debug-mutarray-a)
+- [`Display (MutArray a)`](mut_array.md#display-mutarray-a)
 
 ## `net` (22 entries)
 
@@ -898,7 +914,7 @@
 - [`expectAll`](test.md#expectall)
 - [`runTests`](test.md#runtests)
 
-## `time` (20 entries)
+## `time` (28 entries)
 
 - [`Duration`](time.md#duration)
 - [`millis`](time.md#millis)
@@ -908,12 +924,20 @@
 - [`days`](time.md#days)
 - [`toMillis`](time.md#tomillis)
 - [`toSeconds`](time.md#toseconds)
+- [`toMinutes`](time.md#tominutes)
+- [`toHours`](time.md#tohours)
+- [`toDays`](time.md#todays)
 - [`addDuration`](time.md#addduration)
 - [`subDuration`](time.md#subduration)
 - [`DateTime`](time.md#datetime)
 - [`fromEpochSeconds`](time.md#fromepochseconds)
 - [`toEpochSeconds`](time.md#toepochseconds)
 - [`formatIso`](time.md#formatiso)
+- [`parseIso`](time.md#parseiso)
+- [`Display Duration`](time.md#display-duration)
+- [`Display DateTime`](time.md#display-datetime)
+- [`Semigroup Duration`](time.md#semigroup-duration)
+- [`Monoid Duration`](time.md#monoid-duration)
 - [`now`](time.md#now)
 - [`nowDateTime`](time.md#nowdatetime)
 - [`monotonic`](time.md#monotonic)
@@ -921,7 +945,7 @@
 - [`sleep`](time.md#sleep)
 - [`sleepSeconds`](time.md#sleepseconds)
 
-## `toml` (17 entries)
+## `toml` (19 entries)
 
 - [`TomlValue`](toml.md#tomlvalue)
 - [`Toml`](toml.md#toml)
@@ -940,8 +964,10 @@
 - [`Eq Toml`](toml.md#eq-toml)
 - [`Debug TomlValue`](toml.md#debug-tomlvalue)
 - [`Debug Toml`](toml.md#debug-toml)
+- [`Display TomlValue`](toml.md#display-tomlvalue)
+- [`Display Toml`](toml.md#display-toml)
 
-## `validation` (10 entries)
+## `validation` (11 entries)
 
 - [`Validation`](validation.md#validation)
 - [`Mappable (Validation e)`](validation.md#mappable-validation-e)
@@ -950,6 +976,7 @@
 - [`Traversable (Validation e)`](validation.md#traversable-validation-e)
 - [`Eq (Validation e a)`](validation.md#eq-validation-e-a)
 - [`Debug (Validation e a)`](validation.md#debug-validation-e-a)
+- [`Semigroup (Validation e a)`](validation.md#semigroup-validation-e-a)
 - [`Display (Validation e a)`](validation.md#display-validation-e-a)
 - [`validationToResult`](validation.md#validationtoresult)
 - [`resultToValidation`](validation.md#resulttovalidation)

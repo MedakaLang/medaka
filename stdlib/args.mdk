@@ -17,13 +17,22 @@
 -- existential).  The only expressible combinator shape is the wrapped-function
 -- one, which is opaque and therefore cannot derive help.
 --
--- Cost posture: `FlagSpec` is four immutable fields of plain data.  There are
--- deliberately NO `deriving` clauses and NO `impl`s on the types below, and
--- the module imports only `string` — every consumer already imports it, so
--- nothing new enters dispatch scope.  Per-flag lookup over `given` is a
--- monomorphic fold rather than a polymorphic `lookup`.  Adding an `impl`, a
--- `deriving`, or a `map`/`hash_map` import invalidates the measured import
--- cost and must be re-measured (`[T-STDLIB-IMPORT]`).
+-- Cost posture: `FlagSpec` is four immutable fields of plain data.  The module
+-- imports only `string` — every consumer already imports it, so nothing new
+-- enters dispatch scope.  Per-flag lookup over `given` is a monomorphic fold
+-- rather than a polymorphic `lookup`.  Adding a `map`/`hash_map` import
+-- invalidates the measured import cost and must be re-measured
+-- (`[T-STDLIB-IMPORT]`).
+--
+-- The seven types below carry `deriving (Eq, Debug)` and nothing else (sheet
+-- row A-2, ratified #2306).  This paragraph previously said there were
+-- deliberately NO `deriving` clauses; the ban was lifted, not forgotten — a
+-- spec value that cannot be compared or printed cannot be asserted on in a
+-- test, which is the defect A-2 names.  `Eq`/`Debug` are prelude interfaces,
+-- so this adds no import; the re-measurement the old wording demanded was run
+-- on `medaka check compiler/driver/medaka_cli.mdk` (the CLI is the module that
+-- imports `args`) and is recorded in the sprint report.  The `map`/`hash_map`
+-- import ban above still stands.
 --
 -- Wording: the four rejection sentences are the ratified ones from
 -- `docs/ops/CLI-CONFORMANCE.md` (C2 unknown flag, C3 exit code 1).  They are
@@ -49,9 +58,10 @@ public export data Arity =
   | ValueList String
   | OneOf (List String) String
   | IntValue String
+deriving (Eq, Debug)
 
 -- | Whether a flag appears in `helpBlockOf`.  Both kinds appear in `rosterOf`.
-public export data Visibility = Public | Internal
+public export data Visibility = Public | Internal deriving (Eq, Debug)
 
 {- | What happens to a `--`-shaped token that no `FlagSpec` claims.
 
@@ -60,7 +70,7 @@ public export data Visibility = Public | Internal
    vocabulary is per-codemod and therefore not statically knowable: an
    unclaimed token is recorded in `given`, consuming the following token as
    its value. -}
-public export data Unknown = RejectUnknown | CollectUnknown
+public export data Unknown = RejectUnknown | CollectUnknown deriving (Eq, Debug)
 
 {- | How the verb treats a raw trailing section.
 
@@ -74,6 +84,7 @@ public export data Trailing =
   | TrailingReject
   | TrailingRaw
   | TrailingAfterSeparator
+deriving (Eq, Debug)
 
 {- | One flag, with every spelling it answers to.
 
@@ -88,6 +99,7 @@ public export data FlagSpec =
       summary : String,
       visibility : Visibility,
     }
+deriving (Eq, Debug)
 
 -- | One verb's whole argument vocabulary.  This is the value everything else
 --   in this module is a rendering of.
@@ -112,6 +124,7 @@ public export data ArgSpec =
       unknown : Unknown,
       strictDash : Bool,
     }
+deriving (Eq, Debug)
 
 {- | The result of a successful parse.
 
@@ -125,6 +138,7 @@ public export data Args =
       positionals : List String,
       rest : List String,
     }
+deriving (Eq, Debug)
 
 -- ── Building a spec ────────────────────────────────────────────────────────
 
@@ -634,3 +648,37 @@ valuesGo nm ((k, v)::rest)
     Some s => s :: valuesGo nm rest
     None => valuesGo nm rest
   | otherwise = valuesGo nm rest
+
+-- ── Instance laws (sheet row A-2) ──────────────────────────────────────────
+-- The point of `Eq`/`Debug` here is that a parse RESULT and a SPEC can be
+-- asserted on directly in a test.  Both laws are stated against that use.
+
+-- LAW: `Eq Args` must discriminate on all three fields, so a test asserting on
+-- a parse result cannot pass while the parse dropped a positional or a flag.
+prop "Eq Args discriminates every field" (v : String) =
+  let base = Args { given = [("--out", Some v)], positionals = [v], rest = [] }
+  base == Args { given = [("--out", Some v)], positionals = [v], rest = [] }
+    && base == Args { base | given = [("--out", None)] } == False
+    && base == Args { base | positionals = [] } == False
+    && base == Args { base | rest = [v] } == False
+
+-- LAW: `Eq ArgSpec` reaches through `FlagSpec`/`Arity`/`Visibility` — a spec
+-- that answers to different flags, or to the same flag with a different arity,
+-- must not compare equal.  (This is the composite the seven cells exist for:
+-- comparing an `ArgSpec` exercises every one of the seven instances.)
+prop "Eq ArgSpec reaches through FlagSpec and Arity" (n : String) =
+  let a = spec "fmt" [switch ["--write"] n]
+  let b = spec "fmt" [switch ["--check"] n]
+  let c = spec "fmt" [value ["--write"] "P" n]
+  a == spec "fmt" [switch ["--write"] n]
+    && a == b == False
+    && a == c == False
+    && a == spec "lint" [switch ["--write"] n] == False
+
+-- LAW: `Debug` agrees with `Eq` on the composite — equal specs render
+-- identically, unequal ones render differently — so a failing assertion's
+-- printed value actually explains the failure.
+prop "Debug ArgSpec agrees with Eq" (n : String) =
+  let a = spec "fmt" [switch ["--write"] n]
+  debug a == debug (spec "fmt" [switch ["--write"] n])
+    && debug a == debug (spec "fmt" [switch ["--check"] n]) == False

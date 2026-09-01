@@ -87,6 +87,29 @@ export impl Debug (Validation e a) requires Debug e, Debug a where
   debug (Failure e) = "Failure " ++ debug e
   debug (Success a) = "Success " ++ debug a
 
+{- | The accumulating `Semigroup` (sheet row A-5), agreeing with the
+   `Applicative` above: two `Failure`s combine their errors rather than
+   keeping the first, so `append` never loses a diagnostic.  Two `Success`es
+   combine their payloads, which is why `Semigroup a` is required as well as
+   `Semigroup e` -- without it there is no answer for `Success <> Success`
+   and the instance would have to invent one.
+
+   No `Monoid` peer: an identity would have to be a `Success empty` that also
+   annihilates a `Failure`, and it does not (`Failure e ++ Success empty` is
+   `Failure e`, not `Success empty`), so the identity law fails on one side.
+
+   > display (append (Failure ["a"] : Validation (List String) (List Int)) (Failure ["b"]))
+   "Failure [a, b]"
+   > display (append (Success [1] : Validation (List String) (List Int)) (Success [2]))
+   "Success [1, 2]"
+   > display (append (Failure ["a"] : Validation (List String) (List Int)) (Success [2]))
+   "Failure [a]" -}
+export impl Semigroup (Validation e a) requires Semigroup e, Semigroup a where
+  append (Failure x) (Failure y) = Failure (append x y)
+  append (Failure x) (Success _) = Failure x
+  append (Success _) (Failure y) = Failure y
+  append (Success x) (Success y) = Success (append x y)
+
 {- | Human-facing rendering (backs `println` and `\{}` interpolation), mirroring
    core's `Display (Result e a)`.
 
@@ -135,3 +158,33 @@ prop "map identity is identity on Success" (n : Int) =
 
 prop "map identity is identity on Failure" (n : Int) =
   map identity (Failure n : Validation Int Int) == Failure n
+
+-- ── Semigroup laws (sheet row A-5) ──────────────────────────────────────
+-- LAW: associativity, over all eight `Failure`/`Success` combinations of
+-- three operands.  Associativity is the ONLY law `Semigroup` has, and a
+-- first-failure-wins definition would break it, so this is the whole
+-- justification for the instance.
+
+vOf : Bool -> Int -> Validation (List Int) (List Int)
+vOf True n = Success [n]
+vOf False n = Failure [n]
+
+prop "Semigroup Validation is associative" (p : Bool) (q : Bool) (r : Bool) (n : Int) =
+  let a = vOf p n
+  let b = vOf q (n + 1)
+  let c = vOf r (n + 2)
+  append (append a b) c == append a (append b c)
+
+-- LAW: `append` ACCUMULATES on the failure side rather than keeping only the
+-- first error -- the property that makes it agree with the accumulating
+-- `Applicative` instead of with `Result`'s short-circuit.
+prop "Semigroup Validation accumulates both failures" (x : Int) (y : Int) =
+  let got = append (Failure [x] : Validation (List Int) (List Int)) (Failure [y])
+  got == Failure [x, y]
+
+-- LAW: a `Failure` on either side survives -- `append` never upgrades a
+-- failure to a success.
+prop "Semigroup Validation never discards a failure" (n : Int) (p : Bool) =
+  let ok = Success [n] : Validation (List Int) (List Int)
+  append (Failure [n]) ok == Failure [n]
+    && append ok (Failure [n]) == Failure [n]

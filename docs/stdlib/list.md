@@ -1447,3 +1447,17 @@ re-exports it for discoverability.
 [3, 4]
 ```
 
+## `Arbitrary (List a)`
+
+```
+impl Arbitrary (List a) requires Arbitrary a
+```
+
+The instance form of `arbitraryList` (sheet row H-7).  `arbitraryList` stays
+as the explicit-generator escape hatch — a generator that is not the type's
+`Arbitrary` instance, or a longer list, still needs it.  This impl is what
+lets a HAND-WRITTEN generator call `arbitrary` at `List a` and compose.
+⚠️ It is NOT what makes `prop … (xs : List Int)` work: `medaka test`'s
+runner generates from the declared TYPE, not from `Arbitrary` (see the
+note above the laws below).  `maxLen` is 10, matching `arbitraryString`.
+

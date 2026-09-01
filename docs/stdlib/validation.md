@@ -98,6 +98,35 @@ impl Eq (Validation e a) requires Eq e, Eq a
 impl Debug (Validation e a) requires Debug e, Debug a
 ```
 
+## `Semigroup (Validation e a)`
+
+```
+impl Semigroup (Validation e a) requires Semigroup e, Semigroup a
+```
+
+The accumulating `Semigroup` (sheet row A-5), agreeing with the
+`Applicative` above: two `Failure`s combine their errors rather than
+keeping the first, so `append` never loses a diagnostic.  Two `Success`es
+combine their payloads, which is why `Semigroup a` is required as well as
+`Semigroup e` -- without it there is no answer for `Success <> Success`
+and the instance would have to invent one.
+
+No `Monoid` peer: an identity would have to be a `Success empty` that also
+annihilates a `Failure`, and it does not (`Failure e ++ Success empty` is
+`Failure e`, not `Success empty`), so the identity law fails on one side.
+
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> display (append (Failure ["a"] : Validation (List String) (List Int)) (Failure ["b"]))
+"Failure [a, b]"
+> display (append (Success [1] : Validation (List String) (List Int)) (Success [2]))
+"Success [1, 2]"
+> display (append (Failure ["a"] : Validation (List String) (List Int)) (Success [2]))
+"Failure [a]"
+```
+
 ## `Display (Validation e a)`
 
 ```

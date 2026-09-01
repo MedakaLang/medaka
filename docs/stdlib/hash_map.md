@@ -242,3 +242,42 @@ impl Debug (HashMap k v) requires Debug k, Debug v
 Rendered as `fromList [(k, v), …]` in hash order (so the exact text is
 layout-dependent — don't rely on it for equality; use `eq`).
 
+## `Display (HashMap k v)`
+
+```
+impl Display (HashMap k v) requires Display k, Display v, Ord k
+```
+
+The *display* form, peer of `Display (Map k v)`'s `Map { k => v, … }`,
+with the entries in ascending KEY order so the text depends only on the
+value and not on the table's internal layout.
+
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> display (fromList [(2, 20), (1, 10)]) == "HashMap { 1 => 10, 2 => 20 }"
+True
+> display (new () : HashMap Int Int) == "HashMap {}"
+True
+```
+
+## `Index (HashMap k v) k v`
+
+```
+impl Index (HashMap k v) k v requires Eq k, Hashable k
+```
+
+`index m k` reads `m`'s value at key `k` (`m[k]` sugar dispatches here),
+the peer of `Index (Map k v) k v`.  Raises the coded `indexError`
+(E-INDEX-OOB) when the key is absent -- use `get` for a safe
+`Option`-returning read instead.
+
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> (fromList [(1, 10), (2, 20)])[2]
+20
+```
+

@@ -471,3 +471,44 @@ impl Debug TomlValue
 impl Debug Toml
 ```
 
+## `Display TomlValue`
+
+```
+impl Display TomlValue
+```
+
+A `TomlValue` in TOML's own scalar spelling.
+
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> display (TStr "hi")
+"\"hi\""
+> display (TInt 42)
+"42"
+> display (TBool True)
+"true"
+> display (TArr ["a", "b"])
+"[\"a\", \"b\"]"
+```
+
+## `Display Toml`
+
+```
+impl Display Toml
+```
+
+A whole document as `Toml { key = value, … }` (empty -> `Toml {}`),
+mirroring `Display (Map k v)`'s `Map { … }`.
+
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> display (Toml [("a.b", TInt 1), ("c", TBool False)])
+"Toml { a.b = 1, c = false }"
+> display (Toml [])
+"Toml {}"
+```
+

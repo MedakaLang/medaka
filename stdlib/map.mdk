@@ -35,6 +35,7 @@ import core.{
   Debug,
   Display,
   Mappable,
+  Filterable,
   Semigroup,
   Monoid,
   Ordering,
@@ -544,6 +545,16 @@ intersectionWith f (Bin _ k v l r) b =
     None => link2 l2 r2
     Some w => link k (f v w) l2 r2
 
+{- | Keys present in both maps, keeping the LEFT map's value — the plain form
+   of `intersectionWith`, matching how `union` is the plain form of
+   `unionWith` and how `set.intersection` is left-biased.
+
+   > toList (intersection (fromList [(1, 10), (2, 20)]) (fromList [(2, 2), (3, 3)]))
+   [(2, 20)] -}
+export
+intersection : Ord k => Map k v -> Map k w -> Map k v
+intersection a b = intersectionWith (x _ => x) a b
+
 -- ── Typeclass instances ─────────────────────────────────────────────────
 
 {- | Map over the values, keys and structure preserved.
@@ -553,6 +564,19 @@ intersectionWith f (Bin _ k v l r) b =
 export impl Mappable (Map k) where
   map f Tip = Tip
   map f (Bin s k v l r) = Bin s k (f v) (map f l) (map f r)
+
+{- | Drop (and transform) values, keys and order preserved.  `filterMap` is the
+   primitive; the interface's default `filter` falls out of it.  Note this
+   folds over VALUES — the key-aware form is the module-level `filterWithKey`,
+   which stays because the interface's callback cannot see a key. -}
+export impl Filterable (Map k) where
+  filterMap f Tip = Tip
+  filterMap f (Bin _ k v l r) =
+    let l2 = filterMap f l
+    let r2 = filterMap f r
+    match f v
+      Some w => link k w l2 r2
+      None => link2 l2 r2
 
 {- | Structural equality: same keys mapped to equal values.  Compared through
    the canonical ascending association list, so tree *shape* doesn't matter.
@@ -736,6 +760,37 @@ prop "intersectionWith agrees with naive and stays well-formed" (xs : List (Int,
   let got = intersectionWith (x y => x + y) a b
   eq (toList got) (toList (naiveIntersectionWith (x y => x + y) a b))
     && wellFormed got
+
+-- LAW: `intersection` is exactly the left-biased `intersectionWith`, and its
+-- key set is the set intersection of the two key sets — the same relationship
+-- `union`/`unionWith` and `set.intersection` already satisfy.
+prop "intersection is the left-biased intersectionWith" (xs : List (Int, Int)) (ys : List (Int, Int)) =
+  let a = fromList xs
+  let b = fromList ys
+  let got = intersection a b
+  eq (toList got) (toList (intersectionWith (x _ => x) a b)) && wellFormed got
+
+prop "intersection keeps exactly the shared keys, with the left value" (xs : List (Int, Int)) (ys : List (Int, Int)) =
+  let a = fromList xs
+  let b = fromList ys
+  let got = intersection a b
+  -- every surviving key is in both inputs and carries the LEFT value ...
+  all (k => isSome (get k b) && get k got == get k a) (keys got)
+    -- ... and every key shared by both inputs survives.
+    && all (k => not (isSome (get k b)) || isSome (get k got)) (keys a)
+
+-- LAW (Filterable): `filterMap Some` is the identity, `filter` agrees with the
+-- key-aware `filterWithKey` that ignores its key, and the result is still a
+-- well-formed search tree.
+prop "Filterable: filterMap Some is the identity" (xs : List (Int, Int)) =
+  let m = fromList xs
+  let got = filterMap (v => Some v) m
+  eq (toList got) (toList m) && wellFormed got
+
+prop "Filterable: filter agrees with filterWithKey ignoring the key" (xs : List (Int, Int)) =
+  let m = fromList xs
+  let got = filter (v => v > 0) m
+  eq (toList got) (toList (filterWithKey (_ v => v > 0) m)) && wellFormed got
 
 prop "filterWithKey agrees with naive and stays well-formed" (xs : List (Int, Int)) =
   let m = fromList xs

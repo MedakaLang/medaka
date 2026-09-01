@@ -545,6 +545,19 @@ forEachWithIndexGo f arr i n =
     let _ = f i (arrayGetUnsafe i arr)
     forEachWithIndexGo f arr (i + 1) n
 
+{- | Map every element together with its 0-based index — the missing member of
+   the index-callback family (`foldWithIndex`, `forEachWithIndex`), with the
+   same `(i x)` callback order `list.mapWithIndex` uses.
+
+   > toList (mapWithIndex (i x => i * x) (fromList [1, 2, 3]))
+   [0, 2, 6]
+   > toList (mapWithIndex (i x => i + x) (fromList ([] : List Int)))
+   [] -}
+export
+mapWithIndex : (Int -> a -> <e> b) -> Array a -> <e> Array b
+mapWithIndex f arr =
+  arrayMakeWith (arrayLength arr) (i => f i (arrayGetUnsafe i arr))
+
 -- ── Typeclass impls ─────────────────────────────────────────────────────
 
 export impl Mappable Array where
@@ -627,3 +640,22 @@ prop "forEachWithIndex visits every index once, in order, matching zip with rang
   let _ = forEachWithIndex (i x => seen := (i, x) :: !seen) arr
   let viaZip = fold (acc pair => pair::acc) [] (zip (range 0 (length arr)) arr)
   eq !seen viaZip
+
+-- LAW (H-5/E-6): `mapWithIndex` is `map` that also sees the index.  Three
+-- clauses pin it: it agrees with `map` on an index-ignoring callback, it hands
+-- the callback exactly the indices 0..n-1 in order (this is what fixes the
+-- `(i x)` argument ORDER E-6 ratifies, not `(x i)`), and it agrees with its
+-- own family sibling `foldWithIndex` on the same callback.
+prop "mapWithIndex with an index-ignoring callback is map" (xs : List Int) =
+  let arr = fromList xs
+  eq (mapWithIndex (_ x => x + 1) arr) (map (x => x + 1) arr)
+
+prop "mapWithIndex hands the callback 0..n-1 in order" (xs : List Int) =
+  let arr = fromList xs
+  eq (mapWithIndex (i _ => i) arr) (range 0 (length arr))
+
+prop "mapWithIndex agrees with zipWith over range" (xs : List Int) =
+  let arr = fromList xs
+  eq
+    (mapWithIndex (i x => i * 10 + x) arr)
+    (zipWith (i x => i * 10 + x) (range 0 (length arr)) arr)

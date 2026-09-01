@@ -30,7 +30,8 @@
 -- hash_map/hash_set share identical resize/rehash bodies over DISTINCT ADTs; consolidation needs a shared-core refactor (out of scope).
 -- lint-disable-file rule-duplicate-body
 
-import core.{Eq, Debug, Option, Mappable, Hashable}
+import core.{Eq, Ord, Debug, Display, Option, Mappable, Hashable, Index}
+import list as L
 
 {- `HashMap buckets count`: `!buckets` is the bucket array (each slot a
    chain), `!count` is the live entry count. Both are mutated in place. -}
@@ -274,3 +275,80 @@ export impl Eq (HashMap k v) requires Eq k, Eq v, Hashable k where
    layout-dependent — don't rely on it for equality; use `eq`). -}
 export impl Debug (HashMap k v) requires Debug k, Debug v where
   debug m = "fromList \{debug (entries m)}"
+
+{- ── Display, and the order it fixes (sheet row A-4) ───────────────────────
+
+   `Debug` above renders in HASH order, which is layout-dependent by design.
+   `Display` may not be: a rendering that changes when the table is rebuilt
+   with the same entries is not a rendering of the VALUE.  So `Display` sorts
+   by KEY, which is why it asks for `Ord k` that `Debug` does not — that
+   ordering choice IS row A-4's ratification, and the law it buys is
+   `display m == display (fromList (toList m))`.
+
+   The sort is `list.sortOn fst`: one ordering routine for the whole stdlib,
+   rather than a private copy in every printing path. -}
+
+-- Comma-joined `k => v` entries, mirroring `map.mdk`'s `displayMapEntries`.
+displayEntries : (Display k, Display v) => List (k, v) -> String
+displayEntries [] = ""
+displayEntries [(k, v)] = "\{k} => \{v}"
+displayEntries ((k, v)::rest) = "\{k} => \{v}, \{displayEntries rest}"
+
+{- | The *display* form, peer of `Display (Map k v)`'s `Map { k => v, … }`,
+   with the entries in ascending KEY order so the text depends only on the
+   value and not on the table's internal layout.
+
+   > display (fromList [(2, 20), (1, 10)]) == "HashMap { 1 => 10, 2 => 20 }"
+   True
+   > display (new () : HashMap Int Int) == "HashMap {}"
+   True -}
+export impl Display (HashMap k v) requires Display k, Display v, Ord k where
+  display m = match L.sortOn fst (entries m)
+    [] => "HashMap {}"
+    es => "HashMap { \{displayEntries es} }"
+
+{- | `index m k` reads `m`'s value at key `k` (`m[k]` sugar dispatches here),
+   the peer of `Index (Map k v) k v`.  Raises the coded `indexError`
+   (E-INDEX-OOB) when the key is absent -- use `get` for a safe
+   `Option`-returning read instead.
+
+   > (fromList [(1, 10), (2, 20)])[2]
+   20 -}
+export impl Index (HashMap k v) k v requires Eq k, Hashable k where
+  index m k = match get k m
+    Some v => v
+    None => indexError "key not found"
+
+-- ── Property tests (sheet row A-4) ──────────────────────────────────────
+
+-- LAW: `Display` must depend on the VALUE, not on the table's internal
+-- layout.  Rebuilding a table from its own entries (and from those entries
+-- reversed, which lands them in different buckets in a different order) must
+-- not change the rendering.  This is the law A-4 names for the ordering
+-- choice, and it is what `Debug` -- documented as hash-ordered -- cannot
+-- satisfy.
+prop "Display HashMap is layout-independent" (xs : List (Int, Int)) =
+  let m = fromList xs
+  display m == display (fromList (toList m))
+    && display m == display (fromList (L.reverse (toList m)))
+
+-- LAW: the fixed order is ASCENDING BY KEY, and `Display` agrees with `Eq` --
+-- two tables that compare equal render identically.
+prop "Display HashMap agrees with Eq and lists keys ascending" (xs : List (Int, Int)) =
+  let a = fromList xs
+  let b = fromList (L.reverse xs)
+  ascendingKeys (L.sortOn fst (entries a)) && eq a b == (display a == display b)
+
+ascendingKeys : Ord k => List (k, v) -> Bool
+ascendingKeys [] = True
+ascendingKeys (_::[]) = True
+ascendingKeys ((k1, _)::(k2, v2)::rest) = lte k1 k2
+  && ascendingKeys ((k2, v2)::rest)
+
+-- LAW: `Index` is `get` with the `None` case turned into the coded index
+-- error -- i.e. for every key the table HAS, `m[k]` is exactly `get k m`'s
+-- payload.  (The absent-key panic is exercised by the `Index (Map k v)`
+-- convention this mirrors; a prop cannot catch a panic.)
+prop "Index HashMap agrees with get on present keys" (xs : List (Int, Int)) =
+  let m = fromList xs
+  all (k => eq (Some m[k]) (get k m)) (keys m)

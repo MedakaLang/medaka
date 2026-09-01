@@ -509,6 +509,24 @@ Keys present in both maps, combined with `f leftValue rightValue`.
 [(2, 22)]
 ```
 
+## `intersection`
+
+```
+intersection : Map a b -> Map a c -> Map a b
+```
+
+Keys present in both maps, keeping the LEFT map's value — the plain form
+of `intersectionWith`, matching how `union` is the plain form of
+`unionWith` and how `set.intersection` is left-biased.
+
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> toList (intersection (fromList [(1, 10), (2, 20)]) (fromList [(2, 2), (3, 3)]))
+[(2, 20)]
+```
+
 ## `Mappable (Map k)`
 
 ```
@@ -524,6 +542,17 @@ Map over the values, keys and structure preserved.
 > elems (map (n => n * 10) (fromList [(1, 1), (2, 2)]))
 [10, 20]
 ```
+
+## `Filterable (Map k)`
+
+```
+impl Filterable (Map k)
+```
+
+Drop (and transform) values, keys and order preserved.  `filterMap` is the
+primitive; the interface's default `filter` falls out of it.  Note this
+folds over VALUES — the key-aware form is the module-level `filterWithKey`,
+which stays because the interface's callback cannot see a key.
 
 ## `Eq (Map k v)`
 
