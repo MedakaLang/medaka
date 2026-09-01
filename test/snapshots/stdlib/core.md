@@ -1,5 +1,5 @@
 # META
-source_lines=1699
+source_lines=1858
 stages=DESUGAR,MARK
 # SOURCE
 {- core.mdk — the foundation every other Medaka module rests on.
@@ -442,6 +442,39 @@ eqGo a b i n =
   else
     False
 
+{- | Lexicographic, exactly like `Ord (List a)` — `Array` is `List`'s
+   random-access peer, so `compare` on two arrays agrees element-for-element
+   with `compare` on their `toList`s, and a prefix sorts before its extensions
+   (sheet row A-5).  Lives here rather than in `array.mdk` for the same reason
+   `Eq (Array a)` does: `deriving (Ord)` over a field of array type must build
+   without an `import array`. -}
+{- | Lexicographic, exactly like `Ord (List a)` — `Array` is `List`'s
+   random-access peer, so `compare` on two arrays agrees element-for-element
+   with `compare` on their element lists, and a prefix sorts before its
+   extensions (sheet row A-5).  Lives here rather than in `array.mdk` for the
+   same reason `Eq (Array a)` does: `deriving (Ord)` over a field of array
+   type must build without an `import array`.
+
+   ⚠️ The body delegates to `Ord (List a)` rather than walking the arrays
+   directly on purpose.  A hand-written walk needs an `Ord a`-constrained
+   top-level helper, and calling one of those from an `impl Ord …` body IN
+   THIS MODULE panics at run time with `unbound identifier: $dict_max_0` (the
+   same shape compiles and runs correctly in any other module, and `Eq`- and
+   `Hashable`-constrained helpers are fine from here).  Filed in the sprint
+   report; delegation sidesteps it and makes the "agrees with `Ord (List a)`"
+   law true by construction. -}
+export impl Ord (Array a) requires Ord a where
+  compare a b =
+    compare (arrItems a 0 (arrayLength a)) (arrItems b 0 (arrayLength b))
+
+-- Unconstrained array-to-list walk, for `Ord (Array a)` above.
+arrItems : Array a -> Int -> Int -> List a
+arrItems arr i n =
+  if i >= n then
+    []
+  else
+    arrayGetUnsafe i arr :: arrItems arr (i + 1) n
+
 export impl Debug (Option a) requires Debug a where
   debug None = "None"
   debug (Some x) = "Some " ++ debug x
@@ -668,6 +701,20 @@ hashListItems acc (x::xs) = hashListItems (acc * 33 + hash x) xs
 
 export impl Hashable (List a) requires Hashable a where
   hash xs = hashListItems 0 xs
+
+{- | The same `acc * 33 + hash x` fold `Hashable (List a)` uses, so an array
+   and the list of the same elements hash EQUALLY — the peer relationship
+   sheet row A-5 ratifies.  Agrees with `Eq (Array a)` by construction: equal
+   arrays have equal elements in equal order, so they fold to the same seed. -}
+export impl Hashable (Array a) requires Hashable a where
+  hash arr = hashArrGo 0 arr 0 (arrayLength arr)
+
+hashArrGo : Hashable a => Int -> Array a -> Int -> Int -> Int
+hashArrGo acc arr i n =
+  if i >= n then
+    acc
+  else
+    hashArrGo (acc * 33 + hash (arrayGetUnsafe i arr)) arr (i + 1) n
 
 export impl Hashable (a, b) requires Hashable a, Hashable b where
   hash (a, b) = hash a * 33 + hash b
@@ -1600,6 +1647,23 @@ arbitraryList gen maxLen = go (randomInt 0 maxLen) []
     go 0 acc = acc
     go n acc = go (n - 1) (gen () :: acc)
 
+{- The instance form of `arbitraryList` (sheet row H-7).  `arbitraryList` stays
+   as the explicit-generator escape hatch — a generator that is not the type's
+   `Arbitrary` instance, or a longer list, still needs it.  This impl is what
+   lets a HAND-WRITTEN generator call `arbitrary` at `List a` and compose.
+   ⚠️ It is NOT what makes `prop … (xs : List Int)` work: `medaka test`'s
+   runner generates from the declared TYPE, not from `Arbitrary` (see the
+   note above the laws below).  `maxLen` is 10, matching `arbitraryString`. -}
+export impl Arbitrary (List a) requires Arbitrary a where
+  arbitrary () = arbitraryList arbitrary 10
+
+{- | Half the draws are `None`.  `shrink` collapses a `Some` to `None`, which
+   is the only strictly smaller `Option` there is. -}
+export impl Arbitrary (Option a) requires Arbitrary a where
+  arbitrary () = if randomInt 0 1 == 0 then None else Some (arbitrary ())
+  shrink (Some _) = [None]
+  shrink None = []
+
 -- ─── 4b. Generic (structural representation / `deriving (Generic)`) ──────
 
 {- | A uniform, flat structural view of any value.  `deriving (Generic)`
@@ -1619,9 +1683,12 @@ public export data Rep =
   | RBool Bool
   | RChar Char
   | RUnit
+deriving (Eq, Debug)
 
 -- | A named field inside an `RRecord`.
-public export data RField = RField { fld_name : String, fld_rep : Rep }
+public export data RField =
+  | RField { fld_name : String, fld_rep : Rep }
+deriving (Eq, Debug)
 
 {- | Types with a structural representation.  `to_rep` is synthesised by
    `deriving (Generic)`.  `from_rep` is return-type polymorphic, which the
@@ -1701,6 +1768,98 @@ prop "mapFirst on Result generalizes mapErr" (n : Int) = eq
 prop "foldThen with Some agrees with a pure fold" (xs : List Int) = eq
   (foldThen (acc x => Some (acc + x)) 0 xs)
   (Some (fold (acc x => acc + x) 0 xs))
+
+-- ─── Instance laws for the cells added by sheet rows H-7 and A-2 ─────────
+{- ⚠️ Two things constrain how these are written.
+
+   1. `medaka test`'s property runner does NOT dispatch on `Arbitrary` — it
+      generates from the declared TYPE (`prop_runner.mdk`'s `genForType`,
+      which handles `List`/`Array`/tuple/`Option`/`Result` structurally).  So
+      a `prop` PARAMETER cannot observe these instances; every law below calls
+      `arbitrary` / `shrink` explicitly instead.
+   2. Inside this module the `==` OPERATOR does not resolve to `Eq` for a
+      non-primitive (`Some n == Some n` fails to check here while
+      `eq (Some n) (Some n)` succeeds, and the same program compiles in any
+      other module).  Every existing prop in this file already uses `eq` for
+      that reason; these follow suit. -}
+
+-- Draw `n` independent values from an `Arbitrary` instance.
+drawN : Arbitrary a => Int -> <Rand> List a
+drawN n = if n <= 0 then [] else arbitrary () :: drawN (n - 1)
+
+-- `Arbitrary Int`'s declared range.
+inIntRange : Int -> Bool
+inIntRange x = x >= -1000 && x <= 1000
+
+optInRange : Option Int -> Bool
+optInRange None = True
+optInRange (Some x) = inIntRange x
+
+listInRange : List Int -> Bool
+listInRange xs = length xs <= 10 && all inIntRange xs
+
+-- LAW (H-7): `Arbitrary (List a)` must DELEGATE to the element instance (every
+-- element inside `Arbitrary Int`'s own range), must respect the documented
+-- length bound, and must not be the degenerate always-empty generator — that
+-- last clause is why 50 draws are taken rather than one.
+prop "Arbitrary (List a) delegates, bounds length, and is not degenerate" (n : Int) =
+  let draws = drawN 50 : List (List Int)
+  all listInRange draws && any (xs => length xs > 0) draws
+
+-- LAW (H-7): `Arbitrary (Option a)` must produce BOTH constructors — a
+-- generator that only ever yielded `None` would satisfy every payload law
+-- vacuously — and its `Some` payload must come from the element instance.
+prop "Arbitrary (Option a) draws both constructors and delegates" (n : Int) =
+  let draws = drawN 50 : List (Option Int)
+  all optInRange draws && any isSome draws && any (o => not (isSome o)) draws
+
+-- LAW (H-7): `shrink` must return strictly smaller values.  `None` is the only
+-- `Option` smaller than a `Some`, and nothing is smaller than `None`.
+prop "Arbitrary (Option a) shrinks Some to None and None no further" (x : Int) =
+  let none = None : Option Int
+  eq (shrink (Some x)) [none] && eq (shrink none) []
+
+-- LAW (A-2): derived `Eq`/`Debug` on `Rep`/`RField` are structural and must
+-- agree — the comparison has to reach through `RRecord`'s `List RField` into
+-- each field's nested `Rep`, which is the whole point of a generic
+-- representation being inspectable.
+prop "Eq/Debug on Rep reach through RRecord into a nested field" (n : Int) (nm : String) =
+  let a = RRecord "R" [RField { fld_name = nm, fld_rep = RInt n }]
+  let b = RRecord "R" [RField { fld_name = nm, fld_rep = RInt n }]
+  let c = RRecord "R" [RField { fld_name = nm, fld_rep = RInt (n + 1) }]
+  eq a b
+    && not (eq a c)
+    && eq (debug a) (debug b)
+    && not (eq (debug a) (debug c))
+
+prop "Eq Rep separates the primitive leaves" (n : Int) = eq (RInt n) (RInt n)
+  && not (eq (RInt n) RUnit)
+  && not (eq (RCon "A" []) (RCon "B" []))
+  && not (eq (RCon "A" [RInt n]) (RCon "A" []))
+
+-- LAW (A-5): `Ord (Array a)` is `Ord (List a)` transported along
+-- `toList`/`arrayFromList` — same lexicographic order, and consistent with
+-- `Eq (Array a)` (`compare` is `Eq` exactly when the arrays are equal).
+prop "Ord Array agrees with Ord List elementwise" (xs : List Int) (ys : List Int) =
+  let a = arrayFromList xs
+  let b = arrayFromList ys
+  eq (compare a b) (compare xs ys)
+
+prop "Ord Array is consistent with Eq Array" (xs : List Int) (ys : List Int) =
+  let a = arrayFromList xs
+  let b = arrayFromList ys
+  eq (eq (compare a b) Eq) (eq a b)
+
+prop "Ord Array: a proper prefix sorts before its extension" (xs : List Int) (y : Int) = eq (compare (arrayFromList xs) (arrayFromList (xs ++ [y]))) Lt
+
+-- LAW (A-5): `Hashable (Array a)` agrees with `Hashable (List a)` on the same
+-- elements (the peer relationship), and equal arrays hash equally (the
+-- `Hashable`/`Eq` law that makes it usable as a `HashMap` key).
+prop "Hashable Array agrees with Hashable List" (xs : List Int) =
+  eq (hash (arrayFromList xs)) (hash xs)
+
+prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
+  eq (hash (arrayFromList xs)) (hash (arrayFromList xs))
 # DESUGAR
 (DData Public "Ordering" () ((variant "Lt" (ConPos)) (variant "Eq" (ConPos)) (variant "Gt" (ConPos))) ())
 (DData Public "Option" ("a") ((variant "Some" (ConPos (TyVar "a"))) (variant "None" (ConPos))) ())
@@ -1775,6 +1934,9 @@ prop "foldThen with Some agrees with a pure fold" (xs : List Int) = eq
 (DImpl true "Eq" ((TyApp (TyCon "Array") (TyVar "a"))) ((req "Eq" ((TyVar "a")))) ((im "eq" ((PVar "a") (PVar "b")) (EIf (EBinOp "/=" (EApp (EVar "arrayLength") (EVar "a")) (EApp (EVar "arrayLength") (EVar "b"))) (EVar "False") (EApp (EApp (EApp (EApp (EVar "eqGo") (EVar "a")) (EVar "b")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "a")))))))
 (DTypeSig false "eqGo" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))))
 (DFunDef false "eqGo" ((PVar "a") (PVar "b") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "True") (EIf (EApp (EApp (EVar "eq") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a"))) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "b"))) (EApp (EApp (EApp (EApp (EVar "eqGo") (EVar "a")) (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EVar "False"))))
+(DImpl true "Ord" ((TyApp (TyCon "Array") (TyVar "a"))) ((req "Ord" ((TyVar "a")))) ((im "compare" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "compare") (EApp (EApp (EApp (EVar "arrItems") (EVar "a")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "a")))) (EApp (EApp (EApp (EVar "arrItems") (EVar "b")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "b"))))) (im "lt" ((PVar "x") (PVar "y")) (EMatch (EApp (EApp (EVar "compare") (EVar "x")) (EVar "y")) (arm (PCon "Lt") () (EVar "True")) (arm PWild () (EVar "False")))) (im "gt" ((PVar "x") (PVar "y")) (EMatch (EApp (EApp (EVar "compare") (EVar "x")) (EVar "y")) (arm (PCon "Gt") () (EVar "True")) (arm PWild () (EVar "False")))) (im "lte" ((PVar "x") (PVar "y")) (EMatch (EApp (EApp (EVar "compare") (EVar "x")) (EVar "y")) (arm (PCon "Gt") () (EVar "False")) (arm PWild () (EVar "True")))) (im "gte" ((PVar "x") (PVar "y")) (EMatch (EApp (EApp (EVar "compare") (EVar "x")) (EVar "y")) (arm (PCon "Lt") () (EVar "False")) (arm PWild () (EVar "True")))) (im "min" ((PVar "x") (PVar "y")) (EMatch (EApp (EApp (EVar "compare") (EVar "x")) (EVar "y")) (arm (PCon "Gt") () (EVar "y")) (arm PWild () (EVar "x")))) (im "max" ((PVar "x") (PVar "y")) (EMatch (EApp (EApp (EVar "compare") (EVar "x")) (EVar "y")) (arm (PCon "Lt") () (EVar "y")) (arm PWild () (EVar "x"))))))
+(DTypeSig false "arrItems" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyVar "a"))))))
+(DFunDef false "arrItems" ((PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit) (EBinOp "::" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (EApp (EApp (EApp (EVar "arrItems") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))))
 (DImpl true "Debug" ((TyApp (TyCon "Option") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PCon "None")) (ELit (LString "None"))) (im "debug" ((PCon "Some" (PVar "x"))) (EBinOp "++" (ELit (LString "Some ")) (EApp (EVar "debug") (EVar "x"))))))
 (DImpl true "Debug" ((TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a"))) ((req "Debug" ((TyVar "e"))) (req "Debug" ((TyVar "a")))) ((im "debug" ((PCon "Ok" (PVar "x"))) (EBinOp "++" (ELit (LString "Ok ")) (EApp (EVar "debug") (EVar "x")))) (im "debug" ((PCon "Err" (PVar "e"))) (EBinOp "++" (ELit (LString "Err ")) (EApp (EVar "debug") (EVar "e"))))))
 (DImpl true "Debug" ((TyTuple (TyVar "a") (TyVar "b"))) ((req "Debug" ((TyVar "a"))) (req "Debug" ((TyVar "b")))) ((im "debug" ((PTuple (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EApp (EVar "debug") (EVar "a")))) (ELit (LString ", "))) (EApp (EVar "display") (EApp (EVar "debug") (EVar "b")))) (ELit (LString ")"))))))
@@ -1827,6 +1989,9 @@ prop "foldThen with Some agrees with a pure fold" (xs : List Int) = eq
 (DFunDef false "hashListItems" ((PVar "acc") (PList)) (EVar "acc"))
 (DFunDef false "hashListItems" ((PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "hashListItems") (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 33))) (EApp (EVar "hash") (EVar "x")))) (EVar "xs")))
 (DImpl true "Hashable" ((TyApp (TyCon "List") (TyVar "a"))) ((req "Hashable" ((TyVar "a")))) ((im "hash" ((PVar "xs")) (EApp (EApp (EVar "hashListItems") (ELit (LInt 0))) (EVar "xs")))))
+(DImpl true "Hashable" ((TyApp (TyCon "Array") (TyVar "a"))) ((req "Hashable" ((TyVar "a")))) ((im "hash" ((PVar "arr")) (EApp (EApp (EApp (EApp (EVar "hashArrGo") (ELit (LInt 0))) (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr"))))))
+(DTypeSig false "hashArrGo" (TyConstrained ((cstr "Hashable" (TyVar "a"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))))
+(DFunDef false "hashArrGo" ((PVar "acc") (PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EApp (EApp (EApp (EApp (EVar "hashArrGo") (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 33))) (EApp (EVar "hash") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))))) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))))
 (DImpl true "Hashable" ((TyTuple (TyVar "a") (TyVar "b"))) ((req "Hashable" ((TyVar "a"))) (req "Hashable" ((TyVar "b")))) ((im "hash" ((PTuple (PVar "a") (PVar "b"))) (EBinOp "+" (EBinOp "*" (EApp (EVar "hash") (EVar "a")) (ELit (LInt 33))) (EApp (EVar "hash") (EVar "b"))))))
 (DImpl true "Hashable" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c"))) ((req "Hashable" ((TyVar "a"))) (req "Hashable" ((TyVar "b"))) (req "Hashable" ((TyVar "c")))) ((im "hash" ((PTuple (PVar "a") (PVar "b") (PVar "c"))) (EBinOp "+" (EBinOp "*" (EBinOp "+" (EBinOp "*" (EApp (EVar "hash") (EVar "a")) (ELit (LInt 33))) (EApp (EVar "hash") (EVar "b"))) (ELit (LInt 33))) (EApp (EVar "hash") (EVar "c"))))))
 (DImpl true "Hashable" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c") (TyVar "d"))) ((req "Hashable" ((TyVar "a"))) (req "Hashable" ((TyVar "b"))) (req "Hashable" ((TyVar "c"))) (req "Hashable" ((TyVar "d")))) ((im "hash" ((PTuple (PVar "a") (PVar "b") (PVar "c") (PVar "d"))) (EBinOp "+" (EBinOp "*" (EBinOp "+" (EBinOp "*" (EBinOp "+" (EBinOp "*" (EApp (EVar "hash") (EVar "a")) (ELit (LInt 33))) (EApp (EVar "hash") (EVar "b"))) (ELit (LInt 33))) (EApp (EVar "hash") (EVar "c"))) (ELit (LInt 33))) (EApp (EVar "hash") (EVar "d"))))))
@@ -2008,8 +2173,14 @@ prop "foldThen with Some agrees with a pure fold" (xs : List Int) = eq
 (DImpl true "Arbitrary" ((TyCon "String")) () ((im "arbitrary" ((PLit LUnit)) (EApp (EVar "arbitraryString") (ELit LUnit))) (im "shrink" (PWild) (EListLit))))
 (DTypeSig true "arbitraryList" (TyFun (TyFun (TyCon "Unit") (TyEffect ("Rand") None (TyVar "a"))) (TyFun (TyCon "Int") (TyEffect ("Rand") None (TyApp (TyCon "List") (TyVar "a"))))))
 (DFunDef false "arbitraryList" ((PVar "gen") (PVar "maxLen")) (ELetGroup ((lgb "go" (clause ((PLit (LInt 0)) (PVar "acc")) (EVar "acc")) (clause ((PVar "n") (PVar "acc")) (EApp (EApp (EVar "go") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EBinOp "::" (EApp (EVar "gen") (ELit LUnit)) (EVar "acc")))))) (EApp (EApp (EVar "go") (EApp (EApp (EVar "randomInt") (ELit (LInt 0))) (EVar "maxLen"))) (EListLit))))
+(DImpl true "Arbitrary" ((TyApp (TyCon "List") (TyVar "a"))) ((req "Arbitrary" ((TyVar "a")))) ((im "arbitrary" ((PLit LUnit)) (EApp (EApp (EVar "arbitraryList") (EVar "arbitrary")) (ELit (LInt 10)))) (im "shrink" (PWild) (EListLit))))
+(DImpl true "Arbitrary" ((TyApp (TyCon "Option") (TyVar "a"))) ((req "Arbitrary" ((TyVar "a")))) ((im "arbitrary" ((PLit LUnit)) (EIf (EBinOp "==" (EApp (EApp (EVar "randomInt") (ELit (LInt 0))) (ELit (LInt 1))) (ELit (LInt 0))) (EVar "None") (EApp (EVar "Some") (EApp (EVar "arbitrary") (ELit LUnit))))) (im "shrink" ((PCon "Some" PWild)) (EListLit (EVar "None"))) (im "shrink" ((PCon "None")) (EListLit))))
 (DData Public "Rep" () ((variant "RCon" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Rep")))) (variant "RRecord" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "RField")))) (variant "RInt" (ConPos (TyCon "Int"))) (variant "RFloat" (ConPos (TyCon "Float"))) (variant "RString" (ConPos (TyCon "String"))) (variant "RBool" (ConPos (TyCon "Bool"))) (variant "RChar" (ConPos (TyCon "Char"))) (variant "RUnit" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "Rep")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "RCon" (PVar "__a0") (PVar "__a1")) (PCon "RCon" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1")))) (arm (PTuple (PCon "RRecord" (PVar "__a0") (PVar "__a1")) (PCon "RRecord" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1")))) (arm (PTuple (PCon "RInt" (PVar "__a0")) (PCon "RInt" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "RFloat" (PVar "__a0")) (PCon "RFloat" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "RString" (PVar "__a0")) (PCon "RString" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "RBool" (PVar "__a0")) (PCon "RBool" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "RChar" (PVar "__a0")) (PCon "RChar" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "RUnit") (PCon "RUnit")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DImpl true "Debug" ((TyCon "Rep")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "RCon" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "RCon ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a1"))))) (arm (PCon "RRecord" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "RRecord ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a1"))))) (arm (PCon "RInt" (PVar "__a0")) () (EBinOp "++" (ELit (LString "RInt ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0"))))) (arm (PCon "RFloat" (PVar "__a0")) () (EBinOp "++" (ELit (LString "RFloat ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0"))))) (arm (PCon "RString" (PVar "__a0")) () (EBinOp "++" (ELit (LString "RString ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0"))))) (arm (PCon "RBool" (PVar "__a0")) () (EBinOp "++" (ELit (LString "RBool ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0"))))) (arm (PCon "RChar" (PVar "__a0")) () (EBinOp "++" (ELit (LString "RChar ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0"))))) (arm (PCon "RUnit") () (ELit (LString "RUnit")))))))
 (DData Public "RField" () ((variant "RField" (ConNamed (field "fld_name" (TyCon "String")) (field "fld_rep" (TyCon "Rep"))))) ())
+(DImpl true "Eq" ((TyCon "RField")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "RField" ((rf "fld_name" (PVar "__a0")) (rf "fld_rep" (PVar "__a1"))) false) (PRec "RField" ((rf "fld_name" (PVar "__b0")) (rf "fld_rep" (PVar "__b1"))) false)) () (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1"))))))))
+(DImpl true "Debug" ((TyCon "RField")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PRec "RField" ((rf "fld_name" (PVar "__a0")) (rf "fld_rep" (PVar "__a1"))) false) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "RField {")) (ELit (LString " fld_name = "))) (EApp (EVar "debug") (EVar "__a0"))) (ELit (LString ", fld_rep = "))) (EApp (EVar "debug") (EVar "__a1"))) (ELit (LString " }"))))))))
 (DInterface true false "Generic" ("a") () ((imethod "to_rep" (TyFun (TyVar "a") (TyCon "Rep")) None) (imethod "from_rep" (TyFun (TyCon "Rep") (TyVar "a")) (mdef (PWild) (EApp (EVar "panic") (ELit (LString "from_rep: not implemented (Phase 1 is to_rep only)")))))))
 (DImpl true "Generic" ((TyCon "Int")) () ((im "to_rep" ((PVar "n")) (EApp (EVar "RInt") (EVar "n"))) (im "from_rep" (PWild) (EApp (EVar "panic") (ELit (LString "from_rep: not implemented (Phase 1 is to_rep only)"))))))
 (DImpl true "Generic" ((TyCon "Float")) () ((im "to_rep" ((PVar "x")) (EApp (EVar "RFloat") (EVar "x"))) (im "from_rep" (PWild) (EApp (EVar "panic") (ELit (LString "from_rep: not implemented (Phase 1 is to_rep only)"))))))
@@ -2032,6 +2203,25 @@ prop "foldThen with Some agrees with a pure fold" (xs : List Int) = eq
 (DProp false "map3 on Some matches direct application" ((pp "a" (TyCon "Int")) (pp "b" (TyCon "Int")) (pp "c" (TyCon "Int"))) (EApp (EApp (EVar "eq") (EApp (EApp (EApp (EApp (EVar "map3") (ELam ((PVar "x") (PVar "y") (PVar "z")) (EBinOp "+" (EBinOp "+" (EVar "x") (EVar "y")) (EVar "z")))) (EApp (EVar "Some") (EVar "a"))) (EApp (EVar "Some") (EVar "b"))) (EApp (EVar "Some") (EVar "c")))) (EApp (EVar "Some") (EBinOp "+" (EBinOp "+" (EVar "a") (EVar "b")) (EVar "c")))))
 (DProp false "mapFirst on Result generalizes mapErr" ((pp "n" (TyCon "Int"))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "mapFirst") (ELam ((PVar "x")) (EBinOp "+" (EVar "x") (ELit (LInt 1))))) (EAnnot (EApp (EVar "Err") (EVar "n")) (TyApp (TyApp (TyCon "Result") (TyCon "Int")) (TyCon "Int"))))) (EApp (EApp (EVar "mapErr") (ELam ((PVar "x")) (EBinOp "+" (EVar "x") (ELit (LInt 1))))) (EApp (EVar "Err") (EVar "n")))))
 (DProp false "foldThen with Some agrees with a pure fold" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EApp (EVar "eq") (EApp (EApp (EApp (EVar "foldThen") (ELam ((PVar "acc") (PVar "x")) (EApp (EVar "Some") (EBinOp "+" (EVar "acc") (EVar "x"))))) (ELit (LInt 0))) (EVar "xs"))) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "x")) (EBinOp "+" (EVar "acc") (EVar "x")))) (ELit (LInt 0))) (EVar "xs")))))
+(DTypeSig false "drawN" (TyConstrained ((cstr "Arbitrary" (TyVar "a"))) (TyFun (TyCon "Int") (TyEffect ("Rand") None (TyApp (TyCon "List") (TyVar "a"))))))
+(DFunDef false "drawN" ((PVar "n")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EListLit) (EBinOp "::" (EApp (EVar "arbitrary") (ELit LUnit)) (EApp (EVar "drawN") (EBinOp "-" (EVar "n") (ELit (LInt 1)))))))
+(DTypeSig false "inIntRange" (TyFun (TyCon "Int") (TyCon "Bool")))
+(DFunDef false "inIntRange" ((PVar "x")) (EBinOp "&&" (EBinOp ">=" (EVar "x") (EUnOp "-" (ELit (LInt 1000)))) (EBinOp "<=" (EVar "x") (ELit (LInt 1000)))))
+(DTypeSig false "optInRange" (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyCon "Bool")))
+(DFunDef false "optInRange" ((PCon "None")) (EVar "True"))
+(DFunDef false "optInRange" ((PCon "Some" (PVar "x"))) (EApp (EVar "inIntRange") (EVar "x")))
+(DTypeSig false "listInRange" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Bool")))
+(DFunDef false "listInRange" ((PVar "xs")) (EBinOp "&&" (EBinOp "<=" (EApp (EVar "length") (EVar "xs")) (ELit (LInt 10))) (EApp (EApp (EVar "all") (EVar "inIntRange")) (EVar "xs"))))
+(DProp false "Arbitrary (List a) delegates, bounds length, and is not degenerate" ((pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "draws") (EAnnot (EApp (EVar "drawN") (ELit (LInt 50))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int"))))) (DoExpr (EBinOp "&&" (EApp (EApp (EVar "all") (EVar "listInRange")) (EVar "draws")) (EApp (EApp (EVar "any") (ELam ((PVar "xs")) (EBinOp ">" (EApp (EVar "length") (EVar "xs")) (ELit (LInt 0))))) (EVar "draws"))))))
+(DProp false "Arbitrary (Option a) draws both constructors and delegates" ((pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "draws") (EAnnot (EApp (EVar "drawN") (ELit (LInt 50))) (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Int"))))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "all") (EVar "optInRange")) (EVar "draws")) (EApp (EApp (EVar "any") (EVar "isSome")) (EVar "draws"))) (EApp (EApp (EVar "any") (ELam ((PVar "o")) (EApp (EVar "not") (EApp (EVar "isSome") (EVar "o"))))) (EVar "draws"))))))
+(DProp false "Arbitrary (Option a) shrinks Some to None and None no further" ((pp "x" (TyCon "Int"))) (EBlock (DoLet false false (PVar "none") (EAnnot (EVar "None") (TyApp (TyCon "Option") (TyCon "Int")))) (DoExpr (EBinOp "&&" (EApp (EApp (EVar "eq") (EApp (EVar "shrink") (EApp (EVar "Some") (EVar "x")))) (EListLit (EVar "none"))) (EApp (EApp (EVar "eq") (EApp (EVar "shrink") (EVar "none"))) (EListLit))))))
+(DProp false "Eq/Debug on Rep reach through RRecord into a nested field" ((pp "n" (TyCon "Int")) (pp "nm" (TyCon "String"))) (EBlock (DoLet false false (PVar "a") (EApp (EApp (EVar "RRecord") (ELit (LString "R"))) (EListLit (ERecordCreate "RField" ((fa "fld_name" (EVar "nm")) (fa "fld_rep" (EApp (EVar "RInt") (EVar "n")))))))) (DoLet false false (PVar "b") (EApp (EApp (EVar "RRecord") (ELit (LString "R"))) (EListLit (ERecordCreate "RField" ((fa "fld_name" (EVar "nm")) (fa "fld_rep" (EApp (EVar "RInt") (EVar "n")))))))) (DoLet false false (PVar "c") (EApp (EApp (EVar "RRecord") (ELit (LString "R"))) (EListLit (ERecordCreate "RField" ((fa "fld_name" (EVar "nm")) (fa "fld_rep" (EApp (EVar "RInt") (EBinOp "+" (EVar "n") (ELit (LInt 1)))))))))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "a")) (EVar "b")) (EApp (EVar "not") (EApp (EApp (EVar "eq") (EVar "a")) (EVar "c")))) (EApp (EApp (EVar "eq") (EApp (EVar "debug") (EVar "a"))) (EApp (EVar "debug") (EVar "b")))) (EApp (EVar "not") (EApp (EApp (EVar "eq") (EApp (EVar "debug") (EVar "a"))) (EApp (EVar "debug") (EVar "c"))))))))
+(DProp false "Eq Rep separates the primitive leaves" ((pp "n" (TyCon "Int"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EApp (EVar "RInt") (EVar "n"))) (EApp (EVar "RInt") (EVar "n"))) (EApp (EVar "not") (EApp (EApp (EVar "eq") (EApp (EVar "RInt") (EVar "n"))) (EVar "RUnit")))) (EApp (EVar "not") (EApp (EApp (EVar "eq") (EApp (EApp (EVar "RCon") (ELit (LString "A"))) (EListLit))) (EApp (EApp (EVar "RCon") (ELit (LString "B"))) (EListLit))))) (EApp (EVar "not") (EApp (EApp (EVar "eq") (EApp (EApp (EVar "RCon") (ELit (LString "A"))) (EListLit (EApp (EVar "RInt") (EVar "n"))))) (EApp (EApp (EVar "RCon") (ELit (LString "A"))) (EListLit))))))
+(DProp false "Ord Array agrees with Ord List elementwise" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "ys" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "a") (EApp (EVar "arrayFromList") (EVar "xs"))) (DoLet false false (PVar "b") (EApp (EVar "arrayFromList") (EVar "ys"))) (DoExpr (EApp (EApp (EVar "eq") (EApp (EApp (EVar "compare") (EVar "a")) (EVar "b"))) (EApp (EApp (EVar "compare") (EVar "xs")) (EVar "ys"))))))
+(DProp false "Ord Array is consistent with Eq Array" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "ys" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "a") (EApp (EVar "arrayFromList") (EVar "xs"))) (DoLet false false (PVar "b") (EApp (EVar "arrayFromList") (EVar "ys"))) (DoExpr (EApp (EApp (EVar "eq") (EApp (EApp (EVar "eq") (EApp (EApp (EVar "compare") (EVar "a")) (EVar "b"))) (EVar "Eq"))) (EApp (EApp (EVar "eq") (EVar "a")) (EVar "b"))))))
+(DProp false "Ord Array: a proper prefix sorts before its extension" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "y" (TyCon "Int"))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "compare") (EApp (EVar "arrayFromList") (EVar "xs"))) (EApp (EVar "arrayFromList") (EBinOp "++" (EVar "xs") (EListLit (EVar "y")))))) (EVar "Lt")))
+(DProp false "Hashable Array agrees with Hashable List" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EApp (EVar "eq") (EApp (EVar "hash") (EApp (EVar "arrayFromList") (EVar "xs")))) (EApp (EVar "hash") (EVar "xs"))))
+(DProp false "Hashable Array: equal arrays hash equally" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EApp (EVar "eq") (EApp (EVar "hash") (EApp (EVar "arrayFromList") (EVar "xs")))) (EApp (EVar "hash") (EApp (EVar "arrayFromList") (EVar "xs")))))
 # MARK
 (DData Public "Ordering" () ((variant "Lt" (ConPos)) (variant "Eq" (ConPos)) (variant "Gt" (ConPos))) ())
 (DData Public "Option" ("a") ((variant "Some" (ConPos (TyVar "a"))) (variant "None" (ConPos))) ())
@@ -2106,6 +2296,9 @@ prop "foldThen with Some agrees with a pure fold" (xs : List Int) = eq
 (DImpl true "Eq" ((TyApp (TyCon "Array") (TyVar "a"))) ((req "Eq" ((TyVar "a")))) ((im "eq" ((PVar "a") (PVar "b")) (EIf (EBinOp "/=" (EApp (EVar "arrayLength") (EVar "a")) (EApp (EVar "arrayLength") (EVar "b"))) (EVar "False") (EApp (EApp (EApp (EApp (EDictApp "eqGo") (EVar "a")) (EVar "b")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "a")))))))
 (DTypeSig false "eqGo" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))))
 (DFunDef false "eqGo" ((PVar "a") (PVar "b") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "True") (EIf (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a"))) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "b"))) (EApp (EApp (EApp (EApp (EDictApp "eqGo") (EVar "a")) (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EVar "False"))))
+(DImpl true "Ord" ((TyApp (TyCon "Array") (TyVar "a"))) ((req "Ord" ((TyVar "a")))) ((im "compare" ((PVar "a") (PVar "b")) (EApp (EApp (EMethodRef "compare") (EApp (EApp (EApp (EVar "arrItems") (EVar "a")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "a")))) (EApp (EApp (EApp (EVar "arrItems") (EVar "b")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "b"))))) (im "lt" ((PVar "x") (PVar "y")) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "x")) (EVar "y")) (arm (PCon "Lt") () (EVar "True")) (arm PWild () (EVar "False")))) (im "gt" ((PVar "x") (PVar "y")) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "x")) (EVar "y")) (arm (PCon "Gt") () (EVar "True")) (arm PWild () (EVar "False")))) (im "lte" ((PVar "x") (PVar "y")) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "x")) (EVar "y")) (arm (PCon "Gt") () (EVar "False")) (arm PWild () (EVar "True")))) (im "gte" ((PVar "x") (PVar "y")) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "x")) (EVar "y")) (arm (PCon "Lt") () (EVar "False")) (arm PWild () (EVar "True")))) (im "min" ((PVar "x") (PVar "y")) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "x")) (EVar "y")) (arm (PCon "Gt") () (EVar "y")) (arm PWild () (EVar "x")))) (im "max" ((PVar "x") (PVar "y")) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "x")) (EVar "y")) (arm (PCon "Lt") () (EVar "y")) (arm PWild () (EVar "x"))))))
+(DTypeSig false "arrItems" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyVar "a"))))))
+(DFunDef false "arrItems" ((PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit) (EBinOp "::" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (EApp (EApp (EApp (EVar "arrItems") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))))
 (DImpl true "Debug" ((TyApp (TyCon "Option") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PCon "None")) (ELit (LString "None"))) (im "debug" ((PCon "Some" (PVar "x"))) (EBinOp "++" (ELit (LString "Some ")) (EApp (EMethodRef "debug") (EVar "x"))))))
 (DImpl true "Debug" ((TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a"))) ((req "Debug" ((TyVar "e"))) (req "Debug" ((TyVar "a")))) ((im "debug" ((PCon "Ok" (PVar "x"))) (EBinOp "++" (ELit (LString "Ok ")) (EApp (EMethodRef "debug") (EVar "x")))) (im "debug" ((PCon "Err" (PVar "e"))) (EBinOp "++" (ELit (LString "Err ")) (EApp (EMethodRef "debug") (EVar "e"))))))
 (DImpl true "Debug" ((TyTuple (TyVar "a") (TyVar "b"))) ((req "Debug" ((TyVar "a"))) (req "Debug" ((TyVar "b")))) ((im "debug" ((PTuple (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "a")))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "b")))) (ELit (LString ")"))))))
@@ -2158,6 +2351,9 @@ prop "foldThen with Some agrees with a pure fold" (xs : List Int) = eq
 (DFunDef false "hashListItems" ((PVar "acc") (PList)) (EVar "acc"))
 (DFunDef false "hashListItems" ((PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EDictApp "hashListItems") (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 33))) (EApp (EMethodRef "hash") (EVar "x")))) (EVar "xs")))
 (DImpl true "Hashable" ((TyApp (TyCon "List") (TyVar "a"))) ((req "Hashable" ((TyVar "a")))) ((im "hash" ((PVar "xs")) (EApp (EApp (EDictApp "hashListItems") (ELit (LInt 0))) (EVar "xs")))))
+(DImpl true "Hashable" ((TyApp (TyCon "Array") (TyVar "a"))) ((req "Hashable" ((TyVar "a")))) ((im "hash" ((PVar "arr")) (EApp (EApp (EApp (EApp (EDictApp "hashArrGo") (ELit (LInt 0))) (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr"))))))
+(DTypeSig false "hashArrGo" (TyConstrained ((cstr "Hashable" (TyVar "a"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))))
+(DFunDef false "hashArrGo" ((PVar "acc") (PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EApp (EApp (EApp (EApp (EDictApp "hashArrGo") (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 33))) (EApp (EMethodRef "hash") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))))) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))))
 (DImpl true "Hashable" ((TyTuple (TyVar "a") (TyVar "b"))) ((req "Hashable" ((TyVar "a"))) (req "Hashable" ((TyVar "b")))) ((im "hash" ((PTuple (PVar "a") (PVar "b"))) (EBinOp "+" (EBinOp "*" (EApp (EMethodRef "hash") (EVar "a")) (ELit (LInt 33))) (EApp (EMethodRef "hash") (EVar "b"))))))
 (DImpl true "Hashable" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c"))) ((req "Hashable" ((TyVar "a"))) (req "Hashable" ((TyVar "b"))) (req "Hashable" ((TyVar "c")))) ((im "hash" ((PTuple (PVar "a") (PVar "b") (PVar "c"))) (EBinOp "+" (EBinOp "*" (EBinOp "+" (EBinOp "*" (EApp (EMethodRef "hash") (EVar "a")) (ELit (LInt 33))) (EApp (EMethodRef "hash") (EVar "b"))) (ELit (LInt 33))) (EApp (EMethodRef "hash") (EVar "c"))))))
 (DImpl true "Hashable" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c") (TyVar "d"))) ((req "Hashable" ((TyVar "a"))) (req "Hashable" ((TyVar "b"))) (req "Hashable" ((TyVar "c"))) (req "Hashable" ((TyVar "d")))) ((im "hash" ((PTuple (PVar "a") (PVar "b") (PVar "c") (PVar "d"))) (EBinOp "+" (EBinOp "*" (EBinOp "+" (EBinOp "*" (EBinOp "+" (EBinOp "*" (EApp (EMethodRef "hash") (EVar "a")) (ELit (LInt 33))) (EApp (EMethodRef "hash") (EVar "b"))) (ELit (LInt 33))) (EApp (EMethodRef "hash") (EVar "c"))) (ELit (LInt 33))) (EApp (EMethodRef "hash") (EVar "d"))))))
@@ -2339,8 +2535,14 @@ prop "foldThen with Some agrees with a pure fold" (xs : List Int) = eq
 (DImpl true "Arbitrary" ((TyCon "String")) () ((im "arbitrary" ((PLit LUnit)) (EApp (EVar "arbitraryString") (ELit LUnit))) (im "shrink" (PWild) (EListLit))))
 (DTypeSig true "arbitraryList" (TyFun (TyFun (TyCon "Unit") (TyEffect ("Rand") None (TyVar "a"))) (TyFun (TyCon "Int") (TyEffect ("Rand") None (TyApp (TyCon "List") (TyVar "a"))))))
 (DFunDef false "arbitraryList" ((PVar "gen") (PVar "maxLen")) (ELetGroup ((lgb "go" (clause ((PLit (LInt 0)) (PVar "acc")) (EVar "acc")) (clause ((PVar "n") (PVar "acc")) (EApp (EApp (EVar "go") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EBinOp "::" (EApp (EVar "gen") (ELit LUnit)) (EVar "acc")))))) (EApp (EApp (EVar "go") (EApp (EApp (EVar "randomInt") (ELit (LInt 0))) (EVar "maxLen"))) (EListLit))))
+(DImpl true "Arbitrary" ((TyApp (TyCon "List") (TyVar "a"))) ((req "Arbitrary" ((TyVar "a")))) ((im "arbitrary" ((PLit LUnit)) (EApp (EApp (EVar "arbitraryList") (EMethodRef "arbitrary")) (ELit (LInt 10)))) (im "shrink" (PWild) (EListLit))))
+(DImpl true "Arbitrary" ((TyApp (TyCon "Option") (TyVar "a"))) ((req "Arbitrary" ((TyVar "a")))) ((im "arbitrary" ((PLit LUnit)) (EIf (EBinOp "==" (EApp (EApp (EVar "randomInt") (ELit (LInt 0))) (ELit (LInt 1))) (ELit (LInt 0))) (EVar "None") (EApp (EVar "Some") (EApp (EMethodRef "arbitrary") (ELit LUnit))))) (im "shrink" ((PCon "Some" PWild)) (EListLit (EVar "None"))) (im "shrink" ((PCon "None")) (EListLit))))
 (DData Public "Rep" () ((variant "RCon" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Rep")))) (variant "RRecord" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "RField")))) (variant "RInt" (ConPos (TyCon "Int"))) (variant "RFloat" (ConPos (TyCon "Float"))) (variant "RString" (ConPos (TyCon "String"))) (variant "RBool" (ConPos (TyCon "Bool"))) (variant "RChar" (ConPos (TyCon "Char"))) (variant "RUnit" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "Rep")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "RCon" (PVar "__a0") (PVar "__a1")) (PCon "RCon" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1")))) (arm (PTuple (PCon "RRecord" (PVar "__a0") (PVar "__a1")) (PCon "RRecord" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1")))) (arm (PTuple (PCon "RInt" (PVar "__a0")) (PCon "RInt" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "RFloat" (PVar "__a0")) (PCon "RFloat" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "RString" (PVar "__a0")) (PCon "RString" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "RBool" (PVar "__a0")) (PCon "RBool" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "RChar" (PVar "__a0")) (PCon "RChar" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "RUnit") (PCon "RUnit")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DImpl true "Debug" ((TyCon "Rep")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "RCon" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "RCon ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a1"))))) (arm (PCon "RRecord" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "RRecord ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a1"))))) (arm (PCon "RInt" (PVar "__a0")) () (EBinOp "++" (ELit (LString "RInt ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0"))))) (arm (PCon "RFloat" (PVar "__a0")) () (EBinOp "++" (ELit (LString "RFloat ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0"))))) (arm (PCon "RString" (PVar "__a0")) () (EBinOp "++" (ELit (LString "RString ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0"))))) (arm (PCon "RBool" (PVar "__a0")) () (EBinOp "++" (ELit (LString "RBool ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0"))))) (arm (PCon "RChar" (PVar "__a0")) () (EBinOp "++" (ELit (LString "RChar ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0"))))) (arm (PCon "RUnit") () (ELit (LString "RUnit")))))))
 (DData Public "RField" () ((variant "RField" (ConNamed (field "fld_name" (TyCon "String")) (field "fld_rep" (TyCon "Rep"))))) ())
+(DImpl true "Eq" ((TyCon "RField")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "RField" ((rf "fld_name" (PVar "__a0")) (rf "fld_rep" (PVar "__a1"))) false) (PRec "RField" ((rf "fld_name" (PVar "__b0")) (rf "fld_rep" (PVar "__b1"))) false)) () (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1"))))))))
+(DImpl true "Debug" ((TyCon "RField")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PRec "RField" ((rf "fld_name" (PVar "__a0")) (rf "fld_rep" (PVar "__a1"))) false) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "RField {")) (ELit (LString " fld_name = "))) (EApp (EMethodRef "debug") (EVar "__a0"))) (ELit (LString ", fld_rep = "))) (EApp (EMethodRef "debug") (EVar "__a1"))) (ELit (LString " }"))))))))
 (DInterface true false "Generic" ("a") () ((imethod "to_rep" (TyFun (TyVar "a") (TyCon "Rep")) None) (imethod "from_rep" (TyFun (TyCon "Rep") (TyVar "a")) (mdef (PWild) (EApp (EVar "panic") (ELit (LString "from_rep: not implemented (Phase 1 is to_rep only)")))))))
 (DImpl true "Generic" ((TyCon "Int")) () ((im "to_rep" ((PVar "n")) (EApp (EVar "RInt") (EVar "n"))) (im "from_rep" (PWild) (EApp (EVar "panic") (ELit (LString "from_rep: not implemented (Phase 1 is to_rep only)"))))))
 (DImpl true "Generic" ((TyCon "Float")) () ((im "to_rep" ((PVar "x")) (EApp (EVar "RFloat") (EVar "x"))) (im "from_rep" (PWild) (EApp (EVar "panic") (ELit (LString "from_rep: not implemented (Phase 1 is to_rep only)"))))))
@@ -2363,3 +2565,22 @@ prop "foldThen with Some agrees with a pure fold" (xs : List Int) = eq
 (DProp false "map3 on Some matches direct application" ((pp "a" (TyCon "Int")) (pp "b" (TyCon "Int")) (pp "c" (TyCon "Int"))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EApp (EApp (EDictApp "map3") (ELam ((PVar "x") (PVar "y") (PVar "z")) (EBinOp "+" (EBinOp "+" (EVar "x") (EVar "y")) (EVar "z")))) (EApp (EVar "Some") (EVar "a"))) (EApp (EVar "Some") (EVar "b"))) (EApp (EVar "Some") (EVar "c")))) (EApp (EVar "Some") (EBinOp "+" (EBinOp "+" (EVar "a") (EVar "b")) (EVar "c")))))
 (DProp false "mapFirst on Result generalizes mapErr" ((pp "n" (TyCon "Int"))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EMethodRef "mapFirst") (ELam ((PVar "x")) (EBinOp "+" (EVar "x") (ELit (LInt 1))))) (EAnnot (EApp (EVar "Err") (EVar "n")) (TyApp (TyApp (TyCon "Result") (TyCon "Int")) (TyCon "Int"))))) (EApp (EApp (EVar "mapErr") (ELam ((PVar "x")) (EBinOp "+" (EVar "x") (ELit (LInt 1))))) (EApp (EVar "Err") (EVar "n")))))
 (DProp false "foldThen with Some agrees with a pure fold" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EApp (EDictApp "foldThen") (ELam ((PVar "acc") (PVar "x")) (EApp (EVar "Some") (EBinOp "+" (EVar "acc") (EVar "x"))))) (ELit (LInt 0))) (EVar "xs"))) (EApp (EVar "Some") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "x")) (EBinOp "+" (EVar "acc") (EVar "x")))) (ELit (LInt 0))) (EVar "xs")))))
+(DTypeSig false "drawN" (TyConstrained ((cstr "Arbitrary" (TyVar "a"))) (TyFun (TyCon "Int") (TyEffect ("Rand") None (TyApp (TyCon "List") (TyVar "a"))))))
+(DFunDef false "drawN" ((PVar "n")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EListLit) (EBinOp "::" (EApp (EMethodRef "arbitrary") (ELit LUnit)) (EApp (EDictApp "drawN") (EBinOp "-" (EVar "n") (ELit (LInt 1)))))))
+(DTypeSig false "inIntRange" (TyFun (TyCon "Int") (TyCon "Bool")))
+(DFunDef false "inIntRange" ((PVar "x")) (EBinOp "&&" (EBinOp ">=" (EVar "x") (EUnOp "-" (ELit (LInt 1000)))) (EBinOp "<=" (EVar "x") (ELit (LInt 1000)))))
+(DTypeSig false "optInRange" (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyCon "Bool")))
+(DFunDef false "optInRange" ((PCon "None")) (EVar "True"))
+(DFunDef false "optInRange" ((PCon "Some" (PVar "x"))) (EApp (EVar "inIntRange") (EVar "x")))
+(DTypeSig false "listInRange" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Bool")))
+(DFunDef false "listInRange" ((PVar "xs")) (EBinOp "&&" (EBinOp "<=" (EApp (EMethodRef "length") (EVar "xs")) (ELit (LInt 10))) (EApp (EApp (EDictApp "all") (EVar "inIntRange")) (EVar "xs"))))
+(DProp false "Arbitrary (List a) delegates, bounds length, and is not degenerate" ((pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "draws") (EAnnot (EApp (EDictApp "drawN") (ELit (LInt 50))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Int"))))) (DoExpr (EBinOp "&&" (EApp (EApp (EDictApp "all") (EVar "listInRange")) (EVar "draws")) (EApp (EApp (EDictApp "any") (ELam ((PVar "xs")) (EBinOp ">" (EApp (EMethodRef "length") (EVar "xs")) (ELit (LInt 0))))) (EVar "draws"))))))
+(DProp false "Arbitrary (Option a) draws both constructors and delegates" ((pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "draws") (EAnnot (EApp (EDictApp "drawN") (ELit (LInt 50))) (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Int"))))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EDictApp "all") (EVar "optInRange")) (EVar "draws")) (EApp (EApp (EDictApp "any") (EVar "isSome")) (EVar "draws"))) (EApp (EApp (EDictApp "any") (ELam ((PVar "o")) (EApp (EVar "not") (EApp (EVar "isSome") (EVar "o"))))) (EVar "draws"))))))
+(DProp false "Arbitrary (Option a) shrinks Some to None and None no further" ((pp "x" (TyCon "Int"))) (EBlock (DoLet false false (PVar "none") (EAnnot (EVar "None") (TyApp (TyCon "Option") (TyCon "Int")))) (DoExpr (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "shrink") (EApp (EVar "Some") (EVar "x")))) (EListLit (EVar "none"))) (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "shrink") (EVar "none"))) (EListLit))))))
+(DProp false "Eq/Debug on Rep reach through RRecord into a nested field" ((pp "n" (TyCon "Int")) (pp "nm" (TyCon "String"))) (EBlock (DoLet false false (PVar "a") (EApp (EApp (EVar "RRecord") (ELit (LString "R"))) (EListLit (ERecordCreate "RField" ((fa "fld_name" (EVar "nm")) (fa "fld_rep" (EApp (EVar "RInt") (EVar "n")))))))) (DoLet false false (PVar "b") (EApp (EApp (EVar "RRecord") (ELit (LString "R"))) (EListLit (ERecordCreate "RField" ((fa "fld_name" (EVar "nm")) (fa "fld_rep" (EApp (EVar "RInt") (EVar "n")))))))) (DoLet false false (PVar "c") (EApp (EApp (EVar "RRecord") (ELit (LString "R"))) (EListLit (ERecordCreate "RField" ((fa "fld_name" (EVar "nm")) (fa "fld_rep" (EApp (EVar "RInt") (EBinOp "+" (EVar "n") (ELit (LInt 1)))))))))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "a")) (EVar "b")) (EApp (EVar "not") (EApp (EApp (EMethodRef "eq") (EVar "a")) (EVar "c")))) (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "debug") (EVar "a"))) (EApp (EMethodRef "debug") (EVar "b")))) (EApp (EVar "not") (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "debug") (EVar "a"))) (EApp (EMethodRef "debug") (EVar "c"))))))))
+(DProp false "Eq Rep separates the primitive leaves" ((pp "n" (TyCon "Int"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EApp (EVar "RInt") (EVar "n"))) (EApp (EVar "RInt") (EVar "n"))) (EApp (EVar "not") (EApp (EApp (EMethodRef "eq") (EApp (EVar "RInt") (EVar "n"))) (EVar "RUnit")))) (EApp (EVar "not") (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "RCon") (ELit (LString "A"))) (EListLit))) (EApp (EApp (EVar "RCon") (ELit (LString "B"))) (EListLit))))) (EApp (EVar "not") (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "RCon") (ELit (LString "A"))) (EListLit (EApp (EVar "RInt") (EVar "n"))))) (EApp (EApp (EVar "RCon") (ELit (LString "A"))) (EListLit))))))
+(DProp false "Ord Array agrees with Ord List elementwise" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "ys" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "a") (EApp (EVar "arrayFromList") (EVar "xs"))) (DoLet false false (PVar "b") (EApp (EVar "arrayFromList") (EVar "ys"))) (DoExpr (EApp (EApp (EMethodRef "eq") (EApp (EApp (EMethodRef "compare") (EVar "a")) (EVar "b"))) (EApp (EApp (EMethodRef "compare") (EVar "xs")) (EVar "ys"))))))
+(DProp false "Ord Array is consistent with Eq Array" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "ys" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "a") (EApp (EVar "arrayFromList") (EVar "xs"))) (DoLet false false (PVar "b") (EApp (EVar "arrayFromList") (EVar "ys"))) (DoExpr (EApp (EApp (EMethodRef "eq") (EApp (EApp (EMethodRef "eq") (EApp (EApp (EMethodRef "compare") (EVar "a")) (EVar "b"))) (EVar "Eq"))) (EApp (EApp (EMethodRef "eq") (EVar "a")) (EVar "b"))))))
+(DProp false "Ord Array: a proper prefix sorts before its extension" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "y" (TyCon "Int"))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EMethodRef "compare") (EApp (EVar "arrayFromList") (EVar "xs"))) (EApp (EVar "arrayFromList") (EBinOp "++" (EVar "xs") (EListLit (EVar "y")))))) (EVar "Lt")))
+(DProp false "Hashable Array agrees with Hashable List" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "hash") (EApp (EVar "arrayFromList") (EVar "xs")))) (EApp (EMethodRef "hash") (EVar "xs"))))
+(DProp false "Hashable Array: equal arrays hash equally" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "hash") (EApp (EVar "arrayFromList") (EVar "xs")))) (EApp (EMethodRef "hash") (EApp (EVar "arrayFromList") (EVar "xs")))))

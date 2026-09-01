@@ -1,5 +1,5 @@
 # META
-source_lines=629
+source_lines=661
 stages=DESUGAR,MARK
 # SOURCE
 {- array.mdk — operations on Array a
@@ -549,6 +549,19 @@ forEachWithIndexGo f arr i n =
     let _ = f i (arrayGetUnsafe i arr)
     forEachWithIndexGo f arr (i + 1) n
 
+{- | Map every element together with its 0-based index — the missing member of
+   the index-callback family (`foldWithIndex`, `forEachWithIndex`), with the
+   same `(i x)` callback order `list.mapWithIndex` uses.
+
+   > toList (mapWithIndex (i x => i * x) (fromList [1, 2, 3]))
+   [0, 2, 6]
+   > toList (mapWithIndex (i x => i + x) (fromList ([] : List Int)))
+   [] -}
+export
+mapWithIndex : (Int -> a -> <e> b) -> Array a -> <e> Array b
+mapWithIndex f arr =
+  arrayMakeWith (arrayLength arr) (i => f i (arrayGetUnsafe i arr))
+
 -- ── Typeclass impls ─────────────────────────────────────────────────────
 
 export impl Mappable Array where
@@ -631,6 +644,25 @@ prop "forEachWithIndex visits every index once, in order, matching zip with rang
   let _ = forEachWithIndex (i x => seen := (i, x) :: !seen) arr
   let viaZip = fold (acc pair => pair::acc) [] (zip (range 0 (length arr)) arr)
   eq !seen viaZip
+
+-- LAW (H-5/E-6): `mapWithIndex` is `map` that also sees the index.  Three
+-- clauses pin it: it agrees with `map` on an index-ignoring callback, it hands
+-- the callback exactly the indices 0..n-1 in order (this is what fixes the
+-- `(i x)` argument ORDER E-6 ratifies, not `(x i)`), and it agrees with its
+-- own family sibling `foldWithIndex` on the same callback.
+prop "mapWithIndex with an index-ignoring callback is map" (xs : List Int) =
+  let arr = fromList xs
+  eq (mapWithIndex (_ x => x + 1) arr) (map (x => x + 1) arr)
+
+prop "mapWithIndex hands the callback 0..n-1 in order" (xs : List Int) =
+  let arr = fromList xs
+  eq (mapWithIndex (i _ => i) arr) (range 0 (length arr))
+
+prop "mapWithIndex agrees with zipWith over range" (xs : List Int) =
+  let arr = fromList xs
+  eq
+    (mapWithIndex (i x => i * 10 + x) arr)
+    (zipWith (i x => i * 10 + x) (range 0 (length arr)) arr)
 # DESUGAR
 (DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Foldable" false) (mem "Mappable" false) (mem "Filterable" false) (mem "Semigroup" false) (mem "Monoid" false) (mem "Ordering" false) (mem "Option" false))))
 (DTypeSig true "singleton" (TyFun (TyVar "a") (TyApp (TyCon "Array") (TyVar "a"))))
@@ -732,6 +764,8 @@ prop "forEachWithIndex visits every index once, in order, matching zip with rang
 (DFunDef false "forEachWithIndex" ((PVar "f") (PVar "arr")) (EApp (EApp (EApp (EApp (EVar "forEachWithIndexGo") (EVar "f")) (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr"))))
 (DTypeSig false "forEachWithIndexGo" (TyFun (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Unit")))) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyCon "Unit")))))))
 (DFunDef false "forEachWithIndexGo" ((PVar "f") (PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit LUnit) (EBlock (DoLet false false PWild (EApp (EApp (EVar "f") (EVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "forEachWithIndexGo") (EVar "f")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))))))
+(DTypeSig true "mapWithIndex" (TyFun (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "b")))) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "Array") (TyVar "b"))))))
+(DFunDef false "mapWithIndex" ((PVar "f") (PVar "arr")) (EApp (EApp (EVar "arrayMakeWith") (EApp (EVar "arrayLength") (EVar "arr"))) (ELam ((PVar "i")) (EApp (EApp (EVar "f") (EVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))))))
 (DImpl true "Mappable" ((TyCon "Array")) () ((im "map" ((PVar "f") (PVar "arr")) (EApp (EApp (EVar "arrayMakeWith") (EApp (EVar "arrayLength") (EVar "arr"))) (ELam ((PVar "i")) (EApp (EVar "f") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))))))))
 (DImpl true "Foldable" ((TyCon "Array")) () ((im "fold" ((PVar "f") (PVar "z") (PVar "arr")) (EApp (EApp (EApp (EApp (EApp (EVar "foldGo") (EVar "f")) (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr"))) (EVar "z"))) (im "foldRight" ((PVar "f") (PVar "z") (PVar "arr")) (EApp (EApp (EApp (EApp (EVar "foldRightGo") (EVar "f")) (EVar "arr")) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 1)))) (EVar "z"))) (im "toList" ((PVar "arr")) (EApp (EApp (EApp (EVar "toListGo") (EVar "arr")) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 1)))) (EListLit))) (im "isEmpty" ((PVar "arr")) (EBinOp "==" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 0)))) (im "length" ((PVar "arr")) (EApp (EVar "arrayLength") (EVar "arr")))))
 (DImpl true "Semigroup" ((TyApp (TyCon "Array") (TyVar "a"))) () ((im "append" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "arrayMakeWith") (EBinOp "+" (EApp (EVar "arrayLength") (EVar "a")) (EApp (EVar "arrayLength") (EVar "b")))) (ELam ((PVar "i")) (EIf (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "a"))) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "i") (EApp (EVar "arrayLength") (EVar "a")))) (EVar "b"))))))))
@@ -747,6 +781,9 @@ prop "forEachWithIndex visits every index once, in order, matching zip with rang
 (DProp false "makeWith element at index 0" ((pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "n'") (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (ELit (LInt 1)) (EVar "n"))) (DoExpr (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EApp (EVar "makeWith") (EVar "n'")) (ELam ((PVar "i")) (EBinOp "+" (EBinOp "*" (EVar "i") (ELit (LInt 3))) (ELit (LInt 7)))))) (ELit (LInt 7))))))
 (DProp false "foldWithIndex matches fold over zip with range" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "fromList") (EVar "xs"))) (DoLet false false (PVar "viaIndex") (EApp (EApp (EApp (EVar "foldWithIndex") (ELam ((PVar "acc") (PVar "i") (PVar "x")) (EBinOp "::" (ETuple (EVar "i") (EVar "x")) (EVar "acc")))) (EListLit)) (EVar "arr"))) (DoLet false false (PVar "viaZip") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "pair")) (EBinOp "::" (EVar "pair") (EVar "acc")))) (EListLit)) (EApp (EApp (EVar "zip") (EApp (EApp (EVar "range") (ELit (LInt 0))) (EApp (EVar "length") (EVar "arr")))) (EVar "arr")))) (DoExpr (EApp (EApp (EVar "eq") (EVar "viaIndex")) (EVar "viaZip")))))
 (DProp false "forEachWithIndex visits every index once, in order, matching zip with range" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "fromList") (EVar "xs"))) (DoLet false false (PVar "seen") (EApp (EVar "Ref") (EListLit))) (DoLet false false PWild (EApp (EApp (EVar "forEachWithIndex") (ELam ((PVar "i") (PVar "x")) (EApp (EApp (EVar "setRef") (EVar "seen")) (EBinOp "::" (ETuple (EVar "i") (EVar "x")) (EUnOp "!" (EVar "seen")))))) (EVar "arr"))) (DoLet false false (PVar "viaZip") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "pair")) (EBinOp "::" (EVar "pair") (EVar "acc")))) (EListLit)) (EApp (EApp (EVar "zip") (EApp (EApp (EVar "range") (ELit (LInt 0))) (EApp (EVar "length") (EVar "arr")))) (EVar "arr")))) (DoExpr (EApp (EApp (EVar "eq") (EUnOp "!" (EVar "seen"))) (EVar "viaZip")))))
+(DProp false "mapWithIndex with an index-ignoring callback is map" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EVar "eq") (EApp (EApp (EVar "mapWithIndex") (ELam (PWild (PVar "x")) (EBinOp "+" (EVar "x") (ELit (LInt 1))))) (EVar "arr"))) (EApp (EApp (EVar "map") (ELam ((PVar "x")) (EBinOp "+" (EVar "x") (ELit (LInt 1))))) (EVar "arr"))))))
+(DProp false "mapWithIndex hands the callback 0..n-1 in order" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EVar "eq") (EApp (EApp (EVar "mapWithIndex") (ELam ((PVar "i") PWild) (EVar "i"))) (EVar "arr"))) (EApp (EApp (EVar "range") (ELit (LInt 0))) (EApp (EVar "length") (EVar "arr")))))))
+(DProp false "mapWithIndex agrees with zipWith over range" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EVar "eq") (EApp (EApp (EVar "mapWithIndex") (ELam ((PVar "i") (PVar "x")) (EBinOp "+" (EBinOp "*" (EVar "i") (ELit (LInt 10))) (EVar "x")))) (EVar "arr"))) (EApp (EApp (EApp (EVar "zipWith") (ELam ((PVar "i") (PVar "x")) (EBinOp "+" (EBinOp "*" (EVar "i") (ELit (LInt 10))) (EVar "x")))) (EApp (EApp (EVar "range") (ELit (LInt 0))) (EApp (EVar "length") (EVar "arr")))) (EVar "arr"))))))
 # MARK
 (DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Foldable" false) (mem "Mappable" false) (mem "Filterable" false) (mem "Semigroup" false) (mem "Monoid" false) (mem "Ordering" false) (mem "Option" false))))
 (DTypeSig true "singleton" (TyFun (TyVar "a") (TyApp (TyCon "Array") (TyVar "a"))))
@@ -848,6 +885,8 @@ prop "forEachWithIndex visits every index once, in order, matching zip with rang
 (DFunDef false "forEachWithIndex" ((PVar "f") (PVar "arr")) (EApp (EApp (EApp (EApp (EVar "forEachWithIndexGo") (EVar "f")) (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr"))))
 (DTypeSig false "forEachWithIndexGo" (TyFun (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Unit")))) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyCon "Unit")))))))
 (DFunDef false "forEachWithIndexGo" ((PVar "f") (PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit LUnit) (EBlock (DoLet false false PWild (EApp (EApp (EVar "f") (EVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "forEachWithIndexGo") (EVar "f")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))))))
+(DTypeSig true "mapWithIndex" (TyFun (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "b")))) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "Array") (TyVar "b"))))))
+(DFunDef false "mapWithIndex" ((PVar "f") (PVar "arr")) (EApp (EApp (EVar "arrayMakeWith") (EApp (EVar "arrayLength") (EVar "arr"))) (ELam ((PVar "i")) (EApp (EApp (EVar "f") (EVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))))))
 (DImpl true "Mappable" ((TyCon "Array")) () ((im "map" ((PVar "f") (PVar "arr")) (EApp (EApp (EVar "arrayMakeWith") (EApp (EVar "arrayLength") (EVar "arr"))) (ELam ((PVar "i")) (EApp (EVar "f") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))))))))
 (DImpl true "Foldable" ((TyCon "Array")) () ((im "fold" ((PVar "f") (PVar "z") (PVar "arr")) (EApp (EApp (EApp (EApp (EApp (EVar "foldGo") (EVar "f")) (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr"))) (EVar "z"))) (im "foldRight" ((PVar "f") (PVar "z") (PVar "arr")) (EApp (EApp (EApp (EApp (EVar "foldRightGo") (EVar "f")) (EVar "arr")) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 1)))) (EVar "z"))) (im "toList" ((PVar "arr")) (EApp (EApp (EApp (EVar "toListGo") (EVar "arr")) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 1)))) (EListLit))) (im "isEmpty" ((PVar "arr")) (EBinOp "==" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 0)))) (im "length" ((PVar "arr")) (EApp (EVar "arrayLength") (EVar "arr")))))
 (DImpl true "Semigroup" ((TyApp (TyCon "Array") (TyVar "a"))) () ((im "append" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "arrayMakeWith") (EBinOp "+" (EApp (EVar "arrayLength") (EVar "a")) (EApp (EVar "arrayLength") (EVar "b")))) (ELam ((PVar "i")) (EIf (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "a"))) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "i") (EApp (EVar "arrayLength") (EVar "a")))) (EVar "b"))))))))
@@ -863,3 +902,6 @@ prop "forEachWithIndex visits every index once, in order, matching zip with rang
 (DProp false "makeWith element at index 0" ((pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "n'") (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (ELit (LInt 1)) (EVar "n"))) (DoExpr (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EApp (EVar "makeWith") (EVar "n'")) (ELam ((PVar "i")) (EBinOp "+" (EBinOp "*" (EVar "i") (ELit (LInt 3))) (ELit (LInt 7)))))) (ELit (LInt 7))))))
 (DProp false "foldWithIndex matches fold over zip with range" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "fromList") (EVar "xs"))) (DoLet false false (PVar "viaIndex") (EApp (EApp (EApp (EVar "foldWithIndex") (ELam ((PVar "acc") (PVar "i") (PVar "x")) (EBinOp "::" (ETuple (EVar "i") (EVar "x")) (EVar "acc")))) (EListLit)) (EVar "arr"))) (DoLet false false (PVar "viaZip") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "pair")) (EBinOp "::" (EVar "pair") (EVar "acc")))) (EListLit)) (EApp (EApp (EVar "zip") (EApp (EApp (EVar "range") (ELit (LInt 0))) (EApp (EMethodRef "length") (EVar "arr")))) (EVar "arr")))) (DoExpr (EApp (EApp (EMethodRef "eq") (EVar "viaIndex")) (EVar "viaZip")))))
 (DProp false "forEachWithIndex visits every index once, in order, matching zip with range" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "fromList") (EVar "xs"))) (DoLet false false (PVar "seen") (EApp (EVar "Ref") (EListLit))) (DoLet false false PWild (EApp (EApp (EVar "forEachWithIndex") (ELam ((PVar "i") (PVar "x")) (EApp (EApp (EVar "setRef") (EVar "seen")) (EBinOp "::" (ETuple (EVar "i") (EVar "x")) (EUnOp "!" (EVar "seen")))))) (EVar "arr"))) (DoLet false false (PVar "viaZip") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "pair")) (EBinOp "::" (EVar "pair") (EVar "acc")))) (EListLit)) (EApp (EApp (EVar "zip") (EApp (EApp (EVar "range") (ELit (LInt 0))) (EApp (EMethodRef "length") (EVar "arr")))) (EVar "arr")))) (DoExpr (EApp (EApp (EMethodRef "eq") (EUnOp "!" (EVar "seen"))) (EVar "viaZip")))))
+(DProp false "mapWithIndex with an index-ignoring callback is map" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "mapWithIndex") (ELam (PWild (PVar "x")) (EBinOp "+" (EVar "x") (ELit (LInt 1))))) (EVar "arr"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "x")) (EBinOp "+" (EVar "x") (ELit (LInt 1))))) (EVar "arr"))))))
+(DProp false "mapWithIndex hands the callback 0..n-1 in order" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "mapWithIndex") (ELam ((PVar "i") PWild) (EVar "i"))) (EVar "arr"))) (EApp (EApp (EVar "range") (ELit (LInt 0))) (EApp (EMethodRef "length") (EVar "arr")))))))
+(DProp false "mapWithIndex agrees with zipWith over range" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "mapWithIndex") (ELam ((PVar "i") (PVar "x")) (EBinOp "+" (EBinOp "*" (EVar "i") (ELit (LInt 10))) (EVar "x")))) (EVar "arr"))) (EApp (EApp (EApp (EVar "zipWith") (ELam ((PVar "i") (PVar "x")) (EBinOp "+" (EBinOp "*" (EVar "i") (ELit (LInt 10))) (EVar "x")))) (EApp (EApp (EVar "range") (ELit (LInt 0))) (EApp (EMethodRef "length") (EVar "arr")))) (EVar "arr"))))))

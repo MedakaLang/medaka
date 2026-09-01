@@ -1,5 +1,5 @@
 # META
-source_lines=245
+source_lines=441
 stages=DESUGAR,MARK
 # SOURCE
 {- mut_array.mdk — a growable mutable array (dynamic array / vector).
@@ -21,7 +21,23 @@ stages=DESUGAR,MARK
    first `push`, using the pushed element as the fill — so no dummy/default
    value is needed to construct one. -}
 
-import core.{Eq, Debug, Foldable, Option, Index, IndexMut}
+import core.{
+  Eq,
+  Ord,
+  Ordering,
+  Debug,
+  Display,
+  Foldable,
+  Option,
+  Index,
+  IndexMut,
+}
+
+{- `list` is aliased rather than name-imported: this module's own `insertAt`/
+   `removeAt`/`sortBy`/`sort` are the SAME names, so a selective import would
+   collide.  The list versions define the semantics these four transport onto
+   the vector, so delegating is what keeps the two in step. -}
+import list as L
 
 {- `MutArray backing len`: `!backing` is the capacity-sized store,
    `!len` the live count; both mutated in place. -}
@@ -206,6 +222,74 @@ export
 mapInPlace : (a -> a) -> MutArray a -> Unit
 mapInPlace f (MutArray backing len) = mapInPlaceGo f !backing 0 !len
 
+{- ── Positional edits and sorting (sheet row H-5) ──────────────────────
+
+   All four MUTATE and return `Unit`, which is `mut_array`'s half of the F-3
+   mutation contract (`map`/`set`/`list` return the container; `hash_map`/
+   `hash_set`/`array`/`mut_array` return `Unit`).  Index handling matches
+   `list.insertAt`/`list.removeAt` exactly: both CLAMP rather than panic, so
+   `insertAt` with a too-large index appends and `removeAt` out of range is a
+   no-op.
+
+   `isEmpty` is deliberately NOT added here even though row H-5 names it:
+   `impl Foldable MutArray` below already defines `isEmpty`, so a module-level
+   one would shadow the method -- the #2428 collision, which row H-2 rules out
+   explicitly ("do not add a module-level `isEmpty`"). -}
+
+-- Push every element of a list, in order.
+pushAll : List a -> MutArray a -> Unit
+pushAll [] _ = ()
+pushAll (x::xs) ma =
+  push x ma
+  pushAll xs ma
+
+-- Replace the live range with `xs`, in place (same `Ref` cells, so every
+-- alias of `ma` observes the edit).  Capacity grows via `push` as needed.
+refill : MutArray a -> List a -> Unit
+refill ma xs =
+  clear ma
+  pushAll xs ma
+
+{- | Insert `x` so that it lands at index `i`, shifting the rest right.
+   `i <= 0` prepends; `i >= length` appends.  Grows the backing store when
+   full, like `push`.
+
+   > let ma = fromList [1, 2, 3] in let _ = insertAt 1 9 ma in toList ma
+   [1, 9, 2, 3]
+   > let ma = fromList [1, 2] in let _ = insertAt 7 9 ma in toList ma
+   [1, 2, 9] -}
+export
+insertAt : Int -> a -> MutArray a -> Unit
+insertAt i x ma = refill ma (L.insertAt i x (elems ma))
+
+{- | Drop the element at index `i`.  Out of range leaves the vector unchanged.
+
+   > let ma = fromList [1, 2, 3] in let _ = removeAt 1 ma in toList ma
+   [1, 3]
+   > let ma = fromList [1, 2] in let _ = removeAt 7 ma in toList ma
+   [1, 2] -}
+export
+removeAt : Int -> MutArray a -> Unit
+removeAt i ma = refill ma (L.removeAt i (elems ma))
+
+{- | Sort the live range in place with the supplied comparison.  Stable --
+   equal elements keep their original relative order -- because `list.sortBy`,
+   which does the work, is.
+
+   > let ma = fromList [3, 1, 4, 1, 5] in let _ = sortBy compare ma in toList ma
+   [1, 1, 3, 4, 5] -}
+export
+sortBy : (a -> a -> <e> Ordering) -> MutArray a -> <e> Unit
+sortBy cmp ma = refill ma (L.sortBy cmp (elems ma))
+
+{- | Sort the live range in place by the `Ord` instance.
+
+   > let ma = fromList [3, 1, 2] in let _ = sort ma in toList ma
+   [1, 2, 3] -}
+export
+sort : Ord a => MutArray a -> Unit
+sort ma = sortBy compare ma
+
 -- ── Folds (index-based; never allocate a list) ──────────────────────────
 
 foldGo : (b -> a -> <e> b) -> b -> Array a -> Int -> Int -> <e> b
@@ -247,8 +331,121 @@ export impl Eq (MutArray a) requires Eq a where
    True -}
 export impl Debug (MutArray a) requires Debug a where
   debug ma = "fromList \{debug (elems ma)}"
+
+{- | Same `fromList [...]` shape as `Debug`, over the live range, with the
+   elements rendered by THEIR `Display` (so strings lose their quotes).
+   `MutArray` was the one container in the surface that `println` could not
+   take (sheet row A-4).
+
+   > display (fromList [1, 2, 3]) == "fromList [1, 2, 3]"
+   True -}
+export impl Display (MutArray a) requires Display a where
+  display ma = "fromList \{display (elems ma)}"
+
+-- ── Property tests ──────────────────────────────────────────────────────
+
+-- An INDEPENDENT sort oracle (insertion sort, not a mergesort) so the laws
+-- below cross-check `sortBy` against a different algorithm rather than
+-- against a rearrangement of itself.
+-- lint-disable-next-line rule-stdlib-reimpl
+naiveInsert : Ord a => a -> List a -> List a
+naiveInsert x [] = [x]
+naiveInsert x (y::ys) = if lte x y then x :: y::ys else y :: naiveInsert x ys
+
+naiveSort : Ord a => List a -> List a
+-- lint-disable-next-line rule-stdlib-reimpl
+naiveSort [] = []
+naiveSort (x::xs) = naiveInsert x (naiveSort xs)
+
+-- `list.insertAt`'s clamp, restated so the laws can name the landing index.
+clampIdx : Int -> Int -> Int
+clampIdx i n
+  | i < 0 = 0
+  | i > n = n
+  | otherwise = i
+
+-- Pair each element with its input position, for the stability law.
+tagFrom : Int -> List a -> List (Int, a)
+tagFrom _ [] = []
+tagFrom i (x::xs) = (i, x) :: tagFrom (i + 1) xs
+
+-- A deliberately COARSE sort key, so ties are common.
+coarseKey : (Int, Int) -> Int
+coarseKey (_, x) = if x < 0 then (0 - x) % 3 else x % 3
+
+posOf : (Int, Int) -> Int
+posOf (i, _) = i
+
+{- Sorted by `coarseKey`, and STABLE: within a run of equal keys the original
+   positions must still ascend.  Checked pairwise over the output. -}
+sortedAndStable : List (Int, Int) -> Bool
+sortedAndStable [] = True
+sortedAndStable (_::[]) = True
+sortedAndStable (a::b::rest) = coarseKey a <= coarseKey b
+  && (coarseKey a < coarseKey b || posOf a < posOf b)
+  && sortedAndStable (b::rest)
+
+-- LAW (H-5): `sort` agrees with an independent sort oracle, so it is both
+-- ascending AND a permutation of the input -- either property alone is
+-- satisfiable by a wrong implementation (`[]` is ascending; the identity is a
+-- permutation).
+prop "sort agrees with an independent insertion sort" (xs : List Int) =
+  let ma = fromList xs
+  sort ma
+  eq (toList ma) (naiveSort xs)
+
+-- LAW (H-5): sorting an already-sorted vector changes nothing.
+prop "sort is idempotent" (xs : List Int) =
+  let ma = fromList xs
+  sort ma
+  let once = toList ma
+  sort ma
+  eq (toList ma) once
+
+-- LAW (H-5): `sortBy` is STABLE -- sorting on a coarse key must leave tied
+-- elements in their original relative order.  A total-order oracle cannot see
+-- this, which is why it gets its own law.
+prop "sortBy is stable on ties" (xs : List Int) =
+  let ma = fromList (tagFrom 0 xs)
+  sortBy (a b => compare (coarseKey a) (coarseKey b)) ma
+  sortedAndStable (toList ma) && length ma == length (fromList xs)
+
+-- LAW (H-5): `insertAt` grows the vector by one and lands `x` at the CLAMPED
+-- index; `removeAt` at that same index undoes it exactly.  Stating them as a
+-- round trip pins both functions' index conventions at once.
+prop "insertAt lands at the clamped index and removeAt undoes it" (xs : List Int) (n : Int) (x : Int) =
+  let ma = fromList xs
+  let i = clampIdx n (length ma)
+  insertAt n x ma
+  let grew = length ma == length (fromList xs) + 1
+  let landed = eq (get i ma) (Some x)
+  removeAt i ma
+  grew && landed && eq (toList ma) xs
+
+-- LAW (H-5): `removeAt` out of range is a NO-OP -- not a panic, and not a
+-- silent edit of the nearest element (`list.removeAt`'s ratified behaviour).
+prop "removeAt out of range is a no-op" (xs : List Int) =
+  let ma = fromList xs
+  removeAt (length ma) ma
+  removeAt (0 - 1) ma
+  eq (toList ma) xs
+
+-- LAW (A-4): `Display (MutArray a)` renders the LIVE range in the same
+-- `fromList [...]` shape as `Debug`, and agrees with `Eq` -- equal vectors
+-- render identically, unequal ones do not.  The `push`-then-`pop` clause is
+-- what proves the scratch tail past `len` stays invisible.
+prop "Display MutArray shows only the live range and agrees with Eq" (xs : List Int) (y : Int) =
+  let a = fromList xs
+  let b = fromList xs
+  push y b
+  let differs = not (eq (display a) (display b))
+  let _ = pop b
+  differs
+    && eq (display a) (display b)
+    && eq (display a) "fromList \{display xs}"
 # DESUGAR
-(DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Debug" false) (mem "Foldable" false) (mem "Option" false) (mem "Index" false) (mem "IndexMut" false))))
+(DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Ord" false) (mem "Ordering" false) (mem "Debug" false) (mem "Display" false) (mem "Foldable" false) (mem "Option" false) (mem "Index" false) (mem "IndexMut" false))))
+(DUse false (UseAlias ("list") "L"))
 (DData Public "MutArray" ("a") ((variant "MutArray" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyVar "a"))) (TyApp (TyCon "Ref") (TyCon "Int"))))) ())
 (DTypeSig false "count" (TyFun (TyApp (TyCon "MutArray") (TyVar "a")) (TyCon "Int")))
 (DFunDef false "count" ((PCon "MutArray" PWild (PVar "len"))) (EUnOp "!" (EVar "len")))
@@ -288,6 +485,19 @@ export impl Debug (MutArray a) requires Debug a where
 (DFunDef false "mapInPlaceGo" ((PVar "f") (PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit LUnit) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EApp (EVar "f") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")))) (EVar "arr"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "mapInPlaceGo") (EVar "f")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "mapInPlace" (TyFun (TyFun (TyVar "a") (TyVar "a")) (TyFun (TyApp (TyCon "MutArray") (TyVar "a")) (TyCon "Unit"))))
 (DFunDef false "mapInPlace" ((PVar "f") (PCon "MutArray" (PVar "backing") (PVar "len"))) (EApp (EApp (EApp (EApp (EVar "mapInPlaceGo") (EVar "f")) (EUnOp "!" (EVar "backing"))) (ELit (LInt 0))) (EUnOp "!" (EVar "len"))))
+(DTypeSig false "pushAll" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "MutArray") (TyVar "a")) (TyCon "Unit"))))
+(DFunDef false "pushAll" ((PList) PWild) (ELit LUnit))
+(DFunDef false "pushAll" ((PCons (PVar "x") (PVar "xs")) (PVar "ma")) (EBlock (DoExpr (EApp (EApp (EVar "push") (EVar "x")) (EVar "ma"))) (DoExpr (EApp (EApp (EVar "pushAll") (EVar "xs")) (EVar "ma")))))
+(DTypeSig false "refill" (TyFun (TyApp (TyCon "MutArray") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Unit"))))
+(DFunDef false "refill" ((PVar "ma") (PVar "xs")) (EBlock (DoExpr (EApp (EVar "clear") (EVar "ma"))) (DoExpr (EApp (EApp (EVar "pushAll") (EVar "xs")) (EVar "ma")))))
+(DTypeSig true "insertAt" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyFun (TyApp (TyCon "MutArray") (TyVar "a")) (TyCon "Unit")))))
+(DFunDef false "insertAt" ((PVar "i") (PVar "x") (PVar "ma")) (EApp (EApp (EVar "refill") (EVar "ma")) (EApp (EApp (EApp (EVar "L.insertAt") (EVar "i")) (EVar "x")) (EApp (EVar "elems") (EVar "ma")))))
+(DTypeSig true "removeAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "MutArray") (TyVar "a")) (TyCon "Unit"))))
+(DFunDef false "removeAt" ((PVar "i") (PVar "ma")) (EApp (EApp (EVar "refill") (EVar "ma")) (EApp (EApp (EVar "L.removeAt") (EVar "i")) (EApp (EVar "elems") (EVar "ma")))))
+(DTypeSig true "sortBy" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Ordering")))) (TyFun (TyApp (TyCon "MutArray") (TyVar "a")) (TyEffect () (Some "e") (TyCon "Unit")))))
+(DFunDef false "sortBy" ((PVar "cmp") (PVar "ma")) (EApp (EApp (EVar "refill") (EVar "ma")) (EApp (EApp (EVar "L.sortBy") (EVar "cmp")) (EApp (EVar "elems") (EVar "ma")))))
+(DTypeSig true "sort" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "MutArray") (TyVar "a")) (TyCon "Unit"))))
+(DFunDef false "sort" ((PVar "ma")) (EApp (EApp (EVar "sortBy") (EVar "compare")) (EVar "ma")))
 (DTypeSig false "foldGo" (TyFun (TyFun (TyVar "b") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "b")))) (TyFun (TyVar "b") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyVar "b"))))))))
 (DFunDef false "foldGo" ((PVar "f") (PVar "z") (PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "z") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "foldGo") (EVar "f")) (EApp (EApp (EVar "f") (EVar "z")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")))) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "foldRightGo" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "b") (TyEffect () (Some "e") (TyVar "b")))) (TyFun (TyVar "b") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyVar "b")))))))
@@ -295,8 +505,35 @@ export impl Debug (MutArray a) requires Debug a where
 (DImpl true "Foldable" ((TyCon "MutArray")) () ((im "fold" ((PVar "f") (PVar "z") (PCon "MutArray" (PVar "backing") (PVar "len"))) (EApp (EApp (EApp (EApp (EApp (EVar "foldGo") (EVar "f")) (EVar "z")) (EUnOp "!" (EVar "backing"))) (ELit (LInt 0))) (EUnOp "!" (EVar "len")))) (im "foldRight" ((PVar "f") (PVar "z") (PCon "MutArray" (PVar "backing") (PVar "len"))) (EApp (EApp (EApp (EApp (EVar "foldRightGo") (EVar "f")) (EVar "z")) (EUnOp "!" (EVar "backing"))) (EBinOp "-" (EUnOp "!" (EVar "len")) (ELit (LInt 1))))) (im "toList" ((PVar "ma")) (EApp (EVar "elems") (EVar "ma"))) (im "isEmpty" ((PCon "MutArray" PWild (PVar "len"))) (EBinOp "==" (EUnOp "!" (EVar "len")) (ELit (LInt 0)))) (im "length" ((PCon "MutArray" PWild (PVar "len"))) (EUnOp "!" (EVar "len")))))
 (DImpl true "Eq" ((TyApp (TyCon "MutArray") (TyVar "a"))) ((req "Eq" ((TyVar "a")))) ((im "eq" ((PVar "a") (PVar "b")) (EIf (EBinOp "/=" (EApp (EVar "count") (EVar "a")) (EApp (EVar "count") (EVar "b"))) (EVar "False") (EApp (EApp (EVar "eq") (EApp (EVar "elems") (EVar "a"))) (EApp (EVar "elems") (EVar "b")))))))
 (DImpl true "Debug" ((TyApp (TyCon "MutArray") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PVar "ma")) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EVar "display") (EApp (EVar "debug") (EApp (EVar "elems") (EVar "ma"))))) (ELit (LString ""))))))
+(DImpl true "Display" ((TyApp (TyCon "MutArray") (TyVar "a"))) ((req "Display" ((TyVar "a")))) ((im "display" ((PVar "ma")) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EVar "display") (EApp (EVar "display") (EApp (EVar "elems") (EVar "ma"))))) (ELit (LString ""))))))
+(DTypeSig false "naiveInsert" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))))
+(DFunDef false "naiveInsert" ((PVar "x") (PList)) (EListLit (EVar "x")))
+(DFunDef false "naiveInsert" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EIf (EApp (EApp (EVar "lte") (EVar "x")) (EVar "y")) (EBinOp "::" (EVar "x") (EBinOp "::" (EVar "y") (EVar "ys"))) (EBinOp "::" (EVar "y") (EApp (EApp (EVar "naiveInsert") (EVar "x")) (EVar "ys")))))
+(DTypeSig false "naiveSort" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
+(DFunDef false "naiveSort" ((PList)) (EListLit))
+(DFunDef false "naiveSort" ((PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "naiveInsert") (EVar "x")) (EApp (EVar "naiveSort") (EVar "xs"))))
+(DTypeSig false "clampIdx" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "clampIdx" ((PVar "i") (PVar "n")) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (ELit (LInt 0)) (EIf (EBinOp ">" (EVar "i") (EVar "n")) (EVar "n") (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "tagFrom" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyVar "a"))))))
+(DFunDef false "tagFrom" (PWild (PList)) (EListLit))
+(DFunDef false "tagFrom" ((PVar "i") (PCons (PVar "x") (PVar "xs"))) (EBinOp "::" (ETuple (EVar "i") (EVar "x")) (EApp (EApp (EVar "tagFrom") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "xs"))))
+(DTypeSig false "coarseKey" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "Int")))
+(DFunDef false "coarseKey" ((PTuple PWild (PVar "x"))) (EIf (EBinOp "<" (EVar "x") (ELit (LInt 0))) (EBinOp "%" (EBinOp "-" (ELit (LInt 0)) (EVar "x")) (ELit (LInt 3))) (EBinOp "%" (EVar "x") (ELit (LInt 3)))))
+(DTypeSig false "posOf" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "Int")))
+(DFunDef false "posOf" ((PTuple (PVar "i") PWild)) (EVar "i"))
+(DTypeSig false "sortedAndStable" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyCon "Bool")))
+(DFunDef false "sortedAndStable" ((PList)) (EVar "True"))
+(DFunDef false "sortedAndStable" ((PCons PWild (PList))) (EVar "True"))
+(DFunDef false "sortedAndStable" ((PCons (PVar "a") (PCons (PVar "b") (PVar "rest")))) (EBinOp "&&" (EBinOp "&&" (EBinOp "<=" (EApp (EVar "coarseKey") (EVar "a")) (EApp (EVar "coarseKey") (EVar "b"))) (EBinOp "||" (EBinOp "<" (EApp (EVar "coarseKey") (EVar "a")) (EApp (EVar "coarseKey") (EVar "b"))) (EBinOp "<" (EApp (EVar "posOf") (EVar "a")) (EApp (EVar "posOf") (EVar "b"))))) (EApp (EVar "sortedAndStable") (EBinOp "::" (EVar "b") (EVar "rest")))))
+(DProp false "sort agrees with an independent insertion sort" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EVar "sort") (EVar "ma"))) (DoExpr (EApp (EApp (EVar "eq") (EApp (EVar "toList") (EVar "ma"))) (EApp (EVar "naiveSort") (EVar "xs"))))))
+(DProp false "sort is idempotent" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EVar "sort") (EVar "ma"))) (DoLet false false (PVar "once") (EApp (EVar "toList") (EVar "ma"))) (DoExpr (EApp (EVar "sort") (EVar "ma"))) (DoExpr (EApp (EApp (EVar "eq") (EApp (EVar "toList") (EVar "ma"))) (EVar "once")))))
+(DProp false "sortBy is stable on ties" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EApp (EApp (EVar "tagFrom") (ELit (LInt 0))) (EVar "xs")))) (DoExpr (EApp (EApp (EVar "sortBy") (ELam ((PVar "a") (PVar "b")) (EApp (EApp (EVar "compare") (EApp (EVar "coarseKey") (EVar "a"))) (EApp (EVar "coarseKey") (EVar "b"))))) (EVar "ma"))) (DoExpr (EBinOp "&&" (EApp (EVar "sortedAndStable") (EApp (EVar "toList") (EVar "ma"))) (EBinOp "==" (EApp (EVar "length") (EVar "ma")) (EApp (EVar "length") (EApp (EVar "fromList") (EVar "xs"))))))))
+(DProp false "insertAt lands at the clamped index and removeAt undoes it" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "n" (TyCon "Int")) (pp "x" (TyCon "Int"))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EVar "xs"))) (DoLet false false (PVar "i") (EApp (EApp (EVar "clampIdx") (EVar "n")) (EApp (EVar "length") (EVar "ma")))) (DoExpr (EApp (EApp (EApp (EVar "insertAt") (EVar "n")) (EVar "x")) (EVar "ma"))) (DoLet false false (PVar "grew") (EBinOp "==" (EApp (EVar "length") (EVar "ma")) (EBinOp "+" (EApp (EVar "length") (EApp (EVar "fromList") (EVar "xs"))) (ELit (LInt 1))))) (DoLet false false (PVar "landed") (EApp (EApp (EVar "eq") (EApp (EApp (EVar "get") (EVar "i")) (EVar "ma"))) (EApp (EVar "Some") (EVar "x")))) (DoExpr (EApp (EApp (EVar "removeAt") (EVar "i")) (EVar "ma"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EVar "grew") (EVar "landed")) (EApp (EApp (EVar "eq") (EApp (EVar "toList") (EVar "ma"))) (EVar "xs"))))))
+(DProp false "removeAt out of range is a no-op" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EVar "removeAt") (EApp (EVar "length") (EVar "ma"))) (EVar "ma"))) (DoExpr (EApp (EApp (EVar "removeAt") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1)))) (EVar "ma"))) (DoExpr (EApp (EApp (EVar "eq") (EApp (EVar "toList") (EVar "ma"))) (EVar "xs")))))
+(DProp false "Display MutArray shows only the live range and agrees with Eq" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "y" (TyCon "Int"))) (EBlock (DoLet false false (PVar "a") (EApp (EVar "fromList") (EVar "xs"))) (DoLet false false (PVar "b") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EVar "push") (EVar "y")) (EVar "b"))) (DoLet false false (PVar "differs") (EApp (EVar "not") (EApp (EApp (EVar "eq") (EApp (EVar "display") (EVar "a"))) (EApp (EVar "display") (EVar "b"))))) (DoLet false false PWild (EApp (EVar "pop") (EVar "b"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EVar "differs") (EApp (EApp (EVar "eq") (EApp (EVar "display") (EVar "a"))) (EApp (EVar "display") (EVar "b")))) (EApp (EApp (EVar "eq") (EApp (EVar "display") (EVar "a"))) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EVar "display") (EApp (EVar "display") (EVar "xs")))) (ELit (LString ""))))))))
 # MARK
-(DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Debug" false) (mem "Foldable" false) (mem "Option" false) (mem "Index" false) (mem "IndexMut" false))))
+(DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Ord" false) (mem "Ordering" false) (mem "Debug" false) (mem "Display" false) (mem "Foldable" false) (mem "Option" false) (mem "Index" false) (mem "IndexMut" false))))
+(DUse false (UseAlias ("list") "L"))
 (DData Public "MutArray" ("a") ((variant "MutArray" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyVar "a"))) (TyApp (TyCon "Ref") (TyCon "Int"))))) ())
 (DTypeSig false "count" (TyFun (TyApp (TyCon "MutArray") (TyVar "a")) (TyCon "Int")))
 (DFunDef false "count" ((PCon "MutArray" PWild (PVar "len"))) (EUnOp "!" (EVar "len")))
@@ -336,6 +573,19 @@ export impl Debug (MutArray a) requires Debug a where
 (DFunDef false "mapInPlaceGo" ((PVar "f") (PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit LUnit) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EApp (EVar "f") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")))) (EVar "arr"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "mapInPlaceGo") (EVar "f")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "mapInPlace" (TyFun (TyFun (TyVar "a") (TyVar "a")) (TyFun (TyApp (TyCon "MutArray") (TyVar "a")) (TyCon "Unit"))))
 (DFunDef false "mapInPlace" ((PVar "f") (PCon "MutArray" (PVar "backing") (PVar "len"))) (EApp (EApp (EApp (EApp (EVar "mapInPlaceGo") (EVar "f")) (EUnOp "!" (EVar "backing"))) (ELit (LInt 0))) (EUnOp "!" (EVar "len"))))
+(DTypeSig false "pushAll" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "MutArray") (TyVar "a")) (TyCon "Unit"))))
+(DFunDef false "pushAll" ((PList) PWild) (ELit LUnit))
+(DFunDef false "pushAll" ((PCons (PVar "x") (PVar "xs")) (PVar "ma")) (EBlock (DoExpr (EApp (EApp (EVar "push") (EVar "x")) (EVar "ma"))) (DoExpr (EApp (EApp (EVar "pushAll") (EVar "xs")) (EVar "ma")))))
+(DTypeSig false "refill" (TyFun (TyApp (TyCon "MutArray") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Unit"))))
+(DFunDef false "refill" ((PVar "ma") (PVar "xs")) (EBlock (DoExpr (EApp (EVar "clear") (EVar "ma"))) (DoExpr (EApp (EApp (EVar "pushAll") (EVar "xs")) (EVar "ma")))))
+(DTypeSig true "insertAt" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyFun (TyApp (TyCon "MutArray") (TyVar "a")) (TyCon "Unit")))))
+(DFunDef false "insertAt" ((PVar "i") (PVar "x") (PVar "ma")) (EApp (EApp (EVar "refill") (EVar "ma")) (EApp (EApp (EApp (EVar "L.insertAt") (EVar "i")) (EVar "x")) (EApp (EVar "elems") (EVar "ma")))))
+(DTypeSig true "removeAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "MutArray") (TyVar "a")) (TyCon "Unit"))))
+(DFunDef false "removeAt" ((PVar "i") (PVar "ma")) (EApp (EApp (EVar "refill") (EVar "ma")) (EApp (EApp (EVar "L.removeAt") (EVar "i")) (EApp (EVar "elems") (EVar "ma")))))
+(DTypeSig true "sortBy" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Ordering")))) (TyFun (TyApp (TyCon "MutArray") (TyVar "a")) (TyEffect () (Some "e") (TyCon "Unit")))))
+(DFunDef false "sortBy" ((PVar "cmp") (PVar "ma")) (EApp (EApp (EVar "refill") (EVar "ma")) (EApp (EApp (EVar "L.sortBy") (EVar "cmp")) (EApp (EVar "elems") (EVar "ma")))))
+(DTypeSig true "sort" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "MutArray") (TyVar "a")) (TyCon "Unit"))))
+(DFunDef false "sort" ((PVar "ma")) (EApp (EApp (EVar "sortBy") (EMethodRef "compare")) (EVar "ma")))
 (DTypeSig false "foldGo" (TyFun (TyFun (TyVar "b") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "b")))) (TyFun (TyVar "b") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyVar "b"))))))))
 (DFunDef false "foldGo" ((PVar "f") (PVar "z") (PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "z") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "foldGo") (EVar "f")) (EApp (EApp (EVar "f") (EVar "z")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")))) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "foldRightGo" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "b") (TyEffect () (Some "e") (TyVar "b")))) (TyFun (TyVar "b") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyVar "b")))))))
@@ -343,3 +593,29 @@ export impl Debug (MutArray a) requires Debug a where
 (DImpl true "Foldable" ((TyCon "MutArray")) () ((im "fold" ((PVar "f") (PVar "z") (PCon "MutArray" (PVar "backing") (PVar "len"))) (EApp (EApp (EApp (EApp (EApp (EVar "foldGo") (EVar "f")) (EVar "z")) (EUnOp "!" (EVar "backing"))) (ELit (LInt 0))) (EUnOp "!" (EVar "len")))) (im "foldRight" ((PVar "f") (PVar "z") (PCon "MutArray" (PVar "backing") (PVar "len"))) (EApp (EApp (EApp (EApp (EVar "foldRightGo") (EVar "f")) (EVar "z")) (EUnOp "!" (EVar "backing"))) (EBinOp "-" (EUnOp "!" (EVar "len")) (ELit (LInt 1))))) (im "toList" ((PVar "ma")) (EApp (EVar "elems") (EVar "ma"))) (im "isEmpty" ((PCon "MutArray" PWild (PVar "len"))) (EBinOp "==" (EUnOp "!" (EVar "len")) (ELit (LInt 0)))) (im "length" ((PCon "MutArray" PWild (PVar "len"))) (EUnOp "!" (EVar "len")))))
 (DImpl true "Eq" ((TyApp (TyCon "MutArray") (TyVar "a"))) ((req "Eq" ((TyVar "a")))) ((im "eq" ((PVar "a") (PVar "b")) (EIf (EBinOp "/=" (EApp (EVar "count") (EVar "a")) (EApp (EVar "count") (EVar "b"))) (EVar "False") (EApp (EApp (EMethodRef "eq") (EApp (EVar "elems") (EVar "a"))) (EApp (EVar "elems") (EVar "b")))))))
 (DImpl true "Debug" ((TyApp (TyCon "MutArray") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PVar "ma")) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EApp (EVar "elems") (EVar "ma"))))) (ELit (LString ""))))))
+(DImpl true "Display" ((TyApp (TyCon "MutArray") (TyVar "a"))) ((req "Display" ((TyVar "a")))) ((im "display" ((PVar "ma")) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EMethodRef "display") (EApp (EMethodRef "display") (EApp (EVar "elems") (EVar "ma"))))) (ELit (LString ""))))))
+(DTypeSig false "naiveInsert" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))))
+(DFunDef false "naiveInsert" ((PVar "x") (PList)) (EListLit (EVar "x")))
+(DFunDef false "naiveInsert" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EIf (EApp (EApp (EMethodRef "lte") (EVar "x")) (EVar "y")) (EBinOp "::" (EVar "x") (EBinOp "::" (EVar "y") (EVar "ys"))) (EBinOp "::" (EVar "y") (EApp (EApp (EDictApp "naiveInsert") (EVar "x")) (EVar "ys")))))
+(DTypeSig false "naiveSort" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
+(DFunDef false "naiveSort" ((PList)) (EListLit))
+(DFunDef false "naiveSort" ((PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EDictApp "naiveInsert") (EVar "x")) (EApp (EDictApp "naiveSort") (EVar "xs"))))
+(DTypeSig false "clampIdx" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "clampIdx" ((PVar "i") (PVar "n")) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (ELit (LInt 0)) (EIf (EBinOp ">" (EVar "i") (EVar "n")) (EVar "n") (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "tagFrom" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyVar "a"))))))
+(DFunDef false "tagFrom" (PWild (PList)) (EListLit))
+(DFunDef false "tagFrom" ((PVar "i") (PCons (PVar "x") (PVar "xs"))) (EBinOp "::" (ETuple (EVar "i") (EVar "x")) (EApp (EApp (EVar "tagFrom") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "xs"))))
+(DTypeSig false "coarseKey" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "Int")))
+(DFunDef false "coarseKey" ((PTuple PWild (PVar "x"))) (EIf (EBinOp "<" (EVar "x") (ELit (LInt 0))) (EBinOp "%" (EBinOp "-" (ELit (LInt 0)) (EVar "x")) (ELit (LInt 3))) (EBinOp "%" (EVar "x") (ELit (LInt 3)))))
+(DTypeSig false "posOf" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "Int")))
+(DFunDef false "posOf" ((PTuple (PVar "i") PWild)) (EVar "i"))
+(DTypeSig false "sortedAndStable" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyCon "Bool")))
+(DFunDef false "sortedAndStable" ((PList)) (EVar "True"))
+(DFunDef false "sortedAndStable" ((PCons PWild (PList))) (EVar "True"))
+(DFunDef false "sortedAndStable" ((PCons (PVar "a") (PCons (PVar "b") (PVar "rest")))) (EBinOp "&&" (EBinOp "&&" (EBinOp "<=" (EApp (EVar "coarseKey") (EVar "a")) (EApp (EVar "coarseKey") (EVar "b"))) (EBinOp "||" (EBinOp "<" (EApp (EVar "coarseKey") (EVar "a")) (EApp (EVar "coarseKey") (EVar "b"))) (EBinOp "<" (EApp (EVar "posOf") (EVar "a")) (EApp (EVar "posOf") (EVar "b"))))) (EApp (EVar "sortedAndStable") (EBinOp "::" (EVar "b") (EVar "rest")))))
+(DProp false "sort agrees with an independent insertion sort" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EDictApp "sort") (EVar "ma"))) (DoExpr (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "toList") (EVar "ma"))) (EApp (EDictApp "naiveSort") (EVar "xs"))))))
+(DProp false "sort is idempotent" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EDictApp "sort") (EVar "ma"))) (DoLet false false (PVar "once") (EApp (EMethodRef "toList") (EVar "ma"))) (DoExpr (EApp (EDictApp "sort") (EVar "ma"))) (DoExpr (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "toList") (EVar "ma"))) (EVar "once")))))
+(DProp false "sortBy is stable on ties" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EApp (EApp (EVar "tagFrom") (ELit (LInt 0))) (EVar "xs")))) (DoExpr (EApp (EApp (EVar "sortBy") (ELam ((PVar "a") (PVar "b")) (EApp (EApp (EMethodRef "compare") (EApp (EVar "coarseKey") (EVar "a"))) (EApp (EVar "coarseKey") (EVar "b"))))) (EVar "ma"))) (DoExpr (EBinOp "&&" (EApp (EVar "sortedAndStable") (EApp (EMethodRef "toList") (EVar "ma"))) (EBinOp "==" (EApp (EMethodRef "length") (EVar "ma")) (EApp (EMethodRef "length") (EApp (EVar "fromList") (EVar "xs"))))))))
+(DProp false "insertAt lands at the clamped index and removeAt undoes it" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "n" (TyCon "Int")) (pp "x" (TyCon "Int"))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EVar "xs"))) (DoLet false false (PVar "i") (EApp (EApp (EVar "clampIdx") (EVar "n")) (EApp (EMethodRef "length") (EVar "ma")))) (DoExpr (EApp (EApp (EApp (EVar "insertAt") (EVar "n")) (EVar "x")) (EVar "ma"))) (DoLet false false (PVar "grew") (EBinOp "==" (EApp (EMethodRef "length") (EVar "ma")) (EBinOp "+" (EApp (EMethodRef "length") (EApp (EVar "fromList") (EVar "xs"))) (ELit (LInt 1))))) (DoLet false false (PVar "landed") (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "get") (EVar "i")) (EVar "ma"))) (EApp (EVar "Some") (EVar "x")))) (DoExpr (EApp (EApp (EVar "removeAt") (EVar "i")) (EVar "ma"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EVar "grew") (EVar "landed")) (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "toList") (EVar "ma"))) (EVar "xs"))))))
+(DProp false "removeAt out of range is a no-op" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EVar "removeAt") (EApp (EMethodRef "length") (EVar "ma"))) (EVar "ma"))) (DoExpr (EApp (EApp (EVar "removeAt") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1)))) (EVar "ma"))) (DoExpr (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "toList") (EVar "ma"))) (EVar "xs")))))
+(DProp false "Display MutArray shows only the live range and agrees with Eq" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "y" (TyCon "Int"))) (EBlock (DoLet false false (PVar "a") (EApp (EVar "fromList") (EVar "xs"))) (DoLet false false (PVar "b") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EVar "push") (EVar "y")) (EVar "b"))) (DoLet false false (PVar "differs") (EApp (EVar "not") (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "display") (EVar "a"))) (EApp (EMethodRef "display") (EVar "b"))))) (DoLet false false PWild (EApp (EVar "pop") (EVar "b"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EVar "differs") (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "display") (EVar "a"))) (EApp (EMethodRef "display") (EVar "b")))) (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "display") (EVar "a"))) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EMethodRef "display") (EApp (EMethodRef "display") (EVar "xs")))) (ELit (LString ""))))))))

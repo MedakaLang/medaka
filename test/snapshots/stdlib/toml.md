@@ -1,5 +1,5 @@
 # META
-source_lines=778
+source_lines=868
 stages=DESUGAR,MARK
 # SOURCE
 {- toml.mdk — a minimal TOML subset sufficient to parse `medaka.toml` and
@@ -40,6 +40,7 @@ stages=DESUGAR,MARK
    ordinary accessors work on it unchanged. -}
 
 import string.{trim, lines, toInt, startsWith, drop, indexOf, contains}
+import core.{Display}
 
 -- ── Value type ──────────────────────────────────────────────────────────────
 
@@ -735,6 +736,59 @@ export impl Debug TomlValue where
 export impl Debug Toml where
   debug (Toml kvs) = stringConcat ["Toml [", debugKvList kvs, "]"]
 
+{- ── Display (sheet row A-5) ──────────────────────────────────────────────
+
+   ⚠️ This is NOT a TOML renderer.  Emitting a document `parse` could read
+   back is row H-4, which is DEFERRED behind #2240 (the `toml`-onto-`parsec`
+   consolidation); shipping one here under the `Display` name would be that
+   deferred work wearing a disguise.  What `Display` owes is a stable,
+   legible rendering of the VALUE, in the same `T { … }` shape `Display (Map
+   k v)` and `Display (Set a)` use.
+
+   Values keep TOML's own spelling for their SCALARS (a string is quoted, a
+   bool is `true`/`false`) so that the four variants stay distinguishable --
+   an unquoted `TStr "1"` would render exactly like `TInt 1`, and a `Display`
+   that collapses two distinct values into one text is not a rendering of the
+   value.  That injectivity is the law under test. -}
+
+displayTomlValue : TomlValue -> String
+displayTomlValue (TStr s) = debug s
+displayTomlValue (TArr xs) = debugStrList xs
+displayTomlValue (TInt n) = intToString n
+displayTomlValue (TBool b) = if b then "true" else "false"
+
+displayKvPair : (String, TomlValue) -> String
+displayKvPair (k, v) = stringConcat [k, " = ", displayTomlValue v]
+
+displayKvList : List (String, TomlValue) -> String
+displayKvList [] = ""
+displayKvList (p::[]) = displayKvPair p
+displayKvList (p::ps) = stringConcat [displayKvPair p, ", ", displayKvList ps]
+
+{- | A `TomlValue` in TOML's own scalar spelling.
+
+   > display (TStr "hi")
+   "\"hi\""
+   > display (TInt 42)
+   "42"
+   > display (TBool True)
+   "true"
+   > display (TArr ["a", "b"])
+   "[\"a\", \"b\"]" -}
+export impl Display TomlValue where
+  display = displayTomlValue
+
+{- | A whole document as `Toml { key = value, … }` (empty -> `Toml {}`),
+   mirroring `Display (Map k v)`'s `Map { … }`.
+
+   > display (Toml [("a.b", TInt 1), ("c", TBool False)])
+   "Toml { a.b = 1, c = false }"
+   > display (Toml [])
+   "Toml {}" -}
+export impl Display Toml where
+  display (Toml []) = "Toml {}"
+  display (Toml kvs) = stringConcat ["Toml { ", displayKvList kvs, " }"]
+
 -- ── Property tests ───────────────────────────────────────────────────────────
 
 -- Build a `[package]` document whose `version` is the given (safely-quotable)
@@ -780,8 +834,45 @@ mkGates k = stringConcat
 prop "array-of-tables entries stay separate" (k : Int) = parseTableCount "gate" (mkGates k) == 2
   && parseTableEntryStr "gate" 0 "name" (mkGates k) == Some ("g" ++ intToString k)
   && parseTableEntryStr "gate" 1 "name" (mkGates k) == Some ("h" ++ intToString k)
+
+-- ── Instance laws (sheet row A-5) ───────────────────────────────────────
+
+-- LAW: `Display TomlValue` is INJECTIVE across the four variants -- a
+-- rendering that cannot tell a quoted `TStr "1"` from an `TInt 1` is not a
+-- rendering of the value.  This is the clause that pins the TOML scalar
+-- spelling (quotes, lowercase bools) rather than the prelude's.
+prop "Display TomlValue separates the four variants" (n : Int) (b : Bool) =
+  let s = intToString n
+  let vs = [TStr s, TArr [s], TInt n, TBool b]
+  allDistinct (map display vs)
+
+allDistinct : List String -> Bool
+allDistinct [] = True
+allDistinct (x::rest) = all (x /= _) rest && allDistinct rest
+
+-- LAW: `Display Toml` agrees with `Eq Toml` -- equal documents render
+-- identically, and documents differing in any entry render differently, so
+-- the text is a faithful stand-in for the value in a test failure.
+prop "Display Toml agrees with Eq Toml" (k : String) (n : Int) =
+  let a = Toml [(k, TInt n)]
+  let b = Toml [(k, TInt n)]
+  let c = Toml [(k, TInt (n + 1))]
+  let d = Toml [(k ++ "x", TInt n)]
+  display a == display b
+    && eq a b
+    && not (display a == display c)
+    && not (display a == display d)
+
+-- LAW: every key and every value reaches the output (nothing is silently
+-- dropped as the entry list grows).
+prop "Display Toml renders every entry" (k : String) (n : Int) =
+  let one = display (Toml [(k, TInt n)])
+  let two = display (Toml [(k, TInt n), (k ++ "2", TInt n)])
+  stringLength two > stringLength one
+    && contains (displayTomlValue (TInt n)) two
 # DESUGAR
 (DUse false (UseGroup ("string") ((mem "trim" false) (mem "lines" false) (mem "toInt" false) (mem "startsWith" false) (mem "drop" false) (mem "indexOf" false) (mem "contains" false))))
+(DUse false (UseGroup ("core") ((mem "Display" false))))
 (DData Public "TomlValue" () ((variant "TStr" (ConPos (TyCon "String"))) (variant "TArr" (ConPos (TyApp (TyCon "List") (TyCon "String")))) (variant "TInt" (ConPos (TyCon "Int"))) (variant "TBool" (ConPos (TyCon "Bool")))) ())
 (DData Public "Toml" () ((variant "Toml" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue")))))) ())
 (DTypeSig false "listReverse" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))
@@ -929,6 +1020,19 @@ prop "array-of-tables entries stay separate" (k : Int) = parseTableCount "gate" 
 (DFunDef false "debugKvList" ((PCons (PVar "p") (PVar "ps"))) (EApp (EVar "stringConcat") (EListLit (EApp (EVar "debugKvPair") (EVar "p")) (ELit (LString ", ")) (EApp (EVar "debugKvList") (EVar "ps")))))
 (DImpl true "Debug" ((TyCon "TomlValue")) () ((im "debug" () (EVar "debugTomlValue"))))
 (DImpl true "Debug" ((TyCon "Toml")) () ((im "debug" ((PCon "Toml" (PVar "kvs"))) (EApp (EVar "stringConcat") (EListLit (ELit (LString "Toml [")) (EApp (EVar "debugKvList") (EVar "kvs")) (ELit (LString "]")))))))
+(DTypeSig false "displayTomlValue" (TyFun (TyCon "TomlValue") (TyCon "String")))
+(DFunDef false "displayTomlValue" ((PCon "TStr" (PVar "s"))) (EApp (EVar "debug") (EVar "s")))
+(DFunDef false "displayTomlValue" ((PCon "TArr" (PVar "xs"))) (EApp (EVar "debugStrList") (EVar "xs")))
+(DFunDef false "displayTomlValue" ((PCon "TInt" (PVar "n"))) (EApp (EVar "intToString") (EVar "n")))
+(DFunDef false "displayTomlValue" ((PCon "TBool" (PVar "b"))) (EIf (EVar "b") (ELit (LString "true")) (ELit (LString "false"))))
+(DTypeSig false "displayKvPair" (TyFun (TyTuple (TyCon "String") (TyCon "TomlValue")) (TyCon "String")))
+(DFunDef false "displayKvPair" ((PTuple (PVar "k") (PVar "v"))) (EApp (EVar "stringConcat") (EListLit (EVar "k") (ELit (LString " = ")) (EApp (EVar "displayTomlValue") (EVar "v")))))
+(DTypeSig false "displayKvList" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue"))) (TyCon "String")))
+(DFunDef false "displayKvList" ((PList)) (ELit (LString "")))
+(DFunDef false "displayKvList" ((PCons (PVar "p") (PList))) (EApp (EVar "displayKvPair") (EVar "p")))
+(DFunDef false "displayKvList" ((PCons (PVar "p") (PVar "ps"))) (EApp (EVar "stringConcat") (EListLit (EApp (EVar "displayKvPair") (EVar "p")) (ELit (LString ", ")) (EApp (EVar "displayKvList") (EVar "ps")))))
+(DImpl true "Display" ((TyCon "TomlValue")) () ((im "display" () (EVar "displayTomlValue"))))
+(DImpl true "Display" ((TyCon "Toml")) () ((im "display" ((PCon "Toml" (PList))) (ELit (LString "Toml {}"))) (im "display" ((PCon "Toml" (PVar "kvs"))) (EApp (EVar "stringConcat") (EListLit (ELit (LString "Toml { ")) (EApp (EVar "displayKvList") (EVar "kvs")) (ELit (LString " }")))))))
 (DTypeSig false "mkPackage" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "mkPackage" ((PVar "v")) (EApp (EVar "stringConcat") (EListLit (ELit (LString "[package]\nname = \"demo\"\nversion = \"")) (EVar "v") (ELit (LString "\"")))))
 (DProp false "packageVersion round-trips an Int-derived version" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "parsePackageVersion") (EApp (EVar "mkPackage") (EApp (EVar "intToString") (EVar "n")))) (EApp (EVar "Some") (EApp (EVar "intToString") (EVar "n")))))
@@ -941,8 +1045,15 @@ prop "array-of-tables entries stay separate" (k : Int) = parseTableCount "gate" 
 (DTypeSig false "mkGates" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "mkGates" ((PVar "k")) (EApp (EVar "stringConcat") (EListLit (ELit (LString "[[gate]]\nname = \"g")) (EApp (EVar "intToString") (EVar "k")) (ELit (LString "\"\n[[gate]]\nname = \"h")) (EApp (EVar "intToString") (EVar "k")) (ELit (LString "\"\n")))))
 (DProp false "array-of-tables entries stay separate" ((pp "k" (TyCon "Int"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "parseTableCount") (ELit (LString "gate"))) (EApp (EVar "mkGates") (EVar "k"))) (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EApp (EApp (EVar "parseTableEntryStr") (ELit (LString "gate"))) (ELit (LInt 0))) (ELit (LString "name"))) (EApp (EVar "mkGates") (EVar "k"))) (EApp (EVar "Some") (EBinOp "++" (ELit (LString "g")) (EApp (EVar "intToString") (EVar "k")))))) (EBinOp "==" (EApp (EApp (EApp (EApp (EVar "parseTableEntryStr") (ELit (LString "gate"))) (ELit (LInt 1))) (ELit (LString "name"))) (EApp (EVar "mkGates") (EVar "k"))) (EApp (EVar "Some") (EBinOp "++" (ELit (LString "h")) (EApp (EVar "intToString") (EVar "k")))))))
+(DProp false "Display TomlValue separates the four variants" ((pp "n" (TyCon "Int")) (pp "b" (TyCon "Bool"))) (EBlock (DoLet false false (PVar "s") (EApp (EVar "intToString") (EVar "n"))) (DoLet false false (PVar "vs") (EListLit (EApp (EVar "TStr") (EVar "s")) (EApp (EVar "TArr") (EListLit (EVar "s"))) (EApp (EVar "TInt") (EVar "n")) (EApp (EVar "TBool") (EVar "b")))) (DoExpr (EApp (EVar "allDistinct") (EApp (EApp (EVar "map") (EVar "display")) (EVar "vs"))))))
+(DTypeSig false "allDistinct" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))
+(DFunDef false "allDistinct" ((PList)) (EVar "True"))
+(DFunDef false "allDistinct" ((PCons (PVar "x") (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EVar "all") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "x") (EVar "_s")))) (EVar "rest")) (EApp (EVar "allDistinct") (EVar "rest"))))
+(DProp false "Display Toml agrees with Eq Toml" ((pp "k" (TyCon "String")) (pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "a") (EApp (EVar "Toml") (EListLit (ETuple (EVar "k") (EApp (EVar "TInt") (EVar "n")))))) (DoLet false false (PVar "b") (EApp (EVar "Toml") (EListLit (ETuple (EVar "k") (EApp (EVar "TInt") (EVar "n")))))) (DoLet false false (PVar "c") (EApp (EVar "Toml") (EListLit (ETuple (EVar "k") (EApp (EVar "TInt") (EBinOp "+" (EVar "n") (ELit (LInt 1)))))))) (DoLet false false (PVar "d") (EApp (EVar "Toml") (EListLit (ETuple (EBinOp "++" (EVar "k") (ELit (LString "x"))) (EApp (EVar "TInt") (EVar "n")))))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "display") (EVar "a")) (EApp (EVar "display") (EVar "b"))) (EApp (EApp (EVar "eq") (EVar "a")) (EVar "b"))) (EApp (EVar "not") (EBinOp "==" (EApp (EVar "display") (EVar "a")) (EApp (EVar "display") (EVar "c"))))) (EApp (EVar "not") (EBinOp "==" (EApp (EVar "display") (EVar "a")) (EApp (EVar "display") (EVar "d"))))))))
+(DProp false "Display Toml renders every entry" ((pp "k" (TyCon "String")) (pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "one") (EApp (EVar "display") (EApp (EVar "Toml") (EListLit (ETuple (EVar "k") (EApp (EVar "TInt") (EVar "n"))))))) (DoLet false false (PVar "two") (EApp (EVar "display") (EApp (EVar "Toml") (EListLit (ETuple (EVar "k") (EApp (EVar "TInt") (EVar "n"))) (ETuple (EBinOp "++" (EVar "k") (ELit (LString "2"))) (EApp (EVar "TInt") (EVar "n"))))))) (DoExpr (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "two")) (EApp (EVar "stringLength") (EVar "one"))) (EApp (EApp (EVar "contains") (EApp (EVar "displayTomlValue") (EApp (EVar "TInt") (EVar "n")))) (EVar "two"))))))
 # MARK
 (DUse false (UseGroup ("string") ((mem "trim" false) (mem "lines" false) (mem "toInt" false) (mem "startsWith" false) (mem "drop" false) (mem "indexOf" false) (mem "contains" false))))
+(DUse false (UseGroup ("core") ((mem "Display" false))))
 (DData Public "TomlValue" () ((variant "TStr" (ConPos (TyCon "String"))) (variant "TArr" (ConPos (TyApp (TyCon "List") (TyCon "String")))) (variant "TInt" (ConPos (TyCon "Int"))) (variant "TBool" (ConPos (TyCon "Bool")))) ())
 (DData Public "Toml" () ((variant "Toml" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue")))))) ())
 (DTypeSig false "listReverse" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))
@@ -1090,6 +1201,19 @@ prop "array-of-tables entries stay separate" (k : Int) = parseTableCount "gate" 
 (DFunDef false "debugKvList" ((PCons (PVar "p") (PVar "ps"))) (EApp (EVar "stringConcat") (EListLit (EApp (EVar "debugKvPair") (EVar "p")) (ELit (LString ", ")) (EApp (EVar "debugKvList") (EVar "ps")))))
 (DImpl true "Debug" ((TyCon "TomlValue")) () ((im "debug" () (EVar "debugTomlValue"))))
 (DImpl true "Debug" ((TyCon "Toml")) () ((im "debug" ((PCon "Toml" (PVar "kvs"))) (EApp (EVar "stringConcat") (EListLit (ELit (LString "Toml [")) (EApp (EVar "debugKvList") (EVar "kvs")) (ELit (LString "]")))))))
+(DTypeSig false "displayTomlValue" (TyFun (TyCon "TomlValue") (TyCon "String")))
+(DFunDef false "displayTomlValue" ((PCon "TStr" (PVar "s"))) (EApp (EMethodRef "debug") (EVar "s")))
+(DFunDef false "displayTomlValue" ((PCon "TArr" (PVar "xs"))) (EApp (EVar "debugStrList") (EVar "xs")))
+(DFunDef false "displayTomlValue" ((PCon "TInt" (PVar "n"))) (EApp (EVar "intToString") (EVar "n")))
+(DFunDef false "displayTomlValue" ((PCon "TBool" (PVar "b"))) (EIf (EVar "b") (ELit (LString "true")) (ELit (LString "false"))))
+(DTypeSig false "displayKvPair" (TyFun (TyTuple (TyCon "String") (TyCon "TomlValue")) (TyCon "String")))
+(DFunDef false "displayKvPair" ((PTuple (PVar "k") (PVar "v"))) (EApp (EVar "stringConcat") (EListLit (EVar "k") (ELit (LString " = ")) (EApp (EVar "displayTomlValue") (EVar "v")))))
+(DTypeSig false "displayKvList" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue"))) (TyCon "String")))
+(DFunDef false "displayKvList" ((PList)) (ELit (LString "")))
+(DFunDef false "displayKvList" ((PCons (PVar "p") (PList))) (EApp (EVar "displayKvPair") (EVar "p")))
+(DFunDef false "displayKvList" ((PCons (PVar "p") (PVar "ps"))) (EApp (EVar "stringConcat") (EListLit (EApp (EVar "displayKvPair") (EVar "p")) (ELit (LString ", ")) (EApp (EVar "displayKvList") (EVar "ps")))))
+(DImpl true "Display" ((TyCon "TomlValue")) () ((im "display" () (EVar "displayTomlValue"))))
+(DImpl true "Display" ((TyCon "Toml")) () ((im "display" ((PCon "Toml" (PList))) (ELit (LString "Toml {}"))) (im "display" ((PCon "Toml" (PVar "kvs"))) (EApp (EVar "stringConcat") (EListLit (ELit (LString "Toml { ")) (EApp (EVar "displayKvList") (EVar "kvs")) (ELit (LString " }")))))))
 (DTypeSig false "mkPackage" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "mkPackage" ((PVar "v")) (EApp (EVar "stringConcat") (EListLit (ELit (LString "[package]\nname = \"demo\"\nversion = \"")) (EVar "v") (ELit (LString "\"")))))
 (DProp false "packageVersion round-trips an Int-derived version" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "parsePackageVersion") (EApp (EVar "mkPackage") (EApp (EVar "intToString") (EVar "n")))) (EApp (EVar "Some") (EApp (EVar "intToString") (EVar "n")))))
@@ -1102,3 +1226,9 @@ prop "array-of-tables entries stay separate" (k : Int) = parseTableCount "gate" 
 (DTypeSig false "mkGates" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "mkGates" ((PVar "k")) (EApp (EVar "stringConcat") (EListLit (ELit (LString "[[gate]]\nname = \"g")) (EApp (EVar "intToString") (EVar "k")) (ELit (LString "\"\n[[gate]]\nname = \"h")) (EApp (EVar "intToString") (EVar "k")) (ELit (LString "\"\n")))))
 (DProp false "array-of-tables entries stay separate" ((pp "k" (TyCon "Int"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "parseTableCount") (ELit (LString "gate"))) (EApp (EVar "mkGates") (EVar "k"))) (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EApp (EApp (EVar "parseTableEntryStr") (ELit (LString "gate"))) (ELit (LInt 0))) (ELit (LString "name"))) (EApp (EVar "mkGates") (EVar "k"))) (EApp (EVar "Some") (EBinOp "++" (ELit (LString "g")) (EApp (EVar "intToString") (EVar "k")))))) (EBinOp "==" (EApp (EApp (EApp (EApp (EVar "parseTableEntryStr") (ELit (LString "gate"))) (ELit (LInt 1))) (ELit (LString "name"))) (EApp (EVar "mkGates") (EVar "k"))) (EApp (EVar "Some") (EBinOp "++" (ELit (LString "h")) (EApp (EVar "intToString") (EVar "k")))))))
+(DProp false "Display TomlValue separates the four variants" ((pp "n" (TyCon "Int")) (pp "b" (TyCon "Bool"))) (EBlock (DoLet false false (PVar "s") (EApp (EVar "intToString") (EVar "n"))) (DoLet false false (PVar "vs") (EListLit (EApp (EVar "TStr") (EVar "s")) (EApp (EVar "TArr") (EListLit (EVar "s"))) (EApp (EVar "TInt") (EVar "n")) (EApp (EVar "TBool") (EVar "b")))) (DoExpr (EApp (EVar "allDistinct") (EApp (EApp (EMethodRef "map") (EMethodRef "display")) (EVar "vs"))))))
+(DTypeSig false "allDistinct" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))
+(DFunDef false "allDistinct" ((PList)) (EVar "True"))
+(DFunDef false "allDistinct" ((PCons (PVar "x") (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EDictApp "all") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "x") (EVar "_s")))) (EVar "rest")) (EApp (EVar "allDistinct") (EVar "rest"))))
+(DProp false "Display Toml agrees with Eq Toml" ((pp "k" (TyCon "String")) (pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "a") (EApp (EVar "Toml") (EListLit (ETuple (EVar "k") (EApp (EVar "TInt") (EVar "n")))))) (DoLet false false (PVar "b") (EApp (EVar "Toml") (EListLit (ETuple (EVar "k") (EApp (EVar "TInt") (EVar "n")))))) (DoLet false false (PVar "c") (EApp (EVar "Toml") (EListLit (ETuple (EVar "k") (EApp (EVar "TInt") (EBinOp "+" (EVar "n") (ELit (LInt 1)))))))) (DoLet false false (PVar "d") (EApp (EVar "Toml") (EListLit (ETuple (EBinOp "++" (EVar "k") (ELit (LString "x"))) (EApp (EVar "TInt") (EVar "n")))))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EMethodRef "display") (EVar "a")) (EApp (EMethodRef "display") (EVar "b"))) (EApp (EApp (EMethodRef "eq") (EVar "a")) (EVar "b"))) (EApp (EVar "not") (EBinOp "==" (EApp (EMethodRef "display") (EVar "a")) (EApp (EMethodRef "display") (EVar "c"))))) (EApp (EVar "not") (EBinOp "==" (EApp (EMethodRef "display") (EVar "a")) (EApp (EMethodRef "display") (EVar "d"))))))))
+(DProp false "Display Toml renders every entry" ((pp "k" (TyCon "String")) (pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "one") (EApp (EMethodRef "display") (EApp (EVar "Toml") (EListLit (ETuple (EVar "k") (EApp (EVar "TInt") (EVar "n"))))))) (DoLet false false (PVar "two") (EApp (EMethodRef "display") (EApp (EVar "Toml") (EListLit (ETuple (EVar "k") (EApp (EVar "TInt") (EVar "n"))) (ETuple (EBinOp "++" (EVar "k") (ELit (LString "2"))) (EApp (EVar "TInt") (EVar "n"))))))) (DoExpr (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "two")) (EApp (EVar "stringLength") (EVar "one"))) (EApp (EApp (EVar "contains") (EApp (EVar "displayTomlValue") (EApp (EVar "TInt") (EVar "n")))) (EVar "two"))))))

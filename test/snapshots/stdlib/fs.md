@@ -1,5 +1,5 @@
 # META
-source_lines=100
+source_lines=136
 stages=DESUGAR,MARK
 # SOURCE
 {- fs.mdk — a filesystem convenience layer over the host file externs.
@@ -31,6 +31,7 @@ import string.{contains}
      time, seconds since the Unix epoch). -}
 public export data FileStat =
   | FileStat { size : Int, isDir : Bool, isFile : Bool, mtime : Float }
+deriving (Eq, Debug)
 
 {- | `stat path` — like `statFile`, but wraps the raw tuple in a `FileStat`.
      `Err` (strerror) if the path cannot be stat'd (e.g. does not exist). -}
@@ -102,11 +103,48 @@ isFile p = map (st => st.isFile) (stat p)
 export
 fileSize : String -> <FileRead "_"> Result String Int
 fileSize p = map (st => st.size) (stat p)
+
+-- ── Instance laws ────────────────────────────────────────────────────────────
+-- `FileStat` is a plain record of four immutable fields, so derived `Eq` is
+-- field-wise structural equality.  The externs above do not run under the
+-- interpreter, so the laws are stated over hand-built records rather than over
+-- a real `stat` call.
+
+-- LAW (A-1): derived `Eq FileStat` is reflexive and discriminates on EVERY
+-- field — a derived instance that silently ignored a field would still be
+-- reflexive, so both halves are needed.
+prop "Eq FileStat is reflexive and field-discriminating" (n : Int) (b : Bool) =
+  let base = FileStat {
+    size = n,
+    isDir = b,
+    isFile = not b,
+    mtime = intToFloat n,
+  }
+  base == base
+    && base == FileStat { base | size = n + 1 } == False
+    && base == FileStat { base | isDir = not b } == False
+    && base == FileStat { base | isFile = b } == False
+    && base == FileStat { base | mtime = intToFloat n + 1.0 } == False
+
+-- LAW (A-1): derived `Debug FileStat` renders every field, so two records that
+-- differ anywhere render differently (and equal records render identically).
+prop "Debug FileStat separates records that Eq separates" (n : Int) (b : Bool) =
+  let x = FileStat { size = n, isDir = b, isFile = not b, mtime = intToFloat n }
+  let y = FileStat { x | size = n + 1 }
+  debug x == debug FileStat {
+      size = n,
+      isDir = b,
+      isFile = not b,
+      mtime = intToFloat n,
+    }
+    && debug x == debug y == False
 # DESUGAR
 (DUse false (UseGroup ("core") ((mem "Result" false) (mem "Ok" false) (mem "Err" false))))
 (DUse false (UseGroup ("path") ((mem "dirname" false) (mem "joinPath" false))))
 (DUse false (UseGroup ("string") ((mem "contains" false))))
 (DData Public "FileStat" () ((variant "FileStat" (ConNamed (field "size" (TyCon "Int")) (field "isDir" (TyCon "Bool")) (field "isFile" (TyCon "Bool")) (field "mtime" (TyCon "Float"))))) ())
+(DImpl true "Eq" ((TyCon "FileStat")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "FileStat" ((rf "size" (PVar "__a0")) (rf "isDir" (PVar "__a1")) (rf "isFile" (PVar "__a2")) (rf "mtime" (PVar "__a3"))) false) (PRec "FileStat" ((rf "size" (PVar "__b0")) (rf "isDir" (PVar "__b1")) (rf "isFile" (PVar "__b2")) (rf "mtime" (PVar "__b3"))) false)) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EVar "eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EVar "eq") (EVar "__a3")) (EVar "__b3"))))))))
+(DImpl true "Debug" ((TyCon "FileStat")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PRec "FileStat" ((rf "size" (PVar "__a0")) (rf "isDir" (PVar "__a1")) (rf "isFile" (PVar "__a2")) (rf "mtime" (PVar "__a3"))) false) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "FileStat {")) (ELit (LString " size = "))) (EApp (EVar "debug") (EVar "__a0"))) (ELit (LString ", isDir = "))) (EApp (EVar "debug") (EVar "__a1"))) (ELit (LString ", isFile = "))) (EApp (EVar "debug") (EVar "__a2"))) (ELit (LString ", mtime = "))) (EApp (EVar "debug") (EVar "__a3"))) (ELit (LString " }"))))))))
 (DTypeSig true "stat" (TyFun (TyCon "String") (TyEffect ((hole "FileRead")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "FileStat")))))
 (DFunDef false "stat" ((PVar "p")) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "sz") (PVar "d") (PVar "f") (PVar "m"))) (ERecordCreate "FileStat" ((fa "size" (EVar "sz")) (fa "isDir" (EVar "d")) (fa "isFile" (EVar "f")) (fa "mtime" (EVar "m")))))) (EApp (EVar "statFile") (EVar "p"))))
 (DTypeSig true "copyFile" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ((hole "FileRead") (hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
@@ -124,11 +162,15 @@ fileSize p = map (st => st.size) (stat p)
 (DFunDef false "isFile" ((PVar "p")) (EApp (EApp (EVar "map") (ELam ((PVar "st")) (EFieldAccess (EVar "st") "isFile"))) (EApp (EVar "stat") (EVar "p"))))
 (DTypeSig true "fileSize" (TyFun (TyCon "String") (TyEffect ((hole "FileRead")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
 (DFunDef false "fileSize" ((PVar "p")) (EApp (EApp (EVar "map") (ELam ((PVar "st")) (EFieldAccess (EVar "st") "size"))) (EApp (EVar "stat") (EVar "p"))))
+(DProp false "Eq FileStat is reflexive and field-discriminating" ((pp "n" (TyCon "Int")) (pp "b" (TyCon "Bool"))) (EBlock (DoLet false false (PVar "base") (ERecordCreate "FileStat" ((fa "size" (EVar "n")) (fa "isDir" (EVar "b")) (fa "isFile" (EApp (EVar "not") (EVar "b"))) (fa "mtime" (EApp (EVar "intToFloat") (EVar "n")))))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "base") (EVar "base")) (EBinOp "==" (EBinOp "==" (EVar "base") (EVariantUpdate "FileStat" (EVar "base") ((fa "size" (EBinOp "+" (EVar "n") (ELit (LInt 1))))))) (EVar "False"))) (EBinOp "==" (EBinOp "==" (EVar "base") (EVariantUpdate "FileStat" (EVar "base") ((fa "isDir" (EApp (EVar "not") (EVar "b")))))) (EVar "False"))) (EBinOp "==" (EBinOp "==" (EVar "base") (EVariantUpdate "FileStat" (EVar "base") ((fa "isFile" (EVar "b"))))) (EVar "False"))) (EBinOp "==" (EBinOp "==" (EVar "base") (EVariantUpdate "FileStat" (EVar "base") ((fa "mtime" (EBinOp "+" (EApp (EVar "intToFloat") (EVar "n")) (ELit (LFloat 1.0))))))) (EVar "False"))))))
+(DProp false "Debug FileStat separates records that Eq separates" ((pp "n" (TyCon "Int")) (pp "b" (TyCon "Bool"))) (EBlock (DoLet false false (PVar "x") (ERecordCreate "FileStat" ((fa "size" (EVar "n")) (fa "isDir" (EVar "b")) (fa "isFile" (EApp (EVar "not") (EVar "b"))) (fa "mtime" (EApp (EVar "intToFloat") (EVar "n")))))) (DoLet false false (PVar "y") (EVariantUpdate "FileStat" (EVar "x") ((fa "size" (EBinOp "+" (EVar "n") (ELit (LInt 1))))))) (DoExpr (EBinOp "&&" (EBinOp "==" (EApp (EVar "debug") (EVar "x")) (EApp (EVar "debug") (ERecordCreate "FileStat" ((fa "size" (EVar "n")) (fa "isDir" (EVar "b")) (fa "isFile" (EApp (EVar "not") (EVar "b"))) (fa "mtime" (EApp (EVar "intToFloat") (EVar "n"))))))) (EBinOp "==" (EBinOp "==" (EApp (EVar "debug") (EVar "x")) (EApp (EVar "debug") (EVar "y"))) (EVar "False"))))))
 # MARK
 (DUse false (UseGroup ("core") ((mem "Result" false) (mem "Ok" false) (mem "Err" false))))
 (DUse false (UseGroup ("path") ((mem "dirname" false) (mem "joinPath" false))))
 (DUse false (UseGroup ("string") ((mem "contains" false))))
 (DData Public "FileStat" () ((variant "FileStat" (ConNamed (field "size" (TyCon "Int")) (field "isDir" (TyCon "Bool")) (field "isFile" (TyCon "Bool")) (field "mtime" (TyCon "Float"))))) ())
+(DImpl true "Eq" ((TyCon "FileStat")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "FileStat" ((rf "size" (PVar "__a0")) (rf "isDir" (PVar "__a1")) (rf "isFile" (PVar "__a2")) (rf "mtime" (PVar "__a3"))) false) (PRec "FileStat" ((rf "size" (PVar "__b0")) (rf "isDir" (PVar "__b1")) (rf "isFile" (PVar "__b2")) (rf "mtime" (PVar "__b3"))) false)) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EMethodRef "eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EMethodRef "eq") (EVar "__a3")) (EVar "__b3"))))))))
+(DImpl true "Debug" ((TyCon "FileStat")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PRec "FileStat" ((rf "size" (PVar "__a0")) (rf "isDir" (PVar "__a1")) (rf "isFile" (PVar "__a2")) (rf "mtime" (PVar "__a3"))) false) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "FileStat {")) (ELit (LString " size = "))) (EApp (EMethodRef "debug") (EVar "__a0"))) (ELit (LString ", isDir = "))) (EApp (EMethodRef "debug") (EVar "__a1"))) (ELit (LString ", isFile = "))) (EApp (EMethodRef "debug") (EVar "__a2"))) (ELit (LString ", mtime = "))) (EApp (EMethodRef "debug") (EVar "__a3"))) (ELit (LString " }"))))))))
 (DTypeSig true "stat" (TyFun (TyCon "String") (TyEffect ((hole "FileRead")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "FileStat")))))
 (DFunDef false "stat" ((PVar "p")) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "sz") (PVar "d") (PVar "f") (PVar "m"))) (ERecordCreate "FileStat" ((fa "size" (EVar "sz")) (fa "isDir" (EVar "d")) (fa "isFile" (EVar "f")) (fa "mtime" (EVar "m")))))) (EApp (EVar "statFile") (EVar "p"))))
 (DTypeSig true "copyFile" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ((hole "FileRead") (hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
@@ -146,3 +188,5 @@ fileSize p = map (st => st.size) (stat p)
 (DFunDef false "isFile" ((PVar "p")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "st")) (EFieldAccess (EVar "st") "isFile"))) (EApp (EVar "stat") (EVar "p"))))
 (DTypeSig true "fileSize" (TyFun (TyCon "String") (TyEffect ((hole "FileRead")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
 (DFunDef false "fileSize" ((PVar "p")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "st")) (EFieldAccess (EVar "st") "size"))) (EApp (EVar "stat") (EVar "p"))))
+(DProp false "Eq FileStat is reflexive and field-discriminating" ((pp "n" (TyCon "Int")) (pp "b" (TyCon "Bool"))) (EBlock (DoLet false false (PVar "base") (ERecordCreate "FileStat" ((fa "size" (EVar "n")) (fa "isDir" (EVar "b")) (fa "isFile" (EApp (EVar "not") (EVar "b"))) (fa "mtime" (EApp (EVar "intToFloat") (EVar "n")))))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "base") (EVar "base")) (EBinOp "==" (EBinOp "==" (EVar "base") (EVariantUpdate "FileStat" (EVar "base") ((fa "size" (EBinOp "+" (EVar "n") (ELit (LInt 1))))))) (EVar "False"))) (EBinOp "==" (EBinOp "==" (EVar "base") (EVariantUpdate "FileStat" (EVar "base") ((fa "isDir" (EApp (EVar "not") (EVar "b")))))) (EVar "False"))) (EBinOp "==" (EBinOp "==" (EVar "base") (EVariantUpdate "FileStat" (EVar "base") ((fa "isFile" (EVar "b"))))) (EVar "False"))) (EBinOp "==" (EBinOp "==" (EVar "base") (EVariantUpdate "FileStat" (EVar "base") ((fa "mtime" (EBinOp "+" (EApp (EVar "intToFloat") (EVar "n")) (ELit (LFloat 1.0))))))) (EVar "False"))))))
+(DProp false "Debug FileStat separates records that Eq separates" ((pp "n" (TyCon "Int")) (pp "b" (TyCon "Bool"))) (EBlock (DoLet false false (PVar "x") (ERecordCreate "FileStat" ((fa "size" (EVar "n")) (fa "isDir" (EVar "b")) (fa "isFile" (EApp (EVar "not") (EVar "b"))) (fa "mtime" (EApp (EVar "intToFloat") (EVar "n")))))) (DoLet false false (PVar "y") (EVariantUpdate "FileStat" (EVar "x") ((fa "size" (EBinOp "+" (EVar "n") (ELit (LInt 1))))))) (DoExpr (EBinOp "&&" (EBinOp "==" (EApp (EMethodRef "debug") (EVar "x")) (EApp (EMethodRef "debug") (ERecordCreate "FileStat" ((fa "size" (EVar "n")) (fa "isDir" (EVar "b")) (fa "isFile" (EApp (EVar "not") (EVar "b"))) (fa "mtime" (EApp (EVar "intToFloat") (EVar "n"))))))) (EBinOp "==" (EBinOp "==" (EApp (EMethodRef "debug") (EVar "x")) (EApp (EMethodRef "debug") (EVar "y"))) (EVar "False"))))))
