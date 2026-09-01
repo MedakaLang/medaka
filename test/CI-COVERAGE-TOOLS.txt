@@ -67,11 +67,14 @@ test/gate_cost_collect         the AUTOMATED half of #2180's baseline auto-advan
                                compiler itself; it has no pass/fail assertion of its own.
 
 # ── golden capture ──
-# CHECK=1 turns this one into a comparison, but its DEFAULT action is to WRITE the goldens
-# and nothing invokes it with CHECK=1. It is a blessing action, exactly like capture_goldens.
-# (If the error-quality corpus is ever wired into CI it goes in a shard as CHECK=1 — and
-# then this line comes out.)
-test/error_quality_fixtures/capture   captures the error-quality baseline .out goldens.
+# CHECK=1 turns this one into a comparison, but its DEFAULT action (no env var) is to WRITE
+# the goldens — still a blessing action, exactly like capture_goldens. #2446/S-diag-census
+# wired the CHECK=1 comparison into CI via a thin wrapper,
+# test/diff_compiler_error_quality_baseline.sh (in a shard, in test/gates.toml), which sets
+# CHECK=1 and execs this script — so THIS entry does not "come out": capture.sh itself is
+# still a bare `sh capture.sh` blessing action, and the wrapper is the registry's `run` target.
+test/error_quality_fixtures/capture   captures the error-quality baseline .out goldens (its
+                                       CHECK=1 comparison mode is gated via the wrapper above).
 
 # ── measurement (no pass/fail verdict) ──
 test/bench                     perf harness. Reports numbers; asserts nothing.
@@ -102,6 +105,19 @@ test/cli_conformance_census    derived CLI conformance census (#2354, S-conforma
                                 from the day it landed. The ENFORCING gate is S-4's
                                 help/parse-arm agreement gate; this is the map that slice
                                 works from. See the script header.
+
+test/diag_census               derived error-quality conformance census (#2446, S-diag-
+                                census, `make diag-census`): re-derives, per fixture in
+                                test/error_quality_fixtures/, the machine-checkable facts
+                                GRADING.md's L/X/A columns used to be hand-typed from —
+                                human-channel prefix, caret presence, real location,
+                                --json code/kind/range presence, diagnostic count — plus a
+                                documented-vs-observed diagnostic-code coverage set against
+                                compiler/DIAGNOSTIC-CODES-DESIGN.md. Always exits 0 and
+                                asserts nothing; the ENFORCING check that the corpus's
+                                captured .out baselines haven't silently drifted is
+                                test/diff_compiler_error_quality_baseline.sh. See the
+                                script header.
 
 # ── sqlite (the GATES are sqlite/test/*_oracle.sh — those are in the `sqlite` shard) ──
 # Self-described, in its own header: "it is a status report, not a gate". It prints

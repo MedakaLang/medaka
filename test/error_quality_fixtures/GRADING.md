@@ -1,5 +1,22 @@
 # GRADING — error-quality corpus scored against the rubric
 
+> **Stamp: 2026-09-01, base `44b678464930a01ffff83e744ccaf22cd2605747`
+> (#2446, S-diag-census).** The three MACHINE-SCORABLE dimensions this doc
+> used to hand-type — **L** Located, **X** Cascade-free, **A**
+> Agent-parseable — are superseded by `make diag-census`
+> (`test/diag_census.sh`), which re-derives location/caret/`--json`
+> code-kind-range presence and diagnostic count fresh from the built binary
+> every run. This doc's own prose claim that "no fixture reaches A=2 (no
+> `code`/`kind`/`fix` exists)" was already FALSE at this base — `--json`
+> already emits `code`/`kind`/`range` on the overwhelming majority of
+> fixtures (F6, #2446) — which is exactly the kind of drift a hand-typed
+> table cannot catch and a re-run census can. Read `A`/`X`/`L` cells below as
+> a HISTORICAL, dated snapshot only; `make diag-census`'s live output is the
+> current answer. The **judgment** dimensions — **C** Correct, **R**
+> Points-at-root-cause, **F** Actionable-fix, **J** Jargon-free — cannot be
+> machine-derived (they require reading the message for sense, not just
+> shape) and survive below as a dated ledger of human scoring sessions.
+
 Every one of the 55 fixtures in this directory, scored against the 7-dimension
 rubric in `compiler/ERROR-QUALITY.md` §3. Each dimension is **0 / 1 / 2**
 (max **14**): **L** Located, **C** Correct, **R** Points-at-root-cause,
