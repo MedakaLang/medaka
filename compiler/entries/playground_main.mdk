@@ -25,10 +25,21 @@
 -- HOW MANY TIMES IT RUNS (S2/#2442 — this line used to read "ONCE" and was wrong).
 -- Per invocation, over the user's program:
 --   `analyze` — parsed + loaded ONCE (`run`'s `loadProgramE`, threaded downstream),
---     prelude parsed + desugared ONCE (`desugaredPrelude`, content-keyed), typechecked
---     ONCE (`analyzeFrom`/`analyzeProject`); PLUS one further check of the SYNTHETIC
---     auto-print wrap (`underivedMainDiags`) on the bare-value mains that trigger it,
---     which is a different program and not a repeat of the same work.
+--     typechecked ONCE (`analyzeFrom`/`analyzeProject`); PLUS one further check of
+--     the SYNTHETIC auto-print wrap (`underivedMainDiags`) on the bare-value mains
+--     that trigger it, which is a different program and not a repeat of the same
+--     work.
+--     Prelude parsing+desugaring is ONCE only on the SINGLE-MODULE arm
+--     (`analyzeSingle` → `analyzeFrom` fills the global content-keyed
+--     `desugaredPrelude` memo, `frontend/desugar_cache.mdk`; `doEmit` below then
+--     hits that memo). The MULTI-MODULE arm (`analyzeMulti` → `analyzeProject`)
+--     is NOT converged: `analyzeProject`'s loader fills a separate, per-call
+--     `Ref` (`preludeDesugared`, `driver/diagnostics.mdk`) that `doEmit`'s
+--     `desugaredPrelude` call never sees, so on that arm `doEmit` still
+--     re-parses+re-desugars runtime.mdk and core.mdk from scratch — measured
+--     ~103ms/compile on the multi-module arm vs ~8ms on the single-module arm
+--     (Fix-1/#2442 review round). This is a known, UNCONVERGED gap, not fixed
+--     here — separate follow-up work.
 --   `compile` — all of the above, plus exactly one emit-side `elaborateModules`
 --     inside `runEmit`.
 -- Before S2 this entry additionally re-loaded and re-parsed every user module, re-parsed
@@ -319,10 +330,14 @@ mainShapeError decls = match findMainFunDef decls
 -- re-reads and re-parses every user module), plus `desugar (parse rsrc)` /
 -- `desugar (parse csrc)` over runtime.mdk + core.mdk.  Both are now what
 -- `medaka_cli.mdk`'s `typecheckGate`/`typecheckGateRoute` already do: the loader's
--- module list is THREADED in from `run` (the caller that loaded it), and the two
--- prelude halves go through the content-keyed `desugaredPrelude` memo that
--- `analyzeFrom` (driver/diagnostics.mdk) already filled on the way here — so this
--- is a cache HIT, not a second desugar.
+-- module list is THREADED in from `run` (the caller that loaded it), and — on the
+-- SINGLE-MODULE arm only — the two prelude halves go through the content-keyed
+-- `desugaredPrelude` memo that `analyzeFrom` (driver/diagnostics.mdk) already
+-- filled on the way here, so this is a cache HIT, not a second desugar. The
+-- MULTI-MODULE arm (`analyzeMulti` → `analyzeProject`) fills a DIFFERENT,
+-- per-call `preludeDesugared` Ref instead (never `desugaredPrelude`), so on that
+-- arm this call is still a cache MISS — see the header's "HOW MANY TIMES IT
+-- RUNS" note; unconverged, not fixed here.
 --
 -- 🚨 IT ALSO RAN A WHOLE `mangleUnits` + `elaborateModules` HERE AND DISCARDED THE
 -- RESULT.  That call was NOT dead — bound to `_`, but its SIDE EFFECT was
@@ -369,6 +384,22 @@ doEmit emit rsrc csrc tsrc entry mods warnTriples =
   else
     finishClean emit warnTriples rt core modules
 
+-- ACCEPTED TRADEOFF (Val, 2026-09-01, #2442 review round F1): because `analyze`
+-- deliberately never reaches `runEmit` below, it CANNOT detect a codegen-only
+-- failure — an unsupported wasm construct that only trips `E-PANIC`/`unreachable`
+-- inside the emitter, never surfaced as a source diagnostic by anything above this
+-- point. That's the whole point of `analyze`: skipping codegen is what saves the
+-- ~596ms a clean one-liner otherwise spends in `runEmit` (see the `analyze` doc
+-- comment above `main`). Before `analyze` existed in its current form, every
+-- keystroke ran `compile` and reached codegen, so such a gap surfaced as a
+-- synthetic "compiler trap: unreachable" JS-level catch — not a real, located
+-- source diagnostic either. After: `analyze` reports the program clean, and the
+-- user only learns of the emitter gap on Run (when `compile` finally reaches
+-- `runEmit`). Val's ruling: ship as-is — the old always-reached-codegen message
+-- was arguably a worse, misleading pseudo-diagnostic for what is a compiler
+-- limitation, not the user's bug. This is a deliberate, accepted tradeoff, not a
+-- bug to fix here.
+--
 -- The ONE divergence point between `compile` and `analyze`.  Every diagnostic
 -- either mode can produce has already been produced by the time control reaches
 -- here, so `compile` prints the WAT marker and the WAT while `analyze` prints its
