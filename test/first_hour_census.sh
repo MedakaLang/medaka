@@ -167,14 +167,26 @@ MUTATION_KINDS="drop-paren drop-import drop-arm typo-ident dedent"
 BUCKETS="$WORK/buckets.tsv"     # kind<TAB>bucket<TAB>fixture
 : > "$BUCKETS"
 mutant_count=0
+crashed_count=0
 
 # ── classify one mutant: run --json, decide bucket ──────────────────────--
 classify_mutant() {
   # $1 = mutant file, $2 = kind, $3 = fixture label (for the report)
   mfile="$1"; mkind="$2"; mlabel="$3"
   json="$(cd "$ROOT" && run_timed "$BIN" check --json "$mfile" 2>&1)"
+  mrc=$?
   code="$(printf '%s' "$json" | grep -oE '"code":"[^"]*"' | head -n1 | sed -E 's/"code":"([^"]*)"/\1/')"
-  if [ -z "$code" ]; then
+  if [ -z "$code" ] && [ "$mrc" -ne 0 ]; then
+    # "no code in --json" is NOT by itself evidence the mutant was accepted.
+    # `run_timed`'s `alarm` exits 127 on a $TIMEOUT-second hang, and a bare
+    # crash writes no JSON at all — both land here with an empty `code` and
+    # would otherwise have been counted as SILENT-ACCEPT, i.e. as the
+    # compiler noticing nothing, when in fact it died.  Only a genuine rc=0
+    # is an acceptance; everything else gets its own visible bucket, keyed by
+    # rc so a timeout (127) is distinguishable from an ordinary failure.
+    bucket="MUTANT-CRASHED rc=$mrc"
+    crashed_count=$((crashed_count + 1))
+  elif [ -z "$code" ]; then
     bucket="SILENT-ACCEPT"
   elif [ "$code" = "P-PARSE" ]; then
     msg="$(printf '%s' "$json" | grep -oE '"message":"[^"]*"' | head -n1 | sed -E 's/"message":"([^"]*)"/\1/')"
@@ -221,6 +233,11 @@ while IFS="$(printf '\t')" read -r idx kind loc dest rest; do
 done < "$MANIFEST"
 
 echo "first_hour_census: $mutant_count mutants classified"
+# Said out loud rather than left to be spotted in the ranked table: a nonzero
+# figure here means that many mutants produced NO diagnostic AND a nonzero exit
+# (hang or crash), so they are neither an acceptance nor a rejection and belong
+# in no code bucket.  Zero is the expected reading.
+echo "first_hour_census: $crashed_count mutants died with no JSON diagnostic (MUTANT-CRASHED; not counted as SILENT-ACCEPT)"
 echo "----------------------------------------"
 echo "ranked table — non-parse codes (by code)"
 printf '%-8s %6s\n' "count" "code"

@@ -1,8 +1,8 @@
 # GRADING — error-quality corpus scored against the rubric
 
-> **Stamp: 2026-09-01, base `44b678464930a01ffff83e744ccaf22cd2605747`
-> (#2446, S-diag-census).** The three MACHINE-SCORABLE dimensions this doc
-> used to hand-type — **L** Located, **X** Cascade-free, **A**
+> **Stamp: 2026-09-02, base `c4e203ccf` (#2446, S-diag-census; re-stamped in
+> the sprint's fix round, which moved no fixture and re-scored nothing).**
+> The three MACHINE-SCORABLE dimensions this doc used to hand-type — **L** Located, **X** Cascade-free, **A**
 > Agent-parseable — are superseded by `make diag-census`
 > (`test/diag_census.sh`), which re-derives location/caret/`--json`
 > code-kind-range presence and diagnostic count fresh from the built binary
@@ -17,8 +17,16 @@
 > machine-derived (they require reading the message for sense, not just
 > shape) and survive below as a dated ledger of human scoring sessions.
 
-Every one of the 55 fixtures in this directory, scored against the 7-dimension
-rubric in `compiler/ERROR-QUALITY.md` §3. Each dimension is **0 / 1 / 2**
+§1 below scores the 55 fixtures this directory held when that session ran,
+against the 7-dimension rubric in `compiler/ERROR-QUALITY.md` §3. ⚠️ The
+directory now holds **78** (`ls test/error_quality_fixtures/*/*.mdk | wc -l`),
+so §1 is NOT a complete census of the corpus and never re-became one — the
+later re-grade sections below carry their own counts (60, 63, 67, 69), each
+dated to its own base, and none of them reaches 78 either. For a live,
+complete, per-fixture view of the CURRENT corpus, run `make diag-census`; the
+tables here are dated human scoring sessions, not the roster.
+
+Each dimension is **0 / 1 / 2**
 (max **14**): **L** Located, **C** Correct, **R** Points-at-root-cause,
 **F** Actionable-fix, **J** Jargon-free, **X** Cascade-free, **A** Agent-parseable.
 

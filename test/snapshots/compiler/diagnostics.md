@@ -1,5 +1,5 @@
 # META
-source_lines=1735
+source_lines=1748
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/diagnostics.mdk — structured error pipeline (Phase A.4)
@@ -521,10 +521,18 @@ ppDiagCliSrc src file diag = ppDiagCliLines (srcLinesArr src) file diag
 -- the map and call this; `ppDiagCliSrc` stays as the thin single-diagnostic
 -- wrapper.  Output is byte-identical by construction — this IS the old body,
 -- with `nthLine src sl` replaced by an index into the pre-split array.
+--
+-- 🚨 #2400 F2b: THIS is the one place a human-channel path becomes display text,
+-- so `displayPath` is applied HERE and nowhere else.  Normalising at the four
+-- individual multi-module call sites (as F2b first did) fixed only the arms that
+-- happened to be listed: `medaka check main.mdk` agreed afterwards, but `medaka
+-- check ./main.mdk` then diverged the OTHER way — the module-graph arm stripped
+-- the prefix while the single-file arm, which echoes `target` exactly as typed,
+-- kept it.  One renderer, one normalisation, and no call site can be missed.
 export
 ppDiagCliLines : Array String -> String -> Diag -> String
 ppDiagCliLines srcLines file (Diag sev _ msg (Some (Loc _ sl sc _ _)) _ _) =
-  let header = "\{ppSeverity sev}: \{file}:\{intToString sl}:\{intToString sc}: \{msg}"
+  let header = "\{ppSeverity sev}: \{displayPath file}:\{intToString sl}:\{intToString sc}: \{msg}"
   match nthLineArr srcLines sl
     None => header
     Some lineText =>
@@ -570,7 +578,7 @@ ppResolveErrorLines [] = []
 ppResolveErrorLines ((_, [])::rest) = ppResolveErrorLines rest
 ppResolveErrorLines ((file, errs)::rest) =
   let srcLines = srcLinesArr (readFileSafe file)
-  map (e => ppDiagCliLines srcLines (displayPath file) (diagOfResError e)) errs
+  map (e => ppDiagCliLines srcLines file (diagOfResError e)) errs
     ++ ppResolveErrorLines rest
 
 -- #2400 F2b: one file, two spellings, in one tool.  The loader mints a module's
@@ -581,6 +589,11 @@ ppResolveErrorLines ((file, errs)::rest) =
 -- `main.mdk`.  Measured on both entry forms at the sprint base: `main.mdk` →
 -- `./main.mdk:1:10:`, `proj/main.mdk` → `proj/main.mdk:1:10:` (already right),
 -- absolute → absolute (already right).  Only the empty-dirname case diverged.
+--
+-- The convention is STRIPPED, and it must be applied to BOTH arms or it just
+-- moves the divergence: a user who types `./main.mdk` gets that spelling back
+-- verbatim from the single-file arm, so stripping only the module-graph arm
+-- makes THAT invocation disagree instead.  Sole call site is `ppDiagCliLines`.
 --
 -- 🚨 NORMALIZED HERE, AT THE RENDER BOUNDARY — NOT IN `fileOfModuleId`.  That
 -- string is also a real path handed to `fileExists`/`readFile`, AND the prefix
@@ -1797,14 +1810,14 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
 (DTypeSig true "ppDiagCliSrc" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Diag") (TyCon "String")))))
 (DFunDef false "ppDiagCliSrc" ((PVar "src") (PVar "file") (PVar "diag")) (EApp (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "src"))) (EVar "file")) (EVar "diag")))
 (DTypeSig true "ppDiagCliLines" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Diag") (TyCon "String")))))
-(DFunDef false "ppDiagCliLines" ((PVar "srcLines") (PVar "file") (PCon "Diag" (PVar "sev") PWild (PVar "msg") (PCon "Some" (PCon "Loc" PWild (PVar "sl") (PVar "sc") PWild PWild)) PWild PWild)) (EBlock (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "ppSeverity") (EVar "sev")))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "file"))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "sl")))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "sc")))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "msg"))) (ELit (LString "")))) (DoExpr (EMatch (EApp (EApp (EVar "nthLineArr") (EVar "srcLines")) (EVar "sl")) (arm (PCon "None") () (EVar "header")) (arm (PCon "Some" (PVar "lineText")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "header"))) (ELit (LString "\n  |\n"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "sl")))) (ELit (LString " | "))) (EApp (EVar "display") (EVar "lineText"))) (ELit (LString "\n  | "))) (EApp (EVar "display") (EApp (EVar "spaces") (EVar "sc")))) (ELit (LString "^"))))))))
+(DFunDef false "ppDiagCliLines" ((PVar "srcLines") (PVar "file") (PCon "Diag" (PVar "sev") PWild (PVar "msg") (PCon "Some" (PCon "Loc" PWild (PVar "sl") (PVar "sc") PWild PWild)) PWild PWild)) (EBlock (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "ppSeverity") (EVar "sev")))) (ELit (LString ": "))) (EApp (EVar "display") (EApp (EVar "displayPath") (EVar "file")))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "sl")))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "sc")))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "msg"))) (ELit (LString "")))) (DoExpr (EMatch (EApp (EApp (EVar "nthLineArr") (EVar "srcLines")) (EVar "sl")) (arm (PCon "None") () (EVar "header")) (arm (PCon "Some" (PVar "lineText")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "header"))) (ELit (LString "\n  |\n"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "sl")))) (ELit (LString " | "))) (EApp (EVar "display") (EVar "lineText"))) (ELit (LString "\n  | "))) (EApp (EVar "display") (EApp (EVar "spaces") (EVar "sc")))) (ELit (LString "^"))))))))
 (DFunDef false "ppDiagCliLines" (PWild PWild (PCon "Diag" (PVar "sev") PWild (PVar "msg") (PCon "None") PWild PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "ppSeverity") (EVar "sev")))) (ELit (LString ": <unknown location>: "))) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))
 (DTypeSig true "ppResolveErrorsByFile" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "ResError")))) (TyEffect ("IO") None (TyCon "String"))))
 (DFunDef false "ppResolveErrorsByFile" ((PVar "pairs")) (EApp (EVar "joinNl") (EApp (EVar "ppResolveErrorLines") (EVar "pairs"))))
 (DTypeSig false "ppResolveErrorLines" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "ResError")))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "ppResolveErrorLines" ((PList)) (EListLit))
 (DFunDef false "ppResolveErrorLines" ((PCons (PTuple PWild (PList)) (PVar "rest"))) (EApp (EVar "ppResolveErrorLines") (EVar "rest")))
-(DFunDef false "ppResolveErrorLines" ((PCons (PTuple (PVar "file") (PVar "errs")) (PVar "rest"))) (EBlock (DoLet false false (PVar "srcLines") (EApp (EVar "srcLinesArr") (EApp (EVar "readFileSafe") (EVar "file")))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "e")) (EApp (EApp (EApp (EVar "ppDiagCliLines") (EVar "srcLines")) (EApp (EVar "displayPath") (EVar "file"))) (EApp (EVar "diagOfResError") (EVar "e"))))) (EVar "errs")) (EApp (EVar "ppResolveErrorLines") (EVar "rest"))))))
+(DFunDef false "ppResolveErrorLines" ((PCons (PTuple (PVar "file") (PVar "errs")) (PVar "rest"))) (EBlock (DoLet false false (PVar "srcLines") (EApp (EVar "srcLinesArr") (EApp (EVar "readFileSafe") (EVar "file")))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "e")) (EApp (EApp (EApp (EVar "ppDiagCliLines") (EVar "srcLines")) (EVar "file")) (EApp (EVar "diagOfResError") (EVar "e"))))) (EVar "errs")) (EApp (EVar "ppResolveErrorLines") (EVar "rest"))))))
 (DTypeSig true "displayPath" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "displayPath" ((PVar "path")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "./"))) (EVar "path")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (EApp (EVar "stringLength") (EVar "path"))) (EVar "path")) (EIf (EVar "otherwise") (EVar "path") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "spaces" (TyFun (TyCon "Int") (TyCon "String")))
@@ -2060,14 +2073,14 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
 (DTypeSig true "ppDiagCliSrc" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Diag") (TyCon "String")))))
 (DFunDef false "ppDiagCliSrc" ((PVar "src") (PVar "file") (PVar "diag")) (EApp (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "src"))) (EVar "file")) (EVar "diag")))
 (DTypeSig true "ppDiagCliLines" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Diag") (TyCon "String")))))
-(DFunDef false "ppDiagCliLines" ((PVar "srcLines") (PVar "file") (PCon "Diag" (PVar "sev") PWild (PVar "msg") (PCon "Some" (PCon "Loc" PWild (PVar "sl") (PVar "sc") PWild PWild)) PWild PWild)) (EBlock (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "ppSeverity") (EVar "sev")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "file"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "sl")))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "sc")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString "")))) (DoExpr (EMatch (EApp (EApp (EVar "nthLineArr") (EVar "srcLines")) (EVar "sl")) (arm (PCon "None") () (EVar "header")) (arm (PCon "Some" (PVar "lineText")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "header"))) (ELit (LString "\n  |\n"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "sl")))) (ELit (LString " | "))) (EApp (EMethodRef "display") (EVar "lineText"))) (ELit (LString "\n  | "))) (EApp (EMethodRef "display") (EApp (EVar "spaces") (EVar "sc")))) (ELit (LString "^"))))))))
+(DFunDef false "ppDiagCliLines" ((PVar "srcLines") (PVar "file") (PCon "Diag" (PVar "sev") PWild (PVar "msg") (PCon "Some" (PCon "Loc" PWild (PVar "sl") (PVar "sc") PWild PWild)) PWild PWild)) (EBlock (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "ppSeverity") (EVar "sev")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EApp (EVar "displayPath") (EVar "file")))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "sl")))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "sc")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString "")))) (DoExpr (EMatch (EApp (EApp (EVar "nthLineArr") (EVar "srcLines")) (EVar "sl")) (arm (PCon "None") () (EVar "header")) (arm (PCon "Some" (PVar "lineText")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "header"))) (ELit (LString "\n  |\n"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "sl")))) (ELit (LString " | "))) (EApp (EMethodRef "display") (EVar "lineText"))) (ELit (LString "\n  | "))) (EApp (EMethodRef "display") (EApp (EVar "spaces") (EVar "sc")))) (ELit (LString "^"))))))))
 (DFunDef false "ppDiagCliLines" (PWild PWild (PCon "Diag" (PVar "sev") PWild (PVar "msg") (PCon "None") PWild PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "ppSeverity") (EVar "sev")))) (ELit (LString ": <unknown location>: "))) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))
 (DTypeSig true "ppResolveErrorsByFile" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "ResError")))) (TyEffect ("IO") None (TyCon "String"))))
 (DFunDef false "ppResolveErrorsByFile" ((PVar "pairs")) (EApp (EVar "joinNl") (EApp (EVar "ppResolveErrorLines") (EVar "pairs"))))
 (DTypeSig false "ppResolveErrorLines" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "ResError")))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "ppResolveErrorLines" ((PList)) (EListLit))
 (DFunDef false "ppResolveErrorLines" ((PCons (PTuple PWild (PList)) (PVar "rest"))) (EApp (EVar "ppResolveErrorLines") (EVar "rest")))
-(DFunDef false "ppResolveErrorLines" ((PCons (PTuple (PVar "file") (PVar "errs")) (PVar "rest"))) (EBlock (DoLet false false (PVar "srcLines") (EApp (EVar "srcLinesArr") (EApp (EVar "readFileSafe") (EVar "file")))) (DoExpr (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "e")) (EApp (EApp (EApp (EVar "ppDiagCliLines") (EVar "srcLines")) (EApp (EVar "displayPath") (EVar "file"))) (EApp (EVar "diagOfResError") (EVar "e"))))) (EVar "errs")) (EApp (EVar "ppResolveErrorLines") (EVar "rest"))))))
+(DFunDef false "ppResolveErrorLines" ((PCons (PTuple (PVar "file") (PVar "errs")) (PVar "rest"))) (EBlock (DoLet false false (PVar "srcLines") (EApp (EVar "srcLinesArr") (EApp (EVar "readFileSafe") (EVar "file")))) (DoExpr (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "e")) (EApp (EApp (EApp (EVar "ppDiagCliLines") (EVar "srcLines")) (EVar "file")) (EApp (EVar "diagOfResError") (EVar "e"))))) (EVar "errs")) (EApp (EVar "ppResolveErrorLines") (EVar "rest"))))))
 (DTypeSig true "displayPath" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "displayPath" ((PVar "path")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "./"))) (EVar "path")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (EApp (EVar "stringLength") (EVar "path"))) (EVar "path")) (EIf (EVar "otherwise") (EVar "path") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "spaces" (TyFun (TyCon "Int") (TyCon "String")))
