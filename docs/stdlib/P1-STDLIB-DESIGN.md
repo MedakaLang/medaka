@@ -34,7 +34,7 @@ P0 is a mature core. What exists today, from `STDLIB.md` + `stdlib/*.mdk` +
 - `core` (prelude, auto-imported): Eq/Ord/Debug/Semigroup/Monoid/Num/Bounded/
   Mappable/Applicative/Thenable/Foldable/Filterable; Option/Result/Ordering;
   functional combinators.
-- `list`, `string` (UTF-8 codepoint), `array` (fixed), `mut_array` (growable
+- `list`, `string` (UTF-8 codepoint), `array` (fixed), `vector` (growable
   vector), `map`/`set` (persistent weight-balanced trees), `hash_map`/`hash_set`
   (mutable), `json` (parser+serializer), `toml`.
 - `byteparser` / `bytebuilder` — generic binary parser-combinators + symmetric
@@ -156,7 +156,7 @@ Cost legend for §3–4:
 | **`math`** | libm float ops: `sqrt cbrt hypot exp log log2 log10 pow sin cos tan asin acos atan atan2 floor ceil round trunc`; pure: `isNan isInf isFinite degrees radians lerp gcd lcm` | **[extern]** for the ~20 libm leaves (each mechanical) + **[pure]** wrappers | ~20 externs + ~150 LOC Medaka | Universal table-stakes; blocks graphics/geometry/stats/sqlite-math; each extern is a copy-paste of the `floatRem` shape |
 | **`path`** | `join dirname basename extension splitExt stem normalize isAbsolute components relative` | **[pure]** — promote+extend `compiler/support/path.mdk` | ~200 LOC Medaka | Cheapest P1 win; pure string; already 80% written; unblocks fs+build tooling |
 | **`fs` extend** | `removeFile rename copyFile removeDir mkdirAll walkDir stat`(size/mtime/isDir/isFile) `tempDir tempFile` | **[extern]** for `unlink/rename/rmdir/stat` + **[pure]** for `copyFile`(read+write), `mkdirAll`/`walkDir`(recurse over `listDir`) | ~5 externs + ~150 LOC | Anchor (a); reuses existing `<FileRead>`/`<FileWrite>` labels; high everyday value |
-| **`bytes` flesh-out** | little-endian `le*` in byteparser/bytebuilder; a `bytes` module with a byte-buffer ergonomic layer over `mut_array Int`; `slice/concat/toHex/fromHex` | **[pure]** (endianness = arithmetic over existing byte arrays) | ~250 LOC | Anchor (d); all pure; makes byteparser symmetric and usable for real formats |
+| **`bytes` flesh-out** | little-endian `le*` in byteparser/bytebuilder; a `bytes` module with a byte-buffer ergonomic layer over `vector Int`; `slice/concat/toHex/fromHex` | **[pure]** (endianness = arithmetic over existing byte arrays) | ~250 LOC | Anchor (d); all pure; makes byteparser symmetric and usable for real formats |
 | **`base64` / `hex`** | `base64.encode/decode`, `hex.encode/decode` over `Array Int`/`String` | **[pure]** | ~120 LOC | Not named by anchors but ubiquitous, trivially pure, and needed by fs/net/json-adjacent work |
 | **`time` (basic)** | `monotonicSec`(new extern), `sleep`(extern); pure `Duration`/`Instant` types + arithmetic; civil calendar `Date`/`DateTime` (days↔y/m/d is pure), ISO-8601 format/parse (pure) | **[extern]** for 2 clock/sleep externs (reuse `<Clock>`) + **[pure]** calendar | 2 externs + ~300 LOC | `wallTimeSec` alone is too thin; monotonic clock + Duration is table-stakes in all 5 langs; calendar is pure and high-value. **Timezones deferred to P2.** |
 | **`net` (staged, LAST in P1)** | TCP client+server, UDP; `connect/listen/accept/send/recv/close`, DNS `resolve` | **[extern]+[C+wasm]**, `<Net>` label already exists | ~10 externs + C runtime + ~200 LOC Medaka | Anchor (c). Real C-runtime work + no clean wasm story → its own arc; see §5. Do math/fs/bytes/time FIRST. |
@@ -321,7 +321,7 @@ implementation agent.
    `isNan`/`lerp`); doctests. **[extern, ONE re-mint]. Sonnet for the templated
    extern pass; Opus/human owns the seed re-mint + `selfcompile_fixpoint` gate.**
 4. **`bytes` flesh-out** — little-endian `le*` in byteparser/bytebuilder + a
-   `stdlib/bytes.mdk` buffer/slice/concat/toHex/fromHex layer over `mut_array`.
+   `stdlib/bytes.mdk` buffer/slice/concat/toHex/fromHex layer over `vector`.
    **[pure]. Sonnet.** (Depends on #2 for hex.)
 5. **`fs` extend** — externs `removeFile`/`rename`/`removeDir`/`stat` (batch with
    #3's re-mint if possible), then pure `copyFile`/`mkdirAll`/`walkDir`/`tempDir`

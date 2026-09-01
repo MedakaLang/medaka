@@ -18,7 +18,7 @@ default: nearly everything in this guide is a `List`.
 `Array a` is a contiguous, fixed-length, *mutable* block, written `[|1, 2, 3|]`.
 Indexing is constant time and writing an element in place is constant time; changing
 the length is not possible at all. If you need something array-shaped that also
-grows, that is [`mut_array`](../stdlib/STDLIB.md), covered later in this chapter —
+grows, that is [`vector`](../stdlib/STDLIB.md), covered later in this chapter —
 `Array` itself never resizes.
 
 ```medaka
@@ -180,7 +180,7 @@ last line `3` and not `4`.
 
 For hash-based, mutable variants — when you are building a large table and do not
 need ordering — reach for [`hash_map`](../stdlib/STDLIB.md) and `hash_set` instead;
-`mut_array` is the growable-vector counterpart to `Array`. This chapter does not
+`vector` is the growable counterpart to the fixed-size `Array`. This chapter does not
 cover them, and their APIs deliberately mirror the ones here.
 
 ## Strings

@@ -2,7 +2,7 @@
 # diff_compiler_index_oob.sh — #1787 E-INDEX-OOB message parity, run vs build+exec.
 #
 # The prelude's `impl Index (Array a) Int a` / `impl IndexMut …` (and String's and
-# MutArray's) guard every `a[i]` and `a[i] := v`.  Until #1787 they raised
+# Vector's) guard every `a[i]` and `a[i] := v`.  Until #1787 they raised
 # `indexError` with an INTERPOLATED message that the native backend then THREW AWAY:
 # @mdk_oob takes no argument, so the same program printed
 #
@@ -38,7 +38,7 @@
 #
 # THE CONTROL (index_ok) IS LOAD-BEARING: it pins that every in-bounds index at the
 # exact boundaries the guards must not reject — first (0) and last (len - 1), read
-# AND write, Array + String + MutArray — still returns its value on BOTH engines.
+# AND write, Array + String + Vector — still returns its value on BOTH engines.
 # Without it, "fixing" this gate by making a guard reject everything reads as green.
 # If the control breaks, the environment broke, not the bug.
 #
@@ -150,7 +150,7 @@ check_oob index_oob_read      '9'
 check_oob index_oob_write     '9'
 check_oob index_oob_negative  '-3'
 check_oob index_oob_string    '10'
-check_oob index_oob_mut_array '4'
+check_oob index_oob_vector '4'
 check_ok  index_ok
 
 echo

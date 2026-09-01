@@ -75,8 +75,8 @@ live in stdlib (the internal-extern guard rejects them in user code):
 |---|---|---|
 | `Index (Array a) Int a` | `stdlib/array.mdk` | `index arr i = if i < 0 \|\| i >= arrayLength arr then indexError "index \{intToString i} out of bounds" else arrayGetUnsafe i arr` |
 | `IndexMut (Array a) Int a` | `stdlib/array.mdk` | bounds-check then `let _ = arraySetUnsafe i v arr in arr` (in-place, `<Mut>`; F3) |
-| `Index (MutArray a) Int a` | `stdlib/mut_array.mdk` | mirror over MutArray rep (`mutArrayGet`/`mutArrayLen`) |
-| `IndexMut (MutArray a) Int a` | `stdlib/mut_array.mdk` | mirror, in-place |
+| `Index (Vector a) Int a` | `stdlib/vector.mdk` | mirror over Vector rep (`vectorGet`/`vectorLen`) |
+| `IndexMut (Vector a) Int a` | `stdlib/vector.mdk` | mirror, in-place |
 | `Index (List a) Int a` | `stdlib/core.mdk` or `stdlib/list.mdk` | `match xs { [] => indexError "index out of bounds"; (h::t) => if i <= 0 then h else index t (i-1) }` — **O(n), DOCUMENT (F4)** |
 | `Index String Int Char` | `stdlib/string.mdk` | `let cs = stringToChars s in` bounds-check `else arrayGetUnsafe i cs` (codepoint → `Char`) |
 | `Index (Map k v) k v requires Ord k` | `stdlib/map.mdk` | `match Map.get k m { Some v => v; None => indexError "key not found" }` — returns `v` not Option (locked); OOB=key-not-found. **Arg order:** `Map.get k m` (`map.mdk:167`) vs `index m k`. `requires Ord k` on a multi-param Map impl proven by `FromEntries (Map k v) (k,v) requires Ord k` (`map.mdk:474`). |
