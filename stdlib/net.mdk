@@ -29,7 +29,7 @@
    `medaka build --target wasm` rejects any program importing `net`. -}
 
 import array.{drop}
-import mut_array.{MutArray, new, push, toArray}
+import vector.{Vector, new, push, toArray}
 import string.{toUtf8, fromUtf8}
 
 -- ── Opaque handles ──────────────────────────────────────────────────────────
@@ -137,7 +137,7 @@ sendAll conn bs =
     Ok 0 => Err "net.sendAll: 0 bytes written (connection stalled)"
     Ok n => sendAll conn (drop n bs)
 
-recvAllLoop : Connection -> MutArray Int -> <Net "_"> Result String (Array Int)
+recvAllLoop : Connection -> Vector Int -> <Net "_"> Result String (Array Int)
 recvAllLoop conn buf = match recv conn 4096
   Err e => Err e
   Ok chunk => if arrayLength chunk == 0 then Ok (toArray buf)
@@ -172,7 +172,7 @@ export
 sendLine : Connection -> String -> <Net "_"> Result String Unit
 sendLine conn s = sendString conn (s ++ "\n")
 
-recvLineLoop : Connection -> MutArray Int -> <Net "_"> Result String (Option String)
+recvLineLoop : Connection -> Vector Int -> <Net "_"> Result String (Option String)
 recvLineLoop conn buf =
   match recv conn 1
     Err e => Err e
