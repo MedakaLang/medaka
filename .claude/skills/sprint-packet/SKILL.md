@@ -121,3 +121,41 @@ plus the report path.
 - **Notes** — anything the next reader needs: findings (bugs seen, sites not
   covered, suspicious neighbors), deviations, declined mid-task messages.
   `NONE` is valid; absence is not.
+
+### The author self-check — five questions, answered inside Notes
+
+Answer all five at the end of Notes, in order, **with concrete nouns**. "I
+followed the conventions" is not an answer; a file path, a function name, or
+an explicit "none / not applicable, because …" is. They are cheap to answer
+honestly and expensive to answer falsely, which is the point: they are the
+author-side half of the `style-review` pass, and they front-load the findings
+that pass would otherwise raise a day later.
+
+1. **Which `stdlib/` or `compiler/support/` functions did you look for before
+   writing any new helper? Name them** — or say "no new helper written". (The
+   reference is `docs/stdlib/index.md`, name-by-name; `rule-stdlib-reimpl` in
+   `compiler/tools/lint.mdk` is a floor, not the check — it cannot see a
+   renamed reimplementation.)
+2. **Where did the new code land, and does that match the placement the
+   contract stated?** Name the directory. If it differs from the contract, say
+   why in one line. (Ground truth: the `architecture` skill.)
+3. **Which existing file did you EXTEND rather than extract from, and why was
+   extending right there?** Name the file, or say "no existing file grew". If
+   the file is in `make arch-census`'s largest-files table, the "why" is
+   required, not optional.
+4. **What does each comment you added state that the code cannot show?** Name
+   any comment that narrates this PR rather than the code — and delete it
+   before answering. (`[T-COMMENT-REGISTER]` in `AGENTS.md`.)
+5. **Which test vehicle carries the new behaviour, by name?** The gate script,
+   fixture path, doctest, property, or must-fail pin. If none, say what would
+   fail if this change were reverted — and if the honest answer is "nothing",
+   say that; it is a finding, not a failure to confess.
+
+The report is graded mechanically for shape (not for content) by
+`sh scripts/sprint-report-check.sh <report>`: it checks that the first line is
+the verdict and that Evidence and Notes are present. It is not a gate.
+
+**The same five questions are the PR-body self-check** when the orchestrator
+writes a body through `scripts/pr.sh body` — same wording, same demand for
+concrete nouns, one place to answer them for the reader who never sees the
+slice reports. See `docs/ops/PR-HELPER.md` § "The body self-check".

@@ -776,6 +776,8 @@ The two that must reach you before you load it — both silent:
 | **perf-hunt** | Stage slow, or `diff_compiler_perf_scaling.sh` red. |
 | **benchmark-emitter** | `compiler/backend/*` change to measure, or a suspicious fixpoint failure. |
 | **add-lsp-capability** | Add/extend an LSP feature. |
+| **architecture** | Where a new file/subcommand/subsystem/helper BELONGS, and the standing DECLINED register a planner must not relitigate. Read before adding a file or writing a contract's Surface row. Drift detector: `make arch-census`. |
+| **style-review** | The end-of-sprint craft pass (duplication, comment register, test vehicle, placement, diagnostics, docs, CLI shape) — every section a pointer, plus the demands it must NOT make. Once per sprint, never per-PR. |
 | **pr-review** | Review an agent-authored PR diff for craft. Read-only, after CI green. |
 | **bug-hunt** | Adversarial S0/S1 hunt. Best right after a batch closes. |
 

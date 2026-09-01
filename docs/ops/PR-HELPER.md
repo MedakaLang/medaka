@@ -105,6 +105,40 @@ the PR's actual `mergeCommit` so the caller can see what did land. Fails if the
 given SHA is not on `main` after the PR closes, or if the repo's `main` cannot
 be fetched (never guesses).
 
+## The body self-check
+
+**This is a documentation convention, not helper logic.** `body` takes an
+arbitrary file and writes it verbatim; nothing below changes what the script
+does, and nothing below is enforced by it.
+
+A PR body is the only artifact a reader gets who never sees the sprint's slice
+reports. So the body you hand to `pr.sh body --file F` answers **the same five
+questions** a sprint report answers at the end of its Notes section — verbatim,
+and with concrete nouns (a path, a function name, or an explicit "none,
+because …"; "followed the conventions" is not an answer):
+
+1. **Which `stdlib/` or `compiler/support/` functions were looked for before
+   any new helper was written?** Name them, or "no new helper". The reference
+   is `docs/stdlib/index.md`; `rule-stdlib-reimpl` in `compiler/tools/lint.mdk`
+   is a floor, not the check — it cannot see a renamed reimplementation.
+2. **Where did the new code land, and does that match the placement the
+   contract stated?** Name the directory; if it differs, say why in one line.
+3. **Which existing file was EXTENDED rather than extracted from, and why was
+   extending right?** Name it, or "no existing file grew". If it appears in
+   `make arch-census`'s largest-files table, the "why" is required.
+4. **What does each added comment state that the code cannot show?** Name any
+   comment that narrates the PR rather than the code — and delete it first.
+5. **Which test vehicle carries the new behaviour, by name?** Gate script,
+   fixture path, doctest, property, or must-fail pin. If none, say what would
+   fail if the change were reverted; "nothing" is an honest answer and a
+   finding.
+
+The canonical wording lives in `.claude/skills/sprint-packet/SKILL.md`
+§ "The author self-check"; the placement ground truth they are measured
+against is `.claude/skills/architecture/SKILL.md`. Answer them once, in the
+body, near the end. `body`'s readback still byte-compares the file, so nothing
+here affects verification.
+
 ## Testing
 
 `sh test/pr_helper_test.sh` runs all five subcommands against the mock

@@ -193,8 +193,9 @@ scripts/sprint-disjoint        sprint-orchestration evidence tool: mechanical di
                                parallel. Asserts nothing about the compiler; exit 1 means
                                "collision evidence found", which is data for the planner,
                                not a suite failure. See .claude/skills/sprint-packet.
-scripts/sprint-report-check    sprint-orchestration intake tool: presence check for the six
-                               mandatory report sections (sprint-packet §9) in an agent
+scripts/sprint-report-check    sprint-orchestration intake tool: shape check for the three
+                               v8 report sections (Verdict first line, Evidence, Notes —
+                               .claude/skills/sprint-packet "The report") in an agent
                                report. Grades documents in the ephemeral sprint record dir
                                under /var/tmp — nothing in this tree, and nothing about the
                                compiler. Exit 1 means "bounce this report to its author".
