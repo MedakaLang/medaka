@@ -194,6 +194,36 @@ else
     exit 1
   }
   printf 'checked same-process LLVM emission isolation (P -> P+U -> P; distinct IR; P=7, P+U=11)\n'
+  # Second same-process P -> P+U -> P control, shaped to reach core_ir_lower.mdk's
+  # hoistNullaryMemo memo-CAF machinery, which the Mark control above never touches
+  # (mark : a -> Int has non-empty positions, so it never enters memoKeys). theUnit
+  # is nullary/return-position: P has a sole HasUnit impl (Box, hoisted directly, no
+  # memo CAF needed); P+U adds a second impl (Cup), so both become multi-impl and
+  # recordMultiImplMemo fires, synthesizing per-tag memo CAFs. These private temp
+  # files are not a shared fixture corpus.
+  printf '%s\n' 'interface HasUnit a where' '  theUnit : a' 'data Box = Box' 'impl HasUnit Box where' '  theUnit = Box' 'useTwice : HasUnit a => (a -> String) -> String' 'useTwice f = f theUnit' 'boxTag : Box -> String' 'boxTag Box = "box"' 'main = useTwice boxTag' > "$ISO/hu_p.mdk"
+  printf '%s\n' 'interface HasUnit a where' '  theUnit : a' 'data Box = Box' 'data Cup = Cup' 'impl HasUnit Box where' '  theUnit = Box' 'impl HasUnit Cup where' '  theUnit = Cup' 'useTwice : HasUnit a => (a -> String) -> String' 'useTwice f = f theUnit' 'cupTag : Cup -> String' 'cupTag Cup = "cup"' 'main = useTwice cupTag' > "$ISO/hu_pu.mdk"
+  "$EMITBIN" --isolation "$RUNTIME" "$ISO/hu_p.mdk" "$ISO/hu_pu.mdk" > "$ISO/hu_isolation.ll" 2> "$ISO/hu_isolation.err"
+  hu_isolation_rc=$?
+  if [ "$hu_isolation_rc" -ne 0 ]; then
+    printf 'FAIL: same-process EmitInput isolation control (HasUnit)\n%s\n' "$(cat "$ISO/hu_isolation.err")"
+    exit 1
+  fi
+  hu_isolation_verdict="$(cat "$ISO/hu_isolation.ll")"
+  [ "$hu_isolation_verdict" = "LLVM_EMIT_ISOLATION_OK" ] || {
+    printf 'FAIL: same-process EmitInput isolation verdict was %s (HasUnit)\n' "$hu_isolation_verdict"
+    exit 1
+  }
+  for n in hu_p hu_pu; do
+    "$EMITBIN" "$RUNTIME" "$ISO/$n.mdk" > "$ISO/$n.ll" 2> "$ISO/$n.err" || { cat "$ISO/$n.err"; exit 1; }
+    "$CC" $GC_CFLAGS "$ISO/$n.ll" "$RT" $GC_LIBS -lm -o "$ISO/$n.bin" || exit 1
+  done
+  hu_p_out="$("$ISO/hu_p.bin")"; hu_pu_out="$("$ISO/hu_pu.bin")"
+  [ "$hu_p_out" = box ] && [ "$hu_pu_out" = cup ] || {
+    printf 'FAIL: HasUnit isolation control expected P=box P+U=cup; got P=%s P+U=%s\n' "$hu_p_out" "$hu_pu_out"
+    exit 1
+  }
+  printf 'checked same-process LLVM emission isolation (HasUnit: P -> P+U -> P; distinct IR; nullary memo path; P=box, P+U=cup)\n'
   "$EMITBIN" --gap-isolation > "$ISO/gap-isolation.out" 2> "$ISO/gap-isolation.err"
   gap_rc=$?
   [ "$gap_rc" -ne 0 ] || {
