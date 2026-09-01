@@ -1762,7 +1762,7 @@ printNamedFieldData vis n params [Variant cname (ConNamed fields nameOmitted)] d
   let deriveDoc = if isEmptyL derives then
     Nil
   else
-    indentBlock (printDerives derives)
+    Cat Hardline (printDerives derives)
   Cat (visPrefix vis) (Cat head (Cat body deriveDoc))
 printNamedFieldData vis n params variants derives =
   -- #1110: the printer STRIPS decl identity (it is not renderable — a

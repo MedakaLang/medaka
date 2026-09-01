@@ -4,4 +4,4 @@ data Expense = {
     amount : Float,
     category : Category,
   }
-  deriving (Eq, Debug)
+deriving (Eq, Debug)
