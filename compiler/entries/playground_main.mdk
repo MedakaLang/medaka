@@ -37,6 +37,12 @@
 -- the branch; for __MEDAKA_WAT_DIAGS__ the SECOND line is the warnings JSON and
 -- everything after that is the WAT. Diagnostics JSON is byte-identical to
 -- `medaka check --json` (the cj* renderers below mirror medaka_cli.mdk).
+--   __MEDAKA_ANALYZE__\n<one-line JSON {"files":[...]}>\n         ← `analyze` mode
+-- (diagnostics only, no codegen): no ERROR diagnostics.  The JSON line carries the
+-- same warnings `__MEDAKA_WAT_DIAGS__` would have carried, or `{"files":[]}` when
+-- there are none — `analyze` ALWAYS prints a marker AND a payload, so the host
+-- never has to tell "clean" apart from "no output".  Errors under `analyze` use
+-- `__MEDAKA_DIAGNOSTICS__`, byte-identically to `compile`.
 --
 -- This entry is OUTSIDE the self-host compiler graph (an entry, not imported), so
 -- it needs no fixpoint/seed: the decisive checks are wasm-tools assemble/validate
@@ -123,22 +129,35 @@ import backend.wasm_reach.{wasmReachFilter}
 
 -- ARG CONTRACT (Stage 3): the FIRST arg is a MODE, dispatched below.
 --   compile  <runtime> <core> <entry> [root ...]      → analyze→emit (today's behavior)
+--   analyze  <runtime> <core> <entry> [root ...]      → analyze ONLY, no wasm codegen
 --   hover    <runtime> <core> <entry> <line> <col>     → __MEDAKA_HOVER__ + Hover JSON
 --   complete <runtime> <core> <entry> <line> <col>     → __MEDAKA_COMPLETE__ + CompletionItem[]
 -- line/col are 0-based (LSP position convention).  hover/complete run a fresh
 -- single-file typecheck (checkOneSchemeFull — the same env the LSP's
 -- hoverFor/completionFor use on a no-import buffer) and look up the identifier /
--- prefix at the cursor.  ONE playground.wasm serves all three (the typecheck deps
+-- prefix at the cursor.  ONE playground.wasm serves all four (the typecheck deps
 -- are already linked for `compile`).
+--
+-- `analyze` (#2442) is `compile` minus the emit tail: it runs the IDENTICAL
+-- diagnostic-producing logic — the same analyzeLocated/analyzeProject route, the
+-- same main-shape guard, the same `underivedMainDiags` — and stops where `compile`
+-- would call `runEmit`.  It exists because the editor's live-squiggle path
+-- (playground/language-worker.js) throws the WAT away: on a clean one-liner, 596ms
+-- of a 769ms `compile` was codegen nobody read.  The `emit` flag threaded through
+-- run/analyzeSingle/analyzeMulti/guardedEmit/doEmit below is that fork, and it
+-- diverges at exactly ONE point (`finishClean`) so the two modes cannot drift in
+-- what diagnostics they report.
 main : <IO> Unit
 main = match args ()
   "compile"::runtimeP::coreP::entry::roots =>
-    run runtimeP coreP entry (rootsOrDefault entry roots)
+    run True runtimeP coreP entry (rootsOrDefault entry roots)
+  "analyze"::runtimeP::coreP::entry::roots =>
+    run False runtimeP coreP entry (rootsOrDefault entry roots)
   "hover"::runtimeP::coreP::entry::rest =>
     runQuery True runtimeP coreP entry rest
   "complete"::runtimeP::coreP::entry::rest =>
     runQuery False runtimeP coreP entry rest
-  _ => ePutStrLn "usage: playground_main <compile|hover|complete> <runtime.mdk> <core.mdk> <entry.mdk> [root ... | line col]"
+  _ => ePutStrLn "usage: playground_main <compile|analyze|hover|complete> <runtime.mdk> <core.mdk> <entry.mdk> [root ... | line col]"
 
 rootsOrDefault : String -> List String -> List String
 rootsOrDefault entry [] = [dirOf entry]
@@ -154,8 +173,10 @@ rootsOrDefault _ roots = roots
 --   1 module             → analyzeLocated (single-file path)
 --   N modules            → analyzeProject (loader path)
 -- If analysis is clean, fall through to emit.
-run : String -> String -> String -> List String -> <IO> Unit
-run runtimeP coreP entry roots = match readFile runtimeP
+-- `emit` False (mode `analyze`) takes the SAME route through every diagnostic
+-- above and below; it only changes what happens after the last one has passed.
+run : Bool -> String -> String -> String -> List String -> <IO> Unit
+run emit runtimeP coreP entry roots = match readFile runtimeP
   Err e => emitLoadFail entry e
   Ok rsrc => match readFile coreP
     Err e => emitLoadFail entry e
@@ -177,30 +198,31 @@ run runtimeP coreP entry roots = match readFile runtimeP
               Some mid => findImportLoc mid (parseLocated tsrc)
             emitDiagnostics (cjAllToJson [(entry, tsrc, [Diag SevError "R-MODULE-LOAD" lmsg mloc None None])])
           Ok mods => match mods
-            [_] => analyzeSingle rsrc csrc tsrc entry runtimeP coreP roots
-            _ => analyzeMulti rsrc csrc tsrc entry runtimeP coreP roots mods
+            [_] => analyzeSingle emit rsrc csrc tsrc entry runtimeP coreP roots
+            _ => analyzeMulti emit rsrc csrc tsrc entry runtimeP coreP roots mods
 
 -- Single module: analyzeLocated (correct single-file type errors).  Clean ⇒ emit.
-analyzeSingle : String -> String -> String -> String -> String -> String -> List String -> <IO> Unit
-analyzeSingle rsrc csrc tsrc entry runtimeP coreP roots =
+analyzeSingle : Bool -> String -> String -> String -> String -> String -> String -> List String -> <IO> Unit
+analyzeSingle emit rsrc csrc tsrc entry runtimeP coreP roots =
   let diags = analyzeLocated rsrc csrc tsrc
   match any isDiagError diags
     True => emitDiagnostics (cjAllToJson [(entry, tsrc, diags)])
-    False => guardedEmit rsrc csrc tsrc entry roots [(entry, tsrc, filterWarnings diags)]
+    False => guardedEmit emit rsrc csrc tsrc entry roots [(entry, tsrc, filterWarnings diags)]
 
 -- Multi-module: analyzeProject (loader path).  Clean ⇒ emit.
 -- #1362: `analyzeSingle` above uses the UNGUARDED `analyzeLocated` (the
 -- playground has no `--allow-internal` flag or trusted-root concept); kept
 -- unguarded here too (`allowInternal = True`, `trustedMods = []`) for parity.
-analyzeMulti : String -> String -> String -> String -> String -> String -> List String -> List (String, List Decl) -> <IO> Unit
-analyzeMulti rsrc csrc tsrc entry runtimeP coreP roots _mods =
+analyzeMulti : Bool -> String -> String -> String -> String -> String -> String -> List String -> List (String, List Decl) -> <IO> Unit
+analyzeMulti emit rsrc csrc tsrc entry runtimeP coreP roots _mods =
   let cacheRef = Ref []
   let parseCacheRef = Ref []
   let results = analyzeProject True [] cacheRef parseCacheRef (_ => None) entry roots rsrc csrc
   let triples = map readDiagSrc results
   match any cjHasErr results
     True => emitDiagnostics (cjAllToJson triples)
-    False => guardedEmit rsrc csrc tsrc entry roots (map warnTriple triples)
+    False =>
+      guardedEmit emit rsrc csrc tsrc entry roots (map warnTriple triples)
 
 -- Keep only non-error (i.e. warning) diagnostics for a single file's list.
 filterWarnings : List Diag -> List Diag
@@ -226,12 +248,14 @@ warnTriple (p, s, ds) = (p, s, filterWarnings ds)
 -- file, so a clean-but-warning program can still surface them once we reach
 -- `doEmit` below.  The main-shape guard runs FIRST and unconditionally blocks
 -- on an ERROR — it never consults warnTriples.
-guardedEmit : String -> String -> String -> String -> List String -> List (String, String, List Diag) -> <IO> Unit
-guardedEmit rsrc csrc tsrc entry roots warnTriples = match parseResult tsrc
+-- Runs in BOTH modes: W-MAIN-SHAPE / W-MAIN-MISSING are diagnostics the editor
+-- shows today, so `analyze` must report them exactly as `compile` does.
+guardedEmit : Bool -> String -> String -> String -> String -> List String -> List (String, String, List Diag) -> <IO> Unit
+guardedEmit emit rsrc csrc tsrc entry roots warnTriples = match parseResult tsrc
   Err pe => emitParseError entry pe
   Ok decls => match mainShapeError decls
     Some d => emitDiagnostics (cjAllToJson [(entry, tsrc, [d])])
-    None => doEmit rsrc csrc tsrc entry roots warnTriples
+    None => doEmit emit rsrc csrc tsrc entry roots warnTriples
 
 -- Find a top-level `main` DFunDef among a module's raw decls (skipping @attr
 -- wrappers).  Returns its param list + body so callers can inspect arity and
@@ -281,8 +305,10 @@ mainShapeError decls = match findMainFunDef decls
 -- crash the emitter); a bare underived-ADT main surfaces the clean `No impl of
 -- Display …` diagnostic (via the __MEDAKA_DIAGNOSTICS__ marker, NOT the WAT
 -- marker).  A Unit/Async main is unchanged.
-doEmit : String -> String -> String -> String -> List String -> List (String, String, List Diag) -> <IO> Unit
-doEmit rsrc csrc tsrc entry roots warnTriples = match loadProgramE entry roots
+-- `underivedMainDiags` below is a DIAGNOSTIC, not part of emit, so it runs in
+-- `analyze` mode too; only the `finishClean` tail is mode-dependent.
+doEmit : Bool -> String -> String -> String -> String -> List String -> List (String, String, List Diag) -> <IO> Unit
+doEmit emit rsrc csrc tsrc entry roots warnTriples = match loadProgramE entry roots
   Err (LoadParseFailed mpath _ pe) => emitParseError mpath pe
   Err (LoadMsg e) => emitDiagnostics (cjAllToJson [(entry, "", [Diag SevError "R-MODULE-LOAD" e None None None])])
   Ok mods =>
@@ -296,13 +322,34 @@ doEmit rsrc csrc tsrc entry roots warnTriples = match loadProgramE entry roots
       let coreW = autoPrintPinCore core
       let modulesW = autoPrintWrapModules modules
       match underivedMainDiags rt coreW modulesW
-        [] =>
-          let _ = emitWatMarker warnTriples
-          runEmit rt coreW modulesW
+        [] => finishClean emit warnTriples rt coreW modulesW
         errs => emitDiagnostics (cjAllToJson [(entry, tsrc, map diagOfTypeError errs)])
     else
-      let _ = emitWatMarker warnTriples
-      runEmit rt core modules
+      finishClean emit warnTriples rt core modules
+
+-- The ONE divergence point between `compile` and `analyze`.  Every diagnostic
+-- either mode can produce has already been produced by the time control reaches
+-- here, so `compile` prints the WAT marker and the WAT while `analyze` prints its
+-- own marker and the same warnings JSON — no lowerProgramEmit, no wasmReachFilter,
+-- no emitProgram, and no second `elaborateModules` (runEmit's own).
+finishClean : Bool -> List (String, String, List Diag) -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
+finishClean emit warnTriples runtimeDecls coreDecls modules =
+  if emit then
+    let _ = emitWatMarker warnTriples
+    runEmit runtimeDecls coreDecls modules
+  else emitAnalyzeMarker warnTriples
+
+-- `analyze`'s terminal marker: ALWAYS a marker line plus a one-line JSON payload.
+-- The payload is byte-identical to the warnings JSON `emitWatMarker` writes when
+-- there ARE warnings, and `{"files":[]}` when there are none — which is what
+-- `compile`'s bare `__MEDAKA_WAT__` means to the host (no diagnostics at all), so
+-- the two modes hand the caller the same diagnostic set either way.
+emitAnalyzeMarker : List (String, String, List Diag) -> <IO> Unit
+emitAnalyzeMarker warnTriples =
+  let _ = putStr "__MEDAKA_ANALYZE__\n"
+  match any tripleHasDiag warnTriples
+    True => putStr (cjAllToJson warnTriples ++ "\n")
+    False => putStr (cjAllToJson [] ++ "\n")
 
 -- Print the plain WAT marker when there are no warnings, else the combined
 -- marker (warnings JSON line, THEN the WAT) — the browser shows the warnings
