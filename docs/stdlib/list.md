@@ -15,7 +15,7 @@ Re-export the Filterable container ops so they're discoverable as
 ## `filter`
 
 ```
-filter : re-export of core.filter
+filter : (a -> Bool) -> b a -> b a
 ```
 
 Re-export the Filterable container ops so they're discoverable as
@@ -24,7 +24,7 @@ Re-export the Filterable container ops so they're discoverable as
 ## `filterMap`
 
 ```
-filterMap : re-export of core.filterMap
+filterMap : (a -> Option b) -> c a -> c b
 ```
 
 Re-export the Filterable container ops so they're discoverable as
@@ -115,7 +115,7 @@ the same shape `String.repeat` had before #1728.
 ## `iterate`
 
 ```
-iterate : Int -> (a -> a) -> a -> List a
+iterate : Int -> (a -> <e> a) -> a -> <e> List a
 ```
 
 `[x, f x, f (f x), …]` of length `n`.  Empty when `n <= 0`.
@@ -135,7 +135,7 @@ iterate : Int -> (a -> a) -> a -> List a
 ## `unfold`
 
 ```
-unfold : (a -> Option (b, a)) -> a -> List b
+unfold : (b -> <e> Option (a, b)) -> b -> <e> List a
 ```
 
 Build a list from a seed: `gen` returns `Some (element, nextSeed)` to emit
@@ -258,7 +258,7 @@ position).
 ## `scanLeft`
 
 ```
-scanLeft : (a -> b -> a) -> a -> List b -> List a
+scanLeft : (b -> a -> <e> b) -> b -> List a -> <e> List b
 ```
 
 Like `fold`, but keeping every intermediate accumulator (so the result is
@@ -275,7 +275,7 @@ one longer than the input).
 ## `scanRight`
 
 ```
-scanRight : (a -> b -> b) -> b -> List a -> List b
+scanRight : (a -> b -> <e> b) -> b -> List a -> <e> List b
 ```
 
 Right-associated `scanLeft`: every intermediate of a right fold.
@@ -291,7 +291,7 @@ Right-associated `scanLeft`: every intermediate of a right fold.
 ## `findIndex`
 
 ```
-findIndex : (a -> Bool) -> List a -> Option Int
+findIndex : (a -> <e> Bool) -> List a -> <e> Option Int
 ```
 
 Index of the first element satisfying the predicate, or `None`.
@@ -307,7 +307,7 @@ Some 2
 ## `findIndices`
 
 ```
-findIndices : (a -> Bool) -> List a -> List Int
+findIndices : (a -> <e> Bool) -> List a -> <e> List Int
 ```
 
 Indices of every element satisfying the predicate.
@@ -323,7 +323,7 @@ Indices of every element satisfying the predicate.
 ## `elemIndex`
 
 ```
-elemIndex : a -> List a -> Option Int
+elemIndex : Eq a => a -> List a -> Option Int
 ```
 
 Index of the first occurrence of `x` (by `Eq`), or `None`.
@@ -339,7 +339,7 @@ Some 2
 ## `elemIndices`
 
 ```
-elemIndices : a -> List a -> List Int
+elemIndices : Eq a => a -> List a -> List Int
 ```
 
 Indices of every occurrence of `x` (by `Eq`).
@@ -357,7 +357,7 @@ Indices of every occurrence of `x` (by `Eq`).
 ## `lookup`
 
 ```
-lookup : a -> List (a, b) -> Option b
+lookup : Eq k => k -> List (k, v) -> Option v
 ```
 
 Look `key` up in an association list, returning the first match.
@@ -377,7 +377,7 @@ None
 ## `findMap`
 
 ```
-findMap : (a -> Option b) -> List a -> Option b
+findMap : (a -> <e> Option b) -> List a -> <e> Option b
 ```
 
 The first non-`None` result of `f` — `find` and `map` in a single pass,
@@ -396,7 +396,7 @@ None
 ## `reduce`
 
 ```
-reduce : (a -> a -> a) -> List a -> Option a
+reduce : (a -> a -> <e> a) -> List a -> <e> Option a
 ```
 
 Left-fold using the first element as the seed — `None` on an empty list.
@@ -418,7 +418,7 @@ None
 ## `maximumBy`
 
 ```
-maximumBy : (a -> a -> Ordering) -> List a -> Option a
+maximumBy : (a -> a -> <e> Ordering) -> List a -> <e> Option a
 ```
 
 Largest element by a custom comparator, or `None` when empty.  Ties keep
@@ -437,7 +437,7 @@ None
 ## `minimumBy`
 
 ```
-minimumBy : (a -> a -> Ordering) -> List a -> Option a
+minimumBy : (a -> a -> <e> Ordering) -> List a -> <e> Option a
 ```
 
 Smallest element by a custom comparator, or `None` when empty.  Ties keep
@@ -456,7 +456,7 @@ None
 ## `mapWithIndex`
 
 ```
-mapWithIndex : (Int -> a -> b) -> List a -> List b
+mapWithIndex : (Int -> a -> <e> b) -> List a -> <e> List b
 ```
 
 `map`, but `f` also receives each element's 0-based index.
@@ -490,7 +490,7 @@ Pair every element with its 0-based index.
 ## `mapAccumL`
 
 ```
-mapAccumL : (a -> b -> (a, c)) -> a -> List b -> (a, List c)
+mapAccumL : (s -> a -> <e> (s, b)) -> s -> List a -> <e> (s, List b)
 ```
 
 Left-to-right `map` threading an accumulator: `f` sees the running state
@@ -508,7 +508,7 @@ Returns the final state and the mapped list.
 ## `mapAccumR`
 
 ```
-mapAccumR : (a -> b -> (a, c)) -> a -> List b -> (a, List c)
+mapAccumR : (s -> a -> <e> (s, b)) -> s -> List a -> <e> (s, List b)
 ```
 
 Like `mapAccumL`, but threads the accumulator right-to-left.  The output
@@ -615,7 +615,7 @@ Everything after the first `n` elements.
 ## `takeWhile`
 
 ```
-takeWhile : (a -> Bool) -> List a -> List a
+takeWhile : (a -> <e> Bool) -> List a -> <e> List a
 ```
 
 Longest prefix whose elements all satisfy the predicate.
@@ -637,7 +637,7 @@ Longest prefix whose elements all satisfy the predicate.
 ## `dropWhile`
 
 ```
-dropWhile : (a -> Bool) -> List a -> List a
+dropWhile : (a -> <e> Bool) -> List a -> <e> List a
 ```
 
 Drop the longest prefix whose elements satisfy the predicate.
@@ -659,7 +659,7 @@ Drop the longest prefix whose elements satisfy the predicate.
 ## `span`
 
 ```
-span : (a -> Bool) -> List a -> (List a, List a)
+span : (a -> <e> Bool) -> List a -> <e> (List a, List a)
 ```
 
 `(takeWhile p xs, dropWhile p xs)`, in a single pass.
@@ -681,7 +681,7 @@ span : (a -> Bool) -> List a -> (List a, List a)
 ## `break`
 
 ```
-break : (a -> Bool) -> List a -> (List a, List a)
+break : (a -> <e> Bool) -> List a -> <e> (List a, List a)
 ```
 
 `span` with the predicate negated: split at the first element that *does*
@@ -754,7 +754,7 @@ Empty when `n <= 0`.
 ## `dropWhileEnd`
 
 ```
-dropWhileEnd : (a -> Bool) -> List a -> List a
+dropWhileEnd : (a -> <e> Bool) -> List a -> <e> List a
 ```
 
 Drop the longest *suffix* whose elements all satisfy the predicate — the
@@ -775,7 +775,7 @@ mirror of `dropWhile`.  Trailing-whitespace trimming is the usual reason.
 ## `takeWhileEnd`
 
 ```
-takeWhileEnd : (a -> Bool) -> List a -> List a
+takeWhileEnd : (a -> <e> Bool) -> List a -> <e> List a
 ```
 
 The longest *suffix* whose elements all satisfy the predicate — the mirror
@@ -796,7 +796,7 @@ of `takeWhile`.
 ## `split`
 
 ```
-split : List a -> List a -> List (List a)
+split : Eq a => List a -> List a -> List (List a)
 ```
 
 Split on every occurrence of the separator *sublist*, dropping the
@@ -821,7 +821,7 @@ argument order, and an empty separator likewise yields `[xs]`.
 ## `startsWith`
 
 ```
-startsWith : List a -> List a -> Bool
+startsWith : Eq a => List a -> List a -> Bool
 ```
 
 True when `prefix` is a leading sublist of `xs`.  Every list starts with
@@ -842,7 +842,7 @@ True
 ## `endsWith`
 
 ```
-endsWith : List a -> List a -> Bool
+endsWith : Eq a => List a -> List a -> Bool
 ```
 
 True when `suffix` is a trailing sublist of `xs`.
@@ -860,7 +860,7 @@ False
 ## `containsSub`
 
 ```
-containsSub : List a -> List a -> Bool
+containsSub : Eq a => List a -> List a -> Bool
 ```
 
 True when `sub` occurs as a contiguous run anywhere in `xs`.  `O(n*m)`
@@ -882,7 +882,7 @@ True
 ## `sortBy`
 
 ```
-sortBy : (a -> a -> Ordering) -> List a -> List a
+sortBy : (a -> a -> <e> Ordering) -> List a -> <e> List a
 ```
 
 Stable sort with a custom comparator (bottom-up is unnecessary; a plain
@@ -899,7 +899,7 @@ recursive merge sort is stable and `O(n log n)`).
 ## `sort`
 
 ```
-sort : List a -> List a
+sort : Ord a => List a -> List a
 ```
 
 Ascending stable sort by the `Ord` instance.
@@ -915,7 +915,7 @@ Ascending stable sort by the `Ord` instance.
 ## `sortOn`
 
 ```
-sortOn : (a -> b) -> List a -> List a
+sortOn : Ord b => (a -> <e> b) -> List a -> <e> List a
 ```
 
 Sort by a derived key, computing the key once per element via a
@@ -933,7 +933,7 @@ recomputing it inside every comparison).
 ## `nubBy`
 
 ```
-nubBy : (a -> a -> Bool) -> List a -> List a
+nubBy : (a -> a -> <e> Bool) -> List a -> <e> List a
 ```
 
 Drop duplicates by a custom equality, keeping the first occurrence.
@@ -950,7 +950,7 @@ Drop duplicates by a custom equality, keeping the first occurrence.
 ## `nub`
 
 ```
-nub : List a -> List a
+nub : Eq a => List a -> List a
 ```
 
 Drop duplicates by `Eq`, keeping the first occurrence.
@@ -966,7 +966,7 @@ Drop duplicates by `Eq`, keeping the first occurrence.
 ## `deleteBy`
 
 ```
-deleteBy : (a -> a -> Bool) -> a -> List a -> List a
+deleteBy : (a -> a -> <e> Bool) -> a -> List a -> <e> List a
 ```
 
 Remove the *first* element matching a custom equality; unchanged when
@@ -983,7 +983,7 @@ nothing matches.
 ## `delete`
 
 ```
-delete : a -> List a -> List a
+delete : Eq a => a -> List a -> List a
 ```
 
 Remove the *first* occurrence of `x` (by `Eq`); unchanged when absent.
@@ -1002,7 +1002,7 @@ Only the first — `filter (/= x) xs` removes every occurrence.
 ## `groupBy`
 
 ```
-groupBy : (a -> a -> Bool) -> List a -> List (List a)
+groupBy : (a -> a -> <e> Bool) -> List a -> <e> List (List a)
 ```
 
 Group maximal runs of adjacent elements that satisfy the equivalence.
@@ -1018,7 +1018,7 @@ Group maximal runs of adjacent elements that satisfy the equivalence.
 ## `group`
 
 ```
-group : List a -> List (List a)
+group : Eq a => List a -> List (List a)
 ```
 
 Group maximal runs of adjacent equal elements (by `Eq`).
@@ -1034,7 +1034,7 @@ Group maximal runs of adjacent equal elements (by `Eq`).
 ## `partition`
 
 ```
-partition : (a -> Bool) -> List a -> (List a, List a)
+partition : (a -> <e> Bool) -> List a -> <e> (List a, List a)
 ```
 
 `(filter p xs, filter (not . p) xs)`, in a single pass.
@@ -1068,7 +1068,7 @@ Keep the `Some`s, drop the `None`s.
 ## `oks`
 
 ```
-oks : List (Result a b) -> List b
+oks : List (Result e a) -> List a
 ```
 
 Keep the `Ok` values, drop the `Err`s.
@@ -1084,7 +1084,7 @@ Keep the `Ok` values, drop the `Err`s.
 ## `errs`
 
 ```
-errs : List (Result a b) -> List a
+errs : List (Result e a) -> List e
 ```
 
 Keep the `Err` values, drop the `Ok`s.
@@ -1100,7 +1100,7 @@ Keep the `Err` values, drop the `Ok`s.
 ## `partitionResults`
 
 ```
-partitionResults : List (Result a b) -> (List a, List b)
+partitionResults : List (Result e a) -> (List e, List a)
 ```
 
 Split into `(errs, oks)` in a single pass.
@@ -1116,7 +1116,7 @@ Split into `(errs, oks)` in a single pass.
 ## `tally`
 
 ```
-tally : List a -> List (a, Int)
+tally : Eq a => List a -> List (a, Int)
 ```
 
 Count occurrences of each distinct element (by `Eq`), in first-seen order.
@@ -1222,7 +1222,7 @@ shortest input.
 ## `zipWith`
 
 ```
-zipWith : (a -> b -> c) -> List a -> List b -> List c
+zipWith : (a -> b -> <e> c) -> List a -> List b -> <e> List c
 ```
 
 Combine two lists element-wise with `f`, stopping at the shorter.
@@ -1260,7 +1260,7 @@ shortest input.
 ## `zipWith3`
 
 ```
-zipWith3 : (a -> b -> c -> d) -> List a -> List b -> List c -> List d
+zipWith3 : (a -> b -> c -> <e> d) -> List a -> List b -> List c -> <e> List d
 ```
 
 Like `zipWith`, but for three lists.  `zip3` is the special case
