@@ -8845,19 +8845,20 @@ paramVarianceEqCheck _ _ l1 l2 =
 -- restores is still bounded by the slot, so eta-expansion buys back exactly the
 -- narrowing direction and nothing else — which is why naming it here is safe.
 --
--- Why the message and not a fix: no rule keyed on TYPES can separate the two
--- directions at this seam.  `handler = Ref noop` (safe narrowing, #2109) and
--- `alias = idr box` (the #1098 laundering) reach `paramVarianceGuard` with the
--- SAME two Monos — `Ref (String -> <Stdout> Unit)` against `Ref (String -> <>
--- Unit)` — render the SAME row pair `<Stdout> vs <>`, and both carry a caret on
--- an ARGUMENT span, so neither the types nor the location discriminates.  What
--- separates them is expression-level provenance (is the argument a value flowing
--- INTO a cell being built here, or an already-typed cell being coerced?), which
--- would need an expected/actual role on `unify` or a checking mode for
--- constructor applications — the larger unifier-direction change this seam
--- deliberately does not have.
+-- No rule keyed on TYPES can separate the two directions at this seam:
+-- `handler = Ref noop` (safe narrowing, #2109) and `alias = idr box` (the #1098
+-- laundering) reach `paramVarianceGuard` with the SAME two Monos and render the
+-- SAME row pair.  What separates them is expression-level provenance — a value
+-- flowing INTO a cell being built here, versus an already-typed cell being
+-- coerced — and that is now read where it is visible: a signed clause's body
+-- is inferred RESULT-FIRST against its signature (`inferExpected`), so a fresh
+-- construction meets the declaration while its slot is still a metavariable
+-- and this guard abstains, while an already-typed cell still arrives closed
+-- and is rejected here.  The eta-expansion recovery the message names is what
+-- remains for the shapes result-first inference does not reach (an unsigned
+-- binding, a lambda-argument head).
 paramVarianceMismatchMsg : List Atom -> List Atom -> String
-paramVarianceMismatchMsg l1 l2 = "Effect row mismatch inside a non-covariant type argument: <\{renderAtoms l1}> vs <\{renderAtoms l2}>. This type parameter is used contravariantly, or behind a mutable cell, so the two rows must be EQUAL — weakening one to the other would let an effectful value be reached through a type that no longer mentions its effects. Write the same effect row on both sides. If the value here performs FEWER effects than the slot permits, that narrowing is safe but is still rejected, because unification is symmetric here and cannot tell which side is the declaration; eta-expand the mismatched function to recover — write `(s => f s)` in place of `f`, and when that function is nested inside a wrapper value here, rebuild the wrapper around the eta-expanded function (e.g. `Ref (s => f s)`). A value that performs MORE effects than the slot permits is rejected either way, so this recovery cannot widen a row."
+paramVarianceMismatchMsg l1 l2 = "Effect row mismatch inside a non-covariant type argument: <\{renderAtoms l1}> vs <\{renderAtoms l2}>. This type parameter is used contravariantly, or behind a mutable cell, so the two rows must be EQUAL — weakening one to the other would let an effectful value be reached through a type that no longer mentions its effects. Write the same effect row on both sides. A FRESHLY built value (`Ref f` at a signed binding) may perform fewer effects than its declared slot permits; what is rejected here is an already-typed value being re-typed at a different row, in either direction, because both readers of the same cell must agree. If this value really is fresh and the site is not covered by its signature, eta-expand the mismatched function — write `(s => f s)` in place of `f`, rebuilding any wrapper around it (e.g. `Ref (s => f s)`); a value that performs MORE effects than the slot permits is rejected either way, so that recovery cannot widen a row."
 
 unifyVars : Ref Tyvar -> Ref Tyvar -> Unit
 unifyVars c1 c2 = if tyvarId c1 == tyvarId c2 then () else bindVar c1 (TVar c2)
@@ -13938,6 +13939,138 @@ unifySpineProbe ft (a::rest) =
   let _ = unify ft (TFun a eff r)
   unifySpineProbe r rest
 
+-- ── #2109: RESULT-FIRST inference against a known expected type ───────────
+-- `paramVarianceGuard` (the D-2 variance gate) fires only when BOTH rows at a
+-- non-covariant slot are closed, and abstains while either is still a
+-- metavariable.  That is the whole lever here.  Inferring an application
+-- ARGUMENT-FIRST (`Ref noop`: `noop`'s closed `<>` row is pinned into `Ref ?a`
+-- before the result ever meets the declaration) presents two closed rows and
+-- the safe write-side narrowing is rejected; inferring it RESULT-FIRST
+-- (`Ref ?a` meets `Ref (String -> <Stdout> Unit)` while `?a` is fresh) lets
+-- the declaration pin the slot, and the argument is then checked against the
+-- DECLARED field type by the ordinary arrow-row rule, which accepts a purer
+-- function where a more effectful one is allowed.
+--
+-- Why this is sound for ANY callee, not only a constructor: the guard still
+-- fires exactly when the callee's result at the slot is CLOSED independently
+-- of the expectation — `idr : Ref a -> Ref a` applied to an already-typed cell
+-- (`alias = idr box`, the #1098 launder) unifies its result first, which pins
+-- `a := String -> <Stdout> Unit`, and the argument `box : Ref (String -> <>
+-- Unit)` then meets that as closed~closed and is rejected as before.  A callee
+-- whose result slot is a metavariable cannot have aliased the cell at any
+-- particular row (parametricity), so nothing but a fresh value ever reaches
+-- the accepting order.  The value this admits therefore has no other alias
+-- yet, which is the one condition under which narrowing at a write is safe.
+--
+-- Scope, deliberately narrow: the expected type must contain a non-covariant
+-- slot at all (`monoHasNonCovariantSlot`), the expression must be a plain
+-- application spine (no lambda-argument or shadow-head special case, which
+-- keep `inferAppExpr`'s arms), and only then does the order change.  Every
+-- other program is inferred exactly as before, so no diagnostic moves.
+inferExpected : TcEnv -> Expr -> Mono -> Mono
+inferExpected env (ELoc l e) expected =
+  currentLoc := Some l
+  inferExpected env e expected
+inferExpected env e expected =
+  if monoHasNonCovariantSlot expected then match appSpineExpr e
+    (hd, args) =>
+      if isEmptyL args || not (plainAppHead env hd) then
+        infer env e
+      else
+        inferAppResultFirst env hd args expected
+  else infer env e
+
+-- the application spine of [e]: its head and its arguments in order, looking
+-- through the location wrappers that sit between one application node and
+-- the next.  A non-application returns itself with no arguments.
+appSpineExpr : Expr -> (Expr, List Expr)
+appSpineExpr (EApp f x) =
+  let s = appSpineExpr f
+  (fst s, snd s ++ [x])
+appSpineExpr (ELoc _ (EApp f x)) = appSpineExpr (EApp f x)
+appSpineExpr e = (e, [])
+
+-- a head `inferAppExpr` would take through its plain arm: an ordinary variable
+-- that is neither a standalone shadow nor a definer shadow.  Anything else
+-- keeps its dedicated arm and the argument-first order.
+plainAppHead : TcEnv -> Expr -> Bool
+plainAppHead env (ELoc _ inner) = plainAppHead env inner
+plainAppHead env (hd@(EVar _)) = plainAppHeadVar env hd
+plainAppHead env (hd@(EVarId _ _)) = plainAppHeadVar env hd
+plainAppHead _ _ = False
+
+plainAppHeadVar : TcEnv -> Expr -> Bool
+plainAppHeadVar env hd = match shadowStandaloneHead env hd
+  Some _ => False
+  None => match definerShadowArgHead hd
+    Some _ => False
+    None => match definerShadowVarHead hd
+      Some _ => False
+      None => True
+
+-- the arrows of [ft] peeled [n] deep, then the result unified with [expected]
+-- BEFORE any argument is looked at; each argument is then inferred against
+-- the (now pinned) domain and applied through the ordinary `inferApp`, so the
+-- effect bookkeeping and every diagnostic of the plain path are unchanged.
+-- A callee with fewer than [n] arrows skips the pre-unification (the arity
+-- error surfaces from `inferApp` exactly as before).
+inferAppResultFirst : TcEnv -> Expr -> List Expr -> Mono -> Mono
+inferAppResultFirst env hd args expected =
+  let ft = infer env hd
+  let _ = match resultAfterArrows (listLen args) ft
+    Some res => unify res expected
+    None => ()
+  inferAppArgsAgainst env hd ft args
+
+inferAppArgsAgainst : TcEnv -> Expr -> Mono -> List Expr -> Mono
+inferAppArgsAgainst _ _ ft [] = ft
+inferAppArgsAgainst env appSoFar ft (x::rest) =
+  let xt = match lamUnderLoc x
+    Some (loc, pats, body) =>
+      let _ = setLocIfSome loc
+      inferLamChecked
+        env
+        (expectedParamTypes (funDomain (normalize ft)) (listLen pats))
+        pats
+        body
+    None => inferExpected env x (funDomain (normalize ft))
+  let res = inferApp (envAlphaLets env) (EApp appSoFar x) ft xt
+  inferAppArgsAgainst env (EApp appSoFar x) res rest
+
+-- the type after peeling [n] arrows off [t] (normalizing at each level), or
+-- None when [t] has fewer.
+resultAfterArrows : Int -> Mono -> Option Mono
+resultAfterArrows n t
+  | n <= 0 = Some t
+  | otherwise = match normalize t
+    TFun _ _ b => resultAfterArrows (n - 1) b
+    _ => None
+
+-- does [t] contain a type-constructor application whose head records a
+-- non-covariant polarity at some applied slot?  The only shapes on which the
+-- variance gate can fire, and so the only ones for which the inference order
+-- matters (`inferExpected`).  Walks under arrows and applications; an
+-- unregistered head, a bare variable, or an index row contributes nothing.
+monoHasNonCovariantSlot : Mono -> Bool
+monoHasNonCovariantSlot t = match normalize t
+  TApp a b => monoSlotNonCovariant a
+    || monoHasNonCovariantSlot a
+    || monoHasNonCovariantSlot b
+  TFun a _ b => monoHasNonCovariantSlot a || monoHasNonCovariantSlot b
+  _ => False
+
+-- is the slot applied at the node above [hd] (positional index = the depth of
+-- [hd]'s own spine) recorded as non-covariant for [hd]'s head?  The same read
+-- `paramVarianceGuard` makes, so the two agree on which slots count.
+monoSlotNonCovariant : Mono -> Bool
+monoSlotNonCovariant hd = match headTyconMono hd
+  Some (HkDecl key) => match paramPolaritiesOf key
+    Some pols => match polarityAt pols (monoSpineDepth hd)
+      PCo => False
+      _ => True
+    None => False
+  _ => False
+
 inferAppExpr : TcEnv -> Expr -> Expr -> Mono
 inferAppExpr env f x = match lamUnderLoc x
     Some (loc, pats, body) =>
@@ -16205,7 +16338,16 @@ registerVariants o env name params variants =
   -- which declaration a key names.  It runs AFTER `recordParamKinds` only
   -- because reading order is irrelevant here; it must run BEFORE
   -- `addVariants` so a later declaration in the same list can compose with it.
-  let _ = recordParamPolarities o name (inferParamPolarities perRun.value.dataParamPolarityRef.value params variants)
+  -- #2112: the seed (`seedParamPolarityFixpoint`) has already run the
+  -- TRANSITIVE fixpoint for this key over every declaration it may compose
+  -- with — including PRIVATE ones an export filter later drops — so a row it
+  -- wrote is at least as tight as anything recomputed here from the table AS
+  -- IT STANDS, and must not be shadowed by a lenient single-pass recompute
+  -- prepended in front of it.  Only a key the seed never saw (a `registerData`
+  -- call outside `registerAllData`) is computed here.
+  let _ = match lookupTab (tyTabKey o name) perRun.value.dataParamPolarityRef.value
+    Some _ => ()
+    None => recordParamPolarities o name (inferParamPolarities perRun.value.dataParamPolarityRef.value params variants)
   -- #2110: the ATOM-GUARANTEE twin, registered in the same breath and from the
   -- same decl-borne identity for the same reason the polarity twin is.  Unlike
   -- that one it reads NO table, so its ordering among these three lines is free.
@@ -29190,6 +29332,7 @@ checkImplEffVarRigidity subject scope mty effMap launderFlagged loc =
     ()
   else
     checkEffVarAtoms subject occs effMap loc
+  let _ = checkIndexOnlyEffVarsOpen subject scope mty effMap loc
   -- ⚠️ DEFERRED-PERFORMANCE residual (round-2 break 4; tracked, NOT enforced):
   -- a method effect var forced CLOSED post-unify is in truth a PIN — an impl
   -- that applies its <e>-callback inside a value whose declared row is pure
@@ -29205,6 +29348,78 @@ checkImplEffVarRigidity subject scope mty effMap launderFlagged loc =
     pushTypeErrorOnceAt "T-IMPL-TOO-SPECIFIC" loc (collapsesEffvarsMsg subject mty)
   else
     ()
+
+-- ── D-3 (#1095): a result-INDEX occurrence is a PROMISE, not a CHARGE ──────
+-- `checkArgEffVarCoverage` lets a row-kinded occurrence in the method's RESULT
+-- (`f e b`) discharge the argument-only obligation the callback's `<e>` raises.
+-- That is right for the DECLARATION — `f e b` says "performs <e> when forced"
+-- — but it says nothing about the CALL, so an impl that APPLIES its callback
+-- (`gmap g (Done a) = Done (g a)`) performs <e> at call time on an arrow the
+-- signature declares pure, and nothing charges it: `check` is green and a
+-- value typed `Int` prints (both engines).  The declaration cannot see it
+-- (the caller sees only the index) and the #803 per-arrow bound cannot see it
+-- (applying the callback contributes the VARIABLE `e`, never an atom).  The
+-- seam with the information intact is the IMPL BODY: under a signature whose
+-- only non-argument occurrences of `e` are indices, the body must leave `e`
+-- OPEN.  Performing it — or forcing an `e`-indexed argument — meets the
+-- declared-pure arrow and CLOSES `e := <>`, which is exactly the pin
+-- `effVarTailIds` documents as "the safe direction" for a var the method's
+-- own arrow charges, and is a launder for one it does not.  Storing the
+-- callback (`Susp (u => g a)`) unifies `e` with the container's own thunk row
+-- and leaves it open, so the deferred arm the spec requires stays legal.
+--
+-- Scoped to INDEX-ONLY variables on purpose: a var the method's own arrow
+-- charges (`map : (a -> <e> b) -> f a -> <e> f b`) may still close — the
+-- compiler's own `impl Mappable Parser` stores its callback under a pure
+-- arrow and does, which is #825's channel, out of scope here and pinned.
+checkIndexOnlyEffVarsOpen : String -> List (String, List Kind) -> Ty -> List (String, Ref Effvar) -> Option Loc -> Unit
+checkIndexOnlyEffVarsOpen subject scope mty effMap loc =
+  checkIndexOnlyGo subject effMap loc (indexOnlyEffVars scope mty)
+
+checkIndexOnlyGo : String -> List (String, Ref Effvar) -> Option Loc -> List String -> Unit
+checkIndexOnlyGo _ _ _ [] = ()
+checkIndexOnlyGo subject effMap loc (v::rest) =
+  let _ = match lookupAssoc v effMap
+    Some cell => match effrowNorm (EffRow [] (Some cell))
+      EffRow _ None => pushTypeErrorOnceAt "T-EFFECT-INDEX-EAGER" loc (indexEagerMsg subject v)
+      _ => ()
+    None => ()
+  checkIndexOnlyGo subject effMap loc rest
+
+-- the method effect vars that ride an ARGUMENT (a callback row or a row-kinded
+-- argument) and occur on NO row the method's own type charges — every
+-- non-argument occurrence is a result index.
+indexOnlyEffVars : List (String, List Kind) -> Ty -> List String
+indexOnlyEffVars scope mty =
+  let argNames = dedup (map fst (methodEffArgOccs scope mty))
+  let charged = map fst (methodEffChargedOccs mty)
+  filterList (v => not (contains v charged)) argNames
+
+-- effect-var occurrences on rows the method's type CHARGES: each spine arrow's
+-- own latent row, and every arrow row written inside the final return type.
+-- The `effVarOccAtoms` half of `methodEffRetOccs` minus the two INDEX forms —
+-- the row-kinded-slot padding (`rowArgAtomsIn`) and a bare row written in a
+-- slot (`TyRow`, `Box <Stdout | e> Unit`) — which promise rather than charge.
+methodEffChargedOccs : Ty -> List (String, List Atom)
+methodEffChargedOccs (TyConstrained _ t) = methodEffChargedOccs t
+methodEffChargedOccs (TyEffect labels (Some n) t) =
+  (n, atomsOfWritten labels) :: methodEffChargedOccs t
+methodEffChargedOccs (TyEffect _ None t) = methodEffChargedOccs t
+methodEffChargedOccs (TyFun _ b) = methodEffChargedOccs b
+methodEffChargedOccs t = effVarChargedOccs t
+
+effVarChargedOccs : Ty -> List (String, List Atom)
+effVarChargedOccs (TyEffect labels (Some n) t) =
+  (n, atomsOfWritten labels) :: effVarChargedOccs t
+effVarChargedOccs (TyEffect _ None t) = effVarChargedOccs t
+effVarChargedOccs (TyApp a b) = effVarChargedOccs a ++ effVarChargedOccs b
+effVarChargedOccs (TyFun a b) = effVarChargedOccs a ++ effVarChargedOccs b
+effVarChargedOccs (TyTuple ts) = flatMap effVarChargedOccs ts
+effVarChargedOccs (TyConstrained _ t) = effVarChargedOccs t
+effVarChargedOccs _ = []
+
+indexEagerMsg : String -> String -> String
+indexEagerMsg subject evar = "\{subject} performs the effect variable <\{evar}> at call time, but the method's signature charges <\{evar}> only in a result INDEX (`f \{evar} …`), which promises the effect when the value is later forced, not now. The body applies its <\{evar}>-callback (or forces an <\{evar}>-indexed argument) on an arrow the signature declares pure, so a caller's effectful callback would run from a call typed pure. Defer it — store the callback under the container's own <\{evar}> thunk (e.g. `Suspend (u => g a)`) — or charge the method's own arrow (`-> <\{evar}> …`)."
 
 checkEffVarAtoms : String -> List (String, List Atom) -> List (String, Ref Effvar) -> Option Loc -> Unit
 checkEffVarAtoms _ _ [] _ = ()
@@ -30825,8 +31040,19 @@ initialEnv =
 -- filtering `declEnvRowPolarityEntries`' `kindPublicDataDecl` arm already
 -- applies, a pre-existing scope question and not this order-sensitivity fix.
 registerAllData : TcEnv -> List Decl -> TcEnv
-registerAllData env ds =
-  let _ = seedParamPolarityFixpoint ds
+registerAllData env ds = registerAllDataScoped env ds ds
+
+-- #2112: register [ds], but run the polarity fixpoint over [allDs] — the
+-- WHOLE declaration list [ds] was filtered from — and keep only [ds]'s own
+-- keys.  `appendDataUniverse` registers a module's PUBLIC data into the
+-- universe; a public wrapper over a PRIVATE write/contra-channel type must
+-- still compose against the private declaration (the fixpoint's INPUT set is
+-- not its EXPORT set — the same split `declEnvRowPolarityEntries` makes on the
+-- cross-module chain), or the universe holds a lenient `PCo` row for the
+-- wrapper that every importer then reads first.
+registerAllDataScoped : TcEnv -> List Decl -> List Decl -> TcEnv
+registerAllDataScoped env ds allDs =
+  let _ = seedParamPolarityFixpointScoped ds allDs
   registerAllDataGo env ds
 
 registerAllDataGo : TcEnv -> List Decl -> TcEnv
@@ -30836,10 +31062,44 @@ registerAllDataGo env (d::rest) = registerAllDataGo (registerData env d) rest
 -- Prepends, exactly as `recordParamPolarities` does, so the seed layers over
 -- whatever the universe/import ladder already put in the ref rather than
 -- replacing it.
-seedParamPolarityFixpoint : List Decl -> Unit
-seedParamPolarityFixpoint ds =
+-- #2112: the fixpoint runs over [allDs]; only the keys declared in [ds] are
+-- kept.  When the two lists are the same list nothing is filtered.
+--
+-- A declaration the table ALREADY answers for is not recomputed.  The
+-- cross-module chain (`declEnvRowPolarityEntries`) computed an imported
+-- public wrapper's row over its OWN module, private siblings included; here
+-- those siblings are out of sight (filtered from the universe), so a recompute
+-- could only be more lenient, and in-round it would shadow the chain's row
+-- for every own declaration composing against it.  The universe is
+-- authoritative for what it holds; this seed adds only what it does not.
+seedParamPolarityFixpointScoped : List Decl -> List Decl -> Unit
+seedParamPolarityFixpointScoped ds allDs =
   let cur = perRun.value.dataParamPolarityRef.value
-  perRun.value.dataParamPolarityRef := declEnvPolarityEntriesFix cur ds ++ cur
+  let fresh = filterList (d => not (declHasPolarityEntry cur d)) allDs
+  let full = declEnvPolarityEntriesFix cur fresh
+  let keys = declPolarityKeys ds
+  let kept = filterList (e => tabKeyElem keys (fst e)) full
+  perRun.value.dataParamPolarityRef := kept ++ cur
+
+declHasPolarityEntry : List (TabKey, List Polarity) -> Decl -> Bool
+declHasPolarityEntry tab d = match declPolarityKeys [d]
+  [] => False
+  k::_ => match lookupTab k tab
+    Some _ => True
+    None => False
+
+-- every key `declEnvPolarityEntries` would record for [ds], public or not —
+-- the input-side counterpart of `polarityPublicKeys`.
+declPolarityKeys : List Decl -> List TabKey
+declPolarityKeys [] = []
+declPolarityKeys ((DAttrib _ d)::rest) = declPolarityKeys (d::rest)
+declPolarityKeys ((DData { dataName = n, dataOrigin = o })::rest) =
+  tyTabKey o n :: declPolarityKeys rest
+declPolarityKeys ((DNewtype { newtypeName = n, newtypeOrigin = o })::rest) =
+  tyTabKey o n :: declPolarityKeys rest
+declPolarityKeys ((DTypeAlias { tyAliasName = n, tyAliasOrigin = o })::rest) =
+  tyTabKey o n :: declPolarityKeys rest
+declPolarityKeys (_::rest) = declPolarityKeys rest
 
 -- ── dependency-ordered, SCC-merged letrec processing ──────────────────────
 -- The prelude has forward references and mutual recursion throughout, so groups
@@ -31545,7 +31805,15 @@ inferClauseEff env peel (pats, body) =
   let _ = peelOntoParams peel (fst pr) pats
   let saved = perRun.value.curEffect.value
   perRun.value.curEffect := (openRow ())
-  let bodyTy = infer (extendLocalVars env (snd pr)) body
+  -- #2109: a signed clause's body is inferred AGAINST the signature's result
+  -- type (result-first), so a fresh construction at a non-covariant slot meets
+  -- the declaration while its own slot is still a metavariable.  See
+  -- `inferExpected`.  An unsigned clause is byte-identical to before.
+  let bodyTy = match peel
+    Some src => match resultAfterArrows (listLen pats) src
+      Some expected => inferExpected (extendLocalVars env (snd pr)) body expected
+      None => infer (extendLocalVars env (snd pr)) body
+    None => infer (extendLocalVars env (snd pr)) body
   let bodyEff = perRun.value.curEffect.value
   perRun.value.curEffect := saved
   (arrowsWithLastEffect (fst pr) bodyEff bodyTy, effrowLabels bodyEff)
@@ -33781,7 +34049,9 @@ appendDataUniverse mid prog0 =
   -- immediately below is what puts this module's own public aliases in front,
   -- exactly as it always did.
   let _ = loadDataUniverse (declEnvsOrdOf mid driverState.value.declEnvsRef.value)
-  let env2 = registerAllData crossRun.value.universeDataEnv.value pubDecls
+  -- #2112: the polarity fixpoint sees the WHOLE module (`prog0`), the universe
+  -- receives only the public keys — see `registerAllDataScoped`.
+  let env2 = registerAllDataScoped crossRun.value.universeDataEnv.value pubDecls prog0
   let _ = storeDataUniverse ()
   crossRun.value.universeDataEnv := env2
   -- #1111 A-2.11 (#1319 unit 1): the identity-keyed companion of `universeDataEnv`'s ctor

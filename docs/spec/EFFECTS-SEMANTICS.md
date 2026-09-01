@@ -1249,12 +1249,23 @@ in argument types. What generalizes is the **invariant on `φ`**, not a signatur
 so the obligation is a checkable property of each declared eliminator, not
 something an interface can impose.
 
-**The obligation itself is still unenforced for interface methods; the index it
-protects is no longer unchecked.** Probed on a binary built from `main`
-(2026-07-26), then independently reproduced and filed. These are conformance
-findings against §9, not claims about the spec.
+**Both halves are now enforced.** The index is checked at unification (#1094,
+below), and — since D-3 (#1095) — an interface method whose only non-argument
+occurrences of an argument-carried effect variable are result INDICES is
+checked at the **impl body**: the variable must stay OPEN. An impl that
+applies its `<e>`-callback (or forces an `<e>`-indexed argument) performs `e`
+on an arrow the signature declares pure, which closes `e := ⟨ ⟩` — and that
+closing is the whole signal, because the deferred arm (`Susp (u => g a)`)
+unifies `e` with the container's own thunk row and leaves it open. Reported as
+`T-EFFECT-INDEX-EAGER` from `checkImplEffVarRigidity`
+(`checkIndexOnlyEffVarsOpen`). The rule is deliberately scoped to index-only
+variables: a variable the method's own arrow charges may still close (that is
+#825's channel, pinned and out of scope). The eliminator obligation for
+ordinary functions is a consequence of §5's escape check (§6.9 Q4); for
+interface methods it is this rule.
 
-⚠️ **Status, 2026-07-30: Finding 1 is CLOSED; Finding 2 is OPEN.** The two findings
+⚠️ **Status, 2026-07-30 (superseded above, kept as the record): Finding 1 is
+CLOSED; Finding 2 was OPEN until D-3.** The two findings
 below were both live when this section was written and their statuses have since
 diverged. **#1094 closed 2026-07-27** (PR #1102): `unifyN (TEff r1) (TEff r2) =
 unifyIndexRow r1 r2` (`compiler/types/typecheck.mdk:3396`) now routes an
@@ -1506,14 +1517,15 @@ document three public retractions already (PRs #999/#1001).
   resolves to *consequence*, parked on #1094 for confirmation once the index is
   checked.
 
-  What is **not** resolved, and is the reason this entry stays open: the argument
-  above covers *declared* eliminators only. It does **not** extend to interface
-  method signatures, where #1095 shows a result-index occurrence being miscounted as
-  a charge (§6.7, finding 2) — there the escape check is not reached, so for methods
-  the obligation remains a genuine rule with nothing enforcing it. Falsifier for the
-  resolved half, should anyone find one: an eliminator that *runs* a registered
-  computation, carries a concrete non-empty index, and is nevertheless accepted. None
-  was found.
+  The other half — interface method signatures, where #1095 showed a result-index
+  occurrence being miscounted as a charge (§6.7, finding 2) — is **now a rule with
+  something enforcing it (D-3, #1095 closed)**: an index-only effect variable must
+  stay open through the impl body, `T-EFFECT-INDEX-EAGER` otherwise (§6.7). So Q4
+  resolves as *consequence* for declared eliminators and *rule* for methods, and
+  the rule is enforced at the one seam that can see the eager application. Falsifier
+  for the resolved half, should anyone find one: an eliminator that *runs* a
+  registered computation, carries a concrete non-empty index, and is nevertheless
+  accepted. None was found.
 - **Q5 — `type` aliases with an `Effect` parameter.** §6.2 admits the annotation on
   an alias head by symmetry with the other binding forms. Whether an alias may
   *abstract over* a row in a way its expansion does not (partial application,

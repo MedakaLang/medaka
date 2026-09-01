@@ -1,0 +1,39 @@
+-- PRIVATE-DECLARATION concealment x write channel, cross-module. Regression
+-- row for #2112 (a public wrapper over a PRIVATE write type), closed by this
+-- sprint's slice 1 (S-polarity-input-set).
+--
+-- `Outer` (wrap.mdk) is public and abstract; the type that actually carries
+-- the `Ref` -- `Inner` -- is private and unnameable here. The concealment is
+-- VISIBILITY, not shape: this row differs from write-opaque-export only in
+-- that the write channel sits one declaration deeper, in a decl the
+-- cross-module chain used to filter away before computing the table.
+--
+-- EFFECTS-SEMANTICS.md §9 + §5. `callBox` declares an EMPTY row and performs
+-- `<Stdout>` if this widening is accepted, so it MUST be REJECTED -- and it
+-- must be rejected on the MODULE path, which seeds the polarity table
+-- differently from the single-file Flat path.
+import wrap.{Outer, mkOuter, outerRef}
+
+shout : Unit -> <Stdout> Unit
+shout u =
+  let _ = putStr "SMUGGLED "
+  ()
+
+pureFn : Unit -> Unit
+pureFn u = ()
+
+box : Outer (Unit -> <> Unit)
+box = mkOuter pureFn
+
+alias : Outer (Unit -> <Stdout> Unit)
+alias = box
+
+writeIntoAlias : Unit -> Unit
+writeIntoAlias u = outerRef alias := shout
+
+callBox : Unit -> Unit
+callBox u = (outerRef box).value ()
+
+main =
+  let _ = writeIntoAlias ()
+  println (callBox ())
