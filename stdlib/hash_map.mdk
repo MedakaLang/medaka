@@ -107,7 +107,7 @@ has key m = isSome (get key m)
    0 -}
 export
 findWithDefault : (Eq k, Hashable k) => v -> k -> HashMap k v -> v
-findWithDefault d key m = fromOption d (get key m)
+findWithDefault d key m = optionOr d (get key m)
 
 -- ── Bucket helpers (for insert/delete) ──────────────────────────────────
 

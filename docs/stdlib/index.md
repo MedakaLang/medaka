@@ -162,7 +162,7 @@
 - [`leFloat64`](byteparser.md#lefloat64)
 - [`runByteParser`](byteparser.md#runbyteparser)
 
-## `core` (170 entries)
+## `core` (172 entries)
 
 - [`Ordering`](core.md#ordering)
 - [`Option`](core.md#option)
@@ -247,7 +247,7 @@
 - [`Mappable`](core.md#mappable)
 - [`Mappable Option`](core.md#mappable-option)
 - [`Mappable (Result e)`](core.md#mappable-result-e)
-- [`replaceWith`](core.md#replacewith)
+- [`mapConst`](core.md#mapconst)
 - [`Applicative`](core.md#applicative)
 - [`Applicative Option`](core.md#applicative-option)
 - [`Applicative (Result e)`](core.md#applicative-result-e)
@@ -299,12 +299,14 @@
 - [`xor`](core.md#xor)
 - [`isSome`](core.md#issome)
 - [`isNone`](core.md#isnone)
-- [`fromOption`](core.md#fromoption)
+- [`optionOr`](core.md#optionor)
+- [`option`](core.md#option)
 - [`toResult`](core.md#toresult)
 - [`fromResult`](core.md#fromresult)
 - [`isOk`](core.md#isok)
 - [`isErr`](core.md#iserr)
-- [`fromResultOr`](core.md#fromresultor)
+- [`resultOr`](core.md#resultor)
+- [`result`](core.md#result)
 - [`mapErr`](core.md#maperr)
 - [`identity`](core.md#identity)
 - [`fst`](core.md#fst)
@@ -641,10 +643,6 @@
 - [`Debug (NonEmpty a)`](nonempty.md#debug-nonempty-a)
 - [`Display (NonEmpty a)`](nonempty.md#display-nonempty-a)
 
-## `option` (1 entries)
-
-- [`option`](option.md#option)
-
 ## `path` (12 entries)
 
 - [`dirname`](path.md#dirname)
@@ -659,10 +657,6 @@
 - [`isAbsolute`](path.md#isabsolute)
 - [`stripPrefix`](path.md#stripprefix)
 - [`normalize`](path.md#normalize)
-
-## `result` (1 entries)
-
-- [`result`](result.md#result)
 
 ## `runtime` (138 entries)
 

@@ -1827,7 +1827,7 @@ fi
 # ⚠️ EXPECTED VALUES ARE DERIVED FROM THE DECLARED SEMANTICS, NOT CAPTURED, per
 # AGENTS.md's "a captured golden records what the engine DID".  Each term, from
 # stdlib/runtime.mdk's signatures and stdlib/core.mdk's definitions:
-#   charFromCode 65        = Some 'A'   (ASCII 65)   -> fromOption -> charCode = 65
+#   charFromCode 65        = Some 'A'   (ASCII 65)   -> optionOr -> charCode = 65
 #   stringToFloat "2.5"    = Some 2.5   -> +7.5 = 10.0 exactly (both are exact
 #                                          binary fractions) -> floatToInt = 10
 #   stringCompare "a" "b"  = Lt         ('a'=97 < 'b'=98)     -> 100
@@ -1856,10 +1856,10 @@ import x1280_defs.{twinA, unTwinA} -- ONLY the functions; never defs' Twin
 import x1280_other.{otherLen}      -- ONLY the function; never other's Twin
 
 viaOptionChar : Int
-viaOptionChar = charCode (fromOption 'z' (charFromCode 65))
+viaOptionChar = charCode (optionOr 'z' (charFromCode 65))
 
 viaOptionFloat : Int
-viaOptionFloat = floatToInt (fromOption 0.0 (stringToFloat "2.5") + 7.5)
+viaOptionFloat = floatToInt (optionOr 0.0 (stringToFloat "2.5") + 7.5)
 
 viaOrdering : Int
 viaOrdering = match stringCompare "a" "b"

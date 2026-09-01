@@ -390,7 +390,7 @@ declImplIfaceIdRow : Decl -> List (String, String, String)
 -- #1037: an attribute wraps the decl it annotates; matched arm-for-arm with
 -- `declImplEntries`, which unwraps `DAttrib` for the same reason.
 declImplIfaceIdRow (DAttrib _ d) = declImplIfaceIdRow d
-declImplIfaceIdRow (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, ... }) = [(ifaceIdentity o ifaceName, fromOption noneHeadTag (headTyconHead typeArgs), implRouteKeyWord o ifaceName typeArgs None)]
+declImplIfaceIdRow (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, ... }) = [(ifaceIdentity o ifaceName, optionOr noneHeadTag (headTyconHead typeArgs), implRouteKeyWord o ifaceName typeArgs None)]
 declImplIfaceIdRow _ = []
 
 -- the interface IDENTITIES of every declared impl at [tag] (head tag OR canonical
@@ -518,7 +518,7 @@ implMethodReqCounts _ _ = []
 
 implMethodReqCountEntry : List (String, Int) -> String -> ImplMethod -> List ((String, String), Int)
 implMethodReqCountEntry arities tag (ImplMethod mname pats _) =
-  let declArity = fromOption (listLen pats) (lookupAssoc mname arities)
+  let declArity = optionOr (listLen pats) (lookupAssoc mname arities)
   let reqCount = subClampZero (listLen pats) declArity
   [((mname, tag), reqCount)]
 
@@ -1603,7 +1603,7 @@ applyMethodDicts env name route narrowed fwdReqs0 implRoutes methodRoutes =
   -- wants the absent/present distinction.  Looking it up twice doubled a
   -- linear-in-impl-count scan on a runtime dispatch hot path for nothing.
   let reqCount = lookupMethodReqCountOpt name tag
-  let fwdReqs = takeN (fromOption 0 reqCount) fwdReqs0
+  let fwdReqs = takeN (optionOr 0 reqCount) fwdReqs0
   if awaitsArgs narrowed then
     match specializeDefault env name tag reqCount implRoutes narrowed
       Some specialized => applyDicts env specialized methodRoutes
@@ -2329,7 +2329,7 @@ declImplEntries _ _ _ = []
 
 implMethodEntry : EvalEnv (Value e) -> List ((String, String, String), List Int) -> TyConOrigin -> String -> List Ty -> ImplMethod -> (String, (Int, Value e))
 implMethodEntry env disp o ifaceName typeArgs (ImplMethod mname pats body) =
-  let tag = fromOption noneHeadTag (headTyconHead typeArgs)
+  let tag = optionOr noneHeadTag (headTyconHead typeArgs)
   let key = implRouteKeyWord o ifaceName typeArgs None
   -- #1113 Phase 4: `o` is the impl's own view of WHICH interface it implements
   -- (resolve's `fillIfaceOccOrigin`), so `ifaceIdentity o ifaceName` is the same

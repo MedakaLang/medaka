@@ -111,7 +111,7 @@ has key m = isSome (get key m)
    0 -}
 export
 findWithDefault : (Eq k, Hashable k) => v -> k -> HashMap k v -> v
-findWithDefault d key m = fromOption d (get key m)
+findWithDefault d key m = optionOr d (get key m)
 
 -- ── Bucket helpers (for insert/delete) ──────────────────────────────────
 
@@ -377,7 +377,7 @@ prop "Index HashMap agrees with get on present keys" (xs : List (Int, Int)) =
 (DTypeSig true "has" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyCon "Bool")))))
 (DFunDef false "has" ((PVar "key") (PVar "m")) (EApp (EVar "isSome") (EApp (EApp (EVar "get") (EVar "key")) (EVar "m"))))
 (DTypeSig true "findWithDefault" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyVar "v") (TyFun (TyVar "k") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyVar "v"))))))
-(DFunDef false "findWithDefault" ((PVar "d") (PVar "key") (PVar "m")) (EApp (EApp (EVar "fromOption") (EVar "d")) (EApp (EApp (EVar "get") (EVar "key")) (EVar "m"))))
+(DFunDef false "findWithDefault" ((PVar "d") (PVar "key") (PVar "m")) (EApp (EApp (EVar "optionOr") (EVar "d")) (EApp (EApp (EVar "get") (EVar "key")) (EVar "m"))))
 (DTypeSig false "bucketHas" (TyConstrained ((cstr "Eq" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyCon "Bool")))))
 (DFunDef false "bucketHas" (PWild (PList)) (EVar "False"))
 (DFunDef false "bucketHas" ((PVar "key") (PCons (PTuple (PVar "k") PWild) (PVar "rest"))) (EIf (EBinOp "==" (EVar "key") (EVar "k")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EVar "bucketHas") (EVar "key")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -461,7 +461,7 @@ prop "Index HashMap agrees with get on present keys" (xs : List (Int, Int)) =
 (DTypeSig true "has" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyCon "Bool")))))
 (DFunDef false "has" ((PVar "key") (PVar "m")) (EApp (EVar "isSome") (EApp (EApp (EDictApp "get") (EVar "key")) (EVar "m"))))
 (DTypeSig true "findWithDefault" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyVar "v") (TyFun (TyVar "k") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyVar "v"))))))
-(DFunDef false "findWithDefault" ((PVar "d") (PVar "key") (PVar "m")) (EApp (EApp (EVar "fromOption") (EVar "d")) (EApp (EApp (EDictApp "get") (EVar "key")) (EVar "m"))))
+(DFunDef false "findWithDefault" ((PVar "d") (PVar "key") (PVar "m")) (EApp (EApp (EVar "optionOr") (EVar "d")) (EApp (EApp (EDictApp "get") (EVar "key")) (EVar "m"))))
 (DTypeSig false "bucketHas" (TyConstrained ((cstr "Eq" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyCon "Bool")))))
 (DFunDef false "bucketHas" (PWild (PList)) (EVar "False"))
 (DFunDef false "bucketHas" ((PVar "key") (PCons (PTuple (PVar "k") PWild) (PVar "rest"))) (EIf (EBinOp "==" (EVar "key") (EVar "k")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EDictApp "bucketHas") (EVar "key")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))

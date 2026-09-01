@@ -4,11 +4,11 @@
 -- `fillImplDefaults` is SAME-MODULE ONLY, so a method-less impl declared in a
 -- module OTHER than the interface's carries an empty method list.  `keyForSite`'s
 -- candidate scan requires method-name membership, so it never sees this impl and
--- answers `None`, and the caller's `fromOption tag (...)` supplies the bare head
+-- answers `None`, and the caller's `optionOr tag (...)` supplies the bare head
 -- tag `Box`.  That tag is not a hedge over a selector result: it is the ONLY
 -- source of the `<TAG>` in the emitter's `@mdk_default_<method>_<TAG>` symbol
 -- (`llvm_emit.emitDefaultRKey`, reached after `implFor` misses and
--- `emitGeneralRKey` misses).  A `b1` that deleted `fromOption tag` -- which every
+-- `emitGeneralRKey` misses).  A `b1` that deleted `optionOr tag` -- which every
 -- design document before RUN-P3-013 said it would -- breaks EVERY cross-module
 -- default-inheritance call site in the tree, and this fixture is the pin for it.
 --
@@ -22,7 +22,7 @@
 -- right up until the link fails.  The discrimination lives in this gate's
 -- Section 3 rows, which pin BOTH emitted symbols by name:
 --   * `@mdk_default_sz_Box`  -- the cross-module (no-row) arm, keyed on the tag
---     `fromOption tag` supplies;
+--     `optionOr tag` supplies;
 --   * `@mdk_impl_Cup_sz`     -- the same-module twin, whose specialized clause
 --     makes it an ordinary tagged impl.
 -- Their COEXISTENCE in one program is the point: one source shape, two routes,

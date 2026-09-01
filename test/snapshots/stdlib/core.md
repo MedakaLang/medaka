@@ -1,5 +1,5 @@
 # META
-source_lines=1858
+source_lines=1912
 stages=DESUGAR,MARK
 # SOURCE
 {- core.mdk — the foundation every other Medaka module rests on.
@@ -828,13 +828,18 @@ export impl Mappable (Result e) where
   map _ (Err x) = Err x
 
 {- | Replace every element of a wrapped value with a constant, keeping the
-   structure — Haskell's `$>`.  `replaceWith fa b == map (const b) fa`.
+   structure — Haskell's `<$`.  `mapConst b fa == map (const b) fa`.
 
-   > replaceWith (Some 5) 9
+   Value-first/data-last, like every other prelude combinator: the argument
+   the name is about comes first, and the container comes last so partial
+   application composes (#2306 E-2 renamed and reordered this from
+   `replaceWith : f a -> b -> f b`).
+
+   > mapConst 9 (Some 5)
    Some 9 -}
 export
-replaceWith : Mappable f => f a -> b -> f b
-replaceWith fa b = map (_ => b) fa
+mapConst : Mappable f => b -> f a -> f b
+mapConst b fa = map (_ => b) fa
 
 {- | `Mappable` plus the ability to lift a plain value and apply a wrapped
    function to a wrapped argument.  Laws (identity, homomorphism,
@@ -949,12 +954,18 @@ filterThen f (x::xs) = andThen
 {- | Run an effectful action for each element, in order, discarding the
    per-element results.  Haskell's `traverse_`/`for_` specialised to `List`.
 
-   > forEach [1, 2, 3] (x => Some ())
+   Fn-first/data-last, matching `find`/`count`/`any`/`all`/`filterThen`
+   (#2306 E-1 reordered this from `List a -> (a -> m Unit) -> m Unit`).  The
+   doctest below is also the PIN for that order: a reorder is silent wherever
+   both arguments still typecheck, but a lambda is not a `List`, so this line
+   fails to typecheck under the old signature.
+
+   > forEach (x => Some ()) [1, 2, 3]
    Some () -}
 export
-forEach : Thenable m => List a -> (a -> <e> m Unit) -> <e> m Unit
-forEach [] _ = pure ()
-forEach (x::xs) f = andThen (f x) (_ => forEach xs f)
+forEach : Thenable m => (a -> <e> m Unit) -> List a -> <e> m Unit
+forEach _ [] = pure ()
+forEach f (x::xs) = andThen (f x) (_ => forEach f xs)
 
 {- | Run each action in a list, in order, discarding the results.  Haskell's
    `sequence_` specialised to `List`.
@@ -1466,14 +1477,29 @@ isNone (Some _) = False
 
 {- | Unwrap with a default for `None`.
 
-   > fromOption 0 (Some 42)
+   > optionOr 0 (Some 42)
    42
-   > fromOption 0 None
+   > optionOr 0 None
    0 -}
 export
-fromOption : a -> Option a -> a
-fromOption _ (Some a) = a
-fromOption d None = d
+optionOr : a -> Option a -> a
+optionOr _ (Some a) = a
+optionOr d None = d
+
+{- | Eliminate an `Option` by supplying a default for `None` and a function
+   for `Some`.  Named for what it eliminates (Haskell calls it `maybe`).
+
+   Lived in a published one-entry `option` module until the
+   0.1.0 surface freeze moved it beside its own type (#2306 I-2).
+
+   > option 0 (x => x + 1) (Some 41)
+   42
+   > option 0 (x => x + 1) None
+   0 -}
+export
+option : b -> (a -> <e> b) -> Option a -> <e> b
+option _ f (Some x) = f x
+option dflt _ None = dflt
 
 -- | Turn an `Option` into a `Result`, supplying the error for `None`.
 export
@@ -1504,11 +1530,26 @@ isErr (Err _) = True
 isErr (Ok _) = False
 
 {- | Unwrap with a default for `Err`.  Named distinctly from
-   `fromOption` so the two don't collide when both are in scope. -}
+   `optionOr` so the two don't collide when both are in scope. -}
 export
-fromResultOr : a -> Result e a -> a
-fromResultOr _ (Ok a) = a
-fromResultOr d (Err _) = d
+resultOr : a -> Result e a -> a
+resultOr _ (Ok a) = a
+resultOr d (Err _) = d
+
+{- | Eliminate a `Result` by supplying a handler for `Err` and a handler for
+   `Ok`.  Named for what it eliminates (Haskell calls it `either`).
+
+   Lived in a published one-entry `result` module until the
+   0.1.0 surface freeze moved it beside its own type (#2306 I-2).
+
+   > result (e => 0) (x => x + 1) (Ok 41)
+   42
+   > result (e => e) (x => x + 1) (Err 7)
+   7 -}
+export
+result : (e -> <eff> c) -> (a -> <eff> c) -> Result e a -> <eff> c
+result _ onOk (Ok x) = onOk x
+result onErr _ (Err e) = onErr e
 
 {- | Apply a function to the `Err` side, leaving `Ok` alone.  The `Ok`
    analogue is just `map` from `Mappable (Result e)`. -}
@@ -1739,11 +1780,24 @@ prop "length matches a counting fold" (xs : List Int) =
 prop "any/all duality" (xs : List Int) =
   any (x => x > 0) xs == not (all (x => x <= 0) xs)
 
-prop "fromOption d (Some x) == x" (x : Int) (d : Int) =
-  fromOption d (Some x) == x
+prop "optionOr d (Some x) == x" (x : Int) (d : Int) = optionOr d (Some x) == x
 
 prop "toResult/fromResult round-trip on Some" (x : Int) =
   eq (fromResult (toResult "missing" (Some x))) (Some x)
+
+-- The four props below came in with `option`/`result` from the one-entry
+-- modules that #2306 I-2 folded into core.
+prop "option dflt f (Some x) == f x" (x : Int) (d : Int) =
+  option d (n => n * 2) (Some x) == x * 2
+
+prop "option dflt f None == dflt" (d : Int) =
+  option d (n => n * 2) (None : Option Int) == d
+
+prop "result onErr onOk (Ok x) == onOk x" (x : Int) =
+  result (e => 0) (n => n * 2) (Ok x) == x * 2
+
+prop "result onErr onOk (Err e) == onErr e" (e : Int) =
+  result (n => n * 2) (n => 0) (Err e : Result Int Int) == e * 2
 
 prop "Ord (List a) is reflexive" (xs : List Int) = match compare xs xs
   Eq => True
@@ -2010,8 +2064,8 @@ prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
 (DImpl true "Mappable" ((TyCon "List")) () ((im "map" (PWild (PList)) (EListLit)) (im "map" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (EBinOp "::" (EApp (EVar "f") (EVar "x")) (EApp (EApp (EVar "map") (EVar "f")) (EVar "xs"))))))
 (DImpl true "Mappable" ((TyCon "Option")) () ((im "map" ((PVar "f") (PCon "Some" (PVar "a"))) (EApp (EVar "Some") (EApp (EVar "f") (EVar "a")))) (im "map" (PWild (PCon "None")) (EVar "None"))))
 (DImpl true "Mappable" ((TyApp (TyCon "Result") (TyVar "e"))) () ((im "map" ((PVar "f") (PCon "Ok" (PVar "a"))) (EApp (EVar "Ok") (EApp (EVar "f") (EVar "a")))) (im "map" (PWild (PCon "Err" (PVar "x"))) (EApp (EVar "Err") (EVar "x")))))
-(DTypeSig true "replaceWith" (TyConstrained ((cstr "Mappable" (TyVar "f"))) (TyFun (TyApp (TyVar "f") (TyVar "a")) (TyFun (TyVar "b") (TyApp (TyVar "f") (TyVar "b"))))))
-(DFunDef false "replaceWith" ((PVar "fa") (PVar "b")) (EApp (EApp (EVar "map") (ELam (PWild) (EVar "b"))) (EVar "fa")))
+(DTypeSig true "mapConst" (TyConstrained ((cstr "Mappable" (TyVar "f"))) (TyFun (TyVar "b") (TyFun (TyApp (TyVar "f") (TyVar "a")) (TyApp (TyVar "f") (TyVar "b"))))))
+(DFunDef false "mapConst" ((PVar "b") (PVar "fa")) (EApp (EApp (EVar "map") (ELam (PWild) (EVar "b"))) (EVar "fa")))
 (DInterface true false "Applicative" ("f") ((super "Mappable" ("f"))) ((imethod "pure" (TyFun (TyVar "a") (TyApp (TyVar "f") (TyVar "a"))) None) (imethod "ap" (TyFun (TyApp (TyVar "f") (TyFun (TyVar "a") (TyVar "b"))) (TyFun (TyApp (TyVar "f") (TyVar "a")) (TyApp (TyVar "f") (TyVar "b")))) None)))
 (DImpl true "Applicative" ((TyCon "List")) () ((im "pure" ((PVar "a")) (EListLit (EVar "a"))) (im "ap" ((PList) PWild) (EListLit)) (im "ap" ((PCons (PVar "f") (PVar "fs")) (PVar "xs")) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "f")) (EVar "xs")) (EApp (EApp (EVar "ap") (EVar "fs")) (EVar "xs"))))))
 (DImpl true "Applicative" ((TyCon "Option")) () ((im "pure" ((PVar "a")) (EApp (EVar "Some") (EVar "a"))) (im "ap" ((PCon "None") PWild) (EVar "None")) (im "ap" (PWild (PCon "None")) (EVar "None")) (im "ap" ((PCon "Some" (PVar "f")) (PCon "Some" (PVar "a"))) (EApp (EVar "Some") (EApp (EVar "f") (EVar "a"))))))
@@ -2037,9 +2091,9 @@ prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
 (DTypeSig true "filterThen" (TyConstrained ((cstr "Thenable" (TyVar "m"))) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyApp (TyVar "m") (TyCon "Bool")))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyVar "m") (TyApp (TyCon "List") (TyVar "a"))))))))
 (DFunDef false "filterThen" (PWild (PList)) (EApp (EVar "pure") (EListLit)))
 (DFunDef false "filterThen" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "andThen") (EApp (EVar "f") (EVar "x"))) (ELam ((PVar "keep")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "filterThen") (EVar "f")) (EVar "xs"))) (ELam ((PVar "rest")) (EApp (EVar "pure") (EIf (EVar "keep") (EBinOp "::" (EVar "x") (EVar "rest")) (EVar "rest"))))))))
-(DTypeSig true "forEach" (TyConstrained ((cstr "Thenable" (TyVar "m"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyApp (TyVar "m") (TyCon "Unit")))) (TyEffect () (Some "e") (TyApp (TyVar "m") (TyCon "Unit")))))))
-(DFunDef false "forEach" ((PList) PWild) (EApp (EVar "pure") (ELit LUnit)))
-(DFunDef false "forEach" ((PCons (PVar "x") (PVar "xs")) (PVar "f")) (EApp (EApp (EVar "andThen") (EApp (EVar "f") (EVar "x"))) (ELam (PWild) (EApp (EApp (EVar "forEach") (EVar "xs")) (EVar "f")))))
+(DTypeSig true "forEach" (TyConstrained ((cstr "Thenable" (TyVar "m"))) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyApp (TyVar "m") (TyCon "Unit")))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyVar "m") (TyCon "Unit")))))))
+(DFunDef false "forEach" (PWild (PList)) (EApp (EVar "pure") (ELit LUnit)))
+(DFunDef false "forEach" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "andThen") (EApp (EVar "f") (EVar "x"))) (ELam (PWild) (EApp (EApp (EVar "forEach") (EVar "f")) (EVar "xs")))))
 (DTypeSig true "runEach" (TyConstrained ((cstr "Thenable" (TyVar "m"))) (TyFun (TyApp (TyCon "List") (TyApp (TyVar "m") (TyVar "a"))) (TyApp (TyVar "m") (TyCon "Unit")))))
 (DFunDef false "runEach" ((PList)) (EApp (EVar "pure") (ELit LUnit)))
 (DFunDef false "runEach" ((PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "andThen") (EVar "x")) (ELam (PWild) (EApp (EVar "runEach") (EVar "xs")))))
@@ -2118,9 +2172,12 @@ prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
 (DTypeSig true "isNone" (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyCon "Bool")))
 (DFunDef false "isNone" ((PCon "None")) (EVar "True"))
 (DFunDef false "isNone" ((PCon "Some" PWild)) (EVar "False"))
-(DTypeSig true "fromOption" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyVar "a"))))
-(DFunDef false "fromOption" (PWild (PCon "Some" (PVar "a"))) (EVar "a"))
-(DFunDef false "fromOption" ((PVar "d") (PCon "None")) (EVar "d"))
+(DTypeSig true "optionOr" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyVar "a"))))
+(DFunDef false "optionOr" (PWild (PCon "Some" (PVar "a"))) (EVar "a"))
+(DFunDef false "optionOr" ((PVar "d") (PCon "None")) (EVar "d"))
+(DTypeSig true "option" (TyFun (TyVar "b") (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "b"))) (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyEffect () (Some "e") (TyVar "b"))))))
+(DFunDef false "option" (PWild (PVar "f") (PCon "Some" (PVar "x"))) (EApp (EVar "f") (EVar "x")))
+(DFunDef false "option" ((PVar "dflt") PWild (PCon "None")) (EVar "dflt"))
 (DTypeSig true "toResult" (TyFun (TyVar "e") (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a")))))
 (DFunDef false "toResult" (PWild (PCon "Some" (PVar "a"))) (EApp (EVar "Ok") (EVar "a")))
 (DFunDef false "toResult" ((PVar "e") (PCon "None")) (EApp (EVar "Err") (EVar "e")))
@@ -2133,9 +2190,12 @@ prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
 (DTypeSig true "isErr" (TyFun (TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a")) (TyCon "Bool")))
 (DFunDef false "isErr" ((PCon "Err" PWild)) (EVar "True"))
 (DFunDef false "isErr" ((PCon "Ok" PWild)) (EVar "False"))
-(DTypeSig true "fromResultOr" (TyFun (TyVar "a") (TyFun (TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a")) (TyVar "a"))))
-(DFunDef false "fromResultOr" (PWild (PCon "Ok" (PVar "a"))) (EVar "a"))
-(DFunDef false "fromResultOr" ((PVar "d") (PCon "Err" PWild)) (EVar "d"))
+(DTypeSig true "resultOr" (TyFun (TyVar "a") (TyFun (TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a")) (TyVar "a"))))
+(DFunDef false "resultOr" (PWild (PCon "Ok" (PVar "a"))) (EVar "a"))
+(DFunDef false "resultOr" ((PVar "d") (PCon "Err" PWild)) (EVar "d"))
+(DTypeSig true "result" (TyFun (TyFun (TyVar "e") (TyEffect () (Some "eff") (TyVar "c"))) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "eff") (TyVar "c"))) (TyFun (TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a")) (TyEffect () (Some "eff") (TyVar "c"))))))
+(DFunDef false "result" (PWild (PVar "onOk") (PCon "Ok" (PVar "x"))) (EApp (EVar "onOk") (EVar "x")))
+(DFunDef false "result" ((PVar "onErr") PWild (PCon "Err" (PVar "e"))) (EApp (EVar "onErr") (EVar "e")))
 (DTypeSig true "mapErr" (TyFun (TyFun (TyVar "e") (TyVar "f")) (TyFun (TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a")) (TyApp (TyApp (TyCon "Result") (TyVar "f")) (TyVar "a")))))
 (DFunDef false "mapErr" ((PVar "f") (PCon "Err" (PVar "e"))) (EApp (EVar "Err") (EApp (EVar "f") (EVar "e"))))
 (DFunDef false "mapErr" (PWild (PCon "Ok" (PVar "a"))) (EApp (EVar "Ok") (EVar "a")))
@@ -2194,8 +2254,12 @@ prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
 (DProp false "filter . filter p == filter p" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "filter") (ELam ((PVar "x")) (EBinOp ">" (EVar "x") (ELit (LInt 0))))) (EApp (EApp (EVar "filter") (ELam ((PVar "x")) (EBinOp ">" (EVar "x") (ELit (LInt 0))))) (EVar "xs")))) (EApp (EApp (EVar "filter") (ELam ((PVar "x")) (EBinOp ">" (EVar "x") (ELit (LInt 0))))) (EVar "xs"))))
 (DProp false "length matches a counting fold" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBinOp "==" (EApp (EVar "length") (EVar "xs")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") PWild) (EBinOp "+" (EVar "acc") (ELit (LInt 1))))) (ELit (LInt 0))) (EVar "xs"))))
 (DProp false "any/all duality" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBinOp "==" (EApp (EApp (EVar "any") (ELam ((PVar "x")) (EBinOp ">" (EVar "x") (ELit (LInt 0))))) (EVar "xs")) (EApp (EVar "not") (EApp (EApp (EVar "all") (ELam ((PVar "x")) (EBinOp "<=" (EVar "x") (ELit (LInt 0))))) (EVar "xs")))))
-(DProp false "fromOption d (Some x) == x" ((pp "x" (TyCon "Int")) (pp "d" (TyCon "Int"))) (EBinOp "==" (EApp (EApp (EVar "fromOption") (EVar "d")) (EApp (EVar "Some") (EVar "x"))) (EVar "x")))
+(DProp false "optionOr d (Some x) == x" ((pp "x" (TyCon "Int")) (pp "d" (TyCon "Int"))) (EBinOp "==" (EApp (EApp (EVar "optionOr") (EVar "d")) (EApp (EVar "Some") (EVar "x"))) (EVar "x")))
 (DProp false "toResult/fromResult round-trip on Some" ((pp "x" (TyCon "Int"))) (EApp (EApp (EVar "eq") (EApp (EVar "fromResult") (EApp (EApp (EVar "toResult") (ELit (LString "missing"))) (EApp (EVar "Some") (EVar "x"))))) (EApp (EVar "Some") (EVar "x"))))
+(DProp false "option dflt f (Some x) == f x" ((pp "x" (TyCon "Int")) (pp "d" (TyCon "Int"))) (EBinOp "==" (EApp (EApp (EApp (EVar "option") (EVar "d")) (ELam ((PVar "n")) (EBinOp "*" (EVar "n") (ELit (LInt 2))))) (EApp (EVar "Some") (EVar "x"))) (EBinOp "*" (EVar "x") (ELit (LInt 2)))))
+(DProp false "option dflt f None == dflt" ((pp "d" (TyCon "Int"))) (EBinOp "==" (EApp (EApp (EApp (EVar "option") (EVar "d")) (ELam ((PVar "n")) (EBinOp "*" (EVar "n") (ELit (LInt 2))))) (EAnnot (EVar "None") (TyApp (TyCon "Option") (TyCon "Int")))) (EVar "d")))
+(DProp false "result onErr onOk (Ok x) == onOk x" ((pp "x" (TyCon "Int"))) (EBinOp "==" (EApp (EApp (EApp (EVar "result") (ELam ((PVar "e")) (ELit (LInt 0)))) (ELam ((PVar "n")) (EBinOp "*" (EVar "n") (ELit (LInt 2))))) (EApp (EVar "Ok") (EVar "x"))) (EBinOp "*" (EVar "x") (ELit (LInt 2)))))
+(DProp false "result onErr onOk (Err e) == onErr e" ((pp "e" (TyCon "Int"))) (EBinOp "==" (EApp (EApp (EApp (EVar "result") (ELam ((PVar "n")) (EBinOp "*" (EVar "n") (ELit (LInt 2))))) (ELam ((PVar "n")) (ELit (LInt 0)))) (EAnnot (EApp (EVar "Err") (EVar "e")) (TyApp (TyApp (TyCon "Result") (TyCon "Int")) (TyCon "Int")))) (EBinOp "*" (EVar "e") (ELit (LInt 2)))))
 (DProp false "Ord (List a) is reflexive" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EMatch (EApp (EApp (EVar "compare") (EVar "xs")) (EVar "xs")) (arm (PCon "Eq") () (EVar "True")) (arm PWild () (EVar "False"))))
 (DProp false "discard replaces the payload with Unit" ((pp "x" (TyCon "Int"))) (EApp (EApp (EVar "eq") (EApp (EVar "discard") (EApp (EVar "Some") (EVar "x")))) (EApp (EVar "Some") (ELit LUnit))))
 (DProp false "on agrees with its hand expansion" ((pp "a" (TyCon "Int")) (pp "b" (TyCon "Int"))) (EBinOp "==" (EApp (EApp (EApp (EApp (EVar "on") (ELam ((PVar "x") (PVar "y")) (EBinOp "+" (EVar "x") (EVar "y")))) (ELam ((PVar "n")) (EBinOp "*" (EVar "n") (ELit (LInt 2))))) (EVar "a")) (EVar "b")) (EBinOp "+" (EBinOp "*" (EVar "a") (ELit (LInt 2))) (EBinOp "*" (EVar "b") (ELit (LInt 2))))))
@@ -2372,8 +2436,8 @@ prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
 (DImpl true "Mappable" ((TyCon "List")) () ((im "map" (PWild (PList)) (EListLit)) (im "map" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (EBinOp "::" (EApp (EVar "f") (EVar "x")) (EApp (EApp (EMethodRef "map") (EVar "f")) (EVar "xs"))))))
 (DImpl true "Mappable" ((TyCon "Option")) () ((im "map" ((PVar "f") (PCon "Some" (PVar "a"))) (EApp (EVar "Some") (EApp (EVar "f") (EVar "a")))) (im "map" (PWild (PCon "None")) (EVar "None"))))
 (DImpl true "Mappable" ((TyApp (TyCon "Result") (TyVar "e"))) () ((im "map" ((PVar "f") (PCon "Ok" (PVar "a"))) (EApp (EVar "Ok") (EApp (EVar "f") (EVar "a")))) (im "map" (PWild (PCon "Err" (PVar "x"))) (EApp (EVar "Err") (EVar "x")))))
-(DTypeSig true "replaceWith" (TyConstrained ((cstr "Mappable" (TyVar "f"))) (TyFun (TyApp (TyVar "f") (TyVar "a")) (TyFun (TyVar "b") (TyApp (TyVar "f") (TyVar "b"))))))
-(DFunDef false "replaceWith" ((PVar "fa") (PVar "b")) (EApp (EApp (EMethodRef "map") (ELam (PWild) (EVar "b"))) (EVar "fa")))
+(DTypeSig true "mapConst" (TyConstrained ((cstr "Mappable" (TyVar "f"))) (TyFun (TyVar "b") (TyFun (TyApp (TyVar "f") (TyVar "a")) (TyApp (TyVar "f") (TyVar "b"))))))
+(DFunDef false "mapConst" ((PVar "b") (PVar "fa")) (EApp (EApp (EMethodRef "map") (ELam (PWild) (EVar "b"))) (EVar "fa")))
 (DInterface true false "Applicative" ("f") ((super "Mappable" ("f"))) ((imethod "pure" (TyFun (TyVar "a") (TyApp (TyVar "f") (TyVar "a"))) None) (imethod "ap" (TyFun (TyApp (TyVar "f") (TyFun (TyVar "a") (TyVar "b"))) (TyFun (TyApp (TyVar "f") (TyVar "a")) (TyApp (TyVar "f") (TyVar "b")))) None)))
 (DImpl true "Applicative" ((TyCon "List")) () ((im "pure" ((PVar "a")) (EListLit (EVar "a"))) (im "ap" ((PList) PWild) (EListLit)) (im "ap" ((PCons (PVar "f") (PVar "fs")) (PVar "xs")) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "f")) (EVar "xs")) (EApp (EApp (EMethodRef "ap") (EVar "fs")) (EVar "xs"))))))
 (DImpl true "Applicative" ((TyCon "Option")) () ((im "pure" ((PVar "a")) (EApp (EVar "Some") (EVar "a"))) (im "ap" ((PCon "None") PWild) (EVar "None")) (im "ap" (PWild (PCon "None")) (EVar "None")) (im "ap" ((PCon "Some" (PVar "f")) (PCon "Some" (PVar "a"))) (EApp (EVar "Some") (EApp (EVar "f") (EVar "a"))))))
@@ -2399,9 +2463,9 @@ prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
 (DTypeSig true "filterThen" (TyConstrained ((cstr "Thenable" (TyVar "m"))) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyApp (TyVar "m") (TyCon "Bool")))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyVar "m") (TyApp (TyCon "List") (TyVar "a"))))))))
 (DFunDef false "filterThen" (PWild (PList)) (EApp (EMethodRef "pure") (EListLit)))
 (DFunDef false "filterThen" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "f") (EVar "x"))) (ELam ((PVar "keep")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EDictApp "filterThen") (EVar "f")) (EVar "xs"))) (ELam ((PVar "rest")) (EApp (EMethodRef "pure") (EIf (EVar "keep") (EBinOp "::" (EVar "x") (EVar "rest")) (EVar "rest"))))))))
-(DTypeSig true "forEach" (TyConstrained ((cstr "Thenable" (TyVar "m"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyApp (TyVar "m") (TyCon "Unit")))) (TyEffect () (Some "e") (TyApp (TyVar "m") (TyCon "Unit")))))))
-(DFunDef false "forEach" ((PList) PWild) (EApp (EMethodRef "pure") (ELit LUnit)))
-(DFunDef false "forEach" ((PCons (PVar "x") (PVar "xs")) (PVar "f")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "f") (EVar "x"))) (ELam (PWild) (EApp (EApp (EDictApp "forEach") (EVar "xs")) (EVar "f")))))
+(DTypeSig true "forEach" (TyConstrained ((cstr "Thenable" (TyVar "m"))) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyApp (TyVar "m") (TyCon "Unit")))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyVar "m") (TyCon "Unit")))))))
+(DFunDef false "forEach" (PWild (PList)) (EApp (EMethodRef "pure") (ELit LUnit)))
+(DFunDef false "forEach" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "f") (EVar "x"))) (ELam (PWild) (EApp (EApp (EDictApp "forEach") (EVar "f")) (EVar "xs")))))
 (DTypeSig true "runEach" (TyConstrained ((cstr "Thenable" (TyVar "m"))) (TyFun (TyApp (TyCon "List") (TyApp (TyVar "m") (TyVar "a"))) (TyApp (TyVar "m") (TyCon "Unit")))))
 (DFunDef false "runEach" ((PList)) (EApp (EMethodRef "pure") (ELit LUnit)))
 (DFunDef false "runEach" ((PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EMethodRef "andThen") (EVar "x")) (ELam (PWild) (EApp (EDictApp "runEach") (EVar "xs")))))
@@ -2480,9 +2544,12 @@ prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
 (DTypeSig true "isNone" (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyCon "Bool")))
 (DFunDef false "isNone" ((PCon "None")) (EVar "True"))
 (DFunDef false "isNone" ((PCon "Some" PWild)) (EVar "False"))
-(DTypeSig true "fromOption" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyVar "a"))))
-(DFunDef false "fromOption" (PWild (PCon "Some" (PVar "a"))) (EVar "a"))
-(DFunDef false "fromOption" ((PVar "d") (PCon "None")) (EVar "d"))
+(DTypeSig true "optionOr" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyVar "a"))))
+(DFunDef false "optionOr" (PWild (PCon "Some" (PVar "a"))) (EVar "a"))
+(DFunDef false "optionOr" ((PVar "d") (PCon "None")) (EVar "d"))
+(DTypeSig true "option" (TyFun (TyVar "b") (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "b"))) (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyEffect () (Some "e") (TyVar "b"))))))
+(DFunDef false "option" (PWild (PVar "f") (PCon "Some" (PVar "x"))) (EApp (EVar "f") (EVar "x")))
+(DFunDef false "option" ((PVar "dflt") PWild (PCon "None")) (EVar "dflt"))
 (DTypeSig true "toResult" (TyFun (TyVar "e") (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a")))))
 (DFunDef false "toResult" (PWild (PCon "Some" (PVar "a"))) (EApp (EVar "Ok") (EVar "a")))
 (DFunDef false "toResult" ((PVar "e") (PCon "None")) (EApp (EVar "Err") (EVar "e")))
@@ -2495,9 +2562,12 @@ prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
 (DTypeSig true "isErr" (TyFun (TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a")) (TyCon "Bool")))
 (DFunDef false "isErr" ((PCon "Err" PWild)) (EVar "True"))
 (DFunDef false "isErr" ((PCon "Ok" PWild)) (EVar "False"))
-(DTypeSig true "fromResultOr" (TyFun (TyVar "a") (TyFun (TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a")) (TyVar "a"))))
-(DFunDef false "fromResultOr" (PWild (PCon "Ok" (PVar "a"))) (EVar "a"))
-(DFunDef false "fromResultOr" ((PVar "d") (PCon "Err" PWild)) (EVar "d"))
+(DTypeSig true "resultOr" (TyFun (TyVar "a") (TyFun (TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a")) (TyVar "a"))))
+(DFunDef false "resultOr" (PWild (PCon "Ok" (PVar "a"))) (EVar "a"))
+(DFunDef false "resultOr" ((PVar "d") (PCon "Err" PWild)) (EVar "d"))
+(DTypeSig true "result" (TyFun (TyFun (TyVar "e") (TyEffect () (Some "eff") (TyVar "c"))) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "eff") (TyVar "c"))) (TyFun (TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a")) (TyEffect () (Some "eff") (TyVar "c"))))))
+(DFunDef false "result" (PWild (PVar "onOk") (PCon "Ok" (PVar "x"))) (EApp (EVar "onOk") (EVar "x")))
+(DFunDef false "result" ((PVar "onErr") PWild (PCon "Err" (PVar "e"))) (EApp (EVar "onErr") (EVar "e")))
 (DTypeSig true "mapErr" (TyFun (TyFun (TyVar "e") (TyVar "f")) (TyFun (TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a")) (TyApp (TyApp (TyCon "Result") (TyVar "f")) (TyVar "a")))))
 (DFunDef false "mapErr" ((PVar "f") (PCon "Err" (PVar "e"))) (EApp (EVar "Err") (EApp (EVar "f") (EVar "e"))))
 (DFunDef false "mapErr" (PWild (PCon "Ok" (PVar "a"))) (EApp (EVar "Ok") (EVar "a")))
@@ -2556,8 +2626,12 @@ prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
 (DProp false "filter . filter p == filter p" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EMethodRef "filter") (ELam ((PVar "x")) (EBinOp ">" (EVar "x") (ELit (LInt 0))))) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "x")) (EBinOp ">" (EVar "x") (ELit (LInt 0))))) (EVar "xs")))) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "x")) (EBinOp ">" (EVar "x") (ELit (LInt 0))))) (EVar "xs"))))
 (DProp false "length matches a counting fold" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBinOp "==" (EApp (EMethodRef "length") (EVar "xs")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") PWild) (EBinOp "+" (EVar "acc") (ELit (LInt 1))))) (ELit (LInt 0))) (EVar "xs"))))
 (DProp false "any/all duality" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBinOp "==" (EApp (EApp (EDictApp "any") (ELam ((PVar "x")) (EBinOp ">" (EVar "x") (ELit (LInt 0))))) (EVar "xs")) (EApp (EVar "not") (EApp (EApp (EDictApp "all") (ELam ((PVar "x")) (EBinOp "<=" (EVar "x") (ELit (LInt 0))))) (EVar "xs")))))
-(DProp false "fromOption d (Some x) == x" ((pp "x" (TyCon "Int")) (pp "d" (TyCon "Int"))) (EBinOp "==" (EApp (EApp (EVar "fromOption") (EVar "d")) (EApp (EVar "Some") (EVar "x"))) (EVar "x")))
+(DProp false "optionOr d (Some x) == x" ((pp "x" (TyCon "Int")) (pp "d" (TyCon "Int"))) (EBinOp "==" (EApp (EApp (EVar "optionOr") (EVar "d")) (EApp (EVar "Some") (EVar "x"))) (EVar "x")))
 (DProp false "toResult/fromResult round-trip on Some" ((pp "x" (TyCon "Int"))) (EApp (EApp (EMethodRef "eq") (EApp (EVar "fromResult") (EApp (EApp (EVar "toResult") (ELit (LString "missing"))) (EApp (EVar "Some") (EVar "x"))))) (EApp (EVar "Some") (EVar "x"))))
+(DProp false "option dflt f (Some x) == f x" ((pp "x" (TyCon "Int")) (pp "d" (TyCon "Int"))) (EBinOp "==" (EApp (EApp (EApp (EVar "option") (EVar "d")) (ELam ((PVar "n")) (EBinOp "*" (EVar "n") (ELit (LInt 2))))) (EApp (EVar "Some") (EVar "x"))) (EBinOp "*" (EVar "x") (ELit (LInt 2)))))
+(DProp false "option dflt f None == dflt" ((pp "d" (TyCon "Int"))) (EBinOp "==" (EApp (EApp (EApp (EVar "option") (EVar "d")) (ELam ((PVar "n")) (EBinOp "*" (EVar "n") (ELit (LInt 2))))) (EAnnot (EVar "None") (TyApp (TyCon "Option") (TyCon "Int")))) (EVar "d")))
+(DProp false "result onErr onOk (Ok x) == onOk x" ((pp "x" (TyCon "Int"))) (EBinOp "==" (EApp (EApp (EApp (EVar "result") (ELam ((PVar "e")) (ELit (LInt 0)))) (ELam ((PVar "n")) (EBinOp "*" (EVar "n") (ELit (LInt 2))))) (EApp (EVar "Ok") (EVar "x"))) (EBinOp "*" (EVar "x") (ELit (LInt 2)))))
+(DProp false "result onErr onOk (Err e) == onErr e" ((pp "e" (TyCon "Int"))) (EBinOp "==" (EApp (EApp (EApp (EVar "result") (ELam ((PVar "n")) (EBinOp "*" (EVar "n") (ELit (LInt 2))))) (ELam ((PVar "n")) (ELit (LInt 0)))) (EAnnot (EApp (EVar "Err") (EVar "e")) (TyApp (TyApp (TyCon "Result") (TyCon "Int")) (TyCon "Int")))) (EBinOp "*" (EVar "e") (ELit (LInt 2)))))
 (DProp false "Ord (List a) is reflexive" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "xs")) (EVar "xs")) (arm (PCon "Eq") () (EVar "True")) (arm PWild () (EVar "False"))))
 (DProp false "discard replaces the payload with Unit" ((pp "x" (TyCon "Int"))) (EApp (EApp (EMethodRef "eq") (EApp (EDictApp "discard") (EApp (EVar "Some") (EVar "x")))) (EApp (EVar "Some") (ELit LUnit))))
 (DProp false "on agrees with its hand expansion" ((pp "a" (TyCon "Int")) (pp "b" (TyCon "Int"))) (EBinOp "==" (EApp (EApp (EApp (EApp (EVar "on") (ELam ((PVar "x") (PVar "y")) (EBinOp "+" (EVar "x") (EVar "y")))) (ELam ((PVar "n")) (EBinOp "*" (EVar "n") (ELit (LInt 2))))) (EVar "a")) (EVar "b")) (EBinOp "+" (EBinOp "*" (EVar "a") (ELit (LInt 2))) (EBinOp "*" (EVar "b") (ELit (LInt 2))))))

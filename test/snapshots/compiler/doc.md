@@ -1,5 +1,5 @@
 # META
-source_lines=1078
+source_lines=1081
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/doc.mdk — the native `medaka doc` documentation extractor.
@@ -841,10 +841,13 @@ excludedLibraryModule moduleName = moduleName == "async"
 -- true.  Note it leaves the packet's own stated exception intact: `Int` has no
 -- `int` module in the set, so `impl Debug Int` still stays in `core`.
 --
--- Clause ordering matters and is not cosmetic: `Option`/`Result` ARE declared
--- (in `core.mdk`) while `option.mdk`/`result.mdk` also exist, so clause 1 keeps
--- their impls on `core` beside their `data` declaration rather than scattering
--- them to a module that merely operates on them.
+-- Clause ordering matters and is not cosmetic: a type that IS declared keeps
+-- its impls beside its `data` declaration rather than scattering them to a
+-- module that merely operates on it.  The original instance was `Option`/
+-- `Result`, declared in `core.mdk` while one-entry `option.mdk`/`result.mdk`
+-- also existed; #2306 I-2 deleted those two modules, so that pair no longer
+-- exercises the ordering.  The rule is unchanged and still load-bearing for
+-- any core-declared type an operating module merely mentions.
 export
 rebucketLibraryImpls : List ModuleDoc -> List ModuleDoc
 rebucketLibraryImpls mds =

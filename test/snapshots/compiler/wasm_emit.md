@@ -9128,7 +9128,7 @@ syntheticCtorArity name = trailingIntOf name
 typeCtorsOfW : List (String, String) -> OrdMap (List String) -> OrdMap (List String)
 typeCtorsOfW [] m = m
 typeCtorsOfW ((c, t)::rest) m =
-  typeCtorsOfW rest (omInsert t (c :: fromOption [] (omLookup t m)) m)
+  typeCtorsOfW rest (omInsert t (c :: optionOr [] (omLookup t m)) m)
 
 -- ctorName → dense per-type ordinal, for the USER path of `ctorOrdinal` only.
 -- Reproduces that path's formula
@@ -9185,7 +9185,7 @@ ctorsOfTypeDispatchW userFallback ty =
 -- `ctorsOfTypeDispatchW` — nothing left to keep in lockstep by hand.
 ctorsOfTypeIxW : OrdMap (List String) -> String -> List String
 ctorsOfTypeIxW tcm ty =
-  ctorsOfTypeDispatchW (t => fromOption [] (omLookup t tcm)) ty
+  ctorsOfTypeDispatchW (t => optionOr [] (omLookup t tcm)) ty
 
 ctorArity : Prog -> String -> Int
 ctorArity prog name = match omLookup name (indexCtorAritiesW (progIndex prog))
@@ -9266,7 +9266,7 @@ tupleTypeArity ty = trailingIntOf ty
 
 ctorsOfTypeUser : Prog -> String -> List String
 ctorsOfTypeUser prog ty =
-  fromOption [] (omLookup ty (indexTypeCtorsW (progIndex prog)))
+  optionOr [] (omLookup ty (indexTypeCtorsW (progIndex prog)))
 
 -- the number of ctors a type has (the br_table's slot count).
 typeCtorCount : Prog -> String -> Int
@@ -11745,7 +11745,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "syntheticCtorArity" ((PVar "name")) (EApp (EVar "trailingIntOf") (EVar "name")))
 (DTypeSig false "typeCtorsOfW" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "typeCtorsOfW" ((PList) (PVar "m")) (EVar "m"))
-(DFunDef false "typeCtorsOfW" ((PCons (PTuple (PVar "c") (PVar "t")) (PVar "rest")) (PVar "m")) (EApp (EApp (EVar "typeCtorsOfW") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "t")) (EBinOp "::" (EVar "c") (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "t")) (EVar "m"))))) (EVar "m"))))
+(DFunDef false "typeCtorsOfW" ((PCons (PTuple (PVar "c") (PVar "t")) (PVar "rest")) (PVar "m")) (EApp (EApp (EVar "typeCtorsOfW") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "t")) (EBinOp "::" (EVar "c") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "t")) (EVar "m"))))) (EVar "m"))))
 (DTypeSig false "ctorOrdsOfW" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int")))))))
 (DFunDef false "ctorOrdsOfW" ((PList) PWild PWild (PVar "m")) (EVar "m"))
 (DFunDef false "ctorOrdsOfW" ((PCons (PVar "ty") (PVar "rest")) (PVar "tym") (PVar "tcm") (PVar "m")) (EApp (EApp (EApp (EApp (EVar "ctorOrdsOfW") (EVar "rest")) (EVar "tym")) (EVar "tcm")) (EApp (EApp (EApp (EApp (EApp (EVar "indexCtorsW") (EVar "tym")) (EVar "ty")) (EApp (EApp (EVar "ctorsOfTypeIxW") (EVar "tcm")) (EVar "ty"))) (ELit (LInt 0))) (EVar "m"))))
@@ -11757,7 +11757,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "ctorsOfTypeDispatchW" (TyFun (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "ctorsOfTypeDispatchW" ((PVar "userFallback") (PVar "ty")) (EIf (EApp (EVar "isReservedType") (EVar "ty")) (EApp (EVar "reservedCtorsOfType") (EVar "ty")) (EIf (EBinOp "==" (EVar "ty") (ELit (LString "List"))) (EListLit (ELit (LString "Cons")) (ELit (LString "Nil"))) (EIf (EBinOp "==" (EVar "ty") (ELit (LString "Bool"))) (EListLit (ELit (LString "False")) (ELit (LString "True"))) (EIf (EApp (EVar "isTupleType") (EVar "ty")) (EListLit (EApp (EVar "tupleCtorName") (EApp (EVar "tupleTypeArity") (EVar "ty")))) (EApp (EVar "userFallback") (EVar "ty")))))))
 (DTypeSig false "ctorsOfTypeIxW" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "ctorsOfTypeIxW" ((PVar "tcm") (PVar "ty")) (EApp (EApp (EVar "ctorsOfTypeDispatchW") (ELam ((PVar "t")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "t")) (EVar "tcm"))))) (EVar "ty")))
+(DFunDef false "ctorsOfTypeIxW" ((PVar "tcm") (PVar "ty")) (EApp (EApp (EVar "ctorsOfTypeDispatchW") (ELam ((PVar "t")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "t")) (EVar "tcm"))))) (EVar "ty")))
 (DTypeSig false "ctorArity" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyCon "Int"))))
 (DFunDef false "ctorArity" ((PVar "prog") (PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EApp (EVar "indexCtorAritiesW") (EApp (EVar "progIndex") (EVar "prog")))) (arm (PCon "Some" (PVar "a")) () (EVar "a")) (arm (PCon "None") () (EIf (EApp (EVar "isSyntheticCtor") (EVar "name")) (EApp (EVar "syntheticCtorArity") (EVar "name")) (EApp (EVar "reservedCtorArity") (EVar "name"))))))
 (DTypeSig false "ctorTypeName" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyCon "String"))))
@@ -11777,7 +11777,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "tupleTypeArity" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "tupleTypeArity" ((PVar "ty")) (EApp (EVar "trailingIntOf") (EVar "ty")))
 (DTypeSig false "ctorsOfTypeUser" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "ctorsOfTypeUser" ((PVar "prog") (PVar "ty")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "ty")) (EApp (EVar "indexTypeCtorsW") (EApp (EVar "progIndex") (EVar "prog"))))))
+(DFunDef false "ctorsOfTypeUser" ((PVar "prog") (PVar "ty")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "ty")) (EApp (EVar "indexTypeCtorsW") (EApp (EVar "progIndex") (EVar "prog"))))))
 (DTypeSig false "typeCtorCount" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyCon "Int"))))
 (DFunDef false "typeCtorCount" ((PVar "prog") (PVar "ty")) (EApp (EVar "listLen") (EApp (EApp (EVar "ctorsOfType") (EVar "prog")) (EVar "ty"))))
 (DTypeSig false "switchTypeName" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "CTBranch")) (TyCon "String"))))
@@ -13985,7 +13985,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "syntheticCtorArity" ((PVar "name")) (EApp (EVar "trailingIntOf") (EVar "name")))
 (DTypeSig false "typeCtorsOfW" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "typeCtorsOfW" ((PList) (PVar "m")) (EVar "m"))
-(DFunDef false "typeCtorsOfW" ((PCons (PTuple (PVar "c") (PVar "t")) (PVar "rest")) (PVar "m")) (EApp (EApp (EVar "typeCtorsOfW") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "t")) (EBinOp "::" (EVar "c") (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "t")) (EVar "m"))))) (EVar "m"))))
+(DFunDef false "typeCtorsOfW" ((PCons (PTuple (PVar "c") (PVar "t")) (PVar "rest")) (PVar "m")) (EApp (EApp (EVar "typeCtorsOfW") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "t")) (EBinOp "::" (EVar "c") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "t")) (EVar "m"))))) (EVar "m"))))
 (DTypeSig false "ctorOrdsOfW" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int")))))))
 (DFunDef false "ctorOrdsOfW" ((PList) PWild PWild (PVar "m")) (EVar "m"))
 (DFunDef false "ctorOrdsOfW" ((PCons (PVar "ty") (PVar "rest")) (PVar "tym") (PVar "tcm") (PVar "m")) (EApp (EApp (EApp (EApp (EVar "ctorOrdsOfW") (EVar "rest")) (EVar "tym")) (EVar "tcm")) (EApp (EApp (EApp (EApp (EApp (EVar "indexCtorsW") (EVar "tym")) (EVar "ty")) (EApp (EApp (EVar "ctorsOfTypeIxW") (EVar "tcm")) (EVar "ty"))) (ELit (LInt 0))) (EVar "m"))))
@@ -13997,7 +13997,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "ctorsOfTypeDispatchW" (TyFun (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "ctorsOfTypeDispatchW" ((PVar "userFallback") (PVar "ty")) (EIf (EApp (EVar "isReservedType") (EVar "ty")) (EApp (EVar "reservedCtorsOfType") (EVar "ty")) (EIf (EBinOp "==" (EVar "ty") (ELit (LString "List"))) (EListLit (ELit (LString "Cons")) (ELit (LString "Nil"))) (EIf (EBinOp "==" (EVar "ty") (ELit (LString "Bool"))) (EListLit (ELit (LString "False")) (ELit (LString "True"))) (EIf (EApp (EVar "isTupleType") (EVar "ty")) (EListLit (EApp (EVar "tupleCtorName") (EApp (EVar "tupleTypeArity") (EVar "ty")))) (EApp (EVar "userFallback") (EVar "ty")))))))
 (DTypeSig false "ctorsOfTypeIxW" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "ctorsOfTypeIxW" ((PVar "tcm") (PVar "ty")) (EApp (EApp (EVar "ctorsOfTypeDispatchW") (ELam ((PVar "t")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "t")) (EVar "tcm"))))) (EVar "ty")))
+(DFunDef false "ctorsOfTypeIxW" ((PVar "tcm") (PVar "ty")) (EApp (EApp (EVar "ctorsOfTypeDispatchW") (ELam ((PVar "t")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "t")) (EVar "tcm"))))) (EVar "ty")))
 (DTypeSig false "ctorArity" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyCon "Int"))))
 (DFunDef false "ctorArity" ((PVar "prog") (PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EApp (EVar "indexCtorAritiesW") (EApp (EVar "progIndex") (EVar "prog")))) (arm (PCon "Some" (PVar "a")) () (EVar "a")) (arm (PCon "None") () (EIf (EApp (EVar "isSyntheticCtor") (EVar "name")) (EApp (EVar "syntheticCtorArity") (EVar "name")) (EApp (EVar "reservedCtorArity") (EVar "name"))))))
 (DTypeSig false "ctorTypeName" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyCon "String"))))
@@ -14017,7 +14017,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "tupleTypeArity" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "tupleTypeArity" ((PVar "ty")) (EApp (EVar "trailingIntOf") (EVar "ty")))
 (DTypeSig false "ctorsOfTypeUser" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "ctorsOfTypeUser" ((PVar "prog") (PVar "ty")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "ty")) (EApp (EVar "indexTypeCtorsW") (EApp (EVar "progIndex") (EVar "prog"))))))
+(DFunDef false "ctorsOfTypeUser" ((PVar "prog") (PVar "ty")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "ty")) (EApp (EVar "indexTypeCtorsW") (EApp (EVar "progIndex") (EVar "prog"))))))
 (DTypeSig false "typeCtorCount" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyCon "Int"))))
 (DFunDef false "typeCtorCount" ((PVar "prog") (PVar "ty")) (EApp (EVar "listLen") (EApp (EApp (EVar "ctorsOfType") (EVar "prog")) (EVar "ty"))))
 (DTypeSig false "switchTypeName" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "CTBranch")) (TyCon "String"))))

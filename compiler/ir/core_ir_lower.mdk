@@ -534,7 +534,7 @@ filterMapRows f (r::rest) = match f r
 -- back in reverse row order and is `reverseL`'d at the branch (as in
 -- `exhaust.mdk`'s `headBuckets`).
 bucketRows : String -> OrdMap (List (Int, (List Pat, Int))) -> List (Int, (List Pat, Int))
-bucketRows k m = fromOption [] (omLookup k m)
+bucketRows k m = optionOr [] (omLookup k m)
 
 pushBucket : String -> (Int, (List Pat, Int)) -> OrdMap (List (Int, (List Pat, Int))) -> OrdMap (List (Int, (List Pat, Int)))
 pushBucket k r m = omInsert k (r :: bucketRows k m) m
@@ -1358,7 +1358,7 @@ lowerImpls prog =
 -- tagged, and therefore visible) clause for each inherited default.
 --
 -- The head tag is computed EXACTLY as `lowerImplMethod` computes an entry's tag
--- (`fromOption noneHeadTag (headTyconHead tys)`), the canonical key EXACTLY as it
+-- (`optionOr noneHeadTag (headTyconHead tys)`), the canonical key EXACTLY as it
 -- computes an entry's key (`implRouteKeyWord implOrigin iface tys None` — B-2.2-e:
 -- the SAME origin argument, so the two stay equal), and the decl set is matched
 -- arm-for-arm with `lowerDeclImpl` — including its `DAttrib` unwrapping (#1037).  So
@@ -1417,7 +1417,7 @@ ifaceImplHeadTable prog = flatMap ifaceImplHeadEntries prog
 ifaceImplHeadEntries : Decl -> List (String, String, String, String)
 -- #1037: matched arm-for-arm with `lowerDeclImpl`, which now unwraps `DAttrib` too.
 ifaceImplHeadEntries (DAttrib _ d) = ifaceImplHeadEntries d
-ifaceImplHeadEntries (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, ... }) = [(ifaceIdentity o ifaceName, ifaceName, fromOption noneHeadTag (headTyconHead typeArgs), implRouteKeyWord o ifaceName typeArgs None)]
+ifaceImplHeadEntries (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, ... }) = [(ifaceIdentity o ifaceName, ifaceName, optionOr noneHeadTag (headTyconHead typeArgs), implRouteKeyWord o ifaceName typeArgs None)]
 ifaceImplHeadEntries _ = []
 
 -- ── emitted impl-symbol collision guard (#1950) ───────────────────────────────
@@ -1494,7 +1494,7 @@ implSymbolCollisionGuard prog =
 -- uses, so the two cannot drift apart on a program.
 implSymRowsOf : Decl -> List (String, String, String)
 implSymRowsOf (DAttrib _ d) = implSymRowsOf d
-implSymRowsOf (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, methods, ... }) = map (implSymRow (fromOption noneHeadTag (headTyconHead typeArgs)) (implRouteKeyWord o ifaceName typeArgs None)) methods
+implSymRowsOf (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, methods, ... }) = map (implSymRow (optionOr noneHeadTag (headTyconHead typeArgs)) (implRouteKeyWord o ifaceName typeArgs None)) methods
 implSymRowsOf _ = []
 
 implSymRow : String -> String -> ImplMethod -> (String, String, String)
@@ -1703,7 +1703,7 @@ dictRouteWordsOf : Decl -> List (String, String, String)
 dictRouteWordsOf (DAttrib _ d) = dictRouteWordsOf d
 dictRouteWordsOf (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, methods, ... }) =
   let key = implRouteKeyWord o ifaceName typeArgs None
-  let tag = fromOption noneHeadTag (headTyconHead typeArgs)
+  let tag = optionOr noneHeadTag (headTyconHead typeArgs)
   flatMap (dictRouteWordRowsFor tag key) methods
 dictRouteWordsOf _ = []
 
@@ -1854,7 +1854,7 @@ lowerDeclImpl _ _ = []
 
 lowerImplMethod : List ((String, String, String), List Int) -> TyConOrigin -> String -> List Ty -> ImplMethod -> CImplEntry
 lowerImplMethod disp o ifaceName typeArgs (ImplMethod mname pats body) =
-  let tag = fromOption noneHeadTag (headTyconHead typeArgs)
+  let tag = optionOr noneHeadTag (headTyconHead typeArgs)
   let key = implRouteKeyWord o ifaceName typeArgs None
   -- #1113 Phase 4: identity-keyed admissibility lookup — the LOCKSTEP peer of
   -- `eval.implMethodEntry`'s identical line.  `o` is already bound for `key`, so

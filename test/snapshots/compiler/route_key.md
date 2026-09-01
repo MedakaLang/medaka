@@ -1,5 +1,5 @@
 # META
-source_lines=466
+source_lines=467
 stages=DESUGAR,MARK
 # SOURCE
 -- The SHARED ROUTE-WORD MINT — Stage B / Phase 3′ (ARCH B-2, #1113).
@@ -210,7 +210,8 @@ funHeadTag = "__fun__"
 -- different bite with a different blast radius.
 export
 implRouteKeyWord : TyConOrigin -> String -> List Ty -> Option String -> String
-implRouteKeyWord o iface tys nm = "\{ifaceWordOf o iface}|\{joinWith " " (map rkTyAtom tys)}|\{fromOption "" nm}"
+implRouteKeyWord o iface tys nm =
+  "\{ifaceWordOf o iface}|\{joinWith " " (map rkTyAtom tys)}|\{optionOr "" nm}"
 
 -- ── the route word a SITE gets ───────────────────────────────────────────
 -- [headIsUnique] is the caller's collision verdict — "is this head the head of
@@ -476,7 +477,7 @@ rkTyList =
 (DTypeSig true "funHeadTag" (TyCon "String"))
 (DFunDef false "funHeadTag" () (ELit (LString "__fun__")))
 (DTypeSig true "implRouteKeyWord" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))))
-(DFunDef false "implRouteKeyWord" ((PVar "o") (PVar "iface") (PVar "tys") (PVar "nm")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EVar "ifaceWordOf") (EVar "o")) (EVar "iface")))) (ELit (LString "|"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "map") (EVar "rkTyAtom")) (EVar "tys"))))) (ELit (LString "|"))) (EApp (EVar "display") (EApp (EApp (EVar "fromOption") (ELit (LString ""))) (EVar "nm")))) (ELit (LString ""))))
+(DFunDef false "implRouteKeyWord" ((PVar "o") (PVar "iface") (PVar "tys") (PVar "nm")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EVar "ifaceWordOf") (EVar "o")) (EVar "iface")))) (ELit (LString "|"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "map") (EVar "rkTyAtom")) (EVar "tys"))))) (ELit (LString "|"))) (EApp (EVar "display") (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EVar "nm")))) (ELit (LString ""))))
 (DTypeSig true "routeWordFor" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "String")))))))
 (DFunDef false "routeWordFor" ((PVar "headIsUnique") (PVar "tag") (PVar "o") (PVar "iface") (PVar "tys")) (EIf (EVar "headIsUnique") (EVar "tag") (EApp (EApp (EApp (EApp (EVar "implRouteKeyWord") (EVar "o")) (EVar "iface")) (EVar "tys")) (EVar "None"))))
 (DTypeSig false "rkTy" (TyFun (TyCon "Ty") (TyCon "String")))
@@ -524,7 +525,7 @@ rkTyList =
 (DTypeSig true "funHeadTag" (TyCon "String"))
 (DFunDef false "funHeadTag" () (ELit (LString "__fun__")))
 (DTypeSig true "implRouteKeyWord" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))))
-(DFunDef false "implRouteKeyWord" ((PVar "o") (PVar "iface") (PVar "tys") (PVar "nm")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EVar "ifaceWordOf") (EVar "o")) (EVar "iface")))) (ELit (LString "|"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EMethodRef "map") (EVar "rkTyAtom")) (EVar "tys"))))) (ELit (LString "|"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "fromOption") (ELit (LString ""))) (EVar "nm")))) (ELit (LString ""))))
+(DFunDef false "implRouteKeyWord" ((PVar "o") (PVar "iface") (PVar "tys") (PVar "nm")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EVar "ifaceWordOf") (EVar "o")) (EVar "iface")))) (ELit (LString "|"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EMethodRef "map") (EVar "rkTyAtom")) (EVar "tys"))))) (ELit (LString "|"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EVar "nm")))) (ELit (LString ""))))
 (DTypeSig true "routeWordFor" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "String")))))))
 (DFunDef false "routeWordFor" ((PVar "headIsUnique") (PVar "tag") (PVar "o") (PVar "iface") (PVar "tys")) (EIf (EVar "headIsUnique") (EVar "tag") (EApp (EApp (EApp (EApp (EVar "implRouteKeyWord") (EVar "o")) (EVar "iface")) (EVar "tys")) (EVar "None"))))
 (DTypeSig false "rkTy" (TyFun (TyCon "Ty") (TyCon "String")))

@@ -27,9 +27,9 @@ tjOut : Ref (List (List String))
 tjOut = Ref []
 
 tjLowOf : String -> Int
-tjLowOf x = fromOption 0 (omLookup x !tjLow)
+tjLowOf x = optionOr 0 (omLookup x !tjLow)
 tjOnStack : String -> Bool
-tjOnStack x = fromOption False (omLookup x !tjOn)
+tjOnStack x = optionOr False (omLookup x !tjOn)
 
 export
 tarjanSCCs : List String -> OrdMap (List String) -> List (List String)
@@ -62,7 +62,7 @@ strongconnect v adj =
   tjCounter := idx + 1
   tjStack := v :: !tjStack
   tjOn := omInsert v True !tjOn
-  let _ = scEdges v (fromOption [] (omLookup v adj)) adj
+  let _ = scEdges v (optionOr [] (omLookup v adj)) adj
   if tjLowOf v == idx then tjPop v [] else ()
 
 scEdges : String -> List String -> OrdMap (List String) -> Unit

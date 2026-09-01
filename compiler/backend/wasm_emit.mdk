@@ -9124,7 +9124,7 @@ syntheticCtorArity name = trailingIntOf name
 typeCtorsOfW : List (String, String) -> OrdMap (List String) -> OrdMap (List String)
 typeCtorsOfW [] m = m
 typeCtorsOfW ((c, t)::rest) m =
-  typeCtorsOfW rest (omInsert t (c :: fromOption [] (omLookup t m)) m)
+  typeCtorsOfW rest (omInsert t (c :: optionOr [] (omLookup t m)) m)
 
 -- ctorName → dense per-type ordinal, for the USER path of `ctorOrdinal` only.
 -- Reproduces that path's formula
@@ -9181,7 +9181,7 @@ ctorsOfTypeDispatchW userFallback ty =
 -- `ctorsOfTypeDispatchW` — nothing left to keep in lockstep by hand.
 ctorsOfTypeIxW : OrdMap (List String) -> String -> List String
 ctorsOfTypeIxW tcm ty =
-  ctorsOfTypeDispatchW (t => fromOption [] (omLookup t tcm)) ty
+  ctorsOfTypeDispatchW (t => optionOr [] (omLookup t tcm)) ty
 
 ctorArity : Prog -> String -> Int
 ctorArity prog name = match omLookup name (indexCtorAritiesW (progIndex prog))
@@ -9262,7 +9262,7 @@ tupleTypeArity ty = trailingIntOf ty
 
 ctorsOfTypeUser : Prog -> String -> List String
 ctorsOfTypeUser prog ty =
-  fromOption [] (omLookup ty (indexTypeCtorsW (progIndex prog)))
+  optionOr [] (omLookup ty (indexTypeCtorsW (progIndex prog)))
 
 -- the number of ctors a type has (the br_table's slot count).
 typeCtorCount : Prog -> String -> Int

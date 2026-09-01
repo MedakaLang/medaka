@@ -18,7 +18,7 @@ stages=DESUGAR,MARK
    `Err`; `getEnv` returns `Option`. There is no IO monad — an action runs when
    it is evaluated, so you can `match readFile path` directly. -}
 
-import core.{Debug, Display, Option, Result, fromOption}
+import core.{Debug, Display, Option, Result, optionOr}
 
 -- ── Standard error (Display, mirroring the prelude's print/println) ──────
 
@@ -78,9 +78,9 @@ readLines path = map splitLines (readFile path)
 {- | An environment variable's value, or `fallback` when it is unset. -}
 export
 getEnvOr : String -> String -> <IO> String
-getEnvOr name fallback = fromOption fallback (getEnv name)
+getEnvOr name fallback = optionOr fallback (getEnv name)
 # DESUGAR
-(DUse false (UseGroup ("core") ((mem "Debug" false) (mem "Display" false) (mem "Option" false) (mem "Result" false) (mem "fromOption" false))))
+(DUse false (UseGroup ("core") ((mem "Debug" false) (mem "Display" false) (mem "Option" false) (mem "Result" false) (mem "optionOr" false))))
 (DTypeSig true "eprint" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyVar "a") (TyEffect ("IO") None (TyCon "Unit")))))
 (DFunDef false "eprint" ((PVar "x")) (EApp (EVar "ePutStr") (EApp (EVar "display") (EVar "x"))))
 (DTypeSig true "eprintln" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyVar "a") (TyEffect ("IO") None (TyCon "Unit")))))
@@ -94,9 +94,9 @@ getEnvOr name fallback = fromOption fallback (getEnv name)
 (DTypeSig true "readLines" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "readLines" ((PVar "path")) (EApp (EApp (EVar "map") (EVar "splitLines")) (EApp (EVar "readFile") (EVar "path"))))
 (DTypeSig true "getEnvOr" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String")))))
-(DFunDef false "getEnvOr" ((PVar "name") (PVar "fallback")) (EApp (EApp (EVar "fromOption") (EVar "fallback")) (EApp (EVar "getEnv") (EVar "name"))))
+(DFunDef false "getEnvOr" ((PVar "name") (PVar "fallback")) (EApp (EApp (EVar "optionOr") (EVar "fallback")) (EApp (EVar "getEnv") (EVar "name"))))
 # MARK
-(DUse false (UseGroup ("core") ((mem "Debug" false) (mem "Display" false) (mem "Option" false) (mem "Result" false) (mem "fromOption" false))))
+(DUse false (UseGroup ("core") ((mem "Debug" false) (mem "Display" false) (mem "Option" false) (mem "Result" false) (mem "optionOr" false))))
 (DTypeSig true "eprint" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyVar "a") (TyEffect ("IO") None (TyCon "Unit")))))
 (DFunDef false "eprint" ((PVar "x")) (EApp (EVar "ePutStr") (EApp (EMethodRef "display") (EVar "x"))))
 (DTypeSig true "eprintln" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyVar "a") (TyEffect ("IO") None (TyCon "Unit")))))
@@ -110,4 +110,4 @@ getEnvOr name fallback = fromOption fallback (getEnv name)
 (DTypeSig true "readLines" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "readLines" ((PVar "path")) (EApp (EApp (EMethodRef "map") (EVar "splitLines")) (EApp (EVar "readFile") (EVar "path"))))
 (DTypeSig true "getEnvOr" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String")))))
-(DFunDef false "getEnvOr" ((PVar "name") (PVar "fallback")) (EApp (EApp (EVar "fromOption") (EVar "fallback")) (EApp (EVar "getEnv") (EVar "name"))))
+(DFunDef false "getEnvOr" ((PVar "name") (PVar "fallback")) (EApp (EApp (EVar "optionOr") (EVar "fallback")) (EApp (EVar "getEnv") (EVar "name"))))

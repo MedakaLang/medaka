@@ -31,9 +31,9 @@ tjOut : Ref (List (List String))
 tjOut = Ref []
 
 tjLowOf : String -> Int
-tjLowOf x = fromOption 0 (omLookup x !tjLow)
+tjLowOf x = optionOr 0 (omLookup x !tjLow)
 tjOnStack : String -> Bool
-tjOnStack x = fromOption False (omLookup x !tjOn)
+tjOnStack x = optionOr False (omLookup x !tjOn)
 
 export
 tarjanSCCs : List String -> OrdMap (List String) -> List (List String)
@@ -66,7 +66,7 @@ strongconnect v adj =
   tjCounter := idx + 1
   tjStack := v :: !tjStack
   tjOn := omInsert v True !tjOn
-  let _ = scEdges v (fromOption [] (omLookup v adj)) adj
+  let _ = scEdges v (optionOr [] (omLookup v adj)) adj
   if tjLowOf v == idx then tjPop v [] else ()
 
 scEdges : String -> List String -> OrdMap (List String) -> Unit
@@ -109,9 +109,9 @@ tjPop v acc = match !tjStack
 (DTypeSig false "tjOut" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "tjOut" () (EApp (EVar "Ref") (EListLit)))
 (DTypeSig false "tjLowOf" (TyFun (TyCon "String") (TyCon "Int")))
-(DFunDef false "tjLowOf" ((PVar "x")) (EApp (EApp (EVar "fromOption") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "x")) (EUnOp "!" (EVar "tjLow")))))
+(DFunDef false "tjLowOf" ((PVar "x")) (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "x")) (EUnOp "!" (EVar "tjLow")))))
 (DTypeSig false "tjOnStack" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "tjOnStack" ((PVar "x")) (EApp (EApp (EVar "fromOption") (EVar "False")) (EApp (EApp (EVar "omLookup") (EVar "x")) (EUnOp "!" (EVar "tjOn")))))
+(DFunDef false "tjOnStack" ((PVar "x")) (EApp (EApp (EVar "optionOr") (EVar "False")) (EApp (EApp (EVar "omLookup") (EVar "x")) (EUnOp "!" (EVar "tjOn")))))
 (DTypeSig true "tarjanSCCs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "tarjanSCCs" ((PVar "names") (PVar "adj")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "tjCounter")) (ELit (LInt 0)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "tjStack")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "tjIndex")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "tjLow")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "tjOn")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "tjOut")) (EListLit))) (DoLet false false PWild (EApp (EApp (EVar "tarjanAll") (EVar "names")) (EVar "adj"))) (DoExpr (EApp (EVar "reverseL") (EUnOp "!" (EVar "tjOut"))))))
 (DTypeSig false "tarjanAll" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "Unit"))))
@@ -120,7 +120,7 @@ tjPop v acc = match !tjStack
 (DTypeSig false "tjVisit" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "Unit"))))
 (DFunDef false "tjVisit" ((PVar "v") (PVar "adj")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "v")) (EUnOp "!" (EVar "tjIndex"))) (arm (PCon "Some" PWild) () (ELit LUnit)) (arm (PCon "None") () (EApp (EApp (EVar "strongconnect") (EVar "v")) (EVar "adj")))))
 (DTypeSig false "strongconnect" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "Unit"))))
-(DFunDef false "strongconnect" ((PVar "v") (PVar "adj")) (EBlock (DoLet false false (PVar "idx") (EUnOp "!" (EVar "tjCounter"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "tjIndex")) (EApp (EApp (EApp (EVar "omInsert") (EVar "v")) (EVar "idx")) (EUnOp "!" (EVar "tjIndex"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "tjLow")) (EApp (EApp (EApp (EVar "omInsert") (EVar "v")) (EVar "idx")) (EUnOp "!" (EVar "tjLow"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "tjCounter")) (EBinOp "+" (EVar "idx") (ELit (LInt 1))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "tjStack")) (EBinOp "::" (EVar "v") (EUnOp "!" (EVar "tjStack"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "tjOn")) (EApp (EApp (EApp (EVar "omInsert") (EVar "v")) (EVar "True")) (EUnOp "!" (EVar "tjOn"))))) (DoLet false false PWild (EApp (EApp (EApp (EVar "scEdges") (EVar "v")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "v")) (EVar "adj")))) (EVar "adj"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "tjLowOf") (EVar "v")) (EVar "idx")) (EApp (EApp (EVar "tjPop") (EVar "v")) (EListLit)) (ELit LUnit)))))
+(DFunDef false "strongconnect" ((PVar "v") (PVar "adj")) (EBlock (DoLet false false (PVar "idx") (EUnOp "!" (EVar "tjCounter"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "tjIndex")) (EApp (EApp (EApp (EVar "omInsert") (EVar "v")) (EVar "idx")) (EUnOp "!" (EVar "tjIndex"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "tjLow")) (EApp (EApp (EApp (EVar "omInsert") (EVar "v")) (EVar "idx")) (EUnOp "!" (EVar "tjLow"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "tjCounter")) (EBinOp "+" (EVar "idx") (ELit (LInt 1))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "tjStack")) (EBinOp "::" (EVar "v") (EUnOp "!" (EVar "tjStack"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "tjOn")) (EApp (EApp (EApp (EVar "omInsert") (EVar "v")) (EVar "True")) (EUnOp "!" (EVar "tjOn"))))) (DoLet false false PWild (EApp (EApp (EApp (EVar "scEdges") (EVar "v")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "v")) (EVar "adj")))) (EVar "adj"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "tjLowOf") (EVar "v")) (EVar "idx")) (EApp (EApp (EVar "tjPop") (EVar "v")) (EListLit)) (ELit LUnit)))))
 (DTypeSig false "scEdges" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "Unit")))))
 (DFunDef false "scEdges" ((PVar "v") (PList) (PVar "adj")) (ELit LUnit))
 (DFunDef false "scEdges" ((PVar "v") (PCons (PVar "w") (PVar "ws")) (PVar "adj")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "scEdge") (EVar "v")) (EVar "w")) (EVar "adj"))) (DoExpr (EApp (EApp (EApp (EVar "scEdges") (EVar "v")) (EVar "ws")) (EVar "adj")))))
@@ -144,9 +144,9 @@ tjPop v acc = match !tjStack
 (DTypeSig false "tjOut" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "tjOut" () (EApp (EVar "Ref") (EListLit)))
 (DTypeSig false "tjLowOf" (TyFun (TyCon "String") (TyCon "Int")))
-(DFunDef false "tjLowOf" ((PVar "x")) (EApp (EApp (EVar "fromOption") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "x")) (EUnOp "!" (EVar "tjLow")))))
+(DFunDef false "tjLowOf" ((PVar "x")) (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "x")) (EUnOp "!" (EVar "tjLow")))))
 (DTypeSig false "tjOnStack" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "tjOnStack" ((PVar "x")) (EApp (EApp (EVar "fromOption") (EVar "False")) (EApp (EApp (EVar "omLookup") (EVar "x")) (EUnOp "!" (EVar "tjOn")))))
+(DFunDef false "tjOnStack" ((PVar "x")) (EApp (EApp (EVar "optionOr") (EVar "False")) (EApp (EApp (EVar "omLookup") (EVar "x")) (EUnOp "!" (EVar "tjOn")))))
 (DTypeSig true "tarjanSCCs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "tarjanSCCs" ((PVar "names") (PVar "adj")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "tjCounter")) (ELit (LInt 0)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "tjStack")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "tjIndex")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "tjLow")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "tjOn")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "tjOut")) (EListLit))) (DoLet false false PWild (EApp (EApp (EVar "tarjanAll") (EVar "names")) (EVar "adj"))) (DoExpr (EApp (EVar "reverseL") (EUnOp "!" (EVar "tjOut"))))))
 (DTypeSig false "tarjanAll" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "Unit"))))
@@ -155,7 +155,7 @@ tjPop v acc = match !tjStack
 (DTypeSig false "tjVisit" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "Unit"))))
 (DFunDef false "tjVisit" ((PVar "v") (PVar "adj")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "v")) (EUnOp "!" (EVar "tjIndex"))) (arm (PCon "Some" PWild) () (ELit LUnit)) (arm (PCon "None") () (EApp (EApp (EVar "strongconnect") (EVar "v")) (EVar "adj")))))
 (DTypeSig false "strongconnect" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "Unit"))))
-(DFunDef false "strongconnect" ((PVar "v") (PVar "adj")) (EBlock (DoLet false false (PVar "idx") (EUnOp "!" (EVar "tjCounter"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "tjIndex")) (EApp (EApp (EApp (EVar "omInsert") (EVar "v")) (EVar "idx")) (EUnOp "!" (EVar "tjIndex"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "tjLow")) (EApp (EApp (EApp (EVar "omInsert") (EVar "v")) (EVar "idx")) (EUnOp "!" (EVar "tjLow"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "tjCounter")) (EBinOp "+" (EVar "idx") (ELit (LInt 1))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "tjStack")) (EBinOp "::" (EVar "v") (EUnOp "!" (EVar "tjStack"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "tjOn")) (EApp (EApp (EApp (EVar "omInsert") (EVar "v")) (EVar "True")) (EUnOp "!" (EVar "tjOn"))))) (DoLet false false PWild (EApp (EApp (EApp (EVar "scEdges") (EVar "v")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "v")) (EVar "adj")))) (EVar "adj"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "tjLowOf") (EVar "v")) (EVar "idx")) (EApp (EApp (EVar "tjPop") (EVar "v")) (EListLit)) (ELit LUnit)))))
+(DFunDef false "strongconnect" ((PVar "v") (PVar "adj")) (EBlock (DoLet false false (PVar "idx") (EUnOp "!" (EVar "tjCounter"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "tjIndex")) (EApp (EApp (EApp (EVar "omInsert") (EVar "v")) (EVar "idx")) (EUnOp "!" (EVar "tjIndex"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "tjLow")) (EApp (EApp (EApp (EVar "omInsert") (EVar "v")) (EVar "idx")) (EUnOp "!" (EVar "tjLow"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "tjCounter")) (EBinOp "+" (EVar "idx") (ELit (LInt 1))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "tjStack")) (EBinOp "::" (EVar "v") (EUnOp "!" (EVar "tjStack"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "tjOn")) (EApp (EApp (EApp (EVar "omInsert") (EVar "v")) (EVar "True")) (EUnOp "!" (EVar "tjOn"))))) (DoLet false false PWild (EApp (EApp (EApp (EVar "scEdges") (EVar "v")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "v")) (EVar "adj")))) (EVar "adj"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "tjLowOf") (EVar "v")) (EVar "idx")) (EApp (EApp (EVar "tjPop") (EVar "v")) (EListLit)) (ELit LUnit)))))
 (DTypeSig false "scEdges" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "Unit")))))
 (DFunDef false "scEdges" ((PVar "v") (PList) (PVar "adj")) (ELit LUnit))
 (DFunDef false "scEdges" ((PVar "v") (PCons (PVar "w") (PVar "ws")) (PVar "adj")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "scEdge") (EVar "v")) (EVar "w")) (EVar "adj"))) (DoExpr (EApp (EApp (EApp (EVar "scEdges") (EVar "v")) (EVar "ws")) (EVar "adj")))))

@@ -7,7 +7,7 @@
 -- abstract-headed `f e Int` therefore meets the row-slot test with an empty graded scope.
 --
 -- The result is a FIX, not a leak.  Pre-#822 that withheld `e` fell through
--- `fromAstTypeE (TyVar n)`'s `fromOption (TCon n)` and became a FABRICATED RIGID
+-- `fromAstTypeE (TyVar n)`'s `optionOr (TCon n)` and became a FABRICATED RIGID
 -- `TCon "e"`: `getInner` inferred as `D a b -> b e Int`, an opaque constant no caller
 -- could ever satisfy.  The golden below records `D a b -> b a Int` — a real variable.
 data D e f = MkD (Unit -> <e> Unit) (f e Int)

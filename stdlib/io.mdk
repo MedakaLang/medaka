@@ -14,7 +14,7 @@
    `Err`; `getEnv` returns `Option`. There is no IO monad — an action runs when
    it is evaluated, so you can `match readFile path` directly. -}
 
-import core.{Debug, Display, Option, Result, fromOption}
+import core.{Debug, Display, Option, Result, optionOr}
 
 -- ── Standard error (Display, mirroring the prelude's print/println) ──────
 
@@ -74,4 +74,4 @@ readLines path = map splitLines (readFile path)
 {- | An environment variable's value, or `fallback` when it is unset. -}
 export
 getEnvOr : String -> String -> <IO> String
-getEnvOr name fallback = fromOption fallback (getEnv name)
+getEnvOr name fallback = optionOr fallback (getEnv name)

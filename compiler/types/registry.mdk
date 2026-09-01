@@ -204,7 +204,7 @@
 -- so the derivation is spelled out here rather than left to the next unit.
 -- The key today is (`types/typecheck.mdk:15171`):
 --
---     let key = joinWith "," (iface :: map (o2 => fromOption "" (headTyconMono o2)) occs)
+--     let key = joinWith "," (iface :: map (o2 => optionOr "" (headTyconMono o2)) occs)
 --
 -- `headTyconMono : Mono -> Option String`, so a POSITION CAN BE ABSENT and
 -- the `""` is a POSITIONAL PLACEHOLDER, not a name. Absent positions really
@@ -1206,7 +1206,7 @@ identBuiltinFixture ns name = Ident ns identOriginBuiltin name
 
 identIn : Ns -> String -> String -> Ident
 identIn ns mid name =
-  fromOption
+  optionOr
     (identBuiltinFixture ns "__fixture_fallback__")
     (mkIdent ns (OriginModule mid) name)
 

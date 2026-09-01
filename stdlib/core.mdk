@@ -824,13 +824,18 @@ export impl Mappable (Result e) where
   map _ (Err x) = Err x
 
 {- | Replace every element of a wrapped value with a constant, keeping the
-   structure — Haskell's `$>`.  `replaceWith fa b == map (const b) fa`.
+   structure — Haskell's `<$`.  `mapConst b fa == map (const b) fa`.
 
-   > replaceWith (Some 5) 9
+   Value-first/data-last, like every other prelude combinator: the argument
+   the name is about comes first, and the container comes last so partial
+   application composes (#2306 E-2 renamed and reordered this from
+   `replaceWith : f a -> b -> f b`).
+
+   > mapConst 9 (Some 5)
    Some 9 -}
 export
-replaceWith : Mappable f => f a -> b -> f b
-replaceWith fa b = map (_ => b) fa
+mapConst : Mappable f => b -> f a -> f b
+mapConst b fa = map (_ => b) fa
 
 {- | `Mappable` plus the ability to lift a plain value and apply a wrapped
    function to a wrapped argument.  Laws (identity, homomorphism,
@@ -945,12 +950,18 @@ filterThen f (x::xs) = andThen
 {- | Run an effectful action for each element, in order, discarding the
    per-element results.  Haskell's `traverse_`/`for_` specialised to `List`.
 
-   > forEach [1, 2, 3] (x => Some ())
+   Fn-first/data-last, matching `find`/`count`/`any`/`all`/`filterThen`
+   (#2306 E-1 reordered this from `List a -> (a -> m Unit) -> m Unit`).  The
+   doctest below is also the PIN for that order: a reorder is silent wherever
+   both arguments still typecheck, but a lambda is not a `List`, so this line
+   fails to typecheck under the old signature.
+
+   > forEach (x => Some ()) [1, 2, 3]
    Some () -}
 export
-forEach : Thenable m => List a -> (a -> <e> m Unit) -> <e> m Unit
-forEach [] _ = pure ()
-forEach (x::xs) f = andThen (f x) (_ => forEach xs f)
+forEach : Thenable m => (a -> <e> m Unit) -> List a -> <e> m Unit
+forEach _ [] = pure ()
+forEach f (x::xs) = andThen (f x) (_ => forEach f xs)
 
 {- | Run each action in a list, in order, discarding the results.  Haskell's
    `sequence_` specialised to `List`.
@@ -1462,14 +1473,29 @@ isNone (Some _) = False
 
 {- | Unwrap with a default for `None`.
 
-   > fromOption 0 (Some 42)
+   > optionOr 0 (Some 42)
    42
-   > fromOption 0 None
+   > optionOr 0 None
    0 -}
 export
-fromOption : a -> Option a -> a
-fromOption _ (Some a) = a
-fromOption d None = d
+optionOr : a -> Option a -> a
+optionOr _ (Some a) = a
+optionOr d None = d
+
+{- | Eliminate an `Option` by supplying a default for `None` and a function
+   for `Some`.  Named for what it eliminates (Haskell calls it `maybe`).
+
+   Lived in a published one-entry `option` module until the
+   0.1.0 surface freeze moved it beside its own type (#2306 I-2).
+
+   > option 0 (x => x + 1) (Some 41)
+   42
+   > option 0 (x => x + 1) None
+   0 -}
+export
+option : b -> (a -> <e> b) -> Option a -> <e> b
+option _ f (Some x) = f x
+option dflt _ None = dflt
 
 -- | Turn an `Option` into a `Result`, supplying the error for `None`.
 export
@@ -1500,11 +1526,26 @@ isErr (Err _) = True
 isErr (Ok _) = False
 
 {- | Unwrap with a default for `Err`.  Named distinctly from
-   `fromOption` so the two don't collide when both are in scope. -}
+   `optionOr` so the two don't collide when both are in scope. -}
 export
-fromResultOr : a -> Result e a -> a
-fromResultOr _ (Ok a) = a
-fromResultOr d (Err _) = d
+resultOr : a -> Result e a -> a
+resultOr _ (Ok a) = a
+resultOr d (Err _) = d
+
+{- | Eliminate a `Result` by supplying a handler for `Err` and a handler for
+   `Ok`.  Named for what it eliminates (Haskell calls it `either`).
+
+   Lived in a published one-entry `result` module until the
+   0.1.0 surface freeze moved it beside its own type (#2306 I-2).
+
+   > result (e => 0) (x => x + 1) (Ok 41)
+   42
+   > result (e => e) (x => x + 1) (Err 7)
+   7 -}
+export
+result : (e -> <eff> c) -> (a -> <eff> c) -> Result e a -> <eff> c
+result _ onOk (Ok x) = onOk x
+result onErr _ (Err e) = onErr e
 
 {- | Apply a function to the `Err` side, leaving `Ok` alone.  The `Ok`
    analogue is just `map` from `Mappable (Result e)`. -}
@@ -1735,11 +1776,24 @@ prop "length matches a counting fold" (xs : List Int) =
 prop "any/all duality" (xs : List Int) =
   any (x => x > 0) xs == not (all (x => x <= 0) xs)
 
-prop "fromOption d (Some x) == x" (x : Int) (d : Int) =
-  fromOption d (Some x) == x
+prop "optionOr d (Some x) == x" (x : Int) (d : Int) = optionOr d (Some x) == x
 
 prop "toResult/fromResult round-trip on Some" (x : Int) =
   eq (fromResult (toResult "missing" (Some x))) (Some x)
+
+-- The four props below came in with `option`/`result` from the one-entry
+-- modules that #2306 I-2 folded into core.
+prop "option dflt f (Some x) == f x" (x : Int) (d : Int) =
+  option d (n => n * 2) (Some x) == x * 2
+
+prop "option dflt f None == dflt" (d : Int) =
+  option d (n => n * 2) (None : Option Int) == d
+
+prop "result onErr onOk (Ok x) == onOk x" (x : Int) =
+  result (e => 0) (n => n * 2) (Ok x) == x * 2
+
+prop "result onErr onOk (Err e) == onErr e" (e : Int) =
+  result (n => n * 2) (n => 0) (Err e : Result Int Int) == e * 2
 
 prop "Ord (List a) is reflexive" (xs : List Int) = match compare xs xs
   Eq => True

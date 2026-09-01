@@ -19,7 +19,7 @@
 --     (`fn_bool_return` renders True as `1`), so the result is packed into an Int.
 --   * `diff_compiler_llvm_typed.sh` emits this corpus with `runtime.mdk` ONLY (no
 --     `core.mdk` prelude), so no prelude helper is in scope — hence the local `unwrap`
---     rather than the prelude's `fromOption`.
+--     rather than the prelude's `optionOr`.
 --
 -- `lo`/`hi` go through `charFromCode` rather than char literals on purpose: `fmt`
 -- normalizes `'\u{10FFFF}'` into a RAW U+10FFFF byte sequence in the source, which is

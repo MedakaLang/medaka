@@ -206,7 +206,8 @@ funHeadTag = "__fun__"
 -- different bite with a different blast radius.
 export
 implRouteKeyWord : TyConOrigin -> String -> List Ty -> Option String -> String
-implRouteKeyWord o iface tys nm = "\{ifaceWordOf o iface}|\{joinWith " " (map rkTyAtom tys)}|\{fromOption "" nm}"
+implRouteKeyWord o iface tys nm =
+  "\{ifaceWordOf o iface}|\{joinWith " " (map rkTyAtom tys)}|\{optionOr "" nm}"
 
 -- ── the route word a SITE gets ───────────────────────────────────────────
 -- [headIsUnique] is the caller's collision verdict — "is this head the head of

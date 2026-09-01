@@ -126,8 +126,10 @@ listing.
 
 - **Modules (no re-mint):** `stdlib/validation.mdk` (`Validation e a`, accumulating
   `Applicative requires Semigroup e`, deliberately no `Thenable`), `stdlib/nonempty.mdk`
-  (`NonEmpty a`, total `head`/`maximum`/`minimum`), `stdlib/option.mdk` (`option`
-  eliminator), `stdlib/result.mdk` (`result` eliminator); `stdlib/list.mdk` gained
+  (`NonEmpty a`, total `head`/`maximum`/`minimum`), a one-file `option` module
+  (`option` eliminator) and a one-file `result` module (`result` eliminator) —
+  both folded into `stdlib/core.mdk` and deleted by #2306 I-2 at the 0.1.0
+  surface freeze; `stdlib/list.mdk` gained
   `somes`/`oks`/`errs`/`partitionResults`.
 - **Core (bite A + B, one re-mint):** `on`, `curry`, `uncurry`, `discard`, `map2`/`map3`,
   `foldThen`/`repeatThen`/`filterThen`, `forEach`/`runEach`, `guard`; new

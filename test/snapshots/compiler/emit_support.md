@@ -298,16 +298,16 @@ initReach (n::rest) m = reachListOf n m ++ initReach rest m
 -- the LAST key's reach pair — the one `mergeReach` may share.
 lastReach : List String -> OrdMap (List String, OrdMap Unit) -> (List String, OrdMap Unit)
 lastReach [] _ = ([], omEmpty)
-lastReach [n] m = fromOption ([], omEmpty) (omLookup n m)
+lastReach [n] m = optionOr ([], omEmpty) (omLookup n m)
 lastReach (_::rest) m = lastReach rest m
 
 reachListOf : String -> OrdMap (List String, OrdMap Unit) -> List String
-reachListOf n m = fst (fromOption ([], omEmpty) (omLookup n m))
+reachListOf n m = fst (optionOr ([], omEmpty) (omLookup n m))
 
 -- concat (default []) of the OrdMap lookups over a list of keys.
 unionLookup : List String -> OrdMap (List String) -> List String
 unionLookup [] _ = []
-unionLookup (n::rest) m = fromOption [] (omLookup n m) ++ unionLookup rest m
+unionLookup (n::rest) m = optionOr [] (omLookup n m) ++ unionLookup rest m
 
 insertReach : List String -> (List String, OrdMap Unit) -> OrdMap (List String, OrdMap Unit) -> OrdMap (List String, OrdMap Unit)
 insertReach [] _ acc = acc
@@ -319,7 +319,7 @@ insertReach (n::rest) reached acc =
 -- backends (replaces the old direct-only `eagerVars [] body`).
 export
 bindEagerReach : OrdMap (List String) -> CBind -> List String
-bindEagerReach rm (CBind name [CClause [] _]) = fromOption [] (omLookup name rm)
+bindEagerReach rm (CBind name [CClause [] _]) = optionOr [] (omLookup name rm)
 bindEagerReach _ _ = []
 
 -- #623: the value-init topo sort used to carry the SAME binding list twice — as
@@ -481,7 +481,7 @@ anyKeyIn (n::rest) s = omHasKey n s || anyKeyIn rest s
 -- a name self-loops when its own eager callees include itself (`x = x + 1`); a
 -- singleton SCC does NOT record this on its own, so it is tested explicitly.
 selfLoops : String -> OrdMap (List String) -> Bool
-selfLoops n adj = contains n (fromOption [] (omLookup n adj))
+selfLoops n adj = contains n (optionOr [] (omLookup n adj))
 
 anySelfLoop : List String -> OrdMap (List String) -> Bool
 anySelfLoop [] _ = False
@@ -490,7 +490,7 @@ anySelfLoop (n::rest) adj = selfLoops n adj || anySelfLoop rest adj
 -- callees of every member of an SCC, concatenated (for the successor-taint check).
 sccCallees : List String -> OrdMap (List String) -> List String
 sccCallees [] _ = []
-sccCallees (n::rest) adj = fromOption [] (omLookup n adj) ++ sccCallees rest adj
+sccCallees (n::rest) adj = optionOr [] (omLookup n adj) ++ sccCallees rest adj
 
 insertAllKeys : List String -> OrdMap Unit -> OrdMap Unit
 insertAllKeys [] acc = acc
@@ -734,18 +734,18 @@ rngBound _ = 0
 (DFunDef false "initReach" ((PCons (PVar "n") (PVar "rest")) (PVar "m")) (EBinOp "++" (EApp (EApp (EVar "reachListOf") (EVar "n")) (EVar "m")) (EApp (EApp (EVar "initReach") (EVar "rest")) (EVar "m"))))
 (DTypeSig false "lastReach" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
 (DFunDef false "lastReach" ((PList) PWild) (ETuple (EListLit) (EVar "omEmpty")))
-(DFunDef false "lastReach" ((PList (PVar "n")) (PVar "m")) (EApp (EApp (EVar "fromOption") (ETuple (EListLit) (EVar "omEmpty"))) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "m"))))
+(DFunDef false "lastReach" ((PList (PVar "n")) (PVar "m")) (EApp (EApp (EVar "optionOr") (ETuple (EListLit) (EVar "omEmpty"))) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "m"))))
 (DFunDef false "lastReach" ((PCons PWild (PVar "rest")) (PVar "m")) (EApp (EApp (EVar "lastReach") (EVar "rest")) (EVar "m")))
 (DTypeSig false "reachListOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "reachListOf" ((PVar "n") (PVar "m")) (EApp (EVar "fst") (EApp (EApp (EVar "fromOption") (ETuple (EListLit) (EVar "omEmpty"))) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "m")))))
+(DFunDef false "reachListOf" ((PVar "n") (PVar "m")) (EApp (EVar "fst") (EApp (EApp (EVar "optionOr") (ETuple (EListLit) (EVar "omEmpty"))) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "m")))))
 (DTypeSig false "unionLookup" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "unionLookup" ((PList) PWild) (EListLit))
-(DFunDef false "unionLookup" ((PCons (PVar "n") (PVar "rest")) (PVar "m")) (EBinOp "++" (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "m"))) (EApp (EApp (EVar "unionLookup") (EVar "rest")) (EVar "m"))))
+(DFunDef false "unionLookup" ((PCons (PVar "n") (PVar "rest")) (PVar "m")) (EBinOp "++" (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "m"))) (EApp (EApp (EVar "unionLookup") (EVar "rest")) (EVar "m"))))
 (DTypeSig false "insertReach" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (TyApp (TyCon "OrdMap") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))))
 (DFunDef false "insertReach" ((PList) PWild (PVar "acc")) (EVar "acc"))
 (DFunDef false "insertReach" ((PCons (PVar "n") (PVar "rest")) (PVar "reached") (PVar "acc")) (EApp (EApp (EApp (EVar "insertReach") (EVar "rest")) (EVar "reached")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "reached")) (EVar "acc"))))
 (DTypeSig true "bindEagerReach" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "bindEagerReach" ((PVar "rm") (PCon "CBind" (PVar "name") (PList (PCon "CClause" (PList) PWild)))) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "rm"))))
+(DFunDef false "bindEagerReach" ((PVar "rm") (PCon "CBind" (PVar "name") (PList (PCon "CClause" (PList) PWild)))) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "rm"))))
 (DFunDef false "bindEagerReach" (PWild PWild) (EListLit))
 (DTypeSig true "bindNameMap" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "OrdMap") (TyCon "CBind"))))
 (DFunDef false "bindNameMap" ((PList)) (EVar "omEmpty"))
@@ -819,13 +819,13 @@ rngBound _ = 0
 (DFunDef false "anyKeyIn" ((PList) PWild) (EVar "False"))
 (DFunDef false "anyKeyIn" ((PCons (PVar "n") (PVar "rest")) (PVar "s")) (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "s")) (EApp (EApp (EVar "anyKeyIn") (EVar "rest")) (EVar "s"))))
 (DTypeSig false "selfLoops" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "Bool"))))
-(DFunDef false "selfLoops" ((PVar "n") (PVar "adj")) (EApp (EApp (EVar "contains") (EVar "n")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "adj")))))
+(DFunDef false "selfLoops" ((PVar "n") (PVar "adj")) (EApp (EApp (EVar "contains") (EVar "n")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "adj")))))
 (DTypeSig false "anySelfLoop" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "Bool"))))
 (DFunDef false "anySelfLoop" ((PList) PWild) (EVar "False"))
 (DFunDef false "anySelfLoop" ((PCons (PVar "n") (PVar "rest")) (PVar "adj")) (EBinOp "||" (EApp (EApp (EVar "selfLoops") (EVar "n")) (EVar "adj")) (EApp (EApp (EVar "anySelfLoop") (EVar "rest")) (EVar "adj"))))
 (DTypeSig false "sccCallees" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "sccCallees" ((PList) PWild) (EListLit))
-(DFunDef false "sccCallees" ((PCons (PVar "n") (PVar "rest")) (PVar "adj")) (EBinOp "++" (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "adj"))) (EApp (EApp (EVar "sccCallees") (EVar "rest")) (EVar "adj"))))
+(DFunDef false "sccCallees" ((PCons (PVar "n") (PVar "rest")) (PVar "adj")) (EBinOp "++" (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "adj"))) (EApp (EApp (EVar "sccCallees") (EVar "rest")) (EVar "adj"))))
 (DTypeSig false "insertAllKeys" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
 (DFunDef false "insertAllKeys" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "insertAllKeys" ((PCons (PVar "n") (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "insertAllKeys") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "acc"))))
@@ -953,18 +953,18 @@ rngBound _ = 0
 (DFunDef false "initReach" ((PCons (PVar "n") (PVar "rest")) (PVar "m")) (EBinOp "++" (EApp (EApp (EVar "reachListOf") (EVar "n")) (EVar "m")) (EApp (EApp (EVar "initReach") (EVar "rest")) (EVar "m"))))
 (DTypeSig false "lastReach" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
 (DFunDef false "lastReach" ((PList) PWild) (ETuple (EListLit) (EVar "omEmpty")))
-(DFunDef false "lastReach" ((PList (PVar "n")) (PVar "m")) (EApp (EApp (EVar "fromOption") (ETuple (EListLit) (EVar "omEmpty"))) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "m"))))
+(DFunDef false "lastReach" ((PList (PVar "n")) (PVar "m")) (EApp (EApp (EVar "optionOr") (ETuple (EListLit) (EVar "omEmpty"))) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "m"))))
 (DFunDef false "lastReach" ((PCons PWild (PVar "rest")) (PVar "m")) (EApp (EApp (EVar "lastReach") (EVar "rest")) (EVar "m")))
 (DTypeSig false "reachListOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "reachListOf" ((PVar "n") (PVar "m")) (EApp (EVar "fst") (EApp (EApp (EVar "fromOption") (ETuple (EListLit) (EVar "omEmpty"))) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "m")))))
+(DFunDef false "reachListOf" ((PVar "n") (PVar "m")) (EApp (EVar "fst") (EApp (EApp (EVar "optionOr") (ETuple (EListLit) (EVar "omEmpty"))) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "m")))))
 (DTypeSig false "unionLookup" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "unionLookup" ((PList) PWild) (EListLit))
-(DFunDef false "unionLookup" ((PCons (PVar "n") (PVar "rest")) (PVar "m")) (EBinOp "++" (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "m"))) (EApp (EApp (EVar "unionLookup") (EVar "rest")) (EVar "m"))))
+(DFunDef false "unionLookup" ((PCons (PVar "n") (PVar "rest")) (PVar "m")) (EBinOp "++" (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "m"))) (EApp (EApp (EVar "unionLookup") (EVar "rest")) (EVar "m"))))
 (DTypeSig false "insertReach" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (TyApp (TyCon "OrdMap") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))))
 (DFunDef false "insertReach" ((PList) PWild (PVar "acc")) (EVar "acc"))
 (DFunDef false "insertReach" ((PCons (PVar "n") (PVar "rest")) (PVar "reached") (PVar "acc")) (EApp (EApp (EApp (EVar "insertReach") (EVar "rest")) (EVar "reached")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "reached")) (EVar "acc"))))
 (DTypeSig true "bindEagerReach" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "bindEagerReach" ((PVar "rm") (PCon "CBind" (PVar "name") (PList (PCon "CClause" (PList) PWild)))) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "rm"))))
+(DFunDef false "bindEagerReach" ((PVar "rm") (PCon "CBind" (PVar "name") (PList (PCon "CClause" (PList) PWild)))) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "rm"))))
 (DFunDef false "bindEagerReach" (PWild PWild) (EListLit))
 (DTypeSig true "bindNameMap" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "OrdMap") (TyCon "CBind"))))
 (DFunDef false "bindNameMap" ((PList)) (EVar "omEmpty"))
@@ -1038,13 +1038,13 @@ rngBound _ = 0
 (DFunDef false "anyKeyIn" ((PList) PWild) (EVar "False"))
 (DFunDef false "anyKeyIn" ((PCons (PVar "n") (PVar "rest")) (PVar "s")) (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "s")) (EApp (EApp (EVar "anyKeyIn") (EVar "rest")) (EVar "s"))))
 (DTypeSig false "selfLoops" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "Bool"))))
-(DFunDef false "selfLoops" ((PVar "n") (PVar "adj")) (EApp (EApp (EVar "contains") (EVar "n")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "adj")))))
+(DFunDef false "selfLoops" ((PVar "n") (PVar "adj")) (EApp (EApp (EVar "contains") (EVar "n")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "adj")))))
 (DTypeSig false "anySelfLoop" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "Bool"))))
 (DFunDef false "anySelfLoop" ((PList) PWild) (EVar "False"))
 (DFunDef false "anySelfLoop" ((PCons (PVar "n") (PVar "rest")) (PVar "adj")) (EBinOp "||" (EApp (EApp (EVar "selfLoops") (EVar "n")) (EVar "adj")) (EApp (EApp (EVar "anySelfLoop") (EVar "rest")) (EVar "adj"))))
 (DTypeSig false "sccCallees" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "sccCallees" ((PList) PWild) (EListLit))
-(DFunDef false "sccCallees" ((PCons (PVar "n") (PVar "rest")) (PVar "adj")) (EBinOp "++" (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "adj"))) (EApp (EApp (EVar "sccCallees") (EVar "rest")) (EVar "adj"))))
+(DFunDef false "sccCallees" ((PCons (PVar "n") (PVar "rest")) (PVar "adj")) (EBinOp "++" (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "adj"))) (EApp (EApp (EVar "sccCallees") (EVar "rest")) (EVar "adj"))))
 (DTypeSig false "insertAllKeys" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
 (DFunDef false "insertAllKeys" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "insertAllKeys" ((PCons (PVar "n") (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "insertAllKeys") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "acc"))))
