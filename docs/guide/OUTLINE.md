@@ -67,7 +67,7 @@ scope below is the authority, not the slug).*
 - Introduce: `List` vs `Array` (when to reach for which); `Map`/`Set` + literals;
   strings + **interpolation `\{ }` tied to `Display`**; workhorse combinators
   (`map`/`filter`/`fold`) idiomatically with pipes; ranges. A "how do I..." cluster.
-- Defer: `hash_map`/`mut_array`/`json`/`byteparser` etc. (link out); Foldable theory.
+- Defer: `hash_map`/`vector`/`json`/`byteparser` etc. (link out); Foldable theory.
 
 ## 7. Effects & IO — "Doing things in the world" *(the signature chapter)*
 Lead with the surprise.

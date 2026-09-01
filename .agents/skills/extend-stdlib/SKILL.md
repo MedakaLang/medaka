@@ -77,7 +77,7 @@ example, run `./medaka check` — it names the failing decl.
   `Float`, `Bool`, `Char`, `String`, `Unit`, `Ordering`, `List`, `Array`, `Option`,
   `Result` and 2–5-tuples are **all in `stdlib/core.mdk`**, so they are always
   reachable. The ones that are NOT: `Map` (`map.mdk`), `Set` (`set.mdk`), `HashMap`
-  /`HashSet`, `MutArray`, `Json`, `Toml` — an example whose result is one of those
+  /`HashSet`, `Vector`, `Json`, `Toml` — an example whose result is one of those
   needs that module imported in the file under test, or it will not resolve.
 - **`core.mdk` `prop`s are prepended to every downstream file's test context**, so
   a core prop that fails to resolve breaks *every* downstream module's test run,

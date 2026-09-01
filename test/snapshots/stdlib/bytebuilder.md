@@ -6,7 +6,7 @@ stages=DESUGAR,MARK
 --
 -- Symmetric inverse of `byteparser`: where `byteparser` DECODES byte arrays
 -- into values, `bytebuilder` ENCODES values INTO byte arrays.  Backed by a
--- `MutArray Int` (growable, amortised-O(1) `push`); `buildArray` freezes the
+-- `Vector Int` (growable, amortised-O(1) `push`); `buildArray` freezes the
 -- live range into a fixed-size `Array Int` in emission order — no reverse pass.
 --
 -- All `emit*` functions write bytes in the byte order that `byteparser`'s
@@ -14,18 +14,18 @@ stages=DESUGAR,MARK
 -- original value exactly.
 
 import byteparser.{runByteParser, beUint, beSint, leUint, leSint, takeBytes}
-import mut_array.{MutArray, new, push, toArray}
+import vector.{Vector, new, push, toArray}
 import list.{reverse}
 
 -- ---------------------------------------------------------------------------
 -- Builder type
 -- ---------------------------------------------------------------------------
 
--- | A byte output buffer backed by a growable `MutArray Int`.
+-- | A byte output buffer backed by a growable `Vector Int`.
 --   Bytes are appended in O(1) (amortised); `buildArray` snapshots to a
 --   fixed-size `Array Int` in emission order.
 --   The constructor is not exported — use `newBuilder`/`emit*`/`buildArray`.
-export data Builder = Builder (MutArray Int)
+export data Builder = Builder (Vector Int)
 
 -- | Create a new, empty builder.
 export
@@ -385,9 +385,9 @@ prop "emitU16BE reversed bytes, leUint agrees with beUint" (v : Int) =
         Err _ => False
 # DESUGAR
 (DUse false (UseGroup ("byteparser") ((mem "runByteParser" false) (mem "beUint" false) (mem "beSint" false) (mem "leUint" false) (mem "leSint" false) (mem "takeBytes" false))))
-(DUse false (UseGroup ("mut_array") ((mem "MutArray" false) (mem "new" false) (mem "push" false) (mem "toArray" false))))
+(DUse false (UseGroup ("vector") ((mem "Vector" false) (mem "new" false) (mem "push" false) (mem "toArray" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
-(DData Abstract "Builder" () ((variant "Builder" (ConPos (TyApp (TyCon "MutArray") (TyCon "Int"))))) ())
+(DData Abstract "Builder" () ((variant "Builder" (ConPos (TyApp (TyCon "Vector") (TyCon "Int"))))) ())
 (DTypeSig true "newBuilder" (TyFun (TyCon "Unit") (TyCon "Builder")))
 (DFunDef false "newBuilder" (PWild) (EApp (EVar "Builder") (EApp (EVar "new") (ELit LUnit))))
 (DTypeSig true "emitU8" (TyFun (TyCon "Int") (TyFun (TyCon "Builder") (TyCon "Unit"))))
@@ -427,9 +427,9 @@ prop "emitU16BE reversed bytes, leUint agrees with beUint" (v : Int) =
 (DProp false "emitU16BE reversed bytes, leUint agrees with beUint" ((pp "v" (TyCon "Int"))) (EBlock (DoLet false false (PVar "w") (EApp (EApp (EVar "bitAnd") (EVar "v")) (ELit (LInt 65535)))) (DoExpr (EMatch (EApp (EApp (EVar "runByteParser") (EApp (EVar "takeBytes") (ELit (LInt 2)))) (EApp (EVar "build1") (EApp (EVar "emitU16BE") (EVar "w")))) (arm (PCon "Err" PWild) () (EVar "False")) (arm (PCon "Ok" (PVar "bytes")) () (EBlock (DoLet false false (PVar "reversedArr") (EApp (EVar "arrayFromList") (EApp (EVar "reverse") (EVar "bytes")))) (DoExpr (EMatch (EApp (EApp (EVar "runByteParser") (EApp (EVar "leUint") (ELit (LInt 2)))) (EVar "reversedArr")) (arm (PCon "Ok" (PVar "got")) () (EBinOp "==" (EVar "got") (EVar "w"))) (arm (PCon "Err" PWild) () (EVar "False"))))))))))
 # MARK
 (DUse false (UseGroup ("byteparser") ((mem "runByteParser" false) (mem "beUint" false) (mem "beSint" false) (mem "leUint" false) (mem "leSint" false) (mem "takeBytes" false))))
-(DUse false (UseGroup ("mut_array") ((mem "MutArray" false) (mem "new" false) (mem "push" false) (mem "toArray" false))))
+(DUse false (UseGroup ("vector") ((mem "Vector" false) (mem "new" false) (mem "push" false) (mem "toArray" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
-(DData Abstract "Builder" () ((variant "Builder" (ConPos (TyApp (TyCon "MutArray") (TyCon "Int"))))) ())
+(DData Abstract "Builder" () ((variant "Builder" (ConPos (TyApp (TyCon "Vector") (TyCon "Int"))))) ())
 (DTypeSig true "newBuilder" (TyFun (TyCon "Unit") (TyCon "Builder")))
 (DFunDef false "newBuilder" (PWild) (EApp (EVar "Builder") (EApp (EVar "new") (ELit LUnit))))
 (DTypeSig true "emitU8" (TyFun (TyCon "Int") (TyFun (TyCon "Builder") (TyCon "Unit"))))
