@@ -347,6 +347,21 @@ jobs:
       - name: Build the playground WasmGC artifact
         run: bash playground/build_playground_wasm.sh
 
+      # Assemble the DEPLOYABLE tree (playground/site/) — what deploy_cloudflare.sh
+      # actually uploads, and a different file set from the dev tree: it is the only
+      # layout that contains the rendered guide (site/guide/*.html). The e2e step
+      # below runs with SITE=1, which serves THIS tree and turns the guide-route
+      # checks from skipped into mandatory (E2E_EXPECT_GUIDE) — without this step
+      # those checks would take their skip branch and the job would prove nothing
+      # about the guide at all.
+      #
+      # Marginal cost is just the site assembly: build_site.sh only invokes
+      # build_playground_wasm.sh when dist/playground.wasm is absent, and the step
+      # above has already produced it. It is `set -euo pipefail` and fails loudly on
+      # a missing module or a missing guide page, so a broken site cannot look green.
+      - name: Assemble the deployable site (playground/site/, incl. the rendered guide)
+        run: bash playground/build_site.sh
+
       # playground/e2e/run.sh is itself `set -euo pipefail` and ends with `exit
       # "$STATUS"` (its own pass/fail, propagated) — a plain run step is correct, no
       # wrapper needed to keep a real e2e failure from reading as green. Invoked by its
@@ -360,8 +375,13 @@ jobs:
       # signal (a toolchain problem fails one of the steps ABOVE this one; a real e2e
       # regression fails THIS one). Nightly, not the PR path, so a red run here is
       # reported but never blocks a merge.
-      - name: playground e2e (Playwright vs system Chrome)
-        run: bash playground/e2e/run.sh
+      #
+      # SITE=1 serves playground/site/ (assembled above) instead of the dev tree, and
+      # exports E2E_EXPECT_GUIDE=1 so the guide-route assertions are MANDATORY here
+      # rather than skipped. A missing or guide-less site/ fails loud in run.sh — it
+      # never silently falls back to the dev tree.
+      - name: playground e2e (Playwright vs system Chrome, deployed site layout)
+        run: SITE=1 bash playground/e2e/run.sh
 
       # Debug aid: the harness screenshots every check into playground/e2e/screenshots/
       # (gitignored). On failure, ship them as a build artifact instead of making

@@ -203,7 +203,7 @@
 [[gate]]
 name = "diff_compiler_parse_result"
 area = "frontend"
-shard = "gates_3"
+shard = "gates_8"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -219,7 +219,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_eval_modules"
 area = "eval"
-shard = "gates_2"
+shard = "gates_8"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -418,7 +418,7 @@ toolchain = []
 [[gate]]
 name = "parsec/test/check"
 area = "engines"
-shard = "gates_3"
+shard = "gates_7"
 project = "parsec"
 tiers = ["merge"]
 cost = "cheap"
@@ -577,7 +577,7 @@ toolchain = []
 [[gate]]
 name = "pds/test/encodings_vectors"
 area = "engines"
-shard = "gates_8"
+shard = "gates_3"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -681,7 +681,7 @@ toolchain = ["wasm-tools", "node>=24"]
 [[gate]]
 name = "pds/test/rfc6979_vectors"
 area = "engines"
-shard = "gates_2"
+shard = "gates_6"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -723,7 +723,7 @@ toolchain = []
 [[gate]]
 name = "pds/test/secp256k1_public_key"
 area = "engines"
-shard = "gates_2"
+shard = "gates_7"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -765,7 +765,7 @@ toolchain = []
 [[gate]]
 name = "pds/test/trust_boundary_guards"
 area = "engines"
-shard = "gates_2"
+shard = "gates_7"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -795,7 +795,7 @@ name = "playground/e2e/run"
 area = "infra"
 shard = "other-job"
 project = "compiler"
-tiers = ["nightly"]
+tiers = ["nightly/SITE=1"]
 cost = "cheap"
 kind = "exec"
 run = "playground/e2e/run.sh"
@@ -905,7 +905,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/inlang_test_oracle"
 area = "engines"
-shard = "gates_8"
+shard = "gates_6"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -961,7 +961,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/multipage_write_oracle"
 area = "engines"
-shard = "gates_6"
+shard = "gates_8"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -975,7 +975,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/multitable_write_oracle"
 area = "engines"
-shard = "gates_6"
+shard = "gates_8"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -1115,7 +1115,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/writer_oracle"
 area = "engines"
-shard = "gates_6"
+shard = "gates_2"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -1143,7 +1143,7 @@ toolchain = []
 [[gate]]
 name = "bootstrap_lex"
 area = "frontend"
-shard = "gates_2"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1157,7 +1157,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "bootstrap_resolve"
 area = "frontend"
-shard = "gates_2"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1227,7 +1227,7 @@ toolchain = []
 [[gate]]
 name = "check_build_oracles_for_consistency"
 area = "types"
-shard = "gates_6"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1451,7 +1451,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_capability_matrix"
 area = "infra"
-shard = "gates_7"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1703,7 +1703,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_core_ir_typed"
 area = "eval"
-shard = "gates_2"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1745,7 +1745,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_dispatch_shape"
 area = "eval"
-shard = "gates_2"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1759,7 +1759,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_doc"
 area = "tools"
-shard = "gates_6"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1829,7 +1829,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_effect_polarity"
 area = "infra"
-shard = "gates_2"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1885,7 +1885,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_eval_json"
 area = "eval"
-shard = "gates_6"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2011,7 +2011,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_eval_typed_batch"
 area = "eval"
-shard = "gates_3"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2123,7 +2123,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_iface_order"
 area = "infra"
-shard = "gates_6"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2165,7 +2165,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_index"
 area = "infra"
-shard = "gates_2"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2221,7 +2221,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_let_refute"
 area = "infra"
-shard = "gates_2"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2249,7 +2249,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_lint_cache"
 area = "tools"
-shard = "gates_2"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2431,7 +2431,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_lsp_b4"
 area = "tools"
-shard = "gates_6"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -2445,7 +2445,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_lsp"
 area = "tools"
-shard = "gates_2"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -2515,7 +2515,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_parse_error_loc"
 area = "frontend"
-shard = "gates_8"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2571,7 +2571,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_ported"
 area = "infra"
-shard = "gates_2"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2641,7 +2641,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_reach_fail_open"
 area = "infra"
-shard = "gates_2"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2739,7 +2739,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_resolve_modules"
 area = "frontend"
-shard = "gates_7"
+shard = "gates_8"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2991,7 +2991,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_source_bytes"
 area = "infra"
-shard = "gates_2"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3061,7 +3061,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_test_typecheck"
 area = "infra"
-shard = "gates_7"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3103,7 +3103,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_wasm_shim_parity"
 area = "wasm"
-shard = "gates_3"
+shard = "gates_8"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -3271,7 +3271,7 @@ toolchain = []
 [[gate]]
 name = "native_fixtures/run"
 area = "infra"
-shard = "gates_7"
+shard = "gates_8"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3666,7 +3666,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_check_ir_floor"
 area = "infra"
-shard = "gates_2"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3742,6 +3742,46 @@ oracles = []
 sources = ["test/diff_compiler_cli_reject_floor.sh", "test/cli_conformance_lib.sh", "compiler/driver/medaka_cli.mdk", "compiler/tools/gate_cmd.mdk", "stdlib/args.mdk"]
 corpus = []
 toolchain = ["clang"]
+
+# The docs RENDER machine (#2386, S-site-wiring). playground/guide_render_test.mjs
+# holds the assertions; this `.sh` is the enrolment, because nothing in CI runs a
+# bare `.mjs` — `run =` here, run_gates.sh's name resolution, and preflight's
+# `_gate_candidates` are all `.sh`-shaped. It grades the RENDERER, not the
+# compiler: no oracle, no ./medaka, node only.
+#
+# Why it matters that this exists at all: docs/guide/*.md mapped to exactly ONE
+# gate before this slice — check_syntax_examples, which proves the guide's code
+# EXECUTES and nothing whatsoever about whether it RENDERS. A chapter whose
+# cross-links broke, whose TOC pointed at nothing, or which rendered blank
+# reached the deployed site green.
+#
+# `sources` names the three renderer files plus the guide corpus, mirroring the
+# preflight arm this slice added. (preflight ALSO derives this gate for the three
+# playground/* files on its own, via `_consumes` reading their paths out of the
+# gate script — the entry here is the registry's independent statement of the
+# same fact, per this file's derived-from-preflight convention.)
+#
+# ⚠️ `shard` below is a GUESS, as every brand-new gate's must be ([W-SHARD-DERIVED],
+# #2178): it has no row in test/gate_cost_baseline.json yet, so `medaka gate
+# balance` HARD-REFUSES to place it until an unnarrowed CI run measures it, and
+# `ci-gen-drift` reds until the follow-up `medaka gate balance && make gen-ci`
+# commit. It is guessed onto a `wasm_arm = true` row on purpose and NOT for
+# wasm: that flag is what installs Node on a `gates` runner (ci.yml, the
+# `wasm_arm = true -> installs wasm-tools + Node` rows), and this gate needs
+# node>=24. The balancer must keep it on a Node-bearing row.
+[[gate]]
+name = "diff_compiler_guide_render"
+area = "infra"
+shard = "gates_3"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+run = "test/diff_compiler_guide_render.sh"
+oracles = []
+sources = ["test/diff_compiler_guide_render.sh", "playground/render_docs.mjs", "playground/build_guide.sh", "playground/guide_render_test.mjs", "playground/vendor/marked/marked.js", "docs/guide/*.md"]
+corpus = ["docs/guide"]
+toolchain = ["node>=24"]
 
 # ── the `gates` matrix rows (S-1, #2177) ─────────────────────────────────────
 #

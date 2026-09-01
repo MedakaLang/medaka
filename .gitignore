@@ -30,6 +30,10 @@ _build/
 # Playground deployable site folder (built by playground/build_site.sh; not committed)
 /playground/site/
 
+# Rendered guide pages (built by playground/build_guide.sh from docs/guide/*.md; a
+# STAGING dir that build_site.sh will fold into /playground/site/). Regenerable.
+/playground/site-guide/
+
 # SQLite demo/probe build artifacts (built to repo root by demos/oracles).
 # `/*_demo` covers the whole family (delete_demo, update_demo, update_expr_demo,
 # writer_demo, writer_api_demo, overflow_demo, rowid_roundtrip_demo,

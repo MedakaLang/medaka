@@ -1070,7 +1070,39 @@ while IFS= read -r f; do
     # does nightly run, and how". That question is now `tiers` in the registry,
     # and this is the gate that checks it.
     .github/workflows/nightly.yml) add 'diff_compiler_ci_shard_coverage'; add 'diff_compiler_tier_drift' ;;
-    docs/guide/*.md)               add 'check_syntax_examples' ;;
+    # Two gates, two different questions, and the guide needs both answered.
+    # `check_syntax_examples` proves the chapters' code EXECUTES (native `medaka
+    # run`); it says nothing about whether the chapter RENDERS. Since #2386 the
+    # guide is a DEPLOYED artifact (playground/build_site.sh renders it into
+    # site/guide/), so a chapter whose cross-links broke, whose TOC pointed at
+    # nothing, or which rendered blank would ship green on the execution gate
+    # alone. `diff_compiler_guide_render` is the render half.
+    #
+    # The renderer's OWN files (playground/render_docs.mjs, build_guide.sh,
+    # guide_render_test.mjs) do NOT need an arm here: they fall through to the
+    # derived `demo/*|playground/*` arm below, and `_gates_for_path` finds this
+    # same gate because test/diff_compiler_guide_render.sh references all three
+    # by path in live (non-comment) lines. Deriving beats listing, and a
+    # hand-written arm here would also SHADOW that derivation (`case` fires its
+    # first matching arm only), silently dropping every other playground/-level
+    # gate those files legitimately reach. Verified by putting those three paths
+    # in a list file and running `PREFLIGHT_DRY=1 PREFLIGHT_CHANGED_FILE=<that
+    # file> sh test/preflight.sh` — each derives diff_compiler_guide_render AND
+    # keeps all nine playground/-level gates it had before.
+    #
+    # THIRD gate, third question (F-guide-gate-hardening, review finding S3-1b):
+    # `check_doc_links` is the only thing in the tree that resolves a chapter's
+    # OUT-OF-SET links (`../spec/FOO.md`, bare `compiler/…` citations) against
+    # what is actually on disk. The renderer cannot: an out-of-set target is
+    # rewritten to a repo blob URL by construction, so a link to a file that does
+    # not exist renders as a plausible, 404ing URL and passes the render gate
+    # clean. Without this line that defect reached `main` on any docs/guide/*.md
+    # PR — `case` fires its FIRST matching arm only, so the arm that names the
+    # two render/execution gates was the whole gate set for such a diff, and
+    # check_doc_links only ran in the merge tier.
+    docs/guide/*.md)               add 'check_syntax_examples'
+                                   add 'diff_compiler_guide_render'
+                                   add 'check_doc_links' ;;
     # S-reference-lands (#2249): docs/stdlib/*.md (+ index.md/inventory.json) is a
     # GENERATED tree (`./medaka doc --out docs/stdlib stdlib/*.mdk`), not prose —
     # without this arm it falls through to the generic docs/*.md "nothing to run"
