@@ -21,8 +21,11 @@ Phase 3's socket shell is next but remains dependency-gated; see
 - `pds/lib/http.mdk` and `pds/lib/xrpc.mdk` — bounded HTTP/1.1 framing,
   deterministic responses, body/query policy, and structural XRPC routing.
 - `pds/lib/store.mdk` and `pds/lib/server_core.mdk` — opaque immutable state
-  plus configured pure composition from request bytes to successor state and
-  response bytes.
+  (blob blocks plus the configured account's repository — see "The Store is
+  secret-bearing") plus configured pure composition from request bytes to
+  successor state and response bytes.
+- `pds/lib/handlers.mdk` — the three atproto record-write procedures
+  (`createRecord`/`putRecord`/`deleteRecord`) over that state.
 - `pds/test/` — in-language `medaka test` suites (`*_test.mdk`) plus gate
   scripts that run them (`*.sh`). Every gate must be placed explicitly in
   exactly one `ci.yml` shard by measured cost; directory location alone does
@@ -259,8 +262,9 @@ multipart, so its media type never selects JSON or text decoding. NSID authority
 identity is case-insensitive while method names remain case-sensitive.
 
 `pds/lib/store.mdk` is an opaque immutable wrapper around the verified
-`BlockStore`. `pds/lib/server_core.mdk` configures a registry plus injected pure
-handler and exposes `handle : Server -> Store -> Request -> (Store, Response)`
+`BlockStore` (Phase 4 adds the configured account's repository beside it — see
+"The Store is secret-bearing"). `pds/lib/server_core.mdk` configures an account
+and a registry plus injected pure handler and exposes `handle : Server -> Store -> Request -> (Store, Response)`
 and the raw-byte `handleBytes` composition. Protocol failures return the input
 store; successful writes return a successor. Neither module imports file,
 socket, runtime-I/O, or async code.
@@ -270,6 +274,96 @@ The buffered policy caps combined headers at 64 KiB, JSON at 150 KiB, text at
 trailer, and chunk counts. `pds/test/protocol_all_engines.sh` requires exact
 eval/native/Wasm agreement on fourteen hand-authored protocol cells and runs a
 native direct-red mutation of a repaired raw-input assertion.
+
+## Phase 4 record writes (#1697, pure half)
+
+`pds/lib/handlers.mdk` implements `com.atproto.repo.createRecord`,
+`com.atproto.repo.putRecord`, and `com.atproto.repo.deleteRecord` as real
+handlers: lexicon-shaped JSON in (`pds/lib/lexjson.mdk` maps the `record` field
+to and from DAG-CBOR), the `lib.repo` transition in the middle, lexicon-shaped
+JSON out. `swapCommit` and `swapRecord` are honored as compare-and-swap
+preconditions and fail with `InvalidSwap`. `swapRecord` is three-valued: absent
+means no check, an explicit `null` asserts the record is ABSENT, and a CID
+string asserts it is exactly that record.
+
+`pds/lib/server_core.mdk` gains an `Account` — the repository owner's DID, the
+owner's handle, and this PDS's hostname — admitted by `pds/lib/atsyntax.mdk`'s
+validators, which are the ones graded against the official atproto interop
+corpora. (`pds/lib/repo.mdk` still carries its own older, divergent
+`validateDid`, which wrongly accepts digits in a DID method; record admission
+does not go through it.) `Handler`, `handle`, and `handleBytes` keep their
+Phase-2 shapes — the account is configuration on the `Server`, not a new
+argument on the composition seam.
+
+`pds/test/record_handlers_main.mdk` replays the provenance-pinned Phase-1
+transcript (`pds/test/vectors/repo_reference_corpus.txt`) through `handleBytes`
+end to end and compares every `uri`, record `cid`, `commit.cid`, and
+`commit.rev` against the corpus's pinned values. It runs as an arm of
+`pds/test/repo_vectors.sh`.
+
+### Where the revision comes from (there is no clock)
+
+`repoCreate`/`repoUpdate`/`repoDelete` each require an explicit, strictly
+monotonic `Tid`, but the pinned lexicon input has no `rev` or `tid` field for a
+caller to supply one, and nothing in the pure core may read a clock. The
+revision is therefore derived from the repository's OWN latest commit:
+
+```
+next = tidNext prior (tidMicros prior) (tidClockId prior)
+```
+
+`tidNext` returns the proposal when it is strictly newer than `prior` and
+otherwise advances `prior` by exactly one microsecond under the proposed clock
+id. The proposal here IS the prior timestamp, so the second arm always fires:
+every write advances the repository revision by one microsecond and keeps the
+clock id the repository was initialized with. The whole revision sequence is a
+pure function of the initializing `Tid`, which is why it reproduces the Phase-1
+reference transcript's revisions exactly — initialized at `3ke6kg3wk222b`
+(micros `1700000000000000`, clock id `7`), then `…232b`, `…242b`, `…252b`,
+`…262b` — and therefore reproduces that transcript's record CIDs, `rev`s, and
+commit CIDs byte for byte.
+
+`createRecord` with no `rkey` uses that same derived revision's canonical
+thirteen-character TID spelling as the record key, which is what a real PDS
+does with its clock, and is deterministic here for the same reason.
+
+### The Store is secret-bearing
+
+`pds/lib/store.mdk`'s `Store` has two halves: the Phase-2 verified blob
+`BlockStore` (`storeGet`/`storePut`/`storeSize`, unchanged, and `storeSize`
+counts only that half), and the configured account's `Repo`.
+
+**A `Store` built by `storeFromRepo` transitively owns the account's secp256k1
+signing secret**, because `Repo` must own it to sign every commit. Nothing in
+`store.mdk` exposes the key and `Store`'s representation is private, but a
+caller that logs, serializes, or copies a `Store` is copying the signing key.
+Phase 3's socket shell must treat a `Store` as key material.
+
+The repository half is `Option`-shaped and starts `None`: `storeEmpty` is a
+store with no account configured. That is not a hedge, it is a measured
+requirement. Protocol composition (framing, routing, media negotiation) is
+tested with no account at all by `pds/test/protocol_all_engines.sh`, whose eval
+arm runs the tree-walking interpreter; one `repoInit` under that interpreter did
+not finish in 600s on this box, so making `storeEmpty` sign would have moved a
+seconds-long merge-queue gate into the >10-minute band that #2208 removed from
+this project. A record write against an unconfigured store is refused with
+`RepoNotFound`, never silently accepted.
+
+### Consequences shipped, deliberately
+
+- **No authentication.** Nothing in the pure core authenticates a request:
+  there is no session, no token check, no signature over the request. Any caller
+  that can reach `handleBytes` can write to the configured repository. That is
+  Phase 4's stated pure-half scope — auth belongs with the Phase 3 socket shell
+  — but it means this core is not safe to expose on a network as it stands.
+- **No lexicon validation.** The record body is admitted as atproto data, not
+  validated against a lexicon schema. `validate: true` is therefore REFUSED
+  with an explicit error rather than accepted and quietly ignored; `validate:
+  false` and an absent field both mean "store the record as given", which is
+  what happens.
+- **One account per server.** `Server` carries exactly one `Account` and
+  `Store` exactly one `Repo`. A `repo` field naming anything but that account's
+  DID or handle is `RepoNotFound`.
 
 ## secp256k1 scalar arithmetic (S-scalar, #1700)
 

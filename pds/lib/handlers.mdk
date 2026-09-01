@@ -1,0 +1,370 @@
+{- | The three pure atproto record-write endpoints:
+   `com.atproto.repo.createRecord`, `com.atproto.repo.putRecord`, and
+   `com.atproto.repo.deleteRecord`.
+
+   Lexicon-shaped JSON goes in and comes out; the transition itself is
+   `lib.repo`'s. Only a write that SUCCEEDS returns a successor `Store` — every
+   rejection (bad body shape, unadmitted identifier, failed compare-and-swap,
+   a repository-layer refusal) returns the identical input `Store`, so a failed
+   request cannot leave observable state behind.
+
+   ── WHERE THE REVISION COMES FROM (no clock is in scope) ────────────────────
+
+   `repoCreate`/`repoUpdate`/`repoDelete` each require an explicit strictly
+   monotonic `Tid`, but the pinned lexicon input has no `rev` field for a
+   caller to supply one and this module has no clock. The revision is
+   therefore derived from the repository's OWN latest commit:
+
+       next = tidNext prior (tidMicros prior) (tidClockId prior)
+
+   `tidNext` advances the prior timestamp by exactly one microsecond when the
+   proposal is not newer, and the proposal here is the prior timestamp itself,
+   so every write advances the repository revision by one microsecond and
+   keeps the clock id the repository was initialized with. The whole sequence
+   is a pure function of the initial revision, which reproduces the Phase-1
+   reference transcript's revisions exactly (`3ke6kg3wk222b` initialized, then
+   `…232b`, `…242b`, `…252b`, `…262b`). See `pds/README.md`.
+
+   `createRecord` with no `rkey` uses that same derived revision's canonical
+   TID spelling as the record key, which is what a real PDS does with its
+   clock and is deterministic here for the same reason. -}
+
+import json.{Json(..), jObject, lookup, stringify}
+import string.{toUtf8}
+import lib.atsyntax.{validateAtIdentifier}
+import lib.cid.{Cid, cidEqual, cidForDagCbor, cidFromString, cidToString}
+import lib.dagcbor.{DagCbor, dagCborEncode}
+import lib.http.{Header, Response, makeHeader, makeResponse}
+import lib.lexjson.{lexJsonToDagCbor}
+import lib.repo.{
+  Repo,
+  RepoCommit,
+  RepoMutation,
+  repoCommitCid,
+  repoCommitTid,
+  repoCreate,
+  repoDelete,
+  repoLatestCommit,
+  repoLookup,
+  repoMutationCommit,
+  repoMutationState,
+  repoUpdate,
+}
+import lib.server_core.{
+  Account,
+  Handler,
+  Server,
+  accountDid,
+  accountHandle,
+  makeServer,
+}
+import lib.store.{Store, storeRepo, storeWithRepo}
+import lib.tid.{Tid, tidClockId, tidMicros, tidNext, tidToString}
+import lib.xrpc.{
+  InputPolicy(..),
+  Registry,
+  XrpcCall(..),
+  makeRegistry,
+  procedureEndpoint,
+  xrpcErrorResponse,
+}
+
+createRecordNsid : String
+createRecordNsid = "com.atproto.repo.createRecord"
+
+putRecordNsid : String
+putRecordNsid = "com.atproto.repo.putRecord"
+
+deleteRecordNsid : String
+deleteRecordNsid = "com.atproto.repo.deleteRecord"
+
+-- ── responses ───────────────────────────────────────────────────────────────
+
+invalidRequest : String -> Response
+invalidRequest = xrpcErrorResponse 400 "Bad Request" "InvalidRequest"
+
+invalidSwap : String -> Response
+invalidSwap = xrpcErrorResponse 400 "Bad Request" "InvalidSwap"
+
+repoNotFound : String -> Response
+repoNotFound = xrpcErrorResponse 400 "Bad Request" "RepoNotFound"
+
+notImplemented : String -> Response
+notImplemented = xrpcErrorResponse 501 "Not Implemented" "NotImplemented"
+
+jsonHeader : Header
+jsonHeader = match makeHeader "content-type" (toUtf8 "application/json")
+  Ok header => header
+  Err message => panic "handlers: internal response header error: \{message}"
+
+{- | The standard XRPC success envelope: 200 with a serialized JSON body.
+   `lib.xrpc` owns the matching error envelope (`xrpcErrorResponse`) but has no
+   success counterpart, so this is it. -}
+export
+jsonOkResponse : Json -> Response
+jsonOkResponse value = match makeResponse 200 "OK" [jsonHeader] (toUtf8 (stringify value))
+  Ok response => response
+  Err message =>
+    panic "handlers: internal response construction error: \{message}"
+
+-- ── request-field admission ─────────────────────────────────────────────────
+
+requireObject : Json -> Result Response Unit
+requireObject (JObject _) = Ok ()
+requireObject _ = Err (invalidRequest "Request body must be a JSON object")
+
+requiredString : String -> Json -> Result Response String
+requiredString name body = match lookup name body
+  None => Err (invalidRequest "Request field '\{name}' is required")
+  Some (JString value) => Ok value
+  Some _ => Err (invalidRequest "Request field '\{name}' must be a string")
+
+optionalString : String -> Json -> Result Response (Option String)
+optionalString name body = match lookup name body
+  None => Ok None
+  Some JNull => Ok None
+  Some (JString value) => Ok (Some value)
+  Some _ => Err (invalidRequest "Request field '\{name}' must be a string")
+
+{- | `validate: true` asks for lexicon record validation, which this server
+   does not implement. Honoring it silently would report a validation that
+   never happened, so it is refused outright; `validate: false` and an absent
+   field both mean "store the record as given", which is what happens. -}
+requireNoLexiconValidation : Json -> Result Response Unit
+requireNoLexiconValidation body = match lookup "validate" body
+  None => Ok ()
+  Some (JBool False) => Ok ()
+  Some (JBool True) => Err (invalidRequest "Lexicon record validation is not implemented; 'validate: true' cannot be honored")
+  Some _ => Err (invalidRequest "Request field 'validate' must be a boolean")
+
+requireConfiguredRepo : Store -> Result Response Repo
+requireConfiguredRepo store = match storeRepo store
+  None =>
+    Err (repoNotFound "No account repository is configured on this server")
+  Some repo => Ok repo
+
+{- | The `repo` field must be an admitted at-identifier naming the one account
+   this server hosts. Admission is `lib.atsyntax`'s, which is the graded
+   validator. -}
+requireHostedRepo : Account -> Json -> Result Response Unit
+requireHostedRepo account body = do
+  target <- requiredString "repo" body
+  () <- match validateAtIdentifier target
+    Err message => Err (invalidRequest "Request field 'repo' is not a valid at-identifier: \{message}")
+    Ok () => Ok ()
+  if target == accountDid account || target == accountHandle account then
+    Ok ()
+  else
+    Err (repoNotFound "This server does not host the repository '\{target}'")
+
+requireRecord : Json -> Result Response DagCbor
+requireRecord body = match lookup "record" body
+  None => Err (invalidRequest "Request field 'record' is required")
+  Some value => match lexJsonToDagCbor value
+    Err message => Err (invalidRequest "Request field 'record' is not representable as atproto data: \{message}")
+    Ok record => Ok record
+
+encodeRecord : DagCbor -> Result Response (Array Int)
+encodeRecord record = match dagCborEncode record
+  Err message => Err (invalidRequest "Request field 'record' cannot be encoded: \{message}")
+  Ok bytes => Ok bytes
+
+recordPath : String -> String -> Array Int
+recordPath collection rkey = toUtf8 "\{collection}/\{rkey}"
+
+-- ── revision derivation ─────────────────────────────────────────────────────
+
+nextRevision : Repo -> Result Response Tid
+nextRevision repo =
+  let prior = repoCommitTid (repoLatestCommit repo)
+  match tidNext prior (tidMicros prior) (tidClockId prior)
+    Err message =>
+      Err (invalidRequest "Repository revision cannot advance: \{message}")
+    Ok rev => Ok rev
+
+-- ── compare-and-swap ────────────────────────────────────────────────────────
+
+currentCommitCid : Repo -> Cid
+currentCommitCid repo = repoCommitCid (repoLatestCommit repo)
+
+currentRecordCid : Array Int -> Repo -> Result Response (Option Cid)
+currentRecordCid path repo = match repoLookup path repo
+  Err message => Err (invalidRequest "Repository read rejected: \{message}")
+  Ok None => Ok None
+  Ok (Some value) => match dagCborEncode value
+    Err message =>
+      Err (invalidRequest "Stored record cannot be re-encoded: \{message}")
+    Ok bytes => Ok (Some (cidForDagCbor bytes))
+
+checkSwapCommit : Json -> Repo -> Result Response Unit
+checkSwapCommit body repo = match lookup "swapCommit" body
+  None => Ok ()
+  Some JNull => Ok ()
+  Some (JString text) => match cidFromString text
+    Err message => Err (invalidRequest "Request field 'swapCommit' is not a valid CID: \{message}")
+    Ok expected =>
+      if cidEqual expected (currentCommitCid repo) then
+        Ok ()
+      else
+        Err (invalidSwap "Commit was at \{cidToString (currentCommitCid repo)}")
+  Some _ => Err (invalidRequest "Request field 'swapCommit' must be a string")
+
+{- | `swapRecord` is three-valued: absent means no check, an explicit `null`
+   asserts the record is ABSENT, and a CID string asserts it is exactly that
+   record. -}
+checkSwapRecord : Json -> Array Int -> Repo -> Result Response Unit
+checkSwapRecord body path repo = match lookup "swapRecord" body
+  None => Ok ()
+  Some JNull => do
+    actual <- currentRecordCid path repo
+    match actual
+      None => Ok ()
+      Some cid => Err (invalidSwap "Record is at \{cidToString cid}; 'swapRecord: null' requires its absence")
+  Some (JString text) => match cidFromString text
+    Err message => Err (invalidRequest "Request field 'swapRecord' is not a valid CID: \{message}")
+    Ok expected => do
+      actual <- currentRecordCid path repo
+      match actual
+        None => Err (invalidSwap "Record does not exist")
+        Some cid =>
+          if cidEqual expected cid then
+            Ok ()
+          else
+            Err (invalidSwap "Record was at \{cidToString cid}")
+  Some _ =>
+    Err (invalidRequest "Request field 'swapRecord' must be a string or null")
+
+-- ── outputs ─────────────────────────────────────────────────────────────────
+
+commitJson : RepoCommit -> Json
+commitJson commit = jObject
+  [
+    ("cid", JString (cidToString (repoCommitCid commit))),
+    ("rev", JString (tidToString (repoCommitTid commit))),
+  ]
+
+writeOutput : Account -> String -> String -> Cid -> RepoCommit -> Json
+writeOutput account collection rkey recordCid commit = jObject
+  [
+    ("uri", JString "at://\{accountDid account}/\{collection}/\{rkey}"),
+    ("cid", JString (cidToString recordCid)),
+    ("commit", commitJson commit),
+  ]
+
+deleteOutput : RepoCommit -> Json
+deleteOutput commit = jObject [("commit", commitJson commit)]
+
+admitMutation : Result String RepoMutation -> Result Response RepoMutation
+admitMutation (Err message) =
+  Err (invalidRequest "Repository write rejected: \{message}")
+admitMutation (Ok mutation) = Ok mutation
+
+-- ── the three endpoints ─────────────────────────────────────────────────────
+
+applyCreateRecord : Account -> Store -> Json -> Result Response (Repo, Json)
+applyCreateRecord account store body = do
+  () <- requireObject body
+  repo <- requireConfiguredRepo store
+  () <- requireHostedRepo account body
+  () <- requireNoLexiconValidation body
+  collection <- requiredString "collection" body
+  record <- requireRecord body
+  rev <- nextRevision repo
+  proposedRkey <- optionalString "rkey" body
+  let rkey = match proposedRkey
+    None => tidToString rev
+    Some value => value
+  let path = recordPath collection rkey
+  () <- checkSwapCommit body repo
+  () <- checkSwapRecord body path repo
+  bytes <- encodeRecord record
+  mutation <- admitMutation (repoCreate path record rev repo)
+  Ok
+    (
+      repoMutationState mutation,
+      writeOutput account collection rkey (cidForDagCbor bytes) (repoMutationCommit mutation),
+    )
+
+applyPutRecord : Account -> Store -> Json -> Result Response (Repo, Json)
+applyPutRecord account store body = do
+  () <- requireObject body
+  repo <- requireConfiguredRepo store
+  () <- requireHostedRepo account body
+  () <- requireNoLexiconValidation body
+  collection <- requiredString "collection" body
+  rkey <- requiredString "rkey" body
+  record <- requireRecord body
+  rev <- nextRevision repo
+  let path = recordPath collection rkey
+  () <- checkSwapCommit body repo
+  () <- checkSwapRecord body path repo
+  bytes <- encodeRecord record
+  existing <- currentRecordCid path repo
+  let transition = match existing
+    None => repoCreate path record rev repo
+    Some _ => repoUpdate path record rev repo
+  mutation <- admitMutation transition
+  Ok
+    (
+      repoMutationState mutation,
+      writeOutput account collection rkey (cidForDagCbor bytes) (repoMutationCommit mutation),
+    )
+
+applyDeleteRecord : Account -> Store -> Json -> Result Response (Repo, Json)
+applyDeleteRecord account store body = do
+  () <- requireObject body
+  repo <- requireConfiguredRepo store
+  () <- requireHostedRepo account body
+  collection <- requiredString "collection" body
+  rkey <- requiredString "rkey" body
+  rev <- nextRevision repo
+  let path = recordPath collection rkey
+  () <- checkSwapCommit body repo
+  () <- checkSwapRecord body path repo
+  mutation <- admitMutation (repoDelete path rev repo)
+  Ok (repoMutationState mutation, deleteOutput (repoMutationCommit mutation))
+
+finishWrite : Store -> Result Response (Repo, Json) -> (Store, Response)
+finishWrite store (Err response) = (store, response)
+finishWrite store (Ok (repo, output)) =
+  (storeWithRepo repo store, jsonOkResponse output)
+
+{- | The record-write handler for one configured account. Any routed call that
+   is not one of the three record-write procedures is answered 501 with the
+   input `Store` intact. -}
+export
+recordHandler : Account -> Handler
+recordHandler account store (ProcedureJsonCall nsid _ body)
+  | nsid == createRecordNsid =
+    finishWrite store (applyCreateRecord account store body)
+  | nsid == putRecordNsid =
+    finishWrite store (applyPutRecord account store body)
+  | nsid == deleteRecordNsid =
+    finishWrite store (applyDeleteRecord account store body)
+  | otherwise =
+    (store, notImplemented "XRPC method is not implemented: \{nsid}")
+recordHandler _ store call =
+  (store, notImplemented "XRPC method is not implemented: \{callNsid call}")
+
+callNsid : XrpcCall -> String
+callNsid (QueryCall nsid _) = nsid
+callNsid (ProcedureNoInputCall nsid _) = nsid
+callNsid (ProcedureJsonCall nsid _ _) = nsid
+callNsid (ProcedureTextCall nsid _ _ _) = nsid
+callNsid (ProcedureRawCall nsid _ _ _) = nsid
+
+-- | The registry of exactly the three record-write procedures.
+export
+recordRegistry : Result String Registry
+recordRegistry = do
+  create <- procedureEndpoint createRecordNsid JsonInput
+  put <- procedureEndpoint putRecordNsid JsonInput
+  remove <- procedureEndpoint deleteRecordNsid JsonInput
+  makeRegistry [create, put, remove]
+
+-- | A configured record-write server for one account.
+export
+recordServer : Account -> Result String Server
+recordServer account = do
+  registry <- recordRegistry
+  Ok (makeServer account registry (recordHandler account))

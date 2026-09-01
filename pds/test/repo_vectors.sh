@@ -103,6 +103,27 @@ grep -F -q 'OP CREATE PASS' "$WORK/native-rep.out" || fail 'native missed the re
 grep -F -q 'CREATE CAR PASS order=' "$WORK/native-rep.out" || fail 'native missed representative exact CAR bytes/order'
 [ "$(tail -1 "$WORK/native-rep.out")" = 'REPRESENTATIVE: PASS' ] || fail 'native did not end in REPRESENTATIVE: PASS'
 
+# ── P4-C: the SAME transcript, through the record-write handler layer ────────
+# repo_vectors_main.mdk replays the corpus directly against lib.repo. This arm
+# replays it through handleBytes — JSON request bytes in, JSON response bytes
+# out — and compares every uri/cid/commit.cid/commit.rev against the same pinned
+# rows, so the handler layer is graded against the official oracle rather than
+# against itself. Native only, for the reason the header gives at length.
+HANDLERS_DRIVER="$ROOT/pds/test/record_handlers_main.mdk"
+if ! MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$HANDLERS_DRIVER" -o "$WORK/handlers" > "$WORK/handlers-build.log" 2>&1; then
+  cat "$WORK/handlers-build.log" >&2
+  fail 'record-handler driver build failed'
+fi
+
+"$WORK/handlers" "$CORPUS" > "$WORK/handlers.out" 2> "$WORK/handlers.err"
+require_empty "$WORK/handlers.err" 'record handlers'
+
+grep -F -q 'transcript: 4/4 handler-layer steps matched the pinned corpus' "$WORK/handlers.out" || fail 'handler-layer transcript count is incomplete'
+grep -F -q 'CELL swap-commit-mismatch PASS error=InvalidSwap' "$WORK/handlers.out" || fail 'handler layer missed the swapCommit CAS rejection'
+grep -F -q 'CELL validate-true-refused PASS error=InvalidRequest' "$WORK/handlers.out" || fail 'handler layer missed the validate:true refusal'
+grep -F -q 'cells: 4/4 state-preserving rejections' "$WORK/handlers.out" || fail 'handler-layer state-preservation count is incomplete'
+[ "$(tail -1 "$WORK/handlers.out")" = 'TOTAL: PASS' ] || fail 'record-handler driver did not end in TOTAL: PASS'
+
 if [ ! -x "$WASM_EMITTER" ] || ! command -v node >/dev/null 2>&1 || ! command -v wasm-tools >/dev/null 2>&1; then
   [ "${MEDAKA_REQUIRE_WASM:-0}" != 1 ] || fail 'Wasm is required but emitter/node/wasm-tools is unavailable'
   echo 'PASS: repo — full official transcript and focused representative on native; Wasm unavailable'
@@ -124,4 +145,4 @@ require_empty "$WORK/wasm-rep.err" 'wasm representative'
 strip_exit_trailer "$WORK/wasm-rep-raw.out" "$WORK/wasm-rep.out"
 cmp "$WORK/native-rep.out" "$WORK/wasm-rep.out" || fail 'native and Wasm normalized representative output differ'
 
-echo 'PASS: repo — full official TIDs/records/MST/commits/signatures/CAR and the 27 focused rejection routes, native == Wasm on both; 19 hostile routes'
+echo 'PASS: repo — full official TIDs/records/MST/commits/signatures/CAR and the 27 focused rejection routes, native == Wasm on both; 19 hostile routes; 4 handler-layer transcript steps + 4 state-preserving rejections'
