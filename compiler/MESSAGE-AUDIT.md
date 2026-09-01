@@ -213,7 +213,7 @@ below are mostly *cross-backend divergence*, not persona.
 | (none) | `main : Async _ requires `runAsync` in scope — add `import async`` | eval.mdk:2452 | inconsistent (bare `panic`) — copy is otherwise good | give a code + located form |
 | E-DIV-ZERO / E-MOD-ZERO / E-NONEXHAUSTIVE-MATCH | `runtime error [E-*]: …` | medaka_rt.c:346,350,361 | inconsistent (coded but **unlocated** — Core IR carries no loc) | known gap; keep coded, add loc when Core IR carries one |
 | (none) | `array index out of bounds` | medaka_rt.c:193 (`mdk_oob`) | inconsistent (offender #10 — no code, no prefix, no loc, divergent wording) | `runtime error [E-INDEX-OOB]: index out of bounds` |
-| (none) | `Array.set: index out of bounds`, `Array.blit: negative length/srcOff/dstOff`, `… source/destination out of bounds`, `MutArray.set: index out of bounds` | array.mdk:268,290–298; mut_array.mdk:144 | inconsistent (raw `panic`, no code/`runtime error` prefix/loc) | route through the coded OOB path |
+| (none) | `Array.set: index out of bounds`, `Array.blit: negative length/srcOff/dstOff`, `… source/destination out of bounds`, `Vector.set: index out of bounds` | array.mdk:268,290–298; vector.mdk:144 | inconsistent (raw `panic`, no code/`runtime error` prefix/loc) | route through the coded OOB path |
 
 **Wasm divergence (flag, no per-row rewrite):** the WasmGC backend lowers every
 trap — OOB, div-zero, nonexhaustive, `panic` — to a bare `unreachable` and

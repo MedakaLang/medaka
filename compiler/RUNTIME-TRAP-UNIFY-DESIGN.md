@@ -2,7 +2,7 @@
 
 **Status:** OPEN — verified live: `stdlib/array.mdk:268` still has a bare, uncoded
 `panic "Array.set: index out of bounds"`, matching this doc's reproduction matrix row
-for `Array.set`/`MutArray.set` OOB ("wrong code, stdlib loc"). Staged-and-ready open work
+for `Array.set`/`Vector.set` OOB ("wrong code, stdlib loc"). Staged-and-ready open work
 (reproduction matrix, target format, touchpoints, staging plan already written); resolves
 `compiler/RUNTIME-DESIGN.md`'s explicitly-deferred "panic unwind model" item.
 
@@ -19,7 +19,7 @@ All exit 1.
 | mod-zero | `f:L:C: … [E-MOD-ZERO]…` | same, no loc | `remainder by zero` (engine) | `program panicked` |
 | non-exhaustive | `f:L:C: … [E-NONEXHAUSTIVE-MATCH]…` | same, no loc | `unreachable` | `program panicked` |
 | array/list OOB `.[i]` | `f:L:C: … [E-INDEX-OOB]: index N…` | ~~no index N~~ → `index N` (no loc) since #1787 | array: `[E-INDEX-OOB]: index N` since #1787; **list `.[i]` = hard wasm emit gap** | `program panicked` |
-| `Array.set`/`MutArray.set` OOB | `stdlib/array.mdk:L: [E-PANIC]: Array.set…` (**wrong code, stdlib loc**) | **bare, no code/loc** | `unreachable` | `program panicked` |
+| `Array.set`/`Vector.set` OOB | `stdlib/array.mdk:L: [E-PANIC]: Array.set…` (**wrong code, stdlib loc**) | **bare, no code/loc** | `unreachable` | `program panicked` |
 | user `panic "msg"` | `f:L:C: [E-PANIC]: msg` | **bare msg, no code/loc** | `unreachable` (**msg dropped, partial stdout LOST**) | `program panicked` |
 | no `main` | `program has no 'main' binding` (bare) | `emitter failed … no main` (bare) | build-time | build-time |
 
@@ -42,7 +42,7 @@ loc. Bad-main → the diagnostic channel as a coded driver diagnostic (`E-NO-MAI
   `runtimePanic` (infra `:1664`, `currentEvalLoc` `:1649`); `:2214/:2248/:2458`
   no-main panics → diagnostic channel (`E-NO-MAIN`), share one builder; `:2462`
   `main:Async` panic → coded+located.
-- **(2) stdlib/array.mdk `:268`, blit `:296/:298`; stdlib/mut_array.mdk `:144`**
+- **(2) stdlib/array.mdk `:268`, blit `:296/:298`; stdlib/vector.mdk `:144`**
   (NOT in emitter graph): bare `panic` → coded OOB. Constraint: stdlib has no
   `runtimePanic`, only the `panic` extern → needs a new coded-OOB seam (fork 4).
 - **(3) runtime/medaka_rt.c** (NOT in seed graph, C): `mdk_oob:192`, `mdk_div_zero:345`,
@@ -65,7 +65,7 @@ loc. Bad-main → the diagnostic channel as a coded driver diagnostic (`E-NO-MAI
 ## 4. Seed re-mint (verified by import trace)
 - eval.mdk (1) → IN seed graph (imported by the driver) → **re-mint owed**.
 - typecheck.mdk (4) → IN seed graph → **re-mint owed**.
-- stdlib array/mut_array (2) → NOT in emitter graph (compiler uses low-level externs)
+- stdlib array/vector (2) → NOT in emitter graph (compiler uses low-level externs)
   → no re-mint (but the seam's native lowering may touch runtime_rt.c/emitter).
 - runtime_rt.c (3) → C, not in seed → no re-mint.
 - wasm_emit.mdk (5) → not in LLVM seed → no LLVM re-mint.
@@ -85,7 +85,7 @@ project: `mdk_oob` printing `index N` -- **taken, #1787** (via `mdk_oob_at`; see
 | B1 | typecheck.mdk (4) dedup message builder | Sonnet | yes (in-graph, mechanical) |
 | B2 | medaka_rt.c (3): `mdk_panic` → `[E-PANIC]` prefix; ~~`mdk_oob(index)` → `index N`~~ **DONE #1787** (as `mdk_oob_at`, + wasm parity; the `mdk_panic` half is still open) | Sonnet | no |
 | B3 | eval.mdk (1): route `:693`/`:2462` via `runtimePanic`; no-main → `E-NO-MAIN` | Opus | **yes — make seed** |
-| B4 | stdlib array/mut_array (2): coded-OOB seam | Opus | no (stdlib) |
+| B4 | stdlib array/vector (2): coded-OOB seam | Opus | no (stdlib) |
 | B5 | wasm_emit.mdk (5): divisor guard + coded trap text via `mdk_write_err_byte` + surface in worker.js/run.js | Opus | no (wasm from source) |
 Order B1→B2→B3→B4→B5; batch B1+B3 re-mint.
 
@@ -110,5 +110,5 @@ Order B1→B2→B3→B4→B5; batch B1+B3 re-mint.
 7. **Exit codes** — already uniformly 1; confirm that's intended.
 
 Critical files: `compiler/eval/eval.mdk`, `runtime/medaka_rt.c`,
-`compiler/backend/wasm_emit.mdk`, `stdlib/array.mdk` + `stdlib/mut_array.mdk`,
+`compiler/backend/wasm_emit.mdk`, `stdlib/array.mdk` + `stdlib/vector.mdk`,
 `playground/worker.js` (peer `compiler/backend/llvm_emit.mdk:2626`).

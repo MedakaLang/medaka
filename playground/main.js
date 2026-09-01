@@ -262,8 +262,8 @@ function applyDiagnostics(files) {
 // build_playground_wasm.sh (these are fetched from dist/<id>.mdk).
 const EXTRA_MODULES = [
   'args', 'array', 'async', 'base64', 'bytebuilder', 'byteparser', 'hash_map',
-  'hash_set', 'hex', 'json', 'list', 'map', 'mut_array', 'nonempty',
-  'path', 'set', 'string', 'toml', 'validation',
+  'hash_set', 'hex', 'json', 'list', 'map', 'nonempty', 'path', 'set',
+  'string', 'toml', 'validation', 'vector',
 ];
 
 // ── Asset loader ──────────────────────────────────────────────────────────────

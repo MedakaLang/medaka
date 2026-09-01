@@ -2,7 +2,7 @@
 -- `Index c k v` (stdlib/core.mdk) is the `xs[k]` operator, so an unsigned indexing
 -- helper is an everyday shape, not an exotic one. stdlib ships three multi-param
 -- interfaces — FromEntries c e, Index c k v, IndexMut c k v — with real impls in
--- map.mdk and mut_array.mdk, so this class was never dormant.
+-- map.mdk and vector.mdk, so this class was never dormant.
 --
 -- On main this was a `check`/`run` DIVERGENCE with no diagnostic to act on:
 -- `check` exited 0 reporting `get2 : a -> b -> c` (constraint absent), then `run`

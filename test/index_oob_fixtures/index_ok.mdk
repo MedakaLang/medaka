@@ -1,8 +1,8 @@
 -- #1787 CONTROL — LOAD-BEARING.  Every in-bounds index at the exact boundaries
 -- the guards must NOT reject: first (0) and last (len - 1), for an Array read,
--- an Array write, a String, and a MutArray.  Without this, "fixing" the gate by
+-- an Array write, a String, and a Vector.  Without this, "fixing" the gate by
 -- making a guard reject everything would read as green.
-import mut_array.{MutArray, fromList}
+import vector.{Vector, fromList}
 
 main =
   let a = [|5, 6, 7|]

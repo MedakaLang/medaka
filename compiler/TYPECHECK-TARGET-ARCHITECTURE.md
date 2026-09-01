@@ -404,7 +404,7 @@ Three changes only:
   - **every type parameter gets a computed polarity** (covariant /
     contravariant / mixed) from its field occurrences, propagated transitively
     through nominal types; contravariant-or-mixed occurrence ⇒ no covariant row
-    leniency at that argument. Write channels (`Ref`/`MutArray`/`HashMap`,
+    leniency at that argument. Write channels (`Ref`/`Vector`/`HashMap`,
     #1098) are the co∧contra *special case* of this rule, not the rule — a
     contravariant occurrence in an ordinary immutable datatype
     (`data Taker a = MkTaker (a -> Int)` holding an effect-bearing arrow) is

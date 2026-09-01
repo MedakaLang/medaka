@@ -183,7 +183,7 @@ subName renames x
 -- user's references as EDictApp.  Mirror of mark_with_prelude's adjustment:
 -- remove from the constrained set any *droppable* prelude plain-fn name the user
 -- shadows and does not itself re-declare constrained.  "Droppable" = not
--- referenced by any other prelude decl: count/find (mut_array/array) are
+-- referenced by any other prelude decl: count/find (vector/array) are
 -- droppable and get removed; clamp (used in a core prop) is NOT, so guards.mdk's
 -- shadow doesn't remove it and its `clamp` references stay marked.
 preludePlainFnNames : List Decl -> List String
