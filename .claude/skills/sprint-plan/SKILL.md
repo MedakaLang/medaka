@@ -53,6 +53,18 @@ deeper than this measured ~75% rework.
    an approximation. If the sites can't be named confidently, flag
    `SPIKE-FIRST`: the slice's first dispatch explores and reports instead of
    implementing.
+   ⚠️ **A slice that adds a file, a subcommand, a subsystem, or a helper must
+   STATE ITS PLACEMENT here** — which directory owns the new code, and if it
+   extends an existing file rather than adding one, why. Ground truth is the
+   **`architecture`** skill (`.claude/skills/architecture/SKILL.md`): what
+   each `compiler/` directory is for, the placement rules, and the standing
+   DECLINED register — read it before writing the row, and do not relitigate
+   a decision the register already closed. The asymmetry is the reason this
+   is an obligation and not a nicety: **placement decided before the code
+   exists costs nothing; placement fixed afterwards costs a snapshot re-bless
+   (`[T-SNAPSHOT-SELF]`) and usually a LEG A golden re-capture
+   (`[T-LEGA-GOLDEN]`) on top of the move.** `make arch-census` gives the
+   current largest-files table if the slice might grow one of them.
 4. **Acceptance shape** — how we'll know it worked ("gate family X", "a new
    fixture class Y", "IR byte-identical"), not exact commands.
 5. **Model** — `sonnet` (default) or `opus` with a one-line why. Opus is the
