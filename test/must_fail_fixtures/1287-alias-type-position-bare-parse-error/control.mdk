@@ -1,6 +1,6 @@
-import mut_array.{MutArray, fromList}
+import vector.{Vector, fromList}
 
-sizeOf : MutArray Int -> Int
+sizeOf : Vector Int -> Int
 sizeOf m = 0
 
 main = println (sizeOf (fromList [1, 2, 3]))
