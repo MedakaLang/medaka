@@ -41,8 +41,9 @@ main = println hello
 
 Day to day, use `import greet.hello` and `import greet.{hello, bye}`. A selective
 import documents what the file uses. `import greet.*` is convenient for a small
-module and worth dropping once the module grows, because a later addition to
-`greet.mdk` can then shadow something in your file without warning.
+module and worth dropping once the module grows: a later addition to `greet.mdk`
+can collide with a name from another import, which is an error at the use site, or
+be silently hidden by a local definition with the same name.
 
 ### Aliases
 
@@ -71,7 +72,7 @@ An alias replaces the unqualified import: `import red as R` does not also bind a
 `paint`. A module alias has to be capitalized, since it is used as a qualifier. A
 member alias renames one imported value.
 
-Two limits. An alias qualifies values only, so `C.Color` in a type does not parse;
+There are two limits. An alias qualifies values only, so `C.Color` in a type does not parse;
 import a type by its own name, `import colors.{Color(..)}`. And an alias cannot be
 combined with a group or wildcard import, since those already bind their names
 unqualified.

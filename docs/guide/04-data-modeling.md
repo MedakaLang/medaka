@@ -18,9 +18,8 @@ favorite : Category
 favorite = Books
 ```
 
-That is a complete definition. `Category` has four values, and `Food` is one of them.
-Constructor names are capitalized, and constructors are the only things you can
-pattern match against.
+Nothing more is needed. `Category` has four values, and `Food` is one of them.
+Constructor names are capitalized.
 
 A constructor can carry data. List the types of its fields after its name:
 
@@ -159,10 +158,17 @@ Landlord
 ```
 
 The `deriving (Eq, Debug)` clauses ask the compiler to generate equality and a
-debug printer for the type. `deriving` gets its own section below. One thing to
-know now is where it goes: after a one-line `data` declaration it has to stay on that
-line, and it can only move to its own line when the declaration spans several lines,
-as it does for `Expense` above.
+debug printer for the type. `deriving` gets its own section below.
+
+> ⚠️ **`deriving` goes on the same line as a one-line `data` declaration.** It can
+> move to its own line only when the declaration spans several lines, as it does for
+> `Expense` above. Put it on its own line after a one-line declaration and the error
+> blames the indentation rather than `deriving`:
+>
+> ```
+> error: deriv.mdk:2:2: unexpected `deriving`. Indentation (column 2) doesn't match
+> the enclosing block
+> ```
 
 > **Coming from Haskell?** Field names belong to their type, not to the module. Two
 > record types in one file can both have an `amount` field, and `e.amount` reads the
@@ -390,8 +396,7 @@ True
 Note "reimbursed"
 ```
 
-A `Payee` cannot be passed where a `Note` is expected, and the wrapper costs nothing
-at run time.
+A `Payee` cannot be passed where a `Note` is expected.
 
 ---
 

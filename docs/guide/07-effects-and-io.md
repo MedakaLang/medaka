@@ -147,6 +147,9 @@ bind it.
   |             ^
 ```
 
+A second error, `Ambiguous instance for Display`, follows it and points at the `do`
+keyword. It is a consequence of the first. Fixing the first clears both.
+
 > ⚠️ **`<-` only works inside `do`.** It is the piece of `do` syntax that most often
 > leaks into a plain block, because it is what other languages build IO blocks from.
 > In a plain block it is an error that names the fix:
@@ -179,7 +182,10 @@ main = println (sumTo 10)
 ```
 
 `sumTo` has no row and needs none. A `Ref` created inside a function and never
-handed out is invisible from outside: same input, same output. The row tracks the
+handed out is invisible from outside: same input, same output. (The `let _ =` is
+there because `map step …` produces a `List Unit`, and a statement is not allowed
+to discard a non-`Unit` value silently. Binding it to `_` says the discard is
+intended.) The row tracks the
 observable boundary, meaning the console, the filesystem, the clock, and the
 network, not every assignment.
 
@@ -231,5 +237,5 @@ work. Neither implies the other.
 > produced. The effect row replaces the `IO` wrapper, so there is no `IO` in a type
 > constructor position anywhere.
 
-Turning those lines into `Expense` values is a chain of steps that can each fail.
-That is what `do` is for, and [chapter 8](08-do-and-thenables.md) picks up there.
+Turning those lines into `Expense` values is a chain of steps that can each fail,
+which is the job of `do`. [Chapter 8](08-do-and-thenables.md) picks up there.

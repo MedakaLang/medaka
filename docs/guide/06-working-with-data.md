@@ -77,6 +77,9 @@ Qualify, or select with `import <mod>.{get}`
 >
 > ```
 > error: probe.mdk:3:9: unexpected `.`
+>   |
+> 3 | sizes : M.Map String Int
+>   |          ^
 > ```
 
 ## `map`, `filter`, and `fold`
@@ -223,9 +226,9 @@ a `Display` implementation can be interpolated.
 > **Coming from Haskell?** `String` is not `[Char]`. None of the list vocabulary
 > (`map`, `length`, `::`) applies to it directly.
 
-## The expense tracker, totalled and grouped
+## The expense tracker, totaled and grouped
 
-That is enough to answer real questions about the ledger. A total is a `fold`.
+With that much you can answer real questions about the ledger. A total is a `fold`.
 Counting a category is a `filter` followed by `length`. Grouping is a `fold` into a
 `Map`.
 

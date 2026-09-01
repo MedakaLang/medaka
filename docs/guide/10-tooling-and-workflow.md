@@ -131,8 +131,8 @@ the file above, `medaka test --native total.mdk` reports every doctest as an err
         executed natively.
 ```
 
-Keep doctested functions in modules without a `main` if you want to run them
-natively. `--filter <substring>` narrows a run to the tests whose name, or for a
+Properties and named tests are unaffected and still run. Keep doctested functions
+in modules without a `main` if you want to run them natively. `--filter <substring>` narrows a run to the tests whose name, or for a
 doctest whose expression, contains the substring.
 
 ## `repl`
@@ -168,7 +168,7 @@ How either backend works is outside this guide.
 
 ---
 
-That is the tour. Chapters 1 through 8 covered the language, chapter 9 how to arrange
+Chapters 1 through 8 covered the language, chapter 9 how to arrange
 it in files, and this one the tools. From here, the [syntax reference](../spec/SYNTAX.md)
 is the precise account of what the compiler accepts, and the
 [stdlib reference](../stdlib/index.md) lists what ships beyond the prelude.

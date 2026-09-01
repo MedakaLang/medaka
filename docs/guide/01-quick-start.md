@@ -91,8 +91,5 @@ main = println (2 + 5)
 7
 ```
 
-## Where you are
-
-You can now write a program, sequence a few statements, and print. The next chapter
-covers what goes on the right-hand side of those statements: values, `let`, and
-types.
+Next: [values, bindings, and types](02-expressions.md), which is what goes on the
+right-hand side of those statements.

@@ -72,7 +72,7 @@ Some 13.5
 None
 ```
 
-Same output, no staircase. Three pieces of syntax do the work:
+Same output, no staircase. The block uses three new things:
 
 - **`do`** opens the block. Its statements are chained rather than merely run in
   order.
@@ -219,5 +219,5 @@ behaves the way you expect as long as your `andThen` does nothing but sequence.
 
 ---
 
-That completes the language. The last two chapters cover how to organize more than
-one file of it, and the tools that check, format, and test what you write.
+The last two chapters cover how to organize a program across files, and the tools
+that check, format, and test what you write.

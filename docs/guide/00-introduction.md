@@ -57,9 +57,9 @@ parses it.
 - **Interfaces.** Overloading by type, in the style of Haskell's typeclasses or Rust's
   traits. `==`, `<`, printing, and arithmetic all go through them, and you can add your
   own.
-- **Effects in the type.** A signature like `readFile : String -> <IO> String` says the
-  function can do IO. A function with no effect row is pure, and the compiler enforces
-  it.
+- **Effects in the type.** A signature like
+  `readLines : String -> <IO> Result String (List String)` says the function can do
+  IO. A function with no effect row is pure, and the compiler enforces it.
 - **No null, no exceptions.** A value that might be missing is an `Option`. An operation
   that might fail returns a `Result`. Both are ordinary data types, so the pattern
   matching checker makes sure you handle them.

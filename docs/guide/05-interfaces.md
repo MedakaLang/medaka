@@ -108,7 +108,7 @@ Five interfaces from the prelude cover most of what you will implement or requir
 | Interface | Methods | Meaning |
 |---|---|---|
 | `Eq` | `eq` (`==`, `/=`) | values can be compared for equality |
-| `Ord` | `compare`, `lt`, `gt`, `min`, `max` | values are ordered; requires `Eq` |
+| `Ord` | `compare`, `lt`, `gt`, `min`, `max`, … | values are ordered; requires `Eq` |
 | `Debug` | `debug` | a developer-facing rendering that shows the structure |
 | `Display` | `display` | a human-facing rendering |
 | `Num` | `add`, `sub`, `mul`, `negate`, `fromInt`, … | the arithmetic operators; requires `Eq` |
@@ -280,7 +280,7 @@ impl Render (List a) where
   render xs = "a list of \{length xs} thing(s)"
 
 impl Render (List Expense) where
-  render xs = "a ledger of \{length xs} expense(s), totalling $\{fold (acc e => acc + e.amount) 0.0 xs}"
+  render xs = "a ledger of \{length xs} expense(s), totaling $\{fold (acc e => acc + e.amount) 0.0 xs}"
 
 main =
   println (render [True, False])
@@ -293,7 +293,7 @@ main =
 
 ```medaka-expect
 a list of 2 thing(s)
-a ledger of 2 expense(s), totalling $1204.5
+a ledger of 2 expense(s), totaling $1204.5
 ```
 
 Both calls go through the same `render`, and the two lines of output come from the
