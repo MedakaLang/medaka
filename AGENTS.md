@@ -159,7 +159,12 @@ REFUSES to run in the same commit that adds it — enrol with a guessed `shard`,
 gen-ci` as a follow-up commit (or trigger `gh workflow run ci.yml --ref <branch>` first to
 get a real sample before merging). Registration rules, the `test/CI-COVERAGE-EXCEPTIONS.txt`
 escape hatch, and `[W-SHARD-COST]` (shards are filled by cost, never by theme): the `gates`
-skill. ⚠️ **[W-SHARD-NEUTRAL] The eight executor rows are named `gates_1`…`gates_8` and mean
+skill. 🚨 **[W-MODULE-BLIND] A module outside every entry's import closure is invisible to
+`make medaka`, `make check-self`, and `test/typecheck_compiler_source.sh`** — none of those
+walk it, so a defect injected into it is caught by nothing (MEASURED, `compiler/types/
+registry.mdk`: the Makefile's `test:` target now names such a module explicitly, since
+`medaka test <file>` typechecks the file before running its doctests). Full incident:
+`.claude/dossier/workflow.md`. ⚠️ **[W-SHARD-NEUTRAL] The eight executor rows are named `gates_1`…`gates_8` and mean
 nothing** (#2178, 2026-08-30) — a row name cannot describe its contents, so it is not allowed
 to try. The thematic names (`gates (frontend)`, `gates (sqlite)`, …) are RETIRED; a doc or
 comment that still names one is describing the pre-rename tree. What a failure was ABOUT comes

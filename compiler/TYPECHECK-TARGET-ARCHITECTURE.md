@@ -2712,6 +2712,197 @@ as "caused by U1c".
 
 ---
 
+## 11. A-2.0 registry substrate — the `RegKey` design record
+
+Relocated verbatim (with the Medaka `-- ` comment prefix stripped) from
+`compiler/types/registry.mdk`, which carried it as in-source header prose for the module
+landing the `Registry`/`MultiRegistry`/`SetRegistry` combinators (A-2.0, #1111, §2 K / §6 A-2
+above). A pointer sentence stands at the extraction site in source.
+
+### 11.1 What the target tables need: COMPOSITE keys (`RegKey`)
+
+An `Ident` names ONE declaration, and at least five tables A-2 must convert
+are keyed by a TUPLE. Sizing the API to `Ident` alone would force each of
+those conversions to re-invent a bare-string composite INSIDE the identity
+(e.g. stuffing `"Foo@3"` into an `Ident`'s name field), which re-introduces
+exactly the un-keyed string this arc exists to remove and forces a lie
+about which `Ns` the thing is in. So `RegKey` is the key type and `Ident`
+is its one-element case:
+
+  ⚠️ #1112 A-3.4 PR2 renamed one row's ANCHOR, not its key: the concrete
+  obligation bucket used to be cited as `obUnivConcreteRef`, a `CrossRun`
+  accumulator that unit DELETED. The key is unchanged; it is minted by
+  `insertUnivImplAt` into `ImplUniverse`, which the Module path now gets
+  from `ieUniverseAt` and the Flat path from `buildImplUniverse`.
+
+  | table                            | key                      | site          |
+  |----------------------------------|--------------------------|---------------|
+  | `universeIfaceParamKinds`        | TabKey × Int  ✅ A-2.4    | typecheck.mdk |
+  | `ImplUniverse` concrete bucket   | Ident × Ident            | typecheck.mdk |
+  | `checkCallObligationsU` dedup    | Ident × [Option Ident]   | typecheck.mdk |
+  | `methodReqCountRef`              | Ident × Ident            | eval.mdk      |
+  | `ifaceDispatchRef`               | Ident × Ident            | eval.mdk      |
+
+Three of the five are pure identity tuples (`regKeyN`); one pairs an
+identity with a parameter SLOT, which is an ordinal and not a declaration —
+it has no namespace and no origin, so it is carried in `RegKey`'s second
+component (`regKeyTabAt`) rather than faked as an `Ident`.
+
+⚠️ ROW 1 SAID `Ident × Int` UNTIL A-2.4 CONVERTED IT, AND THE CORRECTION IS
+NOT COSMETIC. `Ident` has no identity-less inhabitant by design, and this
+table is read on the FLAT driver path as well as the module path
+(`checkGradedImplTys` ← `checkBodyImpl`, shared by both arms), where every
+user declaration is `OriginUnresolved` until #1115. An `Ident`-only key
+would have silently stopped registering and looking up anything there — see
+`RegKey`'s own doc-comment for the full derivation. The remaining four rows
+are stated as A-2.0 sized them; the unit that converts each owes the same
+question ("is this table read on the flat path?") rather than inheriting
+this row's answer.
+
+🚨 `ifaceDispatchRef` HAS NOW BEEN ASKED THAT QUESTION, AND THE ANSWER IS
+YES — SO ITS ROW ABOVE IS MIS-SIZED. #1113 Phase 4 re-keyed that table and
+measured the flat-path half: the flat/loader-less drivers (`medaka check`
+on a no-import file, `lsp`, `repl`, `doc`, the playground) stamp nothing
+(`stampFlatTyOrigins`), so on those paths EVERY row and EVERY query carries
+the absent identity and an `ifaceIdMatches` tier answers None for all of
+them. Its key is therefore NOT the `Ident × Ident` this row states: it is
+TWO-TIERED — identity when one is present, bare SPELLING when it is not —
+and `lookupPositions` (`eval.mdk`) is where both tiers live.
+
+⚠️ A `regKeyN [ifaceIdent, methodIdent]` conversion DELETES THE SPELLING
+TIER, and the loss is silent: `Ident` has no identity-less inhabitant, so
+every flat-path lookup would miss and fall through `lookupPositions`' `[0]`
+fail-open default, quietly changing arg-tag admissibility — and therefore
+dispatch — on all five drivers above. That is ROW 1's hazard exactly, one
+row down, which is why this is written here rather than left for the next
+agent to re-derive. Until identity SUPPLY is total (#1115 E-1 gives the
+flat path module ids) this row's honest sizing is `(Ident | String) ×
+String`; at total supply the spelling tier becomes dead and the row becomes
+true as written. `methodReqCountRef` — installed from the same decl list by
+the same call — has NOT been asked this question and still owes it.
+
+🚨 THE FIFTH ROW IS `[Option Ident]`, NOT `[Ident]`, AND THE DIFFERENCE
+RE-OPENS #607. This row read `Ident × [Ident]` until round 2 of this PR's
+review; that shape is not merely imprecise, it is a live conflation hazard,
+so the derivation is spelled out here rather than left to the next unit.
+The key today is (`types/typecheck.mdk:15171`):
+
+    let key = joinWith "," (iface :: map (o2 => optionOr "" (headTyconMono o2)) occs)
+
+`headTyconMono : Mono -> Option String`, so a POSITION CAN BE ABSENT and
+the `""` is a POSITIONAL PLACEHOLDER, not a name. Absent positions really
+do reach this key on the dedup channel: `checkOneCallObligation` has an
+explicit `else if not (allConcreteHeads args)` arm (`:15214-15215`) which
+on the CALL channel (`dedup=True`) runs `checkUndeterminedObligations`, so
+a non-ground obligation is checked AND its key is added to `seen`.
+
+Concrete failure the `[Ident]` shape invites. Take `interface Ix a b` and
+two CALL-channel obligations `Ix Int b0` (argument 1 undetermined) and
+`Ix a0 Int` (argument 0 undetermined). Today the keys are `"Ix,Int,"` and
+`"Ix,,Int"` — DISTINCT, so both get an ambiguity diagnostic. Convert to
+`regKeyN (ifaceIdent :: presentHeads)` — which is what `Ident × [Ident]`
+implies, since an `Ident` cannot be absent — and both become the SAME
+`RegKey`; the `dedup && contains key seen` guard skips the second and ONE
+DIAGNOSTIC IS SILENTLY LOST. That is exactly the conflation the
+whole-vector key was introduced to prevent (`typecheck.mdk:15161-15163`,
+#607), re-introduced by a key shape that cannot express absence.
+
+The chosen ENCODING, so the next unit does not have to re-derive one. Absence is
+positional, so carry the positions in the ordinal block, which is what it
+is for:
+
+    regKeyNAt (ifaceIdent :: presentHeads) (arity :: presentIndices)
+
+where `presentHeads` are the identities of the positions whose
+`headTyconMono` was `Some`, in argument order, and `presentIndices` are
+those positions' 0-based indices. Injective: `regKeyRender` already reads
+the ident count, then exactly `4n` netstrings, then ordinals, so the two
+blocks never interfere. On the example, `Ix Int b0` renders with ordinals
+`[2, 0]` and `Ix a0 Int` with `[2, 1]` — different keys, both diagnostics
+kept. The `arity` element is not decoration: WITHOUT it the encoding is
+injective only if an interface's arity is fixed, which is true today but is
+an unstated premise living in another file; with it, injectivity is a
+property of the encoding alone.
+
+⚠️ A SECOND ABSENCE, in the same row, from a different cause. Turning a
+`headTyconMono` name into an `Ident` needs that head's `TyConOrigin` —
+`Mono`'s `TCon String TyConOrigin` carries one — and on the FLAT
+single-file path it is `OriginUnresolved`, so `mkIdent` returns `None`
+there for a position whose head IS concrete. So `Option` in this row covers
+two distinct facts: "this argument has no head type constructor" and "this
+head has no module identity yet". The conversion must not collapse them
+into one placeholder: the first is a property of the obligation and must
+key differently per position (above); the second is the Module-path-only
+residual `Ns`' doc-comment in `frontend/ast.mdk` states, and on the flat
+path this table simply keeps its string key until #1115 (E-1).
+
+`regKeyRender`'s injectivity, in one line: the leading netstring is the
+IDENT COUNT `n`, so a decoder reads `n`, then exactly `4n` netstrings (the
+identity block), and everything after is ordinals. No reading depends on
+what any tag or name happens to look like.
+
+⚠️ THE COUNT PREFIX IS DEFENSE IN DEPTH, AND IT HAS NO BEHAVIOURAL WITNESS
+— verified by mutation, not asserted. Deleting it leaves the render
+injective ANYWAY today, because the alternative reading (an ordinal
+netstring mistaken for the start of an identity group) would need some
+`nsTag` to be a decimal-digit string, and none is. MEASURED 2026-08-03:
+deleting the prefix left every PROPERTY-level doctest in this file passing
+(76/76 at the time), which is why the three `startsWith "1:…"` assertions
+below were added — they are the only thing that reds it. RE-MEASURED on the
+round-2 file (93 doctests): deleting the prefix gives 90/93, and the three
+failures are exactly those three lines. So the
+prefix buys exactly one thing: it makes injectivity independent of
+`nsTag`'s alphabet, an invariant that otherwise lives silently in a
+different function and that a seventh namespace could break without any
+signal. It is kept for that reason, and those three doctests exist solely
+because no property-level test can distinguish its presence.
+
+⚠️ COUNTING THE BYTE-SHAPE ASSERTIONS: they fall in two groups with two
+different jobs. `startsWith "1:…"` lines pin the ident-COUNT prefix,
+described in this paragraph; `identKey … == "…"` and `tabKeyRender (TkBare
+…)` lines pin the origin/bare TAG, described at their own sites further
+down (A-2.4 added one of each: a count-prefix line on a `TabKey`-built key,
+and `tabKeyRender (TkBare NsType "Foo") == "4:type4:bare0:3:Foo"`). All are
+the documented exception to `registry.mdk`'s opacity contract. DERIVE the
+count from the file, never re-encode it — and match `TkBare`, not the wider
+`Tk`, which also catches the identity-arm PROPERTY line (`tabKeyRender
+(TkIdent …) == identKey …`) that asserts no bytes at all:
+`grep -c '^-- > \(startsWith "1:\|identKey ident.* == "\|tabKeyRender (TkBare\)' `
+`compiler/types/registry.mdk`.
+
+### 11.2 `regInsert` conflict handling (decided for the A-2.0 unit only)
+
+Per `docs/spec/DICT-SEMANTICS.md` §8 I4, declarations are never rejected —
+only USE sites are — so once every table is keyed by `Ident`, two
+genuinely distinct declarations get genuinely distinct identities and
+coexist; a `regInsert` collision after re-keying means the REGISTRY'S OWN
+KEYING is broken (a compiler bug), not a user error to diagnose at the
+declaration. `regInsert` is therefore LAST-WRITE-WINS, matching every
+existing `universe*` table's current behavior, and `regInsertChecked`
+returns a `Bool` alongside the new registry saying whether an existing
+entry under that exact key was overwritten — the signal a later unit
+(A-2.8) can turn into a diagnostic once the diagnostic-code family
+question (`T-INTERNAL-REGISTRY-CONFLICT` vs. a resolve-phase
+`R-AMBIGUOUS-*` code) is settled. Deliberately NOT decided here.
+So `Registry` is a LAST-WRITE-WINS map, and it must not be described as
+a "write-once-or-diagnose" one — that phrase belongs to this design doc's
+own description of what A-2 will EVENTUALLY deliver, not to the substrate
+module's own behavior today.
+
+### 11.3 What a conversion still has to review, table by table (NOT "pure")
+
+A re-keying is NOT automatically behavior-preserving. At least one named
+target: `regEntries` enumerates in `regKeyRender` order (a
+sorted `OrdMap`), while several targets are assoc `List`s enumerated in
+DECLARATION order — `rejectCyclicAliases` (`types/typecheck.mdk`) walks
+its alias table in that order and `emitCyclicAliasErrors` emits in the
+order the DFS produced, so converting it moves DIAGNOSTIC ORDER and hence
+goldens. Every conversion PR owes an explicit answer to "does any consumer
+of this table depend on its enumeration order?", and where the answer is
+yes it owes either an order-preserving side list or a reviewed golden
+move. What IS preserved by construction is the last-write-wins RESOLUTION
+of a duplicate key, not the ORDER a whole-table walk produces.
+
 ## References
 
 - [`TYPECHECK-ARCHITECTURE.md`](TYPECHECK-ARCHITECTURE.md) — the derived map this design targets
