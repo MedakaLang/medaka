@@ -634,6 +634,16 @@ Each of these was paid for in an incident — pointers, not post-mortems.
   `diff_native_cli.sh`. Given this bullet's own history of a false "fixed" retraction, still
   diff a comment-bearing record decl by eye after `fmt --write` rather than trusting this note
   alone.
+- ⚠️ **[T-COMMENT-REGISTER]** A source comment should state a constraint the
+  code itself cannot show — not narrate its own history. Provenance and
+  litigation (why a decision was made, who ruled on what, what a PR debated)
+  belong on the issue or in `.claude/dossier/`, linked by reference, not
+  written into the source; a comment that reads as reviewer-addressed prose
+  (`refuted`, `ratified`, `"ruling"`) or a draft's self-narration (`earlier
+  cut`, `this PR`) is describing the PR, not the code, and rots the moment
+  the PR merges. No emoji shouts (🚨/⚠️/🔒) in source comments. `make
+  comment-census` (`test/comment_register_census.sh`, #2281) derives a
+  current on-demand report of these registers; it is not a gate.
 - ⚠️ **[T-SHARED-CORPUS]** A fixture directory is a SHARED CORPUS — add/move/delete enrolls you
   in gates you never named. ENUMERATE every consumer, run all of them. Never trust a count —
   derive it, word-bound the grep both sides (`grep -n 'Word-boundaries' test/preflight.sh`).
@@ -766,6 +776,8 @@ The two that must reach you before you load it — both silent:
 | **perf-hunt** | Stage slow, or `diff_compiler_perf_scaling.sh` red. |
 | **benchmark-emitter** | `compiler/backend/*` change to measure, or a suspicious fixpoint failure. |
 | **add-lsp-capability** | Add/extend an LSP feature. |
+| **architecture** | Where a new file/subcommand/subsystem/helper BELONGS, and the standing DECLINED register a planner must not relitigate. Read before adding a file or writing a contract's Surface row. Drift detector: `make arch-census`. |
+| **style-review** | The end-of-sprint craft pass (duplication, comment register, test vehicle, placement, diagnostics, docs, CLI shape) — every section a pointer, plus the demands it must NOT make. Once per sprint, never per-PR. |
 | **pr-review** | Review an agent-authored PR diff for craft. Read-only, after CI green. |
 | **bug-hunt** | Adversarial S0/S1 hunt. Best right after a batch closes. |
 

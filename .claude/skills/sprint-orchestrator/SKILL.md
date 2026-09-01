@@ -90,7 +90,11 @@ instead.
    sync commands handle that — never ask the agent to derive or refuse over
    its cwd.)
 4. **On return, read the report file** (never just the return line) and branch
-   on the Verdict:
+   on the Verdict. `sh scripts/sprint-report-check.sh <report>` grades its
+   SHAPE mechanically (first line is the verdict; Evidence and Notes present)
+   so intake needs no judgment — it is a convenience, not a gate, and it does
+   not read the content. The content you read yourself, including the five
+   author self-check answers at the end of Notes (`sprint-packet`).
    - `LANDED @sha` — merge that SHA into the sprint branch
      (`git merge --no-ff <sha>` on your sprint checkout; resolve nothing by
      hand — a conflict means the base was stale, so re-sync and re-dispatch),
@@ -127,6 +131,19 @@ by serialization.
    sprint diff at once — adversarial programs plus spec conformance — and
    reports ranked findings. For a large sprint, two reviewers with different
    lenses (breakage vs conformance) are licensed; more is not.
+   **Alongside it, dispatch ONE cheap (sonnet) style pass loading the
+   `style-review` skill** (`.claude/skills/style-review/SKILL.md`) at the SAME
+   pinned SHA — craft, not correctness: duplication, comment register, test
+   vehicle, placement, diagnostics, docs, CLI shape, each pointing at its own
+   single source. It builds nothing and fixes nothing. It is **once per
+   sprint, in this round only** — not per-slice, not per-PR, and never a
+   required CI check. Its DECLINED register is what stops it demanding churn;
+   if it returns a finding that register forbids, dismiss it with one NOTES.md
+   line rather than dispatching a fix.
+   Placement findings are measured against what the contract's Surface row
+   STATED (`sprint-plan` step 3) and the **`architecture`** skill
+   (`.claude/skills/architecture/SKILL.md`), not against a reviewer's
+   preference.
 2. **Triage the findings yourself**, with NOTES.md's rows folded in. Three
    bins: *fix-now* (wrongness introduced or exposed by this sprint —
    [W-QUIETER] applies: a path that returned nothing and now returns

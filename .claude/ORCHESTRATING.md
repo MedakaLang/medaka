@@ -20,8 +20,12 @@ Companion docs: `AGENTS.md` (agent-facing router) and the per-task **skills** in
 > the role definitions in **`.claude/agents/`** (`sprint-implementer`, `sprint-reviewer`,
 > `sprint-retro`),
 > and **`scripts/sprint-disjoint.sh`** (parallel-writer disjointness evidence;
-> `scripts/sprint-report-check.sh` checks the retired v≤7 six-section report format and is not
-> part of v8). What each retro round
+> `scripts/sprint-report-check.sh` grades a report's SHAPE against v8's three sections —
+> repaired 2026-09-01 (#2303), having until then graded the retired v≤7 six-section format so
+> that every conformant v8 report bounced). The two review seams
+> **`.claude/skills/architecture`** (placement ground truth + the DECLINED register) and
+> **`.claude/skills/style-review`** (the end-of-sprint craft pass) are dispatched from the
+> orchestrator's end round. What each retro round
 > adopted or declined, and why, is ledgered in **`.claude/SPRINT-WORKFLOW-DECISIONS.md`**;
 > cost hypotheses in **`.claude/SPRINT-COST-HYPOTHESES.md`**. Where those artifacts
 > contradict older prose in this file — notably "Choosing the model" (pre-Claude-5 tiers) and the
