@@ -305,11 +305,15 @@ and the two lines of output are the two different implementations firing. The
 `List Bool` call reaches the general implementation even though `Bool` has no
 `Render` implementation at all, because the general body never looks at an element.
 
-> **Coming from Haskell?** There is no `{-# OVERLAPPING #-}` pragma, no
-> `newtype`-wrapping ritual to pick an instance, and no named instances — the
-> `impl Name of Iface Ty` form, `default impl`, and the `@Name` hint at a use site
-> were all removed together, because most-specific selection makes them
-> unnecessary. A plain `impl` covers every case.
+> **Coming from Haskell?** GHC has no most-specific-instance selection by default —
+> two overlapping instances are a coherence error at the use site unless you opt in
+> with `{-# OVERLAPPING #-}` or `{-# INCOHERENT #-}`, and even then the resolution
+> is a pragma-driven exception rather than the normal rule. Medaka makes
+> most-specific selection the normal rule instead, so there is no `OVERLAPPING`
+> pragma to reach for, no `newtype`-wrapping ritual to pick an instance, and no
+> named instances — the `impl Name of Iface Ty` form, `default impl`, and the
+> `@Name` hint at a use site were all removed together, because most-specific
+> selection makes them unnecessary. A plain `impl` covers every case.
 
 ## Where `deriving` fits
 

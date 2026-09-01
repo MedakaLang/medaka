@@ -38,9 +38,13 @@ such as a `println`. `medaka run` forces `main` for its effects; it never applie
 
 ## Doing more than one thing
 
-`main` can be an indented block of statements rather than a single expression. There
-is no `do` keyword involved and no special IO type — the block is just a sequence,
-run top to bottom.
+`main` can be an indented block of statements rather than a single expression — the
+block is just a sequence, run top to bottom.
+
+> **Coming from Haskell?** There is no `do` keyword involved and no special IO type.
+> A block of statements here is plain sequential evaluation, not monadic binding —
+> see [`do` and Thenables](08-do-and-thenables.md) for what `do` is actually for in
+> Medaka.
 
 ```medaka
 main =

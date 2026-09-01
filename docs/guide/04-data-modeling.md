@@ -6,7 +6,7 @@ place that takes the value apart has to account for every shape it could have. T
 are not documentation you attach to code that already works — they are the thing you
 write down before the code, and the reason the code ends up short.
 
-Everything here is built out of one declaration form, `data`, in two flavours: a
+Everything here is built out of one declaration form, `data`, in two flavors: a
 choice between alternatives, and a bundle of named fields. Real types are usually both.
 
 ## Sum types: a choice between alternatives
@@ -17,12 +17,12 @@ distinct way of *being* that type, and the value carries which one it is.
 ```medaka
 data Category = Food | Housing | Books | Other
 
-favourite : Category
-favourite = Books
+favorite : Category
+favorite = Books
 ```
 
 There is nothing else to a plain enumeration: `Food` is a value of type `Category`,
-and `Category` has exactly four values. Constructors are capitalised, and they are
+and `Category` has exactly four values. Constructors are capitalized, and they are
 the only things you can pattern-match against.
 
 Constructors carry payloads by listing the types they hold, and a longer declaration
@@ -110,6 +110,13 @@ main = println origin.x
 Note that there is no `record` keyword — the word `record` is an ordinary identifier
 in Medaka and you are free to use it as a variable, a field, or a module name.
 
+> **Coming from Haskell?** Field names are scoped to their `data` type, not squeezed
+> into one flat top-level namespace — two different record types in the same module
+> can both declare an `amount` field with no `DuplicateRecordFields` and no manual
+> prefixing, and `.` field access works directly rather than through a generated
+> accessor function. The pun shorthand you'll see below (`Expense { payee, amount }`)
+> is the same idea as Haskell's `NamedFieldPuns`, just on by default.
+
 Here is the guide's running example, finally written properly. An expense has a date,
 a payee, an amount, and a category, and the category is the sum type from the top of
 the chapter:
@@ -176,7 +183,11 @@ are no accessor functions generated for sum types, no `isCoffee` predicates, no
 downcasts. If you have an `Expense` and want what is inside it, you match.
 
 You have already seen patterns in clause heads. `match` is the expression form, and
-the two are interchangeable:
+the two are interchangeable. In practice, prefer the clause-head form (`f (Ctor x) =
+...`) when you are defining a top-level function that pattern-matches its argument —
+`tag` below is written that way — and reach for `match` as an expression for the
+cases where no name is being defined, such as `rate` below branching on a value it
+already has in hand.
 
 ```medaka
 data Category = Food | Housing | Books | Other

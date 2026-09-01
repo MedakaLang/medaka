@@ -89,7 +89,7 @@ and they read exactly as they do anywhere else.
 > ⚠️ **A `do` block must end in an expression, not a `let`.** The last statement is
 > the block's value, and a `let` is a binding rather than a value. Ending on one is
 > currently accepted by the type checker and fails at run time with an unhelpful
-> error, so the mistake is worth recognising by eye: if the last line of a `do` block
+> error, so the mistake is worth recognizing by eye: if the last line of a `do` block
 > starts with `let`, add the `pure …` you meant to write.
 
 ## `Result`, and the running example
@@ -201,7 +201,7 @@ Err boom
 [11, 21, 12, 22]
 ```
 
-One function, four behaviours, and the fourth is the one that shows `do` is not
+One function, four behaviors, and the fourth is the one that shows `do` is not
 secretly about failure. `List` is a `Thenable` too, and its `andThen` tries every
 combination, so `both [1, 2] [10, 20]` produces all four sums rather than
 short-circuiting. "Chain in a context" is the abstraction; "stop at the first
@@ -227,6 +227,6 @@ behave the way you expect if your `andThen` does nothing but sequence.
 
 ---
 
-That closes the language. What remains is how to organise more than one file of it —
+That closes the language. What remains is how to organize more than one file of it —
 `import`, `export`, and project layout — and the tools that check, format, and test
 what you have written.

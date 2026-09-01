@@ -23,11 +23,11 @@ and assumes you can read a type signature.
 - **Ad-hoc polymorphism through `interface`s** (typeclasses by another name; `trait`s
   if you're coming from Rust), including constrained and conditional implementations.
 - **An effect system that lives in the type.** A signature says what a function is
-  allowed to touch: `readFile : String -> <IO> String`, `fetch : String -> <Clock, IO> String`.
+  allowed to touch: `readFile : String -> <IO> String`, `fetch : String -> <Net> String`.
   The row is checked, not decorative — annotate a printing function as pure and the
-  compiler tells you it "declared with `<>` but also performs `<IO>`". Effect labels
-  name host capabilities, which is what makes a Medaka signature a contract about the
-  outside world and not just about values.
+  compiler catches the mismatch, reporting that it "declared with `<>` but also
+  performs `<IO>`". Effect labels name host capabilities, which is what makes a
+  Medaka signature a contract about the outside world and not just about values.
 - **Two backends.** `medaka build` compiles to a native binary through LLVM and
   `clang`; a WebAssembly backend runs the same compiler in the browser, which is how
   [the playground](https://medaka-lang.dev) works with no server behind it.

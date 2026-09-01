@@ -17,7 +17,9 @@ default: nearly everything in this guide is a `List`.
 
 `Array a` is a contiguous, fixed-length, *mutable* block, written `[|1, 2, 3|]`.
 Indexing is constant time and writing an element in place is constant time; changing
-the length is not possible at all.
+the length is not possible at all. If you need something array-shaped that also
+grows, that is [`mut_array`](../stdlib/STDLIB.md), covered later in this chapter —
+`Array` itself never resizes.
 
 ```medaka
 import array as A
@@ -26,9 +28,10 @@ main =
   let xs = [3, 1, 2]
   println (0::xs)
   let arr = A.fromList xs
-  A.set 0 99 arr
+  arr[0] := 99
   println arr
-  println (A.get 1 arr)
+  println arr[1]
+  println (A.get 5 arr)
   A.sortInPlace arr
   println arr
   println (toList arr)
@@ -37,18 +40,22 @@ main =
 ```medaka-expect
 [0, 3, 1, 2]
 [|99, 1, 2|]
-Some 1
+1
+None
 [|1, 2, 99|]
 [1, 2, 99]
 ```
 
 Reach for `List` when you build a sequence by walking it, and for `Array` when you
-need indexed access or in-place updates over a fixed number of slots. `A.set` returns
-`Unit` — it mutates the array you handed it, and does not give you a new one.
+need indexed access or in-place updates over a fixed number of slots. `arr[i] := v`
+writes in place and returns `Unit` — it mutates the array you handed it, and does not
+give you a new one — and `arr[i]` reads the raw element back out.
 
-`A.get` returns `Option a` rather than the element, because index 1 of an array of
-length 1 has no answer. That pattern — a total function returning `Option` instead of
-a partial one that crashes — runs through the whole standard library.
+`A.get` returns `Option a` rather than the element, because an out-of-range index
+(`5`, on a 3-element array above) has no answer, and it is total where the indexing
+sugar is not. That pattern — a total function returning `Option` instead of a partial
+one that crashes — runs through the whole standard library; reach for `arr[i]` for
+the common in-bounds case and `A.get` when the index might be out of range.
 
 That example also shows the other thing you will need constantly: `array` and `list`
 export a lot of the same names (`get`, `take`, `drop`, `sort`, `sortBy`), so the two
@@ -94,7 +101,8 @@ main =
 
 `fold` takes the combining function, a starting value, and the container:
 `fold (acc x => …) start xs`. The accumulator comes first, so `fold (+) 0` and
-`fold (acc x => acc ++ f x) empty` both read left to right.
+`fold (acc x => acc ++ f x) empty` both read left to right. Other languages usually
+call this `reduce`; Medaka's `fold` is that function.
 
 None of these three is specific to `List`. `map` belongs to the `Mappable`
 interface, `filter` to `Filterable`, and `fold` — along with `length`, `toList`,
@@ -177,8 +185,13 @@ cover them, and their APIs deliberately mirror the ones here.
 
 ## Strings
 
-Strings are their own type, not a list of characters. `string` carries the operations
-you expect, and interpolation is the way you build them.
+`String` is its own type, with the operations you expect, and interpolation is the
+way you build them.
+
+> **Coming from Haskell?** `String` is not `[Char]` here — it is its own type, not a
+> list of characters, so none of the `List` vocabulary (`map`, `length`, `::`) works
+> on it directly. `string.toChars` converts explicitly when you need to walk one
+> character at a time.
 
 ```medaka
 import string.{split, join, trim, toFloat}

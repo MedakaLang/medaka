@@ -139,8 +139,8 @@ unqualified, so pairing it with a qualifier is contradictory.
 
 ## Exporting
 
-`export` in front of most declarations — a binding, an `interface`, an `impl`, a `type` alias, an
-`extern` — is unconditional: the declaration becomes visible under its own name, in full.
+`export` in front of most declarations — a binding, an `interface`, an `impl`, a `type` alias —
+is unconditional: the declaration becomes visible under its own name, in full.
 
 `data` is the one exception, because a type and its constructors are two different things to make
 visible. `public export data` exports both; plain `export data` exports the type only, keeping

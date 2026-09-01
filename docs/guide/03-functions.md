@@ -112,7 +112,7 @@ inline on the clause head: `drop n xs | n <= 0 = xs`.
 
 > ⚠️ **An equation guard is `|`; a match-arm guard is `if`.** The two spellings are
 > not interchangeable, and using the wrong one is a parse error rather than a
-> subtle misbehaviour. Inside `match`, write `pat if cond => body`:
+> subtle misbehavior. Inside `match`, write `pat if cond => body`:
 >
 > ```
 > error: guards.mdk:2:4: a match-arm guard uses `if`, not `|` — write `pat if cond
@@ -241,13 +241,12 @@ idiom for "a function defined by cases" in a position where a name would be nois
 passed to `map`, say.
 
 ```medaka
-describe : Option Int -> String
-describe = x => match x
-  Some n if n > 100 => "a big \{n}"
-  Some n => "just \{n}"
-  None => "nothing"
-
-main = println (map describe [Some 5, Some 500, None])
+main = println (map
+  (x => match x
+    Some n if n > 100 => "a big \{n}"
+    Some n => "just \{n}"
+    None => "nothing")
+  [Some 5, Some 500, None])
 ```
 
 ```medaka-expect

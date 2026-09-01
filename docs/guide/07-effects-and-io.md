@@ -1,8 +1,8 @@
 # Effects & IO
 
-Here is the surprise, up front: **in Medaka, imperative IO is a bare indented block.**
-Not `do`. Not a wrapper type. You write the statements one under the other and they
-happen in that order.
+Here is the mechanism, up front: **in Medaka, imperative IO is a bare indented block.**
+No `do` keyword, no wrapper type to unwrap — you write the statements one under the
+other and they happen in that order.
 
 ```medaka
 main =
@@ -42,7 +42,7 @@ August
 month closed
 ```
 
-If you are coming from Haskell, ML, or Scala, the instinct is to reach for `do`. Do
+If you are coming from Haskell or F#, the instinct is to reach for `do`. Do
 not. `do` exists in Medaka and [chapter 8](08-do-and-thenables.md) is about it, but it
 is sugar for chaining `Option`, `Result`, and other `Thenable` values, and it does not
 sequence IO. The compiler says so directly:
