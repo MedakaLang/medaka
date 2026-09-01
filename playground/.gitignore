@@ -2,6 +2,10 @@
 # The bundle it produces IS committed at vendor/codemirror/codemirror.js.
 /editor-build/
 
+# Regenerable `marked` vendoring scratch (build_marked.sh recreates it).
+# The bundle it produces IS committed at vendor/marked/marked.js.
+/marked-build/
+
 # Any stray npm installs under playground/.
 node_modules/
 
