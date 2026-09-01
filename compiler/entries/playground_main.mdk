@@ -13,7 +13,7 @@
 -- type-broken or parse-broken program, compiles its native diagnostic/panic path
 -- to a wasm `unreachable` trap that aborts with ZERO bytes on stdout/stderr — so
 -- a browser host cannot surface compile errors through it.  This entry runs the
--- REAL front end ONCE (the same `analyzeLocated`/`analyzeProject` path the native
+-- REAL front end (the same `analyzeLocated`/`analyzeProject` path the native
 -- `medaka check --json` uses), and:
 --   * if there are check errors → prints JSON diagnostics in the SAME shape
 --     `medaka check --json` emits ({"files":[{"file","diagnostics":[...]}]}),
@@ -21,6 +21,20 @@
 --   * if clean → emits the program's WAT (exactly as wasm_emit_modules_main does).
 -- Because emit runs only AFTER a clean analyze, a well-typed program never reaches
 -- the emit-panic path.
+--
+-- HOW MANY TIMES IT RUNS (S2/#2442 — this line used to read "ONCE" and was wrong).
+-- Per invocation, over the user's program:
+--   `analyze` — parsed + loaded ONCE (`run`'s `loadProgramE`, threaded downstream),
+--     prelude parsed + desugared ONCE (`desugaredPrelude`, content-keyed), typechecked
+--     ONCE (`analyzeFrom`/`analyzeProject`); PLUS one further check of the SYNTHETIC
+--     auto-print wrap (`underivedMainDiags`) on the bare-value mains that trigger it,
+--     which is a different program and not a repeat of the same work.
+--   `compile` — all of the above, plus exactly one emit-side `elaborateModules`
+--     inside `runEmit`.
+-- Before S2 this entry additionally re-loaded and re-parsed every user module, re-parsed
+-- and re-desugared runtime.mdk + core.mdk, and ran a whole extra `elaborateModules`
+-- whose result it threw away — ~161ms and ~99ms respectively of a 454ms `analyze` of a
+-- four-line program, measured on the Node driver.
 --
 -- ARG CONTRACT (identical to wasm_emit_modules_main):
 --   <runtime.mdk> <core.mdk> <entry.mdk> [root ...]
@@ -52,7 +66,6 @@
 
 import frontend.ast.{Decl(..), Loc(..), Pat, Expr(..)}
 import frontend.parser.{
-  parse,
   parseResult,
   parseLocated,
   ParseError,
@@ -61,6 +74,7 @@ import frontend.parser.{
   parseErrorMessage,
 }
 import frontend.desugar.{desugar}
+import frontend.desugar_cache.{desugaredPrelude}
 import driver.loader.{
   LoadMsg,
   LoadParseFailed,
@@ -198,31 +212,33 @@ run emit runtimeP coreP entry roots = match readFile runtimeP
               Some mid => findImportLoc mid (parseLocated tsrc)
             emitDiagnostics (cjAllToJson [(entry, tsrc, [Diag SevError "R-MODULE-LOAD" lmsg mloc None None])])
           Ok mods => match mods
-            [_] => analyzeSingle emit rsrc csrc tsrc entry runtimeP coreP roots
+            [_] => analyzeSingle emit rsrc csrc tsrc entry runtimeP coreP mods
             _ => analyzeMulti emit rsrc csrc tsrc entry runtimeP coreP roots mods
 
 -- Single module: analyzeLocated (correct single-file type errors).  Clean ⇒ emit.
-analyzeSingle : Bool -> String -> String -> String -> String -> String -> String -> List String -> <IO> Unit
-analyzeSingle emit rsrc csrc tsrc entry runtimeP coreP roots =
+-- `mods` is `run`'s ALREADY-LOADED module list, threaded through rather than
+-- re-derived downstream (S2/#2442): `loadProgramE` has no memo of its own, so
+-- `doEmit`'s second call re-read and re-parsed every user module.
+analyzeSingle : Bool -> String -> String -> String -> String -> String -> String -> List (String, List Decl) -> <IO> Unit
+analyzeSingle emit rsrc csrc tsrc entry runtimeP coreP mods =
   let diags = analyzeLocated rsrc csrc tsrc
   match any isDiagError diags
     True => emitDiagnostics (cjAllToJson [(entry, tsrc, diags)])
-    False => guardedEmit emit rsrc csrc tsrc entry roots [(entry, tsrc, filterWarnings diags)]
+    False => guardedEmit emit rsrc csrc tsrc entry mods [(entry, tsrc, filterWarnings diags)]
 
 -- Multi-module: analyzeProject (loader path).  Clean ⇒ emit.
 -- #1362: `analyzeSingle` above uses the UNGUARDED `analyzeLocated` (the
 -- playground has no `--allow-internal` flag or trusted-root concept); kept
 -- unguarded here too (`allowInternal = True`, `trustedMods = []`) for parity.
 analyzeMulti : Bool -> String -> String -> String -> String -> String -> String -> List String -> List (String, List Decl) -> <IO> Unit
-analyzeMulti emit rsrc csrc tsrc entry runtimeP coreP roots _mods =
+analyzeMulti emit rsrc csrc tsrc entry runtimeP coreP roots mods =
   let cacheRef = Ref []
   let parseCacheRef = Ref []
   let results = analyzeProject True [] cacheRef parseCacheRef (_ => None) entry roots rsrc csrc
   let triples = map readDiagSrc results
   match any cjHasErr results
     True => emitDiagnostics (cjAllToJson triples)
-    False =>
-      guardedEmit emit rsrc csrc tsrc entry roots (map warnTriple triples)
+    False => guardedEmit emit rsrc csrc tsrc entry mods (map warnTriple triples)
 
 -- Keep only non-error (i.e. warning) diagnostics for a single file's list.
 filterWarnings : List Diag -> List Diag
@@ -250,12 +266,12 @@ warnTriple (p, s, ds) = (p, s, filterWarnings ds)
 -- on an ERROR — it never consults warnTriples.
 -- Runs in BOTH modes: W-MAIN-SHAPE / W-MAIN-MISSING are diagnostics the editor
 -- shows today, so `analyze` must report them exactly as `compile` does.
-guardedEmit : Bool -> String -> String -> String -> String -> List String -> List (String, String, List Diag) -> <IO> Unit
-guardedEmit emit rsrc csrc tsrc entry roots warnTriples = match parseResult tsrc
+guardedEmit : Bool -> String -> String -> String -> String -> List (String, List Decl) -> List (String, String, List Diag) -> <IO> Unit
+guardedEmit emit rsrc csrc tsrc entry mods warnTriples = match parseResult tsrc
   Err pe => emitParseError entry pe
   Ok decls => match mainShapeError decls
     Some d => emitDiagnostics (cjAllToJson [(entry, tsrc, [d])])
-    None => doEmit emit rsrc csrc tsrc entry roots warnTriples
+    None => doEmit emit rsrc csrc tsrc entry mods warnTriples
 
 -- Find a top-level `main` DFunDef among a module's raw decls (skipping @attr
 -- wrappers).  Returns its param list + body so callers can inspect arity and
@@ -296,42 +312,70 @@ mainShapeError decls = match findMainFunDef decls
   None => Some (Diag SevError "W-MAIN-MISSING" mainMissingMsg None None None)
 
 -- ── emit (clean path) ───────────────────────────────────────────────────────
--- Identical to wasm_emit_modules_main.runEmit, prefixed by the WAT marker.  Re-
--- loads modules (the analyze phase did not retain the elaborated tree); a clean
--- analyze guarantees this load + emit cannot hit the diagnostic/panic path.
--- COMPOSITE-MAIN AUTO-PRINT (design §10, single-process in-browser path): after a
--- clean analyze, elaborate once to learn main's type.  A bare non-Unit VALUE main
--- is rewritten `main = <e>` → `main = println <e>` (so composite mains no longer
--- crash the emitter); a bare underived-ADT main surfaces the clean `No impl of
--- Display …` diagnostic (via the __MEDAKA_DIAGNOSTICS__ marker, NOT the WAT
+-- Identical to wasm_emit_modules_main.runEmit, prefixed by the WAT marker.  A clean
+-- analyze guarantees this emit cannot hit the diagnostic/panic path.
+-- S2/#2442 — CONVERGENCE ON THE CLI'S SHAPE.  This used to re-derive the whole
+-- front end from source here: a SECOND `loadProgramE` (which has no memo — it
+-- re-reads and re-parses every user module), plus `desugar (parse rsrc)` /
+-- `desugar (parse csrc)` over runtime.mdk + core.mdk.  Both are now what
+-- `medaka_cli.mdk`'s `typecheckGate`/`typecheckGateRoute` already do: the loader's
+-- module list is THREADED in from `run` (the caller that loaded it), and the two
+-- prelude halves go through the content-keyed `desugaredPrelude` memo that
+-- `analyzeFrom` (driver/diagnostics.mdk) already filled on the way here — so this
+-- is a cache HIT, not a second desugar.
+--
+-- 🚨 IT ALSO RAN A WHOLE `mangleUnits` + `elaborateModules` HERE AND DISCARDED THE
+-- RESULT.  That call was NOT dead — bound to `_`, but its SIDE EFFECT was
+-- `mainSchemeRef`, the sole input to `mainTypeIsUnit`/`mainTypeIsAsync`/
+-- `mainTypeIsFloat` and therefore to the `shouldAutoPrintMain` two lines below.
+-- What retired it is that `mainSchemeRef` acquired a SECOND, equally authoritative
+-- producer on BOTH arms that reach here, after this call site was written:
+--   * single module — `analyzeFrom` → `checkOneDiags` → `checkModulesEntryFullSplit`
+--     (#2155's SET-OR-CLEAR write);
+--   * multi module  — `analyzeProject` → `typecheckPass` → `cmDiagsCollect` →
+--     `setMainSchemeIfEntry` (#2246's).
+-- Both run BEFORE this point on every path that reaches it, and nothing between
+-- them and here writes the ref (`desugaredPrelude` and `desugarPair` are pure;
+-- `underivedMainDiags` runs after, and `checkOneDiagsSynthetic` saves/restores it
+-- by design).  MEASURED, not inferred (S2/#2442): an instrumented build printing all
+-- three predicates plus `shouldAutoPrintMain` immediately before and after this
+-- elaborate agreed on all four bits in 34/34 runs — 17 fixtures spanning Unit,
+-- Int/String/Bool/List/Option/Result/tuple values, Float, an explicit `main : Int`
+-- sig, a shadowed `println`, and the multi-module arm — in both modes.
+-- ⚠️ Do NOT reintroduce a discarded elaborate here as "cheap insurance": it is the
+-- interleaved second `Module`-arm run that #2049 (typecheck.mdk's `matchOracle`
+-- obituary) is about, and its removal is what makes `analyze` elaborate the user's
+-- program exactly once.
+--
+-- COMPOSITE-MAIN AUTO-PRINT (design §10, single-process in-browser path): a bare
+-- non-Unit VALUE main is rewritten `main = <e>` → `main = println <e>` (so composite
+-- mains no longer crash the emitter); a bare underived-ADT main surfaces the clean
+-- `No impl of Display …` diagnostic (via the __MEDAKA_DIAGNOSTICS__ marker, NOT the WAT
 -- marker).  A Unit/Async main is unchanged.
 -- `underivedMainDiags` below is a DIAGNOSTIC, not part of emit, so it runs in
 -- `analyze` mode too; only the `finishClean` tail is mode-dependent.
-doEmit : Bool -> String -> String -> String -> String -> List String -> List (String, String, List Diag) -> <IO> Unit
-doEmit emit rsrc csrc tsrc entry roots warnTriples = match loadProgramE entry roots
-  Err (LoadParseFailed mpath _ pe) => emitParseError mpath pe
-  Err (LoadMsg e) => emitDiagnostics (cjAllToJson [(entry, "", [Diag SevError "R-MODULE-LOAD" e None None None])])
-  Ok mods =>
-    let rt = desugar (parse rsrc)
-    let core = desugar (parse csrc)
-    let modules = map desugarPair mods
-    let (coreMangled, modulesMangled) = mangleUnits core modules
-    let _ = elaborateModules rt coreMangled modulesMangled
-    if shouldAutoPrintMain core modules then
-      -- coreW carries the wrap's prelude-pinned callee (autoPrintPinCore, #2185).
-      let coreW = autoPrintPinCore core
-      let modulesW = autoPrintWrapModules modules
-      match underivedMainDiags rt coreW modulesW
-        [] => finishClean emit warnTriples rt coreW modulesW
-        errs => emitDiagnostics (cjAllToJson [(entry, tsrc, map diagOfTypeError errs)])
-    else
-      finishClean emit warnTriples rt core modules
+doEmit : Bool -> String -> String -> String -> String -> List (String, List Decl) -> List (String, String, List Diag) -> <IO> Unit
+doEmit emit rsrc csrc tsrc entry mods warnTriples =
+  let rt = desugaredPrelude rsrc
+  let core = desugaredPrelude csrc
+  let modules = map desugarPair mods
+  if shouldAutoPrintMain core modules then
+    -- coreW carries the wrap's prelude-pinned callee (autoPrintPinCore, #2185).
+    let coreW = autoPrintPinCore core
+    let modulesW = autoPrintWrapModules modules
+    match underivedMainDiags rt coreW modulesW
+      [] => finishClean emit warnTriples rt coreW modulesW
+      errs => emitDiagnostics (cjAllToJson [(entry, tsrc, map diagOfTypeError errs)])
+  else
+    finishClean emit warnTriples rt core modules
 
 -- The ONE divergence point between `compile` and `analyze`.  Every diagnostic
 -- either mode can produce has already been produced by the time control reaches
 -- here, so `compile` prints the WAT marker and the WAT while `analyze` prints its
 -- own marker and the same warnings JSON — no lowerProgramEmit, no wasmReachFilter,
--- no emitProgram, and no second `elaborateModules` (runEmit's own).
+-- no emitProgram, and no `elaborateModules` at all (`runEmit`'s is now the only one
+-- on either path — see doEmit's obituary for the discarded one that used to precede
+-- it, which is why `analyze` reaches here having elaborated the user's program once).
 finishClean : Bool -> List (String, String, List Diag) -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
 finishClean emit warnTriples runtimeDecls coreDecls modules =
   if emit then
