@@ -13,7 +13,7 @@ import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.annotate.{annotateProgram}
 import ir.core_ir_lower.{lowerProgram}
-import ir.core_ir_eval.{cevalMain}
+import ir.core_ir_eval.{cevalMainOf}
 
 main = match args ()
   [targetPath] => withTarget targetPath
@@ -30,5 +30,7 @@ main = match args ()
 -- proves while the IR carries the slots a backend will consume.
 withTarget : String -> <IO> Unit
 withTarget targetPath = match readFile targetPath
-  Ok targetSrc => putStrLn (cevalMain (lowerProgram (annotateProgram (desugar (parse targetSrc)))))
+  Ok targetSrc =>
+    let decls = annotateProgram (desugar (parse targetSrc))
+    putStrLn (cevalMainOf decls (lowerProgram decls))
   Err msg => ePutStrLn msg

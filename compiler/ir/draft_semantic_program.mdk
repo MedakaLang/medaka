@@ -10,6 +10,7 @@ import frontend.ast.{Decl}
 import ir.core_ir.{CProgram(..)}
 import ir.core_ir_lower.{
   lowerProgramEmit,
+  EmitTarget(..),
   returnsSelfTable,
   selfFnParamTable,
   methodIfaceTable,
@@ -140,7 +141,7 @@ buildDraftSemanticProgram runtimeDecls coreD modules mainIsUnit mainIsFloat =
     (DraftObservation
       ProducerLowerProgramEmit
       PopulationPostDceEmitCore
-      (lowerProgramEmit allDecls))
+      (lowerProgramEmit TargetBothUnknown allDecls))
     (DraftObservation
       ProducerReturnsSelfTable
       PopulationElaboratedGraph
@@ -191,8 +192,9 @@ modulesSexp modules = slist (map draftModulePayloadSexp modules)
 -- by the primary structural probe. Declaration-only facts are compared by the
 -- dedicated rows below rather than hidden behind this projection.
 draftModulePayloadSexp : DraftModule -> String
-draftModulePayloadSexp (DraftModule mid decls) =
-  node "module" [escStr mid, cprogramToSexp (lowerProgramEmit decls)]
+draftModulePayloadSexp (DraftModule mid decls) = node
+  "module"
+  [escStr mid, cprogramToSexp (lowerProgramEmit TargetBothUnknown decls)]
 
 draftModuleSexp : DraftModule -> String
 draftModuleSexp (DraftModule mid decls) =
@@ -213,7 +215,7 @@ compareDraftSemanticProgram (DraftSemanticProgram (DraftObservation runtimeProdu
     receipt FactRuntimeProjection ProducerLoadedRuntime PopulationRuntimeDecls (observationMetadataMatches ProducerLoadedRuntime PopulationRuntimeDecls runtimeProducer runtimePopulation && modulesSexp [DraftModule "runtime" draftRuntime] == modulesSexp [DraftModule "runtime" runtimeDecls]),
     receipt FactPreludeProjection ProducerElaborateModules PopulationElaboratedPrelude (observationMetadataMatches ProducerElaborateModules PopulationElaboratedPrelude coreProducer corePopulation && modulesSexp [DraftModule "core" draftCore] == modulesSexp [DraftModule "core" coreD]),
     receipt FactModuleProjection ProducerElaborateModules PopulationElaboratedModules (observationMetadataMatches ProducerElaborateModules PopulationElaboratedModules modulesProducer modulesPopulation && modulesSexp draftModules == modulesSexp (map moduleOf modules)),
-    receipt FactLegacyCore ProducerLowerProgramEmit PopulationPostDceEmitCore (observationMetadataMatches ProducerLowerProgramEmit PopulationPostDceEmitCore legacyCoreProducer legacyCorePopulation && cprogramToSexp draftLegacyCore == cprogramToSexp (lowerProgramEmit allDecls)),
+    receipt FactLegacyCore ProducerLowerProgramEmit PopulationPostDceEmitCore (observationMetadataMatches ProducerLowerProgramEmit PopulationPostDceEmitCore legacyCoreProducer legacyCorePopulation && cprogramToSexp draftLegacyCore == cprogramToSexp (lowerProgramEmit TargetBothUnknown allDecls)),
     receipt FactReturnsSelf ProducerReturnsSelfTable PopulationElaboratedGraph (observationMetadataMatches ProducerReturnsSelfTable PopulationElaboratedGraph returnsSelfProducer returnsSelfPopulation && flattenRows draftReturnsSelf == returnsSelfTable allDecls),
     receipt FactSelfFnParams ProducerSelfFnParamTable PopulationElaboratedGraph (observationMetadataMatches ProducerSelfFnParamTable PopulationElaboratedGraph selfFnProducer selfFnPopulation && flattenRows draftSelfFnParams == selfFnParamTable allDecls),
     receipt FactMethodIface ProducerMethodIfaceTable PopulationElaboratedGraph (observationMetadataMatches ProducerMethodIfaceTable PopulationElaboratedGraph methodIfaceProducer methodIfacePopulation && flattenRows draftMethodIface == methodIfaceTable allDecls),
