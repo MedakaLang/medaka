@@ -44,7 +44,7 @@ constructors below are the only sanctioned way to *build* one.
 ## `singleton`
 
 ```
-singleton : a -> b -> Map a b
+singleton : k -> v -> Map k v
 ```
 
 A map with a single entry.
@@ -60,7 +60,7 @@ A map with a single entry.
 ## `fromList`
 
 ```
-fromList : List (a, b) -> Map a b
+fromList : Ord k => List (k, v) -> Map k v
 ```
 
 Build a map from an association list.  Later pairs win on duplicate keys.
@@ -102,7 +102,7 @@ element types the empty braces leave open:
 ## `size`
 
 ```
-size : Map a b -> Int
+size : Map k v -> Int
 ```
 
 Number of entries.  O(1) — read straight off the root's cached size.
@@ -118,7 +118,7 @@ Number of entries.  O(1) — read straight off the root's cached size.
 ## `isEmpty`
 
 ```
-isEmpty : Map a b -> Bool
+isEmpty : Map k v -> Bool
 ```
 
 `True` when the map has no entries.
@@ -134,7 +134,7 @@ True
 ## `get`
 
 ```
-get : a -> Map a b -> Option b
+get : Ord k => k -> Map k v -> Option v
 ```
 
 Look up the value at a key.
@@ -164,7 +164,7 @@ the container first (`index m k`).
 ## `has`
 
 ```
-has : a -> Map a b -> Bool
+has : Ord k => k -> Map k v -> Bool
 ```
 
 `True` when the key is present.
@@ -182,7 +182,7 @@ False
 ## `findWithDefault`
 
 ```
-findWithDefault : a -> b -> Map b a -> a
+findWithDefault : Ord k => v -> k -> Map k v -> v
 ```
 
 Value at a key, or a fallback when the key is absent.
@@ -200,7 +200,7 @@ Value at a key, or a fallback when the key is absent.
 ## `set`
 
 ```
-set : a -> b -> Map a b -> Map a b
+set : Ord k => k -> v -> Map k v -> Map k v
 ```
 
 Insert a key/value pair, replacing any existing value at the key.
@@ -216,7 +216,7 @@ Insert a key/value pair, replacing any existing value at the key.
 ## `insertWith`
 
 ```
-insertWith : (a -> a -> a) -> b -> a -> Map b a -> Map b a
+insertWith : Ord k => (v -> v -> v) -> k -> v -> Map k v -> Map k v
 ```
 
 Insert with a combining function.  On a collision the new value is
@@ -233,7 +233,7 @@ Insert with a combining function.  On a collision the new value is
 ## `adjust`
 
 ```
-adjust : (a -> a) -> b -> Map b a -> Map b a
+adjust : Ord k => (v -> v) -> k -> Map k v -> Map k v
 ```
 
 Apply a function to the value at a key, if present.  A no-op when the key
@@ -250,7 +250,7 @@ is absent.  The tree shape is unchanged, so no rebalancing is needed.
 ## `delete`
 
 ```
-delete : a -> Map a b -> Map a b
+delete : Ord k => k -> Map k v -> Map k v
 ```
 
 Remove a key.  A no-op when the key is absent.
@@ -268,7 +268,7 @@ False
 ## `minView`
 
 ```
-minView : Map a b -> Option (a, b, Map a b)
+minView : Map k v -> Option (k, v, Map k v)
 ```
 
 Split off the smallest entry: `Some (key, value, rest)`, or `None` when
@@ -277,7 +277,7 @@ empty.  `rest` stays balanced.
 ## `maxView`
 
 ```
-maxView : Map a b -> Option (a, b, Map a b)
+maxView : Map k v -> Option (k, v, Map k v)
 ```
 
 Split off the largest entry: `Some (key, value, rest)`, or `None`.
@@ -285,7 +285,7 @@ Split off the largest entry: `Some (key, value, rest)`, or `None`.
 ## `getMin`
 
 ```
-getMin : Map a b -> Option (a, b)
+getMin : Map k v -> Option (k, v)
 ```
 
 Smallest key/value, or `None`.
@@ -301,7 +301,7 @@ Some (1, 0)
 ## `getMax`
 
 ```
-getMax : Map a b -> Option (a, b)
+getMax : Map k v -> Option (k, v)
 ```
 
 Largest key/value, or `None`.
@@ -317,7 +317,7 @@ Some (3, 0)
 ## `deleteMin`
 
 ```
-deleteMin : Map a b -> Map a b
+deleteMin : Map k v -> Map k v
 ```
 
 Drop the smallest entry (a no-op on the empty map).
@@ -333,7 +333,7 @@ Drop the smallest entry (a no-op on the empty map).
 ## `deleteMax`
 
 ```
-deleteMax : Map a b -> Map a b
+deleteMax : Map k v -> Map k v
 ```
 
 Drop the largest entry (a no-op on the empty map).
@@ -349,7 +349,7 @@ Drop the largest entry (a no-op on the empty map).
 ## `foldrWithKey`
 
 ```
-foldrWithKey : (a -> b -> c -> c) -> c -> Map a b -> c
+foldrWithKey : (k -> v -> b -> <e> b) -> b -> Map k v -> <e> b
 ```
 
 Right fold over key/value pairs in ascending key order.
@@ -357,7 +357,7 @@ Right fold over key/value pairs in ascending key order.
 ## `foldlWithKey`
 
 ```
-foldlWithKey : (a -> b -> c -> a) -> a -> Map b c -> a
+foldlWithKey : (b -> k -> v -> <e> b) -> b -> Map k v -> <e> b
 ```
 
 Left fold over key/value pairs in ascending key order.
@@ -365,7 +365,7 @@ Left fold over key/value pairs in ascending key order.
 ## `toList`
 
 ```
-toList : Map a b -> List (a, b)
+toList : Map k v -> List (k, v)
 ```
 
 All key/value pairs, ascending by key.
@@ -381,7 +381,7 @@ All key/value pairs, ascending by key.
 ## `keys`
 
 ```
-keys : Map a b -> List a
+keys : Map k v -> List k
 ```
 
 All keys, ascending.
@@ -397,7 +397,7 @@ All keys, ascending.
 ## `values`
 
 ```
-values : Map a b -> List b
+values : Map k v -> List v
 ```
 
 All values, ordered by their keys.
@@ -413,7 +413,7 @@ All values, ordered by their keys.
 ## `mapWithKey`
 
 ```
-mapWithKey : (a -> b -> c) -> Map a b -> Map a c
+mapWithKey : (k -> v -> <e> w) -> Map k v -> <e> Map k w
 ```
 
 Map a function over the values, keeping keys and structure.  The key is
@@ -430,7 +430,7 @@ passed alongside the value.
 ## `filterWithKey`
 
 ```
-filterWithKey : (a -> b -> Bool) -> Map a b -> Map a b
+filterWithKey : Ord k => (k -> v -> <e> Bool) -> Map k v -> <e> Map k v
 ```
 
 Keep only the entries whose key/value satisfy the predicate.
@@ -446,7 +446,7 @@ Keep only the entries whose key/value satisfy the predicate.
 ## `union`
 
 ```
-union : Map a b -> Map a b -> Map a b
+union : Ord k => Map k v -> Map k v -> Map k v
 ```
 
 Left-biased union: on a shared key the value from the first map wins.
@@ -464,7 +464,7 @@ Left-biased union: on a shared key the value from the first map wins.
 ## `unionWith`
 
 ```
-unionWith : (a -> a -> a) -> Map b a -> Map b a -> Map b a
+unionWith : Ord k => (v -> v -> v) -> Map k v -> Map k v -> Map k v
 ```
 
 Union with a combining function for shared keys: `f leftValue rightValue`.
@@ -480,7 +480,7 @@ Union with a combining function for shared keys: `f leftValue rightValue`.
 ## `difference`
 
 ```
-difference : Map a b -> Map a c -> Map a b
+difference : Ord k => Map k v -> Map k w -> Map k v
 ```
 
 Keys present in the first map but not the second (values from the first).
@@ -496,7 +496,7 @@ Keys present in the first map but not the second (values from the first).
 ## `intersectionWith`
 
 ```
-intersectionWith : (a -> b -> c) -> Map d a -> Map d b -> Map d c
+intersectionWith : Ord k => (v -> w -> x) -> Map k v -> Map k w -> Map k x
 ```
 
 Keys present in both maps, combined with `f leftValue rightValue`.
@@ -512,7 +512,7 @@ Keys present in both maps, combined with `f leftValue rightValue`.
 ## `intersection`
 
 ```
-intersection : Map a b -> Map a c -> Map a b
+intersection : Ord k => Map k v -> Map k w -> Map k v
 ```
 
 Keys present in both maps, keeping the LEFT map's value — the plain form
@@ -669,7 +669,7 @@ True
 ## `wellFormed`
 
 ```
-wellFormed : Map a b -> Bool
+wellFormed : Ord k => Map k v -> Bool
 ```
 
 Check the three structural invariants at every node: the search-tree

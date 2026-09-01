@@ -261,7 +261,7 @@ Drop the element at index `i`.  Out of range leaves the vector unchanged.
 ## `sortBy`
 
 ```
-sortBy : (a -> a -> Ordering) -> MutArray a -> Unit
+sortBy : (a -> a -> <e> Ordering) -> MutArray a -> <e> Unit
 ```
 
 Sort the live range in place with the supplied comparison.  Stable --
@@ -279,7 +279,7 @@ which does the work, is.
 ## `sort`
 
 ```
-sort : MutArray a -> Unit
+sort : Ord a => MutArray a -> Unit
 ```
 
 Sort the live range in place by the `Ord` instance.

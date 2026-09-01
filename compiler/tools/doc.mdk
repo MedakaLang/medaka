@@ -280,14 +280,19 @@ ppRequireOne (Require { requireHead = iface, requireArgs = tys }) = match tys
   [] => iface
   _ => "\{iface} \{joinWith " " (map (ppTyP 2) tys)}"
 
--- Look up the inferred scheme for [name]; fall back to the AST annotation when
--- typecheck produced no scheme (partial results).  Mirror value_sig.
+-- Render the signature line for [name].  The AST annotation WINS when the
+-- author wrote one (`DTypeSig`/`DExtern`), because it is the surface a reader
+-- wrote and `ppTyDoc` renders it faithfully — `ppScheme` (types/typecheck)
+-- DROPS constraint contexts and `TyEffect` rows, so rendering off the inferred
+-- scheme silently published `nub : List a -> List a` for a source line reading
+-- `nub : Eq a => List a -> List a` (#2448).  Only when there is no written
+-- annotation at all (a bare `DFunDef`, or a `let` group) is the inferred scheme
+-- the sole source of truth; its lossiness there is a separate problem.
 valueSig : String -> List (String, Scheme) -> Option Ty -> String
-valueSig name schemes fallbackTy = match lookupScheme name schemes
+valueSig name _ (Some ty) = "\{name} : \{ppTyDoc ty}"
+valueSig name schemes None = match lookupScheme name schemes
   Some s => "\{name} : \{ppScheme s}"
-  None => match fallbackTy
-    Some ty => "\{name} : \{ppTyDoc ty}"
-    None => name
+  None => name
 
 -- Last match wins: checkProgramSeeded returns globalS ++ topSchemes, so the
 -- user's top-level binding appears LAST (after any same-named interface method
