@@ -114,6 +114,21 @@ playground/build_compiler_wasm   builds the compiler-to-wasm bundle.
 playground/build_editor          builds the CM6 editor bundle.
 playground/build_playground_wasm builds playground/dist/playground.wasm.
 playground/build_site            assembles the static playground site.
+playground/build_marked          ONE-TIME vendoring of the `marked` Markdown parser into the
+                                 committed bundle playground/vendor/marked/marked.js (#2386,
+                                 S-render-machine). Exactly like build_editor above: it needs
+                                 network + `npm install`, produces a committed artifact, and
+                                 asserts nothing about the compiler. It MUST stay listed
+                                 here — `_gate_candidates()` in preflight.sh treats any
+                                 unlisted `playground/*.sh` as a gate and EXECUTES it, which
+                                 for this script means a live npm install on any `make
+                                 preflight` that happens to touch playground/.
+playground/build_guide           renders docs/guide/*.md into playground/site-guide/ via
+                                 playground/render_docs.mjs (#2386, S-render-machine). A build
+                                 step, not a check: it produces the staging dir build_site.sh
+                                 will consume, and asserts nothing. The ASSERTIONS about its
+                                 output live in playground/guide_render_test.mjs — invocable
+                                 standalone today, wired into preflight/CI by S-site-wiring.
 playground/deploy_cloudflare     publishes playground/site/ to Cloudflare Pages (project `medaka`,
                                  https://medaka-lang.dev). Running it proves nothing about the
                                  compiler — it is a deploy, and it needs credentials no runner has.

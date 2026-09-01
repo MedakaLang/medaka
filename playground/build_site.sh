@@ -17,8 +17,11 @@
 #   dist/playground.wasm
 #   dist/runtime.mdk  dist/core.mdk
 #   dist/<m>.mdk      for every EXTRA_MODULES entry in main.js (array, list, …)
+#   guide/<chapter>.html  one page per docs/guide/*.md (OUTLINE.md excluded)
+#   guide/guide.css
 #
 # Runs build_playground_wasm.sh first if dist/playground.wasm is missing.
+# Runs build_guide.sh to render the guide straight into site/guide/.
 # playground/site/ is gitignored — do NOT commit it.
 #
 # Deploy: upload playground/site/ to any static host (GitHub Pages, Cloudflare
@@ -79,6 +82,24 @@ cp "$SCRIPT_DIR/vendor/codemirror/codemirror.js" "$SITE/vendor/codemirror/"
 cp "$DIST/playground.wasm" "$SITE/dist/"
 cp "$DIST"/*.mdk           "$SITE/dist/"
 
+# ── The guide (docs/guide/*.md -> site/guide/*.html) ─────────────────────────
+#
+# Rendered STRAIGHT INTO the deploy tree rather than into the playground/site-guide
+# staging dir and copied: one output location means there is no second copy to go
+# stale, and the renderer's default --playground-url ("../index.html") is already
+# correct for this layout — site/guide/x.html reaching site/index.html.
+#
+# build_guide.sh (and render_docs.mjs under it) needs only `node` and the
+# committed marked bundle; no network, no npm install.
+#
+# $DIST is passed as the third argument so the renderer can withhold the ▶ button
+# from a block importing a module this site does not ship — the page fetches each
+# import as dist/<id>.mdk, so an unshipped one is a 404 at Run time no matter how
+# well the block compiles natively. Safe to pass unconditionally here: dist/ is a
+# hard prerequisite checked above.
+echo "[build_site] rendering docs/guide -> $SITE/guide ..."
+bash "$SCRIPT_DIR/build_guide.sh" "$ROOT/docs/guide" "$SITE/guide" "$SITE/dist"
+
 # ── Verify the site can actually serve what the page asks for ───────────────
 # Derived from main.js, so this check cannot drift from the page's real needs.
 missing=""
@@ -91,6 +112,24 @@ for f in runtime.mdk core.mdk; do
 done
 if [ -n "$missing" ]; then
   echo "FAIL: main.js fetches these at runtime but they are not in site/dist:$missing" >&2
+  exit 1
+fi
+
+# Same shape, same reason, for the guide: the expected page set is DERIVED from
+# docs/guide/ (minus OUTLINE.md, the guide's planning doc — build_guide.sh
+# excludes it, so this must too), never a hardcoded chapter list. A chapter added
+# to docs/guide/ that the renderer somehow failed to emit is a loud failure here
+# rather than a page that is quietly absent from the deploy.
+missing_guide=""
+for m in "$ROOT"/docs/guide/*.md; do
+  b="$(basename "$m")"
+  if [ "$b" != "OUTLINE.md" ] && [ ! -f "$SITE/guide/${b%.md}.html" ]; then
+    missing_guide="$missing_guide ${b%.md}.html"
+  fi
+done
+[ -f "$SITE/guide/guide.css" ] || missing_guide="$missing_guide guide.css"
+if [ -n "$missing_guide" ]; then
+  echo "FAIL: docs/guide names these but they are not in site/guide:$missing_guide" >&2
   exit 1
 fi
 

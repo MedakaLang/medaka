@@ -16,6 +16,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SITE="$SCRIPT_DIR/site"
 ENV_FILE="${CF_ENV_FILE:-$HOME/.cf-medaka.env}"
 PROJECT="${CF_PAGES_PROJECT:-medaka}"
@@ -41,7 +42,11 @@ set +a
 redact() { sed -e "s/${CLOUDFLARE_API_TOKEN}/***REDACTED***/g"; }
 
 # ── The site must be built, and complete ────────────────────────────────────
-if [ ! -f "$SITE/index.html" ] || [ ! -f "$SITE/dist/playground.wasm" ]; then
+# `site/guide` joins the trigger deliberately: a site/ assembled BEFORE the guide
+# was wired in (#2386, S-site-wiring) has index.html and playground.wasm and would
+# otherwise have sailed straight past this into a deploy with no guide at all —
+# and with playground/index.html's new Guide/Quickstart links 404ing.
+if [ ! -f "$SITE/index.html" ] || [ ! -f "$SITE/dist/playground.wasm" ] || [ ! -d "$SITE/guide" ]; then
   echo "[deploy] site/ not built — running build_site.sh ..."
   bash "$SCRIPT_DIR/build_site.sh" >/dev/null
 fi
@@ -51,6 +56,18 @@ fi
 mdk_count=$(find "$SITE/dist" -name '*.mdk' | wc -l | tr -d ' ')
 if [ "$mdk_count" -lt 22 ]; then
   echo "FAIL: site/dist has $mdk_count .mdk files, expected >=22. Re-run build_site.sh." >&2
+  exit 1
+fi
+
+# Same re-assert for the guide, and DERIVED from docs/guide/ rather than pinned to
+# a number: the .mdk floor above is a fixed `>=22` because main.js's module list
+# moves independently of this script, but the guide's page count is exactly
+# "docs/guide/*.md minus OUTLINE.md", which is knowable here. A chapter added to
+# the repo and missing from site/ is a stale build, not a smaller guide.
+guide_expected=$(find "$ROOT/docs/guide" -maxdepth 1 -name '*.md' ! -name 'OUTLINE.md' | wc -l | tr -d ' ')
+guide_count=$(find "$SITE/guide" -maxdepth 1 -name '*.html' | wc -l | tr -d ' ')
+if [ "$guide_count" -lt "$guide_expected" ]; then
+  echo "FAIL: site/guide has $guide_count pages, docs/guide names $guide_expected. Re-run build_site.sh." >&2
   exit 1
 fi
 
