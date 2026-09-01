@@ -74,6 +74,31 @@ repository self-draining artifact, and #1075 explicitly owes one if its
 prerequisite branch lands. Those are test debts on the issue, not evidence for
 or against the architecture verdict.
 
+**#1075's debt update, 2026-09-01 (sprint `argtag-decidability`, #2445
+closeout).** The prerequisite this row names (#1046's arg-tag arm-set fix)
+landed at `33385a53`, so on this row's own wording the `build-run` pin is now
+owed. It remains UNPAID, and not silently: #1075's exact spelling (a
+method-less impl at a PRIMITIVE head — `impl Speak Int where`) is not
+`test/argtag_matrix_fixtures/`'s enrolled `A4_mixed_primitive__B2_one_default`
+cell, which places the method-less impl at the *user* head (`Cat`) with `Int`
+defining — the mirror, not the match (measured identical on all three verbs,
+see `S-4-narrow-where-decidable.md`'s report and #1075's own issue-comment
+amendment). Two independent blockers keep the pin from being paid this
+slice: (1) the local-pin narrowing that would let #1075's own repro reach
+`build` at all is not landed (S-4 took the sprint's pre-licensed
+no-narrowing discharge — see `docs/KNOWN-GAPS.md`'s "Known over-reject"
+entry), so a `must_fail_fixtures/` row graded on ordinary `check`/`run`/`build`
+now MALFORMEDs at `check` (`T-LOCAL-CONSTRAINED-MONO`, exit 1) rather than
+reaching the emitter panic the issue records — the same MALFORMED-verb problem
+`1046-methodless-impl-argtag-dispatch/claim.txt` already documents for its own
+row; and (2) reaching it at all needs the same test-only unpin hatch the
+census uses, and `test/argtag_matrix_fixtures/` is a shared corpus
+([T-SHARED-CORPUS]) — extending it with an eleventh cell is a corpus decision
+this closeout slice is not licensed to make unilaterally. Left for the
+end-of-sprint review round to accept or decline adding
+`A4_mixed_primitive__B2_one_default_at_primitive_head` (S-4's Notes item 3
+names the same candidate).
+
 ## 3. Direct and split backend families
 
 ### 3.1 Record creation order - #1306
