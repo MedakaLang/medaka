@@ -1,5 +1,5 @@
 # META
-source_lines=4387
+source_lines=4398
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, port of lib/eval.ml's tree-walking
@@ -2499,7 +2499,7 @@ currentEvalFile : Ref String
 currentEvalFile = Ref ""
 
 -- #1542: per-module (modId -> file path) map, set once by the run driver from
--- the SAME loader-produced `pathMap` `resolveModulesToHumaneByPath` already
+-- the SAME loader-produced `pathMap` `resolveModulesErrorsByFile` already
 -- uses for resolve-phase diagnostics (#41/#186/#1360) — reused here so a
 -- RUNTIME error gets the same per-module attribution a resolve error already
 -- gets.  Consulted only at module-env construction (buildModInfos), never on
@@ -2593,7 +2593,18 @@ updateEvalLoc (Loc f sl sc el ec)
 -- Chokepoint for user-facing runtime errors.  `panic` is a noreturn C-abort
 -- that never returns to Medaka, so the located, coded diagnostic must be
 -- formatted INTO the panic string here (Fork B option iii).  The text prefix
--- mirrors resolve.mdk's ppResErrorLocatedF: `file:L:C:` with a 0-based column.
+-- is `file:L:C:` with a 0-based column.
+--
+-- ⚠️ #2400 SITE CENSUS: this is the LAST hand-built human diagnostic line in the
+-- compiler — every compile-time channel now renders through
+-- `driver.diagnostics.ppDiagCliLines` (severity prefix + `file:L:C:` + caret).
+-- It is NOT routed there, and the reason is structural rather than an oversight:
+-- `panic` is a noreturn C-abort reached from the middle of evaluation, and this
+-- module has no source text for the frame it died in (`modulePathMap` carries
+-- module PATHS, not their bytes) — so there is no caret to draw and no `<IO>`
+-- seam to read one at.  It also has no `error: ` prefix because its own banner
+-- word is `runtime error [CODE]`, which is not a `Severity`.  Filed as the
+-- residual on #2400, not silently left alike-looking.
 -- Stage 4: when `runJsonMode` is set, format the SAME `Diag` through the
 -- exact serializer `medaka check --json` uses (driver.diagnostics'
 -- `cjAllToJsonWith`, which is `cjAllToJson` plus C4's envelope notices),

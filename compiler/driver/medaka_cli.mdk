@@ -104,7 +104,7 @@ import frontend.parser.{
 }
 import frontend.desugar_cache.{desugaredPrelude}
 import frontend.desugar.{desugar}
-import frontend.resolve.{resolveModulesToHumaneByPath, internalGuardFor}
+import frontend.resolve.{resolveModulesErrorsByFile, internalGuardFor}
 import driver.loader.{
   LoadError,
   LoadMsg,
@@ -128,6 +128,8 @@ import driver.diagnostics.{
   ppDiagCli,
   ppDiagCliSrc,
   ppDiagCliLines,
+  ppResolveErrorsByFile,
+  displayPath,
   srcLinesArr,
   Diag(..),
   Severity(..),
@@ -668,9 +670,15 @@ runCheckCmd argv =
 -- that module had been checked directly: `ppParseError` against the module's OWN
 -- source and path, so the file, line/col, caret and `P-*`/`L-*` code all name the
 -- module that is actually broken rather than the entry that imported it.
+-- #2400 F2b: `mpath` is LOADER-MINTED (`./bad.mdk` for a module beside an entry
+-- named with no directory part), unlike every other `ppParseError` call site,
+-- which passes the CLI's own target string.  Same one-file-two-spellings defect
+-- the resolve and type-error channels had; same `displayPath` answer.  `msrc`
+-- is deliberately the module's OWN source, so the caret keeps naming the module
+-- that is actually broken (#100) — only the header spelling changes.
 moduleLoadErrText : String -> String -> String -> LoadError -> <IO> String
 moduleLoadErrText _ _ _ (LoadParseFailed mpath msrc e) =
-  ppParseError msrc mpath e
+  ppParseError msrc (displayPath mpath) e
 moduleLoadErrText tsrc target stdlibDir (LoadMsg lmsg) = match unknownModuleIdOf lmsg
   None => lmsg
   Some mid =>
@@ -735,7 +743,7 @@ errTextOf (errText, _, _) = errText
 -- other two callers) ignore it, so their narrow-to-coherence behaviour and
 -- its measured perf/noise rationale (see `isCoherenceWarn`) are untouched.
 -- #1362: `allowInternal`/`trusted` gate the internal-extern guard on the
--- resolve half of this pass, exactly like the `resolveModulesToHumaneByPath`
+-- resolve half of this pass, exactly like the `resolveModulesErrorsByFile`
 -- gate every caller here already runs BEFORE this one — this call is
 -- redundant-but-consistent (a resolve error this pass could newly find would
 -- already have been caught upstream), not a second independent gate.
@@ -774,19 +782,27 @@ joinedOrNone ls = Some (joinNl ls)
 -- whether `xs` is empty — which made a clean multi-module project pay a full
 -- per-file `Array String` split on EVERY file for output that does not exist.
 -- The `[]` arm is what keeps the split off the zero-diagnostic path; keep it.
+--
+-- #2400 F2b: `path` here is the LOADER-NORMALISED form (`./main.mdk` for an
+-- entry named with no directory part), which is why these two are `displayPath`
+-- sites as well as the resolve channel — the same tool printed `./main.mdk` for
+-- a multi-module TYPE error and `main.mdk` for a single-file one.  Normalising
+-- for DISPLAY only: `locatedProjectDiags` identifies the entry triple
+-- positionally BECAUSE these paths do not compare equal to `target`, and that
+-- stays true (the triples themselves are untouched).
 renderTripleErrors : (String, String, List Diag) -> List String
 renderTripleErrors (path, src, diags) =
   let errs = filter isDiagError diags
   match errs
     [] => []
-    _ => map (ppDiagCliLines (srcLinesArr src) path) errs
+    _ => map (ppDiagCliLines (srcLinesArr src) (displayPath path)) errs
 
 renderTripleWarnings : (String, String, List Diag) -> List String
 renderTripleWarnings (path, src, diags) =
   let ws = filter isDiagWarn diags
   match ws
     [] => []
-    _ => map (ppDiagCliLines (srcLinesArr src) path) ws
+    _ => map (ppDiagCliLines (srcLinesArr src) (displayPath path)) ws
 
 -- For the run/build multi-module gates, whose SOUNDNESS predicate stays the
 -- looser `hadTypeErrors` (checkModulesHasErrors over-rejects valid code — see
@@ -899,7 +915,7 @@ checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target m
   -- #41: attribute each module's resolve errors to its OWN file (via `pathMap`),
   -- not a single `target` fallback that mislabels every imported-module error as
   -- the entry file.
-  let resDiags = resolveModulesToHumaneByPath pathMap allowInternal trusted rtD coreD modsD
+  let resDiags = ppResolveErrorsByFile (resolveModulesErrorsByFile pathMap allowInternal trusted rtD coreD modsD)
   match resDiags
     "" =>
       -- BUGFIX (imported-module diagnostics): when there ARE type errors, render
@@ -2196,17 +2212,17 @@ typecheckGateRoute allowInternal trusted _ _ rsrc csrc tsrc target [(mid, decls)
       TGOk (flatMap renderTripleWarnings allWarns)
     _ => TGErr (joinNl (map (ppDiagCliLines (srcLinesArr tsrc) target) errs))
 typecheckGateRoute allowInternal trusted pathMap roots rsrc csrc tsrc target mods =
-  -- S-1/#2234 (F-converge): live use (they feed `resolveModulesToHumaneByPath`
+  -- S-1/#2234 (F-converge): live use (they feed `resolveModulesErrorsByFile`
   -- below), so this is a cache hit, not a deletion — `desugaredPrelude` is the
   -- content-keyed memo of exactly `desugar (parsePrelude src)`.
   let rtD = desugaredPrelude rsrc
   let coreD = desugaredPrelude csrc
   let modsD = map desugarPair mods
   -- #186/#1360: attribute each module's resolve errors to its OWN file, via the
-  -- loader's modId → path map — the SAME `resolveModulesToHumaneByPath` seam
+  -- loader's modId → path map — the SAME `resolveModulesErrorsByFile` seam
   -- `checkRoute` has used since #41.  The single `target` fallback this replaced
   -- stamped EVERY imported module's error with the entry file's path.
-  let resDiags = resolveModulesToHumaneByPath pathMap allowInternal trusted rtD coreD modsD
+  let resDiags = ppResolveErrorsByFile (resolveModulesErrorsByFile pathMap allowInternal trusted rtD coreD modsD)
   match resDiags
     "" => match locatedProjectDiags allowInternal trusted target roots rsrc csrc
       -- CHECK-STRENGTH gate: the located per-module ERROR diagnostics, identical to
@@ -2579,7 +2595,7 @@ runRunCmd argv =
                     -- for why this is not an over-rejection.
                     -- #186/#1360: per-module attribution via the loader's
                     -- `pathMap`, the same seam `checkRoute` uses (#41).
-                    let resDiags = resolveModulesToHumaneByPath pathMap allowInternal trusted rtD coreD modsD
+                    let resDiags = ppResolveErrorsByFile (resolveModulesErrorsByFile pathMap allowInternal trusted rtD coreD modsD)
                     match resDiags
                       -- `locatedProjectDiags`, not `locatedProjectErrors`: the same
                       -- single `analyzeProject` pass, but keeping the WARNINGS the
@@ -2608,7 +2624,7 @@ runRunCmd argv =
 -- hadTypeErrors reflects THIS run only.  A type error makes
 -- evalModulesOutput miscompile (the G1 bug), so we never reach it.
 -- Resolve-phase errors (e.g. PrivateNameAccess) ride a SEPARATE channel
--- hadTypeErrors does not cover, so resolveModulesToHumaneByPath is consulted
+-- hadTypeErrors does not cover, so resolveModulesErrorsByFile is consulted
 -- FIRST (mirroring `check`/`build`) and run aborts with the same humane
 -- diagnostic before elaborate/eval.
 
