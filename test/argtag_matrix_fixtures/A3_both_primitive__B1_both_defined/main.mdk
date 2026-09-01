@@ -1,0 +1,12 @@
+interface Speak a where
+  speak : a -> String
+
+impl Speak Int where
+  speak _ = "int"
+
+impl Speak Bool where
+  speak _ = "bool"
+
+main =
+  let f = v => speak v
+  println (f 1 ++ "|" ++ f True)

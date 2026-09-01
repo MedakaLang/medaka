@@ -1,0 +1,6 @@
+class: undecidable-by-construction
+correct: int|bool
+check: 0
+run: 0 | int|bool
+build: 1 | error: emitter failed compiling main.mdk\nruntime error [E-PANIC]: no impl of method 'fromInt' for type 'Bool'\n
+exec: n/a

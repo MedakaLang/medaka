@@ -1743,6 +1743,20 @@ corpus = ["test/dict_fixtures", "test/must_fail_fixtures", "test/typecheck_error
 toolchain = ["clang"]
 
 [[gate]]
+name = "diff_compiler_argtag_matrix"
+area = "soundness"
+shard = "gates_2"
+project = "compiler"
+tiers = ["merge"]
+cost = "medium"
+kind = "exec"
+run = "test/diff_compiler_argtag_matrix.sh"
+oracles = []
+sources = ["compiler/backend/*", "compiler/driver/*", "compiler/eval/*", "compiler/frontend/marker.mdk", "compiler/ir/*", "compiler/types/*", "test/diff_compiler_argtag_matrix.sh"]
+corpus = ["test/argtag_matrix_fixtures"]
+toolchain = ["clang"]
+
+[[gate]]
 name = "diff_compiler_dispatch_shape"
 area = "eval"
 shard = "gates_7"
