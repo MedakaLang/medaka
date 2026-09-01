@@ -28,6 +28,12 @@
 //   --css-name <file>  basename of the stylesheet this doc set emits and links
 //                      (default: 'guide.css'). Two doc sets rendered into the
 //                      same directory must not both claim one filename.
+//   --dist <dir>       the directory of `.mdk` modules the playground page SHIPS
+//                      (playground/dist, staged by build_playground_wasm.sh).
+//                      Optional: given, a block importing a module that is not
+//                      there is classified not-runnable (conjunct 4 below);
+//                      omitted, that one conjunct is skipped and everything else
+//                      is unchanged.
 //
 // Besides one page per source `.md`, the renderer emits a doc-set INDEX page at
 // `index.html`: a static host serves nothing at a bare directory URL without
@@ -88,13 +94,44 @@ const escapeHtml = (s) =>
 //      exit. Calling one of these does not fail to COMPILE — the wasm module
 //      loads fine — it throws a `CapabilityError` at run time instead of
 //      producing the documented output, which is worse than no link.
+//   3. it defines a top-level `main`. A block without one is not a program:
+//      natively `medaka build` panics ("no 'main' binding found"), and the
+//      browser answers W-MAIN-MISSING. The ▶ button would open a guaranteed
+//      failure, so there must not be one.
+//   4. every module it imports is one the page SHIPS. A `import test` resolves
+//      natively and 404s in the browser, which fetches each import from
+//      `dist/<id>.mdk`. The shipped set is DERIVED from a `--dist` directory,
+//      never hardcoded; with no `--dist` this conjunct is skipped (a caller that
+//      does not know which modules its page ships cannot be asked to assert
+//      anything about them — see parseArgs).
 // Everything outside that partition gets a deliberate, visible "not runnable"
 // note instead of a link — never a silently absent one. See playground/NOTES.md
 // for the corpus counts this partition currently produces.
+//
+// ⚠️ Conjuncts 3 and 4 are also stated, INDEPENDENTLY, by
+// playground/guide_wasm_differential.mjs (`ruleSaysRunnable` there, plus its
+// `definesMain`/`unshippedImports`). That duplication is deliberate — a shared
+// constant cannot disagree with itself, and the differential's job is to catch
+// the render and the rule drifting apart — so a change here needs the mirror
+// there.
 const UNSUPPORTED_CALL_RE =
   /\b(readFile|writeFile|readLine|readLines|getEnv|fileExists|args|exit)\b/;
 
-function classifyRunnable(label, text) {
+// Conjunct 3. A top-level `main` binding starts a line, so anchor to one.
+const definesMain = (text) => /^main\b/m.test(text);
+
+// Conjunct 4. Top-level `import <module>` — the module id is the first
+// lowercase token after the keyword; the selective/alias/wildcard tail is
+// irrelevant to WHICH file the page must have fetched.
+function unshippedImports(text, shipped) {
+  const out = [];
+  for (const m of text.matchAll(/^\s*(?:export\s+)?import\s+([a-z][a-z_0-9]*)/gm)) {
+    if (!shipped.has(m[1])) out.push(m[1]);
+  }
+  return out;
+}
+
+function classifyRunnable(label, text, shipped) {
   if (label === 'medaka-project') {
     return { runnable: false, reason: 'multi-file project — the playground runs a single source buffer' };
   }
@@ -104,6 +141,16 @@ function classifyRunnable(label, text) {
   const m = text.match(UNSUPPORTED_CALL_RE);
   if (m) {
     return { runnable: false, reason: `uses \`${m[1]}\`, which the browser playground has no host support for` };
+  }
+  if (!definesMain(text)) {
+    return { runnable: false, reason: 'defines no top-level `main`, so there is no program to run' };
+  }
+  if (shipped) {
+    const missing = unshippedImports(text, shipped);
+    if (missing.length) {
+      return { runnable: false,
+        reason: `imports \`${missing.join('`, `')}\`, which the playground does not ship` };
+    }
   }
   return { runnable: true };
 }
@@ -172,6 +219,11 @@ function parseArgs(argv) {
     // playground root (e.g. site/guide/*.html next to site/index.html).
     playgroundUrl: '../index.html',
     cssName: 'guide.css',
+    // null = "this caller does not know the shipped-module set", which SKIPS the
+    // unshipped-import conjunct rather than asserting an empty set (which would
+    // call every importing block not-runnable). Same default-preserves-behavior
+    // discipline as --css-name.
+    distDir: null,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -188,6 +240,7 @@ function parseArgs(argv) {
       case '--repo-root': opts.repoRoot = resolve(next()); break;
       case '--playground-url': opts.playgroundUrl = next(); break;
       case '--css-name': opts.cssName = next(); break;
+      case '--dist': opts.distDir = resolve(next()); break;
       default: throw new Error(`unknown argument: ${a}`);
     }
   }
@@ -195,14 +248,27 @@ function parseArgs(argv) {
   if (opts.cssName.includes('/') || opts.cssName.includes('\\')) {
     throw new Error(`--css-name must be a bare filename, not a path: ${opts.cssName}`);
   }
+  // A --dist that is not there is a hard error, never a silent skip: the caller
+  // asked for the check, so failing to perform it must be loud.
+  if (opts.distDir && !existsSync(opts.distDir)) {
+    throw new Error(`--dist does not exist: ${opts.distDir}`);
+  }
   return opts;
 }
 
 // ── the renderer ────────────────────────────────────────────────────────────
 export function renderDocSet(opts) {
   const { src, out, exclude, repoUrl, repoRoot, playgroundUrl = '../index.html',
-          cssName = 'guide.css' } = opts;
+          cssName = 'guide.css', distDir = null } = opts;
   if (!existsSync(src)) throw new Error(`--src does not exist: ${src}`);
+
+  // The shipped-module set, DERIVED from what build_playground_wasm.sh staged —
+  // exactly the files main.js can fetch as `dist/<id>.mdk`. `null` (no --dist)
+  // means "unknown", which skips conjunct 4; an empty directory would be a
+  // legitimately empty set and is NOT the same thing.
+  const shipped = distDir === null
+    ? null
+    : new Set(readdirSync(distDir).filter((f) => f.endsWith('.mdk')).map((f) => f.replace(/\.mdk$/, '')));
 
   // Enumerate the doc set from the DIRECTORY — never a hardcoded chapter list, so
   // a new chapter appears on the site by existing.
@@ -218,7 +284,7 @@ export function renderDocSet(opts) {
   const docTitle = opts.title ?? basename(src);
 
   const rendered = pages.map((file) =>
-    renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, playgroundUrl, cssName }));
+    renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, playgroundUrl, cssName, shipped }));
 
   rmSync(out, { recursive: true, force: true });
   mkdirSync(out, { recursive: true });
@@ -233,7 +299,7 @@ export function renderDocSet(opts) {
   return rendered;
 }
 
-function renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, playgroundUrl, cssName }) {
+function renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, playgroundUrl, cssName, shipped }) {
   const markdown = readFileSync(join(src, file), 'utf8');
   const slug = slugger();
   const toc = [];
@@ -268,7 +334,7 @@ function renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, play
         }
         const kind = KNOWN_FENCES[label] ?? 'unknown';
         const footer = kind === 'medaka'
-          ? runnableFooter(classifyRunnable(label, text), text, playgroundUrl)
+          ? runnableFooter(classifyRunnable(label, text, shipped), text, playgroundUrl)
           : '';
         return `<div class="codeblock kind-${kind}"`
           + ` data-lang="${escapeHtml(label || 'plain')}"`

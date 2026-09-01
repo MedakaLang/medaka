@@ -91,8 +91,14 @@ cp "$DIST"/*.mdk           "$SITE/dist/"
 #
 # build_guide.sh (and render_docs.mjs under it) needs only `node` and the
 # committed marked bundle; no network, no npm install.
+#
+# $DIST is passed as the third argument so the renderer can withhold the ▶ button
+# from a block importing a module this site does not ship — the page fetches each
+# import as dist/<id>.mdk, so an unshipped one is a 404 at Run time no matter how
+# well the block compiles natively. Safe to pass unconditionally here: dist/ is a
+# hard prerequisite checked above.
 echo "[build_site] rendering docs/guide -> $SITE/guide ..."
-bash "$SCRIPT_DIR/build_guide.sh" "$ROOT/docs/guide" "$SITE/guide"
+bash "$SCRIPT_DIR/build_guide.sh" "$ROOT/docs/guide" "$SITE/guide" "$SITE/dist"
 
 # ── Verify the site can actually serve what the page asks for ───────────────
 # Derived from main.js, so this check cannot drift from the page's real needs.

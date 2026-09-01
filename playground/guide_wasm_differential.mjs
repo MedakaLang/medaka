@@ -36,11 +36,19 @@
 // `--fault-inject <id>` corrupts one example's WAT between emit and assembly to
 // demonstrate that on demand.
 //
+// Nor does AGREEING TO FAIL count as a match. A block whose native oracle exits
+// nonzero is reported in its own `native failure` bucket: the two engines are
+// still compared byte-for-byte (a disagreement there is still a divergence), but
+// "both paths panic identically" is not the claim the ▶ button makes, and folding
+// it into `matched` inflated the headline count by exactly the examples a reader
+// would call broken.
+//
 // ── The partition is TESTED, not assumed ─────────────────────────────────────
 // The runnable set is read off the rendered HTML (a block carries an
 // `<a class="pg-run">` iff render_docs.mjs classified it runnable) AND
 // independently recomputed here from the stated rule (fence label exactly
-// `medaka`, and no call to a playground-stubbed capability). A disagreement is
+// `medaka`, no call to a playground-stubbed capability, a top-level `main`, and
+// no import of a module playground/dist does not ship). A disagreement is
 // reported as MISCLASSIFIED and fails the run — the rule and the render must not
 // drift apart silently.
 //
@@ -93,27 +101,21 @@ const STUBBED_CAPABILITY_RE =
   /\b(readFile|writeFile|readLine|readLines|getEnv|fileExists|args|exit)\b/;
 const KIND_MEDAKA_LABELS = new Set(['medaka', 'medaka-project', 'medaka-nocheck']);
 
-function ruleSaysRunnable(label, source) {
-  if (label !== 'medaka') return { runnable: false, reason: `fence label \`${label}\`` };
-  const m = source.match(STUBBED_CAPABILITY_RE);
-  if (m) return { runnable: false, reason: `uses \`${m[1]}\` (playground stubs it)` };
-  return { runnable: true, reason: '' };
-}
-
-// ── two conditions the rule above does NOT state, which nonetheless decide
-//    whether the ▶ button does anything ────────────────────────────────────
-// Neither is a wasm divergence: on both, the native and the browser paths AGREE
-// that the program cannot run. They are gaps in the runnable rule itself, so
-// they are counted and reported separately from the wasm differential rather
-// than blamed on the oracle. This harness deliberately does NOT patch
-// render_docs.mjs's rule — see the report for S-prove-the-promise.
+// Two further conditions decide whether the ▶ button does anything, and both are
+// now part of the rule proper — on the sprint's review round they were ported
+// into render_docs.mjs's `classifyRunnable` as conjuncts 3 and 4, so the render
+// machine and this restatement finally state the SAME four-conjunct rule. (Until
+// then this harness stated them only here, and reported the difference as a
+// RULE-GAP bucket over blocks the render had already given a button to. That
+// bucket still exists below — see `checkExample` — as a residual net for a block
+// that reaches the runnable partition anyway; with the rules agreed it reports 0,
+// and anything it does report is real drift.)
 //
-// (1) A block with no top-level `main` is not a program. `medaka build` panics
-//     ("no 'main' binding found"); the browser answers W-MAIN-MISSING. The rule
-//     never asks.
+// (3) A block with no top-level `main` is not a program. `medaka build` panics
+//     ("no 'main' binding found"); the browser answers W-MAIN-MISSING.
 const definesMain = (source) => /^main\b/m.test(source);
 
-// (2) A block importing a stdlib module the page does not SHIP cannot resolve in
+// (4) A block importing a stdlib module the page does not SHIP cannot resolve in
 //     the browser however well it compiles natively. The shipped set is derived
 //     from playground/dist (what build_playground_wasm.sh staged and main.js
 //     fetches), never hardcoded here.
@@ -123,6 +125,18 @@ function unshippedImports(source, shipped) {
     if (!shipped.has(m[1])) out.push(m[1]);
   }
   return out;
+}
+
+function ruleSaysRunnable(label, source, shipped) {
+  if (label !== 'medaka') return { runnable: false, reason: `fence label \`${label}\`` };
+  const m = source.match(STUBBED_CAPABILITY_RE);
+  if (m) return { runnable: false, reason: `uses \`${m[1]}\` (playground stubs it)` };
+  if (!definesMain(source)) return { runnable: false, reason: 'defines no top-level `main`' };
+  const missing = unshippedImports(source, shipped);
+  if (missing.length) {
+    return { runnable: false, reason: `imports \`${missing.join('`, `')}\` (playground/dist does not ship it)` };
+  }
+  return { runnable: true, reason: '' };
 }
 
 // ── read the corpus off the RENDERED html ────────────────────────────────────
@@ -271,6 +285,22 @@ async function checkExample(block, env, work) {
   if (native.code !== guest.code) diffs.push(`exit code: native ${native.code}, wasm ${guest.code}`);
   if (diffs.length) return fail(block, 'divergence', diffs.join('\n  '));
 
+  // Both engines agree — but agreeing to FAIL is not a match. Until the review
+  // round this function never asked whether the native oracle succeeded, so a
+  // block that dies identically on both paths scored `matched` and inflated the
+  // headline count with runs no reader would call working. Byte-parity is still
+  // checked (above, and it is still a divergence if the two disagree), but the
+  // block is reported in its own bucket rather than folded into `matched`.
+  // 04-data-modeling's non-exhaustive `Shape`/`Triangle` example is the corpus's
+  // one instance: the prose documents the panic, so the honest report is "this
+  // exits nonzero, on both engines, as written", not "matched".
+  if (native.code !== 0) {
+    return { block, status: 'native-fails', phase: 'native-nonzero',
+      detail: `native oracle exits ${native.code} (wasm agrees byte-for-byte); the block runs but does not succeed`
+        + `${native.err.trim() ? `\n  native stderr: ${JSON.stringify(native.err.trim().slice(0, 200))}` : ''}`,
+      stdout: native.out };
+  }
+
   // Both engines agree — but do they agree with the GUIDE? A `medaka-expect`
   // fence right below the example is the documented answer the reader is
   // promised; a block without one makes no such promise and is simply not
@@ -290,10 +320,18 @@ function fail(block, phase, detail) {
 const env0 = preflight();
 const blocks = readBlocks(GUIDE_DIR);
 
+// The shipped-module set is now part of the RULE (conjunct 4), not just of the
+// per-block run, so it has to exist before the misclassification check — hence
+// the hoist. Reading dist/*.mdk is cheap; the expensive `loadCompiler` stays
+// below, after `--list` has had its chance to exit.
+const stdlib = loadStdlib();
+// core/runtime are fed directly, not through the loader, so they are shipped too.
+const shippedModules = new Set([...Object.keys(stdlib.extra), 'core', 'runtime']);
+
 const kindMedaka = blocks.filter((b) => KIND_MEDAKA_LABELS.has(b.label));
 const misclassified = [];
 for (const b of kindMedaka) {
-  const rule = ruleSaysRunnable(b.label, b.source);
+  const rule = ruleSaysRunnable(b.label, b.source, shippedModules);
   if (rule.runnable !== b.renderedRunnable) {
     misclassified.push({ b, rule });
   }
@@ -309,7 +347,7 @@ console.log('');
 
 if (opts.list) {
   for (const b of runnable) console.log(`  runnable  ${b.id}`);
-  for (const b of notRunnable) console.log(`  excluded  ${b.id}  (${ruleSaysRunnable(b.label, b.source).reason})`);
+  for (const b of notRunnable) console.log(`  excluded  ${b.id}  (${ruleSaysRunnable(b.label, b.source, shippedModules).reason})`);
   process.exit(0);
 }
 
@@ -327,13 +365,11 @@ if (opts.faultInject && !runnable.some((b) => b.id === opts.faultInject)) {
   die(`--fault-inject ${opts.faultInject} matched no runnable block (try --list)`);
 }
 
-const stdlib = loadStdlib();
 const env = {
   ...env0,
   wasmBytes: await loadCompiler(env0.wasm),
   stdlib,
-  // core/runtime are fed directly, not through the loader, so they are shipped too.
-  shippedModules: new Set([...Object.keys(stdlib.extra), 'core', 'runtime']),
+  shippedModules,
 };
 
 const work = join(tmpdir(), `guide-wasm-${process.pid}`);
@@ -349,7 +385,7 @@ for (const b of targets) {
   const r = await checkExample(b, env, work);
   results.push(r);
   done++;
-  const tag = { ok: 'ok      ', FAIL: 'FAIL    ', 'RULE-GAP': 'RULE-GAP' }[r.status];
+  const tag = { ok: 'ok      ', FAIL: 'FAIL    ', 'RULE-GAP': 'RULE-GAP', 'native-fails': 'NAT-FAIL' }[r.status];
   console.log(`[${String(done).padStart(3)}/${targets.length}] ${tag} ${r.block.id}${r.status === 'ok' ? '' : `  (${r.phase})`}`);
   if (r.status !== 'ok') console.log(`  ${r.detail.split('\n').join('\n  ')}`);
 }
@@ -357,6 +393,7 @@ for (const b of targets) {
 const matched = results.filter((r) => r.status === 'ok');
 const failed = results.filter((r) => r.status === 'FAIL');
 const ruleGaps = results.filter((r) => r.status === 'RULE-GAP');
+const nativeFails = results.filter((r) => r.status === 'native-fails');
 
 const listPhases = (rs) => {
   const byPhase = {};
@@ -366,9 +403,11 @@ const listPhases = (rs) => {
 
 console.log('');
 console.log(`RESULT over the ${targets.length}-block runnable partition:`);
-console.log(`  ${matched.length} matched          — native oracle and the browser's wasm path agree on stdout, stderr and exit code`);
+console.log(`  ${matched.length} matched          — the example SUCCEEDS natively (exit 0) and the browser's wasm path agrees on stdout, stderr and exit code`);
 console.log(`  ${failed.length} wasm divergence  — the example works natively and does NOT work on the wasm path`);
 if (failed.length) listPhases(failed);
+console.log(`  ${nativeFails.length} native failure   — both engines agree byte-for-byte, but the native oracle exits nonzero, so this is not a working example and is NOT counted as matched`);
+if (nativeFails.length) listPhases(nativeFails);
 console.log(`  ${ruleGaps.length} rule gap         — neither path can run it; the runnable rule should not have called it runnable`);
 if (ruleGaps.length) listPhases(ruleGaps);
 console.log(`  (${notRunnable.length} kind-medaka blocks are outside the runnable partition by the rule and were not run)`);
@@ -393,7 +432,7 @@ if (opts.json) {
     totals: { blocks: blocks.length, kindMedaka: kindMedaka.length, runnable: runnable.length, notRunnable: notRunnable.length },
     misclassified: misclassified.map(({ b, rule }) => ({ id: b.id, rendered: b.renderedRunnable, rule })),
     results: results.map((r) => ({ id: r.block.id, status: r.status, phase: r.phase, detail: r.detail, stdout: r.stdout, source: r.block.source, expect: r.block.expect ?? null, documented: r.documented ?? null })),
-    excluded: notRunnable.map((b) => ({ id: b.id, reason: ruleSaysRunnable(b.label, b.source).reason })),
+    excluded: notRunnable.map((b) => ({ id: b.id, reason: ruleSaysRunnable(b.label, b.source, shippedModules).reason })),
   }, null, 2));
   console.log(`\nwrote ${opts.json}`);
 }
