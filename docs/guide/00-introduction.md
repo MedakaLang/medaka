@@ -1,41 +1,21 @@
 # Introduction
 
-Medaka is a declarative functional language designed to be practical for everyday
-use. It takes the ideas that make functional programming worth doing — algebraic
-data types, exhaustive pattern matching, type inference, ad-hoc polymorphism — and
-packages them in a small, cohesive language with a compiler, a formatter, a linter,
-a test runner, and a language server in one binary.
+Medaka is a small functional language for everyday programming. It has algebraic
+data types, pattern matching that the compiler checks for completeness, type
+inference, interfaces for overloading, and an effect system that records in a
+function's type what that function is allowed to touch. Programs compile to native
+code through LLVM or to WebAssembly, and the compiler, formatter, linter, test
+runner, and language server all live in one `medaka` binary.
 
-This guide is for people who already know how to program. It teaches *Medaka's way*
-of doing things rather than programming from first principles, so it moves quickly
-and assumes you can read a type signature.
+This guide is for people who already know how to program in some language. It does
+not assume which one. It teaches how things are done in Medaka rather than
+programming from scratch, so it moves quickly and skips the parts you already know.
 
-> **Already comfortable with Haskell or OCaml?** Start with the
-> [Haskell and OCaml delta sheet](haskell-ocaml-delta.md), then return
-> here for the main guide.
+> **Coming from Haskell or OCaml?** You already have most of the concepts. The
+> [delta sheet](haskell-ocaml-delta.md) lists the places where the spelling or the
+> rules differ, and you can skim the rest of the guide.
 
-## What you get
-
-- **Strong static typing** with Hindley–Milner inference. You rarely write a type;
-  you write signatures because they document, not because the compiler needs them.
-- **Declarative syntax** in the Haskell tradition — significant indentation, no
-  braces, definitions by pattern-matching clauses.
-- **Ad-hoc polymorphism through `interface`s** (typeclasses by another name; `trait`s
-  if you're coming from Rust), including constrained and conditional implementations.
-- **An effect system that lives in the type.** A signature says what a function is
-  allowed to touch: `readFile : String -> <IO> String`, `fetch : String -> <Net> String`.
-  The row is checked, not decorative — annotate a printing function as pure and the
-  compiler catches the mismatch, reporting that it "declared with `<>` but also
-  performs `<IO>`". Effect labels name host capabilities, which is what makes a
-  Medaka signature a contract about the outside world and not just about values.
-- **Two backends.** `medaka build` compiles to a native binary through LLVM and
-  `clang`; a WebAssembly backend runs the same compiler in the browser, which is how
-  [the playground](https://medaka-lang.dev) works with no server behind it.
-- **Tooling in the box.** `medaka check`, `run`, `build`, `fmt`, `lint`, `test`
-  (doctests and property tests), `repl`, and `lsp` are all subcommands of the one
-  binary — there is nothing to assemble before you start.
-
-Here's a small sample:
+## A first look
 
 ```medaka
 data Expense = Coffee Float | Rent Float | Book String Float
@@ -59,38 +39,58 @@ You logged 3 expenses.
 Total spent: $1239.5
 ```
 
-Nothing in that program is explained yet, and that is deliberate — it is a taste, not
-a lesson. A sum type with three variants, a function defined as three clauses that
-match on them, a pipeline built with `|>`, string interpolation with `\{ }`, and an
-indented block of statements for the IO at the end. Every one of those gets its own
-chapter. The expense tracker comes back as the guide's running example once there is
-enough language to build it properly.
+Reading it top to bottom: `Expense` is a type with three constructors. `cost` is one
+function written as three clauses, one per constructor. `main` builds a list, sends it
+through `map` and `sum` with the pipe operator, and prints two lines using string
+interpolation. Each of those gets a chapter. The expense tracker comes back throughout
+the guide as its running example, and by chapter 8 it reads its data from a file and
+parses it.
 
-## Where to go next
+## What you get
 
-Start at the top and read straight through — the chapters build on each other:
+- **Static types, inferred.** The compiler works out the types of your program. You
+  write signatures on top-level definitions because they document, not because the
+  compiler needs them.
+- **Data types and pattern matching.** You describe the shapes your data can take, and
+  every place that takes a value apart has to handle every shape. Forget one and the
+  compiler names it.
+- **Interfaces.** Overloading by type, in the style of Haskell's typeclasses or Rust's
+  traits. `==`, `<`, printing, and arithmetic all go through them, and you can add your
+  own.
+- **Effects in the type.** A signature like
+  `readLines : String -> <IO> Result String (List String)` says the function can do
+  IO. A function with no effect row is pure, and the compiler enforces it.
+- **No null, no exceptions.** A value that might be missing is an `Option`. An operation
+  that might fail returns a `Result`. Both are ordinary data types, so the pattern
+  matching checker makes sure you handle them.
+- **One binary.** `medaka check`, `run`, `build`, `fmt`, `lint`, `test`, `repl`, and
+  `lsp` are subcommands of the same executable. There is nothing else to install.
 
-- **[Quick Start](01-quick-start.md)** — your first running program, in about five minutes.
-- **[Values, Bindings & Types](02-expressions.md)** — literals, bindings, mutation, and
-  what a type signature buys you.
-- **[Functions](03-functions.md)**, **[Data Modeling](04-data-modeling.md)**, and
-  **[Interfaces](05-interfaces.md)** — the core of the language: clauses and pattern
-  matching, `data` and records, and how `interface`/`impl` replace inheritance.
-- **[Working with Data](06-working-with-data.md)**, **[Effects & IO](07-effects-and-io.md)**,
-  and **[`do` and Thenables](08-do-and-thenables.md)** — the collections you will reach
-  for, why effects show up in the type, and what `do` is actually for (it is not IO).
-- **[Modules & Projects](09-modules-and-projects.md)** and
-  **[Tooling & Workflow](10-tooling-and-workflow.md)** — splitting a program across files,
-  and the `check`/`fmt`/`lint`/`test` loop you will run while writing.
+## How to read this guide
 
-And one side road, at whatever point it helps:
+The chapters build on each other, so the first time through, read them in order.
 
-- **[Medaka for Haskell and OCaml readers](haskell-ocaml-delta.md)** — the deltas, if you
-  already have the concepts and just need the spellings.
+1. [Quick Start](01-quick-start.md). Your first program, and how to run it.
+2. [Values, Bindings & Types](02-expressions.md). Literals, `let`, mutable cells,
+   and what a signature buys you.
+3. [Functions](03-functions.md). Clauses, guards, lambdas, and the pipe operator.
+4. [Data Modeling](04-data-modeling.md). Sum types, records, pattern matching, and
+   why `Option` replaces null.
+5. [Interfaces](05-interfaces.md). Overloading, constraints, and `deriving`.
+6. [Working with Data](06-working-with-data.md). Lists, arrays, maps, strings, and
+   the `map`/`filter`/`fold` vocabulary.
+7. [Effects & IO](07-effects-and-io.md). How IO is written, and what the effect row
+   in a signature means.
+8. [`do` and Thenables](08-do-and-thenables.md). Chaining computations that can
+   fail.
+9. [Modules & Projects](09-modules-and-projects.md). Splitting a program across
+   files.
+10. [Tooling & Workflow](10-tooling-and-workflow.md). The `check`, `fmt`, `lint`,
+    and `test` loop.
 
-Every example in this guide is extracted and type-checked by CI before a change can merge,
-and the ones with output shown beneath them are executed and compared against exactly that
-output — so what you read here is what the current compiler actually does.
+Every example in this guide is compiled by the test suite before a change can merge.
+Examples with output shown beneath them are also run, and the output is compared. If
+the guide says a program prints something, that is what the current compiler prints.
 
 ## Why Medaka?
 

@@ -8,7 +8,7 @@ filterMap}`), the tree's only real re-export.
 ## `triple`
 
 ```
-triple : re-export of reexport_helper.triple
+triple : Int -> Int
 ```
 
 Re-exported so a reader of this module finds it here.

@@ -3807,8 +3807,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_guide_render.sh"
 oracles = []
-sources = ["test/diff_compiler_guide_render.sh", "playground/render_docs.mjs", "playground/build_guide.sh", "playground/guide_render_test.mjs", "playground/vendor/marked/marked.js", "docs/guide/*.md"]
-corpus = ["docs/guide"]
+sources = ["test/diff_compiler_guide_render.sh", "playground/render_docs.mjs", "playground/build_guide.sh", "playground/build_stdlib_docs.sh", "playground/guide_render_test.mjs", "playground/vendor/marked/marked.js", "docs/guide/*.md", "docs/stdlib/*.md"]
+corpus = ["docs/guide", "docs/stdlib"]
 toolchain = ["node>=24"]
 
 # ── the `gates` matrix rows (S-1, #2177) ─────────────────────────────────────

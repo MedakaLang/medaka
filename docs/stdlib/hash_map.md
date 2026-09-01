@@ -42,7 +42,7 @@ chain), `!count` is the live entry count. Both are mutated in place.
 ## `new`
 
 ```
-new : Unit -> HashMap a b
+new : Unit -> HashMap k v
 ```
 
 A fresh, empty hash table. Takes `Unit` (not a nullary value) so each call
@@ -51,7 +51,7 @@ allocates its own table rather than sharing one mutable cell.
 ## `size`
 
 ```
-size : HashMap a b -> Int
+size : HashMap k v -> Int
 ```
 
 Number of entries. O(1).
@@ -67,7 +67,7 @@ Number of entries. O(1).
 ## `isEmpty`
 
 ```
-isEmpty : HashMap a b -> Bool
+isEmpty : HashMap k v -> Bool
 ```
 
 `True` when there are no entries.
@@ -83,7 +83,7 @@ True
 ## `get`
 
 ```
-get : a -> HashMap a b -> Option b
+get : (Eq k, Hashable k) => k -> HashMap k v -> Option v
 ```
 
 The value at a key, or `None`.
@@ -101,7 +101,7 @@ None
 ## `has`
 
 ```
-has : a -> HashMap a b -> Bool
+has : (Eq k, Hashable k) => k -> HashMap k v -> Bool
 ```
 
 `True` when the key is present.
@@ -117,7 +117,7 @@ True
 ## `findWithDefault`
 
 ```
-findWithDefault : a -> b -> HashMap b a -> a
+findWithDefault : (Eq k, Hashable k) => v -> k -> HashMap k v -> v
 ```
 
 Value at a key, or a fallback.
@@ -133,7 +133,7 @@ Value at a key, or a fallback.
 ## `setInPlace`
 
 ```
-setInPlace : a -> b -> HashMap a b -> Unit
+setInPlace : (Eq k, Hashable k) => k -> v -> HashMap k v -> Unit
 ```
 
 Insert (or overwrite) the value at a key, in place. Resizes (doubling)
@@ -142,7 +142,7 @@ when the load factor passes 0.75.
 ## `fromList`
 
 ```
-fromList : List (a, b) -> HashMap a b
+fromList : (Eq k, Hashable k) => List (k, v) -> HashMap k v
 ```
 
 Build a table from an association list (later pairs win on duplicates).
@@ -158,7 +158,7 @@ Build a table from an association list (later pairs win on duplicates).
 ## `deleteInPlace`
 
 ```
-deleteInPlace : a -> HashMap a b -> Unit
+deleteInPlace : (Eq k, Hashable k) => k -> HashMap k v -> Unit
 ```
 
 Remove a key, in place. A no-op when absent.
@@ -166,7 +166,7 @@ Remove a key, in place. A no-op when absent.
 ## `toList`
 
 ```
-toList : HashMap a b -> List (a, b)
+toList : HashMap k v -> List (k, v)
 ```
 
 All key/value pairs, in unspecified (hash) order.
@@ -174,7 +174,7 @@ All key/value pairs, in unspecified (hash) order.
 ## `keys`
 
 ```
-keys : HashMap a b -> List a
+keys : HashMap k v -> List k
 ```
 
 All keys, in unspecified order.
@@ -190,7 +190,7 @@ All keys, in unspecified order.
 ## `values`
 
 ```
-values : HashMap a b -> List b
+values : HashMap k v -> List v
 ```
 
 All values, in unspecified order.

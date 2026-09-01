@@ -418,6 +418,7 @@ deriveImpls f (d::ds) = match f (deriveRefName d)
 -- hand-typed list to rot.
 -- The generator is a THUNK on purpose: Medaka is strict, so an eager
 -- `List (String, Decl)` would run every deriver on every lookup.
+export
 dataDerivers : String -> List String -> List Variant -> List (String, Unit -> Decl)
 dataDerivers name params variants = [
   ("Eq", _ => applyDeriveParams name params (deriveEqData name variants)),
@@ -460,6 +461,7 @@ deriveForData name params variants iface =
 -- taken, so a newtype genuinely cannot derive them here.  Keeping the two tables
 -- separate is what stops the diagnostic from advertising `Generic` on a newtype
 -- that cannot have it.
+export
 newtypeDerivers : String -> List String -> String -> Ty -> List (String, Unit -> Decl)
 newtypeDerivers name params con fty =
   let synthetic = [Variant con (ConPos [fty])]

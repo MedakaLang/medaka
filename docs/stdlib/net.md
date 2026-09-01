@@ -53,7 +53,7 @@ A listening TCP socket (from `listen`), not yet accepted.
 ## `resolve`
 
 ```
-resolve : String -> <Net> Result String (List String)
+resolve : String -> <Net _> Result String (List String)
 ```
 
 Resolve a hostname to its numeric IP address strings (`getaddrinfo`).
@@ -64,7 +64,7 @@ Non-executing example (net is unbound under `medaka run`; see module doc):
 ## `connect`
 
 ```
-connect : String -> Int -> <Net> Result String Connection
+connect : String -> Int -> <Net _> Result String Connection
 ```
 
 Connect to `host`:`port` (DNS resolution happens internally). Prefer
@@ -74,7 +74,7 @@ connection across a larger scope than one bracketed call.
 ## `listen`
 
 ```
-listen : String -> Int -> <Net> Result String Listener
+listen : String -> Int -> <Net _> Result String Listener
 ```
 
 Bind + listen on `addr`:`port` (port `0` picks an OS-assigned ephemeral
@@ -84,7 +84,7 @@ single-process loopback self-test hermetic).
 ## `listenPort`
 
 ```
-listenPort : Listener -> <Net> Result String Int
+listenPort : Listener -> <Net _> Result String Int
 ```
 
 The actual bound port of a `Listener` (useful after `listen addr 0`).
@@ -92,7 +92,7 @@ The actual bound port of a `Listener` (useful after `listen addr 0`).
 ## `accept`
 
 ```
-accept : Listener -> <Net> Result String Connection
+accept : Listener -> <Net _> Result String Connection
 ```
 
 Block until a peer connects, then return the accepted `Connection`.
@@ -100,7 +100,7 @@ Block until a peer connects, then return the accepted `Connection`.
 ## `send`
 
 ```
-send : Connection -> Array Int -> <Net> Result String Int
+send : Connection -> Array Int -> <Net _> Result String Int
 ```
 
 One `send(2)` call. May write FEWER bytes than given (`Ok n` with
@@ -110,7 +110,7 @@ yourself.
 ## `recv`
 
 ```
-recv : Connection -> Int -> <Net> Result String (Array Int)
+recv : Connection -> Int -> <Net _> Result String (Array Int)
 ```
 
 One `recv(2)` call, at most `n` bytes. `Ok []` (an empty `Array`) means the
@@ -119,7 +119,7 @@ peer closed the connection (EOF) — use `recvAll` to read to EOF.
 ## `shutdown`
 
 ```
-shutdown : Connection -> Int -> <Net> Result String Unit
+shutdown : Connection -> Int -> <Net _> Result String Unit
 ```
 
 Shut down `how` (0=read, 1=write, 2=both) of a connection without closing
@@ -128,7 +128,7 @@ the fd. Rarely needed directly — `close`/the brackets are the common path.
 ## `close`
 
 ```
-close : Connection -> <Net> Result String Unit
+close : Connection -> <Net _> Result String Unit
 ```
 
 Close a connection's fd. Idempotent-safe (a double `close` is `Ok`, per the
@@ -137,7 +137,7 @@ C shim). Prefer `withConnection`, which calls this for you on every path.
 ## `closeListener`
 
 ```
-closeListener : Listener -> <Net> Result String Unit
+closeListener : Listener -> <Net _> Result String Unit
 ```
 
 Close a listener's fd (mirrors `close`, for the `Listener` handle).
@@ -145,7 +145,7 @@ Close a listener's fd (mirrors `close`, for the `Listener` handle).
 ## `setTimeout`
 
 ```
-setTimeout : Connection -> Int -> <Net> Result String Unit
+setTimeout : Connection -> Int -> <Net _> Result String Unit
 ```
 
 Set the socket read/write timeout in milliseconds (`0` = blocking, no
@@ -155,7 +155,7 @@ needs a timeout to avoid hanging forever on a stalled peer.
 ## `sendAll`
 
 ```
-sendAll : Connection -> Array Int -> <Net> Result String Unit
+sendAll : Connection -> Array Int -> <Net _> Result String Unit
 ```
 
 Write every byte of `bs`, looping over `send` as needed (BSD `send` may
@@ -167,7 +167,7 @@ guaranteed to terminate.
 ## `recvAll`
 
 ```
-recvAll : Connection -> <Net> Result String (Array Int)
+recvAll : Connection -> <Net _> Result String (Array Int)
 ```
 
 Read until the peer closes the connection (EOF), accumulating every chunk.
@@ -177,7 +177,7 @@ discarded — a partial read is not distinguishable from a fresh failure).
 ## `sendString`
 
 ```
-sendString : Connection -> String -> <Net> Result String Unit
+sendString : Connection -> String -> <Net _> Result String Unit
 ```
 
 Encode `s` as UTF-8 and write every byte (`sendAll`).
@@ -185,7 +185,7 @@ Encode `s` as UTF-8 and write every byte (`sendAll`).
 ## `recvString`
 
 ```
-recvString : Connection -> <Net> Result String String
+recvString : Connection -> <Net _> Result String String
 ```
 
 Read to EOF and decode the bytes as UTF-8 (`recvAll` + `fromUtf8`). Use
@@ -196,7 +196,7 @@ one-shot request/response); for a persistent connection, size a `recv`/
 ## `sendLine`
 
 ```
-sendLine : Connection -> String -> <Net> Result String Unit
+sendLine : Connection -> String -> <Net _> Result String Unit
 ```
 
 Send `s` followed by `"\n"`, UTF-8 encoded (`sendAll`).
@@ -204,7 +204,7 @@ Send `s` followed by `"\n"`, UTF-8 encoded (`sendAll`).
 ## `recvLine`
 
 ```
-recvLine : Connection -> <Net> Result String (Option String)
+recvLine : Connection -> <Net _> Result String (Option String)
 ```
 
 Read one line (up to and excluding `"\n"`), byte at a time. `Some line` on
@@ -217,7 +217,7 @@ recommended for bulk transfer (use `recvAll`/`recv` there).
 ## `withConnection`
 
 ```
-withConnection : String -> Int -> (Connection -> <Net> Result String a) -> <Net> Result String a
+withConnection : String -> Int -> (Connection -> <Net _> Result String a) -> <Net _> Result String a
 ```
 
 Connect to `host`:`port`, run `body` on the resulting `Connection`, and
@@ -231,7 +231,7 @@ Non-executing example:
 ## `withListener`
 
 ```
-withListener : String -> Int -> (Listener -> <Net> Result String a) -> <Net> Result String a
+withListener : String -> Int -> (Listener -> <Net _> Result String a) -> <Net _> Result String a
 ```
 
 Bind + listen on `addr`:`port`, run `body` on the resulting `Listener`, and
@@ -240,7 +240,7 @@ close it afterward NO MATTER what `body` returns. Returns `body`'s result.
 ## `serveLoop`
 
 ```
-serveLoop : Listener -> (Connection -> <Net> Result String Unit) -> <Net> Result String Unit
+serveLoop : Listener -> (Connection -> <Net _> Result String Unit) -> <Net _> Result String Unit
 ```
 
 Accept connections from `lis` in a loop, handing each to `handle` and

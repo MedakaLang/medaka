@@ -477,7 +477,9 @@ tree-walker oracle — the cheap setting, before any native runtime exists.
 Concrete §2.3 items (surfaced by the §2.2 capstone harness,
 `test/diff_compiler_bytecode_selfproc.sh`):
 
-- ✅ **DONE (2026-06-06) — Typed multi-module bytecode VM path** —
+- ✅ **DONE (2026-06-06) — Typed multi-module bytecode VM path** — (historical —
+  the bytecode VM this section describes, and `lowerProgram`'s `ctorFieldOrdersRef`
+  write it mentions, were both removed; kept for the C1-era design record)
   `eval_bytecode_typed_modules_main.mdk` (the `eval_typed_modules_main.mdk`-analog
   for the bytecode VM): loads → `elaborateModules` (route-stamping) → `annotateProgram`
   per module → `bcEvalModulesOutput`. All three selfproc probes (lex/parse/tc) now

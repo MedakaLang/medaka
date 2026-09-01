@@ -1,5 +1,5 @@
 # META
-source_lines=4557
+source_lines=4555
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage — Stage 2 port of `lib/resolve.ml` (single-file
@@ -4523,11 +4523,9 @@ externTyOriginScope coreDecls = flatTyOriginScope coreDecls
 -- longer origin-free — but they only cover heads reaching a top-level binding's
 -- type, which is a strictly smaller set than the decls this tap retains.)
 --
--- Shape is the established probe-flag idiom: `setFaithfulRoutes`
--- (ir/core_ir_sexp.mdk). OFF by
--- default; one `Bool` read on the hot path; and it retains the decl lists BY
--- REFERENCE (no copy, no projection, no rendering) so the probe owns the format and
--- this file owns nothing but the fact.
+-- Shape: OFF by default; one `Bool` read on the hot path; and it retains the
+-- decl lists BY REFERENCE (no copy, no projection, no rendering) so the probe
+-- owns the format and this file owns nothing but the fact.
 originTraceEnabled : Ref Bool
 originTraceEnabled = Ref False
 
