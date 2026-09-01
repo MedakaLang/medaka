@@ -113,6 +113,15 @@ cmp "$WORK/native.out" "$WORK/wasm-raw.out" || fail 'native and Wasm output diff
 # Swap the hostname the did:web document is expected to be keyed by. If the
 # gate can be satisfied by a document that names the wrong server, it is not
 # grading the document at all.
+#
+# The mutation below is applied only to a throwaway copy under
+# $WORK/mutation-tree — the live $SOURCE the rest of this suite (and every
+# future run) depends on must come out byte-identical. Take the pristine
+# backup here, BEFORE any copying/mutating happens, so the final check below
+# compares the real source of truth (this backup) against the real live file
+# ($SOURCE) — not a copy against itself, which can never fail.
+cp "$SOURCE" "$WORK/source-pristine.mdk"
+
 mkdir -p "$WORK/mutation-tree"
 cp -R "$ROOT/pds" "$WORK/mutation-tree/pds"
 
@@ -141,8 +150,8 @@ grep -F -q 'CELL wellknown-did-json FAIL' "$WORK/mutated.out" || {
   fail 'did:web hostname mutation failed for an unrelated reason'
 }
 
-cp "$ROOT/pds/test/read_routes_all_engines_main.mdk" "$WORK/mutation-tree/pds/test/read_routes_all_engines_main.mdk"
-cmp "$ROOT/pds/test/read_routes_all_engines_main.mdk" "$WORK/mutation-tree/pds/test/read_routes_all_engines_main.mdk"
+cmp "$WORK/source-pristine.mdk" "$SOURCE" \
+  || fail 'read_routes_all_engines_main.mdk (the live source of truth) was left modified by the mutation test — it should only ever touch the throwaway mutation-tree copy'
 
 echo 'MUTATION did-web-hostname PASS direct-red'
 echo 'PASS: PDS repository-free read routes — 17/17 named cells; eval == native == Wasm; direct-red mutation; bytes restored'

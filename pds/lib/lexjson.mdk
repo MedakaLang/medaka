@@ -115,10 +115,25 @@ lexJsonLink : Json -> Result String DagCbor
 lexJsonLink (JString text) = map DcLink (cidFromString text)
 lexJsonLink _ = Err "lexjson: '$link' value must be a string"
 
+-- A `$bytes` string is accepted only in the two spellings a well-behaved
+-- encoder can produce for the bytes it decodes to: unpadded
+-- (`stripBase64Padding (encode bytes)`, our own convention) or fully padded
+-- (`encode bytes`, the tolerated input form the module doc promises still
+-- decodes). Any other spelling — padding that doesn't match either form
+-- (e.g. one `=` short/long of correct), or trailing bits in the last
+-- base64 character that no canonical encoder ever sets — decodes to the
+-- same bytes but is rejected rather than silently normalized.
 lexJsonBytes : Json -> Result String DagCbor
 lexJsonBytes (JString text) = match padBase64 text
   Err message => Err message
-  Ok padded => map DcBytes (decode padded)
+  Ok padded => match decode padded
+    Err message => Err message
+    Ok bytes =>
+      let fullyPadded = encode bytes
+      if text == stripBase64Padding fullyPadded || text == fullyPadded then
+        Ok (DcBytes bytes)
+      else
+        Err "lexjson: '$bytes' value is not canonical base64"
 lexJsonBytes _ = Err "lexjson: '$bytes' value must be a string"
 
 lexJsonFields : Array (String, Json) -> Int -> Int -> Result String (List (String, DagCbor))
