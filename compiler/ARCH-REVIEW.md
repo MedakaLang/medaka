@@ -3,7 +3,8 @@
 **Status:** PARTIAL — several PASS1/PASS3 recommendations shipped (OCaml `lib/` removal
 2026-06-26; `support/ordmap.mdk` wraps stdlib `Map`; `Emit` is a named-field record at
 `compiler/backend/llvm_emit.mdk:752`; `backend/llvm_preamble.mdk` exists). Still open:
-PASS2's `typecheck.mdk` Ref-bundling refactor (still one ~13k-line file) and PASS3's
+PASS2's `typecheck.mdk` Ref-bundling refactor (still one file, line count: `make
+arch-census`) and PASS3's
 "lift `typeOf`/`LTy` into `backend/llvm_lty.mdk`" (file does not exist). The OCaml-removal
 discussion below (e.g. "~37k Medaka + ~17k OCaml") is now historical — OCaml was removed
 2026-06-26, see AGENTS.md.
