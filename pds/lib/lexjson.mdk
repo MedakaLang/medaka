@@ -1,0 +1,141 @@
+{- | A pure, total, both-directions mapping between `DagCbor`
+   (`pds/lib/dagcbor.mdk`) and `Json` (`stdlib/json.mdk`) under atproto's
+   lexicon-JSON convention.
+
+   A CID link (`DcLink`) renders as `{"$link": "<cid string>"}`; a byte
+   string (`DcBytes`) renders as `{"$bytes": "<base64>"}`. The `$bytes`
+   alphabet is the *standard* base64 alphabet (`+`/`/`, not URL-safe), but
+   **unpadded** — `@atproto/lex-json`'s reference encoder strips trailing
+   `=` (confirmed against `pds/test/vectors/lexjson_reference_corpus.txt`,
+   not assumed), so this module strips it on the way out and tolerantly
+   re-pads on the way in (a fully-padded `$bytes` string still decodes).
+   Every other `DagCbor` shape maps structurally (`DcMap` field order
+   preserved).
+
+   `dagCborToLexJson` is total: every `DagCbor` value has exactly one lexicon
+   JSON rendering. `lexJsonToDagCbor` is partial (`Result String DagCbor`):
+   JSON this convention cannot represent is REJECTED, never silently coerced
+   into something plausible —
+     - a `JObject` with a duplicate key (our own `Json` parser does not
+       reject these; `DagCbor`'s `DcMap` has no room for them),
+     - a `JObject` carrying a `"$link"` or `"$bytes"` key that is not
+       *exactly* that one key with a string value (so an ordinary map that
+       happens to use `"$link"`/`"$bytes"` as a field name among others is
+       never quietly reinterpreted as a link/bytes object, nor a link/bytes
+       object with stray extra fields quietly treated as a plain map),
+     - a `"$link"` string that is not a valid CID, or a `"$bytes"` string
+       that is not valid base64,
+     - a `JFloat` (the atproto data model admits only integers). -}
+
+import base64.{decode, encode}
+import json.{Json(..), jArray, jObject}
+import lib.cid.{cidFromString, cidToString}
+import lib.dagcbor.{DagCbor(..)}
+
+-- ── DagCbor → Json (total) ─────────────────────────────────────────────
+
+{- | Render one `DagCbor` value as its lexicon-JSON form. Total: every
+   `DagCbor` shape has exactly one rendering. -}
+export
+dagCborToLexJson : DagCbor -> Json
+dagCborToLexJson DcNull = JNull
+dagCborToLexJson (DcBool b) = JBool b
+dagCborToLexJson (DcInt n) = JInt n
+dagCborToLexJson (DcBytes bytes) =
+  jObject [("$bytes", JString (stripBase64Padding (encode bytes)))]
+dagCborToLexJson (DcString s) = JString s
+dagCborToLexJson (DcArray xs) = jArray (map dagCborToLexJson xs)
+dagCborToLexJson (DcMap fields) = jObject (map dagCborFieldToLexJson fields)
+dagCborToLexJson (DcLink cid) = jObject [("$link", JString (cidToString cid))]
+
+dagCborFieldToLexJson : (String, DagCbor) -> (String, Json)
+dagCborFieldToLexJson (key, value) = (key, dagCborToLexJson value)
+
+-- Drop trailing '=' padding from a base64 string (`@atproto/lex-json`'s
+-- `$bytes` convention is unpadded).
+stripBase64Padding : String -> String
+stripBase64Padding s =
+  let n = stringLength s
+  if n >= 1 && stringSlice (n - 1) n s == "=" then
+    stripBase64Padding (stringSlice 0 (n - 1) s)
+  else
+    s
+
+-- Re-add '=' padding (0, 1, or 2 chars) so `base64.decode` accepts an
+-- unpadded `$bytes` string. A length that is `1 mod 4` cannot be a valid
+-- base64 encoding at any padding, so that is rejected outright.
+padBase64 : String -> Result String String
+padBase64 s = match stringLength s % 4
+  0 => Ok s
+  2 => Ok (stringConcat [s, "=="])
+  3 => Ok (stringConcat [s, "="])
+  _ => Err "lexjson: '$bytes' value has an invalid base64 length"
+
+-- ── Json → DagCbor (partial: rejects what the convention cannot represent) ──
+
+{- | Parse one lexicon-JSON value back into `DagCbor`, or reject it (see the
+   module doc comment for the exact rejected shapes). -}
+export
+lexJsonToDagCbor : Json -> Result String DagCbor
+lexJsonToDagCbor JNull = Ok DcNull
+lexJsonToDagCbor (JBool b) = Ok (DcBool b)
+lexJsonToDagCbor (JInt n) = Ok (DcInt n)
+lexJsonToDagCbor (JFloat _) =
+  Err
+    "lexjson: non-integer numbers are not representable in the atproto data model"
+lexJsonToDagCbor (JString s) = Ok (DcString s)
+lexJsonToDagCbor (JArray arr) =
+  map DcArray (lexJsonArray arr 0 (arrayLength arr))
+lexJsonToDagCbor (JObject pairs) = lexJsonObject pairs
+
+lexJsonArray : Array Json -> Int -> Int -> Result String (List DagCbor)
+lexJsonArray arr i n
+  | i >= n = Ok []
+  | otherwise = match lexJsonToDagCbor arr[i]
+    Err message => Err message
+    Ok value => map (value :: _) (lexJsonArray arr (i + 1) n)
+
+lexJsonObject : Array (String, Json) -> Result String DagCbor
+lexJsonObject pairs =
+  let n = arrayLength pairs
+  if hasDuplicateKey pairs 0 n then
+    Err "lexjson: duplicate object key"
+  else if n == 1 && fst pairs[0] == "$link" then
+    lexJsonLink (snd pairs[0])
+  else if n == 1 && fst pairs[0] == "$bytes" then
+    lexJsonBytes (snd pairs[0])
+  else if hasKey "$link" pairs 0 n then
+    Err "lexjson: '$link' key present on a map that is not a single-key link object"
+  else if hasKey "$bytes" pairs 0 n then
+    Err "lexjson: '$bytes' key present on a map that is not a single-key bytes object"
+  else
+    map DcMap (lexJsonFields pairs 0 n)
+
+lexJsonLink : Json -> Result String DagCbor
+lexJsonLink (JString text) = map DcLink (cidFromString text)
+lexJsonLink _ = Err "lexjson: '$link' value must be a string"
+
+lexJsonBytes : Json -> Result String DagCbor
+lexJsonBytes (JString text) = match padBase64 text
+  Err message => Err message
+  Ok padded => map DcBytes (decode padded)
+lexJsonBytes _ = Err "lexjson: '$bytes' value must be a string"
+
+lexJsonFields : Array (String, Json) -> Int -> Int -> Result String (List (String, DagCbor))
+lexJsonFields pairs i n
+  | i >= n = Ok []
+  | otherwise = match lexJsonToDagCbor (snd pairs[i])
+    Err message => Err message
+    Ok value => map ((fst pairs[i], value) :: _) (lexJsonFields pairs (i + 1) n)
+
+hasKey : String -> Array (String, Json) -> Int -> Int -> Bool
+hasKey key pairs i n
+  | i >= n = False
+  | fst pairs[i] == key = True
+  | otherwise = hasKey key pairs (i + 1) n
+
+hasDuplicateKey : Array (String, Json) -> Int -> Int -> Bool
+hasDuplicateKey pairs i n
+  | i >= n = False
+  | hasKey (fst pairs[i]) pairs (i + 1) n = True
+  | otherwise = hasDuplicateKey pairs (i + 1) n

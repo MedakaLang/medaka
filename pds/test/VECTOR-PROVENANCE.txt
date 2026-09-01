@@ -622,3 +622,21 @@ source-url:    https://raw.githubusercontent.com/bluesky-social/atproto/4d2097ff
 extraction:    committed byte-verbatim as fetched; curl -sS <url> | cmp - <file> reproduces it
 retrieved:     2026-09-01
 consumer:      P4-A-IDENTIFIER-SYNTAX (#2455 pds-phase4-record-api, invalid tid interop syntax cases)
+
+[impl]
+id:            official-atproto-lex
+repo:          https://github.com/bluesky-social/atproto
+version:       @atproto/lex-json 0.1.6, @atproto/lex-data 0.1.7, @atproto/lex-cbor 0.1.6
+commit:        4d2097ff37e0a7872444b845740f7cdcf2ace7f4
+retrieved:     2026-09-01
+notes:         official TypeScript lexicon JSON<->IPLD conversion packages (packages/lex/lex-json, packages/lex/lex-data, packages/lex/lex-cbor in the atproto monorepo); reuses the same commit already pinned by the official-atproto-repo impl above (this is not a second authority for @atproto/repo — it pins three additional, separately-versioned packages published from the same monorepo state); the complete transitive graph and every registry integrity are pinned by pds/tools/atproto_reference/package-lock.json
+
+[vector]
+file:          pds/test/vectors/lexjson_reference_corpus.txt
+local-sha256:  32118d20a59fed781daa3be57c1c1a0bf7d081c728d144cbab5451edca7b2058
+kind:          reference-impl
+impl:          official-atproto-lex
+source-url:    https://registry.npmjs.org/@atproto/lex-json/-/lex-json-0.1.6.tgz
+extraction:    pds/tools/gen_lexjson_corpus.sh copies the committed exact manifest and lockfile into a fresh temp directory, runs npm ci --ignore-scripts, verifies @atproto/lex-json@0.1.6, @atproto/lex-data@0.1.7, and @atproto/lex-cbor@0.1.6, and runs gen_lexjson_corpus.mjs. The generator builds representative AT Protocol data-model values (null, bools, ints, negative ints, byte strings of several lengths, nested maps/arrays, raw and dag-cbor CID links, and a map mixing a byte string with a nested link), encodes each with @atproto/lex-cbor's canonical DAG-CBOR encoder and @atproto/lex-json's lexStringify, and self-verifies each row round-trips through the reference libraries' own decode/parse before emitting it.
+retrieved:     2026-09-01
+consumer:      P4-B-IPLD-JSON (#2455 pds-phase4-record-api, lexicon-JSON<->DAG-CBOR mapping)

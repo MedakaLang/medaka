@@ -631,6 +631,20 @@ corpus = []
 toolchain = []
 
 [[gate]]
+name = "pds/test/lexjson_vectors"
+area = "engines"
+shard = "gates_4"
+project = "pds"
+tiers = ["merge"]
+cost = "medium"
+kind = "exec"
+run = "pds/test/lexjson_vectors.sh"
+oracles = []
+sources = ["pds/*"]
+corpus = []
+toolchain = []
+
+[[gate]]
 name = "pds/test/mst_vectors"
 area = "engines"
 shard = "gates_8"
