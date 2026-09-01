@@ -152,7 +152,7 @@ job runs this harness (`test/preflight.sh` keeps `playground/e2e/run.sh` in
 `LOCAL_SKIP`), and the PR-gating guide check remains the static
 `test/diff_compiler_guide_render.sh`.
 
-⚠️ `GET /guide/` is a **404**: `build_site.sh` emits one page per chapter and no
-directory index, and `playground/index.html` links to
-`./guide/00-introduction.html` directly. Intentional as built, but a reader who
-types `/guide/` gets nothing — worth a decision rather than a discovery.
+`GET /guide/` is a 200: `build_site.sh` now emits `guide/index.html` (a real
+doc-set index page), and the e2e harness asserts the bare `/guide/` route
+serves a directory index. Fixed by F-render-fixes (review finding S1-2); this
+paragraph previously said 404 — left stale by that fix, corrected here.
