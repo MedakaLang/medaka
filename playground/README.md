@@ -161,12 +161,38 @@ whatever `build_site.sh` last copied, so after any change that moves
 the deploy by hand. The wasm is the page's dominant download and the whole
 playground blocks on it.
 
-To verify a deploy, point the e2e spec at the live origin instead of the local
-server — it takes the base url as its first argument:
+### Verifying a deploy
+
+🚨 **Never read the deploy's exit code as the answer** — the preview trap above
+exits 0 while production 404s. Verify the ORIGIN. Two tools, in this order:
 
 ```sh
-cd playground/e2e && node tests/playground.spec.mjs https://medaka-lang.dev /tmp/shots
+# 1. the published doc sets — the whole 905-link stdlib index, by name
+bash playground/verify_stdlib_deploy.sh https://medaka-lang.dev
+
+# 2. the app itself in a real browser (needs node v24+ and system Chrome)
+cd playground/e2e && \
+  E2E_EXPECT_GUIDE=1 E2E_EXPECT_STDLIB=1 \
+  node tests/playground.spec.mjs https://medaka-lang.dev /tmp/shots
 ```
+
+`verify_stdlib_deploy.sh` compares the live `/stdlib/` route against **this
+checkout's** `docs/stdlib` — the bare route, the entry-link count, the published
+page set, every deep entry link (target status *and* `#anchor`), the stylesheet
+and the back link — and names each mismatch individually. Clean run ends with
+
+```
+RESULT: PASS — https://medaka-lang.dev/stdlib/ matches docs/stdlib (905 entry links, 0 broken).
+```
+
+Exit 1 = a real mismatch, named above the summary. Exit 2 = the origin was
+unreachable or the checkout could not supply expectations — deliberately
+distinguished, because "I could not ask" is not "the answer was no".
+
+The e2e spec takes the base url as its first argument. `E2E_EXPECT_GUIDE` /
+`E2E_EXPECT_STDLIB` make its `/guide` and `/stdlib` route checks **mandatory**;
+without them a missing doc set reads as a skip, not a failure. (`SITE=1 bash
+playground/e2e/run.sh` sets both for the local `site/` tree.)
 
 See `PLAYGROUND-DESIGN.md` §6.1 for the hosting rationale and the superseded
 container-based plan.

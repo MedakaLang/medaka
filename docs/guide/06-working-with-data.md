@@ -1,28 +1,27 @@
 # Working with Data
 
-You have types and you have behavior. This chapter is about the containers you keep
-data in and the handful of functions you push it through. There is not much new
-syntax here — the point is the vocabulary, and the fact that almost all of it comes
-from a small number of interfaces you already met in
-[chapter 5](05-interfaces.md).
+This chapter is about the containers you keep data in and the handful of functions
+you push it through. There is little new syntax. Most of the chapter is vocabulary,
+and most of that vocabulary comes from a few interfaces in the style of chapter 5.
 
-## `List` and `Array`
+## `List`, `Array`, and `Vector`
 
-Medaka gives you two sequence types, and the choice between them is a cost decision,
-not a style one.
+Medaka has three sequence types, and the choice between them is about cost.
 
-`List a` is a singly-linked cons list, written `[1, 2, 3]`. Prepending with `::` is
-constant time, it pattern-matches head-and-tail, and it is immutable. It is the
-default: nearly everything in this guide is a `List`.
+`List a` is a singly linked list, written `[1, 2, 3]`. Adding an element to the
+front with `::` is constant time, it pattern-matches as head and tail, and it is
+immutable. It is the default, and nearly everything in this guide is a `List`.
 
-`Array a` is a contiguous, fixed-length, *mutable* block, written `[|1, 2, 3|]`.
-Indexing is constant time and writing an element in place is constant time; changing
-the length is not possible at all. If you need something array-shaped that also
-grows, that is [`vector`](../stdlib/STDLIB.md), covered later in this chapter —
-`Array` itself never resizes.
+`Array a` is a contiguous block of fixed length, written `[|1, 2, 3|]`. Reading an
+element by index is constant time, and so is writing one in place, but the length
+never changes.
+
+`Vector a`, from the `vector` module, is an array that grows. Use it when you are
+accumulating an unknown number of elements and want indexed access afterwards.
 
 ```medaka
 import array as A
+import vector as V
 
 main =
   let xs = [3, 1, 2]
@@ -35,6 +34,11 @@ main =
   A.sortInPlace arr
   println arr
   println (toList arr)
+  let v = V.new ()
+  V.push "a" v
+  V.push "b" v
+  println (length v)
+  println (V.pop v)
 ```
 
 ```medaka-expect
@@ -44,44 +48,44 @@ main =
 None
 [|1, 2, 99|]
 [1, 2, 99]
+2
+Some b
 ```
 
-Reach for `List` when you build a sequence by walking it, and for `Array` when you
-need indexed access or in-place updates over a fixed number of slots. `arr[i] := v`
-writes in place and returns `Unit` — it mutates the array you handed it, and does not
-give you a new one — and `arr[i]` reads the raw element back out.
+Use `List` when you build a sequence by walking it. Use `Array` when you need
+indexed access or in-place updates over a fixed number of slots. `arr[i] := v` writes
+in place and returns `Unit`; `arr[i]` reads an element. `A.get` returns an `Option`
+instead, because an out-of-range index has no answer. Reach for `arr[i]` when you
+know the index is in bounds and `A.get` when you do not. That pattern, a total
+function returning `Option` instead of a partial one that crashes, runs through the
+whole standard library.
 
-`A.get` returns `Option a` rather than the element, because an out-of-range index
-(`5`, on a 3-element array above) has no answer, and it is total where the indexing
-sugar is not. That pattern — a total function returning `Option` instead of a partial
-one that crashes — runs through the whole standard library; reach for `arr[i]` for
-the common in-bounds case and `A.get` when the index might be out of range.
-
-That example also shows the other thing you will need constantly: `array` and `list`
-export a lot of the same names (`get`, `take`, `drop`, `sort`, `sortBy`), so the two
-modules cannot both be wildcard-imported and used unqualified. `import list.*` next to
-`import array.*` is accepted on its own — the collision is not the import, it is the
-*use*, and it is reported at the reference:
+The example also shows why the imports are qualified. `list` and `array` export many
+of the same names (`get`, `take`, `drop`, `sort`, `sortBy`), so if you wildcard-import
+both, using one of those names is an error at the use site:
 
 ```
 probe.mdk:4:16: Ambiguous occurrence: 'get' is exported by both `list` and `array`.
 Qualify, or select with `import <mod>.{get}`
 ```
 
-`import array as A` gives you a prefix instead, and sidesteps the question entirely.
+`import array as A` gives you a prefix and avoids the question.
 
-> ⚠️ **A module alias works for values, not for types.** `import map as M` lets you
-> write `M.get`, but `M.Map String Int` in a *type* is a parse error. Import the type
-> by name — `import map.{Map}` — alongside the alias, on its own line.
+> ⚠️ **A module alias qualifies values, not types.** `import map as M` lets you
+> write `M.get`, but `M.Map String Int` in a type is a parse error. Import the type
+> by name on its own line, `import map.{Map}`, alongside the alias.
 >
 > ```
-> error: probe.mdk:3:10: unexpected `.`
+> error: probe.mdk:3:9: unexpected `.`
+>   |
+> 3 | sizes : M.Map String Int
+>   |          ^
 > ```
 
-## The three functions you will actually use
+## `map`, `filter`, and `fold`
 
-`map`, `filter`, and `fold` cover most of what you want to do with a container, and
-they read best chained with `|>`.
+These three cover most of what you do with a container, and they read best in a
+chain of pipes.
 
 ```medaka
 main =
@@ -99,16 +103,16 @@ main =
 25
 ```
 
-`fold` takes the combining function, a starting value, and the container:
-`fold (acc x => …) start xs`. The accumulator comes first, so `fold (+) 0` and
-`fold (acc x => acc ++ f x) empty` both read left to right. Other languages usually
-call this `reduce`; Medaka's `fold` is that function.
+`fold` takes a combining function, a starting value, and the container:
+`fold (acc x => …) start xs`. The accumulator is the function's first argument.
+Other languages call this `reduce`.
 
-None of these three is specific to `List`. `map` belongs to the `Mappable`
-interface, `filter` to `Filterable`, and `fold` — along with `length`, `toList`,
-`isEmpty` and `foldRight` — to `Foldable`. Anything implementing them gets the whole
-vocabulary it implements — which is why `toList` worked on an `Array` above, and why
-`Option`, a container of at most one thing, answers to `map` and `fold`:
+None of the three is specific to `List`. `map` is the method of the `Mappable`
+interface, `filter` of `Filterable`, and `fold` of `Foldable`, which also provides
+`length`, `toList`, `isEmpty`, and `foldRight`. Any type that implements one of
+those interfaces gets its vocabulary. That is why `toList` worked on an `Array`
+above, and why `Option`, a container of at most one thing, answers to `map` and
+`fold`:
 
 ```medaka
 main =
@@ -126,14 +130,14 @@ Some 2
 ```
 
 `Option` is `Mappable` and `Foldable` but not `Filterable`, because a container with
-a fixed shape has nowhere to put "one fewer element". The interfaces are separate
-precisely so a type can implement the ones that make sense for it.
+a fixed shape has nowhere to put "one fewer element". The interfaces are separate so
+that a type can implement the ones that make sense for it.
 
-> **Coming from Haskell?** `map` is `fmap`, not the list-only one; `fold` is
+> **Coming from Haskell?** `map` is `fmap`, not the list-only one. `fold` is
 > `foldl'` with the arguments in the order you would guess. There is no
-> `Data.List.map` versus `Prelude.map` split, because the interface is the only one.
+> `Data.List.map` versus `Prelude.map` split.
 
-Ranges build lists (and arrays) of numbers without a loop:
+Ranges build lists and arrays of numbers:
 
 ```medaka
 main =
@@ -148,14 +152,14 @@ main =
 [|1, 2, 3, 4|]
 ```
 
-`[a..b]` is half-open and `[a..=b]` includes the endpoint. `[| … |]` gives you the
-array version of the same range.
+`[a..b]` stops before `b` and `[a..=b]` includes it. The `[| … |]` form gives an
+array.
 
 ## `Map` and `Set`
 
 `Map k v` and `Set a` are immutable ordered trees, so their keys need `Ord`. Both
-have literal syntax, and both require you to import the module *and* the type — a
-bare `import map` binds no names.
+have literal syntax. Both need the module and the type imported by name, since a bare
+`import map` binds nothing.
 
 ```medaka
 import map.{Map, get}
@@ -175,23 +179,16 @@ True
 3
 ```
 
-`get` returns `Option v`, and `Set` collapses duplicates, which is what makes the
-last line `3` and not `4`.
+`get` returns an `Option`, and a `Set` drops duplicates, which is why the last line
+is 3 rather than 4.
 
-For hash-based, mutable variants — when you are building a large table and do not
-need ordering — reach for [`hash_map`](../stdlib/STDLIB.md) and `hash_set` instead;
-`vector` is the growable counterpart to the fixed-size `Array`. This chapter does not
-cover them, and their APIs deliberately mirror the ones here.
+When you are building a large table and do not need ordering, `hash_map` and
+`hash_set` are the mutable, hash-based versions. Their APIs mirror the ones here.
 
 ## Strings
 
-`String` is its own type, with the operations you expect, and interpolation is the
-way you build them.
-
-> **Coming from Haskell?** `String` is not `[Char]` here — it is its own type, not a
-> list of characters, so none of the `List` vocabulary (`map`, `length`, `::`) works
-> on it directly. `string.toChars` converts explicitly when you need to walk one
-> character at a time.
+`String` is its own type, separate from lists, and string interpolation is the main
+way to build one.
 
 ```medaka
 import string.{split, join, trim, toFloat}
@@ -213,13 +210,12 @@ Some 4.5
 `toFloat` returns an `Option` for the same reason `A.get` does: `toFloat "banana"`
 has no answer.
 
-String interpolation is `\{ }`, and — as [chapter 5](05-interfaces.md) showed — it
-calls `display`. Anything with a `Display` implementation can be interpolated, and
-implementing `Display` once makes a type interpolate everywhere.
+Interpolation is `\{ }`, and as chapter 5 showed, it calls `display`. Anything with
+a `Display` implementation can be interpolated.
 
-> ⚠️ **`length` is a `Foldable` method, so it does not work on `String`.** A string
-> is not a container of characters as far as the interface vocabulary is concerned.
-> Convert first with `string.toChars`, which the compiler will tell you:
+> ⚠️ **`length` does not work on a `String`.** `length` is a `Foldable` method, and a
+> string is not a container of characters as far as the interfaces are concerned.
+> Convert with `string.toChars` first. The compiler says so:
 >
 > ```
 > error: probe.mdk:2:18: 'length' expects a container (like List or Array) here, but
@@ -227,11 +223,14 @@ implementing `Display` once makes a type interpolate everywhere.
 > with `string.toChars` first.
 > ```
 
-## The expense tracker, totalled and grouped
+> **Coming from Haskell?** `String` is not `[Char]`. None of the list vocabulary
+> (`map`, `length`, `::`) applies to it directly.
 
-Everything above is enough to answer real questions about the ledger. Summing is a
-`fold`, counting a category is a `filter` then a `length`, and grouping is a `fold`
-into a `Map`.
+## The expense tracker, totaled and grouped
+
+With that much you can answer real questions about the ledger. A total is a `fold`.
+Counting a category is a `filter` followed by `length`. Grouping is a `fold` into a
+`Map`.
 
 ```medaka
 import map.{Map, get, toList, insertWith}
@@ -302,17 +301,18 @@ books: 18.0
 Some 18.0
 ```
 
-Three things there are worth naming. `insertWith (+)` is the grouping idiom — insert
-the amount at the category, and if something is already there, combine with `+`
-instead of overwriting. `toList` on a `Map` gives you `List (k, v)` in key order,
-which is why the output is in `Category`'s declaration order and not insertion order.
-And `printAll` is how you print a list one line at a time: a two-clause recursive
-function, not a loop — `map println xs` would build a `List Unit` and throw it away,
-which the compiler refuses to let you do silently.
+`insertWith (+)` is the grouping idiom: insert the amount under the category, and if
+there is already an amount there, add to it instead of replacing it. `toList` on a
+`Map` gives a list of pairs in key order, which is why the output follows
+`Category`'s declaration order rather than the order of the ledger.
+
+`printAll` is how you print a list one element per line: a two-clause recursive
+function. `map println xs` would build a `List Unit` and discard it, and the
+compiler refuses to let a statement throw away a non-`Unit` value silently.
 
 ## How do I…
 
-| …do this | …with this |
+| To do this | Use this |
 |---|---|
 | turn every element into something else | `map f xs` |
 | keep some elements | `filter p xs` (`list.partition` keeps both halves) |
@@ -327,15 +327,12 @@ which the compiler refuses to let you do silently.
 | build a `Map` from pairs | `map.fromList`, or the `Map { k => v }` literal |
 | count occurrences | `list.tally` |
 
-The full module list is in [the stdlib overview](../stdlib/STDLIB.md); `json`,
-`byteparser` and `bytebuilder` live there too and are worth knowing about before you
-hand-roll a parser.
+The [stdlib reference](../stdlib/index.md) lists every module and function. Before
+you hand-roll a parser, look at `json`, `byteparser`, and `bytebuilder` there.
 
 ---
 
-Almost every function in this chapter has been pure: same input, same output, nothing
-touched outside the program. The exception is anything that printed: every `main` above,
-and `printAll`, whose signature had to say so — `Display a => List a -> <IO> Unit`. That
-`<IO>` is not decoration. The next chapter is about the other kind of code —
-[chapter 7, effects and IO](07-effects-and-io.md) — and it starts by contradicting
-something you probably expect.
+Nearly every function in this chapter was pure: same input, same output, nothing
+touched outside the program. The exceptions were the ones that printed, and
+`printAll`'s signature had to say so with `<IO>`. [Chapter 7](07-effects-and-io.md)
+is about that row and what it means.

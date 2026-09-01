@@ -75,7 +75,7 @@ The first element.  Total (a `NonEmpty` always has one).
 ## `maximum`
 
 ```
-maximum : NonEmpty a -> a
+maximum : Ord a => NonEmpty a -> a
 ```
 
 The largest element.  Total.
@@ -91,7 +91,7 @@ The largest element.  Total.
 ## `minimum`
 
 ```
-minimum : NonEmpty a -> a
+minimum : Ord a => NonEmpty a -> a
 ```
 
 The smallest element.  Total.

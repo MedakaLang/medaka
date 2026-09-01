@@ -53,7 +53,7 @@ A set with a single element.
 ## `fromList`
 
 ```
-fromList : List a -> Set a
+fromList : Ord a => List a -> Set a
 ```
 
 Build a set from a list, dropping duplicates.
@@ -101,7 +101,7 @@ Number of elements. O(1) — read off the root's cached size.
 ## `has`
 
 ```
-has : a -> Set a -> Bool
+has : Ord a => a -> Set a -> Bool
 ```
 
 `True` when the element is present.
@@ -119,7 +119,7 @@ False
 ## `insert`
 
 ```
-insert : a -> Set a -> Set a
+insert : Ord a => a -> Set a -> Set a
 ```
 
 Insert an element. A no-op (structurally) when already present.
@@ -137,7 +137,7 @@ Insert an element. A no-op (structurally) when already present.
 ## `delete`
 
 ```
-delete : a -> Set a -> Set a
+delete : Ord a => a -> Set a -> Set a
 ```
 
 Remove an element. A no-op when absent.
@@ -261,7 +261,7 @@ Drop the largest element (a no-op on the empty set).
 ## `union`
 
 ```
-union : Set a -> Set a -> Set a
+union : Ord a => Set a -> Set a -> Set a
 ```
 
 Union — every element in either set.
@@ -289,7 +289,7 @@ Disjoint operands keep every element of both; a subset operand adds nothing:
 ## `intersection`
 
 ```
-intersection : Set a -> Set a -> Set a
+intersection : Ord a => Set a -> Set a -> Set a
 ```
 
 Intersection — elements in both sets.
@@ -317,7 +317,7 @@ Disjoint operands intersect to empty; a subset operand is its own intersection:
 ## `difference`
 
 ```
-difference : Set a -> Set a -> Set a
+difference : Ord a => Set a -> Set a -> Set a
 ```
 
 Difference — elements in the first set but not the second.
@@ -345,7 +345,7 @@ Subtracting a disjoint set changes nothing; subtracting a superset empties it:
 ## `isSubsetOf`
 
 ```
-isSubsetOf : Set a -> Set a -> Bool
+isSubsetOf : Ord a => Set a -> Set a -> Bool
 ```
 
 `True` when every element of the first set is in the second.
@@ -490,7 +490,7 @@ True
 ## `wellFormed`
 
 ```
-wellFormed : Set a -> Bool
+wellFormed : Ord a => Set a -> Bool
 ```
 
 Check the structural invariants at every node: search-tree order

@@ -1115,8 +1115,18 @@ while IFS= read -r f; do
     # consumer, [W-THIRD-CONSUMER] — its own `.sh` is already covered by the
     # generic `test/diff_compiler_*.sh` arm above), so an inventory-only edit
     # must reach it too, not just the freshness gate.
+    # S-site-wiring (#2384): since S-stdlib-renders, `diff_compiler_guide_render`
+    # grades docs/stdlib/*.md too (it renders the whole set through
+    # playground/build_stdlib_docs.sh and asserts the derived page set), so a
+    # docs/stdlib edit must reach it — the same widening the guide's own arm
+    # needed when its render gate landed. It has to be named HERE rather than
+    # left to derivation: this hand-written arm SHADOWS the derived
+    # `demo/*|playground/*` fallback that finds the gate for the renderer's own
+    # files (`case` fires its first matching arm only — the mechanism the guide
+    # arm's comment above describes).
     docs/stdlib/*)                 add 'diff_compiler_doc_stdlib_reference'
-                                   add 'diff_compiler_stdlib_conventions' ;;
+                                   add 'diff_compiler_stdlib_conventions'
+                                   add 'diff_compiler_guide_render' ;;
     # Third ledger, same structural blind spot (#1608). Its rows pin a WRONG VALUE
     # rather than a divergence — see its own header — but the masking path is
     # identical: a loose file under test/ that someone edits ALONE when the gate reds.
