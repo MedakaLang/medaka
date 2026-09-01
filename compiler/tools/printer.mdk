@@ -1762,7 +1762,7 @@ printNamedFieldData vis n params [Variant cname (ConNamed fields nameOmitted)] d
   let deriveDoc = if isEmptyL derives then
     Nil
   else
-    Cat Hardline (printDerives derives)
+    indentBlock (printDerives derives)
   Cat (visPrefix vis) (Cat head (Cat body deriveDoc))
 printNamedFieldData vis n params variants derives =
   -- #1110: the printer STRIPS decl identity (it is not renderable — a
@@ -1816,7 +1816,7 @@ printDataDeclCommented vis n params variants derives vcomments =
   let deriveDoc = if isEmptyL derives then
     Nil
   else
-    Cat Hardline (printDerives derives)
+    indentBlock (printDerives derives)
   Cat (visPrefix vis) (Cat head (Cat variantDocs deriveDoc))
 
 -- One Hardline + comment text per leading comment of a variant.
@@ -1881,7 +1881,7 @@ printDecl (DData { dataVis = vis, dataName = n, dataParams = params, dataCtors =
   let deriveDoc = if isEmptyL derives then
     Nil
   else
-    Cat Line (printDerives derives)
+    nest (Cat Line (printDerives derives))
   group (Cat (visPrefix vis) (Cat head (Cat variantDocs deriveDoc)))
 printDecl (DTypeAlias { tyAliasPub = pub, tyAliasName = n, tyAliasParams = params, tyAliasRhs = rhs }) = Cat (if pub then text "export " else Nil) (Cat (text "type ") (Cat (text n) (Cat (concatD (map (p => Cat (text " ") (text p)) params)) (Cat (text " = ") (printType rhs)))))
 printDecl (DNewtype { newtypePub = pub, newtypeName = n, newtypeParams = params, newtypeCtor = con, newtypeFieldTy = fty, newtypeDerives = derives }) = Cat (if pub then text "export " else Nil) (Cat (text "newtype ") (Cat (text n) (Cat (concatD (map (p => Cat (text " ") (text p)) params)) (Cat (text " = ") (Cat (text con) (Cat (text " ") (Cat (printTypeAtom fty) (if isEmptyL derives then Nil else Cat (text " deriving (") (Cat (text (joinWith ", " (map deriveRefName derives))) (text ")"))))))))))
