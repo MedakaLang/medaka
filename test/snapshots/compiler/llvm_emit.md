@@ -1,5 +1,5 @@
 # META
-source_lines=12370
+source_lines=12420
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -6270,19 +6270,69 @@ emitMethodArgDispatch e method argOps =
 -- so those sites take the same branch as before.  With [raw] non-empty and [emittable]
 -- empty at >=2 groups, `emitArgTagDispatchWith … []` emits exactly what
 -- `emitArgTagDispatch` did.  Only the single-group case changes shape.
+-- #2445: THE UNDECIDABLE-BY-CONSTRUCTION REFUSAL.  Every arm of the arg-tag chain
+-- below tests the receiver cell's CONSTRUCTOR tag (`emitTagMatch`/`ctorsOfType`), and
+-- a group's tag is its impl's HEAD tycon -- so two declared impls of one interface at
+-- the SAME head (`impl Wrap (Pair Int)` and `impl Wrap (Pair String)`) mint two arms
+-- whose `icmp eq` compares against the IDENTICAL constant.  The second arm is dead
+-- code and the first one wins every receiver, at exit 0, with no diagnostic: measured
+-- `1|1` where the semantics and `medaka run` both say `1|2`.  The single-group
+-- shortcut (`emitArgTagCovered`) folds the same collision even harder -- an
+-- unconditional direct call with no tag test at all -- which is the shape a
+-- group-duplicate check structurally cannot see, because when the sibling head
+-- INHERITS the default `tagsMinus` has already deleted the shared tag string from the
+-- uncovered set and only one group survives.
+--
+-- So the refusal is keyed on the DECLARATION facts, not on the emitted arm set, and it
+-- sits at the route's single entry rather than inside the chain: `ifaceDeclHeadUnique`
+-- (`core_ir_lower`, the same predicate `declTagOrKey` and typecheck's
+-- `ieCountHeadByIface` already answer route keys with) says whether this interface has
+-- more than one declared impl at this head.  More than one and the runtime tag CANNOT
+-- decide between them, so we refuse the whole route with a `gapE` -- loud -- instead of
+-- emitting a chain that silently picks an arm.
+--
+-- ⚠️ INHERITED FAIL-OPEN, stated so this is not read as total: `ifaceDeclHeadUnique`
+-- answers True ("unique, safe") when `ifaceImplHeadsRef` is UNINSTALLED, so a driver
+-- that never lowered through `lowerImpls` degrades to today's silent output rather
+-- than refusing.  The guard is a floor on the installed path, not a proof.
+--
+-- Byte-identity: every interface in the tree today whose method reaches an arg-tag
+-- site has at most one declared impl per head (the one live witness,
+-- `test/dict_fixtures/i7-flatten-arm-fresh-universe.mdk`, chains prelude `fold` over
+-- List/Option/Result), so the predicate is True at every tag and every such site takes
+-- the unchanged branch below.
+argTagHeadCollision : Emit -> String -> List ImplGroup -> List String -> Bool
+argTagHeadCollision e method groups raw =
+  let iface = methodIfaceOfInput e method
+  if iface == "" then
+    False
+  else
+    anyGroupHeadCollides iface groups || anyList (t => not (ifaceDeclHeadUnique iface t)) raw
+
+anyGroupHeadCollides : String -> List ImplGroup -> Bool
+anyGroupHeadCollides _ [] = False
+anyGroupHeadCollides iface (g::rest)
+  | not (ifaceDeclHeadUnique iface (groupTag g)) = True
+  | otherwise = anyGroupHeadCollides iface rest
+
 emitArgTagRoute : Emit -> String -> List ImplGroup -> List String -> List String -> List String -> (String, LTy)
+emitArgTagRoute e method groups emittable raw argOps
+  | argTagHeadCollision e method groups raw = gapE e "arg-tag dispatch for method '\{method}' is undecidable: interface '\{methodIfaceOfInput e method}' declares more than one impl at the same type head, so the receiver's runtime constructor tag cannot choose between them"
+  | otherwise = emitArgTagRouteGo e method groups emittable raw argOps
+
+emitArgTagRouteGo : Emit -> String -> List ImplGroup -> List String -> List String -> List String -> (String, LTy)
 -- no inheriting head at all: the arm set the entries give IS the whole answer, and
 -- every branch here is the pre-#1046 one (byte-identical IR).
-emitArgTagRoute e method groups [] [] argOps =
+emitArgTagRouteGo e method groups [] [] argOps =
   emitArgTagCovered e method groups argOps
 -- heads inherit the default but none can carry an arm — chain anyway, so the
 -- untestable heads reach the loud terminal instead of the shortcut.
-emitArgTagRoute e method groups [] _ argOps =
+emitArgTagRouteGo e method groups [] _ argOps =
   emitArgTagDispatchWith e method groups [] argOps
 -- #1046: at least one DECLARED impl of this interface inherits the default rather than
 -- defining [method], so it contributes no entry and is missing from `groups`.  A runtime
 -- test is required even at one group.
-emitArgTagRoute e method groups uncovered _ argOps =
+emitArgTagRouteGo e method groups uncovered _ argOps =
   emitArgTagDispatchWith e method groups uncovered argOps
 
 -- the fully-covered route: the pre-#1046 shape, split out only so `emitArgTagRoute`
@@ -13394,10 +13444,17 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DFunDef false "tagsMinus" ((PCons (PVar "t") (PVar "rest")) (PVar "covered")) (EIf (EApp (EApp (EVar "contains") (EVar "t")) (EVar "covered")) (EApp (EApp (EVar "tagsMinus") (EVar "rest")) (EVar "covered")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "t") (EApp (EApp (EVar "tagsMinus") (EVar "rest")) (EVar "covered"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "emitMethodArgDispatch" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy"))))))
 (DFunDef false "emitMethodArgDispatch" ((PVar "e") (PVar "method") (PVar "argOps")) (EBlock (DoLet false false (PVar "groups") (EApp (EApp (EVar "implGroupsForMethod") (EVar "e")) (EVar "method"))) (DoExpr (EMatch (EVar "groups") (arm (PList) () (EApp (EApp (EApp (EVar "emitDefaultArgTag") (EVar "e")) (EVar "method")) (EVar "argOps"))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagRoute") (EVar "e")) (EVar "method")) (EVar "groups")) (EApp (EApp (EVar "argTagUncovered") (EVar "e")) (EVar "method"))) (EApp (EApp (EVar "argTagUncoveredRaw") (EVar "e")) (EVar "method"))) (EVar "argOps")))))))
+(DTypeSig false "argTagHeadCollision" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))))
+(DFunDef false "argTagHeadCollision" ((PVar "e") (PVar "method") (PVar "groups") (PVar "raw")) (EBlock (DoLet false false (PVar "iface") (EApp (EApp (EVar "methodIfaceOfInput") (EVar "e")) (EVar "method"))) (DoExpr (EIf (EBinOp "==" (EVar "iface") (ELit (LString ""))) (EVar "False") (EBinOp "||" (EApp (EApp (EVar "anyGroupHeadCollides") (EVar "iface")) (EVar "groups")) (EApp (EApp (EVar "anyList") (ELam ((PVar "t")) (EApp (EVar "not") (EApp (EApp (EVar "ifaceDeclHeadUnique") (EVar "iface")) (EVar "t"))))) (EVar "raw")))))))
+(DTypeSig false "anyGroupHeadCollides" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyCon "Bool"))))
+(DFunDef false "anyGroupHeadCollides" (PWild (PList)) (EVar "False"))
+(DFunDef false "anyGroupHeadCollides" ((PVar "iface") (PCons (PVar "g") (PVar "rest"))) (EIf (EApp (EVar "not") (EApp (EApp (EVar "ifaceDeclHeadUnique") (EVar "iface")) (EApp (EVar "groupTag") (EVar "g")))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EVar "anyGroupHeadCollides") (EVar "iface")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "emitArgTagRoute" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy")))))))))
-(DFunDef false "emitArgTagRoute" ((PVar "e") (PVar "method") (PVar "groups") (PList) (PList) (PVar "argOps")) (EApp (EApp (EApp (EApp (EVar "emitArgTagCovered") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "argOps")))
-(DFunDef false "emitArgTagRoute" ((PVar "e") (PVar "method") (PVar "groups") (PList) PWild (PVar "argOps")) (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatchWith") (EVar "e")) (EVar "method")) (EVar "groups")) (EListLit)) (EVar "argOps")))
-(DFunDef false "emitArgTagRoute" ((PVar "e") (PVar "method") (PVar "groups") (PVar "uncovered") PWild (PVar "argOps")) (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatchWith") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "uncovered")) (EVar "argOps")))
+(DFunDef false "emitArgTagRoute" ((PVar "e") (PVar "method") (PVar "groups") (PVar "emittable") (PVar "raw") (PVar "argOps")) (EIf (EApp (EApp (EApp (EApp (EVar "argTagHeadCollision") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "raw")) (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "arg-tag dispatch for method '")) (EApp (EVar "display") (EVar "method"))) (ELit (LString "' is undecidable: interface '"))) (EApp (EVar "display") (EApp (EApp (EVar "methodIfaceOfInput") (EVar "e")) (EVar "method")))) (ELit (LString "' declares more than one impl at the same type head, so the receiver's runtime constructor tag cannot choose between them")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagRouteGo") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "emittable")) (EVar "raw")) (EVar "argOps")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "emitArgTagRouteGo" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy")))))))))
+(DFunDef false "emitArgTagRouteGo" ((PVar "e") (PVar "method") (PVar "groups") (PList) (PList) (PVar "argOps")) (EApp (EApp (EApp (EApp (EVar "emitArgTagCovered") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "argOps")))
+(DFunDef false "emitArgTagRouteGo" ((PVar "e") (PVar "method") (PVar "groups") (PList) PWild (PVar "argOps")) (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatchWith") (EVar "e")) (EVar "method")) (EVar "groups")) (EListLit)) (EVar "argOps")))
+(DFunDef false "emitArgTagRouteGo" ((PVar "e") (PVar "method") (PVar "groups") (PVar "uncovered") PWild (PVar "argOps")) (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatchWith") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "uncovered")) (EVar "argOps")))
 (DTypeSig false "emitArgTagCovered" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy")))))))
 (DFunDef false "emitArgTagCovered" ((PVar "e") (PVar "method") (PList (PVar "g")) (PVar "argOps")) (EApp (EApp (EApp (EApp (EApp (EVar "emitImplCallSat") (EVar "e")) (EApp (EApp (EVar "implFnName") (EApp (EVar "groupSymTag") (EVar "g"))) (EVar "method"))) (EVar "argOps")) (EApp (EApp (EApp (EVar "methodArityOfTag") (EVar "e")) (EVar "method")) (EApp (EVar "groupTag") (EVar "g")))) (EVar "LTInt")))
 (DFunDef false "emitArgTagCovered" ((PVar "e") (PVar "method") (PVar "groups") (PVar "argOps")) (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatch") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "argOps")))
@@ -15723,10 +15780,17 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DFunDef false "tagsMinus" ((PCons (PVar "t") (PVar "rest")) (PVar "covered")) (EIf (EApp (EApp (EVar "contains") (EVar "t")) (EVar "covered")) (EApp (EApp (EVar "tagsMinus") (EVar "rest")) (EVar "covered")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "t") (EApp (EApp (EVar "tagsMinus") (EVar "rest")) (EVar "covered"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "emitMethodArgDispatch" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy"))))))
 (DFunDef false "emitMethodArgDispatch" ((PVar "e") (PVar "method") (PVar "argOps")) (EBlock (DoLet false false (PVar "groups") (EApp (EApp (EVar "implGroupsForMethod") (EVar "e")) (EVar "method"))) (DoExpr (EMatch (EVar "groups") (arm (PList) () (EApp (EApp (EApp (EVar "emitDefaultArgTag") (EVar "e")) (EVar "method")) (EVar "argOps"))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagRoute") (EVar "e")) (EVar "method")) (EVar "groups")) (EApp (EApp (EVar "argTagUncovered") (EVar "e")) (EVar "method"))) (EApp (EApp (EVar "argTagUncoveredRaw") (EVar "e")) (EVar "method"))) (EVar "argOps")))))))
+(DTypeSig false "argTagHeadCollision" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))))
+(DFunDef false "argTagHeadCollision" ((PVar "e") (PVar "method") (PVar "groups") (PVar "raw")) (EBlock (DoLet false false (PVar "iface") (EApp (EApp (EVar "methodIfaceOfInput") (EVar "e")) (EVar "method"))) (DoExpr (EIf (EBinOp "==" (EVar "iface") (ELit (LString ""))) (EVar "False") (EBinOp "||" (EApp (EApp (EVar "anyGroupHeadCollides") (EVar "iface")) (EVar "groups")) (EApp (EApp (EVar "anyList") (ELam ((PVar "t")) (EApp (EVar "not") (EApp (EApp (EVar "ifaceDeclHeadUnique") (EVar "iface")) (EVar "t"))))) (EVar "raw")))))))
+(DTypeSig false "anyGroupHeadCollides" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyCon "Bool"))))
+(DFunDef false "anyGroupHeadCollides" (PWild (PList)) (EVar "False"))
+(DFunDef false "anyGroupHeadCollides" ((PVar "iface") (PCons (PVar "g") (PVar "rest"))) (EIf (EApp (EVar "not") (EApp (EApp (EVar "ifaceDeclHeadUnique") (EVar "iface")) (EApp (EVar "groupTag") (EVar "g")))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EVar "anyGroupHeadCollides") (EVar "iface")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "emitArgTagRoute" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy")))))))))
-(DFunDef false "emitArgTagRoute" ((PVar "e") (PVar "method") (PVar "groups") (PList) (PList) (PVar "argOps")) (EApp (EApp (EApp (EApp (EVar "emitArgTagCovered") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "argOps")))
-(DFunDef false "emitArgTagRoute" ((PVar "e") (PVar "method") (PVar "groups") (PList) PWild (PVar "argOps")) (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatchWith") (EVar "e")) (EVar "method")) (EVar "groups")) (EListLit)) (EVar "argOps")))
-(DFunDef false "emitArgTagRoute" ((PVar "e") (PVar "method") (PVar "groups") (PVar "uncovered") PWild (PVar "argOps")) (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatchWith") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "uncovered")) (EVar "argOps")))
+(DFunDef false "emitArgTagRoute" ((PVar "e") (PVar "method") (PVar "groups") (PVar "emittable") (PVar "raw") (PVar "argOps")) (EIf (EApp (EApp (EApp (EApp (EVar "argTagHeadCollision") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "raw")) (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "arg-tag dispatch for method '")) (EApp (EMethodRef "display") (EVar "method"))) (ELit (LString "' is undecidable: interface '"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "methodIfaceOfInput") (EVar "e")) (EVar "method")))) (ELit (LString "' declares more than one impl at the same type head, so the receiver's runtime constructor tag cannot choose between them")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagRouteGo") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "emittable")) (EVar "raw")) (EVar "argOps")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "emitArgTagRouteGo" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy")))))))))
+(DFunDef false "emitArgTagRouteGo" ((PVar "e") (PVar "method") (PVar "groups") (PList) (PList) (PVar "argOps")) (EApp (EApp (EApp (EApp (EVar "emitArgTagCovered") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "argOps")))
+(DFunDef false "emitArgTagRouteGo" ((PVar "e") (PVar "method") (PVar "groups") (PList) PWild (PVar "argOps")) (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatchWith") (EVar "e")) (EVar "method")) (EVar "groups")) (EListLit)) (EVar "argOps")))
+(DFunDef false "emitArgTagRouteGo" ((PVar "e") (PVar "method") (PVar "groups") (PVar "uncovered") PWild (PVar "argOps")) (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatchWith") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "uncovered")) (EVar "argOps")))
 (DTypeSig false "emitArgTagCovered" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy")))))))
 (DFunDef false "emitArgTagCovered" ((PVar "e") (PVar "method") (PList (PVar "g")) (PVar "argOps")) (EApp (EApp (EApp (EApp (EApp (EVar "emitImplCallSat") (EVar "e")) (EApp (EApp (EVar "implFnName") (EApp (EVar "groupSymTag") (EVar "g"))) (EVar "method"))) (EVar "argOps")) (EApp (EApp (EApp (EVar "methodArityOfTag") (EVar "e")) (EVar "method")) (EApp (EVar "groupTag") (EVar "g")))) (EVar "LTInt")))
 (DFunDef false "emitArgTagCovered" ((PVar "e") (PVar "method") (PVar "groups") (PVar "argOps")) (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatch") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "argOps")))

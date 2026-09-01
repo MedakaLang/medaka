@@ -1120,7 +1120,7 @@ applyOpt (VClosureF env pats f) arg = applyClosureF env pats f arg
 applyOpt (VPrim f) arg = Some (f arg)
 applyOpt (VTypedImpl t key pos seen inner) arg =
   applyTyped t key pos seen inner arg
-applyOpt (VMulti vs) arg = collectPartials [] (filterByTag vs arg) arg
+applyOpt (VMulti vs) arg = let _ = checkArgTagDecidable vs arg in collectPartials [] (filterByTag vs arg) arg
 applyOpt other _ =
   runtimePanic "E-NOT-A-FUNCTION" ("applied non-function: " ++ ppValue other)
 
@@ -1157,6 +1157,61 @@ keepCand tag v = not (isDispatching v) || matchesTag tag v
 isDispatching : Value e -> Bool
 isDispatching (VTypedImpl _ _ pos seen _) = containsInt seen pos
 isDispatching _ = False
+
+-- #2445: THE EVAL MIRROR OF THE ARG-TAG UNDECIDABILITY REFUSAL.  `filterByTag` above
+-- narrows the candidate set by the receiver's runtime TAG, and `collectPartials` then
+-- takes the FIRST candidate that applies.  When two candidates survive that filter
+-- because they share a head tycon and differ only in their type ARGUMENTS
+-- (`impl Wrap (Pair Int)` / `impl Wrap (Pair String)` -- one runtime tag, two impls),
+-- the tag has not decided anything and "first wins" is a coin flip reported as an
+-- answer: measured `1|1` where the semantics say `1|2`, exit 0, on `medaka run`, the
+-- exact silent fold `emitArgTagRoute`'s guard refuses on the native side.
+--
+-- ⚠️ THE MULTI-SLOT CARVE-OUT IS LOAD-BEARING, NOT A SOFTENING.  A candidate carries a
+-- LIST of dispatching positions, and a multi-parameter interface may legitimately have
+-- two impls agreeing at slot 0 and separated at a LATER slot -- exactly what the
+-- `s-multiparam-*` / `s-nary-*` dict fixtures exercise.  Those candidates are still
+-- decidable, just not YET, so the check fires ONLY for colliding candidates with no
+-- dispatching slot after the one being applied (`hasLaterSlot`).  Without it this would
+-- panic on correct programs.
+--
+-- Distinct CANONICAL KEYS, not distinct tags, is the collision test: a re-imported
+-- prelude impl appears twice under one key and is one impl, while `Wrap|(Pair Int)|`
+-- and `Wrap|(Pair String)|` are two.
+checkArgTagDecidable : List (Value e) -> Value e -> Unit
+checkArgTagDecidable vs arg
+  | not (anyList isDispatching vs) = ()
+  | otherwise = match runtimeTypeTag arg
+    None => ()
+    Some tag => reportIfUndecidable tag (filterList (undecidableCand tag) vs)
+
+undecidableCand : String -> Value e -> Bool
+undecidableCand tag v = isDispatching v
+  && matchesTag tag v
+  && not (hasLaterSlot v)
+
+-- is there a dispatching slot AFTER the argument being applied right now?  [seen] is
+-- the count of arguments already consumed, so the slot now being filled is [seen] and
+-- anything strictly greater can still discriminate.
+hasLaterSlot : Value e -> Bool
+hasLaterSlot (VTypedImpl _ _ pos seen _) = anyList (> seen) pos
+hasLaterSlot _ = False
+
+reportIfUndecidable : String -> List (Value e) -> Unit
+reportIfUndecidable tag cands
+  | twoDistinctKeys cands [] = runtimePanic "E-AMBIGUOUS-DISPATCH" "arg-tag dispatch on a receiver of type '\{tag}' is undecidable: more than one impl is declared at that type head and the runtime tag cannot choose between them"
+  | otherwise = ()
+
+twoDistinctKeys : List (Value e) -> List String -> Bool
+twoDistinctKeys [] _ = False
+twoDistinctKeys (v::rest) seen
+  | contains (candKey v) seen = twoDistinctKeys rest seen
+  | isEmptyL seen = twoDistinctKeys rest [candKey v]
+  | otherwise = True
+
+candKey : Value e -> String
+candKey (VTypedImpl _ k _ _ _) = k
+candKey _ = ""
 
 -- return-position dispatch (RKey): narrow a method's VMulti to the impl whose
 -- VTypedImpl tag matches the type the typechecker resolved (no runtime arg).  An

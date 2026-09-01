@@ -1,0 +1,6 @@
+class: undecidable-by-construction
+correct: 1|2
+check: 0
+run: 1 | main.mdk:21:14: runtime error [E-AMBIGUOUS-DISPATCH]: arg-tag dispatch on a receiver of type 'Pair' is undecidable: more than one impl is declared at that type head and the runtime tag cannot choose between them
+build: 1 | error: emitter failed compiling main.mdk\nruntime error [E-PANIC]: arg-tag dispatch for method 'wsize' is undecidable: interface 'Wrap' declares more than one impl at the same type head, so the receiver's runtime constructor tag cannot choose between them\n
+exec: n/a

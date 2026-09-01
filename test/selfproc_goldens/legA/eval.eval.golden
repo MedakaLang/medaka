@@ -34,6 +34,7 @@ buildMethodReqCounts : List Decl -> List ((String, String), Int)
 buildModInfos : ModExports (Value a) -> List (String, ModExports (Value a)) -> List (String, List Decl) -> List (ModInfo (Value a))
 buildWith : Value a -> Int -> Int -> List (Value a)
 bytesBEToU64 : Array Int -> U64
+candKey : Value a -> String
 canonHashFloat : Float -> Float
 canonNaN : Float
 cellOf : (String, Value a) -> (String, Ref (Value a))
@@ -42,6 +43,7 @@ charFromCodeUnsafe : Int -> Char
 charPred : (Char -> Bool) -> Value a -> Value a
 charToVChar : Char -> Value a
 charUpper : String -> String -> Bool -> Bool
+checkArgTagDecidable : List (Value a) -> Value a -> Unit
 clauseClosure : EvalEnv (Value a) -> (List Pat, Expr) -> Value a
 clauseDef : String -> FunClause -> (String, (List Pat, Expr))
 clausesForName : String -> List (String, (List Pat, Expr)) -> List (List Pat, Expr)
@@ -154,6 +156,7 @@ groupValue : EvalEnv (Value a) -> List (List Pat, Expr) -> Value a
 groupsNamedIn : List String -> List (String, List (List Pat, Expr)) -> List (String, List (List Pat, Expr))
 groupsNotNamedIn : List String -> List (String, List (List Pat, Expr)) -> List (String, List (List Pat, Expr))
 groupsOf : List Decl -> List (String, List (List Pat, Expr))
+hasLaterSlot : Value a -> Bool
 hasTag : String -> Value a -> Bool
 headTycon : Ty -> Option String
 headTyconHead : List Ty -> Option String
@@ -401,6 +404,7 @@ reTag : String -> String -> List Int -> Int -> Value a -> Value a
 receiverParam : List String -> List String
 recordCreateVals : String -> List String -> List (String, Value a) -> List (Value a)
 reexport : ModExports (Value a) -> List (String, ModExports (Value a)) -> Decl -> List (String, Ref (Value a))
+reportIfUndecidable : String -> List (Value a) -> Unit
 resolveMembers : UsePath -> ModExports (Value a) -> List (String, Ref (Value a))
 resultToValue : Result String (Value a) -> Value a
 rngDraw : Unit -> U64
@@ -439,6 +443,7 @@ takeN : Int -> List a -> List a
 testCapableExterns : Unit -> List (String, Value a)
 topGroupValue : EvalEnv (Value a) -> List (List Pat, Expr) -> Value a
 tupleHeadTag : Int -> String
+twoDistinctKeys : List (Value a) -> List String -> Bool
 tyMentions : Ty -> List String -> Bool
 tyvarsInArgs : List Ty -> Int
 u64Bit63 : U64 -> Int
@@ -456,6 +461,7 @@ unChar : Value a -> Char
 unInt : Value a -> Int
 unIntArray : Value a -> Array Int
 unString : Value a -> String
+undecidableCand : String -> Value a -> Bool
 unitResultToValue : Result String Unit -> Value a
 updateEvalLoc : Loc -> Unit
 upperInitialName : String -> Bool

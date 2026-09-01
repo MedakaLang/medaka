@@ -130,14 +130,15 @@ hatch working, and it is why the region is observable at all.
 |---|---|---|---|---|
 | `A1…__B1_both_defined` | bug | `woof\|meow` | ✅ `woof\|meow` | 🚨 `woof\|woof` **silent, exit 0** |
 | `A1…__B2_one_default` | bug | `woof\|meow` | ✅ `woof\|meow` | 🚨 `woof\|woof` **silent, exit 0** |
-| `A2…__B1_both_defined` | undecidable | `boxint\|boxstr` | 🚨 `boxint\|boxint` **silent** | build aborts, exit 1 |
-| `A2…__B2_one_default` | undecidable | `boxint\|boxstr` | 🚨 `boxint\|boxint` **silent** | build aborts, exit 1 |
+| `A2…__B1_both_defined` | undecidable | `boxint\|boxstr` | E-AMBIGUOUS-DISPATCH, exit 1 | build aborts, exit 1 |
+| `A2…__B2_one_default` | undecidable | `boxint\|boxstr` | E-AMBIGUOUS-DISPATCH, exit 1 | build aborts, exit 1 |
 | `A3…__B1_both_defined` | undecidable | `int\|bool` | ✅ `int\|bool` | build aborts, exit 1 |
 | `A3…__B2_one_default` | undecidable | `int\|bool` | ✅ `int\|bool` | build aborts, exit 1 |
 | `A4…__B1_both_defined` | undecidable | `meow\|int` | ✅ `meow\|int` | build aborts, exit 1 |
 | `A4…__B2_one_default` | undecidable | `meow\|int` | ✅ `meow\|int` | build aborts, exit 1 |
 | `A5…__B1_both_defined` | bug | `[meow]\|meow` | E-PANIC, exit 1 | E-NONEXHAUSTIVE, exit 1 |
 | `A5…__B2_one_default` | bug | `box\|meow` | ✅ `box\|meow` | 🚨 `box\|box` **silent, exit 0** |
+| `A6…__no_local` | undecidable | `1\|2` | E-AMBIGUOUS-DISPATCH, exit 1 | build refuses, exit 1 |
 | `CONTROL…__not_pinned` | decidable | `woof\|meow//woof\|meow` | ✅ | ✅ |
 
 ### A1_distinct_user_heads__B1_both_defined
@@ -163,8 +164,16 @@ S-1 packet names. `Box Int` and `Box String` are two impls with two distinct can
 impl keys, so `groupImpls` yields TWO groups — but `ctorsOfType e (groupTag g)` is
 `{Box}` for both, because a tycon determines its ctor set and there is one tycon here. Two
 groups, one runtime test, first arm wins. The cell tag is strictly weaker than the type
-identity the decision needs, so no amount of narrowing helps: eval answers
-`boxint|boxint` **silently**.
+identity the decision needs, so no amount of narrowing helps.
+
+⚠️ **This cell's `run` line MOVED in #2445 S-3, and the class did not.** Eval used to
+answer `boxint|boxint` **silently, at exit 0** — `filterByTag` kept both candidates
+(they share the head tag) and `collectPartials` took the first one that applied. It now
+refuses with `E-AMBIGUOUS-DISPATCH` at exit 1 (`checkArgTagDecidable`, `eval/eval.mdk`).
+The shape is still `undecidable-by-construction` — nothing here became decidable, and the
+correct answer is still unreachable on this route. What changed is that the compiler now
+SAYS SO instead of inventing an answer, so the pin records a refusal rather than a wrong
+value. Re-deriving `boxint|boxint` here would be a regression, not a repair.
 
 The native side does not even get that far — `medaka build` aborts at exit 1 with
 `runtime error [E-PANIC]: no impl of method 'fromInt' for type 'String'`. That message is
@@ -174,7 +183,7 @@ mentions; see the "loud but misleading" note below.
 ### A2_same_head_diff_args__B2_one_default
 
 **`undecidable-by-construction`.** `A2__B1` with the `Box Int` impl method-less. Identical
-outcome on both engines, which is the point: at a head collision, axis B does not matter —
+outcome on both engines (including the S-3 `run` refusal noted above), which is the point: at a head collision, axis B does not matter —
 the tag sets are equal whatever the group set is, so the discrimination has already failed
 before the group set is consulted. This cell is what makes "A2 is undecidable" a statement
 about the *head*, not about a particular impl spelling.
@@ -236,6 +245,44 @@ correct (`box|meow`), the native binary answers `box|box` **silently at exit 0**
 one-route-ref collapse as the `A1` row. The pair `A5__B1`/`A5__B2` is therefore useful
 evidence on its own: it separates the `requires`-body failure from the local-route failure,
 and shows the local-route failure is what remains once the body is made trivial.
+
+### A6_same_head_chain_reached__no_local
+
+**`undecidable-by-construction`** — and the cell the original ten did not contain: the
+head collision reaching the NATIVE ARG-TAG CHAIN, with no `let`-local and therefore no
+pin, no hatch, and no `#1082` monomorphisation anywhere in the story.
+
+Every A2 cell routes its collision through a pinned local, and a pinned local is resolved
+to ONE impl *before emit* — the marker stamps a single impl key on the lifted lambda's one
+shared call site, so `emitArgDispatchChain` is never entered and the collision is
+unobservable in IR. That was the S-3 spike's finding, and it is why the native halves of
+`A2`/`A3`/`A4` all read "build aborts" rather than showing a chain. This cell removes the
+local: `Wrap` is HIGHER-KINDED, so `go`'s constraint is not dict-abstracted and `wsize`
+falls through to the arg-tag route with the receiver's runtime tag as its only evidence.
+
+**Measured at base `919096b82`, before the S-3 guards** — the chain was built, and both
+of its arms tested the SAME constant:
+
+```
+argyes10:  call @mdk_impl_…Wrap_7c__28_Pair_20_Int_29__7c__wsize   -- icmp eq %t6, 21474836480
+argnext10: %t12 = icmp eq i64 %t6, 21474836480                     -- the identical tag
+argyes13:  call @mdk_impl_…Wrap_7c__28_Pair_20_String_29__7c__wsize -- dead code
+```
+
+The binary printed `1` twice at exit 0 where the semantics say `1` then `2`; `medaka run`
+printed `1` twice as well. That is the silent fold this corpus exists to name, observed on
+the arg-tag chain itself rather than inferred from it.
+
+Both engines now refuse loudly (`emitArgTagRoute`'s `argTagHeadCollision` on the native
+side, `checkArgTagDecidable` on eval). The class stays `undecidable-by-construction`: the
+runtime constructor tag is strictly weaker than the type identity the choice needs, and no
+narrowing of `T-LOCAL-CONSTRAINED-MONO` can reach this cell at all — it is not in the
+pinned region.
+
+⚠️ **Honest limit.** `ifaceDeclHeadUnique` answers "unique, safe" when
+`ifaceImplHeadsRef` is uninstalled, so a driver that never lowered through `lowerImpls`
+still emits the silent chain. This cell pins the installed path, which is every path
+`medaka build`/`run` take today; it is a floor, not a proof.
 
 ### CONTROL_toplevel_helper__not_pinned
 

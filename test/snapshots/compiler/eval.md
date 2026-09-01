@@ -1,5 +1,5 @@
 # META
-source_lines=4387
+source_lines=4442
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, port of lib/eval.ml's tree-walking
@@ -1124,7 +1124,7 @@ applyOpt (VClosureF env pats f) arg = applyClosureF env pats f arg
 applyOpt (VPrim f) arg = Some (f arg)
 applyOpt (VTypedImpl t key pos seen inner) arg =
   applyTyped t key pos seen inner arg
-applyOpt (VMulti vs) arg = collectPartials [] (filterByTag vs arg) arg
+applyOpt (VMulti vs) arg = let _ = checkArgTagDecidable vs arg in collectPartials [] (filterByTag vs arg) arg
 applyOpt other _ =
   runtimePanic "E-NOT-A-FUNCTION" ("applied non-function: " ++ ppValue other)
 
@@ -1161,6 +1161,61 @@ keepCand tag v = not (isDispatching v) || matchesTag tag v
 isDispatching : Value e -> Bool
 isDispatching (VTypedImpl _ _ pos seen _) = containsInt seen pos
 isDispatching _ = False
+
+-- #2445: THE EVAL MIRROR OF THE ARG-TAG UNDECIDABILITY REFUSAL.  `filterByTag` above
+-- narrows the candidate set by the receiver's runtime TAG, and `collectPartials` then
+-- takes the FIRST candidate that applies.  When two candidates survive that filter
+-- because they share a head tycon and differ only in their type ARGUMENTS
+-- (`impl Wrap (Pair Int)` / `impl Wrap (Pair String)` -- one runtime tag, two impls),
+-- the tag has not decided anything and "first wins" is a coin flip reported as an
+-- answer: measured `1|1` where the semantics say `1|2`, exit 0, on `medaka run`, the
+-- exact silent fold `emitArgTagRoute`'s guard refuses on the native side.
+--
+-- ⚠️ THE MULTI-SLOT CARVE-OUT IS LOAD-BEARING, NOT A SOFTENING.  A candidate carries a
+-- LIST of dispatching positions, and a multi-parameter interface may legitimately have
+-- two impls agreeing at slot 0 and separated at a LATER slot -- exactly what the
+-- `s-multiparam-*` / `s-nary-*` dict fixtures exercise.  Those candidates are still
+-- decidable, just not YET, so the check fires ONLY for colliding candidates with no
+-- dispatching slot after the one being applied (`hasLaterSlot`).  Without it this would
+-- panic on correct programs.
+--
+-- Distinct CANONICAL KEYS, not distinct tags, is the collision test: a re-imported
+-- prelude impl appears twice under one key and is one impl, while `Wrap|(Pair Int)|`
+-- and `Wrap|(Pair String)|` are two.
+checkArgTagDecidable : List (Value e) -> Value e -> Unit
+checkArgTagDecidable vs arg
+  | not (anyList isDispatching vs) = ()
+  | otherwise = match runtimeTypeTag arg
+    None => ()
+    Some tag => reportIfUndecidable tag (filterList (undecidableCand tag) vs)
+
+undecidableCand : String -> Value e -> Bool
+undecidableCand tag v = isDispatching v
+  && matchesTag tag v
+  && not (hasLaterSlot v)
+
+-- is there a dispatching slot AFTER the argument being applied right now?  [seen] is
+-- the count of arguments already consumed, so the slot now being filled is [seen] and
+-- anything strictly greater can still discriminate.
+hasLaterSlot : Value e -> Bool
+hasLaterSlot (VTypedImpl _ _ pos seen _) = anyList (> seen) pos
+hasLaterSlot _ = False
+
+reportIfUndecidable : String -> List (Value e) -> Unit
+reportIfUndecidable tag cands
+  | twoDistinctKeys cands [] = runtimePanic "E-AMBIGUOUS-DISPATCH" "arg-tag dispatch on a receiver of type '\{tag}' is undecidable: more than one impl is declared at that type head and the runtime tag cannot choose between them"
+  | otherwise = ()
+
+twoDistinctKeys : List (Value e) -> List String -> Bool
+twoDistinctKeys [] _ = False
+twoDistinctKeys (v::rest) seen
+  | contains (candKey v) seen = twoDistinctKeys rest seen
+  | isEmptyL seen = twoDistinctKeys rest [candKey v]
+  | otherwise = True
+
+candKey : Value e -> String
+candKey (VTypedImpl _ k _ _ _) = k
+candKey _ = ""
 
 -- return-position dispatch (RKey): narrow a method's VMulti to the impl whose
 -- VTypedImpl tag matches the type the typechecker resolved (no runtime arg).  An
@@ -4782,7 +4837,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "applyOpt" ((PCon "VClosureF" (PVar "env") (PVar "pats") (PVar "f")) (PVar "arg")) (EApp (EApp (EApp (EApp (EVar "applyClosureF") (EVar "env")) (EVar "pats")) (EVar "f")) (EVar "arg")))
 (DFunDef false "applyOpt" ((PCon "VPrim" (PVar "f")) (PVar "arg")) (EApp (EVar "Some") (EApp (EVar "f") (EVar "arg"))))
 (DFunDef false "applyOpt" ((PCon "VTypedImpl" (PVar "t") (PVar "key") (PVar "pos") (PVar "seen") (PVar "inner")) (PVar "arg")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyTyped") (EVar "t")) (EVar "key")) (EVar "pos")) (EVar "seen")) (EVar "inner")) (EVar "arg")))
-(DFunDef false "applyOpt" ((PCon "VMulti" (PVar "vs")) (PVar "arg")) (EApp (EApp (EApp (EVar "collectPartials") (EListLit)) (EApp (EApp (EVar "filterByTag") (EVar "vs")) (EVar "arg"))) (EVar "arg")))
+(DFunDef false "applyOpt" ((PCon "VMulti" (PVar "vs")) (PVar "arg")) (ELet false PWild (EApp (EApp (EVar "checkArgTagDecidable") (EVar "vs")) (EVar "arg")) (EApp (EApp (EApp (EVar "collectPartials") (EListLit)) (EApp (EApp (EVar "filterByTag") (EVar "vs")) (EVar "arg"))) (EVar "arg"))))
 (DFunDef false "applyOpt" ((PVar "other") PWild) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-NOT-A-FUNCTION"))) (EBinOp "++" (ELit (LString "applied non-function: ")) (EApp (EVar "ppValue") (EVar "other")))))
 (DTypeSig false "applyTyped" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))))))))))
 (DFunDef false "applyTyped" ((PVar "t") (PVar "key") (PVar "pos") (PVar "seen") (PVar "inner") (PVar "arg")) (EApp (EApp (EVar "map") (EApp (EApp (EApp (EApp (EVar "reTag") (EVar "t")) (EVar "key")) (EVar "pos")) (EBinOp "+" (EVar "seen") (ELit (LInt 1))))) (EApp (EApp (EVar "applyOpt") (EVar "inner")) (EVar "arg"))))
@@ -4801,6 +4856,21 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "isDispatching" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "Bool")))
 (DFunDef false "isDispatching" ((PCon "VTypedImpl" PWild PWild (PVar "pos") (PVar "seen") PWild)) (EApp (EApp (EVar "containsInt") (EVar "seen")) (EVar "pos")))
 (DFunDef false "isDispatching" (PWild) (EVar "False"))
+(DTypeSig false "checkArgTagDecidable" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "Unit"))))
+(DFunDef false "checkArgTagDecidable" ((PVar "vs") (PVar "arg")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "anyList") (EVar "isDispatching")) (EVar "vs"))) (ELit LUnit) (EIf (EVar "otherwise") (EMatch (EApp (EVar "runtimeTypeTag") (EVar "arg")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "tag")) () (EApp (EApp (EVar "reportIfUndecidable") (EVar "tag")) (EApp (EApp (EVar "filterList") (EApp (EVar "undecidableCand") (EVar "tag"))) (EVar "vs"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "undecidableCand" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "Bool"))))
+(DFunDef false "undecidableCand" ((PVar "tag") (PVar "v")) (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isDispatching") (EVar "v")) (EApp (EApp (EVar "matchesTag") (EVar "tag")) (EVar "v"))) (EApp (EVar "not") (EApp (EVar "hasLaterSlot") (EVar "v")))))
+(DTypeSig false "hasLaterSlot" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "Bool")))
+(DFunDef false "hasLaterSlot" ((PCon "VTypedImpl" PWild PWild (PVar "pos") (PVar "seen") PWild)) (EApp (EApp (EVar "anyList") (ELam ((PVar "_s")) (EBinOp ">" (EVar "_s") (EVar "seen")))) (EVar "pos")))
+(DFunDef false "hasLaterSlot" (PWild) (EVar "False"))
+(DTypeSig false "reportIfUndecidable" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyCon "Unit"))))
+(DFunDef false "reportIfUndecidable" ((PVar "tag") (PVar "cands")) (EIf (EApp (EApp (EVar "twoDistinctKeys") (EVar "cands")) (EListLit)) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-AMBIGUOUS-DISPATCH"))) (EBinOp "++" (EBinOp "++" (ELit (LString "arg-tag dispatch on a receiver of type '")) (EApp (EVar "display") (EVar "tag"))) (ELit (LString "' is undecidable: more than one impl is declared at that type head and the runtime tag cannot choose between them")))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "twoDistinctKeys" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "twoDistinctKeys" ((PList) PWild) (EVar "False"))
+(DFunDef false "twoDistinctKeys" ((PCons (PVar "v") (PVar "rest")) (PVar "seen")) (EIf (EApp (EApp (EVar "contains") (EApp (EVar "candKey") (EVar "v"))) (EVar "seen")) (EApp (EApp (EVar "twoDistinctKeys") (EVar "rest")) (EVar "seen")) (EIf (EApp (EVar "isEmptyL") (EVar "seen")) (EApp (EApp (EVar "twoDistinctKeys") (EVar "rest")) (EListLit (EApp (EVar "candKey") (EVar "v")))) (EIf (EVar "otherwise") (EVar "True") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "candKey" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "String")))
+(DFunDef false "candKey" ((PCon "VTypedImpl" PWild (PVar "k") PWild PWild PWild)) (EVar "k"))
+(DFunDef false "candKey" (PWild) (ELit (LString "")))
 (DTypeSig true "narrowMethod" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))
 (DFunDef false "narrowMethod" (PWild PWild (PCon "VMulti" (PVar "vs")) (PLit (LString ""))) (EApp (EVar "VMulti") (EVar "vs")))
 (DFunDef false "narrowMethod" ((PVar "env") (PVar "method") (PCon "VMulti" (PVar "vs")) (PVar "tag")) (EApp (EVar "stripResolved") (EApp (EApp (EApp (EApp (EVar "pickByTag") (EVar "env")) (EVar "method")) (EVar "vs")) (EVar "tag"))))
@@ -6267,7 +6337,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "applyOpt" ((PCon "VClosureF" (PVar "env") (PVar "pats") (PVar "f")) (PVar "arg")) (EApp (EApp (EApp (EApp (EVar "applyClosureF") (EVar "env")) (EVar "pats")) (EVar "f")) (EVar "arg")))
 (DFunDef false "applyOpt" ((PCon "VPrim" (PVar "f")) (PVar "arg")) (EApp (EVar "Some") (EApp (EVar "f") (EVar "arg"))))
 (DFunDef false "applyOpt" ((PCon "VTypedImpl" (PVar "t") (PVar "key") (PVar "pos") (PVar "seen") (PVar "inner")) (PVar "arg")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyTyped") (EVar "t")) (EVar "key")) (EVar "pos")) (EVar "seen")) (EVar "inner")) (EVar "arg")))
-(DFunDef false "applyOpt" ((PCon "VMulti" (PVar "vs")) (PVar "arg")) (EApp (EApp (EApp (EVar "collectPartials") (EListLit)) (EApp (EApp (EVar "filterByTag") (EVar "vs")) (EVar "arg"))) (EVar "arg")))
+(DFunDef false "applyOpt" ((PCon "VMulti" (PVar "vs")) (PVar "arg")) (ELet false PWild (EApp (EApp (EVar "checkArgTagDecidable") (EVar "vs")) (EVar "arg")) (EApp (EApp (EApp (EVar "collectPartials") (EListLit)) (EApp (EApp (EVar "filterByTag") (EVar "vs")) (EVar "arg"))) (EVar "arg"))))
 (DFunDef false "applyOpt" ((PVar "other") PWild) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-NOT-A-FUNCTION"))) (EBinOp "++" (ELit (LString "applied non-function: ")) (EApp (EVar "ppValue") (EVar "other")))))
 (DTypeSig false "applyTyped" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))))))))))
 (DFunDef false "applyTyped" ((PVar "t") (PVar "key") (PVar "pos") (PVar "seen") (PVar "inner") (PVar "arg")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EApp (EVar "reTag") (EVar "t")) (EVar "key")) (EVar "pos")) (EBinOp "+" (EVar "seen") (ELit (LInt 1))))) (EApp (EApp (EVar "applyOpt") (EVar "inner")) (EVar "arg"))))
@@ -6286,6 +6356,21 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "isDispatching" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "Bool")))
 (DFunDef false "isDispatching" ((PCon "VTypedImpl" PWild PWild (PVar "pos") (PVar "seen") PWild)) (EApp (EApp (EVar "containsInt") (EVar "seen")) (EVar "pos")))
 (DFunDef false "isDispatching" (PWild) (EVar "False"))
+(DTypeSig false "checkArgTagDecidable" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "Unit"))))
+(DFunDef false "checkArgTagDecidable" ((PVar "vs") (PVar "arg")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "anyList") (EVar "isDispatching")) (EVar "vs"))) (ELit LUnit) (EIf (EVar "otherwise") (EMatch (EApp (EVar "runtimeTypeTag") (EVar "arg")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "tag")) () (EApp (EApp (EVar "reportIfUndecidable") (EVar "tag")) (EApp (EApp (EVar "filterList") (EApp (EVar "undecidableCand") (EVar "tag"))) (EVar "vs"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "undecidableCand" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "Bool"))))
+(DFunDef false "undecidableCand" ((PVar "tag") (PVar "v")) (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isDispatching") (EVar "v")) (EApp (EApp (EVar "matchesTag") (EVar "tag")) (EVar "v"))) (EApp (EVar "not") (EApp (EVar "hasLaterSlot") (EVar "v")))))
+(DTypeSig false "hasLaterSlot" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "Bool")))
+(DFunDef false "hasLaterSlot" ((PCon "VTypedImpl" PWild PWild (PVar "pos") (PVar "seen") PWild)) (EApp (EApp (EVar "anyList") (ELam ((PVar "_s")) (EBinOp ">" (EVar "_s") (EVar "seen")))) (EVar "pos")))
+(DFunDef false "hasLaterSlot" (PWild) (EVar "False"))
+(DTypeSig false "reportIfUndecidable" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyCon "Unit"))))
+(DFunDef false "reportIfUndecidable" ((PVar "tag") (PVar "cands")) (EIf (EApp (EApp (EVar "twoDistinctKeys") (EVar "cands")) (EListLit)) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-AMBIGUOUS-DISPATCH"))) (EBinOp "++" (EBinOp "++" (ELit (LString "arg-tag dispatch on a receiver of type '")) (EApp (EMethodRef "display") (EVar "tag"))) (ELit (LString "' is undecidable: more than one impl is declared at that type head and the runtime tag cannot choose between them")))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "twoDistinctKeys" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "twoDistinctKeys" ((PList) PWild) (EVar "False"))
+(DFunDef false "twoDistinctKeys" ((PCons (PVar "v") (PVar "rest")) (PVar "seen")) (EIf (EApp (EApp (EVar "contains") (EApp (EVar "candKey") (EVar "v"))) (EVar "seen")) (EApp (EApp (EVar "twoDistinctKeys") (EVar "rest")) (EVar "seen")) (EIf (EApp (EVar "isEmptyL") (EVar "seen")) (EApp (EApp (EVar "twoDistinctKeys") (EVar "rest")) (EListLit (EApp (EVar "candKey") (EVar "v")))) (EIf (EVar "otherwise") (EVar "True") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "candKey" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "String")))
+(DFunDef false "candKey" ((PCon "VTypedImpl" PWild (PVar "k") PWild PWild PWild)) (EVar "k"))
+(DFunDef false "candKey" (PWild) (ELit (LString "")))
 (DTypeSig true "narrowMethod" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))
 (DFunDef false "narrowMethod" (PWild PWild (PCon "VMulti" (PVar "vs")) (PLit (LString ""))) (EApp (EVar "VMulti") (EVar "vs")))
 (DFunDef false "narrowMethod" ((PVar "env") (PVar "method") (PCon "VMulti" (PVar "vs")) (PVar "tag")) (EApp (EVar "stripResolved") (EApp (EApp (EApp (EApp (EVar "pickByTag") (EVar "env")) (EVar "method")) (EVar "vs")) (EVar "tag"))))
