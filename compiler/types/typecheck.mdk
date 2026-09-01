@@ -16902,10 +16902,6 @@ polarityAt : List Polarity -> Int -> Polarity
 polarityAt [] _ = PCo
 polarityAt (q::rest) i = if i <= 0 then q else polarityAt rest (i - 1)
 
-variantFieldTailNames : Variant -> List String
-variantFieldTailNames (Variant _ payload) =
-  flatMap effTailNames (payloadAstTypes payload)
-
 payloadAstTypes : ConPayload -> List Ty
 payloadAstTypes (ConPos tys) = tys
 payloadAstTypes (ConNamed fields _) = map fieldTyOf fields
@@ -27314,7 +27310,7 @@ inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (Metho
     ()
   else
     let _ = unify expected2 actualTy
-    checkImplEffVarRigidity subject dscope mty effMap2 False defLoc
+    checkImplEffVarRigidity subject dscope mty effMap2 False [] defLoc
   let addedObls = wWindow perRun.value.implObls oblN0
   let addedCallObls = callOblsWindow callN0
   let _ = checkDefaultMethodRigidity
@@ -29185,6 +29181,8 @@ inferImplMethod env allProg iface implTvMap headMonos (ImplMethod mname pats bod
     let launderMark = wMark perRun.value.absorptions
     let declArrows = allArrowEffs expected
     let actualArrows = allArrowEffs actual
+    -- D-3 (#1095): read BEFORE the unify below closes the declared-pure arrows.
+    let eagerIdx = eagerIndexOnlyVars gscope mty effMap actualArrows
     let _ = unify expected actual
     let launderEsc = launderEscapeFromLog declArrows actualArrows (wWindow perRun.value.absorptions launderMark)
     -- True iff the launder query flagged this body — the post-unify effect-atom half
@@ -29226,7 +29224,7 @@ inferImplMethod env allProg iface implTvMap headMonos (ImplMethod mname pats bod
     -- the subject in a diagnostic and is compared against `pred.iface.irName` in
     -- `checkSurvivorDispatchMonos`.  Widening it to an identity is a separate
     -- question from #1647's signature LOOKUP and is deliberately not this slice's.
-    let _ = checkImplMethodRigidity iface.irName mname mty headMonos extraMap effMap addedObls addedCallObls launderFlagged gscope launderLoc
+    let _ = checkImplMethodRigidity iface.irName mname mty headMonos extraMap effMap addedObls addedCallObls launderFlagged gscope eagerIdx launderLoc
     -- #518 (S0, silent wrongness): PLAN.md #11 Num defaulting NEVER RAN over an impl
     -- method body — this path is not a let-group, so nothing grounded its ambiguous
     -- Num vars.  A literal consumed entirely inside the body (`t _ = s [1, 2]`) left
@@ -29438,7 +29436,7 @@ effectLaunderMsg iface mname escaping = "Effect laundering in impl of '\{mname}'
 --                    preserving today's values exactly (impl: the real threaded flag;
 --                    default's own separate call: False) — 2a does NOT touch the
 --                    double-report.
-checkMethodRigidityCore : String -> String -> Ty -> List Mono -> List (String, Mono) -> List String -> List UObligation -> List (IfaceRef, List Mono, Option Loc) -> Option (List (String, Ref Effvar), Bool, List (String, List Kind)) -> Option Loc -> Unit
+checkMethodRigidityCore : String -> String -> Ty -> List Mono -> List (String, Mono) -> List String -> List UObligation -> List (IfaceRef, List Mono, Option Loc) -> Option (List (String, Ref Effvar), Bool, List (String, List Kind), List String) -> Option Loc -> Unit
 checkMethodRigidityCore subject iface mty headMonos extraMap ownTyparams addedObls addedCallObls effInside loc =
   let pinned = map fst (filterList (p => not (isUnboundTvar (snd p))) extraMap)
   let _ = if isNonEmptyL pinned then pushTypeErrorOnceAt "T-IMPL-TOO-SPECIFIC" loc (pinsTyvarMsg subject mty pinned)
@@ -29451,12 +29449,11 @@ checkMethodRigidityCore subject iface mty headMonos extraMap ownTyparams addedOb
   let _ = checkSurvivorObligations subject iface ownTyparams mty extraMap addedObls loc
   let _ = checkSurvivorCallObligations subject iface ownTyparams mty extraMap addedCallObls loc
   match effInside
-    Some (effMap, launderFlagged, gscope) =>
-      checkImplEffVarRigidity subject gscope mty effMap launderFlagged loc
+    Some (effMap, launderFlagged, gscope, eager) => checkImplEffVarRigidity subject gscope mty effMap launderFlagged eager loc
     None => ()
 
-checkImplMethodRigidity : String -> String -> Ty -> List Mono -> List (String, Mono) -> List (String, Ref Effvar) -> List UObligation -> List (IfaceRef, List Mono, Option Loc) -> Bool -> List (String, List Kind) -> Option Loc -> Unit
-checkImplMethodRigidity iface mname mty headMonos extraMap effMap addedObls addedCallObls launderFlagged gscope loc = checkMethodRigidityCore (implSubject iface mname) iface mty headMonos extraMap [] addedObls addedCallObls (Some (effMap, launderFlagged, gscope)) loc
+checkImplMethodRigidity : String -> String -> Ty -> List Mono -> List (String, Mono) -> List (String, Ref Effvar) -> List UObligation -> List (IfaceRef, List Mono, Option Loc) -> Bool -> List (String, List Kind) -> List String -> Option Loc -> Unit
+checkImplMethodRigidity iface mname mty headMonos extraMap effMap addedObls addedCallObls launderFlagged gscope eager loc = checkMethodRigidityCore (implSubject iface mname) iface mty headMonos extraMap [] addedObls addedCallObls (Some (effMap, launderFlagged, gscope, eager)) loc
 
 -- B1 (adversarial review): the GENERIC default-method path is the checking seam
 -- for a cross-module impl that inherits an interface default (fillImplDefaults
@@ -29636,14 +29633,14 @@ anyContainsI (x::xs) ys = containsI x ys || anyContainsI xs ys
 -- `Async e`.  Resolution is design-scoped (#817); until then this check
 -- preserves main's behavior for that channel exactly.  (The TYPE-var half has
 -- no such carve-out: a method type var may never alias an impl-head type var.)
-checkImplEffVarRigidity : String -> List (String, List Kind) -> Ty -> List (String, Ref Effvar) -> Bool -> Option Loc -> Unit
-checkImplEffVarRigidity subject scope mty effMap launderFlagged loc =
+checkImplEffVarRigidity : String -> List (String, List Kind) -> Ty -> List (String, Ref Effvar) -> Bool -> List String -> Option Loc -> Unit
+checkImplEffVarRigidity subject scope mty effMap launderFlagged eager loc =
   let occs = effVarOccAtoms mty ++ map (n => (n, [])) (rowArgNamesIn scope mty)
   let _ = if launderFlagged then
     ()
   else
     checkEffVarAtoms subject occs effMap loc
-  let _ = checkIndexOnlyEffVarsOpen subject scope mty effMap loc
+  let _ = checkIndexOnlyEffVarsOpen subject effMap loc eager
   -- ⚠️ DEFERRED-PERFORMANCE residual (round-2 break 4; tracked, NOT enforced):
   -- a method effect var forced CLOSED post-unify is in truth a PIN — an impl
   -- that applies its <e>-callback inside a value whose declared row is pure
@@ -29683,9 +29680,39 @@ checkImplEffVarRigidity subject scope mty effMap launderFlagged loc =
 -- charges (`map : (a -> <e> b) -> f a -> <e> f b`) may still close — the
 -- compiler's own `impl Mappable Parser` stores its callback under a pure
 -- arrow and does, which is #825's channel, out of scope here and pinned.
-checkIndexOnlyEffVarsOpen : String -> List (String, List Kind) -> Ty -> List (String, Ref Effvar) -> Option Loc -> Unit
-checkIndexOnlyEffVarsOpen subject scope mty effMap loc =
-  checkIndexOnlyGo subject effMap loc (indexOnlyEffVars scope mty)
+-- ⚠️ CLOSED ALONE IS NOT THE SIGNAL.  An index-only variable can also close
+-- through an INDEX unification with no effect performed: `deferAp mf ma =
+-- deferThen mf (g => deferMap g ma)` maps a PURE `g` (from `f e (a -> b)`,
+-- whose arrow is `<>`), so `deferMap g ma : f <> b` meets the result `f e b`
+-- and pins `e := <>` — honest, and sound (the value built carries `mf`'s real
+-- row).  What distinguishes the eager arm is that the body PERFORMS `e` on one
+-- of the method's own arrows.  So [eager] is computed at the impl seam from the
+-- body's arrow rows BEFORE they are unified with the declared (pure) arrows —
+-- the same pre-unify snapshot the #803 launder query takes — and only a var in
+-- that set is reported here.  (An interface DEFAULT body has no such snapshot
+-- available at its rigidity read and passes `[]`: a residual, not a rule.)
+checkIndexOnlyEffVarsOpen : String -> List (String, Ref Effvar) -> Option Loc -> List String -> Unit
+checkIndexOnlyEffVarsOpen subject effMap loc eager =
+  checkIndexOnlyGo subject effMap loc eager
+
+-- the index-only vars of [mty] that some body arrow row (pre-unify) carries as
+-- its tail — i.e. the body performs them at call time.
+eagerIndexOnlyVars : List (String, List Kind) -> Ty -> List (String, Ref Effvar) -> List EffRow -> List String
+eagerIndexOnlyVars scope mty effMap actualArrows =
+  let tails = flatMap rowTailId actualArrows
+  filterList (v => effVarCellIn v effMap tails) (indexOnlyEffVars scope mty)
+
+rowTailId : EffRow -> List Int
+rowTailId row = match effrowNorm row
+  EffRow _ (Some t) => [effvarId t]
+  EffRow _ None => []
+
+effVarCellIn : String -> List (String, Ref Effvar) -> List Int -> Bool
+effVarCellIn v effMap tails = match lookupAssoc v effMap
+  Some cell => match rowTailId (EffRow [] (Some cell))
+    i::_ => containsI i tails
+    [] => False
+  None => False
 
 checkIndexOnlyGo : String -> List (String, Ref Effvar) -> Option Loc -> List String -> Unit
 checkIndexOnlyGo _ _ _ [] = ()
