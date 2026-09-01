@@ -101,6 +101,14 @@ test/comment_register_census   derived comment-register census (#2281, S-comment
                                 reads the per-file breakdown before acting on it (see the
                                 script header).
 
+test/arch_census                derived architecture census (#2289, S-arch-census,
+                                `make arch-census`): reports the largest-files table plus
+                                per-directory file/line totals over compiler/*.mdk +
+                                stdlib/*.mdk. SOFT detector only — encodes no threshold and
+                                renders no verdict (that judgment is the `architecture`
+                                skill's job, not this script's). Always exits 0 and asserts
+                                nothing. See the script header.
+
 test/cli_conformance_census    derived CLI conformance census (#2354, S-conformance-table,
                                 `make cli-conformance-census`): re-derives
                                 docs/ops/CLI-CONFORMANCE.md's machine-checkable columns —
