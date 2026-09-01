@@ -1228,6 +1228,16 @@ coherenceWarnCode = "W-INCOMPARABLE-IMPLS"
 -- (3) render costs are bounded by the collision count rather than by the module
 -- graph.  This list is the decision, taken deliberately; it is not a place to
 -- park codes, and every addition owes the same three measurements.
+--
+-- ⚠️ #2400 / F4 (2026-09-01): THIS LIST IS NOW THE MULTI-MODULE ALLOWLIST ONLY.
+-- The SINGLE-FILE / single-module arms of `run` and `build` bypass it entirely via
+-- `allWarnTriples` (`filter isDiagWarn`), matching what `checkRoute`'s single-file
+-- arm already does with the identical `diags` value.  The split is deliberate, not
+-- an oversight: objections (2) and (3) above are properties of the module graph and
+-- do not reach a single-file program (measured — see `allWarnTriples`'s note), while
+-- on a graph the #1185 phantom is still ~99% of the channel.  So the multi-module
+-- side stays here, BLOCKED ON #1185, and collapsing the two arms back together is a
+-- decision that waits on #1185's constructor oracle becoming scrutinee-typed.
 runBuildWarnCodes : List String
 runBuildWarnCodes = [coherenceWarnCode, "W-PRELUDE-METHOD-SHADOW"]
 
@@ -1317,8 +1327,8 @@ emitHiddenDiagNote n =
   ePutStrLn
     "\{intToString n} further diagnostic(s) in imported modules; rerun with --json to see them"
 
--- The (path, src, coherence-warnings) triple of a SINGLE-file analysis.  The
--- single-module twin of what `locatedProjectDiags` returns, so both `run` arms hand
+-- The (path, src, warnings) triple of a SINGLE-file analysis.  The single-module
+-- twin of what `locatedProjectDiags` returns, so both `run` arms hand
 -- `finishRunEval` the SAME shape.
 --
 -- ⚠️ TRIPLES, NOT PRE-RENDERED STRINGS, and the reason is `--json`.  An earlier
@@ -1328,8 +1338,37 @@ emitHiddenDiagNote n =
 -- documented contract is a `Diag` JSON envelope, and `diff_compiler_eval_json`
 -- (which captures stderr ALONE) caught it.  Deferring the rendering to the emit
 -- site is what lets one carrier serve both.
-cohWarnTriples : String -> String -> List Diag -> List (String, String, List Diag)
-cohWarnTriples src file diags = match filter isCoherenceWarn diags
+--
+-- #2400 / F4.  This USED TO BE `cohWarnTriples`, filtering `isCoherenceWarn`; it now
+-- filters `isDiagWarn`, and it is the ONLY place `run`/`build` widen past
+-- `runBuildWarnCodes`.  (Its two call sites — `run`'s single-file arm and
+-- `typecheckGateRoute`'s single-module arm — were its ONLY callers, so nothing on
+-- the multi-module path lost a filter; those arms carry `projWarns` from
+-- `locatedProjectDiags` and still go through `cohWarnsOfTriple`/`isCoherenceWarn`.)
+-- Read `isCoherenceWarn`'s 🚨 block first: it records why widening the WHOLE channel
+-- to `isDiagWarn` was tried and reverted.  Every one of its three measured
+-- objections is a property of the MODULE GRAPH, and none of them reaches this door:
+--
+--  (2) SPEW.  The ~96%-false `Missing case: 'Text _'` phantom is #1185, whose
+--      constructor oracle is drawn from the whole graph rather than the scrutinee's
+--      own type — so it needs a graph to misfire.  Measured on this base: a
+--      same-file `data Token = Text String | Num Int` beside an exhaustive
+--      `List`-matching multi-clause function produced NO false warning, and neither
+--      did a two-module toy; the compiler's own entry file produces 36 of them, all
+--      phantom.  Single-file has no imported constructor universe to draw from.
+--  (3) PERF.  The render cost is "per file whose channel is non-empty"; here there
+--      is exactly ONE file, already read into `src` for the error path.
+--  (1) CRITERION.  `check`'s single-file arm (~:857) filters the SAME `diags` value
+--      with the SAME `filter isDiagWarn`, computed by the SAME `analyzeFrom` call on
+--      the SAME program.  So this cannot surface a warning `check` does not already
+--      show — it makes the three verbs agree on one input, which IS the criterion.
+--
+-- ⚠️ THE SPLIT IS DELIBERATE.  The multi-module arms (`locatedProjectDiags`'s
+-- callers, `isHiddenNonEntryWarn`, `hiddenWarnsOfTriple`) stay on
+-- `runBuildWarnCodes` and are BLOCKED ON #1185 — widening them ships the phantom.
+-- Do not "unify" the two arms until #1185's oracle is scrutinee-typed.
+allWarnTriples : String -> String -> List Diag -> List (String, String, List Diag)
+allWarnTriples src file diags = match filter isDiagWarn diags
   [] => []
   ws => [(file, src, ws)]
 
@@ -2208,7 +2247,11 @@ typecheckGateRoute allowInternal trusted _ _ rsrc csrc tsrc target [(mid, decls)
       -- so they are passed empty rather than computed — the `desugar (parse …)` pair
       -- this used to build was dead work on every `medaka build`/`run`.
       let mainWarns = mainShapeWarnings [] [] [] decls
-      let allWarns = cohWarnTriples tsrc target diags ++ nonEmptyTriples [(target, tsrc, mainWarns)]
+      -- #2400 / F4: SINGLE-MODULE only, so `allWarnTriples` carries the FULL
+      -- warning set here (it filters `isDiagWarn`, not `runBuildWarnCodes`).  See
+      -- its note for why the #1185 phantom cannot reach this arm; the multi-module
+      -- arm below keeps `locatedProjectDiags`' coherence-only allowlist.
+      let allWarns = allWarnTriples tsrc target diags ++ nonEmptyTriples [(target, tsrc, mainWarns)]
       TGOk (flatMap renderTripleWarnings allWarns)
     _ => TGErr (joinNl (map (ppDiagCliLines (srcLinesArr tsrc) target) errs))
 typecheckGateRoute allowInternal trusted pathMap roots rsrc csrc tsrc target mods =
@@ -2576,7 +2619,14 @@ runRunCmd argv =
                         let elaborated = elaborateModules rtD coreD modsD
                         let perfTCheck = now ()
                         let _ = emitPhase perfOn "check" (perfTCheck - perfTLoad) target
-                        finishRunEval target jsonMode elaborated mods (cohWarnTriples tsrc target diags) (runEvalPerf perfOn target perfT0 perfTCheck)
+                        -- #2400 / F4: SINGLE-FILE only, so `allWarnTriples` carries
+                        -- the FULL warning set here (it filters `isDiagWarn`, not
+                        -- `runBuildWarnCodes`; see its note).
+                        -- `finishRunEval` carries this triple down BOTH channels
+                        -- (human `renderTripleWarnings`, `--json` `pendingRunDiags`),
+                        -- so widening here widens both in lockstep.  The multi-module
+                        -- arm below keeps `projWarns` on the coherence allowlist.
+                        finishRunEval target jsonMode elaborated mods (allWarnTriples tsrc target diags) (runEvalPerf perfOn target perfT0 perfTCheck)
                       _ =>
                         runAbort (joinNl (map (ppDiagCliLines (srcLinesArr tsrc) target) errs))
                   _ =>
