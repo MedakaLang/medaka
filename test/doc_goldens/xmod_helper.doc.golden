@@ -1,0 +1,10 @@
+# xmod_helper
+
+## `double`
+
+```
+double : a -> a
+```
+
+Doubles its argument.
+

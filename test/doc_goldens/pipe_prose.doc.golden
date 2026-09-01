@@ -1,0 +1,43 @@
+# pipe_prose
+
+pipe_prose.mdk — S2-3: `| ` is a Haddock marker only where a marker can sit.
+
+The rule used to strip a leading `| ` from EVERY prose line, which silently
+deleted real content whose first character happens to be `|` — a BNF
+alternative, a Markdown table row, a wrapped `data` declaration inside a
+fenced block (that last one was live in `stdlib/json.mdk`'s header).
+
+## `parseExpr`
+
+```
+parseExpr : String -> Int
+```
+
+── Grammar ─────────────────────────────────────────────────────────────
+Parse an expression.
+
+  The marker above sits on the SECOND line of this doc block: the
+  decorative separator on the line before it is a separate comment that
+  `findDocForLine`'s proximity rule merged in.  It is still stripped.
+
+  The rows below are USER CONTENT and must survive verbatim:
+
+  ```
+  expr ::= term
+  ```
+
+| expr | term |
+|------|------|
+| a    | b    |
+
+## `otherEntry`
+
+```
+otherEntry : Int -> Int
+```
+
+A second marked block, to show the marker is consumed once per BLOCK and
+  not once per file.
+
+| still | a | table |
+

@@ -6,7 +6,7 @@
 greet : String -> String
 ```
 
-| A greeting function (non-colliding name).
+A greeting function (non-colliding name).
 
 ## `add`
 
@@ -14,7 +14,7 @@ greet : String -> String
 add : Int -> Int -> Int
 ```
 
-| Add two numbers — name collides with the Num interface method `add`.
+Add two numbers — name collides with the Num interface method `add`.
 
 ## `map`
 
@@ -22,5 +22,5 @@ add : Int -> Int -> Int
 map : (a -> b) -> List a -> List b
 ```
 
-| Map a function over a list — name collides with Foldable/Mappable `map`.
+Map a function over a list — name collides with Foldable/Mappable `map`.
 

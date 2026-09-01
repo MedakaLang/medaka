@@ -1,0 +1,6 @@
+import xmod_helper.{double}
+
+-- Doubles a sibling-imported value, then adds one. This function has no
+-- DTypeSig — its inferred signature depends on `double`'s inferred type
+-- resolving through the import (#213).
+export doublePlusOne x = double x + 1

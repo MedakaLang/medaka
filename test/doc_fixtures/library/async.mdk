@@ -1,0 +1,9 @@
+-- async.mdk — library-mode EXCLUSION probe. Not the real stdlib async.mdk;
+-- lives here to prove `excludedLibraryModule` keys on the derived module
+-- NAME ("async"), not the literal stdlib path — see S-doc-library-mode.
+
+-- | If this appears in a library-mode index or inventory, the exclusion
+--   rule regressed to a path-based check.
+export
+shouldNeverAppear : Int -> Int
+shouldNeverAppear x = x

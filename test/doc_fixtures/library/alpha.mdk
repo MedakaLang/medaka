@@ -1,0 +1,9 @@
+-- alpha.mdk — tiny library-mode fixture module #1.
+
+-- | Double an Int.
+--
+-- > double 21
+-- 42
+export
+double : Int -> Int
+double x = x * 2

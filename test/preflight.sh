@@ -1071,6 +1071,14 @@ while IFS= read -r f; do
     # and this is the gate that checks it.
     .github/workflows/nightly.yml) add 'diff_compiler_ci_shard_coverage'; add 'diff_compiler_tier_drift' ;;
     docs/guide/*.md)               add 'check_syntax_examples' ;;
+    # S-reference-lands (#2249): docs/stdlib/*.md (+ index.md/inventory.json) is a
+    # GENERATED tree (`./medaka doc --out docs/stdlib stdlib/*.mdk`), not prose —
+    # without this arm it falls through to the generic docs/*.md "nothing to run"
+    # path and a hand-edit of a committed page would be invisible locally.
+    # (stdlib/*.mdk itself already forces the FULL suite via the blast-radius arm
+    # above, `diff_compiler_snapshot*`'s stdlib/*.mdk case — [L-BLAST-RADIUS] — so
+    # this arm only needs to cover an edit to the generated tree itself.)
+    docs/stdlib/*)                 add 'diff_compiler_doc_stdlib_reference' ;;
     # Third ledger, same structural blind spot (#1608). Its rows pin a WRONG VALUE
     # rather than a divergence — see its own header — but the masking path is
     # identical: a loose file under test/ that someone edits ALONE when the gate reds.

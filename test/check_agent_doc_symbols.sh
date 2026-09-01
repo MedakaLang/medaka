@@ -174,7 +174,17 @@ command -v grep >/dev/null 2>&1 || { echo "FAIL: grep not found"; exit 2; }
 git ls-files 'AGENTS.md' '.claude/skills/*/SKILL.md' '.claude/workstreams/*.md' '.claude/ORCHESTRATING.md' \
                 '.claude/dossier/*.md' \
   > "$WORK/doc_files_broad.txt"
-git ls-files 'docs/spec/*.md' > "$WORK/doc_files_scoped.txt"
+# docs/stdlib/*.md (S-reference-lands, #2249) joins the SCOPED tier, not
+# BROAD: the generated per-module pages are dense with backticked type
+# signatures (`(a -> Bool) -> List a -> List a`) that are not symbol claims
+# at all — BROAD would count every one of those as a claim. SCOPED only
+# counts a backtick claim when the same line also cites a source path, which
+# is the shape a generated reference page actually has (a heading naming a
+# real stdlib symbol, immediately followed by its signature fence — the
+# fence itself has no source-path citation on the same line, so it is inert
+# under this tier; the surrounding prose that DOES cite `stdlib/X.mdk` is
+# what gets checked).
+git ls-files 'docs/spec/*.md' 'docs/stdlib/*.md' > "$WORK/doc_files_scoped.txt"
 
 # Basenames of the SAME three directories the resolution corpus (step 3)
 # reads from — used below so a bare `typecheck.mdk:11422` cite (no directory

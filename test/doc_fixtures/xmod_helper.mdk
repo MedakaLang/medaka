@@ -1,0 +1,2 @@
+-- Doubles its argument.
+export double x = x * 2
