@@ -27,11 +27,49 @@ instead of relying only on headless-logic tests
    then runs and prints its greeting.
 8. Share round-trip: `#share-btn` encodes the current buffer into a `#code=`
    URL hash; reloading at that URL restores the exact program in the editor.
+9. **(site mode only)** The rendered guide: the apex header links into it,
+   `/guide/00-introduction.html` and a chapter page load with real content, the
+   chapter's `← Playground` back link resolves, an `Open in Playground` link
+   puts that block's source verbatim into the editor, and three guide examples
+   that document their output with a `medaka-expect` fence actually print it
+   when Run in the browser.
 
 A screenshot is captured after each test into `screenshots/` (gitignored) for
 human eyeballing: `01_loaded.png`, `02_highlighting.png`, `03_run_output.png`,
 `04_squiggle.png`, `05_hover.png`, `06_completion.png`, `07_examples.png`,
-`08_share_roundtrip.png` (plus `ERROR.png` if the harness itself throws).
+`08_share_roundtrip.png`, and in site mode `09_guide_chapter.png`,
+`10_guide_open_in_playground.png`, `11_guide_sample_run.png` (plus `ERROR.png`
+if the harness itself throws).
+
+## Two modes: the dev tree vs. the deployed site
+
+```sh
+bash playground/e2e/run.sh          # serves playground/  — the DEV tree
+SITE=1 bash playground/e2e/run.sh   # serves playground/site/ — what actually deploys
+```
+
+The dev tree is `index.html` + `main.js` sitting beside `dist/`: a layout no
+user ever visits. `playground/site/` is what `build_site.sh` assembles and
+`deploy_cloudflare.sh` uploads — a different file set, and the only one that
+contains the rendered guide. Running only against the dev tree is how this
+harness stayed green through a `build_site.sh` that shipped a broken site, so
+prefer `SITE=1` when a change could touch the deploy.
+
+`SITE=1` requires `playground/site/` to exist and to contain `guide/`
+(`bash playground/build_site.sh`); a missing or guide-less `site/` is a loud
+failure, never a silent fall-back to the dev tree. It also sets
+`E2E_EXPECT_GUIDE=1`, which turns check 9 from skipped into mandatory — export
+that by hand to demand the guide of a live origin too:
+
+```sh
+E2E_EXPECT_GUIDE=1 node playground/e2e/tests/playground.spec.mjs https://medaka-lang.dev /tmp/shots
+```
+
+**This harness does not gate a PR.** It is nightly-only
+(`.github/workflows/nightly.yml`, `playground-e2e`; `test/preflight.sh` keeps
+`playground/e2e/run.sh` in `LOCAL_SKIP`). The PR-gating check for the guide is
+`test/diff_compiler_guide_render.sh`, which is static — it never opens a
+browser and never compiles an example.
 
 ## How to run
 

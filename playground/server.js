@@ -10,7 +10,14 @@
 //   bash playground/build_playground_wasm.sh
 //
 // Env:
-//   PORT  — listen port (default 8080)
+//   PORT        — listen port (default 8080)
+//   SERVE_ROOT  — directory to serve (default: this one, the dev tree).
+//                 Set it to playground/site to serve the DEPLOYED layout —
+//                 index.html + guide/ + dist/ as build_site.sh assembles them,
+//                 which is what actually reaches medaka-lang.dev. The e2e
+//                 harness uses this (SITE=1 bash playground/e2e/run.sh); it is
+//                 one server with one MIME map and one cache policy either way,
+//                 so a second serving implementation cannot drift from this one.
 
 'use strict';
 
@@ -20,7 +27,19 @@ const path = require('path');
 
 // ── Configuration ─────────────────────────────────────────────────────────��───
 const PORT       = parseInt(process.env.PORT || '8080', 10);
-const PLAYGROUND = __dirname;
+// Resolved so the traversal guard below compares canonical paths, and so a
+// relative SERVE_ROOT is read against the caller's cwd rather than silently
+// against this file's directory.
+const PLAYGROUND = process.env.SERVE_ROOT
+  ? path.resolve(process.env.SERVE_ROOT)
+  : __dirname;
+if (!fs.existsSync(path.join(PLAYGROUND, 'index.html'))) {
+  // Fail loud rather than serving 404s that read like a broken page: a missing
+  // site/ almost always means build_site.sh has not been run.
+  console.error('FAIL: no index.html in ' + PLAYGROUND);
+  if (process.env.SERVE_ROOT) console.error('  build it first: bash playground/build_site.sh');
+  process.exit(1);
+}
 
 // ── MIME map ──────────────────────────────────────────────────────────────────
 const MIME = {
@@ -81,6 +100,7 @@ server.listen(PORT, '127.0.0.1', () => {
   console.log('Medaka playground (static) at http://localhost:' + PORT);
   console.log('  Serving: ' + PLAYGROUND);
   console.log('  dist/playground.wasm must be pre-built: bash playground/build_playground_wasm.sh');
+  if (process.env.SERVE_ROOT) console.log('  (SERVE_ROOT set — this is the deployed site layout, not the dev tree)');
 });
 
 server.on('error', (e) => {

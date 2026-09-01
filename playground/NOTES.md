@@ -86,3 +86,68 @@ rewrite is entirely in the rendered output:
 `docs/guide/OUTLINE.md` is the guide's planning document (chapter plan, word
 budgets), not a chapter. `build_guide.sh` passes `--exclude OUTLINE.md`, so it is
 **not published**. Nothing in the guide links to it, so nothing breaks.
+
+## Does the guide's promise hold? (S-prove-the-promise, S-4)
+
+Every ▶ Open in Playground button is a promise: *click this and it runs*. Nothing
+checked it, so `playground/guide_wasm_differential.mjs` does. It compiles each
+runnable example with `playground/dist/playground.wasm` — the same WasmGC
+compiler blob the page loads — through `playground/compile.mjs`, the same seam
+`compiler-worker.js` imports, over the same `dist/*.mdk` module set `main.js`
+fetches; assembles the WAT and runs it under Node ≥24; and diffs stdout, stderr
+AND exit code against `medaka build`'s native binary.
+
+```sh
+bash playground/build_site.sh                     # needs site/guide + dist/
+node playground/guide_wasm_differential.mjs       # add --list, --only <id>, --json <path>
+```
+
+**Result at the time of writing: 56 matched / 3 wasm divergence / 6 rule gap, of
+65.** Of the 56, all 55 that carry a `medaka-expect` fence print exactly what the
+guide says they print.
+
+The three **wasm divergences** are compiler bugs, not guide bugs — each works
+natively and fails only on the browser's path. Minimal repros are in the
+S-prove-the-promise sprint report; none is fixed here.
+
+The six **rule gaps** are a different animal: on those, native and browser AGREE
+that the program cannot run, so the runnable partition should never have offered
+a ▶ button. `classifyRunnable` in `render_docs.mjs` asks two questions — is the
+fence label exactly `medaka`, and does the source call a stubbed capability — and
+it needs two more:
+
+1. **does the block define a top-level `main`?** Five blocks do not
+   (`02-expressions#7/#8/#14`, `04-data-modeling#1`, `09-modules-and-projects#12`).
+   They are fragments; native panics *"no 'main' binding found"* and the browser
+   answers `W-MAIN-MISSING`.
+2. **does it import a module the page SHIPS?** `10-tooling-and-workflow#5` does
+   `import test`, and `test` is deliberately excluded from `EXTRA_MODULES`
+   (native-only externs). The current rule only inspects stubbed *calls*, never
+   unshipped *imports*.
+
+The differential deliberately does **not** patch that rule — it reports the gap
+and recomputes the rule independently of `render_docs.mjs`, so a future
+render/rule drift shows up as `MISCLASSIFIED` rather than as silent agreement.
+
+⚠️ Not enrolled in `test/gates.toml`: it needs a built `playground.wasm`, and it
+is currently RED by design (the nine above are real). Enrolling a red gate needs
+a `known-red` issue and the `[W-SHARD-DERIVED]` cost-baseline dance — the
+orchestrator's call once the three compiler bugs are filed.
+
+## `SITE=1` — the e2e harness serves the deployed tree
+
+`playground/e2e` used to serve `playground/` (the dev tree) and never
+`playground/site/`, which is why it stayed green through a `build_site.sh` that
+shipped a broken site. `SITE=1 bash playground/e2e/run.sh` now serves
+`playground/site/` and makes the guide-route checks mandatory
+(`E2E_EXPECT_GUIDE`); a missing or guide-less `site/` fails loud rather than
+falling back. Both modes drive the SAME `playground/server.js` via its new
+`SERVE_ROOT` env var, so there is only one MIME map and one cache policy.
+
+Still nightly-only (`.github/workflows/nightly.yml`); the PR-gating guide check
+remains the static `test/diff_compiler_guide_render.sh`.
+
+⚠️ `GET /guide/` is a **404**: `build_site.sh` emits one page per chapter and no
+directory index, and `playground/index.html` links to
+`./guide/00-introduction.html` directly. Intentional as built, but a reader who
+types `/guide/` gets nothing — worth a decision rather than a discovery.

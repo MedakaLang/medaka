@@ -237,6 +237,117 @@ async function main() {
     check('editor content survives hash round-trip', srcAfterReload === pipelineSrcBeforeReload, srcAfterReload.slice(0, 60));
     await page.screenshot({ path: `${SCREENSHOT_DIR}/08_share_roundtrip.png` });
 
+    // ── Test 9/10: the rendered guide (site layout only) ─────────────────────
+    // These only exist in the DEPLOYED tree (playground/site/, assembled by
+    // build_site.sh); the dev tree has no guide/ at all. E2E_EXPECT_GUIDE — set
+    // by `SITE=1 bash playground/e2e/run.sh`, and settable by hand for a live
+    // origin — is what makes them mandatory rather than skipped, so "the guide
+    // is missing" can never read as "the guide tests passed".
+    if (!process.env.E2E_EXPECT_GUIDE) {
+      console.log('Skipping guide-route tests (E2E_EXPECT_GUIDE unset — dev tree has no guide/).');
+      console.log('  Run them with: SITE=1 bash playground/e2e/run.sh');
+    } else {
+      const base = BASE_URL.replace(/#.*$/, '').replace(/\/$/, '');
+      const GUIDE_ENTRY = '/guide/00-introduction.html';
+
+      // ── Test 9: the apex links into the guide, and the guide links back ────
+      console.log('Test: guide route');
+      await page.goto(base + '/', { waitUntil: 'domcontentloaded' });
+      const guideHref = await page.getAttribute('.links a[href*="guide/"]', 'href');
+      check('apex header links into the guide', !!guideHref, String(guideHref));
+
+      // The route the site actually publishes. A bare /guide/ is reported below
+      // but not asserted: build_site.sh emits one page per chapter and no
+      // directory index, so /guide/ is a 404 by construction, not by breakage.
+      const entryStatus = (await page.goto(base + GUIDE_ENTRY, { waitUntil: 'domcontentloaded' })).status();
+      check(`${GUIDE_ENTRY} loads (200)`, entryStatus === 200, `status ${entryStatus}`);
+      const bareGuide = await page.evaluate(async (u) => (await fetch(u)).status, base + '/guide/');
+      console.log(`  (informational: GET /guide/ -> ${bareGuide}; the site publishes per-chapter pages, no directory index)`);
+
+      // A chapter page: real rendered content, not an empty shell.
+      const chapterStatus = (await page.goto(base + '/guide/03-functions.html', { waitUntil: 'domcontentloaded' })).status();
+      check('a chapter page loads (200)', chapterStatus === 200, `status ${chapterStatus}`);
+      const chapterH1 = await page.$eval('h1', (el) => el.textContent.trim()).catch(() => '');
+      check('chapter page has a heading', chapterH1.length > 0, chapterH1);
+      const chapterBlocks = await page.$$eval('.codeblock.kind-medaka', (els) => els.length);
+      check(`chapter page renders medaka code blocks (got ${chapterBlocks})`, chapterBlocks > 0);
+      const backHref = await page.getAttribute('.site-nav-back', 'href');
+      const backStatus = await page.evaluate(async (h) => (await fetch(h)).status, backHref);
+      check(`guide "← Playground" back link resolves (${backHref} -> ${backStatus})`, backStatus === 200);
+      await page.screenshot({ path: `${SCREENSHOT_DIR}/09_guide_chapter.png` });
+
+      // "Open in Playground" must land the EXACT block source in the editor.
+      console.log('Test: guide "Open in Playground" round-trip');
+      const firstRun = await page.evaluate(() => {
+        const a = document.querySelector('a.pg-run');
+        if (!a) return null;
+        return { href: a.getAttribute('href'), source: a.closest('.codeblock').getAttribute('data-source') };
+      });
+      check('chapter page offers an "Open in Playground" link', !!firstRun);
+      if (firstRun) {
+        await page.click('a.pg-run');
+        await page.waitForSelector('.cm-editor .cm-content', { timeout: 15000 });
+        const inEditor = await page.evaluate(() => window.__mdkView.state.doc.toString());
+        check('the linked block\'s source arrives verbatim in the editor',
+          inEditor.trim() === firstRun.source.trim(), JSON.stringify(inEditor.slice(0, 80)));
+        await page.screenshot({ path: `${SCREENSHOT_DIR}/10_guide_open_in_playground.png` });
+      }
+
+      // ── Test 10: a real browser produces the guide's DOCUMENTED output ─────
+      // The tie between this browser and playground/guide_wasm_differential.mjs,
+      // which checks all 65 runnable examples out-of-browser: both are asked the
+      // same question — does the example print what the `medaka-expect` fence
+      // beside it says it prints — so agreeing here is evidence that the
+      // differential's wasm engine and this Chrome's agree.
+      console.log('Test: guide examples produce their documented output IN THE BROWSER');
+      await page.goto(base + '/guide/01-quick-start.html', { waitUntil: 'domcontentloaded' });
+      const samples = (await page.evaluate(() => {
+        const out = [];
+        const blocks = [...document.querySelectorAll('.codeblock')];
+        for (let i = 0; i + 1 < blocks.length; i++) {
+          const a = blocks[i].querySelector('a.pg-run');
+          if (!a) continue;
+          if (!blocks[i + 1].classList.contains('kind-output')) continue;
+          out.push({
+            href: a.getAttribute('href'),
+            source: blocks[i].getAttribute('data-source'),
+            expect: blocks[i + 1].getAttribute('data-source'),
+          });
+        }
+        return out;
+      })).slice(0, 3);
+      check(`found guide examples with a documented output (got ${samples.length})`, samples.length >= 2);
+      for (const [i, s] of samples.entries()) {
+        // about:blank first: consecutive samples differ only in the URL's HASH,
+        // and a same-document hash change does NOT reload — without this the
+        // editor keeps the previous sample and the console keeps its output,
+        // which reads as a pass for whichever sample happened to run first.
+        await page.goto('about:blank');
+        await page.goto(base + '/guide/' + s.href, { waitUntil: 'domcontentloaded' });
+        await page.waitForSelector('.cm-editor .cm-content', { timeout: 15000 });
+        // Belt and braces on the same hazard: assert we are about to run THIS
+        // sample's program, not a leftover one.
+        const loaded = await page.evaluate(() => window.__mdkView.state.doc.toString());
+        check(`guide sample ${i + 1} loads its own source into the editor`,
+          loaded.trim() === s.source.trim(), JSON.stringify(loaded.slice(0, 80)));
+        await page.waitForSelector('#run-btn:not([disabled])', { timeout: 20000 });
+        await page.click('#run-btn');
+        const want = s.expect.trim();
+        try {
+          await page.waitForFunction(
+            (w) => document.getElementById('console')?.textContent?.includes(w),
+            want.split('\n')[0],
+            { timeout: 40000 },
+          );
+        } catch { /* the check below records it */ }
+        const got = (await page.$eval('#console', (el) => el.textContent)).trim();
+        const allLines = want.split('\n').every((ln) => got.includes(ln));
+        check(`guide sample ${i + 1} prints its documented output in the browser`, allLines,
+          `want ${JSON.stringify(want)} / got ${JSON.stringify(got.slice(0, 200))}`);
+      }
+      await page.screenshot({ path: `${SCREENSHOT_DIR}/11_guide_sample_run.png` });
+    }
+
     if (pageErrors.length) {
       console.log('Uncaught page errors observed during run:', pageErrors);
     }
