@@ -62,8 +62,22 @@ pass() { echo "  PASS  $*"; }
 
 # fetch <url> <outfile> -> prints the HTTP status; never fails the script
 # (000 = the origin gave no answer at all, which is not the same as a 404).
+# curl's own exit status is captured explicitly rather than relying on `||`
+# after a command substitution that may already have written a partial
+# %{http_code} to stdout before failing — that partial output can otherwise
+# concatenate with a fallback "000", producing a garbled status (e.g.
+# "000000") that fails to equal the literal string "000" downstream, which
+# masks a genuine network failure as a content mismatch (exit 1) instead of
+# the correct "origin unreachable" (exit 2). Guard: accept the captured
+# status only if curl exited 0 AND it is purely digits; otherwise "000".
 fetch() {
-  curl -sS -L --max-time 30 -o "$2" -w '%{http_code}' "$1" 2>/dev/null || echo "000"
+  local status rc=0
+  status="$(curl -sS -L --max-time 30 -o "$2" -w '%{http_code}' "$1" 2>/dev/null)" || rc=$?
+  if [ "$rc" -eq 0 ] && [[ "$status" =~ ^[0-9]+$ ]]; then
+    echo "$status"
+  else
+    echo "000"
+  fi
 }
 
 echo "origin: $BASE"
@@ -102,6 +116,35 @@ else
   if grep -q 'chapter-index' "$idx"; then
     echo "        the served page is the SYNTHETIC chapter list, not index.md's own render"
   fi
+fi
+
+# A matching COUNT is not a matching SET — a stale served page can serve the
+# right number of links while pointing at the wrong mod#anchor targets (a
+# count-preserving rename). Derive the WANT set directly from
+# docs/stdlib/index.md's own `- [`name`](mod.md#anchor)` lines and diff it
+# against the served set as multisets (sorted comparison; duplicates in
+# index.md, e.g. two names sharing one anchor, are expected and must match
+# on both sides, not just be deduped away).
+grep -E '^- \[' "$DOCS/index.md" | grep -oE '\]\([^)]+\)' \
+  | sed -E 's/^\]\(//; s/\)$//; s/\.md#/.html#/' | sort > "$WORK/want_links.txt"
+sort "$WORK/links.txt" > "$WORK/got_links.txt"
+added=0; missing_links=0
+while IFS= read -r l; do
+  [ -n "$l" ] || continue
+  added=$((added + 1))
+  [ "$added" -le "$MAX_REPORT" ] && fail "served link not in docs/stdlib/index.md: $l"
+done < <(comm -13 "$WORK/want_links.txt" "$WORK/got_links.txt")
+while IFS= read -r l; do
+  [ -n "$l" ] || continue
+  missing_links=$((missing_links + 1))
+  [ "$missing_links" -le "$MAX_REPORT" ] && fail "docs/stdlib/index.md link not served: $l"
+done < <(comm -23 "$WORK/want_links.txt" "$WORK/got_links.txt")
+[ "$added" -gt "$MAX_REPORT" ] && echo "        ... and $((added - MAX_REPORT)) more added link(s) not listed"
+[ "$missing_links" -gt "$MAX_REPORT" ] && echo "        ... and $((missing_links - MAX_REPORT)) more missing link(s) not listed"
+if [ "$added" = 0 ] && [ "$missing_links" = 0 ]; then
+  pass "served link set == docs/stdlib/index.md link set ($want_entries entries)"
+else
+  echo "  ----  $added added, $missing_links missing (link-set mismatch, see above)"
 fi
 
 # -- 3. the published page set -----------------------------------------------
