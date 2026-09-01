@@ -62,7 +62,7 @@ emitter/probes over compiler source must pass `$STDLIB` as well as the compiler 
 
 `stdlib/runtime.mdk` (extern primitive catalog, read from disk at runtime) · `core.mdk` (**the implicit
 prelude** — `Eq`/`Ord`/`Debug`/`Num`/…) · plus `list`/`string`/`array`/`map`/`set`/`io`/`hash_map`/
-`hash_set`/`mut_array`/`json`/`byteparser`/`bytebuilder`.
+`hash_set`/`vector`/`json`/`byteparser`/`bytebuilder`.
 
 **Only `core.mdk` is auto-prelude** — import the rest by bare name (`import map`). `io.mdk` is the
 ergonomic layer over the `runtime.mdk` IO externs.

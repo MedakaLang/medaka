@@ -88,7 +88,7 @@ yields a mutable cell. Every other mutable structure is built by a **lowercase
 function application**, which stays expansive regardless of this change:
 
 - Arrays: `arrayMake`, `arrayMakeWith`, `arrayFromList`, `arrayCopy` (runtime.mdk:124-136).
-- `mut_array`, `hash_map`, `hash_set`: pure-Medaka over `Array` via lowercase functions.
+- `vector`, `hash_map`, `hash_set`: pure-Medaka over `Array` via lowercase functions.
 
 Therefore the only way to *syntactically* produce a polymorphic mutable cell from
 a constructor application is `Ref <value>`. If that generalized, it would be
@@ -239,7 +239,7 @@ Medaka:
   rejected today and **must remain rejected** — generalizing it would let
   `setRef` store an `Int` through `Ref (List Int)` and read it through
   `Ref (List String)`. The proposed predicate preserves this rejection.
-- All other mutable structures (`Array`, `mut_array`, `hash_map`, `hash_set`)
+- All other mutable structures (`Array`, `vector`, `hash_map`, `hash_set`)
   are produced by **lowercase function applications** (`arrayMake`, …), which the
   predicate never treats as non-expansive — they remain expansive exactly as
   today. Function applications in general stay expansive (the `_ => False`

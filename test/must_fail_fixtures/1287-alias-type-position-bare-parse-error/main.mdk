@@ -1,6 +1,6 @@
-import mut_array as MA
+import vector as MA
 
-sizeOf : MA.MutArray Int -> Int
+sizeOf : MA.Vector Int -> Int
 sizeOf m = 0
 
 main = println (sizeOf (MA.fromList [1, 2, 3]))

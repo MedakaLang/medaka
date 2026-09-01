@@ -83,7 +83,7 @@ prediction was touched.
 | #1070 umbrella: 7 of 15 `universe*` tables collide | DRAINED-BY **A-1 → A-2 → A-3** | A |
 | #1092 `methodIfaceParamsRef` bare-method-name collision | DRAINED-BY **A-1 → A-2**, with a key-precision refinement (G-4) | A |
 | #1095 result-index occurrence discharges coverage | **GAP (ownership)** — D-3 defers to #823, #823's record defers to soundness-not-an-issue | D-3 / #823; see G-3 |
-| #1098 `Ref`/`MutArray`/`HashMap` widening launder | DRAINED-BY **D-2** (#1119) | D |
+| #1098 `Ref`/`Vector`/`HashMap` widening launder | DRAINED-BY **D-2** (#1119) | D |
 | #1100 abstract-head row arg never collected | DRAINED-BY **D-3** (unconditional half) | D |
 | #1103 `unifyRowN` same-tail prefix discard | DRAINED-BY **D-1** (#1118) | D |
 | #1121 contravariant Type parameter widens | DRAINED-BY **D-2** (#1119) | D |
@@ -1319,17 +1319,17 @@ least one label; the non-empty case reaches the *correct* guarded subset check. 
 site accounts for mutation, and `Ref`'s type parameter carries no invariance requirement.
 
 **Why the plan removes the cause.** §2 I is explicit that write channels are **not** the
-rule: *"Write channels (`Ref`/`MutArray`/`HashMap`, #1098) are the co∧contra special case
+rule: *"Write channels (`Ref`/`Vector`/`HashMap`, #1098) are the co∧contra special case
 of this rule, not the rule"*. D-2 computes a per-parameter polarity from field occurrences
 and propagates it transitively; `Ref a`'s parameter occurs in both the read and the write
 signature, so it is mixed ⇒ invariant ⇒ no covariant row leniency at that argument. The
-three stdlib types built on `Ref` (`MutArray`, `HashSet`, `HashMap` — grep-confirmed in
+three stdlib types built on `Ref` (`Vector`, `HashSet`, `HashMap` — grep-confirmed in
 #1098's body) inherit it through the transitive propagation rather than through a
 hand-maintained table, which is what makes this a class fix.
 
 **Falsifiable prediction.** When **D-2** lands, `alias : Ref (Unit -> <Stdout> Unit); alias
 = box` (where `box : Ref (Unit -> <> Unit)`) must be rejected (today: exit 0, both engines
-print `REF-EFFECT-PERFORMED`), and the same must hold for the `MutArray` and `HashMap`
+print `REF-EFFECT-PERFORMED`), and the same must hold for the `Vector` and `HashMap`
 repros **without a per-type entry being added for either** — if closing them needs three
 more table rows, D-2 implemented the special case and not the rule. The `List` control and
 the bare-function control must both stay **accepted**.

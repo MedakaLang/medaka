@@ -487,7 +487,7 @@ for all 3 = the slot-indexed-env rework (supervised — see interim summary).
   (cons pieces O(1) each, freeze once) and routed `joinNl`/`joinSp` through it;
   `renderToks = joinNl (map tokenToString toks)`; `escFrom` collects a `List String`
   then `stringConcat`. This *is* the "amortized-append + single-freeze" pattern, but
-  functional (list) rather than a vendored mut_array StringBuilder — under the
+  functional (list) rather than a vendored vector StringBuilder — under the
   tree-walker the native `String.concat` freeze beats any Medaka-level per-char push,
   and a mutable buffer would need vendoring into compiler + threading mutation through
   pure recursion for no asymptotic gain. (Considered & rejected on those grounds.)

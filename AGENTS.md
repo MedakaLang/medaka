@@ -86,7 +86,7 @@ Support files:
 
 `stdlib/` modules: `runtime.mdk` (extern catalog), `core.mdk` (**only auto-prelude**),
 `list`/`string`/`array`, `map`/`set` (ordered trees), `hash_map`/`hash_set` (mutable hash),
-`mut_array` (growable vector), `json`, `byteparser`/`bytebuilder` (parser-combinator libraries
+`vector` (growable array), `json`, `byteparser`/`bytebuilder` (parser-combinator libraries
 for hand-rolled binary/text parsing and building — `parsec` is a separate, more general
 parser-combinator project under its own manifest, not part of `stdlib/`), `io.mdk` (ergonomic
 layer over `runtime.mdk` IO), `args` (one CLI argument parser — a verb's flag vocabulary is a
