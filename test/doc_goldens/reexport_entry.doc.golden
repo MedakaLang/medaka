@@ -1,0 +1,23 @@
+# reexport_entry
+
+reexport_entry.mdk — S-doc-surface-truth hole (a): a re-exporting
+`export import m.{...}` must produce one documented entry per member.
+Mirrors `stdlib/list.mdk:8` (`export import core.{Filterable, filter,
+filterMap}`), the tree's only real re-export.
+
+## `triple`
+
+```
+triple : re-export of reexport_helper.triple
+```
+
+Re-exported so a reader of this module finds it here.
+
+## `quadruple`
+
+```
+quadruple : Int -> Int
+```
+
+A local binding, so the page shows re-exports and own entries together.
+

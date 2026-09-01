@@ -220,6 +220,7 @@ import tools.doc.{
   renderIndex,
   libraryInventoryJson,
   excludedLibraryModule,
+  rebucketLibraryImpls,
 }
 import tools.lint.{
   allRules,
@@ -3149,7 +3150,12 @@ runDocLibraryTargets outDir targets = match dropExcludedTargets targets
             Err msg =>
               let _ = ePutStrLn msg
               exit 1
-            Ok mds => writeLibraryOutputs outDir mds
+            -- `rebucketLibraryImpls` runs at the `List ModuleDoc` level, after
+            -- every module is computed and before ANY output is written, so the
+            -- pages, the index and the inventory all read the same (already
+            -- re-filed) entry lists — an impl cannot be on one page and indexed
+            -- under another.
+            Ok mds => writeLibraryOutputs outDir (rebucketLibraryImpls mds)
 
 dropExcludedTargets : List String -> List String
 dropExcludedTargets [] = []

@@ -11,6 +11,8 @@ double : Int -> Int
 Double an Int.
 
 
+*(doctest — run by `medaka test`)*
+
 ```medaka
 > double 21
 42

@@ -1,0 +1,15 @@
+# bare_extern
+
+bare_extern.mdk — the NEGATIVE control for hole (c).  Same shape as
+`runtime.mdk` next to it, different module name, so the unexported extern
+must NOT be documented: `preludeOnlyModule` is a per-module exception, not a
+global "ignore `pub`" relaxation that would leak every module's privates.
+
+## `visiblePrimitive`
+
+```
+visiblePrimitive : Int -> Int
+```
+
+Exported, so it does.
+

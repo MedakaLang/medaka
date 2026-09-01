@@ -34,6 +34,10 @@ import frontend.ast.{
   IfaceMethod(..),
   Require(..),
   LetBind(..),
+  UsePath(..),
+  UseMember,
+  useMemberOrigin,
+  useMemberLocal,
 }
 import types.typecheck.{Scheme(..), ppScheme}
 import support.util.{
@@ -50,8 +54,20 @@ import json.{Json, JString, jObject, jArray}
 import string.{toLower}
 
 -- ── doc_entry ──────────────────────────────────────────────────────────────
--- de_name / de_sig (never empty) / de_doc (stripped doc prose, may be "").
-data DocEntry = DocEntry String String String
+-- de_name / de_sig (never empty) / de_doc (stripped doc prose, may be "") /
+-- de_kind (S-doc-surface-truth: the ATTRIBUTION facts about the declaration
+-- this entry came from, threaded at extraction time rather than re-derived by
+-- parsing `de_sig` back — the sig is a rendering, not a data structure).
+data DocEntry = DocEntry String String String DocKind
+
+-- What kind of declaration produced an entry, for the library-mode impl
+-- rebucketing pass (`rebucketLibraryImpls`).  `KTypeDecl` marks a `data`/
+-- `newtype` declaration — the evidence that this module OWNS that type name.
+-- `KImplOn` carries the head type-constructor name of the impl's FIRST type
+-- argument (`impl Debug (Array a)` -> `Some "Array"`), or `None` when the impl
+-- has no type arguments or its head is a type VARIABLE (`impl Debug a`), which
+-- has no owner by construction.  Everything else is `KPlain`.
+data DocKind = KPlain | KTypeDecl | KImplOn (Option String)
 
 -- ── small string helpers (builtins; mirror doctest's local wrappers) ────────
 dlen : String -> Int
@@ -245,46 +261,85 @@ ppIfaceMethod : IfaceMethod -> String
 ppIfaceMethod (IfaceMethod mname mty _ _) = "  \{mname} : \{ppTyDoc mty}"
 
 -- Compute (name, sig) for a public decl, or None to skip it.  Mirror render_sig.
-renderSig : Decl -> List (String, Scheme) -> Option (String, String)
-renderSig (DTypeSig True name ty) schemes =
+--
+-- The leading `Bool` is `docBareExterns` (S-doc-surface-truth hole (c)): when
+-- True, an UNEXPORTED `extern` is documented anyway.  It is set for exactly one
+-- module — `runtime` (`preludeOnlyModule` below) — because `export` status is
+-- MEANINGLESS there, verified first-hand rather than assumed: `stdlib/runtime.mdk`
+-- contains no `export` at all, and a selective import of one of its names is a
+-- hard error ("Module 'runtime' has no exported name 'stringLength'"), so nothing
+-- can reach those 138 externs by importing them — they are visible only because
+-- runtime.mdk IS the prelude.  Every OTHER module's `pub = False` decls are
+-- genuinely private helpers and stay undocumented, which is why this is a
+-- per-module exception (keyed on the derived module name, mirroring
+-- `excludedLibraryModule`) and not a global "ignore `pub`" relaxation.
+renderSig : Bool -> Decl -> List (String, Scheme) -> Option (String, String)
+renderSig _ (DTypeSig True name ty) schemes =
   Some (name, valueSig name schemes (Some ty))
-renderSig (DFunDef True name _ _) schemes =
+renderSig _ (DFunDef True name _ _) schemes =
   Some (name, valueSig name schemes None)
-renderSig (DExtern True name ty) schemes =
-  Some (name, valueSig name schemes (Some ty))
-renderSig (DLetGroup True bindings) schemes = match bindings
+renderSig bare (DExtern pub name ty) schemes
+  | pub || bare = Some (name, valueSig name schemes (Some ty))
+renderSig _ (DLetGroup True bindings) schemes = match bindings
   (LetBind name _)::_ => Some (name, valueSig name schemes None)
   [] => None
-renderSig (DData { dataVis = vis, dataName = name, dataParams = params, dataCtors = variants }) _
+renderSig _ (DData { dataVis = vis, dataName = name, dataParams = params, dataCtors = variants }) _
   | not (dataVisPrivate vis) =
     let head = joinWith " " (name::params)
     let body = match variants
       [] => ""
       _ => "\n  = " ++ joinWith "\n  | " (map ppDataVariant variants)
     Some (name, "data \{head}\{body}")
-renderSig (DInterface { pub = True, name, typarams, methods }) _ =
+renderSig _ (DInterface { pub = True, name, typarams, methods }) _ =
   let head = joinWith " " (name::typarams)
   let ms = map ppIfaceMethod methods
   let body = match ms
     [] => ""
     _ => "\n" ++ joinWith "\n" ms
   Some (name, "interface \{head}\{body}")
-renderSig (DTypeAlias { tyAliasPub = True, tyAliasName = name, tyAliasParams = params, tyAliasRhs = ty }) _ =
+renderSig _ (DTypeAlias { tyAliasPub = True, tyAliasName = name, tyAliasParams = params, tyAliasRhs = ty }) _ =
   let head = joinWith " " (name::params)
   Some (name, "type \{head} = \{ppTyDoc ty}")
-renderSig (DNewtype { newtypePub = True, newtypeName = name, newtypeParams = params, newtypeCtor = ctor, newtypeFieldTy = ty }) _ =
+renderSig _ (DNewtype { newtypePub = True, newtypeName = name, newtypeParams = params, newtypeCtor = ctor, newtypeFieldTy = ty }) _ =
   let head = joinWith " " (name::params)
   Some (name, "newtype \{head} = \{ctor} \{ppTyP 2 ty}")
-renderSig (DImpl { pub = True, iface, tys, reqs }) _ =
+renderSig _ (DImpl { pub = True, iface, tys, reqs }) _ =
   let args = match tys
     [] => ""
     _ => " " ++ joinWith " " (map (ppTyP 2) tys)
   Some (iface ++ args, "impl \{iface}\{args}\{ppRequiresDoc reqs}")
-renderSig _ _ = None
+renderSig _ _ _ = None
 
 dataVisPrivate : DataVis -> Bool
 dataVisPrivate VisPrivate = True
 dataVisPrivate _ = False
+
+-- The one module whose unexported `extern`s are documented anyway (hole (c)).
+-- Keyed on the DERIVED module name (post `baseOf`/`chopExt`), exactly like
+-- `excludedLibraryModule` — a fixture module named `runtime` gets the same
+-- treatment, so the rule is testable without touching `stdlib/runtime.mdk`.
+export
+preludeOnlyModule : String -> Bool
+preludeOnlyModule moduleName = moduleName == "runtime"
+
+-- ── attribution: what kind of declaration is this? (hole (b)) ───────────────
+
+declKind : Decl -> DocKind
+declKind (DImpl { tys = tys }) = KImplOn (headTyName tys)
+declKind (DData { dataName = _ }) = KTypeDecl
+declKind (DNewtype { newtypeName = _ }) = KTypeDecl
+declKind _ = KPlain
+
+headTyName : List Ty -> Option String
+headTyName [] = None
+headTyName (t::_) = tyHeadName t
+
+-- The head type CONSTRUCTOR of a type application spine: `Array a` -> `Array`,
+-- `Array` -> `Array`, `a` -> None (a type variable owns nothing).
+tyHeadName : Ty -> Option String
+tyHeadName (TyCon { tyConName = s }) = Some s
+tyHeadName (TyApp f _) = tyHeadName f
+tyHeadName _ = None
 
 -- ── entry extraction (mirror lib/doc.ml) ────────────────────────────────────
 
@@ -299,38 +354,87 @@ letgroupEntriesGo : List LetBind -> List (String, Scheme) -> String -> List (Str
 letgroupEntriesGo [] _ _ = []
 letgroupEntriesGo ((LetBind name _)::rest) schemes doc =
   let sigStr = valueSig name schemes None
-  (name, DocEntry name sigStr doc) :: letgroupEntriesGo rest schemes doc
+  (name, DocEntry name sigStr doc KPlain) :: letgroupEntriesGo rest schemes doc
+
+-- ── re-exports (hole (a)) ───────────────────────────────────────────────────
+-- `export import core.{Filterable, filter, filterMap}` (`stdlib/list.mdk:8`,
+-- the tree's only re-export today) parses to `DUse True (UseGroup path members)`
+-- and rendered NOTHING before this slice: `renderSig` had no `DUse` arm, so
+-- `list`'s page silently omitted three names its users reach through it.
+--
+-- Expansion is one entry per member (like `allLetgroupEntries`, not `renderSig`,
+-- which is one-entry-per-decl by construction), under the member's LOCAL name
+-- (`useMemberLocal` — its alias if written `a as b`).
+--
+-- THE RULE, decided after measuring rather than assuming (packet §3(a) asked for
+-- exactly this check): `docSchemesFor` returns `entryOwnSchemes`, the importing
+-- module's OWN top-level schemes, and a re-export is not a top-level binding
+-- there — so a re-exported name usually has NO scheme to render.  We still try
+-- the lookup first (it costs nothing and is right if a future resolve change
+-- starts registering re-exports locally); when it misses, the entry documents
+-- the re-export BY NAME AND ORIGIN — `filter : re-export of core.filter` — which
+-- is a true statement about the module's surface, not an inferred signature we
+-- cannot justify.  A reader follows the origin module's own page for the type.
+reexportEntries : Int -> List (String, Scheme) -> List (Int, String) -> (List String, List UseMember) -> List (String, DocEntry)
+reexportEntries line schemes tbl (path, members) =
+  let doc = findDocForLine tbl line
+  reexportEntriesGo (joinWith "." path) members schemes doc
+
+reexportEntriesGo : String -> List UseMember -> List (String, Scheme) -> String -> List (String, DocEntry)
+reexportEntriesGo _ [] _ _ = []
+reexportEntriesGo originMod (m::rest) schemes doc =
+  let local = useMemberLocal m
+  let origin = useMemberOrigin m
+  let sigStr = match lookupScheme local schemes
+    Some s => "\{local} : \{ppScheme s}"
+    None => "\{local} : re-export of \{originMod}.\{origin}"
+  (local, DocEntry local sigStr doc KPlain) :: reexportEntriesGo originMod rest schemes doc
+
+-- Match a re-exporting `export import m.{a, b}`, returning (path, members).
+-- Only `UseGroup` re-exports name members; `export import m.*` / `m as A` name
+-- none individually and are deliberately left alone (there are none in the tree).
+useGroupOf : Decl -> Option (List String, List UseMember)
+useGroupOf (DUse True (UseGroup path members) _) = Some (path, members)
+useGroupOf _ = None
 
 -- The driver: zip decls with their positions, fold collecting entries, dedup by
 -- name (first wins), emit in source order.  Mirror extract_entries.
-extractEntries : List Decl -> List DeclPos -> List (String, Scheme) -> List Comment -> List DocEntry
-extractEntries decls positions schemes comments =
+extractEntries : Bool -> List Decl -> List DeclPos -> List (String, Scheme) -> List Comment -> List DocEntry
+extractEntries bare decls positions schemes comments =
   let tbl = buildCommentTbl comments
   let pairs = zipDoc decls positions
-  let result = extractFold pairs schemes tbl [] []
+  let result = extractFold bare pairs schemes tbl [] []
   reverseL (fst result)
 
 -- Fold over (decl, pos) pairs.  State: (revEntries, seenNames).  Returns it.
-extractFold : List (Decl, DeclPos) -> List (String, Scheme) -> List (Int, String) -> List DocEntry -> List String -> (List DocEntry, List String)
-extractFold [] _ _ revEntries seen = (revEntries, seen)
-extractFold ((decl, dp)::rest) schemes tbl revEntries seen =
+extractFold : Bool -> List (Decl, DeclPos) -> List (String, Scheme) -> List (Int, String) -> List DocEntry -> List String -> (List DocEntry, List String)
+extractFold _ [] _ _ revEntries seen = (revEntries, seen)
+extractFold bare ((decl, dp)::rest) schemes tbl revEntries seen =
   let line = declPosLine dp
-  match letgroupOf decl
-    Some (isPub, bindings) =>
-      let extras = allLetgroupEntries isPub bindings line schemes tbl
+  match multiEntriesFor decl line schemes tbl
+    Some extras =>
       let acc = foldExtras extras revEntries seen
-      extractFold rest schemes tbl (fst acc) (snd acc)
-    None => match renderSig decl schemes
-      None => extractFold rest schemes tbl revEntries seen
-      Some (name, sigStr) => if memberStr name seen then extractFold rest schemes tbl revEntries seen
+      extractFold bare rest schemes tbl (fst acc) (snd acc)
+    None => match renderSig bare decl schemes
+      None => extractFold bare rest schemes tbl revEntries seen
+      Some (name, sigStr) => if memberStr name seen then extractFold bare rest schemes tbl revEntries seen
       else
         let doc = findDocForLine tbl line
         extractFold
+          bare
           rest
           schemes
           tbl
-          (DocEntry name sigStr doc :: revEntries)
+          (DocEntry name sigStr doc (declKind decl) :: revEntries)
           (name::seen)
+
+-- The two decl shapes that expand to MANY entries (a `let` group, a re-exporting
+-- `export import`); `None` means "one entry at most, ask `renderSig`".
+multiEntriesFor : Decl -> Int -> List (String, Scheme) -> List (Int, String) -> Option (List (String, DocEntry))
+multiEntriesFor decl line schemes tbl = match letgroupOf decl
+  Some (isPub, bindings) =>
+    Some (allLetgroupEntries isPub bindings line schemes tbl)
+  None => map (reexportEntries line schemes tbl) (useGroupOf decl)
 
 -- Add each letgroup extra if its name is unseen (first wins).
 foldExtras : List (String, DocEntry) -> List DocEntry -> List String -> (List DocEntry, List String)
@@ -427,9 +531,19 @@ docSegGo (line::rest) ModeExample acc segs =
 docSegments : List String -> List DocSegment
 docSegments lines = docSegGo lines ModeProse [] []
 
+-- An `ExampleSeg` is not decorative prose: `medaka test` EXTRACTS and RUNS it
+-- (`compiler/tools/doctest.mdk`), so its expected-output lines are verified on
+-- every test run.  A reader cannot tell that from a bare fenced block, so
+-- S-doc-surface-truth (hole (d)) labels it.  THE RULE: the marker sits on its
+-- own line immediately above the fence, italic so it reads as an annotation
+-- rather than as part of the example, and it is emitted for EVERY `ExampleSeg`
+-- — the segmenter's `> ` rule IS doctest's own extraction rule, so an example
+-- the doc renders fenced is by construction one `medaka test` runs.
 renderDocSegment : DocSegment -> String
 renderDocSegment (ProseSeg ls) = joinWith "\n" ls
-renderDocSegment (ExampleSeg ls) = "```medaka\n" ++ joinWith "\n" ls ++ "\n```"
+renderDocSegment (ExampleSeg ls) = "*(doctest — run by `medaka test`)*\n\n```medaka\n"
+  ++ joinWith "\n" ls
+  ++ "\n```"
 
 -- Render extracted doc prose (an entry's own doc, or a module's header
 -- comment) as valid Markdown: marker stripped, doctest examples fenced.
@@ -466,7 +580,7 @@ renderMarkdown moduleName header entries =
   stringConcat (titleBlock :: headerBlock :: map renderEntry entries)
 
 renderEntry : DocEntry -> String
-renderEntry (DocEntry name sig doc) =
+renderEntry (DocEntry name sig doc _) =
   let header = "## `" ++ name ++ "`\n\n"
   let sigBlock = "```\n" ++ sig ++ "\n```\n"
   let rendered = renderDocProse doc
@@ -520,7 +634,7 @@ computeModuleDoc runtimeSrc coreSrc src filename roots =
   let moduleName = chopExt (baseOf filename)
   let tbl = buildCommentTbl comments
   let header = moduleHeaderFrom tbl
-  let entries = extractEntries rawDecls positions schemes comments
+  let entries = extractEntries (preludeOnlyModule moduleName) rawDecls positions schemes comments
   ModuleDoc moduleName (dedupHeader header entries) entries
 
 -- When the header comment sits directly above the FIRST decl with no gap
@@ -539,7 +653,7 @@ dedupHeader header entries =
 
 firstEntryDoc : List DocEntry -> String
 firstEntryDoc [] = ""
-firstEntryDoc ((DocEntry _ _ doc)::_) = doc
+firstEntryDoc ((DocEntry _ _ doc _)::_) = doc
 
 export
 renderModulePage : ModuleDoc -> String
@@ -558,6 +672,114 @@ renderModulePage (ModuleDoc name header entries) =
 export
 excludedLibraryModule : String -> Bool
 excludedLibraryModule moduleName = moduleName == "async"
+
+-- ── impl rebucketing: file an impl under the TYPE's page (hole (b)) ─────────
+--
+-- `impl Debug (Array a)` / `Eq (Array a)` / `Display (Array a)` are declared in
+-- `stdlib/core.mdk` (which does not even import `array`) and, before this pass,
+-- rendered on `core`'s page — where nobody looking up "how do I print an Array"
+-- would find them.  This is a LIBRARY-MODE-ONLY correction by construction:
+-- single-file `medaka doc core.mdk` has no way to know `array` exists as a
+-- sibling page, so `runDoc` never calls this.
+--
+-- THE RULE (decided here, and it is a rule, not a lookup — the packet's
+-- suggested mechanism does not reach its own headline example, see MEASUREMENT
+-- below).  The OWNER of a head type-constructor name `T` within a library set is:
+--
+--   1. the module whose own public `data`/`newtype` declares `T` (a `KTypeDecl`
+--      entry named `T`).  Declaration is the strongest possible evidence and
+--      always wins;
+--   2. failing that, the module whose page NAME equals `toLower T`, when the
+--      library set contains such a module.  This is the OPAQUE-BUILTIN clause:
+--      a type the compiler builds in has no declaration to find, but the module
+--      that exists to operate on it is named for it;
+--   3. otherwise: no owner.
+--
+-- An impl entry moves to its head type's owner iff that owner is a DIFFERENT
+-- module than the one that wrote the `impl`.  An impl whose head type has no
+-- owner — a bare type variable (`impl Debug a`), or a builtin with no module
+-- named for it (`Int`, `Char`, `Bool`, `Ref`) — STAYS where it was declared.
+-- An impl with no type arguments at all stays too.
+--
+-- MEASUREMENT that forced clause 2 (packet §3(b) prescribed clause 1 alone, and
+-- separately required `array.md` to carry `Debug (Array a)`; the two cannot both
+-- hold, so the rule had to be decided rather than transcribed):
+--
+--   $ grep -rn 'data Array\|newtype Array' stdlib/ compiler/   # -> no output
+--   $ sed -n 14p stdlib/array.mdk
+--        2. Opaque builtin vs. typeclass member.  `Array a` cannot be pattern-
+--
+-- `Array` is declared NOWHERE, so clause 1 alone attributes it to nothing and
+-- the impls would have stayed on `core`.  Clause 2 is what makes the array page
+-- true.  Note it leaves the packet's own stated exception intact: `Int` has no
+-- `int` module in the set, so `impl Debug Int` still stays in `core`.
+--
+-- Clause ordering matters and is not cosmetic: `Option`/`Result` ARE declared
+-- (in `core.mdk`) while `option.mdk`/`result.mdk` also exist, so clause 1 keeps
+-- their impls on `core` beside their `data` declaration rather than scattering
+-- them to a module that merely operates on them.
+export
+rebucketLibraryImpls : List ModuleDoc -> List ModuleDoc
+rebucketLibraryImpls mds =
+  let owners = concatMapDoc typeOwnersOf mds
+  let modNames = map mdName mds
+  let moved = concatMapDoc (movedFrom owners modNames) mds
+  map (rebucketOne owners modNames moved) mds
+
+-- Clause 1's evidence: every (typeName, declaringModule) pair in the library.
+typeOwnersOf : ModuleDoc -> List (String, String)
+typeOwnersOf (ModuleDoc n _ es) = concatMapDoc (typeOwnerEntry n) es
+
+typeOwnerEntry : String -> DocEntry -> List (String, String)
+typeOwnerEntry n (DocEntry name _ _ KTypeDecl) = [(name, n)]
+typeOwnerEntry _ _ = []
+
+ownerOfType : List (String, String) -> List String -> String -> Option String
+ownerOfType owners modNames tyName = match lookupStrDoc tyName owners
+  Some m => Some m
+  None =>
+    let lowered = toLower tyName
+    if memberStr lowered modNames then Some lowered else None
+
+lookupStrDoc : String -> List (String, String) -> Option String
+lookupStrDoc _ [] = None
+lookupStrDoc k ((n, v)::rest) = if k == n then Some v else lookupStrDoc k rest
+
+-- `Some target` iff this entry is an impl that belongs on ANOTHER module's page.
+entryTarget : List (String, String) -> List String -> String -> DocEntry -> Option String
+entryTarget owners modNames here (DocEntry _ _ _ (KImplOn (Some hd))) = match ownerOfType owners modNames hd
+  Some m => if m == here then None else Some m
+  None => None
+entryTarget _ _ _ _ = None
+
+movedFrom : List (String, String) -> List String -> ModuleDoc -> List (String, DocEntry)
+movedFrom owners modNames (ModuleDoc here _ es) =
+  concatMapDoc (movedEntry owners modNames here) es
+
+movedEntry : List (String, String) -> List String -> String -> DocEntry -> List (String, DocEntry)
+movedEntry owners modNames here e = match entryTarget owners modNames here e
+  Some m => [(m, e)]
+  None => []
+
+-- Keep everything that did not move out, then append everything that moved in
+-- (source order preserved within each group; incoming impls land after the
+-- module's own entries, which is where a reader expects "instances" to sit).
+rebucketOne : List (String, String) -> List String -> List (String, DocEntry) -> ModuleDoc -> ModuleDoc
+rebucketOne owners modNames moved (ModuleDoc here header es) =
+  let kept = filterDoc (e => isNoneDoc (entryTarget owners modNames here e)) es
+  let incoming = concatMapDoc (takeForModule here) moved
+  ModuleDoc here header (kept ++ incoming)
+
+takeForModule : String -> (String, DocEntry) -> List DocEntry
+takeForModule here (m, e) = if m == here then [e] else []
+
+filterDoc : (a -> Bool) -> List a -> List a
+filterDoc _ [] = []
+filterDoc p (x::xs) = if p x then x :: filterDoc p xs else filterDoc p xs
+
+isNoneDoc : Option String -> Bool
+isNoneDoc None = True
+isNoneDoc _ = False
 
 -- GitHub's auto-anchor slug for a `## \`name\`` header: lowercase, run of
 -- non `[a-z0-9_-]` chars collapses to one `-`, leading/trailing `-` trimmed.
@@ -626,7 +848,7 @@ inventoryEntriesFor (ModuleDoc moduleName _ entries) =
   map (inventoryEntryJson moduleName) entries
 
 inventoryEntryJson : String -> DocEntry -> Json
-inventoryEntryJson moduleName (DocEntry name sig _) = jObject
+inventoryEntryJson moduleName (DocEntry name sig _ _) = jObject
   [
     ("module", JString moduleName),
     ("name", JString name),
@@ -648,7 +870,7 @@ renderIndexModule (ModuleDoc name _ entries) =
   "\{head}\{links}\n\n"
 
 renderIndexLink : String -> DocEntry -> String
-renderIndexLink moduleName (DocEntry name _ _) =
+renderIndexLink moduleName (DocEntry name _ _ _) =
   "- [`\{name}`](\{moduleName}.md#\{slugifyAnchor name})"
 
 listLenDoc : List a -> Int

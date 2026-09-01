@@ -29,9 +29,15 @@ MEDAKA="${MEDAKA:-$ROOT/medaka}"
 FIXDIR="$ROOT/test/doc_fixtures"
 GOLDENDIR="$ROOT/test/doc_goldens"
 # S-doc-library-mode: `medaka doc --out DIR <files...>` arm. Small fixture
-# library (3 modules, one `async`-named probe to prove the exclusion rule is
-# name-keyed, not path-keyed) under its own subdir/golden dir so the
-# single-file loop above (`$FIXDIR/*.mdk`, non-recursive) never touches it.
+# library (an `async`-named probe to prove the exclusion rule is name-keyed, not
+# path-keyed; plus S-doc-surface-truth's `gamma`/`array` pair for the impl
+# rebucketing rule) under its own subdir/golden dir so the single-file loop
+# above (`$FIXDIR/*.mdk`, non-recursive) never touches it.
+#
+# S-doc-surface-truth also adds four single-file fixtures to $FIXDIR, picked up
+# by the glob above with no edit here: reexport_entry/reexport_helper (hole (a),
+# `export import m.{...}`), runtime.mdk (hole (c), the prelude-only extern
+# exception, name-keyed) and bare_extern.mdk (its negative control).
 LIBFIXDIR="$FIXDIR/library"
 LIBGOLDENDIR="$GOLDENDIR/library"
 LIBTMPDIR="$(mktemp -d)"
@@ -88,6 +94,30 @@ if [ -d "$LIBGOLDENDIR" ]; then
   else
     pass=$((pass + 1))
     printf 'ok   library-mode async-exclusion\n'
+  fi
+  # S-doc-surface-truth hole (b): `rebucketLibraryImpls` files an impl under the
+  # page of the type it is ON, not the module that declared it. gamma.mdk writes
+  # `impl Sizeish (Array Int)`; `Array` is an opaque builtin with no declaring
+  # module, so the page named for it owns the entry. Asserted DIRECTLY (not only
+  # via the golden tree) so a rebucketing regression cannot be blessed away.
+  # Matched on the ENTRY HEADER line, not anywhere in the page — both fixtures'
+  # own header prose names the impl, so a bare substring grep is satisfied by
+  # documentation about the rule rather than by the rule holding.
+  if grep -q '^## .Sizeish (Array Int).$' "$LIBTMPDIR/array.md" 2>/dev/null \
+    && ! grep -q '^## .Sizeish (Array Int).$' "$LIBTMPDIR/gamma.md" 2>/dev/null; then
+    pass=$((pass + 1))
+    printf 'ok   library-mode impl rebucketing (Sizeish (Array Int) -> array.md)\n'
+  else
+    fail=$((fail + 1))
+    printf 'FAIL library-mode impl rebucketing (Sizeish (Array Int) is not filed on array.md)\n'
+  fi
+  # ... and the declaring module still keeps an impl on a type it DECLARES.
+  if grep -q '^## .Sizeish Widget.$' "$LIBTMPDIR/gamma.md" 2>/dev/null; then
+    pass=$((pass + 1))
+    printf 'ok   library-mode impl rebucketing (Sizeish Widget stays on gamma.md)\n'
+  else
+    fail=$((fail + 1))
+    printf 'FAIL library-mode impl rebucketing (Sizeish Widget left gamma.md)\n'
   fi
   if diff -rq "$LIBGOLDENDIR" "$LIBTMPDIR" >/dev/null 2>&1; then
     pass=$((pass + 1))

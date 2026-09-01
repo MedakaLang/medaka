@@ -1,0 +1,12 @@
+# reexport_helper
+
+reexport_helper.mdk — the ORIGIN module for the re-export fixture below.
+
+## `triple`
+
+```
+triple : Int -> Int
+```
+
+Triple an Int.
+
