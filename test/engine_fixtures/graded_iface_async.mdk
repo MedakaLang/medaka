@@ -16,11 +16,11 @@ interface GMappable f where
   gmap : (a -> <e> b) -> f e a -> f e b
 
 impl GThenable Async where
-  gandThen (Done a) k = k a
+  gandThen (Done a) k = Suspend (u => k a)
   gandThen (Suspend th) k = Suspend (u => gandThen (th u) k)
 
 impl GMappable Async where
-  gmap g (Done a) = Done (g a)
+  gmap g (Done a) = Suspend (u => Done (g a))
   gmap g (Suspend th) = Suspend (u => gmap g (th u))
 
 -- the per-type eliminator: it performs exactly the row the value carries

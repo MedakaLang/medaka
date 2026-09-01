@@ -11,7 +11,7 @@ interface GThenable f where
   gandThen : f e a -> (a -> <e> f e b) -> f e b
 
 impl GThenable Async where
-  gandThen (Done a) k = k a
+  gandThen (Done a) k = Suspend (u => k a)
   gandThen (Suspend th) k = Suspend (u => gandThen (th u) k)
 
 chain : Async e a -> (a -> <e> Async e b) -> Async e b

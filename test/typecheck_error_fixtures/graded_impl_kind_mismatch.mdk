@@ -4,11 +4,15 @@
 -- nowhere to live.  Without this check the method type's Row slot elaborates to a
 -- TEff row while Box's own ctor scheme has a plain tyvar there, and `unify` binds
 -- the two silently: the impl would be accepted with a meaningless grade.
--- Rejected by T-IMPL-KIND-MISMATCH.
+-- Rejected by T-IMPL-KIND-MISMATCH.  The body is a self-recursive call rather than
+-- a constructor pattern that applies the callback: D-3 (#1095) rejects an eager
+-- application against this same graded signature independently, and a constructed
+-- body would let this fixture pass on the wrong diagnostic if the kind check ever
+-- went quiet (same reasoning as graded_head_wrong_kind_flat.mdk).
 data Box e a = Mk a
 
 interface GThenable f where
   gandThen : f e a -> (a -> <e> f e b) -> f e b
 
 impl GThenable Box where
-  gandThen (Mk a) k = k a
+  gandThen b k = gandThen b k
