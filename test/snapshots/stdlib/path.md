@@ -1,5 +1,5 @@
 # META
-source_lines=321
+source_lines=332
 stages=DESUGAR,MARK
 # SOURCE
 {- path.mdk — POSIX ("/"-separated) path manipulation.
@@ -240,29 +240,40 @@ export
 isAbsolute : String -> Bool
 isAbsolute path = startsWith "/" path
 
-{- | Drop `prefix` from the front of `path` if `path` starts with it as a
+{- | Drop `prefix` from the front of `path` if `path` starts with it at a
    whole component boundary (i.e. right after `prefix` comes either the end
-   of the string or a `/`); returns `path` unchanged otherwise.
+   of the string or a `/`); `None` when it does not.
+
+   Returns `Option` for the same reason `string.stripPrefix` does (#2310): the
+   old fail-soft form returned the input path on no-match, which is also what
+   a successful strip of `""` returns, so a caller could not tell the two
+   apart.  The empty prefix strips nothing and succeeds.
 
    > stripPrefix "a/b" "a/b/c.txt"
-   "c.txt"
+   Some "c.txt"
 
    > stripPrefix "a/x" "a/b/c.txt"
-   "a/b/c.txt" -}
+   None
+
+   > stripPrefix "a/b" "a/b"
+   Some ""
+
+   > stripPrefix "" "a/b"
+   Some "a/b" -}
 export
-stripPrefix : String -> String -> String
+stripPrefix : String -> String -> Option String
 stripPrefix prefix path =
   let plen = stringLength prefix
   if prefix == "" then
-    path
+    Some path
   else if not (startsWith prefix path) then
-    path
+    None
   else if stringLength path == plen then
-    ""
+    Some ""
   else if stringSlice plen (plen + 1) path == "/" then
-    stringSlice (plen + 1) (stringLength path) path
+    Some (stringSlice (plen + 1) (stringLength path) path)
   else
-    path
+    None
 
 -- ── Normalization ────────────────────────────────────────────────────────
 
@@ -367,8 +378,8 @@ prop "dirname ++ / ++ basename normalizes back to the original absolute path" (p
 (DFunDef false "filterEmpty" ((PCons (PVar "s") (PVar "rest"))) (EIf (EBinOp "==" (EVar "s") (ELit (LString ""))) (EApp (EVar "filterEmpty") (EVar "rest")) (EBinOp "::" (EVar "s") (EApp (EVar "filterEmpty") (EVar "rest")))))
 (DTypeSig true "isAbsolute" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isAbsolute" ((PVar "path")) (EApp (EApp (EVar "startsWith") (ELit (LString "/"))) (EVar "path")))
-(DTypeSig true "stripPrefix" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "stripPrefix" ((PVar "prefix") (PVar "path")) (EBlock (DoLet false false (PVar "plen") (EApp (EVar "stringLength") (EVar "prefix"))) (DoExpr (EIf (EBinOp "==" (EVar "prefix") (ELit (LString ""))) (EVar "path") (EIf (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (EVar "prefix")) (EVar "path"))) (EVar "path") (EIf (EBinOp "==" (EApp (EVar "stringLength") (EVar "path")) (EVar "plen")) (ELit (LString "")) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "plen")) (EBinOp "+" (EVar "plen") (ELit (LInt 1)))) (EVar "path")) (ELit (LString "/"))) (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "plen") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "path"))) (EVar "path")) (EVar "path"))))))))
+(DTypeSig true "stripPrefix" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "stripPrefix" ((PVar "prefix") (PVar "path")) (EBlock (DoLet false false (PVar "plen") (EApp (EVar "stringLength") (EVar "prefix"))) (DoExpr (EIf (EBinOp "==" (EVar "prefix") (ELit (LString ""))) (EApp (EVar "Some") (EVar "path")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (EVar "prefix")) (EVar "path"))) (EVar "None") (EIf (EBinOp "==" (EApp (EVar "stringLength") (EVar "path")) (EVar "plen")) (EApp (EVar "Some") (ELit (LString ""))) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "plen")) (EBinOp "+" (EVar "plen") (ELit (LInt 1)))) (EVar "path")) (ELit (LString "/"))) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "plen") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "path"))) (EVar "path"))) (EVar "None"))))))))
 (DTypeSig true "normalize" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "normalize" ((PVar "path")) (EBlock (DoLet false false (PVar "abs") (EApp (EVar "isAbsolute") (EVar "path"))) (DoLet false false (PVar "cleaned") (EApp (EApp (EApp (EVar "normGo") (EVar "abs")) (EApp (EVar "segments") (EVar "path"))) (EListLit))) (DoLet false false (PVar "body") (EApp (EVar "joinAll") (EApp (EVar "reverse") (EVar "cleaned")))) (DoExpr (EIf (EVar "abs") (EBinOp "++" (ELit (LString "/")) (EVar "body")) (EIf (EBinOp "==" (EVar "body") (ELit (LString ""))) (ELit (LString ".")) (EVar "body"))))))
 (DTypeSig false "normGo" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
@@ -429,8 +440,8 @@ prop "dirname ++ / ++ basename normalizes back to the original absolute path" (p
 (DFunDef false "filterEmpty" ((PCons (PVar "s") (PVar "rest"))) (EIf (EBinOp "==" (EVar "s") (ELit (LString ""))) (EApp (EVar "filterEmpty") (EVar "rest")) (EBinOp "::" (EVar "s") (EApp (EVar "filterEmpty") (EVar "rest")))))
 (DTypeSig true "isAbsolute" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isAbsolute" ((PVar "path")) (EApp (EApp (EVar "startsWith") (ELit (LString "/"))) (EVar "path")))
-(DTypeSig true "stripPrefix" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "stripPrefix" ((PVar "prefix") (PVar "path")) (EBlock (DoLet false false (PVar "plen") (EApp (EVar "stringLength") (EVar "prefix"))) (DoExpr (EIf (EBinOp "==" (EVar "prefix") (ELit (LString ""))) (EVar "path") (EIf (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (EVar "prefix")) (EVar "path"))) (EVar "path") (EIf (EBinOp "==" (EApp (EVar "stringLength") (EVar "path")) (EVar "plen")) (ELit (LString "")) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "plen")) (EBinOp "+" (EVar "plen") (ELit (LInt 1)))) (EVar "path")) (ELit (LString "/"))) (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "plen") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "path"))) (EVar "path")) (EVar "path"))))))))
+(DTypeSig true "stripPrefix" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "stripPrefix" ((PVar "prefix") (PVar "path")) (EBlock (DoLet false false (PVar "plen") (EApp (EVar "stringLength") (EVar "prefix"))) (DoExpr (EIf (EBinOp "==" (EVar "prefix") (ELit (LString ""))) (EApp (EVar "Some") (EVar "path")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (EVar "prefix")) (EVar "path"))) (EVar "None") (EIf (EBinOp "==" (EApp (EVar "stringLength") (EVar "path")) (EVar "plen")) (EApp (EVar "Some") (ELit (LString ""))) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "plen")) (EBinOp "+" (EVar "plen") (ELit (LInt 1)))) (EVar "path")) (ELit (LString "/"))) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "plen") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "path"))) (EVar "path"))) (EVar "None"))))))))
 (DTypeSig true "normalize" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "normalize" ((PVar "path")) (EBlock (DoLet false false (PVar "abs") (EApp (EVar "isAbsolute") (EVar "path"))) (DoLet false false (PVar "cleaned") (EApp (EApp (EApp (EVar "normGo") (EMethodRef "abs")) (EApp (EVar "segments") (EVar "path"))) (EListLit))) (DoLet false false (PVar "body") (EApp (EVar "joinAll") (EApp (EVar "reverse") (EVar "cleaned")))) (DoExpr (EIf (EMethodRef "abs") (EBinOp "++" (ELit (LString "/")) (EVar "body")) (EIf (EBinOp "==" (EVar "body") (ELit (LString ""))) (ELit (LString ".")) (EVar "body"))))))
 (DTypeSig false "normGo" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))

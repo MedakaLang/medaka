@@ -296,26 +296,45 @@ False
 ## `stripPrefix`
 
 ```
-stripPrefix : String -> String -> String
+stripPrefix : String -> String -> Option String
 ```
 
-Drop `prefix` from the front of `path` if `path` starts with it as a
+Drop `prefix` from the front of `path` if `path` starts with it at a
 whole component boundary (i.e. right after `prefix` comes either the end
-of the string or a `/`); returns `path` unchanged otherwise.
+of the string or a `/`); `None` when it does not.
+
+Returns `Option` for the same reason `string.stripPrefix` does (#2310): the
+old fail-soft form returned the input path on no-match, which is also what
+a successful strip of `""` returns, so a caller could not tell the two
+apart.  The empty prefix strips nothing and succeeds.
 
 
 *(doctest — run by `medaka test`)*
 
 ```medaka
 > stripPrefix "a/b" "a/b/c.txt"
-"c.txt"
+Some "c.txt"
 ```
 
 *(doctest — run by `medaka test`)*
 
 ```medaka
 > stripPrefix "a/x" "a/b/c.txt"
-"a/b/c.txt"
+None
+```
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> stripPrefix "a/b" "a/b"
+Some ""
+```
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> stripPrefix "" "a/b"
+Some "a/b"
 ```
 
 ## `normalize`
