@@ -90,6 +90,25 @@ test/fmt_clean_census          derived fmt-clean report (#1794, `make fmt-clean-
                                 gate, to avoid surfacing tree-wide pre-existing formatting
                                 debt as a sudden required-check failure (see the script header).
 
+test/comment_register_census   derived comment-register census (#2281, S-comment-census,
+                                `make comment-census`): counts seven comment-register classes
+                                by line over compiler/*.mdk + stdlib/*.mdk — history
+                                narration, reviewer-addressed ruling vocabulary, tombstones,
+                                emoji shouts, draft narration, dead deictic citations, and
+                                falsified-by-refactor candidates (drawn from the draft-
+                                narration hits). Always exits 0 and asserts nothing —
+                                classifications, not disjoint defect counts; a human still
+                                reads the per-file breakdown before acting on it (see the
+                                script header).
+
+test/arch_census                derived architecture census (#2289, S-arch-census,
+                                `make arch-census`): reports the largest-files table plus
+                                per-directory file/line totals over compiler/*.mdk +
+                                stdlib/*.mdk. SOFT detector only — encodes no threshold and
+                                renders no verdict (that judgment is the `architecture`
+                                skill's job, not this script's). Always exits 0 and asserts
+                                nothing. See the script header.
+
 test/cli_conformance_census    derived CLI conformance census (#2354, S-conformance-table,
                                 `make cli-conformance-census`): re-derives
                                 docs/ops/CLI-CONFORMANCE.md's machine-checkable columns —
@@ -103,17 +122,16 @@ test/cli_conformance_census    derived CLI conformance census (#2354, S-conforma
                                 help/parse-arm agreement gate; this is the map that slice
                                 works from. See the script header.
 
-test/comment_register_census   derived comment-register census (#2281, comment-register
-                                sprint, `make comment-register-census`): counts the
-                                comment-register classes (dead-path lib/*.ml citations,
-                                tombstones, ruling vocabulary, history narration, draft
-                                self-correction, dead deictics, emoji shouts) over
-                                compiler/ and stdlib/ — pure grep/awk, no built ./medaka
-                                needed. Always exits 0 and asserts nothing: it counts
-                                CLASSES, deliberately never a percentage or a length
-                                ratchet (#2281's review: a length ratchet teaches short
-                                bad comments). The burn-down instrument the later slices
-                                of the sprint are measured against. See the script header.
+test/slop_census               composing entry point over the slop-burndown crusade's (#2276)
+                                member censuses (#2304, S-slop-census, `make slop-census`): a
+                                registry, encoded as data in the script, of every member census
+                                (comment-register, arch, fmt-clean, cli-conformance, the
+                                rule-stdlib-reimpl lint row, plus the not-yet-built diag/doc/
+                                doctest-shape rows) — never reimplements a member, shells out to
+                                the owner script. A registry row whose script does not exist
+                                reports MISSING, never 0. Build-needing rows are SKIPPED by
+                                default (SLOP_CENSUS_FULL=1 to run them). Always exits 0 and
+                                asserts nothing. See the script header.
 
 # ── sqlite (the GATES are sqlite/test/*_oracle.sh — those are in the `sqlite` shard) ──
 # Self-described, in its own header: "it is a status report, not a gate". It prints
@@ -175,8 +193,9 @@ scripts/sprint-disjoint        sprint-orchestration evidence tool: mechanical di
                                parallel. Asserts nothing about the compiler; exit 1 means
                                "collision evidence found", which is data for the planner,
                                not a suite failure. See .claude/skills/sprint-packet.
-scripts/sprint-report-check    sprint-orchestration intake tool: presence check for the six
-                               mandatory report sections (sprint-packet §9) in an agent
+scripts/sprint-report-check    sprint-orchestration intake tool: shape check for the three
+                               v8 report sections (Verdict first line, Evidence, Notes —
+                               .claude/skills/sprint-packet "The report") in an agent
                                report. Grades documents in the ephemeral sprint record dir
                                under /var/tmp — nothing in this tree, and nothing about the
                                compiler. Exit 1 means "bounce this report to its author".

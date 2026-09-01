@@ -13,7 +13,7 @@
 MEDAKA_SCRATCH ?= /var/tmp/medaka-scratch
 export TMPDIR := $(shell mkdir -p $(MEDAKA_SCRATCH) 2>/dev/null && echo $(MEDAKA_SCRATCH) || echo /tmp)
 
-.PHONY: medaka emitter seed bootstrap seed-health check-self test gates snapshot-check preflight ci clean help docs-links docs-index gen-ci agent-doc-symbols pr-helper-test fmt-clean-census cli-conformance-census comment-register-census
+.PHONY: medaka emitter seed bootstrap seed-health check-self test gates snapshot-check preflight ci clean help docs-links docs-index gen-ci agent-doc-symbols pr-helper-test fmt-clean-census cli-conformance-census comment-census arch-census slop-census
 
 ## medaka  — build the native OCaml-free `medaka` CLI (CANONICAL).
 ##           WARM (./medaka_emitter present): 2-stage rebuild from current source,
@@ -202,14 +202,33 @@ fmt-clean-census: medaka
 cli-conformance-census: medaka
 	sh test/cli_conformance_census.sh
 
-## comment-register-census — derived, diffable census of the comment-register
-##           classes (#2281: dead-path lib/*.ml citations, tombstones, ruling
-##           vocabulary, history narration, draft self-correction, dead
-##           deictics, emoji shouts) over compiler/ and stdlib/. Pure grep/awk
-##           — no built ./medaka needed. Always exits 0: a census, not a gate
-##           — see test/comment_register_census.sh's header.
-comment-register-census:
+## comment-census — report the seven comment-register classes (#2281) by
+##           line over compiler/*.mdk + stdlib/*.mdk: history narration,
+##           reviewer-addressed ruling vocabulary, tombstones, emoji shouts,
+##           draft narration, dead deictic citations, and falsified-by-
+##           refactor candidates. Derived, not hand-maintained — see
+##           test/comment_register_census.sh's header. Pure text/regex, no
+##           built ./medaka needed. Always exits 0: a census, not a gate.
+comment-census:
 	sh test/comment_register_census.sh
+
+## arch-census — report the largest-files table + per-directory file/line
+##           totals over compiler/*.mdk + stdlib/*.mdk (#2289). Derived, not
+##           hand-maintained — see test/arch_census.sh's header. SOFT
+##           detector only: no threshold, no verdict. Pure text/wc, no built
+##           ./medaka needed. Always exits 0: a census, not a gate.
+arch-census:
+	sh test/arch_census.sh
+
+## slop-census — the ONE composing entry point over the slop-burndown
+##           crusade's (#2276) member censuses (#2304). Registry is data IN
+##           test/slop_census.sh — a row whose script does not exist reports
+##           MISSING, never 0. Default invocation does NOT build or invoke
+##           ./medaka (build-needing rows are SKIPPED with a reason); pass
+##           SLOP_CENSUS_FULL=1 to also run those (needs `make medaka` first).
+##           Always exits 0: a census, not a gate.
+slop-census:
+	sh test/slop_census.sh
 
 ## clean   — remove native build artifacts (keeps the checked-in seed)
 clean:
