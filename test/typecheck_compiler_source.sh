@@ -1065,11 +1065,10 @@ if [ "$carrier_count_actual" != "$carrier_count_expected" ]; then
 fi
 echo "  ok: $carrier_count_actual TyConOrigin mention(s) in ast.mdk (name-set + positional)"
 
-# ── #1318 B-4 predicate-slot carrier shadow ratchet ─────────────────────────
-# The carrier slice is intentionally non-authoritative: it must retain both pure legacy
-# adapters and both live producer hooks while remaining absent from mutable compiler state.
-# This is source structure rather than a new gate, so it rides the compiler-source check
-# that already owns structural carrier completeness.
+# ── #1318 B-4 predicate-slot producer-authority ratchet ─────────────────────
+# Function and impl-`requires` predicate slots now have one mutable authority.  Readers
+# may retain pure legacy projections during the consumer cutover, but the former parallel
+# ids/ifaces/args tables and impl tuple store must not be reintroduced or dual-written.
 predicate_slot_src="$ROOT/compiler/types/typecheck.mdk"
 predicate_slot_required='data PredicateSlotArgs = PSArgsUnknown | PSArgsKnown (List Mono)
 data PredicateSlot =
@@ -1081,22 +1080,41 @@ predicateSlotOfImplReq : (String, List Int, Predicate) -> (String, PredicateSlot
 legacyImplReqOfPredicateSlot : (String, PredicateSlot) -> (String, List Int, Predicate)
 predicateSlotShadowCompare : List PredicateSlot -> List PredicateSlot -> Unit
 let _ = shadowFunConstraintEntry slots argsOpt
-let _ = shadowImplReqEntry entry'
+let _ = shadowImplReqEntry entry
+implReqPredicateSlots : Ref (List (String, PredicateSlot))
+funPredicateSlotsRef : Ref (List (String, List PredicateSlot))
+crossModuleFunPredicateSlotsRef : Ref (List (String, List PredicateSlot))
+crossModuleFunPredicateSlotsQualRef : Ref (List ((String, String), List PredicateSlot))
+perRun.value.funPredicateSlotsRef :=
+perRun.value.implReqPredicateSlots :=
+crossRun.value.crossModuleFunPredicateSlotsRef :=
+let _ = setRef crossRun.value.crossModuleFunPredicateSlotsQualRef'
 
 printf '%s\n' "$predicate_slot_required" | while IFS= read -r required; do
   if ! grep -Fq "$required" "$predicate_slot_src"; then
-    echo "FAIL: #1318 predicate-slot carrier shadow is missing required source: $required"
+    echo "FAIL: #1318 predicate-slot producer authority is missing required source: $required"
     exit 1
   fi
 done || exit 1
 
-if grep -E 'Ref.*PredicateSlot|PredicateSlot.*Ref' "$predicate_slot_src" \
-  | grep -vE '^[[:space:]]*--' >/dev/null; then
-  echo "FAIL: #1318 predicate-slot carrier became mutable state before producer cutover."
-  echo "  This slice permits pure adapters and ephemeral shadow comparisons only."
-  exit 1
-fi
-echo "  ok: #1318 predicate-slot carrier/adapters/hooks present; no carrier Ref storage"
+predicate_slot_retired='implReqPreds
+funConstraintsRef
+funConstraintIfacesRef
+funConstraintArgsRef
+crossModuleFunConstraintsRef
+crossModuleFunConstraintsQualRef
+crossModuleFunConstraintIfacesRef
+crossModuleFunConstraintIfacesQualRef
+crossModuleFunConstraintArgsQualRef'
+
+printf '%s\n' "$predicate_slot_retired" | while IFS= read -r retired; do
+  if grep -w "$retired" "$predicate_slot_src" \
+    | grep -vE '^[[:space:]]*--' >/dev/null; then
+    echo "FAIL: #1318 retired predicate-slot authority is present in live source: $retired"
+    exit 1
+  fi
+done || exit 1
+echo "  ok: #1318 predicate-slot producer authority present; retired mutable authorities absent"
 
 # ── #1111 Stage A-2 unit A-2.8: registry keying ratchet ─────────────────────
 # Mechanical enforcement for the registry-keying arc (re-keying ~15
