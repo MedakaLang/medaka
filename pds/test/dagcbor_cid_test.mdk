@@ -58,7 +58,7 @@ test "CID digest access is a defensive copy" =
   let cid = cidForDagCbor [|9, 8, 7|]
   let before = cidToBytes cid
   let exposed = cidDigest cid
-  let () = A.set 0 (bitXor exposed[0] 255) exposed
+  let () = A.setInPlace 0 (bitXor exposed[0] 255) exposed
   expectEqual (cidToBytes cid) before
 
 test "DAG-CBOR round-trips every admitted value kind" =

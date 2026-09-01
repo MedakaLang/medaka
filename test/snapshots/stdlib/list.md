@@ -1,5 +1,5 @@
 # META
-source_lines=1045
+source_lines=1051
 stages=DESUGAR,MARK
 # SOURCE
 -- list.mdk — operations on List a
@@ -607,11 +607,17 @@ split sep xs = go xs
 
 -- Sublist predicates
 --
--- Named to mirror `string.startsWith` / `endsWith` / `contains` (same
--- needle-first argument order) rather than Haskell's `isPrefixOf` family —
--- these ask the same question of a different container, so they get the same
--- name.  For a *single element* rather than a sublist, `elem` (core, over any
--- `Foldable`) is what you want.
+-- `startsWith`/`endsWith` are named to mirror `string.startsWith`/`endsWith`
+-- (same needle-first argument order) rather than Haskell's `isPrefixOf`
+-- family — they ask the same question of a different container, so they get
+-- the same name.  For a *single element* rather than a sublist, `elem` (core,
+-- over any `Foldable`) is what you want.
+--
+-- The third member does NOT mirror `string.contains`: it is `containsSub`
+-- (#2306 J-3).  For a `String` the substring reading is the only one there
+-- is, but a reader who meets `contains : List a -> List a -> Bool` expects
+-- MEMBERSHIP and gets sub-sequence search, and the type warns them of
+-- nothing — a call with two lists typechecks under either meaning.
 
 {- | True when `prefix` is a leading sublist of `xs`.  Every list starts with
    the empty list.
@@ -642,18 +648,18 @@ endsWith suffix xs = startsWith (reverse suffix) (reverse xs)
    naive scan — fine for short needles; for text prefer `string.contains`,
    which is host-backed.
 
-   > contains [2, 3] [1, 2, 3, 4]
+   > containsSub [2, 3] [1, 2, 3, 4]
    True
-   > contains [2, 4] [1, 2, 3, 4]
+   > containsSub [2, 4] [1, 2, 3, 4]
    False
-   > contains ([] : List Int) [1]
+   > containsSub ([] : List Int) [1]
    True -}
 export
-contains : Eq a => List a -> List a -> Bool
-contains sub [] = startsWith sub []
-contains sub (xs@(_::rest))
+containsSub : Eq a => List a -> List a -> Bool
+containsSub sub [] = startsWith sub []
+containsSub sub (xs@(_::rest))
   | startsWith sub xs = True
-  | otherwise = contains sub rest
+  | otherwise = containsSub sub rest
 
 -- Sorting
 
@@ -1169,9 +1175,9 @@ prop "range length is max 0 (hi - lo)" (lo : Int) (hi : Int) =
 (DFunDef false "startsWith" ((PCons (PVar "p") (PVar "ps")) (PCons (PVar "x") (PVar "xs"))) (EBinOp "&&" (EBinOp "==" (EVar "p") (EVar "x")) (EApp (EApp (EVar "startsWith") (EVar "ps")) (EVar "xs"))))
 (DTypeSig true "endsWith" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))))
 (DFunDef false "endsWith" ((PVar "suffix") (PVar "xs")) (EApp (EApp (EVar "startsWith") (EApp (EVar "reverse") (EVar "suffix"))) (EApp (EVar "reverse") (EVar "xs"))))
-(DTypeSig true "contains" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))))
-(DFunDef false "contains" ((PVar "sub") (PList)) (EApp (EApp (EVar "startsWith") (EVar "sub")) (EListLit)))
-(DFunDef false "contains" ((PVar "sub") (PAs "xs" (PCons PWild (PVar "rest")))) (EIf (EApp (EApp (EVar "startsWith") (EVar "sub")) (EVar "xs")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EVar "contains") (EVar "sub")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "containsSub" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))))
+(DFunDef false "containsSub" ((PVar "sub") (PList)) (EApp (EApp (EVar "startsWith") (EVar "sub")) (EListLit)))
+(DFunDef false "containsSub" ((PVar "sub") (PAs "xs" (PCons PWild (PVar "rest")))) (EIf (EApp (EApp (EVar "startsWith") (EVar "sub")) (EVar "xs")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EVar "containsSub") (EVar "sub")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "sortBy" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Ordering")))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyVar "a"))))))
 (DFunDef false "sortBy" (PWild (PList)) (EListLit))
 (DFunDef false "sortBy" (PWild (PList (PVar "x"))) (EListLit (EVar "x")))
@@ -1411,9 +1417,9 @@ prop "range length is max 0 (hi - lo)" (lo : Int) (hi : Int) =
 (DFunDef false "startsWith" ((PCons (PVar "p") (PVar "ps")) (PCons (PVar "x") (PVar "xs"))) (EBinOp "&&" (EBinOp "==" (EVar "p") (EVar "x")) (EApp (EApp (EDictApp "startsWith") (EVar "ps")) (EVar "xs"))))
 (DTypeSig true "endsWith" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))))
 (DFunDef false "endsWith" ((PVar "suffix") (PVar "xs")) (EApp (EApp (EDictApp "startsWith") (EApp (EVar "reverse") (EVar "suffix"))) (EApp (EVar "reverse") (EVar "xs"))))
-(DTypeSig true "contains" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))))
-(DFunDef false "contains" ((PVar "sub") (PList)) (EApp (EApp (EDictApp "startsWith") (EMethodRef "sub")) (EListLit)))
-(DFunDef false "contains" ((PVar "sub") (PAs "xs" (PCons PWild (PVar "rest")))) (EIf (EApp (EApp (EDictApp "startsWith") (EMethodRef "sub")) (EVar "xs")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EDictApp "contains") (EMethodRef "sub")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "containsSub" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))))
+(DFunDef false "containsSub" ((PVar "sub") (PList)) (EApp (EApp (EDictApp "startsWith") (EMethodRef "sub")) (EListLit)))
+(DFunDef false "containsSub" ((PVar "sub") (PAs "xs" (PCons PWild (PVar "rest")))) (EIf (EApp (EApp (EDictApp "startsWith") (EMethodRef "sub")) (EVar "xs")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EDictApp "containsSub") (EMethodRef "sub")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "sortBy" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Ordering")))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyVar "a"))))))
 (DFunDef false "sortBy" (PWild (PList)) (EListLit))
 (DFunDef false "sortBy" (PWild (PList (PVar "x"))) (EListLit (EVar "x")))

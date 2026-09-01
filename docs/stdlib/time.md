@@ -141,6 +141,54 @@ The duration as whole seconds (truncated toward zero).
 2
 ```
 
+## `toMinutes`
+
+```
+toMinutes : Duration -> Int
+```
+
+The duration as whole minutes (truncated toward zero).
+
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> toMinutes (seconds 150)
+2
+```
+
+## `toHours`
+
+```
+toHours : Duration -> Int
+```
+
+The duration as whole hours (truncated toward zero).
+
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> toHours (minutes 150)
+2
+```
+
+## `toDays`
+
+```
+toDays : Duration -> Int
+```
+
+The duration as whole days (truncated toward zero).
+
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> toDays (hours 50)
+2
+```
+
 ## `addDuration`
 
 ```
@@ -241,6 +289,66 @@ Render a `DateTime` as ISO 8601 `YYYY-MM-DDThh:mm:ssZ` (zero-padded, UTC).
 "2024-03-05T07:08:09Z"
 ```
 
+## `parseIso`
+
+```
+parseIso : String -> Option DateTime
+```
+
+Parse ISO 8601 `YYYY-MM-DDThh:mm:ssZ` (UTC only, exactly the shape
+`formatIso` emits), or `None`.  This is the exact inverse of `formatIso`:
+the candidate is accepted only if re-rendering it reproduces the input
+byte-for-byte, so no alternate spelling of the same instant (`+7` for `07`,
+a lowercase `t`, a missing pad) is silently accepted.
+
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> parseIso "2024-03-05T07:08:09Z" == Some (DateTime { year = 2024, month = 3, day = 5, hour = 7, minute = 8, second = 9 })
+True
+> map toEpochSeconds (parseIso "1970-01-01T00:00:00Z")
+Some 0
+> parseIso "2024-03-05 07:08:09Z"
+None
+> parseIso "2024-13-05T07:08:09Z"
+None
+> parseIso "not a date"
+None
+```
+
+## `Display Duration`
+
+```
+impl Display Duration
+```
+
+A `Duration` displays as its whole millisecond count with an `ms` suffix.
+
+## `Display DateTime`
+
+```
+impl Display DateTime
+```
+
+A `DateTime` displays as its ISO 8601 rendering — `display == formatIso`.
+
+## `Semigroup Duration`
+
+```
+impl Semigroup Duration
+```
+
+`addDuration` is the associative append.
+
+## `Monoid Duration`
+
+```
+impl Monoid Duration
+```
+
+`millis 0` is the identity for `addDuration`.
+
 ## `now`
 
 ```
@@ -279,10 +387,20 @@ reading.  Time a block with `let t0 = monotonic ()  … elapsedSince t0`.
 ## `sleep`
 
 ```
-sleep : Int -> <Clock> Unit
+sleep : Duration -> <Clock> Unit
 ```
 
-Sleep for `ms` milliseconds.
+Sleep for a `Duration`.
+
+Takes a `Duration`, not a bare `Int`: `sleep 5` used to mean five
+MILLISECONDS while reading as five seconds, and the type could not warn
+anyone (#2306 J-1).  Now the unit is in the value — `sleep (seconds 5)`,
+`sleep (millis 5)` — and the old `sleepSeconds` is gone with it, since
+`seconds` already says that.
+
+`sleepSeconds` below is UNCHANGED: it was never the ambiguous one — the
+row cites it as the proof that this module already knew units belong
+somewhere the reader can see them.
 
 ## `sleepSeconds`
 
@@ -290,5 +408,5 @@ Sleep for `ms` milliseconds.
 sleepSeconds : Int -> <Clock> Unit
 ```
 
-Sleep for `s` seconds.
+Sleep for `s` seconds.  Equivalent to `sleep (seconds s)`.
 

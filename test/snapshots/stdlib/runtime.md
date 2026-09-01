@@ -1,12 +1,15 @@
 # META
-source_lines=285
+source_lines=289
 stages=DESUGAR,MARK
 # SOURCE
 -- Built-in extern declarations.
--- Every name here must have a matching OCaml implementation in lib/eval.ml.
--- To add a new primitive: add an extern line here, add its OCaml impl in
--- eval.ml's `primitives` list, and (if non-pure) its effect annotation here
--- ensures eff_env is seeded automatically.
+-- Every name here must have a matching implementation in the native
+-- interpreter, compiler/eval/eval.mdk. To add a new primitive: add an
+-- extern line here, add its implementation to eval.mdk's primitive
+-- dispatch, and (if non-pure) its effect annotation here ensures eff_env is
+-- seeded automatically. See .claude/skills/add-primitive/SKILL.md for the
+-- full procedure, including the LLVM/WasmGC backend wiring a primitive that
+-- must also work under `medaka build` needs.
 --
 -- `pure` and `map` are *not* externs: they're interface methods of
 -- Applicative and Mappable declared in stdlib/core.mdk, and dispatched
@@ -18,11 +21,11 @@ extern putStr : String -> <Stdout> Unit
 extern putStrLn : String -> <Stdout> Unit
 extern Ref : a -> Ref a
 extern setRef : Ref a -> a -> Unit
--- Per-type Hashable hashers — SPECIFIED deterministic algorithms, byte-identical
--- in lib/eval.ml (oracle) and runtime/medaka_rt.c (native): hashInt/hashChar/
--- hashFloat = SplitMix64-finalizer mix, hashString = FNV-1a, hashBool = 0/1; all
--- masked to [0, 2^30) (non-negative).  Replaced the old structural __hashRaw,
--- which the type-erased native runtime cannot replicate.  Called by the primitive
+-- Per-type Hashable hashers — SPECIFIED deterministic algorithms, implemented
+-- in runtime/medaka_rt.c: hashInt/hashChar/hashFloat = SplitMix64-finalizer
+-- mix, hashString = FNV-1a, hashBool = 0/1; all masked to [0, 2^30)
+-- (non-negative).  Replaced the old structural __hashRaw, which the
+-- type-erased native runtime cannot replicate.  Called by the primitive
 -- `Hashable` impls in core.mdk; derived/compound impls compose them via `hash`.
 extern hashInt : Int -> Int
 extern hashFloat : Float -> Int
@@ -37,9 +40,8 @@ extern readFile : String -> <FileRead "_"> Result String String
 -- 0..255, or Err msg on failure.  Mirrors readFile but builds an Array of
 -- tagged ints instead of a String.  For SQLite/binary read paths.
 extern readFileBytes : String -> <FileRead "_"> Result String (Array Int)
--- Bitwise / shift primitives (PURE).  Defined on the 63-bit Int rep; native
--- (C) == OCaml for NON-NEGATIVE operands (the binary-decoding case).
--- shiftRight is LOGICAL (unsigned): OCaml lsr, C >> on the untagged value.
+-- Bitwise / shift primitives (PURE).  Defined on the 63-bit Int rep.
+-- shiftRight is LOGICAL (unsigned): C `>>` on the untagged value.
 extern bitAnd : Int -> Int -> Int
 extern bitOr : Int -> Int -> Int
 extern bitXor : Int -> Int -> Int
@@ -167,7 +169,7 @@ extern osEntropyBytes : Int -> <Rand> Array Int
 extern charToStr : Char -> String
 extern intToFloat : Int -> Float
 extern floatToInt : Float -> Int
--- floatRem a b = a - b * trunc(a/b)  (C fmod == LLVM frem == OCaml Float.rem).
+-- floatRem a b = a - b * trunc(a/b)  (C fmod == LLVM frem).
 -- Backs the `Float % Float` operator in the interpreter so `run` matches `build`
 -- (which emits `frem` inline) EXACTLY.  Pure.
 extern floatRem : Float -> Float -> Float
@@ -213,16 +215,18 @@ extern bytesToFloat64 : Array Int -> Int -> Float
 -- and return them as an Array of 8 Ints (each 0..255).  Pure.
 extern floatToBytes64 : Float -> Array Int
 -- Platform bounds backing `impl Bounded Int`/`Bounded Char` in core.mdk.
--- Int bounds are the 63-bit OCaml `int` limits; Char bounds are U+0000 / U+10FFFF.
+-- Int bounds are the 63-bit tagged Int representation's limits; Char bounds are U+0000 / U+10FFFF.
 extern intMinBound : Int
 extern intMaxBound : Int
 extern charMinBound : Char
 extern charMaxBound : Char
 -- Leaf renderers backing the `Debug` impls in core.mdk / string.mdk.  These
--- expose the same OCaml formatting `pp_value` uses, so `debug` agrees with
--- `println` on numbers.  `debugStringLit`/`debugCharLit` produce the *quoted,
--- escaped* literal form (round-trippable into source), so `debug` on a String
--- intentionally differs from `println` (cf. Haskell `show` vs `putStr`).
+-- expose the same number formatting the native runtime's `println`/`Display`
+-- path uses, so `debug` agrees with `println` on numbers.  Sibling internal
+-- renderers produce the *quoted,
+-- escaped* literal form (round-trippable into source) for other kinds, so
+-- `debug` on a String intentionally differs from `println` (cf. Haskell
+-- `show` vs `putStr`).
 extern intToString : Int -> String
 extern floatToString : Float -> String
 extern debugStringLit : String -> String

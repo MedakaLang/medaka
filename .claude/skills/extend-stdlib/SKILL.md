@@ -13,6 +13,13 @@ this skill is for code written *in Medaka* on top of the prelude + kernel.
 stress-tests the language). Only do this when **explicitly asked**. `docs/stdlib/STDLIB.md`
 is the checklist/spec; keep its ✅/⏳/🟡/⛔ statuses current as you go.
 
+**Before adding a new export, read `stdlib/README.md`'s "API conventions"
+section** (ratified #2306) — the 7 rules on partial/total peer names, generic
+vs. specialized re-exports, data-last exceptions, extern/typed-peer pairing,
+hash-container parity, `toml`'s deferred renderer, and `isEmpty` ownership.
+`docs/stdlib/inventory.json` is the machine-readable surface those rules are
+checked against (`test/diff_compiler_stdlib_conventions.sh`).
+
 ## Conventions (match existing code)
 
 - **Multi-arg lambdas: `x y => body`**, never curried. Tuple-pattern lambdas

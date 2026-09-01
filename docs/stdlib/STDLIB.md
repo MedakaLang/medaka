@@ -1217,25 +1217,34 @@ which is what makes `impl Bimappable (,)` possible.
   `impl Eq (NonEmpty a) requires Eq a`, `impl Debug (NonEmpty a) requires Debug a`,
   `impl Display (NonEmpty a) requires Display a` (all `default impl`)
 
-## Module 22 — `option` ✅ implemented (P1, 2026-07-02)
+## Module 22 — `option` ✅ implemented (P1, 2026-07-02) → FOLDED INTO `core` (2026-09-01)
 
-`stdlib/option.mdk` — the `Option` eliminator. `import option`.
-`Option`/`isSome`/`isNone`/`fromOption`/`toResult`/`fromResult` already live in
-`core` (auto-prelude); this module adds the one thing core doesn't:
+The `Option` eliminator. It shipped as a published, one-file `option` module
+until the 0.1.0 surface freeze (#2306 I-2) moved it into
+`core.mdk` beside its own type and DELETED the module — a reference page with
+a single entry was the most visible piece of slop in the launch artifact.
+There is no `import option`; the name is in the auto-prelude:
 
 - ✅ `option : b -> (a -> <e> b) -> Option a -> <e> b` — fold both cases:
   a default for `None`, a function for `Some` (Haskell calls this `maybe`;
   Medaka names it for the type it eliminates)
 
-## Module 23 — `result` ✅ implemented (P1, 2026-07-02)
+It sits with `Option`/`isSome`/`isNone`/`optionOr`/`toResult`/`fromResult`
+(`optionOr` was `fromOption` until #2306 D-1 — `fromX` now always means
+"build from an X").
 
-`stdlib/result.mdk` — the `Result` eliminator. `import result`.
-`Result`/`isOk`/`isErr`/`fromResultOr`/`mapErr` already live in `core`
-(auto-prelude); this module adds the one thing core doesn't:
+## Module 23 — `result` ✅ implemented (P1, 2026-07-02) → FOLDED INTO `core` (2026-09-01)
+
+The `Result` eliminator, moved into `core.mdk` by the same #2306 I-2 ruling
+that folded Module 22; the one-file `result` module is deleted and there is no
+`import result`:
 
 - ✅ `result : (e -> <eff> c) -> (a -> <eff> c) -> Result e a -> <eff> c` — fold
   both cases: a handler for `Err`, a handler for `Ok` (Haskell calls this
   `either`; Medaka names it for the type it eliminates)
+
+It sits with `Result`/`isOk`/`isErr`/`resultOr`/`mapErr` (`resultOr` was
+`fromResultOr` until #2306 D-1).
 
 ## Module 24 — `bits64` ✅ implemented (2026-07-15, issue #223)
 

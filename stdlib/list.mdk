@@ -603,11 +603,17 @@ split sep xs = go xs
 
 -- Sublist predicates
 --
--- Named to mirror `string.startsWith` / `endsWith` / `contains` (same
--- needle-first argument order) rather than Haskell's `isPrefixOf` family —
--- these ask the same question of a different container, so they get the same
--- name.  For a *single element* rather than a sublist, `elem` (core, over any
--- `Foldable`) is what you want.
+-- `startsWith`/`endsWith` are named to mirror `string.startsWith`/`endsWith`
+-- (same needle-first argument order) rather than Haskell's `isPrefixOf`
+-- family — they ask the same question of a different container, so they get
+-- the same name.  For a *single element* rather than a sublist, `elem` (core,
+-- over any `Foldable`) is what you want.
+--
+-- The third member does NOT mirror `string.contains`: it is `containsSub`
+-- (#2306 J-3).  For a `String` the substring reading is the only one there
+-- is, but a reader who meets `contains : List a -> List a -> Bool` expects
+-- MEMBERSHIP and gets sub-sequence search, and the type warns them of
+-- nothing — a call with two lists typechecks under either meaning.
 
 {- | True when `prefix` is a leading sublist of `xs`.  Every list starts with
    the empty list.
@@ -638,18 +644,18 @@ endsWith suffix xs = startsWith (reverse suffix) (reverse xs)
    naive scan — fine for short needles; for text prefer `string.contains`,
    which is host-backed.
 
-   > contains [2, 3] [1, 2, 3, 4]
+   > containsSub [2, 3] [1, 2, 3, 4]
    True
-   > contains [2, 4] [1, 2, 3, 4]
+   > containsSub [2, 4] [1, 2, 3, 4]
    False
-   > contains ([] : List Int) [1]
+   > containsSub ([] : List Int) [1]
    True -}
 export
-contains : Eq a => List a -> List a -> Bool
-contains sub [] = startsWith sub []
-contains sub (xs@(_::rest))
+containsSub : Eq a => List a -> List a -> Bool
+containsSub sub [] = startsWith sub []
+containsSub sub (xs@(_::rest))
   | startsWith sub xs = True
-  | otherwise = contains sub rest
+  | otherwise = containsSub sub rest
 
 -- Sorting
 

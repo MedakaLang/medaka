@@ -115,7 +115,7 @@ rejectContains label witness result = match result
 setAt : Int -> Int -> Array Int -> Array Int
 setAt index value bytes =
   let out = arrayCopy bytes
-  let () = A.set index value out
+  let () = A.setInPlace index value out
   out
 
 runMalformed : <IO> Int

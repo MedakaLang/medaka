@@ -50,6 +50,7 @@ import frontend.ast.{
   useMemberLocal,
 }
 import types.typecheck.{Scheme(..), ppScheme}
+import frontend.resolve.{internalExterns}
 import support.util.{joinWith, reverseL, escStr, stringTrim, splitNl}
 import support.path.{baseOf, chopExt}
 import driver.diagnostics.{projectEntrySchemes}
@@ -684,7 +685,21 @@ renderMarkdown moduleName header entries =
   let titleBlock = "# " ++ moduleName ++ "\n\n"
   let headerProse = renderDocProse header
   let headerBlock = if headerProse == "" then "" else headerProse ++ "\n\n"
-  stringConcat (titleBlock :: headerBlock :: map renderEntry entries)
+  stringConcat
+    (titleBlock :: primitiveLayerBanner moduleName :: headerBlock :: map renderEntry entries)
+
+-- D-5 (#2306): the prelude-only page publishes 138 externs in a naming
+-- convention that RIVALS the library layer's — `stringToUpper` sits beside
+-- `string.toUpper`, `stringToFloat` beside `string.toFloat`.  The ruling KEEPS
+-- `<type><Op>` and ratifies it as the LAYER MARKER (renaming would collide
+-- head-on with the library names, which is why `stdlib/string.mdk` already
+-- omits `length`/`isEmpty`), so the page has to SAY it is the primitive layer
+-- rather than reading as a rival API of equal standing.  Rendered from the
+-- module name, so it reaches library mode and single-file `medaka doc` alike.
+primitiveLayerBanner : String -> String
+primitiveLayerBanner moduleName
+  | preludeOnlyModule moduleName = "> **This is the PRIMITIVE LAYER.** These names are host `extern`s: they\n> are in scope everywhere without an import, and they are deliberately\n> spelled `<type><Op>` (`stringToUpper`, `intToString`) to mark that.\n> Prefer the library name where one exists — `string.toUpper`,\n> `string.toFloat` — and reach for a name on this page only when no\n> library module covers it.\n\n"
+  | otherwise = ""
 
 renderEntry : DocEntry -> String
 renderEntry (DocEntry name sig doc _) =
@@ -733,6 +748,46 @@ mdName (ModuleDoc n _ _ _) = n
 -- extract entries + the module header, in one place so both modes see
 -- identical resolution behavior (S-doc-multimodule's per-module scheme fix
 -- included).
+-- D-6 (#2306): the reference must not publish a name the RESOLVER rejects.
+-- `resolve.internalExterns` is the guard list — a module that is neither part
+-- of the standard library nor built with `--allow-internal` gets
+-- `'<name>' is an internal-only primitive` for any of them — yet they were
+-- rendered on the `runtime` page with signature and doc comment, telling the
+-- reader to do something the compiler forbids.  The list is IMPORTED, not
+-- copied: one source of truth, so a name added to the guard disappears from
+-- the page in the same commit.  The filter applies only where the guard does
+-- (the prelude-only `runtime` page), so a fixture that legitimately shows an
+-- internal name on some other page is unaffected.
+-- D-7 (#2432): a SECOND, doc-only exclusion list — compiler/harness internals
+-- that a user program can already call (the resolver's `internalExterns`
+-- guard does not cover them), so they must NOT be added to that guard: doing
+-- so would reject ordinary programs (`__fallthrough__` backs every match
+-- guard) and red 6 fixtures for the other 9 names (measured in #2432). This
+-- list is doc-only — never imported by/into `resolve.mdk` — and only trims
+-- what the reference page renders.
+docOnlyExcluded : List String
+docOnlyExcluded = [
+  "__fallthrough__",
+  "stashRunStdout",
+  "enableRunStdoutFlush",
+  "assertSnapshot",
+  "indexError",
+  "indexErrorAt",
+  "sliceError",
+  "debugStringLit",
+  "debugCharLit",
+  "buildFingerprint",
+]
+
+dropInternalExterns : Bool -> List DocEntry -> List DocEntry
+dropInternalExterns False entries = entries
+dropInternalExterns True entries =
+  filter (e => not (isInternalExtern e)) entries
+
+isInternalExtern : DocEntry -> Bool
+isInternalExtern (DocEntry name _ _ _) = elem name internalExterns
+  || elem name docOnlyExcluded
+
 export
 computeModuleDoc : String -> String -> String -> String -> List String -> <IO> ModuleDoc
 computeModuleDoc runtimeSrc coreSrc src filename roots =
@@ -744,7 +799,8 @@ computeModuleDoc runtimeSrc coreSrc src filename roots =
   let moduleName = chopExt (baseOf filename)
   let tbl = buildCommentTbl comments
   let header = moduleHeaderFrom tbl
-  let entries = extractEntries (preludeOnlyModule moduleName) rawDecls positions schemes comments
+  let primitiveLayer = preludeOnlyModule moduleName
+  let entries = dropInternalExterns primitiveLayer (extractEntries primitiveLayer rawDecls positions schemes comments)
   ModuleDoc
     moduleName
     (dedupHeader header entries)
@@ -837,10 +893,13 @@ excludedLibraryModule moduleName = moduleName == "async"
 -- true.  Note it leaves the packet's own stated exception intact: `Int` has no
 -- `int` module in the set, so `impl Debug Int` still stays in `core`.
 --
--- Clause ordering matters and is not cosmetic: `Option`/`Result` ARE declared
--- (in `core.mdk`) while `option.mdk`/`result.mdk` also exist, so clause 1 keeps
--- their impls on `core` beside their `data` declaration rather than scattering
--- them to a module that merely operates on them.
+-- Clause ordering matters and is not cosmetic: a type that IS declared keeps
+-- its impls beside its `data` declaration rather than scattering them to a
+-- module that merely operates on it.  The original instance was `Option`/
+-- `Result`, declared in `core.mdk` while one-entry `option.mdk`/`result.mdk`
+-- also existed; #2306 I-2 deleted those two modules, so that pair no longer
+-- exercises the ordering.  The rule is unchanged and still load-bearing for
+-- any core-declared type an operating module merely mentions.
 export
 rebucketLibraryImpls : List ModuleDoc -> List ModuleDoc
 rebucketLibraryImpls mds =
@@ -1068,11 +1127,22 @@ listLenDoc (_::xs) = 1 + listLenDoc xs
 -- correct here — `doc` is a single CLI invocation, no cross-call reuse.
 -- `projectEntrySchemes` returns `None` only on a LOAD error (missing/cyclic
 -- import), never on a type error; a no-import file cannot hit a load error,
--- so falling back to `[]` on `None` changes nothing for the no-import case.
--- Unlike lsp.mdk's completion consumer, this call site only ever looks up
--- schemes BY NAME for names the caller already knows it declared
+-- so this arm is reached ONLY for the load-error case, never the no-import
+-- one. Unlike lsp.mdk's completion consumer, this call site only ever looks
+-- up schemes BY NAME for names the caller already knows it declared
 -- (extractEntries/renderSig, never a full-environment enumeration).
+-- #2422: falling back to `[]` here used to make a module with a broken
+-- import graph and an un-annotated export render a silent, signature-less
+-- page at exit 0 — indistinguishable from a module that simply has no
+-- annotatable exports. `[]` is still the right EXTRACTION-level value (there
+-- is nothing to look up), but the failure must stop being invisible, so this
+-- now also reports the load error and exits non-zero, mirroring every other
+-- load-error arm in this file's own callers (`runDocTargets`/
+-- `runDocLibraryTargets`, medaka_cli.mdk) rather than swallowing it here.
 docSchemesFor : String -> String -> String -> List String -> List Decl -> <IO> List (String, Scheme)
 docSchemesFor runtimeSrc coreSrc filename roots rawUser = match projectEntrySchemes (Ref []) (Ref []) (_ => None) filename roots runtimeSrc coreSrc
-  None => []
+  None =>
+    let _ = ePutStrLn "medaka doc: '\{filename}' has an unresolved import graph (missing or cyclic import) — signatures unavailable"
+    let _ = exit 1
+    []
   Some schemes => schemes

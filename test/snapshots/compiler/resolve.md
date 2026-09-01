@@ -3972,7 +3972,7 @@ stampTyHead _ t = (t, False)
 -- An UNKNOWN type name keeps `OriginUnresolved` — there is no module to attribute
 -- it to, and `checkType` has already reported it as `UnknownType`.
 originOfTyName : OrdMap TyConOrigin -> String -> TyConOrigin
-originOfTyName scope n = fromOption OriginUnresolved (omLookup n scope)
+originOfTyName scope n = optionOr OriginUnresolved (omLookup n scope)
 
 stampHeadWith : Ty -> TyConOrigin -> (Ty, Bool)
 stampHeadWith t OriginUnresolved = (t, False)
@@ -4267,7 +4267,7 @@ mapIfaceOccDeclLocal _ d = d
 -- `stdlib/core.mdk` — and the arm exists so that stays a stated fact.
 fillIfaceOccOrigin : OrdMap TyConOrigin -> String -> String -> TyConOrigin -> TyConOrigin
 fillIfaceOccOrigin scope _ n OriginUnresolved =
-  fromOption OriginUnresolved (omLookup (ifaceKey n) scope)
+  optionOr OriginUnresolved (omLookup (ifaceKey n) scope)
 fillIfaceOccOrigin _ _ _ OriginBuiltin = OriginBuiltin
 fillIfaceOccOrigin _ _ _ (o@(OriginModule _)) = o
 
@@ -5730,7 +5730,7 @@ takeOriginTrace _ =
 (DFunDef false "stampTyHead" ((PVar "scope") (PAs "t" (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false))) (EMatch (EVar "o") (arm (PCon "OriginUnresolved") () (EApp (EApp (EVar "stampHeadWith") (EVar "t")) (EApp (EApp (EVar "originOfTyName") (EVar "scope")) (EVar "n")))) (arm (PCon "OriginBuiltin") () (ETuple (EVar "t") (EVar "False"))) (arm (PCon "OriginModule" PWild) () (ETuple (EVar "t") (EVar "False")))))
 (DFunDef false "stampTyHead" (PWild (PVar "t")) (ETuple (EVar "t") (EVar "False")))
 (DTypeSig false "originOfTyName" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyCon "String") (TyCon "TyConOrigin"))))
-(DFunDef false "originOfTyName" ((PVar "scope") (PVar "n")) (EApp (EApp (EVar "fromOption") (EVar "OriginUnresolved")) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "scope"))))
+(DFunDef false "originOfTyName" ((PVar "scope") (PVar "n")) (EApp (EApp (EVar "optionOr") (EVar "OriginUnresolved")) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "scope"))))
 (DTypeSig false "stampHeadWith" (TyFun (TyCon "Ty") (TyFun (TyCon "TyConOrigin") (TyTuple (TyCon "Ty") (TyCon "Bool")))))
 (DFunDef false "stampHeadWith" ((PVar "t") (PCon "OriginUnresolved")) (ETuple (EVar "t") (EVar "False")))
 (DFunDef false "stampHeadWith" ((PVar "t") (PVar "o")) (ETuple (EVariantUpdate "TyCon" (EVar "t") ((fa "tyConOrigin" (EVar "o")))) (EVar "True")))
@@ -5764,7 +5764,7 @@ takeOriginTrace _ =
 (DFunDef false "mapIfaceOccDeclLocal" ((PVar "f") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "mapIfaceOccDeclLocal") (EVar "f")) (EVar "d"))))
 (DFunDef false "mapIfaceOccDeclLocal" (PWild (PVar "d")) (EVar "d"))
 (DTypeSig false "fillIfaceOccOrigin" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "TyConOrigin"))))))
-(DFunDef false "fillIfaceOccOrigin" ((PVar "scope") PWild (PVar "n") (PCon "OriginUnresolved")) (EApp (EApp (EVar "fromOption") (EVar "OriginUnresolved")) (EApp (EApp (EVar "omLookup") (EApp (EVar "ifaceKey") (EVar "n"))) (EVar "scope"))))
+(DFunDef false "fillIfaceOccOrigin" ((PVar "scope") PWild (PVar "n") (PCon "OriginUnresolved")) (EApp (EApp (EVar "optionOr") (EVar "OriginUnresolved")) (EApp (EApp (EVar "omLookup") (EApp (EVar "ifaceKey") (EVar "n"))) (EVar "scope"))))
 (DFunDef false "fillIfaceOccOrigin" (PWild PWild PWild (PCon "OriginBuiltin")) (EVar "OriginBuiltin"))
 (DFunDef false "fillIfaceOccOrigin" (PWild PWild PWild (PAs "o" (PCon "OriginModule" PWild))) (EVar "o"))
 (DTypeSig true "ifaceKey" (TyFun (TyCon "String") (TyCon "String")))
@@ -6965,7 +6965,7 @@ takeOriginTrace _ =
 (DFunDef false "stampTyHead" ((PVar "scope") (PAs "t" (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false))) (EMatch (EVar "o") (arm (PCon "OriginUnresolved") () (EApp (EApp (EVar "stampHeadWith") (EVar "t")) (EApp (EApp (EVar "originOfTyName") (EVar "scope")) (EVar "n")))) (arm (PCon "OriginBuiltin") () (ETuple (EVar "t") (EVar "False"))) (arm (PCon "OriginModule" PWild) () (ETuple (EVar "t") (EVar "False")))))
 (DFunDef false "stampTyHead" (PWild (PVar "t")) (ETuple (EVar "t") (EVar "False")))
 (DTypeSig false "originOfTyName" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyCon "String") (TyCon "TyConOrigin"))))
-(DFunDef false "originOfTyName" ((PVar "scope") (PVar "n")) (EApp (EApp (EVar "fromOption") (EVar "OriginUnresolved")) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "scope"))))
+(DFunDef false "originOfTyName" ((PVar "scope") (PVar "n")) (EApp (EApp (EVar "optionOr") (EVar "OriginUnresolved")) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "scope"))))
 (DTypeSig false "stampHeadWith" (TyFun (TyCon "Ty") (TyFun (TyCon "TyConOrigin") (TyTuple (TyCon "Ty") (TyCon "Bool")))))
 (DFunDef false "stampHeadWith" ((PVar "t") (PCon "OriginUnresolved")) (ETuple (EVar "t") (EVar "False")))
 (DFunDef false "stampHeadWith" ((PVar "t") (PVar "o")) (ETuple (EVariantUpdate "TyCon" (EVar "t") ((fa "tyConOrigin" (EVar "o")))) (EVar "True")))
@@ -6999,7 +6999,7 @@ takeOriginTrace _ =
 (DFunDef false "mapIfaceOccDeclLocal" ((PVar "f") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "mapIfaceOccDeclLocal") (EVar "f")) (EVar "d"))))
 (DFunDef false "mapIfaceOccDeclLocal" (PWild (PVar "d")) (EVar "d"))
 (DTypeSig false "fillIfaceOccOrigin" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "TyConOrigin"))))))
-(DFunDef false "fillIfaceOccOrigin" ((PVar "scope") PWild (PVar "n") (PCon "OriginUnresolved")) (EApp (EApp (EVar "fromOption") (EVar "OriginUnresolved")) (EApp (EApp (EVar "omLookup") (EApp (EVar "ifaceKey") (EVar "n"))) (EVar "scope"))))
+(DFunDef false "fillIfaceOccOrigin" ((PVar "scope") PWild (PVar "n") (PCon "OriginUnresolved")) (EApp (EApp (EVar "optionOr") (EVar "OriginUnresolved")) (EApp (EApp (EVar "omLookup") (EApp (EVar "ifaceKey") (EVar "n"))) (EVar "scope"))))
 (DFunDef false "fillIfaceOccOrigin" (PWild PWild PWild (PCon "OriginBuiltin")) (EVar "OriginBuiltin"))
 (DFunDef false "fillIfaceOccOrigin" (PWild PWild PWild (PAs "o" (PCon "OriginModule" PWild))) (EVar "o"))
 (DTypeSig true "ifaceKey" (TyFun (TyCon "String") (TyCon "String")))

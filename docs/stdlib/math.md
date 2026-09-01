@@ -259,40 +259,40 @@ Floor modulo: the remainder that pairs with `floorDiv`, so
 0
 ```
 
-## `gcdInt`
+## `gcd`
 
 ```
-gcdInt : Int -> Int -> Int
+gcd : Int -> Int -> Int
 ```
 
 Greatest common divisor via the Euclidean algorithm, on absolute
-  values so the result is non-negative.  `gcdInt 0 0 = 0`.
+  values so the result is non-negative.  `gcd 0 0 = 0`.
 
 
 *(doctest — run by `medaka test`)*
 
 ```medaka
-> gcdInt 12 18
+> gcd 12 18
 6
-> gcdInt 17 5
+> gcd 17 5
 1
 ```
 
-## `lcmInt`
+## `lcm`
 
 ```
-lcmInt : Int -> Int -> Int
+lcm : Int -> Int -> Int
 ```
 
-Least common multiple, non-negative.  `lcmInt _ 0 = 0`.
+Least common multiple, non-negative.  `lcm _ 0 = 0`.
 
 
 *(doctest — run by `medaka test`)*
 
 ```medaka
-> lcmInt 4 6
+> lcm 4 6
 12
-> lcmInt 3 5
+> lcm 3 5
 15
 ```
 
@@ -304,6 +304,12 @@ powInt : Int -> Int -> Int
 
 Integer exponentiation by squaring.  A non-positive exponent yields 1
   (the empty product); `powInt b 0 = 1` for any `b`.
+
+  KEEPS its `Int` suffix while `gcdInt`/`lcmInt` lost theirs (#2306 J-2):
+  `runtime.pow : Float -> Float -> Float` is an extern, so it is in scope
+  UNQUALIFIED everywhere, and a `math.pow : Int -> Int -> Int` would meet
+  it head-on in that scope.  The suffix is load-bearing for exactly this
+  one of the three; `gcd`/`lcm` have no such peer.
 
 
 *(doctest — run by `medaka test`)*

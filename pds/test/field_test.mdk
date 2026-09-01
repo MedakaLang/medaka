@@ -14,7 +14,7 @@
    boundaries (every 26 bits, and the 26/22 seam at limb 9) are hit exactly
    rather than by hand-typed hex. -}
 
-import array.{set}
+import array.{setInPlace}
 import test.{expectEqual, expectTrue, expectFalse}
 import lib.field.{
   Fe,
@@ -40,7 +40,7 @@ import lib.field.{
 
 -- ── Input construction (inputs, not answer keys) ──────────────────────
 
--- 32 big-endian bytes with exactly bit `k` set.
+-- 32 big-endian bytes with exactly bit `k` setInPlace.
 bitBytes : Int -> Array Int
 bitBytes k =
   let out = arrayMake 32 0
@@ -63,7 +63,7 @@ decGo out i =
     if v == 0 then
       out[i] := 255
       decGo out (i - 1)
-    else set i (v - 1) out
+    else setInPlace i (v - 1) out
 
 allOnes : Array Int
 allOnes = arrayMake 32 255

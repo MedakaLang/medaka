@@ -98,18 +98,18 @@
    Eval/Wasm retain value parity; Wasm's ordinary boxed `Int` carrier is
    outside this native constant-time claim. -}
 
--- Writes here are still on `Array.set` rather than the `arr[i] := v` sugar the
+-- Writes here are still on `Array.setInPlace` rather than the `arr[i] := v` sugar the
 -- rest of the tree uses (#1786) -- but the reason is now HISTORICAL, and this
 -- comment is a note to whoever migrates them, not a warning against it.
 --
 -- The cost was never dispatch (`setIndex` on a monomorphic `Array` receiver emits
--- a direct call, same as `Array.set`). It was an INLINING asymmetry: `setIndex`'s
+-- a direct call, same as `Array.setInPlace`). It was an INLINING asymmetry: `setIndex`'s
 -- out-of-bounds branch interpolated a message, which put it past LLVM's inline
--- threshold, so it never inlined into the hot loops where `Array.set` did --
+-- threshold, so it never inlined into the hot loops where `Array.setInPlace` did --
 -- 0.588s vs 0.677s over 200k feMuls. #1787 removed the interpolation, and both
 -- spellings now inline. Migrating these three modules is mechanical and wanted;
 -- re-measure when you do, and delete this comment.
-import array.{set, blit}
+import array.{setInPlace, blit}
 
 -- ── Constants ────────────────────────────────────────────────────────
 
@@ -186,12 +186,12 @@ carryPassGo : Array Int -> Int -> Int
 carryPassGo n i =
   if i >= 9 then
     let hi = n[9]
-    let () = set 9 (bitAnd hi topMask) n
+    let () = setInPlace 9 (bitAnd hi topMask) n
     shiftRight hi 22
   else
     let v = n[i]
-    let () = set i (bitAnd v limbMask) n
-    let () = set (i + 1) (n[i + 1] + shiftRight v 26) n
+    let () = setInPlace i (bitAnd v limbMask) n
+    let () = setInPlace (i + 1) (n[i + 1] + shiftRight v 26) n
     carryPassGo n (i + 1)
 
 -- One unconditional carry-and-fold round. IN PLACE.
@@ -201,8 +201,8 @@ carryPassGo n i =
 carryFoldRound : Array Int -> Unit
 carryFoldRound n =
   let x = carryPass n
-  let () = set 0 (n[0] + x * foldLow) n
-  set 1 (n[1] + x * foldHi) n
+  let () = setInPlace 0 (n[0] + x * foldLow) n
+  setInPlace 1 (n[1] + x * foldHi) n
 
 -- Exactly three unconditional carry-and-fold rounds. The proof in
 -- docs/design/ATPROTO-PDS-CONSTANT-TIME.md §3 covers every admitted producer
@@ -233,11 +233,11 @@ subPCandidate : Array Int -> Array Int -> Int -> Int -> Int
 subPCandidate n diff i borrow =
   if i >= 9 then
     let t = n[9] + topMask + 1 - pLimbs[9] - borrow
-    let () = set 9 (bitAnd t topMask) diff
+    let () = setInPlace 9 (bitAnd t topMask) diff
     1 - shiftRight t 22
   else
     let t = n[i] + limbMask + 1 - pLimbs[i] - borrow
-    let () = set i (bitAnd t limbMask) diff
+    let () = setInPlace i (bitAnd t limbMask) diff
     subPCandidate n diff (i + 1) (1 - shiftRight t 26)
 
 -- Blend the unconditional subtraction candidate back into n. `keepDiff` is
@@ -248,7 +248,7 @@ selectPCandidate n diff keepDiff i =
   if i >= 10 then ()
   else
     let original = n[i]
-    let () = set i (original + keepDiff * (diff[i] - original)) n
+    let () = setInPlace i (original + keepDiff * (diff[i] - original)) n
     selectPCandidate n diff keepDiff (i + 1)
 
 subPSelect : Array Int -> Unit
@@ -289,12 +289,12 @@ limbsOfBytesGo bs n bpos acc accBits li =
   if li >= 10 then ()
   else
     if accBits >= 26 then
-      let () = set li (bitAnd acc limbMask) n
+      let () = setInPlace li (bitAnd acc limbMask) n
       limbsOfBytesGo bs n bpos (shiftRight acc 26) (accBits - 26) (li + 1)
     else
       if bpos >= 0 then limbsOfBytesGo bs n (bpos - 1) (acc + shiftLeft bs[bpos] accBits) (accBits + 8) li
       else
-        let () = set li (bitAnd acc limbMask) n
+        let () = setInPlace li (bitAnd acc limbMask) n
         limbsOfBytesGo bs n bpos (shiftRight acc 26) 0 (li + 1)
 
 -- Is this a well-formed 32-byte array with every element in 0..255?
@@ -360,12 +360,12 @@ toBytesGo n out li acc accBits pos =
   if pos < 0 then ()
   else
     if accBits >= 8 then
-      let () = set pos (bitAnd acc 255) out
+      let () = setInPlace pos (bitAnd acc 255) out
       toBytesGo n out li (shiftRight acc 8) (accBits - 8) (pos - 1)
     else
       if li < 10 then toBytesGo n out (li + 1) (acc + shiftLeft n[li] accBits) (accBits + 26) pos
       else
-        let () = set pos (bitAnd acc 255) out
+        let () = setInPlace pos (bitAnd acc 255) out
         toBytesGo n out li (shiftRight acc 8) 0 (pos - 1)
 
 -- ── Comparison ───────────────────────────────────────────────────────
@@ -444,7 +444,7 @@ feSelectGo : Int -> Array Int -> Array Int -> Array Int -> Int -> Unit
 feSelectGo bit a b out i =
   if i >= 10 then ()
   else
-    let () = set i (a[i] + bit * (b[i] - a[i])) out
+    let () = setInPlace i (a[i] + bit * (b[i] - a[i])) out
     feSelectGo bit a b out (i + 1)
 
 -- | Is the canonical representative odd? (The low bit of limb 0.)
@@ -466,7 +466,7 @@ addGo : Array Int -> Array Int -> Array Int -> Int -> Unit
 addGo a b e i =
   if i >= 10 then ()
   else
-    let () = set i (a[i] + b[i]) e
+    let () = setInPlace i (a[i] + b[i]) e
     addGo a b e (i + 1)
 
 -- | Additive inverse mod p, computed as `p - a` with borrow. `a` is canonical
@@ -485,10 +485,10 @@ negateGo a e i borrow =
   else
     let d = pLimbs[i] - a[i] - borrow
     if d < 0 then
-      let () = set i (d + limbMask + 1) e
+      let () = setInPlace i (d + limbMask + 1) e
       negateGo a e (i + 1) 1
     else
-      let () = set i d e
+      let () = setInPlace i d e
       negateGo a e (i + 1) 0
 
 -- | Fixed-control additive inverse for secret-bearing arithmetic. The full
@@ -506,10 +506,10 @@ feNegateCtGo : Array Int -> Array Int -> Int -> Int -> Unit
 feNegateCtGo a out i borrow =
   if i >= 9 then
     let t = pLimbs[9] + topMask + 1 - a[9] - borrow
-    set 9 (bitAnd t topMask) out
+    setInPlace 9 (bitAnd t topMask) out
   else
     let t = pLimbs[i] + limbMask + 1 - a[i] - borrow
-    let () = set i (bitAnd t limbMask) out
+    let () = setInPlace i (bitAnd t limbMask) out
     feNegateCtGo a out (i + 1) (1 - shiftRight t 26)
 
 -- | Subtraction mod p. NEGATE-THEN-ADD, exactly as the reference does it —
@@ -551,7 +551,7 @@ mulAccumRow a b c i j =
   if j >= 10 then ()
   else
     let k = i + j
-    let () = set k (c[k] + a[i] * b[j]) c
+    let () = setInPlace k (c[k] + a[i] * b[j]) c
     mulAccumRow a b c i (j + 1)
 
 -- Carry columns 0..18 down below 2^26, depositing the last carry in c[19].
@@ -560,8 +560,8 @@ carryChain c i =
   if i >= 19 then ()
   else
     let v = c[i]
-    let () = set i (bitAnd v limbMask) c
-    let () = set (i + 1) (c[i + 1] + shiftRight v 26) c
+    let () = setInPlace i (bitAnd v limbMask) c
+    let () = setInPlace (i + 1) (c[i + 1] + shiftRight v 26) c
     carryChain c (i + 1)
 
 -- Fold columns 10..19 (weight >= 2^260) into columns 0..10, then fold the
@@ -579,15 +579,15 @@ foldHigh c e =
   let () = foldCopy c e 0
   let () = foldGo c e 10
   let hi = e[10]
-  let () = set 10 0 e
-  let () = set 0 (e[0] + hi * r0) e
-  set 1 (e[1] + hi * r1) e
+  let () = setInPlace 10 0 e
+  let () = setInPlace 0 (e[0] + hi * r0) e
+  setInPlace 1 (e[1] + hi * r1) e
 
 foldCopy : Array Int -> Array Int -> Int -> Unit
 foldCopy c e m =
   if m >= 10 then ()
   else
-    let () = set m c[m] e
+    let () = setInPlace m c[m] e
     foldCopy c e (m + 1)
 
 foldGo : Array Int -> Array Int -> Int -> Unit
@@ -595,8 +595,8 @@ foldGo c e q =
   if q >= 20 then ()
   else
     let v = c[q]
-    let () = set (q - 10) (e[q - 10] + v * r0) e
-    let () = set (q - 9) (e[q - 9] + v * r1) e
+    let () = setInPlace (q - 10) (e[q - 10] + v * r0) e
+    let () = setInPlace (q - 9) (e[q - 9] + v * r1) e
     foldGo c e (q + 1)
 
 -- | Squaring mod p. Deliberately `feMul a a`: the reference splits squaring out

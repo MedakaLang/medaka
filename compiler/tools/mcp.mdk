@@ -40,7 +40,7 @@ import json.{
   asInt,
   asArray,
 }
-import io.{stripCR}
+import string.{stripCR}
 import driver.diagnostics.{
   checkJsonSingle,
   checkJsonFile,

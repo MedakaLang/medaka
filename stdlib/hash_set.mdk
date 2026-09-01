@@ -22,7 +22,8 @@
 -- hash_set/hash_map share identical resize/rehash bodies over DISTINCT ADTs; consolidation needs a shared-core refactor (out of scope).
 -- lint-disable-file rule-duplicate-body
 
-import core.{Eq, Debug, Foldable, Hashable}
+import core.{Eq, Ord, Debug, Display, Foldable, Hashable}
+import list as L
 
 {- `HashSet buckets count`: chains in `!buckets`, live count in
    `!count`; both mutated in place. -}
@@ -86,8 +87,8 @@ bucketRemove x (y::rest)
 {- | Add an element, in place. A no-op when already present. Resizes (doubling)
    past load factor 0.75. -}
 export
-insert : (Eq a, Hashable a) => a -> HashSet a -> Unit
-insert x (HashSet buckets count) =
+insertInPlace : (Eq a, Hashable a) => a -> HashSet a -> Unit
+insertInPlace x (HashSet buckets count) =
   let arr = !buckets
   let idx = slotOf x (arrayLength arr)
   insertAt x arr idx buckets count
@@ -147,13 +148,13 @@ fromList xs =
 insertAll : (Eq a, Hashable a) => List a -> HashSet a -> Unit
 insertAll [] _ = ()
 insertAll (x::rest) s =
-  insert x s
+  insertInPlace x s
   insertAll rest s
 
 {- | Remove an element, in place. A no-op when absent. -}
 export
-delete : (Eq a, Hashable a) => a -> HashSet a -> Unit
-delete x (HashSet buckets count) =
+deleteInPlace : (Eq a, Hashable a) => a -> HashSet a -> Unit
+deleteInPlace x (HashSet buckets count) =
   let arr = !buckets
   let idx = slotOf x (arrayLength arr)
   deleteAt x arr idx count
@@ -215,3 +216,55 @@ export impl Eq (HashSet a) requires Eq a, Hashable a where
    equality). -}
 export impl Debug (HashSet a) requires Debug a where
   debug s = "fromList \{debug (elemList s)}"
+
+{- ── Display, and the order it fixes (sheet row A-4) ───────────────────────
+
+   `Debug` above renders in HASH order, which is layout-dependent by design.
+   `Display` may not be: a rendering that changes when the set is rebuilt from
+   its own elements is not a rendering of the VALUE.  So `Display` sorts, which
+   is why it asks for `Ord a` that `Debug` does not -- that ordering choice IS
+   row A-4's ratification, and the law it buys is
+   `display s == display (fromList (toList s))`.  The sort is `list.sort`: one
+   ordering routine for the whole stdlib, rather than a private copy in every
+   printing path. -}
+
+displayItems : Display a => List a -> String
+displayItems [] = ""
+displayItems [x] = "\{x}"
+displayItems (y::rest) = "\{y}, \{displayItems rest}"
+
+{- | The *display* form, peer of `Display (Set a)`'s `Set { x, … }`, with the
+   elements in ascending order so the text depends only on the value and not
+   on the table's internal layout.
+
+   > display (fromList [3, 1, 2]) == "HashSet { 1, 2, 3 }"
+   True
+   > display (new () : HashSet Int) == "HashSet {}"
+   True -}
+export impl Display (HashSet a) requires Display a, Ord a where
+  display s = match L.sort (elemList s)
+    [] => "HashSet {}"
+    xs => "HashSet { \{displayItems xs} }"
+
+-- ── Property tests (sheet row A-4) ──────────────────────────────────────
+
+ascendingL : Ord a => List a -> Bool
+ascendingL [] = True
+ascendingL (_::[]) = True
+ascendingL (x::y::rest) = lte x y && ascendingL (y::rest)
+
+-- LAW: `Display` must depend on the VALUE, not on the set's internal layout.
+-- Rebuilding from its own elements, and from those elements reversed (which
+-- fills the chains in a different order), must not change the rendering --
+-- the law `Debug`, documented as hash-ordered, cannot satisfy.
+prop "Display HashSet is layout-independent" (xs : List Int) =
+  let s = fromList xs
+  display s == display (fromList (toList s))
+    && display s == display (fromList (L.reverse (toList s)))
+
+-- LAW: the fixed order is ASCENDING, and `Display` agrees with `Eq` -- two
+-- sets that compare equal render identically.
+prop "Display HashSet agrees with Eq and lists elements ascending" (xs : List Int) =
+  let a = fromList xs
+  let b = fromList (L.reverse xs)
+  ascendingL (L.sort (elemList a)) && eq a b == (display a == display b)

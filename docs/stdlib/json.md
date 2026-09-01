@@ -278,6 +278,27 @@ True
 True
 ```
 
+## `asObject`
+
+```
+asObject : Json -> Option (Array (String, Json))
+```
+
+The key/value pairs of a `JObject`, or `None`.  Completes the `asX`
+family: every `Json` variant's payload is now reachable by a partial
+downcast.  (Re-wrap with `JObject` to compare as a `Json`, exactly as
+`asArray` does — there is no `Eq (Array (String, Json))` in scope here.)
+
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> map JObject (asObject (jObject [("a", JInt 1)])) == Some (jObject [("a", JInt 1)])
+True
+> asObject (JInt 1) == None
+True
+```
+
 ## `Eq Json`
 
 ```

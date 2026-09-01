@@ -108,7 +108,7 @@ import hash_map.{
   HashMap,
   new as hmNew,
   get as hmGet,
-  set as hmSet,
+  setInPlace as hmSet,
   keys as hmKeys,
 }
 
@@ -1671,7 +1671,7 @@ splitLastL (x::rest) = map ((pre, last) => (x::pre, last)) (splitLastL rest)
 (DUse false (UseGroup ("list") ((mem "sort" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))
 (DUse false (UseGroup ("array") ((mem "get" false "arrayGet"))))
-(DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false "hmNew") (mem "get" false "hmGet") (mem "set" false "hmSet") (mem "keys" false "hmKeys"))))
+(DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false "hmNew") (mem "get" false "hmGet") (mem "setInPlace" false "hmSet") (mem "keys" false "hmKeys"))))
 (DTypeSig false "sep" (TyCon "String"))
 (DFunDef false "sep" () (ELit (LString "\t")))
 (DTypeSig false "nsVal" (TyCon "String"))
@@ -2171,7 +2171,7 @@ splitLastL (x::rest) = map ((pre, last) => (x::pre, last)) (splitLastL rest)
 (DUse false (UseGroup ("list") ((mem "sort" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))
 (DUse false (UseGroup ("array") ((mem "get" false "arrayGet"))))
-(DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false "hmNew") (mem "get" false "hmGet") (mem "set" false "hmSet") (mem "keys" false "hmKeys"))))
+(DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false "hmNew") (mem "get" false "hmGet") (mem "setInPlace" false "hmSet") (mem "keys" false "hmKeys"))))
 (DTypeSig false "sep" (TyCon "String"))
 (DFunDef false "sep" () (ELit (LString "\t")))
 (DTypeSig false "nsVal" (TyCon "String"))

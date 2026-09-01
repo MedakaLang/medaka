@@ -4,15 +4,19 @@ bits64.mdk — 64-bit-unsigned arithmetic over the 63-bit `Int` fixnum.
 
 Medaka's `Int` is a 63-bit fixnum that WRAPS on overflow, so it cannot hold
 a `uint64` value (let alone a `uint64` product mod 2^64).  This module
-emulates a `uint64` as a 4-tuple of 16-bit limbs `(l0, l1, l2, l3)`,
+emulates a `uint64` as four 16-bit limbs `U64 l0 l1 l2 l3`,
 least-significant first — exactly the representation the compiler itself
 hand-rolled in `compiler/eval/eval.mdk` to reproduce SplitMix64 / FNV-1a
 faithfully while fixing issue #98.  The algorithms here mirror that proven
 implementation.
 
-Why a tuple and not a fresh `data` type: tuple instances (`Eq`, `Debug`, …)
-already live in the prelude (`core.mdk`), so this module drags no new
-instance surface and imports near-free (see `docs/stdlib/STDLIB.md`).
+Why a `data` type and not a tuple alias (#2311): a transparent
+`type U64 = (Int, Int, Int, Int)` alias let the prelude's generic tuple
+`Ord` reach the limbs in the WRONG order — `compare` ordered by `l0` first
+and silently disagreed with `cmp` on the same values, with no diagnostic.
+The nullary-constructor newtype carries its own `Eq`/`Ord`/`Debug`/
+`Display`/`Hashable`, and its `Ord` delegates to `cmp`, so the prelude and
+this module can no longer answer differently.
 
 Every intermediate stays well under the 63-bit range: a limb < 2^16, a
 16×16 partial product < 2^32, and a column sum of four such products plus a
@@ -22,10 +26,16 @@ Use it for hashing, PRNGs, checksums, and binary/wire formats — anything
 that needs the C `unsigned long long` overflow / bit semantics.  All ops are
 modulo 2^64 (they wrap), matching C's unsigned arithmetic.
 
+Operations are fn-first/data-last and carry no `64` suffix — the module is
+already called `bits64`.  Import qualified (`import bits64 as B`) if you
+also want the prelude's boolean `and`/`or`/`xor`, or the `Num` interface's
+`add`/`sub`, in the same scope.
+
 ## `U64`
 
 ```
-type U64 = (Int, Int, Int, Int)
+data U64
+  = U64 Int Int Int Int
 ```
 
 A `uint64` as four 16-bit limbs, least-significant first: the value is
@@ -34,7 +44,7 @@ A `uint64` as four 16-bit limbs, least-significant first: the value is
 ## `zero`
 
 ```
-zero : (Int, Int, Int, Int)
+zero : U64
 ```
 
 The all-zero `uint64`.
@@ -42,15 +52,15 @@ The all-zero `uint64`.
 ## `one`
 
 ```
-one : (Int, Int, Int, Int)
+one : U64
 ```
 
 The `uint64` value 1.
 
-## `ofInt`
+## `fromIntBits`
 
 ```
-ofInt : Int -> (Int, Int, Int, Int)
+fromIntBits : Int -> U64
 ```
 
 Split a Medaka `Int` into `uint64` limbs, masking to the low 64 bits.
@@ -59,26 +69,27 @@ Because each 16-bit window is masked immediately, this reproduces C's
 `(unsigned long long)n` for negatives too (the two's-complement bits of a
 window are the same under either shift convention).
 
-(Named `ofInt`, not `fromInt`, on purpose: `fromInt` is the `Num` interface
-method in `core.mdk`, and a top-level binding of that name is absorbed as a
-method definition and poisons inference for the whole module.)
+(Named `fromIntBits`, not `fromInt`, on purpose: `fromInt` is the `Num`
+interface method in `core.mdk`, and a top-level binding of that name is
+absorbed as a method definition and poisons inference for the whole
+module.)
 
 
 *(doctest — run by `medaka test`)*
 
 ```medaka
-> ofInt 1
-(1, 0, 0, 0)
-> ofInt 65536
-(0, 1, 0, 0)
-> ofInt 4294967296
-(0, 0, 1, 0)
+> fromIntBits 1
+U64 1 0 0 0
+> fromIntBits 65536
+U64 0 1 0 0
+> fromIntBits 4294967296
+U64 0 0 1 0
 ```
 
 ## `isZero`
 
 ```
-isZero : (Int, Int, Int, Int) -> Bool
+isZero : U64 -> Bool
 ```
 
 Is this `uint64` zero?
@@ -87,38 +98,49 @@ Is this `uint64` zero?
 *(doctest — run by `medaka test`)*
 
 ```medaka
-> isZero (ofInt 0)
+> isZero (fromIntBits 0)
 True
-> isZero (ofInt 5)
+> isZero (fromIntBits 5)
 False
 ```
 
-## `cmp64`
+## `cmp`
 
 ```
-cmp64 : (Int, Int, Int, Int) -> (Int, Int, Int, Int) -> Ordering
+cmp : U64 -> U64 -> Ordering
 ```
 
-Compare two `uint64` values (unsigned).
+Compare two `uint64` values (unsigned).  The `Ord U64` instance delegates
+here, so `compare` and `cmp` can never disagree (#2311).
 
 
 *(doctest — run by `medaka test`)*
 
 ```medaka
-> cmp64 (ofInt 1) (ofInt 2)
+> cmp (fromIntBits 1) (fromIntBits 2)
 Lt
-> cmp64 (ofInt 2) (ofInt 2)
+> cmp (fromIntBits 2) (fromIntBits 2)
 Eq
-> cmp64 (ofInt 3) (ofInt 2)
+> cmp (fromIntBits 3) (fromIntBits 2)
 Gt
-> cmp64 (0, 0, 0, 1) (65535, 65535, 65535, 0)
+> cmp (U64 0 0 0 1) (U64 65535 65535 65535 0)
 Gt
 ```
 
-## `add64`
+## `Ord U64`
 
 ```
-add64 : (Int, Int, Int, Int) -> (Int, Int, Int, Int) -> (Int, Int, Int, Int)
+impl Ord U64
+```
+
+Unsigned ordering, NOT the limb-lexicographic order a derived `Ord` would
+produce: the limbs are least-significant FIRST, so the derived instance
+would compare `l0` before `l3` and order values wrongly (#2311).
+
+## `add`
+
+```
+add : U64 -> U64 -> U64
 ```
 
 Addition mod 2^64 (wraps on overflow).
@@ -127,18 +149,18 @@ Addition mod 2^64 (wraps on overflow).
 *(doctest — run by `medaka test`)*
 
 ```medaka
-> add64 (ofInt 1) (ofInt 2)
-(3, 0, 0, 0)
-> add64 (ofInt 65535) (ofInt 1)
-(0, 1, 0, 0)
-> add64 (65535, 65535, 65535, 65535) (ofInt 1)
-(0, 0, 0, 0)
+> add (fromIntBits 1) (fromIntBits 2)
+U64 3 0 0 0
+> add (fromIntBits 65535) (fromIntBits 1)
+U64 0 1 0 0
+> add (U64 65535 65535 65535 65535) (fromIntBits 1)
+U64 0 0 0 0
 ```
 
-## `sub64`
+## `sub`
 
 ```
-sub64 : (Int, Int, Int, Int) -> (Int, Int, Int, Int) -> (Int, Int, Int, Int)
+sub : U64 -> U64 -> U64
 ```
 
 Subtraction mod 2^64: `a - b`, wrapping when `b > a`.
@@ -150,16 +172,16 @@ the borrow into the next limb.
 *(doctest — run by `medaka test`)*
 
 ```medaka
-> sub64 (ofInt 5) (ofInt 3)
-(2, 0, 0, 0)
-> sub64 (ofInt 0) (ofInt 1)
-(65535, 65535, 65535, 65535)
+> sub (fromIntBits 5) (fromIntBits 3)
+U64 2 0 0 0
+> sub (fromIntBits 0) (fromIntBits 1)
+U64 65535 65535 65535 65535
 ```
 
-## `mulLow64`
+## `mulLow`
 
 ```
-mulLow64 : (Int, Int, Int, Int) -> (Int, Int, Int, Int) -> (Int, Int, Int, Int)
+mulLow : U64 -> U64 -> U64
 ```
 
 Low 64 bits of the product `a * b` (i.e. `a * b mod 2^64`) — schoolbook
@@ -169,66 +191,69 @@ multiply keeping only the low four limbs.
 *(doctest — run by `medaka test`)*
 
 ```medaka
-> mulLow64 (ofInt 7) (ofInt 6)
-(42, 0, 0, 0)
-> mulLow64 (ofInt 65536) (ofInt 65536)
-(0, 0, 1, 0)
-> mulLow64 (0, 0, 0, 1) (0, 1, 0, 0)
-(0, 0, 0, 0)
+> mulLow (fromIntBits 7) (fromIntBits 6)
+U64 42 0 0 0
+> mulLow (fromIntBits 65536) (fromIntBits 65536)
+U64 0 0 1 0
+> mulLow (U64 0 0 0 1) (U64 0 1 0 0)
+U64 0 0 0 0
 ```
 
-## `and64`
+## `and`
 
 ```
-and64 : (Int, Int, Int, Int) -> (Int, Int, Int, Int) -> (Int, Int, Int, Int)
+and : U64 -> U64 -> U64
 ```
 
-Bitwise AND.
+Bitwise AND.  Shadows the prelude's boolean `and` when imported
+unqualified — import `bits64` qualified if you need both.
 
 
 *(doctest — run by `medaka test`)*
 
 ```medaka
-> and64 (ofInt 12) (ofInt 10)
-(8, 0, 0, 0)
+> and (fromIntBits 12) (fromIntBits 10)
+U64 8 0 0 0
 ```
 
-## `or64`
+## `or`
 
 ```
-or64 : (Int, Int, Int, Int) -> (Int, Int, Int, Int) -> (Int, Int, Int, Int)
+or : U64 -> U64 -> U64
 ```
 
-Bitwise OR.
+Bitwise OR.  Shadows the prelude's boolean `or` when imported
+unqualified.
 
 
 *(doctest — run by `medaka test`)*
 
 ```medaka
-> or64 (ofInt 12) (ofInt 10)
-(14, 0, 0, 0)
+> or (fromIntBits 12) (fromIntBits 10)
+U64 14 0 0 0
 ```
 
-## `xor64`
+## `xor`
 
 ```
-xor64 : (Int, Int, Int, Int) -> (Int, Int, Int, Int) -> (Int, Int, Int, Int)
+xor : U64 -> U64 -> U64
 ```
 
-Bitwise XOR.
+Bitwise XOR.  Shadows the prelude's boolean `xor` when imported
+unqualified.
 
 
 *(doctest — run by `medaka test`)*
 
 ```medaka
-> xor64 (ofInt 12) (ofInt 10)
-(6, 0, 0, 0)
+> xor (fromIntBits 12) (fromIntBits 10)
+U64 6 0 0 0
 ```
 
 ## `limbAt`
 
 ```
-limbAt : (Int, Int, Int, Int) -> Int -> Int
+limbAt : Int -> U64 -> Int
 ```
 
 Limb `i` of a `uint64` — its bits `[16i, 16i+15]` as an `Int` in
@@ -238,16 +263,16 @@ Limb `i` of a `uint64` — its bits `[16i, 16i+15]` as an `Int` in
 *(doctest — run by `medaka test`)*
 
 ```medaka
-> limbAt (10, 20, 30, 40) 2
+> limbAt 2 (U64 10 20 30 40)
 30
-> limbAt (ofInt 65536) 1
+> limbAt 1 (fromIntBits 65536)
 1
 ```
 
-## `shr64`
+## `shr`
 
 ```
-shr64 : (Int, Int, Int, Int) -> Int -> (Int, Int, Int, Int)
+shr : Int -> U64 -> U64
 ```
 
 Logical right shift by `n` bits, `n` in `[0, 63]`.  Vacated high bits are
@@ -257,18 +282,18 @@ filled with zeros (unsigned shift).
 *(doctest — run by `medaka test`)*
 
 ```medaka
-> shr64 (ofInt 256) 4
-(16, 0, 0, 0)
-> shr64 (ofInt 65536) 16
-(1, 0, 0, 0)
-> shr64 (0, 0, 0, 32768) 63
-(1, 0, 0, 0)
+> shr 4 (fromIntBits 256)
+U64 16 0 0 0
+> shr 16 (fromIntBits 65536)
+U64 1 0 0 0
+> shr 63 (U64 0 0 0 32768)
+U64 1 0 0 0
 ```
 
-## `shl64`
+## `shl`
 
 ```
-shl64 : (Int, Int, Int, Int) -> Int -> (Int, Int, Int, Int)
+shl : Int -> U64 -> U64
 ```
 
 Logical left shift by `n` bits, `n` in `[0, 63]`.  Bits shifted past bit
@@ -278,18 +303,18 @@ Logical left shift by `n` bits, `n` in `[0, 63]`.  Bits shifted past bit
 *(doctest — run by `medaka test`)*
 
 ```medaka
-> shl64 (ofInt 1) 4
-(16, 0, 0, 0)
-> shl64 (ofInt 1) 16
-(0, 1, 0, 0)
-> shl64 (ofInt 1) 63
-(0, 0, 0, 32768)
+> shl 4 (fromIntBits 1)
+U64 16 0 0 0
+> shl 16 (fromIntBits 1)
+U64 0 1 0 0
+> shl 63 (fromIntBits 1)
+U64 0 0 0 32768
 ```
 
-## `mod64`
+## `mod`
 
 ```
-mod64 : (Int, Int, Int, Int) -> (Int, Int, Int, Int) -> (Int, Int, Int, Int)
+mod : U64 -> U64 -> U64
 ```
 
 Exact `uint64` modulo: `dividend mod divisor`, correct for any nonzero
@@ -300,11 +325,11 @@ large divisors).  A zero divisor is a caller error and yields `dividend`.
 *(doctest — run by `medaka test`)*
 
 ```medaka
-> mod64 (ofInt 17) (ofInt 5)
-(2, 0, 0, 0)
-> mod64 (65535, 65535, 65535, 65535) (ofInt 10)
-(5, 0, 0, 0)
-> mod64 (0, 0, 0, 32768) (ofInt 3)
-(2, 0, 0, 0)
+> mod (fromIntBits 17) (fromIntBits 5)
+U64 2 0 0 0
+> mod (U64 65535 65535 65535 65535) (fromIntBits 10)
+U64 5 0 0 0
+> mod (U64 0 0 0 32768) (fromIntBits 3)
+U64 2 0 0 0
 ```
 

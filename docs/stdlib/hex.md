@@ -10,7 +10,7 @@ significant nibble first.
 **Decode strictness.**  `decode` rejects (`Err`) an odd-length input and
 any non-hex-digit character.  Whitespace is NOT skipped — a string with
 embedded spaces/newlines is an error.  Both uppercase and lowercase hex
-digits are accepted on decode (mirrors `string.digitToInt`, which already
+digits are accepted on decode (mirrors `string.fromDigit`, which already
 treats `'a'..'f'`/`'A'..'F'` uniformly); `encode` always produces
 lowercase, `encodeUpper` uppercase.
 

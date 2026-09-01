@@ -1827,7 +1827,7 @@ fi
 # ⚠️ EXPECTED VALUES ARE DERIVED FROM THE DECLARED SEMANTICS, NOT CAPTURED, per
 # AGENTS.md's "a captured golden records what the engine DID".  Each term, from
 # stdlib/runtime.mdk's signatures and stdlib/core.mdk's definitions:
-#   charFromCode 65        = Some 'A'   (ASCII 65)   -> fromOption -> charCode = 65
+#   charFromCode 65        = Some 'A'   (ASCII 65)   -> optionOr -> charCode = 65
 #   stringToFloat "2.5"    = Some 2.5   -> +7.5 = 10.0 exactly (both are exact
 #                                          binary fractions) -> floatToInt = 10
 #   stringCompare "a" "b"  = Lt         ('a'=97 < 'b'=98)     -> 100
@@ -1856,10 +1856,10 @@ import x1280_defs.{twinA, unTwinA} -- ONLY the functions; never defs' Twin
 import x1280_other.{otherLen}      -- ONLY the function; never other's Twin
 
 viaOptionChar : Int
-viaOptionChar = charCode (fromOption 'z' (charFromCode 65))
+viaOptionChar = charCode (optionOr 'z' (charFromCode 65))
 
 viaOptionFloat : Int
-viaOptionFloat = floatToInt (fromOption 0.0 (stringToFloat "2.5") + 7.5)
+viaOptionFloat = floatToInt (optionOr 0.0 (stringToFloat "2.5") + 7.5)
 
 viaOrdering : Int
 viaOrdering = match stringCompare "a" "b"
@@ -2852,6 +2852,74 @@ if [ "$ffi_bld_code" -ne 0 ] && [ ! -x "$TMP/ffiuse.out" ]; then
   pass=$((pass+1)); printf 'ok   ffi-xmod/build (#2137: build agrees, no binary)\n'
 else
   fail=$((fail+1)); printf 'FAIL ffi-xmod/build (build exit %d, binary present=%s)\n' "$ffi_bld_code" "$([ -x "$TMP/ffiuse.out" ] && echo yes || echo no)"
+fi
+
+# 19. package-sealed import resolution (loader `childRoots`).  `roots` is ordered
+#     entry-dir FIRST (`[entryDir, projRoot, stdlibDir]`), and every module in the
+#     graph used to inherit that order for its OWN imports — so a user file merely
+#     NAMED like a stdlib module hijacked the STDLIB's private view of it.  A
+#     `list.mdk` sitting next to the entry point broke `stdlib/hash_map.mdk`'s own
+#     `import list as L` with `Unbound variable: L.sortOn`, on a program that never
+#     mentions `list`.  `test/build_diff_fixtures/list.mdk` is such a file, which is
+#     why `deriving_hashable`/`hash_negative_hash` could not be built beside it.
+#     Per [T-GLOBAL-TABLE] the assertion is about the UNRELATED code: (a) the entry
+#     never imports `list` and must still compile and RUN correctly through
+#     hash_map; (b) build agrees; (c) the shadow is not merely ignored — the user's
+#     OWN `import list` still resolves to the user's OWN file, so the fix seals one
+#     package off from another rather than banning the name.
+mkdir -p "$TMP/shadow"
+cat > "$TMP/shadow/list.mdk" <<'EOF'
+-- A user module that merely SHARES A NAME with stdlib/list.mdk. It exports none
+-- of list's names; if the stdlib ever resolves `list` to this file, hash_map's
+-- `L.sortOn`/`L.reverse` go unbound.
+export data IntBag = IntBag Int
+export mine : Int
+mine = 42
+EOF
+cat > "$TMP/shadow/user.mdk" <<'EOF'
+import hash_map.{new as hmNew, setInPlace as hmSet, get as hmGet}
+main : <IO> Unit
+main =
+  let m = hmNew ()
+  let _ = hmSet 7 "seven" m
+  println (hmGet 7 m)
+EOF
+shadow_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/shadow/user.mdk" 2>&1)"
+shadow_code=$?
+case "$shadow_out" in
+  *"Unbound variable: L."*) fail=$((fail+1)); printf 'FAIL shadow/check (user list.mdk hijacked the stdlib: [%s])\n' "$shadow_out" ;;
+  *) if [ "$shadow_code" -eq 0 ]; then pass=$((pass+1)); printf 'ok   shadow/check (same-named user module does not reach into the stdlib)\n'
+     else fail=$((fail+1)); printf 'FAIL shadow/check (exit %d: [%s])\n' "$shadow_code" "$shadow_out"; fi ;;
+esac
+
+MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" bound "$MEDAKA" build "$TMP/shadow/user.mdk" -o "$TMP/shadow/user.out" > "$TMP/shadow/build.log" 2>&1
+shadow_bld=$?
+if [ "$shadow_bld" -eq 0 ] && [ -x "$TMP/shadow/user.out" ]; then
+  shadow_run="$("$TMP/shadow/user.out" 2>&1)"
+  if [ "$shadow_run" = "Some seven" ]; then
+    pass=$((pass+1)); printf 'ok   shadow/build (native build runs, unrelated hash_map code still correct)\n'
+  else
+    fail=$((fail+1)); printf 'FAIL shadow/build (ran but printed [%s], want [Some seven])\n' "$shadow_run"
+  fi
+else
+  fail=$((fail+1)); printf 'FAIL shadow/build (exit %d: [%s])\n' "$shadow_bld" "$(cat "$TMP/shadow/build.log")"
+fi
+
+# (c) the user's own `import list` must STILL find the user's own file — sealing
+#     the stdlib off must not turn the name into a reserved word.
+cat > "$TMP/shadow/own.mdk" <<'EOF'
+import list.{mine}
+main : <IO> Unit
+main = println mine
+EOF
+own_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/shadow/own.mdk" 2>&1)"
+own_code=$?
+if [ "$own_code" -eq 0 ]; then
+  own_run="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/shadow/own.mdk" 2>&1)"
+  if [ "$own_run" = "42" ]; then pass=$((pass+1)); printf 'ok   shadow/own-still-wins (user import list resolves to the user file)\n'
+  else fail=$((fail+1)); printf 'FAIL shadow/own-still-wins (ran but printed [%s], want [42])\n' "$own_run"; fi
+else
+  fail=$((fail+1)); printf 'FAIL shadow/own-still-wins (check exit %d: [%s])\n' "$own_code" "$own_out"
 fi
 
 printf '\n%d ok, %d failing\n' "$pass" "$fail"

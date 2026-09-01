@@ -98,8 +98,8 @@ test "entry and root byte views are defensive copies" =
   let [(shown, _)] = mstEntries tree
   let root = mstRootBytes tree
   let before = mstRootBytes tree
-  let () = A.set 0 0 shown
-  let () = A.set 0 0 root
+  let () = A.setInPlace 0 0 shown
+  let () = A.setInPlace 0 0 root
   expectEqual (mstRootBytes tree) before
 
 test "reachable block view validates after layered construction" =

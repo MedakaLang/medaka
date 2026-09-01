@@ -265,7 +265,7 @@ oGetCtorType oracle c
 oGetArity : Oracle -> String -> Int
 oGetArity oracle c
   | (Some a) <- tupleArityOfName c = a
-  | otherwise = fromOption 0 (omLookup c oracle.ctorArity)
+  | otherwise = optionOr 0 (omLookup c oracle.ctorArity)
 
 -- ── pattern → canonical matrix pattern ────────────────────────────────────
 export
@@ -471,7 +471,7 @@ headBuckets (row::rest) acc = headBuckets rest (headBucketRow row acc)
 
 headBucketRow : List Pat -> OrdMap (List (List Pat)) -> OrdMap (List (List Pat))
 headBucketRow ((PCon c args)::tl) acc =
-  omInsert c (args ++ tl :: fromOption [] (omLookup c acc)) acc
+  omInsert c (args ++ tl :: optionOr [] (omLookup c acc)) acc
 headBucketRow _ acc = acc
 
 anyWildHead : List (List Pat) -> Bool
@@ -497,7 +497,7 @@ usefulBranch oracle pmat restQ c =
 usefulBranchIn : Oracle -> OrdMap (List (List Pat)) -> List Pat -> String -> Bool
 usefulBranchIn oracle buckets restQ c =
   let a = oGetArity oracle c
-  let rows = reverseL (fromOption [] (omLookup c buckets))
+  let rows = reverseL (optionOr [] (omLookup c buckets))
   useful oracle None rows (replicate a PWild ++ restQ)
 
 -- ── redundant / unreachable-arm detection ─────────────────────────────────

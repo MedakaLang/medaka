@@ -4,4 +4,4 @@ import array as A
 import lib.field.{Fe(..), feZero}
 
 main = match feZero
-  Fe limbs => A.set 0 7 limbs
+  Fe limbs => A.setInPlace 0 7 limbs

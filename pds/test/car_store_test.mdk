@@ -84,8 +84,8 @@ test "input and lookup arrays cannot alias store contents" =
   let source = arrayCopy extraBytes
   let store = mustStore (blockStorePut extraCid source blockStoreEmpty)
   let (Some shown) = blockStoreGet extraCid store
-  let () = A.set 0 0 source
-  let () = A.set 0 0 shown
+  let () = A.setInPlace 0 0 source
+  let () = A.setInPlace 0 0 shown
   expectEqual (blockStoreGet extraCid store) (Some extraBytes)
 
 test "CAR encodes and strictly round-trips explicit block order" =

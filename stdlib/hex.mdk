@@ -8,7 +8,7 @@
    **Decode strictness.**  `decode` rejects (`Err`) an odd-length input and
    any non-hex-digit character.  Whitespace is NOT skipped — a string with
    embedded spaces/newlines is an error.  Both uppercase and lowercase hex
-   digits are accepted on decode (mirrors `string.digitToInt`, which already
+   digits are accepted on decode (mirrors `string.fromDigit`, which already
    treats `'a'..'f'`/`'A'..'F'` uniformly); `encode` always produces
    lowercase, `encodeUpper` uppercase. -}
 
@@ -16,7 +16,7 @@
 -- lint-disable-file rule-duplicate-body
 
 import array.{get, fromList}
-import string.{digitToInt, intToDigit, toUtf8, fromUtf8, toChars}
+import string.{fromDigit, toDigit, toUtf8, fromUtf8, toChars}
 
 -- | In-bounds indexing via the safe `Array.get`, panicking on a miss.  Every
 --   call site below only ever indexes within the array's own known length,
@@ -37,10 +37,10 @@ charAt i arr = match get i arr
 
 digitChar : Int -> Bool -> Char
 digitChar n upper =
-  if upper then match intToDigit n
+  if upper then match toDigit n
     Some c => charToUpper c
     None => '?'
-  else match intToDigit n
+  else match toDigit n
     Some c => c
     None => '?'
 
@@ -102,9 +102,9 @@ encodeString s = encode (toUtf8 s)
 decodeGo : Array Char -> Int -> Int -> List Int -> Result String (List Int)
 decodeGo chars i n acc
   | i >= n = Ok acc
-  | otherwise = match digitToInt (charAt i chars)
+  | otherwise = match fromDigit (charAt i chars)
     None => Err "hex.decode: invalid hex digit"
-    Some hi => match digitToInt (charAt (i + 1) chars)
+    Some hi => match fromDigit (charAt (i + 1) chars)
       None => Err "hex.decode: invalid hex digit"
       Some lo => decodeGo chars (i + 2) n (acc ++ [hi * 16 + lo])
 

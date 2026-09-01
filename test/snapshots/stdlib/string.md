@@ -1,5 +1,5 @@
 # META
-source_lines=741
+source_lines=753
 stages=DESUGAR,MARK
 # SOURCE
 -- string.mdk — operations on String and Char
@@ -57,7 +57,7 @@ import core.{Eq, Ord, Debug, Foldable, Mappable, Option, Ordering}
 -- — distinct from `println`, which emits the raw characters.
 
 -- ── Char operations ─────────────────────────────────────────────────────────
--- ASCII-exact predicates (isDigit/digitToInt/intToDigit) compute on the
+-- ASCII-exact predicates (isDigit/fromDigit/toDigit) compute on the
 -- codepoint directly; the classification wrappers below (isAlpha/isSpace/…)
 -- wrap ASCII-only kernel externs (issue #417 — no Unicode tables exist).
 
@@ -104,15 +104,15 @@ isPunct c = charIsPunct c
 {- | `'0'`..`'9'` → `Some 0`..`Some 9`, `'a'`..`'f'`/`'A'`..`'F'` →
    `Some 10`..`Some 15`, anything else `None`.
 
-   > digitToInt '7'
+   > fromDigit '7'
    Some 7
-   > digitToInt 'f'
+   > fromDigit 'f'
    Some 15
-   > digitToInt 'z'
+   > fromDigit 'z'
    None -}
 export
-digitToInt : Char -> Option Int
-digitToInt c = digitVal (charCode c)
+fromDigit : Char -> Option Int
+fromDigit c = digitVal (charCode c)
 
 digitVal : Int -> Option Int
 digitVal n
@@ -121,17 +121,17 @@ digitVal n
   | n >= 65 && n <= 70 = Some (n - 55)
   | otherwise = None
 
-{- | Inverse of `digitToInt` for `0`..`15` (lowercase hex); `None` otherwise.
+{- | Inverse of `fromDigit` for `0`..`15` (lowercase hex); `None` otherwise.
 
-   > intToDigit 7
+   > toDigit 7
    Some '7'
-   > intToDigit 12
+   > toDigit 12
    Some 'c'
-   > intToDigit 42
+   > toDigit 42
    None -}
 export
-intToDigit : Int -> Option Char
-intToDigit n
+toDigit : Int -> Option Char
+toDigit n
   | n >= 0 && n <= 9 = charFromCode (n + 48)
   | n >= 10 && n <= 15 = charFromCode (n + 87)
   | otherwise = None
@@ -644,6 +644,18 @@ export
 lines : String -> List String
 lines s = map stripCR (split nl s)
 
+{- | Drop one trailing `\r`, so a CRLF line reads as its content.  Idempotent
+   on a line that has none.
+
+   The `string` function `io.stripCR` used to duplicate: a `String -> String`
+   transformation has no business in the IO module, so #2306 I-3 exported this
+   one and deleted that one.
+
+   > stripCR "ab\r"
+   "ab"
+   > stripCR "ab"
+   "ab" -}
+export
 stripCR : String -> String
 stripCR line =
   if endsWith "\r" line then
@@ -759,12 +771,12 @@ half k = if k <= 1 then 0 else 1 + half (k - 2)
 (DFunDef false "isLower" ((PVar "c")) (EApp (EVar "charIsLower") (EVar "c")))
 (DTypeSig true "isPunct" (TyFun (TyCon "Char") (TyCon "Bool")))
 (DFunDef false "isPunct" ((PVar "c")) (EApp (EVar "charIsPunct") (EVar "c")))
-(DTypeSig true "digitToInt" (TyFun (TyCon "Char") (TyApp (TyCon "Option") (TyCon "Int"))))
-(DFunDef false "digitToInt" ((PVar "c")) (EApp (EVar "digitVal") (EApp (EVar "charCode") (EVar "c"))))
+(DTypeSig true "fromDigit" (TyFun (TyCon "Char") (TyApp (TyCon "Option") (TyCon "Int"))))
+(DFunDef false "fromDigit" ((PVar "c")) (EApp (EVar "digitVal") (EApp (EVar "charCode") (EVar "c"))))
 (DTypeSig false "digitVal" (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))
 (DFunDef false "digitVal" ((PVar "n")) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 48))) (EBinOp "<=" (EVar "n") (ELit (LInt 57)))) (EApp (EVar "Some") (EBinOp "-" (EVar "n") (ELit (LInt 48)))) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 97))) (EBinOp "<=" (EVar "n") (ELit (LInt 102)))) (EApp (EVar "Some") (EBinOp "-" (EVar "n") (ELit (LInt 87)))) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 65))) (EBinOp "<=" (EVar "n") (ELit (LInt 70)))) (EApp (EVar "Some") (EBinOp "-" (EVar "n") (ELit (LInt 55)))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
-(DTypeSig true "intToDigit" (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Char"))))
-(DFunDef false "intToDigit" ((PVar "n")) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 0))) (EBinOp "<=" (EVar "n") (ELit (LInt 9)))) (EApp (EVar "charFromCode") (EBinOp "+" (EVar "n") (ELit (LInt 48)))) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 10))) (EBinOp "<=" (EVar "n") (ELit (LInt 15)))) (EApp (EVar "charFromCode") (EBinOp "+" (EVar "n") (ELit (LInt 87)))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig true "toDigit" (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Char"))))
+(DFunDef false "toDigit" ((PVar "n")) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 0))) (EBinOp "<=" (EVar "n") (ELit (LInt 9)))) (EApp (EVar "charFromCode") (EBinOp "+" (EVar "n") (ELit (LInt 48)))) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 10))) (EBinOp "<=" (EVar "n") (ELit (LInt 15)))) (EApp (EVar "charFromCode") (EBinOp "+" (EVar "n") (ELit (LInt 87)))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig true "fromChar" (TyFun (TyCon "Char") (TyCon "String")))
 (DFunDef false "fromChar" ((PVar "c")) (EApp (EVar "charToStr") (EVar "c")))
 (DTypeSig true "toChars" (TyFun (TyCon "String") (TyApp (TyCon "Array") (TyCon "Char"))))
@@ -873,7 +885,7 @@ half k = if k <= 1 then 0 else 1 + half (k - 2)
 (DFunDef false "splitGo" ((PVar "sepLen") (PVar "sep") (PVar "s")) (EMatch (EApp (EApp (EVar "indexOf") (EVar "sep")) (EVar "s")) (arm (PCon "None") () (EListLit (EVar "s"))) (arm (PCon "Some" (PVar "i")) () (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "s")) (EApp (EApp (EApp (EVar "splitGo") (EVar "sepLen")) (EVar "sep")) (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (EVar "sepLen"))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")))))))
 (DTypeSig true "lines" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "lines" ((PVar "s")) (EApp (EApp (EVar "map") (EVar "stripCR")) (EApp (EApp (EVar "split") (EVar "nl")) (EVar "s"))))
-(DTypeSig false "stripCR" (TyFun (TyCon "String") (TyCon "String")))
+(DTypeSig true "stripCR" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "stripCR" ((PVar "line")) (EIf (EApp (EApp (EVar "endsWith") (ELit (LString "\r"))) (EVar "line")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "line")) (ELit (LInt 1)))) (EVar "line")) (EVar "line")))
 (DTypeSig true "words" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "words" ((PVar "s")) (EBlock (DoLet false false (PVar "a") (EApp (EVar "toChars") (EVar "s"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "a"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "wordsFrom") (EVar "a")) (EVar "n")) (EVar "s")) (EApp (EApp (EApp (EVar "firstNonSpace") (EVar "a")) (ELit (LInt 0))) (EVar "n"))))))
@@ -915,12 +927,12 @@ half k = if k <= 1 then 0 else 1 + half (k - 2)
 (DFunDef false "isLower" ((PVar "c")) (EApp (EVar "charIsLower") (EVar "c")))
 (DTypeSig true "isPunct" (TyFun (TyCon "Char") (TyCon "Bool")))
 (DFunDef false "isPunct" ((PVar "c")) (EApp (EVar "charIsPunct") (EVar "c")))
-(DTypeSig true "digitToInt" (TyFun (TyCon "Char") (TyApp (TyCon "Option") (TyCon "Int"))))
-(DFunDef false "digitToInt" ((PVar "c")) (EApp (EVar "digitVal") (EApp (EVar "charCode") (EVar "c"))))
+(DTypeSig true "fromDigit" (TyFun (TyCon "Char") (TyApp (TyCon "Option") (TyCon "Int"))))
+(DFunDef false "fromDigit" ((PVar "c")) (EApp (EVar "digitVal") (EApp (EVar "charCode") (EVar "c"))))
 (DTypeSig false "digitVal" (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))
 (DFunDef false "digitVal" ((PVar "n")) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 48))) (EBinOp "<=" (EVar "n") (ELit (LInt 57)))) (EApp (EVar "Some") (EBinOp "-" (EVar "n") (ELit (LInt 48)))) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 97))) (EBinOp "<=" (EVar "n") (ELit (LInt 102)))) (EApp (EVar "Some") (EBinOp "-" (EVar "n") (ELit (LInt 87)))) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 65))) (EBinOp "<=" (EVar "n") (ELit (LInt 70)))) (EApp (EVar "Some") (EBinOp "-" (EVar "n") (ELit (LInt 55)))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
-(DTypeSig true "intToDigit" (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Char"))))
-(DFunDef false "intToDigit" ((PVar "n")) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 0))) (EBinOp "<=" (EVar "n") (ELit (LInt 9)))) (EApp (EVar "charFromCode") (EBinOp "+" (EVar "n") (ELit (LInt 48)))) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 10))) (EBinOp "<=" (EVar "n") (ELit (LInt 15)))) (EApp (EVar "charFromCode") (EBinOp "+" (EVar "n") (ELit (LInt 87)))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig true "toDigit" (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Char"))))
+(DFunDef false "toDigit" ((PVar "n")) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 0))) (EBinOp "<=" (EVar "n") (ELit (LInt 9)))) (EApp (EVar "charFromCode") (EBinOp "+" (EVar "n") (ELit (LInt 48)))) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 10))) (EBinOp "<=" (EVar "n") (ELit (LInt 15)))) (EApp (EVar "charFromCode") (EBinOp "+" (EVar "n") (ELit (LInt 87)))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig true "fromChar" (TyFun (TyCon "Char") (TyCon "String")))
 (DFunDef false "fromChar" ((PVar "c")) (EApp (EVar "charToStr") (EVar "c")))
 (DTypeSig true "toChars" (TyFun (TyCon "String") (TyApp (TyCon "Array") (TyCon "Char"))))
@@ -1029,7 +1041,7 @@ half k = if k <= 1 then 0 else 1 + half (k - 2)
 (DFunDef false "splitGo" ((PVar "sepLen") (PVar "sep") (PVar "s")) (EMatch (EApp (EApp (EVar "indexOf") (EVar "sep")) (EVar "s")) (arm (PCon "None") () (EListLit (EVar "s"))) (arm (PCon "Some" (PVar "i")) () (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "s")) (EApp (EApp (EApp (EVar "splitGo") (EVar "sepLen")) (EVar "sep")) (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (EVar "sepLen"))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")))))))
 (DTypeSig true "lines" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "lines" ((PVar "s")) (EApp (EApp (EMethodRef "map") (EVar "stripCR")) (EApp (EApp (EVar "split") (EVar "nl")) (EVar "s"))))
-(DTypeSig false "stripCR" (TyFun (TyCon "String") (TyCon "String")))
+(DTypeSig true "stripCR" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "stripCR" ((PVar "line")) (EIf (EApp (EApp (EVar "endsWith") (ELit (LString "\r"))) (EVar "line")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "line")) (ELit (LInt 1)))) (EVar "line")) (EVar "line")))
 (DTypeSig true "words" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "words" ((PVar "s")) (EBlock (DoLet false false (PVar "a") (EApp (EVar "toChars") (EVar "s"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "a"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "wordsFrom") (EVar "a")) (EVar "n")) (EVar "s")) (EApp (EApp (EApp (EVar "firstNonSpace") (EVar "a")) (ELit (LInt 0))) (EVar "n"))))))

@@ -1857,7 +1857,7 @@ ifaceTabKey o n = tabKeyOf NsIface o n
 -- lets an atom-less copy veto a faithful one.
 krowSlotOccs : List (String, List Kind) -> Bool -> TyConOrigin -> String -> List Ty -> List (String, List Atom)
 krowSlotOccs scope perf o n args = match lookupTab (tyTabKey o n) perRun.value.dataParamKindsRef.value
-  Some kinds if listLen kinds == listLen args => (if perf then krowArgVarAtoms kinds (fromOption [] (paramRowAtomsOf (tyTabKey o n))) args else [])
+  Some kinds if listLen kinds == listLen args => (if perf then krowArgVarAtoms kinds (optionOr [] (paramRowAtomsOf (tyTabKey o n))) args else [])
     ++ flatMap (argPerformableOccs scope perf) args
   _ => flatMap (argPerformableOccs scope perf) args
 
@@ -3858,7 +3858,7 @@ declEnvVariantOwnerModules mid ((Variant cn (ConNamed _ _))::rest) acc =
   declEnvVariantOwnerModules
     mid
     rest
-    (omInsert cn (mid :: fromOption [] (omLookup cn acc)) acc)
+    (omInsert cn (mid :: optionOr [] (omLookup cn acc)) acc)
 declEnvVariantOwnerModules mid (_::rest) acc =
   declEnvVariantOwnerModules mid rest acc
 
@@ -3919,7 +3919,7 @@ declEnvMarkReached (d::rest) seen = declEnvMarkReached rest (omInsert d () seen)
 -- mapping every other cross-module table in this file keys on, so a hit here is a hit
 -- in `deOwnerModules`.
 declEnvDirectImports : OrdMap (List String) -> String -> List String
-declEnvDirectImports edges mid = fromOption [] (omLookup mid edges)
+declEnvDirectImports edges mid = optionOr [] (omLookup mid edges)
 
 -- The ONE call site of the two seeds, so a future third table cannot be added on
 -- one side only — the same "one body per direction" property `loadDataUniverse`
@@ -3963,7 +3963,7 @@ declEnvDirectImports edges mid = fromOption [] (omLookup mid edges)
 -- to today's prefix answer, never to `[]`.
 declEnvSeedDataUniverse : String -> DeclEnvs -> Unit
 declEnvSeedDataUniverse mid envs =
-  perRun.value.dataParamKindsRef := fromOption [] (omLookup mid envs.deKindsBefore)
+  perRun.value.dataParamKindsRef := optionOr [] (omLookup mid envs.deKindsBefore)
   -- #2158: the BARE-NAME half of the same seed, read under the same key and from
   -- the same fold (`declEnvSeedChain`'s third accumulator), so it holds exactly
   -- the `tabKeyName`s of the line above's keys by construction.
@@ -3976,21 +3976,21 @@ declEnvSeedDataUniverse mid envs =
   -- A MISS is fail-SILENT and STRICTLY BENIGN, unlike the kind half's: an empty
   -- index makes `noImplHintFor` withhold the "add deriving / write an impl"
   -- hint, so the reject still happens with its unhinted message.
-  perRun.value.dataParamNameIndexRef := fromOption omEmpty (omLookup mid envs.deNameIndexBefore)
+  perRun.value.dataParamNameIndexRef := optionOr omEmpty (omLookup mid envs.deNameIndexBefore)
   -- #1119 D-2: the VARIANCE half of the same seed, read under the same key.  A
   -- MISS here is fail-SILENT in the same direction the kind half is (an absent
   -- row makes `unifyN`'s variance gate abstain, i.e. today's leniency) — it can
   -- lose a rejection, never manufacture one.
-  perRun.value.dataParamPolarityRef := fromOption [] (omLookup mid envs.dePolaritiesBefore)
+  perRun.value.dataParamPolarityRef := optionOr [] (omLookup mid envs.dePolaritiesBefore)
   -- #2110 S2-1: the ATOM-GUARANTEE half of the same seed, read under the same
   -- key.  A MISS here is fail-LOUD, not fail-silent like the two above: an
   -- absent row reads as "this declaration guarantees nothing", which is the
   -- pre-#2110 behaviour, so it can only over-reject.  That is why the table
   -- shipped without a seed at all and why the gap was recoverable.
-  perRun.value.dataParamRowAtomsRef := fromOption [] (omLookup mid envs.deAtomsBefore)
-  perRun.value.fieldOwnersRef := fromOption omEmpty (omLookup mid envs.deOwnersBefore)
+  perRun.value.dataParamRowAtomsRef := optionOr [] (omLookup mid envs.deAtomsBefore)
+  perRun.value.fieldOwnersRef := optionOr omEmpty (omLookup mid envs.deOwnersBefore)
   perRun.value.fieldOwnerModulesRef := envs.deOwnerModules
-  perRun.value.fieldOwnerReachRef := fromOption omEmpty (omLookup mid envs.deReach)
+  perRun.value.fieldOwnerReachRef := optionOr omEmpty (omLookup mid envs.deReach)
 
 -- ── doctests ─────────────────────────────────────────────────────────────
 -- The three arms of `kindPublicDataDecl` that `publicDataDecl` does NOT have are
@@ -4014,9 +4014,9 @@ declEnvSeedDataUniverse mid envs =
 
 -- The field-owner population: only a `ConNamed` variant votes, and it votes under
 -- its CONSTRUCTOR name.
--- > fromOption [] (omLookup "x" (declEnvDeclFieldOwners [deFieldOwnerFixtureA] omEmpty))
+-- > optionOr [] (omLookup "x" (declEnvDeclFieldOwners [deFieldOwnerFixtureA] omEmpty))
 -- ["Pt"]
--- > fromOption [] (omLookup "x" (declEnvDeclFieldOwners [deKindNewtypeFixture] omEmpty))
+-- > optionOr [] (omLookup "x" (declEnvDeclFieldOwners [deKindNewtypeFixture] omEmpty))
 -- []
 
 -- Fixtures for the doctests above.  `deKindRow1` is the SAME decls at ordinal 1,
@@ -4095,13 +4095,13 @@ deKindRow1 = declEnvModule 1 "m" deKindFixtureDecls
 --   * A ONE-row chain could not discriminate any of that (prefix and final
 --     accumulator coincide at the only row), which is why the probe carries two
 --     rows with DISTINCT ids rather than reusing `deKindRow0`/`deKindRow1`.
--- > listLen (fromOption [] (omLookup "m" deSeedChainKinds))
+-- > listLen (optionOr [] (omLookup "m" deSeedChainKinds))
 -- 0
--- > fromOption [] (omLookup "x" (fromOption omEmpty (omLookup "m" deSeedChainOwners)))
+-- > optionOr [] (omLookup "x" (optionOr omEmpty (omLookup "m" deSeedChainOwners)))
 -- []
--- > listLen (fromOption [] (omLookup "n" deSeedChainKinds))
+-- > listLen (optionOr [] (omLookup "n" deSeedChainKinds))
 -- 3
--- > fromOption [] (omLookup "x" (fromOption omEmpty (omLookup "n" deSeedChainOwners)))
+-- > optionOr [] (omLookup "x" (optionOr omEmpty (omLookup "n" deSeedChainOwners)))
 -- ["Pt"]
 
 -- #2158: the THIRD accumulator, on the SAME probe, so the own-row exclusion is
@@ -4110,9 +4110,9 @@ deKindRow1 = declEnvModule 1 "m" deKindFixtureDecls
 -- kind-public names and NOT its own identical copies.  (`Priv` is absent from
 -- both for the separate reason `declEnvRowKindEntries`' cross-module arm drops
 -- a private decl — see the kind-count doctests above.)
--- > omKeys (fromOption omEmpty (omLookup "m" deSeedChainNames))
+-- > omKeys (optionOr omEmpty (omLookup "m" deSeedChainNames))
 -- []
--- > omKeys (fromOption omEmpty (omLookup "n" deSeedChainNames))
+-- > omKeys (optionOr omEmpty (omLookup "n" deSeedChainNames))
 -- ["Opq", "Pt", "Wrap"]
 
 -- 🚨 THE PARITY ASSERTION, AND IT IS THE ONE THAT PINS THE FIX.  #2158 first
@@ -4165,8 +4165,8 @@ deSeedChainNames =
 -- equivalence class the only reader (`noImplHintFor`'s `omHasKey`) can observe.
 deSeedNameParity : String -> Bool
 deSeedNameParity mid =
-  let accumulated = omKeys (fromOption omEmpty (omLookup mid deSeedChainNames))
-  let rebuilt = omKeys (omFromNames (map (p => tabKeyName (fst p)) (fromOption [] (omLookup mid deSeedChainKinds))) omEmpty)
+  let accumulated = omKeys (optionOr omEmpty (omLookup mid deSeedChainNames))
+  let rebuilt = omKeys (omFromNames (map (p => tabKeyName (fst p)) (optionOr [] (omLookup mid deSeedChainKinds))) omEmpty)
   accumulated == rebuilt
 
 -- ── #2158 F7: THE NAME INDEX AS A PROGRAM-GLOBAL TABLE (T-GLOBAL-TABLE) ──────
@@ -4258,7 +4258,7 @@ deNameIdxChainNoUnrelated =
   nm
 
 deNameIdxAt : OrdMap (OrdMap Unit) -> String -> List String
-deNameIdxAt nm mid = omKeys (fromOption omEmpty (omLookup mid nm))
+deNameIdxAt nm mid = omKeys (optionOr omEmpty (omLookup mid nm))
 
 -- ── doctests ─────────────────────────────────────────────────────────────
 -- (a) A name declared in an EARLIER module is visible at a later module's seed.
@@ -4270,9 +4270,9 @@ deNameIdxAt nm mid = omKeys (fromOption omEmpty (omLookup mid nm))
 --     the universe later, via `recordParamKinds` under `registerAllData … prog0`.
 --     `modB` declares `Beta`; `Beta` is absent from `modB`'s own seed and present
 --     one row later.
--- > omHasKey "Beta" (fromOption omEmpty (omLookup "modB" deNameIdxChain))
+-- > omHasKey "Beta" (optionOr omEmpty (omLookup "modB" deNameIdxChain))
 -- False
--- > omHasKey "Beta" (fromOption omEmpty (omLookup "modC" deNameIdxChain))
+-- > omHasKey "Beta" (optionOr omEmpty (omLookup "modC" deNameIdxChain))
 -- True
 
 --     …and the first row's seed is empty, own-row exclusion at the boundary.
@@ -4565,7 +4565,7 @@ addCtorIdentRaw : String -> TyConOrigin -> String -> ConPayload -> DataEnv -> Da
 addCtorIdentRaw tyName o cn payload env = match mkIdent NsCtor o cn
   None => env
   Some ident =>
-    let next = fromOption [] (omLookup cn env.deCtorIdents) ++ [(ident, tyName, Variant cn payload)]
+    let next = optionOr [] (omLookup cn env.deCtorIdents) ++ [(ident, tyName, Variant cn payload)]
     let env2 = DataEnv { env | deCtorIdents = omInsert cn next env.deCtorIdents }
     match payload
       ConNamed fields _ => addRecordIdentRaw tyName cn ident fields env2
@@ -4580,7 +4580,7 @@ addCtorIdentRaw tyName o cn payload env = match mkIdent NsCtor o cn
 -- when the fold finishes. Values are byte-identical, only the fold is linear.
 addRecordIdentRaw : String -> String -> Ident -> List Field -> DataEnv -> DataEnv
 addRecordIdentRaw tyName cn ident fields env =
-  let next = (ident, tyName, fields) :: fromOption [] (omLookup cn env.deRecordIdents)
+  let next = (ident, tyName, fields) :: optionOr [] (omLookup cn env.deRecordIdents)
   addFieldOwnerIdents
     ident
     cn
@@ -4590,7 +4590,7 @@ addRecordIdentRaw tyName cn ident fields env =
 addFieldOwnerIdents : Ident -> String -> List Field -> DataEnv -> DataEnv
 addFieldOwnerIdents _ _ [] env = env
 addFieldOwnerIdents ident cn ((Field fn _)::rest) env =
-  let next = (ident, cn) :: fromOption [] (omLookup fn env.deFieldOwnerIdents)
+  let next = (ident, cn) :: optionOr [] (omLookup fn env.deFieldOwnerIdents)
   addFieldOwnerIdents
     ident
     cn
@@ -4920,18 +4920,18 @@ deRecordIdentTyNames ((_, tyName, _)::rest) =
   tyName :: deRecordIdentTyNames rest
 
 -- ── doctests ─────────────────────────────────────────────────────────────
--- > map snd (fromOption [] (omLookup "x" deFieldOwnerCollisionEnv.deFieldOwnerIdents))
+-- > map snd (optionOr [] (omLookup "x" deFieldOwnerCollisionEnv.deFieldOwnerIdents))
 -- ["Pt", "Vec"]
--- > listLen (fromOption [] (omLookup "x" deFieldOwnerCollisionEnv.deFieldOwnerIdents))
+-- > listLen (optionOr [] (omLookup "x" deFieldOwnerCollisionEnv.deFieldOwnerIdents))
 -- 2
--- > map snd (fromOption [] (omLookup "x" deFieldOwnerSingleEnv.deFieldOwnerIdents))
+-- > map snd (optionOr [] (omLookup "x" deFieldOwnerSingleEnv.deFieldOwnerIdents))
 -- ["Pt"]
 
 -- The discriminating case: SAME declared name ("Pt") from two DIFFERENT
 -- modules stays two DISTINCT identities, not one bare-name collision.
--- > map snd (fromOption [] (omLookup "x" deFieldOwnerSameNameEnv.deFieldOwnerIdents))
+-- > map snd (optionOr [] (omLookup "x" deFieldOwnerSameNameEnv.deFieldOwnerIdents))
 -- ["Pt", "Pt"]
--- > distinctIdentsIn2 (fromOption [] (omLookup "x" deFieldOwnerSameNameEnv.deFieldOwnerIdents))
+-- > distinctIdentsIn2 (optionOr [] (omLookup "x" deFieldOwnerSameNameEnv.deFieldOwnerIdents))
 -- True
 
 -- #2147's order half, on `deRecordIdents` rather than `deFieldOwnerIdents`:
@@ -4939,9 +4939,9 @@ deRecordIdentTyNames ((_, tyName, _)::rest) =
 -- (ordinal 1).  Remove `deRecordIdents`' `omMapValues reverseL` in
 -- `buildDataEnv` and this reads `["P2", "P1"]`; the length assertion beside it
 -- does not move, which is precisely why a length was never enough.
--- > deRecordIdentTyNames (fromOption [] (omLookup "Pt" deRecordOrderEnv.deRecordIdents))
+-- > deRecordIdentTyNames (optionOr [] (omLookup "Pt" deRecordOrderEnv.deRecordIdents))
 -- ["P1", "P2"]
--- > listLen (fromOption [] (omLookup "Pt" deRecordOrderEnv.deRecordIdents))
+-- > listLen (optionOr [] (omLookup "Pt" deRecordOrderEnv.deRecordIdents))
 -- 2
 
 -- 🚨 THE BLANK LINE ABOVE IS LOAD-BEARING — DO NOT CLOSE THE GAP.  A doctest's
@@ -6961,8 +6961,8 @@ data CSlot = CSlot { csIface : IfaceRef, csId : Int }
 --   * `0` is a genuinely RECORDED state (`registerMember` guards on the constraint
 --     list, not on the surviving slots, so an entry with zero declared slots is real),
 --     so spelling absence `0` makes the two indistinguishable;
---   * `Option Int` collapses at the read site through one invisible `fromOption 0`
---     (99 uses of `fromOption` in `compiler/`), which is exactly the erasure this
+--   * `Option Int` collapses at the read site through one invisible `optionOr 0`
+--     (99 uses of `optionOr` in `compiler/`), which is exactly the erasure this
 --     distinction exists to survive.
 -- `CDPUnknown` has no prelude eliminator and the token exists nowhere else in the
 -- tree, so "is any site collapsing absence into a length?" is one grep.
@@ -7593,7 +7593,7 @@ consSiteFn fn x idx = omInsert fn (x :: sitesFor fn idx) idx
 
 -- the sites recorded for [fn], most-recent-first
 sitesFor : String -> OrdMap (List a) -> List a
-sitesFor fn idx = fromOption [] (omLookup fn idx)
+sitesFor fn idx = optionOr [] (omLookup fn idx)
 
 -- #194: cross-module accumulator for the FIRST (bare-dict) elaboration sweep's
 -- direct promotions.  resetState clears promotedRef per module, so elabHarvestWorker
@@ -9259,7 +9259,7 @@ freshEffSubst (id::rest) = (id, freshEffvar ()) :: freshEffSubst rest
 
 substMono : List (Int, Mono) -> List (Int, Ref Effvar) -> Mono -> Mono
 substMono subst esub t = match normalize t
-  TVar cell => fromOption (TVar cell) (lookupAssocI (tyvarId cell) subst)
+  TVar cell => optionOr (TVar cell) (lookupAssocI (tyvarId cell) subst)
   c@(TCon _ _) => c
   TRigid n => TRigid n
   TApp a b => TApp (substMono subst esub a) (substMono subst esub b)
@@ -9286,7 +9286,7 @@ reopenRowN _ r = r
 -- the arrow domain and re-opens covariant closed-with-labels rows (start pos=True)
 substMonoP : Bool -> List (Int, Mono) -> List (Int, Ref Effvar) -> Mono -> Mono
 substMonoP pos subst esub t = match normalize t
-  TVar cell => fromOption (TVar cell) (lookupAssocI (tyvarId cell) subst)
+  TVar cell => optionOr (TVar cell) (lookupAssocI (tyvarId cell) subst)
   c@(TCon _ _) => c
   TRigid n => TRigid n
   TApp a b => TApp (substMonoP pos subst esub a) (substMonoP pos subst esub b)
@@ -9360,9 +9360,9 @@ ppSchemeNamed n s =
   -- module last checked).  With the leak-guard windows retired this is what stops a
   -- where-helper `g`'s obligation rendering on an unrelated top-level `g`; a binder
   -- absent from schemeDefIdsRef (id 0) falls to the bare-name scan (today's path).
-  let id = fromOption 0 (omLookup n perRun.value.schemeDefIdsRef.value)
+  let id = optionOr 0 (omLookup n perRun.value.schemeDefIdsRef.value)
   ppSchemeCon
-    (fromOption [] (lookupSchemeObls n id perRun.value.schemeObligationsRef.value))
+    (optionOr [] (lookupSchemeObls n id perRun.value.schemeObligationsRef.value))
     s
 
 -- S-full-env-scheme-entry (#1116): `ppSchemeNamed` for a display surface whose env
@@ -9395,7 +9395,7 @@ ppSchemeNamedFull n s = match omLookup n perRun.value.schemeDefIdsRef.value
   Some _ => ppSchemeNamed n s
   None => match lookupSchemeObls n 0 perRun.value.schemeObligationsRef.value
     Some obs => ppSchemeCon obs s
-    None => ppSchemeCon (fromOption [] (omLookup n crossRun.value.coreSchemeObligationsRef.value)) s
+    None => ppSchemeCon (optionOr [] (omLookup n crossRun.value.coreSchemeObligationsRef.value)) s
 
 ppMono : Mono -> String
 ppMono t =
@@ -9601,7 +9601,7 @@ aliasDfsVisit graph visitedRef onStackRef cyclicOut name =
     if contains name !onStackRef then cyclicOut := dedup (takeUntilInclusiveS name !onStackRef ++ !cyclicOut)
     else
       onStackRef := name :: !onStackRef
-      let _ = aliasDfsVisitNeighbors graph visitedRef onStackRef cyclicOut (fromOption [] (lookupAssoc name graph))
+      let _ = aliasDfsVisitNeighbors graph visitedRef onStackRef cyclicOut (optionOr [] (lookupAssoc name graph))
       onStackRef := filterList (/= name) !onStackRef
       visitedRef := name :: !visitedRef
 
@@ -9766,7 +9766,7 @@ fromAstTypeE etbl tvs (TyCon { tyConName = n, tyConOrigin = o }) = match lookupT
 -- RIGID PRODUCER 1 of 2 (#1110).  A `TyVar` bound by the enclosing scheme
 -- resolves to its mono; the FALLBACK — an unbound type-parameter name — is a
 -- rigid variable, not a type constructor.  See `Mono.TRigid`.
-fromAstTypeE etbl tvs (TyVar n) = fromOption (TRigid n) (lookupAssoc n tvs)
+fromAstTypeE etbl tvs (TyVar n) = optionOr (TRigid n) (lookupAssoc n tvs)
 fromAstTypeE etbl tvs (TyApp a b) = match tyAppSpine (TyApp a b)
   (TyCon { tyConName = n, tyConOrigin = o }, args) => fromAstTypeApp etbl tvs o n args
   -- #822: an ABSTRACT head with known kinds — an interface typaram of graded kind
@@ -9889,7 +9889,7 @@ fromAstTypeApp etbl tvs o n args =
 -- `data D e f = MkD (Unit -> <e> Unit) (f e Int)`, the `e` of the abstract-headed
 -- `f e Int` reaches this arm unscoped.
 -- The result is a FIX, not a leak: pre-#822 that `e` was withheld from tvs and then
--- elaborated by `fromAstTypeE (TyVar n)`'s `fromOption (TCon n)` fallback into a
+-- elaborated by `fromAstTypeE (TyVar n)`'s `optionOr (TCon n)` fallback into a
 -- FABRICATED RIGID `TCon "e"` — `getInner : D e f -> f e Int` inferred as
 -- `D a b -> b e Int`, an opaque constant no caller can ever satisfy.  It now infers
 -- `D a b -> b a Int`.  Pinned by typecheck_error_fixtures/graded_krow_data_slot_abstract_head.mdk.
@@ -10075,7 +10075,7 @@ rowArgAtomsIn _ _ = []
 
 rowArgAtomsApp : List (String, List Kind) -> TyConOrigin -> String -> List Ty -> List (String, List Atom) -> List (String, List Atom)
 rowArgAtomsApp scope o n args fallback = match lookupTab (tyTabKey o n) perRun.value.dataParamKindsRef.value
-  Some kinds if listLen kinds == listLen args => krowArgVarAtoms kinds (fromOption [] (paramRowAtomsOf (tyTabKey o n))) args
+  Some kinds if listLen kinds == listLen args => krowArgVarAtoms kinds (optionOr [] (paramRowAtomsOf (tyTabKey o n))) args
     ++ flatMap (rowArgAtomsIn scope) args
   _ => fallback
 
@@ -10809,7 +10809,7 @@ qualConstraintDecl name = match qualConstraintKey name
 qualDeclOf : String -> String -> List Int -> CDeclared
 qualDeclOf src origin ids =
   let slots = pairSlots ids
-    (fromOption [] (lookupQualPayload src origin crossRun.value.crossModuleFunConstraintIfacesQualRef.value))
+    (optionOr [] (lookupQualPayload src origin crossRun.value.crossModuleFunConstraintIfacesQualRef.value))
   CDeclared {
     cdSlots = slots,
     cdPrefix = clampPrefix slots
@@ -10820,7 +10820,7 @@ qualDeclOf src origin ids =
     -- ids but no args is unaffected.  S-inferred-vector-supply (#1869): an INFERRED callee
     -- is no longer automatically in that class — `registerInferredFor` writes a real row
     -- when it recovers one, and writes none (this arm) when it recovers nothing.
-    cdArgs = fromOption [] (lookupQualPayload src origin crossRun.value.crossModuleFunConstraintArgsQualRef.value),
+    cdArgs = optionOr [] (lookupQualPayload src origin crossRun.value.crossModuleFunConstraintArgsQualRef.value),
   }
 
 -- the (import-source module, ORIGINAL exported name) key a cross-module callee's qual
@@ -10841,7 +10841,7 @@ qualConstraintKey : String -> Option (String, String)
 qualConstraintKey name = map
   (src => (
     src,
-    fromOption name (lookupAssoc name perRun.value.currentImportOriginsRef.value),
+    optionOr name (lookupAssoc name perRun.value.currentImportOriginsRef.value),
   ))
   (lookupAssoc name perRun.value.currentImportDefinersRef.value)
 
@@ -10872,7 +10872,7 @@ declaredConstraintIds name = match qualConstraintIds name
   -- through to the source-blind bare-name table.
   None =>
     if hasImportDefiner name then []
-    else fromOption [] (lookupAssocSL2 name perRun.value.funConstraintsRef.value)
+    else optionOr [] (lookupAssocSL2 name perRun.value.funConstraintsRef.value)
 
 qualConstraintIds : String -> Option (List Int)
 qualConstraintIds name = match qualConstraintKey name
@@ -10942,8 +10942,8 @@ declaredConstraintFor name = match qualConstraintDecl name
     if hasImportDefiner name then CDeclared { cdSlots = [], cdPrefix = CDPLen 0, cdArgs = [] }
     else
       let slots = pairSlots
-        (fromOption [] (lookupAssocSL2 name perRun.value.funConstraintsRef.value))
-        (fromOption [] (lookupAssocS name perRun.value.funConstraintIfacesRef.value))
+        (optionOr [] (lookupAssocSL2 name perRun.value.funConstraintsRef.value))
+        (optionOr [] (lookupAssocS name perRun.value.funConstraintIfacesRef.value))
       CDeclared {
         cdSlots = slots,
         cdPrefix = clampPrefix slots (lookupAssoc name perRun.value.funConstraintDeclaredRef.value),
@@ -11134,7 +11134,7 @@ instantiateTracked (Forall ids evars t) =
 -- through `routesOfMonosTopV`; empty vectors make that the scalar router term for term.
 declaredConstraintArgs : String -> List (List Mono)
 declaredConstraintArgs name =
-  fromOption [] (lookupAssocVecs name perRun.value.funConstraintArgsRef.value)
+  optionOr [] (lookupAssocVecs name perRun.value.funConstraintArgsRef.value)
 
 lookupAssocVecs : String -> List (String, List (List Mono)) -> Option (List (List Mono))
 lookupAssocVecs _ [] = None
@@ -11270,8 +11270,8 @@ expandSupersCross allDecls idsTbl ifacesTbl argsTbl = (
 -- vector recoverable", and keys exactly as it did before this widening).
 expandSupersEntry : List Decl -> List (String, List IfaceRef) -> List (String, List (List Mono)) -> (String, List Int) -> (String, List Int)
 expandSupersEntry allDecls ifacesTbl argsTbl (fn, ids) =
-  let ifaces = fromOption [] (lookupAssocS fn ifacesTbl)
-  let args = fromOption [] (lookupAssocVecs fn argsTbl)
+  let ifaces = optionOr [] (lookupAssocS fn ifacesTbl)
+  let args = optionOr [] (lookupAssocVecs fn argsTbl)
   let pairs = expandSupersVecs allDecls (zipSlotVecs (pairSlots ids ifaces) args)
   (fn, map (s => (fst s).csId) pairs)
 
@@ -11800,7 +11800,7 @@ fieldSelectionWellTyped te rname ri fname ft = match ctorSiblingWithholdingHere 
   Some sib =>
     let _ = pushTypeError
       "T-FIELD-NOT-IN-ALL-CTORS"
-      (fieldNotInAllCtorsMsg fname (fromOption rname (headTyconNameMono te)) sib)
+      (fieldNotInAllCtorsMsg fname (optionOr rname (headTyconNameMono te)) sib)
     -- Same poisoned placeholder `unknownFieldFresh` returns: the access is already
     -- explained, so don't let its result var pile a second cascade on top.
     let v = freshVar ()
@@ -11844,7 +11844,7 @@ fieldNotInAllCtorsMsg fname tname sib = "Field '\{fname}' is not declared by eve
 -- because it asks a spelling question, not a candidacy one.
 fieldOwnerNames : String -> List String
 fieldOwnerNames fname =
-  fieldOwnerReachFilter (sortUniqS (fromOption
+  fieldOwnerReachFilter (sortUniqS (optionOr
     []
     (omLookup fname perRun.value.fieldOwnersRef.value)))
 
@@ -12228,7 +12228,7 @@ mangledHeadCandidates : String -> String -> List (String, RecordInfo)
 mangledHeadCandidates head fname =
   mangledHeadCandidatesGo
     head
-    (fromOption [] (omLookup fname perRun.value.fieldOwnersRef.value))
+    (optionOr [] (omLookup fname perRun.value.fieldOwnersRef.value))
 
 mangledHeadCandidatesGo : String -> List String -> List (String, RecordInfo)
 mangledHeadCandidatesGo _ [] = []
@@ -16148,7 +16148,7 @@ registerRecordInfoKeyed o key typeName params fields =
 addFieldOwners : String -> List String -> OrdMap (List String) -> OrdMap (List String)
 addFieldOwners _ [] m = m
 addFieldOwners key (fn::rest) m =
-  addFieldOwners key rest (omInsert fn (key :: fromOption [] (omLookup fn m)) m)
+  addFieldOwners key rest (omInsert fn (key :: optionOr [] (omLookup fn m)) m)
 
 recFieldMono : List (String, Mono) -> Field -> (String, Mono)
 recFieldMono tvs (Field fn ty) = (fn, fromAstType tvs ty)
@@ -17048,7 +17048,7 @@ methodConstrainedPairs _ =
 -- pinned by this channel got a bare mismatch with no help at all.
 argStampPairs : PendingEntry -> List (Int, String)
 argStampPairs (PendingEntry name _ am _ _ _) =
-  map (id => (id, fromOption "" (ifaceOfMethodName name))) (monoUnboundIds am)
+  map (id => (id, optionOr "" (ifaceOfMethodName name))) (monoUnboundIds am)
 
 -- #2026: the ENTRY-POINT-NEUTRAL half of the method pin channel, and the reason this
 -- file now has one.  `methodConstrainedIds`/`-Pairs` above read `pendingArgStamps`,
@@ -17272,7 +17272,7 @@ dedupPairsByIdGo (p::rest) seen
 -- recovers whatever the use sites unified it to.  [t] is known to contain it (the
 -- caller filtered on freeGenVars t), so the fallback is unreachable in practice.
 tvarMonoOfIn : Mono -> Int -> Mono
-tvarMonoOfIn t id = fromOption t (findTvarInMono t id)
+tvarMonoOfIn t id = optionOr t (findTvarInMono t id)
 
 -- #866 / #1021 review — Blocker 3.  A `Type mismatch` between the two types a PINNED
 -- local was used at is not a mistake the user made at the second use site; it is this
@@ -18552,7 +18552,7 @@ ifaceParamMonos name fullMono = match omLookup name perRun.value.methodIfacePara
 -- the fallback when the head match bound nothing for it is a rigid variable,
 -- not a type constructor.  See `Mono.TRigid`.
 paramMonoOf : List (String, Mono) -> String -> Mono
-paramMonoOf subst tp = fromOption (TRigid tp) (lookupAssoc tp subst)
+paramMonoOf subst tp = optionOr (TRigid tp) (lookupAssoc tp subst)
 
 -- 🚨 THE SHARED RETEST, AND IT IS SPELLING-KEYED THROUGH `dispHeadTab` ON PURPOSE —
 -- IT MUST BE THE SAME PROJECTION THE BUCKETING APPLIES, NEVER A STRONGER ONE.
@@ -18753,7 +18753,7 @@ data AdmittedVerdict = AdDefer | AdStandalone | AdReject (List IfaceRef)
 -- projection is correct here", not "nothing is admitted".
 admittedIfacesFor : String -> List IfaceRef
 admittedIfacesFor name =
-  fromOption [] (omLookup name perRun.value.methodAdmittedIfacesRef.value)
+  optionOr [] (omLookup name perRun.value.methodAdmittedIfacesRef.value)
 
 importerAdmittedVerdict : ImplEnv -> String -> List Mono -> AdmittedVerdict
 importerAdmittedVerdict env name ats = match admittedIfacesFor name
@@ -19157,7 +19157,7 @@ enclSlotIndex (Some p) target encl = match indexOfPred target p (enclPreds encl)
 
 enclSlotIds : String -> List Int
 enclSlotIds encl =
-  fromOption [] (lookupAssocSL2 encl perRun.value.funConstraintsRef.value)
+  optionOr [] (lookupAssocSL2 encl perRun.value.funConstraintsRef.value)
 
 -- [encl]'s own constraint slots as PREDICATES, in slot order: each slot's interface
 -- and the argument vector its signature recorded, paired with the tyvar id the slot
@@ -19171,7 +19171,7 @@ enclPreds encl =
   zipSlotArgs
     (pairSlots
       (enclSlotIds encl)
-      (fromOption
+      (optionOr
         []
         (lookupAssocS encl perRun.value.funConstraintIfacesRef.value)))
     (declaredConstraintArgs encl)
@@ -19312,7 +19312,7 @@ goalPredOf : String -> Mono -> Option Predicate
 goalPredOf name fullMono = map
   (ifr => Predicate {
     iface = ifr,
-    args = fromOption [] (ifaceParamMonos name fullMono),
+    args = optionOr [] (ifaceParamMonos name fullMono),
   })
   (admittedIfaceFor name)
 
@@ -19522,7 +19522,7 @@ stampOpRouteVal isBinop implTable method operandMono tag =
     -- singleton — entryHeadMatches then takes its arg-0 fallback, byte-identical
     -- to the pre-#609 scan.  Every operator interface (Eq/Ord/Num) is single-param
     -- anyway, where the singleton IS the full vector.
-    let key = fromOption tag (keyForSite method [operandMono])
+    let key = optionOr tag (keyForSite method [operandMono])
     -- ARCH B-2.1-h: graph-global, off `bodyImplEnvRef` — see `ieDefinesReqMethodAt`.
     -- The head projection is `headTyconMono operandMono`, i.e. the `HeadKey` whose
     -- `headKeyName` IS the `tag` this arm was passed (`entail` derives both from the
@@ -20640,7 +20640,7 @@ insertIfaceMethodIdents iface typarams scope origin ((IfaceMethod mname mty _ _)
 -- of this method name" and the collided list cannot fill with self-collisions.
 addMethodIdentCand : String -> Ident -> (IfaceRef, List String, Ty, List (String, List Kind)) -> (OrdMap (List (Ident, (IfaceRef, List String, Ty, List (String, List Kind)))), List String) -> (OrdMap (List (Ident, (IfaceRef, List String, Ty, List (String, List Kind)))), List String)
 addMethodIdentCand mname ident payload (cands, collided) =
-  let prior = dropMethodIdentCand ident (fromOption [] (omLookup mname cands))
+  let prior = dropMethodIdentCand ident (optionOr [] (omLookup mname cands))
   let next = prior ++ [(ident, payload)]
   (
     omInsert mname next cands,
@@ -20751,7 +20751,7 @@ aliasMethodKeyGroup : List (String, String, String, Ident, Loc) -> OrdMap (List 
 aliasMethodKeyGroup [] g = g
 aliasMethodKeyGroup (r::rest) g =
   let k = aliasRowKey r
-  aliasMethodKeyGroup rest (omInsert k (fromOption [] (omLookup k g) ++ [r]) g)
+  aliasMethodKeyGroup rest (omInsert k (optionOr [] (omLookup k g) ++ [r]) g)
 
 -- One decision per KEY.  Exactly one declaration identity behind it ⇒ supply the entry
 -- (the #1386 / #1276 remedy, unchanged).  Two or more ⇒ no entry and a hard ambiguity
@@ -20761,7 +20761,7 @@ aliasMethodKeyGroup (r::rest) g =
 aliasMethodKeyApply : OrdMap (List (String, String, String, Ident, Loc)) -> List String -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind)) -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind))
 aliasMethodKeyApply _ [] tab = tab
 aliasMethodKeyApply g (k::rest) tab =
-  let hits = fromOption [] (omLookup k g)
+  let hits = optionOr [] (omLookup k g)
   let tab2 = match aliasRowIdents hits []
     [] => tab
     [_] => aliasMethodKeyEntry k hits tab
@@ -21295,7 +21295,7 @@ addCtorIdentCand env tyName o cn (cands, collided) = match mkIdent NsCtor o cn
   Some ident => match lookupCtor env cn
     None => (cands, collided)
     Some s =>
-      let prior = dropCtorIdentCand ident (fromOption [] (omLookup cn cands))
+      let prior = dropCtorIdentCand ident (optionOr [] (omLookup cn cands))
       let next = prior ++ [(ident, tyName, s)]
       (
         omInsert cn next cands,
@@ -21609,7 +21609,7 @@ addRecordIdentCand tyName o cn (cands, collided) = match mkIdent NsCtor o cn
   Some ident => match lookupRecordByName cn
     None => (cands, collided)
     Some ri =>
-      let prior = dropRecordIdentCand ident (fromOption [] (omLookup cn cands))
+      let prior = dropRecordIdentCand ident (optionOr [] (omLookup cn cands))
       let next = prior ++ [(ident, tyName, ri)]
       (
         omInsert cn next cands,
@@ -22333,7 +22333,7 @@ export type ImplBuckets = OrdMap (List ImplEntry)
 -- the entries at head tycon [tag] (empty when no impl heads there), in declaration
 -- order.  Shared by both bucket flavours (List ImplEntry / List KeyEntry).
 bucketOf : String -> OrdMap (List a) -> List a
-bucketOf tag buckets = fromOption [] (omLookup tag buckets)
+bucketOf tag buckets = optionOr [] (omLookup tag buckets)
 
 -- build the table from the program's impls-with-requires (others need no dicts),
 -- bucketed by head tycon tag with each bucket in forward declaration order.
@@ -22570,7 +22570,7 @@ implKeyTc iface tys = implRouteKeyWord OriginUnresolved iface tys None
 -- GOAL's head tag".  That is only sound while the winner's head IS the goal's head,
 -- which held by construction while every entry came out of `bucketOf (goalHeadCon
 -- goals)`.  Once the headless bucket is unioned in, a `noneHeadTag` winner reaches
--- here and `None` threw it away one line later: `entailInst`'s `fromOption tag (…)`
+-- here and `None` threw it away one line later: `entailInst`'s `optionOr tag (…)`
 -- fell back to the goal's head tycon and called the CONCRETE sibling — which is why
 -- registering and unioning the general impl, on their own, changed nothing
 -- observable (proved twice, two independent agents, both probes inert).
@@ -22605,10 +22605,10 @@ implKeyTc iface tys = implRouteKeyWord OriginUnresolved iface tys None
 -- needed, before F-3b moved the word — is not reached from here at all.  The tier
 -- that DOES depend on this function is the one below it, `emitDefaultRKey`, and it
 -- is reached from the `None` arm, not from here: `mdk_default_<method>_<TAG>` is
--- keyed on the `<TAG>` that `fromOption tag` supplies at the caller.  That is why
+-- keyed on the `<TAG>` that `optionOr tag` supplies at the caller.  That is why
 -- the `None` arm must keep the concrete head tag (see its own comment).
 --
--- ⇒ `fromOption tag` is NOT a hedge over a selector result.  At the sites where it
+-- ⇒ `optionOr tag` is NOT a hedge over a selector result.  At the sites where it
 -- fires it is the ONLY source of that TAG — nothing downstream re-derives one — so
 -- deleting it breaks every cross-module method-less impl inheriting an interface
 -- default.  And read a green suite here accordingly: it is evidence about the
@@ -22621,7 +22621,7 @@ implKeyTc iface tys = implRouteKeyWord OriginUnresolved iface tys None
 -- word.  Returning the canonical key for a UNIQUE headless head would have stamped
 -- `Tag|a|` where the emitter computes `__none__` — a dict-word skew invisible on the
 -- direct-call path this fixture exercises and live on the RDict path.
--- (Retiring `fromOption tag (…)` outright — B-2/#1113's end state, where the route
+-- (Retiring `optionOr tag (…)` outright — B-2/#1113's end state, where the route
 -- IS the selected instance's identity with no head-tag hedge at all — additionally
 -- renames every single-impl-per-head symbol in the tree, which moves the seed and
 -- every golden.  That is #1113's change, not this one; what F-3b needs is only that
@@ -22716,7 +22716,7 @@ keyForSite name goals =
         Some (headKeyNameOr noneHeadTag (univReceiverTag tys))
     -- No impl anywhere in the graph defines [name] at this goal's head (or the goal
     -- has no head tycon at all, `ieSelectRowByMethod`'s `None => None` arm).  Every
-    -- caller answers `None` with `fromOption tag (…)`, i.e. the bare goal-head tag —
+    -- caller answers `None` with `optionOr tag (…)`, i.e. the bare goal-head tag —
     -- unchanged, and now genuinely safe: the graph agreeing there is no impl means
     -- there is no second impl for that bare word to name.
     None => None
@@ -23945,14 +23945,14 @@ censusHeadNameTy t = match headTySpineNode t
   _ => None
 
 -- The bare name of a head key, with [dflt] when there is NO head type
--- constructor — the `fromOption <placeholder> (headTycon… …)` shape the
+-- constructor — the `optionOr <placeholder> (headTycon… …)` shape the
 -- dispatch-key sites already used, now spelled once so the projection happens
 -- exactly once per call (Medaka is strict: `map headKeyName` over the `Option`
 -- would allocate a second `Option` to throw away).  HOW MANY such sites there
 -- are is a command, not a number written here — the same shape spelled
--- `fromOption` on the commit before A-2.2 is
+-- `optionOr` on the commit before A-2.2 is
 -- `git show <pre-A-2.2>:compiler/types/typecheck.mdk
---  | grep -nE 'fromOption[^(]*\(headTycon'`, and the sites this covers now are:
+--  | grep -nE 'optionOr[^(]*\(headTycon'`, and the sites this covers now are:
 --
 --   grep -nw headKeyNameOr compiler/types/typecheck.mdk \
 --     | grep -vE '^[0-9]+:[[:space:]]*--' \
@@ -24375,9 +24375,9 @@ entailAssum m encl name kind = match entailAssumVar m encl name kind
 --     (`goalPredOfOp` and `stampOpRouteVal` say the same).
 goalVecOfKind : String -> Mono -> EntailKind -> List Mono
 goalVecOfKind name m (EKReturn fullMono _) =
-  fromOption [m] (ifaceParamMonos name fullMono)
+  optionOr [m] (ifaceParamMonos name fullMono)
 goalVecOfKind name m (EKArg fullMono) =
-  fromOption [m] (ifaceParamMonos name fullMono)
+  optionOr [m] (ifaceParamMonos name fullMono)
 goalVecOfKind _ m (EKNestedTop _ _ _ _ rest) = m::rest
 goalVecOfKind _ m (EKOp _ _) = [m]
 
@@ -24426,8 +24426,8 @@ entailInst : ImplBuckets -> String -> Mono -> String -> String -> EntailKind -> 
 -- with no registered interface (ifaceParamMonos → None) still selects on [m],
 -- exactly as before.
 entailInst implTable name m encl tag (EKReturn fullMono _) =
-  let paramMonos = fromOption [m] (ifaceParamMonos name fullMono)
-  let routeKey = fromOption tag (keyForSite name paramMonos)
+  let paramMonos = optionOr [m] (ifaceParamMonos name fullMono)
+  let routeKey = optionOr tag (keyForSite name paramMonos)
   (RKey routeKey [], implDictRoutesForFull implTable encl name tag m paramMonos)
 -- #203 (E, the root fix): mirror EKReturn.  Was `RKey tag …` — a BARE ambiguous head
 -- tag whose constructor carried no KeyBuckets, so it could not reach the min⊑ selector;
@@ -24510,7 +24510,7 @@ entailInst implTable _ m encl tag (EKNestedTop iface _ prevSize spent rest) =
   -- The lesson for the next bite at this seam: a wrong answer downstream of an
   -- interface-spelling collision is NOT evidence that the interface-spelling seam caused
   -- it.  Vary the collision away and re-measure before attributing.
-  let routeKey = fromOption tag (keyForSiteByIface iface (m::rest))
+  let routeKey = optionOr tag (keyForSiteByIface iface (m::rest))
   (
     RKey routeKey (argImplRequiresRoutes implTable iface encl tag m rest prevSize spent),
     [],
@@ -24524,8 +24524,8 @@ entailInst implTable _ m encl tag (EKNestedTop iface _ prevSize spent rest) =
 -- handed the scalar `m` to argImplDictRoutesForEncl, so the two arms could select
 -- differently at n≥2.  Sharing one binding makes them agree by construction.
 entailInst implTable name m encl tag (EKArg fullMono) =
-  let goals = fromOption [m] (ifaceParamMonos name fullMono)
-  let routeKey = fromOption tag (keyForSite name goals)
+  let goals = optionOr [m] (ifaceParamMonos name fullMono)
+  let routeKey = optionOr tag (keyForSite name goals)
   -- ARCH B-2.1-h: graph-global, off `bodyImplEnvRef` — see `ieDefinesReqMethodAt`,
   -- which carries the measured repro.  The head is `headTyconMono m`, the `HeadKey`
   -- whose name IS this arm's `tag` (`entail` derives `tag` from the same `m` via
@@ -25004,7 +25004,7 @@ resolveMethodDicts implTable ((methodRef, monos)::rest) =
 realizeRecDictApps : List RecDictApp -> Unit
 realizeRecDictApps [] = ()
 realizeRecDictApps ((RecDictApp routesRef callee encl mono)::rest) =
-  let ids = fromOption [] (lookupAssocSL2 callee perRun.value.funConstraintsRef.value)
+  let ids = optionOr [] (lookupAssocSL2 callee perRun.value.funConstraintsRef.value)
   let routes = recRoutes encl mono ids
   routesRef := routes
   realizeRecDictApps rest
@@ -25034,7 +25034,7 @@ resolveRecMono encl m = match headTyconNameMono m
 -- constraint ids (its position in funConstraintsRef[encl] = the kept slot)
 enclSlot : String -> Mono -> Option Int
 enclSlot encl m = match normalize m
-  TVar cell => indexOfId (tyvarId cell) (fromOption [] (lookupAssocSL2 encl perRun.value.funConstraintsRef.value))
+  TVar cell => indexOfId (tyvarId cell) (optionOr [] (lookupAssocSL2 encl perRun.value.funConstraintsRef.value))
   _ => None
 
 indexOfId : Int -> List Int -> Option Int
@@ -25160,7 +25160,7 @@ binopRouteSplit r = (r, [])
 
 binopMethodApp : String -> Expr -> Expr -> Ref Route -> Expr
 binopMethodApp op l r routeRef =
-  let method = fromOption "eq" (binopMethod op)
+  let method = optionOr "eq" (binopMethod op)
   let split = binopRouteSplit !routeRef
   let call = EApp (EApp (EMethodAt method (Ref (fst split)) (Ref (snd split)) (Ref [])) l) r
   if op == "/=" then EApp (EVar "not") call else call
@@ -25170,7 +25170,7 @@ binopMethodApp op l r routeRef =
 -- Route-ripping helper — nothing about it is binop-specific).
 unopMethodApp : String -> Expr -> Ref Route -> Expr
 unopMethodApp op e routeRef =
-  let method = fromOption "negate" (unopMethod op)
+  let method = optionOr "negate" (unopMethod op)
   let split = binopRouteSplit !routeRef
   EApp (EMethodAt method (Ref (fst split)) (Ref (snd split)) (Ref [])) e
 
@@ -25233,7 +25233,7 @@ ifaceDictPassDefault n ty pats body mloc k
 
 methodDictArityOf : String -> Int
 methodDictArityOf n =
-  listLen (fromOption
+  listLen (optionOr
     []
     (lookupAssocSL2 n perRun.value.methodConstraintsRef.value))
 
@@ -25461,9 +25461,7 @@ fieldAssignDictSites (FieldAssign _ e) = collectDictSites e
 
 dictArityOf : String -> Int
 dictArityOf n =
-  listLen (fromOption
-    []
-    (lookupAssocSL2 n perRun.value.funConstraintsRef.value))
+  listLen (optionOr [] (lookupAssocSL2 n perRun.value.funConstraintsRef.value))
 
 dictParams : String -> Int -> List Pat
 dictParams n k = dictParamsGo n 0 k
@@ -27434,7 +27432,7 @@ univAddIfaceTag False _ _ tags = tags
 univAddIfaceTag True ifkey hd tags =
   regInsertK
     ifkey
-    (sregAddK (regKeyOfTab hd) (fromOption sregEmpty (regLookupK ifkey tags)))
+    (sregAddK (regKeyOfTab hd) (optionOr sregEmpty (regLookupK ifkey tags)))
     tags
 
 -- ── PR3 keyed lookups (replace implMatches / implMatchesReceiver / findMatchingImplReqs /
@@ -27585,9 +27583,7 @@ firstReqMatch ((tys, reqs)::rest) args = match implHeadSubst tys args
 -- tag, exactly as the old implHeadTagsFromHeads skipped them).
 implCountForIfaceU : ImplUniverse -> IfaceRef -> Int
 implCountForIfaceU (ImplUniverse _ _ tags) iface =
-  fromOption
-    0
-    (map sregSize (regLookupK (regKeyOfTab (oblIfaceKey iface)) tags))
+  optionOr 0 (map sregSize (regLookupK (regKeyOfTab (oblIfaceKey iface)) tags))
 
 -- the concrete "iface|tag" bucket (empty when the tag is None / no such impl).
 -- A-2.2 (#1111): the GOAL-side head arrives as a `HeadKey` that CAN carry
@@ -28075,7 +28071,7 @@ implTysIfMatch _ _ _ = []
 -- declaration for an error in the impl.  Preserving `tyConLoc` here is NOT a
 -- byte-identical change; preserving `tyConOrigin` is.
 substTyVars : List (String, Ty) -> Ty -> Ty
-substTyVars sub (TyVar n) = fromOption (TyVar n) (lookupAssoc n sub)
+substTyVars sub (TyVar n) = optionOr (TyVar n) (lookupAssoc n sub)
 substTyVars _ (t@(TyCon {  })) = TyCon { t | tyConLoc = None }
 substTyVars sub (TyApp a b) = TyApp (substTyVars sub a) (substTyVars sub b)
 substTyVars sub (TyFun a b) = TyFun (substTyVars sub a) (substTyVars sub b)
@@ -28229,7 +28225,7 @@ reqToObligation subst (Require { requireHead = ifaceR, requireArgs = tysR, requi
 -- Impl-typaram vars (the common case, `Display a`) resolve to their bound mono; an
 -- unbound name gets a fresh var (defers, never a spurious concrete head).
 reqTyToMono : List (String, Mono) -> Ty -> Mono
-reqTyToMono sub (TyVar n) = fromOption (freshVar ()) (lookupAssoc n sub)
+reqTyToMono sub (TyVar n) = optionOr (freshVar ()) (lookupAssoc n sub)
 reqTyToMono _ (TyCon { tyConName = n, tyConOrigin = o }) = tconFrom o n
 reqTyToMono sub (TyApp a b) = TApp (reqTyToMono sub a) (reqTyToMono sub b)
 reqTyToMono sub (TyFun a b) =
@@ -31341,7 +31337,7 @@ setFunConstraintEntry m slots argsOpt =
   -- `funConstraintArgsRef`, so the two dedups see identical input; `None` (no vector row
   -- at all) yields `[]` per slot, i.e. exactly the pre-widening count.
   let _ = setRef perRun.value.funConstraintDeclaredRef
-    ((m, CDPLen (listLen (dedupSlotVecs (zipSlotVecs slots (fromOption [] argsOpt)))))::perRun.value.funConstraintDeclaredRef.value)
+    ((m, CDPLen (listLen (dedupSlotVecs (zipSlotVecs slots (optionOr [] argsOpt)))))::perRun.value.funConstraintDeclaredRef.value)
   perRun.value.funConstraintIfacesRef := ((m, map (s => s.csIface) slots)::perRun.value.funConstraintIfacesRef.value)
   match argsOpt
     Some args => (perRun.value.funConstraintArgsRef := ((m, args)::perRun.value.funConstraintArgsRef.value))
@@ -31879,7 +31875,7 @@ registerSchemeObligations memberDefIds sigTvMaps callObls addedObls ((m, sch)::r
   -- lint-disable-next-line rule-prefer-assign-op
   let _ = if isEmptyL obs then ()
   else
-    let defId = fromOption 0 (omLookup m memberDefIds)
+    let defId = optionOr 0 (omLookup m memberDefIds)
     setRef
       perRun.value.schemeObligationsRef
       (((m, defId), obs)::perRun.value.schemeObligationsRef.value)
@@ -33952,7 +33948,7 @@ nameableIfaceMethodSet prog =
   addImportedIfaceMethods
     prog
     (addIfaceRowMethods
-      (fromOption
+      (optionOr
         []
         (omLookup "core" driverState.value.graphIfaceMethodsRef.value))
       (namesToSet (allIfaceMethodNames prog) omEmpty))

@@ -9,7 +9,7 @@
      1. Performance vs. functional feel.  The public API is a pure facade
         where it can be (`map`, `filter`, `sort`, etc. return fresh arrays)
         and explicitly mutates in place where that's the whole point
-        (`set`, `swap`, `sortInPlace`) — untracked, no effect in the signature.
+        (`setInPlace`, `swap`, `sortInPlace`) — untracked, no effect in the signature.
 
      2. Opaque builtin vs. typeclass member.  `Array a` cannot be pattern-
         matched like `List a`, so the impls below dispatch through the
@@ -19,7 +19,7 @@
         definitions would encode cartesian-style allocation that's a
         performance trap on bulk data.
 
-   The kernel of OCaml-backed primitives lives in stdlib/runtime.mdk and is
+   The kernel of native primitives lives in stdlib/runtime.mdk and is
    the surface this module sits on top of.  Most operations here are one or
    two lines of Medaka built on `arrayMakeWith` + `arrayGetUnsafe`, which
    compile to a tight loop in the host runtime. -}
@@ -77,11 +77,6 @@ makeWithRevBuild : (Int -> <e> a) -> Int -> Int -> List a -> <e> List a
 makeWithRevBuild f i n acc
   | i >= n = acc
   | otherwise = makeWithRevBuild f (i + 1) n (f i :: acc)
-
--- | Alias for `make`, included for symmetry with `List.replicate`.
-export
-replicate : Int -> a -> Array a
-replicate n x = arrayMake n x
 
 -- | Build an array from a list, preserving order.
 export
@@ -300,10 +295,10 @@ revList (x::xs) acc = revList xs (x::acc)
 
 -- | Bounds-checked write.  Panics on OOB.
 export
-set : Int -> a -> Array a -> Unit
-set i x arr =
+setInPlace : Int -> a -> Array a -> Unit
+setInPlace i x arr =
   if i < 0 || i >= arrayLength arr then
-    panic "Array.set: index out of bounds"
+    panic "Array.setInPlace: index out of bounds"
   else
     arraySetUnsafe i x arr
 
@@ -545,6 +540,19 @@ forEachWithIndexGo f arr i n =
     let _ = f i (arrayGetUnsafe i arr)
     forEachWithIndexGo f arr (i + 1) n
 
+{- | Map every element together with its 0-based index — the missing member of
+   the index-callback family (`foldWithIndex`, `forEachWithIndex`), with the
+   same `(i x)` callback order `list.mapWithIndex` uses.
+
+   > toList (mapWithIndex (i x => i * x) (fromList [1, 2, 3]))
+   [0, 2, 6]
+   > toList (mapWithIndex (i x => i + x) (fromList ([] : List Int)))
+   [] -}
+export
+mapWithIndex : (Int -> a -> <e> b) -> Array a -> <e> Array b
+mapWithIndex f arr =
+  arrayMakeWith (arrayLength arr) (i => f i (arrayGetUnsafe i arr))
+
 -- ── Typeclass impls ─────────────────────────────────────────────────────
 
 export impl Mappable Array where
@@ -627,3 +635,22 @@ prop "forEachWithIndex visits every index once, in order, matching zip with rang
   let _ = forEachWithIndex (i x => seen := (i, x) :: !seen) arr
   let viaZip = fold (acc pair => pair::acc) [] (zip (range 0 (length arr)) arr)
   eq !seen viaZip
+
+-- LAW (H-5/E-6): `mapWithIndex` is `map` that also sees the index.  Three
+-- clauses pin it: it agrees with `map` on an index-ignoring callback, it hands
+-- the callback exactly the indices 0..n-1 in order (this is what fixes the
+-- `(i x)` argument ORDER E-6 ratifies, not `(x i)`), and it agrees with its
+-- own family sibling `foldWithIndex` on the same callback.
+prop "mapWithIndex with an index-ignoring callback is map" (xs : List Int) =
+  let arr = fromList xs
+  eq (mapWithIndex (_ x => x + 1) arr) (map (x => x + 1) arr)
+
+prop "mapWithIndex hands the callback 0..n-1 in order" (xs : List Int) =
+  let arr = fromList xs
+  eq (mapWithIndex (i _ => i) arr) (range 0 (length arr))
+
+prop "mapWithIndex agrees with zipWith over range" (xs : List Int) =
+  let arr = fromList xs
+  eq
+    (mapWithIndex (i x => i * 10 + x) arr)
+    (zipWith (i x => i * 10 + x) (range 0 (length arr)) arr)

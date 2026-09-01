@@ -26,10 +26,11 @@
    call the real C clock / `nanosleep`. -}
 
 import math.{floorDiv}
+import string.{sliceClamped, toInt}
 
 -- ── Duration ────────────────────────────────────────────────────────────
 -- | A time span, stored as a whole number of MILLISECONDS.
-public export data Duration = Duration Int
+public export data Duration = Duration Int deriving (Eq, Ord, Debug)
 
 -- | A duration of `n` milliseconds.
 --
@@ -84,6 +85,30 @@ export
 toSeconds : Duration -> Int
 toSeconds (Duration ms) = ms / 1000
 
+-- | The duration as whole minutes (truncated toward zero).
+--
+-- > toMinutes (seconds 150)
+-- 2
+export
+toMinutes : Duration -> Int
+toMinutes (Duration ms) = ms / 60000
+
+-- | The duration as whole hours (truncated toward zero).
+--
+-- > toHours (minutes 150)
+-- 2
+export
+toHours : Duration -> Int
+toHours (Duration ms) = ms / 3600000
+
+-- | The duration as whole days (truncated toward zero).
+--
+-- > toDays (hours 50)
+-- 2
+export
+toDays : Duration -> Int
+toDays (Duration ms) = ms / 86400000
+
 -- | Add two durations.
 --
 -- > toMillis (addDuration (seconds 1) (millis 500))
@@ -111,6 +136,7 @@ public export data DateTime =
       minute : Int,
       second : Int,
     }
+deriving (Eq, Ord, Debug)
 
 -- Days since 1970-01-01 for a civil (y, m, d).  Hinnant's days_from_civil.
 daysFromCivil : Int -> Int -> Int -> Int
@@ -201,6 +227,71 @@ export
 formatIso : DateTime -> String
 formatIso dt = "\{pad4 dt.year}-\{pad2 dt.month}-\{pad2 dt.day}T\{pad2 dt.hour}:\{pad2 dt.minute}:\{pad2 dt.second}Z"
 
+{- Assemble a `DateTime` from six already-parsed fields, rejecting any that is
+   out of civil range.  Split out of `parseIso` so the six `Option`s are
+   destructured by ONE pattern match rather than nested `match`es. -}
+isoFields : Option Int -> Option Int -> Option Int -> Option Int -> Option Int -> Option Int -> Option DateTime
+isoFields (Some y) (Some mo) (Some d) (Some h) (Some mi) (Some sec) =
+  if y >= 0 && mo >= 1 && mo <= 12 && d >= 1 && d <= 31 && h <= 23 && mi <= 59 && sec <= 59 then
+    Some DateTime {
+      year = y,
+      month = mo,
+      day = d,
+      hour = h,
+      minute = mi,
+      second = sec,
+    }
+  else
+    None
+isoFields _ _ _ _ _ _ = None
+
+{- | Parse ISO 8601 `YYYY-MM-DDThh:mm:ssZ` (UTC only, exactly the shape
+   `formatIso` emits), or `None`.  This is the exact inverse of `formatIso`:
+   the candidate is accepted only if re-rendering it reproduces the input
+   byte-for-byte, so no alternate spelling of the same instant (`+7` for `07`,
+   a lowercase `t`, a missing pad) is silently accepted.
+
+   > parseIso "2024-03-05T07:08:09Z" == Some (DateTime { year = 2024, month = 3, day = 5, hour = 7, minute = 8, second = 9 })
+   True
+   > map toEpochSeconds (parseIso "1970-01-01T00:00:00Z")
+   Some 0
+   > parseIso "2024-03-05 07:08:09Z"
+   None
+   > parseIso "2024-13-05T07:08:09Z"
+   None
+   > parseIso "not a date"
+   None -}
+export
+parseIso : String -> Option DateTime
+parseIso s =
+  if stringLength s == 20 && sliceClamped 4 5 s == "-" && sliceClamped 7 8 s == "-" && sliceClamped 10 11 s == "T" && sliceClamped 13 14 s == ":" && sliceClamped 16 17 s == ":" && sliceClamped 19 20 s == "Z" then match isoFields (toInt (sliceClamped 0 4 s)) (toInt (sliceClamped 5 7 s)) (toInt (sliceClamped 8 10 s)) (toInt (sliceClamped 11 13 s)) (toInt (sliceClamped 14 16 s)) (toInt (sliceClamped 17 19 s))
+    Some dt => if formatIso dt == s then Some dt else None
+    None => None
+  else None
+
+-- ── Instances ───────────────────────────────────────────────────────────
+{- `Eq`/`Ord`/`Debug` are derived on both types (see the `data` decls).
+   Derived `Ord Duration` compares the stored millisecond count, so it agrees
+   with `toMillis`; derived `Ord DateTime` is lexicographic in field order
+   (year, month, day, hour, minute, second), so for civil-range values it
+   agrees with `toEpochSeconds`.  Both laws are property-tested below. -}
+
+-- | A `Duration` displays as its whole millisecond count with an `ms` suffix.
+export impl Display Duration where
+  display (Duration ms) = "\{intToString ms}ms"
+
+-- | A `DateTime` displays as its ISO 8601 rendering — `display == formatIso`.
+export impl Display DateTime where
+  display dt = formatIso dt
+
+-- | `addDuration` is the associative append.
+export impl Semigroup Duration where
+  append a b = addDuration a b
+
+-- | `millis 0` is the identity for `addDuration`.
+export impl Monoid Duration where
+  empty = Duration 0
+
 -- ── Effectful helpers (over the `<Clock>` externs) ──────────────────────
 -- | Current wall-clock time in Unix epoch seconds (Float).
 export
@@ -224,12 +315,22 @@ export
 elapsedSince : Float -> <Clock> Float
 elapsedSince start = monotonicSec () - start
 
--- | Sleep for `ms` milliseconds.
-export
-sleep : Int -> <Clock> Unit
-sleep ms = sleepMs ms
+{- | Sleep for a `Duration`.
 
--- | Sleep for `s` seconds.
+   Takes a `Duration`, not a bare `Int`: `sleep 5` used to mean five
+   MILLISECONDS while reading as five seconds, and the type could not warn
+   anyone (#2306 J-1).  Now the unit is in the value — `sleep (seconds 5)`,
+   `sleep (millis 5)` — and the old `sleepSeconds` is gone with it, since
+   `seconds` already says that.
+
+   `sleepSeconds` below is UNCHANGED: it was never the ambiguous one — the
+   row cites it as the proof that this module already knew units belong
+   somewhere the reader can see them. -}
+export
+sleep : Duration -> <Clock> Unit
+sleep d = sleepMs (toMillis d)
+
+-- | Sleep for `s` seconds.  Equivalent to `sleep (seconds s)`.
 export
 sleepSeconds : Int -> <Clock> Unit
 sleepSeconds s = sleepMs (s * 1000)
@@ -240,3 +341,69 @@ sleepSeconds s = sleepMs (s * 1000)
 prop "epoch round-trips through the civil calendar" (n : Int) =
   let s = 1000000 + (if n < 0 then 0 - n else n) % 3000000000
   toEpochSeconds (fromEpochSeconds s) == s
+
+-- A civil-range epoch second, for the DateTime laws below.
+sane : Int -> Int
+sane n = 1000000 + (if n < 0 then 0 - n else n) % 3000000000
+
+-- LAW (H-3): `parseIso` is the exact inverse of `formatIso` — every value
+-- `formatIso` can emit parses back to the SAME `DateTime`, and nothing else
+-- parses at all.
+prop "parseIso inverts formatIso" (n : Int) =
+  let dt = fromEpochSeconds (sane n)
+  parseIso (formatIso dt) == Some dt
+
+prop "parseIso rejects a corrupted separator" (n : Int) =
+  let iso = formatIso (fromEpochSeconds (sane n))
+  parseIso (sliceClamped 0 10 iso ++ " " ++ sliceClamped 11 20 iso) == None
+
+-- LAW (H-3): the five `Duration` constructors and the five projections are
+-- inverse at their own unit, and each projection truncates toward zero.
+prop "Duration projections invert their constructors" (n : Int) =
+  let k = (if n < 0 then 0 - n else n) % 100000
+  toMillis (millis k) == k
+    && toSeconds (seconds k) == k
+    && toMinutes (minutes k) == k
+    && toHours (hours k) == k
+    && toDays (days k) == k
+
+prop "Duration projections are the coarser unit's floor" (n : Int) =
+  let k = (if n < 0 then 0 - n else n) % 100000000
+  let d = millis k
+  toSeconds d == toMillis d / 1000
+    && toMinutes d == toSeconds d / 60
+    && toHours d == toMinutes d / 60
+    && toDays d == toHours d / 24
+
+-- LAW (A-1): derived `Ord Duration` must agree with `toMillis` ordering, and
+-- must be consistent with `Eq`.
+prop "Ord Duration agrees with toMillis" (a : Int) (b : Int) = compare (millis a) (millis b) == compare a b
+  && millis a == millis b == (a == b)
+
+-- LAW (A-1): derived `Ord DateTime` must agree with `toEpochSeconds` ordering
+-- on civil-range values, and must be consistent with `Eq`.
+prop "Ord DateTime agrees with toEpochSeconds" (a : Int) (b : Int) =
+  let x = fromEpochSeconds (sane a)
+  let y = fromEpochSeconds (sane b)
+  compare x y == compare (toEpochSeconds x) (toEpochSeconds y)
+    && x == y == (toEpochSeconds x == toEpochSeconds y)
+
+-- LAW (A-1): `Display DateTime` IS `formatIso`; `Display Duration` renders the
+-- millisecond count, so it round-trips through `toMillis`.
+prop "Display DateTime is formatIso" (n : Int) =
+  let dt = fromEpochSeconds (sane n)
+  display dt == formatIso dt
+
+prop "Display Duration renders the millisecond count" (n : Int) =
+  display (millis n) == intToString n ++ "ms"
+
+-- LAW (A-1): `Semigroup`/`Monoid Duration` — associativity plus a two-sided
+-- identity.  These are the laws that license the instances at all.
+prop "Semigroup Duration is associative" (a : Int) (b : Int) (c : Int) =
+  let l = append (append (millis a) (millis b)) (millis c)
+  let r = append (millis a) (append (millis b) (millis c))
+  l == r
+
+prop "Monoid Duration: empty is a two-sided identity" (n : Int) =
+  let d = millis n
+  append d empty == d && append empty d == d

@@ -4,7 +4,7 @@
 -- See STDLIB.md for the division-of-labour between doctests / props / tests.
 
 {- | The result of a single test expectation. -}
-public export data Expectation = Pass | Fail String deriving (Debug)
+public export data Expectation = Pass | Fail String deriving (Eq, Debug)
 
 -- ── Primitive assertions ─────────────────────────────────────────────────
 
@@ -137,3 +137,18 @@ goTests ((name, thunk)::rest) passed failed = match thunk ()
 export
 runTests : List (String, Unit -> Expectation) -> <IO> Bool
 runTests tests = goTests tests 0 0
+
+-- ── Instance laws ────────────────────────────────────────────────────────
+-- LAW (A-2): derived `Eq Expectation` must separate the two constructors AND
+-- the payload — an assertion library whose results compare equal regardless of
+-- the failure message would make every `expectEqual` over an `Expectation`
+-- pass vacuously.
+prop "Eq Expectation separates constructors and payloads" (m : String) = pass == pass
+  && fail m == fail m
+  && pass == fail m == False
+  && fail m == fail (m ++ "!") == False
+
+-- LAW (A-2): `Debug` agrees with `Eq` — equal expectations render identically,
+-- distinguishable ones render differently.
+prop "Debug Expectation agrees with Eq" (m : String) = debug (fail m) == debug (fail m)
+  && debug (fail m) == debug pass == False

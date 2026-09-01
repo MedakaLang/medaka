@@ -46,19 +46,6 @@ user-facing), `inspect` produces round-trippable output: strings and chars
 are quoted, ADTs print with constructor names and field values.  Handy for
 tracing intermediate values without a custom `Display` impl.
 
-## `stripCR`
-
-```
-stripCR : String -> String
-```
-
-Line splitting is done here over the global `string*` kernel externs (in
-runtime.mdk) rather than `import string.{lines}`.  string.mdk is importable
-as of Phase 117, but `string.lines` deliberately *keeps* the final empty line
-a trailing newline produces, whereas readLines drops it — so this stays a
-local helper.  Splits on `\n`, dropping a trailing `\r` (so CRLF files work)
-and the final empty line a trailing newline would otherwise produce.
-
 ## `readLines`
 
 ```

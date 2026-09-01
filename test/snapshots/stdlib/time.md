@@ -1,5 +1,5 @@
 # META
-source_lines=242
+source_lines=409
 stages=DESUGAR,MARK
 # SOURCE
 {- time.mdk — durations + a UTC civil calendar, plus thin wrappers over the
@@ -30,10 +30,11 @@ stages=DESUGAR,MARK
    call the real C clock / `nanosleep`. -}
 
 import math.{floorDiv}
+import string.{sliceClamped, toInt}
 
 -- ── Duration ────────────────────────────────────────────────────────────
 -- | A time span, stored as a whole number of MILLISECONDS.
-public export data Duration = Duration Int
+public export data Duration = Duration Int deriving (Eq, Ord, Debug)
 
 -- | A duration of `n` milliseconds.
 --
@@ -88,6 +89,30 @@ export
 toSeconds : Duration -> Int
 toSeconds (Duration ms) = ms / 1000
 
+-- | The duration as whole minutes (truncated toward zero).
+--
+-- > toMinutes (seconds 150)
+-- 2
+export
+toMinutes : Duration -> Int
+toMinutes (Duration ms) = ms / 60000
+
+-- | The duration as whole hours (truncated toward zero).
+--
+-- > toHours (minutes 150)
+-- 2
+export
+toHours : Duration -> Int
+toHours (Duration ms) = ms / 3600000
+
+-- | The duration as whole days (truncated toward zero).
+--
+-- > toDays (hours 50)
+-- 2
+export
+toDays : Duration -> Int
+toDays (Duration ms) = ms / 86400000
+
 -- | Add two durations.
 --
 -- > toMillis (addDuration (seconds 1) (millis 500))
@@ -115,6 +140,7 @@ public export data DateTime =
       minute : Int,
       second : Int,
     }
+deriving (Eq, Ord, Debug)
 
 -- Days since 1970-01-01 for a civil (y, m, d).  Hinnant's days_from_civil.
 daysFromCivil : Int -> Int -> Int -> Int
@@ -205,6 +231,71 @@ export
 formatIso : DateTime -> String
 formatIso dt = "\{pad4 dt.year}-\{pad2 dt.month}-\{pad2 dt.day}T\{pad2 dt.hour}:\{pad2 dt.minute}:\{pad2 dt.second}Z"
 
+{- Assemble a `DateTime` from six already-parsed fields, rejecting any that is
+   out of civil range.  Split out of `parseIso` so the six `Option`s are
+   destructured by ONE pattern match rather than nested `match`es. -}
+isoFields : Option Int -> Option Int -> Option Int -> Option Int -> Option Int -> Option Int -> Option DateTime
+isoFields (Some y) (Some mo) (Some d) (Some h) (Some mi) (Some sec) =
+  if y >= 0 && mo >= 1 && mo <= 12 && d >= 1 && d <= 31 && h <= 23 && mi <= 59 && sec <= 59 then
+    Some DateTime {
+      year = y,
+      month = mo,
+      day = d,
+      hour = h,
+      minute = mi,
+      second = sec,
+    }
+  else
+    None
+isoFields _ _ _ _ _ _ = None
+
+{- | Parse ISO 8601 `YYYY-MM-DDThh:mm:ssZ` (UTC only, exactly the shape
+   `formatIso` emits), or `None`.  This is the exact inverse of `formatIso`:
+   the candidate is accepted only if re-rendering it reproduces the input
+   byte-for-byte, so no alternate spelling of the same instant (`+7` for `07`,
+   a lowercase `t`, a missing pad) is silently accepted.
+
+   > parseIso "2024-03-05T07:08:09Z" == Some (DateTime { year = 2024, month = 3, day = 5, hour = 7, minute = 8, second = 9 })
+   True
+   > map toEpochSeconds (parseIso "1970-01-01T00:00:00Z")
+   Some 0
+   > parseIso "2024-03-05 07:08:09Z"
+   None
+   > parseIso "2024-13-05T07:08:09Z"
+   None
+   > parseIso "not a date"
+   None -}
+export
+parseIso : String -> Option DateTime
+parseIso s =
+  if stringLength s == 20 && sliceClamped 4 5 s == "-" && sliceClamped 7 8 s == "-" && sliceClamped 10 11 s == "T" && sliceClamped 13 14 s == ":" && sliceClamped 16 17 s == ":" && sliceClamped 19 20 s == "Z" then match isoFields (toInt (sliceClamped 0 4 s)) (toInt (sliceClamped 5 7 s)) (toInt (sliceClamped 8 10 s)) (toInt (sliceClamped 11 13 s)) (toInt (sliceClamped 14 16 s)) (toInt (sliceClamped 17 19 s))
+    Some dt => if formatIso dt == s then Some dt else None
+    None => None
+  else None
+
+-- ── Instances ───────────────────────────────────────────────────────────
+{- `Eq`/`Ord`/`Debug` are derived on both types (see the `data` decls).
+   Derived `Ord Duration` compares the stored millisecond count, so it agrees
+   with `toMillis`; derived `Ord DateTime` is lexicographic in field order
+   (year, month, day, hour, minute, second), so for civil-range values it
+   agrees with `toEpochSeconds`.  Both laws are property-tested below. -}
+
+-- | A `Duration` displays as its whole millisecond count with an `ms` suffix.
+export impl Display Duration where
+  display (Duration ms) = "\{intToString ms}ms"
+
+-- | A `DateTime` displays as its ISO 8601 rendering — `display == formatIso`.
+export impl Display DateTime where
+  display dt = formatIso dt
+
+-- | `addDuration` is the associative append.
+export impl Semigroup Duration where
+  append a b = addDuration a b
+
+-- | `millis 0` is the identity for `addDuration`.
+export impl Monoid Duration where
+  empty = Duration 0
+
 -- ── Effectful helpers (over the `<Clock>` externs) ──────────────────────
 -- | Current wall-clock time in Unix epoch seconds (Float).
 export
@@ -228,12 +319,22 @@ export
 elapsedSince : Float -> <Clock> Float
 elapsedSince start = monotonicSec () - start
 
--- | Sleep for `ms` milliseconds.
-export
-sleep : Int -> <Clock> Unit
-sleep ms = sleepMs ms
+{- | Sleep for a `Duration`.
 
--- | Sleep for `s` seconds.
+   Takes a `Duration`, not a bare `Int`: `sleep 5` used to mean five
+   MILLISECONDS while reading as five seconds, and the type could not warn
+   anyone (#2306 J-1).  Now the unit is in the value — `sleep (seconds 5)`,
+   `sleep (millis 5)` — and the old `sleepSeconds` is gone with it, since
+   `seconds` already says that.
+
+   `sleepSeconds` below is UNCHANGED: it was never the ambiguous one — the
+   row cites it as the proof that this module already knew units belong
+   somewhere the reader can see them. -}
+export
+sleep : Duration -> <Clock> Unit
+sleep d = sleepMs (toMillis d)
+
+-- | Sleep for `s` seconds.  Equivalent to `sleep (seconds s)`.
 export
 sleepSeconds : Int -> <Clock> Unit
 sleepSeconds s = sleepMs (s * 1000)
@@ -244,9 +345,79 @@ sleepSeconds s = sleepMs (s * 1000)
 prop "epoch round-trips through the civil calendar" (n : Int) =
   let s = 1000000 + (if n < 0 then 0 - n else n) % 3000000000
   toEpochSeconds (fromEpochSeconds s) == s
+
+-- A civil-range epoch second, for the DateTime laws below.
+sane : Int -> Int
+sane n = 1000000 + (if n < 0 then 0 - n else n) % 3000000000
+
+-- LAW (H-3): `parseIso` is the exact inverse of `formatIso` — every value
+-- `formatIso` can emit parses back to the SAME `DateTime`, and nothing else
+-- parses at all.
+prop "parseIso inverts formatIso" (n : Int) =
+  let dt = fromEpochSeconds (sane n)
+  parseIso (formatIso dt) == Some dt
+
+prop "parseIso rejects a corrupted separator" (n : Int) =
+  let iso = formatIso (fromEpochSeconds (sane n))
+  parseIso (sliceClamped 0 10 iso ++ " " ++ sliceClamped 11 20 iso) == None
+
+-- LAW (H-3): the five `Duration` constructors and the five projections are
+-- inverse at their own unit, and each projection truncates toward zero.
+prop "Duration projections invert their constructors" (n : Int) =
+  let k = (if n < 0 then 0 - n else n) % 100000
+  toMillis (millis k) == k
+    && toSeconds (seconds k) == k
+    && toMinutes (minutes k) == k
+    && toHours (hours k) == k
+    && toDays (days k) == k
+
+prop "Duration projections are the coarser unit's floor" (n : Int) =
+  let k = (if n < 0 then 0 - n else n) % 100000000
+  let d = millis k
+  toSeconds d == toMillis d / 1000
+    && toMinutes d == toSeconds d / 60
+    && toHours d == toMinutes d / 60
+    && toDays d == toHours d / 24
+
+-- LAW (A-1): derived `Ord Duration` must agree with `toMillis` ordering, and
+-- must be consistent with `Eq`.
+prop "Ord Duration agrees with toMillis" (a : Int) (b : Int) = compare (millis a) (millis b) == compare a b
+  && millis a == millis b == (a == b)
+
+-- LAW (A-1): derived `Ord DateTime` must agree with `toEpochSeconds` ordering
+-- on civil-range values, and must be consistent with `Eq`.
+prop "Ord DateTime agrees with toEpochSeconds" (a : Int) (b : Int) =
+  let x = fromEpochSeconds (sane a)
+  let y = fromEpochSeconds (sane b)
+  compare x y == compare (toEpochSeconds x) (toEpochSeconds y)
+    && x == y == (toEpochSeconds x == toEpochSeconds y)
+
+-- LAW (A-1): `Display DateTime` IS `formatIso`; `Display Duration` renders the
+-- millisecond count, so it round-trips through `toMillis`.
+prop "Display DateTime is formatIso" (n : Int) =
+  let dt = fromEpochSeconds (sane n)
+  display dt == formatIso dt
+
+prop "Display Duration renders the millisecond count" (n : Int) =
+  display (millis n) == intToString n ++ "ms"
+
+-- LAW (A-1): `Semigroup`/`Monoid Duration` — associativity plus a two-sided
+-- identity.  These are the laws that license the instances at all.
+prop "Semigroup Duration is associative" (a : Int) (b : Int) (c : Int) =
+  let l = append (append (millis a) (millis b)) (millis c)
+  let r = append (millis a) (append (millis b) (millis c))
+  l == r
+
+prop "Monoid Duration: empty is a two-sided identity" (n : Int) =
+  let d = millis n
+  append d empty == d && append empty d == d
 # DESUGAR
 (DUse false (UseGroup ("math") ((mem "floorDiv" false))))
+(DUse false (UseGroup ("string") ((mem "sliceClamped" false) (mem "toInt" false))))
 (DData Public "Duration" () ((variant "Duration" (ConPos (TyCon "Int")))) ())
+(DImpl true "Eq" ((TyCon "Duration")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Duration" (PVar "__a0")) (PCon "Duration" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")))))))
+(DImpl true "Ord" ((TyCon "Duration")) () ((im "compare" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Duration" (PVar "__a0")) (PCon "Duration" (PVar "__b0"))) () (EApp (EApp (EVar "compare") (EVar "__a0")) (EVar "__b0")))))))
+(DImpl true "Debug" ((TyCon "Duration")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "Duration" (PVar "__a0")) () (EBinOp "++" (ELit (LString "Duration ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))))))))
 (DTypeSig true "millis" (TyFun (TyCon "Int") (TyCon "Duration")))
 (DFunDef false "millis" ((PVar "n")) (EApp (EVar "Duration") (EVar "n")))
 (DTypeSig true "seconds" (TyFun (TyCon "Int") (TyCon "Duration")))
@@ -261,11 +432,20 @@ prop "epoch round-trips through the civil calendar" (n : Int) =
 (DFunDef false "toMillis" ((PCon "Duration" (PVar "ms"))) (EVar "ms"))
 (DTypeSig true "toSeconds" (TyFun (TyCon "Duration") (TyCon "Int")))
 (DFunDef false "toSeconds" ((PCon "Duration" (PVar "ms"))) (EBinOp "/" (EVar "ms") (ELit (LInt 1000))))
+(DTypeSig true "toMinutes" (TyFun (TyCon "Duration") (TyCon "Int")))
+(DFunDef false "toMinutes" ((PCon "Duration" (PVar "ms"))) (EBinOp "/" (EVar "ms") (ELit (LInt 60000))))
+(DTypeSig true "toHours" (TyFun (TyCon "Duration") (TyCon "Int")))
+(DFunDef false "toHours" ((PCon "Duration" (PVar "ms"))) (EBinOp "/" (EVar "ms") (ELit (LInt 3600000))))
+(DTypeSig true "toDays" (TyFun (TyCon "Duration") (TyCon "Int")))
+(DFunDef false "toDays" ((PCon "Duration" (PVar "ms"))) (EBinOp "/" (EVar "ms") (ELit (LInt 86400000))))
 (DTypeSig true "addDuration" (TyFun (TyCon "Duration") (TyFun (TyCon "Duration") (TyCon "Duration"))))
 (DFunDef false "addDuration" ((PCon "Duration" (PVar "a")) (PCon "Duration" (PVar "b"))) (EApp (EVar "Duration") (EBinOp "+" (EVar "a") (EVar "b"))))
 (DTypeSig true "subDuration" (TyFun (TyCon "Duration") (TyFun (TyCon "Duration") (TyCon "Duration"))))
 (DFunDef false "subDuration" ((PCon "Duration" (PVar "a")) (PCon "Duration" (PVar "b"))) (EApp (EVar "Duration") (EBinOp "-" (EVar "a") (EVar "b"))))
 (DData Public "DateTime" () ((variant "DateTime" (ConNamed (field "year" (TyCon "Int")) (field "month" (TyCon "Int")) (field "day" (TyCon "Int")) (field "hour" (TyCon "Int")) (field "minute" (TyCon "Int")) (field "second" (TyCon "Int"))))) ())
+(DImpl true "Eq" ((TyCon "DateTime")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "DateTime" ((rf "year" (PVar "__a0")) (rf "month" (PVar "__a1")) (rf "day" (PVar "__a2")) (rf "hour" (PVar "__a3")) (rf "minute" (PVar "__a4")) (rf "second" (PVar "__a5"))) false) (PRec "DateTime" ((rf "year" (PVar "__b0")) (rf "month" (PVar "__b1")) (rf "day" (PVar "__b2")) (rf "hour" (PVar "__b3")) (rf "minute" (PVar "__b4")) (rf "second" (PVar "__b5"))) false)) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EVar "eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EVar "eq") (EVar "__a3")) (EVar "__b3"))) (EApp (EApp (EVar "eq") (EVar "__a4")) (EVar "__b4"))) (EApp (EApp (EVar "eq") (EVar "__a5")) (EVar "__b5"))))))))
+(DImpl true "Ord" ((TyCon "DateTime")) () ((im "compare" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "DateTime" ((rf "year" (PVar "__a0")) (rf "month" (PVar "__a1")) (rf "day" (PVar "__a2")) (rf "hour" (PVar "__a3")) (rf "minute" (PVar "__a4")) (rf "second" (PVar "__a5"))) false) (PRec "DateTime" ((rf "year" (PVar "__b0")) (rf "month" (PVar "__b1")) (rf "day" (PVar "__b2")) (rf "hour" (PVar "__b3")) (rf "minute" (PVar "__b4")) (rf "second" (PVar "__b5"))) false)) () (EMatch (EApp (EApp (EVar "compare") (EVar "__a0")) (EVar "__b0")) (arm (PCon "Eq") () (EMatch (EApp (EApp (EVar "compare") (EVar "__a1")) (EVar "__b1")) (arm (PCon "Eq") () (EMatch (EApp (EApp (EVar "compare") (EVar "__a2")) (EVar "__b2")) (arm (PCon "Eq") () (EMatch (EApp (EApp (EVar "compare") (EVar "__a3")) (EVar "__b3")) (arm (PCon "Eq") () (EMatch (EApp (EApp (EVar "compare") (EVar "__a4")) (EVar "__b4")) (arm (PCon "Eq") () (EApp (EApp (EVar "compare") (EVar "__a5")) (EVar "__b5"))) (arm (PVar "__c") () (EVar "__c")))) (arm (PVar "__c") () (EVar "__c")))) (arm (PVar "__c") () (EVar "__c")))) (arm (PVar "__c") () (EVar "__c")))) (arm (PVar "__c") () (EVar "__c"))))))))
+(DImpl true "Debug" ((TyCon "DateTime")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PRec "DateTime" ((rf "year" (PVar "__a0")) (rf "month" (PVar "__a1")) (rf "day" (PVar "__a2")) (rf "hour" (PVar "__a3")) (rf "minute" (PVar "__a4")) (rf "second" (PVar "__a5"))) false) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "DateTime {")) (ELit (LString " year = "))) (EApp (EVar "debug") (EVar "__a0"))) (ELit (LString ", month = "))) (EApp (EVar "debug") (EVar "__a1"))) (ELit (LString ", day = "))) (EApp (EVar "debug") (EVar "__a2"))) (ELit (LString ", hour = "))) (EApp (EVar "debug") (EVar "__a3"))) (ELit (LString ", minute = "))) (EApp (EVar "debug") (EVar "__a4"))) (ELit (LString ", second = "))) (EApp (EVar "debug") (EVar "__a5"))) (ELit (LString " }"))))))))
 (DTypeSig false "daysFromCivil" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "daysFromCivil" ((PVar "y0") (PVar "m") (PVar "d")) (EBlock (DoLet false false (PVar "y") (EIf (EBinOp "<=" (EVar "m") (ELit (LInt 2))) (EBinOp "-" (EVar "y0") (ELit (LInt 1))) (EVar "y0"))) (DoLet false false (PVar "era") (EBinOp "/" (EIf (EBinOp ">=" (EVar "y") (ELit (LInt 0))) (EVar "y") (EBinOp "-" (EVar "y") (ELit (LInt 399)))) (ELit (LInt 400)))) (DoLet false false (PVar "yoe") (EBinOp "-" (EVar "y") (EBinOp "*" (EVar "era") (ELit (LInt 400))))) (DoLet false false (PVar "mp") (EIf (EBinOp ">" (EVar "m") (ELit (LInt 2))) (EBinOp "-" (EVar "m") (ELit (LInt 3))) (EBinOp "+" (EVar "m") (ELit (LInt 9))))) (DoLet false false (PVar "doy") (EBinOp "-" (EBinOp "+" (EBinOp "/" (EBinOp "+" (EBinOp "*" (ELit (LInt 153)) (EVar "mp")) (ELit (LInt 2))) (ELit (LInt 5))) (EVar "d")) (ELit (LInt 1)))) (DoLet false false (PVar "doe") (EBinOp "+" (EBinOp "-" (EBinOp "+" (EBinOp "*" (EVar "yoe") (ELit (LInt 365))) (EBinOp "/" (EVar "yoe") (ELit (LInt 4)))) (EBinOp "/" (EVar "yoe") (ELit (LInt 100)))) (EVar "doy"))) (DoExpr (EBinOp "-" (EBinOp "+" (EBinOp "*" (EVar "era") (ELit (LInt 146097))) (EVar "doe")) (ELit (LInt 719468))))))
 (DTypeSig false "civilFromDays" (TyFun (TyCon "Int") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int"))))
@@ -280,6 +460,15 @@ prop "epoch round-trips through the civil calendar" (n : Int) =
 (DFunDef false "pad4" ((PVar "n")) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 10))) (EBinOp "++" (ELit (LString "000")) (EApp (EVar "intToString") (EVar "n"))) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 100))) (EBinOp "++" (ELit (LString "00")) (EApp (EVar "intToString") (EVar "n"))) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 1000))) (EBinOp "++" (ELit (LString "0")) (EApp (EVar "intToString") (EVar "n"))) (EApp (EVar "intToString") (EVar "n"))))))
 (DTypeSig true "formatIso" (TyFun (TyCon "DateTime") (TyCon "String")))
 (DFunDef false "formatIso" ((PVar "dt")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "pad4") (EFieldAccess (EVar "dt") "year")))) (ELit (LString "-"))) (EApp (EVar "display") (EApp (EVar "pad2") (EFieldAccess (EVar "dt") "month")))) (ELit (LString "-"))) (EApp (EVar "display") (EApp (EVar "pad2") (EFieldAccess (EVar "dt") "day")))) (ELit (LString "T"))) (EApp (EVar "display") (EApp (EVar "pad2") (EFieldAccess (EVar "dt") "hour")))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "pad2") (EFieldAccess (EVar "dt") "minute")))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "pad2") (EFieldAccess (EVar "dt") "second")))) (ELit (LString "Z"))))
+(DTypeSig false "isoFields" (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "DateTime")))))))))
+(DFunDef false "isoFields" ((PCon "Some" (PVar "y")) (PCon "Some" (PVar "mo")) (PCon "Some" (PVar "d")) (PCon "Some" (PVar "h")) (PCon "Some" (PVar "mi")) (PCon "Some" (PVar "sec"))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "y") (ELit (LInt 0))) (EBinOp ">=" (EVar "mo") (ELit (LInt 1)))) (EBinOp "<=" (EVar "mo") (ELit (LInt 12)))) (EBinOp ">=" (EVar "d") (ELit (LInt 1)))) (EBinOp "<=" (EVar "d") (ELit (LInt 31)))) (EBinOp "<=" (EVar "h") (ELit (LInt 23)))) (EBinOp "<=" (EVar "mi") (ELit (LInt 59)))) (EBinOp "<=" (EVar "sec") (ELit (LInt 59)))) (EApp (EVar "Some") (ERecordCreate "DateTime" ((fa "year" (EVar "y")) (fa "month" (EVar "mo")) (fa "day" (EVar "d")) (fa "hour" (EVar "h")) (fa "minute" (EVar "mi")) (fa "second" (EVar "sec"))))) (EVar "None")))
+(DFunDef false "isoFields" (PWild PWild PWild PWild PWild PWild) (EVar "None"))
+(DTypeSig true "parseIso" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "DateTime"))))
+(DFunDef false "parseIso" ((PVar "s")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 20))) (EBinOp "==" (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 4))) (ELit (LInt 5))) (EVar "s")) (ELit (LString "-")))) (EBinOp "==" (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 7))) (ELit (LInt 8))) (EVar "s")) (ELit (LString "-")))) (EBinOp "==" (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 10))) (ELit (LInt 11))) (EVar "s")) (ELit (LString "T")))) (EBinOp "==" (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 13))) (ELit (LInt 14))) (EVar "s")) (ELit (LString ":")))) (EBinOp "==" (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 16))) (ELit (LInt 17))) (EVar "s")) (ELit (LString ":")))) (EBinOp "==" (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 19))) (ELit (LInt 20))) (EVar "s")) (ELit (LString "Z")))) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "isoFields") (EApp (EVar "toInt") (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 0))) (ELit (LInt 4))) (EVar "s")))) (EApp (EVar "toInt") (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 5))) (ELit (LInt 7))) (EVar "s")))) (EApp (EVar "toInt") (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 8))) (ELit (LInt 10))) (EVar "s")))) (EApp (EVar "toInt") (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 11))) (ELit (LInt 13))) (EVar "s")))) (EApp (EVar "toInt") (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 14))) (ELit (LInt 16))) (EVar "s")))) (EApp (EVar "toInt") (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 17))) (ELit (LInt 19))) (EVar "s")))) (arm (PCon "Some" (PVar "dt")) () (EIf (EBinOp "==" (EApp (EVar "formatIso") (EVar "dt")) (EVar "s")) (EApp (EVar "Some") (EVar "dt")) (EVar "None"))) (arm (PCon "None") () (EVar "None"))) (EVar "None")))
+(DImpl true "Display" ((TyCon "Duration")) () ((im "display" ((PCon "Duration" (PVar "ms"))) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "ms")))) (ELit (LString "ms"))))))
+(DImpl true "Display" ((TyCon "DateTime")) () ((im "display" ((PVar "dt")) (EApp (EVar "formatIso") (EVar "dt")))))
+(DImpl true "Semigroup" ((TyCon "Duration")) () ((im "append" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "addDuration") (EVar "a")) (EVar "b")))))
+(DImpl true "Monoid" ((TyCon "Duration")) () ((im "empty" () (EApp (EVar "Duration") (ELit (LInt 0))))))
 (DTypeSig true "now" (TyFun (TyCon "Unit") (TyEffect ("Clock") None (TyCon "Float"))))
 (DFunDef false "now" ((PVar "u")) (EApp (EVar "wallTimeSec") (EVar "u")))
 (DTypeSig true "nowDateTime" (TyFun (TyCon "Unit") (TyEffect ("Clock") None (TyCon "DateTime"))))
@@ -288,14 +477,30 @@ prop "epoch round-trips through the civil calendar" (n : Int) =
 (DFunDef false "monotonic" ((PVar "u")) (EApp (EVar "monotonicSec") (EVar "u")))
 (DTypeSig true "elapsedSince" (TyFun (TyCon "Float") (TyEffect ("Clock") None (TyCon "Float"))))
 (DFunDef false "elapsedSince" ((PVar "start")) (EBinOp "-" (EApp (EVar "monotonicSec") (ELit LUnit)) (EVar "start")))
-(DTypeSig true "sleep" (TyFun (TyCon "Int") (TyEffect ("Clock") None (TyCon "Unit"))))
-(DFunDef false "sleep" ((PVar "ms")) (EApp (EVar "sleepMs") (EVar "ms")))
+(DTypeSig true "sleep" (TyFun (TyCon "Duration") (TyEffect ("Clock") None (TyCon "Unit"))))
+(DFunDef false "sleep" ((PVar "d")) (EApp (EVar "sleepMs") (EApp (EVar "toMillis") (EVar "d"))))
 (DTypeSig true "sleepSeconds" (TyFun (TyCon "Int") (TyEffect ("Clock") None (TyCon "Unit"))))
 (DFunDef false "sleepSeconds" ((PVar "s")) (EApp (EVar "sleepMs") (EBinOp "*" (EVar "s") (ELit (LInt 1000)))))
 (DProp false "epoch round-trips through the civil calendar" ((pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "s") (EBinOp "+" (ELit (LInt 1000000)) (EBinOp "%" (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (EVar "n")) (EVar "n")) (ELit (LInt 3000000000))))) (DoExpr (EBinOp "==" (EApp (EVar "toEpochSeconds") (EApp (EVar "fromEpochSeconds") (EVar "s"))) (EVar "s")))))
+(DTypeSig false "sane" (TyFun (TyCon "Int") (TyCon "Int")))
+(DFunDef false "sane" ((PVar "n")) (EBinOp "+" (ELit (LInt 1000000)) (EBinOp "%" (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (EVar "n")) (EVar "n")) (ELit (LInt 3000000000)))))
+(DProp false "parseIso inverts formatIso" ((pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "dt") (EApp (EVar "fromEpochSeconds") (EApp (EVar "sane") (EVar "n")))) (DoExpr (EBinOp "==" (EApp (EVar "parseIso") (EApp (EVar "formatIso") (EVar "dt"))) (EApp (EVar "Some") (EVar "dt"))))))
+(DProp false "parseIso rejects a corrupted separator" ((pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "iso") (EApp (EVar "formatIso") (EApp (EVar "fromEpochSeconds") (EApp (EVar "sane") (EVar "n"))))) (DoExpr (EBinOp "==" (EApp (EVar "parseIso") (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 0))) (ELit (LInt 10))) (EVar "iso")) (ELit (LString " "))) (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 11))) (ELit (LInt 20))) (EVar "iso")))) (EVar "None")))))
+(DProp false "Duration projections invert their constructors" ((pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "k") (EBinOp "%" (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (EVar "n")) (EVar "n")) (ELit (LInt 100000)))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "toMillis") (EApp (EVar "millis") (EVar "k"))) (EVar "k")) (EBinOp "==" (EApp (EVar "toSeconds") (EApp (EVar "seconds") (EVar "k"))) (EVar "k"))) (EBinOp "==" (EApp (EVar "toMinutes") (EApp (EVar "minutes") (EVar "k"))) (EVar "k"))) (EBinOp "==" (EApp (EVar "toHours") (EApp (EVar "hours") (EVar "k"))) (EVar "k"))) (EBinOp "==" (EApp (EVar "toDays") (EApp (EVar "days") (EVar "k"))) (EVar "k"))))))
+(DProp false "Duration projections are the coarser unit's floor" ((pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "k") (EBinOp "%" (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (EVar "n")) (EVar "n")) (ELit (LInt 100000000)))) (DoLet false false (PVar "d") (EApp (EVar "millis") (EVar "k"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "toSeconds") (EVar "d")) (EBinOp "/" (EApp (EVar "toMillis") (EVar "d")) (ELit (LInt 1000)))) (EBinOp "==" (EApp (EVar "toMinutes") (EVar "d")) (EBinOp "/" (EApp (EVar "toSeconds") (EVar "d")) (ELit (LInt 60))))) (EBinOp "==" (EApp (EVar "toHours") (EVar "d")) (EBinOp "/" (EApp (EVar "toMinutes") (EVar "d")) (ELit (LInt 60))))) (EBinOp "==" (EApp (EVar "toDays") (EVar "d")) (EBinOp "/" (EApp (EVar "toHours") (EVar "d")) (ELit (LInt 24))))))))
+(DProp false "Ord Duration agrees with toMillis" ((pp "a" (TyCon "Int")) (pp "b" (TyCon "Int"))) (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "compare") (EApp (EVar "millis") (EVar "a"))) (EApp (EVar "millis") (EVar "b"))) (EApp (EApp (EVar "compare") (EVar "a")) (EVar "b"))) (EBinOp "==" (EBinOp "==" (EApp (EVar "millis") (EVar "a")) (EApp (EVar "millis") (EVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))))
+(DProp false "Ord DateTime agrees with toEpochSeconds" ((pp "a" (TyCon "Int")) (pp "b" (TyCon "Int"))) (EBlock (DoLet false false (PVar "x") (EApp (EVar "fromEpochSeconds") (EApp (EVar "sane") (EVar "a")))) (DoLet false false (PVar "y") (EApp (EVar "fromEpochSeconds") (EApp (EVar "sane") (EVar "b")))) (DoExpr (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "compare") (EVar "x")) (EVar "y")) (EApp (EApp (EVar "compare") (EApp (EVar "toEpochSeconds") (EVar "x"))) (EApp (EVar "toEpochSeconds") (EVar "y")))) (EBinOp "==" (EBinOp "==" (EVar "x") (EVar "y")) (EBinOp "==" (EApp (EVar "toEpochSeconds") (EVar "x")) (EApp (EVar "toEpochSeconds") (EVar "y"))))))))
+(DProp false "Display DateTime is formatIso" ((pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "dt") (EApp (EVar "fromEpochSeconds") (EApp (EVar "sane") (EVar "n")))) (DoExpr (EBinOp "==" (EApp (EVar "display") (EVar "dt")) (EApp (EVar "formatIso") (EVar "dt"))))))
+(DProp false "Display Duration renders the millisecond count" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "display") (EApp (EVar "millis") (EVar "n"))) (EBinOp "++" (EApp (EVar "intToString") (EVar "n")) (ELit (LString "ms")))))
+(DProp false "Semigroup Duration is associative" ((pp "a" (TyCon "Int")) (pp "b" (TyCon "Int")) (pp "c" (TyCon "Int"))) (EBlock (DoLet false false (PVar "l") (EApp (EApp (EVar "append") (EApp (EApp (EVar "append") (EApp (EVar "millis") (EVar "a"))) (EApp (EVar "millis") (EVar "b")))) (EApp (EVar "millis") (EVar "c")))) (DoLet false false (PVar "r") (EApp (EApp (EVar "append") (EApp (EVar "millis") (EVar "a"))) (EApp (EApp (EVar "append") (EApp (EVar "millis") (EVar "b"))) (EApp (EVar "millis") (EVar "c"))))) (DoExpr (EBinOp "==" (EVar "l") (EVar "r")))))
+(DProp false "Monoid Duration: empty is a two-sided identity" ((pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "d") (EApp (EVar "millis") (EVar "n"))) (DoExpr (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "append") (EVar "d")) (EVar "empty")) (EVar "d")) (EBinOp "==" (EApp (EApp (EVar "append") (EVar "empty")) (EVar "d")) (EVar "d"))))))
 # MARK
 (DUse false (UseGroup ("math") ((mem "floorDiv" false))))
+(DUse false (UseGroup ("string") ((mem "sliceClamped" false) (mem "toInt" false))))
 (DData Public "Duration" () ((variant "Duration" (ConPos (TyCon "Int")))) ())
+(DImpl true "Eq" ((TyCon "Duration")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Duration" (PVar "__a0")) (PCon "Duration" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")))))))
+(DImpl true "Ord" ((TyCon "Duration")) () ((im "compare" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Duration" (PVar "__a0")) (PCon "Duration" (PVar "__b0"))) () (EApp (EApp (EMethodRef "compare") (EVar "__a0")) (EVar "__b0")))))))
+(DImpl true "Debug" ((TyCon "Duration")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "Duration" (PVar "__a0")) () (EBinOp "++" (ELit (LString "Duration ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))))))))
 (DTypeSig true "millis" (TyFun (TyCon "Int") (TyCon "Duration")))
 (DFunDef false "millis" ((PVar "n")) (EApp (EVar "Duration") (EVar "n")))
 (DTypeSig true "seconds" (TyFun (TyCon "Int") (TyCon "Duration")))
@@ -310,11 +515,20 @@ prop "epoch round-trips through the civil calendar" (n : Int) =
 (DFunDef false "toMillis" ((PCon "Duration" (PVar "ms"))) (EVar "ms"))
 (DTypeSig true "toSeconds" (TyFun (TyCon "Duration") (TyCon "Int")))
 (DFunDef false "toSeconds" ((PCon "Duration" (PVar "ms"))) (EBinOp "/" (EVar "ms") (ELit (LInt 1000))))
+(DTypeSig true "toMinutes" (TyFun (TyCon "Duration") (TyCon "Int")))
+(DFunDef false "toMinutes" ((PCon "Duration" (PVar "ms"))) (EBinOp "/" (EVar "ms") (ELit (LInt 60000))))
+(DTypeSig true "toHours" (TyFun (TyCon "Duration") (TyCon "Int")))
+(DFunDef false "toHours" ((PCon "Duration" (PVar "ms"))) (EBinOp "/" (EVar "ms") (ELit (LInt 3600000))))
+(DTypeSig true "toDays" (TyFun (TyCon "Duration") (TyCon "Int")))
+(DFunDef false "toDays" ((PCon "Duration" (PVar "ms"))) (EBinOp "/" (EVar "ms") (ELit (LInt 86400000))))
 (DTypeSig true "addDuration" (TyFun (TyCon "Duration") (TyFun (TyCon "Duration") (TyCon "Duration"))))
 (DFunDef false "addDuration" ((PCon "Duration" (PVar "a")) (PCon "Duration" (PVar "b"))) (EApp (EVar "Duration") (EBinOp "+" (EVar "a") (EVar "b"))))
 (DTypeSig true "subDuration" (TyFun (TyCon "Duration") (TyFun (TyCon "Duration") (TyCon "Duration"))))
 (DFunDef false "subDuration" ((PCon "Duration" (PVar "a")) (PCon "Duration" (PVar "b"))) (EApp (EVar "Duration") (EBinOp "-" (EVar "a") (EVar "b"))))
 (DData Public "DateTime" () ((variant "DateTime" (ConNamed (field "year" (TyCon "Int")) (field "month" (TyCon "Int")) (field "day" (TyCon "Int")) (field "hour" (TyCon "Int")) (field "minute" (TyCon "Int")) (field "second" (TyCon "Int"))))) ())
+(DImpl true "Eq" ((TyCon "DateTime")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "DateTime" ((rf "year" (PVar "__a0")) (rf "month" (PVar "__a1")) (rf "day" (PVar "__a2")) (rf "hour" (PVar "__a3")) (rf "minute" (PVar "__a4")) (rf "second" (PVar "__a5"))) false) (PRec "DateTime" ((rf "year" (PVar "__b0")) (rf "month" (PVar "__b1")) (rf "day" (PVar "__b2")) (rf "hour" (PVar "__b3")) (rf "minute" (PVar "__b4")) (rf "second" (PVar "__b5"))) false)) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EMethodRef "eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EMethodRef "eq") (EVar "__a3")) (EVar "__b3"))) (EApp (EApp (EMethodRef "eq") (EVar "__a4")) (EVar "__b4"))) (EApp (EApp (EMethodRef "eq") (EVar "__a5")) (EVar "__b5"))))))))
+(DImpl true "Ord" ((TyCon "DateTime")) () ((im "compare" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "DateTime" ((rf "year" (PVar "__a0")) (rf "month" (PVar "__a1")) (rf "day" (PVar "__a2")) (rf "hour" (PVar "__a3")) (rf "minute" (PVar "__a4")) (rf "second" (PVar "__a5"))) false) (PRec "DateTime" ((rf "year" (PVar "__b0")) (rf "month" (PVar "__b1")) (rf "day" (PVar "__b2")) (rf "hour" (PVar "__b3")) (rf "minute" (PVar "__b4")) (rf "second" (PVar "__b5"))) false)) () (EMatch (EApp (EApp (EMethodRef "compare") (EVar "__a0")) (EVar "__b0")) (arm (PCon "Eq") () (EMatch (EApp (EApp (EMethodRef "compare") (EVar "__a1")) (EVar "__b1")) (arm (PCon "Eq") () (EMatch (EApp (EApp (EMethodRef "compare") (EVar "__a2")) (EVar "__b2")) (arm (PCon "Eq") () (EMatch (EApp (EApp (EMethodRef "compare") (EVar "__a3")) (EVar "__b3")) (arm (PCon "Eq") () (EMatch (EApp (EApp (EMethodRef "compare") (EVar "__a4")) (EVar "__b4")) (arm (PCon "Eq") () (EApp (EApp (EMethodRef "compare") (EVar "__a5")) (EVar "__b5"))) (arm (PVar "__c") () (EVar "__c")))) (arm (PVar "__c") () (EVar "__c")))) (arm (PVar "__c") () (EVar "__c")))) (arm (PVar "__c") () (EVar "__c")))) (arm (PVar "__c") () (EVar "__c"))))))))
+(DImpl true "Debug" ((TyCon "DateTime")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PRec "DateTime" ((rf "year" (PVar "__a0")) (rf "month" (PVar "__a1")) (rf "day" (PVar "__a2")) (rf "hour" (PVar "__a3")) (rf "minute" (PVar "__a4")) (rf "second" (PVar "__a5"))) false) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "DateTime {")) (ELit (LString " year = "))) (EApp (EMethodRef "debug") (EVar "__a0"))) (ELit (LString ", month = "))) (EApp (EMethodRef "debug") (EVar "__a1"))) (ELit (LString ", day = "))) (EApp (EMethodRef "debug") (EVar "__a2"))) (ELit (LString ", hour = "))) (EApp (EMethodRef "debug") (EVar "__a3"))) (ELit (LString ", minute = "))) (EApp (EMethodRef "debug") (EVar "__a4"))) (ELit (LString ", second = "))) (EApp (EMethodRef "debug") (EVar "__a5"))) (ELit (LString " }"))))))))
 (DTypeSig false "daysFromCivil" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "daysFromCivil" ((PVar "y0") (PVar "m") (PVar "d")) (EBlock (DoLet false false (PVar "y") (EIf (EBinOp "<=" (EVar "m") (ELit (LInt 2))) (EBinOp "-" (EVar "y0") (ELit (LInt 1))) (EVar "y0"))) (DoLet false false (PVar "era") (EBinOp "/" (EIf (EBinOp ">=" (EVar "y") (ELit (LInt 0))) (EVar "y") (EBinOp "-" (EVar "y") (ELit (LInt 399)))) (ELit (LInt 400)))) (DoLet false false (PVar "yoe") (EBinOp "-" (EVar "y") (EBinOp "*" (EVar "era") (ELit (LInt 400))))) (DoLet false false (PVar "mp") (EIf (EBinOp ">" (EVar "m") (ELit (LInt 2))) (EBinOp "-" (EVar "m") (ELit (LInt 3))) (EBinOp "+" (EVar "m") (ELit (LInt 9))))) (DoLet false false (PVar "doy") (EBinOp "-" (EBinOp "+" (EBinOp "/" (EBinOp "+" (EBinOp "*" (ELit (LInt 153)) (EVar "mp")) (ELit (LInt 2))) (ELit (LInt 5))) (EVar "d")) (ELit (LInt 1)))) (DoLet false false (PVar "doe") (EBinOp "+" (EBinOp "-" (EBinOp "+" (EBinOp "*" (EVar "yoe") (ELit (LInt 365))) (EBinOp "/" (EVar "yoe") (ELit (LInt 4)))) (EBinOp "/" (EVar "yoe") (ELit (LInt 100)))) (EVar "doy"))) (DoExpr (EBinOp "-" (EBinOp "+" (EBinOp "*" (EVar "era") (ELit (LInt 146097))) (EVar "doe")) (ELit (LInt 719468))))))
 (DTypeSig false "civilFromDays" (TyFun (TyCon "Int") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int"))))
@@ -329,6 +543,15 @@ prop "epoch round-trips through the civil calendar" (n : Int) =
 (DFunDef false "pad4" ((PVar "n")) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 10))) (EBinOp "++" (ELit (LString "000")) (EApp (EVar "intToString") (EVar "n"))) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 100))) (EBinOp "++" (ELit (LString "00")) (EApp (EVar "intToString") (EVar "n"))) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 1000))) (EBinOp "++" (ELit (LString "0")) (EApp (EVar "intToString") (EVar "n"))) (EApp (EVar "intToString") (EVar "n"))))))
 (DTypeSig true "formatIso" (TyFun (TyCon "DateTime") (TyCon "String")))
 (DFunDef false "formatIso" ((PVar "dt")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "pad4") (EFieldAccess (EVar "dt") "year")))) (ELit (LString "-"))) (EApp (EMethodRef "display") (EApp (EVar "pad2") (EFieldAccess (EVar "dt") "month")))) (ELit (LString "-"))) (EApp (EMethodRef "display") (EApp (EVar "pad2") (EFieldAccess (EVar "dt") "day")))) (ELit (LString "T"))) (EApp (EMethodRef "display") (EApp (EVar "pad2") (EFieldAccess (EVar "dt") "hour")))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "pad2") (EFieldAccess (EVar "dt") "minute")))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "pad2") (EFieldAccess (EVar "dt") "second")))) (ELit (LString "Z"))))
+(DTypeSig false "isoFields" (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "DateTime")))))))))
+(DFunDef false "isoFields" ((PCon "Some" (PVar "y")) (PCon "Some" (PVar "mo")) (PCon "Some" (PVar "d")) (PCon "Some" (PVar "h")) (PCon "Some" (PVar "mi")) (PCon "Some" (PVar "sec"))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "y") (ELit (LInt 0))) (EBinOp ">=" (EVar "mo") (ELit (LInt 1)))) (EBinOp "<=" (EVar "mo") (ELit (LInt 12)))) (EBinOp ">=" (EVar "d") (ELit (LInt 1)))) (EBinOp "<=" (EVar "d") (ELit (LInt 31)))) (EBinOp "<=" (EVar "h") (ELit (LInt 23)))) (EBinOp "<=" (EVar "mi") (ELit (LInt 59)))) (EBinOp "<=" (EVar "sec") (ELit (LInt 59)))) (EApp (EVar "Some") (ERecordCreate "DateTime" ((fa "year" (EVar "y")) (fa "month" (EVar "mo")) (fa "day" (EVar "d")) (fa "hour" (EVar "h")) (fa "minute" (EVar "mi")) (fa "second" (EVar "sec"))))) (EVar "None")))
+(DFunDef false "isoFields" (PWild PWild PWild PWild PWild PWild) (EVar "None"))
+(DTypeSig true "parseIso" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "DateTime"))))
+(DFunDef false "parseIso" ((PVar "s")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 20))) (EBinOp "==" (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 4))) (ELit (LInt 5))) (EVar "s")) (ELit (LString "-")))) (EBinOp "==" (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 7))) (ELit (LInt 8))) (EVar "s")) (ELit (LString "-")))) (EBinOp "==" (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 10))) (ELit (LInt 11))) (EVar "s")) (ELit (LString "T")))) (EBinOp "==" (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 13))) (ELit (LInt 14))) (EVar "s")) (ELit (LString ":")))) (EBinOp "==" (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 16))) (ELit (LInt 17))) (EVar "s")) (ELit (LString ":")))) (EBinOp "==" (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 19))) (ELit (LInt 20))) (EVar "s")) (ELit (LString "Z")))) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "isoFields") (EApp (EVar "toInt") (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 0))) (ELit (LInt 4))) (EVar "s")))) (EApp (EVar "toInt") (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 5))) (ELit (LInt 7))) (EVar "s")))) (EApp (EVar "toInt") (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 8))) (ELit (LInt 10))) (EVar "s")))) (EApp (EVar "toInt") (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 11))) (ELit (LInt 13))) (EVar "s")))) (EApp (EVar "toInt") (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 14))) (ELit (LInt 16))) (EVar "s")))) (EApp (EVar "toInt") (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 17))) (ELit (LInt 19))) (EVar "s")))) (arm (PCon "Some" (PVar "dt")) () (EIf (EBinOp "==" (EApp (EVar "formatIso") (EVar "dt")) (EVar "s")) (EApp (EVar "Some") (EVar "dt")) (EVar "None"))) (arm (PCon "None") () (EVar "None"))) (EVar "None")))
+(DImpl true "Display" ((TyCon "Duration")) () ((im "display" ((PCon "Duration" (PVar "ms"))) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "ms")))) (ELit (LString "ms"))))))
+(DImpl true "Display" ((TyCon "DateTime")) () ((im "display" ((PVar "dt")) (EApp (EVar "formatIso") (EVar "dt")))))
+(DImpl true "Semigroup" ((TyCon "Duration")) () ((im "append" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "addDuration") (EVar "a")) (EVar "b")))))
+(DImpl true "Monoid" ((TyCon "Duration")) () ((im "empty" () (EApp (EVar "Duration") (ELit (LInt 0))))))
 (DTypeSig true "now" (TyFun (TyCon "Unit") (TyEffect ("Clock") None (TyCon "Float"))))
 (DFunDef false "now" ((PVar "u")) (EApp (EVar "wallTimeSec") (EVar "u")))
 (DTypeSig true "nowDateTime" (TyFun (TyCon "Unit") (TyEffect ("Clock") None (TyCon "DateTime"))))
@@ -337,8 +560,20 @@ prop "epoch round-trips through the civil calendar" (n : Int) =
 (DFunDef false "monotonic" ((PVar "u")) (EApp (EVar "monotonicSec") (EVar "u")))
 (DTypeSig true "elapsedSince" (TyFun (TyCon "Float") (TyEffect ("Clock") None (TyCon "Float"))))
 (DFunDef false "elapsedSince" ((PVar "start")) (EBinOp "-" (EApp (EVar "monotonicSec") (ELit LUnit)) (EVar "start")))
-(DTypeSig true "sleep" (TyFun (TyCon "Int") (TyEffect ("Clock") None (TyCon "Unit"))))
-(DFunDef false "sleep" ((PVar "ms")) (EApp (EVar "sleepMs") (EVar "ms")))
+(DTypeSig true "sleep" (TyFun (TyCon "Duration") (TyEffect ("Clock") None (TyCon "Unit"))))
+(DFunDef false "sleep" ((PVar "d")) (EApp (EVar "sleepMs") (EApp (EVar "toMillis") (EVar "d"))))
 (DTypeSig true "sleepSeconds" (TyFun (TyCon "Int") (TyEffect ("Clock") None (TyCon "Unit"))))
 (DFunDef false "sleepSeconds" ((PVar "s")) (EApp (EVar "sleepMs") (EBinOp "*" (EVar "s") (ELit (LInt 1000)))))
 (DProp false "epoch round-trips through the civil calendar" ((pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "s") (EBinOp "+" (ELit (LInt 1000000)) (EBinOp "%" (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (EVar "n")) (EVar "n")) (ELit (LInt 3000000000))))) (DoExpr (EBinOp "==" (EApp (EVar "toEpochSeconds") (EApp (EVar "fromEpochSeconds") (EVar "s"))) (EVar "s")))))
+(DTypeSig false "sane" (TyFun (TyCon "Int") (TyCon "Int")))
+(DFunDef false "sane" ((PVar "n")) (EBinOp "+" (ELit (LInt 1000000)) (EBinOp "%" (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (EVar "n")) (EVar "n")) (ELit (LInt 3000000000)))))
+(DProp false "parseIso inverts formatIso" ((pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "dt") (EApp (EVar "fromEpochSeconds") (EApp (EVar "sane") (EVar "n")))) (DoExpr (EBinOp "==" (EApp (EVar "parseIso") (EApp (EVar "formatIso") (EVar "dt"))) (EApp (EVar "Some") (EVar "dt"))))))
+(DProp false "parseIso rejects a corrupted separator" ((pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "iso") (EApp (EVar "formatIso") (EApp (EVar "fromEpochSeconds") (EApp (EVar "sane") (EVar "n"))))) (DoExpr (EBinOp "==" (EApp (EVar "parseIso") (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 0))) (ELit (LInt 10))) (EVar "iso")) (ELit (LString " "))) (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 11))) (ELit (LInt 20))) (EVar "iso")))) (EVar "None")))))
+(DProp false "Duration projections invert their constructors" ((pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "k") (EBinOp "%" (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (EVar "n")) (EVar "n")) (ELit (LInt 100000)))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "toMillis") (EApp (EVar "millis") (EVar "k"))) (EVar "k")) (EBinOp "==" (EApp (EVar "toSeconds") (EApp (EVar "seconds") (EVar "k"))) (EVar "k"))) (EBinOp "==" (EApp (EVar "toMinutes") (EApp (EVar "minutes") (EVar "k"))) (EVar "k"))) (EBinOp "==" (EApp (EVar "toHours") (EApp (EVar "hours") (EVar "k"))) (EVar "k"))) (EBinOp "==" (EApp (EVar "toDays") (EApp (EVar "days") (EVar "k"))) (EVar "k"))))))
+(DProp false "Duration projections are the coarser unit's floor" ((pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "k") (EBinOp "%" (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (EVar "n")) (EVar "n")) (ELit (LInt 100000000)))) (DoLet false false (PVar "d") (EApp (EVar "millis") (EVar "k"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "toSeconds") (EVar "d")) (EBinOp "/" (EApp (EVar "toMillis") (EVar "d")) (ELit (LInt 1000)))) (EBinOp "==" (EApp (EVar "toMinutes") (EVar "d")) (EBinOp "/" (EApp (EVar "toSeconds") (EVar "d")) (ELit (LInt 60))))) (EBinOp "==" (EApp (EVar "toHours") (EVar "d")) (EBinOp "/" (EApp (EVar "toMinutes") (EVar "d")) (ELit (LInt 60))))) (EBinOp "==" (EApp (EVar "toDays") (EVar "d")) (EBinOp "/" (EApp (EVar "toHours") (EVar "d")) (ELit (LInt 24))))))))
+(DProp false "Ord Duration agrees with toMillis" ((pp "a" (TyCon "Int")) (pp "b" (TyCon "Int"))) (EBinOp "&&" (EBinOp "==" (EApp (EApp (EMethodRef "compare") (EApp (EVar "millis") (EVar "a"))) (EApp (EVar "millis") (EVar "b"))) (EApp (EApp (EMethodRef "compare") (EVar "a")) (EVar "b"))) (EBinOp "==" (EBinOp "==" (EApp (EVar "millis") (EVar "a")) (EApp (EVar "millis") (EVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))))
+(DProp false "Ord DateTime agrees with toEpochSeconds" ((pp "a" (TyCon "Int")) (pp "b" (TyCon "Int"))) (EBlock (DoLet false false (PVar "x") (EApp (EVar "fromEpochSeconds") (EApp (EVar "sane") (EVar "a")))) (DoLet false false (PVar "y") (EApp (EVar "fromEpochSeconds") (EApp (EVar "sane") (EVar "b")))) (DoExpr (EBinOp "&&" (EBinOp "==" (EApp (EApp (EMethodRef "compare") (EVar "x")) (EVar "y")) (EApp (EApp (EMethodRef "compare") (EApp (EVar "toEpochSeconds") (EVar "x"))) (EApp (EVar "toEpochSeconds") (EVar "y")))) (EBinOp "==" (EBinOp "==" (EVar "x") (EVar "y")) (EBinOp "==" (EApp (EVar "toEpochSeconds") (EVar "x")) (EApp (EVar "toEpochSeconds") (EVar "y"))))))))
+(DProp false "Display DateTime is formatIso" ((pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "dt") (EApp (EVar "fromEpochSeconds") (EApp (EVar "sane") (EVar "n")))) (DoExpr (EBinOp "==" (EApp (EMethodRef "display") (EVar "dt")) (EApp (EVar "formatIso") (EVar "dt"))))))
+(DProp false "Display Duration renders the millisecond count" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EMethodRef "display") (EApp (EVar "millis") (EVar "n"))) (EBinOp "++" (EApp (EVar "intToString") (EVar "n")) (ELit (LString "ms")))))
+(DProp false "Semigroup Duration is associative" ((pp "a" (TyCon "Int")) (pp "b" (TyCon "Int")) (pp "c" (TyCon "Int"))) (EBlock (DoLet false false (PVar "l") (EApp (EApp (EMethodRef "append") (EApp (EApp (EMethodRef "append") (EApp (EVar "millis") (EVar "a"))) (EApp (EVar "millis") (EVar "b")))) (EApp (EVar "millis") (EVar "c")))) (DoLet false false (PVar "r") (EApp (EApp (EMethodRef "append") (EApp (EVar "millis") (EVar "a"))) (EApp (EApp (EMethodRef "append") (EApp (EVar "millis") (EVar "b"))) (EApp (EVar "millis") (EVar "c"))))) (DoExpr (EBinOp "==" (EVar "l") (EVar "r")))))
+(DProp false "Monoid Duration: empty is a two-sided identity" ((pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "d") (EApp (EVar "millis") (EVar "n"))) (DoExpr (EBinOp "&&" (EBinOp "==" (EApp (EApp (EMethodRef "append") (EVar "d")) (EMethodRef "empty")) (EVar "d")) (EBinOp "==" (EApp (EApp (EMethodRef "append") (EMethodRef "empty")) (EVar "d")) (EVar "d"))))))

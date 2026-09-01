@@ -199,11 +199,6 @@ some p = do
   xs <- many p
   pure (x::xs)
 
--- | Alias for `some`.
-export
-many1 : ByteParser a -> ByteParser (List a)
-many1 p = some p
-
 -- | One-or-more `p` separated by `sep`.
 export
 sepBy1 : ByteParser a -> ByteParser b -> ByteParser (List a)

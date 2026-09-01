@@ -118,9 +118,7 @@ What's in the standard library, what's planned, module-by-module status.
 | [`mut_array.md`](stdlib/mut_array.md) | mut_array | — |
 | [`net.md`](stdlib/net.md) | net | — |
 | [`nonempty.md`](stdlib/nonempty.md) | nonempty | — |
-| [`option.md`](stdlib/option.md) | option | — |
 | [`path.md`](stdlib/path.md) | path | — |
-| [`result.md`](stdlib/result.md) | result | — |
 | [`runtime.md`](stdlib/runtime.md) | runtime | — |
 | [`set.md`](stdlib/set.md) | set | — |
 | [`string.md`](stdlib/string.md) | string | — |

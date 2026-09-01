@@ -18,7 +18,15 @@ be incoherent (two "correct" answers for combining two failures depend
 on which interface a caller happens to reach for). Haskell's
 `validation` package, PureScript, and Scala/cats' `Validated` all make
 this same call: accumulate via `Applicative`, and if you need
-short-circuiting sequencing, convert to `Result` (`validationToResult`) first.
+short-circuiting sequencing, convert to `Result` (`toResult`) first.
+
+⚠️ `toResult` and `fromResult` (renamed from `validationToResult`/
+`resultToValidation` by #2306 D-2, so the module qualifier carries the type
+instead of the name stuttering it) DELIBERATELY reuse two prelude spellings:
+`core.toResult : e -> Option a -> Result e a` and `core.fromResult :
+Result e a -> Option a`.  A selective `import validation.{toResult}` SHADOWS
+the prelude name in that module with no ambiguity diagnostic, so prefer
+`import validation as V` and write `V.toResult`.
 
 ## `Validation`
 
@@ -36,9 +44,9 @@ as intentional rather than a `Result` look-alike bug.
 *(doctest — run by `medaka test`)*
 
 ```medaka
-> validationToResult (Success 1)
+> toResult (Success 1)
 Ok 1
-> validationToResult (Failure "bad")
+> toResult (Failure "bad")
 Err "bad"
 ```
 
@@ -62,11 +70,11 @@ the first, so validating several fields collects every error.
 *(doctest — run by `medaka test`)*
 
 ```medaka
-> validationToResult (ap (Failure ["bad name"] : Validation (List String) (Int -> Int)) (Failure ["bad age"] : Validation (List String) Int))
+> toResult (ap (Failure ["bad name"] : Validation (List String) (Int -> Int)) (Failure ["bad age"] : Validation (List String) Int))
 Err ["bad name", "bad age"]
-> validationToResult (ap (Failure ["bad name"] : Validation (List String) (Int -> Int)) (Success 5 : Validation (List String) Int))
+> toResult (ap (Failure ["bad name"] : Validation (List String) (Int -> Int)) (Success 5 : Validation (List String) Int))
 Err ["bad name"]
-> validationToResult (ap (pure (n => n + 1) : Validation (List String) (Int -> Int)) (Success 5 : Validation (List String) Int))
+> toResult (ap (pure (n => n + 1) : Validation (List String) (Int -> Int)) (Success 5 : Validation (List String) Int))
 Ok 6
 ```
 
@@ -98,6 +106,35 @@ impl Eq (Validation e a) requires Eq e, Eq a
 impl Debug (Validation e a) requires Debug e, Debug a
 ```
 
+## `Semigroup (Validation e a)`
+
+```
+impl Semigroup (Validation e a) requires Semigroup e, Semigroup a
+```
+
+The accumulating `Semigroup` (sheet row A-5), agreeing with the
+`Applicative` above: two `Failure`s combine their errors rather than
+keeping the first, so `append` never loses a diagnostic.  Two `Success`es
+combine their payloads, which is why `Semigroup a` is required as well as
+`Semigroup e` -- without it there is no answer for `Success <> Success`
+and the instance would have to invent one.
+
+No `Monoid` peer: an identity would have to be a `Success empty` that also
+annihilates a `Failure`, and it does not (`Failure e ++ Success empty` is
+`Failure e`, not `Success empty`), so the identity law fails on one side.
+
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> display (append (Failure ["a"] : Validation (List String) (List Int)) (Failure ["b"]))
+"Failure [a, b]"
+> display (append (Success [1] : Validation (List String) (List Int)) (Success [2]))
+"Success [1, 2]"
+> display (append (Failure ["a"] : Validation (List String) (List Int)) (Success [2]))
+"Failure [a]"
+```
+
 ## `Display (Validation e a)`
 
 ```
@@ -117,10 +154,10 @@ core's `Display (Result e a)`.
 "Failure bad"
 ```
 
-## `validationToResult`
+## `toResult`
 
 ```
-validationToResult : Validation a b -> Result a b
+toResult : Validation a b -> Result a b
 ```
 
 Drop down to the short-circuiting `Result` (e.g. to `andThen`-sequence
@@ -130,14 +167,14 @@ once you no longer need to accumulate).
 *(doctest — run by `medaka test`)*
 
 ```medaka
-> validationToResult (Success 1)
+> toResult (Success 1)
 Ok 1
 ```
 
-## `resultToValidation`
+## `fromResult`
 
 ```
-resultToValidation : Result a b -> Validation a b
+fromResult : Result a b -> Validation a b
 ```
 
 Lift a `Result` into `Validation` (e.g. to combine it with others via
@@ -147,9 +184,9 @@ the accumulating `Applicative`).
 *(doctest — run by `medaka test`)*
 
 ```medaka
-> resultToValidation (Ok 1 : Result String Int)
+> fromResult (Ok 1 : Result String Int)
 Success 1
-> resultToValidation (Err "bad" : Result String Int)
+> fromResult (Err "bad" : Result String Int)
 Failure "bad"
 ```
 

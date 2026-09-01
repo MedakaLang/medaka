@@ -1725,14 +1725,14 @@ groupCtorsByType t = omMapValues reverseL (foldCtorsByType t omEmpty)
 foldCtorsByType : List (String, String) -> OrdMap (List String) -> OrdMap (List String)
 foldCtorsByType [] acc = acc
 foldCtorsByType ((c, ty)::rest) acc =
-  foldCtorsByType rest (omInsert ty (c :: fromOption [] (omLookup ty acc)) acc)
+  foldCtorsByType rest (omInsert ty (c :: optionOr [] (omLookup ty acc)) acc)
 
 -- (ctor, ordinal) for every ctor of every type, types visited in first-appearance
 -- order and each bucket numbered from 0 — so `omFromPairs (reverseL …)` keeps the
 -- first occurrence, matching `indexOfStr name (ctorsOfType e ty)`.
 ctorOrdinalPairs : OrdMap (List String) -> List String -> List (String, Int)
 ctorOrdinalPairs _ [] = []
-ctorOrdinalPairs byType (ty::rest) = numberFrom 0 (fromOption [] (omLookup ty byType))
+ctorOrdinalPairs byType (ty::rest) = numberFrom 0 (optionOr [] (omLookup ty byType))
   ++ ctorOrdinalPairs byType rest
 
 numberFrom : Int -> List String -> List (String, Int)
@@ -8220,7 +8220,7 @@ ctorOrdinal e name = match ctorTypeOf e name
   -- is in `ty`'s bucket and therefore in the ordinal map — the map probe and the
   -- `indexOfStr` scan return the same Int.  RUN-EMIT-003: the scan path is retired.
   Some _ => match !e.ctorOrdinalMap
-    Some m => fromOption 0 (omLookup name m)
+    Some m => optionOr 0 (omLookup name m)
     None => panic "llvm: ctorOrdinalMap read before install (internal error)"
   None => if name == "Nil" then 1 else 0
 
@@ -8235,7 +8235,7 @@ ctorTypeId e name = match ctorTypeOf e name
   -- `indexOfStr` scan agree, and `omSize` is that list's length (nubStr ⇒ distinct).
   -- RUN-EMIT-003: both `distinctTypeNames`-scan paths are retired.
   Some ty => match !e.typeIdMap
-    Some m => fromOption 0 (omLookup ty m)
+    Some m => optionOr 0 (omLookup ty m)
     None => panic "llvm: typeIdMap read before install (internal error)"
   None => match !e.typeIdMap
     Some m => omSize m

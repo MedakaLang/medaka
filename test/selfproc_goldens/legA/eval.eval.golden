@@ -33,7 +33,7 @@ buildIfaceDispatch : List Decl -> List ((String, String, String), List Int)
 buildMethodReqCounts : List Decl -> List ((String, String), Int)
 buildModInfos : ModExports (Value a) -> List (String, ModExports (Value a)) -> List (String, List Decl) -> List (ModInfo (Value a))
 buildWith : Value a -> Int -> Int -> List (Value a)
-bytesBEToU64 : Array Int -> (Int, Int, Int, Int)
+bytesBEToU64 : Array Int -> U64
 canonHashFloat : Float -> Float
 canonNaN : Float
 cellOf : (String, Value a) -> (String, Ref (Value a))
@@ -137,8 +137,8 @@ findCell : List (String, Ref (Value a)) -> String -> Ref (Value a)
 firstOrEmpty : List String -> String
 flattenEnv : EvalEnv (Value a) -> List (String, Value a)
 fmtSentinel : String
-fnvFold64 : List Int -> (Int, Int, Int, Int) -> (Int, Int, Int, Int)
-fnvStep64 : (Int, Int, Int, Int) -> Int -> (Int, Int, Int, Int)
+fnvFold64 : List Int -> U64 -> U64
+fnvStep64 : U64 -> Int -> U64
 force : Value a -> Value a
 forceCell : Ref (Value a) -> String -> Value a
 forceMemo : Ref (Value a) -> String -> (Unit -> Value a) -> Value a
@@ -403,9 +403,9 @@ recordCreateVals : String -> List String -> List (String, Value a) -> List (Valu
 reexport : ModExports (Value a) -> List (String, ModExports (Value a)) -> Decl -> List (String, Ref (Value a))
 resolveMembers : UsePath -> ModExports (Value a) -> List (String, Ref (Value a))
 resultToValue : Result String (Value a) -> Value a
-rngDraw : Unit -> (Int, Int, Int, Int)
+rngDraw : Unit -> U64
 rngStateRef : Ref Int
-rngU64Ref : Ref (Int, Int, Int, Int)
+rngU64Ref : Ref U64
 rootFullEnv : List (ModInfo (Value a)) -> List (String, Ref (Value a)) -> List (String, Value a)
 rootLocals : List (ModInfo (Value a)) -> List (String, Value a)
 routeTag : EvalEnv (Value a) -> Route -> String
@@ -441,17 +441,17 @@ topGroupValue : EvalEnv (Value a) -> List (List Pat, Expr) -> Value a
 tupleHeadTag : Int -> String
 tyMentions : Ty -> List String -> Bool
 tyvarsInArgs : List Ty -> Int
-u64Bit63 : (Int, Int, Int, Int) -> Int
-u64Const1 : (Int, Int, Int, Int)
-u64Const2 : (Int, Int, Int, Int)
-u64Finalize : (Int, Int, Int, Int) -> (Int, Int, Int, Int)
-u64FnvBasis : (Int, Int, Int, Int)
-u64FnvPrime : (Int, Int, Int, Int)
-u64Golden : (Int, Int, Int, Int)
-u64Low30 : (Int, Int, Int, Int) -> Int
-u64Mix : (Int, Int, Int, Int) -> (Int, Int, Int, Int)
-u64ToInt : (Int, Int, Int, Int) -> Int
-u64ToSignedInt : (Int, Int, Int, Int) -> Int
+u64Bit63 : U64 -> Int
+u64Const1 : U64
+u64Const2 : U64
+u64Finalize : U64 -> U64
+u64FnvBasis : U64
+u64FnvPrime : U64
+u64Golden : U64
+u64Low30 : U64 -> Int
+u64Mix : U64 -> U64
+u64ToInt : U64 -> Int
+u64ToSignedInt : U64 -> Int
 unChar : Value a -> Char
 unInt : Value a -> Int
 unIntArray : Value a -> Array Int

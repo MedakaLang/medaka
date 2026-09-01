@@ -1,5 +1,5 @@
 # META
-source_lines=417
+source_lines=412
 stages=DESUGAR,MARK
 # SOURCE
 -- | byteparser — a binary parser-combinator library for Medaka.
@@ -202,11 +202,6 @@ some p = do
   x <- p
   xs <- many p
   pure (x::xs)
-
--- | Alias for `some`.
-export
-many1 : ByteParser a -> ByteParser (List a)
-many1 p = some p
 
 -- | One-or-more `p` separated by `sep`.
 export
@@ -455,8 +450,6 @@ runByteParser p bytes = match runBP p bytes 0
 (DFunDef false "manyGo" ((PVar "p") (PVar "input") (PVar "pos") (PVar "acc")) (EMatch (EApp (EApp (EApp (EVar "runBP") (EVar "p")) (EVar "input")) (EVar "pos")) (arm (PCon "BErr" PWild PWild) () (EApp (EApp (EVar "BOk") (EApp (EVar "reverse") (EVar "acc"))) (EVar "pos"))) (arm (PCon "BOk" (PVar "a") (PVar "pos2")) () (EIf (EBinOp "==" (EVar "pos2") (EVar "pos")) (EApp (EApp (EVar "BOk") (EApp (EVar "reverse") (EVar "acc"))) (EVar "pos2")) (EApp (EApp (EApp (EApp (EVar "manyGo") (EVar "p")) (EVar "input")) (EVar "pos2")) (EBinOp "::" (EVar "a") (EVar "acc")))))))
 (DTypeSig true "some" (TyFun (TyApp (TyCon "ByteParser") (TyVar "a")) (TyApp (TyCon "ByteParser") (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "some" ((PVar "p")) (EApp (EApp (EVar "andThen") (EVar "p")) (ELam ((PVar "x")) (EApp (EApp (EVar "andThen") (EApp (EVar "many") (EVar "p"))) (ELam ((PVar "xs")) (EApp (EVar "pure") (EBinOp "::" (EVar "x") (EVar "xs"))))))))
-(DTypeSig true "many1" (TyFun (TyApp (TyCon "ByteParser") (TyVar "a")) (TyApp (TyCon "ByteParser") (TyApp (TyCon "List") (TyVar "a")))))
-(DFunDef false "many1" ((PVar "p")) (EApp (EVar "some") (EVar "p")))
 (DTypeSig true "sepBy1" (TyFun (TyApp (TyCon "ByteParser") (TyVar "a")) (TyFun (TyApp (TyCon "ByteParser") (TyVar "b")) (TyApp (TyCon "ByteParser") (TyApp (TyCon "List") (TyVar "a"))))))
 (DFunDef false "sepBy1" ((PVar "p") (PVar "sep")) (EApp (EApp (EVar "andThen") (EVar "p")) (ELam ((PVar "x")) (EApp (EApp (EVar "andThen") (EApp (EVar "many") (EApp (EApp (EVar "andThen") (EVar "sep")) (ELam (PWild) (EVar "p"))))) (ELam ((PVar "xs")) (EApp (EVar "pure") (EBinOp "::" (EVar "x") (EVar "xs"))))))))
 (DTypeSig true "sepBy" (TyFun (TyApp (TyCon "ByteParser") (TyVar "a")) (TyFun (TyApp (TyCon "ByteParser") (TyVar "b")) (TyApp (TyCon "ByteParser") (TyApp (TyCon "List") (TyVar "a"))))))
@@ -534,8 +527,6 @@ runByteParser p bytes = match runBP p bytes 0
 (DFunDef false "manyGo" ((PVar "p") (PVar "input") (PVar "pos") (PVar "acc")) (EMatch (EApp (EApp (EApp (EVar "runBP") (EVar "p")) (EVar "input")) (EVar "pos")) (arm (PCon "BErr" PWild PWild) () (EApp (EApp (EVar "BOk") (EApp (EVar "reverse") (EVar "acc"))) (EVar "pos"))) (arm (PCon "BOk" (PVar "a") (PVar "pos2")) () (EIf (EBinOp "==" (EVar "pos2") (EVar "pos")) (EApp (EApp (EVar "BOk") (EApp (EVar "reverse") (EVar "acc"))) (EVar "pos2")) (EApp (EApp (EApp (EApp (EVar "manyGo") (EVar "p")) (EVar "input")) (EVar "pos2")) (EBinOp "::" (EVar "a") (EVar "acc")))))))
 (DTypeSig true "some" (TyFun (TyApp (TyCon "ByteParser") (TyVar "a")) (TyApp (TyCon "ByteParser") (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "some" ((PVar "p")) (EApp (EApp (EMethodRef "andThen") (EVar "p")) (ELam ((PVar "x")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "many") (EVar "p"))) (ELam ((PVar "xs")) (EApp (EMethodRef "pure") (EBinOp "::" (EVar "x") (EVar "xs"))))))))
-(DTypeSig true "many1" (TyFun (TyApp (TyCon "ByteParser") (TyVar "a")) (TyApp (TyCon "ByteParser") (TyApp (TyCon "List") (TyVar "a")))))
-(DFunDef false "many1" ((PVar "p")) (EApp (EVar "some") (EVar "p")))
 (DTypeSig true "sepBy1" (TyFun (TyApp (TyCon "ByteParser") (TyVar "a")) (TyFun (TyApp (TyCon "ByteParser") (TyVar "b")) (TyApp (TyCon "ByteParser") (TyApp (TyCon "List") (TyVar "a"))))))
 (DFunDef false "sepBy1" ((PVar "p") (PVar "sep")) (EApp (EApp (EMethodRef "andThen") (EVar "p")) (ELam ((PVar "x")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "many") (EApp (EApp (EMethodRef "andThen") (EVar "sep")) (ELam (PWild) (EVar "p"))))) (ELam ((PVar "xs")) (EApp (EMethodRef "pure") (EBinOp "::" (EVar "x") (EVar "xs"))))))))
 (DTypeSig true "sepBy" (TyFun (TyApp (TyCon "ByteParser") (TyVar "a")) (TyFun (TyApp (TyCon "ByteParser") (TyVar "b")) (TyApp (TyCon "ByteParser") (TyApp (TyCon "List") (TyVar "a"))))))

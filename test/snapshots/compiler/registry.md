@@ -208,7 +208,7 @@ stages=DESUGAR,MARK
 -- so the derivation is spelled out here rather than left to the next unit.
 -- The key today is (`types/typecheck.mdk:15171`):
 --
---     let key = joinWith "," (iface :: map (o2 => fromOption "" (headTyconMono o2)) occs)
+--     let key = joinWith "," (iface :: map (o2 => optionOr "" (headTyconMono o2)) occs)
 --
 -- `headTyconMono : Mono -> Option String`, so a POSITION CAN BE ABSENT and
 -- the `""` is a POSITIONAL PLACEHOLDER, not a name. Absent positions really
@@ -1210,7 +1210,7 @@ identBuiltinFixture ns name = Ident ns identOriginBuiltin name
 
 identIn : Ns -> String -> String -> Ident
 identIn ns mid name =
-  fromOption
+  optionOr
     (identBuiltinFixture ns "__fixture_fallback__")
     (mkIdent ns (OriginModule mid) name)
 
@@ -2213,7 +2213,7 @@ headU = HkDecl (TkBare NsType "Box")
 (DTypeSig false "identBuiltinFixture" (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyCon "Ident"))))
 (DFunDef false "identBuiltinFixture" ((PVar "ns") (PVar "name")) (EApp (EApp (EApp (EVar "Ident") (EVar "ns")) (EVar "identOriginBuiltin")) (EVar "name")))
 (DTypeSig false "identIn" (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Ident")))))
-(DFunDef false "identIn" ((PVar "ns") (PVar "mid") (PVar "name")) (EApp (EApp (EVar "fromOption") (EApp (EApp (EVar "identBuiltinFixture") (EVar "ns")) (ELit (LString "__fixture_fallback__")))) (EApp (EApp (EApp (EVar "mkIdent") (EVar "ns")) (EApp (EVar "OriginModule") (EVar "mid"))) (EVar "name"))))
+(DFunDef false "identIn" ((PVar "ns") (PVar "mid") (PVar "name")) (EApp (EApp (EVar "optionOr") (EApp (EApp (EVar "identBuiltinFixture") (EVar "ns")) (ELit (LString "__fixture_fallback__")))) (EApp (EApp (EApp (EVar "mkIdent") (EVar "ns")) (EApp (EVar "OriginModule") (EVar "mid"))) (EVar "name"))))
 (DTypeSig false "identTypeFooM" (TyCon "Ident"))
 (DFunDef false "identTypeFooM" () (EApp (EApp (EApp (EVar "identIn") (EVar "NsType")) (ELit (LString "m"))) (ELit (LString "Foo"))))
 (DTypeSig false "identIfaceFooM" (TyCon "Ident"))
@@ -2484,7 +2484,7 @@ headU = HkDecl (TkBare NsType "Box")
 (DTypeSig false "identBuiltinFixture" (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyCon "Ident"))))
 (DFunDef false "identBuiltinFixture" ((PVar "ns") (PVar "name")) (EApp (EApp (EApp (EVar "Ident") (EVar "ns")) (EVar "identOriginBuiltin")) (EVar "name")))
 (DTypeSig false "identIn" (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Ident")))))
-(DFunDef false "identIn" ((PVar "ns") (PVar "mid") (PVar "name")) (EApp (EApp (EVar "fromOption") (EApp (EApp (EVar "identBuiltinFixture") (EVar "ns")) (ELit (LString "__fixture_fallback__")))) (EApp (EApp (EApp (EVar "mkIdent") (EVar "ns")) (EApp (EVar "OriginModule") (EVar "mid"))) (EVar "name"))))
+(DFunDef false "identIn" ((PVar "ns") (PVar "mid") (PVar "name")) (EApp (EApp (EVar "optionOr") (EApp (EApp (EVar "identBuiltinFixture") (EVar "ns")) (ELit (LString "__fixture_fallback__")))) (EApp (EApp (EApp (EVar "mkIdent") (EVar "ns")) (EApp (EVar "OriginModule") (EVar "mid"))) (EVar "name"))))
 (DTypeSig false "identTypeFooM" (TyCon "Ident"))
 (DFunDef false "identTypeFooM" () (EApp (EApp (EApp (EVar "identIn") (EVar "NsType")) (ELit (LString "m"))) (ELit (LString "Foo"))))
 (DTypeSig false "identIfaceFooM" (TyCon "Ident"))

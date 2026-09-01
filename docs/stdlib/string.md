@@ -111,10 +111,10 @@ isPunct : Char -> Bool
 
 True for a Unicode punctuation character.
 
-## `digitToInt`
+## `fromDigit`
 
 ```
-digitToInt : Char -> Option Int
+fromDigit : Char -> Option Int
 ```
 
 `'0'`..`'9'` → `Some 0`..`Some 9`, `'a'`..`'f'`/`'A'`..`'F'` →
@@ -124,31 +124,31 @@ digitToInt : Char -> Option Int
 *(doctest — run by `medaka test`)*
 
 ```medaka
-> digitToInt '7'
+> fromDigit '7'
 Some 7
-> digitToInt 'f'
+> fromDigit 'f'
 Some 15
-> digitToInt 'z'
+> fromDigit 'z'
 None
 ```
 
-## `intToDigit`
+## `toDigit`
 
 ```
-intToDigit : Int -> Option Char
+toDigit : Int -> Option Char
 ```
 
-Inverse of `digitToInt` for `0`..`15` (lowercase hex); `None` otherwise.
+Inverse of `fromDigit` for `0`..`15` (lowercase hex); `None` otherwise.
 
 
 *(doctest — run by `medaka test`)*
 
 ```medaka
-> intToDigit 7
+> toDigit 7
 Some '7'
-> intToDigit 12
+> toDigit 12
 Some 'c'
-> intToDigit 42
+> toDigit 42
 None
 ```
 
@@ -767,6 +767,29 @@ Split into lines on `\n`, also stripping a trailing `\r` (so `\r\n` works).
 ```medaka
 > lines "a\nb\nc"
 ["a", "b", "c"]
+```
+
+## `stripCR`
+
+```
+stripCR : String -> String
+```
+
+Drop one trailing `\r`, so a CRLF line reads as its content.  Idempotent
+on a line that has none.
+
+The `string` function `io.stripCR` used to duplicate: a `String -> String`
+transformation has no business in the IO module, so #2306 I-3 exported this
+one and deleted that one.
+
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> stripCR "ab\r"
+"ab"
+> stripCR "ab"
+"ab"
 ```
 
 ## `words`

@@ -2157,7 +2157,7 @@ same "which stage owns S4/S6" decision.
 > ```
 >
 > **14 errors**, every one of them raised inside the PRELUDE's own bodies
-> (`map2`/`map3`/`replaceWith`/`discard` in `stdlib/core.mdk` all call `map`), all reported
+> (`map2`/`map3`/`mapConst`/`discard` in `stdlib/core.mdk` all call `map`), all reported
 > against the user's file at a fabricated `1:0` — including `'map' takes 1 argument(s) but
 > is applied to 2` for a call the user never wrote. This is also the source of the
 > separately-filed fabricated-`1:0` diagnostics.

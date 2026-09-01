@@ -68,7 +68,7 @@
 --   unioning it into the lookups is NECESSARY AND NOT SUFFICIENT -- built on its
 --   own it is INERT and this file stays at 99/99/99. A headless winner sits alone
 --   in the `noneHeadTag` bucket, so `keyForSite`'s head-collision gate never fired,
---   it answered `None`, and `entailInst`'s `fromOption tag (…)` fell back to the
+--   it answered `None`, and `entailInst`'s `optionOr tag (…)` fell back to the
 --   GOAL's head tycon -- discarding the correctly-selected candidate one line
 --   after selecting it. F-3b's third part is that `else` arm. If you are probing
 --   this area and your control will not move, that is where to look.

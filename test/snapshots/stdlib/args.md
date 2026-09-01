@@ -1,5 +1,5 @@
 # META
-source_lines=636
+source_lines=684
 stages=DESUGAR,MARK
 # SOURCE
 -- args.mdk — one command-line argument parser, as a first-order value
@@ -21,13 +21,22 @@ stages=DESUGAR,MARK
 -- existential).  The only expressible combinator shape is the wrapped-function
 -- one, which is opaque and therefore cannot derive help.
 --
--- Cost posture: `FlagSpec` is four immutable fields of plain data.  There are
--- deliberately NO `deriving` clauses and NO `impl`s on the types below, and
--- the module imports only `string` — every consumer already imports it, so
--- nothing new enters dispatch scope.  Per-flag lookup over `given` is a
--- monomorphic fold rather than a polymorphic `lookup`.  Adding an `impl`, a
--- `deriving`, or a `map`/`hash_map` import invalidates the measured import
--- cost and must be re-measured (`[T-STDLIB-IMPORT]`).
+-- Cost posture: `FlagSpec` is four immutable fields of plain data.  The module
+-- imports only `string` — every consumer already imports it, so nothing new
+-- enters dispatch scope.  Per-flag lookup over `given` is a monomorphic fold
+-- rather than a polymorphic `lookup`.  Adding a `map`/`hash_map` import
+-- invalidates the measured import cost and must be re-measured
+-- (`[T-STDLIB-IMPORT]`).
+--
+-- The seven types below carry `deriving (Eq, Debug)` and nothing else (sheet
+-- row A-2, ratified #2306).  This paragraph previously said there were
+-- deliberately NO `deriving` clauses; the ban was lifted, not forgotten — a
+-- spec value that cannot be compared or printed cannot be asserted on in a
+-- test, which is the defect A-2 names.  `Eq`/`Debug` are prelude interfaces,
+-- so this adds no import; the re-measurement the old wording demanded was run
+-- on `medaka check compiler/driver/medaka_cli.mdk` (the CLI is the module that
+-- imports `args`) and is recorded in the sprint report.  The `map`/`hash_map`
+-- import ban above still stands.
 --
 -- Wording: the four rejection sentences are the ratified ones from
 -- `docs/ops/CLI-CONFORMANCE.md` (C2 unknown flag, C3 exit code 1).  They are
@@ -53,9 +62,10 @@ public export data Arity =
   | ValueList String
   | OneOf (List String) String
   | IntValue String
+deriving (Eq, Debug)
 
 -- | Whether a flag appears in `helpBlockOf`.  Both kinds appear in `rosterOf`.
-public export data Visibility = Public | Internal
+public export data Visibility = Public | Internal deriving (Eq, Debug)
 
 {- | What happens to a `--`-shaped token that no `FlagSpec` claims.
 
@@ -64,7 +74,7 @@ public export data Visibility = Public | Internal
    vocabulary is per-codemod and therefore not statically knowable: an
    unclaimed token is recorded in `given`, consuming the following token as
    its value. -}
-public export data Unknown = RejectUnknown | CollectUnknown
+public export data Unknown = RejectUnknown | CollectUnknown deriving (Eq, Debug)
 
 {- | How the verb treats a raw trailing section.
 
@@ -78,6 +88,7 @@ public export data Trailing =
   | TrailingReject
   | TrailingRaw
   | TrailingAfterSeparator
+deriving (Eq, Debug)
 
 {- | One flag, with every spelling it answers to.
 
@@ -92,6 +103,7 @@ public export data FlagSpec =
       summary : String,
       visibility : Visibility,
     }
+deriving (Eq, Debug)
 
 -- | One verb's whole argument vocabulary.  This is the value everything else
 --   in this module is a rendering of.
@@ -116,6 +128,7 @@ public export data ArgSpec =
       unknown : Unknown,
       strictDash : Bool,
     }
+deriving (Eq, Debug)
 
 {- | The result of a successful parse.
 
@@ -129,6 +142,7 @@ public export data Args =
       positionals : List String,
       rest : List String,
     }
+deriving (Eq, Debug)
 
 -- ── Building a spec ────────────────────────────────────────────────────────
 
@@ -638,15 +652,63 @@ valuesGo nm ((k, v)::rest)
     Some s => s :: valuesGo nm rest
     None => valuesGo nm rest
   | otherwise = valuesGo nm rest
+
+-- ── Instance laws (sheet row A-2) ──────────────────────────────────────────
+-- The point of `Eq`/`Debug` here is that a parse RESULT and a SPEC can be
+-- asserted on directly in a test.  Both laws are stated against that use.
+
+-- LAW: `Eq Args` must discriminate on all three fields, so a test asserting on
+-- a parse result cannot pass while the parse dropped a positional or a flag.
+prop "Eq Args discriminates every field" (v : String) =
+  let base = Args { given = [("--out", Some v)], positionals = [v], rest = [] }
+  base == Args { given = [("--out", Some v)], positionals = [v], rest = [] }
+    && base == Args { base | given = [("--out", None)] } == False
+    && base == Args { base | positionals = [] } == False
+    && base == Args { base | rest = [v] } == False
+
+-- LAW: `Eq ArgSpec` reaches through `FlagSpec`/`Arity`/`Visibility` — a spec
+-- that answers to different flags, or to the same flag with a different arity,
+-- must not compare equal.  (This is the composite the seven cells exist for:
+-- comparing an `ArgSpec` exercises every one of the seven instances.)
+prop "Eq ArgSpec reaches through FlagSpec and Arity" (n : String) =
+  let a = spec "fmt" [switch ["--write"] n]
+  let b = spec "fmt" [switch ["--check"] n]
+  let c = spec "fmt" [value ["--write"] "P" n]
+  a == spec "fmt" [switch ["--write"] n]
+    && a == b == False
+    && a == c == False
+    && a == spec "lint" [switch ["--write"] n] == False
+
+-- LAW: `Debug` agrees with `Eq` on the composite — equal specs render
+-- identically, unequal ones render differently — so a failing assertion's
+-- printed value actually explains the failure.
+prop "Debug ArgSpec agrees with Eq" (n : String) =
+  let a = spec "fmt" [switch ["--write"] n]
+  debug a == debug (spec "fmt" [switch ["--write"] n])
+    && debug a == debug (spec "fmt" [switch ["--check"] n]) == False
 # DESUGAR
 (DUse false (UseGroup ("string") ((mem "startsWith" false) (mem "indexOf" false) (mem "join" false) (mem "toInt" false) (mem "repeat" false))))
 (DData Public "Arity" () ((variant "Switch" (ConPos)) (variant "Value" (ConPos (TyCon "String"))) (variant "ValueList" (ConPos (TyCon "String"))) (variant "OneOf" (ConPos (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))) (variant "IntValue" (ConPos (TyCon "String")))) ())
+(DImpl true "Eq" ((TyCon "Arity")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Switch") (PCon "Switch")) () (EVar "True")) (arm (PTuple (PCon "Value" (PVar "__a0")) (PCon "Value" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "ValueList" (PVar "__a0")) (PCon "ValueList" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "OneOf" (PVar "__a0") (PVar "__a1")) (PCon "OneOf" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1")))) (arm (PTuple (PCon "IntValue" (PVar "__a0")) (PCon "IntValue" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DImpl true "Debug" ((TyCon "Arity")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "Switch") () (ELit (LString "Switch"))) (arm (PCon "Value" (PVar "__a0")) () (EBinOp "++" (ELit (LString "Value ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0"))))) (arm (PCon "ValueList" (PVar "__a0")) () (EBinOp "++" (ELit (LString "ValueList ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0"))))) (arm (PCon "OneOf" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "OneOf ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a1"))))) (arm (PCon "IntValue" (PVar "__a0")) () (EBinOp "++" (ELit (LString "IntValue ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))))))))
 (DData Public "Visibility" () ((variant "Public" (ConPos)) (variant "Internal" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "Visibility")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Public") (PCon "Public")) () (EVar "True")) (arm (PTuple (PCon "Internal") (PCon "Internal")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DImpl true "Debug" ((TyCon "Visibility")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "Public") () (ELit (LString "Public"))) (arm (PCon "Internal") () (ELit (LString "Internal")))))))
 (DData Public "Unknown" () ((variant "RejectUnknown" (ConPos)) (variant "CollectUnknown" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "Unknown")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "RejectUnknown") (PCon "RejectUnknown")) () (EVar "True")) (arm (PTuple (PCon "CollectUnknown") (PCon "CollectUnknown")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DImpl true "Debug" ((TyCon "Unknown")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "RejectUnknown") () (ELit (LString "RejectUnknown"))) (arm (PCon "CollectUnknown") () (ELit (LString "CollectUnknown")))))))
 (DData Public "Trailing" () ((variant "TrailingReject" (ConPos)) (variant "TrailingRaw" (ConPos)) (variant "TrailingAfterSeparator" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "Trailing")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "TrailingReject") (PCon "TrailingReject")) () (EVar "True")) (arm (PTuple (PCon "TrailingRaw") (PCon "TrailingRaw")) () (EVar "True")) (arm (PTuple (PCon "TrailingAfterSeparator") (PCon "TrailingAfterSeparator")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DImpl true "Debug" ((TyCon "Trailing")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "TrailingReject") () (ELit (LString "TrailingReject"))) (arm (PCon "TrailingRaw") () (ELit (LString "TrailingRaw"))) (arm (PCon "TrailingAfterSeparator") () (ELit (LString "TrailingAfterSeparator")))))))
 (DData Public "FlagSpec" () ((variant "FlagSpec" (ConNamed (field "names" (TyApp (TyCon "List") (TyCon "String"))) (field "arity" (TyCon "Arity")) (field "summary" (TyCon "String")) (field "visibility" (TyCon "Visibility"))))) ())
+(DImpl true "Eq" ((TyCon "FlagSpec")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "FlagSpec" ((rf "names" (PVar "__a0")) (rf "arity" (PVar "__a1")) (rf "summary" (PVar "__a2")) (rf "visibility" (PVar "__a3"))) false) (PRec "FlagSpec" ((rf "names" (PVar "__b0")) (rf "arity" (PVar "__b1")) (rf "summary" (PVar "__b2")) (rf "visibility" (PVar "__b3"))) false)) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EVar "eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EVar "eq") (EVar "__a3")) (EVar "__b3"))))))))
+(DImpl true "Debug" ((TyCon "FlagSpec")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PRec "FlagSpec" ((rf "names" (PVar "__a0")) (rf "arity" (PVar "__a1")) (rf "summary" (PVar "__a2")) (rf "visibility" (PVar "__a3"))) false) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "FlagSpec {")) (ELit (LString " names = "))) (EApp (EVar "debug") (EVar "__a0"))) (ELit (LString ", arity = "))) (EApp (EVar "debug") (EVar "__a1"))) (ELit (LString ", summary = "))) (EApp (EVar "debug") (EVar "__a2"))) (ELit (LString ", visibility = "))) (EApp (EVar "debug") (EVar "__a3"))) (ELit (LString " }"))))))))
 (DData Public "ArgSpec" () ((variant "ArgSpec" (ConNamed (field "verb" (TyCon "String")) (field "flags" (TyApp (TyCon "List") (TyCon "FlagSpec"))) (field "trailing" (TyCon "Trailing")) (field "unknown" (TyCon "Unknown")) (field "strictDash" (TyCon "Bool"))))) ())
+(DImpl true "Eq" ((TyCon "ArgSpec")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "ArgSpec" ((rf "verb" (PVar "__a0")) (rf "flags" (PVar "__a1")) (rf "trailing" (PVar "__a2")) (rf "unknown" (PVar "__a3")) (rf "strictDash" (PVar "__a4"))) false) (PRec "ArgSpec" ((rf "verb" (PVar "__b0")) (rf "flags" (PVar "__b1")) (rf "trailing" (PVar "__b2")) (rf "unknown" (PVar "__b3")) (rf "strictDash" (PVar "__b4"))) false)) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EVar "eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EVar "eq") (EVar "__a3")) (EVar "__b3"))) (EApp (EApp (EVar "eq") (EVar "__a4")) (EVar "__b4"))))))))
+(DImpl true "Debug" ((TyCon "ArgSpec")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PRec "ArgSpec" ((rf "verb" (PVar "__a0")) (rf "flags" (PVar "__a1")) (rf "trailing" (PVar "__a2")) (rf "unknown" (PVar "__a3")) (rf "strictDash" (PVar "__a4"))) false) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "ArgSpec {")) (ELit (LString " verb = "))) (EApp (EVar "debug") (EVar "__a0"))) (ELit (LString ", flags = "))) (EApp (EVar "debug") (EVar "__a1"))) (ELit (LString ", trailing = "))) (EApp (EVar "debug") (EVar "__a2"))) (ELit (LString ", unknown = "))) (EApp (EVar "debug") (EVar "__a3"))) (ELit (LString ", strictDash = "))) (EApp (EVar "debug") (EVar "__a4"))) (ELit (LString " }"))))))))
 (DData Public "Args" () ((variant "Args" (ConNamed (field "given" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))) (field "positionals" (TyApp (TyCon "List") (TyCon "String"))) (field "rest" (TyApp (TyCon "List") (TyCon "String")))))) ())
+(DImpl true "Eq" ((TyCon "Args")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "Args" ((rf "given" (PVar "__a0")) (rf "positionals" (PVar "__a1")) (rf "rest" (PVar "__a2"))) false) (PRec "Args" ((rf "given" (PVar "__b0")) (rf "positionals" (PVar "__b1")) (rf "rest" (PVar "__b2"))) false)) () (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EVar "eq") (EVar "__a2")) (EVar "__b2"))))))))
+(DImpl true "Debug" ((TyCon "Args")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PRec "Args" ((rf "given" (PVar "__a0")) (rf "positionals" (PVar "__a1")) (rf "rest" (PVar "__a2"))) false) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Args {")) (ELit (LString " given = "))) (EApp (EVar "debug") (EVar "__a0"))) (ELit (LString ", positionals = "))) (EApp (EVar "debug") (EVar "__a1"))) (ELit (LString ", rest = "))) (EApp (EVar "debug") (EVar "__a2"))) (ELit (LString " }"))))))))
 (DTypeSig true "switch" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "FlagSpec"))))
 (DFunDef false "switch" ((PVar "ns") (PVar "s")) (ERecordCreate "FlagSpec" ((fa "names" (EVar "ns")) (fa "arity" (EVar "Switch")) (fa "summary" (EVar "s")) (fa "visibility" (EVar "Public")))))
 (DTypeSig true "value" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "FlagSpec")))))
@@ -764,15 +826,32 @@ valuesGo nm ((k, v)::rest)
 (DTypeSig false "valuesGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "valuesGo" (PWild (PList)) (EListLit))
 (DFunDef false "valuesGo" ((PVar "nm") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "nm")) (EMatch (EVar "v") (arm (PCon "Some" (PVar "s")) () (EBinOp "::" (EVar "s") (EApp (EApp (EVar "valuesGo") (EVar "nm")) (EVar "rest")))) (arm (PCon "None") () (EApp (EApp (EVar "valuesGo") (EVar "nm")) (EVar "rest")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "valuesGo") (EVar "nm")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DProp false "Eq Args discriminates every field" ((pp "v" (TyCon "String"))) (EBlock (DoLet false false (PVar "base") (ERecordCreate "Args" ((fa "given" (EListLit (ETuple (ELit (LString "--out")) (EApp (EVar "Some") (EVar "v"))))) (fa "positionals" (EListLit (EVar "v"))) (fa "rest" (EListLit))))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "base") (ERecordCreate "Args" ((fa "given" (EListLit (ETuple (ELit (LString "--out")) (EApp (EVar "Some") (EVar "v"))))) (fa "positionals" (EListLit (EVar "v"))) (fa "rest" (EListLit))))) (EBinOp "==" (EBinOp "==" (EVar "base") (EVariantUpdate "Args" (EVar "base") ((fa "given" (EListLit (ETuple (ELit (LString "--out")) (EVar "None"))))))) (EVar "False"))) (EBinOp "==" (EBinOp "==" (EVar "base") (EVariantUpdate "Args" (EVar "base") ((fa "positionals" (EListLit))))) (EVar "False"))) (EBinOp "==" (EBinOp "==" (EVar "base") (EVariantUpdate "Args" (EVar "base") ((fa "rest" (EListLit (EVar "v")))))) (EVar "False"))))))
+(DProp false "Eq ArgSpec reaches through FlagSpec and Arity" ((pp "n" (TyCon "String"))) (EBlock (DoLet false false (PVar "a") (EApp (EApp (EVar "spec") (ELit (LString "fmt"))) (EListLit (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--write")))) (EVar "n"))))) (DoLet false false (PVar "b") (EApp (EApp (EVar "spec") (ELit (LString "fmt"))) (EListLit (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--check")))) (EVar "n"))))) (DoLet false false (PVar "c") (EApp (EApp (EVar "spec") (ELit (LString "fmt"))) (EListLit (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--write")))) (ELit (LString "P"))) (EVar "n"))))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "a") (EApp (EApp (EVar "spec") (ELit (LString "fmt"))) (EListLit (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--write")))) (EVar "n"))))) (EBinOp "==" (EBinOp "==" (EVar "a") (EVar "b")) (EVar "False"))) (EBinOp "==" (EBinOp "==" (EVar "a") (EVar "c")) (EVar "False"))) (EBinOp "==" (EBinOp "==" (EVar "a") (EApp (EApp (EVar "spec") (ELit (LString "lint"))) (EListLit (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--write")))) (EVar "n"))))) (EVar "False"))))))
+(DProp false "Debug ArgSpec agrees with Eq" ((pp "n" (TyCon "String"))) (EBlock (DoLet false false (PVar "a") (EApp (EApp (EVar "spec") (ELit (LString "fmt"))) (EListLit (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--write")))) (EVar "n"))))) (DoExpr (EBinOp "&&" (EBinOp "==" (EApp (EVar "debug") (EVar "a")) (EApp (EVar "debug") (EApp (EApp (EVar "spec") (ELit (LString "fmt"))) (EListLit (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--write")))) (EVar "n")))))) (EBinOp "==" (EBinOp "==" (EApp (EVar "debug") (EVar "a")) (EApp (EVar "debug") (EApp (EApp (EVar "spec") (ELit (LString "fmt"))) (EListLit (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--check")))) (EVar "n")))))) (EVar "False"))))))
 # MARK
 (DUse false (UseGroup ("string") ((mem "startsWith" false) (mem "indexOf" false) (mem "join" false) (mem "toInt" false) (mem "repeat" false))))
 (DData Public "Arity" () ((variant "Switch" (ConPos)) (variant "Value" (ConPos (TyCon "String"))) (variant "ValueList" (ConPos (TyCon "String"))) (variant "OneOf" (ConPos (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))) (variant "IntValue" (ConPos (TyCon "String")))) ())
+(DImpl true "Eq" ((TyCon "Arity")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Switch") (PCon "Switch")) () (EVar "True")) (arm (PTuple (PCon "Value" (PVar "__a0")) (PCon "Value" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "ValueList" (PVar "__a0")) (PCon "ValueList" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "OneOf" (PVar "__a0") (PVar "__a1")) (PCon "OneOf" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1")))) (arm (PTuple (PCon "IntValue" (PVar "__a0")) (PCon "IntValue" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DImpl true "Debug" ((TyCon "Arity")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "Switch") () (ELit (LString "Switch"))) (arm (PCon "Value" (PVar "__a0")) () (EBinOp "++" (ELit (LString "Value ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0"))))) (arm (PCon "ValueList" (PVar "__a0")) () (EBinOp "++" (ELit (LString "ValueList ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0"))))) (arm (PCon "OneOf" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "OneOf ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a1"))))) (arm (PCon "IntValue" (PVar "__a0")) () (EBinOp "++" (ELit (LString "IntValue ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))))))))
 (DData Public "Visibility" () ((variant "Public" (ConPos)) (variant "Internal" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "Visibility")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Public") (PCon "Public")) () (EVar "True")) (arm (PTuple (PCon "Internal") (PCon "Internal")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DImpl true "Debug" ((TyCon "Visibility")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "Public") () (ELit (LString "Public"))) (arm (PCon "Internal") () (ELit (LString "Internal")))))))
 (DData Public "Unknown" () ((variant "RejectUnknown" (ConPos)) (variant "CollectUnknown" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "Unknown")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "RejectUnknown") (PCon "RejectUnknown")) () (EVar "True")) (arm (PTuple (PCon "CollectUnknown") (PCon "CollectUnknown")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DImpl true "Debug" ((TyCon "Unknown")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "RejectUnknown") () (ELit (LString "RejectUnknown"))) (arm (PCon "CollectUnknown") () (ELit (LString "CollectUnknown")))))))
 (DData Public "Trailing" () ((variant "TrailingReject" (ConPos)) (variant "TrailingRaw" (ConPos)) (variant "TrailingAfterSeparator" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "Trailing")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "TrailingReject") (PCon "TrailingReject")) () (EVar "True")) (arm (PTuple (PCon "TrailingRaw") (PCon "TrailingRaw")) () (EVar "True")) (arm (PTuple (PCon "TrailingAfterSeparator") (PCon "TrailingAfterSeparator")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DImpl true "Debug" ((TyCon "Trailing")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "TrailingReject") () (ELit (LString "TrailingReject"))) (arm (PCon "TrailingRaw") () (ELit (LString "TrailingRaw"))) (arm (PCon "TrailingAfterSeparator") () (ELit (LString "TrailingAfterSeparator")))))))
 (DData Public "FlagSpec" () ((variant "FlagSpec" (ConNamed (field "names" (TyApp (TyCon "List") (TyCon "String"))) (field "arity" (TyCon "Arity")) (field "summary" (TyCon "String")) (field "visibility" (TyCon "Visibility"))))) ())
+(DImpl true "Eq" ((TyCon "FlagSpec")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "FlagSpec" ((rf "names" (PVar "__a0")) (rf "arity" (PVar "__a1")) (rf "summary" (PVar "__a2")) (rf "visibility" (PVar "__a3"))) false) (PRec "FlagSpec" ((rf "names" (PVar "__b0")) (rf "arity" (PVar "__b1")) (rf "summary" (PVar "__b2")) (rf "visibility" (PVar "__b3"))) false)) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EMethodRef "eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EMethodRef "eq") (EVar "__a3")) (EVar "__b3"))))))))
+(DImpl true "Debug" ((TyCon "FlagSpec")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PRec "FlagSpec" ((rf "names" (PVar "__a0")) (rf "arity" (PVar "__a1")) (rf "summary" (PVar "__a2")) (rf "visibility" (PVar "__a3"))) false) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "FlagSpec {")) (ELit (LString " names = "))) (EApp (EMethodRef "debug") (EVar "__a0"))) (ELit (LString ", arity = "))) (EApp (EMethodRef "debug") (EVar "__a1"))) (ELit (LString ", summary = "))) (EApp (EMethodRef "debug") (EVar "__a2"))) (ELit (LString ", visibility = "))) (EApp (EMethodRef "debug") (EVar "__a3"))) (ELit (LString " }"))))))))
 (DData Public "ArgSpec" () ((variant "ArgSpec" (ConNamed (field "verb" (TyCon "String")) (field "flags" (TyApp (TyCon "List") (TyCon "FlagSpec"))) (field "trailing" (TyCon "Trailing")) (field "unknown" (TyCon "Unknown")) (field "strictDash" (TyCon "Bool"))))) ())
+(DImpl true "Eq" ((TyCon "ArgSpec")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "ArgSpec" ((rf "verb" (PVar "__a0")) (rf "flags" (PVar "__a1")) (rf "trailing" (PVar "__a2")) (rf "unknown" (PVar "__a3")) (rf "strictDash" (PVar "__a4"))) false) (PRec "ArgSpec" ((rf "verb" (PVar "__b0")) (rf "flags" (PVar "__b1")) (rf "trailing" (PVar "__b2")) (rf "unknown" (PVar "__b3")) (rf "strictDash" (PVar "__b4"))) false)) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EMethodRef "eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EMethodRef "eq") (EVar "__a3")) (EVar "__b3"))) (EApp (EApp (EMethodRef "eq") (EVar "__a4")) (EVar "__b4"))))))))
+(DImpl true "Debug" ((TyCon "ArgSpec")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PRec "ArgSpec" ((rf "verb" (PVar "__a0")) (rf "flags" (PVar "__a1")) (rf "trailing" (PVar "__a2")) (rf "unknown" (PVar "__a3")) (rf "strictDash" (PVar "__a4"))) false) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "ArgSpec {")) (ELit (LString " verb = "))) (EApp (EMethodRef "debug") (EVar "__a0"))) (ELit (LString ", flags = "))) (EApp (EMethodRef "debug") (EVar "__a1"))) (ELit (LString ", trailing = "))) (EApp (EMethodRef "debug") (EVar "__a2"))) (ELit (LString ", unknown = "))) (EApp (EMethodRef "debug") (EVar "__a3"))) (ELit (LString ", strictDash = "))) (EApp (EMethodRef "debug") (EVar "__a4"))) (ELit (LString " }"))))))))
 (DData Public "Args" () ((variant "Args" (ConNamed (field "given" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))) (field "positionals" (TyApp (TyCon "List") (TyCon "String"))) (field "rest" (TyApp (TyCon "List") (TyCon "String")))))) ())
+(DImpl true "Eq" ((TyCon "Args")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "Args" ((rf "given" (PVar "__a0")) (rf "positionals" (PVar "__a1")) (rf "rest" (PVar "__a2"))) false) (PRec "Args" ((rf "given" (PVar "__b0")) (rf "positionals" (PVar "__b1")) (rf "rest" (PVar "__b2"))) false)) () (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EMethodRef "eq") (EVar "__a2")) (EVar "__b2"))))))))
+(DImpl true "Debug" ((TyCon "Args")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PRec "Args" ((rf "given" (PVar "__a0")) (rf "positionals" (PVar "__a1")) (rf "rest" (PVar "__a2"))) false) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Args {")) (ELit (LString " given = "))) (EApp (EMethodRef "debug") (EVar "__a0"))) (ELit (LString ", positionals = "))) (EApp (EMethodRef "debug") (EVar "__a1"))) (ELit (LString ", rest = "))) (EApp (EMethodRef "debug") (EVar "__a2"))) (ELit (LString " }"))))))))
 (DTypeSig true "switch" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "FlagSpec"))))
 (DFunDef false "switch" ((PVar "ns") (PVar "s")) (ERecordCreate "FlagSpec" ((fa "names" (EVar "ns")) (fa "arity" (EVar "Switch")) (fa "summary" (EVar "s")) (fa "visibility" (EVar "Public")))))
 (DTypeSig true "value" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "FlagSpec")))))
@@ -890,3 +969,6 @@ valuesGo nm ((k, v)::rest)
 (DTypeSig false "valuesGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "valuesGo" (PWild (PList)) (EListLit))
 (DFunDef false "valuesGo" ((PVar "nm") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "nm")) (EMatch (EVar "v") (arm (PCon "Some" (PVar "s")) () (EBinOp "::" (EVar "s") (EApp (EApp (EVar "valuesGo") (EVar "nm")) (EVar "rest")))) (arm (PCon "None") () (EApp (EApp (EVar "valuesGo") (EVar "nm")) (EVar "rest")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "valuesGo") (EVar "nm")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DProp false "Eq Args discriminates every field" ((pp "v" (TyCon "String"))) (EBlock (DoLet false false (PVar "base") (ERecordCreate "Args" ((fa "given" (EListLit (ETuple (ELit (LString "--out")) (EApp (EVar "Some") (EVar "v"))))) (fa "positionals" (EListLit (EVar "v"))) (fa "rest" (EListLit))))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "base") (ERecordCreate "Args" ((fa "given" (EListLit (ETuple (ELit (LString "--out")) (EApp (EVar "Some") (EVar "v"))))) (fa "positionals" (EListLit (EVar "v"))) (fa "rest" (EListLit))))) (EBinOp "==" (EBinOp "==" (EVar "base") (EVariantUpdate "Args" (EVar "base") ((fa "given" (EListLit (ETuple (ELit (LString "--out")) (EVar "None"))))))) (EVar "False"))) (EBinOp "==" (EBinOp "==" (EVar "base") (EVariantUpdate "Args" (EVar "base") ((fa "positionals" (EListLit))))) (EVar "False"))) (EBinOp "==" (EBinOp "==" (EVar "base") (EVariantUpdate "Args" (EVar "base") ((fa "rest" (EListLit (EVar "v")))))) (EVar "False"))))))
+(DProp false "Eq ArgSpec reaches through FlagSpec and Arity" ((pp "n" (TyCon "String"))) (EBlock (DoLet false false (PVar "a") (EApp (EApp (EVar "spec") (ELit (LString "fmt"))) (EListLit (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--write")))) (EVar "n"))))) (DoLet false false (PVar "b") (EApp (EApp (EVar "spec") (ELit (LString "fmt"))) (EListLit (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--check")))) (EVar "n"))))) (DoLet false false (PVar "c") (EApp (EApp (EVar "spec") (ELit (LString "fmt"))) (EListLit (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--write")))) (ELit (LString "P"))) (EVar "n"))))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "a") (EApp (EApp (EVar "spec") (ELit (LString "fmt"))) (EListLit (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--write")))) (EVar "n"))))) (EBinOp "==" (EBinOp "==" (EVar "a") (EVar "b")) (EVar "False"))) (EBinOp "==" (EBinOp "==" (EVar "a") (EVar "c")) (EVar "False"))) (EBinOp "==" (EBinOp "==" (EVar "a") (EApp (EApp (EVar "spec") (ELit (LString "lint"))) (EListLit (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--write")))) (EVar "n"))))) (EVar "False"))))))
+(DProp false "Debug ArgSpec agrees with Eq" ((pp "n" (TyCon "String"))) (EBlock (DoLet false false (PVar "a") (EApp (EApp (EVar "spec") (ELit (LString "fmt"))) (EListLit (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--write")))) (EVar "n"))))) (DoExpr (EBinOp "&&" (EBinOp "==" (EApp (EMethodRef "debug") (EVar "a")) (EApp (EMethodRef "debug") (EApp (EApp (EVar "spec") (ELit (LString "fmt"))) (EListLit (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--write")))) (EVar "n")))))) (EBinOp "==" (EBinOp "==" (EApp (EMethodRef "debug") (EVar "a")) (EApp (EMethodRef "debug") (EApp (EApp (EVar "spec") (ELit (LString "fmt"))) (EListLit (EApp (EApp (EVar "switch") (EListLit (ELit (LString "--check")))) (EVar "n")))))) (EVar "False"))))))

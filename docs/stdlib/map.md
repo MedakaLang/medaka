@@ -394,10 +394,10 @@ All keys, ascending.
 [1, 2, 3]
 ```
 
-## `elems`
+## `values`
 
 ```
-elems : Map a b -> List b
+values : Map a b -> List b
 ```
 
 All values, ordered by their keys.
@@ -406,7 +406,7 @@ All values, ordered by their keys.
 *(doctest — run by `medaka test`)*
 
 ```medaka
-> elems (fromList [(2, 20), (1, 10), (3, 30)])
+> values (fromList [(2, 20), (1, 10), (3, 30)])
 [10, 20, 30]
 ```
 
@@ -423,7 +423,7 @@ passed alongside the value.
 *(doctest — run by `medaka test`)*
 
 ```medaka
-> elems (mapWithKey (k v => k + v) (fromList [(1, 10), (2, 20)]))
+> values (mapWithKey (k v => k + v) (fromList [(1, 10), (2, 20)]))
 [11, 22]
 ```
 
@@ -509,6 +509,24 @@ Keys present in both maps, combined with `f leftValue rightValue`.
 [(2, 22)]
 ```
 
+## `intersection`
+
+```
+intersection : Map a b -> Map a c -> Map a b
+```
+
+Keys present in both maps, keeping the LEFT map's value — the plain form
+of `intersectionWith`, matching how `union` is the plain form of
+`unionWith` and how `set.intersection` is left-biased.
+
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> toList (intersection (fromList [(1, 10), (2, 20)]) (fromList [(2, 2), (3, 3)]))
+[(2, 20)]
+```
+
 ## `Mappable (Map k)`
 
 ```
@@ -521,9 +539,20 @@ Map over the values, keys and structure preserved.
 *(doctest — run by `medaka test`)*
 
 ```medaka
-> elems (map (n => n * 10) (fromList [(1, 1), (2, 2)]))
+> values (map (n => n * 10) (fromList [(1, 1), (2, 2)]))
 [10, 20]
 ```
+
+## `Filterable (Map k)`
+
+```
+impl Filterable (Map k)
+```
+
+Drop (and transform) values, keys and order preserved.  `filterMap` is the
+primitive; the interface's default `filter` falls out of it.  Note this
+folds over VALUES — the key-aware form is the module-level `filterWithKey`,
+which stays because the interface's callback cannot see a key.
 
 ## `Eq (Map k v)`
 

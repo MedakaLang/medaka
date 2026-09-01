@@ -73,10 +73,10 @@ True
 False
 ```
 
-## `insert`
+## `insertInPlace`
 
 ```
-insert : a -> HashSet a -> Unit
+insertInPlace : a -> HashSet a -> Unit
 ```
 
 Add an element, in place. A no-op when already present. Resizes (doubling)
@@ -98,10 +98,10 @@ Build a set from a list, dropping duplicates.
 8
 ```
 
-## `delete`
+## `deleteInPlace`
 
 ```
-delete : a -> HashSet a -> Unit
+deleteInPlace : a -> HashSet a -> Unit
 ```
 
 Remove an element, in place. A no-op when absent.
@@ -149,4 +149,24 @@ impl Debug (HashSet a) requires Debug a
 
 Rendered `fromList [a, …]` in hash order (layout-dependent; use `eq` for
 equality).
+
+## `Display (HashSet a)`
+
+```
+impl Display (HashSet a) requires Display a, Ord a
+```
+
+The *display* form, peer of `Display (Set a)`'s `Set { x, … }`, with the
+elements in ascending order so the text depends only on the value and not
+on the table's internal layout.
+
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> display (fromList [3, 1, 2]) == "HashSet { 1, 2, 3 }"
+True
+> display (new () : HashSet Int) == "HashSet {}"
+True
+```
 

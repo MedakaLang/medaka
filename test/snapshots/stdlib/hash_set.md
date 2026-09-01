@@ -1,5 +1,5 @@
 # META
-source_lines=217
+source_lines=270
 stages=DESUGAR,MARK
 # SOURCE
 {- hash_set.mdk — a mutable hash set (Module 6).
@@ -26,7 +26,8 @@ stages=DESUGAR,MARK
 -- hash_set/hash_map share identical resize/rehash bodies over DISTINCT ADTs; consolidation needs a shared-core refactor (out of scope).
 -- lint-disable-file rule-duplicate-body
 
-import core.{Eq, Debug, Foldable, Hashable}
+import core.{Eq, Ord, Debug, Display, Foldable, Hashable}
+import list as L
 
 {- `HashSet buckets count`: chains in `!buckets`, live count in
    `!count`; both mutated in place. -}
@@ -90,8 +91,8 @@ bucketRemove x (y::rest)
 {- | Add an element, in place. A no-op when already present. Resizes (doubling)
    past load factor 0.75. -}
 export
-insert : (Eq a, Hashable a) => a -> HashSet a -> Unit
-insert x (HashSet buckets count) =
+insertInPlace : (Eq a, Hashable a) => a -> HashSet a -> Unit
+insertInPlace x (HashSet buckets count) =
   let arr = !buckets
   let idx = slotOf x (arrayLength arr)
   insertAt x arr idx buckets count
@@ -151,13 +152,13 @@ fromList xs =
 insertAll : (Eq a, Hashable a) => List a -> HashSet a -> Unit
 insertAll [] _ = ()
 insertAll (x::rest) s =
-  insert x s
+  insertInPlace x s
   insertAll rest s
 
 {- | Remove an element, in place. A no-op when absent. -}
 export
-delete : (Eq a, Hashable a) => a -> HashSet a -> Unit
-delete x (HashSet buckets count) =
+deleteInPlace : (Eq a, Hashable a) => a -> HashSet a -> Unit
+deleteInPlace x (HashSet buckets count) =
   let arr = !buckets
   let idx = slotOf x (arrayLength arr)
   deleteAt x arr idx count
@@ -219,8 +220,61 @@ export impl Eq (HashSet a) requires Eq a, Hashable a where
    equality). -}
 export impl Debug (HashSet a) requires Debug a where
   debug s = "fromList \{debug (elemList s)}"
+
+{- ── Display, and the order it fixes (sheet row A-4) ───────────────────────
+
+   `Debug` above renders in HASH order, which is layout-dependent by design.
+   `Display` may not be: a rendering that changes when the set is rebuilt from
+   its own elements is not a rendering of the VALUE.  So `Display` sorts, which
+   is why it asks for `Ord a` that `Debug` does not -- that ordering choice IS
+   row A-4's ratification, and the law it buys is
+   `display s == display (fromList (toList s))`.  The sort is `list.sort`: one
+   ordering routine for the whole stdlib, rather than a private copy in every
+   printing path. -}
+
+displayItems : Display a => List a -> String
+displayItems [] = ""
+displayItems [x] = "\{x}"
+displayItems (y::rest) = "\{y}, \{displayItems rest}"
+
+{- | The *display* form, peer of `Display (Set a)`'s `Set { x, … }`, with the
+   elements in ascending order so the text depends only on the value and not
+   on the table's internal layout.
+
+   > display (fromList [3, 1, 2]) == "HashSet { 1, 2, 3 }"
+   True
+   > display (new () : HashSet Int) == "HashSet {}"
+   True -}
+export impl Display (HashSet a) requires Display a, Ord a where
+  display s = match L.sort (elemList s)
+    [] => "HashSet {}"
+    xs => "HashSet { \{displayItems xs} }"
+
+-- ── Property tests (sheet row A-4) ──────────────────────────────────────
+
+ascendingL : Ord a => List a -> Bool
+ascendingL [] = True
+ascendingL (_::[]) = True
+ascendingL (x::y::rest) = lte x y && ascendingL (y::rest)
+
+-- LAW: `Display` must depend on the VALUE, not on the set's internal layout.
+-- Rebuilding from its own elements, and from those elements reversed (which
+-- fills the chains in a different order), must not change the rendering --
+-- the law `Debug`, documented as hash-ordered, cannot satisfy.
+prop "Display HashSet is layout-independent" (xs : List Int) =
+  let s = fromList xs
+  display s == display (fromList (toList s))
+    && display s == display (fromList (L.reverse (toList s)))
+
+-- LAW: the fixed order is ASCENDING, and `Display` agrees with `Eq` -- two
+-- sets that compare equal render identically.
+prop "Display HashSet agrees with Eq and lists elements ascending" (xs : List Int) =
+  let a = fromList xs
+  let b = fromList (L.reverse xs)
+  ascendingL (L.sort (elemList a)) && eq a b == (display a == display b)
 # DESUGAR
-(DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Debug" false) (mem "Foldable" false) (mem "Hashable" false))))
+(DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Foldable" false) (mem "Hashable" false))))
+(DUse false (UseAlias ("list") "L"))
 (DData Public "HashSet" ("a") ((variant "HashSet" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyVar "a")))) (TyApp (TyCon "Ref") (TyCon "Int"))))) ())
 (DTypeSig false "initialCapacity" (TyCon "Int"))
 (DFunDef false "initialCapacity" () (ELit (LInt 8)))
@@ -238,8 +292,8 @@ export impl Debug (HashSet a) requires Debug a where
 (DTypeSig false "bucketRemove" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))))
 (DFunDef false "bucketRemove" (PWild (PList)) (EListLit))
 (DFunDef false "bucketRemove" ((PVar "x") (PCons (PVar "y") (PVar "rest"))) (EIf (EBinOp "==" (EVar "x") (EVar "y")) (EVar "rest") (EIf (EVar "otherwise") (EBinOp "::" (EVar "y") (EApp (EApp (EVar "bucketRemove") (EVar "x")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "insert" (TyConstrained ((cstr "Eq" (TyVar "a")) (cstr "Hashable" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "HashSet") (TyVar "a")) (TyCon "Unit")))))
-(DFunDef false "insert" ((PVar "x") (PCon "HashSet" (PVar "buckets") (PVar "count"))) (EBlock (DoLet false false (PVar "arr") (EUnOp "!" (EVar "buckets"))) (DoLet false false (PVar "idx") (EApp (EApp (EVar "slotOf") (EVar "x")) (EApp (EVar "arrayLength") (EVar "arr")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "insertAt") (EVar "x")) (EVar "arr")) (EVar "idx")) (EVar "buckets")) (EVar "count")))))
+(DTypeSig true "insertInPlace" (TyConstrained ((cstr "Eq" (TyVar "a")) (cstr "Hashable" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "HashSet") (TyVar "a")) (TyCon "Unit")))))
+(DFunDef false "insertInPlace" ((PVar "x") (PCon "HashSet" (PVar "buckets") (PVar "count"))) (EBlock (DoLet false false (PVar "arr") (EUnOp "!" (EVar "buckets"))) (DoLet false false (PVar "idx") (EApp (EApp (EVar "slotOf") (EVar "x")) (EApp (EVar "arrayLength") (EVar "arr")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "insertAt") (EVar "x")) (EVar "arr")) (EVar "idx")) (EVar "buckets")) (EVar "count")))))
 (DTypeSig false "insertAt" (TyConstrained ((cstr "Eq" (TyVar "a")) (cstr "Hashable" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyVar "a"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyVar "a")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyCon "Unit"))))))))
 (DFunDef false "insertAt" ((PVar "x") (PVar "arr") (PVar "idx") (PVar "buckets") (PVar "count")) (EIf (EApp (EApp (EVar "bucketHas") (EVar "x")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "idx")) (EVar "arr"))) (ELit LUnit) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "idx")) (EBinOp "::" (EVar "x") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "idx")) (EVar "arr")))) (EVar "arr"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "count")) (EBinOp "+" (EUnOp "!" (EVar "count")) (ELit (LInt 1))))) (DoExpr (EApp (EApp (EVar "maybeResize") (EVar "buckets")) (EVar "count")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "maybeResize" (TyConstrained ((cstr "Hashable" (TyVar "a"))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyVar "a")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyCon "Unit")))))
@@ -257,9 +311,9 @@ export impl Debug (HashSet a) requires Debug a where
 (DFunDef false "fromList" ((PVar "xs")) (EBlock (DoLet false false (PVar "s") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "insertAll") (EVar "xs")) (EVar "s"))) (DoExpr (EVar "s"))))
 (DTypeSig false "insertAll" (TyConstrained ((cstr "Eq" (TyVar "a")) (cstr "Hashable" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "HashSet") (TyVar "a")) (TyCon "Unit")))))
 (DFunDef false "insertAll" ((PList) PWild) (ELit LUnit))
-(DFunDef false "insertAll" ((PCons (PVar "x") (PVar "rest")) (PVar "s")) (EBlock (DoExpr (EApp (EApp (EVar "insert") (EVar "x")) (EVar "s"))) (DoExpr (EApp (EApp (EVar "insertAll") (EVar "rest")) (EVar "s")))))
-(DTypeSig true "delete" (TyConstrained ((cstr "Eq" (TyVar "a")) (cstr "Hashable" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "HashSet") (TyVar "a")) (TyCon "Unit")))))
-(DFunDef false "delete" ((PVar "x") (PCon "HashSet" (PVar "buckets") (PVar "count"))) (EBlock (DoLet false false (PVar "arr") (EUnOp "!" (EVar "buckets"))) (DoLet false false (PVar "idx") (EApp (EApp (EVar "slotOf") (EVar "x")) (EApp (EVar "arrayLength") (EVar "arr")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "deleteAt") (EVar "x")) (EVar "arr")) (EVar "idx")) (EVar "count")))))
+(DFunDef false "insertAll" ((PCons (PVar "x") (PVar "rest")) (PVar "s")) (EBlock (DoExpr (EApp (EApp (EVar "insertInPlace") (EVar "x")) (EVar "s"))) (DoExpr (EApp (EApp (EVar "insertAll") (EVar "rest")) (EVar "s")))))
+(DTypeSig true "deleteInPlace" (TyConstrained ((cstr "Eq" (TyVar "a")) (cstr "Hashable" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "HashSet") (TyVar "a")) (TyCon "Unit")))))
+(DFunDef false "deleteInPlace" ((PVar "x") (PCon "HashSet" (PVar "buckets") (PVar "count"))) (EBlock (DoLet false false (PVar "arr") (EUnOp "!" (EVar "buckets"))) (DoLet false false (PVar "idx") (EApp (EApp (EVar "slotOf") (EVar "x")) (EApp (EVar "arrayLength") (EVar "arr")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "deleteAt") (EVar "x")) (EVar "arr")) (EVar "idx")) (EVar "count")))))
 (DTypeSig false "deleteAt" (TyConstrained ((cstr "Eq" (TyVar "a")) (cstr "Hashable" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyVar "a"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyCon "Unit")))))))
 (DFunDef false "deleteAt" ((PVar "x") (PVar "arr") (PVar "idx") (PVar "count")) (EIf (EApp (EApp (EVar "bucketHas") (EVar "x")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "idx")) (EVar "arr"))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "idx")) (EApp (EApp (EVar "bucketRemove") (EVar "x")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "idx")) (EVar "arr")))) (EVar "arr"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "count")) (EBinOp "-" (EUnOp "!" (EVar "count")) (ELit (LInt 1)))))) (ELit LUnit)))
 (DTypeSig false "collectElems" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyVar "a"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))))
@@ -278,8 +332,20 @@ export impl Debug (HashSet a) requires Debug a where
 (DFunDef false "allIn" ((PCons (PVar "x") (PVar "rest")) (PVar "s")) (EIf (EApp (EApp (EVar "has") (EVar "x")) (EVar "s")) (EApp (EApp (EVar "allIn") (EVar "rest")) (EVar "s")) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DImpl true "Eq" ((TyApp (TyCon "HashSet") (TyVar "a"))) ((req "Eq" ((TyVar "a"))) (req "Hashable" ((TyVar "a")))) ((im "eq" ((PVar "a") (PVar "b")) (EIf (EBinOp "/=" (EApp (EVar "size") (EVar "a")) (EApp (EVar "size") (EVar "b"))) (EVar "False") (EApp (EApp (EVar "allIn") (EApp (EVar "elemList") (EVar "a"))) (EVar "b"))))))
 (DImpl true "Debug" ((TyApp (TyCon "HashSet") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EVar "display") (EApp (EVar "debug") (EApp (EVar "elemList") (EVar "s"))))) (ELit (LString ""))))))
+(DTypeSig false "displayItems" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "String"))))
+(DFunDef false "displayItems" ((PList)) (ELit (LString "")))
+(DFunDef false "displayItems" ((PList (PVar "x"))) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "x"))) (ELit (LString ""))))
+(DFunDef false "displayItems" ((PCons (PVar "y") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "y"))) (ELit (LString ", "))) (EApp (EVar "display") (EApp (EVar "displayItems") (EVar "rest")))) (ELit (LString ""))))
+(DImpl true "Display" ((TyApp (TyCon "HashSet") (TyVar "a"))) ((req "Display" ((TyVar "a"))) (req "Ord" ((TyVar "a")))) ((im "display" ((PVar "s")) (EMatch (EApp (EVar "L.sort") (EApp (EVar "elemList") (EVar "s"))) (arm (PList) () (ELit (LString "HashSet {}"))) (arm (PVar "xs") () (EBinOp "++" (EBinOp "++" (ELit (LString "HashSet { ")) (EApp (EVar "display") (EApp (EVar "displayItems") (EVar "xs")))) (ELit (LString " }"))))))))
+(DTypeSig false "ascendingL" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool"))))
+(DFunDef false "ascendingL" ((PList)) (EVar "True"))
+(DFunDef false "ascendingL" ((PCons PWild (PList))) (EVar "True"))
+(DFunDef false "ascendingL" ((PCons (PVar "x") (PCons (PVar "y") (PVar "rest")))) (EBinOp "&&" (EApp (EApp (EVar "lte") (EVar "x")) (EVar "y")) (EApp (EVar "ascendingL") (EBinOp "::" (EVar "y") (EVar "rest")))))
+(DProp false "Display HashSet is layout-independent" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "s") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EBinOp "&&" (EBinOp "==" (EApp (EVar "display") (EVar "s")) (EApp (EVar "display") (EApp (EVar "fromList") (EApp (EVar "toList") (EVar "s"))))) (EBinOp "==" (EApp (EVar "display") (EVar "s")) (EApp (EVar "display") (EApp (EVar "fromList") (EApp (EVar "L.reverse") (EApp (EVar "toList") (EVar "s"))))))))))
+(DProp false "Display HashSet agrees with Eq and lists elements ascending" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "a") (EApp (EVar "fromList") (EVar "xs"))) (DoLet false false (PVar "b") (EApp (EVar "fromList") (EApp (EVar "L.reverse") (EVar "xs")))) (DoExpr (EBinOp "&&" (EApp (EVar "ascendingL") (EApp (EVar "L.sort") (EApp (EVar "elemList") (EVar "a")))) (EBinOp "==" (EApp (EApp (EVar "eq") (EVar "a")) (EVar "b")) (EBinOp "==" (EApp (EVar "display") (EVar "a")) (EApp (EVar "display") (EVar "b"))))))))
 # MARK
-(DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Debug" false) (mem "Foldable" false) (mem "Hashable" false))))
+(DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Foldable" false) (mem "Hashable" false))))
+(DUse false (UseAlias ("list") "L"))
 (DData Public "HashSet" ("a") ((variant "HashSet" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyVar "a")))) (TyApp (TyCon "Ref") (TyCon "Int"))))) ())
 (DTypeSig false "initialCapacity" (TyCon "Int"))
 (DFunDef false "initialCapacity" () (ELit (LInt 8)))
@@ -297,8 +363,8 @@ export impl Debug (HashSet a) requires Debug a where
 (DTypeSig false "bucketRemove" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))))
 (DFunDef false "bucketRemove" (PWild (PList)) (EListLit))
 (DFunDef false "bucketRemove" ((PVar "x") (PCons (PVar "y") (PVar "rest"))) (EIf (EBinOp "==" (EVar "x") (EVar "y")) (EVar "rest") (EIf (EVar "otherwise") (EBinOp "::" (EVar "y") (EApp (EApp (EDictApp "bucketRemove") (EVar "x")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "insert" (TyConstrained ((cstr "Eq" (TyVar "a")) (cstr "Hashable" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "HashSet") (TyVar "a")) (TyCon "Unit")))))
-(DFunDef false "insert" ((PVar "x") (PCon "HashSet" (PVar "buckets") (PVar "count"))) (EBlock (DoLet false false (PVar "arr") (EUnOp "!" (EVar "buckets"))) (DoLet false false (PVar "idx") (EApp (EApp (EDictApp "slotOf") (EVar "x")) (EApp (EVar "arrayLength") (EVar "arr")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EDictApp "insertAt") (EVar "x")) (EVar "arr")) (EVar "idx")) (EVar "buckets")) (EDictApp "count")))))
+(DTypeSig true "insertInPlace" (TyConstrained ((cstr "Eq" (TyVar "a")) (cstr "Hashable" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "HashSet") (TyVar "a")) (TyCon "Unit")))))
+(DFunDef false "insertInPlace" ((PVar "x") (PCon "HashSet" (PVar "buckets") (PVar "count"))) (EBlock (DoLet false false (PVar "arr") (EUnOp "!" (EVar "buckets"))) (DoLet false false (PVar "idx") (EApp (EApp (EDictApp "slotOf") (EVar "x")) (EApp (EVar "arrayLength") (EVar "arr")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EDictApp "insertAt") (EVar "x")) (EVar "arr")) (EVar "idx")) (EVar "buckets")) (EDictApp "count")))))
 (DTypeSig false "insertAt" (TyConstrained ((cstr "Eq" (TyVar "a")) (cstr "Hashable" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyVar "a"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyVar "a")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyCon "Unit"))))))))
 (DFunDef false "insertAt" ((PVar "x") (PVar "arr") (PVar "idx") (PVar "buckets") (PVar "count")) (EIf (EApp (EApp (EDictApp "bucketHas") (EVar "x")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "idx")) (EVar "arr"))) (ELit LUnit) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "idx")) (EBinOp "::" (EVar "x") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "idx")) (EVar "arr")))) (EVar "arr"))) (DoExpr (EApp (EApp (EVar "setRef") (EDictApp "count")) (EBinOp "+" (EUnOp "!" (EDictApp "count")) (ELit (LInt 1))))) (DoExpr (EApp (EApp (EDictApp "maybeResize") (EVar "buckets")) (EDictApp "count")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "maybeResize" (TyConstrained ((cstr "Hashable" (TyVar "a"))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyVar "a")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyCon "Unit")))))
@@ -316,9 +382,9 @@ export impl Debug (HashSet a) requires Debug a where
 (DFunDef false "fromList" ((PVar "xs")) (EBlock (DoLet false false (PVar "s") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EDictApp "insertAll") (EVar "xs")) (EVar "s"))) (DoExpr (EVar "s"))))
 (DTypeSig false "insertAll" (TyConstrained ((cstr "Eq" (TyVar "a")) (cstr "Hashable" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "HashSet") (TyVar "a")) (TyCon "Unit")))))
 (DFunDef false "insertAll" ((PList) PWild) (ELit LUnit))
-(DFunDef false "insertAll" ((PCons (PVar "x") (PVar "rest")) (PVar "s")) (EBlock (DoExpr (EApp (EApp (EDictApp "insert") (EVar "x")) (EVar "s"))) (DoExpr (EApp (EApp (EDictApp "insertAll") (EVar "rest")) (EVar "s")))))
-(DTypeSig true "delete" (TyConstrained ((cstr "Eq" (TyVar "a")) (cstr "Hashable" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "HashSet") (TyVar "a")) (TyCon "Unit")))))
-(DFunDef false "delete" ((PVar "x") (PCon "HashSet" (PVar "buckets") (PVar "count"))) (EBlock (DoLet false false (PVar "arr") (EUnOp "!" (EVar "buckets"))) (DoLet false false (PVar "idx") (EApp (EApp (EDictApp "slotOf") (EVar "x")) (EApp (EVar "arrayLength") (EVar "arr")))) (DoExpr (EApp (EApp (EApp (EApp (EDictApp "deleteAt") (EVar "x")) (EVar "arr")) (EVar "idx")) (EDictApp "count")))))
+(DFunDef false "insertAll" ((PCons (PVar "x") (PVar "rest")) (PVar "s")) (EBlock (DoExpr (EApp (EApp (EDictApp "insertInPlace") (EVar "x")) (EVar "s"))) (DoExpr (EApp (EApp (EDictApp "insertAll") (EVar "rest")) (EVar "s")))))
+(DTypeSig true "deleteInPlace" (TyConstrained ((cstr "Eq" (TyVar "a")) (cstr "Hashable" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "HashSet") (TyVar "a")) (TyCon "Unit")))))
+(DFunDef false "deleteInPlace" ((PVar "x") (PCon "HashSet" (PVar "buckets") (PVar "count"))) (EBlock (DoLet false false (PVar "arr") (EUnOp "!" (EVar "buckets"))) (DoLet false false (PVar "idx") (EApp (EApp (EDictApp "slotOf") (EVar "x")) (EApp (EVar "arrayLength") (EVar "arr")))) (DoExpr (EApp (EApp (EApp (EApp (EDictApp "deleteAt") (EVar "x")) (EVar "arr")) (EVar "idx")) (EDictApp "count")))))
 (DTypeSig false "deleteAt" (TyConstrained ((cstr "Eq" (TyVar "a")) (cstr "Hashable" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyVar "a"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyCon "Unit")))))))
 (DFunDef false "deleteAt" ((PVar "x") (PVar "arr") (PVar "idx") (PVar "count")) (EIf (EApp (EApp (EDictApp "bucketHas") (EVar "x")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "idx")) (EVar "arr"))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "idx")) (EApp (EApp (EDictApp "bucketRemove") (EVar "x")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "idx")) (EVar "arr")))) (EVar "arr"))) (DoExpr (EApp (EApp (EVar "setRef") (EDictApp "count")) (EBinOp "-" (EUnOp "!" (EDictApp "count")) (ELit (LInt 1)))))) (ELit LUnit)))
 (DTypeSig false "collectElems" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyVar "a"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))))
@@ -337,3 +403,14 @@ export impl Debug (HashSet a) requires Debug a where
 (DFunDef false "allIn" ((PCons (PVar "x") (PVar "rest")) (PVar "s")) (EIf (EApp (EApp (EDictApp "has") (EVar "x")) (EVar "s")) (EApp (EApp (EDictApp "allIn") (EVar "rest")) (EVar "s")) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DImpl true "Eq" ((TyApp (TyCon "HashSet") (TyVar "a"))) ((req "Eq" ((TyVar "a"))) (req "Hashable" ((TyVar "a")))) ((im "eq" ((PVar "a") (PVar "b")) (EIf (EBinOp "/=" (EApp (EVar "size") (EVar "a")) (EApp (EVar "size") (EVar "b"))) (EVar "False") (EApp (EApp (EDictApp "allIn") (EApp (EVar "elemList") (EVar "a"))) (EVar "b"))))))
 (DImpl true "Debug" ((TyApp (TyCon "HashSet") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EApp (EVar "elemList") (EVar "s"))))) (ELit (LString ""))))))
+(DTypeSig false "displayItems" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "String"))))
+(DFunDef false "displayItems" ((PList)) (ELit (LString "")))
+(DFunDef false "displayItems" ((PList (PVar "x"))) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "x"))) (ELit (LString ""))))
+(DFunDef false "displayItems" ((PCons (PVar "y") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "y"))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EApp (EDictApp "displayItems") (EVar "rest")))) (ELit (LString ""))))
+(DImpl true "Display" ((TyApp (TyCon "HashSet") (TyVar "a"))) ((req "Display" ((TyVar "a"))) (req "Ord" ((TyVar "a")))) ((im "display" ((PVar "s")) (EMatch (EApp (EVar "L.sort") (EApp (EVar "elemList") (EVar "s"))) (arm (PList) () (ELit (LString "HashSet {}"))) (arm (PVar "xs") () (EBinOp "++" (EBinOp "++" (ELit (LString "HashSet { ")) (EApp (EMethodRef "display") (EApp (EDictApp "displayItems") (EVar "xs")))) (ELit (LString " }"))))))))
+(DTypeSig false "ascendingL" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool"))))
+(DFunDef false "ascendingL" ((PList)) (EVar "True"))
+(DFunDef false "ascendingL" ((PCons PWild (PList))) (EVar "True"))
+(DFunDef false "ascendingL" ((PCons (PVar "x") (PCons (PVar "y") (PVar "rest")))) (EBinOp "&&" (EApp (EApp (EMethodRef "lte") (EVar "x")) (EVar "y")) (EApp (EDictApp "ascendingL") (EBinOp "::" (EVar "y") (EVar "rest")))))
+(DProp false "Display HashSet is layout-independent" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "s") (EApp (EDictApp "fromList") (EVar "xs"))) (DoExpr (EBinOp "&&" (EBinOp "==" (EApp (EMethodRef "display") (EVar "s")) (EApp (EMethodRef "display") (EApp (EDictApp "fromList") (EApp (EMethodRef "toList") (EVar "s"))))) (EBinOp "==" (EApp (EMethodRef "display") (EVar "s")) (EApp (EMethodRef "display") (EApp (EDictApp "fromList") (EApp (EVar "L.reverse") (EApp (EMethodRef "toList") (EVar "s"))))))))))
+(DProp false "Display HashSet agrees with Eq and lists elements ascending" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "a") (EApp (EDictApp "fromList") (EVar "xs"))) (DoLet false false (PVar "b") (EApp (EDictApp "fromList") (EApp (EVar "L.reverse") (EVar "xs")))) (DoExpr (EBinOp "&&" (EApp (EDictApp "ascendingL") (EApp (EVar "L.sort") (EApp (EVar "elemList") (EVar "a")))) (EBinOp "==" (EApp (EApp (EMethodRef "eq") (EVar "a")) (EVar "b")) (EBinOp "==" (EApp (EMethodRef "display") (EVar "a")) (EApp (EMethodRef "display") (EVar "b"))))))))

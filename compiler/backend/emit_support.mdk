@@ -294,16 +294,16 @@ initReach (n::rest) m = reachListOf n m ++ initReach rest m
 -- the LAST key's reach pair — the one `mergeReach` may share.
 lastReach : List String -> OrdMap (List String, OrdMap Unit) -> (List String, OrdMap Unit)
 lastReach [] _ = ([], omEmpty)
-lastReach [n] m = fromOption ([], omEmpty) (omLookup n m)
+lastReach [n] m = optionOr ([], omEmpty) (omLookup n m)
 lastReach (_::rest) m = lastReach rest m
 
 reachListOf : String -> OrdMap (List String, OrdMap Unit) -> List String
-reachListOf n m = fst (fromOption ([], omEmpty) (omLookup n m))
+reachListOf n m = fst (optionOr ([], omEmpty) (omLookup n m))
 
 -- concat (default []) of the OrdMap lookups over a list of keys.
 unionLookup : List String -> OrdMap (List String) -> List String
 unionLookup [] _ = []
-unionLookup (n::rest) m = fromOption [] (omLookup n m) ++ unionLookup rest m
+unionLookup (n::rest) m = optionOr [] (omLookup n m) ++ unionLookup rest m
 
 insertReach : List String -> (List String, OrdMap Unit) -> OrdMap (List String, OrdMap Unit) -> OrdMap (List String, OrdMap Unit)
 insertReach [] _ acc = acc
@@ -315,7 +315,7 @@ insertReach (n::rest) reached acc =
 -- backends (replaces the old direct-only `eagerVars [] body`).
 export
 bindEagerReach : OrdMap (List String) -> CBind -> List String
-bindEagerReach rm (CBind name [CClause [] _]) = fromOption [] (omLookup name rm)
+bindEagerReach rm (CBind name [CClause [] _]) = optionOr [] (omLookup name rm)
 bindEagerReach _ _ = []
 
 -- #623: the value-init topo sort used to carry the SAME binding list twice — as
@@ -477,7 +477,7 @@ anyKeyIn (n::rest) s = omHasKey n s || anyKeyIn rest s
 -- a name self-loops when its own eager callees include itself (`x = x + 1`); a
 -- singleton SCC does NOT record this on its own, so it is tested explicitly.
 selfLoops : String -> OrdMap (List String) -> Bool
-selfLoops n adj = contains n (fromOption [] (omLookup n adj))
+selfLoops n adj = contains n (optionOr [] (omLookup n adj))
 
 anySelfLoop : List String -> OrdMap (List String) -> Bool
 anySelfLoop [] _ = False
@@ -486,7 +486,7 @@ anySelfLoop (n::rest) adj = selfLoops n adj || anySelfLoop rest adj
 -- callees of every member of an SCC, concatenated (for the successor-taint check).
 sccCallees : List String -> OrdMap (List String) -> List String
 sccCallees [] _ = []
-sccCallees (n::rest) adj = fromOption [] (omLookup n adj) ++ sccCallees rest adj
+sccCallees (n::rest) adj = optionOr [] (omLookup n adj) ++ sccCallees rest adj
 
 insertAllKeys : List String -> OrdMap Unit -> OrdMap Unit
 insertAllKeys [] acc = acc

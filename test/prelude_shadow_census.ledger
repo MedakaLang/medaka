@@ -88,9 +88,11 @@ flat|PASS
 flip|PASS
 foldThen|PASS
 forEach|PASS
-fromOption|PASS
+optionOr|PASS
+option|PASS
 fromResult|PASS
-fromResultOr|PASS
+resultOr|PASS
+result|PASS
 fst|PASS
 guard|PASS
 identity|PASS
@@ -116,7 +118,7 @@ println|SPECIAL_RUN_REJECT
 print|PASS
 product|PASS
 repeatThen|PASS
-replaceWith|PASS
+mapConst|PASS
 runEach|PASS
 snd|PASS
 sum|PASS

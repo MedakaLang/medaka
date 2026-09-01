@@ -35,9 +35,11 @@ running doctests in stdlib/json.mdk
   ok   stdlib/json.mdk:577: asBool JNull == None
   ok   stdlib/json.mdk:588: map JArray (asArray (jArray [JInt 1, JInt 2])) == Some (jArray [JInt 1, JInt 2])
   ok   stdlib/json.mdk:590: asArray (JInt 1) == None
-  ok   stdlib/json.mdk:616: eq (parse "[1, 2]") (Ok (jArray [JInt 1, JInt 2]))
+  ok   stdlib/json.mdk:602: map JObject (asObject (jObject [("a", JInt 1)])) == Some (jObject [("a", JInt 1)])
+  ok   stdlib/json.mdk:604: asObject (JInt 1) == None
+  ok   stdlib/json.mdk:630: eq (parse "[1, 2]") (Ok (jArray [JInt 1, JInt 2]))
 
-stdlib/json.mdk: 37/37 passed
+stdlib/json.mdk: 39/39 passed
 Testing "parse-then-stringify round-trips a JInt" ... OK (100 tests)
 Testing "parse-then-stringify round-trips a JString (exercises escaping)" ... OK (100 tests)
 Testing "parse-then-stringify round-trips a JBool" ... OK (100 tests)
@@ -48,7 +50,9 @@ Testing "asString (JString s) == Some s" ... OK (100 tests)
 Testing "asBool (JBool b) == Some b" ... OK (100 tests)
 Testing "asFloat (JFloat f) == Some f" ... OK (100 tests)
 Testing "asArray recovers a built JArray" ... OK (100 tests)
+Testing "asObject recovers a built JObject" ... OK (100 tests)
+Testing "asObject rejects every non-object variant" ... OK (100 tests)
 Testing "at k recovers the k-th element of a JArray" ... OK (100 tests)
 Testing "lookup finds an inserted key" ... OK (100 tests)
 
-12 passed, 0 failed
+14 passed, 0 failed

@@ -104,7 +104,7 @@ import hash_map.{
   HashMap,
   new as hmNew,
   get as hmGet,
-  set as hmSet,
+  setInPlace as hmSet,
   keys as hmKeys,
 }
 

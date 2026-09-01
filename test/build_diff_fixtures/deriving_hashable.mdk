@@ -13,7 +13,7 @@
 -- hash_map/hash_set mask at the point of use — see hash_negative_hash.mdk,
 -- #416). `negHashes` pins that a negative derived hash still round-trips
 -- through a HashMap.
-import hash_map.{new as hmNew, set as hmSet, get as hmGet}
+import hash_map.{new as hmNew, setInPlace as hmSet, get as hmGet}
 
 -- multi-field
 data P = P Int String deriving (Hashable, Eq)

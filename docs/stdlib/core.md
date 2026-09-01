@@ -2,8 +2,9 @@
 
 core.mdk — the foundation every other Medaka module rests on.
 
-This file is automatically prepended to every program by the compiler
-(see lib/prelude.ml), so everything declared here is in scope without
+This file is automatically loaded as the implicit prelude by the native
+compiler pipeline (stdlib/runtime.mdk + stdlib/core.mdk, read from
+MEDAKA_ROOT at startup), so everything declared here is in scope without
 an `import`.  See STDLIB.md for the full plan and Module 1 checklist.
 
 Layout:
@@ -770,20 +771,25 @@ impl Mappable (Result e)
 `default` so a user-defined alternative (e.g. one that maps over the
 `Err` side) can coexist without forcing every call site to qualify.
 
-## `replaceWith`
+## `mapConst`
 
 ```
-replaceWith : a b -> c -> a c
+mapConst : a -> b c -> b a
 ```
 
 Replace every element of a wrapped value with a constant, keeping the
-structure — Haskell's `$>`.  `replaceWith fa b == map (const b) fa`.
+structure — Haskell's `<$`.  `mapConst b fa == map (const b) fa`.
+
+Value-first/data-last, like every other prelude combinator: the argument
+the name is about comes first, and the container comes last so partial
+application composes (#2306 E-2 renamed and reordered this from
+`replaceWith : f a -> b -> f b`).
 
 
 *(doctest — run by `medaka test`)*
 
 ```medaka
-> replaceWith (Some 5) 9
+> mapConst 9 (Some 5)
 Some 9
 ```
 
@@ -949,17 +955,23 @@ Some [2, 3]
 ## `forEach`
 
 ```
-forEach : List a -> (a -> b Unit) -> b Unit
+forEach : (a -> b Unit) -> List a -> b Unit
 ```
 
 Run an effectful action for each element, in order, discarding the
 per-element results.  Haskell's `traverse_`/`for_` specialised to `List`.
 
+Fn-first/data-last, matching `find`/`count`/`any`/`all`/`filterThen`
+(#2306 E-1 reordered this from `List a -> (a -> m Unit) -> m Unit`).  The
+doctest below is also the PIN for that order: a reorder is silent wherever
+both arguments still typecheck, but a lambda is not a `List`, so this line
+fails to typecheck under the old signature.
+
 
 *(doctest — run by `medaka test`)*
 
 ```medaka
-> forEach [1, 2, 3] (x => Some ())
+> forEach (x => Some ()) [1, 2, 3]
 Some ()
 ```
 
@@ -1470,10 +1482,10 @@ isNone : Option a -> Bool
 
 True if the value is absent.
 
-## `fromOption`
+## `optionOr`
 
 ```
-fromOption : a -> Option a -> a
+optionOr : a -> Option a -> a
 ```
 
 Unwrap with a default for `None`.
@@ -1482,9 +1494,31 @@ Unwrap with a default for `None`.
 *(doctest — run by `medaka test`)*
 
 ```medaka
-> fromOption 0 (Some 42)
+> optionOr 0 (Some 42)
 42
-> fromOption 0 None
+> optionOr 0 None
+0
+```
+
+## `option`
+
+```
+option : a -> (b -> a) -> Option b -> a
+```
+
+Eliminate an `Option` by supplying a default for `None` and a function
+for `Some`.  Named for what it eliminates (Haskell calls it `maybe`).
+
+Lived in a published one-entry `option` module until the
+0.1.0 surface freeze moved it beside its own type (#2306 I-2).
+
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> option 0 (x => x + 1) (Some 41)
+42
+> option 0 (x => x + 1) None
 0
 ```
 
@@ -1522,14 +1556,36 @@ isErr : Result a b -> Bool
 
 True if the result is `Err`.
 
-## `fromResultOr`
+## `resultOr`
 
 ```
-fromResultOr : a -> Result b a -> a
+resultOr : a -> Result b a -> a
 ```
 
 Unwrap with a default for `Err`.  Named distinctly from
-`fromOption` so the two don't collide when both are in scope.
+`optionOr` so the two don't collide when both are in scope.
+
+## `result`
+
+```
+result : (a -> b) -> (c -> b) -> Result a c -> b
+```
+
+Eliminate a `Result` by supplying a handler for `Err` and a handler for
+`Ok`.  Named for what it eliminates (Haskell calls it `either`).
+
+Lived in a published one-entry `result` module until the
+0.1.0 surface freeze moved it beside its own type (#2306 I-2).
+
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> result (e => 0) (x => x + 1) (Ok 41)
+42
+> result (e => e) (x => x + 1) (Err 7)
+7
+```
 
 ## `mapErr`
 
@@ -1743,6 +1799,15 @@ arbitraryList : (Unit -> <Rand> a) -> Int -> <Rand> List a
 ```
 
 Generate a list of up to `maxLen` elements using `gen`.
+
+## `Arbitrary (Option a)`
+
+```
+impl Arbitrary (Option a) requires Arbitrary a
+```
+
+Half the draws are `None`.  `shrink` collapses a `Some` to `None`, which
+is the only strictly smaller `Option` there is.
 
 ## `Rep`
 

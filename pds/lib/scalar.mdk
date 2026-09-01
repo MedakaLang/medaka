@@ -108,7 +108,7 @@
    it. The guard remains a defense against an internal arithmetic regression.
 
    ── Bounds-checked array API, deliberately ───────────────────────────
-   This module reads with `arr[i]` and writes with `Array.set` — the
+   This module reads with `arr[i]` and writes with `Array.setInPlace` — the
    bounds-checked PUBLIC API — never the restricted `*Unsafe` internal
    externs. (Spelled that way on purpose: a grep for the restricted names
    over this slice's `.mdk` files must come back EMPTY, and a prose mention
@@ -133,14 +133,14 @@
    Eval/Wasm retain value parity; Wasm's ordinary boxed `Int` carrier is
    outside this native constant-time claim. -}
 
--- Writes here are still on `Array.set` rather than the `arr[i] := v` sugar the
+-- Writes here are still on `Array.setInPlace` rather than the `arr[i] := v` sugar the
 -- rest of the tree uses (#1786) -- but the reason is now HISTORICAL, and this
 -- comment is a note to whoever migrates them, not a warning against it.
 --
 -- The cost was never dispatch (`setIndex` on a monomorphic `Array` receiver emits
--- a direct call, same as `Array.set`). It was an INLINING asymmetry: `setIndex`'s
+-- a direct call, same as `Array.setInPlace`). It was an INLINING asymmetry: `setIndex`'s
 -- out-of-bounds branch interpolated a message, which put it past LLVM's inline
--- threshold, so it never inlined into the hot loops where `Array.set` did --
+-- threshold, so it never inlined into the hot loops where `Array.setInPlace` did --
 -- 0.588s vs 0.677s over 200k feMuls. #1787 removed the interpolation, and both
 -- spellings now inline. Migrating these three modules is mechanical and wanted;
 -- re-measure when you do, and delete this comment.
@@ -228,7 +228,7 @@ carryGo w i carry =
   if i >= nWide then if carry /= 0 then panic "scalar.carryAll: carry out of the top limb — input was >= 2^512" else ()
   else
     let v = w[i] + carry
-    let () = A.set i (bitAnd v limbMask) w
+    let () = A.setInPlace i (bitAnd v limbMask) w
     carryGo w (i + 1) (shiftRight v 16)
 
 -- One fold pass: `H * 2^256 + L` becomes `H * c + L`, IN PLACE, with the high
@@ -249,8 +249,8 @@ takeHigh : Array Int -> Array Int -> Int -> Unit
 takeHigh w h i =
   if i >= nWide then ()
   else
-    let () = A.set (i - 16) w[i] h
-    let () = A.set i 0 w
+    let () = A.setInPlace (i - 16) w[i] h
+    let () = A.setInPlace i 0 w
     takeHigh w h (i + 1)
 
 foldAccum : Array Int -> Array Int -> Int -> Unit
@@ -265,7 +265,7 @@ foldAccumRow w h i j =
   if j >= 9 then ()
   else
     let k = i + j
-    let () = A.set k (w[k] + h[i] * cLimbs[j]) w
+    let () = A.setInPlace k (w[k] + h[i] * cLimbs[j]) w
     foldAccumRow w h i (j + 1)
 
 -- Exactly four unconditional folds after the initial carry. The proof in
@@ -304,7 +304,7 @@ subNCandidate w diff i borrow =
   if i >= 16 then borrow
   else
     let t = w[i] + limbMask + 1 - nLimbs[i] - borrow
-    let () = A.set i (bitAnd t limbMask) diff
+    let () = A.setInPlace i (bitAnd t limbMask) diff
     subNCandidate w diff (i + 1) (1 - shiftRight t 16)
 
 -- Blend the unconditional subtraction candidate into w. The loop condition is
@@ -314,7 +314,7 @@ selectNCandidate w diff keepDiff i =
   if i >= 16 then ()
   else
     let original = w[i]
-    let () = A.set i (original + keepDiff * (diff[i] - original)) w
+    let () = A.setInPlace i (original + keepDiff * (diff[i] - original)) w
     selectNCandidate w diff keepDiff (i + 1)
 
 subNSelect : Array Int -> Unit
@@ -344,7 +344,7 @@ copyLow : Array Int -> Array Int -> Int -> Unit
 copyLow w out i =
   if i >= 16 then ()
   else
-    let () = A.set i w[i] out
+    let () = A.setInPlace i w[i] out
     copyLow w out (i + 1)
 
 -- ── Serialization ────────────────────────────────────────────────────
@@ -362,7 +362,7 @@ limbsOfBytesGo : Array Int -> Array Int -> Int -> Unit
 limbsOfBytesGo bs out i =
   if i >= 16 then ()
   else
-    let () = A.set i (bs[31 - 2 * i] + bs[30 - 2 * i] * 256) out
+    let () = A.setInPlace i (bs[31 - 2 * i] + bs[30 - 2 * i] * 256) out
     limbsOfBytesGo bs out (i + 1)
 
 -- Is this a well-formed 32-byte array with every element in 0..255?
@@ -413,7 +413,7 @@ scanSecretBytes bs safeBytes i validBit =
   else
     let b = bs[i]
     let byteBit = secretByteBit b
-    let () = A.set i (bitAnd b 255 * byteBit) safeBytes
+    let () = A.setInPlace i (bitAnd b 255 * byteBit) safeBytes
     scanSecretBytes bs safeBytes (i + 1) (validBit * byteBit)
 
 -- Borrow after subtracting n is 1 exactly when the raw 256-bit limbs are < n.
@@ -505,8 +505,8 @@ toBytesGo : Array Int -> Array Int -> Int -> Unit
 toBytesGo v out i =
   if i >= 16 then ()
   else
-    let () = A.set (31 - 2 * i) (bitAnd v[i] 255) out
-    let () = A.set (30 - 2 * i) (shiftRight v[i] 8) out
+    let () = A.setInPlace (31 - 2 * i) (bitAnd v[i] 255) out
+    let () = A.setInPlace (30 - 2 * i) (shiftRight v[i] 8) out
     toBytesGo v out (i + 1)
 
 -- ── Comparison ───────────────────────────────────────────────────────
@@ -579,7 +579,7 @@ scSelectGo : Int -> Array Int -> Array Int -> Array Int -> Int -> Unit
 scSelectGo bit a b out i =
   if i >= 16 then ()
   else
-    let () = A.set i (a[i] + bit * (b[i] - a[i])) out
+    let () = A.setInPlace i (a[i] + bit * (b[i] - a[i])) out
     scSelectGo bit a b out (i + 1)
 
 -- | The LOW-S PREDICATE: is `s` strictly greater than `floor(n/2)`?
@@ -630,10 +630,10 @@ scHighBorrow s i borrow =
 
 dblGo : Array Int -> Array Int -> Int -> Int -> Unit
 dblGo s d i carry =
-  if i >= 16 then A.set 16 carry d
+  if i >= 16 then A.setInPlace 16 carry d
   else
     let v = 2 * s[i] + carry
-    let () = A.set i (bitAnd v limbMask) d
+    let () = A.setInPlace i (bitAnd v limbMask) d
     dblGo s d (i + 1) (shiftRight v 16)
 
 -- ── Arithmetic ───────────────────────────────────────────────────────
@@ -651,7 +651,7 @@ addGo : Array Int -> Array Int -> Array Int -> Int -> Unit
 addGo a b w i =
   if i >= 16 then ()
   else
-    let () = A.set i (a[i] + b[i]) w
+    let () = A.setInPlace i (a[i] + b[i]) w
     addGo a b w (i + 1)
 
 -- | Additive inverse mod `n`, computed as `n - a` with borrow. `a` is
@@ -670,10 +670,10 @@ negateGo a w i borrow =
   else
     let d = nLimbs[i] - a[i] - borrow
     if d < 0 then
-      let () = A.set i (d + limbMask + 1) w
+      let () = A.setInPlace i (d + limbMask + 1) w
       negateGo a w (i + 1) 1
     else
-      let () = A.set i d w
+      let () = A.setInPlace i d w
       negateGo a w (i + 1) 0
 
 -- | Fixed-control additive inverse for secret-bearing arithmetic. The full
@@ -692,7 +692,7 @@ scNegateCtGo a out i borrow =
   if i >= 16 then ()
   else
     let t = nLimbs[i] + limbMask + 1 - a[i] - borrow
-    let () = A.set i (bitAnd t limbMask) out
+    let () = A.setInPlace i (bitAnd t limbMask) out
     scNegateCtGo a out (i + 1) (1 - shiftRight t 16)
 
 -- | Subtraction mod `n`. NEGATE-THEN-ADD, exactly as the reference does it —
@@ -726,7 +726,7 @@ mulAccumRow a b w i j =
   if j >= 16 then ()
   else
     let k = i + j
-    let () = A.set k (w[k] + a[i] * b[j]) w
+    let () = A.setInPlace k (w[k] + a[i] * b[j]) w
     mulAccumRow a b w i (j + 1)
 
 -- | Multiplicative inverse mod `n`, by Fermat's little theorem: `a^(n-2)`,

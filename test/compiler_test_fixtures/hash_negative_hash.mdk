@@ -3,8 +3,8 @@
 -- dispatch" panic; native: SEGFAULT). This is the EVAL-side guard; the native
 -- one is test/build_diff_fixtures/hash_negative_hash.mdk.
 import test.{expectEqual}
-import hash_map.{new as hmNew, set as hmSet, get as hmGet}
-import hash_set.{new as hsNew, insert as hsInsert, has as hsHas}
+import hash_map.{new as hmNew, setInPlace as hmSet, get as hmGet}
+import hash_set.{new as hsNew, insertInPlace as hsInsert, has as hsHas}
 
 -- `K tag h` hashes on `h` ONLY, so `K 1 h` and `K 2 h` COLLIDE while staying
 -- un-equal. Eq is STRUCTURAL (derived) over both fields, so eq-equal values

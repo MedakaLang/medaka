@@ -82,16 +82,19 @@ import driver.diagnostics.{
 }
 -- The uint64 limb library the RNG/hash externs are built on lives in stdlib
 -- (`bits64`) now — the compiler is a first-class consumer of it (issue #223).
--- It exports only a `U64` type ALIAS over a tuple, so the import drags no new
--- instance surface (near-free per AGENTS.md) and DCE trims to the fns used here.
+-- `U64` is a nullary-constructor newtype (#2311), so the import brings its own
+-- `Eq`/`Ord`/`Debug`/`Display`/`Hashable` into dispatch scope; DCE still trims
+-- to the fns used here.  `and`/`or` are NOT imported — nothing here needs them,
+-- and they would shadow the prelude's boolean pair.
 import bits64.{
-  add64,
-  sub64,
-  mulLow64,
-  xor64,
-  shr64,
-  mod64,
-  ofInt,
+  U64(..),
+  add,
+  sub,
+  mulLow,
+  xor,
+  shr,
+  mod,
+  fromIntBits,
   isZero,
   limbAt,
 }
@@ -387,7 +390,7 @@ declImplIfaceIdRow : Decl -> List (String, String, String)
 -- #1037: an attribute wraps the decl it annotates; matched arm-for-arm with
 -- `declImplEntries`, which unwraps `DAttrib` for the same reason.
 declImplIfaceIdRow (DAttrib _ d) = declImplIfaceIdRow d
-declImplIfaceIdRow (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, ... }) = [(ifaceIdentity o ifaceName, fromOption noneHeadTag (headTyconHead typeArgs), implRouteKeyWord o ifaceName typeArgs None)]
+declImplIfaceIdRow (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, ... }) = [(ifaceIdentity o ifaceName, optionOr noneHeadTag (headTyconHead typeArgs), implRouteKeyWord o ifaceName typeArgs None)]
 declImplIfaceIdRow _ = []
 
 -- the interface IDENTITIES of every declared impl at [tag] (head tag OR canonical
@@ -515,7 +518,7 @@ implMethodReqCounts _ _ = []
 
 implMethodReqCountEntry : List (String, Int) -> String -> ImplMethod -> List ((String, String), Int)
 implMethodReqCountEntry arities tag (ImplMethod mname pats _) =
-  let declArity = fromOption (listLen pats) (lookupAssoc mname arities)
+  let declArity = optionOr (listLen pats) (lookupAssoc mname arities)
   let reqCount = subClampZero (listLen pats) declArity
   [((mname, tag), reqCount)]
 
@@ -1600,7 +1603,7 @@ applyMethodDicts env name route narrowed fwdReqs0 implRoutes methodRoutes =
   -- wants the absent/present distinction.  Looking it up twice doubled a
   -- linear-in-impl-count scan on a runtime dispatch hot path for nothing.
   let reqCount = lookupMethodReqCountOpt name tag
-  let fwdReqs = takeN (fromOption 0 reqCount) fwdReqs0
+  let fwdReqs = takeN (optionOr 0 reqCount) fwdReqs0
   if awaitsArgs narrowed then
     match specializeDefault env name tag reqCount implRoutes narrowed
       Some specialized => applyDicts env specialized methodRoutes
@@ -2326,7 +2329,7 @@ declImplEntries _ _ _ = []
 
 implMethodEntry : EvalEnv (Value e) -> List ((String, String, String), List Int) -> TyConOrigin -> String -> List Ty -> ImplMethod -> (String, (Int, Value e))
 implMethodEntry env disp o ifaceName typeArgs (ImplMethod mname pats body) =
-  let tag = fromOption noneHeadTag (headTyconHead typeArgs)
+  let tag = optionOr noneHeadTag (headTyconHead typeArgs)
   let key = implRouteKeyWord o ifaceName typeArgs None
   -- #1113 Phase 4: `o` is the impl's own view of WHICH interface it implements
   -- (resolve's `fillIfaceOccOrigin`), so `ifaceIdentity o ifaceName` is the same
@@ -2707,64 +2710,64 @@ optionToValue (Some v) = VCon "Some" [v]
 -- eval-vs-native RNG/hash divergence (issue #98).
 
 -- Golden ratio increment 0x9E3779B97F4A7C15 as limbs.
-u64Golden : (Int, Int, Int, Int)
-u64Golden = (31765, 32586, 31161, 40503)  -- 7C15 7F4A 79B9 9E37
+u64Golden : U64
+u64Golden = U64 31765 32586 31161 40503  -- 7C15 7F4A 79B9 9E37
 
 -- SplitMix64 finalizer multipliers.
-u64Const1 : (Int, Int, Int, Int)
-u64Const1 = (58809, 7396, 18285, 48984)  -- 0xBF58476D1CE4E5B9: E5B9 1CE4 476D BF58
+u64Const1 : U64
+u64Const1 = U64 58809 7396 18285 48984  -- 0xBF58476D1CE4E5B9: E5B9 1CE4 476D BF58
 
-u64Const2 : (Int, Int, Int, Int)
-u64Const2 = (4587, 4913, 18875, 38096)  -- 0x94D049BB133111EB: 11EB 1331 49BB 94D0
+u64Const2 : U64
+u64Const2 = U64 4587 4913 18875 38096  -- 0x94D049BB133111EB: 11EB 1331 49BB 94D0
 
 -- FNV-1a 64-bit offset basis 0xCBF29CE484222325 and prime 0x100000001B3.
-u64FnvBasis : (Int, Int, Int, Int)
-u64FnvBasis = (8997, 33826, 40164, 52210)  -- 2325 8422 9CE4 CBF2
+u64FnvBasis : U64
+u64FnvBasis = U64 8997 33826 40164 52210  -- 2325 8422 9CE4 CBF2
 
-u64FnvPrime : (Int, Int, Int, Int)
-u64FnvPrime = (435, 0, 256, 0)  -- 01B3 0000 0100 0000
+u64FnvPrime : U64
+u64FnvPrime = U64 435 0 256 0  -- 01B3 0000 0100 0000
 
--- `ofInt`/`add64`/`mulLow64`/`xor64`/`limbAt`/`shr64` (plus the `shiftWords`
--- helper `shr64` needs) are imported from stdlib `bits64` above — the compiler
+-- `fromIntBits`/`add`/`mulLow`/`xor`/`limbAt`/`shr` (plus the `shiftWords`
+-- helper `shr` needs) are imported from stdlib `bits64` above — the compiler
 -- shares the one proven limb library rather than re-deriving it here (#223).
 
 -- SplitMix64 finalizer, then `mix64 x = finalize (x + golden)` — identical to
 -- mdk_hash_mix64, and one SplitMix64 step (state += golden; finalize).
-u64Finalize : (Int, Int, Int, Int) -> (Int, Int, Int, Int)
+u64Finalize : U64 -> U64
 u64Finalize z =
-  let z1 = mulLow64 (xor64 z (shr64 z 30)) u64Const1
-  let z2 = mulLow64 (xor64 z1 (shr64 z1 27)) u64Const2
-  xor64 z2 (shr64 z2 31)
+  let z1 = mulLow (xor z (shr 30 z)) u64Const1
+  let z2 = mulLow (xor z1 (shr 27 z1)) u64Const2
+  xor z2 (shr 31 z2)
 
-u64Mix : (Int, Int, Int, Int) -> (Int, Int, Int, Int)
-u64Mix x = u64Finalize (add64 x u64Golden)
+u64Mix : U64 -> U64
+u64Mix x = u64Finalize (add x u64Golden)
 
 -- Low 30 bits (the native MDK_HASH_MASK = 2^30 - 1) as a non-negative Int.
-u64Low30 : (Int, Int, Int, Int) -> Int
-u64Low30 (a0, a1, _, _) = bitAnd (bitOr a0 (shiftLeft a1 16)) 1073741823
+u64Low30 : U64 -> Int
+u64Low30 (U64 a0 a1 _ _) = bitAnd (bitOr a0 (shiftLeft a1 16)) 1073741823
 
 -- uint64 -> Int, for a value known to fit in a positive Medaka Int (< 2^62):
 -- the randomFloat mantissa (53 bits) and any `next % range` remainder (< range
 -- <= 2^62 - 1) both qualify, so `shiftLeft a3 48` never reaches the sign bit.
-u64ToInt : (Int, Int, Int, Int) -> Int
-u64ToInt (a0, a1, a2, a3) =
+u64ToInt : U64 -> Int
+u64ToInt (U64 a0 a1 a2 a3) =
   bitOr (bitOr a0 (shiftLeft a1 16)) (bitOr (shiftLeft a2 32) (shiftLeft a3 48))
 
--- `sub64` (borrow-propagating subtraction) and `mod64` (exact long division —
+-- `sub` (borrow-propagating subtraction) and `mod` (exact long division —
 -- eval's old `u64Mod`/`u64ModExactGo`/`u64BitAt`/`cmp64` collapse into it, the
 -- zero-divisor guard being a harmless superset the RNG never triggers) and
 -- `isZero` are imported from stdlib `bits64` above (#223).
 
 -- Bit 63 — the sign bit under a two's-complement (signed long long) reading.
-u64Bit63 : (Int, Int, Int, Int) -> Int
-u64Bit63 (_, _, _, a3) = bitAnd (shiftRight a3 15) 1
+u64Bit63 : U64 -> Int
+u64Bit63 (U64 _ _ _ a3) = bitAnd (shiftRight a3 15) 1
 
 -- uint64 -> signed Medaka Int, interpreting the top bit as a two's-complement
 -- sign. Used only where the value is known to land in [-2^62, 2^62 - 1] (a
 -- randomInt result is always in [lo, hi]); the sign-extended `hi16 << 48` then
 -- has magnitude <= 2^62, so it fits the Int without overflow.
-u64ToSignedInt : (Int, Int, Int, Int) -> Int
-u64ToSignedInt (a0, a1, a2, a3) =
+u64ToSignedInt : U64 -> Int
+u64ToSignedInt (U64 a0 a1 a2 a3) =
   let hi16 = if bitAnd a3 32768 == 0 then a3 else a3 - 65536
   bitOr (bitOr a0 (shiftLeft a1 16)) (shiftLeft a2 32) + shiftLeft hi16 48
 
@@ -2780,13 +2783,13 @@ export
 rngStateRef : Ref Int
 rngStateRef = Ref 123456789
 
-rngU64Ref : Ref (Int, Int, Int, Int)
-rngU64Ref = Ref (0, 0, 0, 0)
+rngU64Ref : Ref U64
+rngU64Ref = Ref (U64 0 0 0 0)
 
 -- One SplitMix64 step: advance the global state and return the finalized draw.
-rngDraw : Unit -> (Int, Int, Int, Int)
+rngDraw : Unit -> U64
 rngDraw _ =
-  let s = add64 !rngU64Ref u64Golden
+  let s = add !rngU64Ref u64Golden
   rngU64Ref := s
   u64Finalize s
 
@@ -2794,33 +2797,33 @@ rngDraw _ =
 -- including for spans that overflow a 62-bit Medaka Int: native computes
 -- `range = hi - lo + 1` and the modulus in 64-bit, so eval must too, or the
 -- draw sequence itself desyncs. Everything is done in uint64 — `hi - lo + 1`
--- via sub64/add64, native's `range <= 0` guard as `zero || sign-bit set`, the
+-- via sub/add, native's `range <= 0` guard as `zero || sign-bit set`, the
 -- modulus with the exact long division, and `lo + rem` back to a signed Int —
 -- so no bare 63-bit Int op is ever asked to hold a value it cannot (issue #98).
 pRandomInt : Value e -> Value e -> <e> Value e
 pRandomInt (VInt lo) (VInt hi) =
-  let loU = ofInt lo
-  let rangeU = add64 (sub64 (ofInt hi) loU) (ofInt 1)
+  let loU = fromIntBits lo
+  let rangeU = add (sub (fromIntBits hi) loU) (fromIntBits 1)
   if isZero rangeU || u64Bit63 rangeU == 1 then VInt lo
   else
-    let rem = mod64 (rngDraw ()) rangeU
-    VInt (u64ToSignedInt (add64 loU rem))
+    let rem = mod (rngDraw ()) rangeU
+    VInt (u64ToSignedInt (add loU rem))
 pRandomInt _ _ = panic "randomInt: expected Int Int"
 
 pRandomBool : Value e -> <e> Value e
-pRandomBool _ = VBool (bitAnd (limbAt (rngDraw ()) 0) 1 == 1)
+pRandomBool _ = VBool (bitAnd (limbAt 0 (rngDraw ())) 1 == 1)
 
 pRandomFloat : Value e -> <e> Value e
 pRandomFloat _ =
   -- `intToFloat 9007199254740992` is the double 2^53 (the mantissa scale); written
   -- via an Int literal because `medaka fmt` corrupts a >= 1e15 float literal (#51).
-  let bits = u64ToInt (shr64 (rngDraw ()) 11)
+  let bits = u64ToInt (shr 11 (rngDraw ()))
   VFloat (intToFloat bits * (1.0 / intToFloat 9007199254740992) * 2.0 - 1.0)
 
 pRandomChar : Value e -> <e> Value e
 pRandomChar _ =
   VChar (charToStr (charFromCodeUnsafe
-    (32 + u64ToInt (mod64 (rngDraw ()) (ofInt 95)))))
+    (32 + u64ToInt (mod (rngDraw ()) (fromIntBits 95)))))
 
 charFromCodeUnsafe : Int -> Char
 -- Intentional cross-file duplicate of the same helper in prop_runner.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
@@ -2831,7 +2834,7 @@ charFromCodeUnsafe n = match charFromCode n
 
 pSetSeed : Value e -> <e> Value e
 pSetSeed (VInt seed) =
-  rngU64Ref := ofInt seed
+  rngU64Ref := fromIntBits seed
   VUnit
 pSetSeed _ = panic "setSeed: expected Int"
 
@@ -3062,33 +3065,34 @@ pFloatToBytes64 _ = panic "floatToBytes64: not a Float"
 -- mixer made `medaka run` and `medaka build` disagree on hash values, both silent).
 -- hashInt/hashChar/hashFloat = mix64 then mask to [0, 2^30); hashString = 64-bit
 -- FNV-1a; hashBool = 0/1. `n`/codepoint arrive as the untagged native Int, so a
--- negative Int's two's-complement 64-bit value flows straight into `ofInt`.
+-- negative Int's two's-complement 64-bit value flows straight into
+-- `fromIntBits`.
 
 -- One 64-bit FNV-1a step: h = (h XOR byte) * prime (low 64 bits).
-fnvStep64 : (Int, Int, Int, Int) -> Int -> (Int, Int, Int, Int)
-fnvStep64 (h0, h1, h2, h3) byte =
-  mulLow64 (bitXor h0 byte, h1, h2, h3) u64FnvPrime
+fnvStep64 : U64 -> Int -> U64
+fnvStep64 (U64 h0 h1 h2 h3) byte =
+  mulLow (U64 (bitXor h0 byte) h1 h2 h3) u64FnvPrime
 
-fnvFold64 : List Int -> (Int, Int, Int, Int) -> (Int, Int, Int, Int)
+fnvFold64 : List Int -> U64 -> U64
 fnvFold64 [] h = h
 fnvFold64 (x::xs) h = fnvFold64 xs (fnvStep64 h x)
 
 -- 8 big-endian bytes (bs[0] = MSB, as floatToBytes64 emits) -> uint64 limbs.
-bytesBEToU64 : Array Int -> (Int, Int, Int, Int)
-bytesBEToU64 bs = (
-  bitOr (arrayGetUnsafe 7 bs) (shiftLeft (arrayGetUnsafe 6 bs) 8),
-  bitOr (arrayGetUnsafe 5 bs) (shiftLeft (arrayGetUnsafe 4 bs) 8),
-  bitOr (arrayGetUnsafe 3 bs) (shiftLeft (arrayGetUnsafe 2 bs) 8),
-  bitOr (arrayGetUnsafe 1 bs) (shiftLeft (arrayGetUnsafe 0 bs) 8),
-)
+bytesBEToU64 : Array Int -> U64
+bytesBEToU64 bs =
+  U64
+    (bitOr (arrayGetUnsafe 7 bs) (shiftLeft (arrayGetUnsafe 6 bs) 8))
+    (bitOr (arrayGetUnsafe 5 bs) (shiftLeft (arrayGetUnsafe 4 bs) 8))
+    (bitOr (arrayGetUnsafe 3 bs) (shiftLeft (arrayGetUnsafe 2 bs) 8))
+    (bitOr (arrayGetUnsafe 1 bs) (shiftLeft (arrayGetUnsafe 0 bs) 8))
 
 pHashInt : Value e -> <e> Value e
-pHashInt (VInt n) = VInt (u64Low30 (u64Mix (ofInt n)))
+pHashInt (VInt n) = VInt (u64Low30 (u64Mix (fromIntBits n)))
 pHashInt _ = panic "hashInt: not an Int"
 
 pHashChar : Value e -> <e> Value e
 pHashChar (VChar s) =
-  VInt (u64Low30 (u64Mix (ofInt (charCode (arrayGetUnsafe
+  VInt (u64Low30 (u64Mix (fromIntBits (charCode (arrayGetUnsafe
     0
     (stringToChars s))))))
 pHashChar _ = panic "hashChar: not a Char"

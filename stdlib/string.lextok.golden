@@ -127,14 +127,14 @@ IDENT "c"
 NEWLINE
 EXPORT
 NEWLINE
-IDENT "digitToInt"
+IDENT "fromDigit"
 COLON
 UPPER "Char"
 ARROW
 UPPER "Option"
 UPPER "Int"
 NEWLINE
-IDENT "digitToInt"
+IDENT "fromDigit"
 IDENT "c"
 EQUAL
 IDENT "digitVal"
@@ -210,14 +210,14 @@ DEDENT
 NEWLINE
 EXPORT
 NEWLINE
-IDENT "intToDigit"
+IDENT "toDigit"
 COLON
 UPPER "Int"
 ARROW
 UPPER "Option"
 UPPER "Char"
 NEWLINE
-IDENT "intToDigit"
+IDENT "toDigit"
 IDENT "n"
 INDENT
 PIPE
@@ -2069,6 +2069,8 @@ IDENT "split"
 IDENT "nl"
 IDENT "s"
 RPAREN
+NEWLINE
+EXPORT
 NEWLINE
 IDENT "stripCR"
 COLON

@@ -34,8 +34,14 @@ stay bare.
 
 A key `k` under the *i*-th (0-based) `[[t]]` header is stored as
 `"t.<i>.k"`.  `tableCount` and `tableEntry` are the accessors for that
-shape; `tableEntry` hands back a sub-document whose keys are bare, so the
-ordinary accessors work on it unchanged.
+shape; `tableEntry` hands back `Some` sub-document whose keys are bare (so
+the ordinary accessors work on it unchanged), or `None` for an index that
+is out of range.
+
+This module is the GENERAL TOML reader: it knows nothing about
+`medaka.toml`'s schema.  The `[package]`/`[workspace]` accessors that used
+to live here are the compiler's business and now live in
+`compiler/support/manifest.mdk` (I-1).
 
 ## `TomlValue`
 
@@ -319,11 +325,17 @@ Zero when the table is absent:
 ## `tableEntry`
 
 ```
-tableEntry : String -> Int -> Toml -> Toml
+tableEntry : String -> Int -> Toml -> Option Toml
 ```
 
 The `i`-th (0-based) `[[name]]` entry, as a sub-document whose keys are
 bare — so `getString`/`getArray`/`getInt`/`getBool` apply unchanged.
+`None` when `i` is out of range.
+
+`Option`, not a bare `Toml`, for the same reason `path.stripPrefix` is
+(#2310's defect class): an out-of-range index used to come back as a
+document in which every lookup happens to be `None`, so "no such entry" and
+"an entry with no keys" were the same value.
 
 
 *(doctest — run by `medaka test`)*
@@ -333,117 +345,13 @@ bare — so `getString`/`getArray`/`getInt`/`getBool` apply unchanged.
 Some "b"
 ```
 
-An out-of-range index yields an empty document, so lookups are `None`:
+An out-of-range index is `None`:
 
 
 *(doctest — run by `medaka test`)*
 
 ```medaka
 > parseTableEntryStr "gate" 9 "name" "[[gate]]\nname = \"a\""
-None
-```
-
-## `packageName`
-
-```
-packageName : Toml -> Option String
-```
-
-Extract `name` from a parsed `[package]` section.
-
-
-*(doctest — run by `medaka test`)*
-
-```medaka
-> parsePackageName "[package]\nname = \"my-project\"\nversion = \"0.1.0\"\nentry = \"main.mdk\""
-Some "my-project"
-```
-
-`None` when `name` is absent:
-
-
-*(doctest — run by `medaka test`)*
-
-```medaka
-> parsePackageName "[package]\nversion = \"0.1.0\""
-None
-```
-
-## `packageVersion`
-
-```
-packageVersion : Toml -> Option String
-```
-
-Extract `version` from a parsed `[package]` section.
-
-
-*(doctest — run by `medaka test`)*
-
-```medaka
-> parsePackageVersion "[package]\nname = \"x\"\nversion = \"2.3.4\"\nentry = \"main.mdk\""
-Some "2.3.4"
-```
-
-`None` when `version` is absent:
-
-
-*(doctest — run by `medaka test`)*
-
-```medaka
-> parsePackageVersion "[package]\nname = \"x\""
-None
-```
-
-## `packageEntry`
-
-```
-packageEntry : Toml -> Option String
-```
-
-Extract `entry` from a parsed `[package]` section.
-
-
-*(doctest — run by `medaka test`)*
-
-```medaka
-> parsePackageEntry "[package]\nname = \"x\"\nversion = \"0.1.0\"\nentry = \"src/main.mdk\""
-Some "src/main.mdk"
-```
-
-`None` when `entry` is absent:
-
-
-*(doctest — run by `medaka test`)*
-
-```medaka
-> parsePackageEntry "[package]\nname = \"x\""
-None
-```
-
-## `workspaceMembers`
-
-```
-workspaceMembers : Toml -> Option (List String)
-```
-
-Extract `members` from a parsed `[workspace]` section.
-
-
-*(doctest — run by `medaka test`)*
-
-```medaka
-> parseWorkspaceMembers "[workspace]\nmembers = [\"pkgs/core\", \"pkgs/net\"]"
-Some ["pkgs/core", "pkgs/net"]
-```
-
-`None` when there is no `[workspace]` section:
-
-
-*(doctest — run by `medaka test`)*
-
-```medaka
-> parseWorkspaceMembers "[package]\nname = \"x\""
 None
 ```
 
@@ -469,5 +377,46 @@ impl Debug TomlValue
 
 ```
 impl Debug Toml
+```
+
+## `Display TomlValue`
+
+```
+impl Display TomlValue
+```
+
+A `TomlValue` in TOML's own scalar spelling.
+
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> display (TStr "hi")
+"\"hi\""
+> display (TInt 42)
+"42"
+> display (TBool True)
+"true"
+> display (TArr ["a", "b"])
+"[\"a\", \"b\"]"
+```
+
+## `Display Toml`
+
+```
+impl Display Toml
+```
+
+A whole document as `Toml { key = value, … }` (empty -> `Toml {}`),
+mirroring `Display (Map k v)`'s `Map { … }`.
+
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> display (Toml [("a.b", TInt 1), ("c", TBool False)])
+"Toml { a.b = 1, c = false }"
+> display (Toml [])
+"Toml {}"
 ```
 

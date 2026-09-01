@@ -19,13 +19,22 @@ existential quantification and Medaka has none (probed — the `b` in
 existential).  The only expressible combinator shape is the wrapped-function
 one, which is opaque and therefore cannot derive help.
 
-Cost posture: `FlagSpec` is four immutable fields of plain data.  There are
-deliberately NO `deriving` clauses and NO `impl`s on the types below, and
-the module imports only `string` — every consumer already imports it, so
-nothing new enters dispatch scope.  Per-flag lookup over `given` is a
-monomorphic fold rather than a polymorphic `lookup`.  Adding an `impl`, a
-`deriving`, or a `map`/`hash_map` import invalidates the measured import
-cost and must be re-measured (`[T-STDLIB-IMPORT]`).
+Cost posture: `FlagSpec` is four immutable fields of plain data.  The module
+imports only `string` — every consumer already imports it, so nothing new
+enters dispatch scope.  Per-flag lookup over `given` is a monomorphic fold
+rather than a polymorphic `lookup`.  Adding a `map`/`hash_map` import
+invalidates the measured import cost and must be re-measured
+(`[T-STDLIB-IMPORT]`).
+
+The seven types below carry `deriving (Eq, Debug)` and nothing else (sheet
+row A-2, ratified #2306).  This paragraph previously said there were
+deliberately NO `deriving` clauses; the ban was lifted, not forgotten — a
+spec value that cannot be compared or printed cannot be asserted on in a
+test, which is the defect A-2 names.  `Eq`/`Debug` are prelude interfaces,
+so this adds no import; the re-measurement the old wording demanded was run
+on `medaka check compiler/driver/medaka_cli.mdk` (the CLI is the module that
+imports `args`) and is recorded in the sprint report.  The `map`/`hash_map`
+import ban above still stands.
 
 Wording: the four rejection sentences are the ratified ones from
 `docs/ops/CLI-CONFORMANCE.md` (C2 unknown flag, C3 exit code 1).  They are

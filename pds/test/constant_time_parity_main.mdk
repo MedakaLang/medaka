@@ -7,7 +7,7 @@
 import lib.field.{feFromBytesReduce, feMul, feInverse, feToBytes}
 import lib.scalar.{scFromBytesReduce, scMul, scInverse, scToBytes}
 import lib.sign.{secretKeyFromBytes, publicKeyCompressed, publicKeyForSecret}
-import array.{set}
+import array.{setInPlace}
 
 renderBytes : Array Int -> Int -> String -> String
 renderBytes bs i acc =
@@ -22,7 +22,7 @@ emit label bs = println "\{label}:\{renderBytes bs 0 ""}"
 main =
   let maxBytes = arrayMake 32 255
   let oneBytes = arrayMake 32 0
-  let () = set 31 1 oneBytes
+  let () = setInPlace 31 1 oneBytes
   let fieldMax = feFromBytesReduce maxBytes
   let scalarMax = scFromBytesReduce maxBytes
   let () = emit "field-mul" (feToBytes (feMul fieldMax fieldMax))

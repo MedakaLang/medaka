@@ -11,7 +11,7 @@ under the hood.  Two design tensions shape this module:
 1. Performance vs. functional feel.  The public API is a pure facade
 where it can be (`map`, `filter`, `sort`, etc. return fresh arrays)
 and explicitly mutates in place where that's the whole point
-(`set`, `swap`, `sortInPlace`) — untracked, no effect in the signature.
+(`setInPlace`, `swap`, `sortInPlace`) — untracked, no effect in the signature.
 
 2. Opaque builtin vs. typeclass member.  `Array a` cannot be pattern-
 matched like `List a`, so the impls below dispatch through the
@@ -21,7 +21,7 @@ deliberately skip `Applicative` / `Thenable`, because the natural
 definitions would encode cartesian-style allocation that's a
 performance trap on bulk data.
 
-The kernel of OCaml-backed primitives lives in stdlib/runtime.mdk and is
+The kernel of native primitives lives in stdlib/runtime.mdk and is
 the surface this module sits on top of.  Most operations here are one or
 two lines of Medaka built on `arrayMakeWith` + `arrayGetUnsafe`, which
 compile to a tight loop in the host runtime.
@@ -75,14 +75,6 @@ makeWith : Int -> (Int -> a) -> Array a
 > length (makeWith 0 (i => i))
 0
 ```
-
-## `replicate`
-
-```
-replicate : Int -> a -> Array a
-```
-
-Alias for `make`, included for symmetry with `List.replicate`.
 
 ## `fromList`
 
@@ -304,10 +296,10 @@ the interface default.  `filterMap` filters via a list intermediate
 reverse): one O(N) traversal + one O(M) list build + one O(M) array
 copy, no mutation so the signature stays pure.
 
-## `set`
+## `setInPlace`
 
 ```
-set : Int -> a -> Array a -> Unit
+setInPlace : Int -> a -> Array a -> Unit
 ```
 
 Bounds-checked write.  Panics on OOB.
@@ -467,6 +459,26 @@ an array's bytes into a writer).
 [(2, 9), (1, 8), (0, 7)]
 ```
 
+## `mapWithIndex`
+
+```
+mapWithIndex : (Int -> a -> b) -> Array a -> Array b
+```
+
+Map every element together with its 0-based index — the missing member of
+the index-callback family (`foldWithIndex`, `forEachWithIndex`), with the
+same `(i x)` callback order `list.mapWithIndex` uses.
+
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> toList (mapWithIndex (i x => i * x) (fromList [1, 2, 3]))
+[0, 2, 6]
+> toList (mapWithIndex (i x => i + x) (fromList ([] : List Int)))
+[]
+```
+
 ## `Mappable Array`
 
 ```
@@ -530,6 +542,28 @@ impl Eq (Array a) requires Eq a
 Lives in `core.mdk` (not `array.mdk`) alongside `Debug`/`Index` so
 `deriving (Eq)` over a field of array type builds without an `import array`.
 
+## `Ord (Array a)`
+
+```
+impl Ord (Array a) requires Ord a
+```
+
+Lexicographic, exactly like `Ord (List a)` — `Array` is `List`'s
+random-access peer, so `compare` on two arrays agrees element-for-element
+with `compare` on their element lists, and a prefix sorts before its
+extensions (sheet row A-5).  Lives here rather than in `array.mdk` for the
+same reason `Eq (Array a)` does: `deriving (Ord)` over a field of array
+type must build without an `import array`.
+
+⚠️ The body delegates to `Ord (List a)` rather than walking the arrays
+directly on purpose.  A hand-written walk needs an `Ord a`-constrained
+top-level helper, and calling one of those from an `impl Ord …` body IN
+THIS MODULE panics at run time with `unbound identifier: $dict_max_0` (the
+same shape compiles and runs correctly in any other module, and `Eq`- and
+`Hashable`-constrained helpers are fine from here).  Filed in the sprint
+report; delegation sidesteps it and makes the "agrees with `Ord (List a)`"
+law true by construction.
+
 ## `Display (Array a)`
 
 ```
@@ -547,6 +581,17 @@ literals interpolate without an explicit `import array`.
 > display [|1, 2, 3|] == "[|1, 2, 3|]"
 True
 ```
+
+## `Hashable (Array a)`
+
+```
+impl Hashable (Array a) requires Hashable a
+```
+
+The same `acc * 33 + hash x` fold `Hashable (List a)` uses, so an array
+and the list of the same elements hash EQUALLY — the peer relationship
+sheet row A-5 ratifies.  Agrees with `Eq (Array a)` by construction: equal
+arrays have equal elements in equal order, so they fold to the same seed.
 
 ## `Index (Array a) Int a`
 

@@ -209,7 +209,10 @@ uppercaseFirst : Array Int -> Array Int
 uppercaseFirst path =
   let changed = arrayCopy path
   let byte = changed[0]
-  let () = if byte >= 97 && byte <= 122 then A.set 0 (byte - 32) changed else ()
+  let () = if byte >= 97 && byte <= 122 then
+    A.setInPlace 0 (byte - 32) changed
+  else
+    ()
   changed
 
 repoIdentityControl : Repo -> Array Int -> DagCbor -> <IO> Int
@@ -317,9 +320,9 @@ runHostile did secret repo path presentRecord =
   let missingPrev = mustEncode (DcMap (removeField "prev" fields))
   let badVersion = mustEncode (DcMap (setField "version" (DcInt 2) fields))
   let badSig = mustEncode (DcMap (setField "sig" (DcBytes (arrayMake 64 0)) fields))
-  let tampered =
+  let tampered = 
     let bytes = arrayCopy signed
-    let () = A.set (arrayLength bytes - 1) (bitXor bytes[arrayLength bytes - 1] 1) bytes
+    let () = A.setInPlace (arrayLength bytes - 1) (bitXor bytes[arrayLength bytes - 1] 1) bytes
     bytes
   sum
     [

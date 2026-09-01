@@ -1,11 +1,12 @@
 # META
-source_lines=1699
+source_lines=1907
 stages=TYPES
 # SOURCE
 {- core.mdk — the foundation every other Medaka module rests on.
 
-   This file is automatically prepended to every program by the compiler
-   (see lib/prelude.ml), so everything declared here is in scope without
+   This file is automatically loaded as the implicit prelude by the native
+   compiler pipeline (stdlib/runtime.mdk + stdlib/core.mdk, read from
+   MEDAKA_ROOT at startup), so everything declared here is in scope without
    an `import`.  See STDLIB.md for the full plan and Module 1 checklist.
 
    Layout:
@@ -442,6 +443,33 @@ eqGo a b i n =
   else
     False
 
+{- | Lexicographic, exactly like `Ord (List a)` — `Array` is `List`'s
+   random-access peer, so `compare` on two arrays agrees element-for-element
+   with `compare` on their element lists, and a prefix sorts before its
+   extensions (sheet row A-5).  Lives here rather than in `array.mdk` for the
+   same reason `Eq (Array a)` does: `deriving (Ord)` over a field of array
+   type must build without an `import array`.
+
+   ⚠️ The body delegates to `Ord (List a)` rather than walking the arrays
+   directly on purpose.  A hand-written walk needs an `Ord a`-constrained
+   top-level helper, and calling one of those from an `impl Ord …` body IN
+   THIS MODULE panics at run time with `unbound identifier: $dict_max_0` (the
+   same shape compiles and runs correctly in any other module, and `Eq`- and
+   `Hashable`-constrained helpers are fine from here).  Filed in the sprint
+   report; delegation sidesteps it and makes the "agrees with `Ord (List a)`"
+   law true by construction. -}
+export impl Ord (Array a) requires Ord a where
+  compare a b =
+    compare (arrItems a 0 (arrayLength a)) (arrItems b 0 (arrayLength b))
+
+-- Unconstrained array-to-list walk, for `Ord (Array a)` above.
+arrItems : Array a -> Int -> Int -> List a
+arrItems arr i n =
+  if i >= n then
+    []
+  else
+    arrayGetUnsafe i arr :: arrItems arr (i + 1) n
+
 export impl Debug (Option a) requires Debug a where
   debug None = "None"
   debug (Some x) = "Some " ++ debug x
@@ -669,6 +697,20 @@ hashListItems acc (x::xs) = hashListItems (acc * 33 + hash x) xs
 export impl Hashable (List a) requires Hashable a where
   hash xs = hashListItems 0 xs
 
+{- | The same `acc * 33 + hash x` fold `Hashable (List a)` uses, so an array
+   and the list of the same elements hash EQUALLY — the peer relationship
+   sheet row A-5 ratifies.  Agrees with `Eq (Array a)` by construction: equal
+   arrays have equal elements in equal order, so they fold to the same seed. -}
+export impl Hashable (Array a) requires Hashable a where
+  hash arr = hashArrGo 0 arr 0 (arrayLength arr)
+
+hashArrGo : Hashable a => Int -> Array a -> Int -> Int -> Int
+hashArrGo acc arr i n =
+  if i >= n then
+    acc
+  else
+    hashArrGo (acc * 33 + hash (arrayGetUnsafe i arr)) arr (i + 1) n
+
 export impl Hashable (a, b) requires Hashable a, Hashable b where
   hash (a, b) = hash a * 33 + hash b
 
@@ -781,13 +823,18 @@ export impl Mappable (Result e) where
   map _ (Err x) = Err x
 
 {- | Replace every element of a wrapped value with a constant, keeping the
-   structure — Haskell's `$>`.  `replaceWith fa b == map (const b) fa`.
+   structure — Haskell's `<$`.  `mapConst b fa == map (const b) fa`.
 
-   > replaceWith (Some 5) 9
+   Value-first/data-last, like every other prelude combinator: the argument
+   the name is about comes first, and the container comes last so partial
+   application composes (#2306 E-2 renamed and reordered this from
+   `replaceWith : f a -> b -> f b`).
+
+   > mapConst 9 (Some 5)
    Some 9 -}
 export
-replaceWith : Mappable f => f a -> b -> f b
-replaceWith fa b = map (_ => b) fa
+mapConst : Mappable f => b -> f a -> f b
+mapConst b fa = map (_ => b) fa
 
 {- | `Mappable` plus the ability to lift a plain value and apply a wrapped
    function to a wrapped argument.  Laws (identity, homomorphism,
@@ -902,12 +949,18 @@ filterThen f (x::xs) = andThen
 {- | Run an effectful action for each element, in order, discarding the
    per-element results.  Haskell's `traverse_`/`for_` specialised to `List`.
 
-   > forEach [1, 2, 3] (x => Some ())
+   Fn-first/data-last, matching `find`/`count`/`any`/`all`/`filterThen`
+   (#2306 E-1 reordered this from `List a -> (a -> m Unit) -> m Unit`).  The
+   doctest below is also the PIN for that order: a reorder is silent wherever
+   both arguments still typecheck, but a lambda is not a `List`, so this line
+   fails to typecheck under the old signature.
+
+   > forEach (x => Some ()) [1, 2, 3]
    Some () -}
 export
-forEach : Thenable m => List a -> (a -> <e> m Unit) -> <e> m Unit
-forEach [] _ = pure ()
-forEach (x::xs) f = andThen (f x) (_ => forEach xs f)
+forEach : Thenable m => (a -> <e> m Unit) -> List a -> <e> m Unit
+forEach _ [] = pure ()
+forEach f (x::xs) = andThen (f x) (_ => forEach f xs)
 
 {- | Run each action in a list, in order, discarding the results.  Haskell's
    `sequence_` specialised to `List`.
@@ -1419,14 +1472,29 @@ isNone (Some _) = False
 
 {- | Unwrap with a default for `None`.
 
-   > fromOption 0 (Some 42)
+   > optionOr 0 (Some 42)
    42
-   > fromOption 0 None
+   > optionOr 0 None
    0 -}
 export
-fromOption : a -> Option a -> a
-fromOption _ (Some a) = a
-fromOption d None = d
+optionOr : a -> Option a -> a
+optionOr _ (Some a) = a
+optionOr d None = d
+
+{- | Eliminate an `Option` by supplying a default for `None` and a function
+   for `Some`.  Named for what it eliminates (Haskell calls it `maybe`).
+
+   Lived in a published one-entry `option` module until the
+   0.1.0 surface freeze moved it beside its own type (#2306 I-2).
+
+   > option 0 (x => x + 1) (Some 41)
+   42
+   > option 0 (x => x + 1) None
+   0 -}
+export
+option : b -> (a -> <e> b) -> Option a -> <e> b
+option _ f (Some x) = f x
+option dflt _ None = dflt
 
 -- | Turn an `Option` into a `Result`, supplying the error for `None`.
 export
@@ -1457,11 +1525,26 @@ isErr (Err _) = True
 isErr (Ok _) = False
 
 {- | Unwrap with a default for `Err`.  Named distinctly from
-   `fromOption` so the two don't collide when both are in scope. -}
+   `optionOr` so the two don't collide when both are in scope. -}
 export
-fromResultOr : a -> Result e a -> a
-fromResultOr _ (Ok a) = a
-fromResultOr d (Err _) = d
+resultOr : a -> Result e a -> a
+resultOr _ (Ok a) = a
+resultOr d (Err _) = d
+
+{- | Eliminate a `Result` by supplying a handler for `Err` and a handler for
+   `Ok`.  Named for what it eliminates (Haskell calls it `either`).
+
+   Lived in a published one-entry `result` module until the
+   0.1.0 surface freeze moved it beside its own type (#2306 I-2).
+
+   > result (e => 0) (x => x + 1) (Ok 41)
+   42
+   > result (e => e) (x => x + 1) (Err 7)
+   7 -}
+export
+result : (e -> <eff> c) -> (a -> <eff> c) -> Result e a -> <eff> c
+result _ onOk (Ok x) = onOk x
+result onErr _ (Err e) = onErr e
 
 {- | Apply a function to the `Err` side, leaving `Ok` alone.  The `Ok`
    analogue is just `map` from `Mappable (Result e)`. -}
@@ -1600,6 +1683,23 @@ arbitraryList gen maxLen = go (randomInt 0 maxLen) []
     go 0 acc = acc
     go n acc = go (n - 1) (gen () :: acc)
 
+{- The instance form of `arbitraryList` (sheet row H-7).  `arbitraryList` stays
+   as the explicit-generator escape hatch — a generator that is not the type's
+   `Arbitrary` instance, or a longer list, still needs it.  This impl is what
+   lets a HAND-WRITTEN generator call `arbitrary` at `List a` and compose.
+   ⚠️ It is NOT what makes `prop … (xs : List Int)` work: `medaka test`'s
+   runner generates from the declared TYPE, not from `Arbitrary` (see the
+   note above the laws below).  `maxLen` is 10, matching `arbitraryString`. -}
+export impl Arbitrary (List a) requires Arbitrary a where
+  arbitrary () = arbitraryList arbitrary 10
+
+{- | Half the draws are `None`.  `shrink` collapses a `Some` to `None`, which
+   is the only strictly smaller `Option` there is. -}
+export impl Arbitrary (Option a) requires Arbitrary a where
+  arbitrary () = if randomInt 0 1 == 0 then None else Some (arbitrary ())
+  shrink (Some _) = [None]
+  shrink None = []
+
 -- ─── 4b. Generic (structural representation / `deriving (Generic)`) ──────
 
 {- | A uniform, flat structural view of any value.  `deriving (Generic)`
@@ -1619,9 +1719,12 @@ public export data Rep =
   | RBool Bool
   | RChar Char
   | RUnit
+deriving (Eq, Debug)
 
 -- | A named field inside an `RRecord`.
-public export data RField = RField { fld_name : String, fld_rep : Rep }
+public export data RField =
+  | RField { fld_name : String, fld_rep : Rep }
+deriving (Eq, Debug)
 
 {- | Types with a structural representation.  `to_rep` is synthesised by
    `deriving (Generic)`.  `from_rep` is return-type polymorphic, which the
@@ -1672,11 +1775,24 @@ prop "length matches a counting fold" (xs : List Int) =
 prop "any/all duality" (xs : List Int) =
   any (x => x > 0) xs == not (all (x => x <= 0) xs)
 
-prop "fromOption d (Some x) == x" (x : Int) (d : Int) =
-  fromOption d (Some x) == x
+prop "optionOr d (Some x) == x" (x : Int) (d : Int) = optionOr d (Some x) == x
 
 prop "toResult/fromResult round-trip on Some" (x : Int) =
   eq (fromResult (toResult "missing" (Some x))) (Some x)
+
+-- The four props below came in with `option`/`result` from the one-entry
+-- modules that #2306 I-2 folded into core.
+prop "option dflt f (Some x) == f x" (x : Int) (d : Int) =
+  option d (n => n * 2) (Some x) == x * 2
+
+prop "option dflt f None == dflt" (d : Int) =
+  option d (n => n * 2) (None : Option Int) == d
+
+prop "result onErr onOk (Ok x) == onOk x" (x : Int) =
+  result (e => 0) (n => n * 2) (Ok x) == x * 2
+
+prop "result onErr onOk (Err e) == onErr e" (e : Int) =
+  result (n => n * 2) (n => 0) (Err e : Result Int Int) == e * 2
 
 prop "Ord (List a) is reflexive" (xs : List Int) = match compare xs xs
   Eq => True
@@ -1701,6 +1817,98 @@ prop "mapFirst on Result generalizes mapErr" (n : Int) = eq
 prop "foldThen with Some agrees with a pure fold" (xs : List Int) = eq
   (foldThen (acc x => Some (acc + x)) 0 xs)
   (Some (fold (acc x => acc + x) 0 xs))
+
+-- ─── Instance laws for the cells added by sheet rows H-7 and A-2 ─────────
+{- ⚠️ Two things constrain how these are written.
+
+   1. `medaka test`'s property runner does NOT dispatch on `Arbitrary` — it
+      generates from the declared TYPE (`prop_runner.mdk`'s `genForType`,
+      which handles `List`/`Array`/tuple/`Option`/`Result` structurally).  So
+      a `prop` PARAMETER cannot observe these instances; every law below calls
+      `arbitrary` / `shrink` explicitly instead.
+   2. Inside this module the `==` OPERATOR does not resolve to `Eq` for a
+      non-primitive (`Some n == Some n` fails to check here while
+      `eq (Some n) (Some n)` succeeds, and the same program compiles in any
+      other module).  Every existing prop in this file already uses `eq` for
+      that reason; these follow suit. -}
+
+-- Draw `n` independent values from an `Arbitrary` instance.
+drawN : Arbitrary a => Int -> <Rand> List a
+drawN n = if n <= 0 then [] else arbitrary () :: drawN (n - 1)
+
+-- `Arbitrary Int`'s declared range.
+inIntRange : Int -> Bool
+inIntRange x = x >= -1000 && x <= 1000
+
+optInRange : Option Int -> Bool
+optInRange None = True
+optInRange (Some x) = inIntRange x
+
+listInRange : List Int -> Bool
+listInRange xs = length xs <= 10 && all inIntRange xs
+
+-- LAW (H-7): `Arbitrary (List a)` must DELEGATE to the element instance (every
+-- element inside `Arbitrary Int`'s own range), must respect the documented
+-- length bound, and must not be the degenerate always-empty generator — that
+-- last clause is why 50 draws are taken rather than one.
+prop "Arbitrary (List a) delegates, bounds length, and is not degenerate" (n : Int) =
+  let draws = drawN 50 : List (List Int)
+  all listInRange draws && any (xs => length xs > 0) draws
+
+-- LAW (H-7): `Arbitrary (Option a)` must produce BOTH constructors — a
+-- generator that only ever yielded `None` would satisfy every payload law
+-- vacuously — and its `Some` payload must come from the element instance.
+prop "Arbitrary (Option a) draws both constructors and delegates" (n : Int) =
+  let draws = drawN 50 : List (Option Int)
+  all optInRange draws && any isSome draws && any (o => not (isSome o)) draws
+
+-- LAW (H-7): `shrink` must return strictly smaller values.  `None` is the only
+-- `Option` smaller than a `Some`, and nothing is smaller than `None`.
+prop "Arbitrary (Option a) shrinks Some to None and None no further" (x : Int) =
+  let none = None : Option Int
+  eq (shrink (Some x)) [none] && eq (shrink none) []
+
+-- LAW (A-2): derived `Eq`/`Debug` on `Rep`/`RField` are structural and must
+-- agree — the comparison has to reach through `RRecord`'s `List RField` into
+-- each field's nested `Rep`, which is the whole point of a generic
+-- representation being inspectable.
+prop "Eq/Debug on Rep reach through RRecord into a nested field" (n : Int) (nm : String) =
+  let a = RRecord "R" [RField { fld_name = nm, fld_rep = RInt n }]
+  let b = RRecord "R" [RField { fld_name = nm, fld_rep = RInt n }]
+  let c = RRecord "R" [RField { fld_name = nm, fld_rep = RInt (n + 1) }]
+  eq a b
+    && not (eq a c)
+    && eq (debug a) (debug b)
+    && not (eq (debug a) (debug c))
+
+prop "Eq Rep separates the primitive leaves" (n : Int) = eq (RInt n) (RInt n)
+  && not (eq (RInt n) RUnit)
+  && not (eq (RCon "A" []) (RCon "B" []))
+  && not (eq (RCon "A" [RInt n]) (RCon "A" []))
+
+-- LAW (A-5): `Ord (Array a)` is `Ord (List a)` transported along
+-- `toList`/`arrayFromList` — same lexicographic order, and consistent with
+-- `Eq (Array a)` (`compare` is `Eq` exactly when the arrays are equal).
+prop "Ord Array agrees with Ord List elementwise" (xs : List Int) (ys : List Int) =
+  let a = arrayFromList xs
+  let b = arrayFromList ys
+  eq (compare a b) (compare xs ys)
+
+prop "Ord Array is consistent with Eq Array" (xs : List Int) (ys : List Int) =
+  let a = arrayFromList xs
+  let b = arrayFromList ys
+  eq (eq (compare a b) Eq) (eq a b)
+
+prop "Ord Array: a proper prefix sorts before its extension" (xs : List Int) (y : Int) = eq (compare (arrayFromList xs) (arrayFromList (xs ++ [y]))) Lt
+
+-- LAW (A-5): `Hashable (Array a)` agrees with `Hashable (List a)` on the same
+-- elements (the peer relationship), and equal arrays hash equally (the
+-- `Hashable`/`Eq` law that makes it usable as a `HashMap` key).
+prop "Hashable Array agrees with Hashable List" (xs : List Int) =
+  eq (hash (arrayFromList xs)) (hash xs)
+
+prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
+  eq (hash (arrayFromList xs)) (hash (arrayFromList xs))
 # TYPES
 eq : a -> a -> Bool
 append : a -> a -> a
@@ -1765,6 +1973,7 @@ thenCmp : Ordering -> Ordering -> Ordering
 debugListItems : Debug a => List a -> String
 debugArrayItems : Debug a => Array a -> Int -> Int -> String
 eqGo : Eq a => Array a -> Array a -> Int -> Int -> Bool
+arrItems : Array a -> Int -> Int -> List a
 displayListItems : Display a => List a -> String
 displayArrayItems : Display a => Array a -> Int -> Int -> String
 derivedIsQuoteChar : Char -> Bool
@@ -1773,9 +1982,10 @@ derivedHasTopLevelSpace : Array Char -> Int -> Int -> Int -> Bool
 derivedArgNeedsParens : String -> Bool
 derivedShowWrap : String -> String
 hashListItems : Hashable a => Int -> List a -> Int
+hashArrGo : Hashable a => Int -> Array a -> Int -> Int -> Int
 println : Display a => a -> <IO> Unit
 print : Display a => a -> <IO> Unit
-replaceWith : Mappable a => a b -> c -> a c
+mapConst : Mappable b => a -> b c -> b a
 map2 : Applicative d => (a -> b -> c) -> d a -> d b -> d c
 map3 : Applicative e => (a -> b -> c -> d) -> e a -> e b -> e c -> e d
 flatMap : Thenable b => (a -> b c) -> b a -> b c
@@ -1786,7 +1996,7 @@ unless : Thenable a => Bool -> a Unit -> a Unit
 foldThen : Thenable c => (a -> b -> c a) -> a -> List b -> c a
 repeatThen : Thenable a => Int -> a b -> a (List b)
 filterThen : Thenable b => (a -> b Bool) -> List a -> b (List a)
-forEach : Thenable b => List a -> (a -> b Unit) -> b Unit
+forEach : Thenable b => (a -> b Unit) -> List a -> b Unit
 runEach : Thenable a => List (a b) -> a Unit
 guard : Alternative a => Bool -> a Unit
 sliceListGo : List a -> Int -> Int -> Int -> List a
@@ -1805,12 +2015,14 @@ or : Bool -> Bool -> Bool
 xor : Bool -> Bool -> Bool
 isSome : Option a -> Bool
 isNone : Option a -> Bool
-fromOption : a -> Option a -> a
+optionOr : a -> Option a -> a
+option : a -> (b -> a) -> Option b -> a
 toResult : a -> Option b -> Result a b
 fromResult : Result a b -> Option b
 isOk : Result a b -> Bool
 isErr : Result a b -> Bool
-fromResultOr : a -> Result b a -> a
+resultOr : a -> Result b a -> a
+result : (a -> b) -> (c -> b) -> Result a c -> b
 mapErr : (a -> b) -> Result a c -> Result b c
 fst : (a, b) -> a
 snd : (a, b) -> b
@@ -1825,3 +2037,7 @@ pipe : (a -> b) -> (b -> c) -> a -> c
 apply : (a -> b) -> a -> b
 arbitraryString : Unit -> <Rand> String
 arbitraryList : (Unit -> <Rand> a) -> Int -> <Rand> List a
+drawN : Arbitrary a => Int -> <Rand> List a
+inIntRange : Int -> Bool
+optInRange : Option Int -> Bool
+listInRange : List Int -> Bool

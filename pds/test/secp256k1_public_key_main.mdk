@@ -100,11 +100,11 @@ assertion label passed =
 main : <IO, Env> Unit
 main =
   let oddGenerator = arrayCopy generatorCompressed
-  let () = A.set 0 3 oddGenerator
+  let () = A.setInPlace 0 3 oddGenerator
   let xAtOrAboveP = arrayMake 33 255
-  let () = A.set 0 2 xAtOrAboveP
+  let () = A.setInPlace 0 2 xAtOrAboveP
   let nonsquareXZero = arrayMake 33 0
-  let () = A.set 0 2 nonsquareXZero
+  let () = A.setInPlace 0 2 nonsquareXZero
   let a1 = assertion "compressed-G-2G-3G" (roundTrip generatorCompressed && roundTrip twoGCompressed && roundTrip threeGCompressed)
   let a2 = assertion "derived-G-2G-3G" (derivedMatches 1 generatorCompressed && derivedMatches 2 twoGCompressed && derivedMatches 3 threeGCompressed)
   let a3 = assertion "derived-leading-zero-scalar" (derivedMatches 4 fourGCompressed)

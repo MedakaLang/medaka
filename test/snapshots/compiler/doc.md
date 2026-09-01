@@ -1,5 +1,5 @@
 # META
-source_lines=1078
+source_lines=1148
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/doc.mdk — the native `medaka doc` documentation extractor.
@@ -54,6 +54,7 @@ import frontend.ast.{
   useMemberLocal,
 }
 import types.typecheck.{Scheme(..), ppScheme}
+import frontend.resolve.{internalExterns}
 import support.util.{joinWith, reverseL, escStr, stringTrim, splitNl}
 import support.path.{baseOf, chopExt}
 import driver.diagnostics.{projectEntrySchemes}
@@ -688,7 +689,21 @@ renderMarkdown moduleName header entries =
   let titleBlock = "# " ++ moduleName ++ "\n\n"
   let headerProse = renderDocProse header
   let headerBlock = if headerProse == "" then "" else headerProse ++ "\n\n"
-  stringConcat (titleBlock :: headerBlock :: map renderEntry entries)
+  stringConcat
+    (titleBlock :: primitiveLayerBanner moduleName :: headerBlock :: map renderEntry entries)
+
+-- D-5 (#2306): the prelude-only page publishes 138 externs in a naming
+-- convention that RIVALS the library layer's — `stringToUpper` sits beside
+-- `string.toUpper`, `stringToFloat` beside `string.toFloat`.  The ruling KEEPS
+-- `<type><Op>` and ratifies it as the LAYER MARKER (renaming would collide
+-- head-on with the library names, which is why `stdlib/string.mdk` already
+-- omits `length`/`isEmpty`), so the page has to SAY it is the primitive layer
+-- rather than reading as a rival API of equal standing.  Rendered from the
+-- module name, so it reaches library mode and single-file `medaka doc` alike.
+primitiveLayerBanner : String -> String
+primitiveLayerBanner moduleName
+  | preludeOnlyModule moduleName = "> **This is the PRIMITIVE LAYER.** These names are host `extern`s: they\n> are in scope everywhere without an import, and they are deliberately\n> spelled `<type><Op>` (`stringToUpper`, `intToString`) to mark that.\n> Prefer the library name where one exists — `string.toUpper`,\n> `string.toFloat` — and reach for a name on this page only when no\n> library module covers it.\n\n"
+  | otherwise = ""
 
 renderEntry : DocEntry -> String
 renderEntry (DocEntry name sig doc _) =
@@ -737,6 +752,46 @@ mdName (ModuleDoc n _ _ _) = n
 -- extract entries + the module header, in one place so both modes see
 -- identical resolution behavior (S-doc-multimodule's per-module scheme fix
 -- included).
+-- D-6 (#2306): the reference must not publish a name the RESOLVER rejects.
+-- `resolve.internalExterns` is the guard list — a module that is neither part
+-- of the standard library nor built with `--allow-internal` gets
+-- `'<name>' is an internal-only primitive` for any of them — yet they were
+-- rendered on the `runtime` page with signature and doc comment, telling the
+-- reader to do something the compiler forbids.  The list is IMPORTED, not
+-- copied: one source of truth, so a name added to the guard disappears from
+-- the page in the same commit.  The filter applies only where the guard does
+-- (the prelude-only `runtime` page), so a fixture that legitimately shows an
+-- internal name on some other page is unaffected.
+-- D-7 (#2432): a SECOND, doc-only exclusion list — compiler/harness internals
+-- that a user program can already call (the resolver's `internalExterns`
+-- guard does not cover them), so they must NOT be added to that guard: doing
+-- so would reject ordinary programs (`__fallthrough__` backs every match
+-- guard) and red 6 fixtures for the other 9 names (measured in #2432). This
+-- list is doc-only — never imported by/into `resolve.mdk` — and only trims
+-- what the reference page renders.
+docOnlyExcluded : List String
+docOnlyExcluded = [
+  "__fallthrough__",
+  "stashRunStdout",
+  "enableRunStdoutFlush",
+  "assertSnapshot",
+  "indexError",
+  "indexErrorAt",
+  "sliceError",
+  "debugStringLit",
+  "debugCharLit",
+  "buildFingerprint",
+]
+
+dropInternalExterns : Bool -> List DocEntry -> List DocEntry
+dropInternalExterns False entries = entries
+dropInternalExterns True entries =
+  filter (e => not (isInternalExtern e)) entries
+
+isInternalExtern : DocEntry -> Bool
+isInternalExtern (DocEntry name _ _ _) = elem name internalExterns
+  || elem name docOnlyExcluded
+
 export
 computeModuleDoc : String -> String -> String -> String -> List String -> <IO> ModuleDoc
 computeModuleDoc runtimeSrc coreSrc src filename roots =
@@ -748,7 +803,8 @@ computeModuleDoc runtimeSrc coreSrc src filename roots =
   let moduleName = chopExt (baseOf filename)
   let tbl = buildCommentTbl comments
   let header = moduleHeaderFrom tbl
-  let entries = extractEntries (preludeOnlyModule moduleName) rawDecls positions schemes comments
+  let primitiveLayer = preludeOnlyModule moduleName
+  let entries = dropInternalExterns primitiveLayer (extractEntries primitiveLayer rawDecls positions schemes comments)
   ModuleDoc
     moduleName
     (dedupHeader header entries)
@@ -841,10 +897,13 @@ excludedLibraryModule moduleName = moduleName == "async"
 -- true.  Note it leaves the packet's own stated exception intact: `Int` has no
 -- `int` module in the set, so `impl Debug Int` still stays in `core`.
 --
--- Clause ordering matters and is not cosmetic: `Option`/`Result` ARE declared
--- (in `core.mdk`) while `option.mdk`/`result.mdk` also exist, so clause 1 keeps
--- their impls on `core` beside their `data` declaration rather than scattering
--- them to a module that merely operates on them.
+-- Clause ordering matters and is not cosmetic: a type that IS declared keeps
+-- its impls beside its `data` declaration rather than scattering them to a
+-- module that merely operates on it.  The original instance was `Option`/
+-- `Result`, declared in `core.mdk` while one-entry `option.mdk`/`result.mdk`
+-- also existed; #2306 I-2 deleted those two modules, so that pair no longer
+-- exercises the ordering.  The rule is unchanged and still load-bearing for
+-- any core-declared type an operating module merely mentions.
 export
 rebucketLibraryImpls : List ModuleDoc -> List ModuleDoc
 rebucketLibraryImpls mds =
@@ -1072,19 +1131,31 @@ listLenDoc (_::xs) = 1 + listLenDoc xs
 -- correct here — `doc` is a single CLI invocation, no cross-call reuse.
 -- `projectEntrySchemes` returns `None` only on a LOAD error (missing/cyclic
 -- import), never on a type error; a no-import file cannot hit a load error,
--- so falling back to `[]` on `None` changes nothing for the no-import case.
--- Unlike lsp.mdk's completion consumer, this call site only ever looks up
--- schemes BY NAME for names the caller already knows it declared
+-- so this arm is reached ONLY for the load-error case, never the no-import
+-- one. Unlike lsp.mdk's completion consumer, this call site only ever looks
+-- up schemes BY NAME for names the caller already knows it declared
 -- (extractEntries/renderSig, never a full-environment enumeration).
+-- #2422: falling back to `[]` here used to make a module with a broken
+-- import graph and an un-annotated export render a silent, signature-less
+-- page at exit 0 — indistinguishable from a module that simply has no
+-- annotatable exports. `[]` is still the right EXTRACTION-level value (there
+-- is nothing to look up), but the failure must stop being invisible, so this
+-- now also reports the load error and exits non-zero, mirroring every other
+-- load-error arm in this file's own callers (`runDocTargets`/
+-- `runDocLibraryTargets`, medaka_cli.mdk) rather than swallowing it here.
 docSchemesFor : String -> String -> String -> List String -> List Decl -> <IO> List (String, Scheme)
 docSchemesFor runtimeSrc coreSrc filename roots rawUser = match projectEntrySchemes (Ref []) (Ref []) (_ => None) filename roots runtimeSrc coreSrc
-  None => []
+  None =>
+    let _ = ePutStrLn "medaka doc: '\{filename}' has an unresolved import graph (missing or cyclic import) — signatures unavailable"
+    let _ = exit 1
+    []
   Some schemes => schemes
 # DESUGAR
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "commentLine" false) (mem "commentText" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositions" false) (mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Ty" true) (mem "Constraint" true) (mem "DataVis" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "IfaceMethod" true) (mem "Require" true) (mem "LetBind" true) (mem "UsePath" true) (mem "UseMember" false) (mem "useMemberOrigin" false) (mem "useMemberLocal" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "Scheme" true) (mem "ppScheme" false))))
+(DUse false (UseGroup ("frontend" "resolve") ((mem "internalExterns" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "stringTrim" false) (mem "splitNl" false))))
 (DUse false (UseGroup ("support" "path") ((mem "baseOf" false) (mem "chopExt" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "projectEntrySchemes" false))))
@@ -1268,7 +1339,9 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser = match projectEntrySche
 (DTypeSig false "collectHeaderLines" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "collectHeaderLines" ((PVar "tbl") (PVar "line")) (EMatch (EApp (EApp (EVar "lookupLineLast") (EVar "tbl")) (EVar "line")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "text")) () (EBinOp "::" (EVar "text") (EApp (EApp (EVar "collectHeaderLines") (EVar "tbl")) (EBinOp "+" (EVar "line") (ELit (LInt 1))))))))
 (DTypeSig false "renderMarkdown" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyCon "String")))))
-(DFunDef false "renderMarkdown" ((PVar "moduleName") (PVar "header") (PVar "entries")) (EBlock (DoLet false false (PVar "titleBlock") (EBinOp "++" (EBinOp "++" (ELit (LString "# ")) (EVar "moduleName")) (ELit (LString "\n\n")))) (DoLet false false (PVar "headerProse") (EApp (EVar "renderDocProse") (EVar "header"))) (DoLet false false (PVar "headerBlock") (EIf (EBinOp "==" (EVar "headerProse") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (EVar "headerProse") (ELit (LString "\n\n"))))) (DoExpr (EApp (EVar "stringConcat") (EBinOp "::" (EVar "titleBlock") (EBinOp "::" (EVar "headerBlock") (EApp (EApp (EVar "map") (EVar "renderEntry")) (EVar "entries"))))))))
+(DFunDef false "renderMarkdown" ((PVar "moduleName") (PVar "header") (PVar "entries")) (EBlock (DoLet false false (PVar "titleBlock") (EBinOp "++" (EBinOp "++" (ELit (LString "# ")) (EVar "moduleName")) (ELit (LString "\n\n")))) (DoLet false false (PVar "headerProse") (EApp (EVar "renderDocProse") (EVar "header"))) (DoLet false false (PVar "headerBlock") (EIf (EBinOp "==" (EVar "headerProse") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (EVar "headerProse") (ELit (LString "\n\n"))))) (DoExpr (EApp (EVar "stringConcat") (EBinOp "::" (EVar "titleBlock") (EBinOp "::" (EApp (EVar "primitiveLayerBanner") (EVar "moduleName")) (EBinOp "::" (EVar "headerBlock") (EApp (EApp (EVar "map") (EVar "renderEntry")) (EVar "entries")))))))))
+(DTypeSig false "primitiveLayerBanner" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "primitiveLayerBanner" ((PVar "moduleName")) (EIf (EApp (EVar "preludeOnlyModule") (EVar "moduleName")) (ELit (LString "> **This is the PRIMITIVE LAYER.** These names are host `extern`s: they\n> are in scope everywhere without an import, and they are deliberately\n> spelled `<type><Op>` (`stringToUpper`, `intToString`) to mark that.\n> Prefer the library name where one exists — `string.toUpper`,\n> `string.toFloat` — and reach for a name on this page only when no\n> library module covers it.\n\n")) (EIf (EVar "otherwise") (ELit (LString "")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "renderEntry" (TyFun (TyCon "DocEntry") (TyCon "String")))
 (DFunDef false "renderEntry" ((PCon "DocEntry" (PVar "name") (PVar "sig") (PVar "doc") PWild)) (EBlock (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (ELit (LString "## `")) (EVar "name")) (ELit (LString "`\n\n")))) (DoLet false false (PVar "sigBlock") (EBinOp "++" (EBinOp "++" (ELit (LString "```\n")) (EVar "sig")) (ELit (LString "\n```\n")))) (DoLet false false (PVar "rendered") (EApp (EVar "renderDocProse") (EVar "doc"))) (DoLet false false (PVar "docBlock") (EIf (EBinOp "==" (EVar "rendered") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (EBinOp "++" (ELit (LString "\n")) (EVar "rendered")) (ELit (LString "\n"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "header"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "sigBlock"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "docBlock"))) (ELit (LString "\n"))))))
 (DTypeSig true "runDoc" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "String"))))))))
@@ -1276,8 +1349,15 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser = match projectEntrySche
 (DData Abstract "ModuleDoc" () ((variant "ModuleDoc" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "DocEntry")) (TyApp (TyCon "List") (TyCon "String"))))) ())
 (DTypeSig true "mdName" (TyFun (TyCon "ModuleDoc") (TyCon "String")))
 (DFunDef false "mdName" ((PCon "ModuleDoc" (PVar "n") PWild PWild PWild)) (EVar "n"))
+(DTypeSig false "docOnlyExcluded" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "docOnlyExcluded" () (EListLit (ELit (LString "__fallthrough__")) (ELit (LString "stashRunStdout")) (ELit (LString "enableRunStdoutFlush")) (ELit (LString "assertSnapshot")) (ELit (LString "indexError")) (ELit (LString "indexErrorAt")) (ELit (LString "sliceError")) (ELit (LString "debugStringLit")) (ELit (LString "debugCharLit")) (ELit (LString "buildFingerprint"))))
+(DTypeSig false "dropInternalExterns" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyApp (TyCon "List") (TyCon "DocEntry")))))
+(DFunDef false "dropInternalExterns" ((PCon "False") (PVar "entries")) (EVar "entries"))
+(DFunDef false "dropInternalExterns" ((PCon "True") (PVar "entries")) (EApp (EApp (EVar "filter") (ELam ((PVar "e")) (EApp (EVar "not") (EApp (EVar "isInternalExtern") (EVar "e"))))) (EVar "entries")))
+(DTypeSig false "isInternalExtern" (TyFun (TyCon "DocEntry") (TyCon "Bool")))
+(DFunDef false "isInternalExtern" ((PCon "DocEntry" (PVar "name") PWild PWild PWild)) (EBinOp "||" (EApp (EApp (EVar "elem") (EVar "name")) (EVar "internalExterns")) (EApp (EApp (EVar "elem") (EVar "name")) (EVar "docOnlyExcluded"))))
 (DTypeSig true "computeModuleDoc" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "ModuleDoc"))))))))
-(DFunDef false "computeModuleDoc" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src") (PVar "filename") (PVar "roots")) (EBlock (DoLet false false (PVar "parsed") (EApp (EVar "parseWithPositions") (EVar "src"))) (DoLet false false (PVar "rawDecls") (EApp (EVar "fst") (EVar "parsed"))) (DoLet false false (PVar "positions") (EApp (EVar "positionsDecls") (EApp (EVar "snd") (EVar "parsed")))) (DoLet false false (PVar "comments") (EApp (EVar "collectComments") (EVar "src"))) (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EApp (EApp (EVar "docSchemesFor") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "filename")) (EVar "roots")) (EVar "rawDecls"))) (DoLet false false (PVar "moduleName") (EApp (EVar "chopExt") (EApp (EVar "baseOf") (EVar "filename")))) (DoLet false false (PVar "tbl") (EApp (EVar "buildCommentTbl") (EVar "comments"))) (DoLet false false (PVar "header") (EApp (EVar "moduleHeaderFrom") (EVar "tbl"))) (DoLet false false (PVar "entries") (EApp (EApp (EApp (EApp (EApp (EVar "extractEntries") (EApp (EVar "preludeOnlyModule") (EVar "moduleName"))) (EVar "rawDecls")) (EVar "positions")) (EVar "schemes")) (EVar "comments"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "ModuleDoc") (EVar "moduleName")) (EApp (EApp (EVar "dedupHeader") (EVar "header")) (EVar "entries"))) (EVar "entries")) (EApp (EVar "declaredTypeNames") (EVar "rawDecls"))))))
+(DFunDef false "computeModuleDoc" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src") (PVar "filename") (PVar "roots")) (EBlock (DoLet false false (PVar "parsed") (EApp (EVar "parseWithPositions") (EVar "src"))) (DoLet false false (PVar "rawDecls") (EApp (EVar "fst") (EVar "parsed"))) (DoLet false false (PVar "positions") (EApp (EVar "positionsDecls") (EApp (EVar "snd") (EVar "parsed")))) (DoLet false false (PVar "comments") (EApp (EVar "collectComments") (EVar "src"))) (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EApp (EApp (EVar "docSchemesFor") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "filename")) (EVar "roots")) (EVar "rawDecls"))) (DoLet false false (PVar "moduleName") (EApp (EVar "chopExt") (EApp (EVar "baseOf") (EVar "filename")))) (DoLet false false (PVar "tbl") (EApp (EVar "buildCommentTbl") (EVar "comments"))) (DoLet false false (PVar "header") (EApp (EVar "moduleHeaderFrom") (EVar "tbl"))) (DoLet false false (PVar "primitiveLayer") (EApp (EVar "preludeOnlyModule") (EVar "moduleName"))) (DoLet false false (PVar "entries") (EApp (EApp (EVar "dropInternalExterns") (EVar "primitiveLayer")) (EApp (EApp (EApp (EApp (EApp (EVar "extractEntries") (EVar "primitiveLayer")) (EVar "rawDecls")) (EVar "positions")) (EVar "schemes")) (EVar "comments")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "ModuleDoc") (EVar "moduleName")) (EApp (EApp (EVar "dedupHeader") (EVar "header")) (EVar "entries"))) (EVar "entries")) (EApp (EVar "declaredTypeNames") (EVar "rawDecls"))))))
 (DTypeSig false "dedupHeader" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyCon "String"))))
 (DFunDef false "dedupHeader" ((PVar "header") (PVar "entries")) (EIf (EBinOp "&&" (EBinOp "/=" (EVar "header") (ELit (LString ""))) (EBinOp "==" (EVar "header") (EApp (EVar "firstEntryDoc") (EVar "entries")))) (ELit (LString "")) (EVar "header")))
 (DTypeSig false "firstEntryDoc" (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyCon "String")))
@@ -1363,12 +1443,13 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser = match projectEntrySche
 (DFunDef false "listLenDoc" ((PList)) (ELit (LInt 0)))
 (DFunDef false "listLenDoc" ((PCons PWild (PVar "xs"))) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "listLenDoc") (EVar "xs"))))
 (DTypeSig false "docSchemesFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))))
-(DFunDef false "docSchemesFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "filename") (PVar "roots") (PVar "rawUser")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectEntrySchemes") (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (ELam (PWild) (EVar "None"))) (EVar "filename")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "schemes")) () (EVar "schemes"))))
+(DFunDef false "docSchemesFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "filename") (PVar "roots") (PVar "rawUser")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectEntrySchemes") (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (ELam (PWild) (EVar "None"))) (EVar "filename")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka doc: '")) (EApp (EVar "display") (EVar "filename"))) (ELit (LString "' has an unresolved import graph (missing or cyclic import) — signatures unavailable"))))) (DoLet false false PWild (EApp (EVar "exit") (ELit (LInt 1)))) (DoExpr (EListLit)))) (arm (PCon "Some" (PVar "schemes")) () (EVar "schemes"))))
 # MARK
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "commentLine" false) (mem "commentText" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositions" false) (mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Ty" true) (mem "Constraint" true) (mem "DataVis" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "IfaceMethod" true) (mem "Require" true) (mem "LetBind" true) (mem "UsePath" true) (mem "UseMember" false) (mem "useMemberOrigin" false) (mem "useMemberLocal" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "Scheme" true) (mem "ppScheme" false))))
+(DUse false (UseGroup ("frontend" "resolve") ((mem "internalExterns" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "stringTrim" false) (mem "splitNl" false))))
 (DUse false (UseGroup ("support" "path") ((mem "baseOf" false) (mem "chopExt" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "projectEntrySchemes" false))))
@@ -1552,7 +1633,9 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser = match projectEntrySche
 (DTypeSig false "collectHeaderLines" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "collectHeaderLines" ((PVar "tbl") (PVar "line")) (EMatch (EApp (EApp (EVar "lookupLineLast") (EVar "tbl")) (EVar "line")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "text")) () (EBinOp "::" (EVar "text") (EApp (EApp (EVar "collectHeaderLines") (EVar "tbl")) (EBinOp "+" (EVar "line") (ELit (LInt 1))))))))
 (DTypeSig false "renderMarkdown" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyCon "String")))))
-(DFunDef false "renderMarkdown" ((PVar "moduleName") (PVar "header") (PVar "entries")) (EBlock (DoLet false false (PVar "titleBlock") (EBinOp "++" (EBinOp "++" (ELit (LString "# ")) (EVar "moduleName")) (ELit (LString "\n\n")))) (DoLet false false (PVar "headerProse") (EApp (EVar "renderDocProse") (EVar "header"))) (DoLet false false (PVar "headerBlock") (EIf (EBinOp "==" (EVar "headerProse") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (EVar "headerProse") (ELit (LString "\n\n"))))) (DoExpr (EApp (EVar "stringConcat") (EBinOp "::" (EVar "titleBlock") (EBinOp "::" (EVar "headerBlock") (EApp (EApp (EMethodRef "map") (EVar "renderEntry")) (EVar "entries"))))))))
+(DFunDef false "renderMarkdown" ((PVar "moduleName") (PVar "header") (PVar "entries")) (EBlock (DoLet false false (PVar "titleBlock") (EBinOp "++" (EBinOp "++" (ELit (LString "# ")) (EVar "moduleName")) (ELit (LString "\n\n")))) (DoLet false false (PVar "headerProse") (EApp (EVar "renderDocProse") (EVar "header"))) (DoLet false false (PVar "headerBlock") (EIf (EBinOp "==" (EVar "headerProse") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (EVar "headerProse") (ELit (LString "\n\n"))))) (DoExpr (EApp (EVar "stringConcat") (EBinOp "::" (EVar "titleBlock") (EBinOp "::" (EApp (EVar "primitiveLayerBanner") (EVar "moduleName")) (EBinOp "::" (EVar "headerBlock") (EApp (EApp (EMethodRef "map") (EVar "renderEntry")) (EVar "entries")))))))))
+(DTypeSig false "primitiveLayerBanner" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "primitiveLayerBanner" ((PVar "moduleName")) (EIf (EApp (EVar "preludeOnlyModule") (EVar "moduleName")) (ELit (LString "> **This is the PRIMITIVE LAYER.** These names are host `extern`s: they\n> are in scope everywhere without an import, and they are deliberately\n> spelled `<type><Op>` (`stringToUpper`, `intToString`) to mark that.\n> Prefer the library name where one exists — `string.toUpper`,\n> `string.toFloat` — and reach for a name on this page only when no\n> library module covers it.\n\n")) (EIf (EVar "otherwise") (ELit (LString "")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "renderEntry" (TyFun (TyCon "DocEntry") (TyCon "String")))
 (DFunDef false "renderEntry" ((PCon "DocEntry" (PVar "name") (PVar "sig") (PVar "doc") PWild)) (EBlock (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (ELit (LString "## `")) (EVar "name")) (ELit (LString "`\n\n")))) (DoLet false false (PVar "sigBlock") (EBinOp "++" (EBinOp "++" (ELit (LString "```\n")) (EVar "sig")) (ELit (LString "\n```\n")))) (DoLet false false (PVar "rendered") (EApp (EVar "renderDocProse") (EVar "doc"))) (DoLet false false (PVar "docBlock") (EIf (EBinOp "==" (EVar "rendered") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (EBinOp "++" (ELit (LString "\n")) (EVar "rendered")) (ELit (LString "\n"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "header"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "sigBlock"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "docBlock"))) (ELit (LString "\n"))))))
 (DTypeSig true "runDoc" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "String"))))))))
@@ -1560,8 +1643,15 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser = match projectEntrySche
 (DData Abstract "ModuleDoc" () ((variant "ModuleDoc" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "DocEntry")) (TyApp (TyCon "List") (TyCon "String"))))) ())
 (DTypeSig true "mdName" (TyFun (TyCon "ModuleDoc") (TyCon "String")))
 (DFunDef false "mdName" ((PCon "ModuleDoc" (PVar "n") PWild PWild PWild)) (EVar "n"))
+(DTypeSig false "docOnlyExcluded" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "docOnlyExcluded" () (EListLit (ELit (LString "__fallthrough__")) (ELit (LString "stashRunStdout")) (ELit (LString "enableRunStdoutFlush")) (ELit (LString "assertSnapshot")) (ELit (LString "indexError")) (ELit (LString "indexErrorAt")) (ELit (LString "sliceError")) (ELit (LString "debugStringLit")) (ELit (LString "debugCharLit")) (ELit (LString "buildFingerprint"))))
+(DTypeSig false "dropInternalExterns" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyApp (TyCon "List") (TyCon "DocEntry")))))
+(DFunDef false "dropInternalExterns" ((PCon "False") (PVar "entries")) (EVar "entries"))
+(DFunDef false "dropInternalExterns" ((PCon "True") (PVar "entries")) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "e")) (EApp (EVar "not") (EApp (EVar "isInternalExtern") (EVar "e"))))) (EVar "entries")))
+(DTypeSig false "isInternalExtern" (TyFun (TyCon "DocEntry") (TyCon "Bool")))
+(DFunDef false "isInternalExtern" ((PCon "DocEntry" (PVar "name") PWild PWild PWild)) (EBinOp "||" (EApp (EApp (EDictApp "elem") (EVar "name")) (EVar "internalExterns")) (EApp (EApp (EDictApp "elem") (EVar "name")) (EVar "docOnlyExcluded"))))
 (DTypeSig true "computeModuleDoc" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "ModuleDoc"))))))))
-(DFunDef false "computeModuleDoc" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src") (PVar "filename") (PVar "roots")) (EBlock (DoLet false false (PVar "parsed") (EApp (EVar "parseWithPositions") (EVar "src"))) (DoLet false false (PVar "rawDecls") (EApp (EVar "fst") (EVar "parsed"))) (DoLet false false (PVar "positions") (EApp (EVar "positionsDecls") (EApp (EVar "snd") (EVar "parsed")))) (DoLet false false (PVar "comments") (EApp (EVar "collectComments") (EVar "src"))) (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EApp (EApp (EVar "docSchemesFor") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "filename")) (EVar "roots")) (EVar "rawDecls"))) (DoLet false false (PVar "moduleName") (EApp (EVar "chopExt") (EApp (EVar "baseOf") (EVar "filename")))) (DoLet false false (PVar "tbl") (EApp (EVar "buildCommentTbl") (EVar "comments"))) (DoLet false false (PVar "header") (EApp (EVar "moduleHeaderFrom") (EVar "tbl"))) (DoLet false false (PVar "entries") (EApp (EApp (EApp (EApp (EApp (EVar "extractEntries") (EApp (EVar "preludeOnlyModule") (EVar "moduleName"))) (EVar "rawDecls")) (EVar "positions")) (EVar "schemes")) (EVar "comments"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "ModuleDoc") (EVar "moduleName")) (EApp (EApp (EVar "dedupHeader") (EVar "header")) (EVar "entries"))) (EVar "entries")) (EApp (EVar "declaredTypeNames") (EVar "rawDecls"))))))
+(DFunDef false "computeModuleDoc" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src") (PVar "filename") (PVar "roots")) (EBlock (DoLet false false (PVar "parsed") (EApp (EVar "parseWithPositions") (EVar "src"))) (DoLet false false (PVar "rawDecls") (EApp (EVar "fst") (EVar "parsed"))) (DoLet false false (PVar "positions") (EApp (EVar "positionsDecls") (EApp (EVar "snd") (EVar "parsed")))) (DoLet false false (PVar "comments") (EApp (EVar "collectComments") (EVar "src"))) (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EApp (EApp (EVar "docSchemesFor") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "filename")) (EVar "roots")) (EVar "rawDecls"))) (DoLet false false (PVar "moduleName") (EApp (EVar "chopExt") (EApp (EVar "baseOf") (EVar "filename")))) (DoLet false false (PVar "tbl") (EApp (EVar "buildCommentTbl") (EVar "comments"))) (DoLet false false (PVar "header") (EApp (EVar "moduleHeaderFrom") (EVar "tbl"))) (DoLet false false (PVar "primitiveLayer") (EApp (EVar "preludeOnlyModule") (EVar "moduleName"))) (DoLet false false (PVar "entries") (EApp (EApp (EVar "dropInternalExterns") (EVar "primitiveLayer")) (EApp (EApp (EApp (EApp (EApp (EVar "extractEntries") (EVar "primitiveLayer")) (EVar "rawDecls")) (EVar "positions")) (EVar "schemes")) (EVar "comments")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "ModuleDoc") (EVar "moduleName")) (EApp (EApp (EVar "dedupHeader") (EVar "header")) (EVar "entries"))) (EVar "entries")) (EApp (EVar "declaredTypeNames") (EVar "rawDecls"))))))
 (DTypeSig false "dedupHeader" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyCon "String"))))
 (DFunDef false "dedupHeader" ((PVar "header") (PVar "entries")) (EIf (EBinOp "&&" (EBinOp "/=" (EVar "header") (ELit (LString ""))) (EBinOp "==" (EVar "header") (EApp (EVar "firstEntryDoc") (EVar "entries")))) (ELit (LString "")) (EVar "header")))
 (DTypeSig false "firstEntryDoc" (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyCon "String")))
@@ -1647,4 +1737,4 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser = match projectEntrySche
 (DFunDef false "listLenDoc" ((PList)) (ELit (LInt 0)))
 (DFunDef false "listLenDoc" ((PCons PWild (PVar "xs"))) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "listLenDoc") (EVar "xs"))))
 (DTypeSig false "docSchemesFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))))
-(DFunDef false "docSchemesFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "filename") (PVar "roots") (PVar "rawUser")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectEntrySchemes") (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (ELam (PWild) (EVar "None"))) (EVar "filename")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "schemes")) () (EVar "schemes"))))
+(DFunDef false "docSchemesFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "filename") (PVar "roots") (PVar "rawUser")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectEntrySchemes") (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (ELam (PWild) (EVar "None"))) (EVar "filename")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka doc: '")) (EApp (EMethodRef "display") (EVar "filename"))) (ELit (LString "' has an unresolved import graph (missing or cyclic import) — signatures unavailable"))))) (DoLet false false PWild (EApp (EVar "exit") (ELit (LInt 1)))) (DoExpr (EListLit)))) (arm (PCon "Some" (PVar "schemes")) () (EVar "schemes"))))

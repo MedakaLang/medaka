@@ -3968,7 +3968,7 @@ stampTyHead _ t = (t, False)
 -- An UNKNOWN type name keeps `OriginUnresolved` — there is no module to attribute
 -- it to, and `checkType` has already reported it as `UnknownType`.
 originOfTyName : OrdMap TyConOrigin -> String -> TyConOrigin
-originOfTyName scope n = fromOption OriginUnresolved (omLookup n scope)
+originOfTyName scope n = optionOr OriginUnresolved (omLookup n scope)
 
 stampHeadWith : Ty -> TyConOrigin -> (Ty, Bool)
 stampHeadWith t OriginUnresolved = (t, False)
@@ -4263,7 +4263,7 @@ mapIfaceOccDeclLocal _ d = d
 -- `stdlib/core.mdk` — and the arm exists so that stays a stated fact.
 fillIfaceOccOrigin : OrdMap TyConOrigin -> String -> String -> TyConOrigin -> TyConOrigin
 fillIfaceOccOrigin scope _ n OriginUnresolved =
-  fromOption OriginUnresolved (omLookup (ifaceKey n) scope)
+  optionOr OriginUnresolved (omLookup (ifaceKey n) scope)
 fillIfaceOccOrigin _ _ _ OriginBuiltin = OriginBuiltin
 fillIfaceOccOrigin _ _ _ (o@(OriginModule _)) = o
 

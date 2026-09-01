@@ -27,6 +27,7 @@ import string.{contains}
      time, seconds since the Unix epoch). -}
 public export data FileStat =
   | FileStat { size : Int, isDir : Bool, isFile : Bool, mtime : Float }
+deriving (Eq, Debug)
 
 {- | `stat path` — like `statFile`, but wraps the raw tuple in a `FileStat`.
      `Err` (strerror) if the path cannot be stat'd (e.g. does not exist). -}
@@ -98,3 +99,38 @@ isFile p = map (st => st.isFile) (stat p)
 export
 fileSize : String -> <FileRead "_"> Result String Int
 fileSize p = map (st => st.size) (stat p)
+
+-- ── Instance laws ────────────────────────────────────────────────────────────
+-- `FileStat` is a plain record of four immutable fields, so derived `Eq` is
+-- field-wise structural equality.  The externs above do not run under the
+-- interpreter, so the laws are stated over hand-built records rather than over
+-- a real `stat` call.
+
+-- LAW (A-1): derived `Eq FileStat` is reflexive and discriminates on EVERY
+-- field — a derived instance that silently ignored a field would still be
+-- reflexive, so both halves are needed.
+prop "Eq FileStat is reflexive and field-discriminating" (n : Int) (b : Bool) =
+  let base = FileStat {
+    size = n,
+    isDir = b,
+    isFile = not b,
+    mtime = intToFloat n,
+  }
+  base == base
+    && base == FileStat { base | size = n + 1 } == False
+    && base == FileStat { base | isDir = not b } == False
+    && base == FileStat { base | isFile = b } == False
+    && base == FileStat { base | mtime = intToFloat n + 1.0 } == False
+
+-- LAW (A-1): derived `Debug FileStat` renders every field, so two records that
+-- differ anywhere render differently (and equal records render identically).
+prop "Debug FileStat separates records that Eq separates" (n : Int) (b : Bool) =
+  let x = FileStat { size = n, isDir = b, isFile = not b, mtime = intToFloat n }
+  let y = FileStat { x | size = n + 1 }
+  debug x == debug FileStat {
+      size = n,
+      isDir = b,
+      isFile = not b,
+      mtime = intToFloat n,
+    }
+    && debug x == debug y == False

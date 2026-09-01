@@ -841,7 +841,7 @@ floatIsFinite f = f * 0.0 == 0.0
 -- at the source with a located error rather than let it reach codegen.
 floatTokEnd : Array Char -> Int -> Int -> Int -> Int -> Int -> List RawTok
 floatTokEnd src len pos endp depth id =
-  let f = fromOption 0.0 (stringToFloat (substrNoUs src pos endp))
+  let f = optionOr 0.0 (stringToFloat (substrNoUs src pos endp))
   if floatIsFinite f then
     RTok (TFloat f) pos endp :: scan src len endp depth id
   else
@@ -876,7 +876,7 @@ commonEscDecode e
   | e == 'n' = Some "\n"
   | e == 't' = Some "\t"
   | e == 'r' = Some "\r"
-  | e == '0' = Some (charToStr (fromOption ' ' (charFromCode 0)))
+  | e == '0' = Some (charToStr (optionOr ' ' (charFromCode 0)))
   | isBackslash e = Some "\\"
   | isQuote e = Some "\""
   | otherwise = None
@@ -913,7 +913,7 @@ scanInterpEsc src len p depth acc e
   | isQuote e = scanInterpCont src len (p + 2) depth (acc ++ "\"")
   | isBackslash e = scanInterpCont src len (p + 2) depth (acc ++ "\\")
   | e == 'r' = scanInterpCont src len (p + 2) depth (acc ++ "\r")
-  | e == '0' = scanInterpCont src len (p + 2) depth (acc ++ charToStr (fromOption ' ' (charFromCode 0)))
+  | e == '0' = scanInterpCont src len (p + 2) depth (acc ++ charToStr (optionOr ' ' (charFromCode 0)))
   | isUnicodeEsc src len p e = match uniEscChar src len p
     None => lexErrorTok p (uniEscErr src len p)
     Some c =>
@@ -976,7 +976,7 @@ scanTripleEsc src len p startQ depth id leadingNl acc e
     scanTriple src len (p + 2) startQ depth id leadingNl (acc ++ "\\")
   | e == 'r' =
     scanTriple src len (p + 2) startQ depth id leadingNl (acc ++ "\r")
-  | e == '0' = scanTriple src len (p + 2) startQ depth id leadingNl (acc ++ charToStr (fromOption ' ' (charFromCode 0)))
+  | e == '0' = scanTriple src len (p + 2) startQ depth id leadingNl (acc ++ charToStr (optionOr ' ' (charFromCode 0)))
   | isUnicodeEsc src len p e = match uniEscChar src len p
     None => lexErrorTok p (uniEscErr src len p)
     Some c => scanTriple src len (uniEscEnd src len p) startQ depth id leadingNl (acc ++ charToStr c)
@@ -1017,7 +1017,7 @@ scanInterpTripleEsc src len p depth acc e
   | isQuote e = scanInterpTripleCont src len (p + 2) depth (acc ++ "\"")
   | isBackslash e = scanInterpTripleCont src len (p + 2) depth (acc ++ "\\")
   | e == 'r' = scanInterpTripleCont src len (p + 2) depth (acc ++ "\r")
-  | e == '0' = scanInterpTripleCont src len (p + 2) depth (acc ++ charToStr (fromOption ' ' (charFromCode 0)))
+  | e == '0' = scanInterpTripleCont src len (p + 2) depth (acc ++ charToStr (optionOr ' ' (charFromCode 0)))
   | isUnicodeEsc src len p e = match uniEscChar src len p
     None => lexErrorTok p (uniEscErr src len p)
     Some c => scanInterpTripleCont src len (uniEscEnd src len p) depth (acc ++ charToStr c)
@@ -1125,12 +1125,12 @@ joinNlStr xs = joinWith "\n" xs
 -- Medaka source — onto only the TRIPLE-flavored open; this pass keys off
 -- that marker and strips it back off before the token goes anywhere else.
 tripleInterpMark : String
-tripleInterpMark = charToStr (fromOption ' ' (charFromCode 1))
+tripleInterpMark = charToStr (optionOr ' ' (charFromCode 1))
 
 hasTripleInterpMark : String -> Bool
 hasTripleInterpMark s =
   let cs = stringToChars s
-  arrayLength cs > 0 && at cs 0 == fromOption ' ' (charFromCode 1)
+  arrayLength cs > 0 && at cs 0 == optionOr ' ' (charFromCode 1)
 
 dropTripleInterpMark : String -> String
 dropTripleInterpMark s =
@@ -1316,7 +1316,7 @@ charClose src len p
 -- ── `\u{HEX}` codepoint guard (#567) ─────────────────────────────────────────
 -- `charFromCode` (`runtime/medaka_rt.c`) ALREADY bounds [0, 0x10FFFF], already
 -- excludes the UTF-16 surrogate block, and already returns `None`. The #567 defect
--- was never a missing check — it was DISCARDING that `None` with `fromOption ' '`,
+-- was never a missing check — it was DISCARDING that `None` with `optionOr ' '`,
 -- which turned a correct rejection into a SPACE (exit 0, no diagnostic).
 --
 -- Honouring the `None` is necessary but NOT sufficient. `parseRadix` accumulates in

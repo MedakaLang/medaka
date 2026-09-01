@@ -83,7 +83,7 @@ import ir.core_ir.{
   CImplBody(..),
 }
 import support.util.{filterList, startsWith}
-import hash_map.{HashMap, new, set, has, findWithDefault}
+import hash_map.{HashMap, new, setInPlace, has, findWithDefault}
 
 -- ── entry point ────────────────────────────────────────────────────────────
 -- Filter a lowered `CProgram` to the bindings and impl entries reachable from
@@ -126,8 +126,8 @@ reachKeys groups impls =
 definedKeys : List CBind -> List CImplEntry -> HashMap String Unit
 definedKeys groups impls =
   let s = new ()
-  let _ = forEachU (b => set (bindKey b) () s) groups
-  let _ = forEachU (e => set (implKey e) () s) impls
+  let _ = forEachU (b => setInPlace (bindKey b) () s) groups
+  let _ = forEachU (e => setInPlace (implKey e) () s) impls
   s
 
 -- mirrors dce.canonRef / wasm_emit.canonFn: a post-mangle-synthesized bare prelude
@@ -169,7 +169,7 @@ addImplEdges defined g (CImplEntry method _ body) =
 
 addEdges : HashMap String Unit -> HashMap String (List String) -> String -> List String -> Unit
 addEdges defined g key refs =
-  set key (map (canonKey defined) refs ++ findWithDefault [] key g) g
+  setInPlace key (map (canonKey defined) refs ++ findWithDefault [] key g) g
 
 -- BFS worklist closure; `has` skips already-processed keys so each is expanded once.
 closure : HashMap String (List String) -> HashMap String Unit -> List String -> Unit
@@ -177,7 +177,7 @@ closure _ _ [] = ()
 closure graph seen (w::work)
   | has w seen = closure graph seen work
   | otherwise =
-    let _ = set w () seen
+    let _ = setInPlace w () seen
     closure graph seen (findWithDefault [] w graph ++ work)
 
 -- ── structural reference collection ────────────────────────────────────────

@@ -177,10 +177,10 @@ pop : MutArray a -> Option a
 Remove and return the last element, or `None` when empty.  Keeps capacity
 (no shrink).
 
-## `set`
+## `setInPlace`
 
 ```
-set : Int -> a -> MutArray a -> Unit
+setInPlace : Int -> a -> MutArray a -> Unit
 ```
 
 Overwrite the element at an index.  Panics when out of the live range
@@ -219,6 +219,78 @@ mapInPlace : (a -> a) -> MutArray a -> Unit
 ```
 
 Apply `f` to every live element in place.
+
+## `insertAt`
+
+```
+insertAt : Int -> a -> MutArray a -> Unit
+```
+
+Insert `x` so that it lands at index `i`, shifting the rest right.
+`i <= 0` prepends; `i >= length` appends.  Grows the backing store when
+full, like `push`.
+
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> let ma = fromList [1, 2, 3] in let _ = insertAt 1 9 ma in toList ma
+[1, 9, 2, 3]
+> let ma = fromList [1, 2] in let _ = insertAt 7 9 ma in toList ma
+[1, 2, 9]
+```
+
+## `removeAt`
+
+```
+removeAt : Int -> MutArray a -> Unit
+```
+
+Drop the element at index `i`.  Out of range leaves the vector unchanged.
+
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> let ma = fromList [1, 2, 3] in let _ = removeAt 1 ma in toList ma
+[1, 3]
+> let ma = fromList [1, 2] in let _ = removeAt 7 ma in toList ma
+[1, 2]
+```
+
+## `sortBy`
+
+```
+sortBy : (a -> a -> Ordering) -> MutArray a -> Unit
+```
+
+Sort the live range in place with the supplied comparison.  Stable --
+equal elements keep their original relative order -- because `list.sortBy`,
+which does the work, is.
+
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> let ma = fromList [3, 1, 4, 1, 5] in let _ = sortBy compare ma in toList ma
+[1, 1, 3, 4, 5]
+```
+
+## `sort`
+
+```
+sort : MutArray a -> Unit
+```
+
+Sort the live range in place by the `Ord` instance.
+
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> let ma = fromList [3, 1, 2] in let _ = sort ma in toList ma
+[1, 2, 3]
+```
 
 ## `Foldable MutArray`
 
@@ -268,6 +340,25 @@ Rendered as `fromList [a, …]` over the live range.
 
 ```medaka
 > debug (fromList [1, 2, 3]) == "fromList [1, 2, 3]"
+True
+```
+
+## `Display (MutArray a)`
+
+```
+impl Display (MutArray a) requires Display a
+```
+
+Same `fromList [...]` shape as `Debug`, over the live range, with the
+elements rendered by THEIR `Display` (so strings lose their quotes).
+`MutArray` was the one container in the surface that `println` could not
+take (sheet row A-4).
+
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> display (fromList [1, 2, 3]) == "fromList [1, 2, 3]"
 True
 ```
 
