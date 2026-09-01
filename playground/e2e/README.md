@@ -67,7 +67,10 @@ E2E_EXPECT_GUIDE=1 node playground/e2e/tests/playground.spec.mjs https://medaka-
 
 **This harness does not gate a PR.** It is nightly-only
 (`.github/workflows/nightly.yml`, `playground-e2e`; `test/preflight.sh` keeps
-`playground/e2e/run.sh` in `LOCAL_SKIP`). The PR-gating check for the guide is
+`playground/e2e/run.sh` in `LOCAL_SKIP`). That job assembles the deployable tree
+(`bash playground/build_site.sh`) and then runs `SITE=1 bash
+playground/e2e/run.sh`, so the guide-route checks above run MANDATORY nightly —
+they are not skipped there. The PR-gating check for the guide is
 `test/diff_compiler_guide_render.sh`, which is static — it never opens a
 browser and never compiles an example.
 

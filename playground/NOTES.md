@@ -144,8 +144,13 @@ shipped a broken site. `SITE=1 bash playground/e2e/run.sh` now serves
 falling back. Both modes drive the SAME `playground/server.js` via its new
 `SERVE_ROOT` env var, so there is only one MIME map and one cache policy.
 
-Still nightly-only (`.github/workflows/nightly.yml`); the PR-gating guide check
-remains the static `test/diff_compiler_guide_render.sh`.
+`.github/workflows/nightly.yml`'s `playground-e2e` job now assembles
+`playground/site/` (`bash playground/build_site.sh`) and runs the harness as
+`SITE=1 bash playground/e2e/run.sh`, so the guide-route assertions genuinely
+execute nightly rather than taking their skip branch. Still nightly-only: no PR
+job runs this harness (`test/preflight.sh` keeps `playground/e2e/run.sh` in
+`LOCAL_SKIP`), and the PR-gating guide check remains the static
+`test/diff_compiler_guide_render.sh`.
 
 ⚠️ `GET /guide/` is a **404**: `build_site.sh` emits one page per chapter and no
 directory index, and `playground/index.html` links to
