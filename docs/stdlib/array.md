@@ -76,14 +76,6 @@ makeWith : Int -> (Int -> a) -> Array a
 0
 ```
 
-## `replicate`
-
-```
-replicate : Int -> a -> Array a
-```
-
-Alias for `make`, included for symmetry with `List.replicate`.
-
 ## `fromList`
 
 ```

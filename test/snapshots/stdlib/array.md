@@ -1,5 +1,5 @@
 # META
-source_lines=661
+source_lines=656
 stages=DESUGAR,MARK
 # SOURCE
 {- array.mdk — operations on Array a
@@ -81,11 +81,6 @@ makeWithRevBuild : (Int -> <e> a) -> Int -> Int -> List a -> <e> List a
 makeWithRevBuild f i n acc
   | i >= n = acc
   | otherwise = makeWithRevBuild f (i + 1) n (f i :: acc)
-
--- | Alias for `make`, included for symmetry with `List.replicate`.
-export
-replicate : Int -> a -> Array a
-replicate n x = arrayMake n x
 
 -- | Build an array from a list, preserving order.
 export
@@ -673,8 +668,6 @@ prop "mapWithIndex agrees with zipWith over range" (xs : List Int) =
 (DFunDef false "makeWith" ((PVar "n") (PVar "f")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EArrayLit) (EApp (EVar "arrayFromList") (EApp (EApp (EVar "revList") (EApp (EApp (EApp (EApp (EVar "makeWithRevBuild") (EVar "f")) (ELit (LInt 0))) (EVar "n")) (EListLit))) (EListLit)))))
 (DTypeSig false "makeWithRevBuild" (TyFun (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyVar "a"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyVar "a"))))))))
 (DFunDef false "makeWithRevBuild" ((PVar "f") (PVar "i") (PVar "n") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "makeWithRevBuild") (EVar "f")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EBinOp "::" (EApp (EVar "f") (EVar "i")) (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "replicate" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyApp (TyCon "Array") (TyVar "a")))))
-(DFunDef false "replicate" ((PVar "n") (PVar "x")) (EApp (EApp (EVar "arrayMake") (EVar "n")) (EVar "x")))
 (DTypeSig true "fromList" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Array") (TyVar "a"))))
 (DFunDef false "fromList" ((PVar "xs")) (EApp (EVar "arrayFromList") (EVar "xs")))
 (DTypeSig true "range" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Array") (TyCon "Int")))))
@@ -794,8 +787,6 @@ prop "mapWithIndex agrees with zipWith over range" (xs : List Int) =
 (DFunDef false "makeWith" ((PVar "n") (PVar "f")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EArrayLit) (EApp (EVar "arrayFromList") (EApp (EApp (EVar "revList") (EApp (EApp (EApp (EApp (EVar "makeWithRevBuild") (EVar "f")) (ELit (LInt 0))) (EVar "n")) (EListLit))) (EListLit)))))
 (DTypeSig false "makeWithRevBuild" (TyFun (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyVar "a"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyVar "a"))))))))
 (DFunDef false "makeWithRevBuild" ((PVar "f") (PVar "i") (PVar "n") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "makeWithRevBuild") (EVar "f")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EBinOp "::" (EApp (EVar "f") (EVar "i")) (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "replicate" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyApp (TyCon "Array") (TyVar "a")))))
-(DFunDef false "replicate" ((PVar "n") (PVar "x")) (EApp (EApp (EVar "arrayMake") (EVar "n")) (EVar "x")))
 (DTypeSig true "fromList" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Array") (TyVar "a"))))
 (DFunDef false "fromList" ((PVar "xs")) (EApp (EVar "arrayFromList") (EVar "xs")))
 (DTypeSig true "range" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Array") (TyCon "Int")))))

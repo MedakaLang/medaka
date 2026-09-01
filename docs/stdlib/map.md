@@ -394,10 +394,10 @@ All keys, ascending.
 [1, 2, 3]
 ```
 
-## `elems`
+## `values`
 
 ```
-elems : Map a b -> List b
+values : Map a b -> List b
 ```
 
 All values, ordered by their keys.
@@ -406,7 +406,7 @@ All values, ordered by their keys.
 *(doctest — run by `medaka test`)*
 
 ```medaka
-> elems (fromList [(2, 20), (1, 10), (3, 30)])
+> values (fromList [(2, 20), (1, 10), (3, 30)])
 [10, 20, 30]
 ```
 
@@ -423,7 +423,7 @@ passed alongside the value.
 *(doctest — run by `medaka test`)*
 
 ```medaka
-> elems (mapWithKey (k v => k + v) (fromList [(1, 10), (2, 20)]))
+> values (mapWithKey (k v => k + v) (fromList [(1, 10), (2, 20)]))
 [11, 22]
 ```
 
@@ -539,7 +539,7 @@ Map over the values, keys and structure preserved.
 *(doctest — run by `medaka test`)*
 
 ```medaka
-> elems (map (n => n * 10) (fromList [(1, 1), (2, 2)]))
+> values (map (n => n * 10) (fromList [(1, 1), (2, 2)]))
 [10, 20]
 ```
 

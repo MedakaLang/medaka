@@ -378,16 +378,16 @@ keys m = foldrWithKey (k _ acc => k::acc) [] m
 
 {- | All values, ordered by their keys.
 
-   > elems (fromList [(2, 20), (1, 10), (3, 30)])
+   > values (fromList [(2, 20), (1, 10), (3, 30)])
    [10, 20, 30] -}
 export
-elems : Map k v -> List v
-elems m = foldrWithKey (k v acc => v::acc) [] m
+values : Map k v -> List v
+values m = foldrWithKey (k v acc => v::acc) [] m
 
 {- | Map a function over the values, keeping keys and structure.  The key is
    passed alongside the value.
 
-   > elems (mapWithKey (k v => k + v) (fromList [(1, 10), (2, 20)]))
+   > values (mapWithKey (k v => k + v) (fromList [(1, 10), (2, 20)]))
    [11, 22] -}
 export
 mapWithKey : (k -> v -> <e> w) -> Map k v -> <e> Map k w
@@ -559,7 +559,7 @@ intersection a b = intersectionWith (x _ => x) a b
 
 {- | Map over the values, keys and structure preserved.
 
-   > elems (map (n => n * 10) (fromList [(1, 1), (2, 2)]))
+   > values (map (n => n * 10) (fromList [(1, 1), (2, 2)]))
    [10, 20] -}
 export impl Mappable (Map k) where
   map f Tip = Tip

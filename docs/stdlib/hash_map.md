@@ -163,27 +163,13 @@ deleteInPlace : a -> HashMap a b -> Unit
 
 Remove a key, in place. A no-op when absent.
 
-## `entries`
-
-```
-entries : HashMap a b -> List (a, b)
-```
-
-All key/value pairs, in unspecified (hash) order.
-
-Named `entries`, not `toList`: `toList` is a `Foldable` method (returning
-*elements*), and `HashMap` isn't `Foldable` — within this file the local
-`toList` would be shadowed by the method and mistyped (`List v` vs the
-pairs `List (k, v)`). `toList` below is a thin exported alias, never used
-internally.
-
 ## `toList`
 
 ```
 toList : HashMap a b -> List (a, b)
 ```
 
-Conventional alias for `entries` (all key/value pairs).
+All key/value pairs, in unspecified (hash) order.
 
 ## `keys`
 

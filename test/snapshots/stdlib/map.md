@@ -382,16 +382,16 @@ keys m = foldrWithKey (k _ acc => k::acc) [] m
 
 {- | All values, ordered by their keys.
 
-   > elems (fromList [(2, 20), (1, 10), (3, 30)])
+   > values (fromList [(2, 20), (1, 10), (3, 30)])
    [10, 20, 30] -}
 export
-elems : Map k v -> List v
-elems m = foldrWithKey (k v acc => v::acc) [] m
+values : Map k v -> List v
+values m = foldrWithKey (k v acc => v::acc) [] m
 
 {- | Map a function over the values, keeping keys and structure.  The key is
    passed alongside the value.
 
-   > elems (mapWithKey (k v => k + v) (fromList [(1, 10), (2, 20)]))
+   > values (mapWithKey (k v => k + v) (fromList [(1, 10), (2, 20)]))
    [11, 22] -}
 export
 mapWithKey : (k -> v -> <e> w) -> Map k v -> <e> Map k w
@@ -563,7 +563,7 @@ intersection a b = intersectionWith (x _ => x) a b
 
 {- | Map over the values, keys and structure preserved.
 
-   > elems (map (n => n * 10) (fromList [(1, 1), (2, 2)]))
+   > values (map (n => n * 10) (fromList [(1, 1), (2, 2)]))
    [10, 20] -}
 export impl Mappable (Map k) where
   map f Tip = Tip
@@ -906,8 +906,8 @@ prop "link2 rejoins a split without its key" (k : Int) (xs : List (Int, Int)) =
 (DFunDef false "toList" ((PVar "m")) (EApp (EApp (EApp (EVar "foldrWithKey") (ELam ((PVar "k") (PVar "v") (PVar "acc")) (EBinOp "::" (ETuple (EVar "k") (EVar "v")) (EVar "acc")))) (EListLit)) (EVar "m")))
 (DTypeSig true "keys" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "List") (TyVar "k"))))
 (DFunDef false "keys" ((PVar "m")) (EApp (EApp (EApp (EVar "foldrWithKey") (ELam ((PVar "k") PWild (PVar "acc")) (EBinOp "::" (EVar "k") (EVar "acc")))) (EListLit)) (EVar "m")))
-(DTypeSig true "elems" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "List") (TyVar "v"))))
-(DFunDef false "elems" ((PVar "m")) (EApp (EApp (EApp (EVar "foldrWithKey") (ELam ((PVar "k") (PVar "v") (PVar "acc")) (EBinOp "::" (EVar "v") (EVar "acc")))) (EListLit)) (EVar "m")))
+(DTypeSig true "values" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "List") (TyVar "v"))))
+(DFunDef false "values" ((PVar "m")) (EApp (EApp (EApp (EVar "foldrWithKey") (ELam ((PVar "k") (PVar "v") (PVar "acc")) (EBinOp "::" (EVar "v") (EVar "acc")))) (EListLit)) (EVar "m")))
 (DTypeSig true "mapWithKey" (TyFun (TyFun (TyVar "k") (TyFun (TyVar "v") (TyEffect () (Some "e") (TyVar "w")))) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "w"))))))
 (DFunDef false "mapWithKey" ((PVar "f") (PCon "Tip")) (EVar "Tip"))
 (DFunDef false "mapWithKey" ((PVar "f") (PCon "Bin" (PVar "s") (PVar "k") (PVar "v") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EVar "s")) (EVar "k")) (EApp (EApp (EVar "f") (EVar "k")) (EVar "v"))) (EApp (EApp (EVar "mapWithKey") (EVar "f")) (EVar "l"))) (EApp (EApp (EVar "mapWithKey") (EVar "f")) (EVar "r"))))
@@ -1099,8 +1099,8 @@ prop "link2 rejoins a split without its key" (k : Int) (xs : List (Int, Int)) =
 (DFunDef false "toList#shadow" ((PVar "m")) (EApp (EApp (EApp (EVar "foldrWithKey") (ELam ((PVar "k") (PVar "v") (PVar "acc")) (EBinOp "::" (ETuple (EVar "k") (EVar "v")) (EVar "acc")))) (EListLit)) (EVar "m")))
 (DTypeSig true "keys" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "List") (TyVar "k"))))
 (DFunDef false "keys" ((PVar "m")) (EApp (EApp (EApp (EVar "foldrWithKey") (ELam ((PVar "k") PWild (PVar "acc")) (EBinOp "::" (EVar "k") (EVar "acc")))) (EListLit)) (EVar "m")))
-(DTypeSig true "elems" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "List") (TyVar "v"))))
-(DFunDef false "elems" ((PVar "m")) (EApp (EApp (EApp (EVar "foldrWithKey") (ELam ((PVar "k") (PVar "v") (PVar "acc")) (EBinOp "::" (EVar "v") (EVar "acc")))) (EListLit)) (EVar "m")))
+(DTypeSig true "values" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "List") (TyVar "v"))))
+(DFunDef false "values" ((PVar "m")) (EApp (EApp (EApp (EVar "foldrWithKey") (ELam ((PVar "k") (PVar "v") (PVar "acc")) (EBinOp "::" (EVar "v") (EVar "acc")))) (EListLit)) (EVar "m")))
 (DTypeSig true "mapWithKey" (TyFun (TyFun (TyVar "k") (TyFun (TyVar "v") (TyEffect () (Some "e") (TyVar "w")))) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "w"))))))
 (DFunDef false "mapWithKey" ((PVar "f") (PCon "Tip")) (EVar "Tip"))
 (DFunDef false "mapWithKey" ((PVar "f") (PCon "Bin" (PVar "s") (PVar "k") (PVar "v") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EVar "s")) (EVar "k")) (EApp (EApp (EVar "f") (EVar "k")) (EVar "v"))) (EApp (EApp (EVar "mapWithKey") (EVar "f")) (EVar "l"))) (EApp (EApp (EVar "mapWithKey") (EVar "f")) (EVar "r"))))

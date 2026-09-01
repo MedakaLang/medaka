@@ -78,11 +78,6 @@ makeWithRevBuild f i n acc
   | i >= n = acc
   | otherwise = makeWithRevBuild f (i + 1) n (f i :: acc)
 
--- | Alias for `make`, included for symmetry with `List.replicate`.
-export
-replicate : Int -> a -> Array a
-replicate n x = arrayMake n x
-
 -- | Build an array from a list, preserving order.
 export
 fromList : List a -> Array a

@@ -227,14 +227,6 @@ Ok [2, 2]
 Err "unexpected byte at byte 0"
 ```
 
-## `many1`
-
-```
-many1 : ByteParser a -> ByteParser (List a)
-```
-
-Alias for `some`.
-
 ## `sepBy1`
 
 ```

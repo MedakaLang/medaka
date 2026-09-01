@@ -33,12 +33,11 @@
 - [`lastValue`](args.md#lastvalue)
 - [`flagValues`](args.md#flagvalues)
 
-## `array` (45 entries)
+## `array` (44 entries)
 
 - [`singleton`](array.md#singleton)
 - [`make`](array.md#make)
 - [`makeWith`](array.md#makewith)
-- [`replicate`](array.md#replicate)
 - [`fromList`](array.md#fromlist)
 - [`range`](array.md#range)
 - [`copy`](array.md#copy)
@@ -128,7 +127,7 @@
 - [`emitLeUint`](bytebuilder.md#emitleuint)
 - [`buildArray`](bytebuilder.md#buildarray)
 
-## `byteparser` (33 entries)
+## `byteparser` (32 entries)
 
 - [`BResult`](byteparser.md#bresult)
 - [`ByteParser`](byteparser.md#byteparser)
@@ -147,7 +146,6 @@
 - [`peek`](byteparser.md#peek)
 - [`many`](byteparser.md#many)
 - [`some`](byteparser.md#some)
-- [`many1`](byteparser.md#many1)
 - [`sepBy1`](byteparser.md#sepby1)
 - [`sepBy`](byteparser.md#sepby)
 - [`optional`](byteparser.md#optional)
@@ -348,7 +346,7 @@
 - [`isFile`](fs.md#isfile)
 - [`fileSize`](fs.md#filesize)
 
-## `hash_map` (18 entries)
+## `hash_map` (17 entries)
 
 - [`HashMap`](hash_map.md#hashmap)
 - [`new`](hash_map.md#new)
@@ -360,7 +358,6 @@
 - [`setInPlace`](hash_map.md#setinplace)
 - [`fromList`](hash_map.md#fromlist)
 - [`deleteInPlace`](hash_map.md#deleteinplace)
-- [`entries`](hash_map.md#entries)
 - [`toList`](hash_map.md#tolist)
 - [`keys`](hash_map.md#keys)
 - [`values`](hash_map.md#values)
@@ -540,7 +537,7 @@
 - [`foldlWithKey`](map.md#foldlwithkey)
 - [`toList`](map.md#tolist)
 - [`keys`](map.md#keys)
-- [`elems`](map.md#elems)
+- [`values`](map.md#values)
 - [`mapWithKey`](map.md#mapwithkey)
 - [`filterWithKey`](map.md#filterwithkey)
 - [`union`](map.md#union)
