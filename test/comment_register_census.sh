@@ -1,7 +1,8 @@
 #!/bin/sh
 # test/comment_register_census.sh — derived comment-register census. Not a
 # gate: this is a reporting tool, run via `make comment-census`. It asserts
-# nothing and always exits 0.
+# nothing; exits 0 on a healthy run, and refuses (exit 1) only if the file
+# corpus comes back empty — see below.
 #
 # WHY THIS EXISTS (#2281, leg 3 P of crusade #2276): source comments in this
 # tree drift into several registers that read fine the day they're written
@@ -41,8 +42,9 @@
 # Portable POSIX sh (grep -E, no bash-only features).
 #
 # Usage:  sh test/comment_register_census.sh
-# Output: per-file breakdown, then a per-class summary table. Always exits 0
-#         — this is a report, not a pass/fail check.
+# Output: per-file breakdown, then a per-class summary table. Exits 0 on a
+#         healthy run; refuses (exit 1) only if the file corpus comes back
+#         empty, which would otherwise misreport as a clean zero.
 
 set -u
 
@@ -63,16 +65,18 @@ fi
 # '#' — acceptable at census precision, see header).
 #
 #  1 history narration — excludes the instrumental "used to" sense
-#     ("is/are/was/be/been used to"); ~20% of naive "used to" hits are that
-#     false-positive shape per #2281's adversarial review.
+#     ("is/are/was/be/been used to") — a real false-positive shape naive
+#     "used to" matching hits; see #2281's adversarial review for measured
+#     rates, not asserted here.
 re_history='Until 2026-|formerly|The old |withdrawn|used to'
 re_history_exclude='(is|are|was|be|been) used to'
 #  2 reviewer-addressed ruling vocabulary — MEASURED is provenance this repo
 #     wants, tracked as its own separate metric below, never folded in here.
 re_ruling='refuted|ratified|withdrawn|"ruling"'
 #  3 tombstones — "was HERE and is RETIRED", "do not re-add", and the
-#     sibling relocation form (the naive regex undercounts by >2x without it
-#     per #2281's adversarial review).
+#     sibling relocation form (the naive regex undercounts meaningfully
+#     without it; see #2281's adversarial review for measured rates, not
+#     asserted here).
 re_tombstone='was HERE and is RETIRED|do not re-add|now lives in|moved to|now comes from'
 #  4 emoji shouts.
 re_emoji='🚨|⚠️|🔒'
@@ -135,9 +139,10 @@ echo "comment_register_census: $n_files tracked .mdk files under compiler/ and s
 echo
 echo "NOTE: these are line CLASSIFICATIONS, not disjoint defect counts — a"
 echo "single line can match more than one class (draft/emoji/ruling prose"
-echo "frequently overlaps; #2281's adversarial review found 68% of emoji"
-echo "lines also match another class). Per-class sums do NOT add up to the"
-echo "distinct-line total below; both are reported."
+echo "frequently overlaps; classes overlapping is expected — see #2281 for"
+echo "measured percentages, which are about WHERE emoji lines sit (inside"
+echo "essay files), not about class-overlap). Per-class sums do NOT add up"
+echo "to the distinct-line total below; both are reported."
 echo
 echo "-- per-file breakdown (files with at least one hit) --"
 if [ -n "$per_file_report" ]; then

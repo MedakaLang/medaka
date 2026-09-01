@@ -26,8 +26,9 @@
 # with no flags) does NOT build or invoke ./medaka — those rows are SKIPPED
 # with a reason. Pass SLOP_CENSUS_FULL=1 to also run them (this will invoke
 # the already-built ./medaka at $ROOT/medaka; it does not build it for you —
-# run `make medaka` first, or `make slop-census SLOP_CENSUS_FULL=1` which
-# depends on the medaka target).
+# the `slop-census` Make target has NO `medaka` prerequisite, by design, to
+# stay cheap and side-effect-free by default, so you must build it yourself
+# first: run `make medaka`, then `make slop-census SLOP_CENSUS_FULL=1`).
 #
 # Needs no built ./medaka by default. Portable POSIX sh.
 #
@@ -75,6 +76,7 @@ n_total=0
 n_present=0
 n_missing=0
 n_ran=0
+n_failed=0
 n_skipped=0
 
 IFS='
@@ -118,14 +120,30 @@ for row in $registry; do
     continue
   fi
 
-  n_ran=$((n_ran + 1))
-  printf '[RAN]      %s\n' "$name"
+  # Capture the member's own exit status without a trailing pipe eating it
+  # (POSIX sh has no PIPESTATUS) — run into a temp file, check $? directly,
+  # then sed the file separately.
+  out_file="$(mktemp "${TMPDIR:-/tmp}/slop_census.XXXXXX")"
+  if ( cd "$ROOT" && eval "$cmd" ) >"$out_file" 2>&1; then
+    member_status=0
+  else
+    member_status=$?
+  fi
+
+  if [ "$member_status" -eq 0 ]; then
+    n_ran=$((n_ran + 1))
+    printf '[RAN]      %s\n' "$name"
+  else
+    n_failed=$((n_failed + 1))
+    printf '[FAIL]     %s  (exit %s)\n' "$name" "$member_status"
+  fi
   echo '  --------------------------------------------------------------'
-  ( cd "$ROOT" && eval "$cmd" ) | sed 's/^/  /'
+  sed 's/^/  /' "$out_file"
+  rm -f "$out_file"
   echo
 done
 
 echo
-echo "slop_census: $n_total registry rows — $n_present present ($n_ran ran, $n_skipped skipped), $n_missing MISSING"
+echo "slop_census: $n_total registry rows — $n_present present ($n_ran ran, $n_failed failed, $n_skipped skipped), $n_missing MISSING"
 
 exit 0

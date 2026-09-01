@@ -1,7 +1,8 @@
 #!/bin/sh
 # test/arch_census.sh — derived architecture census. Not a gate: this is a
 # reporting tool, run via `make arch-census`. It asserts nothing, encodes no
-# threshold, and always exits 0.
+# threshold; exits 0 on a healthy run, and refuses (exit 1) only if the file
+# corpus comes back empty — see below.
 #
 # WHY THIS EXISTS (#2289, leg 4 P of crusade #2276): tracked prose in this
 # repo repeatedly hand-typed `.mdk` line counts as LIVE facts — e.g.
@@ -31,7 +32,9 @@
 #
 # Usage:  sh test/arch_census.sh
 # Output: largest-files table (top 20), then per-directory file/line
-#         totals. Always exits 0 — this is a report, not a pass/fail check.
+#         totals. Exits 0 on a healthy run; refuses (exit 1) only if the
+#         file corpus comes back empty, which would otherwise misreport as
+#         a clean zero.
 # Reproducibility: deterministic given the same tracked tree — two runs
 # against the same commit and worktree state produce byte-identical output.
 
@@ -42,11 +45,13 @@ cd "$ROOT" || exit 1
 
 IFS='
 '
-files="$(git -C "$ROOT" ls-files -- 'compiler/*.mdk' 'stdlib/*.mdk' | grep -v '^compiler/entries/\|/test/')"
-# (compiler/entries/ is not test/, so the grep above is belt-and-braces for
-# any future test/ nesting under compiler/ or stdlib/ — the primary
-# exclusion is the literal '^test/' prefix, which 'compiler/*.mdk'
-# 'stdlib/*.mdk' globs never produce in the first place.)
+files="$(git -C "$ROOT" ls-files -- 'compiler/*.mdk' 'stdlib/*.mdk' | grep -v '^test/')"
+# ('compiler/*.mdk' 'stdlib/*.mdk' never produce anything under 'test/', so
+# this exclusion is a no-op today — it's kept only to match
+# fmt_clean_census.sh's pattern verbatim, for any future test/ nesting under
+# compiler/ or stdlib/. compiler/entries/*.mdk is INCLUDED — the
+# `architecture` skill names entries/ as a directory this census should
+# show, and comment_register_census.sh's corpus already includes it.)
 
 if [ -z "$files" ]; then
   echo "arch_census: matched ZERO .mdk files under compiler/ or stdlib/ — harness bug, refusing to report" >&2
