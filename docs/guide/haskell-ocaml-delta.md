@@ -1,33 +1,32 @@
 # Medaka for Haskell and OCaml Readers
 
-This is a delta sheet, not a second tutorial. It names the places where
-Haskell or OCaml instincts are most likely to mislead you; the rest of the
-[main guide](00-introduction.md) remains the default route. A Python-first
-(tier-1) route is deliberately deferred until real reader evidence shows what
-it needs—it is not an unfinished guide hidden elsewhere.
+This is a delta sheet, not a second tutorial. It lists the places where Haskell or
+OCaml habits will mislead you in Medaka. For everything else, the
+[main guide](00-introduction.md) applies.
 
 ## The delta
 
-| Topic | Medaka today | Current authority |
+| Topic | In Medaka | Reference |
 |---|---|---|
-| Interfaces and impls | A typeclass is an `interface`; instances are ordinary `impl`s. `requires` on an interface declares a superclass, while `requires` on an impl declares the impl's context. Overlap is allowed only when selection has a unique most-specific match; Medaka chooses that match automatically and rejects ambiguity. | [Syntax forms](../spec/SYNTAX.md#interfaces--implementations); [selection semantics](../spec/DICT-SEMANTICS.md#3-entailment-constructing-evidence) |
-| Interface vocabulary | Medaka names these interfaces `Mappable`, `Applicative`, `Thenable`, `Filterable`, and `Traversable`; the methods are `map`, `pure`, and `andThen` (`>>=` with its arguments swapped). There is no `Functor` or `Monad` in the stdlib, and no `IO` instance of any of them. | [Interfaces and implementations](../spec/SYNTAX.md#interfaces--implementations) |
-| Removed dispatch syntax | Named impls, `default impl`, and `@Name` use-site hints are gone. Write a plain `impl`; there is no name or hint to select manually. | [Interfaces and implementations](../spec/SYNTAX.md#interfaces--implementations) |
-| Default methods | A default method body lives in the `interface`, but its signature must mention the interface parameter so dispatch has the required type connection. | [Interfaces and implementations](../spec/SYNTAX.md#interfaces--implementations) |
-| Effect rows | Effects decorate the result arrow: `String -> <IO> String`. Higher-order functions can accept an effectful function such as `a -> <e> b`, and `<IO \| e>` is an open row with tail `e`. | [Type annotations and signatures](../spec/SYNTAX.md#type-annotations--signatures) |
-| IO and `do` | Sequence ordinary IO in a bare indented block. `do` is sugar for `Thenable`'s `andThen`/`pure`, not an IO wrapper; it is required when using `<-`, which is forbidden in a bare block. | [`do` notation](../spec/SYNTAX.md#do-notation-do-keyword-required) |
-| Mutation | Bindings stay immutable. Mutable state lives in `Ref a`: construct with `Ref value`, write with `:=`, and read with prefix `!`. Here `!` is dereference, not Boolean negation (`not`). | [Refs](../spec/SYNTAX.md#refs) |
-| Records | There is no record declaration keyword. A record is a single-constructor `data` declaration with named fields, for example `data Person = { name : String }`. | [Records](../spec/SYNTAX.md#records) |
-| Local recursion | `let rec` binds exactly one recursive binding. There is no OCaml-style `with` group for mutually recursive local definitions. | [`let` and mutation](../spec/SYNTAX.md#let--mutation) |
-| Layout | Blocks use indentation and lexer-produced `INDENT`/`DEDENT`/`NEWLINE`, not explicit braces. Deeper indentation can instead continue an expression according to Medaka's continuation rules, so do not infer layout solely from visual nesting. | [Layout notes](../spec/SYNTAX.md#layout-notes); [formal layout semantics](../spec/LAYOUT-SEMANTICS.md) |
-| `deriving` placement | Keep `deriving (...)` inline after a one-line `data` declaration. It may occupy its own indented line only when the declaration itself is multi-line. | [Data types](../spec/SYNTAX.md#data-types) |
-| Reserved words | Do not paste a keyword list or count into notes or tooling. Derive the lexer keywords and the parser's reserved-identifier subset with the commands in the syntax specification. | [Reserved words and derivation commands](../spec/SYNTAX.md#reserved-words--keywords) |
+| Typeclasses | A typeclass is an `interface`; an instance is an `impl`. `requires` on an interface declares a superclass. `requires` on an impl declares the impl's context. | [Interfaces](../spec/SYNTAX.md#interfaces--implementations) |
+| Overlapping instances | Allowed. When several impls apply, the unique most-specific one is chosen automatically. Genuine ambiguity is an error. There are no named instances, no `OVERLAPPING` pragmas, and no use-site hints. | [Selection semantics](../spec/DICT-SEMANTICS.md#3-entailment-constructing-evidence) |
+| Functor / Monad | The interfaces are `Mappable`, `Applicative`, `Thenable`, `Filterable`, and `Traversable`. The methods are `map`, `pure`, and `andThen` (`>>=` with the arguments swapped). There is no `Functor` or `Monad`, and no `IO` instance of anything. | [Interfaces](../spec/SYNTAX.md#interfaces--implementations) |
+| Default methods | A default body lives in the interface, and its signature must mention the interface parameter so dispatch has something to key on. | [Interfaces](../spec/SYNTAX.md#interfaces--implementations) |
+| Effects | Effects go on the result arrow: `String -> <IO> String`. A higher-order function can take an effectful argument, `a -> <e> b`, and `<IO \| e>` is an open row. | [Signatures](../spec/SYNTAX.md#type-annotations--signatures) |
+| IO and `do` | IO is a plain indented block of statements. `do` is sugar for `Thenable`'s `andThen` and `pure`, and `<-` is legal only inside it. | [`do` notation](../spec/SYNTAX.md#do-notation-do-keyword-required) |
+| Mutation | Bindings are immutable. Mutable state is a `Ref a`: build with `Ref value`, write with `:=`, read with prefix `!`. `!` is dereference, not negation; negation is `not`. | [Refs](../spec/SYNTAX.md#refs) |
+| Records | No record keyword. A record is a single-constructor `data` with named fields: `data Person = { name : String }`. Field names are scoped to their type. | [Records](../spec/SYNTAX.md#records) |
+| Local recursion | `let rec` binds one recursive definition. There is no `and` for mutually recursive local definitions; top-level definitions are mutually recursive without a keyword. | [`let`](../spec/SYNTAX.md#let--mutation) |
+| Strings | `String` is not a list of characters. `string.toChars` converts when you need one. | [Working with Data](06-working-with-data.md#strings) |
+| Layout | Indentation-based, as in Haskell, but a deeper-indented line can continue an expression rather than open a block, depending on the tokens at the boundary. | [Layout notes](../spec/SYNTAX.md#layout-notes) |
+| `deriving` placement | Inline after a one-line `data` declaration. On its own line only when the declaration spans several lines. | [Data types](../spec/SYNTAX.md#data-types) |
+| Lambdas | `x y => body`, with no backslash. Multi-parameter lambdas are not curried one arrow at a time. `(x, y) => …` takes a tuple. | [Lambdas](../spec/SYNTAX.md#lambdas) |
+| Backtick infix | Removed. Write `f x y`. | [Removed](../spec/SYNTAX.md#removed--do-not-use) |
 
 ## One checked example
 
-The generic impl is applicable to every type, but the `Int` impl is the unique
-most-specific match. The same bare block then mutates and reads a `Ref` before
-performing IO:
+The general impl applies to every type, but the `Int` impl is the unique most-specific
+match, so it wins. The same block then writes and reads a `Ref` before printing:
 
 ```medaka
 interface GuideKind a where
@@ -46,21 +45,18 @@ main =
   println !count
 ```
 
-Its output is:
-
 ```medaka-expect
 specific
 2
 ```
 
-## Fast migration checks
+## Quick checks when something feels wrong
 
-- If Haskell intuition says “put IO in `do`,” ask whether you are actually
-  binding a `Thenable` value with `<-`. Plain effectful statements belong in a
-  bare block.
-- If OCaml intuition says `let rec ... and ...`, split the design: Medaka's
-  local recursive form owns one binding and has no grouping keyword.
-- If instance selection seems to need a name, remove the name or hint. The
-  accepted program must have one most-specific matching impl instead.
-- If an identifier produces a surprising layout error, derive the current
-  reserved spellings from the lexer/parser commands before diagnosing layout.
+- If your instinct says "put the IO in `do`", ask whether you are binding a
+  `Thenable` value with `<-`. If not, it belongs in a plain block.
+- If your instinct says `let rec … and …`, split it into separate definitions, or
+  move them to the top level.
+- If instance selection seems to need a name or a pragma, remove it. Write the more
+  specific `impl` and let selection pick it.
+- If a name you can see is reported as unbound, check indentation before anything
+  else.

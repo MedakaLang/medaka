@@ -1,14 +1,13 @@
 # Interfaces
 
-An `interface` declares a set of operations; an `impl` says how a particular type
-performs them. Together they give you behavior that varies by type without
-inheritance, without runtime dispatch tables you maintain by hand, and without
-losing type inference. If you have met Haskell's typeclasses or Rust's traits, this
-is that idea; if you haven't, think of it as "a named capability a type can have".
+An `interface` names a set of operations. An `impl` says how one particular type
+performs them. Between them, they let you write code that works for any type that
+supports the operations you need, and the compiler picks the right implementation
+for each call. If you know Haskell's typeclasses or Rust's traits, this is the same
+idea. If not, think of an interface as a named capability that a type can have.
 
-[Chapter 4](04-data-modeling.md)'s `deriving (Eq, Debug)` was already this
-machinery — it wrote the implementations for you. This chapter is about writing them
-yourself.
+The `deriving (Eq, Debug)` in chapter 4 was this machinery with the implementation
+written for you. This chapter is about writing it yourself.
 
 ## Declaring an interface
 
@@ -28,12 +27,13 @@ main = println (price (Ticket 12.5))
 12.5
 ```
 
-`a` is the interface's parameter — the type being described. Every method signature
-must mention it, because that is what dispatch keys on: given a call to `price`, the
-compiler looks at the argument's type and selects the matching `impl`.
+`a` is the interface's parameter, the type being described. Every method's
+signature has to mention it, because the argument's type is what the compiler uses
+to choose an `impl`. Given a call `price (Ticket 12.5)`, the compiler sees a
+`Ticket` and selects `impl Priced Ticket`.
 
-An `impl` body is an ordinary function definition and takes the same shapes: several
-clauses, patterns in the heads, guards.
+A method body inside an `impl` is an ordinary function definition, so it can have
+several clauses, patterns, and guards:
 
 ```medaka
 data Card = Silver | Gold | Platinum
@@ -64,10 +64,9 @@ False
 
 ## Constraints: `=>` in a signature
 
-An interface earns its keep in *generic* code. A lowercase type variable in a
-signature means "any type"; a constraint before `=>` narrows it to "any type that
-implements this interface", and inside the function you may use that interface's
-methods.
+Interfaces pay off in generic code. A lowercase type variable in a signature means
+"any type". A constraint in front of `=>` narrows it to "any type with this
+interface", and inside the function you can use the interface's methods on it.
 
 ```medaka
 interface Priced a where
@@ -97,29 +96,29 @@ main =
 ticket(12.5) costs 12.5
 ```
 
-Several constraints are written as a parenthesized, comma-separated list, as in
-`expensive`. You will rarely write these by hand for your own code — inference works
-them out — but you will read them constantly in stdlib signatures, and writing them
-on your own top-level definitions documents exactly what a function needs.
+Several constraints go in parentheses, separated by commas, as in `expensive`. The
+compiler infers constraints on its own, so you could leave the signatures off. Write
+them anyway: they state what the function needs from its arguments, and you will read
+them constantly in library signatures.
 
-## The working vocabulary
+## The interfaces you meet every day
 
-Five interfaces from the prelude account for most of what you will implement:
+Five interfaces from the prelude cover most of what you will implement or require:
 
-| Interface | Method(s) | What it means |
+| Interface | Methods | Meaning |
 |---|---|---|
 | `Eq` | `eq` (`==`, `/=`) | values can be compared for equality |
 | `Ord` | `compare`, `lt`, `gt`, `min`, `max` | values are ordered; requires `Eq` |
-| `Debug` | `debug` | a developer-facing, round-trippable rendering |
+| `Debug` | `debug` | a developer-facing rendering that shows the structure |
 | `Display` | `display` | a human-facing rendering |
 | `Num` | `add`, `sub`, `mul`, `negate`, `fromInt`, … | the arithmetic operators; requires `Eq` |
 
-`Debug` and `Display` are deliberately two interfaces rather than one. `debug` is for
-you — it quotes strings and shows constructors, so its output can be read back.
-`display` is for your users, and it is what `println` and string interpolation call.
+`Debug` and `Display` are separate on purpose. `debug` is for you: it quotes strings
+and shows constructor names, so you can see what a value is made of. `display` is
+for the user, and it is what `println` and string interpolation call.
 
-That distinction is where the running example picks up. An `Expense` should render
-one way in a log line and another way in a stack trace:
+That is where the running example picks up. An `Expense` should look one way in a
+report and another way in a debugging session:
 
 ```medaka
 data Category = Food | Housing | Books | Other deriving (Debug)
@@ -153,15 +152,15 @@ main =
 Expense { date = "2026-08-31", payee = "Cafe Fish", amount = 4.5, category = Food }
 ```
 
-Two things happen there that are worth naming. `println coffee` works because
-`println` requires `Display` and we supplied it. And `\{e.category}` inside the
-`Display Expense` body calls `display` on the category — string interpolation is
-`Display`, all the way down, so implementing it once composes everywhere.
+`println coffee` works because `println` requires `Display` and `Expense` now has
+it. Inside that implementation, `\{e.category}` calls `display` on the category, so
+the `Display Category` implementation is used too. Interpolation is `Display` all the
+way down.
 
 ## Default methods
 
-An interface may supply a body for a method. Implementations that say nothing about
-that method inherit the default; implementations that define it override it.
+An interface can provide a body for a method. An `impl` that says nothing about the
+method gets the default. An `impl` that defines it overrides the default.
 
 ```medaka
 interface Priced a where
@@ -189,9 +188,9 @@ False
 True
 ```
 
-The default's *signature* still has to mention the interface parameter, even though
-its body might not — without `a` in the type there is nothing to dispatch on, and
-the compiler says so rather than picking arbitrarily:
+A default method's signature still has to mention `a`, even if its body does not
+use it. Without `a` in the type there is nothing to dispatch on, and the compiler
+says so:
 
 ```
 error: d2.mdk:4:13: Method 'currency' in interface 'Priced' does not mention
@@ -200,8 +199,8 @@ interface parameter(s) 'a'; cannot dispatch
 
 ## Conditional implementations: `impl … requires …`
 
-An implementation can itself depend on an interface. "A list of `a`s is priceable,
-*provided* `a` is priceable" is written with `requires`:
+An implementation can depend on another one. "A list of `a` has a price, provided
+`a` has a price" is written with `requires`:
 
 ```medaka
 interface Priced a where
@@ -225,16 +224,16 @@ main =
 7.5
 ```
 
-The second line is the point: `List (List Ticket)` is priceable because
-`List a requires Priced a` applies to itself, and the compiler assembles that chain
-without being told to. `impl Eq (List a) requires Eq a` in the prelude is the same
-shape, and is why `[1, 2] == [1, 2]` works for every element type that has `Eq`.
+The second line works because the implementation applies to itself: a
+`List (List Ticket)` has a price because `List Ticket` does. The prelude's
+`impl Eq (List a) requires Eq a` has the same shape, and it is why `[1, 2] == [1, 2]`
+works for every element type that has `Eq`.
 
-## `requires` on the interface itself
+## `requires` on an interface
 
-`requires` also appears on an `interface` declaration, where it means "you cannot
-implement this one without implementing that one first". `Ord` requires `Eq` in
-exactly this way — an ordering that disagreed with equality would be nonsense.
+`requires` can also go on the interface itself, where it means "to implement this,
+you must implement that first". `Ord` requires `Eq` this way, since an ordering that
+disagrees with equality would make no sense.
 
 ```medaka
 interface Priced a where
@@ -258,18 +257,15 @@ main = println (invoiceLine (Ticket 3.0))
 1 x ticket ... 3.0
 ```
 
-Note that `invoiceLine`'s body calls `price` without a constraint of its own: inside
-a `Billable` implementation, `Priced` is already known to hold. Constraints declared
-on the interface propagate to everyone who uses it.
+`invoiceLine` calls `price` without declaring a `Priced` constraint of its own.
+Inside a `Billable` implementation, `Priced` is already known to hold.
 
-## When implementations overlap, the most specific one wins
-
-This is the part that is genuinely not Haskell, so read it carefully.
+## Overlapping implementations: the most specific one wins
 
 Two implementations can both apply to the same type. When they do, Medaka picks the
-*more specific* one automatically — no annotation, no ordering rule, no import
-tricks. `impl Render (List Expense)` is more specific than `impl Render (List a)`,
-so a list of expenses gets the former and a list of anything else gets the latter:
+more specific one, with no annotation and no ordering rule. `impl Render (List Expense)`
+is more specific than `impl Render (List a)`, so a list of expenses gets the first and
+a list of anything else gets the second:
 
 ```medaka
 data Expense = { payee : String, amount : Float }
@@ -300,37 +296,32 @@ a list of 2 thing(s)
 a ledger of 2 expense(s), totalling $1204.5
 ```
 
-Both calls go through the same `render`, on two values of the same shape — a list —
-and the two lines of output are the two different implementations firing. The
-`List Bool` call reaches the general implementation even though `Bool` has no
-`Render` implementation at all, because the general body never looks at an element.
+Both calls go through the same `render`, and the two lines of output come from the
+two implementations. The `List Bool` call uses the general implementation even
+though `Bool` has no `Render` of its own, because the general body never looks at an
+element.
 
-> **Coming from Haskell?** GHC has no most-specific-instance selection by default —
-> two overlapping instances are a coherence error at the use site unless you opt in
-> with `{-# OVERLAPPING #-}` or `{-# INCOHERENT #-}`, and even then the resolution
-> is a pragma-driven exception rather than the normal rule. Medaka makes
-> most-specific selection the normal rule instead, so there is no `OVERLAPPING`
-> pragma to reach for, no `newtype`-wrapping ritual to pick an instance, and no
-> named instances — the `impl Name of Iface Ty` form, `default impl`, and the
-> `@Name` hint at a use site were all removed together, because most-specific
-> selection makes them unnecessary. A plain `impl` covers every case.
+> **Coming from Haskell?** This is the part that differs. GHC treats overlapping
+> instances as an error unless you opt in with a pragma. In Medaka, most-specific
+> selection is the normal rule, so there is no `OVERLAPPING` pragma, no newtype
+> wrapper to select an instance, and no named instances. A plain `impl` covers every
+> case.
 
 ## Where `deriving` fits
 
 `deriving (Eq, Ord, Debug, Display, Generic, Hashable)` on a `data` declaration
-generates exactly the implementations you would otherwise write, from the type's
-structure: `Eq` compares constructors and then fields; `Ord` orders by declaration
-position and then by field; `Debug` prints the constructor and its fields.
+generates the implementations you would otherwise write, from the type's structure.
+Derived `Eq` compares constructors and then fields. Derived `Ord` orders by
+declaration position and then by fields. Derived `Debug` prints the constructor and
+its fields.
 
-Derive when the structural answer is the right answer, and write the `impl` by hand
-when it is not — which, for `Display`, is nearly always, since how a value should
-look to a user is a design decision and not a property of its fields. `Expense`
-above derived `Debug` and hand-wrote `Display` for exactly that reason.
+Derive when the structural answer is the right one. Write the `impl` by hand when it
+is not, which for `Display` is nearly always: how a value should look to a person is
+a design decision, not a property of its fields. That is why `Expense` above derived
+`Debug` and wrote `Display` by hand.
 
 ---
 
-You can now describe data and give it behavior.
-[Chapter 6](06-working-with-data.md) turns to the collections
-and combinators you will use to actually push that data around — `List` versus
-`Array`, `Map` and `Set`, and the `map`/`filter`/`fold` vocabulary that has been
-quietly appearing in these examples all along.
+Next, [chapter 6](06-working-with-data.md) covers the containers you keep data in
+and the `map`/`filter`/`fold` vocabulary that has been showing up in these examples
+without an introduction.

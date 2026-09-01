@@ -1,18 +1,15 @@
 # Data Modeling
 
-This is the chapter that changes how you write programs. In Medaka you describe the
-shape of your domain first, as a type, and the compiler then holds you to it: every
-place that takes the value apart has to account for every shape it could have. Types
-are not documentation you attach to code that already works — they are the thing you
-write down before the code, and the reason the code ends up short.
+In Medaka you describe the shape of your data first, as a type, and the compiler holds
+the rest of the program to that description. Every place that takes a value apart has
+to account for every shape the value can have. This chapter is about the one
+declaration that does all of it, `data`, in its two forms: a choice between
+alternatives, and a bundle of named fields.
 
-Everything here is built out of one declaration form, `data`, in two flavors: a
-choice between alternatives, and a bundle of named fields. Real types are usually both.
+## Sum types: one of several alternatives
 
-## Sum types: a choice between alternatives
-
-A `data` declaration lists the constructors of a type, separated by `|`. Each is a
-distinct way of *being* that type, and the value carries which one it is.
+A `data` declaration lists the constructors of a type, separated by `|`. A value of
+the type is exactly one of them.
 
 ```medaka
 data Category = Food | Housing | Books | Other
@@ -21,12 +18,11 @@ favorite : Category
 favorite = Books
 ```
 
-There is nothing else to a plain enumeration: `Food` is a value of type `Category`,
-and `Category` has exactly four values. Constructors are capitalized, and they are
-the only things you can pattern-match against.
+That is a complete definition. `Category` has four values, and `Food` is one of them.
+Constructor names are capitalized, and constructors are the only things you can
+pattern match against.
 
-Constructors carry payloads by listing the types they hold, and a longer declaration
-is conventionally written one alternative per line:
+A constructor can carry data. List the types of its fields after its name:
 
 ```medaka
 data Expense = Coffee Float | Rent Float | Book String Float
@@ -43,12 +39,12 @@ main = println (cost (Book "SICP" 35.0))
 35.0
 ```
 
-`Coffee` is now a *function* of type `Float -> Expense`, and `Book` of type
-`String -> Float -> Expense`. Constructors are ordinary functions that happen to be
-the only way to build the type.
+`Coffee` is now a function of type `Float -> Expense`, and `Book` has type
+`String -> Float -> Expense`. Constructors are ordinary functions, and they are the
+only way to build a value of the type.
 
-A `data` declaration can take type parameters, written lowercase after the type name.
-That is all it takes to define your own generic container:
+A `data` declaration can take type parameters, written in lowercase after the type
+name. That is all it takes to define a generic container:
 
 ```medaka
 data Tree a = Leaf | Node (Tree a) a (Tree a)
@@ -73,28 +69,32 @@ main =
 [2, 5, 8, 9]
 ```
 
-`Ord a =>` in that signature is a *constraint*: `insert` works for any `a` that can
-be ordered. [Chapter 5](05-interfaces.md) is about where those constraints come
-from.
+The `Ord a =>` in `insert`'s signature is a constraint: `insert` works for any `a`
+that can be compared. Chapter 5 explains where constraints come from.
 
-The stdlib's `Option` and `Result` are exactly this shape and nothing more — they are
-ordinary `data` declarations you could have written yourself, `public export data
-Option a = Some a | None` and `public export data Result e a = Ok a | Err e` in
-[`stdlib/core.mdk`](../../stdlib/core.mdk). Nothing about a sum type from the stdlib
-is more privileged than one of yours. (`List` is the exception: it *is* a compiler
-builtin, with literal and `::` syntax of its own, so there is no `data List` to read.
-It still behaves like the cons-cell sum type it looks like.)
+The standard library's `Option` and `Result` are declared this same way, in
+[`stdlib/core.mdk`](../../stdlib/core.mdk):
+
+```medaka-nocheck: stdlib declarations, shown for reference
+data Option a = Some a | None
+data Result e a = Ok a | Err e
+```
+
+Nothing about them is built in. A sum type you write has the same standing as one
+from the standard library. `List` is the exception: it is a compiler builtin with its
+own literal syntax and the `::` operator, but it behaves like the two-constructor
+type it looks like.
 
 ## Records: a bundle of named fields
 
-When a value is one thing with several parts rather than a choice between
-alternatives, give the fields names. A record is a `data` type with a single
-brace-delimited constructor; because the constructor name would just repeat the type
-name, you may leave it out and it is supplied for you.
+When a value is one thing with several parts, give the parts names. A record is a
+`data` type with a single constructor whose fields are written in braces. The
+constructor is usually named after the type, so you can leave its name out and the
+compiler fills it in.
 
 ```medaka
 data Point = { x : Int, y : Int }
--- exactly equivalent to:
+-- the same as:
 data Point2 = Point2 { x : Int, y : Int }
 
 origin : Point
@@ -107,19 +107,12 @@ main = println origin.x
 0
 ```
 
-Note that there is no `record` keyword — the word `record` is an ordinary identifier
-in Medaka and you are free to use it as a variable, a field, or a module name.
+There is no `record` keyword. `record` is an ordinary word you can use as a variable
+name.
 
-> **Coming from Haskell?** Field names are scoped to their `data` type, not squeezed
-> into one flat top-level namespace — two different record types in the same module
-> can both declare an `amount` field with no `DuplicateRecordFields` and no manual
-> prefixing, and `.` field access works directly rather than through a generated
-> accessor function. The pun shorthand you'll see below (`Expense { payee, amount }`)
-> is the same idea as Haskell's `NamedFieldPuns`, just on by default.
-
-Here is the guide's running example, finally written properly. An expense has a date,
-a payee, an amount, and a category, and the category is the sum type from the top of
-the chapter:
+Here is the running example as a proper record. An expense has a date, a payee, an
+amount, and a category, and the category is the sum type from the top of the
+chapter:
 
 ```medaka
 data Category = Food | Housing | Books | Other deriving (Eq, Debug)
@@ -148,9 +141,9 @@ Food
 Expense { date = "2026-08-31", payee = "Cafe Fish", amount = 4.5, category = Food }
 ```
 
-Construction requires every field; there are no defaults and no partially built
-records. Field access is `.`, and when a variable in scope already has the field's
-name, the *pun* shorthand lets you drop the `= name` half:
+Building a record requires every field. There are no defaults and no partially built
+records. Fields are read with `.`. When a variable in scope already has the same name
+as a field, you can write the field name alone and skip the `= name` part:
 
 ```medaka
 data Expense = { payee : String, amount : Float }
@@ -165,29 +158,27 @@ main = println (fromParts "Landlord" 1200.0).payee
 Landlord
 ```
 
-> ⚠️ **`deriving` on its own line needs a multi-line `data` declaration.** After a
-> one-line declaration it has to stay inline — `data Category = Food | Housing
-> deriving (Eq)`. On its own line after a one-line declaration it is a parse error
-> that blames the indentation rather than `deriving` itself, which is confusing the
-> first time:
->
-> ```
-> error: deriv.mdk:2:2: unexpected `deriving`. Indentation (column 2) doesn't match
-> the enclosing block
-> ```
+The `deriving (Eq, Debug)` clauses ask the compiler to generate equality and a
+debug printer for the type. `deriving` gets its own section below. One thing to
+know now is where it goes: after a one-line `data` declaration it has to stay on that
+line, and it can only move to its own line when the declaration spans several lines,
+as it does for `Expense` above.
 
-## Pattern matching is the eliminator
+> **Coming from Haskell?** Field names belong to their type, not to the module. Two
+> record types in one file can both have an `amount` field, and `e.amount` reads the
+> field directly rather than through a generated accessor function. The field pun
+> (`Expense { payee, amount }`) is always on.
 
-Constructors build values; patterns take them apart. That is the whole story — there
-are no accessor functions generated for sum types, no `isCoffee` predicates, no
-downcasts. If you have an `Expense` and want what is inside it, you match.
+## Pattern matching takes values apart
+
+Constructors build values and patterns take them apart. There are no generated
+accessor functions for sum types, no `isCoffee` predicates, and no casts. To get at
+what is inside an `Expense`, you match on it.
 
 You have already seen patterns in clause heads. `match` is the expression form, and
-the two are interchangeable. In practice, prefer the clause-head form (`f (Ctor x) =
-...`) when you are defining a top-level function that pattern-matches its argument —
-`tag` below is written that way — and reach for `match` as an expression for the
-cases where no name is being defined, such as `rate` below branching on a value it
-already has in hand.
+the two do the same thing. When you are defining a function that matches on its
+argument, use clauses. When you have a value in hand inside an expression, use
+`match`.
 
 ```medaka
 data Category = Food | Housing | Books | Other
@@ -217,20 +208,19 @@ rent of 1200.0
 Cafe Fish charged 4.5
 ```
 
-Record patterns are worth dwelling on. `Expense { category = Housing, amount }`
-matches *and* binds in one move: it fires only when the category is `Housing`, and
-it brings `amount` into scope by punning. Fields you do not mention are ignored, and
-`Expense { ... }` matches any expense while binding nothing.
+Record patterns do two jobs at once. `Expense { category = Housing, amount }` only
+matches when the category is `Housing`, and it binds `amount` as a side effect of
+matching. Fields you do not mention are ignored. `Expense { ... }` matches any expense
+and binds nothing.
 
-The other pattern shapes you will reach for: `_` discards, `x :: rest` splits a list
-into head and tail, `[]` matches the empty list, `(a, b)` destructures a tuple,
-`whole@(Some x)` binds the whole value *and* its parts, and literal patterns like
-`0` or `'a'..='z'` match by value.
+Other patterns you will use: `_` matches anything and binds nothing, `x :: rest`
+splits a list into its first element and the remainder, `[]` matches the empty list,
+`(a, b)` takes a tuple apart, `whole@(Some x)` binds both the whole value and its
+parts, and a literal like `0` or a range like `'a'..='z'` matches by value.
 
-## Exhaustiveness: the payoff
+## Exhaustiveness
 
-Here is what all of this buys. When you match on a sum type and forget a case, the
-compiler tells you which one:
+When you match on a sum type and leave out a case, the compiler tells you which one:
 
 ```medaka
 data Shape = Circle Float | Rect Float Float | Triangle Float Float
@@ -251,38 +241,27 @@ warning: shape.mdk:6:14: non-exhaustive match of 'Shape'. Missing case:
 the rest.
 ```
 
-The diagnostic names the missing constructor, not merely "some case is missing".
-This is the mechanism behind the usual claim that adding a variant to a type is
-safe: add `Triangle` to `Shape` and every incomplete match in the program is
-reported, one by one, with the case it now needs.
+This is what makes adding a constructor to a type safe. Add `Triangle` to `Shape`,
+and every match in the program that does not handle it is reported, with the case it
+now needs.
 
-> ⚠️ **A non-exhaustive match is a *warning*, and `medaka check` still exits 0.**
-> It becomes a real failure only when the missing case is actually reached, at
-> which point the program stops:
+> ⚠️ **A non-exhaustive match is a warning, not an error.** `medaka check` still
+> exits 0. The program fails only if the missing case is actually reached:
 >
 > ```
 > ./shape.mdk:4:15: runtime error [E-NONEXHAUSTIVE-MATCH]: non-exhaustive match
 > ```
 >
-> So do not treat a green `check` as proof that your matches are complete — read
-> the warnings. Reaching for a `_` wildcard arm silences the warning permanently,
-> which is exactly what you do *not* want on a type you expect to grow.
+> Read the warnings. And think twice before adding a `_` arm to silence one: a
+> wildcard also silences the warning for every constructor you add later.
 
 ## `Option` and `Result` instead of null and exceptions
 
-Medaka has no null and no `undefined`. A value that might be absent says so in its
-type, using `Option`:
-
-```medaka-nocheck: stdlib declarations, shown for reference
-data Option a = Some a | None
-data Result e a = Ok a | Err e
-```
-
-The consequence is that you cannot forget to handle the absent case — it is a
-constructor, so the exhaustiveness checker is watching. `Result` is the same idea
-for operations that can fail with an explanation: note the parameter order, error
-type first, so `Result String Expense` is "an `Expense`, or a `String` saying why
-not".
+Medaka has no null. A value that might be absent says so in its type, using
+`Option`, and because `None` is a constructor, the exhaustiveness check makes sure
+you handle it. `Result` is the same idea for an operation that can fail with a
+reason. Note the order of its parameters: the error type comes first, so
+`Result String Expense` reads as "an `Expense`, or a `String` explaining why not".
 
 ```medaka
 data Expense = { payee : String, amount : Float }
@@ -321,16 +300,15 @@ no such payee
 Cafe Fish: 0.0
 ```
 
-That last line is a preview of [chapter 6](06-working-with-data.md): `Option` is
-mappable, so you can transform the value inside without unwrapping it.
-[Chapter 8](08-do-and-thenables.md) goes further and shows how to chain
-several fallible steps with `do` — but the shape you have now, match and handle, is
-what most code actually does.
+The last line uses `map` on an `Option`, which transforms the value inside without
+unwrapping it. Chapter 6 covers that, and chapter 8 shows how to chain several steps
+that each return an `Option` or `Result`. Most of the time, though, the code you
+write looks like `report`: match, and handle both cases.
 
-## `deriving`: the boilerplate you don't write
+## `deriving`
 
-Comparing two expenses for equality, printing one for a log, sorting a list of them —
-these are mechanical, and `deriving` writes them from the type's own structure.
+Comparing two expenses for equality, printing one, or sorting a list of them is
+mechanical work, and `deriving` writes it from the type's structure.
 
 ```medaka
 data Category = Food | Housing | Books | Other deriving (Eq, Ord, Debug)
@@ -355,24 +333,17 @@ True
 Expense { payee = "Cafe Fish", amount = 5.25, category = Food }
 ```
 
-Six interfaces can be derived — `Eq`, `Ord`, `Debug`, `Display`, `Generic`, and
-`Hashable` — and asking for anything else is an error that lists them:
-
-```
-error: d1.mdk:1:25: cannot derive 'Banana' for 'C'; supported: Eq, Ord, Debug,
-Display, Generic, Hashable
-```
-
-`Ord` derives a comparison from constructor order, so `Food < Housing` above holds
-because `Food` is declared first. [Chapter 5](05-interfaces.md) explains what
-`deriving` is actually
-generating and when you should write the implementation by hand instead.
+You can derive `Eq`, `Ord`, `Debug`, `Display`, `Generic`, and `Hashable`. Asking
+for anything else is an error that lists those six. A derived `Ord` orders
+constructors by their declaration order, which is why `Food` is less than `Housing`
+above. Chapter 5 explains what `deriving` generates and when to write the
+implementation by hand instead.
 
 ## Functional update
 
-Records are immutable, so "changing a field" means building a new record that differs
-in that field. `{ record | field = value }` does it without restating the fields you
-are keeping, and it nests:
+Records are immutable, so "changing a field" means building a new record that
+differs in that field. `{ r | field = value }` does that without restating the fields
+you are keeping, and it nests.
 
 ```medaka
 data Address = { city : String, street : String }
@@ -394,16 +365,15 @@ Seattle
 Portland
 ```
 
-`m` is untouched, as it must be — nothing in Medaka mutates a record in place, and
-the original binding still names the original value. When a type has several
-constructors, the variant form `Pt { p | y = 9 }` names which one you expect, and `p`
-must be that variant.
+`m` is unchanged, and still names the original value. When a type has several
+constructors, write the constructor in front, `Pt { p | y = 9 }`, and `p` has to be
+that constructor.
 
-## A note on `newtype`
+## `newtype`
 
-`newtype` declares a type with exactly one constructor wrapping exactly one value. It
-exists to make two things that are both "a `String` underneath" into two *different*
-types the compiler will not let you confuse:
+`newtype` declares a type with one constructor wrapping one value. Use it when two
+things are both a `String` or an `Int` underneath but must not be confused with each
+other.
 
 ```medaka
 newtype Payee = Payee String deriving (Eq, Debug)
@@ -420,12 +390,11 @@ True
 Note "reimbursed"
 ```
 
-Reach for it whenever a domain concept is currently being passed around as a bare
-`String` or `Int` and confusing it with another one would be a real bug.
+A `Payee` cannot be passed where a `Note` is expected, and the wrapper costs nothing
+at run time.
 
 ---
 
-You can now describe a domain and take it apart safely. What is still missing is
-behavior that varies by type — `debug` and `==` worked above because something
-implemented them for your types. [Chapter 5](05-interfaces.md) is about writing those
-implementations yourself.
+You can now describe a domain and take it apart. `==` and `debug` worked in this
+chapter because something implemented them for your types. [Chapter 5](05-interfaces.md)
+is about writing those implementations yourself.

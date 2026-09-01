@@ -1,17 +1,18 @@
 # `do` and Thenables
 
-[Chapter 7](07-effects-and-io.md) made the negative case: `do` is not how you write
-IO. This chapter makes the positive one. `do` is sugar for chaining computations that
-carry a *context* — a value that might be missing, a value that might be an error, a
-computation with several possible answers — so that the chaining code reads like
-ordinary sequential code and the context handling disappears.
+Chapter 7 said what `do` is not. This chapter says what it is. `do` is syntax for
+chaining computations that carry a context: a value that might be missing, a value
+that might be an error, a computation with several possible answers. Inside a `do`
+block, the chaining reads like ordinary sequential code and the context handling
+disappears.
 
-No `do` block in this chapter performs IO. Where an example prints, the printing is
-an ordinary bare block in `main`, outside the chain.
+No `do` block in this chapter performs IO. Where an example prints, the printing
+happens in `main`, outside the chain.
 
-## The problem `do` solves
+## The problem
 
-Three lookups, each of which can fail. Written by hand, the plumbing is the program:
+Three lookups, each of which can fail. Written by hand, the plumbing is most of the
+program:
 
 ```medaka
 import map.{Map, get}
@@ -40,8 +41,8 @@ Some 13.5
 None
 ```
 
-Two lookups, four lines of `match`, and the interesting part — `p * fromInt n` — is
-buried at the bottom of a staircase. Add a third lookup and it gets worse.
+Two lookups, four lines of `match`, and the part that matters, `p * fromInt n`, is at
+the bottom of a staircase. A third lookup makes it worse.
 
 ## The same thing with `do`
 
@@ -71,35 +72,33 @@ Some 13.5
 None
 ```
 
-Identical output, and the staircase is gone. Three pieces of syntax do the work:
+Same output, no staircase. Three pieces of syntax do the work:
 
-- **`do`** opens the block, and the block's statements are chained rather than merely
-  sequenced.
-- **`<-`** *binds through* the context. `p <- get name prices` means "if the lookup
-  produced `Some p`, carry on with `p` bound; if it produced `None`, abandon the whole
-  block and let its value be `None`." The short-circuit is the point — you never write
-  the failing branch.
-- **`pure`** goes the other way, lifting an ordinary value back into the context.
-  `p * fromInt n` is a `Float`; `pure (p * fromInt n)` is an `Option Float`, which is
-  what `lineTotal` must return.
+- **`do`** opens the block. Its statements are chained rather than merely run in
+  order.
+- **`<-`** binds through the context. `p <- get name prices` means: if the lookup
+  produced `Some p`, continue with `p` in scope; if it produced `None`, stop here and
+  make the whole block's value `None`. You never write the failing branch.
+- **`pure`** goes the other way, wrapping an ordinary value back into the context.
+  `p * fromInt n` is a `Float`; `pure (p * fromInt n)` is an `Option Float`, which
+  is what `lineTotal` returns.
 
-A `do` block may also contain plain `let` bindings for values that need no context,
-and they read exactly as they do anywhere else.
+A `do` block can also contain plain `let` bindings for values that need no context.
 
-> ⚠️ **A `do` block must end in an expression, not a `let`.** The last statement is
-> the block's value, and a `let` is a binding rather than a value. Ending on one is
-> currently accepted by the type checker and fails at run time with an unhelpful
-> error, so the mistake is worth recognizing by eye: if the last line of a `do` block
-> starts with `let`, add the `pure …` you meant to write.
+> ⚠️ **A `do` block has to end in an expression, not a `let`.** The last statement is
+> the block's value, and a `let` is not a value. The type checker currently accepts a
+> block that ends in `let`, and the program then fails at run time with an unhelpful
+> message, so this is one to catch by eye: if the last line of a `do` block starts
+> with `let`, the `pure …` is missing.
 
 ## `Result`, and the running example
 
-`Option` says "no value". `Result e a` says "no value, and here is why" — and it
-chains under `do` in exactly the same way, carrying the first `Err` out of the block.
+`Option` says "no value". `Result e a` says "no value, and here is why". It chains
+under `do` the same way, carrying the first `Err` out of the block.
 
-Parsing a ledger line is a chain of fallible steps: split it, read four fields, turn
-one into a number and another into a `Category`. Any of them can fail, and the caller
-wants to know which.
+Parsing a ledger line is a chain of steps that can fail: split it, read four fields,
+turn one into a number and another into a `Category`. Any step can fail, and the
+caller wants to know which one did.
 
 ```medaka
 import string.{split, trim, toFloat}
@@ -163,22 +162,22 @@ skipped: not a number: lots
 skipped: missing field 3
 ```
 
-`parseExpense` reads top to bottom as six ordinary steps. The failure paths are not
-written anywhere, and there are six of them: each `<-` is a place the block can stop
-and hand its `Err` to the caller, with the message the failing step produced. The
-second and third lines of output are two different steps failing.
+`parseExpense` reads as six plain steps. There are six places it can fail, one per
+`<-`, and none of them is written out. Each `<-` is a point where the block can stop
+and hand the failing step's `Err` to the caller. The second and third lines of output
+are two different steps failing.
 
-Note the shape of the seam. `parseExpense` is pure and returns a `Result`; `report`
-is the `<IO>` function that decides what to do about it. Keeping the chain pure and
-the decision at the edge is the normal arrangement, and it is why chapter 7's file
-reading and this chapter's parsing compose without either one knowing about the
+Note where the seam is. `parseExpense` is pure and returns a `Result`. `report` is
+the `<IO>` function that decides what to do with it. Keeping the chain pure and the
+decision at the edge is the normal arrangement, and it is why chapter 7's file
+reading and this chapter's parsing fit together without either knowing about the
 other.
 
-## `do` abstracts over any `Thenable`
+## `do` works for any `Thenable`
 
-`do` is not built into `Option` or `Result`. It is sugar over two interface methods —
-`andThen` from `Thenable` and `pure` from `Applicative` — so a function written with
-`do` and a `Thenable` constraint works for *every* type that implements them:
+`do` is not built into `Option` or `Result`. It is sugar over two interface methods,
+`andThen` from `Thenable` and `pure` from `Applicative`, so a function written with
+`do` and a `Thenable` constraint works for every type that implements them:
 
 ```medaka
 both : Thenable m => m Int -> m Int -> m Int
@@ -201,32 +200,24 @@ Err boom
 [11, 21, 12, 22]
 ```
 
-One function, four behaviors, and the fourth is the one that shows `do` is not
-secretly about failure. `List` is a `Thenable` too, and its `andThen` tries every
-combination, so `both [1, 2] [10, 20]` produces all four sums rather than
-short-circuiting. "Chain in a context" is the abstraction; "stop at the first
-failure" is just what the context happens to do for `Option` and `Result`.
+One function, four behaviors. The fourth shows that `do` is not only about failure.
+`List` is a `Thenable` too, and its `andThen` tries every combination, so
+`both [1, 2] [10, 20]` produces all four sums. "Chain in a context" is the general
+idea. "Stop at the first failure" is what the context happens to do for `Option` and
+`Result`.
+
+In the prelude, `Option`, `Result e`, and `List` implement `Thenable`, which
+requires `Applicative`, which requires `Mappable`. Writing your own, for a parser or
+a state threader, is an ordinary `impl` in the style of chapter 5. The laws such an
+implementation should satisfy are beyond this guide. The practical rule is that `do`
+behaves the way you expect as long as your `andThen` does nothing but sequence.
 
 > **Coming from Haskell?** `andThen` is `>>=` with the arguments swapped so the value
-> reads first, `pure` is `pure`, and `Thenable` is `Monad` without the historical
-> `Functor`/`Applicative`/`Monad` naming. There is no `IO` instance, deliberately —
-> that is [chapter 7](07-effects-and-io.md)'s bare block, not this.
-
-## Which types work with `do`
-
-Anything implementing `Thenable`, which requires `Applicative`, which requires
-`Mappable`. In the prelude that is `Option`, `Result e`, and `List`; `map`,
-`filterMap`, `fold` and friends from [chapter 6](06-working-with-data.md) come from
-the same family of interfaces.
-
-Writing your own `Thenable` — a parser, a writer that accumulates a log, a state
-threader — is a real thing to do and follows the pattern of any other `impl` from
-[chapter 5](05-interfaces.md). The laws such an implementation should satisfy, and
-the reasons they matter, are beyond this guide; the practical rule is that `do` will
-behave the way you expect if your `andThen` does nothing but sequence.
+> comes first, `pure` is `pure`, and `Thenable` is `Monad` without the
+> `Functor`/`Applicative`/`Monad` names. There is no `IO` instance, on purpose. IO is
+> chapter 7's plain block.
 
 ---
 
-That closes the language. What remains is how to organize more than one file of it —
-`import`, `export`, and project layout — and the tools that check, format, and test
-what you have written.
+That completes the language. The last two chapters cover how to organize more than
+one file of it, and the tools that check, format, and test what you write.
