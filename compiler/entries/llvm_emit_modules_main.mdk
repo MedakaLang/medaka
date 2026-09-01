@@ -35,6 +35,7 @@ import types.typecheck.{
 }
 import ir.core_ir.{CProgram(..), CBind(..), CImplEntry(..), CImplBody(..)}
 import ir.core_ir_lower.{
+  ifaceImplHeadTable,
   declaredRecordFieldOrders,
   lowerProgramEmit,
   returnsSelfTable,
@@ -136,6 +137,7 @@ emitTail runtimeDecls coreD modules2 =
     (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
     (mainTypeIsUnit ()) (mainTypeIsFloat ()) half preludeBinds preludeImpls (srcNameFromArgs (args ())) (declaredRecordFieldOrders allDecls)
     (validateFfiExternTypeNames (checkedFfiExternTypeNamesModules modules2))
+    (ifaceImplHeadTable allDecls)
   let statsOn = statsEnabled ()
   if statsOn then
     let (text, stats) = emitProgramWithStats input (lowerProgramEmit allDecls)

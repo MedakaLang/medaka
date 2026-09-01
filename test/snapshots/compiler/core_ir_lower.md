@@ -1,5 +1,5 @@
 # META
-source_lines=2358
+source_lines=2352
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -1358,9 +1358,7 @@ lgToBind ((n, _), cs) = CBind n cs
 -- core_ir_typed_main).  The emit path lowers through here too and never reads the
 -- tables, so installing is a no-op for it.
 lowerImpls : List Decl -> List CImplEntry
-lowerImpls prog =
-  let _ = installIfaceImplHeads (ifaceImplHeadTable prog)
-  lowerImplsWith (installDispatchTables prog) prog
+lowerImpls prog = lowerImplsWith (installDispatchTables prog) prog
 
 -- ── #948: interface → the HEAD TAGS of its impls, read off the impl DECLS ────
 -- `lowerDeclImpl` projects a `DImpl` to one `CImplEntry` PER METHOD IT DEFINES, so
@@ -1401,12 +1399,15 @@ lowerImpls prog =
 -- bare head "Box" — a DIFFERENT hash word.  With the declared keys here the two
 -- sides compute the same collision verdict from the same facts.
 --
--- Installed HERE rather than by each emit driver on purpose: `lowerImpls` is the
--- one chokepoint every emit path funnels through with the WHOLE program's decls
--- (`lowerProgramEmit allDecls`), and it already installs `installDispatchTables`
--- the same way.  A per-driver `install*` call — the shape the other side tables
--- use — can be FORGOTTEN in a new driver, and the failure mode of forgetting it
--- is exactly the segfault this fixes.
+-- Until 2026-09-01 this table was INSTALLED into an ambient `Ref` by `lowerImpls`
+-- (the one chokepoint every emit path funnels through) and read back by the two
+-- backends through zero-argument accessors.  It is now an explicit VALUE: the emit
+-- driver mints it with `ifaceImplHeadTable` over the same decl list it lowers and
+-- hands it to the backend inside `EmitInput`/`WasmEmitInput`, so the three readers
+-- below take it as a parameter.  The forgettable-`install*` hazard the old note
+-- worried about is now a TYPE error instead: a driver cannot build an emit input
+-- without supplying this table.  A driver that has no decls (a hand-built
+-- `CProgram` test harness) passes `[]`, which is the pre-#1036 bare-head answer.
 -- ── #1047: the row also carries the INTERFACE IDENTITY ──────────────────────
 -- The `iface` field is a BARE NAME, and two unrelated modules may each declare an
 -- interface spelled the same way.  `implOrigin` (`frontend/ast.mdk`, stamped by
@@ -1421,13 +1422,6 @@ lowerImpls prog =
 -- on a program with no METHOD-name collision — is unchanged.  (⚠️ METHOD, not
 -- interface: the colliding interfaces' own names are irrelevant and may differ.)
 -- one row per DECLARED impl: (iface identity, iface, head tag, canonical impl key).
-ifaceImplHeadsRef : Ref (List (String, String, String, String))
-ifaceImplHeadsRef = Ref []
-
-export
-installIfaceImplHeads : List (String, String, String, String) -> Unit
-installIfaceImplHeads t = ifaceImplHeadsRef := t
-
 export
 ifaceImplHeadTable : List Decl -> List (String, String, String, String)
 ifaceImplHeadTable prog = flatMap ifaceImplHeadEntries prog
@@ -1788,8 +1782,8 @@ checkDictTagsInjective space hash ((m, w, owner)::rest) seen =
 -- falls back to first-match.  Not fixable here: `mdk_default_<method>_<tag>` has no
 -- interface component, so the two default bodies have one symbol between them.
 export
-ifaceIdsAtTag : String -> List String
-ifaceIdsAtTag tag = ifaceIdsAtTagGo tag !ifaceImplHeadsRef
+ifaceIdsAtTag : List (String, String, String, String) -> String -> List String
+ifaceIdsAtTag heads tag = ifaceIdsAtTagGo tag heads
 
 ifaceIdsAtTagGo : String -> List (String, String, String, String) -> List String
 ifaceIdsAtTagGo _ [] = []
@@ -1805,14 +1799,14 @@ ifaceIdsAtTagGo tag ((ifaceId, _, t, k)::rest)
 -- canonical full-type key — the same word `keyForSiteByIface` stamps into the
 -- caller's dict cell.
 export
-ifaceImplRouteKeys : String -> List String
-ifaceImplRouteKeys iface = ifaceRouteKeysGo iface !ifaceImplHeadsRef
+ifaceImplRouteKeys : List (String, String, String, String) -> String -> List String
+ifaceImplRouteKeys heads iface = ifaceRouteKeysGo heads iface heads
 
-ifaceRouteKeysGo : String -> List (String, String, String, String) -> List String
-ifaceRouteKeysGo _ [] = []
-ifaceRouteKeysGo iface ((_, i, tag, key)::rest)
-  | i == iface = declRouteKey tag key (ifaceDeclHeadUnique i tag) :: ifaceRouteKeysGo iface rest
-  | otherwise = ifaceRouteKeysGo iface rest
+ifaceRouteKeysGo : List (String, String, String, String) -> String -> List (String, String, String, String) -> List String
+ifaceRouteKeysGo _ _ [] = []
+ifaceRouteKeysGo heads iface ((_, i, tag, key)::rest)
+  | i == iface = declRouteKey tag key (ifaceDeclHeadUnique heads i tag) :: ifaceRouteKeysGo heads iface rest
+  | otherwise = ifaceRouteKeysGo heads iface rest
 
 declRouteKey : String -> String -> Bool -> String
 declRouteKey tag key unique = if unique then tag else key
@@ -1826,13 +1820,13 @@ declRouteKey tag key unique = if unique then tag else key
 -- collision verdicts on a cross-module program.  It now counts the graph-global
 -- `IE`, i.e. the same population.  The arithmetic still differs and that difference
 -- is pre-existing: this side counts DISTINCT canonical keys, that side counts rows.
--- An UNINSTALLED table answers True — the
--- pre-#1036 bare-head behaviour — so a driver that never lowered through
--- `lowerImpls` degrades to today's output rather than mis-keying.
+-- An EMPTY table answers True — the
+-- pre-#1036 bare-head behaviour — so a driver that supplies no decl-derived table
+-- degrades to today's output rather than mis-keying.
 export
-ifaceDeclHeadUnique : String -> String -> Bool
-ifaceDeclHeadUnique iface tag =
-  listLen (declKeysAtHead !ifaceImplHeadsRef iface tag []) <= 1
+ifaceDeclHeadUnique : List (String, String, String, String) -> String -> String -> Bool
+ifaceDeclHeadUnique heads iface tag =
+  listLen (declKeysAtHead heads iface tag []) <= 1
 
 declKeysAtHead : List (String, String, String, String) -> String -> String -> List String -> List String
 declKeysAtHead [] _ _ acc = acc
@@ -2829,11 +2823,7 @@ nodeTag _ = "?"
 (DTypeSig false "lgToBind" (TyFun (TyTuple (TyTuple (TyCon "String") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "CClause"))) (TyCon "CBind")))
 (DFunDef false "lgToBind" ((PTuple (PTuple (PVar "n") PWild) (PVar "cs"))) (EApp (EApp (EVar "CBind") (EVar "n")) (EVar "cs")))
 (DTypeSig false "lowerImpls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "CImplEntry"))))
-(DFunDef false "lowerImpls" ((PVar "prog")) (EBlock (DoLet false false PWild (EApp (EVar "installIfaceImplHeads") (EApp (EVar "ifaceImplHeadTable") (EVar "prog")))) (DoExpr (EApp (EApp (EVar "lowerImplsWith") (EApp (EVar "installDispatchTables") (EVar "prog"))) (EVar "prog")))))
-(DTypeSig false "ifaceImplHeadsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String")))))
-(DFunDef false "ifaceImplHeadsRef" () (EApp (EVar "Ref") (EListLit)))
-(DTypeSig true "installIfaceImplHeads" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyCon "Unit")))
-(DFunDef false "installIfaceImplHeads" ((PVar "t")) (EApp (EApp (EVar "setRef") (EVar "ifaceImplHeadsRef")) (EVar "t")))
+(DFunDef false "lowerImpls" ((PVar "prog")) (EApp (EApp (EVar "lowerImplsWith") (EApp (EVar "installDispatchTables") (EVar "prog"))) (EVar "prog")))
 (DTypeSig true "ifaceImplHeadTable" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String")))))
 (DFunDef false "ifaceImplHeadTable" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "ifaceImplHeadEntries")) (EVar "prog")))
 (DTypeSig false "ifaceImplHeadEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String")))))
@@ -2886,20 +2876,20 @@ nodeTag _ = "?"
 (DTypeSig false "checkDictTagsInjective" (TyFun (TyCon "String") (TyFun (TyFun (TyCon "String") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Unit"))))))
 (DFunDef false "checkDictTagsInjective" (PWild PWild (PList) PWild) (ELit LUnit))
 (DFunDef false "checkDictTagsInjective" ((PVar "space") (PVar "hash") (PCons (PTuple (PVar "m") (PVar "w") (PVar "owner")) (PVar "rest")) (PVar "seen")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "intToString") (EApp (EVar "hash") (EVar "w")))) (DoLet false false (PVar "k") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "\n"))) (EApp (EVar "display") (EVar "t"))) (ELit (LString "")))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "seen")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "space")) (EVar "hash")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "k")) (ETuple (EVar "w") (EVar "owner"))) (EVar "seen")))) (arm (PCon "Some" (PTuple (PVar "w0") (PVar "owner0"))) () (EIf (EBinOp "==" (EVar "owner0") (EVar "owner")) (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "space")) (EVar "hash")) (EVar "rest")) (EVar "seen")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "emitted dict-witness tag collision: two DISTINCT impls of method `")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "` hash to one dispatch tag.\ntag space: "))) (EApp (EVar "display") (EVar "space"))) (ELit (LString "\ncollided tag: "))) (EApp (EVar "display") (EVar "t"))) (ELit (LString "\nroute word 1: "))) (EApp (EVar "display") (EVar "w0"))) (ELit (LString "\nroute word 2: "))) (EApp (EVar "display") (EVar "w"))) (ELit (LString "\nA dict witness carries this tag, and method `"))) (EApp (EVar "display") (EVar "m"))) (ELit (LString "`'s shared dispatcher selects an impl by comparing it against every OTHER impl of that SAME method name -- these two words ARE compared against each other at that dispatcher, so this collision is live: whichever arm the emitter happened to emit FIRST wins every call through a dictionary, silently, at exit 0. The two words above are the impls' route words: either a bare head tycon or a canonical dispatch key spelled `<module>::<Interface>|<type arguments>|`. This is NOT a naming collision you can rename your way out of by making the names more different -- `hashName` is djb2, a radix-33 polynomial over a 74-code-point alphabet, so it is genuinely non-injective (`hashName \"Az\" == hashName \"BY\"`). One of the two words above may name a type or interface from the prelude or stdlib that you do not own -- rename the OTHER one, one of your own types or interfaces involved in this collision. Please also report this message, with both words above."))))))))))
-(DTypeSig true "ifaceIdsAtTag" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "ifaceIdsAtTag" ((PVar "tag")) (EApp (EApp (EVar "ifaceIdsAtTagGo") (EVar "tag")) (EUnOp "!" (EVar "ifaceImplHeadsRef"))))
+(DTypeSig true "ifaceIdsAtTag" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "ifaceIdsAtTag" ((PVar "heads") (PVar "tag")) (EApp (EApp (EVar "ifaceIdsAtTagGo") (EVar "tag")) (EVar "heads")))
 (DTypeSig false "ifaceIdsAtTagGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "ifaceIdsAtTagGo" (PWild (PList)) (EListLit))
 (DFunDef false "ifaceIdsAtTagGo" ((PVar "tag") (PCons (PTuple (PVar "ifaceId") PWild (PVar "t") (PVar "k")) (PVar "rest"))) (EIf (EBinOp "||" (EBinOp "==" (EVar "t") (EVar "tag")) (EBinOp "==" (EVar "k") (EVar "tag"))) (EBinOp "::" (EVar "ifaceId") (EApp (EApp (EVar "ifaceIdsAtTagGo") (EVar "tag")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "ifaceIdsAtTagGo") (EVar "tag")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "ifaceImplRouteKeys" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "ifaceImplRouteKeys" ((PVar "iface")) (EApp (EApp (EVar "ifaceRouteKeysGo") (EVar "iface")) (EUnOp "!" (EVar "ifaceImplHeadsRef"))))
-(DTypeSig false "ifaceRouteKeysGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "ifaceRouteKeysGo" (PWild (PList)) (EListLit))
-(DFunDef false "ifaceRouteKeysGo" ((PVar "iface") (PCons (PTuple PWild (PVar "i") (PVar "tag") (PVar "key")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "i") (EVar "iface")) (EBinOp "::" (EApp (EApp (EApp (EVar "declRouteKey") (EVar "tag")) (EVar "key")) (EApp (EApp (EVar "ifaceDeclHeadUnique") (EVar "i")) (EVar "tag"))) (EApp (EApp (EVar "ifaceRouteKeysGo") (EVar "iface")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "ifaceRouteKeysGo") (EVar "iface")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "ifaceImplRouteKeys" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "ifaceImplRouteKeys" ((PVar "heads") (PVar "iface")) (EApp (EApp (EApp (EVar "ifaceRouteKeysGo") (EVar "heads")) (EVar "iface")) (EVar "heads")))
+(DTypeSig false "ifaceRouteKeysGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "ifaceRouteKeysGo" (PWild PWild (PList)) (EListLit))
+(DFunDef false "ifaceRouteKeysGo" ((PVar "heads") (PVar "iface") (PCons (PTuple PWild (PVar "i") (PVar "tag") (PVar "key")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "i") (EVar "iface")) (EBinOp "::" (EApp (EApp (EApp (EVar "declRouteKey") (EVar "tag")) (EVar "key")) (EApp (EApp (EApp (EVar "ifaceDeclHeadUnique") (EVar "heads")) (EVar "i")) (EVar "tag"))) (EApp (EApp (EApp (EVar "ifaceRouteKeysGo") (EVar "heads")) (EVar "iface")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "ifaceRouteKeysGo") (EVar "heads")) (EVar "iface")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "declRouteKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyCon "String")))))
 (DFunDef false "declRouteKey" ((PVar "tag") (PVar "key") (PVar "unique")) (EIf (EVar "unique") (EVar "tag") (EVar "key")))
-(DTypeSig true "ifaceDeclHeadUnique" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "ifaceDeclHeadUnique" ((PVar "iface") (PVar "tag")) (EBinOp "<=" (EApp (EVar "listLen") (EApp (EApp (EApp (EApp (EVar "declKeysAtHead") (EUnOp "!" (EVar "ifaceImplHeadsRef"))) (EVar "iface")) (EVar "tag")) (EListLit))) (ELit (LInt 1))))
+(DTypeSig true "ifaceDeclHeadUnique" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
+(DFunDef false "ifaceDeclHeadUnique" ((PVar "heads") (PVar "iface") (PVar "tag")) (EBinOp "<=" (EApp (EVar "listLen") (EApp (EApp (EApp (EApp (EVar "declKeysAtHead") (EVar "heads")) (EVar "iface")) (EVar "tag")) (EListLit))) (ELit (LInt 1))))
 (DTypeSig false "declKeysAtHead" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "declKeysAtHead" ((PList) PWild PWild (PVar "acc")) (EVar "acc"))
 (DFunDef false "declKeysAtHead" ((PCons (PTuple PWild (PVar "i") (PVar "t") (PVar "k")) (PVar "rest")) (PVar "iface") (PVar "tag") (PVar "acc")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "i") (EVar "iface")) (EBinOp "==" (EVar "t") (EVar "tag"))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "k")) (EVar "acc")))) (EApp (EApp (EApp (EApp (EVar "declKeysAtHead") (EVar "rest")) (EVar "iface")) (EVar "tag")) (EBinOp "::" (EVar "k") (EVar "acc"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "declKeysAtHead") (EVar "rest")) (EVar "iface")) (EVar "tag")) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -3551,11 +3541,7 @@ nodeTag _ = "?"
 (DTypeSig false "lgToBind" (TyFun (TyTuple (TyTuple (TyCon "String") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "CClause"))) (TyCon "CBind")))
 (DFunDef false "lgToBind" ((PTuple (PTuple (PVar "n") PWild) (PVar "cs"))) (EApp (EApp (EVar "CBind") (EVar "n")) (EVar "cs")))
 (DTypeSig false "lowerImpls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "CImplEntry"))))
-(DFunDef false "lowerImpls" ((PVar "prog")) (EBlock (DoLet false false PWild (EApp (EVar "installIfaceImplHeads") (EApp (EVar "ifaceImplHeadTable") (EVar "prog")))) (DoExpr (EApp (EApp (EVar "lowerImplsWith") (EApp (EVar "installDispatchTables") (EVar "prog"))) (EVar "prog")))))
-(DTypeSig false "ifaceImplHeadsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String")))))
-(DFunDef false "ifaceImplHeadsRef" () (EApp (EVar "Ref") (EListLit)))
-(DTypeSig true "installIfaceImplHeads" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyCon "Unit")))
-(DFunDef false "installIfaceImplHeads" ((PVar "t")) (EApp (EApp (EVar "setRef") (EVar "ifaceImplHeadsRef")) (EVar "t")))
+(DFunDef false "lowerImpls" ((PVar "prog")) (EApp (EApp (EVar "lowerImplsWith") (EApp (EVar "installDispatchTables") (EVar "prog"))) (EVar "prog")))
 (DTypeSig true "ifaceImplHeadTable" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String")))))
 (DFunDef false "ifaceImplHeadTable" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "ifaceImplHeadEntries")) (EVar "prog")))
 (DTypeSig false "ifaceImplHeadEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String")))))
@@ -3608,20 +3594,20 @@ nodeTag _ = "?"
 (DTypeSig false "checkDictTagsInjective" (TyFun (TyCon "String") (TyFun (TyFun (TyCon "String") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Unit"))))))
 (DFunDef false "checkDictTagsInjective" (PWild PWild (PList) PWild) (ELit LUnit))
 (DFunDef false "checkDictTagsInjective" ((PVar "space") (PVar "hash") (PCons (PTuple (PVar "m") (PVar "w") (PVar "owner")) (PVar "rest")) (PVar "seen")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "intToString") (EApp (EMethodRef "hash") (EVar "w")))) (DoLet false false (PVar "k") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EVar "t"))) (ELit (LString "")))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "seen")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "space")) (EMethodRef "hash")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "k")) (ETuple (EVar "w") (EVar "owner"))) (EVar "seen")))) (arm (PCon "Some" (PTuple (PVar "w0") (PVar "owner0"))) () (EIf (EBinOp "==" (EVar "owner0") (EVar "owner")) (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "space")) (EMethodRef "hash")) (EVar "rest")) (EVar "seen")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "emitted dict-witness tag collision: two DISTINCT impls of method `")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "` hash to one dispatch tag.\ntag space: "))) (EApp (EMethodRef "display") (EVar "space"))) (ELit (LString "\ncollided tag: "))) (EApp (EMethodRef "display") (EVar "t"))) (ELit (LString "\nroute word 1: "))) (EApp (EMethodRef "display") (EVar "w0"))) (ELit (LString "\nroute word 2: "))) (EApp (EMethodRef "display") (EVar "w"))) (ELit (LString "\nA dict witness carries this tag, and method `"))) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "`'s shared dispatcher selects an impl by comparing it against every OTHER impl of that SAME method name -- these two words ARE compared against each other at that dispatcher, so this collision is live: whichever arm the emitter happened to emit FIRST wins every call through a dictionary, silently, at exit 0. The two words above are the impls' route words: either a bare head tycon or a canonical dispatch key spelled `<module>::<Interface>|<type arguments>|`. This is NOT a naming collision you can rename your way out of by making the names more different -- `hashName` is djb2, a radix-33 polynomial over a 74-code-point alphabet, so it is genuinely non-injective (`hashName \"Az\" == hashName \"BY\"`). One of the two words above may name a type or interface from the prelude or stdlib that you do not own -- rename the OTHER one, one of your own types or interfaces involved in this collision. Please also report this message, with both words above."))))))))))
-(DTypeSig true "ifaceIdsAtTag" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "ifaceIdsAtTag" ((PVar "tag")) (EApp (EApp (EVar "ifaceIdsAtTagGo") (EVar "tag")) (EUnOp "!" (EVar "ifaceImplHeadsRef"))))
+(DTypeSig true "ifaceIdsAtTag" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "ifaceIdsAtTag" ((PVar "heads") (PVar "tag")) (EApp (EApp (EVar "ifaceIdsAtTagGo") (EVar "tag")) (EVar "heads")))
 (DTypeSig false "ifaceIdsAtTagGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "ifaceIdsAtTagGo" (PWild (PList)) (EListLit))
 (DFunDef false "ifaceIdsAtTagGo" ((PVar "tag") (PCons (PTuple (PVar "ifaceId") PWild (PVar "t") (PVar "k")) (PVar "rest"))) (EIf (EBinOp "||" (EBinOp "==" (EVar "t") (EVar "tag")) (EBinOp "==" (EVar "k") (EVar "tag"))) (EBinOp "::" (EVar "ifaceId") (EApp (EApp (EVar "ifaceIdsAtTagGo") (EVar "tag")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "ifaceIdsAtTagGo") (EVar "tag")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "ifaceImplRouteKeys" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "ifaceImplRouteKeys" ((PVar "iface")) (EApp (EApp (EVar "ifaceRouteKeysGo") (EVar "iface")) (EUnOp "!" (EVar "ifaceImplHeadsRef"))))
-(DTypeSig false "ifaceRouteKeysGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "ifaceRouteKeysGo" (PWild (PList)) (EListLit))
-(DFunDef false "ifaceRouteKeysGo" ((PVar "iface") (PCons (PTuple PWild (PVar "i") (PVar "tag") (PVar "key")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "i") (EVar "iface")) (EBinOp "::" (EApp (EApp (EApp (EVar "declRouteKey") (EVar "tag")) (EVar "key")) (EApp (EApp (EVar "ifaceDeclHeadUnique") (EVar "i")) (EVar "tag"))) (EApp (EApp (EVar "ifaceRouteKeysGo") (EVar "iface")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "ifaceRouteKeysGo") (EVar "iface")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "ifaceImplRouteKeys" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "ifaceImplRouteKeys" ((PVar "heads") (PVar "iface")) (EApp (EApp (EApp (EVar "ifaceRouteKeysGo") (EVar "heads")) (EVar "iface")) (EVar "heads")))
+(DTypeSig false "ifaceRouteKeysGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "ifaceRouteKeysGo" (PWild PWild (PList)) (EListLit))
+(DFunDef false "ifaceRouteKeysGo" ((PVar "heads") (PVar "iface") (PCons (PTuple PWild (PVar "i") (PVar "tag") (PVar "key")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "i") (EVar "iface")) (EBinOp "::" (EApp (EApp (EApp (EVar "declRouteKey") (EVar "tag")) (EVar "key")) (EApp (EApp (EApp (EVar "ifaceDeclHeadUnique") (EVar "heads")) (EVar "i")) (EVar "tag"))) (EApp (EApp (EApp (EVar "ifaceRouteKeysGo") (EVar "heads")) (EVar "iface")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "ifaceRouteKeysGo") (EVar "heads")) (EVar "iface")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "declRouteKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyCon "String")))))
 (DFunDef false "declRouteKey" ((PVar "tag") (PVar "key") (PVar "unique")) (EIf (EVar "unique") (EVar "tag") (EVar "key")))
-(DTypeSig true "ifaceDeclHeadUnique" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "ifaceDeclHeadUnique" ((PVar "iface") (PVar "tag")) (EBinOp "<=" (EApp (EVar "listLen") (EApp (EApp (EApp (EApp (EVar "declKeysAtHead") (EUnOp "!" (EVar "ifaceImplHeadsRef"))) (EVar "iface")) (EVar "tag")) (EListLit))) (ELit (LInt 1))))
+(DTypeSig true "ifaceDeclHeadUnique" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
+(DFunDef false "ifaceDeclHeadUnique" ((PVar "heads") (PVar "iface") (PVar "tag")) (EBinOp "<=" (EApp (EVar "listLen") (EApp (EApp (EApp (EApp (EVar "declKeysAtHead") (EVar "heads")) (EVar "iface")) (EVar "tag")) (EListLit))) (ELit (LInt 1))))
 (DTypeSig false "declKeysAtHead" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "declKeysAtHead" ((PList) PWild PWild (PVar "acc")) (EVar "acc"))
 (DFunDef false "declKeysAtHead" ((PCons (PTuple PWild (PVar "i") (PVar "t") (PVar "k")) (PVar "rest")) (PVar "iface") (PVar "tag") (PVar "acc")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "i") (EVar "iface")) (EBinOp "==" (EVar "t") (EVar "tag"))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "k")) (EVar "acc")))) (EApp (EApp (EApp (EApp (EVar "declKeysAtHead") (EVar "rest")) (EVar "iface")) (EVar "tag")) (EBinOp "::" (EVar "k") (EVar "acc"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "declKeysAtHead") (EVar "rest")) (EVar "iface")) (EVar "tag")) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))

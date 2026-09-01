@@ -21,12 +21,13 @@ import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.annotate.{annotateProgram}
 import ir.core_ir_lower.{
+  ifaceImplHeadTable,
   lowerProgramEmit,
   declSigTypeNames,
   ctorFieldTypeNames,
   declaredRecordFieldOrders,
 }
-import backend.wasm_emit.{emitProgram, makeWasmEmitInput}
+import backend.wasm_emit.{emitProgram, makeWasmEmitInputFull}
 
 main = match args ()
   [targetPath] => withTarget targetPath
@@ -36,6 +37,9 @@ withTarget : String -> <IO> Unit
 withTarget targetPath = match readFile targetPath
   Ok targetSrc =>
     let decls = desugar (parse targetSrc)
-    let input = makeWasmEmitInput [] (declSigTypeNames decls) (ctorFieldTypeNames decls) False (declaredRecordFieldOrders decls)
-    putStr (emitProgram input (lowerProgramEmit (annotateProgram decls)))
+    -- the SAME decl list that is lowered, so the head table and the lowered
+    -- program's impl entries are projections of one program.
+    let annotated = annotateProgram decls
+    let input = makeWasmEmitInputFull [] (declSigTypeNames decls) (ctorFieldTypeNames decls) False (declaredRecordFieldOrders decls) [] (ifaceImplHeadTable annotated)
+    putStr (emitProgram input (lowerProgramEmit annotated))
   Err msg => ePutStrLn msg

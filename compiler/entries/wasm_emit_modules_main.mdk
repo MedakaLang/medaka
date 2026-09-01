@@ -39,6 +39,7 @@ import types.typecheck.{
 }
 import ir.core_ir.{CProgram(..)}
 import ir.core_ir_lower.{
+  ifaceImplHeadTable,
   declaredRecordFieldOrders,
   lowerProgramEmit,
   methodIfaceTable,
@@ -47,7 +48,7 @@ import ir.core_ir_lower.{
   validateFfiExternTypeNames,
 }
 import ir.dce.{dceFilter}
-import backend.wasm_emit.{emitProgram, makeWasmEmitInputWithFfi}
+import backend.wasm_emit.{emitProgram, makeWasmEmitInputFull}
 import backend.wasm_reach.{wasmReachFilter}
 import entries.entry_support.{driveModules, runEmitWith}
 import support.timer.{statsEnabled, emitStats}
@@ -70,7 +71,7 @@ emitTail runtimeDecls coreD modules2 =
   let allDecls0 = coreD ++ flatMap snd modules2
   let allDecls = dceFilter allDecls0
   let _ = preludeReturnPosDictNames coreD allDecls ++ preludeArgPosDictNames coreD allDecls ++ constrainedSigNames allDecls
-  let input = makeWasmEmitInputWithFfi (methodIfaceTable allDecls) (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls) (ctorFieldTypeNames allDecls) (mainTypeIsFloat ()) (declaredRecordFieldOrders allDecls) (validateFfiExternTypeNames (checkedFfiExternTypeNamesModules modules2))
+  let input = makeWasmEmitInputFull (methodIfaceTable allDecls) (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls) (ctorFieldTypeNames allDecls) (mainTypeIsFloat ()) (declaredRecordFieldOrders allDecls) (validateFfiExternTypeNames (checkedFfiExternTypeNamesModules modules2)) (ifaceImplHeadTable allDecls)
   let lowered = lowerProgramEmit allDecls
   let filtered = wasmReachFilter lowered
   -- MEDAKA_STATS reporting hook (S5, #2359 closure): the S5 gate's "emitted-vs-

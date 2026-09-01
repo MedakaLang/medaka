@@ -38,6 +38,7 @@ import types.typecheck.{
   preludeArgPosDictNames,
 }
 import ir.core_ir_lower.{
+  ifaceImplHeadTable,
   lowerProgramEmit,
   methodIfaceTable,
   declSigTypeNames,
@@ -45,7 +46,7 @@ import ir.core_ir_lower.{
 }
 import backend.private_mangle.{mangleUnits}
 import ir.dce.{dceFilter}
-import backend.wasm_emit.{emitProgramGaps, makeWasmEmitInput}
+import backend.wasm_emit.{emitProgramGaps, makeWasmEmitInputFull}
 import entries.entry_support.{driveModules}
 
 main : <IO> Unit
@@ -62,12 +63,14 @@ runEmit runtimeDecls coreDecls modules =
   -- graph to measure every node, so keep all decls.
   let allDecls = allDecls0
   let _ = preludeReturnPosDictNames coreD allDecls ++ preludeArgPosDictNames coreD allDecls ++ constrainedSigNames allDecls
-  let input = makeWasmEmitInput
+  let input = makeWasmEmitInputFull
     (methodIfaceTable allDecls)
     (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
     []
     False
     (declaredRecordFieldOrders allDecls)
+    []
+    (ifaceImplHeadTable allDecls)
   let gaps = emitProgramGaps input (lowerProgramEmit allDecls)
   printGaps gaps
 

@@ -1354,9 +1354,7 @@ lgToBind ((n, _), cs) = CBind n cs
 -- core_ir_typed_main).  The emit path lowers through here too and never reads the
 -- tables, so installing is a no-op for it.
 lowerImpls : List Decl -> List CImplEntry
-lowerImpls prog =
-  let _ = installIfaceImplHeads (ifaceImplHeadTable prog)
-  lowerImplsWith (installDispatchTables prog) prog
+lowerImpls prog = lowerImplsWith (installDispatchTables prog) prog
 
 -- ── #948: interface → the HEAD TAGS of its impls, read off the impl DECLS ────
 -- `lowerDeclImpl` projects a `DImpl` to one `CImplEntry` PER METHOD IT DEFINES, so
@@ -1397,12 +1395,15 @@ lowerImpls prog =
 -- bare head "Box" — a DIFFERENT hash word.  With the declared keys here the two
 -- sides compute the same collision verdict from the same facts.
 --
--- Installed HERE rather than by each emit driver on purpose: `lowerImpls` is the
--- one chokepoint every emit path funnels through with the WHOLE program's decls
--- (`lowerProgramEmit allDecls`), and it already installs `installDispatchTables`
--- the same way.  A per-driver `install*` call — the shape the other side tables
--- use — can be FORGOTTEN in a new driver, and the failure mode of forgetting it
--- is exactly the segfault this fixes.
+-- Until 2026-09-01 this table was INSTALLED into an ambient `Ref` by `lowerImpls`
+-- (the one chokepoint every emit path funnels through) and read back by the two
+-- backends through zero-argument accessors.  It is now an explicit VALUE: the emit
+-- driver mints it with `ifaceImplHeadTable` over the same decl list it lowers and
+-- hands it to the backend inside `EmitInput`/`WasmEmitInput`, so the three readers
+-- below take it as a parameter.  The forgettable-`install*` hazard the old note
+-- worried about is now a TYPE error instead: a driver cannot build an emit input
+-- without supplying this table.  A driver that has no decls (a hand-built
+-- `CProgram` test harness) passes `[]`, which is the pre-#1036 bare-head answer.
 -- ── #1047: the row also carries the INTERFACE IDENTITY ──────────────────────
 -- The `iface` field is a BARE NAME, and two unrelated modules may each declare an
 -- interface spelled the same way.  `implOrigin` (`frontend/ast.mdk`, stamped by
@@ -1417,13 +1418,6 @@ lowerImpls prog =
 -- on a program with no METHOD-name collision — is unchanged.  (⚠️ METHOD, not
 -- interface: the colliding interfaces' own names are irrelevant and may differ.)
 -- one row per DECLARED impl: (iface identity, iface, head tag, canonical impl key).
-ifaceImplHeadsRef : Ref (List (String, String, String, String))
-ifaceImplHeadsRef = Ref []
-
-export
-installIfaceImplHeads : List (String, String, String, String) -> Unit
-installIfaceImplHeads t = ifaceImplHeadsRef := t
-
 export
 ifaceImplHeadTable : List Decl -> List (String, String, String, String)
 ifaceImplHeadTable prog = flatMap ifaceImplHeadEntries prog
@@ -1784,8 +1778,8 @@ checkDictTagsInjective space hash ((m, w, owner)::rest) seen =
 -- falls back to first-match.  Not fixable here: `mdk_default_<method>_<tag>` has no
 -- interface component, so the two default bodies have one symbol between them.
 export
-ifaceIdsAtTag : String -> List String
-ifaceIdsAtTag tag = ifaceIdsAtTagGo tag !ifaceImplHeadsRef
+ifaceIdsAtTag : List (String, String, String, String) -> String -> List String
+ifaceIdsAtTag heads tag = ifaceIdsAtTagGo tag heads
 
 ifaceIdsAtTagGo : String -> List (String, String, String, String) -> List String
 ifaceIdsAtTagGo _ [] = []
@@ -1801,14 +1795,14 @@ ifaceIdsAtTagGo tag ((ifaceId, _, t, k)::rest)
 -- canonical full-type key — the same word `keyForSiteByIface` stamps into the
 -- caller's dict cell.
 export
-ifaceImplRouteKeys : String -> List String
-ifaceImplRouteKeys iface = ifaceRouteKeysGo iface !ifaceImplHeadsRef
+ifaceImplRouteKeys : List (String, String, String, String) -> String -> List String
+ifaceImplRouteKeys heads iface = ifaceRouteKeysGo heads iface heads
 
-ifaceRouteKeysGo : String -> List (String, String, String, String) -> List String
-ifaceRouteKeysGo _ [] = []
-ifaceRouteKeysGo iface ((_, i, tag, key)::rest)
-  | i == iface = declRouteKey tag key (ifaceDeclHeadUnique i tag) :: ifaceRouteKeysGo iface rest
-  | otherwise = ifaceRouteKeysGo iface rest
+ifaceRouteKeysGo : List (String, String, String, String) -> String -> List (String, String, String, String) -> List String
+ifaceRouteKeysGo _ _ [] = []
+ifaceRouteKeysGo heads iface ((_, i, tag, key)::rest)
+  | i == iface = declRouteKey tag key (ifaceDeclHeadUnique heads i tag) :: ifaceRouteKeysGo heads iface rest
+  | otherwise = ifaceRouteKeysGo heads iface rest
 
 declRouteKey : String -> String -> Bool -> String
 declRouteKey tag key unique = if unique then tag else key
@@ -1822,13 +1816,13 @@ declRouteKey tag key unique = if unique then tag else key
 -- collision verdicts on a cross-module program.  It now counts the graph-global
 -- `IE`, i.e. the same population.  The arithmetic still differs and that difference
 -- is pre-existing: this side counts DISTINCT canonical keys, that side counts rows.
--- An UNINSTALLED table answers True — the
--- pre-#1036 bare-head behaviour — so a driver that never lowered through
--- `lowerImpls` degrades to today's output rather than mis-keying.
+-- An EMPTY table answers True — the
+-- pre-#1036 bare-head behaviour — so a driver that supplies no decl-derived table
+-- degrades to today's output rather than mis-keying.
 export
-ifaceDeclHeadUnique : String -> String -> Bool
-ifaceDeclHeadUnique iface tag =
-  listLen (declKeysAtHead !ifaceImplHeadsRef iface tag []) <= 1
+ifaceDeclHeadUnique : List (String, String, String, String) -> String -> String -> Bool
+ifaceDeclHeadUnique heads iface tag =
+  listLen (declKeysAtHead heads iface tag []) <= 1
 
 declKeysAtHead : List (String, String, String, String) -> String -> String -> List String -> List String
 declKeysAtHead [] _ _ acc = acc

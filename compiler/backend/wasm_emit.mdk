@@ -472,13 +472,17 @@ freshWasmEmit mode = WasmEmit {
 -- Declaration-derived semantic input. Raw lists retain table order where a full
 -- table is required; indexes preserve lookupAssoc's first-match result.
 data WasmEmitInputData =
-  | WasmEmitInputData (List (String, (String, Int))) (OrdMap (String, Int)) (List (String, (List String, String))) (OrdMap (List String, String)) (List (String, List String)) (OrdMap (List Int)) Bool (List (String, List String)) (OrdMap (List String)) (OrdMap (String, List String)) (OrdMap Int) (OrdMap (List String, String))
+  | WasmEmitInputData (List (String, (String, Int))) (OrdMap (String, Int)) (List (String, (List String, String))) (OrdMap (List String, String)) (List (String, List String)) (OrdMap (List Int)) Bool (List (String, List String)) (OrdMap (List String)) (OrdMap (String, List String)) (OrdMap Int) (OrdMap (List String, String)) (List (String, String, String, String))
 
 export type WasmEmitInput = WasmEmitInputData
 
+-- The DECL-FREE form: for the hand-built-`CProgram` harnesses that have no
+-- declaration list to project, so both the FFI extern index and the declared-impl
+-- head table are legitimately empty.  Every driver that lowers real decls uses
+-- `makeWasmEmitInputFull` instead.
 export
 makeWasmEmitInput : List (String, (String, String, Int)) -> List (String, (List String, String)) -> List (String, List String) -> Bool -> List (String, List String) -> WasmEmitInput
-makeWasmEmitInput methodIfaces declSigTypes ctorFieldTypes mainIsFloat recordFieldOrders = makeWasmEmitInputWithFfi methodIfaces declSigTypes ctorFieldTypes mainIsFloat recordFieldOrders []
+makeWasmEmitInput methodIfaces declSigTypes ctorFieldTypes mainIsFloat recordFieldOrders = makeWasmEmitInputFull methodIfaces declSigTypes ctorFieldTypes mainIsFloat recordFieldOrders [] []
 
 -- #2076: the same widening `makeEmitInput`/`ffiExternIndex` gets on the LLVM
 -- side (llvm_emit.mdk) — an index of USER-declared FFI extern names (name ->
@@ -490,9 +494,16 @@ makeWasmEmitInput methodIfaces declSigTypes ctorFieldTypes mainIsFloat recordFie
 -- callers (wasm_emit_typed_main.mdk and friends, which never declare a user FFI
 -- extern) are untouched; only the real multi-module build entry
 -- (wasm_emit_modules_main.mdk) needs to pass this.
+--
+-- 2026-09-01: renamed from `makeWasmEmitInputWithFfi` and widened again, by
+-- `ifaceImplHeads` — `core_ir_lower.ifaceImplHeadTable` over the SAME decl list the
+-- caller lowers.  That table used to reach `ifaceIdsAtTag` through an ambient `Ref`
+-- installed by lowering; it is a carried value now, so this is no longer the
+-- FFI-only widening the name claimed.  The decl-free harnesses keep the 5-argument
+-- `makeWasmEmitInput` above.
 export
-makeWasmEmitInputWithFfi : List (String, (String, String, Int)) -> List (String, (List String, String)) -> List (String, List String) -> Bool -> List (String, List String) -> List (String, (List String, String)) -> WasmEmitInput
-makeWasmEmitInputWithFfi methodIfaces declSigTypes ctorFieldTypes mainIsFloat recordFieldOrders ffiExternTypes = WasmEmitInputData (map bareIfaceArityRowW methodIfaces) (omFromPairs (reverseL (map bareIfaceArityRowW methodIfaces)) omEmpty) declSigTypes (omFromPairs (reverseL declSigTypes) omEmpty) ctorFieldTypes (omFromPairs (reverseL (map ctorToFloatIdxs ctorFieldTypes)) omEmpty) mainIsFloat recordFieldOrders (omFromPairs (reverseL recordFieldOrders) omEmpty) (recordLabelIndex recordFieldOrders omEmpty) (omFromPairs (reverseL (map ifaceIdArityRowW methodIfaces)) omEmpty) (omFromPairs (reverseL ffiExternTypes) omEmpty)
+makeWasmEmitInputFull : List (String, (String, String, Int)) -> List (String, (List String, String)) -> List (String, List String) -> Bool -> List (String, List String) -> List (String, (List String, String)) -> List (String, String, String, String) -> WasmEmitInput
+makeWasmEmitInputFull methodIfaces declSigTypes ctorFieldTypes mainIsFloat recordFieldOrders ffiExternTypes ifaceImplHeads = WasmEmitInputData (map bareIfaceArityRowW methodIfaces) (omFromPairs (reverseL (map bareIfaceArityRowW methodIfaces)) omEmpty) declSigTypes (omFromPairs (reverseL declSigTypes) omEmpty) ctorFieldTypes (omFromPairs (reverseL (map ctorToFloatIdxs ctorFieldTypes)) omEmpty) mainIsFloat recordFieldOrders (omFromPairs (reverseL recordFieldOrders) omEmpty) (recordLabelIndex recordFieldOrders omEmpty) (omFromPairs (reverseL (map ifaceIdArityRowW methodIfaces)) omEmpty) (omFromPairs (reverseL ffiExternTypes) omEmpty) ifaceImplHeads
 
 -- #1450/#1668 -- the two PROJECTIONS of a `methodIfaceTable` row (mirror of
 -- llvm_emit's `bareIfaceArityRow`/`ifaceIdArityRow`).  The bare projection
@@ -508,8 +519,13 @@ ifaceIdArityRowW : (String, (String, String, Int)) -> (String, Int)
 ifaceIdArityRowW (m, (_, ifaceWord, arity)) =
   (ifaceMethodArityKey ifaceWord m, arity)
 
+-- The declared-impl head table this emission was minted with (see
+-- `makeWasmEmitInputFull`); `[]` for a decl-free harness input.
+inputIfaceImplHeadsW : WasmEmitInput -> List (String, String, String, String)
+inputIfaceImplHeadsW (WasmEmitInputData _ _ _ _ _ _ _ _ _ _ _ _ heads) = heads
+
 inputMainIsFloat : WasmEmitInput -> Bool
-inputMainIsFloat (WasmEmitInputData _ _ _ _ _ _ isFloat _ _ _ _ _) = isFloat
+inputMainIsFloat (WasmEmitInputData _ _ _ _ _ _ isFloat _ _ _ _ _ _) = isFloat
 
 recordLabelIndex : List (String, List String) -> OrdMap (String, List String) -> OrdMap (String, List String)
 recordLabelIndex [] m = m
@@ -629,11 +645,11 @@ indexTypeCtorsW index = index.ctor.typeCtors
 -- arity, separate from forwarded dict params).  Every index is built once by
 -- makeWasmEmitInput, preserving first-match list semantics.
 inputMethodIfaces : WasmEmitInput -> List (String, (String, Int))
-inputMethodIfaces (WasmEmitInputData xs _ _ _ _ _ _ _ _ _ _ _) = xs
+inputMethodIfaces (WasmEmitInputData xs _ _ _ _ _ _ _ _ _ _ _ _) = xs
 
 methodIfaceOfW : Prog -> String -> String
 methodIfaceOfW prog name = match progInput prog
-  WasmEmitInputData _ methodIndex _ _ _ _ _ _ _ _ _ _ => match omLookup name methodIndex
+  WasmEmitInputData _ methodIndex _ _ _ _ _ _ _ _ _ _ _ => match omLookup name methodIndex
     Some (iface, _) => iface
     None => ""
 
@@ -642,7 +658,7 @@ methodArityOfW prog name = match progInput prog
   input => methodArityOfInput input name
 
 methodArityOfInput : WasmEmitInput -> String -> Int
-methodArityOfInput (WasmEmitInputData _ methodIndex _ _ _ _ _ _ _ _ _ _) name = match omLookup name methodIndex
+methodArityOfInput (WasmEmitInputData _ methodIndex _ _ _ _ _ _ _ _ _ _ _) name = match omLookup name methodIndex
   Some (_, arity) => arity
   None => 0
 
@@ -660,7 +676,7 @@ methodArityOfInput (WasmEmitInputData _ methodIndex _ _ _ _ _ _ _ _ _ _) name = 
 -- PR #1346's E4 result and re-opens CLOSED S0 #1277.  A miss on the identity key
 -- falls back to the bare table, so collision-free programs emit unchanged.
 inputMethodIfaceIdIndex : WasmEmitInput -> OrdMap Int
-inputMethodIfaceIdIndex (WasmEmitInputData _ _ _ _ _ _ _ _ _ _ idIndex _) =
+inputMethodIfaceIdIndex (WasmEmitInputData _ _ _ _ _ _ _ _ _ _ idIndex _ _) =
   idIndex
 
 methodArityOfIfaceInput : WasmEmitInput -> String -> String -> Int
@@ -696,7 +712,7 @@ methodArityOfTagW prog method tag = match findByTagW method tag (methodEntriesW 
 -- Declared parameter/return type heads drive Unit-main and Float recovery.
 declRetLookupW : Prog -> String -> Option (List String, String)
 declRetLookupW prog name = match progInput prog
-  WasmEmitInputData _ _ _ declIndex _ _ _ _ _ _ _ _ => omLookup name declIndex
+  WasmEmitInputData _ _ _ declIndex _ _ _ _ _ _ _ _ _ => omLookup name declIndex
 
 -- #2076: the wasm peer of `llvm_emit.mdk`'s `ffiSigOf`/`isFfiExtern` — is `name`
 -- a USER-declared FFI extern?  Built from `makeWasmEmitInputWithFfi`'s
@@ -708,7 +724,7 @@ declRetLookupW prog name = match progInput prog
 -- through to a generic unbound-variable panic.
 ffiSigOfW : Prog -> String -> Option (List String, String)
 ffiSigOfW prog name = match progInput prog
-  WasmEmitInputData _ _ _ _ _ _ _ _ _ _ _ ffiIndex => omLookup name ffiIndex
+  WasmEmitInputData _ _ _ _ _ _ _ _ _ _ _ ffiIndex _ => omLookup name ffiIndex
 
 isFfiExternW : Prog -> String -> Bool
 isFfiExternW prog name = match ffiSigOfW prog name
@@ -1090,7 +1106,7 @@ floatFieldIndices (_::rest) i = floatFieldIndices rest (i + 1)
 -- true iff the ctor's field at the given 0-based index has declared type Float.
 isFloatCtorField : Prog -> String -> Int -> Bool
 isFloatCtorField prog ctor idx = match progInput prog
-  WasmEmitInputData _ _ _ _ _ ctorFloatIndex _ _ _ _ _ _ => match omLookup ctor ctorFloatIndex
+  WasmEmitInputData _ _ _ _ _ ctorFloatIndex _ _ _ _ _ _ _ => match omLookup ctor ctorFloatIndex
     Some idxs => containsInt idx idxs
     None => False
 
@@ -4875,7 +4891,10 @@ findByTagW method tag (_::rest) = findByTagW method tag rest
 -- test/must_fail_fixtures/1265-two-ifaces-same-method-one-type-default-collapse/.
 defaultForW : Prog -> String -> String -> Option CImplEntry
 defaultForW prog method tag =
-  pickDefaultAtW tag (findDefaultsW method (methodEntriesW prog method))
+  pickDefaultAtW
+    (inputIfaceImplHeadsW (progInput prog))
+    tag
+    (findDefaultsW method (methodEntriesW prog method))
 
 findDefaultsW : String -> List CImplEntry -> List CImplEntry
 findDefaultsW _ [] = []
@@ -4884,10 +4903,11 @@ findDefaultsW method ((CImplEntry n s (CImplDefault ifaceId pats body))::rest)
   | otherwise = findDefaultsW method rest
 findDefaultsW method (_::rest) = findDefaultsW method rest
 
-pickDefaultAtW : String -> List CImplEntry -> Option CImplEntry
-pickDefaultAtW _ [] = None
-pickDefaultAtW _ [d] = Some d
-pickDefaultAtW tag (d::rest) = narrowDefaultsW (d::rest) (ifaceIdsAtTag tag) d
+pickDefaultAtW : List (String, String, String, String) -> String -> List CImplEntry -> Option CImplEntry
+pickDefaultAtW _ _ [] = None
+pickDefaultAtW _ _ [d] = Some d
+pickDefaultAtW heads tag (d::rest) =
+  narrowDefaultsW (d::rest) (ifaceIdsAtTag heads tag) d
 
 narrowDefaultsW : List CImplEntry -> List String -> CImplEntry -> Option CImplEntry
 narrowDefaultsW ds ids fallback = match filterList (defaultOwnedByW ids) ds
@@ -5818,7 +5838,7 @@ isArithOp op = contains op ["+", "-", "*", "/", "%"]
 -- PVar.  Used by emitLeafRef/emitGuardArmRef to seed floatLocals for the arm body.
 ctorPatFloatBinders : Prog -> Pat -> List String
 ctorPatFloatBinders prog (PCon c args) = match progInput prog
-  WasmEmitInputData _ _ _ _ _ ctorFloatIndex _ _ _ _ _ _ => match omLookup c ctorFloatIndex
+  WasmEmitInputData _ _ _ _ _ ctorFloatIndex _ _ _ _ _ _ _ => match omLookup c ctorFloatIndex
     Some floatIdxs => ctorPatFloatBindersGo c floatIdxs args 0
     None => []
 ctorPatFloatBinders _ _ = []
@@ -8498,13 +8518,13 @@ findRecByField ((ctor, labels)::rest) label =
 
 recordFieldsOf : Prog -> String -> Option (List String)
 recordFieldsOf prog ctor = match progInput prog
-  WasmEmitInputData _ _ _ _ _ _ _ _ recordIndex _ _ _ => match omLookup ctor recordIndex
+  WasmEmitInputData _ _ _ _ _ _ _ _ recordIndex _ _ _ _ => match omLookup ctor recordIndex
     Some labels => Some labels
     None => lookupAssoc ctor (indexRecFieldsW (progIndex prog))
 
 recordByField : Prog -> String -> Option (String, List String)
 recordByField prog label = match progInput prog
-  WasmEmitInputData _ _ _ _ _ _ _ _ _ labelIndex _ _ => match omLookup label labelIndex
+  WasmEmitInputData _ _ _ _ _ _ _ _ _ labelIndex _ _ _ => match omLookup label labelIndex
     Some entry => Some entry
     None => findRecByField (indexRecFieldsW (progIndex prog)) label
 
