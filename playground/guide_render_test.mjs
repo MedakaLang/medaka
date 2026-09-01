@@ -28,6 +28,9 @@
 //   9. every internal `href="X.html#frag"` resolves to a real heading id on the
 //      TARGET page X — not merely to an emitted page, and not merely to the
 //      citing page's own TOC (check 4)
+//  10. syntax highlighting is LOSSLESS — stripping the `<span class="tok-...">`
+//      wrappers from any rendered `<code>` body reproduces that block's
+//      `data-source` exactly, and only `kind-medaka` bodies carry spans at all
 
 import { readdirSync, readFileSync, mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve, dirname, basename } from 'node:path';
@@ -107,13 +110,18 @@ try {
   // was never given, so it is derived once, from the same input, by the same
   // exported helper the renderer itself calls.
   const shipped = shippedModules(distDir);
+  let totalHighlighted = 0;
+  let spanCount = 0;
 
   // One `.codeblock` div, opening attributes through the closing `</div>`. The
   // trailing group is the FOOTER: empty for every non-`medaka` kind, and the
   // `codeblock-actions` div for `kind-medaka`. The non-greedy tail stops at the
   // first `</div>\n`, which is the block's own closer — the footer's inner
   // `</div>` is followed by `</div>`, not by a newline.
-  const BLOCK_RE = /<div class="codeblock kind-([a-z]+)" data-lang="([^"]*)" data-fence="([^"]*)" data-source="([\s\S]*?)"><pre><code[^>]*>[\s\S]*?<\/code><\/pre>([\s\S]*?)<\/div>\n/g;
+  // Group 5 is the `<code>` BODY, which since F-guide-syntax-highlight is no
+  // longer plain-escaped text but token `<span>`s (playground/highlight_medaka.mjs).
+  // Check 10 grades it against group 4 (`data-source`); the footer is now group 6.
+  const BLOCK_RE = /<div class="codeblock kind-([a-z]+)" data-lang="([^"]*)" data-fence="([^"]*)" data-source="([\s\S]*?)"><pre><code[^>]*>([\s\S]*?)<\/code><\/pre>([\s\S]*?)<\/div>\n/g;
 
   for (const page of pages) {
     const html = readFileSync(join(out, page.outFile), 'utf8');
@@ -196,7 +204,7 @@ try {
     //    that kind (render_docs.mjs `code()`); `kind-output`/`toml`/`plain`
     //    blocks correctly have no footer at all.
     for (const b of blocks) {
-      const [, kind, lang, , rawSource, footer] = b;
+      const [, kind, lang, , rawSource, , footer] = b;
       if (kind !== 'medaka') {
         check(footer === '', `${where}: kind-${kind} codeblock carries no runnability footer`);
         continue;
@@ -216,9 +224,39 @@ try {
         `${want.runnable ? 'runnable' : `not runnable (${want.reason})`}`);
       if (want.runnable) totalRunnable++; else totalNotRunnable++;
     }
+
+    // 10. HIGHLIGHTING IS LOSSLESS. `kind-medaka` bodies are token-wrapped by
+    //     playground/highlight_medaka.mjs; every other kind stays plain. Either
+    //     way, deleting the span tags from the rendered body must reproduce the
+    //     block's `data-source` — which is `escapeHtml(text)` — CHARACTER FOR
+    //     CHARACTER. A highlighter that drops, reorders, or double-escapes even
+    //     one character ships a code sample that no longer compiles, and does it
+    //     invisibly: the page still renders, the u25b6 button still works (it
+    //     reads `data-source`, not the body), and only a reader copying the
+    //     visible text finds out. Whole-body equality, deliberately not a spot
+    //     check and deliberately not scoped to `kind-medaka`.
+    for (const b of blocks) {
+      const [, kind, lang, , rawSource, codeBody] = b;
+      const stripped = codeBody.replace(/<span class="tok-[A-Za-z]+">/g, '').replace(/<\/span>/g, '');
+      check(stripped === rawSource,
+        `${where}: kind-${kind} codeblock (${lang}) highlighting is lossless ` +
+        `(stripped body ${stripped === rawSource ? 'matches' : 'DIFFERS from'} data-source)`);
+      if (kind === 'medaka') {
+        totalHighlighted++;
+        spanCount += (codeBody.match(/<span class="tok-/g) ?? []).length;
+      } else {
+        // Non-source kinds must not be highlighted at all: `medaka-expect` is
+        // documented stdout, `toml`/`plain` are not Medaka source. A stray span
+        // here means the kind partition in `code()` drifted.
+        check(!codeBody.includes('<span'),
+          `${where}: kind-${kind} codeblock (${lang}) body carries no token spans`);
+      }
+    }
   }
   note(`${totalLinksRewritten} internal .html link(s) all resolve to emitted pages`);
   note(`${totalCodeblocks} code block(s) all carry a known data-lang and a recoverable data-source`);
+  note(`${totalHighlighted} kind-medaka block(s) carry ${spanCount} token span(s); `
+    + `every code body strips back to its data-source exactly`);
   note(`${totalRunnable} runnable / ${totalNotRunnable} not-runnable medaka block(s), `
     + `each with exactly one footer class matching the recomputed rule`
     + `${shipped === null ? ' (no --dist: the unshipped-import conjunct is skipped on BOTH sides)' : ''}`);
