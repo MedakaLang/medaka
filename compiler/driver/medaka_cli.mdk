@@ -3186,8 +3186,32 @@ collectModuleDocs rsrc csrc stdlibDir (target::rest) = match readFile target
     let md = computeModuleDoc rsrc csrc tsrc target roots
     map (md :: _) (collectModuleDocs rsrc csrc stdlibDir rest)
 
+-- A library page is named for its module's DERIVED name (`mdName`, the
+-- basename minus `.mdk`), so two targets in different directories that share a
+-- basename claim the SAME page: `writeLibraryPages` wrote one and then
+-- overwrote it with the other, the index grew a dead link plus two
+-- identically-titled sections, and `inventory.json` filed both modules' entries
+-- under one name — all silently, at exit 0.  Refuse instead, BEFORE writing
+-- anything, so a half-written output tree is never left behind.
+checkDistinctModuleNames : List ModuleDoc -> <IO> Unit
+checkDistinctModuleNames mds = checkDistinctGo mds []
+
+checkDistinctGo : List ModuleDoc -> List String -> <IO> Unit
+checkDistinctGo [] _ = ()
+checkDistinctGo (md::rest) seen =
+  let n = mdName md
+  if elemStrCli n seen then
+    let _ = ePutStrLn "medaka doc --out: two targets share the module name '\{n}' — they would write the same page '\{n}.md'. Rename one, or document them in separate runs."
+    exit 1
+  else checkDistinctGo rest (n::seen)
+
+elemStrCli : String -> List String -> Bool
+elemStrCli _ [] = False
+elemStrCli x (y::ys) = x == y || elemStrCli x ys
+
 writeLibraryOutputs : String -> List ModuleDoc -> <IO> Unit
 writeLibraryOutputs outDir mds =
+  let _ = checkDistinctModuleNames mds
   let _ = writeLibraryPages outDir mds
   let _ = writeLibraryFile outDir "index.md" (renderIndex mds)
   writeLibraryFile

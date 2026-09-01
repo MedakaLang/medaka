@@ -42,7 +42,10 @@ GOLDENDIR="$ROOT/test/doc_goldens"
 LIBFIXDIR="$FIXDIR/library"
 LIBGOLDENDIR="$GOLDENDIR/library"
 LIBTMPDIR="$(mktemp -d)"
-trap 'rm -rf "$LIBTMPDIR"' EXIT
+# Separate scratch for the duplicate-basename probe (S2-4): it must not live
+# under $LIBTMPDIR, which is compared wholesale against the golden tree.
+DUPTMPDIR="$(mktemp -d)"
+trap 'rm -rf "$LIBTMPDIR" "$DUPTMPDIR"' EXIT
 
 if [ "${CAPTURE:-0}" = "1" ]; then
   mkdir -p "$GOLDENDIR"
@@ -126,6 +129,21 @@ if [ -d "$LIBGOLDENDIR" ]; then
     fail=$((fail + 1))
     printf 'FAIL library-mode impl rebucketing (Sizeish Widget left gamma.md)\n'
   fi
+  # S2-1: ownership clause 1 must see a PRIVATE `data` declaration. owner.mdk
+  # declares `Gadget` without exporting it (so it renders NO doc entry) and
+  # writes `impl Countish Gadget`; gadget.mdk exists under the matching name
+  # but says nothing about the type. Pre-fix, the owner map was built from
+  # rendered entries, missed the private declaration, and filed the impl on
+  # gadget.md. Both halves asserted: it IS on owner.md and is NOT on gadget.md
+  # — a one-sided check passes if the entry vanishes entirely.
+  if grep -q '^## .Countish Gadget.$' "$LIBTMPDIR/owner.md" 2>/dev/null \
+    && ! grep -q '^## .Countish Gadget.$' "$LIBTMPDIR/gadget.md" 2>/dev/null; then
+    pass=$((pass + 1))
+    printf 'ok   library-mode impl rebucketing (private-type owner keeps Countish Gadget)\n'
+  else
+    fail=$((fail + 1))
+    printf 'FAIL library-mode impl rebucketing (Countish Gadget misfiled off owner.md — private `data Gadget` not seen as ownership evidence)\n'
+  fi
   if diff -rq "$LIBGOLDENDIR" "$LIBTMPDIR" >/dev/null 2>&1; then
     pass=$((pass + 1))
     printf 'ok   library-mode tree (index.md + inventory.json + per-module pages)\n'
@@ -137,6 +155,85 @@ if [ -d "$LIBGOLDENDIR" ]; then
 else
   fail=$((fail + 1))
   printf 'FAIL library-mode (no golden tree — run CAPTURE=1 sh test/diff_compiler_doc.sh)\n'
+fi
+
+# ── direct assertions (not only via goldens) ────────────────────────────────
+# The single-file goldens above already pin these fixtures byte-for-byte, but a
+# golden can be re-blessed; these state the PROPERTY, so a regression has to be
+# argued with rather than captured away.
+
+# S2-2: doc's example detection == doctest.mdk's `-- > ` rule. The fixture holds
+# one real doctest and one `-->`-shaped decoy. Cross-checked against `medaka
+# test` itself, which is the authority on how many doctests the file has — the
+# marker claims "run by `medaka test`" and this is that claim, measured.
+DTFIX="$FIXDIR/doctest_marker.mdk"
+if [ -f "$DTFIX" ]; then
+  markers="$("$MEDAKA" doc "$DTFIX" 2>/dev/null | grep -c 'doctest — run by')"
+  ran="$("$MEDAKA" test "$DTFIX" 2>/dev/null | grep -c '^  ok  ')"
+  if [ "$markers" = "1" ] && [ "$ran" = "1" ]; then
+    pass=$((pass + 1))
+    printf 'ok   doctest marker agrees with medaka test (1 marker, 1 doctest run)\n'
+  else
+    fail=$((fail + 1))
+    printf 'FAIL doctest marker disagrees with medaka test (%s marker(s) rendered, %s doctest(s) actually run)\n' "$markers" "$ran"
+  fi
+  # ... and the decoy renders as escaped prose, never inside a fence.
+  if "$MEDAKA" doc "$DTFIX" 2>/dev/null | grep -q '^\\> fakeExample 1$'; then
+    pass=$((pass + 1))
+    printf 'ok   `-->` line renders as escaped prose, not a fenced example\n'
+  else
+    fail=$((fail + 1))
+    printf 'FAIL `-->` line did not render as escaped prose\n'
+  fi
+else
+  fail=$((fail + 1))
+  printf 'FAIL doctest marker check (missing fixture %s)\n' "$DTFIX"
+fi
+
+# S2-3: `| ` is stripped only where a Haddock marker can sit. The marker sits on
+# the SECOND line of the block (below a decorative separator merged in by
+# `findDocForLine`) and must go; the table rows below it are user content and
+# must survive verbatim.
+PPFIX="$FIXDIR/pipe_prose.mdk"
+if [ -f "$PPFIX" ]; then
+  pp="$("$MEDAKA" doc "$PPFIX" 2>/dev/null)"
+  if printf '%s\n' "$pp" | grep -q '^Parse an expression\.$' \
+    && printf '%s\n' "$pp" | grep -q '^| expr | term |$' \
+    && printf '%s\n' "$pp" | grep -q '^|------|------|$' \
+    && printf '%s\n' "$pp" | grep -q '^| still | a | table |$'; then
+    pass=$((pass + 1))
+    printf 'ok   pipe marker stripped once per block, table rows survive\n'
+  else
+    fail=$((fail + 1))
+    printf 'FAIL pipe-prose handling (marker not stripped, or a `|`-led user line was eaten)\n'
+  fi
+else
+  fail=$((fail + 1))
+  printf 'FAIL pipe-prose check (missing fixture %s)\n' "$PPFIX"
+fi
+
+# S2-4: library mode must REFUSE two targets that share a module basename rather
+# than silently overwriting one page with the other (and misattributing both
+# modules' entries in inventory.json). Inputs are synthesized here rather than
+# committed, so no shared fixture corpus grows a directory for one negative
+# case. The refusal must land BEFORE any output is written.
+DUPDIR="$DUPTMPDIR"
+mkdir -p "$DUPDIR/a" "$DUPDIR/b" "$DUPDIR/out"
+cp "$LIBFIXDIR/alpha.mdk" "$DUPDIR/a/samename.mdk"
+cp "$LIBFIXDIR/beta.mdk" "$DUPDIR/b/samename.mdk"
+dupout="$("$MEDAKA" doc --out "$DUPDIR/out" "$DUPDIR/a/samename.mdk" "$DUPDIR/b/samename.mdk" 2>&1)"
+dupstatus=$?
+if [ "$dupstatus" -ne 0 ] \
+  && printf '%s\n' "$dupout" | grep -q "share the module name 'samename'" \
+  && [ ! -f "$DUPDIR/out/samename.md" ]; then
+  pass=$((pass + 1))
+  printf 'ok   library-mode refuses a duplicate module basename\n'
+else
+  fail=$((fail + 1))
+  printf 'FAIL library-mode duplicate basename (exit %d, wrote samename.md=%s) — output:\n%s\n' \
+    "$dupstatus" \
+    "$([ -f "$DUPDIR/out/samename.md" ] && echo yes || echo no)" \
+    "$dupout"
 fi
 
 # 0-checked must fail: a gate that iterated no fixtures proves nothing and must

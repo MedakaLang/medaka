@@ -1,23 +1,33 @@
 # META
-source_lines=901
+source_lines=1078
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/doc.mdk — the native `medaka doc` documentation extractor.
 --
--- A faithful port of lib/doc.ml (the OCaml oracle), byte-identical output.
--- Harvests doc comments from the lexer's side-channel (collectComments),
--- matches them to top-level PUBLIC declarations by source position, looks up
--- inferred types from the typechecker (checkOneScheme, the Module-arm
--- single-module analogue of the single-file path lsp.mdk still uses), and
--- renders Markdown.
+-- A doc-comment extractor and Markdown renderer, in two modes:
+--   • SINGLE-FILE (`runDoc`) — one module in, one Markdown page on stdout.
+--   • LIBRARY (`computeModuleDoc` + `renderModulePage`/`renderIndex`/
+--     `libraryInventoryJson`, driven by `medaka doc --out DIR`) — many modules
+--     in, one page each plus an index and a machine-readable inventory, with
+--     library-wide corrections (`rebucketLibraryImpls`) no single-file run can
+--     make.
 --
--- Mirrors lib/doc.ml exactly:
---   • comment_body / expand_comment / build_comment_tbl / find_doc_for_line
---   • value_sig / pp_data_variant / pp_record_fields / pp_requires / render_sig
---   • all_letgroup_entries / extract_entries / render_markdown
--- and the pre-desugar `pp_ty_prec` (lib/ast.ml) used for AST-rendered sigs —
--- compiler's types/typecheck.ppTy DROPS effect rows, so doc carries its own
--- precise ppTyP that renders <eff> like OCaml's pp_ty_prec.
+-- Both modes share one pipeline: harvest comments from the lexer's
+-- side-channel (`collectComments`), match them to top-level declarations by
+-- source position, infer schemes through the SAME multi-module loader path
+-- `check`/`run`/LSP use (`projectEntrySchemes`, so an import-bearing module
+-- resolves its siblings — S-doc-multimodule), and render.
+--
+-- Entries are extracted from the RAW, PRE-DESUGAR program, so `renderSig`
+-- shows the surface a reader wrote.  Type rendering is this file's own
+-- `ppTyP`, not `types/typecheck.ppTy`, because the latter DROPS `TyEffect`
+-- rows and interface method types carry them.
+--
+-- Historical note: this file began as a port of the OCaml compiler's
+-- `lib/doc.ml` and its comments used to claim byte-identical output.  That
+-- oracle was removed on 2026-06-26 and the renderer has since diverged
+-- deliberately (multi-entry `DUse` re-export expansion, doctest/marker-aware
+-- prose rendering, library-mode impl rebucketing).  It mirrors nothing now.
 
 import frontend.lexer.{Comment, collectComments, commentLine, commentText}
 import frontend.parser.{
@@ -44,14 +54,7 @@ import frontend.ast.{
   useMemberLocal,
 }
 import types.typecheck.{Scheme(..), ppScheme}
-import support.util.{
-  joinWith,
-  reverseL,
-  escStr,
-  stringTrim,
-  splitNl,
-  startsWith,
-}
+import support.util.{joinWith, reverseL, escStr, stringTrim, splitNl}
 import support.path.{baseOf, chopExt}
 import driver.diagnostics.{projectEntrySchemes}
 import json.{Json, JString, jObject, jArray}
@@ -154,9 +157,52 @@ commentBody t =
   else
     ""
 
+-- doctest.mdk's OWN rule for "this comment line is a doctest INPUT line",
+-- spelled out on the raw comment lexeme: `isInputLine c = startsWith "-- > "
+-- (clText c)` (compiler/tools/doctest.mdk).  Kept here as the single place
+-- doc's example detection is tied to doctest's, so the two cannot drift.
+isDoctestInputText : String -> Bool
+isDoctestInputText t = dlen t >= 5 && dsub 0 5 t == "-- > "
+
+-- The prose body of a LINE comment, with one correction on top of
+-- `commentBody` (S2-2).
+--
+-- doc's segmenter (`isExampleStart`) keys on a `> ` prefix in the extracted
+-- BODY; doctest keys on the literal 5-char `-- > ` prefix in the RAW lexeme.
+-- Enumerating `commentBody`'s branches against `isDoctestInputText` shows the
+-- two agree on every comment shape but ONE: `--> x` (no space after the `--`)
+-- takes the 2-char-strip branch and yields the body `> x`, which doctest never
+-- runs — so doc used to fence it and label it "run by `medaka test`", a claim
+-- `medaka test` contradicts.
+--
+-- For exactly that shape the body's leading `>` is emitted MARKDOWN-ESCAPED
+-- (`\> x`): it renders as the literal text the author wrote (rather than as a
+-- blockquote, which is what an unescaped leading `>` means in Markdown), and
+-- it cannot open an `ExampleSeg`.  An `ExampleSeg` therefore exists iff
+-- doctest would collect the same line, which is what makes the fence's marker
+-- true.  Block-comment lines need no correction: doctest's `expandBlock`
+-- reshapes an inner `> x` into `-- > x` and runs it, which is precisely what
+-- `isExampleStart` accepts.
+docLineBody : String -> String
+docLineBody t =
+  let body = commentBody t
+  if isDoctestInputText t || not (isExampleStart body) then
+    body
+  else
+    "\\" ++ body
+
+-- Undo `docLineBody`'s escape.  Inside a fenced example block a line is
+-- reproduced VERBATIM, so the prose-level Markdown escape must not leak into
+-- the fence.
+unescapeGtPrefix : String -> String
+unescapeGtPrefix line =
+  if dlen line >= 3 && dsub 0 3 line == "\\> " then
+    dsub 1 (dlen line) line
+  else
+    line
+
 -- Expand a comment into (line, text) pairs.  Block comments expand to one entry
--- per inner line (bare trimmed, like lib/doc.ml expand_comment — NOT the
--- doctest `-- ` reshape).  Line comments → [(line, commentBody text)].
+-- per inner line (bare trimmed).  Line comments → [(line, docLineBody text)].
 expandComment : Comment -> List (Int, String)
 expandComment c =
   let t = commentText c
@@ -167,7 +213,7 @@ expandComment c =
     let inner = if n >= 4 then dsub 2 (n - 2) t else ""
     expandBlockLines (commentLine c) 0 (splitNl inner)
   else
-    [(commentLine c, commentBody t)]
+    [(commentLine c, docLineBody t)]
 
 expandBlockLines : Int -> Int -> List String -> List (Int, String)
 expandBlockLines _ _ [] = []
@@ -322,7 +368,6 @@ dataVisPrivate _ = False
 -- Keyed on the DERIVED module name (post `baseOf`/`chopExt`), exactly like
 -- `excludedLibraryModule` — a fixture module named `runtime` gets the same
 -- treatment, so the rule is testable without touching `stdlib/runtime.mdk`.
-export
 preludeOnlyModule : String -> Bool
 preludeOnlyModule moduleName = moduleName == "runtime"
 
@@ -333,6 +378,24 @@ declKind (DImpl { tys = tys }) = KImplOn (headTyName tys)
 declKind (DData { dataName = _ }) = KTypeDecl
 declKind (DNewtype { newtypeName = _ }) = KTypeDecl
 declKind _ = KPlain
+
+-- Every type name this module DECLARES, public or private (S2-1).
+--
+-- `declKind` above answers the same question about a RENDERED entry, and that
+-- is not good enough for ownership: `renderSig` emits no entry at all for a
+-- private `data`/`newtype`, so an owner map built from entries is blind to a
+-- privately-declared type and `rebucketLibraryImpls` used to fall through to
+-- its bare-name clause and file the impl on an unrelated module's page.  A
+-- declaration is evidence of ownership whether or not it is public, so the
+-- owner map is built from the RAW decls instead.
+declaredTypeNames : List Decl -> List String
+declaredTypeNames [] = []
+declaredTypeNames (d::ds) = declaredTypeName d ++ declaredTypeNames ds
+
+declaredTypeName : Decl -> List String
+declaredTypeName (DData { dataName = n }) = [n]
+declaredTypeName (DNewtype { newtypeName = n }) = [n]
+declaredTypeName _ = []
 
 headTyName : List Ty -> Option String
 headTyName [] = None
@@ -478,16 +541,15 @@ zipDoc (x::xs) (y::ys) = (x, y) :: zipDoc xs ys
 -- both fixes apply, so every consumer (per-entry docs, the module header lead
 -- paragraph) gets clean Markdown.
 
--- Strip a leading `| ` (or bare `|`) marker from a prose line. Normally only
--- the very first line of a marked comment carries it (`{- | ... -}` marks
--- once at the top; a continuation `--   line two` never repeats it) — BUT a
--- decorative, unmarked section-separator comment (`-- ── Duration ──`,
--- `stdlib/time.mdk`) can sit directly above a `-- | ...`-marked one with no
--- blank line between, and `findDocForLine`'s proximity rule merges both into
--- one doc block, putting the marker on an interior line. So this strips `| `
--- from EVERY prose line, not just the first — applied only in `ModeProse`
--- below, never inside a doctest example block, where a leading `|` would be
--- real (if unlikely) expected output, not a marker.
+-- Does this prose line carry a leading `| ` (or bare `|`) Haddock marker?
+hasPipeMarker : String -> Bool
+hasPipeMarker line = dlen line >= 2 && dsub 0 2 line == "| " || line == "|"
+
+-- Strip a leading `| ` (or bare `|`) marker from a prose line.  Applied ONLY
+-- where a marker can legitimately sit (`markerEligible` below) — never to
+-- every prose line, because a `|`-led line deeper in prose is USER CONTENT (a
+-- BNF alternative, a Markdown table row) and deleting its `|` silently
+-- destroys what the author wrote (S2-3).
 stripPipePrefix : String -> String
 stripPipePrefix line =
   if dlen line >= 2 && dsub 0 2 line == "| " then
@@ -496,6 +558,35 @@ stripPipePrefix line =
     ""
   else
     line
+
+-- Can a Haddock marker still sit on the NEXT line of a doc block?
+--
+-- Normally the marker is on the block's very first line (`{- | ... -}` marks
+-- once at the top; a continuation `--   line two` never repeats it).  But a
+-- decorative, unmarked section-separator comment (`-- ── Duration ──`,
+-- `stdlib/time.mdk`) can sit directly above a `-- | ...`-marked one with no
+-- blank line between, and `findDocForLine`'s proximity rule merges both into
+-- ONE doc block — putting the marker on an interior line.  So marker
+-- eligibility survives a blank line and a decorative separator, and nothing
+-- else; the first real prose (or the marker itself) ends it.
+--
+-- "Decorative" is read off the first character: not a letter and not a digit
+-- and not a space.  That covers the box-drawing/dash/equals rules the tree
+-- actually writes, without this file naming a Unicode literal, and it
+-- excludes indented continuation prose (which starts with a space).
+markerEligibleAfter : String -> Bool
+markerEligibleAfter line = line == "" || isDecorativeLine line
+
+isDecorativeLine : String -> Bool
+isDecorativeLine line =
+  let cs = stringToChars line
+  if arrayLength cs == 0 then False else isDecorativeChar (arrayGetUnsafe 0 cs)
+
+isDecorativeChar : Char -> Bool
+isDecorativeChar c = not (c >= 'a' && c <= 'z')
+  && not (c >= 'A' && c <= 'Z')
+  && not (c >= '0' && c <= '9')
+  && c /= ' '
 
 -- A run of extracted doc-prose lines is either plain prose or a doctest
 -- example block (starts at a `> ` line, extends through following non-blank
@@ -519,30 +610,46 @@ pushSeg ModeProse acc segs =
   if allBlankLines ls then segs else ProseSeg ls :: segs
 pushSeg ModeExample acc segs = ExampleSeg (reverseL acc) :: segs
 
-docSegGo : List String -> SegMode -> List String -> List DocSegment -> List DocSegment
-docSegGo [] mode acc segs = reverseL (pushSeg mode acc segs)
-docSegGo (line::rest) ModeProse acc segs =
+-- The `Bool` is marker eligibility: True while a Haddock `| ` marker could
+-- still legitimately open this doc block (see `markerEligibleAfter`).  It
+-- starts True (the block's first line), is consumed by the one marker the
+-- block may carry, and is never restored — a `|`-led line after that is user
+-- content.
+docSegGo : List String -> SegMode -> Bool -> List String -> List DocSegment -> List DocSegment
+docSegGo [] mode _ acc segs = reverseL (pushSeg mode acc segs)
+docSegGo (line::rest) ModeProse markerOk acc segs =
   if isExampleStart line then
-    docSegGo rest ModeExample [line] (pushSeg ModeProse acc segs)
+    docSegGo rest ModeExample False [line] (pushSeg ModeProse acc segs)
+  else if markerOk && hasPipeMarker line then
+    docSegGo rest ModeProse False (stripPipePrefix line :: acc) segs
   else
-    docSegGo rest ModeProse (stripPipePrefix line :: acc) segs
-docSegGo (line::rest) ModeExample acc segs =
+    docSegGo rest ModeProse (markerOk && markerEligibleAfter line) (line::acc) segs
+docSegGo (line::rest) ModeExample _ acc segs =
   if line == "" then
-    docSegGo rest ModeProse [] (pushSeg ModeExample acc segs)
+    docSegGo rest ModeProse False [] (pushSeg ModeExample acc segs)
   else
-    docSegGo rest ModeExample (line::acc) segs
+    docSegGo rest ModeExample False (unescapeGtPrefix line :: acc) segs
 
 docSegments : List String -> List DocSegment
-docSegments lines = docSegGo lines ModeProse [] []
+docSegments lines = docSegGo lines ModeProse True [] []
 
 -- An `ExampleSeg` is not decorative prose: `medaka test` EXTRACTS and RUNS it
 -- (`compiler/tools/doctest.mdk`), so its expected-output lines are verified on
 -- every test run.  A reader cannot tell that from a bare fenced block, so
 -- S-doc-surface-truth (hole (d)) labels it.  THE RULE: the marker sits on its
 -- own line immediately above the fence, italic so it reads as an annotation
--- rather than as part of the example, and it is emitted for EVERY `ExampleSeg`
--- — the segmenter's `> ` rule IS doctest's own extraction rule, so an example
--- the doc renders fenced is by construction one `medaka test` runs.
+-- rather than as part of the example, and it is emitted for EVERY
+-- `ExampleSeg`.
+--
+-- That last clause is only honest because the segmenter and doctest agree on
+-- what an example IS, and they agree because `docLineBody` (above) makes them:
+-- it neutralises the ONE comment shape (`--> x`) whose body reached
+-- `isExampleStart` without satisfying doctest's `-- > ` rule.  This used to
+-- claim the agreement held "by construction" — it did not, and a `-->` line
+-- got this marker while `medaka test` found zero doctests in the file (S2-2).
+-- Change `isExampleStart` or `docLineBody` and this marker starts lying
+-- again: they are one rule in two places, kept in step by
+-- `isDoctestInputText`.
 renderDocSegment : DocSegment -> String
 renderDocSegment (ProseSeg ls) = joinWith "\n" ls
 renderDocSegment (ExampleSeg ls) = "*(doctest — run by `medaka test`)*\n\n```medaka\n"
@@ -604,24 +711,27 @@ renderEntry (DocEntry name sig doc _) =
 export
 runDoc : String -> String -> String -> String -> List String -> <IO> String
 runDoc runtimeSrc coreSrc src filename roots = match computeModuleDoc runtimeSrc coreSrc src filename roots
-  ModuleDoc name header entries => renderMarkdown name header entries
+  ModuleDoc name header entries _ => renderMarkdown name header entries
 
 -- ── library mode (S-doc-library-mode) ───────────────────────────────────────
 -- A module's full extracted doc: name (page/index title, page filename minus
--- `.md`), header (lead paragraph, from `moduleHeaderFrom`), and entries.
+-- `.md`), header (lead paragraph, from `moduleHeaderFrom`), entries, and the
+-- type names the module DECLARES — public or private, straight off the raw
+-- decls, which is the ownership evidence `rebucketLibraryImpls` reads (S2-1;
+-- the entries alone cannot answer it, see `declaredTypeNames`).
 -- Abstract export: `medaka_cli.mdk`'s library-mode driver reads it only
--- through the accessors + `renderModulePage`/`renderIndex`/
--- `libraryInventoryJson` below, never by constructing/pattern-matching it
--- itself.
-export data ModuleDoc = ModuleDoc String String (List DocEntry)
+-- through `mdName` + `renderModulePage`/`renderIndex`/`libraryInventoryJson`
+-- below, never by constructing/pattern-matching it itself.
+export data ModuleDoc = ModuleDoc String String (List DocEntry) (List String)
 
 export
 mdName : ModuleDoc -> String
-mdName (ModuleDoc n _ _) = n
+mdName (ModuleDoc n _ _ _) = n
 
-export
-mdEntries : ModuleDoc -> List DocEntry
-mdEntries (ModuleDoc _ _ es) = es
+-- (`mdEntries` used to sit here, exported.  Nothing outside this file ever
+-- called it — `grep -rn mdEntries compiler/ | grep -v doc.mdk` is empty — and
+-- nothing inside did either, so it was dead in both directions and is gone
+-- rather than merely un-exported.)
 
 -- Shared by `runDoc` (single-file) and library mode: parse, infer schemes,
 -- extract entries + the module header, in one place so both modes see
@@ -639,7 +749,11 @@ computeModuleDoc runtimeSrc coreSrc src filename roots =
   let tbl = buildCommentTbl comments
   let header = moduleHeaderFrom tbl
   let entries = extractEntries (preludeOnlyModule moduleName) rawDecls positions schemes comments
-  ModuleDoc moduleName (dedupHeader header entries) entries
+  ModuleDoc
+    moduleName
+    (dedupHeader header entries)
+    entries
+    (declaredTypeNames rawDecls)
 
 -- When the header comment sits directly above the FIRST decl with no gap
 -- (no blank line — e.g. `test/doc_fixtures/multiline.mdk`), `findDocForLine`
@@ -661,7 +775,7 @@ firstEntryDoc ((DocEntry _ _ doc _)::_) = doc
 
 export
 renderModulePage : ModuleDoc -> String
-renderModulePage (ModuleDoc name header entries) =
+renderModulePage (ModuleDoc name header entries _) =
   renderMarkdown name header entries
 
 -- `async` is excluded from library mode BY CONSTRUCTION: the rule keys on the
@@ -690,13 +804,22 @@ excludedLibraryModule moduleName = moduleName == "async"
 -- suggested mechanism does not reach its own headline example, see MEASUREMENT
 -- below).  The OWNER of a head type-constructor name `T` within a library set is:
 --
---   1. the module whose own public `data`/`newtype` declares `T` (a `KTypeDecl`
---      entry named `T`).  Declaration is the strongest possible evidence and
---      always wins;
---   2. failing that, the module whose page NAME equals `toLower T`, when the
---      library set contains such a module.  This is the OPAQUE-BUILTIN clause:
---      a type the compiler builds in has no declaration to find, but the module
---      that exists to operate on it is named for it;
+--   1. the module whose own `data`/`newtype` declares `T` — PUBLIC OR PRIVATE,
+--      read off the raw decls (`declaredTypeNames`), never off the rendered
+--      entries.  Declaration is the strongest possible evidence and always
+--      wins.  (S2-1: this clause used to read `KTypeDecl` ENTRIES, and
+--      `renderSig` renders no entry for a private `data`, so a module that
+--      privately declared `T` and publicly wrote `impl Debug T` lost that impl
+--      to whatever module happened to be named `t` — silently, with no
+--      warning.);
+--   2. failing that, the module whose page NAME equals `toLower T` AND which
+--      independently MENTIONS `T` in one of its own entries' signatures.  This
+--      is the OPAQUE-BUILTIN clause: a type the compiler builds in has no
+--      declaration to find, but the module that exists to operate on it is
+--      named for it and cannot avoid naming it in its own signatures.  The
+--      mention is what makes this evidence rather than a coincidence of
+--      spelling (S2-1 again: a bare name match corroborates nothing — a
+--      module named `widget` that never says `Widget` is not its home);
 --   3. otherwise: no owner.
 --
 -- An impl entry moves to its head type's owner iff that owner is a DIFFERENT
@@ -726,53 +849,111 @@ export
 rebucketLibraryImpls : List ModuleDoc -> List ModuleDoc
 rebucketLibraryImpls mds =
   let owners = concatMapDoc typeOwnersOf mds
-  let modNames = map mdName mds
-  let moved = concatMapDoc (movedFrom owners modNames) mds
-  map (rebucketOne owners modNames moved) mds
+  let mentions = map moduleMentionIndex mds
+  let moved = concatMapDoc (movedFrom owners mentions) mds
+  map (rebucketOne owners mentions moved) mds
 
--- Clause 1's evidence: every (typeName, declaringModule) pair in the library.
+-- Clause 1's evidence: every (typeName, declaringModule) pair in the library,
+-- from the raw declarations — private `data`/`newtype` included.
 typeOwnersOf : ModuleDoc -> List (String, String)
-typeOwnersOf (ModuleDoc n _ es) = concatMapDoc (typeOwnerEntry n) es
+typeOwnersOf (ModuleDoc n _ _ tyNames) = map (t => (t, n)) tyNames
 
-typeOwnerEntry : String -> DocEntry -> List (String, String)
-typeOwnerEntry n (DocEntry name _ _ KTypeDecl) = [(name, n)]
-typeOwnerEntry _ _ = []
+-- Clause 2's evidence, per module: the module's name paired with the text its
+-- own entries render, which is where a mention of the type has to show up.
+moduleMentionIndex : ModuleDoc -> (String, List String)
+moduleMentionIndex (ModuleDoc n _ es _) = (n, map entrySigOf es)
 
-ownerOfType : List (String, String) -> List String -> String -> Option String
-ownerOfType owners modNames tyName = match lookupStrDoc tyName owners
+entrySigOf : DocEntry -> String
+entrySigOf (DocEntry _ sig _ _) = sig
+
+ownerOfType : List (String, String) -> List (String, List String) -> String -> Option String
+ownerOfType owners mentions tyName = match lookupStrDoc tyName owners
   Some m => Some m
   None =>
     let lowered = toLower tyName
-    if memberStr lowered modNames then Some lowered else None
+    match lookupSigsDoc lowered mentions
+      None => None
+      Some sigs => if anyMentions tyName sigs then Some lowered else None
+
+lookupSigsDoc : String -> List (String, List String) -> Option (List String)
+lookupSigsDoc _ [] = None
+lookupSigsDoc k ((n, v)::rest) = if k == n then Some v else lookupSigsDoc k rest
+
+anyMentions : String -> List String -> Bool
+anyMentions _ [] = False
+anyMentions tyName (s::rest) = mentionsToken tyName s || anyMentions tyName rest
+
+-- Does `hay` contain `needle` as a whole identifier token?  Word-bounded on
+-- both sides, so a module named `array` does not "mention" `Array` merely by
+-- rendering `ArrayBuilder`.
+mentionsToken : String -> String -> Bool
+mentionsToken needle hay =
+  let ns = stringToChars needle
+  let hs = stringToChars hay
+  mentionsTokenGo ns hs 0 (arrayLength ns) (arrayLength hs)
+
+mentionsTokenGo : Array Char -> Array Char -> Int -> Int -> Int -> Bool
+mentionsTokenGo ns hs i n h =
+  if n == 0 || i + n > h then
+    False
+  else if charsMatchAt ns hs i n && not (isIdentCharAt hs (i - 1) h) && not (isIdentCharAt hs (i + n) h) then
+    True
+  else
+    mentionsTokenGo ns hs (i + 1) n h
+
+charsMatchAt : Array Char -> Array Char -> Int -> Int -> Bool
+charsMatchAt ns hs i n = charsMatchAtGo ns hs i 0 n
+
+charsMatchAtGo : Array Char -> Array Char -> Int -> Int -> Int -> Bool
+charsMatchAtGo ns hs i j n =
+  if j >= n then
+    True
+  else if arrayGetUnsafe (i + j) hs == arrayGetUnsafe j ns then
+    charsMatchAtGo ns hs i (j + 1) n
+  else
+    False
+
+isIdentCharAt : Array Char -> Int -> Int -> Bool
+isIdentCharAt hs i h =
+  if i < 0 || i >= h then
+    False
+  else
+    isIdentChar (arrayGetUnsafe i hs)
+
+isIdentChar : Char -> Bool
+isIdentChar c = c >= 'a' && c <= 'z'
+  || c >= 'A' && c <= 'Z'
+  || c >= '0' && c <= '9'
+  || c == '_'
 
 lookupStrDoc : String -> List (String, String) -> Option String
 lookupStrDoc _ [] = None
 lookupStrDoc k ((n, v)::rest) = if k == n then Some v else lookupStrDoc k rest
 
 -- `Some target` iff this entry is an impl that belongs on ANOTHER module's page.
-entryTarget : List (String, String) -> List String -> String -> DocEntry -> Option String
-entryTarget owners modNames here (DocEntry _ _ _ (KImplOn (Some hd))) = match ownerOfType owners modNames hd
+entryTarget : List (String, String) -> List (String, List String) -> String -> DocEntry -> Option String
+entryTarget owners mentions here (DocEntry _ _ _ (KImplOn (Some hd))) = match ownerOfType owners mentions hd
   Some m => if m == here then None else Some m
   None => None
 entryTarget _ _ _ _ = None
 
-movedFrom : List (String, String) -> List String -> ModuleDoc -> List (String, DocEntry)
-movedFrom owners modNames (ModuleDoc here _ es) =
-  concatMapDoc (movedEntry owners modNames here) es
+movedFrom : List (String, String) -> List (String, List String) -> ModuleDoc -> List (String, DocEntry)
+movedFrom owners mentions (ModuleDoc here _ es _) =
+  concatMapDoc (movedEntry owners mentions here) es
 
-movedEntry : List (String, String) -> List String -> String -> DocEntry -> List (String, DocEntry)
-movedEntry owners modNames here e = match entryTarget owners modNames here e
+movedEntry : List (String, String) -> List (String, List String) -> String -> DocEntry -> List (String, DocEntry)
+movedEntry owners mentions here e = match entryTarget owners mentions here e
   Some m => [(m, e)]
   None => []
 
 -- Keep everything that did not move out, then append everything that moved in
 -- (source order preserved within each group; incoming impls land after the
 -- module's own entries, which is where a reader expects "instances" to sit).
-rebucketOne : List (String, String) -> List String -> List (String, DocEntry) -> ModuleDoc -> ModuleDoc
-rebucketOne owners modNames moved (ModuleDoc here header es) =
-  let kept = filterDoc (e => isNoneDoc (entryTarget owners modNames here e)) es
+rebucketOne : List (String, String) -> List (String, List String) -> List (String, DocEntry) -> ModuleDoc -> ModuleDoc
+rebucketOne owners mentions moved (ModuleDoc here header es tyNames) =
+  let kept = filterDoc (e => isNoneDoc (entryTarget owners mentions here e)) es
   let incoming = concatMapDoc (takeForModule here) moved
-  ModuleDoc here header (kept ++ incoming)
+  ModuleDoc here header (kept ++ incoming) tyNames
 
 takeForModule : String -> (String, DocEntry) -> List DocEntry
 takeForModule here (m, e) = if m == here then [e] else []
@@ -793,7 +974,6 @@ isNoneDoc _ = False
 -- exactness, only on the entry's OWN header and the index's link agreeing,
 -- which `slugifyAnchor` guarantees by construction (both read from the same
 -- function).
-export
 slugifyAnchor : String -> String
 slugifyAnchor name =
   let lowered = toLower name
@@ -848,7 +1028,7 @@ libraryInventoryJson : List ModuleDoc -> Json
 libraryInventoryJson mds = jArray (concatMapDoc inventoryEntriesFor mds)
 
 inventoryEntriesFor : ModuleDoc -> List Json
-inventoryEntriesFor (ModuleDoc moduleName _ entries) =
+inventoryEntriesFor (ModuleDoc moduleName _ entries _) =
   map (inventoryEntryJson moduleName) entries
 
 inventoryEntryJson : String -> DocEntry -> Json
@@ -867,8 +1047,8 @@ renderIndex mds =
   stringConcat ("# Library Index\n\n" :: map renderIndexModule mds)
 
 renderIndexModule : ModuleDoc -> String
-renderIndexModule (ModuleDoc name _ entries) =
-  let count = intToString2 (listLenDoc entries)
+renderIndexModule (ModuleDoc name _ entries _) =
+  let count = intToString (listLenDoc entries)
   let head = "## `\{name}` (\{count} entries)\n\n"
   let links = joinWith "\n" (map (renderIndexLink name) entries)
   "\{head}\{links}\n\n"
@@ -880,9 +1060,6 @@ renderIndexLink moduleName (DocEntry name _ _ _) =
 listLenDoc : List a -> Int
 listLenDoc [] = 0
 listLenDoc (_::xs) = 1 + listLenDoc xs
-
-intToString2 : Int -> String
-intToString2 n = intToString n
 
 -- Inferred schemes via the SAME multi-module loader path `check`/`run`/LSP
 -- project-hover use (`projectEntrySchemes`, driver.diagnostics) — loads the
@@ -908,7 +1085,7 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser = match projectEntrySche
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositions" false) (mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Ty" true) (mem "Constraint" true) (mem "DataVis" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "IfaceMethod" true) (mem "Require" true) (mem "LetBind" true) (mem "UsePath" true) (mem "UseMember" false) (mem "useMemberOrigin" false) (mem "useMemberLocal" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "Scheme" true) (mem "ppScheme" false))))
-(DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "stringTrim" false) (mem "splitNl" false) (mem "startsWith" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "stringTrim" false) (mem "splitNl" false))))
 (DUse false (UseGroup ("support" "path") ((mem "baseOf" false) (mem "chopExt" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "projectEntrySchemes" false))))
 (DUse false (UseGroup ("json") ((mem "Json" false) (mem "JString" false) (mem "jObject" false) (mem "jArray" false))))
@@ -939,8 +1116,14 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser = match projectEntrySche
 (DFunDef false "ppTyDoc" ((PVar "t")) (EApp (EApp (EVar "ppTyP") (ELit (LInt 0))) (EVar "t")))
 (DTypeSig false "commentBody" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "commentBody" ((PVar "t")) (EIf (EBinOp "==" (EVar "t") (ELit (LString "--"))) (ELit (LString "")) (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EVar "dlen") (EVar "t")) (ELit (LInt 3))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 0))) (ELit (LInt 3))) (EVar "t")) (ELit (LString "-- ")))) (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 3))) (EApp (EVar "dlen") (EVar "t"))) (EVar "t")) (EIf (EBinOp ">" (EApp (EVar "dlen") (EVar "t")) (ELit (LInt 2))) (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 2))) (EApp (EVar "dlen") (EVar "t"))) (EVar "t")) (ELit (LString ""))))))
+(DTypeSig false "isDoctestInputText" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isDoctestInputText" ((PVar "t")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "dlen") (EVar "t")) (ELit (LInt 5))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 0))) (ELit (LInt 5))) (EVar "t")) (ELit (LString "-- > ")))))
+(DTypeSig false "docLineBody" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "docLineBody" ((PVar "t")) (EBlock (DoLet false false (PVar "body") (EApp (EVar "commentBody") (EVar "t"))) (DoExpr (EIf (EBinOp "||" (EApp (EVar "isDoctestInputText") (EVar "t")) (EApp (EVar "not") (EApp (EVar "isExampleStart") (EVar "body")))) (EVar "body") (EBinOp "++" (ELit (LString "\\")) (EVar "body"))))))
+(DTypeSig false "unescapeGtPrefix" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "unescapeGtPrefix" ((PVar "line")) (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EVar "dlen") (EVar "line")) (ELit (LInt 3))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 0))) (ELit (LInt 3))) (EVar "line")) (ELit (LString "\\> ")))) (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 1))) (EApp (EVar "dlen") (EVar "line"))) (EVar "line")) (EVar "line")))
 (DTypeSig false "expandComment" (TyFun (TyCon "Comment") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
-(DFunDef false "expandComment" ((PVar "c")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "commentText") (EVar "c"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EVar "dlen") (EVar "t")) (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 0))) (ELit (LInt 2))) (EVar "t")) (ELit (LString "{-")))) (EBlock (DoLet false false (PVar "n") (EApp (EVar "dlen") (EVar "t"))) (DoLet false false (PVar "inner") (EIf (EBinOp ">=" (EVar "n") (ELit (LInt 4))) (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 2))) (EBinOp "-" (EVar "n") (ELit (LInt 2)))) (EVar "t")) (ELit (LString "")))) (DoExpr (EApp (EApp (EApp (EVar "expandBlockLines") (EApp (EVar "commentLine") (EVar "c"))) (ELit (LInt 0))) (EApp (EVar "splitNl") (EVar "inner"))))) (EListLit (ETuple (EApp (EVar "commentLine") (EVar "c")) (EApp (EVar "commentBody") (EVar "t"))))))))
+(DFunDef false "expandComment" ((PVar "c")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "commentText") (EVar "c"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EVar "dlen") (EVar "t")) (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 0))) (ELit (LInt 2))) (EVar "t")) (ELit (LString "{-")))) (EBlock (DoLet false false (PVar "n") (EApp (EVar "dlen") (EVar "t"))) (DoLet false false (PVar "inner") (EIf (EBinOp ">=" (EVar "n") (ELit (LInt 4))) (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 2))) (EBinOp "-" (EVar "n") (ELit (LInt 2)))) (EVar "t")) (ELit (LString "")))) (DoExpr (EApp (EApp (EApp (EVar "expandBlockLines") (EApp (EVar "commentLine") (EVar "c"))) (ELit (LInt 0))) (EApp (EVar "splitNl") (EVar "inner"))))) (EListLit (ETuple (EApp (EVar "commentLine") (EVar "c")) (EApp (EVar "docLineBody") (EVar "t"))))))))
 (DTypeSig false "expandBlockLines" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))))
 (DFunDef false "expandBlockLines" (PWild PWild (PList)) (EListLit))
 (DFunDef false "expandBlockLines" ((PVar "baseLine") (PVar "i") (PCons (PVar "line") (PVar "rest"))) (EBinOp "::" (ETuple (EBinOp "+" (EVar "baseLine") (EVar "i")) (EApp (EVar "stringTrim") (EVar "line"))) (EApp (EApp (EApp (EVar "expandBlockLines") (EVar "baseLine")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
@@ -992,13 +1175,20 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser = match projectEntrySche
 (DTypeSig false "dataVisPrivate" (TyFun (TyCon "DataVis") (TyCon "Bool")))
 (DFunDef false "dataVisPrivate" ((PCon "VisPrivate")) (EVar "True"))
 (DFunDef false "dataVisPrivate" (PWild) (EVar "False"))
-(DTypeSig true "preludeOnlyModule" (TyFun (TyCon "String") (TyCon "Bool")))
+(DTypeSig false "preludeOnlyModule" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "preludeOnlyModule" ((PVar "moduleName")) (EBinOp "==" (EVar "moduleName") (ELit (LString "runtime"))))
 (DTypeSig false "declKind" (TyFun (TyCon "Decl") (TyCon "DocKind")))
 (DFunDef false "declKind" ((PRec "DImpl" ((rf "tys" (PVar "tys"))) false)) (EApp (EVar "KImplOn") (EApp (EVar "headTyName") (EVar "tys"))))
 (DFunDef false "declKind" ((PRec "DData" ((rf "dataName" PWild)) false)) (EVar "KTypeDecl"))
 (DFunDef false "declKind" ((PRec "DNewtype" ((rf "newtypeName" PWild)) false)) (EVar "KTypeDecl"))
 (DFunDef false "declKind" (PWild) (EVar "KPlain"))
+(DTypeSig false "declaredTypeNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "declaredTypeNames" ((PList)) (EListLit))
+(DFunDef false "declaredTypeNames" ((PCons (PVar "d") (PVar "ds"))) (EBinOp "++" (EApp (EVar "declaredTypeName") (EVar "d")) (EApp (EVar "declaredTypeNames") (EVar "ds"))))
+(DTypeSig false "declaredTypeName" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "declaredTypeName" ((PRec "DData" ((rf "dataName" (PVar "n"))) false)) (EListLit (EVar "n")))
+(DFunDef false "declaredTypeName" ((PRec "DNewtype" ((rf "newtypeName" (PVar "n"))) false)) (EListLit (EVar "n")))
+(DFunDef false "declaredTypeName" (PWild) (EListLit))
 (DTypeSig false "headTyName" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "headTyName" ((PList)) (EVar "None"))
 (DFunDef false "headTyName" ((PCons (PVar "t") PWild)) (EApp (EVar "tyHeadName") (EVar "t")))
@@ -1040,8 +1230,16 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser = match projectEntrySche
 (DFunDef false "zipDoc" ((PList) PWild) (EListLit))
 (DFunDef false "zipDoc" (PWild (PList)) (EListLit))
 (DFunDef false "zipDoc" ((PCons (PVar "x") (PVar "xs")) (PCons (PVar "y") (PVar "ys"))) (EBinOp "::" (ETuple (EVar "x") (EVar "y")) (EApp (EApp (EVar "zipDoc") (EVar "xs")) (EVar "ys"))))
+(DTypeSig false "hasPipeMarker" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "hasPipeMarker" ((PVar "line")) (EBinOp "||" (EBinOp "&&" (EBinOp ">=" (EApp (EVar "dlen") (EVar "line")) (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 0))) (ELit (LInt 2))) (EVar "line")) (ELit (LString "| ")))) (EBinOp "==" (EVar "line") (ELit (LString "|")))))
 (DTypeSig false "stripPipePrefix" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "stripPipePrefix" ((PVar "line")) (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EVar "dlen") (EVar "line")) (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 0))) (ELit (LInt 2))) (EVar "line")) (ELit (LString "| ")))) (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 2))) (EApp (EVar "dlen") (EVar "line"))) (EVar "line")) (EIf (EBinOp "==" (EVar "line") (ELit (LString "|"))) (ELit (LString "")) (EVar "line"))))
+(DTypeSig false "markerEligibleAfter" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "markerEligibleAfter" ((PVar "line")) (EBinOp "||" (EBinOp "==" (EVar "line") (ELit (LString ""))) (EApp (EVar "isDecorativeLine") (EVar "line"))))
+(DTypeSig false "isDecorativeLine" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isDecorativeLine" ((PVar "line")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "line"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "arrayLength") (EVar "cs")) (ELit (LInt 0))) (EVar "False") (EApp (EVar "isDecorativeChar") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "cs")))))))
+(DTypeSig false "isDecorativeChar" (TyFun (TyCon "Char") (TyCon "Bool")))
+(DFunDef false "isDecorativeChar" ((PVar "c")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EVar "not") (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "a"))) (EBinOp "<=" (EVar "c") (ELit (LChar "z"))))) (EApp (EVar "not") (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "A"))) (EBinOp "<=" (EVar "c") (ELit (LChar "Z")))))) (EApp (EVar "not") (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "0"))) (EBinOp "<=" (EVar "c") (ELit (LChar "9")))))) (EBinOp "/=" (EVar "c") (ELit (LChar " ")))))
 (DData Private "DocSegment" () ((variant "ProseSeg" (ConPos (TyApp (TyCon "List") (TyCon "String")))) (variant "ExampleSeg" (ConPos (TyApp (TyCon "List") (TyCon "String"))))) ())
 (DData Private "SegMode" () ((variant "ModeProse" (ConPos)) (variant "ModeExample" (ConPos))) ())
 (DTypeSig false "isExampleStart" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -1053,12 +1251,12 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser = match projectEntrySche
 (DFunDef false "pushSeg" (PWild (PList) (PVar "segs")) (EVar "segs"))
 (DFunDef false "pushSeg" ((PCon "ModeProse") (PVar "acc") (PVar "segs")) (EBlock (DoLet false false (PVar "ls") (EApp (EVar "reverseL") (EVar "acc"))) (DoExpr (EIf (EApp (EVar "allBlankLines") (EVar "ls")) (EVar "segs") (EBinOp "::" (EApp (EVar "ProseSeg") (EVar "ls")) (EVar "segs"))))))
 (DFunDef false "pushSeg" ((PCon "ModeExample") (PVar "acc") (PVar "segs")) (EBinOp "::" (EApp (EVar "ExampleSeg") (EApp (EVar "reverseL") (EVar "acc"))) (EVar "segs")))
-(DTypeSig false "docSegGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "SegMode") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "DocSegment")) (TyApp (TyCon "List") (TyCon "DocSegment")))))))
-(DFunDef false "docSegGo" ((PList) (PVar "mode") (PVar "acc") (PVar "segs")) (EApp (EVar "reverseL") (EApp (EApp (EApp (EVar "pushSeg") (EVar "mode")) (EVar "acc")) (EVar "segs"))))
-(DFunDef false "docSegGo" ((PCons (PVar "line") (PVar "rest")) (PCon "ModeProse") (PVar "acc") (PVar "segs")) (EIf (EApp (EVar "isExampleStart") (EVar "line")) (EApp (EApp (EApp (EApp (EVar "docSegGo") (EVar "rest")) (EVar "ModeExample")) (EListLit (EVar "line"))) (EApp (EApp (EApp (EVar "pushSeg") (EVar "ModeProse")) (EVar "acc")) (EVar "segs"))) (EApp (EApp (EApp (EApp (EVar "docSegGo") (EVar "rest")) (EVar "ModeProse")) (EBinOp "::" (EApp (EVar "stripPipePrefix") (EVar "line")) (EVar "acc"))) (EVar "segs"))))
-(DFunDef false "docSegGo" ((PCons (PVar "line") (PVar "rest")) (PCon "ModeExample") (PVar "acc") (PVar "segs")) (EIf (EBinOp "==" (EVar "line") (ELit (LString ""))) (EApp (EApp (EApp (EApp (EVar "docSegGo") (EVar "rest")) (EVar "ModeProse")) (EListLit)) (EApp (EApp (EApp (EVar "pushSeg") (EVar "ModeExample")) (EVar "acc")) (EVar "segs"))) (EApp (EApp (EApp (EApp (EVar "docSegGo") (EVar "rest")) (EVar "ModeExample")) (EBinOp "::" (EVar "line") (EVar "acc"))) (EVar "segs"))))
+(DTypeSig false "docSegGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "SegMode") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "DocSegment")) (TyApp (TyCon "List") (TyCon "DocSegment"))))))))
+(DFunDef false "docSegGo" ((PList) (PVar "mode") PWild (PVar "acc") (PVar "segs")) (EApp (EVar "reverseL") (EApp (EApp (EApp (EVar "pushSeg") (EVar "mode")) (EVar "acc")) (EVar "segs"))))
+(DFunDef false "docSegGo" ((PCons (PVar "line") (PVar "rest")) (PCon "ModeProse") (PVar "markerOk") (PVar "acc") (PVar "segs")) (EIf (EApp (EVar "isExampleStart") (EVar "line")) (EApp (EApp (EApp (EApp (EApp (EVar "docSegGo") (EVar "rest")) (EVar "ModeExample")) (EVar "False")) (EListLit (EVar "line"))) (EApp (EApp (EApp (EVar "pushSeg") (EVar "ModeProse")) (EVar "acc")) (EVar "segs"))) (EIf (EBinOp "&&" (EVar "markerOk") (EApp (EVar "hasPipeMarker") (EVar "line"))) (EApp (EApp (EApp (EApp (EApp (EVar "docSegGo") (EVar "rest")) (EVar "ModeProse")) (EVar "False")) (EBinOp "::" (EApp (EVar "stripPipePrefix") (EVar "line")) (EVar "acc"))) (EVar "segs")) (EApp (EApp (EApp (EApp (EApp (EVar "docSegGo") (EVar "rest")) (EVar "ModeProse")) (EBinOp "&&" (EVar "markerOk") (EApp (EVar "markerEligibleAfter") (EVar "line")))) (EBinOp "::" (EVar "line") (EVar "acc"))) (EVar "segs")))))
+(DFunDef false "docSegGo" ((PCons (PVar "line") (PVar "rest")) (PCon "ModeExample") PWild (PVar "acc") (PVar "segs")) (EIf (EBinOp "==" (EVar "line") (ELit (LString ""))) (EApp (EApp (EApp (EApp (EApp (EVar "docSegGo") (EVar "rest")) (EVar "ModeProse")) (EVar "False")) (EListLit)) (EApp (EApp (EApp (EVar "pushSeg") (EVar "ModeExample")) (EVar "acc")) (EVar "segs"))) (EApp (EApp (EApp (EApp (EApp (EVar "docSegGo") (EVar "rest")) (EVar "ModeExample")) (EVar "False")) (EBinOp "::" (EApp (EVar "unescapeGtPrefix") (EVar "line")) (EVar "acc"))) (EVar "segs"))))
 (DTypeSig false "docSegments" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "DocSegment"))))
-(DFunDef false "docSegments" ((PVar "lines")) (EApp (EApp (EApp (EApp (EVar "docSegGo") (EVar "lines")) (EVar "ModeProse")) (EListLit)) (EListLit)))
+(DFunDef false "docSegments" ((PVar "lines")) (EApp (EApp (EApp (EApp (EApp (EVar "docSegGo") (EVar "lines")) (EVar "ModeProse")) (EVar "True")) (EListLit)) (EListLit)))
 (DTypeSig false "renderDocSegment" (TyFun (TyCon "DocSegment") (TyCon "String")))
 (DFunDef false "renderDocSegment" ((PCon "ProseSeg" (PVar "ls"))) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EVar "ls")))
 (DFunDef false "renderDocSegment" ((PCon "ExampleSeg" (PVar "ls"))) (EBinOp "++" (EBinOp "++" (ELit (LString "*(doctest — run by `medaka test`)*\n\n```medaka\n")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EVar "ls"))) (ELit (LString "\n```"))))
@@ -1074,44 +1272,61 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser = match projectEntrySche
 (DTypeSig false "renderEntry" (TyFun (TyCon "DocEntry") (TyCon "String")))
 (DFunDef false "renderEntry" ((PCon "DocEntry" (PVar "name") (PVar "sig") (PVar "doc") PWild)) (EBlock (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (ELit (LString "## `")) (EVar "name")) (ELit (LString "`\n\n")))) (DoLet false false (PVar "sigBlock") (EBinOp "++" (EBinOp "++" (ELit (LString "```\n")) (EVar "sig")) (ELit (LString "\n```\n")))) (DoLet false false (PVar "rendered") (EApp (EVar "renderDocProse") (EVar "doc"))) (DoLet false false (PVar "docBlock") (EIf (EBinOp "==" (EVar "rendered") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (EBinOp "++" (ELit (LString "\n")) (EVar "rendered")) (ELit (LString "\n"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "header"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "sigBlock"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "docBlock"))) (ELit (LString "\n"))))))
 (DTypeSig true "runDoc" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "String"))))))))
-(DFunDef false "runDoc" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src") (PVar "filename") (PVar "roots")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "computeModuleDoc") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "src")) (EVar "filename")) (EVar "roots")) (arm (PCon "ModuleDoc" (PVar "name") (PVar "header") (PVar "entries")) () (EApp (EApp (EApp (EVar "renderMarkdown") (EVar "name")) (EVar "header")) (EVar "entries")))))
-(DData Abstract "ModuleDoc" () ((variant "ModuleDoc" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "DocEntry"))))) ())
+(DFunDef false "runDoc" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src") (PVar "filename") (PVar "roots")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "computeModuleDoc") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "src")) (EVar "filename")) (EVar "roots")) (arm (PCon "ModuleDoc" (PVar "name") (PVar "header") (PVar "entries") PWild) () (EApp (EApp (EApp (EVar "renderMarkdown") (EVar "name")) (EVar "header")) (EVar "entries")))))
+(DData Abstract "ModuleDoc" () ((variant "ModuleDoc" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "DocEntry")) (TyApp (TyCon "List") (TyCon "String"))))) ())
 (DTypeSig true "mdName" (TyFun (TyCon "ModuleDoc") (TyCon "String")))
-(DFunDef false "mdName" ((PCon "ModuleDoc" (PVar "n") PWild PWild)) (EVar "n"))
-(DTypeSig true "mdEntries" (TyFun (TyCon "ModuleDoc") (TyApp (TyCon "List") (TyCon "DocEntry"))))
-(DFunDef false "mdEntries" ((PCon "ModuleDoc" PWild PWild (PVar "es"))) (EVar "es"))
+(DFunDef false "mdName" ((PCon "ModuleDoc" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig true "computeModuleDoc" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "ModuleDoc"))))))))
-(DFunDef false "computeModuleDoc" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src") (PVar "filename") (PVar "roots")) (EBlock (DoLet false false (PVar "parsed") (EApp (EVar "parseWithPositions") (EVar "src"))) (DoLet false false (PVar "rawDecls") (EApp (EVar "fst") (EVar "parsed"))) (DoLet false false (PVar "positions") (EApp (EVar "positionsDecls") (EApp (EVar "snd") (EVar "parsed")))) (DoLet false false (PVar "comments") (EApp (EVar "collectComments") (EVar "src"))) (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EApp (EApp (EVar "docSchemesFor") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "filename")) (EVar "roots")) (EVar "rawDecls"))) (DoLet false false (PVar "moduleName") (EApp (EVar "chopExt") (EApp (EVar "baseOf") (EVar "filename")))) (DoLet false false (PVar "tbl") (EApp (EVar "buildCommentTbl") (EVar "comments"))) (DoLet false false (PVar "header") (EApp (EVar "moduleHeaderFrom") (EVar "tbl"))) (DoLet false false (PVar "entries") (EApp (EApp (EApp (EApp (EApp (EVar "extractEntries") (EApp (EVar "preludeOnlyModule") (EVar "moduleName"))) (EVar "rawDecls")) (EVar "positions")) (EVar "schemes")) (EVar "comments"))) (DoExpr (EApp (EApp (EApp (EVar "ModuleDoc") (EVar "moduleName")) (EApp (EApp (EVar "dedupHeader") (EVar "header")) (EVar "entries"))) (EVar "entries")))))
+(DFunDef false "computeModuleDoc" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src") (PVar "filename") (PVar "roots")) (EBlock (DoLet false false (PVar "parsed") (EApp (EVar "parseWithPositions") (EVar "src"))) (DoLet false false (PVar "rawDecls") (EApp (EVar "fst") (EVar "parsed"))) (DoLet false false (PVar "positions") (EApp (EVar "positionsDecls") (EApp (EVar "snd") (EVar "parsed")))) (DoLet false false (PVar "comments") (EApp (EVar "collectComments") (EVar "src"))) (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EApp (EApp (EVar "docSchemesFor") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "filename")) (EVar "roots")) (EVar "rawDecls"))) (DoLet false false (PVar "moduleName") (EApp (EVar "chopExt") (EApp (EVar "baseOf") (EVar "filename")))) (DoLet false false (PVar "tbl") (EApp (EVar "buildCommentTbl") (EVar "comments"))) (DoLet false false (PVar "header") (EApp (EVar "moduleHeaderFrom") (EVar "tbl"))) (DoLet false false (PVar "entries") (EApp (EApp (EApp (EApp (EApp (EVar "extractEntries") (EApp (EVar "preludeOnlyModule") (EVar "moduleName"))) (EVar "rawDecls")) (EVar "positions")) (EVar "schemes")) (EVar "comments"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "ModuleDoc") (EVar "moduleName")) (EApp (EApp (EVar "dedupHeader") (EVar "header")) (EVar "entries"))) (EVar "entries")) (EApp (EVar "declaredTypeNames") (EVar "rawDecls"))))))
 (DTypeSig false "dedupHeader" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyCon "String"))))
 (DFunDef false "dedupHeader" ((PVar "header") (PVar "entries")) (EIf (EBinOp "&&" (EBinOp "/=" (EVar "header") (ELit (LString ""))) (EBinOp "==" (EVar "header") (EApp (EVar "firstEntryDoc") (EVar "entries")))) (ELit (LString "")) (EVar "header")))
 (DTypeSig false "firstEntryDoc" (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyCon "String")))
 (DFunDef false "firstEntryDoc" ((PList)) (ELit (LString "")))
 (DFunDef false "firstEntryDoc" ((PCons (PCon "DocEntry" PWild PWild (PVar "doc") PWild) PWild)) (EVar "doc"))
 (DTypeSig true "renderModulePage" (TyFun (TyCon "ModuleDoc") (TyCon "String")))
-(DFunDef false "renderModulePage" ((PCon "ModuleDoc" (PVar "name") (PVar "header") (PVar "entries"))) (EApp (EApp (EApp (EVar "renderMarkdown") (EVar "name")) (EVar "header")) (EVar "entries")))
+(DFunDef false "renderModulePage" ((PCon "ModuleDoc" (PVar "name") (PVar "header") (PVar "entries") PWild)) (EApp (EApp (EApp (EVar "renderMarkdown") (EVar "name")) (EVar "header")) (EVar "entries")))
 (DTypeSig true "excludedLibraryModule" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "excludedLibraryModule" ((PVar "moduleName")) (EBinOp "==" (EVar "moduleName") (ELit (LString "async"))))
 (DTypeSig true "rebucketLibraryImpls" (TyFun (TyApp (TyCon "List") (TyCon "ModuleDoc")) (TyApp (TyCon "List") (TyCon "ModuleDoc"))))
-(DFunDef false "rebucketLibraryImpls" ((PVar "mds")) (EBlock (DoLet false false (PVar "owners") (EApp (EApp (EVar "concatMapDoc") (EVar "typeOwnersOf")) (EVar "mds"))) (DoLet false false (PVar "modNames") (EApp (EApp (EVar "map") (EVar "mdName")) (EVar "mds"))) (DoLet false false (PVar "moved") (EApp (EApp (EVar "concatMapDoc") (EApp (EApp (EVar "movedFrom") (EVar "owners")) (EVar "modNames"))) (EVar "mds"))) (DoExpr (EApp (EApp (EVar "map") (EApp (EApp (EApp (EVar "rebucketOne") (EVar "owners")) (EVar "modNames")) (EVar "moved"))) (EVar "mds")))))
+(DFunDef false "rebucketLibraryImpls" ((PVar "mds")) (EBlock (DoLet false false (PVar "owners") (EApp (EApp (EVar "concatMapDoc") (EVar "typeOwnersOf")) (EVar "mds"))) (DoLet false false (PVar "mentions") (EApp (EApp (EVar "map") (EVar "moduleMentionIndex")) (EVar "mds"))) (DoLet false false (PVar "moved") (EApp (EApp (EVar "concatMapDoc") (EApp (EApp (EVar "movedFrom") (EVar "owners")) (EVar "mentions"))) (EVar "mds"))) (DoExpr (EApp (EApp (EVar "map") (EApp (EApp (EApp (EVar "rebucketOne") (EVar "owners")) (EVar "mentions")) (EVar "moved"))) (EVar "mds")))))
 (DTypeSig false "typeOwnersOf" (TyFun (TyCon "ModuleDoc") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
-(DFunDef false "typeOwnersOf" ((PCon "ModuleDoc" (PVar "n") PWild (PVar "es"))) (EApp (EApp (EVar "concatMapDoc") (EApp (EVar "typeOwnerEntry") (EVar "n"))) (EVar "es")))
-(DTypeSig false "typeOwnerEntry" (TyFun (TyCon "String") (TyFun (TyCon "DocEntry") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
-(DFunDef false "typeOwnerEntry" ((PVar "n") (PCon "DocEntry" (PVar "name") PWild PWild (PCon "KTypeDecl"))) (EListLit (ETuple (EVar "name") (EVar "n"))))
-(DFunDef false "typeOwnerEntry" (PWild PWild) (EListLit))
-(DTypeSig false "ownerOfType" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "ownerOfType" ((PVar "owners") (PVar "modNames") (PVar "tyName")) (EMatch (EApp (EApp (EVar "lookupStrDoc") (EVar "tyName")) (EVar "owners")) (arm (PCon "Some" (PVar "m")) () (EApp (EVar "Some") (EVar "m"))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "lowered") (EApp (EVar "toLower") (EVar "tyName"))) (DoExpr (EIf (EApp (EApp (EVar "memberStr") (EVar "lowered")) (EVar "modNames")) (EApp (EVar "Some") (EVar "lowered")) (EVar "None")))))))
+(DFunDef false "typeOwnersOf" ((PCon "ModuleDoc" (PVar "n") PWild PWild (PVar "tyNames"))) (EApp (EApp (EVar "map") (ELam ((PVar "t")) (ETuple (EVar "t") (EVar "n")))) (EVar "tyNames")))
+(DTypeSig false "moduleMentionIndex" (TyFun (TyCon "ModuleDoc") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "moduleMentionIndex" ((PCon "ModuleDoc" (PVar "n") PWild (PVar "es") PWild)) (ETuple (EVar "n") (EApp (EApp (EVar "map") (EVar "entrySigOf")) (EVar "es"))))
+(DTypeSig false "entrySigOf" (TyFun (TyCon "DocEntry") (TyCon "String")))
+(DFunDef false "entrySigOf" ((PCon "DocEntry" PWild (PVar "sig") PWild PWild)) (EVar "sig"))
+(DTypeSig false "ownerOfType" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
+(DFunDef false "ownerOfType" ((PVar "owners") (PVar "mentions") (PVar "tyName")) (EMatch (EApp (EApp (EVar "lookupStrDoc") (EVar "tyName")) (EVar "owners")) (arm (PCon "Some" (PVar "m")) () (EApp (EVar "Some") (EVar "m"))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "lowered") (EApp (EVar "toLower") (EVar "tyName"))) (DoExpr (EMatch (EApp (EApp (EVar "lookupSigsDoc") (EVar "lowered")) (EVar "mentions")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "sigs")) () (EIf (EApp (EApp (EVar "anyMentions") (EVar "tyName")) (EVar "sigs")) (EApp (EVar "Some") (EVar "lowered")) (EVar "None")))))))))
+(DTypeSig false "lookupSigsDoc" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "lookupSigsDoc" (PWild (PList)) (EVar "None"))
+(DFunDef false "lookupSigsDoc" ((PVar "k") (PCons (PTuple (PVar "n") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "n")) (EApp (EVar "Some") (EVar "v")) (EApp (EApp (EVar "lookupSigsDoc") (EVar "k")) (EVar "rest"))))
+(DTypeSig false "anyMentions" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "anyMentions" (PWild (PList)) (EVar "False"))
+(DFunDef false "anyMentions" ((PVar "tyName") (PCons (PVar "s") (PVar "rest"))) (EBinOp "||" (EApp (EApp (EVar "mentionsToken") (EVar "tyName")) (EVar "s")) (EApp (EApp (EVar "anyMentions") (EVar "tyName")) (EVar "rest"))))
+(DTypeSig false "mentionsToken" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "mentionsToken" ((PVar "needle") (PVar "hay")) (EBlock (DoLet false false (PVar "ns") (EApp (EVar "stringToChars") (EVar "needle"))) (DoLet false false (PVar "hs") (EApp (EVar "stringToChars") (EVar "hay"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "mentionsTokenGo") (EVar "ns")) (EVar "hs")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "ns"))) (EApp (EVar "arrayLength") (EVar "hs"))))))
+(DTypeSig false "mentionsTokenGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))))
+(DFunDef false "mentionsTokenGo" ((PVar "ns") (PVar "hs") (PVar "i") (PVar "n") (PVar "h")) (EIf (EBinOp "||" (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EBinOp ">" (EBinOp "+" (EVar "i") (EVar "n")) (EVar "h"))) (EVar "False") (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EApp (EApp (EVar "charsMatchAt") (EVar "ns")) (EVar "hs")) (EVar "i")) (EVar "n")) (EApp (EVar "not") (EApp (EApp (EApp (EVar "isIdentCharAt") (EVar "hs")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "h")))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "isIdentCharAt") (EVar "hs")) (EBinOp "+" (EVar "i") (EVar "n"))) (EVar "h")))) (EVar "True") (EApp (EApp (EApp (EApp (EApp (EVar "mentionsTokenGo") (EVar "ns")) (EVar "hs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EVar "h")))))
+(DTypeSig false "charsMatchAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
+(DFunDef false "charsMatchAt" ((PVar "ns") (PVar "hs") (PVar "i") (PVar "n")) (EApp (EApp (EApp (EApp (EApp (EVar "charsMatchAtGo") (EVar "ns")) (EVar "hs")) (EVar "i")) (ELit (LInt 0))) (EVar "n")))
+(DTypeSig false "charsMatchAtGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))))
+(DFunDef false "charsMatchAtGo" ((PVar "ns") (PVar "hs") (PVar "i") (PVar "j") (PVar "n")) (EIf (EBinOp ">=" (EVar "j") (EVar "n")) (EVar "True") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (EVar "j"))) (EVar "hs")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "j")) (EVar "ns"))) (EApp (EApp (EApp (EApp (EApp (EVar "charsMatchAtGo") (EVar "ns")) (EVar "hs")) (EVar "i")) (EBinOp "+" (EVar "j") (ELit (LInt 1)))) (EVar "n")) (EVar "False"))))
+(DTypeSig false "isIdentCharAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
+(DFunDef false "isIdentCharAt" ((PVar "hs") (PVar "i") (PVar "h")) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EVar "h"))) (EVar "False") (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "hs")))))
+(DTypeSig false "isIdentChar" (TyFun (TyCon "Char") (TyCon "Bool")))
+(DFunDef false "isIdentChar" ((PVar "c")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "a"))) (EBinOp "<=" (EVar "c") (ELit (LChar "z")))) (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "A"))) (EBinOp "<=" (EVar "c") (ELit (LChar "Z"))))) (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "0"))) (EBinOp "<=" (EVar "c") (ELit (LChar "9"))))) (EBinOp "==" (EVar "c") (ELit (LChar "_")))))
 (DTypeSig false "lookupStrDoc" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "lookupStrDoc" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupStrDoc" ((PVar "k") (PCons (PTuple (PVar "n") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "n")) (EApp (EVar "Some") (EVar "v")) (EApp (EApp (EVar "lookupStrDoc") (EVar "k")) (EVar "rest"))))
-(DTypeSig false "entryTarget" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "DocEntry") (TyApp (TyCon "Option") (TyCon "String")))))))
-(DFunDef false "entryTarget" ((PVar "owners") (PVar "modNames") (PVar "here") (PCon "DocEntry" PWild PWild PWild (PCon "KImplOn" (PCon "Some" (PVar "hd"))))) (EMatch (EApp (EApp (EApp (EVar "ownerOfType") (EVar "owners")) (EVar "modNames")) (EVar "hd")) (arm (PCon "Some" (PVar "m")) () (EIf (EBinOp "==" (EVar "m") (EVar "here")) (EVar "None") (EApp (EVar "Some") (EVar "m")))) (arm (PCon "None") () (EVar "None"))))
+(DTypeSig false "entryTarget" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "String") (TyFun (TyCon "DocEntry") (TyApp (TyCon "Option") (TyCon "String")))))))
+(DFunDef false "entryTarget" ((PVar "owners") (PVar "mentions") (PVar "here") (PCon "DocEntry" PWild PWild PWild (PCon "KImplOn" (PCon "Some" (PVar "hd"))))) (EMatch (EApp (EApp (EApp (EVar "ownerOfType") (EVar "owners")) (EVar "mentions")) (EVar "hd")) (arm (PCon "Some" (PVar "m")) () (EIf (EBinOp "==" (EVar "m") (EVar "here")) (EVar "None") (EApp (EVar "Some") (EVar "m")))) (arm (PCon "None") () (EVar "None"))))
 (DFunDef false "entryTarget" (PWild PWild PWild PWild) (EVar "None"))
-(DTypeSig false "movedFrom" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "ModuleDoc") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "DocEntry")))))))
-(DFunDef false "movedFrom" ((PVar "owners") (PVar "modNames") (PCon "ModuleDoc" (PVar "here") PWild (PVar "es"))) (EApp (EApp (EVar "concatMapDoc") (EApp (EApp (EApp (EVar "movedEntry") (EVar "owners")) (EVar "modNames")) (EVar "here"))) (EVar "es")))
-(DTypeSig false "movedEntry" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "DocEntry") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "DocEntry"))))))))
-(DFunDef false "movedEntry" ((PVar "owners") (PVar "modNames") (PVar "here") (PVar "e")) (EMatch (EApp (EApp (EApp (EApp (EVar "entryTarget") (EVar "owners")) (EVar "modNames")) (EVar "here")) (EVar "e")) (arm (PCon "Some" (PVar "m")) () (EListLit (ETuple (EVar "m") (EVar "e")))) (arm (PCon "None") () (EListLit))))
-(DTypeSig false "rebucketOne" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "DocEntry"))) (TyFun (TyCon "ModuleDoc") (TyCon "ModuleDoc"))))))
-(DFunDef false "rebucketOne" ((PVar "owners") (PVar "modNames") (PVar "moved") (PCon "ModuleDoc" (PVar "here") (PVar "header") (PVar "es"))) (EBlock (DoLet false false (PVar "kept") (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EApp (EVar "isNoneDoc") (EApp (EApp (EApp (EApp (EVar "entryTarget") (EVar "owners")) (EVar "modNames")) (EVar "here")) (EVar "e"))))) (EVar "es"))) (DoLet false false (PVar "incoming") (EApp (EApp (EVar "concatMapDoc") (EApp (EVar "takeForModule") (EVar "here"))) (EVar "moved"))) (DoExpr (EApp (EApp (EApp (EVar "ModuleDoc") (EVar "here")) (EVar "header")) (EBinOp "++" (EVar "kept") (EVar "incoming"))))))
+(DTypeSig false "movedFrom" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "ModuleDoc") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "DocEntry")))))))
+(DFunDef false "movedFrom" ((PVar "owners") (PVar "mentions") (PCon "ModuleDoc" (PVar "here") PWild (PVar "es") PWild)) (EApp (EApp (EVar "concatMapDoc") (EApp (EApp (EApp (EVar "movedEntry") (EVar "owners")) (EVar "mentions")) (EVar "here"))) (EVar "es")))
+(DTypeSig false "movedEntry" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "String") (TyFun (TyCon "DocEntry") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "DocEntry"))))))))
+(DFunDef false "movedEntry" ((PVar "owners") (PVar "mentions") (PVar "here") (PVar "e")) (EMatch (EApp (EApp (EApp (EApp (EVar "entryTarget") (EVar "owners")) (EVar "mentions")) (EVar "here")) (EVar "e")) (arm (PCon "Some" (PVar "m")) () (EListLit (ETuple (EVar "m") (EVar "e")))) (arm (PCon "None") () (EListLit))))
+(DTypeSig false "rebucketOne" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "DocEntry"))) (TyFun (TyCon "ModuleDoc") (TyCon "ModuleDoc"))))))
+(DFunDef false "rebucketOne" ((PVar "owners") (PVar "mentions") (PVar "moved") (PCon "ModuleDoc" (PVar "here") (PVar "header") (PVar "es") (PVar "tyNames"))) (EBlock (DoLet false false (PVar "kept") (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EApp (EVar "isNoneDoc") (EApp (EApp (EApp (EApp (EVar "entryTarget") (EVar "owners")) (EVar "mentions")) (EVar "here")) (EVar "e"))))) (EVar "es"))) (DoLet false false (PVar "incoming") (EApp (EApp (EVar "concatMapDoc") (EApp (EVar "takeForModule") (EVar "here"))) (EVar "moved"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "ModuleDoc") (EVar "here")) (EVar "header")) (EBinOp "++" (EVar "kept") (EVar "incoming"))) (EVar "tyNames")))))
 (DTypeSig false "takeForModule" (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyCon "DocEntry")) (TyApp (TyCon "List") (TyCon "DocEntry")))))
 (DFunDef false "takeForModule" ((PVar "here") (PTuple (PVar "m") (PVar "e"))) (EIf (EBinOp "==" (EVar "m") (EVar "here")) (EListLit (EVar "e")) (EListLit)))
 (DTypeSig false "filterDoc" (TyFun (TyFun (TyVar "a") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
@@ -1120,7 +1335,7 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser = match projectEntrySche
 (DTypeSig false "isNoneDoc" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Bool")))
 (DFunDef false "isNoneDoc" ((PCon "None")) (EVar "True"))
 (DFunDef false "isNoneDoc" (PWild) (EVar "False"))
-(DTypeSig true "slugifyAnchor" (TyFun (TyCon "String") (TyCon "String")))
+(DTypeSig false "slugifyAnchor" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "slugifyAnchor" ((PVar "name")) (EBlock (DoLet false false (PVar "lowered") (EApp (EVar "toLower") (EVar "name"))) (DoLet false false (PVar "chars") (EApp (EVar "stringToChars") (EVar "lowered"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "chars"))) (DoExpr (EApp (EVar "stringTrimDashes") (EApp (EApp (EApp (EVar "slugCharsGo") (EVar "chars")) (ELit (LInt 0))) (EVar "n"))))))
 (DTypeSig false "slugCharsGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "slugCharsGo" ((PVar "chars") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit (LString "")) (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars"))) (DoLet false false (PVar "rest") (EApp (EApp (EApp (EVar "slugCharsGo") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))) (DoExpr (EIf (EApp (EVar "isSlugChar") (EVar "c")) (EBinOp "++" (EApp (EVar "charToStr") (EVar "c")) (EVar "rest")) (EIf (EBinOp "&&" (EBinOp ">" (EApp (EVar "dlen") (EVar "rest")) (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "rest")) (ELit (LString "-")))) (EVar "rest") (EBinOp "++" (ELit (LString "-")) (EVar "rest"))))))))
@@ -1135,20 +1350,18 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser = match projectEntrySche
 (DTypeSig true "libraryInventoryJson" (TyFun (TyApp (TyCon "List") (TyCon "ModuleDoc")) (TyCon "Json")))
 (DFunDef false "libraryInventoryJson" ((PVar "mds")) (EApp (EVar "jArray") (EApp (EApp (EVar "concatMapDoc") (EVar "inventoryEntriesFor")) (EVar "mds"))))
 (DTypeSig false "inventoryEntriesFor" (TyFun (TyCon "ModuleDoc") (TyApp (TyCon "List") (TyCon "Json"))))
-(DFunDef false "inventoryEntriesFor" ((PCon "ModuleDoc" (PVar "moduleName") PWild (PVar "entries"))) (EApp (EApp (EVar "map") (EApp (EVar "inventoryEntryJson") (EVar "moduleName"))) (EVar "entries")))
+(DFunDef false "inventoryEntriesFor" ((PCon "ModuleDoc" (PVar "moduleName") PWild (PVar "entries") PWild)) (EApp (EApp (EVar "map") (EApp (EVar "inventoryEntryJson") (EVar "moduleName"))) (EVar "entries")))
 (DTypeSig false "inventoryEntryJson" (TyFun (TyCon "String") (TyFun (TyCon "DocEntry") (TyCon "Json"))))
 (DFunDef false "inventoryEntryJson" ((PVar "moduleName") (PCon "DocEntry" (PVar "name") (PVar "sig") PWild PWild)) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "module")) (EApp (EVar "JString") (EVar "moduleName"))) (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EVar "name"))) (ETuple (ELit (LString "signature")) (EApp (EVar "JString") (EVar "sig"))))))
 (DTypeSig true "renderIndex" (TyFun (TyApp (TyCon "List") (TyCon "ModuleDoc")) (TyCon "String")))
 (DFunDef false "renderIndex" ((PVar "mds")) (EApp (EVar "stringConcat") (EBinOp "::" (ELit (LString "# Library Index\n\n")) (EApp (EApp (EVar "map") (EVar "renderIndexModule")) (EVar "mds")))))
 (DTypeSig false "renderIndexModule" (TyFun (TyCon "ModuleDoc") (TyCon "String")))
-(DFunDef false "renderIndexModule" ((PCon "ModuleDoc" (PVar "name") PWild (PVar "entries"))) (EBlock (DoLet false false (PVar "count") (EApp (EVar "intToString2") (EApp (EVar "listLenDoc") (EVar "entries")))) (DoLet false false (PVar "head") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "## `")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` ("))) (EApp (EVar "display") (EVar "count"))) (ELit (LString " entries)\n\n")))) (DoLet false false (PVar "links") (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EVar "map") (EApp (EVar "renderIndexLink") (EVar "name"))) (EVar "entries")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "head"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "links"))) (ELit (LString "\n\n"))))))
+(DFunDef false "renderIndexModule" ((PCon "ModuleDoc" (PVar "name") PWild (PVar "entries") PWild)) (EBlock (DoLet false false (PVar "count") (EApp (EVar "intToString") (EApp (EVar "listLenDoc") (EVar "entries")))) (DoLet false false (PVar "head") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "## `")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` ("))) (EApp (EVar "display") (EVar "count"))) (ELit (LString " entries)\n\n")))) (DoLet false false (PVar "links") (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EVar "map") (EApp (EVar "renderIndexLink") (EVar "name"))) (EVar "entries")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "head"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "links"))) (ELit (LString "\n\n"))))))
 (DTypeSig false "renderIndexLink" (TyFun (TyCon "String") (TyFun (TyCon "DocEntry") (TyCon "String"))))
 (DFunDef false "renderIndexLink" ((PVar "moduleName") (PCon "DocEntry" (PVar "name") PWild PWild PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "- [`")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "`]("))) (EApp (EVar "display") (EVar "moduleName"))) (ELit (LString ".md#"))) (EApp (EVar "display") (EApp (EVar "slugifyAnchor") (EVar "name")))) (ELit (LString ")"))))
 (DTypeSig false "listLenDoc" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Int")))
 (DFunDef false "listLenDoc" ((PList)) (ELit (LInt 0)))
 (DFunDef false "listLenDoc" ((PCons PWild (PVar "xs"))) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "listLenDoc") (EVar "xs"))))
-(DTypeSig false "intToString2" (TyFun (TyCon "Int") (TyCon "String")))
-(DFunDef false "intToString2" ((PVar "n")) (EApp (EVar "intToString") (EVar "n")))
 (DTypeSig false "docSchemesFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))))
 (DFunDef false "docSchemesFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "filename") (PVar "roots") (PVar "rawUser")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectEntrySchemes") (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (ELam (PWild) (EVar "None"))) (EVar "filename")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "schemes")) () (EVar "schemes"))))
 # MARK
@@ -1156,7 +1369,7 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser = match projectEntrySche
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositions" false) (mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Ty" true) (mem "Constraint" true) (mem "DataVis" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "IfaceMethod" true) (mem "Require" true) (mem "LetBind" true) (mem "UsePath" true) (mem "UseMember" false) (mem "useMemberOrigin" false) (mem "useMemberLocal" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "Scheme" true) (mem "ppScheme" false))))
-(DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "stringTrim" false) (mem "splitNl" false) (mem "startsWith" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "stringTrim" false) (mem "splitNl" false))))
 (DUse false (UseGroup ("support" "path") ((mem "baseOf" false) (mem "chopExt" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "projectEntrySchemes" false))))
 (DUse false (UseGroup ("json") ((mem "Json" false) (mem "JString" false) (mem "jObject" false) (mem "jArray" false))))
@@ -1187,8 +1400,14 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser = match projectEntrySche
 (DFunDef false "ppTyDoc" ((PVar "t")) (EApp (EApp (EVar "ppTyP") (ELit (LInt 0))) (EVar "t")))
 (DTypeSig false "commentBody" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "commentBody" ((PVar "t")) (EIf (EBinOp "==" (EVar "t") (ELit (LString "--"))) (ELit (LString "")) (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EVar "dlen") (EVar "t")) (ELit (LInt 3))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 0))) (ELit (LInt 3))) (EVar "t")) (ELit (LString "-- ")))) (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 3))) (EApp (EVar "dlen") (EVar "t"))) (EVar "t")) (EIf (EBinOp ">" (EApp (EVar "dlen") (EVar "t")) (ELit (LInt 2))) (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 2))) (EApp (EVar "dlen") (EVar "t"))) (EVar "t")) (ELit (LString ""))))))
+(DTypeSig false "isDoctestInputText" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isDoctestInputText" ((PVar "t")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "dlen") (EVar "t")) (ELit (LInt 5))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 0))) (ELit (LInt 5))) (EVar "t")) (ELit (LString "-- > ")))))
+(DTypeSig false "docLineBody" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "docLineBody" ((PVar "t")) (EBlock (DoLet false false (PVar "body") (EApp (EVar "commentBody") (EVar "t"))) (DoExpr (EIf (EBinOp "||" (EApp (EVar "isDoctestInputText") (EVar "t")) (EApp (EVar "not") (EApp (EVar "isExampleStart") (EVar "body")))) (EVar "body") (EBinOp "++" (ELit (LString "\\")) (EVar "body"))))))
+(DTypeSig false "unescapeGtPrefix" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "unescapeGtPrefix" ((PVar "line")) (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EVar "dlen") (EVar "line")) (ELit (LInt 3))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 0))) (ELit (LInt 3))) (EVar "line")) (ELit (LString "\\> ")))) (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 1))) (EApp (EVar "dlen") (EVar "line"))) (EVar "line")) (EVar "line")))
 (DTypeSig false "expandComment" (TyFun (TyCon "Comment") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
-(DFunDef false "expandComment" ((PVar "c")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "commentText") (EVar "c"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EVar "dlen") (EVar "t")) (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 0))) (ELit (LInt 2))) (EVar "t")) (ELit (LString "{-")))) (EBlock (DoLet false false (PVar "n") (EApp (EVar "dlen") (EVar "t"))) (DoLet false false (PVar "inner") (EIf (EBinOp ">=" (EVar "n") (ELit (LInt 4))) (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 2))) (EBinOp "-" (EVar "n") (ELit (LInt 2)))) (EVar "t")) (ELit (LString "")))) (DoExpr (EApp (EApp (EApp (EVar "expandBlockLines") (EApp (EVar "commentLine") (EVar "c"))) (ELit (LInt 0))) (EApp (EVar "splitNl") (EVar "inner"))))) (EListLit (ETuple (EApp (EVar "commentLine") (EVar "c")) (EApp (EVar "commentBody") (EVar "t"))))))))
+(DFunDef false "expandComment" ((PVar "c")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "commentText") (EVar "c"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EVar "dlen") (EVar "t")) (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 0))) (ELit (LInt 2))) (EVar "t")) (ELit (LString "{-")))) (EBlock (DoLet false false (PVar "n") (EApp (EVar "dlen") (EVar "t"))) (DoLet false false (PVar "inner") (EIf (EBinOp ">=" (EVar "n") (ELit (LInt 4))) (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 2))) (EBinOp "-" (EVar "n") (ELit (LInt 2)))) (EVar "t")) (ELit (LString "")))) (DoExpr (EApp (EApp (EApp (EVar "expandBlockLines") (EApp (EVar "commentLine") (EVar "c"))) (ELit (LInt 0))) (EApp (EVar "splitNl") (EVar "inner"))))) (EListLit (ETuple (EApp (EVar "commentLine") (EVar "c")) (EApp (EVar "docLineBody") (EVar "t"))))))))
 (DTypeSig false "expandBlockLines" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))))
 (DFunDef false "expandBlockLines" (PWild PWild (PList)) (EListLit))
 (DFunDef false "expandBlockLines" ((PVar "baseLine") (PVar "i") (PCons (PVar "line") (PVar "rest"))) (EBinOp "::" (ETuple (EBinOp "+" (EVar "baseLine") (EVar "i")) (EApp (EVar "stringTrim") (EVar "line"))) (EApp (EApp (EApp (EVar "expandBlockLines") (EVar "baseLine")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
@@ -1240,13 +1459,20 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser = match projectEntrySche
 (DTypeSig false "dataVisPrivate" (TyFun (TyCon "DataVis") (TyCon "Bool")))
 (DFunDef false "dataVisPrivate" ((PCon "VisPrivate")) (EVar "True"))
 (DFunDef false "dataVisPrivate" (PWild) (EVar "False"))
-(DTypeSig true "preludeOnlyModule" (TyFun (TyCon "String") (TyCon "Bool")))
+(DTypeSig false "preludeOnlyModule" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "preludeOnlyModule" ((PVar "moduleName")) (EBinOp "==" (EVar "moduleName") (ELit (LString "runtime"))))
 (DTypeSig false "declKind" (TyFun (TyCon "Decl") (TyCon "DocKind")))
 (DFunDef false "declKind" ((PRec "DImpl" ((rf "tys" (PVar "tys"))) false)) (EApp (EVar "KImplOn") (EApp (EVar "headTyName") (EVar "tys"))))
 (DFunDef false "declKind" ((PRec "DData" ((rf "dataName" PWild)) false)) (EVar "KTypeDecl"))
 (DFunDef false "declKind" ((PRec "DNewtype" ((rf "newtypeName" PWild)) false)) (EVar "KTypeDecl"))
 (DFunDef false "declKind" (PWild) (EVar "KPlain"))
+(DTypeSig false "declaredTypeNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "declaredTypeNames" ((PList)) (EListLit))
+(DFunDef false "declaredTypeNames" ((PCons (PVar "d") (PVar "ds"))) (EBinOp "++" (EApp (EVar "declaredTypeName") (EVar "d")) (EApp (EVar "declaredTypeNames") (EVar "ds"))))
+(DTypeSig false "declaredTypeName" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "declaredTypeName" ((PRec "DData" ((rf "dataName" (PVar "n"))) false)) (EListLit (EVar "n")))
+(DFunDef false "declaredTypeName" ((PRec "DNewtype" ((rf "newtypeName" (PVar "n"))) false)) (EListLit (EVar "n")))
+(DFunDef false "declaredTypeName" (PWild) (EListLit))
 (DTypeSig false "headTyName" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "headTyName" ((PList)) (EVar "None"))
 (DFunDef false "headTyName" ((PCons (PVar "t") PWild)) (EApp (EVar "tyHeadName") (EVar "t")))
@@ -1288,8 +1514,16 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser = match projectEntrySche
 (DFunDef false "zipDoc" ((PList) PWild) (EListLit))
 (DFunDef false "zipDoc" (PWild (PList)) (EListLit))
 (DFunDef false "zipDoc" ((PCons (PVar "x") (PVar "xs")) (PCons (PVar "y") (PVar "ys"))) (EBinOp "::" (ETuple (EVar "x") (EVar "y")) (EApp (EApp (EVar "zipDoc") (EVar "xs")) (EVar "ys"))))
+(DTypeSig false "hasPipeMarker" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "hasPipeMarker" ((PVar "line")) (EBinOp "||" (EBinOp "&&" (EBinOp ">=" (EApp (EVar "dlen") (EVar "line")) (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 0))) (ELit (LInt 2))) (EVar "line")) (ELit (LString "| ")))) (EBinOp "==" (EVar "line") (ELit (LString "|")))))
 (DTypeSig false "stripPipePrefix" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "stripPipePrefix" ((PVar "line")) (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EVar "dlen") (EVar "line")) (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 0))) (ELit (LInt 2))) (EVar "line")) (ELit (LString "| ")))) (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 2))) (EApp (EVar "dlen") (EVar "line"))) (EVar "line")) (EIf (EBinOp "==" (EVar "line") (ELit (LString "|"))) (ELit (LString "")) (EVar "line"))))
+(DTypeSig false "markerEligibleAfter" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "markerEligibleAfter" ((PVar "line")) (EBinOp "||" (EBinOp "==" (EVar "line") (ELit (LString ""))) (EApp (EVar "isDecorativeLine") (EVar "line"))))
+(DTypeSig false "isDecorativeLine" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isDecorativeLine" ((PVar "line")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "line"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "arrayLength") (EVar "cs")) (ELit (LInt 0))) (EVar "False") (EApp (EVar "isDecorativeChar") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "cs")))))))
+(DTypeSig false "isDecorativeChar" (TyFun (TyCon "Char") (TyCon "Bool")))
+(DFunDef false "isDecorativeChar" ((PVar "c")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EVar "not") (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "a"))) (EBinOp "<=" (EVar "c") (ELit (LChar "z"))))) (EApp (EVar "not") (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "A"))) (EBinOp "<=" (EVar "c") (ELit (LChar "Z")))))) (EApp (EVar "not") (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "0"))) (EBinOp "<=" (EVar "c") (ELit (LChar "9")))))) (EBinOp "/=" (EVar "c") (ELit (LChar " ")))))
 (DData Private "DocSegment" () ((variant "ProseSeg" (ConPos (TyApp (TyCon "List") (TyCon "String")))) (variant "ExampleSeg" (ConPos (TyApp (TyCon "List") (TyCon "String"))))) ())
 (DData Private "SegMode" () ((variant "ModeProse" (ConPos)) (variant "ModeExample" (ConPos))) ())
 (DTypeSig false "isExampleStart" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -1301,12 +1535,12 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser = match projectEntrySche
 (DFunDef false "pushSeg" (PWild (PList) (PVar "segs")) (EVar "segs"))
 (DFunDef false "pushSeg" ((PCon "ModeProse") (PVar "acc") (PVar "segs")) (EBlock (DoLet false false (PVar "ls") (EApp (EVar "reverseL") (EVar "acc"))) (DoExpr (EIf (EApp (EVar "allBlankLines") (EVar "ls")) (EVar "segs") (EBinOp "::" (EApp (EVar "ProseSeg") (EVar "ls")) (EVar "segs"))))))
 (DFunDef false "pushSeg" ((PCon "ModeExample") (PVar "acc") (PVar "segs")) (EBinOp "::" (EApp (EVar "ExampleSeg") (EApp (EVar "reverseL") (EVar "acc"))) (EVar "segs")))
-(DTypeSig false "docSegGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "SegMode") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "DocSegment")) (TyApp (TyCon "List") (TyCon "DocSegment")))))))
-(DFunDef false "docSegGo" ((PList) (PVar "mode") (PVar "acc") (PVar "segs")) (EApp (EVar "reverseL") (EApp (EApp (EApp (EVar "pushSeg") (EVar "mode")) (EVar "acc")) (EVar "segs"))))
-(DFunDef false "docSegGo" ((PCons (PVar "line") (PVar "rest")) (PCon "ModeProse") (PVar "acc") (PVar "segs")) (EIf (EApp (EVar "isExampleStart") (EVar "line")) (EApp (EApp (EApp (EApp (EVar "docSegGo") (EVar "rest")) (EVar "ModeExample")) (EListLit (EVar "line"))) (EApp (EApp (EApp (EVar "pushSeg") (EVar "ModeProse")) (EVar "acc")) (EVar "segs"))) (EApp (EApp (EApp (EApp (EVar "docSegGo") (EVar "rest")) (EVar "ModeProse")) (EBinOp "::" (EApp (EVar "stripPipePrefix") (EVar "line")) (EVar "acc"))) (EVar "segs"))))
-(DFunDef false "docSegGo" ((PCons (PVar "line") (PVar "rest")) (PCon "ModeExample") (PVar "acc") (PVar "segs")) (EIf (EBinOp "==" (EVar "line") (ELit (LString ""))) (EApp (EApp (EApp (EApp (EVar "docSegGo") (EVar "rest")) (EVar "ModeProse")) (EListLit)) (EApp (EApp (EApp (EVar "pushSeg") (EVar "ModeExample")) (EVar "acc")) (EVar "segs"))) (EApp (EApp (EApp (EApp (EVar "docSegGo") (EVar "rest")) (EVar "ModeExample")) (EBinOp "::" (EVar "line") (EVar "acc"))) (EVar "segs"))))
+(DTypeSig false "docSegGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "SegMode") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "DocSegment")) (TyApp (TyCon "List") (TyCon "DocSegment"))))))))
+(DFunDef false "docSegGo" ((PList) (PVar "mode") PWild (PVar "acc") (PVar "segs")) (EApp (EVar "reverseL") (EApp (EApp (EApp (EVar "pushSeg") (EVar "mode")) (EVar "acc")) (EVar "segs"))))
+(DFunDef false "docSegGo" ((PCons (PVar "line") (PVar "rest")) (PCon "ModeProse") (PVar "markerOk") (PVar "acc") (PVar "segs")) (EIf (EApp (EVar "isExampleStart") (EVar "line")) (EApp (EApp (EApp (EApp (EApp (EVar "docSegGo") (EVar "rest")) (EVar "ModeExample")) (EVar "False")) (EListLit (EVar "line"))) (EApp (EApp (EApp (EVar "pushSeg") (EVar "ModeProse")) (EVar "acc")) (EVar "segs"))) (EIf (EBinOp "&&" (EVar "markerOk") (EApp (EVar "hasPipeMarker") (EVar "line"))) (EApp (EApp (EApp (EApp (EApp (EVar "docSegGo") (EVar "rest")) (EVar "ModeProse")) (EVar "False")) (EBinOp "::" (EApp (EVar "stripPipePrefix") (EVar "line")) (EVar "acc"))) (EVar "segs")) (EApp (EApp (EApp (EApp (EApp (EVar "docSegGo") (EVar "rest")) (EVar "ModeProse")) (EBinOp "&&" (EVar "markerOk") (EApp (EVar "markerEligibleAfter") (EVar "line")))) (EBinOp "::" (EVar "line") (EVar "acc"))) (EVar "segs")))))
+(DFunDef false "docSegGo" ((PCons (PVar "line") (PVar "rest")) (PCon "ModeExample") PWild (PVar "acc") (PVar "segs")) (EIf (EBinOp "==" (EVar "line") (ELit (LString ""))) (EApp (EApp (EApp (EApp (EApp (EVar "docSegGo") (EVar "rest")) (EVar "ModeProse")) (EVar "False")) (EListLit)) (EApp (EApp (EApp (EVar "pushSeg") (EVar "ModeExample")) (EVar "acc")) (EVar "segs"))) (EApp (EApp (EApp (EApp (EApp (EVar "docSegGo") (EVar "rest")) (EVar "ModeExample")) (EVar "False")) (EBinOp "::" (EApp (EVar "unescapeGtPrefix") (EVar "line")) (EVar "acc"))) (EVar "segs"))))
 (DTypeSig false "docSegments" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "DocSegment"))))
-(DFunDef false "docSegments" ((PVar "lines")) (EApp (EApp (EApp (EApp (EVar "docSegGo") (EVar "lines")) (EVar "ModeProse")) (EListLit)) (EListLit)))
+(DFunDef false "docSegments" ((PVar "lines")) (EApp (EApp (EApp (EApp (EApp (EVar "docSegGo") (EVar "lines")) (EVar "ModeProse")) (EVar "True")) (EListLit)) (EListLit)))
 (DTypeSig false "renderDocSegment" (TyFun (TyCon "DocSegment") (TyCon "String")))
 (DFunDef false "renderDocSegment" ((PCon "ProseSeg" (PVar "ls"))) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EVar "ls")))
 (DFunDef false "renderDocSegment" ((PCon "ExampleSeg" (PVar "ls"))) (EBinOp "++" (EBinOp "++" (ELit (LString "*(doctest — run by `medaka test`)*\n\n```medaka\n")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EVar "ls"))) (ELit (LString "\n```"))))
@@ -1322,44 +1556,61 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser = match projectEntrySche
 (DTypeSig false "renderEntry" (TyFun (TyCon "DocEntry") (TyCon "String")))
 (DFunDef false "renderEntry" ((PCon "DocEntry" (PVar "name") (PVar "sig") (PVar "doc") PWild)) (EBlock (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (ELit (LString "## `")) (EVar "name")) (ELit (LString "`\n\n")))) (DoLet false false (PVar "sigBlock") (EBinOp "++" (EBinOp "++" (ELit (LString "```\n")) (EVar "sig")) (ELit (LString "\n```\n")))) (DoLet false false (PVar "rendered") (EApp (EVar "renderDocProse") (EVar "doc"))) (DoLet false false (PVar "docBlock") (EIf (EBinOp "==" (EVar "rendered") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (EBinOp "++" (ELit (LString "\n")) (EVar "rendered")) (ELit (LString "\n"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "header"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "sigBlock"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "docBlock"))) (ELit (LString "\n"))))))
 (DTypeSig true "runDoc" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "String"))))))))
-(DFunDef false "runDoc" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src") (PVar "filename") (PVar "roots")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "computeModuleDoc") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "src")) (EVar "filename")) (EVar "roots")) (arm (PCon "ModuleDoc" (PVar "name") (PVar "header") (PVar "entries")) () (EApp (EApp (EApp (EVar "renderMarkdown") (EVar "name")) (EVar "header")) (EVar "entries")))))
-(DData Abstract "ModuleDoc" () ((variant "ModuleDoc" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "DocEntry"))))) ())
+(DFunDef false "runDoc" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src") (PVar "filename") (PVar "roots")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "computeModuleDoc") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "src")) (EVar "filename")) (EVar "roots")) (arm (PCon "ModuleDoc" (PVar "name") (PVar "header") (PVar "entries") PWild) () (EApp (EApp (EApp (EVar "renderMarkdown") (EVar "name")) (EVar "header")) (EVar "entries")))))
+(DData Abstract "ModuleDoc" () ((variant "ModuleDoc" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "DocEntry")) (TyApp (TyCon "List") (TyCon "String"))))) ())
 (DTypeSig true "mdName" (TyFun (TyCon "ModuleDoc") (TyCon "String")))
-(DFunDef false "mdName" ((PCon "ModuleDoc" (PVar "n") PWild PWild)) (EVar "n"))
-(DTypeSig true "mdEntries" (TyFun (TyCon "ModuleDoc") (TyApp (TyCon "List") (TyCon "DocEntry"))))
-(DFunDef false "mdEntries" ((PCon "ModuleDoc" PWild PWild (PVar "es"))) (EVar "es"))
+(DFunDef false "mdName" ((PCon "ModuleDoc" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig true "computeModuleDoc" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "ModuleDoc"))))))))
-(DFunDef false "computeModuleDoc" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src") (PVar "filename") (PVar "roots")) (EBlock (DoLet false false (PVar "parsed") (EApp (EVar "parseWithPositions") (EVar "src"))) (DoLet false false (PVar "rawDecls") (EApp (EVar "fst") (EVar "parsed"))) (DoLet false false (PVar "positions") (EApp (EVar "positionsDecls") (EApp (EVar "snd") (EVar "parsed")))) (DoLet false false (PVar "comments") (EApp (EVar "collectComments") (EVar "src"))) (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EApp (EApp (EVar "docSchemesFor") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "filename")) (EVar "roots")) (EVar "rawDecls"))) (DoLet false false (PVar "moduleName") (EApp (EVar "chopExt") (EApp (EVar "baseOf") (EVar "filename")))) (DoLet false false (PVar "tbl") (EApp (EVar "buildCommentTbl") (EVar "comments"))) (DoLet false false (PVar "header") (EApp (EVar "moduleHeaderFrom") (EVar "tbl"))) (DoLet false false (PVar "entries") (EApp (EApp (EApp (EApp (EApp (EVar "extractEntries") (EApp (EVar "preludeOnlyModule") (EVar "moduleName"))) (EVar "rawDecls")) (EVar "positions")) (EVar "schemes")) (EVar "comments"))) (DoExpr (EApp (EApp (EApp (EVar "ModuleDoc") (EVar "moduleName")) (EApp (EApp (EVar "dedupHeader") (EVar "header")) (EVar "entries"))) (EVar "entries")))))
+(DFunDef false "computeModuleDoc" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src") (PVar "filename") (PVar "roots")) (EBlock (DoLet false false (PVar "parsed") (EApp (EVar "parseWithPositions") (EVar "src"))) (DoLet false false (PVar "rawDecls") (EApp (EVar "fst") (EVar "parsed"))) (DoLet false false (PVar "positions") (EApp (EVar "positionsDecls") (EApp (EVar "snd") (EVar "parsed")))) (DoLet false false (PVar "comments") (EApp (EVar "collectComments") (EVar "src"))) (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EApp (EApp (EVar "docSchemesFor") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "filename")) (EVar "roots")) (EVar "rawDecls"))) (DoLet false false (PVar "moduleName") (EApp (EVar "chopExt") (EApp (EVar "baseOf") (EVar "filename")))) (DoLet false false (PVar "tbl") (EApp (EVar "buildCommentTbl") (EVar "comments"))) (DoLet false false (PVar "header") (EApp (EVar "moduleHeaderFrom") (EVar "tbl"))) (DoLet false false (PVar "entries") (EApp (EApp (EApp (EApp (EApp (EVar "extractEntries") (EApp (EVar "preludeOnlyModule") (EVar "moduleName"))) (EVar "rawDecls")) (EVar "positions")) (EVar "schemes")) (EVar "comments"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "ModuleDoc") (EVar "moduleName")) (EApp (EApp (EVar "dedupHeader") (EVar "header")) (EVar "entries"))) (EVar "entries")) (EApp (EVar "declaredTypeNames") (EVar "rawDecls"))))))
 (DTypeSig false "dedupHeader" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyCon "String"))))
 (DFunDef false "dedupHeader" ((PVar "header") (PVar "entries")) (EIf (EBinOp "&&" (EBinOp "/=" (EVar "header") (ELit (LString ""))) (EBinOp "==" (EVar "header") (EApp (EVar "firstEntryDoc") (EVar "entries")))) (ELit (LString "")) (EVar "header")))
 (DTypeSig false "firstEntryDoc" (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyCon "String")))
 (DFunDef false "firstEntryDoc" ((PList)) (ELit (LString "")))
 (DFunDef false "firstEntryDoc" ((PCons (PCon "DocEntry" PWild PWild (PVar "doc") PWild) PWild)) (EVar "doc"))
 (DTypeSig true "renderModulePage" (TyFun (TyCon "ModuleDoc") (TyCon "String")))
-(DFunDef false "renderModulePage" ((PCon "ModuleDoc" (PVar "name") (PVar "header") (PVar "entries"))) (EApp (EApp (EApp (EVar "renderMarkdown") (EVar "name")) (EVar "header")) (EVar "entries")))
+(DFunDef false "renderModulePage" ((PCon "ModuleDoc" (PVar "name") (PVar "header") (PVar "entries") PWild)) (EApp (EApp (EApp (EVar "renderMarkdown") (EVar "name")) (EVar "header")) (EVar "entries")))
 (DTypeSig true "excludedLibraryModule" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "excludedLibraryModule" ((PVar "moduleName")) (EBinOp "==" (EVar "moduleName") (ELit (LString "async"))))
 (DTypeSig true "rebucketLibraryImpls" (TyFun (TyApp (TyCon "List") (TyCon "ModuleDoc")) (TyApp (TyCon "List") (TyCon "ModuleDoc"))))
-(DFunDef false "rebucketLibraryImpls" ((PVar "mds")) (EBlock (DoLet false false (PVar "owners") (EApp (EApp (EVar "concatMapDoc") (EVar "typeOwnersOf")) (EVar "mds"))) (DoLet false false (PVar "modNames") (EApp (EApp (EMethodRef "map") (EVar "mdName")) (EVar "mds"))) (DoLet false false (PVar "moved") (EApp (EApp (EVar "concatMapDoc") (EApp (EApp (EVar "movedFrom") (EVar "owners")) (EVar "modNames"))) (EVar "mds"))) (DoExpr (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EVar "rebucketOne") (EVar "owners")) (EVar "modNames")) (EVar "moved"))) (EVar "mds")))))
+(DFunDef false "rebucketLibraryImpls" ((PVar "mds")) (EBlock (DoLet false false (PVar "owners") (EApp (EApp (EVar "concatMapDoc") (EVar "typeOwnersOf")) (EVar "mds"))) (DoLet false false (PVar "mentions") (EApp (EApp (EMethodRef "map") (EVar "moduleMentionIndex")) (EVar "mds"))) (DoLet false false (PVar "moved") (EApp (EApp (EVar "concatMapDoc") (EApp (EApp (EVar "movedFrom") (EVar "owners")) (EVar "mentions"))) (EVar "mds"))) (DoExpr (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EVar "rebucketOne") (EVar "owners")) (EVar "mentions")) (EVar "moved"))) (EVar "mds")))))
 (DTypeSig false "typeOwnersOf" (TyFun (TyCon "ModuleDoc") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
-(DFunDef false "typeOwnersOf" ((PCon "ModuleDoc" (PVar "n") PWild (PVar "es"))) (EApp (EApp (EVar "concatMapDoc") (EApp (EVar "typeOwnerEntry") (EVar "n"))) (EVar "es")))
-(DTypeSig false "typeOwnerEntry" (TyFun (TyCon "String") (TyFun (TyCon "DocEntry") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
-(DFunDef false "typeOwnerEntry" ((PVar "n") (PCon "DocEntry" (PVar "name") PWild PWild (PCon "KTypeDecl"))) (EListLit (ETuple (EVar "name") (EVar "n"))))
-(DFunDef false "typeOwnerEntry" (PWild PWild) (EListLit))
-(DTypeSig false "ownerOfType" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "ownerOfType" ((PVar "owners") (PVar "modNames") (PVar "tyName")) (EMatch (EApp (EApp (EVar "lookupStrDoc") (EVar "tyName")) (EVar "owners")) (arm (PCon "Some" (PVar "m")) () (EApp (EVar "Some") (EVar "m"))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "lowered") (EApp (EVar "toLower") (EVar "tyName"))) (DoExpr (EIf (EApp (EApp (EVar "memberStr") (EVar "lowered")) (EVar "modNames")) (EApp (EVar "Some") (EVar "lowered")) (EVar "None")))))))
+(DFunDef false "typeOwnersOf" ((PCon "ModuleDoc" (PVar "n") PWild PWild (PVar "tyNames"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "t")) (ETuple (EVar "t") (EVar "n")))) (EVar "tyNames")))
+(DTypeSig false "moduleMentionIndex" (TyFun (TyCon "ModuleDoc") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "moduleMentionIndex" ((PCon "ModuleDoc" (PVar "n") PWild (PVar "es") PWild)) (ETuple (EVar "n") (EApp (EApp (EMethodRef "map") (EVar "entrySigOf")) (EVar "es"))))
+(DTypeSig false "entrySigOf" (TyFun (TyCon "DocEntry") (TyCon "String")))
+(DFunDef false "entrySigOf" ((PCon "DocEntry" PWild (PVar "sig") PWild PWild)) (EVar "sig"))
+(DTypeSig false "ownerOfType" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
+(DFunDef false "ownerOfType" ((PVar "owners") (PVar "mentions") (PVar "tyName")) (EMatch (EApp (EApp (EVar "lookupStrDoc") (EVar "tyName")) (EVar "owners")) (arm (PCon "Some" (PVar "m")) () (EApp (EVar "Some") (EVar "m"))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "lowered") (EApp (EVar "toLower") (EVar "tyName"))) (DoExpr (EMatch (EApp (EApp (EVar "lookupSigsDoc") (EVar "lowered")) (EVar "mentions")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "sigs")) () (EIf (EApp (EApp (EVar "anyMentions") (EVar "tyName")) (EVar "sigs")) (EApp (EVar "Some") (EVar "lowered")) (EVar "None")))))))))
+(DTypeSig false "lookupSigsDoc" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "lookupSigsDoc" (PWild (PList)) (EVar "None"))
+(DFunDef false "lookupSigsDoc" ((PVar "k") (PCons (PTuple (PVar "n") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "n")) (EApp (EVar "Some") (EVar "v")) (EApp (EApp (EVar "lookupSigsDoc") (EVar "k")) (EVar "rest"))))
+(DTypeSig false "anyMentions" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "anyMentions" (PWild (PList)) (EVar "False"))
+(DFunDef false "anyMentions" ((PVar "tyName") (PCons (PVar "s") (PVar "rest"))) (EBinOp "||" (EApp (EApp (EVar "mentionsToken") (EVar "tyName")) (EVar "s")) (EApp (EApp (EVar "anyMentions") (EVar "tyName")) (EVar "rest"))))
+(DTypeSig false "mentionsToken" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "mentionsToken" ((PVar "needle") (PVar "hay")) (EBlock (DoLet false false (PVar "ns") (EApp (EVar "stringToChars") (EVar "needle"))) (DoLet false false (PVar "hs") (EApp (EVar "stringToChars") (EVar "hay"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "mentionsTokenGo") (EVar "ns")) (EVar "hs")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "ns"))) (EApp (EVar "arrayLength") (EVar "hs"))))))
+(DTypeSig false "mentionsTokenGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))))
+(DFunDef false "mentionsTokenGo" ((PVar "ns") (PVar "hs") (PVar "i") (PVar "n") (PVar "h")) (EIf (EBinOp "||" (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EBinOp ">" (EBinOp "+" (EVar "i") (EVar "n")) (EVar "h"))) (EVar "False") (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EApp (EApp (EVar "charsMatchAt") (EVar "ns")) (EVar "hs")) (EVar "i")) (EVar "n")) (EApp (EVar "not") (EApp (EApp (EApp (EVar "isIdentCharAt") (EVar "hs")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "h")))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "isIdentCharAt") (EVar "hs")) (EBinOp "+" (EVar "i") (EVar "n"))) (EVar "h")))) (EVar "True") (EApp (EApp (EApp (EApp (EApp (EVar "mentionsTokenGo") (EVar "ns")) (EVar "hs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EVar "h")))))
+(DTypeSig false "charsMatchAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
+(DFunDef false "charsMatchAt" ((PVar "ns") (PVar "hs") (PVar "i") (PVar "n")) (EApp (EApp (EApp (EApp (EApp (EVar "charsMatchAtGo") (EVar "ns")) (EVar "hs")) (EVar "i")) (ELit (LInt 0))) (EVar "n")))
+(DTypeSig false "charsMatchAtGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))))
+(DFunDef false "charsMatchAtGo" ((PVar "ns") (PVar "hs") (PVar "i") (PVar "j") (PVar "n")) (EIf (EBinOp ">=" (EVar "j") (EVar "n")) (EVar "True") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (EVar "j"))) (EVar "hs")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "j")) (EVar "ns"))) (EApp (EApp (EApp (EApp (EApp (EVar "charsMatchAtGo") (EVar "ns")) (EVar "hs")) (EVar "i")) (EBinOp "+" (EVar "j") (ELit (LInt 1)))) (EVar "n")) (EVar "False"))))
+(DTypeSig false "isIdentCharAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
+(DFunDef false "isIdentCharAt" ((PVar "hs") (PVar "i") (PVar "h")) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EVar "h"))) (EVar "False") (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "hs")))))
+(DTypeSig false "isIdentChar" (TyFun (TyCon "Char") (TyCon "Bool")))
+(DFunDef false "isIdentChar" ((PVar "c")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "a"))) (EBinOp "<=" (EVar "c") (ELit (LChar "z")))) (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "A"))) (EBinOp "<=" (EVar "c") (ELit (LChar "Z"))))) (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "0"))) (EBinOp "<=" (EVar "c") (ELit (LChar "9"))))) (EBinOp "==" (EVar "c") (ELit (LChar "_")))))
 (DTypeSig false "lookupStrDoc" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "lookupStrDoc" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupStrDoc" ((PVar "k") (PCons (PTuple (PVar "n") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "n")) (EApp (EVar "Some") (EVar "v")) (EApp (EApp (EVar "lookupStrDoc") (EVar "k")) (EVar "rest"))))
-(DTypeSig false "entryTarget" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "DocEntry") (TyApp (TyCon "Option") (TyCon "String")))))))
-(DFunDef false "entryTarget" ((PVar "owners") (PVar "modNames") (PVar "here") (PCon "DocEntry" PWild PWild PWild (PCon "KImplOn" (PCon "Some" (PVar "hd"))))) (EMatch (EApp (EApp (EApp (EVar "ownerOfType") (EVar "owners")) (EVar "modNames")) (EVar "hd")) (arm (PCon "Some" (PVar "m")) () (EIf (EBinOp "==" (EVar "m") (EVar "here")) (EVar "None") (EApp (EVar "Some") (EVar "m")))) (arm (PCon "None") () (EVar "None"))))
+(DTypeSig false "entryTarget" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "String") (TyFun (TyCon "DocEntry") (TyApp (TyCon "Option") (TyCon "String")))))))
+(DFunDef false "entryTarget" ((PVar "owners") (PVar "mentions") (PVar "here") (PCon "DocEntry" PWild PWild PWild (PCon "KImplOn" (PCon "Some" (PVar "hd"))))) (EMatch (EApp (EApp (EApp (EVar "ownerOfType") (EVar "owners")) (EVar "mentions")) (EVar "hd")) (arm (PCon "Some" (PVar "m")) () (EIf (EBinOp "==" (EVar "m") (EVar "here")) (EVar "None") (EApp (EVar "Some") (EVar "m")))) (arm (PCon "None") () (EVar "None"))))
 (DFunDef false "entryTarget" (PWild PWild PWild PWild) (EVar "None"))
-(DTypeSig false "movedFrom" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "ModuleDoc") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "DocEntry")))))))
-(DFunDef false "movedFrom" ((PVar "owners") (PVar "modNames") (PCon "ModuleDoc" (PVar "here") PWild (PVar "es"))) (EApp (EApp (EVar "concatMapDoc") (EApp (EApp (EApp (EVar "movedEntry") (EVar "owners")) (EVar "modNames")) (EVar "here"))) (EVar "es")))
-(DTypeSig false "movedEntry" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "DocEntry") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "DocEntry"))))))))
-(DFunDef false "movedEntry" ((PVar "owners") (PVar "modNames") (PVar "here") (PVar "e")) (EMatch (EApp (EApp (EApp (EApp (EVar "entryTarget") (EVar "owners")) (EVar "modNames")) (EVar "here")) (EVar "e")) (arm (PCon "Some" (PVar "m")) () (EListLit (ETuple (EVar "m") (EVar "e")))) (arm (PCon "None") () (EListLit))))
-(DTypeSig false "rebucketOne" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "DocEntry"))) (TyFun (TyCon "ModuleDoc") (TyCon "ModuleDoc"))))))
-(DFunDef false "rebucketOne" ((PVar "owners") (PVar "modNames") (PVar "moved") (PCon "ModuleDoc" (PVar "here") (PVar "header") (PVar "es"))) (EBlock (DoLet false false (PVar "kept") (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EApp (EVar "isNoneDoc") (EApp (EApp (EApp (EApp (EVar "entryTarget") (EVar "owners")) (EVar "modNames")) (EVar "here")) (EVar "e"))))) (EVar "es"))) (DoLet false false (PVar "incoming") (EApp (EApp (EVar "concatMapDoc") (EApp (EVar "takeForModule") (EVar "here"))) (EVar "moved"))) (DoExpr (EApp (EApp (EApp (EVar "ModuleDoc") (EVar "here")) (EVar "header")) (EBinOp "++" (EVar "kept") (EVar "incoming"))))))
+(DTypeSig false "movedFrom" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "ModuleDoc") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "DocEntry")))))))
+(DFunDef false "movedFrom" ((PVar "owners") (PVar "mentions") (PCon "ModuleDoc" (PVar "here") PWild (PVar "es") PWild)) (EApp (EApp (EVar "concatMapDoc") (EApp (EApp (EApp (EVar "movedEntry") (EVar "owners")) (EVar "mentions")) (EVar "here"))) (EVar "es")))
+(DTypeSig false "movedEntry" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "String") (TyFun (TyCon "DocEntry") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "DocEntry"))))))))
+(DFunDef false "movedEntry" ((PVar "owners") (PVar "mentions") (PVar "here") (PVar "e")) (EMatch (EApp (EApp (EApp (EApp (EVar "entryTarget") (EVar "owners")) (EVar "mentions")) (EVar "here")) (EVar "e")) (arm (PCon "Some" (PVar "m")) () (EListLit (ETuple (EVar "m") (EVar "e")))) (arm (PCon "None") () (EListLit))))
+(DTypeSig false "rebucketOne" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "DocEntry"))) (TyFun (TyCon "ModuleDoc") (TyCon "ModuleDoc"))))))
+(DFunDef false "rebucketOne" ((PVar "owners") (PVar "mentions") (PVar "moved") (PCon "ModuleDoc" (PVar "here") (PVar "header") (PVar "es") (PVar "tyNames"))) (EBlock (DoLet false false (PVar "kept") (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EApp (EVar "isNoneDoc") (EApp (EApp (EApp (EApp (EVar "entryTarget") (EVar "owners")) (EVar "mentions")) (EVar "here")) (EVar "e"))))) (EVar "es"))) (DoLet false false (PVar "incoming") (EApp (EApp (EVar "concatMapDoc") (EApp (EVar "takeForModule") (EVar "here"))) (EVar "moved"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "ModuleDoc") (EVar "here")) (EVar "header")) (EBinOp "++" (EVar "kept") (EVar "incoming"))) (EVar "tyNames")))))
 (DTypeSig false "takeForModule" (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyCon "DocEntry")) (TyApp (TyCon "List") (TyCon "DocEntry")))))
 (DFunDef false "takeForModule" ((PVar "here") (PTuple (PVar "m") (PVar "e"))) (EIf (EBinOp "==" (EVar "m") (EVar "here")) (EListLit (EVar "e")) (EListLit)))
 (DTypeSig false "filterDoc" (TyFun (TyFun (TyVar "a") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
@@ -1368,7 +1619,7 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser = match projectEntrySche
 (DTypeSig false "isNoneDoc" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Bool")))
 (DFunDef false "isNoneDoc" ((PCon "None")) (EVar "True"))
 (DFunDef false "isNoneDoc" (PWild) (EVar "False"))
-(DTypeSig true "slugifyAnchor" (TyFun (TyCon "String") (TyCon "String")))
+(DTypeSig false "slugifyAnchor" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "slugifyAnchor" ((PVar "name")) (EBlock (DoLet false false (PVar "lowered") (EApp (EVar "toLower") (EVar "name"))) (DoLet false false (PVar "chars") (EApp (EVar "stringToChars") (EVar "lowered"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "chars"))) (DoExpr (EApp (EVar "stringTrimDashes") (EApp (EApp (EApp (EVar "slugCharsGo") (EVar "chars")) (ELit (LInt 0))) (EVar "n"))))))
 (DTypeSig false "slugCharsGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "slugCharsGo" ((PVar "chars") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit (LString "")) (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars"))) (DoLet false false (PVar "rest") (EApp (EApp (EApp (EVar "slugCharsGo") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))) (DoExpr (EIf (EApp (EVar "isSlugChar") (EVar "c")) (EBinOp "++" (EApp (EVar "charToStr") (EVar "c")) (EVar "rest")) (EIf (EBinOp "&&" (EBinOp ">" (EApp (EVar "dlen") (EVar "rest")) (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EApp (EVar "dsub") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "rest")) (ELit (LString "-")))) (EVar "rest") (EBinOp "++" (ELit (LString "-")) (EVar "rest"))))))))
@@ -1383,19 +1634,17 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser = match projectEntrySche
 (DTypeSig true "libraryInventoryJson" (TyFun (TyApp (TyCon "List") (TyCon "ModuleDoc")) (TyCon "Json")))
 (DFunDef false "libraryInventoryJson" ((PVar "mds")) (EApp (EVar "jArray") (EApp (EApp (EVar "concatMapDoc") (EVar "inventoryEntriesFor")) (EVar "mds"))))
 (DTypeSig false "inventoryEntriesFor" (TyFun (TyCon "ModuleDoc") (TyApp (TyCon "List") (TyCon "Json"))))
-(DFunDef false "inventoryEntriesFor" ((PCon "ModuleDoc" (PVar "moduleName") PWild (PVar "entries"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "inventoryEntryJson") (EVar "moduleName"))) (EVar "entries")))
+(DFunDef false "inventoryEntriesFor" ((PCon "ModuleDoc" (PVar "moduleName") PWild (PVar "entries") PWild)) (EApp (EApp (EMethodRef "map") (EApp (EVar "inventoryEntryJson") (EVar "moduleName"))) (EVar "entries")))
 (DTypeSig false "inventoryEntryJson" (TyFun (TyCon "String") (TyFun (TyCon "DocEntry") (TyCon "Json"))))
 (DFunDef false "inventoryEntryJson" ((PVar "moduleName") (PCon "DocEntry" (PVar "name") (PVar "sig") PWild PWild)) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "module")) (EApp (EVar "JString") (EVar "moduleName"))) (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EVar "name"))) (ETuple (ELit (LString "signature")) (EApp (EVar "JString") (EVar "sig"))))))
 (DTypeSig true "renderIndex" (TyFun (TyApp (TyCon "List") (TyCon "ModuleDoc")) (TyCon "String")))
 (DFunDef false "renderIndex" ((PVar "mds")) (EApp (EVar "stringConcat") (EBinOp "::" (ELit (LString "# Library Index\n\n")) (EApp (EApp (EMethodRef "map") (EVar "renderIndexModule")) (EVar "mds")))))
 (DTypeSig false "renderIndexModule" (TyFun (TyCon "ModuleDoc") (TyCon "String")))
-(DFunDef false "renderIndexModule" ((PCon "ModuleDoc" (PVar "name") PWild (PVar "entries"))) (EBlock (DoLet false false (PVar "count") (EApp (EVar "intToString2") (EApp (EVar "listLenDoc") (EVar "entries")))) (DoLet false false (PVar "head") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "## `")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` ("))) (EApp (EMethodRef "display") (EDictApp "count"))) (ELit (LString " entries)\n\n")))) (DoLet false false (PVar "links") (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "renderIndexLink") (EVar "name"))) (EVar "entries")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "head"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "links"))) (ELit (LString "\n\n"))))))
+(DFunDef false "renderIndexModule" ((PCon "ModuleDoc" (PVar "name") PWild (PVar "entries") PWild)) (EBlock (DoLet false false (PVar "count") (EApp (EVar "intToString") (EApp (EVar "listLenDoc") (EVar "entries")))) (DoLet false false (PVar "head") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "## `")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` ("))) (EApp (EMethodRef "display") (EDictApp "count"))) (ELit (LString " entries)\n\n")))) (DoLet false false (PVar "links") (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "renderIndexLink") (EVar "name"))) (EVar "entries")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "head"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "links"))) (ELit (LString "\n\n"))))))
 (DTypeSig false "renderIndexLink" (TyFun (TyCon "String") (TyFun (TyCon "DocEntry") (TyCon "String"))))
 (DFunDef false "renderIndexLink" ((PVar "moduleName") (PCon "DocEntry" (PVar "name") PWild PWild PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "- [`")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "`]("))) (EApp (EMethodRef "display") (EVar "moduleName"))) (ELit (LString ".md#"))) (EApp (EMethodRef "display") (EApp (EVar "slugifyAnchor") (EVar "name")))) (ELit (LString ")"))))
 (DTypeSig false "listLenDoc" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Int")))
 (DFunDef false "listLenDoc" ((PList)) (ELit (LInt 0)))
 (DFunDef false "listLenDoc" ((PCons PWild (PVar "xs"))) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "listLenDoc") (EVar "xs"))))
-(DTypeSig false "intToString2" (TyFun (TyCon "Int") (TyCon "String")))
-(DFunDef false "intToString2" ((PVar "n")) (EApp (EVar "intToString") (EVar "n")))
 (DTypeSig false "docSchemesFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))))
 (DFunDef false "docSchemesFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "filename") (PVar "roots") (PVar "rawUser")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectEntrySchemes") (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (ELam (PWild) (EVar "None"))) (EVar "filename")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "schemes")) () (EVar "schemes"))))

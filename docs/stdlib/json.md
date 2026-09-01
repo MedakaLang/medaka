@@ -10,7 +10,7 @@ and the `Eq`/`Debug`/`Display` interfaces.
 **Value model.**
 ```
 data Json = JNull | JBool Bool | JInt Int | JFloat Float | JString String
-JArray (Array Json) | JObject (Array (String, Json))
+| JArray (Array Json) | JObject (Array (String, Json))
 ```
 Numbers split into `JInt`/`JFloat` so `3` round-trips as `3` (not `3.0`) and
 the parser must classify int-vs-float. Arrays and objects are **`Array`-backed**

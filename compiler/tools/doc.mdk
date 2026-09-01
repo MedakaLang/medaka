@@ -1,19 +1,29 @@
 -- compiler/tools/doc.mdk — the native `medaka doc` documentation extractor.
 --
--- A faithful port of lib/doc.ml (the OCaml oracle), byte-identical output.
--- Harvests doc comments from the lexer's side-channel (collectComments),
--- matches them to top-level PUBLIC declarations by source position, looks up
--- inferred types from the typechecker (checkOneScheme, the Module-arm
--- single-module analogue of the single-file path lsp.mdk still uses), and
--- renders Markdown.
+-- A doc-comment extractor and Markdown renderer, in two modes:
+--   • SINGLE-FILE (`runDoc`) — one module in, one Markdown page on stdout.
+--   • LIBRARY (`computeModuleDoc` + `renderModulePage`/`renderIndex`/
+--     `libraryInventoryJson`, driven by `medaka doc --out DIR`) — many modules
+--     in, one page each plus an index and a machine-readable inventory, with
+--     library-wide corrections (`rebucketLibraryImpls`) no single-file run can
+--     make.
 --
--- Mirrors lib/doc.ml exactly:
---   • comment_body / expand_comment / build_comment_tbl / find_doc_for_line
---   • value_sig / pp_data_variant / pp_record_fields / pp_requires / render_sig
---   • all_letgroup_entries / extract_entries / render_markdown
--- and the pre-desugar `pp_ty_prec` (lib/ast.ml) used for AST-rendered sigs —
--- compiler's types/typecheck.ppTy DROPS effect rows, so doc carries its own
--- precise ppTyP that renders <eff> like OCaml's pp_ty_prec.
+-- Both modes share one pipeline: harvest comments from the lexer's
+-- side-channel (`collectComments`), match them to top-level declarations by
+-- source position, infer schemes through the SAME multi-module loader path
+-- `check`/`run`/LSP use (`projectEntrySchemes`, so an import-bearing module
+-- resolves its siblings — S-doc-multimodule), and render.
+--
+-- Entries are extracted from the RAW, PRE-DESUGAR program, so `renderSig`
+-- shows the surface a reader wrote.  Type rendering is this file's own
+-- `ppTyP`, not `types/typecheck.ppTy`, because the latter DROPS `TyEffect`
+-- rows and interface method types carry them.
+--
+-- Historical note: this file began as a port of the OCaml compiler's
+-- `lib/doc.ml` and its comments used to claim byte-identical output.  That
+-- oracle was removed on 2026-06-26 and the renderer has since diverged
+-- deliberately (multi-entry `DUse` re-export expansion, doctest/marker-aware
+-- prose rendering, library-mode impl rebucketing).  It mirrors nothing now.
 
 import frontend.lexer.{Comment, collectComments, commentLine, commentText}
 import frontend.parser.{
@@ -40,14 +50,7 @@ import frontend.ast.{
   useMemberLocal,
 }
 import types.typecheck.{Scheme(..), ppScheme}
-import support.util.{
-  joinWith,
-  reverseL,
-  escStr,
-  stringTrim,
-  splitNl,
-  startsWith,
-}
+import support.util.{joinWith, reverseL, escStr, stringTrim, splitNl}
 import support.path.{baseOf, chopExt}
 import driver.diagnostics.{projectEntrySchemes}
 import json.{Json, JString, jObject, jArray}
@@ -150,9 +153,52 @@ commentBody t =
   else
     ""
 
+-- doctest.mdk's OWN rule for "this comment line is a doctest INPUT line",
+-- spelled out on the raw comment lexeme: `isInputLine c = startsWith "-- > "
+-- (clText c)` (compiler/tools/doctest.mdk).  Kept here as the single place
+-- doc's example detection is tied to doctest's, so the two cannot drift.
+isDoctestInputText : String -> Bool
+isDoctestInputText t = dlen t >= 5 && dsub 0 5 t == "-- > "
+
+-- The prose body of a LINE comment, with one correction on top of
+-- `commentBody` (S2-2).
+--
+-- doc's segmenter (`isExampleStart`) keys on a `> ` prefix in the extracted
+-- BODY; doctest keys on the literal 5-char `-- > ` prefix in the RAW lexeme.
+-- Enumerating `commentBody`'s branches against `isDoctestInputText` shows the
+-- two agree on every comment shape but ONE: `--> x` (no space after the `--`)
+-- takes the 2-char-strip branch and yields the body `> x`, which doctest never
+-- runs — so doc used to fence it and label it "run by `medaka test`", a claim
+-- `medaka test` contradicts.
+--
+-- For exactly that shape the body's leading `>` is emitted MARKDOWN-ESCAPED
+-- (`\> x`): it renders as the literal text the author wrote (rather than as a
+-- blockquote, which is what an unescaped leading `>` means in Markdown), and
+-- it cannot open an `ExampleSeg`.  An `ExampleSeg` therefore exists iff
+-- doctest would collect the same line, which is what makes the fence's marker
+-- true.  Block-comment lines need no correction: doctest's `expandBlock`
+-- reshapes an inner `> x` into `-- > x` and runs it, which is precisely what
+-- `isExampleStart` accepts.
+docLineBody : String -> String
+docLineBody t =
+  let body = commentBody t
+  if isDoctestInputText t || not (isExampleStart body) then
+    body
+  else
+    "\\" ++ body
+
+-- Undo `docLineBody`'s escape.  Inside a fenced example block a line is
+-- reproduced VERBATIM, so the prose-level Markdown escape must not leak into
+-- the fence.
+unescapeGtPrefix : String -> String
+unescapeGtPrefix line =
+  if dlen line >= 3 && dsub 0 3 line == "\\> " then
+    dsub 1 (dlen line) line
+  else
+    line
+
 -- Expand a comment into (line, text) pairs.  Block comments expand to one entry
--- per inner line (bare trimmed, like lib/doc.ml expand_comment — NOT the
--- doctest `-- ` reshape).  Line comments → [(line, commentBody text)].
+-- per inner line (bare trimmed).  Line comments → [(line, docLineBody text)].
 expandComment : Comment -> List (Int, String)
 expandComment c =
   let t = commentText c
@@ -163,7 +209,7 @@ expandComment c =
     let inner = if n >= 4 then dsub 2 (n - 2) t else ""
     expandBlockLines (commentLine c) 0 (splitNl inner)
   else
-    [(commentLine c, commentBody t)]
+    [(commentLine c, docLineBody t)]
 
 expandBlockLines : Int -> Int -> List String -> List (Int, String)
 expandBlockLines _ _ [] = []
@@ -318,7 +364,6 @@ dataVisPrivate _ = False
 -- Keyed on the DERIVED module name (post `baseOf`/`chopExt`), exactly like
 -- `excludedLibraryModule` — a fixture module named `runtime` gets the same
 -- treatment, so the rule is testable without touching `stdlib/runtime.mdk`.
-export
 preludeOnlyModule : String -> Bool
 preludeOnlyModule moduleName = moduleName == "runtime"
 
@@ -329,6 +374,24 @@ declKind (DImpl { tys = tys }) = KImplOn (headTyName tys)
 declKind (DData { dataName = _ }) = KTypeDecl
 declKind (DNewtype { newtypeName = _ }) = KTypeDecl
 declKind _ = KPlain
+
+-- Every type name this module DECLARES, public or private (S2-1).
+--
+-- `declKind` above answers the same question about a RENDERED entry, and that
+-- is not good enough for ownership: `renderSig` emits no entry at all for a
+-- private `data`/`newtype`, so an owner map built from entries is blind to a
+-- privately-declared type and `rebucketLibraryImpls` used to fall through to
+-- its bare-name clause and file the impl on an unrelated module's page.  A
+-- declaration is evidence of ownership whether or not it is public, so the
+-- owner map is built from the RAW decls instead.
+declaredTypeNames : List Decl -> List String
+declaredTypeNames [] = []
+declaredTypeNames (d::ds) = declaredTypeName d ++ declaredTypeNames ds
+
+declaredTypeName : Decl -> List String
+declaredTypeName (DData { dataName = n }) = [n]
+declaredTypeName (DNewtype { newtypeName = n }) = [n]
+declaredTypeName _ = []
 
 headTyName : List Ty -> Option String
 headTyName [] = None
@@ -474,16 +537,15 @@ zipDoc (x::xs) (y::ys) = (x, y) :: zipDoc xs ys
 -- both fixes apply, so every consumer (per-entry docs, the module header lead
 -- paragraph) gets clean Markdown.
 
--- Strip a leading `| ` (or bare `|`) marker from a prose line. Normally only
--- the very first line of a marked comment carries it (`{- | ... -}` marks
--- once at the top; a continuation `--   line two` never repeats it) — BUT a
--- decorative, unmarked section-separator comment (`-- ── Duration ──`,
--- `stdlib/time.mdk`) can sit directly above a `-- | ...`-marked one with no
--- blank line between, and `findDocForLine`'s proximity rule merges both into
--- one doc block, putting the marker on an interior line. So this strips `| `
--- from EVERY prose line, not just the first — applied only in `ModeProse`
--- below, never inside a doctest example block, where a leading `|` would be
--- real (if unlikely) expected output, not a marker.
+-- Does this prose line carry a leading `| ` (or bare `|`) Haddock marker?
+hasPipeMarker : String -> Bool
+hasPipeMarker line = dlen line >= 2 && dsub 0 2 line == "| " || line == "|"
+
+-- Strip a leading `| ` (or bare `|`) marker from a prose line.  Applied ONLY
+-- where a marker can legitimately sit (`markerEligible` below) — never to
+-- every prose line, because a `|`-led line deeper in prose is USER CONTENT (a
+-- BNF alternative, a Markdown table row) and deleting its `|` silently
+-- destroys what the author wrote (S2-3).
 stripPipePrefix : String -> String
 stripPipePrefix line =
   if dlen line >= 2 && dsub 0 2 line == "| " then
@@ -492,6 +554,35 @@ stripPipePrefix line =
     ""
   else
     line
+
+-- Can a Haddock marker still sit on the NEXT line of a doc block?
+--
+-- Normally the marker is on the block's very first line (`{- | ... -}` marks
+-- once at the top; a continuation `--   line two` never repeats it).  But a
+-- decorative, unmarked section-separator comment (`-- ── Duration ──`,
+-- `stdlib/time.mdk`) can sit directly above a `-- | ...`-marked one with no
+-- blank line between, and `findDocForLine`'s proximity rule merges both into
+-- ONE doc block — putting the marker on an interior line.  So marker
+-- eligibility survives a blank line and a decorative separator, and nothing
+-- else; the first real prose (or the marker itself) ends it.
+--
+-- "Decorative" is read off the first character: not a letter and not a digit
+-- and not a space.  That covers the box-drawing/dash/equals rules the tree
+-- actually writes, without this file naming a Unicode literal, and it
+-- excludes indented continuation prose (which starts with a space).
+markerEligibleAfter : String -> Bool
+markerEligibleAfter line = line == "" || isDecorativeLine line
+
+isDecorativeLine : String -> Bool
+isDecorativeLine line =
+  let cs = stringToChars line
+  if arrayLength cs == 0 then False else isDecorativeChar (arrayGetUnsafe 0 cs)
+
+isDecorativeChar : Char -> Bool
+isDecorativeChar c = not (c >= 'a' && c <= 'z')
+  && not (c >= 'A' && c <= 'Z')
+  && not (c >= '0' && c <= '9')
+  && c /= ' '
 
 -- A run of extracted doc-prose lines is either plain prose or a doctest
 -- example block (starts at a `> ` line, extends through following non-blank
@@ -515,30 +606,46 @@ pushSeg ModeProse acc segs =
   if allBlankLines ls then segs else ProseSeg ls :: segs
 pushSeg ModeExample acc segs = ExampleSeg (reverseL acc) :: segs
 
-docSegGo : List String -> SegMode -> List String -> List DocSegment -> List DocSegment
-docSegGo [] mode acc segs = reverseL (pushSeg mode acc segs)
-docSegGo (line::rest) ModeProse acc segs =
+-- The `Bool` is marker eligibility: True while a Haddock `| ` marker could
+-- still legitimately open this doc block (see `markerEligibleAfter`).  It
+-- starts True (the block's first line), is consumed by the one marker the
+-- block may carry, and is never restored — a `|`-led line after that is user
+-- content.
+docSegGo : List String -> SegMode -> Bool -> List String -> List DocSegment -> List DocSegment
+docSegGo [] mode _ acc segs = reverseL (pushSeg mode acc segs)
+docSegGo (line::rest) ModeProse markerOk acc segs =
   if isExampleStart line then
-    docSegGo rest ModeExample [line] (pushSeg ModeProse acc segs)
+    docSegGo rest ModeExample False [line] (pushSeg ModeProse acc segs)
+  else if markerOk && hasPipeMarker line then
+    docSegGo rest ModeProse False (stripPipePrefix line :: acc) segs
   else
-    docSegGo rest ModeProse (stripPipePrefix line :: acc) segs
-docSegGo (line::rest) ModeExample acc segs =
+    docSegGo rest ModeProse (markerOk && markerEligibleAfter line) (line::acc) segs
+docSegGo (line::rest) ModeExample _ acc segs =
   if line == "" then
-    docSegGo rest ModeProse [] (pushSeg ModeExample acc segs)
+    docSegGo rest ModeProse False [] (pushSeg ModeExample acc segs)
   else
-    docSegGo rest ModeExample (line::acc) segs
+    docSegGo rest ModeExample False (unescapeGtPrefix line :: acc) segs
 
 docSegments : List String -> List DocSegment
-docSegments lines = docSegGo lines ModeProse [] []
+docSegments lines = docSegGo lines ModeProse True [] []
 
 -- An `ExampleSeg` is not decorative prose: `medaka test` EXTRACTS and RUNS it
 -- (`compiler/tools/doctest.mdk`), so its expected-output lines are verified on
 -- every test run.  A reader cannot tell that from a bare fenced block, so
 -- S-doc-surface-truth (hole (d)) labels it.  THE RULE: the marker sits on its
 -- own line immediately above the fence, italic so it reads as an annotation
--- rather than as part of the example, and it is emitted for EVERY `ExampleSeg`
--- — the segmenter's `> ` rule IS doctest's own extraction rule, so an example
--- the doc renders fenced is by construction one `medaka test` runs.
+-- rather than as part of the example, and it is emitted for EVERY
+-- `ExampleSeg`.
+--
+-- That last clause is only honest because the segmenter and doctest agree on
+-- what an example IS, and they agree because `docLineBody` (above) makes them:
+-- it neutralises the ONE comment shape (`--> x`) whose body reached
+-- `isExampleStart` without satisfying doctest's `-- > ` rule.  This used to
+-- claim the agreement held "by construction" — it did not, and a `-->` line
+-- got this marker while `medaka test` found zero doctests in the file (S2-2).
+-- Change `isExampleStart` or `docLineBody` and this marker starts lying
+-- again: they are one rule in two places, kept in step by
+-- `isDoctestInputText`.
 renderDocSegment : DocSegment -> String
 renderDocSegment (ProseSeg ls) = joinWith "\n" ls
 renderDocSegment (ExampleSeg ls) = "*(doctest — run by `medaka test`)*\n\n```medaka\n"
@@ -600,24 +707,27 @@ renderEntry (DocEntry name sig doc _) =
 export
 runDoc : String -> String -> String -> String -> List String -> <IO> String
 runDoc runtimeSrc coreSrc src filename roots = match computeModuleDoc runtimeSrc coreSrc src filename roots
-  ModuleDoc name header entries => renderMarkdown name header entries
+  ModuleDoc name header entries _ => renderMarkdown name header entries
 
 -- ── library mode (S-doc-library-mode) ───────────────────────────────────────
 -- A module's full extracted doc: name (page/index title, page filename minus
--- `.md`), header (lead paragraph, from `moduleHeaderFrom`), and entries.
+-- `.md`), header (lead paragraph, from `moduleHeaderFrom`), entries, and the
+-- type names the module DECLARES — public or private, straight off the raw
+-- decls, which is the ownership evidence `rebucketLibraryImpls` reads (S2-1;
+-- the entries alone cannot answer it, see `declaredTypeNames`).
 -- Abstract export: `medaka_cli.mdk`'s library-mode driver reads it only
--- through the accessors + `renderModulePage`/`renderIndex`/
--- `libraryInventoryJson` below, never by constructing/pattern-matching it
--- itself.
-export data ModuleDoc = ModuleDoc String String (List DocEntry)
+-- through `mdName` + `renderModulePage`/`renderIndex`/`libraryInventoryJson`
+-- below, never by constructing/pattern-matching it itself.
+export data ModuleDoc = ModuleDoc String String (List DocEntry) (List String)
 
 export
 mdName : ModuleDoc -> String
-mdName (ModuleDoc n _ _) = n
+mdName (ModuleDoc n _ _ _) = n
 
-export
-mdEntries : ModuleDoc -> List DocEntry
-mdEntries (ModuleDoc _ _ es) = es
+-- (`mdEntries` used to sit here, exported.  Nothing outside this file ever
+-- called it — `grep -rn mdEntries compiler/ | grep -v doc.mdk` is empty — and
+-- nothing inside did either, so it was dead in both directions and is gone
+-- rather than merely un-exported.)
 
 -- Shared by `runDoc` (single-file) and library mode: parse, infer schemes,
 -- extract entries + the module header, in one place so both modes see
@@ -635,7 +745,11 @@ computeModuleDoc runtimeSrc coreSrc src filename roots =
   let tbl = buildCommentTbl comments
   let header = moduleHeaderFrom tbl
   let entries = extractEntries (preludeOnlyModule moduleName) rawDecls positions schemes comments
-  ModuleDoc moduleName (dedupHeader header entries) entries
+  ModuleDoc
+    moduleName
+    (dedupHeader header entries)
+    entries
+    (declaredTypeNames rawDecls)
 
 -- When the header comment sits directly above the FIRST decl with no gap
 -- (no blank line — e.g. `test/doc_fixtures/multiline.mdk`), `findDocForLine`
@@ -657,7 +771,7 @@ firstEntryDoc ((DocEntry _ _ doc _)::_) = doc
 
 export
 renderModulePage : ModuleDoc -> String
-renderModulePage (ModuleDoc name header entries) =
+renderModulePage (ModuleDoc name header entries _) =
   renderMarkdown name header entries
 
 -- `async` is excluded from library mode BY CONSTRUCTION: the rule keys on the
@@ -686,13 +800,22 @@ excludedLibraryModule moduleName = moduleName == "async"
 -- suggested mechanism does not reach its own headline example, see MEASUREMENT
 -- below).  The OWNER of a head type-constructor name `T` within a library set is:
 --
---   1. the module whose own public `data`/`newtype` declares `T` (a `KTypeDecl`
---      entry named `T`).  Declaration is the strongest possible evidence and
---      always wins;
---   2. failing that, the module whose page NAME equals `toLower T`, when the
---      library set contains such a module.  This is the OPAQUE-BUILTIN clause:
---      a type the compiler builds in has no declaration to find, but the module
---      that exists to operate on it is named for it;
+--   1. the module whose own `data`/`newtype` declares `T` — PUBLIC OR PRIVATE,
+--      read off the raw decls (`declaredTypeNames`), never off the rendered
+--      entries.  Declaration is the strongest possible evidence and always
+--      wins.  (S2-1: this clause used to read `KTypeDecl` ENTRIES, and
+--      `renderSig` renders no entry for a private `data`, so a module that
+--      privately declared `T` and publicly wrote `impl Debug T` lost that impl
+--      to whatever module happened to be named `t` — silently, with no
+--      warning.);
+--   2. failing that, the module whose page NAME equals `toLower T` AND which
+--      independently MENTIONS `T` in one of its own entries' signatures.  This
+--      is the OPAQUE-BUILTIN clause: a type the compiler builds in has no
+--      declaration to find, but the module that exists to operate on it is
+--      named for it and cannot avoid naming it in its own signatures.  The
+--      mention is what makes this evidence rather than a coincidence of
+--      spelling (S2-1 again: a bare name match corroborates nothing — a
+--      module named `widget` that never says `Widget` is not its home);
 --   3. otherwise: no owner.
 --
 -- An impl entry moves to its head type's owner iff that owner is a DIFFERENT
@@ -722,53 +845,111 @@ export
 rebucketLibraryImpls : List ModuleDoc -> List ModuleDoc
 rebucketLibraryImpls mds =
   let owners = concatMapDoc typeOwnersOf mds
-  let modNames = map mdName mds
-  let moved = concatMapDoc (movedFrom owners modNames) mds
-  map (rebucketOne owners modNames moved) mds
+  let mentions = map moduleMentionIndex mds
+  let moved = concatMapDoc (movedFrom owners mentions) mds
+  map (rebucketOne owners mentions moved) mds
 
--- Clause 1's evidence: every (typeName, declaringModule) pair in the library.
+-- Clause 1's evidence: every (typeName, declaringModule) pair in the library,
+-- from the raw declarations — private `data`/`newtype` included.
 typeOwnersOf : ModuleDoc -> List (String, String)
-typeOwnersOf (ModuleDoc n _ es) = concatMapDoc (typeOwnerEntry n) es
+typeOwnersOf (ModuleDoc n _ _ tyNames) = map (t => (t, n)) tyNames
 
-typeOwnerEntry : String -> DocEntry -> List (String, String)
-typeOwnerEntry n (DocEntry name _ _ KTypeDecl) = [(name, n)]
-typeOwnerEntry _ _ = []
+-- Clause 2's evidence, per module: the module's name paired with the text its
+-- own entries render, which is where a mention of the type has to show up.
+moduleMentionIndex : ModuleDoc -> (String, List String)
+moduleMentionIndex (ModuleDoc n _ es _) = (n, map entrySigOf es)
 
-ownerOfType : List (String, String) -> List String -> String -> Option String
-ownerOfType owners modNames tyName = match lookupStrDoc tyName owners
+entrySigOf : DocEntry -> String
+entrySigOf (DocEntry _ sig _ _) = sig
+
+ownerOfType : List (String, String) -> List (String, List String) -> String -> Option String
+ownerOfType owners mentions tyName = match lookupStrDoc tyName owners
   Some m => Some m
   None =>
     let lowered = toLower tyName
-    if memberStr lowered modNames then Some lowered else None
+    match lookupSigsDoc lowered mentions
+      None => None
+      Some sigs => if anyMentions tyName sigs then Some lowered else None
+
+lookupSigsDoc : String -> List (String, List String) -> Option (List String)
+lookupSigsDoc _ [] = None
+lookupSigsDoc k ((n, v)::rest) = if k == n then Some v else lookupSigsDoc k rest
+
+anyMentions : String -> List String -> Bool
+anyMentions _ [] = False
+anyMentions tyName (s::rest) = mentionsToken tyName s || anyMentions tyName rest
+
+-- Does `hay` contain `needle` as a whole identifier token?  Word-bounded on
+-- both sides, so a module named `array` does not "mention" `Array` merely by
+-- rendering `ArrayBuilder`.
+mentionsToken : String -> String -> Bool
+mentionsToken needle hay =
+  let ns = stringToChars needle
+  let hs = stringToChars hay
+  mentionsTokenGo ns hs 0 (arrayLength ns) (arrayLength hs)
+
+mentionsTokenGo : Array Char -> Array Char -> Int -> Int -> Int -> Bool
+mentionsTokenGo ns hs i n h =
+  if n == 0 || i + n > h then
+    False
+  else if charsMatchAt ns hs i n && not (isIdentCharAt hs (i - 1) h) && not (isIdentCharAt hs (i + n) h) then
+    True
+  else
+    mentionsTokenGo ns hs (i + 1) n h
+
+charsMatchAt : Array Char -> Array Char -> Int -> Int -> Bool
+charsMatchAt ns hs i n = charsMatchAtGo ns hs i 0 n
+
+charsMatchAtGo : Array Char -> Array Char -> Int -> Int -> Int -> Bool
+charsMatchAtGo ns hs i j n =
+  if j >= n then
+    True
+  else if arrayGetUnsafe (i + j) hs == arrayGetUnsafe j ns then
+    charsMatchAtGo ns hs i (j + 1) n
+  else
+    False
+
+isIdentCharAt : Array Char -> Int -> Int -> Bool
+isIdentCharAt hs i h =
+  if i < 0 || i >= h then
+    False
+  else
+    isIdentChar (arrayGetUnsafe i hs)
+
+isIdentChar : Char -> Bool
+isIdentChar c = c >= 'a' && c <= 'z'
+  || c >= 'A' && c <= 'Z'
+  || c >= '0' && c <= '9'
+  || c == '_'
 
 lookupStrDoc : String -> List (String, String) -> Option String
 lookupStrDoc _ [] = None
 lookupStrDoc k ((n, v)::rest) = if k == n then Some v else lookupStrDoc k rest
 
 -- `Some target` iff this entry is an impl that belongs on ANOTHER module's page.
-entryTarget : List (String, String) -> List String -> String -> DocEntry -> Option String
-entryTarget owners modNames here (DocEntry _ _ _ (KImplOn (Some hd))) = match ownerOfType owners modNames hd
+entryTarget : List (String, String) -> List (String, List String) -> String -> DocEntry -> Option String
+entryTarget owners mentions here (DocEntry _ _ _ (KImplOn (Some hd))) = match ownerOfType owners mentions hd
   Some m => if m == here then None else Some m
   None => None
 entryTarget _ _ _ _ = None
 
-movedFrom : List (String, String) -> List String -> ModuleDoc -> List (String, DocEntry)
-movedFrom owners modNames (ModuleDoc here _ es) =
-  concatMapDoc (movedEntry owners modNames here) es
+movedFrom : List (String, String) -> List (String, List String) -> ModuleDoc -> List (String, DocEntry)
+movedFrom owners mentions (ModuleDoc here _ es _) =
+  concatMapDoc (movedEntry owners mentions here) es
 
-movedEntry : List (String, String) -> List String -> String -> DocEntry -> List (String, DocEntry)
-movedEntry owners modNames here e = match entryTarget owners modNames here e
+movedEntry : List (String, String) -> List (String, List String) -> String -> DocEntry -> List (String, DocEntry)
+movedEntry owners mentions here e = match entryTarget owners mentions here e
   Some m => [(m, e)]
   None => []
 
 -- Keep everything that did not move out, then append everything that moved in
 -- (source order preserved within each group; incoming impls land after the
 -- module's own entries, which is where a reader expects "instances" to sit).
-rebucketOne : List (String, String) -> List String -> List (String, DocEntry) -> ModuleDoc -> ModuleDoc
-rebucketOne owners modNames moved (ModuleDoc here header es) =
-  let kept = filterDoc (e => isNoneDoc (entryTarget owners modNames here e)) es
+rebucketOne : List (String, String) -> List (String, List String) -> List (String, DocEntry) -> ModuleDoc -> ModuleDoc
+rebucketOne owners mentions moved (ModuleDoc here header es tyNames) =
+  let kept = filterDoc (e => isNoneDoc (entryTarget owners mentions here e)) es
   let incoming = concatMapDoc (takeForModule here) moved
-  ModuleDoc here header (kept ++ incoming)
+  ModuleDoc here header (kept ++ incoming) tyNames
 
 takeForModule : String -> (String, DocEntry) -> List DocEntry
 takeForModule here (m, e) = if m == here then [e] else []
@@ -789,7 +970,6 @@ isNoneDoc _ = False
 -- exactness, only on the entry's OWN header and the index's link agreeing,
 -- which `slugifyAnchor` guarantees by construction (both read from the same
 -- function).
-export
 slugifyAnchor : String -> String
 slugifyAnchor name =
   let lowered = toLower name
@@ -844,7 +1024,7 @@ libraryInventoryJson : List ModuleDoc -> Json
 libraryInventoryJson mds = jArray (concatMapDoc inventoryEntriesFor mds)
 
 inventoryEntriesFor : ModuleDoc -> List Json
-inventoryEntriesFor (ModuleDoc moduleName _ entries) =
+inventoryEntriesFor (ModuleDoc moduleName _ entries _) =
   map (inventoryEntryJson moduleName) entries
 
 inventoryEntryJson : String -> DocEntry -> Json
@@ -863,8 +1043,8 @@ renderIndex mds =
   stringConcat ("# Library Index\n\n" :: map renderIndexModule mds)
 
 renderIndexModule : ModuleDoc -> String
-renderIndexModule (ModuleDoc name _ entries) =
-  let count = intToString2 (listLenDoc entries)
+renderIndexModule (ModuleDoc name _ entries _) =
+  let count = intToString (listLenDoc entries)
   let head = "## `\{name}` (\{count} entries)\n\n"
   let links = joinWith "\n" (map (renderIndexLink name) entries)
   "\{head}\{links}\n\n"
@@ -876,9 +1056,6 @@ renderIndexLink moduleName (DocEntry name _ _ _) =
 listLenDoc : List a -> Int
 listLenDoc [] = 0
 listLenDoc (_::xs) = 1 + listLenDoc xs
-
-intToString2 : Int -> String
-intToString2 n = intToString n
 
 -- Inferred schemes via the SAME multi-module loader path `check`/`run`/LSP
 -- project-hover use (`projectEntrySchemes`, driver.diagnostics) — loads the

@@ -1,0 +1,19 @@
+# gadget
+
+gadget.mdk — library-mode fixture #6: the DECOY for S2-1.
+
+A module whose name equals `toLower "Gadget"` but which says nothing about
+the type: it declares no `Gadget` and names none in any of its signatures.
+Both halves of the S2-1 fix independently keep `owner.mdk`'s
+`impl Countish Gadget` off this page — clause 1 finds the private
+declaration in `owner`, and clause 2 would refuse this module anyway for
+want of a single corroborating mention.
+
+## `tripled`
+
+```
+tripled : Int -> Int
+```
+
+Unrelated helper; deliberately mentions no type but `Int`.
+

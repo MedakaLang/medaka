@@ -1,9 +1,12 @@
 # array
 
 array.mdk — library-mode fixture module #4: a module NAMED for an opaque
-builtin.  It declares nothing about `Array`; it only has to EXIST under that
-name for `rebucketLibraryImpls`' ownership clause 2 to file gamma's
-`Sizeish (Array Int)` here.
+builtin.  It DECLARES nothing about `Array` (no `data`/`newtype`), so
+ownership clause 1 cannot reach it; clause 2 files gamma's
+`Sizeish (Array Int)` here because this module is named for the type AND
+corroborates that by naming `Array` in its own signature below.  (S2-1: the
+corroboration is required — `test/doc_fixtures/library/gadget.mdk` is the
+negative control, a module named for a type it never mentions.)
 
 ## `firstOrZero`
 

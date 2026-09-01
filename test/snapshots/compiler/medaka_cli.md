@@ -1,5 +1,5 @@
 # META
-source_lines=4304
+source_lines=4328
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/medaka_cli.mdk — the native `medaka` CLI dispatcher (Phase C
@@ -3190,8 +3190,32 @@ collectModuleDocs rsrc csrc stdlibDir (target::rest) = match readFile target
     let md = computeModuleDoc rsrc csrc tsrc target roots
     map (md :: _) (collectModuleDocs rsrc csrc stdlibDir rest)
 
+-- A library page is named for its module's DERIVED name (`mdName`, the
+-- basename minus `.mdk`), so two targets in different directories that share a
+-- basename claim the SAME page: `writeLibraryPages` wrote one and then
+-- overwrote it with the other, the index grew a dead link plus two
+-- identically-titled sections, and `inventory.json` filed both modules' entries
+-- under one name — all silently, at exit 0.  Refuse instead, BEFORE writing
+-- anything, so a half-written output tree is never left behind.
+checkDistinctModuleNames : List ModuleDoc -> <IO> Unit
+checkDistinctModuleNames mds = checkDistinctGo mds []
+
+checkDistinctGo : List ModuleDoc -> List String -> <IO> Unit
+checkDistinctGo [] _ = ()
+checkDistinctGo (md::rest) seen =
+  let n = mdName md
+  if elemStrCli n seen then
+    let _ = ePutStrLn "medaka doc --out: two targets share the module name '\{n}' — they would write the same page '\{n}.md'. Rename one, or document them in separate runs."
+    exit 1
+  else checkDistinctGo rest (n::seen)
+
+elemStrCli : String -> List String -> Bool
+elemStrCli _ [] = False
+elemStrCli x (y::ys) = x == y || elemStrCli x ys
+
 writeLibraryOutputs : String -> List ModuleDoc -> <IO> Unit
 writeLibraryOutputs outDir mds =
+  let _ = checkDistinctModuleNames mds
   let _ = writeLibraryPages outDir mds
   let _ = writeLibraryFile outDir "index.md" (renderIndex mds)
   writeLibraryFile
@@ -4710,8 +4734,16 @@ runMcpServerFromEnv _ =
 (DTypeSig false "collectModuleDocs" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "ModuleDoc")))))))))
 (DFunDef false "collectModuleDocs" (PWild PWild PWild (PList)) (EApp (EVar "Ok") (EListLit)))
 (DFunDef false "collectModuleDocs" ((PVar "rsrc") (PVar "csrc") (PVar "stdlibDir") (PCons (PVar "target") (PVar "rest"))) (EMatch (EApp (EVar "readFile") (EVar "target")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "Err") (EVar "msg"))) (arm (PCon "Ok" (PVar "tsrc")) () (EBlock (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf2") (EVar "target"))) (EListLit (EVar "stdlibDir")))) (DoLet false false (PVar "md") (EApp (EApp (EApp (EApp (EApp (EVar "computeModuleDoc") (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "target")) (EVar "roots"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "md") (EVar "_s")))) (EApp (EApp (EApp (EApp (EVar "collectModuleDocs") (EVar "rsrc")) (EVar "csrc")) (EVar "stdlibDir")) (EVar "rest"))))))))
+(DTypeSig false "checkDistinctModuleNames" (TyFun (TyApp (TyCon "List") (TyCon "ModuleDoc")) (TyEffect ("IO") None (TyCon "Unit"))))
+(DFunDef false "checkDistinctModuleNames" ((PVar "mds")) (EApp (EApp (EVar "checkDistinctGo") (EVar "mds")) (EListLit)))
+(DTypeSig false "checkDistinctGo" (TyFun (TyApp (TyCon "List") (TyCon "ModuleDoc")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit")))))
+(DFunDef false "checkDistinctGo" ((PList) PWild) (ELit LUnit))
+(DFunDef false "checkDistinctGo" ((PCons (PVar "md") (PVar "rest")) (PVar "seen")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "mdName") (EVar "md"))) (DoExpr (EIf (EApp (EApp (EVar "elemStrCli") (EVar "n")) (EVar "seen")) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka doc --out: two targets share the module name '")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' — they would write the same page '"))) (EApp (EVar "display") (EVar "n"))) (ELit (LString ".md'. Rename one, or document them in separate runs."))))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))) (EApp (EApp (EVar "checkDistinctGo") (EVar "rest")) (EBinOp "::" (EVar "n") (EVar "seen")))))))
+(DTypeSig false "elemStrCli" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "elemStrCli" (PWild (PList)) (EVar "False"))
+(DFunDef false "elemStrCli" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EBinOp "||" (EBinOp "==" (EVar "x") (EVar "y")) (EApp (EApp (EVar "elemStrCli") (EVar "x")) (EVar "ys"))))
 (DTypeSig false "writeLibraryOutputs" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ModuleDoc")) (TyEffect ("IO") None (TyCon "Unit")))))
-(DFunDef false "writeLibraryOutputs" ((PVar "outDir") (PVar "mds")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "writeLibraryPages") (EVar "outDir")) (EVar "mds"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "writeLibraryFile") (EVar "outDir")) (ELit (LString "index.md"))) (EApp (EVar "renderIndex") (EVar "mds")))) (DoExpr (EApp (EApp (EApp (EVar "writeLibraryFile") (EVar "outDir")) (ELit (LString "inventory.json"))) (EApp (EVar "stringify") (EApp (EVar "libraryInventoryJson") (EVar "mds")))))))
+(DFunDef false "writeLibraryOutputs" ((PVar "outDir") (PVar "mds")) (EBlock (DoLet false false PWild (EApp (EVar "checkDistinctModuleNames") (EVar "mds"))) (DoLet false false PWild (EApp (EApp (EVar "writeLibraryPages") (EVar "outDir")) (EVar "mds"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "writeLibraryFile") (EVar "outDir")) (ELit (LString "index.md"))) (EApp (EVar "renderIndex") (EVar "mds")))) (DoExpr (EApp (EApp (EApp (EVar "writeLibraryFile") (EVar "outDir")) (ELit (LString "inventory.json"))) (EApp (EVar "stringify") (EApp (EVar "libraryInventoryJson") (EVar "mds")))))))
 (DTypeSig false "writeLibraryPages" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ModuleDoc")) (TyEffect ("IO") None (TyCon "Unit")))))
 (DFunDef false "writeLibraryPages" (PWild (PList)) (ELit LUnit))
 (DFunDef false "writeLibraryPages" ((PVar "outDir") (PCons (PVar "md") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "writeLibraryFile") (EVar "outDir")) (EBinOp "++" (EApp (EVar "mdName") (EVar "md")) (ELit (LString ".md")))) (EApp (EVar "renderModulePage") (EVar "md")))) (DoExpr (EApp (EApp (EVar "writeLibraryPages") (EVar "outDir")) (EVar "rest")))))
@@ -5272,8 +5304,16 @@ runMcpServerFromEnv _ =
 (DTypeSig false "collectModuleDocs" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "ModuleDoc")))))))))
 (DFunDef false "collectModuleDocs" (PWild PWild PWild (PList)) (EApp (EVar "Ok") (EListLit)))
 (DFunDef false "collectModuleDocs" ((PVar "rsrc") (PVar "csrc") (PVar "stdlibDir") (PCons (PVar "target") (PVar "rest"))) (EMatch (EApp (EVar "readFile") (EVar "target")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "Err") (EVar "msg"))) (arm (PCon "Ok" (PVar "tsrc")) () (EBlock (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf2") (EVar "target"))) (EListLit (EVar "stdlibDir")))) (DoLet false false (PVar "md") (EApp (EApp (EApp (EApp (EApp (EVar "computeModuleDoc") (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "target")) (EVar "roots"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "md") (EVar "_s")))) (EApp (EApp (EApp (EApp (EVar "collectModuleDocs") (EVar "rsrc")) (EVar "csrc")) (EVar "stdlibDir")) (EVar "rest"))))))))
+(DTypeSig false "checkDistinctModuleNames" (TyFun (TyApp (TyCon "List") (TyCon "ModuleDoc")) (TyEffect ("IO") None (TyCon "Unit"))))
+(DFunDef false "checkDistinctModuleNames" ((PVar "mds")) (EApp (EApp (EVar "checkDistinctGo") (EVar "mds")) (EListLit)))
+(DTypeSig false "checkDistinctGo" (TyFun (TyApp (TyCon "List") (TyCon "ModuleDoc")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit")))))
+(DFunDef false "checkDistinctGo" ((PList) PWild) (ELit LUnit))
+(DFunDef false "checkDistinctGo" ((PCons (PVar "md") (PVar "rest")) (PVar "seen")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "mdName") (EVar "md"))) (DoExpr (EIf (EApp (EApp (EVar "elemStrCli") (EVar "n")) (EVar "seen")) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka doc --out: two targets share the module name '")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' — they would write the same page '"))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString ".md'. Rename one, or document them in separate runs."))))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))) (EApp (EApp (EVar "checkDistinctGo") (EVar "rest")) (EBinOp "::" (EVar "n") (EVar "seen")))))))
+(DTypeSig false "elemStrCli" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "elemStrCli" (PWild (PList)) (EVar "False"))
+(DFunDef false "elemStrCli" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EBinOp "||" (EBinOp "==" (EVar "x") (EVar "y")) (EApp (EApp (EVar "elemStrCli") (EVar "x")) (EVar "ys"))))
 (DTypeSig false "writeLibraryOutputs" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ModuleDoc")) (TyEffect ("IO") None (TyCon "Unit")))))
-(DFunDef false "writeLibraryOutputs" ((PVar "outDir") (PVar "mds")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "writeLibraryPages") (EVar "outDir")) (EVar "mds"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "writeLibraryFile") (EVar "outDir")) (ELit (LString "index.md"))) (EApp (EVar "renderIndex") (EVar "mds")))) (DoExpr (EApp (EApp (EApp (EVar "writeLibraryFile") (EVar "outDir")) (ELit (LString "inventory.json"))) (EApp (EVar "stringify") (EApp (EVar "libraryInventoryJson") (EVar "mds")))))))
+(DFunDef false "writeLibraryOutputs" ((PVar "outDir") (PVar "mds")) (EBlock (DoLet false false PWild (EApp (EVar "checkDistinctModuleNames") (EVar "mds"))) (DoLet false false PWild (EApp (EApp (EVar "writeLibraryPages") (EVar "outDir")) (EVar "mds"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "writeLibraryFile") (EVar "outDir")) (ELit (LString "index.md"))) (EApp (EVar "renderIndex") (EVar "mds")))) (DoExpr (EApp (EApp (EApp (EVar "writeLibraryFile") (EVar "outDir")) (ELit (LString "inventory.json"))) (EApp (EVar "stringify") (EApp (EVar "libraryInventoryJson") (EVar "mds")))))))
 (DTypeSig false "writeLibraryPages" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ModuleDoc")) (TyEffect ("IO") None (TyCon "Unit")))))
 (DFunDef false "writeLibraryPages" (PWild (PList)) (ELit LUnit))
 (DFunDef false "writeLibraryPages" ((PVar "outDir") (PCons (PVar "md") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "writeLibraryFile") (EVar "outDir")) (EBinOp "++" (EApp (EVar "mdName") (EVar "md")) (ELit (LString ".md")))) (EApp (EVar "renderModulePage") (EVar "md")))) (DoExpr (EApp (EApp (EVar "writeLibraryPages") (EVar "outDir")) (EVar "rest")))))
