@@ -38,11 +38,19 @@ Tutorial-style onboarding, not a spec. Not yet cross-linked into this index's st
 
 | Doc | What it is | Status |
 |-----|------------|--------|
-| [`0. Introduction.md`](guide/0. Introduction.md) | Introduction | — |
-| [`1. Quick Start.md`](guide/1. Quick Start.md) | Quick Start | — |
-| [`2. Expressions.md`](guide/2. Expressions.md) | Expressions | — |
-| [`Haskell and OCaml Delta.md`](guide/Haskell and OCaml Delta.md) | Medaka for Haskell and OCaml Readers | — |
+| [`00-introduction.md`](guide/00-introduction.md) | Introduction | — |
+| [`01-quick-start.md`](guide/01-quick-start.md) | Quick Start | — |
+| [`02-expressions.md`](guide/02-expressions.md) | Values, Bindings & Types | — |
+| [`03-functions.md`](guide/03-functions.md) | Functions | — |
+| [`04-data-modeling.md`](guide/04-data-modeling.md) | Data Modeling | — |
+| [`05-interfaces.md`](guide/05-interfaces.md) | Interfaces | — |
+| [`06-working-with-data.md`](guide/06-working-with-data.md) | Working with Data | — |
+| [`07-effects-and-io.md`](guide/07-effects-and-io.md) | Effects & IO | — |
+| [`08-do-and-thenables.md`](guide/08-do-and-thenables.md) | `do` and Thenables | — |
+| [`09-modules-and-projects.md`](guide/09-modules-and-projects.md) | Modules & Projects | — |
+| [`10-tooling-and-workflow.md`](guide/10-tooling-and-workflow.md) | Tooling & Workflow | — |
 | [`OUTLINE.md`](guide/OUTLINE.md) | Medaka Guide — Outline | — |
+| [`haskell-ocaml-delta.md`](guide/haskell-ocaml-delta.md) | Medaka for Haskell and OCaml Readers | — |
 
 ### design — open/partial work
 

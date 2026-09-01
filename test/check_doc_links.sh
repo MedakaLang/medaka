@@ -103,9 +103,11 @@ command -v awk >/dev/null 2>&1 || { echo "FAIL: awk not found"; exit 2; }
 
 # ── 1. Enumerate every tracked markdown file. ───────────────────────────────
 # git ls-files (not `find`) so gitignored/generated trees (playground/dist,
-# node_modules, …) never enter the corpus, and so filenames containing
-# spaces (yes, this repo has them: docs/guide/"0. Introduction.md") come
-# through as whole lines, not word-split.
+# node_modules, …) never enter the corpus, and so a filename containing
+# spaces comes through as a whole line, not word-split. No tracked markdown
+# file has a space in its name today (docs/guide/ dropped its space-named
+# chapters; derive with `git ls-files '*.md' | grep ' '`), but the corpus is
+# git's to shape, not this gate's, so the read stays space-safe.
 #
 # test/snapshots/** is EXCLUDED: it is the diff_compiler_snapshot_frontend.sh
 # golden corpus — literal `.mdk` SOURCE dumped verbatim inside a "# SOURCE"
@@ -166,8 +168,11 @@ function handleLink(fname, lineno, target,    frag, dir) {
   # the math notation in DICT-SEMANTICS.md (two spans, both with a space). Excusing
   # those in the exceptions file would be excusing a PARSING BUG; drop them here
   # instead. (Verified against the corpus: these two spans are the ONLY
-  # space-bearing link targets, and nothing links to the three space-named
-  # docs/guide/ files, so this exclusion loses no real reference.)
+  # space-bearing link targets. The space-named guide chapters — whose
+  # angle-bracketed cross-links this rule USED to drop unchecked — were
+  # renamed to space-free slugs, so this exclusion loses no real reference.
+  # NOTE: this comment lives inside a single-quoted awk program; an
+  # apostrophe here ENDS that quote and breaks the script.)
   if (target ~ /[ \t]/) return
   # An ellipsis-elided path ("compiler/.../resolve.mdk") is prose shorthand for
   # "somewhere under compiler/", not a citation of a real file. Same reasoning.

@@ -24,28 +24,28 @@ of aspirational.
 ## Literals
 
 ```medaka
-p1 = 42                     -- Int
-p2 = 0xFF                   -- hex Int
-p3 = 0b1010                 -- binary Int
-p4 = 0o17                   -- octal Int
-p5 = 1_000_000              -- underscores allowed
-p6 = 3.14                   -- Float
-p7 = 3.141_592              -- Float
-p7a = 1e12                   -- Float (scientific: integer mantissa + exponent)
-p7b = 1.5e10                 -- Float (fractional mantissa + exponent)
-p7c = 9e+15                  -- Float (explicit `+` exponent)
-p7d = 1e-05                  -- Float (negative exponent)
-p8 = "hello"                -- String
-p9 = """triple quoted"""    -- triple-quoted String (may span lines)
-p10 = 'a'                   -- Char
-p11 = True                  -- Bool
-p12 = False                 -- Bool
-p13 = ()                    -- Unit
-p14 = [1, 2, 3]             -- List
-p15 = []                    -- empty List
-p16 = [|1, 2, 3|]           -- Array
-p17 = [||]                  -- empty Array
-p18 = (1, "hi")             -- Tuple
+p1 = 42  -- Int
+p2 = 0xFF  -- hex Int
+p3 = 0b1010  -- binary Int
+p4 = 0o17  -- octal Int
+p5 = 1_000_000  -- underscores allowed
+p6 = 3.14  -- Float
+p7 = 3.141592  -- Float
+p7a = 1e+12  -- Float (scientific: integer mantissa + exponent)
+p7b = 15000000000.0  -- Float (fractional mantissa + exponent)
+p7c = 9e+15  -- Float (explicit `+` exponent)
+p7d = 1e-05  -- Float (negative exponent)
+p8 = "hello"  -- String
+p9 = """triple quoted"""  -- triple-quoted String (may span lines)
+p10 = 'a'  -- Char
+p11 = True  -- Bool
+p12 = False  -- Bool
+p13 = ()  -- Unit
+p14 = [1, 2, 3]  -- List
+p15 = []  -- empty List
+p16 = [|1, 2, 3|]  -- Array
+p17 = [||]  -- empty Array
+p18 = (1, "hi")  -- Tuple
 ```
 
 `Int` is a 63-bit tagged signed integer (`intMinBound`/`intMaxBound` = `-2^62`
@@ -121,10 +121,10 @@ grammar of the run is specified here and not left to the value rules above.
 name = "world"
 a = 1
 b = 2
-p1 = "hello \{name}!"        -- desugars to `display name` (auto Display, no manual debug)
-p2 = "\{a} and \{b}"         -- multiple holes
-p3 = "result: \{1 + 2}"      -- arbitrary expression
-p4 = """multi \{name}"""     -- works in triple-quoted too
+p1 = "hello \{name}!"  -- desugars to `display name` (auto Display, no manual debug)
+p2 = "\{a} and \{b}"  -- multiple holes
+p3 = "result: \{1 + 2}"  -- arbitrary expression
+p4 = "multi \{name}"  -- works in triple-quoted too
 ```
 
 ## Type annotations & signatures
@@ -132,32 +132,32 @@ p4 = """multi \{name}"""     -- works in triple-quoted too
 ```medaka
 x : Int
 x = 5
-add : Int -> Int -> Int             -- curried arrow
+add : Int -> Int -> Int  -- curried arrow
 add a b = a + b
-id : a -> a                         -- type variable (lowercase)
+id : a -> a  -- type variable (lowercase)
 id v = v
-head : List a -> Option a           -- type application
+head : List a -> Option a  -- type application
 head xs = match xs
-  (h :: _) => Some h
-  []       => None
-neq : Eq a => a -> a -> Bool        -- one constraint
+  h::_ => Some h
+  [] => None
+neq : Eq a => a -> a -> Bool  -- one constraint
 neq p q = p /= q
-f : (Eq a, Ord b) => a -> b -> Bool -- multiple constraints
+f : (Eq a, Ord b) => a -> b -> Bool  -- multiple constraints
 f p q = True
-p1 = (5 : Int)                       -- annotation in expression position
-p2 = let y : Int = 5 in y + 1        -- annotated let
+p1 = 5 : Int  -- annotation in expression position
+p2 = let y = 5 : Int in y + 1  -- annotated let
 ```
 
 Effect rows in signatures (see Effects):
 
 ```medaka
-readFile : String -> <IO> String                -- single effect label
+readFile : String -> <IO> String  -- single effect label
 readFile _ = "stub"
-fetch    : String -> <Clock, IO> String         -- multiple effect labels
+fetch : String -> <Clock, IO> String  -- multiple effect labels
 fetch _ = "stub"
-applyTo : (a -> <e> b) -> a -> b               -- effect variable
+applyTo : (a -> <e> b) -> a -> b  -- effect variable
 applyTo g v = g v
-run      : (Unit -> <IO | e> a) -> <IO | e> a  -- open tail row
+run : (Unit -> <IO | e> a) -> <IO | e> a  -- open tail row
 run g = g ()
 ```
 
@@ -166,18 +166,18 @@ Effect-label declarations (Phase 146 gap 2 — builtins are
 FileRead, FileWrite, FFI`; declare more):
 
 ```medaka
-effect KV                  -- a user/platform effect label, usable as <KV> in rows
-export effect Fetch        -- export-marked (cross-module import works; Phase 146 gap 3 ✅ 2026-06-07)
+effect KV  -- a user/platform effect label, usable as <KV> in rows
+export effect Fetch  -- export-marked (cross-module import works; Phase 146 gap 3 ✅ 2026-06-07)
 ```
 
 ## Function definitions
 
 ```medaka
-double x = x + x                  -- simple
-factorial 0 = 1                   -- pattern-matching head; multiple clauses stack
+double x = x + x  -- simple
+factorial 0 = 1  -- pattern-matching head; multiple clauses stack
 factorial n = n * factorial (n - 1)
 data Point = Pt { x : Int, y : Int }
-setX v p@(Pt { x, y }) = Pt { p | x = v }  -- `@` as-pattern param (binds whole + fields)
+setX v (p@(Pt { x, y })) = Pt { p | x = v }  -- `@` as-pattern param (binds whole + fields)
 ```
 
 Implicitly self-recursive and mutually recursive at top level — no keyword.
@@ -190,19 +190,20 @@ are both parse errors.
 
 ```medaka
 classify n
-  | n < 0     = "neg"
-  | n > 0     = "pos"
+  | n < 0 = "neg"
+  | n > 0 = "pos"
   | otherwise = "zero"
 
 -- inline single-guard form is allowed:
-drop n xs | n <= 0 = xs
+drop n xs
+  | n <= 0 = xs
 drop n (x::xs) = drop (n - 1) xs
 drop n [] = []
 
 -- pattern-bind qualifier `pat <- expr`; binds scope rightward + into body:
 filterMap f (x::xs)
-  | Some y <- f x = y :: filterMap f xs
-  | None   <- f x = filterMap f xs
+  | (Some y) <- f x = y :: filterMap f xs
+  | None <- f x = filterMap f xs
 filterMap f [] = []
 ```
 
@@ -210,8 +211,9 @@ filterMap f [] = []
 its own indented line below the body (Haskell-style); both parse:
 
 ```medaka
-f x = g x where
-  g y = y * 2
+f x = g x
+  where
+    g y = y * 2
 ```
 
 ```medaka
@@ -234,17 +236,17 @@ classify x
 ## Lambdas
 
 ```medaka
-p1 = x => x + 1                  -- single param. NOTE: no `\` or `fun` prefix
-p2 = x y => x + y                -- multi-param (NOT curried `x => y => ...`)
-p3 = (x, y) => x + y             -- tuple-destructuring param
-p4 = (Some x) => x               -- constructor-pattern param
-p5 = _ => 0                      -- wildcard param
-p6 = xs@rest => xs               -- as-pattern param
+p1 = x => x + 1  -- single param. NOTE: no `\` or `fun` prefix
+p2 = x y => x + y  -- multi-param (NOT curried `x => y => ...`)
+p3 = (x, y) => x + y  -- tuple-destructuring param
+p4 = (Some x) => x  -- constructor-pattern param
+p5 = _ => 0  -- wildcard param
+p6 = (xs@rest) => xs  -- as-pattern param
 
 -- point-free one-arg lambda that immediately matches (no `function` keyword)
 p7 = x => match x
   Some x => x
-  None   => 0
+  None => 0
 ```
 
 ## Operators
@@ -259,28 +261,28 @@ inc n = n + 1
 data Person = { name : String }
 person = Person { name = "n" }
 
-e1  = 2 + 3               -- arithmetic
-e2  = 10 - 4
-e3  = 3 * 4
-e4  = 10 / 2
-e5  = 5 % 2
-e6  = -(5)                 -- unary minus
-e7  = x == y
-e8  = x /= y
-e9  = x < y
+e1 = 2 + 3  -- arithmetic
+e2 = 10 - 4
+e3 = 3 * 4
+e4 = 10 / 2
+e5 = 5 % 2
+e6 = -5  -- unary minus
+e7 = x == y
+e8 = x /= y
+e9 = x < y
 e10 = x > y
 e11 = x <= y
 e12 = x >= y
-e13 = p && q               -- boolean
+e13 = p && q  -- boolean
 e14 = p || q
-e15 = not True              -- boolean negation (`not` is the ONLY spelling)
-e16 = 1 :: [2, 3]            -- cons
-e17 = [1,2] ++ [3,4]         -- append (Semigroup): works on lists...
-e18 = "ab" ++ "cd"           -- ...and strings too
-e19 = 5 |> double            -- pipe (apply value through fn)
-e20 = double >> inc          -- left-to-right composition
-e21 = inc << double          -- right-to-left composition
-e22 = person.name            -- dot = field/module access ONLY
+e15 = not True  -- boolean negation (`not` is the ONLY spelling)
+e16 = 1::[2, 3]  -- cons
+e17 = [1, 2] ++ [3, 4]  -- append (Semigroup): works on lists...
+e18 = "ab" ++ "cd"  -- ...and strings too
+e19 = 5 |> double  -- pipe (apply value through fn)
+e20 = double >> inc  -- left-to-right composition
+e21 = inc << double  -- right-to-left composition
+e22 = person.name  -- dot = field/module access ONLY
 ```
 
 There is no backtick-infix operator syntax (`` x `f` y ``) — see "Removed — do not use".
@@ -288,27 +290,27 @@ There is no backtick-infix operator syntax (`` x `f` y ``) — see "Removed — 
 Sections (parenthesized partial operators):
 
 ```medaka
-p1 = (+5)        -- right section  x => x + 5
-p2 = (2 * _)      -- left section   x => 2 * x
-p3 = (+)          -- bare operator as function
+p1 = (+ 5)  -- right section  x => x + 5
+p2 = (2 * _)  -- left section   x => 2 * x
+p3 = (+)  -- bare operator as function
 p4 = (-)
 ```
 
 Indexing & slicing:
 
 ```medaka
-arr = [|1,2,3,4,5,6|]
-p1 = arr.[0]        -- index
-p2 = arr.[2..5]      -- slice, half-open
-p3 = arr.[0..=3]     -- slice, inclusive
+arr = [|1, 2, 3, 4, 5, 6|]
+p1 = arr[0]  -- index
+p2 = arr.[2..5]  -- slice, half-open
+p3 = arr.[0..=3]  -- slice, inclusive
 ```
 
 ## Ranges
 
 ```medaka
-p1 = [1..10]        -- List Int, half-open [1,10)
-p2 = [1..=10]        -- List Int, inclusive
-p3 = [|1..=100|]     -- Array Int, inclusive
+p1 = [1..10]  -- List Int, half-open [1,10)
+p2 = [1..=10]  -- List Int, inclusive
+p3 = [|1..=100|]  -- Array Int, inclusive
 -- and in patterns (see below)
 ```
 
@@ -322,7 +324,7 @@ m1 x = match x
   n           => debug n         -- variable (also serves as catch-all)
 
 m2 t = match t
-  (a, b)      => a               -- tuple
+  (a, b) => a  -- tuple
 
 m3 xs = match xs
   x :: rest   => x                -- cons
@@ -349,14 +351,14 @@ m7 c = match c
   _           => "other"
 
 m8 p = match p
-  Person { name }            => name    -- record pattern (pun)
+  Person { name } => name  -- record pattern (pun)
 
 m9 p = match p
   Person { name = "Al", age } => debug age -- record pattern (explicit + bind)
   Person { name, ... }       => name       -- record pattern with rest
 
 m10 p = match p
-  Person { ... }             => 0          -- record rest only
+  Person { ... } => 0  -- record rest only
 ```
 
 Match-arm guards — the SAME qualifiers as equation guards (`cond`, comma-`,`
@@ -368,9 +370,9 @@ f : Int -> Option Int
 f n = if n > 10 then Some n else None
 
 classify n = match n
-  x if x > 0                 => "pos"
-  x if Some y <- f x, y > 0  => "some-pos"
-  _                           => "other"
+  x if x > 0 => "pos"
+  x if (Some y) <- f x, y > 0 => "some-pos"
+  _ => "other"
 ```
 
 ## Control flow
@@ -381,8 +383,10 @@ doThing = println "a"
 doOther = println "b"
 
 p1 = if 1 > 0 then 1 else 0
-p2 = if let Some v = opt then v else 0        -- if-let (single-ctor bind)
-p3 x = if x > 0 then println "pos"            -- else-less: else defaults to (); then must be Unit
+p2 = match opt
+  Some v => v
+  _ => 0  -- if-let (single-ctor bind)
+p3 x = if x > 0 then println "pos"  -- else-less: else defaults to (); then must be Unit
 main =
   if 1 > 0 then                               -- else-less with an indented side-effecting block
     doThing
@@ -402,9 +406,11 @@ the body on a *following* line, all on the `else` line, is **not** a block opene
 
 ```medaka
 p1 = let x = 5 in x + 1
-p2 = let f x = x + 1 in f 5             -- let-bound function
+p2 = let f x = x + 1 in f 5  -- let-bound function
 p3 = let g x y = x + y in g 1 2
-p4 = let rec f = x => f x in f 0        -- recursive value (RHS must be a lambda)
+p4 = f 0
+  where
+    f = x => f x  -- recursive value (RHS must be a lambda)
 ```
 
 There is no `let-else` (`let PAT = EXPR else DEFAULT`) — see "Removed — do not use".
@@ -436,10 +442,10 @@ computation1 = Some 1
 computation2 x = Some (x + 1)
 
 result = do
-  x <- computation1           -- monadic bind
+  x <- computation1  -- monadic bind
   y <- computation2 x
-  let z = x + y               -- pure let (no `mut`)
-  pure z                     -- expression statement, must unify to `m a`
+  let z = x + y  -- pure let (no `mut`)
+  pure z  -- expression statement, must unify to `m a`
 ```
 
 `do` abstracts over any monad (Option, Result, custom). It is true sugar
@@ -449,32 +455,44 @@ indented block, not `do`.
 ## Data types
 
 ```medaka
-data MyBool = MyTrue | MyFalse                      -- inline sum
-data MyOption a = MySome a | MyNone                 -- with payload + type param
-data Shape                                           -- block form
-  = Circle Float
+data MyBool =
+  | MyTrue  -- inline sum
+  | MyFalse
+data MyOption a =
+  | MySome a  -- with payload + type param
+  | MyNone
+data Shape =
+  -- block form
+  | Circle Float
   | Rectangle Float Float
 
-data Point = Pt { x : Int, y : Int }                -- named-field variant (inline)
-data Vec = { x : Int, y : Int }                     -- SHORT form: single braced ctor,
-                                                      -- name omitted → ctor name = tycon
-                                                      -- (`Vec`); == `data Vec = Vec { … }`.
-                                                      -- Only for a lone `{ … }` ctor with
-                                                      -- no `|`; multi-ctor stays explicit.
-data Event                                           -- named-field variant (block)
-  = Click { x : Int, y : Int }
+data Point =
+  | Pt { x : Int, y : Int }  -- named-field variant (inline)
+data Vec =
+  | { x : Int, y : Int }  -- SHORT form: single braced ctor,
+-- name omitted → ctor name = tycon
+-- (`Vec`); == `data Vec = Vec { … }`.
+-- Only for a lone `{ … }` ctor with
+-- no `|`; multi-ctor stays explicit.
+data Event =
+  -- named-field variant (block)
+  | Click { x : Int, y : Int }
   | Scroll Int
 
-data MyColor = MyRed | MyGreen deriving (Debug)      -- deriving
+data MyColor =
+  | MyRed  -- deriving
+  | MyGreen
+deriving (Debug)
 
-data Multi                                           -- deriving MAY sit on its own indented
-  = Foo                                               -- line — but only because this `data`
-  | Bar                                               -- decl itself is multi-line (see below)
-  deriving (Debug)
+data Multi =
+  -- deriving MAY sit on its own indented
+  | Foo  -- line — but only because this `data`
+  | Bar  -- decl itself is multi-line (see below)
+deriving (Debug)
 
 p = Pt { x = 1, y = 2 }
-p2 = Pt { p | y = 9 }                                -- variant functional update
-                                                      -- (copy p, override y; p must be a Pt)
+p2 = Pt { p | y = 9 }  -- variant functional update
+-- (copy p, override y; p must be a Pt)
 ```
 
 **`deriving` on its own line depends on whether the `data` decl is multi-line.** After a
@@ -505,25 +523,28 @@ form as the product-type syntax. That section is stale; this file is ground
 truth for what the current binary accepts.
 
 ```medaka
-data Person = { name : String, age : Int }          -- record = single-ctor named data
-                                                      -- (ctor implicitly named `Person`)
+data Person =
+  | { name : String, age : Int }  -- record = single-ctor named data
+-- (ctor implicitly named `Person`)
 -- equivalent explicit form: data Person = Person { name : String, age : Int }
 
-p1 = Person { name = "Alice", age = 30 }             -- construction (all fields required)
+p1 = Person { name = "Alice", age = 30 }  -- construction (all fields required)
 
 name = "Bob"
 age = 40
-p2 = Person { name, age }                            -- pun shorthand (name = name, ...)
+p2 = Person { name, age }  -- pun shorthand (name = name, ...)
 
-n  = p1.name                                          -- field access
-p3 = { p1 | age = 31 }                                -- functional update
+n = p1.name  -- field access
+p3 = { p1 | age = 31 }  -- functional update
 
 data Address = { city : String }
 data PersonA = { address : Address }
-pa  = PersonA { address = Address { city = "NYC" } }
-pa2 = { pa | address.city = "Boston" }                -- nested update sugar
+pa = PersonA { address = Address { city = "NYC" } }
+pa2 = { pa | address = { pa.address | city = "Boston" } }  -- nested update sugar
 
-data Boxed = { x : Int } deriving (Debug)             -- deriving on a record-shaped data type
+data Boxed =
+  | { x : Int }  -- deriving on a record-shaped data type
+deriving (Debug)
 ```
 
 ## Type aliases & newtypes
@@ -541,8 +562,9 @@ newtype Age = Age Int deriving (Eq)
 interface Eq2 a where
   eq2 : a -> a -> Bool
 
-interface Ord2 a requires Eq2 a where       -- superclass constraint
+interface Ord2 a requires Eq2 a where
   compare2 : a -> a -> Ordering
+-- superclass constraint
 
 interface Greeter a where                    -- default method body
   greet : a -> String                        -- the default body's sig MUST mention `a`
@@ -555,8 +577,9 @@ impl Eq2 Int where
 
 data Box a = Box a
 
-impl Eq2 (Box a) requires Eq2 a where        -- conditional impl
+impl Eq2 (Box a) requires Eq2 a where
   eq2 (Box x) (Box y) = eq2 x y
+-- conditional impl
 ```
 
 An impl method body accepts the same equation-guard shapes as a top-level
@@ -609,23 +632,23 @@ public export data T = TA | TB
 export g = 2
 
 -- file: main_single.mdk
-import utils.greet                  -- single name
+import utils.greet  -- single name
 main = println greet
 
 -- file: main_group.mdk
-import utils.{greet, helper}        -- group
+import utils.{greet, helper}  -- group
 main = println (greet ++ helper)
 
 -- file: main_wildcard.mdk
-import utils.*                      -- wildcard
+import utils.*  -- wildcard
 main = println greet
 
 -- file: main_type.mdk
-import colors.{Color(..)}           -- type + all its constructors
+import colors.{Color(..)}  -- type + all its constructors
 main = println (debug Red)
 
 -- file: main_mixed.mdk
-import m.{f, T(..), g}              -- mixed
+import m.{f, T(..), g}  -- mixed
 main = println (f + g)
 
 -- file: main_reexport.mdk
@@ -637,17 +660,21 @@ Export forms:
 
 ```medaka-project
 -- file: exports_demo.mdk
-export                              -- export the following declaration
-foo x = x
+export foo x = x
+-- export the following declaration
 
-public export data Shade = Light | Dark   -- export type + constructors
-export data Hidden = HiddenCtor            -- abstract export (type only)
+public export data Shade =
+  | Light  -- export type + constructors
+  | Dark
+export data Hidden =
+  | HiddenCtor  -- abstract export (type only)
 
 -- file: main.mdk
 import exports_demo.{foo, Shade(..), Hidden}
-main = println (foo (match Light
-  Light => "l"
-  Dark => "d"))
+main = println (foo
+  (match Light
+    Light => "l"
+    Dark => "d"))
 ```
 
 **`public` only applies to `data`.** `public export data` (`VisPublic`) exports the type
@@ -688,8 +715,8 @@ export emit = "A"
 export emit = "B"
 
 -- file: main.mdk
-import emit_a as EA                 -- module alias: refer to EA.emit
-import emit_b.{emit as emitB}       -- member alias: rename one value
+import emit_a as EA  -- module alias: refer to EA.emit
+import emit_b.{emit as emitB}  -- member alias: rename one value
 main = println (EA.emit ++ emitB)
 ```
 
@@ -845,10 +872,10 @@ with the `!` operator — the OCaml spelling:
 
 ```medaka
 main =
-  let count = Ref 0      -- immutable BINDING of a mutable CELL
-  count := 42            -- `:=` writes the cell (sugar for `setRef count 42`)
-  count := !count + 1    -- `!` reads the cell; `:=` is right-assoc, low prec
-  println !count         -- => 43
+  let count = Ref 0  -- immutable BINDING of a mutable CELL
+  count := 42  -- `:=` writes the cell (sugar for `setRef count 42`)
+  count := !count + 1  -- `!` reads the cell; `:=` is right-assoc, low prec
+  println !count  -- => 43
 ```
 
 `x := e` is surface sugar that desugars to `setRef x e` (type
@@ -873,8 +900,8 @@ import map.{Map, get}
 import set.{Set, has}
 
 main =
-  println (get "a" (Map { "a" => 1, "b" => 2 }))
-  println (has 2 (Set { 1, 2, 3 }))
+  println (get "a" Map { "a" => 1, "b" => 2 })
+  println (has 2 Set { 1, 2, 3 })
 ```
 
 ## Comments
