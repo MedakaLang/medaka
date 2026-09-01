@@ -122,6 +122,17 @@ test/cli_conformance_census    derived CLI conformance census (#2354, S-conforma
                                 help/parse-arm agreement gate; this is the map that slice
                                 works from. See the script header.
 
+test/slop_census               composing entry point over the slop-burndown crusade's (#2276)
+                                member censuses (#2304, S-slop-census, `make slop-census`): a
+                                registry, encoded as data in the script, of every member census
+                                (comment-register, arch, fmt-clean, cli-conformance, the
+                                rule-stdlib-reimpl lint row, plus the not-yet-built diag/doc/
+                                doctest-shape rows) — never reimplements a member, shells out to
+                                the owner script. A registry row whose script does not exist
+                                reports MISSING, never 0. Build-needing rows are SKIPPED by
+                                default (SLOP_CENSUS_FULL=1 to run them). Always exits 0 and
+                                asserts nothing. See the script header.
+
 # ── sqlite (the GATES are sqlite/test/*_oracle.sh — those are in the `sqlite` shard) ──
 # Self-described, in its own header: "it is a status report, not a gate". It prints
 # OPEN/FIXED per known compiler bug and exits 0 unconditionally. Asserts nothing.

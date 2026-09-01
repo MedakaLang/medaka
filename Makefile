@@ -13,7 +13,7 @@
 MEDAKA_SCRATCH ?= /var/tmp/medaka-scratch
 export TMPDIR := $(shell mkdir -p $(MEDAKA_SCRATCH) 2>/dev/null && echo $(MEDAKA_SCRATCH) || echo /tmp)
 
-.PHONY: medaka emitter seed bootstrap seed-health check-self test gates snapshot-check preflight ci clean help docs-links docs-index gen-ci agent-doc-symbols pr-helper-test fmt-clean-census cli-conformance-census comment-census arch-census
+.PHONY: medaka emitter seed bootstrap seed-health check-self test gates snapshot-check preflight ci clean help docs-links docs-index gen-ci agent-doc-symbols pr-helper-test fmt-clean-census cli-conformance-census comment-census arch-census slop-census
 
 ## medaka  — build the native OCaml-free `medaka` CLI (CANONICAL).
 ##           WARM (./medaka_emitter present): 2-stage rebuild from current source,
@@ -219,6 +219,16 @@ comment-census:
 ##           ./medaka needed. Always exits 0: a census, not a gate.
 arch-census:
 	sh test/arch_census.sh
+
+## slop-census — the ONE composing entry point over the slop-burndown
+##           crusade's (#2276) member censuses (#2304). Registry is data IN
+##           test/slop_census.sh — a row whose script does not exist reports
+##           MISSING, never 0. Default invocation does NOT build or invoke
+##           ./medaka (build-needing rows are SKIPPED with a reason); pass
+##           SLOP_CENSUS_FULL=1 to also run those (needs `make medaka` first).
+##           Always exits 0: a census, not a gate.
+slop-census:
+	sh test/slop_census.sh
 
 ## clean   — remove native build artifacts (keeps the checked-in seed)
 clean:
