@@ -7029,51 +7029,7 @@ data ShadowDicts =
 emptyShadowDicts : ShadowDicts
 emptyShadowDicts = ShadowDicts { sdMonos = [], sdIfaces = [], sdArgVecs = [] }
 
--- THE pairing point — the only place in the tree where a slot-id list meets a
--- slot-parallel interface list.
---
--- ⚠️ POLICY: truncate, exactly as the three zips it replaces did
--- (`shatterVecObls`, `recordCallObligations`, `expandSupersEntry`'s `zipL`).  This is
--- BEHAVIOUR, not tidiness: per the paragraph on `CSlot` a real mismatch is reachable,
--- and today's answer is "drop the unpaired tail, never over-reject".  Diagnosing
--- instead is only safe once someone has MEASURED that no real program reaches a
--- mismatch (an instrumented build over the compiler's own source + `stdlib/`); until
--- then the default is byte-identical truncation, and changing it is a separate,
--- evidence-bearing change.
-pairSlots : List Int -> List IfaceRef -> List CSlot
-pairSlots [] _ = []
-pairSlots _ [] = []
-pairSlots (id::ids) (iface::ifs) =
-  CSlot { csIface = iface, csId = id } :: pairSlots ids ifs
-
 data Predicate = Predicate { iface : IfaceRef, args : List Mono }
-
--- B-4 carrier shadow: project the function-slot legacy pair without changing its
--- prefix policy.  `None` makes every slot unknown.  `Some vectors` marks exactly the
--- supplied prefix known and leaves the slot tail unknown; surplus vectors are truncated
--- at the slot list, matching every existing slot/vector zip.
-predicateSlotsOfLegacy : List CSlot -> Option (List (List Mono)) -> List PredicateSlot
-predicateSlotsOfLegacy slots None = map predicateSlotUnknown slots
-predicateSlotsOfLegacy slots (Some args) =
-  predicateSlotsOfKnownPrefix slots args
-
-predicateSlotUnknown : CSlot -> PredicateSlot
-predicateSlotUnknown s = PredicateSlot {
-  psIface = s.csIface,
-  psArgs = PSArgsUnknown,
-  psBoundIds = [s.csId],
-}
-
-predicateSlotsOfKnownPrefix : List CSlot -> List (List Mono) -> List PredicateSlot
-predicateSlotsOfKnownPrefix [] _ = []
-predicateSlotsOfKnownPrefix slots [] = map predicateSlotUnknown slots
-predicateSlotsOfKnownPrefix (s::slots) (args::rest) =
-  PredicateSlot {
-      psIface = s.csIface,
-      psArgs = PSArgsKnown args,
-      psBoundIds = [s.csId],
-    } ::
-    predicateSlotsOfKnownPrefix slots rest
 
 -- The inverse function-slot projections.  A malformed carrier (non-singleton bound ids,
 -- or a known vector after an unknown one) deliberately loses that field so the live
@@ -7081,7 +7037,7 @@ predicateSlotsOfKnownPrefix (s::slots) (args::rest) =
 legacyCSlotsOfPredicateSlots : List PredicateSlot -> List CSlot
 legacyCSlotsOfPredicateSlots [] = []
 legacyCSlotsOfPredicateSlots (s::rest) = match s.psBoundIds
-  id::[] => CSlot {
+  id::_ => CSlot {
     csIface = s.psIface,
     csId = id,
   } :: legacyCSlotsOfPredicateSlots rest
@@ -7099,11 +7055,18 @@ legacyArgsOfPredicateSlots (s::rest) = match s.psArgs
 -- derived on demand so they cannot drift into separate authorities again.
 predicateSlotIds : List PredicateSlot -> List Int
 predicateSlotIds [] = []
-predicateSlotIds (s::rest) = s.psBoundIds ++ predicateSlotIds rest
+predicateSlotIds (s::rest) = match s.psBoundIds
+  [] => predicateSlotIds rest
+  id::_ => id :: predicateSlotIds rest
 
-predicateSlotIfaces : List PredicateSlot -> List IfaceRef
-predicateSlotIfaces [] = []
-predicateSlotIfaces (s::rest) = s.psIface :: predicateSlotIfaces rest
+predicateSlotLegacyVec : PredicateSlot -> (CSlot, List Mono)
+predicateSlotLegacyVec s = match s.psBoundIds
+  [] =>
+    (CSlot { csIface = s.psIface, csId = 0 }, predicateSlotKnownArgs s.psArgs)
+  id::_ => (CSlot {
+      csIface = s.psIface,
+      csId = id,
+    }, predicateSlotKnownArgs s.psArgs)
 
 predicateSlotArgs : List PredicateSlot -> List (List Mono)
 predicateSlotArgs slots = optionOr [] (legacyArgsOfPredicateSlots slots)
@@ -7121,33 +7084,11 @@ predicateSlotIdsAt : String -> List (String, List PredicateSlot) -> List Int
 predicateSlotIdsAt name table =
   predicateSlotIds (optionOr [] (lookupPredicateSlots name table))
 
-predicateSlotIfacesAt : String -> List (String, List PredicateSlot) -> List IfaceRef
-predicateSlotIfacesAt name table =
-  predicateSlotIfaces (optionOr [] (lookupPredicateSlots name table))
-
-predicateSlotArgsAt : String -> List (String, List PredicateSlot) -> List (List Mono)
-predicateSlotArgsAt name table =
-  predicateSlotArgs (optionOr [] (lookupPredicateSlots name table))
-
 predicateSlotIdsEntry : (a, List PredicateSlot) -> (a, List Int)
 predicateSlotIdsEntry (key, slots) = (key, predicateSlotIds slots)
 
-predicateSlotIfacesEntry : (a, List PredicateSlot) -> (a, List IfaceRef)
-predicateSlotIfacesEntry (key, slots) = (key, predicateSlotIfaces slots)
-
-predicateSlotArgsEntry : (a, List PredicateSlot) -> List (a, List (List Mono))
-predicateSlotArgsEntry (key, slots) = match legacyArgsOfPredicateSlots slots
-  Some args => [(key, args)]
-  None => []
-
 predicateSlotIdsTable : List (a, List PredicateSlot) -> List (a, List Int)
 predicateSlotIdsTable entries = map predicateSlotIdsEntry entries
-
-predicateSlotIfacesTable : List (a, List PredicateSlot) -> List (a, List IfaceRef)
-predicateSlotIfacesTable entries = map predicateSlotIfacesEntry entries
-
-predicateSlotArgsTable : List (a, List PredicateSlot) -> List (a, List (List Mono))
-predicateSlotArgsTable entries = flatMap predicateSlotArgsEntry entries
 
 predicateSlotWithoutArgs : PredicateSlot -> PredicateSlot
 predicateSlotWithoutArgs s = PredicateSlot {
@@ -7224,15 +7165,6 @@ predicateSlotShadowCompare expected actual =
     ()
   else
     panic "TYPECHECK-AUDIT predicate-slot shadow mismatch"
-
-shadowFunConstraintEntry : List CSlot -> Option (List (List Mono)) -> Unit
-shadowFunConstraintEntry slots argsOpt =
-  let view = predicateSlotsOfLegacy slots argsOpt
-  predicateSlotShadowCompare
-    view
-    (predicateSlotsOfLegacy
-      (legacyCSlotsOfPredicateSlots view)
-      (legacyArgsOfPredicateSlots view))
 
 shadowImplReqEntry : (String, List Int, Predicate) -> Unit
 shadowImplReqEntry entry =
@@ -11198,16 +11130,17 @@ inferDictAtFound name routesRef inst =
     let expanded = map fst expandedV
     let ids = map (s => s.csId) expanded
     let monos = constraintMonosOf ids (snd inst)
+    let argVecs = callArgVecsV expandedV (snd inst)
     -- the ROUTING goal stays a spelling (`resolveDictApps` asks the SPELLING-keyed
     -- `KeyBuckets` a route-word question — see `dispHeadTab`); only the OBLIGATION goal
     -- below carries identity.
-    let _ = pushDictApp (routesRef, monos, map (s => s.csIface) expanded, callArgVecsV expandedV (snd inst), !currentLoc)
+    let _ = pushDictApp (routesRef, monos, map (s => s.csIface) expanded, argVecs, !currentLoc)
     perRun.value.dictAppFns := (consSiteFn perRun.value.currentFn.value monos perRun.value.dictAppFns.value)
     -- #11 soundness: record this call's instantiated impl obligations (iface paired
     -- with the call's constraint mono), checked after inference by checkCallObligations.
     -- The iface list is slot-parallel to [monos]; a concrete-head mono with no impl
     -- (`Num String` from `f "hello"` where `f : Num a => a -> a`) becomes an error.
-    let _ = recordCallObligations expanded monos
+    let _ = recordCallObligations expanded monos argVecs
     fst inst
   else
     perRun.value.pendingRecDictApps := (RecDictApp routesRef name perRun.value.currentFn.value (fst inst) :: perRun.value.pendingRecDictApps.value)
@@ -11227,11 +11160,19 @@ anyIdPinned (id::rest) subst = match lookupAssocI id subst
 -- pendingCallObligations.  Length-zips defensively (an iface list shorter than the
 -- mono list — e.g. a multi-param constraint whose ifaces weren't recorded — just
 -- stops, never over-rejecting).
-recordCallObligations : List CSlot -> List Mono -> Unit
-recordCallObligations [] _ = ()
-recordCallObligations _ [] = ()
-recordCallObligations (s::ss) (mono::ms)
-  | s.csIface.irName == "" = recordCallObligations ss ms
+recordCallObligations : List CSlot -> List Mono -> List (List Mono) -> Unit
+recordCallObligations [] _ _ = ()
+recordCallObligations _ [] _ = ()
+recordCallObligations (s::ss) (mono::ms) []
+  | s.csIface.irName == "" = recordCallObligations ss ms []
+  | otherwise =
+    let _ = recordObl Predicate {
+      iface = s.csIface,
+      args = [mono],
+    } 0 PCallSlot !currentLoc
+    recordCallObligations ss ms []
+recordCallObligations (s::ss) (mono::ms) (args::rest)
+  | s.csIface.irName == "" = recordCallObligations ss ms rest
   | otherwise =
     -- 1-ary by construction: these slots are funConstraintsRef's SHATTERED
     -- per-tyvar dict slots (`Ix a i` => two slots), so each carries one mono.
@@ -11252,15 +11193,9 @@ recordCallObligations (s::ss) (mono::ms)
     -- P1 (#1446) / U1b (#1482): `funConstraintIfacesRef`'s payload is `List IfaceRef`,
     -- so this site records the interface OCCURRENCE's identity instead of
     -- `OriginUnresolved`.  It was one of the two `ifaceRefBare` producers.
-    let _ = recordObl (Predicate { iface = s.csIface, args = [mono] }) 0 PCallSlot !currentLoc
-    recordCallObligations ss ms
-
--- String-keyed assoc lookup over funConstraintIfacesRef (returns the iface name list).
-lookupAssocS : String -> List (String, List IfaceRef) -> Option (List IfaceRef)
-lookupAssocS _ [] = None
-lookupAssocS k ((k2, v)::rest)
-  | k == k2 = Some v
-  | otherwise = lookupAssocS k rest
+    let goalArgs = if isEmptyL args then [mono] else args
+    let _ = recordObl (Predicate { iface = s.csIface, args = goalArgs }) 0 PCallSlot !currentLoc
+    recordCallObligations ss ms rest
 
 -- instantiate a scheme, returning both the mono and the (quantified id → fresh
 -- var) substitution, so a caller can recover specific quantified variables
@@ -11268,61 +11203,6 @@ instantiateTracked : Scheme -> (Mono, List (Int, Mono))
 instantiateTracked (Forall ids evars t) =
   let subst = freshSubst ids
   (substMonoP True subst (freshEffSubst evars) t, subst)
-
--- #1161 (F-3a-ii): the callee's declared per-slot predicate ARGUMENT VECTORS, as
--- recorded at signature registration (registerMember).  Bare-name keyed, mirroring the
--- `None` arm of `declaredConstraintFor`.
--- ⚠️ THIS IS THE LOCAL LOOKUP ONLY, and that is now a NARROWER claim than it was.
--- S-xmod-vector-supply (#1868 silent / #1867 loud) CLOSED the cross-module residual this
--- header used to describe: `crossModuleFunConstraintArgsQualRef` is the `(definer module,
--- exported name)`-keyed twin, seeded beside the ids/ifaces/prefix snapshots and read
--- through `declaredConstraintFor`'s `cdArgs`, so an IMPORTED constrained callee's call
--- site now sees the same argument vector a local one does.  What still reads THIS bare
--- table is (a) `declaredConstraintFor`'s local/wildcard/re-export/check-path arm and
--- (b) `enclPreds`, whose subject is the ENCLOSING fn and therefore always local.
---
--- 🚨 WHY THE QUAL KEY IS WHAT MAKES THE VECTOR SAFE TO CROSS — the hazard this header
--- used to cite as the reason NOT to build the table, and the measurement that answers
--- it.  A stored vector's tyvars are not re-attributed by `attributeModuleEntries` (it
--- only re-keys by `(mid, name)`), and each module resets `tyvarCounter`, so a vector
--- read off the WRONG module's entry substitutes to a wrong-but-concrete goal — strictly
--- worse than missing.  The vector is safe because it never needs re-attribution in the
--- first place: `constraintVarIfaceMonos` (which mints the slot IDS) and
--- `constraintVarArgMonos` (which mints these VECTORS) are called on ONE signature
--- instantiation's `snd inst` in `preunifySigsEx`, so a slot's `csId` is literally one of
--- its own vector's tyvar ids.  The call site then maps BOTH through the same
--- `instantiateTracked` subst of that callee's own scheme, whose quantified ids are those
--- same signature vars.  So the vector lives in exactly the id space the already-shipped
--- ids table crosses in — no wider — and the ONLY way to leave it is to resolve the entry
--- by bare name.  Hence: qual key, no bare-name cross-module peer, no seed back into
--- `funConstraintArgsRef`.  The residual's cost is what drained with it: `useIx : Ix a
--- Char => a -> Int` printed 222 compiled alone and 111 imported — byte-identical source,
--- different answer, exit 0, both engines.
--- ✅ SECOND RESIDUAL — CLOSED by FIX-shadow-arity-skew, and the prose that stood here is
--- kept only as the record of why it had to be.  It read: `resolveRLocalSites` / `SKRLocal`
--- fill their dict routes with the SCALAR `routesOfMonosTop`, so an importer- or
--- definer-shadowed constrained standalone with a multi-argument predicate keeps the
--- per-tyvar goal; and S-xmod-vector-supply left it there deliberately, on the measured
--- ground that it changed only `cdArgs` while the shadow route read only `cdSlots`, so the
--- neighbour was "neither newly wrong nor newly reachable".
--- 🚨 That clearance was SOUND FOR ITS OWN SLICE AND FALSIFIED BY THE NEXT ONE.
--- S-slot-key-vector (#1866) re-keyed `cdSlots` ITSELF on the whole predicate, which is
--- precisely the premise the clearance rested on, and the shadow route — still expanding
--- against a constant `[]` — under-counted the definition's dict params: `run` E-PANIC,
--- `build` a per-execution heap pointer, wasm illegal cast, `check` exit 0.  The lesson is
--- not "that reasoning was careless"; it is that "reads only X, and I touched only Y" has
--- a HALF-LIFE OF ONE SLICE, and a comment recording such a clearance must be re-read by
--- whoever next moves X.  `SKRLocal` now carries the vectors and both resolvers select
--- through `routesOfMonosTopV`; empty vectors make that the scalar router term for term.
-declaredConstraintArgs : String -> List (List Mono)
-declaredConstraintArgs name =
-  predicateSlotArgsAt name perRun.value.funPredicateSlotsRef.value
-
-lookupAssocVecs : String -> List (String, List (List Mono)) -> Option (List (List Mono))
-lookupAssocVecs _ [] = None
-lookupAssocVecs k ((k2, v)::rest)
-  | k == k2 = Some v
-  | otherwise = lookupAssocVecs k rest
 
 -- Slot-parallel to constraintMonosOf's OUTPUT, and it must stay that way: it walks the
 -- SAME slot list against the SAME [subst] and applies the SAME drop rule (an id absent
@@ -11385,20 +11265,38 @@ lookupAssocSL2 k ((k2, v)::rest)
 -- both tables and returns both results makes both reads happen before either write, so
 -- the ordering constraint is discharged by the TYPE rather than by statement order in a
 -- caller that a later edit can reshuffle.
-predicateSlotEntryOfLegacy : List (String, List IfaceRef) -> List (String, List (List Mono)) -> (String, List Int) -> (String, List PredicateSlot)
-predicateSlotEntryOfLegacy ifacesTbl argsTbl (fn, ids) =
-  let slots = pairSlots ids (optionOr [] (lookupAssocS fn ifacesTbl))
-  (fn, predicateSlotsOfLegacy slots (lookupAssocVecs fn argsTbl))
-
-predicateSlotTableOfLegacy : List (String, List Int) -> List (String, List IfaceRef) -> List (String, List (List Mono)) -> List (String, List PredicateSlot)
-predicateSlotTableOfLegacy idsTbl ifacesTbl argsTbl =
-  map (predicateSlotEntryOfLegacy ifacesTbl argsTbl) idsTbl
-
 expandFunPredicateSlots : List Decl -> List (String, List PredicateSlot) -> List (String, List PredicateSlot)
 expandFunPredicateSlots allDecls table =
-  let argsTbl = predicateSlotArgsTable table
-  let expanded = expandSupersCross allDecls (predicateSlotIdsTable table) (predicateSlotIfacesTable table) argsTbl
-  predicateSlotTableOfLegacy (fst expanded) (snd expanded) argsTbl
+  map (expandPredicateSlotEntry allDecls) table
+
+expandPredicateSlotEntry : List Decl -> (String, List PredicateSlot) -> (String, List PredicateSlot)
+expandPredicateSlotEntry allDecls (name, slots) =
+  (name, expandPredicateSlots allDecls slots)
+
+expandPredicateSlots : List Decl -> List PredicateSlot -> List PredicateSlot
+expandPredicateSlots allDecls slots =
+  let idx = predicateSlotIndex slots omEmpty
+  map
+    (predicateSlotFromExpanded idx)
+    (expandSupersVecs allDecls (map predicateSlotLegacyVec slots))
+
+predicateSlotIndex : List PredicateSlot -> OrdMap PredicateSlot -> OrdMap PredicateSlot
+predicateSlotIndex [] acc = acc
+predicateSlotIndex (s::rest) acc =
+  predicateSlotIndex
+    rest
+    (omInsert (cslotVecKey (predicateSlotLegacyVec s)) s acc)
+
+predicateSlotFromExpanded : OrdMap PredicateSlot -> (CSlot, List Mono) -> PredicateSlot
+predicateSlotFromExpanded idx pair = match omLookup (cslotVecKey pair) idx
+  Some s => s
+  None =>
+    let (slot, args) = pair
+    PredicateSlot {
+      psIface = slot.csIface,
+      psArgs = PSArgsKnown args,
+      psBoundIds = dedupI (slot.csId :: flatMap monoTyvarIds args),
+    }
 
 -- ── WS-1b: superclass-evidence flatten (port of lib/typecheck.ml expand_supers) ──
 -- A `=>`-constrained fn whose body calls a SUPERCLASS method (e.g. `build : Sub a =>`
@@ -11428,62 +11326,6 @@ expandSupersTable : List Decl -> Unit
 expandSupersTable allDecls =
   perRun.value.funPredicateSlotsRef :=
     expandFunPredicateSlots allDecls perRun.value.funPredicateSlotsRef.value
-
--- as expandSupersTable but operates on the cross-module snapshot pair (so a
--- cross-module constrained fn gets the same expansion — else it under-fills).
--- S-slot-key-vector (#1866): [argsTbl] joins, for the ID entry only.  The id entry is the
--- one whose dedup decides emitted dict ARITY, and since the key is now the whole predicate
--- it needs the same argument vectors the CALL side already expands with
--- (`inferDictAtFound`'s `zipSlotVecs slots dc.cdArgs`) — otherwise define and call
--- disagree on the slot count for `(Ix a Char, Ix a Bool) => …`.  The IFACE entry
--- deliberately does NOT take it: it expands a SYNTHETIC id list purely to reproduce the
--- same iface SEQUENCE, and feeding it vectors it has no id space for would move that
--- sequence.  See `expandSupersIfaceEntry`.
-expandSupersCross : List Decl -> List (String, List Int) -> List (String, List IfaceRef) -> List (String, List (List Mono)) -> (List (String, List Int), List (String, List IfaceRef))
-expandSupersCross allDecls idsTbl ifacesTbl argsTbl = (
-  map (expandSupersEntry allDecls ifacesTbl argsTbl) idsTbl,
-  map (expandSupersIfaceEntry allDecls) ifacesTbl,
-)
-
--- expand one (fn, ids) entry: the parallel iface list is looked up by fn name.
--- S-slot-key-vector (#1866): so is the parallel ARGUMENT-VECTOR list, which `zipSlotVecs`
--- pairs onto the slots (a legitimate PREFIX — a slot past its end reads `[]`, i.e. "no
--- vector recoverable", and keys exactly as it did before this widening).
-expandSupersEntry : List Decl -> List (String, List IfaceRef) -> List (String, List (List Mono)) -> (String, List Int) -> (String, List Int)
-expandSupersEntry allDecls ifacesTbl argsTbl (fn, ids) =
-  let ifaces = optionOr [] (lookupAssocS fn ifacesTbl)
-  let args = optionOr [] (lookupAssocVecs fn argsTbl)
-  let pairs = expandSupersVecs allDecls (zipSlotVecs (pairSlots ids ifaces) args)
-  (fn, map (s => (fst s).csId) pairs)
-
--- expand one (fn, ifaces) entry the SAME way, returning the parallel iface names.
-expandSupersIfaceEntry : List Decl -> (String, List IfaceRef) -> (String, List IfaceRef)
-expandSupersIfaceEntry allDecls (fn, ifaces) =
-  let ids = idsForIfaceSlots ifaces
-  let pairs = expandSupersPairs allDecls (pairSlots ids ifaces)
-  (fn, map (s => s.csIface) pairs)
-
--- a synthetic id list parallel to the iface list when only the iface entry is in
--- hand (the iface-entry expansion must produce the same iface SEQUENCE as the id
--- entry; positions, not values, must agree).  Uses slot index as the id so the
--- super-name substitution + dedup walk identically.  NOTE: this works because in a
--- `requires` chain every slot in one fn's expansion shares its declared tyvar — but
--- DISTINCT declared constraints get distinct synthetic ids, so two unrelated
--- constraints sharing a super still dedup correctly per chain.
-idsForIfaceSlots : List IfaceRef -> List Int
-idsForIfaceSlots ifaces = idsForIfaceSlotsGo 0 ifaces
-
-idsForIfaceSlotsGo : Int -> List IfaceRef -> List Int
-idsForIfaceSlotsGo _ [] = []
-idsForIfaceSlotsGo i (_::rest) = i :: idsForIfaceSlotsGo (i + 1) rest
-
--- transitive super-closure over the declared (iface, id) slots: start from the
--- declared slots, repeatedly append direct supers of every current slot until no
--- new (iface, id) pair appears.  Result is the declared slots first (order/indices
--- preserved) then the appended supers, deduped by (iface, id).
-expandSupersPairs : List Decl -> List CSlot -> List CSlot
-expandSupersPairs allDecls declared =
-  map fst (expandSupersVecs allDecls (map (s => (s, [])) declared))
 
 -- 🚨 S-dict-arity-contract: the SAME fixpoint, carrying each slot's PREDICATE ARGUMENT
 -- VECTOR (in the callee signature's instantiation vars) alongside the slot.  `Ix a b`
@@ -19286,7 +19128,7 @@ implReqDictVarOf (Some p) m encl
 implReqPick : Int -> Predicate -> String -> Bool -> List (String, PredicateSlot) -> Option String
 implReqPick _ _ _ _ [] = None
 implReqPick target p pfx needArgs ((dname, slot)::rest)
-  | startsWith pfx dname && containsI target slot.psBoundIds && slot.psIface.irName /= "" && slot.psIface.irName == p.iface.irName && (not needArgs || predArgsAgree p.args (predicateSlotKnownArgs slot.psArgs)) = Some dname
+  | startsWith pfx dname && containsI target slot.psBoundIds && slot.psIface.irName /= "" && slot.psIface.irName == p.iface.irName && (not needArgs || predArgsAgreeSameInstantiation p.args (predicateSlotKnownArgs slot.psArgs)) = Some dname
   | otherwise = implReqPick target p pfx needArgs rest
 
 predicateSlotKnownArgs : PredicateSlotArgs -> List Mono
@@ -19345,35 +19187,26 @@ enclSlotIds encl =
 -- `registerInferredFor` records `[]` for an unrecovered slot), so a slot past its end —
 -- or one whose recorded vector is empty — gets `args = []`
 -- — which `predArgsAgreeEncl` reads as "no vector to disambiguate on", never as a match.
-enclPreds : String -> List (Int, Predicate)
+enclPreds : String -> List PredicateSlot
 enclPreds encl =
-  zipSlotArgs
-    (pairSlots
-      (enclSlotIds encl)
-      (predicateSlotIfacesAt encl perRun.value.funPredicateSlotsRef.value))
-    (declaredConstraintArgs encl)
-
-zipSlotArgs : List CSlot -> List (List Mono) -> List (Int, Predicate)
-zipSlotArgs [] _ = []
-zipSlotArgs (s::rest) [] =
-  (s.csId, Predicate { iface = s.csIface, args = [] }) :: zipSlotArgs rest []
-zipSlotArgs (s::rest) (v::vs) =
-  (s.csId, Predicate { iface = s.csIface, args = v }) :: zipSlotArgs rest vs
+  optionOr
+    []
+    (lookupPredicateSlots encl perRun.value.funPredicateSlotsRef.value)
 
 -- TWO PASSES, MOST SPECIFIC FIRST, and the order is behaviour: a context may name one
 -- interface twice over one variable at different arguments (`(Ix a Char, Ix a Bool)`),
 -- where the iface alone cannot tell the two slots apart and only the recorded argument
 -- vector can.  Pass 1 requires both; pass 2 requires the interface alone, which is what
 -- answers #1177's `(Dbg a, Ix a Char)`.
-indexOfPred : Int -> Predicate -> List (Int, Predicate) -> Option Int
+indexOfPred : Int -> Predicate -> List PredicateSlot -> Option Int
 indexOfPred target p preds = match indexOfPredGo 0 target p True preds
   Some i => Some i
   None => indexOfPredGo 0 target p False preds
 
-indexOfPredGo : Int -> Int -> Predicate -> Bool -> List (Int, Predicate) -> Option Int
+indexOfPredGo : Int -> Int -> Predicate -> Bool -> List PredicateSlot -> Option Int
 indexOfPredGo _ _ _ _ [] = None
-indexOfPredGo i target p needArgs ((id, sp)::rest)
-  | id == target && sp.iface.irName /= "" && sp.iface.irName == p.iface.irName && (not needArgs || predArgsAgreeEncl p.args sp.args) = Some i
+indexOfPredGo i target p needArgs (sp::rest)
+  | containsI target sp.psBoundIds && sp.psIface.irName /= "" && sp.psIface.irName == p.iface.irName && (not needArgs || predArgsAgreeSameInstantiation p.args (predicateSlotKnownArgs sp.psArgs)) = Some i
   | otherwise = indexOfPredGo (i + 1) target p needArgs rest
 
 -- 🚨 S-nonlead-arg-identity (#1904) — THE ENCLOSING-SCOPE ROUTING RELATION, and it is
@@ -19417,10 +19250,10 @@ indexOfPredGo i target p needArgs ((id, sp)::rest)
 -- genuinely different instantiation stops matching in pass 1 and is answered by pass 2,
 -- i.e. by the interface alone, which is where such a goal sat before `predArgsAgree`
 -- existed at all.
-predArgsAgreeEncl : List Mono -> List Mono -> Bool
-predArgsAgreeEncl [] _ = False
-predArgsAgreeEncl _ [] = False
-predArgsAgreeEncl gs vs
+predArgsAgreeSameInstantiation : List Mono -> List Mono -> Bool
+predArgsAgreeSameInstantiation [] _ = False
+predArgsAgreeSameInstantiation _ [] = False
+predArgsAgreeSameInstantiation gs vs
   | listLen gs /= listLen vs = False
   | otherwise = argPosAgreeEncl gs vs
 
@@ -19439,29 +19272,6 @@ monoPosAgreesEncl a b = match normalize a
     TVar c2 => tyvarId c1 == tyvarId c2
     _ => monoHeadAgrees a b
   _ => monoHeadAgrees a b
-
--- Does the goal's instantiated argument vector agree with a slot's recorded one?
--- ⚠️ SINCE #1904 THIS IS THE `implReqPick` CHANNEL'S RELATION ONLY.  The
--- enclosing-fn channel (`indexOfPredGo`) calls `predArgsAgreeEncl`, which adds a
--- tyvar-IDENTITY arm on the strength of a measurement that its two vectors share one
--- instantiation.  That measurement covers only that channel — the caution below is
--- unretracted here, and widening it to this one needs its own measurement.
--- ⚠️ EMPTY ON EITHER SIDE IS **NOT** AGREEMENT — an absent vector must not let pass 1
--- claim a slot it knows nothing about, or the two passes collapse into one and the
--- `(Ix a Char, Ix a Bool)` discrimination is lost.  Agreement is head-tycon-wise and
--- only where BOTH sides are ground: the recorded vector is in the SIGNATURE's
--- instantiation vars while the goal is in the call's, so a position that is a variable
--- on either side carries no information here and must not veto.
-predArgsAgree : List Mono -> List Mono -> Bool
-predArgsAgree [] _ = False
-predArgsAgree _ [] = False
-predArgsAgree gs vs
-  | listLen gs /= listLen vs = False
-  | otherwise = argHeadsAgree gs vs
-
-argHeadsAgree : List Mono -> List Mono -> Bool
-argHeadsAgree (g::gs) (v::vs) = monoHeadAgrees g v && argHeadsAgree gs vs
-argHeadsAgree _ _ = True
 
 monoHeadAgrees : Mono -> Mono -> Bool
 monoHeadAgrees a b = match headTyconNameMono a
@@ -24572,7 +24382,9 @@ entailAssumVar : Mono -> String -> String -> EntailKind -> Option String
 -- constrained FUNCTION, not a method occurrence).
 entailAssumVar m encl name (EKReturn fullMono _) =
   activeDictVarOfEncl (goalPredOf name fullMono) m encl
-entailAssumVar m encl _ (EKNestedTop _ _ _ _ _) = activeDictVarForEncl m encl
+entailAssumVar m encl _ (EKNestedTop iface _ _ _ rest) = match activeFunDictPredOf iface.irName (m::rest) encl
+  Some dname => Some dname
+  None => activeDictVarForEncl m encl
 entailAssumVar m encl name (EKArg fullMono) =
   activeDictVarOfEncl (goalPredOf name fullMono) m encl
 entailAssumVar m encl name (EKOp isBinop inImpl) =
@@ -29764,6 +29576,18 @@ activeDictPredOf iface goalArgs encl =
     Some dname => Some dname
     None => firstPredForEncl iface goalArgs "" preds
 
+-- Function-carrier predicate evidence is lexical to [encl].  Unlike activeDictPredOf,
+-- this lookup deliberately has no global fallback: activeDictPreds accumulates across
+-- functions, so an unscoped hit could route stale evidence from a different body.
+activeFunDictPredOf : String -> List Mono -> String -> Option String
+activeFunDictPredOf _ _ "" = None
+activeFunDictPredOf iface goalArgs encl =
+  firstPredForEncl
+    iface
+    goalArgs
+    ("$dict_" ++ encl ++ "_")
+    perRun.value.activeDictPreds.value
+
 firstPredForEncl : String -> List Mono -> String -> List (String, List Mono, String) -> Option String
 firstPredForEncl _ _ _ [] = None
 firstPredForEncl iface goalArgs pfx ((eiface, eargs, ename)::rest)
@@ -31483,13 +31307,12 @@ registerConstraintRegs ((m, ifaceMonos, argVecs)::rest) =
 -- legitimately a PREFIX of the slots, and folding it in per-slot would either truncate
 -- the id list (a dict-ARITY change) or invent a vector.  Entry-ABSENCE is also
 -- meaningful — an ids-only entry is a distinct state from an entry with empty args.
-setFunConstraintEntry : String -> List CSlot -> Option (List (List Mono)) -> Unit
+setFunConstraintEntry : String -> List PredicateSlot -> Unit
 -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
 -- lint-disable-next-line rule-prefer-assign-op
-setFunConstraintEntry m slots argsOpt =
-  let _ = shadowFunConstraintEntry slots argsOpt
+setFunConstraintEntry m slots =
   perRun.value.funPredicateSlotsRef :=
-    ((m, predicateSlotsOfLegacy slots argsOpt)::perRun.value.funPredicateSlotsRef.value)
+    ((m, slots)::perRun.value.funPredicateSlotsRef.value)
   -- B-2.2-f (#1113): the DECLARED-prefix sidecar, written in the SAME op as the ids it
   -- describes so the two can never be written apart.
   --
@@ -31508,7 +31331,7 @@ setFunConstraintEntry m slots argsOpt =
   -- `funConstraintArgsRef`, so the two dedups see identical input; `None` (no vector row
   -- at all) yields `[]` per slot, i.e. exactly the pre-widening count.
   let _ = setRef perRun.value.funConstraintDeclaredRef
-    ((m, CDPLen (listLen (dedupSlotVecs (zipSlotVecs slots (optionOr [] argsOpt)))))::perRun.value.funConstraintDeclaredRef.value)
+    ((m, CDPLen (listLen (dedupSlotVecs (map predicateSlotLegacyVec slots))))::perRun.value.funConstraintDeclaredRef.value)
   ()
 
 -- register a member's constraints: ids into funConstraintsRef + activeDictVars (the
@@ -31529,13 +31352,12 @@ registerMember : String -> List (IfaceRef, List Mono) -> List (List Mono) -> Uni
 -- no entry (mirrors registerInferredFor's empty-ids guard).
 registerMember _ [] _ = ()
 registerMember m ifaceMonos argVecs =
-  let slots = registerMemberSlots m 0 ifaceMonos
-  let keptArgs = keptConstraintArgs ifaceMonos argVecs
+  let slots = registerMemberSlots m 0 ifaceMonos argVecs
   -- #1909: the PREDICATE-keyed half of the given, alongside the tyvar-id half
   -- `registerMemberSlots` just wrote.  Exactly `registerReqSlots`' pairing, one channel
   -- over — see `registerSlotPredGivens`.
-  let _ = registerSlotPredGivens m 0 slots keptArgs
-  setFunConstraintEntry m slots (Some keptArgs)
+  let _ = registerSlotPredGivens m 0 slots
+  setFunConstraintEntry m slots
 
 -- #1161 (F-3a-ii): the argument vectors of the constraints registerMemberSlots KEEPS,
 -- in the same slot order — the same `normalize`-is-a-TVar filter applied to the parallel
@@ -31545,13 +31367,6 @@ registerMember m ifaceMonos argVecs =
 -- the second clause stops early.  That is why #994's fusion keeps this payload
 -- entry-level and OPTIONAL instead of folding it into `CSlot` — see
 -- `setFunConstraintEntry`.
-keptConstraintArgs : List (IfaceRef, List Mono) -> List (List Mono) -> List (List Mono)
-keptConstraintArgs [] _ = []
-keptConstraintArgs _ [] = []
-keptConstraintArgs ((_, monos)::rest) (v::vs) = match abstractSlotIds monos
-  [] => keptConstraintArgs rest vs
-  _ => v :: keptConstraintArgs rest vs
-
 -- [kept] is the next dict-param slot; a constraint variable forced concrete by the
 -- body takes no dict and doesn't advance the slot (so param names stay 0..k-1,
 -- matching dict_pass).
@@ -31579,16 +31394,26 @@ keptConstraintArgs ((_, monos)::rest) (v::vs) = match abstractSlotIds monos
 -- is what answers those sites (`enclSlotIndex`'s predicate/first-id rungs are keyed on
 -- the slot's lead id and legitimately miss).  This mirrors `registerReqSlots`'
 -- `registerEachActive`, which has keyed many ids onto one `requires` slot all along.
-registerMemberSlots : String -> Int -> List (IfaceRef, List Mono) -> List CSlot
-registerMemberSlots _ _ [] = []
-registerMemberSlots m kept ((iface, monos)::rest) = match abstractSlotIds monos
-  [] => registerMemberSlots m kept rest
+registerMemberSlots : String -> Int -> List (IfaceRef, List Mono) -> List (List Mono) -> List PredicateSlot
+registerMemberSlots _ _ [] _ = []
+registerMemberSlots m kept ((iface, monos)::rest) [] = match abstractSlotIds monos
+  [] => registerMemberSlots m kept rest []
   id::more =>
     let _ = registerEachActiveId (id::more) (dictParamName m kept)
-    CSlot {
-      csIface = iface,
-      csId = id,
-    } :: registerMemberSlots m (kept + 1) rest
+    PredicateSlot {
+      psIface = iface,
+      psArgs = PSArgsUnknown,
+      psBoundIds = id::more,
+    } :: registerMemberSlots m (kept + 1) rest []
+registerMemberSlots m kept ((iface, monos)::rest) (args::argRest) = match abstractSlotIds monos
+  [] => registerMemberSlots m kept rest argRest
+  id::more =>
+    let _ = registerEachActiveId (id::more) (dictParamName m kept)
+    PredicateSlot {
+      psIface = iface,
+      psArgs = PSArgsKnown args,
+      psBoundIds = id::more,
+    } :: registerMemberSlots m (kept + 1) rest argRest
 
 -- the ids of [monos] that are still ABSTRACT type variables, in order.  The filter
 -- `registerMemberSlots` and `keptConstraintArgs` must agree on, factored so the two
@@ -31632,12 +31457,17 @@ registerEachActiveId (id::rest) dname =
 -- slot gets `dictParamName m n`.  The vector list is legitimately a PREFIX of the slots
 -- (`keptConstraintArgs` stops when its input runs out — see `setFunConstraintEntry`), so
 -- the second clause stops early rather than inventing a subject for a vectorless slot.
-registerSlotPredGivens : String -> Int -> List CSlot -> List (List Mono) -> Unit
-registerSlotPredGivens _ _ [] _ = ()
-registerSlotPredGivens _ _ _ [] = ()
-registerSlotPredGivens m slot (s::srest) (v::vrest) =
-  let _ = registerPredGiven s.csIface.irName v (dictParamName m slot)
-  registerSlotPredGivens m (slot + 1) srest vrest
+registerSlotPredGivens : String -> Int -> List PredicateSlot -> Unit
+registerSlotPredGivens _ _ [] = ()
+registerSlotPredGivens m slot (s::srest) =
+  let _ = registerFunPredGiven s.psIface.irName s.psArgs (dictParamName m slot)
+  registerSlotPredGivens m (slot + 1) srest
+
+registerFunPredGiven : String -> PredicateSlotArgs -> String -> Unit
+registerFunPredGiven _ PSArgsUnknown _ = ()
+registerFunPredGiven iface (PSArgsKnown args) dname =
+  perRun.value.activeDictPreds :=
+    (iface, args, dname)::perRun.value.activeDictPreds.value
 
 -- Pass B: infer each member's clauses, unifying with its placeholder.
 -- Phase 73 (bidirectional, signature-driven parameter typing): a member WITH a
@@ -33272,10 +33102,9 @@ registerInferredFor m ids vecs =
   -- sit in the second `setRef`'s argument, i.e. after it); that is sound only because it
   -- reads `implObls` / `schemeObligationsRef` / `dictApps` and NEITHER fn-constraint
   -- table — checked, since a recovery that consulted them would change answers here.
-  let slots = map (id => CSlot { csIface = ifaceForInferredId m id, csId = id }) ids
-  let slotVecs = map (s => inferredVecFor s.csIface s.csId vecs) slots
-  let _ = setFunConstraintEntry m slots (inferredArgsOpt slotVecs)
-  let _ = registerActiveDictVars m 0 ids
+  let slots = inferredPredicateSlots m ids vecs
+  let _ = setFunConstraintEntry m slots
+  let _ = registerActiveDictVars m 0 slots
   -- #1909, the INFERRED twin of `registerMember`'s call: this writer is likewise ids-only
   -- (`registerActiveDictVars` above), so an inferred binding whose deferred predicate is
   -- STRUCTURED (`nest x = tagOf (Wrap x)`) had the same unreachable-`entailAssum` gap as
@@ -33283,8 +33112,23 @@ registerInferredFor m ids vecs =
   -- The subject comes from the vector `inferredVecFor` already recovers per slot since
   -- #1869; a slot that recovered nothing carries `[]` and registers nothing, exactly as
   -- it did before.  See `registerSlotPredGivens` for why this adds no selector call.
-  let _ = registerSlotPredGivens m 0 slots slotVecs
+  let _ = registerSlotPredGivens m 0 slots
   perRun.value.promotedRef := (m::perRun.value.promotedRef.value)
+
+inferredPredicateSlots : String -> List Int -> List (IfaceRef, Int, List Mono) -> List PredicateSlot
+inferredPredicateSlots _ [] _ = []
+inferredPredicateSlots m (id::rest) vecs =
+  let iface = ifaceForInferredId m id
+  let args = inferredVecFor iface id vecs
+  let bound = if isEmptyL args then
+    [id]
+  else
+    dedupI (id :: flatMap monoTyvarIds args)
+  PredicateSlot {
+    psIface = iface,
+    psArgs = if isEmptyL args then PSArgsUnknown else PSArgsKnown args,
+    psBoundIds = bound,
+  } :: inferredPredicateSlots m (filterList (x => not (containsI x bound)) rest) vecs
 
 -- N5 (inherited, slice 1): entry ABSENCE means "no argument vector was recorded for this
 -- callee at all", and every reader turns it into `(slot, [])` — the historical scalar
@@ -33292,11 +33136,6 @@ registerInferredFor m ids vecs =
 -- reader, same-module and cross-module alike, so writing one would only ADD a
 -- `funConstraintArgsRef` / `crossModuleFunConstraintArgsQualRef` row that says nothing.
 -- Recover nothing ⇒ write nothing, exactly as before this slice.
-inferredArgsOpt : List (List Mono) -> Option (List (List Mono))
-inferredArgsOpt vecs
-  | allList isEmptyL vecs = None
-  | otherwise = Some vecs
-
 -- #23: the iface name for an inferred constraint var.  `ifaceForConstraintId` only
 -- recovers it from a pendingImplObligation whose `occ` is a BARE `TVar id`; a
 -- constraint induced by a `fromInt`/method site records a COMPOUND occ (the whole
@@ -33394,10 +33233,10 @@ ifaceForConstraintIdGo id (o::rest) = match o.oblProj
     _ => ifaceForConstraintIdGo id rest
   OpProjected => ifaceForConstraintIdGo id rest
 
-registerActiveDictVars : String -> Int -> List Int -> Unit
+registerActiveDictVars : String -> Int -> List PredicateSlot -> Unit
 registerActiveDictVars _ _ [] = ()
-registerActiveDictVars m slot (id::rest) =
-  perRun.value.activeDictVars := (id, dictParamName m slot)::perRun.value.activeDictVars.value
+registerActiveDictVars m slot (s::rest) =
+  let _ = registerEachActiveId s.psBoundIds (dictParamName m slot)
   registerActiveDictVars m (slot + 1) rest
 
 -- Render accumulated type errors as `TYPE ERROR: <msg>` lines (in order of

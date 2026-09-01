@@ -1066,21 +1066,27 @@ fi
 echo "  ok: $carrier_count_actual TyConOrigin mention(s) in ast.mdk (name-set + positional)"
 
 # ── #1318 B-4 predicate-slot producer-authority ratchet ─────────────────────
-# Function and impl-`requires` predicate slots now have one mutable authority.  Readers
-# may retain pure legacy projections during the consumer cutover, but the former parallel
-# ids/ifaces/args tables and impl tuple store must not be reintroduced or dual-written.
+# Function and impl-`requires` predicate slots now have one mutable authority. The
+# function consumer is carrier-native: one complete predicate owns one dict slot, known
+# vectors feed scoped nested evidence, and compatibility projections never re-shatter it.
 predicate_slot_src="$ROOT/compiler/types/typecheck.mdk"
 predicate_slot_required='data PredicateSlotArgs = PSArgsUnknown | PSArgsKnown (List Mono)
 data PredicateSlot =
 | PredicateSlot {
-predicateSlotsOfLegacy : List CSlot -> Option (List (List Mono)) -> List PredicateSlot
 legacyCSlotsOfPredicateSlots : List PredicateSlot -> List CSlot
 legacyArgsOfPredicateSlots : List PredicateSlot -> Option (List (List Mono))
 predicateSlotOfImplReq : (String, List Int, Predicate) -> (String, PredicateSlot)
 legacyImplReqOfPredicateSlot : (String, PredicateSlot) -> (String, List Int, Predicate)
 predicateSlotShadowCompare : List PredicateSlot -> List PredicateSlot -> Unit
-let _ = shadowFunConstraintEntry slots argsOpt
 let _ = shadowImplReqEntry entry
+setFunConstraintEntry : String -> List PredicateSlot -> Unit
+registerActiveDictVars : String -> Int -> List PredicateSlot -> Unit
+recordCallObligations : List CSlot -> List Mono -> List (List Mono) -> Unit
+expandPredicateSlots : List Decl -> List PredicateSlot -> List PredicateSlot
+predArgsAgreeSameInstantiation : List Mono -> List Mono -> Bool
+registerFunPredGiven : String -> PredicateSlotArgs -> String -> Unit
+activeFunDictPredOf : String -> List Mono -> String -> Option String
+entailAssumVar m encl _ (EKNestedTop iface _ _ _ rest) = match activeFunDictPredOf iface.irName (m::rest) encl
 implReqPredicateSlots : Ref (List (String, PredicateSlot))
 funPredicateSlotsRef : Ref (List (String, List PredicateSlot))
 crossModuleFunPredicateSlotsRef : Ref (List (String, List PredicateSlot))
@@ -1096,6 +1102,26 @@ printf '%s\n' "$predicate_slot_required" | while IFS= read -r required; do
     exit 1
   fi
 done || exit 1
+
+predicate_slot_old_consumers='setFunConstraintEntry : String -> List CSlot -> Option (List (List Mono)) -> Unit
+registerActiveDictVars : String -> Int -> List Int -> Unit
+recordCallObligations : List CSlot -> List Mono -> Unit
+predArgsAgreeEncl : List Mono -> List Mono -> Bool
+entailAssumVar m encl _ (EKNestedTop _ _ _ _ _) = activeDictVarForEncl m encl'
+
+printf '%s\n' "$predicate_slot_old_consumers" | while IFS= read -r retired; do
+  if grep -Fq "$retired" "$predicate_slot_src"; then
+    echo "FAIL: #1318 retired predicate-slot consumer is present: $retired"
+    exit 1
+  fi
+done || exit 1
+
+predicate_relation_uses=$(grep -F 'predArgsAgreeSameInstantiation p.args' "$predicate_slot_src" \
+  | grep -cvE '^[[:space:]]*--')
+if [ "$predicate_relation_uses" -ne 2 ]; then
+  echo "FAIL: #1318 shared full-vector relation must serve exactly enclosing and impl-requires consumers (got $predicate_relation_uses)"
+  exit 1
+fi
 
 predicate_slot_retired='implReqPreds
 funConstraintsRef
