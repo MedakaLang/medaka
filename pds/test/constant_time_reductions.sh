@@ -91,26 +91,26 @@ ir_call_shape_ok() {
   name=$1
   body=$2
   case "$name" in
-    canonicalize) expected='444837400 70' ;; carryFoldRound) expected='1550513033 241' ;;
-    carryAll) expected='4232113032 67' ;; carryGo) expected='3778194225 239' ;;
-    carryPass) expected='2372681006 49' ;; carryPassGo) expected='173258734 434' ;;
-    copyLow) expected='3155186103 116' ;;
-    foldAccum) expected='3786743205 133' ;; foldAccumRow) expected='3148195415 193' ;;
+    canonicalize) expected='444837400 70' ;; carryFoldRound) expected='623455845 255' ;;
+    carryAll) expected='4232113032 67' ;; carryGo) expected='3104229516 246' ;;
+    carryPass) expected='2372681006 49' ;; carryPassGo) expected='929309996 455' ;;
+    copyLow) expected='1052357539 123' ;;
+    foldAccum) expected='3786743205 133' ;; foldAccumRow) expected='3580882342 200' ;;
     foldOnce) expected='3086817660 152' ;; reduceCarry) expected='1494584225 93' ;;
     reduceFixed) expected='4074489195 234' ;; reduceWide) expected='1838799703 160' ;;
-    selectNCandidate) expected='2528052175 146' ;; selectPCandidate) expected='119278451 145' ;;
-    subNCandidate) expected='2597640850 328' ;; subNSelect) expected='1807119209 206' ;;
-    subPCandidate) expected='2254594368 624' ;; subPSelect) expected='253077062 204' ;;
-    takeHigh) expected='1628856368 182' ;;
+    selectNCandidate) expected='2353378859 153' ;; selectPCandidate) expected='2694484873 152' ;;
+    subNCandidate) expected='1109142635 335' ;; subNSelect) expected='1807119209 206' ;;
+    subPCandidate) expected='4245653428 638' ;; subPSelect) expected='253077062 204' ;;
+    takeHigh) expected='3607616228 196' ;;
     feZeroBit) expected='1334897826 93' ;; feZeroBorrow) expected='3190414508 366' ;;
     feEqualBit) expected='3866854817 116' ;; feEqualBorrow) expected='1799738399 454' ;;
-    feSelect) expected='2431464765 149' ;; feSelectGo) expected='218780675 160' ;;
-    feNegateCt) expected='2191561892 230' ;; feNegateCtGo) expected='3980975781 565' ;;
+    feSelect) expected='2431464765 149' ;; feSelectGo) expected='3685324955 167' ;;
+    feNegateCt) expected='2191561892 230' ;; feNegateCtGo) expected='2485150926 579' ;;
     scZeroBit) expected='735493066 95' ;; scZeroBorrow) expected='2133022951 217' ;;
     scEqualBit) expected='803674573 119' ;; scEqualBorrow) expected='768047878 251' ;;
-    scSelect) expected='721711084 152' ;; scSelectGo) expected='2010823749 161' ;;
+    scSelect) expected='721711084 152' ;; scSelectGo) expected='3389893739 168' ;;
     scHighBit) expected='2703992254 116' ;; scHighBorrow) expected='2129175628 279' ;;
-    scNegateCt) expected='1081324241 235' ;; scNegateCtGo) expected='2055894317 327' ;;
+    scNegateCt) expected='1081324241 235' ;; scNegateCtGo) expected='937536410 334' ;;
     *) return 1 ;;
   esac
   actual=$(sed -n 's/.*call i64 @\([^ (]*\).*/\1/p' "$body" | cksum | awk '{ print $1 " " $2 }')
@@ -140,7 +140,7 @@ helper_ir_ok() {
   comparisons=$(grep -E -c 'call i64 @mdk_value_(eq|ne|lt|le|gt|ge)\(' "$body" || true)
   hashes=$(grep -F -c 'call i64 @mdk_hash_bool(' "$body" || true)
   indices=$(grep -F -c 'call i64 @mdk_impl_Array_index(' "$body" || true)
-  sets=$(grep -F -c 'call i64 @mdk_array__set(' "$body" || true)
+  sets=$(grep -F -c 'call i64 @mdk_array__setInPlace(' "$body" || true)
   makes=$(grep -F -c 'call i64 @mdk_array_make(' "$body" || true)
   copies=$(grep -F -c 'call i64 @mdk_array_copy(' "$body" || true)
   total=$(grep -E -c 'call i64 @' "$body" || true)
@@ -155,7 +155,7 @@ raw_accessor_ir_ok() {
   [ "$(grep -c 'br i1' "$body" || true)" -eq 2 ] &&
     [ "$(grep -E -c 'call i64 @mdk_value_(eq|ne|lt|le|gt|ge)\(' "$body" || true)" -eq 0 ] &&
     [ "$(grep -F -c 'call i64 @mdk_hash_bool(' "$body" || true)" -eq 0 ] &&
-    [ "$(grep -E -c 'call i64 @mdk_(impl_Array_index|array__set|array_make|array_copy)\(' "$body" || true)" -eq 0 ]
+    [ "$(grep -E -c 'call i64 @mdk_(impl_Array_index|array__set(InPlace)?|array_make|array_copy)\(' "$body" || true)" -eq 0 ]
 }
 
 source_indices_ok() {
@@ -176,8 +176,8 @@ source_indices_ok() {
 source_writes_allocations_ok() {
   body=$1
   awk '
-    /(^|[[:space:]])(A\.)?set[[:space:]]/ &&
-      $0 !~ /(A\.)?set (0|1|9|i|j|k|\(i \+ 1\)|\(i - 16\)) / { exit 1 }
+    /(^|[[:space:]])(A\.)?set(InPlace)?[[:space:]]/ &&
+      $0 !~ /(A\.)?set(InPlace)? (0|1|9|i|j|k|\(i \+ 1\)|\(i - 16\)) / { exit 1 }
     /arrayMake[[:space:]]/ && $0 !~ /arrayMake (10|16|32) / { exit 1 }
   ' "$body"
 }
@@ -185,27 +185,27 @@ source_writes_allocations_ok() {
 source_write_shape_ok() {
   name=$1
   body=$2
-  writes=$(grep -E -c '(^|[[:space:]])(A\.)?set[[:space:]]' "$body" || true)
+  writes=$(grep -E -c '(^|[[:space:]])(A\.)?set(InPlace)?[[:space:]]' "$body" || true)
   case "$name" in
     carryPassGo)
-      [ "$writes" -eq 3 ] && [ "$(grep -F -c 'set 9 ' "$body" || true)" -eq 1 ] &&
-        [ "$(grep -F -c 'set i ' "$body" || true)" -eq 1 ] &&
-        [ "$(grep -F -c 'set (i + 1) ' "$body" || true)" -eq 1 ] ;;
+      [ "$writes" -eq 3 ] && [ "$(grep -F -c 'setInPlace 9 ' "$body" || true)" -eq 1 ] &&
+        [ "$(grep -F -c 'setInPlace i ' "$body" || true)" -eq 1 ] &&
+        [ "$(grep -F -c 'setInPlace (i + 1) ' "$body" || true)" -eq 1 ] ;;
     carryFoldRound)
-      [ "$writes" -eq 2 ] && [ "$(grep -F -c 'set 0 ' "$body" || true)" -eq 1 ] &&
-        [ "$(grep -F -c 'set 1 ' "$body" || true)" -eq 1 ] ;;
+      [ "$writes" -eq 2 ] && [ "$(grep -F -c 'setInPlace 0 ' "$body" || true)" -eq 1 ] &&
+        [ "$(grep -F -c 'setInPlace 1 ' "$body" || true)" -eq 1 ] ;;
     subPCandidate|feNegateCtGo)
-      [ "$writes" -eq 2 ] && [ "$(grep -F -c 'set 9 ' "$body" || true)" -eq 1 ] &&
-        [ "$(grep -F -c 'set i ' "$body" || true)" -eq 1 ] ;;
+      [ "$writes" -eq 2 ] && [ "$(grep -F -c 'setInPlace 9 ' "$body" || true)" -eq 1 ] &&
+        [ "$(grep -F -c 'setInPlace i ' "$body" || true)" -eq 1 ] ;;
     selectPCandidate|feSelectGo)
-      [ "$writes" -eq 1 ] && [ "$(grep -F -c 'set i ' "$body" || true)" -eq 1 ] ;;
+      [ "$writes" -eq 1 ] && [ "$(grep -F -c 'setInPlace i ' "$body" || true)" -eq 1 ] ;;
     carryGo|subNCandidate|selectNCandidate|copyLow|scSelectGo|scNegateCtGo)
-      [ "$writes" -eq 1 ] && [ "$(grep -F -c 'A.set i ' "$body" || true)" -eq 1 ] ;;
+      [ "$writes" -eq 1 ] && [ "$(grep -F -c 'A.setInPlace i ' "$body" || true)" -eq 1 ] ;;
     takeHigh)
-      [ "$writes" -eq 2 ] && [ "$(grep -F -c 'A.set (i - 16) ' "$body" || true)" -eq 1 ] &&
-        [ "$(grep -F -c 'A.set i ' "$body" || true)" -eq 1 ] ;;
+      [ "$writes" -eq 2 ] && [ "$(grep -F -c 'A.setInPlace (i - 16) ' "$body" || true)" -eq 1 ] &&
+        [ "$(grep -F -c 'A.setInPlace i ' "$body" || true)" -eq 1 ] ;;
     foldAccumRow)
-      [ "$writes" -eq 1 ] && [ "$(grep -F -c 'A.set k ' "$body" || true)" -eq 1 ] ;;
+      [ "$writes" -eq 1 ] && [ "$(grep -F -c 'A.setInPlace k ' "$body" || true)" -eq 1 ] ;;
     *) [ "$writes" -eq 0 ] ;;
   esac
 }
@@ -228,27 +228,27 @@ source_shape_ok() {
   body=$2
   case "$name" in
     canonicalize) expected='1918979222 101' ;; carryAll) expected='3784023453 28' ;;
-    carryFoldRound) expected='3658556356 112' ;; carryGo) expected='2803185373 258' ;;
-    carryPass) expected='1250453555 31' ;; carryPassGo) expected='797599452 263' ;;
-    copyLow) expected='3333185083 104' ;;
-    foldAccum) expected='1811712224 107' ;; foldAccumRow) expected='590181241 149' ;;
+    carryFoldRound) expected='702085150 126' ;; carryGo) expected='2473884978 265' ;;
+    carryPass) expected='1250453555 31' ;; carryPassGo) expected='1857917920 284' ;;
+    copyLow) expected='2185712744 111' ;;
+    foldAccum) expected='1811712224 107' ;; foldAccumRow) expected='2020878519 156' ;;
     foldOnce) expected='1770996279 84' ;; reduceCarry) expected='2596813441 92' ;;
     reduceFixed) expected='736687942 206' ;; reduceWide) expected='1389933683 128' ;;
-    selectNCandidate) expected='503125172 203' ;; selectPCandidate) expected='2300619837 201' ;;
-    subNCandidate) expected='3306359253 219' ;; subNSelect) expected='1155645251 125' ;;
-    subPCandidate) expected='1795641584 328' ;; subPSelect) expected='764393686 125' ;;
+    selectNCandidate) expected='868510668 210' ;; selectPCandidate) expected='1063104259 208' ;;
+    subNCandidate) expected='3519783463 226' ;; subNSelect) expected='1155645251 125' ;;
+    subPCandidate) expected='714167625 342' ;; subPSelect) expected='764393686 125' ;;
     feZeroBit) expected='1598842918 42' ;; feZeroBorrow) expected='2456388451 212' ;;
     feEqualBit) expected='243104385 56' ;; feEqualBorrow) expected='1904311731 242' ;;
-    feSelect) expected='564879547 108' ;; feSelectGo) expected='4272630245 150' ;;
-    feNegateCt) expected='2668735364 126' ;; feNegateCtGo) expected='3283175466 296' ;;
+    feSelect) expected='564879547 108' ;; feSelectGo) expected='3738294658 157' ;;
+    feNegateCt) expected='2668735364 126' ;; feNegateCtGo) expected='2165366212 310' ;;
     rawFe) expected='714619739 33' ;;
     scZeroBit) expected='1698366246 42' ;; scZeroBorrow) expected='2082986577 156' ;;
     scEqualBit) expected='1611320584 56' ;; scEqualBorrow) expected='3496656700 174' ;;
-    scSelect) expected='1808119660 108' ;; scSelectGo) expected='1022110123 152' ;;
+    scSelect) expected='1808119660 108' ;; scSelectGo) expected='161536967 159' ;;
     scHighBit) expected='601342344 46' ;; scHighBorrow) expected='1879936321 172' ;;
-    scNegateCt) expected='1370341835 126' ;; scNegateCtGo) expected='272873770 217' ;;
+    scNegateCt) expected='1370341835 126' ;; scNegateCtGo) expected='3026427442 224' ;;
     rawSc) expected='3051169895 33' ;;
-    takeHigh) expected='2782148329 134' ;; *) return 1 ;;
+    takeHigh) expected='2180466419 148' ;; *) return 1 ;;
   esac
   actual=$(cksum "$body" | awk '{ print $1 " " $2 }')
   [ "$actual" = "$expected" ]
@@ -344,7 +344,7 @@ append_field_probe() {
 fieldRoundsWitness : Bool
 fieldRoundsWitness =
   let raw = arrayMake 10 limbMask
-  let () = set 9 (shiftLeft 1 43 - 1) raw
+  let () = setInPlace 9 (shiftLeft 1 43 - 1) raw
   let () = reduceCarry raw
   fieldWitnessGo raw 0
 
@@ -489,8 +489,8 @@ fi
 pass 'field borrow secret-branch mutation is rejected by source structure'
 
 awk '
-  /let \(\) = A.set i \(original \+ keepDiff \* \(diff\[i\] - original\)\) w/ {
-    print "    let () = if keepDiff == 1 then A.set i diff[i] w else A.set i original w"
+  /let \(\) = A.setInPlace i \(original \+ keepDiff \* \(diff\[i\] - original\)\) w/ {
+    print "    let () = if keepDiff == 1 then A.setInPlace i diff[i] w else A.setInPlace i original w"
     next
   }
   { print }
@@ -503,7 +503,7 @@ pass 'scalar select secret-branch mutation is rejected by source structure'
 awk '
   /selectNCandidate w diff keepDiff \(i \+ 1\)/ {
     print "    let secret = hashBool (original < diff[i])"
-    print "    let () = A.set i (w[i] + 0 * secret) w"
+    print "    let () = A.setInPlace i (w[i] + 0 * secret) w"
     print
     next
   }
@@ -518,7 +518,7 @@ awk '
   /selectNCandidate w diff keepDiff \(i \+ 1\)/ {
     print "    let secretIndex = bitAnd original 1"
     print "    let sampled = w[secretIndex]"
-    print "    let () = A.set i (w[i] + 0 * sampled) w"
+    print "    let () = A.setInPlace i (w[i] + 0 * sampled) w"
     print
     next
   }
@@ -530,10 +530,10 @@ fi
 pass 'scalar secret-index mutation is rejected by source structure'
 
 awk '
-  /let \(\) = A.set i \(original \+ keepDiff \* \(diff\[i\] - original\)\) w/ {
+  /let \(\) = A.setInPlace i \(original \+ keepDiff \* \(diff\[i\] - original\)\) w/ {
     print "    let secretIndex = bitAnd original 1"
     print "    let scratch = arrayMake 2 0"
-    print "    let () = A.set secretIndex 0 scratch"
+    print "    let () = A.setInPlace secretIndex 0 scratch"
     print
     next
   }
@@ -550,8 +550,8 @@ awk '
     print "    let k = borrow"
     next
   }
-  /A.set i \(bitAnd t limbMask\) diff/ {
-    print "    let () = A.set k (bitAnd t limbMask) diff"
+  /A.setInPlace i \(bitAnd t limbMask\) diff/ {
+    print "    let () = A.setInPlace k (bitAnd t limbMask) diff"
     next
   }
   { print }
@@ -579,10 +579,10 @@ fi
 pass 'scalar leaky-wrapper mutation is rejected by exact source graph'
 
 awk '
-  /let \(\) = A.set i w\[i\] out/ {
+  /let \(\) = A.setInPlace i w\[i\] out/ {
     print "    let value = w[i]"
     print "    let copied = if value == 0 then shiftRight value 0 else value"
-    print "    let () = A.set i copied out"
+    print "    let () = A.setInPlace i copied out"
     next
   }
   { print }
@@ -629,8 +629,8 @@ fi
 pass 'scalar high-bit secret-branch mutation is rejected by source structure'
 
 awk '
-  /let \(\) = set i \(a\[i\] \+ bit \* \(b\[i\] - a\[i\]\)\) out/ {
-    print "    let () = if bit == 1 then set i b[i] out else set i a[i] out"
+  /let \(\) = setInPlace i \(a\[i\] \+ bit \* \(b\[i\] - a\[i\]\)\) out/ {
+    print "    let () = if bit == 1 then setInPlace i b[i] out else setInPlace i a[i] out"
     next
   }
   { print }
@@ -723,8 +723,8 @@ grep -F -q 'mdk_value_eq' "$WORK/borrow-mutant.ll" || fail 'field borrow mutatio
 pass 'field borrow mutation is rejected by native IR control'
 
 awk '
-  /let \(\) = set i \(original \+ keepDiff \* \(diff\[i\] - original\)\) n/ {
-    print "    let () = if keepDiff == 1 then set i diff[i] n else set i original n"
+  /let \(\) = setInPlace i \(original \+ keepDiff \* \(diff\[i\] - original\)\) n/ {
+    print "    let () = if keepDiff == 1 then setInPlace i diff[i] n else setInPlace i original n"
     next
   }
   { print }
@@ -760,7 +760,7 @@ extract_function subNCandidate "$WORK/scalar_emit.ll" "$WORK/scalar-borrow-curre
 if grep -F -q 'mdk_value_eq' "$WORK/scalar-select-current.ll" "$WORK/scalar-borrow-current.ll"; then
   fail 'current scalar reduction IR contains secret equality control'
 fi
-grep -F -q 'call i64 @mdk_array__set(i64 %arg2,' "$WORK/scalar-borrow-current.ll" || fail 'scalar borrow IR writes only at its public index argument'
+grep -F -q 'call i64 @mdk_array__setInPlace(i64 %arg2,' "$WORK/scalar-borrow-current.ll" || fail 'scalar borrow IR writes only at its public index argument'
 pass 'current scalar IR has only public-counter control'
 pass 'complete scalar reducer IR matches the approved helper control shape'
 
@@ -817,7 +817,7 @@ extract_function selectNCandidate "$WORK/scalar_write_mutant.ll" "$WORK/scalar-w
 if helper_ir_ok "$WORK/scalar-write-mutant.ll" 1 2 1 0 0 7; then
   fail 'scalar secret-write mutation is rejected by native IR call multiset'
 fi
-write_calls=$(grep -F -c 'call i64 @mdk_array__set(' "$WORK/scalar-write-mutant.ll" || true)
+write_calls=$(grep -F -c 'call i64 @mdk_array__setInPlace(' "$WORK/scalar-write-mutant.ll" || true)
 make_calls=$(grep -F -c 'call i64 @mdk_array_make(' "$WORK/scalar-write-mutant.ll" || true)
 [ "$write_calls" -gt 1 ] && [ "$make_calls" -gt 0 ] || fail 'scalar secret-write mutation reaches native IR'
 pass 'scalar secret-write mutation is rejected by native IR call multiset'
@@ -826,10 +826,19 @@ cp "$WORK/scalar_rebound_index_source_mutant.mdk" "$WORK/scalar_rebound_index_mu
 append_scalar_probe "$WORK/scalar_rebound_index_mutant.mdk"
 MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_rebound_index_mutant.mdk" -o "$WORK/scalar_rebound_index_mutant" --keep-ir > "$WORK/build-scalar-rebound-index-mutant.log" 2>&1
 extract_function subNCandidate "$WORK/scalar_rebound_index_mutant.ll" "$WORK/scalar-rebound-index-mutant.ll"
-if grep -F -q 'call i64 @mdk_array__set(i64 %arg2,' "$WORK/scalar-rebound-index-mutant.ll"; then
+# Positive control for the operand-provenance detector below (#2437).  That detector is a
+# NEGATIVE assertion — it passes when its grep finds nothing — so a pattern that has quietly
+# stopped being able to match anything is indistinguishable from a clean tree.  The
+# `array.set` -> `array.setInPlace` rename retargeted the emitted callee once already.  Prove
+# the exact pattern CAN still fire, against the clean tree's own public-index write, before
+# reading its non-match against the mutant as evidence of anything.
+grep -F -q 'call i64 @mdk_array__setInPlace(i64 %arg2,' "$WORK/scalar-borrow-current.ll" ||
+  fail 'secret-index operand-provenance detector still matches a real public-index write'
+pass 'secret-index operand-provenance detector is proven live against a known public-index write'
+if grep -F -q 'call i64 @mdk_array__setInPlace(i64 %arg2,' "$WORK/scalar-rebound-index-mutant.ll"; then
   fail 'scalar rebound secret-index mutation is rejected by native IR operand provenance'
 fi
-grep -F -q 'call i64 @mdk_array__set(i64 %arg3,' "$WORK/scalar-rebound-index-mutant.ll" || fail 'scalar rebound secret-index mutation reaches native IR'
+grep -F -q 'call i64 @mdk_array__setInPlace(i64 %arg3,' "$WORK/scalar-rebound-index-mutant.ll" || fail 'scalar rebound secret-index mutation reaches native IR'
 pass 'scalar rebound secret-index mutation is rejected by native IR operand provenance'
 
 cp "$WORK/scalar_wrapper_source_mutant.mdk" "$WORK/scalar_wrapper_mutant.mdk"

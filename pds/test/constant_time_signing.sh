@@ -54,22 +54,22 @@ write_source_manifest() {
 
 expected_internal_source_manifest() {
   cat <<'EOF'
-2995963130 26246  pds/lib/field.mdk
-344284241 31757  pds/lib/scalar.mdk
-3537888636 12958  pds/lib/sha256.mdk
-2659055724 1983  pds/lib/hmac_sha256.mdk
-4146415434 24375  pds/lib/secp256k1.mdk
+2128046436 26463  pds/lib/field.mdk
+2693440632 31918  pds/lib/scalar.mdk
+209766332 13042  pds/lib/sha256.mdk
+2955477369 1997  pds/lib/hmac_sha256.mdk
+1959740629 24445  pds/lib/secp256k1.mdk
 1507350302 4544  pds/test/constant_time_signing_main.mdk
 EOF
 }
 
 expected_public_source_manifest() {
   cat <<'EOF'
-2995963130 26246  pds/lib/field.mdk
-344284241 31757  pds/lib/scalar.mdk
-3537888636 12958  pds/lib/sha256.mdk
-2659055724 1983  pds/lib/hmac_sha256.mdk
-4146415434 24375  pds/lib/secp256k1.mdk
+2128046436 26463  pds/lib/field.mdk
+2693440632 31918  pds/lib/scalar.mdk
+209766332 13042  pds/lib/sha256.mdk
+2955477369 1997  pds/lib/hmac_sha256.mdk
+1959740629 24445  pds/lib/secp256k1.mdk
 2769643849 3846  pds/lib/sign.mdk
 1515542623 3110  pds/test/constant_time_signing_public_main.mdk
 EOF
@@ -271,7 +271,7 @@ write_control_manifest() {
     branches=$(grep -c 'br i1' "$WORK/function.ll" || true)
     comparisons=$(grep -E -c 'call i64 @mdk_value_(eq|ne|lt|le|gt|ge)\(' "$WORK/function.ll" || true)
     indices=$(grep -F -c 'call i64 @mdk_impl_Array_index(' "$WORK/function.ll" || true)
-    sets=$(grep -F -c 'call i64 @mdk_array__set(' "$WORK/function.ll" || true)
+    sets=$(grep -F -c 'call i64 @mdk_array__setInPlace(' "$WORK/function.ll" || true)
     makes=$(grep -F -c 'call i64 @mdk_array_make(' "$WORK/function.ll" || true)
     copies=$(grep -F -c 'call i64 @mdk_array_copy(' "$WORK/function.ll" || true)
     total=$(grep -E -c 'call i64 @' "$WORK/function.ll" || true)
@@ -483,7 +483,7 @@ pass 'native internal carrier retains the exact signature plus candidate-1/exhau
 
 collect_full_closure mdk_lib_secp256k1__ecdsaSignDigestForTest
 closure_grade=$(cksum "$WORK/full-closure.lst" | awk '{print $1 " " $2}')
-[ "$closure_grade" = '2499938860 4924' ] || fail "emitted transitive closure drifted ($closure_grade)"
+[ "$closure_grade" = '3326442416 4931' ] || fail "emitted transitive closure drifted ($closure_grade)"
 for prefix in field scalar sha256 hmac_sha256 secp256k1; do
   grep -F -q "mdk_lib_${prefix}__" "$WORK/full-closure.lst" || fail "emitted closure reaches $prefix"
 done
@@ -503,7 +503,7 @@ cp "$WORK/signing-full-closure.lst" "$WORK/full-closure.lst"
 
 write_control_manifest > "$WORK/control.manifest"
 control_grade=$(cksum "$WORK/control.manifest" | awk '{print $1 " " $2}')
-[ "$control_grade" = '2875306919 7373' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
+[ "$control_grade" = '1923240905 7380' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
 pass 'emitted helper bodies retain the audited branch/index/allocation shape; only fixed public controls remain'
 
 for symbol in \
@@ -616,7 +616,7 @@ done
 write_control_manifest > "$WORK/public-control.manifest"
 public_closure_grade=$(cksum "$WORK/full-closure.lst" | awk '{print $1 " " $2}')
 public_control_grade=$(cksum "$WORK/public-control.manifest" | awk '{print $1 " " $2}')
-if [ "$public_closure_grade" != '3474219027 5043' ] || [ "$public_control_grade" != '3772875544 7548' ]; then
+if [ "$public_closure_grade" != '4249195108 5050' ] || [ "$public_control_grade" != '1114424452 7555' ]; then
   fail "public union exact grades drifted (closure=$public_closure_grade control=$public_control_grade)"
 fi
 pass "public-root LLVM union excludes ForTest and retains the audited signing/key topology ($(wc -l < "$WORK/full-closure.lst") definitions)"
