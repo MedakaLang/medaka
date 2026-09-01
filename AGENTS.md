@@ -497,19 +497,6 @@ under *Writing tests*.
   fully fmt-clean** — the list of which files fail `medaka fmt --check` is DERIVED, not
   hand-typed (a hand-typed list here rotted twice over, #1794): `make fmt-clean-census`
   (`test/fmt_clean_census.sh`) reports the current set on demand. → dossier
-- **[H-COMMENT-REGISTER] Comment register** — a comment-register CLASS is a shape of comment
-  that is provably wrong or misdirected regardless of what it says: a dead-path citation (a
-  repo-relative path the comment names no longer exists — the OCaml reference compiler under
-  `lib/`/`bin/`/`dev/` removed 2026-06-26 is the biggest instance), a tombstone or its softer
-  sibling ("now lives in" / "moved to"), reviewer-addressed ruling vocabulary litigating a
-  withdrawn decision, history narration of what used to be true, or a draft correcting itself
-  in place. `make comment-register-census` (`test/comment_register_census.sh`) counts these
-  CLASSES over `compiler/` and `stdlib/`, never a percentage — a length ratchet on comments
-  teaches agents to write short bad comments, not fewer wrong ones (#2281). When relocating a
-  paragraph out of source rather than deleting it outright, the pointer left behind MUST name
-  the destination as a **repo-relative path** (e.g. `compiler/STAGE2-DESIGN.md` §4), never a
-  bare prose description — so `make docs-links` can verify the destination still exists. An
-  unreachable relocation (a pointer nobody can resolve) is a deletion with extra steps.
 - **[H-LINT] Lint** — **MAX RATCHET, all ~20 rules gated.** Also runs `medaka lint compiler
   stdlib sqlite`. **Run `medaka lint` on files you touch.** Disable inline: `-- lint-disable-
   next-line <rule>` (also `-line`, `-file`; omit rule = all). ⚠️ `--fix` bails on any decl with
@@ -659,8 +646,16 @@ Each of these was paid for in an incident — pointers, not post-mortems.
   written into the source; a comment that reads as reviewer-addressed prose
   (`refuted`, `ratified`, `"ruling"`) or a draft's self-narration (`earlier
   cut`, `this PR`) is describing the PR, not the code, and rots the moment
-  the PR merges. No emoji shouts (🚨/⚠️/🔒) in source comments. `make
-  comment-census` (`test/comment_register_census.sh`, #2281) derives a
+  the PR merges. No emoji shouts (🚨/⚠️/🔒) in source comments. A dead-path
+  citation — a repo-relative path the comment names that no longer exists,
+  the OCaml reference compiler under `lib/` removed 2026-06-26 being the
+  biggest instance — is this same register: provably wrong regardless of
+  what it says. When relocating a paragraph out of source rather than
+  deleting it outright, the pointer left behind MUST name the destination as
+  a **repo-relative path** (e.g. `compiler/STAGE2-DESIGN.md` §4), never a
+  bare prose description, so `make docs-links` can verify the destination
+  still exists — an unreachable relocation is a deletion with extra steps.
+  `make comment-census` (`test/comment_register_census.sh`, #2281) derives a
   current on-demand report of these registers; it is not a gate.
 - ⚠️ **[T-SHARED-CORPUS]** A fixture directory is a SHARED CORPUS — add/move/delete enrolls you
   in gates you never named. ENUMERATE every consumer, run all of them. Never trust a count —

@@ -88,6 +88,10 @@ re_deictic='this PR'
 #  MEASURED — provenance marker, own metric, NOT one of the seven classes
 #     and not folded into class 2 (ruling vocabulary).
 re_measured='MEASURED'
+#  8 dead-path — a comment citing a repo-relative lib/*.ml* path (the OCaml
+#     reference compiler removed 2026-06-26, `oracle-frozen`). Matches
+#     .ml/.mli/.mll/.mly.
+re_deadpath='lib/[A-Za-z0-9_./]*\.ml[a-z]*'
 
 n_files=0
 sum_history=0
@@ -97,6 +101,8 @@ sum_emoji=0
 sum_draft=0
 sum_deictic=0
 sum_measured=0
+sum_deadpath=0
+sum_commentblocks=0
 sum_distinct=0
 
 per_file_report=""
@@ -113,6 +119,16 @@ for f in $files; do
   c_draft=$(grep -Ec "$re_draft" "$f" 2>/dev/null)
   c_deictic=$(grep -Ec "$re_deictic" "$f" 2>/dev/null)
   c_measured=$(grep -Ec "$re_measured" "$f" 2>/dev/null)
+  c_deadpath=$(grep -Ec "$re_deadpath" "$f" 2>/dev/null)
+
+  # comment-blocks: count RUNS of >=12 consecutive `--`-only comment lines
+  # (a run is counted once, when it first reaches 12, not once per line
+  # thereafter).
+  c_commentblocks=$(awk '
+    /^[ \t]*--/ { run++; if (run == 12) blocks++; next }
+    { run = 0 }
+    END { print blocks + 0 }
+  ' "$f" 2>/dev/null)
 
   # Distinct lines matching >=1 of the seven classes (excluding the history
   # false-positive shape). MEASURED is excluded from this total — it is not
@@ -126,11 +142,13 @@ for f in $files; do
   sum_draft=$((sum_draft + c_draft))
   sum_deictic=$((sum_deictic + c_deictic))
   sum_measured=$((sum_measured + c_measured))
+  sum_deadpath=$((sum_deadpath + c_deadpath))
+  sum_commentblocks=$((sum_commentblocks + c_commentblocks))
   sum_distinct=$((sum_distinct + c_distinct))
 
-  f_total=$((c_history + c_ruling + c_tombstone + c_emoji + c_draft + c_deictic + c_measured))
+  f_total=$((c_history + c_ruling + c_tombstone + c_emoji + c_draft + c_deictic + c_measured + c_deadpath + c_commentblocks))
   if [ "$f_total" -gt 0 ]; then
-    per_file_report="$per_file_report$f: history=$c_history ruling=$c_ruling tombstone=$c_tombstone emoji=$c_emoji draft=$c_draft deictic=$c_deictic measured=$c_measured
+    per_file_report="$per_file_report$f: history=$c_history ruling=$c_ruling tombstone=$c_tombstone emoji=$c_emoji draft=$c_draft deictic=$c_deictic measured=$c_measured dead-path=$c_deadpath comment-blocks=$c_commentblocks
 "
   fi
 done
@@ -161,6 +179,8 @@ echo "  6. dead deictic citations:           $sum_deictic"
 echo "  7. falsified-by-refactor candidates: see class 5 above (not"
 echo "     independently greppable — its hits ARE the candidate list,"
 echo "     requiring human judgment; not a definitive falsified-count)"
+echo "  8. dead-path lib/*.ml citations:     $sum_deadpath"
+echo "  9. comment-block essays (12+ lines): $sum_commentblocks"
 echo
 echo "  distinct lines matching >=1 of the seven classes: $sum_distinct"
 echo
