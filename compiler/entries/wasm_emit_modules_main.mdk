@@ -80,13 +80,14 @@ emitTail runtimeDecls coreD modules2 =
   -- (top-level binds + impl entries) before and after the filter runs. Same
   -- gating convention as `llvm_emit.mdk`'s `emitProgramWithStats`/support.timer's
   -- `statsEnabled`: OFF by default, so ordinary emission (every gate that diffs
-  -- this entry's stdout) stays byte-identical; the two extra `listLen` walks only
-  -- run when MEDAKA_STATS is set.
+  -- this entry's stdout) stays byte-identical; the whole stats block — including
+  -- both `programUnitCount` walks, not just the print — is skipped when
+  -- MEDAKA_STATS is unset.
   let statsOn = statsEnabled ()
-  let _ = emitStats statsOn [
+  let _ = if statsOn then emitStats True [
     ("wasm-reach-total-units", programUnitCount lowered),
     ("wasm-reach-kept-units", programUnitCount filtered),
-  ]
+  ] else ()
   putStr (emitProgram input filtered)
 
 -- The unit count `backend.wasm_reach.wasmReachFilter` filters over: every
