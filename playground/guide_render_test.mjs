@@ -90,8 +90,11 @@ try {
       .map((m) => m[1]).filter((h) => !/^[a-z][a-z0-9+.-]*:/i.test(h));
     check(relMd.length === 0, `${where}: no relative .md href survives (found ${relMd.join(', ')})`);
 
-    // 3. every internal .html href names an emitted page.
+    // 3. every SIBLING .html href (no leading "../" — those deliberately leave the
+    //    doc set, e.g. S-2's "open in playground" / back-to-playground links)
+    //    names a page that was actually emitted.
     for (const m of html.matchAll(/href="([^":#]+\.html)(#[^"]*)?"/g)) {
+      if (m[1].startsWith('../')) continue;
       check(emitted.has(m[1]), `${where}: internal link ${m[1]} names an emitted page`);
       totalLinksRewritten++;
     }

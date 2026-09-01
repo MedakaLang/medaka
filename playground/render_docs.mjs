@@ -22,6 +22,9 @@
 //                      `main`). Pass `--repo-url ''` to leave them untouched.
 //   --repo-root <dir>  repo root used to resolve those out-of-set links
 //                      (default: the parent of this script's directory)
+//   --playground-url <href>  href to the playground's index.html from a
+//                      rendered page, used for the "open in playground" links
+//                      and the back-to-playground nav (default: '../index.html')
 //
 // Output contract (S-2 "open in playground" links and S-3 site wiring depend on
 // this shape — see playground/NOTES.md):
@@ -65,6 +68,58 @@ const escapeHtml = (s) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
+// ── "open in playground" runnability partition ─────────────────────────────
+// A fenced block is RUNNABLE in the browser playground iff ALL of:
+//   1. its normalized fence label is exactly `medaka` (not `medaka-project` —
+//      multi-file, the playground has one buffer; not `medaka-nocheck` — a
+//      fragment never meant to stand alone; and not `medaka-expect`/`toml`/an
+//      unlabelled fence, none of which are Medaka source to run at all), AND
+//   2. its source contains no call to a host capability the playground's wasm
+//      import object stubs out (playground/worker.js `capabilityStub`):
+//      readFile, writeFile, readLine, readLines, getEnv, fileExists, args,
+//      exit. Calling one of these does not fail to COMPILE — the wasm module
+//      loads fine — it throws a `CapabilityError` at run time instead of
+//      producing the documented output, which is worse than no link.
+// Everything outside that partition gets a deliberate, visible "not runnable"
+// note instead of a link — never a silently absent one. See playground/NOTES.md
+// for the corpus counts this partition currently produces.
+const UNSUPPORTED_CALL_RE =
+  /\b(readFile|writeFile|readLine|readLines|getEnv|fileExists|args|exit)\b/;
+
+function classifyRunnable(label, text) {
+  if (label === 'medaka-project') {
+    return { runnable: false, reason: 'multi-file project — the playground runs a single source buffer' };
+  }
+  if (label === 'medaka-nocheck') {
+    return { runnable: false, reason: 'a fragment, not a standalone program' };
+  }
+  const m = text.match(UNSUPPORTED_CALL_RE);
+  if (m) {
+    return { runnable: false, reason: `uses \`${m[1]}\`, which the browser playground has no host support for` };
+  }
+  return { runnable: true };
+}
+
+// Mirrors playground/main.js `encodeProgram` byte-for-byte: UTF-8 bytes -> base64
+// -> URL-safe (`+`->`-`, `/`->`_`, trailing `=` stripped). A pure string
+// transform, so the build can compute it without any browser runtime.
+function encodeProgram(src) {
+  return Buffer.from(src, 'utf8').toString('base64')
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function runnableFooter(status, text, playgroundUrl) {
+  if (status.runnable) {
+    const href = `${playgroundUrl}#code=${encodeProgram(text)}`;
+    return `<div class="codeblock-actions">`
+      + `<a class="pg-run" href="${escapeHtml(href)}" rel="noopener">&#9654; Open in Playground</a>`
+      + `</div>`;
+  }
+  return `<div class="codeblock-actions">`
+    + `<span class="pg-not-runnable">Not runnable in the playground: ${escapeHtml(status.reason)}</span>`
+    + `</div>`;
+}
+
 // Slug from heading TEXT, GitHub-flavoured: lowercase, drop everything that is
 // not a word char / space / hyphen, spaces → hyphens. Collision-safe via a
 // per-page seen-count suffix, so two identically-titled headings get stable,
@@ -89,6 +144,11 @@ function parseArgs(argv) {
     src: null, out: null, exclude: [], title: null,
     repoUrl: 'https://github.com/MedakaLang/medaka/blob/main',
     repoRoot: resolve(HERE, '..'),
+    // Relative (or absolute) href to the playground's index.html, from a
+    // rendered page. Default assumes the convention `build_site.sh` (S-3) is
+    // expected to follow: this doc set's pages land one directory below the
+    // playground root (e.g. site/guide/*.html next to site/index.html).
+    playgroundUrl: '../index.html',
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -103,6 +163,7 @@ function parseArgs(argv) {
       case '--title': opts.title = next(); break;
       case '--repo-url': opts.repoUrl = next().replace(/\/+$/, ''); break;
       case '--repo-root': opts.repoRoot = resolve(next()); break;
+      case '--playground-url': opts.playgroundUrl = next(); break;
       default: throw new Error(`unknown argument: ${a}`);
     }
   }
@@ -112,7 +173,7 @@ function parseArgs(argv) {
 
 // ── the renderer ────────────────────────────────────────────────────────────
 export function renderDocSet(opts) {
-  const { src, out, exclude, repoUrl, repoRoot } = opts;
+  const { src, out, exclude, repoUrl, repoRoot, playgroundUrl = '../index.html' } = opts;
   if (!existsSync(src)) throw new Error(`--src does not exist: ${src}`);
 
   // Enumerate the doc set from the DIRECTORY — never a hardcoded chapter list, so
@@ -129,7 +190,7 @@ export function renderDocSet(opts) {
   const docTitle = opts.title ?? basename(src);
 
   const rendered = pages.map((file) =>
-    renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages }));
+    renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, playgroundUrl }));
 
   rmSync(out, { recursive: true, force: true });
   mkdirSync(out, { recursive: true });
@@ -139,7 +200,7 @@ export function renderDocSet(opts) {
   return rendered;
 }
 
-function renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages }) {
+function renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, playgroundUrl }) {
   const markdown = readFileSync(join(src, file), 'utf8');
   const slug = slugger();
   const toc = [];
@@ -173,12 +234,15 @@ function renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages }) {
             `silently render as unhighlighted prose.`);
         }
         const kind = KNOWN_FENCES[label] ?? 'unknown';
+        const footer = kind === 'medaka'
+          ? runnableFooter(classifyRunnable(label, text), text, playgroundUrl)
+          : '';
         return `<div class="codeblock kind-${kind}"`
           + ` data-lang="${escapeHtml(label || 'plain')}"`
           + ` data-fence="${escapeHtml(info)}"`
           + ` data-source="${escapeHtml(text)}">`
           + `<pre><code class="language-${escapeHtml(label || 'plain')}">`
-          + `${escapeHtml(text)}</code></pre></div>\n`;
+          + `${escapeHtml(text)}</code></pre>${footer}</div>\n`;
       },
 
       link({ href, title, tokens }) {
@@ -201,7 +265,7 @@ function renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages }) {
     outFile,
     title: pageTitle,
     toc,
-    html: pageShell({ pageTitle, docTitle, body, toc, outFile, pages }),
+    html: pageShell({ pageTitle, docTitle, body, toc, outFile, pages, playgroundUrl }),
   };
 }
 
@@ -247,7 +311,7 @@ function rewriteHref(href, { file, src, inSet, repoUrl, repoRoot, errors }) {
 }
 
 // ── page shell ──────────────────────────────────────────────────────────────
-function pageShell({ pageTitle, docTitle, body, toc, outFile, pages }) {
+function pageShell({ pageTitle, docTitle, body, toc, outFile, pages, playgroundUrl }) {
   const tocHtml = toc.length === 0 ? '' :
     `<nav class="toc" aria-label="On this page">\n<h2>On this page</h2>\n<ul>\n`
     + toc.map((h) => `<li class="toc-h${h.depth}"><a href="#${h.id}">${h.text}</a></li>`).join('\n')
@@ -268,6 +332,10 @@ function pageShell({ pageTitle, docTitle, body, toc, outFile, pages }) {
 <link rel="stylesheet" href="guide.css">
 </head>
 <body>
+<header class="site-nav">
+<a class="site-nav-back" href="${escapeHtml(playgroundUrl)}">&larr; Playground</a>
+<span class="site-nav-title">${escapeHtml(docTitle)}</span>
+</header>
 <div class="layout">
 <nav class="chapters" aria-label="Chapters">
 <h2>${escapeHtml(docTitle)}</h2>
@@ -285,45 +353,91 @@ ${body}</article>
 `;
 }
 
+// Design tokens copied VERBATIM from playground/index.html's `:root` (~line 39)
+// — same dark chrome, same fixed (non-media-query) theme; the playground itself
+// has no light-mode arm, so the guide doesn't invent one either.
 const STYLESHEET = `/* Generated by playground/render_docs.mjs — do not edit by hand. */
-:root { --fg:#1b1b1f; --bg:#fff; --muted:#5a5a66; --rule:#e2e2ea; --accent:#0a6cbe;
-        --code-bg:#f6f7f9; --out-bg:#f1f6f1; }
-@media (prefers-color-scheme: dark) {
-  :root { --fg:#e6e6ea; --bg:#16161a; --muted:#a0a0ad; --rule:#2c2c34; --accent:#6fb4f0;
-          --code-bg:#1e1e24; --out-bg:#1a221c; }
+:root {
+  --bg: #0b0e14;
+  --panel: #11151d;
+  --panel-2: #161b24;
+  --line: #232a36;
+  --ink: #d6dbe3;
+  --muted: #8b93a1;
+  --faint: #5c6470;
+  --gold: #e2b96f;
+  --gold-bright: #f0cd8e;
+  --ok: #6fcf97;
+  --err: #f47067;
+  --code-bg: #0d1117;
+  --mono: "SF Mono", "Cascadia Code", "Fira Code", Menlo, Consolas, monospace;
+  --ui: system-ui, -apple-system, "Segoe UI", sans-serif;
 }
-* { box-sizing: border-box; }
-body { margin:0; color:var(--fg); background:var(--bg); font:16px/1.65 -apple-system,
-       BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
-.layout { display:flex; gap:2rem; max-width:1180px; margin:0 auto; padding:2rem 1.25rem; }
-.chapters { flex:0 0 15rem; font-size:.9rem; }
-.chapters h2 { font-size:.8rem; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
+*, *::before, *::after { box-sizing: border-box; }
+html { background: #07090d; }
+body { margin:0; color:var(--ink); background:var(--bg); font:16px/1.65 var(--ui); }
+a { color:var(--gold); text-decoration:none; }
+a:hover { color:var(--gold-bright); text-decoration:underline; }
+
+.site-nav { display:flex; align-items:center; gap:1rem; padding:.85rem 1.25rem;
+       background:var(--panel); border-bottom:1px solid var(--line); position:sticky; top:0;
+       z-index:10; }
+.site-nav-back { color:var(--muted); font:500 .85rem var(--ui); }
+.site-nav-back:hover { color:var(--ink); }
+.site-nav-title { color:var(--faint); font-size:.8rem; text-transform:uppercase;
+       letter-spacing:.06em; }
+
+.layout { display:flex; gap:2.5rem; max-width:1180px; margin:0 auto; padding:2rem 1.25rem; }
+.chapters { flex:0 0 15rem; font-size:.88rem; }
+.chapters h2, .toc h2 { font-size:.75rem; text-transform:uppercase; letter-spacing:.06em;
+       color:var(--faint); margin:0 0 .6rem; }
 .chapters ul, .toc ul { list-style:none; margin:0; padding:0; }
-.chapters li { margin:.3rem 0; }
-.chapters a.here { font-weight:600; }
-main { flex:1 1 auto; min-width:0; }
-a { color:var(--accent); }
-h1,h2,h3 { line-height:1.25; margin:2rem 0 .75rem; }
-h1 { margin-top:0; }
-h1 .anchor, h2 .anchor, h3 .anchor { float:left; margin-left:-1.1em; padding-right:.3em;
-       color:var(--muted); opacity:0; text-decoration:none; }
+.chapters li { margin:.35rem 0; }
+.chapters a { color:var(--muted); }
+.chapters a:hover { color:var(--ink); }
+.chapters a.here { color:var(--gold); font-weight:600; }
+main { flex:1 1 auto; min-width:0; max-width:42rem; }
+
+h1,h2,h3 { line-height:1.3; margin:2rem 0 .75rem; color:var(--ink); }
+h1 { margin-top:0; font-size:1.7rem; }
+h2 { font-size:1.3rem; border-bottom:1px solid var(--line); padding-bottom:.3rem; }
+h3 { font-size:1.05rem; }
+h1 .anchor, h2 .anchor, h3 .anchor { float:left; margin-left:-1.15em; padding-right:.3em;
+       color:var(--faint); opacity:0; text-decoration:none; }
 h1:hover .anchor, h2:hover .anchor, h3:hover .anchor { opacity:1; }
-.toc { border:1px solid var(--rule); border-radius:6px; padding:.75rem 1rem; margin-bottom:2rem;
-       font-size:.9rem; }
-.toc h2 { font-size:.8rem; text-transform:uppercase; letter-spacing:.06em; color:var(--muted);
-       margin:0 0 .5rem; }
-.toc li { margin:.2rem 0; }
+p, li { color:var(--ink); }
+
+.toc { border:1px solid var(--line); background:var(--panel); border-radius:8px;
+       padding:.85rem 1.1rem; margin-bottom:2rem; font-size:.88rem; }
+.toc li { margin:.25rem 0; }
+.toc a { color:var(--muted); }
+.toc a:hover { color:var(--gold); }
 .toc .toc-h3 { padding-left:1rem; }
-.codeblock { margin:1rem 0; }
-.codeblock pre { margin:0; padding:.85rem 1rem; overflow-x:auto; border-radius:6px;
-       background:var(--code-bg); border:1px solid var(--rule); }
-.codeblock.kind-output pre { background:var(--out-bg); }
-code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:.9em; }
-:not(pre) > code { background:var(--code-bg); padding:.1em .35em; border-radius:4px; }
+
+.codeblock { margin:1.1rem 0; border:1px solid var(--line); border-radius:8px;
+       overflow:hidden; background:var(--code-bg); }
+.codeblock pre { margin:0; padding:.9rem 1.1rem; overflow-x:auto; background:var(--code-bg); }
+.codeblock.kind-output pre { background:var(--panel-2); }
+.codeblock.kind-output { border-color:var(--line); }
+code, pre { font-family:var(--mono); font-size:.88em; }
+:not(pre) > code { background:var(--panel-2); color:var(--ink); padding:.15em .4em;
+       border-radius:4px; }
+
+.codeblock-actions { border-top:1px solid var(--line); background:var(--panel);
+       padding:.5rem .9rem; font:500 .8rem var(--ui); }
+.pg-run { color:var(--gold); }
+.pg-run:hover { color:var(--gold-bright); }
+.pg-not-runnable { color:var(--faint); font-style:italic; }
+
 table { border-collapse:collapse; }
-th, td { border:1px solid var(--rule); padding:.4rem .6rem; text-align:left; }
-blockquote { margin:1rem 0; padding:.1rem 1rem; border-left:3px solid var(--rule); color:var(--muted); }
-@media (max-width:820px) { .layout { flex-direction:column; } .chapters { flex:none; } }
+th, td { border:1px solid var(--line); padding:.4rem .7rem; text-align:left; }
+blockquote { margin:1rem 0; padding:.15rem 1.1rem; border-left:3px solid var(--gold);
+       color:var(--muted); }
+@media (max-width:820px) {
+  .layout { flex-direction:column; }
+  .chapters { flex:none; }
+  main { max-width:none; }
+}
 `;
 
 // ── CLI ─────────────────────────────────────────────────────────────────────
