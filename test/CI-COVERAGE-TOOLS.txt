@@ -129,6 +129,14 @@ playground/build_guide           renders docs/guide/*.md into playground/site-gu
                                  will consume, and asserts nothing. The ASSERTIONS about its
                                  output live in playground/guide_render_test.mjs — invocable
                                  standalone today, wired into preflight/CI by S-site-wiring.
+playground/build_stdlib_docs     renders docs/stdlib/*.md into playground/site-stdlib/ via
+                                 playground/render_docs.mjs (#2384, S-stdlib-renders). The exact
+                                 sibling of build_guide above, over the same render machine, and
+                                 the same classification: a build step that produces a staging dir
+                                 for build_site.sh and asserts nothing. The ASSERTIONS about its
+                                 output live in playground/guide_render_test.mjs, which grades the
+                                 stdlib render (index-link resolution, doctest-footer suppression,
+                                 design-doc exclusion) alongside the guide's.
 playground/deploy_cloudflare     publishes playground/site/ to Cloudflare Pages (project `medaka`,
                                  https://medaka-lang.dev). Running it proves nothing about the
                                  compiler — it is a deploy, and it needs credentials no runner has.
