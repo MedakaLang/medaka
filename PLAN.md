@@ -169,7 +169,7 @@ check/run/build, every backend); (B) bounds-checked the extern — `off<0 || off
 arrayLength arr` → `E-INDEX-OOB` panic in `compiler/eval/eval.mdk` `pBytesToFloat64`. Verified: userland
 rejected; `--allow-internal` OOB now TRAPS (was leak); valid `off=0` returns a float; byteparser doctests 33/33;
 agreement 25/0, llvm 195/0, fixpoint C3a/C3b YES; no re-mint. **All other indexed surface (Array `.[i]`/slice,
-MutArray, hash tables, String, the 5 gated array externs) audited AIRTIGHT.** Wasm follow-up (low-pri): the gate
+Vector, hash tables, String, the 5 gated array externs) audited AIRTIGHT.** Wasm follow-up (low-pri): the gate
 already blocks userland on wasm; a wasm-side bounds check (`wasm_emit.mdk:1055`) would only harden
 `--allow-internal` wasm. **Systemic follow-up worth doing:** `internalExterns` is a hand-maintained *denylist*
 this extern slipped through — invert to an allowlist, or add a lint/test asserting every pointer-arithmetic
@@ -372,7 +372,7 @@ only `.` — + desugar + impls + inference check). **Design LOCKED (Shape B, uni
 - **Read semantics:** `a[i]` returns the ELEMENT, bounds/key-checked → clean **`E-INDEX-OOB`** /
   key-missing trap (NOT `Option`, even though `get` returns `Option`); the `Option` form stays the
   safe `.get`. Ties into the deferred coded-OOB seam.
-- **Impls:** Array, MutArray, Map, HashMap (IndexMut for the mutable ones). **List/trees: OPEN
+- **Impls:** Array, Vector, Map, HashMap (IndexMut for the mutable ones). **List/trees: OPEN
   sub-decision** — `impl Index List` (O(n) convenience vs the `xs[0]` perf-footgun hint). Design pass.
 - **ONE feasibility check for the design pass:** `FromEntries` is 2-param; `Index` wants **3** (`c k v`).
   Confirm the multi-param machinery is arity-general at 3 params (likely yes). **Fallback if not:** the
@@ -385,8 +385,8 @@ in parallel (read-only).
 > **✅ SHIPPED 2026-07-12 as Index arc #16 (`c9478073`).** Design → `INDEX-DESIGN.md` +
 > `INDEX-16-PLAN.md`. Multi-param arity-general at 3 params CONFIRMED (no blessed-assoc-types
 > hatch needed). Delivered: `Index`/`IndexMut` interfaces in `core.mdk`; impls Array/List/String
-> (prelude, no import) + Map/MutArray; `a.[i]` AND bare **`a[i]`** grammar; `a[i][j]` chaining;
-> `a[i] := v` in-place write (Array/MutArray only; untracked, no effect row — was `<Mut>` at the
+> (prelude, no import) + Map/Vector; `a.[i]` AND bare **`a[i]`** grammar; `a[i][j]` chaining;
+> `a[i] := v` in-place write (Array/Vector only; untracked, no effect row — was `<Mut>` at the
 > time, removed 2026-07-14); coded `E-INDEX-OOB` via a new
 > `indexError` abort extern; F2a retired the built-in `EIndex` path. The full differential suite
 > caught 2 latent bugs the stage agents missed (prelude-free probe regressions; a return-position
@@ -485,7 +485,7 @@ A long human-in-the-loop session: the user drove the in-browser playground and r
 **Error-message copy review:** `compiler/MESSAGE-AUDIT.md` (census of ~226 user-facing strings, ~65 flagged; tone rare, mostly consistency drift; centralization assessed + REJECTED — dynamic templates, no dedup benefit; standardize in place). Then: an **em-dash → period/colon pass** (82 messages, punctuation-only, 91 goldens proven punctuation-only) and the user's **57 authored copy edits** (rewordings, quoting, capitalization, `ambiguousField` de-persona'd, lint findings restored to `— <verb>` form, `check-policy` emoji dropped). Both merged; `run_gates` 73/0.
 
 ### Deferred items from this session (pick these up next)
-- **Runtime-trap-format unification** (the biggest; from the message audit's "four-way trap divergence" + the user's deferred copy edits): the four backends trap differently — (1) `eval.mdk`: route the bare `panic "non-exhaustive match"` (~:693) through `runtimePanic`; route the "no 'main' binding" messages (~:2204/2238/2448) through the diagnostic channel; give `main : Async` (~:2452) a code + located form; (2) `stdlib/array.mdk`/`mut_array.mdk` OOB messages → route through the coded OOB path; (3) `runtime/medaka_rt.c` `E-DIV-ZERO`/`E-MOD-ZERO`/`E-NONEXHAUSTIVE` — add a source **loc** (blocked on Core IR carrying source locations — the deeper gap); (4) `typecheck.mdk` `T-EFFECT-PARAM` host-pattern message dedup (`:997`/`:969` share one builder). Needs a bit of design (the wasm backend drops `panic` messages entirely). `mdk_oob` → `[E-INDEX-OOB]` was the one literal piece already done.
+- **Runtime-trap-format unification** (the biggest; from the message audit's "four-way trap divergence" + the user's deferred copy edits): the four backends trap differently — (1) `eval.mdk`: route the bare `panic "non-exhaustive match"` (~:693) through `runtimePanic`; route the "no 'main' binding" messages (~:2204/2238/2448) through the diagnostic channel; give `main : Async` (~:2452) a code + located form; (2) `stdlib/array.mdk`/`vector.mdk` OOB messages → route through the coded OOB path; (3) `runtime/medaka_rt.c` `E-DIV-ZERO`/`E-MOD-ZERO`/`E-NONEXHAUSTIVE` — add a source **loc** (blocked on Core IR carrying source locations — the deeper gap); (4) `typecheck.mdk` `T-EFFECT-PARAM` host-pattern message dedup (`:997`/`:969` share one builder). Needs a bit of design (the wasm backend drops `panic` messages entirely). `mdk_oob` → `[E-INDEX-OOB]` was the one literal piece already done.
 - **Type-error span precision** — `No impl of Num for String` (and type errors generally) point at a 1-char `currentLoc` snapshot, not the offending operand's full span. A dedicated typecheck-span pass; it threads through constraint solving (`pendingBinopSites`), affects many type-error locs — do them together, not one-off.
 - **Multi-clause FUNCTION exhaustiveness** (investigated, filed): non-exhaustive multi-clause functions (`f Red = …; f Green = …`, missing `Blue`) get NO warning even in native `check` (explicit `match` does). Root cause: they desugar to a `VMulti` dispatch list, not an `EMatch`; the parallel engine (`exhaust.mdk` `checkGroupCovered`) is **gated to guarded clauses only** (`checkGroup`'s `otherwise = []`, ~line 521-524). Fix is one line to remove the gate BUT measured **~524 new warnings tree-wide** (34 stdlib + 490 compiler), overwhelmingly intentional partial functions. A responsible fix = gate removal + per-clause locs + a specific message + a tree-wide cleanup of the intentional partials. Scoped mini-project.
 - **Remaining em-dash hint-joins** (rare-path, low value): `loader.mdk` available-modules suffix, `build_cmd.mdk` wasm-tools/libgc-missing errors, and backend-internal `gap`/WAT-comment strings (not really user copy).
@@ -748,7 +748,7 @@ A file-by-file review of the sqlite library through `medaka fmt` + `medaka lint`
 
 ## Current status (2026-06-27) — sqlite dogfood review batch (UTF-8 + Float % + `f -1` + Ordering Eq/Ord)
 
-**SHIPPED** (`main` = `29c2120`, seed re-minted, cold `bootstrap_from_seed` PASS, full `diff_compiler_*` 0-fail, fixpoint C3a/C3b YES). A file-by-file review of the sqlite library landed a 10-task batch. New features: **UTF-8 codec externs** (`stringToUtf8Bytes`/`stringFromUtf8Bytes` + `stdlib/string.mdk` `toUtf8`/`fromUtf8`/`utf8ByteLength`); **Float `%` completed** (it was ~90% built — eval lacked the `VFloat` arm; fixed via a `floatRem` extern = C fmod == LLVM frem; reproduce-first nearly reimplemented a working operator); **negative literal in application position** `f -1` → `f (-1)` (lexer `TMinusTight` + head-gated `parseApp`, "Rule C"; `5 -1` stays subtraction); **`Ordering` Eq/Ord** (run≠build fix — `o == Lt` build-failed); **`bytebuilder.emitBeUint`** promoted. Cleanups: five dogfood libs de-rolled off hand-written stdlib reimplementations; `Display Cell`/`Display Row` consolidation; select `compare`/`Ordering` + param-destructure/record-update; btree §12 constants; rowtype `cellShape`→`debug`; MutArray-Builder adoption in dbwriter/recordenc. **`isEven`/`isOdd` were DROPPED** (blocked by the dict-pass shadowing bug below). Memory: `project_sqlite_review_batch`.
+**SHIPPED** (`main` = `29c2120`, seed re-minted, cold `bootstrap_from_seed` PASS, full `diff_compiler_*` 0-fail, fixpoint C3a/C3b YES). A file-by-file review of the sqlite library landed a 10-task batch. New features: **UTF-8 codec externs** (`stringToUtf8Bytes`/`stringFromUtf8Bytes` + `stdlib/string.mdk` `toUtf8`/`fromUtf8`/`utf8ByteLength`); **Float `%` completed** (it was ~90% built — eval lacked the `VFloat` arm; fixed via a `floatRem` extern = C fmod == LLVM frem; reproduce-first nearly reimplemented a working operator); **negative literal in application position** `f -1` → `f (-1)` (lexer `TMinusTight` + head-gated `parseApp`, "Rule C"; `5 -1` stays subtraction); **`Ordering` Eq/Ord** (run≠build fix — `o == Lt` build-failed); **`bytebuilder.emitBeUint`** promoted. Cleanups: five dogfood libs de-rolled off hand-written stdlib reimplementations; `Display Cell`/`Display Row` consolidation; select `compare`/`Ordering` + param-destructure/record-update; btree §12 constants; rowtype `cellShape`→`debug`; Vector-Builder adoption in dbwriter/recordenc. **`isEven`/`isOdd` were DROPPED** (blocked by the dict-pass shadowing bug below). Memory: `project_sqlite_review_batch`.
 
 ## Current status (2026-06-27) — internal-only array externs restricted (--allow-internal)
 
@@ -1080,7 +1080,7 @@ string interpolation, type aliases/newtypes, container literals
 
 The stdlib in Medaka is **complete** across `core`, `list`, `array`, `string`
 (frozen, Phase 128), ordered `map`/`set`, mutable `hash_map`/`hash_set`,
-`mut_array`, `io`, and `json` (STDLIB.md Modules 1–9 all done).
+`vector`, `io`, and `json` (STDLIB.md Modules 1–9 all done).
 
 **Self-host (Stage 1) and the native backend (Stage 2)** are both ✅ COMPLETE —
 all eight pipeline stages ported to Medaka and validated byte-for-byte, the
@@ -2260,7 +2260,7 @@ non-package-manager gaps:
 refinement roadmap" (the effect-label half is shared with the capability wedge).
 
 Core modules 1–9 are **complete** (`core`/`list`/`array`/`string` + `map`/`set`,
-hash containers, `io`, `mut_array`, `json`) — see PLAN-ARCHIVE.md. `stdlib/string.mdk`
+hash containers, `io`, `vector`, `json`) — see PLAN-ARCHIVE.md. `stdlib/string.mdk`
 API frozen 2026-06-03 (Phase 128). Remaining work is incremental additions tracked in
 STDLIB.md (verified 2026-06-18 audit): the `<>` Semigroup operator (not lexed at all),
 JSON pretty-printer + `ToJson`/`FromJson` codecs, single-codepoint string indexing

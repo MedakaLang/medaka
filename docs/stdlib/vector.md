@@ -1,14 +1,15 @@
-# mut_array
+# vector
 
-mut_array.mdk — a growable mutable array (dynamic array / vector).
+vector.mdk — a growable array (a dynamic array, `Vec` in Rust, `vector` in
+C++, `ArrayList` in Java).
 
 `Array a` (Module 4) is **fixed-size**: O(1) random access, but no `push`/
-`pop`.  `MutArray a` is the growable counterpart — a vector backed by an
+`pop`.  `Vector a` is the growable counterpart — backed by an
 `Array a` with spare capacity, so `push` is amortized O(1) (the backing
 doubles when full, like the hash tables in Module 6).  Reach for `Array` when
-the length is known up front; reach for `MutArray` when you accumulate.
+the length is known up front; reach for `Vector` when you accumulate.
 
-Representation: `MutArray backing len` where `!backing` is the backing
+Representation: `Vector backing len` where `!backing` is the backing
 array (its `arrayLength` is the *capacity*) and `!len` is the number of
 live elements (`0 <= len <= capacity`).  Both are `Ref`s, mutated in place.
 Slots `[len, capacity)` are scratch — never read; they hold
@@ -19,20 +20,20 @@ scratch tail is invisible.  `empty`/`new` start at capacity 0 and allocate on
 first `push`, using the pushed element as the fill — so no dummy/default
 value is needed to construct one.
 
-## `MutArray`
+## `Vector`
 
 ```
-data MutArray a
-  = MutArray (Ref (Array a)) (Ref Int)
+data Vector a
+  = Vector (Ref (Array a)) (Ref Int)
 ```
 
-`MutArray backing len`: `!backing` is the capacity-sized store,
+`Vector backing len`: `!backing` is the capacity-sized store,
 `!len` the live count; both mutated in place.
 
 ## `new`
 
 ```
-new : Unit -> MutArray a
+new : Unit -> Vector a
 ```
 
 A fresh, empty vector (capacity 0; grows on first `push`).  Takes `Unit`,
@@ -41,7 +42,7 @@ not a nullary value, so each call allocates its own cells.
 ## `fromList`
 
 ```
-fromList : List a -> MutArray a
+fromList : List a -> Vector a
 ```
 
 Build a vector from a list, preserving order.  Capacity equals the length
@@ -58,7 +59,7 @@ Build a vector from a list, preserving order.  Capacity equals the length
 ## `fromArray`
 
 ```
-fromArray : Array a -> MutArray a
+fromArray : Array a -> Vector a
 ```
 
 Wrap a *copy* of an array as a vector (so later mutation does not disturb
@@ -67,7 +68,7 @@ the caller's array).
 ## `capacity`
 
 ```
-capacity : MutArray a -> Int
+capacity : Vector a -> Int
 ```
 
 Capacity of the backing store (`>= length`).  Grows by doubling.
@@ -83,7 +84,7 @@ Capacity of the backing store (`>= length`).  Grows by doubling.
 ## `get`
 
 ```
-get : Int -> MutArray a -> Option a
+get : Int -> Vector a -> Option a
 ```
 
 Element at an index, or `None` when out of the live range `[0, length)`.
@@ -98,10 +99,10 @@ Some 20
 None
 ```
 
-## `Index (MutArray a) Int a`
+## `Index (Vector a) Int a`
 
 ```
-impl Index (MutArray a) Int a
+impl Index (Vector a) Int a
 ```
 
 `index ma i` reads `ma`'s element at `i` (`ma[i]` sugar dispatches here),
@@ -112,7 +113,7 @@ over the live range `[0, length)`.  O(1).  Raises the coded `indexError`
 ## `first`
 
 ```
-first : MutArray a -> Option a
+first : Vector a -> Option a
 ```
 
 First element, or `None` when empty.
@@ -128,7 +129,7 @@ Some 10
 ## `last`
 
 ```
-last : MutArray a -> Option a
+last : Vector a -> Option a
 ```
 
 Last element, or `None` when empty.
@@ -144,7 +145,7 @@ Some 30
 ## `toArray`
 
 ```
-toArray : MutArray a -> Array a
+toArray : Vector a -> Array a
 ```
 
 Snapshot the live range into a fresh fixed-size `Array a`.  (Shown here via
@@ -162,7 +163,7 @@ the `arrayLength` kernel primitive — `Array`'s own `Foldable`/`Debug` live in
 ## `push`
 
 ```
-push : a -> MutArray a -> Unit
+push : a -> Vector a -> Unit
 ```
 
 Append an element, growing (doubling) the backing store when it is full.
@@ -171,7 +172,7 @@ Amortized O(1).
 ## `pop`
 
 ```
-pop : MutArray a -> Option a
+pop : Vector a -> Option a
 ```
 
 Remove and return the last element, or `None` when empty.  Keeps capacity
@@ -180,16 +181,16 @@ Remove and return the last element, or `None` when empty.  Keeps capacity
 ## `setInPlace`
 
 ```
-setInPlace : Int -> a -> MutArray a -> Unit
+setInPlace : Int -> a -> Vector a -> Unit
 ```
 
 Overwrite the element at an index.  Panics when out of the live range
 `[0, length)` (use `push` to extend).
 
-## `IndexMut (MutArray a) Int a`
+## `IndexMut (Vector a) Int a`
 
 ```
-impl IndexMut (MutArray a) Int a
+impl IndexMut (Vector a) Int a
 ```
 
 `setIndex ma i v` writes `v` at `ma`'s index `i`, in place, over the live
@@ -199,7 +200,7 @@ range `[0, length)`, and returns `ma`.  O(1).  Raises the coded
 ## `swap`
 
 ```
-swap : Int -> Int -> MutArray a -> Unit
+swap : Int -> Int -> Vector a -> Unit
 ```
 
 Exchange the elements at two indices.  Caller ensures both are in range.
@@ -207,7 +208,7 @@ Exchange the elements at two indices.  Caller ensures both are in range.
 ## `clear`
 
 ```
-clear : MutArray a -> Unit
+clear : Vector a -> Unit
 ```
 
 Drop all elements (length 0), retaining the allocated capacity.
@@ -215,7 +216,7 @@ Drop all elements (length 0), retaining the allocated capacity.
 ## `mapInPlace`
 
 ```
-mapInPlace : (a -> a) -> MutArray a -> Unit
+mapInPlace : (a -> a) -> Vector a -> Unit
 ```
 
 Apply `f` to every live element in place.
@@ -223,7 +224,7 @@ Apply `f` to every live element in place.
 ## `insertAt`
 
 ```
-insertAt : Int -> a -> MutArray a -> Unit
+insertAt : Int -> a -> Vector a -> Unit
 ```
 
 Insert `x` so that it lands at index `i`, shifting the rest right.
@@ -243,7 +244,7 @@ full, like `push`.
 ## `removeAt`
 
 ```
-removeAt : Int -> MutArray a -> Unit
+removeAt : Int -> Vector a -> Unit
 ```
 
 Drop the element at index `i`.  Out of range leaves the vector unchanged.
@@ -261,7 +262,7 @@ Drop the element at index `i`.  Out of range leaves the vector unchanged.
 ## `sortBy`
 
 ```
-sortBy : (a -> a -> Ordering) -> MutArray a -> Unit
+sortBy : (a -> a -> Ordering) -> Vector a -> Unit
 ```
 
 Sort the live range in place with the supplied comparison.  Stable --
@@ -279,7 +280,7 @@ which does the work, is.
 ## `sort`
 
 ```
-sort : MutArray a -> Unit
+sort : Vector a -> Unit
 ```
 
 Sort the live range in place by the `Ord` instance.
@@ -292,14 +293,14 @@ Sort the live range in place by the `Ord` instance.
 [1, 2, 3]
 ```
 
-## `Foldable MutArray`
+## `Foldable Vector`
 
 ```
-impl Foldable MutArray
+impl Foldable Vector
 ```
 
 Folds over the live range (in order), so `toList`/`length`/`sum`/`elem`/
-`any`/… all work on a `MutArray`.
+`any`/… all work on a `Vector`.
 
 
 *(doctest — run by `medaka test`)*
@@ -311,10 +312,10 @@ Folds over the live range (in order), so `toList`/`length`/`sum`/`elem`/
 3
 ```
 
-## `Eq (MutArray a)`
+## `Eq (Vector a)`
 
 ```
-impl Eq (MutArray a) requires Eq a
+impl Eq (Vector a) requires Eq a
 ```
 
 Element-wise equality over the live ranges (capacity is irrelevant).
@@ -327,10 +328,10 @@ Element-wise equality over the live ranges (capacity is irrelevant).
 True
 ```
 
-## `Debug (MutArray a)`
+## `Debug (Vector a)`
 
 ```
-impl Debug (MutArray a) requires Debug a
+impl Debug (Vector a) requires Debug a
 ```
 
 Rendered as `fromList [a, …]` over the live range.
@@ -343,15 +344,15 @@ Rendered as `fromList [a, …]` over the live range.
 True
 ```
 
-## `Display (MutArray a)`
+## `Display (Vector a)`
 
 ```
-impl Display (MutArray a) requires Display a
+impl Display (Vector a) requires Display a
 ```
 
 Same `fromList [...]` shape as `Debug`, over the live range, with the
 elements rendered by THEIR `Display` (so strings lose their quotes).
-`MutArray` was the one container in the surface that `println` could not
+`Vector` was the one container in the surface that `println` could not
 take (sheet row A-4).
 
 

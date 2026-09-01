@@ -31,7 +31,7 @@ if [ "$#" -gt 0 ]; then
   files="$*"
 else
   files="$ROOT/compiler/frontend/lexer.mdk"
-  for f in core list array string map set io hash_map hash_set mut_array json test; do
+  for f in core list array string map set io hash_map hash_set vector json test; do
     files="$files $ROOT/stdlib/$f.mdk"
   done
 fi

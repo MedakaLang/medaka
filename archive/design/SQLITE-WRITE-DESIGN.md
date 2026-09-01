@@ -39,7 +39,7 @@ Scope locked 2026-06-24 (user-confirmed). Format map verified against a real
   <FileWrite> Result String Unit`, mirroring `readFileBytes` (commit `1b25c9b`) across the
   4 sites below. IN the emitter graph → fixpoint + seed re-mint + OCaml-oracle parity.
 - **Byte builder gap is total** (`byteparser` is decode-only). No `arrayConcat`/`arrayAppend`
-  extern. Build on `stdlib/mut_array.mdk` (`MutArray`, amortized-O(1) `push`, `toArray`).
+  extern. Build on `stdlib/vector.mdk` (`Vector`, amortized-O(1) `push`, `toArray`).
 
 ## Byte-perfect format map (what an encoder must EMIT)
 
@@ -87,8 +87,8 @@ page number (int), the exact `CREATE TABLE …` text.
   VPrim oracle; `runtime/medaka_rt.c` `mdk_write_file_bytes` — untag `(arr[i+1]>>1)`, `"wb"`;
   `compiler/backend/llvm_emit.mdk` register + `emitFileExtern` arm). Fixpoint + seed re-mint +
   oracle parity. Verify: write `[72,73]` → `xxd` shows `48 49`.
-- **P1 — byte builder ✅ DONE (`75ccf95`).** `byteparser/lib/bytebuilder.mdk` — `emitU8/U16BE/U24BE/U32BE/Bytes/SqVarint/BeSint` + `buildArray`; 33/33 round-trip doctests vs the byteparser decoders. **Builder is backed by `Ref (List Int)`** (O(1) prepend + reverse-on-build), NOT `MutArray` as originally sketched: P1 surfaced a compiler finding — **`arrayBlit` is missing from the native interpreter's primitives table** (`compiler/eval/eval.mdk`; present in `lib/eval.ml` + the build path), so `MutArray.push` panics `unbound identifier: arrayBlit` under native `run`/`test` (works under `build` + oracle — a run-vs-build gap). Fix = add an `arrayBlit` entry to `compiler/eval/eval.mdk` (analogous to `arrayCopy` :1789). FIXED `ecd2eee` (added arrayBlit + arraySetUnsafe to the native interp primitives table). The Ref-List builder needs no MutArray so the write path is unblocked.
-- **P1 — (original sketch)** byte builder `byteparser/lib/bytebuilder.mdk` (`MutArray Int`-backed):
+- **P1 — byte builder ✅ DONE (`75ccf95`).** `byteparser/lib/bytebuilder.mdk` — `emitU8/U16BE/U24BE/U32BE/Bytes/SqVarint/BeSint` + `buildArray`; 33/33 round-trip doctests vs the byteparser decoders. **Builder is backed by `Ref (List Int)`** (O(1) prepend + reverse-on-build), NOT `Vector` as originally sketched: P1 surfaced a compiler finding — **`arrayBlit` is missing from the native interpreter's primitives table** (`compiler/eval/eval.mdk`; present in `lib/eval.ml` + the build path), so `Vector.push` panics `unbound identifier: arrayBlit` under native `run`/`test` (works under `build` + oracle — a run-vs-build gap). Fix = add an `arrayBlit` entry to `compiler/eval/eval.mdk` (analogous to `arrayCopy` :1789). FIXED `ecd2eee` (added arrayBlit + arraySetUnsafe to the native interp primitives table). The Ref-List builder needs no Vector so the write path is unblocked.
+- **P1 — (original sketch)** byte builder `byteparser/lib/bytebuilder.mdk` (`Vector Int`-backed):
   `emitU8/U16BE/U24BE/U32BE/Bytes/SqVarint/BeSint`, `buildArray`. Differentially test each
   `emit*` against its `byteparser` decoder (`emitSqVarint`↔`sqVarint`, `emitU32BE`↔`beUint 4`).
 - **P2 — record encoder ✅ DONE (`c4b9731`).** `sqlite/lib/recordenc.mdk` `encodeRecord : List Cell -> Result String (Array Int)` (inverse of `parseRecord`; serial selection incl. 8/9; header-len self-counting; IPK-as-NULL; `CFloat`→`Err`). 7/7 round-trip doctests + the captured real bytes `[4,0,17,1,66,111,25]`. **Self-contained byte emission** (does NOT use `bytebuilder`) because P2 surfaced **F1** (loader): a dependency module's intra-package imports aren't rebased to the dep root, so `byteparser.lib.bytebuilder` (which imports its sibling `byteparser`) is unusable cross-package (`unknown module: lib.byteparser`). **F1 fix IN PROGRESS** (loader, user-chosen). Also surfaced **F2** (pre-existing, tracked): `medaka test` panics on a doctest returning a no-`Debug` type — convention workaround is `showCells`/`roundTripShow`.
@@ -180,4 +180,4 @@ Goldens must strip absolute build paths (MEMORY footgun).
   declare, `compiler/eval/eval.mdk` interpreter primitive, `runtime/medaka_rt.c` C
   impl, `compiler/backend/llvm_emit.mdk` emit arm) — native has no fifth OCaml site.
 - Readers to invert: `sqlite/lib/{header,btree,recordfmt}.mdk`; IPK locator
-  `pkColumnIndex` in `sqlite/lib/sqlite.mdk`. Buffer: `stdlib/mut_array.mdk`.
+  `pkColumnIndex` in `sqlite/lib/sqlite.mdk`. Buffer: `stdlib/vector.mdk`.
