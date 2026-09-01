@@ -549,8 +549,9 @@ compiler/driver/medaka_cli.mdk` is empty: `bench` is a dead *declaration keyword
 (parser/typecheck/fmt/LSP surface), not a verb. Wrong subsystem, wrong gates. It stays open on
 its own leg.
 
-**Splitting `medaka_cli.mdk` (3,646 lines) — out of scope.** That is #2282. This document
-makes it more tempting, not less; note findings there rather than acting on them.
+**Splitting `medaka_cli.mdk` (line count: `make arch-census`) — out of scope.** That is
+#2282. This document makes it more tempting, not less; note findings there rather than
+acting on them.
 
 ---
 

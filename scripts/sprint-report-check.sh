@@ -1,28 +1,45 @@
 #!/bin/sh
-# sprint-report-check.sh — mechanical §9 section check for a sprint agent report.
+# sprint-report-check.sh — mechanical section check for a v8 sprint agent report.
 # NOT A GATE (ledgered in test/CI-COVERAGE-TOOLS.txt): it grades documents in an
 # ephemeral sprint record dir under /var/tmp, never anything in this tree.
 #
 # Usage: sh scripts/sprint-report-check.sh <report.md> [...]
-# Exit 0 = every named report carries all six sections plus its `time:` line;
-# exit 1 = at least one does not (or does not exist).
+# Exit 0 = every named report opens with a well-formed Verdict line and carries
+# a marked Evidence and Notes section; exit 1 = at least one does not (or does
+# not exist).
 #
-# Point it at REPORTS ONLY. A ledger (reports/rear-seat-ledger.md) is not a §9
-# report and will bounce; a sweep that always fires one known-false alarm is how
-# a check stops being believed, which is the dynamic this script exists to fix.
+# THE FORMAT IT GRADES: THREE sections — Verdict, Evidence, Notes — per
+# `.claude/skills/sprint-packet/SKILL.md` § "The report" and, for the two
+# role agents that write their own verdict token instead of a sprint-packet
+# one, `.claude/agents/sprint-reviewer.md` and `.claude/agents/sprint-retro.md`.
+# Verdict must be one of: `LANDED @<sha>`, `REFUSED`, `BLOCKED`, `SPIKE-DONE`,
+# `REVIEW-DONE: <n> findings (<k> S0/S1)`, or `RETRO: <n> proposals`. There is
+# no `time:` line. `sprint-packet` and the two agent role files are the
+# sources for the shape; if this script disagrees with any of them, they win
+# and this script is the bug (see #2276 for the checker-format incident
+# history).
 #
-# PRESENCE ONLY — whether the content is any good is a seat's judgment, not this
-# script's. It exists so report intake needs no judgment at all: in
-# sprint/ctor-identity 10 of 31 report files were missing at least one section
-# and ZERO bounces were issued, because the roles' own definitions licensed a
-# role-local body format while claiming "§9 governs".
+# Point it at REPORTS ONLY. A packet, a contract, or NOTES.md is not a report
+# and will bounce; a sweep that always fires one known-false alarm is how a
+# check stops being believed.
 #
-# A section counts as present only if it is MARKED: a heading (`## Verdict`), a
-# bold label (`**Verdict**` / `**Verdict:**`), or a column-0 `Verdict:` line. An
-# earlier draft accepted `^<name>` anywhere at column 0 and was fooled by the
-# prose line "Decisions-surfaced item awaiting ruling." — a false NEGATIVE, i.e.
-# the masking direction of the very check. If you loosen this matcher, re-run it
-# over a known-bad corpus and confirm the miss count does not drop.
+# PRESENCE ONLY — whether the content is any good is the orchestrator's
+# judgment, not this script's. It exists so report intake needs no judgment at
+# all (see #2276 for the corpus that motivated this).
+#
+# HOW EACH SECTION IS RECOGNISED — this matcher is deliberately tight:
+#   * Verdict is positional AND lexical: the FIRST non-blank line must BE one
+#     of the accepted verdict forms above, optionally behind a `## Verdict` /
+#     `**Verdict:**` / column-0 `Verdict:` marker on that same line. A report
+#     whose verdict is buried below prose is not machine-readable by the
+#     orchestrator, which merges by the SHA on that line.
+#   * Evidence and Notes count as present only if MARKED: a heading
+#     (`## Evidence`), a bold label (`**Notes**` / `**Notes:**`), or a
+#     column-0 `Notes:` line — a bare `^<name>` match anywhere at column 0 is
+#     a known false-negative trap, fooled by prose that merely mentions the
+#     section name (see #2276).
+# If you loosen this matcher, re-run it over a known-bad corpus and confirm the
+# miss count does not drop.
 rc=0
 for f in "$@"; do
   if [ ! -f "$f" ]; then
@@ -31,15 +48,30 @@ for f in "$@"; do
     continue
   fi
   miss=
-  for s in 'Verdict' 'Evidence' 'Decisions[ -]surfaced' 'Deviations' 'Not[ -]covered' 'Friction'; do
+
+  # Verdict: positional (first non-blank line) and lexical (one of the six accepted forms).
+  first="$(sed -e '/^[[:space:]]*$/d' -e 'q' "$f")"
+  # Strip an optional Verdict marker off that line. Explicit [Vv] classes and
+  # BREs only — GNU sed's `I` flag and `\|` alternation are not portable to
+  # BSD sed ([B-DUAL-PLATFORM]).
+  verdict_body="$(printf '%s' "$first" |
+    sed -e 's/^ \{0,3\}//' \
+        -e 's/^#\{1,4\} *//' \
+        -e 's/^\*\* *[Vv]erdict *:\{0,1\} *\*\*//' \
+        -e 's/^[Vv]erdict//' \
+        -e 's/^ *: *//' \
+        -e 's/^ *//')"
+  if ! printf '%s\n' "$verdict_body" |
+       grep -qE '^(LANDED @[0-9a-f]{7,40}|REFUSED|BLOCKED|SPIKE-DONE|REVIEW-DONE: [0-9]+ findings \([0-9]+ S0/S1\)|RETRO: [0-9]+ proposals)( .*)?$'; then
+    miss="$miss [Verdict]"
+  fi
+
+  for s in 'Evidence' 'Notes'; do
     if ! grep -qiE "^ {0,3}(#{1,4} *|\*\*)${s}" "$f" && ! grep -qiE "^${s} *:" "$f"; then
-      miss="$miss [$(printf '%s' "$s" | sed 's/\[ -\]/ /g')]"
+      miss="$miss [$s]"
     fi
   done
-  # The §9 time-split line, checked here for the same reason the sections are:
-  # it is the sprint's only wall-clock instrument, it is asserted by ~12 role
-  # definitions, and a duty that is only asserted gets dropped silently.
-  grep -qiE '^ {0,3}(\*\*)?time *:' "$f" || miss="$miss [time:]"
+
   if [ -n "$miss" ]; then
     printf '%s: BOUNCE — missing:%s\n' "$f" "$miss"
     rc=1
