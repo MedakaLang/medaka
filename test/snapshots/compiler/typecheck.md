@@ -1,5 +1,5 @@
 # META
-source_lines=37919
+source_lines=37798
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -7358,80 +7358,50 @@ data CrossRun = CrossRun {
     universeMethodIfaceParamsRef : Ref (OrdMap (IfaceRef, List String, Ty, List (String, List Kind))),
     universeMethodIdentsRef : Ref (OrdMap (List (Ident, (IfaceRef, List String, Ty, List (String, List Kind))))),  -- #1111 A-2.5 (#1092): the identity-keyed COMPANION of the line above — see methodIdentOf
     universeMethodCollidedRef : Ref (List String),  -- #1111 A-2.5: the method NAMES the line above holds ≥2 distinct identities for (normally EMPTY)
-    -- ⚠️ `universeRegisteredIfacesRef` was HERE and is RETIRED by #1569.  It was a
-    -- `Unit`-valued NAME-membership set (#1111 A-2.4: DELIBERATELY bare-name, never
-    -- re-keyed — the reasoning is preserved in the `ifaceRegistered` history at
-    -- `builtinClassPresent`), the sibling of `PerRun.registeredIfacesRef` grown by
-    -- `appendUniverseAccums` and copied into the per-run ref on the Module arm.
-    -- #1539 deleted `ifaceRegistered`, its only reader, leaving both refs
-    -- write-only; #1569 removes the write side too.  Do not re-add either half
-    -- without a reader.
     universeMethodDispatchIdxByIdRef : Ref (List ((IfaceRef, String), Int)),  -- #1351: the interface dispatch-index universe, keyed ((IfaceRef, method name), Int).  Its bare-name-keyed predecessor `universeMethodDispatchIdxRef` was RETIRED by L5 (CONTRACT) once `dispatchIdxScoped` stopped falling back to it — read via `methodDispatchIdxByIdRef`.
     universeRecordByName : Ref (OrdMap RecordInfo),
     universeRecordIdentsRef : Ref (OrdMap (List (Ident, String, RecordInfo))),  -- #1111 A-2.12 (#1319 unit 2): the identity-keyed COMPANION of the line above — see insertRecordIdents
     universeRecordCollidedRef : Ref (List String),  -- #1111 A-2.12: the registry KEYS the line above holds ≥2 distinct identities for (normally EMPTY)
-    -- ⚠️ `universeFieldOwners` was HERE and is RETIRED by A-3.2b slice 3 (#1512).
-    -- It was the per-module-grown cross-run field-name → owning-registry-key multimap,
-    -- marshalled by `loadDataUniverse`/`storeDataUniverse`.  The per-module seed now
-    -- comes from stage K: `declEnvsRef.deOwnersBefore`, one `omLookup` by loader module
-    -- id over the prefix chain `declEnvSeedChain` builds.  Do not re-add it — a cross-run
-    -- copy beside K is two answers to "which records can this module see a field of", and
-    -- the copy is the one whose population depends on marshalling order.
-    -- ⚠️ `universeDataParamKinds` was HERE and is RETIRED by A-3.2b slice 2 (#1512).
-    -- Same machine one projection over: the cross-run data-type param-KIND list
-    -- (identity-keyed since #1111 A-2.3).  Its seed is `declEnvsRef.deKindsBefore`, and
-    -- the projection that fills it is `kindPublicDataDecl` — a PEER of `publicDataDecl`,
-    -- admitting `VisAbstract` and public `DNewtype` too, because those are the decls
-    -- `registerOpaqueParamKinds` used to publish separately (#804/#1028).  That pass is
-    -- gone with this cell; do not re-add either.
-    -- ⚠️ `universeIfaceRequiredRef` was HERE and is RETIRED by A-3.5a (#1557).
-    -- It was the per-module-grown iface → required-method-names `Registry` that
-    -- impl-completeness read on the Module arm, identity-keyed since #1111 A-2.4
-    -- (`regKeyOfTab (ifaceTabKey ifaceOrigin name)`).  Stage K's `CE` already holds
-    -- exactly that value under exactly that key (`ceRowRequired`, minted by
-    -- `classEnvRowsOf` from the same `requiredMethodNames`), so the cell was a second
-    -- copy of a stage-K projection — the dual-write shape design law L1 removes.  Its
-    -- one reader (`implCompletenessMsgsOfMap`) now calls `ceRequiredAt` at the reading
-    -- module's ordinal, and the FLAT arm's separate bare-name scan
-    -- (`ifaceRequiredMethods`) went with it: there is now ONE checker for both modes.
-    -- Its writer `insertIfaceRequired` and that writer's `appendUniverseAccums` call
-    -- are gone too.  ⚠️ It was NOT in the `loadDataUniverse`/`storeDataUniverse`
-    -- ladder (it was written only from `appendUniverseAccums`), so unlike A-3.5c this
-    -- retirement does not touch that marshalling pair and cannot desynchronize it.
-    -- ⚠️ `universeIfaceParamKinds` was HERE and is RETIRED by A-3.5c (#1557).
-    -- It was #822's iface half of the kind universe, identity×slot-keyed since
-    -- #1111 A-2.4 and marshalled beside `universeAliasTable` above by the same
-    -- `loadDataUniverse`/`storeDataUniverse` pair.  Its one reader
-    -- (`checkGradedImplTys`) now sources from stage K: `declEnvsRef.deIfaces`,
-    -- projected at the reader's own ordinal by `ceSlotKindsAt`.  Its `perRun` half
-    -- (`ifaceParamKindsRef`) and its writer went with it -- do not re-add either.
-    -- A cross-run copy beside K is two answers to "what kind is this interface's
-    -- slot", and the copy is the one whose population depends on marshalling order.
-    -- ⚠️ `universeAliasTable` was HERE and is RETIRED by A-3.2b's residual (#1512).
-    -- It was the per-module-grown cross-run copy of the type-ALIAS table, marshalled
-    -- by `loadDataUniverse`/`storeDataUniverse`.  Its readers now source from stage
-    -- K: `declEnvsRef.deData.deAliases`, projected at the reader's own ordinal by
-    -- `aliasUniverseAt`.  Do not re-add it — a cross-run copy beside K is two
-    -- answers to "which aliases can this module see", and the copy is the one that
-    -- would silently carry `rejectCyclicAliases`' per-module deletions.
     universeDataEnv : Ref TcEnv,
     universeCtorIdentsRef : Ref (OrdMap (List (Ident, String, Scheme))),  -- #1111 A-2.11 (#1319 unit 1): the identity-keyed COMPANION of universeDataEnv's ctor map — see insertCtorIdents
     universeCtorCollidedRef : Ref (List String),  -- #1111 A-2.11: the ctor NAMES the line above holds ≥2 distinct identities for (normally EMPTY)
-    -- ⚠️ `universeDataDecls` was HERE and is RETIRED by A-3.2b (#1512, #1319 unit 4).
-    -- It was #674's positional `List Decl` of prior modules' public data decls, the
-    -- overlay pool; both its consumers now read stage K's `DeclEnvs.deModules` at the
-    -- reader's own ordinal.  Do not re-add a cross-run decl accumulator: the envelope
-    -- already holds the whole graph, keyed by loader module id and ordinal.
-    --
-    -- ⚠️ AND SO WERE `obUnivConcreteRef`/`obUnivHeadlessRef`/`obUnivIfaceTagsRef` —
-    -- the per-module-grown obligation impl universe, RETIRED by A-3.4 PR2 (#1112).
-    -- Not merely unread: stage K's `IE` (`declEnvsRef.deImpls`, projected at the
-    -- reader's ordinal by `ieUniverseAt`) is now the single answer to "what impls
-    -- exist" on the Module path, and keeping a second still-written copy is exactly
-    -- the two-sources-of-truth divergence design law L1 removes.  Note the shape
-    -- these two retirements share: BOTH replaced a cross-run accumulator with an
-    -- ordinal-filtered read of the one whole-graph envelope.  That is the arc, and
-    -- the `cross_allowed` count is what records it.
+    -- ⚠️ TOMBSTONES.  Ten cross-run field-Refs were RETIRED from this record — seven
+    -- `universe*` cells plus the three `obUniv*` — and each is now answered by a stage-K
+    -- structure, projected at the READING module's own ordinal.
+    -- 🚨 DO NOT RE-ADD A CROSS-RUN COPY BESIDE STAGE K (design law L1): that is two
+    -- answers to one question, and the copy is always the one whose population depends on
+    -- marshalling order.  Retired cell -> what answers it now:
+    --   `universeRegisteredIfacesRef` (#1569) -- NOTHING.  Its only reader
+    --      `ifaceRegistered` was deleted by #1539, leaving it and its `PerRun` sibling
+    --      write-only.  It was deliberately bare-name while it lived (#1111 A-2.4; the
+    --      reasoning is kept in `builtinClassPresent`'s header).  Do not re-add either
+    --      half without a reader.
+    --   `universeFieldOwners` (A-3.2b slice 3, #1512) -- `declEnvsRef.deOwnersBefore`,
+    --      one `omLookup` by loader module id over `declEnvSeedChain`'s prefix chain.
+    --   `universeDataParamKinds` (A-3.2b slice 2, #1512) -- `declEnvsRef.deKindsBefore`,
+    --      filled by `kindPublicDataDecl`, a PEER of `publicDataDecl` that also admits
+    --      `VisAbstract` and public `DNewtype` because those are the decls
+    --      `registerOpaqueParamKinds` used to publish separately (#804/#1028).  That pass
+    --      is gone with this cell; re-add neither.
+    --   `universeIfaceRequiredRef` (A-3.5a, #1557) -- stage K's `CE` already holds that
+    --      value under that key (`ceRowRequired`); its one reader
+    --      `implCompletenessMsgsOfMap` now calls `ceRequiredAt`, and the FLAT arm's
+    --      separate bare-name scan `ifaceRequiredMethods` went with it, so there is now
+    --      ONE impl-completeness checker for both modes.  ⚠️ It was never in the
+    --      `loadDataUniverse`/`storeDataUniverse` ladder, so unlike A-3.5c its retirement
+    --      cannot desynchronize that marshalling pair.
+    --   `universeIfaceParamKinds` (A-3.5c, #1557) -- `declEnvsRef.deIfaces`, projected at
+    --      the reader's ordinal by `ceSlotKindsAt`.  #822's iface half of the kind
+    --      universe; its `perRun` half `ifaceParamKindsRef` and its writer went too.
+    --   `universeAliasTable` (A-3.2b residual, #1512) -- `declEnvsRef.deData.deAliases`,
+    --      projected by `aliasUniverseAt`.  A copy would silently carry
+    --      `rejectCyclicAliases`' per-module deletions.
+    --   `universeDataDecls` (A-3.2b, #1512 / #1319 unit 4) -- #674's positional overlay
+    --      pool; both consumers now read `DeclEnvs.deModules` at the reader's own ordinal,
+    --      the envelope already holding the whole graph keyed by loader module id.
+    --   `obUnivConcreteRef`/`obUnivHeadlessRef`/`obUnivIfaceTagsRef` (A-3.4 PR2, #1112) --
+    --      stage K's `IE` (`declEnvsRef.deImpls`, projected by `ieUniverseAt`) is the
+    --      single answer to "what impls exist" on the Module path.  Not merely unread.
     builtinClassesRef : Ref BuiltinClasses,  -- #1446 P1 + #1539 / DICT §8 I7: the four operator/literal classes' identities AND presence, read off the PRELUDE's own DInterface decls — see seedBuiltinClasses
     crossModuleFunConstraintsRef : Ref (List (String, List Int)),
     crossModuleFunConstraintsQualRef : Ref (List ((String, String), List Int)),
@@ -12854,6 +12824,23 @@ builtinClassPresent BSemigroup =
   crossRun.value.builtinClassesRef.value.bcSemigroupPresent
 
 -- the identity-carrying interface reference a synthetic occurrence records.
+--
+-- 🚨 STANDING CONDITION, FOR THE FOUR CALL SITES THIS FUNCTION FEEDS
+-- (`recordIfaceObligation`, `inferNumLitBare`, `numCallObls`, `numDictObls`).  Each of
+-- them builds a DECL-LAYER obligation goal out of this ref, via `builtinClassOrigin` ->
+-- `builtinClassesRef`, a table `builtinClassesGo` populates by reading
+-- `DInterface { ifaceOrigin }`.  That is sound TODAY only because no user declaration can
+-- reach that table's population — MEASURED on both arms: a module IN the import graph
+-- redeclaring one of the four spellings is rejected `Duplicate interface: Semigroup`
+-- (exit 1); a module NOT in the graph is never loaded at all, so it contributes no
+-- `DInterface` to the walk; and a user `core.mdk` cannot shadow the prelude.  The
+-- cross-layer defect U1c (#1507) cured at `recordImplObligation` RETURNS at all four
+-- sites if ANY of these changes: the duplicate-interface guard is relaxed; DICT §7.1 U1
+-- makes the prelude a graph node (at which point §8 I4 makes two same-spelled
+-- declarations legal, which is precisely what removes the guard); or a fifth
+-- `BuiltinClass` is added whose spelling the guard does not cover.  The safety here is a
+-- property of the LANGUAGE's current namespace rules, not of this channel.  Background:
+-- `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` §10.7.
 builtinIfaceRef : BuiltinClass -> IfaceRef
 builtinIfaceRef c =
   IfaceRef { irName = builtinClassName c, irOrigin = builtinClassOrigin c }
@@ -13616,119 +13603,42 @@ recordImplObligation x mono
   | otherwise = match omLookup x perRun.value.methodIfaceParamsRef.value
     None => mono
     Some (iface, typarams, mty, _) =>
-      -- U1c (#1507): `iface`, NOT `ifaceRefBare iface.irName` — RESTORED, per the repo
-      -- owner's ratified ruling.  The class a method-occurrence goal names is the
-      -- interface that DECLARES the method the occurrence resolved to, carrying that
-      -- `interface` declaration's I4 identity `(originModule, name)`
-      -- (`docs/spec/DICT-SEMANTICS.md` §8 I4, `:1864`: identity is "assigned once
-      -- where it is declared", and every occurrence is "resolved to one such identity"
-      -- before entailment runs).  There is no competing "occurrence layer": an
-      -- interface-name occurrence is *resolved to* a declaration identity, so
-      -- `DImpl.implOrigin` and `DInterface.ifaceOrigin` are the SAME layer — one
-      -- ASSIGNED once at the interface's own `interface` decl, one RESOLVED-TO at each
-      -- occurrence (including this method's declaring interface, right here) — and
-      -- comparing them is not a category error.
+      -- U1c (#1507): pass `iface`, NOT `ifaceRefBare iface.irName`.  ⚠️ THE LIVE RULE,
+      -- not merely a citation: the class a method-occurrence goal names is the interface
+      -- that DECLARES the method the occurrence resolved to, carrying that `interface`
+      -- declaration's I4 identity `(originModule, name)` (`docs/spec/DICT-SEMANTICS.md`
+      -- §8 I4 — identity is assigned once where it is declared, and every occurrence is
+      -- resolved to one such identity before entailment runs).  There is no competing
+      -- "occurrence layer": `DImpl.implOrigin` and `DInterface.ifaceOrigin` are the SAME
+      -- layer — one ASSIGNED at the `interface` decl, one RESOLVED-TO at each occurrence
+      -- — so comparing them is not a category error.  Discarding the identity here
+      -- silently accepts #1438's cross-module collision shape (a `No impl of Same for P`
+      -- bucket miss on a program whose `impl Same P` is three lines up); carrying it
+      -- REJECTS that shape, discriminating METHOD-OCCURRENCE goals the same way the other
+      -- three goal-producer call sites always did.
       --
-      -- 🚨 A DO-NOT-RESTORE ban stood at this exact site from #1480 (withdrawn
-      -- deliberately) until U1c landed.  Its premise was that `stampDeclOrigin`
-      -- ("which module DECLARES this interface") and `fillIfaceOccOrigin`
-      -- ("what did this occurrence RESOLVE to") are two stampers answering two
-      -- INCOMPARABLE questions.  That premise was wrong: they answer the SAME
-      -- question — "which interface declaration does this name denote" — from two
-      -- vantage points that PRODUCE THE SAME VALUE wherever resolution has a unique
-      -- answer, which `fillIfaceOccOrigin` (via `mapOriginsInDecl`, run in the same
-      -- scope as every other occurrence stamp) guarantees for exactly the programs
-      -- that reach this line.
+      -- 🚨 A DO-NOT-RESTORE ban stood at this exact site from #1480 until U1c retired it.
+      -- Do NOT reinstate it on a bare assertion that the two layers are "different" — and
+      -- do NOT cite "resolve already rejects the ambiguous case" as cover either: MEASURED,
+      -- resolve catches a DIRECT double import of a colliding method name but does NOT
+      -- diagnose a RE-EXPORT MERGE of the same collision, which reaches this line as
+      -- `overrideScopedMethods`' arbitrary floor answer with no diagnostic either way.
       --
-      -- ⚠️ "RESOLVE diagnoses every ambiguous case" is FALSE AS A BLANKET CLAIM, and an
-      -- earlier revision of this paragraph said it anyway — refuted in one experiment,
-      -- which is exactly the shape that licenses reinstating the ban, so the carve-out
-      -- has to be explicit. MEASURED, both arms, two modules each declaring an
-      -- interface with the same method name (`p.IP.mth`, `g.IG.mth`), merged into a
-      -- third module via `export import p.{IP,mth}` + `export import g.{IG,mth}`: a
-      -- DIRECT double import of the same name is what resolve catches
-      -- (`Ambiguous occurrence: 'mth' is exported by both …`, `importedMethodEntry`'s
-      -- own comment below); a RE-EXPORT MERGE of the same collision is not caught by
-      -- resolve at all — `check` exits 0 or 1 depending on nothing but which of the two
-      -- `export import` lines comes first in the re-exporting module, with NO
-      -- diagnostic from resolve either way. In that shape `scopedMethodEntry` cannot
-      -- decide it (`importedMethodEntry` sees two import-witnessed candidates, which
-      -- is the SAME two-candidates shape the direct-import case rejects — but nothing
-      -- upstream rejects it here), so `overrideScopedMethods` keeps the FLOOR's
-      -- arbitrary last-registered answer, and this site silently inherits it. So: the
-      -- two values disagree only in the ambiguous case, unambiguous cases genuinely
-      -- agree, and a DIRECT import ambiguity genuinely is rejected upstream — but a
-      -- RE-EXPORT-MERGE ambiguity is not, and reaches this site as the floor's
-      -- arbitrary identity rather than as a diagnostic. The RULING survives this
-      -- carve-out (an unambiguous occurrence's identity is still correct here, which is
-      -- the property U1c is about); the flat "already rejected upstream" sentence does
-      -- not, and is corrected to say so. Do NOT reinstate the ban on a bare assertion
-      -- that the two layers are "different" — but do not cite "resolve already
-      -- rejects the ambiguous case" as blanket cover either; it doesn't, for this
-      -- shape. (Adjacent to the open #1288 re-export-merge family; not this unit's to
-      -- fix.)
+      -- ⚠️ THIS IS NOT THE ONLY DECL-LAYER GOAL SITE.  Four more
+      -- (`recordIfaceObligation`, `inferNumLitBare`, `numCallObls`, `numDictObls`) build
+      -- their goal from `builtinIfaceRef`; the STANDING CONDITION that keeps them safe
+      -- lives at that function's own definition, where it is about them.  And "the third
+      -- and last of the `ifaceRefBare` producers" (U1b retired the other two,
+      -- `schemeObligationsRef` and `funConstraintIfacesRef`) is a claim about
+      -- `ifaceRefBare` MINTS ONLY — the `ImplUniverse` channel has at least six goal
+      -- producers in total.  Re-derive with `grep -n ifaceRefBare` rather than trust a
+      -- count, and do not read the narrow claim as the broad one.
       --
-      -- ⚠️ THIS IS NOT THE ONLY DECL-LAYER GOAL SITE, AND AN EARLIER VERSION OF THIS
-      -- COMMENT SAID IT WAS ("the ONE goal producer … the other three are all
-      -- OCCURRENCE layer").  That was true of the sites examined and FALSE OF THE SET.
-      -- Census, re-derived here rather than relayed -- `grep -n builtinIfaceRef`:
-      -- `recordIfaceObligation`, `inferNumLitBare`, `numCallObls` and `numDictObls`
-      -- all build their goal from `builtinIfaceRef` -> `builtinClassOrigin` ->
-      -- `builtinClassesRef`, and `builtinClassesGo` populates that table by reading
-      -- `DInterface { ifaceOrigin }`.  FOUR more decl-layer goals, making the same
-      -- cross-layer comparison this site was just cured of.
-      --
-      -- They are unreachable TODAY, and the reason is NOT that they are occurrence-
-      -- layer -- it is that no user declaration can reach that table's population.
-      -- MEASURED on both arms:
-      --   * a module IN the import graph redeclaring one of the four spellings is
-      --     rejected `Duplicate interface: Semigroup`, exit 1;
-      --   * a module NOT in the graph is never loaded at all (it can contain arbitrary
-      --     garbage and `check` still exits 0), so it contributes no `DInterface` to
-      --     `builtinClassesGo`'s walk either;
-      --   * a user `core.mdk` cannot shadow the prelude -- `import core.{n}` for a name
-      --     only the user's file declares is unresolvable, exit 1.
-      --
-      -- 🚨 STANDING CONDITION.  Defect 1 RETURNS at those four sites if ANY of these
-      -- changes: the duplicate-interface guard is relaxed; §7.1 U1 makes the prelude a
-      -- node (at which point §8 I4 makes two same-spelled declarations legal, which is
-      -- precisely what removes the guard); or a fifth `BuiltinClass` is added whose
-      -- spelling the guard does not cover.  The safety here is a property of the
-      -- LANGUAGE's current namespace rules, not of this channel.
-      --
-      -- MEASURED, and it is #1288's own reproduction verbatim: a `mid.mdk` doing
-      -- `export import p.*` + `export import g.*` merges two unrelated `Same`
-      -- interfaces, an importer's `impl Same P` gets `implOrigin = g` while the method
-      -- `pmth` it defines belongs to `p.Same`, and the goal `TkIdent p Same` misses the
-      -- impl's `TkIdent g Same` bucket.  Result: `No impl of Same for P` on a program
-      -- whose `impl Same P` is three lines up, with no syntax available to say which
-      -- `Same` was meant.  The bare compatibility leg does NOT cover this -- it protects
-      -- goal-WITHOUT-identity against impl-WITH-identity, and this is
-      -- goal-with-identity against impl-with-a-DIFFERENT-identity.
-      --
-      -- Two OTHER goal producers (`recordSigConstraintObls`,
-      -- `recordMethodLevelSlotObls` via `constraintOrigin`, `reqToObligation` via
-      -- `requireOrigin`) already carried identity before U1c (they never went through
-      -- the bare-name detour this site did) -- filled by the SAME walk in the SAME
-      -- scope as `implOrigin`, so they agree with it by construction. This site is the
-      -- THIRD, and last, of the `ifaceRefBare` producers -- U1b retired the other two
-      -- (`schemeObligationsRef`, `funConstraintIfacesRef`); see the census a few lines
-      -- above and re-derive it with `grep -n ifaceRefBare` rather than trust a count.
-      -- ⚠️ THAT IS NOT A CLAIM THAT THE `ImplUniverse` CHANNEL HAS ONLY THREE OR FOUR
-      -- GOAL PRODUCERS TOTAL. It does not: `recordCallObligations`'s `PCallSlot`
-      -- predicate (:7205, above), the `builtinIfaceRef`-derived sites named a few
-      -- paragraphs up, and others besides all push a `Predicate` into the same channel
-      -- -- a derived count of the WHOLE set is at least six. "Last of the three" here
-      -- means only "last of the sites that ever minted `ifaceRefBare`", the narrow
-      -- claim the census actually supports -- do not read it as "last of N total
-      -- producers" for any N not independently re-derived.
-      --
-      -- U1c (#1507) closes the capability gap the retired ban's COST paragraph
-      -- recorded: this site now discriminates METHOD-OCCURRENCE goals the same way
-      -- the other three always did, so the #1438 collision shape reached through a
-      -- bare method call (`p/pl`, `p/po` in the review corpus) is REJECTED, not
-      -- silently accepted.  See `test/dict_fixtures/i4-xmod-method-occurrence-*` for
-      -- the positive pair and `test/must_fail_fixtures/1507-…` (drained, removed).
+      -- The retired ban's premise and why it was wrong, the re-export-merge measurement,
+      -- the `builtinIfaceRef` census, and #1288's verbatim repro:
+      -- `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` §10.7.  Positive pair:
+      -- `test/dict_fixtures/i4-xmod-method-occurrence-{foreign-iface-rejected,
+      -- own-iface-control}`.
       let _ = pushPendingObl iface typarams mty mono PMethodOcc !currentLoc
       -- #818 (#838 I3): also record each method-level `=>` constraint slot (e.g.
       -- `Ord b` on `peer : Ord b => a -> b -> b -> Bool`) as its OWN obligation, so an
@@ -25856,31 +25766,26 @@ checkBodyImpl seed mode prog0 =
     -- must know whether this pass is the PRELUDE's, because the prelude contributes to
     -- S1's INTERFACE operand but NOT to its STANDALONE one.  See its header.
     Module mid _ _ => appendUniverseAccums mid prog0
-  -- 🚨 #1112 A-3.4 PR2 — THE `IE` READER FLIP.  THIS IS THE ONE PRODUCTION READ OF
-  -- STAGE K's `IE`, and it is what makes the registry real rather than shelf-ware.
+  -- 🚨 #1112 A-3.4 PR2 — THE `IE` READER FLIP.  A production read of stage K's `IE`
+  -- (A-3.5b added a second, `ieRowsVisibleAt`; do NOT re-instate "the ONE place" here).
+  -- It replaced the three `obUniv*` `CrossRun` accumulators, which are GONE rather than
+  -- merely unread — two sources of truth for "what impls exist" is what design law L1
+  -- removes.  The WAS/NOW migration narrative, and the whole-prefix equality MEASUREMENT
+  -- that licensed deleting the `ieShadowCompare` instrument, live in
+  -- `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` §9.5a; what stays here are the facts a
+  -- reader OF THIS LINE needs.
   --
-  -- WAS (#154 PR3, retired here): `ImplUniverse obUnivConcreteRef.value
-  -- obUnivHeadlessRef.value obUnivIfaceTagsRef.value` — three `CrossRun` accumulators
-  -- grown one module at a time by the `appendUniverseAccums prog0` immediately above.
-  -- Those three fields are GONE, not merely unread: these were their only readers, so
-  -- leaving them would have left two sources of truth for "what impls exist" (design
-  -- law L1) and the `cross_allowed` ratchet would still carry three rows this unit
-  -- exists to retire.
-  --
-  -- NOW: a projection of the whole-graph `IE` through `ieUniverseAt`, the universe
-  -- read accessor (A-3.5b added a second `IE` read, `ieRowsVisibleAt`; see that
-  -- function's header, and do not re-instate "the ONE place" here).
-  --
-  -- 🚨 AND SINCE A-3.6 (#1558) IT IS NO LONGER FILTERED TO THIS MODULE'S ORDINAL
-  -- PREFIX.  This paragraph said "filtered to this module's ordinal prefix … the
-  -- filter stays ON here (it must)", which was A-3.4 PR2 correctly refusing to do
-  -- A-3.6's job early.  A-3.6 has now done it: `ieSnapAt` routes through
-  -- `ieCandidacyVisibleAt`, which is `True`, so this binding is the WHOLE GRAPH's
-  -- impl universe regardless of `mid`'s ordinal.  **This line is where A-3's
-  -- headline C4/I2 claim is cashed** — everything an obligation check on the
-  -- multi-module path knows about which impls exist comes from here, and it now
-  -- knows the same thing in every module, which is what *"import scoping never
-  -- decides which instances exist"* means operationally.
+  -- 🚨 SINCE A-3.6 (#1558) THIS IS NOT FILTERED TO THIS MODULE'S ORDINAL PREFIX.
+  -- `ieSnapAt` routes through `ieCandidacyVisibleAt`, which is `True`, so this binding is
+  -- the WHOLE GRAPH's impl universe regardless of `mid`'s ordinal.  This line is where
+  -- A-3's C4/I2 claim is cashed: every obligation check on the multi-module path knows the
+  -- same impl population in every module — *"import scoping never decides which instances
+  -- exist"* (`docs/spec/DICT-SEMANTICS.md` §8 I5).  It WIDENS #1438's same-spelled-
+  -- interface reach (#1482 measured that topological prefix scoping was accidentally
+  -- load-bearing for it); expected and licensed, but an acceptance delta.  ⚠️ The pin that
+  -- used to grade that delta, `test/must_fail_fixtures/1072-overlap-xmod-bare-head-arm-
+  -- order`, IS GONE FROM THE TREE (derive: `ls test/must_fail_fixtures | grep 1072`) — see
+  -- §9.5a; do not read its absence as "already drained".
   --
   -- ⚠️ `declEnvsOrdOf mid` IS STILL PASSED AND IS NOW INERT ON THIS PATH.  It is
   -- kept so the call site does not move and so re-scoping candidacy later is a
@@ -25889,15 +25794,6 @@ checkBodyImpl seed mode prog0 =
   -- here — an unknown module id now gains the whole graph rather than losing
   -- everything, the opposite of the fail-CLOSED story `declEnvsOrdOf` documents for
   -- the NAME axis.
-  --
-  -- ⚠️ WHAT THIS WIDENS, said out loud rather than left to be discovered: #1482's
-  -- measurement showed topological prefix scoping was accidentally load-bearing for
-  -- #1438's same-spelled-interface shape, so #1438's reach grows here.  That is
-  -- expected and licensed (§8 I5), not a regression — but it is an acceptance delta,
-  -- and the pin that grades it is
-  -- `test/must_fail_fixtures/1072-overlap-xmod-bare-head-arm-order`, which A-3.6
-  -- flips: `main.mdk` must now print `specific` with `control.mdk` STILL `specific`.
-  -- Red on both legs is a real regression, not the drain.
   --
   -- 🚨 BOUND ONCE, READ TWICE, AND THE "ONCE" IS LOAD-BEARING.  There are TWO Module-arm
   -- consumers — `residualUnivRef` (#1549) just below, and the end-of-body obligation
@@ -25908,23 +25804,6 @@ checkBodyImpl seed mode prog0 =
   -- accumulator these replaced was likewise grown once, above, and read at both sites).
   -- A third consumer should take this binding too, or say in writing why it needs a
   -- different ordinal.
-  --
-  -- WHY THIS IS EQUALITY-PRESERVING, MEASURED AND NOT ASSUMED.  §9.5's argument is the
-  -- conjunction of (a) a fold algebra — `growImplUniverse` is the SAME writer on both
-  -- sides, over triples from the SAME `implDeclsWithReqs` — and (b) `DL`, the decl-list
-  -- identity, which the algebra assumes rather than shows.  PR1's `ieShadowCompare`
-  -- measured the per-module SLICE.  This PR measured the strictly stronger proposition
-  -- the flip actually rests on: the WHOLE PREFIX universe at the read site, both
-  -- `MultiRegistry` buckets and the tag `Registry`, digested key-by-key and
-  -- entry-by-entry in bucket order, `IE` against the accumulator, panicking on any
-  -- disagreement.  Run over the compiler's own graph (both the `checkModules` and the
-  -- `elaborateModules` driver), `make check-self`, the multi-module differential gates,
-  -- and 193 multi-module fixture projects: ZERO disagreements.  Fail-capable in two
-  -- directions, both executed: projecting at `ord - 1` panicked with the prelude's whole
-  -- population on one side and an empty universe on the other, and a name-triggered
-  -- control proved `medaka check` on a two-module project reaches this line carrying a
-  -- real module id at a real ordinal.  The instrument is deleted with `ieShadowCompare`;
-  -- the measurement is the reason this binding is allowed to exist.
   let moduleImplUniv = match mode
     Flat _ => emptyImplUniverse
     Module mid _ _ =>

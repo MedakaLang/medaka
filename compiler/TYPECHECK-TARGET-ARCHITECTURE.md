@@ -2106,6 +2106,59 @@ deletes them, and re-keying their counting scans re-introduced #1277 in a
 measured experiment); `universeRegisteredIfacesRef` stays bare; the three
 `*CollidedRef` detectors stay bare (merging by bare name is their purpose).
 
+### 9.5a PR2 as executed — the reader flip, its measurement, and A-3.6's widening
+
+§9.5 above is the design as written *before* PR2 landed; this subsection records what
+actually happened, so the code site (`moduleImplUniv` in `compiler/types/typecheck.mdk`,
+`grep -n 'THE .IE. READER FLIP'`) can keep pointers and its two tripwires rather than the
+whole narrative.
+
+**WAS → NOW.** WAS (#154 PR3, retired by PR2): `ImplUniverse obUnivConcreteRef.value
+obUnivHeadlessRef.value obUnivIfaceTagsRef.value` — three `CrossRun` accumulators grown one
+module at a time by `appendUniverseAccums prog0`. Those three fields are GONE, not merely
+unread: these were their only readers, so leaving them would have left two sources of truth
+for "what impls exist" (design law L1) and the `cross_allowed` ratchet would still carry three
+rows the unit exists to retire. NOW: a projection of the whole-graph `IE` through
+`ieUniverseAt`. A-3.5b later added a second `IE` read, `ieRowsVisibleAt`, so "the ONE place"
+is no longer true and must not be re-instated at the code site.
+
+**The `ieShadowCompare` instrument is gone with it.** §9.5's PR1 remedy shipped a hard `panic`
+into the released compiler for exactly one job — measuring the §9.5 equality before the flip
+committed to it. PR2 deleted it, on a strictly stronger measurement than PR1's per-module
+slice.
+
+**WHY THE FLIP IS EQUALITY-PRESERVING, MEASURED AND NOT ASSUMED.** §9.5's argument is the
+conjunction of (a) the fold algebra and (b) `DL`, the decl-list identity the algebra assumes
+rather than shows. PR1's `ieShadowCompare` measured the per-module SLICE. PR2 measured the
+proposition the flip actually rests on: the WHOLE PREFIX universe at the read site — both
+`MultiRegistry` buckets and the tag `Registry`, digested key-by-key and entry-by-entry in
+bucket order, `IE` against the accumulator, panicking on any disagreement. Run over the
+compiler's own graph (both the `checkModules` and the `elaborateModules` driver), `make
+check-self`, the multi-module differential gates, and 193 multi-module fixture projects: ZERO
+disagreements. Fail-capable in two directions, both executed — projecting at `ord - 1`
+panicked with the prelude's whole population on one side and an empty universe on the other,
+and a name-triggered control proved `medaka check` on a two-module project reaches the line
+carrying a real module id at a real ordinal. That measurement, not the algebra alone, is why
+the binding is allowed to exist.
+
+**A-3.6 (#1558) removed the ordinal-prefix filter, and that is where the C4/I2 claim is
+cashed.** PR2's own comment said the projection was "filtered to this module's ordinal
+prefix … the filter stays ON here (it must)", which was PR2 correctly refusing to do A-3.6's
+job early. A-3.6 has now done it: `ieSnapAt` routes through `ieCandidacyVisibleAt`, which is
+`True`, so the binding is the WHOLE GRAPH's impl universe regardless of `mid`'s ordinal.
+Everything an obligation check on the multi-module path knows about which impls exist comes
+from that line, and it now knows the same thing in every module — which is what *"import
+scoping never decides which instances exist"* (§8 I5) means operationally.
+
+⚠️ **What this widens, said out loud.** #1482's measurement showed topological prefix scoping
+was accidentally load-bearing for #1438's same-spelled-interface shape, so #1438's reach grows
+at this line. That is expected and licensed by §8 I5, not a regression — but it is an
+acceptance delta. 🚨 The pin PR2's comment named as the grader,
+`test/must_fail_fixtures/1072-overlap-xmod-bare-head-arm-order`, **no longer exists in the
+tree** (derive: `ls test/must_fail_fixtures | grep 1072`), so the widening currently has no
+named grading fixture. Whoever next touches this line should re-establish one rather than read
+the absence as "already drained".
+
 ### 9.6 The subsumption enumeration — derived by SHAPE, not by prefix
 
 Derived three ways, because a `universe*` prefix grep provably misses members
@@ -2498,12 +2551,88 @@ category error the retired ban at `recordImplObligation` (`compiler/types/typech
 in-source, from #1480 through U1b) asserted. That same ruling carries the re-export-merge
 carve-out §10.7's own census note records below, and an explicit scope limit: the ruling
 does not by itself license deleting the bare compatibility leg (§10.4/§10.5 remain the
-authority on that). Full argument, kept in-source rather than only here so a future reader
-hits it before reinstating the ban: `grep -n 'U1c (#1507)' compiler/types/typecheck.mdk`.
+authority on that). This section is the argument's home; `recordImplObligation`
+(`compiler/types/typecheck.mdk`, `grep -n 'U1c (#1507)'`) keeps a pointer whose own sentence
+states the live rule, so a reader at the code site learns the constraint without leaving it.
+
+**The retired ban's premise, and why it was wrong.** From #1480 until U1c a DO-NOT-RESTORE
+ban stood at `recordImplObligation`'s method-occurrence arm. Its premise: `stampDeclOrigin`
+("which module DECLARES this interface") and `fillIfaceOccOrigin` ("what did this occurrence
+RESOLVE to") are two stampers answering two INCOMPARABLE questions. That premise was wrong —
+they answer the SAME question, "which interface declaration does this name denote", from two
+vantage points that PRODUCE THE SAME VALUE wherever resolution has a unique answer, which
+`fillIfaceOccOrigin` (via `mapOriginsInDecl`, run in the same scope as every other occurrence
+stamp) guarantees for exactly the programs that reach that line. Do NOT reinstate the ban on a
+bare assertion that the two layers are "different".
+
+⚠️ **The carve-out: "resolve diagnoses every ambiguous case" is FALSE as a blanket claim**,
+and an earlier revision of the in-source paragraph asserted it anyway — a refutation of that
+sentence is exactly the shape that would license reinstating the ban, so the limit has to be
+explicit. MEASURED, both arms, with two modules each declaring an interface with the same
+method name (`p.IP.mth`, `g.IG.mth`) merged into a third via `export import p.{IP,mth}` +
+`export import g.{IG,mth}`: a DIRECT double import of the same name is what resolve catches
+(`Ambiguous occurrence: 'mth' is exported by both …`, per `importedMethodEntry`); a RE-EXPORT
+MERGE of the same collision is **not caught by resolve at all** — `check` exits 0 or 1
+depending on nothing but which `export import` line comes first, with no diagnostic either
+way. In that shape `scopedMethodEntry` cannot decide it, so `overrideScopedMethods` keeps the
+floor's arbitrary last-registered answer and `recordImplObligation` silently inherits it. So:
+the two values disagree only in the ambiguous case, unambiguous cases genuinely agree, and a
+DIRECT import ambiguity genuinely is rejected upstream — but a RE-EXPORT-MERGE ambiguity is
+not. Do not cite "resolve already rejects the ambiguous case" as blanket cover. (Adjacent to
+the open #1288 re-export-merge family; not this unit's to fix. Pinned by
+`test/must_fail_fixtures/1530-xmod-method-name-collision-reexport-merge`.)
 
 **The change is one token.** `recordImplObligation`'s `pushPendingObl (ifaceRefBare
 iface.irName) …` becomes `pushPendingObl iface …` — `iface` is already the identity-carrying
-`IfaceRef` `methodIfaceParamsRef` held; the retired code was discarding it.
+`IfaceRef` `methodIfaceParamsRef` held; the retired code was discarding it. Operationally the
+site now discriminates METHOD-OCCURRENCE goals the same way the other three call sites always
+did, so the #1438 collision shape reached through a bare method call is REJECTED rather than
+silently accepted.
+
+**The other decl-layer goal sites, and the standing condition that guards them.** An earlier
+revision of the in-source comment claimed `recordImplObligation` was the ONE decl-layer goal
+producer and "the other three are all OCCURRENCE layer". That was true of the sites examined
+and FALSE OF THE SET. Census (`grep -n builtinIfaceRef compiler/types/typecheck.mdk`):
+`recordIfaceObligation`, `inferNumLitBare`, `numCallObls` and `numDictObls` all build their
+goal from `builtinIfaceRef` → `builtinClassOrigin` → `builtinClassesRef`, and
+`builtinClassesGo` populates that table by reading `DInterface { ifaceOrigin }`. Four more
+decl-layer goals making the same cross-layer comparison U1c cured at this site.
+
+They are unreachable TODAY, and the reason is NOT that they are occurrence-layer — it is that
+no user declaration can reach that table's population. MEASURED on both arms: a module IN the
+import graph redeclaring one of the four spellings is rejected `Duplicate interface:
+Semigroup`, exit 1; a module NOT in the graph is never loaded at all (arbitrary garbage, and
+`check` still exits 0), so it contributes no `DInterface` to `builtinClassesGo`'s walk; and a
+user `core.mdk` cannot shadow the prelude — `import core.{n}` for a name only the user's file
+declares is unresolvable, exit 1. 🚨 The resulting STANDING CONDITION — the defect returns at
+those four sites if the duplicate-interface guard is relaxed, if §7.1 U1 makes the prelude a
+node (at which point §8 I4 makes two same-spelled declarations legal, which is precisely what
+removes the guard), or if a fifth `BuiltinClass` is added whose spelling the guard does not
+cover — is kept **in-source at `builtinIfaceRef`'s own definition**, because it is a condition
+those sites must maintain rather than a fact about U1c. The safety is a property of the
+LANGUAGE's current namespace rules, not of this channel.
+
+**What "third and last" means, and what it does not.** `recordImplObligation` is the THIRD and
+last of the `ifaceRefBare` GOAL PRODUCERS — U1b retired the other two
+(`schemeObligationsRef`, `funConstraintIfacesRef`). Two other goal producers
+(`recordSigConstraintObls`, `recordMethodLevelSlotObls` via `constraintOrigin`,
+`reqToObligation` via `requireOrigin`) already carried identity before U1c, filled by the SAME
+walk in the SAME scope as `implOrigin`, so they agree with it by construction.
+⚠️ **That is NOT a claim that the `ImplUniverse` channel has only three or four goal producers
+total.** It does not: `recordCallObligations`' `PCallSlot` predicate, the
+`builtinIfaceRef`-derived sites above, and others besides all push a `Predicate` into the same
+channel — a derived count of the WHOLE set is at least six. "Last of the three" means only
+"last of the sites that ever minted `ifaceRefBare`", the narrow claim the census supports; do
+not read it as "last of N total producers" for any N not independently re-derived.
+
+**Why identity at this site matters — #1288's own reproduction, verbatim and measured.** A
+`mid.mdk` doing `export import p.*` + `export import g.*` merges two unrelated `Same`
+interfaces; an importer's `impl Same P` gets `implOrigin = g` while the method `pmth` it
+defines belongs to `p.Same`, and the goal `TkIdent p Same` misses the impl's `TkIdent g Same`
+bucket. Result: `No impl of Same for P` on a program whose `impl Same P` is three lines up,
+with no syntax available to say which `Same` was meant. The bare compatibility leg does NOT
+cover this — it protects goal-WITHOUT-identity against impl-WITH-identity, and this is
+goal-with-identity against impl-with-a-DIFFERENT-identity.
 
 **Census check, done rather than assumed — and narrower than an earlier revision claimed.**
 After this change exactly one `ifaceRefBare` call site remains besides its own definition —
