@@ -54,9 +54,12 @@ const MIME = {
 
 // ── Static file handler ───────────────────────────────────────────────────────
 function handleStatic(req, res) {
-  const urlPath = req.url === '/' ? '/index.html' : req.url;
-  // Strip query string.
-  const cleanPath = urlPath.split('?')[0];
+  // Strip query string first, then resolve a directory URL to its index.html —
+  // what every static host (Cloudflare Pages included) does, and what the site
+  // relies on for the bare `/guide/` route. Without this the dev server 404s a
+  // directory that the real origin serves, so the e2e harness would grade a
+  // route the deploy does not actually have.
+  const cleanPath = req.url.split('?')[0].replace(/\/$/, '/index.html');
   // Resolve canonically: join first, then resolve to collapse any '..' segments.
   const filePath = path.resolve(path.join(PLAYGROUND, cleanPath));
 

@@ -25,6 +25,14 @@
 //   --playground-url <href>  href to the playground's index.html from a
 //                      rendered page, used for the "open in playground" links
 //                      and the back-to-playground nav (default: '../index.html')
+//   --css-name <file>  basename of the stylesheet this doc set emits and links
+//                      (default: 'guide.css'). Two doc sets rendered into the
+//                      same directory must not both claim one filename.
+//
+// Besides one page per source `.md`, the renderer emits a doc-set INDEX page at
+// `index.html`: a static host serves nothing at a bare directory URL without
+// one, so `/guide/` would 404 for anyone who types the route rather than
+// following a link into a specific chapter.
 //
 // Output contract (S-2 "open in playground" links and S-3 site wiring depend on
 // this shape — see playground/NOTES.md):
@@ -120,6 +128,21 @@ function runnableFooter(status, text, playgroundUrl) {
     + `</div>`;
 }
 
+// The inverse of `escapeHtml`, plus the handful of named entities an author may
+// have typed literally in Markdown. Heading text reaches the slugger already
+// HTML-escaped (marked's `parseInline` escapes as it renders), so without this
+// the `[^\w\s-]` strip below sees `&quot;` as the five bare letters `quot` and
+// welds them into the anchor — `#quothello-worldquot-in-medaka`. Decode FIRST,
+// so the punctuation is punctuation again and gets stripped as punctuation.
+// `&amp;` is decoded LAST: doing it first would let `&amp;lt;` become `<`.
+const decodeEntities = (s) =>
+  s.replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
+   .replace(/&#[xX]([0-9a-fA-F]+);/g, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+   .replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+   .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+   .replace(/&nbsp;/g, ' ')
+   .replace(/&amp;/g, '&');
+
 // Slug from heading TEXT, GitHub-flavoured: lowercase, drop everything that is
 // not a word char / space / hyphen, spaces → hyphens. Collision-safe via a
 // per-page seen-count suffix, so two identically-titled headings get stable,
@@ -127,8 +150,7 @@ function runnableFooter(status, text, playgroundUrl) {
 function slugger() {
   const seen = new Map();
   return (text) => {
-    const base = text.toLowerCase().trim()
-      .replace(/<[^>]*>/g, '')
+    const base = decodeEntities(text.replace(/<[^>]*>/g, '')).toLowerCase().trim()
       .replace(/[^\w\s-]/g, '')
       .replace(/\s+/g, '-')
       .replace(/-+/g, '-')
@@ -149,6 +171,7 @@ function parseArgs(argv) {
     // expected to follow: this doc set's pages land one directory below the
     // playground root (e.g. site/guide/*.html next to site/index.html).
     playgroundUrl: '../index.html',
+    cssName: 'guide.css',
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -164,16 +187,21 @@ function parseArgs(argv) {
       case '--repo-url': opts.repoUrl = next().replace(/\/+$/, ''); break;
       case '--repo-root': opts.repoRoot = resolve(next()); break;
       case '--playground-url': opts.playgroundUrl = next(); break;
+      case '--css-name': opts.cssName = next(); break;
       default: throw new Error(`unknown argument: ${a}`);
     }
   }
   if (!opts.src || !opts.out) throw new Error('both --src and --out are required');
+  if (opts.cssName.includes('/') || opts.cssName.includes('\\')) {
+    throw new Error(`--css-name must be a bare filename, not a path: ${opts.cssName}`);
+  }
   return opts;
 }
 
 // ── the renderer ────────────────────────────────────────────────────────────
 export function renderDocSet(opts) {
-  const { src, out, exclude, repoUrl, repoRoot, playgroundUrl = '../index.html' } = opts;
+  const { src, out, exclude, repoUrl, repoRoot, playgroundUrl = '../index.html',
+          cssName = 'guide.css' } = opts;
   if (!existsSync(src)) throw new Error(`--src does not exist: ${src}`);
 
   // Enumerate the doc set from the DIRECTORY — never a hardcoded chapter list, so
@@ -190,17 +218,22 @@ export function renderDocSet(opts) {
   const docTitle = opts.title ?? basename(src);
 
   const rendered = pages.map((file) =>
-    renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, playgroundUrl }));
+    renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, playgroundUrl, cssName }));
 
   rmSync(out, { recursive: true, force: true });
   mkdirSync(out, { recursive: true });
   for (const page of rendered) writeFileSync(join(out, page.outFile), page.html);
-  writeFileSync(join(out, 'guide.css'), STYLESHEET);
+  // The doc-set index. A static host serves a directory URL from its index.html
+  // or not at all, so without this the bare `/guide/` route is a 404 even though
+  // every chapter page is present — see playground/NOTES.md.
+  writeFileSync(join(out, 'index.html'),
+    indexPage({ docTitle, rendered, pages, playgroundUrl, cssName }));
+  writeFileSync(join(out, cssName), STYLESHEET);
 
   return rendered;
 }
 
-function renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, playgroundUrl }) {
+function renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, playgroundUrl, cssName }) {
   const markdown = readFileSync(join(src, file), 'utf8');
   const slug = slugger();
   const toc = [];
@@ -265,7 +298,7 @@ function renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, play
     outFile,
     title: pageTitle,
     toc,
-    html: pageShell({ pageTitle, docTitle, body, toc, outFile, pages, playgroundUrl }),
+    html: pageShell({ pageTitle, docTitle, body, toc, outFile, pages, playgroundUrl, cssName }),
   };
 }
 
@@ -311,7 +344,7 @@ function rewriteHref(href, { file, src, inSet, repoUrl, repoRoot, errors }) {
 }
 
 // ── page shell ──────────────────────────────────────────────────────────────
-function pageShell({ pageTitle, docTitle, body, toc, outFile, pages, playgroundUrl }) {
+function pageShell({ pageTitle, docTitle, body, toc, outFile, pages, playgroundUrl, cssName = 'guide.css' }) {
   const tocHtml = toc.length === 0 ? '' :
     `<nav class="toc" aria-label="On this page">\n<h2>On this page</h2>\n<ul>\n`
     + toc.map((h) => `<li class="toc-h${h.depth}"><a href="#${h.id}">${h.text}</a></li>`).join('\n')
@@ -328,8 +361,8 @@ function pageShell({ pageTitle, docTitle, body, toc, outFile, pages, playgroundU
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escapeHtml(pageTitle)} — ${escapeHtml(docTitle)}</title>
-<link rel="stylesheet" href="guide.css">
+<title>${escapeHtml(pageTitle === docTitle ? pageTitle : `${pageTitle} — ${docTitle}`)}</title>
+<link rel="stylesheet" href="${escapeHtml(cssName)}">
 </head>
 <body>
 <header class="site-nav">
@@ -351,6 +384,22 @@ ${body}</article>
 </body>
 </html>
 `;
+}
+
+// The doc-set index: a real contents page listing every rendered chapter by its
+// own H1, in render order. It is NOT one of the rendered pages (it has no source
+// `.md`), so it is emitted here rather than mapped from the source set — which
+// also keeps every count that derives from `docs/guide/*.md` honest.
+function indexPage({ docTitle, rendered, pages, playgroundUrl, cssName }) {
+  const items = rendered.map((p) =>
+    `<li><a href="${escapeHtml(p.outFile)}">${escapeHtml(p.title)}</a></li>`).join('\n');
+  const body = `<h1>${escapeHtml(docTitle)}</h1>\n`
+    + `<p>${escapeHtml(`${rendered.length} chapters. Start at the top, or jump in anywhere.`)}</p>\n`
+    + `<ol class="chapter-index">\n${items}\n</ol>\n`;
+  return pageShell({
+    pageTitle: docTitle, docTitle, body, toc: [],
+    outFile: 'index.html', pages, playgroundUrl, cssName,
+  });
 }
 
 // Design tokens copied VERBATIM from playground/index.html's `:root` (~line 39)
@@ -428,6 +477,9 @@ code, pre { font-family:var(--mono); font-size:.88em; }
 .pg-run { color:var(--gold); }
 .pg-run:hover { color:var(--gold-bright); }
 .pg-not-runnable { color:var(--faint); font-style:italic; }
+
+.chapter-index { padding-left:1.4rem; }
+.chapter-index li { margin:.45rem 0; }
 
 table { border-collapse:collapse; }
 th, td { border:1px solid var(--line); padding:.4rem .7rem; text-align:left; }

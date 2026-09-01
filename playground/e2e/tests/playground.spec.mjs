@@ -256,13 +256,16 @@ async function main() {
       const guideHref = await page.getAttribute('.links a[href*="guide/"]', 'href');
       check('apex header links into the guide', !!guideHref, String(guideHref));
 
-      // The route the site actually publishes. A bare /guide/ is reported below
-      // but not asserted: build_site.sh emits one page per chapter and no
-      // directory index, so /guide/ is a 404 by construction, not by breakage.
       const entryStatus = (await page.goto(base + GUIDE_ENTRY, { waitUntil: 'domcontentloaded' })).status();
       check(`${GUIDE_ENTRY} loads (200)`, entryStatus === 200, `status ${entryStatus}`);
+
+      // The bare /guide/ route — the one Val approved by name, and the one a
+      // reader types rather than clicks. render_docs.mjs emits guide/index.html
+      // precisely so a static host has something to serve here; without it this
+      // is a 404 while every chapter page is fine, which is invisible to anyone
+      // who only ever follows links.
       const bareGuide = await page.evaluate(async (u) => (await fetch(u)).status, base + '/guide/');
-      console.log(`  (informational: GET /guide/ -> ${bareGuide}; the site publishes per-chapter pages, no directory index)`);
+      check('bare /guide/ route serves a directory index (200)', bareGuide === 200, `status ${bareGuide}`);
 
       // A chapter page: real rendered content, not an empty shell.
       const chapterStatus = (await page.goto(base + '/guide/03-functions.html', { waitUntil: 'domcontentloaded' })).status();
