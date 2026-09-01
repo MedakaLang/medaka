@@ -463,6 +463,20 @@ corpus = []
 toolchain = ["wasm-tools", "node>=24"]
 
 [[gate]]
+name = "pds/test/atsyntax_vectors"
+area = "engines"
+shard = "gates_8"
+project = "pds"
+tiers = ["merge"]
+cost = "medium"
+kind = "exec"
+run = "pds/test/atsyntax_vectors.sh"
+oracles = []
+sources = ["pds/*"]
+corpus = []
+toolchain = []
+
+[[gate]]
 name = "pds/test/car_vectors"
 area = "engines"
 shard = "gates_8"
