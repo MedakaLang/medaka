@@ -1,0 +1,16 @@
+-- CONTROL for #1958: byte-identical to main.mdk except `impl Speak Dog` OVERRIDES
+-- `speak` (`"woof"`) instead of inheriting the interface default -- the ONE flipped
+-- feature. Must build-run clean and print `woof|meow|ring` at -O2.
+import iface.{Speak(..), speak}
+data Dog = Dog
+data Cat = Cat
+data Bell = Bell
+impl Speak Dog where
+  speak _ = "woof"
+impl Speak Cat where
+  speak _ = "meow"
+impl Speak Bell where
+  speak _ = "ring"
+main =
+  let f = v => speak v
+  println (f Dog ++ "|" ++ f Cat ++ "|" ++ f Bell)

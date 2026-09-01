@@ -1,0 +1,18 @@
+-- issue #1958: extends #1046's shape to THREE impls. Dog is METHOD-LESS (inherits the
+-- interface default "woof"), Cat and Bell both OVERRIDE. `check`/`run` both correctly
+-- print `woof|meow|ring`. The native -O2 build (medaka build's default) instead prints
+-- `ring|meow|ring`, exit 0 -- the method-less Dog silently resolves to Bell's body via
+-- the dispatcher's `unreachable` fallthrough, which the optimizer turns into a
+-- plausible-but-wrong branch instead of a trap.
+import iface.{Speak(..), speak}
+data Dog = Dog
+data Cat = Cat
+data Bell = Bell
+impl Speak Dog where              -- METHOD-LESS: inherits the default
+impl Speak Cat where
+  speak _ = "meow"
+impl Speak Bell where
+  speak _ = "ring"
+main =
+  let f = v => speak v
+  println (f Dog ++ "|" ++ f Cat ++ "|" ++ f Bell)

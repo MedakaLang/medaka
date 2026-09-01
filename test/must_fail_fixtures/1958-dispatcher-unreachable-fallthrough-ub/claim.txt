@@ -1,0 +1,89 @@
+issue: 1958
+what: `compiler/backend/llvm_emit.mdk` emits `unreachable` as the fallthrough of every
+what: method dispatcher (`@mdk_disp_<method>_<i>_<n>`). This fixture extends #1046's
+what: cross-module-interface-with-default shape from two impls to THREE, reached
+what: through a local lambda (the arg-tag dispatch path): `Dog` is METHOD-LESS
+what: (inherits the interface default `"woof"`), `Cat` overrides to `"meow"`, `Bell`
+what: overrides to `"ring"`. `check` and `run` (the tree-walking interpreter) both
+what: correctly print `woof|meow|ring`. `medaka build`'s NATIVE binary, at its default
+what: optimization level (`-O2`), instead prints `ring|meow|ring`, exit 0 -- the
+what: method-less `Dog` dispatch silently resolves to `Bell`'s body instead of the
+what: default, with no diagnostic anywhere. At `-O0` the SAME unmodified `main.mdk`
+what: instead SEGFAULTS (exit 139, `E-FATAL-SIGNAL fatal memory fault`) -- the
+what: dispatcher's `unreachable` fallthrough genuinely has undefined behaviour, and
+what: the optimizer's inference from it produces a DIFFERENT wrong observable at each
+what: level, exactly as #1958 describes. This fixture pins only the `-O2` shape
+what: (medaka build's default and what CI/`make medaka` actually ships), because that
+what: is the one an ordinary `medaka build` invocation hits.
+what:
+what: MEASURED FIRST-HAND, MEDAKA_STRICT=1, exit read via file redirect, in this
+what: worktree's binary (`/root/medaka/medaka`, already built, not borrowed):
+what:   medaka build main.mdk -o /tmp/x > log 2>&1; echo $?     -> 0
+what:   /tmp/x > out 2>&1; echo $?                              -> 0, out = "ring|meow|ring"
+what:   medaka run main.mdk > out 2>&1; echo $?                 -> 0, out = "woof|meow|ring"
+what: Repeated 5x with a FRESH build each time (default -O2, no MEDAKA_CLANG_OPT
+what: override) and 5x re-executing one already-built binary: all 10 runs printed
+what: exactly `ring|meow|ring`, exit 0 -- deterministic on this toolchain/box, unlike
+what: the -O0 arm (which is real UB but not what this row pins).
+what:
+what: Also probed with MEDAKA_CLANG_OPT=-O0/-O1/-O2 directly against the SAME
+what: unmodified main.mdk (the three-optimization-level differential the issue body
+what: describes):
+what:   -O0 -> build exit 0, binary exit 139 (SIGSEGV, "fatal memory fault")
+what:   -O1 -> build exit 0, binary exit 0, stdout "ring|meow|ring"
+what:   -O2 -> build exit 0, binary exit 0, stdout "ring|meow|ring"  (== plain `medaka build`)
+cmd: build-run main.mdk
+exit: 0
+stdout-line: ring|meow|ring
+control: build-run control.mdk
+why-fixture: `check` and `run` are both green and correct on this program (measured
+why-fixture: above) -- only the NATIVE build's own binary discriminates the bug, so
+why-fixture: `build-run` is the only verb that can pin it; a check- or run-based pin
+why-fixture: would pass and prove nothing. `stdout-line: ring|meow|ring` is the whole
+why-fixture: pinned observable, deliberately: the exit code (0) is identical to a
+why-fixture: CORRECT run, so the exit code alone cannot discriminate "still broken"
+why-fixture: from "fixed" -- only WHICH bytes came out can. This row pins the
+why-fixture: default-`-O2` behaviour specifically (plain `medaka build`, no
+why-fixture: `MEDAKA_CLANG_OPT` override), which is what CI, `make medaka`, and every
+why-fixture: ordinary invocation of `medaka build` actually run at. It deliberately
+why-fixture: does NOT pin the `-O0` SIGSEGV or the `-O1` wrong-answer as claims of
+why-fixture: their own -- see why-note.
+why-control: control.mdk is byte-identical to main.mdk except `impl Speak Dog`
+why-control: DEFINES `speak` (`"woof"`) instead of inheriting the interface default --
+why-control: the ONE flipped feature (same isolating move as #1046's own control).
+why-control: MEASURED: build-run control.mdk exits 0, stdout `woof|meow|ring`,
+why-control: matching what `run` prints for both programs. This isolates the
+why-control: observation to a method-less impl silently dropping out of its
+why-control: dispatch group (and the resulting `unreachable` fallthrough becoming
+why-control: reachable), not to arg-tag dispatch, 3-impl interfaces, or local
+why-control: lambdas in general. If the control breaks, the environment regressed
+why-control: and this row's drain is a lie.
+why-note: This is deliberately NOT a duplicate of #1046: #1046 pins the SAME root
+why-note: mechanism (a method-less impl vanishing from `implGroupsForMethod`, so the
+why-note: emitter takes a shortcut) at the ARG-TAG single-group level, where the
+why-note: emitted code is an unconditional direct call with no test and no
+why-note: `unreachable` involved at all. #1958 is specifically about the
+why-note: DISPATCHER's `unreachable` fallthrough -- the THIRD impl is what forces
+why-note: `implGroupsForMethod` back above the `[g]` single-group shortcut into the
+why-note: multi-group dispatcher path (`emitMethodArgDispatch`'s `_ => ...` arm,
+why-note: which builds a real tag-tested dispatcher with an `unreachable` default
+why-note: case), so the method-less `Dog` genuinely reaches a dispatcher whose
+why-note: fallthrough is UB, rather than merely missing a tag test. #1046 stays open
+why-note: and pinned separately; a fix to #1046's "method-less impls vanish from
+why-note: their group" root cause would very likely ALSO drain this row (both impls
+why-note: would then contribute dispatch entries, so Dog would hit a matching arm
+why-note: instead of the `unreachable` default) -- that is expected and fine, not a
+why-note: sign this pin is wrong. #1958's OWN suggested fix (replace `unreachable`
+why-note: with a trapping `mdk_panic` default arm) would ALSO drain this row on its
+why-note: own, independent of #1046, by turning the reachable-default case into a
+why-note: loud panic (a different exit code) rather than a silent wrong answer --
+why-note: either fix is a legitimate drain.
+why-note: The `-O0` SIGSEGV and the `-O1` wrong-answer (both measured above, both
+why-note: reproduced deterministically across repeats in this session) are NOT
+why-note: separately pinned as claims: `-O0` is not what `medaka build` uses by
+why-note: default and would need `MEDAKA_CLANG_OPT=-O0` to reach, and `-O1`'s
+why-note: behaviour, while measured identical to `-O2` here, is UB by the issue's own
+why-note: framing and not guaranteed stable enough to pin on its own without a
+why-note: dedicated MEDAKA_CLANG_OPT-varying gate. Only the default-`-O2` shape (this
+why-note: row's pin) is what an ordinary `medaka build` invocation is guaranteed to
+why-note: hit.
