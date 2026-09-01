@@ -1470,8 +1470,8 @@ checkUndeterminedRetEffVars (d::rest) =
   checkUndeterminedRetEffVars rest
 
 checkUndeterminedRetEffVarsDecl : Decl -> Unit
-checkUndeterminedRetEffVarsDecl (DInterface { name, typarams, methods, ... }) =
-  checkIfaceMethodEffs name (declGradedScope typarams methods) methods
+checkUndeterminedRetEffVarsDecl (DInterface { name, typarams, typaramKinds, methods, ... }) =
+  checkIfaceMethodEffs name (declGradedScope typarams typaramKinds methods) methods
 -- #1103: the ARGUMENT-COVERAGE half of the rule is NOT method-only.  Its own
 -- comment (below) says post-unify inspection cannot catch these shapes because
 -- `unifyRowN`'s same-tail arm (`<e>` ~ `<Stdout | e>`) succeeds without
@@ -1490,6 +1490,193 @@ checkUndeterminedRetEffVarsDecl (DTypeSig _ n t) =
 checkUndeterminedRetEffVarsDecl (DAttrib _ d) =
   checkUndeterminedRetEffVarsDecl d
 checkUndeterminedRetEffVarsDecl _ = ()
+
+-- ── Declared-kind consistency (EFFECTS-SEMANTICS §6.4, §6.5) ──────────────
+-- Declaring a kind creates an obligation between the head and the body.  Runs
+-- AFTER `registerAllData` (like `checkUndeterminedRetEffVars`), because the
+-- "is this slot Effect-kinded" reads (`rowArgNames`) consult the kind table.
+--
+-- (a) declared kind CONTRADICTED by usage: `data Async (e : Type) a = Mk (Unit
+--     -> <e> a)` — or, the compulsory-migration case, an UNANNOTATED `e` in an
+--     effect-tail / Effect-slot position, which §6.3 says can never be
+--     `Effect`-kinded by inference.  Both are `T-EFFECT-KIND-MISMATCH`, at the
+--     field whose position demands the kind.
+-- (b) declared `Effect` but used as an ordinary type (`data Box (e : Effect) a
+--     = Mk e`): the same code.  A phantom `Effect` parameter — declared and
+--     never used — is LEGAL (§6.4 (b)).
+-- (c) an interface parameter: an unannotated parameter whose methods put it
+--     at a slot that co-occurs with an effect tail (the retired inference rule)
+--     needs `(f : Effect -> Type -> Type)`; a declared arrow kind whose slots
+--     disagree with that evidence is reported the same way.
+-- (d) `requires`-chain agreement (§6.5), for a superinterface declared in the
+--     SAME module: the parameter's resolved kinds must equal the super's.
+checkDeclaredKinds : List Decl -> Unit
+checkDeclaredKinds prog = checkDeclaredKindsGo prog prog
+
+checkDeclaredKindsGo : List Decl -> List Decl -> Unit
+checkDeclaredKindsGo _ [] = ()
+checkDeclaredKindsGo prog (d::rest) =
+  let _ = checkDeclaredKindsDecl prog d
+  checkDeclaredKindsGo prog rest
+
+checkDeclaredKindsDecl : List Decl -> Decl -> Unit
+checkDeclaredKindsDecl prog (DAttrib _ d) = checkDeclaredKindsDecl prog d
+checkDeclaredKindsDecl _ (DData { dataName = n, dataParams = ps, dataParamKinds = ks, dataCtors = vs }) =
+  checkHeadKinds n ps ks (flatMap (v => payloadAstTypes (variantPayload v)) vs)
+checkDeclaredKindsDecl _ (DNewtype { newtypeName = n, newtypeParams = ps, newtypeParamKinds = ks, newtypeFieldTy = fty }) =
+  checkHeadKinds n ps ks [fty]
+checkDeclaredKindsDecl _ (DTypeAlias { tyAliasName = n, tyAliasParams = ps, tyAliasParamKinds = ks, tyAliasRhs = rhs }) =
+  checkHeadKinds n ps ks [rhs]
+checkDeclaredKindsDecl prog (DInterface { name, typarams, typaramKinds, supers, methods, ... }) =
+  let _ = checkIfaceHeadKinds name typarams (padAnns typarams typaramKinds) methods
+  checkSuperKinds prog name typarams (padAnns typarams typaramKinds) methods supers
+checkDeclaredKindsDecl _ _ = ()
+
+-- data / newtype / alias heads: [fieldTys] are every type the declaration's
+-- body mentions.
+checkHeadKinds : String -> List String -> List (Option KindAnn) -> List Ty -> Unit
+checkHeadKinds name params anns fieldTys =
+  let rowNames = dedup (flatMap effTailNames fieldTys ++ flatMap rowArgNames fieldTys)
+  checkHeadKindsGo name rowNames fieldTys params (padAnns params anns)
+
+checkHeadKindsGo : String -> List String -> List Ty -> List String -> List (Option KindAnn) -> Unit
+checkHeadKindsGo _ _ _ [] _ = ()
+checkHeadKindsGo name rowNames fieldTys (p::ps) (a::anns) =
+  let loc = firstTyLocList fieldTys
+  let _ = match a
+    None => if contains p rowNames then
+      pushTypeErrorOnceAt "T-EFFECT-KIND-MISMATCH" loc (unannotatedRowParamMsg name p)
+    else
+      ()
+    Some KindEffect => if anyList (tyVarTypeOcc p) fieldTys then
+      pushTypeErrorOnceAt "T-EFFECT-KIND-MISMATCH" loc (effectParamAsTypeMsg name p)
+    else
+      ()
+    Some (k@(KindArrow _ _)) => if kindAnnHasEffect k then
+      pushTypeErrorOnceAt "T-EFFECT-KIND-MISMATCH" loc (effectArrowOnDataHeadMsg name p k)
+    else
+      ()
+    Some KindType => if contains p rowNames then
+      pushTypeErrorOnceAt "T-EFFECT-KIND-MISMATCH" loc (typeParamAsRowMsg name p)
+    else
+      ()
+  checkHeadKindsGo name rowNames fieldTys ps anns
+checkHeadKindsGo _ _ _ _ [] = ()
+
+-- does the type variable [p] occur in a TYPE position of [t] — anywhere but an
+-- effect tail or an `Effect`-kinded argument slot of a registered head?
+tyVarTypeOcc : String -> Ty -> Bool
+tyVarTypeOcc p (TyVar n) = n == p
+tyVarTypeOcc p (TyEffect _ _ t) = tyVarTypeOcc p t
+tyVarTypeOcc _ (TyRow _ _ _) = False
+tyVarTypeOcc p (TyFun a b) = tyVarTypeOcc p a || tyVarTypeOcc p b
+tyVarTypeOcc p (TyTuple ts) = anyList (tyVarTypeOcc p) ts
+tyVarTypeOcc p (TyConstrained _ t) = tyVarTypeOcc p t
+tyVarTypeOcc p (TyApp a b) = match tyAppSpine (TyApp a b)
+  (TyCon { tyConName = n, tyConOrigin = o }, args) => match lookupTab (tyTabKey o n) perRun.value.dataParamKindsRef.value
+    Some kinds if listLen kinds == listLen args => tyVarTypeOccSlots p kinds args
+    _ => anyList (tyVarTypeOcc p) args
+  (hd, args) => tyVarTypeOcc p hd || anyList (tyVarTypeOcc p) args
+tyVarTypeOcc _ _ = False
+
+-- per slot: a bare `p` at a KRow slot is a ROW occurrence (skipped); anything
+-- else is walked as a type.
+tyVarTypeOccSlots : String -> List Kind -> List Ty -> Bool
+tyVarTypeOccSlots p (KRow::ks) ((TyVar _)::ts) = tyVarTypeOccSlots p ks ts
+tyVarTypeOccSlots p (_::ks) (t::ts) = tyVarTypeOcc p t || tyVarTypeOccSlots p ks ts
+tyVarTypeOccSlots _ _ _ = False
+
+-- interface heads (c): the retired co-occurrence inference is the EVIDENCE.
+checkIfaceHeadKinds : String -> List String -> List (Option KindAnn) -> List IfaceMethod -> Unit
+checkIfaceHeadKinds _ [] _ _ = ()
+checkIfaceHeadKinds name (p::ps) (a::anns) methods =
+  let inferred = ifaceParamKindsOf p methods
+  let loc = firstIfaceMethodLoc methods
+  let _ = match a
+    Some (k@(KindArrow _ _)) =>
+      let want = kindAnnSlots k
+      if isNonEmptyL inferred && listLen inferred == listLen want && anyRowDeclaredType inferred want then
+        pushTypeErrorOnceAt "T-EFFECT-KIND-MISMATCH" loc (ifaceSlotDeclaredTypeMsg name p k)
+      else
+        ()
+    Some KindEffect => pushTypeErrorOnceAt "T-EFFECT-KIND-MISMATCH" loc (ifaceParamEffectKindMsg name p)
+    _ => if anyKRow inferred then
+      pushTypeErrorOnceAt "T-EFFECT-KIND-MISMATCH" loc (unannotatedGradedParamMsg name p inferred)
+    else
+      ()
+  checkIfaceHeadKinds name ps anns methods
+checkIfaceHeadKinds _ _ [] _ = ()
+
+-- a slot the methods use as an effect row that the annotation declares `Type`
+anyRowDeclaredType : List Kind -> List Kind -> Bool
+anyRowDeclaredType (KRow::_) (KType::_) = True
+anyRowDeclaredType (_::gs) (_::ws) = anyRowDeclaredType gs ws
+anyRowDeclaredType _ _ = False
+
+firstIfaceMethodLoc : List IfaceMethod -> Option Loc
+firstIfaceMethodLoc [] = None
+firstIfaceMethodLoc ((IfaceMethod _ mty _ _)::_) = firstTyLoc mty
+
+-- (d) `requires` chain, same module only: the sub's resolved kinds for the
+-- parameters it applies the super to must equal the super's own resolved
+-- kinds at those positions.
+checkSuperKinds : List Decl -> String -> List String -> List (Option KindAnn) -> List IfaceMethod -> List Super -> Unit
+checkSuperKinds _ _ _ _ _ [] = ()
+checkSuperKinds prog name typarams anns methods ((Super { superHead = sh, superParams = sps })::rest) =
+  let _ = match findIfaceDecl prog sh
+    Some (stps, sanns, smethods) =>
+      let subKinds = map (p => ifaceParamKindsFor typarams anns methods p) sps
+      let superKinds = ifaceParamKindsDeclAll stps (padAnns stps sanns) smethods
+      if listLen subKinds == listLen superKinds && not (allList (pair => kindsEq (fst pair) (snd pair)) (zipKinds subKinds superKinds)) then
+        pushTypeErrorOnceAt "T-EFFECT-KIND-MISMATCH" (firstIfaceMethodLoc methods) (requiresKindMsg name sh)
+      else
+        ()
+    None => ()
+  checkSuperKinds prog name typarams anns methods rest
+
+zipKinds : List (List Kind) -> List (List Kind) -> List (List Kind, List Kind)
+zipKinds (a::as) (b::bs) = (a, b) :: zipKinds as bs
+zipKinds _ _ = []
+
+-- the resolved slot kinds of the sub-interface's OWN parameter [p]
+ifaceParamKindsFor : List String -> List (Option KindAnn) -> List IfaceMethod -> String -> List Kind
+ifaceParamKindsFor [] _ _ _ = []
+ifaceParamKindsFor (q::qs) (a::anns) methods p
+  | q == p = ifaceParamKindsDecl a p methods
+  | otherwise = ifaceParamKindsFor qs anns methods p
+ifaceParamKindsFor _ [] _ _ = []
+
+findIfaceDecl : List Decl -> String -> Option (List String, List (Option KindAnn), List IfaceMethod)
+findIfaceDecl [] _ = None
+findIfaceDecl ((DAttrib _ d)::rest) n = findIfaceDecl (d::rest) n
+findIfaceDecl ((DInterface { name, typarams, typaramKinds, methods, ... })::rest) n
+  | name == n = Some (typarams, typaramKinds, methods)
+  | otherwise = findIfaceDecl rest n
+findIfaceDecl (_::rest) n = findIfaceDecl rest n
+
+unannotatedRowParamMsg : String -> String -> String
+unannotatedRowParamMsg name p = "Type parameter `\{p}` of `\{name}` is used as an effect row (in an effect tail or an Effect-kinded argument slot), but its head does not declare it one. A parameter is Effect-kinded only when written so: declare the head as `\{name} (\{p} : Effect) …`."
+
+typeParamAsRowMsg : String -> String -> String
+typeParamAsRowMsg name p = "Type parameter `\{p}` of `\{name}` is declared `(\{p} : Type)` but is used as an effect row (in an effect tail or an Effect-kinded argument slot). Declare it `(\{p} : Effect)`, or use it as an ordinary type."
+
+effectParamAsTypeMsg : String -> String -> String
+effectParamAsTypeMsg name p = "Type parameter `\{p}` of `\{name}` is declared `(\{p} : Effect)` but is used as an ordinary type. An Effect-kinded parameter may occur only as an arrow's effect row (`Unit -> <\{p}> a`) or in an Effect-kinded argument slot (`Async \{p} a`). Drop the annotation, or move the parameter into an effect position."
+
+effectArrowOnDataHeadMsg : String -> String -> KindAnn -> String
+effectArrowOnDataHeadMsg name p k = "Type parameter `\{p}` of `\{name}` is declared with kind `\{renderKindAnn k}`. An arrow kind containing `Effect` is supported on interface heads only; a data, newtype, or type-alias parameter may be `Effect` or an ordinary (Effect-free) kind."
+
+ifaceSlotDeclaredTypeMsg : String -> String -> KindAnn -> String
+ifaceSlotDeclaredTypeMsg name p k = "Type parameter `\{p}` of interface `\{name}` is declared `(\{p} : \{renderKindAnn k})`, but a method signature uses one of its `Type` slots as an effect row (the same name appears in that slot and in an effect tail). Declare that slot `Effect`, or use a different variable in the effect tail."
+
+ifaceParamEffectKindMsg : String -> String -> String
+ifaceParamEffectKindMsg name p = "Type parameter `\{p}` of interface `\{name}` is declared `(\{p} : Effect)`. An interface parameter is a type constructor, so its kind is an arrow — write `(\{p} : Effect -> Type -> Type)` for an effect-indexed constructor."
+
+unannotatedGradedParamMsg : String -> String -> List Kind -> String
+unannotatedGradedParamMsg name p inferred = "Type parameter `\{p}` of interface `\{name}` is used as an effect-indexed constructor (a method puts a variable at one of its slots and uses that variable in an effect tail), but its head does not declare it one. A parameter is Effect-kinded only when written so: declare the head as `\{name} (\{p} : \{renderKindArrow inferred}) …`."
+
+requiresKindMsg : String -> String -> String
+requiresKindMsg name sh = "Interface `\{name}` requires `\{sh}` at a parameter whose kind differs from `\{sh}`'s own: a `requires` clause is an ordinary kind application, and there is no coercion between `Type` and `Effect`. The two families (plain and Deferred*) are peers and cannot be chained — declare both heads at the same kind."
 
 checkIfaceMethodEffs : String -> List (String, List Kind) -> List IfaceMethod -> Unit
 checkIfaceMethodEffs _ _ [] = ()
@@ -3466,8 +3653,11 @@ declEnvRowKindEntries cur m
 declEnvKindEntries : List Decl -> List (TabKey, List Kind)
 declEnvKindEntries [] = []
 declEnvKindEntries ((DAttrib _ d)::rest) = declEnvKindEntries (d::rest)
-declEnvKindEntries ((DData { dataName = n, dataParams = ps, dataCtors = vs, dataOrigin = o })::rest) = (tyTabKey o n, inferParamKinds ps vs) :: declEnvKindEntries rest
-declEnvKindEntries ((DNewtype { newtypeName = n, newtypeParams = ps, newtypeCtor = con, newtypeFieldTy = fty, newtypeOrigin = o })::rest) = (tyTabKey o n, inferParamKinds ps [Variant con (ConPos [fty])]) :: declEnvKindEntries rest
+declEnvKindEntries ((DData { dataName = n, dataParams = ps, dataParamKinds = ks, dataOrigin = o })::rest) = (tyTabKey o n, declParamKinds ps ks) :: declEnvKindEntries rest
+declEnvKindEntries ((DNewtype { newtypeName = n, newtypeParams = ps, newtypeParamKinds = ks, newtypeOrigin = o })::rest) = (tyTabKey o n, declParamKinds ps ks) :: declEnvKindEntries rest
+-- #2121: an alias head's declared kinds travel cross-module exactly like a
+-- data head's (mirrors `registerData`'s `DTypeAlias` arm).
+declEnvKindEntries ((DTypeAlias { tyAliasName = n, tyAliasParams = ps, tyAliasParamKinds = ks, tyAliasOrigin = o })::rest) = (tyTabKey o n, declParamKinds ps ks) :: declEnvKindEntries rest
 declEnvKindEntries (_::rest) = declEnvKindEntries rest
 
 -- `dataParamKindsRef`'s cross-module seed.  `deModules` is ASCENDING, and each
@@ -6088,23 +6278,30 @@ buildClassEnvGo (m::rest) env =
   buildClassEnvGo rest (ceAddRows rows env)
 
 -- One interface decl's raw facts: name, typarams, methods, supers, identity.
-classEnvDeclFacts : List Decl -> List (String, List String, List IfaceMethod, List Super, TyConOrigin)
+classEnvDeclFacts : List Decl -> List (String, List String, List (Option KindAnn), List IfaceMethod, List Super, TyConOrigin)
 classEnvDeclFacts prog = flatMap classEnvDeclFact prog
 
-classEnvDeclFact : Decl -> List (String, List String, List IfaceMethod, List Super, TyConOrigin)
+classEnvDeclFact : Decl -> List (String, List String, List (Option KindAnn), List IfaceMethod, List Super, TyConOrigin)
 classEnvDeclFact (DAttrib _ d) = classEnvDeclFact d
-classEnvDeclFact (DInterface { name, typarams, supers, methods, ifaceOrigin, ... }) = [(name, typarams, methods, supers, ifaceOrigin)]
+classEnvDeclFact (DInterface { name, typarams, typaramKinds, supers, methods, ifaceOrigin, ... }) = [(name, typarams, typaramKinds, methods, supers, ifaceOrigin)]
 classEnvDeclFact _ = []
 
-classEnvRowsOf : Int -> List (String, List String, List IfaceMethod, List Super, TyConOrigin) -> List CeRow
+classEnvRowsOf : Int -> List (String, List String, List (Option KindAnn), List IfaceMethod, List Super, TyConOrigin) -> List CeRow
 classEnvRowsOf _ [] = []
-classEnvRowsOf ord ((name, typarams, methods, supers, o)::rest) =
-  let scope = declGradedScope typarams methods
+classEnvRowsOf ord ((name, typarams, kinds, methods, supers, o)::rest) =
+  let scope = declGradedScope typarams kinds methods
   let row = CeRow (regKeyOfTab (ifaceTabKey o name)) ord IfaceRef {
     irName = name,
     irOrigin = o,
-  } typarams (map (ceMethodOf scope) methods) supers (map (p => ifaceParamKindsOf p methods) typarams) (requiredMethodNames methods)
+  } typarams (map (ceMethodOf scope) methods) supers (ifaceParamKindsDeclAll typarams kinds methods) (requiredMethodNames methods)
   row :: classEnvRowsOf ord rest
+
+-- every parameter's RESOLVED slot kinds, positional with [typarams].
+ifaceParamKindsDeclAll : List String -> List (Option KindAnn) -> List IfaceMethod -> List (List Kind)
+ifaceParamKindsDeclAll [] _ _ = []
+ifaceParamKindsDeclAll (p::ps) [] methods = ifaceParamKindsDeclAll (p::ps) [None] methods
+ifaceParamKindsDeclAll (p::ps) (a::anns) methods =
+  ifaceParamKindsDecl a p methods :: ifaceParamKindsDeclAll ps anns methods
 
 ceMethodOf : List (String, List Kind) -> IfaceMethod -> (String, Ty, List (String, List Kind))
 ceMethodOf scope (IfaceMethod n ty _ _) = (n, ty, scope)
@@ -16238,15 +16435,21 @@ registerData : TcEnv -> Decl -> TcEnv
 -- it locally and kept it opaque cross-module, which is the mirror of the widening
 -- that guard was added to prevent.
 registerData env (DAttrib _ d) = registerData env d
-registerData env (DData { dataName = name, dataParams = params, dataCtors = variants, dataOrigin = o }) = registerVariants o env name params variants
+registerData env (DData { dataName = name, dataParams = params, dataParamKinds = anns, dataCtors = variants, dataOrigin = o }) = registerVariants o env name params anns variants
 -- DECLARATION MINT (#1110/#1111 A-2.3): `tyAliasOrigin` is the alias's own
 -- identity, stamped by `stampDeclOrigins` at the module that declared it — the
 -- same source `registerVariants` takes `dataOrigin`/`newtypeOrigin` from, and
 -- for the same reason (see its 🚨 note: it must not come from ambient state).
-registerData env (DTypeAlias { tyAliasName = name, tyAliasParams = params, tyAliasRhs = rhs, tyAliasOrigin = o }) =
+registerData env (DTypeAlias { tyAliasName = name, tyAliasParams = params, tyAliasParamKinds = anns, tyAliasRhs = rhs, tyAliasOrigin = o }) =
   perRun.value.aliasTableRef := (tyTabKey o name, (params, rhs))::perRun.value.aliasTableRef.value
+  -- #2121 / EFFECTS-SEMANTICS §6.2: an alias head's DECLARED kinds are recorded
+  -- like a data head's, so `type BoxAlias (e : Effect) a = Box e a` accepts a
+  -- row at its `e` slot.  `headRemainingKinds` still abstains on an alias
+  -- (it checks `aliasTableRef` first), so the graded-instance-head check is
+  -- unaffected; only the row-slot readers see the entry.
+  let _ = recordParamKinds o name (declParamKinds params anns)
   env
-registerData env (DNewtype { newtypeName = name, newtypeParams = params, newtypeCtor = con, newtypeFieldTy = fty, newtypeOrigin = o }) = registerVariants o env name params [Variant con (ConPos [fty])]
+registerData env (DNewtype { newtypeName = name, newtypeParams = params, newtypeParamKinds = anns, newtypeCtor = con, newtypeFieldTy = fty, newtypeOrigin = o }) = registerVariants o env name params anns [Variant con (ConPos [fty])]
 -- ⚠️ #1557 A-3.5c: THE `DInterface` ARM IS GONE, and its absence is the point.
 -- #822 registered each interface type-parameter's slot kinds here, into
 -- `ifaceParamKindsRef`, *"because every consumer must see the table BEFORE the first
@@ -16329,9 +16532,9 @@ substField subst (fn, fm) = (fn, substMono subst [] fm)
 -- id would attribute every imported type to the importer.  That is the same
 -- class of wrongness #1219 eliminated on the flat path, and it is why this unit
 -- was blocked until the decl-layer carriers landed (#1225).
-registerVariants : TyConOrigin -> TcEnv -> String -> List String -> List Variant -> TcEnv
-registerVariants o env name params variants =
-  let kinds = inferParamKinds params variants
+registerVariants : TyConOrigin -> TcEnv -> String -> List String -> List (Option KindAnn) -> List Variant -> TcEnv
+registerVariants o env name params anns variants =
+  let kinds = declParamKinds params anns
   let _ = recordParamKinds o name kinds
   -- #1119 D-2: the VARIANCE twin, registered in the same breath and from the
   -- same decl-borne identity, so the two tables cannot come to disagree about
@@ -16383,12 +16586,53 @@ recordParamKinds o name kinds =
   -- without the index needing the list's ordering.
   perRun.value.dataParamNameIndexRef := omInsert name () perRun.value.dataParamNameIndexRef.value
 
--- A data param is KRow iff its name appears in a field's effect-tail position
--- (`<e>`); else KType (the common case).  Inferred from usage — no syntax.
-inferParamKinds : List String -> List Variant -> List Kind
-inferParamKinds params variants =
-  let tailNames = flatMap variantFieldTailNames variants
-  map (p => if contains p tailNames then KRow else KType) params
+-- ── Declared kinds (EFFECTS-SEMANTICS §6.1–§6.3, §6.8) ──────────────────
+-- A data / newtype / alias parameter is `Effect`-kinded (KRow) iff its head
+-- DECLARES it so — `data Async (e : Effect) a`.  The inference rule this
+-- replaces ("KRow iff the name appears in some field's effect tail") is
+-- retired, per §6.3's surgical rule: an UNANNOTATED parameter may be inferred
+-- at any kind that contains no `Effect`, which for a data head means KType.
+-- An unannotated parameter used as a row is a kind error, reported by
+-- `checkDeclaredKinds` at the field that demands the kind; here it is simply
+-- KType, so elaboration continues.
+declParamKinds : List String -> List (Option KindAnn) -> List Kind
+declParamKinds params anns = map kindOfAnn (padAnns params anns)
+
+-- the annotation list is positional and the same length as the parameter
+-- list; pad defensively so a short list never truncates the kinds.
+padAnns : List String -> List (Option KindAnn) -> List (Option KindAnn)
+padAnns [] _ = []
+padAnns (_::ps) (a::as) = a :: padAnns ps as
+padAnns (_::ps) [] = None :: padAnns ps []
+
+kindOfAnn : Option KindAnn -> Kind
+kindOfAnn (Some KindEffect) = KRow
+kindOfAnn _ = KType
+
+-- an INTERFACE parameter's slot kinds from its declared arrow kind: `Effect ->
+-- Type -> Type` is `[KRow, KType]` (the final `Type` is the result, not a
+-- slot).  An atomic annotation has no slots.
+kindAnnSlots : KindAnn -> List Kind
+kindAnnSlots (KindArrow a b) = kindAnnAtom a :: kindAnnSlots b
+kindAnnSlots _ = []
+
+kindAnnAtom : KindAnn -> Kind
+kindAnnAtom KindEffect = KRow
+kindAnnAtom _ = KType
+
+kindAnnHasEffect : KindAnn -> Bool
+kindAnnHasEffect KindEffect = True
+kindAnnHasEffect (KindArrow a b) = kindAnnHasEffect a || kindAnnHasEffect b
+kindAnnHasEffect _ = False
+
+renderKindAnn : KindAnn -> String
+renderKindAnn KindType = "Type"
+renderKindAnn KindEffect = "Effect"
+renderKindAnn (KindArrow a b) = "\{renderKindAnnAtomic a} -> \{renderKindAnn b}"
+
+renderKindAnnAtomic : KindAnn -> String
+renderKindAnnAtomic (k@(KindArrow _ _)) = "(\{renderKindAnn k})"
+renderKindAnnAtomic k = renderKindAnn k
 
 -- ── #1119 D-2 (#1098 / #1121): the VARIANCE half of `recordParamKinds` ────
 -- Sibling of `recordParamKinds` immediately above, sharing its key (`tyTabKey
@@ -16693,13 +16937,27 @@ kindsEq _ _ = False
 -- The scope derived STRAIGHT FROM THE DECLARATION being elaborated: the same
 -- `ifaceParamKindsOf` inference stage K's `ceParamKinds` runs, on the very methods
 -- whose signatures are about to be built.  No name, no table, no lookup — structurally unforgeable.
-declGradedScope : List String -> List IfaceMethod -> List (String, List Kind)
-declGradedScope [] _ = []
-declGradedScope (p::ps) methods =
+-- EFFECTS-SEMANTICS §6.3 / §6.8: the graded scope is now DECLARED — an
+-- interface parameter is graded iff its head writes an arrow kind with an
+-- `Effect` in it (`(f : Effect -> Type -> Type)`).  The co-occurrence inference
+-- (`ifaceParamKindsOf`) is retired as a SOURCE of kinds and survives only as
+-- the evidence `checkDeclaredKinds` uses to tell the author which parameter
+-- needed the annotation.  [anns] is positional with [typarams].
+declGradedScope : List String -> List (Option KindAnn) -> List IfaceMethod -> List (String, List Kind)
+declGradedScope [] _ _ = []
+declGradedScope (p::ps) [] methods = declGradedScope (p::ps) [None] methods
+declGradedScope (p::ps) (a::anns) methods =
   declGradedScopeAdd
     p
-    (ifaceParamKindsOf p methods)
-    (declGradedScope ps methods)
+    (ifaceParamKindsDecl a p methods)
+    (declGradedScope ps anns methods)
+
+-- an interface parameter's RESOLVED slot kinds (§6.3): the declared arrow
+-- kind's slots where one is written; otherwise the inferred ARITY with every
+-- slot at KType — an unannotated parameter is never `Effect`-kinded.
+ifaceParamKindsDecl : Option KindAnn -> String -> List IfaceMethod -> List Kind
+ifaceParamKindsDecl (Some (KindArrow a b)) _ _ = kindAnnSlots (KindArrow a b)
+ifaceParamKindsDecl _ p methods = map (_ => KType) (ifaceParamKindsOf p methods)
 
 declGradedScopeAdd : String -> List Kind -> List (String, List Kind) -> List (String, List Kind)
 declGradedScopeAdd p kinds rest
@@ -20689,7 +20947,7 @@ insertMethodIfaceParams ((DAttrib _ d)::rest) acc =
   insertMethodIfaceParams rest (insertMethodIfaceParams [d] acc)
 -- #822: the graded scope is computed ONCE per declaration — the union over ALL of this
 -- interface's methods — and threaded in, never re-derived per method.
-insertMethodIfaceParams ((DInterface { name, typarams, methods, ifaceOrigin, ... })::rest) acc = insertMethodIfaceParams rest (insertIfaceMethodsAcc IfaceRef { irName = name, irOrigin = ifaceOrigin } typarams (declGradedScope typarams methods) methods acc)
+insertMethodIfaceParams ((DInterface { name, typarams, typaramKinds, methods, ifaceOrigin, ... })::rest) acc = insertMethodIfaceParams rest (insertIfaceMethodsAcc IfaceRef { irName = name, irOrigin = ifaceOrigin } typarams (declGradedScope typarams typaramKinds methods) methods acc)
 insertMethodIfaceParams (_::rest) acc = insertMethodIfaceParams rest acc
 
 insertIfaceMethodsAcc : IfaceRef -> List String -> List (String, List Kind) -> List IfaceMethod -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind)) -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind))
@@ -20764,7 +21022,7 @@ insertMethodIdents : List Decl -> (OrdMap (List (Ident, (IfaceRef, List String, 
 insertMethodIdents [] acc = acc
 insertMethodIdents ((DAttrib _ d)::rest) acc =
   insertMethodIdents rest (insertMethodIdents [d] acc)
-insertMethodIdents ((DInterface { name, typarams, methods, ifaceOrigin, ... })::rest) acc = insertMethodIdents rest (insertIfaceMethodIdents name typarams (declGradedScope typarams methods) ifaceOrigin methods acc)
+insertMethodIdents ((DInterface { name, typarams, typaramKinds, methods, ifaceOrigin, ... })::rest) acc = insertMethodIdents rest (insertIfaceMethodIdents name typarams (declGradedScope typarams typaramKinds methods) ifaceOrigin methods acc)
 insertMethodIdents (_::rest) acc = insertMethodIdents rest acc
 
 insertIfaceMethodIdents : String -> List String -> List (String, List Kind) -> TyConOrigin -> List IfaceMethod -> (OrdMap (List (Ident, (IfaceRef, List String, Ty, List (String, List Kind)))), List String) -> (OrdMap (List (Ident, (IfaceRef, List String, Ty, List (String, List Kind)))), List String)
@@ -26356,6 +26614,9 @@ checkBodyImpl seed mode prog0 =
   -- predicate (rowArgNames) reads that table to distinguish a row-kinded ctor arg
   -- (`Async e a`, pins the effect) from a type-kinded one (`List e`, does not).
   let _ = checkUndeterminedRetEffVars prog
+  -- EFFECTS-SEMANTICS §6.4/§6.5: declared-kind consistency.  Same placement — the
+  -- slot-kind reads consult the table `dataEnv` just populated.
+  let _ = checkDeclaredKinds prog
   -- #822: instance-head kind check for graded interfaces.  Same placement rationale
   -- as the line above for the HEAD-constructor half, which still reads
   -- `dataParamKindsRef` that `dataEnv` above has just populated.
@@ -26909,11 +27170,11 @@ inferOneIfaceDefaults env (DAttrib _ d) = inferOneIfaceDefaults env d
 -- `No impl of Foldable for Map` obligation.  The interface scheme is shadow-free.
 -- Also extend env with these schemes so PEER-method refs in a default body
 -- resolve to the interface methods (oracle's env_with_methods), not user shadows.
-inferOneIfaceDefaults env (DInterface { name, typarams, methods, ... }) =
+inferOneIfaceDefaults env (DInterface { name, typarams, typaramKinds, methods, ... }) =
   -- #822: derived from THIS declaration, not from a name key (declGradedScope), and
   -- threaded down so the default bodies see the same Row slots the schemes were built
   -- with.  Computed ONCE per interface rather than per method.
-  let dscope = declGradedScope typarams methods
+  let dscope = declGradedScope typarams typaramKinds methods
   let ifaceSchemes = methodSchemesPure dscope methods
   inferDefaultMethods (extendVars env ifaceSchemes) name dscope typarams methods
 inferOneIfaceDefaults _ _ = ()
@@ -29626,12 +29887,12 @@ ifaceMethodTy ((DAttrib _ d)::rest) iface mname = match ifaceMethodTy [d] iface 
 -- the interface, and with a bare `name == iface` the joint multi-module decl list makes
 -- "first" mean "whichever module the loader happened to order first", which is how an
 -- impl body came to be read under a same-spelled OTHER module's method type.
-ifaceMethodTy ((DInterface { name, typarams, methods, ifaceOrigin, ... })::rest) iface mname
+ifaceMethodTy ((DInterface { name, typarams, typaramKinds, methods, ifaceOrigin, ... })::rest) iface mname
   | sameIfaceDecl IfaceRef {
     irName = name,
     irOrigin = ifaceOrigin,
   } iface = match methodTyOf mname methods
-    Some ty => Some (typarams, ty, declGradedScope typarams methods)
+    Some ty => Some (typarams, ty, declGradedScope typarams typaramKinds methods)
     None => ifaceMethodTy rest iface mname
   | otherwise = ifaceMethodTy rest iface mname
 ifaceMethodTy (_::rest) iface mname = ifaceMethodTy rest iface mname
@@ -30674,8 +30935,8 @@ ifaceMethodSchemes [] = []
 ifaceMethodSchemes (d::rest) = declIfaceMethods d ++ ifaceMethodSchemes rest
 
 declIfaceMethods : Decl -> List (String, Scheme)
-declIfaceMethods (DInterface { name, typarams, methods, ... }) =
-  methodSchemes (declGradedScope typarams methods) typarams methods
+declIfaceMethods (DInterface { name, typarams, typaramKinds, methods, ... }) =
+  methodSchemes (declGradedScope typarams typaramKinds methods) typarams methods
 declIfaceMethods _ = []
 
 -- #1351 L1 (EXPAND): the IDENTITY-CARRYING sibling of `ifaceMethodSchemes` above.
@@ -30802,14 +31063,14 @@ numLitFromIntParamsOf (d::rest) = match numLitFromIntParamsDecl d
 -- `IfaceRef`, same typarams, same declared `Ty`, same `declGradedScope`.
 numLitFromIntParamsDecl : Decl -> Option (IfaceRef, List String, Ty, List (String, List Kind))
 numLitFromIntParamsDecl (DAttrib _ d) = numLitFromIntParamsDecl d
-numLitFromIntParamsDecl (DInterface { name, typarams, methods, ifaceOrigin, ... })
+numLitFromIntParamsDecl (DInterface { name, typarams, typaramKinds, methods, ifaceOrigin, ... })
   | sameIfaceDecl IfaceRef {
     irName = name,
     irOrigin = ifaceOrigin,
   } (builtinIfaceRef BNum) = pickIfaceMethodParams IfaceRef {
     irName = name,
     irOrigin = ifaceOrigin,
-  } typarams (declGradedScope typarams methods) "fromInt" methods
+  } typarams (declGradedScope typarams typaramKinds methods) "fromInt" methods
   | otherwise = None
 numLitFromIntParamsDecl _ = None
 
@@ -30831,7 +31092,7 @@ registerMethodIfaceParamsAll (d::rest) =
 
 registerMethodIfaceParamsDecl : Decl -> Unit
 registerMethodIfaceParamsDecl (DAttrib _ d) = registerMethodIfaceParamsDecl d
-registerMethodIfaceParamsDecl (DInterface { name, typarams, methods, ifaceOrigin, ... }) = registerMethodIfaceParamsMethods IfaceRef { irName = name, irOrigin = ifaceOrigin } typarams (declGradedScope typarams methods) methods
+registerMethodIfaceParamsDecl (DInterface { name, typarams, typaramKinds, methods, ifaceOrigin, ... }) = registerMethodIfaceParamsMethods IfaceRef { irName = name, irOrigin = ifaceOrigin } typarams (declGradedScope typarams typaramKinds methods) methods
 registerMethodIfaceParamsDecl _ = ()
 
 -- #822: [scope] — this interface's graded typarams, computed ONCE from THIS declaration
@@ -34420,6 +34681,8 @@ kindPublicDataDecl : Decl -> Bool
 kindPublicDataDecl (DData { dataVis = VisPublic }) = True
 kindPublicDataDecl (DData { dataVis = VisAbstract }) = True
 kindPublicDataDecl (DNewtype { newtypePub = True }) = True
+-- #2121: an exported alias publishes its declared kinds (see `declEnvKindEntries`).
+kindPublicDataDecl (DTypeAlias { tyAliasPub = True }) = True
 kindPublicDataDecl _ = False
 
 -- WS-1a fix: every impl in scope, EXPORT OR NOT.  Instances are GLOBAL (coherence
