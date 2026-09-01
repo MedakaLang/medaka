@@ -23,7 +23,7 @@
 -- next step.  This is the trampoline / free-monad-ish encoding (ASYNC-DESIGN
 -- §2.1) — `Suspend` boundaries are the yield points the scheduler interleaves
 -- on.  The thunk performs `<e>`, so `e` is the row this computation rides.
-export data Async e a = Done a | Suspend (Unit -> <e> Async e a)
+export data Async (e : Effect) a = Done a | Suspend (Unit -> <e> Async e a)
 
 -- The interface instances are over `Async e` (the row fixed, the value varying)
 -- — the standard partially-applied `* -> *` instance head, like `Mappable (Map

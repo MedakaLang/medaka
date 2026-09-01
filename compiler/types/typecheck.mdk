@@ -35,6 +35,7 @@ import frontend.ast.{
   -- fixture that pins `dataEnvFromDeclsGo`'s deliberate `DAttrib` asymmetry.
   Attr(..),
   Ty(..),
+  KindAnn(..),
   TyConOrigin(..),
   Ns(..),
   Ident(..),
@@ -1635,7 +1636,7 @@ checkSuperKinds prog name typarams anns methods ((Super { superHead = sh, superP
   checkSuperKinds prog name typarams anns methods rest
 
 zipKinds : List (List Kind) -> List (List Kind) -> List (List Kind, List Kind)
-zipKinds (a::as) (b::bs) = (a, b) :: zipKinds as bs
+zipKinds (a::xs) (b::ys) = (a, b) :: zipKinds xs ys
 zipKinds _ _ = []
 
 -- the resolved slot kinds of the sub-interface's OWN parameter [p]
@@ -16621,7 +16622,7 @@ declParamKinds params anns = map kindOfAnn (padAnns params anns)
 -- list; pad defensively so a short list never truncates the kinds.
 padAnns : List String -> List (Option KindAnn) -> List (Option KindAnn)
 padAnns [] _ = []
-padAnns (_::ps) (a::as) = a :: padAnns ps as
+padAnns (_::ps) (a::rest) = a :: padAnns ps rest
 padAnns (_::ps) [] = None :: padAnns ps []
 
 kindOfAnn : Option KindAnn -> Kind
