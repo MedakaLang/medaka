@@ -1,5 +1,5 @@
 # META
-source_lines=2344
+source_lines=2358
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -943,11 +943,10 @@ bindFieldTemps ((CField k ex)::rest) body =
 -- (non-empty routes) is NOT hoisted — it keeps its per-call semantics.
 --
 -- Only occurrences that ACTUALLY appear are hoisted: the walk records each rewritten
--- (tag, method) into memoRefsRef so no dead CAF global is emitted.  The module Ref
--- (reset per hoistNullaryMemo call — lowerProgramEmit is the single caller) keeps the
--- structural walk to one pass without tupling a collector through every CExpr case.
-memoRefsRef : Ref (List (String, String))
-memoRefsRef = Ref []
+-- (tag, method) into `LowerState.memoRefs` (declared below).  That collector is a Ref
+-- so the structural walk stays one pass without tupling an accumulator through every
+-- CExpr case — but it is a field of the per-emission carrier, not a module-scope Ref
+-- reset by convention on entry (#1954).
 
 -- the (method, SELECTOR) instances that are per-instance CAFs — see the gate above.
 -- The selector is the string an RKey occurrence of this instance actually carries:
@@ -1037,20 +1036,36 @@ hasDefaultL ((CImplEntry n _ (CImplDefault _ _ _))::rest) m = n == m
   || hasDefaultL rest m
 hasDefaultL (_::rest) m = hasDefaultL rest m
 
--- the (method, selector) instances hoistable through a runtime-dict route (item 1),
--- reset per hoistNullaryMemo call.  Read only by the RDict/RDictFwd hoistExpr arm.
-soleMemoKeysRef : Ref (List (String, String))
-soleMemoKeysRef = Ref []
-
--- #747: ALL (method, selector) memo keys of the program (nullary/return-position/
--- no-requires impls), computed once in hoistNullaryMemo.  Read by the RDict/RDictFwd
--- MULTI-impl arm of hoistDictNullary to enumerate every impl tag of the method so a
--- `$memo_<selector>_<method>` CAF is synthesized for each.  The occurrence stays a
--- runtime dispatch; the emit backends' dispatch chain forces the matching per-tag CAF
--- (per-runtime-tag memoisation), so each resolved tag's side effect fires once — the
--- same sharing eval's per-VTypedImpl memoThunk gives regardless of route.
-allMemoKeysRef : Ref (List (String, String))
-allMemoKeysRef = Ref []
+-- ── LowerState — the per-emission hoist carrier (#1954) ──────────────────────
+-- Constructed once per `hoistNullaryMemo` call and threaded explicitly through the
+-- whole hoist walk, in place of three module-scope `Ref`s that were reset-on-entry
+-- by convention.  It REPLACES the walk's existing `keys` parameter rather than
+-- riding alongside it, so no walk function gained an argument.
+--
+--   • `memoKeysAll` — #747: ALL (method, selector) memo keys of the program
+--     (nullary/return-position/no-requires impls), computed once in
+--     `hoistNullaryMemo`.  This is one value serving what used to be two: the
+--     `keys` parameter the walk threaded (read by `hoistExpr`'s `isMemoKey` gate)
+--     and `allMemoKeysRef`, which `hoistNullaryMemo` always assigned that same
+--     `keys`.  Read by the RDict/RDictFwd MULTI-impl arm of `hoistDictNullary` to
+--     enumerate every impl tag of the method so a `$memo_<selector>_<method>` CAF
+--     is synthesized for each.  The occurrence stays a runtime dispatch; the emit
+--     backends' dispatch chain forces the matching per-tag CAF (per-runtime-tag
+--     memoisation), so each resolved tag's side effect fires once — the same
+--     sharing eval's per-VTypedImpl memoThunk gives regardless of route.
+--   • `soleKeys` — the (method, selector) instances hoistable through a runtime-dict
+--     route (#731 item 1).  Read only by the RDict/RDictFwd `hoistExpr` arm.
+--   • `memoRefs` — the walk's collector of rewritten (tag, method) pairs.  The one
+--     mutable field, and the only reason the carrier holds a `Ref` at all.
+--
+-- Adding a field is one line here plus the one construction site in
+-- `hoistNullaryMemo`: every walk function already takes the whole record.
+data LowerState =
+  | LowerState {
+      memoKeysAll : List (String, String),
+      soleKeys : List (String, String),
+      memoRefs : Ref (List (String, String)),
+    }
 
 -- the synthesized CAF binding name for a memoised (selector, method) instance.  The
 -- `$` prefix is the internal-binder convention (cf. composeVar `$cf`), so it cannot
@@ -1070,11 +1085,12 @@ allMemoKeysRef = Ref []
 memoBindName : String -> String -> String
 memoBindName selector method = "$memo_\{injectiveIdent selector}_\{method}"
 
-recordMemoRef : String -> String -> Unit
-recordMemoRef tag method = memoRefsRef := (tag, method) :: !memoRefsRef
+recordMemoRef : LowerState -> String -> String -> Unit
+recordMemoRef st tag method =
+  let refs = st.memoRefs in refs := (tag, method) :: !refs
 
 -- #731 item 1 / #747: rewrite a runtime-dict-routed nullary occurrence.
---   • single-impl (soleMemoKeysRef): the runtime dict can only ever resolve to the
+--   • single-impl (`st.soleKeys`): the runtime dict can only ever resolve to the
 --     ONE impl, so hoist the occurrence itself to that shared CAF (statically the
 --     same one an RKey occurrence names) — #731 item 1, unchanged.
 --   • multi-impl (#747): the resolved tag is only known at runtime, so the occurrence
@@ -1084,30 +1100,30 @@ recordMemoRef tag method = memoRefsRef := (tag, method) :: !memoRefsRef
 --     resolved tag's side effect fires once, shared across routes (matching eval's
 --     per-VTypedImpl memoThunk).  Distinct tags carry distinct CAFs → memoise
 --     independently.  A method with no nullary/return-position impl records nothing.
-hoistDictNullary : String -> Route -> CExpr
-hoistDictNullary name route = match lookupAssoc name !soleMemoKeysRef
+hoistDictNullary : LowerState -> String -> Route -> CExpr
+hoistDictNullary st name route = match lookupAssoc name st.soleKeys
   Some sel =>
-    let _ = recordMemoRef sel name
+    let _ = recordMemoRef st sel name
     CVar (memoBindName sel name) AGlobal
   None =>
-    let _ = recordMultiImplMemo name
+    let _ = recordMultiImplMemo st name
     CMethod name route [] []
 
 -- #747: synthesize one per-tag CAF for every nullary/return-position impl of a
 -- multi-impl method reached via a runtime-dict route.  Records each (selector, method)
--- into memoRefsRef so hoistNullaryMemo prepends a `$memo_<selector>_<method>` value
+-- into `st.memoRefs` so hoistNullaryMemo prepends a `$memo_<selector>_<method>` value
 -- bind (dedupPairs collapses repeats).  Only fires for methods that appear in the
 -- program's memo keys — a nullary occurrence of a NON-memoisable method records
 -- nothing, leaving its per-call dispatch untouched.
-recordMultiImplMemo : String -> Unit
-recordMultiImplMemo name = recordMultiImplMemoGo name !allMemoKeysRef
+recordMultiImplMemo : LowerState -> String -> Unit
+recordMultiImplMemo st name = recordMultiImplMemoGo st name st.memoKeysAll
 
-recordMultiImplMemoGo : String -> List (String, String) -> Unit
-recordMultiImplMemoGo _ [] = ()
-recordMultiImplMemoGo name ((m, sel)::rest)
+recordMultiImplMemoGo : LowerState -> String -> List (String, String) -> Unit
+recordMultiImplMemoGo _ _ [] = ()
+recordMultiImplMemoGo st name ((m, sel)::rest)
   | m == name =
-    let _ = recordMemoRef sel name in recordMultiImplMemoGo name rest
-  | otherwise = recordMultiImplMemoGo name rest
+    let _ = recordMemoRef st sel name in recordMultiImplMemoGo st name rest
+  | otherwise = recordMultiImplMemoGo st name rest
 
 -- the whole-program hoist: rewrite every memoisable occurrence to a CAF reference,
 -- then prepend one synthesized CAF value-bind per referenced instance.  A no-op (the
@@ -1117,12 +1133,14 @@ hoistNullaryMemo (CProgram groups ctorArs ctorTypes implEntries) =
   let keys = memoKeys implEntries
   if isEmptyL keys then CProgram groups ctorArs ctorTypes implEntries
   else
-    memoRefsRef := []
-    soleMemoKeysRef := soleMemoKeys implEntries keys
-    allMemoKeysRef := keys
-    let groups2 = map (hoistBind keys) groups
-    let impls2 = map (hoistImpl keys) implEntries
-    let refs = dedupPairs (reverseL !memoRefsRef)
+    let st = LowerState {
+      memoKeysAll = keys,
+      soleKeys = soleMemoKeys implEntries keys,
+      memoRefs = Ref [],
+    }
+    let groups2 = map (hoistBind st) groups
+    let impls2 = map (hoistImpl st) implEntries
+    let refs = dedupPairs (reverseL !st.memoRefs)
     CProgram (map memoCafBind refs ++ groups2) ctorArs ctorTypes impls2
 
 memoCafBind : (String, String) -> CBind
@@ -1140,24 +1158,24 @@ dedupPairs ps = dedupBy memoRefKey ps
 memoRefKey : (String, String) -> String
 memoRefKey (tag, method) = lenKey tag ++ method
 
-hoistBind : List (String, String) -> CBind -> CBind
-hoistBind keys (CBind n clauses) = CBind n (map (hoistClause keys) clauses)
+hoistBind : LowerState -> CBind -> CBind
+hoistBind st (CBind n clauses) = CBind n (map (hoistClause st) clauses)
 
-hoistClause : List (String, String) -> CClause -> CClause
-hoistClause keys (CClause pats body) = CClause pats (hoistExpr keys body)
+hoistClause : LowerState -> CClause -> CClause
+hoistClause st (CClause pats body) = CClause pats (hoistExpr st body)
 
-hoistImpl : List (String, String) -> CImplEntry -> CImplEntry
-hoistImpl keys (CImplEntry n s (CImplTagged tag key iface pos pats body)) =
-  CImplEntry n s (CImplTagged tag key iface pos pats (hoistExpr keys body))
-hoistImpl keys (CImplEntry n s (CImplDefault ifaceId pats body)) =
-  CImplEntry n s (CImplDefault ifaceId pats (hoistExpr keys body))
+hoistImpl : LowerState -> CImplEntry -> CImplEntry
+hoistImpl st (CImplEntry n s (CImplTagged tag key iface pos pats body)) =
+  CImplEntry n s (CImplTagged tag key iface pos pats (hoistExpr st body))
+hoistImpl st (CImplEntry n s (CImplDefault ifaceId pats body)) =
+  CImplEntry n s (CImplDefault ifaceId pats (hoistExpr st body))
 
 -- the structural walk (mirrors rewriteExprRP), rewriting ONLY the gated CMethod
 -- occurrence; everything else recurses unchanged.
-hoistExpr : List (String, String) -> CExpr -> CExpr
-hoistExpr keys (CMethod name (RKey tag []) [] []) =
-  if isMemoKey keys name tag then
-    let _ = recordMemoRef tag name
+hoistExpr : LowerState -> CExpr -> CExpr
+hoistExpr st (CMethod name (RKey tag []) [] []) =
+  if isMemoKey st.memoKeysAll name tag then
+    let _ = recordMemoRef st tag name
     CVar (memoBindName tag name) AGlobal
   else CMethod name (RKey tag []) [] []
 -- #731 item 1: a nullary return-position method reached via a runtime-dict route
@@ -1167,70 +1185,66 @@ hoistExpr keys (CMethod name (RKey tag []) [] []) =
 -- direct RKey occurrence hits); hoist it to the SAME CAF the RKey path uses so the
 -- side effect fires once on build too, shared across routes.  A multi-impl method's
 -- tag is only known at runtime, so it stays a per-call dispatch (unchanged).
-hoistExpr _ (CMethod name (RDict d) [] []) = hoistDictNullary name (RDict d)
-hoistExpr _ (CMethod name (RDictFwd d) [] []) =
-  hoistDictNullary name (RDictFwd d)
+hoistExpr st (CMethod name (RDict d) [] []) = hoistDictNullary st name (RDict d)
+hoistExpr st (CMethod name (RDictFwd d) [] []) =
+  hoistDictNullary st name (RDictFwd d)
 hoistExpr _ (CMethod name r ir mr) = CMethod name r ir mr
 hoistExpr _ (CLit l) = CLit l
 hoistExpr _ (CVar x addr) = CVar x addr
-hoistExpr keys (CApp f x) = CApp (hoistExpr keys f) (hoistExpr keys x)
-hoistExpr keys (CLam pats body) = CLam pats (hoistExpr keys body)
-hoistExpr keys (CLet r pat e1 e2) =
-  CLet r pat (hoistExpr keys e1) (hoistExpr keys e2)
-hoistExpr keys (CLetGroup binds body) =
-  CLetGroup (map (hoistBind keys) binds) (hoistExpr keys body)
-hoistExpr keys (CMatch scrut arms) =
-  CMatch (hoistExpr keys scrut) (map (hoistArm keys) arms)
-hoistExpr keys (CDecision scrut arms tree) =
-  CDecision (hoistExpr keys scrut) (map (hoistArm keys) arms) tree
-hoistExpr keys (CIf c t e) =
-  CIf (hoistExpr keys c) (hoistExpr keys t) (hoistExpr keys e)
-hoistExpr keys (CBinPrim op l r tag) =
-  CBinPrim op (hoistExpr keys l) (hoistExpr keys r) tag
-hoistExpr keys (CUnOp op x) = CUnOp op (hoistExpr keys x)
-hoistExpr keys (CTuple es) = CTuple (map (hoistExpr keys) es)
-hoistExpr keys (CList es) = CList (map (hoistExpr keys) es)
-hoistExpr keys (CRecord name fields) =
-  CRecord name (map (hoistField keys) fields)
-hoistExpr keys (CFieldAccess ex f n) = CFieldAccess (hoistExpr keys ex) f n
-hoistExpr keys (CRecordUpdate name base fields) =
-  CRecordUpdate name (hoistExpr keys base) (map (hoistField keys) fields)
-hoistExpr keys (CVariantUpdate con base fields) =
-  CVariantUpdate con (hoistExpr keys base) (map (hoistField keys) fields)
-hoistExpr keys (CArray es) = CArray (map (hoistExpr keys) es)
-hoistExpr keys (CRangeList lo hi incl) =
-  CRangeList (hoistExpr keys lo) (hoistExpr keys hi) incl
-hoistExpr keys (CRangeArray lo hi incl) =
-  CRangeArray (hoistExpr keys lo) (hoistExpr keys hi) incl
-hoistExpr keys (CIndex a i) = CIndex (hoistExpr keys a) (hoistExpr keys i)
-hoistExpr keys (CSlice a lo hi incl) =
-  CSlice (hoistExpr keys a) (hoistExpr keys lo) (hoistExpr keys hi) incl
-hoistExpr keys (CStringIndex a i) =
-  CStringIndex (hoistExpr keys a) (hoistExpr keys i)
-hoistExpr keys (CStringSlice a lo hi incl) =
-  CStringSlice (hoistExpr keys a) (hoistExpr keys lo) (hoistExpr keys hi) incl
-hoistExpr keys (CListIndex a i) =
-  CListIndex (hoistExpr keys a) (hoistExpr keys i)
-hoistExpr keys (CListSlice a lo hi incl) =
-  CListSlice (hoistExpr keys a) (hoistExpr keys lo) (hoistExpr keys hi) incl
-hoistExpr keys (CBlock stmts) = CBlock (map (hoistStmt keys) stmts)
+hoistExpr st (CApp f x) = CApp (hoistExpr st f) (hoistExpr st x)
+hoistExpr st (CLam pats body) = CLam pats (hoistExpr st body)
+hoistExpr st (CLet r pat e1 e2) = CLet r pat (hoistExpr st e1) (hoistExpr st e2)
+hoistExpr st (CLetGroup binds body) =
+  CLetGroup (map (hoistBind st) binds) (hoistExpr st body)
+hoistExpr st (CMatch scrut arms) =
+  CMatch (hoistExpr st scrut) (map (hoistArm st) arms)
+hoistExpr st (CDecision scrut arms tree) =
+  CDecision (hoistExpr st scrut) (map (hoistArm st) arms) tree
+hoistExpr st (CIf c t e) =
+  CIf (hoistExpr st c) (hoistExpr st t) (hoistExpr st e)
+hoistExpr st (CBinPrim op l r tag) =
+  CBinPrim op (hoistExpr st l) (hoistExpr st r) tag
+hoistExpr st (CUnOp op x) = CUnOp op (hoistExpr st x)
+hoistExpr st (CTuple es) = CTuple (map (hoistExpr st) es)
+hoistExpr st (CList es) = CList (map (hoistExpr st) es)
+hoistExpr st (CRecord name fields) = CRecord name (map (hoistField st) fields)
+hoistExpr st (CFieldAccess ex f n) = CFieldAccess (hoistExpr st ex) f n
+hoistExpr st (CRecordUpdate name base fields) =
+  CRecordUpdate name (hoistExpr st base) (map (hoistField st) fields)
+hoistExpr st (CVariantUpdate con base fields) =
+  CVariantUpdate con (hoistExpr st base) (map (hoistField st) fields)
+hoistExpr st (CArray es) = CArray (map (hoistExpr st) es)
+hoistExpr st (CRangeList lo hi incl) =
+  CRangeList (hoistExpr st lo) (hoistExpr st hi) incl
+hoistExpr st (CRangeArray lo hi incl) =
+  CRangeArray (hoistExpr st lo) (hoistExpr st hi) incl
+hoistExpr st (CIndex a i) = CIndex (hoistExpr st a) (hoistExpr st i)
+hoistExpr st (CSlice a lo hi incl) =
+  CSlice (hoistExpr st a) (hoistExpr st lo) (hoistExpr st hi) incl
+hoistExpr st (CStringIndex a i) = CStringIndex (hoistExpr st a) (hoistExpr st i)
+hoistExpr st (CStringSlice a lo hi incl) =
+  CStringSlice (hoistExpr st a) (hoistExpr st lo) (hoistExpr st hi) incl
+hoistExpr st (CListIndex a i) = CListIndex (hoistExpr st a) (hoistExpr st i)
+hoistExpr st (CListSlice a lo hi incl) =
+  CListSlice (hoistExpr st a) (hoistExpr st lo) (hoistExpr st hi) incl
+hoistExpr st (CBlock stmts) = CBlock (map (hoistStmt st) stmts)
 hoistExpr _ (CDict name rs) = CDict name rs
 
-hoistArm : List (String, String) -> CArm -> CArm
-hoistArm keys (CArm pat guards body) =
-  CArm pat (map (hoistGuard keys) guards) (hoistExpr keys body)
+hoistArm : LowerState -> CArm -> CArm
+hoistArm st (CArm pat guards body) =
+  CArm pat (map (hoistGuard st) guards) (hoistExpr st body)
 
-hoistGuard : List (String, String) -> CGuard -> CGuard
-hoistGuard keys (CGBool e) = CGBool (hoistExpr keys e)
-hoistGuard keys (CGBind p e) = CGBind p (hoistExpr keys e)
+hoistGuard : LowerState -> CGuard -> CGuard
+hoistGuard st (CGBool e) = CGBool (hoistExpr st e)
+hoistGuard st (CGBind p e) = CGBind p (hoistExpr st e)
 
-hoistStmt : List (String, String) -> CStmt -> CStmt
-hoistStmt keys (CSExpr e) = CSExpr (hoistExpr keys e)
-hoistStmt keys (CSLet r pat e) = CSLet r pat (hoistExpr keys e)
-hoistStmt keys (CSAssign x e) = CSAssign x (hoistExpr keys e)
+hoistStmt : LowerState -> CStmt -> CStmt
+hoistStmt st (CSExpr e) = CSExpr (hoistExpr st e)
+hoistStmt st (CSLet r pat e) = CSLet r pat (hoistExpr st e)
+hoistStmt st (CSAssign x e) = CSAssign x (hoistExpr st e)
 
-hoistField : List (String, String) -> CField -> CField
-hoistField keys (CField k e) = CField k (hoistExpr keys e)
+hoistField : LowerState -> CField -> CField
+hoistField st (CField k e) = CField k (hoistExpr st e)
 
 -- recompile a CDecision's tree from rewritten arms (same call lowerMatch makes).
 compileArmsC : List CArm -> CTree
@@ -2670,8 +2684,6 @@ nodeTag _ = "?"
 (DTypeSig false "bindFieldTemps" (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyFun (TyCon "CExpr") (TyCon "CExpr"))))
 (DFunDef false "bindFieldTemps" ((PList) (PVar "body")) (EVar "body"))
 (DFunDef false "bindFieldTemps" ((PCons (PCon "CField" (PVar "k") (PVar "ex")) (PVar "rest")) (PVar "body")) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "False")) (EApp (EApp (EVar "PVar") (EApp (EVar "recTempName") (EVar "k"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))))) (EVar "ex")) (EApp (EApp (EVar "bindFieldTemps") (EVar "rest")) (EVar "body"))))
-(DTypeSig false "memoRefsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
-(DFunDef false "memoRefsRef" () (EApp (EVar "Ref") (EListLit)))
 (DTypeSig false "memoKeys" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "memoKeys" ((PVar "entries")) (EApp (EApp (EVar "memoKeysGo") (EVar "entries")) (EVar "entries")))
 (DTypeSig false "memoKeysGo" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
@@ -2703,80 +2715,77 @@ nodeTag _ = "?"
 (DFunDef false "hasDefaultL" ((PList) PWild) (EVar "False"))
 (DFunDef false "hasDefaultL" ((PCons (PCon "CImplEntry" (PVar "n") PWild (PCon "CImplDefault" PWild PWild PWild)) (PVar "rest")) (PVar "m")) (EBinOp "||" (EBinOp "==" (EVar "n") (EVar "m")) (EApp (EApp (EVar "hasDefaultL") (EVar "rest")) (EVar "m"))))
 (DFunDef false "hasDefaultL" ((PCons PWild (PVar "rest")) (PVar "m")) (EApp (EApp (EVar "hasDefaultL") (EVar "rest")) (EVar "m")))
-(DTypeSig false "soleMemoKeysRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
-(DFunDef false "soleMemoKeysRef" () (EApp (EVar "Ref") (EListLit)))
-(DTypeSig false "allMemoKeysRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
-(DFunDef false "allMemoKeysRef" () (EApp (EVar "Ref") (EListLit)))
+(DData Private "LowerState" () ((variant "LowerState" (ConNamed (field "memoKeysAll" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "soleKeys" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "memoRefs" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))) ())
 (DTypeSig false "memoBindName" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "memoBindName" ((PVar "selector") (PVar "method")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "$memo_")) (EApp (EVar "display") (EApp (EVar "injectiveIdent") (EVar "selector")))) (ELit (LString "_"))) (EApp (EVar "display") (EVar "method"))) (ELit (LString ""))))
-(DTypeSig false "recordMemoRef" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit"))))
-(DFunDef false "recordMemoRef" ((PVar "tag") (PVar "method")) (EApp (EApp (EVar "setRef") (EVar "memoRefsRef")) (EBinOp "::" (ETuple (EVar "tag") (EVar "method")) (EUnOp "!" (EVar "memoRefsRef")))))
-(DTypeSig false "hoistDictNullary" (TyFun (TyCon "String") (TyFun (TyCon "Route") (TyCon "CExpr"))))
-(DFunDef false "hoistDictNullary" ((PVar "name") (PVar "route")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EUnOp "!" (EVar "soleMemoKeysRef"))) (arm (PCon "Some" (PVar "sel")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "recordMemoRef") (EVar "sel")) (EVar "name"))) (DoExpr (EApp (EApp (EVar "CVar") (EApp (EApp (EVar "memoBindName") (EVar "sel")) (EVar "name"))) (EVar "AGlobal"))))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EVar "recordMultiImplMemo") (EVar "name"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "route")) (EListLit)) (EListLit)))))))
-(DTypeSig false "recordMultiImplMemo" (TyFun (TyCon "String") (TyCon "Unit")))
-(DFunDef false "recordMultiImplMemo" ((PVar "name")) (EApp (EApp (EVar "recordMultiImplMemoGo") (EVar "name")) (EUnOp "!" (EVar "allMemoKeysRef"))))
-(DTypeSig false "recordMultiImplMemoGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Unit"))))
-(DFunDef false "recordMultiImplMemoGo" (PWild (PList)) (ELit LUnit))
-(DFunDef false "recordMultiImplMemoGo" ((PVar "name") (PCons (PTuple (PVar "m") (PVar "sel")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "m") (EVar "name")) (ELet false PWild (EApp (EApp (EVar "recordMemoRef") (EVar "sel")) (EVar "name")) (EApp (EApp (EVar "recordMultiImplMemoGo") (EVar "name")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "recordMultiImplMemoGo") (EVar "name")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "recordMemoRef" (TyFun (TyCon "LowerState") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit")))))
+(DFunDef false "recordMemoRef" ((PVar "st") (PVar "tag") (PVar "method")) (ELet false (PVar "refs") (EFieldAccess (EVar "st") "memoRefs") (EApp (EApp (EVar "setRef") (EVar "refs")) (EBinOp "::" (ETuple (EVar "tag") (EVar "method")) (EUnOp "!" (EVar "refs"))))))
+(DTypeSig false "hoistDictNullary" (TyFun (TyCon "LowerState") (TyFun (TyCon "String") (TyFun (TyCon "Route") (TyCon "CExpr")))))
+(DFunDef false "hoistDictNullary" ((PVar "st") (PVar "name") (PVar "route")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EFieldAccess (EVar "st") "soleKeys")) (arm (PCon "Some" (PVar "sel")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "recordMemoRef") (EVar "st")) (EVar "sel")) (EVar "name"))) (DoExpr (EApp (EApp (EVar "CVar") (EApp (EApp (EVar "memoBindName") (EVar "sel")) (EVar "name"))) (EVar "AGlobal"))))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EApp (EVar "recordMultiImplMemo") (EVar "st")) (EVar "name"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "route")) (EListLit)) (EListLit)))))))
+(DTypeSig false "recordMultiImplMemo" (TyFun (TyCon "LowerState") (TyFun (TyCon "String") (TyCon "Unit"))))
+(DFunDef false "recordMultiImplMemo" ((PVar "st") (PVar "name")) (EApp (EApp (EApp (EVar "recordMultiImplMemoGo") (EVar "st")) (EVar "name")) (EFieldAccess (EVar "st") "memoKeysAll")))
+(DTypeSig false "recordMultiImplMemoGo" (TyFun (TyCon "LowerState") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Unit")))))
+(DFunDef false "recordMultiImplMemoGo" (PWild PWild (PList)) (ELit LUnit))
+(DFunDef false "recordMultiImplMemoGo" ((PVar "st") (PVar "name") (PCons (PTuple (PVar "m") (PVar "sel")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "m") (EVar "name")) (ELet false PWild (EApp (EApp (EApp (EVar "recordMemoRef") (EVar "st")) (EVar "sel")) (EVar "name")) (EApp (EApp (EApp (EVar "recordMultiImplMemoGo") (EVar "st")) (EVar "name")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "recordMultiImplMemoGo") (EVar "st")) (EVar "name")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "hoistNullaryMemo" (TyFun (TyCon "CProgram") (TyCon "CProgram")))
-(DFunDef false "hoistNullaryMemo" ((PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "implEntries"))) (EBlock (DoLet false false (PVar "keys") (EApp (EVar "memoKeys") (EVar "implEntries"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "keys")) (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "implEntries")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "memoRefsRef")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "soleMemoKeysRef")) (EApp (EApp (EVar "soleMemoKeys") (EVar "implEntries")) (EVar "keys")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "allMemoKeysRef")) (EVar "keys"))) (DoLet false false (PVar "groups2") (EApp (EApp (EVar "map") (EApp (EVar "hoistBind") (EVar "keys"))) (EVar "groups"))) (DoLet false false (PVar "impls2") (EApp (EApp (EVar "map") (EApp (EVar "hoistImpl") (EVar "keys"))) (EVar "implEntries"))) (DoLet false false (PVar "refs") (EApp (EVar "dedupPairs") (EApp (EVar "reverseL") (EUnOp "!" (EVar "memoRefsRef"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CProgram") (EBinOp "++" (EApp (EApp (EVar "map") (EVar "memoCafBind")) (EVar "refs")) (EVar "groups2"))) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls2"))))))))
+(DFunDef false "hoistNullaryMemo" ((PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "implEntries"))) (EBlock (DoLet false false (PVar "keys") (EApp (EVar "memoKeys") (EVar "implEntries"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "keys")) (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "implEntries")) (EBlock (DoLet false false (PVar "st") (ERecordCreate "LowerState" ((fa "memoKeysAll" (EVar "keys")) (fa "soleKeys" (EApp (EApp (EVar "soleMemoKeys") (EVar "implEntries")) (EVar "keys"))) (fa "memoRefs" (EApp (EVar "Ref") (EListLit)))))) (DoLet false false (PVar "groups2") (EApp (EApp (EVar "map") (EApp (EVar "hoistBind") (EVar "st"))) (EVar "groups"))) (DoLet false false (PVar "impls2") (EApp (EApp (EVar "map") (EApp (EVar "hoistImpl") (EVar "st"))) (EVar "implEntries"))) (DoLet false false (PVar "refs") (EApp (EVar "dedupPairs") (EApp (EVar "reverseL") (EUnOp "!" (EFieldAccess (EVar "st") "memoRefs"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CProgram") (EBinOp "++" (EApp (EApp (EVar "map") (EVar "memoCafBind")) (EVar "refs")) (EVar "groups2"))) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls2"))))))))
 (DTypeSig false "memoCafBind" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "CBind")))
 (DFunDef false "memoCafBind" ((PTuple (PVar "tag") (PVar "method"))) (EApp (EApp (EVar "CBind") (EApp (EApp (EVar "memoBindName") (EVar "tag")) (EVar "method"))) (EListLit (EApp (EApp (EVar "CClause") (EListLit)) (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "method")) (EApp (EApp (EVar "RKey") (EVar "tag")) (EListLit))) (EListLit)) (EListLit))))))
 (DTypeSig false "dedupPairs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "dedupPairs" ((PVar "ps")) (EApp (EApp (EVar "dedupBy") (EVar "memoRefKey")) (EVar "ps")))
 (DTypeSig false "memoRefKey" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "String")))
 (DFunDef false "memoRefKey" ((PTuple (PVar "tag") (PVar "method"))) (EBinOp "++" (EApp (EVar "lenKey") (EVar "tag")) (EVar "method")))
-(DTypeSig false "hoistBind" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "CBind") (TyCon "CBind"))))
-(DFunDef false "hoistBind" ((PVar "keys") (PCon "CBind" (PVar "n") (PVar "clauses"))) (EApp (EApp (EVar "CBind") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EVar "hoistClause") (EVar "keys"))) (EVar "clauses"))))
-(DTypeSig false "hoistClause" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "CClause") (TyCon "CClause"))))
-(DFunDef false "hoistClause" ((PVar "keys") (PCon "CClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "CClause") (EVar "pats")) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "body"))))
-(DTypeSig false "hoistImpl" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "CImplEntry") (TyCon "CImplEntry"))))
-(DFunDef false "hoistImpl" ((PVar "keys") (PCon "CImplEntry" (PVar "n") (PVar "s") (PCon "CImplTagged" (PVar "tag") (PVar "key") (PVar "iface") (PVar "pos") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EVar "CImplEntry") (EVar "n")) (EVar "s")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EVar "tag")) (EVar "key")) (EVar "iface")) (EVar "pos")) (EVar "pats")) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "body")))))
-(DFunDef false "hoistImpl" ((PVar "keys") (PCon "CImplEntry" (PVar "n") (PVar "s") (PCon "CImplDefault" (PVar "ifaceId") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EVar "CImplEntry") (EVar "n")) (EVar "s")) (EApp (EApp (EApp (EVar "CImplDefault") (EVar "ifaceId")) (EVar "pats")) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "body")))))
-(DTypeSig false "hoistExpr" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "CExpr") (TyCon "CExpr"))))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CMethod" (PVar "name") (PCon "RKey" (PVar "tag") (PList)) (PList) (PList))) (EIf (EApp (EApp (EApp (EVar "isMemoKey") (EVar "keys")) (EVar "name")) (EVar "tag")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "recordMemoRef") (EVar "tag")) (EVar "name"))) (DoExpr (EApp (EApp (EVar "CVar") (EApp (EApp (EVar "memoBindName") (EVar "tag")) (EVar "name"))) (EVar "AGlobal")))) (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EApp (EApp (EVar "RKey") (EVar "tag")) (EListLit))) (EListLit)) (EListLit))))
-(DFunDef false "hoistExpr" (PWild (PCon "CMethod" (PVar "name") (PCon "RDict" (PVar "d")) (PList) (PList))) (EApp (EApp (EVar "hoistDictNullary") (EVar "name")) (EApp (EVar "RDict") (EVar "d"))))
-(DFunDef false "hoistExpr" (PWild (PCon "CMethod" (PVar "name") (PCon "RDictFwd" (PVar "d")) (PList) (PList))) (EApp (EApp (EVar "hoistDictNullary") (EVar "name")) (EApp (EVar "RDictFwd") (EVar "d"))))
+(DTypeSig false "hoistBind" (TyFun (TyCon "LowerState") (TyFun (TyCon "CBind") (TyCon "CBind"))))
+(DFunDef false "hoistBind" ((PVar "st") (PCon "CBind" (PVar "n") (PVar "clauses"))) (EApp (EApp (EVar "CBind") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EVar "hoistClause") (EVar "st"))) (EVar "clauses"))))
+(DTypeSig false "hoistClause" (TyFun (TyCon "LowerState") (TyFun (TyCon "CClause") (TyCon "CClause"))))
+(DFunDef false "hoistClause" ((PVar "st") (PCon "CClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "CClause") (EVar "pats")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "body"))))
+(DTypeSig false "hoistImpl" (TyFun (TyCon "LowerState") (TyFun (TyCon "CImplEntry") (TyCon "CImplEntry"))))
+(DFunDef false "hoistImpl" ((PVar "st") (PCon "CImplEntry" (PVar "n") (PVar "s") (PCon "CImplTagged" (PVar "tag") (PVar "key") (PVar "iface") (PVar "pos") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EVar "CImplEntry") (EVar "n")) (EVar "s")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EVar "tag")) (EVar "key")) (EVar "iface")) (EVar "pos")) (EVar "pats")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "body")))))
+(DFunDef false "hoistImpl" ((PVar "st") (PCon "CImplEntry" (PVar "n") (PVar "s") (PCon "CImplDefault" (PVar "ifaceId") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EVar "CImplEntry") (EVar "n")) (EVar "s")) (EApp (EApp (EApp (EVar "CImplDefault") (EVar "ifaceId")) (EVar "pats")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "body")))))
+(DTypeSig false "hoistExpr" (TyFun (TyCon "LowerState") (TyFun (TyCon "CExpr") (TyCon "CExpr"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CMethod" (PVar "name") (PCon "RKey" (PVar "tag") (PList)) (PList) (PList))) (EIf (EApp (EApp (EApp (EVar "isMemoKey") (EFieldAccess (EVar "st") "memoKeysAll")) (EVar "name")) (EVar "tag")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "recordMemoRef") (EVar "st")) (EVar "tag")) (EVar "name"))) (DoExpr (EApp (EApp (EVar "CVar") (EApp (EApp (EVar "memoBindName") (EVar "tag")) (EVar "name"))) (EVar "AGlobal")))) (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EApp (EApp (EVar "RKey") (EVar "tag")) (EListLit))) (EListLit)) (EListLit))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CMethod" (PVar "name") (PCon "RDict" (PVar "d")) (PList) (PList))) (EApp (EApp (EApp (EVar "hoistDictNullary") (EVar "st")) (EVar "name")) (EApp (EVar "RDict") (EVar "d"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CMethod" (PVar "name") (PCon "RDictFwd" (PVar "d")) (PList) (PList))) (EApp (EApp (EApp (EVar "hoistDictNullary") (EVar "st")) (EVar "name")) (EApp (EVar "RDictFwd") (EVar "d"))))
 (DFunDef false "hoistExpr" (PWild (PCon "CMethod" (PVar "name") (PVar "r") (PVar "ir") (PVar "mr"))) (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "r")) (EVar "ir")) (EVar "mr")))
 (DFunDef false "hoistExpr" (PWild (PCon "CLit" (PVar "l"))) (EApp (EVar "CLit") (EVar "l")))
 (DFunDef false "hoistExpr" (PWild (PCon "CVar" (PVar "x") (PVar "addr"))) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "addr")))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "CApp") (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "f"))) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "x"))))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CLam" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "CLam") (EVar "pats")) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "body"))))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CLet" (PVar "r") (PVar "pat") (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "r")) (EVar "pat")) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "e1"))) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "e2"))))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "CLetGroup") (EApp (EApp (EVar "map") (EApp (EVar "hoistBind") (EVar "keys"))) (EVar "binds"))) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "body"))))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EVar "CMatch") (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "scrut"))) (EApp (EApp (EVar "map") (EApp (EVar "hoistArm") (EVar "keys"))) (EVar "arms"))))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EApp (EApp (EApp (EVar "CDecision") (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "scrut"))) (EApp (EApp (EVar "map") (EApp (EVar "hoistArm") (EVar "keys"))) (EVar "arms"))) (EVar "tree")))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CIf" (PVar "c") (PVar "t") (PVar "e"))) (EApp (EApp (EApp (EVar "CIf") (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "c"))) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "t"))) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "e"))))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag"))) (EApp (EApp (EApp (EApp (EVar "CBinPrim") (EVar "op")) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "l"))) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "r"))) (EVar "tag")))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CUnOp" (PVar "op") (PVar "x"))) (EApp (EApp (EVar "CUnOp") (EVar "op")) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "x"))))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CTuple" (PVar "es"))) (EApp (EVar "CTuple") (EApp (EApp (EVar "map") (EApp (EVar "hoistExpr") (EVar "keys"))) (EVar "es"))))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CList" (PVar "es"))) (EApp (EVar "CList") (EApp (EApp (EVar "map") (EApp (EVar "hoistExpr") (EVar "keys"))) (EVar "es"))))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CRecord" (PVar "name") (PVar "fields"))) (EApp (EApp (EVar "CRecord") (EVar "name")) (EApp (EApp (EVar "map") (EApp (EVar "hoistField") (EVar "keys"))) (EVar "fields"))))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CFieldAccess" (PVar "ex") (PVar "f") (PVar "n"))) (EApp (EApp (EApp (EVar "CFieldAccess") (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "ex"))) (EVar "f")) (EVar "n")))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CRecordUpdate" (PVar "name") (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "CRecordUpdate") (EVar "name")) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "base"))) (EApp (EApp (EVar "map") (EApp (EVar "hoistField") (EVar "keys"))) (EVar "fields"))))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CVariantUpdate" (PVar "con") (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "CVariantUpdate") (EVar "con")) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "base"))) (EApp (EApp (EVar "map") (EApp (EVar "hoistField") (EVar "keys"))) (EVar "fields"))))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CArray" (PVar "es"))) (EApp (EVar "CArray") (EApp (EApp (EVar "map") (EApp (EVar "hoistExpr") (EVar "keys"))) (EVar "es"))))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CRangeList" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "CRangeList") (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "lo"))) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "hi"))) (EVar "incl")))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CRangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "CRangeArray") (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "lo"))) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "hi"))) (EVar "incl")))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "CIndex") (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "a"))) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "i"))))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "CSlice") (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "a"))) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "lo"))) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "hi"))) (EVar "incl")))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CStringIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "CStringIndex") (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "a"))) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "i"))))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "CStringSlice") (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "a"))) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "lo"))) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "hi"))) (EVar "incl")))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CListIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "CListIndex") (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "a"))) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "i"))))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "CListSlice") (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "a"))) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "lo"))) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "hi"))) (EVar "incl")))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CBlock" (PVar "stmts"))) (EApp (EVar "CBlock") (EApp (EApp (EVar "map") (EApp (EVar "hoistStmt") (EVar "keys"))) (EVar "stmts"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "CApp") (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "f"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "x"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CLam" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "CLam") (EVar "pats")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "body"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CLet" (PVar "r") (PVar "pat") (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "r")) (EVar "pat")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "e1"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "e2"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "CLetGroup") (EApp (EApp (EVar "map") (EApp (EVar "hoistBind") (EVar "st"))) (EVar "binds"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "body"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EVar "CMatch") (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "scrut"))) (EApp (EApp (EVar "map") (EApp (EVar "hoistArm") (EVar "st"))) (EVar "arms"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EApp (EApp (EApp (EVar "CDecision") (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "scrut"))) (EApp (EApp (EVar "map") (EApp (EVar "hoistArm") (EVar "st"))) (EVar "arms"))) (EVar "tree")))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CIf" (PVar "c") (PVar "t") (PVar "e"))) (EApp (EApp (EApp (EVar "CIf") (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "c"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "t"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "e"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag"))) (EApp (EApp (EApp (EApp (EVar "CBinPrim") (EVar "op")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "l"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "r"))) (EVar "tag")))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CUnOp" (PVar "op") (PVar "x"))) (EApp (EApp (EVar "CUnOp") (EVar "op")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "x"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CTuple" (PVar "es"))) (EApp (EVar "CTuple") (EApp (EApp (EVar "map") (EApp (EVar "hoistExpr") (EVar "st"))) (EVar "es"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CList" (PVar "es"))) (EApp (EVar "CList") (EApp (EApp (EVar "map") (EApp (EVar "hoistExpr") (EVar "st"))) (EVar "es"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CRecord" (PVar "name") (PVar "fields"))) (EApp (EApp (EVar "CRecord") (EVar "name")) (EApp (EApp (EVar "map") (EApp (EVar "hoistField") (EVar "st"))) (EVar "fields"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CFieldAccess" (PVar "ex") (PVar "f") (PVar "n"))) (EApp (EApp (EApp (EVar "CFieldAccess") (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "ex"))) (EVar "f")) (EVar "n")))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CRecordUpdate" (PVar "name") (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "CRecordUpdate") (EVar "name")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "base"))) (EApp (EApp (EVar "map") (EApp (EVar "hoistField") (EVar "st"))) (EVar "fields"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CVariantUpdate" (PVar "con") (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "CVariantUpdate") (EVar "con")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "base"))) (EApp (EApp (EVar "map") (EApp (EVar "hoistField") (EVar "st"))) (EVar "fields"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CArray" (PVar "es"))) (EApp (EVar "CArray") (EApp (EApp (EVar "map") (EApp (EVar "hoistExpr") (EVar "st"))) (EVar "es"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CRangeList" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "CRangeList") (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "lo"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CRangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "CRangeArray") (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "lo"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "CIndex") (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "a"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "i"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "CSlice") (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "a"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "lo"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CStringIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "CStringIndex") (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "a"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "i"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "CStringSlice") (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "a"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "lo"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CListIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "CListIndex") (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "a"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "i"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "CListSlice") (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "a"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "lo"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CBlock" (PVar "stmts"))) (EApp (EVar "CBlock") (EApp (EApp (EVar "map") (EApp (EVar "hoistStmt") (EVar "st"))) (EVar "stmts"))))
 (DFunDef false "hoistExpr" (PWild (PCon "CDict" (PVar "name") (PVar "rs"))) (EApp (EApp (EVar "CDict") (EVar "name")) (EVar "rs")))
-(DTypeSig false "hoistArm" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "CArm") (TyCon "CArm"))))
-(DFunDef false "hoistArm" ((PVar "keys") (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) (EApp (EApp (EApp (EVar "CArm") (EVar "pat")) (EApp (EApp (EVar "map") (EApp (EVar "hoistGuard") (EVar "keys"))) (EVar "guards"))) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "body"))))
-(DTypeSig false "hoistGuard" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "CGuard") (TyCon "CGuard"))))
-(DFunDef false "hoistGuard" ((PVar "keys") (PCon "CGBool" (PVar "e"))) (EApp (EVar "CGBool") (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "e"))))
-(DFunDef false "hoistGuard" ((PVar "keys") (PCon "CGBind" (PVar "p") (PVar "e"))) (EApp (EApp (EVar "CGBind") (EVar "p")) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "e"))))
-(DTypeSig false "hoistStmt" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "CStmt") (TyCon "CStmt"))))
-(DFunDef false "hoistStmt" ((PVar "keys") (PCon "CSExpr" (PVar "e"))) (EApp (EVar "CSExpr") (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "e"))))
-(DFunDef false "hoistStmt" ((PVar "keys") (PCon "CSLet" (PVar "r") (PVar "pat") (PVar "e"))) (EApp (EApp (EApp (EVar "CSLet") (EVar "r")) (EVar "pat")) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "e"))))
-(DFunDef false "hoistStmt" ((PVar "keys") (PCon "CSAssign" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "CSAssign") (EVar "x")) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "e"))))
-(DTypeSig false "hoistField" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "CField") (TyCon "CField"))))
-(DFunDef false "hoistField" ((PVar "keys") (PCon "CField" (PVar "k") (PVar "e"))) (EApp (EApp (EVar "CField") (EVar "k")) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "e"))))
+(DTypeSig false "hoistArm" (TyFun (TyCon "LowerState") (TyFun (TyCon "CArm") (TyCon "CArm"))))
+(DFunDef false "hoistArm" ((PVar "st") (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) (EApp (EApp (EApp (EVar "CArm") (EVar "pat")) (EApp (EApp (EVar "map") (EApp (EVar "hoistGuard") (EVar "st"))) (EVar "guards"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "body"))))
+(DTypeSig false "hoistGuard" (TyFun (TyCon "LowerState") (TyFun (TyCon "CGuard") (TyCon "CGuard"))))
+(DFunDef false "hoistGuard" ((PVar "st") (PCon "CGBool" (PVar "e"))) (EApp (EVar "CGBool") (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "e"))))
+(DFunDef false "hoistGuard" ((PVar "st") (PCon "CGBind" (PVar "p") (PVar "e"))) (EApp (EApp (EVar "CGBind") (EVar "p")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "e"))))
+(DTypeSig false "hoistStmt" (TyFun (TyCon "LowerState") (TyFun (TyCon "CStmt") (TyCon "CStmt"))))
+(DFunDef false "hoistStmt" ((PVar "st") (PCon "CSExpr" (PVar "e"))) (EApp (EVar "CSExpr") (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "e"))))
+(DFunDef false "hoistStmt" ((PVar "st") (PCon "CSLet" (PVar "r") (PVar "pat") (PVar "e"))) (EApp (EApp (EApp (EVar "CSLet") (EVar "r")) (EVar "pat")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "e"))))
+(DFunDef false "hoistStmt" ((PVar "st") (PCon "CSAssign" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "CSAssign") (EVar "x")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "e"))))
+(DTypeSig false "hoistField" (TyFun (TyCon "LowerState") (TyFun (TyCon "CField") (TyCon "CField"))))
+(DFunDef false "hoistField" ((PVar "st") (PCon "CField" (PVar "k") (PVar "e"))) (EApp (EApp (EVar "CField") (EVar "k")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "e"))))
 (DTypeSig false "compileArmsC" (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "CTree")))
 (DFunDef false "compileArmsC" ((PVar "arms")) (EApp (EApp (EVar "compileTree") (EApp (EApp (EVar "map") (EVar "carmHasGuard")) (EVar "arms"))) (EApp (EApp (EVar "cInitialRows") (EVar "arms")) (ELit (LInt 0)))))
 (DTypeSig false "carmHasGuard" (TyFun (TyCon "CArm") (TyCon "Bool")))
@@ -3397,8 +3406,6 @@ nodeTag _ = "?"
 (DTypeSig false "bindFieldTemps" (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyFun (TyCon "CExpr") (TyCon "CExpr"))))
 (DFunDef false "bindFieldTemps" ((PList) (PVar "body")) (EVar "body"))
 (DFunDef false "bindFieldTemps" ((PCons (PCon "CField" (PVar "k") (PVar "ex")) (PVar "rest")) (PVar "body")) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "False")) (EApp (EApp (EVar "PVar") (EApp (EVar "recTempName") (EVar "k"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))))) (EVar "ex")) (EApp (EApp (EVar "bindFieldTemps") (EVar "rest")) (EVar "body"))))
-(DTypeSig false "memoRefsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
-(DFunDef false "memoRefsRef" () (EApp (EVar "Ref") (EListLit)))
 (DTypeSig false "memoKeys" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "memoKeys" ((PVar "entries")) (EApp (EApp (EVar "memoKeysGo") (EVar "entries")) (EVar "entries")))
 (DTypeSig false "memoKeysGo" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
@@ -3430,80 +3437,77 @@ nodeTag _ = "?"
 (DFunDef false "hasDefaultL" ((PList) PWild) (EVar "False"))
 (DFunDef false "hasDefaultL" ((PCons (PCon "CImplEntry" (PVar "n") PWild (PCon "CImplDefault" PWild PWild PWild)) (PVar "rest")) (PVar "m")) (EBinOp "||" (EBinOp "==" (EVar "n") (EVar "m")) (EApp (EApp (EVar "hasDefaultL") (EVar "rest")) (EVar "m"))))
 (DFunDef false "hasDefaultL" ((PCons PWild (PVar "rest")) (PVar "m")) (EApp (EApp (EVar "hasDefaultL") (EVar "rest")) (EVar "m")))
-(DTypeSig false "soleMemoKeysRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
-(DFunDef false "soleMemoKeysRef" () (EApp (EVar "Ref") (EListLit)))
-(DTypeSig false "allMemoKeysRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
-(DFunDef false "allMemoKeysRef" () (EApp (EVar "Ref") (EListLit)))
+(DData Private "LowerState" () ((variant "LowerState" (ConNamed (field "memoKeysAll" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "soleKeys" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "memoRefs" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))) ())
 (DTypeSig false "memoBindName" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "memoBindName" ((PVar "selector") (PVar "method")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "$memo_")) (EApp (EMethodRef "display") (EApp (EVar "injectiveIdent") (EVar "selector")))) (ELit (LString "_"))) (EApp (EMethodRef "display") (EVar "method"))) (ELit (LString ""))))
-(DTypeSig false "recordMemoRef" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit"))))
-(DFunDef false "recordMemoRef" ((PVar "tag") (PVar "method")) (EApp (EApp (EVar "setRef") (EVar "memoRefsRef")) (EBinOp "::" (ETuple (EVar "tag") (EVar "method")) (EUnOp "!" (EVar "memoRefsRef")))))
-(DTypeSig false "hoistDictNullary" (TyFun (TyCon "String") (TyFun (TyCon "Route") (TyCon "CExpr"))))
-(DFunDef false "hoistDictNullary" ((PVar "name") (PVar "route")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EUnOp "!" (EVar "soleMemoKeysRef"))) (arm (PCon "Some" (PVar "sel")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "recordMemoRef") (EVar "sel")) (EVar "name"))) (DoExpr (EApp (EApp (EVar "CVar") (EApp (EApp (EVar "memoBindName") (EVar "sel")) (EVar "name"))) (EVar "AGlobal"))))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EVar "recordMultiImplMemo") (EVar "name"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "route")) (EListLit)) (EListLit)))))))
-(DTypeSig false "recordMultiImplMemo" (TyFun (TyCon "String") (TyCon "Unit")))
-(DFunDef false "recordMultiImplMemo" ((PVar "name")) (EApp (EApp (EVar "recordMultiImplMemoGo") (EVar "name")) (EUnOp "!" (EVar "allMemoKeysRef"))))
-(DTypeSig false "recordMultiImplMemoGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Unit"))))
-(DFunDef false "recordMultiImplMemoGo" (PWild (PList)) (ELit LUnit))
-(DFunDef false "recordMultiImplMemoGo" ((PVar "name") (PCons (PTuple (PVar "m") (PVar "sel")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "m") (EVar "name")) (ELet false PWild (EApp (EApp (EVar "recordMemoRef") (EVar "sel")) (EVar "name")) (EApp (EApp (EVar "recordMultiImplMemoGo") (EVar "name")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "recordMultiImplMemoGo") (EVar "name")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "recordMemoRef" (TyFun (TyCon "LowerState") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit")))))
+(DFunDef false "recordMemoRef" ((PVar "st") (PVar "tag") (PVar "method")) (ELet false (PVar "refs") (EFieldAccess (EVar "st") "memoRefs") (EApp (EApp (EVar "setRef") (EVar "refs")) (EBinOp "::" (ETuple (EVar "tag") (EVar "method")) (EUnOp "!" (EVar "refs"))))))
+(DTypeSig false "hoistDictNullary" (TyFun (TyCon "LowerState") (TyFun (TyCon "String") (TyFun (TyCon "Route") (TyCon "CExpr")))))
+(DFunDef false "hoistDictNullary" ((PVar "st") (PVar "name") (PVar "route")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EFieldAccess (EVar "st") "soleKeys")) (arm (PCon "Some" (PVar "sel")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "recordMemoRef") (EVar "st")) (EVar "sel")) (EVar "name"))) (DoExpr (EApp (EApp (EVar "CVar") (EApp (EApp (EVar "memoBindName") (EVar "sel")) (EVar "name"))) (EVar "AGlobal"))))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EApp (EVar "recordMultiImplMemo") (EVar "st")) (EVar "name"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "route")) (EListLit)) (EListLit)))))))
+(DTypeSig false "recordMultiImplMemo" (TyFun (TyCon "LowerState") (TyFun (TyCon "String") (TyCon "Unit"))))
+(DFunDef false "recordMultiImplMemo" ((PVar "st") (PVar "name")) (EApp (EApp (EApp (EVar "recordMultiImplMemoGo") (EVar "st")) (EVar "name")) (EFieldAccess (EVar "st") "memoKeysAll")))
+(DTypeSig false "recordMultiImplMemoGo" (TyFun (TyCon "LowerState") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Unit")))))
+(DFunDef false "recordMultiImplMemoGo" (PWild PWild (PList)) (ELit LUnit))
+(DFunDef false "recordMultiImplMemoGo" ((PVar "st") (PVar "name") (PCons (PTuple (PVar "m") (PVar "sel")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "m") (EVar "name")) (ELet false PWild (EApp (EApp (EApp (EVar "recordMemoRef") (EVar "st")) (EVar "sel")) (EVar "name")) (EApp (EApp (EApp (EVar "recordMultiImplMemoGo") (EVar "st")) (EVar "name")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "recordMultiImplMemoGo") (EVar "st")) (EVar "name")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "hoistNullaryMemo" (TyFun (TyCon "CProgram") (TyCon "CProgram")))
-(DFunDef false "hoistNullaryMemo" ((PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "implEntries"))) (EBlock (DoLet false false (PVar "keys") (EApp (EVar "memoKeys") (EVar "implEntries"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "keys")) (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "implEntries")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "memoRefsRef")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "soleMemoKeysRef")) (EApp (EApp (EVar "soleMemoKeys") (EVar "implEntries")) (EVar "keys")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "allMemoKeysRef")) (EVar "keys"))) (DoLet false false (PVar "groups2") (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistBind") (EVar "keys"))) (EVar "groups"))) (DoLet false false (PVar "impls2") (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistImpl") (EVar "keys"))) (EVar "implEntries"))) (DoLet false false (PVar "refs") (EApp (EVar "dedupPairs") (EApp (EVar "reverseL") (EUnOp "!" (EVar "memoRefsRef"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CProgram") (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "memoCafBind")) (EVar "refs")) (EVar "groups2"))) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls2"))))))))
+(DFunDef false "hoistNullaryMemo" ((PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "implEntries"))) (EBlock (DoLet false false (PVar "keys") (EApp (EVar "memoKeys") (EVar "implEntries"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "keys")) (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "implEntries")) (EBlock (DoLet false false (PVar "st") (ERecordCreate "LowerState" ((fa "memoKeysAll" (EVar "keys")) (fa "soleKeys" (EApp (EApp (EVar "soleMemoKeys") (EVar "implEntries")) (EVar "keys"))) (fa "memoRefs" (EApp (EVar "Ref") (EListLit)))))) (DoLet false false (PVar "groups2") (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistBind") (EVar "st"))) (EVar "groups"))) (DoLet false false (PVar "impls2") (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistImpl") (EVar "st"))) (EVar "implEntries"))) (DoLet false false (PVar "refs") (EApp (EVar "dedupPairs") (EApp (EVar "reverseL") (EUnOp "!" (EFieldAccess (EVar "st") "memoRefs"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CProgram") (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "memoCafBind")) (EVar "refs")) (EVar "groups2"))) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls2"))))))))
 (DTypeSig false "memoCafBind" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "CBind")))
 (DFunDef false "memoCafBind" ((PTuple (PVar "tag") (PVar "method"))) (EApp (EApp (EVar "CBind") (EApp (EApp (EVar "memoBindName") (EVar "tag")) (EVar "method"))) (EListLit (EApp (EApp (EVar "CClause") (EListLit)) (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "method")) (EApp (EApp (EVar "RKey") (EVar "tag")) (EListLit))) (EListLit)) (EListLit))))))
 (DTypeSig false "dedupPairs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "dedupPairs" ((PVar "ps")) (EApp (EApp (EVar "dedupBy") (EVar "memoRefKey")) (EVar "ps")))
 (DTypeSig false "memoRefKey" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "String")))
 (DFunDef false "memoRefKey" ((PTuple (PVar "tag") (PVar "method"))) (EBinOp "++" (EApp (EVar "lenKey") (EVar "tag")) (EVar "method")))
-(DTypeSig false "hoistBind" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "CBind") (TyCon "CBind"))))
-(DFunDef false "hoistBind" ((PVar "keys") (PCon "CBind" (PVar "n") (PVar "clauses"))) (EApp (EApp (EVar "CBind") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistClause") (EVar "keys"))) (EVar "clauses"))))
-(DTypeSig false "hoistClause" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "CClause") (TyCon "CClause"))))
-(DFunDef false "hoistClause" ((PVar "keys") (PCon "CClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "CClause") (EVar "pats")) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "body"))))
-(DTypeSig false "hoistImpl" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "CImplEntry") (TyCon "CImplEntry"))))
-(DFunDef false "hoistImpl" ((PVar "keys") (PCon "CImplEntry" (PVar "n") (PVar "s") (PCon "CImplTagged" (PVar "tag") (PVar "key") (PVar "iface") (PVar "pos") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EVar "CImplEntry") (EVar "n")) (EVar "s")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EVar "tag")) (EVar "key")) (EVar "iface")) (EVar "pos")) (EVar "pats")) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "body")))))
-(DFunDef false "hoistImpl" ((PVar "keys") (PCon "CImplEntry" (PVar "n") (PVar "s") (PCon "CImplDefault" (PVar "ifaceId") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EVar "CImplEntry") (EVar "n")) (EVar "s")) (EApp (EApp (EApp (EVar "CImplDefault") (EVar "ifaceId")) (EVar "pats")) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "body")))))
-(DTypeSig false "hoistExpr" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "CExpr") (TyCon "CExpr"))))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CMethod" (PVar "name") (PCon "RKey" (PVar "tag") (PList)) (PList) (PList))) (EIf (EApp (EApp (EApp (EVar "isMemoKey") (EVar "keys")) (EVar "name")) (EVar "tag")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "recordMemoRef") (EVar "tag")) (EVar "name"))) (DoExpr (EApp (EApp (EVar "CVar") (EApp (EApp (EVar "memoBindName") (EVar "tag")) (EVar "name"))) (EVar "AGlobal")))) (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EApp (EApp (EVar "RKey") (EVar "tag")) (EListLit))) (EListLit)) (EListLit))))
-(DFunDef false "hoistExpr" (PWild (PCon "CMethod" (PVar "name") (PCon "RDict" (PVar "d")) (PList) (PList))) (EApp (EApp (EVar "hoistDictNullary") (EVar "name")) (EApp (EVar "RDict") (EVar "d"))))
-(DFunDef false "hoistExpr" (PWild (PCon "CMethod" (PVar "name") (PCon "RDictFwd" (PVar "d")) (PList) (PList))) (EApp (EApp (EVar "hoistDictNullary") (EVar "name")) (EApp (EVar "RDictFwd") (EVar "d"))))
+(DTypeSig false "hoistBind" (TyFun (TyCon "LowerState") (TyFun (TyCon "CBind") (TyCon "CBind"))))
+(DFunDef false "hoistBind" ((PVar "st") (PCon "CBind" (PVar "n") (PVar "clauses"))) (EApp (EApp (EVar "CBind") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistClause") (EVar "st"))) (EVar "clauses"))))
+(DTypeSig false "hoistClause" (TyFun (TyCon "LowerState") (TyFun (TyCon "CClause") (TyCon "CClause"))))
+(DFunDef false "hoistClause" ((PVar "st") (PCon "CClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "CClause") (EVar "pats")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "body"))))
+(DTypeSig false "hoistImpl" (TyFun (TyCon "LowerState") (TyFun (TyCon "CImplEntry") (TyCon "CImplEntry"))))
+(DFunDef false "hoistImpl" ((PVar "st") (PCon "CImplEntry" (PVar "n") (PVar "s") (PCon "CImplTagged" (PVar "tag") (PVar "key") (PVar "iface") (PVar "pos") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EVar "CImplEntry") (EVar "n")) (EVar "s")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EVar "tag")) (EVar "key")) (EVar "iface")) (EVar "pos")) (EVar "pats")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "body")))))
+(DFunDef false "hoistImpl" ((PVar "st") (PCon "CImplEntry" (PVar "n") (PVar "s") (PCon "CImplDefault" (PVar "ifaceId") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EVar "CImplEntry") (EVar "n")) (EVar "s")) (EApp (EApp (EApp (EVar "CImplDefault") (EVar "ifaceId")) (EVar "pats")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "body")))))
+(DTypeSig false "hoistExpr" (TyFun (TyCon "LowerState") (TyFun (TyCon "CExpr") (TyCon "CExpr"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CMethod" (PVar "name") (PCon "RKey" (PVar "tag") (PList)) (PList) (PList))) (EIf (EApp (EApp (EApp (EVar "isMemoKey") (EFieldAccess (EVar "st") "memoKeysAll")) (EVar "name")) (EVar "tag")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "recordMemoRef") (EVar "st")) (EVar "tag")) (EVar "name"))) (DoExpr (EApp (EApp (EVar "CVar") (EApp (EApp (EVar "memoBindName") (EVar "tag")) (EVar "name"))) (EVar "AGlobal")))) (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EApp (EApp (EVar "RKey") (EVar "tag")) (EListLit))) (EListLit)) (EListLit))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CMethod" (PVar "name") (PCon "RDict" (PVar "d")) (PList) (PList))) (EApp (EApp (EApp (EVar "hoistDictNullary") (EVar "st")) (EVar "name")) (EApp (EVar "RDict") (EVar "d"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CMethod" (PVar "name") (PCon "RDictFwd" (PVar "d")) (PList) (PList))) (EApp (EApp (EApp (EVar "hoistDictNullary") (EVar "st")) (EVar "name")) (EApp (EVar "RDictFwd") (EVar "d"))))
 (DFunDef false "hoistExpr" (PWild (PCon "CMethod" (PVar "name") (PVar "r") (PVar "ir") (PVar "mr"))) (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "r")) (EVar "ir")) (EVar "mr")))
 (DFunDef false "hoistExpr" (PWild (PCon "CLit" (PVar "l"))) (EApp (EVar "CLit") (EVar "l")))
 (DFunDef false "hoistExpr" (PWild (PCon "CVar" (PVar "x") (PVar "addr"))) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "addr")))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "CApp") (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "f"))) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "x"))))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CLam" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "CLam") (EVar "pats")) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "body"))))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CLet" (PVar "r") (PVar "pat") (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "r")) (EVar "pat")) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "e1"))) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "e2"))))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "CLetGroup") (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistBind") (EVar "keys"))) (EVar "binds"))) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "body"))))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EVar "CMatch") (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "scrut"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistArm") (EVar "keys"))) (EVar "arms"))))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EApp (EApp (EApp (EVar "CDecision") (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "scrut"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistArm") (EVar "keys"))) (EVar "arms"))) (EVar "tree")))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CIf" (PVar "c") (PVar "t") (PVar "e"))) (EApp (EApp (EApp (EVar "CIf") (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "c"))) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "t"))) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "e"))))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag"))) (EApp (EApp (EApp (EApp (EVar "CBinPrim") (EVar "op")) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "l"))) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "r"))) (EVar "tag")))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CUnOp" (PVar "op") (PVar "x"))) (EApp (EApp (EVar "CUnOp") (EVar "op")) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "x"))))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CTuple" (PVar "es"))) (EApp (EVar "CTuple") (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistExpr") (EVar "keys"))) (EVar "es"))))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CList" (PVar "es"))) (EApp (EVar "CList") (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistExpr") (EVar "keys"))) (EVar "es"))))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CRecord" (PVar "name") (PVar "fields"))) (EApp (EApp (EVar "CRecord") (EVar "name")) (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistField") (EVar "keys"))) (EVar "fields"))))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CFieldAccess" (PVar "ex") (PVar "f") (PVar "n"))) (EApp (EApp (EApp (EVar "CFieldAccess") (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "ex"))) (EVar "f")) (EVar "n")))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CRecordUpdate" (PVar "name") (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "CRecordUpdate") (EVar "name")) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "base"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistField") (EVar "keys"))) (EVar "fields"))))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CVariantUpdate" (PVar "con") (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "CVariantUpdate") (EVar "con")) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "base"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistField") (EVar "keys"))) (EVar "fields"))))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CArray" (PVar "es"))) (EApp (EVar "CArray") (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistExpr") (EVar "keys"))) (EVar "es"))))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CRangeList" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "CRangeList") (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "lo"))) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "hi"))) (EVar "incl")))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CRangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "CRangeArray") (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "lo"))) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "hi"))) (EVar "incl")))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "CIndex") (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "a"))) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "i"))))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "CSlice") (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "a"))) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "lo"))) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "hi"))) (EVar "incl")))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CStringIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "CStringIndex") (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "a"))) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "i"))))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "CStringSlice") (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "a"))) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "lo"))) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "hi"))) (EVar "incl")))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CListIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "CListIndex") (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "a"))) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "i"))))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "CListSlice") (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "a"))) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "lo"))) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "hi"))) (EVar "incl")))
-(DFunDef false "hoistExpr" ((PVar "keys") (PCon "CBlock" (PVar "stmts"))) (EApp (EVar "CBlock") (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistStmt") (EVar "keys"))) (EVar "stmts"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "CApp") (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "f"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "x"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CLam" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "CLam") (EVar "pats")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "body"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CLet" (PVar "r") (PVar "pat") (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "r")) (EVar "pat")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "e1"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "e2"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "CLetGroup") (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistBind") (EVar "st"))) (EVar "binds"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "body"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EVar "CMatch") (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "scrut"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistArm") (EVar "st"))) (EVar "arms"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EApp (EApp (EApp (EVar "CDecision") (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "scrut"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistArm") (EVar "st"))) (EVar "arms"))) (EVar "tree")))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CIf" (PVar "c") (PVar "t") (PVar "e"))) (EApp (EApp (EApp (EVar "CIf") (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "c"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "t"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "e"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag"))) (EApp (EApp (EApp (EApp (EVar "CBinPrim") (EVar "op")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "l"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "r"))) (EVar "tag")))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CUnOp" (PVar "op") (PVar "x"))) (EApp (EApp (EVar "CUnOp") (EVar "op")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "x"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CTuple" (PVar "es"))) (EApp (EVar "CTuple") (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistExpr") (EVar "st"))) (EVar "es"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CList" (PVar "es"))) (EApp (EVar "CList") (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistExpr") (EVar "st"))) (EVar "es"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CRecord" (PVar "name") (PVar "fields"))) (EApp (EApp (EVar "CRecord") (EVar "name")) (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistField") (EVar "st"))) (EVar "fields"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CFieldAccess" (PVar "ex") (PVar "f") (PVar "n"))) (EApp (EApp (EApp (EVar "CFieldAccess") (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "ex"))) (EVar "f")) (EVar "n")))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CRecordUpdate" (PVar "name") (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "CRecordUpdate") (EVar "name")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "base"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistField") (EVar "st"))) (EVar "fields"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CVariantUpdate" (PVar "con") (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "CVariantUpdate") (EVar "con")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "base"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistField") (EVar "st"))) (EVar "fields"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CArray" (PVar "es"))) (EApp (EVar "CArray") (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistExpr") (EVar "st"))) (EVar "es"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CRangeList" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "CRangeList") (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "lo"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CRangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "CRangeArray") (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "lo"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "CIndex") (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "a"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "i"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "CSlice") (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "a"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "lo"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CStringIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "CStringIndex") (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "a"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "i"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "CStringSlice") (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "a"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "lo"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CListIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "CListIndex") (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "a"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "i"))))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "CListSlice") (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "a"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "lo"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "hoistExpr" ((PVar "st") (PCon "CBlock" (PVar "stmts"))) (EApp (EVar "CBlock") (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistStmt") (EVar "st"))) (EVar "stmts"))))
 (DFunDef false "hoistExpr" (PWild (PCon "CDict" (PVar "name") (PVar "rs"))) (EApp (EApp (EVar "CDict") (EVar "name")) (EVar "rs")))
-(DTypeSig false "hoistArm" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "CArm") (TyCon "CArm"))))
-(DFunDef false "hoistArm" ((PVar "keys") (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) (EApp (EApp (EApp (EVar "CArm") (EVar "pat")) (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistGuard") (EVar "keys"))) (EVar "guards"))) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "body"))))
-(DTypeSig false "hoistGuard" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "CGuard") (TyCon "CGuard"))))
-(DFunDef false "hoistGuard" ((PVar "keys") (PCon "CGBool" (PVar "e"))) (EApp (EVar "CGBool") (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "e"))))
-(DFunDef false "hoistGuard" ((PVar "keys") (PCon "CGBind" (PVar "p") (PVar "e"))) (EApp (EApp (EVar "CGBind") (EVar "p")) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "e"))))
-(DTypeSig false "hoistStmt" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "CStmt") (TyCon "CStmt"))))
-(DFunDef false "hoistStmt" ((PVar "keys") (PCon "CSExpr" (PVar "e"))) (EApp (EVar "CSExpr") (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "e"))))
-(DFunDef false "hoistStmt" ((PVar "keys") (PCon "CSLet" (PVar "r") (PVar "pat") (PVar "e"))) (EApp (EApp (EApp (EVar "CSLet") (EVar "r")) (EVar "pat")) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "e"))))
-(DFunDef false "hoistStmt" ((PVar "keys") (PCon "CSAssign" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "CSAssign") (EVar "x")) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "e"))))
-(DTypeSig false "hoistField" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "CField") (TyCon "CField"))))
-(DFunDef false "hoistField" ((PVar "keys") (PCon "CField" (PVar "k") (PVar "e"))) (EApp (EApp (EVar "CField") (EVar "k")) (EApp (EApp (EVar "hoistExpr") (EVar "keys")) (EVar "e"))))
+(DTypeSig false "hoistArm" (TyFun (TyCon "LowerState") (TyFun (TyCon "CArm") (TyCon "CArm"))))
+(DFunDef false "hoistArm" ((PVar "st") (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) (EApp (EApp (EApp (EVar "CArm") (EVar "pat")) (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistGuard") (EVar "st"))) (EVar "guards"))) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "body"))))
+(DTypeSig false "hoistGuard" (TyFun (TyCon "LowerState") (TyFun (TyCon "CGuard") (TyCon "CGuard"))))
+(DFunDef false "hoistGuard" ((PVar "st") (PCon "CGBool" (PVar "e"))) (EApp (EVar "CGBool") (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "e"))))
+(DFunDef false "hoistGuard" ((PVar "st") (PCon "CGBind" (PVar "p") (PVar "e"))) (EApp (EApp (EVar "CGBind") (EVar "p")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "e"))))
+(DTypeSig false "hoistStmt" (TyFun (TyCon "LowerState") (TyFun (TyCon "CStmt") (TyCon "CStmt"))))
+(DFunDef false "hoistStmt" ((PVar "st") (PCon "CSExpr" (PVar "e"))) (EApp (EVar "CSExpr") (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "e"))))
+(DFunDef false "hoistStmt" ((PVar "st") (PCon "CSLet" (PVar "r") (PVar "pat") (PVar "e"))) (EApp (EApp (EApp (EVar "CSLet") (EVar "r")) (EVar "pat")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "e"))))
+(DFunDef false "hoistStmt" ((PVar "st") (PCon "CSAssign" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "CSAssign") (EVar "x")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "e"))))
+(DTypeSig false "hoistField" (TyFun (TyCon "LowerState") (TyFun (TyCon "CField") (TyCon "CField"))))
+(DFunDef false "hoistField" ((PVar "st") (PCon "CField" (PVar "k") (PVar "e"))) (EApp (EApp (EVar "CField") (EVar "k")) (EApp (EApp (EVar "hoistExpr") (EVar "st")) (EVar "e"))))
 (DTypeSig false "compileArmsC" (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "CTree")))
 (DFunDef false "compileArmsC" ((PVar "arms")) (EApp (EApp (EVar "compileTree") (EApp (EApp (EMethodRef "map") (EVar "carmHasGuard")) (EVar "arms"))) (EApp (EApp (EVar "cInitialRows") (EVar "arms")) (ELit (LInt 0)))))
 (DTypeSig false "carmHasGuard" (TyFun (TyCon "CArm") (TyCon "Bool")))
