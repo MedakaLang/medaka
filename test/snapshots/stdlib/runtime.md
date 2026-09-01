@@ -1,5 +1,5 @@
 # META
-source_lines=285
+source_lines=286
 stages=DESUGAR,MARK
 # SOURCE
 -- Built-in extern declarations.
@@ -220,9 +220,10 @@ extern charMinBound : Char
 extern charMaxBound : Char
 -- Leaf renderers backing the `Debug` impls in core.mdk / string.mdk.  These
 -- expose the same OCaml formatting `pp_value` uses, so `debug` agrees with
--- `println` on numbers.  `debugStringLit`/`debugCharLit` produce the *quoted,
--- escaped* literal form (round-trippable into source), so `debug` on a String
--- intentionally differs from `println` (cf. Haskell `show` vs `putStr`).
+-- `println` on numbers.  Sibling internal renderers produce the *quoted,
+-- escaped* literal form (round-trippable into source) for other kinds, so
+-- `debug` on a String intentionally differs from `println` (cf. Haskell
+-- `show` vs `putStr`).
 extern intToString : Int -> String
 extern floatToString : Float -> String
 extern debugStringLit : String -> String

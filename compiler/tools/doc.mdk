@@ -758,6 +758,27 @@ mdName (ModuleDoc n _ _ _) = n
 -- the page in the same commit.  The filter applies only where the guard does
 -- (the prelude-only `runtime` page), so a fixture that legitimately shows an
 -- internal name on some other page is unaffected.
+-- D-7 (#2432): a SECOND, doc-only exclusion list — compiler/harness internals
+-- that a user program can already call (the resolver's `internalExterns`
+-- guard does not cover them), so they must NOT be added to that guard: doing
+-- so would reject ordinary programs (`__fallthrough__` backs every match
+-- guard) and red 6 fixtures for the other 9 names (measured in #2432). This
+-- list is doc-only — never imported by/into `resolve.mdk` — and only trims
+-- what the reference page renders.
+docOnlyExcluded : List String
+docOnlyExcluded = [
+  "__fallthrough__",
+  "stashRunStdout",
+  "enableRunStdoutFlush",
+  "assertSnapshot",
+  "indexError",
+  "indexErrorAt",
+  "sliceError",
+  "debugStringLit",
+  "debugCharLit",
+  "buildFingerprint",
+]
+
 dropInternalExterns : Bool -> List DocEntry -> List DocEntry
 dropInternalExterns False entries = entries
 dropInternalExterns True entries =
@@ -765,6 +786,7 @@ dropInternalExterns True entries =
 
 isInternalExtern : DocEntry -> Bool
 isInternalExtern (DocEntry name _ _ _) = elem name internalExterns
+  || elem name docOnlyExcluded
 
 export
 computeModuleDoc : String -> String -> String -> String -> List String -> <IO> ModuleDoc

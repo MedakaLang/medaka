@@ -1,5 +1,5 @@
 # META
-source_lines=1115
+source_lines=1137
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/doc.mdk — the native `medaka doc` documentation extractor.
@@ -762,6 +762,27 @@ mdName (ModuleDoc n _ _ _) = n
 -- the page in the same commit.  The filter applies only where the guard does
 -- (the prelude-only `runtime` page), so a fixture that legitimately shows an
 -- internal name on some other page is unaffected.
+-- D-7 (#2432): a SECOND, doc-only exclusion list — compiler/harness internals
+-- that a user program can already call (the resolver's `internalExterns`
+-- guard does not cover them), so they must NOT be added to that guard: doing
+-- so would reject ordinary programs (`__fallthrough__` backs every match
+-- guard) and red 6 fixtures for the other 9 names (measured in #2432). This
+-- list is doc-only — never imported by/into `resolve.mdk` — and only trims
+-- what the reference page renders.
+docOnlyExcluded : List String
+docOnlyExcluded = [
+  "__fallthrough__",
+  "stashRunStdout",
+  "enableRunStdoutFlush",
+  "assertSnapshot",
+  "indexError",
+  "indexErrorAt",
+  "sliceError",
+  "debugStringLit",
+  "debugCharLit",
+  "buildFingerprint",
+]
+
 dropInternalExterns : Bool -> List DocEntry -> List DocEntry
 dropInternalExterns False entries = entries
 dropInternalExterns True entries =
@@ -769,6 +790,7 @@ dropInternalExterns True entries =
 
 isInternalExtern : DocEntry -> Bool
 isInternalExtern (DocEntry name _ _ _) = elem name internalExterns
+  || elem name docOnlyExcluded
 
 export
 computeModuleDoc : String -> String -> String -> String -> List String -> <IO> ModuleDoc
@@ -1316,11 +1338,13 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser = match projectEntrySche
 (DData Abstract "ModuleDoc" () ((variant "ModuleDoc" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "DocEntry")) (TyApp (TyCon "List") (TyCon "String"))))) ())
 (DTypeSig true "mdName" (TyFun (TyCon "ModuleDoc") (TyCon "String")))
 (DFunDef false "mdName" ((PCon "ModuleDoc" (PVar "n") PWild PWild PWild)) (EVar "n"))
+(DTypeSig false "docOnlyExcluded" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "docOnlyExcluded" () (EListLit (ELit (LString "__fallthrough__")) (ELit (LString "stashRunStdout")) (ELit (LString "enableRunStdoutFlush")) (ELit (LString "assertSnapshot")) (ELit (LString "indexError")) (ELit (LString "indexErrorAt")) (ELit (LString "sliceError")) (ELit (LString "debugStringLit")) (ELit (LString "debugCharLit")) (ELit (LString "buildFingerprint"))))
 (DTypeSig false "dropInternalExterns" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyApp (TyCon "List") (TyCon "DocEntry")))))
 (DFunDef false "dropInternalExterns" ((PCon "False") (PVar "entries")) (EVar "entries"))
 (DFunDef false "dropInternalExterns" ((PCon "True") (PVar "entries")) (EApp (EApp (EVar "filter") (ELam ((PVar "e")) (EApp (EVar "not") (EApp (EVar "isInternalExtern") (EVar "e"))))) (EVar "entries")))
 (DTypeSig false "isInternalExtern" (TyFun (TyCon "DocEntry") (TyCon "Bool")))
-(DFunDef false "isInternalExtern" ((PCon "DocEntry" (PVar "name") PWild PWild PWild)) (EApp (EApp (EVar "elem") (EVar "name")) (EVar "internalExterns")))
+(DFunDef false "isInternalExtern" ((PCon "DocEntry" (PVar "name") PWild PWild PWild)) (EBinOp "||" (EApp (EApp (EVar "elem") (EVar "name")) (EVar "internalExterns")) (EApp (EApp (EVar "elem") (EVar "name")) (EVar "docOnlyExcluded"))))
 (DTypeSig true "computeModuleDoc" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "ModuleDoc"))))))))
 (DFunDef false "computeModuleDoc" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src") (PVar "filename") (PVar "roots")) (EBlock (DoLet false false (PVar "parsed") (EApp (EVar "parseWithPositions") (EVar "src"))) (DoLet false false (PVar "rawDecls") (EApp (EVar "fst") (EVar "parsed"))) (DoLet false false (PVar "positions") (EApp (EVar "positionsDecls") (EApp (EVar "snd") (EVar "parsed")))) (DoLet false false (PVar "comments") (EApp (EVar "collectComments") (EVar "src"))) (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EApp (EApp (EVar "docSchemesFor") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "filename")) (EVar "roots")) (EVar "rawDecls"))) (DoLet false false (PVar "moduleName") (EApp (EVar "chopExt") (EApp (EVar "baseOf") (EVar "filename")))) (DoLet false false (PVar "tbl") (EApp (EVar "buildCommentTbl") (EVar "comments"))) (DoLet false false (PVar "header") (EApp (EVar "moduleHeaderFrom") (EVar "tbl"))) (DoLet false false (PVar "primitiveLayer") (EApp (EVar "preludeOnlyModule") (EVar "moduleName"))) (DoLet false false (PVar "entries") (EApp (EApp (EVar "dropInternalExterns") (EVar "primitiveLayer")) (EApp (EApp (EApp (EApp (EApp (EVar "extractEntries") (EVar "primitiveLayer")) (EVar "rawDecls")) (EVar "positions")) (EVar "schemes")) (EVar "comments")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "ModuleDoc") (EVar "moduleName")) (EApp (EApp (EVar "dedupHeader") (EVar "header")) (EVar "entries"))) (EVar "entries")) (EApp (EVar "declaredTypeNames") (EVar "rawDecls"))))))
 (DTypeSig false "dedupHeader" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyCon "String"))))
@@ -1608,11 +1632,13 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser = match projectEntrySche
 (DData Abstract "ModuleDoc" () ((variant "ModuleDoc" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "DocEntry")) (TyApp (TyCon "List") (TyCon "String"))))) ())
 (DTypeSig true "mdName" (TyFun (TyCon "ModuleDoc") (TyCon "String")))
 (DFunDef false "mdName" ((PCon "ModuleDoc" (PVar "n") PWild PWild PWild)) (EVar "n"))
+(DTypeSig false "docOnlyExcluded" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "docOnlyExcluded" () (EListLit (ELit (LString "__fallthrough__")) (ELit (LString "stashRunStdout")) (ELit (LString "enableRunStdoutFlush")) (ELit (LString "assertSnapshot")) (ELit (LString "indexError")) (ELit (LString "indexErrorAt")) (ELit (LString "sliceError")) (ELit (LString "debugStringLit")) (ELit (LString "debugCharLit")) (ELit (LString "buildFingerprint"))))
 (DTypeSig false "dropInternalExterns" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyApp (TyCon "List") (TyCon "DocEntry")))))
 (DFunDef false "dropInternalExterns" ((PCon "False") (PVar "entries")) (EVar "entries"))
 (DFunDef false "dropInternalExterns" ((PCon "True") (PVar "entries")) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "e")) (EApp (EVar "not") (EApp (EVar "isInternalExtern") (EVar "e"))))) (EVar "entries")))
 (DTypeSig false "isInternalExtern" (TyFun (TyCon "DocEntry") (TyCon "Bool")))
-(DFunDef false "isInternalExtern" ((PCon "DocEntry" (PVar "name") PWild PWild PWild)) (EApp (EApp (EDictApp "elem") (EVar "name")) (EVar "internalExterns")))
+(DFunDef false "isInternalExtern" ((PCon "DocEntry" (PVar "name") PWild PWild PWild)) (EBinOp "||" (EApp (EApp (EDictApp "elem") (EVar "name")) (EVar "internalExterns")) (EApp (EApp (EDictApp "elem") (EVar "name")) (EVar "docOnlyExcluded"))))
 (DTypeSig true "computeModuleDoc" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "ModuleDoc"))))))))
 (DFunDef false "computeModuleDoc" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src") (PVar "filename") (PVar "roots")) (EBlock (DoLet false false (PVar "parsed") (EApp (EVar "parseWithPositions") (EVar "src"))) (DoLet false false (PVar "rawDecls") (EApp (EVar "fst") (EVar "parsed"))) (DoLet false false (PVar "positions") (EApp (EVar "positionsDecls") (EApp (EVar "snd") (EVar "parsed")))) (DoLet false false (PVar "comments") (EApp (EVar "collectComments") (EVar "src"))) (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EApp (EApp (EVar "docSchemesFor") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "filename")) (EVar "roots")) (EVar "rawDecls"))) (DoLet false false (PVar "moduleName") (EApp (EVar "chopExt") (EApp (EVar "baseOf") (EVar "filename")))) (DoLet false false (PVar "tbl") (EApp (EVar "buildCommentTbl") (EVar "comments"))) (DoLet false false (PVar "header") (EApp (EVar "moduleHeaderFrom") (EVar "tbl"))) (DoLet false false (PVar "primitiveLayer") (EApp (EVar "preludeOnlyModule") (EVar "moduleName"))) (DoLet false false (PVar "entries") (EApp (EApp (EVar "dropInternalExterns") (EVar "primitiveLayer")) (EApp (EApp (EApp (EApp (EApp (EVar "extractEntries") (EVar "primitiveLayer")) (EVar "rawDecls")) (EVar "positions")) (EVar "schemes")) (EVar "comments")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "ModuleDoc") (EVar "moduleName")) (EApp (EApp (EVar "dedupHeader") (EVar "header")) (EVar "entries"))) (EVar "entries")) (EApp (EVar "declaredTypeNames") (EVar "rawDecls"))))))
 (DTypeSig false "dedupHeader" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyCon "String"))))

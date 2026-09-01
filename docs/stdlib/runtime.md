@@ -195,74 +195,6 @@ exit : Int -> Unit
 panic : String -> a
 ```
 
-## `indexError`
-
-```
-indexError : String -> a
-```
-
-Coded-OOB abort, for a container's own `Index`/`IndexMut` impl to raise on
-out-of-bounds access.  Reuses the existing E-INDEX-OOB abort machinery every
-backend already has for the built-in index paths (native @mdk_oob, wasm's
-E-INDEX-OOB trap) -- unlike `panic`, which is always coded E-PANIC.
-
-## `indexErrorAt`
-
-```
-indexErrorAt : Int -> a
-```
-
-Coded-OOB abort carrying the offending index, for a container's own
-`Index`/`IndexMut` impl (#1787).  Prefer this over `indexError` with an
-interpolated message: `indexError`'s message is DROPPED by the native and wasm
-backends (they raise a fixed-text E-INDEX-OOB abort), so interpolating one made
-`run` and a built binary disagree, and the dead string-building cost enough LLVM
-inline budget to stop `index`/`setIndex` inlining into hot loops.  Here the index
-is formatted by the abort itself (native @mdk_oob_at), so every engine that can
-report it does.
-
-## `sliceError`
-
-```
-sliceError : Int -> Int -> a
-```
-
-Coded-OOB abort for a container's own `Slice` impl to raise on an
-out-of-bounds slice range (#670).  Args are `(lo, hiIncl)` -- the original low
-bound and the INCLUSIVE upper bound (adjusted end - 1) -- so the message reads
-`slice [lo..hiIncl] out of bounds`, byte-identical to the interpreter's
-`sliceArray` abort.  Reuses the existing E-SLICE-OOB abort machinery every
-backend already has for the built-in slice path (native @mdk_slice_oob, wasm's
-E-SLICE-OOB trap) -- unlike `panic`, which is always coded E-PANIC.
-
-## `stashRunStdout`
-
-```
-stashRunStdout : String -> Unit
-```
-
-Internal `medaka run` plumbing ("run drops stdout on panic" fix). `run`'s
-tree-walking interpreter buffers a program's stdout in an in-language
-Ref<String> (eval.mdk's outputRef) and writes it out only after `main`
-returns NORMALLY -- so a panicking program's buffered stdout used to be
-silently discarded (Medaka panics are NOT catchable; there is no unwind
-path back to that final write). These two internal-only externs let
-eval.mdk register the buffer with the native runtime so every abort path
-(panic / index-OOB / non-exhaustive-match / stack-overflow / a fatal
-signal) can flush it before dying -- see runtime/medaka_rt.c's
-mdk_flush_run_stdout_on_abort. Not for general use: `stashRunStdout` takes
-an O(1) pointer+length snapshot (no allocation, no observable effect by
-itself) and `enableRunStdoutFlush` is called exactly once, only by the
-real `medaka run` CLI driver -- never by the pure differential-oracle eval
-probes, which share this same source but never call it, so their captured
-output is unaffected.
-
-## `enableRunStdoutFlush`
-
-```
-enableRunStdoutFlush : Unit -> Unit
-```
-
 ## `args`
 
 ```
@@ -295,18 +227,6 @@ environment variable, or None
 Absolute path of the running executable (realpath-resolved).  Lets a
 relocated `medaka` binary derive an exe-relative default MEDAKA_ROOT instead
 of assuming it runs inside the repo (DISTRIBUTION-DESIGN.md D1).
-
-## `buildFingerprint`
-
-```
-buildFingerprint : Unit -> <Env> String
-```
-
-Compiler-source fingerprint this binary was BUILT from, baked at C-compile
-time by test/build_native_medaka.sh (-DMEDAKA_SRC_FP).  "" on any build path
-that does not bake it (cold seed bootstrap, oracle builds, a shipped binary).
-The CLI recomputes the same fingerprint over the LIVE compiler/ sources and
-warns when they diverge (issue #89 staleness guard).  Native-only.
 
 ## `fileExists`
 
@@ -655,25 +575,6 @@ wall-clock time in seconds (gettimeofday)
 monotonic clock in seconds (clock_gettime CLOCK_MONOTONIC); for measuring intervals
 sleep for N milliseconds (nanosleep)
 
-## `__fallthrough__`
-
-```
-__fallthrough__ : Unit -> a
-```
-
-one stdin line, None at EOF
-all of stdin
-read exactly N bytes; None at EOF or short read
-flush buffered stdout (LSP stdio framing)
-wall-clock time in seconds (gettimeofday)
-monotonic clock in seconds (clock_gettime CLOCK_MONOTONIC); for measuring intervals
-sleep for N milliseconds (nanosleep)
-total GC-allocated bytes since process start (Gc.allocated_bytes proxy)
-Internal: the terminator of a desugared guard chain (Phase 91).  Raises the
-same "no clause matched" signal as a failed pattern, so when a function
-clause's guards all fail, dispatch falls through to the next pattern clause
-(Haskell semantics) instead of aborting.  Not meant for direct use.
-
 ## `randomInt`
 
 ```
@@ -937,32 +838,15 @@ intToString : Int -> String
 
 Leaf renderers backing the `Debug` impls in core.mdk / string.mdk.  These
 expose the same OCaml formatting `pp_value` uses, so `debug` agrees with
-`println` on numbers.  `debugStringLit`/`debugCharLit` produce the *quoted,
-escaped* literal form (round-trippable into source), so `debug` on a String
-intentionally differs from `println` (cf. Haskell `show` vs `putStr`).
+`println` on numbers.  Sibling internal renderers produce the *quoted,
+escaped* literal form (round-trippable into source) for other kinds, so
+`debug` on a String intentionally differs from `println` (cf. Haskell
+`show` vs `putStr`).
 
 ## `floatToString`
 
 ```
 floatToString : Float -> String
-```
-
-## `debugStringLit`
-
-```
-debugStringLit : String -> String
-```
-
-## `debugCharLit`
-
-```
-debugCharLit : Char -> String
-```
-
-## `assertSnapshot`
-
-```
-assertSnapshot : String -> String -> <IO> Unit
 ```
 
 ## `arrayLength`
