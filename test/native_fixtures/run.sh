@@ -125,12 +125,12 @@ case "$out" in
   *) bad inline_let_missing_in "got [$out]" ;;
 esac
 
-# arrayBlit + arraySetUnsafe in native interpreter: MutArray.push triggers both.
+# arrayBlit + arraySetUnsafe in native interpreter: Vector.push triggers both.
 # Before the fix: "unbound identifier: arrayBlit" on the 3rd push (first grow).
-out="$(perl -e 'alarm 30; exec @ARGV' -- "$M" run "$FIX/mut_array_push.mdk" 2>&1)"
+out="$(perl -e 'alarm 30; exec @ARGV' -- "$M" run "$FIX/vector_push.mdk" 2>&1)"
 case "$out" in
-  ok) ok mut_array_push ;;
-  *) bad mut_array_push "expected 'ok', got [$out]" ;;
+  ok) ok vector_push ;;
+  *) bad vector_push "expected 'ok', got [$out]" ;;
 esac
 
 # PARSE-ERROR-LOCATION Stage 1 (caret) + Stage 2 (foreign-syntax hints).

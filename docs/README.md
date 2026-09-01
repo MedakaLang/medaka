@@ -115,7 +115,6 @@ What's in the standard library, what's planned, module-by-module status.
 | [`list.md`](stdlib/list.md) | list | — |
 | [`map.md`](stdlib/map.md) | map | — |
 | [`math.md`](stdlib/math.md) | math | — |
-| [`mut_array.md`](stdlib/mut_array.md) | mut_array | — |
 | [`net.md`](stdlib/net.md) | net | — |
 | [`nonempty.md`](stdlib/nonempty.md) | nonempty | — |
 | [`path.md`](stdlib/path.md) | path | — |
@@ -126,6 +125,7 @@ What's in the standard library, what's planned, module-by-module status.
 | [`time.md`](stdlib/time.md) | time | — |
 | [`toml.md`](stdlib/toml.md) | toml | — |
 | [`validation.md`](stdlib/validation.md) | validation | — |
+| [`vector.md`](stdlib/vector.md) | vector | — |
 
 ### compiler internals — stay in compiler/, indexed here for findability
 

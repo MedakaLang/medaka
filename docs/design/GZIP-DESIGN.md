@@ -58,7 +58,7 @@ regions of the language untested.
 | Dimension | `sqlite/` | This project |
 |-----------|-----------|--------------|
 | Bit granularity | Byte-aligned, big-endian | **LSB-first bit stream**; Huffman codes packed MSB-of-code-first inside it. Two opposite bit orders in one format |
-| Data mutation | Immutable; `Array Int` read-only | **In-place `Array Int` / `MutArray Int`** — a 32 KB sliding window with *overlapping* back-references (the `distance < length` case is the whole trick) |
+| Data mutation | Immutable; `Array Int` read-only | **In-place `Array Int` / `Vector Int`** — a 32 KB sliding window with *overlapping* back-references (the `distance < length` case is the whole trick) |
 | Hot loops | Allocation-heavy, not perf-sensitive | Genuinely hot inner loops. Gives `test/diff_compiler_perf_scaling.sh` and the emitter a real **non-compiler** workload, which the tree currently has none of |
 | Numeric surface | Varints, big-endian ints | 32-bit masked arithmetic (CRC-32, Adler-32) on a 63-bit `Int`; `shiftRight` is **logical**, which is what CRC needs |
 | Testing style | Fixed corpus + golden diffs | **Round-trip properties** (`inflate (deflate x) == x`) over generated inputs — an unbounded oracle, not a fixed corpus |
@@ -82,7 +82,7 @@ Nothing needs to be added to the runtime. Verified against the current tree:
 | Bitwise ops | `bitAnd`, `bitOr`, `bitXor`, `shiftLeft`, `shiftRight`, `bitNot` (`stdlib/runtime.mdk`) | `shiftRight` is **logical** (unsigned), documented as such at its declaration — correct for CRC and for bit extraction |
 | Binary file read | `readFileBytes : String -> <FileRead "_"> Result String (Array Int)` | The byte-clean read; `readFile` UTF-8-decodes and would corrupt any byte ≥ 0x80 |
 | Binary file write | `writeFileBytes : String -> Array Int -> <FileWrite "_"> Result String Unit` | The byte-clean counterpart. The SQLite project's write path already leans on it |
-| Growable output | `stdlib/mut_array.mdk` — `push`, `set`, `get`, `toArray`, amortized O(1) | The natural output accumulator |
+| Growable output | `stdlib/vector.mdk` — `push`, `set`, `get`, `toArray`, amortized O(1) | The natural output accumulator |
 | Fixed buffers | `stdlib/array.mdk` — `make`, `set`, `blit`, `fill`, `copy` | The window and the Huffman decode tables. `blit` handles non-overlapping copies; overlapping LZ77 copies must be byte-at-a-time by definition |
 | Byte-level framing | `stdlib/byteparser.mdk` (`leUint`, `takeSlice`, `runByteParser`) and `stdlib/bytebuilder.mdk` (`emitU8`, `emitU32LE`, `buildArray`) | Used for the **container** layers only — gzip/zlib headers and trailers are byte-aligned. The DEFLATE payload needs its own bit reader (below) |
 
@@ -324,11 +324,11 @@ cell and passes every test but one.
 
 ### 4. The sliding window and the overlap case
 
-Output is a `MutArray Int` that *is* the window — no separate 32 KB ring buffer.
+Output is a `Vector Int` that *is* the window — no separate 32 KB ring buffer.
 A back-reference `(length, distance)` copies from `outLen - distance` forward:
 
 ```
-copyBack : Int -> Int -> MutArray Int -> Result String Unit
+copyBack : Int -> Int -> Vector Int -> Result String Unit
 -- for i in 0..length-1:  push (get (outLen - distance + i)) out
 ```
 

@@ -8770,7 +8770,7 @@ monoSpineDepth t = match normalize t
 -- on the Flat path and be silently wiped on the Module path — the exact
 -- single-file-vs-cross-module split a seed must not have.
 --
--- ⚠️ EXACTLY TWO SEEDS, NOT FOUR.  `MutArray`/`HashMap` are ordinary Medaka
+-- ⚠️ EXACTLY TWO SEEDS, NOT FOUR.  `Vector`/`HashMap` are ordinary Medaka
 -- types declared OVER these, so they inherit invariance transitively through
 -- `paramOccPolarities`' `TyApp` composition and must NOT be listed: a hardcoded
 -- entry would be a second, unkeyed source of the same fact.
@@ -11559,7 +11559,7 @@ checkStmtNotDiscarded t e
 -- `a[i] := v` desugars to `setIndex a i v` (`rewriteAssignIndex`, desugar.mdk), and
 -- `IndexMut.setIndex : c -> k -> v -> c` (core.mdk) returns the container BY
 -- INTERFACE CONTRACT so a caller can chain — but every current impl (`Array`,
--- `MutArray`, mut_array.mdk) mutates in place and returns the SAME value, so the
+-- `Vector` in vector.mdk) mutates in place and returns the SAME value, so the
 -- bare-statement idiom `arr[i] := v` (real code: sqlite/lib/dbwriter.mdk,
 -- gzip/lib/{huffman,inflate}.mdk) never actually loses anything by discarding it.
 --
@@ -11569,7 +11569,7 @@ checkStmtNotDiscarded t e
 -- an existed-already probe) would silently dodge the discard check too, which
 -- is exactly the bug this check exists to catch. `isExemptInPlaceSetIndex`
 -- therefore also requires the DISCARDED VALUE's own head type constructor to be
--- one of the two real in-place `IndexMut` impls (`Array`/`MutArray`) — since
+-- one of the two real in-place `IndexMut` impls (`Array`/`Vector`) — since
 -- `setIndex : c -> k -> v -> c`, that head IS the receiver's head, so this reads
 -- the receiver's type off the statement's own already-inferred `t` for free,
 -- no separate route/interface lookup needed. A future persistent-container
@@ -11601,7 +11601,7 @@ stmtCalleeName (EDictAt n _) = Some n
 stmtCalleeName _ = None
 
 exemptInPlaceIndexMutHeads : List String
-exemptInPlaceIndexMutHeads = ["Array", "MutArray"]
+exemptInPlaceIndexMutHeads = ["Array", "Vector"]
 
 isExemptInPlaceSetIndex : Mono -> Expr -> Bool
 isExemptInPlaceSetIndex t e = match headTyconNameMono t
@@ -37361,7 +37361,7 @@ selfDeclArities mid prog qual bare =
 -- the modules processed after it.
 --
 -- 🚨 MEASURED, not hypothetical — this is what the first cut of #1425's fix did.  Masking
--- `count` while checking `mut_array` (which declares an unconstrained `count`) deleted the
+-- `count` while checking `vector` (which declares an unconstrained `count`) deleted the
 -- PRELUDE's constrained `count` row from the accumulator, so every later module lost it and
 -- an ordinary `count (x => x > 1) [1, 2, 3]` in the entry panicked at `run`.  Prelude names
 -- are the ones that expose it, because `importDefinersOf` skips `core` — a prelude name is
@@ -39788,7 +39788,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "stmtCalleeName" ((PCon "EDictAt" (PVar "n") PWild)) (EApp (EVar "Some") (EVar "n")))
 (DFunDef false "stmtCalleeName" (PWild) (EVar "None"))
 (DTypeSig false "exemptInPlaceIndexMutHeads" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "exemptInPlaceIndexMutHeads" () (EListLit (ELit (LString "Array")) (ELit (LString "MutArray"))))
+(DFunDef false "exemptInPlaceIndexMutHeads" () (EListLit (ELit (LString "Array")) (ELit (LString "Vector"))))
 (DTypeSig false "isExemptInPlaceSetIndex" (TyFun (TyCon "Mono") (TyFun (TyCon "Expr") (TyCon "Bool"))))
 (DFunDef false "isExemptInPlaceSetIndex" ((PVar "t") (PVar "e")) (EMatch (EApp (EVar "headTyconNameMono") (EVar "t")) (arm (PCon "Some" (PVar "hd")) () (EBinOp "&&" (EBinOp "==" (EApp (EVar "stmtCalleeName") (EVar "e")) (EApp (EVar "Some") (ELit (LString "setIndex")))) (EApp (EApp (EVar "contains") (EVar "hd")) (EVar "exemptInPlaceIndexMutHeads")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "pushDiscardedValueError" (TyFun (TyCon "Mono") (TyFun (TyCon "Expr") (TyCon "Unit"))))
@@ -45836,7 +45836,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "stmtCalleeName" ((PCon "EDictAt" (PVar "n") PWild)) (EApp (EVar "Some") (EVar "n")))
 (DFunDef false "stmtCalleeName" (PWild) (EVar "None"))
 (DTypeSig false "exemptInPlaceIndexMutHeads" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "exemptInPlaceIndexMutHeads" () (EListLit (ELit (LString "Array")) (ELit (LString "MutArray"))))
+(DFunDef false "exemptInPlaceIndexMutHeads" () (EListLit (ELit (LString "Array")) (ELit (LString "Vector"))))
 (DTypeSig false "isExemptInPlaceSetIndex" (TyFun (TyCon "Mono") (TyFun (TyCon "Expr") (TyCon "Bool"))))
 (DFunDef false "isExemptInPlaceSetIndex" ((PVar "t") (PVar "e")) (EMatch (EApp (EVar "headTyconNameMono") (EVar "t")) (arm (PCon "Some" (PVar "hd")) () (EBinOp "&&" (EBinOp "==" (EApp (EVar "stmtCalleeName") (EVar "e")) (EApp (EVar "Some") (ELit (LString "setIndex")))) (EApp (EApp (EVar "contains") (EVar "hd")) (EVar "exemptInPlaceIndexMutHeads")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "pushDiscardedValueError" (TyFun (TyCon "Mono") (TyFun (TyCon "Expr") (TyCon "Unit"))))
