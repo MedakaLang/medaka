@@ -231,6 +231,8 @@ import support.util.{
   noneHeadTag,
   dedupBy,
   startsWith,
+  splitNl,
+  stringTrimLeft,
 }
 import ir.core_ir_lower.{ifaceIdsAtTag, ifaceMethodArityKey, ifaceWordOfKey}
 import backend.trmc_analysis.{
@@ -283,7 +285,12 @@ import backend.wasm_preamble.{
   strConcatRuntimeLines,
   appendRuntimeLines,
   valueEqRuntimeLines,
-  valueArithRuntimeLines,
+  valueAddRuntimeLines,
+  valueSubRuntimeLines,
+  valueMulRuntimeLines,
+  valueDivRuntimeLines,
+  valueModRuntimeLines,
+  valueCmpNumRuntimeLines,
   rngStateGlobalLines,
   rngRuntimeLines,
   hashRuntimeLines,
@@ -383,7 +390,12 @@ data WasmEmit = WasmEmit {
     useStrLeaf : Ref Bool,
     useFloat : Ref Bool,
     useStrSearch : Ref Bool,
-    useValueArith : Ref Bool,
+    useValueAdd : Ref Bool,
+    useValueSub : Ref Bool,
+    useValueMul : Ref Bool,
+    useValueDiv : Ref Bool,
+    useValueMod : Ref Bool,
+    useValueCmpNum : Ref Bool,
     useIO : Ref Bool,
     tupleArities : Ref (List Int),
     floatGlobals : Ref (List String),
@@ -442,7 +454,12 @@ freshWasmEmit mode = WasmEmit {
   useStrLeaf = Ref False,
   useFloat = Ref False,
   useStrSearch = Ref False,
-  useValueArith = Ref False,
+  useValueAdd = Ref False,
+  useValueSub = Ref False,
+  useValueMul = Ref False,
+  useValueDiv = Ref False,
+  useValueMod = Ref False,
+  useValueCmpNum = Ref False,
   useIO = Ref False,
   tupleArities = Ref [],
   floatGlobals = Ref [],
@@ -1205,6 +1222,24 @@ export
 emitProgram : WasmEmitInput -> CProgram -> String
 emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp
 
+-- The X-W.H1/H2 same-process input/state-isolation harnesses (`reemitInput` and
+-- peers, compiler/entries/wasm_emit_typed_main.mdk) deliberately re-emit ONE
+-- lowered `CProgram` under MISMATCHED `WasmEmitInput` fields (P's real program
+-- with U's sig/ctor/method/mainIsFloat table) specifically to prove each field
+-- independently influences the physical plan (`P_NE_SIG` etc). Such a
+-- combination never occurs in a real compile (there sigs/ctors/methods/
+-- mainIsFloat are always derived from the SAME decls as the program), can
+-- legitimately desync a gating decision that reads the mismatched table (e.g.
+-- `inputMainIsFloat` forcing a Float auto-print with no Float anywhere in the
+-- program's own body), and is never assembled by wasm-tools -- so it is not
+-- this check's business, same reasoning as `emitProgramGaps` below. Exported
+-- for that harness ONLY; every real caller (build/run, every fixture-driven
+-- gate) stays on the checked `emitProgram`.
+export
+emitProgramUnchecked : WasmEmitInput -> CProgram -> String
+emitProgramUnchecked input cp =
+  emitProgramCore (freshWasmEmit WGapStrict) input cp
+
 -- Record mode is a complete ordinary emission with a fresh event lifecycle.
 -- It is intentionally separate from the all-binding/no-main census below.
 export
@@ -1215,7 +1250,20 @@ emitProgramRecord input cp =
   (text, gapEventsOfW emit)
 
 emitProgramWith : WasmEmit -> WasmEmitInput -> CProgram -> String
-emitProgramWith emit input (CProgram groups ctorArs ctorTypes impls) =
+emitProgramWith emit input cp =
+  let text = emitProgramCore emit input cp
+  -- WGapRecord is the tolerant/census mode (mirrors emitProgramGaps below): it
+  -- continues past an unsupported node by RECORDING a gap event instead of
+  -- aborting, so its assembled text is intentionally allowed to be incomplete/
+  -- self-inconsistent -- not a real module, so not this check's business.
+  -- Only WGapStrict (the real, on-by-default production path) is asserted.
+  let _ = match emit.gapMode
+    WGapStrict => assertEmittedClosureW text
+    WGapRecord => ()
+  text
+
+emitProgramCore : WasmEmit -> WasmEmitInput -> CProgram -> String
+emitProgramCore emit input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef emit.useStr (programUsesStr groups)
   -- W7: scan the program for collection usage (gates type-section decls + forces
   -- ref-mode — every collection is a boxed (ref eq) value).  The scan only ever
@@ -1245,6 +1293,140 @@ emitProgramWith emit input (CProgram groups ctorArs ctorTypes impls) =
   let prog = Prog index typeNames valNames useClos impls input emit
   if useRef then emitRefProgram prog groups
   else emitScalarProgram emit fnNames valNames groups
+
+-- ── emit-time closure check (#392) ──────────────────────────────────────────
+-- The runtime-line gating graph (which WAT helper block a program's use-flags
+-- pull in) is hand-maintained; S1-S3 each narrowed it (fewer impls, per-operator
+-- splits, dropped names), and a wrongly-narrowed gate used to surface only as a
+-- downstream `wasm-tools validate` "unknown func $x" on whichever fixture
+-- happened to exercise the gap (#388: `$mdk_value_mod` called `$mdk_float_rem`
+-- with only `useValueArith` set, silently broke 21 int-only fixtures). Run on
+-- every emit (not a flag) so a gate that gets narrowed wrong fails HERE, in
+-- process, naming the missing symbol, instead of downstream and silently.
+--
+-- Operates on the FINAL assembled text, granularity-agnostic to whatever flags
+-- gated what -- it only asserts every directly-named callee resolves within
+-- this module, either as a `(func $name ...)` definition or an
+-- `(import "env" "..." (func $name ...))` declaration (see
+-- `stderrByteImportLines`, wasm_preamble.mdk, for the import text shape).
+-- `call_ref`/`return_call_ref` are exempt: they dispatch dynamically through a
+-- `(ref $codety)` table value, never naming a callee symbol directly, and
+-- their literal text never matches the `call $` needle below (`call_ref`/
+-- `return_call_ref` both have `_ref` where this needle expects a space).
+--
+-- NOT one call per line: wasm_emit.mdk's own call sites are each their own
+-- list element (flat, unfolded -- operands already on the stack), but the
+-- hand-written runtime blocks in wasm_preamble.mdk are FOLDED s-expr WAT
+-- with a call site anywhere inside a line, sometimes several per line (e.g.
+-- valueAddRuntimeLines' `(call $mdk_box_int (i64.add (call $mdk_unbox_int
+-- ...) (call $mdk_unbox_int ...)))`) -- an earlier draft of this check that
+-- assumed startsWith missed exactly this shape. So this scans every line for
+-- ALL occurrences of the `call $` needle, not just a line-leading one.
+-- `return_call $NAME` is caught by the SAME needle -- "return_call $NAME"
+-- literally contains "call $NAME" as a substring (right after `return_`), so
+-- no separate needle is needed.
+-- A string literal can never spoof either needle: `escWatBytes` hex-escapes
+-- EVERY byte of a data segment (`oneDataSeg`), so no literal ASCII ever
+-- reaches the assembled text from user data.
+assertEmittedClosureW : String -> Unit
+assertEmittedClosureW text =
+  let lines = splitNl text
+  let defined = omFromNames (collectDefinedNamesW lines) omEmpty
+  let called = collectCalledNamesW lines
+  checkCalledNamesW defined called
+
+-- ⚠️ ACCUMULATOR-PASSING, DELIBERATELY (#392 follow-up).  The three walkers
+-- below (`collectCalledNamesGoW`, `collectDefinedNamesGoW`, `identsAfterAllGoW`)
+-- used to build their result AFTER the recursive call returned (`idents ++
+-- recurse rest` / `name :: recurse ...`), i.e. one live stack frame per WAT line
+-- and per `call $` occurrence within a line.  That is fine on the native path
+-- (a 256 MB GC-aware worker thread, runtime/medaka_rt.c) but FATAL on the wasm
+-- path: `compiler/entries/playground_main.mdk` compiles this very code to
+-- WasmGC, and the guest then runs on the HOST JS engine's ~1 MB stack, so the
+-- check's own depth is proportional to the emitted module's text size.  It
+-- overflowed at 15,739 lines -- i.e. on `main = 42`, the smallest program there
+-- is -- taking every browser compile down with `Maximum call stack size
+-- exceeded`.  Threading an accumulator makes each self-call a TRUE tail call,
+-- which W4's TCO (§4.2) emits as `return_call`: constant stack, any module size.
+-- Keep them tail-recursive.  The `Rev` suffix marks the reversed intermediate:
+-- each `xxxRevW` returns its names LAST-FIRST, and the single `reverseL` at the
+-- public entry restores the exact pre-rewrite order (per line, and across
+-- lines), so the collected lists are element-for-element identical to what the
+-- non-tail version produced.
+collectCalledNamesW : List String -> List String
+collectCalledNamesW lines = reverseL (collectCalledNamesGoW lines [])
+
+collectCalledNamesGoW : List String -> List String -> List String
+collectCalledNamesGoW [] acc = acc
+collectCalledNamesGoW (line::rest) acc =
+  if startsWith ";;" (stringTrimLeft line) then
+    collectCalledNamesGoW rest acc
+  else
+    collectCalledNamesGoW rest (identsAfterAllRevW "call $" 6 line ++ acc)
+
+-- `(func $NAME` appears exactly once per defining line -- a plain top-level
+-- function's own def line AND an import's `(import "env" "..." (func $NAME
+-- ...))` line alike -- so one needle covers both (a) and (b) of the closure
+-- requirement.
+collectDefinedNamesW : List String -> List String
+collectDefinedNamesW lines = reverseL (collectDefinedNamesGoW lines [])
+
+collectDefinedNamesGoW : List String -> List String -> List String
+collectDefinedNamesGoW [] acc = acc
+collectDefinedNamesGoW (line::rest) acc =
+  collectDefinedNamesGoW rest (identsAfterAllRevW "(func $" 7 line ++ acc)
+
+-- every occurrence of `needle` in `line`, mapped to the identifier
+-- immediately following it (skipping `skipLen` chars of the needle itself,
+-- e.g. `call $` -> 6, so the scan resumes right after the `$`), in REVERSE
+-- order of occurrence.  The callers above prepend this onto their own reversed
+-- accumulator, so one `reverseL` at the public entry un-reverses both levels at
+-- once: acc = revLn ++ ... ++ revL1, and `reverseL acc` = L1 ++ ... ++ Ln,
+-- exactly the old `L1 ++ ... ++ Ln`.
+identsAfterAllRevW : String -> Int -> String -> List String
+identsAfterAllRevW needle skipLen line =
+  identsAfterAllGoW needle skipLen line 0 []
+
+identsAfterAllGoW : String -> Int -> String -> Int -> List String -> List String
+identsAfterAllGoW needle skipLen line from acc =
+  let n = stringLength line
+  if from >= n then acc
+  else match stringIndexOf needle (stringSlice from n line)
+    None => acc
+    Some rel =>
+      let hit = from + rel
+      let name = identAfterW line (hit + skipLen)
+      identsAfterAllGoW
+        needle
+        skipLen
+        line
+        (hit + stringLength needle)
+        (name::acc)
+
+-- read a bare identifier (word chars only -- `$` already consumed) forward
+-- from `from` until a non-identifier char or end of line.
+identAfterW : String -> Int -> String
+identAfterW line from = identAfterGoW line from (stringLength line) from
+
+identAfterGoW : String -> Int -> Int -> Int -> String
+identAfterGoW line i n from =
+  if i >= n then
+    stringSlice from n line
+  else if isIdentCharW (stringSlice i (i + 1) line) then
+    identAfterGoW line (i + 1) n from
+  else
+    stringSlice from i line
+
+isIdentCharW : String -> Bool
+isIdentCharW c = c /= " " && c /= "(" && c /= ")" && c /= "\""
+
+checkCalledNamesW : OrdMap Unit -> List String -> Unit
+checkCalledNamesW _ [] = ()
+checkCalledNamesW defined (name::rest) =
+  if omHasKey name defined then
+    checkCalledNamesW defined rest
+  else
+    panic ("wasm emit: call to undefined/unimported $" ++ name ++ " -- a runtime-line gate is missing this helper's dependency (#392)")
 
 -- ── gap census driver ────────────────────────────────────────────────────────
 -- The WasmGC peer of llvm_emit's emitProgramGaps: emit EVERY binding (fns +
@@ -2582,9 +2764,20 @@ emitRefProgram prog groups =
   -- useStrSearch in emitValueCmpRef).
   let valueCmpRt = if (progEmit prog).useValueCmp.value then valueEqRuntimeLines else []
   -- A0: runtime value-tag-dispatched arithmetic helpers ($mdk_value_add/…), emitted only
-  -- when a poly-`Num` operand is routed to them (A1).  Reference $float/$boxint (always
-  -- declared) + $mdk_unbox_int/$mdk_box_int (always in ioRuntimeLines).
-  let valueArithRt = if (progEmit prog).useValueArith.value then valueArithRuntimeLines else []
+  -- when a poly-`Num` operand actually routes to THAT operator's helper (A1). Split
+  -- per-operator (S2/#2359 correction) so e.g. a program using only `-` doesn't also
+  -- define $mdk_value_add/mul/div/mod. Reference $float/$boxint (always declared) +
+  -- $mdk_unbox_int/$mdk_box_int (always in ioRuntimeLines).
+  let valueAddRt = if (progEmit prog).useValueAdd.value then valueAddRuntimeLines else []
+  let valueSubRt = if (progEmit prog).useValueSub.value then valueSubRuntimeLines else []
+  let valueMulRt = if (progEmit prog).useValueMul.value then valueMulRuntimeLines else []
+  let valueDivRt = if (progEmit prog).useValueDiv.value then valueDivRuntimeLines else []
+  let valueModRt = if (progEmit prog).useValueMod.value then valueModRuntimeLines else []
+  -- A1 (poly-`Ord`-on-Float, string-free): the num-only cmp sextet (eq_num/cmp_num/
+  -- lt_num/le_num/gt_num/ge_num), gated as ONE block (mirrors valueCmpRt's precedent
+  -- for the $str-capable sibling) — independent of which arith op(s), if any, are
+  -- also demanded in this emission.
+  let valueCmpNumRt = if (progEmit prog).useValueCmpNum.value then valueCmpNumRuntimeLines else []
   let stderrRt = if (progEmit prog).useEPut.value then stderrRuntimeLines else []
   let rngRt = if (progEmit prog).useRng.value then rngRuntimeLines else []
   let hashRt = if (progEmit prog).useHash.value then hashRuntimeLines else []
@@ -2593,9 +2786,10 @@ emitRefProgram prog groups =
   -- randomFloat helpers (gated separately since they need mix64 / next_u64) + the
   -- string index-of / compare runtime.
   -- #345 $mdk_float_rem backs the monomorphic Float `%` (useFloat) AND the num-poly
-  -- `%` value-dispatch arm ($mdk_value_mod, useValueArith) — emit it when EITHER is on,
-  -- so an int-only value-arith program doesn't reference a missing $mdk_float_rem.
-  let floatRemRt = if (progEmit prog).useFloat.value || (progEmit prog).useValueArith.value then floatRemRuntimeLines else []
+  -- `%` value-dispatch arm ($mdk_value_mod, useValueMod) — emit it when EITHER is on,
+  -- so an int-only value-arith program (e.g. only poly `+`) doesn't reference a
+  -- missing $mdk_float_rem.
+  let floatRemRt = if (progEmit prog).useFloat.value || (progEmit prog).useValueMod.value then floatRemRuntimeLines else []
   let floatRt = if (progEmit prog).useFloat.value then floatRuntimeLines else []
   let hashFloatRt = if (progEmit prog).useFloatHash.value then hashFloatRuntimeLines else []
   let randomFloatRt = if (progEmit prog).useFloatRng.value then randomFloatRuntimeLines else []
@@ -2637,7 +2831,8 @@ emitRefProgram prog groups =
   -- other globals below, which the text format permits independently of binding order.
   let constClosGlobals = wConstClosGlobalLines (progEmit prog)
   joinNl (header ++ typeSection ++ imports ++ trapImport ++ elemDecl ++ globals ++ constClosGlobals
-            ++ fns ++ implFns ++ defaultDefs ++ lifted ++ applyRt ++ ioRt ++ strLeafRt ++ strConcatRt ++ appendRt ++ valueCmpRt ++ valueArithRt
+            ++ fns ++ implFns ++ defaultDefs ++ lifted ++ applyRt ++ ioRt ++ strLeafRt ++ strConcatRt ++ appendRt ++ valueCmpRt
+            ++ valueAddRt ++ valueSubRt ++ valueMulRt ++ valueDivRt ++ valueModRt ++ valueCmpNumRt
             ++ stderrRt ++ rngRt ++ hashRt ++ hashStrRt
             ++ floatRemRt ++ floatRt ++ hashFloatRt ++ randomFloatRt ++ strSearchRt
             ++ strCodecRt ++ charFromCodeRt ++ charClassRt ++ ioHostRt ++ ioArgsRt ++ fileBytesRt ++ floatStrRt
@@ -5368,26 +5563,26 @@ emitBinRef prog env d op l r tag =
     let _ = setRef (progEmit prog).useStrLeaf True
     emitValueCmpRef prog env d op l r
   else if isCmpOp op && isPolyNumBinop (progEmit prog) l r then
-    -- #371: valueArithRuntimeLines is spliced in WHOLE whenever useValueArith is
-    -- set (wasm_emit.mdk's `valueArithRt` binding) — and it now UNCONDITIONALLY
-    -- defines $mdk_value_div/$mdk_value_mod with a baked-in coded divisor-zero
-    -- guard (wasm_preamble.mdk) referencing the $mdk_write_err_byte host import,
-    -- even for a program that only ever uses poly-`Num` `==`/`<`/etc (this branch).
-    -- So trapImportNeeded must be forced here too, not just at arith branch below
-    -- — else a poly-cmp-only program parses with "unknown func: $mdk_write_err_byte"
-    -- (the import undeclared) because the unused div/mod bodies still reference it.
-    let _ = setRef (progEmit prog).useValueArith True
-    let _ = setRef (progEmit prog).trapImportNeeded True
+    -- S2/#2359 correction of #371: this branch only ever calls into the num-only
+    -- cmp sextet (emitValueCmpNumRef below) — never $mdk_value_div/$mdk_value_mod
+    -- — so it demands ONLY useValueCmpNum, not the arith family, and never needs
+    -- to force trapImportNeeded (div/mod's divisor-zero guard is the only thing
+    -- in this whole family that touches $mdk_write_err_byte).
+    let _ = setRef (progEmit prog).useValueCmpNum True
     emitValueCmpNumRef prog env d op l r
   -- A1 (poly-`Num`-on-Float): arithmetic whose operand is a polymorphic `Num` param
   -- routes through the runtime value-tag-dispatched $mdk_value_add/… helper (A0) instead
   -- of the trapping inline int primitive.  The static Int/Float fast paths are unchanged.
-  -- #371: same trap-import note as the isCmpOp branch above — $mdk_value_div/
-  -- $mdk_value_mod's guard is baked into valueArithRuntimeLines UNCONDITIONALLY, so
-  -- ANY poly-`Num` arith op (not just `/`/`%`) must force the host import.
-  else if isArithOp op && isPolyNumBinop (progEmit prog) l r then
-    let _ = setRef (progEmit prog).useValueArith True
+  -- S2/#2359 correction of #371: only the SPECIFIC operator's helper is demanded
+  -- (setValueArithFlag below), and trapImportNeeded is forced ONLY on the div/mod
+  -- arm — $mdk_value_div/$mdk_value_mod's divisor-zero guard is the only thing in
+  -- this family referencing $mdk_write_err_byte; add/sub/mul never do.
+  else if isArithOp op && (op == "/" || op == "%") && isPolyNumBinop (progEmit prog) l r then
+    let _ = setValueArithFlag (progEmit prog) op
     let _ = setRef (progEmit prog).trapImportNeeded True
+    emitRefExpr prog env d l ++ emitRefExpr prog env d r ++ ["call $mdk_value_" ++ valueArithName op]
+  else if isArithOp op && isPolyNumBinop (progEmit prog) l r then
+    let _ = setValueArithFlag (progEmit prog) op
     emitRefExpr prog env d l ++ emitRefExpr prog env d r ++ ["call $mdk_value_" ++ valueArithName op]
   else
     -- layer-17 §2.1: Int arithmetic/comparison computes in i64 over the box/unbox
@@ -5420,6 +5615,17 @@ valueArithName "*" = "mul"
 valueArithName "/" = "div"
 valueArithName "%" = "mod"
 valueArithName op = panic ("wasm A0: not a value-arith op '" ++ op ++ "'")
+
+-- S2/#2359: set ONLY the ref for the operator actually demanded, so
+-- valueArithRt (wasm_emit.mdk) splices in just that operator's helper instead
+-- of the whole add/sub/mul/div/mod family.
+setValueArithFlag : WasmEmit -> String -> Unit
+setValueArithFlag emit "+" = setRef emit.useValueAdd True
+setValueArithFlag emit "-" = setRef emit.useValueSub True
+setValueArithFlag emit "*" = setRef emit.useValueMul True
+setValueArithFlag emit "/" = setRef emit.useValueDiv True
+setValueArithFlag emit "%" = setRef emit.useValueMod True
+setValueArithFlag _ op = panic ("wasm A0: not a value-arith op '" ++ op ++ "'")
 
 -- ── B5: coded runtime-trap helpers (RUNTIME-TRAP-UNIFY-DESIGN §3 (5), §7 forks 1-2) ──
 -- The WasmGC peer of the native traps: emit the same coded stderr line the interpreter
@@ -5491,7 +5697,9 @@ emitValueCmpRef prog env d op l r =
 -- A1 (poly-`Ord`-on-Float, string-free program): the num-only peer of emitValueCmpRef.
 -- `==`/`/=` go through $mdk_value_eq_num (-> i31 Bool); ordering through $mdk_value_cmp_num
 -- (-> i32 -1/0/1).  Both dispatch $float vs int (i31/$boxint) ONLY — no $str — so they
--- need no pre-scan-set type; gated by useValueArith alongside the arith helpers.
+-- need no pre-scan-set type; gated by its own useValueCmpNum flag (S2/#2359 —
+-- independent of the per-operator arith flags, since this branch never touches
+-- $mdk_value_add/sub/mul/div/mod).
 emitValueCmpNumRef : Prog -> List String -> Int -> String -> CExpr -> CExpr -> List String
 emitValueCmpNumRef prog env d op l r =
   let lv = emitRefExpr prog env d l

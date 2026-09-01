@@ -4,7 +4,9 @@
 # Emits a pinned corpus through the LLVM and WasmGC emitters and extracts, per
 # backend, the set of SOURCE functions that received a TMC (tail-modulo-cons)
 # destination-passing transform.  The parity gate (diff_compiler_tmc_parity.sh)
-# wraps this helper and FAILS on any set difference; run standalone to inspect.
+# wraps this helper and FAILS on any DIFF row; run standalone to inspect.
+# Comparison is exact on the PROBE arm and subset-tolerant (wasm ⊆ llvm) on the
+# SHIPPING arm — see the summary section at the bottom for why.
 #
 # Extraction is marker-first: both emitters emit a deterministic census marker
 # per TMC decision (`; tmc: <fn> <mode>` in .ll / `;; tmc: <fn> <mode>` in .wat).
@@ -138,15 +140,66 @@ if emit_or_fail llvm check_main "$EMITTER" "$RUNTIME" "$CORE" "$GRAPH_ENTRY" "$R
   extract_pair check_main
 fi
 
+# is_shipping_item NAME — true for the SHIPPING-arm items (<x>.ship, and the
+# bare check_main module graph), false for the PROBE-arm single-file items.
+# The distinction is load-bearing for the comparison below: only the shipping
+# arm goes through wasm_emit_modules_main.
+is_shipping_item() {
+  case "$1" in *.ship | check_main) return 0 ;; *) return 1 ;; esac
+}
+
 # ── summary ───────────────────────────────────────────────────────────────────
+#
+# Comparison semantics differ BY ARM, and that asymmetry is by design:
+#
+#   • PROBE arm (llvm_emit_main / wasm_emit_main): EXACT parity, as always.
+#     Neither probe calls wasmReachFilter, so any set difference at all is a
+#     real detection/eligibility drift — exactly what this census exists for.
+#
+#   • SHIPPING arm (<x>.ship + check_main, emitted by wasm_emit_modules_main):
+#     wasm's set may be a strict SUBSET of llvm's.  wasm_emit_modules_main runs
+#     wasmReachFilter (compiler/backend/wasm_reach.mdk, the
+#     wasm-emit-only-what-runs sprint) over the CProgram AFTER TRMC marking,
+#     dropping dispatch-unreachable functions before emission — so a TMC'd
+#     helper this fixture never reaches is simply never emitted, and therefore
+#     carries no census marker.  LLVM has no such filter: dceFilter
+#     (compiler/ir/dce.mdk, shared with wasm and deliberately out of that
+#     sprint's scope) never removes an impl/method body, so llvm's shipping set
+#     is a superset of anything wasm's pruned set can hold.  wasm ⊆ llvm on this
+#     arm is expected and permanent; it is reported as SUBSET, not DIFF.
+#
+# Still a hard DIFF on EITHER arm — this is what keeps the subset rule honest:
+#   • a wasm line with no identical counterpart in llvm.  Lines carry
+#     "<fn> <mode>", so this catches BOTH a function wasm TMC'd that llvm did
+#     not (impossible via pruning — pruning only ever removes) AND a shared
+#     function whose MODE diverges (trmc vs group-root vs group:<root>), which
+#     is the eligibility divergence WASM-TMC-GAP-DESIGN.md's "parity by
+#     construction" claim is about.
+# And the `-- EXPECT-TMC:` pins (check_pins, above) are untouched by any of
+# this: a pinned fn missing from EITHER shipping set is still a PINFAIL, so a
+# subset can never be licensed all the way down to vacuous.
 {
   echo "TMC census — $(ls "$OUT" | grep -c '\.llvm\.tmc$') corpus items — outdir $OUT"
   for l in "$OUT"/*.llvm.tmc; do
     name="$(basename "$l" .llvm.tmc)"; w="$OUT/$name.wasm.tmc"
     nl="$(wc -l < "$l")"; nw="$(wc -l < "$w")"
+    # wasm-only lines: present in the wasm set, absent from the llvm set.
+    # Both files are `sort -u` output, so comm's precondition holds.
+    wasm_only="$(comm -13 "$l" "$w")"
     if cmp -s "$l" "$w"; then echo "same $name (llvm=$nl wasm=$nw)"
+    elif is_shipping_item "$name" && [ -z "$wasm_only" ]; then
+      echo "SUBSET $name (llvm=$nl wasm=$nw) — wasm set is a subset of llvm's: reachability-pruned, not a divergence"
+      comm -23 "$l" "$w" | sed 's/^/    llvm-only (pruned from wasm): /'
     else
       echo "DIFF $name (llvm=$nl wasm=$nw)"
+      if is_shipping_item "$name"; then
+        echo "    GENUINE BACKEND DIVERGENCE (shipping arm) — wasm TMC'd a function llvm did not,"
+        echo "    or TMC'd a shared function at a different mode.  Reachability pruning can only"
+        echo "    REMOVE from wasm's set, so this is not a prune artifact.  wasm-only lines:"
+        printf '%s\n' "$wasm_only" | sed 's/^/      /'
+      else
+        echo "    PROBE arm — exact parity required here (wasmReachFilter never runs on this arm)."
+      fi
       diff "$l" "$w" | sed 's/^/    /'
     fi
   done

@@ -8,6 +8,10 @@
 --     -> types.typecheck.elaborateModules  (REAL core.mdk prelude + dict-passing)
 --     -> ir.core_ir_lower.lowerProgramEmit
 --     -> ir.dce.dceFilter  (prunes the real prelude to reached decls)
+--     -> backend.wasm_reach.wasmReachFilter  (#2359: drops the impl bodies —
+--        and the plain bindings only they reached — that no dispatchable method
+--        name in this program can reach; see that module's header for the exact
+--        notion of reachable)
 --     -> backend.wasm_emit.emitProgram
 --
 -- so typeclass dispatch flows through the REAL `core.mdk` prelude (Eq/Ord/Num/
@@ -33,6 +37,7 @@ import types.typecheck.{
   mainTypeIsFloat,
   checkedFfiExternTypeNamesModules,
 }
+import ir.core_ir.{CProgram(..)}
 import ir.core_ir_lower.{
   declaredRecordFieldOrders,
   lowerProgramEmit,
@@ -43,7 +48,10 @@ import ir.core_ir_lower.{
 }
 import ir.dce.{dceFilter}
 import backend.wasm_emit.{emitProgram, makeWasmEmitInputWithFfi}
+import backend.wasm_reach.{wasmReachFilter}
 import entries.entry_support.{driveModules, runEmitWith}
+import support.timer.{statsEnabled, emitStats}
+import support.util.{listLen}
 
 main : <IO> Unit
 main = driveModules (runEmitWith emitTail)
@@ -63,4 +71,28 @@ emitTail runtimeDecls coreD modules2 =
   let allDecls = dceFilter allDecls0
   let _ = preludeReturnPosDictNames coreD allDecls ++ preludeArgPosDictNames coreD allDecls ++ constrainedSigNames allDecls
   let input = makeWasmEmitInputWithFfi (methodIfaceTable allDecls) (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls) (ctorFieldTypeNames allDecls) (mainTypeIsFloat ()) (declaredRecordFieldOrders allDecls) (validateFfiExternTypeNames (checkedFfiExternTypeNamesModules modules2))
-  putStr (emitProgram input (lowerProgramEmit allDecls))
+  let lowered = lowerProgramEmit allDecls
+  let filtered = wasmReachFilter lowered
+  -- MEDAKA_STATS reporting hook (S5, #2359 closure): the S5 gate's "emitted-vs-
+  -- reachable" ratio must be derived from THIS filter's own notion of reachable,
+  -- never a freshly re-derived one (the contract's named S1∧S5 shared-decision
+  -- risk) — so report the unit count `wasmReachFilter` itself operates over
+  -- (top-level binds + impl entries) before and after the filter runs. Same
+  -- gating convention as `llvm_emit.mdk`'s `emitProgramWithStats`/support.timer's
+  -- `statsEnabled`: OFF by default, so ordinary emission (every gate that diffs
+  -- this entry's stdout) stays byte-identical; the whole stats block — including
+  -- both `programUnitCount` walks, not just the print — is skipped when
+  -- MEDAKA_STATS is unset.
+  let statsOn = statsEnabled ()
+  let _ = if statsOn then emitStats True [
+    ("wasm-reach-total-units", programUnitCount lowered),
+    ("wasm-reach-kept-units", programUnitCount filtered),
+  ] else ()
+  putStr (emitProgram input filtered)
+
+-- The unit count `backend.wasm_reach.wasmReachFilter` filters over: every
+-- top-level bind group plus every impl entry. Matches that filter's own
+-- `filterList` granularity exactly, so "kept / total" over this count IS the
+-- notion of reachable S1 computes — not a re-derived one.
+programUnitCount : CProgram -> Int
+programUnitCount (CProgram groups _ _ impls) = listLen groups + listLen impls

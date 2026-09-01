@@ -216,8 +216,13 @@ for required in \
     exit 1
   }
 done
-[ "$(grep -F 'let _ = setRef (progEmit prog).trapImportNeeded True' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
-  echo "FAIL H2B8-WRITERS: expected two explicit poly-runtime writers"
+# S2/#2359: narrowed from TWO unconditional poly-runtime writers (the isCmpOp
+# poly-num branch AND the isArithOp poly-num branch both forced trapImportNeeded
+# whenever useValueArith was set at all, #371's over-broad fix) to exactly ONE —
+# the isArithOp branch's OWN div/mod-specific arm — since the isCmpOp branch never
+# reaches $mdk_value_div/$mdk_value_mod's guard, and add/sub/mul never do either.
+[ "$(grep -F 'let _ = setRef (progEmit prog).trapImportNeeded True' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+  echo "FAIL H2B8-WRITERS: expected exactly one explicit poly-runtime writer (S2/#2359: div/mod-only)"
   exit 1
 }
 if grep -E '^_?useEPutRef[[:space:]]*[:=]|setRef (_?useEPutRef)' "$WASM_SRC" >/dev/null; then

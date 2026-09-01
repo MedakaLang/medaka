@@ -565,12 +565,22 @@ probeWasmTools _ = match runCommand "wasm-tools" ["--version"]
 -- STEP 2 (wasm): assemble the WAT to a .wasm with `wasm-tools parse`, then GC-
 -- validate it with `wasm-tools validate`.  Surfaces each tool's own stderr on
 -- failure.  `--features=all` matches the gate scripts' validate (GC + tail-call).
+-- Once validated, strip the debug `name` custom section with `wasm-tools strip
+-- --all` — it is pure debug info (31-42% of emitted bytes, #2377) and this is
+-- the one place a user-facing `.wasm` gets produced (`runBuildWasmIn`, the only
+-- caller). Validating BEFORE stripping keeps validate's error messages meaningful
+-- against the artifact as assembled; gate-consumed WAT/`wasm-tools print` output
+-- never goes through this function, so names stay intact there.
 wasmAssemble : String -> String -> String -> <IO> BuildResult
 wasmAssemble watPath outPath inputAbs = match runCommand "wasm-tools" ["parse", watPath, "-o", outPath]
   Err e => BuildErr ("error: could not run wasm-tools parse: " ++ e)
   Ok (0, _, _) => match runCommand "wasm-tools" ["validate", "--features=all", outPath]
     Err e => BuildErr ("error: could not run wasm-tools validate: " ++ e)
-    Ok (0, _, _) => BuildOk "built \{inputAbs} -> \{outPath}"
+    Ok (0, _, _) => match runCommand "wasm-tools" ["strip", "--all", outPath, "-o", outPath]
+      Err e => BuildErr ("error: could not run wasm-tools strip: " ++ e)
+      Ok (0, _, _) => BuildOk "built \{inputAbs} -> \{outPath}"
+      Ok (_, _, stripErr) =>
+        BuildErr "error: wasm-tools strip failed on \{outPath}\n\{stripErr}"
     Ok (_, _, valErr) =>
       BuildErr "error: wasm-tools validate rejected \{outPath}\n\{valErr}"
   Ok (_, _, parseErr) => BuildErr "error: wasm-tools parse failed assembling \{inputAbs}\n\{parseErr}"

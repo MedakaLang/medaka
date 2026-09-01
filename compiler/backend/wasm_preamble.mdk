@@ -823,9 +823,14 @@ valueModZeroTrapW : List String
 valueModZeroTrapW = asciiTrapBytesW "runtime error [E-MOD-ZERO]: modulo by zero\n"
   ++ ["        unreachable"]
 
+-- S2/#2359: split into one list PER OPERATOR (add/sub/mul/div/mod) so a program
+-- demanding only e.g. `-` (WasmEmit.useValueSub) doesn't drag in the other four
+-- functions — was one flat list spliced whole on a single blanket flag
+-- (useValueArith). See wasm_emit.mdk's valueAddRt/valueSubRt/valueMulRt/
+-- valueDivRt/valueModRt bindings for the per-flag gating this backs.
 export
-valueArithRuntimeLines : List String
-valueArithRuntimeLines = [
+valueAddRuntimeLines : List String
+valueAddRuntimeLines = [
   "  ;; -- A0 runtime value-tag-dispatched arithmetic (poly-`Num`: Int i31/$boxint OR $float) --",
   "  (func $mdk_value_add (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
   "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))",
@@ -833,49 +838,83 @@ valueArithRuntimeLines = [
   "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
   "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))",
   "      (else (call $mdk_box_int (i64.add (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))",
+]
+
+export
+valueSubRuntimeLines : List String
+valueSubRuntimeLines = [
   "  (func $mdk_value_sub (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
   "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))",
   "      (then (struct.new $float (f64.sub",
   "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
   "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))",
   "      (else (call $mdk_box_int (i64.sub (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))",
+]
+
+export
+valueMulRuntimeLines : List String
+valueMulRuntimeLines = [
   "  (func $mdk_value_mul (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
   "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))",
   "      (then (struct.new $float (f64.mul",
   "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
   "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))",
   "      (else (call $mdk_box_int (i64.mul (call $mdk_unbox_int (local.get $a)) (call $mdk_unbox_int (local.get $b)))))))",
-  "  ;; #371: int arm guards the divisor (mirrors emitDivZeroGuard's concrete-Int",
-  "  ;; guard) — stash $b's unboxed value in $vdr, trap the coded [E-DIV-ZERO] line",
-  "  ;; if zero, else div_s using the stashed value (unbox once, not twice).",
-  "  (func $mdk_value_div (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
-  "    (local $vdr i64)",
-  "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))",
-  "      (then (struct.new $float (f64.div",
-  "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
-  "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))",
-  "      (else",
-  "        (local.set $vdr (call $mdk_unbox_int (local.get $b)))",
-  "        (if (i64.eqz (local.get $vdr)) (then"]
-  ++ valueDivZeroTrapW ++
-  ["        ))",
-  "        (call $mdk_box_int (i64.div_s (call $mdk_unbox_int (local.get $a)) (local.get $vdr))))))",
-  "  ;; #345 Float arm is fmod ($mdk_float_rem), NOT the old inline `a - b*trunc(a/b)`",
-  "  ;; (which lost precision for large |a/b|, e.g. 1e300 % 7 -> 1e300).  Mirrors native",
-  "  ;; mdk_num_mod's fmod and the monomorphic Float `%` path (emitFloatBinRef).",
-  "  ;; #371: int arm guards the divisor the same way as $mdk_value_div above.",
-  "  (func $mdk_value_mod (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
-  "    (local $vdr i64)",
-  "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))",
-  "      (then (struct.new $float (call $mdk_float_rem",
-  "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
-  "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))",
-  "      (else",
-  "        (local.set $vdr (call $mdk_unbox_int (local.get $b)))",
-  "        (if (i64.eqz (local.get $vdr)) (then"]
-  ++ valueModZeroTrapW ++
-  ["        ))",
-  "        (call $mdk_box_int (i64.rem_s (call $mdk_unbox_int (local.get $a)) (local.get $vdr))))))",
+]
+
+export
+valueDivRuntimeLines : List String
+valueDivRuntimeLines = [
+    "  ;; #371: int arm guards the divisor (mirrors emitDivZeroGuard's concrete-Int",
+    "  ;; guard) — stash $b's unboxed value in $vdr, trap the coded [E-DIV-ZERO] line",
+    "  ;; if zero, else div_s using the stashed value (unbox once, not twice).",
+    "  (func $mdk_value_div (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
+    "    (local $vdr i64)",
+    "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))",
+    "      (then (struct.new $float (f64.div",
+    "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
+    "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))",
+    "      (else",
+    "        (local.set $vdr (call $mdk_unbox_int (local.get $b)))",
+    "        (if (i64.eqz (local.get $vdr)) (then",
+  ]
+  ++ valueDivZeroTrapW
+  ++ [
+    "        ))",
+    "        (call $mdk_box_int (i64.div_s (call $mdk_unbox_int (local.get $a)) (local.get $vdr))))))",
+  ]
+
+export
+valueModRuntimeLines : List String
+valueModRuntimeLines = [
+    "  ;; #345 Float arm is fmod ($mdk_float_rem), NOT the old inline `a - b*trunc(a/b)`",
+    "  ;; (which lost precision for large |a/b|, e.g. 1e300 % 7 -> 1e300).  Mirrors native",
+    "  ;; mdk_num_mod's fmod and the monomorphic Float `%` path (emitFloatBinRef).",
+    "  ;; #371: int arm guards the divisor the same way as $mdk_value_div above.",
+    "  (func $mdk_value_mod (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
+    "    (local $vdr i64)",
+    "    (if (result (ref eq)) (ref.test (ref $float) (local.get $a))",
+    "      (then (struct.new $float (call $mdk_float_rem",
+    "        (struct.get $float 0 (ref.cast (ref $float) (local.get $a)))",
+    "        (struct.get $float 0 (ref.cast (ref $float) (local.get $b))))))",
+    "      (else",
+    "        (local.set $vdr (call $mdk_unbox_int (local.get $b)))",
+    "        (if (i64.eqz (local.get $vdr)) (then",
+  ]
+  ++ valueModZeroTrapW
+  ++ [
+    "        ))",
+    "        (call $mdk_box_int (i64.rem_s (call $mdk_unbox_int (local.get $a)) (local.get $vdr))))))",
+  ]
+
+-- S2/#2359: the num-only poly-`Ord`/`Eq`-on-Float cmp sextet (eq_num/cmp_num/
+-- lt_num/le_num/gt_num/ge_num), gated as ONE block by its own flag
+-- (WasmEmit.useValueCmpNum) — independent of which arith op(s) above are
+-- demanded, since the isCmpOp poly-num routing branch (wasm_emit.mdk) never
+-- touches $mdk_value_add/sub/mul/div/mod.
+export
+valueCmpNumRuntimeLines : List String
+valueCmpNumRuntimeLines = [
   "  ;; -- A1 poly-`Ord`/`Eq`-on-Float, NUM-ONLY (no $str): $float f64-eq/cmp else i64 --",
   "  (func $mdk_value_eq_num (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
   "    (if (ref.test (ref $float) (local.get $a))",
@@ -1194,9 +1233,10 @@ floatStrRuntimeLines = [
 -- bytes.  All byte-identical to the native oracle.
 -- #345 $mdk_float_rem = fmod(a, b), byte-identical to C fmod / LLVM frem; backs BOTH
 -- the monomorphic `Float % Float` (emitFloatBinRef) AND the num-poly `%` runtime arm
--- ($mdk_value_mod, in valueArithRuntimeLines).  Emitted separately from floatRuntimeLines
--- and gated on `useFloatRef || useValueArithRef` (wasm_emit.mdk) so an int-only program
--- that routes `%` through value-dispatch still gets the helper (was a parse-time
+-- ($mdk_value_mod, in valueModRuntimeLines).  Emitted separately from floatRuntimeLines
+-- and gated on `useFloatRef || useValueModRef` (wasm_emit.mdk, S2/#2359: narrowed from
+-- the old whole-family useValueArithRef) so an int-only program that routes `%`
+-- through value-dispatch still gets the helper (was a parse-time
 -- `unknown func $mdk_float_rem` regression when it lived only in floatRuntimeLines).  The
 -- old one-step `a - b*trunc(a/b)` LOST PRECISION for large |a/b| (f64.div/f64.trunc round:
 -- 1e300 % 7 came back 0, not 1).  This is the exact power-of-two reduction used by libm:
