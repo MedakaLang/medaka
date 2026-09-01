@@ -25,20 +25,25 @@
 -- on.  The thunk performs `<e>`, so `e` is the row this computation rides.
 export data Async (e : Effect) a = Done a | Suspend (Unit -> <e> Async e a)
 
--- The interface instances are over `Async e` (the row fixed, the value varying)
--- — the standard partially-applied `* -> *` instance head, like `Mappable (Map
--- k)`.
-export impl Mappable (Async e) where
-  map f (Done a) = Done (f a)
-  map f (Suspend t) = Suspend (u => map f (t u))
+-- The interface instances are the DEFERRED family (core.mdk `Deferred*`):
+-- the instance head is the bare constructor `Async : Effect -> Type -> Type`,
+-- and the effect of a callback rides the INDEX, not the method's arrow.  Every
+-- arm STORES its callback under a `Suspend` — an eager `Done (f a)` would
+-- perform the callback's row at construction, from a call typed pure, and is
+-- rejected (`T-EFFECT-INDEX-EAGER`).  Cost accepted with that ruling: a
+-- map/bind on an already-`Done` value allocates one `Suspend` and pays one
+-- extra `runAsync` round.
+export impl DeferredMappable Async where
+  deferMap f (Done a) = Suspend (u => Done (f a))
+  deferMap f (Suspend t) = Suspend (u => deferMap f (t u))
 
-export impl Applicative (Async e) where
-  pure a = Done a
-  ap mf ma = andThen mf (f => map f ma)
+export impl DeferredApplicative Async where
+  deferPure a = Done a
+  deferAp mf ma = deferThen mf (f => deferMap f ma)
 
-export impl Thenable (Async e) where
-  andThen (Done a) k = k a
-  andThen (Suspend t) k = Suspend (u => andThen (t u) k)
+export impl DeferredThenable Async where
+  deferThen (Done a) k = Suspend (u => k a)
+  deferThen (Suspend t) k = Suspend (u => deferThen (t u) k)
 
 -- | Lift an effectful (or pure) thunk into `Async`, deferring it behind one
 -- `Suspend` boundary.  `liftIO (u => putStrLn "hi") : Async <Stdout> Unit`;
@@ -96,16 +101,16 @@ concurrent asyncs = Suspend (_ => concurrent (map stepAsync asyncs))
    > runAsync (Done 5)
    5
 
-   > runAsync (map (x => x + 1) (Done 4))
+   > runAsync (deferMap (x => x + 1) (Done 4))
    5
 
-   > runAsync (ap (Done (x => x * 2)) (Done 21))
+   > runAsync (deferAp (Done (x => x * 2)) (Done 21))
    42
 
-   > runAsync (andThen (Done 10) (x => Done (x + 5)))
+   > runAsync (deferThen (Done 10) (x => Done (x + 5)))
    15
 
-   > runAsync (andThen yield (_ => Done 99))
+   > runAsync (deferThen yield (_ => Done 99))
    99
 
    > runAsync (liftIO (u => 21 + 21))

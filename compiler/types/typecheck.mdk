@@ -29449,8 +29449,32 @@ checkMethodRigidityCore subject iface mty headMonos extraMap ownTyparams addedOb
   let _ = checkSurvivorObligations subject iface ownTyparams mty extraMap addedObls loc
   let _ = checkSurvivorCallObligations subject iface ownTyparams mty extraMap addedCallObls loc
   match effInside
-    Some (effMap, launderFlagged, gscope, eager) => checkImplEffVarRigidity subject gscope mty effMap launderFlagged eager loc
+    Some (effMap, launderFlagged, gscope, eager) =>
+      -- #817 carve-out RETIRED (#823): a method effect variable may no longer
+      -- alias an INSTANCE-HEAD row parameter (`impl Mappable (Async e)`, whose
+      -- `Suspend` arm stored the callback and forced method `e'` ~ head `e`,
+      -- charging the effect at build time and performing it at force time).
+      -- With the `Deferred*` family the head is the bare constructor and the
+      -- callback row rides the index, so the identification is never needed;
+      -- the type-variable half never had the exception.
+      let _ = if anyContainsI (effVarTailIds effMap) (flatMap monoIndexEffvarIds headMonos) then
+        pushTypeErrorOnceAt "T-IMPL-TOO-SPECIFIC" loc (aliasesHeadRowMsg subject mty)
+      else
+        ()
+      checkImplEffVarRigidity subject gscope mty effMap launderFlagged eager loc
     None => ()
+
+-- every row cell's id reachable in a head type — `impl I (Async e)` carries
+-- its `e` as a `TEff` argument of the head application.
+monoIndexEffvarIds : Mono -> List Int
+monoIndexEffvarIds m = match normalize m
+  TApp a b => monoIndexEffvarIds a ++ monoIndexEffvarIds b
+  TFun a r b => monoIndexEffvarIds a ++ rowTailId r ++ monoIndexEffvarIds b
+  TEff r => rowTailId r
+  _ => []
+
+aliasesHeadRowMsg : String -> Ty -> String
+aliasesHeadRowMsg subject mty = "\{subject} identifies a method effect variable with the instance head's own effect-row parameter: the declared type '\{ppTy mty}' promises every caller its own choice of that variable, but this body ties it to the row the head fixes, so an effect registered at build time would be charged there and performed later, at force time, from a value whose type no longer mentions it. Implement the Deferred* interfaces for an effect-indexed constructor instead (the callback's row then rides the index), or keep the method's effect variable independent of the head's."
 
 checkImplMethodRigidity : String -> String -> Ty -> List Mono -> List (String, Mono) -> List (String, Ref Effvar) -> List UObligation -> List (IfaceRef, List Mono, Option Loc) -> Bool -> List (String, List Kind) -> List String -> Option Loc -> Unit
 checkImplMethodRigidity iface mname mty headMonos extraMap effMap addedObls addedCallObls launderFlagged gscope eager loc = checkMethodRigidityCore (implSubject iface mname) iface mty headMonos extraMap [] addedObls addedCallObls (Some (effMap, launderFlagged, gscope, eager)) loc
