@@ -867,15 +867,46 @@ joinArrow (x::xs) = stringConcat [x, " → ", joinArrow xs]
 --     appending them.  The entry's deps stay first so the entry's view wins on a
 --     name clash, and a dep's stdlib imports keep flowing through the original
 --     `roots` (the stdlib root is never dropped).
--- For a module found under a root already in `roots` (entry / stdlib / a root we
--- already entered), nothing changes — this is purely additive.
+--
+-- 🚨 The rebase is UNCONDITIONAL — `owningRoot` is prepended even when it is
+-- ALREADY in `roots`.  It used to be guarded by `contains owningRoot roots`
+-- ("nothing changes for a module found under a root we already have"), and that
+-- guard silently exempted the two roots it matters most for: the STDLIB root and
+-- the entry project root, both of which are ALWAYS in `roots`.  `roots` is
+-- ordered entry-dir-FIRST (`[entryDir, projRoot, stdlibDir]` on the check/run
+-- path), so under the guard a stdlib module's OWN `import list as L` searched the
+-- USER'S entry directory first.  A user file that merely happens to be named
+-- `list.mdk` next to the entry point then hijacked `stdlib/hash_map.mdk`'s private
+-- view of `list` and broke the STDLIB from the outside — on a program that never
+-- mentions `list` at all:
+--   `stdlib/hash_map.mdk:305:14: Unbound variable: L.sortOn`
+-- `test/build_diff_fixtures/list.mdk` is exactly such a file, which is why
+-- `deriving_hashable.mdk` and `hash_negative_hash.mdk` (its neighbours, both
+-- reaching `hash_map`) could neither be checked nor built in that directory.
+-- Prepending unconditionally states the actual rule — A MODULE'S OWN IMPORTS
+-- RESOLVE AGAINST ITS OWN PACKAGE FIRST — for every package, the stdlib and the
+-- entry project included.  Regression legs: `diff_compiler_check_cli_modules.sh`
+-- leg 19.
+--
+-- ⚠️ PREPEND ONLY, NEVER MOVE.  `owningRoot`'s EXISTING position in `roots` must
+-- be left alone: `canonRootFor` (above) measures a module id from the LAST root
+-- containing the file, and that "stdlib LAST" ordering is what keeps `list`
+-- spelled `list` rather than `stdlib.list` when the stdlib lives inside the
+-- project tree.  Deleting the old occurrence while prepending would invert
+-- exactly that, renaming every stdlib id under a `src/`-layout project.  So the
+-- head is a resolution-order override; the tail stays the canonicalization order.
+-- Skipping the cons when `owningRoot` is already the head keeps the list from
+-- lengthening once per DFS level (every extra root costs a `fileExists` probe per
+-- import in `findInRoots`): a same-package descent — the overwhelmingly common
+-- case, and every step of a stdlib or compiler subtree — adds nothing at all.
 
 childRoots : String -> List String -> List String
-childRoots owningRoot roots =
-  if contains owningRoot roots then
-    roots
+childRoots owningRoot [] = [owningRoot]
+childRoots owningRoot (r::rs) =
+  if r == owningRoot then
+    r::rs
   else
-    owningRoot::roots
+    owningRoot :: r::rs
 
 -- The deps in effect for a module owned by `owningRoot`: the inherited `deps`
 -- plus, when we've crossed into a new package (owningRoot not yet in `roots`),
