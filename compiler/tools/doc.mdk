@@ -56,6 +56,7 @@ import frontend.resolve.{internalExterns}
 import support.util.{joinWith, reverseL, escStr, stringTrim, splitNl}
 import support.path.{baseOf, chopExt}
 import driver.diagnostics.{projectEntrySchemes}
+import frontend.desugar.{dataDerivers, newtypeDerivers}
 import json.{Json, JString, jObject, jArray}
 import string.{toLower}
 
@@ -448,14 +449,31 @@ letgroupEntriesGo ((LetBind name _)::rest) schemes doc =
 --
 -- Derived entries carry NO doc prose: the type's doc comment belongs to the
 -- type's entry, and repeating it under three instance headings would be noise.
-derivedEntries : String -> List String -> List DeriveRef -> List (String, DocEntry)
-derivedEntries _ _ [] = []
-derivedEntries tyName params (d::ds) =
+-- Which type-shape a `deriving (…)` clause is attached to — carries exactly
+-- the shape info `dataDerivers`/`newtypeDerivers` need to answer "does this
+-- class have a deriver for this shape," so `derivedEntries` can filter
+-- against the SAME oracle `unknownDerive`/`declDeriveErrors` (desugar.mdk)
+-- already use to reject an unsupported class at compile time.
+data DeriveShape = ShapeData (List Variant) | ShapeNewtype String Ty
+
+-- True when `iface` has a deriver for this shape, per the canonical tables.
+hasDeriver : String -> List String -> DeriveShape -> String -> Bool
+hasDeriver tyName params (ShapeData variants) iface =
+  elem iface (map fst (dataDerivers tyName params variants))
+hasDeriver tyName params (ShapeNewtype con fty) iface =
+  elem iface (map fst (newtypeDerivers tyName params con fty))
+
+derivedEntries : String -> List String -> DeriveShape -> List DeriveRef -> List (String, DocEntry)
+derivedEntries _ _ _ [] = []
+derivedEntries tyName params shape (d::ds) =
   let iface = deriveRefName d
-  let args = derivedHead tyName params
-  let name = "\{iface} \{args}"
-  let sigStr = "impl \{iface} \{args}\{derivedRequires iface params}"
-  (name, DocEntry name sigStr "" (KImplOn (Some tyName))) :: derivedEntries tyName params ds
+  let rest = derivedEntries tyName params shape ds
+  if not (hasDeriver tyName params shape iface) then rest
+  else
+    let args = derivedHead tyName params
+    let name = "\{iface} \{args}"
+    let sigStr = "impl \{iface} \{args}\{derivedRequires iface params}"
+    (name, DocEntry name sigStr "" (KImplOn (Some tyName)))::rest
 
 -- `T` with no params, `(T a b)` with them — `ppTyP 2`'s rendering of the head
 -- `appliedHead` builds.
@@ -476,22 +494,23 @@ noDerives _ = False
 -- (typeName, params, derives) for a decl carrying a non-empty `deriving (…)`
 -- clause, else None.  A PRIVATE `data`/`newtype` is excluded here exactly as
 -- in `renderSig`: an unpublished type's instances are not part of the surface.
-derivesOf : Decl -> Option (String, List String, List DeriveRef)
-derivesOf (DData { dataVis = vis, dataName = n, dataParams = ps, dataDerives = ds })
-  | not (dataVisPrivate vis) && not (noDerives ds) = Some (n, ps, ds)
-derivesOf (DNewtype { newtypePub = True, newtypeName = n, newtypeParams = ps, newtypeDerives = ds })
-  | not (noDerives ds) = Some (n, ps, ds)
+derivesOf : Decl -> Option (String, List String, List DeriveRef, DeriveShape)
+derivesOf (DData { dataVis = vis, dataName = n, dataParams = ps, dataCtors = variants, dataDerives = ds })
+  | not (dataVisPrivate vis) && not (noDerives ds) =
+    Some (n, ps, ds, ShapeData variants)
+derivesOf (DNewtype { newtypePub = True, newtypeName = n, newtypeParams = ps, newtypeCtor = con, newtypeFieldTy = fty, newtypeDerives = ds })
+  | not (noDerives ds) = Some (n, ps, ds, ShapeNewtype con fty)
 derivesOf _ = None
 
 -- The type's own entry (exactly what the single-entry path would have made)
 -- followed by one entry per derived class.
-derivingEntries : Bool -> Decl -> Int -> List (String, Scheme) -> List (Int, String) -> (String, List String, List DeriveRef) -> List (String, DocEntry)
-derivingEntries bare decl line schemes tbl (tyName, params, derives) =
+derivingEntries : Bool -> Decl -> Int -> List (String, Scheme) -> List (Int, String) -> (String, List String, List DeriveRef, DeriveShape) -> List (String, DocEntry)
+derivingEntries bare decl line schemes tbl (tyName, params, derives, shape) =
   let doc = findDocForLine tbl line
   let own = match renderSig bare decl schemes
     None => []
     Some (name, sigStr) => [(name, DocEntry name sigStr doc (declKind decl))]
-  own ++ derivedEntries tyName params derives
+  own ++ derivedEntries tyName params shape derives
 
 -- ── re-exports (hole (a)) ───────────────────────────────────────────────────
 -- `export import core.{Filterable, filter, filterMap}` (`stdlib/list.mdk:8`,
