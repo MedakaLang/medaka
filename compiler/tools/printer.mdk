@@ -1897,9 +1897,7 @@ printDecl (DInterface { pub, def, name, typarams, supers, methods }) = Cat
           (concatD (map (p => Cat (text " ") (text p)) typarams))
           (Cat
             (superDoc supers)
-            (Cat
-              (text " where")
-              (indentBlock (sepBy Hardline (map ifaceMethodDoc methods)))))))))
+            (if isEmptyL methods then Nil else Cat (text " where") (indentBlock (sepBy Hardline (map ifaceMethodDoc methods)))))))))
 printDecl (DImpl { pub, iface, tys, reqs, methods }) = Cat
   (if pub then text "export " else Nil)
   (Cat
@@ -1908,9 +1906,7 @@ printDecl (DImpl { pub, iface, tys, reqs, methods }) = Cat
       (implHead iface tys)
       (Cat
         (reqsDoc reqs)
-        (Cat
-          (text " where")
-          (indentBlock (sepBy Hardline (map implMethodDoc methods)))))))
+        (if isEmptyL methods then Nil else Cat (text " where") (indentBlock (sepBy Hardline (map implMethodDoc methods)))))))
 printDecl (DUse pub path _) = Cat
   (if pub then text "export " else Nil)
   (Cat (text "import ") (printUsePath path))
