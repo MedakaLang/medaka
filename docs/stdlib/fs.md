@@ -29,6 +29,18 @@ The metadata `statFile` (stat(2)) returns for a path:
 `size` in bytes, `isDir`/`isFile` type flags, and `mtime` (modification
 time, seconds since the Unix epoch).
 
+## `Eq FileStat`
+
+```
+impl Eq FileStat
+```
+
+## `Debug FileStat`
+
+```
+impl Debug FileStat
+```
+
 ## `stat`
 
 ```

@@ -15,6 +15,18 @@ data Expectation
 
 The result of a single test expectation.
 
+## `Eq Expectation`
+
+```
+impl Eq Expectation
+```
+
+## `Debug Expectation`
+
+```
+impl Debug Expectation
+```
+
 ## `pass`
 
 ```

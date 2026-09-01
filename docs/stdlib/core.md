@@ -1832,6 +1832,18 @@ deriving type (serialisation, hashing, pretty-printing, …).
 `RRecord` carries a record type's name and its named fields.  The
 remaining constructors are primitive leaves.
 
+## `Eq Rep`
+
+```
+impl Eq Rep
+```
+
+## `Debug Rep`
+
+```
+impl Debug Rep
+```
+
 ## `RField`
 
 ```
@@ -1840,6 +1852,18 @@ data RField
 ```
 
 A named field inside an `RRecord`.
+
+## `Eq RField`
+
+```
+impl Eq RField
+```
+
+## `Debug RField`
+
+```
+impl Debug RField
+```
 
 ## `Generic`
 

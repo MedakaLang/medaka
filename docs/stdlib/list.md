@@ -15,7 +15,7 @@ Re-export the Filterable container ops so they're discoverable as
 ## `filter`
 
 ```
-filter : re-export of core.filter
+filter : (a -> Bool) -> b a -> b a
 ```
 
 Re-export the Filterable container ops so they're discoverable as
@@ -24,7 +24,7 @@ Re-export the Filterable container ops so they're discoverable as
 ## `filterMap`
 
 ```
-filterMap : re-export of core.filterMap
+filterMap : (a -> Option b) -> c a -> c b
 ```
 
 Re-export the Filterable container ops so they're discoverable as
