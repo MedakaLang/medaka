@@ -86,10 +86,14 @@ Support files:
 
 `stdlib/` modules: `runtime.mdk` (extern catalog), `core.mdk` (**only auto-prelude**),
 `list`/`string`/`array`, `map`/`set` (ordered trees), `hash_map`/`hash_set` (mutable hash),
-`mut_array` (growable vector), `json`, `byteparser`/`bytebuilder`, `io.mdk` (ergonomic layer
-over `runtime.mdk` IO), `args` (one CLI argument parser — a verb's flag vocabulary is a VALUE
-that the `(known: …)` roster and the parser are unified renderings of;
-`docs/design/ARGS-DESIGN.md`).
+`mut_array` (growable vector), `json`, `byteparser`/`bytebuilder` (parser-combinator libraries
+for hand-rolled binary/text parsing and building — `parsec` is a separate, more general
+parser-combinator project under its own manifest, not part of `stdlib/`), `io.mdk` (ergonomic
+layer over `runtime.mdk` IO), `args` (one CLI argument parser — a verb's flag vocabulary is a
+VALUE that the `(known: …)` roster and the parser are unified renderings of;
+`docs/design/ARGS-DESIGN.md`). **For "does the stdlib have X" ask the generated reference,
+[`docs/stdlib/index.md`](docs/stdlib/index.md)** (`./medaka doc --out docs/stdlib stdlib/*.mdk`)
+— name-by-name, regenerated from source, never hand-maintained.
 
 Import forms: `import map.{Map, get}` (selective), `import map.*` (all exported), `import
 map as M` → `M.get` (**values only** — an alias-qualified name in *type* position is a parse
@@ -789,4 +793,5 @@ reached for constantly.
 | `compiler/DIAGNOSTIC-CODES-DESIGN.md` | Diagnostic code taxonomy + `Diag` JSON contract |
 | `compiler/PERF-RESULTS.md` / `PERF-SCOPE.md` | Perf log / ranked hot paths (`test/bench.sh`) |
 | `compiler/STAGE2-DESIGN.md` / `RUNTIME-DESIGN.md` | Backend design: Core IR seam, value rep, GC, per-extern disposition |
-| `docs/stdlib/STDLIB.md` / `stdlib/README.md` | Stdlib module plan / conventions for externs |
+| `docs/stdlib/index.md` | **THE stdlib reference** — generated, name-by-name, per-module signatures/docs/impls for every `stdlib/*.mdk` (`./medaka doc --out docs/stdlib stdlib/*.mdk`). Answer "does the stdlib have X" here, not in `STDLIB.md`. |
+| `docs/stdlib/STDLIB.md` / `stdlib/README.md` | Stdlib design rationale, history, and open roadmap (demoted from reference — see `docs/stdlib/index.md`) / conventions for externs |

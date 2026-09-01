@@ -1,0 +1,24 @@
+# runtime
+
+runtime.mdk — S-doc-surface-truth hole (c) probe.  NOT `stdlib/runtime.mdk`;
+it lives here to prove `preludeOnlyModule` keys on the DERIVED module name
+("runtime"), not on the stdlib path — the same name-keyed shape as
+`excludedLibraryModule`.
+
+## `probeUnexported`
+
+```
+probeUnexported : Int -> Int
+```
+
+A bare (unexported) extern.  Documented anyway: in a prelude-only module
+  `export` status is meaningless, because nothing can import the module.
+
+## `probeExported`
+
+```
+probeExported : Int -> Int
+```
+
+An exported extern.  Documented in every module, exception or not.
+

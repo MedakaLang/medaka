@@ -1,0 +1,41 @@
+# doctest_marker
+
+doctest_marker.mdk — S2-2: doc's example detection must agree with
+doctest.mdk's, so the italic "run by medaka test" marker cannot lie.
+
+doctest classifies an input line by the literal 5-char `-- > ` prefix
+(`isInputLine`, compiler/tools/doctest.mdk).  doc's segmenter keys on a `> `
+prefix in the extracted comment BODY, and `commentBody`'s 2-char-strip
+branch turns `--> x` into `> x` — a body doc used to fence and label as
+verified while `medaka test` never ran it.
+
+## `realExample`
+
+```
+realExample : Int -> Int
+```
+
+A REAL doctest: the raw comment carries `-- > `, so `medaka test` runs it
+  and the fenced block below legitimately earns the marker.
+
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> realExample 1
+2
+```
+
+## `fakeExample`
+
+```
+fakeExample : Int -> Int
+```
+
+NOT a doctest: the raw comment is `--> …` (no space after the `--`), which
+  `medaka test` never collects.  It must render as ordinary prose — no
+  marker, no fence — with the leading `>` escaped so Markdown shows the text
+  the author wrote instead of a blockquote.
+
+\> fakeExample 1
+

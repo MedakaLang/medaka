@@ -1,0 +1,6 @@
+-- beta.mdk — tiny library-mode fixture module #2.
+
+-- | Add one to an Int.
+export
+increment : Int -> Int
+increment x = x + 1

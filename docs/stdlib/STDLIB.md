@@ -1,4 +1,10 @@
-# Medaka Standard Library Plan
+# Medaka Standard Library — Design Notes & Roadmap
+
+> **Does the stdlib have X?** This is NOT the reference — see
+> [`docs/stdlib/index.md`](index.md) (generated from source via
+> `./medaka doc --out docs/stdlib stdlib/*.mdk`) for the actual, current
+> function/type/impl list. This document is design rationale, history, and the
+> open roadmap.
 
 > Historical bug-fix citations below (`lib/prelude.ml`, `lib/resolve.ml`,
 > `lib/typecheck.ml`, `eval.ml`, `bin/main.ml`) reference the OCaml reference
@@ -1269,13 +1275,9 @@ what a verb parses, what its help advertises and what its rejection names as
 `map`/`hash_map` import — all three are load-bearing for its measured import
 cost (`[T-STDLIB-IMPORT]`); adding one means re-measuring.
 
-**Exports:** `Arity` (`Switch`/`Value`/`ValueList`/`OneOf`/`IntValue`),
-`Visibility`, `Unknown`, `Trailing`, `FlagSpec`, `ArgSpec`, `Args`; builders
-`switch`/`value`/`valueList`/`oneOf`/`intValue`/`internal`/`spec`/
-`withTrailing`/`withUnknown`; renderings `canonical`/`flagLabel`/`rosterOf`/
-`helpBlockOf`/`unknownFlagMessage`/`missingValueMessage`/`invalidValueMessage`/
-`usageExitCode`; `parseArgs`; queries `flag`/`flagValue`/`lastValue`/
-`flagValues`. 40 doctests.
+**Exports:** see the generated [`docs/stdlib/args.md`](args.md) for the current
+name-by-name list with signatures — this document no longer hand-maintains a
+copy of it.
 
 ---
 
