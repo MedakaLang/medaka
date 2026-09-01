@@ -1110,7 +1110,13 @@ while IFS= read -r f; do
     # (stdlib/*.mdk itself already forces the FULL suite via the blast-radius arm
     # above, `diff_compiler_snapshot*`'s stdlib/*.mdk case — [L-BLAST-RADIUS] — so
     # this arm only needs to cover an edit to the generated tree itself.)
-    docs/stdlib/*)                 add 'diff_compiler_doc_stdlib_reference' ;;
+    # S-conventions-ratchet (#2306 leg 9): `diff_compiler_stdlib_conventions`
+    # reads `docs/stdlib/inventory.json` directly (a THIRD independent
+    # consumer, [W-THIRD-CONSUMER] — its own `.sh` is already covered by the
+    # generic `test/diff_compiler_*.sh` arm above), so an inventory-only edit
+    # must reach it too, not just the freshness gate.
+    docs/stdlib/*)                 add 'diff_compiler_doc_stdlib_reference'
+                                   add 'diff_compiler_stdlib_conventions' ;;
     # Third ledger, same structural blind spot (#1608). Its rows pin a WRONG VALUE
     # rather than a divergence — see its own header — but the masking path is
     # identical: a loose file under test/ that someone edits ALONE when the gate reds.

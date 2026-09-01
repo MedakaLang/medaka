@@ -1,11 +1,12 @@
 # META
-source_lines=1912
+source_lines=1913
 stages=DESUGAR,MARK
 # SOURCE
 {- core.mdk — the foundation every other Medaka module rests on.
 
-   This file is automatically prepended to every program by the compiler
-   (see lib/prelude.ml), so everything declared here is in scope without
+   This file is automatically loaded as the implicit prelude by the native
+   compiler pipeline (stdlib/runtime.mdk + stdlib/core.mdk, read from
+   MEDAKA_ROOT at startup), so everything declared here is in scope without
    an `import`.  See STDLIB.md for the full plan and Module 1 checklist.
 
    Layout:

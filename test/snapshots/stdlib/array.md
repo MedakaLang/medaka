@@ -23,7 +23,7 @@ stages=DESUGAR,MARK
         definitions would encode cartesian-style allocation that's a
         performance trap on bulk data.
 
-   The kernel of OCaml-backed primitives lives in stdlib/runtime.mdk and is
+   The kernel of native primitives lives in stdlib/runtime.mdk and is
    the surface this module sits on top of.  Most operations here are one or
    two lines of Medaka built on `arrayMakeWith` + `arrayGetUnsafe`, which
    compile to a tight loop in the host runtime. -}

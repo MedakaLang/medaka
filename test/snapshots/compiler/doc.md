@@ -1,5 +1,5 @@
 # META
-source_lines=1137
+source_lines=1148
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/doc.mdk — the native `medaka doc` documentation extractor.
@@ -1131,13 +1131,24 @@ listLenDoc (_::xs) = 1 + listLenDoc xs
 -- correct here — `doc` is a single CLI invocation, no cross-call reuse.
 -- `projectEntrySchemes` returns `None` only on a LOAD error (missing/cyclic
 -- import), never on a type error; a no-import file cannot hit a load error,
--- so falling back to `[]` on `None` changes nothing for the no-import case.
--- Unlike lsp.mdk's completion consumer, this call site only ever looks up
--- schemes BY NAME for names the caller already knows it declared
+-- so this arm is reached ONLY for the load-error case, never the no-import
+-- one. Unlike lsp.mdk's completion consumer, this call site only ever looks
+-- up schemes BY NAME for names the caller already knows it declared
 -- (extractEntries/renderSig, never a full-environment enumeration).
+-- #2422: falling back to `[]` here used to make a module with a broken
+-- import graph and an un-annotated export render a silent, signature-less
+-- page at exit 0 — indistinguishable from a module that simply has no
+-- annotatable exports. `[]` is still the right EXTRACTION-level value (there
+-- is nothing to look up), but the failure must stop being invisible, so this
+-- now also reports the load error and exits non-zero, mirroring every other
+-- load-error arm in this file's own callers (`runDocTargets`/
+-- `runDocLibraryTargets`, medaka_cli.mdk) rather than swallowing it here.
 docSchemesFor : String -> String -> String -> List String -> List Decl -> <IO> List (String, Scheme)
 docSchemesFor runtimeSrc coreSrc filename roots rawUser = match projectEntrySchemes (Ref []) (Ref []) (_ => None) filename roots runtimeSrc coreSrc
-  None => []
+  None =>
+    let _ = ePutStrLn "medaka doc: '\{filename}' has an unresolved import graph (missing or cyclic import) — signatures unavailable"
+    let _ = exit 1
+    []
   Some schemes => schemes
 # DESUGAR
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "commentLine" false) (mem "commentText" false))))
@@ -1432,7 +1443,7 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser = match projectEntrySche
 (DFunDef false "listLenDoc" ((PList)) (ELit (LInt 0)))
 (DFunDef false "listLenDoc" ((PCons PWild (PVar "xs"))) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "listLenDoc") (EVar "xs"))))
 (DTypeSig false "docSchemesFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))))
-(DFunDef false "docSchemesFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "filename") (PVar "roots") (PVar "rawUser")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectEntrySchemes") (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (ELam (PWild) (EVar "None"))) (EVar "filename")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "schemes")) () (EVar "schemes"))))
+(DFunDef false "docSchemesFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "filename") (PVar "roots") (PVar "rawUser")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectEntrySchemes") (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (ELam (PWild) (EVar "None"))) (EVar "filename")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka doc: '")) (EApp (EVar "display") (EVar "filename"))) (ELit (LString "' has an unresolved import graph (missing or cyclic import) — signatures unavailable"))))) (DoLet false false PWild (EApp (EVar "exit") (ELit (LInt 1)))) (DoExpr (EListLit)))) (arm (PCon "Some" (PVar "schemes")) () (EVar "schemes"))))
 # MARK
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "commentLine" false) (mem "commentText" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositions" false) (mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
@@ -1726,4 +1737,4 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser = match projectEntrySche
 (DFunDef false "listLenDoc" ((PList)) (ELit (LInt 0)))
 (DFunDef false "listLenDoc" ((PCons PWild (PVar "xs"))) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "listLenDoc") (EVar "xs"))))
 (DTypeSig false "docSchemesFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))))
-(DFunDef false "docSchemesFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "filename") (PVar "roots") (PVar "rawUser")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectEntrySchemes") (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (ELam (PWild) (EVar "None"))) (EVar "filename")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "schemes")) () (EVar "schemes"))))
+(DFunDef false "docSchemesFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "filename") (PVar "roots") (PVar "rawUser")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectEntrySchemes") (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (ELam (PWild) (EVar "None"))) (EVar "filename")) (EVar "roots")) (EVar "runtimeSrc")) (EVar "coreSrc")) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka doc: '")) (EApp (EMethodRef "display") (EVar "filename"))) (ELit (LString "' has an unresolved import graph (missing or cyclic import) — signatures unavailable"))))) (DoLet false false PWild (EApp (EVar "exit") (ELit (LInt 1)))) (DoExpr (EListLit)))) (arm (PCon "Some" (PVar "schemes")) () (EVar "schemes"))))

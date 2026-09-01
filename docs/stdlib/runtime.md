@@ -8,10 +8,13 @@
 > library module covers it.
 
 Built-in extern declarations.
-Every name here must have a matching OCaml implementation in lib/eval.ml.
-To add a new primitive: add an extern line here, add its OCaml impl in
-eval.ml's `primitives` list, and (if non-pure) its effect annotation here
-ensures eff_env is seeded automatically.
+Every name here must have a matching implementation in the native
+interpreter, compiler/eval/eval.mdk. To add a new primitive: add an
+extern line here, add its implementation to eval.mdk's primitive
+dispatch, and (if non-pure) its effect annotation here ensures eff_env is
+seeded automatically. See .claude/skills/add-primitive/SKILL.md for the
+full procedure, including the LLVM/WasmGC backend wiring a primitive that
+must also work under `medaka build` needs.
 
 `pure` and `map` are *not* externs: they're interface methods of
 Applicative and Mappable declared in stdlib/core.mdk, and dispatched
@@ -50,11 +53,11 @@ setRef : Ref a -> a -> Unit
 hashInt : Int -> Int
 ```
 
-Per-type Hashable hashers — SPECIFIED deterministic algorithms, byte-identical
-in lib/eval.ml (oracle) and runtime/medaka_rt.c (native): hashInt/hashChar/
-hashFloat = SplitMix64-finalizer mix, hashString = FNV-1a, hashBool = 0/1; all
-masked to [0, 2^30) (non-negative).  Replaced the old structural __hashRaw,
-which the type-erased native runtime cannot replicate.  Called by the primitive
+Per-type Hashable hashers — SPECIFIED deterministic algorithms, implemented
+in runtime/medaka_rt.c: hashInt/hashChar/hashFloat = SplitMix64-finalizer
+mix, hashString = FNV-1a, hashBool = 0/1; all masked to [0, 2^30)
+(non-negative).  Replaced the old structural __hashRaw, which the
+type-erased native runtime cannot replicate.  Called by the primitive
 `Hashable` impls in core.mdk; derived/compound impls compose them via `hash`.
 
 ## `hashFloat`
@@ -121,9 +124,8 @@ tagged ints instead of a String.  For SQLite/binary read paths.
 bitAnd : Int -> Int -> Int
 ```
 
-Bitwise / shift primitives (PURE).  Defined on the 63-bit Int rep; native
-(C) == OCaml for NON-NEGATIVE operands (the binary-decoding case).
-shiftRight is LOGICAL (unsigned): OCaml lsr, C >> on the untagged value.
+Bitwise / shift primitives (PURE).  Defined on the 63-bit Int rep.
+shiftRight is LOGICAL (unsigned): C `>>` on the untagged value.
 
 ## `bitOr`
 
@@ -639,7 +641,7 @@ floatToInt : Float -> Int
 floatRem : Float -> Float -> Float
 ```
 
-floatRem a b = a - b * trunc(a/b)  (C fmod == LLVM frem == OCaml Float.rem).
+floatRem a b = a - b * trunc(a/b)  (C fmod == LLVM frem).
 Backs the `Float % Float` operator in the interpreter so `run` matches `build`
 (which emits `frem` inline) EXACTLY.  Pure.
 
@@ -810,7 +812,7 @@ intMinBound : Int
 ```
 
 Platform bounds backing `impl Bounded Int`/`Bounded Char` in core.mdk.
-Int bounds are the 63-bit OCaml `int` limits; Char bounds are U+0000 / U+10FFFF.
+Int bounds are the 63-bit tagged Int representation's limits; Char bounds are U+0000 / U+10FFFF.
 
 ## `intMaxBound`
 
@@ -837,8 +839,9 @@ intToString : Int -> String
 ```
 
 Leaf renderers backing the `Debug` impls in core.mdk / string.mdk.  These
-expose the same OCaml formatting `pp_value` uses, so `debug` agrees with
-`println` on numbers.  Sibling internal renderers produce the *quoted,
+expose the same number formatting the native runtime's `println`/`Display`
+path uses, so `debug` agrees with `println` on numbers.  Sibling internal
+renderers produce the *quoted,
 escaped* literal form (round-trippable into source) for other kinds, so
 `debug` on a String intentionally differs from `println` (cf. Haskell
 `show` vs `putStr`).

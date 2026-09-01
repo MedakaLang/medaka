@@ -1127,11 +1127,22 @@ listLenDoc (_::xs) = 1 + listLenDoc xs
 -- correct here — `doc` is a single CLI invocation, no cross-call reuse.
 -- `projectEntrySchemes` returns `None` only on a LOAD error (missing/cyclic
 -- import), never on a type error; a no-import file cannot hit a load error,
--- so falling back to `[]` on `None` changes nothing for the no-import case.
--- Unlike lsp.mdk's completion consumer, this call site only ever looks up
--- schemes BY NAME for names the caller already knows it declared
+-- so this arm is reached ONLY for the load-error case, never the no-import
+-- one. Unlike lsp.mdk's completion consumer, this call site only ever looks
+-- up schemes BY NAME for names the caller already knows it declared
 -- (extractEntries/renderSig, never a full-environment enumeration).
+-- #2422: falling back to `[]` here used to make a module with a broken
+-- import graph and an un-annotated export render a silent, signature-less
+-- page at exit 0 — indistinguishable from a module that simply has no
+-- annotatable exports. `[]` is still the right EXTRACTION-level value (there
+-- is nothing to look up), but the failure must stop being invisible, so this
+-- now also reports the load error and exits non-zero, mirroring every other
+-- load-error arm in this file's own callers (`runDocTargets`/
+-- `runDocLibraryTargets`, medaka_cli.mdk) rather than swallowing it here.
 docSchemesFor : String -> String -> String -> List String -> List Decl -> <IO> List (String, Scheme)
 docSchemesFor runtimeSrc coreSrc filename roots rawUser = match projectEntrySchemes (Ref []) (Ref []) (_ => None) filename roots runtimeSrc coreSrc
-  None => []
+  None =>
+    let _ = ePutStrLn "medaka doc: '\{filename}' has an unresolved import graph (missing or cyclic import) — signatures unavailable"
+    let _ = exit 1
+    []
   Some schemes => schemes
