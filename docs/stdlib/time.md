@@ -37,6 +37,24 @@ data Duration
 ── Duration ────────────────────────────────────────────────────────────
 A time span, stored as a whole number of MILLISECONDS.
 
+## `Eq Duration`
+
+```
+impl Eq Duration
+```
+
+## `Ord Duration`
+
+```
+impl Ord Duration
+```
+
+## `Debug Duration`
+
+```
+impl Debug Duration
+```
+
 ## `millis`
 
 ```
@@ -230,6 +248,24 @@ data DateTime
 
 ── UTC civil calendar ──────────────────────────────────────────────────
 A civil UTC date-and-time.  `month` is 1-12, `day` is 1-31.
+
+## `Eq DateTime`
+
+```
+impl Eq DateTime
+```
+
+## `Ord DateTime`
+
+```
+impl Ord DateTime
+```
+
+## `Debug DateTime`
+
+```
+impl Debug DateTime
+```
 
 ## `fromEpochSeconds`
 

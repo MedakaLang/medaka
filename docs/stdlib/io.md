@@ -19,7 +19,7 @@ it is evaluated, so you can `match readFile path` directly.
 ## `eprint`
 
 ```
-eprint : a -> <IO> Unit
+eprint : Display a => a -> <IO> Unit
 ```
 
 Write a value to stderr (no trailing newline), rendered via `Display` —
@@ -28,7 +28,7 @@ the stderr analog of the prelude's `print`.
 ## `eprintln`
 
 ```
-eprintln : a -> <IO> Unit
+eprintln : Display a => a -> <IO> Unit
 ```
 
 Write a value to stderr followed by a newline — the stderr analog of
@@ -37,7 +37,7 @@ Write a value to stderr followed by a newline — the stderr analog of
 ## `inspect`
 
 ```
-inspect : a -> <IO> Unit
+inspect : Debug a => a -> <IO> Unit
 ```
 
 Print a value via `Debug` followed by a newline — the `Debug`-rendering

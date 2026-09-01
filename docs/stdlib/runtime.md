@@ -105,13 +105,13 @@ readLine : Unit -> <Stdin> String
 ## `readFile`
 
 ```
-readFile : String -> <FileRead> Result String String
+readFile : String -> <FileRead _> Result String String
 ```
 
 ## `readFileBytes`
 
 ```
-readFileBytes : String -> <FileRead> Result String (Array Int)
+readFileBytes : String -> <FileRead _> Result String (Array Int)
 ```
 
 Read a file as RAW BYTES (no UTF-8 decode): Ok (Array Int) of byte values
@@ -160,13 +160,13 @@ bitNot : Int -> Int
 ## `writeFile`
 
 ```
-writeFile : String -> String -> <FileWrite> Result String Unit
+writeFile : String -> String -> <FileWrite _> Result String Unit
 ```
 
 ## `writeFileBytes`
 
 ```
-writeFileBytes : String -> Array Int -> <FileWrite> Result String Unit
+writeFileBytes : String -> Array Int -> <FileWrite _> Result String Unit
 ```
 
 Write raw bytes (Array Int, values 0..255) to a file, truncating.  The
@@ -176,7 +176,7 @@ or Err msg on failure.
 ## `runCommand`
 
 ```
-runCommand : String -> List String -> <Exec> Result String (Int, String, String)
+runCommand : String -> List String -> <Exec _> Result String (Int, String, String)
 ```
 
 Run a subprocess: prog args -> Ok (exitCode, stdout, stderr) | Err osError.
@@ -209,7 +209,7 @@ stdlib/io.mdk; these are the irreducible host primitives.
 ## `getEnv`
 
 ```
-getEnv : String -> <Env> Option String
+getEnv : String -> <Env _> Option String
 ```
 
 io Module 7.  Higher-level ergonomics (eprint/eprintln/readLines) live in
@@ -233,19 +233,19 @@ of assuming it runs inside the repo (DISTRIBUTION-DESIGN.md D1).
 ## `fileExists`
 
 ```
-fileExists : String -> <FileRead> Bool
+fileExists : String -> <FileRead _> Bool
 ```
 
 ## `canonicalizePath`
 
 ```
-canonicalizePath : String -> <FileRead> String
+canonicalizePath : String -> <FileRead _> String
 ```
 
 ## `appendFile`
 
 ```
-appendFile : String -> String -> <FileWrite> Result String Unit
+appendFile : String -> String -> <FileWrite _> Result String Unit
 ```
 
 realpath(3): resolve ./../symlinks to an absolute path; input unchanged on failure
@@ -253,13 +253,13 @@ realpath(3): resolve ./../symlinks to an absolute path; input unchanged on failu
 ## `listDir`
 
 ```
-listDir : String -> <FileRead> Result String (List String)
+listDir : String -> <FileRead _> Result String (List String)
 ```
 
 ## `makeDir`
 
 ```
-makeDir : String -> <FileWrite> Result String Unit
+makeDir : String -> <FileWrite _> Result String Unit
 ```
 
 directory entries (names)
@@ -267,7 +267,7 @@ directory entries (names)
 ## `removeFile`
 
 ```
-removeFile : String -> <FileWrite> Result String Unit
+removeFile : String -> <FileWrite _> Result String Unit
 ```
 
 directory entries (names)
@@ -276,7 +276,7 @@ create directory (mkdir 0o755)
 ## `rename`
 
 ```
-rename : String -> String -> <FileWrite> Result String Unit
+rename : String -> String -> <FileWrite _> Result String Unit
 ```
 
 directory entries (names)
@@ -286,7 +286,7 @@ unlink(2): delete a file.  Err (strerror) on failure
 ## `removeDir`
 
 ```
-removeDir : String -> <FileWrite> Result String Unit
+removeDir : String -> <FileWrite _> Result String Unit
 ```
 
 directory entries (names)
@@ -297,7 +297,7 @@ rename(2) old new: move/rename a path.  Err (strerror) on failure
 ## `statFile`
 
 ```
-statFile : String -> <FileRead> Result String (Int, Bool, Bool, Float)
+statFile : String -> <FileRead _> Result String (Int, Bool, Bool, Float)
 ```
 
 directory entries (names)
@@ -311,7 +311,7 @@ does not exist / cannot be stat'd.  Mirrors runCommand's tuple-return shape.
 ## `netResolve`
 
 ```
-netResolve : String -> <Net> Result String (List String)
+netResolve : String -> <Net _> Result String (List String)
 ```
 
 Networking (native-only; unbound under `medaka run`, rejected by --target wasm).
@@ -321,7 +321,7 @@ newtypes are a stdlib concern (stdlib/net.mdk).  See NET-DESIGN.md.
 ## `netTcpConnect`
 
 ```
-netTcpConnect : String -> Int -> <Net> Result String Int
+netTcpConnect : String -> Int -> <Net _> Result String Int
 ```
 
 Networking (native-only; unbound under `medaka run`, rejected by --target wasm).
@@ -332,7 +332,7 @@ getaddrinfo: hostname -> numeric IP strings
 ## `netTcpListen`
 
 ```
-netTcpListen : String -> Int -> <Net> Result String Int
+netTcpListen : String -> Int -> <Net _> Result String Int
 ```
 
 Networking (native-only; unbound under `medaka run`, rejected by --target wasm).
@@ -344,7 +344,7 @@ host, port -> connected fd (does DNS internally)
 ## `netListenPort`
 
 ```
-netListenPort : Int -> <Net> Result String Int
+netListenPort : Int -> <Net _> Result String Int
 ```
 
 Networking (native-only; unbound under `medaka run`, rejected by --target wasm).
@@ -357,7 +357,7 @@ bind addr, port (0=ephemeral) -> listening fd
 ## `netTcpAccept`
 
 ```
-netTcpAccept : Int -> <Net> Result String Int
+netTcpAccept : Int -> <Net _> Result String Int
 ```
 
 Networking (native-only; unbound under `medaka run`, rejected by --target wasm).
@@ -371,7 +371,7 @@ listening fd -> actual bound port (for port 0)
 ## `netSend`
 
 ```
-netSend : Int -> Array Int -> <Net> Result String Int
+netSend : Int -> Array Int -> <Net _> Result String Int
 ```
 
 Networking (native-only; unbound under `medaka run`, rejected by --target wasm).
@@ -386,7 +386,7 @@ listening fd -> accepted connection fd (blocks)
 ## `netRecv`
 
 ```
-netRecv : Int -> Int -> <Net> Result String (Array Int)
+netRecv : Int -> Int -> <Net _> Result String (Array Int)
 ```
 
 Networking (native-only; unbound under `medaka run`, rejected by --target wasm).
@@ -402,7 +402,7 @@ fd, bytes -> count actually written (may be < len)
 ## `netShutdown`
 
 ```
-netShutdown : Int -> Int -> <Net> Result String Unit
+netShutdown : Int -> Int -> <Net _> Result String Unit
 ```
 
 Networking (native-only; unbound under `medaka run`, rejected by --target wasm).
@@ -419,7 +419,7 @@ fd, maxBytes -> bytes read (empty Array = EOF)
 ## `netClose`
 
 ```
-netClose : Int -> <Net> Result String Unit
+netClose : Int -> <Net _> Result String Unit
 ```
 
 Networking (native-only; unbound under `medaka run`, rejected by --target wasm).
@@ -437,7 +437,7 @@ fd, how (0=read,1=write,2=both) -> shutdown(2)
 ## `netSetTimeout`
 
 ```
-netSetTimeout : Int -> Int -> <Net> Result String Unit
+netSetTimeout : Int -> Int -> <Net _> Result String Unit
 ```
 
 Networking (native-only; unbound under `medaka run`, rejected by --target wasm).

@@ -17,10 +17,18 @@
 # actually executes.
 #
 # It also makes the renderer's inputs DERIVABLE by preflight: this file's live
-# references to playground/guide_render_test.mjs, playground/render_docs.mjs and
-# playground/build_guide.sh are what test/preflight.sh's `_consumes` scan reads
-# to map a change in any of those three back to this gate. Do not demote those
-# paths to prose-only mentions.
+# references to playground/guide_render_test.mjs, playground/render_docs.mjs,
+# playground/build_guide.sh and playground/build_stdlib_docs.sh are what
+# test/preflight.sh's `_consumes` scan reads to map a change in any of those four
+# back to this gate. Do not demote those paths to prose-only mentions.
+#
+# TWO DOC SETS, ONE MACHINE. The renderer is doc-set-agnostic by design, and
+# since #2384 it has a second real caller: docs/stdlib, rendered by
+# playground/build_stdlib_docs.sh. Both are graded here, by the same assertions,
+# because the two exercise disjoint halves of the renderer — the guide has no
+# `index.md` (so it takes the SYNTHETIC index arm) and no doctests (so every
+# `medaka` fence takes the FOOTER arm), and the stdlib reference is the exact
+# inverse on both. Grading only one leaves the other arm ungated.
 #
 # Node only — it grades the RENDERER, not the compiler, so it needs no ./medaka
 # and no oracle binary.
@@ -31,18 +39,30 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TEST="$ROOT/playground/guide_render_test.mjs"
 RENDERER="$ROOT/playground/render_docs.mjs"
 BUILDER="$ROOT/playground/build_guide.sh"
+STDLIB_BUILDER="$ROOT/playground/build_stdlib_docs.sh"
 MARKED="$ROOT/playground/vendor/marked/marked.js"
 SRC="$ROOT/docs/guide"
+STDLIB_SRC="$ROOT/docs/stdlib"
+# The three hand-written design notes docs/stdlib carries alongside the
+# generated reference. Kept in step with build_stdlib_docs.sh's --exclude by
+# being read back OUT of it, not by a second hand-typed copy here.
+STDLIB_EXCLUDE="$(sed -n 's/^  --exclude \(.*\) \\$/\1/p' "$STDLIB_BUILDER")"
 
 fail=0
-for f in "$TEST" "$RENDERER" "$BUILDER" "$MARKED"; do
+for f in "$TEST" "$RENDERER" "$BUILDER" "$STDLIB_BUILDER" "$MARKED"; do
   if [ ! -f "$f" ]; then
     echo "FAIL: missing ${f#"$ROOT"/}" >&2
     fail=1
   fi
 done
-if [ ! -d "$SRC" ]; then
-  echo "FAIL: missing docs/guide" >&2
+for d in "$SRC" "$STDLIB_SRC"; do
+  if [ ! -d "$d" ]; then
+    echo "FAIL: missing ${d#"$ROOT"/}" >&2
+    fail=1
+  fi
+done
+if [ -z "$STDLIB_EXCLUDE" ]; then
+  echo "FAIL: could not read the --exclude list out of playground/build_stdlib_docs.sh" >&2
   fail=1
 fi
 [ "$fail" -eq 0 ] || exit 1
@@ -54,6 +74,10 @@ fi
 
 echo "-- guide render assertions (node playground/guide_render_test.mjs)"
 node "$TEST" --src "$SRC" || exit 1
+
+echo "-- stdlib reference render assertions (same harness, docs/stdlib)"
+node "$TEST" --src "$STDLIB_SRC" --exclude "$STDLIB_EXCLUDE" \
+  --title "The Medaka Standard Library" || exit 1
 
 # The renderer is doc-set-agnostic on purpose (build_guide.sh is a thin entry
 # point over it, and the stdlib reference is meant to reuse the same machine,
@@ -88,4 +112,38 @@ fi
 
 pages="$(ls "$OUT/guide"/*.html | wc -l | tr -d ' ')"
 echo "-- build_guide.sh emitted $pages page(s) + guide.css"
+
+echo "-- build_stdlib_docs.sh end-to-end into a scratch out-dir"
+bash "$STDLIB_BUILDER" "$STDLIB_SRC" "$OUT/stdlib" >/dev/null || {
+  echo "FAIL: build_stdlib_docs.sh exited non-zero" >&2
+  exit 1
+}
+
+# Same derived-set discipline as the guide arm: docs/stdlib/*.md minus whatever
+# the builder itself excludes. The excluded design notes must NOT be published —
+# asserted in both directions, because "no page appeared" and "the wrong page
+# appeared" are different defects.
+missing=""
+extra=""
+for m in "$STDLIB_SRC"/*.md; do
+  b="$(basename "$m")"
+  case ",$STDLIB_EXCLUDE," in
+    *",$b,"*)
+      [ ! -f "$OUT/stdlib/${b%.md}.html" ] || extra="$extra ${b%.md}.html" ;;
+    *)
+      [ -f "$OUT/stdlib/${b%.md}.html" ] || missing="$missing ${b%.md}.html" ;;
+  esac
+done
+[ -f "$OUT/stdlib/guide.css" ] || missing="$missing guide.css"
+if [ -n "$missing" ]; then
+  echo "FAIL: build_stdlib_docs.sh did not emit:$missing" >&2
+  exit 1
+fi
+if [ -n "$extra" ]; then
+  echo "FAIL: build_stdlib_docs.sh published excluded design note(s):$extra" >&2
+  exit 1
+fi
+
+stdlib_pages="$(ls "$OUT/stdlib"/*.html | wc -l | tr -d ' ')"
+echo "-- build_stdlib_docs.sh emitted $stdlib_pages page(s) + guide.css"
 echo "PASS: diff_compiler_guide_render"
