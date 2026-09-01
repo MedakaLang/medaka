@@ -157,36 +157,39 @@ reqArr i field entry = match getArray field entry
   None => Err "gates.toml: [[gate]] #\{intToString i}: missing required array field '\{field}'"
 
 readGate : Toml -> Int -> Result String Gate
-readGate doc i =
-  let e = tableEntry "gate" i doc
-  do
-    name <- reqStr i "name" e
-    area <- reqStr i "area" e
-    shard <- reqStr i "shard" e
-    project <- reqStr i "project" e
-    tiers <- reqArr i "tiers" e
-    cost <- reqStr i "cost" e
-    kind <- reqStr i "kind" e
-    run <- reqStr i "run" e
-    oracles <- reqArr i "oracles" e
-    sources <- reqArr i "sources" e
-    corpus <- reqArr i "corpus" e
-    toolchain <- reqArr i "toolchain" e
-    Ok
-      Gate {
-        name = name,
-        area = area,
-        shard = shard,
-        project = project,
-        tiers = tiers,
-        cost = cost,
-        kind = kind,
-        run = run,
-        oracles = oracles,
-        sources = sources,
-        corpus = corpus,
-        toolchain = toolchain,
-      }
+readGate doc i = match tableEntry "gate" i doc
+  None => Err "gates.toml: [[gate]] #\{intToString i}: no such entry"
+  Some e => readGateEntry i e
+
+readGateEntry : Int -> Toml -> Result String Gate
+readGateEntry i e = do
+  name <- reqStr i "name" e
+  area <- reqStr i "area" e
+  shard <- reqStr i "shard" e
+  project <- reqStr i "project" e
+  tiers <- reqArr i "tiers" e
+  cost <- reqStr i "cost" e
+  kind <- reqStr i "kind" e
+  run <- reqStr i "run" e
+  oracles <- reqArr i "oracles" e
+  sources <- reqArr i "sources" e
+  corpus <- reqArr i "corpus" e
+  toolchain <- reqArr i "toolchain" e
+  Ok
+    Gate {
+      name = name,
+      area = area,
+      shard = shard,
+      project = project,
+      tiers = tiers,
+      cost = cost,
+      kind = kind,
+      run = run,
+      oracles = oracles,
+      sources = sources,
+      corpus = corpus,
+      toolchain = toolchain,
+    }
 
 readGatesFrom : Toml -> Int -> Int -> List Gate -> Result String (List Gate)
 readGatesFrom doc i n acc
@@ -264,22 +267,25 @@ shardArr i field entry = match getArray field entry
   None => Err "gates.toml: [[shard]] #\{intToString i}: missing required array field '\{field}'"
 
 readShard : Toml -> Int -> Result String Shard
-readShard doc i =
-  let e = tableEntry "shard" i doc
-  do
-    name <- shardStr i "name" e
-    fullCores <- shardBool i "full_cores" e
-    wasmArm <- shardBool i "wasm_arm" e
-    rationale <- shardStr i "rationale" e
-    pinned <- shardArr i "pinned_gates" e
-    Ok
-      Shard {
-        name = name,
-        fullCores = fullCores,
-        wasmArm = wasmArm,
-        rationale = rationale,
-        pinned = pinned,
-      }
+readShard doc i = match tableEntry "shard" i doc
+  None => Err "gates.toml: [[shard]] #\{intToString i}: no such entry"
+  Some e => readShardEntry i e
+
+readShardEntry : Int -> Toml -> Result String Shard
+readShardEntry i e = do
+  name <- shardStr i "name" e
+  fullCores <- shardBool i "full_cores" e
+  wasmArm <- shardBool i "wasm_arm" e
+  rationale <- shardStr i "rationale" e
+  pinned <- shardArr i "pinned_gates" e
+  Ok
+    Shard {
+      name = name,
+      fullCores = fullCores,
+      wasmArm = wasmArm,
+      rationale = rationale,
+      pinned = pinned,
+    }
 
 readShardsFrom : Toml -> Int -> Int -> List Shard -> Result String (List Shard)
 readShardsFrom doc i n acc

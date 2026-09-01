@@ -946,7 +946,7 @@
 - [`sleep`](time.md#sleep)
 - [`sleepSeconds`](time.md#sleepseconds)
 
-## `toml` (19 entries)
+## `toml` (15 entries)
 
 - [`TomlValue`](toml.md#tomlvalue)
 - [`Toml`](toml.md#toml)
@@ -957,10 +957,6 @@
 - [`getBool`](toml.md#getbool)
 - [`tableCount`](toml.md#tablecount)
 - [`tableEntry`](toml.md#tableentry)
-- [`packageName`](toml.md#packagename)
-- [`packageVersion`](toml.md#packageversion)
-- [`packageEntry`](toml.md#packageentry)
-- [`workspaceMembers`](toml.md#workspacemembers)
 - [`Eq TomlValue`](toml.md#eq-tomlvalue)
 - [`Eq Toml`](toml.md#eq-toml)
 - [`Debug TomlValue`](toml.md#debug-tomlvalue)

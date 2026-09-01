@@ -32,8 +32,14 @@
 
    A key `k` under the *i*-th (0-based) `[[t]]` header is stored as
    `"t.<i>.k"`.  `tableCount` and `tableEntry` are the accessors for that
-   shape; `tableEntry` hands back a sub-document whose keys are bare, so the
-   ordinary accessors work on it unchanged. -}
+   shape; `tableEntry` hands back `Some` sub-document whose keys are bare (so
+   the ordinary accessors work on it unchanged), or `None` for an index that
+   is out of range.
+
+   This module is the GENERAL TOML reader: it knows nothing about
+   `medaka.toml`'s schema.  The `[package]`/`[workspace]` accessors that used
+   to live here are the compiler's business and now live in
+   `compiler/support/manifest.mdk` (I-1). -}
 
 import string.{trim, lines, toInt, startsWith, drop, indexOf, contains}
 import core.{Display}
@@ -428,29 +434,9 @@ parseTableCount name src = match parse src
 parseTableEntryStr : String -> Int -> String -> String -> Option String
 parseTableEntryStr name i field src = match parse src
   Err _ => None
-  Ok doc => getString field (tableEntry name i doc)
-
--- Private helpers: parse a TOML string and apply one exported convenience
--- accessor, so the accessors themselves are exercised by doctests/props.
-parsePackageName : String -> Option String
-parsePackageName src = match parse src
-  Err _ => None
-  Ok doc => packageName doc
-
-parsePackageVersion : String -> Option String
-parsePackageVersion src = match parse src
-  Err _ => None
-  Ok doc => packageVersion doc
-
-parsePackageEntry : String -> Option String
-parsePackageEntry src = match parse src
-  Err _ => None
-  Ok doc => packageEntry doc
-
-parseWorkspaceMembers : String -> Option (List String)
-parseWorkspaceMembers src = match parse src
-  Err _ => None
-  Ok doc => workspaceMembers doc
+  Ok doc => match tableEntry name i doc
+    None => None
+    Some e => getString field e
 
 {- | Look up a string value by (qualified) key.  Returns `None` if the key is
    absent or holds an array.
@@ -584,72 +570,27 @@ stripTablePrefix prefix ((k, v)::rest)
 
 {- | The `i`-th (0-based) `[[name]]` entry, as a sub-document whose keys are
    bare — so `getString`/`getArray`/`getInt`/`getBool` apply unchanged.
+   `None` when `i` is out of range.
+
+   `Option`, not a bare `Toml`, for the same reason `path.stripPrefix` is
+   (#2310's defect class): an out-of-range index used to come back as a
+   document in which every lookup happens to be `None`, so "no such entry" and
+   "an entry with no keys" were the same value.
 
    > parseTableEntryStr "gate" 1 "name" "[[gate]]\nname = \"a\"\n[[gate]]\nname = \"b\""
    Some "b"
 
-   An out-of-range index yields an empty document, so lookups are `None`:
+   An out-of-range index is `None`:
 
    > parseTableEntryStr "gate" 9 "name" "[[gate]]\nname = \"a\""
    None -}
 export
-tableEntry : String -> Int -> Toml -> Toml
+tableEntry : String -> Int -> Toml -> Option Toml
 tableEntry name i (Toml kvs) =
-  Toml (stripTablePrefix (stringConcat [name, ".", intToString i, "."]) kvs)
-
--- ── Convenience accessors for `medaka.toml` fields ──────────────────────────
-
-{- | Extract `name` from a parsed `[package]` section.
-
-   > parsePackageName "[package]\nname = \"my-project\"\nversion = \"0.1.0\"\nentry = \"main.mdk\""
-   Some "my-project"
-
-   `None` when `name` is absent:
-
-   > parsePackageName "[package]\nversion = \"0.1.0\""
-   None -}
-export
-packageName : Toml -> Option String
-packageName doc = getString "package.name" doc
-
-{- | Extract `version` from a parsed `[package]` section.
-
-   > parsePackageVersion "[package]\nname = \"x\"\nversion = \"2.3.4\"\nentry = \"main.mdk\""
-   Some "2.3.4"
-
-   `None` when `version` is absent:
-
-   > parsePackageVersion "[package]\nname = \"x\""
-   None -}
-export
-packageVersion : Toml -> Option String
-packageVersion doc = getString "package.version" doc
-
-{- | Extract `entry` from a parsed `[package]` section.
-
-   > parsePackageEntry "[package]\nname = \"x\"\nversion = \"0.1.0\"\nentry = \"src/main.mdk\""
-   Some "src/main.mdk"
-
-   `None` when `entry` is absent:
-
-   > parsePackageEntry "[package]\nname = \"x\""
-   None -}
-export
-packageEntry : Toml -> Option String
-packageEntry doc = getString "package.entry" doc
-
-{- | Extract `members` from a parsed `[workspace]` section.
-
-   > parseWorkspaceMembers "[workspace]\nmembers = [\"pkgs/core\", \"pkgs/net\"]"
-   Some ["pkgs/core", "pkgs/net"]
-
-   `None` when there is no `[workspace]` section:
-
-   > parseWorkspaceMembers "[package]\nname = \"x\""
-   None -}
-export
-workspaceMembers : Toml -> Option (List String)
-workspaceMembers doc = getArray "workspace.members" doc
+  if i < 0 || i >= tableCount name (Toml kvs) then
+    None
+  else
+    Some (Toml (stripTablePrefix (stringConcat [name, ".", intToString i, "."]) kvs))
 
 -- ── Eq and Debug instances ──────────────────────────────────────────────────
 
@@ -795,15 +736,12 @@ mkPackage v = stringConcat ["[package]\nname = \"demo\"\nversion = \"", v, "\""]
 -- `intToString n` only ever yields characters in `[-0-9]`, none of which are
 -- TOML-significant, so embedding it in a quoted value is safe.
 
-prop "packageVersion round-trips an Int-derived version" (n : Int) =
-  parsePackageVersion (mkPackage (intToString n)) == Some (intToString n)
+prop "a section key round-trips an Int-derived value" (n : Int) =
+  parseGetStr "package.version" (mkPackage (intToString n)) ==
+    Some (intToString n)
 
-prop "packageName is stable regardless of the version value" (n : Int) =
-  parsePackageName (mkPackage (intToString n)) == Some "demo"
-
-prop "packageVersion agrees with getString version" (n : Int) =
-  parsePackageVersion (mkPackage (intToString n)) ==
-    parseGetStr "package.version" (mkPackage (intToString n))
+prop "a sibling key is stable regardless of the varying value" (n : Int) =
+  parseGetStr "package.name" (mkPackage (intToString n)) == Some "demo"
 
 prop "parse is deterministic" (n : Int) =
   parse (mkPackage (intToString n)) == parse (mkPackage (intToString n))

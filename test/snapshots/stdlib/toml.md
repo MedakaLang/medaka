@@ -1,5 +1,5 @@
 # META
-source_lines=868
+source_lines=806
 stages=DESUGAR,MARK
 # SOURCE
 {- toml.mdk — a minimal TOML subset sufficient to parse `medaka.toml` and
@@ -36,8 +36,14 @@ stages=DESUGAR,MARK
 
    A key `k` under the *i*-th (0-based) `[[t]]` header is stored as
    `"t.<i>.k"`.  `tableCount` and `tableEntry` are the accessors for that
-   shape; `tableEntry` hands back a sub-document whose keys are bare, so the
-   ordinary accessors work on it unchanged. -}
+   shape; `tableEntry` hands back `Some` sub-document whose keys are bare (so
+   the ordinary accessors work on it unchanged), or `None` for an index that
+   is out of range.
+
+   This module is the GENERAL TOML reader: it knows nothing about
+   `medaka.toml`'s schema.  The `[package]`/`[workspace]` accessors that used
+   to live here are the compiler's business and now live in
+   `compiler/support/manifest.mdk` (I-1). -}
 
 import string.{trim, lines, toInt, startsWith, drop, indexOf, contains}
 import core.{Display}
@@ -432,29 +438,9 @@ parseTableCount name src = match parse src
 parseTableEntryStr : String -> Int -> String -> String -> Option String
 parseTableEntryStr name i field src = match parse src
   Err _ => None
-  Ok doc => getString field (tableEntry name i doc)
-
--- Private helpers: parse a TOML string and apply one exported convenience
--- accessor, so the accessors themselves are exercised by doctests/props.
-parsePackageName : String -> Option String
-parsePackageName src = match parse src
-  Err _ => None
-  Ok doc => packageName doc
-
-parsePackageVersion : String -> Option String
-parsePackageVersion src = match parse src
-  Err _ => None
-  Ok doc => packageVersion doc
-
-parsePackageEntry : String -> Option String
-parsePackageEntry src = match parse src
-  Err _ => None
-  Ok doc => packageEntry doc
-
-parseWorkspaceMembers : String -> Option (List String)
-parseWorkspaceMembers src = match parse src
-  Err _ => None
-  Ok doc => workspaceMembers doc
+  Ok doc => match tableEntry name i doc
+    None => None
+    Some e => getString field e
 
 {- | Look up a string value by (qualified) key.  Returns `None` if the key is
    absent or holds an array.
@@ -588,72 +574,27 @@ stripTablePrefix prefix ((k, v)::rest)
 
 {- | The `i`-th (0-based) `[[name]]` entry, as a sub-document whose keys are
    bare — so `getString`/`getArray`/`getInt`/`getBool` apply unchanged.
+   `None` when `i` is out of range.
+
+   `Option`, not a bare `Toml`, for the same reason `path.stripPrefix` is
+   (#2310's defect class): an out-of-range index used to come back as a
+   document in which every lookup happens to be `None`, so "no such entry" and
+   "an entry with no keys" were the same value.
 
    > parseTableEntryStr "gate" 1 "name" "[[gate]]\nname = \"a\"\n[[gate]]\nname = \"b\""
    Some "b"
 
-   An out-of-range index yields an empty document, so lookups are `None`:
+   An out-of-range index is `None`:
 
    > parseTableEntryStr "gate" 9 "name" "[[gate]]\nname = \"a\""
    None -}
 export
-tableEntry : String -> Int -> Toml -> Toml
+tableEntry : String -> Int -> Toml -> Option Toml
 tableEntry name i (Toml kvs) =
-  Toml (stripTablePrefix (stringConcat [name, ".", intToString i, "."]) kvs)
-
--- ── Convenience accessors for `medaka.toml` fields ──────────────────────────
-
-{- | Extract `name` from a parsed `[package]` section.
-
-   > parsePackageName "[package]\nname = \"my-project\"\nversion = \"0.1.0\"\nentry = \"main.mdk\""
-   Some "my-project"
-
-   `None` when `name` is absent:
-
-   > parsePackageName "[package]\nversion = \"0.1.0\""
-   None -}
-export
-packageName : Toml -> Option String
-packageName doc = getString "package.name" doc
-
-{- | Extract `version` from a parsed `[package]` section.
-
-   > parsePackageVersion "[package]\nname = \"x\"\nversion = \"2.3.4\"\nentry = \"main.mdk\""
-   Some "2.3.4"
-
-   `None` when `version` is absent:
-
-   > parsePackageVersion "[package]\nname = \"x\""
-   None -}
-export
-packageVersion : Toml -> Option String
-packageVersion doc = getString "package.version" doc
-
-{- | Extract `entry` from a parsed `[package]` section.
-
-   > parsePackageEntry "[package]\nname = \"x\"\nversion = \"0.1.0\"\nentry = \"src/main.mdk\""
-   Some "src/main.mdk"
-
-   `None` when `entry` is absent:
-
-   > parsePackageEntry "[package]\nname = \"x\""
-   None -}
-export
-packageEntry : Toml -> Option String
-packageEntry doc = getString "package.entry" doc
-
-{- | Extract `members` from a parsed `[workspace]` section.
-
-   > parseWorkspaceMembers "[workspace]\nmembers = [\"pkgs/core\", \"pkgs/net\"]"
-   Some ["pkgs/core", "pkgs/net"]
-
-   `None` when there is no `[workspace]` section:
-
-   > parseWorkspaceMembers "[package]\nname = \"x\""
-   None -}
-export
-workspaceMembers : Toml -> Option (List String)
-workspaceMembers doc = getArray "workspace.members" doc
+  if i < 0 || i >= tableCount name (Toml kvs) then
+    None
+  else
+    Some (Toml (stripTablePrefix (stringConcat [name, ".", intToString i, "."]) kvs))
 
 -- ── Eq and Debug instances ──────────────────────────────────────────────────
 
@@ -799,15 +740,12 @@ mkPackage v = stringConcat ["[package]\nname = \"demo\"\nversion = \"", v, "\""]
 -- `intToString n` only ever yields characters in `[-0-9]`, none of which are
 -- TOML-significant, so embedding it in a quoted value is safe.
 
-prop "packageVersion round-trips an Int-derived version" (n : Int) =
-  parsePackageVersion (mkPackage (intToString n)) == Some (intToString n)
+prop "a section key round-trips an Int-derived value" (n : Int) =
+  parseGetStr "package.version" (mkPackage (intToString n)) ==
+    Some (intToString n)
 
-prop "packageName is stable regardless of the version value" (n : Int) =
-  parsePackageName (mkPackage (intToString n)) == Some "demo"
-
-prop "packageVersion agrees with getString version" (n : Int) =
-  parsePackageVersion (mkPackage (intToString n)) ==
-    parseGetStr "package.version" (mkPackage (intToString n))
+prop "a sibling key is stable regardless of the varying value" (n : Int) =
+  parseGetStr "package.name" (mkPackage (intToString n)) == Some "demo"
 
 prop "parse is deterministic" (n : Int) =
   parse (mkPackage (intToString n)) == parse (mkPackage (intToString n))
@@ -948,15 +886,7 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 (DTypeSig false "parseTableCount" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Int"))))
 (DFunDef false "parseTableCount" ((PVar "name") (PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" PWild) () (ELit (LInt 0))) (arm (PCon "Ok" (PVar "doc")) () (EApp (EApp (EVar "tableCount") (EVar "name")) (EVar "doc")))))
 (DTypeSig false "parseTableEntryStr" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))))
-(DFunDef false "parseTableEntryStr" ((PVar "name") (PVar "i") (PVar "field") (PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "doc")) () (EApp (EApp (EVar "getString") (EVar "field")) (EApp (EApp (EApp (EVar "tableEntry") (EVar "name")) (EVar "i")) (EVar "doc"))))))
-(DTypeSig false "parsePackageName" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "parsePackageName" ((PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "doc")) () (EApp (EVar "packageName") (EVar "doc")))))
-(DTypeSig false "parsePackageVersion" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "parsePackageVersion" ((PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "doc")) () (EApp (EVar "packageVersion") (EVar "doc")))))
-(DTypeSig false "parsePackageEntry" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "parsePackageEntry" ((PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "doc")) () (EApp (EVar "packageEntry") (EVar "doc")))))
-(DTypeSig false "parseWorkspaceMembers" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "parseWorkspaceMembers" ((PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "doc")) () (EApp (EVar "workspaceMembers") (EVar "doc")))))
+(DFunDef false "parseTableEntryStr" ((PVar "name") (PVar "i") (PVar "field") (PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "doc")) () (EMatch (EApp (EApp (EApp (EVar "tableEntry") (EVar "name")) (EVar "i")) (EVar "doc")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "e")) () (EApp (EApp (EVar "getString") (EVar "field")) (EVar "e")))))))
 (DTypeSig true "getString" (TyFun (TyCon "String") (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "getString" ((PVar "key") (PCon "Toml" (PVar "kvs"))) (EMatch (EApp (EApp (EVar "lookupKvs") (EVar "key")) (EVar "kvs")) (arm (PCon "Some" (PCon "TStr" (PVar "s"))) () (EApp (EVar "Some") (EVar "s"))) (arm PWild () (EVar "None"))))
 (DTypeSig true "getArray" (TyFun (TyCon "String") (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -975,16 +905,8 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 (DTypeSig false "stripTablePrefix" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue"))))))
 (DFunDef false "stripTablePrefix" (PWild (PList)) (EListLit))
 (DFunDef false "stripTablePrefix" ((PVar "prefix") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EIf (EApp (EApp (EVar "startsWith") (EVar "prefix")) (EVar "k")) (EBinOp "::" (ETuple (EApp (EApp (EVar "drop") (EApp (EVar "stringLength") (EVar "prefix"))) (EVar "k")) (EVar "v")) (EApp (EApp (EVar "stripTablePrefix") (EVar "prefix")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "stripTablePrefix") (EVar "prefix")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "tableEntry" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Toml") (TyCon "Toml")))))
-(DFunDef false "tableEntry" ((PVar "name") (PVar "i") (PCon "Toml" (PVar "kvs"))) (EApp (EVar "Toml") (EApp (EApp (EVar "stripTablePrefix") (EApp (EVar "stringConcat") (EListLit (EVar "name") (ELit (LString ".")) (EApp (EVar "intToString") (EVar "i")) (ELit (LString "."))))) (EVar "kvs"))))
-(DTypeSig true "packageName" (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "packageName" ((PVar "doc")) (EApp (EApp (EVar "getString") (ELit (LString "package.name"))) (EVar "doc")))
-(DTypeSig true "packageVersion" (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "packageVersion" ((PVar "doc")) (EApp (EApp (EVar "getString") (ELit (LString "package.version"))) (EVar "doc")))
-(DTypeSig true "packageEntry" (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "packageEntry" ((PVar "doc")) (EApp (EApp (EVar "getString") (ELit (LString "package.entry"))) (EVar "doc")))
-(DTypeSig true "workspaceMembers" (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "workspaceMembers" ((PVar "doc")) (EApp (EApp (EVar "getArray") (ELit (LString "workspace.members"))) (EVar "doc")))
+(DTypeSig true "tableEntry" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyCon "Toml"))))))
+(DFunDef false "tableEntry" ((PVar "name") (PVar "i") (PCon "Toml" (PVar "kvs"))) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EApp (EVar "tableCount") (EVar "name")) (EApp (EVar "Toml") (EVar "kvs"))))) (EVar "None") (EApp (EVar "Some") (EApp (EVar "Toml") (EApp (EApp (EVar "stripTablePrefix") (EApp (EVar "stringConcat") (EListLit (EVar "name") (ELit (LString ".")) (EApp (EVar "intToString") (EVar "i")) (ELit (LString "."))))) (EVar "kvs"))))))
 (DTypeSig false "eqTomlValue" (TyFun (TyCon "TomlValue") (TyFun (TyCon "TomlValue") (TyCon "Bool"))))
 (DFunDef false "eqTomlValue" ((PCon "TStr" (PVar "a")) (PCon "TStr" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
 (DFunDef false "eqTomlValue" ((PCon "TArr" (PVar "a")) (PCon "TArr" (PVar "b"))) (EApp (EApp (EVar "eqStrLists") (EVar "a")) (EVar "b")))
@@ -1035,9 +957,8 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 (DImpl true "Display" ((TyCon "Toml")) () ((im "display" ((PCon "Toml" (PList))) (ELit (LString "Toml {}"))) (im "display" ((PCon "Toml" (PVar "kvs"))) (EApp (EVar "stringConcat") (EListLit (ELit (LString "Toml { ")) (EApp (EVar "displayKvList") (EVar "kvs")) (ELit (LString " }")))))))
 (DTypeSig false "mkPackage" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "mkPackage" ((PVar "v")) (EApp (EVar "stringConcat") (EListLit (ELit (LString "[package]\nname = \"demo\"\nversion = \"")) (EVar "v") (ELit (LString "\"")))))
-(DProp false "packageVersion round-trips an Int-derived version" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "parsePackageVersion") (EApp (EVar "mkPackage") (EApp (EVar "intToString") (EVar "n")))) (EApp (EVar "Some") (EApp (EVar "intToString") (EVar "n")))))
-(DProp false "packageName is stable regardless of the version value" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "parsePackageName") (EApp (EVar "mkPackage") (EApp (EVar "intToString") (EVar "n")))) (EApp (EVar "Some") (ELit (LString "demo")))))
-(DProp false "packageVersion agrees with getString version" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "parsePackageVersion") (EApp (EVar "mkPackage") (EApp (EVar "intToString") (EVar "n")))) (EApp (EApp (EVar "parseGetStr") (ELit (LString "package.version"))) (EApp (EVar "mkPackage") (EApp (EVar "intToString") (EVar "n"))))))
+(DProp false "a section key round-trips an Int-derived value" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EApp (EVar "parseGetStr") (ELit (LString "package.version"))) (EApp (EVar "mkPackage") (EApp (EVar "intToString") (EVar "n")))) (EApp (EVar "Some") (EApp (EVar "intToString") (EVar "n")))))
+(DProp false "a sibling key is stable regardless of the varying value" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EApp (EVar "parseGetStr") (ELit (LString "package.name"))) (EApp (EVar "mkPackage") (EApp (EVar "intToString") (EVar "n")))) (EApp (EVar "Some") (ELit (LString "demo")))))
 (DProp false "parse is deterministic" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "parse") (EApp (EVar "mkPackage") (EApp (EVar "intToString") (EVar "n")))) (EApp (EVar "parse") (EApp (EVar "mkPackage") (EApp (EVar "intToString") (EVar "n"))))))
 (DTypeSig false "mkInt" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "mkInt" ((PVar "n")) (EApp (EVar "stringConcat") (EListLit (ELit (LString "[limits]\nretries = ")) (EApp (EVar "intToString") (EVar "n")))))
@@ -1129,15 +1050,7 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 (DTypeSig false "parseTableCount" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Int"))))
 (DFunDef false "parseTableCount" ((PVar "name") (PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" PWild) () (ELit (LInt 0))) (arm (PCon "Ok" (PVar "doc")) () (EApp (EApp (EVar "tableCount") (EVar "name")) (EVar "doc")))))
 (DTypeSig false "parseTableEntryStr" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))))
-(DFunDef false "parseTableEntryStr" ((PVar "name") (PVar "i") (PVar "field") (PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "doc")) () (EApp (EApp (EVar "getString") (EVar "field")) (EApp (EApp (EApp (EVar "tableEntry") (EVar "name")) (EVar "i")) (EVar "doc"))))))
-(DTypeSig false "parsePackageName" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "parsePackageName" ((PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "doc")) () (EApp (EVar "packageName") (EVar "doc")))))
-(DTypeSig false "parsePackageVersion" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "parsePackageVersion" ((PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "doc")) () (EApp (EVar "packageVersion") (EVar "doc")))))
-(DTypeSig false "parsePackageEntry" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "parsePackageEntry" ((PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "doc")) () (EApp (EVar "packageEntry") (EVar "doc")))))
-(DTypeSig false "parseWorkspaceMembers" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "parseWorkspaceMembers" ((PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "doc")) () (EApp (EVar "workspaceMembers") (EVar "doc")))))
+(DFunDef false "parseTableEntryStr" ((PVar "name") (PVar "i") (PVar "field") (PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "doc")) () (EMatch (EApp (EApp (EApp (EVar "tableEntry") (EVar "name")) (EVar "i")) (EVar "doc")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "e")) () (EApp (EApp (EVar "getString") (EVar "field")) (EVar "e")))))))
 (DTypeSig true "getString" (TyFun (TyCon "String") (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "getString" ((PVar "key") (PCon "Toml" (PVar "kvs"))) (EMatch (EApp (EApp (EVar "lookupKvs") (EVar "key")) (EVar "kvs")) (arm (PCon "Some" (PCon "TStr" (PVar "s"))) () (EApp (EVar "Some") (EVar "s"))) (arm PWild () (EVar "None"))))
 (DTypeSig true "getArray" (TyFun (TyCon "String") (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -1156,16 +1069,8 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 (DTypeSig false "stripTablePrefix" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue"))))))
 (DFunDef false "stripTablePrefix" (PWild (PList)) (EListLit))
 (DFunDef false "stripTablePrefix" ((PVar "prefix") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EIf (EApp (EApp (EVar "startsWith") (EVar "prefix")) (EVar "k")) (EBinOp "::" (ETuple (EApp (EApp (EVar "drop") (EApp (EVar "stringLength") (EVar "prefix"))) (EVar "k")) (EVar "v")) (EApp (EApp (EVar "stripTablePrefix") (EVar "prefix")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "stripTablePrefix") (EVar "prefix")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "tableEntry" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Toml") (TyCon "Toml")))))
-(DFunDef false "tableEntry" ((PVar "name") (PVar "i") (PCon "Toml" (PVar "kvs"))) (EApp (EVar "Toml") (EApp (EApp (EVar "stripTablePrefix") (EApp (EVar "stringConcat") (EListLit (EVar "name") (ELit (LString ".")) (EApp (EVar "intToString") (EVar "i")) (ELit (LString "."))))) (EVar "kvs"))))
-(DTypeSig true "packageName" (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "packageName" ((PVar "doc")) (EApp (EApp (EVar "getString") (ELit (LString "package.name"))) (EVar "doc")))
-(DTypeSig true "packageVersion" (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "packageVersion" ((PVar "doc")) (EApp (EApp (EVar "getString") (ELit (LString "package.version"))) (EVar "doc")))
-(DTypeSig true "packageEntry" (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "packageEntry" ((PVar "doc")) (EApp (EApp (EVar "getString") (ELit (LString "package.entry"))) (EVar "doc")))
-(DTypeSig true "workspaceMembers" (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "workspaceMembers" ((PVar "doc")) (EApp (EApp (EVar "getArray") (ELit (LString "workspace.members"))) (EVar "doc")))
+(DTypeSig true "tableEntry" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyCon "Toml"))))))
+(DFunDef false "tableEntry" ((PVar "name") (PVar "i") (PCon "Toml" (PVar "kvs"))) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EApp (EVar "tableCount") (EVar "name")) (EApp (EVar "Toml") (EVar "kvs"))))) (EVar "None") (EApp (EVar "Some") (EApp (EVar "Toml") (EApp (EApp (EVar "stripTablePrefix") (EApp (EVar "stringConcat") (EListLit (EVar "name") (ELit (LString ".")) (EApp (EVar "intToString") (EVar "i")) (ELit (LString "."))))) (EVar "kvs"))))))
 (DTypeSig false "eqTomlValue" (TyFun (TyCon "TomlValue") (TyFun (TyCon "TomlValue") (TyCon "Bool"))))
 (DFunDef false "eqTomlValue" ((PCon "TStr" (PVar "a")) (PCon "TStr" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
 (DFunDef false "eqTomlValue" ((PCon "TArr" (PVar "a")) (PCon "TArr" (PVar "b"))) (EApp (EApp (EVar "eqStrLists") (EVar "a")) (EVar "b")))
@@ -1216,9 +1121,8 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 (DImpl true "Display" ((TyCon "Toml")) () ((im "display" ((PCon "Toml" (PList))) (ELit (LString "Toml {}"))) (im "display" ((PCon "Toml" (PVar "kvs"))) (EApp (EVar "stringConcat") (EListLit (ELit (LString "Toml { ")) (EApp (EVar "displayKvList") (EVar "kvs")) (ELit (LString " }")))))))
 (DTypeSig false "mkPackage" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "mkPackage" ((PVar "v")) (EApp (EVar "stringConcat") (EListLit (ELit (LString "[package]\nname = \"demo\"\nversion = \"")) (EVar "v") (ELit (LString "\"")))))
-(DProp false "packageVersion round-trips an Int-derived version" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "parsePackageVersion") (EApp (EVar "mkPackage") (EApp (EVar "intToString") (EVar "n")))) (EApp (EVar "Some") (EApp (EVar "intToString") (EVar "n")))))
-(DProp false "packageName is stable regardless of the version value" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "parsePackageName") (EApp (EVar "mkPackage") (EApp (EVar "intToString") (EVar "n")))) (EApp (EVar "Some") (ELit (LString "demo")))))
-(DProp false "packageVersion agrees with getString version" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "parsePackageVersion") (EApp (EVar "mkPackage") (EApp (EVar "intToString") (EVar "n")))) (EApp (EApp (EVar "parseGetStr") (ELit (LString "package.version"))) (EApp (EVar "mkPackage") (EApp (EVar "intToString") (EVar "n"))))))
+(DProp false "a section key round-trips an Int-derived value" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EApp (EVar "parseGetStr") (ELit (LString "package.version"))) (EApp (EVar "mkPackage") (EApp (EVar "intToString") (EVar "n")))) (EApp (EVar "Some") (EApp (EVar "intToString") (EVar "n")))))
+(DProp false "a sibling key is stable regardless of the varying value" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EApp (EVar "parseGetStr") (ELit (LString "package.name"))) (EApp (EVar "mkPackage") (EApp (EVar "intToString") (EVar "n")))) (EApp (EVar "Some") (ELit (LString "demo")))))
 (DProp false "parse is deterministic" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "parse") (EApp (EVar "mkPackage") (EApp (EVar "intToString") (EVar "n")))) (EApp (EVar "parse") (EApp (EVar "mkPackage") (EApp (EVar "intToString") (EVar "n"))))))
 (DTypeSig false "mkInt" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "mkInt" ((PVar "n")) (EApp (EVar "stringConcat") (EListLit (ELit (LString "[limits]\nretries = ")) (EApp (EVar "intToString") (EVar "n")))))
