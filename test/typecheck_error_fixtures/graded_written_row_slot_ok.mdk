@@ -8,7 +8,7 @@
 -- a bare `f e a`, so `rowArgNamesIn` reports it and the caller withholds it from the
 -- tyvar map — but #822's `isRowSlotArg` only recognised a bare `TyVar`, so the spine fell
 -- to the opaque fallback and #997's brand-new `TyRow` clause in `fromAstTypeE` fired a
--- spurious T-ROW-KIND-MISMATCH on a well-formed signature.
+-- spurious T-EFFECT-KIND-MISMATCH on a well-formed signature.
 --
 -- Delete `isRowSlotArg`'s `TyRow _ (Some n) _` arm and this fixture reddens.
 interface GThenable f where

@@ -1660,7 +1660,7 @@ argPerformableOccs _ _ _ = []
 -- module's type was actually in scope at the use site.  Three tracked defects
 -- were that one sentence: #1069 (a written row erased to its wrapped type,
 -- silently, exit 0), #1090 (the same table rejecting a VALID signature with
--- T-ROW-KIND-MISMATCH — same collision, opposite symptom, selected by the
+-- T-EFFECT-KIND-MISMATCH — same collision, opposite symptom, selected by the
 -- row's SPELLING at the use site, not by arity) and #1070's alias row (`v : T`
 -- resolving to the wrong module's `Float`, wrong VALUE at run time, all three
 -- engines agreeing).
@@ -2168,7 +2168,7 @@ renderKindArrow ks = joinWith " -> " (map kindName ks ++ ["Type"])
 
 kindName : Kind -> String
 kindName KType = "Type"
-kindName KRow = "Row"
+kindName KRow = "Effect"
 
 -- ⚠️ [ctor] is a RAW head tag and must reach the reader through `ppConName` — a tuple
 -- head arrives as `__tuple2__`, and leaking that is exactly what ppConName exists to
@@ -4378,7 +4378,7 @@ deNameIdxAt nm mid = omKeys (optionOr omEmpty (omLookup mid nm))
 --   (b) DIAGNOSTICS — RELAYED from P0-A (`.claude/sprint/phase0/`), NOT
 --       re-derived at this line; treat as the first thing to check, not as
 --       established.  `fromAstTypeE` EMITS type errors: `T-ALIAS-ARITY` and
---       `T-ROW-KIND-MISMATCH`, both through `pushTypeErrorOnce`/`…At`, whose
+--       `T-EFFECT-KIND-MISMATCH`, both through `pushTypeErrorOnce`/`…At`, whose
 --       `Once` dedupe reads `perRun.typeErrorMsgSetRef` (#2068: a membership
 --       index over the same channel; it was a scan of `perRun.typeErrors`
 --       itself) — a bundle `resetState` re-mints per module.  Elaborating in the
@@ -9792,7 +9792,7 @@ fromAstTypeE etbl tvs (TyConstrained _ t) = fromAstTypeE etbl tvs t
 -- a real diagnostic; `TCon "Unit"` is POST-ERROR RECOVERY ONLY, so inference
 -- can keep going, not a value anything should rely on.
 fromAstTypeE etbl tvs (TyRow labels tail loc) =
-  let _ = pushTypeErrorOnceAt "T-ROW-KIND-MISMATCH" loc (rowKindMismatchMsg labels tail)
+  let _ = pushTypeErrorOnceAt "T-EFFECT-KIND-MISMATCH" loc (rowKindMismatchMsg labels tail)
   tconBuiltin "Unit"
 
 -- ppTy's own TyRow rendering (below, in the AST pretty-printer section) isn't
@@ -9912,7 +9912,7 @@ isRowSlotArg etbl tvs (TyVar n) = isSome (lookupAssoc n etbl)
 --
 -- ⚠️ Requiring an open tail here was an S1: it made the SPEC'S OWN `gpure : a -> f <> a`
 -- (EFFECTS-SEMANTICS §6, one of the four canonical graded signatures) unspellable — the
--- closed row fell to the opaque fallback and drew `T-ROW-KIND-MISMATCH`, a message
+-- closed row fell to the opaque fallback and drew `T-EFFECT-KIND-MISMATCH`, a message
 -- asserting the slot "isn't row-kinded" when slot 0 of `f` had just been INFERRED KRow
 -- from a sibling method.  The same `<>` on a concrete head (`Async <> a`) was accepted,
 -- so the two halves of the feature disagreed on one spelling with the abstract half
@@ -9974,12 +9974,12 @@ rowArgOf etbl (TyRow labels tail _) =
 -- root as the S0 above, one function apart, which is why it lands in the same change.
 -- It is the MIRROR of the shipped use-site check (`fromAstTypeE`'s `TyRow` arm: a row
 -- written where a type is expected), so it takes the same shipped code rather than
--- half-applying the decided `T-ROW-KIND-MISMATCH` → `T-EFFECT-KIND-MISMATCH` rename
+-- half-applying the decided `T-EFFECT-KIND-MISMATCH` → `T-EFFECT-KIND-MISMATCH` rename
 -- (EFFECTS-SEMANTICS §6.4/§6.9 Q2) at one site out of three.  `pureRow` stays as the
 -- inert continuation value so inference proceeds, exactly as `fromAstTypeE` continues
 -- with `TCon "Unit"`.
 rowArgOf _ ty =
-  let _ = pushTypeErrorOnceAt "T-ROW-KIND-MISMATCH" (firstTyLoc ty) (typeInRowSlotMsg ty)
+  let _ = pushTypeErrorOnceAt "T-EFFECT-KIND-MISMATCH" (firstTyLoc ty) (typeInRowSlotMsg ty)
   pureRow
 
 -- Names the offending type, so a signature elaborated twice folds into one diagnostic.
@@ -9987,7 +9987,7 @@ rowArgOf _ ty =
 -- key (see its body).  So two different bad slots holding the SAME offending type
 -- (`weird : Box Int Int` and `alsoWeird : Box Int Unit`) collapse to ONE diagnostic and
 -- the second is silently unreported.  That is the behaviour of both shipped
--- `T-ROW-KIND-MISMATCH` sites, matched here on purpose rather than fixed in passing —
+-- `T-EFFECT-KIND-MISMATCH` sites, matched here on purpose rather than fixed in passing —
 -- but do not read the type name in the message as making the key per-slot.
 typeInRowSlotMsg : Ty -> String
 typeInRowSlotMsg ty = "The type `\{ppTy ty}` was written here, but this type-argument position is row-kinded — it expects an effect row, not an ordinary type. Write the row you mean (`<>` for no effects, `<Stdout>`, `<IO | e>`, …), or a row variable bound by the enclosing signature."
@@ -28383,7 +28383,7 @@ reqTyToMono sub (TyConstrained _ t) = reqTyToMono sub t
 -- same diagnostic rather than let #997's new syntax spelling reach it in
 -- silence too.
 reqTyToMono _ (TyRow labels tail loc) =
-  let _ = pushTypeErrorOnceAt "T-ROW-KIND-MISMATCH" loc (rowKindMismatchMsg labels tail)
+  let _ = pushTypeErrorOnceAt "T-EFFECT-KIND-MISMATCH" loc (rowKindMismatchMsg labels tail)
   tconBuiltin "Unit"
 
 -- Check each substituted requirement with the SAME accept/reject logic as a
@@ -34372,7 +34372,7 @@ publicDataDecls decls = filterList publicDataDecl decls
 -- `publicDataDecl` for the kind seed would therefore LOSE an opaque type's parameter
 -- kinds cross-module, which is #804/#1028 exactly: every reader that asks "is slot i
 -- row-kinded?" misses, and each one fails differently — `fromAstTypeApp` erases a
--- written row SILENTLY, the bare-row spelling draws a FALSE `T-ROW-KIND-MISMATCH`, and
+-- written row SILENTLY, the bare-row spelling draws a FALSE `T-EFFECT-KIND-MISMATCH`, and
 -- #784's `checkUndeterminedRetEffVars` cannot see `Async e a` pin `<e>` and rejects the
 -- method.  `stdlib/async.mdk`'s `Async` is that shape; `test/check_module_fixtures/
 -- opaque_param_kinds_xmod/` and its `_newtype` sibling are the fixtures.
@@ -34411,7 +34411,7 @@ publicDataDecls decls = filterList publicDataDecl decls
 --     silent-vs-loud was the SPELLING of the row at the use site — `fromAstTypeE`'s
 --     `TyEffect` arm unwraps a wrapped row to a real type and keeps inferring silently
 --     (#1069), while its `TyRow` arm has no wrapped type and raises
---     `T-ROW-KIND-MISMATCH` (#1090).  Same table, same collision, opposite symptoms.
+--     `T-EFFECT-KIND-MISMATCH` (#1090).  Same table, same collision, opposite symptoms.
 --   * The flat/single-file path is NOT re-keyed and still competes by bare name; that is
 --     the Module-path-only bound recorded on `tyTabKey`, drained by #1115 (E-1).  It is
 --     also why `declEnvSeedChain`'s fold direction is reproduced but currently

@@ -1066,7 +1066,7 @@ latent-row position, which demands `Effect`, and the head says `Type`. Symmetric
 `data Box (e : Effect) a = Mk e` fails: `Mk`'s field position demands a monotype.
 
 The diagnostic is **`T-EFFECT-KIND-MISMATCH`**. That name also **renames the
-shipped `T-ROW-KIND-MISMATCH`**, which today reports the *use*-site half of the
+shipped `T-EFFECT-KIND-MISMATCH`**, which today reports the *use*-site half of the
 same rule ("a row was written here, but this type-argument position isn't
 row-kinded"); the rename follows the kind's name, since every other effect
 diagnostic already says *effect* (`T-EFFECT-LEAK`, `T-EFFECT-UNDETERMINED`,
@@ -1083,7 +1083,7 @@ not "rejected" — the parameter was simply **never `Effect`-kinded**, since
 `inferParamKinds` reads kindedness off a field's effect tail and there is no such
 field. Writing a row in that slot then drew the *use*-site error. Probed
 (2026-07-26): `data Box e a = Mk a` with `useBox : Box <Stdout> Int → Int` →
-`T-ROW-KIND-MISMATCH` at the row; the control `data Box e a = Mk (Unit →^e a)` →
+`T-EFFECT-KIND-MISMATCH` at the row; the control `data Box e a = Mk (Unit →^e a)` →
 `check` exit 0. So the phantom shape was unreachable rather than diagnosed.
 
 *As a declaration, in isolation: **legal**.* A phantom `Effect` parameter cannot
@@ -1442,7 +1442,7 @@ parameterising over the row. Verified:
 ```
 data Later e a = Now a | Wait (Unit -> <e> Later e a)
 data Holder e = H (Later e Int)      -- `e` is inferred Type, not Effect
-useIt : Holder <IO> -> Int           -- T-ROW-KIND-MISMATCH at the row
+useIt : Holder <IO> -> Int           -- T-EFFECT-KIND-MISMATCH at the row
 ```
 
 A declared `data Holder (e : Effect) = H (Later e Int)` states the intent directly
@@ -1486,7 +1486,7 @@ document three public retractions already (PRs #999/#1001).
   the shipped use-site check are the same rule at two seams. Whether
   `T-EFFECT-KIND-MISMATCH` covers both, or the declaration site takes its own code,
   is a taxonomy decision for `compiler/DIAGNOSTIC-CODES-DESIGN.md` and is not made
-  here. (The *rename* of `T-ROW-KIND-MISMATCH` → `T-EFFECT-KIND-MISMATCH` **is**
+  here. (The *rename* of `T-EFFECT-KIND-MISMATCH` → `T-EFFECT-KIND-MISMATCH` **is**
   decided.)
 - **Q3 — a phantom-`Effect`-indexed type as a GRADED INSTANCE HEAD.** §6.4 settles
   the declaration (legal) and explicitly does not settle this. The reason to doubt
@@ -1536,7 +1536,7 @@ document three public retractions already (PRs #999/#1001).
   ```
   data Later e a = Now a | Wait (Unit -> <e> Later e a)
   type LaterInt e = Later e Int
-  useIt : LaterInt <IO> -> Int          -- T-ROW-KIND-MISMATCH at the row
+  useIt : LaterInt <IO> -> Int          -- T-EFFECT-KIND-MISMATCH at the row
   ```
 
   — because the retired inference rule reads kindedness off a *variant field's*
@@ -1841,7 +1841,7 @@ re-read together, and the row is the one with a derivation.
 | §6.1 kind grammar (`Kind ::= Type \| Effect \| Kind → Kind`, `(name : κ)` syntax) | **UNIMPLEMENTED, re-confirmed at THREE independent layers (re-audited with lexer/AST vocabulary, not just parser vocabulary, per the W2 lesson).** Lexer: `TEffect` (`compiler/frontend/lexer.mdk:89`, keyword `"effect"` at `:455`) is the `effect Foo` DECLARATION token, not a kind keyword — no `TKind`/kind-colon token exists. Parser: `parseData:2924-2928`/`parseInterface:2607-2611` parse params as bare `many lowerNameP`. AST: `DData DataVis String (List String) …` (`compiler/frontend/ast.mdk:421`), `DInterface { typarams : List String, … }` (`:433`), `DTypeAlias`/`DNewtype` (`:445`,`:447`) all carry typarams as `List String` — there is no FIELD anywhere in the AST that could hold a kind even if parsed; `Attr = AttrDeprecated String \| AttrInline \| AttrMustUse` (`:406`) rules out an attribute-based side channel too. `data Kind = KType \| KRow` (`compiler/types/typecheck.mdk:1633`), no arrow kinds | N/A | the spec's §6.3 "Status correction" already says this precisely: #822 shipped only an *inferred* graded-lite kind, and declaration is what §6.8 says should retire that — it has not yet. Grepped `typecheck.mdk` for "declared kind"/"kind annotation": zero hits, consistent with the structural absence above |
 | §6.2 where a kind annotation is legal | **UNIMPLEMENTED** — moot; no annotation syntax exists to be legal or illegal anywhere yet | N/A | `DImpl { iface, tys : List Ty, … }` (`compiler/frontend/ast.mdk:437`) is consistent with "impl heads carry no annotation" only by *absence of any annotation grammar at all*, not by a dedicated rejection rule |
 | §6.3 kind-default / surgical rule (resolved kind = declared-or-inferred) | **UNIMPLEMENTED** as specified. Current mechanism is INFERENCE-ONLY: `inferParamKinds:8292` (`data`/`newtype` heads); `declGradedScope:8383`→`ifaceParamKindsOf:8399`→`anySlotIsRow:8416` (`interface` heads) | N/A — there is no *declared* half to combine with the inferred half | this is precisely the "two different inference rules for one concept" §6.8 says declaration retires — both are still live |
-| §6.4(a) `kind-decl` (declared kind contradicted by usage) | **UNIMPLEMENTED** as specified. Current analog is usage-site-only: `T-ROW-KIND-MISMATCH` at `compiler/types/typecheck.mdk:4085`,`4252`,`14072`; `T-IMPL-KIND-MISMATCH` at `:1405`,`:1429` | catches a usage inconsistent with the currently-INFERRED kind | no declaration exists yet to be contradicted — this is the *use*-site half of what §6.4 specifies, not the declaration-site half. The planned rename to `T-EFFECT-KIND-MISMATCH` (§6.4) has also not happened — both codes are still the pre-rename names |
+| §6.4(a) `kind-decl` (declared kind contradicted by usage) | **UNIMPLEMENTED** as specified. Current analog is usage-site-only: `T-EFFECT-KIND-MISMATCH` at `compiler/types/typecheck.mdk:4085`,`4252`,`14072`; `T-IMPL-KIND-MISMATCH` at `:1405`,`:1429` | catches a usage inconsistent with the currently-INFERRED kind | no declaration exists yet to be contradicted — this is the *use*-site half of what §6.4 specifies, not the declaration-site half. The planned rename to `T-EFFECT-KIND-MISMATCH` (§6.4) has also not happened — both codes are still the pre-rename names |
 | §6.4(b) phantom `Effect`-indexed parameter, legal as a declaration | **UNIMPLEMENTED** — moot; no declared-`Effect`-kind parameter can exist yet. `test/typecheck_error_fixtures/graded_ctor_phantom_arg.mdk` (confirmed present) still pins the OLD rejection under the inferred mechanism | N/A | the spec's own §6.4(b) says this fixture's verdict needs re-deciding once declaration lands — it has not been re-decided, and the fixture still asserts the pre-declaration behavior |
 | §6.5 `kind-req` (requires-chain kind agreement) | **UNIMPLEMENTED** as the declared-kind rule. Partial analog for impl-vs-interface only: `checkGradedImplHeads:1335`→`checkGradedImplTys:1368`→`checkGradedImplHead:1395` (`compiler/types/typecheck.mdk`) | impl head's kind vs. the interface slot's (inferred) kind | ⚠️ self-documented bare-name hazard at lines 1347-1367: the slot kinds were once keyed by `<iface>@<slot>` (bare interface NAME, not module identity) in a per-run table whose comment named the exact collision class (#1044, #1047) and called the severity "bounded... never silent wrongness in a program's types" — a claim not independently re-verified here. ⚠️ That hazard is CLOSED twice over: #1111 A-2.4 re-keyed the table to a module-qualified identity, and #1112 A-3.5c (#1557) retired it entirely in favour of stage K's `CE` (`ceRowParamKinds`, read at the reading module's ordinal through `ceSlotKindsAt`) |
 | §6.7 Finding 1 — `Effect`-kinded argument slot at unification | **NOW ENFORCED** (see the ⚠️ notice above the table). `unifyN (TEff r1) (TEff r2) = unifyIndexRow r1 r2` (`compiler/types/typecheck.mdk:3396`) → `unifyIndexRow:1040`/`unifyIndexRowN:1043`/`indexRowEqCheck:1056` | invariant-equality check on an `Effect`-kinded index slot — `F φ₁ τ̄`/`F φ₂ τ̄` interchangeable only when `φ₁ = φ₂` | equality-only on both closed-vs-closed and same-tail-open forms (`unifyIndexRowN:1044-1049`); routes to ordinary `unifyRowN` only when the two tails are provably different metavariables (genuine instantiation, not interchange) — this is exactly §9's "no direction of `≤` licensed at this slot" |
