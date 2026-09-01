@@ -296,8 +296,16 @@
            The old "Quickstart" href pointed at
            github.com/.../docs/guide/1.%20Quick%20Start.md — a file that has not
            existed since the guide was renumbered to 00-…/01-…; it was a live 404
-           on the deployed site. -->
-      <div class="links"><a href="./guide/00-introduction.html">Guide</a><a href="./guide/01-quick-start.html">Quickstart</a><a href="https://github.com/MedakaLang/medaka/blob/main/docs/stdlib/STDLIB.md" target="_blank" rel="noopener">Stdlib</a><a href="https://github.com/MedakaLang/medaka" target="_blank" rel="noopener">GitHub</a></div>
+           on the deployed site.
+           "Stdlib" is same-origin for the same reason (#2384): build_site.sh
+           now renders docs/stdlib into site/stdlib/, index.md and all, and
+           ./stdlib/index.html is the generated reference's own table of
+           contents. The old href pointed off-origin at docs/stdlib/STDLIB.md —
+           the "Plan" design document, which is not the reference, is known
+           stale (it still publishes `replaceWith`, renamed to `mapConst`), and
+           is one of the three notes build_stdlib_docs.sh deliberately does NOT
+           publish. -->
+      <div class="links"><a href="./guide/00-introduction.html">Guide</a><a href="./guide/01-quick-start.html">Quickstart</a><a href="./stdlib/index.html">Stdlib</a><a href="https://github.com/MedakaLang/medaka" target="_blank" rel="noopener">GitHub</a></div>
     </div>
 
     <div id="funnel-strip">

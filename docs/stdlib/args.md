@@ -62,6 +62,18 @@ one, in either C1 spelling (`--flag v` or `--flag=v`).  The trailing
 `ValueList` differs from `Value` only in how it renders in help
 (`--flag=<A,B>`) — splitting the comma list is the consumer's business.
 
+## `Eq Arity`
+
+```
+impl Eq Arity
+```
+
+## `Debug Arity`
+
+```
+impl Debug Arity
+```
+
 ## `Visibility`
 
 ```
@@ -71,6 +83,18 @@ data Visibility
 ```
 
 Whether a flag appears in `helpBlockOf`.  Both kinds appear in `rosterOf`.
+
+## `Eq Visibility`
+
+```
+impl Eq Visibility
+```
+
+## `Debug Visibility`
+
+```
+impl Debug Visibility
+```
 
 ## `Unknown`
 
@@ -87,6 +111,18 @@ What happens to a `--`-shaped token that no `FlagSpec` claims.
 vocabulary is per-codemod and therefore not statically knowable: an
 unclaimed token is recorded in `given`, consuming the following token as
 its value.
+
+## `Eq Unknown`
+
+```
+impl Eq Unknown
+```
+
+## `Debug Unknown`
+
+```
+impl Debug Unknown
+```
 
 ## `Trailing`
 
@@ -106,6 +142,18 @@ it is the callee's argv, `--` included and NOT consumed (`medaka run`).
 * `TrailingAfterSeparator` — the first bare `--` is consumed as a
 separator and everything after it lands in `rest`.
 
+## `Eq Trailing`
+
+```
+impl Eq Trailing
+```
+
+## `Debug Trailing`
+
+```
+impl Debug Trailing
+```
+
 ## `FlagSpec`
 
 ```
@@ -119,6 +167,18 @@ One flag, with every spelling it answers to.
 first: `["--write", "-w"]`.  The head is the CANONICAL name — the key
 `parseArgs` records in `Args.given` and the one `flag`/`flagValue` query
 by, whichever spelling the user typed.
+
+## `Eq FlagSpec`
+
+```
+impl Eq FlagSpec
+```
+
+## `Debug FlagSpec`
+
+```
+impl Debug FlagSpec
+```
 
 ## `ArgSpec`
 
@@ -143,6 +203,18 @@ tree-wide by changing `isFlagToken`'s default — a verb that genuinely
 wants positionals starting with `-` (a filename literally named `-` stays
 exempt either way: `stringLength t > 1` guards that) keeps `False`.
 
+## `Eq ArgSpec`
+
+```
+impl Eq ArgSpec
+```
+
+## `Debug ArgSpec`
+
+```
+impl Debug ArgSpec
+```
+
 ## `Args`
 
 ```
@@ -156,6 +228,18 @@ The result of a successful parse.
 calls `flagValue` and one that wants last-occurrence calls `lastValue` —
 the tree contains both conventions and this module deliberately picks
 neither for you.
+
+## `Eq Args`
+
+```
+impl Eq Args
+```
+
+## `Debug Args`
+
+```
+impl Debug Args
+```
 
 ## `switch`
 

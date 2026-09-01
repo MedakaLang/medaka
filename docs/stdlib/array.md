@@ -61,7 +61,7 @@ make : Int -> a -> Array a
 ## `makeWith`
 
 ```
-makeWith : Int -> (Int -> a) -> Array a
+makeWith : Int -> (Int -> <e> a) -> <e> Array a
 ```
 
 `makeWith n f` — a fresh array whose element `i` is `f i`.
@@ -255,7 +255,7 @@ Pair up two arrays element-wise, truncating to the shorter length.
 ## `zipWith`
 
 ```
-zipWith : (a -> b -> c) -> Array a -> Array b -> Array c
+zipWith : (a -> b -> <e> c) -> Array a -> Array b -> <e> Array c
 ```
 
 Combine two arrays element-wise with `f`, truncating to the shorter.
@@ -333,7 +333,7 @@ Bounds-checked bulk copy: copies `len` elements from `src` at offset
 ## `sortInPlaceBy`
 
 ```
-sortInPlaceBy : (a -> a -> Ordering) -> Array a -> Unit
+sortInPlaceBy : (a -> a -> <e> Ordering) -> Array a -> <e> Unit
 ```
 
 Sort in place using the supplied comparison.
@@ -341,7 +341,7 @@ Sort in place using the supplied comparison.
 ## `sortInPlace`
 
 ```
-sortInPlace : Array a -> Unit
+sortInPlace : Ord a => Array a -> Unit
 ```
 
 Sort in place by the `Ord` instance.
@@ -349,7 +349,7 @@ Sort in place by the `Ord` instance.
 ## `sortBy`
 
 ```
-sortBy : (a -> a -> Ordering) -> Array a -> Array a
+sortBy : (a -> a -> <e> Ordering) -> Array a -> <e> Array a
 ```
 
 Sort into a fresh array using the supplied comparison (stable mergesort).
@@ -367,7 +367,7 @@ Sort into a fresh array using the supplied comparison (stable mergesort).
 ## `sort`
 
 ```
-sort : Array a -> Array a
+sort : Ord a => Array a -> Array a
 ```
 
 Sort into a fresh array by the `Ord` instance.
@@ -383,7 +383,7 @@ Sort into a fresh array by the `Ord` instance.
 ## `sortOn`
 
 ```
-sortOn : (a -> b) -> Array a -> Array a
+sortOn : Ord b => (a -> <e> b) -> Array a -> <e> Array a
 ```
 
 Sort into a fresh array by a key projection, computing the key once per
@@ -401,7 +401,7 @@ every comparison — matching `List.sortOn`.
 ## `find`
 
 ```
-find : (a -> Bool) -> Array a -> Option a
+find : (a -> <e> Bool) -> Array a -> <e> Option a
 ```
 
 First element satisfying the predicate, or `None`.
@@ -409,7 +409,7 @@ First element satisfying the predicate, or `None`.
 ## `findIndex`
 
 ```
-findIndex : (a -> Bool) -> Array a -> Option Int
+findIndex : (a -> <e> Bool) -> Array a -> <e> Option Int
 ```
 
 Index of the first element satisfying the predicate, or `None`.
@@ -425,7 +425,7 @@ Some 2
 ## `foldWithIndex`
 
 ```
-foldWithIndex : (a -> Int -> b -> a) -> a -> Array b -> a
+foldWithIndex : (b -> Int -> a -> <e> b) -> b -> Array a -> <e> b
 ```
 
 Left-to-right fold, threading the running index alongside each element.
@@ -443,7 +443,7 @@ Left-to-right fold, threading the running index alongside each element.
 ## `forEachWithIndex`
 
 ```
-forEachWithIndex : (Int -> a -> Unit) -> Array a -> Unit
+forEachWithIndex : (Int -> a -> <e> Unit) -> Array a -> <e> Unit
 ```
 
 Visit every element in order, applying `f` to its index and itself for
@@ -462,7 +462,7 @@ an array's bytes into a writer).
 ## `mapWithIndex`
 
 ```
-mapWithIndex : (Int -> a -> b) -> Array a -> Array b
+mapWithIndex : (Int -> a -> <e> b) -> Array a -> <e> Array b
 ```
 
 Map every element together with its 0-based index — the missing member of
