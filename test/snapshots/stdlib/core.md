@@ -1,5 +1,5 @@
 # META
-source_lines=1913
+source_lines=1907
 stages=DESUGAR,MARK
 # SOURCE
 {- core.mdk — the foundation every other Medaka module rests on.
@@ -443,12 +443,6 @@ eqGo a b i n =
   else
     False
 
-{- | Lexicographic, exactly like `Ord (List a)` — `Array` is `List`'s
-   random-access peer, so `compare` on two arrays agrees element-for-element
-   with `compare` on their `toList`s, and a prefix sorts before its extensions
-   (sheet row A-5).  Lives here rather than in `array.mdk` for the same reason
-   `Eq (Array a)` does: `deriving (Ord)` over a field of array type must build
-   without an `import array`. -}
 {- | Lexicographic, exactly like `Ord (List a)` — `Array` is `List`'s
    random-access peer, so `compare` on two arrays agrees element-for-element
    with `compare` on their element lists, and a prefix sorts before its

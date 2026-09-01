@@ -1,14 +1,29 @@
 running doctests in stdlib/mut_array.mdk
-  ok   stdlib/mut_array.mdk:41: length (fromList [1, 2, 3])
-  ok   stdlib/mut_array.mdk:61: capacity (fromList [1, 2, 3])
-  ok   stdlib/mut_array.mdk:69: get 1 (fromList [10, 20, 30])
-  ok   stdlib/mut_array.mdk:71: get 5 (fromList [10, 20, 30])
-  ok   stdlib/mut_array.mdk:92: first (fromList [10, 20, 30])
-  ok   stdlib/mut_array.mdk:100: last (fromList [10, 20, 30])
-  ok   stdlib/mut_array.mdk:121: arrayLength (toArray (fromList [1, 2, 3]))
-  ok   stdlib/mut_array.mdk:222: sum (fromList [1, 2, 3, 4])
-  ok   stdlib/mut_array.mdk:224: length (fromList [9, 8, 7])
-  ok   stdlib/mut_array.mdk:235: eq (fromList [1, 2, 3]) (fromList [1, 2, 3])
-  ok   stdlib/mut_array.mdk:242: debug (fromList [1, 2, 3]) == "fromList [1, 2, 3]"
+  ok   stdlib/mut_array.mdk:57: length (fromList [1, 2, 3])
+  ok   stdlib/mut_array.mdk:77: capacity (fromList [1, 2, 3])
+  ok   stdlib/mut_array.mdk:85: get 1 (fromList [10, 20, 30])
+  ok   stdlib/mut_array.mdk:87: get 5 (fromList [10, 20, 30])
+  ok   stdlib/mut_array.mdk:108: first (fromList [10, 20, 30])
+  ok   stdlib/mut_array.mdk:116: last (fromList [10, 20, 30])
+  ok   stdlib/mut_array.mdk:137: arrayLength (toArray (fromList [1, 2, 3]))
+  ok   stdlib/mut_array.mdk:253: let ma = fromList [1, 2, 3] in let _ = insertAt 1 9 ma in toList ma
+  ok   stdlib/mut_array.mdk:255: let ma = fromList [1, 2] in let _ = insertAt 7 9 ma in toList ma
+  ok   stdlib/mut_array.mdk:263: let ma = fromList [1, 2, 3] in let _ = removeAt 1 ma in toList ma
+  ok   stdlib/mut_array.mdk:265: let ma = fromList [1, 2] in let _ = removeAt 7 ma in toList ma
+  ok   stdlib/mut_array.mdk:275: let ma = fromList [3, 1, 4, 1, 5] in let _ = sortBy compare ma in toList ma
+  ok   stdlib/mut_array.mdk:283: let ma = fromList [3, 1, 2] in let _ = sort ma in toList ma
+  ok   stdlib/mut_array.mdk:306: sum (fromList [1, 2, 3, 4])
+  ok   stdlib/mut_array.mdk:308: length (fromList [9, 8, 7])
+  ok   stdlib/mut_array.mdk:319: eq (fromList [1, 2, 3]) (fromList [1, 2, 3])
+  ok   stdlib/mut_array.mdk:326: debug (fromList [1, 2, 3]) == "fromList [1, 2, 3]"
+  ok   stdlib/mut_array.mdk:336: display (fromList [1, 2, 3]) == "fromList [1, 2, 3]"
 
-stdlib/mut_array.mdk: 11/11 passed
+stdlib/mut_array.mdk: 18/18 passed
+Testing "sort agrees with an independent insertion sort" ... OK (100 tests)
+Testing "sort is idempotent" ... OK (100 tests)
+Testing "sortBy is stable on ties" ... OK (100 tests)
+Testing "insertAt lands at the clamped index and removeAt undoes it" ... OK (100 tests)
+Testing "removeAt out of range is a no-op" ... OK (100 tests)
+Testing "Display MutArray shows only the live range and agrees with Eq" ... OK (100 tests)
+
+6 passed, 0 failed

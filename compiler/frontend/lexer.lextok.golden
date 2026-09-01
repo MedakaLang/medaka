@@ -4499,7 +4499,7 @@ INDENT
 LET
 IDENT "f"
 EQUAL
-IDENT "fromOption"
+IDENT "optionOr"
 FLOAT 0.0
 LPAREN
 IDENT "stringToFloat"
@@ -4734,7 +4734,7 @@ UPPER "Some"
 LPAREN
 IDENT "charToStr"
 LPAREN
-IDENT "fromOption"
+IDENT "optionOr"
 CHAR " "
 LPAREN
 IDENT "charFromCode"
@@ -5262,7 +5262,7 @@ IDENT "acc"
 PLUSPLUS
 IDENT "charToStr"
 LPAREN
-IDENT "fromOption"
+IDENT "optionOr"
 CHAR " "
 LPAREN
 IDENT "charFromCode"
@@ -5932,7 +5932,7 @@ IDENT "acc"
 PLUSPLUS
 IDENT "charToStr"
 LPAREN
-IDENT "fromOption"
+IDENT "optionOr"
 CHAR " "
 LPAREN
 IDENT "charFromCode"
@@ -6442,7 +6442,7 @@ IDENT "acc"
 PLUSPLUS
 IDENT "charToStr"
 LPAREN
-IDENT "fromOption"
+IDENT "optionOr"
 CHAR " "
 LPAREN
 IDENT "charFromCode"
@@ -6972,7 +6972,7 @@ IDENT "tripleInterpMark"
 EQUAL
 IDENT "charToStr"
 LPAREN
-IDENT "fromOption"
+IDENT "optionOr"
 CHAR " "
 LPAREN
 IDENT "charFromCode"
@@ -7005,7 +7005,7 @@ IDENT "at"
 IDENT "cs"
 INT 0
 EQ_EQ
-IDENT "fromOption"
+IDENT "optionOr"
 CHAR " "
 LPAREN
 IDENT "charFromCode"

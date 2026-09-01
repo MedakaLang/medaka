@@ -2534,7 +2534,7 @@ RPAREN
 NEWLINE
 EXPORT
 NEWLINE
-IDENT "contains"
+IDENT "containsSub"
 COLON
 UPPER "Eq"
 IDENT "a"
@@ -2547,7 +2547,7 @@ IDENT "a"
 ARROW
 UPPER "Bool"
 NEWLINE
-IDENT "contains"
+IDENT "containsSub"
 IDENT "sub"
 LBRACKET
 RBRACKET
@@ -2557,7 +2557,7 @@ IDENT "sub"
 LBRACKET
 RBRACKET
 NEWLINE
-IDENT "contains"
+IDENT "containsSub"
 IDENT "sub"
 LPAREN
 IDENT "xs"
@@ -2579,7 +2579,7 @@ NEWLINE
 PIPE
 IDENT "otherwise"
 EQUAL
-IDENT "contains"
+IDENT "containsSub"
 IDENT "sub"
 IDENT "rest"
 NEWLINE

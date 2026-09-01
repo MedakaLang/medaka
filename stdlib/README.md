@@ -88,3 +88,34 @@ reasoning and the counter-example each rule exists to protect: PR #2429
    container — it would shadow the interface method, not complete the
    surface. `map`/`hash_map` carry their own only because they are not
    `Foldable`.
+8. **`<type><Op>` ("xToY"-shaped) names are the primitive layer's naming
+   marker.** `runtime.mdk` externs stay in that shape
+   (`string.toDigit`/`fromDigit`, `validation.toResult`/`fromResult` are the
+   library-layer companions, not the marker itself); a library module
+   exporting a new name of that exact shape would claim the marker for a
+   name that isn't a primitive — `docs/stdlib/runtime.md` labels the page
+   "primitive layer — prefer the library name" for exactly this reason.
+9. **The `keys`/`values`/`toList`/`elems`/`entries`/`items` container-
+   accessor family settled to one name per shape per module.**
+   `hash_map.entries` was removed (kept `toList`); `map.elems` was renamed
+   to `map.values`. A module re-introducing two family names with an
+   identical signature is the synonym drift that ruling closed.
+10. **A `*InPlace` suffix is the mutation contract on a container that also
+    has a persistent name.** `hash_map`/`hash_set`/`array`/`mut_array`'s
+    mutating writers are `insertInPlace`/`setInPlace`/`deleteInPlace`;
+    persistent containers keep the bare `insert`/`set`/`delete`. The suffix
+    is what tells a reader "this mutates the receiver" without reading the
+    signature.
+11. **`repeat` and `replicate` are a ratified same-English-word exception,
+    not drift.** `string.repeat` (concatenation) and `<container>.replicate`
+    (element repetition into a container) are different operations that
+    happen to share a name; the conventions detector must not flag this
+    pair.
+12. **Index-callback argument order: the index immediately precedes the
+    element; an accumulator, when present, precedes the index.** E.g.
+    `array.mapWithIndex`, `list.foldWithIndex`/`forEachWithIndex`. This is
+    the shape every `WithIndex`/`WithKey` callback in the surface follows.
+13. **`core.flat` is a ratified exception to the "no same-shaped synonym"
+    sweep — no rename.** It collides in spelling only with `string.join`
+    (different operation entirely) and is self-consistent with `flatMap`;
+    the reasoning is recorded here so the detector never flags it.

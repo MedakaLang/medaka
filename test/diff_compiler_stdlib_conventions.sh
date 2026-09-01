@@ -87,7 +87,7 @@ for mod, entries in by_module.items():
             fails.append(
                 "%s.%s: 'xToY'-shaped name outside the primitive layer "
                 "(runtime.mdk) — D-2/D-5 reserve that spelling for "
-                "primitive externs; see stdlib/README.md rule 2" % (mod, name)
+                "primitive externs; see stdlib/README.md rule 8" % (mod, name)
             )
 
     # (b) duplicate signature (by TYPE SHAPE, name stripped) within the
@@ -102,8 +102,7 @@ for mod, entries in by_module.items():
                     "%s: '%s' and '%s' share an identical signature shape "
                     "(%s) — B-3/C-1 settled the "
                     "keys/values/toList/elems/entries family to one name "
-                    "per shape per module; see stdlib/README.md rule 5's "
-                    "neighbouring ruling" % (mod, n1, n2, s1)
+                    "per shape per module; see stdlib/README.md rule 9" % (mod, n1, n2, s1)
                 )
 
 for msg in fails:

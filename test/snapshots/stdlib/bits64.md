@@ -1,5 +1,5 @@
 # META
-source_lines=341
+source_lines=342
 stages=DESUGAR,MARK
 # SOURCE
 {- bits64.mdk — 64-bit-unsigned arithmetic over the 63-bit `Int` fixnum.
@@ -30,7 +30,8 @@ stages=DESUGAR,MARK
 
    Operations are fn-first/data-last and carry no `64` suffix — the module is
    already called `bits64`.  Import qualified (`import bits64 as B`) if you
-   also want the prelude's boolean `and`/`or`/`xor` in the same scope. -}
+   also want the prelude's boolean `and`/`or`/`xor`, or the `Num` interface's
+   `add`/`sub`, in the same scope. -}
 
 -- The SplitMix64/FNV-1a limb helpers the interpreter's RNG/hash externs are
 -- built on (issue #98) now live HERE: `compiler/eval/eval.mdk` imports this

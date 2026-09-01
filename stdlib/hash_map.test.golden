@@ -1,13 +1,21 @@
 running doctests in stdlib/hash_map.mdk
-  ok   stdlib/hash_map.mdk:63: size (fromList [(1, 10), (2, 20), (1, 30)])
-  ok   stdlib/hash_map.mdk:71: isEmpty (new () : HashMap Int Int)
-  ok   stdlib/hash_map.mdk:85: get 2 (fromList [(1, 10), (2, 20)])
-  ok   stdlib/hash_map.mdk:87: get 9 (fromList [(1, 10), (2, 20)])
-  ok   stdlib/hash_map.mdk:97: has 2 (fromList [(1, 10), (2, 20)])
-  ok   stdlib/hash_map.mdk:105: findWithDefault 0 9 (fromList [(1, 10)])
-  ok   stdlib/hash_map.mdk:187: size (fromList [(1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6), (7, 7), (8, 8)])
+  ok   stdlib/hash_map.mdk:64: size (fromList [(1, 10), (2, 20), (1, 30)])
+  ok   stdlib/hash_map.mdk:72: isEmpty (new () : HashMap Int Int)
+  ok   stdlib/hash_map.mdk:86: get 2 (fromList [(1, 10), (2, 20)])
+  ok   stdlib/hash_map.mdk:88: get 9 (fromList [(1, 10), (2, 20)])
+  ok   stdlib/hash_map.mdk:98: has 2 (fromList [(1, 10), (2, 20)])
+  ok   stdlib/hash_map.mdk:106: findWithDefault 0 9 (fromList [(1, 10)])
+  ok   stdlib/hash_map.mdk:188: size (fromList [(1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6), (7, 7), (8, 8)])
   ok   stdlib/hash_map.mdk:244: keys (fromList [(5, 50)])
   ok   stdlib/hash_map.mdk:252: values (fromList [(5, 50)])
   ok   stdlib/hash_map.mdk:268: eq (fromList [(1, 10), (2, 20)]) (fromList [(2, 20), (1, 10)])
+  ok   stdlib/hash_map.mdk:300: display (fromList [(2, 20), (1, 10)]) == "HashMap { 1 => 10, 2 => 20 }"
+  ok   stdlib/hash_map.mdk:302: display (new () : HashMap Int Int) == "HashMap {}"
+  ok   stdlib/hash_map.mdk:314: (fromList [(1, 10), (2, 20)])[2]
 
-stdlib/hash_map.mdk: 10/10 passed
+stdlib/hash_map.mdk: 13/13 passed
+Testing "Display HashMap is layout-independent" ... OK (100 tests)
+Testing "Display HashMap agrees with Eq and lists keys ascending" ... OK (100 tests)
+Testing "Index HashMap agrees with get on present keys" ... OK (100 tests)
+
+3 passed, 0 failed

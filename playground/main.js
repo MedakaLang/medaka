@@ -263,7 +263,7 @@ function applyDiagnostics(files) {
 const EXTRA_MODULES = [
   'args', 'array', 'async', 'base64', 'bytebuilder', 'byteparser', 'hash_map',
   'hash_set', 'hex', 'json', 'list', 'map', 'mut_array', 'nonempty',
-  'option', 'path', 'result', 'set', 'string', 'toml', 'validation',
+  'path', 'set', 'string', 'toml', 'validation',
 ];
 
 // ── Asset loader ──────────────────────────────────────────────────────────────

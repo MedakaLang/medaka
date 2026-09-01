@@ -10,6 +10,8 @@ UPPER "Fail"
 UPPER "String"
 DERIVING
 LPAREN
+UPPER "Eq"
+COMMA
 UPPER "Debug"
 RPAREN
 NEWLINE
@@ -433,6 +435,74 @@ IDENT "goTests"
 IDENT "tests"
 INT 0
 INT 0
+NEWLINE
+PROP
+STRING "Eq Expectation separates constructors and payloads"
+LPAREN
+IDENT "m"
+COLON
+UPPER "String"
+RPAREN
+EQUAL
+IDENT "pass"
+EQ_EQ
+IDENT "pass"
+AND
+IDENT "fail"
+IDENT "m"
+EQ_EQ
+IDENT "fail"
+IDENT "m"
+AND
+IDENT "pass"
+EQ_EQ
+IDENT "fail"
+IDENT "m"
+EQ_EQ
+UPPER "False"
+AND
+IDENT "fail"
+IDENT "m"
+EQ_EQ
+IDENT "fail"
+LPAREN
+IDENT "m"
+PLUSPLUS
+STRING "!"
+RPAREN
+EQ_EQ
+UPPER "False"
+NEWLINE
+PROP
+STRING "Debug Expectation agrees with Eq"
+LPAREN
+IDENT "m"
+COLON
+UPPER "String"
+RPAREN
+EQUAL
+IDENT "debug"
+LPAREN
+IDENT "fail"
+IDENT "m"
+RPAREN
+EQ_EQ
+IDENT "debug"
+LPAREN
+IDENT "fail"
+IDENT "m"
+RPAREN
+AND
+IDENT "debug"
+LPAREN
+IDENT "fail"
+IDENT "m"
+RPAREN
+EQ_EQ
+IDENT "debug"
+IDENT "pass"
+EQ_EQ
+UPPER "False"
 NEWLINE
 NEWLINE
 EOF

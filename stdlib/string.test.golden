@@ -1,12 +1,12 @@
 running doctests in stdlib/string.mdk
   ok   stdlib/string.mdk:62: isDigit '7'
   ok   stdlib/string.mdk:64: isDigit 'x'
-  ok   stdlib/string.mdk:103: digitToInt '7'
-  ok   stdlib/string.mdk:105: digitToInt 'f'
-  ok   stdlib/string.mdk:107: digitToInt 'z'
-  ok   stdlib/string.mdk:122: intToDigit 7
-  ok   stdlib/string.mdk:124: intToDigit 12
-  ok   stdlib/string.mdk:126: intToDigit 42
+  ok   stdlib/string.mdk:103: fromDigit '7'
+  ok   stdlib/string.mdk:105: fromDigit 'f'
+  ok   stdlib/string.mdk:107: fromDigit 'z'
+  ok   stdlib/string.mdk:122: toDigit 7
+  ok   stdlib/string.mdk:124: toDigit 12
+  ok   stdlib/string.mdk:126: toDigit 42
   ok   stdlib/string.mdk:146: arrayLength (toChars "héllo→")
   ok   stdlib/string.mdk:155: fromChars ['h', 'i']
   ok   stdlib/string.mdk:165: arrayLength (toUtf8 "héllo")
@@ -60,11 +60,13 @@ running doctests in stdlib/string.mdk
   ok   stdlib/string.mdk:622: split "," "a,b,c"
   ok   stdlib/string.mdk:624: split "," "abc"
   ok   stdlib/string.mdk:637: lines "a\nb\nc"
-  ok   stdlib/string.mdk:653: words "  hello   world "
-  ok   stdlib/string.mdk:675: unlines ["a", "b"]
-  ok   stdlib/string.mdk:690: unwords ["a", "b", "c"]
-  ok   stdlib/string.mdk:700: padLeft 5 '.' "ab"
-  ok   stdlib/string.mdk:712: padRight 5 '.' "ab"
-  ok   stdlib/string.mdk:725: center 5 '.' "ab"
+  ok   stdlib/string.mdk:650: stripCR "ab\r"
+  ok   stdlib/string.mdk:652: stripCR "ab"
+  ok   stdlib/string.mdk:665: words "  hello   world "
+  ok   stdlib/string.mdk:687: unlines ["a", "b"]
+  ok   stdlib/string.mdk:702: unwords ["a", "b", "c"]
+  ok   stdlib/string.mdk:712: padLeft 5 '.' "ab"
+  ok   stdlib/string.mdk:724: padRight 5 '.' "ab"
+  ok   stdlib/string.mdk:737: center 5 '.' "ab"
 
-stdlib/string.mdk: 67/67 passed
+stdlib/string.mdk: 69/69 passed
