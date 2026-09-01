@@ -552,7 +552,7 @@ Consequences, and the division of labour with the #803 bound:
   the offending arrow pre-unification); in the idealized semantics it is subsumed by
   rigidity — a rigid `μ` on a declared arrow cannot absorb an intrinsic atom.
 
-**Known residual (#817).** One identification is *deliberately admitted*: a method
+**Former residual (#817) — RETIRED with #823.** One identification *was* deliberately admitted: a method
 effect variable unifying with an **instance-head effect parameter** (`impl Mappable
 (Async e)`, whose `Suspend` arm stores the callback and thereby forces the method's
 `e'` ≈ the head's `e`). It is a real laundering channel — the callback's effect is
@@ -563,8 +563,11 @@ container's row, so rejecting the identification would outlaw effect-polymorphic
 data's shipped functor/monad instances outright. The resolution is design-scoped and
 owned by #817 — and now specified: **graded interfaces** (below, and #820) make the
 container's index absorb the callback row by signature shape, after which this
-exception retires. The type-variable half has **no** such exception (a method type
-variable may never alias an instance-head type variable).
+exception retires — and has: `stdlib/async.mdk` implements the `Deferred*`
+family, and a method effect variable identified with an instance-head row
+parameter is now `T-IMPL-TOO-SPECIFIC` (`aliasesHeadRowMsg`). The type-variable
+half never had such an exception (a method type variable may never alias an
+instance-head type variable).
 
 Two deliberate design notes. **First**, rigidity is an over-approximation in one corner:
 an atom entering a rigid `μ` at a *purely contravariant* occurrence (the impl returns a
