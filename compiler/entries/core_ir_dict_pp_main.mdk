@@ -17,7 +17,7 @@ import types.typecheck.{
 }
 import eval.eval.{funNamesOf, dropShadowedExp}
 import ir.core_ir_lower.{lowerProgram}
-import ir.core_ir_eval.{cevalMain}
+import ir.core_ir_eval.{cevalMainOf}
 import entries.entry_support.{driveRuntime}
 
 main = driveRuntime emit
@@ -32,8 +32,5 @@ runDict runtimeDecls preludeDecls userDecls =
   let livePrelude = dropShadowedExp userNames preludeDecls
   let combined = livePrelude ++ userDecls
   let dictNames = preludeReturnPosDictNames livePrelude combined ++ preludeArgPosDictNames livePrelude combined ++ constrainedSigNames userDecls
-  cevalMain (lowerProgram (elaborateDict
-    runtimeDecls
-    dictNames
-    userNames
-    combined))
+  let decls = elaborateDict runtimeDecls dictNames userNames combined
+  cevalMainOf decls (lowerProgram decls)

@@ -57,8 +57,6 @@ import ir.core_ir.{
 }
 import eval.eval.{
   buildCtorToType,
-  buildCtorFieldOrders,
-  ctorFieldOrdersRef,
   installDispatchTables,
   lookupPositions,
   tyvarsInArgs,
@@ -620,7 +618,6 @@ lowerStmt _ = panic "core_ir lower: unsupported block statement"
 export
 lowerProgram : List Decl -> CProgram
 lowerProgram prog =
-  ctorFieldOrdersRef := buildCtorFieldOrders prog
   CProgram
     (lowerGroups prog)
     (ctorArities prog)

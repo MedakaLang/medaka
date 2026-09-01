@@ -16,7 +16,7 @@ import types.annotate.{annotateProgram}
 import ir.core_ir_lower.{lowerProgram}
 import ir.core_ir_sexp.{cprogramToSexp}
 import ir.core_ir_sexp_parse.{parseCProgram}
-import ir.core_ir_eval.{cevalMain}
+import ir.core_ir_eval.{cevalMainOf}
 
 main = match args ()
   [targetPath] => withTarget targetPath
@@ -25,8 +25,12 @@ main = match args ()
 withTarget : String -> <IO> Unit
 withTarget targetPath = match readFile targetPath
   Ok src =>
-    let prog = lowerProgram (annotateProgram (desugar (parse src)))
+    let decls = annotateProgram (desugar (parse src))
+    let prog = lowerProgram decls
     let sexp = cprogramToSexp prog
     let prog2 = parseCProgram sexp
-    putStrLn (cevalMain prog2)
+    -- the round-tripped `prog2` is evaluated, but the interpreter's ctor
+    -- field-order table is seeded from the SAME decls that produced `prog` —
+    -- the serialization carries no DData, so it cannot re-derive the table.
+    putStrLn (cevalMainOf decls prog2)
   Err msg => ePutStrLn msg
