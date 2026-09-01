@@ -103,6 +103,18 @@ test/cli_conformance_census    derived CLI conformance census (#2354, S-conforma
                                 help/parse-arm agreement gate; this is the map that slice
                                 works from. See the script header.
 
+test/comment_register_census   derived comment-register census (#2281, comment-register
+                                sprint, `make comment-register-census`): counts the
+                                comment-register classes (dead-path lib/*.ml citations,
+                                tombstones, ruling vocabulary, history narration, draft
+                                self-correction, dead deictics, emoji shouts) over
+                                compiler/ and stdlib/ — pure grep/awk, no built ./medaka
+                                needed. Always exits 0 and asserts nothing: it counts
+                                CLASSES, deliberately never a percentage or a length
+                                ratchet (#2281's review: a length ratchet teaches short
+                                bad comments). The burn-down instrument the later slices
+                                of the sprint are measured against. See the script header.
+
 # ── sqlite (the GATES are sqlite/test/*_oracle.sh — those are in the `sqlite` shard) ──
 # Self-described, in its own header: "it is a status report, not a gate". It prints
 # OPEN/FIXED per known compiler bug and exits 0 unconditionally. Asserts nothing.
