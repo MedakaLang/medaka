@@ -41,8 +41,8 @@
    clock and is deterministic here for the same reason. -}
 
 import json.{Json(..), jArray, jObject, lookup, stringify}
-import string.{fromUtf8, split, toInt, toUtf8}
-import lib.atsyntax.{validateAtIdentifier, validateHandle}
+import string.{fromUtf8, split, toInt, toLower, toUtf8}
+import lib.atsyntax.{validateAtIdentifier, validateDid, validateHandle}
 import lib.cid.{Cid, cidEqual, cidForDagCbor, cidFromString, cidToString}
 import lib.dagcbor.{DagCbor, dagCborEncode}
 import lib.http.{Header, QueryParam(..), Response, makeHeader, makeResponse}
@@ -62,6 +62,7 @@ import lib.repo.{
   repoMutationCommit,
   repoMutationState,
   repoUpdate,
+  validateCollection,
 }
 import lib.server_core.{
   Account,
@@ -167,11 +168,18 @@ requiredString name body = match lookup name body
   Some (JString value) => Ok value
   Some _ => Err (invalidRequest "Request field '\{name}' must be a string")
 
+{- | An OPTIONAL lexicon string field. Absent means absent; an explicit JSON
+   `null` does NOT. None of the fields this admits is nullable in its lexicon,
+   so `null` is a malformed value for a declared-string field and is rejected
+   exactly like a number or an object would be — reading it as "absent" would
+   silently accept a body the lexicon forbids. (`swapRecord` IS three-valued
+   and reads its own `null`; see `checkSwapRecord`.) -}
 optionalString : String -> Json -> Result Response (Option String)
 optionalString name body = match lookup name body
   None => Ok None
-  Some JNull => Ok None
   Some (JString value) => Ok (Some value)
+  Some JNull =>
+    Err (invalidRequest "Request field '\{name}' must be a string, not null")
   Some _ => Err (invalidRequest "Request field '\{name}' must be a string")
 
 {- | `validate: true` asks for lexicon record validation, which this server
@@ -191,6 +199,17 @@ requireConfiguredRepo store = match storeRepo store
     Err (repoNotFound "No account repository is configured on this server")
   Some repo => Ok repo
 
+{- | Handle equality. atproto handles are DOMAIN NAMES, so they are compared
+   case-insensitively: the official interop corpus admits `A.ISI.EDU`,
+   `XX.LCS.MIT.EDU` and `SRI-NIC.ARPA` as valid handles
+   (`pds/test/vectors/interop_handle_valid.txt` lines 2-4), and those name the
+   same account as their lowercase spellings. `validateHandle` admits only
+   ASCII, which is exactly the range `toLower` folds (issue #417), so the fold
+   is total here. DIDs are NOT folded — a DID is case-SENSITIVE (a `did:key`
+   identifier is base58, where case carries bits). -}
+sameHandle : String -> String -> Bool
+sameHandle left right = toLower left == toLower right
+
 {- | A repository-naming request field must be an admitted at-identifier naming
    the one account this server hosts. Admission is `lib.atsyntax`'s, which is
    the graded validator. The field is named because the write lexicons spell it
@@ -200,7 +219,21 @@ requireHostedIdentifier field account target = do
   () <- match validateAtIdentifier target
     Err message => Err (invalidRequest "Request field '\{field}' is not a valid at-identifier: \{message}")
     Ok () => Ok ()
-  if target == accountDid account || target == accountHandle account then
+  if target == accountDid account || sameHandle target (accountHandle account) then
+    Ok ()
+  else
+    Err (repoNotFound "This server does not host the repository '\{target}'")
+
+{- | The `com.atproto.sync.*` lexicons declare their `did` parameter as a DID,
+   not an at-identifier: a handle is not an accepted spelling there. This is
+   the DID-only counterpart of `requireHostedIdentifier`. -}
+requireHostedDid : Account -> String -> Result Response Unit
+requireHostedDid account target = do
+  () <- match validateDid target
+    Err message =>
+      Err (invalidRequest "Query parameter 'did' must be a DID: \{message}")
+    Ok () => Ok ()
+  if target == accountDid account then
     Ok ()
   else
     Err (repoNotFound "This server does not host the repository '\{target}'")
@@ -296,12 +329,19 @@ commitJson commit = jObject
     ("rev", JString (tidToString (repoCommitTid commit))),
   ]
 
+{- | `validationStatus` is always `"unknown"`, and that is not a placeholder.
+   `requireNoLexiconValidation` REFUSES `validate: true` outright, so every
+   write this server accepts is one it stored without grading against a
+   lexicon. `"valid"` would claim a check that never ran; omitting the field
+   would leave a client unable to tell an unvalidated write from a validated
+   one. -}
 writeOutput : Account -> String -> String -> Cid -> RepoCommit -> Json
 writeOutput account collection rkey recordCid commit = jObject
   [
     ("uri", JString "at://\{accountDid account}/\{collection}/\{rkey}"),
     ("cid", JString (cidToString recordCid)),
     ("commit", commitJson commit),
+    ("validationStatus", JString "unknown"),
   ]
 
 deleteOutput : RepoCommit -> Json
@@ -363,6 +403,20 @@ applyPutRecord account store body = do
       writeOutput account collection rkey (cidForDagCbor bytes) (repoMutationCommit mutation),
     )
 
+{- | `deleteRecord` is IDEMPOTENT: atproto's contract is that deleting a record
+   that is not there succeeds. A caller that retries a delete whose response it
+   never saw must not be told the second attempt failed.
+
+   The no-op is a genuine no-op, not a delete of nothing: the repository is
+   returned UNCHANGED, so no commit is signed and the revision does not
+   advance — a delete that removed nothing has nothing to record. The response
+   is the ordinary success shape carrying the CURRENT commit.
+
+   Absence is the ONLY thing this forgives. The path still goes through
+   `currentRecordCid` -> `repoLookup` -> `lib.repo`'s `validatePath`, so a
+   malformed collection or record key is still rejected; and an explicit
+   `swapRecord` CID still fails `InvalidSwap` against a missing record, because
+   that caller asserted the record WAS there. -}
 applyDeleteRecord : Account -> Store -> Json -> Result Response (Repo, Json)
 applyDeleteRecord account store body = do
   () <- requireObject body
@@ -370,12 +424,17 @@ applyDeleteRecord account store body = do
   () <- requireHostedRepo account body
   collection <- requiredString "collection" body
   rkey <- requiredString "rkey" body
-  rev <- nextRevision repo
   let path = recordPath collection rkey
   () <- checkSwapCommit body repo
   () <- checkSwapRecord body path repo
-  mutation <- admitMutation (repoDelete path rev repo)
-  Ok (repoMutationState mutation, deleteOutput (repoMutationCommit mutation))
+  existing <- currentRecordCid path repo
+  match existing
+    None => Ok (repo, deleteOutput (repoLatestCommit repo))
+    Some _ => do
+      rev <- nextRevision repo
+      mutation <- admitMutation (repoDelete path rev repo)
+      Ok
+        (repoMutationState mutation, deleteOutput (repoMutationCommit mutation))
 
 finishWrite : Store -> Result Response (Repo, Json) -> (Store, Response)
 finishWrite store (Err response) = (store, response)
@@ -650,12 +709,28 @@ lastRkey fallback [] = fallback
 lastRkey _ [(rkey, _)] = rkey
 lastRkey fallback (_::rest) = lastRkey fallback rest
 
+{- | `listRecords` is the ONE collection-taking endpoint whose collection never
+   reaches `lib.repo`: every sibling builds a `collection/rkey` path that
+   `validatePath` grades, but this one only string-compares the name against
+   already-stored paths. Without this check a malformed collection answered
+   `{"records": []}` with a 200 — a syntactically impossible collection
+   reported as a real, empty one. The grading is `lib.repo`'s own
+   `validateCollection`, so admission here is byte-for-byte what `getRecord`
+   and the three writes apply. -}
+requireCollectionSyntax : String -> Result Response Unit
+requireCollectionSyntax collection =
+  let bytes = toUtf8 collection
+  match validateCollection bytes (arrayLength bytes)
+    Err message => Err (invalidRequest "Query parameter 'collection' is not a valid collection NSID: \{message}")
+    Ok () => Ok ()
+
 applyListRecords : Account -> Store -> List QueryParam -> Result Response Json
 applyListRecords account store params = do
   repo <- requireConfiguredRepo store
   target <- requiredParam "repo" params
   () <- requireHostedIdentifier "repo" account target
   collection <- requiredParam "collection" params
+  () <- requireCollectionSyntax collection
   limit <- requireLimit params
   ascending <- requireReverse params
   cursor <- optionalParam "cursor" params
@@ -706,7 +781,7 @@ applyGetRepo : Account -> Store -> List QueryParam -> Result Response Response
 applyGetRepo account store params = do
   repo <- requireConfiguredRepo store
   target <- requiredParam "did" params
-  () <- requireHostedIdentifier "did" account target
+  () <- requireHostedDid account target
   () <- rejectUnimplementedParam "since" params
   match repoExportCar repo
     Err message => Err (invalidRequest "Repository export rejected: \{message}")
@@ -718,7 +793,7 @@ applyGetLatestCommit : Account -> Store -> List QueryParam -> Result Response Js
 applyGetLatestCommit account store params = do
   repo <- requireConfiguredRepo store
   target <- requiredParam "did" params
-  () <- requireHostedIdentifier "did" account target
+  () <- requireHostedDid account target
   let commit = repoLatestCommit repo
   Ok (jObject
     [
@@ -736,7 +811,7 @@ applyResolveHandle account params = do
   () <- match validateHandle handle
     Err message => Err (invalidRequest "Query parameter 'handle' is not a valid handle: \{message}")
     Ok () => Ok ()
-  if handle == accountHandle account then
+  if sameHandle handle (accountHandle account) then
     Ok (jObject [("did", JString (accountDid account))])
   else
     Err (handleNotFound "Unable to resolve handle '\{handle}'")
