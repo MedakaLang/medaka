@@ -4219,12 +4219,15 @@ mapRequireOcc f (r@(Require { requireHead = n, requireOrigin = o })) =
 -- The three occurrences that are DECL FIELDS rather than `Ty` positions, so no
 -- `Ty`-callback can reach them: `DInterface.supers`, `DImpl.reqs`, `DImpl.iface`.
 --
--- 🚨 Every arm names a label NO SIBLING CONSTRUCTOR HAS (`ifaceOrigin` for
--- `DInterface`, `implOrigin` for `DImpl`) — a record pattern matches by LABEL SET
--- with the constructor DISCARDED under the interpreter, so an arm keyed on the
--- shared `methods` would take `DImpl` values into the `DInterface` arm on `run`
--- while the built binary compared correctly.  See `frontend/ast.mdk`'s `Decl`
--- comment for the measured run≠build table.
+-- ⚠️ Every arm names a label NO SIBLING CONSTRUCTOR HAS (`ifaceOrigin` for
+-- `DInterface`, `implOrigin` for `DImpl`).  That USED to be a correctness
+-- requirement — the interpreter's record match discarded the constructor, so an
+-- arm keyed on the shared `methods` took `DImpl` values into the `DInterface` arm
+-- on `run` while the built binary compared correctly.  Fixed by #1217/#1462:
+-- `matchPat`'s `VRecord` arm (`eval/eval.mdk`) compares `ctor == ctor2` before it
+-- looks at any field, so these arms are safe on their constructors alone.  Keep
+-- the discipline as defensive style — it keeps each arm legible.  See
+-- `frontend/ast.mdk`'s `Decl` comment for the authoritative statement.
 --
 -- ⚠️ The `DAttrib` arm is load-bearing for the same reason `stampDeclOrigin`'s is:
 -- `@deprecated`/`@inline` WRAP the decl they annotate, so a `@must_use impl …`

@@ -665,22 +665,24 @@ public export data Ty =
   -- 🚨 Match it as a PARTIAL record pattern naming only the fields you want —
   -- `TyCon { tyConName = n }`.  A partial pattern already tolerates fields added
   -- later (`desugarPat`/`lookupRecField`, `frontend/exhaust.mdk`, fill every
-  -- unmentioned field with `PWild`), so the `...` rest marker buys NOTHING here
-  -- and costs the exhaustiveness check: `desugarPat _ (PRec _ _ True) = PWild`
-  -- collapses a `...` pattern to a CATCH-ALL, which would silently make every
-  -- `Ty` match in the compiler trivially "exhaustive" and turn a future
-  -- missing-constructor error into a runtime match failure (#1217).
+  -- unmentioned field with `PWild`), so the `...` rest marker buys NOTHING here.
+  -- It no longer COSTS anything either: the `desugarPat _ (PRec _ _ True) =
+  -- PWild` arm that collapsed a `...` pattern to a CATCH-ALL was REMOVED by
+  -- `S-record-pattern-identity` (#1217/#1462).  The one live arm is
+  -- `desugarPat oracle (PRec name fields _)` (`frontend/exhaust.mdk`), which
+  -- lowers the open form to a constructor-tagged row like any other record
+  -- pattern.  Prefer the partial form for legibility, not for safety.
   --
-  -- ⚠️ THAT IS ONLY HALF OF #1217, AND THE HALF THIS NODE HAPPENS TO BE IMMUNE TO
-  -- IS NOT IMMUNE ELSEWHERE.  A record pattern matches by LABEL SET, not by
-  -- constructor — see the full mechanism in the `Decl` comment below, which is
-  -- the authoritative statement.  `TyCon` gets away with a bare `{ tyConName }`
-  -- ONLY because it is the sole record-form constructor of `Ty`, so it has no
-  -- siblings to be confused with; the safety is a property of THIS TYPE, not of
-  -- partial patterns.  ⚠️ Do NOT carry `TyCon {}` (which this line used to offer)
-  -- to a type with siblings: naming zero labels is a catch-all.  An earlier
-  -- version of this paragraph generalised the wrong property and ~50 sites and
-  -- one PR were written on it.
+  -- ✅ THE OTHER HALF OF #1217 IS FIXED TOO.  A record pattern matches by
+  -- CONSTRUCTOR first and by label set second — see the full mechanism in the
+  -- `Decl` comment below, which is the authoritative statement.  `TyCon` is the
+  -- sole record-form constructor of `Ty`, so it never had siblings to be
+  -- confused with in the first place; post-carrier that is no longer what makes
+  -- it safe.  `TyCon {}` — naming zero labels — matches ONLY `TyCon`, and the
+  -- same now holds for a bare `{}` pattern on any type WITH siblings.  An
+  -- earlier version of this paragraph asserted the opposite and ~50 sites and
+  -- one PR were written on it; the "name a discriminating label" discipline it
+  -- urged is now defensive style, not a correctness requirement.
   | TyCon {
       tyConName : String,
       tyConLoc : Option Loc,
@@ -736,8 +738,10 @@ tyConBuiltin n l =
 --
 -- 🚨 Named-field record, and the `constraint` PREFIX is LOAD-BEARING — the
 -- field-namespace rule stated in full on `Ty.TyCon` above.  A bare `head`/`args`
--- would collide across records AND make this type's patterns match a `Require`
--- (a record pattern matches by LABEL SET, not by constructor).  Positional was
+-- would collide across records, which is the emitter wrong-slot hazard that rule
+-- exists for.  (It would NOT also make this type's patterns match a `Require`:
+-- since #1217/#1462 a record pattern matches by CONSTRUCTOR first — see the
+-- `Decl` comment below.)  Positional was
 -- not an option: a positional widening re-churns every pattern site again at the
 -- next field, whereas a partial record pattern tolerates added fields for free.
 public export data Constraint =
@@ -1572,23 +1576,27 @@ mapTyInDecl f (DBench pub n body) =
   let (b2, c) = mapTyInExpr f body
   (DBench pub n b2, c)
 -- ⚠️ PARTIAL record patterns, NO `...` rest marker.  This file's own `TyCon`
--- comment forbids it and #1217 is why: `desugarPat _ (PRec _ _ True) = PWild`
--- collapses a `...` pattern to a CATCH-ALL, so with it these two arms made the
--- whole `Decl` match trivially "exhaustive" and an unhandled constructor produced
--- NO diagnostic at all.  Reproduced on this binary: `f (DA { da_x, ... })` is
--- silent where `g (DA { da_x })` correctly reports `Missing case: 'DB _'`.  These
--- arrived here with the `...` in the move from `tools/codemod.mdk` and are fixed
--- in place; a partial pattern already tolerates fields added later, so the marker
--- bought nothing.
--- ⚠️ DROPPING THE MARKER IS NOT SUFFICIENT, and this comment used to imply it was.
--- That covers only #1217's EXHAUSTIVENESS half; the MATCHING half is that a record
--- pattern is keyed on its LABEL SET with the constructor discarded, so an arm must
--- also name a label no sibling has.  The `Decl` comment above has the mechanism.
--- ⚠️ `ifaceOrigin = _` for the same reason `annotateDecl` needs it: `methods` is
--- shared with `DImpl`, whose arm is BELOW, so a label-keyed match on `methods`
--- alone sends every `DImpl` here under the interpreter.  Pre-existing (it arrived
--- with the move from `tools/codemod.mdk`); narrowed here because this is the file
--- that states the rule.  The tree has more of them — see the `Decl` comment.
+-- comment prefers it that way, and #1217 is the history: the
+-- `desugarPat _ (PRec _ _ True) = PWild` arm USED TO collapse a `...` pattern to a
+-- CATCH-ALL, so with it these two arms made the whole `Decl` match trivially
+-- "exhaustive" and an unhandled constructor produced NO diagnostic at all
+-- (measured then: `f (DA { da_x, ... })` silent where `g (DA { da_x })` correctly
+-- reported `Missing case: 'DB _'`).  That arm was REMOVED by
+-- `S-record-pattern-identity` (#1217/#1462); the one live lowering is
+-- `desugarPat oracle (PRec name fields _)` in `frontend/exhaust.mdk`, which keeps
+-- the constructor for the open form too.  These patterns arrived here with the
+-- `...` in the move from `tools/codemod.mdk` and were fixed in place; a partial
+-- pattern already tolerates fields added later, so the marker bought nothing
+-- either way.
+-- ✅ #1217's MATCHING half is fixed too: a record pattern is keyed on its
+-- CONSTRUCTOR first and on its label set second, so an arm no longer HAS to name a
+-- label no sibling has in order to reach the right value.  The `Decl` comment
+-- above has the mechanism.
+-- ⚠️ `ifaceOrigin = _` is kept as defensive style, but the reason this comment
+-- used to give for it is dead.  `methods` is a label `DImpl` also has, with its arm
+-- BELOW — yet a `DImpl` value can no longer take this arm, because the match
+-- compares the constructor.  Pre-existing (it arrived with the move from
+-- `tools/codemod.mdk`); harmless to keep, not a requirement to replicate.
 mapTyInDecl f (d@(DInterface { ifaceOrigin = _, methods })) =
   let (ms2, c) = mapIfaceMethodsB f methods
   (DInterface { d | methods = ms2 }, c)

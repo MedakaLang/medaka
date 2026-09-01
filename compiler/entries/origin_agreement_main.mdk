@@ -536,12 +536,13 @@ carrierLines ((tag, n)::rest) = "iface-occs-\{tag} \{n}\n\{carrierLines rest}"
 declHeads : List Decl -> List (String, TyConOrigin)
 declHeads decls = flatMap declHeadOf decls
 
--- 🚨 EVERY ARM NAMES A LABEL NO SIBLING CONSTRUCTOR HAS, and that is a correctness
--- requirement here, not a style note: a record pattern matches by LABEL SET, not by
--- constructor (`frontend/ast.mdk`'s rule, and the run≠build divergence at exit 0
--- that motivates it).  The four `…Origin` fields are prefixed per constructor, so
--- they are unique BY CONSTRUCTION — which is why each arm keys on the origin field
--- it is here to read rather than on the name field it also needs.
+-- ⚠️ EVERY ARM NAMES A LABEL NO SIBLING CONSTRUCTOR HAS.  That was a correctness
+-- requirement when a record pattern matched by label set with the constructor
+-- discarded, producing a run≠build divergence at exit 0; #1217/#1462 fixed it, so
+-- today it is DEFENSIVE STYLE (`frontend/ast.mdk`'s `Decl` comment states the rule
+-- and the fix).  The four `…Origin` fields are prefixed per constructor, so they
+-- are unique BY CONSTRUCTION — which is why each arm keys on the origin field it is
+-- here to read rather than on the name field it also needs.
 --
 -- ⚠️ The `DAttrib` arm is load-bearing for the same reason `stampDeclOrigin`'s is:
 -- `@deprecated`/`@inline` WRAP the decl they annotate, so a `@must_use data Foo`
