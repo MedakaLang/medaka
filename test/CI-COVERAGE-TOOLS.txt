@@ -119,6 +119,25 @@ test/diag_census               derived error-quality conformance census (#2446, 
                                 test/diff_compiler_error_quality_baseline.sh. See the
                                 script header.
 
+test/first_hour_census         mutation census over the docs guide corpus, ranked by
+                                first-hour reachability (#2446, S-first-hour-rank,
+                                `make first-hour-census`): extracts every checkable
+                                ```medaka / ```medaka-project example via
+                                test/check_syntax_examples.sh's own SYNTAX_EXTRACT_DIR
+                                seam, applies a small fixed set of "plausible beginner
+                                mistake" mutations (drop a closing paren/brace, drop an
+                                import line, drop a match-arm, typo an identifier,
+                                remove one indent level) to each, runs
+                                `medaka check --json` on every mutant, and tabulates
+                                which diagnostic CODE fires how often — except the
+                                P-PARSE umbrella, ranked by MESSAGE TEXT instead (F8:
+                                60 `failP` sites collapse to one code). A mutant that
+                                type-checks clean is its own SILENT-ACCEPT bucket.
+                                Always exits 0 and asserts nothing; sibling of
+                                test/diag_census, not a rewrite of it — different
+                                corpus (docs, not hand-authored fixtures) and a
+                                mutation step in between. See the script header.
+
 # ── sqlite (the GATES are sqlite/test/*_oracle.sh — those are in the `sqlite` shard) ──
 # Self-described, in its own header: "it is a status report, not a gate". It prints
 # OPEN/FIXED per known compiler bug and exits 0 unconditionally. Asserts nothing.

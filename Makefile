@@ -13,7 +13,7 @@
 MEDAKA_SCRATCH ?= /var/tmp/medaka-scratch
 export TMPDIR := $(shell mkdir -p $(MEDAKA_SCRATCH) 2>/dev/null && echo $(MEDAKA_SCRATCH) || echo /tmp)
 
-.PHONY: medaka emitter seed bootstrap seed-health check-self test gates snapshot-check preflight ci clean help docs-links docs-index gen-ci agent-doc-symbols pr-helper-test fmt-clean-census cli-conformance-census diag-census
+.PHONY: medaka emitter seed bootstrap seed-health check-self test gates snapshot-check preflight ci clean help docs-links docs-index gen-ci agent-doc-symbols pr-helper-test fmt-clean-census cli-conformance-census diag-census first-hour-census
 
 ## medaka  — build the native OCaml-free `medaka` CLI (CANONICAL).
 ##           WARM (./medaka_emitter present): 2-stage rebuild from current source,
@@ -211,6 +211,16 @@ cli-conformance-census: medaka
 ##           enforcing check is test/diff_compiler_error_quality_baseline.sh.
 diag-census: medaka
 	sh test/diag_census.sh
+
+## first-hour-census — mutation census over the docs guide corpus, ranked by
+##           first-hour reachability (extract every checkable guide example,
+##           apply a small set of beginner-mistake mutations, tabulate which
+##           diagnostic code — or, for P-PARSE, which message text — fires
+##           how often). Derived, not hand-maintained — see
+##           test/first_hour_census.sh's header. Needs a built ./medaka.
+##           Always exits 0: a census, not a gate.
+first-hour-census: medaka
+	sh test/first_hour_census.sh
 
 ## clean   — remove native build artifacts (keeps the checked-in seed)
 clean:
