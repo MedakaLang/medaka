@@ -8897,8 +8897,8 @@ typeMismatchReport a b = match !currentMethodMismatch
 -- "route", "RNone" or a tyvar id), ACTIONABLE (two concrete edits, the first of which
 -- always works), CATEGORIZED (its own code, registered in DIAGNOSTIC-CODES-DESIGN.md).
 pinnedLocalMismatch : (Mono, String, String, Option Loc) -> Mono -> Mono -> Unit
-pinnedLocalMismatch (_, name, iface, loc) a b =
-  pinnedLocalReport name iface loc "\{ppMono a} and \{ppMono b}"
+pinnedLocalMismatch (stored, name, iface, loc) a b =
+  pinnedLocalReport name iface loc (pinnedTwoTypes stored a b)
 
 -- #1986 rung 2: the ONE place that renders a pinned local's rejection, shared by both
 -- channels that can detect it — the ordinary unification failure (pinnedLocalMismatch)
@@ -17334,38 +17334,119 @@ tvarMonoOfIn t id = optionOr t (findTvarInMono t id)
 -- `where` case (measured — it fell back to a bare `Type mismatch: String vs Bool`).
 -- Same-file plus the grounding and uniqueness tests carry the precision instead.
 pinnedLocalExplain : Mono -> Mono -> Option (Mono, String, String, Option Loc)
-pinnedLocalExplain a b = match filterList (e => pinnedEntryMatches e a b) perRun.value.pinnedLocals.value
-  [] => None
-  first::rest =>
-    if allList (e => pinnedEntryName e == pinnedEntryName first) rest then
-      Some first
-    else
-      None
+pinnedLocalExplain a b = pinnedUniqueEntry (filterList
+  (e => pinnedEntryMatches e a b)
+  perRun.value.pinnedLocals.value)
+
+-- #1986 rung 2, Cause A: the ONE-TYPE form of the same query.  The numeric-literal
+-- reframe channel (`reportNumOrNoImpl`) never reaches the unifier's two-type failure —
+-- the literal's var unifies with the grounded pin and it is the residual `Num T`
+-- OBLIGATION that fails — so it has exactly one concrete type in hand.  Same entries,
+-- same guards, one side instead of two.
+pinnedLocalExplainOne : Option Loc -> Mono -> Option (Mono, String, String, Option Loc)
+pinnedLocalExplainOne eloc t = pinnedUniqueEntry (filterList
+  (e => pinnedEntryMatchesAt e eloc t)
+  perRun.value.pinnedLocals.value)
+
+-- exactly ONE BINDING may qualify — see pinnedLocalExplain's note.  The test is on the
+-- binding NAME, not the entry count (a multi-constraint callee records one note PER VAR).
+pinnedUniqueEntry : List (Mono, String, String, Option Loc) -> Option (Mono, String, String, Option Loc)
+pinnedUniqueEntry [] = None
+pinnedUniqueEntry (first::rest) =
+  if allList (e => pinnedEntryName e == pinnedEntryName first) rest then
+    Some first
+  else
+    None
 
 pinnedEntryName : (Mono, String, String, Option Loc) -> String
 pinnedEntryName (_, name, _, _) = name
 
 pinnedEntryMatches : (Mono, String, String, Option Loc) -> Mono -> Mono -> Bool
-pinnedEntryMatches (stored, _, _, loc) a b =
+pinnedEntryMatches e a b = pinnedEntryMatchesAt e !currentLoc a
+  || pinnedEntryMatchesAt e !currentLoc b
+
+-- ⚠️ #1986 rung 2: condition (c) is REACHABILITY, not rendering EQUALITY.  It used to
+-- demand `ppMono g == ppMono a || ppMono g == ppMono b`, and that silently declined
+-- every collision one level BELOW the pinned head: `let s = v => speak v` used at
+-- `Box Bool` and `Box String` grounds the pin to `Box Bool` and fails as `Bool` vs
+-- `String`, so the exact-rendering test said "not about this pin" about the one pin it
+-- was about, and the shape fell back to a bare `Type mismatch` while the SAME program
+-- with unwrapped heads (`Dog`/`Cat`) got the located diagnostic.  "One of the two sides
+-- occurs somewhere inside the grounded pinned type" is the same question asked at every
+-- depth; every other guard (grounded head, same file, one responsible binding) is
+-- unchanged, and those are what carry the precision.
+pinnedEntryMatchesAt : (Mono, String, String, Option Loc) -> Option Loc -> Mono -> Bool
+pinnedEntryMatchesAt (stored, _, _, loc) eloc t =
   let g = normalize stored
   match headTyconNameMono g
     None => False
-    Some _ => (ppMono g == ppMono a || ppMono g == ppMono b)
-      && locSameFileAsError loc
+    Some _ => monoReaches g t && locSameFileAs loc eloc
+
+-- True iff [x]'s rendering occurs anywhere inside [g] — at the root (the pre-#1986
+-- behaviour) or in any type-argument / arrow position below it.
+monoReaches : Mono -> Mono -> Bool
+monoReaches g x = monoReachesGo (normalize g) (ppMono x)
+
+monoReachesGo : Mono -> String -> Bool
+monoReachesGo g target
+  | ppMono g == target = True
+  | otherwise = match g
+    TApp f a => monoReachesGo (normalize f) target
+      || monoReachesGo (normalize a) target
+    TFun p _ r => monoReachesGo (normalize p) target
+      || monoReachesGo (normalize r) target
+    _ => False
+
+-- [g] with every subterm rendering as [target] replaced by [rep].  Used ONLY to render
+-- the OTHER type a pinned binding was used at: when the collision is one level inside
+-- the pin (`Box Bool` grounded, `Bool` vs `String` reported), the two types the user
+-- actually wrote are `Box Bool` and `Box String`, and saying "used at two different
+-- types (Bool and String)" would be a true statement about the wrong pair.
+monoReplaceReached : Mono -> String -> Mono -> Mono
+monoReplaceReached g target rep = monoReplaceReachedGo (normalize g) target rep
+
+monoReplaceReachedGo : Mono -> String -> Mono -> Mono
+monoReplaceReachedGo g target rep
+  | ppMono g == target = rep
+  | otherwise = match g
+    TApp f a =>
+      TApp (monoReplaceReached f target rep) (monoReplaceReached a target rep)
+    TFun p e r => TFun (monoReplaceReached p target rep) e (monoReplaceReached r target rep)
+    other => other
+
+-- the two types the pinned binding was USED AT, rendered.  When the pin's grounded type
+-- IS one of the colliding sides the pair is the collision itself (the pre-#1986 answer,
+-- byte-identical); when the collision is reachable one level inside it, the pair is the
+-- grounded type and the same type with the collision's other side substituted in.
+pinnedTwoTypes : Mono -> Mono -> Mono -> String
+pinnedTwoTypes stored a b = pinnedTwoTypesG (normalize stored) a b
+
+pinnedTwoTypesG : Mono -> Mono -> Mono -> String
+pinnedTwoTypesG g a b
+  | ppMono g == ppMono a || ppMono g == ppMono b = "\{ppMono a} and \{ppMono b}"
+  | monoReaches g a =
+    "\{ppMono g} and \{ppMono (monoReplaceReached g (ppMono a) b)}"
+  | monoReaches g b =
+    "\{ppMono (monoReplaceReached g (ppMono b) a)} and \{ppMono g}"
+  | otherwise = "\{ppMono a} and \{ppMono b}"
 
 -- the binding and the error are in the same file.  An absent loc on either side ⇒ we
 -- cannot establish the relation ⇒ False (fall through to the plain mismatch).
 locSameFileAsError : Option Loc -> Bool
-locSameFileAsError (Some (Loc bf _ _ _ _)) = match !currentLoc
-  Some (Loc ef _ _ _ _) => bf == ef
-  None => False
+locSameFileAsError loc = locSameFileAs loc !currentLoc
+
+locSameFileAs : Option Loc -> Option Loc -> Bool
+locSameFileAs (Some (Loc bf _ _ _ _)) (Some (Loc ef _ _ _ _)) = bf == ef
+-- No ERROR loc to relate the binding to ⇒ same as before: we cannot establish the
+-- relation, so fall through to the plain mismatch.
+locSameFileAs (Some _) None = False
 -- No binding loc (an unwrapped where-clause RHS) ⇒ we cannot run the same-file test,
 -- so we let the remaining guards (concrete grounding, rendering match, one responsible
 -- binding) carry it and report at the use site rather than suppressing the explanation
 -- entirely.  Suppressing was the earlier behaviour and it silently hid the diagnostic
 -- for every `where` helper — a guard that fires on the common case is worse than a
 -- guard that is slightly loose on a rare one.
-locSameFileAsError None = True
+locSameFileAs None _ = True
 
 monoUnboundIds : Mono -> List Int
 monoUnboundIds t = match normalize t
@@ -28446,15 +28527,37 @@ pushNoImplError iface loc args = match firstTupleCallHint args
 -- (`x + 1`, `1 + x`) keeps `No impl of Num for T` — the `+` is the real culprit.
 reportNumOrNoImpl : String -> List Mono -> Option Loc -> Unit
 reportNumOrNoImpl iface args loc
-  | iface == "Num" && numlitReframeLoc loc =
-    let hint = numlitMismatchHint loc args
-    pushTypeErrorHelpFixAt
-      "T-TYPE-MISMATCH"
-      loc
-      (numlitMismatchMsg loc args ++ hint)
-      hint
-      None
+  | iface == "Num" && numlitReframeLoc loc = reportNumlitMismatch args loc
   | otherwise = pushNoImplError iface loc args
+
+-- #1986 rung 2 (Cause A).  A pinned local used at a bare numeric literal and at some
+-- other type does NOT fail in the unifier: the literal's var unifies with the grounded
+-- pin, and it is the residual `Num T` obligation that has nowhere to go.  So this
+-- channel — not `typeMismatchReport` — is where `let s = v => speak v; s 1 ... s True`
+-- lands, and it used to print `Type mismatch: Int literal vs Bool` caretted on the `1`,
+-- while the SAME program with a non-literal `Int` got the located binding diagnostic.
+-- Same defect, same binding, different channel ⇒ same voice.  Guarded strictly on "this
+-- obligation's type IS a pinned local's" (`pinnedLocalExplainOne`, which carries the
+-- grounded-head, same-file and one-responsible-binding tests): with no pinned entry the
+-- filter is empty and every ordinary literal mismatch in the tree keeps its message
+-- byte for byte.
+-- Scoped to a ONE-type goal: `Num` is 1-ary, and the substituted rendering
+-- `pinnedTwoTypes` builds is only meaningful against a single losing type.
+reportNumlitMismatch : List Mono -> Option Loc -> Unit
+reportNumlitMismatch [t] loc = match pinnedLocalExplainOne loc t
+  Some (stored, name, iface, bloc) => pinnedLocalReport name iface bloc (pinnedTwoTypes stored (tconBuiltin "Int") t)
+  None => numlitMismatchPush [t] loc
+reportNumlitMismatch args loc = numlitMismatchPush args loc
+
+numlitMismatchPush : List Mono -> Option Loc -> Unit
+numlitMismatchPush args loc =
+  let hint = numlitMismatchHint loc args
+  pushTypeErrorHelpFixAt
+    "T-TYPE-MISMATCH"
+    loc
+    (numlitMismatchMsg loc args ++ hint)
+    hint
+    None
 
 -- True iff [loc] is a literal-sourced Num obligation eligible for reframe: some
 -- literal was recorded at [loc] and that loc was NOT operator-tainted.

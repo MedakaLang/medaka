@@ -1,5 +1,5 @@
 # META
-source_lines=37995
+source_lines=38098
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -8901,8 +8901,8 @@ typeMismatchReport a b = match !currentMethodMismatch
 -- "route", "RNone" or a tyvar id), ACTIONABLE (two concrete edits, the first of which
 -- always works), CATEGORIZED (its own code, registered in DIAGNOSTIC-CODES-DESIGN.md).
 pinnedLocalMismatch : (Mono, String, String, Option Loc) -> Mono -> Mono -> Unit
-pinnedLocalMismatch (_, name, iface, loc) a b =
-  pinnedLocalReport name iface loc "\{ppMono a} and \{ppMono b}"
+pinnedLocalMismatch (stored, name, iface, loc) a b =
+  pinnedLocalReport name iface loc (pinnedTwoTypes stored a b)
 
 -- #1986 rung 2: the ONE place that renders a pinned local's rejection, shared by both
 -- channels that can detect it — the ordinary unification failure (pinnedLocalMismatch)
@@ -17338,38 +17338,119 @@ tvarMonoOfIn t id = optionOr t (findTvarInMono t id)
 -- `where` case (measured — it fell back to a bare `Type mismatch: String vs Bool`).
 -- Same-file plus the grounding and uniqueness tests carry the precision instead.
 pinnedLocalExplain : Mono -> Mono -> Option (Mono, String, String, Option Loc)
-pinnedLocalExplain a b = match filterList (e => pinnedEntryMatches e a b) perRun.value.pinnedLocals.value
-  [] => None
-  first::rest =>
-    if allList (e => pinnedEntryName e == pinnedEntryName first) rest then
-      Some first
-    else
-      None
+pinnedLocalExplain a b = pinnedUniqueEntry (filterList
+  (e => pinnedEntryMatches e a b)
+  perRun.value.pinnedLocals.value)
+
+-- #1986 rung 2, Cause A: the ONE-TYPE form of the same query.  The numeric-literal
+-- reframe channel (`reportNumOrNoImpl`) never reaches the unifier's two-type failure —
+-- the literal's var unifies with the grounded pin and it is the residual `Num T`
+-- OBLIGATION that fails — so it has exactly one concrete type in hand.  Same entries,
+-- same guards, one side instead of two.
+pinnedLocalExplainOne : Option Loc -> Mono -> Option (Mono, String, String, Option Loc)
+pinnedLocalExplainOne eloc t = pinnedUniqueEntry (filterList
+  (e => pinnedEntryMatchesAt e eloc t)
+  perRun.value.pinnedLocals.value)
+
+-- exactly ONE BINDING may qualify — see pinnedLocalExplain's note.  The test is on the
+-- binding NAME, not the entry count (a multi-constraint callee records one note PER VAR).
+pinnedUniqueEntry : List (Mono, String, String, Option Loc) -> Option (Mono, String, String, Option Loc)
+pinnedUniqueEntry [] = None
+pinnedUniqueEntry (first::rest) =
+  if allList (e => pinnedEntryName e == pinnedEntryName first) rest then
+    Some first
+  else
+    None
 
 pinnedEntryName : (Mono, String, String, Option Loc) -> String
 pinnedEntryName (_, name, _, _) = name
 
 pinnedEntryMatches : (Mono, String, String, Option Loc) -> Mono -> Mono -> Bool
-pinnedEntryMatches (stored, _, _, loc) a b =
+pinnedEntryMatches e a b = pinnedEntryMatchesAt e !currentLoc a
+  || pinnedEntryMatchesAt e !currentLoc b
+
+-- ⚠️ #1986 rung 2: condition (c) is REACHABILITY, not rendering EQUALITY.  It used to
+-- demand `ppMono g == ppMono a || ppMono g == ppMono b`, and that silently declined
+-- every collision one level BELOW the pinned head: `let s = v => speak v` used at
+-- `Box Bool` and `Box String` grounds the pin to `Box Bool` and fails as `Bool` vs
+-- `String`, so the exact-rendering test said "not about this pin" about the one pin it
+-- was about, and the shape fell back to a bare `Type mismatch` while the SAME program
+-- with unwrapped heads (`Dog`/`Cat`) got the located diagnostic.  "One of the two sides
+-- occurs somewhere inside the grounded pinned type" is the same question asked at every
+-- depth; every other guard (grounded head, same file, one responsible binding) is
+-- unchanged, and those are what carry the precision.
+pinnedEntryMatchesAt : (Mono, String, String, Option Loc) -> Option Loc -> Mono -> Bool
+pinnedEntryMatchesAt (stored, _, _, loc) eloc t =
   let g = normalize stored
   match headTyconNameMono g
     None => False
-    Some _ => (ppMono g == ppMono a || ppMono g == ppMono b)
-      && locSameFileAsError loc
+    Some _ => monoReaches g t && locSameFileAs loc eloc
+
+-- True iff [x]'s rendering occurs anywhere inside [g] — at the root (the pre-#1986
+-- behaviour) or in any type-argument / arrow position below it.
+monoReaches : Mono -> Mono -> Bool
+monoReaches g x = monoReachesGo (normalize g) (ppMono x)
+
+monoReachesGo : Mono -> String -> Bool
+monoReachesGo g target
+  | ppMono g == target = True
+  | otherwise = match g
+    TApp f a => monoReachesGo (normalize f) target
+      || monoReachesGo (normalize a) target
+    TFun p _ r => monoReachesGo (normalize p) target
+      || monoReachesGo (normalize r) target
+    _ => False
+
+-- [g] with every subterm rendering as [target] replaced by [rep].  Used ONLY to render
+-- the OTHER type a pinned binding was used at: when the collision is one level inside
+-- the pin (`Box Bool` grounded, `Bool` vs `String` reported), the two types the user
+-- actually wrote are `Box Bool` and `Box String`, and saying "used at two different
+-- types (Bool and String)" would be a true statement about the wrong pair.
+monoReplaceReached : Mono -> String -> Mono -> Mono
+monoReplaceReached g target rep = monoReplaceReachedGo (normalize g) target rep
+
+monoReplaceReachedGo : Mono -> String -> Mono -> Mono
+monoReplaceReachedGo g target rep
+  | ppMono g == target = rep
+  | otherwise = match g
+    TApp f a =>
+      TApp (monoReplaceReached f target rep) (monoReplaceReached a target rep)
+    TFun p e r => TFun (monoReplaceReached p target rep) e (monoReplaceReached r target rep)
+    other => other
+
+-- the two types the pinned binding was USED AT, rendered.  When the pin's grounded type
+-- IS one of the colliding sides the pair is the collision itself (the pre-#1986 answer,
+-- byte-identical); when the collision is reachable one level inside it, the pair is the
+-- grounded type and the same type with the collision's other side substituted in.
+pinnedTwoTypes : Mono -> Mono -> Mono -> String
+pinnedTwoTypes stored a b = pinnedTwoTypesG (normalize stored) a b
+
+pinnedTwoTypesG : Mono -> Mono -> Mono -> String
+pinnedTwoTypesG g a b
+  | ppMono g == ppMono a || ppMono g == ppMono b = "\{ppMono a} and \{ppMono b}"
+  | monoReaches g a =
+    "\{ppMono g} and \{ppMono (monoReplaceReached g (ppMono a) b)}"
+  | monoReaches g b =
+    "\{ppMono (monoReplaceReached g (ppMono b) a)} and \{ppMono g}"
+  | otherwise = "\{ppMono a} and \{ppMono b}"
 
 -- the binding and the error are in the same file.  An absent loc on either side ⇒ we
 -- cannot establish the relation ⇒ False (fall through to the plain mismatch).
 locSameFileAsError : Option Loc -> Bool
-locSameFileAsError (Some (Loc bf _ _ _ _)) = match !currentLoc
-  Some (Loc ef _ _ _ _) => bf == ef
-  None => False
+locSameFileAsError loc = locSameFileAs loc !currentLoc
+
+locSameFileAs : Option Loc -> Option Loc -> Bool
+locSameFileAs (Some (Loc bf _ _ _ _)) (Some (Loc ef _ _ _ _)) = bf == ef
+-- No ERROR loc to relate the binding to ⇒ same as before: we cannot establish the
+-- relation, so fall through to the plain mismatch.
+locSameFileAs (Some _) None = False
 -- No binding loc (an unwrapped where-clause RHS) ⇒ we cannot run the same-file test,
 -- so we let the remaining guards (concrete grounding, rendering match, one responsible
 -- binding) carry it and report at the use site rather than suppressing the explanation
 -- entirely.  Suppressing was the earlier behaviour and it silently hid the diagnostic
 -- for every `where` helper — a guard that fires on the common case is worse than a
 -- guard that is slightly loose on a rare one.
-locSameFileAsError None = True
+locSameFileAs None _ = True
 
 monoUnboundIds : Mono -> List Int
 monoUnboundIds t = match normalize t
@@ -28450,15 +28531,37 @@ pushNoImplError iface loc args = match firstTupleCallHint args
 -- (`x + 1`, `1 + x`) keeps `No impl of Num for T` — the `+` is the real culprit.
 reportNumOrNoImpl : String -> List Mono -> Option Loc -> Unit
 reportNumOrNoImpl iface args loc
-  | iface == "Num" && numlitReframeLoc loc =
-    let hint = numlitMismatchHint loc args
-    pushTypeErrorHelpFixAt
-      "T-TYPE-MISMATCH"
-      loc
-      (numlitMismatchMsg loc args ++ hint)
-      hint
-      None
+  | iface == "Num" && numlitReframeLoc loc = reportNumlitMismatch args loc
   | otherwise = pushNoImplError iface loc args
+
+-- #1986 rung 2 (Cause A).  A pinned local used at a bare numeric literal and at some
+-- other type does NOT fail in the unifier: the literal's var unifies with the grounded
+-- pin, and it is the residual `Num T` obligation that has nowhere to go.  So this
+-- channel — not `typeMismatchReport` — is where `let s = v => speak v; s 1 ... s True`
+-- lands, and it used to print `Type mismatch: Int literal vs Bool` caretted on the `1`,
+-- while the SAME program with a non-literal `Int` got the located binding diagnostic.
+-- Same defect, same binding, different channel ⇒ same voice.  Guarded strictly on "this
+-- obligation's type IS a pinned local's" (`pinnedLocalExplainOne`, which carries the
+-- grounded-head, same-file and one-responsible-binding tests): with no pinned entry the
+-- filter is empty and every ordinary literal mismatch in the tree keeps its message
+-- byte for byte.
+-- Scoped to a ONE-type goal: `Num` is 1-ary, and the substituted rendering
+-- `pinnedTwoTypes` builds is only meaningful against a single losing type.
+reportNumlitMismatch : List Mono -> Option Loc -> Unit
+reportNumlitMismatch [t] loc = match pinnedLocalExplainOne loc t
+  Some (stored, name, iface, bloc) => pinnedLocalReport name iface bloc (pinnedTwoTypes stored (tconBuiltin "Int") t)
+  None => numlitMismatchPush [t] loc
+reportNumlitMismatch args loc = numlitMismatchPush args loc
+
+numlitMismatchPush : List Mono -> Option Loc -> Unit
+numlitMismatchPush args loc =
+  let hint = numlitMismatchHint loc args
+  pushTypeErrorHelpFixAt
+    "T-TYPE-MISMATCH"
+    loc
+    (numlitMismatchMsg loc args ++ hint)
+    hint
+    None
 
 -- True iff [loc] is a literal-sourced Num obligation eligible for reframe: some
 -- literal was recorded at [loc] and that loc was NOT operator-tainted.
@@ -39225,7 +39328,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "typeMismatchReport" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))
 (DFunDef false "typeMismatchReport" ((PVar "a") (PVar "b")) (EMatch (EUnOp "!" (EVar "currentMethodMismatch")) (arm (PCon "Some" (PVar "mname")) () (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-METHOD-MISMATCH"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Method '")) (EApp (EVar "display") (EVar "mname"))) (ELit (LString "': expected type "))) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " but got "))) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString ""))))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "pinnedLocalExplain") (EVar "a")) (EVar "b")) (arm (PCon "Some" (PVar "entry")) () (EApp (EApp (EApp (EVar "pinnedLocalMismatch") (EVar "entry")) (EVar "a")) (EVar "b"))) (arm (PCon "None") () (EApp (EApp (EVar "typeMismatchReportRest") (EVar "a")) (EVar "b")))))))
 (DTypeSig false "pinnedLocalMismatch" (TyFun (TyTuple (TyCon "Mono") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit")))))
-(DFunDef false "pinnedLocalMismatch" ((PTuple PWild (PVar "name") (PVar "iface") (PVar "loc")) (PVar "a") (PVar "b")) (EApp (EApp (EApp (EApp (EVar "pinnedLocalReport") (EVar "name")) (EVar "iface")) (EVar "loc")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " and "))) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString "")))))
+(DFunDef false "pinnedLocalMismatch" ((PTuple (PVar "stored") (PVar "name") (PVar "iface") (PVar "loc")) (PVar "a") (PVar "b")) (EApp (EApp (EApp (EApp (EVar "pinnedLocalReport") (EVar "name")) (EVar "iface")) (EVar "loc")) (EApp (EApp (EApp (EVar "pinnedTwoTypes") (EVar "stored")) (EVar "a")) (EVar "b"))))
 (DTypeSig false "pinnedLocalReport" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Unit"))))))
 (DFunDef false "pinnedLocalReport" ((PVar "name") (PVar "iface") (PVar "loc") (PVar "twoTypes")) (EBlock (DoLet false false (PVar "help") (EBinOp "++" (EBinOp "++" (ELit (LString "give '")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "' a top-level definition instead — a top-level binding can be polymorphic in a constrained type, a local one cannot — or use it at one type only")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-LOCAL-CONSTRAINED-MONO"))) (EVar "loc")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "local binding '")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "' is used at two different types ("))) (EApp (EVar "display") (EVar "twoTypes"))) (ELit (LString "), but it cannot be polymorphic: "))) (EApp (EVar "display") (EApp (EVar "constraintPhrase") (EVar "iface")))) (ELit (LString ", and only top-level definitions can carry that constraint")))) (EVar "help")) (EVar "None")))))
 (DTypeSig false "constraintPhrase" (TyFun (TyCon "String") (TyCon "String")))
@@ -40889,14 +40992,36 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "tvarMonoOfIn" (TyFun (TyCon "Mono") (TyFun (TyCon "Int") (TyCon "Mono"))))
 (DFunDef false "tvarMonoOfIn" ((PVar "t") (PVar "id")) (EApp (EApp (EVar "optionOr") (EVar "t")) (EApp (EApp (EVar "findTvarInMono") (EVar "t")) (EVar "id"))))
 (DTypeSig false "pinnedLocalExplain" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyTuple (TyCon "Mono") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
-(DFunDef false "pinnedLocalExplain" ((PVar "a") (PVar "b")) (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EApp (EVar "pinnedEntryMatches") (EVar "e")) (EVar "a")) (EVar "b")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pinnedLocals") "value")) (arm (PList) () (EVar "None")) (arm (PCons (PVar "first") (PVar "rest")) () (EIf (EApp (EApp (EVar "allList") (ELam ((PVar "e")) (EBinOp "==" (EApp (EVar "pinnedEntryName") (EVar "e")) (EApp (EVar "pinnedEntryName") (EVar "first"))))) (EVar "rest")) (EApp (EVar "Some") (EVar "first")) (EVar "None")))))
+(DFunDef false "pinnedLocalExplain" ((PVar "a") (PVar "b")) (EApp (EVar "pinnedUniqueEntry") (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EApp (EVar "pinnedEntryMatches") (EVar "e")) (EVar "a")) (EVar "b")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pinnedLocals") "value"))))
+(DTypeSig false "pinnedLocalExplainOne" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyTuple (TyCon "Mono") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
+(DFunDef false "pinnedLocalExplainOne" ((PVar "eloc") (PVar "t")) (EApp (EVar "pinnedUniqueEntry") (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EApp (EVar "pinnedEntryMatchesAt") (EVar "e")) (EVar "eloc")) (EVar "t")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pinnedLocals") "value"))))
+(DTypeSig false "pinnedUniqueEntry" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyApp (TyCon "Option") (TyTuple (TyCon "Mono") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))
+(DFunDef false "pinnedUniqueEntry" ((PList)) (EVar "None"))
+(DFunDef false "pinnedUniqueEntry" ((PCons (PVar "first") (PVar "rest"))) (EIf (EApp (EApp (EVar "allList") (ELam ((PVar "e")) (EBinOp "==" (EApp (EVar "pinnedEntryName") (EVar "e")) (EApp (EVar "pinnedEntryName") (EVar "first"))))) (EVar "rest")) (EApp (EVar "Some") (EVar "first")) (EVar "None")))
 (DTypeSig false "pinnedEntryName" (TyFun (TyTuple (TyCon "Mono") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "String")))
 (DFunDef false "pinnedEntryName" ((PTuple PWild (PVar "name") PWild PWild)) (EVar "name"))
 (DTypeSig false "pinnedEntryMatches" (TyFun (TyTuple (TyCon "Mono") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool")))))
-(DFunDef false "pinnedEntryMatches" ((PTuple (PVar "stored") PWild PWild (PVar "loc")) (PVar "a") (PVar "b")) (EBlock (DoLet false false (PVar "g") (EApp (EVar "normalize") (EVar "stored"))) (DoExpr (EMatch (EApp (EVar "headTyconNameMono") (EVar "g")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" PWild) () (EBinOp "&&" (EBinOp "||" (EBinOp "==" (EApp (EVar "ppMono") (EVar "g")) (EApp (EVar "ppMono") (EVar "a"))) (EBinOp "==" (EApp (EVar "ppMono") (EVar "g")) (EApp (EVar "ppMono") (EVar "b")))) (EApp (EVar "locSameFileAsError") (EVar "loc"))))))))
+(DFunDef false "pinnedEntryMatches" ((PVar "e") (PVar "a") (PVar "b")) (EBinOp "||" (EApp (EApp (EApp (EVar "pinnedEntryMatchesAt") (EVar "e")) (EUnOp "!" (EVar "currentLoc"))) (EVar "a")) (EApp (EApp (EApp (EVar "pinnedEntryMatchesAt") (EVar "e")) (EUnOp "!" (EVar "currentLoc"))) (EVar "b"))))
+(DTypeSig false "pinnedEntryMatchesAt" (TyFun (TyTuple (TyCon "Mono") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Mono") (TyCon "Bool")))))
+(DFunDef false "pinnedEntryMatchesAt" ((PTuple (PVar "stored") PWild PWild (PVar "loc")) (PVar "eloc") (PVar "t")) (EBlock (DoLet false false (PVar "g") (EApp (EVar "normalize") (EVar "stored"))) (DoExpr (EMatch (EApp (EVar "headTyconNameMono") (EVar "g")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" PWild) () (EBinOp "&&" (EApp (EApp (EVar "monoReaches") (EVar "g")) (EVar "t")) (EApp (EApp (EVar "locSameFileAs") (EVar "loc")) (EVar "eloc"))))))))
+(DTypeSig false "monoReaches" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool"))))
+(DFunDef false "monoReaches" ((PVar "g") (PVar "x")) (EApp (EApp (EVar "monoReachesGo") (EApp (EVar "normalize") (EVar "g"))) (EApp (EVar "ppMono") (EVar "x"))))
+(DTypeSig false "monoReachesGo" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "monoReachesGo" ((PVar "g") (PVar "target")) (EIf (EBinOp "==" (EApp (EVar "ppMono") (EVar "g")) (EVar "target")) (EVar "True") (EIf (EVar "otherwise") (EMatch (EVar "g") (arm (PCon "TApp" (PVar "f") (PVar "a")) () (EBinOp "||" (EApp (EApp (EVar "monoReachesGo") (EApp (EVar "normalize") (EVar "f"))) (EVar "target")) (EApp (EApp (EVar "monoReachesGo") (EApp (EVar "normalize") (EVar "a"))) (EVar "target")))) (arm (PCon "TFun" (PVar "p") PWild (PVar "r")) () (EBinOp "||" (EApp (EApp (EVar "monoReachesGo") (EApp (EVar "normalize") (EVar "p"))) (EVar "target")) (EApp (EApp (EVar "monoReachesGo") (EApp (EVar "normalize") (EVar "r"))) (EVar "target")))) (arm PWild () (EVar "False"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "monoReplaceReached" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyCon "Mono")))))
+(DFunDef false "monoReplaceReached" ((PVar "g") (PVar "target") (PVar "rep")) (EApp (EApp (EApp (EVar "monoReplaceReachedGo") (EApp (EVar "normalize") (EVar "g"))) (EVar "target")) (EVar "rep")))
+(DTypeSig false "monoReplaceReachedGo" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyCon "Mono")))))
+(DFunDef false "monoReplaceReachedGo" ((PVar "g") (PVar "target") (PVar "rep")) (EIf (EBinOp "==" (EApp (EVar "ppMono") (EVar "g")) (EVar "target")) (EVar "rep") (EIf (EVar "otherwise") (EMatch (EVar "g") (arm (PCon "TApp" (PVar "f") (PVar "a")) () (EApp (EApp (EVar "TApp") (EApp (EApp (EApp (EVar "monoReplaceReached") (EVar "f")) (EVar "target")) (EVar "rep"))) (EApp (EApp (EApp (EVar "monoReplaceReached") (EVar "a")) (EVar "target")) (EVar "rep")))) (arm (PCon "TFun" (PVar "p") (PVar "e") (PVar "r")) () (EApp (EApp (EApp (EVar "TFun") (EApp (EApp (EApp (EVar "monoReplaceReached") (EVar "p")) (EVar "target")) (EVar "rep"))) (EVar "e")) (EApp (EApp (EApp (EVar "monoReplaceReached") (EVar "r")) (EVar "target")) (EVar "rep")))) (arm (PVar "other") () (EVar "other"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "pinnedTwoTypes" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "String")))))
+(DFunDef false "pinnedTwoTypes" ((PVar "stored") (PVar "a") (PVar "b")) (EApp (EApp (EApp (EVar "pinnedTwoTypesG") (EApp (EVar "normalize") (EVar "stored"))) (EVar "a")) (EVar "b")))
+(DTypeSig false "pinnedTwoTypesG" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "String")))))
+(DFunDef false "pinnedTwoTypesG" ((PVar "g") (PVar "a") (PVar "b")) (EIf (EBinOp "||" (EBinOp "==" (EApp (EVar "ppMono") (EVar "g")) (EApp (EVar "ppMono") (EVar "a"))) (EBinOp "==" (EApp (EVar "ppMono") (EVar "g")) (EApp (EVar "ppMono") (EVar "b")))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " and "))) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString ""))) (EIf (EApp (EApp (EVar "monoReaches") (EVar "g")) (EVar "a")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "g")))) (ELit (LString " and "))) (EApp (EVar "display") (EApp (EVar "ppMono") (EApp (EApp (EApp (EVar "monoReplaceReached") (EVar "g")) (EApp (EVar "ppMono") (EVar "a"))) (EVar "b"))))) (ELit (LString ""))) (EIf (EApp (EApp (EVar "monoReaches") (EVar "g")) (EVar "b")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "ppMono") (EApp (EApp (EApp (EVar "monoReplaceReached") (EVar "g")) (EApp (EVar "ppMono") (EVar "b"))) (EVar "a"))))) (ELit (LString " and "))) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "g")))) (ELit (LString ""))) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " and "))) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString ""))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "locSameFileAsError" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Bool")))
-(DFunDef false "locSameFileAsError" ((PCon "Some" (PCon "Loc" (PVar "bf") PWild PWild PWild PWild))) (EMatch (EUnOp "!" (EVar "currentLoc")) (arm (PCon "Some" (PCon "Loc" (PVar "ef") PWild PWild PWild PWild)) () (EBinOp "==" (EVar "bf") (EVar "ef"))) (arm (PCon "None") () (EVar "False"))))
-(DFunDef false "locSameFileAsError" ((PCon "None")) (EVar "True"))
+(DFunDef false "locSameFileAsError" ((PVar "loc")) (EApp (EApp (EVar "locSameFileAs") (EVar "loc")) (EUnOp "!" (EVar "currentLoc"))))
+(DTypeSig false "locSameFileAs" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Bool"))))
+(DFunDef false "locSameFileAs" ((PCon "Some" (PCon "Loc" (PVar "bf") PWild PWild PWild PWild)) (PCon "Some" (PCon "Loc" (PVar "ef") PWild PWild PWild PWild))) (EBinOp "==" (EVar "bf") (EVar "ef")))
+(DFunDef false "locSameFileAs" ((PCon "Some" PWild) (PCon "None")) (EVar "False"))
+(DFunDef false "locSameFileAs" ((PCon "None") PWild) (EVar "True"))
 (DTypeSig false "monoUnboundIds" (TyFun (TyCon "Mono") (TyApp (TyCon "List") (TyCon "Int"))))
 (DFunDef false "monoUnboundIds" ((PVar "t")) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TVar" (PVar "cell")) () (EListLit (EApp (EVar "tyvarId") (EVar "cell")))) (arm (PCon "TCon" PWild PWild) () (EListLit)) (arm (PCon "TRigid" PWild) () (EListLit)) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EBinOp "++" (EApp (EVar "monoUnboundIds") (EVar "a")) (EApp (EVar "monoUnboundIds") (EVar "b")))) (arm (PCon "TFun" (PVar "a") PWild (PVar "b")) () (EBinOp "++" (EApp (EVar "monoUnboundIds") (EVar "a")) (EApp (EVar "monoUnboundIds") (EVar "b")))) (arm (PCon "TEff" PWild) () (EListLit))))
 (DTypeSig false "anyIn" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Bool"))))
@@ -42487,7 +42612,12 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "pushNoImplError" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Unit")))))
 (DFunDef false "pushNoImplError" ((PVar "iface") (PVar "loc") (PVar "args")) (EMatch (EApp (EVar "firstTupleCallHint") (EVar "args")) (arm (PCon "Some" (PTuple (PVar "help") (PVar "fix"))) () (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-NO-IMPL"))) (EVar "loc")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EVar "noImplFoundMsg") (EVar "iface")) (EVar "args")))) (ELit (LString " — "))) (EApp (EVar "display") (EVar "help"))) (ELit (LString "")))) (EVar "help")) (EVar "fix"))) (arm (PCon "None") () (EBlock (DoLet false false (PTuple (PVar "msg") (PVar "mhint")) (EApp (EApp (EVar "noImplFoundMsgHinted") (EVar "iface")) (EVar "args"))) (DoExpr (EMatch (EVar "mhint") (arm (PCon "Some" (PVar "hint")) () (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-NO-IMPL"))) (EVar "loc")) (EVar "msg")) (EVar "hint")) (EVar "None"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-NO-IMPL"))) (EVar "loc")) (EVar "msg")))))))))
 (DTypeSig false "reportNumOrNoImpl" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit")))))
-(DFunDef false "reportNumOrNoImpl" ((PVar "iface") (PVar "args") (PVar "loc")) (EIf (EBinOp "&&" (EBinOp "==" (EVar "iface") (ELit (LString "Num"))) (EApp (EVar "numlitReframeLoc") (EVar "loc"))) (EBlock (DoLet false false (PVar "hint") (EApp (EApp (EVar "numlitMismatchHint") (EVar "loc")) (EVar "args"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-TYPE-MISMATCH"))) (EVar "loc")) (EBinOp "++" (EApp (EApp (EVar "numlitMismatchMsg") (EVar "loc")) (EVar "args")) (EVar "hint"))) (EVar "hint")) (EVar "None")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "pushNoImplError") (EVar "iface")) (EVar "loc")) (EVar "args")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "reportNumOrNoImpl" ((PVar "iface") (PVar "args") (PVar "loc")) (EIf (EBinOp "&&" (EBinOp "==" (EVar "iface") (ELit (LString "Num"))) (EApp (EVar "numlitReframeLoc") (EVar "loc"))) (EApp (EApp (EVar "reportNumlitMismatch") (EVar "args")) (EVar "loc")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "pushNoImplError") (EVar "iface")) (EVar "loc")) (EVar "args")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "reportNumlitMismatch" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit"))))
+(DFunDef false "reportNumlitMismatch" ((PList (PVar "t")) (PVar "loc")) (EMatch (EApp (EApp (EVar "pinnedLocalExplainOne") (EVar "loc")) (EVar "t")) (arm (PCon "Some" (PTuple (PVar "stored") (PVar "name") (PVar "iface") (PVar "bloc"))) () (EApp (EApp (EApp (EApp (EVar "pinnedLocalReport") (EVar "name")) (EVar "iface")) (EVar "bloc")) (EApp (EApp (EApp (EVar "pinnedTwoTypes") (EVar "stored")) (EApp (EVar "tconBuiltin") (ELit (LString "Int")))) (EVar "t")))) (arm (PCon "None") () (EApp (EApp (EVar "numlitMismatchPush") (EListLit (EVar "t"))) (EVar "loc")))))
+(DFunDef false "reportNumlitMismatch" ((PVar "args") (PVar "loc")) (EApp (EApp (EVar "numlitMismatchPush") (EVar "args")) (EVar "loc")))
+(DTypeSig false "numlitMismatchPush" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit"))))
+(DFunDef false "numlitMismatchPush" ((PVar "args") (PVar "loc")) (EBlock (DoLet false false (PVar "hint") (EApp (EApp (EVar "numlitMismatchHint") (EVar "loc")) (EVar "args"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-TYPE-MISMATCH"))) (EVar "loc")) (EBinOp "++" (EApp (EApp (EVar "numlitMismatchMsg") (EVar "loc")) (EVar "args")) (EVar "hint"))) (EVar "hint")) (EVar "None")))))
 (DTypeSig false "numlitReframeLoc" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Bool")))
 (DFunDef false "numlitReframeLoc" ((PCon "Some" (PVar "l"))) (EBinOp "&&" (EApp (EApp (EVar "anyList") (ELam ((PVar "p")) (EApp (EApp (EVar "locEq") (EApp (EVar "snd") (EVar "p"))) (EVar "l")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "numlitVarLocs") "value")) (EApp (EVar "not") (EApp (EApp (EVar "anyList") (ELam ((PVar "ol")) (EApp (EApp (EVar "locEq") (EVar "ol")) (EVar "l")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "numlitOpLocs") "value")))))
 (DFunDef false "numlitReframeLoc" ((PCon "None")) (EVar "False"))
@@ -45271,7 +45401,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "typeMismatchReport" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))
 (DFunDef false "typeMismatchReport" ((PVar "a") (PVar "b")) (EMatch (EUnOp "!" (EVar "currentMethodMismatch")) (arm (PCon "Some" (PVar "mname")) () (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-METHOD-MISMATCH"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Method '")) (EApp (EMethodRef "display") (EVar "mname"))) (ELit (LString "': expected type "))) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " but got "))) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString ""))))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "pinnedLocalExplain") (EVar "a")) (EVar "b")) (arm (PCon "Some" (PVar "entry")) () (EApp (EApp (EApp (EVar "pinnedLocalMismatch") (EVar "entry")) (EVar "a")) (EVar "b"))) (arm (PCon "None") () (EApp (EApp (EVar "typeMismatchReportRest") (EVar "a")) (EVar "b")))))))
 (DTypeSig false "pinnedLocalMismatch" (TyFun (TyTuple (TyCon "Mono") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit")))))
-(DFunDef false "pinnedLocalMismatch" ((PTuple PWild (PVar "name") (PVar "iface") (PVar "loc")) (PVar "a") (PVar "b")) (EApp (EApp (EApp (EApp (EVar "pinnedLocalReport") (EVar "name")) (EVar "iface")) (EVar "loc")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " and "))) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString "")))))
+(DFunDef false "pinnedLocalMismatch" ((PTuple (PVar "stored") (PVar "name") (PVar "iface") (PVar "loc")) (PVar "a") (PVar "b")) (EApp (EApp (EApp (EApp (EVar "pinnedLocalReport") (EVar "name")) (EVar "iface")) (EVar "loc")) (EApp (EApp (EApp (EVar "pinnedTwoTypes") (EVar "stored")) (EVar "a")) (EVar "b"))))
 (DTypeSig false "pinnedLocalReport" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Unit"))))))
 (DFunDef false "pinnedLocalReport" ((PVar "name") (PVar "iface") (PVar "loc") (PVar "twoTypes")) (EBlock (DoLet false false (PVar "help") (EBinOp "++" (EBinOp "++" (ELit (LString "give '")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "' a top-level definition instead — a top-level binding can be polymorphic in a constrained type, a local one cannot — or use it at one type only")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-LOCAL-CONSTRAINED-MONO"))) (EVar "loc")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "local binding '")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "' is used at two different types ("))) (EApp (EMethodRef "display") (EVar "twoTypes"))) (ELit (LString "), but it cannot be polymorphic: "))) (EApp (EMethodRef "display") (EApp (EVar "constraintPhrase") (EVar "iface")))) (ELit (LString ", and only top-level definitions can carry that constraint")))) (EVar "help")) (EVar "None")))))
 (DTypeSig false "constraintPhrase" (TyFun (TyCon "String") (TyCon "String")))
@@ -46935,14 +47065,36 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "tvarMonoOfIn" (TyFun (TyCon "Mono") (TyFun (TyCon "Int") (TyCon "Mono"))))
 (DFunDef false "tvarMonoOfIn" ((PVar "t") (PVar "id")) (EApp (EApp (EVar "optionOr") (EVar "t")) (EApp (EApp (EVar "findTvarInMono") (EVar "t")) (EVar "id"))))
 (DTypeSig false "pinnedLocalExplain" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyTuple (TyCon "Mono") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
-(DFunDef false "pinnedLocalExplain" ((PVar "a") (PVar "b")) (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EApp (EVar "pinnedEntryMatches") (EVar "e")) (EVar "a")) (EVar "b")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pinnedLocals") "value")) (arm (PList) () (EVar "None")) (arm (PCons (PVar "first") (PVar "rest")) () (EIf (EApp (EApp (EVar "allList") (ELam ((PVar "e")) (EBinOp "==" (EApp (EVar "pinnedEntryName") (EVar "e")) (EApp (EVar "pinnedEntryName") (EVar "first"))))) (EVar "rest")) (EApp (EVar "Some") (EVar "first")) (EVar "None")))))
+(DFunDef false "pinnedLocalExplain" ((PVar "a") (PVar "b")) (EApp (EVar "pinnedUniqueEntry") (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EApp (EVar "pinnedEntryMatches") (EVar "e")) (EVar "a")) (EVar "b")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pinnedLocals") "value"))))
+(DTypeSig false "pinnedLocalExplainOne" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyTuple (TyCon "Mono") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
+(DFunDef false "pinnedLocalExplainOne" ((PVar "eloc") (PVar "t")) (EApp (EVar "pinnedUniqueEntry") (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EApp (EVar "pinnedEntryMatchesAt") (EVar "e")) (EVar "eloc")) (EVar "t")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pinnedLocals") "value"))))
+(DTypeSig false "pinnedUniqueEntry" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyApp (TyCon "Option") (TyTuple (TyCon "Mono") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))
+(DFunDef false "pinnedUniqueEntry" ((PList)) (EVar "None"))
+(DFunDef false "pinnedUniqueEntry" ((PCons (PVar "first") (PVar "rest"))) (EIf (EApp (EApp (EVar "allList") (ELam ((PVar "e")) (EBinOp "==" (EApp (EVar "pinnedEntryName") (EVar "e")) (EApp (EVar "pinnedEntryName") (EVar "first"))))) (EVar "rest")) (EApp (EVar "Some") (EVar "first")) (EVar "None")))
 (DTypeSig false "pinnedEntryName" (TyFun (TyTuple (TyCon "Mono") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "String")))
 (DFunDef false "pinnedEntryName" ((PTuple PWild (PVar "name") PWild PWild)) (EVar "name"))
 (DTypeSig false "pinnedEntryMatches" (TyFun (TyTuple (TyCon "Mono") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool")))))
-(DFunDef false "pinnedEntryMatches" ((PTuple (PVar "stored") PWild PWild (PVar "loc")) (PVar "a") (PVar "b")) (EBlock (DoLet false false (PVar "g") (EApp (EVar "normalize") (EVar "stored"))) (DoExpr (EMatch (EApp (EVar "headTyconNameMono") (EVar "g")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" PWild) () (EBinOp "&&" (EBinOp "||" (EBinOp "==" (EApp (EVar "ppMono") (EVar "g")) (EApp (EVar "ppMono") (EVar "a"))) (EBinOp "==" (EApp (EVar "ppMono") (EVar "g")) (EApp (EVar "ppMono") (EVar "b")))) (EApp (EVar "locSameFileAsError") (EVar "loc"))))))))
+(DFunDef false "pinnedEntryMatches" ((PVar "e") (PVar "a") (PVar "b")) (EBinOp "||" (EApp (EApp (EApp (EVar "pinnedEntryMatchesAt") (EVar "e")) (EUnOp "!" (EVar "currentLoc"))) (EVar "a")) (EApp (EApp (EApp (EVar "pinnedEntryMatchesAt") (EVar "e")) (EUnOp "!" (EVar "currentLoc"))) (EVar "b"))))
+(DTypeSig false "pinnedEntryMatchesAt" (TyFun (TyTuple (TyCon "Mono") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Mono") (TyCon "Bool")))))
+(DFunDef false "pinnedEntryMatchesAt" ((PTuple (PVar "stored") PWild PWild (PVar "loc")) (PVar "eloc") (PVar "t")) (EBlock (DoLet false false (PVar "g") (EApp (EVar "normalize") (EVar "stored"))) (DoExpr (EMatch (EApp (EVar "headTyconNameMono") (EVar "g")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" PWild) () (EBinOp "&&" (EApp (EApp (EVar "monoReaches") (EVar "g")) (EVar "t")) (EApp (EApp (EVar "locSameFileAs") (EVar "loc")) (EVar "eloc"))))))))
+(DTypeSig false "monoReaches" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool"))))
+(DFunDef false "monoReaches" ((PVar "g") (PVar "x")) (EApp (EApp (EVar "monoReachesGo") (EApp (EVar "normalize") (EVar "g"))) (EApp (EVar "ppMono") (EVar "x"))))
+(DTypeSig false "monoReachesGo" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "monoReachesGo" ((PVar "g") (PVar "target")) (EIf (EBinOp "==" (EApp (EVar "ppMono") (EVar "g")) (EVar "target")) (EVar "True") (EIf (EVar "otherwise") (EMatch (EVar "g") (arm (PCon "TApp" (PVar "f") (PVar "a")) () (EBinOp "||" (EApp (EApp (EVar "monoReachesGo") (EApp (EVar "normalize") (EVar "f"))) (EVar "target")) (EApp (EApp (EVar "monoReachesGo") (EApp (EVar "normalize") (EVar "a"))) (EVar "target")))) (arm (PCon "TFun" (PVar "p") PWild (PVar "r")) () (EBinOp "||" (EApp (EApp (EVar "monoReachesGo") (EApp (EVar "normalize") (EVar "p"))) (EVar "target")) (EApp (EApp (EVar "monoReachesGo") (EApp (EVar "normalize") (EVar "r"))) (EVar "target")))) (arm PWild () (EVar "False"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "monoReplaceReached" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyCon "Mono")))))
+(DFunDef false "monoReplaceReached" ((PVar "g") (PVar "target") (PVar "rep")) (EApp (EApp (EApp (EVar "monoReplaceReachedGo") (EApp (EVar "normalize") (EVar "g"))) (EVar "target")) (EVar "rep")))
+(DTypeSig false "monoReplaceReachedGo" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyCon "Mono")))))
+(DFunDef false "monoReplaceReachedGo" ((PVar "g") (PVar "target") (PVar "rep")) (EIf (EBinOp "==" (EApp (EVar "ppMono") (EVar "g")) (EVar "target")) (EVar "rep") (EIf (EVar "otherwise") (EMatch (EVar "g") (arm (PCon "TApp" (PVar "f") (PVar "a")) () (EApp (EApp (EVar "TApp") (EApp (EApp (EApp (EVar "monoReplaceReached") (EVar "f")) (EVar "target")) (EVar "rep"))) (EApp (EApp (EApp (EVar "monoReplaceReached") (EVar "a")) (EVar "target")) (EVar "rep")))) (arm (PCon "TFun" (PVar "p") (PVar "e") (PVar "r")) () (EApp (EApp (EApp (EVar "TFun") (EApp (EApp (EApp (EVar "monoReplaceReached") (EVar "p")) (EVar "target")) (EVar "rep"))) (EVar "e")) (EApp (EApp (EApp (EVar "monoReplaceReached") (EVar "r")) (EVar "target")) (EVar "rep")))) (arm (PVar "other") () (EVar "other"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "pinnedTwoTypes" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "String")))))
+(DFunDef false "pinnedTwoTypes" ((PVar "stored") (PVar "a") (PVar "b")) (EApp (EApp (EApp (EVar "pinnedTwoTypesG") (EApp (EVar "normalize") (EVar "stored"))) (EVar "a")) (EVar "b")))
+(DTypeSig false "pinnedTwoTypesG" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "String")))))
+(DFunDef false "pinnedTwoTypesG" ((PVar "g") (PVar "a") (PVar "b")) (EIf (EBinOp "||" (EBinOp "==" (EApp (EVar "ppMono") (EVar "g")) (EApp (EVar "ppMono") (EVar "a"))) (EBinOp "==" (EApp (EVar "ppMono") (EVar "g")) (EApp (EVar "ppMono") (EVar "b")))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " and "))) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString ""))) (EIf (EApp (EApp (EVar "monoReaches") (EVar "g")) (EVar "a")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "g")))) (ELit (LString " and "))) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EApp (EApp (EApp (EVar "monoReplaceReached") (EVar "g")) (EApp (EVar "ppMono") (EVar "a"))) (EVar "b"))))) (ELit (LString ""))) (EIf (EApp (EApp (EVar "monoReaches") (EVar "g")) (EVar "b")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EApp (EApp (EApp (EVar "monoReplaceReached") (EVar "g")) (EApp (EVar "ppMono") (EVar "b"))) (EVar "a"))))) (ELit (LString " and "))) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "g")))) (ELit (LString ""))) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " and "))) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString ""))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "locSameFileAsError" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Bool")))
-(DFunDef false "locSameFileAsError" ((PCon "Some" (PCon "Loc" (PVar "bf") PWild PWild PWild PWild))) (EMatch (EUnOp "!" (EVar "currentLoc")) (arm (PCon "Some" (PCon "Loc" (PVar "ef") PWild PWild PWild PWild)) () (EBinOp "==" (EVar "bf") (EVar "ef"))) (arm (PCon "None") () (EVar "False"))))
-(DFunDef false "locSameFileAsError" ((PCon "None")) (EVar "True"))
+(DFunDef false "locSameFileAsError" ((PVar "loc")) (EApp (EApp (EVar "locSameFileAs") (EVar "loc")) (EUnOp "!" (EVar "currentLoc"))))
+(DTypeSig false "locSameFileAs" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Bool"))))
+(DFunDef false "locSameFileAs" ((PCon "Some" (PCon "Loc" (PVar "bf") PWild PWild PWild PWild)) (PCon "Some" (PCon "Loc" (PVar "ef") PWild PWild PWild PWild))) (EBinOp "==" (EVar "bf") (EVar "ef")))
+(DFunDef false "locSameFileAs" ((PCon "Some" PWild) (PCon "None")) (EVar "False"))
+(DFunDef false "locSameFileAs" ((PCon "None") PWild) (EVar "True"))
 (DTypeSig false "monoUnboundIds" (TyFun (TyCon "Mono") (TyApp (TyCon "List") (TyCon "Int"))))
 (DFunDef false "monoUnboundIds" ((PVar "t")) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TVar" (PVar "cell")) () (EListLit (EApp (EVar "tyvarId") (EVar "cell")))) (arm (PCon "TCon" PWild PWild) () (EListLit)) (arm (PCon "TRigid" PWild) () (EListLit)) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EBinOp "++" (EApp (EVar "monoUnboundIds") (EVar "a")) (EApp (EVar "monoUnboundIds") (EVar "b")))) (arm (PCon "TFun" (PVar "a") PWild (PVar "b")) () (EBinOp "++" (EApp (EVar "monoUnboundIds") (EVar "a")) (EApp (EVar "monoUnboundIds") (EVar "b")))) (arm (PCon "TEff" PWild) () (EListLit))))
 (DTypeSig false "anyIn" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Bool"))))
@@ -48533,7 +48685,12 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "pushNoImplError" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Unit")))))
 (DFunDef false "pushNoImplError" ((PVar "iface") (PVar "loc") (PVar "args")) (EMatch (EApp (EVar "firstTupleCallHint") (EVar "args")) (arm (PCon "Some" (PTuple (PVar "help") (PVar "fix"))) () (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-NO-IMPL"))) (EVar "loc")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EVar "noImplFoundMsg") (EVar "iface")) (EVar "args")))) (ELit (LString " — "))) (EApp (EMethodRef "display") (EVar "help"))) (ELit (LString "")))) (EVar "help")) (EVar "fix"))) (arm (PCon "None") () (EBlock (DoLet false false (PTuple (PVar "msg") (PVar "mhint")) (EApp (EApp (EVar "noImplFoundMsgHinted") (EVar "iface")) (EVar "args"))) (DoExpr (EMatch (EVar "mhint") (arm (PCon "Some" (PVar "hint")) () (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-NO-IMPL"))) (EVar "loc")) (EVar "msg")) (EVar "hint")) (EVar "None"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-NO-IMPL"))) (EVar "loc")) (EVar "msg")))))))))
 (DTypeSig false "reportNumOrNoImpl" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit")))))
-(DFunDef false "reportNumOrNoImpl" ((PVar "iface") (PVar "args") (PVar "loc")) (EIf (EBinOp "&&" (EBinOp "==" (EVar "iface") (ELit (LString "Num"))) (EApp (EVar "numlitReframeLoc") (EVar "loc"))) (EBlock (DoLet false false (PVar "hint") (EApp (EApp (EVar "numlitMismatchHint") (EVar "loc")) (EVar "args"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-TYPE-MISMATCH"))) (EVar "loc")) (EBinOp "++" (EApp (EApp (EVar "numlitMismatchMsg") (EVar "loc")) (EVar "args")) (EVar "hint"))) (EVar "hint")) (EVar "None")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "pushNoImplError") (EVar "iface")) (EVar "loc")) (EVar "args")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "reportNumOrNoImpl" ((PVar "iface") (PVar "args") (PVar "loc")) (EIf (EBinOp "&&" (EBinOp "==" (EVar "iface") (ELit (LString "Num"))) (EApp (EVar "numlitReframeLoc") (EVar "loc"))) (EApp (EApp (EVar "reportNumlitMismatch") (EVar "args")) (EVar "loc")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "pushNoImplError") (EVar "iface")) (EVar "loc")) (EVar "args")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "reportNumlitMismatch" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit"))))
+(DFunDef false "reportNumlitMismatch" ((PList (PVar "t")) (PVar "loc")) (EMatch (EApp (EApp (EVar "pinnedLocalExplainOne") (EVar "loc")) (EVar "t")) (arm (PCon "Some" (PTuple (PVar "stored") (PVar "name") (PVar "iface") (PVar "bloc"))) () (EApp (EApp (EApp (EApp (EVar "pinnedLocalReport") (EVar "name")) (EVar "iface")) (EVar "bloc")) (EApp (EApp (EApp (EVar "pinnedTwoTypes") (EVar "stored")) (EApp (EVar "tconBuiltin") (ELit (LString "Int")))) (EVar "t")))) (arm (PCon "None") () (EApp (EApp (EVar "numlitMismatchPush") (EListLit (EVar "t"))) (EVar "loc")))))
+(DFunDef false "reportNumlitMismatch" ((PVar "args") (PVar "loc")) (EApp (EApp (EVar "numlitMismatchPush") (EVar "args")) (EVar "loc")))
+(DTypeSig false "numlitMismatchPush" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit"))))
+(DFunDef false "numlitMismatchPush" ((PVar "args") (PVar "loc")) (EBlock (DoLet false false (PVar "hint") (EApp (EApp (EVar "numlitMismatchHint") (EVar "loc")) (EVar "args"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-TYPE-MISMATCH"))) (EVar "loc")) (EBinOp "++" (EApp (EApp (EVar "numlitMismatchMsg") (EVar "loc")) (EVar "args")) (EVar "hint"))) (EVar "hint")) (EVar "None")))))
 (DTypeSig false "numlitReframeLoc" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Bool")))
 (DFunDef false "numlitReframeLoc" ((PCon "Some" (PVar "l"))) (EBinOp "&&" (EApp (EApp (EVar "anyList") (ELam ((PVar "p")) (EApp (EApp (EVar "locEq") (EApp (EVar "snd") (EVar "p"))) (EVar "l")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "numlitVarLocs") "value")) (EApp (EVar "not") (EApp (EApp (EVar "anyList") (ELam ((PVar "ol")) (EApp (EApp (EVar "locEq") (EVar "ol")) (EVar "l")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "numlitOpLocs") "value")))))
 (DFunDef false "numlitReframeLoc" ((PCon "None")) (EVar "False"))
