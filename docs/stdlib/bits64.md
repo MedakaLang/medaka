@@ -28,7 +28,8 @@ modulo 2^64 (they wrap), matching C's unsigned arithmetic.
 
 Operations are fn-first/data-last and carry no `64` suffix — the module is
 already called `bits64`.  Import qualified (`import bits64 as B`) if you
-also want the prelude's boolean `and`/`or`/`xor` in the same scope.
+also want the prelude's boolean `and`/`or`/`xor`, or the `Num` interface's
+`add`/`sub`, in the same scope.
 
 ## `U64`
 
