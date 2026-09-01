@@ -19,10 +19,14 @@
 #   dist/<m>.mdk      for every EXTRA_MODULES entry in main.js (array, list, …)
 #   guide/<chapter>.html  one page per docs/guide/*.md (OUTLINE.md excluded)
 #   guide/guide.css
+#   stdlib/<module>.html  one page per docs/stdlib/*.md (the three design notes
+#                         build_stdlib_docs.sh excludes are not published)
+#   stdlib/guide.css
 #   _headers          Cloudflare Pages header rules (compresses /dist/*.mdk)
 #
 # Runs build_playground_wasm.sh first if dist/playground.wasm is missing.
-# Runs build_guide.sh to render the guide straight into site/guide/.
+# Runs build_guide.sh to render the guide straight into site/guide/, and
+# build_stdlib_docs.sh to render the stdlib reference into site/stdlib/.
 # playground/site/ is gitignored — do NOT commit it.
 #
 # Deploy: upload playground/site/ to any static host (GitHub Pages, Cloudflare
@@ -105,6 +109,24 @@ cp "$SCRIPT_DIR/_headers" "$SITE/"
 echo "[build_site] rendering docs/guide -> $SITE/guide ..."
 bash "$SCRIPT_DIR/build_guide.sh" "$ROOT/docs/guide" "$SITE/guide" "$SITE/dist"
 
+# ── The stdlib reference (docs/stdlib/*.md -> site/stdlib/*.html) ────────────
+#
+# Same shape as the guide block above, same reasons: rendered straight into the
+# deploy tree (no staging copy to go stale), $DIST passed unconditionally for the
+# ▶-button unshipped-import check.
+#
+# site/stdlib/*.html sits exactly one directory below site/index.html, the same
+# depth as site/guide/*.html, so render_docs.mjs's default --playground-url
+# ("../index.html") is already correct here and is deliberately not overridden —
+# the pages' "← Playground" nav resolves to this site's own index.html.
+#
+# The published set is the GENERATED reference (docs/stdlib/index.md and its
+# per-module pages). build_stdlib_docs.sh excludes the three hand-written design
+# notes that share the directory; that exclusion list lives there, and the check
+# below reads it back out rather than restating it.
+echo "[build_site] rendering docs/stdlib -> $SITE/stdlib ..."
+bash "$SCRIPT_DIR/build_stdlib_docs.sh" "$ROOT/docs/stdlib" "$SITE/stdlib" "$SITE/dist"
+
 # ── Verify the site can actually serve what the page asks for ───────────────
 # Derived from main.js, so this check cannot drift from the page's real needs.
 missing=""
@@ -135,6 +157,30 @@ done
 [ -f "$SITE/guide/guide.css" ] || missing_guide="$missing_guide guide.css"
 if [ -n "$missing_guide" ]; then
   echo "FAIL: docs/guide names these but they are not in site/guide:$missing_guide" >&2
+  exit 1
+fi
+
+# Third instance of the same shape, for the stdlib reference. The expected page
+# set is DERIVED from docs/stdlib/ minus build_stdlib_docs.sh's OWN --exclude
+# list, read back out of that script — one copy of the exclusion set, not two.
+# (test/diff_compiler_guide_render.sh derives it the same way, for the same
+# reason: a hand-typed second copy drifts silently the moment either side moves.)
+stdlib_exclude="$(sed -n 's/^  --exclude \(.*\) \\$/\1/p' "$SCRIPT_DIR/build_stdlib_docs.sh")"
+if [ -z "$stdlib_exclude" ]; then
+  echo "FAIL: could not read the --exclude list out of playground/build_stdlib_docs.sh" >&2
+  exit 1
+fi
+missing_stdlib=""
+for m in "$ROOT"/docs/stdlib/*.md; do
+  b="$(basename "$m")"
+  case ",$stdlib_exclude," in
+    *",$b,"*) ;;
+    *) [ -f "$SITE/stdlib/${b%.md}.html" ] || missing_stdlib="$missing_stdlib ${b%.md}.html" ;;
+  esac
+done
+[ -f "$SITE/stdlib/guide.css" ] || missing_stdlib="$missing_stdlib guide.css"
+if [ -n "$missing_stdlib" ]; then
+  echo "FAIL: docs/stdlib names these but they are not in site/stdlib:$missing_stdlib" >&2
   exit 1
 fi
 

@@ -15,6 +15,18 @@ data Expectation
 
 The result of a single test expectation.
 
+## `Eq Expectation`
+
+```
+impl Eq Expectation
+```
+
+## `Debug Expectation`
+
+```
+impl Debug Expectation
+```
+
 ## `pass`
 
 ```
@@ -86,7 +98,7 @@ Fail "expected False but got True"
 ## `expectEqual`
 
 ```
-expectEqual : a -> a -> Expectation
+expectEqual : (Eq a, Debug a) => a -> a -> Expectation
 ```
 
 Passes when the two values are equal.
@@ -104,7 +116,7 @@ Fail "expected 1 but got 2"
 ## `expectNotEqual`
 
 ```
-expectNotEqual : a -> a -> Expectation
+expectNotEqual : (Eq a, Debug a) => a -> a -> Expectation
 ```
 
 Passes when the two values are not equal.
@@ -122,7 +134,7 @@ Fail "expected values to differ but both were 1"
 ## `expectLessThan`
 
 ```
-expectLessThan : a -> a -> Expectation
+expectLessThan : (Ord a, Debug a) => a -> a -> Expectation
 ```
 
 Passes when `actual < expected`.
@@ -140,7 +152,7 @@ Fail "expected 15 < 10"
 ## `expectGreaterThan`
 
 ```
-expectGreaterThan : a -> a -> Expectation
+expectGreaterThan : (Ord a, Debug a) => a -> a -> Expectation
 ```
 
 Passes when `actual > expected`.

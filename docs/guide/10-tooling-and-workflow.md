@@ -1,15 +1,13 @@
 # Tooling & Workflow
 
-Every `medaka` verb you've been reading examples through this whole guide — `check`, `run` — is
-one binary with several subcommands, and the loop of writing Medaka day to day is mostly `fmt`,
-`lint`, `check`, and `test` on repeat, with `repl` for quick experiments. This chapter is a tour
-of the box.
+Every `medaka` command is a subcommand of one binary. The loop while writing Medaka
+is `check`, `fmt`, `lint`, and `test`, with `repl` for quick experiments. This
+chapter is a tour of each.
 
-## `check` — does it type-check?
+## `check`
 
-You've seen this one everywhere already: `medaka check file.mdk` type-checks a file without
-running it, and every ` ```medaka ` block in this guide is checked exactly this way. A type error
-looks like this:
+`medaka check file.mdk` type-checks a file without running it. Every example in
+this guide goes through it. A type error looks like this:
 
 ```
 error: file.mdk:1:16: No impl of Num for String
@@ -18,11 +16,11 @@ error: file.mdk:1:16: No impl of Num for String
   |                 ^
 ```
 
-located, with the source line and a caret. `check` exits 0 on success and 1 on the first
-accumulated batch of errors — it does not stop at the first one; it collects everything wrong in
-the file and reports all of it at once.
+`check` reports every error it finds in the file, not only the first, and exits 1 if
+there were any. Warnings, such as a non-exhaustive match, are printed but do not
+change the exit code.
 
-## `fmt` — one canonical layout
+## `fmt`
 
 ```
 $ medaka fmt --check file.mdk
@@ -34,12 +32,13 @@ $ medaka fmt --write file.mdk
 formatted 1 file
 ```
 
-`fmt` is comment-preserving and idempotent — running it twice does nothing the second time. Three
-modes: bare (or `--check`) reports which files aren't formatted and changes nothing; `--stdout`
-prints the formatted result without writing; `--write` rewrites in place. There is no
-configuration — one layout, the same one this guide's own examples are written in.
+`fmt` produces one canonical layout, preserves comments, and is idempotent. With no
+flag or with `--check`, it reports which files are not formatted and changes
+nothing. `--stdout` prints the formatted result. `--write` rewrites the file in
+place. There are no configuration options. Every example in this guide is in `fmt`'s
+layout.
 
-## `lint` — style rules beyond what types can catch
+## `lint`
 
 ```
 $ medaka lint file.mdk
@@ -49,26 +48,28 @@ warning: file.mdk:1:1: [rule-missing-signature] top-level 'double' has no type s
   |  ^
 ```
 
-`lint` runs around twenty rules over your source — dead code, hand-rolled logic that a stdlib
-function already does (`rule-stdlib-reimpl`), a `match` that could be a lookup, and more — each
-independently `--disable`-able, or promotable to a hard error with `--deny`. Unlike `check`, `lint`
-has no type information; its rules work on shape and name, not on what things resolve to.
-`--fix` rewrites what it safely can, in place.
+`lint` runs about twenty rules over your source: missing signatures, dead code,
+hand-written logic that a standard library function already does, a `match` that
+could be a lookup, and so on. Each rule can be turned off with `--disable` or
+promoted to an error with `--deny`. `--fix` rewrites what it safely can. Unlike
+`check`, `lint` has no type information. Its rules look at the shape of the code and
+the names in it.
 
-## `test` — doctests, `prop`s, and named tests, in one file
+## `test`
 
-`medaka test` runs three different kinds of check that live directly in your source, none of them
-needing a separate test file:
+`medaka test` runs three kinds of test, all of which live in the source file next
+to the code they test:
 
-- **Doctests** — a comment of the form `-- > expr` followed by `-- expected`, attached to a
-  function. `medaka test` synthesizes `debug (expr)`, runs it, and compares.
-- **`prop`** — a property, checked against 100 generated inputs by default (`--cases` to change
-  that; `--seed` to replay a specific failure).
-- **`test "name" = expr`** — a single named assertion, evaluated once. `expr` must have type
-  `Expectation`, from [`test.mdk`](../../stdlib/test.mdk) (`import test.{expectEqual, ...}`) —
-  not a bare `Bool`.
+- **Doctests.** A comment of the form `-- > expr` followed by `-- expected`, above a
+  definition. `medaka test` evaluates the expression, renders the result with
+  `debug`, and compares.
+- **Properties.** `prop "name" (x : T) … = expr` states something that should hold
+  for all inputs. It is checked against 100 generated inputs by default. `--cases`
+  changes the count and `--seed` replays a particular run.
+- **Named tests.** `test "name" = expr` is one assertion, evaluated once. The
+  expression has type `Expectation`, from the `test` module, rather than `Bool`.
 
-One file with all three, doctest included:
+One file with all three:
 
 ```medaka
 import test.{expectEqual}
@@ -94,7 +95,7 @@ main = println (total [1, 2, 3])
 6
 ```
 
-Running `medaka test` on that file:
+Running `medaka test` on it:
 
 ```
 $ medaka test total.mdk
@@ -113,37 +114,28 @@ running tests in total.mdk
 total.mdk: 1/1 passed
 ```
 
-Every doctest example ran and matched, the property held over its 100 generated `(xs, ys)` pairs,
-and the named test passed. The `main` at the bottom is unrelated to any of this — it's just what
-makes the file runnable with `medaka run` too, which is how this guide's own example ran to
-produce the `6` above.
+Both doctests matched, the property held for its 100 generated pairs, and the named
+test passed. The `main` at the bottom is there only so the file also runs with
+`medaka run`.
 
-By default `test` runs everything through the interpreter (`eval`); `--native` (or
-`--engines native`) compiles to a native binary first and runs doctests through that instead
-— useful for catching an eval/native divergence, but slower. It has a precondition worth
-knowing before you reach for it: the native doctest runner synthesizes its own `main`, so it
-refuses any file that already defines one. Run `medaka test --native total.mdk` on the file
-above and every doctest errors out:
+By default `test` runs everything through the interpreter. `--native` compiles the
+file and runs the doctests through the compiled binary instead, which is slower but
+catches a difference between the two engines. It has one precondition: the native
+runner generates its own `main`, so it refuses a file that already defines one. On
+the file above, `medaka test --native total.mdk` reports every doctest as an error:
 
 ```
   ERROR total.mdk:5: total [1, 2, 3]
         native doctest runner: SKIPPED total.mdk — it already defines a top-level `main`,
         which the synthesized doctest entry point would collide with. No example was
         executed natively.
-  ERROR total.mdk:7: total []
-        native doctest runner: SKIPPED total.mdk — it already defines a top-level `main`,
-        which the synthesized doctest entry point would collide with. No example was
-        executed natively.
-
-total.mdk: 0/2 passed (0 failed, 2 errors)
 ```
 
-Move the doctested functions into a `main`-free module and `--native` works on that. (`prop`s
-and `test "…"`s are unaffected — they run either way.) `--filter <substring>` narrows to
-doctests, `test "…"`s, and `prop "…"`s whose name (or, for a doctest, its input expression)
-contains the substring.
+Properties and named tests are unaffected and still run. Keep doctested functions
+in modules without a `main` if you want to run them natively. `--filter <substring>` narrows a run to the tests whose name, or for a
+doctest whose expression, contains the substring.
 
-## `repl` — quick experiments
+## `repl`
 
 ```
 $ medaka repl
@@ -155,32 +147,28 @@ hi there : String
 > :quit
 ```
 
-Each line is evaluated and its value and type printed. `:reset` clears everything you've bound so
-far in the session; `:quit` or closing stdin (Ctrl-D) ends it. There's no persistence between
-sessions, and no module-loading — it's for a quick "what does this expression do," not for
-building anything.
+Each line is evaluated and printed with its type. `:reset` forgets everything bound
+so far and `:quit` exits. There is no module loading and nothing persists between
+sessions. It is for finding out what an expression does, not for building anything.
 
 ## The playground
 
-Everything above is the local CLI. The [playground](https://medaka-lang.dev) is the same compiler
-— compiled to WasmGC and running entirely in your browser, no server involved — but it exposes
-only one action: edit, hit Run, see output. That's roughly `medaka run`, sandboxed in a Web
-Worker; there's no `fmt`, `lint`, `test`, or project layout in the browser, because there's no
-filesystem for a project to live in. Use the playground to try something in five seconds with
-nothing installed — the [quick start](01-quick-start.md) is written around exactly that — and
-reach for the CLI once you're keeping the code.
+The [playground](https://medaka-lang.dev) is the same compiler, compiled to
+WebAssembly and running in your browser with no server. It offers one action: edit,
+run, read the output. That is `medaka run` in a sandbox. There is no `fmt`, `lint`,
+`test`, or project layout there, because there is no filesystem. Use it to try
+something in a few seconds, and switch to the command line once you are keeping the
+code.
 
 ## `build`
 
-One tool this chapter has deliberately said almost nothing about: `medaka build` compiles to a
-native binary through an LLVM backend (there's a second, WasmGC, backend behind the scenes too —
-it's what the playground runs). Backend internals, and everything about how either one turns
-checked source into machine code, are out of scope for this guide.
+`medaka build file.mdk -o prog` compiles a program to a native executable through
+LLVM. A second backend produces WebAssembly, and is what the playground runs on.
+How either backend works is outside this guide.
 
 ---
 
-That's the whole tour: a language ([chapters 1](01-quick-start.md)–[8](08-do-and-thenables.md)), how
-to arrange it in files (chapter 9), and the tools that check, format, and test what you wrote
-(this chapter). From here, [`docs/spec/SYNTAX.md`](../spec/SYNTAX.md) is the precise reference for
-what the compiler accepts, and the [stdlib docs](../stdlib/STDLIB.md) cover what ships beyond the
-prelude.
+Chapters 1 through 8 covered the language, chapter 9 how to arrange
+it in files, and this one the tools. From here, the [syntax reference](../spec/SYNTAX.md)
+is the precise account of what the compiler accepts, and the
+[stdlib reference](../stdlib/index.md) lists what ships beyond the prelude.

@@ -58,7 +58,7 @@ Number of elements. O(1).
 ## `has`
 
 ```
-has : a -> HashSet a -> Bool
+has : (Eq a, Hashable a) => a -> HashSet a -> Bool
 ```
 
 `True` when the element is present.
@@ -76,7 +76,7 @@ False
 ## `insertInPlace`
 
 ```
-insertInPlace : a -> HashSet a -> Unit
+insertInPlace : (Eq a, Hashable a) => a -> HashSet a -> Unit
 ```
 
 Add an element, in place. A no-op when already present. Resizes (doubling)
@@ -85,7 +85,7 @@ past load factor 0.75.
 ## `fromList`
 
 ```
-fromList : List a -> HashSet a
+fromList : (Eq a, Hashable a) => List a -> HashSet a
 ```
 
 Build a set from a list, dropping duplicates.
@@ -101,7 +101,7 @@ Build a set from a list, dropping duplicates.
 ## `deleteInPlace`
 
 ```
-deleteInPlace : a -> HashSet a -> Unit
+deleteInPlace : (Eq a, Hashable a) => a -> HashSet a -> Unit
 ```
 
 Remove an element, in place. A no-op when absent.
