@@ -1066,7 +1066,7 @@ latent-row position, which demands `Effect`, and the head says `Type`. Symmetric
 `data Box (e : Effect) a = Mk e` fails: `Mk`'s field position demands a monotype.
 
 The diagnostic is **`T-EFFECT-KIND-MISMATCH`**. That name also **renames the
-shipped `T-EFFECT-KIND-MISMATCH`**, which today reports the *use*-site half of the
+shipped `T-ROW-KIND-MISMATCH`** (done), which reports the *use*-site half of the
 same rule ("a row was written here, but this type-argument position isn't
 row-kinded"); the rename follows the kind's name, since every other effect
 diagnostic already says *effect* (`T-EFFECT-LEAK`, `T-EFFECT-UNDETERMINED`,
@@ -1482,12 +1482,11 @@ document three public retractions already (PRs #999/#1001).
   criticism that motivated the choice stands recorded: `DeferredMappable.gmap`
   paired a descriptive interface name with a cryptic, not-even-self-consistent
   prefix.
-- **Q2 — one diagnostic code or two.** §6.4's declaration-site contradiction and
-  the shipped use-site check are the same rule at two seams. Whether
-  `T-EFFECT-KIND-MISMATCH` covers both, or the declaration site takes its own code,
-  is a taxonomy decision for `compiler/DIAGNOSTIC-CODES-DESIGN.md` and is not made
-  here. (The *rename* of `T-EFFECT-KIND-MISMATCH` → `T-EFFECT-KIND-MISMATCH` **is**
-  decided.)
+- **Q2 — one diagnostic code or two. RESOLVED with the implementation: ONE code.**
+  `T-EFFECT-KIND-MISMATCH` (the renamed `T-ROW-KIND-MISMATCH`) covers the use-site
+  check, the declaration-site contradictions of §6.4 (a)/(b), the interface-head
+  cases, and the `requires`-chain disagreement of §6.5; the message text names
+  which seam fired. `compiler/DIAGNOSTIC-CODES-DESIGN.md` records the row.
 - **Q3 — a phantom-`Effect`-indexed type as a GRADED INSTANCE HEAD.** §6.4 settles
   the declaration (legal) and explicitly does not settle this. The reason to doubt
   is stated there; it needs deciding alongside #823's eager-arm fork, which is the

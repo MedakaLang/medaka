@@ -556,6 +556,26 @@ newtype UserId = UserId Int
 newtype Age = Age Int deriving (Eq)
 ```
 
+## Declared parameter kinds (`(p : Kind)` on a head)
+
+A type parameter's kind is written on the declaration head; `Kind ::= Type | Effect
+| Kind -> Kind | ( Kind )`, arrow right-associative. `Type` and `Effect` are ordinary
+identifiers recognised only in kind position (not keywords). Partial annotation is the
+common case. An UNANNOTATED parameter is never `Effect`-kinded — a parameter used as an
+effect row (an arrow's `<e>` tail, or an `Effect` slot of another type) MUST be declared,
+or `T-EFFECT-KIND-MISMATCH` is reported at the field that demands it. `impl` heads take no
+annotation. Spec: `docs/spec/EFFECTS-SEMANTICS.md` §6.1–§6.5.
+
+```medaka
+data Async (e : Effect) a = Done a | Suspend (Unit -> <e> Async e a)
+newtype Box (e : Effect) = MkBox (Unit -> <e> Unit)
+type LaterInt (e : Effect) = Async e Int
+interface DeferredThenable (f : Effect -> Type -> Type) where
+  deferThen : f e a -> (a -> <e> f e b) -> f e b
+data Wrap (g : (Type -> Type) -> Type) = W (g Option)   -- Effect-free arrow kinds may also be written
+data Phantom (e : Effect) a = Phantom a                 -- legal: declared, never used
+```
+
 ## Interfaces & implementations
 
 ```medaka

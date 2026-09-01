@@ -1471,8 +1471,7 @@ checkUndeterminedRetEffVars (d::rest) =
   checkUndeterminedRetEffVars rest
 
 checkUndeterminedRetEffVarsDecl : Decl -> Unit
-checkUndeterminedRetEffVarsDecl (DInterface { name, typarams, typaramKinds, methods, ... }) =
-  checkIfaceMethodEffs name (declGradedScope typarams typaramKinds methods) methods
+checkUndeterminedRetEffVarsDecl (DInterface { name, typarams, typaramKinds, methods, ... }) = checkIfaceMethodEffs name (declGradedScope typarams typaramKinds methods) methods
 -- #1103: the ARGUMENT-COVERAGE half of the rule is NOT method-only.  Its own
 -- comment (below) says post-unify inspection cannot catch these shapes because
 -- `unifyRowN`'s same-tail arm (`<e>` ~ `<Stdout | e>`) succeeds without
@@ -1522,15 +1521,18 @@ checkDeclaredKindsGo prog (d::rest) =
 
 checkDeclaredKindsDecl : List Decl -> Decl -> Unit
 checkDeclaredKindsDecl prog (DAttrib _ d) = checkDeclaredKindsDecl prog d
-checkDeclaredKindsDecl _ (DData { dataName = n, dataParams = ps, dataParamKinds = ks, dataCtors = vs }) =
-  checkHeadKinds n ps ks (flatMap (v => payloadAstTypes (variantPayload v)) vs)
-checkDeclaredKindsDecl _ (DNewtype { newtypeName = n, newtypeParams = ps, newtypeParamKinds = ks, newtypeFieldTy = fty }) =
-  checkHeadKinds n ps ks [fty]
-checkDeclaredKindsDecl _ (DTypeAlias { tyAliasName = n, tyAliasParams = ps, tyAliasParamKinds = ks, tyAliasRhs = rhs }) =
-  checkHeadKinds n ps ks [rhs]
+checkDeclaredKindsDecl _ (DData { dataName = n, dataParams = ps, dataParamKinds = ks, dataCtors = vs }) = checkHeadKinds n ps ks (flatMap (v => payloadAstTypes (variantPayload v)) vs)
+checkDeclaredKindsDecl _ (DNewtype { newtypeName = n, newtypeParams = ps, newtypeParamKinds = ks, newtypeFieldTy = fty }) = checkHeadKinds n ps ks [fty]
+checkDeclaredKindsDecl _ (DTypeAlias { tyAliasName = n, tyAliasParams = ps, tyAliasParamKinds = ks, tyAliasRhs = rhs }) = checkHeadKinds n ps ks [rhs]
 checkDeclaredKindsDecl prog (DInterface { name, typarams, typaramKinds, supers, methods, ... }) =
   let _ = checkIfaceHeadKinds name typarams (padAnns typarams typaramKinds) methods
-  checkSuperKinds prog name typarams (padAnns typarams typaramKinds) methods supers
+  checkSuperKinds
+    prog
+    name
+    typarams
+    (padAnns typarams typaramKinds)
+    methods
+    supers
 checkDeclaredKindsDecl _ _ = ()
 
 -- data / newtype / alias heads: [fieldTys] are every type the declaration's
@@ -1545,22 +1547,26 @@ checkHeadKindsGo _ _ _ [] _ = ()
 checkHeadKindsGo name rowNames fieldTys (p::ps) (a::anns) =
   let loc = firstTyLocList fieldTys
   let _ = match a
-    None => if contains p rowNames then
-      pushTypeErrorOnceAt "T-EFFECT-KIND-MISMATCH" loc (unannotatedRowParamMsg name p)
-    else
-      ()
-    Some KindEffect => if anyList (tyVarTypeOcc p) fieldTys then
-      pushTypeErrorOnceAt "T-EFFECT-KIND-MISMATCH" loc (effectParamAsTypeMsg name p)
-    else
-      ()
-    Some (k@(KindArrow _ _)) => if kindAnnHasEffect k then
-      pushTypeErrorOnceAt "T-EFFECT-KIND-MISMATCH" loc (effectArrowOnDataHeadMsg name p k)
-    else
-      ()
-    Some KindType => if contains p rowNames then
-      pushTypeErrorOnceAt "T-EFFECT-KIND-MISMATCH" loc (typeParamAsRowMsg name p)
-    else
-      ()
+    None =>
+      if contains p rowNames then
+        pushTypeErrorOnceAt "T-EFFECT-KIND-MISMATCH" loc (unannotatedRowParamMsg name p)
+      else
+        ()
+    Some KindEffect =>
+      if anyList (tyVarTypeOcc p) fieldTys then
+        pushTypeErrorOnceAt "T-EFFECT-KIND-MISMATCH" loc (effectParamAsTypeMsg name p)
+      else
+        ()
+    Some (k@(KindArrow _ _)) =>
+      if kindAnnHasEffect k then
+        pushTypeErrorOnceAt "T-EFFECT-KIND-MISMATCH" loc (effectArrowOnDataHeadMsg name p k)
+      else
+        ()
+    Some KindType =>
+      if contains p rowNames then
+        pushTypeErrorOnceAt "T-EFFECT-KIND-MISMATCH" loc (typeParamAsRowMsg name p)
+      else
+        ()
   checkHeadKindsGo name rowNames fieldTys ps anns
 checkHeadKindsGo _ _ _ _ [] = ()
 
@@ -1575,7 +1581,8 @@ tyVarTypeOcc p (TyTuple ts) = anyList (tyVarTypeOcc p) ts
 tyVarTypeOcc p (TyConstrained _ t) = tyVarTypeOcc p t
 tyVarTypeOcc p (TyApp a b) = match tyAppSpine (TyApp a b)
   (TyCon { tyConName = n, tyConOrigin = o }, args) => match lookupTab (tyTabKey o n) perRun.value.dataParamKindsRef.value
-    Some kinds if listLen kinds == listLen args => tyVarTypeOccSlots p kinds args
+    Some kinds if listLen kinds == listLen args =>
+      tyVarTypeOccSlots p kinds args
     _ => anyList (tyVarTypeOcc p) args
   (hd, args) => tyVarTypeOcc p hd || anyList (tyVarTypeOcc p) args
 tyVarTypeOcc _ _ = False
@@ -1584,7 +1591,8 @@ tyVarTypeOcc _ _ = False
 -- else is walked as a type.
 tyVarTypeOccSlots : String -> List Kind -> List Ty -> Bool
 tyVarTypeOccSlots p (KRow::ks) ((TyVar _)::ts) = tyVarTypeOccSlots p ks ts
-tyVarTypeOccSlots p (_::ks) (t::ts) = tyVarTypeOcc p t || tyVarTypeOccSlots p ks ts
+tyVarTypeOccSlots p (_::ks) (t::ts) = tyVarTypeOcc p t
+  || tyVarTypeOccSlots p ks ts
 tyVarTypeOccSlots _ _ _ = False
 
 -- interface heads (c): the retired co-occurrence inference is the EVIDENCE.
@@ -1601,10 +1609,11 @@ checkIfaceHeadKinds name (p::ps) (a::anns) methods =
       else
         ()
     Some KindEffect => pushTypeErrorOnceAt "T-EFFECT-KIND-MISMATCH" loc (ifaceParamEffectKindMsg name p)
-    _ => if anyKRow inferred then
-      pushTypeErrorOnceAt "T-EFFECT-KIND-MISMATCH" loc (unannotatedGradedParamMsg name p inferred)
-    else
-      ()
+    _ =>
+      if anyKRow inferred then
+        pushTypeErrorOnceAt "T-EFFECT-KIND-MISMATCH" loc (unannotatedGradedParamMsg name p inferred)
+      else
+        ()
   checkIfaceHeadKinds name ps anns methods
 checkIfaceHeadKinds _ _ [] _ = ()
 
@@ -6316,7 +6325,8 @@ classEnvRowsOf ord ((name, typarams, kinds, methods, supers, o)::rest) =
 -- every parameter's RESOLVED slot kinds, positional with [typarams].
 ifaceParamKindsDeclAll : List String -> List (Option KindAnn) -> List IfaceMethod -> List (List Kind)
 ifaceParamKindsDeclAll [] _ _ = []
-ifaceParamKindsDeclAll (p::ps) [] methods = ifaceParamKindsDeclAll (p::ps) [None] methods
+ifaceParamKindsDeclAll (p::ps) [] methods =
+  ifaceParamKindsDeclAll (p::ps) [None] methods
 ifaceParamKindsDeclAll (p::ps) (a::anns) methods =
   ifaceParamKindsDecl a p methods :: ifaceParamKindsDeclAll ps anns methods
 
@@ -10073,8 +10083,13 @@ fromAstTypeApp etbl tvs o n args =
   match lookupTab key perRun.value.aliasTableRef.value
     -- Saturated parameterized alias: bind params → arg Monos (alias params shadow
     -- outer tvs of the same name) and expand the RHS through the same seam.
+    -- #2121 / §6.2: each argument elaborates at the alias parameter's DECLARED
+    -- kind — an `Effect` parameter binds a row cell in the effect table so the
+    -- RHS's own occurrence of it (`Later e Int`) reads the written row.
     Some (params, rhs) if listLen params == listLen args =>
-      fromAstTypeE etbl (zipL params (map (fromAstTypeE etbl tvs) args) ++ tvs) rhs
+      let kinds = optionOr (map (_ => KType) params) (lookupTab key perRun.value.dataParamKindsRef.value)
+      let bound = aliasArgBindings etbl tvs params kinds args
+      fromAstTypeE (fst bound ++ etbl) (snd bound ++ tvs) rhs
     -- Alias applied to the wrong arity: reject, keep the opaque fallback.
     Some (params, _) =>
       let _ = pushTypeErrorOnce "T-ALIAS-ARITY" (aliasArityMsg n (listLen params) (listLen args))
@@ -10083,6 +10098,21 @@ fromAstTypeApp etbl tvs o n args =
       Some kinds if listLen kinds == listLen args =>
         foldAppKinds etbl tvs (tconFrom o n) kinds args
       _ => appFallback etbl tvs o n args
+
+-- the alias parameters bound positionally at their declared kinds: (effect
+-- table additions, type table additions).  A KRow parameter gets a fresh row
+-- cell pinned to the written argument row by the index unifier (equality —
+-- an alias slot is an index, §9); a KType parameter binds the elaborated Mono.
+aliasArgBindings : List (String, Ref Effvar) -> List (String, Mono) -> List String -> List Kind -> List Ty -> (List (String, Ref Effvar), List (String, Mono))
+aliasArgBindings etbl tvs (p::ps) (KRow::ks) (arg::args) =
+  let cell = freshEffvar ()
+  let _ = unifyIndexRow (EffRow [] (Some cell)) (rowArgOf etbl arg)
+  let rest = aliasArgBindings etbl tvs ps ks args
+  ((p, cell) :: fst rest, snd rest)
+aliasArgBindings etbl tvs (p::ps) (_::ks) (arg::args) =
+  let rest = aliasArgBindings etbl tvs ps ks args
+  (fst rest, (p, fromAstTypeE etbl tvs arg) :: snd rest)
+aliasArgBindings _ _ _ _ _ = ([], [])
 
 -- #822: a spine headed by an interface typaram of GRADED kind — `f e b` must yield
 -- the SAME Mono shape a row-indexed data head does (`Async e b` =
@@ -10191,7 +10221,7 @@ rowArgOf etbl (TyRow labels tail _) =
 -- root as the S0 above, one function apart, which is why it lands in the same change.
 -- It is the MIRROR of the shipped use-site check (`fromAstTypeE`'s `TyRow` arm: a row
 -- written where a type is expected), so it takes the same shipped code rather than
--- half-applying the decided `T-EFFECT-KIND-MISMATCH` → `T-EFFECT-KIND-MISMATCH` rename
+-- half-applying the decided `T-ROW-KIND-MISMATCH` → `T-EFFECT-KIND-MISMATCH` rename
 -- (EFFECTS-SEMANTICS §6.4/§6.9 Q2) at one site out of three.  `pureRow` stays as the
 -- inert continuation value so inference proceeds, exactly as `fromAstTypeE` continues
 -- with `TCon "Unit"`.
@@ -29912,7 +29942,8 @@ ifaceMethodTy ((DInterface { name, typarams, typaramKinds, methods, ifaceOrigin,
     irName = name,
     irOrigin = ifaceOrigin,
   } iface = match methodTyOf mname methods
-    Some ty => Some (typarams, ty, declGradedScope typarams typaramKinds methods)
+    Some ty =>
+      Some (typarams, ty, declGradedScope typarams typaramKinds methods)
     None => ifaceMethodTy rest iface mname
   | otherwise = ifaceMethodTy rest iface mname
 ifaceMethodTy (_::rest) iface mname = ifaceMethodTy rest iface mname
