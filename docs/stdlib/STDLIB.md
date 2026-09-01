@@ -1,8 +1,8 @@
 # Medaka Standard Library — Design Notes & Roadmap
 
 > **Does the stdlib have X?** This is NOT the reference — see
-> [`docs/stdlib/index.md`](index.md) (generated from source, `make -C . doc`
-> via `./medaka doc --out docs/stdlib stdlib/*.mdk`) for the actual, current
+> [`docs/stdlib/index.md`](index.md) (generated from source via
+> `./medaka doc --out docs/stdlib stdlib/*.mdk`) for the actual, current
 > function/type/impl list. This document is design rationale, history, and the
 > open roadmap.
 

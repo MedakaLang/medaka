@@ -26,6 +26,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # $MEDAKA honoured for local runs against a borrowed/pre-built binary; CI (which
 # builds ./medaka before running gates) falls back to $ROOT/medaka.
 MEDAKA="${MEDAKA:-$ROOT/medaka}"
+[ -x "$MEDAKA" ] || { echo "build native first: make medaka (missing $MEDAKA)"; exit 2; }
 FIXDIR="$ROOT/test/doc_fixtures"
 GOLDENDIR="$ROOT/test/doc_goldens"
 # S-doc-library-mode: `medaka doc --out DIR <files...>` arm. Small fixture
@@ -87,13 +88,19 @@ done
 # ── library-mode arm ────────────────────────────────────────────────────────
 if [ -d "$LIBGOLDENDIR" ]; then
   "$MEDAKA" doc --out "$LIBTMPDIR" "$LIBFIXDIR"/*.mdk >/dev/null 2>/dev/null
-  # `async.mdk` (the exclusion probe) must produce no page.
+  # `async.mdk` (the exclusion probe) must produce no page. Checked together
+  # with proof the run actually produced its OTHER expected pages — bare
+  # absence of async.md is also satisfied by a total generator failure
+  # (nothing generated = async.md also absent = vacuous "pass").
   if [ -f "$LIBTMPDIR/async.md" ]; then
     fail=$((fail + 1))
     printf 'FAIL library-mode (async-probe module was NOT excluded — async.md exists)\n'
-  else
+  elif [ -f "$LIBTMPDIR/alpha.md" ] && [ -f "$LIBTMPDIR/beta.md" ] && [ -f "$LIBTMPDIR/gamma.md" ]; then
     pass=$((pass + 1))
     printf 'ok   library-mode async-exclusion\n'
+  else
+    fail=$((fail + 1))
+    printf 'FAIL library-mode async-exclusion (generator produced no other pages — vacuous absence, not a real exclusion)\n'
   fi
   # S-doc-surface-truth hole (b): `rebucketLibraryImpls` files an impl under the
   # page of the type it is ON, not the module that declared it. gamma.mdk writes
