@@ -687,6 +687,22 @@ corpus = []
 toolchain = ["wasm-tools", "node>=24"]
 
 [[gate]]
+name = "pds/test/read_routes_all_engines"
+area = "engines"
+shard = "gates_1"
+project = "pds"
+tiers = ["merge"]
+# Repository-free by construction (see the script header): no signing, so the
+# eval arm is seconds, not the >10-minute band #2181 removed from this project.
+cost = "medium"
+kind = "exec"
+run = "pds/test/read_routes_all_engines.sh"
+oracles = []
+sources = ["pds/*"]
+corpus = []
+toolchain = ["wasm-tools", "node>=24"]
+
+[[gate]]
 name = "pds/test/repo_vectors"
 area = "engines"
 shard = "gates_8"

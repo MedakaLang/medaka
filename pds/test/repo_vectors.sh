@@ -124,6 +124,31 @@ grep -F -q 'CELL validate-true-refused PASS error=InvalidRequest' "$WORK/handler
 grep -F -q 'cells: 4/4 state-preserving rejections' "$WORK/handlers.out" || fail 'handler-layer state-preservation count is incomplete'
 [ "$(tail -1 "$WORK/handlers.out")" = 'TOTAL: PASS' ] || fail 'record-handler driver did not end in TOTAL: PASS'
 
+# ── P4-D: the SAME transcript, READ BACK through the read/sync handlers ──────
+# Replays the four writes and then reads the result back out through
+# getRecord/listRecords/describeRepo/sync.getRepo/sync.getLatestCommit,
+# comparing every answer against the corpus's own rows. sync.getRepo's body is
+# checked THREE ways: response bytes == repoExportCar's bytes == the corpus CAR
+# row, so a wrong pair cannot satisfy it. Compiled engines only, same reason as
+# the arm above; the repository-FREE half of these routes (the two well-knowns,
+# resolveHandle, and every unconfigured-store refusal) runs on all three
+# engines in pds/test/read_routes_all_engines.sh.
+READS_DRIVER="$ROOT/pds/test/read_handlers_main.mdk"
+if ! MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$READS_DRIVER" -o "$WORK/reads" > "$WORK/reads-build.log" 2>&1; then
+  cat "$WORK/reads-build.log" >&2
+  fail 'read-handler driver build failed'
+fi
+
+"$WORK/reads" "$CORPUS" > "$WORK/reads.out" 2> "$WORK/reads.err"
+require_empty "$WORK/reads.err" 'read handlers'
+
+grep -F -q 'setup: 4/4 transcript writes replayed through the seam' "$WORK/reads.out" || fail 'read-handler setup replay is incomplete'
+grep -F -q 'READ sync-getRepo-car-bytes PASS' "$WORK/reads.out" || fail 'read handlers missed the three-way CAR byte equality'
+grep -F -q 'READ sync-getLatestCommit PASS' "$WORK/reads.out" || fail 'read handlers missed the pinned latest commit'
+grep -F -q 'READ getRecord-deleted-medaka-a PASS error=RecordNotFound' "$WORK/reads.out" || fail 'read handlers missed the deleted-record refusal'
+grep -F -q 'reads: 12/12 corpus-graded read routes' "$WORK/reads.out" || fail 'read-handler route count is incomplete'
+[ "$(tail -1 "$WORK/reads.out")" = 'TOTAL: PASS' ] || fail 'read-handler driver did not end in TOTAL: PASS'
+
 if [ ! -x "$WASM_EMITTER" ] || ! command -v node >/dev/null 2>&1 || ! command -v wasm-tools >/dev/null 2>&1; then
   [ "${MEDAKA_REQUIRE_WASM:-0}" != 1 ] || fail 'Wasm is required but emitter/node/wasm-tools is unavailable'
   echo 'PASS: repo — full official transcript and focused representative on native; Wasm unavailable'
@@ -145,4 +170,4 @@ require_empty "$WORK/wasm-rep.err" 'wasm representative'
 strip_exit_trailer "$WORK/wasm-rep-raw.out" "$WORK/wasm-rep.out"
 cmp "$WORK/native-rep.out" "$WORK/wasm-rep.out" || fail 'native and Wasm normalized representative output differ'
 
-echo 'PASS: repo — full official TIDs/records/MST/commits/signatures/CAR and the 27 focused rejection routes, native == Wasm on both; 19 hostile routes; 4 handler-layer transcript steps + 4 state-preserving rejections'
+echo 'PASS: repo — full official TIDs/records/MST/commits/signatures/CAR and the 27 focused rejection routes, native == Wasm on both; 19 hostile routes; 4 handler-layer transcript steps + 4 state-preserving rejections; 12 corpus-graded read routes'

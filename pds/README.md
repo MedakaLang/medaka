@@ -1,10 +1,12 @@
 # pds/
 
 The self-hosted atproto PDS (Personal Data Server) written in Medaka. Phases
-0–2 of the umbrella design (#1697) are complete in this tree: the pure core
+0–2 and the pure half of Phase 4 of the umbrella design (#1697) are complete in
+this tree: the pure core
 covers strict secp256k1 signing and `did:key`, canonical DAG-CBOR/CIDs, the
 atproto MST, verified CAR/block storage, signed repository transitions, strict
-HTTP/1.1 framing, structural XRPC routing, and explicit immutable handler state.
+HTTP/1.1 framing, structural XRPC routing, explicit immutable handler state, and
+the nine atproto record/sync/identity endpoints plus the two well-known paths.
 Phase 3's socket shell is next but remains dependency-gated; see
 `docs/design/ATPROTO-PDS-DESIGN.md` for the full design.
 
@@ -24,8 +26,12 @@ Phase 3's socket shell is next but remains dependency-gated; see
   (blob blocks plus the configured account's repository — see "The Store is
   secret-bearing") plus configured pure composition from request bytes to
   successor state and response bytes.
-- `pds/lib/handlers.mdk` — the three atproto record-write procedures
-  (`createRecord`/`putRecord`/`deleteRecord`) over that state.
+- `pds/lib/handlers.mdk` — every atproto endpoint this PDS serves over that
+  state: the three record-write procedures
+  (`createRecord`/`putRecord`/`deleteRecord`), the six read/sync/identity
+  queries (`getRecord`/`listRecords`/`describeRepo`/`sync.getRepo`/
+  `sync.getLatestCommit`/`identity.resolveHandle`), and the two non-XRPC
+  well-known paths.
 - `pds/test/` — in-language `medaka test` suites (`*_test.mdk`) plus gate
   scripts that run them (`*.sh`). Every gate must be placed explicitly in
   exactly one `ci.yml` shard by measured cost; directory location alone does
@@ -57,8 +63,9 @@ MEDAKA_REQUIRE_WASM=1 sh pds/test/protocol_all_engines.sh
 
 **The policy itself is not restated here.** It lives in `AGENTS.md`
 [W-PROJECT-BY-MANIFEST] (a `medaka.toml` outside `compiler/`/`test/` makes a
-project; it needs a floor gate under `<project>/test/` and a `ci.yml` shard glob
-placed by measured cost; `test/preflight.sh` derives its arm from the manifest
+project; it needs a floor gate under `<project>/test/` and a `shard` field in
+`test/gates.toml`, whose real placement `medaka gate balance` + `make gen-ci`
+derive from measured cost; `test/preflight.sh` derives its arm from the manifest
 and needs no edit; `test/diff_compiler_project_enrolment.sh` re-derives and
 compares all three on every run). This block used to duplicate it, and the copy
 had already gone stale — it named the `sqlite` shard as pds's only home, while
@@ -66,12 +73,19 @@ had already gone stale — it named the `sqlite` shard as pds's only home, while
 
 Three things are specific to `pds/` and are NOT in the general policy:
 
-* **Depth.** Shard globs do not cross `/`, so a script in a SUBDIRECTORY of
-  `pds/test/` is enrolled by NOTHING unless explicitly named and will red
-  `diff_compiler_ci_shard_coverage` until it gets a `test/CI-COVERAGE-TOOLS.txt`
-  row. Do not put scripts in subdirectories of `pds/test/`. (Preflight's arm is a
-  shell `case` pattern and DOES match at any depth — the pair reads as consistent
-  when it is not. [RUN-PDS0-003(a)])
+* **Depth.** This bullet used to say shard globs do not cross `/`, so a script
+  in a subdirectory of `pds/test/` was enrolled by nothing. **That is no longer
+  how enrolment works and the claim is retired** (re-derived 2026-09-01 against
+  the current tree, per P4-D): since the #2178 CI re-architecture there are no
+  shard globs at all. `.github/workflows/ci.yml` names gates one by one, and
+  `test/diff_compiler_ci_shard_coverage.sh` classifies a gate by the
+  REPO-RELATIVE STEM of its `test/gates.toml` `run` field
+  (`tracked = {p[:-3] …}` over `git ls-files '*.sh'`, matched against
+  `by_stem[run[:-3]]`) — a path of any depth. What still enrols a script is a
+  `[[gate]]` row with a valid `shard`; what still leaves one unreachable is the
+  absence of one. Depth is not the axis. Keeping scripts directly under
+  `pds/test/` is still the convention every existing gate follows, but it is a
+  convention, not a coverage requirement.
 * **Non-gates.** A script that proves nothing about the compiler — an oracle
   run/compose script, a corpus-extraction script — must live OUTSIDE `pds/test/`
   (`pds/oracle/`, `pds/tools/`) and needs a `test/CI-COVERAGE-TOOLS.txt` row keyed
@@ -301,6 +315,59 @@ end to end and compares every `uri`, record `cid`, `commit.cid`, and
 `commit.rev` against the corpus's pinned values. It runs as an arm of
 `pds/test/repo_vectors.sh`.
 
+## Phase 4 reads, sync, identity, and the two well-knowns (#1697, pure half)
+
+`pds/lib/handlers.mdk` also implements the six read routes. None of them can
+transition the `Store`: `readHandled` returns a bare `Response`, so the read
+half is structurally incapable of writing, and `pdsHandler` returns the input
+`Store` for every one of them.
+
+| Route | Answer | Refusals |
+|---|---|---|
+| `com.atproto.repo.getRecord` | `{uri, cid, value}` | `RecordNotFound` when absent, or when an explicit `cid` parameter names a different record |
+| `com.atproto.repo.listRecords` | `{records, cursor?}` | — |
+| `com.atproto.repo.describeRepo` | `{did, handle, collections, handleIsCorrect}` | `RepoNotFound` |
+| `com.atproto.sync.getRepo` | the repository CAR, `application/vnd.ipld.car` | `since` is refused, not ignored |
+| `com.atproto.sync.getLatestCommit` | `{cid, rev}` | `RepoNotFound` |
+| `com.atproto.identity.resolveHandle` | `{did}` | `HandleNotFound`; needs no repository |
+
+`listRecords` implements atproto's `limit` (1–100, default 50), `reverse`
+(`false` — descending record key, newest first — is the default; `true` is
+ascending), and `cursor`. A `cursor` is emitted ONLY when a further page
+exists, so a client that gets none knows it has seen the whole collection.
+
+`sync.getRepo`'s body is `pds/lib/repo.mdk`'s `repoExportCar` verbatim, not a
+second CAR emission. `pds/test/read_handlers_main.mdk` grades that three ways at
+once — response bytes == `repoExportCar`'s bytes == the pinned corpus `CAR` row
+(557 bytes for the reference transcript's final state) — because either
+equality alone could be satisfied by a wrong pair. It runs as an arm of
+`pds/test/repo_vectors.sh`, beside the write-side replay.
+
+### The well-known route class
+
+`/.well-known/did.json` and `/.well-known/atproto-did` are not XRPC methods and
+have no NSID, so `pds/lib/xrpc.mdk` routes them as their own explicitly-typed
+class (`WellKnown`), reached through the same `routeRequest`/`handle` seam and
+the same `Store` as every other path — not beside it. They are graded exactly
+as a query endpoint is: GET only (405 otherwise), no request body framing (400
+otherwise). Every OTHER path outside `/xrpc/` still 404s with
+`NotFound`/`XRPC route not found`, unchanged.
+
+`/.well-known/did.json` serves **this PDS's own did:web document**, keyed by the
+hostname `makeAccount` admitted — it describes the SERVER's atproto service
+endpoint, not the hosted account, which is a `did:key` and owns a different
+document this server does not serve. `/.well-known/atproto-did` serves the
+hosted account's DID as bare `text/plain; charset=utf-8`, with no trailing
+newline.
+
+`pds/test/read_routes_all_engines.sh` grades the repository-FREE half of all of
+this — both well-knowns, `resolveHandle` in full, every read's
+unconfigured-store `RepoNotFound` refusal, and the non-XRPC 404 control — on
+eval, native, and real Wasm with a direct-red mutation, seventeen named cells.
+It is repository-free deliberately: nothing in it signs, which is what makes an
+eval arm affordable at all (see "The Store is secret-bearing" for the 600s
+measurement).
+
 ### Where the revision comes from (there is no clock)
 
 `repoCreate`/`repoUpdate`/`repoDelete` each require an explicit, strictly
@@ -363,7 +430,18 @@ this project. A record write against an unconfigured store is refused with
   what happens.
 - **One account per server.** `Server` carries exactly one `Account` and
   `Store` exactly one `Repo`. A `repo` field naming anything but that account's
-  DID or handle is `RepoNotFound`.
+  DID or handle is `RepoNotFound`. `resolveHandle` resolves exactly the one
+  handle that server hosts and nothing else, and `describeRepo`'s
+  `handleIsCorrect` is `true` by that same construction — `makeAccount`
+  admitted the DID/handle pair and `resolveHandle` answers from it — not by a
+  bidirectional resolution this core cannot perform.
+- **No `didDoc` on `describeRepo`.** The lexicon has the field; this server
+  omits it. The account DID is a `did:key` and there is no DID resolver in the
+  pure core, so any document printed here would be invented.
+- **No `since` on `sync.getRepo`.** Incremental sync is not implemented, so the
+  parameter is REFUSED rather than ignored: answering the whole-repository
+  question when a narrower one was asked would return something plausible and
+  wrong.
 
 ## secp256k1 scalar arithmetic (S-scalar, #1700)
 
