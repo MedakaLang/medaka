@@ -2579,8 +2579,14 @@ floor's arbitrary last-registered answer and `recordImplObligation` silently inh
 the two values disagree only in the ambiguous case, unambiguous cases genuinely agree, and a
 DIRECT import ambiguity genuinely is rejected upstream — but a RE-EXPORT-MERGE ambiguity is
 not. Do not cite "resolve already rejects the ambiguous case" as blanket cover. (Adjacent to
-the open #1288 re-export-merge family; not this unit's to fix. Pinned by
-`test/must_fail_fixtures/1530-xmod-method-name-collision-reexport-merge`.)
+the open #1288 re-export-merge family; not this unit's to fix. ⚠️ Only ONE of the two arms is
+pinned: `test/must_fail_fixtures/1530-xmod-method-name-collision-reexport-merge` pins the
+REJECT arm — exit 1, `No impl of IP for W`, naming an interface the program never mentions.
+The SILENT-ACCEPT arm — swap the two `export import` lines and the same program exits 0 with
+zero diagnostics — is MEASURED but deliberately NOT pinned, by that fixture or any other; its
+`claim.txt` says so in as many words, and gives the reason: a `must_fail` row asserts one
+verb's exit+stdout, so pinning an "exit 0, prints a plausible-looking value" arm as a positive
+number would let a wrong fix swap the reject arm's value without draining the class.)
 
 **The change is one token.** `recordImplObligation`'s `pushPendingObl (ifaceRefBare
 iface.irName) …` becomes `pushPendingObl iface …` — `iface` is already the identity-carrying

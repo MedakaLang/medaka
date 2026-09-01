@@ -1,5 +1,5 @@
 # META
-source_lines=37798
+source_lines=37806
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -1148,7 +1148,6 @@ effrowLabels r = match effrowNorm r
 -- open tail are preserved.  When no hole is present the row is unchanged.
 -- `lets` is the enclosing function body's α-let scope (EFFECTS WS-2): seeded into
 -- α so an outer-body `let dest = "…"; fetch dest` recovers the literal prefix.
-
 fillHolesInRow : List (String, Expr) -> EffRow -> Option Expr -> EffRow
 fillHolesInRow lets eff firstArg = match effrowNorm eff
   EffRow labels tail =>
@@ -6752,8 +6751,10 @@ recordLocalBind name loc v =
 -- keeps only the tyvar ids (enough to pick a dict route); but to record a real impl
 -- obligation when a constrained fn is INSTANTIATED at a concrete type (`g = f "hello"`
 -- where `f : Num a => a -> a`), the call site needs the iface ("Num") so it can check
--- `Num String` against the impl table.  `funConstraints` carries
--- the iface name into the constraint-obligation check.  Populated at the SAME
+-- `Num String` against the impl table.  funConstraintsRef CANNOT supply that name —
+-- it holds tyvar ids and nothing else — which is exactly why this separate
+-- funConstraintIfacesRef table exists: it is the one that carries the iface name into
+-- the constraint-obligation check.  Populated at the SAME
 -- three sites as funConstraintsRef (registerMember / registerInferredFor /
 -- seedDictAritiesFromSigs), with the SAME cross-module accumulate+reseed lifecycle.
 
@@ -10337,8 +10338,8 @@ infer env (ERangeArray lo hi _) = inferIntRange env lo hi (tconBuiltin "Array")
 -- "no impl of Slice" constraint error via normal method dispatch.
 infer env (EHeadAnnot e ty) = inferHeadAnnot env e ty
 -- ELoc is transparent: capture the span in `currentLoc` (so any type error
--- recorded while inferring the wrapped expr is attributable to this position,
--- ), then infer the inner expr.
+-- recorded while inferring the wrapped expr is attributable to this position), then
+-- infer the inner expr.
 infer env (ELoc l e) =
   currentLoc := Some l
   infer env e
@@ -11666,8 +11667,7 @@ unifyFieldAssignIdx env rname ri subst fn val = match omLookup fn (recordFieldMa
   Some fm => unify (infer env val) (substMono subst [] fm)
 
 -- TYPECHECK-AUDIT OBS4: every declared field must be supplied in a record
--- construction — every declared field
--- must be supplied.  Walk `declaredFields`, check each name is present
+-- construction.  Walk `declaredFields`, check each name is present
 -- among the supplied `FieldAssign` list; push MissingField for any absent one.
 -- `supplied` is the SET of supplied field names (built once by the caller), so the
 -- membership test is O(log N) instead of a per-declared-field O(N) list scan — a single
@@ -13612,10 +13612,20 @@ recordImplObligation x mono
       -- "occurrence layer": `DImpl.implOrigin` and `DInterface.ifaceOrigin` are the SAME
       -- layer — one ASSIGNED at the `interface` decl, one RESOLVED-TO at each occurrence
       -- — so comparing them is not a category error.  Discarding the identity here
-      -- silently accepts #1438's cross-module collision shape (a `No impl of Same for P`
-      -- bucket miss on a program whose `impl Same P` is three lines up); carrying it
-      -- REJECTS that shape, discriminating METHOD-OCCURRENCE goals the same way the other
-      -- three goal-producer call sites always did.
+      -- silently accepts #1438's cross-module collision shape; carrying it REJECTS that
+      -- shape, discriminating METHOD-OCCURRENCE goals the same way the other three
+      -- goal-producer call sites always did.
+      --
+      -- ⚠️ #1288 IS A SEPARATE FACT, AND POINTS THE OTHER WAY — do not weld the two.
+      -- It is what carrying identity COSTS: when a re-export merge (`mid.mdk` doing
+      -- `export import p.*` + `export import g.*` over two unrelated `Same` interfaces)
+      -- gives an importer's `impl Same P` an `implOrigin` of `g` while the method it
+      -- defines belongs to `p.Same`, the identity-carrying goal `TkIdent p Same` misses
+      -- the impl's `TkIdent g Same` bucket.  That is a FALSE REJECT at exit 1 —
+      -- `No impl of Same for P` on a program whose `impl Same P` is three lines up, with
+      -- no syntax available to say which `Same` was meant.  #1438: identity turns a
+      -- silent accept into a reject (good).  #1288: identity turns a valid program into
+      -- a rejection (bad, and open).  Both are live; both belong here.
       --
       -- 🚨 A DO-NOT-RESTORE ban stood at this exact site from #1480 until U1c retired it.
       -- Do NOT reinstate it on a bare assertion that the two layers are "different" — and
@@ -16607,7 +16617,6 @@ letGroupDefs ((LetBind n clauses)::rest) = map (tcClauseDef n) clauses
 tcClauseDef : String -> FunClause -> (String, (List Pat, Expr))
 tcClauseDef n c = (n, funClausePair c)
 
--- D2 fix.
 -- True iff the expression is an explicit lambda at the top level.
 -- ⚠️ #807 (pre-existing, out of scope here): does NOT see through an ELoc
 -- wrapper, so a zero-param `let rec f = x => …` clause — whose RHS the parser
@@ -26358,7 +26367,7 @@ checkBodyImpl seed mode prog0 =
 -- `No impl of … for …` check).
 
 -- Phase 4.55: infer each prop body with its declared params in scope, so the
--- prepass-marked EDictAt/EMethodAt route refs inside resolve resolve.
+-- prepass-marked EDictAt/EMethodAt route refs inside resolve.
 -- Runs unconditionally (props are eval-only; the
 -- emit/golden paths have no props): infer prop_body; unify t_bool.
 -- A prop body is eval-only and is NOT dict-passed for operator dispatch: like the
@@ -31582,7 +31591,6 @@ hasDupI (x::xs) = containsI x xs || hasDupI xs
 sigTooGeneralMsg : String -> Ty -> String
 sigTooGeneralMsg name ty = "Declared signature of '\{name}' is more general than its body. '\{ppTy ty}' claims type variables that are the same type after inference"
 
--- C3.
 annotTooGeneralMsg : Ty -> String
 annotTooGeneralMsg ty = "Type annotation '"
   ++ ppTy ty
