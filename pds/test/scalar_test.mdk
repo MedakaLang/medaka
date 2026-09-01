@@ -20,7 +20,7 @@
    key for the low-S boundary is the corpus's `high` rows.
 
    This file uses the BOUNDS-CHECKED public array API (`arr[i]`,
-   `arr[i] := v`, `Array.set`) — no restricted internal externs. -}
+   `arr[i] := v`, `Array.setInPlace`) — no restricted internal externs. -}
 
 import test.{expectEqual, expectTrue, expectFalse}
 import array as A
@@ -71,7 +71,7 @@ decGo out i =
     if v == 0 then
       out[i] := 255
       decGo out (i - 1)
-    else A.set i (v - 1) out
+    else A.setInPlace i (v - 1) out
 
 -- 32 big-endian bytes, incremented by one.
 incBytes : Array Int -> Array Int
@@ -88,7 +88,7 @@ incGo out i =
     if v == 255 then
       out[i] := 0
       incGo out (i - 1)
-    else A.set i (v + 1) out
+    else A.setInPlace i (v + 1) out
 
 -- 32 big-endian bytes, halved (v >> 1).
 halveBytes : Array Int -> Array Int

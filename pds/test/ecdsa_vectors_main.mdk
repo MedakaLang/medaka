@@ -48,13 +48,13 @@ isErr (Ok _) = False
 isErr (Err _) = True
 
 bump : Array Int -> Int -> Unit
-bump counts i = A.set i (counts[i] + 1) counts
+bump counts i = A.setInPlace i (counts[i] + 1) counts
 
 copy32 : Array Int -> Array Int -> Int -> Int -> Unit
 copy32 input out offset i =
   if i >= 32 then ()
   else
-    let () = A.set (offset + i) input[i] out
+    let () = A.setInPlace (offset + i) input[i] out
     copy32 input out offset (i + 1)
 
 compactOf : Array Int -> Array Int -> Array Int
@@ -74,7 +74,7 @@ componentGo : Array Int -> Array Int -> Int -> Int -> Unit
 componentGo compact out offset i =
   if i >= 32 then ()
   else
-    let () = A.set i compact[offset + i] out
+    let () = A.setInPlace i compact[offset + i] out
     componentGo compact out offset (i + 1)
 
 one32 : Array Int
@@ -94,7 +94,7 @@ copyPrefix : Array Int -> Array Int -> Int -> Unit
 copyPrefix input out i =
   if i >= arrayLength input || i >= arrayLength out then ()
   else
-    let () = A.set i input[i] out
+    let () = A.setInPlace i input[i] out
     copyPrefix input out (i + 1)
 
 withLength : Array Int -> Int -> Array Int
@@ -128,8 +128,8 @@ runPublicBoundaryProbes counts keyHex digest compact =
         let longDigest = arrayMake 33 0
         let lowDomain = withLength digest 32
         let highDomain = withLength digest 32
-        let () = A.set 0 (-1) lowDomain
-        let () = A.set 31 256 highDomain
+        let () = A.setInPlace 0 (-1) lowDomain
+        let () = A.setInPlace 31 256 highDomain
         let publicKey = publicKeyForSecret secret
         let signOk = isErr (signDigest secret shortDigest) && isErr (signDigest secret longDigest) && isErr (signDigest secret lowDomain) && isErr (signDigest secret highDomain)
         let verifyOk = not (verifyDigest publicKey shortDigest signature) && not (verifyDigest publicKey longDigest signature) && not (verifyDigest publicKey lowDomain signature) && not (verifyDigest publicKey highDomain signature)
@@ -223,7 +223,7 @@ copyUncompressedX : Array Int -> Array Int -> Int -> Unit
 copyUncompressedX input out i =
   if i >= 32 then ()
   else
-    let () = A.set (i + 1) input[i + 1] out
+    let () = A.setInPlace (i + 1) input[i + 1] out
     copyUncompressedX input out (i + 1)
 
 compressedFromUncompressed : Array Int -> Array Int
@@ -231,7 +231,7 @@ compressedFromUncompressed input =
   if arrayLength input /= 65 then [||]
   else
     let out = arrayMake 33 0
-    let () = A.set 0 (2 + input[64] % 2) out
+    let () = A.setInPlace 0 (2 + input[64] % 2) out
     let () = copyUncompressedX input out 0
     out
 
@@ -279,7 +279,7 @@ runWycheproofRow counts seen lineNo text = match split " " (trim text)
       let () = bump counts 4
       println "FAIL Wycheproof tcId=\{id}: duplicate or out of range"
     else
-      let () = A.set idValue 1 seen
+      let () = A.setInPlace idValue 1 seen
       let () = bump counts 5
       let compact = bytes compactHex
       let digest = sha256 (bytes messageHex)

@@ -13,7 +13,7 @@ stages=DESUGAR,MARK
      1. Performance vs. functional feel.  The public API is a pure facade
         where it can be (`map`, `filter`, `sort`, etc. return fresh arrays)
         and explicitly mutates in place where that's the whole point
-        (`set`, `swap`, `sortInPlace`) — untracked, no effect in the signature.
+        (`setInPlace`, `swap`, `sortInPlace`) — untracked, no effect in the signature.
 
      2. Opaque builtin vs. typeclass member.  `Array a` cannot be pattern-
         matched like `List a`, so the impls below dispatch through the
@@ -304,10 +304,10 @@ revList (x::xs) acc = revList xs (x::acc)
 
 -- | Bounds-checked write.  Panics on OOB.
 export
-set : Int -> a -> Array a -> Unit
-set i x arr =
+setInPlace : Int -> a -> Array a -> Unit
+setInPlace i x arr =
   if i < 0 || i >= arrayLength arr then
-    panic "Array.set: index out of bounds"
+    panic "Array.setInPlace: index out of bounds"
   else
     arraySetUnsafe i x arr
 
@@ -720,8 +720,8 @@ prop "mapWithIndex agrees with zipWith over range" (xs : List Int) =
 (DTypeSig false "revList" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "revList" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "revList" ((PCons (PVar "x") (PVar "xs")) (PVar "acc")) (EApp (EApp (EVar "revList") (EVar "xs")) (EBinOp "::" (EVar "x") (EVar "acc"))))
-(DTypeSig true "set" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyCon "Unit")))))
-(DFunDef false "set" ((PVar "i") (PVar "x") (PVar "arr")) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr")))) (EApp (EVar "panic") (ELit (LString "Array.set: index out of bounds"))) (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EVar "x")) (EVar "arr"))))
+(DTypeSig true "setInPlace" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyCon "Unit")))))
+(DFunDef false "setInPlace" ((PVar "i") (PVar "x") (PVar "arr")) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr")))) (EApp (EVar "panic") (ELit (LString "Array.setInPlace: index out of bounds"))) (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EVar "x")) (EVar "arr"))))
 (DTypeSig true "swap" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyCon "Unit")))))
 (DFunDef false "swap" ((PVar "i") (PVar "j") (PVar "arr")) (EBlock (DoLet false false (PVar "xi") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (DoLet false false (PVar "xj") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "j")) (EVar "arr"))) (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EVar "xj")) (EVar "arr"))) (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "j")) (EVar "xi")) (EVar "arr")))))
 (DTypeSig true "fill" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyCon "Unit"))))
@@ -841,8 +841,8 @@ prop "mapWithIndex agrees with zipWith over range" (xs : List Int) =
 (DTypeSig false "revList" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "revList" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "revList" ((PCons (PVar "x") (PVar "xs")) (PVar "acc")) (EApp (EApp (EVar "revList") (EVar "xs")) (EBinOp "::" (EVar "x") (EVar "acc"))))
-(DTypeSig true "set" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyCon "Unit")))))
-(DFunDef false "set" ((PVar "i") (PVar "x") (PVar "arr")) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr")))) (EApp (EVar "panic") (ELit (LString "Array.set: index out of bounds"))) (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EVar "x")) (EVar "arr"))))
+(DTypeSig true "setInPlace" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyCon "Unit")))))
+(DFunDef false "setInPlace" ((PVar "i") (PVar "x") (PVar "arr")) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr")))) (EApp (EVar "panic") (ELit (LString "Array.setInPlace: index out of bounds"))) (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EVar "x")) (EVar "arr"))))
 (DTypeSig true "swap" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyCon "Unit")))))
 (DFunDef false "swap" ((PVar "i") (PVar "j") (PVar "arr")) (EBlock (DoLet false false (PVar "xi") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (DoLet false false (PVar "xj") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "j")) (EVar "arr"))) (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EVar "xj")) (EVar "arr"))) (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "j")) (EVar "xi")) (EVar "arr")))))
 (DTypeSig true "fill" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyCon "Unit"))))

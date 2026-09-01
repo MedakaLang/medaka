@@ -138,8 +138,8 @@ bucketRemove key ((k, v)::rest)
 {- | Insert (or overwrite) the value at a key, in place. Resizes (doubling)
    when the load factor passes 0.75. -}
 export
-set : (Eq k, Hashable k) => k -> v -> HashMap k v -> Unit
-set key val (HashMap buckets count) =
+setInPlace : (Eq k, Hashable k) => k -> v -> HashMap k v -> Unit
+setInPlace key val (HashMap buckets count) =
   let arr = !buckets
   let idx = slotOf key (arrayLength arr)
   insertAt key val arr idx buckets count
@@ -201,15 +201,15 @@ fromList pairs =
 insertAll : (Eq k, Hashable k) => List (k, v) -> HashMap k v -> Unit
 insertAll [] _ = ()
 insertAll ((k, v)::rest) m =
-  set k v m
+  setInPlace k v m
   insertAll rest m
 
 -- ── Deletion (mutating) ─────────────────────────────────────────────────
 
 {- | Remove a key, in place. A no-op when absent. -}
 export
-delete : (Eq k, Hashable k) => k -> HashMap k v -> Unit
-delete key (HashMap buckets count) =
+deleteInPlace : (Eq k, Hashable k) => k -> HashMap k v -> Unit
+deleteInPlace key (HashMap buckets count) =
   let arr = !buckets
   let idx = slotOf key (arrayLength arr)
   deleteAt key arr idx count
@@ -388,8 +388,8 @@ prop "Index HashMap agrees with get on present keys" (xs : List (Int, Int)) =
 (DTypeSig false "bucketRemove" (TyConstrained ((cstr "Eq" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v")))))))
 (DFunDef false "bucketRemove" (PWild (PList)) (EListLit))
 (DFunDef false "bucketRemove" ((PVar "key") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "key") (EVar "k")) (EVar "rest") (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "k") (EVar "v")) (EApp (EApp (EVar "bucketRemove") (EVar "key")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "set" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyCon "Unit"))))))
-(DFunDef false "set" ((PVar "key") (PVar "val") (PCon "HashMap" (PVar "buckets") (PVar "count"))) (EBlock (DoLet false false (PVar "arr") (EUnOp "!" (EVar "buckets"))) (DoLet false false (PVar "idx") (EApp (EApp (EVar "slotOf") (EVar "key")) (EApp (EVar "arrayLength") (EVar "arr")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "insertAt") (EVar "key")) (EVar "val")) (EVar "arr")) (EVar "idx")) (EVar "buckets")) (EVar "count")))))
+(DTypeSig true "setInPlace" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyCon "Unit"))))))
+(DFunDef false "setInPlace" ((PVar "key") (PVar "val") (PCon "HashMap" (PVar "buckets") (PVar "count"))) (EBlock (DoLet false false (PVar "arr") (EUnOp "!" (EVar "buckets"))) (DoLet false false (PVar "idx") (EApp (EApp (EVar "slotOf") (EVar "key")) (EApp (EVar "arrayLength") (EVar "arr")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "insertAt") (EVar "key")) (EVar "val")) (EVar "arr")) (EVar "idx")) (EVar "buckets")) (EVar "count")))))
 (DTypeSig false "insertAt" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v")))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyCon "Unit")))))))))
 (DFunDef false "insertAt" ((PVar "key") (PVar "val") (PVar "arr") (PVar "idx") (PVar "buckets") (PVar "count")) (EIf (EApp (EApp (EVar "bucketHas") (EVar "key")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "idx")) (EVar "arr"))) (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "idx")) (EApp (EApp (EApp (EVar "bucketReplace") (EVar "key")) (EVar "val")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "idx")) (EVar "arr")))) (EVar "arr")) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "idx")) (EBinOp "::" (ETuple (EVar "key") (EVar "val")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "idx")) (EVar "arr")))) (EVar "arr"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "count")) (EBinOp "+" (EUnOp "!" (EVar "count")) (ELit (LInt 1))))) (DoExpr (EApp (EApp (EVar "maybeResize") (EVar "buckets")) (EVar "count")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "maybeResize" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyCon "Unit")))))
@@ -407,9 +407,9 @@ prop "Index HashMap agrees with get on present keys" (xs : List (Int, Int)) =
 (DFunDef false "fromList" ((PVar "pairs")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "insertAll") (EVar "pairs")) (EVar "m"))) (DoExpr (EVar "m"))))
 (DTypeSig false "insertAll" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyCon "Unit")))))
 (DFunDef false "insertAll" ((PList) PWild) (ELit LUnit))
-(DFunDef false "insertAll" ((PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest")) (PVar "m")) (EBlock (DoExpr (EApp (EApp (EApp (EVar "set") (EVar "k")) (EVar "v")) (EVar "m"))) (DoExpr (EApp (EApp (EVar "insertAll") (EVar "rest")) (EVar "m")))))
-(DTypeSig true "delete" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyCon "Unit")))))
-(DFunDef false "delete" ((PVar "key") (PCon "HashMap" (PVar "buckets") (PVar "count"))) (EBlock (DoLet false false (PVar "arr") (EUnOp "!" (EVar "buckets"))) (DoLet false false (PVar "idx") (EApp (EApp (EVar "slotOf") (EVar "key")) (EApp (EVar "arrayLength") (EVar "arr")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "deleteAt") (EVar "key")) (EVar "arr")) (EVar "idx")) (EVar "count")))))
+(DFunDef false "insertAll" ((PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest")) (PVar "m")) (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "k")) (EVar "v")) (EVar "m"))) (DoExpr (EApp (EApp (EVar "insertAll") (EVar "rest")) (EVar "m")))))
+(DTypeSig true "deleteInPlace" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyCon "Unit")))))
+(DFunDef false "deleteInPlace" ((PVar "key") (PCon "HashMap" (PVar "buckets") (PVar "count"))) (EBlock (DoLet false false (PVar "arr") (EUnOp "!" (EVar "buckets"))) (DoLet false false (PVar "idx") (EApp (EApp (EVar "slotOf") (EVar "key")) (EApp (EVar "arrayLength") (EVar "arr")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "deleteAt") (EVar "key")) (EVar "arr")) (EVar "idx")) (EVar "count")))))
 (DTypeSig false "deleteAt" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v")))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyCon "Unit")))))))
 (DFunDef false "deleteAt" ((PVar "key") (PVar "arr") (PVar "idx") (PVar "count")) (EIf (EApp (EApp (EVar "bucketHas") (EVar "key")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "idx")) (EVar "arr"))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "idx")) (EApp (EApp (EVar "bucketRemove") (EVar "key")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "idx")) (EVar "arr")))) (EVar "arr"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "count")) (EBinOp "-" (EUnOp "!" (EVar "count")) (ELit (LInt 1)))))) (ELit LUnit)))
 (DTypeSig false "collectBuckets" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v")))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))))))))
@@ -472,8 +472,8 @@ prop "Index HashMap agrees with get on present keys" (xs : List (Int, Int)) =
 (DTypeSig false "bucketRemove" (TyConstrained ((cstr "Eq" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v")))))))
 (DFunDef false "bucketRemove" (PWild (PList)) (EListLit))
 (DFunDef false "bucketRemove" ((PVar "key") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "key") (EVar "k")) (EVar "rest") (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "k") (EVar "v")) (EApp (EApp (EDictApp "bucketRemove") (EVar "key")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "set" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyCon "Unit"))))))
-(DFunDef false "set" ((PVar "key") (PVar "val") (PCon "HashMap" (PVar "buckets") (PVar "count"))) (EBlock (DoLet false false (PVar "arr") (EUnOp "!" (EVar "buckets"))) (DoLet false false (PVar "idx") (EApp (EApp (EDictApp "slotOf") (EVar "key")) (EApp (EVar "arrayLength") (EVar "arr")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EDictApp "insertAt") (EVar "key")) (EVar "val")) (EVar "arr")) (EVar "idx")) (EVar "buckets")) (EDictApp "count")))))
+(DTypeSig true "setInPlace" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyCon "Unit"))))))
+(DFunDef false "setInPlace" ((PVar "key") (PVar "val") (PCon "HashMap" (PVar "buckets") (PVar "count"))) (EBlock (DoLet false false (PVar "arr") (EUnOp "!" (EVar "buckets"))) (DoLet false false (PVar "idx") (EApp (EApp (EDictApp "slotOf") (EVar "key")) (EApp (EVar "arrayLength") (EVar "arr")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EDictApp "insertAt") (EVar "key")) (EVar "val")) (EVar "arr")) (EVar "idx")) (EVar "buckets")) (EDictApp "count")))))
 (DTypeSig false "insertAt" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v")))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyCon "Unit")))))))))
 (DFunDef false "insertAt" ((PVar "key") (PVar "val") (PVar "arr") (PVar "idx") (PVar "buckets") (PVar "count")) (EIf (EApp (EApp (EDictApp "bucketHas") (EVar "key")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "idx")) (EVar "arr"))) (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "idx")) (EApp (EApp (EApp (EDictApp "bucketReplace") (EVar "key")) (EVar "val")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "idx")) (EVar "arr")))) (EVar "arr")) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "idx")) (EBinOp "::" (ETuple (EVar "key") (EVar "val")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "idx")) (EVar "arr")))) (EVar "arr"))) (DoExpr (EApp (EApp (EVar "setRef") (EDictApp "count")) (EBinOp "+" (EUnOp "!" (EDictApp "count")) (ELit (LInt 1))))) (DoExpr (EApp (EApp (EDictApp "maybeResize") (EVar "buckets")) (EDictApp "count")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "maybeResize" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyCon "Unit")))))
@@ -491,9 +491,9 @@ prop "Index HashMap agrees with get on present keys" (xs : List (Int, Int)) =
 (DFunDef false "fromList" ((PVar "pairs")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EDictApp "insertAll") (EVar "pairs")) (EVar "m"))) (DoExpr (EVar "m"))))
 (DTypeSig false "insertAll" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyCon "Unit")))))
 (DFunDef false "insertAll" ((PList) PWild) (ELit LUnit))
-(DFunDef false "insertAll" ((PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest")) (PVar "m")) (EBlock (DoExpr (EApp (EApp (EApp (EDictApp "set") (EVar "k")) (EVar "v")) (EVar "m"))) (DoExpr (EApp (EApp (EDictApp "insertAll") (EVar "rest")) (EVar "m")))))
-(DTypeSig true "delete" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyCon "Unit")))))
-(DFunDef false "delete" ((PVar "key") (PCon "HashMap" (PVar "buckets") (PVar "count"))) (EBlock (DoLet false false (PVar "arr") (EUnOp "!" (EVar "buckets"))) (DoLet false false (PVar "idx") (EApp (EApp (EDictApp "slotOf") (EVar "key")) (EApp (EVar "arrayLength") (EVar "arr")))) (DoExpr (EApp (EApp (EApp (EApp (EDictApp "deleteAt") (EVar "key")) (EVar "arr")) (EVar "idx")) (EDictApp "count")))))
+(DFunDef false "insertAll" ((PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest")) (PVar "m")) (EBlock (DoExpr (EApp (EApp (EApp (EDictApp "setInPlace") (EVar "k")) (EVar "v")) (EVar "m"))) (DoExpr (EApp (EApp (EDictApp "insertAll") (EVar "rest")) (EVar "m")))))
+(DTypeSig true "deleteInPlace" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyCon "Unit")))))
+(DFunDef false "deleteInPlace" ((PVar "key") (PCon "HashMap" (PVar "buckets") (PVar "count"))) (EBlock (DoLet false false (PVar "arr") (EUnOp "!" (EVar "buckets"))) (DoLet false false (PVar "idx") (EApp (EApp (EDictApp "slotOf") (EVar "key")) (EApp (EVar "arrayLength") (EVar "arr")))) (DoExpr (EApp (EApp (EApp (EApp (EDictApp "deleteAt") (EVar "key")) (EVar "arr")) (EVar "idx")) (EDictApp "count")))))
 (DTypeSig false "deleteAt" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v")))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyCon "Unit")))))))
 (DFunDef false "deleteAt" ((PVar "key") (PVar "arr") (PVar "idx") (PVar "count")) (EIf (EApp (EApp (EDictApp "bucketHas") (EVar "key")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "idx")) (EVar "arr"))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "idx")) (EApp (EApp (EDictApp "bucketRemove") (EVar "key")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "idx")) (EVar "arr")))) (EVar "arr"))) (DoExpr (EApp (EApp (EVar "setRef") (EDictApp "count")) (EBinOp "-" (EUnOp "!" (EDictApp "count")) (ELit (LInt 1)))))) (ELit LUnit)))
 (DTypeSig false "collectBuckets" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v")))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))))))))

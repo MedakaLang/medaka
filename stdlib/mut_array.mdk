@@ -176,10 +176,10 @@ pop (MutArray backing len)
 {- | Overwrite the element at an index.  Panics when out of the live range
    `[0, length)` (use `push` to extend). -}
 export
-set : Int -> a -> MutArray a -> Unit
-set i x (MutArray backing len)
+setInPlace : Int -> a -> MutArray a -> Unit
+setInPlace i x (MutArray backing len)
   | i >= 0 && i < !len = arraySetUnsafe i x !backing
-  | otherwise = panic "MutArray.set: index out of bounds"
+  | otherwise = panic "MutArray.setInPlace: index out of bounds"
 
 {- | `setIndex ma i v` writes `v` at `ma`'s index `i`, in place, over the live
    range `[0, length)`, and returns `ma`.  O(1).  Raises the coded

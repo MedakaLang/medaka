@@ -1,5 +1,5 @@
 # META
-source_lines=4797
+source_lines=4807
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -84,7 +84,16 @@ import support.util.{
   dedupBy,
   dedup,
 }
-import hash_map.{HashMap, new, get, set, has, keys, size, findWithDefault}
+import hash_map.{
+  HashMap,
+  new,
+  get,
+  setInPlace,
+  has,
+  keys,
+  size,
+  findWithDefault,
+}
 import tools.printer.{declToString, exprToString, ppTy}
 import support.path.{dirOf, modIdOf}
 import support.char.{isAlnum, isLower, isUpper}
@@ -693,8 +702,8 @@ stdlibSigTriples dir = match listDir dir
   Ok entries => flatMap (stdlibFileSigs dir) (stdlibMdkNames entries)
 
 -- Group the flat triples by NAME, preserving stdlib-file order within a name.
--- Appending rather than overwriting is the whole point: `set` alone would keep
--- one module's `reverse` and drop the other's without a word.
+-- Appending rather than overwriting is the whole point: `setInPlace` alone
+-- would keep one module's `reverse` and drop the other's without a word.
 groupStdlibSigs : List (String, String, Ty) -> HashMap String (List (String, Ty))
 groupStdlibSigs triples =
   let m = new ()
@@ -704,7 +713,7 @@ groupStdlibSigs triples =
 groupStdlibSigsInto : List (String, String, Ty) -> HashMap String (List (String, Ty)) -> Unit
 groupStdlibSigsInto [] _ = ()
 groupStdlibSigsInto ((modName, name, ty)::rest) m =
-  let _ = set name (findWithDefault [] name m ++ [(modName, ty)]) m
+  let _ = setInPlace name (findWithDefault [] name m ++ [(modName, ty)]) m
   groupStdlibSigsInto rest m
 
 -- Top-level `.mdk` members only, dot-entries dropped, sorted for determinism.
@@ -1740,8 +1749,8 @@ ownsModule None _ = False
 ownsModule (Some own) modName = modName == own
 
 -- name → the `Ty` its top-level `DTypeSig` declares.  Built by walking the
--- reversed decl list with an unconditional `set`, so the FIRST signature in the
--- file wins (a file with two signatures for one name is already a resolve error;
+-- reversed decl list with an unconditional `setInPlace`, so the FIRST
+-- signature in the file wins (a file with two signatures for one name is already a resolve error;
 -- this only fixes which one lint reads).
 sigTyMapOf : List Decl -> HashMap String Ty
 sigTyMapOf prog =
@@ -1752,7 +1761,7 @@ sigTyMapOf prog =
 sigTyInto : List (String, Ty) -> HashMap String Ty -> Unit
 sigTyInto [] _ = ()
 sigTyInto ((n, t)::rest) m =
-  let _ = set n t m
+  let _ = setInPlace n t m
   sigTyInto rest m
 
 topSigPairL : Decl -> List (String, Ty)
@@ -4154,7 +4163,7 @@ nameSetOf names =
 nameSetInto : List String -> HashMap String Unit -> Unit
 nameSetInto [] _ = ()
 nameSetInto (n::rest) s =
-  let _ = set n () s
+  let _ = setInPlace n () s
   nameSetInto rest s
 
 allDefNameL : (Decl, Option Loc) -> List (String, Option Loc)
@@ -4243,14 +4252,15 @@ bodyIdents d = sortUniqS (identTokens (declToString d))
 -- BFS over the ref graph: pop a name; if already visited skip; else mark visited
 -- and enqueue its body refs (only DFunDef keys have refs; every other name is a
 -- leaf).  Terminates because `visited` grows monotonically and each name is
--- expanded once.  `has`/`set` are O(1) average, so this is ~O(names + edges); the
--- old `contains x visited` over a list made it O(names^2).
+-- expanded once.  `has`/`setInPlace` are O(1) average, so this is
+-- ~O(names + edges); the old `contains x visited` over a list made it
+-- O(names^2).
 bfsReach : HashMap String (List String) -> HashMap String Unit -> List String -> Unit
 bfsReach _ _ [] = ()
 bfsReach refMap visited (x::rest)
   | has x visited = bfsReach refMap visited rest
   | otherwise =
-    let _ = set x () visited
+    let _ = setInPlace x () visited
     bfsReach refMap visited (refsOf refMap x ++ rest)
 
 refsOf : HashMap String (List String) -> String -> List String
@@ -4271,7 +4281,7 @@ mergeRefs pairs =
 mergeRefsGo : HashMap String (List String) -> List (String, List String) -> Unit
 mergeRefsGo _ [] = ()
 mergeRefsGo acc ((n, rs)::rest) =
-  let _ = set n (sortUniqS (findWithDefault [] n acc ++ rs)) acc
+  let _ = setInPlace n (sortUniqS (findWithDefault [] n acc ++ rs)) acc
   mergeRefsGo acc rest
 
 -- ── identifier tokeniser ──────────────────────────────────────────────────────
@@ -4594,7 +4604,7 @@ groupOccsByKey occs =
 groupOccsGo : HashMap String (List (String, Int, String, String)) -> List (String, Int, String, String) -> Unit
 groupOccsGo _ [] = ()
 groupOccsGo m (o::rest) =
-  let _ = set (occKey o) (o :: findWithDefault [] (occKey o) m) m
+  let _ = setInPlace (occKey o) (o :: findWithDefault [] (occKey o) m) m
   groupOccsGo m rest
 
 -- Distinct keys in first-appearance order.  `keys` on the HashMap would do this
@@ -4613,7 +4623,7 @@ dupDistinctGo _ [] = []
 dupDistinctGo seen (o::rest)
   | has (occKey o) seen = dupDistinctGo seen rest
   | otherwise =
-    let _ = set (occKey o) () seen
+    let _ = setInPlace (occKey o) () seen
     occKey o :: dupDistinctGo seen rest
 
 -- Can this key's group emit at all?  ≥2 occurrences spanning ≥2 distinct files.
@@ -4734,7 +4744,7 @@ sameFileGroupByKey occs =
 sameFileGroupGo : HashMap String (List (String, Int, String)) -> List (String, Int, String) -> Unit
 sameFileGroupGo _ [] = ()
 sameFileGroupGo m (o::rest) =
-  let _ = set (sameFileOccKey o) (o :: findWithDefault [] (sameFileOccKey o) m) m
+  let _ = setInPlace (sameFileOccKey o) (o :: findWithDefault [] (sameFileOccKey o) m) m
   sameFileGroupGo m rest
 
 sameFileDistinctKeys : List (String, Int, String) -> List String
@@ -4747,7 +4757,7 @@ sameFileDistinctGo _ [] = []
 sameFileDistinctGo seen (o::rest)
   | has (sameFileOccKey o) seen = sameFileDistinctGo seen rest
   | otherwise =
-    let _ = set (sameFileOccKey o) () seen
+    let _ = setInPlace (sameFileOccKey o) () seen
     sameFileOccKey o :: sameFileDistinctGo seen rest
 
 sameFileOccName : (String, Int, String) -> String
@@ -4804,7 +4814,7 @@ duplicateBodySameFileRule = Rule {
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true) (mem "ppSeverity" false) (mem "readFileSafe" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "joinNl" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "reverseL" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "endsWith" false) (mem "stringTrim" false) (mem "lookupAssoc" false) (mem "dedupBy" false) (mem "dedup" false))))
-(DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "get" false) (mem "set" false) (mem "has" false) (mem "keys" false) (mem "size" false) (mem "findWithDefault" false))))
+(DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "get" false) (mem "setInPlace" false) (mem "has" false) (mem "keys" false) (mem "size" false) (mem "findWithDefault" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "declToString" false) (mem "exprToString" false) (mem "ppTy" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "modIdOf" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false) (mem "isLower" false) (mem "isUpper" false))))
@@ -4952,7 +4962,7 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "groupStdlibSigs" ((PVar "triples")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "groupStdlibSigsInto") (EVar "triples")) (EVar "m"))) (DoExpr (EVar "m"))))
 (DTypeSig false "groupStdlibSigsInto" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ty"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))) (TyCon "Unit"))))
 (DFunDef false "groupStdlibSigsInto" ((PList) PWild) (ELit LUnit))
-(DFunDef false "groupStdlibSigsInto" ((PCons (PTuple (PVar "modName") (PVar "name") (PVar "ty")) (PVar "rest")) (PVar "m")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "set") (EVar "name")) (EBinOp "++" (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "name")) (EVar "m")) (EListLit (ETuple (EVar "modName") (EVar "ty"))))) (EVar "m"))) (DoExpr (EApp (EApp (EVar "groupStdlibSigsInto") (EVar "rest")) (EVar "m")))))
+(DFunDef false "groupStdlibSigsInto" ((PCons (PTuple (PVar "modName") (PVar "name") (PVar "ty")) (PVar "rest")) (PVar "m")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EVar "name")) (EBinOp "++" (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "name")) (EVar "m")) (EListLit (ETuple (EVar "modName") (EVar "ty"))))) (EVar "m"))) (DoExpr (EApp (EApp (EVar "groupStdlibSigsInto") (EVar "rest")) (EVar "m")))))
 (DTypeSig false "stdlibMdkNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "stdlibMdkNames" ((PVar "names")) (EApp (EVar "sortUniqS") (EApp (EApp (EVar "filterList") (EVar "isStdlibMember")) (EVar "names"))))
 (DTypeSig false "isStdlibMember" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -5260,7 +5270,7 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "sigTyMapOf" ((PVar "prog")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "sigTyInto") (EApp (EVar "reverseL") (EApp (EApp (EVar "flatMap") (EVar "topSigPairL")) (EVar "prog")))) (EVar "m"))) (DoExpr (EVar "m"))))
 (DTypeSig false "sigTyInto" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Ty")) (TyCon "Unit"))))
 (DFunDef false "sigTyInto" ((PList) PWild) (ELit LUnit))
-(DFunDef false "sigTyInto" ((PCons (PTuple (PVar "n") (PVar "t")) (PVar "rest")) (PVar "m")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "set") (EVar "n")) (EVar "t")) (EVar "m"))) (DoExpr (EApp (EApp (EVar "sigTyInto") (EVar "rest")) (EVar "m")))))
+(DFunDef false "sigTyInto" ((PCons (PTuple (PVar "n") (PVar "t")) (PVar "rest")) (PVar "m")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (EVar "t")) (EVar "m"))) (DoExpr (EApp (EApp (EVar "sigTyInto") (EVar "rest")) (EVar "m")))))
 (DTypeSig false "topSigPairL" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))))
 (DFunDef false "topSigPairL" ((PCon "DTypeSig" PWild (PVar "name") (PVar "ty"))) (EListLit (ETuple (EVar "name") (EVar "ty"))))
 (DFunDef false "topSigPairL" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "topSigPairL") (EVar "d")))
@@ -6213,7 +6223,7 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "nameSetOf" ((PVar "names")) (EBlock (DoLet false false (PVar "s") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "nameSetInto") (EVar "names")) (EVar "s"))) (DoExpr (EVar "s"))))
 (DTypeSig false "nameSetInto" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyCon "Unit"))))
 (DFunDef false "nameSetInto" ((PList) PWild) (ELit LUnit))
-(DFunDef false "nameSetInto" ((PCons (PVar "n") (PVar "rest")) (PVar "s")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "set") (EVar "n")) (ELit LUnit)) (EVar "s"))) (DoExpr (EApp (EApp (EVar "nameSetInto") (EVar "rest")) (EVar "s")))))
+(DFunDef false "nameSetInto" ((PCons (PVar "n") (PVar "rest")) (PVar "s")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (ELit LUnit)) (EVar "s"))) (DoExpr (EApp (EApp (EVar "nameSetInto") (EVar "rest")) (EVar "s")))))
 (DTypeSig false "allDefNameL" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))
 (DFunDef false "allDefNameL" ((PTuple (PCon "DFunDef" PWild (PVar "name") PWild PWild) (PVar "loc"))) (EListLit (ETuple (EVar "name") (EVar "loc"))))
 (DFunDef false "allDefNameL" ((PTuple (PCon "DAttrib" PWild (PVar "d")) (PVar "loc"))) (EApp (EVar "allDefNameL") (ETuple (EVar "d") (EVar "loc"))))
@@ -6255,14 +6265,14 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "bodyIdents" ((PVar "d")) (EApp (EVar "sortUniqS") (EApp (EVar "identTokens") (EApp (EVar "declToString") (EVar "d")))))
 (DTypeSig false "bfsReach" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "bfsReach" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "bfsReach" ((PVar "refMap") (PVar "visited") (PCons (PVar "x") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EVar "x")) (EVar "visited")) (EApp (EApp (EApp (EVar "bfsReach") (EVar "refMap")) (EVar "visited")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "set") (EVar "x")) (ELit LUnit)) (EVar "visited"))) (DoExpr (EApp (EApp (EApp (EVar "bfsReach") (EVar "refMap")) (EVar "visited")) (EBinOp "++" (EApp (EApp (EVar "refsOf") (EVar "refMap")) (EVar "x")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "bfsReach" ((PVar "refMap") (PVar "visited") (PCons (PVar "x") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EVar "x")) (EVar "visited")) (EApp (EApp (EApp (EVar "bfsReach") (EVar "refMap")) (EVar "visited")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EVar "x")) (ELit LUnit)) (EVar "visited"))) (DoExpr (EApp (EApp (EApp (EVar "bfsReach") (EVar "refMap")) (EVar "visited")) (EBinOp "++" (EApp (EApp (EVar "refsOf") (EVar "refMap")) (EVar "x")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "refsOf" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "refsOf" ((PVar "refMap") (PVar "n")) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "refMap")))
 (DTypeSig false "mergeRefs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "mergeRefs" ((PVar "pairs")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "mergeRefsGo") (EVar "m")) (EVar "pairs"))) (DoExpr (EVar "m"))))
 (DTypeSig false "mergeRefsGo" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyCon "Unit"))))
 (DFunDef false "mergeRefsGo" (PWild (PList)) (ELit LUnit))
-(DFunDef false "mergeRefsGo" ((PVar "acc") (PCons (PTuple (PVar "n") (PVar "rs")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "set") (EVar "n")) (EApp (EVar "sortUniqS") (EBinOp "++" (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "acc")) (EVar "rs")))) (EVar "acc"))) (DoExpr (EApp (EApp (EVar "mergeRefsGo") (EVar "acc")) (EVar "rest")))))
+(DFunDef false "mergeRefsGo" ((PVar "acc") (PCons (PTuple (PVar "n") (PVar "rs")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (EApp (EVar "sortUniqS") (EBinOp "++" (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "acc")) (EVar "rs")))) (EVar "acc"))) (DoExpr (EApp (EApp (EVar "mergeRefsGo") (EVar "acc")) (EVar "rest")))))
 (DTypeSig false "identTokens" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "identTokens" ((PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EApp (EApp (EApp (EVar "identTokGo") (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (ELit (LInt 0))))))
 (DTypeSig false "identTokGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -6331,12 +6341,12 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "groupOccsByKey" ((PVar "occs")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "groupOccsGo") (EVar "m")) (EVar "occs"))) (DoExpr (EVar "m"))))
 (DTypeSig false "groupOccsGo" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyCon "Unit"))))
 (DFunDef false "groupOccsGo" (PWild (PList)) (ELit LUnit))
-(DFunDef false "groupOccsGo" ((PVar "m") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "set") (EApp (EVar "occKey") (EVar "o"))) (EBinOp "::" (EVar "o") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EApp (EVar "occKey") (EVar "o"))) (EVar "m")))) (EVar "m"))) (DoExpr (EApp (EApp (EVar "groupOccsGo") (EVar "m")) (EVar "rest")))))
+(DFunDef false "groupOccsGo" ((PVar "m") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "occKey") (EVar "o"))) (EBinOp "::" (EVar "o") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EApp (EVar "occKey") (EVar "o"))) (EVar "m")))) (EVar "m"))) (DoExpr (EApp (EApp (EVar "groupOccsGo") (EVar "m")) (EVar "rest")))))
 (DTypeSig false "dupDistinctKeys" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "dupDistinctKeys" ((PVar "occs")) (EBlock (DoLet false false (PVar "seen") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "dupDistinctGo") (EVar "seen")) (EVar "occs")))))
 (DTypeSig false "dupDistinctGo" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "dupDistinctGo" (PWild (PList)) (EListLit))
-(DFunDef false "dupDistinctGo" ((PVar "seen") (PCons (PVar "o") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EApp (EVar "occKey") (EVar "o"))) (EVar "seen")) (EApp (EApp (EVar "dupDistinctGo") (EVar "seen")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "set") (EApp (EVar "occKey") (EVar "o"))) (ELit LUnit)) (EVar "seen"))) (DoExpr (EBinOp "::" (EApp (EVar "occKey") (EVar "o")) (EApp (EApp (EVar "dupDistinctGo") (EVar "seen")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "dupDistinctGo" ((PVar "seen") (PCons (PVar "o") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EApp (EVar "occKey") (EVar "o"))) (EVar "seen")) (EApp (EApp (EVar "dupDistinctGo") (EVar "seen")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "occKey") (EVar "o"))) (ELit LUnit)) (EVar "seen"))) (DoExpr (EBinOp "::" (EApp (EVar "occKey") (EVar "o")) (EApp (EApp (EVar "dupDistinctGo") (EVar "seen")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "dupGroupFires" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyCon "Bool")))
 (DFunDef false "dupGroupFires" ((PVar "grp")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "listLen") (EVar "grp")) (ELit (LInt 2))) (EBinOp ">=" (EApp (EVar "listLen") (EApp (EVar "sortUniqS") (EApp (EApp (EVar "map") (EVar "occFile")) (EVar "grp")))) (ELit (LInt 2)))))
 (DTypeSig true "fileDupOccs" (TyFun (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String")))))
@@ -6374,12 +6384,12 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "sameFileGroupByKey" ((PVar "occs")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "sameFileGroupGo") (EVar "m")) (EVar "occs"))) (DoExpr (EVar "m"))))
 (DTypeSig false "sameFileGroupGo" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyCon "Unit"))))
 (DFunDef false "sameFileGroupGo" (PWild (PList)) (ELit LUnit))
-(DFunDef false "sameFileGroupGo" ((PVar "m") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "set") (EApp (EVar "sameFileOccKey") (EVar "o"))) (EBinOp "::" (EVar "o") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EApp (EVar "sameFileOccKey") (EVar "o"))) (EVar "m")))) (EVar "m"))) (DoExpr (EApp (EApp (EVar "sameFileGroupGo") (EVar "m")) (EVar "rest")))))
+(DFunDef false "sameFileGroupGo" ((PVar "m") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "sameFileOccKey") (EVar "o"))) (EBinOp "::" (EVar "o") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EApp (EVar "sameFileOccKey") (EVar "o"))) (EVar "m")))) (EVar "m"))) (DoExpr (EApp (EApp (EVar "sameFileGroupGo") (EVar "m")) (EVar "rest")))))
 (DTypeSig false "sameFileDistinctKeys" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "sameFileDistinctKeys" ((PVar "occs")) (EBlock (DoLet false false (PVar "seen") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "sameFileDistinctGo") (EVar "seen")) (EVar "occs")))))
 (DTypeSig false "sameFileDistinctGo" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "sameFileDistinctGo" (PWild (PList)) (EListLit))
-(DFunDef false "sameFileDistinctGo" ((PVar "seen") (PCons (PVar "o") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EApp (EVar "sameFileOccKey") (EVar "o"))) (EVar "seen")) (EApp (EApp (EVar "sameFileDistinctGo") (EVar "seen")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "set") (EApp (EVar "sameFileOccKey") (EVar "o"))) (ELit LUnit)) (EVar "seen"))) (DoExpr (EBinOp "::" (EApp (EVar "sameFileOccKey") (EVar "o")) (EApp (EApp (EVar "sameFileDistinctGo") (EVar "seen")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "sameFileDistinctGo" ((PVar "seen") (PCons (PVar "o") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EApp (EVar "sameFileOccKey") (EVar "o"))) (EVar "seen")) (EApp (EApp (EVar "sameFileDistinctGo") (EVar "seen")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "sameFileOccKey") (EVar "o"))) (ELit LUnit)) (EVar "seen"))) (DoExpr (EBinOp "::" (EApp (EVar "sameFileOccKey") (EVar "o")) (EApp (EApp (EVar "sameFileDistinctGo") (EVar "seen")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "sameFileOccName" (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")) (TyCon "String")))
 (DFunDef false "sameFileOccName" ((PTuple (PVar "n") PWild PWild)) (EVar "n"))
 (DTypeSig false "sameFileOccLine" (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")) (TyCon "Int")))
@@ -6403,7 +6413,7 @@ duplicateBodySameFileRule = Rule {
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true) (mem "ppSeverity" false) (mem "readFileSafe" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "joinNl" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "reverseL" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "endsWith" false) (mem "stringTrim" false) (mem "lookupAssoc" false) (mem "dedupBy" false) (mem "dedup" false))))
-(DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "get" false) (mem "set" false) (mem "has" false) (mem "keys" false) (mem "size" false) (mem "findWithDefault" false))))
+(DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "get" false) (mem "setInPlace" false) (mem "has" false) (mem "keys" false) (mem "size" false) (mem "findWithDefault" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "declToString" false) (mem "exprToString" false) (mem "ppTy" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "modIdOf" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false) (mem "isLower" false) (mem "isUpper" false))))
@@ -6551,7 +6561,7 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "groupStdlibSigs" ((PVar "triples")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "groupStdlibSigsInto") (EVar "triples")) (EVar "m"))) (DoExpr (EVar "m"))))
 (DTypeSig false "groupStdlibSigsInto" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ty"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))) (TyCon "Unit"))))
 (DFunDef false "groupStdlibSigsInto" ((PList) PWild) (ELit LUnit))
-(DFunDef false "groupStdlibSigsInto" ((PCons (PTuple (PVar "modName") (PVar "name") (PVar "ty")) (PVar "rest")) (PVar "m")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "set") (EVar "name")) (EBinOp "++" (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "name")) (EVar "m")) (EListLit (ETuple (EVar "modName") (EVar "ty"))))) (EVar "m"))) (DoExpr (EApp (EApp (EVar "groupStdlibSigsInto") (EVar "rest")) (EVar "m")))))
+(DFunDef false "groupStdlibSigsInto" ((PCons (PTuple (PVar "modName") (PVar "name") (PVar "ty")) (PVar "rest")) (PVar "m")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EVar "name")) (EBinOp "++" (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "name")) (EVar "m")) (EListLit (ETuple (EVar "modName") (EVar "ty"))))) (EVar "m"))) (DoExpr (EApp (EApp (EVar "groupStdlibSigsInto") (EVar "rest")) (EVar "m")))))
 (DTypeSig false "stdlibMdkNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "stdlibMdkNames" ((PVar "names")) (EApp (EVar "sortUniqS") (EApp (EApp (EVar "filterList") (EVar "isStdlibMember")) (EVar "names"))))
 (DTypeSig false "isStdlibMember" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -6859,7 +6869,7 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "sigTyMapOf" ((PVar "prog")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "sigTyInto") (EApp (EVar "reverseL") (EApp (EApp (EDictApp "flatMap") (EVar "topSigPairL")) (EVar "prog")))) (EVar "m"))) (DoExpr (EVar "m"))))
 (DTypeSig false "sigTyInto" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Ty")) (TyCon "Unit"))))
 (DFunDef false "sigTyInto" ((PList) PWild) (ELit LUnit))
-(DFunDef false "sigTyInto" ((PCons (PTuple (PVar "n") (PVar "t")) (PVar "rest")) (PVar "m")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "set") (EVar "n")) (EVar "t")) (EVar "m"))) (DoExpr (EApp (EApp (EVar "sigTyInto") (EVar "rest")) (EVar "m")))))
+(DFunDef false "sigTyInto" ((PCons (PTuple (PVar "n") (PVar "t")) (PVar "rest")) (PVar "m")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (EVar "t")) (EVar "m"))) (DoExpr (EApp (EApp (EVar "sigTyInto") (EVar "rest")) (EVar "m")))))
 (DTypeSig false "topSigPairL" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty")))))
 (DFunDef false "topSigPairL" ((PCon "DTypeSig" PWild (PVar "name") (PVar "ty"))) (EListLit (ETuple (EVar "name") (EVar "ty"))))
 (DFunDef false "topSigPairL" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "topSigPairL") (EVar "d")))
@@ -7812,7 +7822,7 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "nameSetOf" ((PVar "names")) (EBlock (DoLet false false (PVar "s") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "nameSetInto") (EVar "names")) (EVar "s"))) (DoExpr (EVar "s"))))
 (DTypeSig false "nameSetInto" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyCon "Unit"))))
 (DFunDef false "nameSetInto" ((PList) PWild) (ELit LUnit))
-(DFunDef false "nameSetInto" ((PCons (PVar "n") (PVar "rest")) (PVar "s")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "set") (EVar "n")) (ELit LUnit)) (EVar "s"))) (DoExpr (EApp (EApp (EVar "nameSetInto") (EVar "rest")) (EVar "s")))))
+(DFunDef false "nameSetInto" ((PCons (PVar "n") (PVar "rest")) (PVar "s")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (ELit LUnit)) (EVar "s"))) (DoExpr (EApp (EApp (EVar "nameSetInto") (EVar "rest")) (EVar "s")))))
 (DTypeSig false "allDefNameL" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))
 (DFunDef false "allDefNameL" ((PTuple (PCon "DFunDef" PWild (PVar "name") PWild PWild) (PVar "loc"))) (EListLit (ETuple (EVar "name") (EVar "loc"))))
 (DFunDef false "allDefNameL" ((PTuple (PCon "DAttrib" PWild (PVar "d")) (PVar "loc"))) (EApp (EVar "allDefNameL") (ETuple (EVar "d") (EVar "loc"))))
@@ -7854,14 +7864,14 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "bodyIdents" ((PVar "d")) (EApp (EVar "sortUniqS") (EApp (EVar "identTokens") (EApp (EVar "declToString") (EVar "d")))))
 (DTypeSig false "bfsReach" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "bfsReach" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "bfsReach" ((PVar "refMap") (PVar "visited") (PCons (PVar "x") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EVar "x")) (EVar "visited")) (EApp (EApp (EApp (EVar "bfsReach") (EVar "refMap")) (EVar "visited")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "set") (EVar "x")) (ELit LUnit)) (EVar "visited"))) (DoExpr (EApp (EApp (EApp (EVar "bfsReach") (EVar "refMap")) (EVar "visited")) (EBinOp "++" (EApp (EApp (EVar "refsOf") (EVar "refMap")) (EVar "x")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "bfsReach" ((PVar "refMap") (PVar "visited") (PCons (PVar "x") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EVar "x")) (EVar "visited")) (EApp (EApp (EApp (EVar "bfsReach") (EVar "refMap")) (EVar "visited")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EVar "x")) (ELit LUnit)) (EVar "visited"))) (DoExpr (EApp (EApp (EApp (EVar "bfsReach") (EVar "refMap")) (EVar "visited")) (EBinOp "++" (EApp (EApp (EVar "refsOf") (EVar "refMap")) (EVar "x")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "refsOf" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "refsOf" ((PVar "refMap") (PVar "n")) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "refMap")))
 (DTypeSig false "mergeRefs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "mergeRefs" ((PVar "pairs")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "mergeRefsGo") (EVar "m")) (EVar "pairs"))) (DoExpr (EVar "m"))))
 (DTypeSig false "mergeRefsGo" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyCon "Unit"))))
 (DFunDef false "mergeRefsGo" (PWild (PList)) (ELit LUnit))
-(DFunDef false "mergeRefsGo" ((PVar "acc") (PCons (PTuple (PVar "n") (PVar "rs")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "set") (EVar "n")) (EApp (EVar "sortUniqS") (EBinOp "++" (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "acc")) (EVar "rs")))) (EVar "acc"))) (DoExpr (EApp (EApp (EVar "mergeRefsGo") (EVar "acc")) (EVar "rest")))))
+(DFunDef false "mergeRefsGo" ((PVar "acc") (PCons (PTuple (PVar "n") (PVar "rs")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (EApp (EVar "sortUniqS") (EBinOp "++" (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "acc")) (EVar "rs")))) (EVar "acc"))) (DoExpr (EApp (EApp (EVar "mergeRefsGo") (EVar "acc")) (EVar "rest")))))
 (DTypeSig false "identTokens" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "identTokens" ((PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EApp (EApp (EApp (EVar "identTokGo") (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (ELit (LInt 0))))))
 (DTypeSig false "identTokGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -7930,12 +7940,12 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "groupOccsByKey" ((PVar "occs")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "groupOccsGo") (EVar "m")) (EVar "occs"))) (DoExpr (EVar "m"))))
 (DTypeSig false "groupOccsGo" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyCon "Unit"))))
 (DFunDef false "groupOccsGo" (PWild (PList)) (ELit LUnit))
-(DFunDef false "groupOccsGo" ((PVar "m") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "set") (EApp (EVar "occKey") (EVar "o"))) (EBinOp "::" (EVar "o") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EApp (EVar "occKey") (EVar "o"))) (EVar "m")))) (EVar "m"))) (DoExpr (EApp (EApp (EVar "groupOccsGo") (EVar "m")) (EVar "rest")))))
+(DFunDef false "groupOccsGo" ((PVar "m") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "occKey") (EVar "o"))) (EBinOp "::" (EVar "o") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EApp (EVar "occKey") (EVar "o"))) (EVar "m")))) (EVar "m"))) (DoExpr (EApp (EApp (EVar "groupOccsGo") (EVar "m")) (EVar "rest")))))
 (DTypeSig false "dupDistinctKeys" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "dupDistinctKeys" ((PVar "occs")) (EBlock (DoLet false false (PVar "seen") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "dupDistinctGo") (EVar "seen")) (EVar "occs")))))
 (DTypeSig false "dupDistinctGo" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "dupDistinctGo" (PWild (PList)) (EListLit))
-(DFunDef false "dupDistinctGo" ((PVar "seen") (PCons (PVar "o") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EApp (EVar "occKey") (EVar "o"))) (EVar "seen")) (EApp (EApp (EVar "dupDistinctGo") (EVar "seen")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "set") (EApp (EVar "occKey") (EVar "o"))) (ELit LUnit)) (EVar "seen"))) (DoExpr (EBinOp "::" (EApp (EVar "occKey") (EVar "o")) (EApp (EApp (EVar "dupDistinctGo") (EVar "seen")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "dupDistinctGo" ((PVar "seen") (PCons (PVar "o") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EApp (EVar "occKey") (EVar "o"))) (EVar "seen")) (EApp (EApp (EVar "dupDistinctGo") (EVar "seen")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "occKey") (EVar "o"))) (ELit LUnit)) (EVar "seen"))) (DoExpr (EBinOp "::" (EApp (EVar "occKey") (EVar "o")) (EApp (EApp (EVar "dupDistinctGo") (EVar "seen")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "dupGroupFires" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyCon "Bool")))
 (DFunDef false "dupGroupFires" ((PVar "grp")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "listLen") (EVar "grp")) (ELit (LInt 2))) (EBinOp ">=" (EApp (EVar "listLen") (EApp (EVar "sortUniqS") (EApp (EApp (EMethodRef "map") (EVar "occFile")) (EVar "grp")))) (ELit (LInt 2)))))
 (DTypeSig true "fileDupOccs" (TyFun (TyTuple (TyCon "String") (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String")))))
@@ -7973,12 +7983,12 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "sameFileGroupByKey" ((PVar "occs")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "sameFileGroupGo") (EVar "m")) (EVar "occs"))) (DoExpr (EVar "m"))))
 (DTypeSig false "sameFileGroupGo" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyCon "Unit"))))
 (DFunDef false "sameFileGroupGo" (PWild (PList)) (ELit LUnit))
-(DFunDef false "sameFileGroupGo" ((PVar "m") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "set") (EApp (EVar "sameFileOccKey") (EVar "o"))) (EBinOp "::" (EVar "o") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EApp (EVar "sameFileOccKey") (EVar "o"))) (EVar "m")))) (EVar "m"))) (DoExpr (EApp (EApp (EVar "sameFileGroupGo") (EVar "m")) (EVar "rest")))))
+(DFunDef false "sameFileGroupGo" ((PVar "m") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "sameFileOccKey") (EVar "o"))) (EBinOp "::" (EVar "o") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EApp (EVar "sameFileOccKey") (EVar "o"))) (EVar "m")))) (EVar "m"))) (DoExpr (EApp (EApp (EVar "sameFileGroupGo") (EVar "m")) (EVar "rest")))))
 (DTypeSig false "sameFileDistinctKeys" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "sameFileDistinctKeys" ((PVar "occs")) (EBlock (DoLet false false (PVar "seen") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "sameFileDistinctGo") (EVar "seen")) (EVar "occs")))))
 (DTypeSig false "sameFileDistinctGo" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "sameFileDistinctGo" (PWild (PList)) (EListLit))
-(DFunDef false "sameFileDistinctGo" ((PVar "seen") (PCons (PVar "o") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EApp (EVar "sameFileOccKey") (EVar "o"))) (EVar "seen")) (EApp (EApp (EVar "sameFileDistinctGo") (EVar "seen")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "set") (EApp (EVar "sameFileOccKey") (EVar "o"))) (ELit LUnit)) (EVar "seen"))) (DoExpr (EBinOp "::" (EApp (EVar "sameFileOccKey") (EVar "o")) (EApp (EApp (EVar "sameFileDistinctGo") (EVar "seen")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "sameFileDistinctGo" ((PVar "seen") (PCons (PVar "o") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EApp (EVar "sameFileOccKey") (EVar "o"))) (EVar "seen")) (EApp (EApp (EVar "sameFileDistinctGo") (EVar "seen")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EApp (EVar "sameFileOccKey") (EVar "o"))) (ELit LUnit)) (EVar "seen"))) (DoExpr (EBinOp "::" (EApp (EVar "sameFileOccKey") (EVar "o")) (EApp (EApp (EVar "sameFileDistinctGo") (EVar "seen")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "sameFileOccName" (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")) (TyCon "String")))
 (DFunDef false "sameFileOccName" ((PTuple (PVar "n") PWild PWild)) (EVar "n"))
 (DTypeSig false "sameFileOccLine" (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")) (TyCon "Int")))

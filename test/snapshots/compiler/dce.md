@@ -38,7 +38,7 @@ stages=DESUGAR,MARK
 
 import frontend.ast.{Decl(..)}
 import frontend.marker.{declRefs}
-import hash_map.{HashMap, new, set, has, findWithDefault}
+import hash_map.{HashMap, new, setInPlace, has, findWithDefault}
 
 -- ── entry point ────────────────────────────────────────────────────────────
 -- Filter `decls` (the flattened, elaborated whole-program decl list) to retain
@@ -93,7 +93,7 @@ definedFnNamesInto [] _ = ()
 -- this only reproduces on the no-signature form.)
 definedFnNamesInto ((DAttrib _ d)::rest) s = definedFnNamesInto (d::rest) s
 definedFnNamesInto ((DFunDef _ n _ _)::rest) s =
-  let _ = set n () s
+  let _ = setInPlace n () s
   definedFnNamesInto rest s
 definedFnNamesInto (_::rest) s = definedFnNamesInto rest s
 
@@ -110,8 +110,8 @@ reachableNames decls =
   let _ = closure graph seen (map (canonRef defined) ("main" :: emittingRoots decls))
   seen
 
--- name -> refs(body) as a HashMap (multi-clause defs merged). O(1) set/get;
--- replaces the old O(N²) assoc-list `addRefs`. Ref-list order is irrelevant (fed
+-- name -> refs(body) as a HashMap (multi-clause defs merged). O(1)
+-- setInPlace/get; replaces the old O(N²) assoc-list `addRefs`. Ref-list order is irrelevant (fed
 -- to the membership-only closure).  Each ref is canonicalized against the defined
 -- set so a post-mangle bare prelude reference (`not`) resolves to `core__not`.
 funGraph : HashMap String Unit -> List Decl -> HashMap String (List String)
@@ -126,7 +126,7 @@ funGraphInto _ [] _ = ()
 -- its call-graph edges.
 funGraphInto defined ((DAttrib _ d)::rest) g = funGraphInto defined (d::rest) g
 funGraphInto defined ((DFunDef _ n ps body)::rest) g =
-  let _ = set n (map (canonRef defined) (declRefs (DFunDef False n ps body)) ++ findWithDefault [] n g) g
+  let _ = setInPlace n (map (canonRef defined) (declRefs (DFunDef False n ps body)) ++ findWithDefault [] n g) g
   funGraphInto defined rest g
 funGraphInto defined (_::rest) g = funGraphInto defined rest g
 
@@ -169,7 +169,7 @@ closure _ _ [] = ()
 closure graph seen (w::work)
   | has w seen = closure graph seen work
   | otherwise =
-    let _ = set w () seen
+    let _ = setInPlace w () seen
     closure graph seen (refsOf graph w ++ work)
 
 refsOf : HashMap String (List String) -> String -> List String
@@ -177,7 +177,7 @@ refsOf graph n = findWithDefault [] n graph
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "declRefs" false))))
-(DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "set" false) (mem "has" false) (mem "findWithDefault" false))))
+(DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false) (mem "has" false) (mem "findWithDefault" false))))
 (DTypeSig true "dceFilter" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "dceFilter" ((PVar "decls")) (EApp (EApp (EVar "filterReachable") (EApp (EVar "reachableNames") (EVar "decls"))) (EVar "decls")))
 (DTypeSig false "filterReachable" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
@@ -191,7 +191,7 @@ refsOf graph n = findWithDefault [] n graph
 (DTypeSig false "definedFnNamesInto" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyCon "Unit"))))
 (DFunDef false "definedFnNamesInto" ((PList) PWild) (ELit LUnit))
 (DFunDef false "definedFnNamesInto" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "s")) (EApp (EApp (EVar "definedFnNamesInto") (EBinOp "::" (EVar "d") (EVar "rest"))) (EVar "s")))
-(DFunDef false "definedFnNamesInto" ((PCons (PCon "DFunDef" PWild (PVar "n") PWild PWild) (PVar "rest")) (PVar "s")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "set") (EVar "n")) (ELit LUnit)) (EVar "s"))) (DoExpr (EApp (EApp (EVar "definedFnNamesInto") (EVar "rest")) (EVar "s")))))
+(DFunDef false "definedFnNamesInto" ((PCons (PCon "DFunDef" PWild (PVar "n") PWild PWild) (PVar "rest")) (PVar "s")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (ELit LUnit)) (EVar "s"))) (DoExpr (EApp (EApp (EVar "definedFnNamesInto") (EVar "rest")) (EVar "s")))))
 (DFunDef false "definedFnNamesInto" ((PCons PWild (PVar "rest")) (PVar "s")) (EApp (EApp (EVar "definedFnNamesInto") (EVar "rest")) (EVar "s")))
 (DTypeSig false "reachableNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit"))))
 (DFunDef false "reachableNames" ((PVar "decls")) (EBlock (DoLet false false (PVar "defined") (EApp (EVar "definedFnNames") (EVar "decls"))) (DoLet false false (PVar "graph") (EApp (EApp (EVar "funGraph") (EVar "defined")) (EVar "decls"))) (DoLet false false (PVar "seen") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "closure") (EVar "graph")) (EVar "seen")) (EApp (EApp (EVar "map") (EApp (EVar "canonRef") (EVar "defined"))) (EBinOp "::" (ELit (LString "main")) (EApp (EVar "emittingRoots") (EVar "decls")))))) (DoExpr (EVar "seen"))))
@@ -200,7 +200,7 @@ refsOf graph n = findWithDefault [] n graph
 (DTypeSig false "funGraphInto" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyCon "Unit")))))
 (DFunDef false "funGraphInto" (PWild (PList) PWild) (ELit LUnit))
 (DFunDef false "funGraphInto" ((PVar "defined") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "g")) (EApp (EApp (EApp (EVar "funGraphInto") (EVar "defined")) (EBinOp "::" (EVar "d") (EVar "rest"))) (EVar "g")))
-(DFunDef false "funGraphInto" ((PVar "defined") (PCons (PCon "DFunDef" PWild (PVar "n") (PVar "ps") (PVar "body")) (PVar "rest")) (PVar "g")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "set") (EVar "n")) (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EVar "canonRef") (EVar "defined"))) (EApp (EVar "declRefs") (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (EVar "n")) (EVar "ps")) (EVar "body")))) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "g")))) (EVar "g"))) (DoExpr (EApp (EApp (EApp (EVar "funGraphInto") (EVar "defined")) (EVar "rest")) (EVar "g")))))
+(DFunDef false "funGraphInto" ((PVar "defined") (PCons (PCon "DFunDef" PWild (PVar "n") (PVar "ps") (PVar "body")) (PVar "rest")) (PVar "g")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EVar "canonRef") (EVar "defined"))) (EApp (EVar "declRefs") (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (EVar "n")) (EVar "ps")) (EVar "body")))) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "g")))) (EVar "g"))) (DoExpr (EApp (EApp (EApp (EVar "funGraphInto") (EVar "defined")) (EVar "rest")) (EVar "g")))))
 (DFunDef false "funGraphInto" ((PVar "defined") (PCons PWild (PVar "rest")) (PVar "g")) (EApp (EApp (EApp (EVar "funGraphInto") (EVar "defined")) (EVar "rest")) (EVar "g")))
 (DTypeSig false "emittingRoots" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "emittingRoots" ((PList)) (EListLit))
@@ -213,13 +213,13 @@ refsOf graph n = findWithDefault [] n graph
 (DFunDef false "isEmittingDecl" (PWild) (EVar "False"))
 (DTypeSig false "closure" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "closure" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "closure" ((PVar "graph") (PVar "seen") (PCons (PVar "w") (PVar "work"))) (EIf (EApp (EApp (EVar "has") (EVar "w")) (EVar "seen")) (EApp (EApp (EApp (EVar "closure") (EVar "graph")) (EVar "seen")) (EVar "work")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "set") (EVar "w")) (ELit LUnit)) (EVar "seen"))) (DoExpr (EApp (EApp (EApp (EVar "closure") (EVar "graph")) (EVar "seen")) (EBinOp "++" (EApp (EApp (EVar "refsOf") (EVar "graph")) (EVar "w")) (EVar "work"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "closure" ((PVar "graph") (PVar "seen") (PCons (PVar "w") (PVar "work"))) (EIf (EApp (EApp (EVar "has") (EVar "w")) (EVar "seen")) (EApp (EApp (EApp (EVar "closure") (EVar "graph")) (EVar "seen")) (EVar "work")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EVar "w")) (ELit LUnit)) (EVar "seen"))) (DoExpr (EApp (EApp (EApp (EVar "closure") (EVar "graph")) (EVar "seen")) (EBinOp "++" (EApp (EApp (EVar "refsOf") (EVar "graph")) (EVar "w")) (EVar "work"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "refsOf" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "refsOf" ((PVar "graph") (PVar "n")) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "graph")))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "declRefs" false))))
-(DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "set" false) (mem "has" false) (mem "findWithDefault" false))))
+(DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false) (mem "has" false) (mem "findWithDefault" false))))
 (DTypeSig true "dceFilter" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "dceFilter" ((PVar "decls")) (EApp (EApp (EVar "filterReachable") (EApp (EVar "reachableNames") (EVar "decls"))) (EVar "decls")))
 (DTypeSig false "filterReachable" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
@@ -233,7 +233,7 @@ refsOf graph n = findWithDefault [] n graph
 (DTypeSig false "definedFnNamesInto" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyCon "Unit"))))
 (DFunDef false "definedFnNamesInto" ((PList) PWild) (ELit LUnit))
 (DFunDef false "definedFnNamesInto" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "s")) (EApp (EApp (EVar "definedFnNamesInto") (EBinOp "::" (EVar "d") (EVar "rest"))) (EVar "s")))
-(DFunDef false "definedFnNamesInto" ((PCons (PCon "DFunDef" PWild (PVar "n") PWild PWild) (PVar "rest")) (PVar "s")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "set") (EVar "n")) (ELit LUnit)) (EVar "s"))) (DoExpr (EApp (EApp (EVar "definedFnNamesInto") (EVar "rest")) (EVar "s")))))
+(DFunDef false "definedFnNamesInto" ((PCons (PCon "DFunDef" PWild (PVar "n") PWild PWild) (PVar "rest")) (PVar "s")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (ELit LUnit)) (EVar "s"))) (DoExpr (EApp (EApp (EVar "definedFnNamesInto") (EVar "rest")) (EVar "s")))))
 (DFunDef false "definedFnNamesInto" ((PCons PWild (PVar "rest")) (PVar "s")) (EApp (EApp (EVar "definedFnNamesInto") (EVar "rest")) (EVar "s")))
 (DTypeSig false "reachableNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit"))))
 (DFunDef false "reachableNames" ((PVar "decls")) (EBlock (DoLet false false (PVar "defined") (EApp (EVar "definedFnNames") (EVar "decls"))) (DoLet false false (PVar "graph") (EApp (EApp (EVar "funGraph") (EVar "defined")) (EVar "decls"))) (DoLet false false (PVar "seen") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "closure") (EVar "graph")) (EVar "seen")) (EApp (EApp (EMethodRef "map") (EApp (EVar "canonRef") (EVar "defined"))) (EBinOp "::" (ELit (LString "main")) (EApp (EVar "emittingRoots") (EVar "decls")))))) (DoExpr (EVar "seen"))))
@@ -242,7 +242,7 @@ refsOf graph n = findWithDefault [] n graph
 (DTypeSig false "funGraphInto" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyCon "Unit")))))
 (DFunDef false "funGraphInto" (PWild (PList) PWild) (ELit LUnit))
 (DFunDef false "funGraphInto" ((PVar "defined") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "g")) (EApp (EApp (EApp (EVar "funGraphInto") (EVar "defined")) (EBinOp "::" (EVar "d") (EVar "rest"))) (EVar "g")))
-(DFunDef false "funGraphInto" ((PVar "defined") (PCons (PCon "DFunDef" PWild (PVar "n") (PVar "ps") (PVar "body")) (PVar "rest")) (PVar "g")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "set") (EVar "n")) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EVar "canonRef") (EVar "defined"))) (EApp (EVar "declRefs") (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (EVar "n")) (EVar "ps")) (EVar "body")))) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "g")))) (EVar "g"))) (DoExpr (EApp (EApp (EApp (EVar "funGraphInto") (EVar "defined")) (EVar "rest")) (EVar "g")))))
+(DFunDef false "funGraphInto" ((PVar "defined") (PCons (PCon "DFunDef" PWild (PVar "n") (PVar "ps") (PVar "body")) (PVar "rest")) (PVar "g")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EVar "canonRef") (EVar "defined"))) (EApp (EVar "declRefs") (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (EVar "n")) (EVar "ps")) (EVar "body")))) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "g")))) (EVar "g"))) (DoExpr (EApp (EApp (EApp (EVar "funGraphInto") (EVar "defined")) (EVar "rest")) (EVar "g")))))
 (DFunDef false "funGraphInto" ((PVar "defined") (PCons PWild (PVar "rest")) (PVar "g")) (EApp (EApp (EApp (EVar "funGraphInto") (EVar "defined")) (EVar "rest")) (EVar "g")))
 (DTypeSig false "emittingRoots" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "emittingRoots" ((PList)) (EListLit))
@@ -255,6 +255,6 @@ refsOf graph n = findWithDefault [] n graph
 (DFunDef false "isEmittingDecl" (PWild) (EVar "False"))
 (DTypeSig false "closure" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "closure" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "closure" ((PVar "graph") (PVar "seen") (PCons (PVar "w") (PVar "work"))) (EIf (EApp (EApp (EVar "has") (EVar "w")) (EVar "seen")) (EApp (EApp (EApp (EVar "closure") (EVar "graph")) (EVar "seen")) (EVar "work")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "set") (EVar "w")) (ELit LUnit)) (EVar "seen"))) (DoExpr (EApp (EApp (EApp (EVar "closure") (EVar "graph")) (EVar "seen")) (EBinOp "++" (EApp (EApp (EVar "refsOf") (EVar "graph")) (EVar "w")) (EVar "work"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "closure" ((PVar "graph") (PVar "seen") (PCons (PVar "w") (PVar "work"))) (EIf (EApp (EApp (EVar "has") (EVar "w")) (EVar "seen")) (EApp (EApp (EApp (EVar "closure") (EVar "graph")) (EVar "seen")) (EVar "work")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EVar "w")) (ELit LUnit)) (EVar "seen"))) (DoExpr (EApp (EApp (EApp (EVar "closure") (EVar "graph")) (EVar "seen")) (EBinOp "++" (EApp (EApp (EVar "refsOf") (EVar "graph")) (EVar "w")) (EVar "work"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "refsOf" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "refsOf" ((PVar "graph") (PVar "n")) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "graph")))

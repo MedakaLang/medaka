@@ -38,7 +38,7 @@
    any row failed OR if zero rows were checked (the vacuous-green guard).
 
    This file uses the BOUNDS-CHECKED public array API (`arr[i]`,
-   `Array.set`) — no restricted internal externs, matching `pds/lib/scalar.mdk`. -}
+   `Array.setInPlace`) — no restricted internal externs, matching `pds/lib/scalar.mdk`. -}
 
 import lib.scalar.{
   Sc,
@@ -92,7 +92,7 @@ opIndex op =
     -1
 
 bump : Array Int -> Int -> Unit
-bump arr i = A.set i (arr[i] + 1) arr
+bump arr i = A.setInPlace i (arr[i] + 1) arr
 
 -- ── Row evaluation ───────────────────────────────────────────────────
 

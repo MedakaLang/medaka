@@ -46,7 +46,8 @@ public export data BitReader =
     }
 
 -- | A fresh reader positioned at the start of `bytes`.
-export newBitReader : Array Int -> BitReader
+export
+newBitReader : Array Int -> BitReader
 newBitReader bytes =
   BitReader { src = bytes, pos = Ref 0, hold = Ref 0, count = Ref 0 }
 
@@ -73,7 +74,8 @@ refillBits n r =
 --   1011b = 11; its high nibble 1010b = 10; then the whole next byte 0xCD =
 --   205 verbatim, since 8 bits is exactly one aligned byte) — pinned below
 --   as `test "design-doc LSB-first shape…"`.
-export getBits : Int -> BitReader -> Result String Int
+export
+getBits : Int -> BitReader -> Result String Int
 getBits n r =
   if n < 0 || n > 32 then Err "getBits: width \{intToString n} out of range (must be 0..32)"
   else do
@@ -87,7 +89,8 @@ getBits n r =
 --   unread, so the next `getBits`/`getBytesAligned` call starts on a byte
 --   boundary. A no-op if already aligned. Never fails — there is nothing to
 --   read past the end of input here, only bits to drop.
-export alignByte : BitReader -> Unit
+export
+alignByte : BitReader -> Unit
 alignByte r =
   let extra = r.count.value % 8
   if extra == 0 then ()
@@ -99,7 +102,8 @@ alignByte r =
 --   the caller (whole-byte granularity — meaningful once aligned).
 --   `pos.value` bytes have been pulled INTO the buffer, but
 --   `count.value / 8` of those are still sitting unread in `hold`.
-export bytePos : BitReader -> Int
+export
+bytePos : BitReader -> Int
 bytePos r = r.pos.value - r.count.value / 8
 
 -- | Read `n` raw bytes verbatim (for a DEFLATE stored block). Caller must
@@ -107,7 +111,8 @@ bytePos r = r.pos.value - r.count.value / 8
 --   two operations have independent failure behavior (`alignByte` cannot
 --   fail; this can). Each byte is read via `getBits 8`, which on an aligned
 --   reader returns the byte's value unchanged (bit 0 stays bit 0).
-export getBytesAligned : Int -> BitReader -> Result String (Array Int)
+export
+getBytesAligned : Int -> BitReader -> Result String (Array Int)
 getBytesAligned n r =
   let out = new ()
   getBytesAlignedGo n r out
@@ -131,7 +136,8 @@ public export data BitWriter =
   | BitWriter { buf : MutArray Int, hold : Ref Int, count : Ref Int }
 
 -- | A fresh, empty writer.
-export newBitWriter : Unit -> BitWriter
+export
+newBitWriter : Unit -> BitWriter
 newBitWriter _ = BitWriter { buf = new (), hold = Ref 0, count = Ref 0 }
 
 -- Flush every complete byte currently buffered in `hold` to `buf`.
@@ -155,11 +161,12 @@ flushBytes w =
 --   leftover few bits from a prior `putBits` plus a wide push can wrap
 --   without this guard) — a loud crash at the call site beats a silently
 --   wrong compressed stream, which is the whole point of this module's
---   error-path discipline. Same pattern as `Array.set`/`Array.blit`/
---   `MutArray.set` panicking on an out-of-bounds index rather than
+--   error-path discipline. Same pattern as `Array.setInPlace`/`Array.blit`/
+--   `MutArray.setInPlace` panicking on an out-of-bounds index rather than
 --   returning `Result`. Bits of `v` above position `n - 1` are masked off,
 --   not validated — only the WIDTH is a hard precondition.
-export putBits : Int -> Int -> BitWriter -> Unit
+export
+putBits : Int -> Int -> BitWriter -> Unit
 putBits v n w =
   if n < 0 || n > 32 then panic "putBits: width \{intToString n} out of range (must be 0..32)"
   else
@@ -174,7 +181,8 @@ putBits v n w =
 --   values, extra-bits fields) is LSB-first. Internally this is still `width`
 --   individual calls to the LSB-first `putBits` (one bit at a time), walking
 --   `v`'s bits from bit `width - 1` down to bit `0`.
-export putCodeMSB : Int -> Int -> BitWriter -> Unit
+export
+putCodeMSB : Int -> Int -> BitWriter -> Unit
 putCodeMSB v width w = putCodeMSBGo v (width - 1) w
 
 putCodeMSBGo : Int -> Int -> BitWriter -> Unit
@@ -186,7 +194,8 @@ putCodeMSBGo v i w =
 
 -- | Pad with zero bits up to the next byte boundary. A no-op if already
 --   aligned.
-export alignByteW : BitWriter -> Unit
+export
+alignByteW : BitWriter -> Unit
 alignByteW w =
   let extra = w.count.value % 8
   if extra == 0 then () else putBits 0 (8 - extra) w
@@ -194,7 +203,8 @@ alignByteW w =
 -- | Append raw bytes verbatim. Caller must have called `alignByteW` first
 --   (a stored DEFLATE block's byte-aligned payload) — this does not align
 --   for you, for the same reason `getBytesAligned` doesn't on the read side.
-export putBytesAligned : Array Int -> BitWriter -> Unit
+export
+putBytesAligned : Array Int -> BitWriter -> Unit
 putBytesAligned bytes w = putBytesAlignedGo bytes 0 (arrayLength bytes) w
 
 putBytesAlignedGo : Array Int -> Int -> Int -> BitWriter -> Unit
@@ -207,7 +217,8 @@ putBytesAlignedGo bytes i n w
     None => ()
 
 -- | Pad to a byte boundary and return the accumulated bytes.
-export finishBitWriter : BitWriter -> Array Int
+export
+finishBitWriter : BitWriter -> Array Int
 finishBitWriter w =
   let _ = alignByteW w
   toArray w.buf

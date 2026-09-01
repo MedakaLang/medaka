@@ -72,7 +72,7 @@ highSCompact =
 setAt : Int -> Int -> Array Int -> Array Int
 setAt i value bs =
   let out = arrayCopy bs
-  let () = A.set i value out
+  let () = A.setInPlace i value out
   out
 
 decLast : Array Int -> Array Int
@@ -104,7 +104,7 @@ test "secret key rejects 256 in early middle and final positions" =
 test "secret key stores a scalar before caller input mutates" =
   let mutable = arrayCopy oneBytes
   let admitted = secretKeyFromBytes mutable
-  let () = A.set 31 0 mutable
+  let () = A.setInPlace 31 0 mutable
   expectTrue (isOk admitted && isErr (secretKeyFromBytes mutable))
 
 test "public compact signatures round trip as exactly 64 bytes" = match signatureFromCompact knownCompact

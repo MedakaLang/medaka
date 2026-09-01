@@ -73,10 +73,10 @@ True
 False
 ```
 
-## `insert`
+## `insertInPlace`
 
 ```
-insert : a -> HashSet a -> Unit
+insertInPlace : a -> HashSet a -> Unit
 ```
 
 Add an element, in place. A no-op when already present. Resizes (doubling)
@@ -98,10 +98,10 @@ Build a set from a list, dropping duplicates.
 8
 ```
 
-## `delete`
+## `deleteInPlace`
 
 ```
-delete : a -> HashSet a -> Unit
+deleteInPlace : a -> HashSet a -> Unit
 ```
 
 Remove an element, in place. A no-op when absent.

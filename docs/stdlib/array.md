@@ -11,7 +11,7 @@ under the hood.  Two design tensions shape this module:
 1. Performance vs. functional feel.  The public API is a pure facade
 where it can be (`map`, `filter`, `sort`, etc. return fresh arrays)
 and explicitly mutates in place where that's the whole point
-(`set`, `swap`, `sortInPlace`) — untracked, no effect in the signature.
+(`setInPlace`, `swap`, `sortInPlace`) — untracked, no effect in the signature.
 
 2. Opaque builtin vs. typeclass member.  `Array a` cannot be pattern-
 matched like `List a`, so the impls below dispatch through the
@@ -304,10 +304,10 @@ the interface default.  `filterMap` filters via a list intermediate
 reverse): one O(N) traversal + one O(M) list build + one O(M) array
 copy, no mutation so the signature stays pure.
 
-## `set`
+## `setInPlace`
 
 ```
-set : Int -> a -> Array a -> Unit
+setInPlace : Int -> a -> Array a -> Unit
 ```
 
 Bounds-checked write.  Panics on OOB.

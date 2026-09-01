@@ -81,7 +81,7 @@ fourGCompressed = [|
 withPrefix : Int -> Array Int -> Array Int
 withPrefix prefix encoded =
   let out = arrayCopy encoded
-  let () = A.set 0 prefix out
+  let () = A.setInPlace 0 prefix out
   out
 
 derivedCompressed : Int -> Array Int

@@ -8,8 +8,8 @@
 -- -7 (the issue's repro), intMinBound, 0, intMaxBound, and a large positive.
 -- Each probe also stores a hash-COLLIDING second key (K 2 h hashes equal to
 -- K 1 h but is not eq to it), so the bucket chain walk is exercised too.
-import hash_map.{new as hmNew, set as hmSet, get as hmGet}
-import hash_set.{new as hsNew, insert as hsInsert, has as hsHas}
+import hash_map.{new as hmNew, setInPlace as hmSet, get as hmGet}
+import hash_set.{new as hsNew, insertInPlace as hsInsert, has as hsHas}
 
 -- `K tag h` hashes on `h` ONLY, so `K 1 h` and `K 2 h` COLLIDE while staying
 -- un-equal. Eq is STRUCTURAL (derived) over both fields, so eq-equal values

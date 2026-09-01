@@ -37,7 +37,7 @@ import lib.field.{
   feNegate,
   feInverse,
 }
-import array.{set}
+import array.{setInPlace}
 import hex.{decode, encode}
 import string.{split, startsWith, toInt, trim}
 import io.{readLines}
@@ -69,7 +69,7 @@ opIndex op =
     -1
 
 bump : Array Int -> Int -> Unit
-bump arr i = set i (arr[i] + 1) arr
+bump arr i = setInPlace i (arr[i] + 1) arr
 
 -- ── Row evaluation ───────────────────────────────────────────────────
 

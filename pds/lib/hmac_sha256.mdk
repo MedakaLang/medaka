@@ -22,7 +22,7 @@ fillKeyPad : Array Int -> Array Int -> Int -> Int -> Unit
 fillKeyPad key out pad i =
   if i >= keyBytes then ()
   else
-    let () = A.set i (bitXor key[i] pad) out
+    let () = A.setInPlace i (bitXor key[i] pad) out
     fillKeyPad key out pad (i + 1)
 
 keyPad : Array Int -> Int -> Array Int
@@ -35,7 +35,7 @@ copyBytes : Array Int -> Array Int -> Int -> Int -> Unit
 copyBytes input out offset i =
   if i >= arrayLength input then ()
   else
-    let () = A.set (offset + i) input[i] out
+    let () = A.setInPlace (offset + i) input[i] out
     copyBytes input out offset (i + 1)
 
 joined : Array Int -> Array Int -> Array Int

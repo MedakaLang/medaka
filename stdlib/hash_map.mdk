@@ -134,8 +134,8 @@ bucketRemove key ((k, v)::rest)
 {- | Insert (or overwrite) the value at a key, in place. Resizes (doubling)
    when the load factor passes 0.75. -}
 export
-set : (Eq k, Hashable k) => k -> v -> HashMap k v -> Unit
-set key val (HashMap buckets count) =
+setInPlace : (Eq k, Hashable k) => k -> v -> HashMap k v -> Unit
+setInPlace key val (HashMap buckets count) =
   let arr = !buckets
   let idx = slotOf key (arrayLength arr)
   insertAt key val arr idx buckets count
@@ -197,15 +197,15 @@ fromList pairs =
 insertAll : (Eq k, Hashable k) => List (k, v) -> HashMap k v -> Unit
 insertAll [] _ = ()
 insertAll ((k, v)::rest) m =
-  set k v m
+  setInPlace k v m
   insertAll rest m
 
 -- ── Deletion (mutating) ─────────────────────────────────────────────────
 
 {- | Remove a key, in place. A no-op when absent. -}
 export
-delete : (Eq k, Hashable k) => k -> HashMap k v -> Unit
-delete key (HashMap buckets count) =
+deleteInPlace : (Eq k, Hashable k) => k -> HashMap k v -> Unit
+deleteInPlace key (HashMap buckets count) =
   let arr = !buckets
   let idx = slotOf key (arrayLength arr)
   deleteAt key arr idx count

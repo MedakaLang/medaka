@@ -4,5 +4,5 @@ import array as A
 import lib.field.{feZero, feOne}
 
 main =
-  let () = A.set 0 7 feZero
-  A.set 0 9 feOne
+  let () = A.setInPlace 0 7 feZero
+  A.setInPlace 0 9 feOne

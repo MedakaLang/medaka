@@ -177,10 +177,10 @@ pop : MutArray a -> Option a
 Remove and return the last element, or `None` when empty.  Keeps capacity
 (no shrink).
 
-## `set`
+## `setInPlace`
 
 ```
-set : Int -> a -> MutArray a -> Unit
+setInPlace : Int -> a -> MutArray a -> Unit
 ```
 
 Overwrite the element at an index.  Panics when out of the live range

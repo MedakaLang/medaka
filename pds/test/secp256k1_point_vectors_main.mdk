@@ -57,12 +57,12 @@ known s =
 
 bad : Array Int -> String -> <IO> Unit
 bad c label =
-  let () = A.set 1 (c[1] + 1) c
+  let () = A.setInPlace 1 (c[1] + 1) c
   println "FAIL\t\{label}"
 
 good : Array Int -> String -> <IO> Unit
 good c label =
-  let () = A.set 0 (c[0] + 1) c
+  let () = A.setInPlace 0 (c[0] + 1) c
   println "PASS\t\{label}"
 
 mul : Array Int -> String -> String -> String -> <IO> Unit

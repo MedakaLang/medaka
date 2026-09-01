@@ -33,18 +33,18 @@
    only the final one-or-two blocks (<=128 bytes) are synthesized to hold
    the 0x80 marker, zero padding, and the 64-bit big-endian bit length. -}
 
--- Writes here are still on `Array.set` rather than the `arr[i] := v` sugar the
+-- Writes here are still on `Array.setInPlace` rather than the `arr[i] := v` sugar the
 -- rest of the tree uses (#1786) -- but the reason is now HISTORICAL, and this
 -- comment is a note to whoever migrates them, not a warning against it.
 --
 -- The cost was never dispatch (`setIndex` on a monomorphic `Array` receiver emits
--- a direct call, same as `Array.set`). It was an INLINING asymmetry: `setIndex`'s
+-- a direct call, same as `Array.setInPlace`). It was an INLINING asymmetry: `setIndex`'s
 -- out-of-bounds branch interpolated a message, which put it past LLVM's inline
--- threshold, so it never inlined into the hot loops where `Array.set` did --
+-- threshold, so it never inlined into the hot loops where `Array.setInPlace` did --
 -- 0.588s vs 0.677s over 200k feMuls. #1787 removed the interpolation, and both
 -- spellings now inline. Migrating these three modules is mechanical and wanted;
 -- re-measure when you do, and delete this comment.
-import array.{get, set, make, blit}
+import array.{get, setInPlace, make, blit}
 
 -- ── Constants ────────────────────────────────────────────────────────
 
@@ -135,7 +135,7 @@ fillFirst16 : Array Int -> (Int -> Int) -> Int -> Unit
 fillFirst16 w byteOf i =
   if i >= 16 then ()
   else
-    set i (scheduleWord byteOf i) w
+    setInPlace i (scheduleWord byteOf i) w
     fillFirst16 w byteOf (i + 1)
 
 extendSchedule : Array Int -> Int -> Unit
@@ -145,7 +145,7 @@ extendSchedule w i =
     let s0 = smallSigma0 (wordAt w (i - 15))
     let s1 = smallSigma1 (wordAt w (i - 2))
     let v = mask32 (mask32 (mask32 (wordAt w (i - 16) + s0) + wordAt w (i - 7)) + s1)
-    set i v w
+    setInPlace i v w
     extendSchedule w (i + 1)
 
 -- Build the 64-word message schedule for one block from a byte accessor
@@ -210,7 +210,7 @@ writeLenGo out offset bitLen i =
   if i >= 8 then ()
   else
     let shiftAmt = (7 - i) * 8
-    set (offset + i) (bitAnd (shiftRight bitLen shiftAmt) 255) out
+    setInPlace (offset + i) (bitAnd (shiftRight bitLen shiftAmt) 255) out
     writeLenGo out offset bitLen (i + 1)
 
 -- The number of bytes in the final, padded region (one block if the tail
@@ -226,7 +226,7 @@ buildTail msg len tailLen =
   let size = padLength tailLen
   let out = make size 0
   blit msg (len - tailLen) out 0 tailLen
-  set tailLen 0x80 out
+  setInPlace tailLen 0x80 out
   writeLenGo out (size - 8) (len * 8) 0
   out
 
@@ -287,10 +287,10 @@ sha256 msg =
 
 digestWord : Array Int -> Int -> Int -> Unit
 digestWord out i word =
-  set (i * 4) (bitAnd (shiftRight word 24) 255) out
-  set (i * 4 + 1) (bitAnd (shiftRight word 16) 255) out
-  set (i * 4 + 2) (bitAnd (shiftRight word 8) 255) out
-  set (i * 4 + 3) (bitAnd word 255) out
+  setInPlace (i * 4) (bitAnd (shiftRight word 24) 255) out
+  setInPlace (i * 4 + 1) (bitAnd (shiftRight word 16) 255) out
+  setInPlace (i * 4 + 2) (bitAnd (shiftRight word 8) 255) out
+  setInPlace (i * 4 + 3) (bitAnd word 255) out
 
 digestBytes : State -> Array Int
 digestBytes (h0, h1, h2, h3, h4, h5, h6, h7) =

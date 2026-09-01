@@ -130,10 +130,10 @@ Value at a key, or a fallback.
 0
 ```
 
-## `set`
+## `setInPlace`
 
 ```
-set : a -> b -> HashMap a b -> Unit
+setInPlace : a -> b -> HashMap a b -> Unit
 ```
 
 Insert (or overwrite) the value at a key, in place. Resizes (doubling)
@@ -155,10 +155,10 @@ Build a table from an association list (later pairs win on duplicates).
 8
 ```
 
-## `delete`
+## `deleteInPlace`
 
 ```
-delete : a -> HashMap a b -> Unit
+deleteInPlace : a -> HashMap a b -> Unit
 ```
 
 Remove a key, in place. A no-op when absent.

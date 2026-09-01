@@ -9,7 +9,7 @@
      1. Performance vs. functional feel.  The public API is a pure facade
         where it can be (`map`, `filter`, `sort`, etc. return fresh arrays)
         and explicitly mutates in place where that's the whole point
-        (`set`, `swap`, `sortInPlace`) — untracked, no effect in the signature.
+        (`setInPlace`, `swap`, `sortInPlace`) — untracked, no effect in the signature.
 
      2. Opaque builtin vs. typeclass member.  `Array a` cannot be pattern-
         matched like `List a`, so the impls below dispatch through the
@@ -300,10 +300,10 @@ revList (x::xs) acc = revList xs (x::acc)
 
 -- | Bounds-checked write.  Panics on OOB.
 export
-set : Int -> a -> Array a -> Unit
-set i x arr =
+setInPlace : Int -> a -> Array a -> Unit
+setInPlace i x arr =
   if i < 0 || i >= arrayLength arr then
-    panic "Array.set: index out of bounds"
+    panic "Array.setInPlace: index out of bounds"
   else
     arraySetUnsafe i x arr
 

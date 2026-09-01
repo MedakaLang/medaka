@@ -87,8 +87,8 @@ bucketRemove x (y::rest)
 {- | Add an element, in place. A no-op when already present. Resizes (doubling)
    past load factor 0.75. -}
 export
-insert : (Eq a, Hashable a) => a -> HashSet a -> Unit
-insert x (HashSet buckets count) =
+insertInPlace : (Eq a, Hashable a) => a -> HashSet a -> Unit
+insertInPlace x (HashSet buckets count) =
   let arr = !buckets
   let idx = slotOf x (arrayLength arr)
   insertAt x arr idx buckets count
@@ -148,13 +148,13 @@ fromList xs =
 insertAll : (Eq a, Hashable a) => List a -> HashSet a -> Unit
 insertAll [] _ = ()
 insertAll (x::rest) s =
-  insert x s
+  insertInPlace x s
   insertAll rest s
 
 {- | Remove an element, in place. A no-op when absent. -}
 export
-delete : (Eq a, Hashable a) => a -> HashSet a -> Unit
-delete x (HashSet buckets count) =
+deleteInPlace : (Eq a, Hashable a) => a -> HashSet a -> Unit
+deleteInPlace x (HashSet buckets count) =
   let arr = !buckets
   let idx = slotOf x (arrayLength arr)
   deleteAt x arr idx count

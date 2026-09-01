@@ -80,7 +80,16 @@ import support.util.{
   dedupBy,
   dedup,
 }
-import hash_map.{HashMap, new, get, set, has, keys, size, findWithDefault}
+import hash_map.{
+  HashMap,
+  new,
+  get,
+  setInPlace,
+  has,
+  keys,
+  size,
+  findWithDefault,
+}
 import tools.printer.{declToString, exprToString, ppTy}
 import support.path.{dirOf, modIdOf}
 import support.char.{isAlnum, isLower, isUpper}
@@ -689,8 +698,8 @@ stdlibSigTriples dir = match listDir dir
   Ok entries => flatMap (stdlibFileSigs dir) (stdlibMdkNames entries)
 
 -- Group the flat triples by NAME, preserving stdlib-file order within a name.
--- Appending rather than overwriting is the whole point: `set` alone would keep
--- one module's `reverse` and drop the other's without a word.
+-- Appending rather than overwriting is the whole point: `setInPlace` alone
+-- would keep one module's `reverse` and drop the other's without a word.
 groupStdlibSigs : List (String, String, Ty) -> HashMap String (List (String, Ty))
 groupStdlibSigs triples =
   let m = new ()
@@ -700,7 +709,7 @@ groupStdlibSigs triples =
 groupStdlibSigsInto : List (String, String, Ty) -> HashMap String (List (String, Ty)) -> Unit
 groupStdlibSigsInto [] _ = ()
 groupStdlibSigsInto ((modName, name, ty)::rest) m =
-  let _ = set name (findWithDefault [] name m ++ [(modName, ty)]) m
+  let _ = setInPlace name (findWithDefault [] name m ++ [(modName, ty)]) m
   groupStdlibSigsInto rest m
 
 -- Top-level `.mdk` members only, dot-entries dropped, sorted for determinism.
@@ -1736,8 +1745,8 @@ ownsModule None _ = False
 ownsModule (Some own) modName = modName == own
 
 -- name → the `Ty` its top-level `DTypeSig` declares.  Built by walking the
--- reversed decl list with an unconditional `set`, so the FIRST signature in the
--- file wins (a file with two signatures for one name is already a resolve error;
+-- reversed decl list with an unconditional `setInPlace`, so the FIRST
+-- signature in the file wins (a file with two signatures for one name is already a resolve error;
 -- this only fixes which one lint reads).
 sigTyMapOf : List Decl -> HashMap String Ty
 sigTyMapOf prog =
@@ -1748,7 +1757,7 @@ sigTyMapOf prog =
 sigTyInto : List (String, Ty) -> HashMap String Ty -> Unit
 sigTyInto [] _ = ()
 sigTyInto ((n, t)::rest) m =
-  let _ = set n t m
+  let _ = setInPlace n t m
   sigTyInto rest m
 
 topSigPairL : Decl -> List (String, Ty)
@@ -4150,7 +4159,7 @@ nameSetOf names =
 nameSetInto : List String -> HashMap String Unit -> Unit
 nameSetInto [] _ = ()
 nameSetInto (n::rest) s =
-  let _ = set n () s
+  let _ = setInPlace n () s
   nameSetInto rest s
 
 allDefNameL : (Decl, Option Loc) -> List (String, Option Loc)
@@ -4239,14 +4248,15 @@ bodyIdents d = sortUniqS (identTokens (declToString d))
 -- BFS over the ref graph: pop a name; if already visited skip; else mark visited
 -- and enqueue its body refs (only DFunDef keys have refs; every other name is a
 -- leaf).  Terminates because `visited` grows monotonically and each name is
--- expanded once.  `has`/`set` are O(1) average, so this is ~O(names + edges); the
--- old `contains x visited` over a list made it O(names^2).
+-- expanded once.  `has`/`setInPlace` are O(1) average, so this is
+-- ~O(names + edges); the old `contains x visited` over a list made it
+-- O(names^2).
 bfsReach : HashMap String (List String) -> HashMap String Unit -> List String -> Unit
 bfsReach _ _ [] = ()
 bfsReach refMap visited (x::rest)
   | has x visited = bfsReach refMap visited rest
   | otherwise =
-    let _ = set x () visited
+    let _ = setInPlace x () visited
     bfsReach refMap visited (refsOf refMap x ++ rest)
 
 refsOf : HashMap String (List String) -> String -> List String
@@ -4267,7 +4277,7 @@ mergeRefs pairs =
 mergeRefsGo : HashMap String (List String) -> List (String, List String) -> Unit
 mergeRefsGo _ [] = ()
 mergeRefsGo acc ((n, rs)::rest) =
-  let _ = set n (sortUniqS (findWithDefault [] n acc ++ rs)) acc
+  let _ = setInPlace n (sortUniqS (findWithDefault [] n acc ++ rs)) acc
   mergeRefsGo acc rest
 
 -- ── identifier tokeniser ──────────────────────────────────────────────────────
@@ -4590,7 +4600,7 @@ groupOccsByKey occs =
 groupOccsGo : HashMap String (List (String, Int, String, String)) -> List (String, Int, String, String) -> Unit
 groupOccsGo _ [] = ()
 groupOccsGo m (o::rest) =
-  let _ = set (occKey o) (o :: findWithDefault [] (occKey o) m) m
+  let _ = setInPlace (occKey o) (o :: findWithDefault [] (occKey o) m) m
   groupOccsGo m rest
 
 -- Distinct keys in first-appearance order.  `keys` on the HashMap would do this
@@ -4609,7 +4619,7 @@ dupDistinctGo _ [] = []
 dupDistinctGo seen (o::rest)
   | has (occKey o) seen = dupDistinctGo seen rest
   | otherwise =
-    let _ = set (occKey o) () seen
+    let _ = setInPlace (occKey o) () seen
     occKey o :: dupDistinctGo seen rest
 
 -- Can this key's group emit at all?  ≥2 occurrences spanning ≥2 distinct files.
@@ -4730,7 +4740,7 @@ sameFileGroupByKey occs =
 sameFileGroupGo : HashMap String (List (String, Int, String)) -> List (String, Int, String) -> Unit
 sameFileGroupGo _ [] = ()
 sameFileGroupGo m (o::rest) =
-  let _ = set (sameFileOccKey o) (o :: findWithDefault [] (sameFileOccKey o) m) m
+  let _ = setInPlace (sameFileOccKey o) (o :: findWithDefault [] (sameFileOccKey o) m) m
   sameFileGroupGo m rest
 
 sameFileDistinctKeys : List (String, Int, String) -> List String
@@ -4743,7 +4753,7 @@ sameFileDistinctGo _ [] = []
 sameFileDistinctGo seen (o::rest)
   | has (sameFileOccKey o) seen = sameFileDistinctGo seen rest
   | otherwise =
-    let _ = set (sameFileOccKey o) () seen
+    let _ = setInPlace (sameFileOccKey o) () seen
     sameFileOccKey o :: sameFileDistinctGo seen rest
 
 sameFileOccName : (String, Int, String) -> String
