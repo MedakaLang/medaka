@@ -2979,7 +2979,7 @@ emitPerfExtern e env "allocBytes" args = match emitArgs e env args
   _ => panic "llvm: allocBytes takes one (Unit) argument"
 emitPerfExtern e _ name _ = gapE e ("unsupported perf extern " ++ name)
 
--- Hashable per-type hashers (specified, byte-identical to lib/eval.ml hash_*).
+-- Hashable per-type hashers.
 -- Each unpacks the native arg the C helper wants (untagged int / codepoint /
 -- unboxed double / String cell pointer) and tags the RAW Int result.  hashBool
 -- untags the 0/1 bool word.  See runtime/medaka_rt.c mdk_hash_*.
@@ -4877,7 +4877,7 @@ emitMethod e env name (RLocal sym dicts) implRoutes methRoutes argOps =
 -- downstream `++`/`::` on it dispatches list/string append.  Otherwise
 -- (scalar/element result) keep the LTInt default.
 
--- C5 (mirror lib/eval.ml RLocal): NOT a method dispatch — the receiver has no
+-- C5 (mirror eval.mdk's RLocal handling): NOT a method dispatch — the receiver has no
 -- impl of this interface but an explicitly-imported/local standalone shadows the
 -- method name.  Emit a DIRECT call to that standalone top-level fn (`mdk_<target>`),
 -- exactly as emitApp's isKnownFn branch would for a plain call — no dispatch, no

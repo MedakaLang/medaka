@@ -5,9 +5,9 @@
 --
 -- reads <source.mdk>, parses it with `parseWithPositions`, collects the lexer
 -- comment side-channel, and prints the re-rendered source with comments
--- interleaved at their original positions (fmt.formatSource → fmt.formatProgram,
--- a port of lib/printer.ml `format_program`) to stdout — diffed against the
--- OCaml `medaka fmt --stdout` oracle, see test/diff_compiler_fmt.sh.
+-- interleaved at their original positions (fmt.formatSource → fmt.formatProgram)
+-- to stdout — diffed against the native `medaka fmt --stdout` output, see
+-- test/diff_compiler_fmt.sh.
 
 import tools.fmt.{formatSource}
 

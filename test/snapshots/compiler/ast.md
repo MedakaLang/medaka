@@ -1,14 +1,13 @@
 # META
-source_lines=1914
+source_lines=1912
 stages=DESUGAR,MARK
 # SOURCE
--- Self-hosted Medaka AST — mirror of lib/ast.ml's surface (pre-desugar) nodes,
--- the target the self-host parser builds.  Post-parse-only nodes (EMethodRef,
+-- Medaka AST — the surface (pre-desugar) nodes,
+-- the target the parser builds.  Post-parse-only nodes (EMethodRef,
 -- EDictApp, EHeadAnnot) are intentionally omitted — the parser never produces
--- them.  Constructor names match lib/ast.ml so the structural dump
--- (compiler/sexp.mdk ↔ dev/astdump.ml) stays in lockstep.
+-- them.
 --
--- Coverage grows with the parser port.  This is the core node set; more expr,
+-- Coverage grows with the parser.  This is the core node set; more expr,
 -- pat, ty, and decl variants are added per slice.
 
 public export data Lit =
@@ -20,7 +19,7 @@ public export data Lit =
   | LUnit
 deriving (Eq)
 
--- A source-location span for an expression (mirror of lib/ast.ml's `loc`):
+-- A source-location span for an expression (`loc`):
 -- file, 1-based start line, 0-based start col, 1-based end line, 0-based end col.
 -- Carried by the transparent `ELoc` wrapper the parser puts on atom/leaf and
 -- statement-form expressions.  The `file` is filled by the caller (B.10.2b) —
@@ -832,7 +831,7 @@ firstTyLocList (t::rest) = orElseLoc (firstTyLoc t) (firstTyLocList rest)
 --   site the interface has no impl for the concrete receiver, but an explicitly-
 --   imported/local standalone function shadows the method name, so eval ignores
 --   VMulti dispatch and evaluates the bound name as the plain standalone (no
---   narrowing).  Mirrors lib/ast.ml's RLocal.  The carried String is the
+--   narrowing).  The carried String is the
 --   MANGLED standalone symbol to call ("" = call the EMethodAt's own (bare) name).
 --   On the EMIT path (P0-18) a definer-shadow occurrence is marked `EMethodAt` with
 --   the BARE dispatch name (so `implFor` finds the impl when the receiver DOES have
@@ -988,7 +987,7 @@ public export data Expr =
   -- Head-pinned type annotation (`e :~ T`).  The parser never produces this, but
   -- desugar's container-literal lowering does: `Map { … }`/`Set { … }` become
   -- `(fromEntries [...] :~ Name …)`, pinning the result type so `fromEntries`
-  -- dispatches by the literal's named type (mirror of lib/ast.ml's EHeadAnnot).
+  -- dispatches by the literal's named type.
   | EHeadAnnot Expr Ty
   | EBlock (List DoStmt)
   | EDo (List DoStmt)
@@ -1062,8 +1061,7 @@ public export data Expr =
   -- the typechecker.  Eval applies the matching dictionaries as leading args,
   -- lining up with the dict params dict_pass prepended to f's definition.
   | EDictAt String (Ref (List Route))
-  -- Transparent source-location wrapper (mirror of lib/ast.ml:193 `ELoc of
-  -- loc * expr`).  The parser wraps atom/leaf and statement-form productions
+  -- Transparent source-location wrapper.  The parser wraps atom/leaf and statement-form productions
   -- (matching parser.mly's atoms + let/if/match/function/do/lambda/as-pat) so
   -- typecheck/resolve can attribute errors to a precise expression span via a
   -- `currentLoc` ref.  Semantically transparent: every stage either recurses
@@ -1077,15 +1075,15 @@ public export data Expr =
   -- monad" error.  Desugar-introduced, never parsed/round-tripped.
   | EDoOrigin Loc Expr
   -- PLAN.md #11: a *source* integer literal in EXPRESSION position, polymorphic
-  -- over `Num a` (mirror of lib/ast.ml's `ENumLit of int * float option ref`).
+  -- over `Num a`.
   -- The parser emits this (never `ELit (LInt)`) for an integer in expression
   -- position; pattern-position int literals stay `PLit (LInt)` Int (locked §0.4).
   -- typecheck infers a fresh `Num`-obligated var; the post-HM defaulting pass
   -- grounds an ambiguous Num-only var to Int; then a final pass stamps the ref
   -- `Some f` iff the literal's inferred type ground to Float.  dictPass rewrites
   -- the node to `ELit (LFloat f)` (float ref = Some f), `ELit (LInt n)` (both
-  -- cells empty), or — the #11 soundness arm, mirror of lib/ast.ml's third payload
-  -- `resolved option ref` — `EApp (EMethodAt "fromInt" …) (ELit (LInt n))` when the
+  -- cells empty), or — the #11 soundness arm —
+  -- `EApp (EMethodAt "fromInt" …) (ELit (LInt n))` when the
   -- literal stays a polymorphic `Num a` (the `1` in `inc x = x + 1`): the third
   -- field is the `fromInt`-route cell (`Ref Route`), filled by resolveSites with
   -- the RDictFwd route onto the enclosing `Num a` dict (exactly core.mdk's

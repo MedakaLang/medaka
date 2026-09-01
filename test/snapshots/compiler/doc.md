@@ -1,5 +1,5 @@
 # META
-source_lines=1148
+source_lines=1142
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/doc.mdk — the native `medaka doc` documentation extractor.
@@ -22,12 +22,6 @@ stages=DESUGAR,MARK
 -- shows the surface a reader wrote.  Type rendering is this file's own
 -- `ppTyP`, not `types/typecheck.ppTy`, because the latter DROPS `TyEffect`
 -- rows and interface method types carry them.
---
--- Historical note: this file began as a port of the OCaml compiler's
--- `lib/doc.ml` and its comments used to claim byte-identical output.  That
--- oracle was removed on 2026-06-26 and the renderer has since diverged
--- deliberately (multi-entry `DUse` re-export expansion, doctest/marker-aware
--- prose rendering, library-mode impl rebucketing).  It mirrors nothing now.
 
 import frontend.lexer.{Comment, collectComments, commentLine, commentText}
 import frontend.parser.{
@@ -85,7 +79,7 @@ dlen s = stringLength s
 dsub : Int -> Int -> String -> String
 dsub a b s = stringSlice a b s
 
--- ── pre-desugar type rendering (mirror lib/ast.ml pp_ty_prec) ───────────────
+-- ── pre-desugar type rendering ──────────────────────────────────────────
 -- NOTE: types/typecheck.ppTy drops `TyEffect` rows; OCaml pp_ty_prec renders
 -- them, and interface method types carry effect rows.  So we mirror pp_ty_prec
 -- here directly, precedence-passing.
@@ -141,7 +135,7 @@ ppConstrDoc (Constraint { constraintHead = iface, constraintArgs = args }) = mat
 ppTyDoc : Ty -> String
 ppTyDoc t = ppTyP 0 t
 
--- ── Comment-text extraction (mirror lib/doc.ml) ─────────────────────────────
+-- ── Comment-text extraction ───────────────────────────────────────────────
 
 -- Strip the `-- ` prefix from a line-comment text, returning the bare prose.
 --   "--"            -> ""
@@ -261,7 +255,7 @@ collectDocLines tbl line acc = match lookupLineLast tbl line
   None => acc
   Some text => collectDocLines tbl (line - 1) (text::acc)
 
--- ── signature rendering (mirror lib/doc.ml) ─────────────────────────────────
+-- ── signature rendering ────────────────────────────────────────────────────
 
 ppDataVariant : Variant -> String
 ppDataVariant (Variant name (ConPos [])) = name
@@ -409,7 +403,7 @@ tyHeadName (TyCon { tyConName = s }) = Some s
 tyHeadName (TyApp f _) = tyHeadName f
 tyHeadName _ = None
 
--- ── entry extraction (mirror lib/doc.ml) ────────────────────────────────────
+-- ── entry extraction ───────────────────────────────────────────────────────
 
 -- Expand a public DLetGroup into one (name, DocEntry) per binding.
 allLetgroupEntries : Bool -> List LetBind -> Int -> List (String, Scheme) -> List (Int, String) -> List (String, DocEntry)

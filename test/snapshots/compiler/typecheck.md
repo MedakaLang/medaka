@@ -1,5 +1,5 @@
 # META
-source_lines=37948
+source_lines=37919
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -136,7 +136,7 @@ import frontend.resolve.{
   externTyOriginScope,
   noteOriginTrace,
 }
--- The type-aware non-exhaustive-`match` check (`check_match` in lib/exhaust.ml)
+-- The type-aware non-exhaustive-`match` check (`check_match` in compiler/frontend/exhaust.mdk)
 -- reuses the Maranget matrix machinery already ported in exhaust.mdk — the only
 -- difference from the guard-coverage pass is the ctor oracle (here it comes from
 -- the typechecked program's data decls + the inferred scrutinee type).
@@ -476,7 +476,7 @@ public export data Effvar =
 -- DOMAIN — a small lattice of data-shaped values with a top ⊤ (unconstrained).
 -- Stage 1 is the REPRESENTATION only: every param is built at ⊤, so the row is
 -- byte-identical to the v1 set-of-bare-labels.  Stage 2 adds the Prefix domain's
--- analysis with NO change to this row code.  (Mirror of lib/typecheck.ml.)
+-- analysis with NO change to this row code.
 -- WS-4: a PRODUCT refinement domain — a label refined on several named AXES at
 -- once, each axis a value in an existing sub-domain (e.g. structured `Net` =
 -- `Host(Prefix) × Method(Set)`).  Represented as a sorted assoc-list keyed by
@@ -491,7 +491,7 @@ public export data Param =
   | PSet (Option (List String))
   | PProduct (List (String, Param))
 
--- v2 Stage 2b inferred-hole marker (mirror of lib/typecheck.ml).  A leaf
+-- v2 Stage 2b inferred-hole marker.  A leaf
 -- extern's `<Net _>` parses to the param string "_" (`effHoleSrc`), which
 -- `atomOfWritten` keeps as `PPrefix (Some "_")` — the hole the call-site α
 -- overwrites.  "_" is unambiguous: it can never be a valid written pattern
@@ -535,7 +535,7 @@ atomParam (Atom _ p) = p
 -- means "Prefix-domain (carries a pattern)"; absence ⇒ atomic (Unit).  Seeded
 -- with the builtin Prefix labels (Net/FileRead/FileWrite) and extended per
 -- program from `effect Net Prefix` decls.  An assoc-list Ref (the label set is
--- tiny).  (Mirror of lib/typecheck.ml's effect_domains Hashtbl.)
+-- tiny).
 
 seedEffectDomains : Unit -> Unit
 seedEffectDomains _ =
@@ -838,8 +838,7 @@ atomOfLabel l = Atom l (dtopFor l)
 -- `IO` is the coarse security alias: in a BOUND/annotation row it stands for
 -- the join of every narrow security label at ⊤.  ioAliasLabels lists them
 -- (every minted security label EXCEPT IO itself); internal labels (Mut/Panic)
--- are NOT members, so they are tracked independently of IO.  (Mirror of
--- lib/typecheck.ml's io_alias_labels.)
+-- are NOT members, so they are tracked independently of IO.
 ioAliasLabels : List String
 ioAliasLabels = [
   "Stdout",
@@ -993,7 +992,7 @@ atomsOfWritten ls = atomsNorm (map atomOfWritten ls)
 -- Abstract a DESUGARED core string-producing expr to a known literal prefix or
 -- Unknown.  Intraprocedural (fork (c)): EApp results, fn-parameter EVars, field
 -- access ⇒ Unknown ⇒ ⊤.  `lets` carries let-bound RHSs in scope for the EVar
--- rule.  (Mirror of lib/typecheck.ml's `alpha`.)
+-- rule.
 data KP = Known String | Unknown
 
 -- longest common prefix as a KP (Unknown if empty)
@@ -1149,7 +1148,7 @@ effrowLabels r = match effrowNorm r
 -- open tail are preserved.  When no hole is present the row is unchanged.
 -- `lets` is the enclosing function body's α-let scope (EFFECTS WS-2): seeded into
 -- α so an outer-body `let dest = "…"; fetch dest` recovers the literal prefix.
--- (Mirror of lib/typecheck.ml's fill_holes_in_row.)
+
 fillHolesInRow : List (String, Expr) -> EffRow -> Option Expr -> EffRow
 fillHolesInRow lets eff firstArg = match effrowNorm eff
   EffRow labels tail =>
@@ -1427,8 +1426,7 @@ effectLeakCheck escaping bound =
 effectLeakMsg : List Atom -> List Atom -> String
 effectLeakMsg bound extras = "Effectful value used where <\{renderAtoms bound}> is allowed, but it performs <\{renderAtoms extras}>"
 
--- v2 Stage 2a: diagnostic for a rejected written effect param (mirror of
--- lib/typecheck.ml's EffectParam message).
+-- v2 Stage 2a: diagnostic for a rejected written effect param.
 effectParamMsg : String -> String -> String
 effectParamMsg label why = "Invalid effect parameter on <\{label}>: \{why}"
 
@@ -2601,9 +2599,8 @@ public export data PendingEntry =
 -- after inference, checkImplObligations can read what the interface params
 -- resolved to (parallel-walking the declared type against the normalized
 -- occurrence mono) and reject the call when those concrete head types have NO
--- matching impl in the program — mirroring lib/typecheck.ml's check_method_usages
--- (`No impl of … for …`, lib/typecheck.ml:3845).  Skips while a param is still a
--- polymorphic tyvar (deferred to the caller, exactly like the oracle).
+-- matching impl in the program (the `No impl of … for …` reject).  Skips while a param is still a
+-- polymorphic tyvar (deferred to the caller).
 -- #147: keyed by method NAME (was a program-sized assoc List scanned linearly on
 -- hot per-node paths).  omInsert is last-write-wins and the register site inserts
 -- in the SAME order the old List prepended, so on a method-name collision the
@@ -2634,8 +2631,7 @@ public export data PendingEntry =
 -- (a top-level funDef name that is also a method name and is NOT defined in the
 -- current module).  resolveSite consults it: a method site at a concrete receiver
 -- with NO impl, whose name is here, routes RLocal (eval reads the standalone) instead
--- of RKey<head> (which would panic with no impl).  Mirrors lib/typecheck.ml's
--- env.standalone_values + the EApp RLocal stamp (typecheck.ml:1603-1640,4585).
+-- of RKey<head> (which would panic with no impl).
 -- NOT cleared by resetState — elabModuleStamp rebuilds it per module.
 
 -- DEFINER-shadow names (facet 2): the names THIS module declares as a top-level
@@ -2701,9 +2697,8 @@ routeLocalSym _ = ""
 -- loses the standalone's concrete result element type — typing `toList m : List a`
 -- (a free) instead of `List (String, Int)`, so a downstream `debug` dispatches on the
 -- ungrounded element and renders garbage.  inferAppExpr's standalone-shadow arm reads
--- THIS to recover the standalone result type when the receiver has no impl, mirroring
--- lib/typecheck.ml:2312 (`instantiate_raw (lookup_var env mname)`, where the oracle's
--- env.standalone_values keeps the var bound to the standalone).  Populated per module
+-- THIS to recover the standalone result type when the receiver has no impl.
+-- Populated per module
 -- in checkModuleFullImpl from seedVars (the import seed, pre-rebind).
 
 -- Bug C: the impl key table for the CURRENT module's full impl universe, stashed at
@@ -2898,7 +2893,7 @@ routeLocalSym _ = ""
 -- Each entry is (name, route ref, the discriminating-argument mono CELL);
 -- resolveRLocalSites reads the cell post-inference and stamps RLocal when the
 -- receiver grounds to a head with no impl.
--- Mirrors lib/typecheck.ml's EApp-receiver RLocal stamp.  Reset by resetState.
+-- Reset by resetState.
 -- (name, routeRef, receiverMono, mangledSym, forceLocal) — mangledSym (P0-18) is the
 -- mangled standalone symbol read off the marked route at record time; resolveRLocalSite
 -- stamps `RLocal mangledSym` for a no-impl receiver.  "" on the un-mangled path.
@@ -6602,8 +6597,7 @@ driverState = Ref (freshDriverState ())
 -- B.10.2c: the 5th element is the `currentLoc` span snapshotted at the RECORD
 -- site (during inference, when the ELoc context is live), so the post-HM
 -- obligation check (checkImplObligations) can pair a `No impl of …` reject with
--- the offending expression's range — mirror of lib/typecheck.ml capturing
--- `!current_loc` into method_usages / constraint_obligations at record time
+-- the offending expression's range — captured at record time
 -- rather than reading the stale global at the post-HM raise.
 
 -- PERF: the obligation list's length, in O(1).  That list grows with every
@@ -6641,8 +6635,7 @@ mkMethodOccObl iface typarams mty occ prov loc = UObligation {
 -- [fref] is the node's own Option Float cell; [n] the int value; [dref] is the
 -- node's `fromInt`-route cell (filled by resolveSites — the literal is modelled as a
 -- `fromInt n` method occurrence).  After defaulting + grounding, the post-HM pass
--- setNumlitFloats decides the runtime rep (mirror of lib/typecheck.ml's
--- set_numlit_floats): litVar ground Float ⇒ fref Some, dref cleared ⇒ ELit (LFloat f);
+-- setNumlitFloats decides the runtime rep: litVar ground Float ⇒ fref Some, dref cleared ⇒ ELit (LFloat f);
 -- litVar ground Int ⇒ both cleared ⇒ ELit (LInt n); litVar still polymorphic `Num a`
 -- (the soundness case — `1` in `inc x = x + 1`) ⇒ dref KEPT (RDictFwd onto the
 -- enclosing Num dict) ⇒ dictPass emits `EApp (EMethodAt "fromInt" …) (ELit (LInt n))`.
@@ -6759,8 +6752,8 @@ recordLocalBind name loc v =
 -- keeps only the tyvar ids (enough to pick a dict route); but to record a real impl
 -- obligation when a constrained fn is INSTANTIATED at a concrete type (`g = f "hello"`
 -- where `f : Num a => a -> a`), the call site needs the iface ("Num") so it can check
--- `Num String` against the impl table.  Mirrors lib/typecheck.ml's fun_constraints
--- carrying the iface name into check_constraint_obligations.  Populated at the SAME
+-- `Num String` against the impl table.  `funConstraints` carries
+-- the iface name into the constraint-obligation check.  Populated at the SAME
 -- three sites as funConstraintsRef (registerMember / registerInferredFor /
 -- seedDictAritiesFromSigs), with the SAME cross-module accumulate+reseed lifecycle.
 
@@ -7225,7 +7218,7 @@ uOblIsDecidableNow o =
 -- funConstraintsRef, which the check path leaves empty because its inferred-constraint
 -- registration is gated on dictEligibleSetRef).  At a USE site (inferVar) the binding's
 -- entry is freshened through the call's instantiation subst and checked against the
--- impl table — the compiler analog of lib/typecheck.ml's inferred_constraints carried
+-- impl table — inferred constraints carried
 -- on a scheme and re-checked at every instantiation.
 
 -- E6 (module emit path only): funConstraintsRef is wiped by resetState at the start
@@ -7848,8 +7841,7 @@ tcFix (TcDiag _ _ _ _ _ f) = f
 -- is a per-bindVar flag: occursAdjustUnbound sets it so bindVar can skip the
 -- actual link (preventing a cyclic union-find entry).
 -- B.10.2b: each accumulated error carries the `currentLoc` span in effect at the
--- push site (its `Option Loc`), mirroring lib/typecheck.ml binding `!current_loc`
--- into `Type_error (e, !current_loc)` at the RAISE site rather than reading the
+-- push site (its `Option Loc`), captured at the RAISE site rather than reading the
 -- global last-entered loc afterwards.  `pushTypeError` captures `currentLoc.value`
 -- so locs don't drift as inference continues past the error.  severity = 1.
 --
@@ -8050,8 +8042,7 @@ pushTypeErrorHelpFixAt code loc msg help fix =
 
 -- Source-location attribution (Phase B.10.2): the innermost ELoc span the
 -- `infer` walk has entered.  Set by infer's transparent ELoc arm before
--- recursing (mirror of lib/typecheck.ml's `current_loc` ref, set in its ELoc
--- arm; cf. `fail e = raise (Type_error (e, !current_loc))`).  Surfaced through
+-- recursing.  Surfaced through
 -- Diag / the LSP via `pushTypeError`.  `None` until the first ELoc is entered
 -- (top-level decls aren't ELoc-wrapped).
 currentLoc : Ref (Option Loc)
@@ -8081,8 +8072,7 @@ currentDoOrigin = Ref None
 -- C8b Gap 2 (diagnostic-quality parity): set to `Some methodName` around the
 -- OUTER unify of an interface default body against its declared return type, so a
 -- leaf TypeMismatch is reported as the oracle's specialized single line
--- `Method '<name>': expected type <e> but got <a>` (lib/typecheck.ml's
--- MethodTypeMismatch catch, :3904-3907) instead of a bare `Type mismatch: …`.
+-- `Method '<name>': expected type <e> but got <a>` instead of a bare `Type mismatch: …`.
 currentMethodMismatch : Ref (Option String)
 currentMethodMismatch = Ref None
 
@@ -9197,8 +9187,7 @@ ctorHeadIsUpper name =
 -- Lower every unbound var in [t] deeper than the current level down to the
 -- current level, so a value-restricted (non-generalized) binding's vars can't be
 -- picked up by an enclosing let's generalize.  Mirrors the lowering `unify`
--- performs via occursAdjust in the non-PVar pattern path (oracle
--- `lib/typecheck.ml:555-565`).
+-- performs via occursAdjust in the non-PVar pattern path.
 lowerToCurrent : Mono -> Unit
 lowerToCurrent t = match normalize t
   TVar cell => match !cell
@@ -9222,8 +9211,7 @@ lowerToCurrent t = match normalize t
     ()
 
 -- Generalize a value RHS; value-restrict (monomorphize, lowering free vars)
--- otherwise.  monoScheme leaves the mono ungeneralized.  Oracle
--- `lib/typecheck.ml:569-571`.
+-- otherwise.  monoScheme leaves the mono ungeneralized.
 genRestricted : Bool -> Mono -> Scheme
 genRestricted isValue t
   | isValue = generalize t
@@ -9297,7 +9285,7 @@ substMonoP pos subst esub t = match normalize t
   TFun a eff b => TFun (substMonoP (not pos) subst esub a) (reopenRow pos (substRow esub eff)) (substMonoP pos subst esub b)
   TEff r => TEff (substRow esub r)
 
--- ── rendering (mirrors lib/typecheck.ml pp_mono byte-for-byte) ─────────────
+-- ── rendering ─────────────────────────────────────────────────────────────
 export
 ppScheme : Scheme -> String
 ppScheme (Forall _ _ t) = ppMono t
@@ -9438,7 +9426,7 @@ ppGo ctx cnt prec t = match normalize t
 -- Render a row sitting in type-argument position (the `e` of `Async e a`).  Bare
 -- open tail → the row var's name (reads `Async e a`); labels → `<IO>`/`<IO | e>`;
 -- closed empty → `<>`.  Effvar ids are offset into a private letter namespace so
--- they never collide with tyvar letters.  Mirrors lib/typecheck.ml pp_mono TEff.
+-- they never collide with tyvar letters.
 ppEffArg : Ref (List (Int, String)) -> Ref Int -> EffRow -> String
 ppEffArg ctx cnt r = match effrowNorm r
   EffRow labels tail =>
@@ -10126,8 +10114,7 @@ restAtoms (_::rest) = rest
 -- accumulated as infer descends ELet/ELetGroup/block lets (PVar / single-clause
 -- zero-arg only, mirroring α's own binding rule); read at the fill site via α's
 -- initial `lets`.  A literal laundered through a helper stays ⊤ (spec §5
--- non-goal).  Sound: only turns over-rejections into acceptances.  (Mirror of
--- lib/typecheck.ml's env.alpha_lets.)
+-- non-goal).  Sound: only turns over-rejections into acceptances.
 -- #837 incr2 (Axis A): the 4th field is a name→is-local channel — a FAITHFUL
 -- lexical-scope carrier for "does this name currently denote a body-local
 -- binding?", replacing the reset-at-body-entry `bodyLocalSchemesRef` proxy.  It
@@ -10204,7 +10191,7 @@ inferPat _ (PRng lo hi _) = inferPatRng lo hi
 inferPat _ _ = panic "typecheck: unsupported pattern"
 
 -- range pattern `lo..hi` / `lo..=hi`: only Int and Char bounds are valid
--- (mirrors lib/typecheck.ml PRng arm); binds no variables
+-- binds no variables
 inferPatRng : Lit -> Lit -> (Mono, List (String, Scheme))
 inferPatRng (LInt _) (LInt _) = (tconBuiltin "Int", [])
 inferPatRng (LChar _) (LChar _) = (tconBuiltin "Char", [])
@@ -10331,7 +10318,7 @@ infer : TcEnv -> Expr -> Mono
 infer _ (ELit l) = litType l
 -- PLAN.md #11: a source integer literal is `Num a` for a fresh `a`.  With the
 -- prelude loaded (Num registered + `fromInt` in scope), model the literal exactly
--- as `fromInt n` — mirror of lib/typecheck.ml's e7031e6 ENumLit arm.  inferMethodAt
+-- as `fromInt n`.  inferMethodAt
 -- "fromInt" records the Num impl obligation AND a pendingSite keyed on [dref] (the
 -- node's route cell), so resolveSites later stamps [dref]: RKey when the literal's
 -- type grounds to a concrete Num head, RDictFwd onto the enclosing `Num a` dict when
@@ -10381,7 +10368,7 @@ infer env (ERangeArray lo hi _) = inferIntRange env lo hi (tconBuiltin "Array")
 infer env (EHeadAnnot e ty) = inferHeadAnnot env e ty
 -- ELoc is transparent: capture the span in `currentLoc` (so any type error
 -- recorded while inferring the wrapped expr is attributable to this position,
--- mirror of lib/typecheck.ml's ELoc arm), then infer the inner expr.
+-- ), then infer the inner expr.
 infer env (ELoc l e) =
   currentLoc := Some l
   infer env e
@@ -11220,7 +11207,7 @@ setCrossFunConstraintTables tables =
   crossRun.value.crossModuleFunConstraintsRef := fst tables
   crossRun.value.crossModuleFunConstraintIfacesRef := snd tables
 
--- ── WS-1b: superclass-evidence flatten (port of lib/typecheck.ml expand_supers) ──
+-- ── WS-1b: superclass-evidence flatten ──────────────────────────────────
 -- A `=>`-constrained fn whose body calls a SUPERCLASS method (e.g. `build : Sub a =>`
 -- calls `mk`, a Sup method, where `Sub a requires Sup a`) needs an honest super-dict
 -- slot threaded through.  Inference registers only the DECLARED constraints in
@@ -11709,8 +11696,8 @@ unifyFieldAssignIdx env rname ri subst fn val = match omLookup fn (recordFieldMa
   Some fm => unify (infer env val) (substMono subst [] fm)
 
 -- TYPECHECK-AUDIT OBS4: every declared field must be supplied in a record
--- construction (mirrors lib/typecheck.ml ERecordCreate "Every declared field
--- must be supplied" loop).  Walk `declaredFields`, check each name is present
+-- construction — every declared field
+-- must be supplied.  Walk `declaredFields`, check each name is present
 -- among the supplied `FieldAssign` list; push MissingField for any absent one.
 -- `supplied` is the SET of supplied field names (built once by the caller), so the
 -- membership test is O(log N) instead of a per-declared-field O(N) list scan — a single
@@ -11727,8 +11714,7 @@ checkMissingFields rname (fname::rest) supplied
 -- Phase 72 / TYPECHECK-AUDIT C2: receiver-directed field resolution.  Infer the
 -- receiver FIRST, then pick the owning record by its head tycon when known; if
 -- the receiver is still an unbound var and the field is owned by several
--- records, the access is ambiguous (mirrors lib/typecheck.ml's EFieldAccess +
--- field_owners multimap).  `value` keeps the Ref-projection special case (no
+-- records, the access is ambiguous.  `value` keeps the Ref-projection special case (no
 -- record in compiler/stdlib declares a `value` field, so this matches the
 -- oracle's structural `(Ref a).value → a`).
 inferFieldAccess : TcEnv -> Expr -> String -> Ref String -> Mono
@@ -11834,9 +11820,8 @@ fieldNotInAllCtorsMsg : String -> String -> String -> String
 fieldNotInAllCtorsMsg fname tname sib = "Field '\{fname}' is not declared by every constructor of '\{tname}': constructor '\{sib}' has no '\{fname}'. A '\{tname}' value carries no constructor tag, so '.\{fname}' cannot be resolved; match on the constructor instead"
 
 -- field_owners (Phase 72): every registry KEY whose RecordInfo declares `fname`,
--- sorted + deduped (mirrors lib/typecheck.ml's `field_candidates` +
--- `List.sort_uniq compare`).  For a plain record the key is its type name; for a
--- named-field variant it's the constructor name — matching the oracle, whose
+-- sorted + deduped.  For a plain record the key is its type name; for a
+-- named-field variant it's the constructor name, whose
 -- field_owners maps to the record's type name and the variant's con_name.
 -- The field→owners multimap (fieldOwnersRef) already holds exactly this set of
 -- keys, maintained at registration; `sortUniqS` canonicalizes it so the rendered
@@ -12514,7 +12499,6 @@ fieldFixFrom (Some (Loc f _ _ el ec)) sug =
   Some (Loc f el (ec + 1) el (ec + 1 + stringLength sug), sug)
 fieldFixFrom None _ = None
 
--- byte-for-byte with lib/typecheck.ml UnknownField / AmbiguousField / MissingField messages.
 unknownFieldMsg : String -> String -> String
 unknownFieldMsg fname rname =
   "Field '\{fname}' does not belong to record '\{rname}'"
@@ -12525,7 +12509,7 @@ unknownFieldMsg fname rname =
 abstractFieldMsg : String -> String -> String
 abstractFieldMsg tname fname = "'\{tname}' is exported abstractly. Field '\{fname}' is not accessible; declare it `public export` to expose its fields"
 
--- TYPECHECK-AUDIT OBS4: mirrors lib/typecheck.ml MissingField message byte-for-byte.
+-- TYPECHECK-AUDIT OBS4.
 missingFieldMsg : String -> String -> String
 missingFieldMsg fname rname =
   "Missing field '\{fname}' in construction of record '\{rname}'"
@@ -12535,8 +12519,7 @@ ambiguousFieldMsg fname owners = "Ambiguous field access: '.\{fname}' is declare
 
 -- TYPECHECK-AUDIT D1: convert resolve-not-pre-screened error shapes (unknown
 -- record / constructor, unbound variable) from uncatchable interpreter panics
--- into accumulated typeErrors + a fresh-var placeholder, so inference continues
--- (mirrors lib/typecheck.ml, which `fail`s with these byte-identical messages).
+-- into accumulated typeErrors + a fresh-var placeholder, so inference continues.
 unknownRecordMsg : String -> String
 unknownRecordMsg name = "Unknown record type: " ++ name
 
@@ -12971,7 +12954,7 @@ seedBuiltinClasses (Module mid _ _) prog =
     ()
 
 -- G2: arithmetic `+ - * / %` carry a `Num` obligation on their (unified) operand
--- type — mirrors the oracle's `No impl of Num for <T>` reject (lib/typecheck.ml).
+-- type — a `No impl of Num for <T>` reject.
 -- `++` (append) is NOT Num — it carries a `Semigroup` obligation instead (appendOp
 -- above).  We reuse the
 -- existing pendingImplObligations / checkImplObligations path: a synthetic Num
@@ -13000,8 +12983,8 @@ numArithOp lt rt =
 
 -- PLAN.md #11 soundness arm: model an integer literal as a `fromInt n` method
 -- occurrence so its route cell [dref] gets stamped (RKey ground / RDictFwd poly) by
--- resolveSites — exactly like core.mdk's `fromInt 0` in `sum`.  Direct mirror of
--- lib/typecheck.ml's ENumLit infer arm.  Gated on the prelude (the PRELUDE's `Num`
+-- resolveSites — exactly like core.mdk's `fromInt 0` in `sum`.
+-- Gated on the prelude (the PRELUDE's `Num`
 -- present — `builtinClassPresent BNum` since #1539, was `ifaceRegistered "Num"` — AND
 -- `fromInt` bound): with no prelude (bare-HM oracle) fall back to a plain fresh
 -- Num-obligated var, leaving [dref] RNone (⇒ a static Int literal at rewrite time).
@@ -13363,7 +13346,7 @@ inferVarPlainId env x id = match lookupVar env x
 -- (iface, quantified-var-id); here we instantiate TRACKED so each obligation var maps
 -- to this call's fresh mono, recorded as a call obligation checked after inference.
 -- A binding with no recorded obligations takes the plain instantiate path (identical
--- mono).  Mirrors lib/typecheck.ml re-checking inferred_constraints at every use.
+-- mono).  Re-checks inferred constraints at every use.
 -- #837: [id] is the occurrence's binding id (from EVarId).  When id /= 0 the
 -- lookup keys EXACTLY (x, id) — so a top-level `g`'s use can never pick up a
 -- where-helper `g`'s obligations.  id == 0 (local/where/cross-module/global, or
@@ -13996,7 +13979,7 @@ inferAppExpr env f x = match lamUnderLoc x
 -- the two oracle arms `EApp(f, EVar h)` and `EApp(f, ELoc(_, EVar h))` with
 -- `h.[0]='@'`.  Anything else → None → the ordinary application path.
 
--- Bug C (mirror lib/typecheck.ml:2293-2329): peel a single-argument application's
+-- Bug C: peel a single-argument application's
 -- head to a standalone-shadow interface-method reference (`toList m` where `toList`
 -- is BOTH a Foldable method AND an imported `Map` standalone).  Handles BOTH the
 -- MARKED form (`EMethodAt`, the eval/build path — carries a route ref to stamp RLocal)
@@ -14077,7 +14060,7 @@ ifaceMethodName name =
 -- scheme (giving the concrete result element type, e.g. `List (String, Int)`) and
 -- stamp the route RLocal (when marked); if the receiver DOES have an impl (or its head
 -- is not yet concrete) fall through to ordinary dispatch (typed against the method
--- scheme the env rebound the name to).  Mirror of lib/typecheck.ml:2308-2329.
+-- scheme the env rebound the name to).
 --
 -- ✅ S1-RESIDUAL-B CLOSED (2026-07-14).  This function used to have NO groundShadowReceiver
 -- call, unlike its definer peer inferDefinerShadowApp (which P0-20 gave one).  An UNGROUNDED
@@ -15838,7 +15821,7 @@ inferAnnot env e ty =
 -- checkAnnotTooGeneral skolemization guard — the pin's type variables are MEANT
 -- to ground (the container literal's element types).  Fixes `e`'s head tycon to
 -- the named container so `fromEntries`'s return-position dispatch resolves to
--- that container's impl.  Mirror of lib/typecheck.ml's EHeadAnnot arm.
+-- that container's impl.
 --
 -- Phase 114 (was wrongly dropped here): ignore the *arity* the lowering happened
 -- to supply and apply the head tycon to its *declared* arity of fresh vars.  The
@@ -15867,7 +15850,7 @@ headAnnotTy ty = match tyAppSpine ty
     None => fst (astTypeFreshTbl ty)
   _ => fst (astTypeFreshTbl ty)
 
--- C3 (mirrors lib/typecheck.ml:1821-1842): each type variable named in the
+-- C3: each type variable named in the
 -- annotation asserts polymorphism, so after unification it must still be a
 -- DISTINCT, unbound variable.  If one ground to a concrete type, or two
 -- annotation variables collapsed to the same variable, the annotation is more
@@ -16069,8 +16052,7 @@ inferArm env scrutTy result pat gs body =
   let envBody = inferArmGuards (extendLocalVars env (snd pr)) gs
   unify result (infer envBody body)
 
--- Thread an arm's guard qualifiers left-to-right (mirror of lib/typecheck.ml's
--- EMatch guard fold): a `GBool` must be `Bool` and leaves the env unchanged; a
+-- Thread an arm's guard qualifiers left-to-right: a `GBool` must be `Bool` and leaves the env unchanged; a
 -- `GBind p e` infers `e`, binds `p` against it, and extends the env so the bound
 -- vars are in scope for LATER qualifiers and the arm body.
 inferArmGuards : TcEnv -> List Guard -> TcEnv
@@ -16701,8 +16683,8 @@ funDefs [] = []
 funDefs ((DFunDef _ n pats body)::rest) = (n, (pats, body)) :: funDefs rest
 -- Top-level `let rec … with …` (DLetGroup): flatten each binding's clauses to
 -- (name, (pats, body)) entries, exactly like a multi-clause DFunDef, so the SCC
--- builder groups the mutually-recursive members and assigns them schemes.  Mirrors
--- lib/typecheck.ml, which feeds DLetGroup bindings into the same letrec-group path.
+-- builder groups the mutually-recursive members and assigns them schemes, feeding
+-- DLetGroup bindings into the same letrec-group path.
 funDefs ((DLetGroup _ binds)::rest) = letGroupDefs binds ++ funDefs rest
 funDefs ((DAttrib _ d)::rest) = funDefs (d::rest)
 funDefs (_::rest) = funDefs rest
@@ -16715,7 +16697,7 @@ letGroupDefs ((LetBind n clauses)::rest) = map (tcClauseDef n) clauses
 tcClauseDef : String -> FunClause -> (String, (List Pat, Expr))
 tcClauseDef n c = (n, funClausePair c)
 
--- D2 fix: mirrors oracle is_syntactic_lambda (lib/typecheck.ml:2518-2521).
+-- D2 fix.
 -- True iff the expression is an explicit lambda at the top level.
 -- ⚠️ #807 (pre-existing, out of scope here): does NOT see through an ELoc
 -- wrapper, so a zero-param `let rec f = x => …` clause — whose RHS the parser
@@ -16728,8 +16710,7 @@ isSyntacticLambda (ELam _ _) = True
 isSyntacticLambda _ = False
 
 -- D2 fix: check all top-level DLetGroup declarations for non-function recursive
--- bindings, mirroring the oracle's LetRecNonFunction guard
--- (lib/typecheck.ml:2596-2602, process_letrec_group).  A binding is illegal
+-- bindings.  A binding is illegal
 -- when ALL its clauses have zero params AND none is a syntactic lambda.
 -- Pushes the error into typeErrors for each violating member.
 checkLetRecDecls : List Decl -> Unit
@@ -17355,8 +17336,7 @@ anyIn xs ys = anyList (x => containsI x ys) xs
 -- `Num a` to eval, while leaving a genuinely polymorphic var live: `sum`'s element
 -- var in `t a -> a` is reachable from the argument `t a`, so it stays polymorphic
 -- (`sum [1.0,…]` still works); `x : Float; x = 0`'s var is already concrete Float
--- (not a generalizable var), so it is untouched.  Mirrors lib/typecheck.ml's
--- default_ambiguous_num: a Num-constrained var (alone OR with another class) that is
+-- (not a generalizable var), so it is untouched.  A Num-constrained var (alone OR with another class) that is
 -- ambiguous is grounded to Int — the literal's `Num`/`fromInt` representation IS
 -- Int, so grounding keeps impl selection deterministic.
 --
@@ -17644,8 +17624,7 @@ generalizeGroup env constrained dictPairs (((LetBind name clauses), (_, sch))::r
   generalizeGroup env2 constrained dictPairs rest
 
 -- A where-clause binding is a value (generalizable) iff every clause has params
--- (it's a function) or its zero-arg RHS is non-expansive.  Mirrors the oracle
--- `ELetGroup` value test (lib/typecheck.ml:1715-1716).
+-- (it's a function) or its zero-arg RHS is non-expansive.
 clausesAreValue : TcEnv -> List FunClause -> Bool
 clausesAreValue env clauses = allList (clauseIsValue env) clauses
 
@@ -18116,9 +18095,8 @@ rewriteRPDict _ _ e = e
 -- uses the SCOPE-AWARE rewriteArgScoped below:
 -- an arg-position interface-method name (in argNames) that is shadowed by a local
 -- binder (a parameter, let, lambda arg, or match-pattern variable) stays a plain
--- EVar rather than becoming an EMethodAt.  This mirrors the reference typecheck's
--- Phase-95 `env.locals` guard (lib/typecheck.ml's EVar arm): the OCaml marker is
--- likewise scope-blind and the reference RECOVERS at inference by skipping the
+-- EVar rather than becoming an EMethodAt.  This is the Phase-95 `env.locals` guard:
+-- the marker is scope-blind and inference RECOVERS by skipping the
 -- scope-blind method table for locally-bound names.  Without it, a compiler
 -- function whose parameter happens to share a method name (`arithOp lt rt`,
 -- `composeOp gt ht`, `exprToPat … sub`) has that parameter mis-marked as a method
@@ -18127,9 +18105,9 @@ rewriteRPDict _ _ e = e
 -- scope-aware on this (emit + run `elaborateDict`) path: a local binder shadowing
 -- a return-position method name (`let debug = 99` inside a fn body) keeps the
 -- reference a plain EVar so inference resolves it to the local instead of
--- mis-stamping RKey<resultType> and dispatching to the prelude impl.  Mirrors
--- lib/typecheck.ml's `env.locals` guard, which skips the method_iface table for
--- any locally-bound name (the OCaml EVar-arm recovery).  Byte-identical for the
+-- mis-stamping RKey<resultType> and dispatching to the prelude impl — the
+-- `env.locals` guard, which skips the method_iface table for
+-- any locally-bound name.  Byte-identical for the
 -- corpus (no corpus rp/arg/constrained name is shadowed by a local — the guard
 -- only changes behaviour for a genuinely-shadowing local: an arg-method
 -- `lt`/`gt`/`sub`, a constrained fn `elem`, or a return-position method `debug`).
@@ -18897,8 +18875,8 @@ ieRowAdmittedBy ir (Some iface) = ieRowIfaceMatches ir iface
 -- receiver mono now grounds to a concrete head tycon with NO impl of the method.
 -- The receiver HAS an impl (the genuine-method case, e.g. `toList (Some 7)`) → leave
 -- the route untouched (RNone → eval arg-tag-dispatches to the real impl).  An
--- ungrounded receiver (still a tyvar) → leave it (polymorphic, deferred).  Mirrors
--- lib/typecheck.ml:1603-1640: RLocal only when impl_exists is false.
+-- ungrounded receiver (still a tyvar) → leave it (polymorphic, deferred).
+-- RLocal only when no impl exists.
 -- S-1: [prog]/[implTable] are here so the stamp can call routesOfMonosTop — a PURE
 -- function of the (union-find-solved) constraint monos — and fill the standalone's own
 -- dict routes IN PLACE.  Deliberately NOT routed through pendingDictApps: that list is
@@ -18965,8 +18943,8 @@ resolveRLocalSites prog implTable ((PendingEntry name tagRef am _ kind loc)::res
 -- The receiver HAS an impl (the genuine-method case, e.g. `toList (Some 7)`):
 -- leave the route untouched — eval arg-tag-dispatches on RNone; emit already
 -- stamped the correct RKey<receiverHead> via resolveArgStamps.
--- An ungrounded receiver (still a tyvar) → leave it.  Mirrors lib/typecheck.ml's
--- RLocal-vs-ordinary-dispatch split (the oracle keys the genuine case off the receiver).
+-- An ungrounded receiver (still a tyvar) → leave it.  The
+-- RLocal-vs-ordinary-dispatch split keys the genuine case off the receiver.
 resolveRLocalSite : List Decl -> ImplBuckets -> String -> Ref Route -> Mono -> String -> List Mono -> List IfaceRef -> List (List Mono) -> Unit
 resolveRLocalSite prog implTable name tagRef am sym monos ifaces argVecs = match headTyconMono am
   -- S2 (THE INVERSION): route by SHADOW KIND first, receiver second.
@@ -19605,7 +19583,7 @@ implRowHasReqs [] = False
 implRowHasReqs _ = True
 
 -- ── coherence check (TYPECHECK-AUDIT S3) ───────────────────────────────────
--- Mirror lib/typecheck.ml's check_coherence (Phase 68): reject incoherent USER
+-- Phase 68: reject incoherent USER
 -- impl sets at declaration time.  Two impls of the SAME interface whose head
 -- types can match the same concrete type (impls_overlap) are unresolvable unless
 -- one strictly specializes the other (most-specific-wins).  Genuinely incoherent:
@@ -20320,7 +20298,7 @@ cohPushSoft None = ()
 cohPushSoft (Some (msg, loc)) = pushCoherenceWarning loc msg
 
 -- ── D1 WS-1a: superinterface-existence gate ────────────────────────────────
--- Mirror of lib/typecheck.ml's `check_superinterface_obligations`.  An
+-- An
 -- `impl C T` whose interface declares `interface C a requires D a` is unsound
 -- unless a matching `impl D T` also exists.  This post-pass iterates the USER
 -- impls (so a user impl that overrides a prelude impl isn't double-flagged) and,
@@ -22119,7 +22097,7 @@ substParams (p::rest) subst = match lookupAssoc p subst
   Some t => t :: substParams rest subst
   None => substParams rest subst
 
--- byte-identical to lib/typecheck.ml's MissingSuperImpl rendering: both the impl
+-- Both the impl
 -- head and the super are printed with the same space-joined atom-position args.
 missingSuperImplMsg : String -> List Ty -> String -> List Ty -> String
 missingSuperImplMsg iface implTys superName superTys = "'impl \{iface} \{joinWith " " (map ppTyAtom implTys)}' requires a superinterface 'impl \{superName} \{joinWith " " (map ppTyAtom superTys)}', which is missing"
@@ -22195,7 +22173,7 @@ tyIsConcrete (TyConstrained _ t) = tyIsConcrete t
 tyIsConcrete (TyRow _ _ _) = True
 
 -- one-directional structural match (pattern may carry free TyVar wildcards;
--- concrete is fully ground).  Mirror of lib/typecheck.ml's mono_matches.
+-- concrete is fully ground).
 tyMatchesAst : Ty -> Ty -> Bool
 tyMatchesAst (TyVar _) _ = True
 tyMatchesAst (TyCon { tyConName = a }) (TyCon { tyConName = b }) = a == b
@@ -22463,7 +22441,7 @@ implMethodNameTc (ImplMethod n _ _) = n
 -- One entry per USER impl (regardless of `requires`): the methods it defines (to
 -- match a method site), its head tycon (to detect a head-tag collision), its
 -- head-arg type pattern (matched against the site's concrete result mono), and its
--- canonical impl key.  Mirrors lib/typecheck.ml's `matching_impls` + `entry.impl_key`.
+-- canonical impl key.
 -- The route normally keeps the bare head tycon (the established head-tag dispatch
 -- the native Core-IR/LLVM backend keys symbols by); it is UPGRADED to the full
 -- canonical key ONLY when two impls share that head tycon for the method (the C7
@@ -23081,7 +23059,7 @@ entryCovers (KeyEntry _ _ _ _ _ candTys _ _) (KeyEntry _ _ _ _ _ otherTys _ _) =
 -- occurrence, so a non-linear pattern is only subsumed by a consistent instance.
 -- Direction, as in the superseded scalar `tySubsumes`: is [specifics] an instance of
 -- [generals]?  Only the GENERAL side's TyVars act as wildcards; the SPECIFIC side's
--- are rigid and match only the same name.  Mirrors lib/typecheck.ml's `subsumes`.
+-- are rigid and match only the same name.
 --
 -- ⚠️ n=1 reduction is ALGEBRAIC, not a fixture claim: a KeyEntry's `itys` for a
 -- single-param impl is exactly `[hty]` (keyEntryOfRow destructures `tys` as `headTy::_`
@@ -25127,7 +25105,7 @@ rewriteBinopExpr (EBinOp op l r routeRef) = match !routeRef
   RScalar tag => EAnnot (EBinOp op l r routeRef) (tyConBuiltin tag None)
   _ => binopMethodApp op l r routeRef
 -- PLAN.md #11: re-tag a source integer literal to its inferred runtime rep, a 3-way
--- decision mirroring lib/dict_pass.ml's e7031e6 ENumLit arm.  setNumlitFloats already
+-- decision.  setNumlitFloats already
 -- decided: float cell `Some f` ⇒ concrete Float ⇒ `ELit (LFloat f)`; otherwise the
 -- route cell [dref] distinguishes concrete-Int (RNone, cleared) from a surviving
 -- polymorphic `Num a` (a non-RNone RDictFwd/RKey route, the soundness case) — the
@@ -25185,8 +25163,7 @@ dictPassDecl names _ (DFunDef pub n pats body)
 -- Top-level `let rec … with …` (DLetGroup): each binding is dict-passed exactly
 -- like a DFunDef — a constrained member gets `dictParams n (dictArityOf n)`
 -- prepended to every clause's params, so the dict-passed call sites (which DO get
--- rewritten) line up with the definition.  Mirror of lib/dict_pass.ml's DLetGroup
--- run_decl arm.  (Without this, a `Num a => a -> a` group member's call site
+-- rewritten) line up with the definition.  (Without this, a `Num a => a -> a` group member's call site
 -- supplies a leading dict the body never binds → the dict lands in the first user
 -- param → arithmetic over a dict value panics `unknown op`.)
 dictPassDecl names _ (DLetGroup pub binds) =
@@ -25203,7 +25180,7 @@ dictPassDecl _ _ (d@(DImpl { reqs, methods, ... })) =
 -- Phase 69.x-e: a method with method-level constraints (foldMap's `Monoid m`) gets
 -- one leading `$dict_<method>_<slot>` param per constraint on its DEFAULT body, so a
 -- caller can supply the dictionary the body's `empty`/… reads (routed RDict by
--- inferDefaultMethod).  Mirror of lib/dict_pass.ml's DInterface arm.
+-- inferDefaultMethod).
 dictPassDecl _ _ (d@(DInterface { methods, ... })) =
   DInterface { d | methods = map ifaceDictPassMethod methods }
 dictPassDecl names ret (DAttrib attrs d) =
@@ -25254,8 +25231,8 @@ methodDictArityOf n =
 -- dict params (`dictParams n k`, k = methodDictArityOf n — e.g. `build`'s `Num e`)
 -- FOLLOWED BY the impl-`requires` element-dict params (at slots k..k+nReq-1, only
 -- when the body reads one), then the original pats.  Direct mirror of
--- lib/dict_pass.ml:99-119 (`dict_pats n k @ impl_pats @ pats`) and the
--- `method_off + slot` impl-dict naming in lib/typecheck.ml:3682-3690.  Eval applies
+-- `dict_pats n k @ impl_pats @ pats` shape and the
+-- `method_off + slot` impl-dict naming.  Eval applies
 -- method dicts unconditionally first (eval.mdk), so dropping the leading method-level
 -- params (the old `match reqs []=>d` early-out) mis-bound the dict into the first
 -- value parameter.
@@ -26471,8 +26448,8 @@ checkBodyImpl seed mode prog0 =
     Module mid _ _ => appendDataUniverse mid prog0
   globalS ++ topSchemes
 -- D2: check top-level `let rec` bindings for non-function members before
--- type-checking the DFunDef groups (mirrors oracle's LetRecNonFunction guard,
--- lib/typecheck.ml:2596-2602, which fires in process_letrec_group for
+-- type-checking the DFunDef groups (the LetRecNonFunction guard,
+-- which fires for
 -- is_letrec=true groups — i.e. those coming from DLetGroup).
 
 -- Phase 83/84 single-level: AFTER top-level inference (so the scheme output is
@@ -26484,7 +26461,7 @@ checkBodyImpl seed mode prog0 =
 -- method-level constraint (foldMap's default), registering the constraint var so
 -- the in-body return-position ref (`empty`) routes RDict to `$dict_<method>_<slot>`.
 
--- Phase 4.55 (mirror lib/typecheck.ml:4254-4262): type-check each prop body with
+-- Phase 4.55: type-check each prop body with
 -- its declared params in scope.  This is what RESOLVES the EDictAt/EMethodAt route
 -- refs the prepass marked inside a prop body — without it the routes stay empty,
 -- and on the dict-passed eval path (DRIVER-COLLAPSE Phase 2 promotes the file's own
@@ -26498,13 +26475,13 @@ checkBodyImpl seed mode prog0 =
 -- the impl's method type, BEFORE the resolve* passes read the cells.
 
 -- Error-path B4: now every method occurrence's dispatch type is fully resolved;
--- reject any whose concrete head type has no matching impl (mirrors the oracle's
--- check_method_usages, lib/typecheck.ml:3845).
+-- reject any whose concrete head type has no matching impl (the
+-- `No impl of … for …` check).
 
 -- Phase 4.55: infer each prop body with its declared params in scope, so the
--- prepass-marked EDictAt/EMethodAt route refs inside resolve (mirror of
--- lib/typecheck.ml:4254-4262).  Runs unconditionally (props are eval-only; the
--- emit/golden paths have no props), like the OCaml `infer prop_body; unify t_bool`.
+-- prepass-marked EDictAt/EMethodAt route refs inside resolve resolve.
+-- Runs unconditionally (props are eval-only; the
+-- emit/golden paths have no props): infer prop_body; unify t_bool.
 -- A prop body is eval-only and is NOT dict-passed for operator dispatch: like the
 -- OCaml oracle (which evals raw prop bodies against the marked env), its comparison
 -- operators must stay PRIMITIVE EBinOps the eval builtin handles structurally, not
@@ -26729,8 +26706,7 @@ implHeadParametric (DAttrib _ d) = implHeadParametric d
 implHeadParametric (DImpl { tys, ... }) = isNonEmptyL (flatMap tyVarNames tys)
 implHeadParametric _ = False
 
--- C8b: default-body type-checking runs UNCONDITIONALLY (mirrors the oracle's
--- register_interface default-body loop at lib/typecheck.ml:3122-3160 which checks
+-- C8b: default-body type-checking runs UNCONDITIONALLY (checks
 -- ALL default bodies regardless of whether they carry method-level constraints).
 -- Previously gated on implInferEnabled — that blocked unconstrained defaults
 -- (Ord.lt/gt/min/max, Foldable.length/isEmpty, Filterable.filter, …) from being
@@ -26761,7 +26737,7 @@ inferDefaultBodies env (d::rest) =
 
 inferOneIfaceDefaults : TcEnv -> Decl -> Unit
 inferOneIfaceDefaults env (DAttrib _ d) = inferOneIfaceDefaults env d
--- Mirror lib/typecheck.ml:3116-3126: type each default body against the
+-- Type each default body against the
 -- interface's OWN method scheme (built from [typarams]+[methods]), NOT
 -- `lookupVar env mname`.  On the flat single-file check path a user top-level
 -- funDef can SHADOW a method name (e.g. map.mdk's `isEmpty : Map k v -> Bool`
@@ -26790,7 +26766,7 @@ inferDefaultMethods env iface dscope typarams (m::rest) =
 --
 -- Constrained arm (non-empty ids): method has method-level constraints (e.g. foldMap : Monoid m =>):
 --   Instantiate scheme, register constraint vars → dict param names (for dict-passing
---   emit path), infer body, unify.  Mirrors lib/typecheck.ml:3132-3142 + 3143-3150.
+--   emit path), infer body, unify.
 --   CRITICAL: the constraint slot ids AND the default-body instantiation MUST come
 --   from the SAME sigToSchemeTvs build of THIS method's type.  Reading the ids from
 --   methodConstraintsRef (filled by a SEPARATE ifaceMethodSchemes build with its own
@@ -26798,8 +26774,8 @@ inferDefaultMethods env iface dscope typarams (m::rest) =
 --   that did not appear in the instantiation subst → registerOneMethodDict's
 --   `lookupAssocI id subst` returned None → activeDictVars got no entry → the in-body
 --   `empty`/`++` routed RNone → eval's `++` saw a non-monoid acc and panicked
---   ('++' requires Semigroup).  The oracle (lib/typecheck.ml:3067-3093 + 3126-3142)
---   uses ONE method_schemes build for both, which is mirrored here.
+--   ('++' requires Semigroup).  This code path
+--   uses ONE method_schemes build for both.
 --
 -- Unconstrained arm (empty ids): method has no method-level constraints (e.g. Ord.lt):
 --   Instantiate scheme, infer body, unify — same but no dict registration.
@@ -26967,8 +26943,7 @@ inferDefaultMethodBody mname subject defLoc env expectedTy pats body =
   actualTy
 
 -- ── Error-path B4: missing-impl dispatch-obligation check ──────────────────
--- Mirror lib/typecheck.ml's check_method_usages (the `No impl of … for …` reject,
--- :3845).  For each recorded interface-method occurrence, recover the types the
+-- The `No impl of … for …` reject.  For each recorded interface-method occurrence, recover the types the
 -- interface params resolved to at this site (dispatchMonosOf), and — ONLY when
 -- they are all CONCRETE (a resolved head tycon, no remaining polymorphic var, so
 -- a constrained-generic `Ord a =>` site whose receiver is still `a` is correctly
@@ -27609,8 +27584,7 @@ univHeadless (ImplUniverse _ hl _) iface =
   mregLookupK (regKeyOfTab (oblIfaceKey iface)) hl
 
 -- ── Error-path B4: missing-impl dispatch-obligation check ──────────────────
--- Mirror lib/typecheck.ml's check_method_usages (the `No impl of … for …` reject,
--- :3845).  For each recorded interface-method occurrence, recover the types the
+-- The `No impl of … for …` reject.  For each recorded interface-method occurrence, recover the types the
 -- interface params resolved to at this site (dispatchMonosOf), and — ONLY when
 -- they are all CONCRETE (a resolved head tycon, no remaining polymorphic var, so
 -- a constrained-generic `Ord a =>` site whose receiver is still `a` is correctly
@@ -27633,8 +27607,7 @@ univHeadless (ImplUniverse _ hl _) iface =
 -- inference the mono is ground: a CONCRETE-head mono (`String`) with no matching impl
 -- is an ERROR; a still-polymorphic head (`a`, the obligation propagated to a further-
 -- out caller — `id x = x; y = id 5`) is DEFERRED.  Exactly the accept/reject decision
--- of checkOneImplObligation's tail, and the mirror of lib/typecheck.ml's
--- check_constraint_obligations (which checks fun_constraints instantiated at the call).
+-- of checkOneImplObligation's tail: it checks fun_constraints instantiated at the call.
 -- #838 I1: takes `List UObligation` (the ported call channel) instead of the old bare
 -- tuple.  Deferral is BYTE-IDENTICAL to before the port — checkOneCallObligation still
 -- reads (iface, occs, loc) exactly as it did; only the storage/read shape changed.
@@ -27963,7 +27936,7 @@ checkUndeterminedObligation univ iface occ loc
 
 -- PLAN.md #11: after HM + defaulting every source integer literal's type var is
 -- ground (or a genuine `Num a` survivor).  Decide each literal's runtime rep
--- (3-way, mirror of lib/typecheck.ml's set_numlit_floats):
+-- (3-way):
 --   • ground Float ⇒ stamp the float cell + CLEAR the fromInt route (dref RNone) ⇒
 --     dictPass emits `ELit (LFloat f)` (eval is value-tagged; eval_arith rejects
 --     mixed int/float tags, so a Float literal must carry a real float).
@@ -28562,7 +28535,7 @@ allHeadArgsMatch ((ty, m)::rest) = match matchTyMono ty m
   None => False
 
 -- render the dispatch monos space-separated under ONE shared naming context
--- (mirrors lib/typecheck.ml's pp_monos), so distinct free vars don't all collapse
+-- so distinct free vars don't all collapse
 -- to "a".  Concrete heads (the only case that reaches an error) render as the
 -- type name.
 ppMonosShared : List Mono -> String
@@ -31111,8 +31084,7 @@ processSCC env sigs grouped members =
   -- body (`n = tag [1,2,3]`, element var in no member type).  An arg-reachable var
   -- (`sum`'s/`inc`'s element var) stays polymorphic.  Scoped to THIS group's newly
   -- added obligations (prepended at the front) so an earlier group's already-
-  -- generalized var is never touched.  Mirrors lib/typecheck.ml's
-  -- process_letrec_group group-level pass + per-binding default_ambiguous_num.
+  -- generalized var is never touched.
   let addedObls = wWindow perRun.value.implObls oblN0
   -- #23: also ground an ambiguous Num var that reaches this group ONLY through a
   -- constrained-callee instantiation (its Num obligation lives on the call/dict deltas,
@@ -31608,7 +31580,7 @@ renderDeclaredRow declared (Some v) = "<\{renderAtoms declared} | \{v}>"
 --              though its RHS is an application);
 --   isVal    = plainVal || sigIsFun.
 -- A non-function expansive unsigned binding (`r = Ref []`) is value-restricted and
--- stays monomorphic.  Mirrors oracle lib/typecheck.ml:2705-2710 + 2756.
+-- stays monomorphic.
 sccSchemes : TcEnv -> List (String, Ty) -> OrdMap (List (List Pat, Expr)) -> Bool -> List (String, Mono) -> List (String, Scheme)
 sccSchemes _ _ _ _ [] = []
 sccSchemes env sigs grouped isLetrec ((m, v)::rest) =
@@ -31731,13 +31703,13 @@ hasDupI (x::xs) = containsI x xs || hasDupI xs
 sigTooGeneralMsg : String -> Ty -> String
 sigTooGeneralMsg name ty = "Declared signature of '\{name}' is more general than its body. '\{ppTy ty}' claims type variables that are the same type after inference"
 
--- C3: mirrors lib/typecheck.ml's AnnotationTooGeneral message byte-for-byte.
+-- C3.
 annotTooGeneralMsg : Ty -> String
 annotTooGeneralMsg ty = "Type annotation '"
   ++ ppTy ty
   ++ "' is more polymorphic than the expression. A type variable in the annotation is actually a specific type (or two annotation variables are the same type)"
 
--- pretty-print an AST type (mirrors lib/ast.ml's pp_ty byte-for-byte)
+-- pretty-print an AST type
 ppTy : Ty -> String
 ppTy (TyCon { tyConName = n }) = n
 ppTy (TyVar n) = n
@@ -33481,10 +33453,9 @@ checkModuleFullImpl mid seedVars accData implDecls prog =
 -- seedVars to its imported MONOMORPHIC standalone scheme (`Box k v -> …`), which
 -- would shadow the polymorphic interface-method scheme and mis-type a genuine
 -- method call (`isEmpty [1,2,3]` unifying List with Box).  Re-bind those names to
--- the graph-wide METHOD scheme so the call site types against the method (oracle
--- behaviour); RLocal then redirects only the no-impl receiver back to the standalone
--- at eval.  Mirrors lib/typecheck.ml: the EApp method-head arm types against the
--- method scheme even when standalone_values holds the name.
+-- the graph-wide METHOD scheme so the call site types against the method; RLocal then redirects only the no-impl receiver back to the standalone
+-- at eval: the EApp method-head arm types against the
+-- method scheme even when a standalone value holds the name.
 -- DEFINER shadows are EXCLUDED here: the module's OWN funDef (map-root's `toList`)
 -- must type against its local standalone scheme (`Map k v -> List (k, v)`), not the
 -- imported method scheme — the impl bodies call it ON a Map.  Only IMPORTER shadows
@@ -33498,7 +33469,7 @@ checkModuleFullImpl mid seedVars accData implDecls prog =
 -- the single-file path's inferDefaultBodiesIfEnabled) so a default body's type
 -- error is caught on the module path too — mirrors checkProgramSeeded.
 
--- Phase 4.55 (mirror checkProgramSeeded + lib/typecheck.ml:4254-4262): infer this
+-- Phase 4.55 (mirror checkProgramSeeded): infer this
 -- module's prop bodies so their prepass-marked EDictAt/EMethodAt routes resolve.
 -- The multi-module test path (runPropsMulti) evaluates the ELABORATED prop body
 -- against the dict-passed env, so the body's calls into the file's own promoted
@@ -33528,8 +33499,8 @@ inferModuleImplBodiesIfEnabled env implDecls prog
 
 -- public top-level value names (the pub flag may sit on the sig, def, or extern).
 -- C8(a): a PUBLIC interface ALSO exports its method names so an importer can see
--- their schemes (mirrors lib/typecheck.ml's pub_iface_schemes — methods of an
--- `is_pub = true` interface are appended to the exported value schemes).
+-- their schemes — methods of an
+-- `is_pub = true` interface are appended to the exported value schemes.
 publicValNames : List Decl -> List String
 publicValNames [] = []
 publicValNames ((DAttrib _ d)::rest) = publicValNames [d] ++ publicValNames rest
@@ -34259,7 +34230,7 @@ monoSpineHeadIsCon m = match normalize m
   TRigid _ => True
   _ => False
 
--- ── IMPORT-SCOPED per-module seeding (mirrors lib/typecheck.ml:4513-4543) ────
+-- ── IMPORT-SCOPED per-module seeding ─────────────────────────────────────
 -- The multi-module drivers must NOT flat-seed the cumulative UNION of every
 -- dependency's public schemes into each module's env: omInsert is last-write-wins,
 -- so a later-loaded dependency's same-named binding (e.g. `string.reverse :
@@ -34269,8 +34240,8 @@ monoSpineHeadIsCon m = match normalize m
 -- import, looked up in the SPECIFIC dependency they name.  The implicit prelude
 -- (runtime + core) is always fully in scope and is threaded separately as baseSeed.
 
--- the bare member names a single `import` form names from its dependency —
--- mirrors lib/typecheck.ml's imported_names match (BEFORE mangle-key resolution):
+-- the bare member names a single `import` form names from its dependency
+-- (BEFORE mangle-key resolution):
 --   UseGroup (_, ms) → the member names         (import dep.{a, b, c})
 --   UseWild _        → ALL of the dep's schemes  (import dep.*)
 --   UseName ns       → [last ns] if dotted (import a.b.name), else [] (bare name)

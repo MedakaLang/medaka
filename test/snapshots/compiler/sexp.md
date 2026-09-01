@@ -1,10 +1,9 @@
 # META
-source_lines=334
+source_lines=333
 stages=DESUGAR,MARK
 # SOURCE
--- Structural S-expression dump of the self-host AST, mirroring dev/astdump.ml
--- byte-for-byte so the self-hosted parser can be diffed against the OCaml
--- reference.  Tags are the lib/ast.ml constructor names.  Coverage grows with
+-- Structural S-expression dump of the AST. Tags are the
+-- `compiler/frontend/ast.mdk` constructor names.  Coverage grows with
 -- the AST/parser; new variants get a matching clause here.
 
 import frontend.ast.{
