@@ -89,7 +89,37 @@ What's in the standard library, what's planned, module-by-module status.
 |-----|------------|--------|
 | [`FP-STDLIB-DESIGN.md`](stdlib/FP-STDLIB-DESIGN.md) | FP Standard Library — Typeclasses, Combinators & Error Handling | IMPLEMENTED |
 | [`P1-STDLIB-DESIGN.md`](stdlib/P1-STDLIB-DESIGN.md) | P1 Standard Library — Design & Prioritization | PARTIAL |
-| [`STDLIB.md`](stdlib/STDLIB.md) | Medaka Standard Library Plan | — |
+| [`STDLIB.md`](stdlib/STDLIB.md) | Medaka Standard Library — Design Notes & Roadmap | — |
+| [`args.md`](stdlib/args.md) | args | — |
+| [`array.md`](stdlib/array.md) | array | — |
+| [`base64.md`](stdlib/base64.md) | base64 | — |
+| [`bits64.md`](stdlib/bits64.md) | bits64 | — |
+| [`bytebuilder.md`](stdlib/bytebuilder.md) | bytebuilder | — |
+| [`byteparser.md`](stdlib/byteparser.md) | byteparser | — |
+| [`core.md`](stdlib/core.md) | core | — |
+| [`fs.md`](stdlib/fs.md) | fs | — |
+| [`hash_map.md`](stdlib/hash_map.md) | hash_map | — |
+| [`hash_set.md`](stdlib/hash_set.md) | hash_set | — |
+| [`hex.md`](stdlib/hex.md) | hex | — |
+| [`index.md`](stdlib/index.md) | Library Index | — |
+| [`io.md`](stdlib/io.md) | io | — |
+| [`json.md`](stdlib/json.md) | json | — |
+| [`list.md`](stdlib/list.md) | list | — |
+| [`map.md`](stdlib/map.md) | map | — |
+| [`math.md`](stdlib/math.md) | math | — |
+| [`mut_array.md`](stdlib/mut_array.md) | mut_array | — |
+| [`net.md`](stdlib/net.md) | net | — |
+| [`nonempty.md`](stdlib/nonempty.md) | nonempty | — |
+| [`option.md`](stdlib/option.md) | option | — |
+| [`path.md`](stdlib/path.md) | path | — |
+| [`result.md`](stdlib/result.md) | result | — |
+| [`runtime.md`](stdlib/runtime.md) | runtime | — |
+| [`set.md`](stdlib/set.md) | set | — |
+| [`string.md`](stdlib/string.md) | string | — |
+| [`test.md`](stdlib/test.md) | test | — |
+| [`time.md`](stdlib/time.md) | time | — |
+| [`toml.md`](stdlib/toml.md) | toml | — |
+| [`validation.md`](stdlib/validation.md) | validation | — |
 
 ### compiler internals — stay in compiler/, indexed here for findability
 

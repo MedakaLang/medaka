@@ -1,0 +1,294 @@
+# time
+
+time.mdk — durations + a UTC civil calendar, plus thin wrappers over the
+`<Clock>` externs (`wallTimeSec` / `monotonicSec` / `sleepMs`).
+
+Import with `import time.*` (or select names, e.g.
+`import time.{fromEpochSeconds, formatIso}`).
+
+── Scope ──────────────────────────────────────────────────────────────
+• UTC ONLY.  There is no timezone / DST database (that is a P2 follow-up).
+Every `DateTime` here is civil UTC; `formatIso` always emits a `Z` suffix.
+• The calendar core (`fromEpochSeconds` / `toEpochSeconds`) uses Howard
+Hinnant's days-from-civil / civil-from-days algorithm — pure Int
+arithmetic, correct across leap years and for negative (pre-1970) epochs.
+Medaka's `/` truncates toward zero, so the seconds→days split uses a
+`floorDiv` helper; Hinnant's own `era` adjustments already assume
+truncating division, so they are used verbatim.  `floorDiv` itself now
+lives in `math.mdk` (promoted in #433 — this file used to hand-roll a
+private copy; same algorithm, unchanged).
+
+── Effect labels ──────────────────────────────────────────────────────
+The three externs all carry the `<Clock>` effect.  `sleepMs` reuses
+`<Clock>` for cohesion with the time domain — there is no `<Sleep>` label
+and adding one is out of scope.  Unlike the file externs, `<Clock>`
+externs DO run under the interpreter (`medaka run`): there the interpreter
+oracle has no FFI to the clock, so `wallTimeSec` / `monotonicSec` return
+fixed plausible values and `sleepMs` is a no-op.  On native `build` they
+call the real C clock / `nanosleep`.
+
+## `Duration`
+
+```
+data Duration
+  = Duration Int
+```
+
+── Duration ────────────────────────────────────────────────────────────
+A time span, stored as a whole number of MILLISECONDS.
+
+## `millis`
+
+```
+millis : Int -> Duration
+```
+
+A duration of `n` milliseconds.
+
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> toMillis (millis 250)
+250
+```
+
+## `seconds`
+
+```
+seconds : Int -> Duration
+```
+
+A duration of `n` seconds.
+
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> toMillis (seconds 5)
+5000
+```
+
+## `minutes`
+
+```
+minutes : Int -> Duration
+```
+
+A duration of `n` minutes.
+
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> toSeconds (minutes 2)
+120
+```
+
+## `hours`
+
+```
+hours : Int -> Duration
+```
+
+A duration of `n` hours.
+
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> toSeconds (hours 1)
+3600
+```
+
+## `days`
+
+```
+days : Int -> Duration
+```
+
+A duration of `n` days.
+
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> toSeconds (days 1)
+86400
+```
+
+## `toMillis`
+
+```
+toMillis : Duration -> Int
+```
+
+The duration as whole milliseconds.
+
+## `toSeconds`
+
+```
+toSeconds : Duration -> Int
+```
+
+The duration as whole seconds (truncated toward zero).
+
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> toSeconds (millis 2500)
+2
+```
+
+## `addDuration`
+
+```
+addDuration : Duration -> Duration -> Duration
+```
+
+Add two durations.
+
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> toMillis (addDuration (seconds 1) (millis 500))
+1500
+```
+
+## `subDuration`
+
+```
+subDuration : Duration -> Duration -> Duration
+```
+
+Subtract the second duration from the first.
+
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> toMillis (subDuration (seconds 2) (millis 500))
+1500
+```
+
+## `DateTime`
+
+```
+data DateTime
+  = DateTime { year : Int, month : Int, day : Int, hour : Int, minute : Int, second : Int }
+```
+
+── UTC civil calendar ──────────────────────────────────────────────────
+A civil UTC date-and-time.  `month` is 1-12, `day` is 1-31.
+
+## `fromEpochSeconds`
+
+```
+fromEpochSeconds : Int -> DateTime
+```
+
+Convert Unix epoch seconds (UTC) to a civil `DateTime`.  Supports
+negative (pre-1970) inputs.
+
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> formatIso (fromEpochSeconds 0)
+"1970-01-01T00:00:00Z"
+> formatIso (fromEpochSeconds 1000000000)
+"2001-09-09T01:46:40Z"
+> formatIso (fromEpochSeconds 951782400)
+"2000-02-29T00:00:00Z"
+> formatIso (fromEpochSeconds 1709164800)
+"2024-02-29T00:00:00Z"
+> formatIso (fromEpochSeconds (0 - 1))
+"1969-12-31T23:59:59Z"
+```
+
+## `toEpochSeconds`
+
+```
+toEpochSeconds : DateTime -> Int
+```
+
+Convert a civil `DateTime` (UTC) to Unix epoch seconds.  Inverse of
+`fromEpochSeconds`.
+
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> toEpochSeconds (fromEpochSeconds 1000000000)
+1000000000
+```
+
+## `formatIso`
+
+```
+formatIso : DateTime -> String
+```
+
+Render a `DateTime` as ISO 8601 `YYYY-MM-DDThh:mm:ssZ` (zero-padded, UTC).
+
+
+*(doctest — run by `medaka test`)*
+
+```medaka
+> formatIso (DateTime { year = 2024, month = 3, day = 5, hour = 7, minute = 8, second = 9 })
+"2024-03-05T07:08:09Z"
+```
+
+## `now`
+
+```
+now : Unit -> <Clock> Float
+```
+
+── Effectful helpers (over the `<Clock>` externs) ──────────────────────
+Current wall-clock time in Unix epoch seconds (Float).
+
+## `nowDateTime`
+
+```
+nowDateTime : Unit -> <Clock> DateTime
+```
+
+Current UTC civil time, from the wall clock (floored to whole seconds).
+
+## `monotonic`
+
+```
+monotonic : Unit -> <Clock> Float
+```
+
+A monotonic-clock reading in seconds (immune to wall-clock adjustment).
+Use two readings to time an interval, or `elapsedSince`.
+
+## `elapsedSince`
+
+```
+elapsedSince : Float -> <Clock> Float
+```
+
+Seconds elapsed on the monotonic clock since an earlier `monotonic ()`
+reading.  Time a block with `let t0 = monotonic ()  … elapsedSince t0`.
+
+## `sleep`
+
+```
+sleep : Int -> <Clock> Unit
+```
+
+Sleep for `ms` milliseconds.
+
+## `sleepSeconds`
+
+```
+sleepSeconds : Int -> <Clock> Unit
+```
+
+Sleep for `s` seconds.
+

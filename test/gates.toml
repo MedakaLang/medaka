@@ -1771,6 +1771,20 @@ corpus = ["test/doc_fixtures", "test/doc_goldens"]
 toolchain = []
 
 [[gate]]
+name = "diff_compiler_doc_stdlib_reference"
+area = "tools"
+shard = "gates_2"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+run = "test/diff_compiler_doc_stdlib_reference.sh"
+oracles = []
+sources = ["test/diff_compiler_doc_stdlib_reference.sh", "compiler/tools/doc.mdk", "stdlib/*.mdk"]
+corpus = ["docs/stdlib"]
+toolchain = []
+
+[[gate]]
 name = "diff_compiler_draft_semantic"
 area = "infra"
 shard = "gates_7"
