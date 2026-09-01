@@ -36,9 +36,18 @@ import frontend.ast.{
   LetBind(..),
 }
 import types.typecheck.{Scheme(..), ppScheme}
-import support.util.{joinWith, reverseL, escStr, stringTrim, splitNl}
+import support.util.{
+  joinWith,
+  reverseL,
+  escStr,
+  stringTrim,
+  splitNl,
+  startsWith,
+}
 import support.path.{baseOf, chopExt}
 import driver.diagnostics.{projectEntrySchemes}
+import json.{Json, JString, jObject, jArray}
+import string.{toLower}
 
 -- ── doc_entry ──────────────────────────────────────────────────────────────
 -- de_name / de_sig (never empty) / de_doc (stripped doc prose, may be "").
@@ -349,16 +358,119 @@ zipDoc _ [] = []
 zipDoc (x::xs) (y::ys) = (x, y) :: zipDoc xs ys
 
 -- ── Markdown rendering (mirror render_markdown) ─────────────────────────────
+--
+-- S-doc-library-mode rendering fixes (contract §4 E): the extracted doc prose
+-- can (1) start with a literal `| ` Haddock marker (`{- | ... -}` / `-- | ...`
+-- — the block/line-comment convention that flags a comment as attached doc
+-- prose rather than a stray note) which must be stripped, not rendered, and
+-- (2) contain a doctest example (`> expr` + its expected-output lines up to
+-- the next blank line/EOF, doctest.mdk's own `-- > ` convention after
+-- `commentBody` strips the leading `-- `) which must render as a fenced code
+-- block, not a Markdown blockquote.  `renderDocProse` is the single place
+-- both fixes apply, so every consumer (per-entry docs, the module header lead
+-- paragraph) gets clean Markdown.
 
-renderMarkdown : String -> List DocEntry -> String
-renderMarkdown moduleName entries =
-  stringConcat ("# " ++ moduleName ++ "\n\n" :: map renderEntry entries)
+-- Strip a leading `| ` (or bare `|`) marker from a prose line. Normally only
+-- the very first line of a marked comment carries it (`{- | ... -}` marks
+-- once at the top; a continuation `--   line two` never repeats it) — BUT a
+-- decorative, unmarked section-separator comment (`-- ── Duration ──`,
+-- `stdlib/time.mdk`) can sit directly above a `-- | ...`-marked one with no
+-- blank line between, and `findDocForLine`'s proximity rule merges both into
+-- one doc block, putting the marker on an interior line. So this strips `| `
+-- from EVERY prose line, not just the first — applied only in `ModeProse`
+-- below, never inside a doctest example block, where a leading `|` would be
+-- real (if unlikely) expected output, not a marker.
+stripPipePrefix : String -> String
+stripPipePrefix line =
+  if dlen line >= 2 && dsub 0 2 line == "| " then
+    dsub 2 (dlen line) line
+  else if line == "|" then
+    ""
+  else
+    line
+
+-- A run of extracted doc-prose lines is either plain prose or a doctest
+-- example block (starts at a `> ` line, extends through following non-blank
+-- lines — its expected-output lines — up to the next blank line or EOF).
+data DocSegment = ProseSeg (List String) | ExampleSeg (List String)
+data SegMode = ModeProse | ModeExample
+
+isExampleStart : String -> Bool
+isExampleStart line = dlen line >= 2 && dsub 0 2 line == "> "
+
+allBlankLines : List String -> Bool
+allBlankLines [] = True
+allBlankLines (x::xs) = x == "" && allBlankLines xs
+
+-- Flush the current accumulator (source order) as a segment, dropping an
+-- all-blank prose run (keeps paragraph gaps from becoming empty segments).
+pushSeg : SegMode -> List String -> List DocSegment -> List DocSegment
+pushSeg _ [] segs = segs
+pushSeg ModeProse acc segs =
+  let ls = reverseL acc
+  if allBlankLines ls then segs else ProseSeg ls :: segs
+pushSeg ModeExample acc segs = ExampleSeg (reverseL acc) :: segs
+
+docSegGo : List String -> SegMode -> List String -> List DocSegment -> List DocSegment
+docSegGo [] mode acc segs = reverseL (pushSeg mode acc segs)
+docSegGo (line::rest) ModeProse acc segs =
+  if isExampleStart line then
+    docSegGo rest ModeExample [line] (pushSeg ModeProse acc segs)
+  else
+    docSegGo rest ModeProse (stripPipePrefix line :: acc) segs
+docSegGo (line::rest) ModeExample acc segs =
+  if line == "" then
+    docSegGo rest ModeProse [] (pushSeg ModeExample acc segs)
+  else
+    docSegGo rest ModeExample (line::acc) segs
+
+docSegments : List String -> List DocSegment
+docSegments lines = docSegGo lines ModeProse [] []
+
+renderDocSegment : DocSegment -> String
+renderDocSegment (ProseSeg ls) = joinWith "\n" ls
+renderDocSegment (ExampleSeg ls) = "```medaka\n" ++ joinWith "\n" ls ++ "\n```"
+
+-- Render extracted doc prose (an entry's own doc, or a module's header
+-- comment) as valid Markdown: marker stripped, doctest examples fenced.
+renderDocProse : String -> String
+renderDocProse doc =
+  if doc == "" then ""
+  else
+    let segs = docSegments (splitNl doc)
+    joinWith "\n\n" (map renderDocSegment segs)
+
+-- The module's own header: the comment block starting at the FIRST comment
+-- in the file (contiguous by line — stops at the first line with no comment),
+-- independent of whether it is adjacent to the first decl (it usually isn't —
+-- this file's own header, lines 1-16, is followed by a blank line before the
+-- first `import`).  `tbl` is the same (line, text) assoc list `findDocForLine`
+-- reads; comments arrive from `collectComments` in ascending source order.
+moduleHeaderFrom : List (Int, String) -> String
+moduleHeaderFrom [] = ""
+moduleHeaderFrom ((startLine, text)::rest) =
+  stringTrim (joinWith
+    "\n"
+    (collectHeaderLines ((startLine, text)::rest) startLine))
+
+collectHeaderLines : List (Int, String) -> Int -> List String
+collectHeaderLines tbl line = match lookupLineLast tbl line
+  None => []
+  Some text => text :: collectHeaderLines tbl (line + 1)
+
+renderMarkdown : String -> String -> List DocEntry -> String
+renderMarkdown moduleName header entries =
+  let titleBlock = "# " ++ moduleName ++ "\n\n"
+  let headerProse = renderDocProse header
+  let headerBlock = if headerProse == "" then "" else headerProse ++ "\n\n"
+  stringConcat (titleBlock :: headerBlock :: map renderEntry entries)
 
 renderEntry : DocEntry -> String
 renderEntry (DocEntry name sig doc) =
   let header = "## `" ++ name ++ "`\n\n"
   let sigBlock = "```\n" ++ sig ++ "\n```\n"
-  let docBlock = if doc == "" then "" else "\n" ++ doc ++ "\n"
+  let rendered = renderDocProse doc
+  let docBlock = if rendered == "" then "" else "\n" ++ rendered ++ "\n"
   "\{header}\{sigBlock}\{docBlock}\n"
 
 -- ── top-level driver ────────────────────────────────────────────────────────
@@ -373,15 +485,178 @@ renderEntry (DocEntry name sig doc) =
 -- import-bearing target resolves its siblings before inferring schemes.
 export
 runDoc : String -> String -> String -> String -> List String -> <IO> String
-runDoc runtimeSrc coreSrc src filename roots =
+runDoc runtimeSrc coreSrc src filename roots = match computeModuleDoc runtimeSrc coreSrc src filename roots
+  ModuleDoc name header entries => renderMarkdown name header entries
+
+-- ── library mode (S-doc-library-mode) ───────────────────────────────────────
+-- A module's full extracted doc: name (page/index title, page filename minus
+-- `.md`), header (lead paragraph, from `moduleHeaderFrom`), and entries.
+-- Abstract export: `medaka_cli.mdk`'s library-mode driver reads it only
+-- through the accessors + `renderModulePage`/`renderIndex`/
+-- `libraryInventoryJson` below, never by constructing/pattern-matching it
+-- itself.
+export data ModuleDoc = ModuleDoc String String (List DocEntry)
+
+export
+mdName : ModuleDoc -> String
+mdName (ModuleDoc n _ _) = n
+
+export
+mdEntries : ModuleDoc -> List DocEntry
+mdEntries (ModuleDoc _ _ es) = es
+
+-- Shared by `runDoc` (single-file) and library mode: parse, infer schemes,
+-- extract entries + the module header, in one place so both modes see
+-- identical resolution behavior (S-doc-multimodule's per-module scheme fix
+-- included).
+export
+computeModuleDoc : String -> String -> String -> String -> List String -> <IO> ModuleDoc
+computeModuleDoc runtimeSrc coreSrc src filename roots =
   let parsed = parseWithPositions src
   let rawDecls = fst parsed
   let positions = positionsDecls (snd parsed)
   let comments = collectComments src
   let schemes = docSchemesFor runtimeSrc coreSrc filename roots rawDecls
   let moduleName = chopExt (baseOf filename)
+  let tbl = buildCommentTbl comments
+  let header = moduleHeaderFrom tbl
   let entries = extractEntries rawDecls positions schemes comments
-  renderMarkdown moduleName entries
+  ModuleDoc moduleName (dedupHeader header entries) entries
+
+-- When the header comment sits directly above the FIRST decl with no gap
+-- (no blank line — e.g. `test/doc_fixtures/multiline.mdk`), `findDocForLine`
+-- (unchanged extraction logic) legitimately attaches that SAME comment block
+-- to that decl's own doc too — so the naive header would render identical
+-- text twice, once as the lead paragraph and once as the first entry's own
+-- doc.  Drop the header in that one case; keep it whenever it differs (the
+-- usual case, a gap before the first decl — `stdlib/list.mdk`, this file).
+dedupHeader : String -> List DocEntry -> String
+dedupHeader header entries =
+  if header /= "" && header == firstEntryDoc entries then
+    ""
+  else
+    header
+
+firstEntryDoc : List DocEntry -> String
+firstEntryDoc [] = ""
+firstEntryDoc ((DocEntry _ _ doc)::_) = doc
+
+export
+renderModulePage : ModuleDoc -> String
+renderModulePage (ModuleDoc name header entries) =
+  renderMarkdown name header entries
+
+-- `async` is excluded from library mode BY CONSTRUCTION: the rule keys on the
+-- module's own derived NAME (post `chopExt`/`baseOf`, the same value that
+-- becomes the page's `# name` heading and filename), not on the literal path
+-- `stdlib/async.mdk` — so a fixture module also named `async` (anywhere) is
+-- excluded too, not just the real stdlib one.  Async's design is locked
+-- (ASYNC-DESIGN.md) but excluded from the public docs per the 0.1.0 epic
+-- decision (project_0_1_0_epic_rederivation memory: "async EXCLUDED from
+-- docs").  A single named check, not a growable list, is the rule this slice
+-- is licensed to add — widening it needs a fresh decision, not a bigger list.
+export
+excludedLibraryModule : String -> Bool
+excludedLibraryModule moduleName = moduleName == "async"
+
+-- GitHub's auto-anchor slug for a `## \`name\`` header: lowercase, run of
+-- non `[a-z0-9_-]` chars collapses to one `-`, leading/trailing `-` trimmed.
+-- Exact enough for the plain identifiers most entries render as; an impl
+-- entry's compound name (`Debug (Array a)`) still gets a stable (if not
+-- necessarily GitHub-exact) anchor — same-page linking never depended on
+-- exactness, only on the entry's OWN header and the index's link agreeing,
+-- which `slugifyAnchor` guarantees by construction (both read from the same
+-- function).
+export
+slugifyAnchor : String -> String
+slugifyAnchor name =
+  let lowered = toLower name
+  let chars = stringToChars lowered
+  let n = arrayLength chars
+  stringTrimDashes (slugCharsGo chars 0 n)
+
+-- Walk char-by-char (`arrayGetUnsafe`/`arrayLength` — both globals, no
+-- `array` module import needed), mapping a non slug-char to `-` and
+-- collapsing adjacent `-` as we go (so we never materialize the
+-- un-collapsed string).
+slugCharsGo : Array Char -> Int -> Int -> String
+slugCharsGo chars i n =
+  if i >= n then ""
+  else
+    let c = arrayGetUnsafe i chars
+    let rest = slugCharsGo chars (i + 1) n
+    if isSlugChar c then
+      charToStr c ++ rest
+    else if dlen rest > 0 && dsub 0 1 rest == "-" then
+      rest
+    else
+      "-" ++ rest
+
+isSlugChar : Char -> Bool
+isSlugChar c = c >= 'a' && c <= 'z'
+  || c >= '0' && c <= '9'
+  || c == '_'
+  || c == '-'
+
+stringTrimDashes : String -> String
+stringTrimDashes s = stringTrimDashEnd (stringTrimDashStart s)
+
+stringTrimDashStart : String -> String
+stringTrimDashStart s =
+  if dlen s >= 1 && dsub 0 1 s == "-" then
+    stringTrimDashStart (dsub 1 (dlen s) s)
+  else
+    s
+
+stringTrimDashEnd : String -> String
+stringTrimDashEnd s =
+  if dlen s >= 1 && dsub (dlen s - 1) (dlen s) s == "-" then
+    stringTrimDashEnd (dsub 0 (dlen s - 1) s)
+  else
+    s
+
+-- Machine-readable inventory (#2306 step 1's artifact): every documented
+-- name -> module -> signature, across the library.
+export
+libraryInventoryJson : List ModuleDoc -> Json
+libraryInventoryJson mds = jArray (concatMapDoc inventoryEntriesFor mds)
+
+inventoryEntriesFor : ModuleDoc -> List Json
+inventoryEntriesFor (ModuleDoc moduleName _ entries) =
+  map (inventoryEntryJson moduleName) entries
+
+inventoryEntryJson : String -> DocEntry -> Json
+inventoryEntryJson moduleName (DocEntry name sig _) = jObject
+  [
+    ("module", JString moduleName),
+    ("name", JString name),
+    ("signature", JString sig),
+  ]
+
+-- Index page: one section per module, linking every entry to its own page's
+-- anchor.
+export
+renderIndex : List ModuleDoc -> String
+renderIndex mds =
+  stringConcat ("# Library Index\n\n" :: map renderIndexModule mds)
+
+renderIndexModule : ModuleDoc -> String
+renderIndexModule (ModuleDoc name _ entries) =
+  let count = intToString2 (listLenDoc entries)
+  let head = "## `\{name}` (\{count} entries)\n\n"
+  let links = joinWith "\n" (map (renderIndexLink name) entries)
+  "\{head}\{links}\n\n"
+
+renderIndexLink : String -> DocEntry -> String
+renderIndexLink moduleName (DocEntry name _ _) =
+  "- [`\{name}`](\{moduleName}.md#\{slugifyAnchor name})"
+
+listLenDoc : List a -> Int
+listLenDoc [] = 0
+listLenDoc (_::xs) = 1 + listLenDoc xs
+
+intToString2 : Int -> String
+intToString2 n = intToString n
 
 -- Inferred schemes via the SAME multi-module loader path `check`/`run`/LSP
 -- project-hover use (`projectEntrySchemes`, driver.diagnostics) — loads the

@@ -28,8 +28,14 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MEDAKA="${MEDAKA:-$ROOT/medaka}"
 FIXDIR="$ROOT/test/doc_fixtures"
 GOLDENDIR="$ROOT/test/doc_goldens"
-
-[ -x "$MEDAKA" ] || { echo "build native first: make medaka (missing $MEDAKA)"; exit 2; }
+# S-doc-library-mode: `medaka doc --out DIR <files...>` arm. Small fixture
+# library (3 modules, one `async`-named probe to prove the exclusion rule is
+# name-keyed, not path-keyed) under its own subdir/golden dir so the
+# single-file loop above (`$FIXDIR/*.mdk`, non-recursive) never touches it.
+LIBFIXDIR="$FIXDIR/library"
+LIBGOLDENDIR="$GOLDENDIR/library"
+LIBTMPDIR="$(mktemp -d)"
+trap 'rm -rf "$LIBTMPDIR"' EXIT
 
 if [ "${CAPTURE:-0}" = "1" ]; then
   mkdir -p "$GOLDENDIR"
@@ -43,6 +49,11 @@ if [ "${CAPTURE:-0}" = "1" ]; then
   done
   printf '\ngoldens captured for %d fixtures in %s\n' "$n" "$GOLDENDIR"
   [ "$n" -gt 0 ] || { echo "NO FIXTURES FOUND under $FIXDIR — refusing to report a pass on zero input"; exit 1; }
+
+  rm -rf "$LIBGOLDENDIR"
+  mkdir -p "$LIBGOLDENDIR"
+  "$MEDAKA" doc --out "$LIBGOLDENDIR" "$LIBFIXDIR"/*.mdk >/dev/null 2>/dev/null
+  printf 'captured library-mode golden tree in %s\n' "$LIBGOLDENDIR"
   exit 0
 fi
 
@@ -66,6 +77,30 @@ for f in "$FIXDIR"/*.mdk; do
     printf 'FAIL %s (medaka doc output differs from golden)\n' "$name"
   fi
 done
+
+# ── library-mode arm ────────────────────────────────────────────────────────
+if [ -d "$LIBGOLDENDIR" ]; then
+  "$MEDAKA" doc --out "$LIBTMPDIR" "$LIBFIXDIR"/*.mdk >/dev/null 2>/dev/null
+  # `async.mdk` (the exclusion probe) must produce no page.
+  if [ -f "$LIBTMPDIR/async.md" ]; then
+    fail=$((fail + 1))
+    printf 'FAIL library-mode (async-probe module was NOT excluded — async.md exists)\n'
+  else
+    pass=$((pass + 1))
+    printf 'ok   library-mode async-exclusion\n'
+  fi
+  if diff -rq "$LIBGOLDENDIR" "$LIBTMPDIR" >/dev/null 2>&1; then
+    pass=$((pass + 1))
+    printf 'ok   library-mode tree (index.md + inventory.json + per-module pages)\n'
+  else
+    fail=$((fail + 1))
+    printf 'FAIL library-mode tree differs from golden:\n'
+    diff -rq "$LIBGOLDENDIR" "$LIBTMPDIR" || true
+  fi
+else
+  fail=$((fail + 1))
+  printf 'FAIL library-mode (no golden tree — run CAPTURE=1 sh test/diff_compiler_doc.sh)\n'
+fi
 
 # 0-checked must fail: a gate that iterated no fixtures proves nothing and must
 # never report green (see e.g. diff_compiler_snapshot_frontend.sh's "NOTHING
