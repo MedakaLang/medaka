@@ -6942,6 +6942,21 @@ data VecObl =
 -- there, once.
 data CSlot = CSlot { csIface : IfaceRef, csId : Int }
 
+-- B-4 (#1318): a non-authoritative view of ONE predicate-owned dictionary slot.
+-- `PSArgsUnknown` is not `PSArgsKnown []`: the former means the legacy argument-vector
+-- row was absent or its prefix ended before this slot, while the latter is a known
+-- nullary predicate.  [psBoundIds] is likewise the whole ordered id projection for the
+-- predicate.  Function slots currently contribute one lead id; impl-`requires` slots
+-- contribute every id in their argument vector.  This slice stores neither type: the
+-- live legacy producers below round-trip through it only as a migration audit.
+data PredicateSlotArgs = PSArgsUnknown | PSArgsKnown (List Mono)
+data PredicateSlot =
+  | PredicateSlot {
+      psIface : IfaceRef,
+      psArgs : PredicateSlotArgs,
+      psBoundIds : List Int,
+    }
+
 -- B-2.2-f (#1113): how many of a constrained callee's slots were PRESENT BEFORE
 -- `expandSupersPairs`' transitive super expansion APPENDED any.
 -- ⚠️ THAT WORDING IS THE CORRECTION, and the direction of the old one matters.  This
@@ -7032,6 +7047,118 @@ pairSlots (id::ids) (iface::ifs) =
   CSlot { csIface = iface, csId = id } :: pairSlots ids ifs
 
 data Predicate = Predicate { iface : IfaceRef, args : List Mono }
+
+-- B-4 carrier shadow: project the function-slot legacy pair without changing its
+-- prefix policy.  `None` makes every slot unknown.  `Some vectors` marks exactly the
+-- supplied prefix known and leaves the slot tail unknown; surplus vectors are truncated
+-- at the slot list, matching every existing slot/vector zip.
+predicateSlotsOfLegacy : List CSlot -> Option (List (List Mono)) -> List PredicateSlot
+predicateSlotsOfLegacy slots None = map predicateSlotUnknown slots
+predicateSlotsOfLegacy slots (Some args) =
+  predicateSlotsOfKnownPrefix slots args
+
+predicateSlotUnknown : CSlot -> PredicateSlot
+predicateSlotUnknown s = PredicateSlot {
+  psIface = s.csIface,
+  psArgs = PSArgsUnknown,
+  psBoundIds = [s.csId],
+}
+
+predicateSlotsOfKnownPrefix : List CSlot -> List (List Mono) -> List PredicateSlot
+predicateSlotsOfKnownPrefix [] _ = []
+predicateSlotsOfKnownPrefix slots [] = map predicateSlotUnknown slots
+predicateSlotsOfKnownPrefix (s::slots) (args::rest) =
+  PredicateSlot {
+      psIface = s.csIface,
+      psArgs = PSArgsKnown args,
+      psBoundIds = [s.csId],
+    } ::
+    predicateSlotsOfKnownPrefix slots rest
+
+-- The inverse function-slot projections.  A malformed carrier (non-singleton bound ids,
+-- or a known vector after an unknown one) deliberately loses that field so the live
+-- round-trip comparator below panics instead of silently normalising it.
+legacyCSlotsOfPredicateSlots : List PredicateSlot -> List CSlot
+legacyCSlotsOfPredicateSlots [] = []
+legacyCSlotsOfPredicateSlots (s::rest) = match s.psBoundIds
+  id::[] => CSlot {
+    csIface = s.psIface,
+    csId = id,
+  } :: legacyCSlotsOfPredicateSlots rest
+  _ => legacyCSlotsOfPredicateSlots rest
+
+legacyArgsOfPredicateSlots : List PredicateSlot -> Option (List (List Mono))
+legacyArgsOfPredicateSlots [] = Some []
+legacyArgsOfPredicateSlots (s::rest) = match s.psArgs
+  PSArgsUnknown => None
+  PSArgsKnown args =>
+    Some (args :: optionOr [] (legacyArgsOfPredicateSlots rest))
+
+-- The impl-`requires` adapter keeps the dict parameter name beside the carrier rather
+-- than pretending it is part of predicate identity.  Unlike a function CSlot, this
+-- producer already owns the predicate's complete ordered bound-id vector.
+predicateSlotOfImplReq : (String, List Int, Predicate) -> (String, PredicateSlot)
+predicateSlotOfImplReq (dname, ids, p) = (
+  dname,
+  PredicateSlot {
+    psIface = p.iface,
+    psArgs = PSArgsKnown p.args,
+    psBoundIds = ids,
+  },
+)
+
+legacyImplReqOfPredicateSlot : (String, PredicateSlot) -> (String, List Int, Predicate)
+legacyImplReqOfPredicateSlot (dname, s) =
+  let args = match s.psArgs
+    PSArgsKnown known => known
+    PSArgsUnknown => []
+  (dname, s.psBoundIds, Predicate { iface = s.psIface, args = args })
+
+predicateSlotPairValue : (String, PredicateSlot) -> PredicateSlot
+predicateSlotPairValue (_, s) = s
+
+-- Field-by-field carrier equality.  Interface equality is declaration identity, bound
+-- ids are exact and ordered, and argument vectors use the existing positional structural
+-- identity relation (`monoVecSameGiven`), including unknown-vs-known as a real mismatch.
+predicateSlotSame : PredicateSlot -> PredicateSlot -> Bool
+predicateSlotSame a b = sameIfaceDecl a.psIface b.psIface
+  && eqIntList a.psBoundIds b.psBoundIds
+  && predicateSlotArgsSame a.psArgs b.psArgs
+
+predicateSlotArgsSame : PredicateSlotArgs -> PredicateSlotArgs -> Bool
+predicateSlotArgsSame PSArgsUnknown PSArgsUnknown = True
+predicateSlotArgsSame (PSArgsKnown a) (PSArgsKnown b) = monoVecSameGiven a b
+predicateSlotArgsSame _ _ = False
+
+predicateSlotsSame : List PredicateSlot -> List PredicateSlot -> Bool
+predicateSlotsSame [] [] = True
+predicateSlotsSame (a::arest) (b::brest) = predicateSlotSame a b
+  && predicateSlotsSame arest brest
+predicateSlotsSame _ _ = False
+
+predicateSlotShadowCompare : List PredicateSlot -> List PredicateSlot -> Unit
+predicateSlotShadowCompare expected actual =
+  if predicateSlotsSame expected actual then
+    ()
+  else
+    panic "TYPECHECK-AUDIT predicate-slot shadow mismatch"
+
+shadowFunConstraintEntry : List CSlot -> Option (List (List Mono)) -> Unit
+shadowFunConstraintEntry slots argsOpt =
+  let view = predicateSlotsOfLegacy slots argsOpt
+  predicateSlotShadowCompare
+    view
+    (predicateSlotsOfLegacy
+      (legacyCSlotsOfPredicateSlots view)
+      (legacyArgsOfPredicateSlots view))
+
+shadowImplReqEntry : (String, List Int, Predicate) -> Unit
+shadowImplReqEntry entry =
+  let view = predicateSlotOfImplReq entry
+  let roundtrip = predicateSlotOfImplReq (legacyImplReqOfPredicateSlot view)
+  predicateSlotShadowCompare
+    [predicateSlotPairValue view]
+    [predicateSlotPairValue roundtrip]
 
 -- #991: every arm below is now LIVE — stamped by the producer that records the
 -- obligation, on the ONE storage shape (`UObligation`).  The three arms that read
@@ -29467,6 +29594,7 @@ registerReqSlots mname implTvMap slot ((Require { requireHead = iface, requireAr
   -- PURE SUPPLY: `implReqPreds`' only reader is `implReqPick`, which compares
   -- `sp.iface.irName` against the goal's, so no slot is picked differently today.
   let entry = (dictParamName mname slot, ids, Predicate { iface = IfaceRef { irName = iface, irOrigin = ro }, args = argMonos })
+  let _ = shadowImplReqEntry entry
   perRun.value.implReqPreds := entry::perRun.value.implReqPreds.value
   registerReqSlots mname implTvMap (slot + 1) rest
 
@@ -31318,6 +31446,7 @@ setFunConstraintEntry : String -> List CSlot -> Option (List (List Mono)) -> Uni
 -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
 -- lint-disable-next-line rule-prefer-assign-op
 setFunConstraintEntry m slots argsOpt =
+  let _ = shadowFunConstraintEntry slots argsOpt
   perRun.value.funConstraintsRef := ((m, map (s => s.csId) slots)::perRun.value.funConstraintsRef.value)
   -- B-2.2-f (#1113): the DECLARED-prefix sidecar, written in the SAME op as the ids it
   -- describes so the two can never be written apart.

@@ -1065,6 +1065,39 @@ if [ "$carrier_count_actual" != "$carrier_count_expected" ]; then
 fi
 echo "  ok: $carrier_count_actual TyConOrigin mention(s) in ast.mdk (name-set + positional)"
 
+# ── #1318 B-4 predicate-slot carrier shadow ratchet ─────────────────────────
+# The carrier slice is intentionally non-authoritative: it must retain both pure legacy
+# adapters and both live producer hooks while remaining absent from mutable compiler state.
+# This is source structure rather than a new gate, so it rides the compiler-source check
+# that already owns structural carrier completeness.
+predicate_slot_src="$ROOT/compiler/types/typecheck.mdk"
+predicate_slot_required='data PredicateSlotArgs = PSArgsUnknown | PSArgsKnown (List Mono)
+data PredicateSlot =
+| PredicateSlot {
+predicateSlotsOfLegacy : List CSlot -> Option (List (List Mono)) -> List PredicateSlot
+legacyCSlotsOfPredicateSlots : List PredicateSlot -> List CSlot
+legacyArgsOfPredicateSlots : List PredicateSlot -> Option (List (List Mono))
+predicateSlotOfImplReq : (String, List Int, Predicate) -> (String, PredicateSlot)
+legacyImplReqOfPredicateSlot : (String, PredicateSlot) -> (String, List Int, Predicate)
+predicateSlotShadowCompare : List PredicateSlot -> List PredicateSlot -> Unit
+let _ = shadowFunConstraintEntry slots argsOpt
+let _ = shadowImplReqEntry entry'
+
+printf '%s\n' "$predicate_slot_required" | while IFS= read -r required; do
+  if ! grep -Fq "$required" "$predicate_slot_src"; then
+    echo "FAIL: #1318 predicate-slot carrier shadow is missing required source: $required"
+    exit 1
+  fi
+done || exit 1
+
+if grep -E 'Ref.*PredicateSlot|PredicateSlot.*Ref' "$predicate_slot_src" \
+  | grep -vE '^[[:space:]]*--' >/dev/null; then
+  echo "FAIL: #1318 predicate-slot carrier became mutable state before producer cutover."
+  echo "  This slice permits pure adapters and ephemeral shadow comparisons only."
+  exit 1
+fi
+echo "  ok: #1318 predicate-slot carrier/adapters/hooks present; no carrier Ref storage"
+
 # ── #1111 Stage A-2 unit A-2.8: registry keying ratchet ─────────────────────
 # Mechanical enforcement for the registry-keying arc (re-keying ~15
 # program-global cross-module tables from bare names to qualified identity):
