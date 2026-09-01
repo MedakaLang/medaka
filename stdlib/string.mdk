@@ -53,7 +53,7 @@ import core.{Eq, Ord, Debug, Foldable, Mappable, Option, Ordering}
 -- — distinct from `println`, which emits the raw characters.
 
 -- ── Char operations ─────────────────────────────────────────────────────────
--- ASCII-exact predicates (isDigit/digitToInt/intToDigit) compute on the
+-- ASCII-exact predicates (isDigit/fromDigit/toDigit) compute on the
 -- codepoint directly; the classification wrappers below (isAlpha/isSpace/…)
 -- wrap ASCII-only kernel externs (issue #417 — no Unicode tables exist).
 
@@ -100,15 +100,15 @@ isPunct c = charIsPunct c
 {- | `'0'`..`'9'` → `Some 0`..`Some 9`, `'a'`..`'f'`/`'A'`..`'F'` →
    `Some 10`..`Some 15`, anything else `None`.
 
-   > digitToInt '7'
+   > fromDigit '7'
    Some 7
-   > digitToInt 'f'
+   > fromDigit 'f'
    Some 15
-   > digitToInt 'z'
+   > fromDigit 'z'
    None -}
 export
-digitToInt : Char -> Option Int
-digitToInt c = digitVal (charCode c)
+fromDigit : Char -> Option Int
+fromDigit c = digitVal (charCode c)
 
 digitVal : Int -> Option Int
 digitVal n
@@ -117,17 +117,17 @@ digitVal n
   | n >= 65 && n <= 70 = Some (n - 55)
   | otherwise = None
 
-{- | Inverse of `digitToInt` for `0`..`15` (lowercase hex); `None` otherwise.
+{- | Inverse of `fromDigit` for `0`..`15` (lowercase hex); `None` otherwise.
 
-   > intToDigit 7
+   > toDigit 7
    Some '7'
-   > intToDigit 12
+   > toDigit 12
    Some 'c'
-   > intToDigit 42
+   > toDigit 42
    None -}
 export
-intToDigit : Int -> Option Char
-intToDigit n
+toDigit : Int -> Option Char
+toDigit n
   | n >= 0 && n <= 9 = charFromCode (n + 48)
   | n >= 10 && n <= 15 = charFromCode (n + 87)
   | otherwise = None
@@ -640,6 +640,18 @@ export
 lines : String -> List String
 lines s = map stripCR (split nl s)
 
+{- | Drop one trailing `\r`, so a CRLF line reads as its content.  Idempotent
+   on a line that has none.
+
+   The `string` function `io.stripCR` used to duplicate: a `String -> String`
+   transformation has no business in the IO module, so #2306 I-3 exported this
+   one and deleted that one.
+
+   > stripCR "ab\r"
+   "ab"
+   > stripCR "ab"
+   "ab" -}
+export
 stripCR : String -> String
 stripCR line =
   if endsWith "\r" line then

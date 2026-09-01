@@ -1,5 +1,5 @@
 # META
-source_lines=77
+source_lines=73
 stages=DESUGAR,MARK
 # SOURCE
 {- io.mdk — files, standard streams, environment, and process I/O.
@@ -19,6 +19,7 @@ stages=DESUGAR,MARK
    it is evaluated, so you can `match readFile path` directly. -}
 
 import core.{Debug, Display, Option, Result, optionOr}
+import string.{stripCR}
 
 -- ── Standard error (Display, mirroring the prelude's print/println) ──────
 
@@ -48,20 +49,15 @@ inspect x = putStrLn (debug x)
 -- ── Files ────────────────────────────────────────────────────────────────
 
 {- Line splitting is done here over the global `string*` kernel externs (in
-   runtime.mdk) rather than `import string.{lines}`.  string.mdk is importable
-   as of Phase 117, but `string.lines` deliberately *keeps* the final empty line
-   a trailing newline produces, whereas readLines drops it — so this stays a
-   local helper.  Splits on `\n`, dropping a trailing `\r` (so CRLF files work)
-   and the final empty line a trailing newline would otherwise produce. -}
-export
-stripCR : String -> String
-stripCR s =
-  let n = stringLength s
-  if n > 0 && stringSlice (n - 1) n s == "\r" then
-    stringSlice 0 (n - 1) s
-  else
-    s
+   runtime.mdk) rather than `import string.{lines}`, because `string.lines`
+   deliberately *keeps* the final empty line a trailing newline produces,
+   whereas readLines drops it — so this stays a local helper.  Splits on `\n`,
+   dropping a trailing `\r` (so CRLF files work) and the final empty line a
+   trailing newline would otherwise produce.
 
+   `stripCR` itself is `string.stripCR` and is imported: it is a pure
+   `String -> String` transformation, and this module used to export a second
+   copy of it (#2306 I-3). -}
 splitLines : String -> List String
 splitLines s = match stringIndexOf "\n" s
   None => if s == "" then [] else [stripCR s]
@@ -81,14 +77,13 @@ getEnvOr : String -> String -> <IO> String
 getEnvOr name fallback = optionOr fallback (getEnv name)
 # DESUGAR
 (DUse false (UseGroup ("core") ((mem "Debug" false) (mem "Display" false) (mem "Option" false) (mem "Result" false) (mem "optionOr" false))))
+(DUse false (UseGroup ("string") ((mem "stripCR" false))))
 (DTypeSig true "eprint" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyVar "a") (TyEffect ("IO") None (TyCon "Unit")))))
 (DFunDef false "eprint" ((PVar "x")) (EApp (EVar "ePutStr") (EApp (EVar "display") (EVar "x"))))
 (DTypeSig true "eprintln" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyVar "a") (TyEffect ("IO") None (TyCon "Unit")))))
 (DFunDef false "eprintln" ((PVar "x")) (EApp (EVar "ePutStrLn") (EApp (EVar "display") (EVar "x"))))
 (DTypeSig true "inspect" (TyConstrained ((cstr "Debug" (TyVar "a"))) (TyFun (TyVar "a") (TyEffect ("IO") None (TyCon "Unit")))))
 (DFunDef false "inspect" ((PVar "x")) (EApp (EVar "putStrLn") (EApp (EVar "debug") (EVar "x"))))
-(DTypeSig true "stripCR" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "stripCR" ((PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">" (EVar "n") (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "n")) (EVar "s")) (ELit (LString "\r")))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "s")) (EVar "s")))))
 (DTypeSig false "splitLines" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "splitLines" ((PVar "s")) (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "\n"))) (EVar "s")) (arm (PCon "None") () (EIf (EBinOp "==" (EVar "s") (ELit (LString ""))) (EListLit) (EListLit (EApp (EVar "stripCR") (EVar "s"))))) (arm (PCon "Some" (PVar "i")) () (EBinOp "::" (EApp (EVar "stripCR") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "s"))) (EApp (EVar "splitLines") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")))))))
 (DTypeSig true "readLines" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
@@ -97,14 +92,13 @@ getEnvOr name fallback = optionOr fallback (getEnv name)
 (DFunDef false "getEnvOr" ((PVar "name") (PVar "fallback")) (EApp (EApp (EVar "optionOr") (EVar "fallback")) (EApp (EVar "getEnv") (EVar "name"))))
 # MARK
 (DUse false (UseGroup ("core") ((mem "Debug" false) (mem "Display" false) (mem "Option" false) (mem "Result" false) (mem "optionOr" false))))
+(DUse false (UseGroup ("string") ((mem "stripCR" false))))
 (DTypeSig true "eprint" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyVar "a") (TyEffect ("IO") None (TyCon "Unit")))))
 (DFunDef false "eprint" ((PVar "x")) (EApp (EVar "ePutStr") (EApp (EMethodRef "display") (EVar "x"))))
 (DTypeSig true "eprintln" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyVar "a") (TyEffect ("IO") None (TyCon "Unit")))))
 (DFunDef false "eprintln" ((PVar "x")) (EApp (EVar "ePutStrLn") (EApp (EMethodRef "display") (EVar "x"))))
 (DTypeSig true "inspect" (TyConstrained ((cstr "Debug" (TyVar "a"))) (TyFun (TyVar "a") (TyEffect ("IO") None (TyCon "Unit")))))
 (DFunDef false "inspect" ((PVar "x")) (EApp (EVar "putStrLn") (EApp (EMethodRef "debug") (EVar "x"))))
-(DTypeSig true "stripCR" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "stripCR" ((PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">" (EVar "n") (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "n")) (EVar "s")) (ELit (LString "\r")))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "s")) (EVar "s")))))
 (DTypeSig false "splitLines" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "splitLines" ((PVar "s")) (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "\n"))) (EVar "s")) (arm (PCon "None") () (EIf (EBinOp "==" (EVar "s") (ELit (LString ""))) (EListLit) (EListLit (EApp (EVar "stripCR") (EVar "s"))))) (arm (PCon "Some" (PVar "i")) () (EBinOp "::" (EApp (EVar "stripCR") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "s"))) (EApp (EVar "splitLines") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")))))))
 (DTypeSig true "readLines" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))

@@ -71,7 +71,7 @@ import frontend.lexer.{Token(..), tokenizeWithOffsetPairs}
 import frontend.desugar_cache.{desugaredPrelude}
 import support.char.{isIdentChar, isDigit}
 import support.util.{maxI, utf8Len, joinWith, startsWith}
-import io.{stripCR}
+import string.{stripCR}
 import frontend.desugar.{desugar}
 import types.typecheck.{
   checkOneSchemeFull,

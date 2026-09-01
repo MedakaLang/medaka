@@ -1,5 +1,5 @@
 # META
-source_lines=399
+source_lines=409
 stages=DESUGAR,MARK
 # SOURCE
 {- time.mdk — durations + a UTC civil calendar, plus thin wrappers over the
@@ -319,12 +319,22 @@ export
 elapsedSince : Float -> <Clock> Float
 elapsedSince start = monotonicSec () - start
 
--- | Sleep for `ms` milliseconds.
-export
-sleep : Int -> <Clock> Unit
-sleep ms = sleepMs ms
+{- | Sleep for a `Duration`.
 
--- | Sleep for `s` seconds.
+   Takes a `Duration`, not a bare `Int`: `sleep 5` used to mean five
+   MILLISECONDS while reading as five seconds, and the type could not warn
+   anyone (#2306 J-1).  Now the unit is in the value — `sleep (seconds 5)`,
+   `sleep (millis 5)` — and the old `sleepSeconds` is gone with it, since
+   `seconds` already says that.
+
+   `sleepSeconds` below is UNCHANGED: it was never the ambiguous one — the
+   row cites it as the proof that this module already knew units belong
+   somewhere the reader can see them. -}
+export
+sleep : Duration -> <Clock> Unit
+sleep d = sleepMs (toMillis d)
+
+-- | Sleep for `s` seconds.  Equivalent to `sleep (seconds s)`.
 export
 sleepSeconds : Int -> <Clock> Unit
 sleepSeconds s = sleepMs (s * 1000)
@@ -467,8 +477,8 @@ prop "Monoid Duration: empty is a two-sided identity" (n : Int) =
 (DFunDef false "monotonic" ((PVar "u")) (EApp (EVar "monotonicSec") (EVar "u")))
 (DTypeSig true "elapsedSince" (TyFun (TyCon "Float") (TyEffect ("Clock") None (TyCon "Float"))))
 (DFunDef false "elapsedSince" ((PVar "start")) (EBinOp "-" (EApp (EVar "monotonicSec") (ELit LUnit)) (EVar "start")))
-(DTypeSig true "sleep" (TyFun (TyCon "Int") (TyEffect ("Clock") None (TyCon "Unit"))))
-(DFunDef false "sleep" ((PVar "ms")) (EApp (EVar "sleepMs") (EVar "ms")))
+(DTypeSig true "sleep" (TyFun (TyCon "Duration") (TyEffect ("Clock") None (TyCon "Unit"))))
+(DFunDef false "sleep" ((PVar "d")) (EApp (EVar "sleepMs") (EApp (EVar "toMillis") (EVar "d"))))
 (DTypeSig true "sleepSeconds" (TyFun (TyCon "Int") (TyEffect ("Clock") None (TyCon "Unit"))))
 (DFunDef false "sleepSeconds" ((PVar "s")) (EApp (EVar "sleepMs") (EBinOp "*" (EVar "s") (ELit (LInt 1000)))))
 (DProp false "epoch round-trips through the civil calendar" ((pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "s") (EBinOp "+" (ELit (LInt 1000000)) (EBinOp "%" (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (EVar "n")) (EVar "n")) (ELit (LInt 3000000000))))) (DoExpr (EBinOp "==" (EApp (EVar "toEpochSeconds") (EApp (EVar "fromEpochSeconds") (EVar "s"))) (EVar "s")))))
@@ -550,8 +560,8 @@ prop "Monoid Duration: empty is a two-sided identity" (n : Int) =
 (DFunDef false "monotonic" ((PVar "u")) (EApp (EVar "monotonicSec") (EVar "u")))
 (DTypeSig true "elapsedSince" (TyFun (TyCon "Float") (TyEffect ("Clock") None (TyCon "Float"))))
 (DFunDef false "elapsedSince" ((PVar "start")) (EBinOp "-" (EApp (EVar "monotonicSec") (ELit LUnit)) (EVar "start")))
-(DTypeSig true "sleep" (TyFun (TyCon "Int") (TyEffect ("Clock") None (TyCon "Unit"))))
-(DFunDef false "sleep" ((PVar "ms")) (EApp (EVar "sleepMs") (EVar "ms")))
+(DTypeSig true "sleep" (TyFun (TyCon "Duration") (TyEffect ("Clock") None (TyCon "Unit"))))
+(DFunDef false "sleep" ((PVar "d")) (EApp (EVar "sleepMs") (EApp (EVar "toMillis") (EVar "d"))))
 (DTypeSig true "sleepSeconds" (TyFun (TyCon "Int") (TyEffect ("Clock") None (TyCon "Unit"))))
 (DFunDef false "sleepSeconds" ((PVar "s")) (EApp (EVar "sleepMs") (EBinOp "*" (EVar "s") (ELit (LInt 1000)))))
 (DProp false "epoch round-trips through the civil calendar" ((pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "s") (EBinOp "+" (ELit (LInt 1000000)) (EBinOp "%" (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (EVar "n")) (EVar "n")) (ELit (LInt 3000000000))))) (DoExpr (EBinOp "==" (EApp (EVar "toEpochSeconds") (EApp (EVar "fromEpochSeconds") (EVar "s"))) (EVar "s")))))

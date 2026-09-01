@@ -75,7 +75,7 @@ import frontend.lexer.{Token(..), tokenizeWithOffsetPairs}
 import frontend.desugar_cache.{desugaredPrelude}
 import support.char.{isIdentChar, isDigit}
 import support.util.{maxI, utf8Len, joinWith, startsWith}
-import io.{stripCR}
+import string.{stripCR}
 import frontend.desugar.{desugar}
 import types.typecheck.{
   checkOneSchemeFull,
@@ -2095,7 +2095,7 @@ unit = ()
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isIdentChar" false) (mem "isDigit" false))))
 (DUse false (UseGroup ("support" "util") ((mem "maxI" false) (mem "utf8Len" false) (mem "joinWith" false) (mem "startsWith" false))))
-(DUse false (UseGroup ("io") ((mem "stripCR" false))))
+(DUse false (UseGroup ("string") ((mem "stripCR" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "checkOneSchemeFull" false) (mem "ppSchemeNamed" false) (mem "ppSchemeNamedFull" false) (mem "Scheme" true) (mem "currentLocalSchemes" false) (mem "currentLocalSchemesLoc" false) (mem "currentSeedSchemes" false))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatSource" false))))
@@ -2564,7 +2564,7 @@ unit = ()
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isIdentChar" false) (mem "isDigit" false))))
 (DUse false (UseGroup ("support" "util") ((mem "maxI" false) (mem "utf8Len" false) (mem "joinWith" false) (mem "startsWith" false))))
-(DUse false (UseGroup ("io") ((mem "stripCR" false))))
+(DUse false (UseGroup ("string") ((mem "stripCR" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "checkOneSchemeFull" false) (mem "ppSchemeNamed" false) (mem "ppSchemeNamedFull" false) (mem "Scheme" true) (mem "currentLocalSchemes" false) (mem "currentLocalSchemesLoc" false) (mem "currentSeedSchemes" false))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatSource" false))))

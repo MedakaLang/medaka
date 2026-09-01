@@ -857,10 +857,10 @@ True
 False
 ```
 
-## `contains`
+## `containsSub`
 
 ```
-contains : List a -> List a -> Bool
+containsSub : List a -> List a -> Bool
 ```
 
 True when `sub` occurs as a contiguous run anywhere in `xs`.  `O(n*m)`
@@ -871,11 +871,11 @@ which is host-backed.
 *(doctest — run by `medaka test`)*
 
 ```medaka
-> contains [2, 3] [1, 2, 3, 4]
+> containsSub [2, 3] [1, 2, 3, 4]
 True
-> contains [2, 4] [1, 2, 3, 4]
+> containsSub [2, 4] [1, 2, 3, 4]
 False
-> contains ([] : List Int) [1]
+> containsSub ([] : List Int) [1]
 True
 ```
 

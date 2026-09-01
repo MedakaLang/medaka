@@ -1,5 +1,5 @@
 # META
-source_lines=310
+source_lines=316
 stages=DESUGAR,MARK
 # SOURCE
 {- math.mdk — floating-point math: roots, transcendentals, rounding, and a
@@ -195,34 +195,40 @@ floorMod : Int -> Int -> Int
 floorMod a b = a - floorDiv a b * b
 
 -- | Greatest common divisor via the Euclidean algorithm, on absolute
---   values so the result is non-negative.  `gcdInt 0 0 = 0`.
+--   values so the result is non-negative.  `gcd 0 0 = 0`.
 --
--- > gcdInt 12 18
+-- > gcd 12 18
 -- 6
--- > gcdInt 17 5
+-- > gcd 17 5
 -- 1
 export
-gcdInt : Int -> Int -> Int
-gcdInt a b = gcdGo (absInt a) (absInt b)
+gcd : Int -> Int -> Int
+gcd a b = gcdGo (absInt a) (absInt b)
 
 gcdGo : Int -> Int -> Int
 gcdGo a 0 = a
 gcdGo a b = gcdGo b (a % b)
 
--- | Least common multiple, non-negative.  `lcmInt _ 0 = 0`.
+-- | Least common multiple, non-negative.  `lcm _ 0 = 0`.
 --
--- > lcmInt 4 6
+-- > lcm 4 6
 -- 12
--- > lcmInt 3 5
+-- > lcm 3 5
 -- 15
 export
-lcmInt : Int -> Int -> Int
-lcmInt 0 _ = 0
-lcmInt _ 0 = 0
-lcmInt a b = absInt (a / gcdInt a b * b)
+lcm : Int -> Int -> Int
+lcm 0 _ = 0
+lcm _ 0 = 0
+lcm a b = absInt (a / gcd a b * b)
 
 -- | Integer exponentiation by squaring.  A non-positive exponent yields 1
 --   (the empty product); `powInt b 0 = 1` for any `b`.
+--
+--   KEEPS its `Int` suffix while `gcdInt`/`lcmInt` lost theirs (#2306 J-2):
+--   `runtime.pow : Float -> Float -> Float` is an extern, so it is in scope
+--   UNQUALIFIED everywhere, and a `math.pow : Int -> Int -> Int` would meet
+--   it head-on in that scope.  The suffix is load-bearing for exactly this
+--   one of the three; `gcd`/`lcm` have no such peer.
 --
 -- > powInt 2 10
 -- 1024
@@ -299,13 +305,13 @@ absInt n = if n < 0 then 0 - n else n
 
 -- ── Property tests (integer helpers — exact, sign-safe) ─────────────────
 
-prop "gcdInt is commutative" (a : Int) (b : Int) = eq (gcdInt a b) (gcdInt b a)
+prop "gcd is commutative" (a : Int) (b : Int) = eq (gcd a b) (gcd b a)
 
-prop "gcdInt divides both arguments (when nonzero)" (a : Int) (b : Int) =
-  let g = gcdInt a b
+prop "gcd divides both arguments (when nonzero)" (a : Int) (b : Int) =
+  let g = gcd a b
   eq g 0 || a % g == 0 && b % g == 0
 
-prop "lcmInt is commutative" (a : Int) (b : Int) = eq (lcmInt a b) (lcmInt b a)
+prop "lcm is commutative" (a : Int) (b : Int) = eq (lcm a b) (lcm b a)
 
 prop "powInt b 2 equals b * b" (b : Int) = eq (powInt b 2) (b * b)
 
@@ -333,15 +339,15 @@ prop "powInt b 0 equals 1" (b : Int) = eq (powInt b 0) 1
 (DFunDef false "floorDiv" ((PVar "a") (PVar "b")) (EBlock (DoLet false false (PVar "q") (EBinOp "/" (EVar "a") (EVar "b"))) (DoLet false false (PVar "r") (EBinOp "-" (EVar "a") (EBinOp "*" (EVar "q") (EVar "b")))) (DoExpr (EIf (EBinOp "&&" (EBinOp "/=" (EVar "r") (ELit (LInt 0))) (EBinOp "/=" (EBinOp "<" (EVar "r") (ELit (LInt 0))) (EBinOp "<" (EVar "b") (ELit (LInt 0))))) (EBinOp "-" (EVar "q") (ELit (LInt 1))) (EVar "q")))))
 (DTypeSig true "floorMod" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "floorMod" ((PVar "a") (PVar "b")) (EBinOp "-" (EVar "a") (EBinOp "*" (EApp (EApp (EVar "floorDiv") (EVar "a")) (EVar "b")) (EVar "b"))))
-(DTypeSig true "gcdInt" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "gcdInt" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "gcdGo") (EApp (EVar "absInt") (EVar "a"))) (EApp (EVar "absInt") (EVar "b"))))
+(DTypeSig true "gcd" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "gcd" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "gcdGo") (EApp (EVar "absInt") (EVar "a"))) (EApp (EVar "absInt") (EVar "b"))))
 (DTypeSig false "gcdGo" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "gcdGo" ((PVar "a") (PLit (LInt 0))) (EVar "a"))
 (DFunDef false "gcdGo" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "gcdGo") (EVar "b")) (EBinOp "%" (EVar "a") (EVar "b"))))
-(DTypeSig true "lcmInt" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "lcmInt" ((PLit (LInt 0)) PWild) (ELit (LInt 0)))
-(DFunDef false "lcmInt" (PWild (PLit (LInt 0))) (ELit (LInt 0)))
-(DFunDef false "lcmInt" ((PVar "a") (PVar "b")) (EApp (EVar "absInt") (EBinOp "*" (EBinOp "/" (EVar "a") (EApp (EApp (EVar "gcdInt") (EVar "a")) (EVar "b"))) (EVar "b"))))
+(DTypeSig true "lcm" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "lcm" ((PLit (LInt 0)) PWild) (ELit (LInt 0)))
+(DFunDef false "lcm" (PWild (PLit (LInt 0))) (ELit (LInt 0)))
+(DFunDef false "lcm" ((PVar "a") (PVar "b")) (EApp (EVar "absInt") (EBinOp "*" (EBinOp "/" (EVar "a") (EApp (EApp (EVar "gcd") (EVar "a")) (EVar "b"))) (EVar "b"))))
 (DTypeSig true "powInt" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "powInt" (PWild (PLit (LInt 0))) (ELit (LInt 1)))
 (DFunDef false "powInt" ((PVar "b") (PVar "n")) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (ELit (LInt 1)) (EApp (EApp (EApp (EVar "powGo") (EVar "b")) (EVar "n")) (ELit (LInt 1)))))
@@ -350,9 +356,9 @@ prop "powInt b 0 equals 1" (b : Int) = eq (powInt b 0) 1
 (DFunDef false "powGo" ((PVar "b") (PVar "n") (PVar "acc")) (EBlock (DoLet false false (PVar "acc2") (EIf (EBinOp "==" (EBinOp "%" (EVar "n") (ELit (LInt 2))) (ELit (LInt 1))) (EBinOp "*" (EVar "acc") (EVar "b")) (EVar "acc"))) (DoExpr (EApp (EApp (EApp (EVar "powGo") (EBinOp "*" (EVar "b") (EVar "b"))) (EBinOp "/" (EVar "n") (ELit (LInt 2)))) (EVar "acc2")))))
 (DTypeSig false "absInt" (TyFun (TyCon "Int") (TyCon "Int")))
 (DFunDef false "absInt" ((PVar "n")) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (EVar "n")) (EVar "n")))
-(DProp false "gcdInt is commutative" ((pp "a" (TyCon "Int")) (pp "b" (TyCon "Int"))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "gcdInt") (EVar "a")) (EVar "b"))) (EApp (EApp (EVar "gcdInt") (EVar "b")) (EVar "a"))))
-(DProp false "gcdInt divides both arguments (when nonzero)" ((pp "a" (TyCon "Int")) (pp "b" (TyCon "Int"))) (EBlock (DoLet false false (PVar "g") (EApp (EApp (EVar "gcdInt") (EVar "a")) (EVar "b"))) (DoExpr (EBinOp "||" (EApp (EApp (EVar "eq") (EVar "g")) (ELit (LInt 0))) (EBinOp "&&" (EBinOp "==" (EBinOp "%" (EVar "a") (EVar "g")) (ELit (LInt 0))) (EBinOp "==" (EBinOp "%" (EVar "b") (EVar "g")) (ELit (LInt 0))))))))
-(DProp false "lcmInt is commutative" ((pp "a" (TyCon "Int")) (pp "b" (TyCon "Int"))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "lcmInt") (EVar "a")) (EVar "b"))) (EApp (EApp (EVar "lcmInt") (EVar "b")) (EVar "a"))))
+(DProp false "gcd is commutative" ((pp "a" (TyCon "Int")) (pp "b" (TyCon "Int"))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "gcd") (EVar "a")) (EVar "b"))) (EApp (EApp (EVar "gcd") (EVar "b")) (EVar "a"))))
+(DProp false "gcd divides both arguments (when nonzero)" ((pp "a" (TyCon "Int")) (pp "b" (TyCon "Int"))) (EBlock (DoLet false false (PVar "g") (EApp (EApp (EVar "gcd") (EVar "a")) (EVar "b"))) (DoExpr (EBinOp "||" (EApp (EApp (EVar "eq") (EVar "g")) (ELit (LInt 0))) (EBinOp "&&" (EBinOp "==" (EBinOp "%" (EVar "a") (EVar "g")) (ELit (LInt 0))) (EBinOp "==" (EBinOp "%" (EVar "b") (EVar "g")) (ELit (LInt 0))))))))
+(DProp false "lcm is commutative" ((pp "a" (TyCon "Int")) (pp "b" (TyCon "Int"))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "lcm") (EVar "a")) (EVar "b"))) (EApp (EApp (EVar "lcm") (EVar "b")) (EVar "a"))))
 (DProp false "powInt b 2 equals b * b" ((pp "b" (TyCon "Int"))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "powInt") (EVar "b")) (ELit (LInt 2)))) (EBinOp "*" (EVar "b") (EVar "b"))))
 (DProp false "powInt b 1 equals b" ((pp "b" (TyCon "Int"))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "powInt") (EVar "b")) (ELit (LInt 1)))) (EVar "b")))
 (DProp false "powInt b 0 equals 1" ((pp "b" (TyCon "Int"))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "powInt") (EVar "b")) (ELit (LInt 0)))) (ELit (LInt 1))))
@@ -377,15 +383,15 @@ prop "powInt b 0 equals 1" (b : Int) = eq (powInt b 0) 1
 (DFunDef false "floorDiv" ((PVar "a") (PVar "b")) (EBlock (DoLet false false (PVar "q") (EBinOp "/" (EVar "a") (EVar "b"))) (DoLet false false (PVar "r") (EBinOp "-" (EVar "a") (EBinOp "*" (EVar "q") (EVar "b")))) (DoExpr (EIf (EBinOp "&&" (EBinOp "/=" (EVar "r") (ELit (LInt 0))) (EBinOp "/=" (EBinOp "<" (EVar "r") (ELit (LInt 0))) (EBinOp "<" (EVar "b") (ELit (LInt 0))))) (EBinOp "-" (EVar "q") (ELit (LInt 1))) (EVar "q")))))
 (DTypeSig true "floorMod" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "floorMod" ((PVar "a") (PVar "b")) (EBinOp "-" (EVar "a") (EBinOp "*" (EApp (EApp (EVar "floorDiv") (EVar "a")) (EVar "b")) (EVar "b"))))
-(DTypeSig true "gcdInt" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "gcdInt" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "gcdGo") (EApp (EVar "absInt") (EVar "a"))) (EApp (EVar "absInt") (EVar "b"))))
+(DTypeSig true "gcd" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "gcd" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "gcdGo") (EApp (EVar "absInt") (EVar "a"))) (EApp (EVar "absInt") (EVar "b"))))
 (DTypeSig false "gcdGo" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "gcdGo" ((PVar "a") (PLit (LInt 0))) (EVar "a"))
 (DFunDef false "gcdGo" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "gcdGo") (EVar "b")) (EBinOp "%" (EVar "a") (EVar "b"))))
-(DTypeSig true "lcmInt" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "lcmInt" ((PLit (LInt 0)) PWild) (ELit (LInt 0)))
-(DFunDef false "lcmInt" (PWild (PLit (LInt 0))) (ELit (LInt 0)))
-(DFunDef false "lcmInt" ((PVar "a") (PVar "b")) (EApp (EVar "absInt") (EBinOp "*" (EBinOp "/" (EVar "a") (EApp (EApp (EVar "gcdInt") (EVar "a")) (EVar "b"))) (EVar "b"))))
+(DTypeSig true "lcm" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "lcm" ((PLit (LInt 0)) PWild) (ELit (LInt 0)))
+(DFunDef false "lcm" (PWild (PLit (LInt 0))) (ELit (LInt 0)))
+(DFunDef false "lcm" ((PVar "a") (PVar "b")) (EApp (EVar "absInt") (EBinOp "*" (EBinOp "/" (EVar "a") (EApp (EApp (EVar "gcd") (EVar "a")) (EVar "b"))) (EVar "b"))))
 (DTypeSig true "powInt" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "powInt" (PWild (PLit (LInt 0))) (ELit (LInt 1)))
 (DFunDef false "powInt" ((PVar "b") (PVar "n")) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (ELit (LInt 1)) (EApp (EApp (EApp (EVar "powGo") (EVar "b")) (EVar "n")) (ELit (LInt 1)))))
@@ -394,9 +400,9 @@ prop "powInt b 0 equals 1" (b : Int) = eq (powInt b 0) 1
 (DFunDef false "powGo" ((PVar "b") (PVar "n") (PVar "acc")) (EBlock (DoLet false false (PVar "acc2") (EIf (EBinOp "==" (EBinOp "%" (EVar "n") (ELit (LInt 2))) (ELit (LInt 1))) (EBinOp "*" (EVar "acc") (EVar "b")) (EVar "acc"))) (DoExpr (EApp (EApp (EApp (EVar "powGo") (EBinOp "*" (EVar "b") (EVar "b"))) (EBinOp "/" (EVar "n") (ELit (LInt 2)))) (EVar "acc2")))))
 (DTypeSig false "absInt" (TyFun (TyCon "Int") (TyCon "Int")))
 (DFunDef false "absInt" ((PVar "n")) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (EVar "n")) (EVar "n")))
-(DProp false "gcdInt is commutative" ((pp "a" (TyCon "Int")) (pp "b" (TyCon "Int"))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "gcdInt") (EVar "a")) (EVar "b"))) (EApp (EApp (EVar "gcdInt") (EVar "b")) (EVar "a"))))
-(DProp false "gcdInt divides both arguments (when nonzero)" ((pp "a" (TyCon "Int")) (pp "b" (TyCon "Int"))) (EBlock (DoLet false false (PVar "g") (EApp (EApp (EVar "gcdInt") (EVar "a")) (EVar "b"))) (DoExpr (EBinOp "||" (EApp (EApp (EMethodRef "eq") (EVar "g")) (ELit (LInt 0))) (EBinOp "&&" (EBinOp "==" (EBinOp "%" (EVar "a") (EVar "g")) (ELit (LInt 0))) (EBinOp "==" (EBinOp "%" (EVar "b") (EVar "g")) (ELit (LInt 0))))))))
-(DProp false "lcmInt is commutative" ((pp "a" (TyCon "Int")) (pp "b" (TyCon "Int"))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "lcmInt") (EVar "a")) (EVar "b"))) (EApp (EApp (EVar "lcmInt") (EVar "b")) (EVar "a"))))
+(DProp false "gcd is commutative" ((pp "a" (TyCon "Int")) (pp "b" (TyCon "Int"))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "gcd") (EVar "a")) (EVar "b"))) (EApp (EApp (EVar "gcd") (EVar "b")) (EVar "a"))))
+(DProp false "gcd divides both arguments (when nonzero)" ((pp "a" (TyCon "Int")) (pp "b" (TyCon "Int"))) (EBlock (DoLet false false (PVar "g") (EApp (EApp (EVar "gcd") (EVar "a")) (EVar "b"))) (DoExpr (EBinOp "||" (EApp (EApp (EMethodRef "eq") (EVar "g")) (ELit (LInt 0))) (EBinOp "&&" (EBinOp "==" (EBinOp "%" (EVar "a") (EVar "g")) (ELit (LInt 0))) (EBinOp "==" (EBinOp "%" (EVar "b") (EVar "g")) (ELit (LInt 0))))))))
+(DProp false "lcm is commutative" ((pp "a" (TyCon "Int")) (pp "b" (TyCon "Int"))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "lcm") (EVar "a")) (EVar "b"))) (EApp (EApp (EVar "lcm") (EVar "b")) (EVar "a"))))
 (DProp false "powInt b 2 equals b * b" ((pp "b" (TyCon "Int"))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "powInt") (EVar "b")) (ELit (LInt 2)))) (EBinOp "*" (EVar "b") (EVar "b"))))
 (DProp false "powInt b 1 equals b" ((pp "b" (TyCon "Int"))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "powInt") (EVar "b")) (ELit (LInt 1)))) (EVar "b")))
 (DProp false "powInt b 0 equals 1" ((pp "b" (TyCon "Int"))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "powInt") (EVar "b")) (ELit (LInt 0)))) (ELit (LInt 1))))

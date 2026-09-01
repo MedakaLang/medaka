@@ -191,34 +191,40 @@ floorMod : Int -> Int -> Int
 floorMod a b = a - floorDiv a b * b
 
 -- | Greatest common divisor via the Euclidean algorithm, on absolute
---   values so the result is non-negative.  `gcdInt 0 0 = 0`.
+--   values so the result is non-negative.  `gcd 0 0 = 0`.
 --
--- > gcdInt 12 18
+-- > gcd 12 18
 -- 6
--- > gcdInt 17 5
+-- > gcd 17 5
 -- 1
 export
-gcdInt : Int -> Int -> Int
-gcdInt a b = gcdGo (absInt a) (absInt b)
+gcd : Int -> Int -> Int
+gcd a b = gcdGo (absInt a) (absInt b)
 
 gcdGo : Int -> Int -> Int
 gcdGo a 0 = a
 gcdGo a b = gcdGo b (a % b)
 
--- | Least common multiple, non-negative.  `lcmInt _ 0 = 0`.
+-- | Least common multiple, non-negative.  `lcm _ 0 = 0`.
 --
--- > lcmInt 4 6
+-- > lcm 4 6
 -- 12
--- > lcmInt 3 5
+-- > lcm 3 5
 -- 15
 export
-lcmInt : Int -> Int -> Int
-lcmInt 0 _ = 0
-lcmInt _ 0 = 0
-lcmInt a b = absInt (a / gcdInt a b * b)
+lcm : Int -> Int -> Int
+lcm 0 _ = 0
+lcm _ 0 = 0
+lcm a b = absInt (a / gcd a b * b)
 
 -- | Integer exponentiation by squaring.  A non-positive exponent yields 1
 --   (the empty product); `powInt b 0 = 1` for any `b`.
+--
+--   KEEPS its `Int` suffix while `gcdInt`/`lcmInt` lost theirs (#2306 J-2):
+--   `runtime.pow : Float -> Float -> Float` is an extern, so it is in scope
+--   UNQUALIFIED everywhere, and a `math.pow : Int -> Int -> Int` would meet
+--   it head-on in that scope.  The suffix is load-bearing for exactly this
+--   one of the three; `gcd`/`lcm` have no such peer.
 --
 -- > powInt 2 10
 -- 1024
@@ -295,13 +301,13 @@ absInt n = if n < 0 then 0 - n else n
 
 -- ── Property tests (integer helpers — exact, sign-safe) ─────────────────
 
-prop "gcdInt is commutative" (a : Int) (b : Int) = eq (gcdInt a b) (gcdInt b a)
+prop "gcd is commutative" (a : Int) (b : Int) = eq (gcd a b) (gcd b a)
 
-prop "gcdInt divides both arguments (when nonzero)" (a : Int) (b : Int) =
-  let g = gcdInt a b
+prop "gcd divides both arguments (when nonzero)" (a : Int) (b : Int) =
+  let g = gcd a b
   eq g 0 || a % g == 0 && b % g == 0
 
-prop "lcmInt is commutative" (a : Int) (b : Int) = eq (lcmInt a b) (lcmInt b a)
+prop "lcm is commutative" (a : Int) (b : Int) = eq (lcm a b) (lcm b a)
 
 prop "powInt b 2 equals b * b" (b : Int) = eq (powInt b 2) (b * b)
 

@@ -1,5 +1,12 @@
 # runtime
 
+> **This is the PRIMITIVE LAYER.** These names are host `extern`s: they
+> are in scope everywhere without an import, and they are deliberately
+> spelled `<type><Op>` (`stringToUpper`, `intToString`) to mark that.
+> Prefer the library name where one exists — `string.toUpper`,
+> `string.toFloat` — and reach for a name on this page only when no
+> library module covers it.
+
 Built-in extern declarations.
 Every name here must have a matching OCaml implementation in lib/eval.ml.
 To add a new primitive: add an extern line here, add its OCaml impl in
@@ -886,16 +893,6 @@ set: negative floats, large exponents, top-bit NaN/inf) must go through
 `bytesToFloat64` instead.  Inverse of Int64.bits_of_float / C
 memcpy(&bits,&d,8) for the patterns it can represent.  Pure.
 
-## `bytesToFloat64`
-
-```
-bytesToFloat64 : Array Int -> Int -> Float
-```
-
-Read 8 bytes big-endian from `arr` starting at byte index `off` and
-reinterpret as an IEEE 754 double.  Bytes in `arr` are Int values 0..255.
-Pure (no IO; the array is read-only).
-
 ## `floatToBytes64`
 
 ```
@@ -991,34 +988,10 @@ arrayMake : Int -> a -> Array a
 arrayMakeWith : Int -> (Int -> a) -> Array a
 ```
 
-## `arrayGetUnsafe`
-
-```
-arrayGetUnsafe : Int -> Array a -> a
-```
-
-## `arraySetUnsafe`
-
-```
-arraySetUnsafe : Int -> a -> Array a -> Unit
-```
-
 ## `arrayCopy`
 
 ```
 arrayCopy : Array a -> Array a
-```
-
-## `arrayBlit`
-
-```
-arrayBlit : Array a -> Int -> Array a -> Int -> Int -> Unit
-```
-
-## `arrayFill`
-
-```
-arrayFill : a -> Array a -> Unit
 ```
 
 ## `arrayFromList`

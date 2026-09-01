@@ -50,6 +50,7 @@ import frontend.ast.{
   useMemberLocal,
 }
 import types.typecheck.{Scheme(..), ppScheme}
+import frontend.resolve.{internalExterns}
 import support.util.{joinWith, reverseL, escStr, stringTrim, splitNl}
 import support.path.{baseOf, chopExt}
 import driver.diagnostics.{projectEntrySchemes}
@@ -684,7 +685,21 @@ renderMarkdown moduleName header entries =
   let titleBlock = "# " ++ moduleName ++ "\n\n"
   let headerProse = renderDocProse header
   let headerBlock = if headerProse == "" then "" else headerProse ++ "\n\n"
-  stringConcat (titleBlock :: headerBlock :: map renderEntry entries)
+  stringConcat
+    (titleBlock :: primitiveLayerBanner moduleName :: headerBlock :: map renderEntry entries)
+
+-- D-5 (#2306): the prelude-only page publishes 138 externs in a naming
+-- convention that RIVALS the library layer's — `stringToUpper` sits beside
+-- `string.toUpper`, `stringToFloat` beside `string.toFloat`.  The ruling KEEPS
+-- `<type><Op>` and ratifies it as the LAYER MARKER (renaming would collide
+-- head-on with the library names, which is why `stdlib/string.mdk` already
+-- omits `length`/`isEmpty`), so the page has to SAY it is the primitive layer
+-- rather than reading as a rival API of equal standing.  Rendered from the
+-- module name, so it reaches library mode and single-file `medaka doc` alike.
+primitiveLayerBanner : String -> String
+primitiveLayerBanner moduleName
+  | preludeOnlyModule moduleName = "> **This is the PRIMITIVE LAYER.** These names are host `extern`s: they\n> are in scope everywhere without an import, and they are deliberately\n> spelled `<type><Op>` (`stringToUpper`, `intToString`) to mark that.\n> Prefer the library name where one exists — `string.toUpper`,\n> `string.toFloat` — and reach for a name on this page only when no\n> library module covers it.\n\n"
+  | otherwise = ""
 
 renderEntry : DocEntry -> String
 renderEntry (DocEntry name sig doc _) =
@@ -733,6 +748,24 @@ mdName (ModuleDoc n _ _ _) = n
 -- extract entries + the module header, in one place so both modes see
 -- identical resolution behavior (S-doc-multimodule's per-module scheme fix
 -- included).
+-- D-6 (#2306): the reference must not publish a name the RESOLVER rejects.
+-- `resolve.internalExterns` is the guard list — a module that is neither part
+-- of the standard library nor built with `--allow-internal` gets
+-- `'<name>' is an internal-only primitive` for any of them — yet they were
+-- rendered on the `runtime` page with signature and doc comment, telling the
+-- reader to do something the compiler forbids.  The list is IMPORTED, not
+-- copied: one source of truth, so a name added to the guard disappears from
+-- the page in the same commit.  The filter applies only where the guard does
+-- (the prelude-only `runtime` page), so a fixture that legitimately shows an
+-- internal name on some other page is unaffected.
+dropInternalExterns : Bool -> List DocEntry -> List DocEntry
+dropInternalExterns False entries = entries
+dropInternalExterns True entries =
+  filter (e => not (isInternalExtern e)) entries
+
+isInternalExtern : DocEntry -> Bool
+isInternalExtern (DocEntry name _ _ _) = elem name internalExterns
+
 export
 computeModuleDoc : String -> String -> String -> String -> List String -> <IO> ModuleDoc
 computeModuleDoc runtimeSrc coreSrc src filename roots =
@@ -744,7 +777,8 @@ computeModuleDoc runtimeSrc coreSrc src filename roots =
   let moduleName = chopExt (baseOf filename)
   let tbl = buildCommentTbl comments
   let header = moduleHeaderFrom tbl
-  let entries = extractEntries (preludeOnlyModule moduleName) rawDecls positions schemes comments
+  let primitiveLayer = preludeOnlyModule moduleName
+  let entries = dropInternalExterns primitiveLayer (extractEntries primitiveLayer rawDecls positions schemes comments)
   ModuleDoc
     moduleName
     (dedupHeader header entries)

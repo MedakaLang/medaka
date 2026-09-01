@@ -387,10 +387,20 @@ reading.  Time a block with `let t0 = monotonic ()  … elapsedSince t0`.
 ## `sleep`
 
 ```
-sleep : Int -> <Clock> Unit
+sleep : Duration -> <Clock> Unit
 ```
 
-Sleep for `ms` milliseconds.
+Sleep for a `Duration`.
+
+Takes a `Duration`, not a bare `Int`: `sleep 5` used to mean five
+MILLISECONDS while reading as five seconds, and the type could not warn
+anyone (#2306 J-1).  Now the unit is in the value — `sleep (seconds 5)`,
+`sleep (millis 5)` — and the old `sleepSeconds` is gone with it, since
+`seconds` already says that.
+
+`sleepSeconds` below is UNCHANGED: it was never the ambiguous one — the
+row cites it as the proof that this module already knew units belong
+somewhere the reader can see them.
 
 ## `sleepSeconds`
 
@@ -398,5 +408,5 @@ Sleep for `ms` milliseconds.
 sleepSeconds : Int -> <Clock> Unit
 ```
 
-Sleep for `s` seconds.
+Sleep for `s` seconds.  Equivalent to `sleep (seconds s)`.
 

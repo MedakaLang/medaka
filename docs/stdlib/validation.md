@@ -18,7 +18,15 @@ be incoherent (two "correct" answers for combining two failures depend
 on which interface a caller happens to reach for). Haskell's
 `validation` package, PureScript, and Scala/cats' `Validated` all make
 this same call: accumulate via `Applicative`, and if you need
-short-circuiting sequencing, convert to `Result` (`validationToResult`) first.
+short-circuiting sequencing, convert to `Result` (`toResult`) first.
+
+⚠️ `toResult` and `fromResult` (renamed from `validationToResult`/
+`resultToValidation` by #2306 D-2, so the module qualifier carries the type
+instead of the name stuttering it) DELIBERATELY reuse two prelude spellings:
+`core.toResult : e -> Option a -> Result e a` and `core.fromResult :
+Result e a -> Option a`.  A selective `import validation.{toResult}` SHADOWS
+the prelude name in that module with no ambiguity diagnostic, so prefer
+`import validation as V` and write `V.toResult`.
 
 ## `Validation`
 
@@ -36,9 +44,9 @@ as intentional rather than a `Result` look-alike bug.
 *(doctest — run by `medaka test`)*
 
 ```medaka
-> validationToResult (Success 1)
+> toResult (Success 1)
 Ok 1
-> validationToResult (Failure "bad")
+> toResult (Failure "bad")
 Err "bad"
 ```
 
@@ -62,11 +70,11 @@ the first, so validating several fields collects every error.
 *(doctest — run by `medaka test`)*
 
 ```medaka
-> validationToResult (ap (Failure ["bad name"] : Validation (List String) (Int -> Int)) (Failure ["bad age"] : Validation (List String) Int))
+> toResult (ap (Failure ["bad name"] : Validation (List String) (Int -> Int)) (Failure ["bad age"] : Validation (List String) Int))
 Err ["bad name", "bad age"]
-> validationToResult (ap (Failure ["bad name"] : Validation (List String) (Int -> Int)) (Success 5 : Validation (List String) Int))
+> toResult (ap (Failure ["bad name"] : Validation (List String) (Int -> Int)) (Success 5 : Validation (List String) Int))
 Err ["bad name"]
-> validationToResult (ap (pure (n => n + 1) : Validation (List String) (Int -> Int)) (Success 5 : Validation (List String) Int))
+> toResult (ap (pure (n => n + 1) : Validation (List String) (Int -> Int)) (Success 5 : Validation (List String) Int))
 Ok 6
 ```
 
@@ -146,10 +154,10 @@ core's `Display (Result e a)`.
 "Failure bad"
 ```
 
-## `validationToResult`
+## `toResult`
 
 ```
-validationToResult : Validation a b -> Result a b
+toResult : Validation a b -> Result a b
 ```
 
 Drop down to the short-circuiting `Result` (e.g. to `andThen`-sequence
@@ -159,14 +167,14 @@ once you no longer need to accumulate).
 *(doctest — run by `medaka test`)*
 
 ```medaka
-> validationToResult (Success 1)
+> toResult (Success 1)
 Ok 1
 ```
 
-## `resultToValidation`
+## `fromResult`
 
 ```
-resultToValidation : Result a b -> Validation a b
+fromResult : Result a b -> Validation a b
 ```
 
 Lift a `Result` into `Validation` (e.g. to combine it with others via
@@ -176,9 +184,9 @@ the accumulating `Applicative`).
 *(doctest — run by `medaka test`)*
 
 ```medaka
-> resultToValidation (Ok 1 : Result String Int)
+> fromResult (Ok 1 : Result String Int)
 Success 1
-> resultToValidation (Err "bad" : Result String Int)
+> fromResult (Err "bad" : Result String Int)
 Failure "bad"
 ```
 
