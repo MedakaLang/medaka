@@ -19,6 +19,7 @@
 #   dist/<m>.mdk      for every EXTRA_MODULES entry in main.js (array, list, …)
 #   guide/<chapter>.html  one page per docs/guide/*.md (OUTLINE.md excluded)
 #   guide/guide.css
+#   _headers          Cloudflare Pages header rules (compresses /dist/*.mdk)
 #
 # Runs build_playground_wasm.sh first if dist/playground.wasm is missing.
 # Runs build_guide.sh to render the guide straight into site/guide/.
@@ -81,6 +82,10 @@ cp "$SCRIPT_DIR/vendor/codemirror/codemirror.js" "$SITE/vendor/codemirror/"
 # Run time.
 cp "$DIST/playground.wasm" "$SITE/dist/"
 cp "$DIST"/*.mdk           "$SITE/dist/"
+
+# Cloudflare Pages `_headers` file — see the file itself for why this exists
+# (routes /dist/*.mdk through Cloudflare's compressible-content-type list).
+cp "$SCRIPT_DIR/_headers" "$SITE/"
 
 # ── The guide (docs/guide/*.md -> site/guide/*.html) ─────────────────────────
 #

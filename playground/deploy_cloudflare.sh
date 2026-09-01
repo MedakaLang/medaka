@@ -52,16 +52,22 @@ if [ ! -f "$SITE/index.html" ] || [ ! -f "$SITE/dist/playground.wasm" ] || [ ! -
 fi
 
 # build_site.sh already verifies every asset main.js fetches; re-assert the
-# count here so a hand-edited site/ cannot be published half-populated.
+# count here so a hand-edited site/ cannot be published half-populated. DERIVED
+# from main.js's EXTRA_MODULES (+ runtime.mdk + core.mdk) rather than a fixed
+# number — a hardcoded `22` here went stale the moment EXTRA_MODULES' own count
+# last moved (e.g. the mut_array->vector rename) and silently blocked every
+# deploy with a FAIL that had nothing to do with a half-populated site.
+mdk_expected=$(($(sed -n '/^const EXTRA_MODULES = \[/,/\];/p' "$SCRIPT_DIR/main.js" \
+             | grep -o "'[a-z_0-9]*'" | wc -l) + 2))
 mdk_count=$(find "$SITE/dist" -name '*.mdk' | wc -l | tr -d ' ')
-if [ "$mdk_count" -lt 22 ]; then
-  echo "FAIL: site/dist has $mdk_count .mdk files, expected >=22. Re-run build_site.sh." >&2
+if [ "$mdk_count" -lt "$mdk_expected" ]; then
+  echo "FAIL: site/dist has $mdk_count .mdk files, expected >=$mdk_expected. Re-run build_site.sh." >&2
   exit 1
 fi
 
 # Same re-assert for the guide, and DERIVED from docs/guide/ rather than pinned to
-# a number: the .mdk floor above is a fixed `>=22` because main.js's module list
-# moves independently of this script, but the guide's page count is exactly
+# a number: the .mdk floor above is now likewise derived from main.js rather than
+# fixed, but the guide's page count is exactly
 # "docs/guide/*.md minus OUTLINE.md", which is knowable here. A chapter added to
 # the repo and missing from site/ is a stale build, not a smaller guide.
 guide_expected=$(find "$ROOT/docs/guide" -maxdepth 1 -name '*.md' ! -name 'OUTLINE.md' | wc -l | tr -d ' ')
