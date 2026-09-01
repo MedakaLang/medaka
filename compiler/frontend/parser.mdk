@@ -19,6 +19,7 @@ import frontend.ast.{
   DeriveRef(..),
   Lit(..),
   Ty(..),
+  KindAnn(..),
   Constraint(..),
   Pat(..),
   RecPatField(..),
@@ -2445,24 +2446,24 @@ parseTypeAlias : Bool -> Parser Decl
 parseTypeAlias pub = do
   expectTok TType
   name <- upperNameP
-  params <- many lowerNameP
+  ps <- tyParamsP
   expectTok TEqual
   ty <- parseTy
   skipNewlines
-  pure (dTypeAliasUnresolved pub name params ty)
+  pure (dTypeAliasUnresolved pub name (map fst ps) (map snd ps) ty)
 
 -- `newtype Name a… = Con ty [deriving (…)]`
 parseNewtype : Bool -> Parser Decl
 parseNewtype pub = do
   expectTok TNewtype
   name <- upperNameP
-  params <- many lowerNameP
+  ps <- tyParamsP
   expectTok TEqual
   con <- upperNameP
   fty <- parseTy
   derives <- derivingClause
   skipNewlines
-  pure (dNewtypeUnresolved pub name params con fty derives)
+  pure (dNewtypeUnresolved pub name (map fst ps) (map snd ps) con fty derives)
 
 -- top-level `let rec f a… = body` → DLetGroup with a single binding.
 -- Mutual-recursion grouping via `with` has been removed — each recursive
@@ -2813,12 +2814,12 @@ parseInterface pub isDefault = do
   kw <- getPos
   expectTok TInterface
   name <- upperNameP
-  typarams <- many lowerNameP
+  ps <- tyParamsP
   supers <- ifaceSuper
   methods <- ifaceBody kw
   -- #1110: the parser has a token stream, not a module id, so it builds every
   -- type declaration identity-less; resolve acquires it (`stampDeclOrigin`).
-  pure (dInterfaceUnresolved pub isDefault name typarams supers methods)
+  pure (dInterfaceUnresolved pub isDefault name (map fst ps) (map snd ps) supers methods)
 
 -- optional `requires Iface a, …` superclass list
 ifaceSuper : Parser (List Super)
@@ -3198,11 +3199,82 @@ lowerNameFor : Token -> Parser String
 lowerNameFor (TIdent x) = emit x
 lowerNameFor _ = failP "expected type parameter"
 
+-- ── declared type-parameter kinds (EFFECTS-SEMANTICS §6.1/§6.2) ─────────
+-- `TyParam ::= name | ( name : Kind )`, `Kind ::= Type | Effect | Kind ->
+-- Kind | ( Kind )`, arrow right-associative.  `Type`/`Effect` are ordinary
+-- capitalised identifiers matched only here, in kind position — they are NOT
+-- keywords, so a type or constructor may still be called either of them.
+--
+-- All four parameterised heads (`data`/`newtype`/`type`/`interface`) bind
+-- their parameters through `tyParamsP`, which is exactly the §6.2 table: an
+-- `impl` head names types rather than binding parameters and never reaches
+-- here, so it takes no annotation without any code saying so.
+--
+-- A malformed annotation fails with `failP`, so `many` un-consumes the `(`
+-- and the head's own `expectTok` reports the position.  That is safe because
+-- nothing else in these four heads may follow the parameter list with a `(`.
+tyParamsP : Parser (List (String, Option KindAnn))
+tyParamsP = many tyParamP
+
+tyParamP : Parser (String, Option KindAnn)
+tyParamP = do
+  t <- peekP
+  tyParamFor t
+
+tyParamFor : Token -> Parser (String, Option KindAnn)
+tyParamFor TLParen = do
+  advance
+  n <- lowerNameP
+  expectTok TColon
+  k <- kindP
+  expectTok TRParen
+  pure (n, Some k)
+tyParamFor t = do
+  n <- lowerNameFor t
+  pure (n, None)
+
+kindP : Parser KindAnn
+kindP = do
+  a <- kindAtomP
+  t <- peekP
+  kindArrowRest a t
+
+kindArrowRest : KindAnn -> Token -> Parser KindAnn
+kindArrowRest a TArrow = do
+  advance
+  b <- kindP
+  pure (KindArrow a b)
+kindArrowRest a _ = pure a
+
+kindAtomP : Parser KindAnn
+kindAtomP = do
+  t <- peekP
+  kindAtomFor t
+
+kindAtomFor : Token -> Parser KindAnn
+kindAtomFor (TUpper c)
+  | c == "Type" = kindAtomEmit KindType
+  | c == "Effect" = kindAtomEmit KindEffect
+  | otherwise =
+    failP "expected a kind: `Type`, `Effect`, or an arrow between them"
+kindAtomFor TLParen = do
+  advance
+  k <- kindP
+  expectTok TRParen
+  pure k
+kindAtomFor _ =
+  failP "expected a kind: `Type`, `Effect`, or an arrow between them"
+
+kindAtomEmit : KindAnn -> Parser KindAnn
+kindAtomEmit k = do
+  advance
+  pure k
+
 parseData : DataVis -> Parser Decl
 parseData vis = do
   expectTok TData
   name <- upperNameP
-  params <- many lowerNameP
+  ps <- tyParamsP
   bodyAndDerives <- dataBody name
   let variants = fst bodyAndDerives
   let blockDerives = snd bodyAndDerives
@@ -3211,7 +3283,8 @@ parseData vis = do
   pure (dDataUnresolved
     vis
     name
-    params
+    (map fst ps)
+    (map snd ps)
     variants
     (combineDerives blockDerives outerDerives))
 -- block form may carry `deriving (…)` INSIDE the INDENT span (own line or

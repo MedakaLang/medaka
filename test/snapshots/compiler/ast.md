@@ -1,5 +1,5 @@
 # META
-source_lines=1914
+source_lines=1965
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka AST — mirror of lib/ast.ml's surface (pre-desugar) nodes,
@@ -770,6 +770,52 @@ constraintUnresolved iface args = Constraint {
   constraintOrigin = OriginUnresolved,
 }
 
+-- ── Declared type-parameter kinds (EFFECTS-SEMANTICS §6.1) ────────────────
+-- The SURFACE spelling of a kind, as written on a declaration head:
+-- `data Async (e : Effect) a`, `interface I (f : Effect -> Type -> Type)`.
+-- `KindArrow` is right-associated by the parser; parentheses survive only as
+-- left-nesting (`(Type -> Type) -> Type`), never as redundant structure, so
+-- the printer can re-derive the source spelling from the tree alone.
+--
+-- Deliberately NOT the typechecker's `Kind` (`KType`/`KRow`, `types/`): this
+-- is a parsed artefact that must round-trip through `fmt` byte-for-byte, and
+-- it exists before any kind inference has run.  The two meet where the
+-- typechecker RESOLVES a parameter's kind, not in the AST.
+public export data KindAnn = KindType | KindEffect | KindArrow KindAnn KindAnn
+
+-- The SOURCE spelling of a kind, and of a whole declaration head's parameter
+-- list.  It lives HERE, beside the node, for the reason `firstTyLoc` below
+-- does: three separate tools render a declaration head — `tools/printer` (and
+-- through it `fmt`, where dropping an annotation would DELETE a kind from the
+-- user's source), `tools/doc`, and `tools/lsp` — and a second hand-rolled copy
+-- is how two spellings drift apart.
+export
+kindAnnSource : KindAnn -> String
+kindAnnSource KindType = "Type"
+kindAnnSource KindEffect = "Effect"
+kindAnnSource (KindArrow a b) = "\{kindAnnArg a} -> \{kindAnnSource b}"
+
+-- The arrow associates right, so only a LEFT operand that is itself an arrow
+-- needs parentheses: `Effect -> Type -> Type` prints bare, and `(Type ->
+-- Type) -> Type` keeps exactly the one pair that carries meaning.
+kindAnnArg : KindAnn -> String
+kindAnnArg (k@(KindArrow _ _)) = "(\{kindAnnSource k})"
+kindAnnArg k = kindAnnSource k
+
+-- One head parameter as it was written: `a`, or `(e : Effect)`.
+export
+tyParamSource : String -> Option KindAnn -> String
+tyParamSource p None = p
+tyParamSource p (Some k) = "(\{p} : \{kindAnnSource k})"
+
+-- A head's whole parameter list.  A SHORT kind list (a decl synthesised
+-- without one) degrades to bare names rather than truncating the parameters.
+export
+tyParamSources : List String -> List (Option KindAnn) -> List String
+tyParamSources [] _ = []
+tyParamSources (p::ps) (k::ks) = tyParamSource p k :: tyParamSources ps ks
+tyParamSources (p::ps) [] = p :: tyParamSources ps []
+
 -- ── Loc plumbing (issue 480) ──────────────────────────────────────────────
 -- These live HERE, beside `Loc`/`Ty`, because they are diagnostic-quality
 -- infrastructure every stage needs: `resolve` locates a duplicate signature,
@@ -1311,10 +1357,17 @@ public export data Decl =
   --
   -- ⚠️ Exhaustiveness is a WARNING here, exit 0 — a missed arm does not fail the
   -- build, it fails at RUNTIME.  Audit arms as a SET.
+  --
+  -- The four `…ParamKinds`/`typaramKinds` fields below are the DECLARED kinds
+  -- of the head's type parameters (EFFECTS-SEMANTICS §6.1).  Each is
+  -- POSITIONAL and the same length as the sibling name list, carrying `None`
+  -- wherever the head wrote a bare parameter — partial annotation (§6.3) is
+  -- the common case, so a `Some` in one slot says nothing about the others.
   | DData {
       dataVis : DataVis,
       dataName : String,
       dataParams : List String,
+      dataParamKinds : List (Option KindAnn),
       dataCtors : List Variant,
       dataDerives : List DeriveRef,
       dataOrigin : TyConOrigin,
@@ -1331,6 +1384,7 @@ public export data Decl =
       def : Bool,
       name : String,
       typarams : List String,
+      typaramKinds : List (Option KindAnn),
       supers : List Super,
       methods : List IfaceMethod,
       ifaceOrigin : TyConOrigin,
@@ -1363,6 +1417,7 @@ public export data Decl =
       tyAliasPub : Bool,
       tyAliasName : String,
       tyAliasParams : List String,
+      tyAliasParamKinds : List (Option KindAnn),
       tyAliasRhs : Ty,
       tyAliasOrigin : TyConOrigin,
     }
@@ -1372,6 +1427,7 @@ public export data Decl =
       newtypePub : Bool,
       newtypeName : String,
       newtypeParams : List String,
+      newtypeParamKinds : List (Option KindAnn),
       newtypeCtor : String,
       newtypeFieldTy : Ty,
       newtypeDerives : List DeriveRef,
@@ -1398,22 +1454,24 @@ public export data Decl =
 -- immunity rule cannot repair (`stampDeclOrigin` re-stamps only what a driver
 -- re-runs over, and the emit path runs it once).
 export
-dDataUnresolved : DataVis -> String -> List String -> List Variant -> List DeriveRef -> Decl
-dDataUnresolved vis n params variants derives = DData {
+dDataUnresolved : DataVis -> String -> List String -> List (Option KindAnn) -> List Variant -> List DeriveRef -> Decl
+dDataUnresolved vis n params kinds variants derives = DData {
   dataVis = vis,
   dataName = n,
   dataParams = params,
+  dataParamKinds = kinds,
   dataCtors = variants,
   dataDerives = derives,
   dataOrigin = OriginUnresolved,
 }
 
 export
-dTypeAliasUnresolved : Bool -> String -> List String -> Ty -> Decl
-dTypeAliasUnresolved pub n params rhs = DTypeAlias {
+dTypeAliasUnresolved : Bool -> String -> List String -> List (Option KindAnn) -> Ty -> Decl
+dTypeAliasUnresolved pub n params kinds rhs = DTypeAlias {
   tyAliasPub = pub,
   tyAliasName = n,
   tyAliasParams = params,
+  tyAliasParamKinds = kinds,
   tyAliasRhs = rhs,
   tyAliasOrigin = OriginUnresolved,
 }
@@ -1425,16 +1483,8 @@ dTypeAliasUnresolved pub n params rhs = DTypeAlias {
 -- stamper, and a probe that only patterns on it), and that ratchet is worth more
 -- than the one line of directness it costs here.
 export
-dInterfaceUnresolved : Bool -> Bool -> String -> List String -> List Super -> List IfaceMethod -> Decl
-dInterfaceUnresolved pub isDefault n typarams supers methods = DInterface {
-  pub = pub,
-  def = isDefault,
-  name = n,
-  typarams = typarams,
-  supers = supers,
-  methods = methods,
-  ifaceOrigin = OriginUnresolved,
-}
+dInterfaceUnresolved : Bool -> Bool -> String -> List String -> List (Option KindAnn) -> List Super -> List IfaceMethod -> Decl
+dInterfaceUnresolved pub isDefault n typarams kinds supers methods = DInterface { pub = pub, def = isDefault, name = n, typarams = typarams, typaramKinds = kinds, supers = supers, methods = methods, ifaceOrigin = OriginUnresolved }
 
 -- ⚠️ `DImpl` mints an OCCURRENCE carrier, not a decl-layer one (see its comment
 -- above), so this helper belongs to the `constraintUnresolved` family and NOT to
@@ -1455,11 +1505,12 @@ dImplUnresolved pub iface tys reqs methods = DImpl {
 }
 
 export
-dNewtypeUnresolved : Bool -> String -> List String -> String -> Ty -> List DeriveRef -> Decl
-dNewtypeUnresolved pub n params con fty derives = DNewtype {
+dNewtypeUnresolved : Bool -> String -> List String -> List (Option KindAnn) -> String -> Ty -> List DeriveRef -> Decl
+dNewtypeUnresolved pub n params kinds con fty derives = DNewtype {
   newtypePub = pub,
   newtypeName = n,
   newtypeParams = params,
+  newtypeParamKinds = kinds,
   newtypeCtor = con,
   newtypeFieldTy = fty,
   newtypeDerives = derives,
@@ -1981,6 +2032,21 @@ mapKvsB f ((k, v)::rest) =
 (DData Public "Constraint" () ((variant "Constraint" (ConNamed (field "constraintHead" (TyCon "String")) (field "constraintArgs" (TyApp (TyCon "List") (TyCon "Ty"))) (field "constraintOrigin" (TyCon "TyConOrigin"))))) ())
 (DTypeSig true "constraintUnresolved" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Constraint"))))
 (DFunDef false "constraintUnresolved" ((PVar "iface") (PVar "args")) (ERecordCreate "Constraint" ((fa "constraintHead" (EVar "iface")) (fa "constraintArgs" (EVar "args")) (fa "constraintOrigin" (EVar "OriginUnresolved")))))
+(DData Public "KindAnn" () ((variant "KindType" (ConPos)) (variant "KindEffect" (ConPos)) (variant "KindArrow" (ConPos (TyCon "KindAnn") (TyCon "KindAnn")))) ())
+(DTypeSig true "kindAnnSource" (TyFun (TyCon "KindAnn") (TyCon "String")))
+(DFunDef false "kindAnnSource" ((PCon "KindType")) (ELit (LString "Type")))
+(DFunDef false "kindAnnSource" ((PCon "KindEffect")) (ELit (LString "Effect")))
+(DFunDef false "kindAnnSource" ((PCon "KindArrow" (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "kindAnnArg") (EVar "a")))) (ELit (LString " -> "))) (EApp (EVar "display") (EApp (EVar "kindAnnSource") (EVar "b")))) (ELit (LString ""))))
+(DTypeSig false "kindAnnArg" (TyFun (TyCon "KindAnn") (TyCon "String")))
+(DFunDef false "kindAnnArg" ((PAs "k" (PCon "KindArrow" PWild PWild))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EApp (EVar "kindAnnSource") (EVar "k")))) (ELit (LString ")"))))
+(DFunDef false "kindAnnArg" ((PVar "k")) (EApp (EVar "kindAnnSource") (EVar "k")))
+(DTypeSig true "tyParamSource" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "KindAnn")) (TyCon "String"))))
+(DFunDef false "tyParamSource" ((PVar "p") (PCon "None")) (EVar "p"))
+(DFunDef false "tyParamSource" ((PVar "p") (PCon "Some" (PVar "k"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EVar "p"))) (ELit (LString " : "))) (EApp (EVar "display") (EApp (EVar "kindAnnSource") (EVar "k")))) (ELit (LString ")"))))
+(DTypeSig true "tyParamSources" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "tyParamSources" ((PList) PWild) (EListLit))
+(DFunDef false "tyParamSources" ((PCons (PVar "p") (PVar "ps")) (PCons (PVar "k") (PVar "ks"))) (EBinOp "::" (EApp (EApp (EVar "tyParamSource") (EVar "p")) (EVar "k")) (EApp (EApp (EVar "tyParamSources") (EVar "ps")) (EVar "ks"))))
+(DFunDef false "tyParamSources" ((PCons (PVar "p") (PVar "ps")) (PList)) (EBinOp "::" (EVar "p") (EApp (EApp (EVar "tyParamSources") (EVar "ps")) (EListLit))))
 (DTypeSig true "orElseLoc" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "Loc")))))
 (DFunDef false "orElseLoc" ((PCon "Some" (PVar "l")) PWild) (EApp (EVar "Some") (EVar "l")))
 (DFunDef false "orElseLoc" ((PCon "None") (PVar "fallback")) (EVar "fallback"))
@@ -2038,17 +2104,17 @@ mapKvsB f ((k, v)::rest) =
 (DData Public "DeriveRef" () ((variant "DeriveRef" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
 (DTypeSig true "deriveRefName" (TyFun (TyCon "DeriveRef") (TyCon "String")))
 (DFunDef false "deriveRefName" ((PCon "DeriveRef" (PVar "n") PWild)) (EVar "n"))
-(DData Public "Decl" () ((variant "DTypeSig" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Ty"))) (variant "DExtern" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Ty"))) (variant "DFunDef" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (variant "DData" (ConNamed (field "dataVis" (TyCon "DataVis")) (field "dataName" (TyCon "String")) (field "dataParams" (TyApp (TyCon "List") (TyCon "String"))) (field "dataCtors" (TyApp (TyCon "List") (TyCon "Variant"))) (field "dataDerives" (TyApp (TyCon "List") (TyCon "DeriveRef"))) (field "dataOrigin" (TyCon "TyConOrigin")))) (variant "DUse" (ConPos (TyCon "Bool") (TyCon "UsePath") (TyCon "Loc"))) (variant "DEffect" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (variant "DProp" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "List") (TyCon "PropParam")) (TyCon "Expr"))) (variant "DTest" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Expr"))) (variant "DBench" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Expr"))) (variant "DInterface" (ConNamed (field "pub" (TyCon "Bool")) (field "def" (TyCon "Bool")) (field "name" (TyCon "String")) (field "typarams" (TyApp (TyCon "List") (TyCon "String"))) (field "supers" (TyApp (TyCon "List") (TyCon "Super"))) (field "methods" (TyApp (TyCon "List") (TyCon "IfaceMethod"))) (field "ifaceOrigin" (TyCon "TyConOrigin")))) (variant "DImpl" (ConNamed (field "pub" (TyCon "Bool")) (field "iface" (TyCon "String")) (field "tys" (TyApp (TyCon "List") (TyCon "Ty"))) (field "reqs" (TyApp (TyCon "List") (TyCon "Require"))) (field "methods" (TyApp (TyCon "List") (TyCon "ImplMethod"))) (field "implOrigin" (TyCon "TyConOrigin")))) (variant "DTypeAlias" (ConNamed (field "tyAliasPub" (TyCon "Bool")) (field "tyAliasName" (TyCon "String")) (field "tyAliasParams" (TyApp (TyCon "List") (TyCon "String"))) (field "tyAliasRhs" (TyCon "Ty")) (field "tyAliasOrigin" (TyCon "TyConOrigin")))) (variant "DNewtype" (ConNamed (field "newtypePub" (TyCon "Bool")) (field "newtypeName" (TyCon "String")) (field "newtypeParams" (TyApp (TyCon "List") (TyCon "String"))) (field "newtypeCtor" (TyCon "String")) (field "newtypeFieldTy" (TyCon "Ty")) (field "newtypeDerives" (TyApp (TyCon "List") (TyCon "DeriveRef"))) (field "newtypeOrigin" (TyCon "TyConOrigin")))) (variant "DLetGroup" (ConPos (TyCon "Bool") (TyApp (TyCon "List") (TyCon "LetBind")))) (variant "DAttrib" (ConPos (TyApp (TyCon "List") (TyCon "Attr")) (TyCon "Decl")))) ())
-(DTypeSig true "dDataUnresolved" (TyFun (TyCon "DataVis") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyApp (TyCon "List") (TyCon "DeriveRef")) (TyCon "Decl")))))))
-(DFunDef false "dDataUnresolved" ((PVar "vis") (PVar "n") (PVar "params") (PVar "variants") (PVar "derives")) (ERecordCreate "DData" ((fa "dataVis" (EVar "vis")) (fa "dataName" (EVar "n")) (fa "dataParams" (EVar "params")) (fa "dataCtors" (EVar "variants")) (fa "dataDerives" (EVar "derives")) (fa "dataOrigin" (EVar "OriginUnresolved")))))
-(DTypeSig true "dTypeAliasUnresolved" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyCon "Decl"))))))
-(DFunDef false "dTypeAliasUnresolved" ((PVar "pub") (PVar "n") (PVar "params") (PVar "rhs")) (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "pub")) (fa "tyAliasName" (EVar "n")) (fa "tyAliasParams" (EVar "params")) (fa "tyAliasRhs" (EVar "rhs")) (fa "tyAliasOrigin" (EVar "OriginUnresolved")))))
-(DTypeSig true "dInterfaceUnresolved" (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Super")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyCon "Decl"))))))))
-(DFunDef false "dInterfaceUnresolved" ((PVar "pub") (PVar "isDefault") (PVar "n") (PVar "typarams") (PVar "supers") (PVar "methods")) (ERecordCreate "DInterface" ((fa "pub" (EVar "pub")) (fa "def" (EVar "isDefault")) (fa "name" (EVar "n")) (fa "typarams" (EVar "typarams")) (fa "supers" (EVar "supers")) (fa "methods" (EVar "methods")) (fa "ifaceOrigin" (EVar "OriginUnresolved")))))
+(DData Public "Decl" () ((variant "DTypeSig" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Ty"))) (variant "DExtern" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Ty"))) (variant "DFunDef" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (variant "DData" (ConNamed (field "dataVis" (TyCon "DataVis")) (field "dataName" (TyCon "String")) (field "dataParams" (TyApp (TyCon "List") (TyCon "String"))) (field "dataParamKinds" (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn")))) (field "dataCtors" (TyApp (TyCon "List") (TyCon "Variant"))) (field "dataDerives" (TyApp (TyCon "List") (TyCon "DeriveRef"))) (field "dataOrigin" (TyCon "TyConOrigin")))) (variant "DUse" (ConPos (TyCon "Bool") (TyCon "UsePath") (TyCon "Loc"))) (variant "DEffect" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (variant "DProp" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "List") (TyCon "PropParam")) (TyCon "Expr"))) (variant "DTest" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Expr"))) (variant "DBench" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Expr"))) (variant "DInterface" (ConNamed (field "pub" (TyCon "Bool")) (field "def" (TyCon "Bool")) (field "name" (TyCon "String")) (field "typarams" (TyApp (TyCon "List") (TyCon "String"))) (field "typaramKinds" (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn")))) (field "supers" (TyApp (TyCon "List") (TyCon "Super"))) (field "methods" (TyApp (TyCon "List") (TyCon "IfaceMethod"))) (field "ifaceOrigin" (TyCon "TyConOrigin")))) (variant "DImpl" (ConNamed (field "pub" (TyCon "Bool")) (field "iface" (TyCon "String")) (field "tys" (TyApp (TyCon "List") (TyCon "Ty"))) (field "reqs" (TyApp (TyCon "List") (TyCon "Require"))) (field "methods" (TyApp (TyCon "List") (TyCon "ImplMethod"))) (field "implOrigin" (TyCon "TyConOrigin")))) (variant "DTypeAlias" (ConNamed (field "tyAliasPub" (TyCon "Bool")) (field "tyAliasName" (TyCon "String")) (field "tyAliasParams" (TyApp (TyCon "List") (TyCon "String"))) (field "tyAliasParamKinds" (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn")))) (field "tyAliasRhs" (TyCon "Ty")) (field "tyAliasOrigin" (TyCon "TyConOrigin")))) (variant "DNewtype" (ConNamed (field "newtypePub" (TyCon "Bool")) (field "newtypeName" (TyCon "String")) (field "newtypeParams" (TyApp (TyCon "List") (TyCon "String"))) (field "newtypeParamKinds" (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn")))) (field "newtypeCtor" (TyCon "String")) (field "newtypeFieldTy" (TyCon "Ty")) (field "newtypeDerives" (TyApp (TyCon "List") (TyCon "DeriveRef"))) (field "newtypeOrigin" (TyCon "TyConOrigin")))) (variant "DLetGroup" (ConPos (TyCon "Bool") (TyApp (TyCon "List") (TyCon "LetBind")))) (variant "DAttrib" (ConPos (TyApp (TyCon "List") (TyCon "Attr")) (TyCon "Decl")))) ())
+(DTypeSig true "dDataUnresolved" (TyFun (TyCon "DataVis") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyApp (TyCon "List") (TyCon "DeriveRef")) (TyCon "Decl"))))))))
+(DFunDef false "dDataUnresolved" ((PVar "vis") (PVar "n") (PVar "params") (PVar "kinds") (PVar "variants") (PVar "derives")) (ERecordCreate "DData" ((fa "dataVis" (EVar "vis")) (fa "dataName" (EVar "n")) (fa "dataParams" (EVar "params")) (fa "dataParamKinds" (EVar "kinds")) (fa "dataCtors" (EVar "variants")) (fa "dataDerives" (EVar "derives")) (fa "dataOrigin" (EVar "OriginUnresolved")))))
+(DTypeSig true "dTypeAliasUnresolved" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyFun (TyCon "Ty") (TyCon "Decl")))))))
+(DFunDef false "dTypeAliasUnresolved" ((PVar "pub") (PVar "n") (PVar "params") (PVar "kinds") (PVar "rhs")) (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "pub")) (fa "tyAliasName" (EVar "n")) (fa "tyAliasParams" (EVar "params")) (fa "tyAliasParamKinds" (EVar "kinds")) (fa "tyAliasRhs" (EVar "rhs")) (fa "tyAliasOrigin" (EVar "OriginUnresolved")))))
+(DTypeSig true "dInterfaceUnresolved" (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyFun (TyApp (TyCon "List") (TyCon "Super")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyCon "Decl")))))))))
+(DFunDef false "dInterfaceUnresolved" ((PVar "pub") (PVar "isDefault") (PVar "n") (PVar "typarams") (PVar "kinds") (PVar "supers") (PVar "methods")) (ERecordCreate "DInterface" ((fa "pub" (EVar "pub")) (fa "def" (EVar "isDefault")) (fa "name" (EVar "n")) (fa "typarams" (EVar "typarams")) (fa "typaramKinds" (EVar "kinds")) (fa "supers" (EVar "supers")) (fa "methods" (EVar "methods")) (fa "ifaceOrigin" (EVar "OriginUnresolved")))))
 (DTypeSig true "dImplUnresolved" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyFun (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyCon "Decl")))))))
 (DFunDef false "dImplUnresolved" ((PVar "pub") (PVar "iface") (PVar "tys") (PVar "reqs") (PVar "methods")) (ERecordCreate "DImpl" ((fa "pub" (EVar "pub")) (fa "iface" (EVar "iface")) (fa "tys" (EVar "tys")) (fa "reqs" (EVar "reqs")) (fa "methods" (EVar "methods")) (fa "implOrigin" (EVar "OriginUnresolved")))))
-(DTypeSig true "dNewtypeUnresolved" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "DeriveRef")) (TyCon "Decl"))))))))
-(DFunDef false "dNewtypeUnresolved" ((PVar "pub") (PVar "n") (PVar "params") (PVar "con") (PVar "fty") (PVar "derives")) (ERecordCreate "DNewtype" ((fa "newtypePub" (EVar "pub")) (fa "newtypeName" (EVar "n")) (fa "newtypeParams" (EVar "params")) (fa "newtypeCtor" (EVar "con")) (fa "newtypeFieldTy" (EVar "fty")) (fa "newtypeDerives" (EVar "derives")) (fa "newtypeOrigin" (EVar "OriginUnresolved")))))
+(DTypeSig true "dNewtypeUnresolved" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "DeriveRef")) (TyCon "Decl")))))))))
+(DFunDef false "dNewtypeUnresolved" ((PVar "pub") (PVar "n") (PVar "params") (PVar "kinds") (PVar "con") (PVar "fty") (PVar "derives")) (ERecordCreate "DNewtype" ((fa "newtypePub" (EVar "pub")) (fa "newtypeName" (EVar "n")) (fa "newtypeParams" (EVar "params")) (fa "newtypeParamKinds" (EVar "kinds")) (fa "newtypeCtor" (EVar "con")) (fa "newtypeFieldTy" (EVar "fty")) (fa "newtypeDerives" (EVar "derives")) (fa "newtypeOrigin" (EVar "OriginUnresolved")))))
 (DTypeSig true "mapTyFull" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool")))))
 (DFunDef false "mapTyFull" ((PVar "f") (PVar "ty")) (EBlock (DoLet false false (PTuple (PVar "ty1") (PVar "c1")) (EApp (EApp (EVar "mapTyKids") (EVar "f")) (EVar "ty"))) (DoLet false false (PTuple (PVar "ty2") (PVar "c2")) (EApp (EVar "f") (EVar "ty1"))) (DoExpr (ETuple (EVar "ty2") (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DTypeSig false "mapTyKids" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool")))))
@@ -2253,6 +2319,21 @@ mapKvsB f ((k, v)::rest) =
 (DData Public "Constraint" () ((variant "Constraint" (ConNamed (field "constraintHead" (TyCon "String")) (field "constraintArgs" (TyApp (TyCon "List") (TyCon "Ty"))) (field "constraintOrigin" (TyCon "TyConOrigin"))))) ())
 (DTypeSig true "constraintUnresolved" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Constraint"))))
 (DFunDef false "constraintUnresolved" ((PVar "iface") (PVar "args")) (ERecordCreate "Constraint" ((fa "constraintHead" (EVar "iface")) (fa "constraintArgs" (EVar "args")) (fa "constraintOrigin" (EVar "OriginUnresolved")))))
+(DData Public "KindAnn" () ((variant "KindType" (ConPos)) (variant "KindEffect" (ConPos)) (variant "KindArrow" (ConPos (TyCon "KindAnn") (TyCon "KindAnn")))) ())
+(DTypeSig true "kindAnnSource" (TyFun (TyCon "KindAnn") (TyCon "String")))
+(DFunDef false "kindAnnSource" ((PCon "KindType")) (ELit (LString "Type")))
+(DFunDef false "kindAnnSource" ((PCon "KindEffect")) (ELit (LString "Effect")))
+(DFunDef false "kindAnnSource" ((PCon "KindArrow" (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "kindAnnArg") (EVar "a")))) (ELit (LString " -> "))) (EApp (EMethodRef "display") (EApp (EVar "kindAnnSource") (EVar "b")))) (ELit (LString ""))))
+(DTypeSig false "kindAnnArg" (TyFun (TyCon "KindAnn") (TyCon "String")))
+(DFunDef false "kindAnnArg" ((PAs "k" (PCon "KindArrow" PWild PWild))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EApp (EVar "kindAnnSource") (EVar "k")))) (ELit (LString ")"))))
+(DFunDef false "kindAnnArg" ((PVar "k")) (EApp (EVar "kindAnnSource") (EVar "k")))
+(DTypeSig true "tyParamSource" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "KindAnn")) (TyCon "String"))))
+(DFunDef false "tyParamSource" ((PVar "p") (PCon "None")) (EVar "p"))
+(DFunDef false "tyParamSource" ((PVar "p") (PCon "Some" (PVar "k"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EVar "p"))) (ELit (LString " : "))) (EApp (EMethodRef "display") (EApp (EVar "kindAnnSource") (EVar "k")))) (ELit (LString ")"))))
+(DTypeSig true "tyParamSources" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "tyParamSources" ((PList) PWild) (EListLit))
+(DFunDef false "tyParamSources" ((PCons (PVar "p") (PVar "ps")) (PCons (PVar "k") (PVar "ks"))) (EBinOp "::" (EApp (EApp (EVar "tyParamSource") (EVar "p")) (EVar "k")) (EApp (EApp (EVar "tyParamSources") (EVar "ps")) (EVar "ks"))))
+(DFunDef false "tyParamSources" ((PCons (PVar "p") (PVar "ps")) (PList)) (EBinOp "::" (EVar "p") (EApp (EApp (EVar "tyParamSources") (EVar "ps")) (EListLit))))
 (DTypeSig true "orElseLoc" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "Loc")))))
 (DFunDef false "orElseLoc" ((PCon "Some" (PVar "l")) PWild) (EApp (EVar "Some") (EVar "l")))
 (DFunDef false "orElseLoc" ((PCon "None") (PVar "fallback")) (EVar "fallback"))
@@ -2310,17 +2391,17 @@ mapKvsB f ((k, v)::rest) =
 (DData Public "DeriveRef" () ((variant "DeriveRef" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
 (DTypeSig true "deriveRefName" (TyFun (TyCon "DeriveRef") (TyCon "String")))
 (DFunDef false "deriveRefName" ((PCon "DeriveRef" (PVar "n") PWild)) (EVar "n"))
-(DData Public "Decl" () ((variant "DTypeSig" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Ty"))) (variant "DExtern" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Ty"))) (variant "DFunDef" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (variant "DData" (ConNamed (field "dataVis" (TyCon "DataVis")) (field "dataName" (TyCon "String")) (field "dataParams" (TyApp (TyCon "List") (TyCon "String"))) (field "dataCtors" (TyApp (TyCon "List") (TyCon "Variant"))) (field "dataDerives" (TyApp (TyCon "List") (TyCon "DeriveRef"))) (field "dataOrigin" (TyCon "TyConOrigin")))) (variant "DUse" (ConPos (TyCon "Bool") (TyCon "UsePath") (TyCon "Loc"))) (variant "DEffect" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (variant "DProp" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "List") (TyCon "PropParam")) (TyCon "Expr"))) (variant "DTest" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Expr"))) (variant "DBench" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Expr"))) (variant "DInterface" (ConNamed (field "pub" (TyCon "Bool")) (field "def" (TyCon "Bool")) (field "name" (TyCon "String")) (field "typarams" (TyApp (TyCon "List") (TyCon "String"))) (field "supers" (TyApp (TyCon "List") (TyCon "Super"))) (field "methods" (TyApp (TyCon "List") (TyCon "IfaceMethod"))) (field "ifaceOrigin" (TyCon "TyConOrigin")))) (variant "DImpl" (ConNamed (field "pub" (TyCon "Bool")) (field "iface" (TyCon "String")) (field "tys" (TyApp (TyCon "List") (TyCon "Ty"))) (field "reqs" (TyApp (TyCon "List") (TyCon "Require"))) (field "methods" (TyApp (TyCon "List") (TyCon "ImplMethod"))) (field "implOrigin" (TyCon "TyConOrigin")))) (variant "DTypeAlias" (ConNamed (field "tyAliasPub" (TyCon "Bool")) (field "tyAliasName" (TyCon "String")) (field "tyAliasParams" (TyApp (TyCon "List") (TyCon "String"))) (field "tyAliasRhs" (TyCon "Ty")) (field "tyAliasOrigin" (TyCon "TyConOrigin")))) (variant "DNewtype" (ConNamed (field "newtypePub" (TyCon "Bool")) (field "newtypeName" (TyCon "String")) (field "newtypeParams" (TyApp (TyCon "List") (TyCon "String"))) (field "newtypeCtor" (TyCon "String")) (field "newtypeFieldTy" (TyCon "Ty")) (field "newtypeDerives" (TyApp (TyCon "List") (TyCon "DeriveRef"))) (field "newtypeOrigin" (TyCon "TyConOrigin")))) (variant "DLetGroup" (ConPos (TyCon "Bool") (TyApp (TyCon "List") (TyCon "LetBind")))) (variant "DAttrib" (ConPos (TyApp (TyCon "List") (TyCon "Attr")) (TyCon "Decl")))) ())
-(DTypeSig true "dDataUnresolved" (TyFun (TyCon "DataVis") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyApp (TyCon "List") (TyCon "DeriveRef")) (TyCon "Decl")))))))
-(DFunDef false "dDataUnresolved" ((PVar "vis") (PVar "n") (PVar "params") (PVar "variants") (PVar "derives")) (ERecordCreate "DData" ((fa "dataVis" (EVar "vis")) (fa "dataName" (EVar "n")) (fa "dataParams" (EVar "params")) (fa "dataCtors" (EVar "variants")) (fa "dataDerives" (EVar "derives")) (fa "dataOrigin" (EVar "OriginUnresolved")))))
-(DTypeSig true "dTypeAliasUnresolved" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyCon "Decl"))))))
-(DFunDef false "dTypeAliasUnresolved" ((PVar "pub") (PVar "n") (PVar "params") (PVar "rhs")) (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "pub")) (fa "tyAliasName" (EVar "n")) (fa "tyAliasParams" (EVar "params")) (fa "tyAliasRhs" (EVar "rhs")) (fa "tyAliasOrigin" (EVar "OriginUnresolved")))))
-(DTypeSig true "dInterfaceUnresolved" (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Super")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyCon "Decl"))))))))
-(DFunDef false "dInterfaceUnresolved" ((PVar "pub") (PVar "isDefault") (PVar "n") (PVar "typarams") (PVar "supers") (PVar "methods")) (ERecordCreate "DInterface" ((fa "pub" (EVar "pub")) (fa "def" (EVar "isDefault")) (fa "name" (EVar "n")) (fa "typarams" (EVar "typarams")) (fa "supers" (EVar "supers")) (fa "methods" (EVar "methods")) (fa "ifaceOrigin" (EVar "OriginUnresolved")))))
+(DData Public "Decl" () ((variant "DTypeSig" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Ty"))) (variant "DExtern" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Ty"))) (variant "DFunDef" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (variant "DData" (ConNamed (field "dataVis" (TyCon "DataVis")) (field "dataName" (TyCon "String")) (field "dataParams" (TyApp (TyCon "List") (TyCon "String"))) (field "dataParamKinds" (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn")))) (field "dataCtors" (TyApp (TyCon "List") (TyCon "Variant"))) (field "dataDerives" (TyApp (TyCon "List") (TyCon "DeriveRef"))) (field "dataOrigin" (TyCon "TyConOrigin")))) (variant "DUse" (ConPos (TyCon "Bool") (TyCon "UsePath") (TyCon "Loc"))) (variant "DEffect" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (variant "DProp" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "List") (TyCon "PropParam")) (TyCon "Expr"))) (variant "DTest" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Expr"))) (variant "DBench" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Expr"))) (variant "DInterface" (ConNamed (field "pub" (TyCon "Bool")) (field "def" (TyCon "Bool")) (field "name" (TyCon "String")) (field "typarams" (TyApp (TyCon "List") (TyCon "String"))) (field "typaramKinds" (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn")))) (field "supers" (TyApp (TyCon "List") (TyCon "Super"))) (field "methods" (TyApp (TyCon "List") (TyCon "IfaceMethod"))) (field "ifaceOrigin" (TyCon "TyConOrigin")))) (variant "DImpl" (ConNamed (field "pub" (TyCon "Bool")) (field "iface" (TyCon "String")) (field "tys" (TyApp (TyCon "List") (TyCon "Ty"))) (field "reqs" (TyApp (TyCon "List") (TyCon "Require"))) (field "methods" (TyApp (TyCon "List") (TyCon "ImplMethod"))) (field "implOrigin" (TyCon "TyConOrigin")))) (variant "DTypeAlias" (ConNamed (field "tyAliasPub" (TyCon "Bool")) (field "tyAliasName" (TyCon "String")) (field "tyAliasParams" (TyApp (TyCon "List") (TyCon "String"))) (field "tyAliasParamKinds" (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn")))) (field "tyAliasRhs" (TyCon "Ty")) (field "tyAliasOrigin" (TyCon "TyConOrigin")))) (variant "DNewtype" (ConNamed (field "newtypePub" (TyCon "Bool")) (field "newtypeName" (TyCon "String")) (field "newtypeParams" (TyApp (TyCon "List") (TyCon "String"))) (field "newtypeParamKinds" (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn")))) (field "newtypeCtor" (TyCon "String")) (field "newtypeFieldTy" (TyCon "Ty")) (field "newtypeDerives" (TyApp (TyCon "List") (TyCon "DeriveRef"))) (field "newtypeOrigin" (TyCon "TyConOrigin")))) (variant "DLetGroup" (ConPos (TyCon "Bool") (TyApp (TyCon "List") (TyCon "LetBind")))) (variant "DAttrib" (ConPos (TyApp (TyCon "List") (TyCon "Attr")) (TyCon "Decl")))) ())
+(DTypeSig true "dDataUnresolved" (TyFun (TyCon "DataVis") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyApp (TyCon "List") (TyCon "DeriveRef")) (TyCon "Decl"))))))))
+(DFunDef false "dDataUnresolved" ((PVar "vis") (PVar "n") (PVar "params") (PVar "kinds") (PVar "variants") (PVar "derives")) (ERecordCreate "DData" ((fa "dataVis" (EVar "vis")) (fa "dataName" (EVar "n")) (fa "dataParams" (EVar "params")) (fa "dataParamKinds" (EVar "kinds")) (fa "dataCtors" (EVar "variants")) (fa "dataDerives" (EVar "derives")) (fa "dataOrigin" (EVar "OriginUnresolved")))))
+(DTypeSig true "dTypeAliasUnresolved" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyFun (TyCon "Ty") (TyCon "Decl")))))))
+(DFunDef false "dTypeAliasUnresolved" ((PVar "pub") (PVar "n") (PVar "params") (PVar "kinds") (PVar "rhs")) (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "pub")) (fa "tyAliasName" (EVar "n")) (fa "tyAliasParams" (EVar "params")) (fa "tyAliasParamKinds" (EVar "kinds")) (fa "tyAliasRhs" (EVar "rhs")) (fa "tyAliasOrigin" (EVar "OriginUnresolved")))))
+(DTypeSig true "dInterfaceUnresolved" (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyFun (TyApp (TyCon "List") (TyCon "Super")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyCon "Decl")))))))))
+(DFunDef false "dInterfaceUnresolved" ((PVar "pub") (PVar "isDefault") (PVar "n") (PVar "typarams") (PVar "kinds") (PVar "supers") (PVar "methods")) (ERecordCreate "DInterface" ((fa "pub" (EVar "pub")) (fa "def" (EVar "isDefault")) (fa "name" (EVar "n")) (fa "typarams" (EVar "typarams")) (fa "typaramKinds" (EVar "kinds")) (fa "supers" (EVar "supers")) (fa "methods" (EVar "methods")) (fa "ifaceOrigin" (EVar "OriginUnresolved")))))
 (DTypeSig true "dImplUnresolved" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyFun (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyCon "Decl")))))))
 (DFunDef false "dImplUnresolved" ((PVar "pub") (PVar "iface") (PVar "tys") (PVar "reqs") (PVar "methods")) (ERecordCreate "DImpl" ((fa "pub" (EVar "pub")) (fa "iface" (EVar "iface")) (fa "tys" (EVar "tys")) (fa "reqs" (EVar "reqs")) (fa "methods" (EVar "methods")) (fa "implOrigin" (EVar "OriginUnresolved")))))
-(DTypeSig true "dNewtypeUnresolved" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "DeriveRef")) (TyCon "Decl"))))))))
-(DFunDef false "dNewtypeUnresolved" ((PVar "pub") (PVar "n") (PVar "params") (PVar "con") (PVar "fty") (PVar "derives")) (ERecordCreate "DNewtype" ((fa "newtypePub" (EVar "pub")) (fa "newtypeName" (EVar "n")) (fa "newtypeParams" (EVar "params")) (fa "newtypeCtor" (EVar "con")) (fa "newtypeFieldTy" (EVar "fty")) (fa "newtypeDerives" (EVar "derives")) (fa "newtypeOrigin" (EVar "OriginUnresolved")))))
+(DTypeSig true "dNewtypeUnresolved" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "DeriveRef")) (TyCon "Decl")))))))))
+(DFunDef false "dNewtypeUnresolved" ((PVar "pub") (PVar "n") (PVar "params") (PVar "kinds") (PVar "con") (PVar "fty") (PVar "derives")) (ERecordCreate "DNewtype" ((fa "newtypePub" (EVar "pub")) (fa "newtypeName" (EVar "n")) (fa "newtypeParams" (EVar "params")) (fa "newtypeParamKinds" (EVar "kinds")) (fa "newtypeCtor" (EVar "con")) (fa "newtypeFieldTy" (EVar "fty")) (fa "newtypeDerives" (EVar "derives")) (fa "newtypeOrigin" (EVar "OriginUnresolved")))))
 (DTypeSig true "mapTyFull" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool")))))
 (DFunDef false "mapTyFull" ((PVar "f") (PVar "ty")) (EBlock (DoLet false false (PTuple (PVar "ty1") (PVar "c1")) (EApp (EApp (EVar "mapTyKids") (EVar "f")) (EVar "ty"))) (DoLet false false (PTuple (PVar "ty2") (PVar "c2")) (EApp (EVar "f") (EVar "ty1"))) (DoExpr (ETuple (EVar "ty2") (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DTypeSig false "mapTyKids" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool")))))

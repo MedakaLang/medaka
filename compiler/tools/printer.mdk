@@ -26,6 +26,8 @@ import frontend.ast.{
   dDataUnresolved,
   Lit(..),
   Ty(..),
+  KindAnn(..),
+  tyParamSources,
   Constraint(..),
   Pat(..),
   RecPatField(..),
@@ -1754,21 +1756,31 @@ fieldTyDoc (Field fn ft) = Cat (text fn) (Cat (text " : ") (printType ft))
 -- interior-comment splice re-attaches each field's trailing comment by source-line
 -- index.  Falls back to the plain renderer for any non-single-ConNamed shape.
 export
-printNamedFieldData : DataVis -> String -> List String -> List Variant -> List DeriveRef -> Doc
-printNamedFieldData vis n params [Variant cname (ConNamed fields nameOmitted)] derives =
+printNamedFieldData : DataVis -> String -> List String -> List (Option KindAnn) -> List Variant -> List DeriveRef -> Doc
+printNamedFieldData vis n params kinds [Variant cname (ConNamed fields nameOmitted)] derives =
   let eqPart = if nameOmitted then text " =" else Cat (text " = ") (text cname)
-  let head = Cat (text "data ") (Cat (text n) (Cat (concatD (map (p => Cat (text " ") (text p)) params)) eqPart))
+  let head = Cat (text "data ") (Cat (text n) (Cat (tyParamsDoc params kinds) eqPart))
   let body = Cat (text " {") (Cat (Nest 4 (concatD (map (f => Cat Hardline (Cat (fieldTyDoc f) (text ","))) fields))) (indentBlock (text "}")))
   let deriveDoc = if isEmptyL derives then
     Nil
   else
     Cat Hardline (printDerives derives)
   Cat (visPrefix vis) (Cat head (Cat body deriveDoc))
-printNamedFieldData vis n params variants derives =
+printNamedFieldData vis n params kinds variants derives =
   -- #1110: the printer STRIPS decl identity (it is not renderable — a
   -- module-qualified name in type position is a parse error), so rebuilding an
   -- unstamped node here cannot change a byte of the output.
-  printDecl (dDataUnresolved vis n params variants derives)
+  printDecl (dDataUnresolved vis n params kinds variants derives)
+
+-- A declaration head's type parameters, each preceded by a space: `a`, or
+-- `(e : Effect)` where the head declared a kind (EFFECTS-SEMANTICS §6.1).
+-- Rendering the annotation is not cosmetic plumbing — `fmt` formats through
+-- this printer, so dropping one here would DELETE a kind from the user's
+-- source.  `tyParamSources` (`frontend/ast`) owns the spelling; this only
+-- lays the words out.
+tyParamsDoc : List String -> List (Option KindAnn) -> Doc
+tyParamsDoc params kinds =
+  concatD (map (w => Cat (text " ") (text w)) (tyParamSources params kinds))
 
 printDerives : List DeriveRef -> Doc
 printDerives [] = Nil
@@ -1809,9 +1821,9 @@ dataVariantDocs (v::vs) = Cat
 -- the one-variant-per-line layout via `Hardline` (never the soft `Line`
 -- `dataVariantDocs` uses), so a documented `data` is never reflowed flat.
 export
-printDataDeclCommented : DataVis -> String -> List String -> List Variant -> List DeriveRef -> List (List String, List String) -> Doc
-printDataDeclCommented vis n params variants derives vcomments =
-  let head = Cat (text "data ") (Cat (text n) (concatD (map (p => Cat (text " ") (text p)) params)))
+printDataDeclCommented : DataVis -> String -> List String -> List (Option KindAnn) -> List Variant -> List DeriveRef -> List (List String, List String) -> Doc
+printDataDeclCommented vis n params kinds variants derives vcomments =
+  let head = Cat (text "data ") (Cat (text n) (tyParamsDoc params kinds))
   let variantDocs = dataVariantDocsCommented variants vcomments
   let deriveDoc = if isEmptyL derives then
     Nil
@@ -1875,31 +1887,17 @@ printDecl (DFunDef pub n pats body) =
   Cat header (printDefRhs body)
 printDecl (DLetGroup pub bindings) =
   Cat (if pub then text "export " else Nil) (letGroupDecl bindings)
-printDecl (DData { dataVis = vis, dataName = n, dataParams = params, dataCtors = variants, dataDerives = derives }) =
-  let head = Cat (text "data ") (Cat (text n) (concatD (map (p => Cat (text " ") (text p)) params)))
+printDecl (DData { dataVis = vis, dataName = n, dataParams = params, dataParamKinds = kinds, dataCtors = variants, dataDerives = derives }) =
+  let head = Cat (text "data ") (Cat (text n) (tyParamsDoc params kinds))
   let variantDocs = dataVariantDocs variants
   let deriveDoc = if isEmptyL derives then
     Nil
   else
     Cat Line (printDerives derives)
   group (Cat (visPrefix vis) (Cat head (Cat variantDocs deriveDoc)))
-printDecl (DTypeAlias { tyAliasPub = pub, tyAliasName = n, tyAliasParams = params, tyAliasRhs = rhs }) = Cat (if pub then text "export " else Nil) (Cat (text "type ") (Cat (text n) (Cat (concatD (map (p => Cat (text " ") (text p)) params)) (Cat (text " = ") (printType rhs)))))
-printDecl (DNewtype { newtypePub = pub, newtypeName = n, newtypeParams = params, newtypeCtor = con, newtypeFieldTy = fty, newtypeDerives = derives }) = Cat (if pub then text "export " else Nil) (Cat (text "newtype ") (Cat (text n) (Cat (concatD (map (p => Cat (text " ") (text p)) params)) (Cat (text " = ") (Cat (text con) (Cat (text " ") (Cat (printTypeAtom fty) (if isEmptyL derives then Nil else Cat (text " deriving (") (Cat (text (joinWith ", " (map deriveRefName derives))) (text ")"))))))))))
-printDecl (DInterface { pub, def, name, typarams, supers, methods }) = Cat
-  (if pub then text "export " else Nil)
-  (Cat
-    (if def then text "default " else Nil)
-    (Cat
-      (text "interface ")
-      (Cat
-        (text name)
-        (Cat
-          (concatD (map (p => Cat (text " ") (text p)) typarams))
-          (Cat
-            (superDoc supers)
-            (Cat
-              (text " where")
-              (indentBlock (sepBy Hardline (map ifaceMethodDoc methods)))))))))
+printDecl (DTypeAlias { tyAliasPub = pub, tyAliasName = n, tyAliasParams = params, tyAliasParamKinds = kinds, tyAliasRhs = rhs }) = Cat (if pub then text "export " else Nil) (Cat (text "type ") (Cat (text n) (Cat (tyParamsDoc params kinds) (Cat (text " = ") (printType rhs)))))
+printDecl (DNewtype { newtypePub = pub, newtypeName = n, newtypeParams = params, newtypeParamKinds = kinds, newtypeCtor = con, newtypeFieldTy = fty, newtypeDerives = derives }) = Cat (if pub then text "export " else Nil) (Cat (text "newtype ") (Cat (text n) (Cat (tyParamsDoc params kinds) (Cat (text " = ") (Cat (text con) (Cat (text " ") (Cat (printTypeAtom fty) (if isEmptyL derives then Nil else Cat (text " deriving (") (Cat (text (joinWith ", " (map deriveRefName derives))) (text ")"))))))))))
+printDecl (DInterface { pub, def, name, typarams, typaramKinds, supers, methods }) = Cat (if pub then text "export " else Nil) (Cat (if def then text "default " else Nil) (Cat (text "interface ") (Cat (text name) (Cat (tyParamsDoc typarams typaramKinds) (Cat (superDoc supers) (Cat (text " where") (indentBlock (sepBy Hardline (map ifaceMethodDoc methods)))))))))
 printDecl (DImpl { pub, iface, tys, reqs, methods }) = Cat
   (if pub then text "export " else Nil)
   (Cat

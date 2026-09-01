@@ -766,6 +766,52 @@ constraintUnresolved iface args = Constraint {
   constraintOrigin = OriginUnresolved,
 }
 
+-- ── Declared type-parameter kinds (EFFECTS-SEMANTICS §6.1) ────────────────
+-- The SURFACE spelling of a kind, as written on a declaration head:
+-- `data Async (e : Effect) a`, `interface I (f : Effect -> Type -> Type)`.
+-- `KindArrow` is right-associated by the parser; parentheses survive only as
+-- left-nesting (`(Type -> Type) -> Type`), never as redundant structure, so
+-- the printer can re-derive the source spelling from the tree alone.
+--
+-- Deliberately NOT the typechecker's `Kind` (`KType`/`KRow`, `types/`): this
+-- is a parsed artefact that must round-trip through `fmt` byte-for-byte, and
+-- it exists before any kind inference has run.  The two meet where the
+-- typechecker RESOLVES a parameter's kind, not in the AST.
+public export data KindAnn = KindType | KindEffect | KindArrow KindAnn KindAnn
+
+-- The SOURCE spelling of a kind, and of a whole declaration head's parameter
+-- list.  It lives HERE, beside the node, for the reason `firstTyLoc` below
+-- does: three separate tools render a declaration head — `tools/printer` (and
+-- through it `fmt`, where dropping an annotation would DELETE a kind from the
+-- user's source), `tools/doc`, and `tools/lsp` — and a second hand-rolled copy
+-- is how two spellings drift apart.
+export
+kindAnnSource : KindAnn -> String
+kindAnnSource KindType = "Type"
+kindAnnSource KindEffect = "Effect"
+kindAnnSource (KindArrow a b) = "\{kindAnnArg a} -> \{kindAnnSource b}"
+
+-- The arrow associates right, so only a LEFT operand that is itself an arrow
+-- needs parentheses: `Effect -> Type -> Type` prints bare, and `(Type ->
+-- Type) -> Type` keeps exactly the one pair that carries meaning.
+kindAnnArg : KindAnn -> String
+kindAnnArg (k@(KindArrow _ _)) = "(\{kindAnnSource k})"
+kindAnnArg k = kindAnnSource k
+
+-- One head parameter as it was written: `a`, or `(e : Effect)`.
+export
+tyParamSource : String -> Option KindAnn -> String
+tyParamSource p None = p
+tyParamSource p (Some k) = "(\{p} : \{kindAnnSource k})"
+
+-- A head's whole parameter list.  A SHORT kind list (a decl synthesised
+-- without one) degrades to bare names rather than truncating the parameters.
+export
+tyParamSources : List String -> List (Option KindAnn) -> List String
+tyParamSources [] _ = []
+tyParamSources (p::ps) (k::ks) = tyParamSource p k :: tyParamSources ps ks
+tyParamSources (p::ps) [] = p :: tyParamSources ps []
+
 -- ── Loc plumbing (issue 480) ──────────────────────────────────────────────
 -- These live HERE, beside `Loc`/`Ty`, because they are diagnostic-quality
 -- infrastructure every stage needs: `resolve` locates a duplicate signature,
@@ -1307,10 +1353,17 @@ public export data Decl =
   --
   -- ⚠️ Exhaustiveness is a WARNING here, exit 0 — a missed arm does not fail the
   -- build, it fails at RUNTIME.  Audit arms as a SET.
+  --
+  -- The four `…ParamKinds`/`typaramKinds` fields below are the DECLARED kinds
+  -- of the head's type parameters (EFFECTS-SEMANTICS §6.1).  Each is
+  -- POSITIONAL and the same length as the sibling name list, carrying `None`
+  -- wherever the head wrote a bare parameter — partial annotation (§6.3) is
+  -- the common case, so a `Some` in one slot says nothing about the others.
   | DData {
       dataVis : DataVis,
       dataName : String,
       dataParams : List String,
+      dataParamKinds : List (Option KindAnn),
       dataCtors : List Variant,
       dataDerives : List DeriveRef,
       dataOrigin : TyConOrigin,
@@ -1327,6 +1380,7 @@ public export data Decl =
       def : Bool,
       name : String,
       typarams : List String,
+      typaramKinds : List (Option KindAnn),
       supers : List Super,
       methods : List IfaceMethod,
       ifaceOrigin : TyConOrigin,
@@ -1359,6 +1413,7 @@ public export data Decl =
       tyAliasPub : Bool,
       tyAliasName : String,
       tyAliasParams : List String,
+      tyAliasParamKinds : List (Option KindAnn),
       tyAliasRhs : Ty,
       tyAliasOrigin : TyConOrigin,
     }
@@ -1368,6 +1423,7 @@ public export data Decl =
       newtypePub : Bool,
       newtypeName : String,
       newtypeParams : List String,
+      newtypeParamKinds : List (Option KindAnn),
       newtypeCtor : String,
       newtypeFieldTy : Ty,
       newtypeDerives : List DeriveRef,
@@ -1394,22 +1450,24 @@ public export data Decl =
 -- immunity rule cannot repair (`stampDeclOrigin` re-stamps only what a driver
 -- re-runs over, and the emit path runs it once).
 export
-dDataUnresolved : DataVis -> String -> List String -> List Variant -> List DeriveRef -> Decl
-dDataUnresolved vis n params variants derives = DData {
+dDataUnresolved : DataVis -> String -> List String -> List (Option KindAnn) -> List Variant -> List DeriveRef -> Decl
+dDataUnresolved vis n params kinds variants derives = DData {
   dataVis = vis,
   dataName = n,
   dataParams = params,
+  dataParamKinds = kinds,
   dataCtors = variants,
   dataDerives = derives,
   dataOrigin = OriginUnresolved,
 }
 
 export
-dTypeAliasUnresolved : Bool -> String -> List String -> Ty -> Decl
-dTypeAliasUnresolved pub n params rhs = DTypeAlias {
+dTypeAliasUnresolved : Bool -> String -> List String -> List (Option KindAnn) -> Ty -> Decl
+dTypeAliasUnresolved pub n params kinds rhs = DTypeAlias {
   tyAliasPub = pub,
   tyAliasName = n,
   tyAliasParams = params,
+  tyAliasParamKinds = kinds,
   tyAliasRhs = rhs,
   tyAliasOrigin = OriginUnresolved,
 }
@@ -1421,16 +1479,8 @@ dTypeAliasUnresolved pub n params rhs = DTypeAlias {
 -- stamper, and a probe that only patterns on it), and that ratchet is worth more
 -- than the one line of directness it costs here.
 export
-dInterfaceUnresolved : Bool -> Bool -> String -> List String -> List Super -> List IfaceMethod -> Decl
-dInterfaceUnresolved pub isDefault n typarams supers methods = DInterface {
-  pub = pub,
-  def = isDefault,
-  name = n,
-  typarams = typarams,
-  supers = supers,
-  methods = methods,
-  ifaceOrigin = OriginUnresolved,
-}
+dInterfaceUnresolved : Bool -> Bool -> String -> List String -> List (Option KindAnn) -> List Super -> List IfaceMethod -> Decl
+dInterfaceUnresolved pub isDefault n typarams kinds supers methods = DInterface { pub = pub, def = isDefault, name = n, typarams = typarams, typaramKinds = kinds, supers = supers, methods = methods, ifaceOrigin = OriginUnresolved }
 
 -- ⚠️ `DImpl` mints an OCCURRENCE carrier, not a decl-layer one (see its comment
 -- above), so this helper belongs to the `constraintUnresolved` family and NOT to
@@ -1451,11 +1501,12 @@ dImplUnresolved pub iface tys reqs methods = DImpl {
 }
 
 export
-dNewtypeUnresolved : Bool -> String -> List String -> String -> Ty -> List DeriveRef -> Decl
-dNewtypeUnresolved pub n params con fty derives = DNewtype {
+dNewtypeUnresolved : Bool -> String -> List String -> List (Option KindAnn) -> String -> Ty -> List DeriveRef -> Decl
+dNewtypeUnresolved pub n params kinds con fty derives = DNewtype {
   newtypePub = pub,
   newtypeName = n,
   newtypeParams = params,
+  newtypeParamKinds = kinds,
   newtypeCtor = con,
   newtypeFieldTy = fty,
   newtypeDerives = derives,
