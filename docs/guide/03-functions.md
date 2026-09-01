@@ -1,15 +1,14 @@
 # Functions
 
-Functions are how behavior is packaged in Medaka, and there is only one way to make
-one: bind a name to something that takes arguments. There is no `function` keyword,
-no `def`, no `fun`. This chapter covers defining functions, splitting them into
-clauses that match on their arguments, guarding those clauses with conditions, and
-gluing small functions together into bigger ones.
+There is one way to define a function in Medaka: bind a name to something that takes
+parameters. There is no `function`, `def`, or `fun` keyword. This chapter covers
+defining functions, splitting them into clauses that match on their arguments, adding
+conditions to those clauses, and combining small functions into bigger ones.
 
 ## Defining a function
 
-A definition is a name, its parameters, `=`, and a body. A signature on the line
-above is optional but recommended.
+A definition is a name, its parameters, `=`, and a body. The signature above it is
+optional, but write one on anything top-level.
 
 ```medaka
 double : Int -> Int
@@ -25,12 +24,12 @@ main = println (double (area 3.0 4.0 |> floatToInt))
 24
 ```
 
-Application is by juxtaposition — `area 3.0 4.0`, not `area(3.0, 4.0)` — and it binds
-tighter than any operator, which is why `double (area 3.0 4.0 …)` needs its
-parentheses.
+You call a function by writing its arguments after it, separated by spaces:
+`area 3.0 4.0`, not `area(3.0, 4.0)`. Application binds tighter than any operator,
+which is why the argument to `double` above needs parentheses.
 
-Functions are recursive without saying so, and mutually recursive at the top level
-without a forward declaration:
+Functions can call themselves, and top-level functions can call each other in any
+order, with no forward declaration.
 
 ```medaka
 isEven : Int -> Bool
@@ -50,11 +49,10 @@ True
 
 ## Several clauses, one function
 
-That last example is already doing the thing that makes Medaka code read the way it
-does: a function is written as a *stack of clauses*, each with patterns in the head,
-tried top to bottom. This is the preferred way to take a data type apart.
-
-Here is `cost` from the introduction, in full:
+`isEven` above is written as two clauses. The first matches the argument `0`, the
+second matches anything and names it `n`. Clauses are tried top to bottom, and the
+first one whose patterns match runs. This is the usual way to take a data type apart.
+Here is `cost` from the introduction:
 
 ```medaka
 data Expense = Coffee Float | Rent Float | Book String Float
@@ -74,16 +72,15 @@ main =
 35.0
 ```
 
-All three clauses belong to one function named `cost`; they must be adjacent and
-carry the same number of parameters. `_` in the `Book` clause is a wildcard — the
-title is matched and discarded, and naming it would only invite the linter to point
-out that nothing uses it. [Chapter 4](04-data-modeling.md) covers patterns themselves
-in depth; here the point is only that the *head* of a clause is a pattern position.
+The three clauses have to be next to each other and take the same number of
+parameters. `_` in the `Book` clause is a wildcard: the title is matched and thrown
+away. Chapter 4 covers patterns in detail. For now, remember that each parameter
+position in a clause head is a pattern.
 
 ## Guards
 
-A clause can be split further by conditions. An equation guard is a leading `|`,
-each with its own body, tried in order; `otherwise` is the conventional catch-all.
+A clause can be split further by conditions. Each guard starts with `|`, has its own
+body, and the guards are tried in order. `otherwise` is the conventional last guard.
 
 ```medaka
 band : Float -> String
@@ -106,13 +103,12 @@ medium
 large
 ```
 
-If no guard on a clause holds, control falls through to the *next clause*, so guards
-and multiple clauses compose rather than competing. A single guard can also sit
-inline on the clause head: `drop n xs | n <= 0 = xs`.
+If none of a clause's guards hold, matching moves on to the next clause. A single
+guard can also sit on the same line as the clause head: `drop n xs | n <= 0 = xs`.
 
-> ⚠️ **An equation guard is `|`; a match-arm guard is `if`.** The two spellings are
-> not interchangeable, and using the wrong one is a parse error rather than a
-> subtle misbehavior. Inside `match`, write `pat if cond => body`:
+> ⚠️ **A clause guard uses `|`; a `match` arm guard uses `if`.** The two are not
+> interchangeable, and mixing them up is a parse error. Inside `match`, write
+> `pattern if condition => body`:
 >
 > ```
 > error: guards.mdk:2:4: a match-arm guard uses `if`, not `|` — write `pat if cond
@@ -121,9 +117,9 @@ inline on the clause head: `drop n xs | n <= 0 = xs`.
 
 ## `where`
 
-`where` attaches local definitions to a function. They are visible in the body and,
-as in `band` above, across *all* the guards of the clause when the `where` sits at
-the guards' indentation. Locals may be functions with their own clauses:
+`where` attaches local definitions to a function. They are visible in the body, and
+when the `where` sits at the same indentation as the guards, across all of the guards
+too, as `budget` was above. A local definition can itself have clauses:
 
 ```medaka
 report : Float -> String
@@ -139,16 +135,14 @@ main = println (report 4.5)
 4.5 is fine
 ```
 
-`where` can also trail the body line — `f x = g x where` followed by an indented
-block. Both spellings parse, but they are not two styles the formatter respects:
-`medaka fmt --write` normalizes the trailing form to the one above, moving `where`
-onto its own line and indenting the block under it. Write whichever you like and
-let `fmt` settle it.
+`where` can also follow the body on the same line, with the definitions indented on
+the next line. Both spellings parse, but `medaka fmt` rewrites the trailing form to
+the one shown above, so that is the one you will see.
 
 ## Lambdas
 
-An anonymous function is `params => body`. There is no backslash and no `fun`
-keyword, and the parameters are simply listed before a single arrow.
+An anonymous function is `params => body`. The parameters are listed before a single
+arrow, with no backslash or keyword in front.
 
 ```medaka
 main =
@@ -163,14 +157,14 @@ main =
 [1, 4, 9]
 ```
 
-A parameter position is a pattern, so a lambda can destructure directly:
-`(Some x) => x`, `xs@rest => xs`, `_ => 0`.
+A lambda parameter is a pattern, just like a clause parameter, so a lambda can
+destructure its argument: `(Some x) => x`, `(a, b) => a + b`, `_ => 0`.
 
 > ⚠️ **`(x, y) => …` takes one tuple, not two arguments.** Parentheses around a
-> lambda's parameters are a *tuple pattern*, not an argument list — the habit is
-> easy to bring from JavaScript or Rust and the resulting type error points at the
-> call site rather than the lambda. Two parameters are written with a space
-> between them.
+> lambda's parameters make a tuple pattern. Two parameters are written with a space
+> between them, `x y => …`, and the habit of parenthesizing them is easy to bring from
+> other languages. The resulting type error points at the call site, not at the
+> lambda.
 
 ```medaka
 addPair : (Int, Int) -> Int
@@ -187,16 +181,35 @@ main =
 7
 ```
 
-## Piping, composing, and sections
+When a lambda's whole job is to match on its argument, write `x => match x` and put
+the arms underneath. This shows up a lot in arguments to `map`:
 
-Three small pieces of syntax do most of the work of keeping call chains flat.
+```medaka
+main = println (map
+  (x => match x
+    Some n if n > 100 => "a big \{n}"
+    Some n => "just \{n}"
+    None => "nothing")
+  [Some 5, Some 500, None])
+```
 
-`|>` applies a value to a function, left to right, so a transformation reads in the
-order it happens. `>>` composes two functions left to right and `<<` right to left,
-producing a new function without naming its argument. And a *section* is a
-parenthesized operator with one side filled in: `(+ 5)` is `x => x + 5`, `(2 * _)`
-is `x => 2 * x` — the `_` marks the missing operand when it is the right-hand one —
-and a bare `(+)` or `(==)` is the operator itself as an ordinary function.
+```medaka-expect
+[just 5, a big 500, nothing]
+```
+
+The arms are tried top to bottom, so the guarded `Some n if n > 100` has to come
+before the plain `Some n`, or it would never run.
+
+## Pipes, composition, and sections
+
+Three pieces of syntax keep chains of calls readable.
+
+`x |> f` applies `f` to `x`. A chain of pipes reads in the order the steps happen,
+instead of inside out. `f >> g` composes two functions left to right, and `f << g`
+right to left, giving a new function without naming its argument. A section is an
+operator with one side filled in: `(+ 5)` is `x => x + 5`, `(2 * _)` is `x => 2 * x`,
+with `_` marking the missing operand when it is on the right. A bare `(+)` or `(==)`
+is the operator as an ordinary function.
 
 ```medaka
 data Expense = Coffee Float | Rent Float | Book String Float
@@ -230,33 +243,8 @@ pocket change
 a big one
 ```
 
-`verdict` never mentions the expense it is given. That is worth doing when the
-pipeline *is* the explanation, as here, and worth abandoning the moment a reader
-has to run the composition in their head to see what the argument was.
+`verdict` never names the expense it is given. That reads well when the pipeline is
+the explanation, as here. When a reader would have to trace the composition to work
+out what the argument was, name it instead.
 
-## A lambda that immediately matches
-
-`match` is an expression, so it can be a lambda's whole body. `x => match x` is the
-idiom for "a function defined by cases" in a position where a name would be noise —
-passed to `map`, say.
-
-```medaka
-main = println (map
-  (x => match x
-    Some n if n > 100 => "a big \{n}"
-    Some n => "just \{n}"
-    None => "nothing")
-  [Some 5, Some 500, None])
-```
-
-```medaka-expect
-[just 5, a big 500, nothing]
-```
-
-Note the `if` guards on the arms — the match-arm spelling from the callout above.
-Arms are tried top to bottom, so the specific `Some n if n > 100` has to come before
-the general `Some n` or it would never fire.
-
-You now have every way Medaka gives you to define behavior. The next chapter is
-about the other half: [describing the data](04-data-modeling.md) that behavior takes
-apart.
+Next: [describing the data](04-data-modeling.md) that these functions take apart.

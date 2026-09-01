@@ -264,7 +264,7 @@ Ok None
 ## `between`
 
 ```
-between : ByteParser a -> ByteParser b -> ByteParser c -> ByteParser c
+between : ByteParser open -> ByteParser close -> ByteParser a -> ByteParser a
 ```
 
 `between open close p` parses `open`, then `p`, then `close`, yielding `p`.

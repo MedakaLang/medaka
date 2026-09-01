@@ -157,7 +157,7 @@ core's `Display (Result e a)`.
 ## `toResult`
 
 ```
-toResult : Validation a b -> Result a b
+toResult : Validation e a -> Result e a
 ```
 
 Drop down to the short-circuiting `Result` (e.g. to `andThen`-sequence
@@ -174,7 +174,7 @@ Ok 1
 ## `fromResult`
 
 ```
-fromResult : Result a b -> Validation a b
+fromResult : Result e a -> Validation e a
 ```
 
 Lift a `Result` into `Validation` (e.g. to combine it with others via

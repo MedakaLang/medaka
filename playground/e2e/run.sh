@@ -9,8 +9,9 @@
 #
 # SITE=1 is the one that tests what users get: playground/site/ is what
 # build_site.sh assembles and deploy_cloudflare.sh uploads — a different file set
-# from the dev tree, containing the rendered guide. Under SITE=1 the guide-route
-# checks in the spec become MANDATORY rather than skipped (E2E_EXPECT_GUIDE).
+# from the dev tree, containing the rendered guide AND the rendered stdlib
+# reference. Under SITE=1 the guide-route and /stdlib-route checks in the spec
+# become MANDATORY rather than skipped (E2E_EXPECT_GUIDE / E2E_EXPECT_STDLIB).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -21,6 +22,7 @@ SITE="${SITE:-}"
 if [ -n "$SITE" ]; then
   SERVE_ROOT="$PLAYGROUND_ROOT/site"
   export E2E_EXPECT_GUIDE=1
+  export E2E_EXPECT_STDLIB=1
 else
   SERVE_ROOT="$PLAYGROUND_ROOT"
 fi
@@ -57,6 +59,18 @@ fi
 #    it is exactly the broken deploy this mode exists to catch.
 if [ -n "$SITE" ] && [ ! -d "$SERVE_ROOT/guide" ]; then
   echo "ERROR: $SERVE_ROOT/guide is missing — site/ was assembled without the guide." >&2
+  echo "Rebuild it: bash $PLAYGROUND_ROOT/build_site.sh" >&2
+  exit 1
+fi
+
+# ── …and the rendered stdlib reference, for the same reason (#2384). The
+#    /stdlib route is a second published doc set with the same failure mode: a
+#    site assembled without it deploys clean and 404s only for readers. Failing
+#    LOUD here is what keeps "site/stdlib is missing" from reading as "the
+#    stdlib route tests passed" — E2E_EXPECT_STDLIB above is the spec-side half
+#    of the same discipline.
+if [ -n "$SITE" ] && [ ! -d "$SERVE_ROOT/stdlib" ]; then
+  echo "ERROR: $SERVE_ROOT/stdlib is missing — site/ was assembled without the stdlib reference." >&2
   echo "Rebuild it: bash $PLAYGROUND_ROOT/build_site.sh" >&2
   exit 1
 fi
