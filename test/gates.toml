@@ -795,7 +795,7 @@ name = "playground/e2e/run"
 area = "infra"
 shard = "other-job"
 project = "compiler"
-tiers = ["nightly"]
+tiers = ["nightly/SITE=1"]
 cost = "cheap"
 kind = "exec"
 run = "playground/e2e/run.sh"
