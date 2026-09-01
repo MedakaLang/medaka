@@ -90,6 +90,17 @@ test/fmt_clean_census          derived fmt-clean report (#1794, `make fmt-clean-
                                 gate, to avoid surfacing tree-wide pre-existing formatting
                                 debt as a sudden required-check failure (see the script header).
 
+test/comment_register_census   derived comment-register census (#2281, S-comment-census,
+                                `make comment-census`): counts seven comment-register classes
+                                by line over compiler/*.mdk + stdlib/*.mdk — history
+                                narration, reviewer-addressed ruling vocabulary, tombstones,
+                                emoji shouts, draft narration, dead deictic citations, and
+                                falsified-by-refactor candidates (drawn from the draft-
+                                narration hits). Always exits 0 and asserts nothing —
+                                classifications, not disjoint defect counts; a human still
+                                reads the per-file breakdown before acting on it (see the
+                                script header).
+
 test/cli_conformance_census    derived CLI conformance census (#2354, S-conformance-table,
                                 `make cli-conformance-census`): re-derives
                                 docs/ops/CLI-CONFORMANCE.md's machine-checkable columns —
