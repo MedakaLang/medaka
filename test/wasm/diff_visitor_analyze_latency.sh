@@ -19,16 +19,28 @@
 #
 # The byte-ceiling half of this instrument (deterministic, no box noise) is
 # the SEPARATE merge-tier gate diff_visitor_cost_bytes.sh.
+#
+# Fix-2-latency-ceiling (review round F3, #2442): the original 5000ms ceiling
+# was ~20x too loose to catch the regression it exists to catch — a full
+# revert of the sprint (analyze() mode never existing, falling back to the
+# pre-sprint compile() path's full codegen cost) still measures ~558ms,
+# comfortably under 5000ms. Re-measured `analyze()` min on this worktree's
+# freshly built playground.wasm across 4 runs: 235/259/267/281ms (min range),
+# med up to 331ms — consistent with landing's 217-238ms plus visible box
+# noise. Ceiling retightened to 400ms: ~120-165ms (30-40%) headroom above the
+# fresh measured min range, and ~158ms (28%) margin below the ~558ms
+# full-revert baseline — tight enough that a reintroduced full-codegen
+# regression fails with real margin, loose enough for ordinary box noise.
 set -u
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 DIST="$ROOT/playground/dist"
 PROBE="$ROOT/test/wasm/visitor_analyze_latency.mjs"
 
-# ── measured min (S4 landing, sprint-branch base 5854e2598, this worktree's
-# freshly built playground.wasm) 238ms — ceiling set at ~20x for headroom
-# against a busy shared box, per the contract's order-of-magnitude guidance.
-ANALYZE_MS_CEIL=5000
+# ── measured min (Fix-2-latency-ceiling, this worktree's freshly built
+# playground.wasm, 4 runs) 235-281ms — ceiling set at 400ms: real margin
+# above measured min and real margin below the ~558ms full-revert baseline.
+ANALYZE_MS_CEIL=400
 
 NODE=node
 major=$("$NODE" -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)
