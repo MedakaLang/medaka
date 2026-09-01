@@ -289,7 +289,15 @@
         <span class="name">medaka</span>
       </div>
       <span class="tag">a pragmatic functional language</span>
-      <div class="links"><a href="https://github.com/MedakaLang/medaka/blob/main/docs/guide/1.%20Quick%20Start.md" target="_blank" rel="noopener">Quickstart</a><a href="https://github.com/MedakaLang/medaka/blob/main/docs/stdlib/STDLIB.md" target="_blank" rel="noopener">Stdlib</a><a href="https://github.com/MedakaLang/medaka" target="_blank" rel="noopener">GitHub</a></div>
+      <!-- Guide/Quickstart are SAME-ORIGIN: build_site.sh now renders docs/guide
+           into site/guide/ beside this page, and the guide's own pages link back
+           here ("← Playground", render_docs.mjs). No target="_blank": these are
+           part of the same site, not an outbound link.
+           The old "Quickstart" href pointed at
+           github.com/.../docs/guide/1.%20Quick%20Start.md — a file that has not
+           existed since the guide was renumbered to 00-…/01-…; it was a live 404
+           on the deployed site. -->
+      <div class="links"><a href="./guide/00-introduction.html">Guide</a><a href="./guide/01-quick-start.html">Quickstart</a><a href="https://github.com/MedakaLang/medaka/blob/main/docs/stdlib/STDLIB.md" target="_blank" rel="noopener">Stdlib</a><a href="https://github.com/MedakaLang/medaka" target="_blank" rel="noopener">GitHub</a></div>
     </div>
 
     <div id="funnel-strip">

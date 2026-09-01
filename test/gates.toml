@@ -3729,6 +3729,46 @@ sources = ["test/diff_compiler_cli_reject_floor.sh", "test/cli_conformance_lib.s
 corpus = []
 toolchain = ["clang"]
 
+# The docs RENDER machine (#2386, S-site-wiring). playground/guide_render_test.mjs
+# holds the assertions; this `.sh` is the enrolment, because nothing in CI runs a
+# bare `.mjs` — `run =` here, run_gates.sh's name resolution, and preflight's
+# `_gate_candidates` are all `.sh`-shaped. It grades the RENDERER, not the
+# compiler: no oracle, no ./medaka, node only.
+#
+# Why it matters that this exists at all: docs/guide/*.md mapped to exactly ONE
+# gate before this slice — check_syntax_examples, which proves the guide's code
+# EXECUTES and nothing whatsoever about whether it RENDERS. A chapter whose
+# cross-links broke, whose TOC pointed at nothing, or which rendered blank
+# reached the deployed site green.
+#
+# `sources` names the three renderer files plus the guide corpus, mirroring the
+# preflight arm this slice added. (preflight ALSO derives this gate for the three
+# playground/* files on its own, via `_consumes` reading their paths out of the
+# gate script — the entry here is the registry's independent statement of the
+# same fact, per this file's derived-from-preflight convention.)
+#
+# ⚠️ `shard` below is a GUESS, as every brand-new gate's must be ([W-SHARD-DERIVED],
+# #2178): it has no row in test/gate_cost_baseline.json yet, so `medaka gate
+# balance` HARD-REFUSES to place it until an unnarrowed CI run measures it, and
+# `ci-gen-drift` reds until the follow-up `medaka gate balance && make gen-ci`
+# commit. It is guessed onto a `wasm_arm = true` row on purpose and NOT for
+# wasm: that flag is what installs Node on a `gates` runner (ci.yml, the
+# `wasm_arm = true -> installs wasm-tools + Node` rows), and this gate needs
+# node>=24. The balancer must keep it on a Node-bearing row.
+[[gate]]
+name = "diff_compiler_guide_render"
+area = "infra"
+shard = "gates_3"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+run = "test/diff_compiler_guide_render.sh"
+oracles = []
+sources = ["test/diff_compiler_guide_render.sh", "playground/render_docs.mjs", "playground/build_guide.sh", "playground/guide_render_test.mjs", "playground/vendor/marked/marked.js", "docs/guide/*.md"]
+corpus = ["docs/guide"]
+toolchain = ["node>=24"]
+
 # ── the `gates` matrix rows (S-1, #2177) ─────────────────────────────────────
 #
 # One `[[shard]]` per row of ci.yml's `gates` job matrix, in matrix order.

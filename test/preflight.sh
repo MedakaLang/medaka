@@ -1070,7 +1070,27 @@ while IFS= read -r f; do
     # does nightly run, and how". That question is now `tiers` in the registry,
     # and this is the gate that checks it.
     .github/workflows/nightly.yml) add 'diff_compiler_ci_shard_coverage'; add 'diff_compiler_tier_drift' ;;
-    docs/guide/*.md)               add 'check_syntax_examples' ;;
+    # Two gates, two different questions, and the guide needs both answered.
+    # `check_syntax_examples` proves the chapters' code EXECUTES (native `medaka
+    # run`); it says nothing about whether the chapter RENDERS. Since #2386 the
+    # guide is a DEPLOYED artifact (playground/build_site.sh renders it into
+    # site/guide/), so a chapter whose cross-links broke, whose TOC pointed at
+    # nothing, or which rendered blank would ship green on the execution gate
+    # alone. `diff_compiler_guide_render` is the render half.
+    #
+    # The renderer's OWN files (playground/render_docs.mjs, build_guide.sh,
+    # guide_render_test.mjs) do NOT need an arm here: they fall through to the
+    # derived `demo/*|playground/*` arm below, and `_gates_for_path` finds this
+    # same gate because test/diff_compiler_guide_render.sh references all three
+    # by path in live (non-comment) lines. Deriving beats listing, and a
+    # hand-written arm here would also SHADOW that derivation (`case` fires its
+    # first matching arm only), silently dropping every other playground/-level
+    # gate those files legitimately reach. Verified by putting those three paths
+    # in a list file and running `PREFLIGHT_DRY=1 PREFLIGHT_CHANGED_FILE=<that
+    # file> sh test/preflight.sh` — each derives diff_compiler_guide_render AND
+    # keeps all nine playground/-level gates it had before.
+    docs/guide/*.md)               add 'check_syntax_examples'
+                                   add 'diff_compiler_guide_render' ;;
     # Third ledger, same structural blind spot (#1608). Its rows pin a WRONG VALUE
     # rather than a divergence — see its own header — but the masking path is
     # identical: a loose file under test/ that someone edits ALONE when the gate reds.

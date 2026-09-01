@@ -817,7 +817,7 @@ jobs:
             # is a ruleset change, not an edit here. It is a bare executor number by
             # construction (#2178): a name that cannot describe contents cannot lie
             # about them. What failed is reported by AREA, from the registry.
-            pattern: "'lsp_harness' 'gzip/test/inflate_oracle' 'pds/test/constant_time_signing' 'pds/test/ecdsa_vectors' 'pds/test/scalar_vectors' 'sqlite/test/delete_negative_oracle' 'sqlite/test/groupby_oracle' 'sqlite/test/oracle' 'sqlite/test/update_expr_oracle' 'sqlite/test/update_oracle' 'build_construct_coverage' 'diff_compiler_core_ir_run' 'diff_compiler_eval_run' 'diff_compiler_index_oob' 'diff_compiler_ir_scaling' 'diff_compiler_run_stdout_flush' 'diff_compiler_stack_overflow' 'diff_compiler_test' 'effect_builtin_param_domain' 'selfcompile_build_fixpoint'"
+            pattern: "'lsp_harness' 'gzip/test/inflate_oracle' 'pds/test/constant_time_signing' 'pds/test/ecdsa_vectors' 'pds/test/scalar_vectors' 'sqlite/test/delete_negative_oracle' 'sqlite/test/groupby_oracle' 'sqlite/test/oracle' 'sqlite/test/update_expr_oracle' 'sqlite/test/update_oracle' 'build_construct_coverage' 'diff_compiler_core_ir_run' 'diff_compiler_eval_run' 'diff_compiler_index_oob' 'diff_compiler_ir_scaling' 'diff_compiler_run_stdout_flush' 'diff_compiler_stack_overflow' 'diff_compiler_test' 'effect_builtin_param_domain' 'selfcompile_build_fixpoint' 'diff_compiler_guide_render'"
             wasm_arm: "1"
           - name: gates_4
             # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
