@@ -2,7 +2,7 @@
 --
 -- Symmetric inverse of `byteparser`: where `byteparser` DECODES byte arrays
 -- into values, `bytebuilder` ENCODES values INTO byte arrays.  Backed by a
--- `MutArray Int` (growable, amortised-O(1) `push`); `buildArray` freezes the
+-- `Vector Int` (growable, amortised-O(1) `push`); `buildArray` freezes the
 -- live range into a fixed-size `Array Int` in emission order — no reverse pass.
 --
 -- All `emit*` functions write bytes in the byte order that `byteparser`'s
@@ -10,18 +10,18 @@
 -- original value exactly.
 
 import byteparser.{runByteParser, beUint, beSint, leUint, leSint, takeBytes}
-import mut_array.{MutArray, new, push, toArray}
+import vector.{Vector, new, push, toArray}
 import list.{reverse}
 
 -- ---------------------------------------------------------------------------
 -- Builder type
 -- ---------------------------------------------------------------------------
 
--- | A byte output buffer backed by a growable `MutArray Int`.
+-- | A byte output buffer backed by a growable `Vector Int`.
 --   Bytes are appended in O(1) (amortised); `buildArray` snapshots to a
 --   fixed-size `Array Int` in emission order.
 --   The constructor is not exported — use `newBuilder`/`emit*`/`buildArray`.
-export data Builder = Builder (MutArray Int)
+export data Builder = Builder (Vector Int)
 
 -- | Create a new, empty builder.
 export

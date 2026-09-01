@@ -95,7 +95,7 @@ So today `<Mut>` is:
 - **not a purity guarantee** — falsified by the probe above.
 
 It is a **writer-discipline marker**: *"this function performs a write to some mutable cell."*
-That is a genuinely useful third thing — it documents in-place APIs (`hash_map`, `mut_array`),
+That is a genuinely useful third thing — it documents in-place APIs (`hash_map`, `vector`),
 it is greppable, it flags aliasing hazards. It is also exactly the reading under which masking
 is principled rather than a loophole: **`mut { … }` asserts "the writes in this scope target
 scope-local state."**
@@ -183,7 +183,7 @@ function (`curEffect : Ref EffRow`). Give the block body a fresh row, solve it, 
 **Perimeter check.** After inference, walk the block's result type; error `T-MUT-ESCAPE` if it
 *transitively* contains
 
-- a **mutable handle** — `Ref`, `MutArray`, `HashMap`, `HashSet`, `Builder` (by constructor name;
+- a **mutable handle** — `Ref`, `Vector`, `HashMap`, `HashSet`, `Builder` (by constructor name;
   there is exact precedent — the value restriction already excludes `Ref` by name in
   `typecheck.mdk`). Keep the list as a small registry so user mutable types can opt in later.
 - or **any arrow type** — this is what kills hole (a).
@@ -208,7 +208,7 @@ way to earn the spec's current claim. It **amplifies the contagion we are trying
 **nothing downstream consumes** (the manifest drops `Mut`). Strictly worse.
 
 **(C) Drop `<Mut>` from signatures for local mutation.** Incoherent in this stdlib: every real
-mutable structure — `MutArray`, `HashMap`, `Builder` — is `Ref`-backed. Dropping `Mut` on raw
+mutable structure — `Vector`, `HashMap`, `Builder` — is `Ref`-backed. Dropping `Mut` on raw
 `Array` writes would un-mark the *most* dangerous writes while keeping it on the safe wrappers.
 Doing it properly needs escape analysis, which is the "too clever" branch.
 
@@ -223,7 +223,7 @@ out. Masking `Mut` *cannot* weaken the capability story. What it weakens is a pu
 per §2, does not currently exist.
 
 Wins unlocked: delete `recordenc.mdk`'s duplicated encoder; restore the O(bytes) gather in
-`btree.mdk`; make `mut_array`/`hash_map`/`bytebuilder` legal local accumulators inside pure
+`btree.mdk`; make `vector`/`hash_map`/`bytebuilder` legal local accumulators inside pure
 functions — which is how strict functional code (OCaml, F#) is actually written.
 
 And one number worth sitting with: **the compiler's own source carries ~1,358 `<Mut>`-bearing

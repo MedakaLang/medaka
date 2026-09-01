@@ -101,7 +101,7 @@ reasoning and the counter-example each rule exists to protect: PR #2429
    to `map.values`. A module re-introducing two family names with an
    identical signature is the synonym drift that ruling closed.
 10. **A `*InPlace` suffix is the mutation contract on a container that also
-    has a persistent name.** `hash_map`/`hash_set`/`array`/`mut_array`'s
+    has a persistent name.** `hash_map`/`hash_set`/`array`/`vector`'s
     mutating writers are `insertInPlace`/`setInPlace`/`deleteInPlace`;
     persistent containers keep the bare `insert`/`set`/`delete`. The suffix
     is what tells a reader "this mutates the receiver" without reading the

@@ -1389,7 +1389,7 @@ impl Index (List a) Int a
 
 `index xs i` is `xs`'s element at position `i`.  O(n) — a singly-linked
 list has no random access, so this walks `i` cons cells; prefer `Array`/
-`MutArray` for index-heavy workloads.  Raises the coded `indexError`
+`Vector` for index-heavy workloads.  Raises the coded `indexError`
 (E-INDEX-OOB) when `i` is out of range.  No `IndexMut` impl: `List` is
 immutable / has no in-place element write.
 

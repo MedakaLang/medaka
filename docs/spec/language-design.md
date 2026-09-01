@@ -761,18 +761,18 @@ arr[0]                        -- 1
 map (x => x + 1) arr         -- [|2, 3, 4|], same interface as List
 ```
 
-#### MutArray — mutable array
+#### Vector — mutable array
 Opt-in mutability for performance. The cell is mutable; the binding is immutable. Mutation is untracked — it carries no effect row.
 
 ```
-let arr = MutArray [|1, 2, 3|]
+let arr = Vector [|1, 2, 3|]
 arr[0] = 5                    -- index assignment, mutates in place
 ```
 
-Conversion between Array and MutArray:
+Conversion between Array and Vector:
 ```
-freeze : MutArray a -> Array a   -- zero cost, type change only
-thaw   : Array a -> MutArray a   -- copies
+freeze : Vector a -> Array a   -- zero cost, type change only
+thaw   : Array a -> Vector a   -- copies
 ```
 
 #### Map — immutable tree map
@@ -939,7 +939,7 @@ Rule of thumb: *"Would the absence of this cause every non-trivial project to im
 Rough target: Go's stdlib scope, maybe slightly smaller.
 
 ### In stdlib:
-- Core collections — List, Array, MutArray, Map, HashMap, Set, HashSet
+- Core collections — List, Array, Vector, Map, HashMap, Set, HashSet
 - String utilities — split, trim, join, regex
 - Math — standard numeric operations
 - IO — file system, stdin/stdout
@@ -961,7 +961,7 @@ Rough target: Go's stdlib scope, maybe slightly smaller.
 ## Mutability and Passing Values
 
 ### Value vs Reference Semantics
-Medaka uses **value semantics by default** for primitive types — passing a mutable primitive to a function gives the function a copy, consistent with functional expectations. Mutable collections (`MutArray`, `HashMap`, `HashSet`) use reference semantics naturally since they are heap allocated.
+Medaka uses **value semantics by default** for primitive types — passing a mutable primitive to a function gives the function a copy, consistent with functional expectations. Mutable collections (`Vector`, `HashMap`, `HashSet`) use reference semantics naturally since they are heap allocated.
 
 ```
 -- primitives: value semantics, copy on pass

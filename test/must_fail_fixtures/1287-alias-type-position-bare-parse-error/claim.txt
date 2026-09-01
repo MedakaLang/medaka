@@ -1,22 +1,22 @@
 issue: 1287
-what: An alias-qualified name in TYPE position (`import mut_array as MA` then
-what: `MA.MutArray` in a type signature) reports a bare generic `P-PARSE`
+what: An alias-qualified name in TYPE position (`import vector as MA` then
+what: `MA.Vector` in a type signature) reports a bare generic `P-PARSE`
 what: "unexpected `.`" with no `help` and no `fix` field — nothing connects the
 what: caret to the actual rule, which is that an import alias qualifies VALUES
-what: ONLY and a type must be imported by name (`import mut_array.{MutArray}`).
+what: ONLY and a type must be imported by name (`import vector.{Vector}`).
 cmd: check-json main.mdk
 exit: 1
 diag-code: P-PARSE 2:11-2:12
 control: check-json control.mdk
-why-fixture: main.mdk aliases `mut_array` as `MA` and writes `MA.MutArray Int`
+why-fixture: main.mdk aliases `vector` as `MA` and writes `MA.Vector Int`
 why-fixture: in a type signature. The parser hits the `.` after `MA` and reports
 why-fixture: a bare unexpected-token parse error — `check --json` renders it as
 why-fixture: a plain P-PARSE diagnostic carrying no `help` string and no `fix`
 why-fixture: object, so nothing in the JSON envelope (nor the human message)
 why-fixture: names the values-only alias rule the author violated.
 why-control: control.mdk is the same program with the type imported BY NAME
-why-control: (`import mut_array.{MutArray, fromList}`, `MutArray Int`, bare
+why-control: (`import vector.{Vector, fromList}`, `Vector Int`, bare
 why-control: `fromList`) instead of via the alias — the AGENTS.md-documented
 why-control: correct spelling. It checks clean at exit 0 with zero diagnostics,
 why-control: isolating the bug to the alias-in-type-position case rather than
-why-control: to `MutArray`/`fromList` being broken or unimportable in general.
+why-control: to `Vector`/`fromList` being broken or unimportable in general.

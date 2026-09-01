@@ -30,10 +30,10 @@ NEWLINE
 PUBLIC
 EXPORT
 DATA
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "a"
 EQUAL
-UPPER "MutArray"
+UPPER "Vector"
 LPAREN
 UPPER "Ref"
 LPAREN
@@ -48,14 +48,14 @@ RPAREN
 NEWLINE
 IDENT "count"
 COLON
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "a"
 ARROW
 UPPER "Int"
 NEWLINE
 IDENT "count"
 LPAREN
-UPPER "MutArray"
+UPPER "Vector"
 UNDERSCORE
 IDENT "len"
 RPAREN
@@ -69,13 +69,13 @@ IDENT "new"
 COLON
 UPPER "Unit"
 ARROW
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "a"
 NEWLINE
 IDENT "new"
 UNDERSCORE
 EQUAL
-UPPER "MutArray"
+UPPER "Vector"
 LPAREN
 UPPER "Ref"
 LARRAY
@@ -93,7 +93,7 @@ COLON
 UPPER "List"
 IDENT "a"
 ARROW
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "a"
 NEWLINE
 IDENT "fromList"
@@ -106,7 +106,7 @@ EQUAL
 IDENT "arrayFromList"
 IDENT "xs"
 NEWLINE
-UPPER "MutArray"
+UPPER "Vector"
 LPAREN
 UPPER "Ref"
 IDENT "arr"
@@ -128,7 +128,7 @@ COLON
 UPPER "Array"
 IDENT "a"
 ARROW
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "a"
 NEWLINE
 IDENT "fromArray"
@@ -141,7 +141,7 @@ EQUAL
 IDENT "arrayCopy"
 IDENT "arr"
 NEWLINE
-UPPER "MutArray"
+UPPER "Vector"
 LPAREN
 UPPER "Ref"
 IDENT "c"
@@ -160,14 +160,14 @@ EXPORT
 NEWLINE
 IDENT "capacity"
 COLON
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "a"
 ARROW
 UPPER "Int"
 NEWLINE
 IDENT "capacity"
 LPAREN
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "backing"
 UNDERSCORE
 RPAREN
@@ -182,7 +182,7 @@ IDENT "get"
 COLON
 UPPER "Int"
 ARROW
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "a"
 ARROW
 UPPER "Option"
@@ -191,7 +191,7 @@ NEWLINE
 IDENT "get"
 IDENT "i"
 LPAREN
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "backing"
 IDENT "len"
 RPAREN
@@ -225,7 +225,7 @@ EXPORT
 IMPL
 UPPER "Index"
 LPAREN
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "a"
 RPAREN
 UPPER "Int"
@@ -234,7 +234,7 @@ WHERE
 INDENT
 IDENT "index"
 LPAREN
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "backing"
 IDENT "len"
 RPAREN
@@ -273,7 +273,7 @@ EXPORT
 NEWLINE
 IDENT "first"
 COLON
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "a"
 ARROW
 UPPER "Option"
@@ -290,7 +290,7 @@ EXPORT
 NEWLINE
 IDENT "last"
 COLON
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "a"
 ARROW
 UPPER "Option"
@@ -355,7 +355,7 @@ DEDENT
 NEWLINE
 IDENT "elems"
 COLON
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "a"
 ARROW
 UPPER "List"
@@ -363,7 +363,7 @@ IDENT "a"
 NEWLINE
 IDENT "elems"
 LPAREN
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "backing"
 IDENT "len"
 RPAREN
@@ -384,7 +384,7 @@ EXPORT
 NEWLINE
 IDENT "toArray"
 COLON
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "a"
 ARROW
 UPPER "Array"
@@ -392,7 +392,7 @@ IDENT "a"
 NEWLINE
 IDENT "toArray"
 LPAREN
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "backing"
 IDENT "len"
 RPAREN
@@ -423,7 +423,7 @@ IDENT "push"
 COLON
 IDENT "a"
 ARROW
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "a"
 ARROW
 UPPER "Unit"
@@ -431,7 +431,7 @@ NEWLINE
 IDENT "push"
 IDENT "x"
 LPAREN
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "backing"
 IDENT "len"
 RPAREN
@@ -523,7 +523,7 @@ EXPORT
 NEWLINE
 IDENT "pop"
 COLON
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "a"
 ARROW
 UPPER "Option"
@@ -531,7 +531,7 @@ IDENT "a"
 NEWLINE
 IDENT "pop"
 LPAREN
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "backing"
 IDENT "len"
 RPAREN
@@ -583,7 +583,7 @@ UPPER "Int"
 ARROW
 IDENT "a"
 ARROW
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "a"
 ARROW
 UPPER "Unit"
@@ -592,7 +592,7 @@ IDENT "setInPlace"
 IDENT "i"
 IDENT "x"
 LPAREN
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "backing"
 IDENT "len"
 RPAREN
@@ -617,7 +617,7 @@ PIPE
 IDENT "otherwise"
 EQUAL
 IDENT "panic"
-STRING "MutArray.setInPlace: index out of bounds"
+STRING "Vector.setInPlace: index out of bounds"
 NEWLINE
 DEDENT
 NEWLINE
@@ -625,7 +625,7 @@ EXPORT
 IMPL
 UPPER "IndexMut"
 LPAREN
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "a"
 RPAREN
 UPPER "Int"
@@ -634,7 +634,7 @@ WHERE
 INDENT
 IDENT "setIndex"
 LPAREN
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "backing"
 IDENT "len"
 RPAREN
@@ -662,7 +662,7 @@ IDENT "v"
 BANG
 IDENT "backing"
 NEWLINE
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "backing"
 IDENT "len"
 NEWLINE
@@ -683,7 +683,7 @@ UPPER "Int"
 ARROW
 UPPER "Int"
 ARROW
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "a"
 ARROW
 UPPER "Unit"
@@ -692,7 +692,7 @@ IDENT "swap"
 IDENT "i"
 IDENT "j"
 LPAREN
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "backing"
 UNDERSCORE
 RPAREN
@@ -734,14 +734,14 @@ EXPORT
 NEWLINE
 IDENT "clear"
 COLON
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "a"
 ARROW
 UPPER "Unit"
 NEWLINE
 IDENT "clear"
 LPAREN
-UPPER "MutArray"
+UPPER "Vector"
 UNDERSCORE
 IDENT "len"
 RPAREN
@@ -821,7 +821,7 @@ ARROW
 IDENT "a"
 RPAREN
 ARROW
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "a"
 ARROW
 UPPER "Unit"
@@ -829,7 +829,7 @@ NEWLINE
 IDENT "mapInPlace"
 IDENT "f"
 LPAREN
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "backing"
 IDENT "len"
 RPAREN
@@ -847,7 +847,7 @@ COLON
 UPPER "List"
 IDENT "a"
 ARROW
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "a"
 ARROW
 UPPER "Unit"
@@ -881,7 +881,7 @@ DEDENT
 NEWLINE
 IDENT "refill"
 COLON
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "a"
 ARROW
 UPPER "List"
@@ -911,7 +911,7 @@ UPPER "Int"
 ARROW
 IDENT "a"
 ARROW
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "a"
 ARROW
 UPPER "Unit"
@@ -941,7 +941,7 @@ IDENT "removeAt"
 COLON
 UPPER "Int"
 ARROW
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "a"
 ARROW
 UPPER "Unit"
@@ -978,7 +978,7 @@ GT
 UPPER "Ordering"
 RPAREN
 ARROW
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "a"
 ARROW
 LT
@@ -1010,7 +1010,7 @@ COLON
 UPPER "Ord"
 IDENT "a"
 FAT_ARROW
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "a"
 ARROW
 UPPER "Unit"
@@ -1151,14 +1151,14 @@ NEWLINE
 EXPORT
 IMPL
 UPPER "Foldable"
-UPPER "MutArray"
+UPPER "Vector"
 WHERE
 INDENT
 IDENT "fold"
 IDENT "f"
 IDENT "z"
 LPAREN
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "backing"
 IDENT "len"
 RPAREN
@@ -1176,7 +1176,7 @@ IDENT "foldRight"
 IDENT "f"
 IDENT "z"
 LPAREN
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "backing"
 IDENT "len"
 RPAREN
@@ -1201,7 +1201,7 @@ IDENT "ma"
 NEWLINE
 IDENT "isEmpty"
 LPAREN
-UPPER "MutArray"
+UPPER "Vector"
 UNDERSCORE
 IDENT "len"
 RPAREN
@@ -1213,7 +1213,7 @@ INT 0
 NEWLINE
 IDENT "length"
 LPAREN
-UPPER "MutArray"
+UPPER "Vector"
 UNDERSCORE
 IDENT "len"
 RPAREN
@@ -1227,7 +1227,7 @@ EXPORT
 IMPL
 UPPER "Eq"
 LPAREN
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "a"
 RPAREN
 REQUIRES
@@ -1264,7 +1264,7 @@ EXPORT
 IMPL
 UPPER "Debug"
 LPAREN
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "a"
 RPAREN
 REQUIRES
@@ -1289,7 +1289,7 @@ EXPORT
 IMPL
 UPPER "Display"
 LPAREN
-UPPER "MutArray"
+UPPER "Vector"
 IDENT "a"
 RPAREN
 REQUIRES
@@ -1831,7 +1831,7 @@ NEWLINE
 DEDENT
 NEWLINE
 PROP
-STRING "Display MutArray shows only the live range and agrees with Eq"
+STRING "Display Vector shows only the live range and agrees with Eq"
 LPAREN
 IDENT "xs"
 COLON

@@ -27,7 +27,7 @@
 -- not hypothetical) and returns `Err`, never garbage, never a hang.
 
 import array.{get, make}
-import mut_array.{MutArray, new, push, toArray}
+import vector.{Vector, new, push, toArray}
 import test.{expectEqual}
 
 -- ---------------------------------------------------------------------------
@@ -117,7 +117,7 @@ getBytesAligned n r =
   let out = new ()
   getBytesAlignedGo n r out
 
-getBytesAlignedGo : Int -> BitReader -> MutArray Int -> Result String (Array Int)
+getBytesAlignedGo : Int -> BitReader -> Vector Int -> Result String (Array Int)
 getBytesAlignedGo n r out
   | n <= 0 = Ok (toArray out)
   | otherwise = do
@@ -133,7 +133,7 @@ getBytesAlignedGo n r out
 --   whenever 8 or more valid bits are buffered, whole bytes are flushed to
 --   `buf` (low byte first). `buf` is the growable output.
 public export data BitWriter =
-  | BitWriter { buf : MutArray Int, hold : Ref Int, count : Ref Int }
+  | BitWriter { buf : Vector Int, hold : Ref Int, count : Ref Int }
 
 -- | A fresh, empty writer.
 export
@@ -162,7 +162,7 @@ flushBytes w =
 --   without this guard) — a loud crash at the call site beats a silently
 --   wrong compressed stream, which is the whole point of this module's
 --   error-path discipline. Same pattern as `Array.setInPlace`/`Array.blit`/
---   `MutArray.setInPlace` panicking on an out-of-bounds index rather than
+--   `Vector.setInPlace` panicking on an out-of-bounds index rather than
 --   returning `Result`. Bits of `v` above position `n - 1` are masked off,
 --   not validated — only the WIDTH is a hard precondition.
 export

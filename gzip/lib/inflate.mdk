@@ -20,7 +20,7 @@
 -- `inflateFixedHuffman` already used — is reused unchanged, parameterized
 -- over whichever pair of tables (fixed or dynamic) is in play.
 --
--- The output accumulator (`out : MutArray Int`, built with `stdlib/mut_array.mdk`)
+-- The output accumulator (`out : Vector Int`, built with `stdlib/vector.mdk`)
 -- *is* the sliding window — see `copyBack` below and
 -- `docs/design/GZIP-DESIGN.md` §"The sliding window and the overlap case".
 -- `inflateFixedHuffman` below is `copyBack`'s first real caller: every
@@ -37,7 +37,7 @@
 -- invisible to a subsequent Huffman block's `copyBack`.
 
 import array.{get, make, sliceClamped}
-import mut_array.{MutArray, new, push, get as maGet, toArray, fromList}
+import vector.{Vector, new, push, get as maGet, toArray, fromList}
 import lib.bitio.{
   BitReader,
   newBitReader,
@@ -108,7 +108,7 @@ mask32 = 4294967295
    Design-doc-verified shape: `copyBack 1 4` over `[65, 66]` yields
    `[65, 66, 66, 66, 66, 66]` (RLE of the trailing byte). -}
 export
-copyBack : Int -> Int -> MutArray Int -> Result String Unit
+copyBack : Int -> Int -> Vector Int -> Result String Unit
 copyBack distance len out =
   let outLen = length out
   if distance <= 0 then
@@ -118,7 +118,7 @@ copyBack distance len out =
   else
     copyBackGo distance len out
 
-copyBackGo : Int -> Int -> MutArray Int -> Result String Unit
+copyBackGo : Int -> Int -> Vector Int -> Result String Unit
 copyBackGo distance remaining out
   | remaining <= 0 = Ok ()
   | otherwise =
@@ -149,10 +149,10 @@ checkNlen len nlen =
 -- Push every byte of `bytes` onto `out`, in order — this is what makes a
 -- stored block's payload part of the sliding window, not just part of the
 -- output (see the module header).
-pushAll : Array Int -> MutArray Int -> Unit
+pushAll : Array Int -> Vector Int -> Unit
 pushAll bytes out = pushAllGo bytes 0 (arrayLength bytes) out
 
-pushAllGo : Array Int -> Int -> Int -> MutArray Int -> Unit
+pushAllGo : Array Int -> Int -> Int -> Vector Int -> Unit
 pushAllGo bytes i n out
   | i >= n = ()
   | otherwise = match get i bytes
@@ -163,7 +163,7 @@ pushAllGo bytes i n out
 
 -- | A stored block: byte-align, `LEN`/`NLEN` (2 bytes LE each, validated
 --   against each other), then `LEN` raw bytes copied verbatim into `out`.
-inflateStored : BitReader -> MutArray Int -> Result String Unit
+inflateStored : BitReader -> Vector Int -> Result String Unit
 inflateStored r out =
   let _ = alignByte r
   do
@@ -216,7 +216,7 @@ lookupTable arr i name = match get i arr
 --   `huffman.mdk`): `lengthBase`/`lengthExtra` are indexed by
 --   `lenSym - 257`, but `distBase`/`distExtra` are indexed by the BARE
 --   distance symbol `dsym` — not `dsym - 257`, not `dsym - 1`.
-inflateLengthDistance : Huffman -> Int -> BitReader -> MutArray Int -> Result String Unit
+inflateLengthDistance : Huffman -> Int -> BitReader -> Vector Int -> Result String Unit
 inflateLengthDistance distHuff lenSym r out = do
   lenBase <- lookupTable lengthBase (lenSym - 257) "lengthBase"
   lenExtraBits <- lookupTable lengthExtra (lenSym - 257) "lengthExtra"
@@ -228,7 +228,7 @@ inflateLengthDistance distHuff lenSym r out = do
 -- Split out of `inflateLengthDistance` so the `dsym > maxDistSym` check (RFC
 -- 1951 §3.2.3: distance codes 30/31 are reserved and always invalid) is a
 -- plain match-arm guard rather than nested inside a `do` block.
-distanceFor : Int -> Int -> BitReader -> MutArray Int -> Result String Unit
+distanceFor : Int -> Int -> BitReader -> Vector Int -> Result String Unit
 distanceFor dsym len r out =
   if dsym > maxDistSym then Err "inflate: invalid distance symbol \{dsym} (must be 0..\{maxDistSym})"
   else do
@@ -244,7 +244,7 @@ distanceFor dsym len r out =
 --   stream. Shared by fixed-Huffman (`fixedLitLen`/`fixedDist`) and
 --   dynamic-Huffman (the block's own decoded tables) blocks — see the
 --   module header.
-inflateHuffmanBlock : Huffman -> Huffman -> BitReader -> MutArray Int -> Result String Unit
+inflateHuffmanBlock : Huffman -> Huffman -> BitReader -> Vector Int -> Result String Unit
 inflateHuffmanBlock litHuff distHuff r out = match decodeSym litHuff r
   Err e => Err e
   Ok sym if sym < 256 =>
@@ -258,7 +258,7 @@ inflateHuffmanBlock litHuff distHuff r out = match decodeSym litHuff r
 
 -- | Fixed-Huffman blocks (BTYPE 01): the RFC 1951 §3.2.6 fixed literal/length
 --   and distance tables, unchanged from Phase 2.
-inflateFixedHuffman : BitReader -> MutArray Int -> Result String Unit
+inflateFixedHuffman : BitReader -> Vector Int -> Result String Unit
 inflateFixedHuffman r out = inflateHuffmanBlock fixedLitLen fixedDist r out
 
 -- ---------------------------------------------------------------------------
@@ -388,7 +388,7 @@ readCodeLengthsGo clHuff r lens i total prevLen
 --   both the single-code and zero-used-code exceptions, unlike the
 --   code-length alphabet above), then the same `inflateHuffmanBlock` loop
 --   fixed-Huffman blocks already use.
-inflateDynamicHuffman : BitReader -> MutArray Int -> Result String Unit
+inflateDynamicHuffman : BitReader -> Vector Int -> Result String Unit
 inflateDynamicHuffman r out = do
   (nLit, nDist, clHuff) <- readDynamicHeader r
   let total = nLit + nDist
@@ -406,7 +406,7 @@ inflateDynamicHuffman r out = do
 -- | Decode one block of the given `BTYPE` into `out`. `BTYPE=00`, `BTYPE=01`,
 --   and `BTYPE=10` are all real; `BTYPE=11` is always invalid per RFC 1951
 --   §3.2.3.
-inflateBlock : Int -> BitReader -> MutArray Int -> Result String Unit
+inflateBlock : Int -> BitReader -> Vector Int -> Result String Unit
 inflateBlock btype r out
   | btype == btypeStored = inflateStored r out
   | btype == btypeFixedHuffman = inflateFixedHuffman r out
@@ -417,7 +417,7 @@ inflateBlock btype r out
 
 -- Read BFINAL (1 bit) + BTYPE (2 bits), both LSB-first, decode one block,
 -- and loop until a block with BFINAL=1.
-inflateBlocks : BitReader -> MutArray Int -> Result String Unit
+inflateBlocks : BitReader -> Vector Int -> Result String Unit
 inflateBlocks r out = do
   bfinal <- getBits 1 r
   btype <- getBits 2 r
