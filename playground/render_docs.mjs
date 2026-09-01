@@ -131,7 +131,22 @@ function unshippedImports(text, shipped) {
   return out;
 }
 
-function classifyRunnable(label, text, shipped) {
+// The shipped-module set, DERIVED from what build_playground_wasm.sh staged —
+// exactly the files main.js can fetch as `dist/<id>.mdk`. `null`/absent means
+// "this caller does not know the shipped set", which SKIPS conjunct 4; an empty
+// directory would be a legitimately empty set and is NOT the same thing.
+//
+// Exported because a caller that wants to RECOMPUTE `classifyRunnable` over an
+// already-rendered page (playground/guide_render_test.mjs check 8) must feed it
+// the identical set the render used — deriving it a second time by hand is
+// exactly the drift that check exists to catch.
+export function shippedModules(distDir) {
+  return distDir === null || distDir === undefined
+    ? null
+    : new Set(readdirSync(distDir).filter((f) => f.endsWith('.mdk')).map((f) => f.replace(/\.mdk$/, '')));
+}
+
+export function classifyRunnable(label, text, shipped) {
   if (label === 'medaka-project') {
     return { runnable: false, reason: 'multi-file project — the playground runs a single source buffer' };
   }
@@ -182,7 +197,7 @@ function runnableFooter(status, text, playgroundUrl) {
 // welds them into the anchor — `#quothello-worldquot-in-medaka`. Decode FIRST,
 // so the punctuation is punctuation again and gets stripped as punctuation.
 // `&amp;` is decoded LAST: doing it first would let `&amp;lt;` become `<`.
-const decodeEntities = (s) =>
+export const decodeEntities = (s) =>
   s.replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
    .replace(/&#[xX]([0-9a-fA-F]+);/g, (_, h) => String.fromCodePoint(parseInt(h, 16)))
    .replace(/&quot;/g, '"').replace(/&apos;/g, "'")
@@ -262,13 +277,7 @@ export function renderDocSet(opts) {
           cssName = 'guide.css', distDir = null } = opts;
   if (!existsSync(src)) throw new Error(`--src does not exist: ${src}`);
 
-  // The shipped-module set, DERIVED from what build_playground_wasm.sh staged —
-  // exactly the files main.js can fetch as `dist/<id>.mdk`. `null` (no --dist)
-  // means "unknown", which skips conjunct 4; an empty directory would be a
-  // legitimately empty set and is NOT the same thing.
-  const shipped = distDir === null
-    ? null
-    : new Set(readdirSync(distDir).filter((f) => f.endsWith('.mdk')).map((f) => f.replace(/\.mdk$/, '')));
+  const shipped = shippedModules(distDir);
 
   // Enumerate the doc set from the DIRECTORY — never a hardcoded chapter list, so
   // a new chapter appears on the site by existing.

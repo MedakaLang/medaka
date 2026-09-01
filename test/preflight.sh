@@ -1089,8 +1089,20 @@ while IFS= read -r f; do
     # in a list file and running `PREFLIGHT_DRY=1 PREFLIGHT_CHANGED_FILE=<that
     # file> sh test/preflight.sh` — each derives diff_compiler_guide_render AND
     # keeps all nine playground/-level gates it had before.
+    #
+    # THIRD gate, third question (F-guide-gate-hardening, review finding S3-1b):
+    # `check_doc_links` is the only thing in the tree that resolves a chapter's
+    # OUT-OF-SET links (`../spec/FOO.md`, bare `compiler/…` citations) against
+    # what is actually on disk. The renderer cannot: an out-of-set target is
+    # rewritten to a repo blob URL by construction, so a link to a file that does
+    # not exist renders as a plausible, 404ing URL and passes the render gate
+    # clean. Without this line that defect reached `main` on any docs/guide/*.md
+    # PR — `case` fires its FIRST matching arm only, so the arm that names the
+    # two render/execution gates was the whole gate set for such a diff, and
+    # check_doc_links only ran in the merge tier.
     docs/guide/*.md)               add 'check_syntax_examples'
-                                   add 'diff_compiler_guide_render' ;;
+                                   add 'diff_compiler_guide_render'
+                                   add 'check_doc_links' ;;
     # S-reference-lands (#2249): docs/stdlib/*.md (+ index.md/inventory.json) is a
     # GENERATED tree (`./medaka doc --out docs/stdlib stdlib/*.mdk`), not prose —
     # without this arm it falls through to the generic docs/*.md "nothing to run"
