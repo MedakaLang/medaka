@@ -482,13 +482,13 @@ data Event =
 data MyColor =
   | MyRed  -- deriving
   | MyGreen
-deriving (Debug)
+  deriving (Debug)
 
 data Multi =
   -- deriving MAY sit on its own indented
   | Foo  -- line — but only because this `data`
   | Bar  -- decl itself is multi-line (see below)
-deriving (Debug)
+  deriving (Debug)
 
 p = Pt { x = 1, y = 2 }
 p2 = Pt { p | y = 9 }  -- variant functional update
@@ -500,7 +500,7 @@ multi-line `data` decl (like `Multi` above), an own-line `deriving` works. After
 **one-line** `data` decl, `deriving` must stay inline (as `MyColor` above) — on its own
 line it is a parse error that blames indentation, not `deriving` itself:
 
-```medaka-nocheck: parse error — after a one-line `data` decl, `deriving` must be inline, not on its own line
+```medaka-nocheck: parse error — after a one-line data decl, deriving must be inline, not on its own line
 data C = A | B
   deriving (Eq)                -- unexpected `deriving`. Indentation (column 2)
                                 -- doesn't match the enclosing block
@@ -544,7 +544,7 @@ pa2 = { pa | address = { pa.address | city = "Boston" } }  -- nested update suga
 
 data Boxed =
   | { x : Int }  -- deriving on a record-shaped data type
-deriving (Debug)
+  deriving (Debug)
 ```
 
 ## Type aliases & newtypes

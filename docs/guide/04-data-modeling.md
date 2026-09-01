@@ -126,7 +126,7 @@ data Category = Food | Housing | Books | Other deriving (Eq, Debug)
 
 data Expense =
   | { date : String, payee : String, amount : Float, category : Category }
-deriving (Eq, Debug)
+  deriving (Eq, Debug)
 
 coffee : Expense
 coffee = Expense {
@@ -337,7 +337,7 @@ data Category = Food | Housing | Books | Other deriving (Eq, Ord, Debug)
 
 data Expense =
   | { payee : String, amount : Float, category : Category }
-deriving (Eq, Debug)
+  deriving (Eq, Debug)
 
 main =
   let a = Expense { payee = "Cafe Fish", amount = 4.5, category = Food }
