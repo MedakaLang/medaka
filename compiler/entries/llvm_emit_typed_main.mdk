@@ -28,6 +28,7 @@ import ir.core_ir_lower.{
   ifaceImplHeadTable,
   declaredRecordFieldOrders,
   lowerProgramEmit,
+  EmitTarget(..),
   returnsSelfTable,
   selfFnParamTable,
   methodIfaceTable,
@@ -98,4 +99,4 @@ runEmit runtimeDecls preludeDecls userDecls =
   let dictNames = preludeReturnPosDictNames livePrelude combined ++ preludeArgPosDictNames livePrelude combined ++ constrainedSigNames userDecls
   let elaborated = elaborateDict runtimeDecls dictNames userNames combined
   let input = makeEmitInput (returnsSelfTable combined) (selfFnParamTable combined) (methodIfaceTable combined) (methodConstraintIfaces combined) (ctorFieldTypeNames combined) (declSigTypeNames runtimeDecls ++ declSigTypeNames combined) (mainTypeIsUnit ()) (mainTypeIsFloat ()) 0 [] [] "" (declaredRecordFieldOrders combined) (validateFfiExternTypeNames (checkedFfiExternTypeNames combined)) (ifaceImplHeadTable elaborated)
-  emitProgram input (lowerProgramEmit elaborated)
+  emitProgram input (lowerProgramEmit TargetNative elaborated)

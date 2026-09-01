@@ -21,7 +21,7 @@
 -- redirected the whole fix into the shared analysis.
 
 import frontend.ast.{Decl}
-import ir.core_ir_lower.{lowerProgramEmit}
+import ir.core_ir_lower.{lowerProgramEmit, EmitTarget(..)}
 import ir.core_ir_sexp.{cprogramToSexpWith, faithfulSexpMode}
 import ir.dce.{dceFilter}
 import entries.entry_support.{driveModules, runEmitWith}
@@ -40,4 +40,6 @@ emitTail _ coreD modules2 =
   -- projection (RKey/RLocal element+impl dicts).  Every golden-producing caller
   -- serializes through `cprogramToSexp`'s default mode instead, so the committed
   -- core_ir_sexp/snapshot corpus stays byte-identical.
-  putStr (cprogramToSexpWith faithfulSexpMode (lowerProgramEmit allDecls))
+  -- #1970: a debug probe with no backend of its own -- neither emitter reads this
+  -- output, so it cannot positively rule out either.
+  putStr (cprogramToSexpWith faithfulSexpMode (lowerProgramEmit TargetBothUnknown allDecls))

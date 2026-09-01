@@ -170,6 +170,7 @@ import ir.core_ir_lower.{
   declaredRecordFieldOrders,
   lowerProgram,
   lowerProgramEmit,
+  EmitTarget(..),
   returnsSelfTable,
   selfFnParamTable,
   methodIfaceTable,
@@ -621,7 +622,10 @@ emitBoth root sel runtimeDecls userDecls =
   let userNames = funNamesOf userDecls
   let dictNames = constrainedSigNames userDecls
   let allDecls = elaborateDict runtimeDecls dictNames userNames userDecls
-  let cp = lowerProgramEmit allDecls
+  -- #1970: this ONE lowered CProgram feeds BOTH backends below (`llvmOf`/`wasmOf`),
+  -- so it cannot pass `TargetNative` or `TargetWasm` -- either would narrow the
+  -- guard for the backend that does not get to see it here.
+  let cp = lowerProgramEmit TargetBothUnknown allDecls
   let _ = if wants sel "LLVM" then
     emitSection root "LLVM" (llvmOf runtimeDecls allDecls cp)
   else

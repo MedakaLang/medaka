@@ -38,6 +38,7 @@ import ir.core_ir_lower.{
   ifaceImplHeadTable,
   declaredRecordFieldOrders,
   lowerProgramEmit,
+  EmitTarget(..),
   returnsSelfTable,
   selfFnParamTable,
   methodIfaceTable,
@@ -98,7 +99,7 @@ emitHalfOfEnv = match getEnv "MEDAKA_EMIT_HALF"
 -- to always DEFINE it in the program half instead of asking the shared object
 -- for it.
 preludeSymsOf : List Decl -> (List String, List (String, String))
-preludeSymsOf coreD = match lowerProgramEmit coreD
+preludeSymsOf coreD = match lowerProgramEmit TargetNative coreD
   CProgram groups _ _ impls => (
     filterList (n => not (endsWith autoPrintPinName n)) (map cbindNameOf groups),
     implKeysOf impls,
@@ -140,11 +141,11 @@ emitTail runtimeDecls coreD modules2 =
     (ifaceImplHeadTable allDecls)
   let statsOn = statsEnabled ()
   if statsOn then
-    let (text, stats) = emitProgramWithStats input (lowerProgramEmit allDecls)
+    let (text, stats) = emitProgramWithStats input (lowerProgramEmit TargetNative allDecls)
     let _ = emitStats statsOn stats
     putStr text
   else
-    putStr (emitProgram input (lowerProgramEmit allDecls))
+    putStr (emitProgram input (lowerProgramEmit TargetNative allDecls))
 -- Module-qualify module-PRIVATE top-level functions whose bare name collides
 -- across units, BEFORE elaborateModules flattens the boundaries away (same
 -- flat-emit @mdk_<name> collision risk the bootstrap driver fixes).  The gate

@@ -22,6 +22,7 @@ import frontend.desugar.{desugar}
 import types.annotate.{annotateProgram}
 import ir.core_ir_lower.{
   lowerProgramEmit,
+  EmitTarget(..),
   declaredRecordFieldOrders,
   ifaceImplHeadTable,
 }
@@ -63,4 +64,4 @@ emitTarget decls =
       -- index keeps its behaviour exactly what it was.
       []
       (ifaceImplHeadTable decls))
-    (lowerProgramEmit decls))
+    (lowerProgramEmit TargetNative decls))

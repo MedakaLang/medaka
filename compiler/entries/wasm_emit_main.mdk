@@ -23,6 +23,7 @@ import types.annotate.{annotateProgram}
 import ir.core_ir_lower.{
   ifaceImplHeadTable,
   lowerProgramEmit,
+  EmitTarget(..),
   declSigTypeNames,
   ctorFieldTypeNames,
   declaredRecordFieldOrders,
@@ -41,5 +42,5 @@ withTarget targetPath = match readFile targetPath
     -- program's impl entries are projections of one program.
     let annotated = annotateProgram decls
     let input = makeWasmEmitInputFull [] (declSigTypeNames decls) (ctorFieldTypeNames decls) False (declaredRecordFieldOrders decls) [] (ifaceImplHeadTable annotated)
-    putStr (emitProgram input (lowerProgramEmit annotated))
+    putStr (emitProgram input (lowerProgramEmit TargetWasm annotated))
   Err msg => ePutStrLn msg

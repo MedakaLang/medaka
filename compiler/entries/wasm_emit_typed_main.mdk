@@ -46,6 +46,7 @@ import ir.core_ir.{
 import ir.core_ir_lower.{
   ifaceImplHeadTable,
   lowerProgramEmit,
+  EmitTarget(..),
   declSigTypeNames,
   ctorFieldTypeNames,
   declaredRecordFieldOrders,
@@ -115,7 +116,9 @@ typedProgram runtimeDecls preludeDecls userDecls =
   let livePrelude = dropShadowedExp userNames preludeDecls
   let combined = livePrelude ++ userDecls
   let dictNames = preludeReturnPosDictNames livePrelude combined ++ preludeArgPosDictNames livePrelude combined ++ constrainedSigNames userDecls
-  lowerProgramEmit (elaborateDict runtimeDecls dictNames userNames combined)
+  lowerProgramEmit
+    TargetWasm
+    (elaborateDict runtimeDecls dictNames userNames combined)
 
 -- Same-process input-isolation harness for X-W.H1. It lowers P once, then emits
 -- that exact CProgram with P's complete input, one U-derived field at a time, and

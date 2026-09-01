@@ -1,5 +1,5 @@
 # META
-source_lines=2349
+source_lines=2366
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -628,6 +628,19 @@ lowerProgram prog =
     (buildCtorToType prog)
     (lowerImpls prog)
 
+-- #1970: which backend(s) a `lowerProgramEmit` caller is about to feed the result
+-- to — the discriminator `dictWitnessTagGuard` needs to narrow its wasm 30-bit
+-- `dictTag` check (#377) to callers that provably never emit wasm from this
+-- CProgram.  `TargetBothUnknown` is NOT a "don't know yet, ask later" filler value
+-- — it is the correct, and unchanged, answer for a caller that positively serves
+-- (or cannot rule out serving) BOTH backends from the one lowered program: a
+-- shared debug/structural probe (`snapshot.mdk`'s `emitBoth`, `profile_main.mdk`'s
+-- reused `cprog`, `core_ir_typed_modules_dump_main.mdk`, `draft_semantic_program.mdk`)
+-- must get the SAME full-width check a genuinely target-unaware caller would, or a
+-- collision that is real under `--target wasm` goes unreported because SOME other
+-- caller in the same binary happened to know `native`.  Only `TargetNative` narrows.
+public export data EmitTarget = TargetNative | TargetWasm | TargetBothUnknown
+
 -- ── record-pattern → positional-constructor-pattern rewrite (native backend) ──
 -- The LLVM emitter has no record-pattern path: records / named-field variants are
 -- heap CELLS `[tag | field0 | field1 | …]` exactly like positional constructors,
@@ -649,14 +662,15 @@ lowerProgram prog =
 -- the emitter's record cell layout / recFieldTable use, so the positional indices
 -- line up with the cell's stored field offsets (verified by the fixture byte-diff).
 export
-lowerProgramEmit : List Decl -> CProgram
-lowerProgramEmit prog =
+lowerProgramEmit : EmitTarget -> List Decl -> CProgram
+lowerProgramEmit target prog =
   -- #1950: refuse a program whose impls collide on ONE emitted symbol, here rather
   -- than letting clang report it unlocated.  Both backends reach this seam.
   let _ = implSymbolCollisionGuard prog
   -- #348/#377: refuse a program whose dict-witness TAGS collide under djb2, in
-  -- either backend's tag width.  Same seam, same reason.
-  let _ = dictWitnessTagGuard prog
+  -- either backend's tag width the caller's `target` cannot rule out.  Same seam,
+  -- same reason.
+  let _ = dictWitnessTagGuard target prog
   hoistNullaryMemo (rewriteProgramRecPats
     (declaredRecordFieldOrders prog)
     (lowerProgram prog))
@@ -1654,18 +1668,18 @@ implSymTagOf collide method tag key =
 --     impl, so either match selects the same body and nothing is lost.
 --   * it observes the tag the backends are about to mint; it does not change the
 --     tag scheme.  Every collision-free program emits byte-identical IR and WAT.
---   * ⚠️ the WASM pass OVER-APPROXIMATES for native-only builds, deliberately.  This
---     seam is shared and carries no backend discriminator (`lowerProgramEmit` has
---     ~14 callers across `entries/`, the playground and `tools/snapshot`, none of
---     which pass a target), so a pair that collides ONLY in the 30-bit width — full
---     i64 hashes distinct — refuses `medaka build` as well, though native codegen
---     for it would have been correct.  Taken in the loud direction on purpose: the
---     alternative is a silent wrong dispatch under `--target wasm`, and the message
---     says which width collided so the refusal is not mistaken for a native defect.
---     Threading a target through those callers is the change that would narrow it,
---     and it is bigger than this guard.
-dictWitnessTagGuard : List Decl -> Unit
-dictWitnessTagGuard prog =
+--   * ⚠️ the WASM pass OVER-APPROXIMATES for a caller that cannot positively rule
+--     out wasm.  #1970 threads an `EmitTarget` discriminator through
+--     `lowerProgramEmit` and its callers: a caller passing `TargetNative` (an
+--     LLVM-only emit driver) skips this 30-bit pass entirely, so a pair that
+--     collides ONLY in the masked width — full i64 hashes distinct — now builds
+--     under `--target native`, where native codegen for it is correct.
+--     `TargetWasm` and `TargetBothUnknown` both still run this pass, unchanged: a
+--     target-agnostic caller (a shared debug probe, or a driver feeding one
+--     lowered `CProgram` to both backends) gets the SAME full-width check as
+--     before, because it cannot rule out wasm either.
+dictWitnessTagGuard : EmitTarget -> List Decl -> Unit
+dictWitnessTagGuard target prog =
   let implRows = flatMap dictRouteWordsOf prog
   -- the reserved `noneHeadTag` self-pair is seeded PER METHOD NAME that actually
   -- has a row, not once program-wide: a general instance's runtime dict header is
@@ -1674,11 +1688,14 @@ dictWitnessTagGuard prog =
   -- compared in.
   let sentinelRows = map (m => (m, noneHeadTag, noneHeadTag)) (distinctMethodNamesOf implRows omEmpty)
   let rows = dedupRouteWords (sentinelRows ++ implRows) omEmpty
-  -- native FIRST: a full-width `hashName` collision is also a `dictTag` collision
-  -- (masking cannot separate equal values), so reporting it in the i64 space names
-  -- the wider defect.  The 30-bit pass then catches what only the MASK conflates.
+  -- native FIRST, and ALWAYS: a full-width `hashName` collision is also a
+  -- `dictTag` collision (masking cannot separate equal values), so reporting it
+  -- in the i64 space names the wider defect regardless of target — this pass is
+  -- not the over-approximation and is never narrowed.
   let _ = checkDictTagsInjective nativeDictTagSpace hashName rows omEmpty
-  checkDictTagsInjective wasmDictTagSpace dictTag rows omEmpty
+  match target
+    TargetNative => ()
+    _ => checkDictTagsInjective wasmDictTagSpace dictTag rows omEmpty
 
 -- distinct method names appearing in a row list, first-arrival order — used only to
 -- scope the `noneHeadTag` sentinel per method (see `dictWitnessTagGuard`).
@@ -2583,8 +2600,9 @@ nodeTag _ = "?"
 (DFunDef false "lowerStmt" (PWild) (EApp (EVar "panic") (ELit (LString "core_ir lower: unsupported block statement"))))
 (DTypeSig true "lowerProgram" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram")))
 (DFunDef false "lowerProgram" ((PVar "prog")) (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EVar "lowerGroups") (EVar "prog"))) (EApp (EVar "ctorArities") (EVar "prog"))) (EApp (EVar "buildCtorToType") (EVar "prog"))) (EApp (EVar "lowerImpls") (EVar "prog"))))
-(DTypeSig true "lowerProgramEmit" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram")))
-(DFunDef false "lowerProgramEmit" ((PVar "prog")) (EBlock (DoLet false false PWild (EApp (EVar "implSymbolCollisionGuard") (EVar "prog"))) (DoLet false false PWild (EApp (EVar "dictWitnessTagGuard") (EVar "prog"))) (DoExpr (EApp (EVar "hoistNullaryMemo") (EApp (EApp (EVar "rewriteProgramRecPats") (EApp (EVar "declaredRecordFieldOrders") (EVar "prog"))) (EApp (EVar "lowerProgram") (EVar "prog")))))))
+(DData Public "EmitTarget" () ((variant "TargetNative" (ConPos)) (variant "TargetWasm" (ConPos)) (variant "TargetBothUnknown" (ConPos))) ())
+(DTypeSig true "lowerProgramEmit" (TyFun (TyCon "EmitTarget") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram"))))
+(DFunDef false "lowerProgramEmit" ((PVar "target") (PVar "prog")) (EBlock (DoLet false false PWild (EApp (EVar "implSymbolCollisionGuard") (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "dictWitnessTagGuard") (EVar "target")) (EVar "prog"))) (DoExpr (EApp (EVar "hoistNullaryMemo") (EApp (EApp (EVar "rewriteProgramRecPats") (EApp (EVar "declaredRecordFieldOrders") (EVar "prog"))) (EApp (EVar "lowerProgram") (EVar "prog")))))))
 (DTypeSig true "declaredRecordFieldOrders" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "declaredRecordFieldOrders" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "recPatFieldOrderEntries")) (EVar "prog")))
 (DTypeSig false "recPatFieldOrderEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -2850,8 +2868,8 @@ nodeTag _ = "?"
 (DFunDef false "checkImplSymbolsInjective" ((PVar "collide") (PCons (PTuple (PVar "m") (PVar "tag") (PVar "key")) (PVar "rest")) (PVar "seen")) (EBlock (DoLet false false (PVar "sym") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mdk_impl_")) (EApp (EVar "display") (EApp (EApp (EApp (EApp (EVar "implSymTagOf") (EVar "collide")) (EVar "m")) (EVar "tag")) (EVar "key")))) (ELit (LString "_"))) (EApp (EVar "display") (EVar "m"))) (ELit (LString "")))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "sym")) (EVar "seen")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "checkImplSymbolsInjective") (EVar "collide")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "sym")) (EVar "key")) (EVar "seen")))) (arm (PCon "Some" (PVar "prev")) () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "emitted impl-symbol collision: two DISTINCT impls of method `")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "` are emitted under one symbol.\ncollided symbol: "))) (EApp (EVar "display") (EVar "sym"))) (ELit (LString "\nimpl 1 key: "))) (EApp (EVar "display") (EVar "prev"))) (ELit (LString "\nimpl 2 key: "))) (EApp (EVar "display") (EVar "key"))) (ELit (LString "\nTwo distinct impls cannot share one emitted symbol: the backend would define one body twice (the native link fails) or keep one and silently drop the other. The two keys above are the impls' canonical dispatch keys, spelled `<module>::<Interface>|<type arguments>|`. Since #1950 those keys are spelled into the symbol by `private_mangle.injectiveIdent`, which is INJECTIVE, so this is NOT a naming mistake you can rename your way out of -- it means the emitted-symbol scheme itself lost injectivity. Please report this message, with both keys above.")))))))))
 (DTypeSig false "implSymTagOf" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))))
 (DFunDef false "implSymTagOf" ((PVar "collide") (PVar "method") (PVar "tag") (PVar "key")) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "implHeadKey") (EVar "method")) (EVar "tag"))) (EVar "collide")) (EApp (EVar "injectiveIdent") (EVar "key")) (EVar "tag")))
-(DTypeSig false "dictWitnessTagGuard" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))
-(DFunDef false "dictWitnessTagGuard" ((PVar "prog")) (EBlock (DoLet false false (PVar "implRows") (EApp (EApp (EVar "flatMap") (EVar "dictRouteWordsOf")) (EVar "prog"))) (DoLet false false (PVar "sentinelRows") (EApp (EApp (EVar "map") (ELam ((PVar "m")) (ETuple (EVar "m") (EVar "noneHeadTag") (EVar "noneHeadTag")))) (EApp (EApp (EVar "distinctMethodNamesOf") (EVar "implRows")) (EVar "omEmpty")))) (DoLet false false (PVar "rows") (EApp (EApp (EVar "dedupRouteWords") (EBinOp "++" (EVar "sentinelRows") (EVar "implRows"))) (EVar "omEmpty"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "nativeDictTagSpace")) (EVar "hashName")) (EVar "rows")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "wasmDictTagSpace")) (EVar "dictTag")) (EVar "rows")) (EVar "omEmpty")))))
+(DTypeSig false "dictWitnessTagGuard" (TyFun (TyCon "EmitTarget") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
+(DFunDef false "dictWitnessTagGuard" ((PVar "target") (PVar "prog")) (EBlock (DoLet false false (PVar "implRows") (EApp (EApp (EVar "flatMap") (EVar "dictRouteWordsOf")) (EVar "prog"))) (DoLet false false (PVar "sentinelRows") (EApp (EApp (EVar "map") (ELam ((PVar "m")) (ETuple (EVar "m") (EVar "noneHeadTag") (EVar "noneHeadTag")))) (EApp (EApp (EVar "distinctMethodNamesOf") (EVar "implRows")) (EVar "omEmpty")))) (DoLet false false (PVar "rows") (EApp (EApp (EVar "dedupRouteWords") (EBinOp "++" (EVar "sentinelRows") (EVar "implRows"))) (EVar "omEmpty"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "nativeDictTagSpace")) (EVar "hashName")) (EVar "rows")) (EVar "omEmpty"))) (DoExpr (EMatch (EVar "target") (arm (PCon "TargetNative") () (ELit LUnit)) (arm PWild () (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "wasmDictTagSpace")) (EVar "dictTag")) (EVar "rows")) (EVar "omEmpty")))))))
 (DTypeSig false "distinctMethodNamesOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "distinctMethodNamesOf" ((PList) PWild) (EListLit))
 (DFunDef false "distinctMethodNamesOf" ((PCons (PTuple (PVar "m") PWild PWild) (PVar "rest")) (PVar "seen")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "m")) (EVar "seen")) (EApp (EApp (EVar "distinctMethodNamesOf") (EVar "rest")) (EVar "seen")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "m") (EApp (EApp (EVar "distinctMethodNamesOf") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "m")) (ELit LUnit)) (EVar "seen")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -3301,8 +3319,9 @@ nodeTag _ = "?"
 (DFunDef false "lowerStmt" (PWild) (EApp (EVar "panic") (ELit (LString "core_ir lower: unsupported block statement"))))
 (DTypeSig true "lowerProgram" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram")))
 (DFunDef false "lowerProgram" ((PVar "prog")) (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EVar "lowerGroups") (EVar "prog"))) (EApp (EVar "ctorArities") (EVar "prog"))) (EApp (EVar "buildCtorToType") (EVar "prog"))) (EApp (EVar "lowerImpls") (EVar "prog"))))
-(DTypeSig true "lowerProgramEmit" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram")))
-(DFunDef false "lowerProgramEmit" ((PVar "prog")) (EBlock (DoLet false false PWild (EApp (EVar "implSymbolCollisionGuard") (EVar "prog"))) (DoLet false false PWild (EApp (EVar "dictWitnessTagGuard") (EVar "prog"))) (DoExpr (EApp (EVar "hoistNullaryMemo") (EApp (EApp (EVar "rewriteProgramRecPats") (EApp (EVar "declaredRecordFieldOrders") (EVar "prog"))) (EApp (EVar "lowerProgram") (EVar "prog")))))))
+(DData Public "EmitTarget" () ((variant "TargetNative" (ConPos)) (variant "TargetWasm" (ConPos)) (variant "TargetBothUnknown" (ConPos))) ())
+(DTypeSig true "lowerProgramEmit" (TyFun (TyCon "EmitTarget") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram"))))
+(DFunDef false "lowerProgramEmit" ((PVar "target") (PVar "prog")) (EBlock (DoLet false false PWild (EApp (EVar "implSymbolCollisionGuard") (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "dictWitnessTagGuard") (EVar "target")) (EVar "prog"))) (DoExpr (EApp (EVar "hoistNullaryMemo") (EApp (EApp (EVar "rewriteProgramRecPats") (EApp (EVar "declaredRecordFieldOrders") (EVar "prog"))) (EApp (EVar "lowerProgram") (EVar "prog")))))))
 (DTypeSig true "declaredRecordFieldOrders" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "declaredRecordFieldOrders" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "recPatFieldOrderEntries")) (EVar "prog")))
 (DTypeSig false "recPatFieldOrderEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -3568,8 +3587,8 @@ nodeTag _ = "?"
 (DFunDef false "checkImplSymbolsInjective" ((PVar "collide") (PCons (PTuple (PVar "m") (PVar "tag") (PVar "key")) (PVar "rest")) (PVar "seen")) (EBlock (DoLet false false (PVar "sym") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mdk_impl_")) (EApp (EMethodRef "display") (EApp (EApp (EApp (EApp (EVar "implSymTagOf") (EVar "collide")) (EVar "m")) (EVar "tag")) (EVar "key")))) (ELit (LString "_"))) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "")))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "sym")) (EVar "seen")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "checkImplSymbolsInjective") (EVar "collide")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "sym")) (EVar "key")) (EVar "seen")))) (arm (PCon "Some" (PVar "prev")) () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "emitted impl-symbol collision: two DISTINCT impls of method `")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "` are emitted under one symbol.\ncollided symbol: "))) (EApp (EMethodRef "display") (EVar "sym"))) (ELit (LString "\nimpl 1 key: "))) (EApp (EMethodRef "display") (EVar "prev"))) (ELit (LString "\nimpl 2 key: "))) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString "\nTwo distinct impls cannot share one emitted symbol: the backend would define one body twice (the native link fails) or keep one and silently drop the other. The two keys above are the impls' canonical dispatch keys, spelled `<module>::<Interface>|<type arguments>|`. Since #1950 those keys are spelled into the symbol by `private_mangle.injectiveIdent`, which is INJECTIVE, so this is NOT a naming mistake you can rename your way out of -- it means the emitted-symbol scheme itself lost injectivity. Please report this message, with both keys above.")))))))))
 (DTypeSig false "implSymTagOf" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))))
 (DFunDef false "implSymTagOf" ((PVar "collide") (PVar "method") (PVar "tag") (PVar "key")) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "implHeadKey") (EVar "method")) (EVar "tag"))) (EVar "collide")) (EApp (EVar "injectiveIdent") (EVar "key")) (EVar "tag")))
-(DTypeSig false "dictWitnessTagGuard" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))
-(DFunDef false "dictWitnessTagGuard" ((PVar "prog")) (EBlock (DoLet false false (PVar "implRows") (EApp (EApp (EDictApp "flatMap") (EVar "dictRouteWordsOf")) (EVar "prog"))) (DoLet false false (PVar "sentinelRows") (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (ETuple (EVar "m") (EVar "noneHeadTag") (EVar "noneHeadTag")))) (EApp (EApp (EVar "distinctMethodNamesOf") (EVar "implRows")) (EVar "omEmpty")))) (DoLet false false (PVar "rows") (EApp (EApp (EVar "dedupRouteWords") (EBinOp "++" (EVar "sentinelRows") (EVar "implRows"))) (EVar "omEmpty"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "nativeDictTagSpace")) (EVar "hashName")) (EVar "rows")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "wasmDictTagSpace")) (EVar "dictTag")) (EVar "rows")) (EVar "omEmpty")))))
+(DTypeSig false "dictWitnessTagGuard" (TyFun (TyCon "EmitTarget") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
+(DFunDef false "dictWitnessTagGuard" ((PVar "target") (PVar "prog")) (EBlock (DoLet false false (PVar "implRows") (EApp (EApp (EDictApp "flatMap") (EVar "dictRouteWordsOf")) (EVar "prog"))) (DoLet false false (PVar "sentinelRows") (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (ETuple (EVar "m") (EVar "noneHeadTag") (EVar "noneHeadTag")))) (EApp (EApp (EVar "distinctMethodNamesOf") (EVar "implRows")) (EVar "omEmpty")))) (DoLet false false (PVar "rows") (EApp (EApp (EVar "dedupRouteWords") (EBinOp "++" (EVar "sentinelRows") (EVar "implRows"))) (EVar "omEmpty"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "nativeDictTagSpace")) (EVar "hashName")) (EVar "rows")) (EVar "omEmpty"))) (DoExpr (EMatch (EVar "target") (arm (PCon "TargetNative") () (ELit LUnit)) (arm PWild () (EApp (EApp (EApp (EApp (EVar "checkDictTagsInjective") (EVar "wasmDictTagSpace")) (EVar "dictTag")) (EVar "rows")) (EVar "omEmpty")))))))
 (DTypeSig false "distinctMethodNamesOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "distinctMethodNamesOf" ((PList) PWild) (EListLit))
 (DFunDef false "distinctMethodNamesOf" ((PCons (PTuple (PVar "m") PWild PWild) (PVar "rest")) (PVar "seen")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "m")) (EVar "seen")) (EApp (EApp (EVar "distinctMethodNamesOf") (EVar "rest")) (EVar "seen")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "m") (EApp (EApp (EVar "distinctMethodNamesOf") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "m")) (ELit LUnit)) (EVar "seen")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))

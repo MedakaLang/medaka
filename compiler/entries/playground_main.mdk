@@ -112,6 +112,7 @@ import types.typecheck.{
 import ir.core_ir_lower.{
   ifaceImplHeadTable,
   lowerProgramEmit,
+  EmitTarget(..),
   methodIfaceTable,
   declSigTypeNames,
   declaredRecordFieldOrders,
@@ -337,7 +338,7 @@ runEmit runtimeDecls coreDecls modules =
   -- program, then drop the impl bodies (and the plain bindings only they
   -- reached) that no dispatchable method name in this program can reach.  Without
   -- this the in-browser compiler emitted ~84k lines of WAT for a one-line program.
-  let lowered = lowerProgramEmit allDecls
+  let lowered = lowerProgramEmit TargetWasm allDecls
   let filtered = wasmReachFilter lowered
   putStr (emitProgram input filtered)
 

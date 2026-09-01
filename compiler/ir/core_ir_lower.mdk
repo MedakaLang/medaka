@@ -624,6 +624,19 @@ lowerProgram prog =
     (buildCtorToType prog)
     (lowerImpls prog)
 
+-- #1970: which backend(s) a `lowerProgramEmit` caller is about to feed the result
+-- to — the discriminator `dictWitnessTagGuard` needs to narrow its wasm 30-bit
+-- `dictTag` check (#377) to callers that provably never emit wasm from this
+-- CProgram.  `TargetBothUnknown` is NOT a "don't know yet, ask later" filler value
+-- — it is the correct, and unchanged, answer for a caller that positively serves
+-- (or cannot rule out serving) BOTH backends from the one lowered program: a
+-- shared debug/structural probe (`snapshot.mdk`'s `emitBoth`, `profile_main.mdk`'s
+-- reused `cprog`, `core_ir_typed_modules_dump_main.mdk`, `draft_semantic_program.mdk`)
+-- must get the SAME full-width check a genuinely target-unaware caller would, or a
+-- collision that is real under `--target wasm` goes unreported because SOME other
+-- caller in the same binary happened to know `native`.  Only `TargetNative` narrows.
+public export data EmitTarget = TargetNative | TargetWasm | TargetBothUnknown
+
 -- ── record-pattern → positional-constructor-pattern rewrite (native backend) ──
 -- The LLVM emitter has no record-pattern path: records / named-field variants are
 -- heap CELLS `[tag | field0 | field1 | …]` exactly like positional constructors,
@@ -645,14 +658,15 @@ lowerProgram prog =
 -- the emitter's record cell layout / recFieldTable use, so the positional indices
 -- line up with the cell's stored field offsets (verified by the fixture byte-diff).
 export
-lowerProgramEmit : List Decl -> CProgram
-lowerProgramEmit prog =
+lowerProgramEmit : EmitTarget -> List Decl -> CProgram
+lowerProgramEmit target prog =
   -- #1950: refuse a program whose impls collide on ONE emitted symbol, here rather
   -- than letting clang report it unlocated.  Both backends reach this seam.
   let _ = implSymbolCollisionGuard prog
   -- #348/#377: refuse a program whose dict-witness TAGS collide under djb2, in
-  -- either backend's tag width.  Same seam, same reason.
-  let _ = dictWitnessTagGuard prog
+  -- either backend's tag width the caller's `target` cannot rule out.  Same seam,
+  -- same reason.
+  let _ = dictWitnessTagGuard target prog
   hoistNullaryMemo (rewriteProgramRecPats
     (declaredRecordFieldOrders prog)
     (lowerProgram prog))
@@ -1650,18 +1664,18 @@ implSymTagOf collide method tag key =
 --     impl, so either match selects the same body and nothing is lost.
 --   * it observes the tag the backends are about to mint; it does not change the
 --     tag scheme.  Every collision-free program emits byte-identical IR and WAT.
---   * ⚠️ the WASM pass OVER-APPROXIMATES for native-only builds, deliberately.  This
---     seam is shared and carries no backend discriminator (`lowerProgramEmit` has
---     ~14 callers across `entries/`, the playground and `tools/snapshot`, none of
---     which pass a target), so a pair that collides ONLY in the 30-bit width — full
---     i64 hashes distinct — refuses `medaka build` as well, though native codegen
---     for it would have been correct.  Taken in the loud direction on purpose: the
---     alternative is a silent wrong dispatch under `--target wasm`, and the message
---     says which width collided so the refusal is not mistaken for a native defect.
---     Threading a target through those callers is the change that would narrow it,
---     and it is bigger than this guard.
-dictWitnessTagGuard : List Decl -> Unit
-dictWitnessTagGuard prog =
+--   * ⚠️ the WASM pass OVER-APPROXIMATES for a caller that cannot positively rule
+--     out wasm.  #1970 threads an `EmitTarget` discriminator through
+--     `lowerProgramEmit` and its callers: a caller passing `TargetNative` (an
+--     LLVM-only emit driver) skips this 30-bit pass entirely, so a pair that
+--     collides ONLY in the masked width — full i64 hashes distinct — now builds
+--     under `--target native`, where native codegen for it is correct.
+--     `TargetWasm` and `TargetBothUnknown` both still run this pass, unchanged: a
+--     target-agnostic caller (a shared debug probe, or a driver feeding one
+--     lowered `CProgram` to both backends) gets the SAME full-width check as
+--     before, because it cannot rule out wasm either.
+dictWitnessTagGuard : EmitTarget -> List Decl -> Unit
+dictWitnessTagGuard target prog =
   let implRows = flatMap dictRouteWordsOf prog
   -- the reserved `noneHeadTag` self-pair is seeded PER METHOD NAME that actually
   -- has a row, not once program-wide: a general instance's runtime dict header is
@@ -1670,11 +1684,14 @@ dictWitnessTagGuard prog =
   -- compared in.
   let sentinelRows = map (m => (m, noneHeadTag, noneHeadTag)) (distinctMethodNamesOf implRows omEmpty)
   let rows = dedupRouteWords (sentinelRows ++ implRows) omEmpty
-  -- native FIRST: a full-width `hashName` collision is also a `dictTag` collision
-  -- (masking cannot separate equal values), so reporting it in the i64 space names
-  -- the wider defect.  The 30-bit pass then catches what only the MASK conflates.
+  -- native FIRST, and ALWAYS: a full-width `hashName` collision is also a
+  -- `dictTag` collision (masking cannot separate equal values), so reporting it
+  -- in the i64 space names the wider defect regardless of target — this pass is
+  -- not the over-approximation and is never narrowed.
   let _ = checkDictTagsInjective nativeDictTagSpace hashName rows omEmpty
-  checkDictTagsInjective wasmDictTagSpace dictTag rows omEmpty
+  match target
+    TargetNative => ()
+    _ => checkDictTagsInjective wasmDictTagSpace dictTag rows omEmpty
 
 -- distinct method names appearing in a row list, first-arrival order — used only to
 -- scope the `noneHeadTag` sentinel per method (see `dictWitnessTagGuard`).

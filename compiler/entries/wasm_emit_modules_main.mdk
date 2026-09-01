@@ -42,6 +42,7 @@ import ir.core_ir_lower.{
   ifaceImplHeadTable,
   declaredRecordFieldOrders,
   lowerProgramEmit,
+  EmitTarget(..),
   methodIfaceTable,
   declSigTypeNames,
   ctorFieldTypeNames,
@@ -72,7 +73,7 @@ emitTail runtimeDecls coreD modules2 =
   let allDecls = dceFilter allDecls0
   let _ = preludeReturnPosDictNames coreD allDecls ++ preludeArgPosDictNames coreD allDecls ++ constrainedSigNames allDecls
   let input = makeWasmEmitInputFull (methodIfaceTable allDecls) (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls) (ctorFieldTypeNames allDecls) (mainTypeIsFloat ()) (declaredRecordFieldOrders allDecls) (validateFfiExternTypeNames (checkedFfiExternTypeNamesModules modules2)) (ifaceImplHeadTable allDecls)
-  let lowered = lowerProgramEmit allDecls
+  let lowered = lowerProgramEmit TargetWasm allDecls
   let filtered = wasmReachFilter lowered
   -- MEDAKA_STATS reporting hook (S5, #2359 closure): the S5 gate's "emitted-vs-
   -- reachable" ratio must be derived from THIS filter's own notion of reachable,
