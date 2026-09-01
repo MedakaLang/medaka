@@ -211,6 +211,21 @@ three typed fixtures happen to contain only dict-carrying *consumers* (handled b
 `musttail`), never a dict-carrying *builder*. So the native stack gate has never
 tested a constrained builder either.
 
+**Amendment (2026-09-01, sprint `wasm-emit-only-what-runs`, PR #2381).** Arm B no
+longer requires *set equality*: on the SHIPPING arm the census now accepts wasm's
+TMC set being a **subset** of llvm's, reporting it as `SUBSET` rather than `DIFF`.
+That sprint's S1 added `wasmReachFilter` (`compiler/backend/wasm_reach.mdk`), called
+from `compiler/entries/wasm_emit_modules_main.mdk` *after* TRMC marking: a
+dispatch-unreachable function is never emitted at all on the wasm side, so it carries
+no census marker — while LLVM's `dceFilter` (`compiler/ir/dce.mdk`, shared, and
+deliberately outside that sprint's scope) never removes an impl/method body and keeps
+TRMC'ing it. llvm's shipping set is therefore a superset of anything wasm's pruned set
+can hold, and the relation is one-directional and permanent. This is **not** another
+instance of the blindness above: a wasm entry with no llvm counterpart — including a
+shared function at a divergent *mode* — is still a hard `DIFF`, the probe arm still
+requires exact parity, and the `-- EXPECT-TMC:` coverage pins are unchanged, so the
+subset rule can never decay into vacuous parity.
+
 ---
 
 ## 4. Native is affected too — the 256 MB stack is hiding it

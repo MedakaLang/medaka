@@ -7,14 +7,25 @@
 # `medaka build` pair, with typecheck + dictPass) — extracts each backend's
 # per-function TMC decisions (the `; tmc:` / `;; tmc:` census markers both
 # emitters write — fn name + mode: `trmc`, `group-root`, `group:<root>`), and
-# FAILS on any set difference OR any missed `-- EXPECT-TMC:` coverage pin.
+# FAILS on any DIFF row OR any missed `-- EXPECT-TMC:` coverage pin.
 # This is the TMC-parity arc's acceptance gate: the shared detection/eligibility
 # analysis (backend/trmc_analysis.mdk) guarantees parity by construction; this
 # gate keeps any future backend-local gate from silently re-splitting the sets.
 # The pins guard what parity cannot: both backends dropping the SAME function
 # (the dict-param veto shipped exactly that way — WASM-TMC-GAP-DESIGN.md §3).
 #
-# Exit: 0 all corpus items match; 1 any DIFF/emit failure; 2 toolchain missing
+# ⚠️ "DIFF row" is NOT "any set difference" — the census classifies by arm.
+# On the SHIPPING arm, wasm may TMC a SUBSET of llvm's functions, because
+# wasm_emit_modules_main runs wasmReachFilter (wasm-only, by design) and never
+# emits a dispatch-unreachable function at all — so it has no marker to match.
+# Those rows come back as `SUBSET` and are counted as compared, not failed.
+# `DIFF` still means a real divergence on either arm: a wasm entry llvm lacks,
+# a shared function at a different MODE, or ANY difference on the probe arm
+# (which never calls wasmReachFilter and stays exact-parity).  The rationale
+# and the soundness argument live in test/tmc_census.sh's summary section and
+# in compiler/WASM-TMC-GAP-DESIGN.md §3.
+#
+# Exit: 0 all corpus items match or subset; 1 any DIFF/emit failure; 2 toolchain missing
 # (wasm probe binaries not built — sh test/wasm/build_wasm_oracle.sh).
 set -u
 
@@ -76,7 +87,13 @@ if grep -q '^DIFF ' "$OUT/SUMMARY"; then
   exit 1
 fi
 
-n="$(grep -c '^same ' "$OUT/SUMMARY")"
+# Both `same` and `SUBSET` rows are items that were actually COMPARED — a SUBSET
+# row ran the full wasm-⊆-llvm check and passed it, so it must count toward the
+# zero-comparison guard below.  Counting only `same` would let the guard fire on
+# a perfectly healthy tree the moment every shipping item prunes something.
+n="$(grep -c '^same \|^SUBSET ' "$OUT/SUMMARY")"
+nsame="$(grep -c '^same ' "$OUT/SUMMARY")"
+nsub="$(grep -c '^SUBSET ' "$OUT/SUMMARY")"
 
 # ⚠️ NEVER EXIT 0 HAVING COMPARED NOTHING.
 #
@@ -104,5 +121,5 @@ if [ "$n" -eq 0 ]; then
   exit 1
 fi
 
-echo "tmc parity: $n/$n corpus items — both backends TMC identical function sets"
+echo "tmc parity: $n/$n corpus items — $nsame identical, $nsub shipping-arm wasm-⊆-llvm (reachability-pruned)"
 exit 0
