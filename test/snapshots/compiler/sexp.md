@@ -124,9 +124,9 @@ armSexp (Arm p gs body) =
 
 export
 exprSexp : Expr -> String
--- ELoc is TRANSPARENT in the structural dump (mirror of dev/astdump.ml:69
--- `ELoc(_,e) -> sexp_expr e`): the parse/sexp gates stay byte-identical to the
--- OCaml oracle, which strips locs before dumping.
+-- ELoc is TRANSPARENT in the structural dump: it strips the location wrapper
+-- before dumping, so the dump reflects the expression's shape, not its
+-- source positions.
 exprSexp (ELoc _ e) = exprSexp e
 exprSexp (EDoOrigin _ e) = exprSexp e
 exprSexp (ELit l) = node "ELit" [litSexp l]

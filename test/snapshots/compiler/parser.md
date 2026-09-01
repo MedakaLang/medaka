@@ -1,5 +1,5 @@
 # META
-source_lines=5247
+source_lines=5244
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka parser.  A monadic
@@ -1096,7 +1096,6 @@ recordFieldExprRest _ _ = failP "expected = in record-update field"
 
 -- desugar a dotted-path update field against the update base:
 -- `{ base | a.b.c = v }` → ("a", { base.a | b = { base.a.b | c = v } })
---
 desugarDottedField : Expr -> (List String, Expr) -> FieldAssign
 desugarDottedField base (path, value) = match path
   [field] => FieldAssign field value
@@ -1801,7 +1800,6 @@ parsePatAtomRaw = do
 
 -- atom-level uppercase: a record pattern `C { … }` or a bare nullary ctor `C`
 -- (an *applied* ctor `C p…` needs parens at atom level, like the OCaml grammar).
---
 upperAtomRest : String -> Token -> Parser Pat
 upperAtomRest c TLBrace = recordPat c
 upperAtomRest c _ = pure (PCon c [])
@@ -4561,9 +4559,8 @@ parseLocated src = match tokenizeWithOffsetPairs src
 -- a located, structured `ParseError` on failure, leaving `parse` byte-identical.
 --
 -- `ParseError line col message` carries
---   { file; line; col; message }
--- (the `file` field is the caller's concern — not carried here), with
--- 1-based line, 0-based column derived
+--   { line; col; message }
+-- with 1-based line, 0-based column derived
 -- from the error token's char offset via the lexer's `offsetToLineCol`.
 public export data ParseError = ParseError Int Int String
 

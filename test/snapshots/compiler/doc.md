@@ -80,9 +80,9 @@ dsub : Int -> Int -> String -> String
 dsub a b s = stringSlice a b s
 
 -- ── pre-desugar type rendering ──────────────────────────────────────────
--- NOTE: types/typecheck.ppTy drops `TyEffect` rows; OCaml pp_ty_prec renders
--- them, and interface method types carry effect rows.  So we mirror pp_ty_prec
--- here directly, precedence-passing.
+-- NOTE: types/typecheck.ppTy drops `TyEffect` rows, but interface method
+-- types carry effect rows that doc output needs to show.  So this module
+-- has its own precedence-passing renderer that keeps `TyEffect`/`TyRow`.
 
 ppTyP : Int -> Ty -> String
 ppTyP _ (TyCon { tyConName = s }) = s

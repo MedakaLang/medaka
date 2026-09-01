@@ -1,5 +1,5 @@
 # META
-source_lines=4384
+source_lines=4385
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -3324,8 +3324,9 @@ pArrayMakeWith (VInt n) f = VArray (arrayFromList (buildWith f 0 n))
 pArrayMakeWith _ _ = panic "arrayMakeWith: bad operands"
 
 -- arrayCopy : Array a -> Array a — a fresh, mutation-independent copy.  Routes
--- to the host `arrayCopy` extern (eval.mdk is compiled by the reference, so the
--- runtime extern is in scope).
+-- to the host `arrayCopy` extern (this file is itself compiled by the native
+-- compiler and links against the C runtime, so the runtime extern is in
+-- scope).
 pArrayCopy : Value e -> <e> Value e
 pArrayCopy (VArray a) = VArray (arrayCopy a)
 pArrayCopy _ = panic "arrayCopy: not an Array"

@@ -710,8 +710,8 @@ checkExpr cur env scope (EAnnot e0 t) = checkExpr cur env scope e0
 -- (`fromEntries [...] :~ Map _k _v`).  The container type (Map/Set/…) is a real
 -- type, so validate it like EAnnot via checkType — except the multi-module env
 -- already carries imported types so an `import map`-bearing program resolves
--- `Map`, while a bare `Map { … }` with no import resolves to UnknownType, both
--- (Phase 108).
+-- `Map`, while a bare `Map { … }` with no import resolves to UnknownType — both
+-- are accepted here without a resolve error (Phase 108).
 checkExpr cur env scope (EHeadAnnot e0 t) = checkExpr cur env scope e0
   ++ checkType cur env t
 checkExpr cur env scope (EBlock stmts) = checkStmts cur env scope stmts

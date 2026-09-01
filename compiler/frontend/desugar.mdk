@@ -453,9 +453,9 @@ deriveForData name params variants iface =
 -- data derivers produce the right tagged rendering via a synthetic variant.
 -- The newtype deriver table — the newtype counterpart of `dataDerivers`, and
 -- likewise the single source of both the lookup and the diagnostic's copy.
--- It is deliberately SHORTER than `dataDerivers`: `Generic` (and `Num`) go
--- through specialized newtype derivers this implementation does not
--- have, so a newtype genuinely cannot derive them here.  Keeping the two tables
+-- It is deliberately SHORTER than `dataDerivers`: `Generic` (and `Num`) would
+-- need their own specialized newtype derivers, which have never been
+-- implemented, so a newtype cannot derive them here.  Keeping the two tables
 -- separate is what stops the diagnostic from advertising `Generic` on a newtype
 -- that cannot have it.
 newtypeDerivers : String -> List String -> String -> Ty -> List (String, Unit -> Decl)
