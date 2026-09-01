@@ -1,4 +1,8 @@
 cmd: medaka run
 exit: 1
 ---
+warning: test/error_quality_fixtures/eval/runtime_nonexhaustive.mdk:3:7: non-exhaustive match of 'Int'. Missing case: '_'; add a '_ => …' arm, or a '_' wildcard arm to catch the rest.
+  |
+3 |   1 => "one"))
+  |        ^
 test/error_quality_fixtures/eval/runtime_nonexhaustive.mdk:1:29: runtime error [E-NONEXHAUSTIVE-MATCH]: non-exhaustive match
