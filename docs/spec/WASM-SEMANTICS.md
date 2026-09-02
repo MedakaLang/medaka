@@ -430,3 +430,40 @@ dead until #543 completed it and made the gate derive its host set) (leading-ws-
   check its shape arms against N4/N5/N6.
 - **Works in run.js, breaks in the playground** → WH3 shim-parity; diff the
   two `env` objects before diffing the module.
+
+## 6. Perf-profiling stage divergence — llvm vs. wasm
+
+Relocated from `compiler/entries/profile_main.mdk`'s `wasmStage` comment block (issue
+#359's second half); a pointer sentence stands at the extraction site.
+
+WASM EMIT is the second half of issue #359: the `emit` stage (llvm_emit) and this stage
+(wasm_emit) are graded separately because they diverge on complexity class, not just
+constant factor. `ctorOrdinal`'s whole-table scan is SHARED by both backends, but only
+wasm nests it inside a `(slot, branch)` loop — so the same shape that is quadratic on
+llvm was CUBIC on wasm (#381, `O(ctors × branches × table)`, fixed by #401 for a 53x win
+at N=400). A wasm regression is structurally invisible to the llvm row and vice versa;
+nothing but this stage catches it.
+
+`profile_main.mdk` mirrors `entries/wasm_emit_modules_main.mdk`'s `emitTail` (the real
+wasm build path): the same `WasmEmitInput` producers fed from the same post-DCE decls
+(`live`), then `emitProgram` over the Core IR. `cprog` is deliberately reused from the
+`lower` stage rather than re-lowered — Core IR is backend-agnostic (both
+`llvm_emit_modules_main` and `wasm_emit_modules_main` emit from the identical
+`lowerProgramEmit allDecls`), and re-lowering would time lowering twice and fold it into
+a stage misleadingly named "wasm-emit" (grade a stage, never a sum).
+
+Facts a reader of the profiling code needs, which the in-source pointer also states:
+- **DCE is exercised** exactly as the llvm `emit`/`lower` stages are — same caveats
+  (prelude constant not subtracted, single-file/no-link) apply verbatim, so a ratio here
+  is a LOWER BOUND on the true exponent.
+- **No wasm toolchain is needed**: `emitProgram` renders text WAT and this stage never
+  assembles or runs it, so it adds no node/wasm-tools dependency to the gate's CI shard.
+  That is not the same as free: wasm_emit is ~10x slower than llvm_emit on identical
+  input (~0.215s vs ~0.021s for the prelude alone, 42s vs 12s at xref N=16000).
+- **Opt-in via `MEDAKA_PERF_WASM`**: this stage used to run on every gate invocation,
+  which was expensive enough to make it a CI critical-path concern; shards are scheduled
+  by cost, so a stage that outgrows its shard's budget gets re-priced rather than
+  grandfathered — the specific dollar/minute figures from any one point in time are not
+  reproduced here because they rot; re-derive current shard costs from
+  `test/gate_cost_baseline.json` per `[W-SHARD-COST]` (AGENTS.md) instead of trusting a
+  number in prose.

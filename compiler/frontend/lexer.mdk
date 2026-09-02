@@ -1,14 +1,14 @@
--- Self-hosted Medaka lexer — Stage 1 port of `lib/lexer.mll`.
+-- Self-hosted Medaka lexer.
 --
--- STATUS: tokenizer ported — int/float/string/char literals (with escapes
+-- STATUS: tokenizer — int/float/string/char literals (with escapes
 -- `\n \t \r \0 \\ \"`, char-only `\'`, and the `\u{…}` unicode escape in *both*
--- string and char literals — mirroring lib/lexer.mll's read_string /
--- read_triple_string / read_interp_continue / read_char) + hex/bin/oct ints,
+-- string and char literals) + hex/bin/oct ints,
 -- idents/keywords, operators/punctuation, line + `{- … -}` (nestable) block
 -- comments, string interpolation (`\{expr}` → INTERP_OPEN/MID/END), triple-
 -- quoted strings (`""" … """` with `stripIndent` dedent + their own
 -- interpolation, marked by a negative interp depth), the `@`/`AS_AT` adjacency
--- rule, and a faithful port of lib/lexer.mll's INDENT/DEDENT/NEWLINE layout
+-- rule, and an
+-- INDENT/DEDENT/NEWLINE layout
 -- algorithm + else-continuation filter + leading-operator continuation + Phase
 -- 137 expression-RHS continuation lines (a would-be INDENT that just continues
 -- an application is suppressed; resolved in the layout pass from the previous
@@ -139,9 +139,9 @@ public export data Token =
   | TDedent
   | TEof
   | TLexError String
-deriving (Eq)
+  deriving (Eq)
 
--- Mirrors `lib/lexer.mll` `token_to_string`.  String-bearing tokens use
+-- String-bearing tokens use
 -- `debugStringLit` (the `%S`-style quoted/escaped form); ints use `intToString`.
 export
 tokenToString : Token -> String
@@ -350,8 +350,7 @@ describeToken (TLexError s) = s
 -- INDENT/DEDENT/NEWLINE per the OCaml `handle_indent` algorithm.
 -- `RComment startPos text` carries a captured comment out-of-band: `startPos`
 -- is the source char offset of the opening `--`/`{-`, `text` the full lexeme
--- (including the `--` / `{- … -}` delimiters, matching lib/lexer.mll's
--- `c_text`).  These markers are produced by the comment arms of `scanAt` and
+-- (including the `--` / `{- … -}` delimiters).  These markers are produced by the comment arms of `scanAt` and
 -- *stripped before the layout pass* (`stripComments`), so the Token stream the
 -- parser consumes is byte-identical to before — comments are purely a side
 -- channel.  `collectComments` re-reads the raw stream to surface them.
@@ -492,8 +491,7 @@ keywordOrIdent s = TIdent s
 -- scan src len pos parenDepth interpDepth.  `id` (interp depth) is 0 outside
 -- string interpolation; inside a `\{ … }` it is the brace nesting (1 = the
 -- interpolation's own braces), so a `}` that brings it back to 0 resumes string
--- scanning rather than closing a paren group.  Mirrors lib/lexer.mll's
--- `interp_depth`.
+-- scanning rather than closing a paren group.
 scan : Array Char -> Int -> Int -> Int -> Int -> List RawTok
 scan src len pos depth id
   | pos >= len = []
@@ -921,10 +919,10 @@ scanInterpEsc src len p depth acc e
   | otherwise = scanInterpCont src len (p + 2) depth (acc ++ charToStr e)
 
 -- ── Triple-quoted strings (`""" … """`) ─────────────────────────────────
--- Mirrors lib/lexer.mll `read_triple_string`: only `"""` closes (single/double
+-- Only `"""` closes (single/double
 -- quotes are literal), raw newlines are kept, and `\{` opens an interpolation.
 -- `leadingNl` tracks whether the content opened with a *raw* source newline; if
--- so the closing applies `stripIndent` (the dedent), matching `strip_indent`.
+-- so the closing applies `stripIndent` (the dedent).
 -- An interpolation opened from a triple string is marked by a NEGATIVE interp
 -- depth (`id = -1`), so the closing `}` resumes the triple continuation.
 -- are positions pos, pos+1, pos+2 all `"` (a `"""` delimiter at pos)?
@@ -1024,7 +1022,7 @@ scanInterpTripleEsc src len p depth acc e
   | otherwise = scanInterpTripleCont src len (p + 2) depth (acc ++ charToStr e)
 
 -- Strip the common leading indentation from a multiline string that opens with
--- '\n' (mirrors lib/lexer.mll `strip_indent`); blank lines are ignored when
+-- '\n'; blank lines are ignored when
 -- computing the minimum indent.  No-op unless the content starts with '\n'.
 stripIndent : String -> String
 stripIndent s =
@@ -1245,8 +1243,7 @@ concatAll : List String -> String
 concatAll [] = ""
 concatAll (x::xs) = x ++ concatAll xs
 
--- char literals — escapes processed into the value, mirroring lib/lexer.mll's
--- `read_char` (Phase 133): `\n \t \r \0 \\ \'` and `\u{…}`, else raw chars up to
+-- char literals — escapes processed into the value (Phase 133): `\n \t \r \0 \\ \'` and `\u{…}`, else raw chars up to
 -- the closing quote.  `pos` is at the opening `'`; content starts at `pos + 1`.
 -- The decoded content of a `\<e>` character escape, or `None` if `<e>` is not a
 -- valid escape. A char adds `\'` to the shared `commonEscDecode` table (a bare
@@ -1511,9 +1508,9 @@ bareUnicodeEscMsgStr src len p = "bare unicode escape `\{bareUnicodeEscWritten s
 bareUnicodeEscMsgChar : Array Char -> Int -> Int -> String
 bareUnicodeEscMsgChar src len p = "bare unicode escape `\{bareUnicodeEscWritten src len p}` is not valid Medaka syntax. Medaka's unicode escape is braced — did you mean `\{bareUnicodeEscSuggested src len p}`? Supported character escapes: \\n \\t \\r \\0 \\\\ \\' and \\u{...}"
 
--- ── `\u{HEX}` unicode escapes inside *strings* (mirrors lib/lexer.mll's
--- `'\\' 'u' '{' hex '}'` rule in read_string / read_triple_string /
--- read_interp_continue / read_interp_triple_continue).  `p` is at the backslash;
+-- ── `\u{HEX}` unicode escapes inside *strings* (the
+-- `\u{hex}` escape, handled across the plain-string, triple-string, and
+-- interpolation-continuation scanners).  `p` is at the backslash;
 -- the codepoint is the hex run after `\u{`, terminated by `}`.  Unlike the char
 -- form there is no trailing closing quote, so the resume position is just past
 -- the `}` (he + 1).  `isUnicodeEsc` is the guard the escape handlers test before
@@ -1645,8 +1642,8 @@ malformedLeadingDotTok src len pos =
     "malformed float literal `\{bad}`: a float needs a digit before the decimal point — write `0\{bad}`"
 
 -- `@` is the as-pattern operator (AS_AT) when it immediately follows an
--- identifier (no intervening space), else the impl-hint prefix (AT).  Mirrors
--- lib/lexer.mll's `last_ident_end` adjacency test: only a lowercase/underscore
+-- identifier (no intervening space), else the impl-hint prefix (AT).  The
+-- adjacency test: only a lowercase/underscore
 -- identifier counts (an UPPER ctor or a number does not).
 atToken : Array Char -> Int -> Token
 atToken src pos
@@ -1730,7 +1727,7 @@ afterNl src len np depth id indent nlPos
 -- must NOT emit a layout marker (INDENT/DEDENT/NEWLINE) based on its own column.
 -- When a newline run lands on a comment start we suppress the RNewline and keep
 -- scanning; the newline ending the comment line re-enters afterNl and layout is
--- decided by the next *code* line.  Mirrors lib/lexer.mll `next_is_comment`.
+-- decided by the next *code* line.
 nextIsComment : Array Char -> Int -> Int -> Bool
 nextIsComment src len p = p + 1 < len
   && (at src p == '-' && at src (p + 1) == '-' || at src p == '{' && at src (p + 1) == '-')
@@ -1756,7 +1753,7 @@ continuationTok src len np
   | otherwise = TCons
 
 -- ── Layout pass: RawTok stream -> Token stream ──────────────────────────
--- Mirrors lib/lexer.mll `handle_indent` + the Phase 137 continuation-line
+-- The Phase 137 continuation-line
 -- resolution + the EOF unwind.  Threads `prev` (the previous significant token)
 -- and `opener` (whether a `match` header appeared on the line being
 -- ended), so a would-be INDENT can be suppressed into an application
@@ -1855,8 +1852,7 @@ prevCanEnd None = False
 
 -- an expression binary operator that, ending a logical line, continues the
 -- expression onto the next (deeper-indented) line: the line terminator is
--- suppressed so `a ++\n  b` lexes identically to `a ++ b`.  Mirrors
--- `lib/lexer.mll` `is_trailing_continuation_op`.  Arrows (-> => <-) are
+-- suppressed so `a ++\n  b` lexes identically to `a ++ b`.  Arrows (-> => <-) are
 -- excluded deliberately; trailing `-` is always binary here.
 isTrailingContinuationOp : Token -> Bool
 isTrailingContinuationOp TPlus = True
@@ -2266,11 +2262,11 @@ advanceLine src target p line
   | otherwise = advanceLine src target (p + 1) line
 
 -- ── Comment side channel ─────────────────────────────────────────────────
--- Mirrors lib/lexer.mll's `comment` record + `take_comments`: each captured
+-- Each captured
 -- comment carries its 1-based start line, 0-based start column, and full
 -- lexeme text (the `--…` / `{- … -}`, delimiters included).  Surfaced in
--- SOURCE ORDER, exactly as the OCaml `take_comments ()` (which reverses the
--- accumulator).  `format_program`/the comment-preserving printer consume this
+-- SOURCE ORDER.
+-- `format_program`/the comment-preserving printer consume this
 -- list keyed by position; the parser is unaffected (comments are stripped
 -- before layout — see `stripComments`).
 export data Comment = Comment Int Int String

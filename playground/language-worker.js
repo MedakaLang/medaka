@@ -3,9 +3,12 @@
 // compiler-worker.js: that worker is busy during a Run (instantiate + wat2wasm
 // assemble); this one stays warm for debounced analyze on every keystroke.
 //
-// It imports the same compile.mjs seam and reuses the existing
-// __MEDAKA_DIAGNOSTICS__ analyze path — NO new compiler entry needed (S2 is
-// pure frontend; the diagnostics JSON is already produced by playground.wasm).
+// It imports the same compile.mjs seam, through its `analyze` mode: the guest
+// runs the IDENTICAL diagnostic-producing front end `compile` runs (same route,
+// same main-shape guard, same underivedMainDiags) and then stops before wasm
+// codegen.  This worker discards the WAT, and emitting it cost 596ms of a 769ms
+// clean-program analyze (#2442).  Still ONE compiler entry — playground.wasm just
+// dispatches on an extra argv mode.
 //
 // Protocol:
 //   Receives { type:'init', assets:{ wasm:ArrayBuffer, runtime, core } }
@@ -24,7 +27,7 @@
 // main thread's larger stack fits it.  Keeping analyze here still isolates the
 // per-keystroke work from the UI thread.
 
-import { compile } from './compile.mjs';
+import { analyze } from './compile.mjs';
 
 let wasmBytes = null;   // Uint8Array of playground.wasm
 let stdlib = null;      // { runtime, core }
@@ -46,16 +49,13 @@ self.onmessage = async function (e) {
       return;
     }
     try {
-      const r = await compile(source, { wasm: wasmBytes, stdlib });
-      if (r.ok) {
-        // Compiled cleanly — but there may still be WARNINGS (e.g.
-        // W-NONEXHAUSTIVE) that don't block emit; surface them as squiggles too.
-        const files = (r.diagnostics && r.diagnostics.files) || [];
-        self.postMessage({ type: 'diagnostics', id, files });
-      } else {
-        const files = (r.diagnostics && r.diagnostics.files) || [];
-        self.postMessage({ type: 'diagnostics', id, files });
-      }
+      // `analyze` always returns a `diagnostics` envelope: on a clean program
+      // it is {"files":[]} or the WARNINGS (e.g. W-NONEXHAUSTIVE, which never
+      // blocks emit but still deserves a squiggle), on a broken one the errors.
+      // Either way the posted shape is the same, so `ok` needs no branch here.
+      const r = await analyze(source, { wasm: wasmBytes, stdlib });
+      const files = (r.diagnostics && r.diagnostics.files) || [];
+      self.postMessage({ type: 'diagnostics', id, files });
     } catch (err) {
       self.postMessage({ type: 'error', id, message: (err && err.message) || String(err) });
     }

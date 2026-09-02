@@ -88,9 +88,12 @@ quoted rather than deleted. (1) I5's consequence class **(1)** asserted, in the 
 tense, that the widening *"is carried by a fixture that could not pass before"*. **No such
 fixture exists**: `test/dict_fixtures/` holds `s8-*` units for I1, I2 and I3 only, and the
 design assigns the fixture to A-3 (#1112, OPEN). ⚠️ The repaired clause says *"gated by a
-CONFORMANCE fixture"* and not "gated", because class (3) **is** pinned — **inversely** —
-by `test/must_fail_fixtures/1072-overlap-xmod-bare-head-arm-order/`; the clause now names
-it and says the red it will go is the drain. (2) I5's
+CONFORMANCE fixture"* and not "gated", because class (3) **was** pinned — **inversely** —
+by `test/must_fail_fixtures/1072-overlap-xmod-bare-head-arm-order/`; the clause named it
+and said the red it would go is the drain. 🚨 **That fixture NO LONGER EXISTS in the tree**
+(derive: `ls test/must_fail_fixtures | grep 1072`), so class (3) is pinned by nothing
+today — see `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` §9.5a for the current disposition,
+which also records that its absence must not be read as "already drained". (2) I5's
 §11 row closed by quoting a `SHADOW-SEMANTICS.md` **S2** gloss that S2 itself retracted on
 2026-08-06 (#1375) — that row is the DICT half of the **reciprocal citation** #1375 added,
 so a stale quotation there is load-bearing, not decorative. Repaired to S2's current
@@ -1993,20 +1996,22 @@ module-qualified identity.
 
      Derived, not assumed: the conformance corpus at `test/dict_fixtures/` holds `s8-*`
      units for I1, I2 and I3 only — no I4, I5 or I6 unit exists — so **no class of I5
-     is gated by a CONFORMANCE fixture today.** ⚠️ **That is not the same as ungated,
-     and the difference is exactly class (3).** Class (3) *is* pinned, **inversely**,
-     by `test/must_fail_fixtures/1072-overlap-xmod-bare-head-arm-order/`, which asserts
-     that the class-(3)-wrong answer **still reproduces**: a general `impl Speak (Box
+     is gated by a CONFORMANCE fixture today.** ⚠️ **That was not the same as ungated,
+     and the difference was exactly class (3).** Class (3) *was* pinned, **inversely**,
+     by `test/must_fail_fixtures/1072-overlap-xmod-bare-head-arm-order/`, which asserted
+     that the class-(3)-wrong answer **still reproduced**: a general `impl Speak (Box
      a)` in the site's own module and a strictly more specific `impl Speak (Box Int)`
-     in a module the site does not import, where the native binary prints `general` at
-     exit 0 while `medaka run` prints the correct `specific`. Implementing graph-global
-     candidacy flips that row's stdout to `specific` and turns the pin **red — and the
-     red is the DRAIN, not a break** (the row's own note: *"When main.mdk's stdout flips
-     to `specific` with control.mdk still `specific`, close #1072 and delete this
-     fixture."*). Its mirror `control.mdk` must stay `specific` throughout; a red on
-     *both* is a general regression, not a drain. Classes **(1), (2) and (4) are
-     unpinned in either direction.** Do not cite this clause as evidence the widening
-     is covered, and do not read the four classes here as uniformly unpinned either.
+     in a module the site did not import, where the native binary printed `general` at
+     exit 0 while `medaka run` printed the correct `specific`. Implementing graph-global
+     candidacy was to flip that row's stdout to `specific` and turn the pin **red — the
+     red being the DRAIN, not a break** (the row's own note: *"When main.mdk's stdout
+     flips to `specific` with control.mdk still `specific`, close #1072 and delete this
+     fixture."*). 🚨 **THAT FIXTURE IS GONE FROM THE TREE** (derive: `ls
+     test/must_fail_fixtures | grep 1072`), so class (3) has NO pin today, in either
+     direction — see `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` §9.5a for the current
+     disposition, which also warns against reading the absence as "already drained".
+     Classes **(1), (2) and (4) are unpinned in either direction** as well. Do not cite
+     this clause as evidence the widening is covered.
   2. **New rejections via C1.** Enlarging `match(IE, π)` can destroy a `⊑`-minimum
      that a smaller candidate set had. Two `⊑`-incomparable instances, one of which
      was previously invisible at the goal, make the goal **ambiguous overlap** under

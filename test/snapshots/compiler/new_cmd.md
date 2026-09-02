@@ -1,10 +1,8 @@
 # META
-source_lines=70
+source_lines=68
 stages=DESUGAR,MARK
 # SOURCE
--- Self-hosted implementation of `medaka new <name>`.
--- Mirrors lib/new_cmd.ml exactly: same files, same byte content, same error
--- messages and exit codes.
+-- Implementation of `medaka new <name>`.
 --
 -- Usage (from new_main.mdk):
 --   newProject name  ->  exit code Int
