@@ -1,8 +1,8 @@
 # META
-source_lines=1245
+source_lines=1244
 stages=DESUGAR,MARK
 # SOURCE
--- Port of lib/loader.ml: parse a root .mdk file's transitive imports and return
+-- Parse a root .mdk file's transitive imports and return
 -- them in dependency-first (topological) order.
 --
 -- Simplifications vs the reference (sufficient for the flat, single-root compiler
@@ -124,7 +124,7 @@ moduleIdOfPath roots path =
   slashToDot (stripSuffixStr ".mdk" (relUnderRoots roots path))
 
 -- Walk up from `startDir` to the nearest directory containing `medaka.toml` (the
--- project / module root), mirroring lib/project_config.ml's root discovery.  This
+-- project / module root).  This
 -- is what lets tooling (LSP, run) resolve nested modules whose IDs are rooted at
 -- the PROJECT dir, not the edited file's immediate directory — e.g. a file
 -- `compiler/frontend/parser.mdk` importing `frontend.ast` resolves only when the
@@ -532,8 +532,8 @@ loadErrorMessage (LoadParseFailed path _ e) =
 
 -- ── read-callback variant (B.10.5: unsaved-editor-buffer overrides) ──
 --
--- A `String -> Option String` callback keyed by FILE PATH (mirror
--- lib/diagnostics.ml's `read : string -> string option`).  `Some src` shadows the
+-- A `String -> Option String` callback keyed by FILE PATH (`read : string ->
+-- string option`).  `Some src` shadows the
 -- on-disk file with an editor buffer that has not been saved yet; `None` falls
 -- back to `readFile`.  This lets the LSP analyse a project against the documents
 -- the client currently holds rather than the (possibly stale) disk copies.  The
@@ -845,7 +845,6 @@ rewriteDecls deps roots (d::ds) =
 -- `modId` is detected.  stack is most-recent-first (e.g. ["b","a"] when a→b→a).
 -- We extract everything up to and including `modId`, reverse it, then append
 -- `modId` again: ["b","a"] → take ["b","a"] → reverse ["a","b"] → + "a" = ["a","b","a"]
--- Mirrors lib/loader.ml's `take_until [mod_id] stack` → `List.rev` → join " → ".
 cycleChain : String -> List String -> List String
 cycleChain modId stack = reverseL (takeTo modId stack) ++ [modId]
 
@@ -1132,8 +1131,8 @@ visitModsF parseFn read deps roots stack visited acc (d::ds) = match visitModF p
   Ok (v2, a2) => visitModsF parseFn read deps roots stack v2 a2 ds
 
 -- Load a root file + transitive deps, dependency-first, with an unsaved-buffer
--- override and FILE PATHS in the result.  Mirrors lib/diagnostics.ml's
--- `Loader.load_program ~read` returning `(mod_id, file_path, prog)` triples.
+-- override and FILE PATHS in the result, returning `(mod_id, file_path, prog)`
+-- triples.
 -- A `read` of `(_ => None)` is exactly `loadProgram` (disk-only) plus paths.
 -- Uses placeholder-loc `parseResult`.
 export

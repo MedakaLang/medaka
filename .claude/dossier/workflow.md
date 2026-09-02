@@ -45,6 +45,25 @@ Those numbers are recorded here to show the ranking INVERTED across generations,
 anywhere — a ranking is an encoded fact with no derivation and no expiry. AGENTS.md keeps only
 the derivation command, never a number.
 
+## [W-MODULE-BLIND] A call-site-free module is invisible to every gate
+
+`compiler/types/registry.mdk` (Stage A-2 unit A-2.0, #1111) landed with zero call sites —
+by design, since it is the substrate a *later* unit re-keys onto — and that had a hazard
+nobody had priced: a module outside every entry's import closure is invisible to `make
+medaka`, to `make check-self`, and to `test/typecheck_compiler_source.sh` (pass 1 walks
+`compiler/driver/medaka_cli.mdk`, pass 2 covers `compiler/entries/*.mdk`; a substrate
+module sitting in neither is in NO GATE). The original header answered the composite-key
+hazard with doctests, and NOTHING RAN THEM.
+
+MEASURED 2026-08-03: with `regSize (Registry m) = "not an int"` injected into the file,
+`./medaka check compiler/driver/medaka_cli.mdk` exited 0 and `make check-self` printed
+PASS — a wrong answer, in a file with ~90 doctest assertions, caught by zero required
+checks. The fix: the Makefile's `test:` target now names the module explicitly, since
+`medaka test <file>` typechecks the file before running its doctests, putting both the
+types and the assertions inside the required `inlang` check (`make test`). Every later
+A-2 unit inherits this hazard — a unit that lands a call-site-free module and forgets its
+Makefile line has shipped unverified code with every gate green.
+
 ## [W-SOUNDNESS] Why `soundness` exists
 
 A compiler with unbound constructors once shipped to `main` with every gate green, because

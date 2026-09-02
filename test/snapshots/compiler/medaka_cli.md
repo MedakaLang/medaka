@@ -3059,7 +3059,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f::rest) acc =
     (acc || not ok)
 
 -- ── doc ───────────────────────────────────────────────────────────────────
--- Mirrors bin/main.ml's `doc` arm + lib/doc.ml: read the target file, parse
+-- The `doc` arm: read the target file, parse
 -- (capturing decl positions + comments), typecheck a desugared copy through the
 -- single-file path for inferred schemes, extract PUBLIC-decl doc entries, and
 -- print Markdown to stdout.  Prelude sources (runtime.mdk/core.mdk) come from

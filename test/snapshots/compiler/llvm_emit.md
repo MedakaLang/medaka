@@ -1,5 +1,5 @@
 # META
-source_lines=12512
+source_lines=12521
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -119,9 +119,11 @@ stages=DESUGAR,MARK
 --     Core IR-surface slice; the first leg of the real-backend extern catalog,
 --     unblocked by Boehm GC).  Locks the String rep (RUNTIME-DESIGN §4/§7 decision
 --     2: UTF-8 bytes + cached codepoint count) as a boxed cell
---     [ header | byte_len | cp_count | bytes… | NUL ].  `CLit (LString _)` emits a
---     private `@.str.N` byte-array global (`\HH`-escaped, codepoints re-encoded to
---     UTF-8 via utf8Bytes) + a run-time @mdk_str_lit box; `intToString` lowers to a
+--     [ header | byte_len | cp_count | bytes… | NUL ].  `CLit (LString _)` emits
+--     that WHOLE cell as one private `@.strc.<id>` compile-time constant global
+--     (`\HH`-escaped bytes, codepoints re-encoded to UTF-8 via utf8Bytes) and
+--     yields `ptrtoint (ptr @.strc.<id> to i64)` — no run-time boxing call is made
+--     for a literal (see `emitLit`); `intToString` lowers to a
 --     direct @mdk_int_to_string call (first extern RETURNING a heap String — the
 --     §2a GC-alloc contract); a String-typed `main` auto-prints via @mdk_print_str
 --     (raw bytes + newline, matching pp_value (VString s) = s).  See the "string
@@ -167,8 +169,10 @@ stages=DESUGAR,MARK
 --            field 0.  Write barrier absent (malloc-and-leak, same as @mdk_alloc).
 --   • String — BOXED (native extern catalog slice 1): word is a pointer to a heap
 --            cell [ i64 header | i64 byte_len | i64 cp_count | UTF-8 bytes… | NUL ]
---            (RUNTIME-DESIGN §4, rep LOCKED 2026-06-07).  Built by @mdk_str_lit
---            (literals + intToString); cp_count cached so stringLength is O(1).
+--            (RUNTIME-DESIGN §4, rep LOCKED 2026-06-07).  Literals are emitted as
+--            whole compile-time constant globals (`emitLit`); run-time producers
+--            (intToString, floatToString, …) build the cell via @mdk_str_lit.
+--            cp_count is cached either way, so stringLength is O(1).
 --            GC-managed under Boehm for free (aligned pointer, low bit 0).
 
 import frontend.ast.{
@@ -2047,10 +2051,12 @@ emitLit _ (LBool b) = (if b then "3" else "1", LTBool)
 emitLit e (LFloat f) =
   let w = boxFloat e (ensureFloatDot (floatToString f))
   (w, LTFloat)
--- a String literal (native extern catalog slice 1): emit a private module-scope
--- byte-array global for the UTF-8 bytes and box it at run time via @mdk_str_lit
--- (which caches the codepoint count, RUNTIME-DESIGN.md §4).  Bytes are escaped
--- one-per-`\HH` so the LLVM `c"…"` constant is byte-faithful to the source.
+-- a String literal (native extern catalog slice 1): emit the ENTIRE boxed String
+-- cell — header, byte_len, cached cp_count and the NUL-terminated UTF-8 bytes — as
+-- a single private module-scope compile-time constant global, and yield
+-- `ptrtoint (ptr @.strc.<id> to i64)`.  Nothing runs at run time: no @mdk_str_lit
+-- call, no alloc, no memcpy (RUNTIME-DESIGN.md §4 gives the cell layout).  Bytes
+-- are escaped one-per-`\HH` so the LLVM `c"…"` constant is byte-faithful.
 emitLit e (LString s) =
   let bytes = strBytes s
   let n = lengthS bytes
@@ -2100,7 +2106,10 @@ utf8Bytes cp
 
 -- escape a byte list for an LLVM `c"…"` constant: EVERY byte as `\HH` (uppercase
 -- hex).  Always valid (no quoting edge cases) and exact — the constant's declared
--- length is the byte count, and mdk_str_lit copies exactly that many bytes.
+-- length is the byte count, and every source byte contributes exactly one `\HH`
+-- escape to the constant, so declared length and emitted bytes cannot drift.
+-- (Both callers are `emitGlobal` compile-time constants; nothing copies at run
+-- time.)
 escBytes : List Int -> String
 escBytes [] = ""
 escBytes (b::rest) = "\\\{hex2 b}\{escBytes rest}"
@@ -2994,7 +3003,7 @@ emitPerfExtern e env "allocBytes" args = match emitArgs e env args
   _ => panic "llvm: allocBytes takes one (Unit) argument"
 emitPerfExtern e _ name _ = gapE e ("unsupported perf extern " ++ name)
 
--- Hashable per-type hashers (specified, byte-identical to lib/eval.ml hash_*).
+-- Hashable per-type hashers.
 -- Each unpacks the native arg the C helper wants (untagged int / codepoint /
 -- unboxed double / String cell pointer) and tags the RAW Int result.  hashBool
 -- untags the 0/1 bool word.  See runtime/medaka_rt.c mdk_hash_*.
@@ -4892,7 +4901,7 @@ emitMethod e env name (RLocal sym dicts) implRoutes methRoutes argOps =
 -- downstream `++`/`::` on it dispatches list/string append.  Otherwise
 -- (scalar/element result) keep the LTInt default.
 
--- C5 (mirror lib/eval.ml RLocal): NOT a method dispatch — the receiver has no
+-- C5 (mirror eval.mdk's RLocal handling): NOT a method dispatch — the receiver has no
 -- impl of this interface but an explicitly-imported/local standalone shadows the
 -- method name.  Emit a DIRECT call to that standalone top-level fn (`mdk_<target>`),
 -- exactly as emitApp's isKnownFn branch would for a plain call — no dispatch, no

@@ -1,0 +1,12 @@
+# Cloudflare Pages `_headers` file.
+#
+# The playground ships ~381 KB of stdlib `.mdk` source text as
+# `application/octet-stream`, which Cloudflare Pages does not compress
+# (unlike the `.wasm` beside it, which already comes back with
+# `content-encoding: br`). Overriding the content-type to a text type
+# routes these through Cloudflare's compressible-type list.
+#
+# See: https://developers.cloudflare.com/pages/configuration/headers/
+
+/dist/*.mdk
+  Content-Type: text/plain; charset=utf-8
