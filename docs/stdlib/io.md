@@ -1,21 +1,5 @@
 # io
 
-io.mdk — files, standard streams, environment, and process I/O.
-
-See STDLIB.md (Module 7) for the plan.
-
-The irreducible host primitives are `extern`s in stdlib/runtime.mdk, so they
-are **global** (no import needed): `readFile`/`writeFile`/`appendFile`,
-`readLine`/`readLineOpt`/`readAll`, `args`, `getEnv`, `fileExists`, `listDir`,
-`exit`, `putStr`/`putStrLn` (and the prelude's `print`/`println`), and the
-stderr pair `ePutStr`/`ePutStrLn`. This module adds the ergonomic layer on
-top — `Display`-based stderr output, line-oriented file reading, and an
-`Option`-smoothing environment helper.
-
-Conventions: file ops return `Result String _` with the host error message in
-`Err`; `getEnv` returns `Option`. There is no IO monad — an action runs when
-it is evaluated, so you can `match readFile path` directly.
-
 ## `eprint`
 
 ```

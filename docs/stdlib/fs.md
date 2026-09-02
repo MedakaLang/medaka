@@ -1,23 +1,5 @@
 # fs
 
-fs.mdk — a filesystem convenience layer over the host file externs.
-
-The irreducible host primitives are `extern`s in stdlib/runtime.mdk, so they
-are **global** (no import needed): `readFile`/`writeFile`/`appendFile`,
-`readFileBytes`/`writeFileBytes`, `fileExists`, `listDir`, `makeDir`,
-`removeFile`/`rename`/`removeDir`, `statFile`, `canonicalizePath`. This
-module (`import fs`) adds the ergonomic layer on top — a `FileStat` record
-wrapping `statFile`'s raw tuple, plus composed helpers (`copyFile`,
-`mkdirAll`, `walkDir`, `isDir`/`isFile`/`fileSize`).
-
-Conventions (mirroring stdlib/io.mdk): file ops return `Result String _`
-with the host error message (errno strerror) in `Err`. There is no IO monad —
-an action runs when it is evaluated, so you can `match copyFile src dst`
-directly.
-
-Scope: NATIVE/LLVM. Like every file extern, these execute only through the
-compiled (`medaka build`) path, not the tree-walking interpreter.
-
 ## `FileStat`
 
 ```
@@ -25,21 +7,11 @@ data FileStat
   = FileStat { size : Int, isDir : Bool, isFile : Bool, mtime : Float }
 ```
 
+Instances: `Eq`, `Debug`
+
 The metadata `statFile` (stat(2)) returns for a path:
 `size` in bytes, `isDir`/`isFile` type flags, and `mtime` (modification
 time, seconds since the Unix epoch).
-
-## `Eq FileStat`
-
-```
-impl Eq FileStat
-```
-
-## `Debug FileStat`
-
-```
-impl Debug FileStat
-```
 
 ## `stat`
 
@@ -106,4 +78,6 @@ fileSize : String -> <FileRead _> Result String Int
 ```
 
 `fileSize path` — the size of `path` in bytes.
+
+## Instances
 

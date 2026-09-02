@@ -1,16 +1,10 @@
 # runtime
 
-> **This is the PRIMITIVE LAYER.** These names are host `extern`s: they
-> are in scope everywhere without an import, and they are deliberately
-> spelled `<type><Op>` (`stringToUpper`, `intToString`) to mark that.
-> Prefer the library name where one exists — `string.toUpper`,
-> `string.toFloat` — and reach for a name on this page only when no
-> library module covers it.
-
-runtime.mdk — S-doc-surface-truth hole (c) probe.  NOT `stdlib/runtime.mdk`;
-it lives here to prove `preludeOnlyModule` keys on the DERIVED module name
-("runtime"), not on the stdlib path — the same name-keyed shape as
-`excludedLibraryModule`.
+> These are the host primitives. They are in scope everywhere without an
+> import, and their `<type><Op>` names (`stringToUpper`, `intToString`)
+> mark them as the primitive layer. Prefer the library name where one
+> exists (`string.toUpper`, `string.toFloat`), and reach for a name on this
+> page only when no library module covers it.
 
 ## `probeUnexported`
 

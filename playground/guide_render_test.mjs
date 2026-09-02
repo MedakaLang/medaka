@@ -95,23 +95,19 @@ for (let i = 2; i < process.argv.length; i++) {
 // the two derivations can disagree and a disagreement is a failure — which is
 // the point. Returns the ordered list of doctest fence BODIES, joined exactly as
 // marked hands a `code` token's `text` (newline-joined, no trailing newline).
-const DOCTEST_MARKER = '*(doctest — run by `medaka test`)*';
 function doctestFenceBodies(markdown) {
   const lines = markdown.split('\n');
   const bodies = [];
-  let armed = false;
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (line.trim() === DOCTEST_MARKER) { armed = true; continue; }
-    if (line.trim() === '') continue;            // blank lines do not disarm
-    const open = line.match(/^```(\S*)\s*$/);
-    if (!open) { armed = false; continue; }
+    const open = lines[i].match(/^```(\S*)\s*$/);
+    if (!open) continue;
     const body = [];
     let j = i + 1;
     for (; j < lines.length && !/^```\s*$/.test(lines[j]); j++) body.push(lines[j]);
-    if (armed) bodies.push(body.join('\n'));
+    // A doctest is a `medaka` fence opening on the `> expr` prompt — the shape
+    // `medaka doc` gives every example and no program can have.
+    if (open[1] === 'medaka' && /^> /.test(body[0] ?? '')) bodies.push(body.join('\n'));
     i = j;
-    armed = false;
   }
   return bodies;
 }
@@ -404,7 +400,7 @@ try {
   writeFileSync(join(probe, 'a.md'),
     '# Probe\n\n## S\n\n```medaka\nmain = println 1\n```\n\n'
     + '```medaka-nocheck\nf x = x + 1\n```\n\n'
-    + `${DOCTEST_MARKER}\n\n\`\`\`medaka\n> f 1\n2\n\`\`\`\n`);
+    + '```medaka\n> f 1\n2\n```\n');
   const probeOut = join(scratch, 'probeout');
   renderDocSet({ src: probe, out: probeOut, exclude: [], title: 'Probe', repoUrl: '', repoRoot: REPO_ROOT });
   const probeHtml = readFileSync(join(probeOut, 'a.html'), 'utf8');
@@ -415,7 +411,7 @@ try {
   check(/class="pg-not-runnable"/.test(probeBlocks[1] ?? ''),
     'probe: a `medaka-nocheck` fragment keeps its not-runnable footer');
   check((probeBlocks[2] ?? 'x') === '',
-    'probe: a marker-introduced doctest gets NO footer — in a doc set that is neither the guide nor the stdlib');
+    'probe: a `> `-prompt doctest transcript gets NO footer — in a doc set that is neither the guide nor the stdlib');
   note('doctest footer suppression is keyed on the fence, not on --src');
 } finally {
   rmSync(scratch, { recursive: true, force: true });
