@@ -1486,6 +1486,20 @@ doLetRhs (EIf c t els)
   | not (isUnitLit els) = printIfBody c t els
 doLetRhs e = printExpr precTop e
 
+-- `let pat = <rhs>` equals-sign + RHS: only a bare `EBlock` renders via
+-- `indentBlock` (Nest 2 (Cat Hardline d)) with NO leading keyword text, so it
+-- is the one shape where a fixed " " before the RHS lands as trailing
+-- whitespace ahead of that Hardline.  `EDo`/`EMatch` keep their keyword
+-- adjacent to the space (`= do`, `= match sc`) before their own indented
+-- block, and a block-armed `EIf` renders via `printIfBody`, which likewise
+-- starts with literal `if ` text — both already safe with the plain space,
+-- same as `doLetRhs` always used.  (`EGuards` cannot reach here: it is only
+-- produced as a whole function/method body, never a `let`-statement RHS.)
+doLetEq : Expr -> Doc
+doLetEq (ELoc _ e) = doLetEq e
+doLetEq (EBlock stmts) = Cat (text " =") (printExprBody (EBlock stmts))
+doLetEq e = Cat (text " = ") (doLetRhs e)
+
 printDoStmt : DoStmt -> Doc
 printDoStmt (DoBind pat e) =
   Cat (printPat pat) (Cat (text " <- ") (printExpr precTop e))
@@ -1497,9 +1511,7 @@ printDoStmt (DoExpr e) = match e
   _ => printExprBody e
 printDoStmt (DoLet isMut _ pat e) = Cat
   (text "let ")
-  (Cat
-    (if isMut then text "mut " else Nil)
-    (Cat (printPat pat) (Cat (text " = ") (doLetRhs e))))
+  (Cat (if isMut then text "mut " else Nil) (Cat (printPat pat) (doLetEq e)))
 printDoStmt (DoAssign x e) =
   Cat (text x) (Cat (text " = ") (printExpr precTop e))
 printDoStmt (DoFieldAssign x fields e) =

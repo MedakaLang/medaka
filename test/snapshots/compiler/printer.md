@@ -1,5 +1,5 @@
 # META
-source_lines=2099
+source_lines=2111
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted pretty printer for Medaka — a port of lib/printer.ml, producing
@@ -1490,6 +1490,20 @@ doLetRhs (EIf c t els)
   | not (isUnitLit els) = printIfBody c t els
 doLetRhs e = printExpr precTop e
 
+-- `let pat = <rhs>` equals-sign + RHS: only a bare `EBlock` renders via
+-- `indentBlock` (Nest 2 (Cat Hardline d)) with NO leading keyword text, so it
+-- is the one shape where a fixed " " before the RHS lands as trailing
+-- whitespace ahead of that Hardline.  `EDo`/`EMatch` keep their keyword
+-- adjacent to the space (`= do`, `= match sc`) before their own indented
+-- block, and a block-armed `EIf` renders via `printIfBody`, which likewise
+-- starts with literal `if ` text — both already safe with the plain space,
+-- same as `doLetRhs` always used.  (`EGuards` cannot reach here: it is only
+-- produced as a whole function/method body, never a `let`-statement RHS.)
+doLetEq : Expr -> Doc
+doLetEq (ELoc _ e) = doLetEq e
+doLetEq (EBlock stmts) = Cat (text " =") (printExprBody (EBlock stmts))
+doLetEq e = Cat (text " = ") (doLetRhs e)
+
 printDoStmt : DoStmt -> Doc
 printDoStmt (DoBind pat e) =
   Cat (printPat pat) (Cat (text " <- ") (printExpr precTop e))
@@ -1501,9 +1515,7 @@ printDoStmt (DoExpr e) = match e
   _ => printExprBody e
 printDoStmt (DoLet isMut _ pat e) = Cat
   (text "let ")
-  (Cat
-    (if isMut then text "mut " else Nil)
-    (Cat (printPat pat) (Cat (text " = ") (doLetRhs e))))
+  (Cat (if isMut then text "mut " else Nil) (Cat (printPat pat) (doLetEq e)))
 printDoStmt (DoAssign x e) =
   Cat (text x) (Cat (text " = ") (printExpr precTop e))
 printDoStmt (DoFieldAssign x fields e) =
@@ -2653,10 +2665,14 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "doLetRhs" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "doLetRhs") (EVar "e")))
 (DFunDef false "doLetRhs" ((PCon "EIf" (PVar "c") (PVar "t") (PVar "els"))) (EIf (EApp (EVar "not") (EApp (EVar "isUnitLit") (EVar "els"))) (EApp (EApp (EApp (EVar "printIfBody") (EVar "c")) (EVar "t")) (EVar "els")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "doLetRhs" ((PVar "e")) (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "e")))
+(DTypeSig false "doLetEq" (TyFun (TyCon "Expr") (TyCon "Doc")))
+(DFunDef false "doLetEq" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "doLetEq") (EVar "e")))
+(DFunDef false "doLetEq" ((PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " =")))) (EApp (EVar "printExprBody") (EApp (EVar "EBlock") (EVar "stmts")))))
+(DFunDef false "doLetEq" ((PVar "e")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " = ")))) (EApp (EVar "doLetRhs") (EVar "e"))))
 (DTypeSig false "printDoStmt" (TyFun (TyCon "DoStmt") (TyCon "Doc")))
 (DFunDef false "printDoStmt" ((PCon "DoBind" (PVar "pat") (PVar "e"))) (EApp (EApp (EVar "Cat") (EApp (EVar "printPat") (EVar "pat"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " <- ")))) (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "e")))))
 (DFunDef false "printDoStmt" ((PCon "DoExpr" (PVar "e"))) (EMatch (EVar "e") (arm (PCon "EIf" (PVar "c") (PVar "t") (PVar "els")) () (EIf (EApp (EVar "isUnitLit") (EVar "els")) (EBlock (DoLet false false (PVar "thenPart") (EApp (EVar "elseLessThen") (EVar "t"))) (DoExpr (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "if ")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "c"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " then")))) (EVar "thenPart")))))) (EApp (EVar "printExprBody") (EVar "e")))) (arm PWild () (EApp (EVar "printExprBody") (EVar "e")))))
-(DFunDef false "printDoStmt" ((PCon "DoLet" (PVar "isMut") PWild (PVar "pat") (PVar "e"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "let ")))) (EApp (EApp (EVar "Cat") (EIf (EVar "isMut") (EApp (EVar "text") (ELit (LString "mut "))) (EVar "Nil"))) (EApp (EApp (EVar "Cat") (EApp (EVar "printPat") (EVar "pat"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " = ")))) (EApp (EVar "doLetRhs") (EVar "e")))))))
+(DFunDef false "printDoStmt" ((PCon "DoLet" (PVar "isMut") PWild (PVar "pat") (PVar "e"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "let ")))) (EApp (EApp (EVar "Cat") (EIf (EVar "isMut") (EApp (EVar "text") (ELit (LString "mut "))) (EVar "Nil"))) (EApp (EApp (EVar "Cat") (EApp (EVar "printPat") (EVar "pat"))) (EApp (EVar "doLetEq") (EVar "e"))))))
 (DFunDef false "printDoStmt" ((PCon "DoAssign" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "x"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " = ")))) (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "e")))))
 (DFunDef false "printDoStmt" ((PCon "DoFieldAssign" (PVar "x") (PVar "fields") (PVar "e"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "x"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString ".")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EApp (EApp (EVar "joinWith") (ELit (LString "."))) (EVar "fields")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " = ")))) (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "e")))))))
 (DTypeSig false "interpPartDoc" (TyFun (TyCon "InterpPart") (TyCon "Doc")))
@@ -3396,10 +3412,14 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "doLetRhs" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "doLetRhs") (EVar "e")))
 (DFunDef false "doLetRhs" ((PCon "EIf" (PVar "c") (PVar "t") (PVar "els"))) (EIf (EApp (EVar "not") (EApp (EVar "isUnitLit") (EVar "els"))) (EApp (EApp (EApp (EVar "printIfBody") (EVar "c")) (EVar "t")) (EVar "els")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "doLetRhs" ((PVar "e")) (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "e")))
+(DTypeSig false "doLetEq" (TyFun (TyCon "Expr") (TyCon "Doc")))
+(DFunDef false "doLetEq" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "doLetEq") (EVar "e")))
+(DFunDef false "doLetEq" ((PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " =")))) (EApp (EVar "printExprBody") (EApp (EVar "EBlock") (EVar "stmts")))))
+(DFunDef false "doLetEq" ((PVar "e")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " = ")))) (EApp (EVar "doLetRhs") (EVar "e"))))
 (DTypeSig false "printDoStmt" (TyFun (TyCon "DoStmt") (TyCon "Doc")))
 (DFunDef false "printDoStmt" ((PCon "DoBind" (PVar "pat") (PVar "e"))) (EApp (EApp (EVar "Cat") (EApp (EVar "printPat") (EVar "pat"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " <- ")))) (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "e")))))
 (DFunDef false "printDoStmt" ((PCon "DoExpr" (PVar "e"))) (EMatch (EVar "e") (arm (PCon "EIf" (PVar "c") (PVar "t") (PVar "els")) () (EIf (EApp (EVar "isUnitLit") (EVar "els")) (EBlock (DoLet false false (PVar "thenPart") (EApp (EVar "elseLessThen") (EVar "t"))) (DoExpr (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "if ")))) (EApp (EApp (EVar "Cat") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "c"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " then")))) (EVar "thenPart")))))) (EApp (EVar "printExprBody") (EVar "e")))) (arm PWild () (EApp (EVar "printExprBody") (EVar "e")))))
-(DFunDef false "printDoStmt" ((PCon "DoLet" (PVar "isMut") PWild (PVar "pat") (PVar "e"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "let ")))) (EApp (EApp (EVar "Cat") (EIf (EVar "isMut") (EApp (EVar "text") (ELit (LString "mut "))) (EVar "Nil"))) (EApp (EApp (EVar "Cat") (EApp (EVar "printPat") (EVar "pat"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " = ")))) (EApp (EVar "doLetRhs") (EVar "e")))))))
+(DFunDef false "printDoStmt" ((PCon "DoLet" (PVar "isMut") PWild (PVar "pat") (PVar "e"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "let ")))) (EApp (EApp (EVar "Cat") (EIf (EVar "isMut") (EApp (EVar "text") (ELit (LString "mut "))) (EVar "Nil"))) (EApp (EApp (EVar "Cat") (EApp (EVar "printPat") (EVar "pat"))) (EApp (EVar "doLetEq") (EVar "e"))))))
 (DFunDef false "printDoStmt" ((PCon "DoAssign" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "x"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " = ")))) (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "e")))))
 (DFunDef false "printDoStmt" ((PCon "DoFieldAssign" (PVar "x") (PVar "fields") (PVar "e"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "x"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString ".")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EApp (EApp (EVar "joinWith") (ELit (LString "."))) (EVar "fields")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " = ")))) (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "e")))))))
 (DTypeSig false "interpPartDoc" (TyFun (TyCon "InterpPart") (TyCon "Doc")))
