@@ -162,7 +162,7 @@
 - [`leFloat64`](byteparser.md#lefloat64)
 - [`runByteParser`](byteparser.md#runbyteparser)
 
-## `core` (172 entries)
+## `core` (176 entries)
 
 - [`Ordering`](core.md#ordering)
 - [`Option`](core.md#option)
@@ -258,6 +258,10 @@
 - [`flat`](core.md#flat)
 - [`when`](core.md#when)
 - [`unless`](core.md#unless)
+- [`DeferredMappable`](core.md#deferredmappable)
+- [`DeferredApplicative`](core.md#deferredapplicative)
+- [`DeferredThenable`](core.md#deferredthenable)
+- [`deferFlatMap`](core.md#deferflatmap)
 - [`foldThen`](core.md#foldthen)
 - [`repeatThen`](core.md#repeatthen)
 - [`filterThen`](core.md#filterthen)
