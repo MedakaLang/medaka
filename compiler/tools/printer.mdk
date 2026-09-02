@@ -817,9 +817,7 @@ printExprRaw (EDictApp n) = text n
 printExprRaw (EApp f x) =
   Cat (printExpr precApp f) (Cat (text " ") (appArgDoc f x))
 printExprRaw (ELam pats body) =
-  Cat
-    (sepBy (text " ") (map printPatAtom pats))
-    (Cat (text " => ") (printExpr precTop body))
+  Cat (sepBy (text " ") (map printPatAtom pats)) (lamBodyDoc body)
 printExprRaw (ELet isMut isf pat rhs e2) = printELet isMut isf pat rhs e2
 printExprRaw (ELetGroup bindings body) =
   Cat
@@ -937,6 +935,11 @@ printExprRaw (EMethodAt n _ _ _) = text n
 printExprRaw (EDictAt n _) = text n
 -- ELoc is transparent: print the wrapped expr.
 printExprRaw (ELoc _ e) = printExprRaw e
+
+lamBodyDoc : Expr -> Doc
+lamBodyDoc (ELoc _ e) = lamBodyDoc e
+lamBodyDoc (EBlock stmts) = Cat (text " =>") (printExprBody (EBlock stmts))
+lamBodyDoc e = Cat (text " => ") (printExpr precTop e)
 
 -- An application argument: normally atom-parenthesized by precedence
 -- (`printExpr precPostfix`), EXCEPT a TIGHT negative numeric literal
@@ -1770,7 +1773,7 @@ printNamedFieldData vis n params [Variant cname (ConNamed fields nameOmitted)] d
   let deriveDoc = if isEmptyL derives then
     Nil
   else
-    Cat Hardline (printDerives derives)
+    indentBlock (printDerives derives)
   Cat (visPrefix vis) (Cat head (Cat body deriveDoc))
 printNamedFieldData vis n params variants derives =
   -- #1110: the printer STRIPS decl identity (it is not renderable — a
@@ -2004,7 +2007,7 @@ ifaceMethodDoc (IfaceMethod n _ (Some (MethodDefault pats body)) _) = Cat
   (text n)
   (Cat
     (concatD (map (p => Cat (text " ") (printPatAtom p)) pats))
-    (Cat (text " = ") (printExprBody body)))
+    (printDefRhs body))
 
 implHead : String -> List Ty -> Doc
 implHead iface tys =

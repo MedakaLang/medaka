@@ -12,8 +12,12 @@ data Named =
   | Named { y : Int }  -- explicit ctor, same shape
   deriving (Debug)
 
--- The collapsed one-line spelling converges to the same form in ONE pass (a
--- commented `data` never reflows flat — see printDataDeclCommented).
+-- The collapsed one-line spelling converges to the same form in ONE pass —
+-- true of THIS shape (see printDataDeclCommented), not a general property.
+-- A multi-line `data` whose only comment sits on the `deriving` line DOES
+-- reflow flat on pass 1 (the generic decl-trailing-comment path, not
+-- `vcommentsFor`) and re-block on pass 2, once the comment lands on the same
+-- source line as a variant again.
 data Flat =
   | { z : Int }  -- collapsed spelling
   deriving (Debug)
