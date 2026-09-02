@@ -91,19 +91,16 @@ done
 # ── library-mode arm ────────────────────────────────────────────────────────
 if [ -d "$LIBGOLDENDIR" ]; then
   "$MEDAKA" doc --out "$LIBTMPDIR" "$LIBFIXDIR"/*.mdk >/dev/null 2>/dev/null
-  # `async.mdk` (the exclusion probe) must produce no page. Checked together
-  # with proof the run actually produced its OTHER expected pages — bare
-  # absence of async.md is also satisfied by a total generator failure
-  # (nothing generated = async.md also absent = vacuous "pass").
-  if [ -f "$LIBTMPDIR/async.md" ]; then
-    fail=$((fail + 1))
-    printf 'FAIL library-mode (async-probe module was NOT excluded — async.md exists)\n'
-  elif [ -f "$LIBTMPDIR/alpha.md" ] && [ -f "$LIBTMPDIR/beta.md" ] && [ -f "$LIBTMPDIR/gamma.md" ]; then
+  # Every target gets a page — including `async.mdk`, which library mode used
+  # to drop by name (the exclusion was lifted 2026-09-02 once the async runtime
+  # landed; the probe stays so a re-introduced name-keyed drop is caught here,
+  # not only by the golden tree).
+  if [ -f "$LIBTMPDIR/async.md" ] && [ -f "$LIBTMPDIR/alpha.md" ] && [ -f "$LIBTMPDIR/beta.md" ] && [ -f "$LIBTMPDIR/gamma.md" ]; then
     pass=$((pass + 1))
-    printf 'ok   library-mode async-exclusion\n'
+    printf 'ok   library-mode every-target-documented\n'
   else
     fail=$((fail + 1))
-    printf 'FAIL library-mode async-exclusion (generator produced no other pages — vacuous absence, not a real exclusion)\n'
+    printf 'FAIL library-mode every-target-documented (a target produced no page)\n'
   fi
   # S-doc-surface-truth hole (b): `rebucketLibraryImpls` files an impl under the
   # page of the type it is ON, not the module that declared it. gamma.mdk writes
