@@ -270,12 +270,14 @@ A mutable hash table from keys to values.
 
 ## [`hash_set`](hash_set.md)
 
+A mutable set of distinct elements, keyed by hash.
+
 - [`HashSet`](hash_set.md#hashset)
 - [`new`](hash_set.md#new)
+- [`fromList`](hash_set.md#fromlist)
 - [`size`](hash_set.md#size)
 - [`has`](hash_set.md#has)
 - [`insertInPlace`](hash_set.md#insertinplace)
-- [`fromList`](hash_set.md#fromlist)
 - [`deleteInPlace`](hash_set.md#deleteinplace)
 
 ## [`hex`](hex.md)

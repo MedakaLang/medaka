@@ -1,27 +1,26 @@
 # META
-source_lines=270
+source_lines=279
 stages=DESUGAR,MARK
 # SOURCE
-{- hash_set.mdk — a mutable hash set (Module 6).
+{- | A mutable set of distinct elements, keyed by hash.
 
-   See STDLIB.md (Module 6) for the plan.
+   `HashSet a` gives `O(1)` average membership, insertion, and deletion.
+   The writing operations, `insertInPlace` and `deleteInPlace`, change the
+   set in place and return `Unit`; every other operation reads it. Iteration
+   order is unspecified. Use `set` instead when you want an immutable value
+   or ordered elements.
 
-   `HashSet a` is a **mutable** hash set — separate chaining (each bucket a
-   `List a`) in a `Ref`-held array plus a `Ref Int` count, mirroring
-   `hash_map.mdk`. The *performance* counterpart to the persistent ordered `Set`
-   (set.mdk): O(1) average membership/insert, updates mutate in place.
+   Elements need `Eq` and `Hashable`, and the two must agree: equal elements
+   must hash equally. `deriving (Hashable)` gives an element type an
+   instance that agrees with its derived `Eq`. The `Foldable` instance
+   makes `toList`, `elem`, `length`, and `any` work on a set. -}
 
-   Standalone rather than a wrapper over `HashMap a Unit` — same reasoning as
-   set.mdk over `Map a Unit` (self-contained, no qualified-import gymnastics, no
-   `Unit` payload). Elements hash via the `Hashable` typeclass method `hash`,
-   which must agree with the element's `Eq`. A custom element type gets a
-   structural impl from `deriving (Hashable)` (#422); hand-write `impl Hashable
-   T` only when the derived fold is not what you want. A hash may be NEGATIVE
-   (the fold wraps) — `slotOf` masks the sign off before indexing, so that is
-   safe (#416). Iteration order is unspecified.
-
-   `Foldable HashSet` makes `toList`/`elem`/`length`/`any`/… work (a set's
-   elements *are* its `toList`, unlike a map's pairs). -}
+-- Separate chaining (each bucket a `List a`) in a `Ref`-held array plus a
+-- `Ref Int` count, mirroring `hash_map.mdk`.  Standalone rather than a wrapper
+-- over `HashMap a Unit`, for the same reasons set.mdk is not `Map a Unit`
+-- (self-contained, no qualified-import gymnastics, no `Unit` payload).  A
+-- hash may be NEGATIVE (the fold wraps); `slotOf` masks the sign off before
+-- indexing.
 
 -- hash_set/hash_map share identical resize/rehash bodies over DISTINCT ADTs; consolidation needs a shared-core refactor (out of scope).
 -- lint-disable-file rule-duplicate-body
@@ -29,8 +28,8 @@ stages=DESUGAR,MARK
 import core.{Eq, Ord, Debug, Display, Foldable, Hashable}
 import list as L
 
-{- `HashSet buckets count`: chains in `!buckets`, live count in
-   `!count`; both mutated in place. -}
+{- | The hash set type. Its fields are the bucket array and the element
+   count, both mutable. -}
 public export data HashSet a = HashSet (Ref (Array (List a))) (Ref Int)
 
 initialCapacity : Int
@@ -39,24 +38,49 @@ initialCapacity = 8
 {- Bucket index of an element at a given capacity (cap > 0). The `Hashable`
    contract requires only eq-agreement, NOT a non-negative hash, so a
    contract-compliant user impl may hand us any `Int` — and `%` on a negative
-   dividend is negative, which would index the bucket array out of bounds (issue
-   #416: an OOB `arrayGetUnsafe`). Clearing the sign bit maps every `Int`,
-   `intMinBound` included, into `[0, intMaxBound]` before the `%`. -}
+   dividend is negative, which would index the bucket array out of bounds.
+   Clearing the sign bit maps every `Int`, `intMinBound` included, into
+   `[0, intMaxBound]` before the `%`. -}
 slotOf : Hashable a => a -> Int -> Int
 slotOf x cap = bitAnd (hash x) intMaxBound % cap
 
--- ── Construction ────────────────────────────────────────────────────────
+-- # Construction
 
-{- | A fresh, empty hash set. Takes `Unit` so each call allocates its own. -}
+{- | A new, empty set.
+
+   Each call allocates its own set, which is why it takes `Unit`.
+
+   > size (new () : HashSet Int)
+   0 -}
 export
 new : Unit -> HashSet a
 new _ = HashSet (Ref (arrayMake initialCapacity [])) (Ref 0)
 
--- ── Query (pure reads) ──────────────────────────────────────────────────
-
-{- | Number of elements. O(1).
+{- | A set holding the elements of a list, without duplicates.
 
    > size (fromList [1, 2, 3, 2, 1])
+   3 -}
+export
+fromList : (Eq a, Hashable a) => List a -> HashSet a
+fromList xs =
+  let s = new ()
+  insertAll xs s
+  s
+
+-- > size (fromList [1, 2, 3, 4, 5, 6, 7, 8, 8, 1])
+-- 8
+
+insertAll : (Eq a, Hashable a) => List a -> HashSet a -> Unit
+insertAll [] _ = ()
+insertAll (x::rest) s =
+  insertInPlace x s
+  insertAll rest s
+
+-- # Query
+
+{- | The number of elements, in `O(1)`.
+
+   > size (fromList [1, 2, 3])
    3 -}
 export
 size : HashSet a -> Int
@@ -68,7 +92,7 @@ bucketHas x (y::rest)
   | x == y = True
   | otherwise = bucketHas x rest
 
-{- | `True` when the element is present.
+{- | Whether `x` is a member.
 
    > has 2 (fromList [1, 2, 3])
    True
@@ -80,7 +104,7 @@ has x (HashSet buckets _) =
   let arr = !buckets
   bucketHas x (arrayGetUnsafe (slotOf x (arrayLength arr)) arr)
 
--- ── Insertion / deletion (mutating) ─────────────────────────────────────
+-- # Insertion and deletion
 
 bucketRemove : Eq a => a -> List a -> List a
 bucketRemove _ [] = []
@@ -88,8 +112,9 @@ bucketRemove x (y::rest)
   | x == y = rest
   | otherwise = y :: bucketRemove x rest
 
-{- | Add an element, in place. A no-op when already present. Resizes (doubling)
-   past load factor 0.75. -}
+{- | Adds `x` to the set, in place.
+
+   Nothing happens when `x` is already a member. The set grows as needed. -}
 export
 insertInPlace : (Eq a, Hashable a) => a -> HashSet a -> Unit
 insertInPlace x (HashSet buckets count) =
@@ -105,6 +130,7 @@ insertAt x arr idx buckets count
     count := !count + 1
     maybeResize buckets count
 
+-- Doubles the bucket array when the load factor passes 0.75.
 maybeResize : Hashable a => Ref (Array (List a)) -> Ref Int -> Unit
 maybeResize buckets count
   | !count * 4 > arrayLength !buckets * 3 = resize buckets count
@@ -138,24 +164,9 @@ putRaw x buckets count =
   arraySetUnsafe idx (x :: arrayGetUnsafe idx arr) arr
   count := !count + 1
 
-{- | Build a set from a list, dropping duplicates.
+{- | Removes `x` from the set, in place.
 
-   > size (fromList [1, 2, 3, 4, 5, 6, 7, 8, 8, 1])
-   8 -}
-export
-fromList : (Eq a, Hashable a) => List a -> HashSet a
-fromList xs =
-  let s = new ()
-  insertAll xs s
-  s
-
-insertAll : (Eq a, Hashable a) => List a -> HashSet a -> Unit
-insertAll [] _ = ()
-insertAll (x::rest) s =
-  insertInPlace x s
-  insertAll rest s
-
-{- | Remove an element, in place. A no-op when absent. -}
+   Nothing happens when `x` is not a member. -}
 export
 deleteInPlace : (Eq a, Hashable a) => a -> HashSet a -> Unit
 deleteInPlace x (HashSet buckets count) =
@@ -189,11 +200,9 @@ foldlElems f z (x::rest) = foldlElems f (f z x) rest
 
 -- ── Instances ───────────────────────────────────────────────────────────
 
-{- | Folds over elements (unspecified order), so `toList`/`length`/`elem`/`any`/
-   `sum`/… all work on a HashSet.
+{- | The `Foldable` methods visit the elements in unspecified order, so
+   `toList`, `length`, `elem`, `any`, and `sum` work on a set.
 
-   > toList (fromList [1, 1, 2]) /= []
-   True
    > length (fromList [3, 1, 2, 1])
    3 -}
 export impl Foldable HashSet where
@@ -203,54 +212,54 @@ export impl Foldable HashSet where
   isEmpty s = size s == 0
   length s = size s
 
+-- > toList (fromList [1, 1, 2]) /= []
+-- True
+
 allIn : (Eq a, Hashable a) => List a -> HashSet a -> Bool
 allIn [] _ = True
 allIn (x::rest) s
   | has x s = allIn rest s
   | otherwise = False
 
-{- | Order-independent equality: same elements regardless of layout.
+{- | Two sets are equal when they hold the same elements, whatever their
+   internal layout.
 
    > eq (fromList [1, 2, 3]) (fromList [3, 2, 1, 2])
    True -}
 export impl Eq (HashSet a) requires Eq a, Hashable a where
   eq a b = if size a /= size b then False else allIn (elemList a) b
 
-{- | Rendered `fromList [a, …]` in hash order (layout-dependent; use `eq` for
-   equality). -}
+{- | `debug` renders a set as `fromList [x, ...]` in internal order, so the
+   text depends on the set's layout. Compare sets with `eq`, not by their
+   rendering. -}
 export impl Debug (HashSet a) requires Debug a where
   debug s = "fromList \{debug (elemList s)}"
 
-{- ── Display, and the order it fixes (sheet row A-4) ───────────────────────
-
-   `Debug` above renders in HASH order, which is layout-dependent by design.
-   `Display` may not be: a rendering that changes when the set is rebuilt from
-   its own elements is not a rendering of the VALUE.  So `Display` sorts, which
-   is why it asks for `Ord a` that `Debug` does not -- that ordering choice IS
-   row A-4's ratification, and the law it buys is
-   `display s == display (fromList (toList s))`.  The sort is `list.sort`: one
-   ordering routine for the whole stdlib, rather than a private copy in every
-   printing path. -}
+-- `Debug` above renders in hash order, which is layout-dependent by design.
+-- `Display` may not be: a rendering that changes when the set is rebuilt from
+-- its own elements is not a rendering of the value.  So `Display` sorts, which
+-- is why it asks for `Ord a` that `Debug` does not, and the law it buys is
+-- `display s == display (fromList (toList s))`.  The sort is `list.sort`: one
+-- ordering routine for the whole stdlib.
 
 displayItems : Display a => List a -> String
 displayItems [] = ""
 displayItems [x] = "\{x}"
 displayItems (y::rest) = "\{y}, \{displayItems rest}"
 
-{- | The *display* form, peer of `Display (Set a)`'s `Set { x, … }`, with the
-   elements in ascending order so the text depends only on the value and not
-   on the table's internal layout.
+{- | `display` renders a set as `HashSet { x, ... }` with the elements in
+   ascending order, so the text depends only on the elements.
 
-   > display (fromList [3, 1, 2]) == "HashSet { 1, 2, 3 }"
-   True
-   > display (new () : HashSet Int) == "HashSet {}"
-   True -}
+   > display (fromList [3, 1, 2])
+   "HashSet { 1, 2, 3 }"
+   > display (new () : HashSet Int)
+   "HashSet {}" -}
 export impl Display (HashSet a) requires Display a, Ord a where
   display s = match L.sort (elemList s)
     [] => "HashSet {}"
     xs => "HashSet { \{displayItems xs} }"
 
--- ── Property tests (sheet row A-4) ──────────────────────────────────────
+-- ── Property tests ──────────────────────────────────────────────────────
 
 ascendingL : Ord a => List a -> Bool
 ascendingL [] = True
@@ -282,6 +291,11 @@ prop "Display HashSet agrees with Eq and lists elements ascending" (xs : List In
 (DFunDef false "slotOf" ((PVar "x") (PVar "cap")) (EBinOp "%" (EApp (EApp (EVar "bitAnd") (EApp (EVar "hash") (EVar "x"))) (EVar "intMaxBound")) (EVar "cap")))
 (DTypeSig true "new" (TyFun (TyCon "Unit") (TyApp (TyCon "HashSet") (TyVar "a"))))
 (DFunDef false "new" (PWild) (EApp (EApp (EVar "HashSet") (EApp (EVar "Ref") (EApp (EApp (EVar "arrayMake") (EVar "initialCapacity")) (EListLit)))) (EApp (EVar "Ref") (ELit (LInt 0)))))
+(DTypeSig true "fromList" (TyConstrained ((cstr "Eq" (TyVar "a")) (cstr "Hashable" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "HashSet") (TyVar "a")))))
+(DFunDef false "fromList" ((PVar "xs")) (EBlock (DoLet false false (PVar "s") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "insertAll") (EVar "xs")) (EVar "s"))) (DoExpr (EVar "s"))))
+(DTypeSig false "insertAll" (TyConstrained ((cstr "Eq" (TyVar "a")) (cstr "Hashable" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "HashSet") (TyVar "a")) (TyCon "Unit")))))
+(DFunDef false "insertAll" ((PList) PWild) (ELit LUnit))
+(DFunDef false "insertAll" ((PCons (PVar "x") (PVar "rest")) (PVar "s")) (EBlock (DoExpr (EApp (EApp (EVar "insertInPlace") (EVar "x")) (EVar "s"))) (DoExpr (EApp (EApp (EVar "insertAll") (EVar "rest")) (EVar "s")))))
 (DTypeSig true "size" (TyFun (TyApp (TyCon "HashSet") (TyVar "a")) (TyCon "Int")))
 (DFunDef false "size" ((PCon "HashSet" PWild (PVar "count"))) (EUnOp "!" (EVar "count")))
 (DTypeSig false "bucketHas" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))))
@@ -307,11 +321,6 @@ prop "Display HashSet agrees with Eq and lists elements ascending" (xs : List In
 (DFunDef false "reinsertBucket" ((PCons (PVar "x") (PVar "rest")) (PVar "buckets") (PVar "count")) (EBlock (DoExpr (EApp (EApp (EApp (EVar "putRaw") (EVar "x")) (EVar "buckets")) (EVar "count"))) (DoExpr (EApp (EApp (EApp (EVar "reinsertBucket") (EVar "rest")) (EVar "buckets")) (EVar "count")))))
 (DTypeSig false "putRaw" (TyConstrained ((cstr "Hashable" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyVar "a")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyCon "Unit"))))))
 (DFunDef false "putRaw" ((PVar "x") (PVar "buckets") (PVar "count")) (EBlock (DoLet false false (PVar "arr") (EUnOp "!" (EVar "buckets"))) (DoLet false false (PVar "idx") (EApp (EApp (EVar "slotOf") (EVar "x")) (EApp (EVar "arrayLength") (EVar "arr")))) (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "idx")) (EBinOp "::" (EVar "x") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "idx")) (EVar "arr")))) (EVar "arr"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "count")) (EBinOp "+" (EUnOp "!" (EVar "count")) (ELit (LInt 1)))))))
-(DTypeSig true "fromList" (TyConstrained ((cstr "Eq" (TyVar "a")) (cstr "Hashable" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "HashSet") (TyVar "a")))))
-(DFunDef false "fromList" ((PVar "xs")) (EBlock (DoLet false false (PVar "s") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "insertAll") (EVar "xs")) (EVar "s"))) (DoExpr (EVar "s"))))
-(DTypeSig false "insertAll" (TyConstrained ((cstr "Eq" (TyVar "a")) (cstr "Hashable" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "HashSet") (TyVar "a")) (TyCon "Unit")))))
-(DFunDef false "insertAll" ((PList) PWild) (ELit LUnit))
-(DFunDef false "insertAll" ((PCons (PVar "x") (PVar "rest")) (PVar "s")) (EBlock (DoExpr (EApp (EApp (EVar "insertInPlace") (EVar "x")) (EVar "s"))) (DoExpr (EApp (EApp (EVar "insertAll") (EVar "rest")) (EVar "s")))))
 (DTypeSig true "deleteInPlace" (TyConstrained ((cstr "Eq" (TyVar "a")) (cstr "Hashable" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "HashSet") (TyVar "a")) (TyCon "Unit")))))
 (DFunDef false "deleteInPlace" ((PVar "x") (PCon "HashSet" (PVar "buckets") (PVar "count"))) (EBlock (DoLet false false (PVar "arr") (EUnOp "!" (EVar "buckets"))) (DoLet false false (PVar "idx") (EApp (EApp (EVar "slotOf") (EVar "x")) (EApp (EVar "arrayLength") (EVar "arr")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "deleteAt") (EVar "x")) (EVar "arr")) (EVar "idx")) (EVar "count")))))
 (DTypeSig false "deleteAt" (TyConstrained ((cstr "Eq" (TyVar "a")) (cstr "Hashable" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyVar "a"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyCon "Unit")))))))
@@ -353,6 +362,11 @@ prop "Display HashSet agrees with Eq and lists elements ascending" (xs : List In
 (DFunDef false "slotOf" ((PVar "x") (PVar "cap")) (EBinOp "%" (EApp (EApp (EVar "bitAnd") (EApp (EMethodRef "hash") (EVar "x"))) (EVar "intMaxBound")) (EVar "cap")))
 (DTypeSig true "new" (TyFun (TyCon "Unit") (TyApp (TyCon "HashSet") (TyVar "a"))))
 (DFunDef false "new" (PWild) (EApp (EApp (EVar "HashSet") (EApp (EVar "Ref") (EApp (EApp (EVar "arrayMake") (EVar "initialCapacity")) (EListLit)))) (EApp (EVar "Ref") (ELit (LInt 0)))))
+(DTypeSig true "fromList" (TyConstrained ((cstr "Eq" (TyVar "a")) (cstr "Hashable" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "HashSet") (TyVar "a")))))
+(DFunDef false "fromList" ((PVar "xs")) (EBlock (DoLet false false (PVar "s") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EDictApp "insertAll") (EVar "xs")) (EVar "s"))) (DoExpr (EVar "s"))))
+(DTypeSig false "insertAll" (TyConstrained ((cstr "Eq" (TyVar "a")) (cstr "Hashable" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "HashSet") (TyVar "a")) (TyCon "Unit")))))
+(DFunDef false "insertAll" ((PList) PWild) (ELit LUnit))
+(DFunDef false "insertAll" ((PCons (PVar "x") (PVar "rest")) (PVar "s")) (EBlock (DoExpr (EApp (EApp (EDictApp "insertInPlace") (EVar "x")) (EVar "s"))) (DoExpr (EApp (EApp (EDictApp "insertAll") (EVar "rest")) (EVar "s")))))
 (DTypeSig true "size" (TyFun (TyApp (TyCon "HashSet") (TyVar "a")) (TyCon "Int")))
 (DFunDef false "size" ((PCon "HashSet" PWild (PVar "count"))) (EUnOp "!" (EDictApp "count")))
 (DTypeSig false "bucketHas" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))))
@@ -378,11 +392,6 @@ prop "Display HashSet agrees with Eq and lists elements ascending" (xs : List In
 (DFunDef false "reinsertBucket" ((PCons (PVar "x") (PVar "rest")) (PVar "buckets") (PVar "count")) (EBlock (DoExpr (EApp (EApp (EApp (EDictApp "putRaw") (EVar "x")) (EVar "buckets")) (EDictApp "count"))) (DoExpr (EApp (EApp (EApp (EDictApp "reinsertBucket") (EVar "rest")) (EVar "buckets")) (EDictApp "count")))))
 (DTypeSig false "putRaw" (TyConstrained ((cstr "Hashable" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyVar "a")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyCon "Unit"))))))
 (DFunDef false "putRaw" ((PVar "x") (PVar "buckets") (PVar "count")) (EBlock (DoLet false false (PVar "arr") (EUnOp "!" (EVar "buckets"))) (DoLet false false (PVar "idx") (EApp (EApp (EDictApp "slotOf") (EVar "x")) (EApp (EVar "arrayLength") (EVar "arr")))) (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "idx")) (EBinOp "::" (EVar "x") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "idx")) (EVar "arr")))) (EVar "arr"))) (DoExpr (EApp (EApp (EVar "setRef") (EDictApp "count")) (EBinOp "+" (EUnOp "!" (EDictApp "count")) (ELit (LInt 1)))))))
-(DTypeSig true "fromList" (TyConstrained ((cstr "Eq" (TyVar "a")) (cstr "Hashable" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "HashSet") (TyVar "a")))))
-(DFunDef false "fromList" ((PVar "xs")) (EBlock (DoLet false false (PVar "s") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EDictApp "insertAll") (EVar "xs")) (EVar "s"))) (DoExpr (EVar "s"))))
-(DTypeSig false "insertAll" (TyConstrained ((cstr "Eq" (TyVar "a")) (cstr "Hashable" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "HashSet") (TyVar "a")) (TyCon "Unit")))))
-(DFunDef false "insertAll" ((PList) PWild) (ELit LUnit))
-(DFunDef false "insertAll" ((PCons (PVar "x") (PVar "rest")) (PVar "s")) (EBlock (DoExpr (EApp (EApp (EDictApp "insertInPlace") (EVar "x")) (EVar "s"))) (DoExpr (EApp (EApp (EDictApp "insertAll") (EVar "rest")) (EVar "s")))))
 (DTypeSig true "deleteInPlace" (TyConstrained ((cstr "Eq" (TyVar "a")) (cstr "Hashable" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "HashSet") (TyVar "a")) (TyCon "Unit")))))
 (DFunDef false "deleteInPlace" ((PVar "x") (PCon "HashSet" (PVar "buckets") (PVar "count"))) (EBlock (DoLet false false (PVar "arr") (EUnOp "!" (EVar "buckets"))) (DoLet false false (PVar "idx") (EApp (EApp (EDictApp "slotOf") (EVar "x")) (EApp (EVar "arrayLength") (EVar "arr")))) (DoExpr (EApp (EApp (EApp (EApp (EDictApp "deleteAt") (EVar "x")) (EVar "arr")) (EVar "idx")) (EDictApp "count")))))
 (DTypeSig false "deleteAt" (TyConstrained ((cstr "Eq" (TyVar "a")) (cstr "Hashable" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyVar "a"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyCon "Unit")))))))
