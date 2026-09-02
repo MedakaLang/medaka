@@ -31,7 +31,7 @@ read.
   `prop`, and keep the doc comment's examples illustrative.
 - Instances (`impl`) need no doc comment. The generator lists them under
   their type. Give an instance its own doc comment only when it has
-  behaviour a reader must know about, such as `Ord Float`'s treatment of NaN.
+  behavior a reader must know about, such as `Ord Float`'s treatment of NaN.
 
 ### What a doc comment contains
 
@@ -43,7 +43,7 @@ type. It says what the signature cannot.
    about the result, in the form "Returns the list in reverse order" or "The
    first element, or `None` when the list is empty". Do not start with the
    function's name.
-2. **A short paragraph for behaviour the signature does not show**, only
+2. **A short paragraph for behavior the signature does not show**, only
    when there is some: what happens at the boundaries (empty input, negative
    count, out-of-range index), which occurrence wins, whether order is
    preserved, what is clamped and what panics. One paragraph is the usual

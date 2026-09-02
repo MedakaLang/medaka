@@ -14,7 +14,7 @@ stages=DESUGAR,MARK
    methods of those names unshadowed. Use `stringLength s` and `s == ""`.
    `intToString` renders an integer. -}
 
--- Performance posture: under the hood this module favours what the machine
+-- Performance posture: under the hood this module favors what the machine
 -- likes, a contiguous `Array Char` with O(1) indexing and the direct string
 -- externs (`stringSlice`/`stringConcat`/`stringCompare`/`stringLength`), over
 -- a `List Char` of cons cells.  Three tiers, fastest first:
@@ -753,7 +753,7 @@ padRight n c s =
   else
     s ++ stringConcat (replic (n - stringLength s) (charToStr c))
 
-{- | The string centred in a field of width `n`, padded with `c`.
+{- | The string centered in a field of width `n`, padded with `c`.
 
    When the padding is odd, the extra character goes on the right.
    Unchanged when the string is already at least `n` long.

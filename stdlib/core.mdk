@@ -197,7 +197,7 @@ floatSignBit x = arrayGetUnsafe 0 (floatToBytes64 x) >= 128
 
 -- totalOrder sign tie-break, used only by `compareNaN` to place -NaN below
 -- +NaN.  `compare` does not separate -0.0 from +0.0: the zero sign is
--- normalised away so `compare (-0.0) (+0.0) = Eq`, matching `Eq Float`.
+-- normalized away so `compare (-0.0) (+0.0) = Eq`, matching `Eq Float`.
 compareBySign : Float -> Float -> Ordering
 compareBySign a b = match (floatSignBit a, floatSignBit b)
   (True, False) => Lt
@@ -241,7 +241,7 @@ export impl Ord Float where
     else if a > b then
       Gt
     else if a == b then
-      -- IEEE-equal: the only sign-differing equal pair is ±0.0, normalised to
+      -- IEEE-equal: the only sign-differing equal pair is ±0.0, normalized to
       -- `Eq` so `compare` agrees with `Eq`.
       Eq
     else

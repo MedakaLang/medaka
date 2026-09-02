@@ -738,7 +738,7 @@ Unchanged when it is already at least `n` long.
 center : Int -> Char -> String -> String
 ```
 
-The string centred in a field of width `n`, padded with `c`.
+The string centered in a field of width `n`, padded with `c`.
 
 When the padding is odd, the extra character goes on the right.
 Unchanged when the string is already at least `n` long.
