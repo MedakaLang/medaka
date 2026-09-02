@@ -3466,6 +3466,46 @@ sources = ["playground", "playground/*"]
 corpus = ["test/engine_fixtures"]
 toolchain = ["wasm-tools", "node>=24"]
 
+# S4 (#2442, epic #2036 visitor-wait-time arm) — F6's two absolute-ceiling
+# instruments. Deterministic (assembled-tree file size, no box noise) so it
+# stays at merge tier; the flappy latency half lives in its own
+# nightly-tier gate below (diff_visitor_analyze_latency) per [G14] precedent.
+[[gate]]
+name = "wasm/diff_visitor_cost_bytes"
+area = "wasm"
+shard = "other-job"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+run = "test/wasm/diff_visitor_cost_bytes.sh"
+oracles = []
+sources = ["playground", "playground/*"]
+corpus = []
+toolchain = ["wasm-tools", "node>=24"]
+
+# S4 (#2442, epic #2036 visitor-wait-time arm) — the latency half of F6's
+# two instruments. NIGHTLY, not merge: the contract's §4 note measured the
+# SAME program's `compile` arm swinging 683-789ms (14%) across two
+# consecutive runs on this shared box with nothing else changing, so a
+# PR-blocking wall-clock ceiling would flap. Order-of-magnitude ceiling
+# (~20x measured min), not a percentage — precedent: [G14],
+# test/diff_compiler_perf_scaling.sh's own flappy-cost-belongs-in-nightly
+# call.
+[[gate]]
+name = "wasm/diff_visitor_analyze_latency"
+area = "wasm"
+shard = "other-job"
+project = "compiler"
+tiers = ["nightly"]
+cost = "cheap"
+kind = "exec"
+run = "test/wasm/diff_visitor_analyze_latency.sh"
+oracles = []
+sources = ["playground", "playground/*"]
+corpus = []
+toolchain = ["wasm-tools", "node>=24"]
+
 [[gate]]
 name = "wasm/diff_sqlite"
 area = "wasm"

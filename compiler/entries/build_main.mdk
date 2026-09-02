@@ -11,7 +11,7 @@
 --
 -- Selfhost has no Sys.executable_name / getcwd extern, so those two paths come
 -- from the environment (the gate script sets them).  Output defaults to the
--- input's basename sans .mdk, mirroring lib/build_cmd.ml.
+-- input's basename sans .mdk.
 
 import driver.build_cmd.{
   BuildResult,

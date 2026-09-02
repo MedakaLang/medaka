@@ -1,11 +1,11 @@
 # META
-source_lines=66
+source_lines=65
 stages=DESUGAR,MARK
 # SOURCE
 -- Shared ASCII Char -> Bool predicates for the self-hosted compiler stages.
 -- compiler deliberately avoids the standard library, so the small character
 -- classification helpers the lexer/parser/lsp need live here once instead of
--- being re-implemented per file.  Impls match lib/lexer.mll's char classes.
+-- being re-implemented per file.
 
 export
 isSp : Char -> Bool
@@ -63,8 +63,7 @@ export
 isHexDigit : Char -> Bool
 isHexDigit c = isDigit c || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
 
--- Identifier-continuation char (a-z A-Z 0-9 _ ').  Mirrors
--- lib/lsp_server.ml's is_ident_char.
+-- Identifier-continuation char (a-z A-Z 0-9 _ ').
 export
 isIdentChar : Char -> Bool
 isIdentChar c = isAlnum c
