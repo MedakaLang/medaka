@@ -17,7 +17,7 @@
 -- `pureBox` and especially `widen : Box <Stdout | e> Unit -> Box <Stdout | e> Unit` are
 -- the same-tail case with EQUAL prefixes, whose symmetric difference is empty, and they
 -- must stay accepted. Rejecting those instead would be the obvious over-correction.
-data Box e a = MkBox (Unit -> <e> a)
+data Box (e : Effect) a = MkBox (Unit -> <e> a)
 
 launderBox : Box <Stdout | e> a -> Box e a
 launderBox x = x

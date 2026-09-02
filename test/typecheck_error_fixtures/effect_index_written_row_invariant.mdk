@@ -13,7 +13,7 @@
 --
 -- The mismatch is on the ROW slot only; the value slot was already checked, which is
 -- what localised the hole to the `Effect`-kinded index.
-data Box e a = MkBox (Unit -> <e> a)
+data Box (e : Effect) a = MkBox (Unit -> <e> a)
 
 shout : Unit -> <Stdout> Unit
 shout u = shout u

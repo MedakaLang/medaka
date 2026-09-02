@@ -2,7 +2,7 @@
 -- here is GRADED (slot 0 is row-kinded via `e` in an effect tail); its only required
 -- method is `gandThen2`.  `main_rejects.mdk` imports ONLY `gdummy2` from this module
 -- -- never `Same2` -- exactly like #1269's own repro.
-export interface Same2 f where
+export interface Same2 (f : Effect -> Type -> Type) where
   gandThen2 : f e a -> (a -> <e> f e b) -> f e b
 
 export gdummy2 : Int -> Int

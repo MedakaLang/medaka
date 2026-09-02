@@ -882,7 +882,7 @@ collectLetBinds (ESlice e0 lo hi _ _) = collectLetBinds e0
   ++ collectLetBinds lo
   ++ collectLetBinds hi
 collectLetBinds (EBlock stmts) = flatMap doStmtBinds stmts
-collectLetBinds (EDo stmts) = flatMap doStmtBinds stmts
+collectLetBinds (EDo _ stmts) = flatMap doStmtBinds stmts
 collectLetBinds (EAnnot e0 _) = collectLetBinds e0
 collectLetBinds (EStringInterp parts) = flatMap interpBinds parts
 collectLetBinds (EGuards arms) = flatMap guardArmBinds arms
@@ -1317,7 +1317,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "collectLetBinds" ((PCon "ERangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EVar "collectLetBinds") (EVar "lo")) (EApp (EVar "collectLetBinds") (EVar "hi"))))
 (DFunDef false "collectLetBinds" ((PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") PWild PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "collectLetBinds") (EVar "e0")) (EApp (EVar "collectLetBinds") (EVar "lo"))) (EApp (EVar "collectLetBinds") (EVar "hi"))))
 (DFunDef false "collectLetBinds" ((PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "flatMap") (EVar "doStmtBinds")) (EVar "stmts")))
-(DFunDef false "collectLetBinds" ((PCon "EDo" (PVar "stmts"))) (EApp (EApp (EVar "flatMap") (EVar "doStmtBinds")) (EVar "stmts")))
+(DFunDef false "collectLetBinds" ((PCon "EDo" PWild (PVar "stmts"))) (EApp (EApp (EVar "flatMap") (EVar "doStmtBinds")) (EVar "stmts")))
 (DFunDef false "collectLetBinds" ((PCon "EAnnot" (PVar "e0") PWild)) (EApp (EVar "collectLetBinds") (EVar "e0")))
 (DFunDef false "collectLetBinds" ((PCon "EStringInterp" (PVar "parts"))) (EApp (EApp (EVar "flatMap") (EVar "interpBinds")) (EVar "parts")))
 (DFunDef false "collectLetBinds" ((PCon "EGuards" (PVar "arms"))) (EApp (EApp (EVar "flatMap") (EVar "guardArmBinds")) (EVar "arms")))
@@ -1698,7 +1698,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "collectLetBinds" ((PCon "ERangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EVar "collectLetBinds") (EVar "lo")) (EApp (EVar "collectLetBinds") (EVar "hi"))))
 (DFunDef false "collectLetBinds" ((PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") PWild PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "collectLetBinds") (EVar "e0")) (EApp (EVar "collectLetBinds") (EVar "lo"))) (EApp (EVar "collectLetBinds") (EVar "hi"))))
 (DFunDef false "collectLetBinds" ((PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EDictApp "flatMap") (EVar "doStmtBinds")) (EVar "stmts")))
-(DFunDef false "collectLetBinds" ((PCon "EDo" (PVar "stmts"))) (EApp (EApp (EDictApp "flatMap") (EVar "doStmtBinds")) (EVar "stmts")))
+(DFunDef false "collectLetBinds" ((PCon "EDo" PWild (PVar "stmts"))) (EApp (EApp (EDictApp "flatMap") (EVar "doStmtBinds")) (EVar "stmts")))
 (DFunDef false "collectLetBinds" ((PCon "EAnnot" (PVar "e0") PWild)) (EApp (EVar "collectLetBinds") (EVar "e0")))
 (DFunDef false "collectLetBinds" ((PCon "EStringInterp" (PVar "parts"))) (EApp (EApp (EDictApp "flatMap") (EVar "interpBinds")) (EVar "parts")))
 (DFunDef false "collectLetBinds" ((PCon "EGuards" (PVar "arms"))) (EApp (EApp (EDictApp "flatMap") (EVar "guardArmBinds")) (EVar "arms")))

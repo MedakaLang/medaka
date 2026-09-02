@@ -8,9 +8,9 @@
 -- hole above ("a row position the elaborator does not recognise is silently coerced
 -- instead of diagnosed"), which is why it is fixed in the same change.
 --
--- It reuses the shipped use-site code `T-ROW-KIND-MISMATCH` — this is the MIRROR of
+-- It reuses the shipped use-site code `T-EFFECT-KIND-MISMATCH` — this is the MIRROR of
 -- that check (a type in a row slot rather than a row in a type slot), not a new rule.
-data Box e a = MkBox (Unit -> <e> a)
+data Box (e : Effect) a = MkBox (Unit -> <e> a)
 
 mk : Unit -> Unit
 mk u = ()

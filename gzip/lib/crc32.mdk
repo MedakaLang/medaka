@@ -59,7 +59,8 @@ crcTable = makeWith 256 crcTableEntry
 --
 -- > crc32Init
 -- 4294967295
-export crc32Init : Int
+export
+crc32Init : Int
 crc32Init = crc32Mask
 
 -- | Fold one byte into a running (un-finalized) CRC register. Streaming
@@ -67,7 +68,8 @@ crc32Init = crc32Mask
 --
 -- > crc32Final (crc32Update crc32Init 97)
 -- 3904355907
-export crc32Update : Int -> Int -> Int
+export
+crc32Update : Int -> Int -> Int
 crc32Update crc byte =
   let idx = bitAnd (bitXor crc byte) 255
   match get idx crcTable
@@ -82,7 +84,8 @@ crc32Update crc byte =
 --
 -- > crc32Final crc32Init
 -- 0
-export crc32Final : Int -> Int
+export
+crc32Final : Int -> Int
 crc32Final crc = bitXor crc crc32Mask
 
 -- | CRC-32 (IEEE, gzip's checksum) of a byte array — the one-shot form of
@@ -90,7 +93,8 @@ crc32Final crc = bitXor crc crc32Mask
 --
 -- > crc32 (fromList [49, 50, 51, 52, 53, 54, 55, 56, 57])
 -- 3421780262
-export crc32 : Array Int -> Int
+export
+crc32 : Array Int -> Int
 crc32 bytes = crc32Final (fold crc32Update crc32Init bytes)
 
 -- ---------------------------------------------------------------------------
@@ -111,7 +115,8 @@ adlerStep pair byte =
 --
 -- > adler32 (fromList [49, 50, 51, 52, 53, 54, 55, 56, 57])
 -- 152961502
-export adler32 : Array Int -> Int
+export
+adler32 : Array Int -> Int
 adler32 bytes =
   let (a, b) = fold adlerStep (1, 0) bytes
   shiftLeft b 16 + a

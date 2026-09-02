@@ -8,8 +8,8 @@
 -- claim was false anyway: ACROSS MODULES the loser depended on the order of two
 -- import lines in a third file.  The scope now travels as an argument
 -- (declGradedScope), so there is no shared key left to collide over.
-interface GA f where
+interface GA (f : Effect -> Type -> Type) where
   ga : f e a -> (a -> <e> f e b) -> f e b
 
-interface GB f where
+interface GB (f : Type -> Effect -> Type) where
   gb : f a e -> (a -> <e> f a e) -> f a e

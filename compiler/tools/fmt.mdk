@@ -185,12 +185,12 @@ allEmptyPairs ((ld, tr)::xs) = isEmptyL ld && isEmptyL tr && allEmptyPairs xs
 -- Returns (renderedString, newState) — the Doc is rendered here so the comment
 -- pops are threaded back into the state.
 declDoc : FmtState -> Decl -> (String, FmtState)
-declDoc (FmtState pieces cs vlines cursor started) (d@(DData { dataVis = vis, dataName = n, dataParams = params, dataCtors = variants, dataDerives = derives })) = match takeNVariantLines vlines (listLen variants)
+declDoc (FmtState pieces cs vlines cursor started) (d@(DData { dataVis = vis, dataName = n, dataParams = params, dataParamKinds = kinds, dataCtors = variants, dataDerives = derives })) = match takeNVariantLines vlines (listLen variants)
   (vlinesRest, vls) => match vcommentsFor cs vls
     (vcomments, csRest) =>
       if listLen vcomments == listLen variants && not (allEmptyPairs vcomments) then
         (
-          render (printDataDeclCommented vis n params variants derives vcomments),
+          render (printDataDeclCommented vis n params kinds variants derives vcomments),
           FmtState pieces csRest vlinesRest cursor started,
         )
       else
@@ -258,9 +258,9 @@ isSingleNamedFieldData _ = False
 -- Render a single-variant named-field data decl one-field-per-line, consuming its
 -- one variant line (to keep vlines aligned, exactly as declDoc's DData arm does).
 renderNamedFieldMulti : FmtState -> Decl -> (String, FmtState)
-renderNamedFieldMulti (FmtState pieces cs vlines cursor started) (DData { dataVis = vis, dataName = n, dataParams = params, dataCtors = variants, dataDerives = derives }) = match takeNVariantLines vlines 1
+renderNamedFieldMulti (FmtState pieces cs vlines cursor started) (DData { dataVis = vis, dataName = n, dataParams = params, dataParamKinds = kinds, dataCtors = variants, dataDerives = derives }) = match takeNVariantLines vlines 1
   (vlinesRest, _) => (
-    render (printNamedFieldData vis n params variants derives),
+    render (printNamedFieldData vis n params kinds variants derives),
     FmtState pieces cs vlinesRest cursor started,
   )
 renderNamedFieldMulti st decl = declDoc st decl

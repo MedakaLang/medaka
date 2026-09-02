@@ -1,5 +1,5 @@
 -- #1111 A-2.4 MIRROR PROBE support module: a GRADED interface (slot 0 is row-kinded,
 -- because `e` sits in an effect-tail position of `gthen`'s signature).
 -- NO other interface anywhere in this graph shares its name.
-export interface Graded f where
+export interface Graded (f : Effect -> Type -> Type) where
   gthen : f e a -> (a -> <e> f e b) -> f e b

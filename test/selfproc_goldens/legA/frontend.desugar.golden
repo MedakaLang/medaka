@@ -9,7 +9,8 @@ assignIndexLhs : Expr -> Expr -> Expr -> Ref Route -> Expr
 attribHead : List Attr -> List Decl -> List Decl
 binMethod : String -> String -> String -> Expr -> ImplMethod
 binOp : String -> Expr -> Expr -> Expr
-callAndThen : Expr -> Expr -> Expr
+bindMethodName : Bool -> String
+callAndThen : Bool -> Expr -> Expr -> Expr
 callBin : String -> Expr -> Expr -> Expr
 cannotDeriveMsg : String -> List String -> String -> String
 checkDerives : List Decl -> List (String, Option Loc)
@@ -70,7 +71,7 @@ kvToTuple : (Expr, Expr) -> Expr
 lexCompareExprs : List (Expr, Expr) -> Expr
 lookupDeriver : String -> List (String, Unit -> Decl) -> Option Decl
 lowerContainerLiterals : List Decl -> List Decl
-lowerDo : List DoStmt -> Expr
+lowerDo : Bool -> List DoStmt -> Expr
 mapArm : (Expr -> Expr) -> Arm -> Arm
 mapDecl : (Expr -> Expr) -> Decl -> Decl
 mapDoStmt : (Expr -> Expr) -> DoStmt -> DoStmt
@@ -106,6 +107,7 @@ paramRequires : String -> List String -> List Require
 pinType : String -> List Ty -> Ty
 pinTypeGo : Ty -> List Ty -> Ty
 punField : Expr -> FieldAssign
+pureMethodName : Bool -> String
 qualifyAliasRefs : List Decl -> List Decl
 recPatFields : List Field -> List String -> List RecPatField
 rewriteAliasQual : List String -> Expr -> Expr

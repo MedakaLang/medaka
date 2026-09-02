@@ -31,9 +31,9 @@
 -- change that perturbs ordinary elaboration while teaching the coverage walkers
 -- about the per-parameter atom table shows up here even though none of that
 -- code goes near a wrapper.
-data Slot e = Slot (Unit -> <Stdout | e> Unit)
+data Slot (e : Effect) = Slot (Unit -> <Stdout | e> Unit)
 
-data Bare e = Bare (Unit -> <e> Unit)
+data Bare (e : Effect) = Bare (Unit -> <e> Unit)
 
 -- (1) the same signature shape that rejects for `Slot`, over a wrapper that
 -- guarantees nothing

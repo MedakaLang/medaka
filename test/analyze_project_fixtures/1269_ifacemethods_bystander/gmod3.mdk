@@ -1,7 +1,7 @@
 -- #1269 BYSTANDER support module: half one of a SAME-NAME interface collision that
 -- `main_bystander.mdk` never names.  `Same3` here is GRADED (slot 0 row-kinded via
 -- `e` in an effect tail); its only required method is `gandThen3`.
-export interface Same3 f where
+export interface Same3 (f : Effect -> Type -> Type) where
   gandThen3 : f e a -> (a -> <e> f e b) -> f e b
 
 export gdummy3 : Int -> Int

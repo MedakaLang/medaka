@@ -245,7 +245,7 @@
       "patterns": [
         {
           "name": "keyword.control.medaka",
-          "match": "\\b(if|then|else|match|do|let|in|mut|rec|with)\\b"
+          "match": "\\b(if|then|else|match|do|defer|let|in|mut|rec|with)\\b"
         },
         {
           "name": "keyword.declaration.medaka",

@@ -11,7 +11,7 @@
 -- the widened seam generalizes over the collector rather than patching two
 -- exact repros.  The body never forces the thunk, so the binding-boundary
 -- escape check has nothing to say — the DECLARATION alone is the error.
-data Box e a = Done a | Susp (Unit -> <e> a)
+data Box (e : Effect) a = Done a | Susp (Unit -> <e> a)
 
 peek : Box <Stdout | e> a -> <e> Bool
 peek (Done _) = True

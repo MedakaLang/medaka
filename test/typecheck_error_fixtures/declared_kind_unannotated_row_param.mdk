@@ -1,0 +1,9 @@
+-- Declared-kind conformance (EFFECTS-SEMANTICS.md §6.1-6.4): an UNANNOTATED
+-- type parameter can never be inferred `Effect` any more (the surgical
+-- kind-default rule of §6.3).  `Box`'s field puts `e` in an arrow's effect
+-- tail (`Unit -> <e> a`), which demands `Effect`, but the head leaves `e`
+-- unannotated -- ill-kinded, T-EFFECT-KIND-MISMATCH at the field.
+data Box e a = Mk (Unit -> <e> a)
+
+use : Box e a -> <e> a
+use (Mk f) = f ()

@@ -221,7 +221,7 @@ collectEVars (ESlice a b c _ _) = collectEVars a
   ++ collectEVars c
 collectEVars (EIndex a b _) = collectEVars a ++ collectEVars b
 collectEVars (EBlock stmts) = concatMapCP collectStmt stmts
-collectEVars (EDo stmts) = concatMapCP collectStmt stmts
+collectEVars (EDo _ stmts) = concatMapCP collectStmt stmts
 collectEVars _ = []
 
 collectBind : LetBind -> List String

@@ -30,6 +30,7 @@ import frontend.parser.{
 import frontend.ast.{
   Decl(..),
   Ty(..),
+  tyParamSources,
   Constraint(..),
   DataVis(..),
   Variant(..),
@@ -106,6 +107,12 @@ ppTyP p (TyFun a b) =
 ppTyP p (TyEffect effs tail t) =
   let s = "<\{ppEffInsideDoc effs tail}> \{ppTyP 0 t}"
   if p >= 1 then "(" ++ s ++ ")" else s
+-- A label-free join takes its parenthesised type-argument spelling
+-- (`f (e | e2) b`), matching printer.mdk.
+-- Intentional cross-file duplicate of printer.mdk's `ppTyPrec` clause; not
+-- consolidating (same divergent-by-design printer trio as `ppEffAtomDoc` below).
+-- lint-disable-next-line rule-duplicate-body
+ppTyP _ (TyRow [] (a::b::rest) _) = "(\{joinWith " | " (a :: b::rest)})"
 -- A bare row atom (#997) is already atomic (no wrapped type), so — unlike
 -- `TyEffect` above — it never needs precedence-parens at any `p`.
 ppTyP _ (TyRow effs tail _) = "<\{ppEffInsideDoc effs tail}>"
@@ -118,14 +125,16 @@ ppTyP _ (TyConstrained cs t) =
 -- shared `<...>` row-body renderer for `TyEffect`/`TyRow` (factored out of
 -- `TyEffect`'s arm above so `TyRow` doesn't duplicate it — lint's
 -- rule-duplicate-body would flag an inlined copy).
-ppEffInsideDoc : List (String, Option String) -> Option String -> String
-ppEffInsideDoc effs tail =
+ppEffInsideDoc : List (String, Option String) -> List String -> String
+ppEffInsideDoc effs tails =
   let labs = map ppEffAtomDoc effs
-  match tail
-    None => joinWith ", " labs
-    Some v => match effs
-      [] => v
-      _ => "\{joinWith ", " labs} | \{v}"
+  match tails
+    [] => joinWith ", " labs
+    _ =>
+      let tls = joinWith " | " tails
+      match effs
+        [] => tls
+        _ => "\{joinWith ", " labs} | \{tls}"
 
 -- effect atom: `l` | `l _` (inferred hole) | `l "dom"` (domain-carrying).
 -- Mirror pp_atom in pp_ty_prec: None=>l, Some "_" => l ++ " _", Some s => l ++ " " ++ %S
@@ -390,25 +399,25 @@ renderSig bare (DExtern pub name ty) schemes
 renderSig _ (DLetGroup True bindings) schemes = match bindings
   (LetBind name _)::_ => Some (name, valueSig name schemes None)
   [] => None
-renderSig _ (DData { dataVis = vis, dataName = name, dataParams = params, dataCtors = variants }) _
+renderSig _ (DData { dataVis = vis, dataName = name, dataParams = params, dataParamKinds = kinds, dataCtors = variants }) _
   | not (dataVisPrivate vis) =
-    let head = joinWith " " (name::params)
+    let head = joinWith " " (name :: tyParamSources params kinds)
     let body = match variants
       [] => ""
       _ => "\n  = " ++ joinWith "\n  | " (map ppDataVariant variants)
     Some (name, "data \{head}\{body}")
-renderSig _ (DInterface { pub = True, name, typarams, methods }) _ =
-  let head = joinWith " " (name::typarams)
+renderSig _ (DInterface { pub = True, name, typarams, typaramKinds, methods }) _ =
+  let head = joinWith " " (name :: tyParamSources typarams typaramKinds)
   let ms = map ppIfaceMethod methods
   let body = match ms
     [] => ""
     _ => "\n" ++ joinWith "\n" ms
   Some (name, "interface \{head}\{body}")
-renderSig _ (DTypeAlias { tyAliasPub = True, tyAliasName = name, tyAliasParams = params, tyAliasRhs = ty }) _ =
-  let head = joinWith " " (name::params)
+renderSig _ (DTypeAlias { tyAliasPub = True, tyAliasName = name, tyAliasParams = params, tyAliasParamKinds = kinds, tyAliasRhs = ty }) _ =
+  let head = joinWith " " (name :: tyParamSources params kinds)
   Some (name, "type \{head} = \{ppTyDoc ty}")
-renderSig _ (DNewtype { newtypePub = True, newtypeName = name, newtypeParams = params, newtypeCtor = ctor, newtypeFieldTy = ty }) _ =
-  let head = joinWith " " (name::params)
+renderSig _ (DNewtype { newtypePub = True, newtypeName = name, newtypeParams = params, newtypeParamKinds = kinds, newtypeCtor = ctor, newtypeFieldTy = ty }) _ =
+  let head = joinWith " " (name :: tyParamSources params kinds)
   Some (name, "newtype \{head} = \{ctor} \{ppTyP 2 ty}")
 renderSig _ (DImpl { pub = True, iface, tys, reqs }) _ =
   let args = match tys

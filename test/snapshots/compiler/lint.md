@@ -1,5 +1,5 @@
 # META
-source_lines=4807
+source_lines=4811
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -1821,16 +1821,12 @@ rowVarsOf (TyCon { tyConName = _ }) = []
 rowVarsOf (TyApp f x) = rowVarsOf f ++ rowVarsOf x
 rowVarsOf (TyFun a b) = rowVarsOf a ++ rowVarsOf b
 rowVarsOf (TyTuple ts) = flatMap rowVarsOf ts
-rowVarsOf (TyEffect _ tl t) = optNameL tl ++ rowVarsOf t
+rowVarsOf (TyEffect _ tl t) = tl ++ rowVarsOf t
 rowVarsOf (TyConstrained cs t) = flatMap constrRowVars cs ++ rowVarsOf t
-rowVarsOf (TyRow _ tl _) = optNameL tl
+rowVarsOf (TyRow _ tl _) = tl
 
 constrRowVars : Constraint -> List String
 constrRowVars (Constraint { constraintArgs = args }) = flatMap rowVarsOf args
-
-optNameL : Option String -> List String
-optNameL None = []
-optNameL (Some v) = [v]
 
 tyCanonIn : List String -> List String -> Ty -> String
 tyCanonIn tvs _ (TyVar v) = "%t" ++ intToString (indexIn v tvs)
@@ -1849,7 +1845,7 @@ tyCanonIn tvs rvs (TyConstrained cs t) = "(=> \{joinWith " " (sortUniqS (map (co
 constrCanon : List String -> List String -> Constraint -> String
 constrCanon tvs rvs (Constraint { constraintHead = h, constraintArgs = args }) = "[\{h} \{joinWith " " (map (tyCanonIn tvs rvs) args)}]"
 
-rowCanon : List String -> List (String, Option String) -> Option String -> String
+rowCanon : List String -> List (String, Option String) -> List String -> String
 rowCanon rvs es tl =
   "{\{joinWith " " (sortUniqS (map rowAtomCanon es))}\{rowTailCanon rvs tl}}"
 
@@ -1857,9 +1853,9 @@ rowAtomCanon : (String, Option String) -> String
 rowAtomCanon (l, None) = l
 rowAtomCanon (l, Some s) = "\{l}=\{s}"
 
-rowTailCanon : List String -> Option String -> String
-rowTailCanon _ None = ""
-rowTailCanon rvs (Some v) = " |%r" ++ intToString (indexIn v rvs)
+rowTailCanon : List String -> List String -> String
+rowTailCanon rvs tls =
+  joinWith "" (map (v => " |%r" ++ intToString (indexIn v rvs)) tls)
 
 -- position of `x` in `xs`, or -1 when absent — unreachable, since the order
 -- lists are collected from the very type being rendered.
@@ -2104,7 +2100,7 @@ collectBindHits orc e = tailHitOf orc e
   ++ flatMap (collectBindHits orc) (childExprs e)
 
 tailHitOf : Oracle -> Expr -> List String
-tailHitOf orc (EDo stmts) = hitNameOf orc stmts
+tailHitOf orc (EDo _ stmts) = hitNameOf orc stmts
 tailHitOf orc (EBlock stmts) = hitNameOf orc stmts
 tailHitOf _ _ = []
 
@@ -2138,7 +2134,7 @@ childExprs (EIndex a i _) = [a, i]
 childExprs (EAnnot e _) = [e]
 childExprs (EHeadAnnot e _) = [e]
 childExprs (EBlock stmts) = flatMap stmtExprs stmts
-childExprs (EDo stmts) = flatMap stmtExprs stmts
+childExprs (EDo _ stmts) = flatMap stmtExprs stmts
 childExprs (EStringInterp parts) = flatMap interpPartExprs parts
 childExprs (EGuards arms) = flatMap guardArmExprs arms
 childExprs (ERecordCreate _ fs) = map fieldAssignExpr fs
@@ -2246,9 +2242,9 @@ rewriteBindExpr orc (EIndex a i r) =
 rewriteBindExpr orc (EAnnot e t) = EAnnot (rewriteBindExpr orc e) t
 rewriteBindExpr orc (EHeadAnnot e t) = EHeadAnnot (rewriteBindExpr orc e) t
 rewriteBindExpr orc (EBlock stmts) =
-  EBlock (collapseBindTail orc (map (rewriteBindStmt orc) stmts))
-rewriteBindExpr orc (EDo stmts) =
-  EDo (collapseBindTail orc (map (rewriteBindStmt orc) stmts))
+  EBlock (collapseBindTail orc False (map (rewriteBindStmt orc) stmts))
+rewriteBindExpr orc (EDo d stmts) =
+  EDo d (collapseBindTail orc d (map (rewriteBindStmt orc) stmts))
 rewriteBindExpr orc (EStringInterp parts) =
   EStringInterp (map (rewriteBindInterp orc) parts)
 rewriteBindExpr orc (EGuards arms) =
@@ -2267,19 +2263,27 @@ rewriteBindExpr _ e = e
 -- collapse a (already child-rewritten) statement list: if its last two statements
 -- are the irrefutable bind-then-match shape, replace them with `pat <- e` plus the
 -- arm body's statements spliced inline.
-collapseBindTail : Oracle -> List DoStmt -> List DoStmt
-collapseBindTail orc stmts = match bindMatchTail orc stmts
+collapseBindTail : Oracle -> Bool -> List DoStmt -> List DoStmt
+collapseBindTail orc host stmts = match bindMatchTail orc stmts
   Some (prefix, _, pat, boundE, body) => prefix
-    ++ (DoBind pat boundE :: bodyToStmts body)
+    ++ (DoBind pat boundE :: bodyToStmts host body)
   None => stmts
 
--- the arm body as statements: a do/bare block contributes its own statements
--- (flattened into the outer block); anything else becomes a final expr-statement.
-bodyToStmts : Expr -> List DoStmt
-bodyToStmts e = match unwrapLoc e
-  EDo stmts => stmts
+-- the arm body as statements: a bare block, or a monadic block heralded the SAME
+-- way as the host (`host`: the enclosing block's deferred flag), contributes its
+-- own statements flattened into the outer block; anything else — including a
+-- `defer` block inside a `do` block or vice versa, whose statements bind through
+-- a different interface family (#824) — becomes a final expr-statement.
+bodyToStmts : Bool -> Expr -> List DoStmt
+bodyToStmts host e = match unwrapLoc e
+  EDo d stmts => whenSameHerald host d stmts e
   EBlock stmts => stmts
   _ => [DoExpr e]
+
+whenSameHerald : Bool -> Bool -> List DoStmt -> Expr -> List DoStmt
+whenSameHerald host d stmts e
+  | host == d = stmts
+  | otherwise = [DoExpr e]
 
 rewriteBindStmt : Oracle -> DoStmt -> DoStmt
 rewriteBindStmt orc (DoExpr e) = DoExpr (rewriteBindExpr orc e)
@@ -2521,7 +2525,7 @@ rewriteLamExpr (EIndex a i r) = EIndex (rewriteLamExpr a) (rewriteLamExpr i) r
 rewriteLamExpr (EAnnot e t) = EAnnot (rewriteLamExpr e) t
 rewriteLamExpr (EHeadAnnot e t) = EHeadAnnot (rewriteLamExpr e) t
 rewriteLamExpr (EBlock stmts) = EBlock (map rewriteLamStmt stmts)
-rewriteLamExpr (EDo stmts) = EDo (map rewriteLamStmt stmts)
+rewriteLamExpr (EDo d stmts) = EDo d (map rewriteLamStmt stmts)
 rewriteLamExpr (EStringInterp parts) =
   EStringInterp (map rewriteLamInterp parts)
 rewriteLamExpr (EGuards arms) = EGuards (map rewriteLamGuardArm arms)
@@ -2760,7 +2764,7 @@ rewriteIfMaxMinExpr (EIndex a i r) =
 rewriteIfMaxMinExpr (EAnnot e t) = EAnnot (rewriteIfMaxMinExpr e) t
 rewriteIfMaxMinExpr (EHeadAnnot e t) = EHeadAnnot (rewriteIfMaxMinExpr e) t
 rewriteIfMaxMinExpr (EBlock stmts) = EBlock (map rewriteIfMaxMinStmt stmts)
-rewriteIfMaxMinExpr (EDo stmts) = EDo (map rewriteIfMaxMinStmt stmts)
+rewriteIfMaxMinExpr (EDo d stmts) = EDo d (map rewriteIfMaxMinStmt stmts)
 rewriteIfMaxMinExpr (EStringInterp parts) =
   EStringInterp (map rewriteIfMaxMinInterp parts)
 rewriteIfMaxMinExpr (EGuards arms) = EGuards (map rewriteIfMaxMinGuardArm arms)
@@ -3027,8 +3031,8 @@ rewriteAndThenPureMapExpr (EHeadAnnot e t) =
   EHeadAnnot (rewriteAndThenPureMapExpr e) t
 rewriteAndThenPureMapExpr (EBlock stmts) =
   EBlock (map rewriteAndThenPureMapStmt stmts)
-rewriteAndThenPureMapExpr (EDo stmts) =
-  EDo (map rewriteAndThenPureMapStmt stmts)
+rewriteAndThenPureMapExpr (EDo d stmts) =
+  EDo d (map rewriteAndThenPureMapStmt stmts)
 rewriteAndThenPureMapExpr (EStringInterp parts) =
   EStringInterp (map rewriteAndThenPureMapInterp parts)
 rewriteAndThenPureMapExpr (EGuards arms) =
@@ -3150,7 +3154,7 @@ mapChildExprs g (EIndex a i r) = EIndex (g a) (g i) r
 mapChildExprs g (EAnnot e t) = EAnnot (g e) t
 mapChildExprs g (EHeadAnnot e t) = EHeadAnnot (g e) t
 mapChildExprs g (EBlock stmts) = EBlock (map (mapChildStmt g) stmts)
-mapChildExprs g (EDo stmts) = EDo (map (mapChildStmt g) stmts)
+mapChildExprs g (EDo d stmts) = EDo d (map (mapChildStmt g) stmts)
 mapChildExprs g (EStringInterp parts) =
   EStringInterp (map (mapChildInterp g) parts)
 mapChildExprs g (EGuards arms) = EGuards (map (mapChildGuardArm g) arms)
@@ -5296,14 +5300,11 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "rowVarsOf" ((PCon "TyApp" (PVar "f") (PVar "x"))) (EBinOp "++" (EApp (EVar "rowVarsOf") (EVar "f")) (EApp (EVar "rowVarsOf") (EVar "x"))))
 (DFunDef false "rowVarsOf" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "rowVarsOf") (EVar "a")) (EApp (EVar "rowVarsOf") (EVar "b"))))
 (DFunDef false "rowVarsOf" ((PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "flatMap") (EVar "rowVarsOf")) (EVar "ts")))
-(DFunDef false "rowVarsOf" ((PCon "TyEffect" PWild (PVar "tl") (PVar "t"))) (EBinOp "++" (EApp (EVar "optNameL") (EVar "tl")) (EApp (EVar "rowVarsOf") (EVar "t"))))
+(DFunDef false "rowVarsOf" ((PCon "TyEffect" PWild (PVar "tl") (PVar "t"))) (EBinOp "++" (EVar "tl") (EApp (EVar "rowVarsOf") (EVar "t"))))
 (DFunDef false "rowVarsOf" ((PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "constrRowVars")) (EVar "cs")) (EApp (EVar "rowVarsOf") (EVar "t"))))
-(DFunDef false "rowVarsOf" ((PCon "TyRow" PWild (PVar "tl") PWild)) (EApp (EVar "optNameL") (EVar "tl")))
+(DFunDef false "rowVarsOf" ((PCon "TyRow" PWild (PVar "tl") PWild)) (EVar "tl"))
 (DTypeSig false "constrRowVars" (TyFun (TyCon "Constraint") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "constrRowVars" ((PRec "Constraint" ((rf "constraintArgs" (PVar "args"))) false)) (EApp (EApp (EVar "flatMap") (EVar "rowVarsOf")) (EVar "args")))
-(DTypeSig false "optNameL" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "optNameL" ((PCon "None")) (EListLit))
-(DFunDef false "optNameL" ((PCon "Some" (PVar "v"))) (EListLit (EVar "v")))
 (DTypeSig false "tyCanonIn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyCon "String")))))
 (DFunDef false "tyCanonIn" ((PVar "tvs") PWild (PCon "TyVar" (PVar "v"))) (EBinOp "++" (ELit (LString "%t")) (EApp (EVar "intToString") (EApp (EApp (EVar "indexIn") (EVar "v")) (EVar "tvs")))))
 (DFunDef false "tyCanonIn" (PWild PWild (PRec "TyCon" ((rf "tyConName" (PVar "n"))) false)) (EBinOp "++" (ELit (LString "#")) (EVar "n")))
@@ -5315,14 +5316,13 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "tyCanonIn" ((PVar "tvs") (PVar "rvs") (PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(=> ")) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EVar "sortUniqS") (EApp (EApp (EVar "map") (EApp (EApp (EVar "constrCanon") (EVar "tvs")) (EVar "rvs"))) (EVar "cs")))))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EApp (EVar "tyCanonIn") (EVar "tvs")) (EVar "rvs")) (EVar "t")))) (ELit (LString ")"))))
 (DTypeSig false "constrCanon" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Constraint") (TyCon "String")))))
 (DFunDef false "constrCanon" ((PVar "tvs") (PVar "rvs") (PRec "Constraint" ((rf "constraintHead" (PVar "h")) (rf "constraintArgs" (PVar "args"))) false)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EVar "display") (EVar "h"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "map") (EApp (EApp (EVar "tyCanonIn") (EVar "tvs")) (EVar "rvs"))) (EVar "args"))))) (ELit (LString "]"))))
-(DTypeSig false "rowCanon" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String")))))
+(DTypeSig false "rowCanon" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "rowCanon" ((PVar "rvs") (PVar "es") (PVar "tl")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "{")) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EVar "sortUniqS") (EApp (EApp (EVar "map") (EVar "rowAtomCanon")) (EVar "es")))))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EApp (EVar "rowTailCanon") (EVar "rvs")) (EVar "tl")))) (ELit (LString "}"))))
 (DTypeSig false "rowAtomCanon" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyCon "String")))
 (DFunDef false "rowAtomCanon" ((PTuple (PVar "l") (PCon "None"))) (EVar "l"))
 (DFunDef false "rowAtomCanon" ((PTuple (PVar "l") (PCon "Some" (PVar "s")))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "l"))) (ELit (LString "="))) (EApp (EVar "display") (EVar "s"))) (ELit (LString ""))))
-(DTypeSig false "rowTailCanon" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))
-(DFunDef false "rowTailCanon" (PWild (PCon "None")) (ELit (LString "")))
-(DFunDef false "rowTailCanon" ((PVar "rvs") (PCon "Some" (PVar "v"))) (EBinOp "++" (ELit (LString " |%r")) (EApp (EVar "intToString") (EApp (EApp (EVar "indexIn") (EVar "v")) (EVar "rvs")))))
+(DTypeSig false "rowTailCanon" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
+(DFunDef false "rowTailCanon" ((PVar "rvs") (PVar "tls")) (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EVar "map") (ELam ((PVar "v")) (EBinOp "++" (ELit (LString " |%r")) (EApp (EVar "intToString") (EApp (EApp (EVar "indexIn") (EVar "v")) (EVar "rvs")))))) (EVar "tls"))))
 (DTypeSig false "indexIn" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Int"))))
 (DFunDef false "indexIn" ((PVar "x") (PVar "xs")) (EApp (EApp (EApp (EVar "indexInGo") (EVar "x")) (EVar "xs")) (ELit (LInt 0))))
 (DTypeSig false "indexInGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyCon "Int")))))
@@ -5406,7 +5406,7 @@ duplicateBodySameFileRule = Rule {
 (DTypeSig false "collectBindHits" (TyFun (TyCon "Oracle") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "collectBindHits" ((PVar "orc") (PVar "e")) (EBinOp "++" (EApp (EApp (EVar "tailHitOf") (EVar "orc")) (EVar "e")) (EApp (EApp (EVar "flatMap") (EApp (EVar "collectBindHits") (EVar "orc"))) (EApp (EVar "childExprs") (EVar "e")))))
 (DTypeSig false "tailHitOf" (TyFun (TyCon "Oracle") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "tailHitOf" ((PVar "orc") (PCon "EDo" (PVar "stmts"))) (EApp (EApp (EVar "hitNameOf") (EVar "orc")) (EVar "stmts")))
+(DFunDef false "tailHitOf" ((PVar "orc") (PCon "EDo" PWild (PVar "stmts"))) (EApp (EApp (EVar "hitNameOf") (EVar "orc")) (EVar "stmts")))
 (DFunDef false "tailHitOf" ((PVar "orc") (PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "hitNameOf") (EVar "orc")) (EVar "stmts")))
 (DFunDef false "tailHitOf" (PWild PWild) (EListLit))
 (DTypeSig false "hitNameOf" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "List") (TyCon "String")))))
@@ -5435,7 +5435,7 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "childExprs" ((PCon "EAnnot" (PVar "e") PWild)) (EListLit (EVar "e")))
 (DFunDef false "childExprs" ((PCon "EHeadAnnot" (PVar "e") PWild)) (EListLit (EVar "e")))
 (DFunDef false "childExprs" ((PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "flatMap") (EVar "stmtExprs")) (EVar "stmts")))
-(DFunDef false "childExprs" ((PCon "EDo" (PVar "stmts"))) (EApp (EApp (EVar "flatMap") (EVar "stmtExprs")) (EVar "stmts")))
+(DFunDef false "childExprs" ((PCon "EDo" PWild (PVar "stmts"))) (EApp (EApp (EVar "flatMap") (EVar "stmtExprs")) (EVar "stmts")))
 (DFunDef false "childExprs" ((PCon "EStringInterp" (PVar "parts"))) (EApp (EApp (EVar "flatMap") (EVar "interpPartExprs")) (EVar "parts")))
 (DFunDef false "childExprs" ((PCon "EGuards" (PVar "arms"))) (EApp (EApp (EVar "flatMap") (EVar "guardArmExprs")) (EVar "arms")))
 (DFunDef false "childExprs" ((PCon "ERecordCreate" PWild (PVar "fs"))) (EApp (EApp (EVar "map") (EVar "fieldAssignExpr")) (EVar "fs")))
@@ -5500,8 +5500,8 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "EIndex" (PVar "a") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EVar "EIndex") (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "a"))) (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "i"))) (EVar "r")))
 (DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "EAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "e"))) (EVar "t")))
 (DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "EHeadAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EHeadAnnot") (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "e"))) (EVar "t")))
-(DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EVar "collapseBindTail") (EVar "orc")) (EApp (EApp (EVar "map") (EApp (EVar "rewriteBindStmt") (EVar "orc"))) (EVar "stmts")))))
-(DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "EDo" (PVar "stmts"))) (EApp (EVar "EDo") (EApp (EApp (EVar "collapseBindTail") (EVar "orc")) (EApp (EApp (EVar "map") (EApp (EVar "rewriteBindStmt") (EVar "orc"))) (EVar "stmts")))))
+(DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EApp (EVar "collapseBindTail") (EVar "orc")) (EVar "False")) (EApp (EApp (EVar "map") (EApp (EVar "rewriteBindStmt") (EVar "orc"))) (EVar "stmts")))))
+(DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "EDo" (PVar "d") (PVar "stmts"))) (EApp (EApp (EVar "EDo") (EVar "d")) (EApp (EApp (EApp (EVar "collapseBindTail") (EVar "orc")) (EVar "d")) (EApp (EApp (EVar "map") (EApp (EVar "rewriteBindStmt") (EVar "orc"))) (EVar "stmts")))))
 (DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "EStringInterp" (PVar "parts"))) (EApp (EVar "EStringInterp") (EApp (EApp (EVar "map") (EApp (EVar "rewriteBindInterp") (EVar "orc"))) (EVar "parts"))))
 (DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "EGuards" (PVar "arms"))) (EApp (EVar "EGuards") (EApp (EApp (EVar "map") (EApp (EVar "rewriteBindGuardArm") (EVar "orc"))) (EVar "arms"))))
 (DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "ERecordCreate" (PVar "n") (PVar "fs"))) (EApp (EApp (EVar "ERecordCreate") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EVar "rewriteBindField") (EVar "orc"))) (EVar "fs"))))
@@ -5511,10 +5511,12 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "ESetLit" (PVar "n") (PVar "es"))) (EApp (EApp (EVar "ESetLit") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EVar "rewriteBindExpr") (EVar "orc"))) (EVar "es"))))
 (DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "EAsPat" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "EAsPat") (EVar "x")) (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "e"))))
 (DFunDef false "rewriteBindExpr" (PWild (PVar "e")) (EVar "e"))
-(DTypeSig false "collapseBindTail" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "List") (TyCon "DoStmt")))))
-(DFunDef false "collapseBindTail" ((PVar "orc") (PVar "stmts")) (EMatch (EApp (EApp (EVar "bindMatchTail") (EVar "orc")) (EVar "stmts")) (arm (PCon "Some" (PTuple (PVar "prefix") PWild (PVar "pat") (PVar "boundE") (PVar "body"))) () (EBinOp "++" (EVar "prefix") (EBinOp "::" (EApp (EApp (EVar "DoBind") (EVar "pat")) (EVar "boundE")) (EApp (EVar "bodyToStmts") (EVar "body"))))) (arm (PCon "None") () (EVar "stmts"))))
-(DTypeSig false "bodyToStmts" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "DoStmt"))))
-(DFunDef false "bodyToStmts" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EDo" (PVar "stmts")) () (EVar "stmts")) (arm (PCon "EBlock" (PVar "stmts")) () (EVar "stmts")) (arm PWild () (EListLit (EApp (EVar "DoExpr") (EVar "e"))))))
+(DTypeSig false "collapseBindTail" (TyFun (TyCon "Oracle") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "List") (TyCon "DoStmt"))))))
+(DFunDef false "collapseBindTail" ((PVar "orc") (PVar "host") (PVar "stmts")) (EMatch (EApp (EApp (EVar "bindMatchTail") (EVar "orc")) (EVar "stmts")) (arm (PCon "Some" (PTuple (PVar "prefix") PWild (PVar "pat") (PVar "boundE") (PVar "body"))) () (EBinOp "++" (EVar "prefix") (EBinOp "::" (EApp (EApp (EVar "DoBind") (EVar "pat")) (EVar "boundE")) (EApp (EApp (EVar "bodyToStmts") (EVar "host")) (EVar "body"))))) (arm (PCon "None") () (EVar "stmts"))))
+(DTypeSig false "bodyToStmts" (TyFun (TyCon "Bool") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "DoStmt")))))
+(DFunDef false "bodyToStmts" ((PVar "host") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EDo" (PVar "d") (PVar "stmts")) () (EApp (EApp (EApp (EApp (EVar "whenSameHerald") (EVar "host")) (EVar "d")) (EVar "stmts")) (EVar "e"))) (arm (PCon "EBlock" (PVar "stmts")) () (EVar "stmts")) (arm PWild () (EListLit (EApp (EVar "DoExpr") (EVar "e"))))))
+(DTypeSig false "whenSameHerald" (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "DoStmt")))))))
+(DFunDef false "whenSameHerald" ((PVar "host") (PVar "d") (PVar "stmts") (PVar "e")) (EIf (EBinOp "==" (EVar "host") (EVar "d")) (EVar "stmts") (EIf (EVar "otherwise") (EListLit (EApp (EVar "DoExpr") (EVar "e"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "rewriteBindStmt" (TyFun (TyCon "Oracle") (TyFun (TyCon "DoStmt") (TyCon "DoStmt"))))
 (DFunDef false "rewriteBindStmt" ((PVar "orc") (PCon "DoExpr" (PVar "e"))) (EApp (EVar "DoExpr") (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "e"))))
 (DFunDef false "rewriteBindStmt" ((PVar "orc") (PCon "DoBind" (PVar "p") (PVar "e"))) (EApp (EApp (EVar "DoBind") (EVar "p")) (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "e"))))
@@ -5623,7 +5625,7 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "rewriteLamExpr" ((PCon "EAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EVar "rewriteLamExpr") (EVar "e"))) (EVar "t")))
 (DFunDef false "rewriteLamExpr" ((PCon "EHeadAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EHeadAnnot") (EApp (EVar "rewriteLamExpr") (EVar "e"))) (EVar "t")))
 (DFunDef false "rewriteLamExpr" ((PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EVar "map") (EVar "rewriteLamStmt")) (EVar "stmts"))))
-(DFunDef false "rewriteLamExpr" ((PCon "EDo" (PVar "stmts"))) (EApp (EVar "EDo") (EApp (EApp (EVar "map") (EVar "rewriteLamStmt")) (EVar "stmts"))))
+(DFunDef false "rewriteLamExpr" ((PCon "EDo" (PVar "d") (PVar "stmts"))) (EApp (EApp (EVar "EDo") (EVar "d")) (EApp (EApp (EVar "map") (EVar "rewriteLamStmt")) (EVar "stmts"))))
 (DFunDef false "rewriteLamExpr" ((PCon "EStringInterp" (PVar "parts"))) (EApp (EVar "EStringInterp") (EApp (EApp (EVar "map") (EVar "rewriteLamInterp")) (EVar "parts"))))
 (DFunDef false "rewriteLamExpr" ((PCon "EGuards" (PVar "arms"))) (EApp (EVar "EGuards") (EApp (EApp (EVar "map") (EVar "rewriteLamGuardArm")) (EVar "arms"))))
 (DFunDef false "rewriteLamExpr" ((PCon "ERecordCreate" (PVar "n") (PVar "fs"))) (EApp (EApp (EVar "ERecordCreate") (EVar "n")) (EApp (EApp (EVar "map") (EVar "rewriteLamField")) (EVar "fs"))))
@@ -5725,7 +5727,7 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "rewriteIfMaxMinExpr" ((PCon "EAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EVar "rewriteIfMaxMinExpr") (EVar "e"))) (EVar "t")))
 (DFunDef false "rewriteIfMaxMinExpr" ((PCon "EHeadAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EHeadAnnot") (EApp (EVar "rewriteIfMaxMinExpr") (EVar "e"))) (EVar "t")))
 (DFunDef false "rewriteIfMaxMinExpr" ((PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EVar "map") (EVar "rewriteIfMaxMinStmt")) (EVar "stmts"))))
-(DFunDef false "rewriteIfMaxMinExpr" ((PCon "EDo" (PVar "stmts"))) (EApp (EVar "EDo") (EApp (EApp (EVar "map") (EVar "rewriteIfMaxMinStmt")) (EVar "stmts"))))
+(DFunDef false "rewriteIfMaxMinExpr" ((PCon "EDo" (PVar "d") (PVar "stmts"))) (EApp (EApp (EVar "EDo") (EVar "d")) (EApp (EApp (EVar "map") (EVar "rewriteIfMaxMinStmt")) (EVar "stmts"))))
 (DFunDef false "rewriteIfMaxMinExpr" ((PCon "EStringInterp" (PVar "parts"))) (EApp (EVar "EStringInterp") (EApp (EApp (EVar "map") (EVar "rewriteIfMaxMinInterp")) (EVar "parts"))))
 (DFunDef false "rewriteIfMaxMinExpr" ((PCon "EGuards" (PVar "arms"))) (EApp (EVar "EGuards") (EApp (EApp (EVar "map") (EVar "rewriteIfMaxMinGuardArm")) (EVar "arms"))))
 (DFunDef false "rewriteIfMaxMinExpr" ((PCon "ERecordCreate" (PVar "n") (PVar "fs"))) (EApp (EApp (EVar "ERecordCreate") (EVar "n")) (EApp (EApp (EVar "map") (EVar "rewriteIfMaxMinField")) (EVar "fs"))))
@@ -5837,7 +5839,7 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "rewriteAndThenPureMapExpr" ((PCon "EAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "e"))) (EVar "t")))
 (DFunDef false "rewriteAndThenPureMapExpr" ((PCon "EHeadAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EHeadAnnot") (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "e"))) (EVar "t")))
 (DFunDef false "rewriteAndThenPureMapExpr" ((PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EVar "map") (EVar "rewriteAndThenPureMapStmt")) (EVar "stmts"))))
-(DFunDef false "rewriteAndThenPureMapExpr" ((PCon "EDo" (PVar "stmts"))) (EApp (EVar "EDo") (EApp (EApp (EVar "map") (EVar "rewriteAndThenPureMapStmt")) (EVar "stmts"))))
+(DFunDef false "rewriteAndThenPureMapExpr" ((PCon "EDo" (PVar "d") (PVar "stmts"))) (EApp (EApp (EVar "EDo") (EVar "d")) (EApp (EApp (EVar "map") (EVar "rewriteAndThenPureMapStmt")) (EVar "stmts"))))
 (DFunDef false "rewriteAndThenPureMapExpr" ((PCon "EStringInterp" (PVar "parts"))) (EApp (EVar "EStringInterp") (EApp (EApp (EVar "map") (EVar "rewriteAndThenPureMapInterp")) (EVar "parts"))))
 (DFunDef false "rewriteAndThenPureMapExpr" ((PCon "EGuards" (PVar "arms"))) (EApp (EVar "EGuards") (EApp (EApp (EVar "map") (EVar "rewriteAndThenPureMapGuardArm")) (EVar "arms"))))
 (DFunDef false "rewriteAndThenPureMapExpr" ((PCon "ERecordCreate" (PVar "n") (PVar "fs"))) (EApp (EApp (EVar "ERecordCreate") (EVar "n")) (EApp (EApp (EVar "map") (EVar "rewriteAndThenPureMapField")) (EVar "fs"))))
@@ -5899,7 +5901,7 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "mapChildExprs" ((PVar "g") (PCon "EAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EVar "g") (EVar "e"))) (EVar "t")))
 (DFunDef false "mapChildExprs" ((PVar "g") (PCon "EHeadAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EHeadAnnot") (EApp (EVar "g") (EVar "e"))) (EVar "t")))
 (DFunDef false "mapChildExprs" ((PVar "g") (PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EVar "map") (EApp (EVar "mapChildStmt") (EVar "g"))) (EVar "stmts"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EDo" (PVar "stmts"))) (EApp (EVar "EDo") (EApp (EApp (EVar "map") (EApp (EVar "mapChildStmt") (EVar "g"))) (EVar "stmts"))))
+(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EDo" (PVar "d") (PVar "stmts"))) (EApp (EApp (EVar "EDo") (EVar "d")) (EApp (EApp (EVar "map") (EApp (EVar "mapChildStmt") (EVar "g"))) (EVar "stmts"))))
 (DFunDef false "mapChildExprs" ((PVar "g") (PCon "EStringInterp" (PVar "parts"))) (EApp (EVar "EStringInterp") (EApp (EApp (EVar "map") (EApp (EVar "mapChildInterp") (EVar "g"))) (EVar "parts"))))
 (DFunDef false "mapChildExprs" ((PVar "g") (PCon "EGuards" (PVar "arms"))) (EApp (EVar "EGuards") (EApp (EApp (EVar "map") (EApp (EVar "mapChildGuardArm") (EVar "g"))) (EVar "arms"))))
 (DFunDef false "mapChildExprs" ((PVar "g") (PCon "ERecordCreate" (PVar "n") (PVar "fs"))) (EApp (EApp (EVar "ERecordCreate") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EVar "mapChildField") (EVar "g"))) (EVar "fs"))))
@@ -6895,14 +6897,11 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "rowVarsOf" ((PCon "TyApp" (PVar "f") (PVar "x"))) (EBinOp "++" (EApp (EVar "rowVarsOf") (EVar "f")) (EApp (EVar "rowVarsOf") (EVar "x"))))
 (DFunDef false "rowVarsOf" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "rowVarsOf") (EVar "a")) (EApp (EVar "rowVarsOf") (EVar "b"))))
 (DFunDef false "rowVarsOf" ((PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EDictApp "flatMap") (EVar "rowVarsOf")) (EVar "ts")))
-(DFunDef false "rowVarsOf" ((PCon "TyEffect" PWild (PVar "tl") (PVar "t"))) (EBinOp "++" (EApp (EVar "optNameL") (EVar "tl")) (EApp (EVar "rowVarsOf") (EVar "t"))))
+(DFunDef false "rowVarsOf" ((PCon "TyEffect" PWild (PVar "tl") (PVar "t"))) (EBinOp "++" (EVar "tl") (EApp (EVar "rowVarsOf") (EVar "t"))))
 (DFunDef false "rowVarsOf" ((PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "constrRowVars")) (EVar "cs")) (EApp (EVar "rowVarsOf") (EVar "t"))))
-(DFunDef false "rowVarsOf" ((PCon "TyRow" PWild (PVar "tl") PWild)) (EApp (EVar "optNameL") (EVar "tl")))
+(DFunDef false "rowVarsOf" ((PCon "TyRow" PWild (PVar "tl") PWild)) (EVar "tl"))
 (DTypeSig false "constrRowVars" (TyFun (TyCon "Constraint") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "constrRowVars" ((PRec "Constraint" ((rf "constraintArgs" (PVar "args"))) false)) (EApp (EApp (EDictApp "flatMap") (EVar "rowVarsOf")) (EVar "args")))
-(DTypeSig false "optNameL" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "optNameL" ((PCon "None")) (EListLit))
-(DFunDef false "optNameL" ((PCon "Some" (PVar "v"))) (EListLit (EVar "v")))
 (DTypeSig false "tyCanonIn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyCon "String")))))
 (DFunDef false "tyCanonIn" ((PVar "tvs") PWild (PCon "TyVar" (PVar "v"))) (EBinOp "++" (ELit (LString "%t")) (EApp (EVar "intToString") (EApp (EApp (EVar "indexIn") (EVar "v")) (EVar "tvs")))))
 (DFunDef false "tyCanonIn" (PWild PWild (PRec "TyCon" ((rf "tyConName" (PVar "n"))) false)) (EBinOp "++" (ELit (LString "#")) (EVar "n")))
@@ -6914,14 +6913,13 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "tyCanonIn" ((PVar "tvs") (PVar "rvs") (PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(=> ")) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EVar "sortUniqS") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "constrCanon") (EVar "tvs")) (EVar "rvs"))) (EVar "cs")))))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "tyCanonIn") (EVar "tvs")) (EVar "rvs")) (EVar "t")))) (ELit (LString ")"))))
 (DTypeSig false "constrCanon" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Constraint") (TyCon "String")))))
 (DFunDef false "constrCanon" ((PVar "tvs") (PVar "rvs") (PRec "Constraint" ((rf "constraintHead" (PVar "h")) (rf "constraintArgs" (PVar "args"))) false)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EMethodRef "display") (EVar "h"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "tyCanonIn") (EVar "tvs")) (EVar "rvs"))) (EVar "args"))))) (ELit (LString "]"))))
-(DTypeSig false "rowCanon" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String")))))
+(DTypeSig false "rowCanon" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "rowCanon" ((PVar "rvs") (PVar "es") (PVar "tl")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "{")) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EVar "sortUniqS") (EApp (EApp (EMethodRef "map") (EVar "rowAtomCanon")) (EVar "es")))))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EApp (EVar "rowTailCanon") (EVar "rvs")) (EVar "tl")))) (ELit (LString "}"))))
 (DTypeSig false "rowAtomCanon" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyCon "String")))
 (DFunDef false "rowAtomCanon" ((PTuple (PVar "l") (PCon "None"))) (EVar "l"))
 (DFunDef false "rowAtomCanon" ((PTuple (PVar "l") (PCon "Some" (PVar "s")))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "l"))) (ELit (LString "="))) (EApp (EMethodRef "display") (EVar "s"))) (ELit (LString ""))))
-(DTypeSig false "rowTailCanon" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))
-(DFunDef false "rowTailCanon" (PWild (PCon "None")) (ELit (LString "")))
-(DFunDef false "rowTailCanon" ((PVar "rvs") (PCon "Some" (PVar "v"))) (EBinOp "++" (ELit (LString " |%r")) (EApp (EVar "intToString") (EApp (EApp (EVar "indexIn") (EVar "v")) (EVar "rvs")))))
+(DTypeSig false "rowTailCanon" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
+(DFunDef false "rowTailCanon" ((PVar "rvs") (PVar "tls")) (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "v")) (EBinOp "++" (ELit (LString " |%r")) (EApp (EVar "intToString") (EApp (EApp (EVar "indexIn") (EVar "v")) (EVar "rvs")))))) (EVar "tls"))))
 (DTypeSig false "indexIn" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Int"))))
 (DFunDef false "indexIn" ((PVar "x") (PVar "xs")) (EApp (EApp (EApp (EVar "indexInGo") (EVar "x")) (EVar "xs")) (ELit (LInt 0))))
 (DTypeSig false "indexInGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyCon "Int")))))
@@ -7005,7 +7003,7 @@ duplicateBodySameFileRule = Rule {
 (DTypeSig false "collectBindHits" (TyFun (TyCon "Oracle") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "collectBindHits" ((PVar "orc") (PVar "e")) (EBinOp "++" (EApp (EApp (EVar "tailHitOf") (EVar "orc")) (EVar "e")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "collectBindHits") (EVar "orc"))) (EApp (EVar "childExprs") (EVar "e")))))
 (DTypeSig false "tailHitOf" (TyFun (TyCon "Oracle") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "tailHitOf" ((PVar "orc") (PCon "EDo" (PVar "stmts"))) (EApp (EApp (EVar "hitNameOf") (EVar "orc")) (EVar "stmts")))
+(DFunDef false "tailHitOf" ((PVar "orc") (PCon "EDo" PWild (PVar "stmts"))) (EApp (EApp (EVar "hitNameOf") (EVar "orc")) (EVar "stmts")))
 (DFunDef false "tailHitOf" ((PVar "orc") (PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "hitNameOf") (EVar "orc")) (EVar "stmts")))
 (DFunDef false "tailHitOf" (PWild PWild) (EListLit))
 (DTypeSig false "hitNameOf" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "List") (TyCon "String")))))
@@ -7034,7 +7032,7 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "childExprs" ((PCon "EAnnot" (PVar "e") PWild)) (EListLit (EVar "e")))
 (DFunDef false "childExprs" ((PCon "EHeadAnnot" (PVar "e") PWild)) (EListLit (EVar "e")))
 (DFunDef false "childExprs" ((PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EDictApp "flatMap") (EVar "stmtExprs")) (EVar "stmts")))
-(DFunDef false "childExprs" ((PCon "EDo" (PVar "stmts"))) (EApp (EApp (EDictApp "flatMap") (EVar "stmtExprs")) (EVar "stmts")))
+(DFunDef false "childExprs" ((PCon "EDo" PWild (PVar "stmts"))) (EApp (EApp (EDictApp "flatMap") (EVar "stmtExprs")) (EVar "stmts")))
 (DFunDef false "childExprs" ((PCon "EStringInterp" (PVar "parts"))) (EApp (EApp (EDictApp "flatMap") (EVar "interpPartExprs")) (EVar "parts")))
 (DFunDef false "childExprs" ((PCon "EGuards" (PVar "arms"))) (EApp (EApp (EDictApp "flatMap") (EVar "guardArmExprs")) (EVar "arms")))
 (DFunDef false "childExprs" ((PCon "ERecordCreate" PWild (PVar "fs"))) (EApp (EApp (EMethodRef "map") (EVar "fieldAssignExpr")) (EVar "fs")))
@@ -7099,8 +7097,8 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "EIndex" (PVar "a") (PVar "i") (PVar "r"))) (EApp (EApp (EApp (EVar "EIndex") (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "a"))) (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "i"))) (EVar "r")))
 (DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "EAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "e"))) (EVar "t")))
 (DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "EHeadAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EHeadAnnot") (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "e"))) (EVar "t")))
-(DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EVar "collapseBindTail") (EVar "orc")) (EApp (EApp (EMethodRef "map") (EApp (EVar "rewriteBindStmt") (EVar "orc"))) (EVar "stmts")))))
-(DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "EDo" (PVar "stmts"))) (EApp (EVar "EDo") (EApp (EApp (EVar "collapseBindTail") (EVar "orc")) (EApp (EApp (EMethodRef "map") (EApp (EVar "rewriteBindStmt") (EVar "orc"))) (EVar "stmts")))))
+(DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EApp (EVar "collapseBindTail") (EVar "orc")) (EVar "False")) (EApp (EApp (EMethodRef "map") (EApp (EVar "rewriteBindStmt") (EVar "orc"))) (EVar "stmts")))))
+(DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "EDo" (PVar "d") (PVar "stmts"))) (EApp (EApp (EVar "EDo") (EVar "d")) (EApp (EApp (EApp (EVar "collapseBindTail") (EVar "orc")) (EVar "d")) (EApp (EApp (EMethodRef "map") (EApp (EVar "rewriteBindStmt") (EVar "orc"))) (EVar "stmts")))))
 (DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "EStringInterp" (PVar "parts"))) (EApp (EVar "EStringInterp") (EApp (EApp (EMethodRef "map") (EApp (EVar "rewriteBindInterp") (EVar "orc"))) (EVar "parts"))))
 (DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "EGuards" (PVar "arms"))) (EApp (EVar "EGuards") (EApp (EApp (EMethodRef "map") (EApp (EVar "rewriteBindGuardArm") (EVar "orc"))) (EVar "arms"))))
 (DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "ERecordCreate" (PVar "n") (PVar "fs"))) (EApp (EApp (EVar "ERecordCreate") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EVar "rewriteBindField") (EVar "orc"))) (EVar "fs"))))
@@ -7110,10 +7108,12 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "ESetLit" (PVar "n") (PVar "es"))) (EApp (EApp (EVar "ESetLit") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EVar "rewriteBindExpr") (EVar "orc"))) (EVar "es"))))
 (DFunDef false "rewriteBindExpr" ((PVar "orc") (PCon "EAsPat" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "EAsPat") (EVar "x")) (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "e"))))
 (DFunDef false "rewriteBindExpr" (PWild (PVar "e")) (EVar "e"))
-(DTypeSig false "collapseBindTail" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "List") (TyCon "DoStmt")))))
-(DFunDef false "collapseBindTail" ((PVar "orc") (PVar "stmts")) (EMatch (EApp (EApp (EVar "bindMatchTail") (EVar "orc")) (EVar "stmts")) (arm (PCon "Some" (PTuple (PVar "prefix") PWild (PVar "pat") (PVar "boundE") (PVar "body"))) () (EBinOp "++" (EVar "prefix") (EBinOp "::" (EApp (EApp (EVar "DoBind") (EVar "pat")) (EVar "boundE")) (EApp (EVar "bodyToStmts") (EVar "body"))))) (arm (PCon "None") () (EVar "stmts"))))
-(DTypeSig false "bodyToStmts" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "DoStmt"))))
-(DFunDef false "bodyToStmts" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EDo" (PVar "stmts")) () (EVar "stmts")) (arm (PCon "EBlock" (PVar "stmts")) () (EVar "stmts")) (arm PWild () (EListLit (EApp (EVar "DoExpr") (EVar "e"))))))
+(DTypeSig false "collapseBindTail" (TyFun (TyCon "Oracle") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "List") (TyCon "DoStmt"))))))
+(DFunDef false "collapseBindTail" ((PVar "orc") (PVar "host") (PVar "stmts")) (EMatch (EApp (EApp (EVar "bindMatchTail") (EVar "orc")) (EVar "stmts")) (arm (PCon "Some" (PTuple (PVar "prefix") PWild (PVar "pat") (PVar "boundE") (PVar "body"))) () (EBinOp "++" (EVar "prefix") (EBinOp "::" (EApp (EApp (EVar "DoBind") (EVar "pat")) (EVar "boundE")) (EApp (EApp (EVar "bodyToStmts") (EVar "host")) (EVar "body"))))) (arm (PCon "None") () (EVar "stmts"))))
+(DTypeSig false "bodyToStmts" (TyFun (TyCon "Bool") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "DoStmt")))))
+(DFunDef false "bodyToStmts" ((PVar "host") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EDo" (PVar "d") (PVar "stmts")) () (EApp (EApp (EApp (EApp (EVar "whenSameHerald") (EVar "host")) (EVar "d")) (EVar "stmts")) (EVar "e"))) (arm (PCon "EBlock" (PVar "stmts")) () (EVar "stmts")) (arm PWild () (EListLit (EApp (EVar "DoExpr") (EVar "e"))))))
+(DTypeSig false "whenSameHerald" (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "DoStmt")))))))
+(DFunDef false "whenSameHerald" ((PVar "host") (PVar "d") (PVar "stmts") (PVar "e")) (EIf (EBinOp "==" (EVar "host") (EVar "d")) (EVar "stmts") (EIf (EVar "otherwise") (EListLit (EApp (EVar "DoExpr") (EVar "e"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "rewriteBindStmt" (TyFun (TyCon "Oracle") (TyFun (TyCon "DoStmt") (TyCon "DoStmt"))))
 (DFunDef false "rewriteBindStmt" ((PVar "orc") (PCon "DoExpr" (PVar "e"))) (EApp (EVar "DoExpr") (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "e"))))
 (DFunDef false "rewriteBindStmt" ((PVar "orc") (PCon "DoBind" (PVar "p") (PVar "e"))) (EApp (EApp (EVar "DoBind") (EVar "p")) (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "e"))))
@@ -7222,7 +7222,7 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "rewriteLamExpr" ((PCon "EAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EVar "rewriteLamExpr") (EVar "e"))) (EVar "t")))
 (DFunDef false "rewriteLamExpr" ((PCon "EHeadAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EHeadAnnot") (EApp (EVar "rewriteLamExpr") (EVar "e"))) (EVar "t")))
 (DFunDef false "rewriteLamExpr" ((PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EMethodRef "map") (EVar "rewriteLamStmt")) (EVar "stmts"))))
-(DFunDef false "rewriteLamExpr" ((PCon "EDo" (PVar "stmts"))) (EApp (EVar "EDo") (EApp (EApp (EMethodRef "map") (EVar "rewriteLamStmt")) (EVar "stmts"))))
+(DFunDef false "rewriteLamExpr" ((PCon "EDo" (PVar "d") (PVar "stmts"))) (EApp (EApp (EVar "EDo") (EVar "d")) (EApp (EApp (EMethodRef "map") (EVar "rewriteLamStmt")) (EVar "stmts"))))
 (DFunDef false "rewriteLamExpr" ((PCon "EStringInterp" (PVar "parts"))) (EApp (EVar "EStringInterp") (EApp (EApp (EMethodRef "map") (EVar "rewriteLamInterp")) (EVar "parts"))))
 (DFunDef false "rewriteLamExpr" ((PCon "EGuards" (PVar "arms"))) (EApp (EVar "EGuards") (EApp (EApp (EMethodRef "map") (EVar "rewriteLamGuardArm")) (EVar "arms"))))
 (DFunDef false "rewriteLamExpr" ((PCon "ERecordCreate" (PVar "n") (PVar "fs"))) (EApp (EApp (EVar "ERecordCreate") (EVar "n")) (EApp (EApp (EMethodRef "map") (EVar "rewriteLamField")) (EVar "fs"))))
@@ -7324,7 +7324,7 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "rewriteIfMaxMinExpr" ((PCon "EAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EVar "rewriteIfMaxMinExpr") (EVar "e"))) (EVar "t")))
 (DFunDef false "rewriteIfMaxMinExpr" ((PCon "EHeadAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EHeadAnnot") (EApp (EVar "rewriteIfMaxMinExpr") (EVar "e"))) (EVar "t")))
 (DFunDef false "rewriteIfMaxMinExpr" ((PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EMethodRef "map") (EVar "rewriteIfMaxMinStmt")) (EVar "stmts"))))
-(DFunDef false "rewriteIfMaxMinExpr" ((PCon "EDo" (PVar "stmts"))) (EApp (EVar "EDo") (EApp (EApp (EMethodRef "map") (EVar "rewriteIfMaxMinStmt")) (EVar "stmts"))))
+(DFunDef false "rewriteIfMaxMinExpr" ((PCon "EDo" (PVar "d") (PVar "stmts"))) (EApp (EApp (EVar "EDo") (EVar "d")) (EApp (EApp (EMethodRef "map") (EVar "rewriteIfMaxMinStmt")) (EVar "stmts"))))
 (DFunDef false "rewriteIfMaxMinExpr" ((PCon "EStringInterp" (PVar "parts"))) (EApp (EVar "EStringInterp") (EApp (EApp (EMethodRef "map") (EVar "rewriteIfMaxMinInterp")) (EVar "parts"))))
 (DFunDef false "rewriteIfMaxMinExpr" ((PCon "EGuards" (PVar "arms"))) (EApp (EVar "EGuards") (EApp (EApp (EMethodRef "map") (EVar "rewriteIfMaxMinGuardArm")) (EVar "arms"))))
 (DFunDef false "rewriteIfMaxMinExpr" ((PCon "ERecordCreate" (PVar "n") (PVar "fs"))) (EApp (EApp (EVar "ERecordCreate") (EVar "n")) (EApp (EApp (EMethodRef "map") (EVar "rewriteIfMaxMinField")) (EVar "fs"))))
@@ -7436,7 +7436,7 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "rewriteAndThenPureMapExpr" ((PCon "EAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "e"))) (EVar "t")))
 (DFunDef false "rewriteAndThenPureMapExpr" ((PCon "EHeadAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EHeadAnnot") (EApp (EVar "rewriteAndThenPureMapExpr") (EVar "e"))) (EVar "t")))
 (DFunDef false "rewriteAndThenPureMapExpr" ((PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EMethodRef "map") (EVar "rewriteAndThenPureMapStmt")) (EVar "stmts"))))
-(DFunDef false "rewriteAndThenPureMapExpr" ((PCon "EDo" (PVar "stmts"))) (EApp (EVar "EDo") (EApp (EApp (EMethodRef "map") (EVar "rewriteAndThenPureMapStmt")) (EVar "stmts"))))
+(DFunDef false "rewriteAndThenPureMapExpr" ((PCon "EDo" (PVar "d") (PVar "stmts"))) (EApp (EApp (EVar "EDo") (EVar "d")) (EApp (EApp (EMethodRef "map") (EVar "rewriteAndThenPureMapStmt")) (EVar "stmts"))))
 (DFunDef false "rewriteAndThenPureMapExpr" ((PCon "EStringInterp" (PVar "parts"))) (EApp (EVar "EStringInterp") (EApp (EApp (EMethodRef "map") (EVar "rewriteAndThenPureMapInterp")) (EVar "parts"))))
 (DFunDef false "rewriteAndThenPureMapExpr" ((PCon "EGuards" (PVar "arms"))) (EApp (EVar "EGuards") (EApp (EApp (EMethodRef "map") (EVar "rewriteAndThenPureMapGuardArm")) (EVar "arms"))))
 (DFunDef false "rewriteAndThenPureMapExpr" ((PCon "ERecordCreate" (PVar "n") (PVar "fs"))) (EApp (EApp (EVar "ERecordCreate") (EVar "n")) (EApp (EApp (EMethodRef "map") (EVar "rewriteAndThenPureMapField")) (EVar "fs"))))
@@ -7498,7 +7498,7 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "mapChildExprs" ((PVar "g") (PCon "EAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EVar "g") (EVar "e"))) (EVar "t")))
 (DFunDef false "mapChildExprs" ((PVar "g") (PCon "EHeadAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "EHeadAnnot") (EApp (EVar "g") (EVar "e"))) (EVar "t")))
 (DFunDef false "mapChildExprs" ((PVar "g") (PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EMethodRef "map") (EApp (EVar "mapChildStmt") (EVar "g"))) (EVar "stmts"))))
-(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EDo" (PVar "stmts"))) (EApp (EVar "EDo") (EApp (EApp (EMethodRef "map") (EApp (EVar "mapChildStmt") (EVar "g"))) (EVar "stmts"))))
+(DFunDef false "mapChildExprs" ((PVar "g") (PCon "EDo" (PVar "d") (PVar "stmts"))) (EApp (EApp (EVar "EDo") (EVar "d")) (EApp (EApp (EMethodRef "map") (EApp (EVar "mapChildStmt") (EVar "g"))) (EVar "stmts"))))
 (DFunDef false "mapChildExprs" ((PVar "g") (PCon "EStringInterp" (PVar "parts"))) (EApp (EVar "EStringInterp") (EApp (EApp (EMethodRef "map") (EApp (EVar "mapChildInterp") (EVar "g"))) (EVar "parts"))))
 (DFunDef false "mapChildExprs" ((PVar "g") (PCon "EGuards" (PVar "arms"))) (EApp (EVar "EGuards") (EApp (EApp (EMethodRef "map") (EApp (EVar "mapChildGuardArm") (EVar "g"))) (EVar "arms"))))
 (DFunDef false "mapChildExprs" ((PVar "g") (PCon "ERecordCreate" (PVar "n") (PVar "fs"))) (EApp (EApp (EVar "ERecordCreate") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EVar "mapChildField") (EVar "g"))) (EVar "fs"))))

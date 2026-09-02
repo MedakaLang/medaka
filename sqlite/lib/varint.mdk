@@ -15,7 +15,7 @@
 -- The encoder (`sqVarintBytes`) is the exact inverse of the decoder
 -- (`sqVarint`): a round-trip `sqVarintBytes → sqVarint` reproduces the value.
 
-import byteparser.{ByteParser, BResult, BOk, BErr, runByteParser}
+import byteparser.{ByteParser, ByteParserE, BResult, BOk, BErr, runByteParser}
 
 -- ---------------------------------------------------------------------------
 -- Named constants (STYLE §12 — name the meaning, fold makes shifts free)
@@ -49,7 +49,7 @@ groupMask = 127
 -- Ok 16385
 export
 sqVarint : ByteParser Int
-sqVarint = ByteParser sqVarintGo
+sqVarint = ByteParserE sqVarintGo
 
 -- Decode up to 9 bytes.  `byteNum` counts which byte we are on (1-indexed).
 sqVarintGo : Array Int -> Int -> BResult Int

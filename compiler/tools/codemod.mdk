@@ -214,22 +214,22 @@ effTyNode acts (TyEffect es tail t) = rewriteRow acts es tail t
 effTyNode acts (TyRow es tail l) = rewriteBareRow acts es tail l
 effTyNode _ ty = (ty, False)
 
-rewriteRow : List (String, EffAction) -> List (String, Option String) -> Option String -> Ty -> (Ty, Bool)
+rewriteRow : List (String, EffAction) -> List (String, Option String) -> List String -> Ty -> (Ty, Bool)
 rewriteRow acts es tail t =
   let (deduped, changed) = rewriteAtoms acts es
   match deduped
     [] => match tail
       -- fully-stripped, no tail → an unannotated (pure) arrow: drop the node.
-      None => if changed then (t, True) else (TyEffect [] None t, False)
+      [] => if changed then (t, True) else (TyEffect [] [] t, False)
       -- an open row with no atoms still prints (`<v>`) and round-trips.
-      Some v => (TyEffect [] (Some v) t, changed)
+      _ => (TyEffect [] tail t, changed)
     _ => (TyEffect deduped tail t, changed)
 
 -- Same action-table rewrite as `rewriteRow`, for a bare row atom (#997):
 -- there is no wrapped type to fall back to when the row strips to empty, so
 -- (unlike `rewriteRow`'s `None` case above) an empty closed bare row stays a
--- `TyRow [] None` rather than being dropped — there is no other Ty to become.
-rewriteBareRow : List (String, EffAction) -> List (String, Option String) -> Option String -> Option Loc -> (Ty, Bool)
+-- `TyRow [] []` rather than being dropped — there is no other Ty to become.
+rewriteBareRow : List (String, EffAction) -> List (String, Option String) -> List String -> Option Loc -> (Ty, Bool)
 rewriteBareRow acts es tail l =
   let (deduped, changed) = rewriteAtoms acts es
   (TyRow deduped tail l, changed)

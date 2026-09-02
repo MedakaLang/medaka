@@ -79,6 +79,9 @@ compose|PASS
 const|PASS
 count|PASS
 curry|PASS
+deferFlatMap|PASS
+deferUnless|PASS
+deferWhen|PASS
 discard|PASS
 elem|PASS
 filterThen|PASS

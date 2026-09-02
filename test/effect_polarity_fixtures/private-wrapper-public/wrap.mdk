@@ -1,0 +1,20 @@
+-- Sibling module for private-wrapper. `Inner` is PRIVATE -- no `export` at
+-- all -- and is the only declaration that mentions the write channel. `Outer`
+-- is exported abstractly and is the only name the entry module can spell.
+--
+-- Before this sprint's slice 1, the cross-module polarity chain ran the
+-- fixpoint over `filterList kindPublicDataDecl m.demDecls`, so `Inner` was
+-- filtered out of the fixpoint's INPUT before it ran: `Outer`'s parameter
+-- composed against a MISSING entry for `Inner` and inherited the lenient
+-- `PCo` default. The fixpoint's input set is not its export set.
+data Inner a = MkInner (Ref a)
+
+public export data Outer a = MkOuter (Inner a)
+
+export
+mkOuter : a -> Outer a
+mkOuter x = MkOuter (MkInner (Ref x))
+
+export
+outerRef : Outer a -> Ref a
+outerRef (MkOuter (MkInner r)) = r

@@ -365,7 +365,7 @@ neither direction.** On the guard-PASSING path the winning entry's kinds are all
 so `foldAppKinds` erases the row exactly as `appFallback` does. What actually selected
 silent-vs-loud was the row's SPELLING at the use site — the wrapped form unwraps to a
 real type and keeps inferring silently (#1069), the bare form raises
-`T-ROW-KIND-MISMATCH` (#1090, the same table with the opposite symptom). The identical
+`T-EFFECT-KIND-MISMATCH` (#1090, the same table with the opposite symptom). The identical
 claim in `compiler/types/typecheck.mdk`'s `registerOpaqueParamKinds` doc-comment was
 corrected by the same PR; #1069's issue body carries it too and is left alone.
 
