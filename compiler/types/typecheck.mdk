@@ -2947,7 +2947,7 @@ seedAbstractRecordTypes coreDecls modules =
 -- payload-carrying `SiteKind`) records which recorder built it and carries the
 -- fields unique to that shape.  The common fields are: the method/name, the route
 -- ref the resolver stamps, the primary discriminating mono, and the enclosing-fn
--- name (`currentFn` at record time; "" for RLocal sites, which carry no encl).  The
+-- name (`currentFn` at record time, including RLocal sites).  The
 -- five pending lists stay SEPARATE (the drain schedule is unchanged — this is a
 -- pure data-representation change): each recorder builds a `PendingEntry` with its
 -- own `kind`, and each resolver reads the fields instead of destructuring a tuple.
@@ -2967,7 +2967,7 @@ public export data SiteKind =
   | SKOp Bool
   -- standalone-shadow RLocal site: mangled standalone symbol, forceLocal (P0-20),
   -- and the shadowing standalone's own `=>`-constraint dict monos + iface names
-  -- (S-1).  Primary mono = receiver mono; encl is unused ("").
+  -- (S-1).  Primary mono = receiver mono; encl owns deferred dictionary routing.
   -- FIX-shadow-arity-skew: the 5th field is the slot-parallel predicate ARGUMENT VECTOR
   -- list, so `resolveRLocalSites` can select each slot with `routesOfMonosTopV`'s vector
   -- goal instead of the scalar `Ix Int _`.  It is `ShadowDicts`' third projection and
@@ -3350,8 +3350,8 @@ routeLocalSym _ = ""
 -- `[]` and reproduce the S-1 bug with more code.  This way the fix is ordering-immune
 -- and the route has a single writer.  Empty for an unconstrained standalone.
 -- #156 S3a: these fields now live in `PendingEntry`'s `SKRLocal` kind (mangledSym,
--- forceLocal, dictMonos, dictIfaces); the name/route/receiver-mono are the shared
--- PendingEntry fields, and encl is unused ("") for RLocal sites.
+-- forceLocal, dictMonos, dictIfaces); the name/route/receiver-mono/enclosing-fn are
+-- the shared PendingEntry fields.
 
 -- #158 PR4: the NON-REENTRANT global toggles — booleans a caller flips True around a
 -- sub-computation and restores after, so a reader lower in the SAME inference sees the
@@ -7835,11 +7835,21 @@ uOblIsDecidableNow o =
 -- ports `pendingDictApps` onto `Windowed` too (see `dictApps` below); mutated ONLY
 -- by `resetState` and `pushDictApp`.
 
--- #1155 (F-3c): the 5th element is the `currentLoc` span snapshotted at the RECORD
+-- #1155 (F-3c): [pdaLoc] is the `currentLoc` span snapshotted at the RECORD
 -- site, the same reason and the same shape as `PendingEntry`'s 6th field and
 -- `implObls`' 5th element — `resolveDictApps` runs post-HM, so the live `currentLoc`
 -- there is stale.  `resolveDictApps` republishes it into `goalSiteLoc`.
-pushDictApp : (Ref (List Route), List Mono, List IfaceRef, List (List Mono), Option Loc) -> Unit
+data PendingDictApp =
+  | PendingDictApp {
+      pdaRoutesRef : Ref (List Route),
+      pdaMonos : List Mono,
+      pdaIfaces : List IfaceRef,
+      pdaArgVecs : List (List Mono),
+      pdaEncl : String,
+      pdaLoc : Option Loc,
+    }
+
+pushDictApp : PendingDictApp -> Unit
 pushDictApp app = wPush perRun.value.dictApps app
 
 -- Method-level-constraint dict-passing.  `methodPredicateSlotsRef` is the sole
@@ -7855,6 +7865,13 @@ pushDictApp app = wPush perRun.value.dictApps app
 -- qualified peer is the authority consumed by final scoped dict passing.  Thus a
 -- same-spelled method in another module cannot lend this method either its predicate
 -- identity or its arity, while non-colliding programs preserve the historical order.
+data PendingMethodDict =
+  | PendingMethodDict {
+      pmdRoutesRef : Ref (List Route),
+      pmdSlots : List PredicateSlot,
+      pmdEncl : String,
+    }
+
 -- #158 PR2: the 22 per-run cross-module accumulators declared above (the six
 -- crossModule* dict-arity mirrors of #143/#144, plus the #154 universe*/obUniv* universe
 -- accumulators) are bundled into ONE typed record so their survive/clear lifecycle is a
@@ -8805,13 +8822,13 @@ data PerRun = PerRun {
     currentImportDefinersRef : Ref (List (String, String)),
     currentImportOriginsRef : Ref (List (String, String)),
     importedSchemeOblsRef : Ref (OrdMap (List VecObl)),  -- #1114/#845: this module's imported bindings' scheme contexts, keyed by LOCAL spelling (see importedSchemeOblEntries)
-    dictApps : Windowed (Ref (List Route), List Mono, List IfaceRef, List (List Mono), Option Loc),  -- #841: pendingDictApps/N, ported onto Windowed
+    dictApps : Windowed PendingDictApp,  -- #841: pendingDictApps/N, ported onto Windowed
     obls : Windowed UObligation,  -- #838 I1: the call channel (pendingCallObligations/N), ported onto Windowed
     absorptions : Windowed AbsorptionEvent,  -- #839 2a: row-unifier atom-discard trail (write-only in 2a); windowed per body by the existing obls brackets
     schemeObligationsRef : Ref (List ((String, Int), List VecObl)),  -- #837: keyed by (binding-name, binding-id) — the id from resolve's
     schemeDefIdsRef : Ref (OrdMap Int),  -- stampBindingIds, so a where-helper `g`'s obligations can no longer leak
     methodPredicateSlotsRef : Ref (List (String, List MethodPredicateSlot)),  -- onto an unrelated top-level `g` (retires the three snapshot/restore windows).
-    pendingMethodDicts : Ref (List (Ref (List Route), List PredicateSlot)),
+    pendingMethodDicts : Ref (List PendingMethodDict),
     pendingRecDictApps : Ref (List RecDictApp),  -- #837: each TOP-LEVEL value binder → its stampBindingIds id, set once per
     currentFn : Ref String,  -- module (checkBodyImpl) right after stamping.  registerSchemeObligations
     currentImplBody : Ref Bool,  -- reads it to tag a top-level member's obligations with its binding id.
@@ -11047,7 +11064,7 @@ recordRLocalSite env name tagRef inst
   -- return-position value standalone has no such arrow to match — an unconstrained one
   -- (the whole cell #1430 pins) short-circuits to `emptyShadowDicts` there anyway.
   | isNone (methodDispatchIdx name) && standaloneValuePinned name =
-    perRun.value.pendingRLocalSites := PendingEntry name tagRef inst "" (SKRLocal (routeLocalSym !tagRef) True [] [] []) !currentLoc :: perRun.value.pendingRLocalSites.value
+    perRun.value.pendingRLocalSites := PendingEntry name tagRef inst perRun.value.currentFn.value (SKRLocal (routeLocalSym !tagRef) True [] [] []) !currentLoc :: perRun.value.pendingRLocalSites.value
   | not (contains name driverState.value.standaloneValuesRef.value) = ()
   | otherwise = match methodDispatchIdx name
     None => ()
@@ -11055,7 +11072,7 @@ recordRLocalSite env name tagRef inst
       Some am =>
         let sym = routeLocalSym !tagRef
         let dicts = shadowStandaloneDictSlotsAt (standaloneSchemeFor env name sym) (if sym == "" then name else sym) am
-        perRun.value.pendingRLocalSites := PendingEntry name tagRef am "" (SKRLocal sym (standaloneValuePinned name) dicts.sdMonos dicts.sdIfaces dicts.sdArgVecs) !currentLoc :: perRun.value.pendingRLocalSites.value
+        perRun.value.pendingRLocalSites := PendingEntry name tagRef am perRun.value.currentFn.value (SKRLocal sym (standaloneValuePinned name) dicts.sdMonos dicts.sdIfaces dicts.sdArgVecs) !currentLoc :: perRun.value.pendingRLocalSites.value
       None => ()
 
 -- the SHADOWING STANDALONE's scheme.  An IMPORTER shadow's bare name is rebound by env1
@@ -11186,7 +11203,11 @@ lookupIdxById iface n (((ir, mn), i)::rest)
 recordMethodDicts : String -> Ref (List Route) -> List (Int, Mono) -> Unit
 recordMethodDicts name methodRef subst = match lookupMethodPredicateSlots name perRun.value.methodPredicateSlotsRef.value
   None => ()
-  Some slots => perRun.value.pendingMethodDicts := (methodRef, instantiateMethodPredicateSlots slots subst)::perRun.value.pendingMethodDicts.value
+  Some slots => perRun.value.pendingMethodDicts := PendingMethodDict {
+    pmdRoutesRef = methodRef,
+    pmdSlots = instantiateMethodPredicateSlots slots subst,
+    pmdEncl = perRun.value.currentFn.value,
+  }::perRun.value.pendingMethodDicts.value
 
 -- Instantiate the authoritative method carrier for THIS occurrence.  The carrier's
 -- stable positions index the occurrence's ordered substitution, avoiding any reliance
@@ -11521,7 +11542,14 @@ inferDictAtFound name routesRef inst =
     -- the ROUTING goal stays a spelling (`resolveDictApps` asks the SPELLING-keyed
     -- `KeyBuckets` a route-word question — see `dispHeadTab`); only the OBLIGATION goal
     -- below carries identity.
-    let _ = pushDictApp (routesRef, monos, map (s => s.csIface) expanded, argVecs, !currentLoc)
+    let _ = pushDictApp (PendingDictApp {
+      pdaRoutesRef = routesRef,
+      pdaMonos = monos,
+      pdaIfaces = map (s => s.csIface) expanded,
+      pdaArgVecs = argVecs,
+      pdaEncl = perRun.value.currentFn.value,
+      pdaLoc = !currentLoc,
+    })
     perRun.value.dictAppFns := (consSiteFn perRun.value.currentFn.value monos perRun.value.dictAppFns.value)
     -- #11 soundness: record this call's instantiated impl obligations (iface paired
     -- with the call's constraint mono), checked after inference by checkCallObligations.
@@ -14785,7 +14813,7 @@ recordImporterShadowDicts env mname (r::rest) tx =
     (routeLocalSym !r)
     tx
   let _ = setRef perRun.value.pendingRLocalSites
-    (PendingEntry mname r tx "" (SKRLocal (routeLocalSym !r) True dicts.sdMonos dicts.sdIfaces dicts.sdArgVecs) !currentLoc
+    (PendingEntry mname r tx perRun.value.currentFn.value (SKRLocal (routeLocalSym !r) True dicts.sdMonos dicts.sdIfaces dicts.sdArgVecs) !currentLoc
       ::perRun.value.pendingRLocalSites.value)
   recordImporterShadowDicts env mname rest tx
 
@@ -14800,7 +14828,7 @@ recordImporterShadowDictsAt _ _ [] _ _ = ()
 -- lint-disable-next-line rule-prefer-assign-op
 recordImporterShadowDictsAt env mname (r::rest) ats tx =
   let dicts = shadowStandaloneDictsWithSp (lookupAssoc mname perRun.value.shadowStandaloneSchemesRef.value) mname (routeLocalSym !r) ats
-  let _ = setRef perRun.value.pendingRLocalSites (PendingEntry mname r tx "" (SKRLocal (routeLocalSym !r) True dicts.sdMonos dicts.sdIfaces dicts.sdArgVecs) !currentLoc :: perRun.value.pendingRLocalSites.value)
+  let _ = setRef perRun.value.pendingRLocalSites (PendingEntry mname r tx perRun.value.currentFn.value (SKRLocal (routeLocalSym !r) True dicts.sdMonos dicts.sdIfaces dicts.sdArgVecs) !currentLoc :: perRun.value.pendingRLocalSites.value)
   recordImporterShadowDictsAt env mname rest ats tx
 
 -- P0-18: peel a single-argument application's head to a DEFINER-shadow interface-
@@ -15007,7 +15035,7 @@ inferDefinerShadowAppAt env name tagRef implRef hd nodes f x =
   -- lint-disable-next-line rule-prefer-assign-op
   let _ = if isDictVar then ()
     else setRef perRun.value.pendingRLocalSites
-      (PendingEntry name tagRef xt "" (SKRLocal (routeLocalSym !tagRef) (not dispatches) dicts.sdMonos dicts.sdIfaces dicts.sdArgVecs) !currentLoc
+      (PendingEntry name tagRef xt perRun.value.currentFn.value (SKRLocal (routeLocalSym !tagRef) (not dispatches) dicts.sdMonos dicts.sdIfaces dicts.sdArgVecs) !currentLoc
         ::perRun.value.pendingRLocalSites.value)
   let _ = match argDispatchOf name
     -- #609: the SKArg full mono is the DISPATCH arm's method scheme (`ft`) — the
@@ -17751,12 +17779,13 @@ dictForwardedPairs : Int -> Int -> List (Int, String)
 dictForwardedPairs callN0 dictN0 = flatMap dictAppMonoIds (wWindow perRun.value.dictApps dictN0)
   ++ flatMap callOblMonoIds (callOblsWindow callN0)
 
-dictAppMonoIds : (Ref (List Route), List Mono, List IfaceRef, List (List Mono), Option Loc) -> List (Int, String)
+dictAppMonoIds : PendingDictApp -> List (Int, String)
 -- B-4b-iii: the ROUTE carrier is now `IfaceRef`; this reader is a SPELLING consumer
 -- (its pairs key `dictForwardedPairs`' name-keyed forwarding test), so it projects
 -- `.irName` here and its answer is byte-identical to the pre-widening one.
-dictAppMonoIds (_, monos, ifaces, _, _) =
-  flatMap monoIdsWithIface (zipL monos (map (i => i.irName) ifaces))
+dictAppMonoIds app = flatMap
+  monoIdsWithIface
+  (zipL app.pdaMonos (map (i => i.irName) app.pdaIfaces))
 
 callOblMonoIds : (IfaceRef, List Mono, Option Loc) -> List (Int, String)
 callOblMonoIds (iface, monos, _) =
@@ -19643,14 +19672,14 @@ ieRowAdmittedBy ir (Some iface) = ieRowIfaceMatches ir iface
 -- `shadowKeyTableRef` was in fact the cumulative topological PREFIX on the Module arm.)
 resolveRLocalSites : List Decl -> ImplBuckets -> List PendingEntry -> Unit
 resolveRLocalSites _ _ [] = goalSiteLoc := None
-resolveRLocalSites prog implTable ((PendingEntry name tagRef am _ kind loc)::rest) =
+resolveRLocalSites prog implTable ((PendingEntry name tagRef am encl kind loc)::rest) =
   goalSiteLoc := loc
   let _ = match kind
     SKRLocal sym forceLocal monos ifaces argVecs =>
       if forceLocal then
-        tagRef := RLocal sym (routesOfMonosTopV prog implTable monos ifaces argVecs)
+        tagRef := RLocal sym (routesOfMonosTopV prog implTable encl monos ifaces argVecs)
       else
-        resolveRLocalSite prog implTable name tagRef am sym monos ifaces argVecs
+        resolveRLocalSite prog implTable name tagRef am encl sym monos ifaces argVecs
     _ => ()
   resolveRLocalSites prog implTable rest
 
@@ -19661,8 +19690,8 @@ resolveRLocalSites prog implTable ((PendingEntry name tagRef am _ kind loc)::res
 -- stamped the correct RKey<receiverHead> via resolveArgStamps.
 -- An ungrounded receiver (still a tyvar) → leave it.  The
 -- RLocal-vs-ordinary-dispatch split keys the genuine case off the receiver.
-resolveRLocalSite : List Decl -> ImplBuckets -> String -> Ref Route -> Mono -> String -> List Mono -> List IfaceRef -> List (List Mono) -> Unit
-resolveRLocalSite prog implTable name tagRef am sym monos ifaces argVecs = match headTyconMono am
+resolveRLocalSite : List Decl -> ImplBuckets -> String -> Ref Route -> Mono -> String -> String -> List Mono -> List IfaceRef -> List (List Mono) -> Unit
+resolveRLocalSite prog implTable name tagRef am encl sym monos ifaces argVecs = match headTyconMono am
   -- S2 (THE INVERSION): route by SHADOW KIND first, receiver second.
   --   * DEFINER shadow (the name is this module's own top-level fn) → the standalone,
   --     UNCONDITIONALLY.  The impl universe is not consulted; a grounded head with a live
@@ -19691,11 +19720,11 @@ resolveRLocalSite prog implTable name tagRef am sym monos ifaces argVecs = match
   Some tag => stampRLocalOrFallback
     (not (isDefinerShadow name) && ieImplExistsForHead perRun.value.bodyImplEnvRef.value name tag)
     tagRef sym
-    (routesOfMonosTopV prog implTable monos ifaces argVecs)
+    (routesOfMonosTopV prog implTable encl monos ifaces argVecs)
   -- An UNGROUNDED definer-shadow receiver keeps the old default (RLocal → standalone);
   -- other (importer) ungrounded sites stay untouched (deferred/polymorphic).
   None => if contains name perRun.value.definerShadowNamesRef.value then
-    tagRef := (RLocal sym (routesOfMonosTopV prog implTable monos ifaces argVecs))
+    tagRef := (RLocal sym (routesOfMonosTopV prog implTable encl monos ifaces argVecs))
   else ()
 
 -- C5: hasImpl ⇒ genuine method; route already correct (RNone for arg-tag eval,
@@ -24801,12 +24830,12 @@ findImplEntryGo ((ImplEntry tag2 ms hty reqs itys ifn)::rest) iface tag m
 -- fill each constrained-fn call site's routes: one route per constraint mono.  A
 -- mono pinned to a concrete head → RKey; still a constraint variable (a nested
 -- constrained call) → RDict; otherwise RNone.
-resolveDictApps : List Decl -> ImplBuckets -> List (Ref (List Route), List Mono, List IfaceRef, List (List Mono), Option Loc) -> Unit
+resolveDictApps : List Decl -> ImplBuckets -> List PendingDictApp -> Unit
 resolveDictApps _ _ [] = goalSiteLoc := None
-resolveDictApps prog implTable ((routesRef, monos, ifaces, argVecs, loc)::rest) =
-  goalSiteLoc := loc
-  let routes = routesOfMonosTopV prog implTable monos ifaces argVecs
-  routesRef := routes
+resolveDictApps prog implTable (app::rest) =
+  goalSiteLoc := app.pdaLoc
+  let routes = routesOfMonosTopV prog implTable app.pdaEncl app.pdaMonos app.pdaIfaces app.pdaArgVecs
+  app.pdaRoutesRef := routes
   resolveDictApps prog implTable rest
 
 -- Caller-supplied policy for the UNDETERMINED arm of routeOf (the constraint var is
@@ -25209,17 +25238,17 @@ undeterminedRoute implTable (CountImpls prog iface) =
 -- Slot COUNT, slot ORDER and the number of Routes produced are unchanged either way,
 -- which is what still keeps this arity-neutral.  The self-compile fixpoint proves
 -- absence-of-regression, never correctness of the new path — as before.
-routesOfMonosTopV : List Decl -> ImplBuckets -> List Mono -> List IfaceRef -> List (List Mono) -> List Route
+routesOfMonosTopV : List Decl -> ImplBuckets -> String -> List Mono -> List IfaceRef -> List (List Mono) -> List Route
 -- no vectors at all (a caller with nothing to offer) ⇒ the scalar router, unchanged.
-routesOfMonosTopV prog implTable monos ifaces [] =
-  routesOfMonosTop prog implTable monos ifaces
-routesOfMonosTopV _ _ [] _ _ = []
-routesOfMonosTopV prog implTable (m::rest) [] (_::vs) =
-  routeOf implTable ifaceRefNone "" (CountImpls prog "") m ::
-    routesOfMonosTopV prog implTable rest [] vs
-routesOfMonosTopV prog implTable (m::rest) (iface::ifacesRest) (v::vs) =
-  topRouteV prog implTable iface m v ::
-    routesOfMonosTopV prog implTable rest ifacesRest vs
+routesOfMonosTopV prog implTable encl monos ifaces [] =
+  routesOfMonosTop prog implTable encl monos ifaces
+routesOfMonosTopV _ _ _ [] _ _ = []
+routesOfMonosTopV prog implTable encl (m::rest) [] (_::vs) =
+  routeOf implTable ifaceRefNone encl (CountImpls prog "") m ::
+    routesOfMonosTopV prog implTable encl rest [] vs
+routesOfMonosTopV prog implTable encl (m::rest) (iface::ifacesRest) (v::vs) =
+  topRouteV prog implTable encl iface m v ::
+    routesOfMonosTopV prog implTable encl rest ifacesRest vs
 
 -- one slot.  A multi-argument predicate hands `routeOfD` the goal TAIL (arg 0 stays in
 -- `routeOfD`'s own `m`, exactly as EKNestedTop documents), so the selector sees
@@ -25230,11 +25259,11 @@ routesOfMonosTopV prog implTable (m::rest) (iface::ifacesRest) (v::vs) =
 -- slot the mono of `b`, while the predicate's arg 0 is `a`'s): both slots are evidence
 -- for the SAME predicate, so both must select on the same goal.  That is what
 -- `vectorGoal` returning the head separately encodes; the scalar arm keeps [m].
-topRouteV : List Decl -> ImplBuckets -> IfaceRef -> Mono -> List Mono -> Route
-topRouteV prog implTable iface m goals = match vectorGoal iface goals
+topRouteV : List Decl -> ImplBuckets -> String -> IfaceRef -> Mono -> List Mono -> Route
+topRouteV prog implTable encl iface m goals = match vectorGoal iface goals
   Some (g0, gs) =>
-    routeOfD implTable iface "" (CountImpls prog iface.irName) g0 gs 0 0
-  None => routeOf implTable iface "" (CountImpls prog iface.irName) m
+    routeOfD implTable iface encl (CountImpls prog iface.irName) g0 gs 0 0
+  None => routeOf implTable iface encl (CountImpls prog iface.irName) m
 
 -- `Some (arg0, tail)` exactly when the widening applies: a NON-EMPTY argument vector
 -- under a KNOWN interface.  Everything else is None ⇒ the scalar route.
@@ -25255,14 +25284,14 @@ vectorGoal : IfaceRef -> List Mono -> Option (Mono, List Mono)
 vectorGoal _ [] = None
 vectorGoal iface (g0::gs) = if iface.irName == "" then None else Some (g0, gs)
 
-routesOfMonosTop : List Decl -> ImplBuckets -> List Mono -> List IfaceRef -> List Route
-routesOfMonosTop _ _ [] _ = []
-routesOfMonosTop prog implTable (m::rest) [] =
-  routeOf implTable ifaceRefNone "" (CountImpls prog "") m ::
-    routesOfMonosTop prog implTable rest []
-routesOfMonosTop prog implTable (m::rest) (iface::ifacesRest) =
-  routeOf implTable iface "" (CountImpls prog iface.irName) m ::
-    routesOfMonosTop prog implTable rest ifacesRest
+routesOfMonosTop : List Decl -> ImplBuckets -> String -> List Mono -> List IfaceRef -> List Route
+routesOfMonosTop _ _ _ [] _ = []
+routesOfMonosTop prog implTable encl (m::rest) [] =
+  routeOf implTable ifaceRefNone encl (CountImpls prog "") m ::
+    routesOfMonosTop prog implTable encl rest []
+routesOfMonosTop prog implTable encl (m::rest) (iface::ifacesRest) =
+  routeOf implTable iface encl (CountImpls prog iface.irName) m ::
+    routesOfMonosTop prog implTable encl rest ifacesRest
 
 -- the undetermined-constraint resolution: count impls of [iface] in [prog].
 routeUndeterminedTop : List Decl -> ImplBuckets -> String -> Route
@@ -25572,20 +25601,22 @@ argReqRoute implTable iface encl subst (arg::more) prevSize spent =
 -- → RKey (eval supplies a literal VDict for the body's `empty`/… to read); a
 -- constraint variable still (the caller is itself constrained) → RDict forwarding
 -- the caller's dict.  Mirrors resolveDictApps; runs after inference.
-resolveMethodDicts : ImplBuckets -> List (Ref (List Route), List PredicateSlot) -> Unit
+resolveMethodDicts : ImplBuckets -> List PendingMethodDict -> Unit
 resolveMethodDicts _ [] = ()
-resolveMethodDicts implTable ((methodRef, slots)::rest) =
-  methodRef := methodPredicateRoutes implTable slots
+resolveMethodDicts implTable (pending::rest) =
+  pending.pmdRoutesRef := methodPredicateRoutes implTable pending.pmdEncl pending.pmdSlots
   resolveMethodDicts implTable rest
 
-methodPredicateRoutes : ImplBuckets -> List PredicateSlot -> List Route
-methodPredicateRoutes _ [] = []
-methodPredicateRoutes implTable (slot::rest) =
-  methodPredicateRoute implTable slot :: methodPredicateRoutes implTable rest
+methodPredicateRoutes : ImplBuckets -> String -> List PredicateSlot -> List Route
+methodPredicateRoutes _ _ [] = []
+methodPredicateRoutes implTable encl (slot::rest) =
+  methodPredicateRoute implTable encl slot ::
+    methodPredicateRoutes implTable encl rest
 
-methodPredicateRoute : ImplBuckets -> PredicateSlot -> Route
-methodPredicateRoute implTable slot = match slot.psArgs
-  PSArgsKnown (g0::gs) => routeOfD implTable slot.psIface "" KeepNone g0 gs 0 0
+methodPredicateRoute : ImplBuckets -> String -> PredicateSlot -> Route
+methodPredicateRoute implTable encl slot = match slot.psArgs
+  PSArgsKnown (g0::gs) =>
+    routeOfD implTable slot.psIface encl KeepNone g0 gs 0 0
   _ => RNone
 
 -- ── recursive dict-app realization (self/mutual recursion) ──────────────────
@@ -27397,7 +27428,8 @@ inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (Metho
   -- body of a graded method must see its Row slots as rows, not as tyvars.
   let st = sigToSchemeTvsIn dscope mty
   let ids = methodConstraintSlotIds typarams mty (snd st)
-  perRun.value.currentFn := ""
+  let savedCurrentFn = perRun.value.currentFn.value
+  perRun.value.currentFn := mname
   perRun.value.inRigidityBodyRef := True
   -- #837: the schemeObligationsRef snapshot/restore window is RETIRED — a where-helper
   -- named like a top-level binding can no longer leak, now that registration/lookup key
@@ -27486,7 +27518,8 @@ inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (Metho
     typarams
     mty
     (instantiateNamedMonos (snd st) (snd inst))
-  registerSlotPredGivens mname 0 slots
+  let _ = registerSlotPredGivens mname 0 slots
+  perRun.value.currentFn := savedCurrentFn
 inferDefaultMethod _ _ _ _ _ = ()
 
 instantiateNamedMonos : List (String, Mono) -> List (Int, Mono) -> List (String, Mono)
@@ -31882,7 +31915,7 @@ numCallObls ((iface, monos, loc)::rest) = match (iface.irName, monos)
   ("Num", [mono]) => mkMethodOccObl (builtinIfaceRef BNum) ["a"] (TyVar "a") mono PNumLit loc :: numCallObls rest
   _ => numCallObls rest
 
-numDictObls : List (Ref (List Route), List Mono, List IfaceRef, List (List Mono), Option Loc) -> List UObligation
+numDictObls : List PendingDictApp -> List UObligation
 -- #1155: the loc comes from the ENTRY's own snapshot, not from the ambient
 -- `currentLoc`.  This runs at a generalized group close, well after inference left
 -- the call site, so `currentLoc` named whichever ELoc happened to be entered last.
@@ -31894,7 +31927,9 @@ numDictObls : List (Ref (List Route), List Mono, List IfaceRef, List (List Mono)
 numDictObls [] = []
 -- B-4b-iii: SPELLING consumer of the widened route carrier — the `"Num"` test is a
 -- name test against the prelude spelling, unchanged, so `.irName` is projected here.
-numDictObls ((_, monos, ifaces, _, loc)::rest) = flatMap (p => if fst p == "Num" then [mkMethodOccObl (builtinIfaceRef BNum) ["a"] (TyVar "a") (snd p) PNumLit loc] else []) (zipL (map (i => i.irName) ifaces) monos)
+numDictObls (app::rest) = flatMap (p => if fst p == "Num" then [
+    mkMethodOccObl (builtinIfaceRef BNum) ["a"] (TyVar "a") (snd p) PNumLit app.pdaLoc
+  ] else []) (zipL (map (i => i.irName) app.pdaIfaces) app.pdaMonos)
   ++ numDictObls rest
 
 -- #23 (two-hop forward): the impl-obligation-shaped entries for EVERY iface (not
@@ -34157,9 +34192,9 @@ lookupIfaceById id (o::rest)
 -- Scan pendingDictApps for [id] at a slot (bare-TVar mono) whose iface is non-empty.
 -- B-4b-iii: SPELLING consumer of the widened route carrier — it RETURNS a bare name,
 -- so `.irName` is projected at the one read and `ifaceAtMonoId` keeps its `List String`.
-ifaceFromDictApps : Int -> List (Ref (List Route), List Mono, List IfaceRef, List (List Mono), Option Loc) -> String
+ifaceFromDictApps : Int -> List PendingDictApp -> String
 ifaceFromDictApps _ [] = ""
-ifaceFromDictApps id ((_, monos, ifaces, _, _)::rest) = match ifaceAtMonoId id monos (map (i => i.irName) ifaces)
+ifaceFromDictApps id (app::rest) = match ifaceAtMonoId id app.pdaMonos (map (i => i.irName) app.pdaIfaces)
   Some s => s
   None => ifaceFromDictApps id rest
 
