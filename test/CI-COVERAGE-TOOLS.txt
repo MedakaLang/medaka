@@ -258,6 +258,13 @@ scripts/medaka-mcp-wrapper     stdio launch shim that .mcp.json execs into `meda
 scripts/pr                     the verified PR-lifecycle helper (#1414): `body`/`watch`/`enqueue`/
                                `complete` over gh — a dev tool, not a gate. Its test
                                (test/pr_helper_test.sh) is in the `tools` shard and exercises it.
+scripts/cost_baseline_land     the BOX-SIDE half of #2180's baseline auto-advance: from cron on
+                               the build box, finds nightly's pushed cost-baseline-autoadvance-*
+                               branches, regenerates ci.yml in its own clone, opens the PR and
+                               enqueues it via scripts/pr.sh — the two steps GitHub Actions may
+                               not take on this repo. An orchestration action, like
+                               gate_cost_collect: pushes and opens PRs, asserts nothing about
+                               the compiler. Never run by CI.
 scripts/mutation_transaction   one-source expected-red transaction helper; its focused test
                                runs unguarded in the soundness job.
 scripts/sprint-disjoint        sprint-orchestration evidence tool: mechanical disjointness
