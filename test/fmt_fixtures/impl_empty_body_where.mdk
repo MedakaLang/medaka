@@ -1,0 +1,5 @@
+data Box = Box
+
+impl Sz Box
+
+main = println (sz Box * 100 + sz Cup)

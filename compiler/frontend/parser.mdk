@@ -3269,7 +3269,22 @@ dataAfterEq tyName TIndent = do
   pure (vs, derives)
 dataAfterEq tyName _ = do
   vs <- dataVariantsN tyName
-  pure (vs, [])
+  t <- peekP
+  derives <- inlineTrailingDerives t
+  pure (vs, derives)
+
+-- A one-line `data X = A | B` may still carry `deriving (…)` on its own,
+-- more-indented, next line — the lexer wraps that as an INDENT/DEDENT span
+-- (mirroring the block form's own-line deriving) even though the header
+-- itself never opened a block.
+inlineTrailingDerives : Token -> Parser (List DeriveRef)
+inlineTrailingDerives TIndent = do
+  advance
+  derives <- derivingClause
+  skipNewlines
+  expectTok TDedent
+  pure derives
+inlineTrailingDerives _ = pure []
 
 -- Consume a leading `|` if present (the new multiline form's per-variant pipe
 -- also prefixes the first variant); a no-op otherwise.

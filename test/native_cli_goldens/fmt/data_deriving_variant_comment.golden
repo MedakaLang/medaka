@@ -1,0 +1,23 @@
+-- #2403: a single-constructor record `data` decl whose only comment sits on
+-- the VARIANT's own line, alongside a `deriving` clause, is a fixed point of
+-- `fmt` from the first pass on. It used to be a true 2-cycle: the comment was
+-- an INTERIOR line of the decl, which routed the render to
+-- `printNamedFieldData`'s brace-on-header form, which put the comment back on
+-- the decl's FIRST line, which routed the next pass back to `printDecl`.
+data Boxed =
+  | { x : Int }  -- anonymous ctor
+  deriving (Debug)
+
+data Named =
+  | Named { y : Int }  -- explicit ctor, same shape
+  deriving (Debug)
+
+-- The collapsed one-line spelling converges to the same form in ONE pass —
+-- true of THIS shape (see printDataDeclCommented), not a general property.
+-- A multi-line `data` whose only comment sits on the `deriving` line DOES
+-- reflow flat on pass 1 (the generic decl-trailing-comment path, not
+-- `vcommentsFor`) and re-block on pass 2, once the comment lands on the same
+-- source line as a variant again.
+data Flat =
+  | { z : Int }  -- collapsed spelling
+  deriving (Debug)

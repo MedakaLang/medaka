@@ -36186,8 +36186,166 @@ foldModules wantData wantAll worker collect base baseSeed coreV depEnv accData a
 -- stamped decls back out is the one change that would make that golden's move
 -- non-additive.  A fourth driver must therefore remember to stamp — hence the
 -- identical, greppable `#1110` line at the head of each caller below.
+-- ── core-check memo ──────────────────────────────────────────────────────────
+-- The prelude (runtime + core) is typechecked at the head of EVERY driver entry
+-- (`checkModulesPreamble` below): `medaka check`, the LSP on each didChange, and
+-- the playground on each keystroke all pay it again for the same two decl lists.
+-- Measured natively, a warm single-file analyze is ~52ms of which ~50ms is this
+-- pass.  So the core pass is memoized — keyed by the prelude trees' identity,
+-- which a caller hands down EXPLICITLY as the desugar cache's generation pair
+-- (`desugaredPreludeKey`, frontend/desugar_cache.mdk; the K-suffixed entry
+-- points below).  An unkeyed call (`None`) never hits and never stores: the
+-- AST carries mutable Refs and no equality, so identity cannot be recovered
+-- from the decls themselves, and a caller that hands in a MODIFIED prelude
+-- (`autoPrintPinCore`) must not be able to hit by accident.  A hit RESTORES
+-- what the pass produced instead of recomputing it:
+--   * `coreSchemes` (the return value);
+--   * `crossRun` — the core pass fills the universe accumulators and, right after
+--     it, `coreSchemeObligationsRef`; a hit installs a DETACHED copy of the
+--     snapshot (fresh Refs, `copyCrossRun`) so the user modules that follow
+--     mutate the copy and the memo stays what the miss left;
+--   * the `driverState` fields the core pass writes and a later module could read
+--     before overwriting them (`restoreCoreDriverFields`).
+-- Everything user-dependent that the preamble installs BEFORE the core pass
+-- (graph indexes, `declEnvs`, effect domains, abstract record types) is still
+-- derived on every call; the memo covers exactly the `checkModuleFull` of core
+-- and the one line after it.  `perRun` is re-minted on a hit: every module check
+-- opens with `resetState ()`, so nothing downstream reads the residue either way.
+-- One entry only (the prelude does not change under a process); a different
+-- prelude simply misses and replaces it.
+data CoreCheckMemo =
+  | CoreCheckMemo {
+      ccmKey : (Int, Int),
+      ccmCoreSchemes : List (String, Scheme),
+      ccmCrossRun : CrossRun,
+      ccmDriver : DriverState,
+    }
+
+coreCheckMemoRef : Ref (Option CoreCheckMemo)
+coreCheckMemoRef = Ref None
+
+coreCheckMemoHit : Option (Int, Int) -> Option CoreCheckMemo
+coreCheckMemoHit None = None
+coreCheckMemoHit (Some key) = match !coreCheckMemoRef
+  None => None
+  Some m => if m.ccmKey == key then Some m else None
+
+-- A detached copy: every field re-minted as a fresh Ref over the same (immutable)
+-- value, so neither side's later writes reach the other.  The constructor keeps
+-- this complete — a new CrossRun field cannot be left out of the copy.
+copyCrossRun : CrossRun -> CrossRun
+copyCrossRun c = CrossRun {
+  universeIfaceMethodsRef = Ref c.universeIfaceMethodsRef.value,
+  universeFunNamesRef = Ref c.universeFunNamesRef.value,
+  universeMethodIfaceParamsRef = Ref c.universeMethodIfaceParamsRef.value,
+  universeMethodIdentsRef = Ref c.universeMethodIdentsRef.value,
+  universeMethodCollidedRef = Ref c.universeMethodCollidedRef.value,
+  universeMethodDispatchIdxByIdRef = Ref c.universeMethodDispatchIdxByIdRef.value,
+  universeRecordByName = Ref c.universeRecordByName.value,
+  universeRecordIdentsRef = Ref c.universeRecordIdentsRef.value,
+  universeRecordCollidedRef = Ref c.universeRecordCollidedRef.value,
+  universeDataEnv = Ref c.universeDataEnv.value,
+  universeCtorIdentsRef = Ref c.universeCtorIdentsRef.value,
+  universeCtorCollidedRef = Ref c.universeCtorCollidedRef.value,
+  builtinClassesRef = Ref c.builtinClassesRef.value,
+  crossModuleFunConstraintsRef = Ref c.crossModuleFunConstraintsRef.value,
+  crossModuleFunConstraintsQualRef = Ref c.crossModuleFunConstraintsQualRef.value,
+  crossModuleFunConstraintIfacesRef = Ref c.crossModuleFunConstraintIfacesRef.value,
+  crossModuleFunConstraintIfacesQualRef = Ref c.crossModuleFunConstraintIfacesQualRef.value,
+  crossModuleFunConstraintArgsQualRef = Ref c.crossModuleFunConstraintArgsQualRef.value,
+  crossModuleFunConstraintDeclaredRef = Ref c.crossModuleFunConstraintDeclaredRef.value,
+  crossModuleFunConstraintDeclaredQualRef = Ref c.crossModuleFunConstraintDeclaredQualRef.value,
+  crossModuleMethodConstraintsRef = Ref c.crossModuleMethodConstraintsRef.value,
+  crossModuleMethodConstraintsQualRef = Ref c.crossModuleMethodConstraintsQualRef.value,
+  coreSchemeObligationsRef = Ref c.coreSchemeObligationsRef.value,
+  crossModuleSchemeOblsQualRef = Ref c.crossModuleSchemeOblsQualRef.value,
+}
+
+-- Same shape for the driver record (values only; the memo reads the fields it
+-- restores out of this copy).
+copyDriverState : DriverState -> DriverState
+copyDriverState d = DriverState {
+  effectDomains = Ref d.effectDomains.value,
+  graphMethodExportsRef = Ref d.graphMethodExportsRef.value,
+  graphIfaceMethodsRef = Ref d.graphIfaceMethodsRef.value,
+  graphCtorExportsRef = Ref d.graphCtorExportsRef.value,
+  declEnvsRef = Ref d.declEnvsRef.value,
+  abstractRecordTypesRef = Ref d.abstractRecordTypesRef.value,
+  argDispatchIdxByIdRef = Ref d.argDispatchIdxByIdRef.value,
+  dictEligibleRef = Ref d.dictEligibleRef.value,
+  dictEligibleSetRef = Ref d.dictEligibleSetRef.value,
+  mangledShadowMapRef = Ref d.mangledShadowMapRef.value,
+  mangledFunDefsPresentRef = Ref d.mangledFunDefsPresentRef.value,
+  userIfaceNamesRef = Ref d.userIfaceNamesRef.value,
+  coherenceUserDecls = Ref d.coherenceUserDecls.value,
+  stdlibOwnedModsRef = Ref d.stdlibOwnedModsRef.value,
+  flatEntryIsStdlibRef = Ref d.flatEntryIsStdlibRef.value,
+  builtinExternNamesRef = Ref d.builtinExternNamesRef.value,
+  superDeclsRef = Ref d.superDeclsRef.value,
+  standaloneValuesRef = Ref d.standaloneValuesRef.value,
+  methodDispatchIdxByIdRef = Ref d.methodDispatchIdxByIdRef.value,
+  matchOracle = Ref d.matchOracle.value,
+  matchWarnings = Ref d.matchWarnings.value,
+  promotionHarvestRef = Ref d.promotionHarvestRef.value,
+  mainSchemeRef = Ref d.mainSchemeRef.value,
+  sigNameSetRef = Ref d.sigNameSetRef.value,
+  sigTyMapRef = Ref d.sigTyMapRef.value,
+  implInferEnabled = Ref d.implInferEnabled.value,
+  localPinDisabledRef = Ref d.localPinDisabledRef.value,
+}
+
+-- The driver fields the core pass (checkBodyImpl's Module arm and what it calls)
+-- writes: the extern-name map it accumulates, and the per-module cells it leaves
+-- holding core's values until the next module overwrites them.  Restored on a hit
+-- so a hit leaves the driver exactly where a miss would.
+restoreCoreDriverFields : DriverState -> Unit
+restoreCoreDriverFields d =
+  driverState.value.builtinExternNamesRef := d.builtinExternNamesRef.value
+  driverState.value.superDeclsRef := d.superDeclsRef.value
+  driverState.value.standaloneValuesRef := d.standaloneValuesRef.value
+  driverState.value.methodDispatchIdxByIdRef := d.methodDispatchIdxByIdRef.value
+  driverState.value.sigNameSetRef := d.sigNameSetRef.value
+  driverState.value.sigTyMapRef := d.sigTyMapRef.value
+  driverState.value.matchOracle := d.matchOracle.value
+  driverState.value.matchWarnings := d.matchWarnings.value
+  driverState.value.implInferEnabled := d.implInferEnabled.value
+
+-- The core pass proper, memoized.  Runs `checkModuleFull` over core and snapshots
+-- `coreSchemeObligationsRef` on a miss; installs the snapshot on a hit.
+checkCoreMemoized : Option (Int, Int) -> List Decl -> List (String, Scheme) -> List (String, Scheme)
+checkCoreMemoized key coreDecls runtimeSeed = match coreCheckMemoHit key
+  Some m =>
+    crossRun := copyCrossRun m.ccmCrossRun
+    perRun := freshPerRun ()
+    let _ = restoreCoreDriverFields m.ccmDriver
+    m.ccmCoreSchemes
+  None =>
+    let coreSchemes = checkModuleFull runtimeSeed [] coreDecls
+    -- #673: snapshot core's OWN obligations NOW — perRun.schemeObligationsRef still holds core's
+    -- bindings (the next module's resetState has not run yet).  This is the source-exact store a
+    -- plain-EVar use of a PRELUDE constrained fn (`println`) reads in instantiateVarTracked, so
+    -- its Display obligation lands on the located check path instead of being dropped.
+    -- #837: coreSchemeObligationsRef is NAME-keyed (declaredCrossModuleObls reads it by
+    -- bare cross-module name); drop the binding-id component of each (name, id) key.
+    crossRun.value.coreSchemeObligationsRef := (omFromPairs (map (kv => (fst (fst kv), snd kv)) perRun.value.schemeObligationsRef.value) omEmpty)
+    let _ = match key
+      None => ()
+      Some k => coreCheckMemoRef := Some (CoreCheckMemo {
+        ccmKey = k,
+        ccmCoreSchemes = coreSchemes,
+        ccmCrossRun = copyCrossRun crossRun.value,
+        ccmDriver = copyDriverState driverState.value,
+      })
+    coreSchemes
+
 checkModulesPreamble : List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), List (String, Scheme))
 checkModulesPreamble runtimeDecls coreDecls modules =
+  checkModulesPreambleK None runtimeDecls coreDecls modules
+
+-- `preludeKey`: the desugar-cache generation pair identifying `runtimeDecls` /
+-- `coreDecls` (see the core-check memo above); `None` = unkeyed, no memo.
+checkModulesPreambleK : Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), List (String, Scheme))
+checkModulesPreambleK preludeKey runtimeDecls coreDecls modules =
   let _ = resetCrossModuleState ()
   -- #1111 A-2.5b: derive the graph's method-identity index over the whole
   -- (already-stamped) graph, before any module — including the core pass below — reads
@@ -36237,14 +36395,8 @@ checkModulesPreamble runtimeDecls coreDecls modules =
   -- NAMES, not its origins, so it is the same map either way.
   let runtimeSeed = externSchemes (externTyOriginScope coreDecls) runtimeDecls
   let _ = seedAbstractRecordTypes coreDecls modules
-  let coreSchemes = checkModuleFull runtimeSeed [] coreDecls
-  -- #673: snapshot core's OWN obligations NOW — perRun.schemeObligationsRef still holds core's
-  -- bindings (the next module's resetState has not run yet).  This is the source-exact store a
-  -- plain-EVar use of a PRELUDE constrained fn (`println`) reads in instantiateVarTracked, so
-  -- its Display obligation lands on the located check path instead of being dropped.
-  -- #837: coreSchemeObligationsRef is NAME-keyed (declaredCrossModuleObls reads it by
-  -- bare cross-module name); drop the binding-id component of each (name, id) key.
-  crossRun.value.coreSchemeObligationsRef := (omFromPairs (map (kv => (fst (fst kv), snd kv)) perRun.value.schemeObligationsRef.value) omEmpty)
+  -- the core pass, memoized under the caller's prelude key — see `checkCoreMemoized`.
+  let coreSchemes = checkCoreMemoized preludeKey coreDecls runtimeSeed
   (runtimeSeed, coreSchemes)
 
 -- worker: plain per-module typecheck (no diagnostics harvest, no accAll).  Surfaces
@@ -36512,11 +36664,18 @@ setMainSchemeIfEntry True schemes =
 export
 checkModulesDiags : List Decl -> List Decl -> List (String, List Decl) -> List (String, (List TcDiag, List TcDiag))
 checkModulesDiags runtimeDecls coreDecls0 modules0 =
+  checkModulesDiagsK None runtimeDecls coreDecls0 modules0
+
+-- `checkModulesDiags` with the prelude key for the core-check memo (see
+-- `checkCoreMemoized`); `None` = unkeyed, byte-identical to the wrapper above.
+export
+checkModulesDiagsK : Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> List (String, (List TcDiag, List TcDiag))
+checkModulesDiagsK preludeKey runtimeDecls coreDecls0 modules0 =
   -- #1110: acquire type-constructor identity over the whole graph before anything
   -- typechecks; the rebind shadows the raw params so no line below can read the
   -- unstamped tree.  See `checkModulesPreamble` for why it is here and not there.
   let (coreDecls, modules) = stampGraphTyOrigins coreDecls0 modules0
-  let (runtimeSeed, coreSchemes) = checkModulesPreamble runtimeDecls coreDecls modules
+  let (runtimeSeed, coreSchemes) = checkModulesPreambleK preludeKey runtimeDecls coreDecls modules
   -- #154 PR-C: cmDiagsWorker reads BOTH accData (buildOracle `prog ++ accData` +
   -- runFinalChecks) and accAll (checkModuleFullImpl implDecls + runFinalChecks), and both
   -- are order-observable (oracle first-wins, runFinalChecks scan order), so both concats
@@ -36599,7 +36758,11 @@ entryOwnSchemes (_::rest) = entryOwnSchemes rest
 -- and so is the whole-graph coherence prepend at the bottom.
 checkModulesEntryFull : List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), List TcDiag, List TcDiag)
 checkModulesEntryFull runtimeDecls coreDecls modules =
-  let (_, schemes, errs, warns) = checkModulesEntryFullSplit runtimeDecls coreDecls modules
+  checkModulesEntryFullK None runtimeDecls coreDecls modules
+
+checkModulesEntryFullK : Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), List TcDiag, List TcDiag)
+checkModulesEntryFullK preludeKey runtimeDecls coreDecls modules =
+  let (_, schemes, errs, warns) = checkModulesEntryFullSplitK preludeKey runtimeDecls coreDecls modules
   (schemes, errs, warns)
 
 -- S-full-env-scheme-entry (#1116): the SAME driver, but ALSO returning the
@@ -36620,13 +36783,15 @@ checkModulesEntryFull runtimeDecls coreDecls modules =
 -- re-checking or re-unification against `coreSchemes` happens here: the
 -- prelude list is carried out for LOOKUP only, alongside (never merged with)
 -- the module's own entry for the same bare name.
-checkModulesEntryFullSplit : List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), List (String, Scheme), List TcDiag, List TcDiag)
-checkModulesEntryFullSplit runtimeDecls coreDecls0 modules0 =
+-- `preludeKey`: the prelude key for the core-check memo (see `checkCoreMemoized`);
+-- `None` = unkeyed, no memo.
+checkModulesEntryFullSplitK : Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), List (String, Scheme), List TcDiag, List TcDiag)
+checkModulesEntryFullSplitK preludeKey runtimeDecls coreDecls0 modules0 =
   -- #1110: acquire type-constructor identity over the whole graph before anything
   -- typechecks; the rebind shadows the raw params so no line below can read the
   -- unstamped tree.  See `checkModulesPreamble` for why it is here and not there.
   let (coreDecls, modules) = stampGraphTyOrigins coreDecls0 modules0
-  let (runtimeSeed, coreSchemes) = checkModulesPreamble runtimeDecls coreDecls modules
+  let (runtimeSeed, coreSchemes) = checkModulesPreambleK preludeKey runtimeDecls coreDecls modules
   -- #154 PR-C: cmEntryWorker also routes through checkModuleFullDiags, reading BOTH
   -- accData and accAll exactly as cmDiagsWorker does → both concats RETAINED (byte-identity
   -- witness, not the perf-gate path).
@@ -36788,8 +36953,17 @@ checkOneScheme runtimeDecls coreDecls (rootId, prog) =
 -- own-schemes-only report is deliberate and unchanged.
 export
 checkOneSchemeFull : List Decl -> List Decl -> (String, List Decl) -> (List (String, Scheme), List (String, Scheme))
-checkOneSchemeFull runtimeDecls coreDecls (rootId, prog) =
-  let (coreSchemes, schemes, _, _) = checkModulesEntryFullSplit runtimeDecls coreDecls [(rootId, prog)]
+checkOneSchemeFull runtimeDecls coreDecls prog =
+  checkOneSchemeFullK None runtimeDecls coreDecls prog
+
+-- `checkOneSchemeFull` with the prelude key for the core-check memo (see
+-- `checkCoreMemoized`): pass `Some (desugaredPreludeKey runtimeSrc,
+-- desugaredPreludeKey coreSrc)` when `runtimeDecls`/`coreDecls` are exactly what
+-- `desugaredPrelude` returned for those sources; `None` otherwise.
+export
+checkOneSchemeFullK : Option (Int, Int) -> List Decl -> List Decl -> (String, List Decl) -> (List (String, Scheme), List (String, Scheme))
+checkOneSchemeFullK preludeKey runtimeDecls coreDecls (rootId, prog) =
+  let (coreSchemes, schemes, _, _) = checkModulesEntryFullSplitK preludeKey runtimeDecls coreDecls [(rootId, prog)]
   (coreSchemes, schemes)
 
 -- diagnostics-returning sibling of `checkOneScheme`, matching `checkProgramDiags`'s
@@ -36797,8 +36971,15 @@ checkOneSchemeFull runtimeDecls coreDecls (rootId, prog) =
 -- shape change (this slice's own acceptance bar — see the packet).
 export
 checkOneDiags : List Decl -> List Decl -> (String, List Decl) -> (List TcDiag, List TcDiag)
-checkOneDiags runtimeDecls coreDecls (rootId, prog) =
-  let (_, errs, warns) = checkModulesEntryFull runtimeDecls coreDecls [(rootId, prog)]
+checkOneDiags runtimeDecls coreDecls prog =
+  checkOneDiagsK None runtimeDecls coreDecls prog
+
+-- `checkOneDiags` with the prelude key for the core-check memo — same contract as
+-- `checkOneSchemeFullK`.
+export
+checkOneDiagsK : Option (Int, Int) -> List Decl -> List Decl -> (String, List Decl) -> (List TcDiag, List TcDiag)
+checkOneDiagsK preludeKey runtimeDecls coreDecls (rootId, prog) =
+  let (_, errs, warns) = checkModulesEntryFullK preludeKey runtimeDecls coreDecls [(rootId, prog)]
   (errs, warns)
 
 -- `checkOneDiags` for a SYNTHETIC program — one this driver derived from the user's

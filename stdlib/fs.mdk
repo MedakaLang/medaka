@@ -22,7 +22,7 @@ import string.{contains}
    seconds since the Unix epoch. -}
 public export data FileStat =
   | FileStat { size : Int, isDir : Bool, isFile : Bool, mtime : Float }
-deriving (Eq, Debug)
+  deriving (Eq, Debug)
 
 {- | The metadata of a path as a `FileStat`, or `Err` when the path cannot
    be examined, for instance because it does not exist. -}

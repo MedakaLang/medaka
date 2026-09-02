@@ -139,7 +139,7 @@ public export data Token =
   | TDedent
   | TEof
   | TLexError String
-deriving (Eq)
+  deriving (Eq)
 
 -- String-bearing tokens use
 -- `debugStringLit` (the `%S`-style quoted/escaped form); ints use `intToString`.

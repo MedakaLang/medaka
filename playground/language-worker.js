@@ -18,8 +18,10 @@
 //
 // Cancellation: the worker processes messages sequentially and cannot interrupt
 // a running analyze, so the main thread coalesces (only the latest source is
-// ever queued) and ignores responses whose id is stale.  Re-instantiation per
-// analyze is cheap (runGuest re-instantiates the cached module).
+// ever queued) and ignores responses whose id is stale.  compile.mjs keeps ONE
+// compiler instance alive in this worker and re-enters its `mdk_main` export per
+// analyze, so the compiler's prelude parse/desugar memos survive between
+// keystrokes (a fresh instance per analyze re-derived them every time).
 //
 // NOTE (S3/S4): hover + completion do NOT run here.  They run on the MAIN THREAD
 // (see main.js): a full single-file typecheck recurses thousands of frames deep

@@ -1,4 +1,4 @@
-# Medaka for Haskell and OCaml Readers
+# For Haskell and OCaml Readers
 
 This is a delta sheet, not a second tutorial. It lists the places where Haskell or
 OCaml habits will mislead you in Medaka. For everything else, the
