@@ -692,7 +692,7 @@ defZipLocOr None p = jRange (declPosLine p - 1) 0 (declPosEndLine p - 1) 0
 -- `(preludeSchemes, ownSchemes)` separately; the flat env this file's three
 -- consumers want is `own ++ prelude`, OWN FIRST — `lookupSchemeL` (hover,
 -- inlayHints) is a linear first-match scan, so a buffer binding that shadows a
--- prelude name must come first or the prelude's scheme silently wins the get
+-- prelude name must come first or the prelude's scheme silently wins the lookup
 -- (#2054's shape on the Flat arm; see `checkModulesEntryFullSplit`'s note).
 -- Returns None when the buffer doesn't parse (the OCaml handlers bail the same
 -- way on a parse failure).
@@ -733,7 +733,7 @@ lookupSchemeL name ((n, s)::rest)
 
 -- ── textDocument/hover ──────────────────────────────────────────────────────
 -- handle_hover: identifier-at-cursor → checkProgram
--- env → get → a Hover whose contents is a Markdown MarkupContent rendering
+-- env → lookup → a Hover whose contents is a Markdown MarkupContent rendering
 --   ```medaka
 --   <name> : <type>
 --   ```
@@ -793,7 +793,7 @@ typeAtPoint runtimeSrc coreSrc filePath src line col = match identifierAt src li
           let pfx = sigLeadingEff name (unwrapDecls (parseResult src))
           Some (stringConcat [name, " : ", pfx, ppHoverScheme isLocal name sch])
 
--- The hover get env for the buffer.  A buffer with a non-core sibling import
+-- The hover lookup env for the buffer.  A buffer with a non-core sibling import
 -- goes through the multi-module project pipeline (loads the import graph; the
 -- entry's own schemes are returned and its locals + import-scoped seed land in the
 -- hover side-channels), so imported names resolve.  A single-file buffer keeps the
@@ -842,7 +842,7 @@ hoverScheme name env = match lookupSchemeL name env
 -- (own top-level ++ the WHOLE prelude) first, so a local binder whose bare name
 -- collides with a prelude standalone — `let count = 5` against the prelude's
 -- `count : Foldable b => (a -> Bool) -> b a -> Int` — could never answer: the
--- prelude's scheme won the very first get, at every cursor position in the
+-- prelude's scheme won the very first lookup, at every cursor position in the
 -- buffer.
 --
 -- The fix is NOT a tier reorder.  Putting locals unconditionally first would
