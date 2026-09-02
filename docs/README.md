@@ -152,7 +152,7 @@ What's in the standard library, what's planned, module-by-module status.
 | [`EQ-DISPATCH-DESIGN.md`](../compiler/EQ-DISPATCH-DESIGN.md) | `==`/`/=` → `Eq` Dispatch (Option A) — Design + Blast-Radius Census | OPEN |
 | [`ERROR-QUALITY.md`](../compiler/ERROR-QUALITY.md) | ERROR-QUALITY.md | IMPLEMENTED |
 | [`FFI-ABI.md`](../compiler/FFI-ABI.md) | FFI ABI contract | — |
-| [`FMT-COMMENT-INTERLEAVING-DESIGN.md`](../compiler/FMT-COMMENT-INTERLEAVING-DESIGN.md) | FMT comment-interleaving design — fixing finding "L" | IMPLEMENTED |
+| [`FMT-COMMENT-INTERLEAVING-DESIGN.md`](../compiler/FMT-COMMENT-INTERLEAVING-DESIGN.md) | FMT comment placement — design | the design below replaced the 2026-07-01 line-index splice |
 | [`HELPER-CENSUS.md`](../compiler/HELPER-CENSUS.md) | compiler/ generic-helper census | PARTIAL |
 | [`MESSAGE-AUDIT.md`](../compiler/MESSAGE-AUDIT.md) | MESSAGE-AUDIT.md | PARTIAL |
 | [`MULTICLAUSE-EXHAUST-DESIGN.md`](../compiler/MULTICLAUSE-EXHAUST-DESIGN.md) | Multi-Clause Function Exhaustiveness — Design | IMPLEMENTED |

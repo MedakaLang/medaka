@@ -90,6 +90,10 @@ if grep -E '^wTrmcCtxRef[[:space:]]*[:=]' "$WASM_SRC" >/dev/null; then
   echo "FAIL H2B6-AUTHORITY-SET: retired trmc authority remains ambient"
   exit 1
 fi
+# The pins below are matched against a WHITESPACE-COLLAPSED copy of the source
+# (every run of spaces/newlines is one space), so `medaka fmt` re-wrapping a
+# long line does not read as the carrier having gone missing.
+WASM_FLAT="$(tr -s '[:space:]' ' ' < "$WASM_SRC")"
 for required in \
   'trmcCtx : Ref WTrmcCtx' \
   'trmcCtx = Ref WTrmcOff' \
@@ -100,7 +104,7 @@ for required in \
   'let savedTrmc = (progEmit prog).trmcCtx.value' \
   'let _ = setRef (progEmit prog).trmcCtx WTrmcOff' \
   'let _ = setRef (progEmit prog).trmcCtx savedTrmc'; do
-  grep -F -- "$required" "$WASM_SRC" >/dev/null || {
+  printf '%s' "$WASM_FLAT" | grep -F -- "$required" >/dev/null || {
     echo "FAIL H2B6-WTRMC-CARRIER: missing $required"
     exit 1
   }
@@ -123,12 +127,12 @@ done
   echo "FAIL H2B7-NAMED-WRAPPER-APPARATUS: lambda fixture must use Pair twice"
   exit 1
 }
-[ "$(grep -F 'match (progEmit prog).trmcCtx.value' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'match (progEmit prog).trmcCtx.value' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
   echo "FAIL H2B6-WTRMC-CARRIER: expected exactly two trmc readers"
   exit 1
 }
-[ "$(grep -F 'let _ = setRef (progEmit prog).trmcCtx WTrmcOff' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] &&
-  [ "$(grep -F 'let _ = setRef (progEmit prog).trmcCtx savedTrmc' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let _ = setRef (progEmit prog).trmcCtx WTrmcOff' | wc -l | tr -d '[:space:]')" -eq 2 ] &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let _ = setRef (progEmit prog).trmcCtx savedTrmc' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
   echo "FAIL H2B6-WTRMC-CLEAR-ROUTES: expected two independent-function clears/restores"
   exit 1
 }
