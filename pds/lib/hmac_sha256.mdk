@@ -20,7 +20,8 @@ digestBytes = 32
 
 fillKeyPad : Array Int -> Array Int -> Int -> Int -> Unit
 fillKeyPad key out pad i =
-  if i >= keyBytes then ()
+  if i >= keyBytes then
+    ()
   else
     let () = A.setInPlace i (bitXor key[i] pad) out
     fillKeyPad key out pad (i + 1)
@@ -33,7 +34,8 @@ keyPad key pad =
 
 copyBytes : Array Int -> Array Int -> Int -> Int -> Unit
 copyBytes input out offset i =
-  if i >= arrayLength input then ()
+  if i >= arrayLength input then
+    ()
   else
     let () = A.setInPlace (offset + i) input[i] out
     copyBytes input out offset (i + 1)
@@ -51,7 +53,8 @@ joined prefix suffix =
 export
 hmacSha256FixedKey : Array Int -> Array Int -> Array Int
 hmacSha256FixedKey key message =
-  if arrayLength key /= keyBytes then panic "hmac_sha256: expected a 32-byte key"
+  if arrayLength key /= keyBytes then
+    panic "hmac_sha256: expected a 32-byte key"
   else
     let inner = sha256FixedBytes (joined (keyPad key 0x36) message)
     let outerInput = joined (keyPad key 0x5c) inner

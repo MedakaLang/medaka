@@ -14,10 +14,11 @@ restampSeverity sev f =
 
 -- CONTROL: a `&&`/`||` continuation-op chain keeps its head on the `=` line and
 -- breaks at the leading operators — it must NOT drop below `=`.
-ruleActiveFixable only disable r = r.enabled
-  && (isEmptyL only || contains r.name only)
-  && not (contains r.name disable)
-  && ruleHasFixer r
+ruleActiveFixable only disable r =
+  r.enabled
+    && (isEmptyL only || contains r.name only)
+    && not (contains r.name disable)
+    && ruleHasFixer r
 
 -- Match-arm body: break at `=>`, the arm body drops below on its own line.
 classifyArm x = match x

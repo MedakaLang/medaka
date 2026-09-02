@@ -1,5 +1,5 @@
 # META
-source_lines=1519
+source_lines=1669
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/doc.mdk — the native `medaka doc` documentation extractor.
@@ -116,7 +116,7 @@ ppTyP p (TyEffect effs tail t) =
 -- Intentional cross-file duplicate of printer.mdk's `ppTyPrec` clause; not
 -- consolidating (same divergent-by-design printer trio as `ppEffAtomDoc` below).
 -- lint-disable-next-line rule-duplicate-body
-ppTyP _ (TyRow [] (a::b::rest) _) = "(\{joinWith " | " (a :: b::rest)})"
+ppTyP _ (TyRow [] (a :: b :: rest) _) = "(\{joinWith " | " (a :: b :: rest)})"
 -- A bare row atom (#997) is already atomic (no wrapped type), so — unlike
 -- `TyEffect` above — it never needs precedence-parens at any `p`.
 ppTyP _ (TyRow effs tail _) = "<\{ppEffInsideDoc effs tail}>"
@@ -150,9 +150,10 @@ ppEffAtomDoc (l, Some s) = if s == "_" then l ++ " _" else "\{l} \{escStr s}"
 
 -- a constraint `Iface arg…` (mirror pp_c inside TyConstrained / pp_requires).
 ppConstrDoc : Constraint -> String
-ppConstrDoc (Constraint { constraintHead = iface, constraintArgs = args }) = match args
-  [] => iface
-  _ => "\{iface} \{joinWith " " (map (ppTyP 2) args)}"
+ppConstrDoc (Constraint { constraintHead = iface, constraintArgs = args }) =
+  match args
+    [] => iface
+    _ => "\{iface} \{joinWith " " (map (ppTyP 2) args)}"
 
 ppTyDoc : Ty -> String
 ppTyDoc t = ppTyP 0 t
@@ -235,9 +236,9 @@ expandComment c =
 
 expandBlockLines : Int -> Int -> List String -> List CommentRow
 expandBlockLines _ _ [] = []
-expandBlockLines baseLine i (line::rest) =
-  (baseLine + i, stringTrim line, baseLine) ::
-    expandBlockLines baseLine (i + 1) rest
+expandBlockLines baseLine i (line :: rest) =
+  (baseLine + i, stringTrim line, baseLine)
+    :: expandBlockLines baseLine (i + 1) rest
 
 -- splitNl → support/util.mdk (imported above; #242 dedup of the splitNl cluster).
 
@@ -252,16 +253,19 @@ buildCommentTbl comments = concatMapDoc expandComment comments
 
 concatMapDoc : (a -> List b) -> List a -> List b
 concatMapDoc _ [] = []
-concatMapDoc f (x::xs) = f x ++ concatMapDoc f xs
+concatMapDoc f (x :: xs) = f x ++ concatMapDoc f xs
 
 -- Find the LAST row whose line matches (mirrors Hashtbl.replace semantics:
 -- the last insertion for a key wins).  Returns (text, block).
 lookupLineLast : List CommentRow -> Int -> Option (String, Int)
 lookupLineLast tbl line = lookupLineLastGo tbl line None
 
-lookupLineLastGo : List CommentRow -> Int -> Option (String, Int) -> Option (String, Int)
+lookupLineLastGo : List CommentRow ->
+  Int ->
+  Option (String, Int) ->
+  Option (String, Int)
 lookupLineLastGo [] _ acc = acc
-lookupLineLastGo ((l, t, b)::rest) line acc =
+lookupLineLastGo ((l, t, b) :: rest) line acc =
   if l == line then
     lookupLineLastGo rest line (Some (t, b))
   else
@@ -278,7 +282,7 @@ findDocForLine tbl startLine =
 collectDocLines : List CommentRow -> Int -> List CommentRow -> List CommentRow
 collectDocLines tbl line acc = match lookupLineLast tbl line
   None => acc
-  Some (t, b) => collectDocLines tbl (line - 1) ((line, t, b)::acc)
+  Some (t, b) => collectDocLines tbl (line - 1) ((line, t, b) :: acc)
 
 -- THE RULE for what renders (`stdlib/README.md` § "Writing documentation"):
 -- only a MARKED comment is documentation.  Within a run of comment rows, the
@@ -297,21 +301,18 @@ collectDocLines tbl line acc = match lookupLineLast tbl line
 markedDoc : List CommentRow -> String
 markedDoc rows = match dropToMarker True rows
   [] => ""
-  (_, t, b)::rest => stringTrim (joinWith "\n" (t :: sameBlockTexts b rest))
+  (_, t, b) :: rest => stringTrim (joinWith "\n" (t :: sameBlockTexts b rest))
 
 dropToMarker : Bool -> List CommentRow -> List CommentRow
 dropToMarker _ [] = []
-dropToMarker atStart ((l, t, b)::rest)
-  | hasPipeMarker t && (atStart || b > 0 && l == b) = (l, t, b)::rest
+dropToMarker atStart ((l, t, b) :: rest)
+  | hasPipeMarker t && (atStart || b > 0 && l == b) = (l, t, b) :: rest
   | otherwise = dropToMarker (atStart && markerEligibleAfter t) rest
 
 sameBlockTexts : Int -> List CommentRow -> List String
 sameBlockTexts _ [] = []
-sameBlockTexts b ((_, t, b2)::rest) =
-  if b2 == b then
-    t :: sameBlockTexts b rest
-  else
-    []
+sameBlockTexts b ((_, t, b2) :: rest) =
+  if b2 == b then t :: sameBlockTexts b rest else []
 
 -- Section headings: every `-- # Title` line comment, as (line, title).  A
 -- section is a page-level grouping of the entries that follow it, not
@@ -319,7 +320,7 @@ sameBlockTexts b ((_, t, b2)::rest) =
 -- table rather than attached to a decl.
 sectionsFrom : List CommentRow -> List (Int, String)
 sectionsFrom [] = []
-sectionsFrom ((l, t, b)::rest) =
+sectionsFrom ((l, t, b) :: rest) =
   if b == 0 && dlen t >= 2 && dsub 0 2 t == "# " then
     (l, stringTrim (dsub 2 (dlen t) t)) :: sectionsFrom rest
   else
@@ -368,9 +369,12 @@ valueSig name schemes None = match lookupScheme name schemes
 lookupScheme : String -> List (String, Scheme) -> Option Scheme
 lookupScheme name schemes = lookupSchemeGo name schemes None
 
-lookupSchemeGo : String -> List (String, Scheme) -> Option Scheme -> Option Scheme
+lookupSchemeGo : String ->
+  List (String, Scheme) ->
+  Option Scheme ->
+  Option Scheme
 lookupSchemeGo _ [] acc = acc
-lookupSchemeGo name ((n, s)::rest) acc =
+lookupSchemeGo name ((n, s) :: rest) acc =
   if name == n then
     lookupSchemeGo name rest (Some s)
   else
@@ -401,7 +405,7 @@ renderSig _ (DFunDef True name _ _) schemes =
 renderSig bare (DExtern pub name ty) schemes
   | pub || bare = Some (name, valueSig name schemes (Some ty))
 renderSig _ (DLetGroup True bindings) schemes = match bindings
-  (LetBind name _)::_ => Some (name, valueSig name schemes None)
+  (LetBind name _) :: _ => Some (name, valueSig name schemes None)
   [] => None
 renderSig _ (DData { dataVis = vis, dataName = name, dataParams = params, dataParamKinds = kinds, dataCtors = variants }) _
   | not (dataVisPrivate vis) =
@@ -461,7 +465,7 @@ declKind _ = KPlain
 -- owner map is built from the RAW decls instead.
 declaredTypeNames : List Decl -> List String
 declaredTypeNames [] = []
-declaredTypeNames (d::ds) = declaredTypeName d ++ declaredTypeNames ds
+declaredTypeNames (d :: ds) = declaredTypeName d ++ declaredTypeNames ds
 
 declaredTypeName : Decl -> List String
 declaredTypeName (DData { dataName = n }) = [n]
@@ -470,7 +474,7 @@ declaredTypeName _ = []
 
 headTyName : List Ty -> Option String
 headTyName [] = None
-headTyName (t::_) = tyHeadName t
+headTyName (t :: _) = tyHeadName t
 
 -- The head type CONSTRUCTOR of a type application spine: `Array a` -> `Array`,
 -- `Array` -> `Array`, `a` -> None (a type variable owns nothing).
@@ -482,17 +486,27 @@ tyHeadName _ = None
 -- ── entry extraction ───────────────────────────────────────────────────────
 
 -- Expand a public DLetGroup into one (name, DocEntry) per binding.
-allLetgroupEntries : Bool -> List LetBind -> Int -> List (String, Scheme) -> List CommentRow -> List (String, DocEntry)
+allLetgroupEntries : Bool ->
+  List LetBind ->
+  Int ->
+  List (String, Scheme) ->
+  List CommentRow ->
+  List (String, DocEntry)
 allLetgroupEntries False _ _ _ _ = []
 allLetgroupEntries True bindings line schemes tbl =
   let doc = findDocForLine tbl line
   letgroupEntriesGo bindings schemes doc line
 
-letgroupEntriesGo : List LetBind -> List (String, Scheme) -> String -> Int -> List (String, DocEntry)
+letgroupEntriesGo : List LetBind ->
+  List (String, Scheme) ->
+  String ->
+  Int ->
+  List (String, DocEntry)
 letgroupEntriesGo [] _ _ _ = []
-letgroupEntriesGo ((LetBind name _)::rest) schemes doc line =
+letgroupEntriesGo ((LetBind name _) :: rest) schemes doc line =
   let sigStr = valueSig name schemes None
-  (name, DocEntry name sigStr doc KPlain line) :: letgroupEntriesGo rest schemes doc line
+  (name, DocEntry name sigStr doc KPlain line)
+    :: letgroupEntriesGo rest schemes doc line
 
 -- ── derived instances (`deriving (…)`) ─────────────────────────────────────
 -- `public export data Duration = Duration Int deriving (Eq, Ord, Debug)`
@@ -529,29 +543,35 @@ hasDeriver tyName params (ShapeData variants) iface =
 hasDeriver tyName params (ShapeNewtype con fty) iface =
   elem iface (map fst (newtypeDerivers tyName params con fty))
 
-derivedEntries : String -> List String -> DeriveShape -> Int -> List DeriveRef -> List (String, DocEntry)
+derivedEntries : String ->
+  List String ->
+  DeriveShape ->
+  Int ->
+  List DeriveRef ->
+  List (String, DocEntry)
 derivedEntries _ _ _ _ [] = []
-derivedEntries tyName params shape line (d::ds) =
+derivedEntries tyName params shape line (d :: ds) =
   let iface = deriveRefName d
   let rest = derivedEntries tyName params shape line ds
-  if not (hasDeriver tyName params shape iface) then rest
+  if not (hasDeriver tyName params shape iface) then
+    rest
   else
     let args = derivedHead tyName params
     let name = "\{iface} \{args}"
     let sigStr = "impl \{iface} \{args}\{derivedRequires iface params}"
-    (name, DocEntry name sigStr "" (KImplOn (Some tyName)) line)::rest
+    (name, DocEntry name sigStr "" (KImplOn (Some tyName)) line) :: rest
 
 -- `T` with no params, `(T a b)` with them — `ppTyP 2`'s rendering of the head
 -- `appliedHead` builds.
 derivedHead : String -> List String -> String
 derivedHead tyName [] = tyName
-derivedHead tyName params = "(\{joinWith " " (tyName::params)})"
+derivedHead tyName params = "(\{joinWith " " (tyName :: params)})"
 
 -- `requires C a, C b` — `paramRequires`, one constraint per type param.
 derivedRequires : String -> List String -> String
 derivedRequires _ [] = ""
-derivedRequires iface params = " requires "
-  ++ joinWith ", " (map (p => "\{iface} \{p}") params)
+derivedRequires iface params =
+  " requires " ++ joinWith ", " (map (p => "\{iface} \{p}") params)
 
 noDerives : List DeriveRef -> Bool
 noDerives [] = True
@@ -570,7 +590,13 @@ derivesOf _ = None
 
 -- The type's own entry (exactly what the single-entry path would have made)
 -- followed by one entry per derived class.
-derivingEntries : Bool -> Decl -> Int -> List (String, Scheme) -> List CommentRow -> (String, List String, List DeriveRef, DeriveShape) -> List (String, DocEntry)
+derivingEntries : Bool ->
+  Decl ->
+  Int ->
+  List (String, Scheme) ->
+  List CommentRow ->
+  (String, List String, List DeriveRef, DeriveShape) ->
+  List (String, DocEntry)
 derivingEntries bare decl line schemes tbl (tyName, params, derives, shape) =
   let doc = findDocForLine tbl line
   let own = match renderSig bare decl schemes
@@ -608,7 +634,12 @@ derivingEntries bare decl line schemes tbl (tyName, params, derives, shape) =
 -- no value scheme anywhere by construction, so there is no signature to find,
 -- and naming the origin is a true statement about the module's surface rather
 -- than an inferred signature we cannot justify.
-reexportEntries : Int -> List (String, Scheme) -> List CommentRow -> List (String, List (String, Scheme)) -> (List String, List UseMember) -> List (String, DocEntry)
+reexportEntries : Int ->
+  List (String, Scheme) ->
+  List CommentRow ->
+  List (String, List (String, Scheme)) ->
+  (List String, List UseMember) ->
+  List (String, DocEntry)
 reexportEntries line schemes tbl origins (path, members) =
   let doc = findDocForLine tbl line
   let originMod = joinWith "." path
@@ -620,9 +651,15 @@ reexportEntries line schemes tbl origins (path, members) =
     doc
     line
 
-reexportEntriesGo : String -> List UseMember -> List (String, Scheme) -> List (String, Scheme) -> String -> Int -> List (String, DocEntry)
+reexportEntriesGo : String ->
+  List UseMember ->
+  List (String, Scheme) ->
+  List (String, Scheme) ->
+  String ->
+  Int ->
+  List (String, DocEntry)
 reexportEntriesGo _ [] _ _ _ _ = []
-reexportEntriesGo originMod (m::rest) schemes originSchemes doc line =
+reexportEntriesGo originMod (m :: rest) schemes originSchemes doc line =
   let local = useMemberLocal m
   let origin = useMemberOrigin m
   let sigStr = match lookupScheme local schemes
@@ -630,22 +667,29 @@ reexportEntriesGo originMod (m::rest) schemes originSchemes doc line =
     None => match lookupScheme origin originSchemes
       Some s => "\{local} : \{ppScheme s}"
       None => "\{local} : re-export of \{originMod}.\{origin}"
-  (local, DocEntry local sigStr doc KPlain line) :: reexportEntriesGo originMod rest schemes originSchemes doc line
+  (local, DocEntry local sigStr doc KPlain line)
+    :: reexportEntriesGo originMod rest schemes originSchemes doc line
 
 -- The origin-module scheme table: dotted module id -> that module's own
 -- top-level schemes, for every `export import m.{…}` in the page's raw decls.
 -- Built once per page (a re-export names at most a handful of modules, and the
 -- tree has exactly one such decl today), keyed by the dotted path so two
 -- re-exports from the same module share one load.
-originSchemesOf : String -> List (String, List (String, Scheme)) -> List (String, Scheme)
+originSchemesOf : String ->
+  List (String, List (String, Scheme)) ->
+  List (String, Scheme)
 originSchemesOf _ [] = []
-originSchemesOf mid ((m, ss)::rest)
+originSchemesOf mid ((m, ss) :: rest)
   | mid == m = ss
   | otherwise = originSchemesOf mid rest
 
-originSchemeTable : String -> String -> List String -> List Decl -> <IO> List (String, List (String, Scheme))
+originSchemeTable : String ->
+  String ->
+  List String ->
+  List Decl ->
+  <IO> List (String, List (String, Scheme))
 originSchemeTable _ _ _ [] = []
-originSchemeTable runtimeSrc coreSrc roots (d::ds) =
+originSchemeTable runtimeSrc coreSrc roots (d :: ds) =
   let rest = originSchemeTable runtimeSrc coreSrc roots ds
   match useGroupOf d
     None => rest
@@ -654,11 +698,11 @@ originSchemeTable runtimeSrc coreSrc roots (d::ds) =
       if hasOriginEntry mid rest then
         rest
       else
-        (mid, originModuleSchemes runtimeSrc coreSrc roots path)::rest
+        (mid, originModuleSchemes runtimeSrc coreSrc roots path) :: rest
 
 hasOriginEntry : String -> List (String, List (String, Scheme)) -> Bool
 hasOriginEntry _ [] = False
-hasOriginEntry mid ((m, _)::rest)
+hasOriginEntry mid ((m, _) :: rest)
   | mid == m = True
   | otherwise = hasOriginEntry mid rest
 
@@ -670,16 +714,29 @@ hasOriginEntry mid ((m, _)::rest)
 -- of the importing module's loaded graph (`loader.mdk:389` drops it) — which
 -- is exactly why its schemes have to be resolved by a separate entry load
 -- rather than picked out of the page's own multi-module check.
-originModuleSchemes : String -> String -> List String -> List String -> <IO> List (String, Scheme)
-originModuleSchemes runtimeSrc coreSrc roots path = match findOriginFile roots (joinWith "/" path)
-  None => []
-  Some p => match projectEntrySchemes (Ref []) (Ref []) (_ => None) p roots runtimeSrc coreSrc
+originModuleSchemes : String ->
+  String ->
+  List String ->
+  List String ->
+  <IO> List (String, Scheme)
+originModuleSchemes runtimeSrc coreSrc roots path =
+  match findOriginFile roots (joinWith "/" path)
     None => []
-    Some ss => ss
+    Some p =>
+      match (projectEntrySchemes
+        (Ref [])
+        (Ref [])
+        (_ => None)
+        p
+        roots
+        runtimeSrc
+        coreSrc)
+        None => []
+        Some ss => ss
 
 findOriginFile : List String -> String -> <IO> Option String
 findOriginFile [] _ = None
-findOriginFile (r::rs) rel =
+findOriginFile (r :: rs) rel =
   let p = "\{r}/\{rel}.mdk"
   if fileExists p then Some p else findOriginFile rs rel
 
@@ -692,7 +749,13 @@ useGroupOf _ = None
 
 -- The driver: zip decls with their positions, fold collecting entries, dedup by
 -- name (first wins), emit in source order.  Mirror extract_entries.
-extractEntries : Bool -> List Decl -> List DeclPos -> List (String, Scheme) -> List (String, List (String, Scheme)) -> List Comment -> List DocEntry
+extractEntries : Bool ->
+  List Decl ->
+  List DeclPos ->
+  List (String, Scheme) ->
+  List (String, List (String, Scheme)) ->
+  List Comment ->
+  List DocEntry
 extractEntries bare decls positions schemes origins comments =
   let tbl = buildCommentTbl comments
   let pairs = zipDoc decls positions
@@ -700,9 +763,16 @@ extractEntries bare decls positions schemes origins comments =
   reverseL (fst result)
 
 -- Fold over (decl, pos) pairs.  State: (revEntries, seenNames).  Returns it.
-extractFold : Bool -> List (Decl, DeclPos) -> List (String, Scheme) -> List (String, List (String, Scheme)) -> List CommentRow -> List DocEntry -> List String -> (List DocEntry, List String)
+extractFold : Bool ->
+  List (Decl, DeclPos) ->
+  List (String, Scheme) ->
+  List (String, List (String, Scheme)) ->
+  List CommentRow ->
+  List DocEntry ->
+  List String ->
+  (List DocEntry, List String)
 extractFold _ [] _ _ _ revEntries seen = (revEntries, seen)
-extractFold bare ((decl, dp)::rest) schemes origins tbl revEntries seen =
+extractFold bare ((decl, dp) :: rest) schemes origins tbl revEntries seen =
   let line = declPosLine dp
   match multiEntriesFor bare decl line schemes origins tbl
     Some extras =>
@@ -710,30 +780,32 @@ extractFold bare ((decl, dp)::rest) schemes origins tbl revEntries seen =
       extractFold bare rest schemes origins tbl (fst acc) (snd acc)
     None => match renderSig bare decl schemes
       None => extractFold bare rest schemes origins tbl revEntries seen
-      Some (name, sigStr) => if memberStr name seen then extractFold bare rest schemes origins tbl revEntries seen
-      else
-        let doc = findDocForLine tbl line
-        extractFold
-          bare
-          rest
-          schemes
-          origins
-          tbl
-          (DocEntry name sigStr doc (declKind decl) line :: revEntries)
-          (name::seen)
+      Some (name, sigStr) =>
+        if memberStr name seen then
+          extractFold bare rest schemes origins tbl revEntries seen
+        else
+          let doc = findDocForLine tbl line
+          extractFold
+            bare
+            rest
+            schemes
+            origins
+            tbl
+            (DocEntry name sigStr doc (declKind decl) line :: revEntries)
+            (name :: seen)
 
 -- Interleave `-- # Title` sections with the entries by source line: a section
 -- precedes the first entry declared after it.  Both lists arrive in
 -- ascending line order.
 insertSections : List (Int, String) -> List DocEntry -> List DocEntry
 insertSections [] entries = entries
-insertSections ((l, title)::secs) [] =
+insertSections ((l, title) :: secs) [] =
   sectionEntry l title :: insertSections secs []
-insertSections ((l, title)::secs) (e::es) =
+insertSections ((l, title) :: secs) (e :: es) =
   if l < entryLine e then
-    sectionEntry l title :: insertSections secs (e::es)
+    sectionEntry l title :: insertSections secs (e :: es)
   else
-    e :: insertSections ((l, title)::secs) es
+    e :: insertSections ((l, title) :: secs) es
 
 sectionEntry : Int -> String -> DocEntry
 sectionEntry line title = DocEntry title "" "" KSection line
@@ -744,7 +816,13 @@ entryLine (DocEntry _ _ _ _ line) = line
 -- The three decl shapes that expand to MANY entries (a `let` group, a
 -- re-exporting `export import`, a `data`/`newtype` with a `deriving (…)`
 -- clause); `None` means "one entry at most, ask `renderSig`".
-multiEntriesFor : Bool -> Decl -> Int -> List (String, Scheme) -> List (String, List (String, Scheme)) -> List CommentRow -> Option (List (String, DocEntry))
+multiEntriesFor : Bool ->
+  Decl ->
+  Int ->
+  List (String, Scheme) ->
+  List (String, List (String, Scheme)) ->
+  List CommentRow ->
+  Option (List (String, DocEntry))
 multiEntriesFor bare decl line schemes origins tbl = match letgroupOf decl
   Some (isPub, bindings) =>
     Some (allLetgroupEntries isPub bindings line schemes tbl)
@@ -753,13 +831,16 @@ multiEntriesFor bare decl line schemes origins tbl = match letgroupOf decl
     None => map (derivingEntries bare decl line schemes tbl) (derivesOf decl)
 
 -- Add each letgroup extra if its name is unseen (first wins).
-foldExtras : List (String, DocEntry) -> List DocEntry -> List String -> (List DocEntry, List String)
+foldExtras : List (String, DocEntry) ->
+  List DocEntry ->
+  List String ->
+  (List DocEntry, List String)
 foldExtras [] revEntries seen = (revEntries, seen)
-foldExtras ((name, e)::rest) revEntries seen =
+foldExtras ((name, e) :: rest) revEntries seen =
   if memberStr name seen then
     foldExtras rest revEntries seen
   else
-    foldExtras rest (e::revEntries) (name::seen)
+    foldExtras rest (e :: revEntries) (name :: seen)
 
 -- Match a DLetGroup, returning (is_pub, bindings) or None.
 letgroupOf : Decl -> Option (Bool, List LetBind)
@@ -768,14 +849,14 @@ letgroupOf _ = None
 
 memberStr : String -> List String -> Bool
 memberStr _ [] = False
-memberStr x (y::ys)
+memberStr x (y :: ys)
   | x == y = True
   | otherwise = memberStr x ys
 
 zipDoc : List a -> List b -> List (a, b)
 zipDoc [] _ = []
 zipDoc _ [] = []
-zipDoc (x::xs) (y::ys) = (x, y) :: zipDoc xs ys
+zipDoc (x :: xs) (y :: ys) = (x, y) :: zipDoc xs ys
 
 -- ── Markdown rendering (mirror render_markdown) ─────────────────────────────
 --
@@ -832,10 +913,11 @@ isDecorativeLine line =
   if arrayLength cs == 0 then False else isDecorativeChar (arrayGetUnsafe 0 cs)
 
 isDecorativeChar : Char -> Bool
-isDecorativeChar c = not (c >= 'a' && c <= 'z')
-  && not (c >= 'A' && c <= 'Z')
-  && not (c >= '0' && c <= '9')
-  && c /= ' '
+isDecorativeChar c =
+  not (c >= 'a' && c <= 'z')
+    && not (c >= 'A' && c <= 'Z')
+    && not (c >= '0' && c <= '9')
+    && c /= ' '
 
 -- A run of extracted doc-prose lines is either plain prose or a doctest
 -- example block (starts at a `> ` line, extends through following non-blank
@@ -848,7 +930,7 @@ isExampleStart line = dlen line >= 2 && dsub 0 2 line == "> "
 
 allBlankLines : List String -> Bool
 allBlankLines [] = True
-allBlankLines (x::xs) = x == "" && allBlankLines xs
+allBlankLines (x :: xs) = x == "" && allBlankLines xs
 
 -- Flush the current accumulator (source order) as a segment, dropping an
 -- all-blank prose run (keeps paragraph gaps from becoming empty segments).
@@ -863,7 +945,7 @@ pushSeg ModeExample acc segs = ExampleSeg (reverseL acc) :: segs
 -- leading blanks here trims the paragraph gap that precedes an example, which
 -- would otherwise render as a double blank line above the fence.
 dropWhileBlank : List String -> List String
-dropWhileBlank (""::rest) = dropWhileBlank rest
+dropWhileBlank ("" :: rest) = dropWhileBlank rest
 dropWhileBlank ls = ls
 
 -- The `Bool` is marker eligibility: True while a Haddock `| ` marker could
@@ -871,16 +953,26 @@ dropWhileBlank ls = ls
 -- starts True (the block's first line), is consumed by the one marker the
 -- block may carry, and is never restored — a `|`-led line after that is user
 -- content.
-docSegGo : List String -> SegMode -> Bool -> List String -> List DocSegment -> List DocSegment
+docSegGo : List String ->
+  SegMode ->
+  Bool ->
+  List String ->
+  List DocSegment ->
+  List DocSegment
 docSegGo [] mode _ acc segs = reverseL (pushSeg mode acc segs)
-docSegGo (line::rest) ModeProse markerOk acc segs =
+docSegGo (line :: rest) ModeProse markerOk acc segs =
   if isExampleStart line then
     docSegGo rest ModeExample False [line] (pushSeg ModeProse acc segs)
   else if markerOk && hasPipeMarker line then
     docSegGo rest ModeProse False (stripPipePrefix line :: acc) segs
   else
-    docSegGo rest ModeProse (markerOk && markerEligibleAfter line) (line::acc) segs
-docSegGo (line::rest) ModeExample _ acc segs =
+    docSegGo
+      rest
+      ModeProse
+      (markerOk && markerEligibleAfter line)
+      (line :: acc)
+      segs
+docSegGo (line :: rest) ModeExample _ acc segs =
   if line == "" then
     docSegGo rest ModeProse False [] (pushSeg ModeExample acc segs)
   else
@@ -904,7 +996,8 @@ renderDocSegment (ExampleSeg ls) = "```medaka\n" ++ joinWith "\n" ls ++ "\n```"
 -- comment) as valid Markdown: marker stripped, doctest examples fenced.
 renderDocProse : String -> String
 renderDocProse doc =
-  if doc == "" then ""
+  if doc == "" then
+    ""
   else
     let segs = docSegments (splitNl doc)
     joinWith "\n\n" (map renderDocSegment segs)
@@ -917,8 +1010,8 @@ renderDocProse doc =
 -- reads; comments arrive from `collectComments` in ascending source order.
 moduleHeaderFrom : List CommentRow -> String
 moduleHeaderFrom [] = ""
-moduleHeaderFrom ((startLine, text, b)::rest) =
-  markedDoc (collectHeaderLines ((startLine, text, b)::rest) startLine)
+moduleHeaderFrom ((startLine, text, b) :: rest) =
+  markedDoc (collectHeaderLines ((startLine, text, b) :: rest) startLine)
 
 collectHeaderLines : List CommentRow -> Int -> List CommentRow
 collectHeaderLines tbl line = match lookupLineLast tbl line
@@ -941,7 +1034,11 @@ renderMarkdown moduleName header entries =
   let sectioned = anyDoc isSection entries
   let main = filterDoc (e => not (isListedImpl e)) entries
   stringConcat
-    (titleBlock :: primitiveLayerBanner moduleName :: headerBlock :: map (renderEntry sectioned entries) main ++ [renderInstancesSection entries])
+    (titleBlock
+      :: primitiveLayerBanner moduleName
+      :: headerBlock
+      :: map (renderEntry sectioned entries) main
+        ++ [renderInstancesSection entries])
 
 -- The prelude-only page publishes host externs whose `<type><Op>` names sit
 -- beside the library layer's (`stringToUpper` / `string.toUpper`); the page
@@ -950,7 +1047,8 @@ renderMarkdown moduleName header entries =
 -- alike.
 primitiveLayerBanner : String -> String
 primitiveLayerBanner moduleName
-  | preludeOnlyModule moduleName = "> These are the host primitives. They are in scope everywhere without an\n> import, and their `<type><Op>` names (`stringToUpper`, `intToString`)\n> mark them as the primitive layer. Prefer the library name where one\n> exists (`string.toUpper`, `string.toFloat`), and reach for a name on this\n> page only when no library module covers it.\n\n"
+  | preludeOnlyModule moduleName =
+    "> These are the host primitives. They are in scope everywhere without an\n> import, and their `<type><Op>` names (`stringToUpper`, `intToString`)\n> mark them as the primitive layer. Prefer the library name where one\n> exists (`string.toUpper`, `string.toFloat`), and reach for a name on this\n> page only when no library module covers it.\n\n"
   | otherwise = ""
 
 isSection : DocEntry -> Bool
@@ -970,7 +1068,7 @@ isListedImpl _ = False
 
 anyDoc : (a -> Bool) -> List a -> Bool
 anyDoc _ [] = False
-anyDoc p (x::xs) = p x || anyDoc p xs
+anyDoc p (x :: xs) = p x || anyDoc p xs
 
 -- The interface name of an impl entry: `Eq (List a)` -> `Eq`.
 instanceIface : String -> String
@@ -1017,9 +1115,8 @@ implHeadIs _ _ = False
 -- impl links to its own heading, an undocumented one is just named.
 instanceLine : List DocEntry -> String
 instanceLine [] = ""
-instanceLine impls = "\nInstances: "
-  ++ joinWith ", " (map instanceRef impls)
-  ++ "\n"
+instanceLine impls =
+  "\nInstances: " ++ joinWith ", " (map instanceRef impls) ++ "\n"
 
 instanceRef : DocEntry -> String
 instanceRef (DocEntry name _ doc _ _) =
@@ -1037,7 +1134,11 @@ renderInstancesSection entries =
   let bullets = match keys
     [] => ""
     _ => "\{joinWith "\n" (map (orphanLine orphans) keys)}\n\n"
-  let documented = stringConcat (map (renderEntry True entries) (filterDoc (e => entryDoc e /= "") listed))
+  let documented =
+    stringConcat
+      (map
+        (renderEntry True entries)
+        (filterDoc (e => entryDoc e /= "") listed))
   match listed
     [] => ""
     _ => "## Instances\n\n\{bullets}\{documented}"
@@ -1061,7 +1162,7 @@ entryDoc (DocEntry _ _ doc _ _) = doc
 
 uniqueDoc : List String -> List String
 uniqueDoc [] = []
-uniqueDoc (x::xs) = x :: uniqueDoc (filterDoc (/= x) xs)
+uniqueDoc (x :: xs) = x :: uniqueDoc (filterDoc (/= x) xs)
 
 -- ── top-level driver ────────────────────────────────────────────────────────
 -- Mirror bin/main.ml's `doc` arm: parse (capturing positions + comments),
@@ -1075,8 +1176,9 @@ uniqueDoc (x::xs) = x :: uniqueDoc (filterDoc (/= x) xs)
 -- import-bearing target resolves its siblings before inferring schemes.
 export
 runDoc : String -> String -> String -> String -> List String -> <IO> String
-runDoc runtimeSrc coreSrc src filename roots = match computeModuleDoc runtimeSrc coreSrc src filename roots
-  ModuleDoc name header entries _ => renderMarkdown name header entries
+runDoc runtimeSrc coreSrc src filename roots =
+  match computeModuleDoc runtimeSrc coreSrc src filename roots
+    ModuleDoc name header entries _ => renderMarkdown name header entries
 
 -- ── library mode (S-doc-library-mode) ───────────────────────────────────────
 -- A module's full extracted doc: name (page/index title, page filename minus
@@ -1140,11 +1242,16 @@ dropInternalExterns True entries =
   filter (e => not (isInternalExtern e)) entries
 
 isInternalExtern : DocEntry -> Bool
-isInternalExtern (DocEntry name _ _ _ _) = elem name internalExterns
-  || elem name docOnlyExcluded
+isInternalExtern (DocEntry name _ _ _ _) =
+  elem name internalExterns || elem name docOnlyExcluded
 
 export
-computeModuleDoc : String -> String -> String -> String -> List String -> <IO> ModuleDoc
+computeModuleDoc : String ->
+  String ->
+  String ->
+  String ->
+  List String ->
+  <IO> ModuleDoc
 computeModuleDoc runtimeSrc coreSrc src filename roots =
   let parsed = parseWithPositions src
   let rawDecls = fst parsed
@@ -1156,7 +1263,16 @@ computeModuleDoc runtimeSrc coreSrc src filename roots =
   let tbl = buildCommentTbl comments
   let header = moduleHeaderFrom tbl
   let primitiveLayer = preludeOnlyModule moduleName
-  let entries = dropInternalExterns primitiveLayer (extractEntries primitiveLayer rawDecls positions schemes origins comments)
+  let entries =
+    dropInternalExterns
+      primitiveLayer
+      (extractEntries
+        primitiveLayer
+        rawDecls
+        positions
+        schemes
+        origins
+        comments)
   ModuleDoc
     moduleName
     (dedupHeader header entries)
@@ -1172,14 +1288,11 @@ computeModuleDoc runtimeSrc coreSrc src filename roots =
 -- usual case, a gap before the first decl — `stdlib/list.mdk`, this file).
 dedupHeader : String -> List DocEntry -> String
 dedupHeader header entries =
-  if header /= "" && header == firstEntryDoc entries then
-    ""
-  else
-    header
+  if header /= "" && header == firstEntryDoc entries then "" else header
 
 firstEntryDoc : List DocEntry -> String
 firstEntryDoc [] = ""
-firstEntryDoc ((DocEntry _ _ doc _ _)::_) = doc
+firstEntryDoc ((DocEntry _ _ doc _ _) :: _) = doc
 
 export
 renderModulePage : ModuleDoc -> String
@@ -1264,7 +1377,10 @@ moduleMentionIndex (ModuleDoc n _ es _) = (n, map entrySigOf es)
 entrySigOf : DocEntry -> String
 entrySigOf (DocEntry _ sig _ _ _) = sig
 
-ownerOfType : List (String, String) -> List (String, List String) -> String -> Option String
+ownerOfType : List (String, String) ->
+  List (String, List String) ->
+  String ->
+  Option String
 ownerOfType owners mentions tyName = match lookupStrDoc tyName owners
   Some m => Some m
   None =>
@@ -1275,11 +1391,13 @@ ownerOfType owners mentions tyName = match lookupStrDoc tyName owners
 
 lookupSigsDoc : String -> List (String, List String) -> Option (List String)
 lookupSigsDoc _ [] = None
-lookupSigsDoc k ((n, v)::rest) = if k == n then Some v else lookupSigsDoc k rest
+lookupSigsDoc k ((n, v) :: rest) =
+  if k == n then Some v else lookupSigsDoc k rest
 
 anyMentions : String -> List String -> Bool
 anyMentions _ [] = False
-anyMentions tyName (s::rest) = mentionsToken tyName s || anyMentions tyName rest
+anyMentions tyName (s :: rest) =
+  mentionsToken tyName s || anyMentions tyName rest
 
 -- Does `hay` contain `needle` as a whole identifier token?  Word-bounded on
 -- both sides, so a module named `array` does not "mention" `Array` merely by
@@ -1294,7 +1412,9 @@ mentionsTokenGo : Array Char -> Array Char -> Int -> Int -> Int -> Bool
 mentionsTokenGo ns hs i n h =
   if n == 0 || i + n > h then
     False
-  else if charsMatchAt ns hs i n && not (isIdentCharAt hs (i - 1) h) && not (isIdentCharAt hs (i + n) h) then
+  else if charsMatchAt ns hs i n
+    && not (isIdentCharAt hs (i - 1) h)
+    && not (isIdentCharAt hs (i + n) h) then
     True
   else
     mentionsTokenGo ns hs (i + 1) n h
@@ -1313,33 +1433,43 @@ charsMatchAtGo ns hs i j n =
 
 isIdentCharAt : Array Char -> Int -> Int -> Bool
 isIdentCharAt hs i h =
-  if i < 0 || i >= h then
-    False
-  else
-    isIdentChar (arrayGetUnsafe i hs)
+  if i < 0 || i >= h then False else isIdentChar (arrayGetUnsafe i hs)
 
 isIdentChar : Char -> Bool
-isIdentChar c = c >= 'a' && c <= 'z'
-  || c >= 'A' && c <= 'Z'
-  || c >= '0' && c <= '9'
-  || c == '_'
+isIdentChar c =
+  c >= 'a' && c <= 'z'
+    || c >= 'A' && c <= 'Z'
+    || c >= '0' && c <= '9'
+    || c == '_'
 
 lookupStrDoc : String -> List (String, String) -> Option String
 lookupStrDoc _ [] = None
-lookupStrDoc k ((n, v)::rest) = if k == n then Some v else lookupStrDoc k rest
+lookupStrDoc k ((n, v) :: rest) = if k == n then Some v else lookupStrDoc k rest
 
 -- `Some target` iff this entry is an impl that belongs on ANOTHER module's page.
-entryTarget : List (String, String) -> List (String, List String) -> String -> DocEntry -> Option String
-entryTarget owners mentions here (DocEntry _ _ _ (KImplOn (Some hd)) _) = match ownerOfType owners mentions hd
-  Some m => if m == here then None else Some m
-  None => None
+entryTarget : List (String, String) ->
+  List (String, List String) ->
+  String ->
+  DocEntry ->
+  Option String
+entryTarget owners mentions here (DocEntry _ _ _ (KImplOn (Some hd)) _) =
+  match ownerOfType owners mentions hd
+    Some m => if m == here then None else Some m
+    None => None
 entryTarget _ _ _ _ = None
 
-movedFrom : List (String, String) -> List (String, List String) -> ModuleDoc -> List (String, DocEntry)
+movedFrom : List (String, String) ->
+  List (String, List String) ->
+  ModuleDoc ->
+  List (String, DocEntry)
 movedFrom owners mentions (ModuleDoc here _ es _) =
   concatMapDoc (movedEntry owners mentions here) es
 
-movedEntry : List (String, String) -> List (String, List String) -> String -> DocEntry -> List (String, DocEntry)
+movedEntry : List (String, String) ->
+  List (String, List String) ->
+  String ->
+  DocEntry ->
+  List (String, DocEntry)
 movedEntry owners mentions here e = match entryTarget owners mentions here e
   Some m => [(m, e)]
   None => []
@@ -1347,7 +1477,11 @@ movedEntry owners mentions here e = match entryTarget owners mentions here e
 -- Keep everything that did not move out, then append everything that moved in
 -- (source order preserved within each group; incoming impls land after the
 -- module's own entries, which is where a reader expects "instances" to sit).
-rebucketOne : List (String, String) -> List (String, List String) -> List (String, DocEntry) -> ModuleDoc -> ModuleDoc
+rebucketOne : List (String, String) ->
+  List (String, List String) ->
+  List (String, DocEntry) ->
+  ModuleDoc ->
+  ModuleDoc
 rebucketOne owners mentions moved (ModuleDoc here header es tyNames) =
   let kept = filterDoc (e => isNoneDoc (entryTarget owners mentions here e)) es
   let incoming = concatMapDoc (takeForModule here) moved
@@ -1358,7 +1492,7 @@ takeForModule here (m, e) = if m == here then [e] else []
 
 filterDoc : (a -> Bool) -> List a -> List a
 filterDoc _ [] = []
-filterDoc p (x::xs) = if p x then x :: filterDoc p xs else filterDoc p xs
+filterDoc p (x :: xs) = if p x then x :: filterDoc p xs else filterDoc p xs
 
 isNoneDoc : Option String -> Bool
 isNoneDoc None = True
@@ -1385,7 +1519,8 @@ slugifyAnchor name =
 -- un-collapsed string).
 slugCharsGo : Array Char -> Int -> Int -> String
 slugCharsGo chars i n =
-  if i >= n then ""
+  if i >= n then
+    ""
   else
     let c = arrayGetUnsafe i chars
     let rest = slugCharsGo chars (i + 1) n
@@ -1397,10 +1532,8 @@ slugCharsGo chars i n =
       "-" ++ rest
 
 isSlugChar : Char -> Bool
-isSlugChar c = c >= 'a' && c <= 'z'
-  || c >= '0' && c <= '9'
-  || c == '_'
-  || c == '-'
+isSlugChar c =
+  c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '_' || c == '-'
 
 stringTrimDashes : String -> String
 stringTrimDashes s = stringTrimDashEnd (stringTrimDashStart s)
@@ -1426,17 +1559,17 @@ libraryInventoryJson : List ModuleDoc -> Json
 libraryInventoryJson mds = jArray (concatMapDoc inventoryEntriesFor mds)
 
 inventoryEntriesFor : ModuleDoc -> List Json
-inventoryEntriesFor (ModuleDoc moduleName _ entries _) = map
-  (inventoryEntryJson moduleName)
-  (filterDoc (e => not (isSection e)) entries)
+inventoryEntriesFor (ModuleDoc moduleName _ entries _) =
+  map
+    (inventoryEntryJson moduleName)
+    (filterDoc (e => not (isSection e)) entries)
 
 inventoryEntryJson : String -> DocEntry -> Json
-inventoryEntryJson moduleName (DocEntry name sig _ _ _) = jObject
-  [
-    ("module", JString moduleName),
-    ("name", JString name),
-    ("signature", JString sig),
-  ]
+inventoryEntryJson moduleName (DocEntry name sig _ _ _) = jObject [
+  ("module", JString moduleName),
+  ("name", JString name),
+  ("signature", JString sig),
+]
 
 -- Index page: one heading per module (linked to its page) with the module's
 -- one-line summary, then a link to every function and type on the page.
@@ -1471,10 +1604,12 @@ firstSentence prose =
 
 sentenceEnd : Array Char -> Int -> Int -> Int
 sentenceEnd cs i n =
-  if i >= n then firstLineEnd cs 0 n
+  if i >= n then
+    firstLineEnd cs 0 n
   else
     let c = arrayGetUnsafe i cs
-    if c == '.' && (i + 1 >= n || isSentenceGap (arrayGetUnsafe (i + 1) cs)) then
+    if c == '.'
+      && (i + 1 >= n || isSentenceGap (arrayGetUnsafe (i + 1) cs)) then
       i + 1
     else
       sentenceEnd cs (i + 1) n
@@ -1514,13 +1649,28 @@ firstLineEnd cs i n =
 -- now also reports the load error and exits non-zero, mirroring every other
 -- load-error arm in this file's own callers (`runDocTargets`/
 -- `runDocLibraryTargets`, medaka_cli.mdk) rather than swallowing it here.
-docSchemesFor : String -> String -> String -> List String -> List Decl -> <IO> List (String, Scheme)
-docSchemesFor runtimeSrc coreSrc filename roots rawUser = match projectEntrySchemes (Ref []) (Ref []) (_ => None) filename roots runtimeSrc coreSrc
-  None =>
-    let _ = ePutStrLn "medaka doc: '\{filename}' has an unresolved import graph (missing or cyclic import) — signatures unavailable"
-    let _ = exit 1
-    []
-  Some schemes => schemes
+docSchemesFor : String ->
+  String ->
+  String ->
+  List String ->
+  List Decl ->
+  <IO> List (String, Scheme)
+docSchemesFor runtimeSrc coreSrc filename roots rawUser =
+  match (projectEntrySchemes
+    (Ref [])
+    (Ref [])
+    (_ => None)
+    filename
+    roots
+    runtimeSrc
+    coreSrc)
+    None =>
+      let _ =
+        ePutStrLn
+          "medaka doc: '\{filename}' has an unresolved import graph (missing or cyclic import) — signatures unavailable"
+      let _ = exit 1
+      []
+    Some schemes => schemes
 # DESUGAR
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "commentLine" false) (mem "commentText" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositions" false) (mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))

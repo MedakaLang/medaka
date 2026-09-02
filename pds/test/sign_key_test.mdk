@@ -29,14 +29,14 @@ bytes value = match decode value
 oneBytes : Array Int
 oneBytes = [|
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-  0, 0, 0, 0, 0, 1,
+  0, 0, 0, 0, 0, 1
 |]
 
 nBytes : Array Int
 nBytes = [|
   0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
   0xff, 0xff, 0xfe, 0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b, 0xbf, 0xd2,
-  0x5e, 0x8c, 0xd0, 0x36, 0x41, 0x41,
+  0x5e, 0x8c, 0xd0, 0x36, 0x41, 0x41
 |]
 
 knownCompact : Array Int
@@ -83,23 +83,32 @@ incLast bs = setAt 31 (bs[31] + 1) bs
 
 test "secret key accepts one and n - 1" =
   expectTrue
-    (isOk (secretKeyFromBytes oneBytes) && isOk (secretKeyFromBytes (decLast nBytes)))
+    (isOk (secretKeyFromBytes oneBytes)
+      && isOk (secretKeyFromBytes (decLast nBytes)))
 
 test "secret key rejects public short and long lengths" =
   expectTrue
-    (isErr (secretKeyFromBytes (arrayMake 31 0)) && isErr (secretKeyFromBytes (arrayMake 33 0)))
+    (isErr (secretKeyFromBytes (arrayMake 31 0))
+      && isErr (secretKeyFromBytes (arrayMake 33 0)))
 
 test "secret key rejects zero, n, n + 1, and maximum" =
   expectTrue
-    (isErr (secretKeyFromBytes (arrayMake 32 0)) && isErr (secretKeyFromBytes nBytes) && isErr (secretKeyFromBytes (incLast nBytes)) && isErr (secretKeyFromBytes (arrayMake 32 255)))
+    (isErr (secretKeyFromBytes (arrayMake 32 0))
+      && isErr (secretKeyFromBytes nBytes)
+      && isErr (secretKeyFromBytes (incLast nBytes))
+      && isErr (secretKeyFromBytes (arrayMake 32 255)))
 
 test "secret key rejects -1 in early middle and final positions" =
   expectTrue
-    (isErr (secretKeyFromBytes (setAt 0 (-1) oneBytes)) && isErr (secretKeyFromBytes (setAt 16 (-1) oneBytes)) && isErr (secretKeyFromBytes (setAt 31 (-1) oneBytes)))
+    (isErr (secretKeyFromBytes (setAt 0 (-1) oneBytes))
+      && isErr (secretKeyFromBytes (setAt 16 (-1) oneBytes))
+      && isErr (secretKeyFromBytes (setAt 31 (-1) oneBytes)))
 
 test "secret key rejects 256 in early middle and final positions" =
   expectTrue
-    (isErr (secretKeyFromBytes (setAt 0 256 oneBytes)) && isErr (secretKeyFromBytes (setAt 16 256 oneBytes)) && isErr (secretKeyFromBytes (setAt 31 256 oneBytes)))
+    (isErr (secretKeyFromBytes (setAt 0 256 oneBytes))
+      && isErr (secretKeyFromBytes (setAt 16 256 oneBytes))
+      && isErr (secretKeyFromBytes (setAt 31 256 oneBytes)))
 
 test "secret key stores a scalar before caller input mutates" =
   let mutable = arrayCopy oneBytes
@@ -107,27 +116,38 @@ test "secret key stores a scalar before caller input mutates" =
   let () = A.setInPlace 31 0 mutable
   expectTrue (isOk admitted && isErr (secretKeyFromBytes mutable))
 
-test "public compact signatures round trip as exactly 64 bytes" = match signatureFromCompact knownCompact
-  Err _ => expectTrue False
-  Ok signature =>
-    let compact = signatureCompact signature
-    expectTrue (arrayLength compact == 64 && compact == knownCompact)
+test "public compact signatures round trip as exactly 64 bytes" =
+  match signatureFromCompact knownCompact
+    Err _ => expectTrue False
+    Ok signature =>
+      let compact = signatureCompact signature
+      expectTrue (arrayLength compact == 64 && compact == knownCompact)
 
 test "public compact parsing rejects 63-byte and 65-byte lengths" =
   expectTrue
-    (isErr (signatureFromCompact (arrayMake 63 0)) && isErr (signatureFromCompact (arrayMake 65 0)))
+    (isErr (signatureFromCompact (arrayMake 63 0))
+      && isErr (signatureFromCompact (arrayMake 65 0)))
 
 test "public compact parsing rejects non-byte elements" =
   expectTrue
-    (isErr (signatureFromCompact (setAt 0 (-1) knownCompact)) && isErr (signatureFromCompact (setAt 63 256 knownCompact)))
+    (isErr (signatureFromCompact (setAt 0 (-1) knownCompact))
+      && isErr (signatureFromCompact (setAt 63 256 knownCompact)))
 
 test "public compact parsing rejects zero range and high-S components" =
   expectTrue
-    (isErr (signatureFromCompact zeroRCompact) && isErr (signatureFromCompact zeroSCompact) && isErr (signatureFromCompact rangeRCompact) && isErr (signatureFromCompact rangeSCompact) && isErr (signatureFromCompact highSCompact))
+    (isErr (signatureFromCompact zeroRCompact)
+      && isErr (signatureFromCompact zeroSCompact)
+      && isErr (signatureFromCompact rangeRCompact)
+      && isErr (signatureFromCompact rangeSCompact)
+      && isErr (signatureFromCompact highSCompact))
 
-test "public signing rejects malformed digests before production" = match secretKeyFromBytes oneBytes
-  Err _ => expectTrue False
-  Ok secret =>
-    let zeroDigest = arrayMake 32 0
-    expectTrue
-      (isErr (signDigest secret (arrayMake 31 0)) && isErr (signDigest secret (arrayMake 33 0)) && isErr (signDigest secret (setAt 0 (-1) zeroDigest)) && isErr (signDigest secret (setAt 31 256 zeroDigest)))
+test "public signing rejects malformed digests before production" =
+  match secretKeyFromBytes oneBytes
+    Err _ => expectTrue False
+    Ok secret =>
+      let zeroDigest = arrayMake 32 0
+      expectTrue
+        (isErr (signDigest secret (arrayMake 31 0))
+          && isErr (signDigest secret (arrayMake 33 0))
+          && isErr (signDigest secret (setAt 0 (-1) zeroDigest))
+          && isErr (signDigest secret (setAt 31 256 zeroDigest)))

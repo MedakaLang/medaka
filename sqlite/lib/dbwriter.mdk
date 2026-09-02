@@ -202,7 +202,7 @@ encodeLeafCell rowid recBytes =
   emitBytes (toList (sliceClamped 0 local recBytes)) buf
   -- Placeholder first-overflow-page pointer; `assignOverflow` patches it once
   -- page numbers are known.  Absent entirely when nothing spills.
-  let _ = if local < plen then emitU32BE 0 buf else ()
+  let _ = if local < plen then emitU32BE 0 buf
   (buildArray buf, sliceClamped local plen recBytes)
 
 -- ---------------------------------------------------------------------------
@@ -224,16 +224,23 @@ encodeLeafCell rowid recBytes =
 --   Returns `Err` if the cells + pointer array overflow the page.
 buildLeafPage : Int -> List (Array Int) -> Result String (Array Int)
 buildLeafPage hdrOff cells = do
-  let nCells   = length cells
-  let page     = arrayMake pageSize 0
+  let nCells = length cells
+  let page = arrayMake pageSize 0
   -- The cell-pointer array sits right after the 8-byte page header.
-  let cpStart  = hdrOff + leafHeaderSize
-  let cpEnd    = cpStart + nCells * 2
+  let cpStart = hdrOff + leafHeaderSize
+  let cpEnd = cpStart + nCells * 2
   -- Cells pack downward from the page end; `packCells` returns the lowest
   -- cell offset reached (the content-area start) after writing every cell and
   -- its pointer, or Err on overflow.  The effectful `writeLeafHeader` is a
   -- `let _ =` statement (a bare effect statement isn't allowed in a `do` block).
-  contentStart <- packCells page cells cpStart pageSize cpEnd 0 "table exceeds one page; multi-page not supported in v1"
+  contentStart <- packCells
+    page
+    cells
+    cpStart
+    pageSize
+    cpEnd
+    0
+    "table exceeds one page; multi-page not supported in v1"
   let _ = writeLeafHeader page hdrOff nCells contentStart
   Ok page
 
@@ -243,13 +250,20 @@ buildLeafPage hdrOff cells = do
 -- pageSize); `floor` is the highest offset the cells may not cross (= cpEnd,
 -- the end of the pointer array).  `errMsg` is returned on overflow.  Returns
 -- the final content-area start.  Shared by leaf and interior page assembly.
-packCells : Array Int -> List (Array Int) -> Int -> Int -> Int -> Int -> String -> Result String Int
+packCells : Array Int ->
+  List (Array Int) ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  String ->
+  Result String Int
 packCells page [] cpStart contentTop floor i errMsg = Ok contentTop
-packCells page (cell::rest)  cpStart contentTop floor i errMsg =
-  let clen   = arrayLength cell
+packCells page (cell :: rest) cpStart contentTop floor i errMsg =
+  let clen = arrayLength cell
   let newTop = contentTop - clen
-  if newTop < floor
-  then Err errMsg
+  if newTop < floor then
+    Err errMsg
   else
     -- Blit the cell bytes into the page at newTop.
     blit cell 0 page newTop clen
@@ -321,7 +335,7 @@ encodeInteriorCell childPage rowid =
 --   in the given (ascending-key) order.
 encodeInteriorCells : List (Int, Int) -> List (Array Int) -> List (Array Int)
 encodeInteriorCells [] acc = reverse acc
-encodeInteriorCells ((child, key)::rest) acc =
+encodeInteriorCells ((child, key) :: rest) acc =
   encodeInteriorCells rest (encodeInteriorCell child key :: acc)
 
 -- | Write the 12-byte interior page header at offset 0.
@@ -354,7 +368,14 @@ buildInteriorPage entries rightmost = do
   let cells = encodeInteriorCells entries []
   let cpStart = interiorHeaderSize
   let cpEnd = cpStart + nCells * 2
-  contentStart <- packCells page cells cpStart pageSize cpEnd 0 "table needs more than one interior page; multi-interior trees not supported"
+  contentStart <- packCells
+    page
+    cells
+    cpStart
+    pageSize
+    cpEnd
+    0
+    "table needs more than one interior page; multi-interior trees not supported"
   let _ = writeInteriorHeader page nCells contentStart rightmost
   Ok page
 
@@ -387,7 +408,8 @@ buildOverflowChain spill firstPage =
 
 chainGo : Array Int -> Int -> Int -> Int -> List (Array Int) -> List (Array Int)
 chainGo spill firstPage i total acc =
-  if i >= total then reverse acc
+  if i >= total then
+    reverse acc
   else
     let cap = overflowCapacity usableSize
     let off = i * cap
@@ -396,16 +418,20 @@ chainGo spill firstPage i total acc =
     let page = arrayMake pageSize 0
     let _ = setU32BE page 0 next
     let _ = blit spill off page 4 chunk
-    chainGo spill firstPage (i + 1) total (page::acc)
+    chainGo spill firstPage (i + 1) total (page :: acc)
 
 -- | Assign overflow pages to every spilling row in `rows`, patching each cell's
 --   pointer and emitting its chain.  Threads the next free page number.
 --   `acc` accumulates chain pages in REVERSE file order (the caller reverses).
-assignOverflow : List (Int, Array Int, Array Int) -> Int -> List (Array Int) -> (Int, List (Array Int))
+assignOverflow : List (Int, Array Int, Array Int) ->
+  Int ->
+  List (Array Int) ->
+  (Int, List (Array Int))
 assignOverflow [] next acc = (next, acc)
-assignOverflow (row::rest) next acc =
+assignOverflow (row :: rest) next acc =
   let spill = prowSpill row
-  if arrayLength spill == 0 then assignOverflow rest next acc
+  if arrayLength spill == 0 then
+    assignOverflow rest next acc
   else
     let nPages = overflowPageCount usableSize (arrayLength spill)
     let _ = patchOverflowPtr (prowCell row) next
@@ -414,15 +440,21 @@ assignOverflow (row::rest) next acc =
 
 -- | Assign overflow pages across every leaf batch of every table plan, in file
 --   order (table by table, leaf by leaf, cell by cell).
-assignOverflowPlans : List (String, String, List (List (Int, Array Int, Array Int))) -> Int -> List (Array Int) -> (Int, List (Array Int))
+assignOverflowPlans : List (String, String, List (List (Int, Array Int, Array Int))) ->
+  Int ->
+  List (Array Int) ->
+  (Int, List (Array Int))
 assignOverflowPlans [] next acc = (next, acc)
-assignOverflowPlans ((_, _, batches)::rest) next acc =
+assignOverflowPlans ((_, _, batches) :: rest) next acc =
   let (next2, acc2) = assignOverflowBatches batches next acc
   assignOverflowPlans rest next2 acc2
 
-assignOverflowBatches : List (List (Int, Array Int, Array Int)) -> Int -> List (Array Int) -> (Int, List (Array Int))
+assignOverflowBatches : List (List (Int, Array Int, Array Int)) ->
+  Int ->
+  List (Array Int) ->
+  (Int, List (Array Int))
 assignOverflowBatches [] next acc = (next, acc)
-assignOverflowBatches (b::rest) next acc =
+assignOverflowBatches (b :: rest) next acc =
   let (next2, acc2) = assignOverflow b next acc
   assignOverflowBatches rest next2 acc2
 
@@ -491,7 +523,7 @@ nullifyIpk (Some p) cells = nullifyGo p 0 cells
 
 nullifyGo : Int -> Int -> List Cell -> List Cell
 nullifyGo _ _ [] = []
-nullifyGo p idx (c::rest) =
+nullifyGo p idx (c :: rest) =
   let c2 = if idx == p then CNull else c
   c2 :: nullifyGo p (idx + 1) rest
 
@@ -500,7 +532,10 @@ nullifyGo p idx (c::rest) =
 --   Returns the pending row `(rowid, cell-bytes, spilled-bytes)`; the rowid is
 --   kept for interior-page key construction when the table spans multiple
 --   leaves, and the spill (empty for a row that fits) for overflow allocation.
-encodeRow : Option Int -> Int -> List Cell -> Result String (Int, Array Int, Array Int)
+encodeRow : Option Int ->
+  Int ->
+  List Cell ->
+  Result String (Int, Array Int, Array Int)
 encodeRow ipk autoRowid cells = do
   rowid <- rowidFor ipk autoRowid cells
   recBytes <- encodeRecord (nullifyIpk ipk cells)
@@ -510,11 +545,15 @@ encodeRow ipk autoRowid cells = do
 -- Encode every user row, threading the auto-increment rowid.  Cells come back
 -- in input order (which must already be rowid-ascending for the writer), each
 -- paired with its rowid.
-encodeRows : Option Int -> Int -> List (List Cell) -> List (Int, Array Int, Array Int) -> Result String (List (Int, Array Int, Array Int))
+encodeRows : Option Int ->
+  Int ->
+  List (List Cell) ->
+  List (Int, Array Int, Array Int) ->
+  Result String (List (Int, Array Int, Array Int))
 encodeRows _ _ [] acc = Ok (reverse acc)
-encodeRows ipk autoRowid (row::rest) acc = do
+encodeRows ipk autoRowid (row :: rest) acc = do
   prow <- encodeRow ipk autoRowid row
-  encodeRows ipk (autoRowid + 1) rest (prow::acc)
+  encodeRows ipk (autoRowid + 1) rest (prow :: acc)
 
 -- Encode every user row using an EXPLICIT rowid supplied per row (instead of
 -- auto-incrementing 1..N).  Each input is `(rowid, cells)`.
@@ -526,11 +565,14 @@ encodeRows ipk autoRowid (row::rest) acc = do
 --     renumbering survivors to 1..N.
 -- Rows must still be supplied in rowid-ascending order (the writer's existing
 -- single/multi-leaf + interior-key machinery assumes ascending rowids).
-encodeRowsExplicit : Option Int -> List (Int, List Cell) -> List (Int, Array Int, Array Int) -> Result String (List (Int, Array Int, Array Int))
+encodeRowsExplicit : Option Int ->
+  List (Int, List Cell) ->
+  List (Int, Array Int, Array Int) ->
+  Result String (List (Int, Array Int, Array Int))
 encodeRowsExplicit _ [] acc = Ok (reverse acc)
-encodeRowsExplicit ipk ((rid, row)::rest) acc = do
+encodeRowsExplicit ipk ((rid, row) :: rest) acc = do
   prow <- encodeRow ipk rid row
-  encodeRowsExplicit ipk rest (prow::acc)
+  encodeRowsExplicit ipk rest (prow :: acc)
 
 -- ---------------------------------------------------------------------------
 -- sqlite_master row (page 1)
@@ -561,17 +603,23 @@ masterCells name createSql rootPage =
 -- inside `leafCapacity`.  The guard below is therefore now DEFENSIVE (it can
 -- only fire if the geometry constants are ever made inconsistent), not the
 -- "row too large" wall it used to be.
-packLeaves : List (Int, Array Int, Array Int) -> List (Int, Array Int, Array Int) -> List (List (Int, Array Int, Array Int)) -> Int -> Result String (List (List (Int, Array Int, Array Int)))
+packLeaves : List (Int, Array Int, Array Int) ->
+  List (Int, Array Int, Array Int) ->
+  List (List (Int, Array Int, Array Int)) ->
+  Int ->
+  Result String (List (List (Int, Array Int, Array Int)))
 packLeaves [] cur done used = Ok (reverse (reverse cur :: done))
-packLeaves (p::rest) cur done used =
+packLeaves (p :: rest) cur done used =
   let clen = arrayLength (prowCell p)
   let need = clen + 2
-  if need > leafCapacity then Err "internal: leaf cell of \{intToString clen} bytes exceeds the page (leafCapacity = \{intToString leafCapacity})"
+  if need > leafCapacity then
+    Err
+      "internal: leaf cell of \{intToString clen} bytes exceeds the page (leafCapacity = \{intToString leafCapacity})"
   else match cur
     [] => packLeaves rest [p] done need
     _ =>
       if used + need <= leafCapacity then
-        packLeaves rest (p::cur) done (used + need)
+        packLeaves rest (p :: cur) done (used + need)
       else
         packLeaves rest [p] (reverse cur :: done) need
 
@@ -580,7 +628,7 @@ packLeaves (p::rest) cur done used =
 lastRowid : List (Int, Array Int, Array Int) -> Int
 lastRowid [] = 0
 lastRowid [p] = prowRowid p
-lastRowid (_::rest) = lastRowid rest
+lastRowid (_ :: rest) = lastRowid rest
 
 -- ---------------------------------------------------------------------------
 -- Top-level: buildDatabase
@@ -606,7 +654,12 @@ lastRowid (_::rest) = lastRowid rest
 --   page, a sqlite_master record too large for one page, or any
 --   record-encoding error.
 export
-buildDatabase : String -> String -> Int -> Option Int -> List (List Cell) -> Result String (Array Int)
+buildDatabase : String ->
+  String ->
+  Int ->
+  Option Int ->
+  List (List Cell) ->
+  Result String (Array Int)
 buildDatabase name createSql colCount ipkColIdx rows =
   buildDatabaseMulti [(name, createSql, ipkColIdx, rows)]
 
@@ -627,17 +680,23 @@ buildDatabase name createSql colCount ipkColIdx rows =
 --
 -- Returns the pages in file order; the table's rootpage is always `basePage`.
 
-buildTablePages : Int -> List (List (Int, Array Int, Array Int)) -> Result String (List (Array Int))
+buildTablePages : Int ->
+  List (List (Int, Array Int, Array Int)) ->
+  Result String (List (Array Int))
 buildTablePages basePage [single] = do
-  leaf <- mapErr (e => "data page: \{e}") (buildLeafPage 0 (map prowCell single))
+  leaf <- mapErr
+    (e => "data page: \{e}")
+    (buildLeafPage 0 (map prowCell single))
   Ok [leaf]
 buildTablePages basePage batches = do
-  let nLeaves   = length batches
+  let nLeaves = length batches
   -- Leaves occupy pages basePage+1 .. basePage+nLeaves; interior is basePage.
   leafPages <- buildLeafPages batches (basePage + 1) []
-  let entries   = interiorEntries batches (basePage + 1) []
+  let entries = interiorEntries batches (basePage + 1) []
   let rightmost = basePage + nLeaves
-  interior  <- mapErr (e => "interior page: \{e}") (buildInteriorPage entries rightmost)
+  interior <- mapErr
+    (e => "interior page: \{e}")
+    (buildInteriorPage entries rightmost)
   Ok (interior :: leafPages)
 
 -- | How many B-TREE file pages a table with these leaf batches occupies:
@@ -669,19 +728,22 @@ pageCountOf batches = 1 + length batches
 -- A planned table: its name, CREATE text, and rows partitioned into leaf
 -- batches (so its page count is known before page assignment).
 export
-buildDatabaseMulti : List (String, String, Option Int, List (List Cell)) -> Result String (Array Int)
+buildDatabaseMulti : List (String, String, Option Int, List (List Cell)) ->
+  Result String (Array Int)
 buildDatabaseMulti specs = do
   plans <- planTables specs []
   assembleImage plans
 
 -- Encode each table's rows and partition them into leaf batches, yielding a
 -- plan `(name, createSql, batches)` per table (page count is then known).
-planTables : List (String, String, Option Int, List (List Cell)) -> List (String, String, List (List (Int, Array Int, Array Int))) -> Result String (List (String, String, List (List (Int, Array Int, Array Int))))
+planTables : List (String, String, Option Int, List (List Cell)) ->
+  List (String, String, List (List (Int, Array Int, Array Int))) ->
+  Result String (List (String, String, List (List (Int, Array Int, Array Int))))
 planTables [] acc = Ok (reverse acc)
-planTables ((name, sql, ipk, rows)::rest) acc = do
+planTables ((name, sql, ipk, rows) :: rest) acc = do
   dataRows <- encodeRows ipk 1 rows []
   batches <- packLeaves dataRows [] [] 0
-  planTables rest ((name, sql, batches)::acc)
+  planTables rest ((name, sql, batches) :: acc)
 
 -- ---------------------------------------------------------------------------
 -- Image assembly — shared by the auto-rowid and explicit-rowid entry points
@@ -696,7 +758,8 @@ planTables ((name, sql, ipk, rows)::rest) acc = do
 --   1                        sqlite_master leaf
 --   2 .. btreeTotal          the tables' b-trees (unchanged by overflow)
 --   btreeTotal+1 .. endPage-1  the overflow chains, in row order
-assembleImage : List (String, String, List (List (Int, Array Int, Array Int))) -> Result String (Array Int)
+assembleImage : List (String, String, List (List (Int, Array Int, Array Int))) ->
+  Result String (Array Int)
 assembleImage plans = assembleImageWithIndexes plans []
 
 -- | Assemble the whole file image, adding zero or more single-page secondary
@@ -716,17 +779,22 @@ assembleImage plans = assembleImageWithIndexes plans []
 --   Each `indexPlan` is `(name, tblName, sql, cells)` — its sqlite_master
 --   metadata plus the already-sorted, already-encoded index-leaf cells (built by
 --   `planIndexes`).
-assembleImageWithIndexes : List (String, String, List (List (Int, Array Int, Array Int))) -> List (String, String, String, List (Array Int)) -> Result String (Array Int)
+assembleImageWithIndexes : List (String, String, List (List (Int, Array Int, Array Int))) ->
+  List (String, String, String, List (Array Int)) ->
+  Result String (Array Int)
 assembleImageWithIndexes plans indexPlans = do
   let btreeTotal = totalPageCount plans 1
   let nIndexes = length indexPlans
   let indexBase = btreeTotal + 1
   masterRows <- buildMasterRowsAll plans indexPlans indexBase
   _ <- refuseMasterOverflow masterRows
-  let (endPage, ovRev) = assignOverflowPlans plans (btreeTotal + nIndexes + 1) []
+  let (endPage, ovRev) =
+    assignOverflowPlans plans (btreeTotal + nIndexes + 1) []
   tablePages <- buildAllTablePages plans 2 []
   indexPages <- buildAllIndexPages indexPlans []
-  page1 <- mapErr (e => "sqlite_master overflow: \{e}") (buildLeafPage fileHeaderSize (map prowCell masterRows))
+  page1 <- mapErr
+    (e => "sqlite_master overflow: \{e}")
+    (buildLeafPage fileHeaderSize (map prowCell masterRows))
   let fileHdr = buildFileHeader (endPage - 1)
   let _ = blit fileHdr 0 page1 0 fileHeaderSize
   Ok (concatPageList (page1 :: tablePages ++ indexPages ++ reverse ovRev))
@@ -734,7 +802,10 @@ assembleImageWithIndexes plans indexPlans = do
 -- The sqlite_master pending rows: one per table (rowids 1..T, rootpages walked
 -- from page 2), then one per index (rowids T+1.., rootpages from `indexBase`).
 -- Table rows are byte-identical to the pre-index writer's.
-buildMasterRowsAll : List (String, String, List (List (Int, Array Int, Array Int))) -> List (String, String, String, List (Array Int)) -> Int -> Result String (List (Int, Array Int, Array Int))
+buildMasterRowsAll : List (String, String, List (List (Int, Array Int, Array Int))) ->
+  List (String, String, String, List (Array Int)) ->
+  Int ->
+  Result String (List (Int, Array Int, Array Int))
 buildMasterRowsAll plans indexPlans indexBase = do
   tableRows <- buildMasterRows plans 2 1 []
   indexRows <- buildIndexMasterRows indexPlans indexBase (length plans + 1) []
@@ -743,35 +814,45 @@ buildMasterRowsAll plans indexPlans indexBase = do
 -- One sqlite_master pending row per table: (type, name, tbl_name, rootpage,
 -- sql), rowid 1..N.  Each table's rootpage is the first page of its contiguous
 -- range, walked from page 2.
-buildMasterRows : List (String, String, List (List (Int, Array Int, Array Int))) -> Int -> Int -> List (Int, Array Int, Array Int) -> Result String (List (Int, Array Int, Array Int))
+buildMasterRows : List (String, String, List (List (Int, Array Int, Array Int))) ->
+  Int ->
+  Int ->
+  List (Int, Array Int, Array Int) ->
+  Result String (List (Int, Array Int, Array Int))
 buildMasterRows [] _ _ acc = Ok (reverse acc)
-buildMasterRows ((name, sql, batches)::rest) base rid acc = do
-  masterRec <- mapErr (e => "sqlite_master record: \{e}") (encodeRecord (masterCells name sql base))
+buildMasterRows ((name, sql, batches) :: rest) base rid acc = do
+  masterRec <- mapErr
+    (e => "sqlite_master record: \{e}")
+    (encodeRecord (masterCells name sql base))
   let (cell, spill) = encodeLeafCell rid masterRec
   buildMasterRows
     rest
     (base + pageCountOf batches)
     (rid + 1)
-    ((rid, cell, spill)::acc)
+    ((rid, cell, spill) :: acc)
 
 -- A `sqlite_master` record that spills would need its own overflow chain AND a
 -- pointer patched before page 1 is assembled.  Multi-page sqlite_master stays
 -- out of scope, so refuse cleanly rather than emit a truncated schema.
 refuseMasterOverflow : List (Int, Array Int, Array Int) -> Result String Unit
 refuseMasterOverflow [] = Ok ()
-refuseMasterOverflow (r::rest) =
+refuseMasterOverflow (r :: rest) =
   if arrayLength (prowSpill r) > 0 then
-    Err "sqlite_master overflow: the CREATE TABLE text is too large to store in one page (multi-page sqlite_master is not supported)"
+    Err
+      "sqlite_master overflow: the CREATE TABLE text is too large to store in one page (multi-page sqlite_master is not supported)"
   else
     refuseMasterOverflow rest
 
 -- Build every table's b-tree pages, walking the contiguous page ranges from
 -- `base` (page 2) upward.  Returns them flattened in file order.
-buildAllTablePages : List (String, String, List (List (Int, Array Int, Array Int))) -> Int -> List (List (Array Int)) -> Result String (List (Array Int))
+buildAllTablePages : List (String, String, List (List (Int, Array Int, Array Int))) ->
+  Int ->
+  List (List (Array Int)) ->
+  Result String (List (Array Int))
 buildAllTablePages [] _ acc = Ok (flattenPages (reverse acc))
-buildAllTablePages ((_, _, batches)::rest) base acc = do
+buildAllTablePages ((_, _, batches) :: rest) base acc = do
   pages <- buildTablePages base batches
-  buildAllTablePages rest (base + pageCountOf batches) (pages::acc)
+  buildAllTablePages rest (base + pageCountOf batches) (pages :: acc)
 
 -- ---------------------------------------------------------------------------
 -- Explicit-rowid multi-table build (rowid-faithful rewrite)
@@ -787,13 +868,19 @@ buildAllTablePages ((_, _, batches)::rest) base acc = do
 -- | Build the byte image of a single-table SQLite database with explicit
 --   per-row rowids (`(rowid, cells)`).  See `buildDatabase`.
 export
-buildDatabaseExplicit : String -> String -> Int -> Option Int -> List (Int, List Cell) -> Result String (Array Int)
+buildDatabaseExplicit : String ->
+  String ->
+  Int ->
+  Option Int ->
+  List (Int, List Cell) ->
+  Result String (Array Int)
 buildDatabaseExplicit name createSql colCount ipkColIdx rows =
   buildDatabaseMultiExplicit [(name, createSql, ipkColIdx, rows)]
 
 -- | Like `buildDatabaseMulti` but every table's rows carry an explicit rowid.
 export
-buildDatabaseMultiExplicit : List (String, String, Option Int, List (Int, List Cell)) -> Result String (Array Int)
+buildDatabaseMultiExplicit : List (String, String, Option Int, List (Int, List Cell)) ->
+  Result String (Array Int)
 buildDatabaseMultiExplicit specs = do
   plans <- planTablesExplicit specs []
   assembleImage plans
@@ -801,39 +888,51 @@ buildDatabaseMultiExplicit specs = do
 -- Encode each table's rows using their explicit rowids and partition them into
 -- leaf batches.  Mirrors `planTables` (which assigns 1..N), differing only in
 -- the rowid source.
-planTablesExplicit : List (String, String, Option Int, List (Int, List Cell)) -> List (String, String, List (List (Int, Array Int, Array Int))) -> Result String (List (String, String, List (List (Int, Array Int, Array Int))))
+planTablesExplicit : List (String, String, Option Int, List (Int, List Cell)) ->
+  List (String, String, List (List (Int, Array Int, Array Int))) ->
+  Result String (List (String, String, List (List (Int, Array Int, Array Int))))
 planTablesExplicit [] acc = Ok (reverse acc)
-planTablesExplicit ((name, sql, ipk, rows)::rest) acc = do
+planTablesExplicit ((name, sql, ipk, rows) :: rest) acc = do
   dataRows <- encodeRowsExplicit ipk rows []
   batches <- packLeaves dataRows [] [] 0
-  planTablesExplicit rest ((name, sql, batches)::acc)
+  planTablesExplicit rest ((name, sql, batches) :: acc)
 
 -- Total B-TREE file pages: page 1 (sqlite_master) plus every table's page span.
 -- Overflow pages are allocated on top of this (see `assembleImage`).
-totalPageCount : List (String, String, List (List (Int, Array Int, Array Int))) -> Int -> Int
+totalPageCount : List (String, String, List (List (Int, Array Int, Array Int))) ->
+  Int ->
+  Int
 totalPageCount [] acc = acc
-totalPageCount ((_, _, batches)::rest) acc =
+totalPageCount ((_, _, batches) :: rest) acc =
   totalPageCount rest (acc + pageCountOf batches)
 
 -- Flatten a list of per-table page lists into one file-ordered page list.
 flattenPages : List (List (Array Int)) -> List (Array Int)
 flattenPages [] = []
-flattenPages (p::rest) = p ++ flattenPages rest
+flattenPages (p :: rest) = p ++ flattenPages rest
 
 -- Build one leaf page per batch, numbering pages from `pageNum` upward.
-buildLeafPages : List (List (Int, Array Int, Array Int)) -> Int -> List (Array Int) -> Result String (List (Array Int))
+buildLeafPages : List (List (Int, Array Int, Array Int)) ->
+  Int ->
+  List (Array Int) ->
+  Result String (List (Array Int))
 buildLeafPages [] _ acc = Ok (reverse acc)
-buildLeafPages (b::rest) pageNum acc = do
-  page <- mapErr (e => "data page \{intToString pageNum}: \{e}") (buildLeafPage 0 (map prowCell b))
-  buildLeafPages rest (pageNum + 1) (page::acc)
+buildLeafPages (b :: rest) pageNum acc = do
+  page <- mapErr
+    (e => "data page \{intToString pageNum}: \{e}")
+    (buildLeafPage 0 (map prowCell b))
+  buildLeafPages rest (pageNum + 1) (page :: acc)
 
 -- Interior cell (child-page, max-rowid) entries for every NON-rightmost leaf,
 -- ascending by key.  The last batch is the right-most child (no cell).
-interiorEntries : List (List (Int, Array Int, Array Int)) -> Int -> List (Int, Int) -> List (Int, Int)
+interiorEntries : List (List (Int, Array Int, Array Int)) ->
+  Int ->
+  List (Int, Int) ->
+  List (Int, Int)
 interiorEntries [] _ acc = reverse acc
 interiorEntries [_] _ acc = reverse acc
-interiorEntries (b::rest) pageNum acc =
-  interiorEntries rest (pageNum + 1) ((pageNum, lastRowid b)::acc)
+interiorEntries (b :: rest) pageNum acc =
+  interiorEntries rest (pageNum + 1) ((pageNum, lastRowid b) :: acc)
 
 -- Concatenate a list of equal-sized page images into one byte array, in order.
 concatPageList : List (Array Int) -> Array Int
@@ -843,7 +942,7 @@ concatPageList pages =
 
 blitPages : List (Array Int) -> Array Int -> Int -> Array Int
 blitPages [] file _ = file
-blitPages (p::rest) file off =
+blitPages (p :: rest) file off =
   let n = arrayLength p
   let _ = blit p 0 file off n
   blitPages rest file (off + n)
@@ -928,7 +1027,9 @@ compareIndexEntry (k1, r1) (k2, r2) = match compareCellsSqlite k1 k2
 encodeIndexLeafCell : Array Int -> Result String (Array Int)
 encodeIndexLeafCell recBytes =
   let plen = arrayLength recBytes
-  if plen > indexMaxLocalPayload usableSize then Err "index key record of \{intToString plen} bytes needs an overflow page; multi-page/overflow indexes are not supported in v1"
+  if plen > indexMaxLocalPayload usableSize then
+    Err
+      "index key record of \{intToString plen} bytes needs an overflow page; multi-page/overflow indexes are not supported in v1"
   else
     let buf = newBuilder ()
     let _ = emitBytes (sqVarintBytes plen) buf
@@ -938,21 +1039,25 @@ encodeIndexLeafCell recBytes =
 -- | Encode every `(keyCell, rowid)` entry of one index into a sorted list of
 --   index-leaf cells: sort by SQLite record order, then encode each as the
 --   record `[keyCell, CInt rowid]` wrapped in its `[len][record]` cell.
-encodeIndexCells : List (Cell, Int) -> List (Array Int) -> Result String (List (Array Int))
+encodeIndexCells : List (Cell, Int) ->
+  List (Array Int) ->
+  Result String (List (Array Int))
 encodeIndexCells [] acc = Ok (reverse acc)
-encodeIndexCells ((k, rid)::rest) acc = do
+encodeIndexCells ((k, rid) :: rest) acc = do
   recBytes <- encodeRecord [k, CInt rid]
   cell <- encodeIndexLeafCell recBytes
-  encodeIndexCells rest (cell::acc)
+  encodeIndexCells rest (cell :: acc)
 
 -- | Plan every index: sort its entries and pre-encode its cells, yielding
 --   `(name, tblName, sql, cells)` so the page count (always 1) is known before
 --   page assignment.
-planIndexes : List (String, String, String, List (Cell, Int)) -> List (String, String, String, List (Array Int)) -> Result String (List (String, String, String, List (Array Int)))
+planIndexes : List (String, String, String, List (Cell, Int)) ->
+  List (String, String, String, List (Array Int)) ->
+  Result String (List (String, String, String, List (Array Int)))
 planIndexes [] acc = Ok (reverse acc)
-planIndexes ((name, tbl, sql, entries)::rest) acc = do
+planIndexes ((name, tbl, sql, entries) :: rest) acc = do
   cells <- encodeIndexCells (sortBy compareIndexEntry entries) []
-  planIndexes rest ((name, tbl, sql, cells)::acc)
+  planIndexes rest ((name, tbl, sql, cells) :: acc)
 
 -- | Build the single index-leaf page (0x0A) from a list of sorted, encoded
 --   index cells.  Cell pointers are written in the supplied (ascending-key)
@@ -964,17 +1069,26 @@ buildIndexLeafPage cells = do
   let page = arrayMake pageSize 0
   let cpStart = leafHeaderSize
   let cpEnd = cpStart + nCells * 2
-  contentStart <- packCells page cells cpStart pageSize cpEnd 0 "index has more entries than fit one page; multi-page indexes are not supported in v1"
+  contentStart <- packCells
+    page
+    cells
+    cpStart
+    pageSize
+    cpEnd
+    0
+    "index has more entries than fit one page; multi-page indexes are not supported in v1"
   let _ = writeLeafHeaderTyped page 0 pageIndexLeafByte nCells contentStart
   Ok page
 
 -- | Build one index-leaf page per index plan, in plan order (which matches the
 --   `indexBase`-onward page numbering used for their rootpages).
-buildAllIndexPages : List (String, String, String, List (Array Int)) -> List (Array Int) -> Result String (List (Array Int))
+buildAllIndexPages : List (String, String, String, List (Array Int)) ->
+  List (Array Int) ->
+  Result String (List (Array Int))
 buildAllIndexPages [] acc = Ok (reverse acc)
-buildAllIndexPages ((_, _, _, cells)::rest) acc = do
+buildAllIndexPages ((_, _, _, cells) :: rest) acc = do
   page <- mapErr (e => "index page: \{e}") (buildIndexLeafPage cells)
-  buildAllIndexPages rest (page::acc)
+  buildAllIndexPages rest (page :: acc)
 
 -- The five sqlite_master columns of an index row: type='index', the index name,
 -- the table it belongs to, its rootpage, and the stored CREATE INDEX text.
@@ -984,12 +1098,18 @@ indexMasterCells name tbl sql rootPage =
 
 -- One sqlite_master pending row per index, rootpages walked from `indexBase` and
 -- rowids continuing after the table rows.
-buildIndexMasterRows : List (String, String, String, List (Array Int)) -> Int -> Int -> List (Int, Array Int, Array Int) -> Result String (List (Int, Array Int, Array Int))
+buildIndexMasterRows : List (String, String, String, List (Array Int)) ->
+  Int ->
+  Int ->
+  List (Int, Array Int, Array Int) ->
+  Result String (List (Int, Array Int, Array Int))
 buildIndexMasterRows [] _ _ acc = Ok (reverse acc)
-buildIndexMasterRows ((name, tbl, sql, _)::rest) page rid acc = do
-  recBytes <- mapErr (e => "sqlite_master index record: \{e}") (encodeRecord (indexMasterCells name tbl sql page))
+buildIndexMasterRows ((name, tbl, sql, _) :: rest) page rid acc = do
+  recBytes <- mapErr
+    (e => "sqlite_master index record: \{e}")
+    (encodeRecord (indexMasterCells name tbl sql page))
   let (cell, spill) = encodeLeafCell rid recBytes
-  buildIndexMasterRows rest (page + 1) (rid + 1) ((rid, cell, spill)::acc)
+  buildIndexMasterRows rest (page + 1) (rid + 1) ((rid, cell, spill) :: acc)
 
 -- ---------------------------------------------------------------------------
 -- Public: multi-table + secondary indexes
@@ -1008,7 +1128,9 @@ buildIndexMasterRows ((name, tbl, sql, _)::rest) page rid acc = do
 --
 --   With an empty `indexSpecs` this is byte-identical to `buildDatabaseMulti`.
 export
-buildDatabaseMultiWithIndexes : List (String, String, Option Int, List (List Cell)) -> List (String, String, String, List (Cell, Int)) -> Result String (Array Int)
+buildDatabaseMultiWithIndexes : List (String, String, Option Int, List (List Cell)) ->
+  List (String, String, String, List (Cell, Int)) ->
+  Result String (Array Int)
 buildDatabaseMultiWithIndexes specs indexSpecs = do
   plans <- planTables specs []
   indexPlans <- planIndexes indexSpecs []
@@ -1022,7 +1144,13 @@ buildDatabaseMultiWithIndexes specs indexSpecs = do
 --   `Err` on a build error (overflow / encoding); the file-write Result is
 --   propagated otherwise.
 export
-writeDatabase : String -> String -> String -> Int -> Option Int -> List (List Cell) -> <FileWrite> Result String Unit
+writeDatabase : String ->
+  String ->
+  String ->
+  Int ->
+  Option Int ->
+  List (List Cell) ->
+  <FileWrite> Result String Unit
 writeDatabase path name createSql colCount ipkColIdx rows = do
   img <- buildDatabase name createSql colCount ipkColIdx rows
   writeFileBytes path img

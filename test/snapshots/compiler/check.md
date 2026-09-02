@@ -1,5 +1,5 @@
 # META
-source_lines=180
+source_lines=196
 stages=DESUGAR,MARK
 # SOURCE
 -- Composed self-hosted front-end LOGIC — wires the stage ports into one
@@ -74,7 +74,12 @@ runCheckFromDecls rsrc csrc raw =
 -- spurious typecheck "Unbound variable".  In single-file mode there is
 -- no loader, so any non-core import is by definition unknown.
 
-routeImportCheck : String -> List Decl -> List Decl -> List Decl -> List Decl -> String
+routeImportCheck : String ->
+  List Decl ->
+  List Decl ->
+  List Decl ->
+  List Decl ->
+  String
 routeImportCheck "" runtimeP coreP raw desugared =
   let resDiags = resolveToLines runtimeP coreP desugared
   reportFor resDiags runtimeP coreP raw desugared
@@ -91,7 +96,8 @@ cleanReport : List Decl -> List Decl -> List Decl -> List Decl -> String
 cleanReport runtimeP coreP raw desugared =
   let exWarns = exhaustToLinesWith (raw ++ runtimeP ++ coreP) raw
   let _ = setCoherenceUserDecls desugared
-  let schemes = checkOneToLinesWithRuntime (desugar runtimeP) (desugar coreP) desugared
+  let schemes =
+    checkOneToLinesWithRuntime (desugar runtimeP) (desugar coreP) desugared
   joinNonEmpty exWarns schemes
 -- TYPECHECK-AUDIT S3: stage the USER decls (NO prelude) for the coherence check
 -- so a user impl overriding a prelude impl is not flagged as overlapping.
@@ -119,7 +125,7 @@ checkHasErrors rsrc csrc tsrc =
   let coreP = parsePrelude csrc
   let importErrs = singleFileImportErrors desugared
   match importErrs
-    _::_ => True
+    _ :: _ => True
     [] =>
       let resDiags = resolveToLines runtimeP coreP desugared
       match resDiags
@@ -146,7 +152,12 @@ checkHasErrors rsrc csrc tsrc =
 -- ever repeat that same `""` — `allowInternal`/`trustedMods` are unused now
 -- for the same reason (kept for signature stability with that call site).
 export
-runCheckModules : Bool -> List String -> List Decl -> List Decl -> List (String, List Decl) -> String
+runCheckModules : Bool ->
+  List String ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  String
 runCheckModules allowInternal trustedMods rtD coreD mods =
   let exWarns = entryExhaust rtD coreD mods
   let report = checkModulesEntryReport rtD coreD mods
@@ -155,7 +166,12 @@ runCheckModules allowInternal trustedMods rtD coreD mods =
 -- exit-code predicate analog of checkHasErrors for the multi-module path: a
 -- resolve error OR any type error in the entry module.
 export
-checkModulesHasErrors : Bool -> List String -> List Decl -> List Decl -> List (String, List Decl) -> Bool
+checkModulesHasErrors : Bool ->
+  List String ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  Bool
 checkModulesHasErrors allowInternal trustedMods rtD coreD mods =
   let resDiags = resolveModulesToLinesG allowInternal trustedMods rtD coreD mods
   match resDiags
@@ -181,7 +197,7 @@ declsOfMod (_, prog) = prog
 entryExhaustGo : List Decl -> List (String, List Decl) -> String
 entryExhaustGo _ [] = ""
 entryExhaustGo oracleDecls [(_, prog)] = exhaustToLinesWith oracleDecls prog
-entryExhaustGo oracleDecls (_::rest) = entryExhaustGo oracleDecls rest
+entryExhaustGo oracleDecls (_ :: rest) = entryExhaustGo oracleDecls rest
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false))))

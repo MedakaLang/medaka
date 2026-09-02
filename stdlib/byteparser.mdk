@@ -92,14 +92,14 @@ export impl DeferredMappable ByteParserE where
 
 export impl DeferredApplicative ByteParserE where
   deferPure a = ByteParserE (_ pos => BOk a pos)
-  deferAp pf pa = ByteParserE (input pos =>
-    onOk
-      (runBP pf input pos)
-      (f p2 => onOk (runBP pa input p2) (a p3 => BOk (f a) p3)))
+  deferAp pf pa = ByteParserE (input pos => onOk (runBP
+    pf
+    input
+    pos) (f p2 => onOk (runBP pa input p2) (a p3 => BOk (f a) p3)))
 
 export impl DeferredThenable ByteParserE where
-  deferThen p k = ByteParserE (input pos =>
-    onOk (runBP p input pos) (a p2 => runBP (k a) input p2))
+  deferThen p k = ByteParserE (input pos => onOk (runBP p input pos) (a p2 =>
+    runBP (k a) input p2))
 
 -- | Left-biased, full-backtracking alternative.  Plain functions rather than an
 --   `Alternative` impl: that interface `requires Applicative f` at kind
@@ -112,10 +112,9 @@ noMatch = ByteParserE (_ pos => BErr "noMatch" pos)
 
 export
 orElse : ByteParserE e a -> ByteParserE e a -> ByteParserE e a
-orElse p q = ByteParserE (input pos =>
-  match runBP p input pos
-    BOk a pos2 => BOk a pos2
-    BErr _ _ => runBP q input pos)
+orElse p q = ByteParserE (input pos => match runBP p input pos
+  BOk a pos2 => BOk a pos2
+  BErr _ _ => runBP q input pos)
 
 -- ---------------------------------------------------------------------------
 -- Primitives
@@ -204,7 +203,7 @@ manyGo p input pos acc = match runBP p input pos
     if pos2 == pos then
       BOk (reverse acc) pos2  -- no progress: stop to avoid infinite loop
     else
-      manyGo p input pos2 (a::acc)
+      manyGo p input pos2 (a :: acc)
 
 -- | One-or-more.
 --
@@ -217,7 +216,7 @@ some : ByteParser a -> ByteParser (List a)
 some p = defer
   x <- p
   xs <- many p
-  deferPure (x::xs)
+  deferPure (x :: xs)
 
 -- | One-or-more `p` separated by `sep`.
 export
@@ -227,7 +226,7 @@ sepBy1 p sep = defer
   xs <- many (defer
     _ <- sep
     p)
-  deferPure (x::xs)
+  deferPure (x :: xs)
 
 -- | Zero-or-more `p` separated by `sep`.
 export
@@ -257,7 +256,7 @@ between open close p = defer
 export
 choice : List (ByteParser a) -> ByteParser a
 choice [] = failWith "choice: no alternatives"
-choice (q::rest) = orElse q (choice rest)
+choice (q :: rest) = orElse q (choice rest)
 
 -- | Left-associative chaining of `p` separated by operator parser `op`
 --   whose value is a binary function.
@@ -275,12 +274,13 @@ chainl1 p op = defer
   chainl1Rest p op x
 
 chainl1Rest : ByteParser a -> ByteParser (a -> a -> a) -> a -> ByteParser a
-chainl1Rest p op acc = orElse
-  (defer
-    f <- op
-    y <- p
-    chainl1Rest p op (f acc y))
-  (deferPure acc)
+chainl1Rest p op acc =
+  orElse
+    (defer
+      f <- op
+      y <- p
+      chainl1Rest p op (f acc y))
+    (deferPure acc)
 
 -- | Read exactly N bytes, returning them as a List Int.
 --
@@ -294,7 +294,7 @@ takeBytesGo : Int -> List Int -> Array Int -> Int -> BResult (List Int)
 takeBytesGo n acc input pos
   | n <= 0 = BOk (reverse acc) pos
   | pos >= arrayLength input = BErr "unexpected end of input" pos
-  | otherwise = takeBytesGo (n - 1) (input[pos]::acc) input (pos + 1)
+  | otherwise = takeBytesGo (n - 1) (input[pos] :: acc) input (pos + 1)
 
 -- | Read exactly N bytes, returning them as an Array Int slice.
 export
@@ -381,7 +381,8 @@ leUintGo : Int -> Int -> Int -> Array Int -> Int -> BResult Int
 leUintGo n shift acc input pos
   | n <= 0 = BOk acc pos
   | pos >= arrayLength input = BErr "unexpected end of input" pos
-  | otherwise = leUintGo (n - 1) (shift + 8) (acc + input[pos] * pow2 shift) input (pos + 1)
+  | otherwise =
+    leUintGo (n - 1) (shift + 8) (acc + input[pos] * pow2 shift) input (pos + 1)
 
 -- | Read a little-endian SIGNED integer of exactly N bytes (N in 1..8),
 --   two's-complement.  Mirror of `beSint`: least-significant byte first,

@@ -54,7 +54,7 @@ ifLet opt = match opt
   Some x => x
   _ => 0
 asParam = (xs@rest) => rest
-consAsParam = (ps@(x::_)) => x
+consAsParam = (ps@(x :: _)) => x
 whereEol x = g x
   where
     g y = y * 2

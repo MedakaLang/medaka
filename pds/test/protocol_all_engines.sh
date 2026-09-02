@@ -90,15 +90,18 @@ cp -R "$ROOT/pds" "$WORK/mutation-tree/pds"
 
 python3 - "$WORK/mutation-tree/pds/test/protocol_all_engines_main.mdk" <<'PY'
 import pathlib
+import re
 import sys
 
+# The anchor is matched across whitespace (`medaka fmt` may break the `&&`
+# chain over lines); the mutation keeps whatever layout it found.
 path = pathlib.Path(sys.argv[1])
-old = 'if response == expectedTextResponse 200 "OK" "fixed" && storeSize next == 1'
-new = 'if response == expectedTextResponse 201 "Created" "fixed" && storeSize next == 1'
+anchor = re.compile(r'if response == expectedTextResponse 200 "OK" "fixed"(\s+)&& storeSize next == 1')
 text = path.read_text()
-if text.count(old) != 1:
-    raise SystemExit(f'mutation anchor count is {text.count(old)}, expected 1')
-path.write_text(text.replace(old, new))
+hits = anchor.findall(text)
+if len(hits) != 1:
+    raise SystemExit(f'mutation anchor count is {len(hits)}, expected 1')
+path.write_text(anchor.sub(lambda m: 'if response == expectedTextResponse 201 "Created" "fixed"' + m.group(1) + '&& storeSize next == 1', text))
 PY
 
 MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/mutation-tree/pds/test/protocol_all_engines_main.mdk" -o "$WORK/mutated-native" > "$WORK/mutated-build.log" 2>&1 || {

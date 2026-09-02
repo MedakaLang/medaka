@@ -106,8 +106,12 @@ import list.{get}
 
 data Category = Food | Housing | Books deriving (Debug)
 
-data Expense =
-  | { date : String, payee : String, amount : Float, category : Category }
+data Expense = {
+  date : String,
+  payee : String,
+  amount : Float,
+  category : Category,
+}
 
 impl Display Category where
   display Food = "food"
@@ -142,8 +146,12 @@ parseExpense line = do
   amount <- amountOf raw
   catName <- field 3 parts
   category <- categoryOf catName
-  pure
-    Expense { date = date, payee = payee, amount = amount, category = category }
+  pure Expense {
+    date = date,
+    payee = payee,
+    amount = amount,
+    category = category,
+  }
 
 report : String -> <IO> Unit
 report line = match parseExpense line

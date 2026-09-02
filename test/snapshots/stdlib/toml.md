@@ -1,5 +1,5 @@
 # META
-source_lines=732
+source_lines=777
 stages=DESUGAR,MARK
 # SOURCE
 {- | A reader for a subset of TOML.
@@ -42,7 +42,7 @@ listReverse = listRevGo []
 
 listRevGo : List a -> List a -> List a
 listRevGo acc [] = acc
-listRevGo acc (x::xs) = listRevGo (x::acc) xs
+listRevGo acc (x :: xs) = listRevGo (x :: acc) xs
 
 -- ── Comment stripping ────────────────────────────────────────────────────────
 
@@ -59,12 +59,18 @@ stripCommentGo arr i n inStr acc
   | i >= n = stringFromChars (arrayFromList (listReverse acc))
   | otherwise = stripCommentStep arr i n inStr acc (arrayGetUnsafe i arr)
 
-stripCommentStep : Array Char -> Int -> Int -> Bool -> List Char -> Char -> String
+stripCommentStep : Array Char ->
+  Int ->
+  Int ->
+  Bool ->
+  List Char ->
+  Char ->
+  String
 stripCommentStep arr i n inStr acc c
-  | charCode c == 34 = stripCommentGo arr (i + 1) n (not inStr) (c::acc)
+  | charCode c == 34 = stripCommentGo arr (i + 1) n (not inStr) (c :: acc)
   | charCode c == 35 && not inStr =
     stringFromChars (arrayFromList (listReverse acc))
-  | otherwise = stripCommentGo arr (i + 1) n inStr (c::acc)
+  | otherwise = stripCommentGo arr (i + 1) n inStr (c :: acc)
 
 -- ── String value parser ──────────────────────────────────────────────────────
 
@@ -95,37 +101,54 @@ parseArrayValue arr i
 -- Skip spaces and parse a string item, or close on `]`.  Called at the start
 -- of the array and again after each comma, i.e. wherever an item (or the
 -- close) is expected next.
-parseArrayItems : Array Char -> Int -> List String -> Result String (List String, Int)
+parseArrayItems : Array Char ->
+  Int ->
+  List String ->
+  Result String (List String, Int)
 parseArrayItems arr i acc
   | i >= arrayLength arr = Err "unterminated array"
   | arrayGetUnsafe i arr == ']' = Ok (listReverse acc, i + 1)
   | arrayGetUnsafe i arr == ' ' = parseArrayItems arr (i + 1) acc
   | arrayGetUnsafe i arr == '\t' = parseArrayItems arr (i + 1) acc
   | arrayGetUnsafe i arr == '"' = parseArrayItemStr arr i acc
-  | otherwise = Err (stringConcat ["unexpected char in array: '", charToStr (arrayGetUnsafe i arr), "'"])
+  | otherwise =
+    Err
+      (stringConcat [
+        "unexpected char in array: '",
+        charToStr (arrayGetUnsafe i arr),
+        "'",
+      ])
 
-parseArrayItemStr : Array Char -> Int -> List String -> Result String (List String, Int)
+parseArrayItemStr : Array Char ->
+  Int ->
+  List String ->
+  Result String (List String, Int)
 parseArrayItemStr arr i acc = match parseQuotedStr arr i
   Err e => Err e
-  Ok (s, j) => parseArraySep arr j (s::acc)
+  Ok (s, j) => parseArraySep arr j (s :: acc)
 
 -- After a parsed item: only a `,` (another item may follow, a trailing comma
 -- before `]` is fine) or `]` (close) is valid next.  Anything else, most
 -- commonly another quoted item with no comma between, `["x" "y"]`, is a
 -- malformed array and must be rejected loudly rather than silently accepted
 -- as two adjacent items.
-parseArraySep : Array Char -> Int -> List String -> Result String (List String, Int)
+parseArraySep : Array Char ->
+  Int ->
+  List String ->
+  Result String (List String, Int)
 parseArraySep arr i acc
   | i >= arrayLength arr = Err "unterminated array"
   | arrayGetUnsafe i arr == ' ' = parseArraySep arr (i + 1) acc
   | arrayGetUnsafe i arr == '\t' = parseArraySep arr (i + 1) acc
   | arrayGetUnsafe i arr == ',' = parseArrayItems arr (i + 1) acc
   | arrayGetUnsafe i arr == ']' = Ok (listReverse acc, i + 1)
-  | otherwise = Err (stringConcat [
-    "expected ',' or ']' in array, found: '",
-    charToStr (arrayGetUnsafe i arr),
-    "'",
-  ])
+  | otherwise =
+    Err
+      (stringConcat [
+        "expected ',' or ']' in array, found: '",
+        charToStr (arrayGetUnsafe i arr),
+        "'",
+      ])
 
 -- ── Key-value line parser ────────────────────────────────────────────────────
 
@@ -156,12 +179,19 @@ parseKvAfterEq arr n eq =
   -- Dotted keys (`foo.bar = "zzz"`) are unsupported; reject loudly rather
   -- than silently accepting a dot as an ordinary key character.
   if contains "." key then
-    Err (stringConcat ["dotted key '", key, "' is not supported: use table headers instead"])
+    Err
+      (stringConcat [
+        "dotted key '", key, "' is not supported: use table headers instead"
+      ])
   else
     let valStart = skipSpaces arr (eq + 1) n
     parseKvValue arr n valStart key
 
-parseKvValue : Array Char -> Int -> Int -> String -> Result String (String, TomlValue)
+parseKvValue : Array Char ->
+  Int ->
+  Int ->
+  String ->
+  Result String (String, TomlValue)
 parseKvValue arr n i key
   | i >= n = Err (stringConcat ["missing value for key: ", key])
   | arrayGetUnsafe i arr == '"' = parseKvStr arr i key
@@ -181,7 +211,10 @@ checkLineConsumed arr j key =
   if trailing == "" then
     Ok ()
   else
-    Err (stringConcat ["trailing content after value for key '", key, "': ", trailing])
+    Err
+      (stringConcat [
+        "trailing content after value for key '", key, "': ", trailing
+      ])
 
 parseKvStr : Array Char -> Int -> String -> Result String (String, TomlValue)
 parseKvStr arr i key = match parseQuotedStr arr i
@@ -196,9 +229,9 @@ parseKvArr arr i key = match parseArrayValue arr i
 -- The remaining characters of the line from `i`, trimmed.  Used for the
 -- unquoted scalar forms (integer / boolean), which run to end-of-line.
 restOfLine : Array Char -> Int -> Int -> String
-restOfLine arr n i = trim (stringFromChars (arrayMakeWith
-  (n - i)
-  (j => arrayGetUnsafe (i + j) arr)))
+restOfLine arr n i =
+  trim
+    (stringFromChars (arrayMakeWith (n - i) (j => arrayGetUnsafe (i + j) arr)))
 
 -- Unquoted scalar: `true`/`false`, or an integer.  Anything else (an inline
 -- table `{k = v}`, a float, a datetime, a bare word) is an error, never a
@@ -210,13 +243,12 @@ parseKvScalar tok key
   | tok == "false" = Ok (key, TBool False)
   | otherwise = match toInt tok
     Some n => Ok (key, TInt n)
-    None => Err (stringConcat [
-      "unsupported value for key '",
-      key,
-      "': ",
-      tok,
-      " (expected a quoted string, a string array, an integer, or true/false)",
-    ])
+    None =>
+      Err
+        (stringConcat [
+          "unsupported value for key '", key, "': ", tok,
+          " (expected a quoted string, a string array, an integer, or true/false)"
+        ])
 
 -- ── Document parser ──────────────────────────────────────────────────────────
 
@@ -231,7 +263,9 @@ parseHeader s =
   let n = stringLength s
   if n >= 4 && stringSlice 0 2 s == "[[" && stringSlice (n - 2) n s == "]]" then
     Some (HArrayTable (trim (stringSlice 2 (n - 2) s)))
-  else if n >= 2 && stringSlice 0 1 s == "[" && stringSlice (n - 1) n s == "]" then
+  else if n >= 2
+    && stringSlice 0 1 s == "["
+    && stringSlice (n - 1) n s == "]" then
     Some (HTable (trim (stringSlice 1 (n - 1) s)))
   else
     None
@@ -246,21 +280,26 @@ qualifyKey section key
 -- How many `[[name]]` elements have been opened so far, per table name.
 seenCount : String -> List (String, Int) -> Int
 seenCount _ [] = 0
-seenCount name ((k, c)::rest)
+seenCount name ((k, c) :: rest)
   | k == name = c
   | otherwise = seenCount name rest
 
 bumpCount : String -> List (String, Int) -> List (String, Int)
 bumpCount name [] = [(name, 1)]
-bumpCount name ((k, c)::rest)
-  | k == name = (k, c + 1)::rest
+bumpCount name ((k, c) :: rest)
+  | k == name = (k, c + 1) :: rest
   | otherwise = (k, c) :: bumpCount name rest
 
-parseLinesAcc : List String -> String -> List (String, Int) -> List (String, TomlValue) -> Result String (List (String, TomlValue))
+parseLinesAcc : List String ->
+  String ->
+  List (String, Int) ->
+  List (String, TomlValue) ->
+  Result String (List (String, TomlValue))
 parseLinesAcc [] _ _ acc = Ok (listReverse acc)
-parseLinesAcc (l::ls) section counts acc =
+parseLinesAcc (l :: ls) section counts acc =
   let trimmed = trim (stripComment l)
-  if trimmed == "" then parseLinesAcc ls section counts acc
+  if trimmed == "" then
+    parseLinesAcc ls section counts acc
   else match parseHeader trimmed
     Some (HTable hdr) => parseLinesAcc ls hdr counts acc
     Some (HArrayTable hdr) =>
@@ -273,7 +312,7 @@ parseLinesAcc (l::ls) section counts acc =
     None => match parseKv trimmed
       Err e => Err e
       Ok (k, v) =>
-        parseLinesAcc ls section counts ((qualifyKey section k, v)::acc)
+        parseLinesAcc ls section counts ((qualifyKey section k, v) :: acc)
 
 -- # Parsing
 
@@ -366,7 +405,7 @@ parse s = map Toml (parseLinesAcc (lines s) "" [] [])
 
 lookupKvs : String -> List (String, TomlValue) -> Option TomlValue
 lookupKvs _ [] = None
-lookupKvs key ((k, v)::rest)
+lookupKvs key ((k, v) :: rest)
   | k == key = Some v
   | otherwise = lookupKvs key rest
 
@@ -476,7 +515,8 @@ getBool key (Toml kvs) = match lookupKvs key kvs
 -- The 0-based index in a key of the shape `<name>.<idx>.<field>`, or None.
 tableIdxOf : String -> String -> Option Int
 tableIdxOf prefix key =
-  if not (startsWith prefix key) then None
+  if not (startsWith prefix key) then
+    None
   else
     let rest = drop (stringLength prefix) key
     match indexOf "." rest
@@ -485,7 +525,7 @@ tableIdxOf prefix key =
 
 tableCountGo : String -> List (String, TomlValue) -> Int -> Int
 tableCountGo _ [] best = best
-tableCountGo prefix ((k, _)::rest) best = match tableIdxOf prefix k
+tableCountGo prefix ((k, _) :: rest) best = match tableIdxOf prefix k
   None => tableCountGo prefix rest best
   Some i => tableCountGo prefix rest (max (i + 1) best)
 
@@ -499,9 +539,11 @@ export
 tableCount : String -> Toml -> Int
 tableCount name (Toml kvs) = tableCountGo (stringConcat [name, "."]) kvs 0
 
-stripTablePrefix : String -> List (String, TomlValue) -> List (String, TomlValue)
+stripTablePrefix : String ->
+  List (String, TomlValue) ->
+  List (String, TomlValue)
 stripTablePrefix _ [] = []
-stripTablePrefix prefix ((k, v)::rest)
+stripTablePrefix prefix ((k, v) :: rest)
   | startsWith prefix k =
     (drop (stringLength prefix) k, v) :: stripTablePrefix prefix rest
   | otherwise = stripTablePrefix prefix rest
@@ -522,7 +564,9 @@ tableEntry name i (Toml kvs) =
   if i < 0 || i >= tableCount name (Toml kvs) then
     None
   else
-    Some (Toml (stripTablePrefix (stringConcat [name, ".", intToString i, "."]) kvs))
+    Some
+      (Toml
+        (stripTablePrefix (stringConcat [name, ".", intToString i, "."]) kvs))
 
 -- ── Eq and Debug instances ──────────────────────────────────────────────────
 
@@ -547,14 +591,13 @@ eqTomlValue _ _ = False
 
 eqStrLists : List String -> List String -> Bool
 eqStrLists [] [] = True
-eqStrLists (x::xs) (y::ys) = x == y && eqStrLists xs ys
+eqStrLists (x :: xs) (y :: ys) = x == y && eqStrLists xs ys
 eqStrLists _ _ = False
 
 eqKvList : List (String, TomlValue) -> List (String, TomlValue) -> Bool
 eqKvList [] [] = True
-eqKvList ((k1, v1)::rest1) ((k2, v2)::rest2) = k1 == k2
-  && eqTomlValue v1 v2
-  && eqKvList rest1 rest2
+eqKvList ((k1, v1) :: rest1) ((k2, v2) :: rest2) =
+  k1 == k2 && eqTomlValue v1 v2 && eqKvList rest1 rest2
 eqKvList _ _ = False
 
 export impl Eq TomlValue where
@@ -588,16 +631,16 @@ debugStrList xs = stringConcat ["[", joinDebugStrs xs, "]"]
 
 joinDebugStrs : List String -> String
 joinDebugStrs [] = ""
-joinDebugStrs (x::[]) = debug x
-joinDebugStrs (x::xs) = stringConcat [debug x, ", ", joinDebugStrs xs]
+joinDebugStrs (x :: []) = debug x
+joinDebugStrs (x :: xs) = stringConcat [debug x, ", ", joinDebugStrs xs]
 
 debugKvPair : (String, TomlValue) -> String
 debugKvPair (k, v) = stringConcat ["(", debug k, ", ", debugTomlValue v, ")"]
 
 debugKvList : List (String, TomlValue) -> String
 debugKvList [] = ""
-debugKvList (p::[]) = debugKvPair p
-debugKvList (p::ps) = stringConcat [debugKvPair p, ", ", debugKvList ps]
+debugKvList (p :: []) = debugKvPair p
+debugKvList (p :: ps) = stringConcat [debugKvPair p, ", ", debugKvList ps]
 
 export impl Debug TomlValue where
   debug = debugTomlValue
@@ -626,8 +669,8 @@ displayKvPair (k, v) = stringConcat [k, " = ", displayTomlValue v]
 
 displayKvList : List (String, TomlValue) -> String
 displayKvList [] = ""
-displayKvList (p::[]) = displayKvPair p
-displayKvList (p::ps) = stringConcat [displayKvPair p, ", ", displayKvList ps]
+displayKvList (p :: []) = displayKvPair p
+displayKvList (p :: ps) = stringConcat [displayKvPair p, ", ", displayKvList ps]
 
 {- | `display` renders a value in TOML's own spelling: a string quoted, a
    boolean as `true` or `false`.
@@ -667,8 +710,8 @@ mkPackage v = stringConcat ["[package]\nname = \"demo\"\nversion = \"", v, "\""]
 -- TOML-significant, so embedding it in a quoted value is safe.
 
 prop "a section key round-trips an Int-derived value" (n : Int) =
-  parseGetStr "package.version" (mkPackage (intToString n)) ==
-    Some (intToString n)
+  parseGetStr "package.version" (mkPackage (intToString n))
+    == Some (intToString n)
 
 prop "a sibling key is stable regardless of the varying value" (n : Int) =
   parseGetStr "package.name" (mkPackage (intToString n)) == Some "demo"
@@ -686,18 +729,20 @@ prop "an unquoted integer round-trips as TInt" (n : Int) =
 -- `[[gate]]` indexing: the i-th entry's `name` is the i-th generated name, so
 -- entries never blend into one another however many are present.
 mkGates : Int -> String
-mkGates k = stringConcat
-  [
-    "[[gate]]\nname = \"g",
-    intToString k,
-    "\"\n[[gate]]\nname = \"h",
-    intToString k,
-    "\"\n",
-  ]
+mkGates k = stringConcat [
+  "[[gate]]\nname = \"g",
+  intToString k,
+  "\"\n[[gate]]\nname = \"h",
+  intToString k,
+  "\"\n",
+]
 
-prop "array-of-tables entries stay separate" (k : Int) = parseTableCount "gate" (mkGates k) == 2
-  && parseTableEntryStr "gate" 0 "name" (mkGates k) == Some ("g" ++ intToString k)
-  && parseTableEntryStr "gate" 1 "name" (mkGates k) == Some ("h" ++ intToString k)
+prop "array-of-tables entries stay separate" (k : Int) =
+  parseTableCount "gate" (mkGates k) == 2
+    && parseTableEntryStr "gate" 0 "name" (mkGates k)
+      == Some ("g" ++ intToString k)
+    && parseTableEntryStr "gate" 1 "name" (mkGates k)
+      == Some ("h" ++ intToString k)
 
 -- ── Instance laws ───────────────────────────────────────────────────────
 
@@ -712,7 +757,7 @@ prop "Display TomlValue separates the four variants" (n : Int) (b : Bool) =
 
 allDistinct : List String -> Bool
 allDistinct [] = True
-allDistinct (x::rest) = all (x /= _) rest && allDistinct rest
+allDistinct (x :: rest) = all (x /= _) rest && allDistinct rest
 
 -- LAW: `Display Toml` agrees with `Eq Toml` -- equal documents render
 -- identically, and documents differing in any entry render differently, so

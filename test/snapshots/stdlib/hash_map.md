@@ -1,5 +1,5 @@
 # META
-source_lines=357
+source_lines=379
 stages=DESUGAR,MARK
 # SOURCE
 {- | A mutable hash table from keys to values.
@@ -78,7 +78,7 @@ fromList pairs =
 
 insertAll : (Eq k, Hashable k) => List (k, v) -> HashMap k v -> Unit
 insertAll [] _ = ()
-insertAll ((k, v)::rest) m =
+insertAll ((k, v) :: rest) m =
   setInPlace k v m
   insertAll rest m
 
@@ -102,7 +102,7 @@ isEmpty m = size m == 0
 
 bucketLookup : Eq k => k -> List (k, v) -> Option v
 bucketLookup _ [] = None
-bucketLookup key ((k, v)::rest)
+bucketLookup key ((k, v) :: rest)
   | key == k = Some v
   | otherwise = bucketLookup key rest
 
@@ -138,19 +138,19 @@ findWithDefault d key m = optionOr d (get key m)
 
 bucketHas : Eq k => k -> List (k, v) -> Bool
 bucketHas _ [] = False
-bucketHas key ((k, _)::rest)
+bucketHas key ((k, _) :: rest)
   | key == k = True
   | otherwise = bucketHas key rest
 
 bucketReplace : Eq k => k -> v -> List (k, v) -> List (k, v)
 bucketReplace _ _ [] = []
-bucketReplace key val ((k, v)::rest)
-  | key == k = (key, val)::rest
+bucketReplace key val ((k, v) :: rest)
+  | key == k = (key, val) :: rest
   | otherwise = (k, v) :: bucketReplace key val rest
 
 bucketRemove : Eq k => k -> List (k, v) -> List (k, v)
 bucketRemove _ [] = []
-bucketRemove key ((k, v)::rest)
+bucketRemove key ((k, v) :: rest)
   | key == k = rest
   | otherwise = (k, v) :: bucketRemove key rest
 
@@ -166,7 +166,14 @@ setInPlace key val (HashMap buckets count) =
   let idx = slotOf key (arrayLength arr)
   insertAt key val arr idx buckets count
 
-insertAt : (Eq k, Hashable k) => k -> v -> Array (List (k, v)) -> Int -> Ref (Array (List (k, v))) -> Ref Int -> Unit
+insertAt : (Eq k, Hashable k) =>
+  k ->
+  v ->
+  Array (List (k, v)) ->
+  Int ->
+  Ref (Array (List (k, v))) ->
+  Ref Int ->
+  Unit
 insertAt key val arr idx buckets count
   | bucketHas key (arrayGetUnsafe idx arr) =
     arraySetUnsafe idx (bucketReplace key val (arrayGetUnsafe idx arr)) arr
@@ -189,16 +196,26 @@ resize buckets count =
   count := 0
   reinsertAll oldArr 0 (arrayLength oldArr) buckets count
 
-reinsertAll : (Eq k, Hashable k) => Array (List (k, v)) -> Int -> Int -> Ref (Array (List (k, v))) -> Ref Int -> Unit
+reinsertAll : (Eq k, Hashable k) =>
+  Array (List (k, v)) ->
+  Int ->
+  Int ->
+  Ref (Array (List (k, v))) ->
+  Ref Int ->
+  Unit
 reinsertAll oldArr i n buckets count
   | i >= n = ()
   | otherwise =
     reinsertBucket (arrayGetUnsafe i oldArr) buckets count
     reinsertAll oldArr (i + 1) n buckets count
 
-reinsertBucket : (Eq k, Hashable k) => List (k, v) -> Ref (Array (List (k, v))) -> Ref Int -> Unit
+reinsertBucket : (Eq k, Hashable k) =>
+  List (k, v) ->
+  Ref (Array (List (k, v))) ->
+  Ref Int ->
+  Unit
 reinsertBucket [] _ _ = ()
-reinsertBucket ((k, v)::rest) buckets count =
+reinsertBucket ((k, v) :: rest) buckets count =
   putRaw k v buckets count
   reinsertBucket rest buckets count
 
@@ -222,7 +239,12 @@ deleteInPlace key (HashMap buckets count) =
   let idx = slotOf key (arrayLength arr)
   deleteAt key arr idx count
 
-deleteAt : (Eq k, Hashable k) => k -> Array (List (k, v)) -> Int -> Ref Int -> Unit
+deleteAt : (Eq k, Hashable k) =>
+  k ->
+  Array (List (k, v)) ->
+  Int ->
+  Ref Int ->
+  Unit
 deleteAt key arr idx count =
   if bucketHas key (arrayGetUnsafe idx arr) then
     arraySetUnsafe idx (bucketRemove key (arrayGetUnsafe idx arr)) arr
@@ -272,7 +294,7 @@ values m = map snd (entries m)
 
 allEntriesIn : (Eq k, Eq v, Hashable k) => List (k, v) -> HashMap k v -> Bool
 allEntriesIn [] _ = True
-allEntriesIn ((k, v)::rest) m
+allEntriesIn ((k, v) :: rest) m
   | get k m == Some v = allEntriesIn rest m
   | otherwise = False
 
@@ -301,7 +323,7 @@ export impl Debug (HashMap k v) requires Debug k, Debug v where
 displayEntries : (Display k, Display v) => List (k, v) -> String
 displayEntries [] = ""
 displayEntries [(k, v)] = "\{k} => \{v}"
-displayEntries ((k, v)::rest) = "\{k} => \{v}, \{displayEntries rest}"
+displayEntries ((k, v) :: rest) = "\{k} => \{v}, \{displayEntries rest}"
 
 {- | `display` renders a table as `HashMap { k => v, ... }` with the entries
    in ascending key order, so the text depends only on the entries.
@@ -348,9 +370,9 @@ prop "Display HashMap agrees with Eq and lists keys ascending" (xs : List (Int, 
 
 ascendingKeys : Ord k => List (k, v) -> Bool
 ascendingKeys [] = True
-ascendingKeys (_::[]) = True
-ascendingKeys ((k1, _)::(k2, v2)::rest) = lte k1 k2
-  && ascendingKeys ((k2, v2)::rest)
+ascendingKeys (_ :: []) = True
+ascendingKeys ((k1, _) :: (k2, v2) :: rest) =
+  lte k1 k2 && ascendingKeys ((k2, v2) :: rest)
 
 -- LAW: `Index` is `get` with the `None` case turned into the coded index
 -- error -- i.e. for every key the table HAS, `m[k]` is exactly `get k m`'s

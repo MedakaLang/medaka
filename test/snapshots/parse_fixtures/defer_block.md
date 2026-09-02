@@ -79,9 +79,10 @@ refutable = defer
   deferPure (x + a + b)
 nested : Async <Stdout> Int
 nested = defer
-  x <- deferPure (unOpt (do
-    n <- Some 20
-    pure (n + 1)))
+  x <- deferPure
+    (unOpt (do
+      n <- Some 20
+      pure (n + 1)))
   deferPure (x + 21)
 unOpt : Option Int -> Int
 unOpt (Some n) = n

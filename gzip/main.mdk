@@ -38,11 +38,10 @@ import lib.bitio.{newBitReader, getBits}
 
 -- `printf 'hello' | gzip -n -c`, byte for byte.
 helloGz : Array Int
-helloGz = fromList
-  [
-    31, 139, 8, 0, 0, 0, 0, 0, 0, 3, 203, 72, 205, 201, 201, 7, 0, 134, 166, 16,
-    54, 5, 0, 0, 0,
-  ]
+helloGz = fromList [
+  31, 139, 8, 0, 0, 0, 0, 0, 0, 3, 203, 72, 205, 201, 201, 7, 0, 134, 166, 16,
+  54, 5, 0, 0, 0
+]
 
 -- The uncompressed payload those bytes encode: "hello".
 helloBytes : Array Int
@@ -83,7 +82,8 @@ main = match parseGzipHeader helloGz
       Err e => println ("trailer parse failed: " ++ e)
       Ok (storedCrc, storedSize) =>
         let ourCrc = crc32 helloBytes
-        let _ = println "trailer crc=\{debug storedCrc} isize=\{debug storedSize}"
+        let _ =
+          println "trailer crc=\{debug storedCrc} isize=\{debug storedSize}"
         let _ = println "crc32 of \"hello\" = \{debug ourCrc}"
         let crcOk = ourCrc == storedCrc
         let sizeOk = storedSize == length helloBytes

@@ -1,5 +1,5 @@
 # META
-source_lines=319
+source_lines=321
 stages=DESUGAR,MARK
 # SOURCE
 -- annotate.mdk — Lexical-addressing EMISSION pass (STAGE2-DESIGN §2.0).
@@ -106,7 +106,7 @@ paramFrames pats = reverseL (map patBindings pats)
 
 slotIn : List String -> String -> Int -> Option Int
 slotIn [] _ _ = None
-slotIn (m::rest) n i
+slotIn (m :: rest) n i
   | m == n = Some i
   | otherwise = slotIn rest n (i + 1)
 
@@ -115,7 +115,7 @@ addrOf frames n = addrOfGo frames n 0
 
 addrOfGo : List (List String) -> String -> Int -> Addr
 addrOfGo [] _ _ = AGlobal
-addrOfGo (frame::rest) n depth = match slotIn frame n 0
+addrOfGo (frame :: rest) n depth = match slotIn frame n 0
   Some slot => ALocal depth slot
   None => addrOfGo rest n (depth + 1)
 
@@ -183,7 +183,7 @@ annotateExpr fr (EDoOrigin l e) = EDoOrigin l (annotateExpr fr e)
 -- OUTER scope and pushes the pattern's bindings for the body only (evalLet).
 annotateLet : List (List String) -> Bool -> Bool -> Pat -> Expr -> Expr -> Expr
 annotateLet fr m True (PVar f fl) e1 e2 =
-  let inner = [f]::fr
+  let inner = [f] :: fr
   ELet m True (PVar f fl) (annotateExpr inner e1) (annotateExpr inner e2)
 annotateLet fr m isRec pat e1 e2 =
   ELet
@@ -218,12 +218,14 @@ annotateArm fr (Arm pat gs body) =
   let (gs2, scope2) = annotateGuards scope0 gs
   Arm pat gs2 (annotateExpr scope2 body)
 
-annotateGuards : List (List String) -> List Guard -> (List Guard, List (List String))
+annotateGuards : List (List String) ->
+  List Guard ->
+  (List Guard, List (List String))
 annotateGuards scope [] = ([], scope)
-annotateGuards scope ((GBool e)::rest) =
+annotateGuards scope ((GBool e) :: rest) =
   let (rest2, scope2) = annotateGuards scope rest
   (GBool (annotateExpr scope e) :: rest2, scope2)
-annotateGuards scope ((GBind p e)::rest) =
+annotateGuards scope ((GBind p e) :: rest) =
   let e2 = annotateExpr scope e
   let (rest2, scope2) = annotateGuards (patBindings p :: scope) rest
   (GBind p e2 :: rest2, scope2)
@@ -238,15 +240,15 @@ annotateGuardArm fr (GuardArm gs body) =
 -- a bare block / do-block: each binding statement pushes a frame for the rest
 annotateStmts : List (List String) -> List DoStmt -> List DoStmt
 annotateStmts _ [] = []
-annotateStmts fr ((DoExpr e)::rest) =
+annotateStmts fr ((DoExpr e) :: rest) =
   DoExpr (annotateExpr fr e) :: annotateStmts fr rest
-annotateStmts fr ((DoLet m r p e)::rest) =
+annotateStmts fr ((DoLet m r p e) :: rest) =
   DoLet m r p (annotateExpr fr e) :: annotateStmts (patBindings p :: fr) rest
-annotateStmts fr ((DoBind p e)::rest) =
+annotateStmts fr ((DoBind p e) :: rest) =
   DoBind p (annotateExpr fr e) :: annotateStmts (patBindings p :: fr) rest
-annotateStmts fr ((DoAssign x e)::rest) =
-  DoAssign x (annotateExpr fr e) :: annotateStmts ([x]::fr) rest
-annotateStmts fr ((DoFieldAssign x fs e)::rest) =
+annotateStmts fr ((DoAssign x e) :: rest) =
+  DoAssign x (annotateExpr fr e) :: annotateStmts ([x] :: fr) rest
+annotateStmts fr ((DoFieldAssign x fs e) :: rest) =
   DoFieldAssign x fs (annotateExpr fr e) :: annotateStmts fr rest
 
 annotateInterp : List (List String) -> InterpPart -> InterpPart

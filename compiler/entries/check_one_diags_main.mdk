@@ -20,7 +20,9 @@ import types.typecheck.{checkOneDiags, tcCode}
 
 main = match args ()
   [runtimeP, coreP, targetP] => run runtimeP coreP targetP
-  _ => ePutStrLn "usage: medaka run compiler/entries/check_one_diags_main.mdk <runtime.mdk> <core.mdk> <file.mdk>"
+  _ =>
+    ePutStrLn
+      "usage: medaka run compiler/entries/check_one_diags_main.mdk <runtime.mdk> <core.mdk> <file.mdk>"
 
 run : String -> String -> String -> <IO> Unit
 run runtimeP coreP targetP = match readFile runtimeP
@@ -32,11 +34,15 @@ run runtimeP coreP targetP = match readFile runtimeP
       Ok src =>
         let desugared = desugar (parse src)
         let coreDesugared = desugar (parse csrc)
-        let (errs, _warns) = checkOneDiags (desugar (parse rsrc)) coreDesugared ("probe", desugared)
+        let (errs, _warns) = checkOneDiags (desugar
+          (parse rsrc)) coreDesugared (
+          "probe",
+          desugared,
+        )
         match errs
           [] =>
             putStrLn "ACCEPT"
             putStrLn "-"
-          e::_ =>
+          e :: _ =>
             putStrLn "REJECT"
             putStrLn (tcCode e)

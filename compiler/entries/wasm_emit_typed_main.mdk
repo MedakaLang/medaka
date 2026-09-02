@@ -64,26 +64,26 @@ import backend.wasm_emit.{
 import entries.entry_support.{driveRuntime}
 
 main = match args ()
-  "--reemit-trmc-state"::_ => reemitTrmcState ()
-  "--reemit-impl-self-state"::_ => reemitImplSelfState ()
-  "--reemit-input"::runtimePath::pPath::uPath::_ =>
+  "--reemit-trmc-state" :: _ => reemitTrmcState ()
+  "--reemit-impl-self-state" :: _ => reemitImplSelfState ()
+  "--reemit-input" :: runtimePath :: pPath :: uPath :: _ =>
     reemitInput runtimePath pPath uPath
-  "--reemit-state"::runtimePath::_ => reemitState runtimePath
-  "--reemit-gap-state"::_ => reemitGapState ()
-  "--reemit-gap-strict"::_ => reemitGapStrict ()
-  "--reemit-string-state"::_ => reemitStringState ()
-  "--reemit-default-state"::_ => reemitDefaultState ()
-  "--reemit-lambda-state"::_ => reemitLambdaState ()
-  "--reemit-trap-state"::_ => reemitTrapState ()
-  "--emit-trap-state"::_ =>
+  "--reemit-state" :: runtimePath :: _ => reemitState runtimePath
+  "--reemit-gap-state" :: _ => reemitGapState ()
+  "--reemit-gap-strict" :: _ => reemitGapStrict ()
+  "--reemit-string-state" :: _ => reemitStringState ()
+  "--reemit-default-state" :: _ => reemitDefaultState ()
+  "--reemit-lambda-state" :: _ => reemitLambdaState ()
+  "--reemit-trap-state" :: _ => reemitTrapState ()
+  "--emit-trap-state" :: _ =>
     putStr (emitProgram trapStateInput trapStateAbortProgram)
-  "--reemit-ref-trap-state"::_ => reemitRefTrapState ()
-  "--emit-ref-trap-state"::_ =>
+  "--reemit-ref-trap-state" :: _ => reemitRefTrapState ()
+  "--emit-ref-trap-state" :: _ =>
     putStr (emitProgram refTrapStateInput refTrapStateAbortProgram)
-  "--reemit-feature-state"::_ => reemitFeatureState ()
-  "--reemit-char-from-code-state"::_ => reemitCharFromCodeState ()
-  "--reemit-leaf-runtime-state"::_ => reemitLeafRuntimeState ()
-  "--capture-current-binding"::row::_ => captureCurrentBinding row
+  "--reemit-feature-state" :: _ => reemitFeatureState ()
+  "--reemit-char-from-code-state" :: _ => reemitCharFromCodeState ()
+  "--reemit-leaf-runtime-state" :: _ => reemitLeafRuntimeState ()
+  "--capture-current-binding" :: row :: _ => captureCurrentBinding row
   _ => driveRuntime emit
 
 emit : List Decl -> List Decl -> List Decl -> <IO> Unit
@@ -115,7 +115,10 @@ typedProgram runtimeDecls preludeDecls userDecls =
   let userNames = funNamesOf userDecls
   let livePrelude = dropShadowedExp userNames preludeDecls
   let combined = livePrelude ++ userDecls
-  let dictNames = preludeReturnPosDictNames livePrelude combined ++ preludeArgPosDictNames livePrelude combined ++ constrainedSigNames userDecls
+  let dictNames =
+    preludeReturnPosDictNames livePrelude combined
+      ++ preludeArgPosDictNames livePrelude combined
+      ++ constrainedSigNames userDecls
   lowerProgramEmit
     TargetWasm
     (elaborateDict runtimeDecls dictNames userNames combined)
@@ -144,28 +147,82 @@ reemitInput runtimePath pPath uPath = match readFile runtimePath
         -- input family at a time, and the declared-impl head table is not the
         -- family under test here.
         let pHeads = ifaceImplHeadTable pDecls
-        let pInput = makeWasmEmitInputFull pMethods pSigs pCtors False pRecords [] pHeads
+        let pInput =
+          makeWasmEmitInputFull pMethods pSigs pCtors False pRecords [] pHeads
         let p1 = emitProgram pInput pProgram
         -- these four deliberately pair P's REAL program with a MISMATCHED
         -- (U-derived or dummy) table -- never a real compile combination, so
         -- routed through the unchecked emit (see emitProgramUnchecked's doc).
-        let methodWat = emitProgramUnchecked (makeWasmEmitInputFull (methodIfaceTable uDecls) pSigs pCtors False pRecords [] pHeads) pProgram
-        let sigWat = emitProgramUnchecked (makeWasmEmitInputFull pMethods (declSigTypeNames runtimeDecls ++ declSigTypeNames uDecls) pCtors False pRecords [] pHeads) pProgram
-        let ctorWat = emitProgramUnchecked (makeWasmEmitInputFull pMethods pSigs (ctorFieldTypeNames uDecls) False pRecords [] pHeads) pProgram
-        let recordWat = emitProgramUnchecked (makeWasmEmitInputFull pMethods pSigs pCtors False (declaredRecordFieldOrders uDecls) [] pHeads) pProgram
+        let methodWat =
+          emitProgramUnchecked
+            (makeWasmEmitInputFull
+              (methodIfaceTable uDecls)
+              pSigs
+              pCtors
+              False
+              pRecords
+              []
+              pHeads)
+            pProgram
+        let sigWat =
+          emitProgramUnchecked
+            (makeWasmEmitInputFull
+              pMethods
+              (declSigTypeNames runtimeDecls ++ declSigTypeNames uDecls)
+              pCtors
+              False
+              pRecords
+              []
+              pHeads)
+            pProgram
+        let ctorWat =
+          emitProgramUnchecked
+            (makeWasmEmitInputFull
+              pMethods
+              pSigs
+              (ctorFieldTypeNames uDecls)
+              False
+              pRecords
+              []
+              pHeads)
+            pProgram
+        let recordWat =
+          emitProgramUnchecked
+            (makeWasmEmitInputFull
+              pMethods
+              pSigs
+              pCtors
+              False
+              (declaredRecordFieldOrders uDecls)
+              []
+              pHeads)
+            pProgram
         let mainDecls = desugar (parse "data Dummy = Dummy\n\nmain = 1\n")
         let mainProgram = typedProgram runtimeDecls [] mainDecls
-        let mainBase = emitProgram (typedInput runtimeDecls [] mainDecls) mainProgram
+        let mainBase =
+          emitProgram (typedInput runtimeDecls [] mainDecls) mainProgram
         -- mainIsFloat=True here is deliberately mismatched against the Float-free
         -- Dummy program (proves the flag alone moves the output, P_NE_MAIN) --
         -- unchecked for the same reason as the four above.
-        let mainWat = emitProgramUnchecked (makeWasmEmitInputFull [] (declSigTypeNames runtimeDecls ++ declSigTypeNames mainDecls) (ctorFieldTypeNames mainDecls) True (declaredRecordFieldOrders mainDecls) [] (ifaceImplHeadTable mainDecls)) mainProgram
+        let mainWat =
+          emitProgramUnchecked
+            (makeWasmEmitInputFull
+              []
+              (declSigTypeNames runtimeDecls ++ declSigTypeNames mainDecls)
+              (ctorFieldTypeNames mainDecls)
+              True
+              (declaredRecordFieldOrders mainDecls)
+              []
+              (ifaceImplHeadTable mainDecls))
+            mainProgram
         let pLast = emitProgram pInput pProgram
         let _ = putStrLn (if p1 == pLast then "P_EQ_PLAST" else "P_NE_PLAST")
-        let _ = putStrLn (if p1 /= methodWat then "P_NE_METHOD" else "P_EQ_METHOD")
+        let _ =
+          putStrLn (if p1 /= methodWat then "P_NE_METHOD" else "P_EQ_METHOD")
         let _ = putStrLn (if p1 /= sigWat then "P_NE_SIG" else "P_EQ_SIG")
         let _ = putStrLn (if p1 /= ctorWat then "P_NE_CTOR" else "P_EQ_CTOR")
-        let _ = putStrLn (if mainBase /= mainWat then "P_NE_MAIN" else "P_EQ_MAIN")
+        let _ =
+          putStrLn (if mainBase /= mainWat then "P_NE_MAIN" else "P_EQ_MAIN")
         putStrLn (if p1 /= recordWat then "P_NE_RECORD" else "P_EQ_RECORD")
 
 -- X-W.H2a: the selected Wasm physical indexes must belong to one private Prog, not
@@ -208,10 +265,12 @@ reemitStateFallbackInput runtimeDecls decls =
     []
 
 reemitStateP : String
-reemitStateP = "interface Mark a where\n  mark : a -> Int\n\ndata PSubject = PZero | SharedCtor Int\n\ndata SharedRecord = SharedRecord { pFirst : Int, common : Int }\n\nsharedArity x = x\n\npOnlyFn x = x\n\nsharedValueFn x = x\n\napply f x = f x\n\nchoose x _ = x\n\nsubjectCode subject = match subject\n  PZero => 0\n  SharedCtor value => value\n\npOnlyValue = 1\n\npOnlyProbe = pOnlyFn pOnlyValue\n\npArityValue = sharedArity\n\npArityProbe = apply pArityValue 1\n\npFnValue = sharedValueFn\n\npFnProbe = apply pFnValue 2\n\npRecordProbe = (SharedRecord { pFirst = 3, common = 4 }).common\n\npLazy = mark (SharedCtor 7)\n\nimpl Mark PSubject where\n  mark _ = 7\n\nmain = choose pLazy (subjectCode (SharedCtor 7))\n"
+reemitStateP =
+  "interface Mark a where\n  mark : a -> Int\n\ndata PSubject = PZero | SharedCtor Int\n\ndata SharedRecord = SharedRecord { pFirst : Int, common : Int }\n\nsharedArity x = x\n\npOnlyFn x = x\n\nsharedValueFn x = x\n\napply f x = f x\n\nchoose x _ = x\n\nsubjectCode subject = match subject\n  PZero => 0\n  SharedCtor value => value\n\npOnlyValue = 1\n\npOnlyProbe = pOnlyFn pOnlyValue\n\npArityValue = sharedArity\n\npArityProbe = apply pArityValue 1\n\npFnValue = sharedValueFn\n\npFnProbe = apply pFnValue 2\n\npRecordProbe = (SharedRecord { pFirst = 3, common = 4 }).common\n\npLazy = mark (SharedCtor 7)\n\nimpl Mark PSubject where\n  mark _ = 7\n\nmain = choose pLazy (subjectCode (SharedCtor 7))\n"
 
 reemitStateU : String
-reemitStateU = "interface Mark a where\n  mark : a -> Int -> Int\n\ndata USubject = SharedCtor Int Int | UZero\n\ndata SharedRecord = SharedRecord { common : Int, uLast : Int }\n\nsharedArity x y = x\n\nuOnlyFn x = x\n\nsharedValueFn x y = x\n\napply f x y = f x y\n\nchoose x _ = x\n\nsubjectCode subject = match subject\n  SharedCtor first second => first + second\n  UZero => 0\n\nuOnlyValue = 2\n\nuOnlyProbe = uOnlyFn uOnlyValue\n\nuArityValue = sharedArity\n\nuArityProbe = apply uArityValue 1 2\n\nuFnProbe = sharedValueFn 2 3\n\nuRecordProbe = (SharedRecord { common = 3, uLast = 4 }).common\n\nuLazy = mark (SharedCtor 7 8) 0\n\nimpl Mark USubject where\n  mark _ _ = 9\n\nmain = choose uLazy (subjectCode (SharedCtor 7 8))\n"
+reemitStateU =
+  "interface Mark a where\n  mark : a -> Int -> Int\n\ndata USubject = SharedCtor Int Int | UZero\n\ndata SharedRecord = SharedRecord { common : Int, uLast : Int }\n\nsharedArity x y = x\n\nuOnlyFn x = x\n\nsharedValueFn x y = x\n\napply f x y = f x y\n\nchoose x _ = x\n\nsubjectCode subject = match subject\n  SharedCtor first second => first + second\n  UZero => 0\n\nuOnlyValue = 2\n\nuOnlyProbe = uOnlyFn uOnlyValue\n\nuArityValue = sharedArity\n\nuArityProbe = apply uArityValue 1 2\n\nuFnProbe = sharedValueFn 2 3\n\nuRecordProbe = (SharedRecord { common = 3, uLast = 4 }).common\n\nuLazy = mark (SharedCtor 7 8) 0\n\nimpl Mark USubject where\n  mark _ _ = 9\n\nmain = choose uLazy (subjectCode (SharedCtor 7 8))\n"
 
 -- H2b.6: fresh strict/record/census emissions exercise top-level TRMC state.
 -- P is emitted twice around unrelated U work; U's census carries its one
@@ -237,13 +296,24 @@ trmcStateLoc = Loc "<trmc-state>" 1 1 1 1
 trmcStateProgram : String -> Int -> CProgram
 trmcStateProgram name marker =
   let n = CVar "n" (ALocal 0 0)
-  let recursive = CApp (CVar name AGlobal) (CBinPrim "-" n (CLit (LInt 1)) "Int")
-  let body = CIf (CBinPrim "==" n (CLit (LInt 0)) "Int") (CList []) (CBinPrim "::" (CLit (LInt marker)) recursive "")
+  let recursive =
+    CApp (CVar name AGlobal) (CBinPrim "-" n (CLit (LInt 1)) "Int")
+  let body =
+    CIf
+      (CBinPrim "==" n (CLit (LInt 0)) "Int")
+      (CList [])
+      (CBinPrim "::" (CLit (LInt marker)) recursive "")
   CProgram
     [
       CBind name [CClause [PVar "n" trmcStateLoc] body],
       CBind "main" [
-        CClause [] (CLet False (PCons (PVar "head" trmcStateLoc) PWild) (CApp (CVar name AGlobal) (CLit (LInt 2000000))) (CVar "head" (ALocal 0 0)))
+        CClause
+          []
+          (CLet
+            False
+            (PCons (PVar "head" trmcStateLoc) PWild)
+            (CApp (CVar name AGlobal) (CLit (LInt 2000000)))
+            (CVar "head" (ALocal 0 0))),
       ],
     ]
     []
@@ -251,17 +321,31 @@ trmcStateProgram name marker =
     []
 
 trmcStateCensusProgram : CProgram
-trmcStateCensusProgram = CProgram
-  [
-    CBind "pTrmc" [
-      CClause [PVar "n" trmcStateLoc] (CIf (CBinPrim "==" (CVar "n" (ALocal 0 0)) (CLit (LInt 0)) "Int") (CList []) (CBinPrim "::" (CLit (LInt 17)) (CApp (CVar "pTrmc" AGlobal) (CBinPrim "-" (CVar "n" (ALocal 0 0)) (CLit (LInt 1)) "Int")) ""))
-    ],
-    CBind "trmcIntentionalGap" [CClause [] (CVar "missingTrmcCensus" AGlobal)],
-    CBind "main" [CClause [] (CLit (LInt 0))],
-  ]
-  []
-  []
-  []
+trmcStateCensusProgram =
+  CProgram
+    [
+      CBind "pTrmc" [
+        CClause
+          [PVar "n" trmcStateLoc]
+          (CIf
+            (CBinPrim "==" (CVar "n" (ALocal 0 0)) (CLit (LInt 0)) "Int")
+            (CList [])
+            (CBinPrim
+              "::"
+              (CLit (LInt 17))
+              (CApp
+                (CVar "pTrmc" AGlobal)
+                (CBinPrim "-" (CVar "n" (ALocal 0 0)) (CLit (LInt 1)) "Int"))
+              "")),
+      ],
+      CBind "trmcIntentionalGap" [
+        CClause [] (CVar "missingTrmcCensus" AGlobal),
+      ],
+      CBind "main" [CClause [] (CLit (LInt 0))],
+    ]
+    []
+    []
+    []
 
 reemitImplSelfState : Unit -> <IO> Unit
 reemitImplSelfState _ =
@@ -271,7 +355,8 @@ reemitImplSelfState _ =
   let _ = printCapture "IMPL_SELF_P1" p1
   let (u, _) = emitProgramRecord implSelfInput uProgram
   let _ = printCapture "IMPL_SELF_RECORD_U" u
-  let censusEvents = emitProgramGaps implSelfInput (implSelfCensusProgram uProgram)
+  let censusEvents =
+    emitProgramGaps implSelfInput (implSelfCensusProgram uProgram)
   let _ = printEvents "IMPL_SELF_CENSUS_U_GAP" censusEvents
   printCapture "IMPL_SELF_P2" (emitProgram implSelfInput pProgram)
 
@@ -302,23 +387,47 @@ lambdaStateProgram result =
   let local = PVar "local" lambdaStateLoc
   let nestedName = PVar "nested" lambdaStateLoc
   let identity = CLam [arg] (CVar "arg" (ALocal 0 0))
-  let nested = CLam [arg] (CApp (CVar "local" (ALocal 0 0)) (CVar "arg" (ALocal 0 0)))
-  let lambdaBody = if result == 17 then
-    CLet False local identity (CApp (CVar "local" (ALocal 0 0)) (CLit (LInt result)))
-  else
-    CLet False local identity (CLet False nestedName nested (CApp (CVar "nested" (ALocal 0 0)) (CLit (LInt result))))
-  let body = CLet False PWild (CVar "Pair" AGlobal) (CLet False PWild (CVar "Pair" AGlobal) lambdaBody)
+  let nested =
+    CLam [arg] (CApp (CVar "local" (ALocal 0 0)) (CVar "arg" (ALocal 0 0)))
+  let lambdaBody =
+    if result == 17 then
+      CLet
+        False
+        local
+        identity
+        (CApp (CVar "local" (ALocal 0 0)) (CLit (LInt result)))
+    else
+      CLet
+        False
+        local
+        identity
+        (CLet
+          False
+          nestedName
+          nested
+          (CApp (CVar "nested" (ALocal 0 0)) (CLit (LInt result))))
+  let body =
+    CLet
+      False
+      PWild
+      (CVar "Pair" AGlobal)
+      (CLet False PWild (CVar "Pair" AGlobal) lambdaBody)
   CProgram [CBind "main" [CClause [] body]] [("Pair", 2)] [("Pair", "Pair")] []
 
 lambdaStateCensusProgram : CProgram
-lambdaStateCensusProgram = CProgram
-  [
-    CBind "lambdaCensus" [CClause [] (CLam [PVar "x" lambdaStateLoc] (CVar "x" (ALocal 0 0)))],
-    CBind "lambdaIntentionalGap" [CClause [] (CVar "missingLambdaCensus" AGlobal)],
-  ]
-  [("Pair", 2)]
-  [("Pair", "Pair")]
-  []
+lambdaStateCensusProgram =
+  CProgram
+    [
+      CBind "lambdaCensus" [
+        CClause [] (CLam [PVar "x" lambdaStateLoc] (CVar "x" (ALocal 0 0))),
+      ],
+      CBind "lambdaIntentionalGap" [
+        CClause [] (CVar "missingLambdaCensus" AGlobal),
+      ],
+    ]
+    [("Pair", 2)]
+    [("Pair", "Pair")]
+    []
 
 -- X-W.H2b.8: coded stderr-import demand belongs to fresh WasmEmit. P carries an
 -- uncalled concrete div-zero route, so it imports mdk_write_err_byte while inert main
@@ -341,19 +450,25 @@ reemitTrapState _ =
 reemitFeatureState : Unit -> <IO> Unit
 reemitFeatureState _ =
   let p1 = emitProgram featureStateInput featureStateProgram
-  let hashIntOnly = emitProgram featureHashIntOnlyInput featureHashIntOnlyProgram
+  let hashIntOnly =
+    emitProgram featureHashIntOnlyInput featureHashIntOnlyProgram
   let floatDiv = emitProgram featureStateInput featureFloatDivProgram
   let (u, _) = emitProgramRecord featureStateInput featureStateControlProgram
   let censusEvents = emitProgramGaps featureStateInput featureStateCensusProgram
   let hashFloatP1 = emitProgram featureHashFloatInput featureHashFloatProgram
-  let (hashFloatU, _) = emitProgramRecord featureHashFloatInput featureHashFloatRecordUProgram
-  let hashFloatCensusEvents = emitProgramGaps featureHashFloatInput featureHashFloatCensusProgram
+  let (hashFloatU, _) =
+    emitProgramRecord featureHashFloatInput featureHashFloatRecordUProgram
+  let hashFloatCensusEvents =
+    emitProgramGaps featureHashFloatInput featureHashFloatCensusProgram
   let _ = printCapture "FEATURE_P1" p1
   let _ = printCapture "FEATURE_HASH_INT_ONLY" hashIntOnly
   let _ = printCapture "FEATURE_FLOAT_DIV" floatDiv
   let _ = printCapture "FEATURE_RECORD_U" u
   let _ = printEvents "FEATURE_CENSUS_U_GAP" censusEvents
-  let _ = printCapture "FEATURE_P2" (emitProgram featureStateInput featureStateProgram)
+  let _ =
+    printCapture
+      "FEATURE_P2"
+      (emitProgram featureStateInput featureStateProgram)
   let _ = printCapture "FEATURE_HASH_FLOAT_P1" hashFloatP1
   let _ = printCapture "FEATURE_HASH_FLOAT_RECORD_U" hashFloatU
   let _ = printEvents "FEATURE_HASH_FLOAT_CENSUS_P_GAP" hashFloatCensusEvents
@@ -362,12 +477,16 @@ reemitFeatureState _ =
     (emitProgram featureHashFloatInput featureHashFloatProgram)
 
 featureStateInput : WasmEmitInput
-featureStateInput = makeWasmEmitInput
-  []
-  []
-  [("FeatureRecord", ["Int", "Int"]), ("FeatureVariant", ["Int", "Int"])]
-  False
-  [("FeatureRecord", ["left", "right"]), ("FeatureVariant", ["left", "right"])]
+featureStateInput =
+  makeWasmEmitInput
+    []
+    []
+    [("FeatureRecord", ["Int", "Int"]), ("FeatureVariant", ["Int", "Int"])]
+    False
+    [
+      ("FeatureRecord", ["left", "right"]),
+      ("FeatureVariant", ["left", "right"]),
+    ]
 
 featureStateLoc : Loc
 featureStateLoc = Loc "<feature-state>" 1 1 1 1
@@ -376,40 +495,62 @@ featureStateArg : Pat
 featureStateArg = PVar "x" featureStateLoc
 
 featureStateRecord : CExpr
-featureStateRecord = CRecord
-  "FeatureRecord"
-  [CField "left" (CLit (LInt 1)), CField "right" (CLit (LInt 2))]
+featureStateRecord = CRecord "FeatureRecord" [
+  CField "left" (CLit (LInt 1)),
+  CField "right" (CLit (LInt 2)),
+]
 
 featureStateVariant : CExpr
-featureStateVariant = CRecord
-  "FeatureVariant"
-  [CField "left" (CLit (LInt 3)), CField "right" (CLit (LInt 4))]
+featureStateVariant = CRecord "FeatureVariant" [
+  CField "left" (CLit (LInt 3)),
+  CField "right" (CLit (LInt 4)),
+]
 
 featureStateBinds : List CBind
 featureStateBinds = [
   CBind "featureDiv" [
-    CClause [featureStateArg] (CBinPrim "/" (CVar "x" (ALocal 0 0)) (CLit (LInt 1)) "Int")
+    CClause
+      [featureStateArg]
+      (CBinPrim "/" (CVar "x" (ALocal 0 0)) (CLit (LInt 1)) "Int"),
   ],
   CBind "featureMod" [
-    CClause [featureStateArg] (CBinPrim "%" (CVar "x" (ALocal 0 0)) (CLit (LInt 1)) "Int")
+    CClause
+      [featureStateArg]
+      (CBinPrim "%" (CVar "x" (ALocal 0 0)) (CLit (LInt 1)) "Int"),
   ],
   CBind "featureRecordUpdate" [
-    CClause [featureStateArg] (CRecordUpdate "FeatureRecord" featureStateRecord [CField "left" (CLit (LInt 5))])
+    CClause
+      [featureStateArg]
+      (CRecordUpdate "FeatureRecord" featureStateRecord [
+        CField "left" (CLit (LInt 5)),
+      ]),
   ],
   CBind "featureVariantUpdate" [
-    CClause [featureStateArg] (CVariantUpdate "FeatureVariant" featureStateVariant [CField "right" (CLit (LInt 6))])
+    CClause
+      [featureStateArg]
+      (CVariantUpdate "FeatureVariant" featureStateVariant [
+        CField "right" (CLit (LInt 6)),
+      ]),
   ],
   CBind "featureRandomInt" [
-    CClause [featureStateArg] (CApp (CApp (CVar "randomInt" AGlobal) (CLit (LInt 0))) (CLit (LInt 1)))
+    CClause
+      [featureStateArg]
+      (CApp (CApp (CVar "randomInt" AGlobal) (CLit (LInt 0))) (CLit (LInt 1))),
   ],
   CBind "featureHashInt" [
-    CClause [featureStateArg] (CApp (CVar "hashInt" AGlobal) (CVar "x" (ALocal 0 0)))
+    CClause
+      [featureStateArg]
+      (CApp (CVar "hashInt" AGlobal) (CVar "x" (ALocal 0 0))),
   ],
   CBind "featureEPut" [
-    CClause [featureStateArg] (CApp (CVar "ePutStr" AGlobal) (CLit (LString "feature ePut")))
+    CClause
+      [featureStateArg]
+      (CApp (CVar "ePutStr" AGlobal) (CLit (LString "feature ePut"))),
   ],
   CBind "featurePanic" [
-    CClause [featureStateArg] (CApp (CVar "panic" AGlobal) (CLit (LString "feature panic")))
+    CClause
+      [featureStateArg]
+      (CApp (CVar "panic" AGlobal) (CLit (LString "feature panic"))),
   ],
 ]
 
@@ -435,16 +576,19 @@ featureHashIntOnlyInput : WasmEmitInput
 featureHashIntOnlyInput = makeWasmEmitInput [] [] [] False []
 
 featureHashIntOnlyProgram : CProgram
-featureHashIntOnlyProgram = CProgram
-  [
-    CBind "featureHashIntOnly" [
-      CClause [featureStateArg] (CApp (CVar "hashInt" AGlobal) (CVar "x" (ALocal 0 0)))
-    ],
-    CBind "main" [CClause [] (CLit (LInt 0))],
-  ]
-  []
-  []
-  []
+featureHashIntOnlyProgram =
+  CProgram
+    [
+      CBind "featureHashIntOnly" [
+        CClause
+          [featureStateArg]
+          (CApp (CVar "hashInt" AGlobal) (CVar "x" (ALocal 0 0))),
+      ],
+      CBind "main" [CClause [] (CLit (LInt 0))],
+    ]
+    []
+    []
+    []
 
 -- H2b.10 hashFloat uses a fresh strict emission with an uncalled binding. Its
 -- record U is the nearest miss: Float + hashInt retain shared prerequisites but
@@ -453,44 +597,57 @@ featureHashFloatInput : WasmEmitInput
 featureHashFloatInput = makeWasmEmitInput [] [] [] False []
 
 featureHashFloatProgram : CProgram
-featureHashFloatProgram = CProgram
-  [
-    CBind "featureHashFloat" [
-      CClause [featureStateArg] (CApp (CVar "hashFloat" AGlobal) (CLit (LFloat 3.14)))
-    ],
-    CBind "main" [CClause [] (CLit (LInt 0))],
-  ]
-  []
-  []
-  []
+featureHashFloatProgram =
+  CProgram
+    [
+      CBind "featureHashFloat" [
+        CClause
+          [featureStateArg]
+          (CApp (CVar "hashFloat" AGlobal) (CLit (LFloat 3.14))),
+      ],
+      CBind "main" [CClause [] (CLit (LInt 0))],
+    ]
+    []
+    []
+    []
 
 featureHashFloatRecordUProgram : CProgram
-featureHashFloatRecordUProgram = CProgram
-  [
-    CBind "featureHashFloatNearestFloat" [
-      CClause [featureStateArg] (CApp (CVar "intToFloat" AGlobal) (CVar "x" (ALocal 0 0)))
-    ],
-    CBind "featureHashFloatNearestHashInt" [
-      CClause [featureStateArg] (CApp (CVar "hashInt" AGlobal) (CVar "x" (ALocal 0 0)))
-    ],
-    CBind "main" [CClause [] (CLit (LInt 0))],
-  ]
-  []
-  []
-  []
+featureHashFloatRecordUProgram =
+  CProgram
+    [
+      CBind "featureHashFloatNearestFloat" [
+        CClause
+          [featureStateArg]
+          (CApp (CVar "intToFloat" AGlobal) (CVar "x" (ALocal 0 0))),
+      ],
+      CBind "featureHashFloatNearestHashInt" [
+        CClause
+          [featureStateArg]
+          (CApp (CVar "hashInt" AGlobal) (CVar "x" (ALocal 0 0))),
+      ],
+      CBind "main" [CClause [] (CLit (LInt 0))],
+    ]
+    []
+    []
+    []
 
 featureHashFloatCensusProgram : CProgram
-featureHashFloatCensusProgram = CProgram
-  [
-    CBind "featureHashFloat" [
-      CClause [featureStateArg] (CApp (CVar "hashFloat" AGlobal) (CLit (LFloat 3.14)))
-    ],
-    CBind "featureHashFloatIntentionalGap" [CClause [featureStateArg] (CVar "missingFeatureHashFloatCensus" AGlobal)],
-    CBind "main" [CClause [] (CLit (LInt 0))],
-  ]
-  []
-  []
-  []
+featureHashFloatCensusProgram =
+  CProgram
+    [
+      CBind "featureHashFloat" [
+        CClause
+          [featureStateArg]
+          (CApp (CVar "hashFloat" AGlobal) (CLit (LFloat 3.14))),
+      ],
+      CBind "featureHashFloatIntentionalGap" [
+        CClause [featureStateArg] (CVar "missingFeatureHashFloatCensus" AGlobal),
+      ],
+      CBind "main" [CClause [] (CLit (LInt 0))],
+    ]
+    []
+    []
+    []
 
 -- H2b.11: charFromCode owns a range-check runtime and a point-free extern eta
 -- wrapper. P reaches both routes; U retains the neighboring Char/String path
@@ -499,8 +656,10 @@ featureHashFloatCensusProgram = CProgram
 reemitCharFromCodeState : Unit -> <IO> Unit
 reemitCharFromCodeState _ =
   let p1 = emitProgram charFromCodeStateInput charFromCodeStateProgram
-  let (u, _) = emitProgramRecord charFromCodeStateInput charFromCodeStateControlProgram
-  let censusEvents = emitProgramGaps charFromCodeStateInput charFromCodeStateCensusProgram
+  let (u, _) =
+    emitProgramRecord charFromCodeStateInput charFromCodeStateControlProgram
+  let censusEvents =
+    emitProgramGaps charFromCodeStateInput charFromCodeStateCensusProgram
   let _ = printCapture "CHAR_FROM_CODE_P1" p1
   let _ = printCapture "CHAR_FROM_CODE_RECORD_U" u
   let _ = printEvents "CHAR_FROM_CODE_CENSUS_P_GAP" censusEvents
@@ -512,62 +671,127 @@ charFromCodeStateInput : WasmEmitInput
 charFromCodeStateInput = makeWasmEmitInput [] [] [] False []
 
 charFromCodeStateProgram : CProgram
-charFromCodeStateProgram = CProgram
-  [
-    CBind "charFromCodeApplied" [
-      CClause [featureStateArg] (CApp (CVar "charFromCode" AGlobal) (CVar "x" (ALocal 0 0)))
-    ],
-    CBind "charFromCodePointFree" [
-      CClause [featureStateArg] (CLet False PWild (CVar "charFromCode" AGlobal) (CLit (LInt 0)))
-    ],
-    CBind "main" [CClause [] (CLit (LInt 0))],
-  ]
-  []
-  []
-  []
+charFromCodeStateProgram =
+  CProgram
+    [
+      CBind "charFromCodeApplied" [
+        CClause
+          [featureStateArg]
+          (CApp (CVar "charFromCode" AGlobal) (CVar "x" (ALocal 0 0))),
+      ],
+      CBind "charFromCodePointFree" [
+        CClause
+          [featureStateArg]
+          (CLet False PWild (CVar "charFromCode" AGlobal) (CLit (LInt 0))),
+      ],
+      CBind "main" [CClause [] (CLit (LInt 0))],
+    ]
+    []
+    []
+    []
 
 charFromCodeStateControlProgram : CProgram
-charFromCodeStateControlProgram = CProgram
-  [
-    CBind "charFromCodeNearestChar" [
-      CClause [featureStateArg] (CApp (CVar "charToStr" AGlobal) (CLit (LChar "A")))
-    ],
-    CBind "charFromCodeNearestString" [CClause [featureStateArg] (CLit (LString "char-neighborhood"))],
-    CBind "main" [CClause [] (CLit (LInt 0))],
-  ]
-  []
-  []
-  []
+charFromCodeStateControlProgram =
+  CProgram
+    [
+      CBind "charFromCodeNearestChar" [
+        CClause
+          [featureStateArg]
+          (CApp (CVar "charToStr" AGlobal) (CLit (LChar "A"))),
+      ],
+      CBind "charFromCodeNearestString" [
+        CClause [featureStateArg] (CLit (LString "char-neighborhood")),
+      ],
+      CBind "main" [CClause [] (CLit (LInt 0))],
+    ]
+    []
+    []
+    []
 
 charFromCodeStateCensusProgram : CProgram
-charFromCodeStateCensusProgram = CProgram
-  [
-    CBind "charFromCodeApplied" [
-      CClause [featureStateArg] (CApp (CVar "charFromCode" AGlobal) (CVar "x" (ALocal 0 0)))
-    ],
-    CBind "charFromCodePointFree" [
-      CClause [featureStateArg] (CLet False PWild (CVar "charFromCode" AGlobal) (CLit (LInt 0)))
-    ],
-    CBind "charFromCodeIntentionalGap" [CClause [featureStateArg] (CVar "missingCharFromCodeCensus" AGlobal)],
-    CBind "main" [CClause [] (CLit (LInt 0))],
-  ]
-  []
-  []
-  []
+charFromCodeStateCensusProgram =
+  CProgram
+    [
+      CBind "charFromCodeApplied" [
+        CClause
+          [featureStateArg]
+          (CApp (CVar "charFromCode" AGlobal) (CVar "x" (ALocal 0 0))),
+      ],
+      CBind "charFromCodePointFree" [
+        CClause
+          [featureStateArg]
+          (CLet False PWild (CVar "charFromCode" AGlobal) (CLit (LInt 0))),
+      ],
+      CBind "charFromCodeIntentionalGap" [
+        CClause [featureStateArg] (CVar "missingCharFromCodeCensus" AGlobal),
+      ],
+      CBind "main" [CClause [] (CLit (LInt 0))],
+    ]
+    []
+    []
+    []
 
 -- LR0 capture-only apparatus. Each row emits strict P, record U, census P with
 -- one attributed gap, then strict P again. Record events retain their own empty
 -- capture so a record-mode substitution cannot hide behind valid placeholder WAT.
 reemitLeafRuntimeState : Unit -> <IO> Unit
 reemitLeafRuntimeState _ =
-  let _ = reemitLeafRuntimeRow "CHARCLASS" leafCharClassP leafCharClassU "leafCharClassIntentionalGap" "missingLeafCharClassCensus"
-  let _ = reemitLeafRuntimeRow "FLOATRNG" leafFloatRngP leafFloatRngU "leafFloatRngIntentionalGap" "missingLeafFloatRngCensus"
-  let _ = reemitLeafRuntimeRow "STRCODEC" leafStrCodecP leafStrCodecU "leafStrCodecIntentionalGap" "missingLeafStrCodecCensus"
-  let _ = reemitLeafRuntimeRow "VALUECMP" leafValueCmpP leafValueCmpU "leafValueCmpIntentionalGap" "missingLeafValueCmpCensus"
-  let _ = reemitLeafRuntimeRow "FLOATSTR" leafFloatStrP leafFloatStrU "leafFloatStrIntentionalGap" "missingLeafFloatStrCensus"
-  let _ = reemitLeafRuntimeRow "ARGS" leafArgsP leafArgsU "leafArgsIntentionalGap" "missingLeafArgsCensus"
-  let _ = reemitLeafRuntimeRow "FILEBYTES_READ" leafFileBytesReadP leafFileBytesU "leafFileBytesReadIntentionalGap" "missingLeafFileBytesReadCensus"
-  let _ = reemitLeafRuntimeRow "FILEBYTES_WRITE" leafFileBytesWriteP leafFileBytesU "leafFileBytesWriteIntentionalGap" "missingLeafFileBytesWriteCensus"
+  let _ =
+    reemitLeafRuntimeRow
+      "CHARCLASS"
+      leafCharClassP
+      leafCharClassU
+      "leafCharClassIntentionalGap"
+      "missingLeafCharClassCensus"
+  let _ =
+    reemitLeafRuntimeRow
+      "FLOATRNG"
+      leafFloatRngP
+      leafFloatRngU
+      "leafFloatRngIntentionalGap"
+      "missingLeafFloatRngCensus"
+  let _ =
+    reemitLeafRuntimeRow
+      "STRCODEC"
+      leafStrCodecP
+      leafStrCodecU
+      "leafStrCodecIntentionalGap"
+      "missingLeafStrCodecCensus"
+  let _ =
+    reemitLeafRuntimeRow
+      "VALUECMP"
+      leafValueCmpP
+      leafValueCmpU
+      "leafValueCmpIntentionalGap"
+      "missingLeafValueCmpCensus"
+  let _ =
+    reemitLeafRuntimeRow
+      "FLOATSTR"
+      leafFloatStrP
+      leafFloatStrU
+      "leafFloatStrIntentionalGap"
+      "missingLeafFloatStrCensus"
+  let _ =
+    reemitLeafRuntimeRow
+      "ARGS"
+      leafArgsP
+      leafArgsU
+      "leafArgsIntentionalGap"
+      "missingLeafArgsCensus"
+  let _ =
+    reemitLeafRuntimeRow
+      "FILEBYTES_READ"
+      leafFileBytesReadP
+      leafFileBytesU
+      "leafFileBytesReadIntentionalGap"
+      "missingLeafFileBytesReadCensus"
+  let _ =
+    reemitLeafRuntimeRow
+      "FILEBYTES_WRITE"
+      leafFileBytesWriteP
+      leafFileBytesU
+      "leafFileBytesWriteIntentionalGap"
+      "missingLeafFileBytesWriteCensus"
   reemitLeafRuntimeRow
     "MATH"
     leafMathP
@@ -575,11 +799,17 @@ reemitLeafRuntimeState _ =
     "leafMathIntentionalGap"
     "missingLeafMathCensus"
 
-reemitLeafRuntimeRow : String -> CProgram -> CProgram -> String -> String -> <IO> Unit
+reemitLeafRuntimeRow : String ->
+  CProgram ->
+  CProgram ->
+  String ->
+  String ->
+  <IO> Unit
 reemitLeafRuntimeRow name p u gapBind gapMissing =
   let p1 = emitProgram leafRuntimeInput p
   let (recordU, recordEvents) = emitProgramRecord leafRuntimeInput u
-  let censusEvents = emitProgramGaps leafRuntimeInput (leafRuntimeCensus p gapBind gapMissing)
+  let censusEvents =
+    emitProgramGaps leafRuntimeInput (leafRuntimeCensus p gapBind gapMissing)
   let _ = printCapture ("LEAF_" ++ name ++ "_P1") p1
   let _ = printCapture ("LEAF_" ++ name ++ "_RECORD_U") recordU
   let _ = printEvents ("LEAF_" ++ name ++ "_RECORD_U_EVENTS") recordEvents
@@ -600,193 +830,253 @@ leafRuntimeProgram groups =
   CProgram (groups ++ [CBind "main" [CClause [] (CLit (LInt 0))]]) [] [] []
 
 leafRuntimeCensus : CProgram -> String -> String -> CProgram
-leafRuntimeCensus (CProgram groups ctorArs ctorTypes impls) bindName missingName = CProgram (groups ++ [CBind bindName [CClause [leafRuntimeArg] (CVar missingName AGlobal)]]) ctorArs ctorTypes impls
+leafRuntimeCensus (CProgram groups ctorArs ctorTypes impls) bindName missingName =
+  CProgram
+    (groups
+      ++ [CBind bindName [CClause [leafRuntimeArg] (CVar missingName AGlobal)]])
+    ctorArs
+    ctorTypes
+    impls
 
 leafCharClassP : CProgram
-leafCharClassP = leafRuntimeProgram
-  [
-    CBind "leafCharClass" [
-      CClause [leafRuntimeArg] (CApp (CVar "charIsAlpha" AGlobal) (CLit (LChar "a")))
-    ]
-  ]
+leafCharClassP = leafRuntimeProgram [
+  CBind "leafCharClass" [
+    CClause
+      [leafRuntimeArg]
+      (CApp (CVar "charIsAlpha" AGlobal) (CLit (LChar "a"))),
+  ],
+]
 
 leafCharClassU : CProgram
-leafCharClassU = leafRuntimeProgram
-  [
-    CBind "leafCharClassNearestCode" [
-      CClause [leafRuntimeArg] (CApp (CVar "charFromCode" AGlobal) (CLit (LInt 65)))
-    ],
-    CBind "leafCharClassNearestString" [
-      CClause [leafRuntimeArg] (CLet False PWild (CLit (LString "char-class-nearest")) (CLit (LInt 0)))
-    ],
-  ]
+leafCharClassU = leafRuntimeProgram [
+  CBind "leafCharClassNearestCode" [
+    CClause
+      [leafRuntimeArg]
+      (CApp (CVar "charFromCode" AGlobal) (CLit (LInt 65))),
+  ],
+  CBind "leafCharClassNearestString" [
+    CClause
+      [leafRuntimeArg]
+      (CLet False PWild (CLit (LString "char-class-nearest")) (CLit (LInt 0))),
+  ],
+]
 
 leafFloatRngP : CProgram
-leafFloatRngP = leafRuntimeProgram
-  [
-    CBind "leafFloatRng" [CClause [leafRuntimeArg] (CApp (CVar "randomFloat" AGlobal) (CLit LUnit))]
-  ]
+leafFloatRngP = leafRuntimeProgram [
+  CBind "leafFloatRng" [
+    CClause [leafRuntimeArg] (CApp (CVar "randomFloat" AGlobal) (CLit LUnit)),
+  ],
+]
 
 leafFloatRngU : CProgram
-leafFloatRngU = leafRuntimeProgram
-  [
-    CBind "leafFloatRngNearestInt" [
-      CClause [leafRuntimeArg] (CApp (CApp (CVar "randomInt" AGlobal) (CLit (LInt 0))) (CLit (LInt 1)))
-    ],
-    CBind "leafFloatRngNearestFloat" [
-      CClause [leafRuntimeArg] (CApp (CVar "intToFloat" AGlobal) (CLit (LInt 0)))
-    ],
-  ]
+leafFloatRngU = leafRuntimeProgram [
+  CBind "leafFloatRngNearestInt" [
+    CClause
+      [leafRuntimeArg]
+      (CApp (CApp (CVar "randomInt" AGlobal) (CLit (LInt 0))) (CLit (LInt 1))),
+  ],
+  CBind "leafFloatRngNearestFloat" [
+    CClause [leafRuntimeArg] (CApp (CVar "intToFloat" AGlobal) (CLit (LInt 0))),
+  ],
+]
 
 leafStrCodecP : CProgram
-leafStrCodecP = leafRuntimeProgram
-  [
-    CBind "leafStrCodec" [
-      CClause [leafRuntimeArg] (CApp (CVar "stringToChars" AGlobal) (CLit (LString "héllo")))
-    ]
-  ]
+leafStrCodecP = leafRuntimeProgram [
+  CBind "leafStrCodec" [
+    CClause
+      [leafRuntimeArg]
+      (CApp (CVar "stringToChars" AGlobal) (CLit (LString "héllo"))),
+  ],
+]
 
 leafStrCodecU : CProgram
-leafStrCodecU = leafRuntimeProgram
-  [
-    CBind "leafStrCodecNearestChar" [
-      CClause [leafRuntimeArg] (CApp (CVar "charToStr" AGlobal) (CLit (LChar "A")))
-    ],
-    CBind "leafStrCodecNearestArray" [CClause [leafRuntimeArg] (CArray [CLit (LInt 1)])],
-  ]
+leafStrCodecU = leafRuntimeProgram [
+  CBind "leafStrCodecNearestChar" [
+    CClause
+      [leafRuntimeArg]
+      (CApp (CVar "charToStr" AGlobal) (CLit (LChar "A"))),
+  ],
+  CBind "leafStrCodecNearestArray" [
+    CClause [leafRuntimeArg] (CArray [CLit (LInt 1)]),
+  ],
+]
 
 leafValueCmpP : CProgram
-leafValueCmpP = leafRuntimeProgram
-  [
-    CBind "leafValueCmpEq" [
-      CClause [leafRuntimeArg] (CBinPrim "==" (CLit (LString "value-cmp")) (CLit (LString "value-cmp")) "String")
-    ],
-    CBind "leafValueCmpLt" [
-      CClause [leafRuntimeArg] (CBinPrim "<" (CLit (LString "value-cmp-a")) (CLit (LString "value-cmp-b")) "String")
-    ],
-  ]
+leafValueCmpP = leafRuntimeProgram [
+  CBind "leafValueCmpEq" [
+    CClause
+      [leafRuntimeArg]
+      (CBinPrim
+        "=="
+        (CLit (LString "value-cmp"))
+        (CLit (LString "value-cmp"))
+        "String"),
+  ],
+  CBind "leafValueCmpLt" [
+    CClause
+      [leafRuntimeArg]
+      (CBinPrim
+        "<"
+        (CLit (LString "value-cmp-a"))
+        (CLit (LString "value-cmp-b"))
+        "String"),
+  ],
+]
 
 leafValueCmpU : CProgram
-leafValueCmpU = leafRuntimeProgram
-  [
-    CBind "leafValueCmpNearestStringCompare" [
-      CClause [leafRuntimeArg] (CApp (CApp (CVar "stringCompare" AGlobal) (CLit (LString "medaka"))) (CLit (LString "medaka")))
-    ]
-  ]
+leafValueCmpU = leafRuntimeProgram [
+  CBind "leafValueCmpNearestStringCompare" [
+    CClause
+      [leafRuntimeArg]
+      (CApp
+        (CApp (CVar "stringCompare" AGlobal) (CLit (LString "medaka")))
+        (CLit (LString "medaka"))),
+  ],
+]
 
 -- A2: P selects stringToFloat. U retains Float, String, and IO cofactors without
 -- selecting its host import/runtime; shared leaf census remains ownership-only.
 leafFloatStrP : CProgram
-leafFloatStrP = leafRuntimeProgram
-  [
-    CBind "leafFloatStr" [
-      CClause [leafRuntimeArg] (CApp (CVar "stringToFloat" AGlobal) (CLit (LString "3.14")))
-    ]
-  ]
+leafFloatStrP = leafRuntimeProgram [
+  CBind "leafFloatStr" [
+    CClause
+      [leafRuntimeArg]
+      (CApp (CVar "stringToFloat" AGlobal) (CLit (LString "3.14"))),
+  ],
+]
 
 leafFloatStrU : CProgram
-leafFloatStrU = leafRuntimeProgram
-  [
-    CBind "leafFloatStrNearestFloat" [
-      CClause [leafRuntimeArg] (CApp (CVar "intToFloat" AGlobal) (CVar "x" (ALocal 0 0)))
-    ],
-    CBind "leafFloatStrNearestStringIo" [
-      CClause [leafRuntimeArg] (CApp (CVar "readFile" AGlobal) (CLit (LString "floatstr-nearest")))
-    ],
-  ]
+leafFloatStrU = leafRuntimeProgram [
+  CBind "leafFloatStrNearestFloat" [
+    CClause
+      [leafRuntimeArg]
+      (CApp (CVar "intToFloat" AGlobal) (CVar "x" (ALocal 0 0))),
+  ],
+  CBind "leafFloatStrNearestStringIo" [
+    CClause
+      [leafRuntimeArg]
+      (CApp (CVar "readFile" AGlobal) (CLit (LString "floatstr-nearest"))),
+  ],
+]
 
 -- A3: P selects args. U retains IO, String, and List cofactors without selecting
 -- the args runtime; shared leaf census remains ownership-only.
 leafArgsP : CProgram
-leafArgsP = leafRuntimeProgram
-  [
-    CBind "leafArgs" [CClause [leafRuntimeArg] (CApp (CVar "args" AGlobal) (CLit LUnit))]
-  ]
+leafArgsP = leafRuntimeProgram [
+  CBind "leafArgs" [
+    CClause [leafRuntimeArg] (CApp (CVar "args" AGlobal) (CLit LUnit)),
+  ],
+]
 
 leafArgsU : CProgram
-leafArgsU = leafRuntimeProgram
-  [
-    CBind "leafArgsNearestIo" [
-      CClause [leafRuntimeArg] (CApp (CVar "readFile" AGlobal) (CLit (LString "args-nearest")))
-    ],
-    CBind "leafArgsNearestList" [CClause [leafRuntimeArg] (CList [CLit (LString "args-nearest")])],
-  ]
+leafArgsU = leafRuntimeProgram [
+  CBind "leafArgsNearestIo" [
+    CClause
+      [leafRuntimeArg]
+      (CApp (CVar "readFile" AGlobal) (CLit (LString "args-nearest"))),
+  ],
+  CBind "leafArgsNearestList" [
+    CClause [leafRuntimeArg] (CList [CLit (LString "args-nearest")]),
+  ],
+]
 
 -- A4: separate P rows keep read/write producers independently observable. Shared U
 -- retains IO, Array, and String cofactors without FileBytes demand; census is
 -- ownership-only and all hand-built programs keep main inert.
 leafFileBytesReadP : CProgram
-leafFileBytesReadP = leafRuntimeProgram
-  [
-    CBind "leafFileBytesRead" [
-      CClause [leafRuntimeArg] (CApp (CVar "readFileBytes" AGlobal) (CLit (LString "filebytes-read-inert")))
-    ]
-  ]
+leafFileBytesReadP = leafRuntimeProgram [
+  CBind "leafFileBytesRead" [
+    CClause
+      [leafRuntimeArg]
+      (CApp
+        (CVar "readFileBytes" AGlobal)
+        (CLit (LString "filebytes-read-inert"))),
+  ],
+]
 
 leafFileBytesWriteP : CProgram
-leafFileBytesWriteP = leafRuntimeProgram
-  [
-    CBind "leafFileBytesWrite" [
-      CClause [leafRuntimeArg] (CApp (CApp (CVar "writeFileBytes" AGlobal) (CLit (LString "filebytes-write-inert"))) (CArray [CLit (LInt 1)]))
-    ]
-  ]
+leafFileBytesWriteP = leafRuntimeProgram [
+  CBind "leafFileBytesWrite" [
+    CClause
+      [leafRuntimeArg]
+      (CApp
+        (CApp
+          (CVar "writeFileBytes" AGlobal)
+          (CLit (LString "filebytes-write-inert")))
+        (CArray [CLit (LInt 1)])),
+  ],
+]
 
 leafFileBytesU : CProgram
-leafFileBytesU = leafRuntimeProgram
-  [
-    CBind "leafFileBytesNearestIoString" [
-      CClause [leafRuntimeArg] (CApp (CVar "readFile" AGlobal) (CLit (LString "filebytes-nearest")))
-    ],
-    CBind "leafFileBytesNearestArray" [CClause [leafRuntimeArg] (CArray [CLit (LInt 1)])],
-  ]
+leafFileBytesU = leafRuntimeProgram [
+  CBind "leafFileBytesNearestIoString" [
+    CClause
+      [leafRuntimeArg]
+      (CApp (CVar "readFile" AGlobal) (CLit (LString "filebytes-nearest"))),
+  ],
+  CBind "leafFileBytesNearestArray" [
+    CClause [leafRuntimeArg] (CArray [CLit (LInt 1)]),
+  ],
+]
 
 leafMathP : CProgram
-leafMathP = leafRuntimeProgram
-  [
-    CBind "leafMath" [CClause [leafRuntimeArg] (CApp (CVar "sin" AGlobal) (CLit (LFloat 0.0)))]
-  ]
+leafMathP = leafRuntimeProgram [
+  CBind "leafMath" [
+    CClause [leafRuntimeArg] (CApp (CVar "sin" AGlobal) (CLit (LFloat 0.0))),
+  ],
+]
 
 leafMathU : CProgram
-leafMathU = leafRuntimeProgram
-  [
-    CBind "leafMathNearestSqrt" [CClause [leafRuntimeArg] (CApp (CVar "sqrt" AGlobal) (CLit (LFloat 4.0)))]
-  ]
+leafMathU = leafRuntimeProgram [
+  CBind "leafMathNearestSqrt" [
+    CClause [leafRuntimeArg] (CApp (CVar "sqrt" AGlobal) (CLit (LFloat 4.0))),
+  ],
+]
 
 -- Float `/` stays over-approximated by the divisor-local scan: it needs the
 -- ref-mode local even though IEEE division never traps on zero.
 featureFloatDivProgram : CProgram
-featureFloatDivProgram = CProgram
-  [
-    CBind "featureFloatDiv" [
-      CClause [featureStateArg] (CBinPrim "/" (CLit (LFloat 1.0)) (CLit (LFloat 2.0)) "Float")
-    ],
-    CBind "main" [CClause [] (CLit (LInt 0))],
-  ]
-  []
-  []
-  []
+featureFloatDivProgram =
+  CProgram
+    [
+      CBind "featureFloatDiv" [
+        CClause
+          [featureStateArg]
+          (CBinPrim "/" (CLit (LFloat 1.0)) (CLit (LFloat 2.0)) "Float"),
+      ],
+      CBind "main" [CClause [] (CLit (LInt 0))],
+    ]
+    []
+    []
+    []
 
 featureStateControlProgram : CProgram
-featureStateControlProgram = CProgram
-  [
-    CBind "featurePlainRecord" [CClause [featureStateArg] featureStateRecord],
-    CBind "featurePlainAccess" [
-      CClause [featureStateArg] (CFieldAccess featureStateRecord "left" "FeatureRecord")
-    ],
-    CBind "featureControl" [CClause [featureStateArg] (CLit (LInt 29))],
-    CBind "main" [CClause [] (CLit (LInt 0))],
-  ]
-  featureStateCtorArities
-  featureStateCtorTypes
-  []
+featureStateControlProgram =
+  CProgram
+    [
+      CBind "featurePlainRecord" [CClause [featureStateArg] featureStateRecord],
+      CBind "featurePlainAccess" [
+        CClause
+          [featureStateArg]
+          (CFieldAccess featureStateRecord "left" "FeatureRecord"),
+      ],
+      CBind "featureControl" [CClause [featureStateArg] (CLit (LInt 29))],
+      CBind "main" [CClause [] (CLit (LInt 0))],
+    ]
+    featureStateCtorArities
+    featureStateCtorTypes
+    []
 
 featureStateCensusProgram : CProgram
 featureStateCensusProgram =
   CProgram
-    (featureStateBinds ++ [
-      CBind "featureIntentionalGap" [CClause [featureStateArg] (CVar "missingFeatureCensus" AGlobal)],
-      CBind "main" [CClause [] (CLit (LInt 0))],
-    ])
+    (featureStateBinds
+      ++ [
+        CBind "featureIntentionalGap" [
+          CClause [featureStateArg] (CVar "missingFeatureCensus" AGlobal),
+        ],
+        CBind "main" [CClause [] (CLit (LInt 0))],
+      ])
     featureStateCtorArities
     featureStateCtorTypes
     []
@@ -795,41 +1085,50 @@ trapStateInput : WasmEmitInput
 trapStateInput = makeWasmEmitInput [] [] [] False []
 
 trapStateProgram : CProgram
-trapStateProgram = CProgram
-  [
-    CBind "trapRoute" [
-      CClause [PVar "n" lambdaStateLoc] (CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int")
-    ],
-    CBind "main" [CClause [] (CLit (LInt 17))],
-  ]
-  []
-  []
-  []
+trapStateProgram =
+  CProgram
+    [
+      CBind "trapRoute" [
+        CClause
+          [PVar "n" lambdaStateLoc]
+          (CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int"),
+      ],
+      CBind "main" [CClause [] (CLit (LInt 17))],
+    ]
+    []
+    []
+    []
 
 trapStateControlProgram : CProgram
 trapStateControlProgram =
   CProgram [CBind "main" [CClause [] (CLit (LInt 29))]] [] [] []
 
 trapStateCensusProgram : CProgram
-trapStateCensusProgram = CProgram
-  [
-    CBind "trapCensusRoute" [
-      CClause [PVar "n" lambdaStateLoc] (CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int")
-    ],
-    CBind "trapIntentionalGap" [CClause [] (CVar "missingTrapCensus" AGlobal)],
-  ]
-  []
-  []
-  []
+trapStateCensusProgram =
+  CProgram
+    [
+      CBind "trapCensusRoute" [
+        CClause
+          [PVar "n" lambdaStateLoc]
+          (CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int"),
+      ],
+      CBind "trapIntentionalGap" [CClause [] (CVar "missingTrapCensus" AGlobal)],
+    ]
+    []
+    []
+    []
 
 trapStateAbortProgram : CProgram
-trapStateAbortProgram = CProgram
-  [
-    CBind "main" [CClause [] (CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int")]
-  ]
-  []
-  []
-  []
+trapStateAbortProgram =
+  CProgram
+    [
+      CBind "main" [
+        CClause [] (CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int"),
+      ],
+    ]
+    []
+    []
+    []
 
 -- H2b.8 ref-reader control: the ADT table forces emitRefProgram, whose late import
 -- predicate is distinct from scalar's. No ePut route appears in P or U.
@@ -851,32 +1150,39 @@ refTrapCtorTypes : List (String, String)
 refTrapCtorTypes = [("TrapToken", "TrapToken")]
 
 refTrapStateProgram : CProgram
-refTrapStateProgram = CProgram
-  [
-    CBind "refTrapRoute" [
-      CClause [PVar "n" lambdaStateLoc] (CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int")
-    ],
-    CBind "main" [CClause [] (CLit (LInt 17))],
-  ]
-  refTrapCtorArities
-  refTrapCtorTypes
-  []
+refTrapStateProgram =
+  CProgram
+    [
+      CBind "refTrapRoute" [
+        CClause
+          [PVar "n" lambdaStateLoc]
+          (CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int"),
+      ],
+      CBind "main" [CClause [] (CLit (LInt 17))],
+    ]
+    refTrapCtorArities
+    refTrapCtorTypes
+    []
 
 refTrapStateControlProgram : CProgram
-refTrapStateControlProgram = CProgram
-  [CBind "main" [CClause [] (CLit (LInt 29))]]
-  refTrapCtorArities
-  refTrapCtorTypes
-  []
+refTrapStateControlProgram =
+  CProgram
+    [CBind "main" [CClause [] (CLit (LInt 29))]]
+    refTrapCtorArities
+    refTrapCtorTypes
+    []
 
 refTrapStateAbortProgram : CProgram
-refTrapStateAbortProgram = CProgram
-  [
-    CBind "main" [CClause [] (CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int")]
-  ]
-  refTrapCtorArities
-  refTrapCtorTypes
-  []
+refTrapStateAbortProgram =
+  CProgram
+    [
+      CBind "main" [
+        CClause [] (CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int"),
+      ],
+    ]
+    refTrapCtorArities
+    refTrapCtorTypes
+    []
 
 implSelfInput : WasmEmitInput
 implSelfInput = makeWasmEmitInput [("walk", ("Loop", "Loop", 2))] [] [] False []
@@ -888,22 +1194,38 @@ implSelfProgram : String -> Int -> Int -> CProgram
 implSelfProgram tag base depth =
   let self = CVar "self" (ALocal 0 0)
   let n = CVar "n" (ALocal 0 1)
-  let recurse = CApp (CApp (CMethod "walk" (RKey tag []) [] []) self) (CBinPrim "-" n (CLit (LInt 1)) "Int")
-  let body = CIf (CBinPrim "==" n (CLit (LInt 0)) "Int") (CLit (LInt base)) recurse
+  let recurse =
+    CApp
+      (CApp (CMethod "walk" (RKey tag []) [] []) self)
+      (CBinPrim "-" n (CLit (LInt 1)) "Int")
+  let body =
+    CIf (CBinPrim "==" n (CLit (LInt 0)) "Int") (CLit (LInt base)) recurse
   CProgram
     [CBind "main" [CClause [] (CLit (LInt depth))]]
     [(tag, 0)]
     [(tag, tag)]
     [
-      CImplEntry "walk" 0 (CImplTagged tag tag "Loop" [0] [PVar "self" implSelfLoc, PVar "n" implSelfLoc] body)
+      CImplEntry
+        "walk"
+        0
+        (CImplTagged
+          tag
+          tag
+          "Loop"
+          [0]
+          [PVar "self" implSelfLoc, PVar "n" implSelfLoc]
+          body),
     ]
 
 implSelfCensusProgram : CProgram -> CProgram
 implSelfCensusProgram (CProgram groups ctorArs ctorTypes impls) =
   CProgram
-    (groups ++ [
-      CBind "implSelfIntentionalGap" [CClause [] (CVar "missingImplSelfGap" AGlobal)]
-    ])
+    (groups
+      ++ [
+        CBind "implSelfIntentionalGap" [
+          CClause [] (CVar "missingImplSelfGap" AGlobal),
+        ],
+      ])
     ctorArs
     ctorTypes
     impls
@@ -917,7 +1239,8 @@ reemitGapState _ =
   let pProgram = typedProgram [] [] pDecls
   let pInput = reemitStateFallbackInput [] pDecls
   let p1 = emitProgram pInput pProgram
-  let (recordWat, recordEvents) = emitProgramRecord gapStateInput gapStateProgram
+  let (recordWat, recordEvents) =
+    emitProgramRecord gapStateInput gapStateProgram
   let censusEvents = emitProgramGaps gapStateInput gapStateProgram
   let p2 = emitProgram pInput pProgram
   let _ = printCapture "GAP_P1" p1
@@ -957,7 +1280,8 @@ reemitStringState _ =
   printCapture "STRING_P2" p2
 
 reemitStringStateP : String
-reemitStringStateP = "pExpr _ = \"p-expr\"\n\npRepeat _ = \"p-expr\"\n\npClause \"p-clause\" = \"p-clause-body\"\npClause _ = \"p-clause-other\"\n\npTail x = match x\n  \"p-tail\" => \"p-tail-body\"\n  _ => \"p-tail-other\"\n\npNonTail x =\n  let y = match x\n    \"p-non-tail\" => \"p-non-tail-body\"\n    _ => \"p-non-tail-other\"\n  y\n\nmain = 71\n"
+reemitStringStateP =
+  "pExpr _ = \"p-expr\"\n\npRepeat _ = \"p-expr\"\n\npClause \"p-clause\" = \"p-clause-body\"\npClause _ = \"p-clause-other\"\n\npTail x = match x\n  \"p-tail\" => \"p-tail-body\"\n  _ => \"p-tail-other\"\n\npNonTail x =\n  let y = match x\n    \"p-non-tail\" => \"p-non-tail-body\"\n    _ => \"p-non-tail-other\"\n  y\n\nmain = 71\n"
 
 reemitStringStateU : String
 reemitStringStateU =
@@ -971,7 +1295,8 @@ reemitDefaultState : Unit -> <IO> Unit
 reemitDefaultState _ =
   let p1 = emitProgram defaultStateInputP defaultStateProgramP
   let (u, _) = emitProgramRecord defaultStateInputU defaultStateProgramU
-  let censusEvents = emitProgramGaps defaultStateInputU defaultStateCensusProgramU
+  let censusEvents =
+    emitProgramGaps defaultStateInputU defaultStateCensusProgramU
   let _ = printCapture "DEFAULT_P1" p1
   let _ = printCapture "DEFAULT_RECORD_U" u
   let _ = printEvents "DEFAULT_CENSUS_U_EVENTS" censusEvents
@@ -986,40 +1311,53 @@ defaultStateLoc = Loc "<default-state>" 1 1 1 1
 -- inputs coinciding is a property of THIS probe, not a duplicate to consolidate.
 defaultStateInputP : WasmEmitInput
 -- lint-disable-next-line rule-duplicate-body
-defaultStateInputP = makeWasmEmitInput
-  [("synthDefault", ("DefaultFace", "DefaultFace", 1))]
-  []
-  []
-  False
-  []
+defaultStateInputP =
+  makeWasmEmitInput
+    [("synthDefault", ("DefaultFace", "DefaultFace", 1))]
+    []
+    []
+    False
+    []
 
 -- The P/U pair is deliberately parallel (prelude half vs untyped half); the two
 -- inputs coinciding is a property of THIS probe, not a duplicate to consolidate.
 defaultStateInputU : WasmEmitInput
 -- lint-disable-next-line rule-duplicate-body
-defaultStateInputU = makeWasmEmitInput
-  [("synthDefault", ("DefaultFace", "DefaultFace", 1))]
-  []
-  []
-  False
-  []
+defaultStateInputU =
+  makeWasmEmitInput
+    [("synthDefault", ("DefaultFace", "DefaultFace", 1))]
+    []
+    []
+    False
+    []
 
 defaultStateCall : String -> CExpr
 defaultStateCall tag =
   CApp (CMethod "synthDefault" (RKey tag []) [] []) (CLit LUnit)
 
 defaultStateProgram : String -> Int -> CProgram
-defaultStateProgram tag bodyConstant = CProgram
-  [
-    CBind "defaultRequestOne" [CClause [PVar "one" defaultStateLoc] (defaultStateCall tag)],
-    CBind "defaultRequestTwo" [CClause [PVar "two" defaultStateLoc] (defaultStateCall tag)],
-    CBind "main" [CClause [] (CLit (LInt 0))],
-  ]
-  []
-  []
-  [
-    CImplEntry "synthDefault" 0 (CImplDefault "DefaultFace" [PVar "value" defaultStateLoc] (CLit (LInt bodyConstant)))
-  ]
+defaultStateProgram tag bodyConstant =
+  CProgram
+    [
+      CBind "defaultRequestOne" [
+        CClause [PVar "one" defaultStateLoc] (defaultStateCall tag),
+      ],
+      CBind "defaultRequestTwo" [
+        CClause [PVar "two" defaultStateLoc] (defaultStateCall tag),
+      ],
+      CBind "main" [CClause [] (CLit (LInt 0))],
+    ]
+    []
+    []
+    [
+      CImplEntry
+        "synthDefault"
+        0
+        (CImplDefault
+          "DefaultFace"
+          [PVar "value" defaultStateLoc]
+          (CLit (LInt bodyConstant))),
+    ]
 
 defaultStateProgramP : CProgram
 defaultStateProgramP = defaultStateProgram "PDefault" 17
@@ -1028,18 +1366,31 @@ defaultStateProgramU : CProgram
 defaultStateProgramU = defaultStateProgram "UDefault" 29
 
 defaultStateCensusProgramU : CProgram
-defaultStateCensusProgramU = CProgram
-  [
-    CBind "defaultRequestOne" [CClause [PVar "one" defaultStateLoc] (defaultStateCall "UDefault")],
-    CBind "defaultRequestTwo" [CClause [PVar "two" defaultStateLoc] (defaultStateCall "UDefault")],
-    CBind "defaultCensusGap" [CClause [] (CVar "missingDefaultCensus" AGlobal)],
-    CBind "main" [CClause [] (CLit (LInt 0))],
-  ]
-  []
-  []
-  [
-    CImplEntry "synthDefault" 0 (CImplDefault "DefaultFace" [PVar "value" defaultStateLoc] (CLit (LInt 29)))
-  ]
+defaultStateCensusProgramU =
+  CProgram
+    [
+      CBind "defaultRequestOne" [
+        CClause [PVar "one" defaultStateLoc] (defaultStateCall "UDefault"),
+      ],
+      CBind "defaultRequestTwo" [
+        CClause [PVar "two" defaultStateLoc] (defaultStateCall "UDefault"),
+      ],
+      CBind "defaultCensusGap" [
+        CClause [] (CVar "missingDefaultCensus" AGlobal),
+      ],
+      CBind "main" [CClause [] (CLit (LInt 0))],
+    ]
+    []
+    []
+    [
+      CImplEntry
+        "synthDefault"
+        0
+        (CImplDefault
+          "DefaultFace"
+          [PVar "value" defaultStateLoc]
+          (CLit (LInt 29))),
+    ]
 
 -- Current-binding observation harness.  These rows deliberately only drive the
 -- existing record/census/strict APIs; they do not change emitter ownership or
@@ -1074,19 +1425,20 @@ bindingProgram : List CBind -> CProgram
 bindingProgram groups = CProgram groups bindingRefCtorArs bindingRefCtorTypes []
 
 bindingSensitiveProgram : String -> CProgram
-bindingSensitiveProgram name = bindingProgram
-  [CBind name [CClause [PVar "x" bindingLoc] bindingSensitiveExpr], bindingMain]
+bindingSensitiveProgram name = bindingProgram [
+  CBind name [CClause [PVar "x" bindingLoc] bindingSensitiveExpr],
+  bindingMain,
+]
 
 bindingNoWriterProgram : CProgram
 bindingNoWriterProgram =
   bindingProgram [CBind "P" [CClause [] bindingSensitiveExpr], bindingMain]
 
 bindingWriterProgram : CProgram
-bindingWriterProgram = bindingProgram
-  [
-    CBind "U" [CClause [PVar "x" bindingLoc] (CVar "x" (ALocal 0 0))],
-    bindingMain,
-  ]
+bindingWriterProgram = bindingProgram [
+  CBind "U" [CClause [PVar "x" bindingLoc] (CVar "x" (ALocal 0 0))],
+  bindingMain,
+]
 
 bindingEventCaptures : String -> CProgram -> <IO> Unit
 bindingEventCaptures name program =
@@ -1111,9 +1463,13 @@ captureCurrentBinding "lifted" =
   -- emitLetGroupRef calls emitLgLifted before it emits this group's use-site
   -- body, so the sensitive local member is reached while currentBinding is lg:P.
   let program = bindingProgram [
-    CBind "outer" [CClause [PVar "x" bindingLoc]
-      (CLetGroup [CBind "P" [CClause [PVar "y" bindingLoc] bindingSensitiveExpr]]
-        (CApp (CVar "P" (ALocal 0 0)) (CLit (LInt 0))))],
+    CBind "outer" [
+      CClause
+        [PVar "x" bindingLoc]
+        (CLetGroup
+          [CBind "P" [CClause [PVar "y" bindingLoc] bindingSensitiveExpr]]
+          (CApp (CVar "P" (ALocal 0 0)) (CLit (LInt 0)))),
+    ],
     bindingMain,
   ]
   let _ = bindingEventCaptures "CBIND_LIFT" program
@@ -1131,9 +1487,13 @@ captureCurrentBinding "post-lift" =
   -- unsupported argument; the final strict call observes whichever binding the
   -- existing backend leaves current, without choosing a verdict here.
   let program = bindingProgram [
-    CBind "P" [CClause [PVar "x" bindingLoc]
-      (CLetGroup [CBind "L" [CClause [PVar "y" bindingLoc] (CVar "y" (ALocal 0 0))]]
-        (CApp (CVar "L" (ALocal 0 0)) bindingSensitiveExpr))],
+    CBind "P" [
+      CClause
+        [PVar "x" bindingLoc]
+        (CLetGroup
+          [CBind "L" [CClause [PVar "y" bindingLoc] (CVar "y" (ALocal 0 0))]]
+          (CApp (CVar "L" (ALocal 0 0)) bindingSensitiveExpr)),
+    ],
     bindingMain,
   ]
   let _ = bindingEventCaptures "CBIND_POSTLIFT" program
@@ -1153,7 +1513,8 @@ captureCurrentBinding _ =
     "usage: --capture-current-binding <control|top|lifted|no-writer|post-lift|malformed>"
 
 bindingControlSource : String
-bindingControlSource = "data ControlRef = ControlRef Int\n\ncontrol value = match value\n  ControlRef n => n\n\nmain = control (ControlRef 0)\n"
+bindingControlSource =
+  "data ControlRef = ControlRef Int\n\ncontrol value = match value\n  ControlRef n => n\n\nmain = control (ControlRef 0)\n"
 
 printCapture : String -> String -> <IO> Unit
 printCapture name text =
@@ -1169,7 +1530,7 @@ printEvents name events =
 
 printEventLines : List String -> <IO> Unit
 printEventLines [] = ()
-printEventLines (event::rest) =
+printEventLines (event :: rest) =
   let _ = putStrLn event
   printEventLines rest
 
@@ -1177,23 +1538,25 @@ gapStateInput : WasmEmitInput
 gapStateInput = makeWasmEmitInput [] [] [] False []
 
 gapStateProgram : CProgram
-gapStateProgram = CProgram
-  [
-    CBind "gapA" [CClause [] (CVar "missingGapA" AGlobal)],
-    CBind "gapB" [CClause [] (CVar "missingGapB" AGlobal)],
-    CBind "main" [CClause [] (CLit (LInt 0))],
-  ]
-  []
-  []
-  []
+gapStateProgram =
+  CProgram
+    [
+      CBind "gapA" [CClause [] (CVar "missingGapA" AGlobal)],
+      CBind "gapB" [CClause [] (CVar "missingGapB" AGlobal)],
+      CBind "main" [CClause [] (CLit (LInt 0))],
+    ]
+    []
+    []
+    []
 
 stringCensusProgram : CProgram
-stringCensusProgram = CProgram
-  [
-    CBind "censusString" [CClause [] (CLit (LString "census-string"))],
-    CBind "gapA" [CClause [] (CVar "missingGapA" AGlobal)],
-    CBind "gapB" [CClause [] (CVar "missingGapB" AGlobal)],
-  ]
-  []
-  []
-  []
+stringCensusProgram =
+  CProgram
+    [
+      CBind "censusString" [CClause [] (CLit (LString "census-string"))],
+      CBind "gapA" [CClause [] (CVar "missingGapA" AGlobal)],
+      CBind "gapB" [CClause [] (CVar "missingGapB" AGlobal)],
+    ]
+    []
+    []
+    []

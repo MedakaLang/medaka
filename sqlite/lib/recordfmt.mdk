@@ -81,10 +81,7 @@ serialOf n
   | n == 10 = Err "reserved serial type 10"
   | n == 11 = Err "reserved serial type 11"
   | n >= 12 =
-    if isEven n then
-      Ok (STBlob ((n - 12) / 2))
-    else
-      Ok (STText ((n - 13) / 2))
+    if isEven n then Ok (STBlob ((n - 12) / 2)) else Ok (STText ((n - 13) / 2))
   | otherwise = Err "negative serial type"
 
 -- | Decode a full record into its column cells.
@@ -126,7 +123,7 @@ showCells (Ok cells) = join "|" (map display cells)
 export
 nthCell : List Cell -> Int -> Cell
 nthCell [] _ = CNull
-nthCell (c::rest) i = if i <= 0 then c else nthCell rest (i - 1)
+nthCell (c :: rest) i = if i <= 0 then c else nthCell rest (i - 1)
 
 -- The pure driver: we drop to BResult-level position threading so we can
 -- compute the header boundary precisely.
@@ -137,24 +134,36 @@ parseRecordGo input pos =
 parseRecordAfterHdr : Array Int -> Int -> Int -> Int -> BResult (List Cell)
 parseRecordAfterHdr input pos hdrLen hdrStart =
   let headerEnd = pos + hdrLen
-  onOk
-    (readSerialTypes input hdrStart headerEnd [])
-    (sts _ => readBodies input headerEnd sts [])
+  onOk (readSerialTypes input hdrStart headerEnd []) (sts _ =>
+    readBodies input headerEnd sts [])
 
 -- Read serial-type varints until `pos >= headerEnd`.
-readSerialTypes : Array Int -> Int -> Int -> List SerialType -> BResult (List SerialType)
+readSerialTypes : Array Int ->
+  Int ->
+  Int ->
+  List SerialType ->
+  BResult (List SerialType)
 readSerialTypes input pos headerEnd acc
   | pos >= headerEnd = BOk (reverse acc) pos
-  | otherwise = onOk (runBP sqVarint input pos) (code pos2 => match serialOf code
+  | otherwise = onOk (runBP
+    sqVarint
+    input
+    pos) (code pos2 => match serialOf code
     Err e => BErr e pos
-    Ok st => readSerialTypes input pos2 headerEnd (st::acc))
+    Ok st => readSerialTypes input pos2 headerEnd (st :: acc))
 
 -- Read the body bytes for each serial type in order.
-readBodies : Array Int -> Int -> List SerialType -> List Cell -> BResult (List Cell)
+readBodies : Array Int ->
+  Int ->
+  List SerialType ->
+  List Cell ->
+  BResult (List Cell)
 readBodies input pos [] acc = BOk (reverse acc) pos
-readBodies input pos (st::rest) acc = onOk
-  (readBody input pos st)
-  (cell pos2 => readBodies input pos2 rest (cell::acc))
+readBodies input pos (st :: rest) acc = onOk (readBody
+  input
+  pos
+  st) (cell pos2 =>
+  readBodies input pos2 rest (cell :: acc))
 
 -- Read one cell's body given its serial type.
 readBody : Array Int -> Int -> SerialType -> BResult Cell

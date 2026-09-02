@@ -95,7 +95,8 @@ export
 localPayloadSize : Int -> Int -> Int
 localPayloadSize usable payloadLen =
   let x = maxLocalPayload usable
-  if payloadLen <= x then payloadLen
+  if payloadLen <= x then
+    payloadLen
   else
     let m = minLocalPayload usable
     let k = m + (payloadLen - m) % overflowCapacity usable
@@ -135,7 +136,8 @@ spilledSize usable payloadLen = payloadLen - localPayloadSize usable payloadLen
 export
 overflowPageCount : Int -> Int -> Int
 overflowPageCount usable spilled =
-  if spilled <= 0 then 0
+  if spilled <= 0 then
+    0
   else
     let cap = overflowCapacity usable
     (spilled + cap - 1) / cap

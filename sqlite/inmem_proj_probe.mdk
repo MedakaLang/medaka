@@ -86,8 +86,26 @@ runIDistinct db label sel =
 
 runAll : Db -> <IO> Unit
 runAll db =
-  let _ = runIS db "-- SELECT a+b, name ORDER BY name --" (withOrderBy "name" True (withColumns [unExpr (eAdd (eColInt "a") (eColInt "b")), unExpr (eColText "name")] (selectFrom "nums")))
-  let _ = runSI db "-- SELECT name, id ORDER BY id --" (withOrderBy "id" True (withColumns [unExpr (eColText "name"), unExpr (eColInt "id")] (selectFrom "nums")))
+  let _ =
+    runIS
+      db
+      "-- SELECT a+b, name ORDER BY name --"
+      (withOrderBy
+        "name"
+        True
+        (withColumns
+          [unExpr (eAdd (eColInt "a") (eColInt "b")), unExpr (eColText "name")]
+          (selectFrom "nums")))
+  let _ =
+    runSI
+      db
+      "-- SELECT name, id ORDER BY id --"
+      (withOrderBy
+        "id"
+        True
+        (withColumns
+          [unExpr (eColText "name"), unExpr (eColInt "id")]
+          (selectFrom "nums")))
   runIDistinct
     db
     "-- SELECT DISTINCT a*0 --"

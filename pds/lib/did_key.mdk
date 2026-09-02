@@ -35,7 +35,9 @@ publicKeyFromDidKey did = match stripPrefix "did:key:" did
     Err message => Err "did_key.publicKeyFromDidKey: \{message}"
     Ok payload => match uvarintDecode payload
       Err message => Err "did_key.publicKeyFromDidKey: \{message}"
-      Ok (codec, consumed) => if codec /= multicodecSecp256k1Pub then Err "did_key.publicKeyFromDidKey: expected secp256k1-pub multicodec"
-      else
-        let keyBytes = drop consumed payload
-        publicKeyFromCompressed keyBytes
+      Ok (codec, consumed) =>
+        if codec /= multicodecSecp256k1Pub then
+          Err "did_key.publicKeyFromDidKey: expected secp256k1-pub multicodec"
+        else
+          let keyBytes = drop consumed payload
+          publicKeyFromCompressed keyBytes

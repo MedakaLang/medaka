@@ -108,18 +108,18 @@ endpointNsid (Endpoint nsid _) = nsid
 
 nameMember : String -> List String -> Bool
 nameMember _ [] = False
-nameMember wanted (name::rest) = sameNsidIdentity wanted name
-  || nameMember wanted rest
+nameMember wanted (name :: rest) =
+  sameNsidIdentity wanted name || nameMember wanted rest
 
 validateEntries : List Endpoint -> List String -> Int -> Result String Unit
 validateEntries [] _ _ = Ok ()
-validateEntries ((Endpoint nsid _)::rest) seen count =
+validateEntries ((Endpoint nsid _) :: rest) seen count =
   if count >= maxRegistryEntries then
     Err "xrpc: registry exceeds 128-entry resource limit"
   else if nameMember nsid seen then
     Err "xrpc: duplicate endpoint NSID: \{nsid}"
   else
-    validateEntries rest (nsid::seen) (count + 1)
+    validateEntries rest (nsid :: seen) (count + 1)
 
 -- | Build an ordered, duplicate-free, explicitly bounded endpoint registry.
 export
@@ -130,7 +130,7 @@ makeRegistry endpoints = do
 
 findEndpoint : String -> List Endpoint -> Option Endpoint
 findEndpoint _ [] = None
-findEndpoint wanted (endpoint::rest) =
+findEndpoint wanted (endpoint :: rest) =
   if sameNsidIdentity (endpointNsid endpoint) wanted then
     Some endpoint
   else
@@ -159,7 +159,10 @@ mustJsonHeader = match makeHeader "content-type" (toUtf8 "application/json")
 
 errorResponse : Int -> String -> String -> String -> Response
 errorResponse status reason code message =
-  let body = toUtf8 (stringify (jObject [("error", JString code), ("message", JString message)]))
+  let body =
+    toUtf8
+      (stringify
+        (jObject [("error", JString code), ("message", JString message)]))
   match makeResponse status reason [mustJsonHeader] body
     Ok response => response
     Err detail => panic "xrpc: internal response construction error: \{detail}"
@@ -198,7 +201,9 @@ hasPrefix input prefix i =
   if i >= arrayLength prefix then
     True
   else
-    i < arrayLength input && input[i] == prefix[i] && hasPrefix input prefix (i + 1)
+    i < arrayLength input
+      && input[i] == prefix[i]
+      && hasPrefix input prefix (i + 1)
 
 slice : Array Int -> Int -> Int -> Array Int
 slice input start size = arrayMakeWith size (i => input[start + i])
@@ -231,7 +236,12 @@ xrpcPath path =
   else if arrayLength bytes == arrayLength prefix then
     InvalidXrpcPath
   else
-    XrpcPath (fromUtf8 (slice bytes (arrayLength prefix) (arrayLength bytes - arrayLength prefix)))
+    XrpcPath
+      (fromUtf8
+        (slice
+          bytes
+          (arrayLength prefix)
+          (arrayLength bytes - arrayLength prefix)))
 
 -- | The one request path each well-known route class is reached at. This is
 -- the single spelling of both paths; routing and handlers share it.
@@ -242,7 +252,7 @@ wellKnownPath WellKnownAtprotoDid = atprotoDidPath
 
 hasBodyFraming : List Header -> Bool
 hasBodyFraming [] = False
-hasBodyFraming (header::rest) =
+hasBodyFraming (header :: rest) =
   let name = headerName header
   name == "content-length"
     || name == "transfer-encoding"
@@ -255,9 +265,12 @@ data MediaSelection =
   | InvalidMedia
   | SelectedMedia MediaType
 
-collectContentType : List Header -> Int -> Option (Array Int) -> (Int, Option (Array Int))
+collectContentType : List Header ->
+  Int ->
+  Option (Array Int) ->
+  (Int, Option (Array Int))
 collectContentType [] count value = (count, value)
-collectContentType (header::rest) count value =
+collectContentType (header :: rest) count value =
   if headerName header == "content-type" then
     collectContentType rest (count + 1) (Some (headerValue header))
   else
@@ -266,14 +279,15 @@ collectContentType (header::rest) count value =
 selectMedia : Request -> MediaSelection
 selectMedia request =
   let (count, value) = collectContentType (requestHeaders request) 0 None
-  if count == 0 then MissingMedia
-  else
-    if count > 1 then DuplicateMedia
-    else match value
-      None => MissingMedia
-      Some bytes => match parseMediaType bytes
-        Err _ => InvalidMedia
-        Ok media => SelectedMedia media
+  if count == 0 then
+    MissingMedia
+  else if count > 1 then
+    DuplicateMedia
+  else match value
+    None => MissingMedia
+    Some bytes => match parseMediaType bytes
+      Err _ => InvalidMedia
+      Ok media => SelectedMedia media
 
 isWithin : Result String Unit -> Bool
 isWithin (Ok ()) = True
@@ -335,15 +349,20 @@ mediaFailure (SelectedMedia _) =
   unsupportedMedia "Request body has an unsupported media type"
 
 mediaMatches : InputPolicy -> MediaType -> Bool
-mediaMatches JsonInput media = mediaTypeType media == "application"
-  && mediaTypeSubtype media == "json"
+mediaMatches JsonInput media =
+  mediaTypeType media == "application" && mediaTypeSubtype media == "json"
 mediaMatches TextInput media = mediaTypeType media == "text"
 mediaMatches RawInput _ = True
 mediaMatches NoInput _ = False
 
-decodeProcedure : String -> InputPolicy -> List QueryParam -> Request -> RouteResult
+decodeProcedure : String ->
+  InputPolicy ->
+  List QueryParam ->
+  Request ->
+  RouteResult
 decodeProcedure nsid NoInput params request =
-  if requestBodyLength request > 0 || hasBodyFraming (requestHeaders request) then
+  if requestBodyLength request > 0
+    || hasBodyFraming (requestHeaders request) then
     invalidRequest "This procedure does not accept request body framing"
   else
     RouteCall (ProcedureNoInputCall nsid params)
@@ -365,21 +384,27 @@ decodeProcedure nsid policy params request =
       MissingMedia => mediaFailure MissingMedia
       DuplicateMedia => mediaFailure DuplicateMedia
       InvalidMedia => mediaFailure InvalidMedia
-      SelectedMedia media => if not (mediaMatches policy media) then unsupportedMedia "Request body media type does not match endpoint input"
-      else match decodeRequestBody request
-        Err _ => invalidRequest "Request body is invalid for endpoint input"
-        Ok decoded => match (policy, decoded)
-          (JsonInput, JsonBody _ value) =>
-            RouteCall (ProcedureJsonCall nsid params value)
-          (TextInput, TextBody decodedMedia text) =>
-            RouteCall (ProcedureTextCall nsid params decodedMedia text)
-          _ => unsupportedMedia "Request body media type does not match endpoint input"
+      SelectedMedia media =>
+        if not (mediaMatches policy media) then
+          unsupportedMedia
+            "Request body media type does not match endpoint input"
+        else match decodeRequestBody request
+          Err _ => invalidRequest "Request body is invalid for endpoint input"
+          Ok decoded => match (policy, decoded)
+            (JsonInput, JsonBody _ value) =>
+              RouteCall (ProcedureJsonCall nsid params value)
+            (TextInput, TextBody decodedMedia text) =>
+              RouteCall (ProcedureTextCall nsid params decodedMedia text)
+            _ =>
+              unsupportedMedia
+                "Request body media type does not match endpoint input"
 
 routeEndpoint : Endpoint -> Request -> List QueryParam -> RouteResult
 routeEndpoint (Endpoint nsid QueryEndpoint) request params =
   if requestMethod request /= "GET" then
     methodNotAllowed "XRPC query endpoints require GET"
-  else if requestBodyLength request > 0 || hasBodyFraming (requestHeaders request) then
+  else if requestBodyLength request > 0
+    || hasBodyFraming (requestHeaders request) then
     invalidRequest "XRPC query endpoints do not accept request body framing"
   else
     RouteCall (QueryCall nsid params)
@@ -401,7 +426,8 @@ routeWellKnown : WellKnown -> Request -> RouteResult
 routeWellKnown wellKnown request =
   if requestMethod request /= "GET" then
     methodNotAllowed "atproto well-known paths require GET"
-  else if requestBodyLength request > 0 || hasBodyFraming (requestHeaders request) then
+  else if requestBodyLength request > 0
+    || hasBodyFraming (requestHeaders request) then
     invalidRequest "atproto well-known paths do not accept request body framing"
   else
     RouteCall (WellKnownCall wellKnown)

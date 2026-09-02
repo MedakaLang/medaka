@@ -181,11 +181,8 @@ ctIpkIndex ct = ipkGo (ctCols ct) 0
 
 ipkGo : List ColDef -> Int -> Option Int
 ipkGo [] _ = None
-ipkGo (c::rest) i =
-  if cdIsPk c && cdType c == "INTEGER" then
-    Some i
-  else
-    ipkGo rest (i + 1)
+ipkGo (c :: rest) i =
+  if cdIsPk c && cdType c == "INTEGER" then Some i else ipkGo rest (i + 1)
 
 -- | The 0-based indices of the `NOT NULL` columns.
 --
@@ -197,11 +194,8 @@ ctNotNullIndexes ct = nnGo (ctCols ct) 0 []
 
 nnGo : List ColDef -> Int -> List Int -> List Int
 nnGo [] _ acc = reverse acc
-nnGo (c::rest) i acc =
-  if cdNotNull c then
-    nnGo rest (i + 1) (i::acc)
-  else
-    nnGo rest (i + 1) acc
+nnGo (c :: rest) i acc =
+  if cdNotNull c then nnGo rest (i + 1) (i :: acc) else nnGo rest (i + 1) acc
 
 -- | The 0-based index of the column named `name` (case-insensitive, as SQL
 --   identifiers are).  `None` when the table has no such column.
@@ -216,11 +210,8 @@ ctColIndex ct name = colIdxGo (ctCols ct) (toUpper name) 0
 
 colIdxGo : List ColDef -> String -> Int -> Option Int
 colIdxGo [] _ _ = None
-colIdxGo (c::rest) upper i =
-  if toUpper (cdName c) == upper then
-    Some i
-  else
-    colIdxGo rest upper (i + 1)
+colIdxGo (c :: rest) upper i =
+  if toUpper (cdName c) == upper then Some i else colIdxGo rest upper (i + 1)
 
 -- ---------------------------------------------------------------------------
 -- Affinity
@@ -364,7 +355,8 @@ renderCreate ct =
   "CREATE TABLE \{ctTable ct}(\{join ", " (map renderColDef (ctCols ct))})"
 
 renderColDef : ColDef -> String
-renderColDef c = "\{cdName c}\{typeText (cdType c)}\{pkText (cdIsPk c)}\{nnText (cdNotNull c)}"
+renderColDef c =
+  "\{cdName c}\{typeText (cdType c)}\{pkText (cdIsPk c)}\{nnText (cdNotNull c)}"
 
 typeText : String -> String
 typeText "" = ""
@@ -453,17 +445,19 @@ tableNameOk n =
 -- Reject duplicate column names, a second PRIMARY KEY, and a PRIMARY KEY on a
 -- non-INTEGER column here, where the whole column list is in hand.
 buildCreate : String -> List ColDef -> Parser CreateTable
-buildCreate name cols = dupCheck
-  name
-  cols
-  (dupName (map (c => toUpper (cdName c)) cols))
-  (pkCount cols)
+buildCreate name cols =
+  dupCheck
+    name
+    cols
+    (dupName (map (c => toUpper (cdName c)) cols))
+    (pkCount cols)
 
 dupCheck : String -> List ColDef -> Option String -> Int -> Parser CreateTable
 dupCheck _ _ (Some d) _ = failWith "duplicate column name '\{d}'"
 dupCheck name cols None npk =
   if npk > 1 then
-    failWith "a table may have at most one PRIMARY KEY column (found \{intToString npk})"
+    failWith
+      "a table may have at most one PRIMARY KEY column (found \{intToString npk})"
   else
     pkTypeCheck name cols (badPk cols)
 
@@ -479,11 +473,8 @@ pkTypeCheck _ _ (Some c) =
 
 badPk : List ColDef -> Option String
 badPk [] = None
-badPk (c::rest) =
-  if cdIsPk c && cdType c /= "INTEGER" then
-    Some (cdName c)
-  else
-    badPk rest
+badPk (c :: rest) =
+  if cdIsPk c && cdType c /= "INTEGER" then Some (cdName c) else badPk rest
 
 pkCount : List ColDef -> Int
 pkCount cols = fold (n c => pkBump n (cdIsPk c)) 0 cols
@@ -494,7 +485,7 @@ pkBump n True = n + 1
 
 dupName : List String -> Option String
 dupName [] = None
-dupName (x::rest) = if elem x rest then Some x else dupName rest
+dupName (x :: rest) = if elem x rest then Some x else dupName rest
 
 -- One column definition: `ident [type] [PRIMARY KEY] [NOT NULL]`, and NOTHING
 -- else.  Any other trailing word (DEFAULT, UNIQUE, COLLATE, CHECK, REFERENCES,
@@ -532,12 +523,11 @@ optOr _ (Some s) = s
 -- affinity.  `attempt` makes the whole thing rewind, so `a PRIMARY KEY` (a
 -- typeless PK column) parses as "no type".
 typeNameP : Parser String
-typeNameP = attempt
-  (defer
-    w <- lexeme word
-    _ <- notAConstraint w
-    sz <- optional typeSizeP
-    deferPure "\{toUpper w}\{optOr "" sz}")
+typeNameP = attempt (defer
+  w <- lexeme word
+  _ <- notAConstraint w
+  sz <- optional typeSizeP
+  deferPure "\{toUpper w}\{optOr "" sz}")
 
 notAConstraint : String -> Parser Unit
 notAConstraint w =
@@ -584,16 +574,14 @@ intDigits =
   label "expected a number" (lexeme (deferMap fromChars (many1 digit)))
 
 primaryKeyP : Parser Unit
-primaryKeyP = attempt
-  (defer
-    _ <- keyword "PRIMARY"
-    keyword "KEY")
+primaryKeyP = attempt (defer
+  _ <- keyword "PRIMARY"
+  keyword "KEY")
 
 notNullP : Parser Unit
-notNullP = attempt
-  (defer
-    _ <- keyword "NOT"
-    keyword "NULL")
+notNullP = attempt (defer
+  _ <- keyword "NOT"
+  keyword "NULL")
 
 -- After `[PRIMARY KEY] [NOT NULL]` the only legal next tokens are `,` and `)`.
 -- Anything word-shaped is an unsupported constraint — named, never dropped.
@@ -759,11 +747,10 @@ rejectUniqueIndex = defer
       "UNIQUE indexes are not supported — v1 emits a plain (non-unique) secondary index")
 
 ifNotExistsP : Parser Unit
-ifNotExistsP = attempt
-  (defer
-    _ <- keyword "IF"
-    _ <- keyword "NOT"
-    keyword "EXISTS")
+ifNotExistsP = attempt (defer
+  _ <- keyword "IF"
+  _ <- keyword "NOT"
+  keyword "EXISTS")
 
 -- An indexed column immediately followed by `(` is a function/expression index
 -- (`lower(a)`, `substr(a,1)`), which v1 does not support.
@@ -862,7 +849,7 @@ commaSep1 : Parser a -> Parser (List a)
 commaSep1 p = defer
   x <- p
   xs <- commaSepRest p
-  deferPure (x::xs)
+  deferPure (x :: xs)
 
 commaSepRest : Parser a -> Parser (List a)
 commaSepRest p = defer
@@ -874,4 +861,4 @@ commaSepStep _ None = deferPure []
 commaSepStep p (Some _) = defer
   x <- p
   xs <- commaSepRest p
-  deferPure (x::xs)
+  deferPure (x :: xs)

@@ -67,15 +67,14 @@ import json.{
 -- Everything a run needs about ONE file, whether freshly linted or loaded from a
 -- shard.  `dirty = True` means it was computed this run and its shard needs
 -- (re)writing; a cache hit is clean and writes nothing.
-public export data LintEntry =
-  | LintEntry {
-      path : String,
-      contentHash : String,
-      findings : List Finding,
-      dupOccs : List (String, Int, String, String),
-      directives : List Directive,
-      dirty : Bool,
-    }
+public export data LintEntry = LintEntry {
+  path : String,
+  contentHash : String,
+  findings : List Finding,
+  dupOccs : List (String, Int, String, String),
+  directives : List Directive,
+  dirty : Bool,
+}
 
 -- Bump when the shard schema changes in any way that would make an OLD shard
 -- decode into something WRONG rather than fail to decode.  A version mismatch is
@@ -149,7 +148,12 @@ fnv62Prime = 1099511628211
 fnv62 : Array Int -> Int -> Int -> Int -> Int
 fnv62 bs n i acc
   | i >= n = acc
-  | otherwise = fnv62 bs n (i + 1) (bitAnd fnv62Mask (bitXor acc (arrayGetUnsafe i bs) * fnv62Prime))
+  | otherwise =
+    fnv62
+      bs
+      n
+      (i + 1)
+      (bitAnd fnv62Mask (bitXor acc (arrayGetUnsafe i bs) * fnv62Prime))
 
 -- ── shard paths ──────────────────────────────────────────────────────────────
 
@@ -192,25 +196,25 @@ sanitizeChar c
 
 export
 encodeEntry : String -> LintEntry -> String
-encodeEntry stamp e = stringify (jObject
-  [
-    ("version", JInt cacheFormatVersion),
-    ("stamp", JString stamp),
-    ("path", JString e.path),
-    ("hash", JString e.contentHash),
-    ("findings", jArray (map encFinding e.findings)),
-    ("dupOccs", jArray (map encOcc e.dupOccs)),
-    ("directives", jArray (map encDirective e.directives)),
-  ])
+encodeEntry stamp e =
+  stringify
+    (jObject [
+      ("version", JInt cacheFormatVersion),
+      ("stamp", JString stamp),
+      ("path", JString e.path),
+      ("hash", JString e.contentHash),
+      ("findings", jArray (map encFinding e.findings)),
+      ("dupOccs", jArray (map encOcc e.dupOccs)),
+      ("directives", jArray (map encDirective e.directives)),
+    ])
 
 encFinding : Finding -> Json
-encFinding f = jObject
-  [
-    ("rule", JString f.rule),
-    ("message", JString f.message),
-    ("severity", JString (encSeverity f.severity)),
-    ("loc", encLoc f.loc),
-  ]
+encFinding f = jObject [
+  ("rule", JString f.rule),
+  ("message", JString f.message),
+  ("severity", JString (encSeverity f.severity)),
+  ("loc", encLoc f.loc),
+]
 
 encSeverity : Severity -> String
 encSeverity SevError = "error"
@@ -228,8 +232,10 @@ encOcc : (String, Int, String, String) -> Json
 encOcc (_, line, name, key) = jArray [JInt line, JString name, JString key]
 
 encDirective : Directive -> Json
-encDirective (Directive scope names) = jObject
-  [("scope", encScope scope), ("rules", jArray (map (n => JString n) names))]
+encDirective (Directive scope names) = jObject [
+  ("scope", encScope scope),
+  ("rules", jArray (map (n => JString n) names)),
+]
 
 encScope : DirScope -> Json
 encScope DScopeFile = JString "file"
@@ -248,17 +254,24 @@ decodeEntry : String -> String -> String -> String -> Option LintEntry
 decodeEntry stamp path hash text = match parse text
   Err _ => None
   Ok j =>
-    if decInt "version" j /= Some cacheFormatVersion || decStr "stamp" j /= Some stamp || decStr "path" j /= Some path || decStr "hash" j /= Some hash then
+    if decInt "version" j /= Some cacheFormatVersion
+      || decStr "stamp" j /= Some stamp
+      || decStr "path" j /= Some path
+      || decStr "hash" j /= Some hash then
       None
     else
-      map3 (fs ds dirs => LintEntry {
-        path = path,
-        contentHash = hash,
-        findings = fs,
-        dupOccs = ds,
-        directives = dirs,
-        dirty = False,
-      }) (decList decFinding (get "findings" j)) (decList (decOcc path) (get "dupOccs" j)) (decList decDirective (get "directives" j))
+      map3
+        (fs ds dirs => LintEntry {
+          path = path,
+          contentHash = hash,
+          findings = fs,
+          dupOccs = ds,
+          directives = dirs,
+          dirty = False,
+        })
+        (decList decFinding (get "findings" j))
+        (decList (decOcc path) (get "dupOccs" j))
+        (decList decDirective (get "directives" j))
 
 decStr : String -> Json -> Option String
 decStr k j = optBind (get k j) asString
@@ -280,12 +293,13 @@ decListGo f arr i n
   | otherwise = map2 (::) (f (arrayGetUnsafe i arr)) (decListGo f arr (i + 1) n)
 
 decFinding : Json -> Option Finding
-decFinding j = map4
-  (r m s l => Finding { rule = r, message = m, severity = s, loc = l })
-  (decStr "rule" j)
-  (decStr "message" j)
-  (optBind (decStr "severity" j) decSeverity)
-  (decLoc (get "loc" j))
+decFinding j =
+  map4
+    (r m s l => Finding { rule = r, message = m, severity = s, loc = l })
+    (decStr "rule" j)
+    (decStr "message" j)
+    (optBind (decStr "severity" j) decSeverity)
+    (decLoc (get "loc" j))
 
 decSeverity : String -> Option Severity
 decSeverity "error" = Some SevError
@@ -297,29 +311,32 @@ decSeverity _ = None
 -- than folded in with it.
 decLoc : Option Json -> Option (Option Loc)
 decLoc (Some JNull) = Some None
-decLoc (Some j) = map
-  (l => Some l)
-  (map5
-    (f a b c d => Loc f a b c d)
-    (optBind (at 0 j) asString)
-    (optBind (at 1 j) asInt)
-    (optBind (at 2 j) asInt)
-    (optBind (at 3 j) asInt)
-    (optBind (at 4 j) asInt))
+decLoc (Some j) =
+  map
+    (l => Some l)
+    (map5
+      (f a b c d => Loc f a b c d)
+      (optBind (at 0 j) asString)
+      (optBind (at 1 j) asInt)
+      (optBind (at 2 j) asInt)
+      (optBind (at 3 j) asInt)
+      (optBind (at 4 j) asInt))
 decLoc None = None
 
 decOcc : String -> Json -> Option (String, Int, String, String)
-decOcc path j = map3
-  (line name key => (path, line, name, key))
-  (optBind (at 0 j) asInt)
-  (optBind (at 1 j) asString)
-  (optBind (at 2 j) asString)
+decOcc path j =
+  map3
+    (line name key => (path, line, name, key))
+    (optBind (at 0 j) asInt)
+    (optBind (at 1 j) asString)
+    (optBind (at 2 j) asString)
 
 decDirective : Json -> Option Directive
-decDirective j = map2
-  (scope names => Directive scope names)
-  (optBind (get "scope" j) decScope)
-  (decList asString (get "rules" j))
+decDirective j =
+  map2
+    (scope names => Directive scope names)
+    (optBind (get "scope" j) decScope)
+    (decList asString (get "rules" j))
 
 decScope : Json -> Option DirScope
 decScope (JString "file") = Some DScopeFile
@@ -342,11 +359,22 @@ map3 : (a -> b -> c -> d) -> Option a -> Option b -> Option c -> Option d
 map3 f (Some a) (Some b) (Some c) = Some (f a b c)
 map3 _ _ _ _ = None
 
-map4 : (a -> b -> c -> d -> e) -> Option a -> Option b -> Option c -> Option d -> Option e
+map4 : (a -> b -> c -> d -> e) ->
+  Option a ->
+  Option b ->
+  Option c ->
+  Option d ->
+  Option e
 map4 f (Some a) (Some b) (Some c) (Some d) = Some (f a b c d)
 map4 _ _ _ _ _ = None
 
-map5 : (a -> b -> c -> d -> e -> f) -> Option a -> Option b -> Option c -> Option d -> Option e -> Option f
+map5 : (a -> b -> c -> d -> e -> f) ->
+  Option a ->
+  Option b ->
+  Option c ->
+  Option d ->
+  Option e ->
+  Option f
 map5 f (Some a) (Some b) (Some c) (Some d) (Some e) = Some (f a b c d e)
 map5 _ _ _ _ _ _ = None
 
@@ -383,7 +411,8 @@ export
 storeEntries : String -> String -> List LintEntry -> <IO> Unit
 storeEntries cacheDir stamp entries =
   let dirty = filterList entryDirty entries
-  if listLen dirty == 0 then ()
+  if listLen dirty == 0 then
+    ()
   else match ensureCacheDir cacheDir
     Err _ => ()
     Ok _ => match makeStagingDir cacheDir
@@ -398,7 +427,7 @@ entryDirty e = e.dirty
 
 storeGo : String -> String -> String -> List LintEntry -> <IO> Unit
 storeGo _ _ _ [] = ()
-storeGo cacheDir tmp stamp (e::rest) =
+storeGo cacheDir tmp stamp (e :: rest) =
   let _ = storeOne cacheDir tmp stamp e
   storeGo cacheDir tmp stamp rest
 
@@ -434,13 +463,16 @@ parentOfCacheDir cacheDir =
 dropLastSeg : List String -> List String
 dropLastSeg [] = []
 dropLastSeg [_] = []
-dropLastSeg (x::rest) = x :: dropLastSeg rest
+dropLastSeg (x :: rest) = x :: dropLastSeg rest
 
 -- A staging dir unique to THIS process, inside the cache dir (see storeEntries).
 makeStagingDir : String -> <IO> Result String String
-makeStagingDir cacheDir = match runCommand "mktemp" ["-d", "\{cacheDir}/.staging_XXXXXX"]
-  Err msg => Err (if msg == "" then "mktemp -d failed" else msg)
-  Ok (code, out, err) => if code /= 0 then Err (if err == "" then "mktemp -d failed" else err)
-  else
-    let dir = stringTrim out
-    if dir == "" then Err "mktemp -d printed no path" else Ok dir
+makeStagingDir cacheDir =
+  match runCommand "mktemp" ["-d", "\{cacheDir}/.staging_XXXXXX"]
+    Err msg => Err (if msg == "" then "mktemp -d failed" else msg)
+    Ok (code, out, err) =>
+      if code /= 0 then
+        Err (if err == "" then "mktemp -d failed" else err)
+      else
+        let dir = stringTrim out
+        if dir == "" then Err "mktemp -d printed no path" else Ok dir

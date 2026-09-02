@@ -97,36 +97,38 @@ isDeclStartToken _ = False
 
 skipNoiseToks : List Token -> List Token
 skipNoiseToks [] = []
-skipNoiseToks (TNewline::rest) = skipNoiseToks rest
-skipNoiseToks (TIndent::rest) = skipNoiseToks rest
-skipNoiseToks (TDedent::rest) = skipNoiseToks rest
+skipNoiseToks (TNewline :: rest) = skipNoiseToks rest
+skipNoiseToks (TIndent :: rest) = skipNoiseToks rest
+skipNoiseToks (TDedent :: rest) = skipNoiseToks rest
 skipNoiseToks ts = ts
 
 -- Heuristic: does the token stream look like a declaration?
 looksLikeDecl : List Token -> Bool
 looksLikeDecl toks = match skipNoiseToks toks
   [] => False
-  first::rest => if isDeclStartToken first then True
-  else match first
-    TIdent _ => afterIdentToks (skipNoiseToks rest)
-    TUpper _ => afterIdentToks (skipNoiseToks rest)
-    _ => False
+  first :: rest =>
+    if isDeclStartToken first then
+      True
+    else match first
+      TIdent _ => afterIdentToks (skipNoiseToks rest)
+      TUpper _ => afterIdentToks (skipNoiseToks rest)
+      _ => False
 
 -- After an identifier on the LHS: skip more LHS tokens, look for `=` not `==`.
 afterIdentToks : List Token -> Bool
 afterIdentToks [] = False
-afterIdentToks (TEqual::_) = True
-afterIdentToks (TEqEq::_) = False
-afterIdentToks ((TIdent _)::rest) = afterIdentToks (skipNoiseToks rest)
-afterIdentToks ((TUpper _)::rest) = afterIdentToks (skipNoiseToks rest)
-afterIdentToks (TLParen::rest) = afterParenToks (skipNoiseToks rest)
-afterIdentToks (TUnderscore::rest) = afterIdentToks (skipNoiseToks rest)
+afterIdentToks (TEqual :: _) = True
+afterIdentToks (TEqEq :: _) = False
+afterIdentToks ((TIdent _) :: rest) = afterIdentToks (skipNoiseToks rest)
+afterIdentToks ((TUpper _) :: rest) = afterIdentToks (skipNoiseToks rest)
+afterIdentToks (TLParen :: rest) = afterParenToks (skipNoiseToks rest)
+afterIdentToks (TUnderscore :: rest) = afterIdentToks (skipNoiseToks rest)
 afterIdentToks _ = False
 
 afterParenToks : List Token -> Bool
 afterParenToks [] = False
-afterParenToks (TRParen::rest) = afterIdentToks (skipNoiseToks rest)
-afterParenToks (_::rest) = afterParenToks rest
+afterParenToks (TRParen :: rest) = afterIdentToks (skipNoiseToks rest)
+afterParenToks (_ :: rest) = afterParenToks rest
 
 export
 isDecl : String -> Bool
@@ -146,24 +148,28 @@ endsWithKeyword line kw =
   let s = stringTrim line
   let ls = stringLength s
   let lk = stringLength kw
-  if ls < lk then False
+  if ls < lk then
+    False
   else
     let suffix = stringSlice (ls - lk) ls s
     if suffix == kw then
-      if ls == lk then True else not (isIdentChar (stringSlice (ls - lk - 1) (ls - lk) s))
+      if ls == lk then
+        True
+      else
+        not (isIdentChar (stringSlice (ls - lk - 1) (ls - lk) s))
     else
       False
 
 filterEmpty : List String -> List String
 filterEmpty [] = []
-filterEmpty (x::rest)
+filterEmpty (x :: rest)
   | stringTrim x == "" = filterEmpty rest
   | otherwise = x :: filterEmpty rest
 
 lastLine : List String -> Option String
 lastLine [] = None
 lastLine [x] = Some x
-lastLine (_::rest) = lastLine rest
+lastLine (_ :: rest) = lastLine rest
 
 endsWithBlankLine : String -> Bool
 endsWithBlankLine src =
@@ -173,7 +179,8 @@ endsWithBlankLine src =
 export
 needsMore : String -> Bool
 needsMore source =
-  if endsWithBlankLine source then False
+  if endsWithBlankLine source then
+    False
   else
     let lines = stringSplitNewlines source
     let nonEmpty = filterEmpty lines
@@ -186,11 +193,11 @@ needsMore source =
 -- ── Pipeline helpers ──────────────────────────────────────────────────────
 declTypeAnnotations : List Decl -> List (String, String)
 declTypeAnnotations [] = []
-declTypeAnnotations ((DData { dataName = n })::rest) =
+declTypeAnnotations ((DData { dataName = n }) :: rest) =
   ("type", n) :: declTypeAnnotations rest
-declTypeAnnotations ((DInterface { name = n, ... })::rest) =
+declTypeAnnotations ((DInterface { name = n, ... }) :: rest) =
   ("interface", n) :: declTypeAnnotations rest
-declTypeAnnotations (_::rest) = declTypeAnnotations rest
+declTypeAnnotations (_ :: rest) = declTypeAnnotations rest
 
 startsWithAt : String -> Bool
 startsWithAt s = stringLength s > 0 && stringSlice 0 1 s == "@"
@@ -198,31 +205,37 @@ startsWithAt s = stringLength s > 0 && stringSlice 0 1 s == "@"
 -- Filter scheme list to only new user-visible names.
 userSchemes : List (String, Scheme) -> List String -> List (String, Scheme)
 userSchemes [] _ = []
-userSchemes ((n, s)::rest) known
+userSchemes ((n, s) :: rest) known
   | contains n known = userSchemes rest known
   | startsWithAt n = userSchemes rest known
   | otherwise = (n, s) :: userSchemes rest known
 
 lookupScheme : String -> List (String, Scheme) -> Option Scheme
 lookupScheme _ [] = None
-lookupScheme name ((n, s)::rest)
+lookupScheme name ((n, s) :: rest)
   | name == n = Some s
   | otherwise = lookupScheme name rest
 
-runPipeline : List Decl -> <e> (List String, List (String, Scheme), List (String, Value e))
+runPipeline : List Decl ->
+  <e> (List String, List (String, Scheme), List (String, Value e))
 runPipeline combined =
   let runtimeDecls = !runtimeDeclsRef
   let preludeDecls = !preludeDeclsRef
   let resErrs = resolveProgram runtimeDecls preludeDecls combined
   match resErrs
-    e::_ => (map ppResError resErrs, [], [])
+    e :: _ => (map ppResError resErrs, [], [])
     [] =>
-      let (tcErrs, _) = checkOneDiags runtimeDecls preludeDecls ("__user__", combined)
+      let (tcErrs, _) =
+        checkOneDiags runtimeDecls preludeDecls ("__user__", combined)
       match tcErrs
-        e::_ => (map tcMsg tcErrs, [], [])
+        e :: _ => (map tcMsg tcErrs, [], [])
         [] =>
           let allSchemes = checkOneScheme [] preludeDecls ("__user__", combined)
-          let bindings = evalOneRootEnvWith (testCapableExterns ()) preludeDecls ("__repl__", combined)
+          let bindings = evalOneRootEnvWith (testCapableExterns
+            ()) preludeDecls (
+            "__repl__",
+            combined,
+          )
           ([], allSchemes, bindings)
 -- DRIVER-COLLAPSE Phase 3/4: eval via the 1-module wrapper (evalOneRootEnv
 -- = evalModulesRootEnv over [("__repl__", combined)]) instead of the flat
@@ -240,19 +253,19 @@ printErr msg = ePutStrLn ("<repl>: " ++ msg)
 
 mapIO : (a -> <IO> Unit) -> List a -> <IO> Unit
 mapIO _ [] = ()
-mapIO f (x::rest) =
+mapIO f (x :: rest) =
   let _ = f x
   mapIO f rest
 
 mapIO_ : (a -> <IO> Unit) -> List a -> <IO> Unit
 mapIO_ _ [] = ()
-mapIO_ f (x::rest) =
+mapIO_ f (x :: rest) =
   let _ = f x
   mapIO_ f rest
 
 mapMut : (a -> b) -> List a -> List b
 mapMut _ [] = []
-mapMut f (x::rest) = f x :: mapMut f rest
+mapMut f (x :: rest) = f x :: mapMut f rest
 
 -- ── Process a declaration input ───────────────────────────────────────────
 processDeclInput : String -> <IO> Unit
@@ -261,7 +274,7 @@ processDeclInput src =
   let combined = combinedDecls newDecls
   let (errs, allSchemes, _bindings) = runPipeline combined
   match errs
-    e::_ => mapIO_ printErr errs
+    e :: _ => mapIO_ printErr errs
     [] =>
       let known = !knownNamesRef
       let newSchemes = userSchemes allSchemes known
@@ -291,7 +304,7 @@ processExprInput src =
   let combined = combinedDecls newDecls
   let (errs, allSchemes, bindings) = runPipeline combined
   match errs
-    e::_ => mapIO_ printErr errs
+    e :: _ => mapIO_ printErr errs
     [] =>
       let valOpt = lookupBinding "__repl__" bindings
       let schemeOpt = lookupScheme "__repl__" allSchemes
@@ -306,14 +319,15 @@ processExprInput src =
 processTypeCmd : String -> <IO> Unit
 processTypeCmd exprSrc =
   let trimmed = stringTrim exprSrc
-  if trimmed == "" then ePutStrLn ":type requires an expression"
+  if trimmed == "" then
+    ePutStrLn ":type requires an expression"
   else
     let wrappedSrc = "__repl__ = " ++ trimmed
     let newDecls = desugar (parse wrappedSrc)
     let combined = combinedDecls newDecls
     let (errs, allSchemes, _) = runPipeline combined
     match errs
-      e::_ => mapIO_ printErr errs
+      e :: _ => mapIO_ printErr errs
       [] => match lookupScheme "__repl__" allSchemes
         Some scheme => putStrLn (ppScheme scheme)
         None => ()
@@ -322,7 +336,8 @@ processTypeCmd exprSrc =
 processBrowse : Unit -> <IO> Unit
 processBrowse _ =
   let bindings = !userBindingsRef
-  if listNull bindings then putStrLn "(no user-defined bindings)"
+  if listNull bindings then
+    putStrLn "(no user-defined bindings)"
   else
     let sorted = sortByKey bindings
     mapIO_ printBrowseLine sorted
@@ -336,12 +351,14 @@ listNull _ = False
 
 sortByKey : List (String, String) -> List (String, String)
 sortByKey [] = []
-sortByKey (x::rest) = insertSorted x (sortByKey rest)
+sortByKey (x :: rest) = insertSorted x (sortByKey rest)
 
-insertSorted : (String, String) -> List (String, String) -> List (String, String)
+insertSorted : (String, String) ->
+  List (String, String) ->
+  List (String, String)
 insertSorted x [] = [x]
-insertSorted (k, v) ((k2, v2)::rest)
-  | k <= k2 = (k, v) :: (k2, v2)::rest
+insertSorted (k, v) ((k2, v2) :: rest)
+  | k <= k2 = (k, v) :: (k2, v2) :: rest
   | otherwise = (k2, v2) :: insertSorted (k, v) rest
 
 -- ── Process :reset command ────────────────────────────────────────────────
@@ -356,28 +373,27 @@ processReset _ =
 -- Returns False → exit the REPL loop.
 processCommand : String -> <IO> Bool
 processCommand cmd =
-  if cmd == ":quit" || cmd == ":q" then False
+  if cmd == ":quit" || cmd == ":q" then
+    False
+  else if cmd == ":reset" then
+    let _ = processReset ()
+    True
+  else if cmd == ":browse" || cmd == ":env" then
+    let _ = processBrowse ()
+    True
+  else if startsWith ":type" cmd then
+    let rest = stringSlice 5 (stringLength cmd) cmd
+    let _ = processTypeCmd rest
+    True
+  else if startsWith ":t " cmd then
+    let rest = stringSlice 3 (stringLength cmd) cmd
+    let _ = processTypeCmd rest
+    True
   else
-    if cmd == ":reset" then
-      let _ = processReset ()
-      True
-    else
-      if cmd == ":browse" || cmd == ":env" then
-        let _ = processBrowse ()
-        True
-      else
-        if startsWith ":type" cmd then
-          let rest = stringSlice 5 (stringLength cmd) cmd
-          let _ = processTypeCmd rest
-          True
-        else
-          if startsWith ":t " cmd then
-            let rest = stringSlice 3 (stringLength cmd) cmd
-            let _ = processTypeCmd rest
-            True
-          else
-            let _ = ePutStrLn ("Unknown command: " ++ cmd ++ " (try :browse, :type, :reset, :quit)")
-            True
+    let _ =
+      ePutStrLn
+        ("Unknown command: " ++ cmd ++ " (try :browse, :type, :reset, :quit)")
+    True
 
 -- ── Main REPL loop ────────────────────────────────────────────────────────
 export
@@ -397,17 +413,17 @@ replLoopGo buf cont =
         let trimmed = stringTrim line
         if stringLength trimmed > 0 && stringSlice 0 1 trimmed == ":" then
           let keepGoing = processCommand trimmed
-          if keepGoing then replLoopGo "" False else ()
-        else
-          if needsMore newBuf then replLoopGo newBuf True
-          else
-            let _ = dispatchInput newBuf
-            replLoopGo "" False
-      else
-        if needsMore newBuf then replLoopGo newBuf True
+          if keepGoing then replLoopGo "" False
+        else if needsMore newBuf then
+          replLoopGo newBuf True
         else
           let _ = dispatchInput newBuf
           replLoopGo "" False
+      else if needsMore newBuf then
+        replLoopGo newBuf True
+      else
+        let _ = dispatchInput newBuf
+        replLoopGo "" False
 
 dispatchInput : String -> <IO> Unit
 dispatchInput src =

@@ -34,8 +34,8 @@ main = driveParseSources renderAll
 
 renderAll : List Decl -> List Decl -> List (String, String) -> String
 renderAll runtimeP coreP [] = ""
-renderAll runtimeP coreP (pr::rest) = renderOne runtimeP coreP pr
-  ++ renderAll runtimeP coreP rest
+renderAll runtimeP coreP (pr :: rest) =
+  renderOne runtimeP coreP pr ++ renderAll runtimeP coreP rest
 
 renderOne : List Decl -> List Decl -> (String, String) -> String
 renderOne runtimeP coreP (path, tsrc) =
@@ -59,7 +59,8 @@ cleanReport : List Decl -> List Decl -> List Decl -> List Decl -> String
 cleanReport runtimeP coreP raw desugared =
   let exWarns = exhaustToLinesWith (raw ++ runtimeP ++ coreP) raw
   let _ = setCoherenceUserDecls desugared
-  let schemes = checkOneToLinesWithRuntime (desugar runtimeP) (desugar coreP) desugared
+  let schemes =
+    checkOneToLinesWithRuntime (desugar runtimeP) (desugar coreP) desugared
   joinNonEmpty exWarns schemes
 
 joinNonEmpty : String -> String -> String

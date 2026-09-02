@@ -64,8 +64,8 @@ import support.util.{listLen, maxI}
 
 -- ── small list helpers (no nth/listInit in prelude) ─────────────────────────
 nthL : Int -> List a -> a
-nthL _ (x::[]) = x
-nthL n (x::xs) = if n <= 0 then x else nthL (n - 1) xs
+nthL _ (x :: []) = x
+nthL n (x :: xs) = if n <= 0 then x else nthL (n - 1) xs
 
 -- build [f 0, f 1, …, f (n-1)]  (effectful f: each call may draw from the RNG)
 listInitGo : Int -> Int -> (Int -> <e> a) -> <e> List a
@@ -77,7 +77,8 @@ listInit n f = listInitGo 0 n f
 -- repeat an effectful action n times, discarding results (for-style loop)
 timesGo : Int -> Int -> (Int -> <e> Unit) -> <e> Unit
 timesGo i n f =
-  if i >= n then ()
+  if i >= n then
+    ()
   else
     let _ = f i
     timesGo (i + 1) n f
@@ -158,22 +159,20 @@ baseGtys = [GInt, GFloat, GBool, GString, GChar]
 -- ── target type: biased toward scalars; ADTs/tuples only at higher tier ─────
 randGty : Ctx -> Int -> <Rand> Gty
 randGty ctx depth =
-  if depth <= 0 then pick baseGtys
+  if depth <= 0 then
+    pick baseGtys
+  else if ctxTier ctx >= 1 && not (listEmpty (ctxAdts ctx)) && chance 1 4 then
+    GData (adtName (pick (ctxAdts ctx)))
+  else if ctxTier ctx >= 1 && not (ctxNoTuple ctx) && chance 1 6 then
+    let k = 2 + randBelow 2
+    GTup (randGtyList ctx (depth - 1) k)
   else
-    if ctxTier ctx >= 1 && not (listEmpty (ctxAdts ctx)) && chance 1 4 then GData (adtName (pick (ctxAdts ctx)))
-    else
-      if ctxTier ctx >= 1 && not (ctxNoTuple ctx) && chance 1 6 then
-        let k = 2 + randBelow 2
-        GTup (randGtyList ctx (depth - 1) k)
-      else pick baseGtys
+    pick baseGtys
 
 -- k random element types (named recursion, not an inline ctx-closure)
 randGtyList : Ctx -> Int -> Int -> <Rand> List Gty
 randGtyList ctx depth k =
-  if k <= 0 then
-    []
-  else
-    randGty ctx depth :: randGtyList ctx depth (k - 1)
+  if k <= 0 then [] else randGty ctx depth :: randGtyList ctx depth (k - 1)
 
 listEmpty : List a -> Bool
 listEmpty [] = True
@@ -194,8 +193,9 @@ litOf GInt = ELit (LInt (randSmallInt ()))
 -- compiler printer's floatToString renders a whole float `N.0` as `N.` (trailing
 -- dot, no digit), which the parser rejects — so never emit a whole-valued float.
 litOf GFloat =
-  ELit (LFloat
-    (intToFloat (randBelow 11) + intToFloat (randBelow 3 + 1) / intToFloat 4))
+  ELit
+    (LFloat
+      (intToFloat (randBelow 11) + intToFloat (randBelow 3 + 1) / intToFloat 4))
 litOf GBool = ELit (LBool (chance 1 2))
 litOf GString = ELit (randStringLit ())
 litOf GChar = ELit (randCharLit ())
@@ -216,7 +216,7 @@ binop op l r = EBinOp op l r (Ref RNone)
 
 filterScopeTy : Gty -> List (String, Gty) -> List (String, Gty)
 filterScopeTy _ [] = []
-filterScopeTy ty ((nm, ty2)::rest) =
+filterScopeTy ty ((nm, ty2) :: rest) =
   if gtyEq ty ty2 then
     (nm, ty2) :: filterScopeTy ty rest
   else
@@ -225,10 +225,11 @@ filterScopeTy ty ((nm, ty2)::rest) =
 lookupInScope : Ctx -> Gty -> Option String
 lookupInScope ctx t = match filterScopeTy t (ctxScope ctx)
   [] => None
-  x::_ => Some (fst x)
+  x :: _ => Some (fst x)
 
 findAdtGo : String -> List Gadt -> Gadt
-findAdtGo name (a::rest) = if adtName a == name then a else findAdtGo name rest
+findAdtGo name (a :: rest) =
+  if adtName a == name then a else findAdtGo name rest
 
 findAdt : Ctx -> String -> Gadt
 findAdt ctx name = findAdtGo name (ctxAdts ctx)
@@ -239,12 +240,12 @@ findAdt ctx name = findAdtGo name (ctxAdts ctx)
 -- the LLVM backend faults on the captured-ctx map closure inside ETuple).
 genTupElems : Ctx -> List Gty -> Int -> <Rand> List Expr
 genTupElems _ [] _ = []
-genTupElems ctx (ti::rest) depth =
+genTupElems ctx (ti :: rest) depth =
   genExpr ctx ti (depth - 1) :: genTupElems ctx rest depth
 
 genLeafElems : Ctx -> List Gty -> <Rand> List Expr
 genLeafElems _ [] = []
-genLeafElems ctx (ti::rest) = genLeaf ctx ti :: genLeafElems ctx rest
+genLeafElems ctx (ti :: rest) = genLeaf ctx ti :: genLeafElems ctx rest
 
 -- dispatch on the target type (no scope-reuse).  NOTE: the native backend
 -- mis-lowers a `match` over Gty whose arms mix nullary constructors (GInt..GChar)
@@ -271,7 +272,8 @@ genByType ctx t depth = genScalar ctx t depth
 
 genExpr : Ctx -> Gty -> Int -> <Rand> Expr
 genExpr ctx t depth =
-  if depth <= 0 then genLeaf ctx t
+  if depth <= 0 then
+    genLeaf ctx t
   else
     let reuse = if chance 1 3 then lookupInScope ctx t else None
     match reuse
@@ -287,18 +289,25 @@ genLeaf ctx t = litOf t
 genNum : Ctx -> Gty -> Int -> <Rand> Expr
 genNum ctx t depth =
   let r = randBelow 10
-  if r < 3 then litOf t
-  else
-    if r < 7 then
-      let ops = if gtyEq t GInt then numArithOps ++ intOnlyOps else numArithOps
-      let op = pick ops
-      let l = genExpr ctx t (depth - 1)
-      let rhs = if op == "/" || op == "%" then
+  if r < 3 then
+    litOf t
+  else if r < 7 then
+    let ops = if gtyEq t GInt then numArithOps ++ intOnlyOps else numArithOps
+    let op = pick ops
+    let l = genExpr ctx t (depth - 1)
+    let rhs =
+      if op == "/" || op == "%" then
         ELit (LInt (let v = randSmallInt () in if v == 0 then 1 else v))
       else
         genExpr ctx t (depth - 1)
-      binop op l rhs
-    else if r < 9 then EIf (genCond ctx (depth - 1)) (genExpr ctx t (depth - 1)) (genExpr ctx t (depth - 1)) else genLet ctx t depth
+    binop op l rhs
+  else if r < 9 then
+    EIf
+      (genCond ctx (depth - 1))
+      (genExpr ctx t (depth - 1))
+      (genExpr ctx t (depth - 1))
+  else
+    genLet ctx t depth
 
 -- a boolean usable as an `if` condition: NEVER a bare EIf.
 genCond : Ctx -> Int -> <Rand> Expr
@@ -309,15 +318,15 @@ genCond ctx depth =
   else if r < 8 then
     genCompare ctx (depth - 1)
   else
-    binop (pick ["&&", "||"]) (genCond ctx (depth - 1)) (genCond ctx (depth - 1))
+    binop
+      (pick ["&&", "||"])
+      (genCond ctx (depth - 1))
+      (genCond ctx (depth - 1))
 
 filterDerived : List Gadt -> List Gadt
 filterDerived [] = []
-filterDerived (a::rest) =
-  if adtDerives a then
-    a :: filterDerived rest
-  else
-    filterDerived rest
+filterDerived (a :: rest) =
+  if adtDerives a then a :: filterDerived rest else filterDerived rest
 
 pickOptype : Ctx -> Bool -> List Gadt -> List Gty -> <Rand> Gty
 pickOptype ctx wantOrd derived ordScalars =
@@ -326,7 +335,7 @@ pickOptype ctx wantOrd derived ordScalars =
   else if wantOrd then
     pick ordScalars
   else
-    pick (GBool::ordScalars)
+    pick (GBool :: ordScalars)
 
 -- a comparison/equality expression with a well-typed operand pair.
 genCompare : Ctx -> Int -> <Rand> Expr
@@ -347,9 +356,15 @@ genBool ctx depth =
   else if r < 6 then
     genCompare ctx (depth - 1)
   else if r < 8 then
-    binop (pick ["&&", "||"]) (genBool ctx (depth - 1)) (genBool ctx (depth - 1))
+    binop
+      (pick ["&&", "||"])
+      (genBool ctx (depth - 1))
+      (genBool ctx (depth - 1))
   else
-    EIf (genCond ctx (depth - 1)) (genBool ctx (depth - 1)) (genBool ctx (depth - 1))
+    EIf
+      (genCond ctx (depth - 1))
+      (genBool ctx (depth - 1))
+      (genBool ctx (depth - 1))
 
 genString : Ctx -> Int -> <Rand> Expr
 genString ctx depth =
@@ -365,7 +380,7 @@ genLet ctx t depth =
   let name = freshName ctx "v"
   let rhs = genExpr ctx bt (depth - 1)
   let saved = ctxScope ctx
-  let _ = setScope ctx ((name, bt)::saved)
+  let _ = setScope ctx ((name, bt) :: saved)
   let body = genExpr ctx t (depth - 1)
   let _ = setScope ctx saved
   ELet False False (PVar name (Loc "" 0 0 0 0)) rhs body
@@ -373,7 +388,7 @@ genLet ctx t depth =
 -- construct an ADT value: pick a variant, fill positional fields.
 applyFields : Ctx -> Int -> Expr -> List Gty -> <Rand> Expr
 applyFields ctx depth acc [] = acc
-applyFields ctx depth acc (fty::rest) =
+applyFields ctx depth acc (fty :: rest) =
   applyFields ctx depth (EApp acc (genExpr ctx fty (maxI 0 (depth - 1)))) rest
 
 genData : Ctx -> String -> Int -> <Rand> Expr
@@ -385,10 +400,10 @@ genData ctx name depth =
 -- mapM-style: like map but threads the Mut effect (fresh-name side effects)
 mapMut : (a -> <e> b) -> List a -> <e> List b
 mapMut _ [] = []
-mapMut f (y::ys) = f y :: mapMut f ys
+mapMut f (y :: ys) = f y :: mapMut f ys
 
 zipScope : List String -> List Gty -> List (String, Gty)
-zipScope (n::nr) (ty::tr) = (n, ty) :: zipScope nr tr
+zipScope (n :: nr) (ty :: tr) = (n, ty) :: zipScope nr tr
 zipScope _ _ = []
 
 pvarOf : String -> Pat
@@ -398,7 +413,7 @@ pvarOf n = PVar n (Loc "" 0 0 0 0)
 -- the native backend mis-lowers a closure capturing ctx in some recursive sites).
 freshPVars : Ctx -> List Gty -> List String
 freshPVars _ [] = []
-freshPVars ctx (_::rest) = freshName ctx "p" :: freshPVars ctx rest
+freshPVars ctx (_ :: rest) = freshName ctx "p" :: freshPVars ctx rest
 
 -- ── match: exhaustive arms over one ADT scrutinee, body of type t ───────────
 genArm : Ctx -> Gty -> Int -> (String, List Gty) -> <Rand> Arm
@@ -518,11 +533,11 @@ data Out = Out String Decl Bool
 
 iterAdts : List Gadt -> (Gadt -> <e> Unit) -> <e> Unit
 iterAdts [] _ = ()
-iterAdts (a::rest) f = let _ = f a in iterAdts rest f
+iterAdts (a :: rest) f = let _ = f a in iterAdts rest f
 
 iterExprs : List Expr -> (Expr -> <e> Unit) -> <e> Unit
 iterExprs [] _ = ()
-iterExprs (e::rest) f = let _ = f e in iterExprs rest f
+iterExprs (e :: rest) f = let _ = f e in iterExprs rest f
 
 -- Generate one independent block: decls + main-body statements that print them.
 -- Shares ctx (and the global fresh-name counter) with siblings so names never
@@ -555,13 +570,15 @@ hoistAdtInvs ctx outsRef a =
   if adtDerives a then
     let _ = iterExprs (invEq ctx a) (e => hoistOut ctx outsRef True e)
     iterExprs (invOrd ctx a) (e => hoistOut ctx outsRef True e)
-  else ()
 
 -- main-body statement that prints one hoisted output
 outToStmt : Out -> DoStmt
 outToStmt (Out name _ isInv) =
   if isInv then
-    DoExpr (EApp (EVar "println") (binop "++" (ELit (LString "INV ")) (EApp (EVar "debug") (EVar name))))
+    DoExpr
+      (EApp
+        (EVar "println")
+        (binop "++" (ELit (LString "INV ")) (EApp (EVar "debug") (EVar name))))
   else
     printStmt (EVar name)
 
@@ -580,17 +597,16 @@ genBlock ctx =
   let nVals = 2 + randBelow 3
   let valDecls = listInit nVals (genValDecl ctx)
   let outsRef = Ref []
-  let _ = times 4 (i => hoistOut ctx outsRef False (genExpr ctx (randGty ctx 2) 3))
-  let _ = if ctxTier ctx >= 1 then
-    iterAdts (ctxAdts ctx) (a => hoistOut ctx outsRef False (genMatch ctx a (pick baseGtys) 3))
-  else
-    ()
+  let _ =
+    times 4 (i => hoistOut ctx outsRef False (genExpr ctx (randGty ctx 2) 3))
+  let _ =
+    if ctxTier ctx >= 1 then
+      iterAdts (ctxAdts ctx) (a =>
+        hoistOut ctx outsRef False (genMatch ctx a (pick baseGtys) 3))
   let _ = iterExprs (invArith ctx) (e => hoistOut ctx outsRef True e)
   let _ = hoistOut ctx outsRef True (invOrdTrans ctx)
-  let _ = if ctxTier ctx >= 2 then
-    iterAdts (ctxAdts ctx) (hoistAdtInvs ctx outsRef)
-  else
-    ()
+  let _ =
+    if ctxTier ctx >= 2 then iterAdts (ctxAdts ctx) (hoistAdtInvs ctx outsRef)
   let outs = !outsRef
   let body = map outToStmt outs
   let outDecls = map outDecl outs
@@ -618,10 +634,11 @@ appendBlock : Ctx -> Ref (List Decl) -> Ref (List DoStmt) -> Int -> <Rand> Unit
 appendBlock ctx allDeclsRef allBodyRef i = match genBlock ctx
   (decls, body) =>
     allDeclsRef := !allDeclsRef ++ decls
-    let sep = if i > 0 then
-      [DoExpr (EApp (EVar "println") (ELit (LString "--BLOCK--")))]
-    else
-      []
+    let sep =
+      if i > 0 then
+        [DoExpr (EApp (EVar "println") (ELit (LString "--BLOCK--")))]
+      else
+        []
     allBodyRef := !allBodyRef ++ sep ++ body
 
 genProgram : Ctx -> Int -> <Rand> List Decl
@@ -639,15 +656,16 @@ data Opts = Opts Int Int Int Bool
 
 parseOpts : List String -> Opts -> Opts
 parseOpts [] o = o
-parseOpts ("--seed"::v::rest) (Opts _ t b nt) =
+parseOpts ("--seed" :: v :: rest) (Opts _ t b nt) =
   parseOpts rest (Opts (intOr v 0) t b nt)
-parseOpts ("--tier"::v::rest) (Opts s _ b nt) =
+parseOpts ("--tier" :: v :: rest) (Opts s _ b nt) =
   parseOpts rest (Opts s (intOr v 2) b nt)
-parseOpts ("--batch"::v::rest) (Opts s t _ nt) =
+parseOpts ("--batch" :: v :: rest) (Opts s t _ nt) =
   parseOpts rest (Opts s t (intOr v 1) nt)
-parseOpts ("--width"::_::rest) o = parseOpts rest o
-parseOpts ("--no-tuple"::rest) (Opts s t b _) = parseOpts rest (Opts s t b True)
-parseOpts (_::rest) o = parseOpts rest o
+parseOpts ("--width" :: _ :: rest) o = parseOpts rest o
+parseOpts ("--no-tuple" :: rest) (Opts s t b _) =
+  parseOpts rest (Opts s t b True)
+parseOpts (_ :: rest) o = parseOpts rest o
 
 intOr : String -> Int -> Int
 intOr s d = match toInt s
