@@ -33,8 +33,10 @@ import types.typecheck.{
   checkedFfiExternTypeNamesModules,
 }
 import ir.core_ir_lower.{
+  ifaceImplHeadTable,
   declaredRecordFieldOrders,
   lowerProgramEmit,
+  EmitTarget(..),
   returnsSelfTable,
   selfFnParamTable,
   methodIfaceTable,
@@ -56,8 +58,8 @@ runEmit runtimeDecls coreDecls modules =
   let (coreD, modules2) = elaborateModules runtimeDecls coreMangled modulesMangled
   let allDecls = coreD ++ flatMap snd modules2
   let _ = preludeReturnPosDictNames coreD allDecls ++ preludeArgPosDictNames coreD allDecls ++ constrainedSigNames allDecls
-  let input = makeEmitInput (returnsSelfTable allDecls) (selfFnParamTable allDecls) (methodIfaceTable allDecls) (methodConstraintIfaces allDecls) (ctorFieldTypeNames allDecls) (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls) (mainTypeIsUnit ()) (mainTypeIsFloat ()) 0 [] [] "" (declaredRecordFieldOrders allDecls) (validateFfiExternTypeNames (checkedFfiExternTypeNamesModules modules2))
-  let (text, _) = emitProgramRecord input (lowerProgramEmit allDecls)
+  let input = makeEmitInput (returnsSelfTable allDecls) (selfFnParamTable allDecls) (methodIfaceTable allDecls) (methodConstraintIfaces allDecls) (ctorFieldTypeNames allDecls) (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls) (mainTypeIsUnit ()) (mainTypeIsFloat ()) 0 [] [] "" (declaredRecordFieldOrders allDecls) (validateFfiExternTypeNames (checkedFfiExternTypeNamesModules modules2)) (ifaceImplHeadTable allDecls)
+  let (text, _) = emitProgramRecord input (lowerProgramEmit TargetNative allDecls)
   putStr text
 -- Module-qualify module-PRIVATE top-level functions whose bare name collides
 -- across units, BEFORE elaborateModules flattens the boundaries away.  Without

@@ -554,19 +554,28 @@ for pair in "ctorToTypeRef seed:$total_ctortotype" "installDispatchTables call:$
 done
 echo "  ok: all 4 frame operations appear in exactly 3 places total (no phantom driver)"
 
-# ⚠️ ONE KNOWN, DELIBERATE ASYMMETRY: ctorFieldOrdersRef is seeded ONLY by
-# cevalModules, not by either eval.mdk driver. eval.mdk:1487-1490's own
-# comment: the tree-walk `run` path's ERecordCreate arm (eval.mdk:1184-1188)
+# ⚠️ ONE KNOWN, DELIBERATE ASYMMETRY: ctorFieldOrdersRef is seeded ONLY by the
+# INTERPRETER drivers, never by either eval.mdk tree-walk driver. Since #1954
+# there are THREE such writers, all in core_ir_eval.mdk: cevalModules (the
+# multi-module path) and the single-program seam cevalMainOf / cevalOutputOf.
+# The single-program seeding used to happen in core_ir_lower.mdk's lowerProgram
+# -- lowering seeding interpreter state, dead on every emit path -- and moving
+# it here is what took the total from 1 to 3. What the asymmetry actually
+# protects is UNCHANGED and is the pair below it: evalModulesWith and
+# evalModulesRootEnvWith must stay at 0. eval.mdk:1823-1835's own
+# comment: the tree-walk `run` path's ERecordCreate arm (eval.mdk:1518-1522)
 # looks up ctorFieldOrdersRef and falls back to `VRecord` when the table has
 # no entry for that constructor -- and since evalModulesWith /
 # evalModulesRootEnvWith never populate it, ctorFieldOrdersRef.value stays its
 # initial `[]` for the whole tree-walk run, so evalVariantUpdate's VRecord arm
 # is the one that always fires there; it never reaches the VCon arm that
 # needs the field-order table. Re-verified at this HEAD (not just cited):
-#   - eval.mdk:244 `ctorFieldOrdersRef = Ref []` (the only initializer)
-#   - `ctorFieldOrdersRef :=` occurs EXACTLY ONCE in the whole compiler,
-#     at core_ir_eval.mdk:511, inside cevalModules
-#   - eval.mdk:1184-1188 (ERecordCreate) and eval.mdk:1479-1493
+#   - eval.mdk:330 `ctorFieldOrdersRef = Ref []` (the only initializer)
+#   - `ctorFieldOrdersRef :=` occurs EXACTLY THREE TIMES in the whole
+#     compiler, all of them in core_ir_eval.mdk: once inside cevalModules and
+#     once inside each of cevalMainOf / cevalOutputOf (no line numbers here on
+#     purpose -- the previous pin drifted by 37 lines before anyone noticed)
+#   - eval.mdk:1518-1522 (ERecordCreate) and eval.mdk:1823-1835
 #     (evalVariantUpdate) still branch on `lookupAssoc name
 #     ctorFieldOrdersRef.value` / pattern-match VRecord-vs-VCon exactly as
 #     the comment describes
@@ -613,11 +622,19 @@ echo "  ok: all 4 frame operations appear in exactly 3 places total (no phantom 
 ceval_cfo=$(printf '%s\n' "$ceval_body" | grep -Fc 'ctorFieldOrdersRef := buildCtorFieldOrders allDecls')
 withA_cfo=$(printf '%s\n' "$withA_body" | grep -Fc 'ctorFieldOrdersRef :=')
 withB_cfo=$(printf '%s\n' "$withB_body" | grep -Fc 'ctorFieldOrdersRef :=')
+cevalMainOf_body=$(body_of "$CIE" '^cevalMainOf decls prog =')
+cevalOutputOf_body=$(body_of "$CIE" '^cevalOutputOf decls prog =')
+cevalMainOf_cfo=$(printf '%s\n' "$cevalMainOf_body" | grep -Fc 'ctorFieldOrdersRef := buildCtorFieldOrders decls')
+cevalOutputOf_cfo=$(printf '%s\n' "$cevalOutputOf_body" | grep -Fc 'ctorFieldOrdersRef := buildCtorFieldOrders decls')
 total_cfo=$(grep -F -c 'ctorFieldOrdersRef :=' "$EV" "$CIE" | awk -F: '{s+=$2} END{print s+0}')
-if [ "$ceval_cfo" -ne 1 ] || [ "$withA_cfo" -ne 0 ] || [ "$withB_cfo" -ne 0 ] || [ "$total_cfo" -ne 1 ]; then
+if [ "$ceval_cfo" -ne 1 ] || [ "$withA_cfo" -ne 0 ] || [ "$withB_cfo" -ne 0 ] || \
+   [ "$cevalMainOf_cfo" -ne 1 ] || [ "$cevalOutputOf_cfo" -ne 1 ] || [ "$total_cfo" -ne 3 ]; then
   echo "FAIL: the ctorFieldOrdersRef asymmetry changed shape (cevalModules=$ceval_cfo,"
-  echo "  evalModulesWith=$withA_cfo, evalModulesRootEnvWith=$withB_cfo, total=$total_cfo;"
-  echo "  expected 1/0/0/1). This table's seeding just moved between drivers, or"
+  echo "  evalModulesWith=$withA_cfo, evalModulesRootEnvWith=$withB_cfo,"
+  echo "  cevalMainOf=$cevalMainOf_cfo, cevalOutputOf=$cevalOutputOf_cfo, total=$total_cfo;"
+  echo "  expected 1/0/0/1/1/3 -- the three writers are cevalModules, cevalMainOf and"
+  echo "  cevalOutputOf, all in core_ir_eval.mdk). This table's seeding just moved"
+  echo "  between drivers, or"
   echo "  a NEW driver writes it. If the tree-walk path (evalModulesWith /"
   echo "  evalModulesRootEnvWith) now genuinely needs it -- i.e. its ERecordCreate"
   echo "  arm can now produce a VCon for a named-field constructor -- update this"
@@ -625,7 +642,7 @@ if [ "$ceval_cfo" -ne 1 ] || [ "$withA_cfo" -ne 0 ] || [ "$withB_cfo" -ne 0 ] ||
   echo "  split still matches your new reasoning; do not just bump the numbers."
   exit 1
 fi
-echo "  ok: ctorFieldOrdersRef asymmetry unchanged (cevalModules-only, justified above)"
+echo "  ok: ctorFieldOrdersRef asymmetry unchanged (interpreter-drivers-only, justified above)"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # CHECK 4 — #1112 A-3.4: the `IE` NAMESPACE ratchet

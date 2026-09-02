@@ -110,7 +110,9 @@ import types.typecheck.{
   checkOneSchemeFull,
 }
 import ir.core_ir_lower.{
+  ifaceImplHeadTable,
   lowerProgramEmit,
+  EmitTarget(..),
   methodIfaceTable,
   declSigTypeNames,
   declaredRecordFieldOrders,
@@ -118,7 +120,7 @@ import ir.core_ir_lower.{
 }
 import backend.private_mangle.{mangleUnits}
 import ir.dce.{dceFilter}
-import backend.wasm_emit.{emitProgram, makeWasmEmitInput}
+import backend.wasm_emit.{emitProgram, makeWasmEmitInputFull}
 import backend.wasm_reach.{wasmReachFilter}
 
 -- ARG CONTRACT (Stage 3): the FIRST arg is a MODE, dispatched below.
@@ -331,12 +333,12 @@ runEmit runtimeDecls coreDecls modules =
   let allDecls0 = coreD ++ flatMap snd modules2
   let allDecls = dceFilter allDecls0
   let _ = preludeReturnPosDictNames coreD allDecls ++ preludeArgPosDictNames coreD allDecls ++ constrainedSigNames allDecls
-  let input = makeWasmEmitInput (methodIfaceTable allDecls) (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls) (ctorFieldTypeNames allDecls) (mainTypeIsFloat ()) (declaredRecordFieldOrders allDecls)
+  let input = makeWasmEmitInputFull (methodIfaceTable allDecls) (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls) (ctorFieldTypeNames allDecls) (mainTypeIsFloat ()) (declaredRecordFieldOrders allDecls) [] (ifaceImplHeadTable allDecls)
   -- #2359 (F1): mirror wasm_emit_modules_main.emitTail — bind the lowered
   -- program, then drop the impl bodies (and the plain bindings only they
   -- reached) that no dispatchable method name in this program can reach.  Without
   -- this the in-browser compiler emitted ~84k lines of WAT for a one-line program.
-  let lowered = lowerProgramEmit allDecls
+  let lowered = lowerProgramEmit TargetWasm allDecls
   let filtered = wasmReachFilter lowered
   putStr (emitProgram input filtered)
 
