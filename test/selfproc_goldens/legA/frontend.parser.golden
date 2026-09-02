@@ -119,8 +119,8 @@ effDomainP : ParserE <> (Option String)
 effParamDispatch : Token -> Token -> ParserE <> (Option String)
 effParamFor : Token -> ParserE <> (Option String)
 effParamP : ParserE <> (Option String)
-effectBody : ParserE <> (List (String, Option String), Option String)
-effectBodyFor : Token -> ParserE <> (List (String, Option String), Option String)
+effectBody : ParserE <> (List (String, Option String), List String)
+effectBodyFor : Token -> ParserE <> (List (String, Option String), List String)
 elseBranch : ParserE <> Expr
 elsePresent : ParserE <> Expr
 emit : a -> ParserE <> a
@@ -327,10 +327,10 @@ methodNameStep : Array Token -> Int -> Int -> Int -> Bool -> Token -> List (Opti
 missingWhereIfaceMsg : String
 missingWhereImplMsg : String
 mkAttr : String -> Option String -> Attr
-mkEffect : (List (String, Option String), Option String) -> Ty -> Ty
+mkEffect : (List (String, Option String), List String) -> Ty -> Ty
 mkLocated : String -> Array Token -> Array Int -> Int -> String -> Int -> ParseError
 mkRec : String -> (List RecPatField, Bool) -> Pat
-mkRow : (List (String, Option String), Option String) -> Loc -> Ty
+mkRow : (List (String, Option String), List String) -> Loc -> Ty
 namedImplRemovedMsg : String
 negIntPat : ParserE <> Pat
 negIntRng : Lit -> ParserE <> Pat
@@ -469,6 +469,8 @@ parseTyAtomRaw : ParserE <> Ty
 parseTyFun : ParserE <> Ty
 parseTyParen : ParserE <> Ty
 parseTyParenBody : Token -> ParserE <> Ty
+parseTyParenIdent : Token -> ParserE <> Ty
+parseTyParenTuple : ParserE <> Ty
 parseTypeAlias : Bool -> ParserE <> Decl
 parseUnary : ParserE <> Expr
 parseUpperAtom : String -> ParserE <> Expr
@@ -486,8 +488,8 @@ payloadFor : Token -> ParserE <> ConPayload
 peek2P : ParserE <> Token
 peekP : ParserE <> Token
 peekTok : Array Token -> Int -> Token
-pipeTail : ParserE <> (Option String)
-pipeTailFor : Token -> ParserE <> (Option String)
+pipeTail : ParserE <> (List String)
+pipeTailFor : Token -> ParserE <> (List String)
 positionsChainLines : Positions -> List (List Int)
 positionsDecls : Positions -> List DeclPos
 positionsLastContentLine : Positions -> Int
