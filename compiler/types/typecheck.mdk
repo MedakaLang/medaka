@@ -1144,14 +1144,17 @@ effrowNorm (EffRow labels tail) = match tail
     -- members disappear, and a join left with fewer than two unbound members
     -- IS a plain row.  The cell is path-compressed to its live members so a
     -- later read pays for the flattening once.
-    EJoin id lvl _ =>
+    -- ⚠️ NO path compression: a bound member carries ATOMS on its link row
+    -- (`70 := <Stdout | 75>`), and rewriting the cell to its unbound leaves
+    -- would drop them — the next normalization of the same cell then read
+    -- `<>` where `<Stdout | …>` was (a launder, found first-hand).  The flat
+    -- view is recomputed per call; the cell is never rewritten.
+    EJoin _ _ _ =>
       let f = rowFlat (EffRow labels (Some cell))
       match snd f
         [] => EffRow (fst f) None
         [m] => EffRow (fst f) (Some m)
-        ms =>
-          cell := EJoin id lvl ms
-          EffRow (fst f) (Some cell)
+        _ => EffRow (fst f) (Some cell)
   None => EffRow labels tail
 
 -- the concrete labels (atoms) currently known for a row (ignores the open tail)
@@ -1416,10 +1419,9 @@ joinSideCheck False _ _ lOpen lClosed =
   effectLeakCheck (atomsEscape lOpen lClosed) lClosed
 
 joinMismatch : Bool -> (List Atom, List (Ref Effvar)) -> (List Atom, List (Ref Effvar)) -> Unit
-joinMismatch isIndex fa fb =
-  pushTypeError
-  if isIndex then "T-EFFECT-INDEX-MISMATCH" else "T-EFFECT-LEAK"
-  joinMismatchMsg (renderFlatRow fa) (renderFlatRow fb)
+joinMismatch isIndex fa fb = pushTypeError
+  (if isIndex then "T-EFFECT-INDEX-MISMATCH" else "T-EFFECT-LEAK")
+  (joinMismatchMsg (renderFlatRow fa) (renderFlatRow fb))
 
 renderFlatRow : (List Atom, List (Ref Effvar)) -> String
 renderFlatRow f =
@@ -2719,7 +2721,8 @@ substRow esub r = match effrowNorm r
     -- #821: a join instantiates member-wise — each generalized member gets
     -- the call site's fresh cell, the rest stay shared — into a FRESH join
     -- cell, so the scheme's own join is never mutated by a caller.
-    EJoin _ _ ms => rowOfMembers labels (map (m => substMember esub m) ms)
+    EJoin _ _ ms =>
+      rowOfMembers labels (map (m => substMember esub m) ms)
   EffRow labels None => EffRow labels None
 
 substMember : List (Int, Ref Effvar) -> Ref Effvar -> Ref Effvar
@@ -6910,7 +6913,7 @@ ceGradedIface = DInterface {
   def = False,
   name = "Async",
   typarams = ["f"],
-  typaramKinds = [None],
+  typaramKinds = [Some (KindArrow KindEffect (KindArrow KindType KindType))],
   supers = [],
   methods = [ceGradedMethod],
   ifaceOrigin = OriginModule "gmod",
@@ -6925,7 +6928,7 @@ ceGradedKey = regKeyOfTab (ifaceTabKey (OriginModule "gmod") "Async")
 -- 5. GRADED KIND INFERENCE, positional with `ceTyparams` (here `["f"]`):
 --    slot 0 (f's first argument, `e`) is `KRow`; slot 1 (`a`) is `KType`.
 -- > ceRowParamKindNamesAt ceGradedKey 0 ceGradedEnv
--- [["Row", "Type"]]
+-- [["Effect", "Type"]]
 
 -- ── an UNGRADED fixture: every slot is still RECORDED ("EVERY slot is recorded,
 -- graded or not" — the retired writer's rule, which `ceParamKinds` keeps because
@@ -14565,8 +14568,45 @@ inferAppArgsAgainst env appSoFar ft (x::rest) =
         pats
         body
     None => inferExpected env x (funDomain (normalize ft))
+  -- The result-first order pins the domain from the DECLARATION before the
+  -- argument is seen, and the arrow unifier's closed~closed arm is lenient —
+  -- so the argument must be checked DIRECTIONALLY against its domain here:
+  -- it may perform fewer effects than the slot permits (the #2109
+  -- narrowing), never more.  Without this, `Ref loud` at `Ref (Int -> <> Int)`
+  -- would slip through as a launder.
+  let _ = checkArgSubEffect True (funDomain (normalize ft)) xt
   let res = inferApp (envAlphaLets env) (EApp appSoFar x) ft xt
   inferAppArgsAgainst env (EApp appSoFar x) res rest
+
+-- [actual] flows INTO a slot of type [expected]: every closed arrow row of the
+-- actual must be within the expected's at a covariant position, and the
+-- reverse at a contravariant one; a non-covariant type-constructor slot
+-- demands equality (the same rule `paramVarianceGuard` enforces).  Open rows
+-- are left to unification.
+checkArgSubEffect : Bool -> Mono -> Mono -> Unit
+checkArgSubEffect pos e a = match normalize e
+  TFun e1 er e2 => match normalize a
+    TFun a1 ar a2 =>
+      let _ = checkArgSubEffect (not pos) e1 a1
+      let _ = rowSubCheck pos (effrowNorm er) (effrowNorm ar)
+      checkArgSubEffect pos e2 a2
+    _ => ()
+  TApp e1 e2 => match normalize a
+    TApp a1 a2 =>
+      let _ = if monoSlotNonCovariant e1 then
+        paramVarianceCheck e2 a2
+      else
+        checkArgSubEffect pos e2 a2
+      checkArgSubEffect pos e1 a1
+    _ => ()
+  _ => ()
+
+rowSubCheck : Bool -> EffRow -> EffRow -> Unit
+rowSubCheck True (EffRow le None) (EffRow la None) =
+  effectLeakCheck (atomsEscape la le) le
+rowSubCheck False (EffRow le None) (EffRow la None) =
+  effectLeakCheck (atomsEscape le la) la
+rowSubCheck _ _ _ = ()
 
 -- the type after peeling [n] arrows off [t] (normalizing at each level), or
 -- None when [t] has fewer.
@@ -30065,9 +30105,10 @@ pairRows dr ar = match rowTailId dr
 effVarCellPerformed : String -> List (String, Ref Effvar) -> List (Int, Int) -> List Int -> Bool
 effVarCellPerformed v effMap pairs tails = match lookupAssoc v effMap
   Some cell =>
-    let did = effvarId cell
-    containsI did tails
-      || anyList (p => fst p == did && containsI (snd p) tails) pairs
+    -- the cell's LIVE representative(s): a linked cell reports -1 from
+    -- `effvarId`, and the pairs/tails were recorded through normalization.
+    let dids = rowTailId (EffRow [] (Some cell))
+    anyList (did => containsI did tails || anyList (p => fst p == did && containsI (snd p) tails) pairs) dids
   None => False
 
 -- every unbound tail id the row reaches — a join contributes each member.
