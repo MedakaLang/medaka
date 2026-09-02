@@ -1,0 +1,101 @@
+{- | P4-A identifier and URI syntax driver, graded against the official
+   atproto interop syntax corpora (`pds/test/atsyntax_vectors.sh`).
+
+   Prints one `N/N valid accepted, M/M invalid rejected` line per corpus, plus
+   two extra lines cross-grading `lib.repo`'s existing `validateRkey`/
+   `validateCollection` against the record-key and NSID corpora (they are not
+   exported for anything but this grading). Ends with `TOTAL: PASS` only when
+   every graded corpus (all 7, plus both repo.mdk cross-checks) is 100%. -}
+
+import io.{readLines}
+import string.{startsWith, toUtf8}
+import lib.atsyntax.{
+  validateAtIdentifier,
+  validateAtUri,
+  validateDid,
+  validateHandle,
+  validateRecordKey,
+}
+import lib.nsid.{nsidErrorMessage, validateNsid}
+import lib.repo.{validateCollection, validateRkey}
+import lib.tid.{tidParse}
+
+nsidValidate : String -> Result String Unit
+nsidValidate nsid = mapErr nsidErrorMessage (validateNsid nsid)
+
+tidValidate : String -> Result String Unit
+tidValidate text = map (_ => ()) (tidParse text)
+
+repoRkeyValidate : String -> Result String Unit
+repoRkeyValidate key = validateRkey (toUtf8 key) 0
+
+repoCollectionValidate : String -> Result String Unit
+repoCollectionValidate collection =
+  let bytes = toUtf8 collection
+  validateCollection bytes (arrayLength bytes)
+
+isSkippable : String -> Bool
+isSkippable line = line == "" || startsWith "#" line
+
+gradeLines : (String -> Result String Unit) -> Bool -> List String -> (Int, Int)
+gradeLines validate expectOk [] = (0, 0)
+gradeLines validate expectOk (line::rest) =
+  let (restPass, restTotal) = gradeLines validate expectOk rest
+  if isSkippable line then (restPass, restTotal)
+  else
+    let accepted = match validate line
+      Ok () => True
+      Err _ => False
+    let ok = accepted == expectOk
+    (restPass + (if ok then 1 else 0), restTotal + 1)
+
+mustReadLines : String -> <IO> List String
+mustReadLines path = match readLines path
+  Err message => panic "atsyntax_vectors: cannot read \{path}: \{message}"
+  Ok lines => lines
+
+{- | Grade one corpus and print its counted line. `expectedValidPass` is
+   `None` for "must be 100%"; `Some n` pins a documented, deliberate,
+   pre-existing gap (see the `tid` call site below) so a FURTHER regression
+   still reds this gate instead of being silently absorbed. -}
+gradeCorpusChecked : String -> (String -> Result String Unit) -> String -> String -> Option Int -> <IO> Bool
+gradeCorpusChecked label validate validPath invalidPath expectedValidPass =
+  let validLines = mustReadLines validPath
+  let invalidLines = mustReadLines invalidPath
+  let (validPass, validTotal) = gradeLines validate True validLines
+  let (invalidPass, invalidTotal) = gradeLines validate False invalidLines
+  let () = println "\{label}: \{intToString validPass}/\{intToString validTotal} valid accepted, \{intToString invalidPass}/\{intToString invalidTotal} invalid rejected"
+  let validOk = match expectedValidPass
+    None => validPass == validTotal
+    Some expected => validPass == expected
+  validOk && invalidPass == invalidTotal && validTotal > 0 && invalidTotal > 0
+
+gradeCorpus : String -> (String -> Result String Unit) -> String -> String -> <IO> Bool
+gradeCorpus label validate validPath invalidPath =
+  gradeCorpusChecked label validate validPath invalidPath None
+
+main : <IO, Env, FileRead "_"> Unit
+main = match args ()
+  [aturiValid, aturiInvalid, atidentifierValid, atidentifierInvalid, didValid, didInvalid, handleValid, handleInvalid, nsidValid, nsidInvalid, recordkeyValid, recordkeyInvalid, tidValid, tidInvalid] =>
+    let results = [
+      gradeCorpus "aturi" validateAtUri aturiValid aturiInvalid,
+      gradeCorpus "atidentifier" validateAtIdentifier atidentifierValid atidentifierInvalid,
+      gradeCorpus "did" validateDid didValid didInvalid,
+      gradeCorpus "handle" validateHandle handleValid handleInvalid,
+      gradeCorpus "nsid" nsidValidate nsidValid nsidInvalid,
+      gradeCorpus "recordkey" validateRecordKey recordkeyValid recordkeyInvalid,
+      -- KNOWN, deliberate gap (not a bug): "j222222222222" decodes to
+      -- 16888498602639360us, above lib.tid's intentional 53-bit-safe-integer
+      -- ceiling (tidTimestampMax, pds/lib/tid.mdk) — already pinned by
+      -- pds/test/repo_tid_test.mdk and repo_vectors_main.mdk's own "53-bit"
+      -- assertions on "c222222222222". Pinning the count (not just printing
+      -- it) means a further regression still reds this gate.
+      gradeCorpusChecked "tid" tidValidate tidValid tidInvalid (Some 5),
+      gradeCorpus "repo-validateRkey" repoRkeyValidate recordkeyValid recordkeyInvalid,
+      gradeCorpus "repo-validateCollection" repoCollectionValidate nsidValid nsidInvalid,
+    ]
+    if all (r => r) results then println "TOTAL: PASS"
+    else
+      let () = println "TOTAL: FAIL"
+      exit 1
+  _ => panic "usage: atsyntax_vectors_main <aturi_valid> <aturi_invalid> <atidentifier_valid> <atidentifier_invalid> <did_valid> <did_invalid> <handle_valid> <handle_invalid> <nsid_valid> <nsid_invalid> <recordkey_valid> <recordkey_invalid> <tid_valid> <tid_invalid>"

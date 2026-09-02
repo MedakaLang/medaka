@@ -1,0 +1,126 @@
+{- | P4-B lexicon-JSON<->DAG-CBOR round-trip driver
+   (`pds/test/lexjson_vectors.sh`).
+
+   Graded against the official `@atproto/lex-cbor` + `@atproto/lex-json`
+   reference corpus (`pds/test/vectors/lexjson_reference_corpus.txt`), both
+   directions per row: decode the reference DAG-CBOR bytes and render them as
+   lexicon JSON (must match the reference JSON text exactly), and parse the
+   reference JSON text back to DAG-CBOR and re-encode it (must reproduce the
+   reference bytes exactly).
+
+   Also runs three hand-written malformed-input cases that
+   `pds/lib/lexjson.mdk` must reject rather than silently coerce (its own
+   [W-QUIETER] boundary): a duplicate JSON object key, a plain map that
+   happens to carry a `"$link"` key without being a link object, and a
+   `"$bytes"` value that is not valid base64. -}
+
+import hex.{decode}
+import io.{readLines}
+import json.{Json, parse, stringify}
+import string.{split, startsWith}
+import lib.dagcbor.{dagCborDecode, dagCborEncode}
+import lib.lexjson.{dagCborToLexJson, lexJsonToDagCbor}
+
+mustHex : String -> Array Int
+mustHex text = match decode text
+  Ok bytes => bytes
+  Err message => panic "lexjson_vectors: malformed hex: \{message}"
+
+checkForward : String -> Array Int -> String -> <IO> Bool
+checkForward name cborBytes jsonText = match dagCborDecode cborBytes
+  Err message =>
+    let () = println "ROW \{name} FAIL forward-decode \{message}"
+    False
+  Ok dc =>
+    let rendered = stringify (dagCborToLexJson dc)
+    if rendered == jsonText then True
+    else
+      let () = println "ROW \{name} FAIL forward rendered=\{rendered} expected=\{jsonText}"
+      False
+
+checkBackwardValue : String -> Array Int -> Json -> <IO> Bool
+checkBackwardValue name cborBytes value = match lexJsonToDagCbor value
+  Err message =>
+    let () = println "ROW \{name} FAIL backward \{message}"
+    False
+  Ok dc => match dagCborEncode dc
+    Err message =>
+      let () = println "ROW \{name} FAIL backward-encode \{message}"
+      False
+    Ok reencoded => if reencoded == cborBytes then True
+    else
+      let () = println "ROW \{name} FAIL backward-mismatch"
+      False
+
+checkBackward : String -> Array Int -> String -> <IO> Bool
+checkBackward name cborBytes jsonText = match parse jsonText
+  Err message =>
+    let () = println "ROW \{name} FAIL json-parse \{message}"
+    False
+  Ok value => checkBackwardValue name cborBytes value
+
+runRow : String -> <IO> Int
+runRow line = match split "\t" line
+  [name, cborHex, jsonText] =>
+    let cborBytes = mustHex cborHex
+    let forwardOk = checkForward name cborBytes jsonText
+    let backwardOk = checkBackward name cborBytes jsonText
+    if forwardOk && backwardOk then
+      let () = println "ROW \{name} PASS forward backward"
+      1
+    else 0
+  _ => panic "lexjson_vectors: malformed corpus row: \{line}"
+
+runRows : List String -> Int -> <IO> Int
+runRows [] count = count
+runRows (line::rest) count =
+  if line == "" || startsWith "#" line then
+    runRows rest count
+  else
+    runRows rest (count + runRow line)
+
+countCases : List String -> Int -> Int
+countCases [] count = count
+countCases (line::rest) count =
+  if line == "" || startsWith "#" line then
+    countCases rest count
+  else
+    countCases rest (count + 1)
+
+rejectMalformed : String -> String -> <IO> Int
+rejectMalformed label text = match parse text
+  Err message =>
+    let () = println "MALFORMED \{label} FAIL json-parse \{message}"
+    0
+  Ok value => match lexJsonToDagCbor value
+    Err message =>
+      let () = println "MALFORMED \{label} PASS \{message}"
+      1
+    Ok _ =>
+      let () = println "MALFORMED \{label} FAIL accepted"
+      0
+
+runMalformed : <IO> Int
+runMalformed =
+  let checks = [
+    rejectMalformed "duplicate-key" "{\"a\":1,\"a\":2}",
+    rejectMalformed "link-key-on-plain-map" "{\"$link\":\"not-a-cid\",\"extra\":true}",
+    rejectMalformed "bad-bytes-base64" "{\"$bytes\":\"!!!!\"}",
+  ]
+  sum checks
+
+main : <IO, Env, FileRead "_"> Unit
+main = match args ()
+  [corpusPath] => match readLines corpusPath
+    Err message => panic "lexjson_vectors: cannot read corpus: \{message}"
+    Ok rows =>
+      let total = countCases rows 0
+      let passed = runRows rows 0
+      let malformed = runMalformed
+      let () = println "lexjson: \{intToString passed}/\{intToString total} round-trip (both directions)"
+      let () = println "malformed: \{intToString malformed}/3 rejected"
+      if passed == total && malformed == 3 then println "TOTAL: PASS"
+      else
+        let () = println "TOTAL: FAIL"
+        exit 1
+  _ => panic "usage: lexjson_vectors_main <ledger-owned-corpus>"

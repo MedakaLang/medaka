@@ -1,10 +1,12 @@
 {- | Pure configured PDS protocol composition.
 
-   A Server joins a validated XRPC registry to an injected handler. Raw bytes
-   flow through strict HTTP framing, structural routing, an explicit immutable
-   Store transition, and deterministic response serialization. No filesystem,
-   socket, clock, async, or other effect is available in this module. -}
+   A Server joins an admitted account configuration and a validated XRPC
+   registry to an injected handler. Raw bytes flow through strict HTTP framing,
+   structural routing, an explicit immutable Store transition, and
+   deterministic response serialization. No filesystem, socket, clock, async,
+   or other effect is available in this module. -}
 
+import lib.atsyntax.{validateDid, validateHandle}
 import lib.http.{
   HttpParseFailure(..),
   Request,
@@ -25,18 +27,61 @@ import lib.xrpc.{
 -- | An endpoint-agnostic pure handler with an explicit successor Store.
 export type Handler = Store -> XrpcCall -> (Store, Response)
 
--- | A validated registry paired with its injected pure handler.
-export data Server = Server Registry Handler
+{- | The one account this configured server serves: the repository owner's DID,
+   the owner's handle, and this PDS's own hostname. Its constructor is private
+   so every value has passed atproto identifier admission
+   (`lib.atsyntax`). -}
+export data Account = Account String String String
+
+{- | Admit one account configuration. The DID and the handle are graded by the
+   shared `lib.atsyntax` validators (NOT by `lib.repo`'s own divergent
+   `validateDid`, which wrongly accepts digits in a DID method); the PDS
+   hostname is graded as a domain name by the same handle syntax. -}
+export
+makeAccount : String -> String -> String -> Result String Account
+makeAccount did handle hostname = do
+  () <- validateDid did
+  () <- match validateHandle handle
+    Err message => Err "server_core: account handle: \{message}"
+    Ok () => Ok ()
+  () <- match validateHandle hostname
+    Err message => Err "server_core: PDS hostname: \{message}"
+    Ok () => Ok ()
+  Ok (Account did handle hostname)
+
+-- | The repository owner's DID.
+export
+accountDid : Account -> String
+accountDid (Account did _ _) = did
+
+-- | The repository owner's handle.
+export
+accountHandle : Account -> String
+accountHandle (Account _ handle _) = handle
+
+-- | This PDS's own hostname.
+export
+accountHostname : Account -> String
+accountHostname (Account _ _ hostname) = hostname
+
+-- | An account configuration and a validated registry paired with the
+-- injected pure handler that serves them.
+export data Server = Server Account Registry Handler
 
 export
-makeServer : Registry -> Handler -> Server
-makeServer registry handler = Server registry handler
+makeServer : Account -> Registry -> Handler -> Server
+makeServer account registry handler = Server account registry handler
+
+-- | The configured account this server serves.
+export
+serverAccount : Server -> Account
+serverAccount (Server account _ _) = account
 
 -- | Route an already framed request. Route failures never invoke the handler
 -- and return the identical input Store.
 export
 handle : Server -> Store -> Request -> (Store, Response)
-handle (Server registry handler) store request = match routeRequest registry request
+handle (Server _ registry handler) store request = match routeRequest registry request
   RouteFailure failed => (store, xrpcFailureResponse failed)
   RouteCall call => handler store call
 
