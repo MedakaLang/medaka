@@ -1,5 +1,5 @@
 # META
-source_lines=1785
+source_lines=1993
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/diagnostics.mdk — structured error pipeline (Phase A.4)
@@ -137,7 +137,10 @@ resErrorHelpFix : ResError -> (Option String, Option Fix)
 resErrorHelpFix e = match resErrorDidYouMean e
   Some (bad, sug) =>
     let help = Some "did you mean '\{sug}'?"
-    let fix = map ((Loc f sl sc _ _) => Fix (Loc f sl sc sl (sc + stringLength bad)) sug) (resErrorLoc e)
+    let fix =
+      map
+        ((Loc f sl sc _ _) => Fix (Loc f sl sc sl (sc + stringLength bad)) sug)
+        (resErrorLoc e)
     (help, fix)
   None => (None, None)
 
@@ -325,7 +328,7 @@ allBacktickWords msg = match stringIndexOf "`" msg
 
 twoBacktickWords : String -> Option (String, String)
 twoBacktickWords msg = match allBacktickWords msg
-  a::b::_ => Some (a, b)
+  a :: b :: _ => Some (a, b)
   _ => None
 
 -- A whole-literal replacement `Fix`, spanning exactly `[sc, sc + len(old))` —
@@ -400,7 +403,13 @@ parseErrHelpFix msg (Loc f sl sc el ec)
     Some "replace '!=' with '/=' for not-equal",
     Some (Fix (Loc f sl sc sl (sc + 2)) "/="),
   )
-  | startsWith "integer literal too large for Int (max 4611686018427387903)" msg = (Some "`Int` is 63-bit, spanning [-4611686018427387904, 4611686018427387903]; 4611686018427387904 fits only as the NEGATIVE -4611686018427387904, so write it with its `-`", None)
+  | startsWith
+    "integer literal too large for Int (max 4611686018427387903)"
+    msg = (
+    Some
+      "`Int` is 63-bit, spanning [-4611686018427387904, 4611686018427387903]; 4611686018427387904 fits only as the NEGATIVE -4611686018427387904, so write it with its `-`",
+    None,
+  )
   -- Malformed radix/float literals (#677): the lexer already embeds BOTH the
   -- offending spelling and its suggested fix in backticks (`` `bad` … `good` ``),
   -- so the fix span is `[sc, sc + len(bad))` — the malformed literal itself,
@@ -415,15 +424,18 @@ parseErrHelpFix msg (Loc f sl sc el ec)
   -- malformed-radix/malformed-float hints use just above — no bespoke
   -- fix-building needed.
   | startsWith "bare unicode escape" msg = (
-    Some "Medaka's unicode escape is braced (`\\u{XXXX}`) — there is no bare `\\uXXXX` form",
+    Some
+      "Medaka's unicode escape is braced (`\\u{XXXX}`) — there is no bare `\\uXXXX` form",
     map (oldNewFixOf f sl sc) (twoBacktickWords msg),
   )
   | startsWith "malformed radix literal" msg = (
-    Some "the digit separator '_' can only appear BETWEEN digits, never immediately after the base prefix ('0x'/'0b'/'0o')",
+    Some
+      "the digit separator '_' can only appear BETWEEN digits, never immediately after the base prefix ('0x'/'0b'/'0o')",
     map (oldNewFixOf f sl sc) (twoBacktickWords msg),
   )
   | startsWith "malformed float literal" msg = (
-    Some "Medaka requires a digit on both sides of the decimal point in a float literal",
+    Some
+      "Medaka requires a digit on both sides of the decimal point in a float literal",
     map (oldNewFixOf f sl sc) (twoBacktickWords msg),
   )
   -- A reserved keyword used as a name: rename by appending `_` (any reserved word
@@ -432,7 +444,8 @@ parseErrHelpFix msg (Loc f sl sc el ec)
   -- `sc + stringLength …` span the did-you-mean resolve fix uses.
   | isReservedKwMsg msg = match wordBetweenBackticks msg
     Some w => (
-      Some "rename it — appending `_` (e.g. `\{w}_`) makes any reserved word a valid identifier",
+      Some
+        "rename it — appending `_` (e.g. `\{w}_`) makes any reserved word a valid identifier",
       Some (Fix (Loc f sl sc sl (sc + stringLength w)) "\{w}_"),
     )
     None => (None, None)
@@ -442,7 +455,8 @@ parseErrHelpFix msg (Loc f sl sc el ec)
   -- points at its first char — the fix is a clean single-token deletion, the
   -- same shape as the reserved-keyword rename above.
   | startsWith "`public` only applies to `data` declarations" msg = (
-    Some "`public` only makes a `data` export its constructors too; a function or value is exported with plain `export` — drop `public` here",
+    Some
+      "`public` only makes a `data` export its constructors too; a function or value is exported with plain `export` — drop `public` here",
     Some (Fix (Loc f sl sc sl (sc + stringLength "public")) ""),
   )
   -- Missing `where` on an `interface`/`impl` header (#1160), and a member
@@ -454,22 +468,26 @@ parseErrHelpFix msg (Loc f sl sc el ec)
   -- not at the edit site).  A `fix` here would have to guess a column, which is
   -- worse than none: an agent applies it verbatim.
   | startsWith "missing `where` on this " msg = (
-    Some "`interface` and `impl` headers end with `where`, and their members are indented on the lines below — a header with no `where` swallows the next line as another type argument, which is why the error the parser used to report landed there",
+    Some
+      "`interface` and `impl` headers end with `where`, and their members are indented on the lines below — a header with no `where` swallows the next line as another type argument, which is why the error the parser used to report landed there",
     None,
   )
   | startsWith "a `where` block must start on the next line" msg = (
-    Some "`where` opens a block only when it is the LAST token on its line (docs/spec/LAYOUT-SEMANTICS.md §7.1); anything written after it on the same line is not in the block",
+    Some
+      "`where` opens a block only when it is the LAST token on its line (docs/spec/LAYOUT-SEMANTICS.md §7.1); anything written after it on the same line is not in the block",
     None,
   )
   -- Guard-keyword confusion (#591): the parser anchors each diagnostic AT the
   -- offending keyword (`|` / `if`), so `sc` is its first char — the fix is a
   -- clean single-token swap to the other spelling.
   | startsWith "a match-arm guard uses" msg = (
-    Some "match-arm guards use `if`; replace `|` with `if` (or move this clause to an equation with `|` guards)",
+    Some
+      "match-arm guards use `if`; replace `|` with `if` (or move this clause to an equation with `|` guards)",
     Some (Fix (Loc f sl sc sl (sc + 1)) "if"),
   )
   | startsWith "an equation guard uses" msg = (
-    Some "equation guards use `|`; replace `if` with `|` (match-arm guards, by contrast, use `if`)",
+    Some
+      "equation guards use `|`; replace `if` with `|` (match-arm guards, by contrast, use `if`)",
     Some (Fix (Loc f sl sc sl (sc + 2)) "|"),
   )
   | otherwise = (None, None)
@@ -533,7 +551,8 @@ ppDiagCliSrc src file diag = ppDiagCliLines (srcLinesArr src) file diag
 export
 ppDiagCliLines : Array String -> String -> Diag -> String
 ppDiagCliLines srcLines file (Diag sev _ msg (Some (Loc _ sl sc _ _)) _ _) =
-  let header = "\{ppSeverity sev}: \{displayPath file}:\{intToString sl}:\{intToString sc}: \{msg}"
+  let header =
+    "\{ppSeverity sev}: \{displayPath file}:\{intToString sl}:\{intToString sc}: \{msg}"
   match nthLineArr srcLines sl
     None => header
     Some lineText =>
@@ -576,8 +595,8 @@ ppResolveErrorsByFile pairs = joinNl (ppResolveErrorLines pairs)
 
 ppResolveErrorLines : List (String, List ResError) -> <IO> List String
 ppResolveErrorLines [] = []
-ppResolveErrorLines ((_, [])::rest) = ppResolveErrorLines rest
-ppResolveErrorLines ((file, errs)::rest) =
+ppResolveErrorLines ((_, []) :: rest) = ppResolveErrorLines rest
+ppResolveErrorLines ((file, errs) :: rest) =
   let srcLines = srcLinesArr (readFileSafe file)
   map (e => ppDiagCliLines srcLines file (diagOfResError e)) errs
     ++ ppResolveErrorLines rest
@@ -702,7 +721,12 @@ analyzeLocatedG modName allowInternal runtimeSrc coreSrc progSrc =
 -- (which would re-parse `tsrc` via `parseLocated` — the loader already ran the
 -- structurally-identical `parseLocatedResult` over the same source).
 export
-analyzeFrom : String -> String -> String -> List Decl -> List String -> List Diag
+analyzeFrom : String ->
+  String ->
+  String ->
+  List Decl ->
+  List String ->
+  List Diag
 analyzeFrom modName runtimeSrc coreSrc raw internalGuard =
   let desugared = desugar raw
   let runtimeP = desugaredPrelude runtimeSrc
@@ -710,7 +734,8 @@ analyzeFrom modName runtimeSrc coreSrc raw internalGuard =
   -- the identity of those two trees, for the typechecker's core-check memo
   -- (`checkCoreMemoized`, types/typecheck.mdk): the prelude is typechecked once
   -- per process, not once per call.
-  let preludeKey = Some (desugaredPreludeKey runtimeSrc, desugaredPreludeKey coreSrc)
+  let preludeKey =
+    Some (desugaredPreludeKey runtimeSrc, desugaredPreludeKey coreSrc)
   -- Oracle superset = target + prelude (runtime + core) so exhaustiveness of a
   -- multi-clause function over a prelude ADT (Result/Option/…) isn't false-flagged.
   let guardWarns = checkGuardExhaustivenessWith (raw ++ runtimeP ++ coreP) raw
@@ -729,7 +754,8 @@ analyzeFrom modName runtimeSrc coreSrc raw internalGuard =
   let _ = setCoherenceUserDecls desugared
   let tcDiags = match resErrs
     [] =>
-      let (tcErrs, tcWarns) = checkOneDiagsK preludeKey runtimeP coreP ("__user__", desugared)
+      let (tcErrs, tcWarns) =
+        checkOneDiagsK preludeKey runtimeP coreP ("__user__", desugared)
       map diagOfTypeError tcErrs ++ map diagOfTypeWarning tcWarns
     _ => []
   -- AUTO-PRINT visibility (composite-main design §10): a bare non-Unit VALUE main
@@ -740,7 +766,8 @@ analyzeFrom modName runtimeSrc coreSrc raw internalGuard =
   -- Gated on shouldAutoPrintMain (needs the elaborate above to have set main's
   -- type), so a Unit/Async/function main and a satisfied value main add nothing.
   let autoDiags = match resErrs
-    [] => filterNewDiags tcDiags (autoPrintObligationDiags runtimeP coreP desugared)
+    [] =>
+      filterNewDiags tcDiags (autoPrintObligationDiags runtimeP coreP desugared)
     _ => []
   let guardDiags = map guardWarnToDiag guardWarns
   let shadowDiags = map (preludeShadowWarnToDiag modName) shadowWarns
@@ -755,7 +782,12 @@ autoPrintObligationDiags : List Decl -> List Decl -> List Decl -> List Diag
 autoPrintObligationDiags runtimeP coreP desugared =
   let modules = [("__main__", desugared)]
   if shouldAutoPrintMain coreP modules then
-    map diagOfTypeError (underivedMainDiags runtimeP (autoPrintPinCore coreP) (autoPrintWrapModules modules))
+    map
+      diagOfTypeError
+      (underivedMainDiags
+        runtimeP
+        (autoPrintPinCore coreP)
+        (autoPrintWrapModules modules))
   else
     []
 
@@ -811,11 +843,11 @@ guardWarnToDiag (msg, loc) =
 -- fact that rots the moment prelude aliasing lands; the negative list lives in
 -- docs/spec/SHADOW-SEMANTICS.md.
 preludeShadowWarnToDiag : String -> (String, String, Option Loc) -> Diag
-preludeShadowWarnToDiag modName (_, mname, loc) = Diag
-  SevWarning
-  "W-PRELUDE-METHOD-SHADOW"
-  (stringConcat
-    [
+preludeShadowWarnToDiag modName (_, mname, loc) =
+  Diag
+    SevWarning
+    "W-PRELUDE-METHOD-SHADOW"
+    (stringConcat [
       "interface method '",
       mname,
       "' shadows the prelude function '",
@@ -823,15 +855,14 @@ preludeShadowWarnToDiag modName (_, mname, loc) = Diag
       "', which is no longer reachable by its bare name anywhere in ",
       moduleScopeText modName,
     ])
-  loc
-  (Some (stringConcat
-    [
-      "rename the interface method, or call the prelude's '",
-      mname,
-      "' from a module that does not declare this interface and re-export it",
-      " under another name",
-    ]))
-  None
+    loc
+    (Some
+      (stringConcat [
+        "rename the interface method, or call the prelude's '", mname,
+        "' from a module that does not declare this interface and re-export it",
+        " under another name"
+      ]))
+    None
 
 -- "module 'main'" when the caller knows the module id; "this module" when it
 -- does not (an inline source, the LSP live buffer) — never "module ''".
@@ -892,20 +923,26 @@ analyzeToLines runtimeSrc coreSrc progSrc =
 -- Look a file's bucket up in the assoc list (None = not seeded yet).
 lookupBucket : String -> List (String, List Diag) -> Option (List Diag)
 lookupBucket _ [] = None
-lookupBucket f ((k, v)::rest)
+lookupBucket f ((k, v) :: rest)
   | k == f = Some v
   | otherwise = lookupBucket f rest
 
 -- Replace (or insert) a file's bucket.  Preserves order: an existing key keeps
 -- its position; a new key is appended at the end (so files appear in load order).
-putBucket : String -> List Diag -> List (String, List Diag) -> List (String, List Diag)
+putBucket : String ->
+  List Diag ->
+  List (String, List Diag) ->
+  List (String, List Diag)
 putBucket f v [] = [(f, v)]
-putBucket f v ((k, old)::rest)
-  | k == f = (f, v)::rest
+putBucket f v ((k, old) :: rest)
+  | k == f = (f, v) :: rest
   | otherwise = (k, old) :: putBucket f v rest
 
 -- Append one diagnostic to a file's bucket (seeding the bucket if absent).
-pushDiag : String -> Diag -> List (String, List Diag) -> List (String, List Diag)
+pushDiag : String ->
+  Diag ->
+  List (String, List Diag) ->
+  List (String, List Diag)
 pushDiag f d buckets = match lookupBucket f buckets
   None => putBucket f [d] buckets
   Some ds => putBucket f (ds ++ [d]) buckets
@@ -922,7 +959,10 @@ seedBucket f buckets = match lookupBucket f buckets
 -- EVERY diag (each `++` O(len existing so far)) — O(n^2) over an n-diag
 -- batch. One bulk `existing ++ ds` is a single O(len existing) traversal,
 -- same resulting order (existing diags, then the batch, in original order).
-pushDiags : String -> List Diag -> List (String, List Diag) -> List (String, List Diag)
+pushDiags : String ->
+  List Diag ->
+  List (String, List Diag) ->
+  List (String, List Diag)
 pushDiags _ [] buckets = buckets
 pushDiags f ds buckets = match lookupBucket f buckets
   None => putBucket f ds buckets
@@ -942,14 +982,18 @@ cachePut f v xs = (f, v) :: cacheRemove f xs
 
 cacheRemove : String -> List (String, String) -> List (String, String)
 cacheRemove _ [] = []
-cacheRemove f ((k, v)::rest)
+cacheRemove f ((k, v) :: rest)
   | k == f = cacheRemove f rest
   | otherwise = (k, v) :: cacheRemove f rest
 
 -- The wrapped read callback.  `cacheRef` persists last-good sources across
 -- analyses (threaded by the caller); `staleRef` collects this round's parse
 -- errors (file → Diag) to append after the graph analysis.
-wrappedRead : Ref (List (String, String)) -> Ref (List (String, Diag)) -> (String -> Option String) -> String -> Option String
+wrappedRead : Ref (List (String, String)) ->
+  Ref (List (String, Diag)) ->
+  (String -> Option String) ->
+  String ->
+  Option String
 wrappedRead cacheRef staleRef read path = match read path
   None => None
   Some src => match parseResult src
@@ -1020,13 +1064,23 @@ preludeDesugared src = desugaredPrelude src
 -- silently accepted an internal-extern violation a multi-module project's
 -- human `check` correctly rejected via the guarded path.
 export
-analyzeProject : Bool -> List String -> Ref (List (String, String)) -> Ref (List (String, List Decl)) -> (String -> Option String) -> String -> List String -> String -> String -> <IO> List (String, List Diag)
+analyzeProject : Bool ->
+  List String ->
+  Ref (List (String, String)) ->
+  Ref (List (String, List Decl)) ->
+  (String -> Option String) ->
+  String ->
+  List String ->
+  String ->
+  String ->
+  <IO> List (String, List Diag)
 analyzeProject allowInternal trustedMods cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
   let staleRef = newStale ()
   let wread = p => wrappedRead cacheRef staleRef read p
   let runtimeP = preludeDesugared runtimeSrc
   let coreP = preludeDesugared coreSrc
-  let preludeKey = Some (desugaredPreludeKey runtimeSrc, desugaredPreludeKey coreSrc)
+  let preludeKey =
+    Some (desugaredPreludeKey runtimeSrc, desugaredPreludeKey coreSrc)
   match loadProgramFilesLocatedCachedE parseCacheRef wread entry roots
     -- #100: a parse/lex error in a dependency is attributed to THAT module's file
     -- with its own located `P-*`/`L-*` diag — this is the LSP's most common input
@@ -1038,8 +1092,16 @@ analyzeProject allowInternal trustedMods cacheRef parseCacheRef read entry roots
       appendStale staleRef [(entry, [mkDiag SevError "R-MODULE-LOAD" e None])]
     Ok mods =>
       let seeded = seedAll (map midPath mods) []
-      let afterRes = resolvePass allowInternal trustedMods runtimeP coreP omEmpty mods seeded
-      let afterTc = typecheckPass runtimeP coreP preludeKey (chainKeyOf entry roots) mods afterRes
+      let afterRes =
+        resolvePass allowInternal trustedMods runtimeP coreP omEmpty mods seeded
+      let afterTc =
+        typecheckPass
+          runtimeP
+          coreP
+          preludeKey
+          (chainKeyOf entry roots)
+          mods
+          afterRes
       appendStale staleRef afterTc
 -- A load error (cycle / unknown module / unreadable file) is attributed to the
 -- entry file (the compiler loader returns a single Err string without a per-file
@@ -1054,7 +1116,14 @@ analyzeProject allowInternal trustedMods cacheRef parseCacheRef read entry roots
 -- + imported names) are available to the hover lookup fallback chain.  None on a
 -- load error (a buffer with an unresolved import) — hover then degrades to null.
 export
-projectEntrySchemes : Ref (List (String, String)) -> Ref (List (String, List Decl)) -> (String -> Option String) -> String -> List String -> String -> String -> <IO> Option (List (String, Scheme))
+projectEntrySchemes : Ref (List (String, String)) ->
+  Ref (List (String, List Decl)) ->
+  (String -> Option String) ->
+  String ->
+  List String ->
+  String ->
+  String ->
+  <IO> Option (List (String, Scheme))
 projectEntrySchemes cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
   let staleRef = newStale ()
   let wread = p => wrappedRead cacheRef staleRef read p
@@ -1062,7 +1131,10 @@ projectEntrySchemes cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
   let coreP = preludeDesugared coreSrc
   match loadProgramFilesLocatedCached parseCacheRef wread entry roots
     Err _ => None
-    Ok mods => Some (entryOwnSchemes (checkModules runtimeP coreP (map midToDesugaredPair mods)))
+    Ok mods =>
+      Some
+        (entryOwnSchemes
+          (checkModules runtimeP coreP (map midToDesugaredPair mods)))
 
 -- resolve per module (threading exports), bucketing by file.
 
@@ -1080,16 +1152,20 @@ midPath (_, p, _) = p
 
 seedAll : List String -> List (String, List Diag) -> List (String, List Diag)
 seedAll [] buckets = buckets
-seedAll (f::fs) buckets = seedAll fs (seedBucket f buckets)
+seedAll (f :: fs) buckets = seedAll fs (seedBucket f buckets)
 
 -- Append the collected stale parse-error diagnostics into their files' buckets
 -- (seeding the bucket first so the file appears even if it produced nothing else).
-appendStale : Ref (List (String, Diag)) -> List (String, List Diag) -> List (String, List Diag)
+appendStale : Ref (List (String, Diag)) ->
+  List (String, List Diag) ->
+  List (String, List Diag)
 appendStale staleRef buckets = foldStale !staleRef buckets
 
-foldStale : List (String, Diag) -> List (String, List Diag) -> List (String, List Diag)
+foldStale : List (String, Diag) ->
+  List (String, List Diag) ->
+  List (String, List Diag)
 foldStale [] buckets = buckets
-foldStale ((path, d)::rest) buckets =
+foldStale ((path, d) :: rest) buckets =
   foldStale rest (pushDiag path d (seedBucket path buckets))
 
 -- ── resolve pass (per module, threading exports) ────────────────────────────
@@ -1105,11 +1181,25 @@ foldStale ((path, d)::rest) buckets =
 -- so each module's imports resolve via an O(log n) `findExports` lookup instead of a
 -- linear scan of a growing `List ModuleExports`.  Threaded byte-identically:
 -- `omInsert exp.modId exp known` replaces the `exp :: known` prepend.
-resolvePass : Bool -> List String -> List Decl -> List Decl -> OrdMap ModuleExports -> List (String, String, List Decl) -> List (String, List Diag) -> List (String, List Diag)
+resolvePass : Bool ->
+  List String ->
+  List Decl ->
+  List Decl ->
+  OrdMap ModuleExports ->
+  List (String, String, List Decl) ->
+  List (String, List Diag) ->
+  List (String, List Diag)
 resolvePass _ _ _ _ _ [] buckets = buckets
-resolvePass allowInternal trustedMods rt core known ((mid, path, prog)::rest) buckets =
+resolvePass allowInternal trustedMods rt core known ((mid, path, prog) :: rest) buckets =
   let desugared = desugar prog
-  let (exp, errs) = resolveModuleG (internalGuardFor (allowInternal || contains mid trustedMods)) rt core known mid desugared
+  let (exp, errs) =
+    resolveModuleG
+      (internalGuardFor (allowInternal || contains mid trustedMods))
+      rt
+      core
+      known
+      mid
+      desugared
   let diags = map diagOfResError errs
   resolvePass
     allowInternal
@@ -1130,12 +1220,25 @@ resolvePass allowInternal trustedMods rt core known ((mid, path, prog)::rest) bu
 -- Guard-exhaustiveness warnings still come from the RAW (pre-desugar) module decls
 -- (checkGuardExhaustiveness needs the surface `EGuards` shape, gone after desugar),
 -- bucketed per file alongside the module's type diagnostics.
-typecheckPass : List Decl -> List Decl -> Option (Int, Int) -> String -> List (String, String, List Decl) -> List (String, List Diag) -> List (String, List Diag)
+typecheckPass : List Decl ->
+  List Decl ->
+  Option (Int, Int) ->
+  String ->
+  List (String, String, List Decl) ->
+  List (String, List Diag) ->
+  List (String, List Diag)
 typecheckPass runtimeP coreP preludeKey chainKey mods buckets =
   let modPairs = map midToDesugaredPair mods
   -- the module-chain memo (types/typecheck.mdk): an unchanged import prefix is
   -- resumed from its snapshot, so only the modules after it are re-checked.
-  let tcByMid = checkModulesDiagsChain preludeKey chainKey (map moduleStepKey mods) runtimeP coreP modPairs
+  let tcByMid =
+    checkModulesDiagsChain
+      preludeKey
+      chainKey
+      (map moduleStepKey mods)
+      runtimeP
+      coreP
+      modPairs
   -- Oracle superset = prelude + EVERY loaded module's decls, so a multi-clause
   -- function over an imported ADT isn't false-flagged as non-exhaustive.
   let oracleDecls = runtimeP ++ coreP ++ flatMap rawDeclsOfMod mods
@@ -1157,7 +1260,7 @@ midToDesugaredPair (mid, path, prog) = (mid, desugarModule path prog)
 -- The chain-level memo key: the entry and its roots fix how the loader resolves
 -- and rewrites every module in the graph.
 chainKeyOf : String -> List String -> String
-chainKeyOf entry roots = joinNl (entry::roots)
+chainKeyOf entry roots = joinNl (entry :: roots)
 
 -- One step key per module: id + path + the EXACT source the loader parsed for
 -- that path (`loadedSourceOf`); None when the loader has no record, which
@@ -1177,7 +1280,10 @@ desugarModule path prog = match loadedSourceOf path
     Some decls => decls
     None =>
       let decls = desugar prog
-      moduleDesugarCacheRef := takeFirstN moduleDesugarCacheLimit ((src, decls) :: dropAssoc src !moduleDesugarCacheRef)
+      moduleDesugarCacheRef :=
+        takeFirstN
+          moduleDesugarCacheLimit
+          ((src, decls) :: dropAssoc src !moduleDesugarCacheRef)
       decls
 
 moduleDesugarCacheLimit : Int
@@ -1201,11 +1307,8 @@ diagCode : Diag -> String
 diagCode (Diag _ code _ _ _ _) = code
 
 locEq : Loc -> Loc -> Bool
-locEq (Loc f1 sl1 sc1 el1 ec1) (Loc f2 sl2 sc2 el2 ec2) = f1 == f2
-  && sl1 == sl2
-  && sc1 == sc2
-  && el1 == el2
-  && ec1 == ec2
+locEq (Loc f1 sl1 sc1 el1 ec1) (Loc f2 sl2 sc2 el2 ec2) =
+  f1 == f2 && sl1 == sl2 && sc1 == sc2 && el1 == el2 && ec1 == ec2
 
 -- True when `d` is a T-UNBOUND diagnostic whose Loc exactly matches an
 -- R-UNBOUND diagnostic already sitting in this file's bucket (i.e. resolve
@@ -1215,9 +1318,14 @@ isRedundantUnbound existing d
   | diagCode d /= "T-UNBOUND" = False
   | otherwise = match diagLoc d
     None => False
-    Some dl => anyList (e => diagCode e == "R-UNBOUND" && (match diagLoc e
-      Some el => locEq dl el
-      None => False)) existing
+    Some dl =>
+      anyList
+        (e =>
+          diagCode e == "R-UNBOUND"
+            && (match diagLoc e
+              Some el => locEq dl el
+              None => False))
+        existing
 
 -- For each (mid, path, rawProg): look up its harvested (errs, warns) by mid, wrap
 -- them as Diags (preserving each type error's Option Loc), fold in this module's
@@ -1227,18 +1335,27 @@ isRedundantUnbound existing d
 -- once by `typecheckPass`'s `modPairs`) instead of re-desugaring or reading raw.
 lookupDesugaredMod : String -> List (String, List Decl) -> List Decl
 lookupDesugaredMod _ [] = []
-lookupDesugaredMod mid ((m, d)::rest)
+lookupDesugaredMod mid ((m, d) :: rest)
   | m == mid = d
   | otherwise = lookupDesugaredMod mid rest
 
-foldModuleTc : OrdMap Unit -> List Decl -> List (String, List Decl) -> List (String, String, List Decl) -> List (String, (List TcDiag, List TcDiag)) -> List (String, List Diag) -> List (String, List Diag)
+foldModuleTc : OrdMap Unit ->
+  List Decl ->
+  List (String, List Decl) ->
+  List (String, String, List Decl) ->
+  List (String, (List TcDiag, List TcDiag)) ->
+  List (String, List Diag) ->
+  List (String, List Diag)
 foldModuleTc _ _ _ [] _ buckets = buckets
-foldModuleTc shadowPool oracleDecls modPairs ((mid, path, prog)::rest) tcByMid buckets =
+foldModuleTc shadowPool oracleDecls modPairs ((mid, path, prog) :: rest) tcByMid buckets =
   let (tcErrs, tcWarns) = lookupTcDiags mid tcByMid
   let existing = match lookupBucket path buckets
     Some ds => ds
     None => []
-  let errDiags = filterList (d => not (isRedundantUnbound existing d)) (map diagOfTypeError tcErrs)
+  let errDiags =
+    filterList
+      (d => not (isRedundantUnbound existing d))
+      (map diagOfTypeError tcErrs)
   let warnDiags = map diagOfTypeWarning tcWarns
   let guardWarns = checkGuardExhaustivenessWith oracleDecls prog
   let guardDiags = map guardWarnToDiag guardWarns
@@ -1249,15 +1366,24 @@ foldModuleTc shadowPool oracleDecls modPairs ((mid, path, prog)::rest) tcByMid b
   -- Reads the DESUGARED decls (already computed once in `modPairs` by
   -- `typecheckPass`), not raw — see the FLAT-half comment in `analyzeFrom`
   -- for why a defaulted `IfaceMethod` double-fires over the raw tree (F2).
-  let shadowDiags = map
-    (preludeShadowWarnToDiag mid)
-    (preludeStandaloneShadowsWith shadowPool (lookupDesugaredMod mid modPairs))
-  let buckets2 = pushDiags path (deriveDiags ++ guardDiags ++ shadowDiags ++ errDiags ++ warnDiags) buckets
+  let shadowDiags =
+    map
+      (preludeShadowWarnToDiag mid)
+      (preludeStandaloneShadowsWith
+        shadowPool
+        (lookupDesugaredMod mid modPairs))
+  let buckets2 =
+    pushDiags
+      path
+      (deriveDiags ++ guardDiags ++ shadowDiags ++ errDiags ++ warnDiags)
+      buckets
   foldModuleTc shadowPool oracleDecls modPairs rest tcByMid buckets2
 
-lookupTcDiags : String -> List (String, (List TcDiag, List TcDiag)) -> (List TcDiag, List TcDiag)
+lookupTcDiags : String ->
+  List (String, (List TcDiag, List TcDiag)) ->
+  (List TcDiag, List TcDiag)
 lookupTcDiags _ [] = ([], [])
-lookupTcDiags mid ((m, d)::rest)
+lookupTcDiags mid ((m, d) :: rest)
   | m == mid = d
   | otherwise = lookupTcDiags mid rest
 
@@ -1271,23 +1397,31 @@ lookupTcDiags mid ((m, d)::rest)
 -- unguarded (`allowInternal = True`, `trustedMods = []`) to preserve its prior
 -- byte-identical behavior; it is not exercising the internal-extern boundary.
 export
-analyzeProjectToLines : Ref (List (String, String)) -> (String -> Option String) -> String -> List String -> String -> String -> <IO> String
+analyzeProjectToLines : Ref (List (String, String)) ->
+  (String -> Option String) ->
+  String ->
+  List String ->
+  String ->
+  String ->
+  <IO> String
 analyzeProjectToLines cacheRef read entry roots runtimeSrc coreSrc =
   let parseCacheRef = Ref []
-  joinNl (projectLines (analyzeProject
-    True
-    []
-    cacheRef
-    parseCacheRef
-    read
-    entry
-    roots
-    runtimeSrc
-    coreSrc))
+  joinNl
+    (projectLines
+      (analyzeProject
+        True
+        []
+        cacheRef
+        parseCacheRef
+        read
+        entry
+        roots
+        runtimeSrc
+        coreSrc))
 
 projectLines : List (String, List Diag) -> List String
 projectLines [] = []
-projectLines ((file, ds)::rest) =
+projectLines ((file, ds) :: rest) =
   "## FILE " ++ file :: map ppDiagLoc ds ++ projectLines rest
 
 -- Render a diagnostic for the project gate WITH its start position, so the diff
@@ -1362,25 +1496,35 @@ optField _ None = []
 -- the range covering exactly the span to overwrite (mirrors the LSP text edit).
 export
 cjFixJson : Fix -> Json
-cjFixJson (Fix (Loc _ sl sc el ec) repl) = jObject
-  [("range", cjRange (sl - 1) sc (el - 1) ec), ("replacement", JString repl)]
+cjFixJson (Fix (Loc _ sl sc el ec) repl) = jObject [
+  ("range", cjRange (sl - 1) sc (el - 1) ec),
+  ("replacement", JString repl),
+]
 
 export
 cjDiagnostic : String -> String -> Diag -> Json
 cjDiagnostic _ src (Diag sev code msg loc help fix) =
   jObject
-    ([("code", JString code)] ++ optField "fix" (map cjFixJson fix) ++ optField "help" (map JString help) ++ [("kind", JString (diagKind sev code)), ("message", JString msg), ("range", cjRangeOfLoc src loc), ("severity", JInt (cjSevCode sev)), ("source", JString "medaka")])
+    ([("code", JString code)]
+      ++ optField "fix" (map cjFixJson fix)
+      ++ optField "help" (map JString help)
+      ++ [
+        ("kind", JString (diagKind sev code)),
+        ("message", JString msg),
+        ("range", cjRangeOfLoc src loc),
+        ("severity", JInt (cjSevCode sev)),
+        ("source", JString "medaka"),
+      ])
 
 -- Build the per-file entry: { "file": path, "diagnostics": [...] }.
 -- `src` is the file's source text (for whole-doc range fallback).
 -- `diags` is the List Diag from analyzeProject.
 export
 cjFileEntry : String -> String -> List Diag -> Json
-cjFileEntry path src diags = jObject
-  [
-    ("file", JString path),
-    ("diagnostics", JArray (arrayFromList (map (cjDiagnostic path src) diags))),
-  ]
+cjFileEntry path src diags = jObject [
+  ("file", JString path),
+  ("diagnostics", JArray (arrayFromList (map (cjDiagnostic path src) diags))),
+]
 
 cjTriple : (String, String, List Diag) -> Json
 cjTriple (path, src, diags) = cjFileEntry path src diags
@@ -1404,10 +1548,13 @@ cjAllToJson triples = cjAllToJsonWith [] triples
 -- (compiler/tools/mcp.mdk), which already splices a `staleBinary` field onto an
 -- MCP tool result rather than inventing a second channel.
 export
-cjAllToJsonWith : List (String, Json) -> List (String, String, List Diag) -> String
+cjAllToJsonWith : List (String, Json) ->
+  List (String, String, List Diag) ->
+  String
 cjAllToJsonWith extra triples =
-  stringify (jObject
-    ([("files", JArray (arrayFromList (map cjTriple triples)))] ++ extra))
+  stringify
+    (jObject
+      ([("files", JArray (arrayFromList (map cjTriple triples)))] ++ extra))
 
 -- ── run --json envelope notices ─────────────────────────────────────────────
 -- Staged here rather than in eval.mdk (which owns `pendingRunDiags`) because
@@ -1476,7 +1623,9 @@ relDiagPath root path =
   else
     path
 
-relDiagTriple : String -> (String, String, List Diag) -> (String, String, List Diag)
+relDiagTriple : String ->
+  (String, String, List Diag) ->
+  (String, String, List Diag)
 relDiagTriple root (path, src, diags) = (relDiagPath root path, src, diags)
 
 -- Fold [warns] into the ONE (path, src, diags) triple whose path matches
@@ -1485,11 +1634,14 @@ relDiagTriple root (path, src, diags) = (relDiagPath root path, src, diags)
 -- array instead of manufacturing a second, duplicate `{"file": ...}` entry for
 -- the same path.  A no-match ([] warns, or a path `analyzeProject` never
 -- bucketed) leaves the list untouched.
-mergeMainWarns : String -> List Diag -> List (String, String, List Diag) -> List (String, String, List Diag)
+mergeMainWarns : String ->
+  List Diag ->
+  List (String, String, List Diag) ->
+  List (String, String, List Diag)
 mergeMainWarns _ [] triples = triples
 mergeMainWarns _ _ [] = []
-mergeMainWarns path warns ((p, s, ds)::rest)
-  | p == path = (p, s, ds ++ warns)::rest
+mergeMainWarns path warns ((p, s, ds) :: rest)
+  | p == path = (p, s, ds ++ warns) :: rest
   | otherwise = (p, s, ds) :: mergeMainWarns path warns rest
 
 -- ── main-shape beginner-footgun warning (0.1.0 audit #3; #1236) ─────────────
@@ -1525,9 +1677,9 @@ mergeMainWarns path warns ((p, s, ds)::rest)
 export
 findMainFunDef : List Decl -> Option (List Pat, Expr)
 findMainFunDef [] = None
-findMainFunDef ((DAttrib _ d)::rest) = findMainFunDef (d::rest)
-findMainFunDef ((DFunDef _ "main" ps body)::_) = Some (ps, body)
-findMainFunDef (_::rest) = findMainFunDef rest
+findMainFunDef ((DAttrib _ d) :: rest) = findMainFunDef (d :: rest)
+findMainFunDef ((DFunDef _ "main" ps body) :: _) = Some (ps, body)
+findMainFunDef (_ :: rest) = findMainFunDef rest
 
 -- Best-effort location: the first ELoc span walking the outermost expr spine
 -- (mirrors frontend/desugar.mdk's private `exprLoc`, duplicated here so this
@@ -1550,11 +1702,13 @@ mainBodyLoc _ = None
 
 export
 mainArityMsg : String
-mainArityMsg = "'main' must be a value of type Unit. Write 'main = …', not 'main () = …' or 'main x = …' ('medaka run' never applies main; it forces a zero-arg main for its effects)"
+mainArityMsg =
+  "'main' must be a value of type Unit. Write 'main = …', not 'main () = …' or 'main x = …' ('medaka run' never applies main; it forces a zero-arg main for its effects)"
 
 export
 mainNonUnitMsg : String
-mainNonUnitMsg = "'main' must be a value of type Unit (e.g. an IO action). 'medaka run' only forces main for its side effects and prints nothing for a plain value; wrap the intended effect, e.g. 'main = println \"hi\"'"
+mainNonUnitMsg =
+  "'main' must be a value of type Unit (e.g. an IO action). 'medaka run' only forces main for its side effects and prints nothing for a plain value; wrap the intended effect, e.g. 'main = println \"hi\"'"
 
 -- The ARITY shape (`main () = …` / `main x = …`) needs no type info, so it's
 -- safe to call before (or without) elaborateModules — and takes precedence
@@ -1562,7 +1716,7 @@ mainNonUnitMsg = "'main' must be a value of type Unit (e.g. an IO action). 'meda
 export
 mainArityWarning : List Decl -> Option Diag
 mainArityWarning decls = match findMainFunDef decls
-  Some (_::_, body) =>
+  Some (_ :: _, body) =>
     Some (mkDiag SevWarning "W-MAIN-SHAPE" mainArityMsg (mainBodyLoc body))
   _ => None
 
@@ -1626,7 +1780,11 @@ mainNonUnitWarning decls = match findMainFunDef decls
 -- `rtD`/`coreD`/`modsD` in hand for other purposes (exhaustiveness oracle, resolve),
 -- so passing them there costs nothing.
 export
-mainShapeWarnings : List Decl -> List Decl -> List (String, List Decl) -> List Decl -> List Diag
+mainShapeWarnings : List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  List Decl ->
+  List Diag
 mainShapeWarnings _ _ _ entryDecls = match mainArityWarning entryDecls
   Some d => [d]
   None => match mainNonUnitWarning entryDecls
@@ -1673,8 +1831,22 @@ cjParseErrJson target src e =
   let pcode = parseErrCode (parseErrorMessage e)
   let ploc = Loc target (parseErrorLine e) col (parseErrorLine e) (col + 1)
   let (phelp, pfix) = parseErrHelpFix (parseErrorMessage e) ploc
-  let diagJson = jObject ([("code", JString pcode)] ++ optField "fix" (map cjFixJson pfix) ++ optField "help" (map JString phelp) ++ [("kind", JString (codeKind pcode)), ("message", JString (parseErrorMessage e)), ("range", r), ("severity", JInt 1), ("source", JString "medaka")])
-  let filesJson = jObject [("file", JString target), ("diagnostics", JArray (arrayFromList [diagJson]))]
+  let diagJson =
+    jObject
+      ([("code", JString pcode)]
+        ++ optField "fix" (map cjFixJson pfix)
+        ++ optField "help" (map JString phelp)
+        ++ [
+          ("kind", JString (codeKind pcode)),
+          ("message", JString (parseErrorMessage e)),
+          ("range", r),
+          ("severity", JInt 1),
+          ("source", JString "medaka"),
+        ])
+  let filesJson = jObject [
+    ("file", JString target),
+    ("diagnostics", JArray (arrayFromList [diagJson])),
+  ]
   stringify (jObject [("files", JArray (arrayFromList [filesJson]))])
 
 -- Single-module check → JSON.  Parse errors are detected FIRST; otherwise the
@@ -1684,23 +1856,33 @@ cjParseErrJson target src e =
 -- the value that lands in each diagnostic's `file` field (cjRangeOfLoc ignores the
 -- filename inside each Loc), so an inline check can pass a stable synthetic name.
 export
-checkJsonSingle : String -> Bool -> String -> String -> String -> String -> (String, Bool)
-checkJsonSingle modName allowInternal rsrc csrc target src = match parseResult src
-  Err e => (cjParseErrJson target src e, True)
-  Ok _ =>
-    let diags = analyzeLocatedG modName allowInternal rsrc csrc src
-    let hasErr = anyList diagIsError diags
-    -- #1236: fold the main-shape warning (`main () = …` / `main = 1 + 2`) into
-    -- the SAME envelope `check --json` already builds, instead of leaving it
-    -- entirely absent from this channel. Only on a clean program (no type
-    -- error already reported) — mirrors `checkRoute`'s human-CLI gating, and keeps
-    -- the warning from contradicting the errors already reported for an ill-typed
-    -- program.  (`mainShapeWarnings` itself is now free: it reads the `mainSchemeRef`
-    -- the `analyzeLocatedG` above already populated, rather than re-elaborating.)
-    let mainWarns = if hasErr then [] else
-      let entryRaw = parseLocated src
-      mainShapeWarnings [] [] [(target, desugar entryRaw)] entryRaw
-    (cjAllToJson [(target, src, diags ++ mainWarns)], hasErr)
+checkJsonSingle : String ->
+  Bool ->
+  String ->
+  String ->
+  String ->
+  String ->
+  (String, Bool)
+checkJsonSingle modName allowInternal rsrc csrc target src =
+  match parseResult src
+    Err e => (cjParseErrJson target src e, True)
+    Ok _ =>
+      let diags = analyzeLocatedG modName allowInternal rsrc csrc src
+      let hasErr = anyList diagIsError diags
+      -- #1236: fold the main-shape warning (`main () = …` / `main = 1 + 2`) into
+      -- the SAME envelope `check --json` already builds, instead of leaving it
+      -- entirely absent from this channel. Only on a clean program (no type
+      -- error already reported) — mirrors `checkRoute`'s human-CLI gating, and keeps
+      -- the warning from contradicting the errors already reported for an ill-typed
+      -- program.  (`mainShapeWarnings` itself is now free: it reads the `mainSchemeRef`
+      -- the `analyzeLocatedG` above already populated, rather than re-elaborating.)
+      let mainWarns =
+        if hasErr then
+          []
+        else
+          let entryRaw = parseLocated src
+          mainShapeWarnings [] [] [(target, desugar entryRaw)] entryRaw
+      (cjAllToJson [(target, src, diags ++ mainWarns)], hasErr)
 
 -- File check → JSON.  Reads `target`, then routes exactly like runCheckJsonCmd:
 -- parse error → single diag; load error (bad import) → R-MODULE-LOAD diag with the
@@ -1708,7 +1890,12 @@ checkJsonSingle modName allowInternal rsrc csrc target src = match parseResult s
 -- the owning-root trust signal); multi-module → analyzeProject.  `stdlibDir` is the
 -- <root>/stdlib dir; roots are derived from the target's directory + stdlibDir.
 export
-checkJsonFile : Bool -> String -> String -> String -> String -> <IO> (String, Bool)
+checkJsonFile : Bool ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <IO> (String, Bool)
 checkJsonFile allowInternal rsrc csrc target stdlibDir =
   let src = readFileSafe target
   let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]
@@ -1718,7 +1905,8 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
       -- #100: a parse/lex error in an IMPORTED module serializes exactly like one
       -- in the entry — same `P-*`/`L-*` code, same real range — only attributed to
       -- the MODULE's file and rendered against the module's OWN source.
-      Err (LoadParseFailed mpath msrc pe) => (cjParseErrJson mpath msrc pe, True)
+      Err (LoadParseFailed mpath msrc pe) =>
+        (cjParseErrJson mpath msrc pe, True)
       Err (LoadMsg lmsg) =>
         let mloc = match unknownModuleIdOf lmsg
           None => None
@@ -1728,11 +1916,15 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
           Some _ => match availableModulesText stdlibDir
             "" => None
             txt => Some txt
-        let jmsg = lmsg ++ (match unknownModuleIdOf lmsg
-          None => ""
-          Some _ => availableModulesHint stdlibDir)
+        let jmsg =
+          lmsg
+            ++ (match unknownModuleIdOf lmsg
+              None => ""
+              Some _ => availableModulesHint stdlibDir)
         (
-          cjAllToJson [(target, src, [Diag SevError "R-MODULE-LOAD" jmsg mloc mhelp None])],
+          cjAllToJson [
+            (target, src, [Diag SevError "R-MODULE-LOAD" jmsg mloc mhelp None]),
+          ],
           True,
         )
       Ok mods => match mods
@@ -1741,7 +1933,8 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
           -- #2072: the FFI-stamp discriminator (stdlib-root ownership, NO
           -- `allow-internal` opt-out) — see `stdlibOwnedMods` in loader.mdk for
           -- why it is not `trusted` above.
-          let (flatStdlib, ownedStdlib) = stdlibOwnership target roots stdlibDir mods
+          let (flatStdlib, ownedStdlib) =
+            stdlibOwnership target roots stdlibDir mods
           let _ = setStdlibOwnership flatStdlib ownedStdlib
           checkJsonSingle
             mid
@@ -1758,11 +1951,22 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
           -- empty (silent accept). Same trust computation, hoisted one level.
           let trusted = projectTrustedMods target roots stdlibDir mods
           -- #2072: same discriminator as the single-module arm above.
-          let (flatStdlib, ownedStdlib) = stdlibOwnership target roots stdlibDir mods
+          let (flatStdlib, ownedStdlib) =
+            stdlibOwnership target roots stdlibDir mods
           let _ = setStdlibOwnership flatStdlib ownedStdlib
           let cacheRef = Ref []
           let parseCacheRef = Ref []
-          let results = analyzeProject allowInternal trusted cacheRef parseCacheRef (_ => None) target roots rsrc csrc
+          let results =
+            analyzeProject
+              allowInternal
+              trusted
+              cacheRef
+              parseCacheRef
+              (_ => None)
+              target
+              roots
+              rsrc
+              csrc
           let hasErr = anyList cjHasErrD results
           -- #1236: same main-shape fold as the single-module arm above, only on
           -- a clean project.  `analyzeProject` already parsed+cached the entry
@@ -1770,21 +1974,25 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
           -- `parseCachedLocated`) — reuse that instead of re-parsing, so the
           -- `Loc` this warning carries matches the one every other diagnostic on
           -- this file would.
-          let mainWarns = if hasErr then [] else
-            let entryRaw = match lookupAssoc src !parseCacheRef
-              Some decls => decls
-              None => parseLocated src
-            -- #2246/S-1 (F-converge): `mainShapeWarnings` ignores its first THREE
-            -- parameters unconditionally (see its definition above), so the
-            -- whole-graph desugar this used to compute was dead work on every
-            -- clean multi-module `check --json`.  Pass `[]`, matching the
-            -- single-module arm's `[] [] []`.
-            mainShapeWarnings [] [] [] entryRaw
+          let mainWarns =
+            if hasErr then
+              []
+            else
+              let entryRaw = match lookupAssoc src !parseCacheRef
+                Some decls => decls
+                None => parseLocated src
+              -- #2246/S-1 (F-converge): `mainShapeWarnings` ignores its first THREE
+              -- parameters unconditionally (see its definition above), so the
+              -- whole-graph desugar this used to compute was dead work on every
+              -- clean multi-module `check --json`.  Pass `[]`, matching the
+              -- single-module arm's `[] [] []`.
+              mainShapeWarnings [] [] [] entryRaw
           let triples = map readDiagSrc results
           let root = dirOf stdlibDir
           let relTriples = map (relDiagTriple root) triples
           (
-            cjAllToJson (mergeMainWarns (relDiagPath root target) mainWarns relTriples),
+            cjAllToJson
+              (mergeMainWarns (relDiagPath root target) mainWarns relTriples),
             hasErr,
           )
 # DESUGAR

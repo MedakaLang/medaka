@@ -29,11 +29,18 @@ import io.{readLines}
 
 -- ── Record parsing ───────────────────────────────────────────────────
 
-data Record =
-  | Record { lenBits : Int, msgHex : String, mdHex : String, repeatN : Int }
+data Record = Record {
+  lenBits : Int,
+  msgHex : String,
+  mdHex : String,
+  repeatN : Int,
+}
 
-data ParseAcc =
-  | ParseAcc { lenBits : Option Int, msgHex : Option String, repeatN : Int }
+data ParseAcc = ParseAcc {
+  lenBits : Option Int,
+  msgHex : Option String,
+  repeatN : Int,
+}
 
 initAcc : ParseAcc
 initAcc = ParseAcc { lenBits = None, msgHex = None, repeatN = 1 }
@@ -42,12 +49,13 @@ initAcc = ParseAcc { lenBits = None, msgHex = None, repeatN = 1 }
 -- (comments, `[L = 32]` still splits — its key "[L" matches nothing below,
 -- so it is ignored the same as a true comment).
 splitKV : String -> Option (String, String)
-splitKV line = map
-  (i => (
-    trim (stringSlice 0 i line),
-    trim (stringSlice (i + 1) (stringLength line) line),
-  ))
-  (stringIndexOf "=" line)
+splitKV line =
+  map
+    (i => (
+      trim (stringSlice 0 i line),
+      trim (stringSlice (i + 1) (stringLength line) line),
+    ))
+    (stringIndexOf "=" line)
 
 -- Fold one line into the in-progress record accumulator. Returns the
 -- (possibly updated) accumulator and, when the line completed a record
@@ -55,33 +63,34 @@ splitKV line = map
 applyLine : String -> ParseAcc -> (ParseAcc, Option Record)
 applyLine line acc = match splitKV line
   None => (acc, None)
-  Some (key, value) => if key == "Len" then (ParseAcc { acc | lenBits = toInt value }, None)
-  else
-    if key == "Msg" then (ParseAcc { acc | msgHex = Some (toLower value) }, None)
+  Some (key, value) =>
+    if key == "Len" then
+      (ParseAcc { acc | lenBits = toInt value }, None)
+    else if key == "Msg" then
+      (ParseAcc { acc | msgHex = Some (toLower value) }, None)
+    else if key == "Repeat" then match toInt value
+      Some n => (ParseAcc { acc | repeatN = n }, None)
+      None => (acc, None)
+    else if key == "MD" then match (acc.lenBits, acc.msgHex)
+      (Some lb, Some mh) => (
+        initAcc,
+        Some Record {
+          lenBits = lb,
+          msgHex = mh,
+          mdHex = toLower value,
+          repeatN = acc.repeatN,
+        },
+      )
+      _ => panic "sha256_vector_driver: MD line with no preceding Len/Msg"
     else
-      if key == "Repeat" then match toInt value
-        Some n => (ParseAcc { acc | repeatN = n }, None)
-        None => (acc, None)
-      else
-        if key == "MD" then match (acc.lenBits, acc.msgHex)
-          (Some lb, Some mh) => (
-            initAcc,
-            Some Record {
-              lenBits = lb,
-              msgHex = mh,
-              mdHex = toLower value,
-              repeatN = acc.repeatN,
-            },
-          )
-          _ => panic "sha256_vector_driver: MD line with no preceding Len/Msg"
-        else (acc, None)
+      (acc, None)
 
 parseRecords : List String -> List Record
 parseRecords lines = goParse lines initAcc
 
 goParse : List String -> ParseAcc -> List Record
 goParse [] _ = []
-goParse (line::rest) acc =
+goParse (line :: rest) acc =
   let (acc', maybeRec) = applyLine line acc
   match maybeRec
     None => goParse rest acc'
@@ -108,7 +117,8 @@ expandMsg lenBits msgHex repeatN =
     Err e => panic "sha256_vector_driver: bad hex in Msg: \{e}"
   let oneRep = take lenBytes decoded
   let n = if repeatN <= 0 then 1 else repeatN
-  if n <= 1 then oneRep
+  if n <= 1 then
+    oneRep
   else
     let out = make (lenBytes * n) 0
     fillRepeats out oneRep lenBytes n 0
@@ -116,7 +126,8 @@ expandMsg lenBits msgHex repeatN =
 
 fillRepeats : Array Int -> Array Int -> Int -> Int -> Int -> Unit
 fillRepeats out oneRep lenBytes n i =
-  if i >= n then ()
+  if i >= n then
+    ()
   else
     blit oneRep 0 out (i * lenBytes) lenBytes
     fillRepeats out oneRep lenBytes n (i + 1)
@@ -129,23 +140,25 @@ fullByteLength r = r.lenBits / 8 * (if r.repeatN <= 0 then 1 else r.repeatN)
 -- checked, failed, skipped — (-1) `maxBytes` means unlimited.
 checkRecords : String -> Int -> List Record -> <IO> (Int, Int, Int)
 checkRecords path maxBytes [] = (0, 0, 0)
-checkRecords path maxBytes (r::rest) =
+checkRecords path maxBytes (r :: rest) =
   if maxBytes >= 0 && fullByteLength r > maxBytes then
     let (c, f, s) = checkRecords path maxBytes rest
     (c, f, s + 1)
   else
     let actual = encode (sha256 (expandMsg r.lenBits r.msgHex r.repeatN))
     let (c, f, s) = checkRecords path maxBytes rest
-    if actual == r.mdHex then (c + 1, f, s)
+    if actual == r.mdHex then
+      (c + 1, f, s)
     else
       println
         "MISMATCH \{path} Len=\{r.lenBits} Repeat=\{r.repeatN} expected=\{r.mdHex} actual=\{actual}"
       (c + 1, f + 1, s)
 
 runFile : String -> Int -> <IO, FileRead "_"> Result String (Int, Int, Int)
-runFile path maxBytes = map
-  (lines => checkRecords path maxBytes (parseRecords lines))
-  (readLines path)
+runFile path maxBytes =
+  map
+    (lines => checkRecords path maxBytes (parseRecords lines))
+    (readLines path)
 
 printFileSummary : String -> Int -> Int -> Int -> <IO> Unit
 printFileSummary path checked failed skipped =
@@ -155,25 +168,23 @@ printFileSummary path checked failed skipped =
 
 runAll : List String -> Int -> Int -> Int -> Int -> <IO, FileRead "_"> Unit
 runAll [] maxBytes totalChecked totalFailed totalSkipped =
-  if totalFailed > 0 || totalChecked == 0 then
-    exit 1
-  else
-    exit 0
-runAll (f::rest) maxBytes totalChecked totalFailed totalSkipped = match runFile f maxBytes
-  Err e =>
-    println "ERROR reading \{f}: \{e}"
-    exit 1
-  Ok (c, fl, s) =>
-    printFileSummary f c fl s
-    runAll
-      rest
-      maxBytes
-      (totalChecked + c)
-      (totalFailed + fl)
-      (totalSkipped + s)
+  if totalFailed > 0 || totalChecked == 0 then exit 1 else exit 0
+runAll (f :: rest) maxBytes totalChecked totalFailed totalSkipped =
+  match runFile f maxBytes
+    Err e =>
+      println "ERROR reading \{f}: \{e}"
+      exit 1
+    Ok (c, fl, s) =>
+      printFileSummary f c fl s
+      runAll
+        rest
+        maxBytes
+        (totalChecked + c)
+        (totalFailed + fl)
+        (totalSkipped + s)
 
 parseArgs : List String -> (Int, List String)
-parseArgs ("--max-bytes"::nStr::rest) = match toInt nStr
+parseArgs ("--max-bytes" :: nStr :: rest) = match toInt nStr
   Some n => (n, rest)
   None => panic "sha256_vector_driver: --max-bytes needs an integer argument"
 parseArgs files = (-1, files)
@@ -182,6 +193,9 @@ main : <IO, Env, FileRead "_"> Unit
 main =
   let (maxBytes, files) = parseArgs (args ())
   if files == [] then
-    let _ = println "usage: sha256_vector_driver [--max-bytes N] <vector-file> [<vector-file> ...]"
+    let _ =
+      println
+        "usage: sha256_vector_driver [--max-bytes N] <vector-file> [<vector-file> ...]"
     exit 2
-  else runAll files maxBytes 0 0 0
+  else
+    runAll files maxBytes 0 0 0

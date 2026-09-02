@@ -69,7 +69,7 @@ showUO (UO { uid = i, uname = n, oid = o, oUser = u, amount = a }) =
 
 printUO : List UO -> <IO> Unit
 printUO [] = ()
-printUO (r::rest) = let _ = println (showUO r) in printUO rest
+printUO (r :: rest) = let _ = println (showUO r) in printUO rest
 
 runUO : Db -> String -> Select -> <IO> Unit
 -- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
@@ -82,8 +82,30 @@ runUO db label sel =
 
 runAll : Db -> <IO> Unit
 runAll db =
-  let _ = runUO db "-- join users/orders order oid --" (withOrderBy "orders.oid" True (innerJoin "orders" (eEq (eColInt "users.id") (eColInt "orders.uid")) (selectFrom "users")))
-  let _ = runUO db "-- join where amount>100 order amount --" (withOrderBy "orders.amount" True (withWhere (eGt (eColInt "orders.amount") (eLitI 100)) (innerJoin "orders" (eEq (eColInt "users.id") (eColInt "orders.uid")) (selectFrom "users"))))
+  let _ =
+    runUO
+      db
+      "-- join users/orders order oid --"
+      (withOrderBy
+        "orders.oid"
+        True
+        (innerJoin
+          "orders"
+          (eEq (eColInt "users.id") (eColInt "orders.uid"))
+          (selectFrom "users")))
+  let _ =
+    runUO
+      db
+      "-- join where amount>100 order amount --"
+      (withOrderBy
+        "orders.amount"
+        True
+        (withWhere
+          (eGt (eColInt "orders.amount") (eLitI 100))
+          (innerJoin
+            "orders"
+            (eEq (eColInt "users.id") (eColInt "orders.uid"))
+            (selectFrom "users"))))
   runUO
     db
     "-- join where users.id=1 order amount desc --"

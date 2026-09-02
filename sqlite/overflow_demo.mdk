@@ -61,10 +61,7 @@ textOf n = fromUtf8 (arrayFromList (textGo n 0 []))
 
 textGo : Int -> Int -> List Int -> List Int
 textGo n i acc =
-  if i >= n then
-    reverse acc
-  else
-    textGo n (i + 1) (97 + i % 26 :: acc)
+  if i >= n then reverse acc else textGo n (i + 1) (97 + i % 26 :: acc)
 
 -- | `n` bytes of blob: byte i is (i * 7 + 3) % 256 — covers 0x00 and 0xFF.
 blobOf : Int -> Array Int
@@ -72,10 +69,7 @@ blobOf n = arrayFromList (blobGo n 0 [])
 
 blobGo : Int -> Int -> List Int -> List Int
 blobGo n i acc =
-  if i >= n then
-    reverse acc
-  else
-    blobGo n (i + 1) ((i * 7 + 3) % 256 :: acc)
+  if i >= n then reverse acc else blobGo n (i + 1) ((i * 7 + 3) % 256 :: acc)
 
 -- Two rows per size: a TEXT-only row then a BLOB-only row.  Exactly one big
 -- column per row keeps the record payload ~= size, so a size sweep is a
@@ -85,10 +79,10 @@ rowsOf sizes = rowsGo sizes 1 []
 
 rowsGo : List Int -> Int -> List (List Cell) -> List (List Cell)
 rowsGo [] _ acc = reverse acc
-rowsGo (s::rest) i acc =
+rowsGo (s :: rest) i acc =
   let textRow = [CInt i, CText (textOf s), CNull, CInt s]
   let blobRow = [CInt (i + 1), CNull, CBlob (blobOf s), CInt s]
-  rowsGo rest (i + 2) (blobRow :: textRow::acc)
+  rowsGo rest (i + 2) (blobRow :: textRow :: acc)
 
 -- One row per size with BOTH columns big (payload ~= 2*size).
 mixRowsOf : List Int -> List (List Cell)
@@ -96,8 +90,11 @@ mixRowsOf sizes = mixGo sizes 1 []
 
 mixGo : List Int -> Int -> List (List Cell) -> List (List Cell)
 mixGo [] _ acc = reverse acc
-mixGo (s::rest) i acc =
-  mixGo rest (i + 1) ([CInt i, CText (textOf s), CBlob (blobOf s), CInt s]::acc)
+mixGo (s :: rest) i acc =
+  mixGo
+    rest
+    (i + 1)
+    ([CInt i, CText (textOf s), CBlob (blobOf s), CInt s] :: acc)
 
 -- ---------------------------------------------------------------------------
 -- Rendering — byte-identical to `sqlite3 db "SELECT id, t, hex(b), n FROM big"`
@@ -125,12 +122,14 @@ renderRow pkIdx row =
 
 main : <IO, FileRead, FileWrite> Unit
 main = match args ()
-  "write"::out::sizes => doWrite out (rowsOf (map parseN sizes))
-  "writemix"::out::sizes => doWrite out (mixRowsOf (map parseN sizes))
+  "write" :: out :: sizes => doWrite out (rowsOf (map parseN sizes))
+  "writemix" :: out :: sizes => doWrite out (mixRowsOf (map parseN sizes))
   ["read", db] => doRead db
   ["update", db, rid, newSize] => doUpdate db (parseN rid) (parseN newSize)
   ["delete", db, rid] => doDelete db (parseN rid)
-  _ => println "usage: overflow_demo write|writemix <out.db> <size>... | read <db> | update <db> <rowid> <newsize> | delete <db> <rowid>"
+  _ =>
+    println
+      "usage: overflow_demo write|writemix <out.db> <size>... | read <db> | update <db> <rowid> <newsize> | delete <db> <rowid>"
 
 doWrite : String -> List (List Cell) -> <IO, FileWrite> Unit
 doWrite out rows =

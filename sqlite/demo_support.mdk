@@ -34,7 +34,7 @@ showCellRow cells = join "|" (map cellToString cells)
 export
 bullet : List String -> String
 bullet [] = ""
-bullet (m::rest) = "  FAIL \{m}\n\{bullet rest}"
+bullet (m :: rest) = "  FAIL \{m}\n\{bullet rest}"
 
 -- | `"PASS"` for zero failures, `"FAIL"` otherwise.
 --
@@ -51,7 +51,7 @@ verdict _ = "FAIL"
 export
 printRows : (a -> String) -> List a -> <IO> Unit
 printRows _ [] = ()
-printRows shw (r::rest) =
+printRows shw (r :: rest) =
   let _ = println (shw r)
   printRows shw rest
 
@@ -60,7 +60,7 @@ printRows shw (r::rest) =
 export
 printLines : (a -> String) -> List a -> <IO> Unit
 printLines _ [] = ()
-printLines f (x::rest) =
+printLines f (x :: rest) =
   let _ = println (f x)
   printLines f rest
 
@@ -68,7 +68,7 @@ printLines f (x::rest) =
 export
 printInts : List Int -> <IO> Unit
 printInts [] = ()
-printInts (n::rest) =
+printInts (n :: rest) =
   let _ = println (intToString n)
   printInts rest
 
@@ -81,7 +81,7 @@ showPair (a, b) = "\{a}|\{b}"
 export
 printPairs : List (Int, Int) -> <IO> Unit
 printPairs [] = ()
-printPairs (p::rest) =
+printPairs (p :: rest) =
   let _ = println (showPair p)
   printPairs rest
 

@@ -30,7 +30,7 @@ validBytes bytes i =
 
 copyBlocks : List (Cid, Array Int) -> List (Cid, Array Int)
 copyBlocks [] = []
-copyBlocks ((cid, bytes)::rest) = (cid, arrayCopy bytes) :: copyBlocks rest
+copyBlocks ((cid, bytes) :: rest) = (cid, arrayCopy bytes) :: copyBlocks rest
 
 -- | Header roots in their declared order.
 export
@@ -53,17 +53,19 @@ headerValue roots version =
 
 decodeRoots : List DagCbor -> List Cid -> Result String (List Cid)
 decodeRoots [] acc = Ok (reverse acc)
-decodeRoots ((DcLink cid)::rest) acc = decodeRoots rest (cid::acc)
+decodeRoots ((DcLink cid) :: rest) acc = decodeRoots rest (cid :: acc)
 decodeRoots _ _ = Err "car: header roots must contain only CID links"
 
 decodeHeader : Array Int -> Result String (List Cid)
 decodeHeader bytes = match dagCborDecode bytes
   Err message => Err "car: invalid header: \{message}"
-  Ok (DcMap [("roots", DcArray values), ("version", DcInt version)]) => if version /= 1 then Err "car: header version must be 1"
-  else match decodeRoots values []
-    Err message => Err message
-    Ok [] => Err "car: atproto profile requires at least one root"
-    Ok roots => Ok roots
+  Ok (DcMap [("roots", DcArray values), ("version", DcInt version)]) =>
+    if version /= 1 then
+      Err "car: header version must be 1"
+    else match decodeRoots values []
+      Err message => Err message
+      Ok [] => Err "car: atproto profile requires at least one root"
+      Ok roots => Ok roots
   Ok _ => Err "car: header must be exactly {roots, version}"
 
 varintPrefixEquals : Array Int -> Int -> Array Int -> Int -> Bool
@@ -75,28 +77,39 @@ varintPrefixEquals input pos expected i =
   else
     varintPrefixEquals input pos expected (i + 1)
 
-readVarintGo : Array Int -> Int -> Int -> Int -> Int -> Int -> Result String (Int, Int)
+readVarintGo : Array Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Result String (Int, Int)
 readVarintGo input pos end consumed shift acc =
-  if consumed >= 9 then Err "uvarint: over-long (more than 9 bytes)"
+  if consumed >= 9 then
+    Err "uvarint: over-long (more than 9 bytes)"
+  else if pos + consumed >= end then
+    Err "uvarint: truncated (input ended with the continuation bit still set)"
   else
-    if pos + consumed >= end then Err "uvarint: truncated (input ended with the continuation bit still set)"
-    else
-      let byte = input[pos + consumed]
-      let value = acc + shiftLeft (bitAnd byte 0x7f) shift
-      if bitAnd byte 0x80 == 0 then
-        let used = consumed + 1
-        if value < 0 then Err "uvarint: value exceeds the representable Int range (max 2^62-1)"
+    let byte = input[pos + consumed]
+    let value = acc + shiftLeft (bitAnd byte 0x7f) shift
+    if bitAnd byte 0x80 == 0 then
+      let used = consumed + 1
+      if value < 0 then
+        Err "uvarint: value exceeds the representable Int range (max 2^62-1)"
+      else
+        let canonical = uvarintEncode value
+        if arrayLength canonical /= used
+          || not (varintPrefixEquals input pos canonical 0) then
+          Err "uvarint: non-minimal encoding"
         else
-          let canonical = uvarintEncode value
-          if arrayLength canonical /= used || not (varintPrefixEquals input pos canonical 0) then
-            Err "uvarint: non-minimal encoding"
-          else
-            Ok (value, pos + used)
-      else readVarintGo input pos end (consumed + 1) (shift + 7) value
+          Ok (value, pos + used)
+    else
+      readVarintGo input pos end (consumed + 1) (shift + 7) value
 
 readVarintAt : String -> Array Int -> Int -> Int -> Result String (Int, Int)
 readVarintAt label input pos end =
-  if pos >= end then Err "car: truncated \{label} varint"
+  if pos >= end then
+    Err "car: truncated \{label} varint"
   else match readVarintGo input pos end 0 0 0
     Err message => Err "car: \{label}: \{message}"
     Ok result => Ok result
@@ -111,33 +124,53 @@ parseCidAt input start end = do
   (_, p3) <- readVarintAt "CID hash code" input p2 end
   (digestLength, p4) <- readVarintAt "CID hash length" input p3 end
   let cidEnd = p4 + digestLength
-  if digestLength < 0 || cidEnd > end then Err "car: truncated CID digest"
+  if digestLength < 0 || cidEnd > end then
+    Err "car: truncated CID digest"
   else match cidFromBytes (slice input start (cidEnd - start))
     Err message => Err "car: malformed or non-blessed CID: \{message}"
     Ok cid => Ok (cid, cidEnd)
 
-decodeSections : Array Int -> Int -> Int -> List (Cid, Array Int) -> Result String (List (Cid, Array Int))
+decodeSections : Array Int ->
+  Int ->
+  Int ->
+  List (Cid, Array Int) ->
+  Result String (List (Cid, Array Int))
 decodeSections input pos count acc =
-  if pos == arrayLength input then Ok (reverse acc)
+  if pos == arrayLength input then
+    Ok (reverse acc)
   else match checkCarBlocks (count + 1)
     Err message => Err message
-    Ok () => match readVarintAt "trailing corruption in section length" input pos (arrayLength input)
-      Err message => Err message
-      Ok (sectionLength, payloadPos) => if sectionLength == 0 then Err "car: zero-length section"
-      else match checkCarSectionBytes sectionLength
+    Ok () =>
+      match (readVarintAt
+        "trailing corruption in section length"
+        input
+        pos
+        (arrayLength input))
         Err message => Err message
-        Ok () => if sectionLength > arrayLength input - payloadPos then Err "car: truncated or overlong section length exceeds remaining bytes"
-        else
-          let sectionEnd = payloadPos + sectionLength
-          match parseCidAt input payloadPos sectionEnd
+        Ok (sectionLength, payloadPos) =>
+          if sectionLength == 0 then
+            Err "car: zero-length section"
+          else match checkCarSectionBytes sectionLength
             Err message => Err message
-            Ok (cid, cidEnd) =>
-              let block = slice input cidEnd (sectionEnd - cidEnd)
-              decodeSections input sectionEnd (count + 1) ((cid, block)::acc)
+            Ok () =>
+              if sectionLength > arrayLength input - payloadPos then
+                Err
+                  "car: truncated or overlong section length exceeds remaining bytes"
+              else
+                let sectionEnd = payloadPos + sectionLength
+                match parseCidAt input payloadPos sectionEnd
+                  Err message => Err message
+                  Ok (cid, cidEnd) =>
+                    let block = slice input cidEnd (sectionEnd - cidEnd)
+                    decodeSections
+                      input
+                      sectionEnd
+                      (count + 1)
+                      ((cid, block) :: acc)
 
 rootsPresent : List Cid -> BlockStore -> Result String Unit
 rootsPresent [] _ = Ok ()
-rootsPresent (root::rest) store =
+rootsPresent (root :: rest) store =
   if blockStoreHas root store then
     rootsPresent rest store
   else
@@ -149,18 +182,20 @@ makeCar roots blocks = match checkCarBlocks (length blocks)
   Err message => Err message
   Ok () => match blockStoreFromBlocks blocks
     Err message => Err "car: \{message}"
-    Ok store => map (() => Car roots (copyBlocks blocks) store) (rootsPresent roots store)
+    Ok store =>
+      map (() => Car roots (copyBlocks blocks) store) (rootsPresent roots store)
 
 emitArray : Array Int -> Int -> Builder -> Unit
 emitArray bytes i out =
-  if i >= arrayLength bytes then ()
+  if i >= arrayLength bytes then
+    ()
   else
     emitU8 bytes[i] out
     emitArray bytes (i + 1) out
 
 emitSections : List (Cid, Array Int) -> Builder -> Unit
 emitSections [] _ = ()
-emitSections ((cid, block)::rest) out =
+emitSections ((cid, block) :: rest) out =
   let cidBytes = cidToBytes cid
   let payloadLength = arrayLength cidBytes + arrayLength block
   emitArray (uvarintEncode payloadLength) 0 out
@@ -170,12 +205,13 @@ emitSections ((cid, block)::rest) out =
 
 encodedSectionsSize : List (Cid, Array Int) -> Int -> Result String Int
 encodedSectionsSize [] total = Ok total
-encodedSectionsSize ((cid, block)::rest) total =
+encodedSectionsSize ((cid, block) :: rest) total =
   let payloadLength = arrayLength (cidToBytes cid) + arrayLength block
   match checkCarSectionBytes payloadLength
     Err message => Err message
     Ok () =>
-      let next = total + arrayLength (uvarintEncode payloadLength) + payloadLength
+      let next =
+        total + arrayLength (uvarintEncode payloadLength) + payloadLength
       match checkCarBytes next
         Err message => Err message
         Ok () => encodedSectionsSize rest next
@@ -207,16 +243,21 @@ export
 carDecode : Array Int -> Result String Car
 carDecode input = match checkCarBytes (arrayLength input)
   Err message => Err message
-  Ok () => if not (validBytes input 0) then Err "car: input element outside byte range 0..255"
-  else match readVarintAt "header length" input 0 (arrayLength input)
-    Err message => Err message
-    Ok (headerLength, headerPos) => if headerLength == 0 then Err "car: zero-length header section"
-    else
-      if headerLength > arrayLength input - headerPos then Err "car: truncated header section"
-      else
-        let header = slice input headerPos headerLength
-        match decodeHeader header
-          Err message => Err message
-          Ok roots => match decodeSections input (headerPos + headerLength) 0 []
+  Ok () =>
+    if not (validBytes input 0) then
+      Err "car: input element outside byte range 0..255"
+    else match readVarintAt "header length" input 0 (arrayLength input)
+      Err message => Err message
+      Ok (headerLength, headerPos) =>
+        if headerLength == 0 then
+          Err "car: zero-length header section"
+        else if headerLength > arrayLength input - headerPos then
+          Err "car: truncated header section"
+        else
+          let header = slice input headerPos headerLength
+          match decodeHeader header
             Err message => Err message
-            Ok blocks => makeCar roots blocks
+            Ok roots =>
+              match decodeSections input (headerPos + headerLength) 0 []
+                Err message => Err message
+                Ok blocks => makeCar roots blocks

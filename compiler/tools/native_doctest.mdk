@@ -109,8 +109,12 @@ sentTag line
 -- Ledger: `test/NATIVE-DOCTEST-EXCEPTIONS.txt`.
 nativeSkipReason : String -> List Decl -> Option String
 nativeSkipReason target userDecls
-  | dtProgramIsCore userDecls = Some "native doctest runner: SKIPPED \{target} — it is the prelude itself, and `medaka build` cannot build stdlib/core.mdk as a program (issue #1334). No example was executed natively."
-  | definesMain userDecls = Some "native doctest runner: SKIPPED \{target} — it already defines a top-level `main`, which the synthesized doctest entry point would collide with. No example was executed natively."
+  | dtProgramIsCore userDecls =
+    Some
+      "native doctest runner: SKIPPED \{target} — it is the prelude itself, and `medaka build` cannot build stdlib/core.mdk as a program (issue #1334). No example was executed natively."
+  | definesMain userDecls =
+    Some
+      "native doctest runner: SKIPPED \{target} — it already defines a top-level `main`, which the synthesized doctest entry point would collide with. No example was executed natively."
   | otherwise = None
 
 -- The prelude is the unique program declaring BOTH the `Ordering` data type and
@@ -121,18 +125,18 @@ dtProgramIsCore prog = dtHasOrdering prog && dtHasFoldable prog
 
 dtHasOrdering : List Decl -> Bool
 dtHasOrdering [] = False
-dtHasOrdering ((DData { dataName = "Ordering" })::_) = True
-dtHasOrdering (_::rest) = dtHasOrdering rest
+dtHasOrdering ((DData { dataName = "Ordering" }) :: _) = True
+dtHasOrdering (_ :: rest) = dtHasOrdering rest
 
 dtHasFoldable : List Decl -> Bool
 dtHasFoldable [] = False
-dtHasFoldable ((DInterface { name = "Foldable", ... })::_) = True
-dtHasFoldable (_::rest) = dtHasFoldable rest
+dtHasFoldable ((DInterface { name = "Foldable", ... }) :: _) = True
+dtHasFoldable (_ :: rest) = dtHasFoldable rest
 
 definesMain : List Decl -> Bool
 definesMain [] = False
-definesMain ((DFunDef _ "main" _ _)::_) = True
-definesMain (_::rest) = definesMain rest
+definesMain ((DFunDef _ "main" _ _) :: _) = True
+definesMain (_ :: rest) = definesMain rest
 
 -- ── entry point ─────────────────────────────────────────────────────────────
 -- `target`/`tsrc` are the module under test and its verbatim source;
@@ -143,7 +147,12 @@ definesMain (_::rest) = definesMain rest
 -- The build environment (repo root, `medaka`, `CC`) is read here rather than
 -- taken as parameters, mirroring `medaka build`'s own `runBuildPlainCmd`.
 export
-runNativeDoctests : String -> String -> List Decl -> List Example -> List (Result String (List Decl)) -> <IO> RunResult
+runNativeDoctests : String ->
+  String ->
+  List Decl ->
+  List Example ->
+  List (Result String (List Decl)) ->
+  <IO> RunResult
 runNativeDoctests target tsrc userDecls examples synthResults =
   buildDetailsFrom
     (nativeRendered target tsrc userDecls examples synthResults)
@@ -152,18 +161,25 @@ runNativeDoctests target tsrc userDecls examples synthResults =
 
 -- The engine's obligation as data: Err = one whole-file failure, Ok = one
 -- rendered actual per example (positionally aligned with `examples`).
-nativeRendered : String -> String -> List Decl -> List Example -> List (Result String (List Decl)) -> <IO> Result String (List (Result String String))
-nativeRendered target tsrc userDecls examples synthResults = match nativeSkipReason target userDecls
-  Some reason => Err reason
-  None => match makeTempDir ()
-    Err e => Err "native doctest runner: could not create a scratch directory: \{e}"
-    Ok tmpDir =>
-      -- `rendered` is bound (and so fully forced — Medaka is strict) BEFORE the
-      -- teardown, so the probe binary still exists while it runs.  Same shape as
-      -- `build_cmd.mdk`'s `runBuildNative`.
-      let rendered = runInTmp target tsrc examples synthResults tmpDir
-      let _ = cleanupTempDir tmpDir
-      rendered
+nativeRendered : String ->
+  String ->
+  List Decl ->
+  List Example ->
+  List (Result String (List Decl)) ->
+  <IO> Result String (List (Result String String))
+nativeRendered target tsrc userDecls examples synthResults =
+  match nativeSkipReason target userDecls
+    Some reason => Err reason
+    None => match makeTempDir ()
+      Err e =>
+        Err "native doctest runner: could not create a scratch directory: \{e}"
+      Ok tmpDir =>
+        -- `rendered` is bound (and so fully forced — Medaka is strict) BEFORE the
+        -- teardown, so the probe binary still exists while it runs.  Same shape as
+        -- `build_cmd.mdk`'s `runBuildNative`.
+        let rendered = runInTmp target tsrc examples synthResults tmpDir
+        let _ = cleanupTempDir tmpDir
+        rendered
 
 -- ── the scratch project ─────────────────────────────────────────────────────
 -- ⚠️ TRUSTED-ROOT PROBLEM.  A copy of a stdlib module living outside `stdlib/`
@@ -200,7 +216,12 @@ scratchManifest = "[project]\nname = \"medaka_native_doctest\"\n"
 scratchEntryName : String -> String
 scratchEntryName target = "dt_" ++ baseOf target
 
-runInTmp : String -> String -> List Example -> List (Result String (List Decl)) -> String -> <IO> Result String (List (Result String String))
+runInTmp : String ->
+  String ->
+  List Example ->
+  List (Result String (List Decl)) ->
+  String ->
+  <IO> Result String (List (Result String String))
 runInTmp target tsrc examples synthResults tmpDir =
   let entryPath = joinPath tmpDir (scratchEntryName target)
   let outPath = joinPath tmpDir "dt_probe"
@@ -209,7 +230,13 @@ runInTmp target tsrc examples synthResults tmpDir =
     Err e => Err "native doctest runner: could not write the probe source: \{e}"
     Ok _ => buildAndRun target entryPath outPath tmpDir examples synthResults
 
-buildAndRun : String -> String -> String -> String -> List Example -> List (Result String (List Decl)) -> <IO> Result String (List (Result String String))
+buildAndRun : String ->
+  String ->
+  String ->
+  String ->
+  List Example ->
+  List (Result String (List Decl)) ->
+  <IO> Result String (List (Result String String))
 buildAndRun target entryPath outPath tmpDir examples synthResults =
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let medaka = envOr "MEDAKA" "medaka"
@@ -219,12 +246,28 @@ buildAndRun target entryPath outPath tmpDir examples synthResults =
   -- exact case Stage 0 added that parameter for.  `compiler`/`stdlib` are
   -- appended by `runBuildNativeRoots` itself.
   let extraRoots = entrySearchRoots (dirOf target)
-  match runBuildNativeRoots root medaka cc entryPath outPath tmpDir False extraRoots
-    BuildErr msg => Err "native doctest runner: could not build \{target} natively\n\{msg}"
+  match (runBuildNativeRoots
+    root
+    medaka
+    cc
+    entryPath
+    outPath
+    tmpDir
+    False
+    extraRoots)
+    BuildErr msg =>
+      Err "native doctest runner: could not build \{target} natively\n\{msg}"
     BuildOk _ => match runCommand outPath []
-      Err e => Err "native doctest runner: could not run the compiled probe: \{e}"
+      Err e =>
+        Err "native doctest runner: could not run the compiled probe: \{e}"
       Ok (code, out, errOut) =>
-        Ok (renderAll (chunksOf (splitNl out)) (abortNote code errOut) 0 examples synthResults)
+        Ok
+          (renderAll
+            (chunksOf (splitNl out))
+            (abortNote code errOut)
+            0
+            examples
+            synthResults)
 
 -- ── the probe program ───────────────────────────────────────────────────────
 -- target source (verbatim) ++ the `__dt_i__` bindings ++ a synthesized `main`.
@@ -236,21 +279,31 @@ buildAndRun target entryPath outPath tmpDir examples synthResults =
 -- Referencing every `__dt_i__` from `main` is also what keeps `dceFilter` from
 -- dropping them: an unreferenced top-level binding is dead code, and a dropped
 -- binding is an example that never ran.
-probeSource : String -> List Example -> List (Result String (List Decl)) -> String
+probeSource : String ->
+  List Example ->
+  List (Result String (List Decl)) ->
+  String
 probeSource tsrc examples synthResults =
   joinNl
-    ([tsrc, ""] ++ synthLines 0 examples synthResults ++ ["", "main ="] ++ mainLines 0 examples synthResults ++ ["  putStrLn \"\{sentinelFor endTag}\"", ""])
+    ([tsrc, ""]
+      ++ synthLines 0 examples synthResults
+      ++ ["", "main ="]
+      ++ mainLines 0 examples synthResults
+      ++ ["  putStrLn \"\{sentinelFor endTag}\"", ""])
 
 -- One synth binding per example whose synth PARSED.  An example whose synth
 -- failed to parse contributes no binding (mirroring `buildSynthDecls`) — its
 -- outcome is reported from `synthResults` by `buildDetailsFrom` and never
 -- consults the rendered value.
-synthLines : Int -> List Example -> List (Result String (List Decl)) -> List String
+synthLines : Int ->
+  List Example ->
+  List (Result String (List Decl)) ->
+  List String
 synthLines _ [] _ = []
-synthLines _ (_::_) [] = []
-synthLines i (ex::rest) ((Ok _)::srRest) =
+synthLines _ (_ :: _) [] = []
+synthLines i (ex :: rest) ((Ok _) :: srRest) =
   synthSrc i ex :: synthLines (i + 1) rest srRest
-synthLines i (_::rest) ((Err _)::srRest) = synthLines (i + 1) rest srRest
+synthLines i (_ :: rest) ((Err _) :: srRest) = synthLines (i + 1) rest srRest
 
 -- Per example: the sentinel, then the value.
 --
@@ -260,12 +313,16 @@ synthLines i (_::rest) ((Err _)::srRest) = synthLines (i + 1) rest srRest
 -- is only FORCED and contributes an empty value; `buildDetailsFrom` passes it
 -- as long as it evaluated.  (There are currently zero smoke examples in the
 -- tree, so this arm is correctness, not machinery.)
-mainLines : Int -> List Example -> List (Result String (List Decl)) -> List String
+mainLines : Int ->
+  List Example ->
+  List (Result String (List Decl)) ->
+  List String
 mainLines _ [] _ = []
-mainLines _ (_::_) [] = []
-mainLines i (_::rest) ((Err _)::srRest) = mainLines (i + 1) rest srRest
-mainLines i (ex::rest) ((Ok _)::srRest) = ["  let _ = putStrLn \"\{sentinelFor (intToString i)}\"", valueLine i ex]
-  ++ mainLines (i + 1) rest srRest
+mainLines _ (_ :: _) [] = []
+mainLines i (_ :: rest) ((Err _) :: srRest) = mainLines (i + 1) rest srRest
+mainLines i (ex :: rest) ((Ok _) :: srRest) =
+  ["  let _ = putStrLn \"\{sentinelFor (intToString i)}\"", valueLine i ex]
+    ++ mainLines (i + 1) rest srRest
 
 valueLine : Int -> Example -> String
 valueLine i ex = match exampleExpected ex
@@ -283,13 +340,17 @@ chunksOf lines = reverseL (chunkScan [] None [] lines)
 
 -- Lines before the FIRST sentinel are dropped: they are whatever the module's
 -- own top-level effects printed, not part of any example's value.
-chunkScan : List Chunk -> Option String -> List String -> List String -> List Chunk
+chunkScan : List Chunk ->
+  Option String ->
+  List String ->
+  List String ->
+  List Chunk
 chunkScan acc cur curLines [] = closeChunk acc cur curLines False
-chunkScan acc cur curLines (l::rest) = match sentTag l
+chunkScan acc cur curLines (l :: rest) = match sentTag l
   Some t => chunkScan (closeChunk acc cur curLines True) (Some t) [] rest
   None => match cur
     None => chunkScan acc cur curLines rest
-    Some _ => chunkScan acc cur (l::curLines) rest
+    Some _ => chunkScan acc cur (l :: curLines) rest
 
 closeChunk : List Chunk -> Option String -> List String -> Bool -> List Chunk
 closeChunk acc None _ _ = acc
@@ -298,7 +359,7 @@ closeChunk acc (Some t) curLines terminated =
 
 lookupChunk : String -> List Chunk -> Option Chunk
 lookupChunk _ [] = None
-lookupChunk tag ((Chunk t ls done)::rest)
+lookupChunk tag ((Chunk t ls done) :: rest)
   | t == tag = Some (Chunk t ls done)
   | otherwise = lookupChunk tag rest
 
@@ -316,20 +377,29 @@ abortNote code errOut =
 
 firstNonEmptyLine : List String -> String
 firstNonEmptyLine [] = ""
-firstNonEmptyLine (l::rest)
+firstNonEmptyLine (l :: rest)
   | stringTrim l == "" = firstNonEmptyLine rest
   | otherwise = stringTrim l
 
-renderAll : List Chunk -> String -> Int -> List Example -> List (Result String (List Decl)) -> List (Result String String)
+renderAll : List Chunk ->
+  String ->
+  Int ->
+  List Example ->
+  List (Result String (List Decl)) ->
+  List (Result String String)
 renderAll _ _ _ [] _ = []
-renderAll _ _ _ (_::_) [] = []
-renderAll chunks note i (_::rest) (sr::srRest) =
+renderAll _ _ _ (_ :: _) [] = []
+renderAll chunks note i (_ :: rest) (sr :: srRest) =
   renderOne chunks note i sr :: renderAll chunks note (i + 1) rest srRest
 
 -- The `Err _` synth arm's payload is never read: `buildDetailsFrom`'s
 -- `oneResultOk` reports that example's own parse error and ignores the rendered
 -- entry.  It exists to keep the list positionally aligned with `examples`.
-renderOne : List Chunk -> String -> Int -> Result String (List Decl) -> Result String String
+renderOne : List Chunk ->
+  String ->
+  Int ->
+  Result String (List Decl) ->
+  Result String String
 renderOne _ _ _ (Err _) = Err "example did not parse"
 renderOne chunks note i (Ok _) = match lookupChunk (intToString i) chunks
   Some (Chunk _ ls True) => Ok (joinNl ls)

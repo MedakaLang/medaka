@@ -3,9 +3,9 @@
 -- `PAs t (PCons (A _) rest)` (t bound to the whole list).  Covers the head
 -- position (function clause + match arm) and the tail position.
 
-headAsCons ((t@(A _))::rest) = t
-tailAsCons (x::t@(y::_)) = t
+headAsCons ((t@(A _)) :: rest) = t
+tailAsCons (x :: t@(y :: _)) = t
 
 matchHeadAs xs = match xs
-  (t@(A _))::rest => t
+  (t@(A _)) :: rest => t
   _ => xs

@@ -1,5 +1,5 @@
 # META
-source_lines=719
+source_lines=775
 stages=DESUGAR,MARK
 # SOURCE
 {- | A JSON value type with a parser and a serializer.
@@ -95,7 +95,9 @@ fixTrailingDot s = fixTrailingDotGo s (stringToChars s)
 
 fixTrailingDotGo : String -> Array Char -> String
 fixTrailingDotGo s arr
-  | arrayLength arr > 0 && charCode (arrayGetUnsafe (arrayLength arr - 1) arr) == 46 = stringConcat [s, "0"]
+  | arrayLength arr > 0
+    && charCode (arrayGetUnsafe (arrayLength arr - 1) arr)
+      == 46 = stringConcat [s, "0"]
   | otherwise = s
 
 hexDigit : Int -> String
@@ -143,7 +145,7 @@ memberStrings pairs i acc
   | otherwise =
     let p = arrayGetUnsafe i pairs
     let s = stringConcat [escapeString (fst p), ":", stringify (snd p)]
-    memberStrings pairs (i - 1) (s::acc)
+    memberStrings pairs (i - 1) (s :: acc)
 
 {- | The value as compact JSON text, with no whitespace between tokens.
 
@@ -182,10 +184,8 @@ stringify (JObject pairs) =
 -- sqlite shouldn't need to import all of json for one char check.
 isWs : Char -> Bool
 -- lint-disable-next-line rule-duplicate-body
-isWs c = charCode c == 32
-  || charCode c == 9
-  || charCode c == 10
-  || charCode c == 13
+isWs c =
+  charCode c == 32 || charCode c == 9 || charCode c == 10 || charCode c == 13
 
 skipWs : Array Char -> Int -> Int
 skipWs arr i
@@ -198,22 +198,30 @@ parseStr arr i acc
   | i >= arrayLength arr = Err "unterminated string"
   | otherwise = parseStrChar arr i acc (arrayGetUnsafe i arr)
 
-parseStrChar : Array Char -> Int -> List Char -> Char -> Result String (String, Int)
+parseStrChar : Array Char ->
+  Int ->
+  List Char ->
+  Char ->
+  Result String (String, Int)
 parseStrChar arr i acc c
   | charCode c == 34 = Ok (fromChars (reverse acc), i + 1)
   | charCode c == 92 = parseEsc arr (i + 1) acc
-  | otherwise = parseStr arr (i + 1) (c::acc)
+  | otherwise = parseStr arr (i + 1) (c :: acc)
 
 parseEsc : Array Char -> Int -> List Char -> Result String (String, Int)
 parseEsc arr i acc
   | i >= arrayLength arr = Err "unterminated escape"
   | otherwise = parseEscChar arr i acc (arrayGetUnsafe i arr)
 
-parseEscChar : Array Char -> Int -> List Char -> Char -> Result String (String, Int)
+parseEscChar : Array Char ->
+  Int ->
+  List Char ->
+  Char ->
+  Result String (String, Int)
 parseEscChar arr i acc c
-  | charCode c == 34 = parseStr arr (i + 1) (c::acc)
-  | charCode c == 92 = parseStr arr (i + 1) (c::acc)
-  | charCode c == 47 = parseStr arr (i + 1) (c::acc)
+  | charCode c == 34 = parseStr arr (i + 1) (c :: acc)
+  | charCode c == 92 = parseStr arr (i + 1) (c :: acc)
+  | charCode c == 47 = parseStr arr (i + 1) (c :: acc)
   | c == 'n' = parseStr arr (i + 1) (charOfCode 10 :: acc)
   | c == 't' = parseStr arr (i + 1) (charOfCode 9 :: acc)
   | c == 'r' = parseStr arr (i + 1) (charOfCode 13 :: acc)
@@ -266,7 +274,11 @@ parseUnicode arr i acc
   | i + 4 > arrayLength arr = Err "invalid \\u escape"
   | otherwise = parseUnicodeAt arr i acc (hex4 arr i)
 
-parseUnicodeAt : Array Char -> Int -> List Char -> Option Int -> Result String (String, Int)
+parseUnicodeAt : Array Char ->
+  Int ->
+  List Char ->
+  Option Int ->
+  Result String (String, Int)
 parseUnicodeAt arr i acc None = Err "invalid \\u escape"
 parseUnicodeAt arr i acc (Some k)
   | isHighSurrogate k = parseLowSurrogate arr i acc k
@@ -276,14 +288,23 @@ parseUnicodeAt arr i acc (Some k)
 -- low surrogate at [i+4, i+10) to complete a valid astral codepoint; anything
 -- else (EOF, no `\u`, or a `\u` that isn't a low surrogate) is a lone
 -- surrogate, which is invalid JSON.
-parseLowSurrogate : Array Char -> Int -> List Char -> Int -> Result String (String, Int)
+parseLowSurrogate : Array Char ->
+  Int ->
+  List Char ->
+  Int ->
+  Result String (String, Int)
 parseLowSurrogate arr i acc hi
   | i + 10 > arrayLength arr = Err "invalid \\u escape"
   | arrayGetUnsafe (i + 4) arr /= '\\' = Err "invalid \\u escape"
   | arrayGetUnsafe (i + 5) arr /= 'u' = Err "invalid \\u escape"
   | otherwise = parseLowSurrogateAt arr i acc hi (hex4 arr (i + 6))
 
-parseLowSurrogateAt : Array Char -> Int -> List Char -> Int -> Option Int -> Result String (String, Int)
+parseLowSurrogateAt : Array Char ->
+  Int ->
+  List Char ->
+  Int ->
+  Option Int ->
+  Result String (String, Int)
 parseLowSurrogateAt arr i acc hi (Some lo)
   | isLowSurrogate lo =
     parseUnicodeScalar arr (i + 10) acc (combineSurrogates hi lo)
@@ -292,9 +313,13 @@ parseLowSurrogateAt arr i acc hi _ = Err "invalid \\u escape"
 -- A codepoint that isn't a surrogate (a lone low surrogate lands here too,
 -- via the `otherwise` arm of `parseUnicodeAt` — `charFromCode` rejects it)
 -- → the matching `Char`, appended to `acc`; resumes the string scan at `j`.
-parseUnicodeScalar : Array Char -> Int -> List Char -> Int -> Result String (String, Int)
+parseUnicodeScalar : Array Char ->
+  Int ->
+  List Char ->
+  Int ->
+  Result String (String, Int)
 parseUnicodeScalar arr j acc k = match charFromCode k
-  Some c => parseStr arr j (c::acc)
+  Some c => parseStr arr j (c :: acc)
   None => Err "invalid \\u escape"
 
 -- Numbers: scan the token, classify int vs float, build the value.
@@ -322,7 +347,8 @@ skipFrac arr i
 -- is correctly invalid and must keep failing.
 skipExpSign : Array Char -> Int -> Int
 skipExpSign arr i
-  | i < arrayLength arr && (arrayGetUnsafe i arr == '-' || arrayGetUnsafe i arr == '+') = i + 1
+  | i < arrayLength arr
+    && (arrayGetUnsafe i arr == '-' || arrayGetUnsafe i arr == '+') = i + 1
   | otherwise = i
 
 skipExp : Array Char -> Int -> (Int, Bool)
@@ -335,9 +361,9 @@ isExpChar : Char -> Bool
 isExpChar c = c == 'e' || c == 'E'
 
 subString : Array Char -> Int -> Int -> String
-subString arr start end = stringFromChars (arrayMakeWith
-  (end - start)
-  (k => arrayGetUnsafe (start + k) arr))
+subString arr start end =
+  stringFromChars
+    (arrayMakeWith (end - start) (k => arrayGetUnsafe (start + k) arr))
 
 parseNumber : Array Char -> Int -> Result String (Json, Int)
 parseNumber arr start =
@@ -347,7 +373,13 @@ parseNumber arr start =
   let expR = skipExp arr (fst fracR)
   finishNumber arr start afterSign afterInt (fst expR) (snd fracR || snd expR)
 
-finishNumber : Array Char -> Int -> Int -> Int -> Int -> Bool -> Result String (Json, Int)
+finishNumber : Array Char ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Bool ->
+  Result String (Json, Int)
 finishNumber arr start afterSign afterInt end isFloat
   | afterInt == afterSign = Err "invalid number: no digits"
   | isFloat = finishFloat (subString arr start end) end
@@ -377,7 +409,13 @@ parseLit arr j lit val =
   let litArr = stringToChars lit
   parseLitGo arr j litArr (arrayLength litArr) lit val
 
-parseLitGo : Array Char -> Int -> Array Char -> Int -> String -> Json -> Result String (Json, Int)
+parseLitGo : Array Char ->
+  Int ->
+  Array Char ->
+  Int ->
+  String ->
+  Json ->
+  Result String (Json, Int)
 parseLitGo arr j litArr m lit val
   | matchLit arr j litArr 0 m = Ok (val, j + m)
   | otherwise = Err (stringConcat ["invalid literal, expected '", lit, "'"])
@@ -397,9 +435,12 @@ parseArrayAt arr j
 parseElems : Array Char -> Int -> List Json -> Result String (List Json, Int)
 parseElems arr i acc = do
   (v, j) <- parseValue arr i
-  parseElemsCont arr (skipWs arr j) (v::acc)
+  parseElemsCont arr (skipWs arr j) (v :: acc)
 
-parseElemsCont : Array Char -> Int -> List Json -> Result String (List Json, Int)
+parseElemsCont : Array Char ->
+  Int ->
+  List Json ->
+  Result String (List Json, Int)
 parseElemsCont arr k acc
   | k >= arrayLength arr = Err "unterminated array"
   | arrayGetUnsafe k arr == ',' = parseElems arr (k + 1) acc
@@ -417,10 +458,16 @@ parseObjectAt arr j
     (ms, k) <- parseMembers arr j []
     Ok (JObject (arrayFromList (reverse ms)), k)
 
-parseMembers : Array Char -> Int -> List (String, Json) -> Result String (List (String, Json), Int)
+parseMembers : Array Char ->
+  Int ->
+  List (String, Json) ->
+  Result String (List (String, Json), Int)
 parseMembers arr i acc = parseMemberStart arr (skipWs arr i) acc
 
-parseMemberStart : Array Char -> Int -> List (String, Json) -> Result String (List (String, Json), Int)
+parseMemberStart : Array Char ->
+  Int ->
+  List (String, Json) ->
+  Result String (List (String, Json), Int)
 parseMemberStart arr j acc
   | j >= arrayLength arr = Err "unterminated object"
   | arrayGetUnsafe j arr == '"' = do
@@ -428,15 +475,22 @@ parseMemberStart arr j acc
     parseAfterKey arr (skipWs arr k) key acc
   | otherwise = Err "expected string key in object"
 
-parseAfterKey : Array Char -> Int -> String -> List (String, Json) -> Result String (List (String, Json), Int)
+parseAfterKey : Array Char ->
+  Int ->
+  String ->
+  List (String, Json) ->
+  Result String (List (String, Json), Int)
 parseAfterKey arr k key acc
   | k >= arrayLength arr = Err "unterminated object"
   | arrayGetUnsafe k arr == ':' = do
     (v, m) <- parseValue arr (k + 1)
-    parseMemberCont arr (skipWs arr m) ((key, v)::acc)
+    parseMemberCont arr (skipWs arr m) ((key, v) :: acc)
   | otherwise = Err "expected ':' after object key"
 
-parseMemberCont : Array Char -> Int -> List (String, Json) -> Result String (List (String, Json), Int)
+parseMemberCont : Array Char ->
+  Int ->
+  List (String, Json) ->
+  Result String (List (String, Json), Int)
 parseMemberCont arr m acc
   | m >= arrayLength arr = Err "unterminated object"
   | arrayGetUnsafe m arr == ',' = parseMembers arr (m + 1) acc
@@ -633,8 +687,8 @@ asObject _ = None
 arrEqJson : Array Json -> Array Json -> Int -> Bool
 arrEqJson a b i
   | i >= arrayLength a = True
-  | otherwise = eq (arrayGetUnsafe i a) (arrayGetUnsafe i b)
-    && arrEqJson a b (i + 1)
+  | otherwise =
+    eq (arrayGetUnsafe i a) (arrayGetUnsafe i b) && arrEqJson a b (i + 1)
 
 objEqJson : Array (String, Json) -> Array (String, Json) -> Int -> Bool
 objEqJson a b i
@@ -680,7 +734,8 @@ export impl Display Json where
 prop "parse-then-stringify round-trips a JInt" (n : Int) =
   parse (stringify (JInt n)) == Ok (JInt n)
 
-prop "parse-then-stringify round-trips a JString (exercises escaping)" (s : String) = parse (stringify (JString s)) == Ok (JString s)
+prop "parse-then-stringify round-trips a JString (exercises escaping)" (s : String) =
+  parse (stringify (JString s)) == Ok (JString s)
 
 prop "parse-then-stringify round-trips a JBool" (b : Bool) =
   parse (stringify (JBool b)) == Ok (JBool b)
@@ -710,10 +765,11 @@ prop "asObject recovers a built JObject" (xs : List Int) =
   let j = jObject (map (n => (intToString n, JInt n)) xs)
   map JObject (asObject j) == Some j
 
-prop "asObject rejects every non-object variant" (n : Int) = asObject (JInt n) == None
-  && asObject JNull == None
-  && asObject (JString (intToString n)) == None
-  && asObject (jArray [JInt n]) == None
+prop "asObject rejects every non-object variant" (n : Int) =
+  asObject (JInt n) == None
+    && asObject JNull == None
+    && asObject (JString (intToString n)) == None
+    && asObject (jArray [JInt n]) == None
 
 prop "at k recovers the k-th element of a JArray" (n : Int) =
   let k = if n < 0 then 0 - n else n

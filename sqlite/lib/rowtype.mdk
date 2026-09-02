@@ -36,8 +36,10 @@ import list.{take, drop}
 
 -- | A row decoder: how wide a slice of columns it consumes, and the closure
 --   that turns that slice into a typed value (or an error message).
-public export data RowType a =
-  | RowType { width : Int, decode : List Cell -> Result String a }
+public export data RowType a = RowType {
+  width : Int,
+  decode : List Cell -> Result String a,
+}
 
 -- | The number of columns this RowType consumes.
 export
@@ -65,8 +67,8 @@ tInt : RowType Int
 tInt = mkRowType 1 decodeInt
 
 decodeInt : List Cell -> Result String Int
-decodeInt ((CInt n)::[]) = Ok n
-decodeInt (c::[]) = Err "tInt: expected integer column, got \{debug c}"
+decodeInt ((CInt n) :: []) = Ok n
+decodeInt (c :: []) = Err "tInt: expected integer column, got \{debug c}"
 decodeInt _ = Err "tInt: expected exactly 1 column"
 
 -- | Decode a single text column.
@@ -75,8 +77,8 @@ tText : RowType String
 tText = mkRowType 1 decodeText
 
 decodeText : List Cell -> Result String String
-decodeText ((CText s)::[]) = Ok s
-decodeText (c::[]) = Err "tText: expected text column, got \{debug c}"
+decodeText ((CText s) :: []) = Ok s
+decodeText (c :: []) = Err "tText: expected text column, got \{debug c}"
 decodeText _ = Err "tText: expected exactly 1 column"
 
 -- | Decode a single boolean column (SQLite stores booleans as 0/1 integers).
@@ -85,14 +87,14 @@ tBool : RowType Bool
 tBool = mkRowType 1 decodeBool
 
 decodeBool : List Cell -> Result String Bool
-decodeBool ((CInt n)::[]) =
+decodeBool ((CInt n) :: []) =
   if n == 0 then
     Ok False
   else if n == 1 then
     Ok True
   else
     Err "tBool: expected 0 or 1, got \{n}"
-decodeBool (c::[]) = Err "tBool: expected integer column, got \{debug c}"
+decodeBool (c :: []) = Err "tBool: expected integer column, got \{debug c}"
 decodeBool _ = Err "tBool: expected exactly 1 column"
 
 -- | Decode a single blob column.
@@ -101,8 +103,8 @@ tBlob : RowType (Array Int)
 tBlob = mkRowType 1 decodeBlob
 
 decodeBlob : List Cell -> Result String (Array Int)
-decodeBlob ((CBlob b)::[]) = Ok b
-decodeBlob (c::[]) = Err "tBlob: expected blob column, got \{debug c}"
+decodeBlob ((CBlob b) :: []) = Ok b
+decodeBlob (c :: []) = Err "tBlob: expected blob column, got \{debug c}"
 decodeBlob _ = Err "tBlob: expected exactly 1 column"
 
 -- | Decode a single float column.  COERCES integer cells to float, because
@@ -113,9 +115,9 @@ tFloat : RowType Float
 tFloat = mkRowType 1 decodeFloat
 
 decodeFloat : List Cell -> Result String Float
-decodeFloat ((CFloat f)::[]) = Ok f
-decodeFloat ((CInt n)::[]) = Ok (intToFloat n)
-decodeFloat (c::[]) = Err "tFloat: expected numeric column, got \{debug c}"
+decodeFloat ((CFloat f) :: []) = Ok f
+decodeFloat ((CInt n) :: []) = Ok (intToFloat n)
+decodeFloat (c :: []) = Err "tFloat: expected numeric column, got \{debug c}"
 decodeFloat _ = Err "tFloat: expected exactly 1 column"
 
 -- | Wrap an inner decoder so that a NULL (across ALL its `width` columns)
@@ -129,7 +131,8 @@ tOption inner = mkRowType (rtWidth inner) (optionDecoder inner)
 optionDecoder : RowType a -> List Cell -> Result String (Option a)
 optionDecoder inner cells =
   if cellCount cells /= rtWidth inner then
-    Err "tOption: expected \{intToString (rtWidth inner)} column(s), got \{intToString (cellCount cells)}"
+    Err
+      "tOption: expected \{intToString (rtWidth inner)} column(s), got \{intToString (cellCount cells)}"
   else if allNull cells then
     Ok None
   else
@@ -137,12 +140,12 @@ optionDecoder inner cells =
 
 cellCount : List Cell -> Int
 cellCount [] = 0
-cellCount (_::r) = 1 + cellCount r
+cellCount (_ :: r) = 1 + cellCount r
 
 allNull : List Cell -> Bool
 allNull [] = True
-allNull (CNull::r) = allNull r
-allNull (_::_) = False
+allNull (CNull :: r) = allNull r
+allNull (_ :: _) = False
 
 -- ---------------------------------------------------------------------------
 -- Product combinators
@@ -174,7 +177,13 @@ t3 ra rb rc =
     (rtWidth ra + rtWidth rb + rtWidth rc)
     (decode3 (rtWidth ra) (rtWidth rb) ra rb rc)
 
-decode3 : Int -> Int -> RowType a -> RowType b -> RowType c -> List Cell -> Result String (a, b, c)
+decode3 : Int ->
+  Int ->
+  RowType a ->
+  RowType b ->
+  RowType c ->
+  List Cell ->
+  Result String (a, b, c)
 decode3 wa wb ra rb rc cells = do
   va <- rtDecode ra (take wa cells)
   vb <- rtDecode rb (take wb (drop wa cells))
@@ -189,7 +198,15 @@ t4 ra rb rc rd =
     (rtWidth ra + rtWidth rb + rtWidth rc + rtWidth rd)
     (decode4 (rtWidth ra) (rtWidth rb) (rtWidth rc) ra rb rc rd)
 
-decode4 : Int -> Int -> Int -> RowType a -> RowType b -> RowType c -> RowType d -> List Cell -> Result String (a, b, c, d)
+decode4 : Int ->
+  Int ->
+  Int ->
+  RowType a ->
+  RowType b ->
+  RowType c ->
+  RowType d ->
+  List Cell ->
+  Result String (a, b, c, d)
 decode4 wa wb wc ra rb rc rd cells = do
   va <- rtDecode ra (take wa cells)
   vb <- rtDecode rb (take wb (drop wa cells))
@@ -208,7 +225,10 @@ export
 tCustom : (b -> Result String a) -> RowType b -> RowType a
 tCustom f inner = mkRowType (rtWidth inner) (customDecoder f inner)
 
-customDecoder : (b -> Result String a) -> RowType b -> List Cell -> Result String a
+customDecoder : (b -> Result String a) ->
+  RowType b ->
+  List Cell ->
+  Result String a
 customDecoder f inner cells = flatMap f (rtDecode inner cells)
 
 -- | Build a RowType directly from a width and a raw cell decoder, when none of

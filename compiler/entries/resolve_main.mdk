@@ -15,7 +15,9 @@ import frontend.resolve.{resolveToLines}
 main = match args ()
   [runtimePath, preludePath, targetPath] =>
     withRuntime runtimePath preludePath targetPath
-  _ => ePutStrLn "usage: medaka run compiler/entries/resolve_main.mdk <runtime.mdk> <core.mdk> <file.mdk>"
+  _ =>
+    ePutStrLn
+      "usage: medaka run compiler/entries/resolve_main.mdk <runtime.mdk> <core.mdk> <file.mdk>"
 
 withRuntime : String -> String -> String -> <IO> Unit
 withRuntime runtimePath preludePath targetPath = match readFile runtimePath
@@ -29,5 +31,10 @@ withPrelude runtimeSrc preludePath targetPath = match readFile preludePath
 
 withTarget : String -> String -> String -> <IO> Unit
 withTarget runtimeSrc preludeSrc targetPath = match readFile targetPath
-  Ok targetSrc => putStr (resolveToLines (parse runtimeSrc) (parse preludeSrc) (desugar (parse targetSrc)))
+  Ok targetSrc =>
+    putStr
+      (resolveToLines
+        (parse runtimeSrc)
+        (parse preludeSrc)
+        (desugar (parse targetSrc)))
   Err msg => ePutStrLn msg

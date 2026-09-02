@@ -1,5 +1,5 @@
 # META
-source_lines=329
+source_lines=325
 stages=DESUGAR,MARK
 # SOURCE
 {- | Unsigned 64-bit arithmetic.
@@ -222,14 +222,7 @@ limbAt i (U64 a0 a1 a2 a3) =
 -- Whole-limb offset for a shift of `n` bits (n in [0, 63]).
 shiftWords : Int -> Int
 shiftWords n =
-  if n >= 48 then
-    3
-  else if n >= 32 then
-    2
-  else if n >= 16 then
-    1
-  else
-    0
+  if n >= 48 then 3 else if n >= 32 then 2 else if n >= 16 then 1 else 0
 
 -- One output limb of a logical right shift: low bits of limb `(i+ws)` plus the
 -- carried-in low bits of limb `(i+ws+1)`.
@@ -303,11 +296,17 @@ bitAt u i = bitAnd (limbAt 0 (shr i u)) 1
 -- limb rep so nothing overflows a bare 63-bit Int.  Accumulates the remainder.
 modGo : U64 -> U64 -> U64 -> Int -> U64
 modGo dividend divisor rem i =
-  if i < 0 then rem
+  if i < 0 then
+    rem
   else
     let shifted = add rem rem
     let bit = bitAt dividend i
-    let rem2 = U64 (bitOr (limbAt 0 shifted) bit) (limbAt 1 shifted) (limbAt 2 shifted) (limbAt 3 shifted)
+    let rem2 =
+      U64
+        (bitOr (limbAt 0 shifted) bit)
+        (limbAt 1 shifted)
+        (limbAt 2 shifted)
+        (limbAt 3 shifted)
     let rem3 = match cmp rem2 divisor
       Lt => rem2
       _ => sub rem2 divisor
@@ -324,10 +323,7 @@ modGo dividend divisor rem i =
 export
 mod : U64 -> U64 -> U64
 mod dividend divisor =
-  if isZero divisor then
-    dividend
-  else
-    modGo dividend divisor zero 63
+  if isZero divisor then dividend else modGo dividend divisor zero 63
 
 -- > mod (U64 0 0 0 32768) (fromIntBits 3)
 -- U64 2 0 0 0

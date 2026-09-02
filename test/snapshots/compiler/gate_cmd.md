@@ -1,5 +1,5 @@
 # META
-source_lines=5046
+source_lines=5282
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_cmd.mdk — `medaka gate`, the gate-registry driver (#2176, epic #2182).
@@ -129,21 +129,20 @@ import support.util.{
 -- from).  The list is kept in sorted order so a diff of the registry reads as a
 -- change of fact, not a reordering.
 
-public export data Gate =
-  | Gate {
-      name : String,
-      area : String,
-      shard : String,
-      project : String,
-      tiers : List String,
-      cost : String,
-      kind : String,
-      run : String,
-      oracles : List String,
-      sources : List String,
-      corpus : List String,
-      toolchain : List String,
-    }
+public export data Gate = Gate {
+  name : String,
+  area : String,
+  shard : String,
+  project : String,
+  tiers : List String,
+  cost : String,
+  kind : String,
+  run : String,
+  oracles : List String,
+  sources : List String,
+  corpus : List String,
+  toolchain : List String,
+}
 
 -- ── Registry reading ────────────────────────────────────────────────────────
 
@@ -151,14 +150,18 @@ public export data Gate =
 reqStr : Int -> String -> Toml -> Result String String
 reqStr i field entry = match getString field entry
   Some s => Ok s
-  None => Err "gates.toml: [[gate]] #\{intToString i}: missing required string field '\{field}'"
+  None =>
+    Err
+      "gates.toml: [[gate]] #\{intToString i}: missing required string field '\{field}'"
 
 -- Pull one required string-array field.  Present-but-empty is fine; absent is
 -- not (see the schema note above).
 reqArr : Int -> String -> Toml -> Result String (List String)
 reqArr i field entry = match getArray field entry
   Some xs => Ok xs
-  None => Err "gates.toml: [[gate]] #\{intToString i}: missing required array field '\{field}'"
+  None =>
+    Err
+      "gates.toml: [[gate]] #\{intToString i}: missing required array field '\{field}'"
 
 readGate : Toml -> Int -> Result String Gate
 readGate doc i = match tableEntry "gate" i doc
@@ -179,32 +182,31 @@ readGateEntry i e = do
   sources <- reqArr i "sources" e
   corpus <- reqArr i "corpus" e
   toolchain <- reqArr i "toolchain" e
-  Ok
-    Gate {
-      name = name,
-      area = area,
-      shard = shard,
-      project = project,
-      tiers = tiers,
-      cost = cost,
-      kind = kind,
-      run = run,
-      oracles = oracles,
-      sources = sources,
-      corpus = corpus,
-      toolchain = toolchain,
-    }
+  Ok Gate {
+    name = name,
+    area = area,
+    shard = shard,
+    project = project,
+    tiers = tiers,
+    cost = cost,
+    kind = kind,
+    run = run,
+    oracles = oracles,
+    sources = sources,
+    corpus = corpus,
+    toolchain = toolchain,
+  }
 
 readGatesFrom : Toml -> Int -> Int -> List Gate -> Result String (List Gate)
 readGatesFrom doc i n acc
   | i >= n = Ok (reverseGates acc [])
   | otherwise = match readGate doc i
     Err m => Err m
-    Ok g => readGatesFrom doc (i + 1) n (g::acc)
+    Ok g => readGatesFrom doc (i + 1) n (g :: acc)
 
 reverseGates : List Gate -> List Gate -> List Gate
 reverseGates [] acc = acc
-reverseGates (g::gs) acc = reverseGates gs (g::acc)
+reverseGates (g :: gs) acc = reverseGates gs (g :: acc)
 
 {- | Parse a registry's TOML source into its gate entries, in file order.
    An empty registry is an error: an unreadable or empty `gates.toml` must not
@@ -237,19 +239,20 @@ parseRegistry src = match parse src
 -- ci.yml generator (S-2) is what will read it and emit it verbatim as the
 -- row's comment block.
 
-public export data Shard =
-  | Shard {
-      name : String,
-      fullCores : Bool,
-      wasmArm : Bool,
-      rationale : String,
-      pinned : List String,
-    }
+public export data Shard = Shard {
+  name : String,
+  fullCores : Bool,
+  wasmArm : Bool,
+  rationale : String,
+  pinned : List String,
+}
 
 shardStr : Int -> String -> Toml -> Result String String
 shardStr i field entry = match getString field entry
   Some s => Ok s
-  None => Err "gates.toml: [[shard]] #\{intToString i}: missing required string field '\{field}'"
+  None =>
+    Err
+      "gates.toml: [[shard]] #\{intToString i}: missing required string field '\{field}'"
 
 -- Present-or-error, like every other field: an ABSENT `wasm_arm` must not
 -- silently read as `false`.  In ci.yml the key IS absent when the option is
@@ -259,7 +262,9 @@ shardStr i field entry = match getString field entry
 shardBool : Int -> String -> Toml -> Result String Bool
 shardBool i field entry = match getBool field entry
   Some b => Ok b
-  None => Err "gates.toml: [[shard]] #\{intToString i}: missing required boolean field '\{field}'"
+  None =>
+    Err
+      "gates.toml: [[shard]] #\{intToString i}: missing required boolean field '\{field}'"
 
 -- Likewise for the row's declared closed-row membership.  Present-but-empty is
 -- the normal reading on an OPEN row; ABSENT is an error, because an absent
@@ -268,7 +273,9 @@ shardBool i field entry = match getBool field entry
 shardArr : Int -> String -> Toml -> Result String (List String)
 shardArr i field entry = match getArray field entry
   Some xs => Ok xs
-  None => Err "gates.toml: [[shard]] #\{intToString i}: missing required array field '\{field}'"
+  None =>
+    Err
+      "gates.toml: [[shard]] #\{intToString i}: missing required array field '\{field}'"
 
 readShard : Toml -> Int -> Result String Shard
 readShard doc i = match tableEntry "shard" i doc
@@ -282,25 +289,24 @@ readShardEntry i e = do
   wasmArm <- shardBool i "wasm_arm" e
   rationale <- shardStr i "rationale" e
   pinned <- shardArr i "pinned_gates" e
-  Ok
-    Shard {
-      name = name,
-      fullCores = fullCores,
-      wasmArm = wasmArm,
-      rationale = rationale,
-      pinned = pinned,
-    }
+  Ok Shard {
+    name = name,
+    fullCores = fullCores,
+    wasmArm = wasmArm,
+    rationale = rationale,
+    pinned = pinned,
+  }
 
 readShardsFrom : Toml -> Int -> Int -> List Shard -> Result String (List Shard)
 readShardsFrom doc i n acc
   | i >= n = Ok (reverseShards acc [])
   | otherwise = match readShard doc i
     Err m => Err m
-    Ok sh => readShardsFrom doc (i + 1) n (sh::acc)
+    Ok sh => readShardsFrom doc (i + 1) n (sh :: acc)
 
 reverseShards : List Shard -> List Shard -> List Shard
 reverseShards [] acc = acc
-reverseShards (s::ss) acc = reverseShards ss (s::acc)
+reverseShards (s :: ss) acc = reverseShards ss (s :: acc)
 
 {- | Parse a registry's `[[shard]]` rows, in file order.  A registry with no
    rows is an error for the same reason one with no gates is: "the repo
@@ -425,7 +431,8 @@ parseSelector tok = match selPrefix "name:" tok
         Some v => Ok (SelTier v)
         None =>
           if hasColon tok then
-            Err "unknown selector field in '\{tok}' (expected name:, area:, project: or tier:)"
+            Err
+              "unknown selector field in '\{tok}' (expected name:, area:, project: or tier:)"
           else
             Ok (SelName tok)
 
@@ -450,7 +457,7 @@ matchesSelector (SelTier p) g = anyTierMatch p g.tiers
 export
 anyTierMatch : String -> List String -> Bool
 anyTierMatch _ [] = False
-anyTierMatch p (t::ts)
+anyTierMatch p (t :: ts)
   | globMatch p t = True
   | globMatch p (tierPartOf t) = True
   | otherwise = anyTierMatch p ts
@@ -466,7 +473,7 @@ export
 tierPartOf : String -> String
 tierPartOf tok = match splitOnChar '/' tok
   [] => tok
-  t::_ => t
+  t :: _ => t
 
 {- | A run token's mode part: everything after the first `/`, or `""`.
 
@@ -487,13 +494,13 @@ modePartOf tok =
 -- Conjunction: a gate must satisfy EVERY selector given.
 matchesAll : List Selector -> Gate -> Bool
 matchesAll [] _ = True
-matchesAll (s::ss) g = matchesSelector s g && matchesAll ss g
+matchesAll (s :: ss) g = matchesSelector s g && matchesAll ss g
 
 {- | Select the gates matching every selector, preserving registry order. -}
 export
 selectGates : List Selector -> List Gate -> List Gate
 selectGates _ [] = []
-selectGates sels (g::gs)
+selectGates sels (g :: gs)
   | matchesAll sels g = g :: selectGates sels gs
   | otherwise = selectGates sels gs
 
@@ -501,25 +508,24 @@ selectGates sels (g::gs)
 
 renderNames : List Gate -> String
 renderNames [] = ""
-renderNames (g::gs) = "\{g.name}\n" ++ renderNames gs
+renderNames (g :: gs) = "\{g.name}\n" ++ renderNames gs
 
 gateJson : Gate -> Json
-gateJson g = jObject
-  [
-    ("name", JString g.name),
-    ("baselineKey", JString (baselineKey g.run)),
-    ("area", JString g.area),
-    ("shard", JString g.shard),
-    ("project", JString g.project),
-    ("tiers", jArray (map JString g.tiers)),
-    ("cost", JString g.cost),
-    ("kind", JString g.kind),
-    ("run", JString g.run),
-    ("oracles", jArray (map JString g.oracles)),
-    ("sources", jArray (map JString g.sources)),
-    ("corpus", jArray (map JString g.corpus)),
-    ("toolchain", jArray (map JString g.toolchain)),
-  ]
+gateJson g = jObject [
+  ("name", JString g.name),
+  ("baselineKey", JString (baselineKey g.run)),
+  ("area", JString g.area),
+  ("shard", JString g.shard),
+  ("project", JString g.project),
+  ("tiers", jArray (map JString g.tiers)),
+  ("cost", JString g.cost),
+  ("kind", JString g.kind),
+  ("run", JString g.run),
+  ("oracles", jArray (map JString g.oracles)),
+  ("sources", jArray (map JString g.sources)),
+  ("corpus", jArray (map JString g.corpus)),
+  ("toolchain", jArray (map JString g.toolchain)),
+]
 
 {- | The `--json` rendering: a JSON array of entry objects, in registry order,
    every schema field present. -}
@@ -528,14 +534,13 @@ renderJson : List Gate -> String
 renderJson gs = stringify (jArray (map gateJson gs))
 
 shardJson : Shard -> Json
-shardJson sh = jObject
-  [
-    ("name", JString sh.name),
-    ("full_cores", JBool sh.fullCores),
-    ("wasm_arm", JBool sh.wasmArm),
-    ("rationale", JString sh.rationale),
-    ("pinned_gates", jArray (map JString sh.pinned)),
-  ]
+shardJson sh = jObject [
+  ("name", JString sh.name),
+  ("full_cores", JBool sh.fullCores),
+  ("wasm_arm", JBool sh.wasmArm),
+  ("rationale", JString sh.rationale),
+  ("pinned_gates", jArray (map JString sh.pinned)),
+]
 
 {- | `--shards --json`: the matrix rows as a JSON array, in registry order. -}
 export
@@ -550,147 +555,130 @@ boolWord b = if b then "true" else "false"
 export
 renderShards : List Shard -> String
 renderShards [] = ""
-renderShards (sh::shs) = "\{sh.name}: full_cores=\{boolWord sh.fullCores} wasm_arm=\{boolWord sh.wasmArm} rationale=\{sh.rationale} pinned_gates=[\{joinSpace sh.pinned}]\n"
-  ++ renderShards shs
+renderShards (sh :: shs) =
+  "\{sh.name}: full_cores=\{boolWord sh.fullCores} wasm_arm=\{boolWord sh.wasmArm} rationale=\{sh.rationale} pinned_gates=[\{joinSpace sh.pinned}]\n"
+    ++ renderShards shs
 
 -- ── CLI ─────────────────────────────────────────────────────────────────────
 
 export
 gateHelpText : String
-gateHelpText = stringConcat
-  [
-    "medaka gate — Query the gate registry (test/gates.toml)\n",
-    "\n",
-    "Usage:\n",
-    "  medaka gate list    [<selector>...] [--json] [--registry <path>]\n",
-    "  medaka gate list    --shards [--json] [--registry <path>]\n",
-    "  medaka gate run     [<selector>...] [--dry-run] [--json] [--report <path>]\n",
-    "                      [--timeout <secs>] [--jobs <n>] [--no-stale-check]\n",
-    "                      [--registry <path>]\n",
-    "  medaka gate verify  [--registry <path>]\n",
-    "  medaka gate explain <path> [--prose] [--registry <path>]\n",
-    "  medaka gate reach   [<changed-path>...] [--paths-from <file>] [--json]\n",
-    "                      [--registry <path>] [--root <path>]\n",
-    "  medaka gate ci      [--check] [--registry <path>] [--workflow <path>]\n",
-    "  medaka gate balance [--check] [--registry <path>] [--baseline <path>]\n",
-    "  medaka gate budget  [--registry <path>] [--baseline <path>]\n",
-    "                      [--commit-message <text>]\n",
-    "\n",
-    "Selectors (conjunction — a gate must match all of them):\n",
-    "  name:<glob>      gate name, e.g. name:diff_compiler_*\n",
-    "  area:<glob>      semantic area, e.g. area:backend\n",
-    "  project:<glob>   owning project, e.g. project:sqlite\n",
-    "  tier:<glob>      a RUN of this gate: merge | nightly | ondemand, optionally\n",
-    "                   /<mode> (the invocation delta, e.g. nightly/PERF_DEEP=1).\n",
-    "                   A gate can have several; the glob matches a whole token or\n",
-    "                   its tier part, so tier:nightly selects every mode.\n",
-    "  <glob>           sugar for name:<glob>\n",
-    "\n",
-    "A selector matching zero gates is an error, not an empty list.\n",
-    "\n",
-    "  --json             list: the registry entries as JSON.\n",
-    "  --shards           list: the ci.yml `gates` matrix rows, not the gates.\n",
-    "                     run: the machine-readable run report as JSON.\n",
-    "  --registry <path>  read this registry instead of <MEDAKA_ROOT>/test/gates.toml\n",
-    "\n",
-    "`gate balance` only:\n",
-    "  --check            derive the assignment in memory and report whether the\n",
-    "                     committed one matches it; write nothing\n",
-    "  --baseline <path>  read this cost baseline instead of\n",
-    "                     <MEDAKA_ROOT>/test/gate_cost_baseline.json\n",
-    "\n",
-    "`gate balance` CHOOSES each gate's `shard` row from the registry's own\n",
-    "constraints plus the measured cost baseline, and rewrites the `shard = \"...\"`\n",
-    "lines in test/gates.toml in place. A full_cores row is CLOSED: its members\n",
-    "are declared by that [[shard]] row's `pinned_gates` and checked in both\n",
-    "directions, so they are neither packed nor hand-assignable. A gate needing\n",
-    "wasm-tools/node only lands on a\n",
-    "row with wasm_arm = true. It refuses rather than pack from a missing cost,\n",
-    "and fails when the assignment it would emit misses its pole/floor budget.\n",
-    "\n",
-    "`gate run` only:\n",
-    "  --dry-run          print the resolved invocation plan; execute nothing\n",
-    "  --report <path>    write the per-gate timing report (JSON) to <path>\n",
-    "  --timeout <secs>   override the per-gate fuse (default by `cost`:\n",
-    "                     cheap 300s, medium 900s, heavy 3600s)\n",
-    "  --jobs <n>         ACCEPTED BUT IGNORED — this runner is sequential; the\n",
-    "                     value is recorded in the report.  Medaka has no\n",
-    "                     concurrency primitive (stdlib/runtime.mdk has no\n",
-    "                     fork/waitpid) and runCommand blocks.\n",
-    "  --no-stale-check   skip the stale-oracle refusal (as NO_STALE_CHECK=1 does;\n",
-    "                     it is also skipped whenever CI is set, on purpose)\n",
-    "\n",
-    "`gate run` reports each gate's RAW exit code and never normalizes polarity:\n",
-    "diff_compiler_must_fail is healthy when RED ([G-MUST-FAIL]).\n",
-    "\n",
-    "`gate verify` is the drift gate: text-only, no build. Checks every gate\n",
-    "candidate (test/preflight.sh's own candidate universe) is enrolled or\n",
-    "explicitly listed as a non-gate tool, every entry's run/oracles/corpus\n",
-    "targets exist, every entry is reachable by a selector, no two entries\n",
-    "share a `name`, and every entry's `cost` and `tiers` are well formed.\n",
-    "Exits nonzero on any violation. It checks the SHAPE of `tiers`, not\n",
-    "whether it agrees with the workflows — that is\n",
-    "test/diff_compiler_tier_drift.sh, which reads the workflow YAML.\n",
-    "\n",
-    "`gate ci` regenerates the marked GENERATED region in\n",
-    ".github/workflows/ci.yml — the `gates` job's eight-row matrix — from\n",
-    "the registry's [[shard]] rows and every entry's `shard` field. Run it\n",
-    "via `make gen-ci`.\n",
-    "\n",
-    "  --check            ci: compare only — compute the generated text and\n",
-    "                     compare it IN MEMORY to the file on disk, writing\n",
-    "                     nothing. Exit 0 when they agree, 1 with the first\n",
-    "                     differing line when they do not. This is the drift\n",
-    "                     check; regenerating first would heal an uncommitted\n",
-    "                     hand-edit before any diff could see it, and diffing\n",
-    "                     the whole file would also fire on an edit OUTSIDE\n",
-    "                     the generated region.\n",
-    "\n",
-    "The named-gate steps in soundness/wasm are NOT\n",
-    "generated — the registry cannot say which job runs which (see the\n",
-    "`gate ci` section of compiler/tools/gate_cmd.mdk).\n",
-    "\n",
-    "`gate explain <path>` is the reverse lookup: which entries select a\n",
-    "changed path, and why. Two layers, printed with preflight's own prefixes:\n",
-    "the registry-level POLICY (FULL on a blast-radius path; UNMAPPED + FULL on\n",
-    "an unmatched non-prose path; UNMAPPED alone on prose), then per-entry\n",
-    "`sources` globs and `corpus` directories on GATE lines. A bare token that\n",
-    "is also a field value (name/area/project/tier/run) gets TOKEN lines.\n",
-    "\n",
-    "`gate explain --prose <path>` prints ONLY layer 1b's verdict, `PROSE` or\n",
-    "`NONDOC`, and reads no registry. It exists so that\n",
-    "test/diff_compiler_prose_classifier.sh can diff this classifier against\n",
-    "the one .github/workflows/ci.yml's `detect` job runs (#2200).\n",
-    "\n",
-    "`gate reach <changed-path>...` is the QUEUE's project scoping (#2179):\n",
-    "which projects must run their gates for an entry touching those paths.\n",
-    "A path under <project>/ selects that project, plus every project whose\n",
-    "medaka.toml [dependencies] reaches it, plus the owning project of every\n",
-    "gate whose `corpus` names a selected project. An empty list, a compiler/\n",
-    "or stdlib/ path, and any path no project directory claims all FAIL OPEN\n",
-    "to every project: this command never answers `nothing`.\n",
-    "\n",
-    "`gate budget` is #2180's governor: text-only, no build. Reds when (a) a\n",
-    "schedulable gate has no cost baseline entry, (b) a gate's measured cost\n",
-    "has eaten into the tolerance-adjusted timeout its declared `cost` class\n",
-    "implies, or (c) the projected pole/floor (the same number `gate balance\n",
-    "--check` derives) exceeds S-4's budget. Any violation may be accepted on\n",
-    "purpose with a `Gate-Budget-Override: <token>` trailer on the commit\n",
-    "message (there is no PR body in a merge_group run) — the failing gate\n",
-    "prints the exact trailer to paste.\n",
-    "\n",
-    "  --commit-message <text>  budget: the commit message to scan for\n",
-    "                     `Gate-Budget-Override:` trailers. Omit for none.\n",
-  ]
+gateHelpText = stringConcat [
+  "medaka gate — Query the gate registry (test/gates.toml)\n", "\n", "Usage:\n",
+  "  medaka gate list    [<selector>...] [--json] [--registry <path>]\n",
+  "  medaka gate list    --shards [--json] [--registry <path>]\n",
+  "  medaka gate run     [<selector>...] [--dry-run] [--json] [--report <path>]\n",
+  "                      [--timeout <secs>] [--jobs <n>] [--no-stale-check]\n",
+  "                      [--registry <path>]\n",
+  "  medaka gate verify  [--registry <path>]\n",
+  "  medaka gate explain <path> [--prose] [--registry <path>]\n",
+  "  medaka gate reach   [<changed-path>...] [--paths-from <file>] [--json]\n",
+  "                      [--registry <path>] [--root <path>]\n",
+  "  medaka gate ci      [--check] [--registry <path>] [--workflow <path>]\n",
+  "  medaka gate balance [--check] [--registry <path>] [--baseline <path>]\n",
+  "  medaka gate budget  [--registry <path>] [--baseline <path>]\n",
+  "                      [--commit-message <text>]\n", "\n",
+  "Selectors (conjunction — a gate must match all of them):\n",
+  "  name:<glob>      gate name, e.g. name:diff_compiler_*\n",
+  "  area:<glob>      semantic area, e.g. area:backend\n",
+  "  project:<glob>   owning project, e.g. project:sqlite\n",
+  "  tier:<glob>      a RUN of this gate: merge | nightly | ondemand, optionally\n",
+  "                   /<mode> (the invocation delta, e.g. nightly/PERF_DEEP=1).\n",
+  "                   A gate can have several; the glob matches a whole token or\n",
+  "                   its tier part, so tier:nightly selects every mode.\n",
+  "  <glob>           sugar for name:<glob>\n", "\n",
+  "A selector matching zero gates is an error, not an empty list.\n", "\n",
+  "  --json             list: the registry entries as JSON.\n",
+  "  --shards           list: the ci.yml `gates` matrix rows, not the gates.\n",
+  "                     run: the machine-readable run report as JSON.\n",
+  "  --registry <path>  read this registry instead of <MEDAKA_ROOT>/test/gates.toml\n",
+  "\n", "`gate balance` only:\n",
+  "  --check            derive the assignment in memory and report whether the\n",
+  "                     committed one matches it; write nothing\n",
+  "  --baseline <path>  read this cost baseline instead of\n",
+  "                     <MEDAKA_ROOT>/test/gate_cost_baseline.json\n", "\n",
+  "`gate balance` CHOOSES each gate's `shard` row from the registry's own\n",
+  "constraints plus the measured cost baseline, and rewrites the `shard = \"...\"`\n",
+  "lines in test/gates.toml in place. A full_cores row is CLOSED: its members\n",
+  "are declared by that [[shard]] row's `pinned_gates` and checked in both\n",
+  "directions, so they are neither packed nor hand-assignable. A gate needing\n",
+  "wasm-tools/node only lands on a\n",
+  "row with wasm_arm = true. It refuses rather than pack from a missing cost,\n",
+  "and fails when the assignment it would emit misses its pole/floor budget.\n",
+  "\n", "`gate run` only:\n",
+  "  --dry-run          print the resolved invocation plan; execute nothing\n",
+  "  --report <path>    write the per-gate timing report (JSON) to <path>\n",
+  "  --timeout <secs>   override the per-gate fuse (default by `cost`:\n",
+  "                     cheap 300s, medium 900s, heavy 3600s)\n",
+  "  --jobs <n>         ACCEPTED BUT IGNORED — this runner is sequential; the\n",
+  "                     value is recorded in the report.  Medaka has no\n",
+  "                     concurrency primitive (stdlib/runtime.mdk has no\n",
+  "                     fork/waitpid) and runCommand blocks.\n",
+  "  --no-stale-check   skip the stale-oracle refusal (as NO_STALE_CHECK=1 does;\n",
+  "                     it is also skipped whenever CI is set, on purpose)\n",
+  "\n",
+  "`gate run` reports each gate's RAW exit code and never normalizes polarity:\n",
+  "diff_compiler_must_fail is healthy when RED ([G-MUST-FAIL]).\n", "\n",
+  "`gate verify` is the drift gate: text-only, no build. Checks every gate\n",
+  "candidate (test/preflight.sh's own candidate universe) is enrolled or\n",
+  "explicitly listed as a non-gate tool, every entry's run/oracles/corpus\n",
+  "targets exist, every entry is reachable by a selector, no two entries\n",
+  "share a `name`, and every entry's `cost` and `tiers` are well formed.\n",
+  "Exits nonzero on any violation. It checks the SHAPE of `tiers`, not\n",
+  "whether it agrees with the workflows — that is\n",
+  "test/diff_compiler_tier_drift.sh, which reads the workflow YAML.\n", "\n",
+  "`gate ci` regenerates the marked GENERATED region in\n",
+  ".github/workflows/ci.yml — the `gates` job's eight-row matrix — from\n",
+  "the registry's [[shard]] rows and every entry's `shard` field. Run it\n",
+  "via `make gen-ci`.\n", "\n",
+  "  --check            ci: compare only — compute the generated text and\n",
+  "                     compare it IN MEMORY to the file on disk, writing\n",
+  "                     nothing. Exit 0 when they agree, 1 with the first\n",
+  "                     differing line when they do not. This is the drift\n",
+  "                     check; regenerating first would heal an uncommitted\n",
+  "                     hand-edit before any diff could see it, and diffing\n",
+  "                     the whole file would also fire on an edit OUTSIDE\n",
+  "                     the generated region.\n", "\n",
+  "The named-gate steps in soundness/wasm are NOT\n",
+  "generated — the registry cannot say which job runs which (see the\n",
+  "`gate ci` section of compiler/tools/gate_cmd.mdk).\n", "\n",
+  "`gate explain <path>` is the reverse lookup: which entries select a\n",
+  "changed path, and why. Two layers, printed with preflight's own prefixes:\n",
+  "the registry-level POLICY (FULL on a blast-radius path; UNMAPPED + FULL on\n",
+  "an unmatched non-prose path; UNMAPPED alone on prose), then per-entry\n",
+  "`sources` globs and `corpus` directories on GATE lines. A bare token that\n",
+  "is also a field value (name/area/project/tier/run) gets TOKEN lines.\n",
+  "\n",
+  "`gate explain --prose <path>` prints ONLY layer 1b's verdict, `PROSE` or\n",
+  "`NONDOC`, and reads no registry. It exists so that\n",
+  "test/diff_compiler_prose_classifier.sh can diff this classifier against\n",
+  "the one .github/workflows/ci.yml's `detect` job runs (#2200).\n", "\n",
+  "`gate reach <changed-path>...` is the QUEUE's project scoping (#2179):\n",
+  "which projects must run their gates for an entry touching those paths.\n",
+  "A path under <project>/ selects that project, plus every project whose\n",
+  "medaka.toml [dependencies] reaches it, plus the owning project of every\n",
+  "gate whose `corpus` names a selected project. An empty list, a compiler/\n",
+  "or stdlib/ path, and any path no project directory claims all FAIL OPEN\n",
+  "to every project: this command never answers `nothing`.\n", "\n",
+  "`gate budget` is #2180's governor: text-only, no build. Reds when (a) a\n",
+  "schedulable gate has no cost baseline entry, (b) a gate's measured cost\n",
+  "has eaten into the tolerance-adjusted timeout its declared `cost` class\n",
+  "implies, or (c) the projected pole/floor (the same number `gate balance\n",
+  "--check` derives) exceeds S-4's budget. Any violation may be accepted on\n",
+  "purpose with a `Gate-Budget-Override: <token>` trailer on the commit\n",
+  "message (there is no PR body in a merge_group run) — the failing gate\n",
+  "prints the exact trailer to paste.\n", "\n",
+  "  --commit-message <text>  budget: the commit message to scan for\n",
+  "                     `Gate-Budget-Override:` trailers. Omit for none.\n"
+]
 
 -- Parsed `gate list` argv.
-data ListArgs =
-  | ListArgs {
-      json : Bool,
-      shards : Bool,
-      registry : Option String,
-      selectors : List String,
-    }
+data ListArgs = ListArgs {
+  json : Bool,
+  shards : Bool,
+  registry : Option String,
+  selectors : List String,
+}
 
 -- S-3 (#2355): every subcommand's argv walk and its C2 unrecognized-flag
 -- sentence now come from `stdlib/args.mdk` — `unknownFlagMessage` is the
@@ -701,7 +689,7 @@ data ListArgs =
 -- this slice.
 missingValueOverride : ArgSpec -> List (String, String) -> String -> String
 missingValueOverride _ [] msg = msg
-missingValueOverride sp ((flg, custom)::rest) msg =
+missingValueOverride sp ((flg, custom) :: rest) msg =
   if msg == missingValueMessage sp flg then
     custom
   else
@@ -711,13 +699,13 @@ missingValueOverride sp ((flg, custom)::rest) msg =
 -- fall through as a positional pre-migration; base rejected any leading-`-`
 -- token here, so this restores that floor via the S-5 knob.
 listArgSpec : ArgSpec
-listArgSpec = withStrictDash (spec
-  "gate list"
-  [
-    switch ["--json"] "emit machine-readable JSON",
-    switch ["--shards"] "print each entry's shard placement",
-    value ["--registry"] "PATH" "override the gate registry path",
-  ])
+listArgSpec =
+  withStrictDash
+    (spec "gate list" [
+      switch ["--json"] "emit machine-readable JSON",
+      switch ["--shards"] "print each entry's shard placement",
+      value ["--registry"] "PATH" "override the gate registry path",
+    ])
 
 listMissingValue : List (String, String)
 listMissingValue = [("--registry", "medaka gate list: --registry needs a path")]
@@ -734,13 +722,13 @@ parseListArgs argv = match parseArgs listArgSpec argv
 
 parseSelectors : List String -> List Selector -> Result String (List Selector)
 parseSelectors [] acc = Ok (reverseSels acc [])
-parseSelectors (t::ts) acc = match parseSelector t
+parseSelectors (t :: ts) acc = match parseSelector t
   Err m => Err m
-  Ok s => parseSelectors ts (s::acc)
+  Ok s => parseSelectors ts (s :: acc)
 
 reverseSels : List Selector -> List Selector -> List Selector
 reverseSels [] acc = acc
-reverseSels (s::ss) acc = reverseSels ss (s::acc)
+reverseSels (s :: ss) acc = reverseSels ss (s :: acc)
 
 -- `<MEDAKA_ROOT>/test/gates.toml` unless --registry overrides it.  MEDAKA_ROOT
 -- resolves exe-relative like every other asset (build_cmd.defaultMedakaRoot),
@@ -764,18 +752,22 @@ listOutput argv = match parseListArgs argv
       let path = registryPath a.registry
       match readFile path
         Err m => Err "medaka gate list: cannot read registry: \{m}"
-        Ok src => if a.shards then shardsOutput a.json a.selectors src
-        else match parseRegistry src
-          Err m => Err "medaka gate list: \{m}"
-          Ok gates =>
-            selectionOutput a.json a.selectors (selectGates sels gates) path
+        Ok src =>
+          if a.shards then
+            shardsOutput a.json a.selectors src
+          else match parseRegistry src
+            Err m => Err "medaka gate list: \{m}"
+            Ok gates =>
+              selectionOutput a.json a.selectors (selectGates sels gates) path
 
 -- `--shards` lists the MATRIX ROWS, which selectors do not range over — a
 -- selector is a per-gate predicate, and silently ignoring one here would let
 -- `list --shards area:eval` look like it had filtered something.
 shardsOutput : Bool -> List String -> String -> Result String String
 shardsOutput isJson tokens src
-  | not (isEmptyStrs tokens) = Err "medaka gate list: --shards takes no selectors (got: \{joinSpace tokens})"
+  | not (isEmptyStrs tokens) =
+    Err
+      "medaka gate list: --shards takes no selectors (got: \{joinSpace tokens})"
   | otherwise = match parseShards src
     Err m => Err "medaka gate list: \{m}"
     Ok shs =>
@@ -785,15 +777,19 @@ shardsOutput isJson tokens src
         Ok (renderShards shs)
 
 -- A selector that selects nothing is a HARD ERROR (see the module header).
-selectionOutput : Bool -> List String -> List Gate -> String -> Result String String
+selectionOutput : Bool ->
+  List String ->
+  List Gate ->
+  String ->
+  Result String String
 selectionOutput _ tokens [] path
   | isEmptyStrs tokens = Err "medaka gate list: \{path} contains no gates"
   | otherwise = Err "medaka gate list: no gates match: \{joinSpace tokens}"
-selectionOutput isJson _ (g::gs) _ =
+selectionOutput isJson _ (g :: gs) _ =
   if isJson then
-    Ok (renderJson (g::gs) ++ "\n")
+    Ok (renderJson (g :: gs) ++ "\n")
   else
-    Ok (renderNames (g::gs))
+    Ok (renderNames (g :: gs))
 
 -- The command's only exit site.
 emit : Result String String -> <IO> Unit
@@ -808,26 +804,28 @@ isEmptyStrs _ = False
 
 joinSpace : List String -> String
 joinSpace [] = ""
-joinSpace (x::[]) = x
-joinSpace (x::xs) = "\{x} \{joinSpace xs}"
+joinSpace (x :: []) = x
+joinSpace (x :: xs) = "\{x} \{joinSpace xs}"
 
 {- | `medaka gate <sub> …`. -}
 export
 runGateCmd : List String -> <IO> Unit
 runGateCmd [] =
-  emit (Err
-    "usage: medaka gate <list|run|verify|explain|reach|ci|balance|budget> [<selector>...] [--json]")
-runGateCmd ("list"::rest) = emit (listOutput rest)
-runGateCmd ("run"::rest) = runRunCmdBody rest
-runGateCmd ("verify"::rest) = verifyCmdBody rest
-runGateCmd ("explain"::rest) = explainCmdBody rest
-runGateCmd ("reach"::rest) = reachCmdBody rest
-runGateCmd ("ci"::rest) = ciCmdBody rest
-runGateCmd ("balance"::rest) = balCmdBody rest
-runGateCmd ("budget"::rest) = budgetCmdBody rest
-runGateCmd (sub::_) =
-  emit (Err
-    "medaka gate: unknown subcommand '\{sub}' (expected: list, run, verify, explain, reach, ci, balance, budget)")
+  emit
+    (Err
+      "usage: medaka gate <list|run|verify|explain|reach|ci|balance|budget> [<selector>...] [--json]")
+runGateCmd ("list" :: rest) = emit (listOutput rest)
+runGateCmd ("run" :: rest) = runRunCmdBody rest
+runGateCmd ("verify" :: rest) = verifyCmdBody rest
+runGateCmd ("explain" :: rest) = explainCmdBody rest
+runGateCmd ("reach" :: rest) = reachCmdBody rest
+runGateCmd ("ci" :: rest) = ciCmdBody rest
+runGateCmd ("balance" :: rest) = balCmdBody rest
+runGateCmd ("budget" :: rest) = budgetCmdBody rest
+runGateCmd (sub :: _) =
+  emit
+    (Err
+      "medaka gate: unknown subcommand '\{sub}' (expected: list, run, verify, explain, reach, ci, balance, budget)")
 
 -- ── `gate run` ──────────────────────────────────────────────────────────────
 --
@@ -864,28 +862,26 @@ runGateCmd (sub::_) =
 -- started at all (a missing script, a failed `mktemp`, an ENOENT on `env`) —
 -- which is a DIFFERENT fact from "the gate ran and exited non-zero", and the
 -- two must not be blurred into one failure count without saying which.
-public export data GateResult =
-  | GateResult {
-      name : String,
-      script : String,
-      shell : String,
-      exitCode : Int,
-      timedOut : Bool,
-      spawnError : String,
-      seconds : Float,
-      out : String,
-      err : String,
-    }
+public export data GateResult = GateResult {
+  name : String,
+  script : String,
+  shell : String,
+  exitCode : Int,
+  timedOut : Bool,
+  spawnError : String,
+  seconds : Float,
+  out : String,
+  err : String,
+}
 
 -- Everything a gate invocation needs that is the same for every gate in a run.
-data RunEnv =
-  | RunEnv {
-      root : String,
-      medaka : String,
-      emitter : String,
-      scratchRoot : String,
-      timeoutOverride : Int,
-    }
+data RunEnv = RunEnv {
+  root : String,
+  medaka : String,
+  emitter : String,
+  scratchRoot : String,
+  timeoutOverride : Int,
+}
 
 -- ── timeout policy ──────────────────────────────────────────────────────────
 --
@@ -981,14 +977,18 @@ hasSourceExt p = endsWith ".mdk" p || endsWith ".c" p || endsWith ".h" p
 newestMtimeIn : String -> Float -> <IO> Float
 newestMtimeIn path acc = match statFile path
   Err _ => acc
-  Ok (_, isDir, _, mt) => if isDir then match listDir path
-    Err _ => acc
-    Ok names => newestMtimeEntries path names acc
-  else if hasSourceExt path && mt > acc then mt else acc
+  Ok (_, isDir, _, mt) =>
+    if isDir then match listDir path
+      Err _ => acc
+      Ok names => newestMtimeEntries path names acc
+    else if hasSourceExt path && mt > acc then
+      mt
+    else
+      acc
 
 newestMtimeEntries : String -> List String -> Float -> <IO> Float
 newestMtimeEntries _ [] acc = acc
-newestMtimeEntries dir (n::rest) acc =
+newestMtimeEntries dir (n :: rest) acc =
   newestMtimeEntries dir rest (newestMtimeIn "\{dir}/\{n}" acc)
 
 -- The same source set run_gates.sh scans: compiler/ and stdlib/ *.mdk, plus
@@ -1005,7 +1005,7 @@ newestSourceMtime root =
 -- switched off wholesale.
 selectedOracles : List Gate -> List String
 selectedOracles [] = []
-selectedOracles (g::gs) = g.oracles ++ selectedOracles gs
+selectedOracles (g :: gs) = g.oracles ++ selectedOracles gs
 
 -- The unfiltered scrape, mirroring run_gates.sh's own
 -- `grep -ohE 'test/bin/[a-z_0-9]+' "$g" | sed 's|test/bin/||'` over one gate
@@ -1021,61 +1021,64 @@ stripBinPrefix s =
     s
 
 scrapedOraclesIn : String -> <IO> List String
-scrapedOraclesIn scriptPath = match runCommand "grep" ["-ohE", "test/bin/[a-z_0-9]+", scriptPath]
-  Err _ => []
-  Ok (_, out, _) => map stripBinPrefix (filterList nonBlankLine (splitNl out))
+scrapedOraclesIn scriptPath =
+  match runCommand "grep" ["-ohE", "test/bin/[a-z_0-9]+", scriptPath]
+    Err _ => []
+    Ok (_, out, _) => map stripBinPrefix (filterList nonBlankLine (splitNl out))
 
 nonBlankLine : String -> Bool
 nonBlankLine s = stringTrim s /= ""
 
 scrapedOracles : String -> List Gate -> <IO> List String
 scrapedOracles _ [] = []
-scrapedOracles root (g::gs) = scrapedOraclesIn "\{root}/\{g.run}"
-  ++ scrapedOracles root gs
+scrapedOracles root (g :: gs) =
+  scrapedOraclesIn "\{root}/\{g.run}" ++ scrapedOracles root gs
 
 -- MISSING is not stale — the gate's own "oracle not built" exit-2 owns that
 -- case and says so in its own words.
 staleOf : String -> Float -> List String -> <IO> List String
 staleOf _ _ [] = []
-staleOf root newest (o::os) =
+staleOf root newest (o :: os) =
   let rest = staleOf root newest os
   match statFile "\{root}/test/bin/\{o}"
     Err _ => rest
-    Ok (_, _, _, mt) => if mt < newest then o::rest else rest
+    Ok (_, _, _, mt) => if mt < newest then o :: rest else rest
 
 indentedNames : List String -> List String
 indentedNames [] = []
-indentedNames (o::os) = "  \{o}" :: indentedNames os
+indentedNames (o :: os) = "  \{o}" :: indentedNames os
 
 staleBannerLines : List String -> List String
 staleBannerLines [] = []
-staleBannerLines (o::os) =
-  "    FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one \{o}" ::
-    staleBannerLines os
+staleBannerLines (o :: os) =
+  "    FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one \{o}"
+    :: staleBannerLines os
 
 staleBanner : List String -> String
 staleBanner stale =
   joinNl
     ([
-      "════════════════════════════════════════════════════════════════════",
-      "STALE ORACLES (\{intToString (listLen stale)}) — REFUSING TO RUN.",
-      "",
-      joinNl (indentedNames stale),
-      "",
-      "These probe binaries are OLDER than compiler/ stdlib/ runtime/ source.",
-      "A gate reading one is testing a compiler that no longer exists — and it",
-      "reports an ordinary-looking FAIL that is INDISTINGUISHABLE from a real",
-      "regression.",
-      "",
-      "Rebuild ONLY what is stale — one probe per command:",
-    ] ++ staleBannerLines stale ++ [
-      "",
-      "(Override with NO_STALE_CHECK=1, --no-stale-check, or CI=1 only if you",
-      " know exactly why.  This check is skipped in CI on purpose — see the",
-      " comment above staleOf.)",
-      "════════════════════════════════════════════════════════════════════",
-      "",
-    ])
+        "════════════════════════════════════════════════════════════════════",
+        "STALE ORACLES (\{intToString (listLen stale)}) — REFUSING TO RUN.",
+        "",
+        joinNl (indentedNames stale),
+        "",
+        "These probe binaries are OLDER than compiler/ stdlib/ runtime/ source.",
+        "A gate reading one is testing a compiler that no longer exists — and it",
+        "reports an ordinary-looking FAIL that is INDISTINGUISHABLE from a real",
+        "regression.",
+        "",
+        "Rebuild ONLY what is stale — one probe per command:",
+      ]
+      ++ staleBannerLines stale
+      ++ [
+        "",
+        "(Override with NO_STALE_CHECK=1, --no-stale-check, or CI=1 only if you",
+        " know exactly why.  This check is skipped in CI on purpose — see the",
+        " comment above staleOf.)",
+        "════════════════════════════════════════════════════════════════════",
+        ""
+      ])
 
 -- run_gates.sh's `[ -z "${VAR:-}" ]`: SET-BUT-EMPTY counts as unset.
 envSet : String -> <IO> Bool
@@ -1084,7 +1087,8 @@ envSet name = envOr name "" /= ""
 staleRefusal : Bool -> String -> List Gate -> <IO> Option String
 staleRefusal True _ _ = None
 staleRefusal False root gs =
-  if envSet "CI" || envSet "NO_STALE_CHECK" then None
+  if envSet "CI" || envSet "NO_STALE_CHECK" then
+    None
   else
     let names = sortUniqS (selectedOracles gs ++ scrapedOracles root gs)
     let newest = newestSourceMtime root
@@ -1107,7 +1111,7 @@ shellFor script = match readFile script
 firstLineOf : String -> String
 firstLineOf s = match splitNl s
   [] => ""
-  l::_ => l
+  l :: _ => l
 
 substrIn : String -> String -> Bool
 substrIn needle hay =
@@ -1163,7 +1167,12 @@ spawnFailure g script msg dt = GateResult {
 runOneGate : RunEnv -> Gate -> <IO> GateResult
 runOneGate env g =
   let script = "\{env.root}/\{g.run}"
-  if not (fileExists script) then spawnFailure g script "gate script not found (registry `run` field): \{g.run}" 0.0
+  if not (fileExists script) then
+    spawnFailure
+      g
+      script
+      "gate script not found (registry `run` field): \{g.run}"
+      0.0
   else
     let sh = shellFor script
     let secs = timeoutFor env.timeoutOverride g.cost
@@ -1197,9 +1206,11 @@ msOf r = floatToInt (r.seconds * 1000.0)
 resultLine : GateResult -> String
 resultLine r
   | r.spawnError /= "" = "ERROR \{r.name}  (\{r.spawnError})\n"
-  | r.timedOut = "TIMEOUT \{r.name}  (exit \{intToString r.exitCode} after \{intToString (msOf r)}ms)\n"
+  | r.timedOut =
+    "TIMEOUT \{r.name}  (exit \{intToString r.exitCode} after \{intToString (msOf r)}ms)\n"
   | r.exitCode == 0 = "PASS  \{r.name}  (\{intToString (msOf r)}ms)\n"
-  | otherwise = "FAIL  \{r.name}  (exit \{intToString r.exitCode}, \{intToString (msOf r)}ms)\n"
+  | otherwise =
+    "FAIL  \{r.name}  (exit \{intToString r.exitCode}, \{intToString (msOf r)}ms)\n"
 
 -- ── the sequential loop ─────────────────────────────────────────────────────
 --
@@ -1214,11 +1225,11 @@ resultLine r
 -- reported in the summary as `sequential` — see the report's Notes.
 runGatesLoop : RunEnv -> List Gate -> List GateResult -> <IO> List GateResult
 runGatesLoop _ [] acc = reverseL acc
-runGatesLoop env (g::gs) acc =
+runGatesLoop env (g :: gs) acc =
   let r = runOneGate env g
   let _ = putStr (resultLine r)
   let _ = flushStdout ()
-  runGatesLoop env gs (r::acc)
+  runGatesLoop env gs (r :: acc)
 
 -- ── failure output ──────────────────────────────────────────────────────────
 --
@@ -1248,27 +1259,31 @@ afterNewlines cs i len want
 tailLines : Int -> String -> String
 tailLines n s =
   let k = listLen (splitNl s)
-  if k <= n then s
+  if k <= n then
+    s
   else
     let cs = stringToChars s
     stringSlice (afterNewlines cs 0 (arrayLength cs) (k - n)) (stringLength s) s
 
 failureDetail : GateResult -> String
 failureDetail r =
-  let hdr = "\n───── \{r.name} — \{r.shell} \{r.script} (exit \{intToString r.exitCode}) ─────\n"
-  let o = if stringTrim r.out == "" then
-    "  (stdout: empty)\n"
-  else
-    "  ── stdout ──\n\{tailLines 200 r.out}\n"
-  let e = if stringTrim r.err == "" then
-    "  (stderr: empty)\n"
-  else
-    "  ── stderr ──\n\{tailLines 200 r.err}\n"
+  let hdr =
+    "\n───── \{r.name} — \{r.shell} \{r.script} (exit \{intToString r.exitCode}) ─────\n"
+  let o =
+    if stringTrim r.out == "" then
+      "  (stdout: empty)\n"
+    else
+      "  ── stdout ──\n\{tailLines 200 r.out}\n"
+  let e =
+    if stringTrim r.err == "" then
+      "  (stderr: empty)\n"
+    else
+      "  ── stderr ──\n\{tailLines 200 r.err}\n"
   "\{hdr}\{o}\{e}"
 
 failureDetails : List GateResult -> String
 failureDetails [] = ""
-failureDetails (r::rs)
+failureDetails (r :: rs)
   | gateOk r = failureDetails rs
   | otherwise = failureDetail r ++ failureDetails rs
 
@@ -1276,43 +1291,43 @@ failureDetails (r::rs)
 
 countOk : List GateResult -> Int
 countOk [] = 0
-countOk (r::rs) = (if gateOk r then 1 else 0) + countOk rs
+countOk (r :: rs) = (if gateOk r then 1 else 0) + countOk rs
 
 failingNames : List GateResult -> List String
 failingNames [] = []
-failingNames (r::rs)
+failingNames (r :: rs)
   | gateOk r = failingNames rs
   | otherwise = r.name :: failingNames rs
 
 resultJson : GateResult -> Json
-resultJson r = jObject
-  [
-    ("name", JString r.name),
-    ("script", JString r.script),
-    ("shell", JString r.shell),
-    ("exit", JInt r.exitCode),
-    ("timedOut", JBool r.timedOut),
-    ("ms", JInt (msOf r)),
-    ("seconds", JFloat r.seconds),
-    ("ok", JBool (gateOk r)),
-    ("spawnError", JString r.spawnError),
-    ("stdout", JString r.out),
-    ("stderr", JString r.err),
-  ]
+resultJson r = jObject [
+  ("name", JString r.name),
+  ("script", JString r.script),
+  ("shell", JString r.shell),
+  ("exit", JInt r.exitCode),
+  ("timedOut", JBool r.timedOut),
+  ("ms", JInt (msOf r)),
+  ("seconds", JFloat r.seconds),
+  ("ok", JBool (gateOk r)),
+  ("spawnError", JString r.spawnError),
+  ("stdout", JString r.out),
+  ("stderr", JString r.err),
+]
 
 {- | The machine-readable run report: per-gate timings plus the ok/failing
    tallies.  #2180 (the CI cost ratchet) is the intended consumer; NOTHING in
    this slice enforces a budget from it. -}
 export
 runReportJson : Int -> List GateResult -> String
-runReportJson jobs rs = stringify (jObject
-  [
-    ("jobs", JInt jobs),
-    ("parallel", JBool False),
-    ("ok", JInt (countOk rs)),
-    ("failing", JInt (listLen rs - countOk rs)),
-    ("gates", jArray (map resultJson rs)),
-  ])
+runReportJson jobs rs =
+  stringify
+    (jObject [
+      ("jobs", JInt jobs),
+      ("parallel", JBool False),
+      ("ok", JInt (countOk rs)),
+      ("failing", JInt (listLen rs - countOk rs)),
+      ("gates", jArray (map resultJson rs)),
+    ])
 
 -- ── the dry run ─────────────────────────────────────────────────────────────
 --
@@ -1330,37 +1345,39 @@ dryLine env g =
 
 dryLines : RunEnv -> List Gate -> <IO> String
 dryLines _ [] = ""
-dryLines env (g::gs) = dryLine env g ++ dryLines env gs
+dryLines env (g :: gs) = dryLine env g ++ dryLines env gs
 
 -- ── the `run` subcommand ────────────────────────────────────────────────────
 
-data RunArgs =
-  | RunArgs {
-      registry : Option String,
-      selectors : List String,
-      dryRun : Bool,
-      json : Bool,
-      report : Option String,
-      timeoutSecs : Int,
-      jobs : Int,
-      noStaleCheck : Bool,
-    }
+data RunArgs = RunArgs {
+  registry : Option String,
+  selectors : List String,
+  dryRun : Bool,
+  json : Bool,
+  report : Option String,
+  timeoutSecs : Int,
+  jobs : Int,
+  noStaleCheck : Bool,
+}
 
 -- `withStrictDash` (F1, review finding, #2355): an undeclared `-x` used to
 -- fall through as a positional pre-migration; base rejected any leading-`-`
 -- token here, so this restores that floor via the S-5 knob.
 runArgSpec : ArgSpec
-runArgSpec = withStrictDash (spec
-  "gate run"
-  [
-    switch ["--dry-run"] "print what would run, without running it",
-    switch ["--json"] "emit the machine-readable timing report",
-    switch ["--no-stale-check"] "skip the stale-oracle refusal",
-    value ["--registry"] "PATH" "override the gate registry path",
-    value ["--report"] "PATH" "write the timing report here",
-    value ["--timeout"] "N" "per-gate timeout, in seconds",
-    value ["--jobs"] "N" "worker count (reported only; gates run sequentially)",
-  ])
+runArgSpec =
+  withStrictDash
+    (spec "gate run" [
+      switch ["--dry-run"] "print what would run, without running it",
+      switch ["--json"] "emit the machine-readable timing report",
+      switch ["--no-stale-check"] "skip the stale-oracle refusal",
+      value ["--registry"] "PATH" "override the gate registry path",
+      value ["--report"] "PATH" "write the timing report here",
+      value ["--timeout"] "N" "per-gate timeout, in seconds",
+      value
+        ["--jobs"]
+        "N"
+        "worker count (reported only; gates run sequentially)",
+    ])
 
 runMissingValue : List (String, String)
 runMissingValue = [
@@ -1378,7 +1395,9 @@ runTimeout : Args -> Result String Int
 runTimeout a = match flagValue "--timeout" a
   None => Ok 0
   Some v => match parseDecChecked v
-    None => Err "medaka gate run: --timeout needs a whole number of seconds, got '\{v}'"
+    None =>
+      Err
+        "medaka gate run: --timeout needs a whole number of seconds, got '\{v}'"
     Some n => Ok n
 
 runJobs : Args -> Result String Int
@@ -1393,22 +1412,29 @@ parseRunArgs argv = match parseArgs runArgSpec argv
   Err m => Err (missingValueOverride runArgSpec runMissingValue m)
   Ok a => match runTimeout a
     Err m => Err m
-    Ok timeoutSecs => map (jobs => RunArgs {
-      registry = flagValue "--registry" a,
-      selectors = a.positionals,
-      dryRun = flag "--dry-run" a,
-      json = flag "--json" a,
-      report = flagValue "--report" a,
-      timeoutSecs = timeoutSecs,
-      jobs = jobs,
-      noStaleCheck = flag "--no-stale-check" a,
-    }) (runJobs a)
+    Ok timeoutSecs =>
+      map
+        (jobs => RunArgs {
+          registry = flagValue "--registry" a,
+          selectors = a.positionals,
+          dryRun = flag "--dry-run" a,
+          json = flag "--json" a,
+          report = flagValue "--report" a,
+          timeoutSecs = timeoutSecs,
+          jobs = jobs,
+          noStaleCheck = flag "--no-stale-check" a,
+        })
+        (runJobs a)
 
 -- The selection half, shared with `list`: read the registry, apply the
 -- selectors, and treat a zero-gate selection as a HARD ERROR.  A mistyped
 -- pattern that silently selects nothing is how a shard certifies coverage of a
 -- gate that never ran (test/run_gates.sh:181).
-selectFor : String -> List String -> List Selector -> String -> Result String (List Gate)
+selectFor : String ->
+  List String ->
+  List Selector ->
+  String ->
+  Result String (List Gate)
 selectFor path tokens sels src = match parseRegistry src
   Err m => Err "medaka gate run: \{m}"
   Ok gates => match selectGates sels gates
@@ -1451,20 +1477,22 @@ summaryLine jobs rs =
 finishRun : RunArgs -> List GateResult -> <IO> Unit
 finishRun a rs =
   let wrote = writeReport a.report (runReportJson a.jobs rs ++ "\n")
-  let _ = if a.json then putStr (runReportJson a.jobs rs ++ "\n") else ()
+  let _ = if a.json then putStr (runReportJson a.jobs rs ++ "\n")
   let _ = if a.json then () else putStr (failureDetails rs)
   let _ = if a.json then () else putStr (summaryLine a.jobs rs)
   let bad = failingNames rs
-  let _ = if a.json || isEmptyStrs bad then
-    ()
-  else
-    putStr "FAILING: \{joinSpace bad}\n"
+  let _ =
+    if a.json || isEmptyStrs bad then
+      ()
+    else
+      putStr "FAILING: \{joinSpace bad}\n"
   if isEmptyStrs bad && wrote then exit 0 else exit 1
 
 runSelected : RunArgs -> List Gate -> <IO> Unit
 runSelected a gs =
   let env = runEnvFor a
-  if a.dryRun then putStr (dryLines env gs)
+  if a.dryRun then
+    putStr (dryLines env gs)
   else match staleRefusal a.noStaleCheck env.root gs
     Some banner =>
       let _ = ePutStr banner
@@ -1544,15 +1572,19 @@ gitExitMsg code msg =
     "git ls-files exited \{intToString code}: \{msg}"
 
 gitLsFilesSh : String -> List String -> <IO> Result String (List String)
-gitLsFilesSh root args = match runCommand "git" (["-C", root] ++ args ++ ["*.sh"])
-  Err e => Err "git ls-files failed to run: \{e}"
-  Ok (0, out, _) => Ok (filterList nonBlank (splitNl out))
-  Ok (code, _, err) => Err (gitExitMsg code (stringTrim err))
+gitLsFilesSh root args =
+  match runCommand "git" (["-C", root] ++ args ++ ["*.sh"])
+    Err e => Err "git ls-files failed to run: \{e}"
+    Ok (0, out, _) => Ok (filterList nonBlank (splitNl out))
+    Ok (code, _, err) => Err (gitExitMsg code (stringTrim err))
 
 gateCandidates : String -> <IO> Result String (List String)
 gateCandidates root = match gitLsFilesSh root ["ls-files"]
   Err m => Err m
-  Ok tracked => map (untracked => sortUniqS (tracked ++ untracked)) (gitLsFilesSh root ["ls-files", "-o", "--exclude-standard"])
+  Ok tracked =>
+    map
+      (untracked => sortUniqS (tracked ++ untracked))
+      (gitLsFilesSh root ["ls-files", "-o", "--exclude-standard"])
 
 -- test/CI-COVERAGE-TOOLS.txt: one non-comment, non-blank line per excluded
 -- tool, keyed by its FIRST whitespace-separated token (repo-relative path,
@@ -1565,7 +1597,7 @@ firstToken l = firstNonBlankTok (splitOnChar ' ' l)
 
 firstNonBlankTok : List String -> String
 firstNonBlankTok [] = ""
-firstNonBlankTok (x::xs) = if nonBlank x then x else firstNonBlankTok xs
+firstNonBlankTok (x :: xs) = if nonBlank x then x else firstNonBlankTok xs
 
 toolNames : String -> <IO> List String
 toolNames root = match readFile (joinPath root "test/CI-COVERAGE-TOOLS.txt")
@@ -1578,35 +1610,38 @@ stripSh p = if endsWith ".sh" p then stringSlice 0 (stringLength p - 3) p else p
 
 allRuns : List Gate -> List String
 allRuns [] = []
-allRuns (g::gs) = g.run :: allRuns gs
+allRuns (g :: gs) = g.run :: allRuns gs
 
 -- Check 1: every candidate is enrolled (its path is some entry's `run`) or
 -- excluded (its path minus `.sh` is in test/CI-COVERAGE-TOOLS.txt).
 unenrolledViolations : List String -> List String -> List String -> List String
 unenrolledViolations _ _ [] = []
-unenrolledViolations tools runs (c::cs)
+unenrolledViolations tools runs (c :: cs)
   | contains (stripSh c) tools = unenrolledViolations tools runs cs
   | contains c runs = unenrolledViolations tools runs cs
-  | otherwise = "unenrolled: \{c}  (not a `run` in test/gates.toml, not listed in test/CI-COVERAGE-TOOLS.txt)" :: unenrolledViolations tools runs cs
+  | otherwise =
+    "unenrolled: \{c}  (not a `run` in test/gates.toml, not listed in test/CI-COVERAGE-TOOLS.txt)"
+      :: unenrolledViolations tools runs cs
 
 -- Check 2: every entry's `run` target exists on disk (S-1/S-2's decision:
 -- `run` is already the resolved relative path — a plain file-exists check,
 -- not a re-glob against run_gates.sh's two-glob rule).
 runTargetViolations : String -> List Gate -> <IO> List String
 runTargetViolations _ [] = []
-runTargetViolations root (g::gs) =
+runTargetViolations root (g :: gs) =
   let rest = runTargetViolations root gs
   if fileExists "\{root}/\{g.run}" then
     rest
   else
-    "\{g.name}: run target does not exist: \{g.run}"::rest
+    "\{g.name}: run target does not exist: \{g.run}" :: rest
 
 -- Check 3: every non-empty oracle name is one of build_oracles.sh's own
 -- ENTRIES (via its `--list` mode — no clang/libgc needed, builds nothing).
 knownOracles : String -> <IO> List String
-knownOracles root = match runCommand "sh" ["\{root}/test/build_oracles.sh", "--list"]
-  Err _ => []
-  Ok (_, out, _) => filterList nonBlank (splitNl out)
+knownOracles root =
+  match runCommand "sh" ["\{root}/test/build_oracles.sh", "--list"]
+    Err _ => []
+    Ok (_, out, _) => filterList nonBlank (splitNl out)
 
 -- Two probe names build_oracles.sh deliberately does NOT list in ENTRIES,
 -- because a DIFFERENT script builds them (test/wasm/build_wasm_oracle.sh) —
@@ -1622,40 +1657,42 @@ foreignOracles = ["wasm_emit_main", "wasm_emit_modules_main"]
 
 oracleNamesMissing : List String -> String -> List String -> List String
 oracleNamesMissing _ _ [] = []
-oracleNamesMissing known gname (o::os)
+oracleNamesMissing known gname (o :: os)
   | contains o known || contains o foreignOracles =
     oracleNamesMissing known gname os
-  | otherwise = "\{gname}: oracle not known to `test/build_oracles.sh --list` (nor the wasm-foreign set): \{o}" :: oracleNamesMissing known gname os
+  | otherwise =
+    "\{gname}: oracle not known to `test/build_oracles.sh --list` (nor the wasm-foreign set): \{o}"
+      :: oracleNamesMissing known gname os
 
 oracleTargetViolations : List String -> List Gate -> List String
 oracleTargetViolations _ [] = []
-oracleTargetViolations known (g::gs) = oracleNamesMissing known g.name g.oracles
-  ++ oracleTargetViolations known gs
+oracleTargetViolations known (g :: gs) =
+  oracleNamesMissing known g.name g.oracles ++ oracleTargetViolations known gs
 
 -- Check 4: every entry is reachable by at least one selector.  See the block
 -- comment above for why this is near-vacuous under today's schema, and the
 -- one shape (a `:` in `name`) that is not.
 anyNamed : String -> List Gate -> Bool
 anyNamed _ [] = False
-anyNamed n (g::gs) = g.name == n || anyNamed n gs
+anyNamed n (g :: gs) = g.name == n || anyNamed n gs
 
 reachabilityFor : List Gate -> Gate -> List String
 reachabilityFor all g = match parseSelector g.name
   Err m => [
-    "\{g.name}: its own name is not a valid bare selector (\{m}) — reachable only via an explicit `name:\{g.name}`, not the bare CLI form"
+    "\{g.name}: its own name is not a valid bare selector (\{m}) — reachable only via an explicit `name:\{g.name}`, not the bare CLI form",
   ]
   Ok sel =>
     if anyNamed g.name (selectGates [sel] all) then
       []
     else
       [
-        "\{g.name}: `name:\{g.name}` does not select this entry (registry/selector bug)"
+        "\{g.name}: `name:\{g.name}` does not select this entry (registry/selector bug)",
       ]
 
 reachabilityViolations : List Gate -> List Gate -> List String
 reachabilityViolations _ [] = []
-reachabilityViolations all (g::gs) = reachabilityFor all g
-  ++ reachabilityViolations all gs
+reachabilityViolations all (g :: gs) =
+  reachabilityFor all g ++ reachabilityViolations all gs
 
 -- Check 5 (S-5): every `corpus` entry is a real DIRECTORY.  `listDir` is the
 -- discriminator — `fileExists` is true for a plain file too, and a corpus
@@ -1668,17 +1705,17 @@ dirExists p = match listDir p
 
 corpusDirsMissing : String -> String -> List String -> <IO> List String
 corpusDirsMissing _ _ [] = []
-corpusDirsMissing root gname (c::cs) =
+corpusDirsMissing root gname (c :: cs) =
   let rest = corpusDirsMissing root gname cs
   if dirExists (joinPath root c) then
     rest
   else
-    "\{gname}: corpus directory does not exist: \{c}"::rest
+    "\{gname}: corpus directory does not exist: \{c}" :: rest
 
 corpusTargetViolations : String -> List Gate -> <IO> List String
 corpusTargetViolations _ [] = []
-corpusTargetViolations root (g::gs) = corpusDirsMissing root g.name g.corpus
-  ++ corpusTargetViolations root gs
+corpusTargetViolations root (g :: gs) =
+  corpusDirsMissing root g.name g.corpus ++ corpusTargetViolations root gs
 
 -- Check 6 (#2199): entry `name`s are UNIQUE.  Two entries sharing a name were
 -- merely redundant while the registry only described gates; with `shard` on
@@ -1688,19 +1725,20 @@ corpusTargetViolations root (g::gs) = corpusDirsMissing root g.name g.corpus
 -- exist, and check 4's reachability is satisfied by EITHER twin.
 gateNames : List Gate -> List String
 gateNames [] = []
-gateNames (g::gs) = g.name :: gateNames gs
+gateNames (g :: gs) = g.name :: gateNames gs
 
 countName : String -> List Gate -> Int
 countName _ [] = 0
-countName n (g::gs) = (if g.name == n then 1 else 0) + countName n gs
+countName n (g :: gs) = (if g.name == n then 1 else 0) + countName n gs
 
 dupNameFrom : List Gate -> List String -> List String
 dupNameFrom _ [] = []
-dupNameFrom gates (n::ns) =
+dupNameFrom gates (n :: ns) =
   let k = countName n gates
   let rest = dupNameFrom gates ns
   if k > 1 then
-    "\{n}: \{intToString k} entries share this name — a gate's shard row must not be ambiguous"::rest
+    "\{n}: \{intToString k} entries share this name — a gate's shard row must not be ambiguous"
+      :: rest
   else
     rest
 
@@ -1765,22 +1803,23 @@ firstBadChar s i n
 unsafeName : String -> String -> List String
 unsafeName kind n
   | n == "" = [
-    "(empty): a \{kind} name is empty — it cannot be selected, quoted or generated"
+    "(empty): a \{kind} name is empty — it cannot be selected, quoted or generated",
   ]
   | not (nameLeadOk (stringSlice 0 1 n)) =
     ["\{n}: \{kind} name must start with a letter, a digit or '_'"]
   | not (nameCharsOk n 0 (stringLength n)) = [
-    "\{n}: \{kind} name contains \{firstBadChar n 0 (stringLength n)} — allowed characters are letters, digits, '_', '.' and '/' (a name is emitted into ci.yml and re-read as an unquoted shell word)"
+    "\{n}: \{kind} name contains \{firstBadChar n 0 (stringLength n)} — allowed characters are letters, digits, '_', '.' and '/' (a name is emitted into ci.yml and re-read as an unquoted shell word)",
   ]
   | otherwise = []
 
 unsafeGateNames : List Gate -> List String
 unsafeGateNames [] = []
-unsafeGateNames (g::gs) = unsafeName "gate" g.name ++ unsafeGateNames gs
+unsafeGateNames (g :: gs) = unsafeName "gate" g.name ++ unsafeGateNames gs
 
 unsafeShardNames : List Shard -> List String
 unsafeShardNames [] = []
-unsafeShardNames (s::ss) = unsafeName "shard row" s.name ++ unsafeShardNames ss
+unsafeShardNames (s :: ss) =
+  unsafeName "shard row" s.name ++ unsafeShardNames ss
 
 unsafeNameViolations : List Gate -> List Shard -> List String
 unsafeNameViolations gates shs = unsafeGateNames gates ++ unsafeShardNames shs
@@ -1797,9 +1836,11 @@ costClassOk c = c == "cheap" || c == "medium" || c == "heavy"
 
 invalidCostViolations : List Gate -> List String
 invalidCostViolations [] = []
-invalidCostViolations (g::gs)
+invalidCostViolations (g :: gs)
   | costClassOk g.cost = invalidCostViolations gs
-  | otherwise = "\{g.name}: cost '\{g.cost}' is not one of cheap/medium/heavy" :: invalidCostViolations gs
+  | otherwise =
+    "\{g.name}: cost '\{g.cost}' is not one of cheap/medium/heavy"
+      :: invalidCostViolations gs
 
 -- Check 9 (S-tier-is-data, #2181): every entry's `tiers` is a well-formed set of
 -- RUN TOKENS.  The old `tier : String` had no enum check either, but a bad
@@ -1826,67 +1867,70 @@ hasModeSep tok = stringLength tok > stringLength (tierPartOf tok)
 tierTokenErrors : String -> String -> List String
 tierTokenErrors gname tok
   | not (tierNameOk (tierPartOf tok)) = [
-    "\{gname}: run token '\{tok}' — tier '\{tierPartOf tok}' is not one of merge/nightly/ondemand"
+    "\{gname}: run token '\{tok}' — tier '\{tierPartOf tok}' is not one of merge/nightly/ondemand",
   ]
   | tierPartOf tok == "ondemand" && hasModeSep tok = [
-    "\{gname}: run token '\{tok}' — 'ondemand' cannot carry a mode; nothing invokes the gate, so there is no invocation for a mode to differ from"
+    "\{gname}: run token '\{tok}' — 'ondemand' cannot carry a mode; nothing invokes the gate, so there is no invocation for a mode to differ from",
   ]
   | otherwise = []
 
 tierTokensErrors : String -> List String -> List String
 tierTokensErrors _ [] = []
-tierTokensErrors gname (t::ts) = tierTokenErrors gname t
-  ++ tierTokensErrors gname ts
+tierTokensErrors gname (t :: ts) =
+  tierTokenErrors gname t ++ tierTokensErrors gname ts
 
 hasOndemand : List String -> Bool
 hasOndemand [] = False
-hasOndemand (t::ts) = tierPartOf t == "ondemand" || hasOndemand ts
+hasOndemand (t :: ts) = tierPartOf t == "ondemand" || hasOndemand ts
 
 -- Sorted-and-unique in one predicate: strictly ascending.  Sorted keeps a
 -- registry diff readable as a change of fact; unique stops one run being
 -- declared twice, which would let a duplicate stand in for a missing tier.
 strictlyAscending : List String -> Bool
 strictlyAscending [] = True
-strictlyAscending (_::[]) = True
-strictlyAscending (a::b::rest) = a < b && strictlyAscending (b::rest)
+strictlyAscending (_ :: []) = True
+strictlyAscending (a :: b :: rest) = a < b && strictlyAscending (b :: rest)
 
 invalidTiersViolations : List Gate -> List String
 invalidTiersViolations [] = []
-invalidTiersViolations (g::gs) = gateTiersErrors g ++ invalidTiersViolations gs
+invalidTiersViolations (g :: gs) =
+  gateTiersErrors g ++ invalidTiersViolations gs
 
 gateTiersErrors : Gate -> List String
 gateTiersErrors g
   | isEmptyStrs g.tiers = [
-    "\{g.name}: tiers is empty — every gate has at least one run; a gate nothing invokes is tiers = [\"ondemand\"]"
+    "\{g.name}: tiers is empty — every gate has at least one run; a gate nothing invokes is tiers = [\"ondemand\"]",
   ]
   | not (strictlyAscending g.tiers) =
     ["\{g.name}: tiers \{joinWith " " g.tiers} is not sorted and unique"]
   | hasOndemand g.tiers && listLen g.tiers > 1 = [
-    "\{g.name}: tiers \{joinWith " " g.tiers} mixes 'ondemand' with a real run — 'ondemand' means nothing invokes this gate, so it appears alone or not at all"
+    "\{g.name}: tiers \{joinWith " " g.tiers} mixes 'ondemand' with a real run — 'ondemand' means nothing invokes this gate, so it appears alone or not at all",
   ]
   | otherwise = tierTokensErrors g.name g.tiers
 
 -- ── assembling and rendering the nine classes ───────────────────────────────
 
-verifyClasses : String -> List Gate -> List Shard -> <IO> Result String (List (String, List String))
+verifyClasses : String ->
+  List Gate ->
+  List Shard ->
+  <IO> Result String (List (String, List String))
 verifyClasses root gates shs = match gateCandidates root
   Err m => Err "could not enumerate gate candidates: \{m}"
   Ok cands =>
     let tools = toolNames root
     let runs = allRuns gates
     let known = knownOracles root
-    Ok
-      [
-        ("unenrolled gate scripts", unenrolledViolations tools runs cands),
-        ("missing run targets", runTargetViolations root gates),
-        ("missing oracle targets", oracleTargetViolations known gates),
-        ("missing corpus targets", corpusTargetViolations root gates),
-        ("unreachable entries", reachabilityViolations gates gates),
-        ("duplicate entry names", duplicateNameViolations gates),
-        ("unsafe entry names", unsafeNameViolations gates shs),
-        ("invalid cost class", invalidCostViolations gates),
-        ("invalid tiers", invalidTiersViolations gates),
-      ]
+    Ok [
+      ("unenrolled gate scripts", unenrolledViolations tools runs cands),
+      ("missing run targets", runTargetViolations root gates),
+      ("missing oracle targets", oracleTargetViolations known gates),
+      ("missing corpus targets", corpusTargetViolations root gates),
+      ("unreachable entries", reachabilityViolations gates gates),
+      ("duplicate entry names", duplicateNameViolations gates),
+      ("unsafe entry names", unsafeNameViolations gates shs),
+      ("invalid cost class", invalidCostViolations gates),
+      ("invalid tiers", invalidTiersViolations gates),
+    ]
 
 renderClass : (String, List String) -> String
 renderClass (title, []) = "OK    \{title}: 0\n"
@@ -1896,11 +1940,11 @@ renderClass (title, vs) =
 
 renderClasses : List (String, List String) -> String
 renderClasses [] = ""
-renderClasses (c::cs) = renderClass c ++ renderClasses cs
+renderClasses (c :: cs) = renderClass c ++ renderClasses cs
 
 totalViolations : List (String, List String) -> Int
 totalViolations [] = 0
-totalViolations ((_, vs)::cs) = listLen vs + totalViolations cs
+totalViolations ((_, vs) :: cs) = listLen vs + totalViolations cs
 
 verifyOutput : String -> List Gate -> List Shard -> <IO> Result String String
 verifyOutput root gates shs = match verifyClasses root gates shs
@@ -1909,9 +1953,13 @@ verifyOutput root gates shs = match verifyClasses root gates shs
     let n = totalViolations classes
     let body = renderClasses classes
     if n == 0 then
-      Ok (body ++ "medaka gate verify: OK — \{intToString (listLen gates)} entries, 0 violations.\n")
+      Ok
+        (body
+          ++ "medaka gate verify: OK — \{intToString (listLen gates)} entries, 0 violations.\n")
     else
-      Err (body ++ "medaka gate verify: FAIL — \{intToString n} violation(s) across \{intToString (listLen gates)} entries.\n")
+      Err
+        (body
+          ++ "medaka gate verify: FAIL — \{intToString n} violation(s) across \{intToString (listLen gates)} entries.\n")
 
 -- `verify` prints its body even on failure — the message-carrying `Err`
 -- string above IS the violation report, not a one-liner, so `emit`'s ordinary
@@ -1922,9 +1970,11 @@ data VerifyArgs = VerifyArgs { registry : Option String }
 -- fall through as a positional pre-migration; base rejected any leading-`-`
 -- token here, so this restores that floor via the S-5 knob.
 verifyArgSpec : ArgSpec
-verifyArgSpec = withStrictDash (spec
-  "gate verify"
-  [value ["--registry"] "PATH" "override the gate registry path"])
+verifyArgSpec =
+  withStrictDash
+    (spec "gate verify" [
+      value ["--registry"] "PATH" "override the gate registry path",
+    ])
 
 verifyMissingValue : List (String, String)
 verifyMissingValue =
@@ -1939,7 +1989,7 @@ parseVerifyArgs argv = match parseArgs verifyArgSpec argv
   Err m => Err (missingValueOverride verifyArgSpec verifyMissingValue m)
   Ok a => match a.positionals
     [] => Ok VerifyArgs { registry = flagValue "--registry" a }
-    p::_ => Err (unknownFlagMessage verifyArgSpec p)
+    p :: _ => Err (unknownFlagMessage verifyArgSpec p)
 
 verifyCmdBody : List String -> <IO> Unit
 verifyCmdBody argv = match parseVerifyArgs argv
@@ -1998,7 +2048,7 @@ blastRadiusPrefixes =
 
 blastHit : List String -> String -> Option String
 blastHit [] _ = None
-blastHit (p::ps) path = if globMatch p path then Some p else blastHit ps path
+blastHit (p :: ps) path = if globMatch p path then Some p else blastHit ps path
 
 {- | Layer 1b: is this path PROSE?  The same allowlist
    `.github/workflows/ci.yml`'s `detect` job applies (its `nondoc` case), kept
@@ -2058,7 +2108,7 @@ wholeTreeGlob g = g == "*"
 
 sourceMatches : String -> List String -> List String
 sourceMatches _ [] = []
-sourceMatches path (s::ss)
+sourceMatches path (s :: ss)
   | wholeTreeGlob s = sourceMatches path ss
   | globMatch s path = "sources:\{s}" :: sourceMatches path ss
   | otherwise = sourceMatches path ss
@@ -2077,28 +2127,28 @@ underDir d path = path == d || startsWith "\{d}/" path
 
 corpusMatches : String -> List String -> List String
 corpusMatches _ [] = []
-corpusMatches path (c::cs)
+corpusMatches path (c :: cs)
   | underDir c path = "corpus:\{c}" :: corpusMatches path cs
   | otherwise = corpusMatches path cs
 
 targetedReasons : String -> Gate -> List String
-targetedReasons path g = sourceMatches path g.sources
-  ++ corpusMatches path g.corpus
+targetedReasons path g =
+  sourceMatches path g.sources ++ corpusMatches path g.corpus
 
 explainPathHits : String -> List Gate -> List (Gate, List String)
 explainPathHits _ [] = []
-explainPathHits path (g::gs) =
+explainPathHits path (g :: gs) =
   let rs = targetedReasons path g
   let rest = explainPathHits path gs
-  if isEmptyStrs rs then rest else (g, rs)::rest
+  if isEmptyStrs rs then rest else (g, rs) :: rest
 
 hasWholeTree : List String -> Bool
 hasWholeTree [] = False
-hasWholeTree (s::ss) = wholeTreeGlob s || hasWholeTree ss
+hasWholeTree (s :: ss) = wholeTreeGlob s || hasWholeTree ss
 
 wholeTreeGates : List Gate -> List Gate
 wholeTreeGates [] = []
-wholeTreeGates (g::gs)
+wholeTreeGates (g :: gs)
   | hasWholeTree g.sources = g :: wholeTreeGates gs
   | otherwise = wholeTreeGates gs
 
@@ -2109,25 +2159,26 @@ fieldHit _ False = []
 fieldHit field True = [field]
 
 matchedFields : String -> Gate -> List String
-matchedFields tok g = fieldHit "run" (tok == g.run)
-  ++ fieldHit "name" (tok == g.name)
-  ++ fieldHit "area" (tok == g.area)
-  ++ fieldHit "project" (tok == g.project)
-  ++ fieldHit "tiers" (anyEqStr tok g.tiers)
+matchedFields tok g =
+  fieldHit "run" (tok == g.run)
+    ++ fieldHit "name" (tok == g.name)
+    ++ fieldHit "area" (tok == g.area)
+    ++ fieldHit "project" (tok == g.project)
+    ++ fieldHit "tiers" (anyEqStr tok g.tiers)
 
 -- `tiers` is a list, so a bare token hits it when it IS one of the run tokens —
 -- exact, not glob: `explain` is answering "is this word also a field value?",
 -- and a glob answer there would claim a hit the user did not ask for.
 anyEqStr : String -> List String -> Bool
 anyEqStr _ [] = False
-anyEqStr tok (x::xs) = tok == x || anyEqStr tok xs
+anyEqStr tok (x :: xs) = tok == x || anyEqStr tok xs
 
 explainMatches : String -> List Gate -> List (Gate, List String)
 explainMatches _ [] = []
-explainMatches tok (g::gs) =
+explainMatches tok (g :: gs) =
   let fs = matchedFields tok g
   let rest = explainMatches tok gs
-  if isEmptyStrs fs then rest else (g, fs)::rest
+  if isEmptyStrs fs then rest else (g, fs) :: rest
 
 isEmptyHits : List (Gate, List String) -> Bool
 isEmptyHits [] = True
@@ -2135,18 +2186,19 @@ isEmptyHits _ = False
 
 renderGateLines : List (Gate, List String) -> String
 renderGateLines [] = ""
-renderGateLines ((g, rs)::hs) = "  GATE      \{g.name}  (\{joinWith ", " rs})\n"
-  ++ renderGateLines hs
+renderGateLines ((g, rs) :: hs) =
+  "  GATE      \{g.name}  (\{joinWith ", " rs})\n" ++ renderGateLines hs
 
 renderWholeTree : List Gate -> String
 renderWholeTree [] = ""
-renderWholeTree (g::gs) = "  GATE      \{g.name}  (sources:*, whole-tree)\n"
-  ++ renderWholeTree gs
+renderWholeTree (g :: gs) =
+  "  GATE      \{g.name}  (sources:*, whole-tree)\n" ++ renderWholeTree gs
 
 renderTokenLines : List (Gate, List String) -> String
 renderTokenLines [] = ""
-renderTokenLines ((g, fs)::hs) = "  TOKEN     \{g.name}  (selector field: \{joinWith ", " fs})\n"
-  ++ renderTokenLines hs
+renderTokenLines ((g, fs) :: hs) =
+  "  TOKEN     \{g.name}  (selector field: \{joinWith ", " fs})\n"
+    ++ renderTokenLines hs
 
 tokenSection : String -> List Gate -> String
 tokenSection tok gates =
@@ -2154,16 +2206,19 @@ tokenSection tok gates =
   if isEmptyHits hits then "" else renderTokenLines hits
 
 blastNote : String
-blastNote = "  (registry-level policy, not per-entry data: a blast-radius path runs the\n"
-  ++ "   WHOLE suite whatever any entry's sources say — design doc §2.)\n"
+blastNote =
+  "  (registry-level policy, not per-entry data: a blast-radius path runs the\n"
+    ++ "   WHOLE suite whatever any entry's sources say — design doc §2.)\n"
 
 failOpenNote : String
-failOpenNote = "  (no entry's sources/corpus claims this path and it is not prose, so the\n"
-  ++ "   selection FAILS OPEN to the whole suite — never a silent empty set.)\n"
+failOpenNote =
+  "  (no entry's sources/corpus claims this path and it is not prose, so the\n"
+    ++ "   selection FAILS OPEN to the whole suite — never a silent empty set.)\n"
 
 proseNote : String
-proseNote = "  (prose: no entry claims it and it cannot widen the suite — ci.yml's own\n"
-  ++ "   docs allowlist, `detect` job.)\n"
+proseNote =
+  "  (prose: no entry claims it and it cannot widen the suite — ci.yml's own\n"
+    ++ "   docs allowlist, `detect` job.)\n"
 
 {- | `medaka gate explain <path>`: the policy verdict, then the entries that
    select the path and why. -}
@@ -2177,23 +2232,32 @@ explainOutput path gates =
     Some p => "  FULL      blast-radius:\{p}\n" ++ blastNote ++ wt ++ tok
     None =>
       if isEmptyHits hits then
-        (if isProsePath path then "  UNMAPPED  \{path}\n" ++ proseNote else "  UNMAPPED  \{path}\n  FULL      unmatched-non-prose:\{path}\n" ++ failOpenNote) ++ wt ++ tok
+        (if isProsePath path then
+            "  UNMAPPED  \{path}\n" ++ proseNote
+          else
+            "  UNMAPPED  \{path}\n  FULL      unmatched-non-prose:\{path}\n"
+              ++ failOpenNote)
+          ++ wt
+          ++ tok
       else
         renderGateLines hits ++ wt ++ tok
 
-data ExplainArgs =
-  | ExplainArgs { registry : Option String, path : Option String, prose : Bool }
+data ExplainArgs = ExplainArgs {
+  registry : Option String,
+  path : Option String,
+  prose : Bool,
+}
 
 -- `withStrictDash` (F1, review finding, #2355): an undeclared `-x` used to
 -- fall through as a positional pre-migration; base rejected any leading-`-`
 -- token here, so this restores that floor via the S-5 knob.
 explainArgSpec : ArgSpec
-explainArgSpec = withStrictDash (spec
-  "gate explain"
-  [
-    value ["--registry"] "PATH" "override the gate registry path",
-    switch ["--prose"] "print only the PROSE/NONDOC verdict",
-  ])
+explainArgSpec =
+  withStrictDash
+    (spec "gate explain" [
+      value ["--registry"] "PATH" "override the gate registry path",
+      switch ["--prose"] "print only the PROSE/NONDOC verdict",
+    ])
 
 explainMissingValue : List (String, String)
 explainMissingValue =
@@ -2219,15 +2283,19 @@ explainCmdBody : List String -> <IO> Unit
 explainCmdBody argv = match parseExplainArgs argv
   Err m => emit (Err m)
   Ok a => match a.path
-    None => emit (Err "usage: medaka gate explain <path> [--prose] [--registry <path>]")
-    Some tok => if a.prose then putStr (proseVerdict tok)
-    else
-      let path = registryPath a.registry
-      match readFile path
-        Err m => emit (Err "medaka gate explain: cannot read registry: \{m}")
-        Ok src => match parseRegistry src
-          Err m => emit (Err "medaka gate explain: \{m}")
-          Ok gates => putStr (explainOutput tok gates)
+    None =>
+      emit
+        (Err "usage: medaka gate explain <path> [--prose] [--registry <path>]")
+    Some tok =>
+      if a.prose then
+        putStr (proseVerdict tok)
+      else
+        let path = registryPath a.registry
+        match readFile path
+          Err m => emit (Err "medaka gate explain: cannot read registry: \{m}")
+          Ok src => match parseRegistry src
+            Err m => emit (Err "medaka gate explain: \{m}")
+            Ok gates => putStr (explainOutput tok gates)
 
 -- ── `gate reach` — which PROJECTS must a queue entry run gates for? ─────────
 --
@@ -2277,19 +2345,19 @@ compilerProject = "compiler"
 -- The non-compiler projects whose directory contains `path`.
 directHits : List String -> String -> List String
 directHits [] _ = []
-directHits (p::ps) path
+directHits (p :: ps) path
   | p == compilerProject = directHits ps path
   | underDir p path = p :: directHits ps path
   | otherwise = directHits ps path
 
 concatHits : List String -> List String -> List String
 concatHits _ [] = []
-concatHits univ (path::rest) = directHits univ path ++ concatHits univ rest
+concatHits univ (path :: rest) = directHits univ path ++ concatHits univ rest
 
 allHit : List String -> List String -> Bool
 allHit _ [] = True
-allHit univ (path::rest) = not (isEmptyStrs (directHits univ path))
-  && allHit univ rest
+allHit univ (path :: rest) =
+  not (isEmptyStrs (directHits univ path)) && allHit univ rest
 
 {- | Must the answer for this changed-path list be the WHOLE project universe?
    True for an empty list, and true as soon as ONE path lies under no project
@@ -2321,7 +2389,7 @@ reachIsFailOpen univ paths
 
 anyIn : List String -> List String -> Bool
 anyIn [] _ = False
-anyIn (x::xs) sel = contains x sel || anyIn xs sel
+anyIn (x :: xs) sel = contains x sel || anyIn xs sel
 
 -- One relation step: every LHS whose RHS meets the current selection.  Used for
 -- BOTH edge kinds — the manifest edges (project -> its declared deps) and the
@@ -2329,14 +2397,18 @@ anyIn (x::xs) sel = contains x sel || anyIn xs sel
 -- same shape and the same rule, so they share one traversal.
 edgeAdds : List (String, List String) -> List String -> List String
 edgeAdds [] _ = []
-edgeAdds ((lhs, rhs)::rest) sel
+edgeAdds ((lhs, rhs) :: rest) sel
   | anyIn rhs sel = lhs :: edgeAdds rest sel
   | otherwise = edgeAdds rest sel
 
 -- Joint fixpoint over both edge relations.  `fuel` bounds the walk by the size
 -- of the universe: the selection is a subset of it and grows by at least one on
 -- every non-final round, so it cannot loop even on a cyclic edge set.
-closeGo : Int -> List (String, List String) -> List (String, List String) -> List String -> List String
+closeGo : Int ->
+  List (String, List String) ->
+  List (String, List String) ->
+  List String ->
+  List String
 closeGo fuel deps ces sel
   | fuel <= 0 = sel
   | otherwise =
@@ -2380,7 +2452,11 @@ closeGo fuel deps ces sel
    > reachProjects ["compiler", "gzip", "parsec", "sqlite"] [] [] ["gzip/src/x.mdk", ""]
    ["compiler", "gzip", "parsec", "sqlite"] -}
 export
-reachProjects : List String -> List (String, List String) -> List (String, List String) -> List String -> List String
+reachProjects : List String ->
+  List (String, List String) ->
+  List (String, List String) ->
+  List String ->
+  List String
 reachProjects univ deps ces paths =
   let all = sortUniqS univ
   if reachIsFailOpen all paths then
@@ -2403,16 +2479,16 @@ projectUniverse gs = sortUniqS (map (g => g.project) gs)
 export
 corpusProjectEdges : List String -> List Gate -> List (String, List String)
 corpusProjectEdges _ [] = []
-corpusProjectEdges univ (g::gs) =
+corpusProjectEdges univ (g :: gs) =
   let cs = filterList (c => contains c univ) g.corpus
   let rest = corpusProjectEdges univ gs
-  if isEmptyStrs cs then rest else (g.project, cs)::rest
+  if isEmptyStrs cs then rest else (g.project, cs) :: rest
 
 -- realpath-compare one manifest-resolved dep root against each project dir, so
 -- `sqlite/../parsec` and `parsec` are recognised as the same directory.
 projectForRoot : String -> List String -> String -> <IO> Option String
 projectForRoot _ [] _ = None
-projectForRoot root (q::qs) dr =
+projectForRoot root (q :: qs) dr =
   if canonicalizePath (joinPath root q) == canonicalizePath dr then
     Some q
   else
@@ -2420,11 +2496,11 @@ projectForRoot root (q::qs) dr =
 
 depRootsOf : List (String, String) -> List String
 depRootsOf [] = []
-depRootsOf ((_, r)::rest) = r :: depRootsOf rest
+depRootsOf ((_, r) :: rest) = r :: depRootsOf rest
 
 depProjectsGo : String -> List String -> List String -> <IO> List String
 depProjectsGo _ _ [] = []
-depProjectsGo root univ (dr::rest) = match projectForRoot root univ dr
+depProjectsGo root univ (dr :: rest) = match projectForRoot root univ dr
   Some q => q :: depProjectsGo root univ rest
   None => depProjectsGo root univ rest
 
@@ -2436,16 +2512,19 @@ depProjectsOf root univ p =
   sortUniqS (depProjectsGo root univ (depRootsOf (readDeps (joinPath root p))))
 
 {- | The manifest dependency edges over the project universe. -}
-projectDepEdges : String -> List String -> List String -> <IO> List (String, List String)
+projectDepEdges : String ->
+  List String ->
+  List String ->
+  <IO> List (String, List String)
 projectDepEdges _ _ [] = []
-projectDepEdges root univ (p::ps) =
+projectDepEdges root univ (p :: ps) =
   let ds = depProjectsOf root univ p
   let rest = projectDepEdges root univ ps
-  if isEmptyStrs ds then rest else (p, ds)::rest
+  if isEmptyStrs ds then rest else (p, ds) :: rest
 
 renderProjects : List String -> String
 renderProjects [] = ""
-renderProjects (p::ps) = "\{p}\n" ++ renderProjects ps
+renderProjects (p :: ps) = "\{p}\n" ++ renderProjects ps
 
 {- | `--json`: the selection, whether it FAILED OPEN, and the changed-path list
    it was derived from.  `failOpen` is in the payload because the text rendering
@@ -2453,21 +2532,22 @@ renderProjects (p::ps) = "\{p}\n" ++ renderProjects ps
    shell `for`), and a consumer that cannot tell a derived answer from a
    widened one cannot tell a narrowing bug from a safe default. -}
 reachJson : Bool -> List String -> List String -> String
-reachJson failOpen paths projects = stringify (jObject [
-    ("projects", jArray (map JString projects)),
-    ("failOpen", JBool failOpen),
-    ("changed", jArray (map JString paths)),
-  ])
-  ++ "\n"
+reachJson failOpen paths projects =
+  stringify
+      (jObject [
+        ("projects", jArray (map JString projects)),
+        ("failOpen", JBool failOpen),
+        ("changed", jArray (map JString paths)),
+      ])
+    ++ "\n"
 
-data ReachArgs =
-  | ReachArgs {
-      registry : Option String,
-      root : Option String,
-      json : Bool,
-      pathsFrom : Option String,
-      paths : List String,
-    }
+data ReachArgs = ReachArgs {
+  registry : Option String,
+  root : Option String,
+  json : Bool,
+  pathsFrom : Option String,
+  paths : List String,
+}
 
 -- `--` ends flag parsing, so ANY string can be handed over as a path: a changed
 -- path the classifier does not understand must fail OPEN (below), and that
@@ -2481,16 +2561,16 @@ data ReachArgs =
 -- to `rest` verbatim, dash-shaped or not; strictDash only governs tokens
 -- BEFORE the separator.
 reachArgSpec : ArgSpec
-reachArgSpec = withStrictDash (withTrailing
-  TrailingAfterSeparator
-  (spec
-    "gate reach"
-    [
-      value ["--registry"] "PATH" "override the gate registry path",
-      value ["--root"] "PATH" "override MEDAKA_ROOT",
-      value ["--paths-from"] "PATH" "read changed paths from a file",
-      switch ["--json"] "emit JSON",
-    ]))
+reachArgSpec =
+  withStrictDash
+    (withTrailing
+      TrailingAfterSeparator
+      (spec "gate reach" [
+        value ["--registry"] "PATH" "override the gate registry path",
+        value ["--root"] "PATH" "override MEDAKA_ROOT",
+        value ["--paths-from"] "PATH" "read changed paths from a file",
+        switch ["--json"] "emit JSON",
+      ]))
 
 -- `reach` is the tree's only verb whose unrecognized-flag sentence carries an
 -- extra hint after the shared `(known: …)` tail — appended here, on top of
@@ -2521,7 +2601,8 @@ reachRewriteErr msg
     -- The hint lands INSIDE the `(known: …)` parenthetical, matching the
     -- pre-migration wording exactly — splice before `unknownFlagMessage`'s
     -- trailing `)` rather than appending after it.
-    stringSlice 0 (stringLength msg - 1) msg ++ "; use `--` before a path starting with '-')"
+    stringSlice 0 (stringLength msg - 1) msg
+      ++ "; use `--` before a path starting with '-')"
 
 -- Blank lines are dropped from a `--paths-from` FILE and nowhere else.  `git
 -- diff --name-only` ends in a newline, so its last line is always empty, and
@@ -2539,7 +2620,9 @@ reachPaths a = match a.pathsFrom
   None => a.paths
   Some f => match readFile f
     Err m =>
-      let _ = ePutStrLn "medaka gate reach: cannot read \{f} (\{m}) — failing open to every project"
+      let _ =
+        ePutStrLn
+          "medaka gate reach: cannot read \{f} (\{m}) — failing open to every project"
       []
     Ok src => a.paths ++ nonBlankPaths (splitNl src)
 
@@ -2626,7 +2709,8 @@ ciWorkflowRel : String
 ciWorkflowRel = ".github/workflows/ci.yml"
 
 ciMatrixBegin : String
-ciMatrixBegin = "          # GENERATED:BEGIN gates-matrix — `make gen-ci` (medaka gate ci) from test/gates.toml. DO NOT EDIT BY HAND."
+ciMatrixBegin =
+  "          # GENERATED:BEGIN gates-matrix — `make gen-ci` (medaka gate ci) from test/gates.toml. DO NOT EDIT BY HAND."
 
 ciMatrixEnd : String
 ciMatrixEnd = "          # GENERATED:END gates-matrix"
@@ -2644,16 +2728,16 @@ ciProseLine l = "            # \{l}"
 -- trailing blank comment line carries nothing.
 dropTrailBlank : List String -> List String
 dropTrailBlank [] = []
-dropTrailBlank (x::[])
+dropTrailBlank (x :: [])
   | x == "" = []
   | otherwise = [x]
-dropTrailBlank (x::xs) = x :: dropTrailBlank xs
+dropTrailBlank (x :: xs) = x :: dropTrailBlank xs
 
 -- `'a' 'b' 'c'` — the inner single-quoted token list of a row's pattern.
 ciQuotedNames : List Gate -> String
 ciQuotedNames [] = ""
-ciQuotedNames (g::[]) = "'\{g.name}'"
-ciQuotedNames (g::gs) = "'\{g.name}' \{ciQuotedNames gs}"
+ciQuotedNames (g :: []) = "'\{g.name}'"
+ciQuotedNames (g :: gs) = "'\{g.name}' \{ciQuotedNames gs}"
 
 -- The gates of one row, in registry order.
 ciShardGates : String -> List Gate -> List Gate
@@ -2668,11 +2752,12 @@ ciOptLine _ False = []
 ciOptLine key True = ["            \{key}: \"1\""]
 
 ciRowLines : List Gate -> List String -> Shard -> List String
-ciRowLines rowGates prose sh = ["          - name: \{sh.name}"]
-  ++ map ciProseLine prose
-  ++ ["            pattern: \"\{ciQuotedNames rowGates}\""]
-  ++ ciOptLine "full_cores" sh.fullCores
-  ++ ciOptLine "wasm_arm" sh.wasmArm
+ciRowLines rowGates prose sh =
+  ["          - name: \{sh.name}"]
+    ++ map ciProseLine prose
+    ++ ["            pattern: \"\{ciQuotedNames rowGates}\""]
+    ++ ciOptLine "full_cores" sh.fullCores
+    ++ ciOptLine "wasm_arm" sh.wasmArm
 
 -- Build one row, reading its prose file.  A row with NO gates is a hard error:
 -- ci.yml's own `plan` step fails such a shard with `::error::pattern matched NO
@@ -2680,14 +2765,22 @@ ciRowLines rowGates prose sh = ["          - name: \{sh.name}"]
 -- a known-broken file.
 ciOneRow : String -> List Gate -> Shard -> <IO> Result String (List String)
 ciOneRow root gates sh = match ciShardGates sh.name gates
-  [] => Err "medaka gate ci: shard '\{sh.name}' has no gates in the registry — a row with an empty pattern fails its own shard in CI"
+  [] =>
+    Err
+      "medaka gate ci: shard '\{sh.name}' has no gates in the registry — a row with an empty pattern fails its own shard in CI"
   rowGates => match readFile (joinPath root sh.rationale)
-    Err m => Err "medaka gate ci: shard '\{sh.name}': cannot read rationale \{sh.rationale}: \{m}"
+    Err m =>
+      Err
+        "medaka gate ci: shard '\{sh.name}': cannot read rationale \{sh.rationale}: \{m}"
     Ok src => Ok (ciRowLines rowGates (dropTrailBlank (splitNl src)) sh)
 
-ciRowsLoop : String -> List Gate -> List Shard -> List String -> <IO> Result String (List String)
+ciRowsLoop : String ->
+  List Gate ->
+  List Shard ->
+  List String ->
+  <IO> Result String (List String)
 ciRowsLoop _ _ [] acc = Ok (reverseL acc)
-ciRowsLoop root gates (sh::shs) acc = match ciOneRow root gates sh
+ciRowsLoop root gates (sh :: shs) acc = match ciOneRow root gates sh
   Err m => Err m
   Ok ls => ciRowsLoop root gates shs (reverseL ls ++ acc)
 
@@ -2697,11 +2790,11 @@ ciRowsLoop root gates (sh::shs) acc = match ciOneRow root gates sh
 ciKnownShard : List Shard -> String -> Bool
 ciKnownShard _ "other-job" = True
 ciKnownShard [] _ = False
-ciKnownShard (sh::shs) nm = sh.name == nm || ciKnownShard shs nm
+ciKnownShard (sh :: shs) nm = sh.name == nm || ciKnownShard shs nm
 
 ciUnknownShards : List Shard -> List Gate -> List String
 ciUnknownShards _ [] = []
-ciUnknownShards shs (g::gs)
+ciUnknownShards shs (g :: gs)
   | ciKnownShard shs g.shard = ciUnknownShards shs gs
   | otherwise = "\{g.name} (shard '\{g.shard}')" :: ciUnknownShards shs gs
 
@@ -2709,26 +2802,26 @@ ciUnknownShards shs (g::gs)
 
 ciCountLine : String -> List String -> Int
 ciCountLine _ [] = 0
-ciCountLine want (l::ls)
+ciCountLine want (l :: ls)
   | l == want = 1 + ciCountLine want ls
   | otherwise = ciCountLine want ls
 
 ciIndexOf : String -> List String -> Int -> Int
 ciIndexOf _ [] _ = -1
-ciIndexOf want (l::ls) i
+ciIndexOf want (l :: ls) i
   | l == want = i
   | otherwise = ciIndexOf want ls (i + 1)
 
 -- Copy from the END marker onward, verbatim.
 ciAfterEnd : List String -> List String
 ciAfterEnd [] = []
-ciAfterEnd (l::ls)
-  | l == ciMatrixEnd = l::ls
+ciAfterEnd (l :: ls)
+  | l == ciMatrixEnd = l :: ls
   | otherwise = ciAfterEnd ls
 
 ciSpliceGo : List String -> List String -> List String
 ciSpliceGo _ [] = []
-ciSpliceGo gen (l::ls)
+ciSpliceGo gen (l :: ls)
   | l == ciMatrixBegin = l :: gen ++ ciAfterEnd ls
   | otherwise = l :: ciSpliceGo gen ls
 
@@ -2736,27 +2829,38 @@ ciSpliceGo gen (l::ls)
 -- malformed file, and splicing it would quietly drop or duplicate the region.
 ciSplice : List String -> List String -> Result String (List String)
 ciSplice gen src
-  | ciCountLine ciMatrixBegin src /= 1 = Err "medaka gate ci: \{ciWorkflowRel} must contain exactly one BEGIN marker line (found \{intToString (ciCountLine ciMatrixBegin src)}):\n\{ciMatrixBegin}"
-  | ciCountLine ciMatrixEnd src /= 1 = Err "medaka gate ci: \{ciWorkflowRel} must contain exactly one END marker line (found \{intToString (ciCountLine ciMatrixEnd src)}):\n\{ciMatrixEnd}"
-  | ciIndexOf ciMatrixEnd src 0 < ciIndexOf ciMatrixBegin src 0 = Err "medaka gate ci: \{ciWorkflowRel}: the END marker precedes the BEGIN marker"
+  | ciCountLine ciMatrixBegin src /= 1 =
+    Err
+      "medaka gate ci: \{ciWorkflowRel} must contain exactly one BEGIN marker line (found \{intToString (ciCountLine ciMatrixBegin src)}):\n\{ciMatrixBegin}"
+  | ciCountLine ciMatrixEnd src /= 1 =
+    Err
+      "medaka gate ci: \{ciWorkflowRel} must contain exactly one END marker line (found \{intToString (ciCountLine ciMatrixEnd src)}):\n\{ciMatrixEnd}"
+  | ciIndexOf ciMatrixEnd src 0 < ciIndexOf ciMatrixBegin src 0 =
+    Err
+      "medaka gate ci: \{ciWorkflowRel}: the END marker precedes the BEGIN marker"
   | otherwise = Ok (ciSpliceGo gen src)
 
 -- ── The command ─────────────────────────────────────────────────────────────
 
-data CiArgs =
-  | CiArgs { registry : Option String, workflow : Option String, check : Bool }
+data CiArgs = CiArgs {
+  registry : Option String,
+  workflow : Option String,
+  check : Bool,
+}
 
 parseCiArgs : List String -> CiArgs -> Result String CiArgs
 parseCiArgs [] acc = Ok acc
-parseCiArgs ("--registry"::p::rest) acc =
+parseCiArgs ("--registry" :: p :: rest) acc =
   parseCiArgs rest CiArgs { acc | registry = Some p }
-parseCiArgs ("--registry"::[]) _ = Err "medaka gate ci: --registry needs a path"
-parseCiArgs ("--workflow"::p::rest) acc =
+parseCiArgs ("--registry" :: []) _ =
+  Err "medaka gate ci: --registry needs a path"
+parseCiArgs ("--workflow" :: p :: rest) acc =
   parseCiArgs rest CiArgs { acc | workflow = Some p }
-parseCiArgs ("--workflow"::[]) _ = Err "medaka gate ci: --workflow needs a path"
-parseCiArgs ("--check"::rest) acc =
+parseCiArgs ("--workflow" :: []) _ =
+  Err "medaka gate ci: --workflow needs a path"
+parseCiArgs ("--check" :: rest) acc =
   parseCiArgs rest CiArgs { acc | check = True }
-parseCiArgs (a::_) _ = Err "medaka gate ci: unexpected argument: \{a}"
+parseCiArgs (a :: _) _ = Err "medaka gate ci: unexpected argument: \{a}"
 
 -- `<MEDAKA_ROOT>/.github/workflows/ci.yml` unless --workflow overrides it —
 -- the same exe-relative resolution `registryPath` uses, for the same reason.
@@ -2775,7 +2879,9 @@ ciNewText root regPath regSrc wfSrc = match parseRegistry regSrc
       [] => match ciRowsLoop root gates shs []
         Err m => Err m
         Ok gen => map joinNl (ciSplice gen (splitNl wfSrc))
-      bad => Err "medaka gate ci: \{regPath}: gate(s) name a shard with no [[shard]] row: \{joinSpace bad}"
+      bad =>
+        Err
+          "medaka gate ci: \{regPath}: gate(s) name a shard with no [[shard]] row: \{joinSpace bad}"
 
 -- Write only on a real change: an unconditional write would touch the file's
 -- mtime on every no-op run, and `make gen-ci` is meant to be free to re-run.
@@ -2794,11 +2900,11 @@ ciWrite wfPath wfSrc out
 -- and can never be the first difference.
 ciDiffAt : List String -> List String -> Int -> String
 ciDiffAt [] [] _ = "  (the two texts differ only in trailing newline)"
-ciDiffAt [] (g::_) n =
+ciDiffAt [] (g :: _) n =
   "  line \{intToString n}:\n    on disk:   <end of file>\n    generated: \{g}"
-ciDiffAt (d::_) [] n =
+ciDiffAt (d :: _) [] n =
   "  line \{intToString n}:\n    on disk:   \{d}\n    generated: <end of file>"
-ciDiffAt (d::ds) (g::gs) n
+ciDiffAt (d :: ds) (g :: gs) n
   | d == g = ciDiffAt ds gs (n + 1)
   | otherwise =
     "  line \{intToString n}:\n    on disk:   \{d}\n    generated: \{g}"
@@ -2812,15 +2918,21 @@ ciDiffAt (d::ds) (g::gs) n
 ciCheckResult : String -> String -> String -> Result String String
 ciCheckResult wfPath wfSrc out
   | out == wfSrc = Ok "medaka gate ci: \{wfPath} already up to date\n"
-  | otherwise = Err (stringConcat [
-    "medaka gate ci: \{wfPath}: the generated gates-matrix region does not\n",
-    "match what test/gates.toml generates.  First difference:\n",
-    ciDiffAt (splitNl wfSrc) (splitNl out) 1,
-    "\nRun 'make gen-ci' and commit the result.\n",
-  ])
+  | otherwise =
+    Err
+      (stringConcat [
+        "medaka gate ci: \{wfPath}: the generated gates-matrix region does not\n",
+        "match what test/gates.toml generates.  First difference:\n",
+        ciDiffAt (splitNl wfSrc) (splitNl out) 1,
+        "\nRun 'make gen-ci' and commit the result.\n",
+      ])
 
 ciCmdBody : List String -> <IO> Unit
-ciCmdBody argv = match parseCiArgs argv CiArgs { registry = None, workflow = None, check = False }
+ciCmdBody argv = match parseCiArgs argv CiArgs {
+  registry = None,
+  workflow = None,
+  check = False,
+}
   Err m => emit (Err m)
   Ok a =>
     let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
@@ -2950,14 +3062,13 @@ ciCmdBody argv = match parseCiArgs argv CiArgs { registry = None, workflow = Non
 -- only comparable while the committed assignment is still the one that ran.
 
 -- One schedulable gate, joined with its measured cost.
-data Cand =
-  | Cand {
-      cname : String,
-      crun : String,
-      curRow : String,
-      cms : Int,
-      needsWasm : Bool,
-    }
+data Cand = Cand {
+  cname : String,
+  crun : String,
+  curRow : String,
+  cms : Int,
+  needsWasm : Bool,
+}
 
 -- One matrix row, with the load accumulated onto it so far.
 --
@@ -2966,16 +3077,15 @@ data Cand =
 -- every read because `balPick` consults it once per candidate per row.
 -- `rbuckets` always has exactly `rjobs` entries (`balJobsFor` guarantees
 -- `rjobs >= 1`), and the two are only ever updated together, by `balAdd`.
-data Row =
-  | Row {
-      rname : String,
-      rwasm : Bool,
-      rclosed : Bool,
-      rload : Int,
-      rcount : Int,
-      rjobs : Int,
-      rbuckets : List Int,
-    }
+data Row = Row {
+  rname : String,
+  rwasm : Bool,
+  rclosed : Bool,
+  rload : Int,
+  rcount : Int,
+  rjobs : Int,
+  rbuckets : List Int,
+}
 
 -- One gate's outcome: where it goes, and where it came from.
 data Place = Place { pname : String, pfrom : String, pto : String }
@@ -3165,7 +3275,7 @@ balStabPct = 5
 -- which rows offer it is read from `[[shard]]`'s `wasm_arm`, never assumed.
 balNeedsWasm : List String -> Bool
 balNeedsWasm [] = False
-balNeedsWasm (t::ts)
+balNeedsWasm (t :: ts)
   | t == "wasm-tools" = True
   | startsWith "node" t = True
   | otherwise = balNeedsWasm ts
@@ -3177,14 +3287,14 @@ balNeedsWasm (t::ts)
 -- dropped from the packing (which would quietly REMOVE it from CI).
 balUnknownRows : List Shard -> List Gate -> List String
 balUnknownRows _ [] = []
-balUnknownRows shs (g::gs)
+balUnknownRows shs (g :: gs)
   | g.shard == balOtherJob = balUnknownRows shs gs
   | balHasRow g.shard shs = balUnknownRows shs gs
   | otherwise = g.name :: balUnknownRows shs gs
 
 balHasRow : String -> List Shard -> Bool
 balHasRow _ [] = False
-balHasRow n (s::ss)
+balHasRow n (s :: ss)
   | s.name == n = True
   | otherwise = balHasRow n ss
 
@@ -3198,7 +3308,7 @@ balHasRow n (s::ss)
 -- silence; this check is what makes any future drift in that key loud.
 balUncosted : List GateCost -> List Gate -> List String
 balUncosted _ [] = []
-balUncosted base (g::gs)
+balUncosted base (g :: gs)
   | g.shard == balOtherJob = balUncosted base gs
   | otherwise = match costOf g.run base
     Some _ => balUncosted base gs
@@ -3207,17 +3317,19 @@ balUncosted base (g::gs)
 
 balCands : List GateCost -> List Gate -> List Cand
 balCands _ [] = []
-balCands base (g::gs)
+balCands base (g :: gs)
   | g.shard == balOtherJob = balCands base gs
   | otherwise = match costOf g.run base
     None => balCands base gs
-    Some ms => Cand {
-      cname = g.name,
-      crun = g.run,
-      curRow = g.shard,
-      cms = ms,
-      needsWasm = balNeedsWasm g.toolchain,
-    } :: balCands base gs
+    Some ms =>
+      Cand {
+          cname = g.name,
+          crun = g.run,
+          curRow = g.shard,
+          cms = ms,
+          needsWasm = balNeedsWasm g.toolchain,
+        }
+        :: balCands base gs
 
 -- ⚠️ A `full_cores` row is CLOSED, not merely preferred.
 --
@@ -3234,17 +3346,18 @@ balCands base (g::gs)
 -- target.  See `balTarget`.
 balRows : List RunRecord -> List Shard -> List Row
 balRows _ [] = []
-balRows runs (s::ss) =
+balRows runs (s :: ss) =
   let j = balJobsFor s.name runs
   Row {
-    rname = s.name,
-    rwasm = s.wasmArm,
-    rclosed = s.fullCores,
-    rload = 0,
-    rcount = 0,
-    rjobs = j,
-    rbuckets = balZeros j,
-  } :: balRows runs ss
+      rname = s.name,
+      rwasm = s.wasmArm,
+      rclosed = s.fullCores,
+      rload = 0,
+      rcount = 0,
+      rjobs = j,
+      rbuckets = balZeros j,
+    }
+    :: balRows runs ss
 
 {- | The worker count to model this row's fan-out with: the `jobs` its own most
    recent recorded run actually used (S-1, #2208).
@@ -3298,7 +3411,7 @@ balJobsFor n runs = match latestRunForShard n runs
 -- so the last one wins), or the given default when no run records one.
 balAnyJobs : List RunRecord -> Int -> Int
 balAnyJobs [] acc = acc
-balAnyJobs (r::rs) acc = match r.jobs
+balAnyJobs (r :: rs) acc = match r.jobs
   Some j if j >= 1 => balAnyJobs rs j
   _ => balAnyJobs rs acc
 
@@ -3332,21 +3445,21 @@ candBefore a b
 
 balSortCands : List Cand -> List Cand
 balSortCands [] = []
-balSortCands (x::[]) = x::[]
+balSortCands (x :: []) = x :: []
 balSortCands xs =
   let (l, r) = balHalve xs [] []
   balMergeCands (balSortCands l) (balSortCands r)
 
 balHalve : List Cand -> List Cand -> List Cand -> (List Cand, List Cand)
 balHalve [] a b = (a, b)
-balHalve (x::xs) a b = balHalve xs b (x::a)
+balHalve (x :: xs) a b = balHalve xs b (x :: a)
 
 balMergeCands : List Cand -> List Cand -> List Cand
 balMergeCands [] ys = ys
 balMergeCands xs [] = xs
-balMergeCands (x::xs) (y::ys)
-  | candBefore x y = x :: balMergeCands xs (y::ys)
-  | otherwise = y :: balMergeCands (x::xs) ys
+balMergeCands (x :: xs) (y :: ys)
+  | candBefore x y = x :: balMergeCands xs (y :: ys)
+  | otherwise = y :: balMergeCands (x :: xs) ys
 
 -- The open row a gate should go on: the lightest row that can legally run it.
 -- Scanning with a STRICT `<` keeps the first minimum, so an all-equal set of
@@ -3357,16 +3470,13 @@ balPick c rs = balPickGo c rs None
 balPickGo : Cand -> List Row -> Option Row -> Option String
 balPickGo _ [] None = None
 balPickGo _ [] (Some b) = Some b.rname
-balPickGo c (r::rs) best
+balPickGo c (r :: rs) best
   | r.rclosed = balPickGo c rs best
   | c.needsWasm && not r.rwasm = balPickGo c rs best
   | otherwise = match best
     None => balPickGo c rs (Some r)
     Some b =>
-      if r.rload < b.rload then
-        balPickGo c rs (Some r)
-      else
-        balPickGo c rs best
+      if r.rload < b.rload then balPickGo c rs (Some r) else balPickGo c rs best
 
 {- | The row a gate should go on, with the INCUMBENT row given a bounded
    preference over the LPT pick (S-3, #2218).
@@ -3463,7 +3573,7 @@ balStays c best rs
 -- refusal away from silently pinning a gate to nothing.
 balRowTakes : Cand -> List Row -> Bool
 balRowTakes _ [] = False
-balRowTakes c (r::rs)
+balRowTakes c (r :: rs)
   | r.rname == c.curRow = not r.rclosed && (not c.needsWasm || r.rwasm)
   | otherwise = balRowTakes c rs
 
@@ -3472,7 +3582,7 @@ balRowTakes c (r::rs)
 -- answered False for the same name.
 balRowLoad : String -> List Row -> Int
 balRowLoad _ [] = 0
-balRowLoad n (r::rs)
+balRowLoad n (r :: rs)
   | r.rname == n = r.rload
   | otherwise = balRowLoad n rs
 
@@ -3487,10 +3597,10 @@ balRowLoad n (r::rs)
 -- model rather than by two schedules that happen to share a function.
 balAdd : String -> Int -> List Row -> List Row
 balAdd _ _ [] = []
-balAdd n ms (r::rs)
+balAdd n ms (r :: rs)
   | r.rname == n =
     let bs = balBucketAdd ms r.rbuckets
-    Row { r | rbuckets = bs, rload = balMaxL bs, rcount = r.rcount + 1 }::rs
+    Row { r | rbuckets = bs, rload = balMaxL bs, rcount = r.rcount + 1 } :: rs
   | otherwise = r :: balAdd n ms rs
 
 -- One worker bucket takes the gate: the least-loaded one, first minimum kept,
@@ -3498,23 +3608,23 @@ balAdd n ms (r::rs)
 -- cannot arise (`balJobsFor` floors at 1), but if it ever did, growing a bucket
 -- is the one response that does not silently LOSE the gate's cost.
 balBucketAdd : Int -> List Int -> List Int
-balBucketAdd ms [] = ms::[]
+balBucketAdd ms [] = ms :: []
 balBucketAdd ms bs = balBucketPut ms (balMinL bs) bs
 
 balBucketPut : Int -> Int -> List Int -> List Int
 balBucketPut _ _ [] = []
-balBucketPut ms m (b::bs)
+balBucketPut ms m (b :: bs)
   | b == m = b + ms :: bs
   | otherwise = b :: balBucketPut ms m bs
 
 balMinL : List Int -> Int
 balMinL [] = 0
-balMinL (x::[]) = x
-balMinL (x::xs) = minI x (balMinL xs)
+balMinL (x :: []) = x
+balMinL (x :: xs) = minI x (balMinL xs)
 
 balMaxL : List Int -> Int
 balMaxL [] = 0
-balMaxL (x::xs) = maxI x (balMaxL xs)
+balMaxL (x :: xs) = maxI x (balMaxL xs)
 
 -- Place the sorted candidates one at a time.  A gate with no legal row is the
 -- constraint refusal: it names the gate, what it needs, and which rows offer
@@ -3527,25 +3637,38 @@ balMaxL (x::xs) = maxI x (balMaxL xs)
 -- what the stability preference COSTS by packing the same candidates twice and
 -- comparing the two poles (`balCompute`) — a claim about a trade-off that
 -- printed only one side of it would be unfalsifiable by a reader.
-balPlace : Bool -> List Cand -> List Row -> List Place -> Result String (List Place, List Row)
+balPlace : Bool ->
+  List Cand ->
+  List Row ->
+  List Place ->
+  Result String (List Place, List Row)
 balPlace _ [] rs acc = Ok (reverseL acc, rs)
-balPlace stab (c::cs) rs acc = match if stab then balPickStable c rs else balPick c rs
-  None => Err (stringConcat [
-    "medaka gate balance: no row can run '\{c.cname}'.\n",
-    "  It needs the Wasm toolchain (wasm-tools / node), and every row with\n",
-    "  wasm_arm = true is closed to the packer (full_cores).  Wasm rows: ",
-    joinSpace (balWasmRowNames rs),
-    "\n",
-  ])
-  Some rn => balPlace stab cs (balAdd rn c.cms rs) (Place {
-    pname = c.cname,
-    pfrom = c.curRow,
-    pto = rn,
-  }::acc)
+balPlace stab (c :: cs) rs acc =
+  match if stab then balPickStable c rs else balPick c rs
+    None =>
+      Err
+        (stringConcat [
+          "medaka gate balance: no row can run '\{c.cname}'.\n",
+          "  It needs the Wasm toolchain (wasm-tools / node), and every row with\n",
+          "  wasm_arm = true is closed to the packer (full_cores).  Wasm rows: ",
+          joinSpace (balWasmRowNames rs),
+          "\n",
+        ])
+    Some rn =>
+      balPlace
+        stab
+        cs
+        (balAdd rn c.cms rs)
+        (Place {
+            pname = c.cname,
+            pfrom = c.curRow,
+            pto = rn,
+          }
+          :: acc)
 
 balWasmRowNames : List Row -> List String
 balWasmRowNames [] = []
-balWasmRowNames (r::rs)
+balWasmRowNames (r :: rs)
   | r.rwasm = r.rname :: balWasmRowNames rs
   | otherwise = balWasmRowNames rs
 
@@ -3557,26 +3680,36 @@ balWasmRowNames (r::rs)
 -- refused any registry whose closed rows do not match their declared
 -- `pinned_gates`.  Without that check this seed is the one place a `shard`
 -- value is still hand-assignable, and the hand edit is adopted as the new pin.
-balSeedClosed : List Cand -> List Row -> List Place -> Result String (List Place, List Row)
+balSeedClosed : List Cand ->
+  List Row ->
+  List Place ->
+  Result String (List Place, List Row)
 balSeedClosed [] rs acc = Ok (reverseL acc, rs)
-balSeedClosed (c::cs) rs acc
+balSeedClosed (c :: cs) rs acc
   | not (balIsClosed c.curRow rs) = balSeedClosed cs rs acc
-  | c.needsWasm && not (balRowIsWasm c.curRow rs) = Err "medaka gate balance: '\{c.cname}' needs the Wasm toolchain but is pinned to row '\{c.curRow}', which has wasm_arm = false"
-  | otherwise = balSeedClosed cs (balAdd c.curRow c.cms rs) (Place {
-    pname = c.cname,
-    pfrom = c.curRow,
-    pto = c.curRow,
-  }::acc)
+  | c.needsWasm && not (balRowIsWasm c.curRow rs) =
+    Err
+      "medaka gate balance: '\{c.cname}' needs the Wasm toolchain but is pinned to row '\{c.curRow}', which has wasm_arm = false"
+  | otherwise =
+    balSeedClosed
+      cs
+      (balAdd c.curRow c.cms rs)
+      (Place {
+          pname = c.cname,
+          pfrom = c.curRow,
+          pto = c.curRow,
+        }
+        :: acc)
 
 balIsClosed : String -> List Row -> Bool
 balIsClosed _ [] = False
-balIsClosed n (r::rs)
+balIsClosed n (r :: rs)
   | r.rname == n = r.rclosed
   | otherwise = balIsClosed n rs
 
 balRowIsWasm : String -> List Row -> Bool
 balRowIsWasm _ [] = False
-balRowIsWasm n (r::rs)
+balRowIsWasm n (r :: rs)
   | r.rname == n = r.rwasm
   | otherwise = balRowIsWasm n rs
 
@@ -3613,8 +3746,10 @@ balRowIsWasm n (r::rs)
    edit, and finding out about the second half of it on the next run is not. -}
 balPinErrors : List Gate -> List Shard -> List String
 balPinErrors _ [] = []
-balPinErrors gs (s::ss)
-  | not s.fullCores && not (isEmptyStrs s.pinned) = "row '\{s.name}': pinned_gates is non-empty (\{joinSpace s.pinned}) on an OPEN row (full_cores = false); only a closed row's membership is declared, an open row's is the packer's output" :: balPinErrors gs ss
+balPinErrors gs (s :: ss)
+  | not s.fullCores && not (isEmptyStrs s.pinned) =
+    "row '\{s.name}': pinned_gates is non-empty (\{joinSpace s.pinned}) on an OPEN row (full_cores = false); only a closed row's membership is declared, an open row's is the packer's output"
+      :: balPinErrors gs ss
   | not s.fullCores = balPinErrors gs ss
   | otherwise =
     let members = balRowMembers s.name gs
@@ -3625,7 +3760,7 @@ balPinErrors gs (s::ss)
 -- The gates whose committed `shard` names this row, in registry order.
 balRowMembers : String -> List Gate -> List String
 balRowMembers _ [] = []
-balRowMembers n (g::gs)
+balRowMembers n (g :: gs)
   | g.shard == n = g.name :: balRowMembers n gs
   | otherwise = balRowMembers n gs
 
@@ -3633,7 +3768,7 @@ balRowMembers n (g::gs)
 -- (F3(b)).  Naming where it went instead is the whole diagnosis.
 balPinMissing : String -> List Gate -> List String -> List String -> List String
 balPinMissing _ _ [] _ = []
-balPinMissing n gs (p::ps) members
+balPinMissing n gs (p :: ps) members
   | balElemStr p members = balPinMissing n gs ps members
   | otherwise = balPinPlace n gs p :: balPinMissing n gs ps members
 
@@ -3645,26 +3780,28 @@ balPinPlace n gs p = match balShardOfGate p gs
 
 balShardOfGate : String -> List Gate -> Option String
 balShardOfGate _ [] = None
-balShardOfGate n (g::gs)
+balShardOfGate n (g :: gs)
   | g.name == n = Some g.shard
   | otherwise = balShardOfGate n gs
 
 -- There, but not declared: a gate has been moved onto the closed row (F3(a)).
 balPinExtra : String -> List String -> List String -> List String
 balPinExtra _ _ [] = []
-balPinExtra n pinned (m::ms)
+balPinExtra n pinned (m :: ms)
   | balElemStr m pinned = balPinExtra n pinned ms
-  | otherwise = "row '\{n}': '\{m}' is committed on this closed row but is not in its pinned_gates" :: balPinExtra n pinned ms
+  | otherwise =
+    "row '\{n}': '\{m}' is committed on this closed row but is not in its pinned_gates"
+      :: balPinExtra n pinned ms
 
 balElemStr : String -> List String -> Bool
 balElemStr _ [] = False
-balElemStr x (y::ys)
+balElemStr x (y :: ys)
   | x == y = True
   | otherwise = balElemStr x ys
 
 balOpenCands : List Cand -> List Row -> List Cand
 balOpenCands [] _ = []
-balOpenCands (c::cs) rs
+balOpenCands (c :: cs) rs
   | balIsClosed c.curRow rs = balOpenCands cs rs
   | otherwise = c :: balOpenCands cs rs
 
@@ -3699,7 +3836,10 @@ balOpenCands (c::cs) rs
    `stab` is False for the pure-LPT comparison run that `balCompute` scores the
    preference's pole cost against; the emitted assignment is always the True
    one. -}
-balTarget : Bool -> List Cand -> List Row -> Result String (List Place, List Row)
+balTarget : Bool ->
+  List Cand ->
+  List Row ->
+  Result String (List Place, List Row)
 balTarget stab cs rows0 =
   -- Cost-descending for BOTH halves, not just the packed one: `balAdd` now runs
   -- an LPT schedule inside each row, and a closed row seeded in registry order
@@ -3709,7 +3849,10 @@ balTarget stab cs rows0 =
   let sorted = balSortCands cs
   match balSeedClosed sorted rows0 []
     Err m => Err m
-    Ok (pinned, rows1) => map ((placed, rows2) => (pinned ++ placed, rows2)) (balPlace stab (balSortCands (balOpenCands sorted rows0)) rows1 [])
+    Ok (pinned, rows1) =>
+      map
+        ((placed, rows2) => (pinned ++ placed, rows2))
+        (balPlace stab (balSortCands (balOpenCands sorted rows0)) rows1 [])
 
 -- The assignment already on disk, as the same shape, so the two can be scored
 -- by identical code rather than by two functions that could drift apart.
@@ -3720,46 +3863,46 @@ balTarget stab cs rows0 =
 -- difference a packing gain.
 balCurrent : List Cand -> List Row -> (List Place, List Row)
 balCurrent [] rs = ([], rs)
-balCurrent (c::cs) rs =
+balCurrent (c :: cs) rs =
   let (ps, rs2) = balCurrent cs (balAdd c.curRow c.cms rs)
-  (Place { pname = c.cname, pfrom = c.curRow, pto = c.curRow }::ps, rs2)
+  (Place { pname = c.cname, pfrom = c.curRow, pto = c.curRow } :: ps, rs2)
 
 -- ── Scoring ─────────────────────────────────────────────────────────────────
 
 balPole : List Row -> Int
 balPole [] = 0
-balPole (r::rs) = maxI r.rload (balPole rs)
+balPole (r :: rs) = maxI r.rload (balPole rs)
 
 balPoleRow : List Row -> String
 balPoleRow rs = balPoleRowGo rs "" (-1)
 
 balPoleRowGo : List Row -> String -> Int -> String
 balPoleRowGo [] n _ = n
-balPoleRowGo (r::rs) n best
+balPoleRowGo (r :: rs) n best
   | r.rload > best = balPoleRowGo rs r.rname r.rload
   | otherwise = balPoleRowGo rs n best
 
 balLoads : List Row -> List Int
 balLoads [] = []
-balLoads (r::rs) = r.rload :: balLoads rs
+balLoads (r :: rs) = r.rload :: balLoads rs
 
 balSortInts : List Int -> List Int
 balSortInts [] = []
-balSortInts (x::[]) = x::[]
+balSortInts (x :: []) = x :: []
 balSortInts xs =
   let (l, r) = balHalveI xs [] []
   balMergeInts (balSortInts l) (balSortInts r)
 
 balHalveI : List Int -> List Int -> List Int -> (List Int, List Int)
 balHalveI [] a b = (a, b)
-balHalveI (x::xs) a b = balHalveI xs b (x::a)
+balHalveI (x :: xs) a b = balHalveI xs b (x :: a)
 
 balMergeInts : List Int -> List Int -> List Int
 balMergeInts [] ys = ys
 balMergeInts xs [] = xs
-balMergeInts (x::xs) (y::ys)
-  | x <= y = x :: balMergeInts xs (y::ys)
-  | otherwise = y :: balMergeInts (x::xs) ys
+balMergeInts (x :: xs) (y :: ys)
+  | x <= y = x :: balMergeInts xs (y :: ys)
+  | otherwise = y :: balMergeInts (x :: xs) ys
 
 -- The median row load: the mean of the two middle values for an even row
 -- count, the middle value for an odd one.
@@ -3783,7 +3926,7 @@ balMedian rs =
 
 balNth : Int -> List Int -> Int
 balNth _ [] = 0
-balNth i (x::xs)
+balNth i (x :: xs)
   | i <= 0 = x
   | otherwise = balNth (i - 1) xs
 
@@ -3805,7 +3948,7 @@ balFloorGateMs cs = (balMaxCand cs).cms
 -- error as blaming it for one indivisible gate.
 balFloorClosedMs : List Row -> Int
 balFloorClosedMs [] = 0
-balFloorClosedMs (r::rs)
+balFloorClosedMs (r :: rs)
   | r.rclosed = maxI r.rload (balFloorClosedMs rs)
   | otherwise = balFloorClosedMs rs
 
@@ -3814,7 +3957,7 @@ balFloorClosedRow rs = balFloorClosedRowGo rs "" (-1)
 
 balFloorClosedRowGo : List Row -> String -> Int -> String
 balFloorClosedRowGo [] n _ = n
-balFloorClosedRowGo (r::rs) n best
+balFloorClosedRowGo (r :: rs) n best
   | r.rclosed && r.rload > best = balFloorClosedRowGo rs r.rname r.rload
   | otherwise = balFloorClosedRowGo rs n best
 
@@ -3823,7 +3966,7 @@ balFloorClosedRowGo (r::rs) n best
 -- neither work the packer has to place nor capacity it has to place it on.
 balOpenWork : List Cand -> List Row -> Int
 balOpenWork [] _ = 0
-balOpenWork (c::cs) rs
+balOpenWork (c :: cs) rs
   | balIsClosed c.curRow rs = balOpenWork cs rs
   | otherwise = c.cms + balOpenWork cs rs
 
@@ -3833,7 +3976,7 @@ balOpenWork (c::cs) rs
 -- this term by roughly `jobs`×.
 balOpenSlots : List Row -> Int
 balOpenSlots [] = 0
-balOpenSlots (r::rs)
+balOpenSlots (r :: rs)
   | r.rclosed = balOpenSlots rs
   | otherwise = r.rjobs + balOpenSlots rs
 
@@ -3864,8 +4007,10 @@ balFloorLine cs rs
     "  floor: the achievable pole — set by '\{(balMaxCand cs).cname}' alone (\{balSecs (balFloorGateMs cs)}), which is indivisible.\n",
     "         Moving the FLOOR means that gate has to get FASTER (or be split).\n",
   ]
-  | balFloorClosedMs rs >= balFloor cs rs = "  floor: the achievable pole — set by the closed row '\{balFloorClosedRow rs}' (\{balSecs (balFloorClosedMs rs)}), whose membership the packer cannot change.\n"
-  | otherwise = "  floor: the achievable pole — set by \{balSecs (balOpenWork cs rs)} of open work over \{intToString (balOpenSlots rs)} open worker slots.\n"
+  | balFloorClosedMs rs >= balFloor cs rs =
+    "  floor: the achievable pole — set by the closed row '\{balFloorClosedRow rs}' (\{balSecs (balFloorClosedMs rs)}), whose membership the packer cannot change.\n"
+  | otherwise =
+    "  floor: the achievable pole — set by \{balSecs (balOpenWork cs rs)} of open work over \{intToString (balOpenSlots rs)} open worker slots.\n"
 
 -- `pole / floor` in thousandths.  Integer arithmetic throughout: the factor
 -- is compared against a threshold and printed, and a float would make both
@@ -3878,8 +4023,8 @@ balFactorMilli cs rs =
 balMaxCand : List Cand -> Cand
 balMaxCand [] =
   Cand { cname = "(none)", crun = "", curRow = "", cms = 0, needsWasm = False }
-balMaxCand (c::[]) = c
-balMaxCand (c::cs) =
+balMaxCand (c :: []) = c
+balMaxCand (c :: cs) =
   let r = balMaxCand cs
   if c.cms >= r.cms then c else r
 
@@ -3939,10 +4084,11 @@ balDelta d
 -- nothing in the output to show for it (`balJobsFor`).
 balRowLines : List Row -> List RunRecord -> List String
 balRowLines [] _ = []
-balRowLines (r::rs) runs =
+balRowLines (r :: rs) runs =
   let tag = if r.rclosed then "  [closed: full_cores]" else ""
   let jt = if balJobsIsFallback r.rname runs then " jobs*" else " jobs "
-  "    \{balPadR 10 r.rname} \{balPadL 4 (intToString r.rcount)} gates \{balPadL 9 (balSecs r.rload)}  \{jt}\{intToString r.rjobs}\{tag}" :: balRowLines rs runs
+  "    \{balPadR 10 r.rname} \{balPadL 4 (intToString r.rcount)} gates \{balPadL 9 (balSecs r.rload)}  \{jt}\{intToString r.rjobs}\{tag}"
+    :: balRowLines rs runs
 
 {- | The model against something that is not the model: each row's recorded CI
    wall clock (`rowElapsedMs`, S-1/#2208) beside this model's makespan for the
@@ -3994,7 +4140,7 @@ balRowLines (r::rs) runs =
    A residual near zero or negative is the surprising one. -}
 balCalibLines : List Cand -> List Row -> List RunRecord -> List String
 balCalibLines _ [] _ = []
-balCalibLines cs (r::rs) runs =
+balCalibLines cs (r :: rs) runs =
   balCalibLine cs r runs :: balCalibLines cs rs runs
 
 {- | The recorded run and the committed assignment describe the same gate set
@@ -4019,14 +4165,16 @@ balCalibLines cs (r::rs) runs =
 balCalibStaleness : Int -> Option Int -> Int -> Option Int -> String
 balCalibStaleness _ None _ _ = ""
 balCalibStaleness cur (Some recorded) curDig recDig
-  | cur /= recorded = " [STALE: \{intToString cur} gates now, \{intToString recorded} when recorded]"
+  | cur /= recorded =
+    " [STALE: \{intToString cur} gates now, \{intToString recorded} when recorded]"
   | otherwise = balCalibSetStaleness cur curDig recDig
 
 balCalibSetStaleness : Int -> Int -> Option Int -> String
 balCalibSetStaleness _ _ None = ""
 balCalibSetStaleness n cur (Some recorded)
   | cur == recorded = ""
-  | otherwise = " [STALE: the same \{intToString n} gates by COUNT but a DIFFERENT SET (set digest \{intToString cur} now, \{intToString recorded} when recorded)]"
+  | otherwise =
+    " [STALE: the same \{intToString n} gates by COUNT but a DIFFERENT SET (set digest \{intToString cur} now, \{intToString recorded} when recorded)]"
 
 -- The digest of what is committed to this row NOW, over the same population
 -- `rcount` counts: the candidates whose COMMITTED shard is this row.  Keyed
@@ -4039,7 +4187,7 @@ balRowDigest rn cs = gateSetDigest (balRowKeys rn cs)
 
 balRowKeys : String -> List Cand -> List String
 balRowKeys _ [] = []
-balRowKeys rn (c::cs)
+balRowKeys rn (c :: cs)
   | c.curRow == rn = baselineKey c.crun :: balRowKeys rn cs
   | otherwise = balRowKeys rn cs
 
@@ -4051,11 +4199,14 @@ balCalibLine cands r runs = match latestRunForShard r.rname runs
       "    \{balPadR 10 r.rname} (run \{rr.runId} recorded no rowElapsedMs)"
     Some e =>
       let d = e - r.rload
-      let pct = if r.rload > 0 then
-        " (\{intToString (d * 100 / r.rload)}%)"
-      else
-        ""
-      let stale = balCalibStaleness r.rcount rr.gates (balRowDigest r.rname cands) rr.gatesDigest
+      let pct =
+        if r.rload > 0 then " (\{intToString (d * 100 / r.rload)}%)" else ""
+      let stale =
+        balCalibStaleness
+          r.rcount
+          rr.gates
+          (balRowDigest r.rname cands)
+          rr.gatesDigest
       "    \{balPadR 10 r.rname} recorded \{balPadL 9 (balSecs e)}   predicted \{balPadL 9 (balSecs r.rload)}   residual \{balPadL 9 (balDelta d)}\{pct}\{stale}"
 
 {- | What the incumbent preference bought, and what it cost — on EVERY run, in
@@ -4102,13 +4253,13 @@ balStabLine cs rows0 ps rows = match balTarget False cs rows0
 -- a count that does not mean what the sentence around it says.
 balHeldCount : List Place -> List Place -> Int
 balHeldCount [] _ = 0
-balHeldCount (p::ps) qs
+balHeldCount (p :: ps) qs
   | p.pto == p.pfrom && balPlaceOf p.pname qs /= p.pto = 1 + balHeldCount ps qs
   | otherwise = balHeldCount ps qs
 
 balMoved : List Place -> Int
 balMoved [] = 0
-balMoved (p::ps)
+balMoved (p :: ps)
   | p.pfrom /= p.pto = 1 + balMoved ps
   | otherwise = balMoved ps
 
@@ -4123,7 +4274,7 @@ balThinSamples = 2
 
 balThinCount : List GateCost -> Int
 balThinCount [] = 0
-balThinCount (c::cs)
+balThinCount (c :: cs)
   | c.samples < balThinSamples = 1 + balThinCount cs
   | otherwise = balThinCount cs
 
@@ -4132,7 +4283,8 @@ balThinCount (c::cs)
 -- baseline is not currently resting on single-sample data, not merely an
 -- absence of a warning they might otherwise wonder about.
 balThinLine : List GateCost -> String
-balThinLine base = "  \{intToString (balThinCount base)} of \{intToString (listLen base)} gates are scheduled off a single sample (samples < \{intToString balThinSamples})\n"
+balThinLine base =
+  "  \{intToString (balThinCount base)} of \{intToString (listLen base)} gates are scheduled off a single sample (samples < \{intToString balThinSamples})\n"
 
 -- ── Out-of-sample error of the packing statistic (S-2, #2222) ───────────────
 
@@ -4204,7 +4356,8 @@ balOosBlock : List GateCost -> List Cand -> List RunRecord -> String
 balOosBlock base cs runs =
   let ids = balRunIds runs []
   let nr = listLen ids
-  if nr < 2 then "  out-of-sample error of the packing statistic: not derivable (\{intToString nr} recorded run(s); predicting one run from the others needs at least two)\n"
+  if nr < 2 then
+    "  out-of-sample error of the packing statistic: not derivable (\{intToString nr} recorded run(s); predicting one run from the others needs at least two)\n"
   else
     let vs = balOosVecs base cs ids
     let ne = listLen vs
@@ -4225,7 +4378,8 @@ balOosFolds vs ids i nr
   | otherwise =
     let p = balOosPred vs i
     let a = balOosAct vs i
-    "    run \{balPadR 13 (balNthStr i ids)} predicted \{balPadL 9 (balSecs p)}   actual \{balPadL 9 (balSecs a)}   \{balPadL 7 (balPct1 (p - a) a)}" :: balOosFolds vs ids (i + 1) nr
+    "    run \{balPadR 13 (balNthStr i ids)} predicted \{balPadL 9 (balSecs p)}   actual \{balPadL 9 (balSecs a)}   \{balPadL 7 (balPct1 (p - a) a)}"
+      :: balOosFolds vs ids (i + 1) nr
 
 -- The bias is the number a reader should carry away, so it says which way it
 -- points: the median is the LOW-side robust choice, and the underestimate is
@@ -4252,7 +4406,7 @@ balOosDriftLine base =
 
 balStatDrift : List GateCost -> Int
 balStatDrift [] = 0
-balStatDrift (c::cs)
+balStatDrift (c :: cs)
   | packStat c.ms == c.medianMs = balStatDrift cs
   | otherwise = 1 + balStatDrift cs
 
@@ -4265,7 +4419,7 @@ balStatDrift (c::cs)
 -- drops rather than guesses.
 balOosVecs : List GateCost -> List Cand -> List String -> List (List Int)
 balOosVecs _ [] _ = []
-balOosVecs base (c::cs) ids = match costRowOf c.crun base
+balOosVecs base (c :: cs) ids = match costRowOf c.crun base
   None => balOosVecs base cs ids
   Some g => match balOosVecFor g ids
     None => balOosVecs base cs ids
@@ -4275,7 +4429,7 @@ balOosVecs base (c::cs) ids = match costRowOf c.crun base
 -- the "same admitted set across every fold" rule in `balOosBlock`.
 balOosVecFor : GateCost -> List String -> Option (List Int)
 balOosVecFor _ [] = Some []
-balOosVecFor g (r::rs) = match balSampleForRun r g.ms g.sampleRuns None
+balOosVecFor g (r :: rs) = match balSampleForRun r g.ms g.sampleRuns None
   None => None
   Some v => map (v :: _) (balOosVecFor g rs)
 
@@ -4289,7 +4443,7 @@ balOosVecFor g (r::rs) = match balSampleForRun r g.ms g.sampleRuns None
 balSampleForRun : String -> List Int -> List String -> Option Int -> Option Int
 balSampleForRun _ [] _ acc = acc
 balSampleForRun _ _ [] acc = acc
-balSampleForRun r (m::ms) (s::ss) acc
+balSampleForRun r (m :: ms) (s :: ss) acc
   | s /= r = balSampleForRun r ms ss acc
   | otherwise = match acc
     None => balSampleForRun r ms ss (Some m)
@@ -4301,29 +4455,29 @@ balSampleForRun r (m::ms) (s::ss) acc
 -- field" (0 of N) from "attribution exists but no gate spans every run".
 balAttrKnown : List GateCost -> List Cand -> Int
 balAttrKnown _ [] = 0
-balAttrKnown base (c::cs) = match costRowOf c.crun base
+balAttrKnown base (c :: cs) = match costRowOf c.crun base
   None => balAttrKnown base cs
   Some g => balCountAttr g.sampleRuns + balAttrKnown base cs
 
 balCountAttr : List String -> Int
 balCountAttr [] = 0
-balCountAttr (s::ss)
+balCountAttr (s :: ss)
   | s == "" = balCountAttr ss
   | otherwise = 1 + balCountAttr ss
 
 balAttrTotal : List GateCost -> List Cand -> Int
 balAttrTotal _ [] = 0
-balAttrTotal base (c::cs) = match costRowOf c.crun base
+balAttrTotal base (c :: cs) = match costRowOf c.crun base
   None => balAttrTotal base cs
   Some g => listLen g.ms + balAttrTotal base cs
 
 balOosPred : List (List Int) -> Int -> Int
 balOosPred [] _ = 0
-balOosPred (v::vs) i = packStat (balDropNth i v) + balOosPred vs i
+balOosPred (v :: vs) i = packStat (balDropNth i v) + balOosPred vs i
 
 balOosAct : List (List Int) -> Int -> Int
 balOosAct [] _ = 0
-balOosAct (v::vs) i = balNth i v + balOosAct vs i
+balOosAct (v :: vs) i = balNth i v + balOosAct vs i
 
 balOosPredAll : List (List Int) -> Int -> Int -> Int
 balOosPredAll vs i nr
@@ -4349,7 +4503,7 @@ balOosAbsPm vs i nr acc
 
 balDropNth : Int -> List Int -> List Int
 balDropNth _ [] = []
-balDropNth i (x::xs)
+balDropNth i (x :: xs)
   | i <= 0 = xs
   | otherwise = x :: balDropNth (i - 1) xs
 
@@ -4357,38 +4511,42 @@ balDropNth i (x::xs)
 -- order `ms` is appended in, which is what makes index i mean run i.
 balRunIds : List RunRecord -> List String -> List String
 balRunIds [] acc = balRevStrs acc []
-balRunIds (r::rs) acc
+balRunIds (r :: rs) acc
   | balHasStr r.runId acc = balRunIds rs acc
-  | otherwise = balRunIds rs (r.runId::acc)
+  | otherwise = balRunIds rs (r.runId :: acc)
 
 balHasStr : String -> List String -> Bool
 balHasStr _ [] = False
-balHasStr s (x::xs)
+balHasStr s (x :: xs)
   | x == s = True
   | otherwise = balHasStr s xs
 
 balRevStrs : List String -> List String -> List String
 balRevStrs [] acc = acc
-balRevStrs (x::xs) acc = balRevStrs xs (x::acc)
+balRevStrs (x :: xs) acc = balRevStrs xs (x :: acc)
 
 balNthStr : Int -> List String -> String
 balNthStr _ [] = ""
-balNthStr i (x::xs)
+balNthStr i (x :: xs)
   | i <= 0 = x
   | otherwise = balNthStr (i - 1) xs
 
 -- The projection block both `--check` and the mutating form print, verbatim.
 -- One renderer, so the two can never describe different packings.
-balReport : String -> List Cand -> List Row -> List Place -> List RunRecord -> String
-balReport label cs rs ps runs = stringConcat
-  [
-    "  \{label}: \{intToString (listLen cs)} schedulable gates over \{intToString (listLen rs)} rows\n",
-    "  predicted row wall clock (makespan of the per-gate baseline medians over the row's recorded workers; * = borrowed/defaulted worker count):\n",
-    joinNl (balRowLines rs runs),
-    "\n  pole \{balSecs (balPole rs)} (\{balPoleRow rs})   median \{balSecs (balMedian rs)}   floor \{balSecs (balFloor cs rs)}   pole/floor \{balMilli (balFactorMilli cs rs)}\n",
-    balFloorLine cs rs,
-    "  gates whose row changes: \{intToString (balMoved ps)}\n",
-  ]
+balReport : String ->
+  List Cand ->
+  List Row ->
+  List Place ->
+  List RunRecord ->
+  String
+balReport label cs rs ps runs = stringConcat [
+  "  \{label}: \{intToString (listLen cs)} schedulable gates over \{intToString (listLen rs)} rows\n",
+  "  predicted row wall clock (makespan of the per-gate baseline medians over the row's recorded workers; * = borrowed/defaulted worker count):\n",
+  joinNl (balRowLines rs runs),
+  "\n  pole \{balSecs (balPole rs)} (\{balPoleRow rs})   median \{balSecs (balMedian rs)}   floor \{balSecs (balFloor cs rs)}   pole/floor \{balMilli (balFactorMilli cs rs)}\n",
+  balFloorLine cs rs,
+  "  gates whose row changes: \{intToString (balMoved ps)}\n",
+]
 
 -- ── The decision ────────────────────────────────────────────────────────────
 
@@ -4406,7 +4564,7 @@ balReport label cs rs ps runs = stringConcat
 -- legality is not a cost.
 balCurrentLegal : List Cand -> List Row -> Bool
 balCurrentLegal [] _ = True
-balCurrentLegal (c::cs) rs
+balCurrentLegal (c :: cs) rs
   | c.needsWasm && not (balRowIsWasm c.curRow rs) = False
   | otherwise = balCurrentLegal cs rs
 
@@ -4468,14 +4626,15 @@ balBandNote _ _ _ =
 -- tool disagrees about, and that is the only fact they need.
 balFirstMove : List Place -> Option Place
 balFirstMove [] = None
-balFirstMove (p::ps)
+balFirstMove (p :: ps)
   | p.pfrom /= p.pto = Some p
   | otherwise = balFirstMove ps
 
 balMoveLine : List Place -> String
 balMoveLine ps = match balFirstMove ps
   None => ""
-  Some p => "  first divergence: '\{p.pname}' is committed on row '\{p.pfrom}' but derives to '\{p.pto}'.\n"
+  Some p =>
+    "  first divergence: '\{p.pname}' is committed on row '\{p.pfrom}' but derives to '\{p.pto}'.\n"
 
 {- | The enforcement.  Distinguishes the two ways the budget can be missed,
    because they need different repairs: a packing this command could fix, or
@@ -4500,28 +4659,32 @@ balMoveLine ps = match balFirstMove ps
 balEnforce : List Cand -> List Row -> Option String
 balEnforce cs rs
   | balFactorMilli cs rs <= balTargetMilli = None
-  | balFloorIsGate cs rs = Some (stringConcat [
-    "medaka gate balance: the emitted assignment misses the pole/floor budget of ",
-    balMilli balTargetMilli,
-    " (it is ",
-    balMilli (balFactorMilli cs rs),
-    ").\n",
-    "  The floor is '\{(balMaxCand cs).cname}' alone, at \{balSecs (balMaxCand cs).cms}, against a pole of \{balSecs (balPole rs)}.\n",
-    "  Gates are indivisible, so the pole can never go below the most expensive\n",
-    "  gate, and the rest of this gap is what would not fit around it.  This is\n",
-    "  a gate that has to get FASTER (or be split); repacking cannot move the\n",
-    "  floor while it stands.\n",
-  ])
-  | otherwise = Some (stringConcat [
-    "medaka gate balance: the emitted assignment misses the pole/floor budget of ",
-    balMilli balTargetMilli,
-    " (it is ",
-    balMilli (balFactorMilli cs rs),
-    ").\n",
-    "  No single gate explains it — the floor is \{balSecs (balFloor cs rs)} and no gate costs that\n",
-    "  much — so this is the packing: rows within budget exist and the heuristic\n",
-    "  did not find them.\n",
-  ])
+  | balFloorIsGate cs rs =
+    Some
+      (stringConcat [
+        "medaka gate balance: the emitted assignment misses the pole/floor budget of ",
+        balMilli balTargetMilli,
+        " (it is ",
+        balMilli (balFactorMilli cs rs),
+        ").\n",
+        "  The floor is '\{(balMaxCand cs).cname}' alone, at \{balSecs (balMaxCand cs).cms}, against a pole of \{balSecs (balPole rs)}.\n",
+        "  Gates are indivisible, so the pole can never go below the most expensive\n",
+        "  gate, and the rest of this gap is what would not fit around it.  This is\n",
+        "  a gate that has to get FASTER (or be split); repacking cannot move the\n",
+        "  floor while it stands.\n",
+      ])
+  | otherwise =
+    Some
+      (stringConcat [
+        "medaka gate balance: the emitted assignment misses the pole/floor budget of ",
+        balMilli balTargetMilli,
+        " (it is ",
+        balMilli (balFactorMilli cs rs),
+        ").\n",
+        "  No single gate explains it — the floor is \{balSecs (balFloor cs rs)} and no gate costs that\n",
+        "  much — so this is the packing: rows within budget exist and the heuristic\n",
+        "  did not find them.\n",
+      ])
 
 -- ── Writing the assignment back ─────────────────────────────────────────────
 
@@ -4531,13 +4694,13 @@ balEnforce cs rs
 -- decide which entries it is allowed to skip.
 balShardValues : List Gate -> List Place -> List String
 balShardValues [] _ = []
-balShardValues (g::gs) ps
+balShardValues (g :: gs) ps
   | g.shard == balOtherJob = balOtherJob :: balShardValues gs ps
   | otherwise = balPlaceOf g.name ps :: balShardValues gs ps
 
 balPlaceOf : String -> List Place -> String
 balPlaceOf n [] = n
-balPlaceOf n (p::ps)
+balPlaceOf n (p :: ps)
   | p.pname == n = p.pto
   | otherwise = balPlaceOf n ps
 
@@ -4554,37 +4717,46 @@ balPlaceOf n (p::ps)
 balSplice : List String -> List String -> Result String (List String)
 balSplice vals src = balSpliceGo vals src False []
 
-balSpliceGo : List String -> List String -> Bool -> List String -> Result String (List String)
+balSpliceGo : List String ->
+  List String ->
+  Bool ->
+  List String ->
+  Result String (List String)
 balSpliceGo [] [] _ acc = Ok (reverseL acc)
 balSpliceGo vs [] _ _ =
   Err
     "medaka gate balance: test/gates.toml has fewer [[gate]] shard lines than entries (\{intToString (listLen vs)} unplaced)"
-balSpliceGo vs (l::ls) inGate acc
-  | l == "[[gate]]" = balSpliceGo vs ls True (l::acc)
-  | l == "[[shard]]" = balSpliceGo vs ls False (l::acc)
+balSpliceGo vs (l :: ls) inGate acc
+  | l == "[[gate]]" = balSpliceGo vs ls True (l :: acc)
+  | l == "[[shard]]" = balSpliceGo vs ls False (l :: acc)
   | inGate && startsWith "shard = \"" l = match vs
-    [] => Err "medaka gate balance: test/gates.toml has more [[gate]] shard lines than entries"
-    v::rest => balSpliceGo rest ls inGate ("shard = \"\{v}\""::acc)
-  | otherwise = balSpliceGo vs ls inGate (l::acc)
+    [] =>
+      Err
+        "medaka gate balance: test/gates.toml has more [[gate]] shard lines than entries"
+    v :: rest => balSpliceGo rest ls inGate ("shard = \"\{v}\"" :: acc)
+  | otherwise = balSpliceGo vs ls inGate (l :: acc)
 
 -- ── The command ─────────────────────────────────────────────────────────────
 
-data BalArgs =
-  | BalArgs { registry : Option String, baseline : Option String, check : Bool }
+data BalArgs = BalArgs {
+  registry : Option String,
+  baseline : Option String,
+  check : Bool,
+}
 
 parseBalArgs : List String -> BalArgs -> Result String BalArgs
 parseBalArgs [] acc = Ok acc
-parseBalArgs ("--registry"::p::rest) acc =
+parseBalArgs ("--registry" :: p :: rest) acc =
   parseBalArgs rest BalArgs { acc | registry = Some p }
-parseBalArgs ("--registry"::[]) _ =
+parseBalArgs ("--registry" :: []) _ =
   Err "medaka gate balance: --registry needs a path"
-parseBalArgs ("--baseline"::p::rest) acc =
+parseBalArgs ("--baseline" :: p :: rest) acc =
   parseBalArgs rest BalArgs { acc | baseline = Some p }
-parseBalArgs ("--baseline"::[]) _ =
+parseBalArgs ("--baseline" :: []) _ =
   Err "medaka gate balance: --baseline needs a path"
-parseBalArgs ("--check"::rest) acc =
+parseBalArgs ("--check" :: rest) acc =
   parseBalArgs rest BalArgs { acc | check = True }
-parseBalArgs (a::_) _ = Err "medaka gate balance: unexpected argument: \{a}"
+parseBalArgs (a :: _) _ = Err "medaka gate balance: unexpected argument: \{a}"
 
 -- `<MEDAKA_ROOT>/test/gate_cost_baseline.json` unless --baseline overrides it,
 -- the same exe-relative resolution `registryPath` uses.
@@ -4611,35 +4783,47 @@ balNewText regPath regSrc baseSrc = match parseRegistry regSrc
       Ok base => match parseCostRuns baseSrc
         Err m => Err "medaka gate balance: \{m}"
         Ok runsRead => match balUnknownRows shs gates
-          b::bs => Err "medaka gate balance: \{regPath}: gate(s) name a shard with no [[shard]] row: \{joinSpace (b::bs)}"
+          b :: bs =>
+            Err
+              "medaka gate balance: \{regPath}: gate(s) name a shard with no [[shard]] row: \{joinSpace (b :: bs)}"
           [] => match balUncosted base gates
-            u::us => Err (stringConcat [
-              "medaka gate balance: \{intToString (listLen (u::us))} schedulable gate(s) have no row in the cost baseline:\n",
-              joinNl (balIndent (u::us)),
-              "\n  Refusing to pack: a missing cost is not a cheap gate, it is an\n",
-              "  unknown one, and treating it as 0 would pile it onto the lightest row.\n",
-              "  Re-ingest the baseline (test/gate_cost_ingest.sh) or fix the gate's `run`.\n",
-            ])
+            u :: us =>
+              Err
+                (stringConcat [
+                  "medaka gate balance: \{intToString (listLen (u :: us))} schedulable gate(s) have no row in the cost baseline:\n",
+                  joinNl (balIndent (u :: us)),
+                  "\n  Refusing to pack: a missing cost is not a cheap gate, it is an\n",
+                  "  unknown one, and treating it as 0 would pile it onto the lightest row.\n",
+                  "  Re-ingest the baseline (test/gate_cost_ingest.sh) or fix the gate's `run`.\n",
+                ])
             [] => match balPinErrors gates shs
-              e::es => Err (stringConcat [
-                "medaka gate balance: \{regPath}: a closed row's membership does not match its declared `pinned_gates`:\n",
-                joinNl (balIndent (e::es)),
-                "\n  A `full_cores` row is CLOSED: the packer moves nothing onto it and\n",
-                "  nothing off it, so its members are the one `shard` value no cost\n",
-                "  measurement derives.  They are DECLARED in that [[shard]] row's\n",
-                "  `pinned_gates` and checked against the registry in both directions,\n",
-                "  so a hand-moved `shard` cannot be adopted as the new pin.\n",
-                "  Repair the gate's `shard`; change `pinned_gates` only when the row's\n",
-                "  membership is genuinely meant to differ, and say why in its rationale\n",
-                "  file (docs/ops/GATE-REGISTRY-DESIGN.md §2).\n",
-              ])
+              e :: es =>
+                Err
+                  (stringConcat [
+                    "medaka gate balance: \{regPath}: a closed row's membership does not match its declared `pinned_gates`:\n",
+                    joinNl (balIndent (e :: es)),
+                    "\n  A `full_cores` row is CLOSED: the packer moves nothing onto it and\n",
+                    "  nothing off it, so its members are the one `shard` value no cost\n",
+                    "  measurement derives.  They are DECLARED in that [[shard]] row's\n",
+                    "  `pinned_gates` and checked against the registry in both directions,\n",
+                    "  so a hand-moved `shard` cannot be adopted as the new pin.\n",
+                    "  Repair the gate's `shard`; change `pinned_gates` only when the row's\n",
+                    "  membership is genuinely meant to differ, and say why in its rationale\n",
+                    "  file (docs/ops/GATE-REGISTRY-DESIGN.md §2).\n",
+                  ])
               [] => balCompute regPath gates shs base runsRead regSrc
 
 balIndent : List String -> List String
 balIndent [] = []
-balIndent (x::xs) = "    \{x}" :: balIndent xs
+balIndent (x :: xs) = "    \{x}" :: balIndent xs
 
-balCompute : String -> List Gate -> List Shard -> List GateCost -> List RunRecord -> String -> Result String (String, String)
+balCompute : String ->
+  List Gate ->
+  List Shard ->
+  List GateCost ->
+  List RunRecord ->
+  String ->
+  Result String (String, String)
 balCompute regPath gates shs base runs regSrc =
   let cs = balCands base gates
   -- Cost-descending into BOTH scorings — `balAdd`'s and `balCurrent`'s notes.
@@ -4650,30 +4834,35 @@ balCompute regPath gates shs base runs regSrc =
       let illegal = not (balCurrentLegal cs curRows)
       let gains = balPole rows * 100 < balPole curRows * (100 - balMarginPct)
       let moved = balMoved ps > 0
-      let label = if illegal then
-        "rebalanced (the committed assignment ran a gate on a row lacking its toolchain)"
-      else if moved then
-        "rebalanced"
-      else
-        "unchanged (the committed assignment is already the derived one)"
-      let head = stringConcat [
-        "medaka gate balance: \{regPath}\n",
-        balReport label cs rows ps runs,
-        balThinLine base,
-        balOosBlock base cs runs,
-        balStabLine cs (balRows runs shs) ps rows,
-        "  hysteresis: a move needs a pole gain of more than \{intToString balMarginPct}%",
-        balBandNote illegal gains moved,
-        "\n  budget pole/floor \{balMilli balTargetMilli}",
-        if balFactorMilli cs rows <= balTargetMilli then " — MET\n" else " — MISSED\n",
-        balMoveLine ps,
-        -- Scored against `curRows`, never `rows`: the recorded wall clock came
-        -- from the COMMITTED assignment, so comparing it to the DERIVED one
-        -- would grade the model against a gate set that has never run.
-        "  calibration — last recorded CI wall clock vs this model's prediction for the COMMITTED assignment:\n",
-        joinNl (balCalibLines cs curRows runs),
-        "\n",
-      ]
+      let label =
+        if illegal then
+          "rebalanced (the committed assignment ran a gate on a row lacking its toolchain)"
+        else if moved then
+          "rebalanced"
+        else
+          "unchanged (the committed assignment is already the derived one)"
+      let head = stringConcat
+        [
+          "medaka gate balance: \{regPath}\n",
+          balReport label cs rows ps runs,
+          balThinLine base,
+          balOosBlock base cs runs,
+          balStabLine cs (balRows runs shs) ps rows,
+          "  hysteresis: a move needs a pole gain of more than \{intToString balMarginPct}%",
+          balBandNote illegal gains moved,
+          "\n  budget pole/floor \{balMilli balTargetMilli}",
+          if balFactorMilli cs rows <= balTargetMilli then
+            " — MET\n"
+          else
+            " — MISSED\n",
+          balMoveLine ps,
+          -- Scored against `curRows`, never `rows`: the recorded wall clock came
+          -- from the COMMITTED assignment, so comparing it to the DERIVED one
+          -- would grade the model against a gate set that has never run.
+          "  calibration — last recorded CI wall clock vs this model's prediction for the COMMITTED assignment:\n",
+          joinNl (balCalibLines cs curRows runs),
+          "\n",
+        ]
       match balEnforce cs rows
         Some m => Err "\{head}\{m}"
         None => match balSplice (balShardValues gates ps) (splitNl regSrc)
@@ -4685,11 +4874,15 @@ balCompute regPath gates shs base runs regSrc =
 -- the matrix is balanced.
 balWrite : String -> String -> String -> String -> <IO> Unit
 balWrite regPath regSrc out head
-  | out == regSrc = putStr "\{head}medaka gate balance: \{regPath} already balanced — no shard assignment changed\n"
+  | out == regSrc =
+    putStr
+      "\{head}medaka gate balance: \{regPath} already balanced — no shard assignment changed\n"
   | otherwise = match writeFile regPath out
     Err m =>
       emit (Err "\{head}medaka gate balance: cannot write \{regPath}: \{m}")
-    Ok _ => putStr "\{head}medaka gate balance: rewrote the shard assignments in \{regPath}\n"
+    Ok _ =>
+      putStr
+        "\{head}medaka gate balance: rewrote the shard assignments in \{regPath}\n"
 
 -- `--check`: the SAME comparison `balWrite` makes, in memory, with no write —
 -- `ciCheckResult`'s shape, and for its reason.  Regenerating first and then
@@ -4700,19 +4893,25 @@ balCheckResult : String -> String -> String -> String -> Result String String
 balCheckResult regPath regSrc out head
   | out == regSrc =
     Ok "\{head}medaka gate balance: \{regPath} already balanced\n"
-  | otherwise = Err (stringConcat [
-    head,
-    "medaka gate balance: \{regPath}: the committed shard assignment is not the\n",
-    "one the balancer derives from test/gate_cost_baseline.json.  A `shard` field\n",
-    "is DERIVED DATA (#2178): it is not hand-editable, and a hand edit that keeps\n",
-    "ci.yml self-consistent is exactly what this check exists to catch.  First\n",
-    "differing line:\n",
-    ciDiffAt (splitNl regSrc) (splitNl out) 1,
-    "\nRun 'medaka gate balance' then 'make gen-ci', and commit both.\n",
-  ])
+  | otherwise =
+    Err
+      (stringConcat [
+        head,
+        "medaka gate balance: \{regPath}: the committed shard assignment is not the\n",
+        "one the balancer derives from test/gate_cost_baseline.json.  A `shard` field\n",
+        "is DERIVED DATA (#2178): it is not hand-editable, and a hand edit that keeps\n",
+        "ci.yml self-consistent is exactly what this check exists to catch.  First\n",
+        "differing line:\n",
+        ciDiffAt (splitNl regSrc) (splitNl out) 1,
+        "\nRun 'medaka gate balance' then 'make gen-ci', and commit both.\n",
+      ])
 
 balCmdBody : List String -> <IO> Unit
-balCmdBody argv = match parseBalArgs argv BalArgs { registry = None, baseline = None, check = False }
+balCmdBody argv = match parseBalArgs argv BalArgs {
+  registry = None,
+  baseline = None,
+  check = False,
+}
   Err m => emit (Err m)
   Ok a =>
     let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
@@ -4721,7 +4920,10 @@ balCmdBody argv = match parseBalArgs argv BalArgs { registry = None, baseline = 
     match readFile regPath
       Err m => emit (Err "medaka gate balance: cannot read registry: \{m}")
       Ok regSrc => match readFile basePath
-        Err m => emit (Err "medaka gate balance: cannot read cost baseline \{basePath}: \{m}")
+        Err m =>
+          emit
+            (Err
+              "medaka gate balance: cannot read cost baseline \{basePath}: \{m}")
         Ok baseSrc => match balNewText regPath regSrc baseSrc
           Err m => emit (Err m)
           Ok (head, out) =>
@@ -4783,8 +4985,11 @@ budgetOverrideTokens msg = budgetTokensFromLines (splitNl msg)
 
 budgetTokensFromLines : List String -> List String
 budgetTokensFromLines [] = []
-budgetTokensFromLines (l::ls)
-  | startsWith budgetOverridePrefix (stringTrim l) = budgetFirstWord (stringTrim (budgetDropPrefix budgetOverridePrefix (stringTrim l))) :: budgetTokensFromLines ls
+budgetTokensFromLines (l :: ls)
+  | startsWith budgetOverridePrefix (stringTrim l) =
+    budgetFirstWord
+        (stringTrim (budgetDropPrefix budgetOverridePrefix (stringTrim l)))
+      :: budgetTokensFromLines ls
   | otherwise = budgetTokensFromLines ls
 
 budgetDropPrefix : String -> String -> String
@@ -4793,7 +4998,7 @@ budgetDropPrefix pre s = stringSlice (stringLength pre) (stringLength s) s
 budgetFirstWord : String -> String
 budgetFirstWord s = match splitOnChar ' ' s
   [] => s
-  w::_ => w
+  w :: _ => w
 
 budgetAcked : String -> String -> Bool
 budgetAcked commitMessage token =
@@ -4801,7 +5006,7 @@ budgetAcked commitMessage token =
 
 budgetCountUnacked : String -> List String -> Int
 budgetCountUnacked _ [] = 0
-budgetCountUnacked commitMessage (t::ts)
+budgetCountUnacked commitMessage (t :: ts)
   | budgetAcked commitMessage t = budgetCountUnacked commitMessage ts
   | otherwise = 1 + budgetCountUnacked commitMessage ts
 
@@ -4809,7 +5014,7 @@ budgetCountUnacked commitMessage (t::ts)
 
 budgetUncostedNames : List GateCost -> List Gate -> List String
 budgetUncostedNames _ [] = []
-budgetUncostedNames base (g::gs)
+budgetUncostedNames base (g :: gs)
   | g.shard == balOtherJob = budgetUncostedNames base gs
   | otherwise = match costOf g.run base
     Some _ => budgetUncostedNames base gs
@@ -4817,23 +5022,22 @@ budgetUncostedNames base (g::gs)
 
 budgetUncostedTokens : List String -> List String
 budgetUncostedTokens [] = []
-budgetUncostedTokens (n::ns) = "uncosted:\{n}" :: budgetUncostedTokens ns
+budgetUncostedTokens (n :: ns) = "uncosted:\{n}" :: budgetUncostedTokens ns
 
 budgetUncostedLines : String -> List String -> List String
 budgetUncostedLines _ [] = []
-budgetUncostedLines commitMessage (n::ns) =
+budgetUncostedLines commitMessage (n :: ns) =
   let tok = "uncosted:\{n}"
   let ack = if budgetAcked commitMessage tok then " [ACKNOWLEDGED]" else ""
   stringConcat [
-    n,
-    ack,
-    " — remedy: re-ingest the baseline (test/gate_cost_ingest.sh) so this",
-    " gate gets a sample; the `cost` field is present, the packer just has",
-    " no price yet, so there is nothing to declare or split here.",
-    " To accept unpriced on purpose, paste:\n    Gate-Budget-Override: ",
-    tok,
-    "\n",
-  ] :: budgetUncostedLines commitMessage ns
+      n, ack,
+      " — remedy: re-ingest the baseline (test/gate_cost_ingest.sh) so this",
+      " gate gets a sample; the `cost` field is present, the packer just has",
+      " no price yet, so there is nothing to declare or split here.",
+      " To accept unpriced on purpose, paste:\n    Gate-Budget-Override: ", tok,
+      "\n"
+    ]
+    :: budgetUncostedLines commitMessage ns
 
 -- ── Clause (b) ───────────────────────────────────────────────────────────────
 --
@@ -4854,7 +5058,7 @@ budgetToleratedMs cost = budgetTimeoutMs cost * 1000 / balTargetMilli
 -- alone — never double-reported here.
 budgetOverClassGates : List GateCost -> List Gate -> List Gate
 budgetOverClassGates _ [] = []
-budgetOverClassGates base (g::gs)
+budgetOverClassGates base (g :: gs)
   | g.shard == balOtherJob = budgetOverClassGates base gs
   | otherwise = match costOf g.run base
     None => budgetOverClassGates base gs
@@ -4864,17 +5068,18 @@ budgetOverClassGates base (g::gs)
 
 budgetOverClassTokens : List Gate -> List String
 budgetOverClassTokens [] = []
-budgetOverClassTokens (g::gs) =
+budgetOverClassTokens (g :: gs) =
   "over-class:\{g.name}" :: budgetOverClassTokens gs
 
 -- `timeoutFor`'s coupling is stated inline: re-classing a gate is not a free
 -- label change, it changes when CI kills it.
 budgetTimeoutRemedy : String
-budgetTimeoutRemedy = "Re-classing a gate changes its CI kill timeout (cheap=300s / medium=900s / heavy=3600s, `timeoutFor`) — pick deliberately, not just to silence this gate."
+budgetTimeoutRemedy =
+  "Re-classing a gate changes its CI kill timeout (cheap=300s / medium=900s / heavy=3600s, `timeoutFor`) — pick deliberately, not just to silence this gate."
 
 budgetOverClassLines : List GateCost -> String -> List Gate -> List String
 budgetOverClassLines _ _ [] = []
-budgetOverClassLines base commitMessage (g::gs) =
+budgetOverClassLines base commitMessage (g :: gs) =
   -- `ms` is always `Some` here — `budgetOverClassGates` only keeps gates
   -- `costOf` already resolved; the 0 fallback is unreachable, not a real cost.
   let ms = match costOf g.run base
@@ -4883,20 +5088,30 @@ budgetOverClassLines base commitMessage (g::gs) =
   let tok = "over-class:\{g.name}"
   let ack = if budgetAcked commitMessage tok then " [ACKNOWLEDGED]" else ""
   stringConcat [
-    "\{g.name} (\{g.cost}, measured \{balSecs ms}, tolerance-adjusted ceiling ",
-    balSecs (budgetToleratedMs g.cost), " of a \{intToString (timeoutFor 0 g.cost)}s timeout)", ack,
-    " — remedy: declare a higher `cost` class, split the gate into cheaper",
-    " pieces, or demote it with `tiers = [\"nightly\"]` so it leaves the",
-    " merge-required path. ", budgetTimeoutRemedy,
-    " To accept the current cost on purpose, paste:\n    Gate-Budget-Override: ", tok, "\n",
-  ] :: budgetOverClassLines base commitMessage gs
+      "\{g.name} (\{g.cost}, measured \{balSecs ms}, tolerance-adjusted ceiling ",
+      balSecs (budgetToleratedMs g.cost),
+      " of a \{intToString (timeoutFor 0 g.cost)}s timeout)",
+      ack,
+      " — remedy: declare a higher `cost` class, split the gate into cheaper",
+      " pieces, or demote it with `tiers = [\"nightly\"]` so it leaves the",
+      " merge-required path. ",
+      budgetTimeoutRemedy,
+      " To accept the current cost on purpose, paste:\n    Gate-Budget-Override: ",
+      tok,
+      "\n",
+    ]
+    :: budgetOverClassLines base commitMessage gs
 
 -- ── Clause (c) ───────────────────────────────────────────────────────────────
 --
 -- The SAME projection `gate balance --check` computes — `balCands` already
 -- excludes `other-job` gates from packing entirely, so their (nonexistent)
 -- cost cannot move this number by construction.
-budgetPoleFactor : List Gate -> List Shard -> List GateCost -> List RunRecord -> Result String (Option Int)
+budgetPoleFactor : List Gate ->
+  List Shard ->
+  List GateCost ->
+  List RunRecord ->
+  Result String (Option Int)
 budgetPoleFactor gates shs base runs =
   let cs = balCands base gates
   match balTarget True cs (balRows runs shs)
@@ -4911,41 +5126,51 @@ budgetPoleFloorLines commitMessage (Some factor) =
   let tok = "pole-floor"
   let ack = if budgetAcked commitMessage tok then " [ACKNOWLEDGED]" else ""
   stringConcat [
-    "projected pole/floor \{balMilli factor} exceeds the budget \{balMilli balTargetMilli} (S-4)",
-    ack,
-    " — remedy: run `medaka gate balance` to see which row or gate needs to",
-    " shrink, split the pole gate, or demote a heavy gate to",
-    " `tiers = [\"nightly\"]`. To accept the current pole/floor on purpose, paste:\n    Gate-Budget-Override: ",
-    tok,
-    "\n",
-  ] :: []
+      "projected pole/floor \{balMilli factor} exceeds the budget \{balMilli balTargetMilli} (S-4)",
+      ack,
+      " — remedy: run `medaka gate balance` to see which row or gate needs to",
+      " shrink, split the pole gate, or demote a heavy gate to",
+      " `tiers = [\"nightly\"]`. To accept the current pole/floor on purpose, paste:\n    Gate-Budget-Override: ",
+      tok,
+      "\n",
+    ]
+    :: []
 
 -- ── Assembling the report ────────────────────────────────────────────────────
 
 budgetIndent : List String -> List String
 budgetIndent [] = []
-budgetIndent (x::xs) = "  \{x}" :: budgetIndent xs
+budgetIndent (x :: xs) = "  \{x}" :: budgetIndent xs
 
 budgetSection : String -> List String -> String
 budgetSection _ [] = ""
-budgetSection title lines = "\{title}: \{intToString (listLen lines)}\n\{joinNl (budgetIndent lines)}\n\n"
+budgetSection title lines =
+  "\{title}: \{intToString (listLen lines)}\n\{joinNl (budgetIndent lines)}\n\n"
 
-budgetReport : List GateCost -> String -> List String -> List Gate -> Option Int -> Result String String
+budgetReport : List GateCost ->
+  String ->
+  List String ->
+  List Gate ->
+  Option Int ->
+  Result String String
 budgetReport base commitMessage uncosted overClass poleFactorOpt =
   let aLines = budgetUncostedLines commitMessage uncosted
   let bLines = budgetOverClassLines base commitMessage overClass
   let cLines = budgetPoleFloorLines commitMessage poleFactorOpt
-  let aUnacked = budgetCountUnacked commitMessage (budgetUncostedTokens uncosted)
-  let bUnacked = budgetCountUnacked commitMessage (budgetOverClassTokens overClass)
+  let aUnacked =
+    budgetCountUnacked commitMessage (budgetUncostedTokens uncosted)
+  let bUnacked =
+    budgetCountUnacked commitMessage (budgetOverClassTokens overClass)
   let cCount = match poleFactorOpt
     None => 0
     Some _ => 1
-  let cUnacked = if cCount == 0 then
-    0
-  else if budgetAcked commitMessage "pole-floor" then
-    0
-  else
-    1
+  let cUnacked =
+    if cCount == 0 then
+      0
+    else if budgetAcked commitMessage "pole-floor" then
+      0
+    else
+      1
   let total = listLen uncosted + listLen overClass + cCount
   let unacked = aUnacked + bUnacked + cUnacked
   let body = stringConcat [
@@ -4956,9 +5181,11 @@ budgetReport base commitMessage uncosted overClass poleFactorOpt =
   if total == 0 then
     Ok "medaka gate budget: OK — 0 violations.\n"
   else if unacked == 0 then
-    Ok "\{body}medaka gate budget: \{intToString total} violation(s), all acknowledged by commit-message trailer — OK.\n"
+    Ok
+      "\{body}medaka gate budget: \{intToString total} violation(s), all acknowledged by commit-message trailer — OK.\n"
   else
-    Err "\{body}medaka gate budget: FAIL — \{intToString unacked} of \{intToString total} violation(s) not acknowledged. Paste the `Gate-Budget-Override:` trailer(s) shown above onto your commit message to accept them on purpose.\n"
+    Err
+      "\{body}medaka gate budget: FAIL — \{intToString unacked} of \{intToString total} violation(s) not acknowledged. Paste the `Gate-Budget-Override:` trailer(s) shown above onto your commit message to accept them on purpose.\n"
 
 budgetOutput : String -> String -> String -> String -> Result String String
 budgetOutput regPath regSrc baseSrc commitMessage = match parseRegistry regSrc
@@ -4970,32 +5197,37 @@ budgetOutput regPath regSrc baseSrc commitMessage = match parseRegistry regSrc
       Ok base => match parseCostRuns baseSrc
         Err m => Err "medaka gate budget: \{m}"
         Ok runs => match balUnknownRows shs gates
-          u::us => Err "medaka gate budget: \{regPath}: gate(s) name a shard with no [[shard]] row: \{joinSpace (u::us)}\n"
+          u :: us =>
+            Err
+              "medaka gate budget: \{regPath}: gate(s) name a shard with no [[shard]] row: \{joinSpace (u :: us)}\n"
           [] =>
             let uncosted = budgetUncostedNames base gates
             let overClass = budgetOverClassGates base gates
             match budgetPoleFactor gates shs base runs
               Err m => Err "medaka gate budget: \{m}\n"
-              Ok poleFactorOpt => budgetReport base commitMessage uncosted overClass poleFactorOpt
+              Ok poleFactorOpt =>
+                budgetReport base commitMessage uncosted overClass poleFactorOpt
 
-data BudgetArgs =
-  | BudgetArgs {
-      registry : Option String,
-      baseline : Option String,
-      commitMessage : String,
-    }
+data BudgetArgs = BudgetArgs {
+  registry : Option String,
+  baseline : Option String,
+  commitMessage : String,
+}
 
 -- `withStrictDash` (F1, review finding, #2355): an undeclared `-x` used to
 -- fall through as a positional pre-migration; base rejected any leading-`-`
 -- token here, so this restores that floor via the S-5 knob.
 budgetArgSpec : ArgSpec
-budgetArgSpec = withStrictDash (spec
-  "gate budget"
-  [
-    value ["--registry"] "PATH" "override the gate registry path",
-    value ["--baseline"] "PATH" "override the cost baseline path",
-    value ["--commit-message"] "TEXT" "commit message to scan for a Gate-Budget-Override trailer",
-  ])
+budgetArgSpec =
+  withStrictDash
+    (spec "gate budget" [
+      value ["--registry"] "PATH" "override the gate registry path",
+      value ["--baseline"] "PATH" "override the cost baseline path",
+      value
+        ["--commit-message"]
+        "TEXT"
+        "commit message to scan for a Gate-Budget-Override trailer",
+    ])
 
 budgetMissingValue : List (String, String)
 budgetMissingValue = [
@@ -5020,7 +5252,7 @@ parseBudgetArgs argv = match parseArgs budgetArgSpec argv
       baseline = flagValue "--baseline" a,
       commitMessage = budgetCommitMessage a,
     }
-    p::_ => Err (unknownFlagMessage budgetArgSpec p)
+    p :: _ => Err (unknownFlagMessage budgetArgSpec p)
 
 budgetCmdBody : List String -> <IO> Unit
 budgetCmdBody argv = match parseBudgetArgs argv
@@ -5032,7 +5264,10 @@ budgetCmdBody argv = match parseBudgetArgs argv
     match readFile regPath
       Err m => emit (Err "medaka gate budget: cannot read registry: \{m}")
       Ok regSrc => match readFile basePath
-        Err m => emit (Err "medaka gate budget: cannot read cost baseline \{basePath}: \{m}")
+        Err m =>
+          emit
+            (Err
+              "medaka gate budget: cannot read cost baseline \{basePath}: \{m}")
         Ok baseSrc => emit (budgetOutput regPath regSrc baseSrc a.commitMessage)
 
 -- ── Properties ──────────────────────────────────────────────────────────────
@@ -5043,8 +5278,9 @@ prop "a bare selector token is name: sugar" (n : Int) =
 prop "an explicit name: selector agrees with the bare form" (n : Int) =
   parseSelector ("name:" ++ intToString n) == parseSelector (intToString n)
 
-prop "a literal glob matches itself and nothing longer" (n : Int) = globMatch (intToString n) (intToString n)
-  && not (globMatch (intToString n) (intToString n ++ "x"))
+prop "a literal glob matches itself and nothing longer" (n : Int) =
+  globMatch (intToString n) (intToString n)
+    && not (globMatch (intToString n) (intToString n ++ "x"))
 
 prop "a trailing * matches any suffix" (n : Int) =
   globMatch "g*" ("g" ++ intToString n)

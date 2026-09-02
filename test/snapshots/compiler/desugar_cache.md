@@ -1,5 +1,5 @@
 # META
-source_lines=70
+source_lines=73
 stages=DESUGAR,MARK
 # SOURCE
 -- Source-keyed memoization of `desugar (parsePrelude src)` (#2234, S-1).
@@ -48,7 +48,10 @@ noteDesugaredPrelude : String -> List Decl -> Int
 noteDesugaredPrelude src decls =
   let gen = !desugarGenRef + 1
   desugarGenRef := gen
-  desugarCacheRef := takeFirstN desugarCacheLimit ((src, (gen, decls)) :: dropAssoc src !desugarCacheRef)
+  desugarCacheRef :=
+    takeFirstN
+      desugarCacheLimit
+      ((src, (gen, decls)) :: dropAssoc src !desugarCacheRef)
   gen
 
 -- `desugar (parsePrelude src)`, memoized by source string. Most-recently-used

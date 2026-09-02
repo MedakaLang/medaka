@@ -35,7 +35,8 @@ bytes s = match decode s
 
 token : String -> Bool
 token s =
-  if s == "INF" then True
+  if s == "INF" then
+    True
   else match pointFromCompressed (bytes s)
     Ok p => encode (pointCompressed p) == s
     Err _ => False
@@ -67,22 +68,27 @@ good c label =
 
 mul : Array Int -> String -> String -> String -> <IO> Unit
 mul c scalar expected label =
-  if not (token expected) then bad c label
-  else
-    if scalar == n && expected == "INF" then match pointRawFixedGeneratorIsCanonicalInfinityForTest (bytes scalar)
-      Ok True => good c "\{label} raw-ladder canonical-infinity"
-      _ => bad c label
-    else match scFromBytes (bytes scalar)
-      Ok x =>
-        if expected /= "INF" && encode (pointCompressed (publicPointForSecret x)) == expected then
-          good c label
-        else
-          bad c label
-      Err _ => bad c label
+  if not (token expected) then
+    bad c label
+  else if scalar == n
+    && expected
+      == "INF" then match (pointRawFixedGeneratorIsCanonicalInfinityForTest
+    (bytes scalar))
+    Ok True => good c "\{label} raw-ladder canonical-infinity"
+    _ => bad c label
+  else match scFromBytes (bytes scalar)
+    Ok x =>
+      if expected /= "INF"
+        && encode (pointCompressed (publicPointForSecret x)) == expected then
+        good c label
+      else
+        bad c label
+    Err _ => bad c label
 
 add : Array Int -> String -> String -> String -> String -> <IO> Unit
 add c a b expected label =
-  if not (token a && token b && token expected) then bad c label
+  if not (token a && token b && token expected) then
+    bad c label
   else match known a
     Err _ => bad c label
     Ok x => match known b
@@ -97,7 +103,8 @@ add c a b expected label =
 
 dbl : Array Int -> String -> String -> String -> <IO> Unit
 dbl c a expected label =
-  if not (token a && token expected) then bad c label
+  if not (token a && token expected) then
+    bad c label
   else match known a
     Err _ => bad c label
     Ok x => match known expected
@@ -117,7 +124,7 @@ line c i s = match split " " (trim s)
 
 go : Array Int -> List String -> Int -> <IO> Unit
 go c [] i = ()
-go c (x::xs) i =
+go c (x :: xs) i =
   let () = line c i x
   go c xs (i + 1)
 
@@ -128,8 +135,11 @@ main = match args ()
     Ok rows =>
       let c = arrayMake 2 0
       let () = go c rows 1
-      let () = println "counted: \{intToString c[0]}/\{intToString (c[0] + c[1])} rows ok"
-      if c[1] == 0 && c[0] > 0 then println "TOTAL: PASS"
+      let () =
+        println
+          "counted: \{intToString c[0]}/\{intToString (c[0] + c[1])} rows ok"
+      if c[1] == 0 && c[0] > 0 then
+        println "TOTAL: PASS"
       else
         let () = println "TOTAL: FAIL"
         exit 1

@@ -59,7 +59,7 @@ failWith msg =
 export
 readAllDecls : List String -> <IO> Result String (List Decl)
 readAllDecls [] = Ok []
-readAllDecls (p::rest) = match readFile p
+readAllDecls (p :: rest) = match readFile p
   Err msg => Err msg
   Ok src => map (desugar (parse src) ++ _) (readAllDecls rest)
 
@@ -68,7 +68,7 @@ readAllDecls (p::rest) = match readFile p
 export
 readAllSources : List String -> <IO> Result String (List (String, String))
 readAllSources [] = Ok []
-readAllSources (p::rest) = match readFile p
+readAllSources (p :: rest) = match readFile p
   Err msg => Err msg
   Ok src => map ((p, src) :: _) (readAllSources rest)
 
@@ -83,8 +83,10 @@ driveRuntime emit = driveRuntimeArgs (args ()) emit
 -- same as driveRuntime, but takes the argv explicitly so a probe can strip a leading
 -- flag (e.g. the argstamp parity probe's ON|OFF mode) before dispatching.
 export
-driveRuntimeArgs : List String -> (List Decl -> List Decl -> List Decl -> <IO> Unit) -> <IO> Unit
-driveRuntimeArgs (runtimePath::rest) emit = match splitLast rest
+driveRuntimeArgs : List String ->
+  (List Decl -> List Decl -> List Decl -> <IO> Unit) ->
+  <IO> Unit
+driveRuntimeArgs (runtimePath :: rest) emit = match splitLast rest
   Some (preludePaths, targetPath) => match readFile runtimePath
     Ok rsrc => match readAllDecls preludePaths
       Ok preludeDecls => match readFile targetPath
@@ -127,9 +129,10 @@ usageModules = "usage: <runtime.mdk> <core.mdk> <entry.mdk> [root ...]"
 -- LLVM/WasmGC multi-module emit drivers (llvm_bootstrap_lex_main,
 -- llvm_emit_modules_main, wasm_emit_gaps_main, wasm_emit_modules_main).
 export
-driveModules : (List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) -> <IO> Unit
+driveModules : (List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
+  <IO> Unit
 driveModules runEmit = match args ()
-  runtimeP::coreP::entry::roots =>
+  runtimeP :: coreP :: entry :: roots =>
     driveModulesGo runEmit runtimeP coreP entry (rootsOrDefault entry roots)
   _ => failWith usageModules
 
@@ -140,14 +143,23 @@ rootsOrDefault _ roots = roots
 desugarPair : (String, List Decl) -> (String, List Decl)
 desugarPair (mid, p) = (mid, desugar p)
 
-driveModulesGo : (List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) -> String -> String -> String -> List String -> <IO> Unit
+driveModulesGo : (List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
+  String ->
+  String ->
+  String ->
+  List String ->
+  <IO> Unit
 driveModulesGo runEmit runtimeP coreP entry roots = match readFile runtimeP
   Err e => failWith e
   Ok rsrc => match readFile coreP
     Err e => failWith e
     Ok csrc => match loadProgram entry roots
       Err e => failWith (moduleLoadHint e)
-      Ok mods => runEmit (desugar (parse rsrc)) (desugar (parse csrc)) (map desugarPair mods)
+      Ok mods =>
+        runEmit
+          (desugar (parse rsrc))
+          (desugar (parse csrc))
+          (map desugarPair mods)
 
 -- #1796: `usageModules`' `[root ...]` bracket notation reads as "root args are
 -- optional" — they aren't, the moment the entry graph spans more than one root
@@ -160,7 +172,9 @@ driveModulesGo runEmit runtimeP coreP entry roots = match readFile runtimeP
 moduleLoadHint : String -> String
 moduleLoadHint e = match unknownModuleIdOf e
   None => e
-  Some _ => stringConcat [e, " — did you forget to pass every root search directory? ", usageModules]
+  Some _ => stringConcat [
+    e, " — did you forget to pass every root search directory? ", usageModules
+  ]
 
 -- ── shared composite-main emit glue (parameterized by the backend's emitTail) ──
 -- The LLVM and WasmGC multi-module emit drivers had byte-identical runEmit +
@@ -180,17 +194,23 @@ moduleLoadHint e = match unknownModuleIdOf e
 -- takes the unchanged path, so emitter output on the compiler graph is
 -- byte-identical.
 export
-runEmitWith : String -> (List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
+runEmitWith : String ->
+  (List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  <IO> Unit
 runEmitWith asyncDriver emitTail runtimeDecls coreDecls modules =
   let (coreMangled, modulesMangled) = mangleUnits coreDecls modules
-  let (coreD, modules2) = elaborateModules runtimeDecls coreMangled modulesMangled
+  let (coreD, modules2) =
+    elaborateModules runtimeDecls coreMangled modulesMangled
   if shouldAutoPrintMain coreDecls modules then
     -- the wrap's callee is a PRELUDE re-binding, so the core decl list has to
     -- carry it — see main_autoprint.autoPrintPinCore (#2185 / F1 / F2).
     let coreW = autoPrintPinCore coreDecls
     let modulesW = autoPrintWrapModules modules
     match underivedMainDiags runtimeDecls coreW modulesW
-      d::_ => failWith (tcMsg d)
+      d :: _ => failWith (tcMsg d)
       [] => emitModulesWith emitTail runtimeDecls coreW modulesW
   else match asyncMainShapeError modules
     Some msg => failWith msg
@@ -202,16 +222,22 @@ runEmitWith asyncDriver emitTail runtimeDecls coreDecls modules =
         -- here with a type error, not in the emitter or at run time.
         let modulesW = asyncWrapModules asyncDriver modules
         match underivedMainDiags runtimeDecls coreDecls modulesW
-          d::_ => failWith (tcMsg d)
+          d :: _ => failWith (tcMsg d)
           [] => emitModulesWith emitTail runtimeDecls coreDecls modulesW
-      else emitTail runtimeDecls coreD modules2
+      else
+        emitTail runtimeDecls coreD modules2
 
 -- Mangle + elaborate + emit a (possibly wrapped) module list from scratch.
 export
-emitModulesWith : (List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
+emitModulesWith : (List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  <IO> Unit
 emitModulesWith emitTail runtimeDecls coreDecls modules =
   let (coreMangled, modulesMangled) = mangleUnits coreDecls modules
-  let (coreD, modules2) = elaborateModules runtimeDecls coreMangled modulesMangled
+  let (coreD, modules2) =
+    elaborateModules runtimeDecls coreMangled modulesMangled
   emitTail runtimeDecls coreD modules2
 
 -- ── shared terminal computations ─────────────────────────────────────────────
@@ -224,9 +250,10 @@ export
 evalTypedString : List Decl -> List Decl -> List Decl -> String
 evalTypedString runtimeDecls preludeDecls userDecls =
   let livePrelude = dropShadowedExp (funNamesOf userDecls) preludeDecls
-  evalOneOutput
-    []
-    ("__main__", elaborateOne runtimeDecls livePrelude ("__user__", userDecls))
+  evalOneOutput [] (
+    "__main__",
+    elaborateOne runtimeDecls livePrelude ("__user__", userDecls),
+  )
 
 -- DICT-PASSING path: routes through the 1-module case of the multi-module path
 -- (elaborateOne owns the dict-set + per-module eval).  Byte-identical to the TYPED
@@ -237,9 +264,10 @@ evalDictString : List Decl -> List Decl -> List Decl -> String
 evalDictString runtimeDecls preludeDecls userDecls =
   let userNames = funNamesOf userDecls
   let livePrelude = dropShadowedExp userNames preludeDecls
-  evalOneOutput
-    []
-    ("__main__", elaborateOne runtimeDecls livePrelude ("__user__", userDecls))
+  evalOneOutput [] (
+    "__main__",
+    elaborateOne runtimeDecls livePrelude ("__user__", userDecls),
+  )
 
 -- ── batch drivers ────────────────────────────────────────────────────────────
 
@@ -251,7 +279,7 @@ evalDictString runtimeDecls preludeDecls userDecls =
 export
 batchLoop : String -> (List Decl -> String) -> List String -> <IO> Unit
 batchLoop sentinel render [] = putStr ""
-batchLoop sentinel render (path::rest) = match readFile path
+batchLoop sentinel render (path :: rest) = match readFile path
   Err msg =>
     let _ = ePutStrLn msg
     batchLoop sentinel render rest
@@ -262,9 +290,11 @@ batchLoop sentinel render (path::rest) = match readFile path
 -- batch CLI shape: <runtime.mdk> <core.mdk> <target.mdk>...  runtime + core parsed
 -- + desugared ONCE, then `render runtimeDecls coreDecls targetDecls` per target.
 export
-driveRuntimeBatch : String -> (List Decl -> List Decl -> List Decl -> String) -> <IO> Unit
+driveRuntimeBatch : String ->
+  (List Decl -> List Decl -> List Decl -> String) ->
+  <IO> Unit
 driveRuntimeBatch sentinel render = match args ()
-  runtimePath::corePath::targets => match readFile runtimePath
+  runtimePath :: corePath :: targets => match readFile runtimePath
     Err msg => failWith msg
     Ok rsrc => match readFile corePath
       Err msg => failWith msg
@@ -278,9 +308,10 @@ driveRuntimeBatch sentinel render = match args ()
 -- PARSED (raw, not desugared — resolve/check take the raw AST), all target sources
 -- read, then `render runtimeParsed coreParsed [(path,src)]` builds one output blob.
 export
-driveParseSources : (List Decl -> List Decl -> List (String, String) -> String) -> <IO> Unit
+driveParseSources : (List Decl -> List Decl -> List (String, String) -> String) ->
+  <IO> Unit
 driveParseSources render = match args ()
-  runtimePath::corePath::targets => match readFile runtimePath
+  runtimePath :: corePath :: targets => match readFile runtimePath
     Err msg => failWith msg
     Ok rsrc => match readFile corePath
       Err msg => failWith msg

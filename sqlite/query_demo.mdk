@@ -39,14 +39,14 @@ ageOver25 (User { age = a }) = match a
 
 printUsers : List User -> <IO> Unit
 printUsers [] = ()
-printUsers (u::rest) =
+printUsers (u :: rest) =
   let _ = println (showUser u)
   printUsers rest
 
 main : <IO> Unit
 main = match args ()
   [] => println "usage: qdemo <db-path>"
-  path::_ => match openDb path
+  path :: _ => match openDb path
     Err e => println "open error: \{e}"
     Ok db =>
       let _ = println "-- fetchAll users --"

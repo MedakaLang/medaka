@@ -1,5 +1,5 @@
 # META
-source_lines=487
+source_lines=520
 stages=DESUGAR,MARK
 # SOURCE
 -- async.mdk — Medaka's cooperative-concurrency layer: the `Async` type, its
@@ -132,9 +132,9 @@ spawnTask : Async e a -> Async e (Task a)
 spawnTask act = Suspend (u => spawnWith (Ref False) (Ref None) act)
 
 spawnWith : Ref Bool -> Ref (Option a) -> Async e a -> Async e (Task a)
-spawnWith done cell act = Spawn
-  (deferThen act (a => Suspend (u => finish done cell a)))
-  (u => Done (Task done cell))
+spawnWith done cell act = Spawn (deferThen act (a => Suspend (u =>
+  finish done cell a))) (u =>
+  Done (Task done cell))
 
 finish : Ref Bool -> Ref (Option a) -> a -> Async e Unit
 finish done cell a =
@@ -199,11 +199,12 @@ concurrent asyncs = deferThen (spawnAll [] asyncs) (ts => awaitAll [] ts)
 -- deep and cost N steps per step.
 spawnAll : List (Task a) -> List (Async e a) -> Async e (List (Task a))
 spawnAll acc [] = Done (reverse acc)
-spawnAll acc (a::rest) = deferThen (spawnTask a) (t => spawnAll (t::acc) rest)
+spawnAll acc (a :: rest) =
+  deferThen (spawnTask a) (t => spawnAll (t :: acc) rest)
 
 awaitAll : List a -> List (Task a) -> Async e (List a)
 awaitAll acc [] = Done (reverse acc)
-awaitAll acc (t::rest) = deferThen (await t) (a => awaitAll (a::acc) rest)
+awaitAll acc (t :: rest) = deferThen (await t) (a => awaitAll (a :: acc) rest)
 
 {- | Runs a task to its value sequentially, performing exactly its row `e`.
 
@@ -224,7 +225,10 @@ runAsync prog =
 
 -- The sequential scheduler: the same run queue as `runAsyncIO`, but the only
 -- wait it can satisfy is a finished task's flag.
-scheduleSeq : Ref (List (Async e Unit)) -> Ref (List (Async e Unit)) -> Ref (List (List Wait, Unit -> <e> Async e Unit)) -> <e> Unit
+scheduleSeq : Ref (List (Async e Unit)) ->
+  Ref (List (Async e Unit)) ->
+  Ref (List (List Wait, Unit -> <e> Async e Unit)) ->
+  <e> Unit
 scheduleSeq front back parked = match popTask front back
   Some t =>
     let _ = dispatch back parked (stepTask t)
@@ -234,15 +238,19 @@ scheduleSeq front back parked = match popTask front back
     waiting =>
       let (ready, still) = partition (p => any flagSet (fst p)) waiting
       match ready
-        _::_ =>
+        _ :: _ =>
           parked := still
           let _ = requeue back ready
           scheduleSeq front back parked
         [] =>
-          if any (p => any isFdWait (fst p) || any isTimerWait (fst p)) still then
-            panic "async: runAsync cannot wait on a timer or a file descriptor; drive this program with runAsyncIO"
+          if any
+            (p => any isFdWait (fst p) || any isTimerWait (fst p))
+            still then
+            panic
+              "async: runAsync cannot wait on a timer or a file descriptor; drive this program with runAsyncIO"
           else
-            panic "async: every remaining task is waiting on a task that can never finish (deadlock)"
+            panic
+              "async: every remaining task is waiting on a task that can never finish (deadlock)"
 
 flagSet : Wait -> Bool
 flagSet (WaitFlag r) = !r
@@ -297,14 +305,16 @@ storeResult cell a =
 
 -- The run queue is two lists: tasks are popped from `front` and pushed onto
 -- `back` (newest first); when `front` runs dry, `back` is reversed into it.
-popTask : Ref (List (Async e Unit)) -> Ref (List (Async e Unit)) -> Option (Async e Unit)
+popTask : Ref (List (Async e Unit)) ->
+  Ref (List (Async e Unit)) ->
+  Option (Async e Unit)
 popTask front back = match !front
-  t::rest =>
+  t :: rest =>
     front := rest
     Some t
   [] => match reverse !back
     [] => None
-    t::rest =>
+    t :: rest =>
       front := rest
       back := []
       Some t
@@ -319,7 +329,11 @@ queueLength front back = length !front + length !back
 -- is one pass over the queue as it stood when the round began; at the end of
 -- each round every parked task gets a non-blocking chance to wake, which is
 -- what keeps a task that never parks from starving the rest.
-schedule : Ref (List (Async e Unit)) -> Ref (List (Async e Unit)) -> Ref (List (List Wait, Unit -> <e> Async e Unit)) -> Int -> <Clock, Net "_" | e> Unit
+schedule : Ref (List (Async e Unit)) ->
+  Ref (List (Async e Unit)) ->
+  Ref (List (List Wait, Unit -> <e> Async e Unit)) ->
+  Int ->
+  <Clock, Net "_" | e> Unit
 schedule front back parked budget =
   if budget <= 0 then
     let _ = wakeParked back parked False
@@ -338,7 +352,10 @@ stepTask : Async e Unit -> <e> Async e Unit
 stepTask (Suspend k) = k ()
 stepTask other = other
 
-dispatch : Ref (List (Async e Unit)) -> Ref (List (List Wait, Unit -> <e> Async e Unit)) -> Async e Unit -> Unit
+dispatch : Ref (List (Async e Unit)) ->
+  Ref (List (List Wait, Unit -> <e> Async e Unit)) ->
+  Async e Unit ->
+  Unit
 dispatch _ _ (Done _) = ()
 dispatch back _ (Suspend k) = pushBack back (Suspend k)
 dispatch _ parked (Await ws k) = parked := (ws, k) :: !parked
@@ -350,29 +367,44 @@ dispatch back _ (Spawn child k) =
 -- first.  When `block` is set nothing is runnable: sleep until the earliest
 -- deadline or wait in `ioPoll`, and report a deadlock if neither can wake
 -- anything.  When it is clear, only a zero-timeout poll is made.
-wakeParked : Ref (List (Async e Unit)) -> Ref (List (List Wait, Unit -> <e> Async e Unit)) -> Bool -> <Clock, Net "_"> Unit
+wakeParked : Ref (List (Async e Unit)) ->
+  Ref (List (List Wait, Unit -> <e> Async e Unit)) ->
+  Bool ->
+  <Clock, Net "_"> Unit
 wakeParked back parked block =
   let now = monotonicSec ()
   let (ready, waiting) = partition (p => isReady now p) !parked
   match ready
-    _::_ =>
+    _ :: _ =>
       parked := waiting
       requeue back ready
     [] => match fdWaitsOf waiting
-      [] => if not block then ()
-      else match earliestDeadline waiting
-        Some t => sleepMs (millisUntil now t)
-        None => panic "async: every remaining task is waiting on a task that can never finish (deadlock)"
-      fdWaits =>
-        let timeout = if not block then 0
+      [] =>
+        if not block then
+          ()
         else match earliestDeadline waiting
-          Some t => millisUntil now t
-          None => -1
-        match ioPoll (fromList (map pollFd fdWaits)) (fromList (map pollInterest fdWaits)) timeout
+          Some t => sleepMs (millisUntil now t)
+          None =>
+            panic
+              "async: every remaining task is waiting on a task that can never finish (deadlock)"
+      fdWaits =>
+        let timeout =
+          if not block then
+            0
+          else match earliestDeadline waiting
+            Some t => millisUntil now t
+            None => -1
+        match (ioPoll
+          (fromList (map pollFd fdWaits))
+          (fromList (map pollInterest fdWaits))
+          timeout)
           Err e => panic ("async: poll failed: " ++ e)
           Ok readiness =>
             let satisfied = satisfiedWaits fdWaits (toList readiness)
-            let (woke, still) = partition (p => any (w => waitSatisfied satisfied w) (fst p)) waiting
+            let (woke, still) =
+              partition
+                (p => any (w => waitSatisfied satisfied w) (fst p))
+                waiting
             parked := still
             requeue back woke
 
@@ -380,12 +412,16 @@ millisUntil : Float -> Float -> Int
 millisUntil now t = max 0 (floatToInt ((t - now) * 1000.0) + 1)
 
 -- `parked` holds newest first; requeue oldest first so waking is FIFO.
-requeue : Ref (List (Async e Unit)) -> List (List Wait, Unit -> <e> Async e Unit) -> Unit
+requeue : Ref (List (Async e Unit)) ->
+  List (List Wait, Unit -> <e> Async e Unit) ->
+  Unit
 requeue back ready = requeueOldestFirst back (reverse ready)
 
-requeueOldestFirst : Ref (List (Async e Unit)) -> List (List Wait, Unit -> <e> Async e Unit) -> Unit
+requeueOldestFirst : Ref (List (Async e Unit)) ->
+  List (List Wait, Unit -> <e> Async e Unit) ->
+  Unit
 requeueOldestFirst _ [] = ()
-requeueOldestFirst back ((_, k)::rest) =
+requeueOldestFirst back ((_, k) :: rest) =
   let _ = pushBack back (Suspend k)
   requeueOldestFirst back rest
 
@@ -404,13 +440,13 @@ isFdWait _ = False
 
 earliestDeadline : List (List Wait, Unit -> <e> Async e Unit) -> Option Float
 earliestDeadline [] = None
-earliestDeadline ((ws, _)::rest) =
+earliestDeadline ((ws, _) :: rest) =
   minDeadline (deadlinesOf ws) (earliestDeadline rest)
 
 deadlinesOf : List Wait -> Option Float
 deadlinesOf [] = None
-deadlinesOf ((WaitUntil t)::rest) = minDeadline (Some t) (deadlinesOf rest)
-deadlinesOf (_::rest) = deadlinesOf rest
+deadlinesOf ((WaitUntil t) :: rest) = minDeadline (Some t) (deadlinesOf rest)
+deadlinesOf (_ :: rest) = deadlinesOf rest
 
 minDeadline : Option Float -> Option Float -> Option Float
 minDeadline None b = b
@@ -420,7 +456,7 @@ minDeadline (Some x) (Some y) = Some (min x y)
 -- Every descriptor wait across the park table, one poll entry each.
 fdWaitsOf : List (List Wait, Unit -> <e> Async e Unit) -> List Wait
 fdWaitsOf [] = []
-fdWaitsOf ((ws, _)::rest) = filter isFdWait ws ++ fdWaitsOf rest
+fdWaitsOf ((ws, _) :: rest) = filter isFdWait ws ++ fdWaitsOf rest
 
 pollFd : Wait -> Int
 pollFd (WaitRead fd) = fd
@@ -434,11 +470,8 @@ pollInterest _ = 0
 
 -- The waits whose parallel readiness word is non-zero.
 satisfiedWaits : List Wait -> List Int -> List Wait
-satisfiedWaits (w::ws) (r::rs) =
-  if r == 0 then
-    satisfiedWaits ws rs
-  else
-    w :: satisfiedWaits ws rs
+satisfiedWaits (w :: ws) (r :: rs) =
+  if r == 0 then satisfiedWaits ws rs else w :: satisfiedWaits ws rs
 satisfiedWaits _ _ = []
 
 waitSatisfied : List Wait -> Wait -> Bool

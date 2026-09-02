@@ -33,9 +33,12 @@ checkForward name cborBytes jsonText = match dagCborDecode cborBytes
     False
   Ok dc =>
     let rendered = stringify (dagCborToLexJson dc)
-    if rendered == jsonText then True
+    if rendered == jsonText then
+      True
     else
-      let () = println "ROW \{name} FAIL forward rendered=\{rendered} expected=\{jsonText}"
+      let () =
+        println
+          "ROW \{name} FAIL forward rendered=\{rendered} expected=\{jsonText}"
       False
 
 checkBackwardValue : String -> Array Int -> Json -> <IO> Bool
@@ -47,10 +50,12 @@ checkBackwardValue name cborBytes value = match lexJsonToDagCbor value
     Err message =>
       let () = println "ROW \{name} FAIL backward-encode \{message}"
       False
-    Ok reencoded => if reencoded == cborBytes then True
-    else
-      let () = println "ROW \{name} FAIL backward-mismatch"
-      False
+    Ok reencoded =>
+      if reencoded == cborBytes then
+        True
+      else
+        let () = println "ROW \{name} FAIL backward-mismatch"
+        False
 
 checkBackward : String -> Array Int -> String -> <IO> Bool
 checkBackward name cborBytes jsonText = match parse jsonText
@@ -68,12 +73,13 @@ runRow line = match split "\t" line
     if forwardOk && backwardOk then
       let () = println "ROW \{name} PASS forward backward"
       1
-    else 0
+    else
+      0
   _ => panic "lexjson_vectors: malformed corpus row: \{line}"
 
 runRows : List String -> Int -> <IO> Int
 runRows [] count = count
-runRows (line::rest) count =
+runRows (line :: rest) count =
   if line == "" || startsWith "#" line then
     runRows rest count
   else
@@ -81,7 +87,7 @@ runRows (line::rest) count =
 
 countCases : List String -> Int -> Int
 countCases [] count = count
-countCases (line::rest) count =
+countCases (line :: rest) count =
   if line == "" || startsWith "#" line then
     countCases rest count
   else
@@ -104,7 +110,9 @@ runMalformed : <IO> Int
 runMalformed =
   let checks = [
     rejectMalformed "duplicate-key" "{\"a\":1,\"a\":2}",
-    rejectMalformed "link-key-on-plain-map" "{\"$link\":\"not-a-cid\",\"extra\":true}",
+    rejectMalformed
+      "link-key-on-plain-map"
+      "{\"$link\":\"not-a-cid\",\"extra\":true}",
     rejectMalformed "bad-bytes-base64" "{\"$bytes\":\"!!!!\"}",
   ]
   sum checks
@@ -117,9 +125,12 @@ main = match args ()
       let total = countCases rows 0
       let passed = runRows rows 0
       let malformed = runMalformed
-      let () = println "lexjson: \{intToString passed}/\{intToString total} round-trip (both directions)"
+      let () =
+        println
+          "lexjson: \{intToString passed}/\{intToString total} round-trip (both directions)"
       let () = println "malformed: \{intToString malformed}/3 rejected"
-      if passed == total && malformed == 3 then println "TOTAL: PASS"
+      if passed == total && malformed == 3 then
+        println "TOTAL: PASS"
       else
         let () = println "TOTAL: FAIL"
         exit 1

@@ -1,5 +1,5 @@
 # META
-source_lines=2383
+source_lines=2528
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -190,9 +190,10 @@ lowerBinop op l r tag = CBinPrim op (lower l) (lower r) tag
 
 -- (f >> g) ≡ \x -> g (f x).  composeLam first second ≡ \x -> second (first x).
 composeLam : CExpr -> CExpr -> CExpr
-composeLam first second = CLam
-  [PVar composeVar (Loc "" 0 0 0 0)]
-  (CApp second (CApp first (CVar composeVar AGlobal)))
+composeLam first second =
+  CLam
+    [PVar composeVar (Loc "" 0 0 0 0)]
+    (CApp second (CApp first (CVar composeVar AGlobal)))
 
 lowerArm : Arm -> CArm
 lowerArm (Arm pat guards body) = CArm pat (map lowerGuard guards) (lower body)
@@ -258,7 +259,7 @@ patNeedsGuard _ = False
 -- with the arm's index (the leaves carry it back to the original CArm).
 initialRows : List Arm -> Int -> List (List Pat, Int)
 initialRows [] _ = []
-initialRows ((Arm pat _ _)::rest) i =
+initialRows ((Arm pat _ _) :: rest) i =
   ([canonPat pat], i) :: initialRows rest (i + 1)
 
 -- ── the Maranget recursion, emitting a tree (mirrors exhaust.mdk's matrix ops,
@@ -285,15 +286,19 @@ compileTree guards rows = compileTreeG (guardSet 0 guards omEmpty) rows
 -- list's end, so an index absent from the set reads exactly as it did.
 guardSet : Int -> List Bool -> OrdMap Unit -> OrdMap Unit
 guardSet _ [] acc = acc
-guardSet i (True::rest) acc =
+guardSet i (True :: rest) acc =
   guardSet (i + 1) rest (omInsert (intToString i) () acc)
-guardSet i (False::rest) acc = guardSet (i + 1) rest acc
+guardSet i (False :: rest) acc = guardSet (i + 1) rest acc
 
 compileTreeG : OrdMap Unit -> List (List Pat, Int) -> CTree
 compileTreeG _ [] = CTFail
-compileTreeG guards (row::rest) = compileRows guards row rest (row::rest)
+compileTreeG guards (row :: rest) = compileRows guards row rest (row :: rest)
 
-compileRows : OrdMap Unit -> (List Pat, Int) -> List (List Pat, Int) -> List (List Pat, Int) -> CTree
+compileRows : OrdMap Unit ->
+  (List Pat, Int) ->
+  List (List Pat, Int) ->
+  List (List Pat, Int) ->
+  CTree
 compileRows guards (pats, i) rest rows
   | allWild pats = leafOrGuard guards i rest
   | anyList rowHasCon rows = buildConSwitch guards rows
@@ -324,7 +329,11 @@ buildConSwitch guards rows =
     (map (conBranch guards buckets wilds) (distinctConHeads rows))
     (compileTreeG guards (defaultMatrix rows))
 
-conBranch : OrdMap Unit -> OrdMap (List (Int, (List Pat, Int))) -> List (Int, (List Pat, Int)) -> (String, Int) -> CTBranch
+conBranch : OrdMap Unit ->
+  OrdMap (List (Int, (List Pat, Int))) ->
+  List (Int, (List Pat, Int)) ->
+  (String, Int) ->
+  CTBranch
 conBranch guards buckets wilds (c, a) =
   CTBranch
     (decodeHead c a)
@@ -342,7 +351,11 @@ buildLitSwitch guards rows =
 
 -- Literal heads have arity 0, so a wildcard row contributes its tail unpadded —
 -- exactly what the old `specLitRow _ (PWild::rest, i) = Some (rest, i)` did.
-litBranch : OrdMap Unit -> OrdMap (List (Int, (List Pat, Int))) -> List (Int, (List Pat, Int)) -> Lit -> CTBranch
+litBranch : OrdMap Unit ->
+  OrdMap (List (Int, (List Pat, Int))) ->
+  List (Int, (List Pat, Int)) ->
+  Lit ->
+  CTBranch
 litBranch guards buckets wilds l =
   CTBranch
     (HLit l)
@@ -402,7 +415,7 @@ canonPat (PTuple ps) = PCon tupleName (map canonPat ps)
 canonPat (PCon c args) = PCon c (map canonPat args)
 canonPat (PCons h t) = PCon consName [canonPat h, canonPat t]
 canonPat (PList []) = PCon nilName []
-canonPat (PList (h::r)) = PCon consName [canonPat h, canonPat (PList r)]
+canonPat (PList (h :: r)) = PCon consName [canonPat h, canonPat (PList r)]
 canonPat (PAs _ _ p) = canonPat p
 canonPat (PRng _ _ _) = PWild
 canonPat (PRec _ _ _) = PWild
@@ -416,15 +429,15 @@ isWildPat PWild = True
 isWildPat _ = False
 
 rowHasCon : (List Pat, Int) -> Bool
-rowHasCon ((PCon _ _)::_, _) = True
+rowHasCon ((PCon _ _) :: _, _) = True
 rowHasCon _ = False
 
 rowHasLit : (List Pat, Int) -> Bool
-rowHasLit ((PLit _)::_, _) = True
+rowHasLit ((PLit _) :: _, _) = True
 rowHasLit _ = False
 
 dropHead : (List Pat, Int) -> (List Pat, Int)
-dropHead (_::ps, i) = (ps, i)
+dropHead (_ :: ps, i) = (ps, i)
 dropHead ([], i) = ([], i)
 
 -- distinct head constructors present in column 0, first-seen order, each with
@@ -434,8 +447,8 @@ distinctConHeads rows = dedupHeads (colHeads rows) omEmpty
 
 colHeads : List (List Pat, Int) -> List (String, Int)
 colHeads [] = []
-colHeads (((PCon c args)::_, _)::rest) = (c, listLen args) :: colHeads rest
-colHeads (_::rest) = colHeads rest
+colHeads (((PCon c args) :: _, _) :: rest) = (c, listLen args) :: colHeads rest
+colHeads (_ :: rest) = colHeads rest
 
 -- First-seen dedup by constructor name.  `seen` is an `OrdMap`-backed membership
 -- set (O(log n) test/insert) rather than a growing `List` scanned with `contains`
@@ -444,7 +457,7 @@ colHeads (_::rest) = colHeads rest
 -- unchanged, so first-occurrence ordering is byte-identical to the old list form.
 dedupHeads : List (String, Int) -> OrdMap Unit -> List (String, Int)
 dedupHeads [] _ = []
-dedupHeads ((c, a)::rest) seen
+dedupHeads ((c, a) :: rest) seen
   | omHasKey c seen = dedupHeads rest seen
   | otherwise = (c, a) :: dedupHeads rest (omInsert c () seen)
 
@@ -453,8 +466,8 @@ distinctLits rows = dedupLits (colLits rows) omEmpty
 
 colLits : List (List Pat, Int) -> List Lit
 colLits [] = []
-colLits (((PLit l)::_, _)::rest) = l :: colLits rest
-colLits (_::rest) = colLits rest
+colLits (((PLit l) :: _, _) :: rest) = l :: colLits rest
+colLits (_ :: rest) = colLits rest
 
 -- First-seen dedup of the column's literal heads.  Mirrors #960's `dedupHeads`
 -- fix: the old `seen` List scanned with `anyList (l == _)` per literal was
@@ -468,7 +481,7 @@ colLits (_::rest) = colLits rest
 -- and therefore the emitted literal-switch — is byte-identical to the old form.
 dedupLits : List Lit -> OrdMap Unit -> List Lit
 dedupLits [] _ = []
-dedupLits (l::rest) seen =
+dedupLits (l :: rest) seen =
   let k = litKey l
   match omHasKey k seen
     True => dedupLits rest seen
@@ -499,9 +512,11 @@ normLitZero : Float -> Float
 normLitZero f = if f == 0.0 then 0.0 else f
 
 -- ── matrix specialization / default (over index-carrying rows) ─────────────
-filterMapRows : ((List Pat, Int) -> Option (List Pat, Int)) -> List (List Pat, Int) -> List (List Pat, Int)
+filterMapRows : ((List Pat, Int) -> Option (List Pat, Int)) ->
+  List (List Pat, Int) ->
+  List (List Pat, Int)
 filterMapRows _ [] = []
-filterMapRows f (r::rest) = match f r
+filterMapRows f (r :: rest) = match f r
   Some r2 => r2 :: filterMapRows f rest
   None => filterMapRows f rest
 
@@ -535,41 +550,52 @@ filterMapRows f (r::rest) = match f r
 -- A bucket's rows, or none.  Buckets are built by prepending, so a bucket reads
 -- back in reverse row order and is `reverseL`'d at the branch (as in
 -- `exhaust.mdk`'s `headBuckets`).
-bucketRows : String -> OrdMap (List (Int, (List Pat, Int))) -> List (Int, (List Pat, Int))
+bucketRows : String ->
+  OrdMap (List (Int, (List Pat, Int))) ->
+  List (Int, (List Pat, Int))
 bucketRows k m = optionOr [] (omLookup k m)
 
-pushBucket : String -> (Int, (List Pat, Int)) -> OrdMap (List (Int, (List Pat, Int))) -> OrdMap (List (Int, (List Pat, Int)))
+pushBucket : String ->
+  (Int, (List Pat, Int)) ->
+  OrdMap (List (Int, (List Pat, Int))) ->
+  OrdMap (List (Int, (List Pat, Int)))
 pushBucket k r m = omInsert k (r :: bucketRows k m) m
 
 -- Rows grouped by column-0 constructor, head stripped to `args ++ rest` — i.e.
 -- exactly the rows `specializeCon c` kept, for every `c` at once.  Non-`PCon`
 -- rows (wildcards, literals, empty) still consume an ordinal so the numbering
 -- stays aligned with `wildTailRows`.
-conBuckets : Int -> List (List Pat, Int) -> OrdMap (List (Int, (List Pat, Int))) -> OrdMap (List (Int, (List Pat, Int)))
+conBuckets : Int ->
+  List (List Pat, Int) ->
+  OrdMap (List (Int, (List Pat, Int))) ->
+  OrdMap (List (Int, (List Pat, Int)))
 conBuckets _ [] acc = acc
-conBuckets k (((PCon c args)::rest, i)::more) acc =
+conBuckets k (((PCon c args) :: rest, i) :: more) acc =
   conBuckets (k + 1) more (pushBucket c (k, (args ++ rest, i)) acc)
-conBuckets k (_::more) acc = conBuckets (k + 1) more acc
+conBuckets k (_ :: more) acc = conBuckets (k + 1) more acc
 
 -- The literal mirror.  Keyed by `litKey`, which is injective and `Eq`-exact, so
 -- two literals share a bucket exactly when the old `litEq` compare accepted them
 -- (`distinctLits` already deduped its heads by the same key).  That also retires
 -- `litEq`: #970's O(arms²) allocating compares are gone with the rescan itself,
 -- since a row is now keyed ONCE rather than compared once per distinct literal.
-litBuckets : Int -> List (List Pat, Int) -> OrdMap (List (Int, (List Pat, Int))) -> OrdMap (List (Int, (List Pat, Int)))
+litBuckets : Int ->
+  List (List Pat, Int) ->
+  OrdMap (List (Int, (List Pat, Int))) ->
+  OrdMap (List (Int, (List Pat, Int)))
 litBuckets _ [] acc = acc
-litBuckets k (((PLit l)::rest, i)::more) acc =
+litBuckets k (((PLit l) :: rest, i) :: more) acc =
   litBuckets (k + 1) more (pushBucket (litKey l) (k, (rest, i)) acc)
-litBuckets k (_::more) acc = litBuckets (k + 1) more acc
+litBuckets k (_ :: more) acc = litBuckets (k + 1) more acc
 
 -- Column-0 wildcard rows, head stripped, tagged with the same ordinals
 -- `conBuckets`/`litBuckets` assign.  The head's replacement wildcards are added
 -- per branch by `padWildRow`, since the count is the branch's own arity.
 wildTailRows : Int -> List (List Pat, Int) -> List (Int, (List Pat, Int))
 wildTailRows _ [] = []
-wildTailRows k ((PWild::rest, i)::more) =
+wildTailRows k ((PWild :: rest, i) :: more) =
   (k, (rest, i)) :: wildTailRows (k + 1) more
-wildTailRows k (_::more) = wildTailRows (k + 1) more
+wildTailRows k (_ :: more) = wildTailRows (k + 1) more
 
 padWildRow : Int -> (Int, (List Pat, Int)) -> (Int, (List Pat, Int))
 padWildRow arity (k, (ps, i)) = (k, (replicate arity PWild ++ ps, i))
@@ -577,14 +603,16 @@ padWildRow arity (k, (ps, i)) = (k, (replicate arity PWild ++ ps, i))
 -- Interleave a branch's own rows with the wildcard rows by ordinal, restoring
 -- matrix row order and dropping the tags.  Ordinals are unique (one per matrix
 -- row) and both inputs are ascending, so this is a total, order-exact merge.
-mergeByOrd : List (Int, (List Pat, Int)) -> List (Int, (List Pat, Int)) -> List (List Pat, Int)
+mergeByOrd : List (Int, (List Pat, Int)) ->
+  List (Int, (List Pat, Int)) ->
+  List (List Pat, Int)
 mergeByOrd [] ys = map untagRow ys
 mergeByOrd xs [] = map untagRow xs
-mergeByOrd ((ka, ra)::xs) ((kb, rb)::ys) =
+mergeByOrd ((ka, ra) :: xs) ((kb, rb) :: ys) =
   if ka < kb then
-    ra :: mergeByOrd xs ((kb, rb)::ys)
+    ra :: mergeByOrd xs ((kb, rb) :: ys)
   else
-    rb :: mergeByOrd ((ka, ra)::xs) ys
+    rb :: mergeByOrd ((ka, ra) :: xs) ys
 
 untagRow : (Int, (List Pat, Int)) -> (List Pat, Int)
 untagRow (_, r) = r
@@ -595,7 +623,7 @@ defaultMatrix : List (List Pat, Int) -> List (List Pat, Int)
 defaultMatrix rows = filterMapRows defRow rows
 
 defRow : (List Pat, Int) -> Option (List Pat, Int)
-defRow (PWild::rest, i) = Some (rest, i)
+defRow (PWild :: rest, i) = Some (rest, i)
 defRow _ = None
 
 -- ── small local helpers ────────────────────────────────────────────────────
@@ -671,9 +699,8 @@ lowerProgramEmit target prog =
   -- either backend's tag width the caller's `target` cannot rule out.  Same seam,
   -- same reason.
   let _ = dictWitnessTagGuard target prog
-  hoistNullaryMemo (rewriteProgramRecPats
-    (declaredRecordFieldOrders prog)
-    (lowerProgram prog))
+  hoistNullaryMemo
+    (rewriteProgramRecPats (declaredRecordFieldOrders prog) (lowerProgram prog))
 
 -- ── the ONE authority on a record's field order (#1513) ──────────────────────
 -- ctor name → [field label in declared order], from every DData named-field
@@ -742,7 +769,7 @@ recPatForLabel fo recFields label = match findRecField label recFields
 
 findRecField : String -> List RecPatField -> Option RecPatField
 findRecField _ [] = None
-findRecField label ((RecPatField l fl sub)::rest)
+findRecField label ((RecPatField l fl sub) :: rest)
   | l == label = Some (RecPatField l fl sub)
   | otherwise = findRecField label rest
 
@@ -889,7 +916,10 @@ rewriteFieldRP fo (CField k e) = CField k (rewriteExprRP fo e)
 -- the declaration exactly once each — an anonymous record with no `data`, or a
 -- malformed literal that a diagnostic elsewhere owns.  It is not this pass's job to
 -- start dropping or duplicating fields on a shape it does not recognise.
-normalizeRecordOrder : List (String, List String) -> String -> List CField -> CExpr
+normalizeRecordOrder : List (String, List String) ->
+  String ->
+  List CField ->
+  CExpr
 normalizeRecordOrder fo name fields = match lookupAssoc name fo
   None => CRecord name fields
   Some labels =>
@@ -904,8 +934,8 @@ normalizeRecordOrder fo name fields = match lookupAssoc name fo
 -- typechecker already rejects a literal that names the same field twice
 -- (T-DUPLICATE-FIELD) or one the record does not declare (T-UNKNOWN-FIELD).
 isPermutationOf : List String -> List String -> Bool
-isPermutationOf written labels = listLen written == listLen labels
-  && allList (l => contains l written) labels
+isPermutationOf written labels =
+  listLen written == listLen labels && allList (l => contains l written) labels
 
 cFieldLabel : CField -> String
 cFieldLabel (CField k _) = k
@@ -922,7 +952,7 @@ recTempField label = CField label (CVar (recTempName label) AGlobal)
 
 bindFieldTemps : List CField -> CExpr -> CExpr
 bindFieldTemps [] body = body
-bindFieldTemps ((CField k ex)::rest) body =
+bindFieldTemps ((CField k ex) :: rest) body =
   CLet
     False
     (PVar (recTempName k) (Loc "" 0 0 0 0))
@@ -972,20 +1002,17 @@ memoKeys entries = memoKeysGo entries entries
 
 memoKeysGo : List CImplEntry -> List CImplEntry -> List (String, String)
 memoKeysGo _ [] = []
-memoKeysGo all ((CImplEntry m _ (CImplTagged tag key _ positions pats _))::rest)
+memoKeysGo all ((CImplEntry m _ (CImplTagged tag key _ positions pats _)) :: rest)
   | isEmptyL positions && isEmptyL pats =
     (m, memoSelector all m tag key) :: memoKeysGo all rest
-memoKeysGo all (_::rest) = memoKeysGo all rest
+memoKeysGo all (_ :: rest) = memoKeysGo all rest
 
 -- the string an RKey occurrence of (method, head-tag) carries — bare head when the
 -- head is the sole impl of (method, head), else the canonical C7 key.  Mirrors the
 -- emitter's implFnSymTag/keyForSite choice (C7), so the CAF and the occurrence agree.
 memoSelector : List CImplEntry -> String -> String -> String -> String
 memoSelector all method tag key =
-  if headTagUniqueL all method tag then
-    tag
-  else
-    key
+  if headTagUniqueL all method tag then tag else key
 
 -- does the head tycon [tag] of [method] have a single impl, or several distinct C7
 -- keys (a same-head collision)?  Counts DISTINCT keys, not raw entries (the joint
@@ -995,18 +1022,23 @@ headTagUniqueL : List CImplEntry -> String -> String -> Bool
 headTagUniqueL entries method tag =
   listLen (distinctKeysAtHeadL entries method tag []) <= 1
 
-distinctKeysAtHeadL : List CImplEntry -> String -> String -> List String -> List String
+distinctKeysAtHeadL : List CImplEntry ->
+  String ->
+  String ->
+  List String ->
+  List String
 distinctKeysAtHeadL [] _ _ acc = acc
-distinctKeysAtHeadL ((CImplEntry n _ (CImplTagged t k _ _ _ _))::rest) method tag acc
+distinctKeysAtHeadL ((CImplEntry n _ (CImplTagged t k _ _ _ _)) :: rest) method tag acc
   | n == method && t == tag && not (contains k acc) =
-    distinctKeysAtHeadL rest method tag (k::acc)
+    distinctKeysAtHeadL rest method tag (k :: acc)
   | otherwise = distinctKeysAtHeadL rest method tag acc
-distinctKeysAtHeadL (_::rest) method tag acc =
+distinctKeysAtHeadL (_ :: rest) method tag acc =
   distinctKeysAtHeadL rest method tag acc
 
 isMemoKey : List (String, String) -> String -> String -> Bool
 isMemoKey [] _ _ = False
-isMemoKey ((m2, t2)::rest) m tag = m == m2 && tag == t2 || isMemoKey rest m tag
+isMemoKey ((m2, t2) :: rest) m tag =
+  m == m2 && tag == t2 || isMemoKey rest m tag
 
 -- #731 item 1: the (method, selector) instances whose dispatch is UNAMBIGUOUS by
 -- STATIC KNOWLEDGE regardless of route — exactly one tagged impl and no interface
@@ -1019,7 +1051,7 @@ isMemoKey ((m2, t2)::rest) m tag = m == m2 && tag == t2 || isMemoKey rest m tag
 -- nullary/return-position/no-requires), so it never over-memoises past eval.
 soleMemoKeys : List CImplEntry -> List (String, String) -> List (String, String)
 soleMemoKeys _ [] = []
-soleMemoKeys entries ((m, sel)::rest)
+soleMemoKeys entries ((m, sel) :: rest)
   | taggedImplCount entries m 1 == 1 && not (hasDefaultL entries m) =
     (m, sel) :: soleMemoKeys entries rest
   | otherwise = soleMemoKeys entries rest
@@ -1030,22 +1062,26 @@ taggedImplCount : List CImplEntry -> String -> Int -> Int
 taggedImplCount entries method cap =
   listLen (distinctImplKeysL entries method cap [])
 
-distinctImplKeysL : List CImplEntry -> String -> Int -> List String -> List String
+distinctImplKeysL : List CImplEntry ->
+  String ->
+  Int ->
+  List String ->
+  List String
 distinctImplKeysL [] _ _ acc = acc
 distinctImplKeysL _ _ cap acc
   | listLen acc > cap = acc
-distinctImplKeysL ((CImplEntry n _ (CImplTagged _ k _ _ _ _))::rest) method cap acc
+distinctImplKeysL ((CImplEntry n _ (CImplTagged _ k _ _ _ _)) :: rest) method cap acc
   | n == method && not (contains k acc) =
-    distinctImplKeysL rest method cap (k::acc)
+    distinctImplKeysL rest method cap (k :: acc)
   | otherwise = distinctImplKeysL rest method cap acc
-distinctImplKeysL (_::rest) method cap acc =
+distinctImplKeysL (_ :: rest) method cap acc =
   distinctImplKeysL rest method cap acc
 
 hasDefaultL : List CImplEntry -> String -> Bool
 hasDefaultL [] _ = False
-hasDefaultL ((CImplEntry n _ (CImplDefault _ _ _))::rest) m = n == m
-  || hasDefaultL rest m
-hasDefaultL (_::rest) m = hasDefaultL rest m
+hasDefaultL ((CImplEntry n _ (CImplDefault _ _ _)) :: rest) m =
+  n == m || hasDefaultL rest m
+hasDefaultL (_ :: rest) m = hasDefaultL rest m
 
 -- ── LowerState — the per-emission hoist carrier (#1954) ──────────────────────
 -- Constructed once per `hoistNullaryMemo` call and threaded explicitly through the
@@ -1071,12 +1107,11 @@ hasDefaultL (_::rest) m = hasDefaultL rest m
 --
 -- Adding a field is one line here plus the one construction site in
 -- `hoistNullaryMemo`: every walk function already takes the whole record.
-data LowerState =
-  | LowerState {
-      memoKeysAll : List (String, String),
-      soleKeys : List (String, String),
-      memoRefs : Ref (List (String, String)),
-    }
+data LowerState = LowerState {
+  memoKeysAll : List (String, String),
+  soleKeys : List (String, String),
+  memoRefs : Ref (List (String, String)),
+}
 
 -- the synthesized CAF binding name for a memoised (selector, method) instance.  The
 -- `$` prefix is the internal-binder convention (cf. composeVar `$cf`), so it cannot
@@ -1131,7 +1166,7 @@ recordMultiImplMemo st name = recordMultiImplMemoGo st name st.memoKeysAll
 
 recordMultiImplMemoGo : LowerState -> String -> List (String, String) -> Unit
 recordMultiImplMemoGo _ _ [] = ()
-recordMultiImplMemoGo st name ((m, sel)::rest)
+recordMultiImplMemoGo st name ((m, sel) :: rest)
   | m == name =
     let _ = recordMemoRef st sel name in recordMultiImplMemoGo st name rest
   | otherwise = recordMultiImplMemoGo st name rest
@@ -1142,7 +1177,8 @@ recordMultiImplMemoGo st name ((m, sel)::rest)
 hoistNullaryMemo : CProgram -> CProgram
 hoistNullaryMemo (CProgram groups ctorArs ctorTypes implEntries) =
   let keys = memoKeys implEntries
-  if isEmptyL keys then CProgram groups ctorArs ctorTypes implEntries
+  if isEmptyL keys then
+    CProgram groups ctorArs ctorTypes implEntries
   else
     let st = LowerState {
       memoKeysAll = keys,
@@ -1155,9 +1191,9 @@ hoistNullaryMemo (CProgram groups ctorArs ctorTypes implEntries) =
     CProgram (map memoCafBind refs ++ groups2) ctorArs ctorTypes impls2
 
 memoCafBind : (String, String) -> CBind
-memoCafBind (tag, method) = CBind
-  (memoBindName tag method)
-  [CClause [] (CMethod method (RKey tag []) [] [])]
+memoCafBind (tag, method) = CBind (memoBindName tag method) [
+  CClause [] (CMethod method (RKey tag []) [] []),
+]
 
 -- #242: routed through the canonical O(n·log n) `support.util.dedupBy` (was a
 -- private O(n²) `List`-as-a-set scan).  Both components are unconstrained
@@ -1188,7 +1224,8 @@ hoistExpr st (CMethod name (RKey tag []) [] []) =
   if isMemoKey st.memoKeysAll name tag then
     let _ = recordMemoRef st tag name
     CVar (memoBindName tag name) AGlobal
-  else CMethod name (RKey tag []) [] []
+  else
+    CMethod name (RKey tag []) [] []
 -- #731 item 1: a nullary return-position method reached via a runtime-dict route
 -- (RDictFwd from a polymorphic caller forwarding a concrete dict, or a plain RDict)
 -- resolves — when the method has exactly one impl and no default — statically to
@@ -1266,7 +1303,7 @@ carmHasGuard (CArm pat gs _) = isNonEmptyL gs || patNeedsGuard pat
 
 cInitialRows : List CArm -> Int -> List (List Pat, Int)
 cInitialRows [] _ = []
-cInitialRows ((CArm pat _ _)::rest) i =
+cInitialRows ((CArm pat _ _) :: rest) i =
   ([canonPat pat], i) :: cInitialRows rest (i + 1)
 
 -- the top-level function-group half of lowerProgram, exposed for the multi-module
@@ -1288,14 +1325,14 @@ lgGroup clauses =
 
 lgTag : List (String, CClause) -> Int -> List ((String, Int), CClause)
 lgTag [] _ = []
-lgTag ((n, c)::rest) i = ((n, i), c) :: lgTag rest (i + 1)
+lgTag ((n, c) :: rest) i = ((n, i), c) :: lgTag rest (i + 1)
 
 lgSplit : List a -> (List a, List a)
 lgSplit [] = ([], [])
 lgSplit [x] = ([x], [])
-lgSplit (x::y::rest) =
+lgSplit (x :: y :: rest) =
   let (a, b) = lgSplit rest
-  (x::a, y::b)
+  (x :: a, y :: b)
 
 -- merge sort by name, ascending-index tiebreak (stable ⇒ clause order preserved).
 lgSortName : List ((String, Int), CClause) -> List ((String, Int), CClause)
@@ -1305,50 +1342,59 @@ lgSortName xs =
   let (a, b) = lgSplit xs
   lgMergeName (lgSortName a) (lgSortName b)
 
-lgMergeName : List ((String, Int), CClause) -> List ((String, Int), CClause) -> List ((String, Int), CClause)
+lgMergeName : List ((String, Int), CClause) ->
+  List ((String, Int), CClause) ->
+  List ((String, Int), CClause)
 lgMergeName [] ys = ys
 lgMergeName xs [] = xs
-lgMergeName (((n1, i1), c1)::xs) (((n2, i2), c2)::ys) = match stringCompare n1 n2
-  Lt => ((n1, i1), c1) :: lgMergeName xs (((n2, i2), c2)::ys)
-  Gt => ((n2, i2), c2) :: lgMergeName (((n1, i1), c1)::xs) ys
-  Eq =>
-    if i1 <= i2 then
-      ((n1, i1), c1) :: lgMergeName xs (((n2, i2), c2)::ys)
-    else
-      ((n2, i2), c2) :: lgMergeName (((n1, i1), c1)::xs) ys
+lgMergeName (((n1, i1), c1) :: xs) (((n2, i2), c2) :: ys) =
+  match stringCompare n1 n2
+    Lt => ((n1, i1), c1) :: lgMergeName xs (((n2, i2), c2) :: ys)
+    Gt => ((n2, i2), c2) :: lgMergeName (((n1, i1), c1) :: xs) ys
+    Eq =>
+      if i1 <= i2 then
+        ((n1, i1), c1) :: lgMergeName xs (((n2, i2), c2) :: ys)
+      else
+        ((n2, i2), c2) :: lgMergeName (((n1, i1), c1) :: xs) ys
 
 -- collapse runs of equal name (now contiguous, index-ascending) into
 -- ((name, firstIdx), clausesInOrder).
 lgRuns : List ((String, Int), CClause) -> List ((String, Int), List CClause)
 lgRuns [] = []
-lgRuns (((n, i), c)::rest) =
+lgRuns (((n, i), c) :: rest) =
   let (cs, others) = lgSpan n rest
-  ((n, i), c::cs) :: lgRuns others
+  ((n, i), c :: cs) :: lgRuns others
 
-lgSpan : String -> List ((String, Int), CClause) -> (List CClause, List ((String, Int), CClause))
+lgSpan : String ->
+  List ((String, Int), CClause) ->
+  (List CClause, List ((String, Int), CClause))
 lgSpan _ [] = ([], [])
-lgSpan n (((m, j), c)::rest) =
+lgSpan n (((m, j), c) :: rest) =
   if m == n then
     let (cs, o) = lgSpan n rest
-    (c::cs, o)
-  else ([], ((m, j), c)::rest)
+    (c :: cs, o)
+  else
+    ([], ((m, j), c) :: rest)
 
 -- order groups by first-occurrence index (== groupNames order).
-lgSortIdx : List ((String, Int), List CClause) -> List ((String, Int), List CClause)
+lgSortIdx : List ((String, Int), List CClause) ->
+  List ((String, Int), List CClause)
 lgSortIdx [] = []
 lgSortIdx [x] = [x]
 lgSortIdx xs =
   let (a, b) = lgSplit xs
   lgMergeIdx (lgSortIdx a) (lgSortIdx b)
 
-lgMergeIdx : List ((String, Int), List CClause) -> List ((String, Int), List CClause) -> List ((String, Int), List CClause)
+lgMergeIdx : List ((String, Int), List CClause) ->
+  List ((String, Int), List CClause) ->
+  List ((String, Int), List CClause)
 lgMergeIdx [] ys = ys
 lgMergeIdx xs [] = xs
-lgMergeIdx (((n1, i1), cs1)::xs) (((n2, i2), cs2)::ys) =
+lgMergeIdx (((n1, i1), cs1) :: xs) (((n2, i2), cs2) :: ys) =
   if i1 <= i2 then
-    ((n1, i1), cs1) :: lgMergeIdx xs (((n2, i2), cs2)::ys)
+    ((n1, i1), cs1) :: lgMergeIdx xs (((n2, i2), cs2) :: ys)
   else
-    ((n2, i2), cs2) :: lgMergeIdx (((n1, i1), cs1)::xs) ys
+    ((n2, i2), cs2) :: lgMergeIdx (((n1, i1), cs1) :: xs) ys
 
 lgToBind : ((String, Int), List CClause) -> CBind
 lgToBind ((n, _), cs) = CBind n cs
@@ -1440,7 +1486,14 @@ ifaceImplHeadTable prog = flatMap ifaceImplHeadEntries prog
 ifaceImplHeadEntries : Decl -> List (String, String, String, String)
 -- #1037: matched arm-for-arm with `lowerDeclImpl`, which now unwraps `DAttrib` too.
 ifaceImplHeadEntries (DAttrib _ d) = ifaceImplHeadEntries d
-ifaceImplHeadEntries (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, ... }) = [(ifaceIdentity o ifaceName, ifaceName, optionOr noneHeadTag (headTyconHead typeArgs), implRouteKeyWord o ifaceName typeArgs None)]
+ifaceImplHeadEntries (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, ... }) = [
+  (
+    ifaceIdentity o ifaceName,
+    ifaceName,
+    optionOr noneHeadTag (headTyconHead typeArgs),
+    implRouteKeyWord o ifaceName typeArgs None,
+  ),
+]
 ifaceImplHeadEntries _ = []
 
 -- ── emitted impl-symbol collision guard (#1950) ───────────────────────────────
@@ -1517,7 +1570,12 @@ implSymbolCollisionGuard prog =
 -- uses, so the two cannot drift apart on a program.
 implSymRowsOf : Decl -> List (String, String, String)
 implSymRowsOf (DAttrib _ d) = implSymRowsOf d
-implSymRowsOf (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, methods, ... }) = map (implSymRow (optionOr noneHeadTag (headTyconHead typeArgs)) (implRouteKeyWord o ifaceName typeArgs None)) methods
+implSymRowsOf (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, methods, ... }) =
+  map
+    (implSymRow
+      (optionOr noneHeadTag (headTyconHead typeArgs))
+      (implRouteKeyWord o ifaceName typeArgs None))
+    methods
 implSymRowsOf _ = []
 
 implSymRow : String -> String -> ImplMethod -> (String, String, String)
@@ -1525,11 +1583,15 @@ implSymRow tag key (ImplMethod mname _ _) = (mname, tag, key)
 
 -- distinct pre-images, first arrival wins.  This is what keeps #1397's shape and
 -- every multi-clause impl out of the check — see the SCOPE paragraph above.
-dedupImplSymRows : List (String, String, String) -> OrdMap Unit -> List (String, String, String)
+dedupImplSymRows : List (String, String, String) ->
+  OrdMap Unit ->
+  List (String, String, String)
 dedupImplSymRows [] _ = []
-dedupImplSymRows ((m, tag, key)::rest) seen
+dedupImplSymRows ((m, tag, key) :: rest) seen
   | omHasKey (implPreImageKey m tag key) seen = dedupImplSymRows rest seen
-  | otherwise = (m, tag, key) :: dedupImplSymRows rest (omInsert (implPreImageKey m tag key) () seen)
+  | otherwise =
+    (m, tag, key)
+      :: dedupImplSymRows rest (omInsert (implPreImageKey m tag key) () seen)
 
 -- `\n` cannot occur in a method name, a head tag or a route word, so this is an
 -- injective rendering of the triple and safe as a set key.
@@ -1542,15 +1604,19 @@ implPreImageKey m tag key = "\{m}\n\{tag}\n\{key}"
 -- weight-balanced tree, rather than re-scanned per row: the emitters can afford the
 -- linear `distinctKeysAtHead` count because they call it per METHOD BUCKET (#990),
 -- and this guard sees the whole program at once.
-collidingHeads : List (String, String, String) -> OrdMap String -> OrdMap Unit -> OrdMap Unit
+collidingHeads : List (String, String, String) ->
+  OrdMap String ->
+  OrdMap Unit ->
+  OrdMap Unit
 collidingHeads [] _ acc = acc
-collidingHeads ((m, tag, key)::rest) firstKey acc = match omLookup (implHeadKey m tag) firstKey
-  None => collidingHeads rest (omInsert (implHeadKey m tag) key firstKey) acc
-  Some k0 =>
-    if k0 == key then
-      collidingHeads rest firstKey acc
-    else
-      collidingHeads rest firstKey (omInsert (implHeadKey m tag) () acc)
+collidingHeads ((m, tag, key) :: rest) firstKey acc =
+  match omLookup (implHeadKey m tag) firstKey
+    None => collidingHeads rest (omInsert (implHeadKey m tag) key firstKey) acc
+    Some k0 =>
+      if k0 == key then
+        collidingHeads rest firstKey acc
+      else
+        collidingHeads rest firstKey (omInsert (implHeadKey m tag) () acc)
 
 implHeadKey : String -> String -> String
 implHeadKey m tag = "\{m}\n\{tag}"
@@ -1564,13 +1630,18 @@ implHeadKey m tag = "\{m}\n\{tag}"
 -- `grep -qxF` against a whitespace-stripped claim value without false-draining on a
 -- rewording of the prose around them.  Keep them flush-left if this message is ever
 -- pinned again.
-checkImplSymbolsInjective : OrdMap Unit -> List (String, String, String) -> OrdMap String -> Unit
+checkImplSymbolsInjective : OrdMap Unit ->
+  List (String, String, String) ->
+  OrdMap String ->
+  Unit
 checkImplSymbolsInjective _ [] _ = ()
-checkImplSymbolsInjective collide ((m, tag, key)::rest) seen =
+checkImplSymbolsInjective collide ((m, tag, key) :: rest) seen =
   let sym = "mdk_impl_\{implSymTagOf collide m tag key}_\{m}"
   match omLookup sym seen
     None => checkImplSymbolsInjective collide rest (omInsert sym key seen)
-    Some prev => panic "emitted impl-symbol collision: two DISTINCT impls of method `\{m}` are emitted under one symbol.\ncollided symbol: \{sym}\nimpl 1 key: \{prev}\nimpl 2 key: \{key}\nTwo distinct impls cannot share one emitted symbol: the backend would define one body twice (the native link fails) or keep one and silently drop the other. The two keys above are the impls' canonical dispatch keys, spelled `<module>::<Interface>|<type arguments>|`. Since #1950 those keys are spelled into the symbol by `private_mangle.injectiveIdent`, which is INJECTIVE, so this is NOT a naming mistake you can rename your way out of -- it means the emitted-symbol scheme itself lost injectivity. Please report this message, with both keys above."
+    Some prev =>
+      panic
+        "emitted impl-symbol collision: two DISTINCT impls of method `\{m}` are emitted under one symbol.\ncollided symbol: \{sym}\nimpl 1 key: \{prev}\nimpl 2 key: \{key}\nTwo distinct impls cannot share one emitted symbol: the backend would define one body twice (the native link fails) or keep one and silently drop the other. The two keys above are the impls' canonical dispatch keys, spelled `<module>::<Interface>|<type arguments>|`. Since #1950 those keys are spelled into the symbol by `private_mangle.injectiveIdent`, which is INJECTIVE, so this is NOT a naming mistake you can rename your way out of -- it means the emitted-symbol scheme itself lost injectivity. Please report this message, with both keys above."
 
 -- the SYMBOL tag this row is emitted under — the bare head when it is the sole impl
 -- of (method, head), else the injectively encoded canonical key.  Mirror of
@@ -1579,10 +1650,7 @@ checkImplSymbolsInjective collide ((m, tag, key)::rest) seen =
 -- disagree about what symbol was actually emitted.
 implSymTagOf : OrdMap Unit -> String -> String -> String -> String
 implSymTagOf collide method tag key =
-  if omHasKey (implHeadKey method tag) collide then
-    injectiveIdent key
-  else
-    tag
+  if omHasKey (implHeadKey method tag) collide then injectiveIdent key else tag
 
 -- ── dict-witness TAG injectivity — #348 (native i64), #377 (wasm 30-bit) ──────
 --
@@ -1686,7 +1754,10 @@ dictWitnessTagGuard target prog =
   -- `hashName noneHeadTag` for THAT method's dispatch chain (see the SCOPE note
   -- above), so the reservation only matters within the method it could actually be
   -- compared in.
-  let sentinelRows = map (m => (m, noneHeadTag, noneHeadTag)) (distinctMethodNamesOf implRows omEmpty)
+  let sentinelRows =
+    map
+      (m => (m, noneHeadTag, noneHeadTag))
+      (distinctMethodNamesOf implRows omEmpty)
   let rows = dedupRouteWords (sentinelRows ++ implRows) omEmpty
   -- native FIRST, and ALWAYS: a full-width `hashName` collision is also a
   -- `dictTag` collision (masking cannot separate equal values), so reporting it
@@ -1699,14 +1770,17 @@ dictWitnessTagGuard target prog =
 
 -- distinct method names appearing in a row list, first-arrival order — used only to
 -- scope the `noneHeadTag` sentinel per method (see `dictWitnessTagGuard`).
-distinctMethodNamesOf : List (String, String, String) -> OrdMap Unit -> List String
+distinctMethodNamesOf : List (String, String, String) ->
+  OrdMap Unit ->
+  List String
 distinctMethodNamesOf [] _ = []
-distinctMethodNamesOf ((m, _, _)::rest) seen
+distinctMethodNamesOf ((m, _, _) :: rest) seen
   | omHasKey m seen = distinctMethodNamesOf rest seen
   | otherwise = m :: distinctMethodNamesOf rest (omInsert m () seen)
 
 nativeDictTagSpace : String
-nativeDictTagSpace = "native (LLVM) i64 dict-witness word `hashName` -- BOTH backends, since the wasm tag is this hash masked"
+nativeDictTagSpace =
+  "native (LLVM) i64 dict-witness word `hashName` -- BOTH backends, since the wasm tag is this hash masked"
 
 -- ⚠️ Names the OVER-APPROXIMATION out loud.  This seam has no backend
 -- discriminator (see the SCOPE note on `dictWitnessTagGuard`), so a collision that
@@ -1715,7 +1789,8 @@ nativeDictTagSpace = "native (LLVM) i64 dict-witness word `hashName` -- BOTH bac
 -- the deliberate direction: a loud refusal on a rare program beats a silent wrong
 -- dispatch under `--target wasm`, and the fix (rename one type) clears both.
 wasmDictTagSpace : String
-wasmDictTagSpace = "wasm (WasmGC) 30-bit i31 dict tag `dictTag` (`hashName` masked to the low 30 bits) -- the full i64 tags are DISTINCT, so native codegen would be correct here; refused anyway because a wasm-target build cannot rule out this narrower width"
+wasmDictTagSpace =
+  "wasm (WasmGC) 30-bit i31 dict tag `dictTag` (`hashName` masked to the low 30 bits) -- the full i64 tags are DISTINCT, so native codegen would be correct here; refused anyway because a wasm-target build cannot rule out this narrower width"
 
 -- every route word a dict witness for this impl can carry, paired with the impl's
 -- own identity (its canonical dispatch key, which is unique per declared impl) and
@@ -1733,7 +1808,10 @@ dictRouteWordsOf (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, met
   flatMap (dictRouteWordRowsFor tag key) methods
 dictRouteWordsOf _ = []
 
-dictRouteWordRowsFor : String -> String -> ImplMethod -> List (String, String, String)
+dictRouteWordRowsFor : String ->
+  String ->
+  ImplMethod ->
+  List (String, String, String)
 dictRouteWordRowsFor tag key (ImplMethod mname _ _) =
   [(mname, tag, key), (mname, key, key)]
 
@@ -1743,11 +1821,15 @@ dictRouteWordRowsFor tag key (ImplMethod mname _ _) =
 -- prelude+module decl list duplicates each prelude impl and a multi-clause impl
 -- contributes one row per clause; both still collapse here and can never fire the
 -- check.
-dedupRouteWords : List (String, String, String) -> OrdMap Unit -> List (String, String, String)
+dedupRouteWords : List (String, String, String) ->
+  OrdMap Unit ->
+  List (String, String, String)
 dedupRouteWords [] _ = []
-dedupRouteWords ((m, w, owner)::rest) seen
+dedupRouteWords ((m, w, owner) :: rest) seen
   | omHasKey (dictRouteWordKey m w) seen = dedupRouteWords rest seen
-  | otherwise = (m, w, owner) :: dedupRouteWords rest (omInsert (dictRouteWordKey m w) () seen)
+  | otherwise =
+    (m, w, owner)
+      :: dedupRouteWords rest (omInsert (dictRouteWordKey m w) () seen)
 
 dictRouteWordKey : String -> String -> String
 dictRouteWordKey m w = "\{m}\n\{w}"
@@ -1765,9 +1847,13 @@ dictRouteWordKey m w = "\{m}\n\{w}"
 -- `checkImplSymbolsInjective`'s three are: they are CONTENT-derived, so a
 -- `stdout-line` pin can match them with `grep -qxF` without false-draining on a
 -- rewording of the prose around them.
-checkDictTagsInjective : String -> (String -> Int) -> List (String, String, String) -> OrdMap (String, String) -> Unit
+checkDictTagsInjective : String ->
+  (String -> Int) ->
+  List (String, String, String) ->
+  OrdMap (String, String) ->
+  Unit
 checkDictTagsInjective _ _ [] _ = ()
-checkDictTagsInjective space hash ((m, w, owner)::rest) seen =
+checkDictTagsInjective space hash ((m, w, owner) :: rest) seen =
   let t = intToString (hash w)
   let k = "\{m}\n\{t}"
   match omLookup k seen
@@ -1776,7 +1862,8 @@ checkDictTagsInjective space hash ((m, w, owner)::rest) seen =
       if owner0 == owner then
         checkDictTagsInjective space hash rest seen
       else
-        panic "emitted dict-witness tag collision: two DISTINCT impls of method `\{m}` hash to one dispatch tag.\ntag space: \{space}\ncollided tag: \{t}\nroute word 1: \{w0}\nroute word 2: \{w}\nA dict witness carries this tag, and method `\{m}`'s shared dispatcher selects an impl by comparing it against every OTHER impl of that SAME method name -- these two words ARE compared against each other at that dispatcher, so this collision is live: whichever arm the emitter happened to emit FIRST wins every call through a dictionary, silently, at exit 0. The two words above are the impls' route words: either a bare head tycon or a canonical dispatch key spelled `<module>::<Interface>|<type arguments>|`. This is NOT a naming collision you can rename your way out of by making the names more different -- `hashName` is djb2, a radix-33 polynomial over a 74-code-point alphabet, so it is genuinely non-injective (`hashName \"Az\" == hashName \"BY\"`). One of the two words above may name a type or interface from the prelude or stdlib that you do not own -- rename the OTHER one, one of your own types or interfaces involved in this collision. Please also report this message, with both words above."
+        panic
+          "emitted dict-witness tag collision: two DISTINCT impls of method `\{m}` hash to one dispatch tag.\ntag space: \{space}\ncollided tag: \{t}\nroute word 1: \{w0}\nroute word 2: \{w}\nA dict witness carries this tag, and method `\{m}`'s shared dispatcher selects an impl by comparing it against every OTHER impl of that SAME method name -- these two words ARE compared against each other at that dispatcher, so this collision is live: whichever arm the emitter happened to emit FIRST wins every call through a dictionary, silently, at exit 0. The two words above are the impls' route words: either a bare head tycon or a canonical dispatch key spelled `<module>::<Interface>|<type arguments>|`. This is NOT a naming collision you can rename your way out of by making the names more different -- `hashName` is djb2, a radix-33 polynomial over a 74-code-point alphabet, so it is genuinely non-injective (`hashName \"Az\" == hashName \"BY\"`). One of the two words above may name a type or interface from the prelude or stdlib that you do not own -- rename the OTHER one, one of your own types or interfaces involved in this collision. Please also report this message, with both words above."
 
 -- #1047: the interface IDENTITIES of every declared impl whose head tag OR
 -- canonical key is [tag] — the reverse of `ifaceImplRouteKeys`.  The emitters'
@@ -1801,7 +1888,7 @@ ifaceIdsAtTag heads tag = ifaceIdsAtTagGo tag heads
 
 ifaceIdsAtTagGo : String -> List (String, String, String, String) -> List String
 ifaceIdsAtTagGo _ [] = []
-ifaceIdsAtTagGo tag ((ifaceId, _, t, k)::rest)
+ifaceIdsAtTagGo tag ((ifaceId, _, t, k) :: rest)
   | t == tag || k == tag = ifaceId :: ifaceIdsAtTagGo tag rest
   | otherwise = ifaceIdsAtTagGo tag rest
 
@@ -1813,13 +1900,20 @@ ifaceIdsAtTagGo tag ((ifaceId, _, t, k)::rest)
 -- canonical full-type key — the same word `keyForSiteByIface` stamps into the
 -- caller's dict cell.
 export
-ifaceImplRouteKeys : List (String, String, String, String) -> String -> List String
+ifaceImplRouteKeys : List (String, String, String, String) ->
+  String ->
+  List String
 ifaceImplRouteKeys heads iface = ifaceRouteKeysGo heads iface heads
 
-ifaceRouteKeysGo : List (String, String, String, String) -> String -> List (String, String, String, String) -> List String
+ifaceRouteKeysGo : List (String, String, String, String) ->
+  String ->
+  List (String, String, String, String) ->
+  List String
 ifaceRouteKeysGo _ _ [] = []
-ifaceRouteKeysGo heads iface ((_, i, tag, key)::rest)
-  | i == iface = declRouteKey tag key (ifaceDeclHeadUnique heads i tag) :: ifaceRouteKeysGo heads iface rest
+ifaceRouteKeysGo heads iface ((_, i, tag, key) :: rest)
+  | i == iface =
+    declRouteKey tag key (ifaceDeclHeadUnique heads i tag)
+      :: ifaceRouteKeysGo heads iface rest
   | otherwise = ifaceRouteKeysGo heads iface rest
 
 declRouteKey : String -> String -> Bool -> String
@@ -1836,12 +1930,18 @@ declRouteKey tag key unique = if unique then tag else key
 -- the word, which an EMPTY table also gives — the same degrade-to-today's-output
 -- direction `ifaceDeclHeadUnique` already takes.
 export
-declHeadOfRouteWord : List (String, String, String, String) -> String -> String -> String
+declHeadOfRouteWord : List (String, String, String, String) ->
+  String ->
+  String ->
+  String
 declHeadOfRouteWord heads iface word = declHeadOfRouteWordGo iface word heads
 
-declHeadOfRouteWordGo : String -> String -> List (String, String, String, String) -> String
+declHeadOfRouteWordGo : String ->
+  String ->
+  List (String, String, String, String) ->
+  String
 declHeadOfRouteWordGo _ _ [] = ""
-declHeadOfRouteWordGo iface word ((_, i, t, k)::rest)
+declHeadOfRouteWordGo iface word ((_, i, t, k) :: rest)
   | i == iface && (t == word || k == word) = t
   | otherwise = declHeadOfRouteWordGo iface word rest
 
@@ -1858,15 +1958,22 @@ declHeadOfRouteWordGo iface word ((_, i, t, k)::rest)
 -- pre-#1036 bare-head behaviour — so a driver that supplies no decl-derived table
 -- degrades to today's output rather than mis-keying.
 export
-ifaceDeclHeadUnique : List (String, String, String, String) -> String -> String -> Bool
+ifaceDeclHeadUnique : List (String, String, String, String) ->
+  String ->
+  String ->
+  Bool
 ifaceDeclHeadUnique heads iface tag =
   listLen (declKeysAtHead heads iface tag []) <= 1
 
-declKeysAtHead : List (String, String, String, String) -> String -> String -> List String -> List String
+declKeysAtHead : List (String, String, String, String) ->
+  String ->
+  String ->
+  List String ->
+  List String
 declKeysAtHead [] _ _ acc = acc
-declKeysAtHead ((_, i, t, k)::rest) iface tag acc
+declKeysAtHead ((_, i, t, k) :: rest) iface tag acc
   | i == iface && t == tag && not (contains k acc) =
-    declKeysAtHead rest iface tag (k::acc)
+    declKeysAtHead rest iface tag (k :: acc)
   | otherwise = declKeysAtHead rest iface tag acc
 
 -- lowerImpls against a PRE-BUILT dispatch table — the multi-module driver builds
@@ -1874,10 +1981,14 @@ declKeysAtHead ((_, i, t, k)::rest) iface tag acc
 -- in the prelude needs the prelude's dispatch positions), then lowers each
 -- module's impls against it.
 export
-lowerImplsWith : List ((String, String, String), List Int) -> List Decl -> List CImplEntry
+lowerImplsWith : List ((String, String, String), List Int) ->
+  List Decl ->
+  List CImplEntry
 lowerImplsWith disp prog = flatMap (lowerDeclImpl disp) prog
 
-lowerDeclImpl : List ((String, String, String), List Int) -> Decl -> List CImplEntry
+lowerDeclImpl : List ((String, String, String), List Int) ->
+  Decl ->
+  List CImplEntry
 -- #1037: an ATTRIBUTE IS METADATA — it must never change which impls exist.  A
 -- decl attribute parses to `DAttrib attrs <decl>` (parser.parseAttrib wraps ANY
 -- decl), so `@deprecated "…" impl Speak Cat where …` reaches here as a DAttrib and
@@ -1890,15 +2001,22 @@ lowerDeclImpl disp (DAttrib _ d) = lowerDeclImpl disp d
 -- word (the definition side of the identity-bearing key `keyForSite` stamps at the
 -- call site).  Matched arm-for-arm by `eval.declImplEntries`, which threads the
 -- same field for the same reason.
-lowerDeclImpl disp (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, methods, ... }) = map (lowerImplMethod disp o ifaceName typeArgs) methods
+lowerDeclImpl disp (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, methods, ... }) =
+  map (lowerImplMethod disp o ifaceName typeArgs) methods
 -- #1047: the default carries the DECLARING interface's identity, read straight off
 -- `DInterface.ifaceOrigin` (resolve stamps it in `elaborateModules`' preamble —
 -- `stampGraphTyOrigins`, the seam the `run` path and the separate `medaka_emitter`
 -- BUILD process share, so both engines see the same identity or neither does).
-lowerDeclImpl _ (DInterface { name = ifaceName, ifaceOrigin = o, typarams = typeParams, methods, ... }) = flatMap (lowerDefault (ifaceIdentity o ifaceName) typeParams) methods
+lowerDeclImpl _ (DInterface { name = ifaceName, ifaceOrigin = o, typarams = typeParams, methods, ... }) =
+  flatMap (lowerDefault (ifaceIdentity o ifaceName) typeParams) methods
 lowerDeclImpl _ _ = []
 
-lowerImplMethod : List ((String, String, String), List Int) -> TyConOrigin -> String -> List Ty -> ImplMethod -> CImplEntry
+lowerImplMethod : List ((String, String, String), List Int) ->
+  TyConOrigin ->
+  String ->
+  List Ty ->
+  ImplMethod ->
+  CImplEntry
 lowerImplMethod disp o ifaceName typeArgs (ImplMethod mname pats body) =
   let tag = optionOr noneHeadTag (headTyconHead typeArgs)
   let key = implRouteKeyWord o ifaceName typeArgs None
@@ -1906,7 +2024,8 @@ lowerImplMethod disp o ifaceName typeArgs (ImplMethod mname pats body) =
   -- `eval.implMethodEntry`'s identical line.  `o` is already bound for `key`, so
   -- both consumers pay nothing.  These are the ONLY two `lookupPositions` call
   -- sites, and `CImplTagged`'s `positions` is where the answer is FROZEN.
-  let positions = lookupPositions (ifaceIdentity o ifaceName) ifaceName mname disp
+  let positions =
+    lookupPositions (ifaceIdentity o ifaceName) ifaceName mname disp
   CImplEntry
     mname
     (tyvarsInArgs typeArgs)
@@ -1914,7 +2033,9 @@ lowerImplMethod disp o ifaceName typeArgs (ImplMethod mname pats body) =
 
 lowerDefault : String -> List String -> IfaceMethod -> List CImplEntry
 lowerDefault _ _ (IfaceMethod _ _ None _) = []
-lowerDefault ifaceId typeParams (IfaceMethod mname _ (Some (MethodDefault pats body)) _) = [CImplEntry mname (listLen typeParams) (CImplDefault ifaceId pats (lower body))]
+lowerDefault ifaceId typeParams (IfaceMethod mname _ (Some (MethodDefault pats body)) _) = [
+  CImplEntry mname (listLen typeParams) (CImplDefault ifaceId pats (lower body)),
+]
 
 -- ── returns-self table (native backend: method-call RESULT-type inference) ───
 -- Per (interface, method): does the method's RESULT type mention an interface
@@ -1935,10 +2056,14 @@ returnsSelfTable prog = flatMap ifaceReturnsSelfEntries prog
 ifaceReturnsSelfEntries : Decl -> List ((String, String), Bool)
 -- #1037: an attribute on an `interface` must not delete it from this table either.
 ifaceReturnsSelfEntries (DAttrib _ d) = ifaceReturnsSelfEntries d
-ifaceReturnsSelfEntries (DInterface { name = ifaceName, typarams = typeParams, methods, ... }) = map (m => ifaceReturnsSelfEntry ifaceName typeParams m) methods
+ifaceReturnsSelfEntries (DInterface { name = ifaceName, typarams = typeParams, methods, ... }) =
+  map (m => ifaceReturnsSelfEntry ifaceName typeParams m) methods
 ifaceReturnsSelfEntries _ = []
 
-ifaceReturnsSelfEntry : String -> List String -> IfaceMethod -> ((String, String), Bool)
+ifaceReturnsSelfEntry : String ->
+  List String ->
+  IfaceMethod ->
+  ((String, String), Bool)
 ifaceReturnsSelfEntry ifaceName typeParams (IfaceMethod mname mty _ _) = (
   (ifaceName, mname),
   tyMentionsParams (methodResultTy mty) (headParamOnly typeParams),
@@ -1956,7 +2081,7 @@ ifaceReturnsSelfEntry ifaceName typeParams (IfaceMethod mname mty _ _) = (
 -- `ix` self-returning and mis-typing its array-slot Char result.)
 headParamOnly : List String -> List String
 headParamOnly [] = []
-headParamOnly (p::_) = [p]
+headParamOnly (p :: _) = [p]
 
 -- the RESULT type of a method type: the final tail after stripping the TyFun
 -- argument chain (and any leading constraint/effect wrappers).
@@ -1971,10 +2096,10 @@ methodResultTy t = t
 tyMentionsParams : Ty -> List String -> Bool
 tyMentionsParams (TyVar n) params = contains n params
 tyMentionsParams (TyCon { tyConName = _ }) _ = False
-tyMentionsParams (TyApp a b) params = tyMentionsParams a params
-  || tyMentionsParams b params
-tyMentionsParams (TyFun a b) params = tyMentionsParams a params
-  || tyMentionsParams b params
+tyMentionsParams (TyApp a b) params =
+  tyMentionsParams a params || tyMentionsParams b params
+tyMentionsParams (TyFun a b) params =
+  tyMentionsParams a params || tyMentionsParams b params
 tyMentionsParams (TyTuple ts) params =
   anyList (t => tyMentionsParams t params) ts
 tyMentionsParams (TyEffect _ _ t) params = tyMentionsParams t params
@@ -2004,10 +2129,14 @@ selfFnParamTable prog = flatMap ifaceSelfFnParamEntries prog
 ifaceSelfFnParamEntries : Decl -> List ((String, String), List Int)
 -- #1037
 ifaceSelfFnParamEntries (DAttrib _ d) = ifaceSelfFnParamEntries d
-ifaceSelfFnParamEntries (DInterface { name = ifaceName, typarams = typeParams, methods, ... }) = map (m => ifaceSelfFnParamEntry ifaceName typeParams m) methods
+ifaceSelfFnParamEntries (DInterface { name = ifaceName, typarams = typeParams, methods, ... }) =
+  map (m => ifaceSelfFnParamEntry ifaceName typeParams m) methods
 ifaceSelfFnParamEntries _ = []
 
-ifaceSelfFnParamEntry : String -> List String -> IfaceMethod -> ((String, String), List Int)
+ifaceSelfFnParamEntry : String ->
+  List String ->
+  IfaceMethod ->
+  ((String, String), List Int)
 ifaceSelfFnParamEntry ifaceName typeParams (IfaceMethod mname mty _ _) =
   ((ifaceName, mname), selfFnPositions 0 (methodArgTys mty) typeParams)
 
@@ -2046,10 +2175,14 @@ methodIfaceTable prog = flatMap ifaceMethodArityEntries prog
 ifaceMethodArityEntries : Decl -> List (String, (String, String, Int))
 -- #1037
 ifaceMethodArityEntries (DAttrib _ d) = ifaceMethodArityEntries d
-ifaceMethodArityEntries (DInterface { name = ifaceName, ifaceOrigin = o, methods, ... }) = map (m => ifaceMethodArityEntry (ifaceWordOf o ifaceName) ifaceName m) methods
+ifaceMethodArityEntries (DInterface { name = ifaceName, ifaceOrigin = o, methods, ... }) =
+  map (m => ifaceMethodArityEntry (ifaceWordOf o ifaceName) ifaceName m) methods
 ifaceMethodArityEntries _ = []
 
-ifaceMethodArityEntry : String -> String -> IfaceMethod -> (String, (String, String, Int))
+ifaceMethodArityEntry : String ->
+  String ->
+  IfaceMethod ->
+  (String, (String, String, Int))
 ifaceMethodArityEntry ifaceWord ifaceName (IfaceMethod mname mty _ _) =
   (mname, (ifaceName, ifaceWord, listLen (methodArgTys mty)))
 
@@ -2070,7 +2203,7 @@ ifaceMethodArityKey ifaceWord mname = "\{ifaceWord}#\{mname}"
 export
 ifaceWordOfKey : String -> String
 ifaceWordOfKey key = match splitOnChar '|' key
-  w::_ => w
+  w :: _ => w
   [] => key
 
 -- ── method → method-level constraint INTERFACE names (native backend, G7) ────
@@ -2095,7 +2228,9 @@ methodConstraintIfaceEntries (DInterface { typarams, methods, ... }) =
   flatMap (m => methodConstraintIfaceEntry typarams m) methods
 methodConstraintIfaceEntries _ = []
 
-methodConstraintIfaceEntry : List String -> IfaceMethod -> List (String, List String)
+methodConstraintIfaceEntry : List String ->
+  IfaceMethod ->
+  List (String, List String)
 methodConstraintIfaceEntry typarams (IfaceMethod mname mty _ _) =
   let ifaces = methodLevelConstraintIfaces typarams mty
   if isEmptyL ifaces then [] else [(mname, ifaces)]
@@ -2103,8 +2238,9 @@ methodConstraintIfaceEntry typarams (IfaceMethod mname mty _ _) =
 -- the interface name of each method-level constraint in [ty], in declaration
 -- order (peels TyConstrained/TyEffect like methodConstraintSlotIds).
 methodLevelConstraintIfaces : List String -> Ty -> List String
-methodLevelConstraintIfaces typarams (TyConstrained cs t) = flatMap (c => constraintIfaceIfMethodLevel typarams c) cs
-  ++ methodLevelConstraintIfaces typarams t
+methodLevelConstraintIfaces typarams (TyConstrained cs t) =
+  flatMap (c => constraintIfaceIfMethodLevel typarams c) cs
+    ++ methodLevelConstraintIfaces typarams t
 methodLevelConstraintIfaces typarams (TyEffect _ _ t) =
   methodLevelConstraintIfaces typarams t
 methodLevelConstraintIfaces _ _ = []
@@ -2123,10 +2259,10 @@ constraintArgsMentionNonParam typarams args =
 tyMentionsNonParam : Ty -> List String -> Bool
 tyMentionsNonParam (TyVar n) params = not (contains n params)
 tyMentionsNonParam (TyCon { tyConName = _ }) _ = False
-tyMentionsNonParam (TyApp a b) params = tyMentionsNonParam a params
-  || tyMentionsNonParam b params
-tyMentionsNonParam (TyFun a b) params = tyMentionsNonParam a params
-  || tyMentionsNonParam b params
+tyMentionsNonParam (TyApp a b) params =
+  tyMentionsNonParam a params || tyMentionsNonParam b params
+tyMentionsNonParam (TyFun a b) params =
+  tyMentionsNonParam a params || tyMentionsNonParam b params
 tyMentionsNonParam (TyTuple ts) params =
   anyList (t => tyMentionsNonParam t params) ts
 tyMentionsNonParam (TyEffect _ _ t) params = tyMentionsNonParam t params
@@ -2154,7 +2290,8 @@ ctorFieldTypeNames prog = flatMap ctorFieldTypeEntries prog
 ctorFieldTypeEntries : Decl -> List (String, List String)
 ctorFieldTypeEntries (DData { dataCtors = variants }) =
   map variantFieldTypeEntry variants
-ctorFieldTypeEntries (DNewtype { newtypeCtor = con, newtypeFieldTy = fieldTy }) = [(con, [tyHeadName fieldTy])]
+ctorFieldTypeEntries (DNewtype { newtypeCtor = con, newtypeFieldTy = fieldTy }) =
+  [(con, [tyHeadName fieldTy])]
 ctorFieldTypeEntries (DAttrib _ d) = ctorFieldTypeEntries d
 ctorFieldTypeEntries _ = []
 
@@ -2233,11 +2370,12 @@ declSigTypeEntries _ = []
 -- exemption holds on both sides of the seam; this filter is what keeps it true
 -- for a runtime extern name that no `externCatalog` family predicate claims.)
 export
-ffiExternTypeNames : List Decl -> List Decl -> List (String, (List String, String))
+ffiExternTypeNames : List Decl ->
+  List Decl ->
+  List (String, (List String, String))
 ffiExternTypeNames runtimeDecls userDecls =
-  validateFfiExternTypeNames (ffiExternRows
-    (externDeclNamesOf runtimeDecls)
-    userDecls)
+  validateFfiExternTypeNames
+    (ffiExternRows (externDeclNamesOf runtimeDecls) userDecls)
 
 -- The canonical typed producer lives in `types.typecheck`, but this guard is a
 -- property of the FINISHED bare-name-keyed emitter table rather than of one
@@ -2245,7 +2383,8 @@ ffiExternTypeNames runtimeDecls userDecls =
 -- the untyped snapshot fallback share the existing one-symbol/one-signature
 -- refusal without asking typecheck to import lowering (which would be a cycle).
 export
-validateFfiExternTypeNames : List (String, (List String, String)) -> List (String, (List String, String))
+validateFfiExternTypeNames : List (String, (List String, String)) ->
+  List (String, (List String, String))
 validateFfiExternTypeNames rows =
   -- 🚨 THE INDEX IS BARE-NAME KEYED ACROSS THE WHOLE PROGRAM, so a name declared
   -- twice with two different signatures is a contradiction the index cannot hold
@@ -2274,14 +2413,18 @@ validateFfiExternTypeNames rows =
 -- ⚠️ The three data lines are UNINDENTED on purpose, matching
 -- `checkImplSymbolsInjective`: they are CONTENT-derived, so a `stdout-line` pin can
 -- match them with `grep -qxF` without false-draining on a rewording of the prose.
-ffiCheckExternRowsDistinct : OrdMap String -> List (String, (List String, String)) -> Unit
+ffiCheckExternRowsDistinct : OrdMap String ->
+  List (String, (List String, String)) ->
+  Unit
 ffiCheckExternRowsDistinct _ [] = ()
-ffiCheckExternRowsDistinct seen ((n, sh)::rest) =
+ffiCheckExternRowsDistinct seen ((n, sh) :: rest) =
   let k = ffiRowShapeKey sh
   match omLookup n seen
     None => ffiCheckExternRowsDistinct (omInsert n k seen) rest
     Some prev if prev == k => ffiCheckExternRowsDistinct seen rest
-    Some prev => panic "foreign declaration collision: the C symbol `\{n}` is declared twice with different signatures.\ncolliding symbol: \{n}\ndeclaration 1: \{prev}\ndeclaration 2: \{k}\nA foreign declaration's name IS the C symbol it links to, so both declarations name ONE C function and only one of these two signatures can describe it. The other module's calls would be marshalled through the wrong signature -- a wrong value at exit 0, or a memory fault. Give the two declarations the same signature, or declare the differing one against a differently-named C symbol."
+    Some prev =>
+      panic
+        "foreign declaration collision: the C symbol `\{n}` is declared twice with different signatures.\ncolliding symbol: \{n}\ndeclaration 1: \{prev}\ndeclaration 2: \{k}\nA foreign declaration's name IS the C symbol it links to, so both declarations name ONE C function and only one of these two signatures can describe it. The other module's calls would be marshalled through the wrong signature -- a wrong value at exit 0, or a memory fault. Give the two declarations the same signature, or declare the differing one against a differently-named C symbol."
 
 -- The rendered `(argument heads, return head)` row, for the collision message and
 -- the comparison behind it.  Same projection the index itself stores, so the guard
@@ -2292,10 +2435,10 @@ ffiRowShapeKey (args, ret) = "\{joinWith "," args} -> \{ret}"
 -- the `DExtern` names of a decl list, in order.
 externDeclNamesOf : List Decl -> List String
 externDeclNamesOf [] = []
-externDeclNamesOf ((DExtern _ n _)::rest) = n :: externDeclNamesOf rest
-externDeclNamesOf ((DAttrib _ inner)::rest) = externDeclNamesOf [inner]
-  ++ externDeclNamesOf rest
-externDeclNamesOf (_::rest) = externDeclNamesOf rest
+externDeclNamesOf ((DExtern _ n _) :: rest) = n :: externDeclNamesOf rest
+externDeclNamesOf ((DAttrib _ inner) :: rest) =
+  externDeclNamesOf [inner] ++ externDeclNamesOf rest
+externDeclNamesOf (_ :: rest) = externDeclNamesOf rest
 
 -- Same (param-head-names, return-head-name) shape as `declSigTypeEntries`, so
 -- the emitter reads one row type for both tables.  `tyHeadName` collapses
@@ -2305,12 +2448,14 @@ externDeclNamesOf (_::rest) = externDeclNamesOf rest
 -- so `Array` in this table always means `Array Int`.
 ffiExternRows : List String -> List Decl -> List (String, (List String, String))
 ffiExternRows _ [] = []
-ffiExternRows builtins ((DExtern _ n ty)::rest)
+ffiExternRows builtins ((DExtern _ n ty) :: rest)
   | contains n builtins = ffiExternRows builtins rest
-  | otherwise = (n, (map tyHeadName (methodArgTys ty), tyHeadName (methodRetTy ty))) :: ffiExternRows builtins rest
-ffiExternRows builtins ((DAttrib _ inner)::rest) =
-  ffiExternRows builtins (inner::rest)
-ffiExternRows builtins (_::rest) = ffiExternRows builtins rest
+  | otherwise =
+    (n, (map tyHeadName (methodArgTys ty), tyHeadName (methodRetTy ty)))
+      :: ffiExternRows builtins rest
+ffiExternRows builtins ((DAttrib _ inner) :: rest) =
+  ffiExternRows builtins (inner :: rest)
+ffiExternRows builtins (_ :: rest) = ffiExternRows builtins rest
 
 -- the RESULT type of a (possibly-constrained, possibly-effectful) function type
 -- (the `r` of `a -> b -> … -> r`); a non-function type is its own result.
@@ -2323,7 +2468,7 @@ methodRetTy t = t
 -- positions (0-based) whose type is a TyFun whose result mentions a param.
 selfFnPositions : Int -> List Ty -> List String -> List Int
 selfFnPositions _ [] _ = []
-selfFnPositions i (t::ts) params
+selfFnPositions i (t :: ts) params
   | tyIsFunReturningSelf t params = i :: selfFnPositions (i + 1) ts params
   | otherwise = selfFnPositions (i + 1) ts params
 
@@ -2336,34 +2481,34 @@ tyIsFunReturningSelf _ _ = False
 
 funClausesOf : List Decl -> List (String, CClause)
 funClausesOf [] = []
-funClausesOf ((DFunDef _ n pats body)::rest) =
+funClausesOf ((DFunDef _ n pats body) :: rest) =
   (n, CClause pats (lower body)) :: funClausesOf rest
 -- Top-level `let rec … with …` (DLetGroup): flatten each binding's clauses
 -- into (name, CClause) entries, mirroring eval.mdk's funDefs/letGroupDefs.
-funClausesOf ((DLetGroup _ binds)::rest) = letGroupClausesOf binds
-  ++ funClausesOf rest
-funClausesOf ((DAttrib _ d)::rest) = funClausesOf (d::rest)
-funClausesOf (_::rest) = funClausesOf rest
+funClausesOf ((DLetGroup _ binds) :: rest) =
+  letGroupClausesOf binds ++ funClausesOf rest
+funClausesOf ((DAttrib _ d) :: rest) = funClausesOf (d :: rest)
+funClausesOf (_ :: rest) = funClausesOf rest
 
 letGroupClausesOf : List LetBind -> List (String, CClause)
 letGroupClausesOf [] = []
-letGroupClausesOf ((LetBind n clauses)::rest) = map (lowerLetBind n) clauses
-  ++ letGroupClausesOf rest
+letGroupClausesOf ((LetBind n clauses) :: rest) =
+  map (lowerLetBind n) clauses ++ letGroupClausesOf rest
 
 lowerLetBind : String -> FunClause -> (String, CClause)
 lowerLetBind n (FunClause pats body) = (n, CClause pats (lower body))
 
 ctorArities : List Decl -> List (String, Int)
 ctorArities [] = []
-ctorArities ((DData { dataCtors = variants })::rest) = map variantArity variants
-  ++ ctorArities rest
+ctorArities ((DData { dataCtors = variants }) :: rest) =
+  map variantArity variants ++ ctorArities rest
 -- A newtype is structurally a single-constructor, single-field data type, so its
 -- constructor is a callable arity-1 ctor (matches the oracle's `make_ctor con 1`).
 -- Without this the emitter sees `UserId 42` as an unbound variable.
-ctorArities ((DNewtype { newtypeCtor = con })::rest) =
+ctorArities ((DNewtype { newtypeCtor = con }) :: rest) =
   (con, 1) :: ctorArities rest
-ctorArities ((DAttrib _ d)::rest) = ctorArities (d::rest)
-ctorArities (_::rest) = ctorArities rest
+ctorArities ((DAttrib _ d) :: rest) = ctorArities (d :: rest)
+ctorArities (_ :: rest) = ctorArities rest
 
 variantArity : Variant -> (String, Int)
 variantArity (Variant n payload) = (n, payloadArityL payload)

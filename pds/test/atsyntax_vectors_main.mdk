@@ -39,9 +39,10 @@ isSkippable line = line == "" || startsWith "#" line
 
 gradeLines : (String -> Result String Unit) -> Bool -> List String -> (Int, Int)
 gradeLines validate expectOk [] = (0, 0)
-gradeLines validate expectOk (line::rest) =
+gradeLines validate expectOk (line :: rest) =
   let (restPass, restTotal) = gradeLines validate expectOk rest
-  if isSkippable line then (restPass, restTotal)
+  if isSkippable line then
+    (restPass, restTotal)
   else
     let accepted = match validate line
       Ok () => True
@@ -58,19 +59,30 @@ mustReadLines path = match readLines path
    `None` for "must be 100%"; `Some n` pins a documented, deliberate,
    pre-existing gap (see the `tid` call site below) so a FURTHER regression
    still reds this gate instead of being silently absorbed. -}
-gradeCorpusChecked : String -> (String -> Result String Unit) -> String -> String -> Option Int -> <IO> Bool
+gradeCorpusChecked : String ->
+  (String -> Result String Unit) ->
+  String ->
+  String ->
+  Option Int ->
+  <IO> Bool
 gradeCorpusChecked label validate validPath invalidPath expectedValidPass =
   let validLines = mustReadLines validPath
   let invalidLines = mustReadLines invalidPath
   let (validPass, validTotal) = gradeLines validate True validLines
   let (invalidPass, invalidTotal) = gradeLines validate False invalidLines
-  let () = println "\{label}: \{intToString validPass}/\{intToString validTotal} valid accepted, \{intToString invalidPass}/\{intToString invalidTotal} invalid rejected"
+  let () =
+    println
+      "\{label}: \{intToString validPass}/\{intToString validTotal} valid accepted, \{intToString invalidPass}/\{intToString invalidTotal} invalid rejected"
   let validOk = match expectedValidPass
     None => validPass == validTotal
     Some expected => validPass == expected
   validOk && invalidPass == invalidTotal && validTotal > 0 && invalidTotal > 0
 
-gradeCorpus : String -> (String -> Result String Unit) -> String -> String -> <IO> Bool
+gradeCorpus : String ->
+  (String -> Result String Unit) ->
+  String ->
+  String ->
+  <IO> Bool
 gradeCorpus label validate validPath invalidPath =
   gradeCorpusChecked label validate validPath invalidPath None
 
@@ -79,7 +91,11 @@ main = match args ()
   [aturiValid, aturiInvalid, atidentifierValid, atidentifierInvalid, didValid, didInvalid, handleValid, handleInvalid, nsidValid, nsidInvalid, recordkeyValid, recordkeyInvalid, tidValid, tidInvalid] =>
     let results = [
       gradeCorpus "aturi" validateAtUri aturiValid aturiInvalid,
-      gradeCorpus "atidentifier" validateAtIdentifier atidentifierValid atidentifierInvalid,
+      gradeCorpus
+        "atidentifier"
+        validateAtIdentifier
+        atidentifierValid
+        atidentifierInvalid,
       gradeCorpus "did" validateDid didValid didInvalid,
       gradeCorpus "handle" validateHandle handleValid handleInvalid,
       gradeCorpus "nsid" nsidValidate nsidValid nsidInvalid,
@@ -91,11 +107,22 @@ main = match args ()
       -- assertions on "c222222222222". Pinning the count (not just printing
       -- it) means a further regression still reds this gate.
       gradeCorpusChecked "tid" tidValidate tidValid tidInvalid (Some 5),
-      gradeCorpus "repo-validateRkey" repoRkeyValidate recordkeyValid recordkeyInvalid,
-      gradeCorpus "repo-validateCollection" repoCollectionValidate nsidValid nsidInvalid,
+      gradeCorpus
+        "repo-validateRkey"
+        repoRkeyValidate
+        recordkeyValid
+        recordkeyInvalid,
+      gradeCorpus
+        "repo-validateCollection"
+        repoCollectionValidate
+        nsidValid
+        nsidInvalid,
     ]
-    if all (r => r) results then println "TOTAL: PASS"
+    if all (r => r) results then
+      println "TOTAL: PASS"
     else
       let () = println "TOTAL: FAIL"
       exit 1
-  _ => panic "usage: atsyntax_vectors_main <aturi_valid> <aturi_invalid> <atidentifier_valid> <atidentifier_invalid> <did_valid> <did_invalid> <handle_valid> <handle_invalid> <nsid_valid> <nsid_invalid> <recordkey_valid> <recordkey_invalid> <tid_valid> <tid_invalid>"
+  _ =>
+    panic
+      "usage: atsyntax_vectors_main <aturi_valid> <aturi_invalid> <atidentifier_valid> <atidentifier_invalid> <did_valid> <did_invalid> <handle_valid> <handle_invalid> <nsid_valid> <nsid_invalid> <recordkey_valid> <recordkey_invalid> <tid_valid> <tid_invalid>"

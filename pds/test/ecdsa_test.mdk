@@ -20,7 +20,8 @@ signature value = match ecdsaSignatureFromCompact (bytes value)
   Err message => panic "ecdsa_test: invalid fixed signature: \{message}"
 
 knownCompact : String
-knownCompact = "a0b37f8fba683cc68f6574cd43b39f0343a50008bf6ccea9d13231d9e7e2e1e411edc8d307254296264aebfc3dc76cd8b668373a072fd64665b50000e9fcce52"
+knownCompact =
+  "a0b37f8fba683cc68f6574cd43b39f0343a50008bf6ccea9d13231d9e7e2e1e411edc8d307254296264aebfc3dc76cd8b668373a072fd64665b50000e9fcce52"
 
 test "compact P1363 signatures round trip as exactly 64 bytes" =
   let parsed = signature knownCompact
@@ -28,10 +29,24 @@ test "compact P1363 signatures round trip as exactly 64 bytes" =
   expectTrue (arrayLength compact == 64 && compact == bytes knownCompact)
 
 test "compact parsing rejects zero, range, and high-S components" =
-  let zeroR = bytes "000000000000000000000000000000000000000000000000000000000000000011edc8d307254296264aebfc3dc76cd8b668373a072fd64665b50000e9fcce52"
-  let zeroS = bytes "a0b37f8fba683cc68f6574cd43b39f0343a50008bf6ccea9d13231d9e7e2e1e40000000000000000000000000000000000000000000000000000000000000000"
-  let rangeR = bytes "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd036414111edc8d307254296264aebfc3dc76cd8b668373a072fd64665b50000e9fcce52"
-  let rangeS = bytes "a0b37f8fba683cc68f6574cd43b39f0343a50008bf6ccea9d13231d9e7e2e1e4fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141"
-  let highS = bytes "a0b37f8fba683cc68f6574cd43b39f0343a50008bf6ccea9d13231d9e7e2e1e4ee12372cf8dabd69d9b51403c23893260446a5aca818c9f55a1d5e8be63972ef"
+  let zeroR =
+    bytes
+      "000000000000000000000000000000000000000000000000000000000000000011edc8d307254296264aebfc3dc76cd8b668373a072fd64665b50000e9fcce52"
+  let zeroS =
+    bytes
+      "a0b37f8fba683cc68f6574cd43b39f0343a50008bf6ccea9d13231d9e7e2e1e40000000000000000000000000000000000000000000000000000000000000000"
+  let rangeR =
+    bytes
+      "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd036414111edc8d307254296264aebfc3dc76cd8b668373a072fd64665b50000e9fcce52"
+  let rangeS =
+    bytes
+      "a0b37f8fba683cc68f6574cd43b39f0343a50008bf6ccea9d13231d9e7e2e1e4fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141"
+  let highS =
+    bytes
+      "a0b37f8fba683cc68f6574cd43b39f0343a50008bf6ccea9d13231d9e7e2e1e4ee12372cf8dabd69d9b51403c23893260446a5aca818c9f55a1d5e8be63972ef"
   expectTrue
-    (isErr (ecdsaSignatureFromCompact zeroR) && isErr (ecdsaSignatureFromCompact zeroS) && isErr (ecdsaSignatureFromCompact rangeR) && isErr (ecdsaSignatureFromCompact rangeS) && isErr (ecdsaSignatureFromCompact highS))
+    (isErr (ecdsaSignatureFromCompact zeroR)
+      && isErr (ecdsaSignatureFromCompact zeroS)
+      && isErr (ecdsaSignatureFromCompact rangeR)
+      && isErr (ecdsaSignatureFromCompact rangeS)
+      && isErr (ecdsaSignatureFromCompact highS))

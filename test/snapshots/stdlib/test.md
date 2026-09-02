@@ -1,5 +1,5 @@
 # META
-source_lines=164
+source_lines=165
 stages=DESUGAR,MARK
 # SOURCE
 {- | Assertions for unit tests.
@@ -136,7 +136,7 @@ goTests : List (String, Unit -> Expectation) -> Int -> Int -> <IO> Bool
 goTests [] passed failed =
   println "\n\{intToString passed} passed, \{intToString failed} failed"
   eq failed 0
-goTests ((name, thunk)::rest) passed failed = match thunk ()
+goTests ((name, thunk) :: rest) passed failed = match thunk ()
   Pass =>
     println ("  ok   " ++ name)
     goTests rest (passed + 1) failed
@@ -157,15 +157,16 @@ runTests tests = goTests tests 0 0
 -- payload; an assertion library whose results compare equal regardless of
 -- the failure message would make every `expectEqual` over an `Expectation`
 -- pass vacuously.
-prop "Eq Expectation separates constructors and payloads" (m : String) = pass == pass
-  && fail m == fail m
-  && pass == fail m == False
-  && fail m == fail (m ++ "!") == False
+prop "Eq Expectation separates constructors and payloads" (m : String) =
+  pass == pass
+    && fail m == fail m
+    && pass == fail m == False
+    && fail m == fail (m ++ "!") == False
 
 -- LAW: `Debug` agrees with `Eq`: equal expectations render identically,
 -- distinguishable ones render differently.
-prop "Debug Expectation agrees with Eq" (m : String) = debug (fail m) == debug (fail m)
-  && debug (fail m) == debug pass == False
+prop "Debug Expectation agrees with Eq" (m : String) =
+  debug (fail m) == debug (fail m) && debug (fail m) == debug pass == False
 # DESUGAR
 (DData Public "Expectation" () ((variant "Pass" (ConPos)) (variant "Fail" (ConPos (TyCon "String")))) ())
 (DImpl true "Eq" ((TyCon "Expectation")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Pass") (PCon "Pass")) () (EVar "True")) (arm (PTuple (PCon "Fail" (PVar "__a0")) (PCon "Fail" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple PWild PWild) () (EVar "False"))))))

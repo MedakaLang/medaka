@@ -1,5 +1,5 @@
 # META
-source_lines=347
+source_lines=366
 stages=DESUGAR,MARK
 # SOURCE
 -- Structural S-expression dump of the AST. Tags are the
@@ -53,7 +53,7 @@ joinSp xs = joinWith " " xs
 
 export
 node : String -> List String -> String
-node tag parts = "(" ++ joinSp (tag::parts) ++ ")"
+node tag parts = "(" ++ joinSp (tag :: parts) ++ ")"
 
 export
 slist : List String -> String
@@ -254,21 +254,42 @@ declSexp (DTypeSig p n t) = node "DTypeSig" [boolStr p, escStr n, tySexp t]
 declSexp (DExtern p n t) = node "DExtern" [boolStr p, escStr n, tySexp t]
 declSexp (DFunDef p n ps b) =
   node "DFunDef" [boolStr p, escStr n, slist (map patSexp ps), exprSexp b]
-declSexp (DData { dataVis = vis, dataName = n, dataParams = ps, dataCtors = vs, dataDerives = ds }) = node "DData" [visSexp vis, escStr n, slist (map escStr ps), slist (map variantSexp vs), slist (map (d => escStr (deriveRefName d)) ds)]
+declSexp (DData { dataVis = vis, dataName = n, dataParams = ps, dataCtors = vs, dataDerives = ds }) = node
+  "DData"
+  [
+    visSexp vis,
+    escStr n,
+    slist (map escStr ps),
+    slist (map variantSexp vs),
+    slist (map (d => escStr (deriveRefName d)) ds),
+  ]
 declSexp (DUse pub path _) = node "DUse" [boolStr pub, usePathSexp path]
 declSexp (DEffect pub n dom) =
   node "DEffect" [boolStr pub, escStr n, optStrSexp dom]
-declSexp (DProp pub name params body) = node
-  "DProp"
-  [boolStr pub, escStr name, slist (map propParamSexp params), exprSexp body]
+declSexp (DProp pub name params body) = node "DProp" [
+  boolStr pub,
+  escStr name,
+  slist (map propParamSexp params),
+  exprSexp body,
+]
 declSexp (DTest pub name body) =
   node "DTest" [boolStr pub, escStr name, exprSexp body]
 declSexp (DBench pub name body) =
   node "DBench" [boolStr pub, escStr name, exprSexp body]
 -- #1110: `tyAliasOrigin` is STRIPPED, exactly as `TyCon`'s origin and `ELoc` are.
 -- That is what keeps the dump byte-identical across the carrier PRs.
-declSexp (DTypeAlias { tyAliasPub = p, tyAliasName = n, tyAliasParams = ps, tyAliasRhs = t }) = node "DTypeAlias" [boolStr p, escStr n, slist (map escStr ps), tySexp t]
-declSexp (DNewtype { newtypePub = p, newtypeName = n, newtypeParams = ps, newtypeCtor = con, newtypeFieldTy = fty, newtypeDerives = ds }) = node "DNewtype" [boolStr p, escStr n, slist (map escStr ps), escStr con, tySexp fty, slist (map (d => escStr (deriveRefName d)) ds)]
+declSexp (DTypeAlias { tyAliasPub = p, tyAliasName = n, tyAliasParams = ps, tyAliasRhs = t }) =
+  node "DTypeAlias" [boolStr p, escStr n, slist (map escStr ps), tySexp t]
+declSexp (DNewtype { newtypePub = p, newtypeName = n, newtypeParams = ps, newtypeCtor = con, newtypeFieldTy = fty, newtypeDerives = ds }) = node
+  "DNewtype"
+  [
+    boolStr p,
+    escStr n,
+    slist (map escStr ps),
+    escStr con,
+    tySexp fty,
+    slist (map (d => escStr (deriveRefName d)) ds),
+  ]
 declSexp (DLetGroup p binds) =
   node "DLetGroup" [boolStr p, slist (map letBindSexp binds)]
 declSexp (DAttrib attrs d) =
@@ -284,15 +305,13 @@ declSexp (DInterface { pub, def, name, typarams, supers, methods }) = node
     slist (map superSexp supers),
     slist (map ifaceMethodSexp methods),
   ]
-declSexp (DImpl { pub, iface, tys, reqs, methods }) = node
-  "DImpl"
-  [
-    boolStr pub,
-    escStr iface,
-    slist (map tySexp tys),
-    slist (map requireSexp reqs),
-    slist (map implMethodSexp methods),
-  ]
+declSexp (DImpl { pub, iface, tys, reqs, methods }) = node "DImpl" [
+  boolStr pub,
+  escStr iface,
+  slist (map tySexp tys),
+  slist (map requireSexp reqs),
+  slist (map implMethodSexp methods),
+]
 
 attrSexp : Attr -> String
 attrSexp (AttrDeprecated s) = node "AttrDeprecated" [escStr s]

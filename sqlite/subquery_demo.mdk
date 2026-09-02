@@ -22,10 +22,12 @@ import lib.sqlstmt.{queryString}
 import demo_support.{printRows, showCellRow}
 
 usersSql : String
-usersSql = "CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT, age INTEGER, city TEXT)"
+usersSql =
+  "CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT, age INTEGER, city TEXT)"
 
 ordersSql : String
-ordersSql = "CREATE TABLE orders(id INTEGER PRIMARY KEY, uid INTEGER, amount INTEGER, qty INTEGER)"
+ordersSql =
+  "CREATE TABLE orders(id INTEGER PRIMARY KEY, uid INTEGER, amount INTEGER, qty INTEGER)"
 
 usersRows : List (List Cell)
 usersRows = [
@@ -63,7 +65,7 @@ runAll : Db -> List String -> <IO> Unit
 runAll _ [] = ()
 -- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
 -- lint-disable-next-line rule-duplicate-body
-runAll db (sql::rest) =
+runAll db (sql :: rest) =
   let _ = runSql db sql
   runAll db rest
 

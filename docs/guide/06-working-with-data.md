@@ -25,7 +25,7 @@ import vector as V
 
 main =
   let xs = [3, 1, 2]
-  println (0::xs)
+  println (0 :: xs)
   let arr = A.fromList xs
   arr[0] := 99
   println arr
@@ -237,8 +237,12 @@ import map.{Map, get, toList, insertWith}
 
 data Category = Food | Housing | Books deriving (Eq, Ord, Debug)
 
-data Expense =
-  | { date : String, payee : String, amount : Float, category : Category }
+data Expense = {
+  date : String,
+  payee : String,
+  amount : Float,
+  category : Category,
+}
 
 impl Display Category where
   display Food = "food"
@@ -277,11 +281,11 @@ total : List Expense -> Float
 total xs = xs |> map (e => e.amount) |> fold (+) 0.0
 
 byCategory : List Expense -> Map Category Float
-byCategory xs = fold (m e => insertWith (+) e.category e.amount m) Map {  } xs
+byCategory xs = fold (m e => insertWith (+) e.category e.amount m) Map {} xs
 
 printAll : Display a => List a -> <IO> Unit
 printAll [] = ()
-printAll (x::xs) =
+printAll (x :: xs) =
   println x
   printAll xs
 

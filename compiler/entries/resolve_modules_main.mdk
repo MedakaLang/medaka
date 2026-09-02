@@ -20,8 +20,10 @@ import frontend.resolve.{resolveModulesToLines}
 import support.path.{modIdOf}
 
 main = match args ()
-  runtimeP::coreP::f::rest => run runtimeP coreP (f::rest)
-  _ => ePutStrLn "usage: medaka run compiler/entries/resolve_modules_main.mdk <runtime.mdk> <core.mdk> <mod1.mdk> [mod2.mdk ...]"
+  runtimeP :: coreP :: f :: rest => run runtimeP coreP (f :: rest)
+  _ =>
+    ePutStrLn
+      "usage: medaka run compiler/entries/resolve_modules_main.mdk <runtime.mdk> <core.mdk> <mod1.mdk> [mod2.mdk ...]"
 
 -- last path component, with the `.mdk` suffix stripped (flat module IDs):
 -- modIdOf now lives in support/path.mdk.
@@ -29,7 +31,7 @@ main = match args ()
 -- read + parse + desugar each module into a (modId, decls) pair, in order
 readModules : List String -> <IO> Result String (List (String, List Decl))
 readModules [] = Ok []
-readModules (f::rest) = match readFile f
+readModules (f :: rest) = match readFile f
   Err e => Err e
   Ok src => map ((modIdOf f, desugar (parse src)) :: _) (readModules rest)
 

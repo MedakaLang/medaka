@@ -173,9 +173,11 @@ roundTripBack src s1 =
 roundTripCompare : String -> Select -> Select -> String -> RT
 roundTripCompare src s1 s2 txt =
   if s1 /= s2 then
-    RtFail "\{src}  ==> Select CHANGED\n      first : \{txt}\n      second: \{renderSelect s2}"
+    RtFail
+      "\{src}  ==> Select CHANGED\n      first : \{txt}\n      second: \{renderSelect s2}"
   else if renderSelect s2 /= txt then
-    RtFail "\{src}  ==> render is not a fixpoint: `\{txt}` vs `\{renderSelect s2}`"
+    RtFail
+      "\{src}  ==> render is not a fixpoint: `\{txt}` vs `\{renderSelect s2}`"
   else
     RtOk
 
@@ -183,7 +185,7 @@ rtFailures : List String -> List String
 rtFailures [] = []
 -- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
 -- lint-disable-next-line rule-duplicate-body
-rtFailures (s::rest) = match roundTrip s
+rtFailures (s :: rest) = match roundTrip s
   RtOk => rtFailures rest
   RtFail m => m :: rtFailures rest
 
@@ -245,9 +247,11 @@ rejects = [
 
 rejFailures : List String -> List String
 rejFailures [] = []
-rejFailures (s::rest) = match parseSelect s
+rejFailures (s :: rest) = match parseSelect s
   Err _ => rejFailures rest
-  Ok sel => "ACCEPTED (should be Err): `\{s}`  ==> \{renderSelect sel}" :: rejFailures rest
+  Ok sel =>
+    "ACCEPTED (should be Err): `\{s}`  ==> \{renderSelect sel}"
+      :: rejFailures rest
 
 -- ---------------------------------------------------------------------------
 -- 3. Shape assertions — the EXACT canonical rendering, spelled out.
@@ -304,7 +308,7 @@ shapeCases = [
 
 shapeFailures : List (String, String) -> List String
 shapeFailures [] = []
-shapeFailures ((src, want)::rest) = match parseSelect src
+shapeFailures ((src, want) :: rest) = match parseSelect src
   Err e => "\{src}  ==> parse failed: \{e}" :: shapeFailures rest
   Ok sel => shapeCompare src want (renderSelect sel) (shapeFailures rest)
 
@@ -315,7 +319,7 @@ shapeCompare src want got rest =
   if want == got then
     rest
   else
-    "\{src}\n      want: \{want}\n      got : \{got}"::rest
+    "\{src}\n      want: \{want}\n      got : \{got}" :: rest
 
 -- ---------------------------------------------------------------------------
 -- Report
@@ -333,10 +337,16 @@ main =
   let rejBad = rejFailures rejects
   let shapeBad = shapeFailures shapeCases
   let bad = length rtBad + length rejBad + length shapeBad
-  let _ = println "round-trip (parseSelect . renderSelect == id): \{length corpus - length rtBad}/\{length corpus} \{verdict (length rtBad)}"
+  let _ =
+    println
+      "round-trip (parseSelect . renderSelect == id): \{length corpus - length rtBad}/\{length corpus} \{verdict (length rtBad)}"
   let _ = print (bullet rtBad)
-  let _ = println "rejection  (unsupported SQL is a clean Err):   \{length rejects - length rejBad}/\{length rejects} \{verdict (length rejBad)}"
+  let _ =
+    println
+      "rejection  (unsupported SQL is a clean Err):   \{length rejects - length rejBad}/\{length rejects} \{verdict (length rejBad)}"
   let _ = print (bullet rejBad)
-  let _ = println "shape      (exact canonical rendering):        \{length shapeCases - length shapeBad}/\{length shapeCases} \{verdict (length shapeBad)}"
+  let _ =
+    println
+      "shape      (exact canonical rendering):        \{length shapeCases - length shapeBad}/\{length shapeCases} \{verdict (length shapeBad)}"
   let _ = print (bullet shapeBad)
   println "TOTAL: \{verdict bad}"

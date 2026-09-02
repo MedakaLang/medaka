@@ -75,8 +75,19 @@ emitTail : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
 emitTail runtimeDecls coreD modules2 =
   let allDecls0 = coreD ++ flatMap snd modules2
   let allDecls = dceFilter allDecls0
-  let _ = preludeReturnPosDictNames coreD allDecls ++ preludeArgPosDictNames coreD allDecls ++ constrainedSigNames allDecls
-  let input = makeWasmEmitInputFull (methodIfaceTable allDecls) (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls) (ctorFieldTypeNames allDecls) (mainTypeIsFloat ()) (declaredRecordFieldOrders allDecls) (validateFfiExternTypeNames (checkedFfiExternTypeNamesModules modules2)) (ifaceImplHeadTable allDecls)
+  let _ =
+    preludeReturnPosDictNames coreD allDecls
+      ++ preludeArgPosDictNames coreD allDecls
+      ++ constrainedSigNames allDecls
+  let input =
+    makeWasmEmitInputFull
+      (methodIfaceTable allDecls)
+      (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
+      (ctorFieldTypeNames allDecls)
+      (mainTypeIsFloat ())
+      (declaredRecordFieldOrders allDecls)
+      (validateFfiExternTypeNames (checkedFfiExternTypeNamesModules modules2))
+      (ifaceImplHeadTable allDecls)
   let lowered = lowerProgramEmit TargetWasm allDecls
   let filtered = wasmReachFilter lowered
   -- MEDAKA_STATS reporting hook (S5, #2359 closure): the S5 gate's "emitted-vs-
@@ -90,10 +101,12 @@ emitTail runtimeDecls coreD modules2 =
   -- both `programUnitCount` walks, not just the print — is skipped when
   -- MEDAKA_STATS is unset.
   let statsOn = statsEnabled ()
-  let _ = if statsOn then emitStats True [
-    ("wasm-reach-total-units", programUnitCount lowered),
-    ("wasm-reach-kept-units", programUnitCount filtered),
-  ] else ()
+  let _ =
+    if statsOn then
+      emitStats True [
+        ("wasm-reach-total-units", programUnitCount lowered),
+        ("wasm-reach-kept-units", programUnitCount filtered),
+      ]
   putStr (emitProgram input filtered)
 
 -- The unit count `backend.wasm_reach.wasmReachFilter` filters over: every

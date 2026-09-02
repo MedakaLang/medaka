@@ -86,7 +86,8 @@ uvarintEncode n =
     -- ⚠️ `uvarintDecode` must never REACH this panic: it is `Result`-typed,
     -- and turning a correct `Err` into a process abort would break its own
     -- type-level promise. That is what its explicit `value < 0` arm is for.
-    panic "uvarint: negative value \{intToString n} (unsigned-varint encodes non-negative values only)"
+    panic
+      "uvarint: negative value \{intToString n} (unsigned-varint encodes non-negative values only)"
   else
     arrayFromList (uvarintEncodeGo n)
 
@@ -94,18 +95,24 @@ uvarintEncode n =
 -- `shift` bits already placed. `Err` on truncation (ran out of input while
 -- the continuation bit was still set) or over-length (more than
 -- `uvarintMaxBytes` bytes).
-uvarintDecodeGo : Array Int -> Int -> Int -> Int -> Int -> Result String (Int, Int)
+uvarintDecodeGo : Array Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Result String (Int, Int)
 uvarintDecodeGo bytes idx n shift acc =
-  if idx >= uvarintMaxBytes then Err "uvarint: over-long (more than 9 bytes)"
+  if idx >= uvarintMaxBytes then
+    Err "uvarint: over-long (more than 9 bytes)"
+  else if idx >= n then
+    Err "uvarint: truncated (input ended with the continuation bit still set)"
   else
-    if idx >= n then Err "uvarint: truncated (input ended with the continuation bit still set)"
+    let b = byteAt idx bytes
+    let acc2 = acc + shiftLeft (bitAnd b 0x7f) shift
+    if bitAnd b 0x80 == 0 then
+      Ok (acc2, idx + 1)
     else
-      let b = byteAt idx bytes
-      let acc2 = acc + shiftLeft (bitAnd b 0x7f) shift
-      if bitAnd b 0x80 == 0 then
-        Ok (acc2, idx + 1)
-      else
-        uvarintDecodeGo bytes (idx + 1) n (shift + 7) acc2
+      uvarintDecodeGo bytes (idx + 1) n (shift + 7) acc2
 
 -- Byte-for-byte comparison of `bytes[0 .. len)` against `expected`, used to
 -- confirm a decoded value's canonical (minimal) re-encoding matches what
@@ -157,7 +164,8 @@ uvarintDecode bytes = match uvarintDecodeGo bytes 0 (arrayLength bytes) 0 0
       -- requirement (the published `{0x81, 0x00}` case), which the range
       -- check does not touch.
       let reencoded = uvarintEncode value
-      if arrayLength reencoded /= consumed || not (prefixEquals reencoded bytes 0 consumed) then
+      if arrayLength reencoded /= consumed
+        || not (prefixEquals reencoded bytes 0 consumed) then
         Err "uvarint: non-minimal encoding"
       else
         Ok (value, consumed)

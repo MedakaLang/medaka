@@ -48,23 +48,24 @@ ipk = Some 0
 
 -- The id is the first cell of a row.
 rowId : List Cell -> Int
-rowId ((CInt n)::_) = n
+rowId ((CInt n) :: _) = n
 rowId _ = -1
 
 -- Replace the age (3rd cell) of a row.
 setAge : List Cell -> Cell -> List Cell
-setAge (i::n::_::[]) age = [i, n, age]
+setAge (i :: n :: _ :: []) age = [i, n, age]
 setAge cells age = cells
 
 -- Build → parse → scan → print one table.
 readTable : String -> String -> Int -> List (List Cell) -> <IO> Unit
-readTable name createSql colCount rows = match buildDatabase name createSql colCount ipk rows
-  Err e => println "build error: \{e}"
-  Ok bytes => match fromBytes bytes
-    Err e => println "fromBytes error: \{e}"
-    Ok db => match scanTableRows db name
-      Err e => println "scan error: \{e}"
-      Ok found => printRows display found
+readTable name createSql colCount rows =
+  match buildDatabase name createSql colCount ipk rows
+    Err e => println "build error: \{e}"
+    Ok bytes => match fromBytes bytes
+      Err e => println "fromBytes error: \{e}"
+      Ok db => match scanTableRows db name
+        Err e => println "scan error: \{e}"
+        Ok found => printRows display found
 
 main : <IO> Unit
 main =
@@ -74,7 +75,8 @@ main =
   let afterDelete = filter (r => rowId r /= 2) baseRows
   let _ = readTable "users" usersSql 3 afterDelete
   let _ = println "-- UPDATE id=3 age:=99, READ users --"
-  let afterUpdate = map (r => if rowId r == 3 then setAge r (CInt 99) else r) baseRows
+  let afterUpdate =
+    map (r => if rowId r == 3 then setAge r (CInt 99) else r) baseRows
   let _ = readTable "users" usersSql 3 afterUpdate
   let _ = println "-- CREATE+READ reals (float round-trip) --"
   readTable "reals" realsSql 2 realsRows

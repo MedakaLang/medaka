@@ -123,8 +123,12 @@ report and another way in a debugging session:
 ```medaka
 data Category = Food | Housing | Books | Other deriving (Debug)
 
-data Expense =
-  | { date : String, payee : String, amount : Float, category : Category }
+data Expense = {
+  date : String,
+  payee : String,
+  amount : Float,
+  category : Category,
+}
   deriving (Debug)
 
 impl Display Category where
@@ -280,12 +284,13 @@ impl Render (List a) where
   render xs = "a list of \{length xs} thing(s)"
 
 impl Render (List Expense) where
-  render xs = "a ledger of \{length xs} expense(s), totaling $\{fold (acc e => acc + e.amount) 0.0 xs}"
+  render xs =
+    "a ledger of \{length xs} expense(s), totaling $\{fold (acc e => acc + e.amount) 0.0 xs}"
 
 main =
   println (render [True, False])
-  println (render
-    [
+  println
+    (render [
       Expense { payee = "Cafe Fish", amount = 4.5 },
       Expense { payee = "Landlord", amount = 1200.0 },
     ])

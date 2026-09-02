@@ -5,26 +5,26 @@ running doctests in stdlib/vector.mdk
   ok   stdlib/vector.mdk:87: capacity (fromList [1, 2, 3])
   ok   stdlib/vector.mdk:95: get 1 (fromList [10, 20, 30])
   ok   stdlib/vector.mdk:97: get 5 (fromList [10, 20, 30])
-  ok   stdlib/vector.mdk:118: first (fromList [10, 20, 30])
-  ok   stdlib/vector.mdk:126: last (fromList [10, 20, 30])
-  ok   stdlib/vector.mdk:145: arrayLength (toArray (fromList [1, 2, 3]))
-  ok   stdlib/vector.mdk:159: let v = fromList [1, 2] in let _ = push 3 v in toList v
-  ok   stdlib/vector.mdk:181: pop (fromList [1, 2, 3])
-  ok   stdlib/vector.mdk:197: let v = fromList [1, 2, 3] in let _ = setInPlace 1 9 v in toList v
-  ok   stdlib/vector.mdk:219: let v = fromList [1, 2, 3] in let _ = swap 0 2 v in toList v
-  ok   stdlib/vector.mdk:234: let v = fromList [1, 2, 3] in let _ = clear v in length v
-  ok   stdlib/vector.mdk:249: let v = fromList [1, 2, 3] in let _ = mapInPlace (x => x * 10) v in toList v
-  ok   stdlib/vector.mdk:284: let v = fromList [1, 2, 3] in let _ = insertAtInPlace 1 9 v in toList v
-  ok   stdlib/vector.mdk:290: let v = fromList [1, 2] in let _ = insertAtInPlace 7 9 v in toList v
-  ok   stdlib/vector.mdk:297: let v = fromList [1, 2, 3] in let _ = removeAtInPlace 1 v in toList v
-  ok   stdlib/vector.mdk:303: let v = fromList [1, 2] in let _ = removeAtInPlace 7 v in toList v
-  ok   stdlib/vector.mdk:311: let v = fromList [3, 1, 4, 1, 5] in let _ = sortInPlaceBy compare v in toList v
-  ok   stdlib/vector.mdk:321: let v = fromList [3, 1, 2] in let _ = sortInPlace v in toList v
-  ok   stdlib/vector.mdk:344: sum (fromList [1, 2, 3, 4])
-  ok   stdlib/vector.mdk:353: length (fromList [9, 8, 7])
-  ok   stdlib/vector.mdk:359: eq (fromList [1, 2, 3]) (fromList [1, 2, 3])
-  ok   stdlib/vector.mdk:366: debug (fromList [1, 2, 3])
-  ok   stdlib/vector.mdk:374: display (fromList ["a", "b"])
+  ok   stdlib/vector.mdk:115: first (fromList [10, 20, 30])
+  ok   stdlib/vector.mdk:123: last (fromList [10, 20, 30])
+  ok   stdlib/vector.mdk:142: arrayLength (toArray (fromList [1, 2, 3]))
+  ok   stdlib/vector.mdk:156: let v = fromList [1, 2] in let _ = push 3 v in toList v
+  ok   stdlib/vector.mdk:178: pop (fromList [1, 2, 3])
+  ok   stdlib/vector.mdk:194: let v = fromList [1, 2, 3] in let _ = setInPlace 1 9 v in toList v
+  ok   stdlib/vector.mdk:217: let v = fromList [1, 2, 3] in let _ = swap 0 2 v in toList v
+  ok   stdlib/vector.mdk:232: let v = fromList [1, 2, 3] in let _ = clear v in length v
+  ok   stdlib/vector.mdk:247: let v = fromList [1, 2, 3] in let _ = mapInPlace (x => x * 10) v in toList v
+  ok   stdlib/vector.mdk:282: let v = fromList [1, 2, 3] in let _ = insertAtInPlace 1 9 v in toList v
+  ok   stdlib/vector.mdk:288: let v = fromList [1, 2] in let _ = insertAtInPlace 7 9 v in toList v
+  ok   stdlib/vector.mdk:295: let v = fromList [1, 2, 3] in let _ = removeAtInPlace 1 v in toList v
+  ok   stdlib/vector.mdk:301: let v = fromList [1, 2] in let _ = removeAtInPlace 7 v in toList v
+  ok   stdlib/vector.mdk:309: let v = fromList [3, 1, 4, 1, 5] in let _ = sortInPlaceBy compare v in toList v
+  ok   stdlib/vector.mdk:319: let v = fromList [3, 1, 2] in let _ = sortInPlace v in toList v
+  ok   stdlib/vector.mdk:342: sum (fromList [1, 2, 3, 4])
+  ok   stdlib/vector.mdk:351: length (fromList [9, 8, 7])
+  ok   stdlib/vector.mdk:357: eq (fromList [1, 2, 3]) (fromList [1, 2, 3])
+  ok   stdlib/vector.mdk:364: debug (fromList [1, 2, 3])
+  ok   stdlib/vector.mdk:372: display (fromList ["a", "b"])
 
 stdlib/vector.mdk: 26/26 passed
 Testing "sortInPlace agrees with an independent insertion sortInPlace" ... OK (100 tests)

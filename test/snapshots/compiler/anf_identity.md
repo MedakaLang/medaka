@@ -1,5 +1,5 @@
 # META
-source_lines=80
+source_lines=86
 stages=DESUGAR,MARK
 # SOURCE
 -- X-A preparatory identity substrate (#1400).
@@ -37,32 +37,35 @@ export data StableNodeId =
 
 allNonNegative : List Int -> Bool
 allNonNegative [] = True
-allNonNegative (n::ns) = n >= 0 && allNonNegative ns
+allNonNegative (n :: ns) = n >= 0 && allNonNegative ns
 
 canonicalPathComponents : List String -> Bool
 canonicalPathComponents [] = False
-canonicalPathComponents (component::rest) = component /= ""
-  && component /= "."
-  && component /= ".."
-  && canonicalPathComponentsGo rest
+canonicalPathComponents (component :: rest) =
+  component /= ""
+    && component /= "."
+    && component /= ".."
+    && canonicalPathComponentsGo rest
 
 canonicalPathComponentsGo : List String -> Bool
 canonicalPathComponentsGo [] = True
-canonicalPathComponentsGo (component::rest) = component /= ""
-  && component /= "."
-  && component /= ".."
-  && canonicalPathComponentsGo rest
+canonicalPathComponentsGo (component :: rest) =
+  component /= ""
+    && component /= "."
+    && component /= ".."
+    && canonicalPathComponentsGo rest
 
 canonicalProjectPath : String -> Bool
 canonicalProjectPath path = canonicalPathComponents (splitOnChar '/' path)
 
 validSpan : Int -> Int -> Int -> Int -> Bool
-validSpan startLine startCol endLine endCol = startLine >= 1
-  && startCol >= 0
-  && endLine >= 1
-  && endLine >= startLine
-  && endCol >= 0
-  && (endLine /= startLine || endCol >= startCol)
+validSpan startLine startCol endLine endCol =
+  startLine >= 1
+    && startCol >= 0
+    && endLine >= 1
+    && endLine >= startLine
+    && endCol >= 0
+    && (endLine /= startLine || endCol >= startCol)
 
 export
 mintStableNodeId : StableNodeIdInput -> Result StableNodeIdError StableNodeId
@@ -80,8 +83,11 @@ mintStableNodeId (StableNodeIdInput path startLine startCol endLine endCol child
 -- one through this fold.  The structured value, not its rendered form, is the
 -- identity used by future planning maps.
 export
-foldStableNodeId : (String -> Int -> Int -> Int -> Int -> List Int -> StableGeneratedRole -> a) -> StableNodeId -> a
-foldStableNodeId f (StableNodeId path startLine startCol endLine endCol childPath role) = f path startLine startCol endLine endCol childPath role
+foldStableNodeId : (String -> Int -> Int -> Int -> Int -> List Int -> StableGeneratedRole -> a) ->
+  StableNodeId ->
+  a
+foldStableNodeId f (StableNodeId path startLine startCol endLine endCol childPath role) =
+  f path startLine startCol endLine endCol childPath role
 # DESUGAR
 (DUse false (UseGroup ("support" "util") ((mem "splitOnChar" false) (mem "startsWith" false))))
 (DData Public "StableGeneratedRole" () ((variant "RoleLiftedLambda" (ConPos)) (variant "RoleWrapper" (ConPos)) (variant "RoleEtaAdapter" (ConPos)) (variant "RolePapEntry" (ConPos))) ())

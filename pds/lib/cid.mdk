@@ -68,15 +68,17 @@ cidDigest (Cid _ digest) = arrayCopy digest
 -- | Canonical binary CIDv1 serialization.
 export
 cidToBytes : Cid -> Array Int
-cidToBytes (Cid codec digest) = uvarintEncode 1
-  ++ uvarintEncode codec
-  ++ uvarintEncode multicodecSha2_256
-  ++ uvarintEncode 32
-  ++ digest
+cidToBytes (Cid codec digest) =
+  uvarintEncode 1
+    ++ uvarintEncode codec
+    ++ uvarintEncode multicodecSha2_256
+    ++ uvarintEncode 32
+    ++ digest
 
 decodeAt : String -> Array Int -> Int -> Result String (Int, Int)
 decodeAt label bytes offset =
-  if offset >= arrayLength bytes then Err "cid: truncated before \{label}"
+  if offset >= arrayLength bytes then
+    Err "cid: truncated before \{label}"
   else match uvarintDecode (drop offset bytes)
     Err message => Err "cid: \{label}: \{message}"
     Ok (value, consumed) => Ok (value, offset + consumed)
@@ -85,27 +87,34 @@ decodeAt label bytes offset =
 export
 cidFromBytes : Array Int -> Result String Cid
 cidFromBytes bytes =
-  if not (validBytes bytes 0) then Err "cid: input element outside byte range 0..255"
+  if not (validBytes bytes 0) then
+    Err "cid: input element outside byte range 0..255"
   else match decodeAt "version" bytes 0
     Err message => Err message
-    Ok (version, p1) => if version /= 1 then Err "cid: version must be 1"
-    else match decodeAt "codec" bytes p1
-      Err message => Err message
-      Ok (codec, p2) => if not (validCodec codec) then Err "cid: codec must be raw (0x55) or dag-cbor/DRISL (0x71)"
-      else match decodeAt "hash code" bytes p2
+    Ok (version, p1) =>
+      if version /= 1 then
+        Err "cid: version must be 1"
+      else match decodeAt "codec" bytes p1
         Err message => Err message
-        Ok (hashCode, p3) => if hashCode /= multicodecSha2_256 then Err "cid: hash code must be sha2-256 (0x12)"
-        else match decodeAt "hash length" bytes p3
-          Err message => Err message
-          Ok (hashLength, p4) =>
-            if hashLength /= 32 then
-              Err "cid: SHA-256 digest length must be 32 bytes"
-            else if arrayLength bytes - p4 < 32 then
-              Err "cid: truncated SHA-256 digest"
-            else if arrayLength bytes - p4 > 32 then
-              Err "cid: trailing bytes after SHA-256 digest"
-            else
-              cidFromDigest codec (take 32 (drop p4 bytes))
+        Ok (codec, p2) =>
+          if not (validCodec codec) then
+            Err "cid: codec must be raw (0x55) or dag-cbor/DRISL (0x71)"
+          else match decodeAt "hash code" bytes p2
+            Err message => Err message
+            Ok (hashCode, p3) =>
+              if hashCode /= multicodecSha2_256 then
+                Err "cid: hash code must be sha2-256 (0x12)"
+              else match decodeAt "hash length" bytes p3
+                Err message => Err message
+                Ok (hashLength, p4) =>
+                  if hashLength /= 32 then
+                    Err "cid: SHA-256 digest length must be 32 bytes"
+                  else if arrayLength bytes - p4 < 32 then
+                    Err "cid: truncated SHA-256 digest"
+                  else if arrayLength bytes - p4 > 32 then
+                    Err "cid: trailing bytes after SHA-256 digest"
+                  else
+                    cidFromDigest codec (take 32 (drop p4 bytes))
 
 -- | Canonical lowercase unpadded base32 CID string.
 export
