@@ -14,7 +14,7 @@
    byte-identical, `validate: true` is refused outright, and an unknown
    collection or a malformed body leaves the `Store` byte-identical. -}
 
-import json.{Json(..), jObject, lookup, parse, stringify}
+import json.{Json(..), jObject, get, parse, stringify}
 import hex.{decode}
 import io.{readLines}
 import string.{fromUtf8, split, startsWith, toUtf8}
@@ -101,12 +101,12 @@ responseJson bytes = match parse (responseBodyText bytes)
   Err message => panic "record_handlers: response body is not JSON: \{message}"
 
 fieldText : String -> Json -> String
-fieldText name value = match lookup name value
+fieldText name value = match get name value
   Some (JString text) => text
   _ => "<missing:\{name}>"
 
 commitField : String -> Json -> String
-commitField name value = match lookup "commit" value
+commitField name value = match get "commit" value
   Some commit => fieldText name commit
   None => "<missing:commit>"
 
