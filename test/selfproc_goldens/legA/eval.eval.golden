@@ -34,7 +34,10 @@ buildMethodReqCounts : List Decl -> List ((String, String), Int)
 buildModInfos : ModExports (Value a) -> List (String, ModExports (Value a)) -> List (String, List Decl) -> List (ModInfo (Value a))
 buildWith : Value a -> Int -> Int -> List (Value a)
 bytesBEToU64 : Array Int -> U64
+candIface : Value a -> String
+candIfaceKey : Value a -> (String, String)
 candKey : Value a -> String
+candMatches : String -> Value a -> Bool
 canonHashFloat : Float -> Float
 canonNaN : Float
 cellOf : (String, Value a) -> (String, Ref (Value a))
@@ -73,11 +76,13 @@ declImplEntries : EvalEnv (Value a) -> List ((String, String, String), List Int)
 declImplIfaceIdRow : Decl -> List (String, String, String)
 declImplIfaceIdTable : List Decl -> List (String, String, String)
 declImplIfaceIdsRef : Ref (List (String, String, String))
+defaultBodyKeyCell : String
 defaultCellName : String -> String -> String
 defaultCellOf : EvalEnv (Value a) -> String -> String -> List (Value a)
 defaultEntry : EvalEnv (Value a) -> String -> List String -> IfaceMethod -> List (String, (Int, Value a))
 defaultNamesOf : String -> IfaceMethod -> List String
 dictOfRoute : EvalEnv (Value a) -> Route -> Value a
+dictShadows : EvalEnv (Value a) -> String -> String -> List Route -> List (String, Ref (Value a))
 dispatchPositionsOf : Ty -> List String -> List Int
 displayCtorName : String -> String
 doSetRef : Ref (Value a) -> Value a -> Value a
@@ -169,6 +174,7 @@ ifaceMethodEntry : String -> String -> List String -> IfaceMethod -> ((String, S
 ifaceMethodNmE : IfaceMethod -> String
 ifaceOfMethod : String -> String
 ifaceOfMethodIn : String -> List ((String, String, String), List Int) -> String
+ifaceRivalSeen : (String, String) -> List (String, String) -> Bool
 implDeclNames : Decl -> List String
 implDictRoutes : Option Int -> List Route -> List Route -> List Route
 implMethodEntry : EvalEnv (Value a) -> List ((String, String, String), List Int) -> TyConOrigin -> String -> List Ty -> ImplMethod -> (String, (Int, Value a))
@@ -244,12 +250,15 @@ moduleFileOf : String -> String
 moduleMethodNames : List Decl -> List String
 moduleMethodNamesOf : Decl -> List String
 modulePathMap : Ref (List (String, String))
+narrowByDefaultBodyKey : EvalEnv (Value a) -> List (Value a) -> Value a
 narrowMethod : EvalEnv (Value a) -> String -> Value a -> String -> Value a
+narrowUnrouted : EvalEnv (Value a) -> Value a -> Value a
 negFloatIEEE : Float -> Float
 noMainMsg : String
 oneOnly : List a -> Option a
 oneOrMulti : List (Value a) -> Value a
 oneOrMultiV : List (Value a) -> List (Value a) -> Value a
+onlyCandFor : List (Value a) -> List (Value a) -> Value a
 optionToValue : Option (Value a) -> Value a
 ordGt : Ordering -> Bool
 ordLt : Ordering -> Bool
@@ -443,7 +452,7 @@ takeN : Int -> List a -> List a
 testCapableExterns : Unit -> List (String, Value a)
 topGroupValue : EvalEnv (Value a) -> List (List Pat, Expr) -> Value a
 tupleHeadTag : Int -> String
-twoDistinctKeys : List (Value a) -> List String -> Bool
+twoDistinctKeys : List (Value a) -> List (String, String) -> Bool
 tyMentions : Ty -> List String -> Bool
 tyvarsInArgs : List Ty -> Int
 u64Bit63 : U64 -> Int

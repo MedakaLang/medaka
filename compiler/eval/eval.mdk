@@ -58,6 +58,7 @@ import support.util.{
   noneHeadTag,
   isEmptyL,
   filterList,
+  splitOnChar,
   initList,
   mapOption,
   joinDot,
@@ -1202,16 +1203,53 @@ reportIfUndecidable tag cands
   | twoDistinctKeys cands [] = runtimePanic "E-AMBIGUOUS-DISPATCH" "arg-tag dispatch on a receiver of type '\{tag}' is undecidable: more than one impl is declared at that type head and the runtime tag cannot choose between them"
   | otherwise = ()
 
-twoDistinctKeys : List (Value e) -> List String -> Bool
+-- ⚠️ TWO IMPLS COLLIDE ONLY WITHIN ONE INTERFACE (#2445 fix round, F-2).  The
+-- first cut of this predicate asked "are there two distinct canonical keys?" and
+-- nothing else, which is not the undecidability question: a canonical key is
+-- `<iface word>|<type args>|<method>` (`types/route_key.implRouteKeyWord`), and
+-- `coalesceImpls` merges every impl of every interface that happens to SPELL a
+-- method the same way into ONE `VMulti`.  Two modules each declaring their OWN
+-- interface (`Fa`/`Fb`, distinct `ifaceIdentity`) with ONE impl each at a head
+-- both spell `H` therefore produced two distinct keys — and a hard panic on a
+-- program with no collision at all, where the answer `(1, 2)` was already
+-- correct.  Measured: keys `x1277_a::Fa|H|` and `x1277_b::Fb|H|`, graded by
+-- `test/diff_compiler_check_cli_modules.sh` case `A-2.10/1277-xmod-head-spelling-run`
+-- (stage A-3's E1 tripwire for #1112 — nothing else in the tree names that role).
+-- Which INTERFACE a call site meant is decided by the typechecker, not by the
+-- runtime tag, so cross-interface candidates are never the tag's question; the
+-- residual "two interfaces, one method spelling, one type" hazard is #1265's, and
+-- it is pinned separately at
+-- `test/must_fail_fixtures/1265-two-ifaces-same-method-one-type-default-collapse/`.
+twoDistinctKeys : List (Value e) -> List (String, String) -> Bool
 twoDistinctKeys [] _ = False
 twoDistinctKeys (v::rest) seen
-  | contains (candKey v) seen = twoDistinctKeys rest seen
-  | isEmptyL seen = twoDistinctKeys rest [candKey v]
-  | otherwise = True
+  | ifaceRivalSeen (candIfaceKey v) seen = True
+  | otherwise = twoDistinctKeys rest (candIfaceKey v :: seen)
+
+-- an earlier candidate of the SAME interface word carrying a DIFFERENT canonical
+-- key — the only pair the runtime tag was asked to tell apart and could not.
+ifaceRivalSeen : (String, String) -> List (String, String) -> Bool
+ifaceRivalSeen _ [] = False
+ifaceRivalSeen (i, k) ((i2, k2)::rest)
+  | i == i2 && k /= k2 = True
+  | otherwise = ifaceRivalSeen (i, k) rest
+
+candIfaceKey : Value e -> (String, String)
+candIfaceKey v = (candIface v, candKey v)
 
 candKey : Value e -> String
 candKey (VTypedImpl _ k _ _ _) = k
 candKey _ = ""
+
+-- the `<iface word>` head of a canonical impl key.  `implRouteKeyWord` joins its
+-- three components with `|` and the iface word is the first, so the head of the
+-- split IS the word — and a value carrying no key ("") splits to [""], which
+-- groups the keyless candidates together where `candKey` already makes them
+-- indistinguishable.
+candIface : Value e -> String
+candIface v = match splitOnChar '|' (candKey v)
+  [] => ""
+  w::_ => w
 
 -- return-position dispatch (RKey): narrow a method's VMulti to the impl whose
 -- VTypedImpl tag matches the type the typechecker resolved (no runtime arg).  An
@@ -1222,7 +1260,11 @@ candKey _ = ""
 -- them, so no dispatch decision outside that path can depend on them.
 export
 narrowMethod : EvalEnv (Value e) -> String -> Value e -> String -> <e> Value e
-narrowMethod _ _ (VMulti vs) "" = VMulti vs
+-- An EMPTY tag is an unresolved route reached through a dict whose key is blank
+-- (`methodAtNarrow`'s RDict/RDictFwd arms).  `methodAtNarrow`'s RNone arm reaches
+-- the SAME question by its own path, so both go through one narrower: the
+-- default-body impl key if one is in scope, otherwise the untouched VMulti.
+narrowMethod env _ (VMulti vs) "" = narrowByDefaultBodyKey env vs
 narrowMethod env method (VMulti vs) tag =
   stripResolved (pickByTag env method vs tag)
 -- A single-impl interface method binds to a BARE VTypedImpl (never coalesced into
@@ -1235,6 +1277,48 @@ narrowMethod _ _ (VTypedImpl t k p s inner) "" = VTypedImpl t k p s inner
 narrowMethod _ _ (VTypedImpl t k p s inner) _ =
   stripResolved (VTypedImpl t k p s inner)
 narrowMethod _ _ v _ = v
+
+-- ── #1062: the read-back side of `specializeDefault`'s key cell ────────────
+-- The `RNone` arm above is where a sibling call inside a generic interface DEFAULT
+-- body lands: the body belongs to the interface, not to any impl, so typecheck has
+-- no route to stamp and eval used to hand the whole `VMulti` to arg-tag, which sees
+-- only the head tycon.  When the frame `specializeDefault` prepended names the
+-- canonical impl key this body is running for, that key is the same fact native's
+-- `restampIfaceDicts` writes into the lifted copy's routes — so use it.
+--
+-- STRICTLY A NARROWING: it fires only when the key names EXACTLY ONE candidate.
+-- Zero (the method belongs to a different interface, whose keys never match this
+-- word) or several (which cannot happen for a canonical key, but is not assumed)
+-- leave the `VMulti` byte-identical to what the arm returned before, so every
+-- program that did not have an impl identity in hand behaves exactly as it did.
+-- Untagged candidates are excluded first because `matchesTag` answers True for
+-- them by default — that arm is for the arg-tag filter, where a non-dispatching
+-- candidate must not be dropped, and reading it as a MATCH here would let an
+-- interface default masquerade as the impl.
+narrowByDefaultBodyKey : EvalEnv (Value e) -> List (Value e) -> <e> Value e
+narrowByDefaultBodyKey env vs = match lookupEnvOpt env defaultBodyKeyCell
+  Some (VString key) => onlyCandFor vs (filterList (candMatches key) vs)
+  _ => VMulti vs
+
+-- Only a `VMulti` is a candidate SET; anything else was already decided (a bare
+-- `VTypedImpl`, an untagged default) and is returned untouched.  This is
+-- `methodAtNarrow`'s RNone entrance to the narrower above.
+narrowUnrouted : EvalEnv (Value e) -> Value e -> <e> Value e
+narrowUnrouted env (VMulti vs) = narrowByDefaultBodyKey env vs
+narrowUnrouted _ v = v
+
+candMatches : String -> Value e -> Bool
+candMatches key (VTypedImpl t k _ _ _) = t == key || k == key
+candMatches _ _ = False
+
+onlyCandFor : List (Value e) -> List (Value e) -> <e> Value e
+onlyCandFor _ [v] = stripResolved v
+onlyCandFor vs _ = VMulti vs
+
+-- `#` cannot occur in a Medaka identifier, so this cell can never collide with a
+-- user binding — the same reservation `defaultCellName` relies on.
+defaultBodyKeyCell : String
+defaultBodyKeyCell = "#defaultBodyImplKey"
 
 -- A concrete route tag picks the impl whose VTypedImpl tag matches.  When NO
 -- candidate carries the tag, the receiver's impl does not override this method —
@@ -1410,7 +1494,14 @@ dictOfRoute _ (RScalar _) =
 -- enclosing dict carries nested element dicts for the selected impl, Phase 83/84 #5).
 export
 methodAtNarrow : EvalEnv (Value e) -> String -> Value e -> Route -> <e> (Value e, List (Value e))
-methodAtNarrow _ _ v RNone = (v, [])
+-- #1062: RNone is "typecheck could not key this occurrence", and the sibling calls
+-- inside an interface DEFAULT body are all RNone by construction — the body belongs
+-- to the interface, so there is no impl to key them to.  That is exactly where the
+-- impl key `specializeDefault` recorded for the body applies, so consult it here
+-- rather than dropping straight to arg-tag, which sees only the head tycon and took
+-- the first impl at it (`<boxint>` twice for `Box Int`/`Box String`).  Outside a
+-- default body there is no cell and this is the identity, byte-for-byte.
+methodAtNarrow env _ v RNone = (narrowUnrouted env v, [])
 methodAtNarrow env method v (RKey key _) = (narrowMethod env method v key, [])
 -- ARGSTAMP-UNIFY Phase 2+3 / genuine #21: under eval dict-threading an arg-position
 -- RDict site's narrowed impl method ALSO carries leading element-dict params
@@ -1720,11 +1811,48 @@ applyMethodDicts env name route narrowed fwdReqs0 implRoutes methodRoutes =
 -- same-named default method), left conservatively unchanged; a nullary VThunk
 -- default never reaches here at all, as applyMethodDicts' awaitsArgs guard returns
 -- it before this call.
+-- ── #1062: THE SECOND HALF, ADDED BY #2445's F-2 FIX ROUND ─────────────────
+-- The dict-shadowing above is conditional on the impl HAVING `requires` dicts to
+-- route.  A generic default body whose impl has none got no frame at all — and so
+-- no record, anywhere, of WHICH impl it is running on behalf of.  Its inner
+-- same-interface sibling calls are stamped `RNone` (typecheck cannot resolve them:
+-- the body is the interface's, shared by every impl), so they fell all the way to
+-- arg-tag, which sees only the receiver's HEAD tycon.  With `impl Speak (Box Int)`
+-- and `impl Speak (Box String)` that is one tag for two impls and the sibling call
+-- took the first: `<boxint>` TWICE where `<boxint>`/`<boxstr>` is correct, exit 0,
+-- no diagnostic (#1062).  Native never had this: `emitDefaultDefine` lifts a
+-- per-tag COPY of the default and `restampIfaceDicts` rewrites its inner same-iface
+-- routes to `RKey tag`.
+--
+-- eval cannot rewrite routes (the Core-IR interpreter's default bodies are opaque
+-- `CExpr` — the reason the dict half went through the env too), so the env carries
+-- the same fact instead: ONE cell naming the canonical impl key this default body
+-- is running for, which `narrowMethod`'s `RNone` arm reads back.  That makes the
+-- cell the representation-independent twin of native's restamp, and it is
+-- LEXICAL — prepended to the default closure's own captured env, so it reaches the
+-- body's sibling calls and nothing a call OUT of the body evaluates.
+--
+-- ⚠️ IT NARROWS, IT NEVER OVERRIDES.  A sibling call the typechecker DID resolve
+-- carries a non-empty route tag and never reaches the `RNone` arm, so a default
+-- body that calls `speak` on some OTHER receiver keeps that receiver's own route.
+-- And the cell only decides when it names EXACTLY ONE candidate; a tag matching
+-- none (a different interface's method) or several leaves the `VMulti` exactly as
+-- it found it, so the arg-tag fallback — and the undecidability guard behind it —
+-- still get their turn.
 specializeDefault : EvalEnv (Value e) -> String -> String -> Option Int -> List Route -> Value e -> <e> Option (Value e)
 specializeDefault _ _ _ (Some _) _ _ = None
 specializeDefault env name tag None implRoutes narrowed
-  | tag == "" || isEmptyL implRoutes = None
-  | otherwise = withEnvFrame (siblingShadows env name tag implRoutes) narrowed
+  | tag == "" = None
+  | otherwise = withEnvFrame ((defaultBodyKeyCell, Ref (VString tag)) :: dictShadows env name tag implRoutes) narrowed
+
+-- The dict half stays EXACTLY as scoped as it was: an impl with no `requires` has
+-- no dicts to route, and binding its siblings here would PIN them (the hazard
+-- `siblingShadows`' own note names).  The key cell above carries the impl identity
+-- instead, and narrows only where nothing else decided.
+dictShadows : EvalEnv (Value e) -> String -> String -> List Route -> <e> List (String, Ref (Value e))
+dictShadows env name tag implRoutes
+  | isEmptyL implRoutes = []
+  | otherwise = siblingShadows env name tag implRoutes
 
 -- One shadow binding per same-interface sibling that the impl at [tag] defines with
 -- leading dict params (reqCount > 0).  A sibling the impl does NOT define (None) is
