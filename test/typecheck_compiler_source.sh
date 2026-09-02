@@ -1071,6 +1071,8 @@ echo "  ok: $carrier_count_actual TyConOrigin mention(s) in ast.mdk (name-set + 
 # and method quantifier positions are fields of that slot, never parallel authorities.
 predicate_slot_src="$ROOT/compiler/types/typecheck.mdk"
 predicate_slot_required='data PredicateSlotArgs = PSArgsUnknown | PSArgsKnown (List Mono)
+data PredicateRequest =
+| PredicateRequest { prIface : IfaceRef, prArgs : PredicateSlotArgs }
 data PredicateSlot =
 | PredicateSlot {
 data MethodPredicateSlot =
@@ -1080,10 +1082,25 @@ setFunConstraintEntry : String -> List PredicateSlot -> Unit
 registerActiveDictVars : String -> Int -> List PredicateSlot -> Unit
 recordCallObligations : List CSlot -> List Mono -> List (List Mono) -> Unit
 expandPredicateSlots : List Decl -> List PredicateSlot -> List PredicateSlot
-predArgsAgreeSameInstantiation : List Mono -> List Mono -> Bool
-registerFunPredGiven : String -> PredicateSlotArgs -> String -> Unit
-activeFunDictPredOf : String -> List Mono -> String -> Option String
-entailAssumVar m encl _ (EKNestedTop iface _ _ _ rest) = match activeFunDictPredOf iface.irName (m::rest) encl
+predicateRequestMatchesSlot : PredicateRequest -> PredicateSlot -> Bool
+&& sameIfaceDecl request.prIface slot.psIface
+monoVecSameGiven requestArgs slotArgs
+activeDictPreds : Ref (List (PredicateSlot, String))
+registerFunPredGiven : PredicateSlot -> String -> Unit
+activeFunDictPredOf : PredicateRequest -> String -> Option String
+goalRequestOfKind : String -> EntailKind -> Option PredicateRequest
+goalPredOf : String -> Mono -> Option PredicateRequest
+goalPredOfOp : String -> Option PredicateRequest
+activeDictVarOfEncl : Option PredicateRequest -> Mono -> String -> Option String
+activeDictVarOfEncl None m encl = activeDictVarForEncl m encl
+activeDictVarOfEncl (Some request) m encl =
+enclSlotIndex : Option PredicateRequest -> Int -> String -> Option Int
+enclSlotIndex None target encl = indexOfId target (enclSlotIds encl)
+enclSlotIndex (Some request) target encl =
+implReqPick : Int -> PredicateRequest -> String -> List (String, PredicateSlot) -> Option String
+entailAssumVar _ m encl _ (EKNestedTop iface _ _ _ rest) = match activeFunDictPredOf (PredicateRequest { prIface = iface, prArgs = PSArgsKnown (m::rest) }) encl
+goalMatchesGiven : IfaceRef -> List Mono -> Bool
+anyGivenMatches : PredicateRequest -> List (PredicateSlot, String) -> Bool
 implReqPredicateSlots : Ref (List (String, PredicateSlot))
 funPredicateSlotsRef : Ref (List (String, List PredicateSlot))
 methodPredicateSlotsRef : Ref (List (String, List MethodPredicateSlot))
@@ -1121,6 +1138,14 @@ predicate_slot_old_consumers='setFunConstraintEntry : String -> List CSlot -> Op
 registerActiveDictVars : String -> Int -> List Int -> Unit
 recordCallObligations : List CSlot -> List Mono -> Unit
 predArgsAgreeEncl : List Mono -> List Mono -> Bool
+predArgsAgreeSameInstantiation : List Mono -> List Mono -> Bool
+registerFunPredGiven : String -> PredicateSlotArgs -> String -> Unit
+activeFunDictPredOf : String -> List Mono -> String -> Option String
+activeDictPreds : Ref (List (String, List Mono, String))
+implReqPick : Int -> Predicate -> String -> Bool -> List (String, PredicateSlot) -> Option String
+enclSlotIndex : Option Predicate -> Int -> String -> Option Int
+enclSlotIndex (Some p) target encl = match indexOfPred target p (enclPreds encl)
+None => indexOfId target (enclSlotIds encl)
 entailAssumVar m encl _ (EKNestedTop _ _ _ _ _) = activeDictVarForEncl m encl'
 
 printf '%s\n' "$predicate_slot_old_consumers" | while IFS= read -r retired; do
@@ -1130,10 +1155,10 @@ printf '%s\n' "$predicate_slot_old_consumers" | while IFS= read -r retired; do
   fi
 done || exit 1
 
-predicate_relation_uses=$(grep -F 'predArgsAgreeSameInstantiation p.args' "$predicate_slot_src" \
+predicate_relation_uses=$(grep -F 'predicateRequestMatchesSlot request' "$predicate_slot_src" \
   | grep -cvE '^[[:space:]]*--')
-if [ "$predicate_relation_uses" -ne 2 ]; then
-  echo "FAIL: #1318 shared full-vector relation must serve exactly enclosing and impl-requires consumers (got $predicate_relation_uses)"
+if [ "$predicate_relation_uses" -ne 6 ]; then
+  echo "FAIL: #1318 shared request/slot relation must serve all five identity consumers plus its definition (got $predicate_relation_uses)"
   exit 1
 fi
 

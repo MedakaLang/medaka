@@ -1,0 +1,6 @@
+import defmod.{Same}
+import defmod.*
+
+export
+wildcardValue : Int
+wildcardValue = wildcard 1
