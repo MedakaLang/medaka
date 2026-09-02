@@ -40,7 +40,7 @@
    TID spelling as the record key, which is what a real PDS does with its
    clock and is deterministic here for the same reason. -}
 
-import json.{Json(..), jArray, jObject, lookup, stringify}
+import json.{Json(..), jArray, jObject, get, stringify}
 import string.{fromUtf8, split, toInt, toLower, toUtf8}
 import lib.atsyntax.{validateAtIdentifier, validateDid, validateHandle}
 import lib.cid.{Cid, cidEqual, cidForDagCbor, cidFromString, cidToString}
@@ -163,7 +163,7 @@ requireObject (JObject _) = Ok ()
 requireObject _ = Err (invalidRequest "Request body must be a JSON object")
 
 requiredString : String -> Json -> Result Response String
-requiredString name body = match lookup name body
+requiredString name body = match get name body
   None => Err (invalidRequest "Request field '\{name}' is required")
   Some (JString value) => Ok value
   Some _ => Err (invalidRequest "Request field '\{name}' must be a string")
@@ -175,7 +175,7 @@ requiredString name body = match lookup name body
    silently accept a body the lexicon forbids. (`swapRecord` IS three-valued
    and reads its own `null`; see `checkSwapRecord`.) -}
 optionalString : String -> Json -> Result Response (Option String)
-optionalString name body = match lookup name body
+optionalString name body = match get name body
   None => Ok None
   Some (JString value) => Ok (Some value)
   Some JNull =>
@@ -187,7 +187,7 @@ optionalString name body = match lookup name body
    never happened, so it is refused outright; `validate: false` and an absent
    field both mean "store the record as given", which is what happens. -}
 requireNoLexiconValidation : Json -> Result Response Unit
-requireNoLexiconValidation body = match lookup "validate" body
+requireNoLexiconValidation body = match get "validate" body
   None => Ok ()
   Some (JBool False) => Ok ()
   Some (JBool True) => Err (invalidRequest "Lexicon record validation is not implemented; 'validate: true' cannot be honored")
@@ -244,7 +244,7 @@ requireHostedRepo account body = do
   requireHostedIdentifier "repo" account target
 
 requireRecord : Json -> Result Response DagCbor
-requireRecord body = match lookup "record" body
+requireRecord body = match get "record" body
   None => Err (invalidRequest "Request field 'record' is required")
   Some value => match lexJsonToDagCbor value
     Err message => Err (invalidRequest "Request field 'record' is not representable as atproto data: \{message}")
@@ -283,7 +283,7 @@ currentRecordCid path repo = match repoLookup path repo
     Ok bytes => Ok (Some (cidForDagCbor bytes))
 
 checkSwapCommit : Json -> Repo -> Result Response Unit
-checkSwapCommit body repo = match lookup "swapCommit" body
+checkSwapCommit body repo = match get "swapCommit" body
   None => Ok ()
   Some JNull => Ok ()
   Some (JString text) => match cidFromString text
@@ -299,7 +299,7 @@ checkSwapCommit body repo = match lookup "swapCommit" body
    asserts the record is ABSENT, and a CID string asserts it is exactly that
    record. -}
 checkSwapRecord : Json -> Array Int -> Repo -> Result Response Unit
-checkSwapRecord body path repo = match lookup "swapRecord" body
+checkSwapRecord body path repo = match get "swapRecord" body
   None => Ok ()
   Some JNull => do
     actual <- currentRecordCid path repo

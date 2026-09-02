@@ -1264,27 +1264,6 @@ IDENT "toMillis"
 IDENT "d"
 RPAREN
 NEWLINE
-EXPORT
-NEWLINE
-IDENT "sleepSeconds"
-COLON
-UPPER "Int"
-ARROW
-LT
-UPPER "Clock"
-GT
-UPPER "Unit"
-NEWLINE
-IDENT "sleepSeconds"
-IDENT "s"
-EQUAL
-IDENT "sleepMs"
-LPAREN
-IDENT "s"
-STAR
-INT 1000
-RPAREN
-NEWLINE
 PROP
 STRING "epoch round-trips through the civil calendar"
 LPAREN

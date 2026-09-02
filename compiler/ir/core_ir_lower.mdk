@@ -1821,6 +1821,26 @@ ifaceRouteKeysGo heads iface ((_, i, tag, key)::rest)
 declRouteKey : String -> String -> Bool -> String
 declRouteKey tag key unique = if unique then tag else key
 
+-- #2445: the HEAD TYCON tag of the declared impl a route WORD names.  The word is
+-- whatever `declRouteKey` minted — the bare head tag when the head is unique, the
+-- canonical key when it is NOT — so a caller holding a list of route words cannot
+-- compare them to head tags by string equality: at exactly the collision this maps
+-- back for, the word is the key and never string-equals the bare tag.  (That is the
+-- fail-OPEN a naive duplicate test over `map groupTag groups ++ raw` walks into: the
+-- "one impl defines, sibling at the same head inherits the default" shape is the one
+-- where the two spellings differ.)  Empty when no declared impl of [iface] answers to
+-- the word, which an EMPTY table also gives — the same degrade-to-today's-output
+-- direction `ifaceDeclHeadUnique` already takes.
+export
+declHeadOfRouteWord : List (String, String, String, String) -> String -> String -> String
+declHeadOfRouteWord heads iface word = declHeadOfRouteWordGo iface word heads
+
+declHeadOfRouteWordGo : String -> String -> List (String, String, String, String) -> String
+declHeadOfRouteWordGo _ _ [] = ""
+declHeadOfRouteWordGo iface word ((_, i, t, k)::rest)
+  | i == iface && (t == word || k == word) = t
+  | otherwise = declHeadOfRouteWordGo iface word rest
+
 -- #1036: is [tag] the head of exactly ONE declared impl of [iface]?  Counts
 -- DISTINCT canonical keys (a re-imported prelude impl appears in the joint decl
 -- list twice under ONE key), mirroring the emitter's `distinctKeysAtHead` and

@@ -1117,6 +1117,7 @@ mdName (ModuleDoc n _ _ _) = n
 docOnlyExcluded : List String
 docOnlyExcluded = [
   "__fallthrough__",
+  "setRef",
   "stashRunStdout",
   "enableRunStdoutFlush",
   "assertSnapshot",

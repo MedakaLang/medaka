@@ -1,5 +1,5 @@
 # META
-source_lines=4405
+source_lines=4602
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -62,6 +62,7 @@ import support.util.{
   noneHeadTag,
   isEmptyL,
   filterList,
+  splitOnChar,
   initList,
   mapOption,
   joinDot,
@@ -113,7 +114,7 @@ import bits64.{
 -- type `v` (kind *), not over the row — data-decl kind inference is
 -- non-transitive (a param used only as another type's row argument is inferred
 -- KType and mis-elaborates), so wrapper types thread `Value e` whole.
-public export data Value (e : Effect) =
+public export data Value e =
   | VInt Int
   | VFloat Float
   | VString String
@@ -745,7 +746,9 @@ tyMentions (TyConstrained _ t) params = tyMentions t params
 -- untyped-eval vs typed-core-IR pair — same precedent as typecheck.mdk's
 -- and doc.mdk's ppEffAtomTy).
 -- lint-disable-next-line rule-duplicate-body
-tyMentions (TyRow _ tail _) params = anyList (v => contains v params) tail
+tyMentions (TyRow _ tail _) params = match tail
+  Some v => contains v params
+  None => False
 
 -- ── environment ───────────────────────────────────────────────────────────
 export
@@ -1122,7 +1125,7 @@ applyOpt (VClosureF env pats f) arg = applyClosureF env pats f arg
 applyOpt (VPrim f) arg = Some (f arg)
 applyOpt (VTypedImpl t key pos seen inner) arg =
   applyTyped t key pos seen inner arg
-applyOpt (VMulti vs) arg = collectPartials [] (filterByTag vs arg) arg
+applyOpt (VMulti vs) arg = let _ = checkArgTagDecidable vs arg in collectPartials [] (filterByTag vs arg) arg
 applyOpt other _ =
   runtimePanic "E-NOT-A-FUNCTION" ("applied non-function: " ++ ppValue other)
 
@@ -1160,6 +1163,110 @@ isDispatching : Value e -> Bool
 isDispatching (VTypedImpl _ _ pos seen _) = containsInt seen pos
 isDispatching _ = False
 
+-- #2445: THE EVAL MIRROR OF THE ARG-TAG UNDECIDABILITY REFUSAL.  `filterByTag` above
+-- narrows the candidate set by the receiver's runtime TAG, and `collectPartials` then
+-- takes the FIRST candidate that applies.  When two candidates survive that filter
+-- because they share a head tycon and differ only in their type ARGUMENTS
+-- (`impl Wrap (Pair Int)` / `impl Wrap (Pair String)` -- one runtime tag, two impls),
+-- the tag has not decided anything and "first wins" is a coin flip reported as an
+-- answer: measured `1|1` where the semantics say `1|2`, exit 0, on `medaka run`, the
+-- exact silent fold `emitArgTagRoute`'s guard refuses on the native side.
+--
+-- ⚠️ THE MULTI-SLOT CARVE-OUT IS LOAD-BEARING, NOT A SOFTENING.  A candidate carries a
+-- LIST of dispatching positions, and a multi-parameter interface may legitimately have
+-- two impls agreeing at slot 0 and separated at a LATER slot -- exactly what the
+-- `s-multiparam-*` / `s-nary-*` dict fixtures exercise.  Those candidates are still
+-- decidable, just not YET, so the check fires ONLY for colliding candidates with no
+-- dispatching slot after the one being applied (`hasLaterSlot`).  Without it this would
+-- panic on correct programs.
+--
+-- Distinct CANONICAL KEYS, not distinct tags, is the collision test: a re-imported
+-- prelude impl appears twice under one key and is one impl, while `Wrap|(Pair Int)|`
+-- and `Wrap|(Pair String)|` are two.
+--
+-- ⚠️ COST: UNMEASURED, AND SAID SO ON PURPOSE.  This runs on EVERY `applyOpt (VMulti vs)`
+-- -- the hot dispatch path -- and its `twoDistinctKeys` scan is O(n^2) in the candidate
+-- list.  Nobody has measured what that costs; #2445's review round raised it and the fix
+-- packet (F-4) deliberately scoped measurement OUT rather than guess.  `n` is the number
+-- of candidates at one method, which is small in every program anyone has run, so the
+-- expectation is that this is noise -- but an expectation is not a measurement, and
+-- `check` is GC-bound ([T-PERF-HUNT]: profile ALLOCATION, not wall clock), so a cheap-
+-- looking scan that allocates per candidate is exactly the shape that has surprised this
+-- compiler before.  If a `check`-path regression is ever reported, start here:
+-- `compiler/PERF-SCOPE.md` ranks the hot paths and `test/bench.sh` is the per-stage
+-- harness; a memoised or key-sorted collision test is the obvious first move if it bites.
+checkArgTagDecidable : List (Value e) -> Value e -> Unit
+checkArgTagDecidable vs arg
+  | not (anyList isDispatching vs) = ()
+  | otherwise = match runtimeTypeTag arg
+    None => ()
+    Some tag => reportIfUndecidable tag (filterList (undecidableCand tag) vs)
+
+undecidableCand : String -> Value e -> Bool
+undecidableCand tag v = isDispatching v
+  && matchesTag tag v
+  && not (hasLaterSlot v)
+
+-- is there a dispatching slot AFTER the argument being applied right now?  [seen] is
+-- the count of arguments already consumed, so the slot now being filled is [seen] and
+-- anything strictly greater can still discriminate.
+hasLaterSlot : Value e -> Bool
+hasLaterSlot (VTypedImpl _ _ pos seen _) = anyList (> seen) pos
+hasLaterSlot _ = False
+
+reportIfUndecidable : String -> List (Value e) -> Unit
+reportIfUndecidable tag cands
+  | twoDistinctKeys cands [] = runtimePanic "E-AMBIGUOUS-DISPATCH" "arg-tag dispatch on a receiver of type '\{tag}' is undecidable: more than one impl is declared at that type head and the runtime tag cannot choose between them"
+  | otherwise = ()
+
+-- ⚠️ TWO IMPLS COLLIDE ONLY WITHIN ONE INTERFACE (#2445 fix round, F-2).  The
+-- first cut of this predicate asked "are there two distinct canonical keys?" and
+-- nothing else, which is not the undecidability question: a canonical key is
+-- `<iface word>|<type args>|<method>` (`types/route_key.implRouteKeyWord`), and
+-- `coalesceImpls` merges every impl of every interface that happens to SPELL a
+-- method the same way into ONE `VMulti`.  Two modules each declaring their OWN
+-- interface (`Fa`/`Fb`, distinct `ifaceIdentity`) with ONE impl each at a head
+-- both spell `H` therefore produced two distinct keys — and a hard panic on a
+-- program with no collision at all, where the answer `(1, 2)` was already
+-- correct.  Measured: keys `x1277_a::Fa|H|` and `x1277_b::Fb|H|`, graded by
+-- `test/diff_compiler_check_cli_modules.sh` case `A-2.10/1277-xmod-head-spelling-run`
+-- (stage A-3's E1 tripwire for #1112 — nothing else in the tree names that role).
+-- Which INTERFACE a call site meant is decided by the typechecker, not by the
+-- runtime tag, so cross-interface candidates are never the tag's question; the
+-- residual "two interfaces, one method spelling, one type" hazard is #1265's, and
+-- it is pinned separately at
+-- `test/must_fail_fixtures/1265-two-ifaces-same-method-one-type-default-collapse/`.
+twoDistinctKeys : List (Value e) -> List (String, String) -> Bool
+twoDistinctKeys [] _ = False
+twoDistinctKeys (v::rest) seen
+  | ifaceRivalSeen (candIfaceKey v) seen = True
+  | otherwise = twoDistinctKeys rest (candIfaceKey v :: seen)
+
+-- an earlier candidate of the SAME interface word carrying a DIFFERENT canonical
+-- key — the only pair the runtime tag was asked to tell apart and could not.
+ifaceRivalSeen : (String, String) -> List (String, String) -> Bool
+ifaceRivalSeen _ [] = False
+ifaceRivalSeen (i, k) ((i2, k2)::rest)
+  | i == i2 && k /= k2 = True
+  | otherwise = ifaceRivalSeen (i, k) rest
+
+candIfaceKey : Value e -> (String, String)
+candIfaceKey v = (candIface v, candKey v)
+
+candKey : Value e -> String
+candKey (VTypedImpl _ k _ _ _) = k
+candKey _ = ""
+
+-- the `<iface word>` head of a canonical impl key.  `implRouteKeyWord` joins its
+-- three components with `|` and the iface word is the first, so the head of the
+-- split IS the word — and a value carrying no key ("") splits to [""], which
+-- groups the keyless candidates together where `candKey` already makes them
+-- indistinguishable.
+candIface : Value e -> String
+candIface v = match splitOnChar '|' (candKey v)
+  [] => ""
+  w::_ => w
+
 -- return-position dispatch (RKey): narrow a method's VMulti to the impl whose
 -- VTypedImpl tag matches the type the typechecker resolved (no runtime arg).  An
 -- empty tag (unresolved / polymorphic — doesn't occur in the compiler) leaves the
@@ -1169,7 +1276,11 @@ isDispatching _ = False
 -- them, so no dispatch decision outside that path can depend on them.
 export
 narrowMethod : EvalEnv (Value e) -> String -> Value e -> String -> <e> Value e
-narrowMethod _ _ (VMulti vs) "" = VMulti vs
+-- An EMPTY tag is an unresolved route reached through a dict whose key is blank
+-- (`methodAtNarrow`'s RDict/RDictFwd arms).  `methodAtNarrow`'s RNone arm reaches
+-- the SAME question by its own path, so both go through one narrower: the
+-- default-body impl key if one is in scope, otherwise the untouched VMulti.
+narrowMethod env _ (VMulti vs) "" = narrowByDefaultBodyKey env vs
 narrowMethod env method (VMulti vs) tag =
   stripResolved (pickByTag env method vs tag)
 -- A single-impl interface method binds to a BARE VTypedImpl (never coalesced into
@@ -1182,6 +1293,48 @@ narrowMethod _ _ (VTypedImpl t k p s inner) "" = VTypedImpl t k p s inner
 narrowMethod _ _ (VTypedImpl t k p s inner) _ =
   stripResolved (VTypedImpl t k p s inner)
 narrowMethod _ _ v _ = v
+
+-- ── #1062: the read-back side of `specializeDefault`'s key cell ────────────
+-- The `RNone` arm above is where a sibling call inside a generic interface DEFAULT
+-- body lands: the body belongs to the interface, not to any impl, so typecheck has
+-- no route to stamp and eval used to hand the whole `VMulti` to arg-tag, which sees
+-- only the head tycon.  When the frame `specializeDefault` prepended names the
+-- canonical impl key this body is running for, that key is the same fact native's
+-- `restampIfaceDicts` writes into the lifted copy's routes — so use it.
+--
+-- STRICTLY A NARROWING: it fires only when the key names EXACTLY ONE candidate.
+-- Zero (the method belongs to a different interface, whose keys never match this
+-- word) or several (which cannot happen for a canonical key, but is not assumed)
+-- leave the `VMulti` byte-identical to what the arm returned before, so every
+-- program that did not have an impl identity in hand behaves exactly as it did.
+-- Untagged candidates are excluded first because `matchesTag` answers True for
+-- them by default — that arm is for the arg-tag filter, where a non-dispatching
+-- candidate must not be dropped, and reading it as a MATCH here would let an
+-- interface default masquerade as the impl.
+narrowByDefaultBodyKey : EvalEnv (Value e) -> List (Value e) -> <e> Value e
+narrowByDefaultBodyKey env vs = match lookupEnvOpt env defaultBodyKeyCell
+  Some (VString key) => onlyCandFor vs (filterList (candMatches key) vs)
+  _ => VMulti vs
+
+-- Only a `VMulti` is a candidate SET; anything else was already decided (a bare
+-- `VTypedImpl`, an untagged default) and is returned untouched.  This is
+-- `methodAtNarrow`'s RNone entrance to the narrower above.
+narrowUnrouted : EvalEnv (Value e) -> Value e -> <e> Value e
+narrowUnrouted env (VMulti vs) = narrowByDefaultBodyKey env vs
+narrowUnrouted _ v = v
+
+candMatches : String -> Value e -> Bool
+candMatches key (VTypedImpl t k _ _ _) = t == key || k == key
+candMatches _ _ = False
+
+onlyCandFor : List (Value e) -> List (Value e) -> <e> Value e
+onlyCandFor _ [v] = stripResolved v
+onlyCandFor vs _ = VMulti vs
+
+-- `#` cannot occur in a Medaka identifier, so this cell can never collide with a
+-- user binding — the same reservation `defaultCellName` relies on.
+defaultBodyKeyCell : String
+defaultBodyKeyCell = "#defaultBodyImplKey"
 
 -- A concrete route tag picks the impl whose VTypedImpl tag matches.  When NO
 -- candidate carries the tag, the receiver's impl does not override this method —
@@ -1357,7 +1510,14 @@ dictOfRoute _ (RScalar _) =
 -- enclosing dict carries nested element dicts for the selected impl, Phase 83/84 #5).
 export
 methodAtNarrow : EvalEnv (Value e) -> String -> Value e -> Route -> <e> (Value e, List (Value e))
-methodAtNarrow _ _ v RNone = (v, [])
+-- #1062: RNone is "typecheck could not key this occurrence", and the sibling calls
+-- inside an interface DEFAULT body are all RNone by construction — the body belongs
+-- to the interface, so there is no impl to key them to.  That is exactly where the
+-- impl key `specializeDefault` recorded for the body applies, so consult it here
+-- rather than dropping straight to arg-tag, which sees only the head tycon and took
+-- the first impl at it (`<boxint>` twice for `Box Int`/`Box String`).  Outside a
+-- default body there is no cell and this is the identity, byte-for-byte.
+methodAtNarrow env _ v RNone = (narrowUnrouted env v, [])
 methodAtNarrow env method v (RKey key _) = (narrowMethod env method v key, [])
 -- ARGSTAMP-UNIFY Phase 2+3 / genuine #21: under eval dict-threading an arg-position
 -- RDict site's narrowed impl method ALSO carries leading element-dict params
@@ -1666,11 +1826,48 @@ applyMethodDicts env name route narrowed fwdReqs0 implRoutes methodRoutes =
 -- same-named default method), left conservatively unchanged; a nullary VThunk
 -- default never reaches here at all, as applyMethodDicts' awaitsArgs guard returns
 -- it before this call.
+-- ── #1062: THE SECOND HALF, ADDED BY #2445's F-2 FIX ROUND ─────────────────
+-- The dict-shadowing above is conditional on the impl HAVING `requires` dicts to
+-- route.  A generic default body whose impl has none got no frame at all — and so
+-- no record, anywhere, of WHICH impl it is running on behalf of.  Its inner
+-- same-interface sibling calls are stamped `RNone` (typecheck cannot resolve them:
+-- the body is the interface's, shared by every impl), so they fell all the way to
+-- arg-tag, which sees only the receiver's HEAD tycon.  With `impl Speak (Box Int)`
+-- and `impl Speak (Box String)` that is one tag for two impls and the sibling call
+-- took the first: `<boxint>` TWICE where `<boxint>`/`<boxstr>` is correct, exit 0,
+-- no diagnostic (#1062).  Native never had this: `emitDefaultDefine` lifts a
+-- per-tag COPY of the default and `restampIfaceDicts` rewrites its inner same-iface
+-- routes to `RKey tag`.
+--
+-- eval cannot rewrite routes (the Core-IR interpreter's default bodies are opaque
+-- `CExpr` — the reason the dict half went through the env too), so the env carries
+-- the same fact instead: ONE cell naming the canonical impl key this default body
+-- is running for, which `narrowMethod`'s `RNone` arm reads back.  That makes the
+-- cell the representation-independent twin of native's restamp, and it is
+-- LEXICAL — prepended to the default closure's own captured env, so it reaches the
+-- body's sibling calls and nothing a call OUT of the body evaluates.
+--
+-- ⚠️ IT NARROWS, IT NEVER OVERRIDES.  A sibling call the typechecker DID resolve
+-- carries a non-empty route tag and never reaches the `RNone` arm, so a default
+-- body that calls `speak` on some OTHER receiver keeps that receiver's own route.
+-- And the cell only decides when it names EXACTLY ONE candidate; a tag matching
+-- none (a different interface's method) or several leaves the `VMulti` exactly as
+-- it found it, so the arg-tag fallback — and the undecidability guard behind it —
+-- still get their turn.
 specializeDefault : EvalEnv (Value e) -> String -> String -> Option Int -> List Route -> Value e -> <e> Option (Value e)
 specializeDefault _ _ _ (Some _) _ _ = None
 specializeDefault env name tag None implRoutes narrowed
-  | tag == "" || isEmptyL implRoutes = None
-  | otherwise = withEnvFrame (siblingShadows env name tag implRoutes) narrowed
+  | tag == "" = None
+  | otherwise = withEnvFrame ((defaultBodyKeyCell, Ref (VString tag)) :: dictShadows env name tag implRoutes) narrowed
+
+-- The dict half stays EXACTLY as scoped as it was: an impl with no `requires` has
+-- no dicts to route, and binding its siblings here would PIN them (the hazard
+-- `siblingShadows`' own note names).  The key cell above carries the impl identity
+-- instead, and narrows only where nothing else decided.
+dictShadows : EvalEnv (Value e) -> String -> String -> List Route -> <e> List (String, Ref (Value e))
+dictShadows env name tag implRoutes
+  | isEmptyL implRoutes = []
+  | otherwise = siblingShadows env name tag implRoutes
 
 -- One shadow binding per same-interface sibling that the impl at [tag] defines with
 -- leading dict params (reqCount > 0).  A sibling the impl does NOT define (None) is
@@ -4410,7 +4607,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Route" true) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "Decl" true) (mem "DataVis" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "ifaceIdMatches" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "funHeadTag" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false))))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "mangleCtorCollisions" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "Severity" true) (mem "cjAllToJsonWith" false) (mem "flushRunEnvelope" false) (mem "runEnvelopeFields" false))))
@@ -4618,7 +4815,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "tyMentions" ((PCon "TyTuple" (PVar "ts")) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "t")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))) (EVar "ts")))
 (DFunDef false "tyMentions" ((PCon "TyEffect" PWild PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentions" ((PCon "TyConstrained" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))
-(DFunDef false "tyMentions" ((PCon "TyRow" PWild (PVar "tail") PWild) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EApp (EVar "contains") (EVar "v")) (EVar "params")))) (EVar "tail")))
+(DFunDef false "tyMentions" ((PCon "TyRow" PWild (PVar "tail") PWild) (PVar "params")) (EMatch (EVar "tail") (arm (PCon "Some" (PVar "v")) () (EApp (EApp (EVar "contains") (EVar "v")) (EVar "params"))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "lookupEnv" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "lookupEnv" ((PCon "EvalEnv" (PVar "frames")) (PVar "name")) (EApp (EApp (EVar "lookupFrames") (EVar "frames")) (EVar "name")))
 (DTypeSig false "lookupEnvOpt" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))))))
@@ -4800,7 +4997,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "applyOpt" ((PCon "VClosureF" (PVar "env") (PVar "pats") (PVar "f")) (PVar "arg")) (EApp (EApp (EApp (EApp (EVar "applyClosureF") (EVar "env")) (EVar "pats")) (EVar "f")) (EVar "arg")))
 (DFunDef false "applyOpt" ((PCon "VPrim" (PVar "f")) (PVar "arg")) (EApp (EVar "Some") (EApp (EVar "f") (EVar "arg"))))
 (DFunDef false "applyOpt" ((PCon "VTypedImpl" (PVar "t") (PVar "key") (PVar "pos") (PVar "seen") (PVar "inner")) (PVar "arg")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyTyped") (EVar "t")) (EVar "key")) (EVar "pos")) (EVar "seen")) (EVar "inner")) (EVar "arg")))
-(DFunDef false "applyOpt" ((PCon "VMulti" (PVar "vs")) (PVar "arg")) (EApp (EApp (EApp (EVar "collectPartials") (EListLit)) (EApp (EApp (EVar "filterByTag") (EVar "vs")) (EVar "arg"))) (EVar "arg")))
+(DFunDef false "applyOpt" ((PCon "VMulti" (PVar "vs")) (PVar "arg")) (ELet false PWild (EApp (EApp (EVar "checkArgTagDecidable") (EVar "vs")) (EVar "arg")) (EApp (EApp (EApp (EVar "collectPartials") (EListLit)) (EApp (EApp (EVar "filterByTag") (EVar "vs")) (EVar "arg"))) (EVar "arg"))))
 (DFunDef false "applyOpt" ((PVar "other") PWild) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-NOT-A-FUNCTION"))) (EBinOp "++" (ELit (LString "applied non-function: ")) (EApp (EVar "ppValue") (EVar "other")))))
 (DTypeSig false "applyTyped" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))))))))))
 (DFunDef false "applyTyped" ((PVar "t") (PVar "key") (PVar "pos") (PVar "seen") (PVar "inner") (PVar "arg")) (EApp (EApp (EVar "map") (EApp (EApp (EApp (EApp (EVar "reTag") (EVar "t")) (EVar "key")) (EVar "pos")) (EBinOp "+" (EVar "seen") (ELit (LInt 1))))) (EApp (EApp (EVar "applyOpt") (EVar "inner")) (EVar "arg"))))
@@ -4819,12 +5016,47 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "isDispatching" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "Bool")))
 (DFunDef false "isDispatching" ((PCon "VTypedImpl" PWild PWild (PVar "pos") (PVar "seen") PWild)) (EApp (EApp (EVar "containsInt") (EVar "seen")) (EVar "pos")))
 (DFunDef false "isDispatching" (PWild) (EVar "False"))
+(DTypeSig false "checkArgTagDecidable" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "Unit"))))
+(DFunDef false "checkArgTagDecidable" ((PVar "vs") (PVar "arg")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "anyList") (EVar "isDispatching")) (EVar "vs"))) (ELit LUnit) (EIf (EVar "otherwise") (EMatch (EApp (EVar "runtimeTypeTag") (EVar "arg")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "tag")) () (EApp (EApp (EVar "reportIfUndecidable") (EVar "tag")) (EApp (EApp (EVar "filterList") (EApp (EVar "undecidableCand") (EVar "tag"))) (EVar "vs"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "undecidableCand" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "Bool"))))
+(DFunDef false "undecidableCand" ((PVar "tag") (PVar "v")) (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isDispatching") (EVar "v")) (EApp (EApp (EVar "matchesTag") (EVar "tag")) (EVar "v"))) (EApp (EVar "not") (EApp (EVar "hasLaterSlot") (EVar "v")))))
+(DTypeSig false "hasLaterSlot" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "Bool")))
+(DFunDef false "hasLaterSlot" ((PCon "VTypedImpl" PWild PWild (PVar "pos") (PVar "seen") PWild)) (EApp (EApp (EVar "anyList") (ELam ((PVar "_s")) (EBinOp ">" (EVar "_s") (EVar "seen")))) (EVar "pos")))
+(DFunDef false "hasLaterSlot" (PWild) (EVar "False"))
+(DTypeSig false "reportIfUndecidable" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyCon "Unit"))))
+(DFunDef false "reportIfUndecidable" ((PVar "tag") (PVar "cands")) (EIf (EApp (EApp (EVar "twoDistinctKeys") (EVar "cands")) (EListLit)) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-AMBIGUOUS-DISPATCH"))) (EBinOp "++" (EBinOp "++" (ELit (LString "arg-tag dispatch on a receiver of type '")) (EApp (EVar "display") (EVar "tag"))) (ELit (LString "' is undecidable: more than one impl is declared at that type head and the runtime tag cannot choose between them")))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "twoDistinctKeys" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Bool"))))
+(DFunDef false "twoDistinctKeys" ((PList) PWild) (EVar "False"))
+(DFunDef false "twoDistinctKeys" ((PCons (PVar "v") (PVar "rest")) (PVar "seen")) (EIf (EApp (EApp (EVar "ifaceRivalSeen") (EApp (EVar "candIfaceKey") (EVar "v"))) (EVar "seen")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EVar "twoDistinctKeys") (EVar "rest")) (EBinOp "::" (EApp (EVar "candIfaceKey") (EVar "v")) (EVar "seen"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "ifaceRivalSeen" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Bool"))))
+(DFunDef false "ifaceRivalSeen" (PWild (PList)) (EVar "False"))
+(DFunDef false "ifaceRivalSeen" ((PTuple (PVar "i") (PVar "k")) (PCons (PTuple (PVar "i2") (PVar "k2")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "i") (EVar "i2")) (EBinOp "/=" (EVar "k") (EVar "k2"))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EVar "ifaceRivalSeen") (ETuple (EVar "i") (EVar "k"))) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "candIfaceKey" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyTuple (TyCon "String") (TyCon "String"))))
+(DFunDef false "candIfaceKey" ((PVar "v")) (ETuple (EApp (EVar "candIface") (EVar "v")) (EApp (EVar "candKey") (EVar "v"))))
+(DTypeSig false "candKey" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "String")))
+(DFunDef false "candKey" ((PCon "VTypedImpl" PWild (PVar "k") PWild PWild PWild)) (EVar "k"))
+(DFunDef false "candKey" (PWild) (ELit (LString "")))
+(DTypeSig false "candIface" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "String")))
+(DFunDef false "candIface" ((PVar "v")) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LChar "|"))) (EApp (EVar "candKey") (EVar "v"))) (arm (PList) () (ELit (LString ""))) (arm (PCons (PVar "w") PWild) () (EVar "w"))))
 (DTypeSig true "narrowMethod" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))
-(DFunDef false "narrowMethod" (PWild PWild (PCon "VMulti" (PVar "vs")) (PLit (LString ""))) (EApp (EVar "VMulti") (EVar "vs")))
+(DFunDef false "narrowMethod" ((PVar "env") PWild (PCon "VMulti" (PVar "vs")) (PLit (LString ""))) (EApp (EApp (EVar "narrowByDefaultBodyKey") (EVar "env")) (EVar "vs")))
 (DFunDef false "narrowMethod" ((PVar "env") (PVar "method") (PCon "VMulti" (PVar "vs")) (PVar "tag")) (EApp (EVar "stripResolved") (EApp (EApp (EApp (EApp (EVar "pickByTag") (EVar "env")) (EVar "method")) (EVar "vs")) (EVar "tag"))))
 (DFunDef false "narrowMethod" (PWild PWild (PCon "VTypedImpl" (PVar "t") (PVar "k") (PVar "p") (PVar "s") (PVar "inner")) (PLit (LString ""))) (EApp (EApp (EApp (EApp (EApp (EVar "VTypedImpl") (EVar "t")) (EVar "k")) (EVar "p")) (EVar "s")) (EVar "inner")))
 (DFunDef false "narrowMethod" (PWild PWild (PCon "VTypedImpl" (PVar "t") (PVar "k") (PVar "p") (PVar "s") (PVar "inner")) PWild) (EApp (EVar "stripResolved") (EApp (EApp (EApp (EApp (EApp (EVar "VTypedImpl") (EVar "t")) (EVar "k")) (EVar "p")) (EVar "s")) (EVar "inner"))))
 (DFunDef false "narrowMethod" (PWild PWild (PVar "v") PWild) (EVar "v"))
+(DTypeSig false "narrowByDefaultBodyKey" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
+(DFunDef false "narrowByDefaultBodyKey" ((PVar "env") (PVar "vs")) (EMatch (EApp (EApp (EVar "lookupEnvOpt") (EVar "env")) (EVar "defaultBodyKeyCell")) (arm (PCon "Some" (PCon "VString" (PVar "key"))) () (EApp (EApp (EVar "onlyCandFor") (EVar "vs")) (EApp (EApp (EVar "filterList") (EApp (EVar "candMatches") (EVar "key"))) (EVar "vs")))) (arm PWild () (EApp (EVar "VMulti") (EVar "vs")))))
+(DTypeSig false "narrowUnrouted" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
+(DFunDef false "narrowUnrouted" ((PVar "env") (PCon "VMulti" (PVar "vs"))) (EApp (EApp (EVar "narrowByDefaultBodyKey") (EVar "env")) (EVar "vs")))
+(DFunDef false "narrowUnrouted" (PWild (PVar "v")) (EVar "v"))
+(DTypeSig false "candMatches" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "Bool"))))
+(DFunDef false "candMatches" ((PVar "key") (PCon "VTypedImpl" (PVar "t") (PVar "k") PWild PWild PWild)) (EBinOp "||" (EBinOp "==" (EVar "t") (EVar "key")) (EBinOp "==" (EVar "k") (EVar "key"))))
+(DFunDef false "candMatches" (PWild PWild) (EVar "False"))
+(DTypeSig false "onlyCandFor" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
+(DFunDef false "onlyCandFor" (PWild (PList (PVar "v"))) (EApp (EVar "stripResolved") (EVar "v")))
+(DFunDef false "onlyCandFor" ((PVar "vs") PWild) (EApp (EVar "VMulti") (EVar "vs")))
+(DTypeSig false "defaultBodyKeyCell" (TyCon "String"))
+(DFunDef false "defaultBodyKeyCell" () (ELit (LString "#defaultBodyImplKey")))
 (DTypeSig false "pickByTag" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))
 (DFunDef false "pickByTag" ((PVar "env") (PVar "method") (PVar "vs") (PVar "tag")) (EMatch (EApp (EApp (EVar "filterList") (EApp (EVar "hasTag") (EVar "tag"))) (EVar "vs")) (arm (PList) () (EApp (EApp (EApp (EApp (EVar "pickTagFallback") (EVar "env")) (EVar "method")) (EVar "vs")) (EVar "tag"))) (arm (PVar "matched") () (EApp (EApp (EVar "oneOrMultiV") (EVar "matched")) (EVar "vs")))))
 (DTypeSig false "pickTagFallback" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))
@@ -4877,7 +5109,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "dictOfRoute" (PWild (PCon "RLocal" PWild PWild)) (EApp (EApp (EVar "VDict") (ELit (LString ""))) (EListLit)))
 (DFunDef false "dictOfRoute" (PWild (PCon "RScalar" PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: RScalar is an arithmetic binop tag, not a dispatch route"))))
 (DTypeSig true "methodAtNarrow" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyCon "Route") (TyEffect () (Some "e") (TyTuple (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))))))))
-(DFunDef false "methodAtNarrow" (PWild PWild (PVar "v") (PCon "RNone")) (ETuple (EVar "v") (EListLit)))
+(DFunDef false "methodAtNarrow" ((PVar "env") PWild (PVar "v") (PCon "RNone")) (ETuple (EApp (EApp (EVar "narrowUnrouted") (EVar "env")) (EVar "v")) (EListLit)))
 (DFunDef false "methodAtNarrow" ((PVar "env") (PVar "method") (PVar "v") (PCon "RKey" (PVar "key") PWild)) (ETuple (EApp (EApp (EApp (EApp (EVar "narrowMethod") (EVar "env")) (EVar "method")) (EVar "v")) (EVar "key")) (EListLit)))
 (DFunDef false "methodAtNarrow" ((PVar "env") (PVar "method") (PVar "v") (PCon "RDict" (PVar "d"))) (EMatch (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "d")) (arm (PCon "VDict" (PVar "key") (PVar "reqs")) () (ETuple (EApp (EApp (EApp (EApp (EVar "narrowMethod") (EVar "env")) (EVar "method")) (EVar "v")) (EVar "key")) (EVar "reqs"))) (arm PWild () (ETuple (EVar "v") (EListLit)))))
 (DFunDef false "methodAtNarrow" ((PVar "env") (PVar "method") (PVar "v") (PCon "RDictFwd" (PVar "d"))) (EMatch (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "d")) (arm (PCon "VDict" (PVar "key") (PVar "reqs")) () (ETuple (EApp (EApp (EApp (EApp (EVar "narrowMethod") (EVar "env")) (EVar "method")) (EVar "v")) (EVar "key")) (EVar "reqs"))) (arm PWild () (ETuple (EVar "v") (EListLit)))))
@@ -4964,7 +5196,9 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "applyMethodDicts" ((PVar "env") (PVar "name") (PVar "route") (PVar "narrowed") (PVar "fwdReqs0") (PVar "implRoutes") (PVar "methodRoutes")) (EBlock (DoLet false false (PVar "tag") (EApp (EApp (EVar "routeTag") (EVar "env")) (EVar "route"))) (DoLet false false (PVar "reqCount") (EApp (EApp (EVar "lookupMethodReqCountOpt") (EVar "name")) (EVar "tag"))) (DoLet false false (PVar "fwdReqs") (EApp (EApp (EVar "takeN") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EVar "reqCount"))) (EVar "fwdReqs0"))) (DoExpr (EIf (EApp (EVar "awaitsArgs") (EVar "narrowed")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "specializeDefault") (EVar "env")) (EVar "name")) (EVar "tag")) (EVar "reqCount")) (EVar "implRoutes")) (EVar "narrowed")) (arm (PCon "Some" (PVar "specialized")) () (EApp (EApp (EApp (EVar "applyDicts") (EVar "env")) (EVar "specialized")) (EVar "methodRoutes"))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "v1") (EApp (EApp (EApp (EVar "applyDicts") (EVar "env")) (EVar "narrowed")) (EVar "methodRoutes"))) (DoLet false false (PVar "v2") (EApp (EApp (EApp (EVar "applyDicts") (EVar "env")) (EVar "v1")) (EApp (EApp (EApp (EVar "implDictRoutes") (EVar "reqCount")) (EVar "methodRoutes")) (EVar "implRoutes")))) (DoExpr (EApp (EApp (EVar "applyValues") (EVar "v2")) (EVar "fwdReqs")))))) (EVar "narrowed")))))
 (DTypeSig false "specializeDefault" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))))))))))
 (DFunDef false "specializeDefault" (PWild PWild PWild (PCon "Some" PWild) PWild PWild) (EVar "None"))
-(DFunDef false "specializeDefault" ((PVar "env") (PVar "name") (PVar "tag") (PCon "None") (PVar "implRoutes") (PVar "narrowed")) (EIf (EBinOp "||" (EBinOp "==" (EVar "tag") (ELit (LString ""))) (EApp (EVar "isEmptyL") (EVar "implRoutes"))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EVar "withEnvFrame") (EApp (EApp (EApp (EApp (EVar "siblingShadows") (EVar "env")) (EVar "name")) (EVar "tag")) (EVar "implRoutes"))) (EVar "narrowed")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "specializeDefault" ((PVar "env") (PVar "name") (PVar "tag") (PCon "None") (PVar "implRoutes") (PVar "narrowed")) (EIf (EBinOp "==" (EVar "tag") (ELit (LString ""))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EVar "withEnvFrame") (EBinOp "::" (ETuple (EVar "defaultBodyKeyCell") (EApp (EVar "Ref") (EApp (EVar "VString") (EVar "tag")))) (EApp (EApp (EApp (EApp (EVar "dictShadows") (EVar "env")) (EVar "name")) (EVar "tag")) (EVar "implRoutes")))) (EVar "narrowed")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "dictShadows" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e")))))))))))
+(DFunDef false "dictShadows" ((PVar "env") (PVar "name") (PVar "tag") (PVar "implRoutes")) (EIf (EApp (EVar "isEmptyL") (EVar "implRoutes")) (EListLit) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "siblingShadows") (EVar "env")) (EVar "name")) (EVar "tag")) (EVar "implRoutes")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "siblingShadows" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e")))))))))))
 (DFunDef false "siblingShadows" ((PVar "env") (PVar "name") (PVar "tag") (PVar "implRoutes")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "shadowBind") (EVar "env")) (EVar "tag")) (EVar "implRoutes"))) (EApp (EApp (EVar "filter") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (EVar "name")))) (EApp (EVar "methodsOfIface") (EApp (EVar "ifaceOfMethod") (EVar "name"))))))
 (DTypeSig false "shadowBind" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e")))))))))))
@@ -5895,7 +6129,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Route" true) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "Decl" true) (mem "DataVis" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "ifaceIdMatches" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "funHeadTag" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false))))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "mangleCtorCollisions" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "Severity" true) (mem "cjAllToJsonWith" false) (mem "flushRunEnvelope" false) (mem "runEnvelopeFields" false))))
@@ -6103,7 +6337,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "tyMentions" ((PCon "TyTuple" (PVar "ts")) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "t")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))) (EVar "ts")))
 (DFunDef false "tyMentions" ((PCon "TyEffect" PWild PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentions" ((PCon "TyConstrained" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))
-(DFunDef false "tyMentions" ((PCon "TyRow" PWild (PVar "tail") PWild) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EApp (EVar "contains") (EVar "v")) (EVar "params")))) (EVar "tail")))
+(DFunDef false "tyMentions" ((PCon "TyRow" PWild (PVar "tail") PWild) (PVar "params")) (EMatch (EVar "tail") (arm (PCon "Some" (PVar "v")) () (EApp (EApp (EVar "contains") (EVar "v")) (EVar "params"))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "lookupEnv" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "lookupEnv" ((PCon "EvalEnv" (PVar "frames")) (PVar "name")) (EApp (EApp (EVar "lookupFrames") (EVar "frames")) (EVar "name")))
 (DTypeSig false "lookupEnvOpt" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))))))
@@ -6285,7 +6519,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "applyOpt" ((PCon "VClosureF" (PVar "env") (PVar "pats") (PVar "f")) (PVar "arg")) (EApp (EApp (EApp (EApp (EVar "applyClosureF") (EVar "env")) (EVar "pats")) (EVar "f")) (EVar "arg")))
 (DFunDef false "applyOpt" ((PCon "VPrim" (PVar "f")) (PVar "arg")) (EApp (EVar "Some") (EApp (EVar "f") (EVar "arg"))))
 (DFunDef false "applyOpt" ((PCon "VTypedImpl" (PVar "t") (PVar "key") (PVar "pos") (PVar "seen") (PVar "inner")) (PVar "arg")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyTyped") (EVar "t")) (EVar "key")) (EVar "pos")) (EVar "seen")) (EVar "inner")) (EVar "arg")))
-(DFunDef false "applyOpt" ((PCon "VMulti" (PVar "vs")) (PVar "arg")) (EApp (EApp (EApp (EVar "collectPartials") (EListLit)) (EApp (EApp (EVar "filterByTag") (EVar "vs")) (EVar "arg"))) (EVar "arg")))
+(DFunDef false "applyOpt" ((PCon "VMulti" (PVar "vs")) (PVar "arg")) (ELet false PWild (EApp (EApp (EVar "checkArgTagDecidable") (EVar "vs")) (EVar "arg")) (EApp (EApp (EApp (EVar "collectPartials") (EListLit)) (EApp (EApp (EVar "filterByTag") (EVar "vs")) (EVar "arg"))) (EVar "arg"))))
 (DFunDef false "applyOpt" ((PVar "other") PWild) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-NOT-A-FUNCTION"))) (EBinOp "++" (ELit (LString "applied non-function: ")) (EApp (EVar "ppValue") (EVar "other")))))
 (DTypeSig false "applyTyped" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))))))))))
 (DFunDef false "applyTyped" ((PVar "t") (PVar "key") (PVar "pos") (PVar "seen") (PVar "inner") (PVar "arg")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EApp (EVar "reTag") (EVar "t")) (EVar "key")) (EVar "pos")) (EBinOp "+" (EVar "seen") (ELit (LInt 1))))) (EApp (EApp (EVar "applyOpt") (EVar "inner")) (EVar "arg"))))
@@ -6304,12 +6538,47 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "isDispatching" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "Bool")))
 (DFunDef false "isDispatching" ((PCon "VTypedImpl" PWild PWild (PVar "pos") (PVar "seen") PWild)) (EApp (EApp (EVar "containsInt") (EVar "seen")) (EVar "pos")))
 (DFunDef false "isDispatching" (PWild) (EVar "False"))
+(DTypeSig false "checkArgTagDecidable" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "Unit"))))
+(DFunDef false "checkArgTagDecidable" ((PVar "vs") (PVar "arg")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "anyList") (EVar "isDispatching")) (EVar "vs"))) (ELit LUnit) (EIf (EVar "otherwise") (EMatch (EApp (EVar "runtimeTypeTag") (EVar "arg")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "tag")) () (EApp (EApp (EVar "reportIfUndecidable") (EVar "tag")) (EApp (EApp (EVar "filterList") (EApp (EVar "undecidableCand") (EVar "tag"))) (EVar "vs"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "undecidableCand" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "Bool"))))
+(DFunDef false "undecidableCand" ((PVar "tag") (PVar "v")) (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isDispatching") (EVar "v")) (EApp (EApp (EVar "matchesTag") (EVar "tag")) (EVar "v"))) (EApp (EVar "not") (EApp (EVar "hasLaterSlot") (EVar "v")))))
+(DTypeSig false "hasLaterSlot" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "Bool")))
+(DFunDef false "hasLaterSlot" ((PCon "VTypedImpl" PWild PWild (PVar "pos") (PVar "seen") PWild)) (EApp (EApp (EVar "anyList") (ELam ((PVar "_s")) (EBinOp ">" (EVar "_s") (EVar "seen")))) (EVar "pos")))
+(DFunDef false "hasLaterSlot" (PWild) (EVar "False"))
+(DTypeSig false "reportIfUndecidable" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyCon "Unit"))))
+(DFunDef false "reportIfUndecidable" ((PVar "tag") (PVar "cands")) (EIf (EApp (EApp (EVar "twoDistinctKeys") (EVar "cands")) (EListLit)) (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-AMBIGUOUS-DISPATCH"))) (EBinOp "++" (EBinOp "++" (ELit (LString "arg-tag dispatch on a receiver of type '")) (EApp (EMethodRef "display") (EVar "tag"))) (ELit (LString "' is undecidable: more than one impl is declared at that type head and the runtime tag cannot choose between them")))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "twoDistinctKeys" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Bool"))))
+(DFunDef false "twoDistinctKeys" ((PList) PWild) (EVar "False"))
+(DFunDef false "twoDistinctKeys" ((PCons (PVar "v") (PVar "rest")) (PVar "seen")) (EIf (EApp (EApp (EVar "ifaceRivalSeen") (EApp (EVar "candIfaceKey") (EVar "v"))) (EVar "seen")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EVar "twoDistinctKeys") (EVar "rest")) (EBinOp "::" (EApp (EVar "candIfaceKey") (EVar "v")) (EVar "seen"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "ifaceRivalSeen" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Bool"))))
+(DFunDef false "ifaceRivalSeen" (PWild (PList)) (EVar "False"))
+(DFunDef false "ifaceRivalSeen" ((PTuple (PVar "i") (PVar "k")) (PCons (PTuple (PVar "i2") (PVar "k2")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "i") (EVar "i2")) (EBinOp "/=" (EVar "k") (EVar "k2"))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EVar "ifaceRivalSeen") (ETuple (EVar "i") (EVar "k"))) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "candIfaceKey" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyTuple (TyCon "String") (TyCon "String"))))
+(DFunDef false "candIfaceKey" ((PVar "v")) (ETuple (EApp (EVar "candIface") (EVar "v")) (EApp (EVar "candKey") (EVar "v"))))
+(DTypeSig false "candKey" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "String")))
+(DFunDef false "candKey" ((PCon "VTypedImpl" PWild (PVar "k") PWild PWild PWild)) (EVar "k"))
+(DFunDef false "candKey" (PWild) (ELit (LString "")))
+(DTypeSig false "candIface" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "String")))
+(DFunDef false "candIface" ((PVar "v")) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LChar "|"))) (EApp (EVar "candKey") (EVar "v"))) (arm (PList) () (ELit (LString ""))) (arm (PCons (PVar "w") PWild) () (EVar "w"))))
 (DTypeSig true "narrowMethod" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))
-(DFunDef false "narrowMethod" (PWild PWild (PCon "VMulti" (PVar "vs")) (PLit (LString ""))) (EApp (EVar "VMulti") (EVar "vs")))
+(DFunDef false "narrowMethod" ((PVar "env") PWild (PCon "VMulti" (PVar "vs")) (PLit (LString ""))) (EApp (EApp (EVar "narrowByDefaultBodyKey") (EVar "env")) (EVar "vs")))
 (DFunDef false "narrowMethod" ((PVar "env") (PVar "method") (PCon "VMulti" (PVar "vs")) (PVar "tag")) (EApp (EVar "stripResolved") (EApp (EApp (EApp (EApp (EVar "pickByTag") (EVar "env")) (EVar "method")) (EVar "vs")) (EVar "tag"))))
 (DFunDef false "narrowMethod" (PWild PWild (PCon "VTypedImpl" (PVar "t") (PVar "k") (PVar "p") (PVar "s") (PVar "inner")) (PLit (LString ""))) (EApp (EApp (EApp (EApp (EApp (EVar "VTypedImpl") (EVar "t")) (EVar "k")) (EVar "p")) (EVar "s")) (EVar "inner")))
 (DFunDef false "narrowMethod" (PWild PWild (PCon "VTypedImpl" (PVar "t") (PVar "k") (PVar "p") (PVar "s") (PVar "inner")) PWild) (EApp (EVar "stripResolved") (EApp (EApp (EApp (EApp (EApp (EVar "VTypedImpl") (EVar "t")) (EVar "k")) (EVar "p")) (EVar "s")) (EVar "inner"))))
 (DFunDef false "narrowMethod" (PWild PWild (PVar "v") PWild) (EVar "v"))
+(DTypeSig false "narrowByDefaultBodyKey" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
+(DFunDef false "narrowByDefaultBodyKey" ((PVar "env") (PVar "vs")) (EMatch (EApp (EApp (EVar "lookupEnvOpt") (EVar "env")) (EVar "defaultBodyKeyCell")) (arm (PCon "Some" (PCon "VString" (PVar "key"))) () (EApp (EApp (EVar "onlyCandFor") (EVar "vs")) (EApp (EApp (EVar "filterList") (EApp (EVar "candMatches") (EVar "key"))) (EVar "vs")))) (arm PWild () (EApp (EVar "VMulti") (EVar "vs")))))
+(DTypeSig false "narrowUnrouted" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
+(DFunDef false "narrowUnrouted" ((PVar "env") (PCon "VMulti" (PVar "vs"))) (EApp (EApp (EVar "narrowByDefaultBodyKey") (EVar "env")) (EVar "vs")))
+(DFunDef false "narrowUnrouted" (PWild (PVar "v")) (EVar "v"))
+(DTypeSig false "candMatches" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "Bool"))))
+(DFunDef false "candMatches" ((PVar "key") (PCon "VTypedImpl" (PVar "t") (PVar "k") PWild PWild PWild)) (EBinOp "||" (EBinOp "==" (EVar "t") (EVar "key")) (EBinOp "==" (EVar "k") (EVar "key"))))
+(DFunDef false "candMatches" (PWild PWild) (EVar "False"))
+(DTypeSig false "onlyCandFor" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
+(DFunDef false "onlyCandFor" (PWild (PList (PVar "v"))) (EApp (EVar "stripResolved") (EVar "v")))
+(DFunDef false "onlyCandFor" ((PVar "vs") PWild) (EApp (EVar "VMulti") (EVar "vs")))
+(DTypeSig false "defaultBodyKeyCell" (TyCon "String"))
+(DFunDef false "defaultBodyKeyCell" () (ELit (LString "#defaultBodyImplKey")))
 (DTypeSig false "pickByTag" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))
 (DFunDef false "pickByTag" ((PVar "env") (PVar "method") (PVar "vs") (PVar "tag")) (EMatch (EApp (EApp (EVar "filterList") (EApp (EVar "hasTag") (EVar "tag"))) (EVar "vs")) (arm (PList) () (EApp (EApp (EApp (EApp (EVar "pickTagFallback") (EVar "env")) (EVar "method")) (EVar "vs")) (EVar "tag"))) (arm (PVar "matched") () (EApp (EApp (EVar "oneOrMultiV") (EVar "matched")) (EVar "vs")))))
 (DTypeSig false "pickTagFallback" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))
@@ -6362,7 +6631,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "dictOfRoute" (PWild (PCon "RLocal" PWild PWild)) (EApp (EApp (EVar "VDict") (ELit (LString ""))) (EListLit)))
 (DFunDef false "dictOfRoute" (PWild (PCon "RScalar" PWild)) (EApp (EVar "panic") (ELit (LString "unreachable: RScalar is an arithmetic binop tag, not a dispatch route"))))
 (DTypeSig true "methodAtNarrow" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyCon "Route") (TyEffect () (Some "e") (TyTuple (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))))))))
-(DFunDef false "methodAtNarrow" (PWild PWild (PVar "v") (PCon "RNone")) (ETuple (EVar "v") (EListLit)))
+(DFunDef false "methodAtNarrow" ((PVar "env") PWild (PVar "v") (PCon "RNone")) (ETuple (EApp (EApp (EVar "narrowUnrouted") (EVar "env")) (EVar "v")) (EListLit)))
 (DFunDef false "methodAtNarrow" ((PVar "env") (PVar "method") (PVar "v") (PCon "RKey" (PVar "key") PWild)) (ETuple (EApp (EApp (EApp (EApp (EVar "narrowMethod") (EVar "env")) (EVar "method")) (EVar "v")) (EVar "key")) (EListLit)))
 (DFunDef false "methodAtNarrow" ((PVar "env") (PVar "method") (PVar "v") (PCon "RDict" (PVar "d"))) (EMatch (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "d")) (arm (PCon "VDict" (PVar "key") (PVar "reqs")) () (ETuple (EApp (EApp (EApp (EApp (EVar "narrowMethod") (EVar "env")) (EVar "method")) (EVar "v")) (EVar "key")) (EVar "reqs"))) (arm PWild () (ETuple (EVar "v") (EListLit)))))
 (DFunDef false "methodAtNarrow" ((PVar "env") (PVar "method") (PVar "v") (PCon "RDictFwd" (PVar "d"))) (EMatch (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "d")) (arm (PCon "VDict" (PVar "key") (PVar "reqs")) () (ETuple (EApp (EApp (EApp (EApp (EVar "narrowMethod") (EVar "env")) (EVar "method")) (EVar "v")) (EVar "key")) (EVar "reqs"))) (arm PWild () (ETuple (EVar "v") (EListLit)))))
@@ -6449,7 +6718,9 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "applyMethodDicts" ((PVar "env") (PVar "name") (PVar "route") (PVar "narrowed") (PVar "fwdReqs0") (PVar "implRoutes") (PVar "methodRoutes")) (EBlock (DoLet false false (PVar "tag") (EApp (EApp (EVar "routeTag") (EVar "env")) (EVar "route"))) (DoLet false false (PVar "reqCount") (EApp (EApp (EVar "lookupMethodReqCountOpt") (EVar "name")) (EVar "tag"))) (DoLet false false (PVar "fwdReqs") (EApp (EApp (EVar "takeN") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EVar "reqCount"))) (EVar "fwdReqs0"))) (DoExpr (EIf (EApp (EVar "awaitsArgs") (EVar "narrowed")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "specializeDefault") (EVar "env")) (EVar "name")) (EVar "tag")) (EVar "reqCount")) (EVar "implRoutes")) (EVar "narrowed")) (arm (PCon "Some" (PVar "specialized")) () (EApp (EApp (EApp (EVar "applyDicts") (EVar "env")) (EVar "specialized")) (EVar "methodRoutes"))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "v1") (EApp (EApp (EApp (EVar "applyDicts") (EVar "env")) (EVar "narrowed")) (EVar "methodRoutes"))) (DoLet false false (PVar "v2") (EApp (EApp (EApp (EVar "applyDicts") (EVar "env")) (EVar "v1")) (EApp (EApp (EApp (EVar "implDictRoutes") (EVar "reqCount")) (EVar "methodRoutes")) (EVar "implRoutes")))) (DoExpr (EApp (EApp (EVar "applyValues") (EVar "v2")) (EVar "fwdReqs")))))) (EVar "narrowed")))))
 (DTypeSig false "specializeDefault" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))))))))))
 (DFunDef false "specializeDefault" (PWild PWild PWild (PCon "Some" PWild) PWild PWild) (EVar "None"))
-(DFunDef false "specializeDefault" ((PVar "env") (PVar "name") (PVar "tag") (PCon "None") (PVar "implRoutes") (PVar "narrowed")) (EIf (EBinOp "||" (EBinOp "==" (EVar "tag") (ELit (LString ""))) (EApp (EVar "isEmptyL") (EVar "implRoutes"))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EVar "withEnvFrame") (EApp (EApp (EApp (EApp (EVar "siblingShadows") (EVar "env")) (EVar "name")) (EVar "tag")) (EVar "implRoutes"))) (EVar "narrowed")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "specializeDefault" ((PVar "env") (PVar "name") (PVar "tag") (PCon "None") (PVar "implRoutes") (PVar "narrowed")) (EIf (EBinOp "==" (EVar "tag") (ELit (LString ""))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EVar "withEnvFrame") (EBinOp "::" (ETuple (EVar "defaultBodyKeyCell") (EApp (EVar "Ref") (EApp (EVar "VString") (EVar "tag")))) (EApp (EApp (EApp (EApp (EVar "dictShadows") (EVar "env")) (EVar "name")) (EVar "tag")) (EVar "implRoutes")))) (EVar "narrowed")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "dictShadows" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e")))))))))))
+(DFunDef false "dictShadows" ((PVar "env") (PVar "name") (PVar "tag") (PVar "implRoutes")) (EIf (EApp (EVar "isEmptyL") (EVar "implRoutes")) (EListLit) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "siblingShadows") (EVar "env")) (EVar "name")) (EVar "tag")) (EVar "implRoutes")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "siblingShadows" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e")))))))))))
 (DFunDef false "siblingShadows" ((PVar "env") (PVar "name") (PVar "tag") (PVar "implRoutes")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "shadowBind") (EVar "env")) (EVar "tag")) (EVar "implRoutes"))) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (EVar "name")))) (EApp (EVar "methodsOfIface") (EApp (EVar "ifaceOfMethod") (EVar "name"))))))
 (DTypeSig false "shadowBind" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e")))))))))))

@@ -48,6 +48,16 @@ why-drains: reconstruct the `meow|meow` observation before touching this row.
 why-drains: That is the whole reason the fixture was re-verbed instead of
 why-drains: deleted: deleting it would have removed the tripwire that fires at
 why-drains: the one moment the original bug can return.
+why-drains: CORROBORATED 2026-09-01 (sprint argtag-decidability, #2445) by an
+why-drains: independent measurement, not just this row's own reasoning:
+why-drains: test/argtag_matrix_fixtures/CENSUS.md drove the masked region
+why-drains: through a test-only unpin hatch and found 0 of 10 cells decidable,
+why-drains: every one blocked on the same #1082 mechanism -- including
+why-drains: A1_distinct_user_heads__B1_both_defined, which contains no
+why-drains: method-less impl at all, proving the blocker is #1082 and not
+why-drains: specifically #1046 (whose emitter-side fix already landed at
+why-drains: 33385a53 and remains unreachable from ordinary source for the
+why-drains: same #1082 reason this row pins).
 why-control: control.mdk is byte-identical to main.mdk except the ONE shared
 why-control: local lambda is split into TWO single-type locals -- the exact
 why-control: dimension main's rejection keys on.  `impl Speak Dog` stays

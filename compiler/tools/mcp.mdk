@@ -35,7 +35,7 @@ import json.{
   jArray,
   stringify,
   parse,
-  lookup,
+  get,
   asString,
   asInt,
   asArray,
@@ -148,14 +148,14 @@ errorMsg idJson code message = jObject
 fieldOr : String -> Json -> Json
 -- Intentional cross-file duplicate of lsp.mdk's fieldOr; lsp.mdk doesn't export it and importing it here would widen the cross-module surface.
 -- lint-disable-next-line rule-duplicate-body
-fieldOr key j = match lookup key j
+fieldOr key j = match get key j
   Some v => v
   None => JNull
 
 fieldStr : String -> Json -> Option String
 -- Intentional cross-file duplicate of lsp.mdk's fieldStr; lsp.mdk doesn't export it and importing it here would widen the cross-module surface.
 -- lint-disable-next-line rule-duplicate-body
-fieldStr key j = match lookup key j
+fieldStr key j = match get key j
   Some v => asString v
   None => None
 
@@ -165,7 +165,7 @@ methodOf msg = fieldStr "method" msg
 -- Integer field accessor (for tool args like `line`/`col`).  None when absent or
 -- not a JInt — the caller reports the missing/invalid argument as an isError result.
 fieldInt : String -> Json -> Option Int
-fieldInt key j = match lookup key j
+fieldInt key j = match get key j
   Some v => asInt v
   None => None
 
@@ -987,7 +987,7 @@ medakaFmtSchema = jObject
 -- value both fall back to `dflt` (an argument-shape error, not a crash — the
 -- caller reports it, same policy as fieldStr/fieldInt).
 fieldBoolOr : String -> Bool -> Json -> Bool
-fieldBoolOr key dflt j = match lookup key j
+fieldBoolOr key dflt j = match get key j
   Some (JBool b) => b
   _ => dflt
 
@@ -1108,7 +1108,7 @@ jsonArrToListGo arr i n
 -- containing any non-string element — a malformed `paths` is reported as an
 -- argument error, never silently dropped/skipped element-by-element.
 pathsArg : Json -> Option (List String)
-pathsArg args = match lookup "paths" args
+pathsArg args = match get "paths" args
   None => None
   Some v => match asArray v
     None => None
@@ -1445,7 +1445,7 @@ dispatchMsg runtimeSrc coreSrc stdlibDir msg stalenessCheck = match asArray msg
       -- handleToolsCall — don't double-log it here.
       let _ = if meth == "tools/call" then unit else logMcpCall meth "" ""
       if meth == "notifications/initialized" then unit
-      else match lookup "id" msg
+      else match get "id" msg
         None => unit -- notification: no response for ANY method
         Some idJson =>
           if meth == "initialize" then

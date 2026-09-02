@@ -1,5 +1,5 @@
 # META
-source_lines=138
+source_lines=139
 stages=DESUGAR,MARK
 # SOURCE
 {- | A list with at least one element.
@@ -7,7 +7,7 @@ stages=DESUGAR,MARK
    `NonEmpty a` is a first element and a tail, so it cannot be empty. That
    makes `head`, `maximum`, and `minimum` total: they return the element
    itself rather than an `Option`. Build one with `singleton`, `fromList`,
-   or the `NECons` constructor.
+   or the `NonEmpty` constructor.
 
    Import the module by name, `import nonempty`, and call `nonempty.head`
    and the rest qualified, since the names overlap with `list`'s. -}
@@ -29,7 +29,7 @@ import core.{
 }
 
 -- | A first element and the rest of the list.
-public export data NonEmpty a = NECons a (List a)
+public export data NonEmpty a = NonEmpty a (List a)
 
 -- # Construction
 
@@ -39,7 +39,7 @@ public export data NonEmpty a = NECons a (List a)
    [9] -}
 export
 singleton : a -> NonEmpty a
-singleton x = NECons x []
+singleton x = NonEmpty x []
 
 -- > head (singleton 9)
 -- 9
@@ -56,77 +56,78 @@ singleton x = NECons x []
 export
 fromList : List a -> Option (NonEmpty a)
 fromList [] = None
-fromList (x::rest) = Some (NECons x rest)
+fromList (x::rest) = Some (NonEmpty x rest)
 
 -- # Accessing elements
 
 {- | The first element.
 
-   > head (NECons 7 [8, 9])
+   > head (NonEmpty 7 [8, 9])
    7 -}
 export
 head : NonEmpty a -> a
-head (NECons x _) = x
+head (NonEmpty x _) = x
 
 {- | The largest element.
 
-   > maximum (NECons 3 [1, 4, 1, 5])
+   > maximum (NonEmpty 3 [1, 4, 1, 5])
    5 -}
 export
 maximum : Ord a => NonEmpty a -> a
-maximum (NECons x xs) = fold (acc y => max y acc) x xs
+maximum (NonEmpty x xs) = fold (acc y => max y acc) x xs
 
 {- | The smallest element.
 
-   > minimum (NECons 3 [1, 4, 1, 5])
+   > minimum (NonEmpty 3 [1, 4, 1, 5])
    1 -}
 export
 minimum : Ord a => NonEmpty a -> a
-minimum (NECons x xs) = fold (acc y => min y acc) x xs
+minimum (NonEmpty x xs) = fold (acc y => min y acc) x xs
 
 -- ── Instances ──────────────────────────────────────────────────────────────
 
 {- | `map` applies a function to every element.
 
-   > toList (map (n => n * 2) (NECons 1 [2, 3]))
+   > toList (map (n => n * 2) (NonEmpty 1 [2, 3]))
    [2, 4, 6] -}
 export impl Mappable NonEmpty where
-  map f (NECons x xs) = NECons (f x) (map f xs)
+  map f (NonEmpty x xs) = NonEmpty (f x) (map f xs)
 
 {- | The `Foldable` methods visit the elements in order, first element
    first. `toList` gives back the plain list.
 
-   > toList (NECons 1 [2, 3])
+   > toList (NonEmpty 1 [2, 3])
    [1, 2, 3] -}
 export impl Foldable NonEmpty where
-  fold f z (NECons x xs) = fold f (f z x) xs
-  foldRight f z (NECons x xs) = foldRight f (foldRight f z xs) [x]
-  toList (NECons x xs) = x::xs
+  fold f z (NonEmpty x xs) = fold f (f z x) xs
+  foldRight f z (NonEmpty x xs) = foldRight f (foldRight f z xs) [x]
+  toList (NonEmpty x xs) = x::xs
   isEmpty _ = False
-  length (NECons _ xs) = 1 + length xs
+  length (NonEmpty _ xs) = 1 + length xs
 
--- > fold (acc y => acc + y) 0 (NECons 1 [2, 3])
+-- > fold (acc y => acc + y) 0 (NonEmpty 1 [2, 3])
 -- 6
 
 export impl Traversable NonEmpty where
-  traverse f (NECons x xs) = andThen (f x) (y => map (NECons y) (traverse f xs))
+  traverse f (NonEmpty x xs) =
+    andThen (f x) (y => map (NonEmpty y) (traverse f xs))
 
 {- | `++` concatenates two non-empty lists.
 
-   > toList (append (NECons 1 [2]) (NECons 3 [4]))
+   > toList (append (NonEmpty 1 [2]) (NonEmpty 3 [4]))
    [1, 2, 3, 4] -}
 export impl Semigroup (NonEmpty a) where
-  append (NECons x xs) other = NECons x (xs ++ toList other)
+  append (NonEmpty x xs) other = NonEmpty x (xs ++ toList other)
 
 export impl Eq (NonEmpty a) requires Eq a where
-  eq (NECons x xs) (NECons y ys) = eq x y && eq xs ys
+  eq (NonEmpty x xs) (NonEmpty y ys) = eq x y && eq xs ys
 
 export impl Debug (NonEmpty a) requires Debug a where
   debug ne = "NonEmpty \{debug (toList ne)}"
 
 {- | `display` renders a non-empty list as `NonEmpty [x, ...]`.
 
-   > display (NECons 1 [2, 3])
+   > display (NonEmpty 1 [2, 3])
    "NonEmpty [1, 2, 3]" -}
 export impl Display (NonEmpty a) requires Display a where
   display ne = "NonEmpty \{toList ne}"
@@ -136,55 +137,55 @@ export impl Display (NonEmpty a) requires Display a where
 prop "singleton has one element" (x : Int) = eq (toList (singleton x)) [x]
 
 prop "head is the first element" (x : Int) (xs : List Int) =
-  head (NECons x xs) == x
+  head (NonEmpty x xs) == x
 
 prop "fromList . toList round-trips" (x : Int) (xs : List Int) =
-  eq (fromList (toList (NECons x xs))) (Some (NECons x xs))
+  eq (fromList (toList (NonEmpty x xs))) (Some (NonEmpty x xs))
 # DESUGAR
 (DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Mappable" false) (mem "Foldable" false) (mem "Traversable" false) (mem "Semigroup" false) (mem "Applicative" false) (mem "Thenable" false) (mem "Option" false) (mem "Some" false) (mem "None" false))))
-(DData Public "NonEmpty" ("a") ((variant "NECons" (ConPos (TyVar "a") (TyApp (TyCon "List") (TyVar "a"))))) ())
+(DData Public "NonEmpty" ("a") ((variant "NonEmpty" (ConPos (TyVar "a") (TyApp (TyCon "List") (TyVar "a"))))) ())
 (DTypeSig true "singleton" (TyFun (TyVar "a") (TyApp (TyCon "NonEmpty") (TyVar "a"))))
-(DFunDef false "singleton" ((PVar "x")) (EApp (EApp (EVar "NECons") (EVar "x")) (EListLit)))
+(DFunDef false "singleton" ((PVar "x")) (EApp (EApp (EVar "NonEmpty") (EVar "x")) (EListLit)))
 (DTypeSig true "fromList" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Option") (TyApp (TyCon "NonEmpty") (TyVar "a")))))
 (DFunDef false "fromList" ((PList)) (EVar "None"))
-(DFunDef false "fromList" ((PCons (PVar "x") (PVar "rest"))) (EApp (EVar "Some") (EApp (EApp (EVar "NECons") (EVar "x")) (EVar "rest"))))
+(DFunDef false "fromList" ((PCons (PVar "x") (PVar "rest"))) (EApp (EVar "Some") (EApp (EApp (EVar "NonEmpty") (EVar "x")) (EVar "rest"))))
 (DTypeSig true "head" (TyFun (TyApp (TyCon "NonEmpty") (TyVar "a")) (TyVar "a")))
-(DFunDef false "head" ((PCon "NECons" (PVar "x") PWild)) (EVar "x"))
+(DFunDef false "head" ((PCon "NonEmpty" (PVar "x") PWild)) (EVar "x"))
 (DTypeSig true "maximum" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "NonEmpty") (TyVar "a")) (TyVar "a"))))
-(DFunDef false "maximum" ((PCon "NECons" (PVar "x") (PVar "xs"))) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "y")) (EApp (EApp (EVar "max") (EVar "y")) (EVar "acc")))) (EVar "x")) (EVar "xs")))
+(DFunDef false "maximum" ((PCon "NonEmpty" (PVar "x") (PVar "xs"))) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "y")) (EApp (EApp (EVar "max") (EVar "y")) (EVar "acc")))) (EVar "x")) (EVar "xs")))
 (DTypeSig true "minimum" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "NonEmpty") (TyVar "a")) (TyVar "a"))))
-(DFunDef false "minimum" ((PCon "NECons" (PVar "x") (PVar "xs"))) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "y")) (EApp (EApp (EVar "min") (EVar "y")) (EVar "acc")))) (EVar "x")) (EVar "xs")))
-(DImpl true "Mappable" ((TyCon "NonEmpty")) () ((im "map" ((PVar "f") (PCon "NECons" (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "NECons") (EApp (EVar "f") (EVar "x"))) (EApp (EApp (EVar "map") (EVar "f")) (EVar "xs"))))))
-(DImpl true "Foldable" ((TyCon "NonEmpty")) () ((im "fold" ((PVar "f") (PVar "z") (PCon "NECons" (PVar "x") (PVar "xs"))) (EApp (EApp (EApp (EVar "fold") (EVar "f")) (EApp (EApp (EVar "f") (EVar "z")) (EVar "x"))) (EVar "xs"))) (im "foldRight" ((PVar "f") (PVar "z") (PCon "NECons" (PVar "x") (PVar "xs"))) (EApp (EApp (EApp (EVar "foldRight") (EVar "f")) (EApp (EApp (EApp (EVar "foldRight") (EVar "f")) (EVar "z")) (EVar "xs"))) (EListLit (EVar "x")))) (im "toList" ((PCon "NECons" (PVar "x") (PVar "xs"))) (EBinOp "::" (EVar "x") (EVar "xs"))) (im "isEmpty" (PWild) (EVar "False")) (im "length" ((PCon "NECons" PWild (PVar "xs"))) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "length") (EVar "xs"))))))
-(DImpl true "Traversable" ((TyCon "NonEmpty")) () ((im "traverse" ((PVar "f") (PCon "NECons" (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "andThen") (EApp (EVar "f") (EVar "x"))) (ELam ((PVar "y")) (EApp (EApp (EVar "map") (EApp (EVar "NECons") (EVar "y"))) (EApp (EApp (EVar "traverse") (EVar "f")) (EVar "xs"))))))))
-(DImpl true "Semigroup" ((TyApp (TyCon "NonEmpty") (TyVar "a"))) () ((im "append" ((PCon "NECons" (PVar "x") (PVar "xs")) (PVar "other")) (EApp (EApp (EVar "NECons") (EVar "x")) (EBinOp "++" (EVar "xs") (EApp (EVar "toList") (EVar "other")))))))
-(DImpl true "Eq" ((TyApp (TyCon "NonEmpty") (TyVar "a"))) ((req "Eq" ((TyVar "a")))) ((im "eq" ((PCon "NECons" (PVar "x") (PVar "xs")) (PCon "NECons" (PVar "y") (PVar "ys"))) (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "x")) (EVar "y")) (EApp (EApp (EVar "eq") (EVar "xs")) (EVar "ys"))))))
+(DFunDef false "minimum" ((PCon "NonEmpty" (PVar "x") (PVar "xs"))) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "y")) (EApp (EApp (EVar "min") (EVar "y")) (EVar "acc")))) (EVar "x")) (EVar "xs")))
+(DImpl true "Mappable" ((TyCon "NonEmpty")) () ((im "map" ((PVar "f") (PCon "NonEmpty" (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "NonEmpty") (EApp (EVar "f") (EVar "x"))) (EApp (EApp (EVar "map") (EVar "f")) (EVar "xs"))))))
+(DImpl true "Foldable" ((TyCon "NonEmpty")) () ((im "fold" ((PVar "f") (PVar "z") (PCon "NonEmpty" (PVar "x") (PVar "xs"))) (EApp (EApp (EApp (EVar "fold") (EVar "f")) (EApp (EApp (EVar "f") (EVar "z")) (EVar "x"))) (EVar "xs"))) (im "foldRight" ((PVar "f") (PVar "z") (PCon "NonEmpty" (PVar "x") (PVar "xs"))) (EApp (EApp (EApp (EVar "foldRight") (EVar "f")) (EApp (EApp (EApp (EVar "foldRight") (EVar "f")) (EVar "z")) (EVar "xs"))) (EListLit (EVar "x")))) (im "toList" ((PCon "NonEmpty" (PVar "x") (PVar "xs"))) (EBinOp "::" (EVar "x") (EVar "xs"))) (im "isEmpty" (PWild) (EVar "False")) (im "length" ((PCon "NonEmpty" PWild (PVar "xs"))) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "length") (EVar "xs"))))))
+(DImpl true "Traversable" ((TyCon "NonEmpty")) () ((im "traverse" ((PVar "f") (PCon "NonEmpty" (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "andThen") (EApp (EVar "f") (EVar "x"))) (ELam ((PVar "y")) (EApp (EApp (EVar "map") (EApp (EVar "NonEmpty") (EVar "y"))) (EApp (EApp (EVar "traverse") (EVar "f")) (EVar "xs"))))))))
+(DImpl true "Semigroup" ((TyApp (TyCon "NonEmpty") (TyVar "a"))) () ((im "append" ((PCon "NonEmpty" (PVar "x") (PVar "xs")) (PVar "other")) (EApp (EApp (EVar "NonEmpty") (EVar "x")) (EBinOp "++" (EVar "xs") (EApp (EVar "toList") (EVar "other")))))))
+(DImpl true "Eq" ((TyApp (TyCon "NonEmpty") (TyVar "a"))) ((req "Eq" ((TyVar "a")))) ((im "eq" ((PCon "NonEmpty" (PVar "x") (PVar "xs")) (PCon "NonEmpty" (PVar "y") (PVar "ys"))) (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "x")) (EVar "y")) (EApp (EApp (EVar "eq") (EVar "xs")) (EVar "ys"))))))
 (DImpl true "Debug" ((TyApp (TyCon "NonEmpty") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PVar "ne")) (EBinOp "++" (EBinOp "++" (ELit (LString "NonEmpty ")) (EApp (EVar "display") (EApp (EVar "debug") (EApp (EVar "toList") (EVar "ne"))))) (ELit (LString ""))))))
 (DImpl true "Display" ((TyApp (TyCon "NonEmpty") (TyVar "a"))) ((req "Display" ((TyVar "a")))) ((im "display" ((PVar "ne")) (EBinOp "++" (EBinOp "++" (ELit (LString "NonEmpty ")) (EApp (EVar "display") (EApp (EVar "toList") (EVar "ne")))) (ELit (LString ""))))))
 (DProp false "singleton has one element" ((pp "x" (TyCon "Int"))) (EApp (EApp (EVar "eq") (EApp (EVar "toList") (EApp (EVar "singleton") (EVar "x")))) (EListLit (EVar "x"))))
-(DProp false "head is the first element" ((pp "x" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBinOp "==" (EApp (EVar "head") (EApp (EApp (EVar "NECons") (EVar "x")) (EVar "xs"))) (EVar "x")))
-(DProp false "fromList . toList round-trips" ((pp "x" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EApp (EVar "eq") (EApp (EVar "fromList") (EApp (EVar "toList") (EApp (EApp (EVar "NECons") (EVar "x")) (EVar "xs"))))) (EApp (EVar "Some") (EApp (EApp (EVar "NECons") (EVar "x")) (EVar "xs")))))
+(DProp false "head is the first element" ((pp "x" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBinOp "==" (EApp (EVar "head") (EApp (EApp (EVar "NonEmpty") (EVar "x")) (EVar "xs"))) (EVar "x")))
+(DProp false "fromList . toList round-trips" ((pp "x" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EApp (EVar "eq") (EApp (EVar "fromList") (EApp (EVar "toList") (EApp (EApp (EVar "NonEmpty") (EVar "x")) (EVar "xs"))))) (EApp (EVar "Some") (EApp (EApp (EVar "NonEmpty") (EVar "x")) (EVar "xs")))))
 # MARK
 (DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Mappable" false) (mem "Foldable" false) (mem "Traversable" false) (mem "Semigroup" false) (mem "Applicative" false) (mem "Thenable" false) (mem "Option" false) (mem "Some" false) (mem "None" false))))
-(DData Public "NonEmpty" ("a") ((variant "NECons" (ConPos (TyVar "a") (TyApp (TyCon "List") (TyVar "a"))))) ())
+(DData Public "NonEmpty" ("a") ((variant "NonEmpty" (ConPos (TyVar "a") (TyApp (TyCon "List") (TyVar "a"))))) ())
 (DTypeSig true "singleton" (TyFun (TyVar "a") (TyApp (TyCon "NonEmpty") (TyVar "a"))))
-(DFunDef false "singleton" ((PVar "x")) (EApp (EApp (EVar "NECons") (EVar "x")) (EListLit)))
+(DFunDef false "singleton" ((PVar "x")) (EApp (EApp (EVar "NonEmpty") (EVar "x")) (EListLit)))
 (DTypeSig true "fromList" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Option") (TyApp (TyCon "NonEmpty") (TyVar "a")))))
 (DFunDef false "fromList" ((PList)) (EVar "None"))
-(DFunDef false "fromList" ((PCons (PVar "x") (PVar "rest"))) (EApp (EVar "Some") (EApp (EApp (EVar "NECons") (EVar "x")) (EVar "rest"))))
+(DFunDef false "fromList" ((PCons (PVar "x") (PVar "rest"))) (EApp (EVar "Some") (EApp (EApp (EVar "NonEmpty") (EVar "x")) (EVar "rest"))))
 (DTypeSig true "head" (TyFun (TyApp (TyCon "NonEmpty") (TyVar "a")) (TyVar "a")))
-(DFunDef false "head" ((PCon "NECons" (PVar "x") PWild)) (EVar "x"))
+(DFunDef false "head" ((PCon "NonEmpty" (PVar "x") PWild)) (EVar "x"))
 (DTypeSig true "maximum" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "NonEmpty") (TyVar "a")) (TyVar "a"))))
-(DFunDef false "maximum" ((PCon "NECons" (PVar "x") (PVar "xs"))) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "y")) (EApp (EApp (EMethodRef "max") (EVar "y")) (EVar "acc")))) (EVar "x")) (EVar "xs")))
+(DFunDef false "maximum" ((PCon "NonEmpty" (PVar "x") (PVar "xs"))) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "y")) (EApp (EApp (EMethodRef "max") (EVar "y")) (EVar "acc")))) (EVar "x")) (EVar "xs")))
 (DTypeSig true "minimum" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "NonEmpty") (TyVar "a")) (TyVar "a"))))
-(DFunDef false "minimum" ((PCon "NECons" (PVar "x") (PVar "xs"))) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "y")) (EApp (EApp (EMethodRef "min") (EVar "y")) (EVar "acc")))) (EVar "x")) (EVar "xs")))
-(DImpl true "Mappable" ((TyCon "NonEmpty")) () ((im "map" ((PVar "f") (PCon "NECons" (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "NECons") (EApp (EVar "f") (EVar "x"))) (EApp (EApp (EMethodRef "map") (EVar "f")) (EVar "xs"))))))
-(DImpl true "Foldable" ((TyCon "NonEmpty")) () ((im "fold" ((PVar "f") (PVar "z") (PCon "NECons" (PVar "x") (PVar "xs"))) (EApp (EApp (EApp (EMethodRef "fold") (EVar "f")) (EApp (EApp (EVar "f") (EVar "z")) (EVar "x"))) (EVar "xs"))) (im "foldRight" ((PVar "f") (PVar "z") (PCon "NECons" (PVar "x") (PVar "xs"))) (EApp (EApp (EApp (EMethodRef "foldRight") (EVar "f")) (EApp (EApp (EApp (EMethodRef "foldRight") (EVar "f")) (EVar "z")) (EVar "xs"))) (EListLit (EVar "x")))) (im "toList" ((PCon "NECons" (PVar "x") (PVar "xs"))) (EBinOp "::" (EVar "x") (EVar "xs"))) (im "isEmpty" (PWild) (EVar "False")) (im "length" ((PCon "NECons" PWild (PVar "xs"))) (EBinOp "+" (ELit (LInt 1)) (EApp (EMethodRef "length") (EVar "xs"))))))
-(DImpl true "Traversable" ((TyCon "NonEmpty")) () ((im "traverse" ((PVar "f") (PCon "NECons" (PVar "x") (PVar "xs"))) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "f") (EVar "x"))) (ELam ((PVar "y")) (EApp (EApp (EMethodRef "map") (EApp (EVar "NECons") (EVar "y"))) (EApp (EApp (EMethodRef "traverse") (EVar "f")) (EVar "xs"))))))))
-(DImpl true "Semigroup" ((TyApp (TyCon "NonEmpty") (TyVar "a"))) () ((im "append" ((PCon "NECons" (PVar "x") (PVar "xs")) (PVar "other")) (EApp (EApp (EVar "NECons") (EVar "x")) (EBinOp "++" (EVar "xs") (EApp (EMethodRef "toList") (EVar "other")))))))
-(DImpl true "Eq" ((TyApp (TyCon "NonEmpty") (TyVar "a"))) ((req "Eq" ((TyVar "a")))) ((im "eq" ((PCon "NECons" (PVar "x") (PVar "xs")) (PCon "NECons" (PVar "y") (PVar "ys"))) (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "x")) (EVar "y")) (EApp (EApp (EMethodRef "eq") (EVar "xs")) (EVar "ys"))))))
+(DFunDef false "minimum" ((PCon "NonEmpty" (PVar "x") (PVar "xs"))) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "y")) (EApp (EApp (EMethodRef "min") (EVar "y")) (EVar "acc")))) (EVar "x")) (EVar "xs")))
+(DImpl true "Mappable" ((TyCon "NonEmpty")) () ((im "map" ((PVar "f") (PCon "NonEmpty" (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "NonEmpty") (EApp (EVar "f") (EVar "x"))) (EApp (EApp (EMethodRef "map") (EVar "f")) (EVar "xs"))))))
+(DImpl true "Foldable" ((TyCon "NonEmpty")) () ((im "fold" ((PVar "f") (PVar "z") (PCon "NonEmpty" (PVar "x") (PVar "xs"))) (EApp (EApp (EApp (EMethodRef "fold") (EVar "f")) (EApp (EApp (EVar "f") (EVar "z")) (EVar "x"))) (EVar "xs"))) (im "foldRight" ((PVar "f") (PVar "z") (PCon "NonEmpty" (PVar "x") (PVar "xs"))) (EApp (EApp (EApp (EMethodRef "foldRight") (EVar "f")) (EApp (EApp (EApp (EMethodRef "foldRight") (EVar "f")) (EVar "z")) (EVar "xs"))) (EListLit (EVar "x")))) (im "toList" ((PCon "NonEmpty" (PVar "x") (PVar "xs"))) (EBinOp "::" (EVar "x") (EVar "xs"))) (im "isEmpty" (PWild) (EVar "False")) (im "length" ((PCon "NonEmpty" PWild (PVar "xs"))) (EBinOp "+" (ELit (LInt 1)) (EApp (EMethodRef "length") (EVar "xs"))))))
+(DImpl true "Traversable" ((TyCon "NonEmpty")) () ((im "traverse" ((PVar "f") (PCon "NonEmpty" (PVar "x") (PVar "xs"))) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "f") (EVar "x"))) (ELam ((PVar "y")) (EApp (EApp (EMethodRef "map") (EApp (EVar "NonEmpty") (EVar "y"))) (EApp (EApp (EMethodRef "traverse") (EVar "f")) (EVar "xs"))))))))
+(DImpl true "Semigroup" ((TyApp (TyCon "NonEmpty") (TyVar "a"))) () ((im "append" ((PCon "NonEmpty" (PVar "x") (PVar "xs")) (PVar "other")) (EApp (EApp (EVar "NonEmpty") (EVar "x")) (EBinOp "++" (EVar "xs") (EApp (EMethodRef "toList") (EVar "other")))))))
+(DImpl true "Eq" ((TyApp (TyCon "NonEmpty") (TyVar "a"))) ((req "Eq" ((TyVar "a")))) ((im "eq" ((PCon "NonEmpty" (PVar "x") (PVar "xs")) (PCon "NonEmpty" (PVar "y") (PVar "ys"))) (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "x")) (EVar "y")) (EApp (EApp (EMethodRef "eq") (EVar "xs")) (EVar "ys"))))))
 (DImpl true "Debug" ((TyApp (TyCon "NonEmpty") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PVar "ne")) (EBinOp "++" (EBinOp "++" (ELit (LString "NonEmpty ")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EApp (EMethodRef "toList") (EVar "ne"))))) (ELit (LString ""))))))
 (DImpl true "Display" ((TyApp (TyCon "NonEmpty") (TyVar "a"))) ((req "Display" ((TyVar "a")))) ((im "display" ((PVar "ne")) (EBinOp "++" (EBinOp "++" (ELit (LString "NonEmpty ")) (EApp (EMethodRef "display") (EApp (EMethodRef "toList") (EVar "ne")))) (ELit (LString ""))))))
 (DProp false "singleton has one element" ((pp "x" (TyCon "Int"))) (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "toList") (EApp (EVar "singleton") (EVar "x")))) (EListLit (EVar "x"))))
-(DProp false "head is the first element" ((pp "x" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBinOp "==" (EApp (EVar "head") (EApp (EApp (EVar "NECons") (EVar "x")) (EVar "xs"))) (EVar "x")))
-(DProp false "fromList . toList round-trips" ((pp "x" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EApp (EMethodRef "eq") (EApp (EVar "fromList") (EApp (EMethodRef "toList") (EApp (EApp (EVar "NECons") (EVar "x")) (EVar "xs"))))) (EApp (EVar "Some") (EApp (EApp (EVar "NECons") (EVar "x")) (EVar "xs")))))
+(DProp false "head is the first element" ((pp "x" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBinOp "==" (EApp (EVar "head") (EApp (EApp (EVar "NonEmpty") (EVar "x")) (EVar "xs"))) (EVar "x")))
+(DProp false "fromList . toList round-trips" ((pp "x" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EApp (EMethodRef "eq") (EApp (EVar "fromList") (EApp (EMethodRef "toList") (EApp (EApp (EVar "NonEmpty") (EVar "x")) (EVar "xs"))))) (EApp (EVar "Some") (EApp (EApp (EVar "NonEmpty") (EVar "x")) (EVar "xs")))))

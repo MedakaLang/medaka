@@ -1,0 +1,6 @@
+class: bug
+correct: box|meow
+check: 0
+run: 0 | box|meow
+build: 0 | built main.mdk -> <BIN>
+exec: 0 | box|box

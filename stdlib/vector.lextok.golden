@@ -905,7 +905,7 @@ DEDENT
 NEWLINE
 EXPORT
 NEWLINE
-IDENT "insertAt"
+IDENT "insertAtInPlace"
 COLON
 UPPER "Int"
 ARROW
@@ -916,7 +916,7 @@ IDENT "a"
 ARROW
 UPPER "Unit"
 NEWLINE
-IDENT "insertAt"
+IDENT "insertAtInPlace"
 IDENT "i"
 IDENT "x"
 IDENT "ma"
@@ -937,7 +937,7 @@ RPAREN
 NEWLINE
 EXPORT
 NEWLINE
-IDENT "removeAt"
+IDENT "removeAtInPlace"
 COLON
 UPPER "Int"
 ARROW
@@ -946,7 +946,7 @@ IDENT "a"
 ARROW
 UPPER "Unit"
 NEWLINE
-IDENT "removeAt"
+IDENT "removeAtInPlace"
 IDENT "i"
 IDENT "ma"
 EQUAL
@@ -965,7 +965,7 @@ RPAREN
 NEWLINE
 EXPORT
 NEWLINE
-IDENT "sortBy"
+IDENT "sortInPlaceBy"
 COLON
 LPAREN
 IDENT "a"
@@ -986,7 +986,7 @@ IDENT "e"
 GT
 UPPER "Unit"
 NEWLINE
-IDENT "sortBy"
+IDENT "sortInPlaceBy"
 IDENT "cmp"
 IDENT "ma"
 EQUAL
@@ -1005,7 +1005,7 @@ RPAREN
 NEWLINE
 EXPORT
 NEWLINE
-IDENT "sort"
+IDENT "sortInPlace"
 COLON
 UPPER "Ord"
 IDENT "a"
@@ -1015,10 +1015,10 @@ IDENT "a"
 ARROW
 UPPER "Unit"
 NEWLINE
-IDENT "sort"
+IDENT "sortInPlace"
 IDENT "ma"
 EQUAL
-IDENT "sortBy"
+IDENT "sortInPlaceBy"
 IDENT "compare"
 IDENT "ma"
 NEWLINE
@@ -1583,7 +1583,7 @@ IDENT "rest"
 RPAREN
 NEWLINE
 PROP
-STRING "sort agrees with an independent insertion sort"
+STRING "sortInPlace agrees with an independent insertion sortInPlace"
 LPAREN
 IDENT "xs"
 COLON
@@ -1598,7 +1598,7 @@ EQUAL
 IDENT "fromList"
 IDENT "xs"
 NEWLINE
-IDENT "sort"
+IDENT "sortInPlace"
 IDENT "ma"
 NEWLINE
 IDENT "eq"
@@ -1614,7 +1614,7 @@ NEWLINE
 DEDENT
 NEWLINE
 PROP
-STRING "sort is idempotent"
+STRING "sortInPlace is idempotent"
 LPAREN
 IDENT "xs"
 COLON
@@ -1629,7 +1629,7 @@ EQUAL
 IDENT "fromList"
 IDENT "xs"
 NEWLINE
-IDENT "sort"
+IDENT "sortInPlace"
 IDENT "ma"
 NEWLINE
 LET
@@ -1638,7 +1638,7 @@ EQUAL
 IDENT "toList"
 IDENT "ma"
 NEWLINE
-IDENT "sort"
+IDENT "sortInPlace"
 IDENT "ma"
 NEWLINE
 IDENT "eq"
@@ -1651,7 +1651,7 @@ NEWLINE
 DEDENT
 NEWLINE
 PROP
-STRING "sortBy is stable on ties"
+STRING "sortInPlaceBy is stable on ties"
 LPAREN
 IDENT "xs"
 COLON
@@ -1670,7 +1670,7 @@ INT 0
 IDENT "xs"
 RPAREN
 NEWLINE
-IDENT "sortBy"
+IDENT "sortInPlaceBy"
 LPAREN
 IDENT "a"
 IDENT "b"
@@ -1705,7 +1705,7 @@ NEWLINE
 DEDENT
 NEWLINE
 PROP
-STRING "insertAt lands at the clamped index and removeAt undoes it"
+STRING "insertAtInPlace lands at the clamped index and removeAtInPlace undoes it"
 LPAREN
 IDENT "xs"
 COLON
@@ -1740,7 +1740,7 @@ IDENT "length"
 IDENT "ma"
 RPAREN
 NEWLINE
-IDENT "insertAt"
+IDENT "insertAtInPlace"
 IDENT "n"
 IDENT "x"
 IDENT "ma"
@@ -1773,7 +1773,7 @@ UPPER "Some"
 IDENT "x"
 RPAREN
 NEWLINE
-IDENT "removeAt"
+IDENT "removeAtInPlace"
 IDENT "i"
 IDENT "ma"
 NEWLINE
@@ -1791,7 +1791,7 @@ NEWLINE
 DEDENT
 NEWLINE
 PROP
-STRING "removeAt out of range is a no-op"
+STRING "removeAtInPlace out of range is a no-op"
 LPAREN
 IDENT "xs"
 COLON
@@ -1806,14 +1806,14 @@ EQUAL
 IDENT "fromList"
 IDENT "xs"
 NEWLINE
-IDENT "removeAt"
+IDENT "removeAtInPlace"
 LPAREN
 IDENT "length"
 IDENT "ma"
 RPAREN
 IDENT "ma"
 NEWLINE
-IDENT "removeAt"
+IDENT "removeAtInPlace"
 LPAREN
 INT 0
 MINUS

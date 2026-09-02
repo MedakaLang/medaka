@@ -146,7 +146,6 @@ argOnlyEffVarMsg : String -> String -> String -> String
 argPerformableOccs : List (String, List Kind) -> Bool -> Ty -> List (String, List Atom)
 argPosAgreeEncl : List Mono -> List Mono -> Bool
 argReqRoute : Map String (List ImplEntry) -> String -> String -> List (String, Mono) -> List Ty -> Int -> Int -> Route
-argStampMono : PendingEntry -> Mono
 argStampPairs : PendingEntry -> List (Int, String)
 armDictSites : Arm -> List (Ref (List Route))
 armEVars : Arm -> List String
@@ -1400,6 +1399,7 @@ liveNumVarGo : Int -> List UObligation -> Option Mono
 liveTailId : Ref Effvar -> Int
 loadDataUniverse : Int -> Unit
 locEq : Loc -> Loc -> Bool
+locSameFileAs : Option Loc -> Option Loc -> Bool
 locSameFileAsError : Option Loc -> Bool
 localPinIds : Int -> Int -> List Int
 localPinPairs : Int -> Int -> List (Int, String)
@@ -1464,7 +1464,6 @@ mergeSubstPreferConcrete : List (String, Mono) -> List (String, Mono) -> List (S
 methodArgs : Ty -> List Ty
 methodCandAdmitted : List Decl -> String -> (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Bool
 methodCandImported : List Decl -> String -> (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Bool
-methodConstrainedIds : Unit -> List Int
 methodConstrainedPairs : Unit -> List (Int, String)
 methodConstraintNameOf : List String -> IfaceMethod -> List String
 methodConstraintNames : List Decl -> List String
@@ -1516,6 +1515,10 @@ monoIsBool : Mono -> Bool
 monoIsFunction : Mono -> Bool
 monoIsTyvarId : Mono -> Int -> Bool
 monoPosAgreesEncl : Mono -> Mono -> Bool
+monoReaches : Mono -> Mono -> Bool
+monoReachesGo : Mono -> String -> Bool
+monoReplaceReached : Mono -> String -> Mono -> Mono
+monoReplaceReachedGo : Mono -> String -> Mono -> Mono
 monoSameGiven : Mono -> Mono -> Bool
 monoScheme : Mono -> Scheme
 monoSize : Mono -> Int
@@ -1575,6 +1578,7 @@ numUnimplementableHead : Mono -> Bool
 numlitCtxKind : Option Loc -> Option String
 numlitMismatchHint : Option Loc -> List Mono -> String
 numlitMismatchMsg : Option Loc -> List Mono -> String
+numlitMismatchPush : List Mono -> Option Loc -> Unit
 numlitReframeLoc : Option Loc -> Bool
 oblArgKey : Mono -> String
 oblAsTuple : UObligation -> (IfaceRef, List Mono, Option Loc)
@@ -1653,11 +1657,16 @@ pickStandaloneSchemes : List String -> List (String, Scheme) -> List (String, Sc
 pinLocalIfDictForwarded : Int -> Int -> String -> Option Loc -> Mono -> Bool
 pinnedEntryIsTvar : (Mono, String, String, Option Loc) -> Int -> Bool
 pinnedEntryMatches : (Mono, String, String, Option Loc) -> Mono -> Mono -> Bool
+pinnedEntryMatchesAt : (Mono, String, String, Option Loc) -> Option Loc -> Mono -> Bool
 pinnedEntryName : (Mono, String, String, Option Loc) -> String
 pinnedLocalCollapsedInto : Int -> Option (Mono, String, String, Option Loc)
 pinnedLocalExplain : Mono -> Mono -> Option (Mono, String, String, Option Loc)
+pinnedLocalExplainOne : Option Loc -> Mono -> Option (Mono, String, String, Option Loc)
 pinnedLocalMismatch : (Mono, String, String, Option Loc) -> Mono -> Mono -> Unit
 pinnedLocalReport : String -> String -> Option Loc -> String -> Unit
+pinnedTwoTypes : Mono -> Mono -> Mono -> String
+pinnedTwoTypesG : Mono -> Mono -> Mono -> String
+pinnedUniqueEntry : List (Mono, String, String, Option Loc) -> Option (Mono, String, String, Option Loc)
 pinsTyvarMsg : String -> Ty -> List String -> String
 pipeOp : Mono -> Mono -> Mono
 placeholderBinding : (String, Mono) -> (String, Scheme)
@@ -1887,6 +1896,7 @@ reportAmbiguousImports : List Decl -> Unit
 reportAmbiguousImportsIn : Map String Unit -> List Decl -> Unit
 reportAmbiguousOverlap : List Mono -> List KeyEntry -> Unit
 reportNumOrNoImpl : String -> List Mono -> Option Loc -> Unit
+reportNumlitMismatch : List Mono -> Option Loc -> Unit
 reportSigTooGeneral : String -> Ty -> Option (Int, String, String) -> Unit
 reportUncovered : String -> List (String, Ty, List (String, Mono)) -> List (String, Int) -> List (String, Int) -> Unit
 reportUncoveredVec : String -> List (String, Ty, List (String, Mono)) -> List (String, Int) -> List VecObl -> List VecObl -> Unit
@@ -2020,6 +2030,7 @@ setDictEligible : List String -> Unit
 setFunConstraintEntry : String -> List CSlot -> Option (List (List Mono)) -> Unit
 setFunConstraintTables : (List (String, List Int), List (String, List IfaceRef)) -> Unit
 setLocIfSome : Option Loc -> Unit
+setLocalPinDisabled : Bool -> Unit
 setMainSchemeIfEntry : Bool -> List (String, Scheme) -> Unit
 setMethodConstraintEntry : String -> List Int -> List Int -> Unit
 setNumlitFloats : Unit -> Unit

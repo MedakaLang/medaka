@@ -235,10 +235,10 @@ Replaces every element with `f` applied to it.
 
 ## Editing and sorting
 
-### `insertAt`
+### `insertAtInPlace`
 
 ```
-insertAt : Int -> a -> Vector a -> Unit
+insertAtInPlace : Int -> a -> Vector a -> Unit
 ```
 
 Inserts `x` at index `i`, shifting the following elements right.
@@ -247,14 +247,14 @@ An index at or below `0` prepends; an index at or beyond the length
 appends.
 
 ```medaka
-> let v = fromList [1, 2, 3] in let _ = insertAt 1 9 v in toList v
+> let v = fromList [1, 2, 3] in let _ = insertAtInPlace 1 9 v in toList v
 [1, 9, 2, 3]
 ```
 
-### `removeAt`
+### `removeAtInPlace`
 
 ```
-removeAt : Int -> Vector a -> Unit
+removeAtInPlace : Int -> Vector a -> Unit
 ```
 
 Removes the element at index `i`.
@@ -262,38 +262,38 @@ Removes the element at index `i`.
 Nothing happens when `i` is out of range.
 
 ```medaka
-> let v = fromList [1, 2, 3] in let _ = removeAt 1 v in toList v
+> let v = fromList [1, 2, 3] in let _ = removeAtInPlace 1 v in toList v
 [1, 3]
 ```
 
-### `sortBy`
+### `sortInPlaceBy`
 
 ```
-sortBy : (a -> a -> <e> Ordering) -> Vector a -> <e> Unit
+sortInPlaceBy : (a -> a -> <e> Ordering) -> Vector a -> <e> Unit
 ```
 
 Sorts the elements in place by `cmp`.
 
-The sort is stable: elements that compare equal keep their original
+The sortInPlace is stable: elements that compare equal keep their original
 order.
 
 ```medaka
-> let v = fromList [3, 1, 4, 1, 5] in let _ = sortBy compare v in toList v
+> let v = fromList [3, 1, 4, 1, 5] in let _ = sortInPlaceBy compare v in toList v
 [1, 1, 3, 4, 5]
 ```
 
-### `sort`
+### `sortInPlace`
 
 ```
-sort : Ord a => Vector a -> Unit
+sortInPlace : Ord a => Vector a -> Unit
 ```
 
 Sorts the elements in place in ascending order.
 
-The sort is stable.
+The sortInPlace is stable.
 
 ```medaka
-> let v = fromList [3, 1, 2] in let _ = sort v in toList v
+> let v = fromList [3, 1, 2] in let _ = sortInPlace v in toList v
 [1, 2, 3]
 ```
 
