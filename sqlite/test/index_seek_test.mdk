@@ -220,17 +220,17 @@ test "index seek fixture: the age column really does hold a NULL" =
 -- found nothing".  `people.id` carries no secondary index (it is the rowid
 -- alias, which v1 refuses to index at all).
 
-isErr : Result String (List Row) -> Bool
-isErr (Err _) = True
-isErr (Ok _) = False
-
-unservedColumn : Result String Bool
+-- Must be specifically the "no index on this column" error
+-- (`lib.indexlookup.servingGo`'s fixed message shape), not any `Err` at all —
+-- a table-not-found, a schema-parse failure, or an arity error must not be
+-- able to pass this test by accident.
+unservedColumn : Result String (Result String (List Row))
 unservedColumn = do
   db <- peopleDb
-  Ok (isErr (seekByIndex db "people" "id" (CInt 1)))
+  Ok (seekByIndex db "people" "id" (CInt 1))
 
-test "index seek: an unindexed column is an Err, not an empty Ok" =
-  expectEqual (Ok True) unservedColumn
+test "index seek: an unindexed column is the no-index Err, not any other Err" =
+  expectEqual (Ok (Err "no index on people.id")) unservedColumn
 
 -- ---------------------------------------------------------------------------
 -- Identifier case folds, as it does for a table name

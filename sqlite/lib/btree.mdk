@@ -419,32 +419,6 @@ decodeIndexCells bytes pageSize usable pageBase cpArrayStart nCells i acc
       (i + 1)
       (entry :: acc)
 
--- | Decode all entries of an INDEX-LEAF page.  Returns Err if the page is not
---   an index-leaf page.
-export
-decodeIndexLeafPage : Array Int ->
-  Int ->
-  Int ->
-  Int ->
-  Int ->
-  Result String (List (List Cell, Int))
-decodeIndexLeafPage bytes pageSize usable pageBase hdrOffset = do
-  pt <- pageType bytes hdrOffset
-  if pt /= pageIndexLeaf then
-    Err
-      "decodeIndexLeafPage: page type \{intToString pt} is not an index-leaf page (0x0A)"
-  else do
-    nc <- pageCellCount bytes hdrOffset
-    decodeIndexCells
-      bytes
-      pageSize
-      usable
-      pageBase
-      (hdrOffset + leafHeaderSize)
-      nc
-      0
-      []
-
 -- Decode one index-interior cell at absolute offset `off`:
 --   `[4-byte BE left-child][payload-len varint][record]` — the reverse field
 -- order from a table-interior cell, because the key (unlike a bare rowid) is

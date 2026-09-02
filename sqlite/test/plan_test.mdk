@@ -318,6 +318,37 @@ test "planFor: a BLOB target stays a scan" =
         (EBin OpEq (ECol "b") (ELit (LBlob (arrayFromList [2, 3]))))
         (selectFrom "mixed")))
 
+-- The blob exclusion in `seekableTarget` is load-bearing, not accidentally
+-- unreachable: forced BY HAND (bypassing `planFor`, through the exported
+-- `Plan`/`runPipelineWithPlan` API) a `PlanSeekIndex` on "b" disagrees with
+-- the forced scan on this exact fixture, because `cmpOrder` (the filter)
+-- matches blobs by byte COUNT while the index seek matches byte CONTENT —
+-- `mixed` holds two 2-byte blobs ([2,3] on id 2, [4,5] on id 4), so the scan's
+-- filter admits both while a content seek on [2,3] admits only id 2.
+forcedBlobSelect : Select
+forcedBlobSelect =
+  whereRaw
+    (EBin OpEq (ECol "b") (ELit (LBlob (arrayFromList [2, 3]))))
+    (selectFrom "mixed")
+
+forcedBlobSeekRows : Result String (List (List Cell))
+forcedBlobSeekRows = do
+  db <- mixedDb
+  runPipelineWithPlan
+    db
+    (PlanSeekIndex "b" (CBlob (arrayFromList [2, 3])))
+    forcedBlobSelect
+
+forcedBlobScanRows : Result String (List (List Cell))
+forcedBlobScanRows = do
+  db <- mixedDb
+  runPipelineWithPlan db PlanScan forcedBlobSelect
+
+test "plan: a forced BLOB index seek returns fewer rows than the forced scan" =
+  expectEqual
+    (Ok 1, Ok 2)
+    (map length forcedBlobSeekRows, map length forcedBlobScanRows)
+
 test "planFor: a top-level OR stays a scan" =
   expectEqual
     (Ok PlanScan)

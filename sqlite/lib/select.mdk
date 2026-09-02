@@ -2294,11 +2294,19 @@ isSingleTableSelect (Select { fromAlias = fa, joins = js }) = match (fa, js)
 -- So a plan may only ever be a SUBSET of the scan's rows that still contains
 -- every row the filter would keep — under-planning (falling back to `PlanScan`)
 -- is always safe, and no plan can turn a right answer into a wrong one.
+--
+-- That subset property holds only because `cmpOrder` (the filter's comparator)
+-- and `compareCellsSqlite` (the seek's comparator, `lib.dbwriter`) agree on
+-- equality for every `seekableTarget`; the blob exclusion below is the one
+-- known instance where they don't, not the whole of the rule — a future
+-- change to either comparator must recheck this agreement before widening
+-- `seekableTarget`.
 -- ---------------------------------------------------------------------------
 
 -- | How a single-table query's candidate rows are produced.  `PlanSeekRowid`
---   descends the table B-tree to one rowid; `PlanSeekIndex col target` goes
---   through the secondary index on `col` (`lib.indexlookup.seekByIndex`).
+--   descends the table B-tree to one rowid; `PlanSeekIndex col target` is an
+--   ATTEMPT to seek `col`'s secondary index (`lib.indexlookup.seekByIndex`),
+--   falling back to a scan if no index serves `col`.
 public export data Plan =
   | PlanScan
   | PlanSeekRowid Int
@@ -2306,8 +2314,9 @@ public export data Plan =
   deriving (Eq, Debug)
 
 -- | The access plan for a single-table query: the first top-level `AND`
---   conjunct of the WHERE clause that is a `column = literal` equality this
---   engine can seek on, else `PlanScan`.
+--   conjunct of the WHERE clause that has `column = literal` shape decides
+--   the plan, even when that conjunct turns out to be unseekable — a later
+--   conjunct is not searched for a better one — else `PlanScan`.
 --
 --   The table is read only for its CREATE TABLE text; a table this database
 --   does not have plans a scan, so the missing-table `Err` still comes from row

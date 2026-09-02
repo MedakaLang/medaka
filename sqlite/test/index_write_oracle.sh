@@ -39,8 +39,8 @@
 #       directly (not the Medaka writer) — 300 distinct rows plus one row keyed
 #       long enough to force an overflow-page spill, sized to also force an
 #       index-INTERIOR page (confirmed via `dbstat`, not assumed) — is decoded
-#       by `sqlite/index_read_probe.mdk` (`lib.btree.decodeIndexLeafPage` /
-#       `scanIndexPage`) and diffed byte-for-byte against sqlite3's own
+#       by `sqlite/index_read_probe.mdk` (`lib.btree.scanIndexPage`)
+#       and diffed byte-for-byte against sqlite3's own
 #       `SELECT col, rowid ... ORDER BY col, rowid`.
 #
 # The binary .db is regenerated each run (never committed); only this script and

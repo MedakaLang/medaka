@@ -104,6 +104,17 @@ allRowsMatch = do
 test "rowid seek: agrees with full scan for every rowid present in the fixture" =
   expectEqual (Ok Pass) allRowsMatch
 
+-- `allRowsMatch` passes vacuously if `scanTableRows` regresses to `Ok []` —
+-- `expectAll [] = Pass` and nothing above asserts a nonzero row count.
+scannedRowCount : Result String Int
+scannedRowCount = do
+  db <- fixture
+  scanned <- scanTableRows db tableName
+  Ok (length scanned)
+
+test "rowid seek fixture: t holds thirty rows" =
+  expectEqual (Ok n) scannedRowCount
+
 expectNoneRow : Result String (Option Row) -> Expectation
 expectNoneRow (Ok None) = Pass
 expectNoneRow (Ok (Some r)) =

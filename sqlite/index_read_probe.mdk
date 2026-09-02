@@ -1,5 +1,5 @@
 -- Real-sqlite3 differential probe for the index-page decoders
--- (`lib.btree.scanIndexPage`/`decodeIndexLeafPage`/interior family, driven via
+-- (`lib.btree.scanIndexPage`/interior family, driven via
 -- `lib.sqlite.scanIndexRows`).
 --
 -- Usage: medaka build sqlite/index_read_probe.mdk -o index_read_probe
