@@ -3112,19 +3112,30 @@ emitRefInit prog groups =
     None => []
   let mainLocals = flatMap collectExprLocals mainBodies
   let valBodies = flatMap bindBodies valBinds
-  -- scratch ($__rf<d>) locals sized to the deepest match nesting across all $__init
-  -- bodies (val inits + main).
-  let maxDepth = foldMaxDepth (valBodies ++ mainBodies)
-  let scratch = scratchLocals maxDepth
-  let locals = dedupKeep (valLocals ++ mainLocals) ++ scratch
-  let localDecls = map (l => "  " ++ localDeclRef l) locals
-  let w7Decls = map ("  " ++ _) (w7LocalDecls (progEmit prog) maxDepth)
-  ["  (func $__init"]
-    ++ localDecls
-    ++ w7Decls
-    ++ valInit
+  -- scratch ($__rf<d>) locals sized to the deepest match nesting of each
+  -- function's own bodies: the val inits for $__init, `main` for $__main.
+  let valDepth = foldMaxDepth valBodies
+  let mainDepth = foldMaxDepth mainBodies
+  let initLocalDecls = map (l => "  " ++ localDeclRef l) (dedupKeep valLocals ++ scratchLocals valDepth)
+  let mainLocalDecls = map (l => "  " ++ localDeclRef l) (dedupKeep mainLocals ++ scratchLocals mainDepth)
+  let w7DeclsAt = d => map ("  " ++ _) (w7LocalDecls (progEmit prog) d)
+  let initW7Decls = w7DeclsAt valDepth
+  let mainW7Decls = w7DeclsAt mainDepth
+  -- `main` lives in its own function, exported as `mdk_main`, so a host can
+  -- re-enter it on the same instance after `start` has run the eager
+  -- initializers once (playground/compile.mjs keeps one compiler instance
+  -- alive across analyze calls; the top-level memo Refs then persist).
+  -- `$__init` = eager value inits, then one call of $__main — the same order
+  -- and the same single run of `main` at instantiation as before.
+  ["  (func $__main"]
+    ++ mainLocalDecls
+    ++ mainW7Decls
     ++ mainLines
-    ++ ["  )", "  (start $__init)"]
+    ++ ["  )", "  (export \"mdk_main\" (func $__main))", "  (func $__init"]
+    ++ initLocalDecls
+    ++ initW7Decls
+    ++ valInit
+    ++ ["    call $__main", "  )", "  (start $__init)"]
 
 bindBodies : CBind -> List CExpr
 bindBodies (CBind _ clauses) = flatMap clauseBody clauses
