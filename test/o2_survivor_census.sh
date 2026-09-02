@@ -7,7 +7,12 @@
 # bucketed:
 #
 #   OPAQUE_CALL   — a `call`/`tail call` to an `@mdk_*` runtime or dispatch
-#                   helper that -O2 did not inline away.
+#                   helper (`runtime/medaka_rt.c`) that -O2 did not inline
+#                   away. Excludes calls to module-qualified user functions
+#                   (mangled `@mdk_<module>__<name>` — double underscore,
+#                   per compiler/backend/private_mangle.mdk; runtime helper
+#                   names never contain `__`) — a surviving user-fn call is
+#                   not counted here.
 #   ALLOCATION    — a `call` to an allocator (`@GC_malloc`/`@mdk_*alloc*`).
 #   LOAD          — a `load` instruction; flagged REDUNDANT when the same
 #                   source pointer register is loaded more than once.
@@ -104,7 +109,7 @@ for f in "$CORPUS"/*.mdk; do
     continue
   fi
 
-  opaque="$(printf '%s\n' "$body" | grep -E 'call[^@]*@mdk_[A-Za-z0-9_]*\(' | grep -Ev '@mdk_[A-Za-z0-9_]*alloc' || true)"
+  opaque="$(printf '%s\n' "$body" | grep -E 'call[^@]*@mdk_[A-Za-z0-9_]*\(' | grep -Ev '@mdk_[A-Za-z0-9_]*alloc' | grep -Ev '@mdk_[A-Za-z0-9_]*__[A-Za-z0-9_]*\(' || true)"
   alloc="$(printf '%s\n' "$body" | grep -E 'call[^@]*@(GC_malloc|mdk_[A-Za-z0-9_]*alloc)' || true)"
   loads="$(printf '%s\n' "$body" | grep -E '= *load ' || true)"
   n_loads=$(printf '%s\n' "$loads" | grep -c . || true)

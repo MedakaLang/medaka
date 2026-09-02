@@ -1,0 +1,11 @@
+-- o2_survivor_census.sh corpus probe (FIX2-census-bucketing, F7 repro/demo):
+-- a call to a non-inlinable recursive USER-DEFINED function must not be
+-- bucketed as OPAQUE_CALL — that bucket means a runtime/dispatch helper
+-- (`runtime/medaka_rt.c`), not a module-qualified user function.
+helper : Int -> Int
+helper n = if n <= 0 then 0 else 1 + helper (n - 1)
+
+probe : Int -> Int
+probe a = helper a
+
+main = println (probe 3)
