@@ -1,0 +1,11 @@
+import zmod.{bMeth}
+
+export interface Same a where
+  aMeth : a -> Int
+
+export impl Same Int where
+  aMeth _ = 100
+
+export
+bad : Same a => a -> Int
+bad x = bMeth x

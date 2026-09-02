@@ -1,0 +1,15 @@
+-- The enclosing declared-context carrier has the same nested-position identity
+-- requirement as impl `requires`: these calls must read distinct dict parameters.
+interface Ix a b where
+  ix : a -> b -> Int
+
+impl Ix Int (List Char) where
+  ix _ _ = 300
+
+impl Ix Int (List Bool) where
+  ix _ _ = 100
+
+f : (Ix a (List b), Ix a (List c)) => a -> b -> c -> Int
+f n x y = ix n [x] + ix n [y]
+
+main = println (f 5 'z' True)

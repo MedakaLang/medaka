@@ -1,0 +1,20 @@
+-- #1560 drain.  Reducing `Conv (Wrap t) u` through the conditional impl leaves
+-- one joint residual `Conv t u`, so `f` has exactly one dict plus two value args.
+-- At Int/Bool that dict is forwarded as RDict to the conditional impl, producing
+-- the hand-derived two lines below rather than a null element dictionary.
+main =
+  let _ = println "start"
+  println (f 5 True)
+
+data Wrap a = Wrap a
+
+interface Conv a b where
+  conv : a -> b -> String
+
+impl Conv Int Bool where
+  conv _ _ = "int-bool"
+
+impl Conv (Wrap a) b requires Conv a b where
+  conv (Wrap x) y = "w:\{conv x y}"
+
+f x y = conv (Wrap x) y

@@ -35,7 +35,9 @@
 # "GITHUB_TOKEN pushes don't retrigger other workflows" caveat GitHub's docs
 # describe — it forecloses Actions-authored PRs outright, independent of
 # per-job permissions, so a push-and-open-PR shape is not implementable here.
-# The reduced human step is exactly one command (see the final log line):
+# The remaining steps (regenerate ci.yml, open the PR, enqueue) are taken by
+# scripts/cost_baseline_land.sh from cron on the build box, which holds a
+# real `gh` login; by hand they are (see the final log line):
 #   git fetch origin <branch> && gh pr create --head <branch> --base <sprint/target branch> --fill
 #
 # Usage:
@@ -68,7 +70,16 @@
 # against main — landing it then would have reverted unrelated work). 20 is
 # comfortably above the routine per-run touch (at most 3 generated files:
 # gate_cost_baseline.json, gates.toml, ci.yml) and comfortably below F3's
-# magnitude.
+# magnitude. The guard applies only to a prior branch that has an OPEN PR:
+# a prior branch with no PR was never engaged by anyone, is a strict subset
+# of what this run will cut, and is deleted rather than piled on. Without
+# that distinction the guard deadlocked the loop (2026-09-02: an unopened
+# 01:03 branch drifted 672 files by the 12:07 run, which then refused).
+#
+# THE OTHER HALF — opening the PR and regenerating ci.yml — is
+# scripts/cost_baseline_land.sh, run from cron on the build box (see
+# docs/ops/CI-ARCHITECTURE.md §3.5). GitHub Actions can do neither on this
+# repo, so a pushed branch is this script's ceiling.
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -296,7 +307,20 @@ git -C "$ROOT" diff --stat -- $to_land
 # shellcheck disable=SC2086
 prior_branch="$(git -C "$ROOT" ls-remote --heads "$REMOTE" "${BRANCH_PREFIX}-*" 2>/dev/null \
   | awk '{print $2}' | sed 's#^refs/heads/##' | sort | tail -1)"
+prior_pr=""
 if [ -n "$prior_branch" ]; then
+  prior_pr="$(gh pr list --head "$prior_branch" --state open --json number --jq '.[0].number' 2>/dev/null)"
+fi
+if [ -n "$prior_branch" ] && [ -z "$prior_pr" ]; then
+  # A prior branch that nobody opened a PR from is superseded by the one this
+  # run is about to cut: every advance branch is cut fresh from BASE_BRANCH
+  # and carries only regenerated files, so the newer one contains everything
+  # the older one did. Delete it and go on; the staleness guard below is for
+  # a branch a human (or scripts/cost_baseline_land.sh) has already engaged.
+  echo "gate_cost_collect: '$prior_branch' has no open PR — superseded; deleting it and cutting a fresh advance."
+  git -C "$ROOT" push "$REMOTE" --delete "$prior_branch" >/dev/null 2>&1 \
+    || echo "gate_cost_collect: could not delete '$prior_branch' (continuing; it will be re-judged next run)."
+elif [ -n "$prior_branch" ]; then
   if git -C "$ROOT" fetch --depth=1 "$REMOTE" "$prior_branch" >/dev/null 2>&1; then
     prior_sha="$(git -C "$ROOT" rev-parse FETCH_HEAD)"
     if git -C "$ROOT" fetch --depth=1 "$REMOTE" "$BASE_BRANCH" >/dev/null 2>&1; then
@@ -304,10 +328,10 @@ if [ -n "$prior_branch" ]; then
       stale_files="$(git -C "$ROOT" diff --numstat "$prior_sha" "$base_sha" 2>/dev/null | wc -l | tr -d ' ')"
       if [ -z "$stale_files" ]; then stale_files=0; fi
       if [ "$stale_files" -gt "$STALE_THRESHOLD" ]; then
-        echo "gate_cost_collect: refusing to push a new advance branch — an existing unmerged branch '$prior_branch' has already drifted $stale_files files from '$BASE_BRANCH' (threshold $STALE_THRESHOLD files). A human needs to land or delete '$prior_branch' before this job can safely push another advance on top of it."
+        echo "gate_cost_collect: refusing to push a new advance branch — '$prior_branch' has PR #$prior_pr open and has drifted $stale_files files from '$BASE_BRANCH' (threshold $STALE_THRESHOLD files). CI has not let it land; a human needs to land or close PR #$prior_pr before this job can safely push another advance on top of it."
         exit 1
       fi
-      echo "gate_cost_collect: staleness check — '$prior_branch' is $stale_files file(s) from '$BASE_BRANCH' (threshold $STALE_THRESHOLD) — OK to push another advance."
+      echo "gate_cost_collect: staleness check — '$prior_branch' (PR #$prior_pr) is $stale_files file(s) from '$BASE_BRANCH' (threshold $STALE_THRESHOLD) — OK to push another advance."
     else
       echo "gate_cost_collect: staleness check — could not fetch '$BASE_BRANCH' from '$REMOTE' to compare; proceeding without the guard."
     fi
@@ -355,11 +379,13 @@ echo "  pull requests' — measured in S-1-baseline-autoadvance's spike Q2),"
 echo "  and cannot push ci.yml at all (no grantable 'workflows' permission)."
 if [ -n "$ci_yml_moved" ]; then
   echo "  ⚠️ The derived assignment MOVED, so ci.yml must be regenerated —"
-  echo "  'ci-gen-drift' reds until it is. Two commands land this:"
+  echo "  'ci-gen-drift' reds until it is."
 else
   echo "  The derived assignment did not move, but regenerate anyway so the"
-  echo "  branch is verified against its own generator. Two commands land this:"
+  echo "  branch is verified against its own generator."
 fi
+echo "  scripts/cost_baseline_land.sh (cron on the build box) does both and"
+echo "  opens + enqueues the PR. By hand, the same three commands are:"
 echo "    git fetch origin $BRANCH && git checkout $BRANCH"
 echo "    make gen-ci && git commit -a --amend --no-edit && git push -f"
 echo "    gh pr create --head $BRANCH --base $BASE_BRANCH --fill"

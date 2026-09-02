@@ -1,0 +1,14 @@
+-- Predicate-order twin of s-nested-encl-positional-identity.mdk.
+interface Ix a b where
+  ix : a -> b -> Int
+
+impl Ix Int (List Char) where
+  ix _ _ = 300
+
+impl Ix Int (List Bool) where
+  ix _ _ = 100
+
+f : (Ix a (List c), Ix a (List b)) => a -> b -> c -> Int
+f n x y = ix n [x] + ix n [y]
+
+main = println (f 5 'z' True)

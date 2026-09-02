@@ -1070,6 +1070,187 @@ if [ "$carrier_count_actual" != "$carrier_count_expected" ]; then
 fi
 echo "  ok: $carrier_count_actual TyConOrigin mention(s) in ast.mdk (name-set + positional)"
 
+# ── #1318 B-4 predicate-slot producer-authority ratchet ─────────────────────
+# Function, impl-`requires`, method, recursive, and cross-module consumers share
+# record-valued carriers. One complete predicate owns one dict slot; argument vectors
+# and method quantifier positions are fields of that slot, never parallel authorities.
+predicate_slot_src="$ROOT/compiler/types/typecheck.mdk"
+predicate_slot_required='data PredicateSlotArgs = PSArgsUnknown | PSArgsKnown (List Mono)
+data PredicateRequest = PredicateRequest {
+data PredicateSlot = PredicateSlot {
+data MethodPredicateSlot = MethodPredicateSlot {
+data PendingMethodDict = PendingMethodDict {
+implReqPredicateSlot : (String, List Int, Predicate) -> (String, PredicateSlot)
+setFunConstraintEntry : String -> List PredicateSlot -> Unit
+registerActiveDictVars : String -> Int -> List PredicateSlot -> Unit
+recordCallObligations : List CSlot -> List Mono -> List (List Mono) -> Unit
+expandPredicateSlots : List Decl -> List PredicateSlot -> List PredicateSlot
+predicateRequestMatchesSlot : PredicateRequest -> PredicateSlot -> Bool
+&& sameIfaceDecl request.prIface slot.psIface
+monoVecSameGiven requestArgs slotArgs
+activeDictPreds : Ref (List (PredicateSlot, String))
+registerFunPredGiven : PredicateSlot -> String -> Unit
+activeFunDictPredOf : PredicateRequest -> String -> Option String
+goalRequestOfKind : String -> EntailKind -> Option PredicateRequest
+goalPredOf : String -> Mono -> Option PredicateRequest
+goalPredOfOp : String -> Option PredicateRequest
+activeDictVarOfEncl : Option PredicateRequest -> Mono -> String -> Option String
+activeDictVarOfEncl None m encl = activeDictVarForEncl m encl
+activeDictVarOfEncl (Some request) m encl =
+enclSlotIndex : Option PredicateRequest -> Int -> String -> Option Int
+enclSlotIndex None target encl = indexOfId target (enclSlotIds encl)
+enclSlotIndex (Some request) target encl =
+implReqPick : Int ->
+entailAssumVar _ m encl _ (EKNestedTop iface _ _ _ rest) =
+goalMatchesGiven : IfaceRef -> List Mono -> Bool
+anyGivenMatches : PredicateRequest -> List (PredicateSlot, String) -> Bool
+implReqPredicateSlots : Ref (List (String, PredicateSlot))
+funPredicateSlotsRef : Ref (List (String, List PredicateSlot))
+methodPredicateSlotsRef : Ref (List (String, List MethodPredicateSlot))
+crossModuleFunPredicateSlotsRef : Ref (List (String, List PredicateSlot))
+crossModuleFunPredicateSlotsQualRef : Ref (List ((String, String), List PredicateSlot))
+crossModuleMethodPredicateSlotsRef : Ref (List (String, List MethodPredicateSlot))
+crossModuleMethodPredicateSlotsQualRef : Ref (List ((String, String), List MethodPredicateSlot))
+perRun.value.funPredicateSlotsRef :=
+perRun.value.implReqPredicateSlots :=
+perRun.value.methodPredicateSlotsRef :=
+crossRun.value.crossModuleFunPredicateSlotsRef :=
+crossRun.value.crossModuleFunPredicateSlotsQualRef
+crossRun.value.crossModuleMethodPredicateSlotsRef :=
+crossRun.value.crossModuleMethodPredicateSlotsQualRef
+registerMethodConstraints : List String ->
+setMethodPredicateSlotEntry : String -> List MethodPredicateSlot -> Unit
+methodDictArityOf : String -> Int
+resolveMethodDicts : ImplBuckets -> List PendingMethodDict -> Unit
+pending.pmdRoutesRef :=
+methodPredicateRoutes : ImplBuckets ->
+methodPredicateRoute : ImplBuckets -> String -> PredicateSlot -> Route
+realizeRecDictApps : ImplBuckets -> List RecDictApp -> Unit
+recRoutes : ImplBuckets -> String -> Mono -> List PredicateSlot -> List Route
+recRoute : ImplBuckets -> String -> Mono -> PredicateSlot -> Route
+scopePredicateSlots : List ((String, String), List PredicateSlot) ->
+scopeMethodPredicateSlots : List ((String, String), List MethodPredicateSlot) ->
+attributeMethodModulePredicateSlots : String ->'
+
+printf '%s\n' "$predicate_slot_required" | while IFS= read -r required; do
+  if ! grep -Fq "$required" "$predicate_slot_src"; then
+    echo "FAIL: #1318 predicate-slot producer authority is missing required source: $required"
+    exit 1
+  fi
+done || exit 1
+
+predicate_slot_old_consumers='setFunConstraintEntry : String -> List CSlot -> Option (List (List Mono)) -> Unit
+registerActiveDictVars : String -> Int -> List Int -> Unit
+recordCallObligations : List CSlot -> List Mono -> Unit
+predArgsAgreeEncl : List Mono -> List Mono -> Bool
+predArgsAgreeSameInstantiation : List Mono -> List Mono -> Bool
+registerFunPredGiven : String -> PredicateSlotArgs -> String -> Unit
+activeFunDictPredOf : String -> List Mono -> String -> Option String
+activeDictPreds : Ref (List (String, List Mono, String))
+implReqPick : Int -> Predicate -> String -> Bool -> List (String, PredicateSlot) -> Option String
+enclSlotIndex : Option Predicate -> Int -> String -> Option Int
+enclSlotIndex (Some p) target encl = match indexOfPred target p (enclPreds encl)
+None => indexOfId target (enclSlotIds encl)
+entailAssumVar m encl _ (EKNestedTop _ _ _ _ _) = activeDictVarForEncl m encl'
+
+printf '%s\n' "$predicate_slot_old_consumers" | while IFS= read -r retired; do
+  if grep -Fq "$retired" "$predicate_slot_src"; then
+    echo "FAIL: #1318 retired predicate-slot consumer is present: $retired"
+    exit 1
+  fi
+done || exit 1
+
+# Deferred operator routes keep their lexical evidence owner through the concrete-head
+# stamper.  The scalar registry is global and uncleared, so an empty owner or an
+# owner-prefix miss must not borrow another method's dict.  The direct in-impl operator
+# bypass remains a separately tracked residual and is pinned independently below.
+lexical_dict_block="$(sed -n '/^activeDictVarForEncl :/,/^firstDictForEncl :/p' "$predicate_slot_src")"
+printf '%s\n' "$lexical_dict_block" | grep -Fq '| encl == "" = None' || {
+  echo "FAIL: activeDictVarForEncl must reject an empty evidence owner"
+  exit 1
+}
+printf '%s\n' "$lexical_dict_block" | grep -Fq 'TVar cell =>' || {
+  echo "FAIL: activeDictVarForEncl must retain its type-variable lookup arm"
+  exit 1
+}
+printf '%s\n' "$lexical_dict_block" | grep -Fq 'firstDictForEncl' || {
+  echo "FAIL: activeDictVarForEncl must reject an owner-prefix miss"
+  exit 1
+}
+if printf '%s\n' "$lexical_dict_block" | grep -Fq 'activeDictVarOf m'; then
+  echo "FAIL: activeDictVarForEncl retains a non-lexical global fallback"
+  exit 1
+fi
+
+operator_owner_required='stampOpRouteVal : Bool ->
+let reqs = argImplDictRoutesForEncl
+entailInst implTable name m encl tag (EKOp isBinop _) =
+(stampOpRouteVal isBinop implTable encl name m tag, [])'
+printf '%s\n' "$operator_owner_required" | while IFS= read -r required; do
+  if ! grep -Fq "$required" "$predicate_slot_src"; then
+    echo "FAIL: operator route dropped its evidence owner: $required"
+    exit 1
+  fi
+done || exit 1
+if grep -Fq 'argImplDictRoutesFor :' "$predicate_slot_src"; then
+  echo "FAIL: owner-erasing argImplDictRoutesFor wrapper remains"
+  exit 1
+fi
+
+op_dict_block="$(sed -n '/^opDictVarOf :/,/^resolveOpSite :/p' "$predicate_slot_src")"
+printf '%s\n' "$op_dict_block" | grep -Fq '| inImpl = activeDictVarOf m' || {
+  echo "FAIL: direct opDictVarOf in-impl residual moved during the lexical cutoff"
+  exit 1
+}
+
+predicate_relation_uses=$(grep -F 'predicateRequestMatchesSlot request' "$predicate_slot_src" \
+  | grep -cvE '^[[:space:]]*--')
+if [ "$predicate_relation_uses" -ne 6 ]; then
+  echo "FAIL: #1318 shared request/slot relation must serve all five identity consumers plus its definition (got $predicate_relation_uses)"
+  exit 1
+fi
+
+predicate_slot_retired='implReqPreds
+funConstraintsRef
+funConstraintIfacesRef
+funConstraintArgsRef
+crossModuleFunConstraintsRef
+crossModuleFunConstraintsQualRef
+crossModuleFunConstraintIfacesRef
+crossModuleFunConstraintIfacesQualRef
+crossModuleFunConstraintArgsQualRef
+methodConstraintsRef
+methodConstraintIdsRef
+methodConstraintPositionsRef
+crossModuleMethodConstraintsRef
+crossModuleMethodConstraintsQualRef
+legacyCSlotsOfPredicateSlots
+legacyArgsOfPredicateSlots
+predicateSlotOfImplReq
+legacyImplReqOfPredicateSlot
+predicateSlotShadowCompare
+shadowImplReqEntry
+unknownPredicateSlot
+unknownPredicateSlotsEntry
+unknownPredicateSlotsTable
+predicateSlotIdsEntry
+predicateSlotIdsTable
+alignedMethodConstraintIds
+positionMatch
+bestAlignedEntry
+countInSubst
+scopeMethodArities
+attributeMethodModuleConstraints'
+
+printf '%s\n' "$predicate_slot_retired" | while IFS= read -r retired; do
+  if grep -w "$retired" "$predicate_slot_src" \
+    | grep -vE '^[[:space:]]*--' >/dev/null; then
+    echo "FAIL: #1318 retired predicate-slot authority is present in live source: $retired"
+    exit 1
+  fi
+done || exit 1
+echo "  ok: #1318 predicate-slot exclusive authority present; retired split authorities absent"
+
 # ── #1111 Stage A-2 unit A-2.8: registry keying ratchet ─────────────────────
 # Mechanical enforcement for the registry-keying arc (re-keying ~15
 # program-global cross-module tables from bare names to qualified identity):

@@ -1,0 +1,5 @@
+import selectiveuse.{selectiveValue}
+import wildcarduse.{wildcardValue}
+import reexportuse.{reexportValue}
+
+main = println (selectiveValue, wildcardValue, reexportValue)

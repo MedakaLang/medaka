@@ -1,5 +1,5 @@
--- §4 `gen` -- THE ISSUE 1560 CELL, accept half, at the one residual ARITY whose dict the
--- routing machinery can actually honour today.
+-- §4 `gen` -- ISSUE 1560's single-parameter residual control.  The joint two-argument
+-- residual is covered separately by `s4-joint-residual-rdict-native.mdk`.
 --
 -- HAND-DERIVED FROM THE SPEC BEFORE THE BINARY WAS ASKED:
 --   `conv (Wrap x) y` poses `Conv (Wrap t) u` -- again a MIXED vector, one concrete head

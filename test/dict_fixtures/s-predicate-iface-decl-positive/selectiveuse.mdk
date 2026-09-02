@@ -1,0 +1,6 @@
+import defmod.{Same}
+import defmod.*
+
+export
+selectiveValue : Int
+selectiveValue = selective 1

@@ -14,7 +14,7 @@ Per-section status — derive the authoritative version from the issues
 | 3.2 generated `ci.yml` | #2177 | BUILT (`ci-gen-drift` is a required context) |
 | 3.3 identity ⊥ scheduling | #2178 | BUILT — derived assignment, area-reported failures, and the neutral executor names |
 | 3.4 graph-scoped project suites | #2179 | BUILT — `medaka gate reach`, preflight-widened locally, and `merge_group`-scoped in `ci.yml` (`detect.project_reach`). The compiler half still never narrows. |
-| 3.5 cost ratchet | #2180 | BUILT. ⚠️ Its `gate-budget` job is NOT in the required-check set (derived from ruleset 18885875, 2026-08-30) — a red budget does not block a merge. `ci-gen-drift` IS required, and it runs `medaka gate balance --check`, so a hand-edited assignment is blocked; an over-budget one is not. |
+| 3.5 cost ratchet | #2180 | BUILT. ⚠️ Its `gate-budget` job is NOT in the required-check set (derived from ruleset 18885875, 2026-08-30) — a red budget does not block a merge. `ci-gen-drift` IS required, and it runs `medaka gate balance --check`, so a hand-edited assignment is blocked; an over-budget one is not. The baseline auto-advance loop is CLOSED as of 2026-09-02 (nightly pushes, the build box's cron lands — see §3.5 "Closing the loop"). |
 | 3.6 tier-3 charter | #2181 | NOT STARTED |
 
 ---
@@ -341,6 +341,34 @@ payload's own base/head SHAs, exports it as `GATE_BUDGET_COMMIT_MSG`, and the `.
 prefers that whenever it is set (`gate_cmd.mdk` still touches no git state). Mechanism and
 the measured evidence: `docs/ops/GATE-REGISTRY-DESIGN.md` §14.
 
+**Closing the loop (Val, 2026-09-02).** The auto-advance is two halves on two
+machines, because the repo forbids GitHub Actions from opening a PR and the
+`GITHUB_TOKEN` cannot push a workflow file:
+
+1. **Cloud half** — `nightly.yml`'s `gate-cost-autoadvance` job runs
+   `test/gate_cost_collect.sh`: ingests the last admissible runs' timing
+   artifacts, runs `medaka gate balance`, and pushes a fresh
+   `cost-baseline-autoadvance-<ts>` branch carrying `gate_cost_baseline.json`
+   and `gates.toml` only. A prior branch nobody opened a PR from is deleted as
+   superseded; a prior branch with an OPEN PR that has drifted past the
+   staleness threshold makes the job refuse (a red PR is a human's to look at).
+2. **Box half** — `scripts/cost_baseline_land.sh`, from root's crontab on the
+   build box every 30 minutes, with a dedicated clone under `/root/cost-lander`:
+   for each pushed branch with no PR it builds `./medaka`, runs `make gen-ci`,
+   amends `ci.yml`, opens the PR, and enqueues it with `scripts/pr.sh enqueue`.
+   The crontab line is
+   `*/30 * * * * cd /root/medaka && git fetch -q origin main && git show origin/main:scripts/cost_baseline_land.sh | sh >> /root/cost-lander/land.log 2>&1`
+   — it runs the script from `origin/main`, never from a working tree, so the
+   lander cannot go stale with a checkout.
+
+A rebalance therefore lands with **no human review**. That is a deliberate
+change from the "reviewed diff" posture in §3.3 and §6: the diff is by
+construction exactly what `medaka gate balance && make gen-ci` emits, and both
+`gate-balance` and the required `ci-gen-drift` re-derive and compare it in CI,
+so a reviewer could only ever confirm what the checks already prove. What a
+human still owns is a red auto-advance PR — the queue will not merge it, the
+collector will not pile more behind it, and the nightly known-red issue names it.
+
 ### 3.6 Tiers (#2181)
 
 | Tier | Runs | Contents | Failure protocol |
@@ -431,7 +459,8 @@ same slice as an enrolment change.
   everything. Mitigation: the drift + enrolment gates are independent text-only
   checks; fail-open is enumerated per mechanism, and fault-injection tests (a
   deliberately broken selector must produce a FULL run) are acceptance criteria.
-- **Balancer churn**: committed assignments; a rebalance is a reviewed diff, not
+- **Balancer churn**: committed assignments; a rebalance is a reviewable diff (auto-
+  merged since 2026-09-02, §3.5 "Closing the loop"), not
   ambient motion. ⚠️ Hysteresis was NOT the mitigation that survived — see §3.3: it
   is the churn damper that a hand-edit check cannot coexist with. What bounds churn
   instead is that the cost baseline is a committed file re-ingested deliberately, so

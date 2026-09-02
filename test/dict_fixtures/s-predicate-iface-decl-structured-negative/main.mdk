@@ -1,0 +1,3 @@
+import amod.{Wrap(..), badStructured}
+
+main = println (badStructured (Wrap 1))
