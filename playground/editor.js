@@ -81,12 +81,12 @@ function medakaCompletionSource(svc) {
   };
 }
 
-// Dark editor chrome matching the playground palette (bg #0d1117 / #c9d1d9,
-// accents #e2b96f / #58a6ff, borders #30363d).
+// Dark editor chrome matching the playground palette (bg #0e1320 / #d6dde8,
+// accents #5fd38f / #8ab4ff, borders #2b3550).
 const medakaTheme = EditorView.theme({
   '&': {
-    color: '#c9d1d9',
-    backgroundColor: '#0d1117',
+    color: '#d6dde8',
+    backgroundColor: '#0e1320',
     height: '100%',
     fontSize: '0.88rem',
   },
@@ -95,23 +95,23 @@ const medakaTheme = EditorView.theme({
     lineHeight: '1.55',
   },
   '&.cm-focused': { outline: 'none' },
-  '.cm-content': { caretColor: '#58a6ff' },
-  '&.cm-focused .cm-cursor': { borderLeftColor: '#58a6ff' },
+  '.cm-content': { caretColor: '#5fd38f' },
+  '&.cm-focused .cm-cursor': { borderLeftColor: '#5fd38f' },
   '.cm-gutters': {
-    backgroundColor: '#0d1117',
-    color: '#484f58',
+    backgroundColor: '#0e1320',
+    color: '#5a6580',
     border: 'none',
-    borderRight: '1px solid #21262d',
+    borderRight: '1px solid #1e2638',
   },
-  '.cm-activeLineGutter': { backgroundColor: '#161b22', color: '#8b949e' },
-  '.cm-activeLine': { backgroundColor: 'rgba(56,66,80,0.18)' },
+  '.cm-activeLineGutter': { backgroundColor: '#161d2c', color: '#9ba6ba' },
+  '.cm-activeLine': { backgroundColor: 'rgba(95,211,143,0.06)' },
   '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection': {
-    backgroundColor: '#264f78',
+    backgroundColor: '#2a4a6a',
   },
-  '.cm-selectionMatch': { backgroundColor: 'rgba(88,166,255,0.20)' },
+  '.cm-selectionMatch': { backgroundColor: 'rgba(138,180,255,0.20)' },
   '.cm-matchingBracket, &.cm-focused .cm-matchingBracket': {
-    backgroundColor: 'rgba(226,185,111,0.25)',
-    outline: '1px solid rgba(226,185,111,0.5)',
+    backgroundColor: 'rgba(95,211,143,0.22)',
+    outline: '1px solid rgba(95,211,143,0.5)',
   },
   '.cm-lintRange-error': {
     backgroundImage:
@@ -122,23 +122,23 @@ const medakaTheme = EditorView.theme({
       "url('data:image/svg+xml;utf8,<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"6\" height=\"3\"><path d=\"m0 3 l2 -2 l1 0 l-2 2 l1 0 l2 -2 l1 0 l-2 2\" fill=\"none\" stroke=\"%23ffb347\"/></svg>')",
   },
   '.cm-tooltip': {
-    backgroundColor: '#161b22',
-    border: '1px solid #30363d',
-    color: '#c9d1d9',
+    backgroundColor: '#181f30',
+    border: '1px solid #2b3550',
+    color: '#d6dde8',
   },
   '.cm-tooltip.cm-tooltip-lint .cm-diagnostic': { fontSize: '0.82rem' },
   '.cm-mdk-hover': {
     padding: '3px 8px',
     fontFamily: "'SF Mono', 'Fira Code', 'Cascadia Code', 'Menlo', monospace",
     fontSize: '0.82rem',
-    color: '#e2b96f',
+    color: '#5fd38f',
     whiteSpace: 'pre',
   },
   '.cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected]': {
-    backgroundColor: '#264f78',
-    color: '#c9d1d9',
+    backgroundColor: '#2a4a6a',
+    color: '#d6dde8',
   },
-  '.cm-completionDetail': { color: '#8b949e', fontStyle: 'normal' },
+  '.cm-completionDetail': { color: '#9ba6ba', fontStyle: 'normal' },
 }, { dark: true });
 
 export function createEditor(parent, doc, onDocChange, langService) {

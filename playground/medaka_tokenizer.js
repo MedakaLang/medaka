@@ -7,10 +7,21 @@
 //
 // token() returns one of these class names per token (mapped to highlight tags
 // by medaka_lang.js's tokenTable):
-//   keyword comment string character number typeName variableName
+//   keyword comment string character number typeName constructor variableName
 //   operator punctuation bool escape interpolation
 //
-// The two stateful pieces are handled through the parser state object:
+// typeName vs constructor is a POSITIONAL guess, not a parse: an uppercase
+// identifier is a type in type position and a constructor everywhere else.
+// Type position is line-local — it opens at a single `:` (an annotation),
+// after `data`/`type`/`newtype`/`interface`/`impl`/`requires`/`deriving`/
+// `import`, and closes at end of line or at the `=` of an annotated binding.
+// Inside a `data` body (which spans its indented continuation lines) the
+// first uppercase name after each `=` / `|` is the constructor and the rest
+// of that alternative is types. A top-level (column-0) line resets both.
+// Known miss: a multi-line signature's continuation line lexes as
+// expression position.
+//
+// The stateful pieces are handled through the parser state object:
 //   blockComment : nesting depth of `{- {- -} -}` block comments (0 = outside)
 //   strKind      : 'normal' | 'triple' when currently scanning a string body,
 //                  else null
@@ -18,6 +29,10 @@
 //                  interpolation — each frame remembers the enclosing string
 //                  kind to resume when its `{`/`}` balance returns to 0
 //                  (interpolations nest: `"\{ f "\{x}" }"`).
+//   typePos      : true while in type position on the current line
+//   decl         : 'data' | 'alias' | null — the top-level declaration the
+//                  current line belongs to, for the `=` / `|` rules above
+//   ctorNext     : true when the next uppercase name is a constructor
 
 // The keyword set, mirroring lexer.mdk's `keywordOrIdent` table.  True/False are
 // NOT here — they lex as TUpper (uppercase), handled as `bool` below.  Derive the
@@ -42,7 +57,7 @@ const OP1_SET = '+-*/%<>=:.|!?@~^&$';   // single-char operator chars
 const PUNCT_SET = '()[],;';             // delimiters (not braces — see below)
 
 export function startState() {
-  return { blockComment: 0, strKind: null, interpStack: [] };
+  return { blockComment: 0, strKind: null, interpStack: [], typePos: false, decl: null, ctorNext: false };
 }
 
 export function copyState(s) {
@@ -50,6 +65,7 @@ export function copyState(s) {
     blockComment: s.blockComment,
     strKind: s.strKind,
     interpStack: s.interpStack.map((f) => ({ brace: f.brace, kind: f.kind })),
+    typePos: s.typePos, decl: s.decl, ctorNext: s.ctorNext,
   };
 }
 
@@ -119,7 +135,18 @@ function tokenString(stream, state) {
   return 'string';
 }
 
+// Keywords that put the rest of the line in type position.
+const TYPE_HEAD = new Set(['interface', 'impl', 'requires', 'deriving', 'import']);
+
 function tokenCode(stream, state) {
+  if (stream.pos === 0) {
+    // Line start. A column-0 line is a new top-level declaration; an indented
+    // one continues the current declaration (type position only inside a
+    // data body — an impl/interface body is expressions again).
+    const indented = stream.peek() === ' ' || stream.peek() === '\t';
+    if (!indented) { state.decl = null; state.ctorNext = false; }
+    state.typePos = state.decl === 'data' || state.decl === 'alias';
+  }
   if (stream.eatSpace()) return null;
 
   const c = stream.peek();
@@ -159,13 +186,22 @@ function tokenCode(stream, state) {
   if (c >= 'A' && c <= 'Z') {
     const w = stream.match(/^[A-Za-z0-9_]+/)[0];
     if (w === 'True' || w === 'False') return 'bool';
-    return 'typeName';
+    if (state.ctorNext) { state.ctorNext = false; state.typePos = true; return 'constructor'; }
+    if (state.typePos) return 'typeName';
+    // `M.get`: a module alias, neither a type nor a constructor — keep it neutral.
+    if (stream.peek() === '.' && /^\.[A-Za-z_]/.test(stream.string.slice(stream.pos, stream.pos + 2))) return 'typeName';
+    return 'constructor';
   }
 
   // lowercase / underscore identifier or keyword
   if ((c >= 'a' && c <= 'z') || c === '_') {
     const w = stream.match(/^[A-Za-z0-9_]+/)[0];
-    if (KEYWORDS.has(w)) return 'keyword';
+    if (KEYWORDS.has(w)) {
+      if (w === 'data' || w === 'newtype') { state.decl = 'data'; state.typePos = true; }
+      else if (w === 'type') { state.decl = 'alias'; state.typePos = true; }
+      else if (TYPE_HEAD.has(w)) state.typePos = true;
+      return 'keyword';
+    }
     return 'variableName';
   }
 
@@ -189,8 +225,16 @@ function tokenCode(stream, state) {
     return 'punctuation';
   }
 
-  // single-char operators
-  if (OP1_SET.indexOf(c) >= 0) { stream.next(); return 'operator'; }
+  // single-char operators — three of them move the type/constructor position
+  if (OP1_SET.indexOf(c) >= 0) {
+    stream.next();
+    if (c === ':') state.typePos = true;
+    else if (c === '=') {
+      if (state.decl === 'data') state.ctorNext = true;
+      else if (state.decl !== 'alias') state.typePos = false;
+    } else if (c === '|' && state.decl === 'data') state.ctorNext = true;
+    return 'operator';
+  }
 
   // anything else: consume one char, unstyled
   stream.next();

@@ -268,6 +268,11 @@ function parseArgs(argv) {
     // playground root (e.g. site/guide/*.html next to site/index.html).
     playgroundUrl: '../index.html',
     cssName: 'guide.css',
+    // Extra header links, rendered after the doc-set title in the order given.
+    // Each is Label=href; hrefs are relative to a rendered page, like
+    // --playground-url. The renderer knows nothing about sibling doc sets, so
+    // the caller that lays them out beside each other supplies the links.
+    navLinks: [],
     // null = "this caller does not know the shipped-module set", which SKIPS the
     // unshipped-import conjunct rather than asserting an empty set (which would
     // call every importing block not-runnable). Same default-preserves-behavior
@@ -289,6 +294,13 @@ function parseArgs(argv) {
       case '--repo-root': opts.repoRoot = resolve(next()); break;
       case '--playground-url': opts.playgroundUrl = next(); break;
       case '--css-name': opts.cssName = next(); break;
+      case '--nav-link': {
+        const v = next();
+        const eq = v.indexOf('=');
+        if (eq <= 0 || eq === v.length - 1) throw new Error(`--nav-link needs Label=href, got: ${v}`);
+        opts.navLinks.push({ label: v.slice(0, eq), href: v.slice(eq + 1) });
+        break;
+      }
       case '--dist': opts.distDir = resolve(next()); break;
       default: throw new Error(`unknown argument: ${a}`);
     }
@@ -308,7 +320,7 @@ function parseArgs(argv) {
 // ── the renderer ────────────────────────────────────────────────────────────
 export function renderDocSet(opts) {
   const { src, out, exclude, repoUrl, repoRoot, playgroundUrl = '../index.html',
-          cssName = 'guide.css', distDir = null } = opts;
+          cssName = 'guide.css', navLinks = [], distDir = null } = opts;
   if (!existsSync(src)) throw new Error(`--src does not exist: ${src}`);
 
   const shipped = shippedModules(distDir);
@@ -326,8 +338,13 @@ export function renderDocSet(opts) {
   const inSet = new Set(pages);
   const docTitle = opts.title ?? basename(src);
 
+  // Chapter titles come from each page's H1, not its filename: the sidebar
+  // shows "Quick Start", never "01-quick-start". Read up front so the shell of
+  // the first page already knows the title of the last.
+  const titles = new Map(pages.map((file) => [file, pageTitleOf(readFileSync(join(src, file), 'utf8'), file)]));
+
   const rendered = pages.map((file) =>
-    renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, playgroundUrl, cssName, shipped }));
+    renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, titles, playgroundUrl, navLinks, cssName, shipped }));
 
   rmSync(out, { recursive: true, force: true });
   mkdirSync(out, { recursive: true });
@@ -347,14 +364,21 @@ export function renderDocSet(opts) {
   // basenames, and the renderer must not clobber generated content.
   if (!inSet.has('index.md')) {
     writeFileSync(join(out, 'index.html'),
-      indexPage({ docTitle, rendered, pages, playgroundUrl, cssName }));
+      indexPage({ docTitle, rendered, pages, titles, playgroundUrl, navLinks, cssName }));
   }
   writeFileSync(join(out, cssName), STYLESHEET);
 
   return rendered;
 }
 
-function renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, playgroundUrl, cssName, shipped }) {
+// A page's title is its first H1 with inline code marks stripped (`do` and
+// Thenables -> do and Thenables); the basename is the fallback for a page with
+// no H1 at all.
+function pageTitleOf(markdown, file) {
+  return (markdown.match(/^#\s+(.+)$/m)?.[1] ?? basename(file, '.md')).replace(/`/g, '').trim();
+}
+
+function renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, titles, playgroundUrl, navLinks, cssName, shipped }) {
   const markdown = readFileSync(join(src, file), 'utf8');
   const slug = slugger();
   const toc = [];
@@ -420,14 +444,14 @@ function renderPage({ src, file, inSet, repoUrl, repoRoot, docTitle, pages, play
   const body = md.parse(markdown);
   if (errors.length > 0) throw new Error(errors.join('\n  '));
   const outFile = file.replace(/\.md$/, '.html');
-  const pageTitle = (markdown.match(/^#\s+(.+)$/m)?.[1] ?? basename(file, '.md')).trim();
+  const pageTitle = titles.get(file);
 
   return {
     srcFile: file,
     outFile,
     title: pageTitle,
     toc,
-    html: pageShell({ pageTitle, docTitle, body, toc, outFile, pages, playgroundUrl, cssName }),
+    html: pageShell({ pageTitle, docTitle, body, toc, outFile, pages, titles, playgroundUrl, navLinks, cssName }),
   };
 }
 
@@ -473,7 +497,14 @@ function rewriteHref(href, { file, src, inSet, repoUrl, repoRoot, errors }) {
 }
 
 // ── page shell ──────────────────────────────────────────────────────────────
-function pageShell({ pageTitle, docTitle, body, toc, outFile, pages, playgroundUrl, cssName = 'guide.css' }) {
+function pageShell({ pageTitle, docTitle, body, toc, outFile, pages, titles, playgroundUrl, navLinks = [], cssName = 'guide.css' }) {
+  const navHtml = navLinks.length === 0 ? '' :
+    `<nav class="site-nav-links" aria-label="Site">\n`
+    + navLinks.map(({ label, href }) => {
+      const ext = /^https?:\/\//.test(href) ? ' target="_blank" rel="noopener"' : '';
+      return `<a href="${escapeHtml(href)}"${ext}>${escapeHtml(label)}</a>`;
+    }).join('\n')
+    + `\n</nav>\n`;
   const tocHtml = toc.length === 0 ? '' :
     `<nav class="toc" aria-label="On this page">\n<h2>On this page</h2>\n<ul>\n`
     + toc.map((h) => `<li class="toc-h${h.depth}"><a href="#${h.id}">${h.text}</a></li>`).join('\n')
@@ -482,7 +513,7 @@ function pageShell({ pageTitle, docTitle, body, toc, outFile, pages, playgroundU
   const chapters = pages.map((p) => {
     const href = p.replace(/\.md$/, '.html');
     const here = href === outFile ? ' class="here" aria-current="page"' : '';
-    return `<li><a href="${href}"${here}>${escapeHtml(basename(p, '.md'))}</a></li>`;
+    return `<li><a href="${href}"${here}>${escapeHtml(titles.get(p))}</a></li>`;
   }).join('\n');
 
   return `<!DOCTYPE html>
@@ -496,8 +527,8 @@ function pageShell({ pageTitle, docTitle, body, toc, outFile, pages, playgroundU
 <body>
 <header class="site-nav">
 <a class="site-nav-back" href="${escapeHtml(playgroundUrl)}">&larr; Playground</a>
-<span class="site-nav-title">${escapeHtml(docTitle)}</span>
-</header>
+<a class="site-nav-title" href="index.html">${escapeHtml(docTitle)}</a>
+${navHtml}</header>
 <div class="layout">
 <nav class="chapters" aria-label="Chapters">
 <h2>${escapeHtml(docTitle)}</h2>
@@ -521,7 +552,7 @@ ${body}</article>
 // that derives from `docs/guide/*.md` honest. It is written ONLY for a doc set
 // with no `index.md` of its own (see the guard in `renderDocSet`): where a set
 // authors one, that page is the index and this function is never called.
-function indexPage({ docTitle, rendered, pages, playgroundUrl, cssName }) {
+function indexPage({ docTitle, rendered, pages, titles, playgroundUrl, navLinks, cssName }) {
   const items = rendered.map((p) =>
     `<li><a href="${escapeHtml(p.outFile)}">${escapeHtml(p.title)}</a></li>`).join('\n');
   const body = `<h1>${escapeHtml(docTitle)}</h1>\n`
@@ -529,7 +560,7 @@ function indexPage({ docTitle, rendered, pages, playgroundUrl, cssName }) {
     + `<ol class="chapter-index">\n${items}\n</ol>\n`;
   return pageShell({
     pageTitle: docTitle, docTitle, body, toc: [],
-    outFile: 'index.html', pages, playgroundUrl, cssName,
+    outFile: 'index.html', pages, titles, playgroundUrl, navLinks, cssName,
   });
 }
 
@@ -538,18 +569,19 @@ function indexPage({ docTitle, rendered, pages, playgroundUrl, cssName }) {
 // has no light-mode arm, so the guide doesn't invent one either.
 const STYLESHEET = `/* Generated by playground/render_docs.mjs — do not edit by hand. */
 :root {
-  --bg: #0b0e14;
-  --panel: #11151d;
-  --panel-2: #161b24;
-  --line: #232a36;
-  --ink: #d6dbe3;
-  --muted: #8b93a1;
-  --faint: #5c6470;
-  --gold: #e2b96f;
-  --gold-bright: #f0cd8e;
-  --ok: #6fcf97;
+  --bg: #121826;
+  --panel: #181f30;
+  --panel-2: #1e2638;
+  --line: #2b3550;
+  --ink: #e4e9f2;
+  --muted: #9ba6ba;
+  --faint: #6a7590;
+  --accent: #5fd38f;
+  --accent-bright: #8ee8b3;
+  --accent-deep: #2fae68;
+    --ok: #6fcf97;
   --err: #f47067;
-  --code-bg: #0d1117;
+  --code-bg: #0e1320;
   --mono: "SF Mono", "Cascadia Code", "Fira Code", Menlo, Consolas, monospace;
   --ui: system-ui, -apple-system, "Segoe UI", sans-serif;
 
@@ -557,33 +589,38 @@ const STYLESHEET = `/* Generated by playground/render_docs.mjs — do not edit b
      playground/medaka_lang.js's \`medakaHighlightStyle\` — the table CodeMirror
      paints the LIVE editor with. One token class per entry, same names the
      tokenizer returns, so a read-only guide block and the same code typed into
-     the playground look identical. \`--tok-keyword\` equalling \`--gold\` is
+     the playground look identical. \`--tok-keyword\` sharing the accent family is
      deliberate continuity with the site chrome, not a duplicate to collapse:
      the two are free to diverge, and this block's job is to track the editor. */
-  --tok-keyword: #e2b96f;
+  --tok-keyword: #5fd38f;
   --tok-comment: #6e7781;
-  --tok-string: #7ee787;
-  --tok-character: #7ee787;
-  --tok-interpolation: #d2a8ff;
-  --tok-escape: #d2a8ff;
+  --tok-string: #f0c674;
+  --tok-character: #f0c674;
+  --tok-interpolation: #ffb86c;
+  --tok-escape: #ffb86c;
   --tok-number: #79c0ff;
-  --tok-bool: #58a6ff;
-  --tok-typeName: #58a6ff;
-  --tok-variableName: #c9d1d9;
+  --tok-bool: #8ab4ff;
+  --tok-typeName: #8ab4ff;
+  --tok-constructor: #d29cf5;
+  --tok-variableName: #d6dde8;
   --tok-operator: #a9b1ba;
   --tok-punctuation: #8b949e;
 }
 *, *::before, *::after { box-sizing: border-box; }
-html { background: #07090d; }
+html { background: #0c1019; }
 body { margin:0; color:var(--ink); background:var(--bg); font:16px/1.65 var(--ui); }
-a { color:var(--gold); text-decoration:none; }
-a:hover { color:var(--gold-bright); text-decoration:underline; }
+a { color:var(--accent); text-decoration:none; }
+a:hover { color:var(--accent-bright); text-decoration:underline; }
 
 .site-nav { display:flex; align-items:center; gap:1rem; padding:.85rem 1.25rem;
        background:var(--panel); border-bottom:1px solid var(--line); position:sticky; top:0;
        z-index:10; }
-.site-nav-back { color:var(--muted); font:500 .85rem var(--ui); }
+.site-nav-links { margin-left:auto; display:flex; gap:1rem; font-size:.8rem; }
+.site-nav-links a { color:var(--muted); }
+.site-nav-links a:hover { color:var(--accent); text-decoration:none; }
+.site-nav-back { color:var(--muted); font:500 .85rem var(--ui); white-space:nowrap; }
 .site-nav-back:hover { color:var(--ink); }
+.site-nav-title:hover { color:var(--ink); text-decoration:none; }
 .site-nav-title { color:var(--faint); font-size:.8rem; text-transform:uppercase;
        letter-spacing:.06em; }
 
@@ -595,7 +632,7 @@ a:hover { color:var(--gold-bright); text-decoration:underline; }
 .chapters li { margin:.35rem 0; }
 .chapters a { color:var(--muted); }
 .chapters a:hover { color:var(--ink); }
-.chapters a.here { color:var(--gold); font-weight:600; }
+.chapters a.here { color:var(--accent); font-weight:600; }
 main { flex:1 1 auto; min-width:0; max-width:42rem; }
 
 h1,h2,h3 { line-height:1.3; margin:2rem 0 .75rem; color:var(--ink); }
@@ -611,7 +648,7 @@ p, li { color:var(--ink); }
        padding:.85rem 1.1rem; margin-bottom:2rem; font-size:.88rem; }
 .toc li { margin:.25rem 0; }
 .toc a { color:var(--muted); }
-.toc a:hover { color:var(--gold); }
+.toc a:hover { color:var(--accent); }
 .toc .toc-h3 { padding-left:1rem; }
 
 .codeblock { margin:1.1rem 0; border:1px solid var(--line); border-radius:8px;
@@ -634,6 +671,7 @@ p, li { color:var(--ink); }
 .codeblock .tok-number        { color:var(--tok-number); }
 .codeblock .tok-bool          { color:var(--tok-bool); }
 .codeblock .tok-typeName      { color:var(--tok-typeName); }
+.codeblock .tok-constructor   { color:var(--tok-constructor); }
 .codeblock .tok-variableName  { color:var(--tok-variableName); }
 .codeblock .tok-operator      { color:var(--tok-operator); }
 .codeblock .tok-punctuation   { color:var(--tok-punctuation); }
@@ -643,8 +681,8 @@ code, pre { font-family:var(--mono); font-size:.88em; }
 
 .codeblock-actions { border-top:1px solid var(--line); background:var(--panel);
        padding:.5rem .9rem; font:500 .8rem var(--ui); }
-.pg-run { color:var(--gold); }
-.pg-run:hover { color:var(--gold-bright); }
+.pg-run { color:var(--accent); }
+.pg-run:hover { color:var(--accent-bright); }
 .pg-not-runnable { color:var(--faint); font-style:italic; }
 
 .chapter-index { padding-left:1.4rem; }
@@ -652,11 +690,16 @@ code, pre { font-family:var(--mono); font-size:.88em; }
 
 table { border-collapse:collapse; }
 th, td { border:1px solid var(--line); padding:.4rem .7rem; text-align:left; }
-blockquote { margin:1rem 0; padding:.15rem 1.1rem; border-left:3px solid var(--gold);
+blockquote { margin:1.1rem 0; padding:.65rem 1.1rem; border:1px solid var(--line);
+       border-left:3px solid var(--accent); border-radius:8px; background:var(--panel);
        color:var(--muted); }
+blockquote > :first-child { margin-top:0; }
+blockquote > :last-child { margin-bottom:0; }
 @media (max-width:820px) {
   .layout { flex-direction:column; }
-  .chapters { flex:none; }
+  /* Prose first on a phone; the chapter list follows the page instead of
+     pushing it a full screen down. The header title links to the index. */
+  .chapters { flex:none; order:2; margin-top:2rem; padding-top:1rem; border-top:1px solid var(--line); }
   main { max-width:none; }
 }
 `;

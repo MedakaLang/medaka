@@ -58,4 +58,6 @@ exec node "$SCRIPT_DIR/render_docs.mjs" \
   --exclude STDLIB.md,FP-STDLIB-DESIGN.md,P1-STDLIB-DESIGN.md \
   --title "The Medaka Standard Library" \
   --repo-root "$REPO_ROOT" \
+  --nav-link "Guide=../guide/index.html" \
+  --nav-link "GitHub=https://github.com/MedakaLang/medaka" \
   "${DIST_ARGS[@]+"${DIST_ARGS[@]}"}"

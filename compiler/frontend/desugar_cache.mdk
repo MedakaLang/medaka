@@ -27,28 +27,50 @@ import support.util.{lookupAssoc}
 desugarCacheLimit : Int
 desugarCacheLimit = 4
 
-desugarCacheRef : Ref (List (String, List Decl))
+-- Entries carry a GENERATION: a fresh Int minted each time a tree is desugared
+-- for a key, so a downstream memo keyed on the generation (the typechecked-core
+-- memo in `types/typecheck.mdk`, `checkCoreMemoized`) can tell "the same tree I
+-- saw before" from "the same source, re-minted after an eviction" — the tree
+-- carries mutable route Refs the typechecker fills, so the two are not the same
+-- input.
+desugarCacheRef : Ref (List (String, (Int, List Decl)))
 desugarCacheRef = Ref []
 
--- Record an already-computed desugar of `src`'s prelude parse.
-noteDesugaredPrelude : String -> List Decl -> Unit
+desugarGenRef : Ref Int
+desugarGenRef = Ref 0
+
+-- Record an already-computed desugar of `src`'s prelude parse under a fresh generation.
+noteDesugaredPrelude : String -> List Decl -> Int
 noteDesugaredPrelude src decls =
-  desugarCacheRef :=
-    takeFirstN desugarCacheLimit ((src, decls) :: dropKeyD src !desugarCacheRef)
+  let gen = !desugarGenRef + 1
+  desugarGenRef := gen
+  desugarCacheRef := takeFirstN desugarCacheLimit ((src, (gen, decls)) :: dropKeyD src !desugarCacheRef)
+  gen
 
 -- `desugar (parsePrelude src)`, memoized by source string. Most-recently-used
 -- moves to the front, mirroring `parsePrelude`.
 export
 desugaredPrelude : String -> List Decl
-desugaredPrelude src = match lookupAssoc src !desugarCacheRef
-  Some decls => decls
+desugaredPrelude src = snd (desugaredPreludeEntry src)
+
+-- The generation of the tree `desugaredPrelude src` returns right now.  Hand it
+-- to the typechecker's keyed entry points (`checkOneDiagsK` and siblings) as the
+-- identity of that exact tree; a re-minted tree gets a new generation, so a
+-- stale memo can never hit on it.
+export
+desugaredPreludeKey : String -> Int
+desugaredPreludeKey src = fst (desugaredPreludeEntry src)
+
+desugaredPreludeEntry : String -> (Int, List Decl)
+desugaredPreludeEntry src = match lookupAssoc src !desugarCacheRef
+  Some e => e
   None =>
     let decls = desugar (parsePrelude src)
-    let _ = noteDesugaredPrelude src decls
-    decls
+    let gen = noteDesugaredPrelude src decls
+    (gen, decls)
 
 -- drop any existing entry with this key (so a re-desugar refreshes its position).
-dropKeyD : String -> List (String, List Decl) -> List (String, List Decl)
+dropKeyD : String -> List (String, (Int, List Decl)) -> List (String, (Int, List Decl))
 dropKeyD _ [] = []
 dropKeyD k ((k2, v)::rest)
   | k == k2 = dropKeyD k rest
