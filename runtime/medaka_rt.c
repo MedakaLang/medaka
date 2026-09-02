@@ -65,6 +65,7 @@
 #include <poll.h>
 #include <fcntl.h>
 #include <stdint.h>
+#include <sys/random.h>
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
 #endif
