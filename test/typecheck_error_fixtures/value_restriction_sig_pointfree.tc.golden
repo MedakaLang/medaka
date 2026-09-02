@@ -1,2 +1,3 @@
+TYPE ERROR: Declared signature of 'weird' is polymorphic ('a -> a') but its body is not a value, so it cannot be generalized: a zero-argument binding is evaluated once and shared. Give it a parameter (write 'weird x = … x') or declare the monomorphic type
 TYPE ERROR: Type mismatch: Int vs String
 TYPE ERROR: Type mismatch: String vs Int

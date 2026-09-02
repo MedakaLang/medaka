@@ -67,11 +67,35 @@ Three clauses make the rule total, each the site of a measured defect:
    #1093 shape §4.1 G2 forbids. If such a relaxation is ever wanted it is a change to G2's
    set, taken there, with a fixture that discriminates it.
 
+4. **A declared polymorphic signature over an expansive body is a definition-site
+   error, never a silent narrowing.** If a binding's signature quantifies a type
+   variable (with or without a context) and its bound expression is expansive, the
+   binding cannot generalize to what it declares; the implementation rejects it there
+   (`T-SIG-OVER-EXPANSIVE`), naming the remedy: give the binding a parameter, or write
+   the monomorphic type. It must not accept the signature and then narrow the binding
+   to its first use (#830's shape), nor export the declared scheme over a monomorphic
+   body — the latter is what made `sumOf : (Foldable t, Num a) => t a -> a; sumOf = fold
+   (+) 0` pass `check` and crash `build` on an unbound dictionary witness. This retires
+   the "point-free constrained CAF" (Phase 89): under dictionary elaboration such a
+   binding would become a function of its evidence, re-evaluated per use and never
+   memoized, which is exactly the evaluation move `DICT-SEMANTICS.md` §4.1 G3 says is
+   neutral only for G2's value set. Ruled 2026-09-02: spec as written; write
+   `sumOf xs = fold (+) 0 xs`.
+
+   A bare variable is a value even after the dictionary pre-pass has rewritten it into
+   a marked node, so `callMin : Ord a => a -> a -> a; callMin = min` generalizes under
+   every verb; the predicate must see through the marking or the same program is a
+   value under `check` and expansive under `build`.
+
 **Where it is enforced.** `sccSchemes` (`grep -n 'sccSchemes :' compiler/types/typecheck.mdk`)
 gates each member on `memberClauseIsValue` → `isNonexpansive` and nothing else; local
 `let`/`where` bindings go through `genRestricted` with the same predicate (G2). Pinned by
 `test/typecheck_error_fixtures/value_restriction.mdk`, `value_restriction_scc.mdk` and
-`value_restriction_sig_pointfree.mdk`, gate `test/diff_compiler_typecheck_errors.sh`.
+`value_restriction_sig_pointfree.mdk`, `value_restriction_sig_expansive.mdk` (clause 4) and
+`value_restriction_sig_variable_ok.mdk` (the positive control: a bare variable under a
+constrained signature generalizes), gate `test/diff_compiler_typecheck_errors.sh`; the
+eta-expanded `test/build_diff_fixtures/{pointfree_caf,sum_twocstr}.mdk` and
+`test/ported/test_eval_ported.mdk` (`myMax`) are the retired shape's former fixtures.
 
 **Relation to G3.** `DICT-SEMANTICS.md` §4.1 G3's evaluation-timing argument is contingent
 on the value set being exactly G2's set. This rule is what makes that contingency hold at

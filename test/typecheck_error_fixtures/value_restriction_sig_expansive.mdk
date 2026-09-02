@@ -1,0 +1,13 @@
+-- A declared POLYMORPHIC signature over an EXPANSIVE body (DICT-SEMANTICS §4.1
+-- G2, HM-CORE-SEMANTICS §1 clause 4).  `fold (+) 0` is a partial application,
+-- not a syntactic value, so `sumOf` is monomorphic: a zero-argument binding is
+-- evaluated once and shared, and one shared evaluation cannot be instantiated
+-- at every `t` and `a` the signature promises.  Before this rule the binding
+-- was silently narrowed to its first use (`check` printed `List Int -> Int`
+-- for it, the #830 shape) while `build` panicked on an unbound dictionary
+-- witness.  The remedy is in the message: give the binding a parameter.
+sumOf : (Foldable t, Num a) => t a -> a
+sumOf = fold (+) 0
+
+main : <IO> Unit
+main = println (debug (sumOf [10, 20, 30]))

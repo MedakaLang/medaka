@@ -10089,6 +10089,14 @@ isNonexpansive env (EDoOrigin _ e) = isNonexpansive env e
 isNonexpansive _ (ELit _) = True
 isNonexpansive _ (EVar _) = True
 isNonexpansive _ (EVarId _ _) = True
+-- `run`/`build` rewrite a method reference into a dictionary-marked node before
+-- typechecking (`prePassDict`); the marked node is still a variable, so the value
+-- predicate must answer as it does for the `EVar` that `check` sees — otherwise
+-- `callMin = min` is a value under one verb and expansive under another
+-- (check green, build panics on an unbound dictionary witness).
+isNonexpansive _ (EMethodAt _ _ _ _) = True
+isNonexpansive _ (EDictAt _ _) = True
+isNonexpansive _ (EMethodRef _) = True
 isNonexpansive _ (ELam _ _) = True
 isNonexpansive env (EAnnot e _) = isNonexpansive env e
 isNonexpansive env (EHeadAnnot e _) = isNonexpansive env e
@@ -34894,6 +34902,7 @@ processSCC env sigs grouped members =
   let _ = registerAmbiguousConstraints addedObls (map snd placeholders)  -- RETPOS soundness
   let schemes =
     sccSchemes env2 sigs grouped (isLetrecGroup members) placeholders
+  let _ = checkSigsOverExpansive env2 grouped sigTvMaps
   -- #23 two-hop forward: also record constraints FORWARDED from a constrained
   -- callee (living on the call delta, never in addedObls) into schemeObligationsRef,
   -- so a caller of this group re-instantiates them and its own group can ground the
@@ -35518,6 +35527,31 @@ sccSchemes env sigs grouped isLetrec ((m, v) :: rest) =
 memberClauseIsValue : TcEnv -> (List Pat, Expr) -> Bool
 memberClauseIsValue env ([], rhs) = isNonexpansive env rhs
 memberClauseIsValue _ (_, _) = True
+
+-- ── polymorphic signature over an expansive body ─────────────────────────────
+-- HM-CORE-SEMANTICS §1 clause 4 / DICT-SEMANTICS §4.1 G2.  A signed member whose
+-- signature quantifies a type variable but whose clauses are not syntactic values
+-- cannot generalize to what it declares: `sccSchemes` keeps it monomorphic, and
+-- the declared scheme would otherwise be exported over a body that carries no
+-- dictionary parameter — `check` narrowed it silently to its first use while
+-- `build` panicked on an unbound witness (the former "point-free constrained
+-- CAF", `sumOf : (Foldable t, Num a) => t a -> a ; sumOf = fold (+) 0`).  Reject
+-- at the definition and name the remedy.
+checkSigsOverExpansive : TcEnv ->
+  OrdMap (List (List Pat, Expr)) ->
+  List (String, Ty, List (String, Mono)) ->
+  Unit
+checkSigsOverExpansive _ _ [] = ()
+checkSigsOverExpansive env grouped ((m, ty, tvs) :: rest) =
+  let _ =
+    if not (isEmpty tvs)
+      && not (allList (memberClauseIsValue env) (clausesOf m grouped)) then
+      pushTypeError "T-SIG-OVER-EXPANSIVE" (sigOverExpansiveMsg m ty)
+  checkSigsOverExpansive env grouped rest
+
+sigOverExpansiveMsg : String -> Ty -> String
+sigOverExpansiveMsg name ty =
+  "Declared signature of '\{name}' is polymorphic ('\{ppTy ty}') but its body is not a value, so it cannot be generalized: a zero-argument binding is evaluated once and shared. Give it a parameter (write '\{name} x = … x') or declare the monomorphic type"
 
 -- ── signature-too-general check ──────────────────────────────────────────────
 -- After body inference, the declared signature's type variables must map to

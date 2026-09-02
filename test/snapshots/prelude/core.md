@@ -1446,7 +1446,7 @@ notElem a xs = not (elem a xs)
    Some 3 -}
 export
 maximum : (Foldable t, Ord a) => t a -> Option a
-maximum = fold step None
+maximum xs = fold step None xs
   where
     step None x = Some x
     step (Some m) x = Some (max m x)
@@ -1460,7 +1460,7 @@ maximum = fold step None
    Some 1 -}
 export
 minimum : (Foldable t, Ord a) => t a -> Option a
-minimum = fold step None
+minimum xs = fold step None xs
   where
     step None x = Some x
     step (Some m) x = Some (min m x)

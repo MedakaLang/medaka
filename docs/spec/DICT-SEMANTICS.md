@@ -740,6 +740,16 @@ tracked as #1082, gated on this clause).
     changed accordingly). Pinned by `test/typecheck_error_fixtures/
     value_restriction_scc.mdk` and `value_restriction_sig_pointfree.mdk`.
 
+    Two consequences, both ruled 2026-09-02 (spec as written): a declared
+    polymorphic signature over an expansive body is now a **definition-site error**
+    (`T-SIG-OVER-EXPANSIVE`, `HM-CORE-SEMANTICS.md` §1 clause 4) rather than the
+    #830 silent narrowing — this retires the "point-free constrained CAF" of Phase 89
+    (`sumOf : (Foldable t, Num a) => t a -> a; sumOf = fold (+) 0`), whose dictionary
+    prefix over a non-value is exactly what this clause forbids; and the predicate
+    treats a dictionary-marked variable (`EMethodAt`/`EDictAt`/`EMethodRef`, minted
+    by `run`/`build`'s pre-pass) as the variable it is, so `callMin = min` is a value
+    under every verb.
+
   ⚠️ **This paragraph does NOT assert that the implementation's predicate is now
   exactly this clause's set, and G3 below is NOT thereby discharged.** #1139, #1150,
   #2554 and #2556 were closed one hole at a time; establishing set equality is a
