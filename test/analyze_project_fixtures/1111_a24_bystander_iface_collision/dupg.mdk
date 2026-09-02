@@ -2,7 +2,7 @@
 -- never names.  `Same` here is GRADED -- slot 0 is row-kinded (`f e a`, `e` in an
 -- effect tail) -- and its only required method is `gandThen`.  The entry imports
 -- ONLY `dg` from this module.
-export interface Same f where
+export interface Same (f : Effect -> Type -> Type) where
   gandThen : f e a -> (a -> <e> f e b) -> f e b
 
 export dg : Int -> Int

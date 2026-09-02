@@ -1,7 +1,7 @@
 -- #803 (S0): the row-kinded-data variant. `<e>` is carried by the Row-kinded slot
 -- of `Ghost e`; the impl ignores it and performs its own intrinsic <Stdout>, which
 -- is absorbed into `<e>` and laundered. Rejected by T-EFFECT-LAUNDER at impl check.
-data Ghost e = Using (Unit -> <e> Unit) | Free
+data Ghost (e : Effect) = Using (Unit -> <e> Unit) | Free
 
 interface Speak s where
   speak : s -> Ghost e -> <e> String

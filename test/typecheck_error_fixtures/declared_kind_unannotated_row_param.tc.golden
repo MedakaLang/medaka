@@ -1,0 +1,1 @@
+TYPE ERROR: Type parameter `e` of `Box` is used as an effect row (in an effect tail or an Effect-kinded argument slot), but its head does not declare it one. A parameter is Effect-kinded only when written so: declare the head as `Box (e : Effect) …`.

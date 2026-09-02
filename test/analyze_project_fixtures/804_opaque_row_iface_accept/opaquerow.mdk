@@ -1,4 +1,4 @@
 -- #804: exported ABSTRACTLY (plain `export` — the type NAME crosses the module
--- boundary, the constructor does not).  `e` is Row-kinded, inferred from its use in
--- `Mk`'s field effect tail.  This is the shape `stdlib/async.mdk` uses for `Async e a`.
-export data Asy e a = Mk (Unit -> <e> a)
+-- boundary, the constructor does not).  `e` is Effect-kinded, declared on the
+-- head.  This is the shape `stdlib/async.mdk` uses for `Async (e : Effect) a`.
+export data Asy (e : Effect) a = Mk (Unit -> <e> a)

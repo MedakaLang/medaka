@@ -901,11 +901,11 @@ esac
 # written that way were green with the implementation arm deleted.  ACCEPTANCE is the
 # only observable, and only this gate sees it.
 cat > "$TMP/g822_ma.mdk" <<'EOF'
-export interface GT f where
+export interface GT (f : Effect -> Type -> Type) where
   gpinA : f e a -> (a -> <e> f e b) -> f e b
 EOF
 cat > "$TMP/g822_mb.mdk" <<'EOF'
-export interface GT g where
+export interface GT (g : Type -> Effect -> Type) where
   gpinB : g a e -> (a -> <e> g a e) -> g a e
 EOF
 cat > "$TMP/g822_ab.mdk" <<'EOF'
@@ -944,7 +944,7 @@ done
 # passes on a tree with the old `<iface>@<slot>`-keyed lookup, so it only catches total
 # absence of #822.  This one fails there.  Both orders, because the bug was order-dependent.
 cat > "$TMP/g822_graded.mdk" <<'EOF'
-export interface GT f where
+export interface GT (f : Effect -> Type -> Type) where
   gm : f e a -> (a -> <e> f e b) -> f e b
 EOF
 cat > "$TMP/g822_plain.mdk" <<'EOF'

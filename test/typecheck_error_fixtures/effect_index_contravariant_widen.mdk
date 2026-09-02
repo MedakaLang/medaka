@@ -1,7 +1,7 @@
 -- #1094: WHY INVARIANCE AND NOT COVARIANCE.  This is the direction a `≤`-covariance
 -- rule would license (`<> ≤ <Stdout>`, widening a PURE index) — and it is unsound,
--- because a CONTRAVARIANT `Effect`-indexed type is expressible today and its kind is
--- inferred correctly: `Sink`'s `e` occurs only in the DOMAIN of the stored function.
+-- because a CONTRAVARIANT `Effect`-indexed type is expressible today once its kind is
+-- declared: `Sink`'s `e` occurs only in the DOMAIN of the stored function.
 --
 -- Widening `Sink <>` to `Sink <Stdout>` hands `runSink` a licence to pass an effectful
 -- callback into a sink built for pure ones, so
@@ -11,7 +11,7 @@
 -- direction for a covariant occurrence is exactly the unsafe one here: only EQUALITY
 -- is sound at an index.  Sibling of effect_index_written_row_invariant.mdk, which
 -- pins the opposite direction on a covariant index.
-data Sink e = MkSink ((Unit -> <e> Unit) -> Unit)
+data Sink (e : Effect) = MkSink ((Unit -> <e> Unit) -> Unit)
 
 pureSink : Sink <>
 pureSink = MkSink (g => g ())

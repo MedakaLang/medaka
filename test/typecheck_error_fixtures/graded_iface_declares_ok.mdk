@@ -1,13 +1,13 @@
 -- #822: the spec's graded-lite interface (EFFECTS-SEMANTICS §6 "Graded
--- interfaces") — an interface over a ROW-INDEXED constructor `f : Row -> Type ->
--- Type`, all grades collapsed onto ONE shared variable.  Before interface type
+-- interfaces") — an interface over a ROW-INDEXED constructor `f : Effect -> Type
+-- -> Type`, all grades collapsed onto ONE shared variable.  Before interface type
 -- parameters had kinds this was rejected outright by T-EFFECT-ARG-UNCOVERED: with
 -- an abstract head, `f e b` contributed no return-position occurrence of <e>, so
 -- the var looked argument-only.  It must now DECLARE, and its impl for a
 -- row-indexed data type must check with the grade riding the index.
-data Async e a = Done a | Suspend (Unit -> <e> Async e a)
+data Async (e : Effect) a = Done a | Suspend (Unit -> <e> Async e a)
 
-interface GThenable f where
+interface GThenable (f : Effect -> Type -> Type) where
   gandThen : f e a -> (a -> <e> f e b) -> f e b
 
 impl GThenable Async where

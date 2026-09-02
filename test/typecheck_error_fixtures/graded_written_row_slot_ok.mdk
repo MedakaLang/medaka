@@ -11,5 +11,5 @@
 -- spurious T-EFFECT-KIND-MISMATCH on a well-formed signature.
 --
 -- Delete `isRowSlotArg`'s `TyRow _ (Some n) _` arm and this fixture reddens.
-interface GThenable f where
+interface GThenable (f : Effect -> Type -> Type) where
   gandThen : f <Stdout | e> a -> (a -> <Stdout | e> f <Stdout | e> b) -> f <Stdout | e> b

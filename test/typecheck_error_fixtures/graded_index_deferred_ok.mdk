@@ -5,13 +5,13 @@
 -- EFFECTS-SEMANTICS §6 promises for a deferred graded value — and the impl
 -- MUST stay accepted: the interface, the graded signature, the index and the
 -- impl machinery are all identical to the reject twin.
-data Box e a = Done a | Susp (Unit -> <e> a)
+data Box (e : Effect) a = Done a | Susp (Unit -> <e> a)
 
 runBox : Box e a -> <e> a
 runBox (Done a) = a
 runBox (Susp t) = t ()
 
-interface GMap f where
+interface GMap (f : Effect -> Type -> Type) where
   gmap : (a -> <e> b) -> f e a -> f e b
 
 impl GMap Box where
