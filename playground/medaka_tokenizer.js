@@ -29,7 +29,7 @@
 export const KEYWORDS = new Set([
   'let', 'rec', 'with', 'mut', 'in', 'if', 'then', 'else', 'match', 'data',
   'interface', 'default', 'impl', 'import', 'export', 'public',
-  'where', 'of', 'do', 'as', 'extern', 'requires', 'deriving', 'type',
+  'where', 'of', 'do', 'defer', 'as', 'extern', 'requires', 'deriving', 'type',
   'newtype', 'prop', 'test', 'bench', 'effect', 'internal', 'function',
 ]);
 

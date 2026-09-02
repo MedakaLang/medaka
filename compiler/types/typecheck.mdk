@@ -14409,7 +14409,13 @@ inferExpected env (ELoc l e) expected =
   currentLoc := Some l
   inferExpected env e expected
 inferExpected env e expected =
-  if monoHasNonCovariantSlot expected then match appSpineExpr e
+  -- The order only matters when an ARROW ROW sits inside a type-constructor
+  -- slot (that is the only thing the variance gate compares), so a purely
+  -- structural pre-check (`monoHasArrowInSlot`) runs first; the polarity
+  -- table (a list, scanned per lookup) is consulted only for the rare
+  -- expected types that have such a slot.  Measured: the unconditional table
+  -- walk per signed clause cost ~1% Ir on hello-world `check`.
+  if monoHasArrowInSlot expected && monoHasNonCovariantSlot expected then match appSpineExpr e
     (hd, args) =>
       if isEmptyL args || not (plainAppHead env hd) then
         infer env e
@@ -14525,6 +14531,20 @@ resultAfterArrows n t
 -- variance gate can fire, and so the only ones for which the inference order
 -- matters (`inferExpected`).  Walks under arrows and applications; an
 -- unregistered head, a bare variable, or an index row contributes nothing.
+-- does [t] have an arrow anywhere INSIDE a type-constructor argument?  Purely
+-- structural — no table — so it is the cheap first filter for `inferExpected`.
+monoHasArrowInSlot : Mono -> Bool
+monoHasArrowInSlot t = match normalize t
+  TApp a b => monoHasArrow b || monoHasArrowInSlot a
+  TFun a _ b => monoHasArrowInSlot a || monoHasArrowInSlot b
+  _ => False
+
+monoHasArrow : Mono -> Bool
+monoHasArrow t = match normalize t
+  TFun _ _ _ => True
+  TApp a b => monoHasArrow a || monoHasArrow b
+  _ => False
+
 monoHasNonCovariantSlot : Mono -> Bool
 monoHasNonCovariantSlot t = match normalize t
   TApp a b => monoSlotNonCovariant a

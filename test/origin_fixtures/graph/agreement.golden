@@ -43,6 +43,9 @@ core decl:Arbitrary AGREE AGREE AGREE
 core decl:Bimappable AGREE AGREE AGREE
 core decl:Bounded AGREE AGREE AGREE
 core decl:Debug AGREE AGREE AGREE
+core decl:DeferredApplicative AGREE AGREE AGREE
+core decl:DeferredMappable AGREE AGREE AGREE
+core decl:DeferredThenable AGREE AGREE AGREE
 core decl:Display AGREE AGREE AGREE
 core decl:Eq AGREE AGREE AGREE
 core decl:Filterable AGREE AGREE AGREE
@@ -71,6 +74,9 @@ core iface:Arbitrary AGREE AGREE AGREE
 core iface:Bimappable AGREE AGREE AGREE
 core iface:Bounded AGREE AGREE AGREE
 core iface:Debug AGREE AGREE AGREE
+core iface:DeferredApplicative AGREE AGREE AGREE
+core iface:DeferredMappable AGREE AGREE AGREE
+core iface:DeferredThenable AGREE AGREE AGREE
 core iface:Display AGREE AGREE AGREE
 core iface:Eq AGREE AGREE AGREE
 core iface:Filterable AGREE AGREE AGREE
@@ -168,6 +174,9 @@ decl:Bounded 1 mod:core
 decl:Crate 1 mod:alpha
 decl:CrateId 1 mod:alpha
 decl:Debug 1 mod:core
+decl:DeferredApplicative 1 mod:core
+decl:DeferredMappable 1 mod:core
+decl:DeferredThenable 1 mod:core
 decl:Display 1 mod:core
 decl:Eq 1 mod:core
 decl:Filterable 1 mod:core
@@ -200,6 +209,9 @@ iface:Arbitrary 1 mod:core
 iface:Bimappable 1 mod:core
 iface:Bounded 1 mod:core
 iface:Debug 1 mod:core
+iface:DeferredApplicative 1 mod:core
+iface:DeferredMappable 1 mod:core
+iface:DeferredThenable 1 mod:core
 iface:Display 1 mod:core
 iface:Eq 1 mod:core
 iface:Filterable 1 mod:core
@@ -221,12 +233,12 @@ iface:Weighable 1 mod:alpha
 modules 3
 graph-modules 3
 flat-segments 6
-decl-heads 34
-iface-occs-constraintOrigin 45
-iface-occs-superOrigin 10
+decl-heads 37
+iface-occs-constraintOrigin 48
+iface-occs-superOrigin 12
 iface-occs-requireOrigin 97
 iface-occs-implOrigin 127
-heads 93
-claims 279
+heads 99
+claims 297
 residual 24
 conflicts 0

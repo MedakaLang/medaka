@@ -600,10 +600,14 @@ annotation. Spec: `docs/spec/EFFECTS-SEMANTICS.md` §6.1–§6.5.
 data Async (e : Effect) a = Done a | Suspend (Unit -> <e> Async e a)
 newtype Box (e : Effect) = MkBox (Unit -> <e> Unit)
 type LaterInt (e : Effect) = Async e Int
-interface DeferredThenable (f : Effect -> Type -> Type) where
-  deferThen : f e a -> (a -> <e> f e b) -> f e b
-data Wrap (g : (Type -> Type) -> Type) = W (g Option)   -- Effect-free arrow kinds may also be written
-data Phantom (e : Effect) a = Phantom a                 -- legal: declared, never used
+interface Suspendable (f : Effect -> Type -> Type) where
+  suspendThen : f e a -> (a -> <e> f e b) -> f e b
+-- the prelude's `DeferredThenable` has this head
+
+data Wrap (g : (Type -> Type) -> Type) =
+  | W (g Option)  -- Effect-free arrow kinds may also be written
+data Phantom (e : Effect) a =
+  | Phantom a  -- legal: declared, never used
 ```
 
 ## Interfaces & implementations

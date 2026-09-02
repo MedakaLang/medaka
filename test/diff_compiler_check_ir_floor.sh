@@ -97,7 +97,13 @@ export MEDAKA_ROOT="$ROOT" MEDAKA_EMITTER="$EMITTER"
 # diff_compiler_ir_size.sh).
 CEIL_check="${CHECK_IR_CEIL:-735000000}"
 CEIL_build="${BUILD_IR_CEIL:-520000000}"
-CEIL_run="${RUN_IR_CEIL:-785000000}"
+# `run` re-measured 2026-09-02 at 791,372,632 Ir after the effects-lane PR (#2491): the
+# prelude grew by the `Deferred*` family (3 interfaces, `deferFlatMap`/`deferWhen`/
+# `deferUnless`) and `run` type-checks and elaborates the prelude, so ~0.8% more Ir is
+# the size of the prelude, not an algorithmic regression (the one such regression that
+# PR introduced — a per-signed-clause polarity-table scan — was removed, which is what
+# brought `check` back under its unchanged ceiling). New ceiling ~1.1% over the measured.
+CEIL_run="${RUN_IR_CEIL:-800000000}"
 CEIL_test="${TEST_IR_CEIL:-505000000}"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/mdk-checkirfloor.XXXXXX")"
