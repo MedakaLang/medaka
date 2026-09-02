@@ -68,13 +68,13 @@ import frontend.parser.{
   declPosChildLocs,
 }
 import frontend.lexer.{Token(..), tokenizeWithOffsetPairs}
-import frontend.desugar_cache.{desugaredPrelude}
+import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
 import support.char.{isIdentChar, isDigit}
 import support.util.{maxI, utf8Len, joinWith, startsWith}
 import string.{stripCR}
 import frontend.desugar.{desugar}
 import types.typecheck.{
-  checkOneSchemeFull,
+  checkOneSchemeFullK,
   ppSchemeNamed,
   ppSchemeNamedFull,
   Scheme(..),
@@ -714,7 +714,8 @@ docSchemes runtimeSrc coreSrc src =
     Err _ => None
     Ok userRaw =>
       let userDecls = desugar userRaw
-      let (preludeSchemes, ownSchemes) = checkOneSchemeFull runtimeDecls coreDecls ("__user__", userDecls)
+      let preludeKey = Some (desugaredPreludeKey runtimeSrc, desugaredPreludeKey coreSrc)
+      let (preludeSchemes, ownSchemes) = checkOneSchemeFullK preludeKey runtimeDecls coreDecls ("__user__", userDecls)
       Some (ownSchemes ++ preludeSchemes)
 
 -- core.mdk always parses; unwrap its parseResult (defensive None → []).

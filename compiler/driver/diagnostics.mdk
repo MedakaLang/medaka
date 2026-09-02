@@ -25,7 +25,7 @@ import frontend.parser.{
   parseErrorCol,
   parseErrorMessage,
 }
-import frontend.desugar_cache.{desugaredPrelude}
+import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
 import frontend.desugar.{desugar, checkDerives}
 import frontend.resolve.{
   ResError,
@@ -47,8 +47,8 @@ import frontend.marker.{
   preludeStandaloneShadowsWith,
 }
 import types.typecheck.{
-  checkOneDiags,
-  checkModulesDiags,
+  checkOneDiagsK,
+  checkModulesDiagsK,
   checkModules,
   entryOwnSchemes,
   Scheme(..),
@@ -700,6 +700,10 @@ analyzeFrom modName runtimeSrc coreSrc raw internalGuard =
   let desugared = desugar raw
   let runtimeP = desugaredPrelude runtimeSrc
   let coreP = desugaredPrelude coreSrc
+  -- the identity of those two trees, for the typechecker's core-check memo
+  -- (`checkCoreMemoized`, types/typecheck.mdk): the prelude is typechecked once
+  -- per process, not once per call.
+  let preludeKey = Some (desugaredPreludeKey runtimeSrc, desugaredPreludeKey coreSrc)
   -- Oracle superset = target + prelude (runtime + core) so exhaustiveness of a
   -- multi-clause function over a prelude ADT (Result/Option/…) isn't false-flagged.
   let guardWarns = checkGuardExhaustivenessWith (raw ++ runtimeP ++ coreP) raw
@@ -718,7 +722,7 @@ analyzeFrom modName runtimeSrc coreSrc raw internalGuard =
   let _ = setCoherenceUserDecls desugared
   let tcDiags = match resErrs
     [] =>
-      let (tcErrs, tcWarns) = checkOneDiags runtimeP coreP ("__user__", desugared)
+      let (tcErrs, tcWarns) = checkOneDiagsK preludeKey runtimeP coreP ("__user__", desugared)
       map diagOfTypeError tcErrs ++ map diagOfTypeWarning tcWarns
     _ => []
   -- AUTO-PRINT visibility (composite-main design §10): a bare non-Unit VALUE main
@@ -1015,6 +1019,7 @@ analyzeProject allowInternal trustedMods cacheRef parseCacheRef read entry roots
   let wread = p => wrappedRead cacheRef staleRef read p
   let runtimeP = preludeDesugared runtimeSrc
   let coreP = preludeDesugared coreSrc
+  let preludeKey = Some (desugaredPreludeKey runtimeSrc, desugaredPreludeKey coreSrc)
   match loadProgramFilesLocatedCachedE parseCacheRef wread entry roots
     -- #100: a parse/lex error in a dependency is attributed to THAT module's file
     -- with its own located `P-*`/`L-*` diag — this is the LSP's most common input
@@ -1027,7 +1032,7 @@ analyzeProject allowInternal trustedMods cacheRef parseCacheRef read entry roots
     Ok mods =>
       let seeded = seedAll (map midPath mods) []
       let afterRes = resolvePass allowInternal trustedMods runtimeP coreP omEmpty mods seeded
-      let afterTc = typecheckPass runtimeP coreP [] mods afterRes
+      let afterTc = typecheckPass runtimeP coreP preludeKey mods afterRes
       appendStale staleRef afterTc
 -- A load error (cycle / unknown module / unreadable file) is attributed to the
 -- entry file (the compiler loader returns a single Err string without a per-file
@@ -1118,10 +1123,10 @@ resolvePass allowInternal trustedMods rt core known ((mid, path, prog)::rest) bu
 -- Guard-exhaustiveness warnings still come from the RAW (pre-desugar) module decls
 -- (checkGuardExhaustiveness needs the surface `EGuards` shape, gone after desugar),
 -- bucketed per file alongside the module's type diagnostics.
-typecheckPass : List Decl -> List Decl -> List Decl -> List (String, String, List Decl) -> List (String, List Diag) -> List (String, List Diag)
-typecheckPass runtimeP coreP _ mods buckets =
+typecheckPass : List Decl -> List Decl -> Option (Int, Int) -> List (String, String, List Decl) -> List (String, List Diag) -> List (String, List Diag)
+typecheckPass runtimeP coreP preludeKey mods buckets =
   let modPairs = map midToDesugaredPair mods
-  let tcByMid = checkModulesDiags runtimeP coreP modPairs
+  let tcByMid = checkModulesDiagsK preludeKey runtimeP coreP modPairs
   -- Oracle superset = prelude + EVERY loaded module's decls, so a multi-clause
   -- function over an imported ADT isn't false-flagged as non-exhaustive.
   let oracleDecls = runtimeP ++ coreP ++ flatMap rawDeclsOfMod mods

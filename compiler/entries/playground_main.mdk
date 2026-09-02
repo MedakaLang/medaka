@@ -83,7 +83,7 @@ import frontend.parser.{
   parseErrorMessage,
 }
 import frontend.desugar.{desugar}
-import frontend.desugar_cache.{desugaredPrelude}
+import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
 import driver.loader.{
   LoadMsg,
   LoadParseFailed,
@@ -136,7 +136,7 @@ import types.typecheck.{
   mainTypeIsUnit,
   Scheme,
   ppSchemeNamedFull,
-  checkOneSchemeFull,
+  checkOneSchemeFullK,
 }
 import ir.core_ir_lower.{
   ifaceImplHeadTable,
@@ -544,12 +544,17 @@ queryResult : Bool -> String -> String -> String -> Int -> Int -> Json
 queryResult isHover rsrc csrc tsrc line col = match parseResult tsrc
   Err _ => JNull
   Ok userRaw =>
-    let runtimeDecls = desugar (unwrapDecls (parseResult rsrc))
-    let coreDecls = desugar (unwrapDecls (parseResult csrc))
+    -- The prelude through the process-wide memo (parsed + desugared once per
+    -- session, like `analyze`), and its key for the typechecker's core-check
+    -- memo — a hover after an analyze of the same prelude typechecks only the
+    -- user's buffer.
+    let runtimeDecls = desugaredPrelude rsrc
+    let coreDecls = desugaredPrelude csrc
+    let preludeKey = Some (desugaredPreludeKey rsrc, desugaredPreludeKey csrc)
     -- S-full-env-scheme-entry (#1116): Module arm, own schemes FIRST — kept in
     -- lockstep with `docSchemes` in tools/lsp.mdk, whose comment carries the
     -- shadowing rationale (`lookupSchemeL`/`hoverResult` are first-match scans).
-    let (preludeSchemes, ownSchemes) = checkOneSchemeFull runtimeDecls coreDecls ("__user__", desugar userRaw)
+    let (preludeSchemes, ownSchemes) = checkOneSchemeFullK preludeKey runtimeDecls coreDecls ("__user__", desugar userRaw)
     let env = ownSchemes ++ preludeSchemes
     if isHover then
       hoverResult tsrc line col env
@@ -562,11 +567,6 @@ hoverResult src line col env = match identifierAt src line col
   Some name => match lookupSchemeL name env
     None => JNull
     Some sch => jHover name (ppSchemeNamedFull name sch)
-
--- core.mdk / runtime.mdk always parse; unwrap defensively (None → []).
-unwrapDecls : Result ParseError (List Decl) -> List Decl
-unwrapDecls (Ok ds) = ds
-unwrapDecls (Err _) = []
 
 -- Parse a non-negative decimal from argv (digits only; non-digits skipped).
 parseNat : String -> Int
