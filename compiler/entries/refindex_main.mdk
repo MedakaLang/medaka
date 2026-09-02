@@ -35,16 +35,17 @@ import support.util.{sortUniqS, joinWith, splitOnChar, listLen}
 import support.path.{dirOf}
 
 usage : String
-usage = "usage: medaka run refindex_main.mdk [--dump] <runtime.mdk> <core.mdk> <entry.mdk> [root ...]\n       medaka run refindex_main.mdk --project <runtime.mdk> <core.mdk> <projectRoot> <queryFile>"
+usage =
+  "usage: medaka run refindex_main.mdk [--dump] <runtime.mdk> <core.mdk> <entry.mdk> [root ...]\n       medaka run refindex_main.mdk --project <runtime.mdk> <core.mdk> <projectRoot> <queryFile>"
 
 main : <IO> Unit
 main = match args ()
-  "--dump"::rest => dispatch True rest
-  "--project"::rest => dispatchProject rest
+  "--dump" :: rest => dispatch True rest
+  "--project" :: rest => dispatchProject rest
   rest => dispatch False rest
 
 dispatch : Bool -> List String -> <IO> Unit
-dispatch dump (runtimeP::coreP::entry::roots) =
+dispatch dump (runtimeP :: coreP :: entry :: roots) =
   run dump runtimeP coreP entry (rootsOrDefault entry roots)
 dispatch _ _ = ePutStrLn usage
 
@@ -63,7 +64,7 @@ run dump runtimeP coreP entry roots = match readFile runtimeP
 
 -- `--project` mode: same OPS/DEFS/OCC report, over the whole-project index.
 dispatchProject : List String -> <IO> Unit
-dispatchProject (runtimeP::coreP::root::queryFile::_) =
+dispatchProject (runtimeP :: coreP :: root :: queryFile :: _) =
   runProject runtimeP coreP root queryFile
 dispatchProject _ = ePutStrLn usage
 
@@ -87,7 +88,7 @@ dumpIndex idx = dumpKeys idx (sortUniqS (allDefKeys idx))
 
 dumpKeys : RefIndex -> List String -> <IO> Unit
 dumpKeys _ [] = ()
-dumpKeys idx (k::rest) =
+dumpKeys idx (k :: rest) =
   let _ = println (dumpLine idx k)
   dumpKeys idx rest
 

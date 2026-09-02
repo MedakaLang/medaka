@@ -116,8 +116,12 @@ chapter:
 ```medaka
 data Category = Food | Housing | Books | Other deriving (Eq, Debug)
 
-data Expense =
-  | { date : String, payee : String, amount : Float, category : Category }
+data Expense = {
+  date : String,
+  payee : String,
+  amount : Float,
+  category : Category,
+}
   deriving (Eq, Debug)
 
 coffee : Expense
@@ -193,8 +197,8 @@ tag (Expense { payee, amount }) = "\{payee} charged \{amount}"
 
 main =
   println (rate Books)
-  println (tag
-    Expense { payee = "Landlord", amount = 1200.0, category = Housing })
+  println
+    (tag Expense { payee = "Landlord", amount = 1200.0, category = Housing })
   println (tag Expense { payee = "Cafe Fish", amount = 4.5, category = Food })
 ```
 
@@ -270,7 +274,8 @@ ledger = [
 
 findPayee : String -> List Expense -> Option Expense
 findPayee _ [] = None
-findPayee who (e::rest) = if e.payee == who then Some e else findPayee who rest
+findPayee who (e :: rest) =
+  if e.payee == who then Some e else findPayee who rest
 
 report : Option Expense -> String
 report None = "no such payee"
@@ -285,9 +290,8 @@ validate e
 main =
   println (report (findPayee "Landlord" ledger))
   println (report (findPayee "Nobody" ledger))
-  println (report (map
-    (e => { e | amount = 0.0 })
-    (findPayee "Cafe Fish" ledger)))
+  println
+    (report (map (e => { e | amount = 0.0 }) (findPayee "Cafe Fish" ledger)))
 ```
 
 ```medaka-expect
@@ -309,8 +313,11 @@ mechanical work, and `deriving` writes it from the type's structure.
 ```medaka
 data Category = Food | Housing | Books | Other deriving (Eq, Ord, Debug)
 
-data Expense =
-  | { payee : String, amount : Float, category : Category }
+data Expense = {
+  payee : String,
+  amount : Float,
+  category : Category,
+}
   deriving (Eq, Debug)
 
 main =

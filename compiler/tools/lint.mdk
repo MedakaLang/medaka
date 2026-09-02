@@ -101,13 +101,12 @@ import frontend.lexer.{Comment, collectComments, commentLine, commentText}
 
 -- One lint hit: which rule produced it, the human message, its severity (the
 -- CLI may promote this via `lintProgram`), and an optional source span.
-public export data Finding =
-  | Finding {
-      rule : String,
-      message : String,
-      severity : Severity,
-      loc : Option Loc,
-    }
+public export data Finding = Finding {
+  rule : String,
+  message : String,
+  severity : Severity,
+  loc : Option Loc,
+}
 
 -- A registered rule.  `check` is the whole pass for that rule: the STDLIB INDEX
 -- (`StdlibIndex`, below — every exported stdlib name with its declared
@@ -122,15 +121,14 @@ public export data Finding =
 -- decl, it returns `Some replacementDecls` if the rule can safely rewrite that
 -- decl, else `None`.  `None` = the rule is not auto-fixable.
 -- `enabled`/`severity` are the defaults the CLI may override before running.
-public export data Rule =
-  | Rule {
-      name : String,
-      descr : String,
-      severity : Severity,
-      enabled : Bool,
-      check : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding,
-      fix : Option (Oracle -> Decl -> Option (List Decl)),
-    }
+public export data Rule = Rule {
+  name : String,
+  descr : String,
+  severity : Severity,
+  enabled : Bool,
+  check : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding,
+  fix : Option (Oracle -> Decl -> Option (List Decl)),
+}
 
 -- A registered CROSS-FILE rule.  Unlike `Rule` (one file at a time), `check`
 -- sees EVERY target file's `(path, Positions, decls)` triple at once, so it can
@@ -139,14 +137,13 @@ public export data Rule =
 -- CrossFileRule-record access stays inside this module (the CLI passes/receives
 -- only plain data).  Adding a cross-file rule = one `check` fn + one binding +
 -- one `allCrossFileRules` entry.
-public export data CrossFileRule =
-  | CrossFileRule {
-      name : String,
-      descr : String,
-      severity : Severity,
-      enabled : Bool,
-      check : List (String, Positions, List Decl) -> List Finding,
-    }
+public export data CrossFileRule = CrossFileRule {
+  name : String,
+  descr : String,
+  severity : Severity,
+  enabled : Bool,
+  check : List (String, Positions, List Decl) -> List Finding,
+}
 
 -- ── rule names (kept in sync between the Rule entry and its Findings) ─────────
 ruleNameMatchParam : String
@@ -224,7 +221,8 @@ ruleNamePreferAssignOp = "rule-prefer-assign-op"
 matchParamRule : Rule
 matchParamRule = Rule {
   name = ruleNameMatchParam,
-  descr = "function body is a `match` on a bare parameter (prefer multi-clause; STYLE §8)",
+  descr =
+    "function body is a `match` on a bare parameter (prefer multi-clause; STYLE §8)",
   severity = SevWarning,
   enabled = True,
   check = ruleMatchOnParam,
@@ -244,7 +242,8 @@ derivableRule = Rule {
 stdlibReimplRule : Rule
 stdlibReimplRule = Rule {
   name = ruleNameStdlibReimpl,
-  descr = "top-level function reimplements a stdlib function under a different name (same declared signature) (STYLE §7a)",
+  descr =
+    "top-level function reimplements a stdlib function under a different name (same declared signature) (STYLE §7a)",
   severity = SevWarning,
   enabled = True,
   check = ruleStdlibReimpl,
@@ -254,7 +253,8 @@ stdlibReimplRule = Rule {
 bindThenDestructureRule : Rule
 bindThenDestructureRule = Rule {
   name = ruleNameBindThenDestructure,
-  descr = "do-bind then immediately destructures the bound var with an irrefutable single-arm `match`. Inline the pattern into the bind",
+  descr =
+    "do-bind then immediately destructures the bound var with an irrefutable single-arm `match`. Inline the pattern into the bind",
   severity = SevWarning,
   enabled = True,
   check = ruleBindThenDestructure,
@@ -264,7 +264,8 @@ bindThenDestructureRule = Rule {
 lambdaSectionRule : Rule
 lambdaSectionRule = Rule {
   name = ruleNameLambdaSection,
-  descr = "lambda whose body is a single binary op on its parameter(s). Prefer an operator section (STYLE \"Dogfooding\")",
+  descr =
+    "lambda whose body is a single binary op on its parameter(s). Prefer an operator section (STYLE \"Dogfooding\")",
   severity = SevWarning,
   enabled = True,
   check = ruleLambdaSection,
@@ -274,7 +275,8 @@ lambdaSectionRule = Rule {
 ifMaxMinRule : Rule
 ifMaxMinRule = Rule {
   name = ruleNameIfMaxMin,
-  descr = "if-then-else selects the larger/smaller of the same two operands. Prefer `max`/`min`",
+  descr =
+    "if-then-else selects the larger/smaller of the same two operands. Prefer `max`/`min`",
   severity = SevWarning,
   enabled = True,
   check = ruleIfMaxMin,
@@ -284,7 +286,8 @@ ifMaxMinRule = Rule {
 andThenPureMapRule : Rule
 andThenPureMapRule = Rule {
   name = ruleNameAndThenPureMap,
-  descr = "monadic bind whose continuation just wraps a pure transformation (`andThen m (x => pure body)`). Prefer `map` (functor law: m >>= (pure . f) ≡ fmap f m)",
+  descr =
+    "monadic bind whose continuation just wraps a pure transformation (`andThen m (x => pure body)`). Prefer `map` (functor law: m >>= (pure . f) ≡ fmap f m)",
   severity = SevWarning,
   enabled = True,
   check = ruleAndThenPureMap,
@@ -294,7 +297,8 @@ andThenPureMapRule = Rule {
 destructureInParamRule : Rule
 destructureInParamRule = Rule {
   name = ruleNameDestructureInParam,
-  descr = "function body is a single-arm `match` on a bare parameter with an irrefutable pattern (tuple/record/single-ctor). Destructure directly in the parameter position",
+  descr =
+    "function body is a single-arm `match` on a bare parameter with an irrefutable pattern (tuple/record/single-ctor). Destructure directly in the parameter position",
   severity = SevWarning,
   enabled = True,
   check = ruleDestructureInParam,
@@ -304,7 +308,8 @@ destructureInParamRule = Rule {
 missingSignatureRule : Rule
 missingSignatureRule = Rule {
   name = ruleNameMissingSignature,
-  descr = "top-level value/function binding has no sibling type signature (name : Type). Add one (Haskell -Wmissing-signatures)",
+  descr =
+    "top-level value/function binding has no sibling type signature (name : Type). Add one (Haskell -Wmissing-signatures)",
   severity = SevWarning,
   enabled = True,
   check = ruleMissingSignature,
@@ -314,7 +319,8 @@ missingSignatureRule = Rule {
 notEqRule : Rule
 notEqRule = Rule {
   name = ruleNameNotEq,
-  descr = "negated equality `not (a == b)` / `not (a /= b)`. Prefer `a /= b` / `a == b`",
+  descr =
+    "negated equality `not (a == b)` / `not (a /= b)`. Prefer `a /= b` / `a == b`",
   severity = SevWarning,
   enabled = True,
   check = ruleNotEq,
@@ -324,7 +330,8 @@ notEqRule = Rule {
 boolSimplifyRule : Rule
 boolSimplifyRule = Rule {
   name = ruleNameBoolSimplify,
-  descr = "redundant boolean shape (`if c then True else False`, `x == True`, `not (not x)`, …). Simplify",
+  descr =
+    "redundant boolean shape (`if c then True else False`, `x == True`, `not (not x)`, …). Simplify",
   severity = SevWarning,
   enabled = True,
   check = ruleBoolSimplify,
@@ -334,7 +341,8 @@ boolSimplifyRule = Rule {
 remParityRule : Rule
 remParityRule = Rule {
   name = ruleNameRemParity,
-  descr = "`n % 2 == 0` / `n % 2 /= 0` parity test. Prefer `isEven n` / `isOdd n`",
+  descr =
+    "`n % 2 == 0` / `n % 2 /= 0` parity test. Prefer `isEven n` / `isOdd n`",
   severity = SevWarning,
   enabled = True,
   check = ruleRemParity,
@@ -354,7 +362,8 @@ doubleReverseRule = Rule {
 whenUnlessRule : Rule
 whenUnlessRule = Rule {
   name = ruleNameWhenUnless,
-  descr = "`if b then m else pure ()` / `if b then pure () else m`. Prefer `when b m` / `unless b m`",
+  descr =
+    "`if b then m else pure ()` / `if b then pure () else m`. Prefer `when b m` / `unless b m`",
   severity = SevWarning,
   enabled = True,
   check = ruleWhenUnless,
@@ -364,7 +373,8 @@ whenUnlessRule = Rule {
 complementPredicateRule : Rule
 complementPredicateRule = Rule {
   name = ruleNameComplementPredicate,
-  descr = "`not (p x)` where `p` has a defined complement predicate (`isEmptyL`/`isSome`/`isOk` & inverses). Call the complement directly",
+  descr =
+    "`not (p x)` where `p` has a defined complement predicate (`isEmptyL`/`isSome`/`isOk` & inverses). Call the complement directly",
   severity = SevWarning,
   enabled = True,
   check = ruleComplementPredicate,
@@ -374,7 +384,8 @@ complementPredicateRule = Rule {
 matchToMapRule : Rule
 matchToMapRule = Rule {
   name = ruleNameMatchToMap,
-  descr = "2-arm `match` on Option/Result that reconstructs the failure ctor and re-wraps the success ctor. That IS a functor `map` (hlint 'use fmap')",
+  descr =
+    "2-arm `match` on Option/Result that reconstructs the failure ctor and re-wraps the success ctor. That IS a functor `map` (hlint 'use fmap')",
   severity = SevWarning,
   enabled = True,
   check = ruleMatchToMap,
@@ -384,7 +395,8 @@ matchToMapRule = Rule {
 bindChainToDoRule : Rule
 bindChainToDoRule = Rule {
   name = ruleNameBindChainToDo,
-  descr = "deep (≥3) nested Result/Option passthrough-bind `match` pyramid. Rewrite as a `do` block (suggest-only)",
+  descr =
+    "deep (≥3) nested Result/Option passthrough-bind `match` pyramid. Rewrite as a `do` block (suggest-only)",
   severity = SevWarning,
   enabled = True,
   check = ruleBindChainToDo,
@@ -394,7 +406,8 @@ bindChainToDoRule = Rule {
 deadCodeRule : Rule
 deadCodeRule = Rule {
   name = ruleNameDeadCode,
-  descr = "private (unexported) top-level binding is unreachable from the file's exports/main/doctests. Dead code (Haskell -Wunused-top-binds)",
+  descr =
+    "private (unexported) top-level binding is unreachable from the file's exports/main/doctests. Dead code (Haskell -Wunused-top-binds)",
   severity = SevWarning,
   enabled = True,
   check = ruleDeadCode,
@@ -404,7 +417,8 @@ deadCodeRule = Rule {
 concatToInterpRule : Rule
 concatToInterpRule = Rule {
   name = ruleNameConcatToInterp,
-  descr = "`++` chain mixing string literals and expressions. Prefer string interpolation `\"…\\{e}…\"` (hlint 'use interpolation')",
+  descr =
+    "`++` chain mixing string literals and expressions. Prefer string interpolation `\"…\\{e}…\"` (hlint 'use interpolation')",
   severity = SevWarning,
   enabled = True,
   check = ruleConcatToInterp,
@@ -414,7 +428,8 @@ concatToInterpRule = Rule {
 selfShadowExternRule : Rule
 selfShadowExternRule = Rule {
   name = ruleNameSelfShadowExtern,
-  descr = "top-level binding unconditionally forwards to itself (`f s = f s`, `x = x`) — an infinite self-recursion, not a forward to a same-named extern (#266)",
+  descr =
+    "top-level binding unconditionally forwards to itself (`f s = f s`, `x = x`) — an infinite self-recursion, not a forward to a same-named extern (#266)",
   severity = SevWarning,
   enabled = True,
   check = ruleSelfShadowExtern,
@@ -424,7 +439,8 @@ selfShadowExternRule = Rule {
 preferAssignOpRule : Rule
 preferAssignOpRule = Rule {
   name = ruleNamePreferAssignOp,
-  descr = "`setRef r v` (predates the `:=` write operator), or a `:=` write bound to a wildcard `let _ =`. Prefer `r := v` as a statement",
+  descr =
+    "`setRef r v` (predates the `:=` write operator), or a `:=` write bound to a wildcard `let _ =`. Prefer `r := v` as a statement",
   severity = SevWarning,
   enabled = True,
   check = ruleForPreferAssign,
@@ -465,7 +481,8 @@ allRules = [
 duplicateBodyRule : CrossFileRule
 duplicateBodyRule = CrossFileRule {
   name = ruleNameDuplicateBody,
-  descr = "top-level function body is structurally identical to one in another file (copy-paste; consolidate)",
+  descr =
+    "top-level function body is structurally identical to one in another file (copy-paste; consolidate)",
   severity = SevWarning,
   enabled = True,
   check = ruleDuplicateBody,
@@ -489,7 +506,9 @@ allRuleNames : List String
 allRuleNames =
   let perFile = map ruleNameOf allRules
   perFile
-    ++ filterList (n => not (contains n perFile)) (map crossRuleNameOf allCrossFileRules)
+    ++ filterList
+      (n => not (contains n perFile))
+      (map crossRuleNameOf allCrossFileRules)
 
 ruleNameOf : Rule -> String
 ruleNameOf r = r.name
@@ -508,11 +527,23 @@ crossRuleNameOf r = r.name
 -- `buildStdlibIndex`) and handed to every rule; a caller with no stdlib to read
 -- passes `emptyStdlibIndex` and the rules simply learn nothing from it.
 export
-lintProgram : StdlibIndex -> List Rule -> String -> String -> Positions -> List Decl -> List Finding
+lintProgram : StdlibIndex ->
+  List Rule ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  List Finding
 lintProgram idx rules path src pos prog =
   flatMap (runRuleOn idx path src pos prog) rules
 
-runRuleOn : StdlibIndex -> String -> String -> Positions -> List Decl -> Rule -> List Finding
+runRuleOn : StdlibIndex ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  Rule ->
+  List Finding
 runRuleOn idx path src pos prog r
   | r.enabled = map (restampSeverity r.severity) (r.check idx path src pos prog)
   | otherwise = []
@@ -682,7 +713,7 @@ stdlibFingerprint = match listDir lintStdlibDir
 
 stdlibFingerprintGo : String -> List String -> <IO> String
 stdlibFingerprintGo _ [] = ""
-stdlibFingerprintGo dir (n::rest) =
+stdlibFingerprintGo dir (n :: rest) =
   let path = "\{dir}/\{n}"
   let h = hashString (readFileSafe path)
   "\{n}:\{h};\{stdlibFingerprintGo dir rest}"
@@ -700,15 +731,18 @@ stdlibSigTriples dir = match listDir dir
 -- Group the flat triples by NAME, preserving stdlib-file order within a name.
 -- Appending rather than overwriting is the whole point: `setInPlace` alone
 -- would keep one module's `reverse` and drop the other's without a word.
-groupStdlibSigs : List (String, String, Ty) -> HashMap String (List (String, Ty))
+groupStdlibSigs : List (String, String, Ty) ->
+  HashMap String (List (String, Ty))
 groupStdlibSigs triples =
   let m = new ()
   let _ = groupStdlibSigsInto triples m
   m
 
-groupStdlibSigsInto : List (String, String, Ty) -> HashMap String (List (String, Ty)) -> Unit
+groupStdlibSigsInto : List (String, String, Ty) ->
+  HashMap String (List (String, Ty)) ->
+  Unit
 groupStdlibSigsInto [] _ = ()
-groupStdlibSigsInto ((modName, name, ty)::rest) m =
+groupStdlibSigsInto ((modName, name, ty) :: rest) m =
   let _ = setInPlace name (findWithDefault [] name m ++ [(modName, ty)]) m
   groupStdlibSigsInto rest m
 
@@ -758,21 +792,28 @@ exportedSigPair _ = []
 -- are applied bottom-up (descending start line) so earlier line numbers stay
 -- valid.  Returns `(rewrittenSource, fixedCount)`; unchanged source if no fix.
 export
-applyFixes : List String -> List String -> String -> List Decl -> Positions -> (String, Int)
+applyFixes : List String ->
+  List String ->
+  String ->
+  List Decl ->
+  Positions ->
+  (String, Int)
 applyFixes only disable src prog pos =
   let rules = filterList (ruleActiveFixable only disable) allRules
   let orc = buildOracle prog
   let cmtLines = map commentLine (collectComments src)
-  let splices = collectSplices cmtLines orc rules (zipDeclPos prog (positionsDecls pos))
+  let splices =
+    collectSplices cmtLines orc rules (zipDeclPos prog (positionsDecls pos))
   (applySplices src splices, listLen splices)
 
 -- a rule participates in `--fix` iff it is enabled, passes the --only/--disable
 -- filters, AND carries a fixer.
 ruleActiveFixable : List String -> List String -> Rule -> Bool
-ruleActiveFixable only disable r = r.enabled
-  && (isEmptyL only || contains r.name only)
-  && not (contains r.name disable)
-  && ruleHasFixer r
+ruleActiveFixable only disable r =
+  r.enabled
+    && (isEmptyL only || contains r.name only)
+    && not (contains r.name disable)
+    && ruleHasFixer r
 
 ruleHasFixer : Rule -> Bool
 ruleHasFixer r = match r.fix
@@ -782,7 +823,7 @@ ruleHasFixer r = match r.fix
 zipDeclPos : List Decl -> List DeclPos -> List (Decl, DeclPos)
 zipDeclPos [] _ = []
 zipDeclPos _ [] = []
-zipDeclPos (d::ds) (p::ps) = (d, p) :: zipDeclPos ds ps
+zipDeclPos (d :: ds) (p :: ps) = (d, p) :: zipDeclPos ds ps
 
 -- one (startLine, endLine, replacementText) per fixed decl, in source order.
 --
@@ -793,14 +834,19 @@ zipDeclPos (d::ds) (p::ps) = (d, p) :: zipDeclPos ds ps
 -- interior comment line we SKIP the fix (the rule still WARNS; the source is
 -- left untouched).  A leading doc-comment ABOVE the decl is on a line
 -- `< declPosLine` → outside the span → the fix is still allowed (no over-bail).
-collectSplices : List Int -> Oracle -> List Rule -> List (Decl, DeclPos) -> List (Int, Int, String)
+collectSplices : List Int ->
+  Oracle ->
+  List Rule ->
+  List (Decl, DeclPos) ->
+  List (Int, Int, String)
 collectSplices _ _ _ [] = []
-collectSplices cmtLines orc rules ((d, dp)::rest) = match firstFix orc rules d
+collectSplices cmtLines orc rules ((d, dp) :: rest) = match firstFix orc rules d
   Some newDecls =>
     if spanHasComment cmtLines (declPosLine dp) (declPosEndLine dp) then
       collectSplices cmtLines orc rules rest
     else
-      (declPosLine dp, declPosEndLine dp, renderDecls newDecls) :: collectSplices cmtLines orc rules rest
+      (declPosLine dp, declPosEndLine dp, renderDecls newDecls)
+        :: collectSplices cmtLines orc rules rest
   None => collectSplices cmtLines orc rules rest
 
 -- True iff some comment line falls within the inclusive span `[startLine, endLine]`.
@@ -810,7 +856,7 @@ spanHasComment cmtLines startLine endLine =
 
 firstFix : Oracle -> List Rule -> Decl -> Option (List Decl)
 firstFix _ [] _ = None
-firstFix orc (r::rs) d = match applyRuleFix orc r d
+firstFix orc (r :: rs) d = match applyRuleFix orc r d
   Some newDecls => Some newDecls
   None => firstFix orc rs d
 
@@ -830,7 +876,7 @@ applySplices src splices = joinNl (foldSplices (splitNl src) (reverseL splices))
 
 foldSplices : List String -> List (Int, Int, String) -> List String
 foldSplices lines [] = lines
-foldSplices lines ((s, e, txt)::rest) =
+foldSplices lines ((s, e, txt) :: rest) =
   foldSplices (spliceLines lines s e txt) rest
 
 -- replace the 1-based inclusive line range [s..e] with `txt`'s own lines.
@@ -841,13 +887,13 @@ takeN : Int -> List a -> List a
 takeN n _
   | n <= 0 = []
 takeN _ [] = []
-takeN n (x::xs) = x :: takeN (n - 1) xs
+takeN n (x :: xs) = x :: takeN (n - 1) xs
 
 dropN : Int -> List a -> List a
 dropN n xs
   | n <= 0 = xs
 dropN _ [] = []
-dropN n (_::xs) = dropN (n - 1) xs
+dropN n (_ :: xs) = dropN (n - 1) xs
 
 -- ── CLI-flag-style finding filters ────────────────────────────────────────────
 -- `--disable`/`--only`/`--deny` (and the `medaka_lint` MCP tool's `disable`/
@@ -861,7 +907,7 @@ dropN n (_::xs) = dropN (n - 1) xs
 export
 parseLintFlagList : String -> List String -> List String
 parseLintFlagList prefix [] = []
-parseLintFlagList prefix (x::rest)
+parseLintFlagList prefix (x :: rest)
   | startsWith prefix x =
     splitLintNames (stringSlice (stringLength prefix) (stringLength x) x)
   | otherwise = parseLintFlagList prefix rest
@@ -888,7 +934,11 @@ splitLintNamesGo chars s start i n
 -- Apply finding-level filters.  Operates on Finding.rule (a String) so no
 -- Rule-record field access is needed by the caller.
 export
-applyFindingFilters : List String -> List String -> List String -> List Finding -> List Finding
+applyFindingFilters : List String ->
+  List String ->
+  List String ->
+  List Finding ->
+  List Finding
 applyFindingFilters disable only deny findings =
   let after1 = applyFindingOnly only findings
   let after2 = applyFindingDisable disable after1
@@ -901,7 +951,7 @@ applyFindingOnly names findings = lintFindingOnlyGo names findings
 
 lintFindingOnlyGo : List String -> List Finding -> List Finding
 lintFindingOnlyGo _ [] = []
-lintFindingOnlyGo names (f::rest)
+lintFindingOnlyGo names (f :: rest)
   | contains f.rule names = f :: lintFindingOnlyGo names rest
   | otherwise = lintFindingOnlyGo names rest
 
@@ -912,7 +962,7 @@ applyFindingDisable names findings = lintFindingDisableGo names findings
 
 lintFindingDisableGo : List String -> List Finding -> List Finding
 lintFindingDisableGo _ [] = []
-lintFindingDisableGo names (f::rest)
+lintFindingDisableGo names (f :: rest)
   | contains f.rule names = lintFindingDisableGo names rest
   | otherwise = f :: lintFindingDisableGo names rest
 
@@ -924,13 +974,15 @@ applyFindingDeny names findings = lintFindingDenyGo names findings
 
 lintFindingDenyGo : List String -> List Finding -> List Finding
 lintFindingDenyGo _ [] = []
-lintFindingDenyGo names (f::rest)
-  | contains f.rule names = Finding {
-    rule = f.rule,
-    message = f.message,
-    severity = SevError,
-    loc = f.loc,
-  } :: lintFindingDenyGo names rest
+lintFindingDenyGo names (f :: rest)
+  | contains f.rule names =
+    Finding {
+        rule = f.rule,
+        message = f.message,
+        severity = SevError,
+        loc = f.loc,
+      }
+      :: lintFindingDenyGo names rest
   | otherwise = f :: lintFindingDenyGo names rest
 
 export
@@ -965,11 +1017,17 @@ findingToDiag f =
 -- paths — building the index here would re-parse the whole stdlib once per
 -- target file instead of once per process.
 export
-lintFileDiagTriple : StdlibIndex -> List String -> List String -> List String -> String -> <IO> (String, String, List Diag)
+lintFileDiagTriple : StdlibIndex ->
+  List String ->
+  List String ->
+  List String ->
+  String ->
+  <IO> (String, String, List Diag)
 lintFileDiagTriple idx disable only deny path =
   let src = readFileSafe path
   let (decls, pos) = parseWithPositionsLocated src
-  let allFindings = applySuppressions src (lintProgram idx allRules path src pos decls)
+  let allFindings =
+    applySuppressions src (lintProgram idx allRules path src pos decls)
   let findings = applyFindingFilters disable only deny allFindings
   (path, src, map findingToDiag findings)
 
@@ -982,11 +1040,17 @@ lintFileDiagTriple idx disable only deny path =
 -- (`entries/lint_main.mdk` — THE gate oracle — builds a real one, so the gate
 -- and the CLI see the same rule inputs).
 export
-lintToLines : StdlibIndex -> String -> String -> Positions -> List Decl -> String
+lintToLines : StdlibIndex ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  String
 lintToLines idx src path pos prog =
-  joinNl (map
-    findingLine
-    (applySuppressions src (lintProgram idx allRules path src pos prog)))
+  joinNl
+    (map
+      findingLine
+      (applySuppressions src (lintProgram idx allRules path src pos prog)))
 
 findingLine : Finding -> String
 findingLine f = "\{ppSeverity f.severity}: [\{f.rule}] \{f.message}"
@@ -1058,7 +1122,9 @@ applySuppressionsMulti srcs findings =
 -- reason `applySuppressionsDirs` exists: a `--cache` run already holds every
 -- file's directives and must not re-lex to recover them.
 export
-applySuppressionsMultiDirs : List (String, List Directive) -> List Finding -> List Finding
+applySuppressionsMultiDirs : List (String, List Directive) ->
+  List Finding ->
+  List Finding
 applySuppressionsMultiDirs dirTable findings =
   filterList (f => not (findingSuppressedMulti dirTable f)) findings
 
@@ -1077,11 +1143,8 @@ findingFileOf f = match f.loc
 
 lookupDirs : String -> List (String, List Directive) -> Option (List Directive)
 lookupDirs _ [] = None
-lookupDirs path ((p, ds)::rest) =
-  if p == path then
-    Some ds
-  else
-    lookupDirs path rest
+lookupDirs path ((p, ds) :: rest) =
+  if p == path then Some ds else lookupDirs path rest
 
 export
 collectDirectives : String -> List Directive
@@ -1099,7 +1162,9 @@ parseDirective : Comment -> Option Directive
 parseDirective c =
   let body = trimWs (commentText c)
   if startsWith "--" body then
-    parseDirectiveBody (commentLine c) (trimWs (stringSlice 2 (stringLength body) body))
+    parseDirectiveBody
+      (commentLine c)
+      (trimWs (stringSlice 2 (stringLength body) body))
   else
     None
 
@@ -1108,7 +1173,10 @@ parseDirectiveBody line s = match matchKeyword "lint-disable-next-line" s
   Some names => Some (Directive (DScopeLine (line + 1)) (parseRuleNames names))
   None => match matchKeyword "lint-disable-line" s
     Some names => Some (Directive (DScopeLine line) (parseRuleNames names))
-    None => map (names => Directive DScopeFile (parseRuleNames names)) (matchKeyword "lint-disable-file" s)
+    None =>
+      map
+        (names => Directive DScopeFile (parseRuleNames names))
+        (matchKeyword "lint-disable-file" s)
 
 -- If `s` starts with keyword `kw` AND the keyword is followed by end-of-string
 -- or whitespace (so `lint-disable-lineXYZ` does NOT match), return the trimmed
@@ -1135,8 +1203,9 @@ isSuppressed : List Directive -> Finding -> Bool
 isSuppressed dirs f = anyList (dirCoversFinding f) dirs
 
 dirCoversFinding : Finding -> Directive -> Bool
-dirCoversFinding f (Directive scope names) = (isEmptyL names || contains f.rule names)
-  && scopeMatches (findingLineNo f) scope
+dirCoversFinding f (Directive scope names) =
+  (isEmptyL names || contains f.rule names)
+    && scopeMatches (findingLineNo f) scope
 
 scopeMatches : Option Int -> DirScope -> Bool
 scopeMatches _ DScopeFile = True
@@ -1188,8 +1257,8 @@ declLocList pos prog = zipDeclLoc prog (positionsDecls pos)
 
 zipDeclLoc : List Decl -> List DeclPos -> List (Decl, Option Loc)
 zipDeclLoc [] _ = []
-zipDeclLoc (d::ds) [] = (d, None) :: zipDeclLoc ds []
-zipDeclLoc (d::ds) (p::ps) = (d, Some (declPosToLoc p)) :: zipDeclLoc ds ps
+zipDeclLoc (d :: ds) [] = (d, None) :: zipDeclLoc ds []
+zipDeclLoc (d :: ds) (p :: ps) = (d, Some (declPosToLoc p)) :: zipDeclLoc ds ps
 
 declPosToLoc : DeclPos -> Loc
 declPosToLoc p = let l = declPosLine p in Loc "" l 1 l 1
@@ -1198,7 +1267,12 @@ declPosToLoc p = let l = declPosLine p in Loc "" l 1 l 1
 -- A `DFunDef _ name pats body` (or an impl method) whose body is a `match` with
 -- ≥2 arms over an `EVar p` where `p` is a bare `PVar p` parameter.  Single-arm
 -- matches are skipped (STYLE's "when not to convert").
-ruleMatchOnParam : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleMatchOnParam : StdlibIndex ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  List Finding
 ruleMatchOnParam _ _ _ pos prog = flatMap matchParamDeclL (declLocList pos prog)
 
 matchParamDeclL : (Decl, Option Loc) -> List Finding
@@ -1221,7 +1295,12 @@ matchParamFinding loc name pats body = match unwrapLoc body
   EMatch scrut arms => matchParamArms loc name pats scrut arms
   _ => []
 
-matchParamArms : Option Loc -> String -> List Pat -> Expr -> List Arm -> List Finding
+matchParamArms : Option Loc ->
+  String ->
+  List Pat ->
+  Expr ->
+  List Arm ->
+  List Finding
 matchParamArms loc name pats scrut arms
   | listLen arms < 2 = []
   | otherwise = match unwrapLoc scrut
@@ -1233,10 +1312,11 @@ matchParamHit loc name pats p
   | anyList (isBareParam p) pats = [
     Finding {
       rule = ruleNameMatchParam,
-      message = "function '\{name}' matches on parameter '\{p}' — use a multi-clause function definition",
+      message =
+        "function '\{name}' matches on parameter '\{p}' — use a multi-clause function definition",
       severity = SevWarning,
       loc = loc,
-    }
+    },
   ]
   | otherwise = []
 
@@ -1262,12 +1342,20 @@ isBareParam _ _ = False
 --     as the token `p`, so a real reference is never missed (the scan can only
 --     over-bail, which is safe).
 matchParamFix : Oracle -> Decl -> Option (List Decl)
-matchParamFix _ (DFunDef vis name pats body) = match matchBodyOnBareParam pats body
+matchParamFix _ (DFunDef vis name pats body) = match (matchBodyOnBareParam
+  pats
+  body)
   Some (p, k, arms) => matchParamFixArms vis name pats p k arms
   None => None
 matchParamFix _ _ = None
 
-matchParamFixArms : Bool -> String -> List Pat -> String -> Int -> List Arm -> Option (List Decl)
+matchParamFixArms : Bool ->
+  String ->
+  List Pat ->
+  String ->
+  Int ->
+  List Arm ->
+  Option (List Decl)
 matchParamFixArms vis name pats p k arms
   | listLen arms < 2 = None
   | anyList armHasGuard arms = None
@@ -1316,7 +1404,7 @@ paramIndex p pats = paramIndexGo p pats 0
 
 paramIndexGo : String -> List Pat -> Int -> Option Int
 paramIndexGo _ [] _ = None
-paramIndexGo p (pat::rest) i
+paramIndexGo p (pat :: rest) i
   | isBareParam p pat = Some i
   | otherwise = paramIndexGo p rest (i + 1)
 
@@ -1327,16 +1415,17 @@ paramIndexGo p (pat::rest) i
 -- UNSAFE — non-wildcard — mention).
 armToClause : Bool -> String -> String -> List Pat -> Int -> Arm -> Decl
 armToClause vis name p pats k (Arm pat _ body) =
-  let cpat = if patIsWild pat && wholeWordIn p (exprToString body) then
-    PVar p (Loc "" 0 0 0 0)
-  else
-    pat
+  let cpat =
+    if patIsWild pat && wholeWordIn p (exprToString body) then
+      PVar p (Loc "" 0 0 0 0)
+    else
+      pat
   DFunDef vis name (replaceAt k cpat pats) body
 
 replaceAt : Int -> a -> List a -> List a
 replaceAt _ _ [] = []
-replaceAt 0 x (_::rest) = x::rest
-replaceAt n x (y::rest) = y :: replaceAt (n - 1) x rest
+replaceAt 0 x (_ :: rest) = x :: rest
+replaceAt n x (y :: rest) = y :: replaceAt (n - 1) x rest
 
 -- whole-word (identifier-token) occurrence of `name` in `s`.  Boundaries are any
 -- non-identifier char (isAlnum covers alnum/_/').  Over-matches into string
@@ -1350,7 +1439,9 @@ wholeWordIn name s =
 wholeWordGo : String -> Int -> String -> Array Char -> Int -> Int -> Bool
 wholeWordGo name nlen s cs n i
   | i + nlen > n = False
-  | boundaryAt cs i && boundaryAt cs (i + nlen) && stringSlice i (i + nlen) s == name = True
+  | boundaryAt cs i
+    && boundaryAt cs (i + nlen)
+    && stringSlice i (i + nlen) s == name = True
   | otherwise = wholeWordGo name nlen s cs n (i + 1)
 
 -- position j is a boundary iff at least one neighbour across the candidate edge
@@ -1359,8 +1450,9 @@ boundaryAt : Array Char -> Int -> Bool
 boundaryAt cs j
   | j == 0 = True
   | j >= arrayLength cs = True
-  | otherwise = not (isAlnum (arrayGetUnsafe (j - 1) cs))
-    || not (isAlnum (arrayGetUnsafe j cs))
+  | otherwise =
+    not (isAlnum (arrayGetUnsafe (j - 1) cs))
+      || not (isAlnum (arrayGetUnsafe j cs))
 
 -- ── rule: destructure-in-param ────────────────────────────────────────────────
 -- The single-arm sibling of `rule-match-on-param`.  A `DFunDef _ name pats body`
@@ -1377,7 +1469,12 @@ boundaryAt cs j
 -- not declared in this file) is treated as NOT provably irrefutable → SKIP.  This
 -- is deliberately conservative: false negatives are fine, false positives corrupt
 -- code (they could turn a total match into a partial function clause).
-ruleDestructureInParam : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleDestructureInParam : StdlibIndex ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  List Finding
 ruleDestructureInParam _ _ _ pos prog =
   let orc = buildOracle prog
   flatMap (destructureDeclL orc) (declLocList pos prog)
@@ -1387,21 +1484,32 @@ destructureDeclL orc (d, loc) = match d
   DFunDef _ name pats body => destructureFinding orc loc name pats body
   _ => []
 
-destructureFinding : Oracle -> Option Loc -> String -> List Pat -> Expr -> List Finding
+destructureFinding : Oracle ->
+  Option Loc ->
+  String ->
+  List Pat ->
+  Expr ->
+  List Finding
 destructureFinding orc loc name pats body = match matchBodyOnBareParam pats body
   Some (p, _, arms) => destructureArmsFinding orc loc name p arms
   None => []
 
-destructureArmsFinding : Oracle -> Option Loc -> String -> String -> List Arm -> List Finding
+destructureArmsFinding : Oracle ->
+  Option Loc ->
+  String ->
+  String ->
+  List Arm ->
+  List Finding
 destructureArmsFinding orc loc name p [arm] =
   if destructureArmFires orc p arm then
     [
       Finding {
         rule = ruleNameDestructureInParam,
-        message = "function '\{name}' destructures parameter '\{p}' via a single-arm irrefutable `match`. Destructure it directly in the parameter position",
+        message =
+          "function '\{name}' destructures parameter '\{p}' via a single-arm irrefutable `match`. Destructure it directly in the parameter position",
         severity = SevWarning,
         loc = loc,
-      }
+      },
     ]
   else
     []
@@ -1412,19 +1520,20 @@ destructureArmsFinding _ _ _ _ _ = []
 -- otherwise mention the scrutinee param (conservative printed whole-word scan —
 -- over-bail only, matching `armMentionsParam`).
 destructureArmFires : Oracle -> String -> Arm -> Bool
-destructureArmFires orc p (Arm pat guards body) = isEmptyL guards
-  && destructurablePat orc pat
-  && not (wholeWordIn p (exprToString body))
+destructureArmFires orc p (Arm pat guards body) =
+  isEmptyL guards
+    && destructurablePat orc pat
+    && not (wholeWordIn p (exprToString body))
 
 -- the TOP pattern is a real destructuring pattern (tuple / record / single-ctor
 -- constructor) whose sub-patterns are all irrefutable.  Bare var/wild (pointless
 -- to hoist), literals, `::`/`[…]` list patterns and ranges are excluded.
 destructurablePat : Oracle -> Pat -> Bool
 destructurablePat orc (PTuple ps) = allList (patIrrefutable orc) ps
-destructurablePat orc (PCon c ps) = ctorIsSingle orc c
-  && allList (patIrrefutable orc) ps
-destructurablePat orc (PRec c fs _) = ctorIsSingle orc c
-  && allList (recPatFieldIrrefutable orc) fs
+destructurablePat orc (PCon c ps) =
+  ctorIsSingle orc c && allList (patIrrefutable orc) ps
+destructurablePat orc (PRec c fs _) =
+  ctorIsSingle orc c && allList (recPatFieldIrrefutable orc) fs
 destructurablePat _ _ = False
 
 -- irrefutability of an arbitrary (possibly nested) pattern.  A var/wildcard binds
@@ -1435,10 +1544,10 @@ patIrrefutable : Oracle -> Pat -> Bool
 patIrrefutable _ (PVar _ _) = True
 patIrrefutable _ PWild = True
 patIrrefutable orc (PTuple ps) = allList (patIrrefutable orc) ps
-patIrrefutable orc (PCon c ps) = ctorIsSingle orc c
-  && allList (patIrrefutable orc) ps
-patIrrefutable orc (PRec c fs _) = ctorIsSingle orc c
-  && allList (recPatFieldIrrefutable orc) fs
+patIrrefutable orc (PCon c ps) =
+  ctorIsSingle orc c && allList (patIrrefutable orc) ps
+patIrrefutable orc (PRec c fs _) =
+  ctorIsSingle orc c && allList (recPatFieldIrrefutable orc) fs
 patIrrefutable orc (PAs _ _ p) = patIrrefutable orc p
 patIrrefutable _ _ = False
 
@@ -1465,12 +1574,21 @@ ctorIsSingle orc c = match oGetCtorType orc c
 -- already proved the pattern irrefutable and the param unreferenced, so
 -- `armToClause`'s PWild re-bind special-case never triggers here.
 destructureInParamFix : Oracle -> Decl -> Option (List Decl)
-destructureInParamFix orc (DFunDef vis name pats body) = match matchBodyOnBareParam pats body
+destructureInParamFix orc (DFunDef vis name pats body) = match (matchBodyOnBareParam
+  pats
+  body)
   Some (p, k, arms) => destructureInParamFixArms orc vis name pats p k arms
   None => None
 destructureInParamFix _ _ = None
 
-destructureInParamFixArms : Oracle -> Bool -> String -> List Pat -> String -> Int -> List Arm -> Option (List Decl)
+destructureInParamFixArms : Oracle ->
+  Bool ->
+  String ->
+  List Pat ->
+  String ->
+  Int ->
+  List Arm ->
+  Option (List Decl)
 destructureInParamFixArms orc vis name pats p k [arm] =
   if destructureArmFires orc p arm then
     Some [armToClause vis name p pats k arm]
@@ -1491,7 +1609,12 @@ derivableIfaces = ["Eq", "Ord", "Debug"]
 -- USER code we additionally require the type to have a `data`/`record`
 -- declaration whose constructors are visible in the linted file (`oGetCtors`
 -- returns `Some`) — a primitive has none, so `impl Eq for Int` is never flagged.
-ruleDerivable : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleDerivable : StdlibIndex ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  List Finding
 ruleDerivable _ path _ pos prog
   | isStdlibPath path = []
   | otherwise =
@@ -1515,10 +1638,11 @@ derivableHit orc loc iface tys
         [
           Finding {
             rule = ruleNameDerivable,
-            message = "hand-written `impl \{iface}` for '\{tyName}' — use `deriving (\{iface})`",
+            message =
+              "hand-written `impl \{iface}` for '\{tyName}' — use `deriving (\{iface})`",
             severity = SevWarning,
             loc = loc,
-          }
+          },
         ]
       else
         []
@@ -1607,21 +1731,26 @@ tyHeadName _ = None
 -- So the linted file must ALSO actually be under `stdlib/` (`isStdlibPath`)
 -- before it can own anything; outside stdlib the owner is `None` and no
 -- candidate is ever skipped.
-ruleStdlibReimpl : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleStdlibReimpl : StdlibIndex ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  List Finding
 ruleStdlibReimpl idx path _ pos prog =
-    -- both hoisted out of the per-def loop: `stdlibIndexNames` sorts the whole
-    -- key set on every call, and the signature map is one pass over the file.
-    let ownMod = if isStdlibPath path then Some (modIdOf path) else None
-    let names = stdlibIndexNames idx
-    let sigs = sigTyMapOf prog
-    -- every NAME this file itself declares in a type-ish namespace (#2327
-    -- finding 2) — see `localTyNamesOf`.
-    let locals = nameSetOf (flatMap localTyNamesL prog)
-    -- dedupe by name so a multi-clause function (consecutive DFunDefs) fires once,
-    -- keeping the FIRST clause's location.
-    flatMap
-      (reimplHit idx ownMod names sigs locals)
-      (dedupeNamesLoc (flatMap topDefNameL (declLocList pos prog)))
+  -- both hoisted out of the per-def loop: `stdlibIndexNames` sorts the whole
+  -- key set on every call, and the signature map is one pass over the file.
+  let ownMod = if isStdlibPath path then Some (modIdOf path) else None
+  let names = stdlibIndexNames idx
+  let sigs = sigTyMapOf prog
+  -- every NAME this file itself declares in a type-ish namespace (#2327
+  -- finding 2) — see `localTyNamesOf`.
+  let locals = nameSetOf (flatMap localTyNamesL prog)
+  -- dedupe by name so a multi-clause function (consecutive DFunDefs) fires once,
+  -- keeping the FIRST clause's location.
+  flatMap
+    (reimplHit idx ownMod names sigs locals)
+    (dedupeNamesLoc (flatMap topDefNameL (declLocList pos prog)))
 
 -- ── homonym guard (#2327 finding 2) ───────────────────────────────────────────
 -- `tyCanon` compares type constructors, constraint heads and effect labels by
@@ -1699,13 +1828,25 @@ dedupeNamesLoc xs = dedupBy fst xs
 -- `locals` is the homonym guard (`localTyNamesL`): a signature naming a type,
 -- interface or effect this very file declares cannot be talking about stdlib's
 -- name of the same spelling, so it is skipped before comparison.
-reimplHit : StdlibIndex -> Option String -> List String -> HashMap String Ty -> HashMap String Unit -> (String, Option Loc) -> List Finding
+reimplHit : StdlibIndex ->
+  Option String ->
+  List String ->
+  HashMap String Ty ->
+  HashMap String Unit ->
+  (String, Option Loc) ->
+  List Finding
 reimplHit idx ownMod names sigs locals (name, loc) = match get name sigs
   None => []
-  Some ty => if mentionsLocalTy locals ty then []
-  else match firstMatchingExport idx ownMod (tyCanon ty) (filterList (relaxesOnto name) names)
-    None => []
-    Some (modName, stdName) => [stdlibFinding name modName stdName loc]
+  Some ty =>
+    if mentionsLocalTy locals ty then
+      []
+    else match (firstMatchingExport
+      idx
+      ownMod
+      (tyCanon ty)
+      (filterList (relaxesOnto name) names))
+      None => []
+      Some (modName, stdName) => [stdlibFinding name modName stdName loc]
 
 -- `user` is a RELAXATION of the stdlib name `std` iff, case-insensitively, it
 -- starts or ends with it (`listReverse` ⊇ `reverse`, `takeN` ⊇ `take`).  The
@@ -1721,9 +1862,16 @@ relaxesOnto user std =
 -- `canon`, over the relaxed candidate names in index order — never the
 -- linted file's own module (`ownMod`), which is the true owner rather than a
 -- reimplementation of itself.
-firstMatchingExport : StdlibIndex -> Option String -> String -> List String -> Option (String, String)
+firstMatchingExport : StdlibIndex ->
+  Option String ->
+  String ->
+  List String ->
+  Option (String, String)
 firstMatchingExport _ _ _ [] = None
-firstMatchingExport idx ownMod canon (std::rest) = match firstMatchingModule ownMod canon (stdlibEntriesOf idx std)
+firstMatchingExport idx ownMod canon (std :: rest) = match (firstMatchingModule
+  ownMod
+  canon
+  (stdlibEntriesOf idx std))
   Some modName => Some (modName, std)
   None => firstMatchingExport idx ownMod canon rest
 
@@ -1731,9 +1879,12 @@ firstMatchingExport idx ownMod canon (std::rest) = match firstMatchingModule own
 -- testing the signature at all: the true owner's definition can never be a
 -- "reimplementation" of itself, regardless of what its signature canonicalises to.
 -- `ownMod` is `None` for any file outside `stdlib/`, which owns nothing.
-firstMatchingModule : Option String -> String -> List (String, Ty) -> Option String
+firstMatchingModule : Option String ->
+  String ->
+  List (String, Ty) ->
+  Option String
 firstMatchingModule _ _ [] = None
-firstMatchingModule ownMod canon ((modName, ty)::rest)
+firstMatchingModule ownMod canon ((modName, ty) :: rest)
   | ownsModule ownMod modName = firstMatchingModule ownMod canon rest
   | tyCanon ty == canon = Some modName
   | otherwise = firstMatchingModule ownMod canon rest
@@ -1756,7 +1907,7 @@ sigTyMapOf prog =
 
 sigTyInto : List (String, Ty) -> HashMap String Ty -> Unit
 sigTyInto [] _ = ()
-sigTyInto ((n, t)::rest) m =
+sigTyInto ((n, t) :: rest) m =
   let _ = setInPlace n t m
   sigTyInto rest m
 
@@ -1768,7 +1919,8 @@ topSigPairL _ = []
 stdlibFinding : String -> String -> String -> Option Loc -> Finding
 stdlibFinding name modName stdName loc = Finding {
   rule = ruleNameStdlibReimpl,
-  message = "top-level '\{name}' reimplements stdlib '\{modName}.\{stdName}' (same declared signature) — use the stdlib version",
+  message =
+    "top-level '\{name}' reimplements stdlib '\{modName}.\{stdName}' (same declared signature) — use the stdlib version",
   severity = SevWarning,
   loc = loc,
 }
@@ -1840,12 +1992,17 @@ tyCanonIn tvs rvs (TyTuple ts) =
 tyCanonIn tvs rvs (TyEffect es tl t) =
   "(eff \{rowCanon rvs es tl} \{tyCanonIn tvs rvs t})"
 tyCanonIn _ rvs (TyRow es tl _) = "(row " ++ rowCanon rvs es tl ++ ")"
-tyCanonIn tvs rvs (TyConstrained cs t) = "(=> \{joinWith " " (sortUniqS (map (constrCanon tvs rvs) cs))} \{tyCanonIn tvs rvs t})"
+tyCanonIn tvs rvs (TyConstrained cs t) =
+  "(=> \{joinWith " " (sortUniqS (map (constrCanon tvs rvs) cs))} \{tyCanonIn tvs rvs t})"
 
 constrCanon : List String -> List String -> Constraint -> String
-constrCanon tvs rvs (Constraint { constraintHead = h, constraintArgs = args }) = "[\{h} \{joinWith " " (map (tyCanonIn tvs rvs) args)}]"
+constrCanon tvs rvs (Constraint { constraintHead = h, constraintArgs = args }) =
+  "[\{h} \{joinWith " " (map (tyCanonIn tvs rvs) args)}]"
 
-rowCanon : List String -> List (String, Option String) -> Option String -> String
+rowCanon : List String ->
+  List (String, Option String) ->
+  Option String ->
+  String
 rowCanon rvs es tl =
   "{\{joinWith " " (sortUniqS (map rowAtomCanon es))}\{rowTailCanon rvs tl}}"
 
@@ -1864,7 +2021,7 @@ indexIn x xs = indexInGo x xs 0
 
 indexInGo : String -> List String -> Int -> Int
 indexInGo _ [] _ = -1
-indexInGo x (y::ys) i
+indexInGo x (y :: ys) i
   | x == y = i
   | otherwise = indexInGo x ys (i + 1)
 
@@ -1877,7 +2034,12 @@ indexInGo x (y::ys) i
 -- `List Decl` walk never sees them; `prop`/`test`/`extern` are their own decl
 -- kinds, not `DFunDef`, so they are excluded automatically.  `main` is exempt by
 -- name (entry-point boilerplate).  Multi-clause defs dedupe to one finding.
-ruleMissingSignature : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleMissingSignature : StdlibIndex ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  List Finding
 ruleMissingSignature _ _ _ pos prog =
   -- HashMap-as-set: `contains n sigNames` over the signed-name LIST was O(signs)
   -- per def, i.e. O(defs x signs) across the filterList — and in the common case
@@ -1901,7 +2063,8 @@ missingSigPair sigNames (n, _) = not (n == "main" || has n sigNames)
 missingSigFinding : (String, Option Loc) -> Finding
 missingSigFinding (name, loc) = Finding {
   rule = ruleNameMissingSignature,
-  message = "top-level '\{name}' has no type signature. Add a `\{name} : …` declaration",
+  message =
+    "top-level '\{name}' has no type signature. Add a `\{name} : …` declaration",
   severity = SevWarning,
   loc = loc,
 }
@@ -1932,7 +2095,12 @@ missingSigFinding (name, loc) = Finding {
 -- of that name is an unconditional self-call: a single non-self clause is a
 -- candidate base case (`f [] = 0` beside `f xs = f (tail xs)`), so the whole name
 -- is spared.  Purely syntactic, no false-fire risk beyond genuinely-looping code.
-ruleSelfShadowExtern : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleSelfShadowExtern : StdlibIndex ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  List Finding
 ruleSelfShadowExtern _ _ _ pos prog =
   selfShadowFindings (flatMap selfShadowClauseL (declLocList pos prog))
 
@@ -1945,7 +2113,8 @@ selfShadowFindings clauses =
       (dedupBy fst (map clauseNameLoc clauses)))
 
 -- one (name, params, body, loc) tuple per top-level DFunDef (through DAttrib)
-selfShadowClauseL : (Decl, Option Loc) -> List (String, List Pat, Expr, Option Loc)
+selfShadowClauseL : (Decl, Option Loc) ->
+  List (String, List Pat, Expr, Option Loc)
 selfShadowClauseL (DFunDef _ name pats body, loc) = [(name, pats, body, loc)]
 selfShadowClauseL (DAttrib _ d, loc) = selfShadowClauseL (d, loc)
 selfShadowClauseL _ = []
@@ -1954,13 +2123,15 @@ clauseNameLoc : (String, List Pat, Expr, Option Loc) -> (String, Option Loc)
 clauseNameLoc (n, _, _, l) = (n, l)
 
 -- every clause defining `name` is an unconditional self-call
-allClausesSelfCall : List (String, List Pat, Expr, Option Loc) -> (String, Option Loc) -> Bool
+allClausesSelfCall : List (String, List Pat, Expr, Option Loc) ->
+  (String, Option Loc) ->
+  Bool
 allClausesSelfCall clauses (name, _) =
   allList (clauseSelfCallOrOther name) clauses
 
 clauseSelfCallOrOther : String -> (String, List Pat, Expr, Option Loc) -> Bool
-clauseSelfCallOrOther name (cn, pats, body, _) = cn /= name
-  || unconditionalSelfCall name pats body
+clauseSelfCallOrOther name (cn, pats, body, _) =
+  cn /= name || unconditionalSelfCall name pats body
 
 -- nullary: body is exactly the bare self reference; n-ary: body is an application
 -- spine whose head is the bare self reference.
@@ -1989,7 +2160,8 @@ appHead e = match stripWrap e
 selfShadowFinding : (String, Option Loc) -> Finding
 selfShadowFinding (name, loc) = Finding {
   rule = ruleNameSelfShadowExtern,
-  message = "top-level '\{name}' unconditionally calls itself with no base case — an infinite self-recursion, not a forward to a same-named extern/definition. Rename the binding (give it a distinct name) or add a terminating `match`/`if`/guard",
+  message =
+    "top-level '\{name}' unconditionally calls itself with no base case — an infinite self-recursion, not a forward to a same-named extern/definition. Rename the binding (give it a distinct name) or add a terminating `match`/`if`/guard",
   severity = SevWarning,
   loc = loc,
 }
@@ -2024,8 +2196,8 @@ irrefutablePat _ (PVar _ _) = True
 irrefutablePat _ PWild = True
 irrefutablePat orc (PTuple ps) = not (anyList (refutablePat orc) ps)
 irrefutablePat orc (PRec _ fields _) = not (anyList (refutableField orc) fields)
-irrefutablePat orc (PCon c subps) = ctorIsSole orc c
-  && not (anyList (refutablePat orc) subps)
+irrefutablePat orc (PCon c subps) =
+  ctorIsSole orc c && not (anyList (refutablePat orc) subps)
 irrefutablePat _ _ = False
 
 -- the constructor `c` is the unique constructor of its datatype (single-variant
@@ -2049,15 +2221,25 @@ refutableField orc (RecPatField _ _ (Some p)) = refutablePat orc p
 -- the bound-var/pattern/expr/body of a collapsible bind-then-match tail, plus the
 -- statements preceding it.  Returns None when the last two statements don't form
 -- the irrefutable single-arm shape.
-bindMatchTail : Oracle -> List DoStmt -> Option (List DoStmt, String, Pat, Expr, Expr)
+bindMatchTail : Oracle ->
+  List DoStmt ->
+  Option (List DoStmt, String, Pat, Expr, Expr)
 bindMatchTail orc stmts = match splitTail2 stmts
   Some (prefix, DoBind (PVar v _) boundE, DoExpr matchE) =>
     bindMatchArm orc prefix v boundE (unwrapLoc matchE)
   _ => None
 
-bindMatchArm : Oracle -> List DoStmt -> String -> Expr -> Expr -> Option (List DoStmt, String, Pat, Expr, Expr)
+bindMatchArm : Oracle ->
+  List DoStmt ->
+  String ->
+  Expr ->
+  Expr ->
+  Option (List DoStmt, String, Pat, Expr, Expr)
 bindMatchArm orc prefix v boundE (EMatch scrut [Arm pat [] body])
-  | scrutIsVar v (unwrapLoc scrut) && irrefutablePat orc pat && not (wholeWordIn v (exprToString body)) = Some (prefix, v, pat, boundE, body)
+  | scrutIsVar v (unwrapLoc scrut)
+    && irrefutablePat orc pat
+    && not (wholeWordIn v (exprToString body)) =
+    Some (prefix, v, pat, boundE, body)
   | otherwise = None
 bindMatchArm _ _ _ _ _ = None
 
@@ -2068,11 +2250,16 @@ scrutIsVar _ _ = False
 -- last two statements (prefix, second-to-last, last), or None if fewer than 2.
 splitTail2 : List DoStmt -> Option (List DoStmt, DoStmt, DoStmt)
 splitTail2 stmts = match reverseL stmts
-  lst::scd::restRev => Some (reverseL restRev, scd, lst)
+  lst :: scd :: restRev => Some (reverseL restRev, scd, lst)
   _ => None
 
 -- ── check ────────────────────────────────────────────────────────────────────
-ruleBindThenDestructure : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleBindThenDestructure : StdlibIndex ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  List Finding
 ruleBindThenDestructure _ _ _ pos prog =
   let orc = buildOracle prog
   flatMap (bindDestructureDeclL orc) (declLocList pos prog)
@@ -2089,15 +2276,18 @@ declBindHits _ _ = []
 bindDestructureFinding : Option Loc -> String -> Finding
 bindDestructureFinding loc v = Finding {
   rule = ruleNameBindThenDestructure,
-  message = "binds '" ++ v ++ "' then immediately destructures it in a final `match`. Inline the pattern into the bind",
+  message =
+    "binds '"
+      ++ v
+      ++ "' then immediately destructures it in a final `match`. Inline the pattern into the bind",
   severity = SevWarning,
   loc = loc,
 }
 
 -- collect every collapsible tail's bound-var name, recursing into all sub-exprs.
 collectBindHits : Oracle -> Expr -> List String
-collectBindHits orc e = tailHitOf orc e
-  ++ flatMap (collectBindHits orc) (childExprs e)
+collectBindHits orc e =
+  tailHitOf orc e ++ flatMap (collectBindHits orc) (childExprs e)
 
 tailHitOf : Oracle -> Expr -> List String
 tailHitOf orc (EDo stmts) = hitNameOf orc stmts
@@ -2265,8 +2455,8 @@ rewriteBindExpr _ e = e
 -- arm body's statements spliced inline.
 collapseBindTail : Oracle -> List DoStmt -> List DoStmt
 collapseBindTail orc stmts = match bindMatchTail orc stmts
-  Some (prefix, _, pat, boundE, body) => prefix
-    ++ (DoBind pat boundE :: bodyToStmts body)
+  Some (prefix, _, pat, boundE, body) =>
+    prefix ++ (DoBind pat boundE :: bodyToStmts body)
   None => stmts
 
 -- the arm body as statements: a do/bare block contributes its own statements
@@ -2411,7 +2601,12 @@ lamSection2 x y (EBinOp op a b _)
 lamSection2 _ _ _ = None
 
 -- ── check ─────────────────────────────────────────────────────────────────────
-ruleLambdaSection : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleLambdaSection : StdlibIndex ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  List Finding
 ruleLambdaSection _ _ _ pos prog =
   flatMap lambdaSectionDeclL (declLocList pos prog)
 
@@ -2442,7 +2637,10 @@ optSectionToList None = []
 lambdaSectionFinding : Option Loc -> Section -> Finding
 lambdaSectionFinding loc s = Finding {
   rule = ruleNameLambdaSection,
-  message = "lambda is a single binary operation on its parameter(s). Rewrite as the operator section '" ++ exprToString (ESection s) ++ "'",
+  message =
+    "lambda is a single binary operation on its parameter(s). Rewrite as the operator section '"
+      ++ exprToString (ESection s)
+      ++ "'",
   severity = SevWarning,
   loc = loc,
 }
@@ -2641,7 +2839,12 @@ ifMaxMinOf cond t el = match unwrapLoc cond
   _ => None
 
 -- ── check ─────────────────────────────────────────────────────────────────────
-ruleIfMaxMin : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleIfMaxMin : StdlibIndex ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  List Finding
 ruleIfMaxMin _ _ _ pos prog = flatMap ifMaxMinDeclL (declLocList pos prog)
 
 ifMaxMinDeclL : (Decl, Option Loc) -> List Finding
@@ -2659,8 +2862,8 @@ implMethodIfMaxMinHits (ImplMethod _ _ body) = collectIfMaxMinHits body
 
 -- every eligible `if` anywhere in the expression tree (order irrelevant).
 collectIfMaxMinHits : Expr -> List (String, Expr, Expr)
-collectIfMaxMinHits e = ifMaxMinHitOf e
-  ++ flatMap collectIfMaxMinHits (childExprs e)
+collectIfMaxMinHits e =
+  ifMaxMinHitOf e ++ flatMap collectIfMaxMinHits (childExprs e)
 
 ifMaxMinHitOf : Expr -> List (String, Expr, Expr)
 ifMaxMinHitOf (EIf cond t el) = optHitToList (ifMaxMinOf cond t el)
@@ -2673,7 +2876,8 @@ optHitToList None = []
 ifMaxMinFinding : Option Loc -> (String, Expr, Expr) -> Finding
 ifMaxMinFinding loc (fn, a, b) = Finding {
   rule = ruleNameIfMaxMin,
-  message = "if-then-else selects the \{if fn == "max" then "larger" else "smaller"} of the same two operands. Rewrite as '\{exprToString (EApp (EApp (EVar fn) a) b)}'",
+  message =
+    "if-then-else selects the \{if fn == "max" then "larger" else "smaller"} of the same two operands. Rewrite as '\{exprToString (EApp (EApp (EVar fn) a) b)}'",
   severity = SevWarning,
   loc = loc,
 }
@@ -2849,7 +3053,7 @@ countVar x e = match unwrapLoc e
 
 countVarList : String -> List Expr -> Int
 countVarList _ [] = 0
-countVarList x (e::es) = countVar x e + countVarList x es
+countVarList x (e :: es) = countVar x e + countVarList x es
 
 -- if `arg` is `f x` — x as the SOLE final argument, `f` not mentioning x —
 -- return `Some f` (the eta-reduced function); else `None`.
@@ -2889,7 +3093,12 @@ andThenPureMapBody m x (EApp pureHd arg)
 andThenPureMapBody _ _ _ = None
 
 -- ── check ─────────────────────────────────────────────────────────────────────
-ruleAndThenPureMap : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleAndThenPureMap : StdlibIndex ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  List Finding
 ruleAndThenPureMap _ _ _ pos prog =
   flatMap andThenPureMapDeclL (declLocList pos prog)
 
@@ -2913,8 +3122,8 @@ implMethodAndThenPureMapHits (ImplMethod _ _ body) =
 -- wrapped bind is counted exactly once — at the unwrapped node the tree walk
 -- reaches — rather than twice (mirrors `lamHitOf` / `ifMaxMinHitOf`).
 collectAndThenPureMapHits : Expr -> List Expr
-collectAndThenPureMapHits e = andThenPureMapHitOf e
-  ++ flatMap collectAndThenPureMapHits (childExprs e)
+collectAndThenPureMapHits e =
+  andThenPureMapHitOf e ++ flatMap collectAndThenPureMapHits (childExprs e)
 
 andThenPureMapHitOf : Expr -> List Expr
 andThenPureMapHitOf (EApp inner cont) =
@@ -2928,7 +3137,10 @@ optExprToList None = []
 andThenPureMapFinding : Option Loc -> Expr -> Finding
 andThenPureMapFinding loc rewritten = Finding {
   rule = ruleNameAndThenPureMap,
-  message = "monadic bind wraps a pure transformation of its result — rewrite as '" ++ exprToString rewritten ++ "'",
+  message =
+    "monadic bind wraps a pure transformation of its result — rewrite as '"
+      ++ exprToString rewritten
+      ++ "'",
   severity = SevWarning,
   loc = loc,
 }
@@ -2972,9 +3184,8 @@ rewriteAndThenPureMapExpr (ELoc l e) = ELoc l (rewriteAndThenPureMapExpr e)
 rewriteAndThenPureMapExpr (EDoOrigin l e) =
   EDoOrigin l (rewriteAndThenPureMapExpr e)
 rewriteAndThenPureMapExpr (EApp f x) =
-  tryAndThenPureMap (EApp
-    (rewriteAndThenPureMapExpr f)
-    (rewriteAndThenPureMapExpr x))
+  tryAndThenPureMap
+    (EApp (rewriteAndThenPureMapExpr f) (rewriteAndThenPureMapExpr x))
 rewriteAndThenPureMapExpr (ELam ps b) = ELam ps (rewriteAndThenPureMapExpr b)
 rewriteAndThenPureMapExpr (ELet m isf p e1 e2) =
   ELet m isf p (rewriteAndThenPureMapExpr e1) (rewriteAndThenPureMapExpr e2)
@@ -3220,15 +3431,28 @@ detApply det e = match det e
 -- matched expression, tracked by `collectRewrites` as it descends — falling back
 -- to the decl's location only for a hit with no enclosing `ELoc` on its path at
 -- all (the decl-level `loc` threaded in as the initial "nearest so far").
-exprRuleFindings : (String -> Bool) -> (Expr -> Option Expr) -> (Option Loc -> Expr -> Finding) -> Positions -> List Decl -> List Finding
+exprRuleFindings : (String -> Bool) ->
+  (Expr -> Option Expr) ->
+  (Option Loc -> Expr -> Finding) ->
+  Positions ->
+  List Decl ->
+  List Finding
 exprRuleFindings excl det mkFinding pos prog =
   flatMap (exprRuleDeclL excl det mkFinding) (declLocList pos prog)
 
-exprRuleDeclL : (String -> Bool) -> (Expr -> Option Expr) -> (Option Loc -> Expr -> Finding) -> (Decl, Option Loc) -> List Finding
+exprRuleDeclL : (String -> Bool) ->
+  (Expr -> Option Expr) ->
+  (Option Loc -> Expr -> Finding) ->
+  (Decl, Option Loc) ->
+  List Finding
 exprRuleDeclL excl det mkFinding (d, loc) =
   map ((hitLoc, hit) => mkFinding hitLoc hit) (declRewriteHits excl det loc d)
 
-declRewriteHits : (String -> Bool) -> (Expr -> Option Expr) -> Option Loc -> Decl -> List (Option Loc, Expr)
+declRewriteHits : (String -> Bool) ->
+  (Expr -> Option Expr) ->
+  Option Loc ->
+  Decl ->
+  List (Option Loc, Expr)
 declRewriteHits excl det loc (DFunDef _ name _ body)
   | excl name = []
   | otherwise = collectRewrites loc det body
@@ -3237,7 +3461,10 @@ declRewriteHits _ det loc (DImpl { methods, ... }) =
 declRewriteHits excl det loc (DAttrib _ d) = declRewriteHits excl det loc d
 declRewriteHits _ _ _ _ = []
 
-implMethodRewriteHits : Option Loc -> (Expr -> Option Expr) -> ImplMethod -> List (Option Loc, Expr)
+implMethodRewriteHits : Option Loc ->
+  (Expr -> Option Expr) ->
+  ImplMethod ->
+  List (Option Loc, Expr)
 implMethodRewriteHits loc det (ImplMethod _ _ body) =
   collectRewrites loc det body
 
@@ -3249,10 +3476,14 @@ implMethodRewriteHits loc det (ImplMethod _ _ body) =
 -- becomes the new `curLoc` for everything beneath it — so each real node is
 -- counted exactly once, now stamped with the location of the innermost `ELoc`
 -- that actually wraps it (mirrors `collectLamSections`).
-collectRewrites : Option Loc -> (Expr -> Option Expr) -> Expr -> List (Option Loc, Expr)
+collectRewrites : Option Loc ->
+  (Expr -> Option Expr) ->
+  Expr ->
+  List (Option Loc, Expr)
 collectRewrites _ det (ELoc l e) = collectRewrites (Some l) det e
-collectRewrites curLoc det e = optExprToLocList curLoc (det e)
-  ++ flatMap (collectRewrites curLoc det) (childExprs e)
+collectRewrites curLoc det e =
+  optExprToLocList curLoc (det e)
+    ++ flatMap (collectRewrites curLoc det) (childExprs e)
 
 optExprToLocList : Option Loc -> Option Expr -> List (Option Loc, Expr)
 optExprToLocList _ None = []
@@ -3413,9 +3644,9 @@ operandToInterp e = match strLitValueOf e
 -- lexer would re-tokenise the emitted string).
 mergeInterpStr : List InterpPart -> List InterpPart
 mergeInterpStr [] = []
-mergeInterpStr ((InterpStr a)::(InterpStr b)::rest) =
+mergeInterpStr ((InterpStr a) :: (InterpStr b) :: rest) =
   mergeInterpStr (InterpStr (a ++ b) :: rest)
-mergeInterpStr (p::rest) = p :: mergeInterpStr rest
+mergeInterpStr (p :: rest) = p :: mergeInterpStr rest
 
 -- fire on the RAW node only when it is a qualifying `++` chain top; return the
 -- interpolated-string node.
@@ -3441,7 +3672,12 @@ collectConcatHits e = match concatChainOf e
   Some e2 => e2 :: flatMap collectConcatHits (concatOperands e)
   None => flatMap collectConcatHits (childExprs e)
 
-ruleConcatToInterp : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleConcatToInterp : StdlibIndex ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  List Finding
 ruleConcatToInterp _ _ _ pos prog =
   flatMap concatToInterpDeclL (declLocList pos prog)
 
@@ -3461,7 +3697,10 @@ implMethodConcatHits (ImplMethod _ _ body) = collectConcatHits body
 concatToInterpFinding : Option Loc -> Expr -> Finding
 concatToInterpFinding loc rewritten = Finding {
   rule = ruleNameConcatToInterp,
-  message = "`++` chain of string literals and expressions. Rewrite as an interpolated string '" ++ exprToString rewritten ++ "'",
+  message =
+    "`++` chain of string literals and expressions. Rewrite as an interpolated string '"
+      ++ exprToString rewritten
+      ++ "'",
   severity = SevWarning,
   loc = loc,
 }
@@ -3503,7 +3742,12 @@ notEqOf e = match notArgOf e
     _ => None
   None => None
 
-ruleNotEq : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleNotEq : StdlibIndex ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  List Finding
 ruleNotEq _ _ _ pos prog = exprRuleFindings noExcl notEqOf notEqFinding pos prog
 
 notEqFinding : Option Loc -> Expr -> Finding
@@ -3553,14 +3797,22 @@ boolSimplifyEq op a b
 boolEqResult : String -> Expr -> Bool -> Expr
 boolEqResult op v constIsTrue = if op == "==" == constIsTrue then v else mkNot v
 
-ruleBoolSimplify : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleBoolSimplify : StdlibIndex ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  List Finding
 ruleBoolSimplify _ _ _ pos prog =
   exprRuleFindings noExcl boolSimplifyOf boolSimplifyFinding pos prog
 
 boolSimplifyFinding : Option Loc -> Expr -> Finding
 boolSimplifyFinding loc rewritten = Finding {
   rule = ruleNameBoolSimplify,
-  message = "redundant boolean expression — rewrite as '" ++ exprToString rewritten ++ "'",
+  message =
+    "redundant boolean expression — rewrite as '"
+      ++ exprToString rewritten
+      ++ "'",
   severity = SevWarning,
   loc = loc,
 }
@@ -3596,7 +3848,12 @@ remParityFrom _ _ = None
 parityFn : String -> String
 parityFn op = if op == "==" then "isEven" else "isOdd"
 
-ruleRemParity : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleRemParity : StdlibIndex ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  List Finding
 ruleRemParity _ _ _ pos prog =
   exprRuleFindings remParityExcl remParityOf remParityFinding pos prog
 
@@ -3620,14 +3877,22 @@ doubleReverseOf (EApp hd1 arg1)
     _ => None
 doubleReverseOf _ = None
 
-ruleDoubleReverse : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleDoubleReverse : StdlibIndex ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  List Finding
 ruleDoubleReverse _ _ _ pos prog =
   exprRuleFindings noExcl doubleReverseOf doubleReverseFinding pos prog
 
 doubleReverseFinding : Option Loc -> Expr -> Finding
 doubleReverseFinding loc rewritten = Finding {
   rule = ruleNameDoubleReverse,
-  message = "`reverse (reverse …)` is a no-op. Rewrite as '" ++ exprToString rewritten ++ "'",
+  message =
+    "`reverse (reverse …)` is a no-op. Rewrite as '"
+      ++ exprToString rewritten
+      ++ "'",
   severity = SevWarning,
   loc = loc,
 }
@@ -3680,10 +3945,7 @@ preferAssignOf _ = None
 -- the saturated `setRef r v` spine (head already loc-unwrapped by the caller).
 setRefWriteOf : Expr -> Expr -> Option Expr
 setRefWriteOf (EApp hd r) v =
-  if isEVarNamed "setRef" hd then
-    Some (EBinOp ":=" r v (Ref RNone))
-  else
-    None
+  if isEVarNamed "setRef" hd then Some (EBinOp ":=" r v (Ref RNone)) else None
 setRefWriteOf _ _ = None
 
 -- `let _ = <write>` → a bare `<write>` statement, for every statement in a block.
@@ -3707,17 +3969,19 @@ collapsedBlockOf stmts =
 
 collapseWildWrite : DoStmt -> DoStmt
 collapseWildWrite (s@(DoLet _ _ PWild e)) =
-  if isAssignWrite (unwrapLoc e) then
-    DoExpr e
-  else
-    s
+  if isAssignWrite (unwrapLoc e) then DoExpr e else s
 collapseWildWrite s = s
 
 isAssignWrite : Expr -> Bool
 isAssignWrite (EBinOp ":=" _ _ _) = True
 isAssignWrite _ = False
 
-ruleForPreferAssign : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleForPreferAssign : StdlibIndex ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  List Finding
 ruleForPreferAssign _ _ _ pos prog =
   exprRuleFindings noExcl preferAssignOf preferAssignFinding pos prog
 
@@ -3734,10 +3998,12 @@ preferAssignFinding loc rewritten = Finding {
 }
 
 preferAssignMessage : Expr -> String
-preferAssignMessage (EBlock _) = "`let _ = … := …` binds a write to a wildcard. A `:=` write is a statement — drop the `let _ =`"
-preferAssignMessage rewritten = "`setRef r v` predates the `:=` write operator. Rewrite as '"
-  ++ exprToString rewritten
-  ++ "'"
+preferAssignMessage (EBlock _) =
+  "`let _ = … := …` binds a write to a wildcard. A `:=` write is a statement — drop the `let _ =`"
+preferAssignMessage rewritten =
+  "`setRef r v` predates the `:=` write operator. Rewrite as '"
+    ++ exprToString rewritten
+    ++ "'"
 
 preferAssignFix : Oracle -> Decl -> Option (List Decl)
 preferAssignFix _ d = exprRuleFix noExcl (detApply preferAssignOf) d
@@ -3766,14 +4032,22 @@ whenUnlessOf (EIf c t el)
   | otherwise = None
 whenUnlessOf _ = None
 
-ruleWhenUnless : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleWhenUnless : StdlibIndex ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  List Finding
 ruleWhenUnless _ _ _ pos prog =
   exprRuleFindings whenUnlessExcl whenUnlessOf whenUnlessFinding pos prog
 
 whenUnlessFinding : Option Loc -> Expr -> Finding
 whenUnlessFinding loc rewritten = Finding {
   rule = ruleNameWhenUnless,
-  message = "conditional effect with a `pure ()` branch. Rewrite as '" ++ exprToString rewritten ++ "'",
+  message =
+    "conditional effect with a `pure ()` branch. Rewrite as '"
+      ++ exprToString rewritten
+      ++ "'",
   severity = SevWarning,
   loc = loc,
 }
@@ -3829,7 +4103,12 @@ complementPredOf e = do
   comp <- complementOf name
   Some (renameSpineHead comp (unwrapLoc inner))
 
-ruleComplementPredicate : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleComplementPredicate : StdlibIndex ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  List Finding
 ruleComplementPredicate _ _ _ pos prog =
   exprRuleFindings
     complementExcl
@@ -3909,13 +4188,19 @@ matchToMapCall binder expr scrut =
 -- Option map: (noneArm, someArm) in this order.
 matchToMapOption : Expr -> Arm -> Arm -> Option Expr
 matchToMapOption scrut (Arm pn gn bn) (Arm ps gs bs)
-  | isEmptyL gn && isEmptyL gs && isNilPCon "None" pn && isEVarNamed "None" bn = map ((binder, expr) => matchToMapCall binder expr scrut) (matchToMapTransform "Some" ps bs)
+  | isEmptyL gn && isEmptyL gs && isNilPCon "None" pn && isEVarNamed "None" bn =
+    map
+      ((binder, expr) => matchToMapCall binder expr scrut)
+      (matchToMapTransform "Some" ps bs)
   | otherwise = None
 
 -- Result map: (errArm, okArm) in this order.
 matchToMapResult : Expr -> Arm -> Arm -> Option Expr
 matchToMapResult scrut (Arm pe ge be) (Arm po go bo)
-  | isEmptyL ge && isEmptyL go && matchToMapErrPassthru pe be = map ((binder, expr) => matchToMapCall binder expr scrut) (matchToMapTransform "Ok" po bo)
+  | isEmptyL ge && isEmptyL go && matchToMapErrPassthru pe be =
+    map
+      ((binder, expr) => matchToMapCall binder expr scrut)
+      (matchToMapTransform "Ok" po bo)
   | otherwise = None
 
 -- try both ctor-pairs in both arm orders.
@@ -3935,14 +4220,22 @@ matchToMapOf (EMatch scrut arms) = match arms
   _ => None
 matchToMapOf _ = None
 
-ruleMatchToMap : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleMatchToMap : StdlibIndex ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  List Finding
 ruleMatchToMap _ _ _ pos prog =
   exprRuleFindings noExcl matchToMapOf matchToMapFinding pos prog
 
 matchToMapFinding : Option Loc -> Expr -> Finding
 matchToMapFinding loc rewritten = Finding {
   rule = ruleNameMatchToMap,
-  message = "2-arm match maps over an Option/Result — rewrite as '" ++ exprToString rewritten ++ "'",
+  message =
+    "2-arm match maps over an Option/Result — rewrite as '"
+      ++ exprToString rewritten
+      ++ "'",
   severity = SevWarning,
   loc = loc,
 }
@@ -3979,7 +4272,7 @@ bindChainDepth isResult e =
 bindChainSplit : Expr -> (List Expr, Expr)
 bindChainSplit e = match unwrapLoc e
   EBlock stmts => match reverseL stmts
-    (DoExpr lastE)::revInit => (flatMap stmtExprs (reverseL revInit), lastE)
+    (DoExpr lastE) :: revInit => (flatMap stmtExprs (reverseL revInit), lastE)
     _ => ([], EBlock stmts)
   other => ([], other)
 
@@ -3996,13 +4289,20 @@ bindChainHead isResult e = match unwrapLoc e
 
 bindChainTry : Bool -> Arm -> Arm -> Option Expr
 bindChainTry isResult failArm (Arm okP okGs okBody)
-  | bindChainFailPassthru isResult failArm && isEmptyL okGs && bindChainOkPat isResult okP && not (bindChainRewrap isResult okP okBody) = Some okBody
+  | bindChainFailPassthru isResult failArm
+    && isEmptyL okGs
+    && bindChainOkPat isResult okP
+    && not (bindChainRewrap isResult okP okBody) = Some okBody
   | otherwise = None
 
 -- failure arm is a verbatim passthrough: `Err v => Err v` / `None => None`.
 bindChainFailPassthru : Bool -> Arm -> Bool
-bindChainFailPassthru isResult (Arm p gs body) = isEmptyL gs
-  && (if isResult then matchToMapErrPassthru p body else isNilPCon "None" p && isEVarNamed "None" body)
+bindChainFailPassthru isResult (Arm p gs body) =
+  isEmptyL gs
+    && (if isResult then
+      matchToMapErrPassthru p body
+    else
+      isNilPCon "None" p && isEVarNamed "None" body)
 
 bindChainOkPat : Bool -> Pat -> Bool
 bindChainOkPat isResult (PCon c [_]) = c == (if isResult then "Ok" else "Some")
@@ -4011,7 +4311,10 @@ bindChainOkPat _ _ = False
 -- success arm re-wraps with the SAME ctor (`Ok x => Ok (f x)`) — that's a `map`,
 -- excluded here (owned by `rule-match-to-map`).  Reuses the same linchpin.
 bindChainRewrap : Bool -> Pat -> Expr -> Bool
-bindChainRewrap isResult p body = match matchToMapTransform (if isResult then "Ok" else "Some") p body
+bindChainRewrap isResult p body = match (matchToMapTransform
+  (if isResult then "Ok" else "Some")
+  p
+  body)
   Some _ => True
   None => False
 
@@ -4030,8 +4333,8 @@ bindChainOffChain : Bool -> Expr -> List Expr
 bindChainOffChain isResult e =
   let (lets, core) = bindChainSplit e
   match bindChainHead isResult core
-    Some body => lets
-      ++ (bindChainScrut core :: bindChainOffChain isResult body)
+    Some body =>
+      lets ++ (bindChainScrut core :: bindChainOffChain isResult body)
     None =>
       if bindChainIsTermMap core then
         lets ++ bindChainTermMapParts core
@@ -4071,7 +4374,12 @@ bindChainDeclHeads _ = []
 bindChainImplHeads : ImplMethod -> List Expr
 bindChainImplHeads (ImplMethod _ _ body) = bindChainHeads body
 
-ruleBindChainToDo : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleBindChainToDo : StdlibIndex ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  List Finding
 ruleBindChainToDo _ _ _ pos prog = flatMap bindChainDeclL (declLocList pos prog)
 
 bindChainDeclL : (Decl, Option Loc) -> List Finding
@@ -4080,7 +4388,8 @@ bindChainDeclL (d, loc) = map (bindChainFinding loc) (bindChainDeclHeads d)
 bindChainFinding : Option Loc -> Expr -> Finding
 bindChainFinding loc _ = Finding {
   rule = ruleNameBindChainToDo,
-  message = "deep nested Result/Option passthrough-bind `match` chain (≥3 binds). Rewrite as a `do` block",
+  message =
+    "deep nested Result/Option passthrough-bind `match` chain (≥3 binds). Rewrite as a `do` block",
   severity = SevWarning,
   loc = loc,
 }
@@ -4114,7 +4423,12 @@ bindChainFinding loc _ = Finding {
 -- Operator-named bindings are NOT flagged (their call sites use operator syntax,
 -- not name tokens, so a token scan can't see the reference → risk of false
 -- "dead").  `fix = None` (suggest-only — deletion is by hand).
-ruleDeadCode : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleDeadCode : StdlibIndex ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  List Finding
 ruleDeadCode _ _ src pos prog =
   let reach = reachableNames src prog
   map deadFinding (filterList (deadPair reach) (privateDefLocs pos prog))
@@ -4125,7 +4439,10 @@ deadPair reach (n, _) = not (has n reach)
 deadFinding : (String, Option Loc) -> Finding
 deadFinding (name, loc) = Finding {
   rule = ruleNameDeadCode,
-  message = "private top-level '" ++ name ++ "' is unreachable from exports/main/doctests — remove it (dead code)",
+  message =
+    "private top-level '"
+      ++ name
+      ++ "' is unreachable from exports/main/doctests — remove it (dead code)",
   severity = SevWarning,
   loc = loc,
 }
@@ -4145,9 +4462,10 @@ privateDefLocs pos prog =
   -- List-as-a-set quadratics (see reachableNames).  Membership only; order
   -- irrelevant.
   let exported = nameSetOf (exportedNames prog)
-  dedupeNamesLoc (filterList
-    (candidatePair exported)
-    (flatMap allDefNameL (declLocList pos prog)))
+  dedupeNamesLoc
+    (filterList
+      (candidatePair exported)
+      (flatMap allDefNameL (declLocList pos prog)))
 
 -- Build a HashMap-as-set from a name list (membership testing only).
 nameSetOf : List String -> HashMap String Unit
@@ -4158,7 +4476,7 @@ nameSetOf names =
 
 nameSetInto : List String -> HashMap String Unit -> Unit
 nameSetInto [] _ = ()
-nameSetInto (n::rest) s =
+nameSetInto (n :: rest) s =
   let _ = setInPlace n () s
   nameSetInto rest s
 
@@ -4188,7 +4506,9 @@ isOrdinaryIdent s
 reachableNames : String -> List Decl -> HashMap String Unit
 reachableNames src prog =
   let refMap = mergeRefs (flatMap defRefPair prog)
-  let seed = exportedNames prog ++ ("main" :: flatMap nonDefRefL prog ++ doctestIdents src)
+  let seed =
+    exportedNames prog
+      ++ ("main" :: flatMap nonDefRefL prog ++ doctestIdents src)
   let visited = new ()
   let _ = bfsReach refMap visited seed
   visited
@@ -4251,9 +4571,12 @@ bodyIdents d = sortUniqS (identTokens (declToString d))
 -- expanded once.  `has`/`setInPlace` are O(1) average, so this is
 -- ~O(names + edges); the old `contains x visited` over a list made it
 -- O(names^2).
-bfsReach : HashMap String (List String) -> HashMap String Unit -> List String -> Unit
+bfsReach : HashMap String (List String) ->
+  HashMap String Unit ->
+  List String ->
+  Unit
 bfsReach _ _ [] = ()
-bfsReach refMap visited (x::rest)
+bfsReach refMap visited (x :: rest)
   | has x visited = bfsReach refMap visited rest
   | otherwise =
     let _ = setInPlace x () visited
@@ -4276,7 +4599,7 @@ mergeRefs pairs =
 
 mergeRefsGo : HashMap String (List String) -> List (String, List String) -> Unit
 mergeRefsGo _ [] = ()
-mergeRefsGo acc ((n, rs)::rest) =
+mergeRefsGo acc ((n, rs) :: rest) =
   let _ = setInPlace n (sortUniqS (findWithDefault [] n acc ++ rs)) acc
   mergeRefsGo acc rest
 
@@ -4355,11 +4678,18 @@ dropPrefixN k s = stringSlice k (stringLength s) s
 -- stays clear of the field-scanner gap.  --deny promotion is left to the CLI
 -- (which already owns it for per-file findings).
 export
-runCrossFileRules : List String -> List String -> List (String, Positions, List Decl) -> List Finding
+runCrossFileRules : List String ->
+  List String ->
+  List (String, Positions, List Decl) ->
+  List Finding
 runCrossFileRules only disable files =
   flatMap (runCrossRuleOn only disable files) allCrossFileRules
 
-runCrossRuleOn : List String -> List String -> List (String, Positions, List Decl) -> CrossFileRule -> List Finding
+runCrossRuleOn : List String ->
+  List String ->
+  List (String, Positions, List Decl) ->
+  CrossFileRule ->
+  List Finding
 runCrossRuleOn only disable files r
   | crossRuleActive only disable r =
     map (restampSeverity r.severity) (r.check files)
@@ -4392,7 +4722,10 @@ crossFileCacheSound = match allCrossFileRules
 -- severity restamp, same join — but fed occurrences instead of parses.  Callers
 -- MUST check `crossFileCacheSound` first (see above).
 export
-runCrossFileRulesFromOccs : List String -> List String -> List (String, Int, String, String) -> List Finding
+runCrossFileRulesFromOccs : List String ->
+  List String ->
+  List (String, Int, String, String) ->
+  List Finding
 runCrossFileRulesFromOccs only disable occs =
   flatMap (runCrossRuleFromOccs only disable occs) allCrossFileRules
 
@@ -4400,16 +4733,21 @@ runCrossFileRulesFromOccs only disable occs =
 -- CLI's `crossFileCacheSound` check: it means a caller that ignores that check
 -- still cannot run `dupJoin` under some OTHER rule's name and severity — it just
 -- gets the dup rule alone, which is what the guard would have caught anyway.
-runCrossRuleFromOccs : List String -> List String -> List (String, Int, String, String) -> CrossFileRule -> List Finding
+runCrossRuleFromOccs : List String ->
+  List String ->
+  List (String, Int, String, String) ->
+  CrossFileRule ->
+  List Finding
 runCrossRuleFromOccs only disable occs r
   | crossRuleActive only disable r && r.name == ruleNameDuplicateBody =
     map (restampSeverity r.severity) (dupJoin occs)
   | otherwise = []
 
 crossRuleActive : List String -> List String -> CrossFileRule -> Bool
-crossRuleActive only disable r = r.enabled
-  && (isEmptyL only || contains r.name only)
-  && not (contains r.name disable)
+crossRuleActive only disable r =
+  r.enabled
+    && (isEmptyL only || contains r.name only)
+    && not (contains r.name disable)
 
 -- ── cross-file rule: duplicate-body (copy-paste detector) ──────────────────────
 -- Flags a top-level `DFunDef` whose ELoc-stripped body (+ param-pattern shape) is
@@ -4510,8 +4848,8 @@ isUpperFirst s =
 
 -- combined eligibility: big enough AND not pure data.
 dupEligible : Expr -> Bool
-dupEligible body = bodyComplexity body >= dupComplexityThreshold
-  && not (isPureDataExpr body)
+dupEligible body =
+  bodyComplexity body >= dupComplexityThreshold && not (isPureDataExpr body)
 
 -- Same-file eligibility uses a HIGHER complexity floor than the cross-file
 -- rule.  This is not tuning-to-the-corpus: it is a structural consequence of
@@ -4529,8 +4867,9 @@ dupSameFileComplexityThreshold : Int
 dupSameFileComplexityThreshold = 20
 
 dupEligibleSameFile : Expr -> Bool
-dupEligibleSameFile body = bodyComplexity body >= dupSameFileComplexityThreshold
-  && not (isPureDataExpr body)
+dupEligibleSameFile body =
+  bodyComplexity body >= dupSameFileComplexityThreshold
+    && not (isPureDataExpr body)
 
 ruleDuplicateBody : List (String, Positions, List Decl) -> List Finding
 ruleDuplicateBody files = dupJoin (flatMap fileDupOccs files)
@@ -4581,7 +4920,10 @@ export
 dupJoin : List (String, Int, String, String) -> List Finding
 dupJoin occs =
   let groups = groupOccsByKey occs
-  let live = filterList (k => dupGroupFires (findWithDefault [] k groups)) (dupDistinctKeys occs)
+  let live =
+    filterList
+      (k => dupGroupFires (findWithDefault [] k groups))
+      (dupDistinctKeys occs)
   flatMap
     (k => emitDupGroup (reverseL (findWithDefault [] k groups)))
     (sortUniqS live)
@@ -4591,15 +4933,18 @@ dupJoin occs =
 -- reaching `emitDupGroup` matches the old filter-in-input-order behaviour.
 -- (`sortDupOccs` sorts them anyway — this only keeps the pre-sort list identical
 -- so the two implementations are diffable.)
-groupOccsByKey : List (String, Int, String, String) -> HashMap String (List (String, Int, String, String))
+groupOccsByKey : List (String, Int, String, String) ->
+  HashMap String (List (String, Int, String, String))
 groupOccsByKey occs =
   let m = new ()
   let _ = groupOccsGo m occs
   m
 
-groupOccsGo : HashMap String (List (String, Int, String, String)) -> List (String, Int, String, String) -> Unit
+groupOccsGo : HashMap String (List (String, Int, String, String)) ->
+  List (String, Int, String, String) ->
+  Unit
 groupOccsGo _ [] = ()
-groupOccsGo m (o::rest) =
+groupOccsGo m (o :: rest) =
   let _ = setInPlace (occKey o) (o :: findWithDefault [] (occKey o) m) m
   groupOccsGo m rest
 
@@ -4614,9 +4959,11 @@ dupDistinctKeys occs =
   let seen = new ()
   dupDistinctGo seen occs
 
-dupDistinctGo : HashMap String Unit -> List (String, Int, String, String) -> List String
+dupDistinctGo : HashMap String Unit ->
+  List (String, Int, String, String) ->
+  List String
 dupDistinctGo _ [] = []
-dupDistinctGo seen (o::rest)
+dupDistinctGo seen (o :: rest)
   | has (occKey o) seen = dupDistinctGo seen rest
   | otherwise =
     let _ = setInPlace (occKey o) () seen
@@ -4625,16 +4972,19 @@ dupDistinctGo seen (o::rest)
 -- Can this key's group emit at all?  ≥2 occurrences spanning ≥2 distinct files.
 -- Cheap pre-filter so the sort and `emitDupGroup` only ever see live groups.
 dupGroupFires : List (String, Int, String, String) -> Bool
-dupGroupFires grp = listLen grp >= 2
-  && listLen (sortUniqS (map occFile grp)) >= 2
+dupGroupFires grp =
+  listLen grp >= 2 && listLen (sortUniqS (map occFile grp)) >= 2
 
 -- one occurrence per eligible top-level DFunDef: (file, line, name, structuralKey)
 export
-fileDupOccs : (String, Positions, List Decl) -> List (String, Int, String, String)
+fileDupOccs : (String, Positions, List Decl) ->
+  List (String, Int, String, String)
 fileDupOccs (path, pos, decls) =
   flatMap (dupOccOfDecl path) (declLocList pos decls)
 
-dupOccOfDecl : String -> (Decl, Option Loc) -> List (String, Int, String, String)
+dupOccOfDecl : String ->
+  (Decl, Option Loc) ->
+  List (String, Int, String, String)
 dupOccOfDecl path (d, loc) = match d
   DFunDef _ name pats body =>
     if dupEligible body then
@@ -4680,23 +5030,29 @@ dupFinding distinctFiles occ =
   let others = filterList (/= file) distinctFiles
   Finding {
     rule = ruleNameDuplicateBody,
-    message = "function '\{occName occ}' has a body structurally identical to a definition in \{joinWith ", " others} — consolidate into a shared module",
+    message =
+      "function '\{occName occ}' has a body structurally identical to a definition in \{joinWith ", " others} — consolidate into a shared module",
     severity = SevWarning,
     loc = Some (Loc file line 1 line 1),
   }
 
 -- insertion sort occurrences by (file, line) for deterministic output.
-sortDupOccs : List (String, Int, String, String) -> List (String, Int, String, String)
+sortDupOccs : List (String, Int, String, String) ->
+  List (String, Int, String, String)
 sortDupOccs [] = []
-sortDupOccs (x::xs) = dupInsert x (sortDupOccs xs)
+sortDupOccs (x :: xs) = dupInsert x (sortDupOccs xs)
 
-dupInsert : (String, Int, String, String) -> List (String, Int, String, String) -> List (String, Int, String, String)
+dupInsert : (String, Int, String, String) ->
+  List (String, Int, String, String) ->
+  List (String, Int, String, String)
 dupInsert x [] = [x]
-dupInsert x (y::ys)
-  | dupOccLe x y = x :: y::ys
+dupInsert x (y :: ys)
+  | dupOccLe x y = x :: y :: ys
   | otherwise = y :: dupInsert x ys
 
-dupOccLe : (String, Int, String, String) -> (String, Int, String, String) -> Bool
+dupOccLe : (String, Int, String, String) ->
+  (String, Int, String, String) ->
+  Bool
 dupOccLe a b = match stringCompare (occFile a) (occFile b)
   Lt => True
   Gt => False
@@ -4722,25 +5078,40 @@ sameFileOccOfDecl (d, loc) = match d
   DAttrib _ inner => sameFileOccOfDecl (inner, loc)
   _ => []
 
-ruleDuplicateBodySameFile : StdlibIndex -> String -> String -> Positions -> List Decl -> List Finding
+ruleDuplicateBodySameFile : StdlibIndex ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  List Finding
 ruleDuplicateBodySameFile _ _ _ pos decls =
   let occs = flatMap sameFileOccOfDecl (declLocList pos decls)
   let groups = sameFileGroupByKey occs
-  let live = filterList (k => listLen (findWithDefault [] k groups) >= 2) (sameFileDistinctKeys occs)
+  let live =
+    filterList
+      (k => listLen (findWithDefault [] k groups) >= 2)
+      (sameFileDistinctKeys occs)
   flatMap
     (k => emitSameFileGroup (reverseL (findWithDefault [] k groups)))
     (sortUniqS live)
 
-sameFileGroupByKey : List (String, Int, String) -> HashMap String (List (String, Int, String))
+sameFileGroupByKey : List (String, Int, String) ->
+  HashMap String (List (String, Int, String))
 sameFileGroupByKey occs =
   let m = new ()
   let _ = sameFileGroupGo m occs
   m
 
-sameFileGroupGo : HashMap String (List (String, Int, String)) -> List (String, Int, String) -> Unit
+sameFileGroupGo : HashMap String (List (String, Int, String)) ->
+  List (String, Int, String) ->
+  Unit
 sameFileGroupGo _ [] = ()
-sameFileGroupGo m (o::rest) =
-  let _ = setInPlace (sameFileOccKey o) (o :: findWithDefault [] (sameFileOccKey o) m) m
+sameFileGroupGo m (o :: rest) =
+  let _ =
+    setInPlace
+      (sameFileOccKey o)
+      (o :: findWithDefault [] (sameFileOccKey o) m)
+      m
   sameFileGroupGo m rest
 
 sameFileDistinctKeys : List (String, Int, String) -> List String
@@ -4748,9 +5119,11 @@ sameFileDistinctKeys occs =
   let seen = new ()
   sameFileDistinctGo seen occs
 
-sameFileDistinctGo : HashMap String Unit -> List (String, Int, String) -> List String
+sameFileDistinctGo : HashMap String Unit ->
+  List (String, Int, String) ->
+  List String
 sameFileDistinctGo _ [] = []
-sameFileDistinctGo seen (o::rest)
+sameFileDistinctGo seen (o :: rest)
   | has (sameFileOccKey o) seen = sameFileDistinctGo seen rest
   | otherwise =
     let _ = setInPlace (sameFileOccKey o) () seen
@@ -4781,25 +5154,29 @@ sameFileFinding grp occ =
   let others = filterList (o => sameFileOccName o /= sameFileOccName occ) grp
   Finding {
     rule = ruleNameDuplicateBody,
-    message = "function '\{sameFileOccName occ}' has a body structurally identical to '\{joinWith "', '" (map sameFileOccName others)}' in this same file — consolidate into one function",
+    message =
+      "function '\{sameFileOccName occ}' has a body structurally identical to '\{joinWith "', '" (map sameFileOccName others)}' in this same file — consolidate into one function",
     severity = SevWarning,
     loc = Some (Loc "" (sameFileOccLine occ) 1 (sameFileOccLine occ) 1),
   }
 
 sortSameFileOccs : List (String, Int, String) -> List (String, Int, String)
 sortSameFileOccs [] = []
-sortSameFileOccs (x::xs) = sameFileInsert x (sortSameFileOccs xs)
+sortSameFileOccs (x :: xs) = sameFileInsert x (sortSameFileOccs xs)
 
-sameFileInsert : (String, Int, String) -> List (String, Int, String) -> List (String, Int, String)
+sameFileInsert : (String, Int, String) ->
+  List (String, Int, String) ->
+  List (String, Int, String)
 sameFileInsert x [] = [x]
-sameFileInsert x (y::ys)
-  | sameFileOccLine x <= sameFileOccLine y = x :: y::ys
+sameFileInsert x (y :: ys)
+  | sameFileOccLine x <= sameFileOccLine y = x :: y :: ys
   | otherwise = y :: sameFileInsert x ys
 
 duplicateBodySameFileRule : Rule
 duplicateBodySameFileRule = Rule {
   name = ruleNameDuplicateBody,
-  descr = "top-level function body is structurally identical to another top-level function in the SAME file (copy-paste; consolidate) — the in-file counterpart of the cross-file rule of the same name",
+  descr =
+    "top-level function body is structurally identical to another top-level function in the SAME file (copy-paste; consolidate) — the in-file counterpart of the cross-file rule of the same name",
   severity = SevWarning,
   enabled = True,
   check = ruleDuplicateBodySameFile,

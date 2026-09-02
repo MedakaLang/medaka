@@ -1,5 +1,5 @@
 # META
-source_lines=238
+source_lines=250
 stages=DESUGAR,MARK
 # SOURCE
 {- | TCP connections and name resolution.
@@ -101,7 +101,8 @@ recv (Connection fd) n = netRecv fd n
 export
 sendAll : Connection -> Array Int -> <Net "_"> Result String Unit
 sendAll conn bs =
-  if arrayLength bs == 0 then Ok ()
+  if arrayLength bs == 0 then
+    Ok ()
   else match send conn bs
     Err e => Err e
     Ok 0 => Err "net.sendAll: 0 bytes written (connection stalled)"
@@ -110,10 +111,12 @@ sendAll conn bs =
 recvAllLoop : Connection -> Vector Int -> <Net "_"> Result String (Array Int)
 recvAllLoop conn buf = match recv conn 4096
   Err e => Err e
-  Ok chunk => if arrayLength chunk == 0 then Ok (toArray buf)
-  else
-    let _ = fold (acc b => let _ = push b buf in acc) () chunk
-    recvAllLoop conn buf
+  Ok chunk =>
+    if arrayLength chunk == 0 then
+      Ok (toArray buf)
+    else
+      let _ = fold (acc b => let _ = push b buf in acc) () chunk
+      recvAllLoop conn buf
 
 {- | Receives everything until the peer closes the connection.
 
@@ -144,21 +147,22 @@ export
 sendLine : Connection -> String -> <Net "_"> Result String Unit
 sendLine conn s = sendString conn (s ++ "\n")
 
-recvLineLoop : Connection -> Vector Int -> <Net "_"> Result String (Option String)
-recvLineLoop conn buf =
-  match recv conn 1
-    Err e => Err e
-    Ok chunk =>
-      if arrayLength chunk == 0 then
-        -- EOF: no trailing newline seen. Report whatever was buffered, if any.
-        if isEmpty buf then Ok None
-        else Ok (Some (fromUtf8 (toArray buf)))
+recvLineLoop : Connection ->
+  Vector Int ->
+  <Net "_"> Result String (Option String)
+recvLineLoop conn buf = match recv conn 1
+  Err e => Err e
+  Ok chunk =>
+    if arrayLength chunk == 0 then
+      -- EOF: no trailing newline seen. Report whatever was buffered, if any.
+      if isEmpty buf then Ok None else Ok (Some (fromUtf8 (toArray buf)))
+    else
+      let b = arrayGetUnsafe 0 chunk
+      if b == 10 then
+        Ok (Some (fromUtf8 (toArray buf)))
       else
-        let b = arrayGetUnsafe 0 chunk
-        if b == 10 then Ok (Some (fromUtf8 (toArray buf)))
-        else
-          let _ = push b buf
-          recvLineLoop conn buf
+        let _ = push b buf
+        recvLineLoop conn buf
 
 {- | Receives one line, without its newline.
 
@@ -205,7 +209,10 @@ setTimeout (Connection fd) ms = netSetTimeout fd ms
 
    `withConnection "127.0.0.1" 9000 (conn => sendString conn "hi")` -}
 export
-withConnection : String -> Int -> (Connection -> <Net "_"> Result String a) -> <Net "_"> Result String a
+withConnection : String ->
+  Int ->
+  (Connection -> <Net "_"> Result String a) ->
+  <Net "_"> Result String a
 withConnection host port body = match connect host port
   Err e => Err e
   Ok conn =>
@@ -218,7 +225,10 @@ withConnection host port body = match connect host port
 
    The result is `body`'s result, or the error when listening fails. -}
 export
-withListener : String -> Int -> (Listener -> <Net "_"> Result String a) -> <Net "_"> Result String a
+withListener : String ->
+  Int ->
+  (Listener -> <Net "_"> Result String a) ->
+  <Net "_"> Result String a
 withListener addr port body = match listen addr port
   Err e => Err e
   Ok lis =>
@@ -233,7 +243,9 @@ withListener addr port body = match listen addr port
    failure in `accept` ends the loop with the error. Pair it with
    `withListener` to close the listener when the loop ends. -}
 export
-serveLoop : Listener -> (Connection -> <Net "_"> Result String Unit) -> <Net "_"> Result String Unit
+serveLoop : Listener ->
+  (Connection -> <Net "_"> Result String Unit) ->
+  <Net "_"> Result String Unit
 serveLoop lis handle = match accept lis
   Err e => Err e
   Ok conn =>

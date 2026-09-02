@@ -1,5 +1,5 @@
 # META
-source_lines=385
+source_lines=386
 stages=DESUGAR,MARK
 # SOURCE
 {- | Parser combinators over bytes.
@@ -64,23 +64,22 @@ export impl Mappable ByteParser where
 
 export impl Applicative ByteParser where
   pure a = ByteParser (_ pos => BOk a pos)
-  ap pf pa = ByteParser (input pos =>
-    onOk
-      (runBP pf input pos)
-      (f p2 => onOk (runBP pa input p2) (a p3 => BOk (f a) p3)))
+  ap pf pa = ByteParser (input pos => onOk (runBP
+    pf
+    input
+    pos) (f p2 => onOk (runBP pa input p2) (a p3 => BOk (f a) p3)))
 
 export impl Thenable ByteParser where
-  andThen p k = ByteParser (input pos =>
-    onOk (runBP p input pos) (a p2 => runBP (k a) input p2))
+  andThen p k = ByteParser (input pos => onOk (runBP p input pos) (a p2 =>
+    runBP (k a) input p2))
 
 {- | `orElse p q` runs `p`, and when it fails runs `q` from the same
    position. `noMatch` always fails. -}
 export impl Alternative ByteParser where
   noMatch = ByteParser (_ pos => BErr "noMatch" pos)
-  orElse p q = ByteParser (input pos =>
-    match runBP p input pos
-      BOk a pos2 => BOk a pos2
-      BErr _ _ => runBP q input pos)
+  orElse p q = ByteParser (input pos => match runBP p input pos
+    BOk a pos2 => BOk a pos2
+    BErr _ _ => runBP q input pos)
 
 -- # Primitives
 
@@ -159,7 +158,7 @@ takeBytesGo : Int -> List Int -> Array Int -> Int -> BResult (List Int)
 takeBytesGo n acc input pos
   | n <= 0 = BOk (reverse acc) pos
   | pos >= arrayLength input = BErr "unexpected end of input" pos
-  | otherwise = takeBytesGo (n - 1) (input[pos]::acc) input (pos + 1)
+  | otherwise = takeBytesGo (n - 1) (input[pos] :: acc) input (pos + 1)
 
 -- | Exactly `n` bytes, as an array.
 export
@@ -185,7 +184,7 @@ manyGo p input pos acc = match runBP p input pos
     if pos2 == pos then
       BOk (reverse acc) pos2  -- no progress: stop to avoid infinite loop
     else
-      manyGo p input pos2 (a::acc)
+      manyGo p input pos2 (a :: acc)
 
 {- | One or more repetitions of a parser, as a list.
 
@@ -198,7 +197,7 @@ some : ByteParser a -> ByteParser (List a)
 some p = do
   x <- p
   xs <- many p
-  pure (x::xs)
+  pure (x :: xs)
 
 -- | One or more repetitions of `p`, separated by `sep`.
 export
@@ -208,7 +207,7 @@ sepBy1 p sep = do
   xs <- many (do
     _ <- sep
     p)
-  pure (x::xs)
+  pure (x :: xs)
 
 -- | Zero or more repetitions of `p`, separated by `sep`.
 export
@@ -239,7 +238,7 @@ between open close p = do
 export
 choice : List (ByteParser a) -> ByteParser a
 choice [] = failWith "choice: no alternatives"
-choice (q::rest) = orElse q (choice rest)
+choice (q :: rest) = orElse q (choice rest)
 
 -- Structurally identical to compiler/frontend/parser.mdk's chainl1, but over
 -- a different parser type (ByteParser vs token Parser); not soundly
@@ -254,12 +253,13 @@ chainl1 p op = do
   chainl1Rest p op x
 
 chainl1Rest : ByteParser a -> ByteParser (a -> a -> a) -> a -> ByteParser a
-chainl1Rest p op acc = orElse
-  (do
-    f <- op
-    y <- p
-    chainl1Rest p op (f acc y))
-  (pure acc)
+chainl1Rest p op acc =
+  orElse
+    (do
+      f <- op
+      y <- p
+      chainl1Rest p op (f acc y))
+    (pure acc)
 
 -- # Integers and floats
 
@@ -339,7 +339,8 @@ leUintGo : Int -> Int -> Int -> Array Int -> Int -> BResult Int
 leUintGo n shift acc input pos
   | n <= 0 = BOk acc pos
   | pos >= arrayLength input = BErr "unexpected end of input" pos
-  | otherwise = leUintGo (n - 1) (shift + 8) (acc + input[pos] * pow2 shift) input (pos + 1)
+  | otherwise =
+    leUintGo (n - 1) (shift + 8) (acc + input[pos] * pow2 shift) input (pos + 1)
 
 {- | A two's complement signed integer of `n` bytes, from 1 to 8, least
    significant byte first.

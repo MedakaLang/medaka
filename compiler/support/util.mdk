@@ -31,7 +31,7 @@ import string.{join, split, startsWith as stdStartsWith}
 export
 contains : String -> List String -> Bool
 contains _ [] = False
-contains x (y::ys) =
+contains x (y :: ys) =
   let _ = opBump ()
   x == y || contains x ys
 
@@ -40,7 +40,7 @@ contains x (y::ys) =
 export
 listLen : List a -> Int
 listLen [] = 0
-listLen (_::xs) = 1 + listLen xs
+listLen (_ :: xs) = 1 + listLen xs
 
 export
 reverseL : List a -> List a
@@ -51,14 +51,14 @@ reverseL xs = reverse xs
 export
 anyList : (a -> Bool) -> List a -> Bool
 anyList _ [] = False
-anyList p (x::xs) = p x || anyList p xs
+anyList p (x :: xs) = p x || anyList p xs
 
 -- DECLINED (Foldable dispatch + no short-circuit, see `contains` above).
 -- Kept hand-rolled, unchanged.
 export
 allList : (a -> Bool) -> List a -> Bool
 allList _ [] = True
-allList p (x::xs) = p x && allList p xs
+allList p (x :: xs) = p x && allList p xs
 
 -- first value bound to a String key in an association list.
 --
@@ -76,7 +76,7 @@ allList p (x::xs) = p x && allList p xs
 export
 lookupAssoc : String -> List (String, b) -> Option b
 lookupAssoc _ [] = None
-lookupAssoc k ((k2, v)::rest)
+lookupAssoc k ((k2, v) :: rest)
   | k == k2 = let _ = opBump () in Some v
   | otherwise = let _ = opBump () in lookupAssoc k rest
 
@@ -108,7 +108,9 @@ splitNl s =
 splitNlGo : Array Char -> Int -> Int -> Int -> List String
 splitNlGo chars n start i
   | i >= n = [stringFromChars (arraySubChars chars start n)]
-  | arrayGetUnsafe i chars == '\n' = stringFromChars (arraySubChars chars start i) :: splitNlGo chars n (i + 1) (i + 1)
+  | arrayGetUnsafe i chars == '\n' =
+    stringFromChars (arraySubChars chars start i)
+      :: splitNlGo chars n (i + 1) (i + 1)
   | otherwise = splitNlGo chars n start (i + 1)
 
 -- Split a string on a given character.  Like splitNl but parameterised on the
@@ -160,7 +162,7 @@ dedupBy key xs = dedupByGo key xs omEmpty
 
 dedupByGo : (a -> String) -> List a -> OrdMap Unit -> List a
 dedupByGo _ [] _ = []
-dedupByGo key (x::xs) seen =
+dedupByGo key (x :: xs) seen =
   let k = key x
   match omLookup k seen
     Some _ => dedupByGo key xs seen
@@ -189,7 +191,7 @@ export
 splitLast : List a -> Option (List a, a)
 splitLast [] = None
 splitLast [x] = Some ([], x)
-splitLast (x::rest) = map ((init, lst) => (x::init, lst)) (splitLast rest)
+splitLast (x :: rest) = map ((init, lst) => (x :: init, lst)) (splitLast rest)
 
 -- minimal string escaping for the structural / diagnostic dumps (matches
 -- dev/astdump.ml's esc_str and dev/diagdump.ml): backslash, quote, \n \t \r.
@@ -254,7 +256,7 @@ isNonEmptyL xs = not (isEmptyL xs)
 export
 filterList : (a -> Bool) -> List a -> List a
 filterList _ [] = []
-filterList p (x::xs)
+filterList p (x :: xs)
   | p x = x :: filterList p xs
   | otherwise = filterList p xs
 
@@ -262,7 +264,7 @@ export
 initList : List a -> List a
 initList [] = []
 initList [_] = []
-initList (x::xs) = x :: initList xs
+initList (x :: xs) = x :: initList xs
 
 export
 zipL : List a -> List b -> List (a, b)
@@ -290,11 +292,8 @@ export
 editDistance : String -> String -> Int
 editDistance a b =
   let bs = arrCharList (stringToChars b) 0
-  editLastInt (editLoop
-    (arrCharList (stringToChars a) 0)
-    bs
-    1
-    (editInitRow 0 bs))
+  editLastInt
+    (editLoop (arrCharList (stringToChars a) 0) bs 1 (editInitRow 0 bs))
 
 -- stringToChars yields an Array Char; the DP below walks lists, so materialize
 arrCharList : Array Char -> Int -> List Char
@@ -305,18 +304,18 @@ arrCharList cs i
 -- prev-row seed: [0, 1, 2, …, |bs|]
 editInitRow : Int -> List Char -> List Int
 editInitRow k [] = [k]
-editInitRow k (_::cs) = k :: editInitRow (k + 1) cs
+editInitRow k (_ :: cs) = k :: editInitRow (k + 1) cs
 
 -- fold each source char over the previous row, producing the next row
 editLoop : List Char -> List Char -> Int -> List Int -> List Int
 editLoop [] _ _ prev = prev
-editLoop (ac::acs) bs i (p0::prest) =
+editLoop (ac :: acs) bs i (p0 :: prest) =
   editLoop acs bs (i + 1) (i :: editRow ac bs i p0 prest)
-editLoop (_::_) _ _ [] = []
+editLoop (_ :: _) _ _ [] = []
 
 -- build one new row: `left` = newRow[j-1], `diag` = prev[j-1], `prevRest` = prev[j..]
 editRow : Char -> List Char -> Int -> Int -> List Int -> List Int
-editRow ac (bc::bcs) left diag (pj::pjs) =
+editRow ac (bc :: bcs) left diag (pj :: pjs) =
   let cost = if ac == bc then 0 else 1
   let v = minI (minI (left + 1) (pj + 1)) (diag + cost)
   v :: editRow ac bcs v pj pjs
@@ -325,7 +324,7 @@ editRow _ _ _ _ _ = []
 editLastInt : List Int -> Int
 editLastInt [] = 0
 editLastInt [x] = x
-editLastInt (_::xs) = editLastInt xs
+editLastInt (_ :: xs) = editLastInt xs
 
 -- prefix/suffix tests: (prefix/suffix, string) argument order.  `startsWith`
 -- delegates to stdlib `string.startsWith` (aliased `stdStartsWith` to avoid
@@ -438,13 +437,13 @@ sortUniqS xs = sortUniqSGo xs []
 
 sortUniqSGo : List String -> List String -> List String
 sortUniqSGo [] acc = acc
-sortUniqSGo (x::xs) acc = sortUniqSGo xs (sortInsertS x acc)
+sortUniqSGo (x :: xs) acc = sortUniqSGo xs (sortInsertS x acc)
 
 sortInsertS : String -> List String -> List String
 sortInsertS x [] = [x]
-sortInsertS x (y::ys) = match stringCompare x y
-  Lt => x :: y::ys
-  Eq => y::ys
+sortInsertS x (y :: ys) = match stringCompare x y
+  Lt => x :: y :: ys
+  Eq => y :: ys
   Gt => y :: sortInsertS x ys
 
 -- ── UTF-8 byte width ──────────────────────────────────────────────────────
@@ -461,7 +460,12 @@ utf8CharWidth cp
 utf8LenGo : Array Char -> Int -> Int -> Int -> Int
 utf8LenGo arr len i acc
   | i >= len = acc
-  | otherwise = utf8LenGo arr len (i + 1) (acc + utf8CharWidth (charCode (arrayGetUnsafe i arr)))
+  | otherwise =
+    utf8LenGo
+      arr
+      len
+      (i + 1)
+      (acc + utf8CharWidth (charCode (arrayGetUnsafe i arr)))
 
 export
 utf8Len : String -> Int
@@ -518,7 +522,7 @@ decDigitsNoUs cs n i
 
 decFold : List Char -> Int -> Int
 decFold [] acc = acc
-decFold (c::cs) acc = decFold cs (acc * 10 + (charCode c - 48))
+decFold (c :: cs) acc = decFold cs (acc * 10 + (charCode c - 48))
 
 {- | Parse a decimal integer string to `Int`, or `None` when its magnitude
      exceeds the positive `Int` maximum (2^62 - 1 = 4611686018427387903) — the

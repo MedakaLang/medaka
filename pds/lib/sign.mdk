@@ -69,7 +69,8 @@ signatureCompact (Signature signature) = ecdsaSignatureCompact signature
 
 digestBytesOk : Array Int -> Int -> Bool
 digestBytesOk digest i =
-  if i >= arrayLength digest then True
+  if i >= arrayLength digest then
+    True
   else
     let byte = digest[i]
     if byte < 0 || byte > 255 then False else digestBytesOk digest (i + 1)
@@ -80,15 +81,16 @@ digestBytesOk digest i =
 export
 signDigest : SecretKey -> Array Int -> Result String Signature
 signDigest (SecretKey scalar) digest =
-  if arrayLength digest /= 32 then Err "sign.signDigest: expected 32 digest bytes"
+  if arrayLength digest /= 32 then
+    Err "sign.signDigest: expected 32 digest bytes"
+  else if not (digestBytesOk digest 0) then
+    Err "sign.signDigest: every digest element must be a byte in 0..255"
   else
-    if not (digestBytesOk digest 0) then Err "sign.signDigest: every digest element must be a byte in 0..255"
+    let (validBit, signature) = ecdsaSignDigest scalar digest
+    if validBit == 1 then
+      Ok (Signature signature)
     else
-      let (validBit, signature) = ecdsaSignDigest scalar digest
-      if validBit == 1 then
-        Ok (Signature signature)
-      else
-        Err "RFC 6979 retry bound exhausted"
+      Err "RFC 6979 retry bound exhausted"
 
 -- | Verify one canonical signature against a public key and 32-byte digest.
 --   Invalid digest shape/domain returns `False`.

@@ -246,10 +246,7 @@ lengthSymbolIdx : Int -> Int -> Int
 lengthSymbolIdx len idx
   | idx <= 0 = 0
   | otherwise =
-    if len >= tableAt lengthBase idx then
-      idx
-    else
-      lengthSymbolIdx len (idx - 1)
+    if len >= tableAt lengthBase idx then idx else lengthSymbolIdx len (idx - 1)
 
 -- `idx` IS the distance symbol (`distBase`/`distExtra` are indexed by the
 -- bare symbol — see `huffman.mdk`'s own comment on this). Terminates at 0
@@ -258,10 +255,7 @@ distSymbolIdx : Int -> Int -> Int
 distSymbolIdx dist idx
   | idx <= 0 = 0
   | otherwise =
-    if dist >= tableAt distBase idx then
-      idx
-    else
-      distSymbolIdx dist (idx - 1)
+    if dist >= tableAt distBase idx then idx else distSymbolIdx dist (idx - 1)
 
 -- ---------------------------------------------------------------------------
 -- Emitting literals, matches, and end-of-block onto a `BitWriter`.
@@ -313,14 +307,13 @@ encodeMatch len dist w =
 -- a match search at any position `p >= nextInsert.value` only ever sees
 -- candidates strictly before `p` (never `p` itself, never a duplicate/cyclic
 -- chain entry).
-data Matcher =
-  | Matcher {
-      input : Array Int,
-      n : Int,
-      head : Array Int,
-      prevArr : Array Int,
-      nextInsert : Ref Int,
-    }
+data Matcher = Matcher {
+  input : Array Int,
+  n : Int,
+  head : Array Int,
+  prevArr : Array Int,
+  nextInsert : Ref Int,
+}
 
 newMatcher : Array Int -> Matcher
 newMatcher input =
@@ -378,9 +371,10 @@ insertOne m p =
 insertUpTo : Matcher -> Int -> Unit
 insertUpTo m target =
   let cur = m.nextInsert.value
-  if cur >= target then ()
+  if cur >= target then
+    ()
   else
-    let _ = if hasHash cur m.n then insertOne m cur else ()
+    let _ = if hasHash cur m.n then insertOne m cur
     let _ = m.nextInsert := cur + 1
     insertUpTo m target
 
@@ -397,14 +391,18 @@ findMatchChain m pos candidate chainLeft bestLen bestDist
   | otherwise =
     let limit = minInt maxMatch (m.n - pos)
     let len = matchLenAt m.input pos candidate limit
-    let (bestLen2, bestDist2) = if len > bestLen then
-      (len, pos - candidate)
-    else
-      (bestLen, bestDist)
+    let (bestLen2, bestDist2) =
+      if len > bestLen then (len, pos - candidate) else (bestLen, bestDist)
     if bestLen2 >= maxMatch then
       (bestLen2, bestDist2)
     else
-      findMatchChain m pos (byteAt m.prevArr candidate) (chainLeft - 1) bestLen2 bestDist2
+      findMatchChain
+        m
+        pos
+        (byteAt m.prevArr candidate)
+        (chainLeft - 1)
+        bestLen2
+        bestDist2
 
 matchLenAt : Array Int -> Int -> Int -> Int -> Int
 matchLenAt input pos candidate limit = matchLenGo input pos candidate limit 0
@@ -472,8 +470,10 @@ deflateTryLazy m pos len1 dist1 w =
     if len2 > len1 then
       let _ = encodeLiteral (byteAt m.input pos) w
       deflateScan m (pos + 1) w
-    else deflateEmitMatch m pos len1 dist1 w
-  else deflateEmitMatch m pos len1 dist1 w
+    else
+      deflateEmitMatch m pos len1 dist1 w
+  else
+    deflateEmitMatch m pos len1 dist1 w
 
 -- | The scan loop itself: at each position, look for a match (using the
 --   chain state from all STRICTLY EARLIER positions), insert the current
@@ -491,7 +491,8 @@ deflateScan m pos w
     if len1 < minMatch then
       let _ = encodeLiteral (byteAt m.input pos) w
       deflateScan m (pos + 1) w
-    else deflateTryLazy m pos len1 dist1 w
+    else
+      deflateTryLazy m pos len1 dist1 w
 
 -- ---------------------------------------------------------------------------
 -- Block encoders
@@ -566,17 +567,19 @@ deflateStored : Array Int -> Array Int
 deflateStored input =
   let n = arrayLength input
   let w = newBitWriter ()
-  let _ = if n == 0 then
-    emitStoredBlock True 0 0 input w
-  else
-    emitStoredChunks input n 0 w
+  let _ =
+    if n == 0 then
+      emitStoredBlock True 0 0 input w
+    else
+      emitStoredChunks input n 0 w
   finishBitWriter w
 
 {- | Raw DEFLATE compression (no gzip/zlib framing): the fixed-Huffman
    encoding, or the stored-block fallback if that would be smaller — see the
    module header's "stored-block fallback" section for the exact bound this
    guarantees. -}
-export deflate : Array Int -> Array Int
+export
+deflate : Array Int -> Array Int
 deflate input =
   let fixedBytes = deflateFixedBytes input
   let storedBytes = deflateStored input
@@ -596,7 +599,8 @@ deflate input =
    via `lib.crc32`, wired through — this is the "wire it to a real CRC-32"
    half of Phase 4's container work; the parse/emit machinery itself already
    existed from Phase 1). -}
-export gzipCompress : Array Int -> Array Int
+export
+gzipCompress : Array Int -> Array Int
 gzipCompress input =
   let hdr = GzipHeader {
     mtime = 0,
@@ -626,11 +630,14 @@ firstBlockType payload =
       Err e => panic "firstBlockType: \{e}"
       Ok btype => btype
 
-test "deflateFixedBytes [|65|] matches the hand-derived RFC 1951 byte sequence" = expectEqual [|115, 4, 0|] (deflateFixedBytes (arrayFromList [65]))
+test "deflateFixedBytes [|65|] matches the hand-derived RFC 1951 byte sequence" =
+  expectEqual [|115, 4, 0|] (deflateFixedBytes (arrayFromList [65]))
 
-test "deflateFixedBytes [||] matches the hand-derived RFC 1951 byte sequence (EOB only)" = expectEqual [|3, 0|] (deflateFixedBytes [||])
+test "deflateFixedBytes [||] matches the hand-derived RFC 1951 byte sequence (EOB only)" =
+  expectEqual [|3, 0|] (deflateFixedBytes [||])
 
-test "deflateStored [||] is one 5-byte empty stored block (1 header byte + LEN + NLEN)" = expectEqual 5 (arrayLength (deflateStored [||]))
+test "deflateStored [||] is one 5-byte empty stored block (1 header byte + LEN + NLEN)" =
+  expectEqual 5 (arrayLength (deflateStored [||]))
 
 test "deflate [||] picks fixed Huffman (2 bytes) over stored (5 bytes)" =
   expectEqual [|3, 0|] (deflate [||])
@@ -638,9 +645,8 @@ test "deflate [||] picks fixed Huffman (2 bytes) over stored (5 bytes)" =
 test "deflate of an empty input has BTYPE=1 (fixed Huffman)" =
   expectEqual 1 (firstBlockType (deflate [||]))
 
-test "inflate (deflate [|65|]) recovers the original single byte" = expectEqual
-  (Ok (arrayFromList [65]))
-  (inflate (deflate (arrayFromList [65])))
+test "inflate (deflate [|65|]) recovers the original single byte" =
+  expectEqual (Ok (arrayFromList [65])) (inflate (deflate (arrayFromList [65])))
 
 -- A diverse, non-repeating 256-byte input (every byte value once): fixed
 -- Huffman's average code width is > 8 bits/byte here (144 symbols at 8 bits,
@@ -663,9 +669,11 @@ test "inflate (deflate (all 256 distinct byte values)) round-trips exactly" =
 repeatedInput : Array Int
 repeatedInput = make 1000 65
 
-test "deflate compresses 1000 repeated bytes to well under 1000 output bytes (LZ77 actually ran)" = expectTrue (arrayLength (deflate repeatedInput) < 100)
+test "deflate compresses 1000 repeated bytes to well under 1000 output bytes (LZ77 actually ran)" =
+  expectTrue (arrayLength (deflate repeatedInput) < 100)
 
-test "inflate (deflate (1000 repeated bytes)) recovers the original exactly (distance=1 overlap)" = expectEqual (Ok repeatedInput) (inflate (deflate repeatedInput))
+test "inflate (deflate (1000 repeated bytes)) recovers the original exactly (distance=1 overlap)" =
+  expectEqual (Ok repeatedInput) (inflate (deflate repeatedInput))
 
 -- A pseudo-random 5000-byte input forces the (single-chunk) stored
 -- fallback: `5 * ceil(5000 / 65535) + 5000` = `5 * 1 + 5000` = `5005`,
@@ -708,12 +716,14 @@ genPseudoRandom state count acc
 pseudoRandomBytes : Array Int
 pseudoRandomBytes = arrayFromList (genPseudoRandom 12345 5000 [])
 
-test "deflate of 5000 pseudo-random-looking bytes is exactly 5005 bytes (1 stored chunk, hand-derived)" = expectEqual 5005 (arrayLength (deflate pseudoRandomBytes))
+test "deflate of 5000 pseudo-random-looking bytes is exactly 5005 bytes (1 stored chunk, hand-derived)" =
+  expectEqual 5005 (arrayLength (deflate pseudoRandomBytes))
 
 test "deflate of 5000 pseudo-random-looking bytes has BTYPE=0 (stored)" =
   expectEqual 0 (firstBlockType (deflate pseudoRandomBytes))
 
-test "inflate (deflate (5000 pseudo-random-looking bytes)) round-trips exactly (stored fallback)" = expectEqual (Ok pseudoRandomBytes) (inflate (deflate pseudoRandomBytes))
+test "inflate (deflate (5000 pseudo-random-looking bytes)) round-trips exactly (stored fallback)" =
+  expectEqual (Ok pseudoRandomBytes) (inflate (deflate pseudoRandomBytes))
 
 test "gzipCompress \"hello\" round-trips through our OWN gunzipMember (crc/isize wiring; gunzip is the real proof)" =
   let input = arrayFromList [104, 101, 108, 108, 111]
@@ -763,7 +773,8 @@ pinLazyDeferInput : Array Int
 pinLazyDeferInput =
   concat [|arrayFromList [97, 98, 99, 90, 97, 98, 99], range 100 112|]
 
-test "inflate (deflate pinLazyDeferInput) recovers the input exactly — deflateTryLazy self-match regression pin" = expectEqual (Ok pinLazyDeferInput) (inflate (deflate pinLazyDeferInput))
+test "inflate (deflate pinLazyDeferInput) recovers the input exactly — deflateTryLazy self-match regression pin" =
+  expectEqual (Ok pinLazyDeferInput) (inflate (deflate pinLazyDeferInput))
 
 -- All 19 input bytes are < 144, so an all-literal fixed-Huffman encoding
 -- costs exactly 8 bits/literal: 3 (header) + 19*8 (literals) + 7 (EOB) =
@@ -775,7 +786,8 @@ test "inflate (deflate pinLazyDeferInput) recovers the input exactly — deflate
 -- (19) from "match wrongly deferred to an all/mostly-literal encode" (21,
 -- or worse under the bug's corrupted continuation) without depending on
 -- exact bit-packing beyond that coarse, safely-rounded bound.
-test "deflate pinLazyDeferInput actually takes the pos=4 match (compressed size proves it, not just round-trip luck)" = expectTrue (arrayLength (deflate pinLazyDeferInput) < 20)
+test "deflate pinLazyDeferInput actually takes the pos=4 match (compressed size proves it, not just round-trip luck)" =
+  expectTrue (arrayLength (deflate pinLazyDeferInput) < 20)
 
 -- ---------------------------------------------------------------------------
 -- Properties
@@ -878,7 +890,7 @@ structureByte prevByte raw
 
 structuredBytesGo : List Int -> Int -> List Int
 structuredBytesGo [] prev = []
-structuredBytesGo (r::rest) prev =
+structuredBytesGo (r :: rest) prev =
   let b = structureByte prev r
   b :: structuredBytesGo rest b
 
@@ -894,14 +906,14 @@ structuredBytesFrom raws = structuredBytesGo raws 0
 -- generator above.
 phraseTokens : List (List Int)
 phraseTokens = [
-  [116, 104, 101, 32], -- "the "
-  [97, 110, 100, 32], -- "and "
-  [111, 102, 32], -- "of "
-  [97, 32], -- "a "
-  [116, 111, 32], -- "to "
-  [105, 110, 32], -- "in "
-  [105, 115, 32], -- "is "
-  [98, 121, 32], -- "by "
+  [116, 104, 101, 32],  -- "the "
+  [97, 110, 100, 32],  -- "and "
+  [111, 102, 32],  -- "of "
+  [97, 32],  -- "a "
+  [116, 111, 32],  -- "to "
+  [105, 110, 32],  -- "in "
+  [105, 115, 32],  -- "is "
+  [98, 121, 32],  -- "by "
 ]
 
 phraseCount : Int
@@ -909,7 +921,7 @@ phraseCount = 8
 
 nthToken : Int -> List (List Int) -> List Int
 nthToken i [] = []
-nthToken i (t::rest) = if i <= 0 then t else nthToken (i - 1) rest
+nthToken i (t :: rest) = if i <= 0 then t else nthToken (i - 1) rest
 
 -- Repeatedly halve `raw`'s absolute value, counting how many times the low
 -- bit is 1 before it's 0 (or the bound is hit): `P(index = k) ~ 1/2^(k+1)`
@@ -925,8 +937,8 @@ zipfIndex raw bound = zipfIndexGo (abs raw) bound 0
 
 phraseTextFrom : List Int -> List Int
 phraseTextFrom [] = []
-phraseTextFrom (r::rest) = nthToken (zipfIndex r phraseCount) phraseTokens
-  ++ phraseTextFrom rest
+phraseTextFrom (r :: rest) =
+  nthToken (zipfIndex r phraseCount) phraseTokens ++ phraseTextFrom rest
 
 -- Caught nothing new as of this writing (see the report accompanying this
 -- change) — but unlike the generic `arbitrary` property above, this one

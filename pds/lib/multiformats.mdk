@@ -45,7 +45,8 @@ byteAt i arr = match get i arr
 -- ── unsigned-varint (LEB128) ─────────────────────────────────────────────
 
 -- | Practical maximum byte length of an unsigned-varint (63 usable bits).
-export uvarintMaxBytes : Int
+export
+uvarintMaxBytes : Int
 uvarintMaxBytes = 9
 
 uvarintEncodeGo : Int -> List Int
@@ -70,7 +71,8 @@ uvarintEncodeGo n =
    [|172, 2|]
    > uvarintEncode 16384
    [|128, 128, 1|] -}
-export uvarintEncode : Int -> Array Int
+export
+uvarintEncode : Int -> Array Int
 uvarintEncode n =
   if n < 0 then
     -- unsigned-varint encodes non-negative values only, and
@@ -84,7 +86,8 @@ uvarintEncode n =
     -- ⚠️ `uvarintDecode` must never REACH this panic: it is `Result`-typed,
     -- and turning a correct `Err` into a process abort would break its own
     -- type-level promise. That is what its explicit `value < 0` arm is for.
-    panic "uvarint: negative value \{intToString n} (unsigned-varint encodes non-negative values only)"
+    panic
+      "uvarint: negative value \{intToString n} (unsigned-varint encodes non-negative values only)"
   else
     arrayFromList (uvarintEncodeGo n)
 
@@ -92,18 +95,24 @@ uvarintEncode n =
 -- `shift` bits already placed. `Err` on truncation (ran out of input while
 -- the continuation bit was still set) or over-length (more than
 -- `uvarintMaxBytes` bytes).
-uvarintDecodeGo : Array Int -> Int -> Int -> Int -> Int -> Result String (Int, Int)
+uvarintDecodeGo : Array Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Result String (Int, Int)
 uvarintDecodeGo bytes idx n shift acc =
-  if idx >= uvarintMaxBytes then Err "uvarint: over-long (more than 9 bytes)"
+  if idx >= uvarintMaxBytes then
+    Err "uvarint: over-long (more than 9 bytes)"
+  else if idx >= n then
+    Err "uvarint: truncated (input ended with the continuation bit still set)"
   else
-    if idx >= n then Err "uvarint: truncated (input ended with the continuation bit still set)"
+    let b = byteAt idx bytes
+    let acc2 = acc + shiftLeft (bitAnd b 0x7f) shift
+    if bitAnd b 0x80 == 0 then
+      Ok (acc2, idx + 1)
     else
-      let b = byteAt idx bytes
-      let acc2 = acc + shiftLeft (bitAnd b 0x7f) shift
-      if bitAnd b 0x80 == 0 then
-        Ok (acc2, idx + 1)
-      else
-        uvarintDecodeGo bytes (idx + 1) n (shift + 7) acc2
+      uvarintDecodeGo bytes (idx + 1) n (shift + 7) acc2
 
 -- Byte-for-byte comparison of `bytes[0 .. len)` against `expected`, used to
 -- confirm a decoded value's canonical (minimal) re-encoding matches what
@@ -128,7 +137,8 @@ prefixEquals a b i len =
    Ok (300, 2)
    > uvarintDecode (arrayFromList [0x81, 0x00])
    Err "uvarint: non-minimal encoding" -}
-export uvarintDecode : Array Int -> Result String (Int, Int)
+export
+uvarintDecode : Array Int -> Result String (Int, Int)
 uvarintDecode bytes = match uvarintDecodeGo bytes 0 (arrayLength bytes) 0 0
   Err e => Err e
   Ok (value, consumed) =>
@@ -154,7 +164,8 @@ uvarintDecode bytes = match uvarintDecodeGo bytes 0 (arrayLength bytes) 0 0
       -- requirement (the published `{0x81, 0x00}` case), which the range
       -- check does not touch.
       let reencoded = uvarintEncode value
-      if arrayLength reencoded /= consumed || not (prefixEquals reencoded bytes 0 consumed) then
+      if arrayLength reencoded /= consumed
+        || not (prefixEquals reencoded bytes 0 consumed) then
         Err "uvarint: non-minimal encoding"
       else
         Ok (value, consumed)
@@ -163,7 +174,8 @@ uvarintDecode bytes = match uvarintDecodeGo bytes 0 (arrayLength bytes) 0 0
 
    > uvarintDecodeAll (arrayFromList [172, 2])
    Ok 300 -}
-export uvarintDecodeAll : Array Int -> Result String Int
+export
+uvarintDecodeAll : Array Int -> Result String Int
 uvarintDecodeAll bytes = match uvarintDecode bytes
   Err e => Err e
   Ok (value, consumed) =>
@@ -175,23 +187,28 @@ uvarintDecodeAll bytes = match uvarintDecode bytes
 -- ── multicodec constants (multicodec_table.csv, pinned commit above) ─────
 
 -- | `sha2-256`, tag `multihash`, `permanent`.
-export multicodecSha2_256 : Int
+export
+multicodecSha2_256 : Int
 multicodecSha2_256 = 0x12
 
 -- | `raw`, tag `ipld`, `permanent`.
-export multicodecRaw : Int
+export
+multicodecRaw : Int
 multicodecRaw = 0x55
 
 -- | `dag-cbor`, tag `ipld`, `permanent`.
-export multicodecDagCbor : Int
+export
+multicodecDagCbor : Int
 multicodecDagCbor = 0x71
 
 -- | `secp256k1-pub`, tag `key`, table status `draft`.
-export multicodecSecp256k1Pub : Int
+export
+multicodecSecp256k1Pub : Int
 multicodecSecp256k1Pub = 0xe7
 
 -- | `p256-pub`, tag `key`, table status `draft`.
-export multicodecP256Pub : Int
+export
+multicodecP256Pub : Int
 multicodecP256Pub = 0x1200
 
 {- | A multicodec code's unsigned-varint prefix bytes.
@@ -200,7 +217,8 @@ multicodecP256Pub = 0x1200
    [|231, 1|]
    > multicodecPrefix multicodecP256Pub
    [|128, 36|] -}
-export multicodecPrefix : Int -> Array Int
+export
+multicodecPrefix : Int -> Array Int
 multicodecPrefix code = uvarintEncode code
 
 -- ── multibase base58btc (`z` prefix, status final) ────────────────────────
@@ -209,7 +227,8 @@ multicodecPrefix code = uvarintEncode code
 
    > multibaseBase58btc [||]
    "z" -}
-export multibaseBase58btc : Array Int -> String
+export
+multibaseBase58btc : Array Int -> String
 multibaseBase58btc bytes = "z" ++ base58btcEncode bytes
 
 {- | The exact inverse of `multibaseBase58btc`. `Err` when the leading `z`
@@ -217,7 +236,8 @@ multibaseBase58btc bytes = "z" ++ base58btcEncode bytes
 
    > multibaseBase58btcDecode "z"
    Ok [||] -}
-export multibaseBase58btcDecode : String -> Result String (Array Int)
+export
+multibaseBase58btcDecode : String -> Result String (Array Int)
 multibaseBase58btcDecode s = match stripPrefix "z" s
   Some rest => base58btcDecode rest
   None =>

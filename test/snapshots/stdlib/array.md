@@ -1,5 +1,5 @@
 # META
-source_lines=725
+source_lines=752
 stages=DESUGAR,MARK
 # SOURCE
 {- | Operations on `Array a`.
@@ -137,10 +137,7 @@ copy arr = arrayCopy arr
 export
 get : Int -> Array a -> Option a
 get i arr =
-  if i < 0 || i >= arrayLength arr then
-    None
-  else
-    Some (arrayGetUnsafe i arr)
+  if i < 0 || i >= arrayLength arr then None else Some (arrayGetUnsafe i arr)
 
 {- | The first element, or `None` when the array is empty.
 
@@ -161,10 +158,7 @@ last arr = get (arrayLength arr - 1) arr
 -- Tail-recursive list build, used by the Foldable Array impl's `toList`.
 toListGo : Array a -> Int -> List a -> List a
 toListGo arr i acc =
-  if i < 0 then
-    acc
-  else
-    toListGo arr (i - 1) (arrayGetUnsafe i arr :: acc)
+  if i < 0 then acc else toListGo arr (i - 1) (arrayGetUnsafe i arr :: acc)
 
 -- # Transformation
 
@@ -228,18 +222,21 @@ concat : Array (Array a) -> Array a
 concat arrs =
   let outer = arrayLength arrs
   let total = concatTotal arrs 0 0 outer
-  if total <= 0 then [||]
+  if total <= 0 then
+    [||]
   else
     let out = arrayMake total (concatLookup arrs 0 0 outer)
     concatBlitAll arrs out 0 0 outer
 
 concatBlitAll : Array (Array a) -> Array a -> Int -> Int -> Int -> Array a
 concatBlitAll arrs out k dstOff outer =
-  if k >= outer then out
+  if k >= outer then
+    out
   else
     let inner = arrayGetUnsafe k arrs
     let len = arrayLength inner
-    if len <= 0 then concatBlitAll arrs out (k + 1) dstOff outer
+    if len <= 0 then
+      concatBlitAll arrs out (k + 1) dstOff outer
     else
       let _ = arrayBlit inner 0 out dstOff len
       concatBlitAll arrs out (k + 1) (dstOff + len) outer
@@ -315,21 +312,29 @@ export impl Filterable Array where
     let n = arrayLength arr
     arrayFromList (revList (filterMapGo f arr 0 n []) [])
 
-filterMapGo : (a -> <e> Option b) -> Array a -> Int -> Int -> List b -> <e> List b
+filterMapGo : (a -> <e> Option b) ->
+  Array a ->
+  Int ->
+  Int ->
+  List b ->
+  <e> List b
 filterMapGo f arr i n acc =
-  if i >= n then
-    acc
-  else
-    filterMapStep f arr i n acc (f (arrayGetUnsafe i arr))
+  if i >= n then acc else filterMapStep f arr i n acc (f (arrayGetUnsafe i arr))
 
-filterMapStep : (a -> <e> Option b) -> Array a -> Int -> Int -> List b -> Option b -> <e> List b
-filterMapStep f arr i n acc (Some y) = filterMapGo f arr (i + 1) n (y::acc)
+filterMapStep : (a -> <e> Option b) ->
+  Array a ->
+  Int ->
+  Int ->
+  List b ->
+  Option b ->
+  <e> List b
+filterMapStep f arr i n acc (Some y) = filterMapGo f arr (i + 1) n (y :: acc)
 filterMapStep f arr i n acc None = filterMapGo f arr (i + 1) n acc
 
 -- Local tail-recursive list reverse (avoids depending on stdlib/list.mdk).
 revList : List a -> List a -> List a
 revList [] acc = acc
-revList (x::xs) acc = revList xs (x::acc)
+revList (x :: xs) acc = revList xs (x :: acc)
 
 -- # Mutation
 
@@ -428,7 +433,8 @@ export
 sortBy : (a -> a -> <e> Ordering) -> Array a -> <e> Array a
 sortBy cmp arr =
   let n = arrayLength arr
-  if n <= 1 then arrayCopy arr
+  if n <= 1 then
+    arrayCopy arr
   else
     let mid = n / 2
     let left = arrayMakeWith mid (i => arrayGetUnsafe i arr)
@@ -458,7 +464,10 @@ sort arr = sortBy compare arr
 export
 sortOn : Ord b => (a -> <e> b) -> Array a -> <e> Array a
 sortOn key arr =
-  let decorated = arrayMakeWith (arrayLength arr) (i => (key (arrayGetUnsafe i arr), arrayGetUnsafe i arr))
+  let decorated = arrayMakeWith (arrayLength arr) (i => (
+    key (arrayGetUnsafe i arr),
+    arrayGetUnsafe i arr,
+  ))
   let sorted = sortBy ((k1, _) (k2, _) => compare k1 k2) decorated
   arrayMakeWith (arrayLength sorted) (i => snd (arrayGetUnsafe i sorted))
 
@@ -468,18 +477,19 @@ sortOn key arr =
 -- No mutation — collects into a list then calls `arrayFromList`.
 merge : (a -> a -> <e> Ordering) -> Array a -> Array a -> <e> Array a
 merge cmp left right =
-  arrayFromList (mergeGo
-    cmp
-    left
-    right
-    0
-    0
-    (arrayLength left)
-    (arrayLength right)
-    [])
+  arrayFromList
+    (mergeGo cmp left right 0 0 (arrayLength left) (arrayLength right) [])
 
 -- Accumulates in reverse; flips at the base case via `revList`.
-mergeGo : (a -> a -> <e> Ordering) -> Array a -> Array a -> Int -> Int -> Int -> Int -> List a -> <e> List a
+mergeGo : (a -> a -> <e> Ordering) ->
+  Array a ->
+  Array a ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  List a ->
+  <e> List a
 mergeGo cmp left right il ir nl nr acc
   | il >= nl && ir >= nr = revList acc []
   | il >= nl =
@@ -489,8 +499,18 @@ mergeGo cmp left right il ir nl nr acc
   | otherwise = mergeStep cmp left right il ir nl nr acc
 
 -- Dispatches on comparator result; separated out to avoid match-inside-else.
-mergeStep : (a -> a -> <e> Ordering) -> Array a -> Array a -> Int -> Int -> Int -> Int -> List a -> <e> List a
-mergeStep cmp left right il ir nl nr acc = match cmp (arrayGetUnsafe il left) (arrayGetUnsafe ir right)
+mergeStep : (a -> a -> <e> Ordering) ->
+  Array a ->
+  Array a ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  List a ->
+  <e> List a
+mergeStep cmp left right il ir nl nr acc = match (cmp
+  (arrayGetUnsafe il left)
+  (arrayGetUnsafe ir right))
   Gt =>
     mergeGo cmp left right il (ir + 1) nl nr (arrayGetUnsafe ir right :: acc)
   _ => mergeGo cmp left right (il + 1) ir nl nr (arrayGetUnsafe il left :: acc)
@@ -504,10 +524,7 @@ mergeStep cmp left right il ir nl nr acc = match cmp (arrayGetUnsafe il left) (a
 
 foldGo : (b -> a -> <e> b) -> Array a -> Int -> Int -> b -> <e> b
 foldGo f arr i n acc =
-  if i >= n then
-    acc
-  else
-    foldGo f arr (i + 1) n (f acc (arrayGetUnsafe i arr))
+  if i >= n then acc else foldGo f arr (i + 1) n (f acc (arrayGetUnsafe i arr))
 
 foldRightGo : (a -> b -> <e> b) -> Array a -> Int -> b -> <e> b
 foldRightGo f arr i acc =
@@ -593,7 +610,12 @@ foldWithIndex f z arr = foldWithIndexGo f arr 0 (arrayLength arr) z
 -- > foldWithIndex (acc i x => (i, x) :: acc) [] (fromList ([] : List Int))
 -- []
 
-foldWithIndexGo : (b -> Int -> a -> <e> b) -> Array a -> Int -> Int -> b -> <e> b
+foldWithIndexGo : (b -> Int -> a -> <e> b) ->
+  Array a ->
+  Int ->
+  Int ->
+  b ->
+  <e> b
 foldWithIndexGo f arr i n acc =
   if i >= n then
     acc
@@ -610,7 +632,8 @@ forEachWithIndex f arr = forEachWithIndexGo f arr 0 (arrayLength arr)
 
 forEachWithIndexGo : (Int -> a -> <e> Unit) -> Array a -> Int -> Int -> <e> Unit
 forEachWithIndexGo f arr i n =
-  if i >= n then ()
+  if i >= n then
+    ()
   else
     let _ = f i (arrayGetUnsafe i arr)
     forEachWithIndexGo f arr (i + 1) n
@@ -640,9 +663,11 @@ export impl Foldable Array where
   length arr = arrayLength arr
 
 export impl Semigroup (Array a) where
-  append a b = arrayMakeWith
-    (arrayLength a + arrayLength b)
-    (i => if i < arrayLength a then arrayGetUnsafe i a else arrayGetUnsafe (i - arrayLength a) b)
+  append a b = arrayMakeWith (arrayLength a + arrayLength b) (i =>
+    if i < arrayLength a then
+      arrayGetUnsafe i a
+    else
+      arrayGetUnsafe (i - arrayLength a) b)
 
 {- | `empty` is the empty array.
 
@@ -698,15 +723,17 @@ prop "makeWith element at index 0" (n : Int) =
 
 prop "foldWithIndex matches fold over zip with range" (xs : List Int) =
   let arr = fromList xs
-  let viaIndex = foldWithIndex (acc i x => (i, x)::acc) [] arr
-  let viaZip = fold (acc pair => pair::acc) [] (zip (range 0 (length arr)) arr)
+  let viaIndex = foldWithIndex (acc i x => (i, x) :: acc) [] arr
+  let viaZip =
+    fold (acc pair => pair :: acc) [] (zip (range 0 (length arr)) arr)
   eq viaIndex viaZip
 
 prop "forEachWithIndex visits every index once, in order, matching zip with range" (xs : List Int) =
   let arr = fromList xs
   let seen = Ref []
   let _ = forEachWithIndex (i x => seen := (i, x) :: !seen) arr
-  let viaZip = fold (acc pair => pair::acc) [] (zip (range 0 (length arr)) arr)
+  let viaZip =
+    fold (acc pair => pair :: acc) [] (zip (range 0 (length arr)) arr)
   eq !seen viaZip
 
 -- LAW: `mapWithIndex` is `map` that also sees the index.  Three clauses pin

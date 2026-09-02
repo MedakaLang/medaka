@@ -1,5 +1,5 @@
 # META
-source_lines=1096
+source_lines=1273
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/build_cmd.mdk — `medaka build`, self-hosted
@@ -116,9 +116,13 @@ defaultMedakaEmitter = joinPath exeDir "medaka_emitter"
 export
 readPreludeFile : String -> <IO> Result String String
 readPreludeFile path = match readFile path
-  Err e => Err "error: cannot read the stdlib prelude at \"\{path}\" (\{e})\n  set MEDAKA_ROOT to your medaka repo/install root, run from the project root, or place stdlib/ next to the medaka binary"
+  Err e =>
+    Err
+      "error: cannot read the stdlib prelude at \"\{path}\" (\{e})\n  set MEDAKA_ROOT to your medaka repo/install root, run from the project root, or place stdlib/ next to the medaka binary"
   Ok src => match parseResult src
-    Err pe => Err "\{ppDiagCliSrc src path (parseErrDiag path pe)}\n  (while loading the implicit prelude)"
+    Err pe =>
+      Err
+        "\{ppDiagCliSrc src path (parseErrDiag path pe)}\n  (while loading the implicit prelude)"
     Ok decls =>
       let _ = notePreludeParse src decls
       Ok src
@@ -170,7 +174,7 @@ makeTempDir _ = match runCommand "mktemp" ["-d", "/tmp/medaka_build_XXXXXX"]
 -- driver only ever writes flat files there, so removeFile suffices.
 removeEntries : String -> List String -> <IO> Unit
 removeEntries _ [] = ()
-removeEntries dir (n::rest) =
+removeEntries dir (n :: rest) =
   let _ = removeFile (joinPath dir n)
   removeEntries dir rest
 
@@ -229,7 +233,7 @@ sweepStaleTempDirs _ =
 
 sweepEachStale : List String -> <IO> Unit
 sweepEachStale [] = ()
-sweepEachStale (d::rest) =
+sweepEachStale (d :: rest) =
   let _ = cleanupTempDir d
   sweepEachStale rest
 
@@ -344,10 +348,7 @@ keepIrNote path contents = match writeFile path contents
 -- along the way (progress/diagnostic chatter is expected to be low-volume).
 emitStderrNote : String -> String
 emitStderrNote emitErr =
-  if stringLength emitErr == 0 then
-    ""
-  else
-    "\n" ++ emitErr
+  if stringLength emitErr == 0 then "" else "\n" ++ emitErr
 
 -- ---- the build pipeline ----
 -- root  = repo root (assets live under it)
@@ -359,7 +360,14 @@ emitStderrNote emitErr =
 -- keepIrCli = True iff `--keep-ir` was passed on the command line (OR'd with
 --             MEDAKA_KEEP_IR inside effectiveKeepIr)
 export
-runBuild : String -> String -> String -> BuildTarget -> String -> String -> Bool -> <IO> BuildResult
+runBuild : String ->
+  String ->
+  String ->
+  BuildTarget ->
+  String ->
+  String ->
+  Bool ->
+  <IO> BuildResult
 runBuild root medaka cc TNative inputAbs outPath keepIrCli =
   let _ = sweepStaleTempDirs ()
   runBuildNative root medaka cc inputAbs outPath keepIrCli
@@ -372,7 +380,13 @@ runBuild root medaka cc TWasm inputAbs outPath keepIrCli =
 -- build inside it, then tear it down whatever the outcome.  `res` is bound (and
 -- so fully forced — Medaka is strict) BEFORE cleanupTempDir runs, so the .ll is
 -- still on disk while clang reads it.
-runBuildNative : String -> String -> String -> String -> String -> Bool -> <IO> BuildResult
+runBuildNative : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  Bool ->
+  <IO> BuildResult
 runBuildNative root medaka cc inputAbs outPath keepIrCli = match makeTempDir ()
   Err e =>
     BuildErr "error: could not create a scratch directory for the build: \{e}"
@@ -384,7 +398,14 @@ runBuildNative root medaka cc inputAbs outPath keepIrCli = match makeTempDir ()
 -- Thin compatibility wrapper: every existing caller wants the plain P0-13 root
 -- set with nothing extra appended. Delegates to runBuildNativeRoots with
 -- extraRoots = [] — byte-identical behavior to the pre-Stage-0 function.
-runBuildNativeIn : String -> String -> String -> String -> String -> String -> Bool -> <IO> BuildResult
+runBuildNativeIn : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  Bool ->
+  <IO> BuildResult
 runBuildNativeIn root medaka cc inputAbs outPath tmpDir keepIrCli =
   runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli []
 
@@ -395,7 +416,15 @@ runBuildNativeIn root medaka cc inputAbs outPath tmpDir keepIrCli =
 -- native test-execution engine builds a synthesized doctest entry there and
 -- must still see the real project's import roots.
 export
-runBuildNativeRoots : String -> String -> String -> String -> String -> String -> Bool -> List String -> <IO> BuildResult
+runBuildNativeRoots : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  Bool ->
+  List String ->
+  <IO> BuildResult
 runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots =
   let emitter = joinPath root "compiler/entries/llvm_emit_modules_main.mdk"
   let runtimeP = joinPath root "stdlib/runtime.mdk"
@@ -416,22 +445,22 @@ runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots 
   -- basename-unique in a GLOBAL directory — concurrent builds writing the same
   -- output basename (very common: `-o <tmpdir>/out`) overwrote each other's IR.
   let llPath = joinPath tmpDir "program.ll"
-  let emitArgsBase = [runtimeP, preludeP, inputAbs] ++ inputRoots ++ [compilerDir, stdlibDir]
+  let emitArgsBase =
+    [runtimeP, preludeP, inputAbs] ++ inputRoots ++ [compilerDir, stdlibDir]
   let emitter2 = envOr "MEDAKA_EMITTER" defaultMedakaEmitter
   let useNative = emitter2 /= ""
   let emitProg0 = if useNative then emitter2 else medaka
-  let emitArgs0 = if useNative then
-    emitArgsBase
-  else
-    "run" :: emitter::emitArgsBase
+  let emitArgs0 =
+    if useNative then emitArgsBase else "run" :: emitter :: emitArgsBase
   -- CI FAST PATH (MEDAKA_PRELUDE_OBJ, issue #118) — the prelude half.  When a
   -- prebuilt prelude.o is on offer, tell the emitter to emit THIS PROGRAM ONLY
   -- (declaring what prelude.o defines): 88% of a small program's IR is prelude, and
   -- clang -O2 re-optimises all of it on every build.  See preludeObjOf below.
-  let (emitProg, emitArgs) = if preludeObjOf () == "" then
-    (emitProg0, emitArgs0)
-  else
-    withEmitHalf "program" emitProg0 emitArgs0
+  let (emitProg, emitArgs) =
+    if preludeObjOf () == "" then
+      (emitProg0, emitArgs0)
+    else
+      withEmitHalf "program" emitProg0 emitArgs0
   -- `[perf] emit-ir`: the emitter subprocess alone.  The CLI's single `emit` row
   -- (medaka_cli.mdk) covers this WHOLE function and is deliberately kept as the
   -- total; these sub-rows decompose it (emit-ir + rt-obj + clang) so a slow build
@@ -442,42 +471,59 @@ runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots 
   let tEmit1 = now ()
   let _ = emitPhase perfOn "emit-ir" (tEmit1 - tEmit0) inputAbs
   match emitRes
-    Err e =>
-      BuildErr "error: could not run emitter (\{emitProg}): \{e}"
-    Ok (code, irRaw, emitErr) => if code /= 0 then BuildErr "error: emitter failed compiling \{inputAbs}\n\{emitErr}"
-    else
-      let ir = stripTrailingUnit irRaw
-      if stringLength ir == 0 then BuildErr "error: emitter produced empty IR for \{inputAbs}\n\{emitErr}"
-      else match writeFile llPath ir
-        Err e => BuildErr ("error: could not write IR: " ++ e)
-        Ok _ =>
-          -- --keep-ir / MEDAKA_KEEP_IR: copy the IR to a predictable path next
-          -- to the output binary AFTER clangLink returns (success or failure —
-          -- a clang failure is exactly the case where seeing the IR matters
-          -- most), not before.  This is deliberate, not incidental: two
-          -- concurrent builds of DIFFERENT programs sharing one `-o` each run
-          -- an independent last-write-wins race on outPath (pre-existing,
-          -- inherent to sharing an output path) AND, if we copied the .ll
-          -- first, a SEPARATE independent race on outPath++".ll" — the two
-          -- races can pick different "winners", pairing build A's binary with
-          -- build B's kept IR (silently misleading — measured empirically:
-          -- ~1/3 of trials crossed when the .ll copy ran before clangLink).
-          -- Writing the copy immediately after clangLink returns collapses the
-          -- two races to nearly the same instant in each process's timeline,
-          -- so whichever build's clang finishes last is also the one most
-          -- likely to finish its .ll copy last. This narrows, but for a
-          -- same-`-o` race cannot fully eliminate, the crossing window — see
-          -- the concurrency note on effectiveKeepIr for why builds to
-          -- DISTINCT `-o` paths (the normal, sane usage) have NO such race at
-          -- all.
-          -- Foreign libraries declared by the PROJECT's medaka.toml (not `root`,
-          -- which is the medaka install root that supplies runtime.mdk/core.mdk):
-          -- the project root is found by walking up from the entry, exactly as
-          -- readDeps' callers in loader.mdk do.
-          let ffiRoot = findProjectRootOrSelf (dirOf inputAbs)
-          let res = clangLink cc rtC llPath outPath inputAbs tmpDir ffiRoot (readForeignLibs ffiRoot)
-          let note = (if effectiveKeepIr keepIrCli then keepIrNote (outPath ++ ".ll") ir else "") ++ emitStderrNote emitErr
-          appendNote note res
+    Err e => BuildErr "error: could not run emitter (\{emitProg}): \{e}"
+    Ok (code, irRaw, emitErr) =>
+      if code /= 0 then
+        BuildErr "error: emitter failed compiling \{inputAbs}\n\{emitErr}"
+      else
+        let ir = stripTrailingUnit irRaw
+        if stringLength ir == 0 then
+          BuildErr
+            "error: emitter produced empty IR for \{inputAbs}\n\{emitErr}"
+        else match writeFile llPath ir
+          Err e => BuildErr ("error: could not write IR: " ++ e)
+          Ok _ =>
+            -- --keep-ir / MEDAKA_KEEP_IR: copy the IR to a predictable path next
+            -- to the output binary AFTER clangLink returns (success or failure —
+            -- a clang failure is exactly the case where seeing the IR matters
+            -- most), not before.  This is deliberate, not incidental: two
+            -- concurrent builds of DIFFERENT programs sharing one `-o` each run
+            -- an independent last-write-wins race on outPath (pre-existing,
+            -- inherent to sharing an output path) AND, if we copied the .ll
+            -- first, a SEPARATE independent race on outPath++".ll" — the two
+            -- races can pick different "winners", pairing build A's binary with
+            -- build B's kept IR (silently misleading — measured empirically:
+            -- ~1/3 of trials crossed when the .ll copy ran before clangLink).
+            -- Writing the copy immediately after clangLink returns collapses the
+            -- two races to nearly the same instant in each process's timeline,
+            -- so whichever build's clang finishes last is also the one most
+            -- likely to finish its .ll copy last. This narrows, but for a
+            -- same-`-o` race cannot fully eliminate, the crossing window — see
+            -- the concurrency note on effectiveKeepIr for why builds to
+            -- DISTINCT `-o` paths (the normal, sane usage) have NO such race at
+            -- all.
+            -- Foreign libraries declared by the PROJECT's medaka.toml (not `root`,
+            -- which is the medaka install root that supplies runtime.mdk/core.mdk):
+            -- the project root is found by walking up from the entry, exactly as
+            -- readDeps' callers in loader.mdk do.
+            let ffiRoot = findProjectRootOrSelf (dirOf inputAbs)
+            let res =
+              clangLink
+                cc
+                rtC
+                llPath
+                outPath
+                inputAbs
+                tmpDir
+                ffiRoot
+                (readForeignLibs ffiRoot)
+            let note =
+              (if effectiveKeepIr keepIrCli then
+                  keepIrNote (outPath ++ ".ll") ir
+                else
+                  "")
+                ++ emitStderrNote emitErr
+            appendNote note res
 
 -- ---- wasm (WasmGC + wasm-tools) target ----
 -- Structurally identical to runBuildNative: run the emitter (here the WasmGC
@@ -520,7 +566,13 @@ runBuildWasm root medaka inputAbs outPath keepIrCli = match makeTempDir ()
     let _ = cleanupTempDir tmpDir
     res
 
-runBuildWasmIn : String -> String -> String -> String -> String -> Bool -> <IO> BuildResult
+runBuildWasmIn : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  Bool ->
+  <IO> BuildResult
 runBuildWasmIn root medaka inputAbs outPath tmpDir keepIrCli =
   let runtimeP = joinPath root "stdlib/runtime.mdk"
   let preludeP = joinPath root "stdlib/core.mdk"
@@ -532,32 +584,48 @@ runBuildWasmIn root medaka inputAbs outPath tmpDir keepIrCli =
   -- invocation's private mktemp dir, not at a globally-shared
   -- /tmp/medaka_build_<output basename>.wat that a concurrent build can clobber.
   let watPath = joinPath tmpDir "program.wat"
-  let emitArgsBase = [runtimeP, preludeP, inputAbs] ++ inputRoots ++ [compilerDir, stdlibDir]
+  let emitArgsBase =
+    [runtimeP, preludeP, inputAbs] ++ inputRoots ++ [compilerDir, stdlibDir]
   let wasmEmitter = envOr "MEDAKA_WASM_EMITTER" ""
   -- Surface a missing/unset/mistyped MEDAKA_WASM_EMITTER as an actionable error
   -- here; without this, runCommand fails with a bare "No such file or directory"
   -- that names neither the variable nor the fix.
   if wasmEmitter == "" then
-    BuildErr "error: --target wasm needs a compiled wasm emitter — set MEDAKA_WASM_EMITTER to its path\n  build one with: sh test/wasm/build_wasm_oracle.sh (produces test/bin/wasm_emit_modules_main)"
+    BuildErr
+      "error: --target wasm needs a compiled wasm emitter — set MEDAKA_WASM_EMITTER to its path\n  build one with: sh test/wasm/build_wasm_oracle.sh (produces test/bin/wasm_emit_modules_main)"
   else if not (fileExists wasmEmitter) then
-    BuildErr "error: MEDAKA_WASM_EMITTER points to a missing binary: \{wasmEmitter}\n  build it with: sh test/wasm/build_wasm_oracle.sh (produces test/bin/wasm_emit_modules_main)"
+    BuildErr
+      "error: MEDAKA_WASM_EMITTER points to a missing binary: \{wasmEmitter}\n  build it with: sh test/wasm/build_wasm_oracle.sh (produces test/bin/wasm_emit_modules_main)"
   else match probeWasmTools ()
-    None => BuildErr "error: wasm-tools not found on PATH — install wasm-tools (cargo install wasm-tools or brew install wasm-tools) for --target wasm"
+    None =>
+      BuildErr
+        "error: wasm-tools not found on PATH — install wasm-tools (cargo install wasm-tools or brew install wasm-tools) for --target wasm"
     Some _ => match runCommand wasmEmitter emitArgsBase
-      Err e => BuildErr "error: could not run wasm emitter (\{wasmEmitter}): \{e}"
-      Ok (code, watRaw, emitErr) => if code /= 0 then BuildErr "error: wasm emitter failed compiling \{inputAbs}\n\{emitErr}"
-      else
-        let wat = stripTrailingUnit watRaw
-        if stringLength wat == 0 then BuildErr "error: wasm emitter produced empty WAT for \{inputAbs}\n\{emitErr}"
-        else match writeFile watPath wat
-          Err e => BuildErr ("error: could not write WAT: " ++ e)
-          Ok _ =>
-            -- Same --keep-ir handling as the native path (.wat instead of
-            -- .ll), including the AFTER-assemble ordering — see the comment
-            -- on the native path's runBuildNativeIn for why.
-            let res = wasmAssemble watPath outPath inputAbs
-            let note = (if effectiveKeepIr keepIrCli then keepIrNote (outPath ++ ".wat") wat else "") ++ emitStderrNote emitErr
-            appendNote note res
+      Err e =>
+        BuildErr "error: could not run wasm emitter (\{wasmEmitter}): \{e}"
+      Ok (code, watRaw, emitErr) =>
+        if code /= 0 then
+          BuildErr
+            "error: wasm emitter failed compiling \{inputAbs}\n\{emitErr}"
+        else
+          let wat = stripTrailingUnit watRaw
+          if stringLength wat == 0 then
+            BuildErr
+              "error: wasm emitter produced empty WAT for \{inputAbs}\n\{emitErr}"
+          else match writeFile watPath wat
+            Err e => BuildErr ("error: could not write WAT: " ++ e)
+            Ok _ =>
+              -- Same --keep-ir handling as the native path (.wat instead of
+              -- .ll), including the AFTER-assemble ordering — see the comment
+              -- on the native path's runBuildNativeIn for why.
+              let res = wasmAssemble watPath outPath inputAbs
+              let note =
+                (if effectiveKeepIr keepIrCli then
+                    keepIrNote (outPath ++ ".wat") wat
+                  else
+                    "")
+                  ++ emitStderrNote emitErr
+              appendNote note res
 
 -- Probe `wasm-tools` up front (the wasm analogue of the implicit clang
 -- requirement).  `wasm-tools --version` exits 0 iff the tool is reachable.
@@ -576,18 +644,26 @@ probeWasmTools _ = match runCommand "wasm-tools" ["--version"]
 -- against the artifact as assembled; gate-consumed WAT/`wasm-tools print` output
 -- never goes through this function, so names stay intact there.
 wasmAssemble : String -> String -> String -> <IO> BuildResult
-wasmAssemble watPath outPath inputAbs = match runCommand "wasm-tools" ["parse", watPath, "-o", outPath]
+wasmAssemble watPath outPath inputAbs = match (runCommand "wasm-tools" [
+  "parse", watPath, "-o", outPath
+])
   Err e => BuildErr ("error: could not run wasm-tools parse: " ++ e)
-  Ok (0, _, _) => match runCommand "wasm-tools" ["validate", "--features=all", outPath]
+  Ok (0, _, _) => match (runCommand "wasm-tools" [
+    "validate", "--features=all", outPath
+  ])
     Err e => BuildErr ("error: could not run wasm-tools validate: " ++ e)
-    Ok (0, _, _) => match runCommand "wasm-tools" ["strip", "--all", outPath, "-o", outPath]
+    Ok (0, _, _) => match (runCommand "wasm-tools" [
+      "strip", "--all", outPath, "-o", outPath
+    ])
       Err e => BuildErr ("error: could not run wasm-tools strip: " ++ e)
       Ok (0, _, _) => BuildOk "built \{inputAbs} -> \{outPath}"
       Ok (_, _, stripErr) =>
         BuildErr "error: wasm-tools strip failed on \{outPath}\n\{stripErr}"
     Ok (_, _, valErr) =>
       BuildErr "error: wasm-tools validate rejected \{outPath}\n\{valErr}"
-  Ok (_, _, parseErr) => BuildErr "error: wasm-tools parse failed assembling \{inputAbs}\n\{parseErr}"
+  Ok (_, _, parseErr) =>
+    BuildErr
+      "error: wasm-tools parse failed assembling \{inputAbs}\n\{parseErr}"
 -- EMIT STEP.  Two paths, selected by the MEDAKA_EMITTER env var:
 --   * set   → invoke that NATIVE EMITTER BINARY directly (OCaml-free path — the
 --             clang(seed) binary from test/bootstrap_from_seed.sh).  Args are the
@@ -621,7 +697,15 @@ clangOptFlag =
 -- the objects' undefined symbols) and before the GC libs.  With NO declared
 -- libraries the flag list is `[]` and the probe is skipped outright, so the
 -- clang argv is byte-identical to the pre-FFI one.
-clangLink : String -> String -> String -> String -> String -> String -> String -> List (String, String) -> <IO> BuildResult
+clangLink : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  List (String, String) ->
+  <IO> BuildResult
 clangLink cc rtC llPath outPath inputAbs tmpDir projRoot libs =
   let libErr = foreignLibErr cc tmpDir projRoot libs
   if libErr /= "" then
@@ -633,7 +717,7 @@ clangLink cc rtC llPath outPath inputAbs tmpDir projRoot libs =
 -- library with no search directory contributes `-l<name>` alone.
 libLinkFlags : List (String, String) -> List String
 libLinkFlags [] = []
-libLinkFlags ((name, dir)::rest) =
+libLinkFlags ((name, dir) :: rest) =
   let here = if dir == "" then ["-l\{name}"] else ["-L\{dir}", "-l\{name}"]
   here ++ libLinkFlags rest
 
@@ -653,7 +737,11 @@ libLinkFlags ((name, dir)::rest) =
 -- Cost: one trivial clang invocation per DECLARED library.  A project with no
 -- `[foreign-libraries]` section pays nothing (the [] clause returns before the
 -- probe source is even written).
-foreignLibErr : String -> String -> String -> List (String, String) -> <IO> String
+foreignLibErr : String ->
+  String ->
+  String ->
+  List (String, String) ->
+  <IO> String
 foreignLibErr _ _ _ [] = ""
 foreignLibErr cc tmpDir projRoot libs =
   let probeC = joinPath tmpDir "ffi_lib_probe.c"
@@ -661,12 +749,18 @@ foreignLibErr cc tmpDir projRoot libs =
     Err e => "error: could not write the foreign-library probe source: \{e}"
     Ok _ => foreignLibErrGo cc tmpDir projRoot probeC libs
 
-foreignLibErrGo : String -> String -> String -> String -> List (String, String) -> <IO> String
+foreignLibErrGo : String ->
+  String ->
+  String ->
+  String ->
+  List (String, String) ->
+  <IO> String
 foreignLibErrGo _ _ _ _ [] = ""
-foreignLibErrGo cc tmpDir projRoot probeC ((name, dir)::rest) =
+foreignLibErrGo cc tmpDir projRoot probeC ((name, dir) :: rest) =
   let probeOut = joinPath tmpDir "ffi_lib_probe.out"
   match runCommand cc ([probeC, "-o", probeOut] ++ libLinkFlags [(name, dir)])
-    Err e => "error: could not run clang (\{cc}) to check foreign library '\{name}': \{e}"
+    Err e =>
+      "error: could not run clang (\{cc}) to check foreign library '\{name}': \{e}"
     Ok (0, _, _) => foreignLibErrGo cc tmpDir projRoot probeC rest
     Ok (_, _, _) => missingLibMsg projRoot name dir
 
@@ -675,26 +769,18 @@ foreignLibErrGo cc tmpDir projRoot probeC ((name, dir)::rest) =
 -- fixes it — instead of clang's bare `ld: library not found for -lfoo`.
 missingLibMsg : String -> String -> String -> String
 missingLibMsg projRoot name dir =
-  let searched = if dir == "" then
-    "the linker's default search path"
-  else
-    "\{dir}, nor on the linker's default search path"
-  stringConcat
-    [
-      "error [B-FFI-LIB-NOT-FOUND]: foreign library '",
-      name,
-      "' was not found in ",
-      searched,
-      "\n",
-      "  declared by the key '",
-      name,
-      "' under [foreign-libraries] in ",
-      projRoot,
-      "/medaka.toml\n",
-      "  install the library, or point that key at the directory holding it: ",
-      name,
-      " = \"vendor/lib\"",
-    ]
+  let searched =
+    if dir == "" then
+      "the linker's default search path"
+    else
+      "\{dir}, nor on the linker's default search path"
+  stringConcat [
+    "error [B-FFI-LIB-NOT-FOUND]: foreign library '", name,
+    "' was not found in ", searched, "\n", "  declared by the key '", name,
+    "' under [foreign-libraries] in ", projRoot, "/medaka.toml\n",
+    "  install the library, or point that key at the directory holding it: ",
+    name, " = \"vendor/lib\""
+  ]
 
 -- ---- the automatic C-runtime object cache (#133, epic #2036 G1) ------------
 -- MEASURED attribution of hello-world's ~1.5 s `medaka build` (this tree, this
@@ -776,13 +862,16 @@ missingLibMsg projRoot name dir =
 export
 objCacheDir : Unit -> <IO> String
 objCacheDir _ =
-  if envOr "MEDAKA_NO_OBJ_CACHE" "" /= "" then ""
+  if envOr "MEDAKA_NO_OBJ_CACHE" "" /= "" then
+    ""
   else
     let explicit = envOr "MEDAKA_CACHE_DIR" ""
-    if explicit /= "" then explicit
+    if explicit /= "" then
+      explicit
     else
       let xdg = envOr "XDG_CACHE_HOME" ""
-      if xdg /= "" then joinPath xdg "medaka"
+      if xdg /= "" then
+        joinPath xdg "medaka"
       else
         let home = envOr "HOME" ""
         if home == "" then "" else joinPath home ".cache/medaka"
@@ -795,10 +884,16 @@ objCacheDir _ =
 -- to `sh -c` (hence the "sh" argv[0] filler) rather than interpolated into the
 -- script text — nothing here is exposed to shell word-splitting or quoting.
 -- "" on any failure (caller then skips the cache entirely).
-rtObjCacheKey : String -> String -> String -> List String -> String -> <IO> String
+rtObjCacheKey : String ->
+  String ->
+  String ->
+  List String ->
+  String ->
+  <IO> String
 rtObjCacheKey cc rtC optFlag gcCflags tmpDir =
   let flagsPath = joinPath tmpDir "rtobj_flags"
-  let flagsText = joinWith " " ([optFlag, "-pthread"] ++ gcSectionsCflags ++ gcCflags) ++ "\n"
+  let flagsText =
+    joinWith " " ([optFlag, "-pthread"] ++ gcSectionsCflags ++ gcCflags) ++ "\n"
   match writeFile flagsPath flagsText
     Err _ => ""
     Ok _ =>
@@ -817,10 +912,12 @@ rtObjCacheKey cc rtC optFlag gcCflags tmpDir =
 cachedRtObj : String -> String -> String -> List String -> String -> <IO> String
 cachedRtObj cc rtC optFlag gcCflags tmpDir =
   let dir = objCacheDir ()
-  if dir == "" then ""
+  if dir == "" then
+    ""
   else
     let key = rtObjCacheKey cc rtC optFlag gcCflags tmpDir
-    if key == "" then ""
+    if key == "" then
+      ""
     else
       let objPath = joinPath dir "rt-\{key}.o"
       let hit = if fileExists objPath then rtObjUsable objPath else False
@@ -860,14 +957,27 @@ rtObjUsable objPath =
 -- applied to it inline (and exactly the flags emitRtObj uses — the same one
 -- reader for the opt level and the same detectGC cflags, so the three can never
 -- drift), into an mktemp file inside the cache dir, then atomically rename.
-populateRtObj : String -> String -> String -> List String -> String -> String -> <IO> String
-populateRtObj cc rtC optFlag gcCflags dir objPath = match runCommand "mkdir" ["-p", dir]
+populateRtObj : String ->
+  String ->
+  String ->
+  List String ->
+  String ->
+  String ->
+  <IO> String
+populateRtObj cc rtC optFlag gcCflags dir objPath = match (runCommand "mkdir" [
+  "-p", dir
+])
   Ok (0, _, _) => match runCommand "mktemp" [joinPath dir "rtobj_XXXXXX"]
     Ok (0, tOut, _) =>
       let tmpObj = stringTrim tOut
-      if tmpObj == "" then ""
+      if tmpObj == "" then
+        ""
       else
-        let ccArgs = [optFlag, "-pthread"] ++ gcSectionsCflags ++ gcCflags ++ ["-c", rtC, "-o", tmpObj]
+        let ccArgs =
+          [optFlag, "-pthread"]
+            ++ gcSectionsCflags
+            ++ gcCflags
+            ++ ["-c", rtC, "-o", tmpObj]
         match runCommand cc ccArgs
           Ok (0, _, _) => match runCommand "mv" ["-f", tmpObj, objPath]
             Ok (0, _, _) => objPath
@@ -895,7 +1005,14 @@ rtObjNote rtObjEnv rtCached =
 -- before `detectGC` runs, so the gc probe is inside the measured window rather
 -- than falling into an unattributed gap between the CLI's rows.  Split out only
 -- so the body below keeps its `= match detectGC …` head shape.
-clangLinkGo : String -> String -> String -> String -> String -> String -> List String -> <IO> BuildResult
+clangLinkGo : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  List String ->
+  <IO> BuildResult
 clangLinkGo cc rtC llPath outPath inputAbs tmpDir libFlags =
   clangLinkTimed
     cc
@@ -908,9 +1025,22 @@ clangLinkGo cc rtC llPath outPath inputAbs tmpDir libFlags =
     (perfEnabled ())
     (now ())
 
-clangLinkTimed : String -> String -> String -> String -> String -> String -> List String -> Bool -> Float -> <IO> BuildResult
-clangLinkTimed cc rtC llPath outPath inputAbs tmpDir libFlags perfOn tLink0 = match detectGC cc tmpDir
-  None => BuildErr "error: libgc (bdw-gc) not found — install bdw-gc (brew install bdw-gc) or set GC_PREFIX/pkg-config"
+clangLinkTimed : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  List String ->
+  Bool ->
+  Float ->
+  <IO> BuildResult
+clangLinkTimed cc rtC llPath outPath inputAbs tmpDir libFlags perfOn tLink0 = match (detectGC
+  cc
+  tmpDir)
+  None =>
+    BuildErr
+      "error: libgc (bdw-gc) not found — install bdw-gc (brew install bdw-gc) or set GC_PREFIX/pkg-config"
   Some (gcCflags, gcLibs) =>
     -- `[perf] gc-probe` gets its OWN row rather than being folded into `rt-obj`:
     -- detectGC shells out (pkg-config, then possibly brew, then a real clang
@@ -939,13 +1069,19 @@ clangLinkTimed cc rtC llPath outPath inputAbs tmpDir libFlags perfOn tLink0 = ma
     -- what makes the ~0.76 s saving the DEFAULT for ordinary users instead of a
     -- CI-only trick.  `cachedRtObj` fails open to "" (⇒ rtC, the inline compile).
     let rtObjEnv = envOr "MEDAKA_RT_OBJ" ""
-    let rtCached = if rtObjEnv /= "" && fileExists rtObjEnv then
-      rtObjEnv
-    else
-      cachedRtObj cc rtC optFlag gcCflags tmpDir
+    let rtCached =
+      if rtObjEnv /= "" && fileExists rtObjEnv then
+        rtObjEnv
+      else
+        cachedRtObj cc rtC optFlag gcCflags tmpDir
     let rtInput = if rtCached == "" then rtC else rtCached
     let tRtObj = now ()
-    let _ = emitPhase perfOn "rt-obj" (tRtObj - tGcProbe) (rtObjNote rtObjEnv rtCached)
+    let _ =
+      emitPhase
+        perfOn
+        "rt-obj"
+        (tRtObj - tGcProbe)
+        (rtObjNote rtObjEnv rtCached)
     -- CI FAST PATH (MEDAKA_PRELUDE_OBJ, issue #118) — the LINK half.  Exactly the
     -- MEDAKA_RT_OBJ trick one level up: the prelude is 88% of a small program's IR,
     -- and clang -O2 re-optimises all of it on every build.  Precompile it ONCE
@@ -962,13 +1098,24 @@ clangLinkTimed cc rtC llPath outPath inputAbs tmpDir libFlags perfOn tLink0 = ma
     -- prelude functions into user code without LTO.  Proven output-identical
     -- inline-vs-prebuilt by test/diff_compiler_prelude_obj.sh.
     let preludeObj = preludeObjOf ()
-    let objInputs = if preludeObj == "" then [llPath, rtInput] else [llPath, preludeObj, rtInput]
+    let objInputs =
+      if preludeObj == "" then
+        [llPath, rtInput]
+      else
+        [llPath, preludeObj, rtInput]
     -- The runtime (runtime/medaka_rt.c) runs the compiled program on a 256 MB
     -- worker thread via GC_pthread_create, so it self-provisions its stack: no
     -- Mach-O-only `-Wl,-stack_size` link flag is needed on either platform.
     -- `-pthread` (thread runtime) and `-lm` (math externs) go on every link.
     let sectionsLink = gcSectionsLinkFlag ()
-    let clangArgs = [optFlag, "-pthread"] ++ gcSectionsCflags ++ gcCflags ++ objInputs ++ libFlags ++ gcLibs ++ [sectionsLink, "-lm", "-o", outPath]
+    let clangArgs =
+      [optFlag, "-pthread"]
+        ++ gcSectionsCflags
+        ++ gcCflags
+        ++ objInputs
+        ++ libFlags
+        ++ gcLibs
+        ++ [sectionsLink, "-lm", "-o", outPath]
     -- Bound to a `let` (not matched directly) purely so the stopwatch can be read
     -- ONCE, after the clang child exits, without duplicating the row across three
     -- result arms.  Medaka is strict, so this runs clang exactly where the
@@ -1018,15 +1165,24 @@ withEmitHalf half prog args =
 export
 emitPreludeObj : String -> String -> String -> String -> <IO> BuildResult
 emitPreludeObj cc root medaka outObjPath = match makeTempDir ()
-  Err e => BuildErr "error: could not create a scratch directory for the prelude compile: \{e}"
+  Err e =>
+    BuildErr
+      "error: could not create a scratch directory for the prelude compile: \{e}"
   Ok tmpDir =>
     let res = emitPreludeObjIn cc root medaka outObjPath tmpDir
     let _ = cleanupTempDir tmpDir
     res
 
-emitPreludeObjIn : String -> String -> String -> String -> String -> <IO> BuildResult
+emitPreludeObjIn : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <IO> BuildResult
 emitPreludeObjIn cc root medaka outObjPath tmpDir = match detectGC cc tmpDir
-  None => BuildErr "error: libgc (bdw-gc) not found — install bdw-gc (brew install bdw-gc) or set GC_PREFIX/pkg-config"
+  None =>
+    BuildErr
+      "error: libgc (bdw-gc) not found — install bdw-gc (brew install bdw-gc) or set GC_PREFIX/pkg-config"
   Some (gcCflags, _gcLibs) =>
     let stubPath = joinPath tmpDir "prelude_entry.mdk"
     let llPath = joinPath tmpDir "prelude.ll"
@@ -1034,7 +1190,8 @@ emitPreludeObjIn cc root medaka outObjPath tmpDir = match detectGC cc tmpDir
       Err e =>
         BuildErr "error: could not write the prelude-object entry stub: \{e}"
       Ok _ =>
-        let emitter = joinPath root "compiler/entries/llvm_emit_modules_main.mdk"
+        let emitter =
+          joinPath root "compiler/entries/llvm_emit_modules_main.mdk"
         let emitArgsBase = [
           joinPath root "stdlib/runtime.mdk",
           joinPath root "stdlib/core.mdk",
@@ -1046,26 +1203,38 @@ emitPreludeObjIn cc root medaka outObjPath tmpDir = match detectGC cc tmpDir
         let emitter2 = envOr "MEDAKA_EMITTER" defaultMedakaEmitter
         let useNative = emitter2 /= ""
         let emitProg0 = if useNative then emitter2 else medaka
-        let emitArgs0 = if useNative then
-          emitArgsBase
-        else
-          "run" :: emitter::emitArgsBase
+        let emitArgs0 =
+          if useNative then emitArgsBase else "run" :: emitter :: emitArgsBase
         let (emitProg, emitArgs) = withEmitHalf "prelude" emitProg0 emitArgs0
         match runCommand emitProg emitArgs
           Err e => BuildErr "error: could not run emitter (\{emitProg}): \{e}"
-          Ok (code, irRaw, emitErr) => if code /= 0 then BuildErr "error: emitter failed emitting the prelude object\n\{emitErr}"
-          else
-            let ir = stripTrailingUnit irRaw
-            if stringLength ir == 0 then BuildErr "error: emitter produced empty IR for the prelude object\n\{emitErr}"
-            else match writeFile llPath ir
-              Err e => BuildErr ("error: could not write prelude IR: " ++ e)
-              Ok _ =>
-                let optFlag = clangOptFlag
-                let ccArgs = [optFlag, "-pthread"] ++ gcSectionsCflags ++ gcCflags ++ ["-c", llPath, "-o", outObjPath]
-                match runCommand cc ccArgs
-                  Err e => BuildErr "error: could not run clang (\{cc}): \{e}"
-                  Ok (0, _, _) => BuildOk ("compiled prelude object -> \{outObjPath}" ++ emitStderrNote emitErr)
-                  Ok (_, _, ccErr) => BuildErr "error: clang failed compiling the prelude object\n\{ccErr}"
+          Ok (code, irRaw, emitErr) =>
+            if code /= 0 then
+              BuildErr
+                "error: emitter failed emitting the prelude object\n\{emitErr}"
+            else
+              let ir = stripTrailingUnit irRaw
+              if stringLength ir == 0 then
+                BuildErr
+                  "error: emitter produced empty IR for the prelude object\n\{emitErr}"
+              else match writeFile llPath ir
+                Err e => BuildErr ("error: could not write prelude IR: " ++ e)
+                Ok _ =>
+                  let optFlag = clangOptFlag
+                  let ccArgs =
+                    [optFlag, "-pthread"]
+                      ++ gcSectionsCflags
+                      ++ gcCflags
+                      ++ ["-c", llPath, "-o", outObjPath]
+                  match runCommand cc ccArgs
+                    Err e => BuildErr "error: could not run clang (\{cc}): \{e}"
+                    Ok (0, _, _) =>
+                      BuildOk
+                        ("compiled prelude object -> \{outObjPath}"
+                          ++ emitStderrNote emitErr)
+                    Ok (_, _, ccErr) =>
+                      BuildErr
+                        "error: clang failed compiling the prelude object\n\{ccErr}"
 
 -- ---- precompile the C runtime object (`medaka build --emit-rt-obj <path>`) ----
 -- Compile runtime/medaka_rt.c to a standalone object with EXACTLY the flags
@@ -1079,10 +1248,14 @@ emitPreludeObjIn cc root medaka outObjPath tmpDir = match detectGC cc tmpDir
 export
 emitRtObj : String -> String -> String -> <IO> BuildResult
 emitRtObj cc root outObjPath = match makeTempDir ()
-  Err e => BuildErr "error: could not create a scratch directory for the runtime compile: \{e}"
+  Err e =>
+    BuildErr
+      "error: could not create a scratch directory for the runtime compile: \{e}"
   Ok tmpDir =>
     let res = match detectGC cc tmpDir
-      None => BuildErr "error: libgc (bdw-gc) not found — install bdw-gc (brew install bdw-gc) or set GC_PREFIX/pkg-config"
+      None =>
+        BuildErr
+          "error: libgc (bdw-gc) not found — install bdw-gc (brew install bdw-gc) or set GC_PREFIX/pkg-config"
       Some (gcCflags, _gcLibs) =>
         let optFlag = clangOptFlag
         let rtC = joinPath root "runtime/medaka_rt.c"
@@ -1090,7 +1263,11 @@ emitRtObj cc root outObjPath = match makeTempDir ()
         -- the compile flags (gcSectionsCflags) apply, and they must match
         -- clangLink's exactly so the prebuilt object is indistinguishable from
         -- an inline compile (test/diff_compiler_rt_obj.sh).
-        let ccArgs = [optFlag, "-pthread"] ++ gcSectionsCflags ++ gcCflags ++ ["-c", rtC, "-o", outObjPath]
+        let ccArgs =
+          [optFlag, "-pthread"]
+            ++ gcSectionsCflags
+            ++ gcCflags
+            ++ ["-c", rtC, "-o", outObjPath]
         match runCommand cc ccArgs
           Err e => BuildErr "error: could not run clang (\{cc}): \{e}"
           Ok (0, _, _) => BuildOk "compiled runtime object -> \{outObjPath}"

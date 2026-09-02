@@ -66,9 +66,11 @@ emitIsolation runtimePath pPath pPlusUPath = match readFile runtimePath
         let pPlusU = runEmit runtimeDecls [] pPlusUDecls
         let p2 = runEmit runtimeDecls [] pDecls
         if p1 /= p2 then
-          failWith "LLVM emission isolation failure: P changed after same-process P+U emission"
+          failWith
+            "LLVM emission isolation failure: P changed after same-process P+U emission"
         else if p1 == pPlusU then
-          failWith "LLVM emission isolation failure: P+U did not produce distinct LLVM"
+          failWith
+            "LLVM emission isolation failure: P+U did not produce distinct LLVM"
         else
           putStr "LLVM_EMIT_ISOLATION_OK\n"
 
@@ -78,14 +80,16 @@ emitIsolation runtimePath pPath pPlusUPath = match readFile runtimePath
 emitGapIsolation : <IO> Unit
 emitGapIsolation =
   let input = makeEmitInput [] [] [] [] [] [] False False 0 [] [] "" [] [] []
-  let cp = CProgram [CBind "main" [CClause [] (CMatch (CLit (LInt 0)) [])]] [] [] []
+  let cp =
+    CProgram [CBind "main" [CClause [] (CMatch (CLit (LInt 0)) [])]] [] [] []
   let (_, gaps) = emitProgramRecord input cp
   if contains "?\tunsupported Core IR node CMatch" gaps then
     let _ = putStr "LLVM_GAP_RECORD_OK\n"
     let _ = emitProgram input cp
     failWith
       "LLVM gap isolation failure: strict emission returned after a recorded gap"
-  else failWith "LLVM gap isolation failure: record emission did not report CMatch"
+  else
+    failWith "LLVM gap isolation failure: record emission did not report CMatch"
 
 emit : List Decl -> List Decl -> List Decl -> <IO> Unit
 emit runtimeDecls preludeDecls userDecls =
@@ -96,7 +100,26 @@ runEmit runtimeDecls preludeDecls userDecls =
   let userNames = funNamesOf userDecls
   let livePrelude = dropShadowedExp userNames preludeDecls
   let combined = livePrelude ++ userDecls
-  let dictNames = preludeReturnPosDictNames livePrelude combined ++ preludeArgPosDictNames livePrelude combined ++ constrainedSigNames userDecls
+  let dictNames =
+    preludeReturnPosDictNames livePrelude combined
+      ++ preludeArgPosDictNames livePrelude combined
+      ++ constrainedSigNames userDecls
   let elaborated = elaborateDict runtimeDecls dictNames userNames combined
-  let input = makeEmitInput (returnsSelfTable combined) (selfFnParamTable combined) (methodIfaceTable combined) (methodConstraintIfaces combined) (ctorFieldTypeNames combined) (declSigTypeNames runtimeDecls ++ declSigTypeNames combined) (mainTypeIsUnit ()) (mainTypeIsFloat ()) 0 [] [] "" (declaredRecordFieldOrders combined) (validateFfiExternTypeNames (checkedFfiExternTypeNames combined)) (ifaceImplHeadTable elaborated)
+  let input =
+    makeEmitInput
+      (returnsSelfTable combined)
+      (selfFnParamTable combined)
+      (methodIfaceTable combined)
+      (methodConstraintIfaces combined)
+      (ctorFieldTypeNames combined)
+      (declSigTypeNames runtimeDecls ++ declSigTypeNames combined)
+      (mainTypeIsUnit ())
+      (mainTypeIsFloat ())
+      0
+      []
+      []
+      ""
+      (declaredRecordFieldOrders combined)
+      (validateFfiExternTypeNames (checkedFfiExternTypeNames combined))
+      (ifaceImplHeadTable elaborated)
   emitProgram input (lowerProgramEmit TargetNative elaborated)

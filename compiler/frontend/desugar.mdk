@@ -246,7 +246,7 @@ stripLocE e = e
 -- guard arms → nested if/match, terminated by `__fallthrough__ ()` (fold_right)
 guardsToCore : List GuardArm -> Expr
 guardsToCore [] = fallthrough
-guardsToCore ((GuardArm quals body)::rest) =
+guardsToCore ((GuardArm quals body) :: rest) =
   armChain quals body (guardsToCore rest)
 
 fallthrough : Expr
@@ -254,15 +254,16 @@ fallthrough = EApp (EVar fallthroughName) (ELit LUnit)
 
 armChain : List Guard -> Expr -> Expr -> Expr
 armChain [] body _ = body
-armChain ((GBool e)::qs) body els = EIf e (armChain qs body els) els
-armChain ((GBind p e)::qs) body els =
+armChain ((GBool e) :: qs) body els = EIf e (armChain qs body els) els
+armChain ((GBind p e) :: qs) body els =
   EMatch e [Arm p [] (armChain qs body els), Arm PWild [] els]
 
 -- operator sections → lambdas
 sectionToCore : Section -> Expr
-sectionToCore (SecBare op) = ELam
-  [PVar "_a" (Loc "" 0 0 0 0), PVar "_b" (Loc "" 0 0 0 0)]
-  (binOp op (EVar "_a") (EVar "_b"))
+sectionToCore (SecBare op) =
+  ELam
+    [PVar "_a" (Loc "" 0 0 0 0), PVar "_b" (Loc "" 0 0 0 0)]
+    (binOp op (EVar "_a") (EVar "_b"))
 sectionToCore (SecRight op e) =
   ELam [PVar "_s" (Loc "" 0 0 0 0)] (binOp op (EVar "_s") e)
 sectionToCore (SecLeft e op) =
@@ -279,11 +280,11 @@ interpPartToExpr (InterpExpr e) = EApp (EVar "display") e
 concatStrings : List Expr -> Expr
 concatStrings [] = ELit (LString "")
 concatStrings [x] = x
-concatStrings (first::rest) = concatLeft first rest
+concatStrings (first :: rest) = concatLeft first rest
 
 concatLeft : Expr -> List Expr -> Expr
 concatLeft acc [] = acc
-concatLeft acc (e::rest) = concatLeft (binOp "++" acc e) rest
+concatLeft acc (e :: rest) = concatLeft (binOp "++" acc e) rest
 
 -- ── Pass: lower_do_blocks (do-notation → andThen/pure chains) ─────────────
 -- Only EDo is lowered; bare
@@ -307,7 +308,7 @@ wrapDoOrigin stmts lowered = match firstDoStmtLoc stmts
 
 firstDoStmtLoc : List DoStmt -> Option Loc
 firstDoStmtLoc [] = None
-firstDoStmtLoc (s::rest) = match doStmtLoc s
+firstDoStmtLoc (s :: rest) = match doStmtLoc s
   Some l => Some l
   None => firstDoStmtLoc rest
 
@@ -327,9 +328,9 @@ lowerDo : List DoStmt -> Expr
 lowerDo [DoExpr e] = e
 lowerDo [DoBind pat e] =
   callAndThen e (doCont pat (EApp (EVar "pure") (ELit LUnit)))
-lowerDo ((DoExpr e)::rest) = callAndThen e (ELam [PWild] (lowerDo rest))
-lowerDo ((DoBind pat e)::rest) = callAndThen e (doCont pat (lowerDo rest))
-lowerDo ((DoLet _ isFun pat e)::rest) = ELet False isFun pat e (lowerDo rest)
+lowerDo ((DoExpr e) :: rest) = callAndThen e (ELam [PWild] (lowerDo rest))
+lowerDo ((DoBind pat e) :: rest) = callAndThen e (doCont pat (lowerDo rest))
+lowerDo ((DoLet _ isFun pat e) :: rest) = ELet False isFun pat e (lowerDo rest)
 lowerDo _ = fallthrough
 
 -- #894 review finding 1: `x <- b` / a bare statement line in `do` synthesizes
@@ -355,7 +356,10 @@ callAndThen e cont = match exprLoc e
 -- lambda + 2-arm match whose wildcard arm fails (do_bind_fail = fallthrough)
 doCont : Pat -> Expr -> Expr
 doCont pat body
-  | isRefutable pat = ELam [PVar "__do_x" (Loc "" 0 0 0 0)] (EMatch (EVar "__do_x") [Arm pat [] body, Arm PWild [] fallthrough])
+  | isRefutable pat =
+    ELam
+      [PVar "__do_x" (Loc "" 0 0 0 0)]
+      (EMatch (EVar "__do_x") [Arm pat [] body, Arm PWild [] fallthrough])
   | otherwise = ELam [pat] body
 
 isRefutable : Pat -> Bool
@@ -372,7 +376,7 @@ isRefutable (PAs _ _ p) = isRefutable p
 
 anyRefutable : List Pat -> Bool
 anyRefutable [] = False
-anyRefutable (p::ps) = isRefutable p || anyRefutable ps
+anyRefutable (p :: ps) = isRefutable p || anyRefutable ps
 
 -- ── Pass: expand_decl (`deriving` → generated impls) ──────────────────────
 -- The Eq/Debug/Display/Ord/Generic
@@ -391,8 +395,12 @@ anyRefutable (p::ps) = isRefutable p || anyRefutable ps
 -- below now reports those sites instead of dropping them silently — #421.)
 expandDecl : Decl -> List Decl
 -- #1110: record UPDATE — `deriving` is consumed here, identity must survive it.
-expandDecl (d@(DData { dataName = name, dataParams = params, dataCtors = variants, dataDerives = derives })) = DData { d | dataDerives = [] } :: deriveImpls (deriveForData name params variants) derives
-expandDecl (d@(DNewtype { newtypeName = name, newtypeParams = params, newtypeCtor = con, newtypeFieldTy = fty, newtypeDerives = derives })) = DNewtype { d | newtypeDerives = [] } :: deriveImpls (deriveForNewtype name params con fty) derives
+expandDecl (d@(DData { dataName = name, dataParams = params, dataCtors = variants, dataDerives = derives })) =
+  DData { d | dataDerives = [] }
+    :: deriveImpls (deriveForData name params variants) derives
+expandDecl (d@(DNewtype { newtypeName = name, newtypeParams = params, newtypeCtor = con, newtypeFieldTy = fty, newtypeDerives = derives })) =
+  DNewtype { d | newtypeDerives = [] }
+    :: deriveImpls (deriveForNewtype name params con fty) derives
 expandDecl (DAttrib attrs d) = attribHead attrs (expandDecl d)
 expandDecl d = [d]
 
@@ -400,11 +408,11 @@ expandDecl d = [d]
 -- impls — keep the attribute on the head, leave the impls bare.
 attribHead : List Attr -> List Decl -> List Decl
 attribHead _ [] = []
-attribHead attrs (first::rest) = DAttrib attrs first :: rest
+attribHead attrs (first :: rest) = DAttrib attrs first :: rest
 
 deriveImpls : (String -> Option Decl) -> List DeriveRef -> List Decl
 deriveImpls _ [] = []
-deriveImpls f (d::ds) = match f (deriveRefName d)
+deriveImpls f (d :: ds) = match f (deriveRefName d)
   Some gen => gen :: deriveImpls f ds
   None => deriveImpls f ds
 
@@ -417,17 +425,28 @@ deriveImpls f (d::ds) = match f (deriveRefName d)
 -- The generator is a THUNK on purpose: Medaka is strict, so an eager
 -- `List (String, Decl)` would run every deriver on every lookup.
 export
-dataDerivers : String -> List String -> List Variant -> List (String, Unit -> Decl)
+dataDerivers : String ->
+  List String ->
+  List Variant ->
+  List (String, Unit -> Decl)
 dataDerivers name params variants = [
   ("Eq", _ => applyDeriveParams name params (deriveEqData name variants)),
   ("Ord", _ => applyDeriveParams name params (deriveOrdData name variants)),
   (
     "Debug",
-    _ => applyDeriveParams name params (deriveShowData "Debug" "debug" name variants),
+    _ =>
+      applyDeriveParams
+        name
+        params
+        (deriveShowData "Debug" "debug" name variants),
   ),
   (
     "Display",
-    _ => applyDeriveParams name params (deriveShowData "Display" "display" name variants),
+    _ =>
+      applyDeriveParams
+        name
+        params
+        (deriveShowData "Display" "display" name variants),
   ),
   (
     "Generic",
@@ -442,7 +461,7 @@ dataDerivers name params variants = [
 -- Force the deriver `iface` selects, or None when no deriver claims the name.
 lookupDeriver : String -> List (String, Unit -> Decl) -> Option Decl
 lookupDeriver _ [] = None
-lookupDeriver n ((k, f)::rest)
+lookupDeriver n ((k, f) :: rest)
   | n == k = Some (f ())
   | otherwise = lookupDeriver n rest
 
@@ -460,7 +479,11 @@ deriveForData name params variants iface =
 -- separate is what stops the diagnostic from advertising `Generic` on a newtype
 -- that cannot have it.
 export
-newtypeDerivers : String -> List String -> String -> Ty -> List (String, Unit -> Decl)
+newtypeDerivers : String ->
+  List String ->
+  String ->
+  Ty ->
+  List (String, Unit -> Decl)
 newtypeDerivers name params con fty =
   let synthetic = [Variant con (ConPos [fty])]
   [
@@ -468,11 +491,19 @@ newtypeDerivers name params con fty =
     ("Ord", _ => applyDeriveParams name params (deriveOrdData name synthetic)),
     (
       "Debug",
-      _ => applyDeriveParams name params (deriveShowData "Debug" "debug" name synthetic),
+      _ =>
+        applyDeriveParams
+          name
+          params
+          (deriveShowData "Debug" "debug" name synthetic),
     ),
     (
       "Display",
-      _ => applyDeriveParams name params (deriveShowData "Display" "display" name synthetic),
+      _ =>
+        applyDeriveParams
+          name
+          params
+          (deriveShowData "Display" "display" name synthetic),
     ),
     -- Hashable needs no specialized newtype deriver: the synthetic variant is
     -- ordinal 0 with one field, so the fold collapses to `0 * 33 + hash x` —
@@ -483,7 +514,12 @@ newtypeDerivers name params con fty =
     ),
   ]
 
-deriveForNewtype : String -> List String -> String -> Ty -> String -> Option Decl
+deriveForNewtype : String ->
+  List String ->
+  String ->
+  Ty ->
+  String ->
+  Option Decl
 deriveForNewtype name params con fty iface =
   lookupDeriver iface (newtypeDerivers name params con fty)
 
@@ -507,10 +543,16 @@ checkDerives decls = flatMap declDeriveErrors decls
 declDeriveErrors : Decl -> List (String, Option Loc)
 declDeriveErrors (DData { dataName = name, dataParams = params, dataCtors = variants, dataDerives = derives }) = match derives
   [] => []
-  _ => flatMap (unknownDerive name (map fst (dataDerivers name params variants))) derives
+  _ =>
+    flatMap
+      (unknownDerive name (map fst (dataDerivers name params variants)))
+      derives
 declDeriveErrors (DNewtype { newtypeName = name, newtypeParams = params, newtypeCtor = con, newtypeFieldTy = fty, newtypeDerives = derives }) = match derives
   [] => []
-  _ => flatMap (unknownDerive name (map fst (newtypeDerivers name params con fty))) derives
+  _ =>
+    flatMap
+      (unknownDerive name (map fst (newtypeDerivers name params con fty)))
+      derives
 declDeriveErrors (DAttrib _ d) = declDeriveErrors d
 declDeriveErrors _ = []
 
@@ -528,7 +570,10 @@ cannotDeriveMsg tyName supported n =
 -- rewrite a generated impl's head/constraints for the type's params:
 -- `data Box a deriving Eq` → `impl Eq (Box a) requires Eq a`
 applyDeriveParams : String -> List String -> Decl -> Decl
-applyDeriveParams name params (d@(DImpl { iface, ... })) = DImpl { d | tys = [appliedHead name params], reqs = paramRequires iface params }
+applyDeriveParams name params (d@(DImpl { iface, ... })) = DImpl { d |
+  tys = [appliedHead name params],
+  reqs = paramRequires iface params,
+}
 applyDeriveParams _ _ d = d
 
 appliedHead : String -> List String -> Ty
@@ -536,7 +581,7 @@ appliedHead name params = appliedHeadGo (tyConUnresolved name None) params
 
 appliedHeadGo : Ty -> List String -> Ty
 appliedHeadGo acc [] = acc
-appliedHeadGo acc (p::ps) = appliedHeadGo (TyApp acc (TyVar p)) ps
+appliedHeadGo acc (p :: ps) = appliedHeadGo (TyApp acc (TyVar p)) ps
 
 paramRequires : String -> List String -> List Require
 paramRequires iface params = map (paramReq iface) params
@@ -572,19 +617,19 @@ conBindPat (Variant cname (ConNamed fs _)) vars =
 recPatFields : List Field -> List String -> List RecPatField
 recPatFields [] _ = []
 recPatFields _ [] = []
-recPatFields ((Field n _)::fs) (v::vs) =
-  RecPatField n (Loc "" 0 0 0 0) (Some (PVar v (Loc "" 0 0 0 0))) ::
-    recPatFields fs vs
+recPatFields ((Field n _) :: fs) (v :: vs) =
+  RecPatField n (Loc "" 0 0 0 0) (Some (PVar v (Loc "" 0 0 0 0)))
+    :: recPatFields fs vs
 
 -- Debug and Display share the rendering ("Con " ++ <call> a0 ++ " " ++ …);
 -- only the interface + method-call name differ.
 deriveShowData : String -> String -> String -> List Variant -> Decl
-deriveShowData iface callName name variants = derivedImpl
-  iface
-  name
-  [
-    ImplMethod callName [PVar "__x" (Loc "" 0 0 0 0)] (EMatch (EVar "__x") (map (showArm callName) variants))
-  ]
+deriveShowData iface callName name variants = derivedImpl iface name [
+  ImplMethod
+    callName
+    [PVar "__x" (Loc "" 0 0 0 0)]
+    (EMatch (EVar "__x") (map (showArm callName) variants)),
+]
 
 showArm : String -> Variant -> Arm
 showArm callName (v@(Variant cname payload)) =
@@ -596,17 +641,18 @@ showArm callName (v@(Variant cname payload)) =
 -- surface record literal syntax.
 showBody : String -> String -> ConPayload -> List String -> Expr
 showBody _ cname _ [] = ELit (LString cname)
-showBody callName cname (ConNamed fs _) (v::vs) =
+showBody callName cname (ConNamed fs _) (v :: vs) =
   concatStrings
-    (ELit (LString (cname ++ " {")) :: showNamedParts callName 0 fs (v::vs) ++ [ELit (LString " }")])
-showBody callName cname _ (v::vs) =
+    (ELit (LString (cname ++ " {"))
+      :: showNamedParts callName 0 fs (v :: vs) ++ [ELit (LString " }")])
+showBody callName cname _ (v :: vs) =
   concatStrings
-    (ELit (LString (cname ++ " ")) :: showFieldParts callName 0 (v::vs))
+    (ELit (LString (cname ++ " ")) :: showFieldParts callName 0 (v :: vs))
 
 showFieldParts : String -> Int -> List String -> List Expr
 showFieldParts _ _ [] = []
-showFieldParts callName i (v::vs) = showFieldPart callName i v
-  ++ showFieldParts callName (i + 1) vs
+showFieldParts callName i (v :: vs) =
+  showFieldPart callName i v ++ showFieldParts callName (i + 1) vs
 
 -- Nested field args are wrapped through the prelude's `derivedShowWrap`
 -- (`core.mdk`) so a nested constructor application stays parenthesized —
@@ -626,8 +672,8 @@ wrappedFieldCall callName v =
 showNamedParts : String -> Int -> List Field -> List String -> List Expr
 showNamedParts _ _ [] _ = []
 showNamedParts _ _ _ [] = []
-showNamedParts callName i ((Field fn _)::fs) (v::vs) = showNamedPart callName i fn v
-  ++ showNamedParts callName (i + 1) fs vs
+showNamedParts callName i ((Field fn _) :: fs) (v :: vs) =
+  showNamedPart callName i fn v ++ showNamedParts callName (i + 1) fs vs
 
 showNamedPart : String -> Int -> String -> String -> List Expr
 showNamedPart callName 0 fn v =
@@ -638,17 +684,18 @@ showNamedPart callName _ fn v =
 -- Eq: same-constructor arms compare fields pairwise; a cross-constructor
 -- wildcard arm (only with ≥2 variants) returns False.
 deriveEqData : String -> List Variant -> Decl
-deriveEqData name variants = derivedImpl
-  "Eq"
-  name
-  [
-    binMethod "eq" "__x" "__y" (EMatch (ETuple [EVar "__x", EVar "__y"]) (eqArms variants))
-  ]
+deriveEqData name variants = derivedImpl "Eq" name [
+  binMethod
+    "eq"
+    "__x"
+    "__y"
+    (EMatch (ETuple [EVar "__x", EVar "__y"]) (eqArms variants)),
+]
 
 eqArms : List Variant -> List Arm
 eqArms variants
-  | listLen variants > 1 = map eqSameConArm variants
-    ++ [Arm (PTuple [PWild, PWild]) [] (EVar "False")]
+  | listLen variants > 1 =
+    map eqSameConArm variants ++ [Arm (PTuple [PWild, PWild]) [] (EVar "False")]
   | otherwise = map eqSameConArm variants
 
 eqSameConArm : Variant -> Arm
@@ -666,27 +713,28 @@ eqBody _ avars bvars = andAll (zipEqCalls avars bvars)
 zipEqCalls : List String -> List String -> List Expr
 zipEqCalls [] _ = []
 zipEqCalls _ [] = []
-zipEqCalls (a::arest) (b::brest) =
+zipEqCalls (a :: arest) (b :: brest) =
   callBin "eq" (EVar a) (EVar b) :: zipEqCalls arest brest
 
 andAll : List Expr -> Expr
 andAll [] = EVar "True"
-andAll (first::rest) = andLeft first rest
+andAll (first :: rest) = andLeft first rest
 
 andLeft : Expr -> List Expr -> Expr
 andLeft acc [] = acc
-andLeft acc (e::rest) = andLeft (binOp "&&" acc e) rest
+andLeft acc (e :: rest) = andLeft (binOp "&&" acc e) rest
 
 -- Ord: one arm per (i, vi)×(j, vj) constructor pair.  Different constructors
 -- compare by declaration order (Lt/Gt); same constructor compares fields
 -- lexicographically.
 deriveOrdData : String -> List Variant -> Decl
-deriveOrdData name variants = derivedImpl
-  "Ord"
-  name
-  [
-    binMethod "compare" "__x" "__y" (EMatch (ETuple [EVar "__x", EVar "__y"]) (ordArms variants))
-  ]
+deriveOrdData name variants = derivedImpl "Ord" name [
+  binMethod
+    "compare"
+    "__x"
+    "__y"
+    (EMatch (ETuple [EVar "__x", EVar "__y"]) (ordArms variants)),
+]
 
 ordArms : List Variant -> List Arm
 ordArms variants =
@@ -695,7 +743,7 @@ ordArms variants =
 
 indexFrom : Int -> List a -> List (Int, a)
 indexFrom _ [] = []
-indexFrom i (x::xs) = (i, x) :: indexFrom (i + 1) xs
+indexFrom i (x :: xs) = (i, x) :: indexFrom (i + 1) xs
 
 ordRow : List (Int, Variant) -> (Int, Variant) -> List Arm
 ordRow indexed (i, vi) = map (ordCell i vi) indexed
@@ -718,7 +766,7 @@ ordBody i j avars bvars
 zipExprPairs : List String -> List String -> List (Expr, Expr)
 zipExprPairs [] _ = []
 zipExprPairs _ [] = []
-zipExprPairs (a::arest) (b::brest) =
+zipExprPairs (a :: arest) (b :: brest) =
   (EVar a, EVar b) :: zipExprPairs arest brest
 
 -- Lexicographic chain: `compare a b` per pair, short-circuiting on the first
@@ -726,12 +774,10 @@ zipExprPairs (a::arest) (b::brest) =
 lexCompareExprs : List (Expr, Expr) -> Expr
 lexCompareExprs [] = EVar "Eq"
 lexCompareExprs [(ea, eb)] = callBin "compare" ea eb
-lexCompareExprs ((ea, eb)::rest) = EMatch
-  (callBin "compare" ea eb)
-  [
-    Arm (PCon "Eq" []) [] (lexCompareExprs rest),
-    Arm (PVar "__c" (Loc "" 0 0 0 0)) [] (EVar "__c"),
-  ]
+lexCompareExprs ((ea, eb) :: rest) = EMatch (callBin "compare" ea eb) [
+  Arm (PCon "Eq" []) [] (lexCompareExprs rest),
+  Arm (PVar "__c" (Loc "" 0 0 0 0)) [] (EVar "__c"),
+]
 
 -- Hashable: the djb2-style fold core.mdk's `Hashable` doc specifies — seed the
 -- accumulator with the constructor's ordinal, then `acc = acc * 33 + hash field`
@@ -747,12 +793,12 @@ lexCompareExprs ((ea, eb)::rest) = EMatch
 -- Masking here would buy nothing, cost a bit of hash space, and make derived
 -- impls silently disagree with the unmasked compound impls in core.mdk.
 deriveHashData : String -> List Variant -> Decl
-deriveHashData name variants = derivedImpl
-  "Hashable"
-  name
-  [
-    ImplMethod "hash" [PVar "__x" (Loc "" 0 0 0 0)] (EMatch (EVar "__x") (map hashArm (indexFrom 0 variants)))
-  ]
+deriveHashData name variants = derivedImpl "Hashable" name [
+  ImplMethod
+    "hash"
+    [PVar "__x" (Loc "" 0 0 0 0)]
+    (EMatch (EVar "__x") (map hashArm (indexFrom 0 variants))),
+]
 
 hashArm : (Int, Variant) -> Arm
 hashArm (i, v) =
@@ -763,19 +809,19 @@ hashArm (i, v) =
 -- hashes to its bare ordinal (matching core.mdk's `hash None = 1`).
 hashFold : Expr -> List String -> Expr
 hashFold acc [] = acc
-hashFold acc (v::vs) =
+hashFold acc (v :: vs) =
   hashFold
     (binOp "+" (binOp "*" acc (intLit 33)) (EApp (EVar "hash") (EVar v)))
     vs
 
 -- Generic: one arm per constructor → RCon name [to_rep a0, …]
 deriveGenericData : String -> List Variant -> Decl
-deriveGenericData name variants = derivedImpl
-  "Generic"
-  name
-  [
-    ImplMethod "to_rep" [PVar "__x" (Loc "" 0 0 0 0)] (EMatch (EVar "__x") (map genericArm variants))
-  ]
+deriveGenericData name variants = derivedImpl "Generic" name [
+  ImplMethod
+    "to_rep"
+    [PVar "__x" (Loc "" 0 0 0 0)]
+    (EMatch (EVar "__x") (map genericArm variants)),
+]
 
 genericArm : Variant -> Arm
 genericArm (v@(Variant cname payload)) =
@@ -794,14 +840,12 @@ genericRep cname _ vars =
 genericRFields : List Field -> List String -> List Expr
 genericRFields [] _ = []
 genericRFields _ [] = []
-genericRFields ((Field fn _)::fs) (v::vs) =
-  ERecordCreate
-      "RField"
-      [
-        FieldAssign "fld_name" (ELit (LString fn)),
-        FieldAssign "fld_rep" (toRep v),
-      ] ::
-    genericRFields fs vs
+genericRFields ((Field fn _) :: fs) (v :: vs) =
+  ERecordCreate "RField" [
+      FieldAssign "fld_name" (ELit (LString fn)),
+      FieldAssign "fld_rep" (toRep v),
+    ]
+    :: genericRFields fs vs
 
 toRep : String -> Expr
 toRep x = EApp (EVar "to_rep") (EVar x)
@@ -839,14 +883,21 @@ methodAt byName n = match omLookup n byName
   Some m => m
   None => panic "mergeIfaceMethods: unreachable — name inserted but missing"
 
-foldlMethods : (OrdMap IfaceMethod, List String) -> List IfaceMethod -> (OrdMap IfaceMethod, List String)
+foldlMethods : (OrdMap IfaceMethod, List String) ->
+  List IfaceMethod ->
+  (OrdMap IfaceMethod, List String)
 foldlMethods acc [] = acc
-foldlMethods acc (m::rest) = foldlMethods (insertMethod acc m) rest
+foldlMethods acc (m :: rest) = foldlMethods (insertMethod acc m) rest
 
-insertMethod : (OrdMap IfaceMethod, List String) -> IfaceMethod -> (OrdMap IfaceMethod, List String)
+insertMethod : (OrdMap IfaceMethod, List String) ->
+  IfaceMethod ->
+  (OrdMap IfaceMethod, List String)
 insertMethod (byName, order) m
   | omHasKey (methodName m) byName = (
-    omInsert (methodName m) (mergeTwo (methodAt byName (methodName m)) m) byName,
+    omInsert
+      (methodName m)
+      (mergeTwo (methodAt byName (methodName m)) m)
+      byName,
     order,
   )
   | otherwise = (omInsert (methodName m) m byName, methodName m :: order)
@@ -863,7 +914,9 @@ mergedType : Ty -> Ty -> Ty
 mergedType (TyVar "_") mTy = mTy
 mergedType prevTy _ = prevTy
 
-mergedDefault : Option MethodDefault -> Option MethodDefault -> Option MethodDefault
+mergedDefault : Option MethodDefault ->
+  Option MethodDefault ->
+  Option MethodDefault
 mergedDefault (Some d) _ = Some d
 mergedDefault None mDef = mDef
 
@@ -893,7 +946,7 @@ fillImplDefaults : List Decl -> List Decl
 fillImplDefaults prog = map (fillImplDecl prog) prog
 
 fillImplDecl : List Decl -> Decl -> Decl
-fillImplDecl prog (d@DImpl { iface, methods, ... })
+fillImplDecl prog (d@(DImpl { iface, methods, ... }))
   -- UNIVERSAL: every interface's missing defaults are specialized per impl, with no
   -- exclusions.  Ord and Foldable were formerly held back because their specialized
   -- defaults tripped two emitter dict-threading gaps, both now CLOSED (see
@@ -909,13 +962,15 @@ fillImplDecl prog (d@DImpl { iface, methods, ... })
   --     tagged copy wasn't eta-expanded so a saturated call dropped the container and
   --     returned an unapplied PAP → SIGSEGV.  Fixed by counting leading dict params in
   --     gatherGroup's eta-expansion target (llvm_emit.mdk).
-  | otherwise = DImpl { d | methods = methods ++ synthDefaultMethods methods (ifaceDefaults iface prog) }
+  | otherwise = DImpl { d |
+    methods = methods ++ synthDefaultMethods methods (ifaceDefaults iface prog),
+  }
 fillImplDecl _ d = d
 
 -- The named interface's default methods (those carrying a MethodDefault body).
 ifaceDefaults : String -> List Decl -> List IfaceMethod
 ifaceDefaults _ [] = []
-ifaceDefaults target (d::rest) = ifaceDefaultsStep target d rest
+ifaceDefaults target (d :: rest) = ifaceDefaultsStep target d rest
 
 ifaceDefaultsStep : String -> Decl -> List Decl -> List IfaceMethod
 ifaceDefaultsStep target (DInterface { name, methods, ... }) rest
@@ -931,7 +986,7 @@ ifaceMethodHasDefault (IfaceMethod _ _ None _) = False
 -- Synthesize an ImplMethod from each default whose name is not already explicit.
 synthDefaultMethods : List ImplMethod -> List IfaceMethod -> List ImplMethod
 synthDefaultMethods _ [] = []
-synthDefaultMethods explicit (m::rest)
+synthDefaultMethods explicit (m :: rest)
   | implDefines (methodName m) explicit = synthDefaultMethods explicit rest
   | otherwise = synthFromDefault m :: synthDefaultMethods explicit rest
 
@@ -951,7 +1006,7 @@ concatMapDecl f prog = concatLists (map f prog)
 
 concatLists : List (List a) -> List a
 concatLists [] = []
-concatLists (xs::rest) = xs ++ concatLists rest
+concatLists (xs :: rest) = xs ++ concatLists rest
 
 -- ── Pass: desugar_record_puns ────────────────────────────────────────────
 -- `Name { a, b }` (all bare vars, no `=`) parses as ESetLit; when Name is a
@@ -967,15 +1022,15 @@ desugarRecordPuns prog =
 -- qualify too).
 collectRecordNames : List Decl -> List String
 collectRecordNames [] = []
-collectRecordNames ((DData { dataCtors = variants })::rest) = conNamedCtorNames variants
-  ++ collectRecordNames rest
-collectRecordNames (_::rest) = collectRecordNames rest
+collectRecordNames ((DData { dataCtors = variants }) :: rest) =
+  conNamedCtorNames variants ++ collectRecordNames rest
+collectRecordNames (_ :: rest) = collectRecordNames rest
 
 conNamedCtorNames : List Variant -> List String
 conNamedCtorNames [] = []
-conNamedCtorNames ((Variant n (ConNamed _ _))::rest) =
+conNamedCtorNames ((Variant n (ConNamed _ _)) :: rest) =
   n :: conNamedCtorNames rest
-conNamedCtorNames ((Variant _ (ConPos _))::rest) = conNamedCtorNames rest
+conNamedCtorNames ((Variant _ (ConPos _)) :: rest) = conNamedCtorNames rest
 
 rewriteRecordPun : List String -> Expr -> Expr
 rewriteRecordPun recordNames (ESetLit name items)
@@ -1004,12 +1059,14 @@ lowerContainerLiterals : List Decl -> List Decl
 lowerContainerLiterals prog = mapProg rewriteContainerLit prog
 
 rewriteContainerLit : Expr -> Expr
-rewriteContainerLit (EMapLit name kvs) = EHeadAnnot
-  (EApp (EVar "fromEntries") (EListLit (map kvToTuple kvs)))
-  (pinType name [TyVar "_k", TyVar "_v"])
-rewriteContainerLit (ESetLit name items) = EHeadAnnot
-  (EApp (EVar "fromEntries") (EListLit items))
-  (pinType name [TyVar "_a"])
+rewriteContainerLit (EMapLit name kvs) =
+  EHeadAnnot
+    (EApp (EVar "fromEntries") (EListLit (map kvToTuple kvs)))
+    (pinType name [TyVar "_k", TyVar "_v"])
+rewriteContainerLit (ESetLit name items) =
+  EHeadAnnot
+    (EApp (EVar "fromEntries") (EListLit items))
+    (pinType name [TyVar "_a"])
 rewriteContainerLit e = e
 
 kvToTuple : (Expr, Expr) -> Expr
@@ -1020,7 +1077,7 @@ pinType name args = pinTypeGo (tyConUnresolved name None) args
 
 pinTypeGo : Ty -> List Ty -> Ty
 pinTypeGo acc [] = acc
-pinTypeGo acc (t::ts) = pinTypeGo (TyApp acc t) ts
+pinTypeGo acc (t :: ts) = pinTypeGo (TyApp acc t) ts
 
 -- ── Import aliasing: a qualified reference `A.name` → the flat name `A.name` ──
 -- `import m as A` makes every value m exports available as `A.name`.  The grammar has
@@ -1036,9 +1093,9 @@ pinTypeGo acc (t::ts) = pinTypeGo (TyApp acc t) ts
 -- local can never be captured here.
 moduleAliases : List Decl -> List String
 moduleAliases [] = []
-moduleAliases ((DUse _ (UseAlias _ a) _)::rest) = a :: moduleAliases rest
-moduleAliases ((DAttrib _ d)::rest) = moduleAliases [d] ++ moduleAliases rest
-moduleAliases (_::rest) = moduleAliases rest
+moduleAliases ((DUse _ (UseAlias _ a) _) :: rest) = a :: moduleAliases rest
+moduleAliases ((DAttrib _ d) :: rest) = moduleAliases [d] ++ moduleAliases rest
+moduleAliases (_ :: rest) = moduleAliases rest
 
 -- No alias in this file ⇒ the identity, so an alias-free program is untouched.
 qualifyAliasRefs : List Decl -> List Decl
@@ -1061,12 +1118,13 @@ rewriteAliasQual _ e = e
 -- desugar_list_comps → desugar_questions → lower_do_blocks → desugar_sugar.
 export
 desugar : List Decl -> List Decl
-desugar prog = qualifyAliasRefs prog
-  |> mergeIfaceDefaults
-  |> fillImplDefaults
-  |> concatMapDecl expandDecl
-  |> desugarRecordPuns
-  |> lowerContainerLiterals
-  |> mapProg rewriteDo
-  |> mapProg rewriteAssignIndex
-  |> mapProg rewriteSugar
+desugar prog =
+  qualifyAliasRefs prog
+    |> mergeIfaceDefaults
+    |> fillImplDefaults
+    |> concatMapDecl expandDecl
+    |> desugarRecordPuns
+    |> lowerContainerLiterals
+    |> mapProg rewriteDo
+    |> mapProg rewriteAssignIndex
+    |> mapProg rewriteSugar

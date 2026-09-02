@@ -22,7 +22,8 @@ import frontend.parser.{
 }
 
 renderErr : ParseError -> String
-renderErr pe = "parse error \{intToString (parseErrorLine pe)}:\{intToString (parseErrorCol pe)}"
+renderErr pe =
+  "parse error \{intToString (parseErrorLine pe)}:\{intToString (parseErrorCol pe)}"
 
 main = match args ()
   [path] => match readFile path
@@ -30,4 +31,5 @@ main = match args ()
       Ok _ => putStrLn "ok"
       Err pe => putStrLn (renderErr pe)
     Err msg => ePutStrLn msg
-  _ => ePutStrLn "usage: medaka run compiler/entries/parse_result_main.mdk <file>"
+  _ =>
+    ePutStrLn "usage: medaka run compiler/entries/parse_result_main.mdk <file>"

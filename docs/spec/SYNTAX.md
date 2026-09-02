@@ -138,7 +138,7 @@ id : a -> a  -- type variable (lowercase)
 id v = v
 head : List a -> Option a  -- type application
 head xs = match xs
-  h::_ => Some h
+  h :: _ => Some h
   [] => None
 neq : Eq a => a -> a -> Bool  -- one constraint
 neq p q = p /= q
@@ -197,11 +197,11 @@ classify n
 -- inline single-guard form is allowed:
 drop n xs
   | n <= 0 = xs
-drop n (x::xs) = drop (n - 1) xs
+drop n (x :: xs) = drop (n - 1) xs
 drop n [] = []
 
 -- pattern-bind qualifier `pat <- expr`; binds scope rightward + into body:
-filterMap f (x::xs)
+filterMap f (x :: xs)
   | (Some y) <- f x = y :: filterMap f xs
   | None <- f x = filterMap f xs
 filterMap f [] = []
@@ -244,9 +244,10 @@ p5 = _ => 0  -- wildcard param
 p6 = (xs@rest) => xs  -- as-pattern param
 
 -- point-free one-arg lambda that immediately matches (no `function` keyword)
-p7 = x => match x
-  Some x => x
-  None => 0
+p7 =
+  x => match x
+    Some x => x
+    None => 0
 ```
 
 ## Operators
@@ -276,7 +277,7 @@ e12 = x >= y
 e13 = p && q  -- boolean
 e14 = p || q
 e15 = not True  -- boolean negation (`not` is the ONLY spelling)
-e16 = 1::[2, 3]  -- cons
+e16 = 1 :: [2, 3]  -- cons
 e17 = [1, 2] ++ [3, 4]  -- append (Semigroup): works on lists...
 e18 = "ab" ++ "cd"  -- ...and strings too
 e19 = 5 |> double  -- pipe (apply value through fn)
@@ -320,42 +321,42 @@ p3 = [|1..=100|]  -- Array Int, inclusive
 data Person = Person { name : String, age : Int }
 
 m1 x = match x
-  0           => "zero"          -- literal
-  n           => debug n         -- variable (also serves as catch-all)
+  0 => "zero"  -- literal
+  n => debug n  -- variable (also serves as catch-all)
 
 m2 t = match t
   (a, b) => a  -- tuple
 
 m3 xs = match xs
-  x :: rest   => x                -- cons
-  []          => 0
+  x :: rest => x  -- cons
+  [] => 0
 
 m3b lst = match lst
-  [1, 2, 3]   => 0                -- explicit list
-  _           => 1                -- wildcard
+  [1, 2, 3] => 0  -- explicit list
+  _ => 1  -- wildcard
 
 m4 o = match o
-  Some x      => x                -- constructor
-  _           => 0
+  Some x => x  -- constructor
+  _ => 0
 
 m5 xs = match xs
-  ys@(x::_)   => x                -- as-pattern (binds whole + parts)
-  _           => 0
+  ys@(x :: _) => x  -- as-pattern (binds whole + parts)
+  _ => 0
 
 m6 n = match n
-  1..9        => "single digit"   -- int range pattern
-  _           => "multi"
+  1..9 => "single digit"  -- int range pattern
+  _ => "multi"
 
 m7 c = match c
-  'a'..='z'   => "lower"          -- char range pattern (inclusive)
-  _           => "other"
+  'a'..='z' => "lower"  -- char range pattern (inclusive)
+  _ => "other"
 
 m8 p = match p
   Person { name } => name  -- record pattern (pun)
 
 m9 p = match p
-  Person { name = "Al", age } => debug age -- record pattern (explicit + bind)
-  Person { name, ... }       => name       -- record pattern with rest
+  Person { name = "Al", age } => debug age  -- record pattern (explicit + bind)
+  Person { name, ... } => name  -- record pattern with rest
 
 m10 p = match p
   Person { ... } => 0  -- record rest only
@@ -388,7 +389,8 @@ p2 = match opt
   _ => 0  -- if-let (single-ctor bind)
 p3 x = if x > 0 then println "pos"  -- else-less: else defaults to (); then must be Unit
 main =
-  if 1 > 0 then                               -- else-less with an indented side-effecting block
+  if 1 > 0 then
+    -- else-less with an indented side-effecting block
     doThing
     doOther
 ```
@@ -466,10 +468,8 @@ data Shape =
   | Circle Float
   | Rectangle Float Float
 
-data Point =
-  | Pt { x : Int, y : Int }  -- named-field variant (inline)
-data Vec =
-  | { x : Int, y : Int }  -- SHORT form: single braced ctor,
+data Point = Pt { x : Int, y : Int }  -- named-field variant (inline)
+data Vec = { x : Int, y : Int }  -- SHORT form: single braced ctor,
 -- name omitted → ctor name = tycon
 -- (`Vec`); == `data Vec = Vec { … }`.
 -- Only for a lone `{ … }` ctor with
@@ -509,10 +509,13 @@ data Flag = On | Off
 The two placements parse to the same declaration: the AST records only the derived
 names, not where the source put them. That is why the example blocks here only ever
 show one of the two — every one is canonically `medaka fmt`-formatted, and `fmt`
-resolves the choice by width alone. It renders the whole decl (header, variants,
-`deriving`) as one group: on a single line when it fits (`Flag` above), and otherwise
-fully broken, variants to a `|` block AND `deriving` to its own indented line
-(`MyColor`/`Multi` above). A one-line variant list with an own-line `deriving` is
+resolves the choice by width alone. A multi-constructor decl renders as one group:
+on a single line when it fits (`Flag` above), and otherwise fully broken, variants
+to a `|` block AND `deriving` to its own indented line (`MyColor`/`Multi` above). A
+single record-shaped constructor never gets a `|`: it stays `data P = P { x : Int }`
+on one line, and when its fields do not fit it breaks inside the braces, one field
+per line with a trailing comma, `}` back at the decl's column, and `deriving` on its
+own indented line below. A one-line variant list with an own-line `deriving` is
 therefore legal input that `fmt` never emits.
 
 ## Records
@@ -532,8 +535,7 @@ form as the product-type syntax. That section is stale; this file is ground
 truth for what the current binary accepts.
 
 ```medaka
-data Person =
-  | { name : String, age : Int }  -- record = single-ctor named data
+data Person = { name : String, age : Int }  -- record = single-ctor named data
 -- (ctor implicitly named `Person`)
 -- equivalent explicit form: data Person = Person { name : String, age : Int }
 
@@ -575,9 +577,10 @@ interface Ord2 a requires Eq2 a where
   compare2 : a -> a -> Ordering
 -- superclass constraint
 
-interface Greeter a where                    -- default method body
-  greet : a -> String                        -- the default body's sig MUST mention `a`
-  greet x = "Hello!"                         -- (dispatch needs it in the signature)
+interface Greeter a where
+  -- default method body
+  greet : a -> String  -- the default body's sig MUST mention `a`
+  greet x = "Hello!"  -- (dispatch needs it in the signature)
 
 interface Empty a  -- marker interface (no `where`)
 

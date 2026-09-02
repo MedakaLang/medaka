@@ -1,5 +1,5 @@
 # META
-source_lines=77
+source_lines=82
 stages=DESUGAR,MARK
 # SOURCE
 -- Source-keyed memoization of `desugar (parsePrelude src)` (#2234, S-1).
@@ -48,7 +48,10 @@ noteDesugaredPrelude : String -> List Decl -> Int
 noteDesugaredPrelude src decls =
   let gen = !desugarGenRef + 1
   desugarGenRef := gen
-  desugarCacheRef := takeFirstN desugarCacheLimit ((src, (gen, decls)) :: dropKeyD src !desugarCacheRef)
+  desugarCacheRef :=
+    takeFirstN
+      desugarCacheLimit
+      ((src, (gen, decls)) :: dropKeyD src !desugarCacheRef)
   gen
 
 -- `desugar (parsePrelude src)`, memoized by source string. Most-recently-used
@@ -74,9 +77,11 @@ desugaredPreludeEntry src = match lookupAssoc src !desugarCacheRef
     (gen, decls)
 
 -- drop any existing entry with this key (so a re-desugar refreshes its position).
-dropKeyD : String -> List (String, (Int, List Decl)) -> List (String, (Int, List Decl))
+dropKeyD : String ->
+  List (String, (Int, List Decl)) ->
+  List (String, (Int, List Decl))
 dropKeyD _ [] = []
-dropKeyD k ((k2, v)::rest)
+dropKeyD k ((k2, v) :: rest)
   | k == k2 = dropKeyD k rest
   | otherwise = (k2, v) :: dropKeyD k rest
 # DESUGAR

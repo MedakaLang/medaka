@@ -1,5 +1,5 @@
 # META
-source_lines=467
+source_lines=464
 stages=DESUGAR,MARK
 # SOURCE
 -- The SHARED ROUTE-WORD MINT — Stage B / Phase 3′ (ARCH B-2, #1113).
@@ -230,10 +230,7 @@ implRouteKeyWord o iface tys nm =
 export
 routeWordFor : Bool -> String -> TyConOrigin -> String -> List Ty -> String
 routeWordFor headIsUnique tag o iface tys =
-  if headIsUnique then
-    tag
-  else
-    implRouteKeyWord o iface tys None
+  if headIsUnique then tag else implRouteKeyWord o iface tys None
 
 -- ── the ONE prec-2 `Ty` printer ──────────────────────────────────────────
 -- Mirrors `types/typecheck.mdk`'s `ppTy` family byte-for-byte (which in turn

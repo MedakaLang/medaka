@@ -58,7 +58,7 @@ takePerfSink _ =
 
 revLines : List String -> List String -> List String
 revLines [] acc = acc
-revLines (x::xs) acc = revLines xs (x::acc)
+revLines (x :: xs) acc = revLines xs (x :: acc)
 
 -- Drain the sink to stderr as prose — `flushStaleNoticeProse`'s
 -- (`medaka_cli.mdk`) sibling for the OTHER deferred `run --json` notice, and
@@ -80,7 +80,7 @@ flushPerfSinkProse _ = putTimerLines (takePerfSink ())
 
 putTimerLines : List String -> <IO> Unit
 putTimerLines [] = ()
-putTimerLines (l::ls) =
+putTimerLines (l :: ls) =
   let _ = ePutStrLn l
   putTimerLines ls
 
@@ -120,7 +120,7 @@ emitStat True label count =
 export
 emitStats : Bool -> List (String, Int) -> <IO> Unit
 emitStats _ [] = ()
-emitStats on ((label, count)::rest) =
+emitStats on ((label, count) :: rest) =
   let _ = emitStat on label count
   emitStats on rest
 
@@ -179,11 +179,11 @@ emitTotal True elapsed =
 export
 totalDecls : List (String, List a) -> Int
 totalDecls [] = 0
-totalDecls ((_, ds)::rest) = countList ds + totalDecls rest
+totalDecls ((_, ds) :: rest) = countList ds + totalDecls rest
 
 countList : List a -> Int
 countList [] = 0
-countList (_::xs) = 1 + countList xs
+countList (_ :: xs) = 1 + countList xs
 
 -- GC-backed allocation snapshot: total bytes allocated since process start.
 -- Use paired snapshots to measure per-stage byte allocations.

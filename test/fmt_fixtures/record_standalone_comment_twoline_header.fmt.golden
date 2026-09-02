@@ -7,10 +7,10 @@
 -- line (where `| Cfg {` opens), not the decl's overall start line (`data
 -- Cfg =`) — else every interior comment lands one field short.
 data Cfg = Cfg {
-    alpha : Int,  -- comment about alpha
-    beta : Int,
-    -- a standalone comment block describing the NEXT field,
-    -- spanning two lines.
-    gamma : Int,
-    delta : Int,  -- comment about delta
-  }
+  alpha : Int,  -- comment about alpha
+  beta : Int,
+  -- a standalone comment block describing the NEXT field,
+  -- spanning two lines.
+  gamma : Int,
+  delta : Int,  -- comment about delta
+}

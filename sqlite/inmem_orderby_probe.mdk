@@ -57,7 +57,7 @@ printRows : List User -> <IO> Unit
 printRows [] = ()
 -- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
 -- lint-disable-next-line rule-duplicate-body
-printRows (u::rest) =
+printRows (u :: rest) =
   let _ = println (showUser u)
   printRows rest
 
@@ -72,9 +72,21 @@ runQ db label sel =
 
 runAll : Db -> <IO> Unit
 runAll db =
-  let _ = runQ db "-- order by age asc --" (withOrderBy "age" True (selectFrom "users"))
-  let _ = runQ db "-- order by age desc --" (withOrderBy "age" False (selectFrom "users"))
-  let _ = runQ db "-- order by age asc, name desc --" (withOrderBy "name" False (withOrderBy "age" True (selectFrom "users")))
+  let _ =
+    runQ
+      db
+      "-- order by age asc --"
+      (withOrderBy "age" True (selectFrom "users"))
+  let _ =
+    runQ
+      db
+      "-- order by age desc --"
+      (withOrderBy "age" False (selectFrom "users"))
+  let _ =
+    runQ
+      db
+      "-- order by age asc, name desc --"
+      (withOrderBy "name" False (withOrderBy "age" True (selectFrom "users")))
   runQ
     db
     "-- order by age desc, name asc --"

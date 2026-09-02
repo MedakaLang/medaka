@@ -38,10 +38,7 @@ numsSchema = TableSchema {
 
 numsRows : Int -> Int -> List (List Cell) -> List (List Cell)
 numsRows i n acc =
-  if i > n then
-    reverse acc
-  else
-    numsRows (i + 1) n ([CInt i, CInt i]::acc)
+  if i > n then reverse acc else numsRows (i + 1) n ([CInt i, CInt i] :: acc)
 
 main : <IO> Unit
 main = match args ()

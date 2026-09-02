@@ -5,10 +5,10 @@
 -- "PerRun" shape (compiler/types/typecheck.mdk) of interleaved trailing +
 -- standalone comments in the same record.
 data Cfg = Cfg {
-    alpha : Int,  -- comment about alpha
-    beta : Int,
-    -- a standalone comment block describing the NEXT field,
-    -- spanning two lines.
-    gamma : Int,
-    delta : Int,  -- comment about delta
-  }
+  alpha : Int,  -- comment about alpha
+  beta : Int,
+  -- a standalone comment block describing the NEXT field,
+  -- spanning two lines.
+  gamma : Int,
+  delta : Int,  -- comment about delta
+}

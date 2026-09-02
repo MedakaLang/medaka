@@ -42,6 +42,7 @@ import tools.printer.{
   commentsPlaced,
   setTrailingCommas,
   setImportForced,
+  setUnitStarts,
 }
 import frontend.lexer.{
   Token(..),
@@ -62,6 +63,7 @@ import frontend.parser.{
   declPosLine,
   declPosEndLine,
   trailingCommaLocs,
+  unitStarts,
 }
 import support.util.{
   listLen,
@@ -108,10 +110,7 @@ isSingleLine s = countNl s == 0
 -- Prepend a blank line when started and the gap to `targetLine` is >= 2.
 blankLineIfNeeded : List String -> Int -> Int -> Bool -> List String
 blankLineIfNeeded pieces targetLine cursor started =
-  if started && targetLine - cursor >= 2 then
-    "\n" :: pieces
-  else
-    pieces
+  if started && targetLine - cursor >= 2 then "\n" :: pieces else pieces
 
 -- Emit one standalone comment: blank-line gate, then the lexeme + newline;
 -- advance cursor past any embedded newlines; mark started.
@@ -128,7 +127,9 @@ flushBefore (FmtState pieces [] vlines cursor started placed) _ =
   FmtState pieces [] vlines cursor started placed
 flushBefore (FmtState pieces (c :: rest) vlines cursor started placed) line =
   if commentLine c < line then
-    flushBefore (emitComment (FmtState pieces rest vlines cursor started placed) c) line
+    flushBefore
+      (emitComment (FmtState pieces rest vlines cursor started placed) c)
+      line
   else
     FmtState pieces (c :: rest) vlines cursor started placed
 
@@ -162,14 +163,18 @@ takeBeforeGo (c :: rest) line acc =
 takeSameLine : List Comment -> Int -> (List String, List Comment)
 takeSameLine [] _ = ([], [])
 takeSameLine (c :: rest) line =
-  if commentLine c == line && isSingleLine (commentText c) then match takeSameLine rest line
+  if commentLine c == line
+    && isSingleLine (commentText c) then match takeSameLine rest line
     (more, leftover) => (commentText c :: more, leftover)
-  else ([], c :: rest)
+  else
+    ([], c :: rest)
 
 -- For each variant line, pop its preceding (leading) comments AND its same-line
 -- (trailing) comments.  Returns per-variant (leading, trailing) lexeme lists
 -- (parallel to vls) and the leftover stream.
-vcommentsFor : List Comment -> List Int -> (List (List String, List String), List Comment)
+vcommentsFor : List Comment ->
+  List Int ->
+  (List (List String, List String), List Comment)
 vcommentsFor cs [] = ([], cs)
 vcommentsFor cs (l :: ls) = match takeBefore cs l
   (leading, rest1) => match takeSameLine rest1 l
@@ -190,16 +195,29 @@ countPairs ((ld, tr) :: xs) = listLen ld + listLen tr + countPairs xs
 -- to keep vlines aligned) and interleaving any interior comment before the
 -- variant it documents.  Other decls render opaquely.
 declDoc : FmtState -> Decl -> (String, FmtState)
-declDoc (FmtState pieces cs vlines cursor started placed) (d@(DData { dataVis = vis, dataName = n, dataParams = params, dataCtors = variants, dataDerives = derives })) = match takeNVariantLines vlines (listLen variants)
+declDoc (FmtState pieces cs vlines cursor started placed) (d@(DData { dataVis = vis, dataName = n, dataParams = params, dataCtors = variants, dataDerives = derives })) = match (takeNVariantLines
+  vlines
+  (listLen variants))
   (vlinesRest, vls) => match vcommentsFor cs vls
     (vcomments, csRest) =>
-      if listLen vcomments == listLen variants && not (allEmptyPairs vcomments) then
+      if listLen vcomments == listLen variants
+        && not (allEmptyPairs vcomments) then
         (
-          render (printDataDeclCommented vis n params variants derives vcomments),
-          FmtState pieces csRest vlinesRest cursor started (placed + countPairs vcomments),
+          render
+            (printDataDeclCommented vis n params variants derives vcomments),
+          FmtState
+            pieces
+            csRest
+            vlinesRest
+            cursor
+            started
+            (placed + countPairs vcomments),
         )
       else
-        (render (printDecl d), FmtState pieces cs vlinesRest cursor started placed)
+        (
+          render (printDecl d),
+          FmtState pieces cs vlinesRest cursor started placed,
+        )
 declDoc st decl = (render (printDecl decl), st)
 
 -- ── Trailing comments ─────────────────────────────
@@ -228,7 +246,8 @@ appendTrailing pieces (c :: cs) =
 isInterior : Int -> Int -> Comment -> Bool
 isInterior startLine endLine c =
   let l = commentLine c
-  (l >= startLine && l < endLine) || (l == endLine && not (isSingleLine (commentText c)))
+  l >= startLine && l < endLine
+    || l == endLine && not (isSingleLine (commentText c))
 
 isDataDeclF : Decl -> Bool
 isDataDeclF (DData { dataOrigin = _ }) = True
@@ -251,7 +270,9 @@ isSingleNamedFieldData _ = False
 -- Render a single-variant named-field data decl one-field-per-line, consuming
 -- its one variant line (to keep vlines aligned).
 renderNamedFieldMulti : FmtState -> Decl -> (String, FmtState)
-renderNamedFieldMulti (FmtState pieces cs vlines cursor started placed) (DData { dataVis = vis, dataName = n, dataParams = params, dataCtors = variants, dataDerives = derives }) = match takeNVariantLines vlines 1
+renderNamedFieldMulti (FmtState pieces cs vlines cursor started placed) (DData { dataVis = vis, dataName = n, dataParams = params, dataCtors = variants, dataDerives = derives }) = match (takeNVariantLines
+  vlines
+  1)
   (vlinesRest, _) => (
     render (printNamedFieldData vis n params variants derives),
     FmtState pieces cs vlinesRest cursor started placed,
@@ -262,7 +283,11 @@ renderNamedFieldMulti st decl = declDoc st decl
 -- (header on line 0, field i on line i+1): a STANDALONE comment renders as its
 -- own line above the field it precedes; a TRAILING comment is appended to its
 -- field's line.  Returns (newDeclStr, consumedComments).
-spliceInterior : List String -> String -> Int -> List Comment -> (String, List Comment)
+spliceInterior : List String ->
+  String ->
+  Int ->
+  List Comment ->
+  (String, List Comment)
 spliceInterior srcLines declStr startLine interior =
   let outLines = splitNl declStr
   let classified = classifyIdxs startLine srcLines 0 interior
@@ -287,14 +312,15 @@ data CKind = CTrailing | CStandalone
 
 classifyKind : List String -> Comment -> CKind
 classifyKind srcLines c =
-  if isStandaloneSrc srcLines c then
-    CStandalone
-  else
-    CTrailing
+  if isStandaloneSrc srcLines c then CStandalone else CTrailing
 
 -- Map each interior comment to its OUTPUT-line index and its kind, accounting
 -- for the source lines already eaten by earlier STANDALONE comments.
-classifyIdxs : Int -> List String -> Int -> List Comment -> List (Comment, Int, CKind)
+classifyIdxs : Int ->
+  List String ->
+  Int ->
+  List Comment ->
+  List (Comment, Int, CKind)
 classifyIdxs _ _ _ [] = []
 classifyIdxs startLine srcLines eaten (c :: cs) =
   let k = classifyKind srcLines c
@@ -313,19 +339,26 @@ groupRuns ((c, i, k) :: rest) = match spanSameIdx i rest
 dropIdx : (Comment, Int, CKind) -> (Comment, CKind)
 dropIdx (c, _, k) = (c, k)
 
-spanSameIdx : Int -> List (Comment, Int, CKind) -> (List (Comment, Int, CKind), List (Comment, Int, CKind))
+spanSameIdx : Int ->
+  List (Comment, Int, CKind) ->
+  (List (Comment, Int, CKind), List (Comment, Int, CKind))
 spanSameIdx _ [] = ([], [])
 spanSameIdx i ((c, j, k) :: rest) =
   if i == j then match spanSameIdx i rest
     (same, rest2) => ((c, j, k) :: same, rest2)
-  else ([], (c, j, k) :: rest)
+  else
+    ([], (c, j, k) :: rest)
 
-attachInterior : List String -> List (Int, List (Comment, CKind)) -> Int -> (List String, List Comment)
+attachInterior : List String ->
+  List (Int, List (Comment, CKind)) ->
+  Int ->
+  (List String, List Comment)
 attachInterior [] _ _ = ([], [])
 attachInterior (ln :: rest) groups idx = match takeGroupFor idx groups
   (mine, groupsRest) => match attachInterior rest groupsRest (idx + 1)
     (restLines, consumed1) => match mine
       [] => (ln :: restLines, consumed1)
+
       _ =>
         let standalone = filterList (p => isStandaloneP p) mine
         let trailing = filterList (p => not (isStandaloneP p)) mine
@@ -342,13 +375,12 @@ appendTrailingP ln [] = ln
 appendTrailingP ln ((c, _) :: rest) =
   appendTrailingP "\{ln}  \{commentText c}" rest
 
-takeGroupFor : Int -> List (Int, List (Comment, CKind)) -> (List (Comment, CKind), List (Int, List (Comment, CKind)))
+takeGroupFor : Int ->
+  List (Int, List (Comment, CKind)) ->
+  (List (Comment, CKind), List (Int, List (Comment, CKind)))
 takeGroupFor _ [] = ([], [])
 takeGroupFor idx ((i, cs) :: rest) =
-  if i == idx then
-    (cs, rest)
-  else
-    ([], (i, cs) :: rest)
+  if i == idx then (cs, rest) else ([], (i, cs) :: rest)
 
 -- Render each comment in `cs` as its own line, indented to match `ln`'s own
 -- leading whitespace.
@@ -409,7 +441,8 @@ spanLines (l :: ls) idx startLine endLine
 splitByEndLine : List Comment -> Int -> (List Comment, List Comment)
 splitByEndLine [] _ = ([], [])
 splitByEndLine (c :: rest) endLine =
-  if commentLine c > endLine then ([], c :: rest)
+  if commentLine c > endLine then
+    ([], c :: rest)
   else match splitByEndLine rest endLine
     (mine, after) => (c :: mine, after)
 
@@ -420,32 +453,49 @@ appendAfterComments (FmtState p c v cur s pl) after =
 -- The printer's view of a comment: line, column, lexeme, standalone flag.
 toPComment : List String -> Comment -> PComment
 toPComment srcLines c =
-  PComment (commentLine c) (commentCol c) (commentText c) (isStandaloneSrc srcLines c)
+  PComment
+    (commentLine c)
+    (commentCol c)
+    (commentText c)
+    (isStandaloneSrc srcLines c)
 
 -- A trailing comma the parser recorded on one of the decl's lines (an import
 -- member list's pin).
 anyCommaWithin : Int -> Int -> List (Int, Int) -> Bool
 anyCommaWithin _ _ [] = False
 anyCommaWithin lo hi ((l, _) :: rest) =
-  (l >= lo && l <= hi) || anyCommaWithin lo hi rest
+  l >= lo && l <= hi || anyCommaWithin lo hi rest
 
 -- Process one (decl, declPos) pair.  Narrows the pending comment stream to
 -- this decl's span before dispatching; the after-span remainder is
 -- re-appended on the way out.
-stepDecl : FmtState -> List String -> List (Int, Int) -> Decl -> DeclPos -> FmtState
+stepDecl : FmtState ->
+  List String ->
+  List (Int, Int) ->
+  Decl ->
+  DeclPos ->
+  FmtState
 stepDecl st srcLines commas decl dp =
   let line = declPosLine dp
   let endLine = declPosEndLine dp
   let st1 = flushBefore st line
   match st1
-    FmtState pieces1 cs1 vlines1 cursor1 started1 placed1 => match splitByEndLine cs1 endLine
+    FmtState pieces1 cs1 vlines1 cursor1 started1 placed1 => match (splitByEndLine
+      cs1
+      endLine)
       (mine, after) =>
         let stSpan = FmtState pieces1 mine vlines1 cursor1 started1 placed1
         let stOut = stepDeclSpan stSpan srcLines commas decl line endLine
         appendAfterComments stOut after
 
 -- The per-decl body, over a comment stream narrowed to [line, endLine].
-stepDeclSpan : FmtState -> List String -> List (Int, Int) -> Decl -> Int -> Int -> FmtState
+stepDeclSpan : FmtState ->
+  List String ->
+  List (Int, Int) ->
+  Decl ->
+  Int ->
+  Int ->
+  FmtState
 stepDeclSpan (FmtState pieces1 cs1 vlines1 cursor1 started1 placed1) srcLines commas decl line endLine =
   let pieces2 = blankLineIfNeeded pieces1 line cursor1 started1
   let st2 = FmtState pieces2 cs1 vlines1 cursor1 started1 placed1
@@ -456,7 +506,13 @@ stepDeclSpan (FmtState pieces1 cs1 vlines1 cursor1 started1 placed1) srcLines co
 
 -- A non-data declaration: the printer places every interior comment; any it
 -- cannot place sends the declaration to the verbatim safety net.
-stepExprDecl : FmtState -> List String -> List (Int, Int) -> Decl -> Int -> Int -> FmtState
+stepExprDecl : FmtState ->
+  List String ->
+  List (Int, Int) ->
+  Decl ->
+  Int ->
+  Int ->
+  FmtState
 stepExprDecl (FmtState pieces2 cs1 vlines1 _cursor1 _started1 placed1) srcLines commas decl line endLine =
   let interior = filterList (isInterior line endLine) cs1
   setComments (map (toPComment srcLines) interior) (endLine + 1)
@@ -476,7 +532,13 @@ stepExprDecl (FmtState pieces2 cs1 vlines1 _cursor1 _started1 placed1) srcLines 
     match takeTrailing cs3 endLine
       (trailing, csRest) =>
         let pieces4 = appendTrailing (declStr0 :: pieces2) trailing
-        FmtState ("\n" :: pieces4) csRest vlines1 endLine True (placed1 + placedNow + listLen trailing)
+        FmtState
+          ("\n" :: pieces4)
+          csRest
+          vlines1
+          endLine
+          True
+          (placed1 + placedNow + listLen trailing)
 
 -- A `data` declaration: interior comments are placed per variant
 -- (`printDataDeclCommented`) or, for a single-variant record with field
@@ -486,11 +548,14 @@ stepDataDecl (FmtState pieces2 cs1 vlines1 cursor1 started1 placed1) srcLines de
   -- The variant's OWN source line (`| X {` of a two-line header, else the
   -- decl's start line).
   let variantLine = match vlines1
-    (vl :: _) => vl
+    vl :: _ => vl
     [] => line
   -- A comment on the variant's own line is a variant-TRAILING comment, not a
   -- field comment, so it must not route the decl onto the per-field path.
-  let fieldComments = filterList (c => commentLine c /= variantLine) (filterList (isStrictInterior line endLine) cs1)
+  let fieldComments =
+    filterList
+      (c => commentLine c /= variantLine)
+      (filterList (isStrictInterior line endLine) cs1)
   let nfMulti = isSingleNamedFieldData decl && isNonEmptyL fieldComments
   -- `printNamedFieldData` renders the header as ONE output line; a two-line
   -- source header (`data X =` / `  | X { ...`) originates on the variant's
@@ -501,21 +566,36 @@ stepDataDecl (FmtState pieces2 cs1 vlines1 cursor1 started1 placed1) srcLines de
   match takeTrailing cs1 endLine
     (trailing, csNoTrail) =>
       let st2 = FmtState pieces2 csNoTrail vlines1 cursor1 started1 placed1
-      match (if nfMulti then renderNamedFieldMulti st2 decl else declDoc st2 decl)
-        (declStr0, (FmtState pieces3 cs3 vlines3 _cursor3 _started3 placed3)) =>
-          let interior = if nfMulti then filterList (isStrictInterior line endLine) cs3 else []
+      match if nfMulti then renderNamedFieldMulti st2 decl else declDoc st2 decl
+        (declStr0, FmtState pieces3 cs3 vlines3 _cursor3 _started3 placed3) =>
+          let interior =
+            if nfMulti then
+              filterList (isStrictInterior line endLine) cs3
+            else
+              []
           match spliceInterior srcLines declStr0 headerLine interior
             (declStr, consumed) =>
               let cs3b = dropConsumed cs3 consumed
               let pieces4 = appendTrailing (declStr :: pieces3) trailing
-              FmtState ("\n" :: pieces4) cs3b vlines3 endLine True (placed3 + listLen consumed + listLen trailing)
+              FmtState
+                ("\n" :: pieces4)
+                cs3b
+                vlines3
+                endLine
+                True
+                (placed3 + listLen consumed + listLen trailing)
 
 isStrictInterior : Int -> Int -> Comment -> Bool
 isStrictInterior startLine endLine c =
   let l = commentLine c
   l > startLine && l < endLine && isSingleLine (commentText c)
 
-walkDecls : FmtState -> List String -> List (Int, Int) -> List Decl -> List DeclPos -> FmtState
+walkDecls : FmtState ->
+  List String ->
+  List (Int, Int) ->
+  List Decl ->
+  List DeclPos ->
+  FmtState
 walkDecls st _ _ [] _ = st
 walkDecls st _ _ _ [] = st
 walkDecls st srcLines commas (d :: ds) (p :: ps) =
@@ -526,12 +606,21 @@ walkDecls st srcLines commas (d :: ds) (p :: ps) =
 -- Interleave comments into the rendered program.  Refuses (panics) rather
 -- than produce output that lost a comment.
 export
-formatProgram : List Decl -> List DeclPos -> List Int -> List (Int, Int) -> List Comment -> String -> String
-formatProgram decls declPositions variantLines commas comments src =
+formatProgram : List Decl ->
+  List DeclPos ->
+  List Int ->
+  List (Int, Int) ->
+  List (Int, Int, Int) ->
+  List Comment ->
+  String ->
+  String
+formatProgram decls declPositions variantLines commas arms comments src =
   if listLen declPositions /= listLen decls then
-    panic "medaka fmt: internal error — declaration positions do not line up with the declarations; refusing to format"
+    panic
+      "medaka fmt: internal error — declaration positions do not line up with the declarations; refusing to format"
   else
     setTrailingCommas commas
+    setUnitStarts arms
     let st0 = FmtState [] comments variantLines 0 False 0
     match drainAll (walkDecls st0 (splitNl src) commas decls declPositions)
       FmtState finalPieces _ _ _ _ placed =>
@@ -542,9 +631,8 @@ formatProgram decls declPositions variantLines commas comments src =
 checkCommentCount : Int -> Int -> Unit
 checkCommentCount total placed =
   if total /= placed then
-    panic "medaka fmt: internal error — \{intToString total} comments in, \{intToString placed} placed; refusing to write output that would lose a comment"
-  else
-    ()
+    panic
+      "medaka fmt: internal error — \{intToString total} comments in, \{intToString placed} placed; refusing to write output that would lose a comment"
 
 -- Drain every remaining comment.
 drainAll : FmtState -> FmtState
@@ -559,7 +647,17 @@ formatSource : String -> String
 formatSource src = match parseWithPositions src
   (decls, pos) =>
     let commas = trailingCommaLocs ()
-    restoreTripleQuotedStrings src (formatProgram decls (positionsDecls pos) (positionsVariantLines pos) commas (collectComments src) src)
+    let arms = unitStarts ()
+    restoreTripleQuotedStrings
+      src
+      (formatProgram
+        decls
+        (positionsDecls pos)
+        (positionsVariantLines pos)
+        commas
+        arms
+        (collectComments src)
+        src)
 
 -- ── Triple-quoted string preservation ─────────────
 -- `formatProgram` re-renders every string literal in the canonical
@@ -581,7 +679,8 @@ stringTokenInfo _ [] _ = []
 stringTokenInfo _ _ [] = []
 stringTokenInfo src ((TString _) :: ts) ((s, e) :: ps) =
   let triple = isTripleStringAt src s
-  (triple, if triple then stringSlice s e src else "") :: stringTokenInfo src ts ps
+  (triple, if triple then stringSlice s e src else "")
+    :: stringTokenInfo src ts ps
 stringTokenInfo src (_ :: ts) (_ :: ps) = stringTokenInfo src ts ps
 
 stringTokenSpans : List Token -> List (Int, Int) -> List (Int, Int)
@@ -594,7 +693,9 @@ stringTokenSpans (_ :: ts) (_ :: ps) = stringTokenSpans ts ps
 -- Zip the original literal order against the formatted output's literal
 -- spans, keeping only the ones that need restoring.  A token-count mismatch
 -- is only safe at the TAIL (the final clause drops whatever is left).
-tripleStringSubs : List (Bool, String) -> List (Int, Int) -> List (Int, Int, String)
+tripleStringSubs : List (Bool, String) ->
+  List (Int, Int) ->
+  List (Int, Int, String)
 tripleStringSubs ((True, raw) :: is) ((s, e) :: ss) =
   (s, e, raw) :: tripleStringSubs is ss
 tripleStringSubs ((False, _) :: is) (_ :: ss) = tripleStringSubs is ss

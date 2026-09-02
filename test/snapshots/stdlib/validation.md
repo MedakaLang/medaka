@@ -1,5 +1,5 @@
 # META
-source_lines=177
+source_lines=178
 stages=DESUGAR,MARK
 # SOURCE
 {- | A result type that collects every error instead of stopping at the
@@ -170,7 +170,8 @@ prop "Semigroup Validation is associative" (p : Bool) (q : Bool) (r : Bool) (n :
 -- first error -- the property that makes it agree with the accumulating
 -- `Applicative` instead of with `Result`'s short-circuit.
 prop "Semigroup Validation accumulates both failures" (x : Int) (y : Int) =
-  let got = append (Failure [x] : Validation (List Int) (List Int)) (Failure [y])
+  let got =
+    append (Failure [x] : Validation (List Int) (List Int)) (Failure [y])
   got == Failure [x, y]
 
 -- LAW: a `Failure` on either side survives -- `append` never upgrades a

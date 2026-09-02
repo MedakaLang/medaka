@@ -41,7 +41,11 @@ mustHeader name value = match makeHeader name (toUtf8 value)
   Err message => panic "protocol_all_engines: header setup failed: \{message}"
 
 mustResponse : Int -> String -> String -> Response
-mustResponse status reason body = match makeResponse status reason [mustHeader "content-type" "text/plain"] (toUtf8 body)
+mustResponse status reason body = match (makeResponse
+  status
+  reason
+  [mustHeader "content-type" "text/plain"]
+  (toUtf8 body))
   Ok response => response
   Err message => panic "protocol_all_engines: response setup failed: \{message}"
 
@@ -56,40 +60,62 @@ mustRegistry (Err message) =
   panic "protocol_all_engines: registry setup failed: \{message}"
 
 registry : Registry
-registry = mustRegistry (makeRegistry
-  [
-    mustEndpoint (queryEndpoint "com.example.query.fixed"),
-    mustEndpoint (queryEndpoint "Com.Example.query.caseFixed"),
-    mustEndpoint (procedureEndpoint "com.example.params.check" NoInput),
-    mustEndpoint (procedureEndpoint "com.example.raw.echo" RawInput),
-    mustEndpoint (procedureEndpoint "com.example.block.put" RawInput),
-  ])
+registry =
+  mustRegistry
+    (makeRegistry [
+      mustEndpoint (queryEndpoint "com.example.query.fixed"),
+      mustEndpoint (queryEndpoint "Com.Example.query.caseFixed"),
+      mustEndpoint (procedureEndpoint "com.example.params.check" NoInput),
+      mustEndpoint (procedureEndpoint "com.example.raw.echo" RawInput),
+      mustEndpoint (procedureEndpoint "com.example.block.put" RawInput),
+    ])
 
 handler : Handler
 handler store (QueryCall "com.example.query.fixed" _) =
   (store, mustResponse 200 "OK" "fixed")
 handler store (QueryCall "Com.Example.query.caseFixed" _) =
   (store, mustResponse 200 "OK" "authority-case")
-handler store (ProcedureNoInputCall "com.example.params.check" [QueryParam firstName firstValue, QueryParam secondName secondValue, QueryParam flag flagValue]) = if firstName == "dryRun" && firstValue == "true" && secondName == "dryRun" && secondValue == "" && flag == "flag" && flagValue == "" then (store, mustResponse 200 "OK" "params-ordered") else panic "protocol_all_engines: procedure parameter order mismatch"
+handler store (ProcedureNoInputCall "com.example.params.check" [QueryParam firstName firstValue, QueryParam secondName secondValue, QueryParam flag flagValue]) =
+  if firstName == "dryRun"
+    && firstValue == "true"
+    && secondName == "dryRun"
+    && secondValue == ""
+    && flag == "flag"
+    && flagValue == "" then
+    (store, mustResponse 200 "OK" "params-ordered")
+  else
+    panic "protocol_all_engines: procedure parameter order mismatch"
 handler store (ProcedureRawCall "com.example.raw.echo" [] media bytes) =
   let mediaType = mediaTypeType media
   let mediaSubtype = mediaTypeSubtype media
-  if mediaType == "text" && mediaSubtype == "plain" && bytes == toUtf8 "hello" then
+  if mediaType == "text"
+    && mediaSubtype == "plain"
+    && bytes == toUtf8 "hello" then
     (store, mustResponse 200 "OK" "raw-text")
-  else if mediaType == "application" && mediaSubtype == "json" && bytes == toUtf8 "{nope}" then
+  else if mediaType == "application"
+    && mediaSubtype == "json"
+    && bytes == toUtf8 "{nope}" then
     (store, mustResponse 200 "OK" "raw-json")
-  else if mediaType == "application" && mediaSubtype == "octet-stream" && bytes == [|0, 128, 255|] then
+  else if mediaType == "application"
+    && mediaSubtype == "octet-stream"
+    && bytes == [|0, 128, 255|] then
     (store, mustResponse 200 "OK" "raw-opaque")
   else
     panic "protocol_all_engines: raw media/body preservation mismatch"
-handler store (ProcedureRawCall "com.example.block.put" [] _ bytes) = match storePut (cidForRaw bytes) bytes store
+handler store (ProcedureRawCall "com.example.block.put" [] _ bytes) = match (storePut
+  (cidForRaw bytes)
+  bytes
+  store)
   Err message =>
     panic "protocol_all_engines: verified store update failed: \{message}"
   Ok next => (next, mustResponse 201 "Created" "stored")
 handler _ _ = panic "protocol_all_engines: unexpected routed call"
 
 account : Account
-account = match makeAccount "did:plc:medakaprotocoltest" "protocol.example" "pds.example"
+account = match (makeAccount
+  "did:plc:medakaprotocoltest"
+  "protocol.example"
+  "pds.example")
   Ok value => value
   Err message => panic "protocol_all_engines: account setup failed: \{message}"
 
@@ -122,9 +148,8 @@ expectedError status reason code message =
 appendBytes : Array Int -> Array Int -> Array Int
 appendBytes left right =
   let leftSize = arrayLength left
-  arrayMakeWith
-    (leftSize + arrayLength right)
-    (i => if i < leftSize then left[i] else right[i - leftSize])
+  arrayMakeWith (leftSize + arrayLength right) (i =>
+    if i < leftSize then left[i] else right[i - leftSize])
 
 fixedQuery : Array Int
 fixedQuery =
@@ -167,10 +192,10 @@ rawJsonRequest =
     "POST /xrpc/com.example.raw.echo HTTP/1.1\r\nHost: pds.example\r\nContent-Type: application/json\r\nContent-Length: 6\r\n\r\n{nope}"
 
 rawOpaqueRequest : Array Int
-rawOpaqueRequest = appendBytes
-  (toUtf8
-    "POST /xrpc/com.example.raw.echo HTTP/1.1\r\nHost: pds.example\r\nContent-Type: application/octet-stream\r\nContent-Length: 3\r\n\r\n")
-  [|0, 128, 255|]
+rawOpaqueRequest = appendBytes (toUtf8
+  "POST /xrpc/com.example.raw.echo HTTP/1.1\r\nHost: pds.example\r\nContent-Type: application/octet-stream\r\nContent-Length: 3\r\n\r\n") [|
+  0, 128, 255
+|]
 
 procedureParamsRequest : Array Int
 procedureParamsRequest =
@@ -199,12 +224,16 @@ unknownRequest =
 resourceRequest : Array Int
 resourceRequest =
   toUtf8
-    ("GET /" ++ repeat maxHttpRequestLineBytes "a" ++ " HTTP/1.1\r\nHost: pds.example\r\n\r\n")
+    ("GET /"
+      ++ repeat maxHttpRequestLineBytes "a"
+      ++ " HTTP/1.1\r\nHost: pds.example\r\n\r\n")
 
 checkFixedQuery : <IO> Unit
 checkFixedQuery =
   let (next, response) = handleBytes server seededStore fixedQuery
-  if storeSize next == 1 && seedPreserved next && response == expectedTextResponse 200 "OK" "fixed" then
+  if storeSize next == 1
+    && seedPreserved next
+    && response == expectedTextResponse 200 "OK" "fixed" then
     println "CELL fixed-query PASS status=200 state=unchanged"
   else
     panic "protocol_all_engines: fixed-query mismatch"
@@ -213,7 +242,10 @@ checkChunkedUpdate : <IO> Unit
 checkChunkedUpdate =
   let expectedBody = toUtf8 "abc"
   let (next, response) = handleBytes server seededStore chunkedPut
-  if storeSize next == 2 && seedPreserved next && storeGet (cidForRaw expectedBody) next == Some expectedBody && response == expectedTextResponse 201 "Created" "stored" then
+  if storeSize next == 2
+    && seedPreserved next
+    && storeGet (cidForRaw expectedBody) next == Some expectedBody
+    && response == expectedTextResponse 201 "Created" "stored" then
     println "CELL chunked-update PASS status=201 state=1->2 body=abc"
   else
     panic "protocol_all_engines: chunked-update state mismatch"
@@ -221,7 +253,14 @@ checkChunkedUpdate =
 checkMalformed : <IO> Unit
 checkMalformed =
   let (next, response) = handleBytes server seededStore malformedRequest
-  if storeSize next == 1 && seedPreserved next && response == expectedError 400 "Bad Request" "InvalidRequest" "Malformed HTTP request" then
+  if storeSize next == 1
+    && seedPreserved next
+    && response
+      == expectedError
+        400
+        "Bad Request"
+        "InvalidRequest"
+        "Malformed HTTP request" then
     println "CELL malformed-unchanged PASS status=400 state=unchanged"
   else
     panic "protocol_all_engines: malformed framing mismatch"
@@ -231,12 +270,18 @@ malformedIsUnchanged request =
   let (next, response) = handleBytes server seededStore request
   storeSize next == 1
     && seedPreserved next
-    && response == expectedError 400 "Bad Request" "InvalidRequest" "Malformed HTTP request"
+    && response
+      == expectedError
+        400
+        "Bad Request"
+        "InvalidRequest"
+        "Malformed HTTP request"
 
 checkLowercaseVersion : <IO> Unit
 checkLowercaseVersion =
   if malformedIsUnchanged lowercaseVersionRequest then
-    println "CELL malformed-lowercase-version PASS status=400 state=unchanged no-dispatch"
+    println
+      "CELL malformed-lowercase-version PASS status=400 state=unchanged no-dispatch"
   else
     panic "protocol_all_engines: lowercase HTTP version reached dispatch"
 
@@ -257,7 +302,9 @@ checkInvalidTarget =
 checkRawText : <IO> Unit
 checkRawText =
   let (next, response) = handleBytes server seededStore rawTextRequest
-  if storeSize next == 1 && seedPreserved next && response == expectedTextResponse 200 "OK" "raw-text" then
+  if storeSize next == 1
+    && seedPreserved next
+    && response == expectedTextResponse 200 "OK" "raw-text" then
     println "CELL raw-text PASS media=text/plain bytes=exact state=unchanged"
   else
     panic "protocol_all_engines: raw-text mismatch"
@@ -265,32 +312,45 @@ checkRawText =
 checkRawJson : <IO> Unit
 checkRawJson =
   let (next, response) = handleBytes server seededStore rawJsonRequest
-  if storeSize next == 1 && seedPreserved next && response == expectedTextResponse 200 "OK" "raw-json" then
-    println "CELL raw-json PASS media=application/json bytes=exact state=unchanged"
+  if storeSize next == 1
+    && seedPreserved next
+    && response == expectedTextResponse 200 "OK" "raw-json" then
+    println
+      "CELL raw-json PASS media=application/json bytes=exact state=unchanged"
   else
     panic "protocol_all_engines: raw-json mismatch"
 
 checkRawOpaque : <IO> Unit
 checkRawOpaque =
   let (next, response) = handleBytes server seededStore rawOpaqueRequest
-  if storeSize next == 1 && seedPreserved next && response == expectedTextResponse 200 "OK" "raw-opaque" then
-    println "CELL raw-opaque PASS media=application/octet-stream bytes=exact state=unchanged"
+  if storeSize next == 1
+    && seedPreserved next
+    && response == expectedTextResponse 200 "OK" "raw-opaque" then
+    println
+      "CELL raw-opaque PASS media=application/octet-stream bytes=exact state=unchanged"
   else
     panic "protocol_all_engines: raw-opaque mismatch"
 
 checkProcedureParams : <IO> Unit
 checkProcedureParams =
   let (next, response) = handleBytes server seededStore procedureParamsRequest
-  if storeSize next == 1 && seedPreserved next && response == expectedTextResponse 200 "OK" "params-ordered" then
-    println "CELL procedure-params PASS repeated=true empty=true order=preserved state=unchanged"
+  if storeSize next == 1
+    && seedPreserved next
+    && response == expectedTextResponse 200 "OK" "params-ordered" then
+    println
+      "CELL procedure-params PASS repeated=true empty=true order=preserved state=unchanged"
   else
     panic "protocol_all_engines: procedure parameter mismatch"
 
 checkUppercaseAuthority : <IO> Unit
 checkUppercaseAuthority =
-  let (next, response) = handleBytes server seededStore uppercaseAuthorityRequest
-  if storeSize next == 1 && seedPreserved next && response == expectedTextResponse 200 "OK" "authority-case" then
-    println "CELL uppercase-authority-lookup PASS returned=Com.Example.query.caseFixed state=unchanged"
+  let (next, response) =
+    handleBytes server seededStore uppercaseAuthorityRequest
+  if storeSize next == 1
+    && seedPreserved next
+    && response == expectedTextResponse 200 "OK" "authority-case" then
+    println
+      "CELL uppercase-authority-lookup PASS returned=Com.Example.query.caseFixed state=unchanged"
   else
     panic "protocol_all_engines: uppercase-authority lookup mismatch"
 
@@ -299,14 +359,21 @@ checkAuthorityDuplicateIdentity =
   let lower = mustEndpoint (queryEndpoint "com.example.identity.echo")
   let upperAuthority = mustEndpoint (queryEndpoint "Com.Example.identity.echo")
   let upperMethod = mustEndpoint (queryEndpoint "com.example.identity.Echo")
-  match (makeRegistry [lower, upperAuthority], makeRegistry [lower, upperMethod])
-    (Err _, Ok _) => println "CELL authority-duplicate-identity PASS folded-authority=true method-case=distinct"
+  match (
+    makeRegistry [lower, upperAuthority],
+    makeRegistry [lower, upperMethod],
+  )
+    (Err _, Ok _) =>
+      println
+        "CELL authority-duplicate-identity PASS folded-authority=true method-case=distinct"
     _ => panic "protocol_all_engines: NSID duplicate identity mismatch"
 
 checkEmptyRegPort : <IO> Unit
 checkEmptyRegPort =
   let (next, response) = handleBytes server seededStore emptyRegPortRequest
-  if response == expectedTextResponse 200 "OK" "fixed" && storeSize next == 1 && seedPreserved next then
+  if response == expectedTextResponse 200 "OK" "fixed"
+    && storeSize next == 1
+    && seedPreserved next then
     println "CELL host-empty-reg-port PASS status=200 state=unchanged"
   else
     panic "protocol_all_engines: empty reg-name port mismatch"
@@ -314,7 +381,9 @@ checkEmptyRegPort =
 checkEmptyIpPort : <IO> Unit
 checkEmptyIpPort =
   let (next, response) = handleBytes server seededStore emptyIpPortRequest
-  if seedPreserved next && response == expectedTextResponse 200 "OK" "fixed" && storeSize next == 1 then
+  if seedPreserved next
+    && response == expectedTextResponse 200 "OK" "fixed"
+    && storeSize next == 1 then
     println "CELL host-empty-ip-port PASS status=200 state=unchanged"
   else
     panic "protocol_all_engines: empty IP-literal port mismatch"
@@ -322,7 +391,14 @@ checkEmptyIpPort =
 checkUnknown : <IO> Unit
 checkUnknown =
   let (next, response) = handleBytes server seededStore unknownRequest
-  if storeSize next == 1 && seedPreserved next && response == expectedError 404 "Not Found" "NotFound" "Unknown XRPC method: com.example.query.unknown" then
+  if storeSize next == 1
+    && seedPreserved next
+    && response
+      == expectedError
+        404
+        "Not Found"
+        "NotFound"
+        "Unknown XRPC method: com.example.query.unknown" then
     println "CELL unknown-unchanged PASS status=404 state=unchanged"
   else
     panic "protocol_all_engines: unknown route mismatch"
@@ -330,7 +406,14 @@ checkUnknown =
 checkResource : <IO> Unit
 checkResource =
   let (next, response) = handleBytes server seededStore resourceRequest
-  if storeSize next == 1 && seedPreserved next && response == expectedError 413 "Payload Too Large" "PayloadTooLarge" "HTTP request exceeds resource limits" then
+  if storeSize next == 1
+    && seedPreserved next
+    && response
+      == expectedError
+        413
+        "Payload Too Large"
+        "PayloadTooLarge"
+        "HTTP request exceeds resource limits" then
     println "CELL resource-unchanged PASS status=413 state=unchanged"
   else
     panic "protocol_all_engines: resource classification mismatch"

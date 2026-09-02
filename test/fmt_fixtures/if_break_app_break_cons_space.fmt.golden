@@ -14,27 +14,27 @@ peekByte input pos =
 
 -- #1: `let x = if …` statement RHS (own line) also breaks
 emitVarint v buf =
-  let bytes = if v >= varint9Threshold then
-    varint9Bytes v
-  else
-    varintBytesEncoding v
+  let bytes =
+    if v >= varint9Threshold then varint9Bytes v else varintBytesEncoding v
   appendAll bytes buf
 
 -- #2: println of a nested call — break inside the argument, not after the head
 demo =
-  println (showResult
-    "anyByte [65,66,67] sample label"
-    (runByteParser anyByte (arrayFromList [65, 66, 67])))
-  println (showResult
-    "between long descriptive label here"
-    (runByteParser
-      (between (byte 40) (byte 41) (beUint 1))
-      (arrayFromList [40, 99, 41])))
+  println
+    (showResult
+      "anyByte [65,66,67] sample label"
+      (runByteParser anyByte (arrayFromList [65, 66, 67])))
+  println
+    (showResult
+      "between long descriptive label here"
+      (runByteParser
+        (between (byte 40) (byte 41) (beUint 1))
+        (arrayFromList [40, 99, 41])))
 
 -- #3: `::` spacing by operand atomhood
-consAtoms x acc = x::acc
-consIndex input pos acc = input[pos]::acc
-consChain rest = 1 :: 2::rest
+consAtoms x acc = x :: acc
+consIndex input pos acc = input[pos] :: acc
+consChain rest = 1 :: 2 :: rest
 consSpacedLeft b r = bitAnd b 255 :: r.value
 consSpacedBoth x rest = x + 128 :: addContBits rest
 consSpacedRight x rest b = x :: appendByte rest b

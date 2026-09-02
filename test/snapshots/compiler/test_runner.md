@@ -1,5 +1,5 @@
 # META
-source_lines=54
+source_lines=56
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted `test "…" = <expr>` runner (Phase 127 restored 2026-07-11).
@@ -25,8 +25,8 @@ import tools.doctest.{ExResult(..)}
 export
 hasTests : List Decl -> Bool
 hasTests [] = False
-hasTests ((DTest _ _ _)::_) = True
-hasTests (_::rest) = hasTests rest
+hasTests ((DTest _ _ _) :: _) = True
+hasTests (_ :: rest) = hasTests rest
 
 -- Line number of a body expr (peel the transparent ELoc wrapper).
 exprLine : Expr -> Int
@@ -40,9 +40,9 @@ exprLine _ = 0
 export
 collectTests : List Decl -> List (String, Int, Expr)
 collectTests [] = []
-collectTests ((DTest _ name body)::rest) =
+collectTests ((DTest _ name body) :: rest) =
   (name, exprLine body, body) :: collectTests rest
-collectTests (_::rest) = collectTests rest
+collectTests (_ :: rest) = collectTests rest
 
 -- Evaluate one test body to an Expectation value and classify it.  A body that
 -- does not reduce to Pass/Fail is an `Errored` (e.g. a partial closure); a body
@@ -55,7 +55,9 @@ runOneTest evalEnv body =
     VCon "Pass" [] => Pass
     VCon "Fail" [VString msg] => Fail msg ""
     VCon "Fail" [v] => Fail (ppValue v) ""
-    other => Errored ("test body did not evaluate to an Expectation: " ++ ppValue other)
+    other =>
+      Errored
+        ("test body did not evaluate to an Expectation: " ++ ppValue other)
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DTest" false) (mem "Expr" true) (mem "Loc" true))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "eval" false) (mem "extendEnv" false) (mem "force" false) (mem "ppValue" false))))

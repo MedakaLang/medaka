@@ -52,7 +52,7 @@ singleton x = NECons x []
 export
 fromList : List a -> Option (NonEmpty a)
 fromList [] = None
-fromList (x::rest) = Some (NECons x rest)
+fromList (x :: rest) = Some (NECons x rest)
 
 -- # Accessing elements
 
@@ -97,7 +97,7 @@ export impl Mappable NonEmpty where
 export impl Foldable NonEmpty where
   fold f z (NECons x xs) = fold f (f z x) xs
   foldRight f z (NECons x xs) = foldRight f (foldRight f z xs) [x]
-  toList (NECons x xs) = x::xs
+  toList (NECons x xs) = x :: xs
   isEmpty _ = False
   length (NECons _ xs) = 1 + length xs
 

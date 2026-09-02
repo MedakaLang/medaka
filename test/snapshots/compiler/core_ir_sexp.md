@@ -1,5 +1,5 @@
 # META
-source_lines=285
+source_lines=293
 stages=DESUGAR,MARK
 # SOURCE
 -- Structural S-expression dump of the Core IR (STAGE2-DESIGN §2.1).  Mirrors
@@ -110,9 +110,11 @@ cexprSexp m (CLetGroup binds body) =
   node "CLetGroup" [slist (map (cbindSexp m) binds), cexprSexp m body]
 cexprSexp m (CMatch scrut arms) =
   node "CMatch" (cexprSexp m scrut :: map (carmSexp m) arms)
-cexprSexp m (CDecision scrut arms tree) = node
-  "CDecision"
-  [cexprSexp m scrut, slist (map (carmSexp m) arms), ctreeSexp tree]
+cexprSexp m (CDecision scrut arms tree) = node "CDecision" [
+  cexprSexp m scrut,
+  slist (map (carmSexp m) arms),
+  ctreeSexp tree,
+]
 cexprSexp m (CIf c t e) =
   node "CIf" [cexprSexp m c, cexprSexp m t, cexprSexp m e]
 cexprSexp m (CBinPrim op l r tag) =
@@ -145,22 +147,26 @@ cexprSexp m (CSlice a lo hi incl) =
   node "CSlice" [cexprSexp m a, cexprSexp m lo, cexprSexp m hi, boolStr incl]
 cexprSexp m (CStringIndex a i) =
   node "CStringIndex" [cexprSexp m a, cexprSexp m i]
-cexprSexp m (CStringSlice a lo hi incl) = node
-  "CStringSlice"
-  [cexprSexp m a, cexprSexp m lo, cexprSexp m hi, boolStr incl]
+cexprSexp m (CStringSlice a lo hi incl) = node "CStringSlice" [
+  cexprSexp m a,
+  cexprSexp m lo,
+  cexprSexp m hi,
+  boolStr incl,
+]
 cexprSexp m (CListIndex a i) = node "CListIndex" [cexprSexp m a, cexprSexp m i]
-cexprSexp m (CListSlice a lo hi incl) = node
-  "CListSlice"
-  [cexprSexp m a, cexprSexp m lo, cexprSexp m hi, boolStr incl]
+cexprSexp m (CListSlice a lo hi incl) = node "CListSlice" [
+  cexprSexp m a,
+  cexprSexp m lo,
+  cexprSexp m hi,
+  boolStr incl,
+]
 cexprSexp m (CBlock stmts) = node "CBlock" (map (cstmtSexp m) stmts)
-cexprSexp m (CMethod name route implRoutes methRoutes) = node
-  "CMethod"
-  [
-    escStr name,
-    routeSexp m route,
-    slist (map (routeSexp m) implRoutes),
-    slist (map (routeSexp m) methRoutes),
-  ]
+cexprSexp m (CMethod name route implRoutes methRoutes) = node "CMethod" [
+  escStr name,
+  routeSexp m route,
+  slist (map (routeSexp m) implRoutes),
+  slist (map (routeSexp m) methRoutes),
+]
 cexprSexp m (CDict name routes) =
   node "CDict" [escStr name, slist (map (routeSexp m) routes)]
 
@@ -242,9 +248,11 @@ cimplBodySexp m (CImplTagged tag key iface positions pats body) = node
     slist (map patSexp pats),
     cexprSexp m body,
   ]
-cimplBodySexp m (CImplDefault ifaceId pats body) = node
-  "CImplDefault"
-  [escStr ifaceId, slist (map patSexp pats), cexprSexp m body]
+cimplBodySexp m (CImplDefault ifaceId pats body) = node "CImplDefault" [
+  escStr ifaceId,
+  slist (map patSexp pats),
+  cexprSexp m body,
+]
 
 export
 cimplEntrySexp : SexpMode -> CImplEntry -> String

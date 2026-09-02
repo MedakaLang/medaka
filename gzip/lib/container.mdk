@@ -90,15 +90,14 @@ flagReservedMask = 224
 -- GzipHeader
 -- ---------------------------------------------------------------------------
 
-public export data GzipHeader =
-  | GzipHeader {
-      mtime : Int,
-      name : Option String,
-      comment : Option String,
-      xfl : Int,
-      os : Int,
-    }
-deriving (Eq, Debug)
+public export data GzipHeader = GzipHeader {
+  mtime : Int,
+  name : Option String,
+  comment : Option String,
+  xfl : Int,
+  os : Int,
+}
+  deriving (Eq, Debug)
 
 hasFlag : Int -> Int -> Bool
 hasFlag flg mask = bitAnd flg mask /= 0
@@ -115,7 +114,9 @@ checkMagic _ = failWith "not a gzip stream (bad magic)"
 checkCm : Int -> ByteParser Unit
 checkCm cm
   | cm == cmDeflate = pure ()
-  | otherwise = failWith "unsupported compression method (CM=\{cm}); only 8 (deflate) is supported"
+  | otherwise =
+    failWith
+      "unsupported compression method (CM=\{cm}); only 8 (deflate) is supported"
 
 checkReserved : Int -> ByteParser Unit
 checkReserved flg
@@ -133,34 +134,32 @@ nulTerminated = do
 -- FEXTRA: 2-byte LE length, then that many bytes, discarded (no extra-field
 -- registry is modeled here).
 skipExtra : Int -> ByteParser Unit
-skipExtra flg = when
-  (hasFlag flg flagFextra)
-  (do
-    len <- leUint 2
-    _ <- takeBytes len
-    pure ())
+skipExtra flg = when (hasFlag flg flagFextra) (do
+  len <- leUint 2
+  _ <- takeBytes len
+  pure ())
 
 parseName : Int -> ByteParser (Option String)
 parseName flg =
   if hasFlag flg flagFname then do
     bs <- nulTerminated
     pure (Some (fromUtf8 (arrayFromList bs)))
-  else pure None
+  else
+    pure None
 
 parseComment : Int -> ByteParser (Option String)
 parseComment flg =
   if hasFlag flg flagFcomment then do
     bs <- nulTerminated
     pure (Some (fromUtf8 (arrayFromList bs)))
-  else pure None
+  else
+    pure None
 
 -- FHCRC: 2 bytes, consumed but NOT validated — see the module comment.
 skipFhcrc : Int -> ByteParser Unit
-skipFhcrc flg = when
-  (hasFlag flg flagFhcrc)
-  (do
-    _ <- takeBytes 2
-    pure ())
+skipFhcrc flg = when (hasFlag flg flagFhcrc) (do
+  _ <- takeBytes 2
+  pure ())
 
 gzipHeaderParser : ByteParser GzipHeader
 gzipHeaderParser = do
@@ -177,14 +176,13 @@ gzipHeaderParser = do
   nameVal <- parseName flg
   commentVal <- parseComment flg
   _ <- skipFhcrc flg
-  pure
-    GzipHeader {
-      mtime = mtimeVal,
-      name = nameVal,
-      comment = commentVal,
-      xfl = xflVal,
-      os = osVal,
-    }
+  pure GzipHeader {
+    mtime = mtimeVal,
+    name = nameVal,
+    comment = commentVal,
+    xfl = xflVal,
+    os = osVal,
+  }
 
 {- | Parse a gzip member header. Returns the header and the byte offset at
    which the DEFLATE payload begins — the caller needs that offset to hand
@@ -195,7 +193,8 @@ gzipHeaderParser = do
    > parseGzipHeader (arrayFromList [31, 139, 8, 0, 0, 0, 0, 0, 0, 3])
    Ok (GzipHeader { mtime = 0, name = None, comment = None, xfl = 0, os = 3 }, 10)
 -}
-export parseGzipHeader : Array Int -> Result String (GzipHeader, Int)
+export
+parseGzipHeader : Array Int -> Result String (GzipHeader, Int)
 parseGzipHeader bytes = match runBP gzipHeaderParser bytes 0
   BOk h pos => Ok (h, pos)
   BErr msg pos => Err "\{msg} at byte \{pos}"
@@ -217,10 +216,13 @@ trailerParser = do
    > parseGzipTrailer (arrayFromList [134, 166, 16, 54, 5, 0, 0, 0])
    Ok (907060870, 5)
 -}
-export parseGzipTrailer : Array Int -> Result String (Int, Int)
+export
+parseGzipTrailer : Array Int -> Result String (Int, Int)
 parseGzipTrailer bytes =
   let n = arrayLength bytes
-  if n < 8 then Err "gzip trailer: input too short (need at least 8 bytes for CRC32+ISIZE), got \{n}"
+  if n < 8 then
+    Err
+      "gzip trailer: input too short (need at least 8 bytes for CRC32+ISIZE), got \{n}"
   else match runBP trailerParser bytes (n - 8)
     BOk pair _ => Ok pair
     BErr msg pos => Err "\{msg} at byte \{pos}"
@@ -249,7 +251,8 @@ emitOptionalField (Some s) buf =
    > emitGzipHeader GzipHeader { mtime = 0, name = None, comment = None, xfl = 0, os = 3 }
    [|31, 139, 8, 0, 0, 0, 0, 0, 0, 3|]
 -}
-export emitGzipHeader : GzipHeader -> Array Int
+export
+emitGzipHeader : GzipHeader -> Array Int
 emitGzipHeader h =
   let buf = newBuilder ()
   emitU8 gzipMagic0 buf
@@ -269,7 +272,8 @@ emitGzipHeader h =
    > emitGzipTrailer 907060870 5
    [|134, 166, 16, 54, 5, 0, 0, 0|]
 -}
-export emitGzipTrailer : Int -> Int -> Array Int
+export
+emitGzipTrailer : Int -> Int -> Array Int
 emitGzipTrailer crc isize =
   let buf = newBuilder ()
   emitU32LE crc buf
@@ -285,23 +289,26 @@ emitGzipTrailer crc isize =
 -- `printf 'hello' | gzip -n -c | xxd`:
 --   1f 8b 08 00 00000000 00 03  cb48 cdc9 c907 00  86a6 1036 0500 0000
 -- Minimal header (no FNAME/FCOMMENT/FEXTRA/FHCRC), xfl=0x00, os=0x03.
-test "parseGzipHeader: minimal header from `gzip -n`" = expectEqual
-  (Ok
-    (GzipHeader {
+test "parseGzipHeader: minimal header from `gzip -n`" =
+  expectEqual
+    (Ok (
+      GzipHeader {
         mtime = 0,
         name = None,
         comment = None,
         xfl = 0,
         os = 3,
-      }, 10))
-  (parseGzipHeader (arrayFromList [31, 139, 8, 0, 0, 0, 0, 0, 0, 3]))
+      },
+      10,
+    ))
+    (parseGzipHeader (arrayFromList [31, 139, 8, 0, 0, 0, 0, 0, 0, 3]))
 
 -- `printf 'hello' > greet.txt && gzip -k -f greet.txt | xxd`:
 --   1f 8b 08 08 509b726a 00 03  6772656574 2e747874 00  cb48...
 -- FNAME "greet.txt", mtime = 0x6a729b50 = 1785895760, header ends at byte 20.
-test "parseGzipHeader: FNAME set from a real gzip file" = expectEqual
-  (Ok
-    (
+test "parseGzipHeader: FNAME set from a real gzip file" =
+  expectEqual
+    (Ok (
       GzipHeader {
         mtime = 1785895760,
         name = Some "greet.txt",
@@ -311,45 +318,54 @@ test "parseGzipHeader: FNAME set from a real gzip file" = expectEqual
       },
       20,
     ))
-  (parseGzipHeader (arrayFromList
-    [
-      31, 139, 8, 8, 80, 155, 114, 106, 0, 3, 103, 114, 101, 101, 116, 46, 116,
-      120, 116, 0,
-    ]))
+    (parseGzipHeader
+      (arrayFromList [
+        31, 139, 8, 8, 80, 155, 114, 106, 0, 3, 103, 114, 101, 101, 116, 46,
+        116, 120, 116, 0
+      ]))
 
 -- Trailer of the same `hello.gz`, cross-checked against
 -- `python3 -c "import zlib; print(zlib.crc32(b'hello'), len(b'hello'))"`
 -- -> 907060870 5.
-test "parseGzipTrailer: crc/isize match zlib.crc32(b'hello')/len" = expectEqual
-  (Ok (907060870, 5))
-  (parseGzipTrailer (arrayFromList [134, 166, 16, 54, 5, 0, 0, 0]))
+test "parseGzipTrailer: crc/isize match zlib.crc32(b'hello')/len" =
+  expectEqual
+    (Ok (907060870, 5))
+    (parseGzipTrailer (arrayFromList [134, 166, 16, 54, 5, 0, 0, 0]))
 
 -- The trailer parser reads only the LAST 8 bytes: pass the whole minimal
 -- `.gz` stream (header + 7-byte deflate payload + trailer) and it must skip
 -- straight to the trailer.
-test "parseGzipTrailer: reads the LAST 8 bytes of a full member" = expectEqual
-  (Ok (907060870, 5))
-  (parseGzipTrailer (arrayFromList
-    [
-      31, 139, 8, 0, 0, 0, 0, 0, 0, 3, 203, 72, 205, 201, 201, 7, 0, 134, 166,
-      16, 54, 5, 0, 0, 0,
-    ]))
+test "parseGzipTrailer: reads the LAST 8 bytes of a full member" =
+  expectEqual
+    (Ok (907060870, 5))
+    (parseGzipTrailer
+      (arrayFromList [
+        31, 139, 8, 0, 0, 0, 0, 0, 0, 3, 203, 72, 205, 201, 201, 7, 0, 134, 166,
+        16, 54, 5, 0, 0, 0
+      ]))
 
 -- Error path: bad magic (first two bytes wrong). The failure position is 2,
 -- not 0: `takeBytes 2` already consumed both magic bytes before `checkMagic`
 -- runs (ByteParser position-threading is post-hoc, not lookahead).
-test "parseGzipHeader: bad magic is rejected" = match parseGzipHeader (arrayFromList [0, 0, 8, 0, 0, 0, 0, 0, 0, 3])
+test "parseGzipHeader: bad magic is rejected" = match (parseGzipHeader
+  (arrayFromList [0, 0, 8, 0, 0, 0, 0, 0, 0, 3]))
   Err msg => expectEqual "not a gzip stream (bad magic) at byte 2" msg
   Ok _ => fail "expected Err on bad magic"
 
 -- Error path: CM /= 8 (deflate is the only method gzip actually uses).
-test "parseGzipHeader: CM /= 8 is rejected" = match parseGzipHeader (arrayFromList [31, 139, 9, 0, 0, 0, 0, 0, 0, 3])
-  Err msg => expectEqual "unsupported compression method (CM=9); only 8 (deflate) is supported at byte 3" msg
+test "parseGzipHeader: CM /= 8 is rejected" = match (parseGzipHeader
+  (arrayFromList [31, 139, 9, 0, 0, 0, 0, 0, 0, 3]))
+  Err msg =>
+    expectEqual
+      "unsupported compression method (CM=9); only 8 (deflate) is supported at byte 3"
+      msg
   Ok _ => fail "expected Err on CM /= 8"
 
 -- Error path: a reserved FLG bit (bit 5, value 32) is set.
-test "parseGzipHeader: a reserved FLG bit is rejected" = match parseGzipHeader (arrayFromList [31, 139, 8, 32, 0, 0, 0, 0, 0, 3])
-  Err msg => expectEqual "reserved FLG bits (5,6,7) must be 0, got FLG=32 at byte 4" msg
+test "parseGzipHeader: a reserved FLG bit is rejected" = match (parseGzipHeader
+  (arrayFromList [31, 139, 8, 32, 0, 0, 0, 0, 0, 3]))
+  Err msg =>
+    expectEqual "reserved FLG bits (5,6,7) must be 0, got FLG=32 at byte 4" msg
   Ok _ => fail "expected Err on a reserved FLG bit"
 
 -- ---------------------------------------------------------------------------
@@ -390,7 +406,8 @@ prop "emitGzipHeader/parseGzipHeader round-trips (numeric fields)" (mtimeIn : In
    string containing a NUL would truncate at the first one, which is a fact
    about NUL-terminated encoding, not a bug in this module). -}
 prop "emitGzipHeader/parseGzipHeader round-trips FNAME" (nameIn : String) =
-  let clean = fromUtf8 (arrayFromList (filter (b => b /= 0) (toList (toUtf8 nameIn))))
+  let clean =
+    fromUtf8 (arrayFromList (filter (b => b /= 0) (toList (toUtf8 nameIn))))
   let h = GzipHeader {
     mtime = 0,
     name = Some clean,
@@ -399,12 +416,13 @@ prop "emitGzipHeader/parseGzipHeader round-trips FNAME" (nameIn : String) =
     os = 3,
   }
   match parseGzipHeader (emitGzipHeader h)
-    Ok (parsed, offset) => parsed.name == Some clean
-      && offset == 10 + arrayLength (toUtf8 clean) + 1
+    Ok (parsed, offset) =>
+      parsed.name == Some clean && offset == 10 + arrayLength (toUtf8 clean) + 1
     Err _ => False
 
 -- Trailer round-trip, wrapped to uint32 the same way the header is.
-prop "emitGzipTrailer/parseGzipTrailer round-trips" (crcIn : Int) (isizeIn : Int) = match parseGzipTrailer (emitGzipTrailer crcIn isizeIn)
-  Ok (crc, isize) => crc == bitAnd crcIn 4294967295
-    && isize == bitAnd isizeIn 4294967295
+prop "emitGzipTrailer/parseGzipTrailer round-trips" (crcIn : Int) (isizeIn : Int) = match (parseGzipTrailer
+  (emitGzipTrailer crcIn isizeIn))
+  Ok (crc, isize) =>
+    crc == bitAnd crcIn 4294967295 && isize == bitAnd isizeIn 4294967295
   Err _ => False

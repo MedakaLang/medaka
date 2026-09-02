@@ -113,10 +113,7 @@ get i (Vector backing len)
    `Option`-returning form. -}
 export impl Index (Vector a) Int a where
   index (Vector backing len) i =
-    if i >= 0 && i < !len then
-      arrayGetUnsafe i !backing
-    else
-      indexErrorAt i
+    if i >= 0 && i < !len then arrayGetUnsafe i !backing else indexErrorAt i
 
 {- | The first element, or `None` when the vector is empty.
 
@@ -215,7 +212,8 @@ export impl IndexMut (Vector a) Int a where
     if i >= 0 && i < !len then
       let _ = arraySetUnsafe i v !backing
       Vector backing len
-    else indexErrorAt i
+    else
+      indexErrorAt i
 
 {- | Exchanges the elements at indices `i` and `j`.
 
@@ -270,7 +268,7 @@ mapInPlace f (Vector backing len) = mapInPlaceGo f !backing 0 !len
 -- Push every element of a list, in order.
 pushAll : List a -> Vector a -> Unit
 pushAll [] _ = ()
-pushAll (x::xs) ma =
+pushAll (x :: xs) ma =
   push x ma
   pushAll xs ma
 
@@ -389,12 +387,13 @@ export impl Display (Vector a) requires Display a where
 -- lint-disable-next-line rule-stdlib-reimpl
 naiveInsert : Ord a => a -> List a -> List a
 naiveInsert x [] = [x]
-naiveInsert x (y::ys) = if lte x y then x :: y::ys else y :: naiveInsert x ys
+naiveInsert x (y :: ys) =
+  if lte x y then x :: y :: ys else y :: naiveInsert x ys
 
 naiveSort : Ord a => List a -> List a
 -- lint-disable-next-line rule-stdlib-reimpl
 naiveSort [] = []
-naiveSort (x::xs) = naiveInsert x (naiveSort xs)
+naiveSort (x :: xs) = naiveInsert x (naiveSort xs)
 
 -- `list.insertAt`'s clamp, restated so the laws can name the landing index.
 clampIdx : Int -> Int -> Int
@@ -406,7 +405,7 @@ clampIdx i n
 -- Pair each element with its input position, for the stability law.
 tagFrom : Int -> List a -> List (Int, a)
 tagFrom _ [] = []
-tagFrom i (x::xs) = (i, x) :: tagFrom (i + 1) xs
+tagFrom i (x :: xs) = (i, x) :: tagFrom (i + 1) xs
 
 -- A deliberately COARSE sort key, so ties are common.
 coarseKey : (Int, Int) -> Int
@@ -419,10 +418,11 @@ posOf (i, _) = i
    positions must still ascend.  Checked pairwise over the output. -}
 sortedAndStable : List (Int, Int) -> Bool
 sortedAndStable [] = True
-sortedAndStable (_::[]) = True
-sortedAndStable (a::b::rest) = coarseKey a <= coarseKey b
-  && (coarseKey a < coarseKey b || posOf a < posOf b)
-  && sortedAndStable (b::rest)
+sortedAndStable (_ :: []) = True
+sortedAndStable (a :: b :: rest) =
+  coarseKey a <= coarseKey b
+    && (coarseKey a < coarseKey b || posOf a < posOf b)
+    && sortedAndStable (b :: rest)
 
 -- LAW: `sort` agrees with an independent sort oracle, so it is both
 -- ascending AND a permutation of the input -- either property alone is

@@ -49,7 +49,7 @@ omKeys m = keys m
 export
 omFromNames : List String -> OrdMap Unit -> OrdMap Unit
 omFromNames [] m = m
-omFromNames (x::rest) m = omFromNames rest (omInsert x () m)
+omFromNames (x :: rest) m = omFromNames rest (omInsert x () m)
 
 -- Transform every value in place, preserving the exact tree shape and key set
 -- (structural `mapWithKey`, key ignored).  Used to finalise per-key list buckets
@@ -65,7 +65,7 @@ omMapValues f m = mapWithKey (_ v => f v) m
 export
 omFromPairs : List (String, a) -> OrdMap a -> OrdMap a
 omFromPairs [] m = m
-omFromPairs ((k, v)::rest) m = omFromPairs rest (omInsert k v m)
+omFromPairs ((k, v) :: rest) m = omFromPairs rest (omInsert k v m)
 # DESUGAR
 (DUse false (UseGroup ("map") ((mem "Map" true) (mem "set" false) (mem "get" false) (mem "has" false) (mem "size" false) (mem "delete" false) (mem "keys" false) (mem "mapWithKey" false))))
 (DTypeAlias true "OrdMap" ("a") (TyApp (TyApp (TyCon "Map") (TyCon "String")) (TyVar "a")))

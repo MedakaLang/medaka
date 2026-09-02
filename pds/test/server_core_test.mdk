@@ -41,7 +41,11 @@ mustHeader name value = match makeHeader name (toUtf8 value)
   Err message => panic "server_core_test: header setup failed: \{message}"
 
 mustResponse : Int -> String -> String -> Response
-mustResponse status reason body = match makeResponse status reason [mustHeader "content-type" "text/plain"] (toUtf8 body)
+mustResponse status reason body = match (makeResponse
+  status
+  reason
+  [mustHeader "content-type" "text/plain"]
+  (toUtf8 body))
   Ok response => response
   Err message => panic "server_core_test: response setup failed: \{message}"
 
@@ -56,23 +60,30 @@ mustRegistry (Err message) =
   panic "server_core_test: registry setup failed: \{message}"
 
 registry : Registry
-registry = mustRegistry (makeRegistry
-  [
-    mustEndpoint (queryEndpoint "com.example.query.fixed"),
-    mustEndpoint (procedureEndpoint "com.example.block.put" RawInput),
-  ])
+registry =
+  mustRegistry
+    (makeRegistry [
+      mustEndpoint (queryEndpoint "com.example.query.fixed"),
+      mustEndpoint (procedureEndpoint "com.example.block.put" RawInput),
+    ])
 
 handler : Handler
 handler store (QueryCall "com.example.query.fixed" _) =
   (store, mustResponse 200 "OK" "fixed")
-handler store (ProcedureRawCall "com.example.block.put" [] _ bytes) = match storePut (cidForRaw bytes) bytes store
+handler store (ProcedureRawCall "com.example.block.put" [] _ bytes) = match (storePut
+  (cidForRaw bytes)
+  bytes
+  store)
   Err message =>
     panic "server_core_test: verified store update failed: \{message}"
   Ok next => (next, mustResponse 201 "Created" "stored")
 handler _ _ = panic "server_core_test: unexpected routed call"
 
 account : Account
-account = match makeAccount "did:plc:medakaservertest" "server.example" "pds.example"
+account = match (makeAccount
+  "did:plc:medakaservertest"
+  "server.example"
+  "pds.example")
   Ok value => value
   Err message => panic "server_core_test: account setup failed: \{message}"
 
@@ -88,8 +99,8 @@ seededStore = match storePut (cidForRaw seedBytes) seedBytes storeEmpty
   Err message => panic "server_core_test: seed store setup failed: \{message}"
 
 seedPreserved : Store -> Bool
-seedPreserved store = storeSize store == 1
-  && storeGet (cidForRaw seedBytes) store == Some seedBytes
+seedPreserved store =
+  storeSize store == 1 && storeGet (cidForRaw seedBytes) store == Some seedBytes
 
 expectedTextResponse : Int -> String -> String -> Array Int
 expectedTextResponse status reason body =
@@ -130,14 +141,20 @@ unknownRequest =
 resourceRequest : Array Int
 resourceRequest =
   toUtf8
-    ("GET /" ++ repeat maxHttpRequestLineBytes "a" ++ " HTTP/1.1\r\nHost: pds.example\r\n\r\n")
+    ("GET /"
+      ++ repeat maxHttpRequestLineBytes "a"
+      ++ " HTTP/1.1\r\nHost: pds.example\r\n\r\n")
 
 test "Store starts empty and delegates verified immutable insertion" =
   let bytes = [|1, 2, 3|]
   let cid = cidForRaw bytes
   match storePut cid bytes storeEmpty
     Err _ => expectTrue False
-    Ok next => expectTrue (storeSize storeEmpty == 0 && storeSize next == 1 && storeGet cid next == Some [|1, 2, 3|])
+    Ok next =>
+      expectTrue
+        (storeSize storeEmpty == 0
+          && storeSize next == 1
+          && storeGet cid next == Some [|1, 2, 3|])
 
 test "Store insertion and lookup both retain defensive copies" =
   let bytes = [|4, 5, 6|]
@@ -151,46 +168,73 @@ test "Store insertion and lookup both retain defensive copies" =
         let () = A.setInPlace 1 98 viewed
         expectEqual (storeGet cid next) (Some [|4, 5, 6|])
 
-test "classified parser exposes malformed framing without diagnostic matching" = match parseRequestClassified malformedRequest
+test "classified parser exposes malformed framing without diagnostic matching" = match (parseRequestClassified
+  malformedRequest)
   Err (HttpMalformed _) => expectTrue True
   _ => expectTrue False
 
-test "classified parser exposes resource excess without diagnostic matching" = match parseRequestClassified resourceRequest
+test "classified parser exposes resource excess without diagnostic matching" = match (parseRequestClassified
+  resourceRequest)
   Err (HttpResourceExcess _) => expectTrue True
   _ => expectTrue False
 
-test "original parseRequest API retains its Result String contract" = match parseRequest fixedQuery
+test "original parseRequest API retains its Result String contract" = match (parseRequest
+  fixedQuery)
   Ok _ => expectTrue True
   Err _ => expectTrue False
 
-test "direct configured handle preserves Store for a fixed query" = match parseRequest fixedQuery
+test "direct configured handle preserves Store for a fixed query" = match (parseRequest
+  fixedQuery)
   Err _ => expectTrue False
   Ok request =>
     let (next, response) = handle server seededStore request
     expectTrue
-      (seedPreserved next && serializeResponse response == expectedTextResponse 200 "OK" "fixed")
+      (seedPreserved next
+        && serializeResponse response == expectedTextResponse 200 "OK" "fixed")
 
 test "fixed raw request returns successor Store and exact response bytes" =
   let (next, bytes) = handleBytes server storeEmpty fixedPut
   expectTrue
-    (storeSize next == 1 && storeGet (cidForRaw (toUtf8 "abc")) next == Some (toUtf8 "abc") && bytes == expectedTextResponse 201 "Created" "stored")
+    (storeSize next == 1
+      && storeGet (cidForRaw (toUtf8 "abc")) next == Some (toUtf8 "abc")
+      && bytes == expectedTextResponse 201 "Created" "stored")
 
 test "chunked raw request returns successor Store and exact response bytes" =
   let (next, bytes) = handleBytes server storeEmpty chunkedPut
   expectTrue
-    (storeSize next == 1 && storeGet (cidForRaw (toUtf8 "abc")) next == Some (toUtf8 "abc") && bytes == expectedTextResponse 201 "Created" "stored")
+    (storeSize next == 1
+      && storeGet (cidForRaw (toUtf8 "abc")) next == Some (toUtf8 "abc")
+      && bytes == expectedTextResponse 201 "Created" "stored")
 
 test "malformed framing returns exact 400 and preserves Store" =
   let (next, bytes) = handleBytes server seededStore malformedRequest
   expectTrue
-    (seedPreserved next && bytes == expectedError 400 "Bad Request" "InvalidRequest" "Malformed HTTP request")
+    (seedPreserved next
+      && bytes
+        == expectedError
+          400
+          "Bad Request"
+          "InvalidRequest"
+          "Malformed HTTP request")
 
 test "unknown route returns exact 404 and preserves Store" =
   let (next, bytes) = handleBytes server seededStore unknownRequest
   expectTrue
-    (seedPreserved next && bytes == expectedError 404 "Not Found" "NotFound" "Unknown XRPC method: com.example.query.unknown")
+    (seedPreserved next
+      && bytes
+        == expectedError
+          404
+          "Not Found"
+          "NotFound"
+          "Unknown XRPC method: com.example.query.unknown")
 
 test "resource excess returns exact 413 and preserves Store" =
   let (next, bytes) = handleBytes server seededStore resourceRequest
   expectTrue
-    (seedPreserved next && bytes == expectedError 413 "Payload Too Large" "PayloadTooLarge" "HTTP request exceeds resource limits")
+    (seedPreserved next
+      && bytes
+        == expectedError
+          413
+          "Payload Too Large"
+          "PayloadTooLarge"
+          "HTTP request exceeds resource limits")

@@ -20,7 +20,8 @@ charValue c = indexOf (fromChar c) tidAlphabet
 
 decodeDigits : Array Char -> Int -> Int -> Int -> Result String Int
 decodeDigits chars pos end acc =
-  if pos >= end then Ok acc
+  if pos >= end then
+    Ok acc
   else match charValue chars[pos]
     None => Err "tid: character is outside the sortable alphabet"
     Some value => decodeDigits chars (pos + 1) end (acc * 32 + value)
@@ -30,10 +31,11 @@ encodeDigit value = (toChars tidAlphabet)[value]
 
 encodeFixedGo : Int -> Int -> List Char -> String
 encodeFixedGo value remaining acc =
-  if remaining == 0 then stringFromChars (arrayFromList acc)
+  if remaining == 0 then
+    stringFromChars (arrayFromList acc)
   else
     let digit = encodeDigit (value % 32)
-    encodeFixedGo (value / 32) (remaining - 1) (digit::acc)
+    encodeFixedGo (value / 32) (remaining - 1) (digit :: acc)
 
 encodeFixed : Int -> Int -> String
 encodeFixed value width = encodeFixedGo value width []
@@ -54,17 +56,20 @@ export
 tidParse : String -> Result String Tid
 tidParse text =
   let chars = toChars text
-  if arrayLength chars /= 13 then Err "tid: expected exactly 13 characters"
+  if arrayLength chars /= 13 then
+    Err "tid: expected exactly 13 characters"
   else match charValue chars[0]
     None => Err "tid: character is outside the sortable alphabet"
-    Some first => if first >= 16 then Err "tid: high bit must be zero"
-    else match decodeDigits chars 0 11 0
-      Err message => Err message
-      Ok micros =>
-        if micros > tidTimestampMax then
-          Err "tid: timestamp is outside the representable 53-bit range"
-        else
-          map (Tid text micros) (decodeDigits chars 11 13 0)
+    Some first =>
+      if first >= 16 then
+        Err "tid: high bit must be zero"
+      else match decodeDigits chars 0 11 0
+        Err message => Err message
+        Ok micros =>
+          if micros > tidTimestampMax then
+            Err "tid: timestamp is outside the representable 53-bit range"
+          else
+            map (Tid text micros) (decodeDigits chars 11 13 0)
 
 -- | Canonical thirteen-character spelling.
 export
@@ -90,7 +95,9 @@ tidCompare left right = compare (tidToString left) (tidToString right)
    the prior timestamp by one microsecond using the proposed clock id. -}
 export
 tidNext : Tid -> Int -> Int -> Result String Tid
-tidNext prior proposedMicros proposedClockId = match tidEncode proposedMicros proposedClockId
+tidNext prior proposedMicros proposedClockId = match (tidEncode
+  proposedMicros
+  proposedClockId)
   Err message => Err message
   Ok proposed =>
     if tidCompare proposed prior == Gt then

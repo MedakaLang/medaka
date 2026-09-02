@@ -1,5 +1,5 @@
 # META
-source_lines=130
+source_lines=142
 stages=DESUGAR,MARK
 # SOURCE
 {- | Filesystem helpers built on the host file primitives.
@@ -24,17 +24,22 @@ import string.{contains}
 {- | What `stat` reports about a path: its size in bytes, whether it is a
    directory, whether it is a regular file, and its modification time in
    seconds since the Unix epoch. -}
-public export data FileStat =
-  | FileStat { size : Int, isDir : Bool, isFile : Bool, mtime : Float }
+public export data FileStat = FileStat {
+  size : Int,
+  isDir : Bool,
+  isFile : Bool,
+  mtime : Float,
+}
   deriving (Eq, Debug)
 
 {- | The metadata of a path as a `FileStat`, or `Err` when the path cannot
    be examined, for instance because it does not exist. -}
 export
 stat : String -> <FileRead "_"> Result String FileStat
-stat p = map
-  ((sz, d, f, m) => FileStat { size = sz, isDir = d, isFile = f, mtime = m })
-  (statFile p)
+stat p =
+  map
+    ((sz, d, f, m) => FileStat { size = sz, isDir = d, isFile = f, mtime = m })
+    (statFile p)
 
 {- | Whether a path exists and is a directory. -}
 export
@@ -68,7 +73,8 @@ copyFile src dst = match readFileBytes src
 export
 mkdirAll : String -> <FileWrite "_"> Result String Unit
 mkdirAll path =
-  if path == "" || path == "." || path == "/" then Ok ()
+  if path == "" || path == "." || path == "/" then
+    Ok ()
   else match mkdirAll (dirname path)
     Err e => Err e
     Ok _ => match makeDir path
@@ -87,16 +93,21 @@ walkDir root = match listDir root
   Err e => Err e
   Ok entries => walkEntries root entries []
 
-walkEntries : String -> List String -> List String -> <FileRead "_"> Result String (List String)
+walkEntries : String ->
+  List String ->
+  List String ->
+  <FileRead "_"> Result String (List String)
 walkEntries _ [] acc = Ok acc
-walkEntries root (name::rest) acc =
+walkEntries root (name :: rest) acc =
   let full = joinPath root name
   match stat full
     Err e => Err e
-    Ok st => if st.isDir then match walkDir full
-      Err e => Err e
-      Ok sub => walkEntries root rest (acc ++ (full::sub))
-    else walkEntries root rest (acc ++ [full])
+    Ok st =>
+      if st.isDir then match walkDir full
+        Err e => Err e
+        Ok sub => walkEntries root rest (acc ++ (full :: sub))
+      else
+        walkEntries root rest (acc ++ [full])
 
 -- ── Instance laws ────────────────────────────────────────────────────────────
 -- `FileStat` is a plain record of four immutable fields, so derived `Eq` is
@@ -125,12 +136,13 @@ prop "Eq FileStat is reflexive and field-discriminating" (n : Int) (b : Bool) =
 prop "Debug FileStat separates records that Eq separates" (n : Int) (b : Bool) =
   let x = FileStat { size = n, isDir = b, isFile = not b, mtime = intToFloat n }
   let y = FileStat { x | size = n + 1 }
-  debug x == debug FileStat {
-      size = n,
-      isDir = b,
-      isFile = not b,
-      mtime = intToFloat n,
-    }
+  debug x
+      == debug FileStat {
+        size = n,
+        isDir = b,
+        isFile = not b,
+        mtime = intToFloat n,
+      }
     && debug x == debug y == False
 # DESUGAR
 (DUse false (UseGroup ("core") ((mem "Result" false) (mem "Ok" false) (mem "Err" false))))

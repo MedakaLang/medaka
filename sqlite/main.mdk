@@ -73,7 +73,7 @@ renderRow pkIdx row = join "|" (renderCells (rowCellsWithIpk pkIdx row))
 
 renderCells : List Cell -> List String
 renderCells [] = []
-renderCells (c::rest) = cellToString c :: renderCells rest
+renderCells (c :: rest) = cellToString c :: renderCells rest
 
 -- Dump the stored CREATE statement + all rows of a table.
 dumpTable : Db -> String -> <IO> Unit
@@ -88,7 +88,7 @@ dumpTableRows db table entry = match scanTableRows db table
 
 printRows : Option Int -> List Row -> <IO> Unit
 printRows pkIdx [] = ()
-printRows pkIdx (r::rest) =
+printRows pkIdx (r :: rest) =
   println (renderRow pkIdx r)
   printRows pkIdx rest
 
@@ -100,7 +100,7 @@ dumpSchema db = match readSchema db
 
 printSchema : List SchemaEntry -> <IO> Unit
 printSchema [] = ()
-printSchema (e::rest) =
+printSchema (e :: rest) =
   println "\{schemaType e}|\{schemaName e}|\{intToString (schemaRootPage e)}"
   printSchema rest
 
@@ -129,7 +129,7 @@ runSql path sql = match execSql path sql
 
 printCellRows : List (List Cell) -> <IO> Unit
 printCellRows [] = ()
-printCellRows (cells::rest) =
+printCellRows (cells :: rest) =
   println (join "|" (renderCells cells))
   printCellRows rest
 
@@ -138,7 +138,7 @@ printCellRows (cells::rest) =
 main : <IO, FileRead, FileWrite> Unit
 main = match args ()
   [path] => runOpen path dumpSchema
-  path::arg::_ => runArg path arg
+  path :: arg :: _ => runArg path arg
   _ => println "usage: sqlite_cli <db> [<table> | \"<SQL>\"]"
 
 runArg : String -> String -> <IO, FileRead, FileWrite> Unit

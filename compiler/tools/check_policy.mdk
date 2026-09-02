@@ -75,22 +75,19 @@ parsePolicyArgs argv = parsePolicyGo argv None "Cache,Log" "transform"
 
 parsePolicyGo : List String -> Option String -> String -> String -> PolicyArgs
 parsePolicyGo [] file allow fn = PolicyArgs file allow fn
-parsePolicyGo ("--allow"::v::rest) file _ fn = parsePolicyGo rest file v fn
-parsePolicyGo ("--fn"::v::rest) file allow _ = parsePolicyGo rest file allow v
-parsePolicyGo (f::rest) None allow fn = parsePolicyGo rest (Some f) allow fn
-parsePolicyGo (f::rest) (file@(Some _)) allow fn =
+parsePolicyGo ("--allow" :: v :: rest) file _ fn = parsePolicyGo rest file v fn
+parsePolicyGo ("--fn" :: v :: rest) file allow _ =
+  parsePolicyGo rest file allow v
+parsePolicyGo (f :: rest) None allow fn = parsePolicyGo rest (Some f) allow fn
+parsePolicyGo (f :: rest) (file@(Some _)) allow fn =
   parsePolicyGo rest file allow fn
 
 -- Split the --allow value on ',', dropping empties (mirror String.split_on_char
 -- ',' then filter (<> "")).
 splitComma : String -> List String
 splitComma s =
-  filterNonEmpty (splitCommaGo
-    (stringToChars s)
-    (arrayLength (stringToChars s))
-    0
-    0
-    0)
+  filterNonEmpty
+    (splitCommaGo (stringToChars s) (arrayLength (stringToChars s)) 0 0 0)
 
 -- WS-4: brace-depth-aware label split.  Commas INSIDE `{…}` (a product Method
 -- set, e.g. `Method={GET,POST}`) do NOT separate policy labels.  `depth` tracks
@@ -115,11 +112,8 @@ sliceGo cs a b
 
 filterNonEmpty : List String -> List String
 filterNonEmpty [] = []
-filterNonEmpty (x::xs) =
-  if x == "" then
-    filterNonEmpty xs
-  else
-    x :: filterNonEmpty xs
+filterNonEmpty (x :: xs) =
+  if x == "" then filterNonEmpty xs else x :: filterNonEmpty xs
 
 -- ── WS-1b: policy as (label, param) ─────────────────────────────────────────
 -- Each comma-separated token is either a bare label `L` (→ policy param ⊤ =
@@ -130,7 +124,10 @@ parsePolicy : String -> List (String, Param)
 parsePolicy s = map parsePolicyTok (splitComma s)
 
 parsePolicyTok : String -> (String, Param)
-parsePolicyTok tok = match splitOnFirstEq (stringToChars tok) (arrayLength (stringToChars tok)) 0
+parsePolicyTok tok = match (splitOnFirstEq
+  (stringToChars tok)
+  (arrayLength (stringToChars tok))
+  0)
   None => (tok, PPrefix None)
   Some i =>
     let cs = stringToChars tok
@@ -142,17 +139,21 @@ parsePolicyTok tok = match splitOnFirstEq (stringToChars tok) (arrayLength (stri
     -- carrier sentinel `@P{…}`), so the policy compare reaches `dsub` over a
     -- `PProduct` — pointwise subsumption is inherited.  A plain prefix rhs
     -- (`a.com/*`, no axis `=`) stays `PPrefix (Some rhs)`, byte-identical to WS-1b.
-    if rhsIsProduct rhs
-    then (label, decodeProductParam ("@P{" ++ rhs ++ "}"))
-    else if rhsIsSet rhs
-    then (label, PSet (Some (decodeSetParam rhs)))
-    else (label, PPrefix (Some rhs))
+    if rhsIsProduct rhs then
+      (label, decodeProductParam ("@P{" ++ rhs ++ "}"))
+    else if rhsIsSet rhs then
+      (label, PSet (Some (decodeSetParam rhs)))
+    else
+      (label, PPrefix (Some rhs))
 
 -- a policy rhs is a product when it contains an axis assignment `=` (after the
 -- label `=` already consumed) — e.g. `Host="…"` / `Method={…}`.  A bare prefix
 -- pattern (`a.com/*`) has no `=`.
 rhsIsProduct : String -> Bool
-rhsIsProduct rhs = match splitOnFirstEq (stringToChars rhs) (arrayLength (stringToChars rhs)) 0
+rhsIsProduct rhs = match (splitOnFirstEq
+  (stringToChars rhs)
+  (arrayLength (stringToChars rhs))
+  0)
   None => False
   Some _ => True
 
@@ -177,11 +178,11 @@ splitOnFirstEq cs n i
 -- entry renders `L "pat"`).
 policyLabels : List (String, Param) -> List String
 policyLabels [] = []
-policyLabels ((l, p)::rest) = l ++ drender p :: policyLabels rest
+policyLabels ((l, p) :: rest) = l ++ drender p :: policyLabels rest
 
 lookupParam : String -> List (String, Param) -> Option Param
 lookupParam _ [] = None
-lookupParam k ((l, p)::rest) = if k == l then Some p else lookupParam k rest
+lookupParam k ((l, p) :: rest) = if k == l then Some p else lookupParam k rest
 
 -- ── 2. call graph from the desugared AST ────────────────────────────────────
 -- collectEVars: every EVar name referenced in an expression (conservative —
@@ -196,8 +197,8 @@ collectEVars (EDictApp n) = [n]
 collectEVars (EApp f x) = collectEVars f ++ collectEVars x
 collectEVars (ELam _ body) = collectEVars body
 collectEVars (ELet _ _ _ v body) = collectEVars v ++ collectEVars body
-collectEVars (ELetGroup binds body) = concatMapCP collectBind binds
-  ++ collectEVars body
+collectEVars (ELetGroup binds body) =
+  concatMapCP collectBind binds ++ collectEVars body
 collectEVars (EMatch e arms) = collectEVars e ++ concatMapCP collectArm arms
 collectEVars (EIf c t f) = collectEVars c ++ collectEVars t ++ collectEVars f
 collectEVars (EBinOp _ a b _) = collectEVars a ++ collectEVars b
@@ -207,18 +208,17 @@ collectEVars (EAnnot e _) = collectEVars e
 collectEVars (EHeadAnnot e _) = collectEVars e
 collectEVars (EFieldAccess e _ _) = collectEVars e
 collectEVars (ERecordCreate _ flds) = concatMapCP collectFieldAssign flds
-collectEVars (ERecordUpdate e flds _) = collectEVars e
-  ++ concatMapCP collectFieldAssign flds
-collectEVars (EVariantUpdate _ e flds) = collectEVars e
-  ++ concatMapCP collectFieldAssign flds
+collectEVars (ERecordUpdate e flds _) =
+  collectEVars e ++ concatMapCP collectFieldAssign flds
+collectEVars (EVariantUpdate _ e flds) =
+  collectEVars e ++ concatMapCP collectFieldAssign flds
 collectEVars (ETuple es) = concatMapCP collectEVars es
 collectEVars (EListLit es) = concatMapCP collectEVars es
 collectEVars (EArrayLit es) = concatMapCP collectEVars es
 collectEVars (ERangeList a b _) = collectEVars a ++ collectEVars b
 collectEVars (ERangeArray a b _) = collectEVars a ++ collectEVars b
-collectEVars (ESlice a b c _ _) = collectEVars a
-  ++ collectEVars b
-  ++ collectEVars c
+collectEVars (ESlice a b c _ _) =
+  collectEVars a ++ collectEVars b ++ collectEVars c
 collectEVars (EIndex a b _) = collectEVars a ++ collectEVars b
 collectEVars (EBlock stmts) = concatMapCP collectStmt stmts
 collectEVars (EDo stmts) = concatMapCP collectStmt stmts
@@ -231,8 +231,8 @@ collectClause : FunClause -> List String
 collectClause (FunClause _ body) = collectEVars body
 
 collectArm : Arm -> List String
-collectArm (Arm _ guards body) = concatMapCP collectGuard guards
-  ++ collectEVars body
+collectArm (Arm _ guards body) =
+  concatMapCP collectGuard guards ++ collectEVars body
 
 collectGuard : Guard -> List String
 collectGuard (GBool e) = collectEVars e
@@ -250,7 +250,7 @@ collectStmt (DoFieldAssign _ _ e) = collectEVars e
 
 concatMapCP : (a -> List b) -> List a -> List b
 concatMapCP _ [] = []
-concatMapCP f (x::xs) = f x ++ concatMapCP f xs
+concatMapCP f (x :: xs) = f x ++ concatMapCP f xs
 
 -- A top-level name (DFunDef or DExtern), peeling DAttrib.  Mirror inner_decl +
 -- the DFunDef/DExtern match in the OCaml call-graph builder.
@@ -281,20 +281,17 @@ intersectStr xs ys = filterMember xs ys
 
 filterMember : List String -> List String -> List String
 filterMember [] _ = []
-filterMember (x::xs) ys =
-  if memberStr x ys then
-    x :: filterMember xs ys
-  else
-    filterMember xs ys
+filterMember (x :: xs) ys =
+  if memberStr x ys then x :: filterMember xs ys else filterMember xs ys
 
 collectOpts : List (Option a) -> List a
 collectOpts [] = []
-collectOpts (None::rest) = collectOpts rest
-collectOpts ((Some x)::rest) = x :: collectOpts rest
+collectOpts (None :: rest) = collectOpts rest
+collectOpts ((Some x) :: rest) = x :: collectOpts rest
 
 memberStr : String -> List String -> Bool
 memberStr _ [] = False
-memberStr x (y::ys) = if x == y then True else memberStr x ys
+memberStr x (y :: ys) = if x == y then True else memberStr x ys
 
 -- ── 4. effect ATOMS from a scheme (WS-1b: keep the param, not just the label) ─
 -- Walk the normalized mono: at each TFun, collect the row's atoms (effrowLabels
@@ -325,13 +322,13 @@ sortUniqAtoms atoms = dedupAtoms (sortAtoms atoms)
 
 sortAtoms : List Atom -> List Atom
 sortAtoms [] = []
-sortAtoms (x::xs) = insertAtom x (sortAtoms xs)
+sortAtoms (x :: xs) = insertAtom x (sortAtoms xs)
 
 insertAtom : Atom -> List Atom -> List Atom
 insertAtom x [] = [x]
-insertAtom x (y::ys) =
+insertAtom x (y :: ys) =
   if stringLeq (atomLabel x) (atomLabel y) then
-    x :: y::ys
+    x :: y :: ys
   else
     y :: insertAtom x ys
 
@@ -343,23 +340,23 @@ stringLeq a b = match stringCompare a b
 dedupAtoms : List Atom -> List Atom
 dedupAtoms [] = []
 dedupAtoms [x] = [x]
-dedupAtoms (x::y::rest) =
+dedupAtoms (x :: y :: rest) =
   if atomLabel x == atomLabel y then
-    dedupAtoms (x::rest)
+    dedupAtoms (x :: rest)
   else
-    x :: dedupAtoms (y::rest)
+    x :: dedupAtoms (y :: rest)
 
 -- The label view of an atom list (for header rendering + chain keys).  Each atom
 -- renders `label` (⊤ param) or `label "pat"` (concrete) via drender — byte-
 -- identical to WS-1a for ⊤ params (drender ⊤ = "").
 atomLabels : List Atom -> List String
 atomLabels [] = []
-atomLabels (a::rest) = atomLabel a ++ drender (atomParam a) :: atomLabels rest
+atomLabels (a :: rest) = atomLabel a ++ drender (atomParam a) :: atomLabels rest
 
 -- (name, effect-atoms) for every fn whose scheme carries a non-empty effect set.
 fnEffectsTable : List (String, Scheme) -> List (String, List Atom)
 fnEffectsTable [] = []
-fnEffectsTable ((name, sch)::rest) = match schemeEffects sch
+fnEffectsTable ((name, sch) :: rest) = match schemeEffects sch
   [] => fnEffectsTable rest
   effs => (name, effs) :: fnEffectsTable rest
 
@@ -374,11 +371,20 @@ fnHasEffect table name label = match lookupAssoc name table
 -- find_chain: from `start`, repeatedly hop to the lexicographically-smallest
 -- callee that carries `forbiddenLabel`, stopping at a leaf or a revisit (mirror
 -- SS.find_first_opt over the sorted callee set + the `visited` cutoff).
-findChain : List (String, List String) -> List (String, List Atom) -> String -> String -> List String
+findChain : List (String, List String) ->
+  List (String, List Atom) ->
+  String ->
+  String ->
+  List String
 findChain callGraph effTable start forbiddenLabel =
   traceChain callGraph effTable forbiddenLabel start [start]
 
-traceChain : List (String, List String) -> List (String, List Atom) -> String -> String -> List String -> List String
+traceChain : List (String, List String) ->
+  List (String, List Atom) ->
+  String ->
+  String ->
+  List String ->
+  List String
 traceChain callGraph effTable forbiddenLabel fn visited =
   let callees = match lookupAssoc fn callGraph
     None => []
@@ -387,12 +393,18 @@ traceChain callGraph effTable forbiddenLabel fn visited =
   -- carrying the forbidden effect.
   match firstWithEffect effTable forbiddenLabel (sortUniqS callees)
     None => [fn]
-    Some c => if memberStr c visited then [fn, c]
-      else fn :: traceChain callGraph effTable forbiddenLabel c (c :: visited)
+    Some c =>
+      if memberStr c visited then
+        [fn, c]
+      else
+        fn :: traceChain callGraph effTable forbiddenLabel c (c :: visited)
 
-firstWithEffect : List (String, List Atom) -> String -> List String -> Option String
+firstWithEffect : List (String, List Atom) ->
+  String ->
+  List String ->
+  Option String
 firstWithEffect _ _ [] = None
-firstWithEffect effTable label (c::rest) =
+firstWithEffect effTable label (c :: rest) =
   if fnHasEffect effTable c label then
     Some c
   else
@@ -410,7 +422,7 @@ forbiddenLabels effs policy = filterForbidden effs policy
 
 filterForbidden : List Atom -> List (String, Param) -> List String
 filterForbidden [] _ = []
-filterForbidden (a::rest) policy =
+filterForbidden (a :: rest) policy =
   if atomPermitted a policy then
     filterForbidden rest policy
   else
@@ -500,7 +512,7 @@ runPlugin fnName rtD coreD userD =
 
 lookupValue : String -> List (String, Value e) -> Option (Value e)
 lookupValue _ [] = None
-lookupValue k ((n, v)::rest) = if k == n then Some v else lookupValue k rest
+lookupValue k ((n, v) :: rest) = if k == n then Some v else lookupValue k rest
 
 -- ── driver ──────────────────────────────────────────────────────────────────
 -- runCheckPolicy returns (report, accepted?): the caller prints the report and
@@ -534,7 +546,8 @@ runCheckPolicy rtSrc coreSrc src allowStr fnName =
     -- which is why this site was parked on the Flat wrapper until #1116 grew
     -- `checkOneSchemeFull`. OWN FIRST: `lookupAssoc` is a first-match scan, so a
     -- plugin that redefines a prelude name must win its own lookup.
-    let (preludeSchemes, ownSchemes) = checkOneSchemeFull rtD coreD ("__user__", userD)
+    let (preludeSchemes, ownSchemes) =
+      checkOneSchemeFull rtD coreD ("__user__", userD)
     let schemes = ownSchemes ++ preludeSchemes
     let effTable = fnEffectsTable schemes
     -- Existence is checked against the complete scheme list, not effTable:
@@ -547,22 +560,24 @@ runCheckPolicy rtSrc coreSrc src allowStr fnName =
         let forbidden = forbiddenLabels fnEffects policy
         match forbidden
           [] =>
-            let effStr = if listIsEmpty fnEffects then
-              "pure"
-            else
-              "<" ++ joinWith ", " (atomLabels fnEffects) ++ ">"
+            let effStr =
+              if listIsEmpty fnEffects then
+                "pure"
+              else
+                "<" ++ joinWith ", " (atomLabels fnEffects) ++ ">"
             let header = "accepted. \{fnName} requires only \{effStr}\n"
             let pluginOutput = runPlugin fnName rtD coreD userD
             PolicyAccept (header ++ pluginOutput)
           _ =>
             let chain = findChain callGraph effTable fnName (firstOf forbidden)
-            let header = "rejected. \{fnName} requires <\{joinWith ", " (atomLabels fnEffects)}>. Not permitted by policy {\{joinWith ", " (policyLabels policy)}}\n"
+            let header =
+              "rejected. \{fnName} requires <\{joinWith ", " (atomLabels fnEffects)}>. Not permitted by policy {\{joinWith ", " (policyLabels policy)}}\n"
             let via = "   reached via: " ++ joinWith " → " chain ++ "\n"
             PolicyReject (header ++ via)
 
 firstOf : List String -> String
 firstOf [] = ""
-firstOf (x::_) = x
+firstOf (x :: _) = x
 
 listIsEmpty : List a -> Bool
 listIsEmpty [] = True
@@ -597,7 +612,7 @@ atomToToml a =
   match atomParam a
     PPrefix (Some s) => "\{label} = \"\{s}\""
     PSet (Some xs) => "\{label} = [\{joinWith ", " (map quoteTok xs)}]"
-    PProduct ax => "\{label} = { \{productTomlInline ax} }"   -- WS-4 inline table
+    PProduct ax => "\{label} = { \{productTomlInline ax} }"  -- WS-4 inline table
     _ => label ++ " = true"
 
 -- WS-4: render a product's axes as a TOML inline-table body: a Prefix axis →
@@ -639,7 +654,7 @@ manifestToml atoms =
 
 joinTomlLines : List String -> String
 joinTomlLines [] = ""
-joinTomlLines (x::xs) = "\{x}\n\{joinTomlLines xs}"
+joinTomlLines (x :: xs) = "\{x}\n\{joinTomlLines xs}"
 
 -- Parse args for `medaka manifest <file.mdk> [--fn name]`.
 -- Default fn name: "main" (the conventional entry point for manifest extraction;
@@ -652,9 +667,9 @@ parseManifestArgs argv = parseManifestGo argv None "main"
 
 parseManifestGo : List String -> Option String -> String -> ManifestArgs
 parseManifestGo [] file fn = ManifestArgs file fn
-parseManifestGo ("--fn"::v::rest) file _ = parseManifestGo rest file v
-parseManifestGo (f::rest) None fn = parseManifestGo rest (Some f) fn
-parseManifestGo (f::rest) (file@(Some _)) fn = parseManifestGo rest file fn
+parseManifestGo ("--fn" :: v :: rest) file _ = parseManifestGo rest file v
+parseManifestGo (f :: rest) None fn = parseManifestGo rest (Some f) fn
+parseManifestGo (f :: rest) (file@(Some _)) fn = parseManifestGo rest file fn
 
 -- Run manifest extraction: typecheck the file, read the named fn's inferred
 -- effect row, return TOML.
@@ -675,7 +690,8 @@ runManifest rtSrc coreSrc src fnName =
   -- which is why this site was parked on the Flat wrapper until #1116 grew
   -- `checkOneSchemeFull`. OWN FIRST: `lookupAssoc` is a first-match scan, so a
   -- plugin that redefines a prelude name must win its own lookup.
-  let (preludeSchemes, ownSchemes) = checkOneSchemeFull rtD coreD ("__user__", userD)
+  let (preludeSchemes, ownSchemes) =
+    checkOneSchemeFull rtD coreD ("__user__", userD)
   let schemes = ownSchemes ++ preludeSchemes
   let effTable = fnEffectsTable schemes
   let fnEffects = match lookupAssoc fnName effTable
@@ -699,7 +715,7 @@ atomToAllowTok a =
   match atomParam a
     PPrefix (Some s) => "\{label}=\{s}"
     PSet (Some xs) => "\{label}={\{joinWith "," xs}}"
-    PProduct ax => "\{label}=\{productAllowRhs ax}"   -- WS-4 round-trip form
+    PProduct ax => "\{label}=\{productAllowRhs ax}"  -- WS-4 round-trip form
     _ => label
 
 -- WS-4: render product axes as a policy `--allow` rhs `Host="…";Method={…}` —
@@ -733,7 +749,8 @@ runManifestAtoms rtSrc coreSrc src fnName =
   -- which is why this site was parked on the Flat wrapper until #1116 grew
   -- `checkOneSchemeFull`. OWN FIRST: `lookupAssoc` is a first-match scan, so a
   -- plugin that redefines a prelude name must win its own lookup.
-  let (preludeSchemes, ownSchemes) = checkOneSchemeFull rtD coreD ("__user__", userD)
+  let (preludeSchemes, ownSchemes) =
+    checkOneSchemeFull rtD coreD ("__user__", userD)
   let schemes = ownSchemes ++ preludeSchemes
   let effTable = fnEffectsTable schemes
   let fnEffects = match lookupAssoc fnName effTable

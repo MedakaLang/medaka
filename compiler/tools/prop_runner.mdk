@@ -80,10 +80,11 @@ public export data TyDef = TDData (List String) (List Variant)
 
 buildTyDefs : List Decl -> List (String, TyDef)
 buildTyDefs [] = []
-buildTyDefs (d::rest) = match d
+buildTyDefs (d :: rest) = match d
   DData { dataName = name, dataParams = params, dataCtors = variants } =>
     (name, TDData params variants) :: buildTyDefs rest
-  DNewtype { newtypeName = name, newtypeParams = params, newtypeCtor = con, newtypeFieldTy = fty } => (name, TDData params [Variant con (ConPos [fty])]) :: buildTyDefs rest
+  DNewtype { newtypeName = name, newtypeParams = params, newtypeCtor = con, newtypeFieldTy = fty } =>
+    (name, TDData params [Variant con (ConPos [fty])]) :: buildTyDefs rest
   _ => buildTyDefs rest
 
 -- ── type substitution + spine peeling ─────────────────────────────────────
@@ -102,7 +103,7 @@ tySpine : Ty -> Option (String, List Ty)
 tySpine t = tySpineGo [] t
 
 tySpineGo : List Ty -> Ty -> Option (String, List Ty)
-tySpineGo acc (TyApp f a) = tySpineGo (a::acc) f
+tySpineGo acc (TyApp f a) = tySpineGo (a :: acc) f
 tySpineGo acc (TyCon { tyConName = n }) = Some (n, acc)
 tySpineGo _ _ = None
 
@@ -116,10 +117,18 @@ tySpineGo _ _ = None
 -- readers take a fast path that reproduces the pre-#2294 draw exactly whenever
 -- no recursion is in play, so the draw sequence for a type with no user ADT in
 -- it is unchanged.
-genForType : List (String, TyDef) -> List (String, Ty) -> Int -> Ty -> <e> Value e
+genForType : List (String, TyDef) ->
+  List (String, Ty) ->
+  Int ->
+  Ty ->
+  <e> Value e
 genForType tydefs subst depth (TyVar v) = match lookupAssoc v subst
   Some t => genForType tydefs subst depth t
-  None => panic ("prop_runner: cannot generate values for unbound type variable '" ++ v ++ "'")
+  None =>
+    panic
+      ("prop_runner: cannot generate values for unbound type variable '"
+        ++ v
+        ++ "'")
 genForType tydefs subst depth (TyCon { tyConName = "Int" }) =
   VInt (randIntRange (-1000) 1000)
 genForType tydefs subst depth (TyCon { tyConName = "Bool" }) =
@@ -131,35 +140,51 @@ genForType tydefs subst depth (TyCon { tyConName = "String" }) =
   VString (genString ())
 genForType tydefs subst depth (TyCon { tyConName = "Unit" }) = VUnit
 genForType tydefs subst depth (TyApp (TyCon { tyConName = "List" }) t) =
-  VList (genList
-    tydefs
-    subst
-    depth
-    t
-    (randIntRange 0 (listLenBound tydefs depth t)))
+  VList
+    (genList
+      tydefs
+      subst
+      depth
+      t
+      (randIntRange 0 (listLenBound tydefs depth t)))
 genForType tydefs subst depth (TyApp (TyCon { tyConName = "Array" }) t) =
-  VArray (arrayFromList (genList
-    tydefs
-    subst
-    depth
-    t
-    (randIntRange 0 (listLenBound tydefs depth t))))
+  VArray
+    (arrayFromList
+      (genList
+        tydefs
+        subst
+        depth
+        t
+        (randIntRange 0 (listLenBound tydefs depth t))))
 genForType tydefs subst depth (TyApp (TyCon { tyConName = "Option" }) t) =
   if randBoolL () then
     VCon "None" []
   else
     VCon "Some" [genForType tydefs subst depth t]
-genForType tydefs subst depth (TyApp (TyApp (TyCon { tyConName = "Result" }) e) a) = if randBoolL () then VCon "Ok" [genForType tydefs subst depth a] else VCon "Err" [genForType tydefs subst depth e]
+genForType tydefs subst depth (TyApp (TyApp (TyCon { tyConName = "Result" }) e) a) =
+  if randBoolL () then
+    VCon "Ok" [genForType tydefs subst depth a]
+  else
+    VCon "Err" [genForType tydefs subst depth e]
 genForType tydefs subst depth (TyTuple ts) =
   VTuple (genTuple tydefs subst depth ts)
 genForType tydefs subst depth ty = genUserOrFail tydefs subst depth ty
 
-genTuple : List (String, TyDef) -> List (String, Ty) -> Int -> List Ty -> <e> List (Value e)
+genTuple : List (String, TyDef) ->
+  List (String, Ty) ->
+  Int ->
+  List Ty ->
+  <e> List (Value e)
 genTuple _ _ _ [] = []
-genTuple tydefs subst depth (t::rest) =
+genTuple tydefs subst depth (t :: rest) =
   genForType tydefs subst depth t :: genTuple tydefs subst depth rest
 
-genList : List (String, TyDef) -> List (String, Ty) -> Int -> Ty -> Int -> <e> List (Value e)
+genList : List (String, TyDef) ->
+  List (String, Ty) ->
+  Int ->
+  Ty ->
+  Int ->
+  <e> List (Value e)
 genList _ _ _ _ 0 = []
 genList tydefs subst depth t n =
   genForType tydefs subst depth t :: genList tydefs subst depth t (n - 1)
@@ -187,32 +212,52 @@ genStringGo : Int -> List String
 genStringGo 0 = []
 genStringGo n = genCharStr () :: genStringGo (n - 1)
 
-genUserOrFail : List (String, TyDef) -> List (String, Ty) -> Int -> Ty -> <e> Value e
+genUserOrFail : List (String, TyDef) ->
+  List (String, Ty) ->
+  Int ->
+  Ty ->
+  <e> Value e
 genUserOrFail tydefs subst depth ty = match tySpine ty
   Some (name, args) => match lookupAssoc name tydefs
     Some tydef => genUser tydefs subst depth name tydef args
-    None => panic ("prop_runner: no generator for type '" ++ name ++ "'. Define an explicit generator (there is no 'Arbitrary' deriver).")
+    None =>
+      panic
+        ("prop_runner: no generator for type '"
+          ++ name
+          ++ "'. Define an explicit generator (there is no 'Arbitrary' deriver).")
   None => panic "prop_runner: cannot generate values for type"
 
-genUser : List (String, TyDef) -> List (String, Ty) -> Int -> String -> TyDef -> List Ty -> <e> Value e
+genUser : List (String, TyDef) ->
+  List (String, Ty) ->
+  Int ->
+  String ->
+  TyDef ->
+  List Ty ->
+  <e> Value e
 genUser tydefs subst depth name tydef args =
   let args2 = map (substTy subst) args
   match tydef
     TDData params variants =>
-      let subst2 = if listLen params == listLen args2 then
-        zipL params args2
-      else
-        []
+      let subst2 =
+        if listLen params == listLen args2 then zipL params args2 else []
       let v = pickVariant tydefs name depth variants
       genVariant tydefs subst2 depth v
 
-genVariant : List (String, TyDef) -> List (String, Ty) -> Int -> Variant -> <e> Value e
+genVariant : List (String, TyDef) ->
+  List (String, Ty) ->
+  Int ->
+  Variant ->
+  <e> Value e
 genVariant tydefs subst depth (Variant cname payload) = match payload
   ConPos tys => VCon cname (map (genForType tydefs subst (depth + 1)) tys)
   ConNamed fields _ =>
     VRecord cname (map (genField tydefs subst (depth + 1)) fields)
 
-genField : List (String, TyDef) -> List (String, Ty) -> Int -> Field -> <e> (String, Value e)
+genField : List (String, TyDef) ->
+  List (String, Ty) ->
+  Int ->
+  Field ->
+  <e> (String, Value e)
 genField tydefs subst depth (Field fname fty) =
   (fname, genForType tydefs subst depth fty)
 
@@ -279,37 +324,47 @@ maxGenDepth = 24
 -- as the ADT's own `TyCon` head anyway.
 memberStr : String -> List String -> Bool
 memberStr _ [] = False
-memberStr x (y::rest) = x == y || memberStr x rest
+memberStr x (y :: rest) = x == y || memberStr x rest
 
 adtReaches : List (String, TyDef) -> List String -> String -> String -> Bool
-adtReaches tydefs seen src target = src == target
-  || adtStepReaches tydefs seen src target
+adtReaches tydefs seen src target =
+  src == target || adtStepReaches tydefs seen src target
 
 adtStepReaches : List (String, TyDef) -> List String -> String -> String -> Bool
 adtStepReaches tydefs seen src target =
-  if memberStr src seen then False
+  if memberStr src seen then
+    False
   else match lookupAssoc src tydefs
     None => False
     Some (TDData _ variants) =>
-      anyVariantReaches tydefs (src::seen) variants target
+      anyVariantReaches tydefs (src :: seen) variants target
 
-anyVariantReaches : List (String, TyDef) -> List String -> List Variant -> String -> Bool
+anyVariantReaches : List (String, TyDef) ->
+  List String ->
+  List Variant ->
+  String ->
+  Bool
 anyVariantReaches _ _ [] _ = False
-anyVariantReaches tydefs seen (v::rest) target = variantReaches tydefs seen v target
-  || anyVariantReaches tydefs seen rest target
+anyVariantReaches tydefs seen (v :: rest) target =
+  variantReaches tydefs seen v target
+    || anyVariantReaches tydefs seen rest target
 
-variantReaches : List (String, TyDef) -> List String -> Variant -> String -> Bool
+variantReaches : List (String, TyDef) ->
+  List String ->
+  Variant ->
+  String ->
+  Bool
 variantReaches tydefs seen (Variant _ payload) target = match payload
   ConPos tys => anyTyReaches tydefs seen tys target
   ConNamed fields _ => anyFieldReaches tydefs seen fields target
 
 tyReaches : List (String, TyDef) -> List String -> Ty -> String -> Bool
-tyReaches tydefs seen (TyCon { tyConName = n }) target = isSome (lookupAssoc n tydefs)
-  && adtReaches tydefs seen n target
-tyReaches tydefs seen (TyApp a b) target = tyReaches tydefs seen a target
-  || tyReaches tydefs seen b target
-tyReaches tydefs seen (TyFun a b) target = tyReaches tydefs seen a target
-  || tyReaches tydefs seen b target
+tyReaches tydefs seen (TyCon { tyConName = n }) target =
+  isSome (lookupAssoc n tydefs) && adtReaches tydefs seen n target
+tyReaches tydefs seen (TyApp a b) target =
+  tyReaches tydefs seen a target || tyReaches tydefs seen b target
+tyReaches tydefs seen (TyFun a b) target =
+  tyReaches tydefs seen a target || tyReaches tydefs seen b target
 tyReaches tydefs seen (TyTuple ts) target = anyTyReaches tydefs seen ts target
 tyReaches tydefs seen (TyEffect _ _ t) target = tyReaches tydefs seen t target
 tyReaches tydefs seen (TyConstrained _ t) target =
@@ -318,13 +373,17 @@ tyReaches _ _ _ _ = False
 
 anyTyReaches : List (String, TyDef) -> List String -> List Ty -> String -> Bool
 anyTyReaches _ _ [] _ = False
-anyTyReaches tydefs seen (t::rest) target = tyReaches tydefs seen t target
-  || anyTyReaches tydefs seen rest target
+anyTyReaches tydefs seen (t :: rest) target =
+  tyReaches tydefs seen t target || anyTyReaches tydefs seen rest target
 
-anyFieldReaches : List (String, TyDef) -> List String -> List Field -> String -> Bool
+anyFieldReaches : List (String, TyDef) ->
+  List String ->
+  List Field ->
+  String ->
+  Bool
 anyFieldReaches _ _ [] _ = False
-anyFieldReaches tydefs seen ((Field _ fty)::rest) target = tyReaches tydefs seen fty target
-  || anyFieldReaches tydefs seen rest target
+anyFieldReaches tydefs seen ((Field _ fty) :: rest) target =
+  tyReaches tydefs seen fty target || anyFieldReaches tydefs seen rest target
 
 -- Can generating this constructor's payload re-enter `self`, the ADT the
 -- constructor belongs to?  Directly (`data T = Leaf | Node T T T`) or
@@ -339,8 +398,8 @@ variantRecursive tydefs self v = variantReaches tydefs [] v self
 -- that lies on a cycle of the mention graph?  This is the element-type test
 -- behind `listLenBound`, where there is no "owning ADT" to ask about.
 tyCanDiverge : List (String, TyDef) -> Ty -> Bool
-tyCanDiverge tydefs (TyCon { tyConName = n }) = isSome (lookupAssoc n tydefs)
-  && adtStepReaches tydefs [] n n
+tyCanDiverge tydefs (TyCon { tyConName = n }) =
+  isSome (lookupAssoc n tydefs) && adtStepReaches tydefs [] n n
 tyCanDiverge tydefs (TyApp a b) = tyCanDiverge tydefs a || tyCanDiverge tydefs b
 tyCanDiverge tydefs (TyFun a b) = tyCanDiverge tydefs a || tyCanDiverge tydefs b
 tyCanDiverge tydefs (TyTuple ts) = anyTyCanDiverge tydefs ts
@@ -350,8 +409,8 @@ tyCanDiverge _ _ = False
 
 anyTyCanDiverge : List (String, TyDef) -> List Ty -> Bool
 anyTyCanDiverge _ [] = False
-anyTyCanDiverge tydefs (t::rest) = tyCanDiverge tydefs t
-  || anyTyCanDiverge tydefs rest
+anyTyCanDiverge tydefs (t :: rest) =
+  tyCanDiverge tydefs t || anyTyCanDiverge tydefs rest
 
 -- ── size-aware LIST/ARRAY length (#2294 follow-up) ──────────────────────────
 -- `pickVariant`'s weighting cannot help a SINGLE-constructor recursive ADT —
@@ -396,38 +455,44 @@ listLenBound tydefs depth t =
   else
     max 1 (listLenMax - 2 * depth)
 
-variantWeights : List (String, TyDef) -> String -> Int -> List Variant -> List Int
+variantWeights : List (String, TyDef) ->
+  String ->
+  Int ->
+  List Variant ->
+  List Int
 variantWeights _ _ _ [] = []
-variantWeights tydefs self depth (v::rest) =
-  let w = if variantRecursive tydefs self v then
-    if depth >= maxGenDepth then 0 else max 1 (recWeight0 - depth)
-  else
-    recWeight0
+variantWeights tydefs self depth (v :: rest) =
+  let w =
+    if variantRecursive tydefs self v then
+      if depth >= maxGenDepth then 0 else max 1 (recWeight0 - depth)
+    else
+      recWeight0
   w :: variantWeights tydefs self depth rest
 
 sumL : List Int -> Int
 sumL [] = 0
-sumL (x::rest) = x + sumL rest
+sumL (x :: rest) = x + sumL rest
 
 allEqualInts : List Int -> Bool
 allEqualInts [] = True
-allEqualInts (x::rest) = allEqualGo x rest
+allEqualInts (x :: rest) = allEqualGo x rest
 
 allEqualGo : Int -> List Int -> Bool
 allEqualGo _ [] = True
-allEqualGo x (y::rest) = x == y && allEqualGo x rest
+allEqualGo x (y :: rest) = x == y && allEqualGo x rest
 
 -- Walk the cumulative weights: `r` is a draw in `[0, total)`.
 pickWeighted : List Variant -> List Int -> Int -> Variant
-pickWeighted (v::rest) (w::ws) r =
-  if r < w then
-    v
-  else
-    pickWeighted rest ws (r - w)
-pickWeighted (v::_) [] _ = v
+pickWeighted (v :: rest) (w :: ws) r =
+  if r < w then v else pickWeighted rest ws (r - w)
+pickWeighted (v :: _) [] _ = v
 pickWeighted [] _ _ = panic "prop_runner: data type with no constructors"
 
-pickVariant : List (String, TyDef) -> String -> Int -> List Variant -> <e> Variant
+pickVariant : List (String, TyDef) ->
+  String ->
+  Int ->
+  List Variant ->
+  <e> Variant
 pickVariant tydefs self depth variants =
   let ws = variantWeights tydefs self depth variants
   -- Uniform fast path — depth 0, or an ADT no constructor of which can reach
@@ -446,8 +511,8 @@ pickVariant tydefs self depth variants =
       pickWeighted variants ws (randIntRange 0 (total - 1))
 
 nthList : List a -> Int -> a
-nthList (x::_) 0 = x
-nthList (_::xs) n = nthList xs (n - 1)
+nthList (x :: _) 0 = x
+nthList (_ :: xs) n = nthList xs (n - 1)
 nthList [] _ = panic "nthList: index out of range"
 
 -- ── shrinking (native) ──────────────────────────────────────────────────────
@@ -458,17 +523,11 @@ shrinkValue ty v = match (ty, v)
   (TyCon { tyConName = "Bool" }, VBool True) => [VBool False]
   (TyCon { tyConName = "Bool" }, VBool False) => []
   (TyCon { tyConName = "Float" }, VFloat x) =>
-    if x == 0.0 then
-      []
-    else
-      [VFloat 0.0, VFloat (x / 2.0)]
+    if x == 0.0 then [] else [VFloat 0.0, VFloat (x / 2.0)]
   (TyCon { tyConName = "String" }, VString s) =>
-    if s == "" then
-      []
-    else
-      [VString (stringSlice 0 (stringLength s / 2) s)]
+    if s == "" then [] else [VString (stringSlice 0 (stringLength s / 2) s)]
   (TyApp (TyCon { tyConName = "List" }) _, VList []) => []
-  (TyApp (TyCon { tyConName = "List" }) _, VList (_::rest)) => [VList rest]
+  (TyApp (TyCon { tyConName = "List" }) _, VList (_ :: rest)) => [VList rest]
   (TyApp (TyCon { tyConName = "Option" }) _, VCon "None" []) => []
   (TyApp (TyCon { tyConName = "Option" }) _, VCon "Some" _) => [VCon "None" []]
   _ => []
@@ -518,7 +577,13 @@ propLocPrefix : String -> Int -> String
 propLocPrefix _ 0 = ""
 propLocPrefix target line = "\{target}:\{intToString line}: "
 
-runProp : List (String, TyDef) -> List (String, Value e) -> Decl -> Int -> String -> List (String, Int) -> <IO> Bool
+runProp : List (String, TyDef) ->
+  List (String, Value e) ->
+  Decl ->
+  Int ->
+  String ->
+  List (String, Int) ->
+  <IO> Bool
 runProp tydefs evalEnv (DProp _ name params body) maxTests target propLines =
   let line = lineOfPropName name propLines
   let _ = putStr "\{propLocPrefix target line}Testing \{escStrLocal name} ... "
@@ -532,18 +597,28 @@ runProp tydefs evalEnv (DProp _ name params body) maxTests target propLines =
       let _ = putStrLn ("OK (" ++ intToString maxTests ++ " tests)")
       True
     PropFailed run shrunk fuelExhausted =>
-      let _ = putStrLn "FAILED after \{intToString run}\{if run == 1 then " test" else " tests"}"
-      let _ = if fuelExhausted then
-        putStrLn "  WARNING: shrink fuel exhausted after \{intToString shrinkFuel} steps; the counterexample below may not be minimal, and a shrink arm is probably cycling (see #1307)."
-      else
-        ()
-      let _ = putStrLn "  Seed: \{intToString seedAtStart} (rerun with: medaka test --seed \{intToString seedAtStart} --filter \{escStrLocal name} <file>)"
+      let _ =
+        putStrLn
+          "FAILED after \{intToString run}\{if run == 1 then " test" else " tests"}"
+      let _ =
+        if fuelExhausted then
+          putStrLn
+            "  WARNING: shrink fuel exhausted after \{intToString shrinkFuel} steps; the counterexample below may not be minimal, and a shrink arm is probably cycling (see #1307)."
+      let _ =
+        putStrLn
+          "  Seed: \{intToString seedAtStart} (rerun with: medaka test --seed \{intToString seedAtStart} --filter \{escStrLocal name} <file>)"
       let _ = putStrLn "  Counterexample:"
       let _ = printCounterexample shrunk
       False
 runProp tydefs evalEnv _ maxTests target propLines = True
 
-findFailure : List (String, TyDef) -> List (String, Value e) -> List PropParam -> Expr -> Int -> Int -> <e> PropOutcome (Value e)
+findFailure : List (String, TyDef) ->
+  List (String, Value e) ->
+  List PropParam ->
+  Expr ->
+  Int ->
+  Int ->
+  <e> PropOutcome (Value e)
 findFailure tydefs evalEnv params body maxTests run
   | run > maxTests = PropPassed
   | otherwise =
@@ -558,7 +633,15 @@ findFailure tydefs evalEnv params body maxTests run
       inputs
       (checkProp evalEnv body inputs)
 
-findFailureStep : List (String, TyDef) -> List (String, Value e) -> List PropParam -> Expr -> Int -> Int -> List (String, Value e) -> Bool -> <e> PropOutcome (Value e)
+findFailureStep : List (String, TyDef) ->
+  List (String, Value e) ->
+  List PropParam ->
+  Expr ->
+  Int ->
+  Int ->
+  List (String, Value e) ->
+  Bool ->
+  <e> PropOutcome (Value e)
 findFailureStep tydefs evalEnv params body maxTests run _ True =
   findFailure tydefs evalEnv params body maxTests (run + 1)
 findFailureStep _ evalEnv params body _ run inputs False =
@@ -567,12 +650,12 @@ findFailureStep _ evalEnv params body _ run inputs False =
 
 genInputs : List (String, TyDef) -> List PropParam -> <e> List (String, Value e)
 genInputs _ [] = []
-genInputs tydefs ((PropParam x _ ty)::rest) =
+genInputs tydefs ((PropParam x _ ty) :: rest) =
   (x, genForType tydefs [] 0 ty) :: genInputs tydefs rest
 
 printCounterexample : List (String, Value e) -> <IO> Unit
 printCounterexample [] = ()
-printCounterexample ((x, v)::rest) =
+printCounterexample ((x, v) :: rest) =
   let _ = putStrLn "    \{x} = \{ppValue v}"
   printCounterexample rest
 
@@ -599,19 +682,38 @@ shrinkFuel = 10000
 -- confirmed: `test_main` failed to typecheck with "declared with <> but
 -- also performs <IO>" when tried). The exhaustion flag is instead reported
 -- by the caller, `runProp`, which is unconditionally <IO> already.
-shrinkLoop : List (String, Value e) -> List PropParam -> Expr -> List (String, Value e) -> <e> (List (String, Value e), Bool)
+shrinkLoop : List (String, Value e) ->
+  List PropParam ->
+  Expr ->
+  List (String, Value e) ->
+  <e> (List (String, Value e), Bool)
 shrinkLoop evalEnv params body candidate =
   shrinkLoopFuel evalEnv params body candidate shrinkFuel
 
-shrinkLoopFuel : List (String, Value e) -> List PropParam -> Expr -> List (String, Value e) -> Int -> <e> (List (String, Value e), Bool)
+shrinkLoopFuel : List (String, Value e) ->
+  List PropParam ->
+  Expr ->
+  List (String, Value e) ->
+  Int ->
+  <e> (List (String, Value e), Bool)
 shrinkLoopFuel _ _ _ candidate 0 = (candidate, True)
-shrinkLoopFuel evalEnv params body candidate fuel = match tryShrinkOne evalEnv params body candidate 0
+shrinkLoopFuel evalEnv params body candidate fuel = match (tryShrinkOne
+  evalEnv
+  params
+  body
+  candidate
+  0)
   Some better => shrinkLoopFuel evalEnv params body better (fuel - 1)
   None => (candidate, False)
 
 -- Try each param in order; return the first candidate where some smaller value
 -- still fails the prop.
-tryShrinkOne : List (String, Value e) -> List PropParam -> Expr -> List (String, Value e) -> Int -> <e> Option (List (String, Value e))
+tryShrinkOne : List (String, Value e) ->
+  List PropParam ->
+  Expr ->
+  List (String, Value e) ->
+  Int ->
+  <e> Option (List (String, Value e))
 tryShrinkOne evalEnv params body candidate i
   | i >= listLen params = None
   | otherwise =
@@ -622,9 +724,15 @@ tryShrinkOne evalEnv params body candidate i
       Some better => Some better
       None => tryShrinkOne evalEnv params body candidate (i + 1)
 
-findSmaller : List (String, Value e) -> List PropParam -> Expr -> List (String, Value e) -> String -> List (Value e) -> <e> Option (List (String, Value e))
+findSmaller : List (String, Value e) ->
+  List PropParam ->
+  Expr ->
+  List (String, Value e) ->
+  String ->
+  List (Value e) ->
+  <e> Option (List (String, Value e))
 findSmaller _ _ _ _ _ [] = None
-findSmaller evalEnv params body candidate x (sv::rest) =
+findSmaller evalEnv params body candidate x (sv :: rest) =
   let candidate2 = replaceVal x sv candidate
   if checkProp evalEnv body candidate2 then
     findSmaller evalEnv params body candidate x rest
@@ -636,9 +744,12 @@ assocVal x kvs = match lookupAssoc x kvs
   Some v => v
   None => panic ("prop shrink: missing binding " ++ x)
 
-replaceVal : String -> Value e -> List (String, Value e) -> List (String, Value e)
+replaceVal : String ->
+  Value e ->
+  List (String, Value e) ->
+  List (String, Value e)
 replaceVal _ _ [] = []
-replaceVal x sv ((k, v)::rest)
+replaceVal x sv ((k, v) :: rest)
   | k == x = (k, sv) :: replaceVal x sv rest
   | otherwise = (k, v) :: replaceVal x sv rest
 
@@ -653,7 +764,7 @@ filterProps decls = filterDecls isProp decls
 
 filterDecls : (Decl -> Bool) -> List Decl -> List Decl
 filterDecls _ [] = []
-filterDecls p (d::rest)
+filterDecls p (d :: rest)
   | p d = d :: filterDecls p rest
   | otherwise = filterDecls p rest
 
@@ -677,28 +788,42 @@ propNameMatches _ _ = False
 -- line lookup (test_cmd.mdk's `propLineTests`) so every prop's output carries
 -- `file:line` — see `runProp`.
 export
-runAllProps : Int -> Option String -> String -> List (String, Int) -> List (String, Value e) -> List Decl -> <IO> Bool
+runAllProps : Int ->
+  Option String ->
+  String ->
+  List (String, Int) ->
+  List (String, Value e) ->
+  List Decl ->
+  <IO> Bool
 runAllProps cases filterOpt target propLines evalEnv program =
   let props = filterPropsByName filterOpt (filterProps program)
-  if isEmptyL props then True
+  if isEmptyL props then
+    True
   else
     let tydefs = buildTyDefs program
     let results = runEach cases target propLines tydefs evalEnv props
     let nPass = countTrue results
     let nFail = listLen results - nPass
-    let _ = putStrLn "\n\{intToString nPass} passed, \{intToString nFail} failed"
+    let _ =
+      putStrLn "\n\{intToString nPass} passed, \{intToString nFail} failed"
     nFail == 0
 
-runEach : Int -> String -> List (String, Int) -> List (String, TyDef) -> List (String, Value e) -> List Decl -> <IO> List Bool
+runEach : Int ->
+  String ->
+  List (String, Int) ->
+  List (String, TyDef) ->
+  List (String, Value e) ->
+  List Decl ->
+  <IO> List Bool
 runEach _ _ _ _ _ [] = []
-runEach cases target propLines tydefs evalEnv (p::rest) =
-  runProp tydefs evalEnv p cases target propLines ::
-    runEach cases target propLines tydefs evalEnv rest
+runEach cases target propLines tydefs evalEnv (p :: rest) =
+  runProp tydefs evalEnv p cases target propLines
+    :: runEach cases target propLines tydefs evalEnv rest
 
 countTrue : List Bool -> Int
 countTrue [] = 0
-countTrue (True::rest) = 1 + countTrue rest
-countTrue (False::rest) = countTrue rest
+countTrue (True :: rest) = 1 + countTrue rest
+countTrue (False :: rest) = countTrue rest
 
 -- ── structured (non-printing) results — for `medaka mcp`'s medaka_test (#252) ──
 -- Mirror runAllProps' discovery + per-prop `findFailure`, but return a plain,
@@ -733,34 +858,57 @@ propResultDetail (PropResult _ _ d) = d
 -- mcp's medaka_test, and `medaka test --json`) already reports `file` once
 -- at the top level, so only the line is folded into `detail`.
 export
-runAllPropsResults : Int -> Option String -> List (String, Int) -> List (String, Value e) -> List Decl -> <IO> List PropResult
+runAllPropsResults : Int ->
+  Option String ->
+  List (String, Int) ->
+  List (String, Value e) ->
+  List Decl ->
+  <IO> List PropResult
 runAllPropsResults cases filterOpt propLines evalEnv program =
   let props = filterPropsByName filterOpt (filterProps program)
-  if isEmptyL props then []
+  if isEmptyL props then
+    []
   else
     let tydefs = buildTyDefs program
     runEachResult cases propLines tydefs evalEnv props
 
-runEachResult : Int -> List (String, Int) -> List (String, TyDef) -> List (String, Value e) -> List Decl -> <IO> List PropResult
+runEachResult : Int ->
+  List (String, Int) ->
+  List (String, TyDef) ->
+  List (String, Value e) ->
+  List Decl ->
+  <IO> List PropResult
 runEachResult _ _ _ _ [] = []
-runEachResult cases propLines tydefs evalEnv ((DProp _ name params body)::rest) = propResultOf cases (lineOfPropName name propLines) name (findFailure tydefs evalEnv params body cases 1) :: runEachResult cases propLines tydefs evalEnv rest
-runEachResult cases propLines tydefs evalEnv (_::rest) =
+runEachResult cases propLines tydefs evalEnv ((DProp _ name params body) :: rest) =
+  propResultOf
+      cases
+      (lineOfPropName name propLines)
+      name
+      (findFailure tydefs evalEnv params body cases 1)
+    :: runEachResult cases propLines tydefs evalEnv rest
+runEachResult cases propLines tydefs evalEnv (_ :: rest) =
   runEachResult cases propLines tydefs evalEnv rest
 
 propResultOf : Int -> Int -> String -> PropOutcome (Value e) -> PropResult
 propResultOf cases _line name PropPassed =
   PropResult name True "\{intToString cases} tests passed"
-propResultOf _cases line name (PropFailed run shrunk fuelExhausted) = PropResult
-  name
-  False
-  (stringConcat
-    [
+propResultOf _cases line name (PropFailed run shrunk fuelExhausted) =
+  PropResult
+    name
+    False
+    (stringConcat [
       lineDetailPrefix line,
       "failed after ",
       intToString run,
-      if run == 1 then " test; counterexample: " else " tests; counterexample: ",
+      if run == 1 then
+        " test; counterexample: "
+      else
+        " tests; counterexample: ",
       renderCounterexample shrunk,
-      if fuelExhausted then " (WARNING: shrink fuel exhausted, counterexample may not be minimal — see #1307)" else "",
+      if fuelExhausted then
+        " (WARNING: shrink fuel exhausted, counterexample may not be minimal — see #1307)"
+      else
+        "",
     ])
 
 lineDetailPrefix : Int -> String
@@ -770,7 +918,7 @@ lineDetailPrefix line = "line \{intToString line}: "
 renderCounterexample : List (String, Value e) -> String
 renderCounterexample [] = ""
 renderCounterexample [(x, v)] = stringConcat [x, " = ", ppValue v]
-renderCounterexample ((x, v)::rest) =
+renderCounterexample ((x, v) :: rest) =
   stringConcat [x, " = ", ppValue v, ", ", renderCounterexample rest]
 
 export
@@ -779,4 +927,4 @@ hasProps decls = anyDecl isProp decls
 
 anyDecl : (Decl -> Bool) -> List Decl -> Bool
 anyDecl _ [] = False
-anyDecl p (d::rest) = p d || anyDecl p rest
+anyDecl p (d :: rest) = p d || anyDecl p rest

@@ -1,5 +1,5 @@
 # META
-source_lines=249
+source_lines=254
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/main_autoprint.mdk — shared composite-`main` auto-print wrap.
@@ -48,7 +48,7 @@ import types.typecheck.{
 entryPair : List (String, List Decl) -> Option (String, List Decl)
 entryPair [] = None
 entryPair [p] = Some p
-entryPair (_::rest) = entryPair rest
+entryPair (_ :: rest) = entryPair rest
 
 -- Find the top-level `main`'s param list among a module's decls (skipping @attr
 -- wrappers), so the caller can require an EMPTY param list (a value main — a
@@ -56,9 +56,9 @@ entryPair (_::rest) = entryPair rest
 -- is NEVER auto-printed).
 findMainParams : List Decl -> Option (List Pat)
 findMainParams [] = None
-findMainParams ((DAttrib _ d)::rest) = findMainParams (d::rest)
-findMainParams ((DFunDef _ "main" ps _)::_) = Some ps
-findMainParams (_::rest) = findMainParams rest
+findMainParams ((DAttrib _ d) :: rest) = findMainParams (d :: rest)
+findMainParams ((DFunDef _ "main" ps _) :: _) = Some ps
+findMainParams (_ :: rest) = findMainParams rest
 
 -- True iff a top-level `println` binding is in scope (defined by the prelude).
 -- The wrap re-binds THAT declaration (`autoPrintPinCore`), so it MUST NOT fire when
@@ -68,9 +68,9 @@ findMainParams (_::rest) = findMainParams rest
 -- `println x = putStrLn (display x)`), so the wrap fires there.
 definesPrintln : List Decl -> Bool
 definesPrintln [] = False
-definesPrintln ((DAttrib _ d)::rest) = definesPrintln (d::rest)
-definesPrintln ((DFunDef _ "println" _ _)::_) = True
-definesPrintln (_::rest) = definesPrintln rest
+definesPrintln ((DAttrib _ d) :: rest) = definesPrintln (d :: rest)
+definesPrintln ((DFunDef _ "println" _ _) :: _) = True
+definesPrintln (_ :: rest) = definesPrintln rest
 
 -- Auto-print fires iff main's inferred type is neither Unit nor `Async _`, the
 -- entry `main` is a zero-arg VALUE (empty param list), AND `println` is in scope.
@@ -78,14 +78,15 @@ definesPrintln (_::rest) = definesPrintln rest
 export
 shouldAutoPrintMain : List Decl -> List (String, List Decl) -> Bool
 shouldAutoPrintMain coreDecls modules =
-  if mainTypeIsUnit () || mainTypeIsAsync () then False
-  else
-    if not (definesPrintln (coreDecls ++ flatMap snd modules)) then False
-    else match entryPair modules
-      None => False
-      Some (_, decls) => match findMainParams decls
-        Some [] => True
-        _ => False
+  if mainTypeIsUnit () || mainTypeIsAsync () then
+    False
+  else if not (definesPrintln (coreDecls ++ flatMap snd modules)) then
+    False
+  else match entryPair modules
+    None => False
+    Some (_, decls) => match findMainParams decls
+      Some [] => True
+      _ => False
 
 -- True iff the decl is `main`'s explicit type signature (`main : T`), possibly
 -- @attr-wrapped.  When the wrap fires the body becomes `main = 0autoprintln <e>`
@@ -106,7 +107,7 @@ autoPrintWrapModules : List (String, List Decl) -> List (String, List Decl)
 autoPrintWrapModules [] = []
 autoPrintWrapModules [(mid, decls)] =
   [(mid, map wrapMainDecl (filter (d => not (isMainTypeSig d)) decls))]
-autoPrintWrapModules (p::rest) = p :: autoPrintWrapModules rest
+autoPrintWrapModules (p :: rest) = p :: autoPrintWrapModules rest
 
 wrapMainDecl : Decl -> Decl
 wrapMainDecl (DFunDef vis "main" [] body) =
@@ -174,12 +175,12 @@ autoPrintPinCore coreDecls = coreDecls ++ pinnedPrintlnDecls coreDecls
 
 pinnedPrintlnDecls : List Decl -> List Decl
 pinnedPrintlnDecls [] = []
-pinnedPrintlnDecls ((DAttrib _ d)::rest) = pinnedPrintlnDecls (d::rest)
-pinnedPrintlnDecls ((DTypeSig pub "println" ty)::rest) =
+pinnedPrintlnDecls ((DAttrib _ d) :: rest) = pinnedPrintlnDecls (d :: rest)
+pinnedPrintlnDecls ((DTypeSig pub "println" ty) :: rest) =
   DTypeSig pub autoPrintPinName ty :: pinnedPrintlnDecls rest
-pinnedPrintlnDecls ((DFunDef pub "println" ps body)::rest) =
+pinnedPrintlnDecls ((DFunDef pub "println" ps body) :: rest) =
   DFunDef pub autoPrintPinName ps body :: pinnedPrintlnDecls rest
-pinnedPrintlnDecls (_::rest) = pinnedPrintlnDecls rest
+pinnedPrintlnDecls (_ :: rest) = pinnedPrintlnDecls rest
 
 -- `main = <e>` → `main = 0autoprintln <e>`, re-attaching the body's own source
 -- span (its outer `ELoc`, from `parseLocated`) around the synthetic application
@@ -240,7 +241,10 @@ wrapPrintln body = EApp (EVar autoPrintPinName) body
 -- `compiler/types/typecheck.mdk` for the full mechanism and for why seeding a CORRECT
 -- oracle there is a separate, larger change.
 export
-underivedMainDiags : List Decl -> List Decl -> List (String, List Decl) -> List TcDiag
+underivedMainDiags : List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  List TcDiag
 underivedMainDiags runtimeDecls coreDecls [(mid, entryDecls)] =
   let _ = setCoherenceUserDecls entryDecls
   -- `entryDecls` here is the WRAPPED program (`main = println <e>`), not the user's,
@@ -248,7 +252,8 @@ underivedMainDiags runtimeDecls coreDecls [(mid, entryDecls)] =
   -- `main`'s type — `checkOneDiagsSynthetic` (types/typecheck.mdk) is `checkOneDiags`
   -- with `mainSchemeRef` saved and restored around it, and its header states the
   -- `W-MAIN-SHAPE` regression that reaching for the plain one reintroduces.
-  let (tcErrs, _) = checkOneDiagsSynthetic runtimeDecls coreDecls (mid, entryDecls)
+  let (tcErrs, _) =
+    checkOneDiagsSynthetic runtimeDecls coreDecls (mid, entryDecls)
   tcErrs
 underivedMainDiags _ _ _ = []
 # DESUGAR

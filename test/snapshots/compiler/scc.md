@@ -1,5 +1,5 @@
 # META
-source_lines=91
+source_lines=88
 stages=DESUGAR,MARK
 # SOURCE
 -- Tarjan's strongly-connected-components algorithm, extracted from
@@ -49,7 +49,7 @@ tarjanSCCs names adj =
 
 tarjanAll : List String -> OrdMap (List String) -> Unit
 tarjanAll [] _ = ()
-tarjanAll (v::rest) adj =
+tarjanAll (v :: rest) adj =
   let _ = tjVisit v adj
   tarjanAll rest adj
 
@@ -67,11 +67,11 @@ strongconnect v adj =
   tjStack := v :: !tjStack
   tjOn := omInsert v True !tjOn
   let _ = scEdges v (optionOr [] (omLookup v adj)) adj
-  if tjLowOf v == idx then tjPop v [] else ()
+  if tjLowOf v == idx then tjPop v []
 
 scEdges : String -> List String -> OrdMap (List String) -> Unit
 scEdges v [] adj = ()
-scEdges v (w::ws) adj =
+scEdges v (w :: ws) adj =
   let _ = scEdge v w adj
   scEdges v ws adj
 
@@ -81,18 +81,15 @@ scEdge v w adj = match omLookup w !tjIndex
     let _ = strongconnect w adj
     tjLow := omInsert v (minI (tjLowOf v) (tjLowOf w)) !tjLow
   Some iw =>
-    if tjOnStack w then
-      tjLow := omInsert v (minI (tjLowOf v) iw) !tjLow
-    else
-      ()
+    if tjOnStack w then tjLow := omInsert v (minI (tjLowOf v) iw) !tjLow
 
 tjPop : String -> List String -> Unit
 tjPop v acc = match !tjStack
   [] => tjOut := acc :: !tjOut
-  w::rest =>
+  w :: rest =>
     tjStack := rest
     tjOn := omInsert w False !tjOn
-    if w == v then tjOut := (w::acc) :: !tjOut else tjPop v (w::acc)
+    if w == v then tjOut := (w :: acc) :: !tjOut else tjPop v (w :: acc)
 # DESUGAR
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "minI" false))))

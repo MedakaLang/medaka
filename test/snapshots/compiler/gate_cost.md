@@ -1,5 +1,5 @@
 # META
-source_lines=540
+source_lines=603
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_cost.mdk — the per-gate cost baseline reader (#2178, epic #2182).
@@ -78,14 +78,13 @@ import support.util.{joinWith, listLen, splitOnChar, startsWith}
    removes, so a missing `sampleRuns` parses as all-empty (every sample
    unattributed) and the reader that needs attribution reports that it has
    none rather than inventing it. -}
-public export data GateCost =
-  | GateCost {
-      name : String,
-      medianMs : Int,
-      samples : Int,
-      ms : List Int,
-      sampleRuns : List String,
-    }
+public export data GateCost = GateCost {
+  name : String,
+  medianMs : Int,
+  samples : Int,
+  ms : List Int,
+  sampleRuns : List String,
+}
 
 {- | The baseline's key for a gate, from that gate's `run` script path.
 
@@ -114,7 +113,9 @@ baselineKey run =
 -- ([T-STDLIB-IMPORT]) — `stringSlice`/`stringLength` are prelude builtins.
 dropDotSh : String -> String
 dropDotSh s
-  | stringLength s > 3 && stringSlice (stringLength s - 3) (stringLength s) s == ".sh" = stringSlice 0 (stringLength s - 3) s
+  | stringLength s > 3
+    && stringSlice (stringLength s - 3) (stringLength s) s == ".sh" =
+    stringSlice 0 (stringLength s - 3) s
   | otherwise = s
 
 dropTestPrefix : String -> String
@@ -135,13 +136,23 @@ costSchema = "gate-cost-baseline/1"
 
 costEntry : Int -> Json -> Result String GateCost
 costEntry i e = match asString (orNull (lookup "name" e))
-  None => Err "gate cost baseline: gates[\{intToString i}]: missing string field 'name'"
+  None =>
+    Err
+      "gate cost baseline: gates[\{intToString i}]: missing string field 'name'"
   Some n => match asInt (orNull (lookup "medianMs" e))
-    None => Err "gate cost baseline: gates[\{intToString i}] '\{n}': missing integer field 'medianMs'"
-    Some ms if ms < 0 => Err "gate cost baseline: gates[\{intToString i}] '\{n}': negative medianMs \{intToString ms}"
+    None =>
+      Err
+        "gate cost baseline: gates[\{intToString i}] '\{n}': missing integer field 'medianMs'"
+    Some ms if ms < 0 =>
+      Err
+        "gate cost baseline: gates[\{intToString i}] '\{n}': negative medianMs \{intToString ms}"
     Some ms => match asInt (orNull (lookup "samples" e))
-      None => Err "gate cost baseline: gates[\{intToString i}] '\{n}': missing integer field 'samples'"
-      Some sc if sc < 1 => Err "gate cost baseline: gates[\{intToString i}] '\{n}': samples must be >= 1, got \{intToString sc}"
+      None =>
+        Err
+          "gate cost baseline: gates[\{intToString i}] '\{n}': missing integer field 'samples'"
+      Some sc if sc < 1 =>
+        Err
+          "gate cost baseline: gates[\{intToString i}] '\{n}': samples must be >= 1, got \{intToString sc}"
       Some sc => match costSamples i n e
         Err m => Err m
         -- `samples` and `ms` are two spellings of the same fact, so a row
@@ -150,9 +161,17 @@ costEntry i e = match asString (orNull (lookup "name" e))
         -- the statistic from them, and a count that does not describe the
         -- array makes every such derivation quietly wrong.
         Ok raw if listLen raw /= sc =>
-          Err "gate cost baseline: gates[\{intToString i}] '\{n}': samples is \{intToString sc} but 'ms' holds \{intToString (listLen raw)} value(s)"
+          Err
+            "gate cost baseline: gates[\{intToString i}] '\{n}': samples is \{intToString sc} but 'ms' holds \{intToString (listLen raw)} value(s)"
         Ok raw =>
-          map (rids => GateCost { name = n, medianMs = ms, samples = sc, ms = raw, sampleRuns = rids })
+          map
+            (rids => GateCost {
+              name = n,
+              medianMs = ms,
+              samples = sc,
+              ms = raw,
+              sampleRuns = rids,
+            })
             (costSampleRuns i n e (listLen raw))
 
 -- The retained raw samples of one `gates[]` entry.  Required, not optional:
@@ -163,16 +182,28 @@ costEntry i e = match asString (orNull (lookup "name" e))
 -- as the schema error it is.
 costSamples : Int -> String -> Json -> Result String (List Int)
 costSamples i n e = match asArray (orNull (lookup "ms" e))
-  None => Err "gate cost baseline: gates[\{intToString i}] '\{n}': missing array field 'ms'"
+  None =>
+    Err
+      "gate cost baseline: gates[\{intToString i}] '\{n}': missing array field 'ms'"
   Some arr => costSampleInts i n arr 0 (arrayLength arr) []
 
-costSampleInts : Int -> String -> Array Json -> Int -> Int -> List Int -> Result String (List Int)
+costSampleInts : Int ->
+  String ->
+  Array Json ->
+  Int ->
+  Int ->
+  List Int ->
+  Result String (List Int)
 costSampleInts i n arr k len acc
   | k >= len = Ok (reverseInts acc [])
   | otherwise = match asInt (arrayGetUnsafe k arr)
-    None => Err "gate cost baseline: gates[\{intToString i}] '\{n}': ms[\{intToString k}] is not an integer"
-    Some v if v < 0 => Err "gate cost baseline: gates[\{intToString i}] '\{n}': ms[\{intToString k}] is negative (\{intToString v})"
-    Some v => costSampleInts i n arr (k + 1) len (v::acc)
+    None =>
+      Err
+        "gate cost baseline: gates[\{intToString i}] '\{n}': ms[\{intToString k}] is not an integer"
+    Some v if v < 0 =>
+      Err
+        "gate cost baseline: gates[\{intToString i}] '\{n}': ms[\{intToString k}] is negative (\{intToString v})"
+    Some v => costSampleInts i n arr (k + 1) len (v :: acc)
 
 -- The per-sample run attribution of one `gates[]` entry — OPTIONAL, unlike
 -- `ms`, and the asymmetry is deliberate.  `ms` has been written by every
@@ -192,16 +223,28 @@ costSampleRuns i n e want = match lookup "sampleRuns" e
   None => Ok (blankRuns want)
   Some JNull => Ok (blankRuns want)
   Some j => match asArray j
-    None => Err "gate cost baseline: gates[\{intToString i}] '\{n}': 'sampleRuns' is present but is not an array"
-    Some arr if arrayLength arr /= want => Err "gate cost baseline: gates[\{intToString i}] '\{n}': 'sampleRuns' holds \{intToString (arrayLength arr)} entr(ies) but 'ms' holds \{intToString want}"
+    None =>
+      Err
+        "gate cost baseline: gates[\{intToString i}] '\{n}': 'sampleRuns' is present but is not an array"
+    Some arr if arrayLength arr /= want =>
+      Err
+        "gate cost baseline: gates[\{intToString i}] '\{n}': 'sampleRuns' holds \{intToString (arrayLength arr)} entr(ies) but 'ms' holds \{intToString want}"
     Some arr => costSampleRunStrs i n arr 0 want []
 
-costSampleRunStrs : Int -> String -> Array Json -> Int -> Int -> List String -> Result String (List String)
+costSampleRunStrs : Int ->
+  String ->
+  Array Json ->
+  Int ->
+  Int ->
+  List String ->
+  Result String (List String)
 costSampleRunStrs i n arr k len acc
   | k >= len = Ok (reverseStrs acc [])
   | otherwise = match asString (arrayGetUnsafe k arr)
-    None => Err "gate cost baseline: gates[\{intToString i}] '\{n}': sampleRuns[\{intToString k}] is not a string"
-    Some v => costSampleRunStrs i n arr (k + 1) len (v::acc)
+    None =>
+      Err
+        "gate cost baseline: gates[\{intToString i}] '\{n}': sampleRuns[\{intToString k}] is not a string"
+    Some v => costSampleRunStrs i n arr (k + 1) len (v :: acc)
 
 -- `n` unattributed slots — the empty string is the sentinel, and it can never
 -- collide with a real runId (Actions' `github.run_id` is a nonempty decimal).
@@ -212,26 +255,30 @@ blankRuns n
 
 reverseStrs : List String -> List String -> List String
 reverseStrs [] acc = acc
-reverseStrs (x::xs) acc = reverseStrs xs (x::acc)
+reverseStrs (x :: xs) acc = reverseStrs xs (x :: acc)
 
 reverseInts : List Int -> List Int -> List Int
 reverseInts [] acc = acc
-reverseInts (x::xs) acc = reverseInts xs (x::acc)
+reverseInts (x :: xs) acc = reverseInts xs (x :: acc)
 
 orNull : Option Json -> Json
 orNull None = JNull
 orNull (Some j) = j
 
-costEntries : Array Json -> Int -> Int -> List GateCost -> Result String (List GateCost)
+costEntries : Array Json ->
+  Int ->
+  Int ->
+  List GateCost ->
+  Result String (List GateCost)
 costEntries arr i n acc
   | i >= n = Ok (reverseCosts acc [])
   | otherwise = match costEntry i (arrayGetUnsafe i arr)
     Err m => Err m
-    Ok c => costEntries arr (i + 1) n (c::acc)
+    Ok c => costEntries arr (i + 1) n (c :: acc)
 
 reverseCosts : List GateCost -> List GateCost -> List GateCost
 reverseCosts [] acc = acc
-reverseCosts (c::cs) acc = reverseCosts cs (c::acc)
+reverseCosts (c :: cs) acc = reverseCosts cs (c :: acc)
 
 {- | Parse a cost baseline's JSON source into its per-gate costs, in file
    order.  An empty `gates` array is an error for the same reason an empty
@@ -243,7 +290,9 @@ parseCostBaseline src = match parse src
   Err m => Err "gate cost baseline: \{m}"
   Ok doc => match asString (orNull (lookup "schema" doc))
     None => Err "gate cost baseline: missing top-level string field 'schema'"
-    Some sc if sc /= costSchema => Err "gate cost baseline: unsupported schema '\{sc}' (this reader understands '\{costSchema}')"
+    Some sc if sc /= costSchema =>
+      Err
+        "gate cost baseline: unsupported schema '\{sc}' (this reader understands '\{costSchema}')"
     Some _ => match asArray (orNull (lookup "gates" doc))
       None => Err "gate cost baseline: missing top-level array field 'gates'"
       Some arr if arrayLength arr == 0 =>
@@ -318,17 +367,17 @@ packStat xs =
 -- the thing it sorts.
 costSortInts : List Int -> List Int
 costSortInts [] = []
-costSortInts (x::xs) = costInsert x (costSortInts xs)
+costSortInts (x :: xs) = costInsert x (costSortInts xs)
 
 costInsert : Int -> List Int -> List Int
-costInsert x [] = x::[]
-costInsert x (y::ys)
-  | x <= y = x :: y::ys
+costInsert x [] = x :: []
+costInsert x (y :: ys)
+  | x <= y = x :: y :: ys
   | otherwise = y :: costInsert x ys
 
 costNth : Int -> List Int -> Int
 costNth _ [] = 0
-costNth i (x::xs)
+costNth i (x :: xs)
   | i <= 0 = x
   | otherwise = costNth (i - 1) xs
 
@@ -363,7 +412,7 @@ gateSetDigest ns = gateSetDigestGo ns 0
 
 gateSetDigestGo : List String -> Int -> Int
 gateSetDigestGo [] acc = acc
-gateSetDigestGo (n::ns) acc =
+gateSetDigestGo (n :: ns) acc =
   gateSetDigestGo ns ((acc + gateNameHash n) % costHashMod)
 
 {- | One gate key's hash: the classic `h = h * 131 + c` polynomial, reduced
@@ -383,7 +432,12 @@ gateNameHash s =
 gateNameHashGo : Array Char -> Int -> Int -> Int -> Int
 gateNameHashGo a i n h
   | i >= n = h
-  | otherwise = gateNameHashGo a (i + 1) n ((h * 131 + charCode (arrayGetUnsafe i a)) % costHashMod)
+  | otherwise =
+    gateNameHashGo
+      a
+      (i + 1)
+      n
+      ((h * 131 + charCode (arrayGetUnsafe i a)) % costHashMod)
 
 costHashMod : Int
 costHashMod = 2147483647
@@ -414,25 +468,29 @@ costHashMod = 2147483647
 -- module's own doc-comment above for why the file exists at all.
 
 {- | One `runs[]` provenance row. -}
-public export data RunRecord =
-  | RunRecord {
-      key : String,
-      runId : String,
-      shard : String,
-      jobs : Option Int,
-      parallel : Option Bool,
-      rowElapsedMs : Option Int,
-      gates : Option Int,
-      gatesDigest : Option Int,
-    }
+public export data RunRecord = RunRecord {
+  key : String,
+  runId : String,
+  shard : String,
+  jobs : Option Int,
+  parallel : Option Bool,
+  rowElapsedMs : Option Int,
+  gates : Option Int,
+  gatesDigest : Option Int,
+}
 
 runEntry : Int -> Json -> Result String RunRecord
 runEntry i e = match asString (orNull (lookup "key" e))
-  None => Err "gate cost baseline: runs[\{intToString i}]: missing string field 'key'"
+  None =>
+    Err "gate cost baseline: runs[\{intToString i}]: missing string field 'key'"
   Some k => match asString (orNull (lookup "runId" e))
-    None => Err "gate cost baseline: runs[\{intToString i}] '\{k}': missing string field 'runId'"
+    None =>
+      Err
+        "gate cost baseline: runs[\{intToString i}] '\{k}': missing string field 'runId'"
     Some rid => match asString (orNull (lookup "shard" e))
-      None => Err "gate cost baseline: runs[\{intToString i}] '\{k}': missing string field 'shard'"
+      None =>
+        Err
+          "gate cost baseline: runs[\{intToString i}] '\{k}': missing string field 'shard'"
       Some sh => Ok RunRecord {
         key = k,
         runId = rid,
@@ -444,16 +502,20 @@ runEntry i e = match asString (orNull (lookup "key" e))
         gatesDigest = asInt (orNull (lookup "gatesDigest" e)),
       }
 
-runEntries : Array Json -> Int -> Int -> List RunRecord -> Result String (List RunRecord)
+runEntries : Array Json ->
+  Int ->
+  Int ->
+  List RunRecord ->
+  Result String (List RunRecord)
 runEntries arr i n acc
   | i >= n = Ok (reverseRuns acc [])
   | otherwise = match runEntry i (arrayGetUnsafe i arr)
     Err m => Err m
-    Ok r => runEntries arr (i + 1) n (r::acc)
+    Ok r => runEntries arr (i + 1) n (r :: acc)
 
 reverseRuns : List RunRecord -> List RunRecord -> List RunRecord
 reverseRuns [] acc = acc
-reverseRuns (r::rs) acc = reverseRuns rs (r::acc)
+reverseRuns (r :: rs) acc = reverseRuns rs (r :: acc)
 
 {- | Parse a cost baseline's `runs[]` provenance rows, in file order (oldest
    first — the ingester appends new runs after old ones, dropping only past
@@ -477,7 +539,7 @@ latestRunForShard sh rs = latestRunGo sh rs None
 
 latestRunGo : String -> List RunRecord -> Option RunRecord -> Option RunRecord
 latestRunGo _ [] acc = acc
-latestRunGo sh (r::rs) acc
+latestRunGo sh (r :: rs) acc
   | r.shard == sh = latestRunGo sh rs (Some r)
   | otherwise = latestRunGo sh rs acc
 
@@ -492,7 +554,7 @@ costOf run cs = costOfKey (baselineKey run) cs
 -- would re-split the path 202 times per gate, 40k times per run.
 costOfKey : String -> List GateCost -> Option Int
 costOfKey _ [] = None
-costOfKey k (c::cs)
+costOfKey k (c :: cs)
   | c.name == k = Some c.medianMs
   | otherwise = costOfKey k cs
 
@@ -507,7 +569,7 @@ costRowOf run cs = costRowOfKey (baselineKey run) cs
 
 costRowOfKey : String -> List GateCost -> Option GateCost
 costRowOfKey _ [] = None
-costRowOfKey k (c::cs)
+costRowOfKey k (c :: cs)
   | c.name == k = Some c
   | otherwise = costRowOfKey k cs
 
@@ -520,28 +582,29 @@ prop "baselineKey flattens every separator" (n : Int) =
   baselineKey "a/b/c\{intToString n}.sh" == "a_b_c\{intToString n}"
 
 prop "baselineKey is idempotent on an already-flat key" (n : Int) =
-  baselineKey (baselineKey "test/g\{intToString n}.sh") ==
-    baselineKey "test/g\{intToString n}.sh"
+  baselineKey (baselineKey "test/g\{intToString n}.sh")
+    == baselineKey "test/g\{intToString n}.sh"
 
-prop "packStat of one sample is that sample" (n : Int) = packStat (n::[]) == n
+prop "packStat of one sample is that sample" (n : Int) = packStat (n :: []) == n
 
 -- The robustness property the whole choice of statistic rests on: a single
 -- wild sample among three cannot move the answer.  `pds_test_repo_vectors`
 -- is this property with real numbers.
-prop "one wild sample among three does not move packStat" (n : Int) = packStat (n :: n + 1 :: n + 1000000 :: []) == n + 1
-  && packStat (n + 1000000 :: n :: n + 1 :: []) == n + 1
+prop "one wild sample among three does not move packStat" (n : Int) =
+  packStat (n :: n + 1 :: n + 1000000 :: []) == n + 1
+    && packStat (n + 1000000 :: n :: n + 1 :: []) == n + 1
 
 -- Order-independence is REQUIRED, not incidental: the ingester digests a
 -- report's gates in pattern-resolution order and the balancer digests the
 -- registry's in enrolment order.
 prop "gateSetDigest ignores order" (n : Int) =
-  gateSetDigest ("a\{intToString n}" :: "b\{intToString n}"::[]) ==
-    gateSetDigest ("b\{intToString n}" :: "a\{intToString n}"::[])
+  gateSetDigest ("a\{intToString n}" :: "b\{intToString n}" :: [])
+    == gateSetDigest ("b\{intToString n}" :: "a\{intToString n}" :: [])
 
 -- ...and a swap at equal size must NOT be, which is the whole of #2223.
 prop "gateSetDigest separates a same-size swap" (n : Int) =
-  gateSetDigest ("a\{intToString n}" :: "b\{intToString n}"::[]) /=
-    gateSetDigest ("a\{intToString n}" :: "c\{intToString n}"::[])
+  gateSetDigest ("a\{intToString n}" :: "b\{intToString n}" :: [])
+    /= gateSetDigest ("a\{intToString n}" :: "c\{intToString n}" :: [])
 # DESUGAR
 (DUse false (UseGroup ("json") ((mem "JNull" false) (mem "Json" false) (mem "asArray" false) (mem "asBool" false) (mem "asInt" false) (mem "asString" false) (mem "lookup" false) (mem "parse" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "listLen" false) (mem "splitOnChar" false) (mem "startsWith" false))))

@@ -68,7 +68,10 @@ mustServer account = match recordServer account
   Err message => panic "record_handlers: server setup failed: \{message}"
 
 mustRepo : String -> String -> Tid -> Repo
-mustRepo did secretHex rev = match repoInitFromKeyBytes did (mustHex secretHex) rev
+mustRepo did secretHex rev = match (repoInitFromKeyBytes
+  did
+  (mustHex secretHex)
+  rev)
   Ok repo => repo
   Err message => panic "record_handlers: repository init failed: \{message}"
 
@@ -77,7 +80,8 @@ mustRepo did secretHex rev = match repoInitFromKeyBytes did (mustHex secretHex) 
 procedureRequest : String -> String -> Array Int
 procedureRequest nsid body =
   let bytes = toUtf8 body
-  toUtf8 "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{accountHostText}\r\nContent-Type: application/json\r\nContent-Length: \{intToString (arrayLength bytes)}\r\n\r\n"
+  toUtf8
+      "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{accountHostText}\r\nContent-Type: application/json\r\nContent-Length: \{intToString (arrayLength bytes)}\r\n\r\n"
     ++ bytes
 
 -- Everything after the first CRLFCRLF is the response body.
@@ -85,7 +89,10 @@ bodyStart : Array Int -> Int -> Int
 bodyStart bytes i =
   if i + 3 >= arrayLength bytes then
     panic "record_handlers: response has no body separator"
-  else if bytes[i] == 13 && bytes[i + 1] == 10 && bytes[i + 2] == 13 && bytes[i + 3] == 10 then
+  else if bytes[i] == 13
+    && bytes[i + 1] == 10
+    && bytes[i + 2] == 13
+    && bytes[i + 3] == 10 then
     i + 4
   else
     bodyStart bytes (i + 1)
@@ -113,21 +120,23 @@ commitField name value = match lookup "commit" value
 -- ── the transcript ──────────────────────────────────────────────────────────
 
 createBody : String -> String -> String -> Json -> String
-createBody did collection rkey record = stringify (jObject
-  [
-    ("repo", JString did),
-    ("collection", JString collection),
-    ("rkey", JString rkey),
-    ("record", record),
-  ])
+createBody did collection rkey record =
+  stringify
+    (jObject [
+      ("repo", JString did),
+      ("collection", JString collection),
+      ("rkey", JString rkey),
+      ("record", record),
+    ])
 
 deleteBody : String -> String -> String -> String
-deleteBody did collection rkey = stringify (jObject
-  [
-    ("repo", JString did),
-    ("collection", JString collection),
-    ("rkey", JString rkey),
-  ])
+deleteBody did collection rkey =
+  stringify
+    (jObject [
+      ("repo", JString did),
+      ("collection", JString collection),
+      ("rkey", JString rkey),
+    ])
 
 splitPath : String -> (String, String)
 splitPath text = match split "/" text
@@ -135,7 +144,10 @@ splitPath text = match split "/" text
   _ => panic "record_handlers: malformed corpus path"
 
 runStep : String -> Server -> Store -> String -> String -> <IO> Store
-runStep did server store opLine commitLine = match (split "\t" opLine, split "\t" commitLine)
+runStep did server store opLine commitLine = match (
+  split "\t" opLine,
+  split "\t" commitLine,
+)
   (["OP", kind, pathHex, recordHex, recordCid, rev], ["COMMIT", _, _, _, commitCid, _]) =>
     let (collection, rkey) = splitPath (fromUtf8 (mustHex pathHex))
     let (nsid, body) = match kind
@@ -150,7 +162,8 @@ runStep did server store opLine commitLine = match (split "\t" opLine, split "\t
       "DELETE" =>
         ("com.atproto.repo.deleteRecord", deleteBody did collection rkey)
       _ => panic "record_handlers: unknown transcript operation \{kind}"
-    let (next, responseBytes) = handleBytes server store (procedureRequest nsid body)
+    let (next, responseBytes) =
+      handleBytes server store (procedureRequest nsid body)
     let value = responseJson responseBytes
     let expectedUri = "at://\{did}/\{collection}/\{rkey}"
     let uriOk = kind == "DELETE" || fieldText "uri" value == expectedUri
@@ -158,10 +171,14 @@ runStep did server store opLine commitLine = match (split "\t" opLine, split "\t
     let commitOk = commitField "cid" value == commitCid
     let revOk = commitField "rev" value == rev
     if uriOk && cidOk && commitOk && revOk then
-      let () = println "STEP \{kind} PASS rkey=\{rkey} cid=\{fieldText "cid" value} commit=\{commitCid} rev=\{rev}"
+      let () =
+        println
+          "STEP \{kind} PASS rkey=\{rkey} cid=\{fieldText "cid" value} commit=\{commitCid} rev=\{rev}"
       next
     else
-      let () = println "STEP \{kind} FAIL rkey=\{rkey} uri=\{fieldText "uri" value} cid=\{fieldText "cid" value} commit=\{commitField "cid" value} rev=\{commitField "rev" value}"
+      let () =
+        println
+          "STEP \{kind} FAIL rkey=\{rkey} uri=\{fieldText "uri" value} cid=\{fieldText "cid" value} commit=\{commitField "cid" value} rev=\{commitField "rev" value}"
       let () = exit 1
       next
   _ => panic "record_handlers: malformed transcript rows"
@@ -171,64 +188,101 @@ runStep did server store opLine commitLine = match (split "\t" opLine, split "\t
 storeFingerprint : Store -> String
 storeFingerprint store = match storeRepo store
   None => "<unconfigured>"
-  Some repo => "\{cidToString (repoCommitCid (repoLatestCommit repo))}/\{cidToString (repoRootCid repo)}"
+  Some repo =>
+    "\{cidToString (repoCommitCid (repoLatestCommit repo))}/\{cidToString (repoRootCid repo)}"
 
 rejectCell : String -> String -> String -> Server -> Store -> String -> <IO> Int
 rejectCell label expectedCode nsid server store body =
   let before = storeFingerprint store
-  let (next, responseBytes) = handleBytes server store (procedureRequest nsid body)
+  let (next, responseBytes) =
+    handleBytes server store (procedureRequest nsid body)
   let value = responseJson responseBytes
   let after = storeFingerprint next
   let code = fieldText "error" value
   if code == expectedCode && before == after then
-    let () = println "CELL \{label} PASS error=\{code} message=\{fieldText "message" value} state=unchanged"
+    let () =
+      println
+        "CELL \{label} PASS error=\{code} message=\{fieldText "message" value} state=unchanged"
     1
   else
-    let () = println "CELL \{label} FAIL error=\{code} before=\{before} after=\{after}"
+    let () =
+      println "CELL \{label} FAIL error=\{code} before=\{before} after=\{after}"
     0
 
 swapCommitBody : String -> String -> Json -> String
-swapCommitBody did rkey record = stringify (jObject
-  [
-    ("repo", JString did),
-    ("collection", JString collectionText),
-    ("rkey", JString rkey),
-    ("record", record),
-    (
-      "swapCommit",
-      JString "bafyreie5737gdxlw5i64vzichcalba3z2v5n6icifvx5xytvske7mr3hpm",
-    ),
-  ])
+swapCommitBody did rkey record =
+  stringify
+    (jObject [
+      ("repo", JString did),
+      ("collection", JString collectionText),
+      ("rkey", JString rkey),
+      ("record", record),
+      (
+        "swapCommit",
+        JString "bafyreie5737gdxlw5i64vzichcalba3z2v5n6icifvx5xytvske7mr3hpm",
+      ),
+    ])
 
 validateBody : String -> String -> Json -> String
-validateBody did rkey record = stringify (jObject
-  [
-    ("repo", JString did),
-    ("collection", JString collectionText),
-    ("rkey", JString rkey),
-    ("record", record),
-    ("validate", JBool True),
-  ])
+validateBody did rkey record =
+  stringify
+    (jObject [
+      ("repo", JString did),
+      ("collection", JString collectionText),
+      ("rkey", JString rkey),
+      ("record", record),
+      ("validate", JBool True),
+    ])
 
 unknownCollectionBody : String -> String -> Json -> String
-unknownCollectionBody did rkey record = stringify (jObject
-  [
-    ("repo", JString did),
-    ("collection", JString "not-an-nsid"),
-    ("rkey", JString rkey),
-    ("record", record),
-  ])
+unknownCollectionBody did rkey record =
+  stringify
+    (jObject [
+      ("repo", JString did),
+      ("collection", JString "not-an-nsid"),
+      ("rkey", JString rkey),
+      ("record", record),
+    ])
 
 runCells : String -> Server -> Store -> Json -> <IO> Unit
 runCells did server store record =
   let create = "com.atproto.repo.createRecord"
-  let swap = rejectCell "swap-commit-mismatch" "InvalidSwap" create server store (swapCommitBody did "medaka-c" record)
-  let validate = rejectCell "validate-true-refused" "InvalidRequest" create server store (validateBody did "medaka-d" record)
-  let unknown = rejectCell "unknown-collection" "InvalidRequest" create server store (unknownCollectionBody did "medaka-e" record)
-  let malformed = rejectCell "malformed-json" "InvalidRequest" create server store "{\"repo\": "
+  let swap =
+    rejectCell
+      "swap-commit-mismatch"
+      "InvalidSwap"
+      create
+      server
+      store
+      (swapCommitBody did "medaka-c" record)
+  let validate =
+    rejectCell
+      "validate-true-refused"
+      "InvalidRequest"
+      create
+      server
+      store
+      (validateBody did "medaka-d" record)
+  let unknown =
+    rejectCell
+      "unknown-collection"
+      "InvalidRequest"
+      create
+      server
+      store
+      (unknownCollectionBody did "medaka-e" record)
+  let malformed =
+    rejectCell
+      "malformed-json"
+      "InvalidRequest"
+      create
+      server
+      store
+      "{\"repo\": "
   let cells = swap + validate + unknown + malformed
   let () = println "cells: \{intToString cells}/4 state-preserving rejections"
-  if cells == 4 then println "CELLS: PASS"
+  if cells == 4 then
+    println "CELLS: PASS"
   else
     let () = println "CELLS: FAIL"
     exit 1
@@ -240,7 +294,17 @@ initialTidFrom line = match split "\t" line
   ["TID", _, _, text] => mustTid text
   _ => panic "record_handlers: malformed initial TID row"
 
-runTranscript : List String -> String -> String -> String -> String -> String -> String -> String -> String -> String -> <IO> Unit
+runTranscript : List String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <IO> Unit
 runTranscript ["META", did, secretHex] t0 op1 c1 op2 c2 op3 c3 op4 c4 =
   let account = mustAccount did
   let server = mustServer account
@@ -250,7 +314,8 @@ runTranscript ["META", did, secretHex] t0 op1 c1 op2 c2 op3 c3 op4 c4 =
   let s2 = runStep did server s1 op2 c2
   let s3 = runStep did server s2 op3 c3
   let s4 = runStep did server s3 op4 c4
-  let () = println "transcript: 4/4 handler-layer steps matched the pinned corpus"
+  let () =
+    println "transcript: 4/4 handler-layer steps matched the pinned corpus"
   let () = println "final-commit: \{storeFingerprint s4}"
   let () = runCells did server s1 (recordJsonFrom op1)
   println "TOTAL: PASS"
@@ -262,7 +327,8 @@ recordJsonFrom line = match split "\t" line
   _ => panic "record_handlers: malformed operation row"
 
 runRows : List String -> <IO> Unit
-runRows [meta, t0, _, _, _, _, _, op1, c1, _, _, op2, c2, op3, c3, op4, c4, _, _, "END"] = runTranscript (split "\t" meta) t0 op1 c1 op2 c2 op3 c3 op4 c4
+runRows [meta, t0, _, _, _, _, _, op1, c1, _, _, op2, c2, op3, c3, op4, c4, _, _, "END"] =
+  runTranscript (split "\t" meta) t0 op1 c1 op2 c2 op3 c3 op4 c4
 runRows _ = panic "record_handlers: unexpected corpus shape"
 
 meaningful : String -> Bool

@@ -102,13 +102,14 @@ engineName EngNative = "native"
 export
 doctestFailSuffix : RunResult -> String
 doctestFailSuffix result
-  | runFailed result > 0 || runErrors result > 0 = " (\{intToString (runFailed result)} failed, \{intToString (runErrors result)} errors)"
+  | runFailed result > 0 || runErrors result > 0 =
+    " (\{intToString (runFailed result)} failed, \{intToString (runErrors result)} errors)"
   | otherwise = ""
 
 export
 printDoctestDetails : String -> List (Example, ExResult) -> <IO> Unit
 printDoctestDetails _ [] = ()
-printDoctestDetails target ((ex, res)::rest) =
+printDoctestDetails target ((ex, res) :: rest) =
   let _ = printDoctestOne target ex res
   printDoctestDetails target rest
 
@@ -193,7 +194,7 @@ expandBlock c =
 
 expandLines : Int -> Int -> List String -> List (Int, String)
 expandLines _ _ [] = []
-expandLines baseLine i (line::rest) =
+expandLines baseLine i (line :: rest) =
   let trimmed = stringTrim line
   let text = if trimmed == "" then "--" else "-- " ++ trimmed
   (baseLine + i, text) :: expandLines baseLine (i + 1) rest
@@ -204,18 +205,19 @@ expandLines baseLine i (line::rest) =
 splitIntoBlocks : List (Int, String) -> List (List (Int, String))
 splitIntoBlocks comments = reverseL (blocksGo [] [] 0 comments)
 
-blocksGo : List (List (Int, String)) -> List (Int, String) -> Int -> List (Int, String) -> List (List (Int, String))
+blocksGo : List (List (Int, String)) ->
+  List (Int, String) ->
+  Int ->
+  List (Int, String) ->
+  List (List (Int, String))
 blocksGo acc current _ [] =
-  if isEmptyL current then
-    acc
-  else
-    reverseL current :: acc
-blocksGo acc current lastLine (c::rest)
+  if isEmptyL current then acc else reverseL current :: acc
+blocksGo acc current lastLine (c :: rest)
   | isBlankComment c =
     let acc2 = if isEmptyL current then acc else reverseL current :: acc
     blocksGo acc2 [] (clLine c) rest
   | isEmptyL current || clLine c == lastLine + 1 =
-    blocksGo acc (c::current) (clLine c) rest
+    blocksGo acc (c :: current) (clLine c) rest
   | otherwise = blocksGo (reverseL current :: acc) [c] (clLine c) rest
 
 isEmptyL : List a -> Bool
@@ -237,15 +239,21 @@ sealExample (Some (inp, ln)) expectedRev =
 extractFromBlock : List (Int, String) -> List Example
 extractFromBlock block = reverseL (extractGo [] None [] block)
 
-extractGo : List Example -> Option (String, Int) -> List String -> List (Int, String) -> List Example
-extractGo examples curInput expectedRev [] = match sealExample curInput expectedRev
+extractGo : List Example ->
+  Option (String, Int) ->
+  List String ->
+  List (Int, String) ->
+  List Example
+extractGo examples curInput expectedRev [] = match (sealExample
+  curInput
+  expectedRev)
   None => examples
-  Some ex => ex::examples
-extractGo examples curInput expectedRev (c::rest)
+  Some ex => ex :: examples
+extractGo examples curInput expectedRev (c :: rest)
   | isInputLine c =
     let examples2 = match sealExample curInput expectedRev
       None => examples
-      Some ex => ex::examples
+      Some ex => ex :: examples
     extractGo examples2 (Some (inputBody c, clLine c)) [] rest
   | isExpectedLine c = match curInput
     None => extractGo examples None [] rest
@@ -253,7 +261,7 @@ extractGo examples curInput expectedRev (c::rest)
   | otherwise =
     let examples2 = match sealExample curInput expectedRev
       None => examples
-      Some ex => ex::examples
+      Some ex => ex :: examples
     extractGo examples2 None [] rest
 
 -- ── Public extraction ───────────────────────────────────────────────────────
@@ -270,8 +278,8 @@ commentToPair c = (commentLine c, commentText c)
 
 concatMapC : List (Int, String) -> List (Int, String)
 concatMapC [] = []
-concatMapC (c::rest) = (if isBlockComment c then expandBlock c else [c])
-  ++ concatMapC rest
+concatMapC (c :: rest) =
+  (if isBlockComment c then expandBlock c else [c]) ++ concatMapC rest
 
 -- ── Synthesizing the per-example binding ────────────────────────────────────
 -- An example with an expected line is rendered through the user-facing `debug`
@@ -305,7 +313,7 @@ buildSynthResults examples = buildSynthResultsGo 0 examples
 
 buildSynthResultsGo : Int -> List Example -> List (Result String (List Decl))
 buildSynthResultsGo _ [] = []
-buildSynthResultsGo i (ex::rest) =
+buildSynthResultsGo i (ex :: rest) =
   synthOne i ex :: buildSynthResultsGo (i + 1) rest
 
 synthOne : Int -> Example -> Result String (List Decl)
@@ -323,8 +331,8 @@ buildSynthDecls synthResults = concatOkDecls synthResults
 
 concatOkDecls : List (Result String (List Decl)) -> List Decl
 concatOkDecls [] = []
-concatOkDecls ((Ok ds)::rest) = ds ++ concatOkDecls rest
-concatOkDecls ((Err _)::rest) = concatOkDecls rest
+concatOkDecls ((Ok ds) :: rest) = ds ++ concatOkDecls rest
+concatOkDecls ((Err _) :: rest) = concatOkDecls rest
 
 -- ── Compare rendered results against expected ────────────────────────────────
 -- Stage 1 (make `medaka test` run natively): this seam used to take the raw
@@ -340,7 +348,10 @@ concatOkDecls ((Err _)::rest) = concatOkDecls rest
 -- thin adapter over `lookupBinding (synthName i) env` / `ppValue (force v)`.
 
 export
-buildDetailsFrom : Result String (List (Result String String)) -> List (Result String (List Decl)) -> List Example -> RunResult
+buildDetailsFrom : Result String (List (Result String String)) ->
+  List (Result String (List Decl)) ->
+  List Example ->
+  RunResult
 buildDetailsFrom renderedResult synthResults examples =
   let details = detailsGoFrom renderedResult synthResults examples
   let passed = countResult isPass details
@@ -348,7 +359,10 @@ buildDetailsFrom renderedResult synthResults examples =
   let errors = countResult isErr details
   RunResult (listLen examples) passed failed errors details
 
-detailsGoFrom : Result String (List (Result String String)) -> List (Result String (List Decl)) -> List Example -> List (Example, ExResult)
+detailsGoFrom : Result String (List (Result String String)) ->
+  List (Result String (List Decl)) ->
+  List Example ->
+  List (Example, ExResult)
 detailsGoFrom (Err msg) synthResults examples =
   detailsGoErr msg synthResults examples
 detailsGoFrom (Ok rendered) synthResults examples =
@@ -359,11 +373,14 @@ detailsGoFrom (Ok rendered) synthResults examples =
 -- and never conflated with the whole-file failure (mirrors the pre-Stage-1
 -- `oneResult`'s `oneResult _ (Err msg) i ex` catch-all, which fired
 -- regardless of the env/render outcome).
-detailsGoErr : String -> List (Result String (List Decl)) -> List Example -> List (Example, ExResult)
+detailsGoErr : String ->
+  List (Result String (List Decl)) ->
+  List Example ->
+  List (Example, ExResult)
 detailsGoErr _ _ [] = []
-detailsGoErr msg (sr::srRest) (ex::rest) =
+detailsGoErr msg (sr :: srRest) (ex :: rest) =
   (ex, oneResultErr msg sr) :: detailsGoErr msg srRest rest
-detailsGoErr _ [] (_::_) = []
+detailsGoErr _ [] (_ :: _) = []
 -- (the [] / (_::_) fallback only fires if synthResults and examples somehow
 -- desync in length — buildSynthResults always produces one entry per
 -- example, so this is unreachable in practice; kept for exhaustiveness.)
@@ -375,14 +392,20 @@ oneResultErr msg (Ok _) = Errored msg
 -- Successful run: one rendered Result per example, positionally aligned (a
 -- per-example parse failure still wins — it never reaches the rendered
 -- result, so it can't be conflated with "ran but produced no/bad output").
-detailsGoOk : List (Result String String) -> List (Result String (List Decl)) -> List Example -> List (Example, ExResult)
-detailsGoOk (r::rRest) (sr::srRest) (ex::rest) =
+detailsGoOk : List (Result String String) ->
+  List (Result String (List Decl)) ->
+  List Example ->
+  List (Example, ExResult)
+detailsGoOk (r :: rRest) (sr :: srRest) (ex :: rest) =
   (ex, oneResultOk r sr ex) :: detailsGoOk rRest srRest rest
 detailsGoOk _ _ [] = []
-detailsGoOk [] _ (_::_) = []
-detailsGoOk _ [] (_::_) = []
+detailsGoOk [] _ (_ :: _) = []
+detailsGoOk _ [] (_ :: _) = []
 
-oneResultOk : Result String String -> Result String (List Decl) -> Example -> ExResult
+oneResultOk : Result String String ->
+  Result String (List Decl) ->
+  Example ->
+  ExResult
 oneResultOk _ (Err pmsg) ex = Errored ("parse error: " ++ pmsg)
 oneResultOk (Err msg) (Ok _) ex = Errored msg
 oneResultOk (Ok actual) (Ok _) ex = compareValue ex actual
@@ -406,7 +429,7 @@ isErr _ = False
 
 countResult : (ExResult -> Bool) -> List (Example, ExResult) -> Int
 countResult _ [] = 0
-countResult p ((_, r)::rest)
+countResult p ((_, r) :: rest)
   | p r = 1 + countResult p rest
   | otherwise = countResult p rest
 
@@ -416,7 +439,7 @@ hasUseDecls decls = anyUse decls
 
 anyUse : List Decl -> Bool
 anyUse [] = False
-anyUse (d::rest) = isUse d || anyUse rest
+anyUse (d :: rest) = isUse d || anyUse rest
 
 isUse : Decl -> Bool
 isUse (DUse _ _ _) = True

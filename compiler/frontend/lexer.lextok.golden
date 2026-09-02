@@ -1536,6 +1536,7 @@ IDENT "a"
 IDENT "b"
 IDENT "c"
 EQUAL
+INDENT
 IDENT "pos"
 PLUS
 INT 2
@@ -1567,6 +1568,8 @@ INT 2
 RPAREN
 EQ_EQ
 IDENT "c"
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "substr"
 COLON
@@ -2888,6 +2891,7 @@ IDENT "src"
 IDENT "len"
 IDENT "pos"
 EQUAL
+INDENT
 IDENT "at"
 IDENT "src"
 IDENT "pos"
@@ -2930,6 +2934,8 @@ PLUS
 INT 2
 RPAREN
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "radixKind"
 COLON
@@ -3498,6 +3504,7 @@ NEWLINE
 PIPE
 IDENT "otherwise"
 EQUAL
+INDENT
 UPPER "RTok"
 LPAREN
 UPPER "TInt"
@@ -3532,6 +3539,8 @@ IDENT "len"
 IDENT "e"
 IDENT "depth"
 IDENT "id"
+NEWLINE
+DEDENT
 NEWLINE
 DEDENT
 NEWLINE
@@ -3616,6 +3625,7 @@ IDENT "src"
 IDENT "len"
 IDENT "pos"
 EQUAL
+INDENT
 IDENT "at"
 IDENT "src"
 IDENT "pos"
@@ -3648,6 +3658,8 @@ INT 2
 RPAREN
 EQ_EQ
 CHAR "_"
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "malformedRadixTok"
 COLON
@@ -3799,6 +3811,7 @@ IDENT "digits"
 EQ_EQ
 INT 0
 EQUAL
+INDENT
 IDENT "lexErrorTok"
 IDENT "pos"
 INTERP_OPEN "malformed radix literal `"
@@ -3807,9 +3820,12 @@ INTERP_MID "`: '_' cannot immediately follow the radix prefix '"
 IDENT "prefix"
 INTERP_END "', and no digit follows it either"
 NEWLINE
+DEDENT
+NEWLINE
 PIPE
 IDENT "otherwise"
 EQUAL
+INDENT
 IDENT "lexErrorTok"
 IDENT "pos"
 INTERP_OPEN "malformed radix literal `"
@@ -3819,6 +3835,8 @@ IDENT "prefix"
 INTERP_MID ""
 IDENT "digits"
 INTERP_END "`"
+NEWLINE
+DEDENT
 NEWLINE
 DEDENT
 NEWLINE
@@ -3838,6 +3856,7 @@ IDENT "src"
 IDENT "len"
 IDENT "e1"
 EQUAL
+INDENT
 IDENT "e1"
 LT
 IDENT "len"
@@ -3864,6 +3883,8 @@ PLUS
 INT 1
 RPAREN
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "isExpMarker"
 COLON
@@ -3914,6 +3935,7 @@ INDENT
 LET
 IDENT "q"
 EQUAL
+INDENT
 IF
 IDENT "p"
 PLUS
@@ -3954,6 +3976,8 @@ INDENT
 IDENT "p"
 PLUS
 INT 1
+NEWLINE
+DEDENT
 NEWLINE
 DEDENT
 NEWLINE
@@ -4088,6 +4112,7 @@ NEWLINE
 PIPE
 IDENT "otherwise"
 EQUAL
+INDENT
 UPPER "RTok"
 LPAREN
 UPPER "TInt"
@@ -4117,6 +4142,8 @@ IDENT "id"
 NEWLINE
 DEDENT
 NEWLINE
+DEDENT
+NEWLINE
 IDENT "isMalformedExpDot"
 COLON
 UPPER "Array"
@@ -4133,6 +4160,7 @@ IDENT "src"
 IDENT "len"
 IDENT "e1"
 EQUAL
+INDENT
 IDENT "e1"
 LT
 IDENT "len"
@@ -4155,6 +4183,8 @@ GT
 IDENT "e1"
 PLUS
 INT 1
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "malformedExpDotTok"
 COLON
@@ -4246,6 +4276,7 @@ IDENT "src"
 IDENT "len"
 IDENT "e1"
 EQUAL
+INDENT
 IDENT "e1"
 LT
 IDENT "len"
@@ -4264,6 +4295,8 @@ IDENT "len"
 IDENT "e1"
 RPAREN
 NEWLINE
+DEDENT
+NEWLINE
 IDENT "dotContinuesAccess"
 COLON
 UPPER "Array"
@@ -4280,6 +4313,7 @@ IDENT "src"
 IDENT "len"
 IDENT "p"
 EQUAL
+INDENT
 IDENT "p"
 PLUS
 INT 1
@@ -4359,6 +4393,8 @@ RPAREN
 EQ_EQ
 CHAR "*"
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "malformedTrailingDotTok"
 COLON
@@ -4769,22 +4805,32 @@ COLON
 UPPER "Array"
 UPPER "Char"
 ARROW
+INDENT
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "String"
 ARROW
+NEWLINE
 UPPER "Char"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "RawTok"
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "scanStrEsc"
 IDENT "src"
@@ -4851,6 +4897,7 @@ NEWLINE
 UPPER "Some"
 IDENT "c"
 FAT_ARROW
+INDENT
 IDENT "scanStr"
 IDENT "src"
 IDENT "len"
@@ -4869,6 +4916,8 @@ PLUSPLUS
 IDENT "charToStr"
 IDENT "c"
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 DEDENT
 NEWLINE
@@ -4920,12 +4969,15 @@ RPAREN
 NEWLINE
 UPPER "None"
 FAT_ARROW
+INDENT
 IDENT "lexErrorTok"
 IDENT "p"
 INTERP_OPEN "invalid escape sequence '\\"
 IDENT "charToStr"
 IDENT "e"
 INTERP_END "' — Medaka's string escapes are \\n \\t \\r \\0 \\\\ \\\" and \\u{...}"
+NEWLINE
+DEDENT
 NEWLINE
 DEDENT
 NEWLINE
@@ -5248,6 +5300,7 @@ IDENT "e"
 EQ_EQ
 CHAR "0"
 EQUAL
+INDENT
 IDENT "scanInterpCont"
 IDENT "src"
 IDENT "len"
@@ -5270,6 +5323,8 @@ INT 0
 RPAREN
 RPAREN
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 PIPE
 IDENT "isUnicodeEsc"
@@ -5357,6 +5412,7 @@ IDENT "src"
 IDENT "len"
 IDENT "pos"
 EQUAL
+INDENT
 IDENT "pos"
 PLUS
 INT 2
@@ -5391,6 +5447,8 @@ PLUS
 INT 2
 RPAREN
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "firstNl"
 COLON
@@ -5436,22 +5494,32 @@ COLON
 UPPER "Array"
 UPPER "Char"
 ARROW
+INDENT
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "Bool"
 ARROW
+NEWLINE
 UPPER "String"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "RawTok"
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "scanTriple"
 IDENT "src"
@@ -5468,6 +5536,7 @@ IDENT "p"
 GEQ
 IDENT "len"
 EQUAL
+INDENT
 UPPER "RTok"
 LPAREN
 UPPER "TString"
@@ -5487,12 +5556,15 @@ IDENT "p"
 IDENT "depth"
 IDENT "id"
 NEWLINE
+DEDENT
+NEWLINE
 PIPE
 IDENT "isTripleAt"
 IDENT "src"
 IDENT "len"
 IDENT "p"
 EQUAL
+INDENT
 UPPER "RTok"
 LPAREN
 UPPER "TString"
@@ -5519,6 +5591,8 @@ INT 3
 RPAREN
 IDENT "depth"
 IDENT "id"
+NEWLINE
+DEDENT
 NEWLINE
 PIPE
 IDENT "isBackslash"
@@ -5622,6 +5696,7 @@ IDENT "src"
 IDENT "p"
 RPAREN
 EQUAL
+INDENT
 IDENT "scanTriple"
 IDENT "src"
 IDENT "len"
@@ -5643,6 +5718,8 @@ IDENT "acc"
 PLUSPLUS
 STRING "\n"
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 PIPE
 IDENT "isQuote"
@@ -5722,6 +5799,7 @@ NEWLINE
 PIPE
 IDENT "otherwise"
 EQUAL
+INDENT
 IDENT "scanTriple"
 IDENT "src"
 IDENT "len"
@@ -5747,29 +5825,42 @@ RPAREN
 NEWLINE
 DEDENT
 NEWLINE
+DEDENT
+NEWLINE
 IDENT "scanTripleEsc"
 COLON
 UPPER "Array"
 UPPER "Char"
 ARROW
+INDENT
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "Bool"
 ARROW
+NEWLINE
 UPPER "String"
 ARROW
+NEWLINE
 UPPER "Char"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "RawTok"
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "scanTripleEsc"
 IDENT "src"
@@ -5915,6 +6006,7 @@ IDENT "e"
 EQ_EQ
 CHAR "0"
 EQUAL
+INDENT
 IDENT "scanTriple"
 IDENT "src"
 IDENT "len"
@@ -5940,6 +6032,8 @@ INT 0
 RPAREN
 RPAREN
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 PIPE
 IDENT "isUnicodeEsc"
@@ -5968,6 +6062,7 @@ NEWLINE
 UPPER "Some"
 IDENT "c"
 FAT_ARROW
+INDENT
 IDENT "scanTriple"
 IDENT "src"
 IDENT "len"
@@ -5987,6 +6082,8 @@ PLUSPLUS
 IDENT "charToStr"
 IDENT "c"
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 DEDENT
 NEWLINE
@@ -6304,18 +6401,26 @@ COLON
 UPPER "Array"
 UPPER "Char"
 ARROW
+INDENT
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "String"
 ARROW
+NEWLINE
 UPPER "Char"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "RawTok"
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "scanInterpTripleEsc"
 IDENT "src"
@@ -6428,6 +6533,7 @@ IDENT "e"
 EQ_EQ
 CHAR "0"
 EQUAL
+INDENT
 IDENT "scanInterpTripleCont"
 IDENT "src"
 IDENT "len"
@@ -6450,6 +6556,8 @@ INT 0
 RPAREN
 RPAREN
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 PIPE
 IDENT "isUnicodeEsc"
@@ -6478,6 +6586,7 @@ NEWLINE
 UPPER "Some"
 IDENT "c"
 FAT_ARROW
+INDENT
 IDENT "scanInterpTripleCont"
 IDENT "src"
 IDENT "len"
@@ -6494,6 +6603,8 @@ PLUSPLUS
 IDENT "charToStr"
 IDENT "c"
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 DEDENT
 NEWLINE
@@ -7686,21 +7797,29 @@ IDENT "dedentTripleGroup"
 COLON
 UPPER "String"
 ARROW
+INDENT
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "String"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "RawTok"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "RawTok"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "RawTok"
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "dedentTripleGroup"
 IDENT "sReal"
@@ -7740,6 +7859,7 @@ IDENT "openStr'"
 CONS
 IDENT "restVals"
 FAT_ARROW
+INDENT
 UPPER "RTok"
 LPAREN
 UPPER "TInterpOpen"
@@ -7755,9 +7875,12 @@ PLUSPLUS
 IDENT "dedentTripleInterp"
 IDENT "afterEnd"
 NEWLINE
+DEDENT
+NEWLINE
 LBRACKET
 RBRACKET
 FAT_ARROW
+INDENT
 UPPER "RTok"
 LPAREN
 UPPER "TInterpOpen"
@@ -7770,6 +7893,8 @@ IDENT "midToks"
 PLUSPLUS
 IDENT "dedentTripleInterp"
 IDENT "afterEnd"
+NEWLINE
+DEDENT
 NEWLINE
 DEDENT
 NEWLINE
@@ -8011,6 +8136,7 @@ IDENT "src"
 IDENT "p"
 RPAREN
 EQUAL
+INDENT
 IDENT "lexErrorTok"
 LPAREN
 IDENT "p"
@@ -8018,6 +8144,8 @@ MINUS
 INT 1
 RPAREN
 STRING "character literal is empty. A character is exactly one codepoint — write `'\\0'` for the NUL character, or use a `\"\"` string for an empty value"
+NEWLINE
+DEDENT
 NEWLINE
 PIPE
 IDENT "otherwise"
@@ -8037,7 +8165,10 @@ UPPER "String"
 NEWLINE
 IDENT "charUntermMsg"
 EQUAL
+INDENT
 STRING "character literal is not terminated. A character is one codepoint between single quotes, as in `'a'` or `'\\n'`"
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "escChar"
 COLON
@@ -8093,12 +8224,15 @@ IDENT "e"
 INDENT
 UPPER "None"
 FAT_ARROW
+INDENT
 IDENT "lexErrorTok"
 IDENT "p"
 INTERP_OPEN "invalid escape sequence '\\"
 IDENT "charToStr"
 IDENT "e"
 INTERP_END "' — Medaka's character escapes are \\n \\t \\r \\0 \\\\ \\' and \\u{...}"
+NEWLINE
+DEDENT
 NEWLINE
 UPPER "Some"
 IDENT "s"
@@ -8206,6 +8340,7 @@ INT 1
 RPAREN
 RPAREN
 EQUAL
+INDENT
 UPPER "RTok"
 LPAREN
 UPPER "TChar"
@@ -8235,6 +8370,8 @@ INT 2
 RPAREN
 IDENT "depth"
 IDENT "id"
+NEWLINE
+DEDENT
 NEWLINE
 PIPE
 IDENT "otherwise"
@@ -8606,7 +8743,10 @@ IDENT "he"
 GEQ
 IDENT "len"
 EQUAL
+INDENT
 STRING "unicode escape is not terminated. Expected one to six hex digits (0-9, a-f, A-F) then `}`, but the file ended"
+NEWLINE
+DEDENT
 NEWLINE
 PIPE
 IDENT "at"
@@ -8615,7 +8755,10 @@ IDENT "he"
 EQ_EQ
 CHAR "_"
 EQUAL
+INDENT
 STRING "unicode escape uses a `_` separator, which is not allowed here. `_` groups digits in integer literals (`1_000`, `0xD_EAD`), but a `\\u{...}` codepoint must be an unbroken run of hex digits — write the digits unbroken, as in `\\u{41}` rather than `\\u{4_1}`"
+NEWLINE
+DEDENT
 NEWLINE
 PIPE
 IDENT "he"
@@ -8628,13 +8771,17 @@ IDENT "he"
 EQ_EQ
 CHAR "}"
 EQUAL
+INDENT
 STRING "unicode escape `\\u{}` has no digits. A codepoint needs at least one hex digit — `\\u{41}` is 'A' and `\\u{0}` is NUL"
+NEWLINE
+DEDENT
 NEWLINE
 PIPE
 IDENT "he"
 EQ_EQ
 IDENT "s"
 EQUAL
+INDENT
 INTERP_OPEN "unicode escape is not terminated. Expected one to six hex digits (0-9, a-f, A-F) then `}`, but found `"
 IDENT "charToStr"
 LPAREN
@@ -8644,9 +8791,12 @@ IDENT "he"
 RPAREN
 INTERP_END "`"
 NEWLINE
+DEDENT
+NEWLINE
 PIPE
 IDENT "otherwise"
 EQUAL
+INDENT
 INTERP_OPEN "unicode escape is not terminated. Expected `}` after the hex digits, but found `"
 IDENT "charToStr"
 LPAREN
@@ -8655,6 +8805,8 @@ IDENT "src"
 IDENT "he"
 RPAREN
 INTERP_END "`"
+NEWLINE
+DEDENT
 NEWLINE
 DEDENT
 NEWLINE
@@ -8720,6 +8872,7 @@ IF
 IDENT "uniIsSurrogate"
 IDENT "cp"
 FAT_ARROW
+INDENT
 INTERP_OPEN "unicode escape '"
 IDENT "uniEscText"
 IDENT "src"
@@ -8727,14 +8880,19 @@ IDENT "len"
 IDENT "p"
 INTERP_END "' is a UTF-16 surrogate, not a character. Codepoints D800-DFFF only ever encode one half of a surrogate pair and are never valid on their own"
 NEWLINE
+DEDENT
+NEWLINE
 UNDERSCORE
 FAT_ARROW
+INDENT
 INTERP_OPEN "unicode escape '"
 IDENT "uniEscText"
 IDENT "src"
 IDENT "len"
 IDENT "p"
 INTERP_END "' is out of range. A codepoint must be at most 10FFFF"
+NEWLINE
+DEDENT
 NEWLINE
 DEDENT
 NEWLINE
@@ -8921,6 +9079,7 @@ IDENT "len"
 IDENT "p"
 IDENT "e"
 EQUAL
+INDENT
 IDENT "e"
 EQ_EQ
 CHAR "u"
@@ -8958,6 +9117,8 @@ INT 2
 RPAREN
 EQ_EQ
 INT 4
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "bareUnicodeEscWritten"
 COLON
@@ -9044,6 +9205,7 @@ IDENT "src"
 IDENT "len"
 IDENT "p"
 EQUAL
+INDENT
 INTERP_OPEN "bare unicode escape `"
 IDENT "bareUnicodeEscWritten"
 IDENT "src"
@@ -9055,6 +9217,8 @@ IDENT "src"
 IDENT "len"
 IDENT "p"
 INTERP_END "`? Supported string escapes: \\n \\t \\r \\0 \\\\ \\\" and \\u{...}"
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "bareUnicodeEscMsgChar"
 COLON
@@ -9072,6 +9236,7 @@ IDENT "src"
 IDENT "len"
 IDENT "p"
 EQUAL
+INDENT
 INTERP_OPEN "bare unicode escape `"
 IDENT "bareUnicodeEscWritten"
 IDENT "src"
@@ -9083,6 +9248,8 @@ IDENT "src"
 IDENT "len"
 IDENT "p"
 INTERP_END "`? Supported character escapes: \\n \\t \\r \\0 \\\\ \\' and \\u{...}"
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "isUnicodeEsc"
 COLON
@@ -9155,22 +9322,32 @@ COLON
 UPPER "Array"
 UPPER "Char"
 ARROW
+INDENT
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "Token"
 ARROW
+NEWLINE
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "RawTok"
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "emit"
 IDENT "src"
@@ -10215,6 +10392,7 @@ IDENT "src"
 IDENT "len"
 IDENT "pos"
 EQUAL
+INDENT
 IDENT "pos"
 PLUS
 INT 1
@@ -10251,6 +10429,8 @@ RPAREN
 RPAREN
 RPAREN
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "malformedLeadingDotTok"
 COLON
@@ -11012,32 +11192,33 @@ IDENT "depth"
 IDENT "id"
 NEWLINE
 PIPE
-IDENT "isContinuation"
+IDENT "otherwise"
+EQUAL
+MATCH
+IDENT "leadingOp"
 IDENT "src"
 IDENT "len"
 IDENT "np"
-EQUAL
 INDENT
+UPPER "Some"
+LPAREN
+IDENT "tok"
+COMMA
+IDENT "n"
+RPAREN
+FAT_ARROW
 IDENT "emit"
 IDENT "src"
 IDENT "len"
 IDENT "np"
 IDENT "depth"
 IDENT "id"
-LPAREN
-IDENT "continuationTok"
-IDENT "src"
-IDENT "len"
-IDENT "np"
-RPAREN
-INT 2
+IDENT "tok"
+IDENT "n"
 INT 0
 NEWLINE
-DEDENT
-NEWLINE
-PIPE
-IDENT "otherwise"
-EQUAL
+UPPER "None"
+FAT_ARROW
 UPPER "RNewline"
 IDENT "indent"
 IDENT "nlPos"
@@ -11048,6 +11229,8 @@ IDENT "len"
 IDENT "np"
 IDENT "depth"
 IDENT "id"
+NEWLINE
+DEDENT
 NEWLINE
 DEDENT
 NEWLINE
@@ -11067,6 +11250,7 @@ IDENT "src"
 IDENT "len"
 IDENT "p"
 EQUAL
+INDENT
 IDENT "p"
 PLUS
 INT 1
@@ -11107,7 +11291,9 @@ EQ_EQ
 CHAR "-"
 RPAREN
 NEWLINE
-IDENT "isContinuation"
+DEDENT
+NEWLINE
+IDENT "leadingOp"
 COLON
 UPPER "Array"
 UPPER "Char"
@@ -11116,74 +11302,14 @@ UPPER "Int"
 ARROW
 UPPER "Int"
 ARROW
-UPPER "Bool"
-NEWLINE
-IDENT "isContinuation"
-IDENT "src"
-IDENT "len"
-IDENT "np"
-EQUAL
-IDENT "is2"
-IDENT "src"
-IDENT "len"
-IDENT "np"
-CHAR "|"
-CHAR ">"
-OR
-IDENT "is2"
-IDENT "src"
-IDENT "len"
-IDENT "np"
-CHAR ">"
-CHAR ">"
-OR
-IDENT "is2"
-IDENT "src"
-IDENT "len"
-IDENT "np"
-CHAR "<"
-CHAR "<"
-OR
-IDENT "is2"
-IDENT "src"
-IDENT "len"
-IDENT "np"
-CHAR "&"
-CHAR "&"
-OR
-IDENT "is2"
-IDENT "src"
-IDENT "len"
-IDENT "np"
-CHAR "|"
-CHAR "|"
-OR
-IDENT "is2"
-IDENT "src"
-IDENT "len"
-IDENT "np"
-CHAR "+"
-CHAR "+"
-OR
-IDENT "is2"
-IDENT "src"
-IDENT "len"
-IDENT "np"
-CHAR ":"
-CHAR ":"
-NEWLINE
-IDENT "continuationTok"
-COLON
-UPPER "Array"
-UPPER "Char"
-ARROW
-UPPER "Int"
-ARROW
-UPPER "Int"
-ARROW
+UPPER "Option"
+LPAREN
 UPPER "Token"
+COMMA
+UPPER "Int"
+RPAREN
 NEWLINE
-IDENT "continuationTok"
+IDENT "leadingOp"
 IDENT "src"
 IDENT "len"
 IDENT "np"
@@ -11196,7 +11322,12 @@ IDENT "np"
 CHAR "|"
 CHAR ">"
 EQUAL
+UPPER "Some"
+LPAREN
 UPPER "TPipeRight"
+COMMA
+INT 2
+RPAREN
 NEWLINE
 PIPE
 IDENT "is2"
@@ -11206,7 +11337,12 @@ IDENT "np"
 CHAR ">"
 CHAR ">"
 EQUAL
+UPPER "Some"
+LPAREN
 UPPER "TRCompose"
+COMMA
+INT 2
+RPAREN
 NEWLINE
 PIPE
 IDENT "is2"
@@ -11216,7 +11352,42 @@ IDENT "np"
 CHAR "<"
 CHAR "<"
 EQUAL
+UPPER "Some"
+LPAREN
 UPPER "TLCompose"
+COMMA
+INT 2
+RPAREN
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "np"
+CHAR "<"
+CHAR "="
+EQUAL
+UPPER "Some"
+LPAREN
+UPPER "TLeq"
+COMMA
+INT 2
+RPAREN
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "np"
+CHAR ">"
+CHAR "="
+EQUAL
+UPPER "Some"
+LPAREN
+UPPER "TGeq"
+COMMA
+INT 2
+RPAREN
 NEWLINE
 PIPE
 IDENT "is2"
@@ -11226,7 +11397,12 @@ IDENT "np"
 CHAR "&"
 CHAR "&"
 EQUAL
+UPPER "Some"
+LPAREN
 UPPER "TAnd"
+COMMA
+INT 2
+RPAREN
 NEWLINE
 PIPE
 IDENT "is2"
@@ -11236,7 +11412,12 @@ IDENT "np"
 CHAR "|"
 CHAR "|"
 EQUAL
+UPPER "Some"
+LPAREN
 UPPER "TOr"
+COMMA
+INT 2
+RPAREN
 NEWLINE
 PIPE
 IDENT "is2"
@@ -11246,12 +11427,245 @@ IDENT "np"
 CHAR "+"
 CHAR "+"
 EQUAL
+UPPER "Some"
+LPAREN
 UPPER "TPlusPlus"
+COMMA
+INT 2
+RPAREN
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "np"
+CHAR ":"
+CHAR ":"
+EQUAL
+UPPER "Some"
+LPAREN
+UPPER "TCons"
+COMMA
+INT 2
+RPAREN
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "np"
+CHAR "="
+CHAR "="
+EQUAL
+UPPER "Some"
+LPAREN
+UPPER "TEqEq"
+COMMA
+INT 2
+RPAREN
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "np"
+CHAR "/"
+CHAR "="
+EQUAL
+UPPER "Some"
+LPAREN
+UPPER "TNeq"
+COMMA
+INT 2
+RPAREN
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "np"
+CHAR "<"
+CHAR "-"
+EQUAL
+UPPER "None"
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "np"
+CHAR "-"
+CHAR ">"
+EQUAL
+UPPER "None"
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "np"
+CHAR "-"
+CHAR "-"
+EQUAL
+UPPER "None"
+NEWLINE
+PIPE
+IDENT "is2"
+IDENT "src"
+IDENT "len"
+IDENT "np"
+CHAR "-"
+CHAR "}"
+EQUAL
+UPPER "None"
+NEWLINE
+PIPE
+IDENT "np"
+LT
+IDENT "len"
+AND
+IDENT "at"
+IDENT "src"
+IDENT "np"
+EQ_EQ
+CHAR "-"
+AND
+IDENT "np"
+PLUS
+INT 1
+LT
+IDENT "len"
+AND
+IDENT "isSp"
+LPAREN
+IDENT "at"
+IDENT "src"
+LPAREN
+IDENT "np"
+PLUS
+INT 1
+RPAREN
+RPAREN
+EQUAL
+UPPER "Some"
+LPAREN
+UPPER "TMinus"
+COMMA
+INT 1
+RPAREN
+NEWLINE
+PIPE
+IDENT "np"
+LT
+IDENT "len"
+AND
+IDENT "at"
+IDENT "src"
+IDENT "np"
+EQ_EQ
+CHAR "+"
+EQUAL
+UPPER "Some"
+LPAREN
+UPPER "TPlus"
+COMMA
+INT 1
+RPAREN
+NEWLINE
+PIPE
+IDENT "np"
+LT
+IDENT "len"
+AND
+IDENT "at"
+IDENT "src"
+IDENT "np"
+EQ_EQ
+CHAR "*"
+EQUAL
+UPPER "Some"
+LPAREN
+UPPER "TStar"
+COMMA
+INT 1
+RPAREN
+NEWLINE
+PIPE
+IDENT "np"
+LT
+IDENT "len"
+AND
+IDENT "at"
+IDENT "src"
+IDENT "np"
+EQ_EQ
+CHAR "/"
+EQUAL
+UPPER "Some"
+LPAREN
+UPPER "TSlash"
+COMMA
+INT 1
+RPAREN
+NEWLINE
+PIPE
+IDENT "np"
+LT
+IDENT "len"
+AND
+IDENT "at"
+IDENT "src"
+IDENT "np"
+EQ_EQ
+CHAR "%"
+EQUAL
+UPPER "Some"
+LPAREN
+UPPER "TMod"
+COMMA
+INT 1
+RPAREN
+NEWLINE
+PIPE
+IDENT "np"
+LT
+IDENT "len"
+AND
+IDENT "at"
+IDENT "src"
+IDENT "np"
+EQ_EQ
+CHAR "<"
+EQUAL
+UPPER "Some"
+LPAREN
+UPPER "TLt"
+COMMA
+INT 1
+RPAREN
+NEWLINE
+PIPE
+IDENT "np"
+LT
+IDENT "len"
+AND
+IDENT "at"
+IDENT "src"
+IDENT "np"
+EQ_EQ
+CHAR ">"
+EQUAL
+UPPER "Some"
+LPAREN
+UPPER "TGt"
+COMMA
+INT 1
+RPAREN
 NEWLINE
 PIPE
 IDENT "otherwise"
 EQUAL
-UPPER "TCons"
+UPPER "None"
 NEWLINE
 DEDENT
 NEWLINE
@@ -11260,23 +11674,30 @@ COLON
 UPPER "List"
 UPPER "RawTok"
 ARROW
+INDENT
 UPPER "List"
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "List"
-UPPER "Int"
+UPPER "BracketFrame"
 ARROW
+NEWLINE
 UPPER "Option"
 UPPER "Token"
 ARROW
+NEWLINE
 UPPER "Bool"
 ARROW
+NEWLINE
 UPPER "List"
 LPAREN
 UPPER "Token"
 COMMA
 UPPER "Int"
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "layout"
 LBRACKET
@@ -11321,7 +11742,14 @@ IDENT "layout"
 IDENT "rest"
 IDENT "stack"
 LPAREN
+UPPER "BracketFrame"
 INT 0
+LPAREN
+IDENT "opener"
+OR
+IDENT "isOpener"
+IDENT "t"
+RPAREN
 CONS
 IDENT "frames"
 RPAREN
@@ -11329,12 +11757,7 @@ LPAREN
 UPPER "Some"
 IDENT "t"
 RPAREN
-LPAREN
-IDENT "opener"
-OR
-IDENT "isOpener"
-IDENT "t"
-RPAREN
+UPPER "False"
 NEWLINE
 DEDENT
 NEWLINE
@@ -11343,6 +11766,22 @@ IDENT "bracketCloser"
 IDENT "t"
 EQUAL
 IDENT "flushClose"
+IDENT "t"
+IDENT "off"
+IDENT "rest"
+IDENT "stack"
+IDENT "frames"
+IDENT "opener"
+NEWLINE
+PIPE
+IDENT "t"
+EQ_EQ
+UPPER "TComma"
+AND
+IDENT "frameHasLive"
+IDENT "frames"
+EQUAL
+IDENT "flushSep"
 IDENT "t"
 IDENT "off"
 IDENT "rest"
@@ -11435,25 +11874,33 @@ IDENT "flushClose"
 COLON
 UPPER "Token"
 ARROW
+INDENT
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "RawTok"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "List"
-UPPER "Int"
+UPPER "BracketFrame"
 ARROW
+NEWLINE
 UPPER "Bool"
 ARROW
+NEWLINE
 UPPER "List"
 LPAREN
 UPPER "Token"
 COMMA
 UPPER "Int"
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "flushClose"
 IDENT "t"
@@ -11495,11 +11942,15 @@ IDENT "off"
 IDENT "rest"
 IDENT "stack"
 LPAREN
+LPAREN
+UPPER "BracketFrame"
 IDENT "f"
+IDENT "saved"
+RPAREN
 CONS
 IDENT "fs"
 RPAREN
-IDENT "opener"
+UNDERSCORE
 EQUAL
 INDENT
 IDENT "flushCloseGo"
@@ -11509,7 +11960,7 @@ IDENT "rest"
 IDENT "stack"
 IDENT "f"
 IDENT "fs"
-IDENT "opener"
+IDENT "saved"
 NEWLINE
 DEDENT
 NEWLINE
@@ -11517,27 +11968,36 @@ IDENT "flushCloseGo"
 COLON
 UPPER "Token"
 ARROW
+INDENT
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "RawTok"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "List"
-UPPER "Int"
+UPPER "BracketFrame"
 ARROW
+NEWLINE
 UPPER "Bool"
 ARROW
+NEWLINE
 UPPER "List"
 LPAREN
 UPPER "Token"
 COMMA
 UPPER "Int"
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "flushCloseGo"
 IDENT "t"
@@ -11623,6 +12083,7 @@ NEWLINE
 PIPE
 IDENT "otherwise"
 EQUAL
+INDENT
 LPAREN
 UPPER "TNewline"
 COMMA
@@ -11649,6 +12110,267 @@ IDENT "fs"
 IDENT "opener"
 NEWLINE
 DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "flushSep"
+COLON
+UPPER "Token"
+ARROW
+INDENT
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "RawTok"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "BracketFrame"
+ARROW
+NEWLINE
+UPPER "Bool"
+ARROW
+NEWLINE
+UPPER "List"
+LPAREN
+UPPER "Token"
+COMMA
+UPPER "Int"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "flushSep"
+IDENT "t"
+IDENT "off"
+IDENT "rest"
+IDENT "stack"
+LBRACKET
+RBRACKET
+IDENT "opener"
+EQUAL
+INDENT
+LPAREN
+IDENT "t"
+COMMA
+IDENT "off"
+RPAREN
+CONS
+IDENT "layout"
+IDENT "rest"
+IDENT "stack"
+LBRACKET
+RBRACKET
+LPAREN
+UPPER "Some"
+IDENT "t"
+RPAREN
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "flushSep"
+IDENT "t"
+IDENT "off"
+IDENT "rest"
+IDENT "stack"
+LPAREN
+LPAREN
+UPPER "BracketFrame"
+IDENT "f"
+IDENT "saved"
+RPAREN
+CONS
+IDENT "fs"
+RPAREN
+IDENT "opener"
+EQUAL
+INDENT
+IDENT "flushSepGo"
+IDENT "t"
+IDENT "off"
+IDENT "rest"
+IDENT "stack"
+IDENT "f"
+LPAREN
+UPPER "BracketFrame"
+INT 0
+IDENT "saved"
+CONS
+IDENT "fs"
+RPAREN
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "flushSepGo"
+COLON
+UPPER "Token"
+ARROW
+INDENT
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "RawTok"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "BracketFrame"
+ARROW
+NEWLINE
+UPPER "Bool"
+ARROW
+NEWLINE
+UPPER "List"
+LPAREN
+UPPER "Token"
+COMMA
+UPPER "Int"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "flushSepGo"
+IDENT "t"
+IDENT "off"
+IDENT "rest"
+LBRACKET
+RBRACKET
+UNDERSCORE
+IDENT "frames"
+IDENT "opener"
+EQUAL
+INDENT
+LPAREN
+IDENT "t"
+COMMA
+IDENT "off"
+RPAREN
+CONS
+IDENT "layout"
+IDENT "rest"
+LBRACKET
+RBRACKET
+IDENT "frames"
+LPAREN
+UPPER "Some"
+IDENT "t"
+RPAREN
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "flushSepGo"
+IDENT "t"
+IDENT "off"
+IDENT "rest"
+LPAREN
+IDENT "top"
+CONS
+IDENT "tl"
+RPAREN
+IDENT "f"
+IDENT "frames"
+IDENT "opener"
+INDENT
+PIPE
+IDENT "f"
+LEQ
+INT 0
+EQUAL
+LPAREN
+IDENT "t"
+COMMA
+IDENT "off"
+RPAREN
+CONS
+IDENT "layout"
+IDENT "rest"
+LPAREN
+IDENT "top"
+CONS
+IDENT "tl"
+RPAREN
+IDENT "frames"
+LPAREN
+UPPER "Some"
+IDENT "t"
+RPAREN
+IDENT "opener"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+INDENT
+LPAREN
+UPPER "TNewline"
+COMMA
+IDENT "off"
+RPAREN
+CONS
+LPAREN
+UPPER "TDedent"
+COMMA
+IDENT "off"
+RPAREN
+CONS
+IDENT "flushSepGo"
+IDENT "t"
+IDENT "off"
+IDENT "rest"
+IDENT "tl"
+LPAREN
+IDENT "f"
+MINUS
+INT 1
+RPAREN
+IDENT "frames"
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "frameHasLive"
+COLON
+UPPER "List"
+UPPER "BracketFrame"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "frameHasLive"
+LPAREN
+LPAREN
+UPPER "BracketFrame"
+IDENT "f"
+UNDERSCORE
+RPAREN
+CONS
+UNDERSCORE
+RPAREN
+EQUAL
+IDENT "f"
+GT
+INT 0
+NEWLINE
+IDENT "frameHasLive"
+LBRACKET
+RBRACKET
+EQUAL
+UPPER "False"
 NEWLINE
 IDENT "bracketOpener"
 COLON
@@ -11737,6 +12459,15 @@ IDENT "isOpener"
 UNDERSCORE
 EQUAL
 UPPER "False"
+NEWLINE
+PUBLIC
+EXPORT
+DATA
+UPPER "BracketFrame"
+EQUAL
+UPPER "BracketFrame"
+UPPER "Int"
+UPPER "Bool"
 NEWLINE
 IDENT "canEndExpr"
 COLON
@@ -11965,6 +12696,11 @@ EQUAL
 UPPER "True"
 NEWLINE
 IDENT "isTrailingContinuationOp"
+UPPER "TIn"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "isTrailingContinuationOp"
 UNDERSCORE
 EQUAL
 UPPER "False"
@@ -12004,6 +12740,15 @@ IDENT "opener"
 LPAREN
 UPPER "Some"
 UPPER "TDo"
+RPAREN
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "armsHerald"
+IDENT "opener"
+LPAREN
+UPPER "Some"
+UPPER "TFatArrow"
 RPAREN
 EQUAL
 UPPER "True"
@@ -12129,28 +12874,37 @@ IDENT "applyNl"
 COLON
 UPPER "Int"
 ARROW
+INDENT
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "RawTok"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "List"
-UPPER "Int"
+UPPER "BracketFrame"
 ARROW
+NEWLINE
 UPPER "Option"
 UPPER "Token"
 ARROW
+NEWLINE
 UPPER "Bool"
 ARROW
+NEWLINE
 UPPER "List"
 LPAREN
 UPPER "Token"
 COMMA
 UPPER "Int"
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "applyNl"
 IDENT "col"
@@ -12213,30 +12967,40 @@ IDENT "applyNlFrame"
 COLON
 UPPER "Int"
 ARROW
+INDENT
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "RawTok"
 ARROW
+NEWLINE
 UPPER "List"
-UPPER "Int"
+UPPER "BracketFrame"
 ARROW
+NEWLINE
 UPPER "Option"
 UPPER "Token"
 ARROW
+NEWLINE
 UPPER "Bool"
 ARROW
+NEWLINE
 UPPER "List"
 LPAREN
 UPPER "Token"
 COMMA
 UPPER "Int"
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "applyNlFrame"
 IDENT "col"
@@ -12270,7 +13034,11 @@ IDENT "top"
 IDENT "stack"
 IDENT "rest"
 LPAREN
+LPAREN
+UPPER "BracketFrame"
 IDENT "f"
+IDENT "saved"
+RPAREN
 CONS
 IDENT "fs"
 RPAREN
@@ -12282,6 +13050,7 @@ IDENT "f"
 GT
 INT 0
 EQUAL
+INDENT
 IDENT "applyNlTop"
 IDENT "col"
 IDENT "off"
@@ -12289,12 +13058,16 @@ IDENT "top"
 IDENT "stack"
 IDENT "rest"
 LPAREN
+UPPER "BracketFrame"
 IDENT "f"
+IDENT "saved"
 CONS
 IDENT "fs"
 RPAREN
 IDENT "prev"
 IDENT "opener"
+NEWLINE
+DEDENT
 NEWLINE
 PIPE
 IDENT "col"
@@ -12326,7 +13099,9 @@ CONS
 IDENT "stack"
 RPAREN
 LPAREN
+UPPER "BracketFrame"
 INT 1
+IDENT "saved"
 CONS
 IDENT "fs"
 RPAREN
@@ -12342,7 +13117,9 @@ IDENT "layout"
 IDENT "rest"
 IDENT "stack"
 LPAREN
+UPPER "BracketFrame"
 IDENT "f"
+IDENT "saved"
 CONS
 IDENT "fs"
 RPAREN
@@ -12355,30 +13132,40 @@ IDENT "applyNlTop"
 COLON
 UPPER "Int"
 ARROW
+INDENT
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "RawTok"
 ARROW
+NEWLINE
 UPPER "List"
-UPPER "Int"
+UPPER "BracketFrame"
 ARROW
+NEWLINE
 UPPER "Option"
 UPPER "Token"
 ARROW
+NEWLINE
 UPPER "Bool"
 ARROW
+NEWLINE
 UPPER "List"
 LPAREN
 UPPER "Token"
 COMMA
 UPPER "Int"
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "applyNlTop"
 IDENT "col"
@@ -12444,28 +13231,37 @@ IDENT "wouldIndent"
 COLON
 UPPER "Int"
 ARROW
+INDENT
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "RawTok"
 ARROW
+NEWLINE
 UPPER "List"
-UPPER "Int"
+UPPER "BracketFrame"
 ARROW
+NEWLINE
 UPPER "Option"
 UPPER "Token"
 ARROW
+NEWLINE
 UPPER "Bool"
 ARROW
+NEWLINE
 UPPER "List"
 LPAREN
 UPPER "Token"
 COMMA
 UPPER "Int"
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "wouldIndent"
 IDENT "col"
@@ -12536,10 +13332,10 @@ NEWLINE
 IDENT "bumpFrame"
 COLON
 UPPER "List"
-UPPER "Int"
+UPPER "BracketFrame"
 ARROW
 UPPER "List"
-UPPER "Int"
+UPPER "BracketFrame"
 NEWLINE
 IDENT "bumpFrame"
 LBRACKET
@@ -12550,24 +13346,32 @@ RBRACKET
 NEWLINE
 IDENT "bumpFrame"
 LPAREN
+LPAREN
+UPPER "BracketFrame"
 IDENT "f"
+IDENT "s"
+RPAREN
 CONS
 IDENT "fs"
 RPAREN
 EQUAL
+UPPER "BracketFrame"
+LPAREN
 IDENT "f"
 PLUS
 INT 1
+RPAREN
+IDENT "s"
 CONS
 IDENT "fs"
 NEWLINE
 IDENT "dropFrame"
 COLON
 UPPER "List"
-UPPER "Int"
+UPPER "BracketFrame"
 ARROW
 UPPER "List"
-UPPER "Int"
+UPPER "BracketFrame"
 NEWLINE
 IDENT "dropFrame"
 LBRACKET
@@ -12578,14 +13382,22 @@ RBRACKET
 NEWLINE
 IDENT "dropFrame"
 LPAREN
+LPAREN
+UPPER "BracketFrame"
 IDENT "f"
+IDENT "s"
+RPAREN
 CONS
 IDENT "fs"
 RPAREN
 EQUAL
+UPPER "BracketFrame"
+LPAREN
 IDENT "f"
 MINUS
 INT 1
+RPAREN
+IDENT "s"
 CONS
 IDENT "fs"
 NEWLINE
@@ -12593,28 +13405,37 @@ IDENT "resolveCont"
 COLON
 UPPER "Int"
 ARROW
+INDENT
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "RawTok"
 ARROW
+NEWLINE
 UPPER "List"
-UPPER "Int"
+UPPER "BracketFrame"
 ARROW
+NEWLINE
 UPPER "Option"
 UPPER "Token"
 ARROW
+NEWLINE
 UPPER "Bool"
 ARROW
+NEWLINE
 UPPER "List"
 LPAREN
 UPPER "Token"
 COMMA
 UPPER "Int"
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "resolveCont"
 IDENT "col"
@@ -12693,6 +13514,7 @@ NEWLINE
 PIPE
 IDENT "otherwise"
 EQUAL
+INDENT
 LPAREN
 UPPER "TIndent"
 COMMA
@@ -12722,6 +13544,8 @@ UPPER "False"
 NEWLINE
 DEDENT
 NEWLINE
+DEDENT
+NEWLINE
 IDENT "resolveCont"
 IDENT "col"
 IDENT "off"
@@ -12745,23 +13569,30 @@ IDENT "popDedents"
 COLON
 UPPER "Int"
 ARROW
+INDENT
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "RawTok"
 ARROW
+NEWLINE
 UPPER "List"
-UPPER "Int"
+UPPER "BracketFrame"
 ARROW
+NEWLINE
 UPPER "List"
 LPAREN
 UPPER "Token"
 COMMA
 UPPER "Int"
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "popDedents"
 IDENT "col"
@@ -12795,6 +13626,7 @@ IDENT "top"
 GT
 IDENT "col"
 EQUAL
+INDENT
 LPAREN
 UPPER "TDedent"
 COMMA
@@ -12816,6 +13648,8 @@ LPAREN
 IDENT "dropFrame"
 IDENT "frames"
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 PIPE
 IDENT "otherwise"
@@ -13081,6 +13915,7 @@ IDENT "layoutWithOffsets"
 IDENT "src"
 IDENT "len"
 EQUAL
+INDENT
 IDENT "elseFilter"
 LPAREN
 IDENT "layout"
@@ -13107,22 +13942,29 @@ UPPER "None"
 UPPER "False"
 RPAREN
 NEWLINE
+DEDENT
+NEWLINE
 IDENT "layoutPairs"
 COLON
 UPPER "List"
 UPPER "RawTok"
 ARROW
+INDENT
 UPPER "List"
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "List"
-UPPER "Int"
+UPPER "BracketFrame"
 ARROW
+NEWLINE
 UPPER "Option"
 UPPER "Token"
 ARROW
+NEWLINE
 UPPER "Bool"
 ARROW
+NEWLINE
 UPPER "List"
 LPAREN
 UPPER "Token"
@@ -13131,6 +13973,8 @@ UPPER "Int"
 COMMA
 UPPER "Int"
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "layoutPairs"
 LBRACKET
@@ -13164,6 +14008,7 @@ PIPE
 IDENT "bracketOpener"
 IDENT "t"
 EQUAL
+INDENT
 LPAREN
 IDENT "t"
 COMMA
@@ -13176,7 +14021,14 @@ IDENT "layoutPairs"
 IDENT "rest"
 IDENT "stack"
 LPAREN
+UPPER "BracketFrame"
 INT 0
+LPAREN
+IDENT "opener"
+OR
+IDENT "isOpener"
+IDENT "t"
+RPAREN
 CONS
 IDENT "frames"
 RPAREN
@@ -13184,12 +14036,9 @@ LPAREN
 UPPER "Some"
 IDENT "t"
 RPAREN
-LPAREN
-IDENT "opener"
-OR
-IDENT "isOpener"
-IDENT "t"
-RPAREN
+UPPER "False"
+NEWLINE
+DEDENT
 NEWLINE
 PIPE
 IDENT "bracketCloser"
@@ -13203,6 +14052,26 @@ IDENT "rest"
 IDENT "stack"
 IDENT "frames"
 IDENT "opener"
+NEWLINE
+PIPE
+IDENT "t"
+EQ_EQ
+UPPER "TComma"
+AND
+IDENT "frameHasLive"
+IDENT "frames"
+EQUAL
+INDENT
+IDENT "flushSepPairs"
+IDENT "t"
+IDENT "s"
+IDENT "e"
+IDENT "rest"
+IDENT "stack"
+IDENT "frames"
+IDENT "opener"
+NEWLINE
+DEDENT
 NEWLINE
 PIPE
 IDENT "otherwise"
@@ -13287,25 +14156,32 @@ IDENT "opener"
 NEWLINE
 DEDENT
 NEWLINE
-IDENT "flushClosePairs"
+IDENT "flushSepPairs"
 COLON
 UPPER "Token"
 ARROW
+INDENT
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "RawTok"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "List"
-UPPER "Int"
+UPPER "BracketFrame"
 ARROW
+NEWLINE
 UPPER "Bool"
 ARROW
+NEWLINE
 UPPER "List"
 LPAREN
 UPPER "Token"
@@ -13314,6 +14190,265 @@ UPPER "Int"
 COMMA
 UPPER "Int"
 RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "flushSepPairs"
+IDENT "t"
+IDENT "s"
+IDENT "e"
+IDENT "rest"
+IDENT "stack"
+LBRACKET
+RBRACKET
+IDENT "opener"
+EQUAL
+INDENT
+LPAREN
+IDENT "t"
+COMMA
+IDENT "s"
+COMMA
+IDENT "e"
+RPAREN
+CONS
+IDENT "layoutPairs"
+IDENT "rest"
+IDENT "stack"
+LBRACKET
+RBRACKET
+LPAREN
+UPPER "Some"
+IDENT "t"
+RPAREN
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "flushSepPairs"
+IDENT "t"
+IDENT "s"
+IDENT "e"
+IDENT "rest"
+IDENT "stack"
+LPAREN
+LPAREN
+UPPER "BracketFrame"
+IDENT "f"
+IDENT "saved"
+RPAREN
+CONS
+IDENT "fs"
+RPAREN
+IDENT "opener"
+EQUAL
+INDENT
+IDENT "flushSepPairsGo"
+IDENT "t"
+IDENT "s"
+IDENT "e"
+IDENT "rest"
+IDENT "stack"
+IDENT "f"
+LPAREN
+UPPER "BracketFrame"
+INT 0
+IDENT "saved"
+CONS
+IDENT "fs"
+RPAREN
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "flushSepPairsGo"
+COLON
+UPPER "Token"
+ARROW
+INDENT
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "RawTok"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "BracketFrame"
+ARROW
+NEWLINE
+UPPER "Bool"
+ARROW
+NEWLINE
+UPPER "List"
+LPAREN
+UPPER "Token"
+COMMA
+UPPER "Int"
+COMMA
+UPPER "Int"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "flushSepPairsGo"
+IDENT "t"
+IDENT "s"
+IDENT "e"
+IDENT "rest"
+LBRACKET
+RBRACKET
+UNDERSCORE
+IDENT "frames"
+IDENT "opener"
+EQUAL
+INDENT
+LPAREN
+IDENT "t"
+COMMA
+IDENT "s"
+COMMA
+IDENT "e"
+RPAREN
+CONS
+IDENT "layoutPairs"
+IDENT "rest"
+LBRACKET
+RBRACKET
+IDENT "frames"
+LPAREN
+UPPER "Some"
+IDENT "t"
+RPAREN
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "flushSepPairsGo"
+IDENT "t"
+IDENT "s"
+IDENT "e"
+IDENT "rest"
+LPAREN
+IDENT "top"
+CONS
+IDENT "tl"
+RPAREN
+IDENT "f"
+IDENT "frames"
+IDENT "opener"
+INDENT
+PIPE
+IDENT "f"
+LEQ
+INT 0
+EQUAL
+LPAREN
+IDENT "t"
+COMMA
+IDENT "s"
+COMMA
+IDENT "e"
+RPAREN
+CONS
+IDENT "layoutPairs"
+IDENT "rest"
+LPAREN
+IDENT "top"
+CONS
+IDENT "tl"
+RPAREN
+IDENT "frames"
+LPAREN
+UPPER "Some"
+IDENT "t"
+RPAREN
+IDENT "opener"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+INDENT
+LPAREN
+UPPER "TNewline"
+COMMA
+IDENT "s"
+COMMA
+IDENT "s"
+RPAREN
+CONS
+LPAREN
+UPPER "TDedent"
+COMMA
+IDENT "s"
+COMMA
+IDENT "s"
+RPAREN
+CONS
+IDENT "flushSepPairsGo"
+IDENT "t"
+IDENT "s"
+IDENT "e"
+IDENT "rest"
+IDENT "tl"
+LPAREN
+IDENT "f"
+MINUS
+INT 1
+RPAREN
+IDENT "frames"
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "flushClosePairs"
+COLON
+UPPER "Token"
+ARROW
+INDENT
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "RawTok"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "BracketFrame"
+ARROW
+NEWLINE
+UPPER "Bool"
+ARROW
+NEWLINE
+UPPER "List"
+LPAREN
+UPPER "Token"
+COMMA
+UPPER "Int"
+COMMA
+UPPER "Int"
+RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "flushClosePairs"
 IDENT "t"
@@ -13359,11 +14494,15 @@ IDENT "e"
 IDENT "rest"
 IDENT "stack"
 LPAREN
+LPAREN
+UPPER "BracketFrame"
 IDENT "f"
+IDENT "saved"
+RPAREN
 CONS
 IDENT "fs"
 RPAREN
-IDENT "opener"
+UNDERSCORE
 EQUAL
 INDENT
 IDENT "flushClosePairsGo"
@@ -13374,7 +14513,7 @@ IDENT "rest"
 IDENT "stack"
 IDENT "f"
 IDENT "fs"
-IDENT "opener"
+IDENT "saved"
 NEWLINE
 DEDENT
 NEWLINE
@@ -13382,23 +14521,31 @@ IDENT "flushClosePairsGo"
 COLON
 UPPER "Token"
 ARROW
+INDENT
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "RawTok"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "List"
-UPPER "Int"
+UPPER "BracketFrame"
 ARROW
+NEWLINE
 UPPER "Bool"
 ARROW
+NEWLINE
 UPPER "List"
 LPAREN
 UPPER "Token"
@@ -13407,6 +14554,8 @@ UPPER "Int"
 COMMA
 UPPER "Int"
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "flushClosePairsGo"
 IDENT "t"
@@ -13498,6 +14647,7 @@ NEWLINE
 PIPE
 IDENT "otherwise"
 EQUAL
+INDENT
 LPAREN
 UPPER "TNewline"
 COMMA
@@ -13530,26 +14680,35 @@ IDENT "opener"
 NEWLINE
 DEDENT
 NEWLINE
+DEDENT
+NEWLINE
 IDENT "applyNlPairs"
 COLON
 UPPER "Int"
 ARROW
+INDENT
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "RawTok"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "List"
-UPPER "Int"
+UPPER "BracketFrame"
 ARROW
+NEWLINE
 UPPER "Option"
 UPPER "Token"
 ARROW
+NEWLINE
 UPPER "Bool"
 ARROW
+NEWLINE
 UPPER "List"
 LPAREN
 UPPER "Token"
@@ -13558,6 +14717,8 @@ UPPER "Int"
 COMMA
 UPPER "Int"
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "applyNlPairs"
 IDENT "col"
@@ -13622,24 +14783,32 @@ IDENT "applyNlFramePairs"
 COLON
 UPPER "Int"
 ARROW
+INDENT
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "RawTok"
 ARROW
+NEWLINE
 UPPER "List"
-UPPER "Int"
+UPPER "BracketFrame"
 ARROW
+NEWLINE
 UPPER "Option"
 UPPER "Token"
 ARROW
+NEWLINE
 UPPER "Bool"
 ARROW
+NEWLINE
 UPPER "List"
 LPAREN
 UPPER "Token"
@@ -13648,6 +14817,8 @@ UPPER "Int"
 COMMA
 UPPER "Int"
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "applyNlFramePairs"
 IDENT "col"
@@ -13681,7 +14852,11 @@ IDENT "top"
 IDENT "stack"
 IDENT "rest"
 LPAREN
+LPAREN
+UPPER "BracketFrame"
 IDENT "f"
+IDENT "saved"
+RPAREN
 CONS
 IDENT "fs"
 RPAREN
@@ -13693,6 +14868,7 @@ IDENT "f"
 GT
 INT 0
 EQUAL
+INDENT
 IDENT "applyNlTopPairs"
 IDENT "col"
 IDENT "off"
@@ -13700,12 +14876,16 @@ IDENT "top"
 IDENT "stack"
 IDENT "rest"
 LPAREN
+UPPER "BracketFrame"
 IDENT "f"
+IDENT "saved"
 CONS
 IDENT "fs"
 RPAREN
 IDENT "prev"
 IDENT "opener"
+NEWLINE
+DEDENT
 NEWLINE
 PIPE
 IDENT "col"
@@ -13739,7 +14919,9 @@ CONS
 IDENT "stack"
 RPAREN
 LPAREN
+UPPER "BracketFrame"
 INT 1
+IDENT "saved"
 CONS
 IDENT "fs"
 RPAREN
@@ -13755,7 +14937,9 @@ IDENT "layoutPairs"
 IDENT "rest"
 IDENT "stack"
 LPAREN
+UPPER "BracketFrame"
 IDENT "f"
+IDENT "saved"
 CONS
 IDENT "fs"
 RPAREN
@@ -13768,24 +14952,32 @@ IDENT "applyNlTopPairs"
 COLON
 UPPER "Int"
 ARROW
+INDENT
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "RawTok"
 ARROW
+NEWLINE
 UPPER "List"
-UPPER "Int"
+UPPER "BracketFrame"
 ARROW
+NEWLINE
 UPPER "Option"
 UPPER "Token"
 ARROW
+NEWLINE
 UPPER "Bool"
 ARROW
+NEWLINE
 UPPER "List"
 LPAREN
 UPPER "Token"
@@ -13794,6 +14986,8 @@ UPPER "Int"
 COMMA
 UPPER "Int"
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "applyNlTopPairs"
 IDENT "col"
@@ -13869,22 +15063,29 @@ IDENT "wouldIndentPairs"
 COLON
 UPPER "Int"
 ARROW
+INDENT
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "RawTok"
 ARROW
+NEWLINE
 UPPER "List"
-UPPER "Int"
+UPPER "BracketFrame"
 ARROW
+NEWLINE
 UPPER "Option"
 UPPER "Token"
 ARROW
+NEWLINE
 UPPER "Bool"
 ARROW
+NEWLINE
 UPPER "List"
 LPAREN
 UPPER "Token"
@@ -13893,6 +15094,8 @@ UPPER "Int"
 COMMA
 UPPER "Int"
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "wouldIndentPairs"
 IDENT "col"
@@ -13923,6 +15126,7 @@ IDENT "prevCanEnd"
 IDENT "prev"
 RPAREN
 EQUAL
+INDENT
 LPAREN
 UPPER "TIndent"
 COMMA
@@ -13945,6 +15149,8 @@ RPAREN
 UPPER "None"
 UPPER "False"
 NEWLINE
+DEDENT
+NEWLINE
 PIPE
 IDENT "otherwise"
 EQUAL
@@ -13963,22 +15169,29 @@ IDENT "resolveContPairs"
 COLON
 UPPER "Int"
 ARROW
+INDENT
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "RawTok"
 ARROW
+NEWLINE
 UPPER "List"
-UPPER "Int"
+UPPER "BracketFrame"
 ARROW
+NEWLINE
 UPPER "Option"
 UPPER "Token"
 ARROW
+NEWLINE
 UPPER "Bool"
 ARROW
+NEWLINE
 UPPER "List"
 LPAREN
 UPPER "Token"
@@ -13987,6 +15200,8 @@ UPPER "Int"
 COMMA
 UPPER "Int"
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "resolveContPairs"
 IDENT "col"
@@ -14068,6 +15283,7 @@ NEWLINE
 PIPE
 IDENT "otherwise"
 EQUAL
+INDENT
 LPAREN
 UPPER "TIndent"
 COMMA
@@ -14099,6 +15315,8 @@ UPPER "False"
 NEWLINE
 DEDENT
 NEWLINE
+DEDENT
+NEWLINE
 IDENT "resolveContPairs"
 IDENT "col"
 IDENT "off"
@@ -14122,17 +15340,22 @@ IDENT "popDedentsPairs"
 COLON
 UPPER "Int"
 ARROW
+INDENT
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "Int"
 ARROW
+NEWLINE
 UPPER "List"
 UPPER "RawTok"
 ARROW
+NEWLINE
 UPPER "List"
-UPPER "Int"
+UPPER "BracketFrame"
 ARROW
+NEWLINE
 UPPER "List"
 LPAREN
 UPPER "Token"
@@ -14141,6 +15364,8 @@ UPPER "Int"
 COMMA
 UPPER "Int"
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 IDENT "popDedentsPairs"
 IDENT "col"
@@ -14174,6 +15399,7 @@ IDENT "top"
 GT
 IDENT "col"
 EQUAL
+INDENT
 LPAREN
 UPPER "TDedent"
 COMMA
@@ -14199,6 +15425,8 @@ LPAREN
 IDENT "dropFrame"
 IDENT "frames"
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 PIPE
 IDENT "otherwise"
@@ -14455,6 +15683,7 @@ IDENT "layoutWithOffsetPairs"
 IDENT "src"
 IDENT "len"
 EQUAL
+INDENT
 IDENT "elseFilterPairs"
 LPAREN
 IDENT "layoutPairs"
@@ -14480,6 +15709,8 @@ RBRACKET
 UPPER "None"
 UPPER "False"
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 EXPORT
 NEWLINE
@@ -15344,12 +16575,14 @@ IDENT "line"
 IDENT "lineStart"
 EQUAL
 MATCH
+LPAREN
 IDENT "posLineColFrom"
 IDENT "src"
 IDENT "startPos"
 IDENT "p"
 IDENT "line"
 IDENT "lineStart"
+RPAREN
 INDENT
 LPAREN
 IDENT "line2"
@@ -15357,6 +16590,7 @@ COMMA
 IDENT "col"
 RPAREN
 FAT_ARROW
+INDENT
 UPPER "Comment"
 IDENT "line2"
 IDENT "col"
@@ -15372,6 +16606,8 @@ IDENT "startPos"
 MINUS
 IDENT "col"
 RPAREN
+NEWLINE
+DEDENT
 NEWLINE
 DEDENT
 NEWLINE

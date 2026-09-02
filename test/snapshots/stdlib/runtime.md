@@ -1,5 +1,5 @@
 # META
-source_lines=585
+source_lines=590
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -84,7 +84,9 @@ extern writeFile : String -> String -> <FileWrite "_"> Result String Unit
 
 -- | Writes bytes, `0` to `255` each, to a file, replacing any existing
 -- contents.
-extern writeFileBytes : String -> Array Int -> <FileWrite "_"> Result String Unit
+extern writeFileBytes : String ->
+  Array Int ->
+  <FileWrite "_"> Result String Unit
 
 -- | Appends a string to a file, creating it when it does not exist.
 extern appendFile : String -> String -> <FileWrite "_"> Result String Unit
@@ -114,7 +116,8 @@ extern removeDir : String -> <FileWrite "_"> Result String Unit
 -- | A path's size in bytes, whether it is a directory, whether it is a
 -- regular file, and its modification time in seconds. `fs.stat` returns the
 -- same as a record.
-extern statFile : String -> <FileRead "_"> Result String (Int, Bool, Bool, Float)
+extern statFile : String ->
+  <FileRead "_"> Result String (Int, Bool, Bool, Float)
 
 -- # Processes and environment
 
@@ -138,7 +141,9 @@ extern buildFingerprint : Unit -> <Env> String
 -- code, the captured standard output, and the captured standard error; a
 -- non-zero exit code is still `Ok`. `Err` carries the host's message when
 -- the program could not be started.
-extern runCommand : String -> List String -> <Exec "_"> Result String (Int, String, String)
+extern runCommand : String ->
+  List String ->
+  <Exec "_"> Result String (Int, String, String)
 
 -- | Ends the program with an exit code.
 extern exit : Int -> Unit

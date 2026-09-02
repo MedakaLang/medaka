@@ -106,13 +106,13 @@ if [ "$#" -gt 0 ]; then
   files="$*"
   full_run=0
 else
-  # EVERY tracked .mdk in the tree (#2500: the old hand-listed corpus missed
-  # pds/, sqlite/, parsec/, gzip/ and most of test/, which is where the last two
-  # formatter bugs were found), minus the corpora whose files are MEANT not to
-  # parse.  A parse failure on any other file is a hard failure of this gate.
-  files="$(cd "$ROOT" && git ls-files '*.mdk' | grep -v -E \
-    '^test/(parse_error_fixtures|parse_error_loc_fixtures|must_fail_fixtures|error_quality_fixtures|lint_fix_fixtures|stack_overflow_fixtures|symbol_collision_fixtures|comment_fixtures|codemod_fixtures)/' \
-    | sed "s|^|$ROOT/|")"
+  # EVERY tracked .mdk outside test/ (#2500: the old hand-listed corpus missed
+  # pds/, sqlite/, parsec/ and gzip/, which is where the last two formatter bugs
+  # were found) plus the two formatter fixture corpora.  test/ itself holds
+  # many fixtures that are MEANT not to parse, so it is not swept wholesale; a
+  # parse failure on any file listed here is a hard failure of this gate.
+  files="$(cd "$ROOT" && git ls-files '*.mdk' | grep -v '^test/' | sed "s|^|$ROOT/|") \
+$ROOT/test/fmt_fixtures/*.mdk $ROOT/test/parse_fixtures/*.mdk"
   full_run=1
 fi
 

@@ -123,9 +123,11 @@ roundTripBack src e1 =
 roundTripCompare : String -> SqlExpr -> SqlExpr -> String -> RT
 roundTripCompare src e1 e2 s2 =
   if e1 /= e2 then
-    RtFail "\{src}  ==> AST CHANGED\n      first : \{dumpExpr e1}\n      second: \{dumpExpr e2}"
+    RtFail
+      "\{src}  ==> AST CHANGED\n      first : \{dumpExpr e1}\n      second: \{dumpExpr e2}"
   else if renderSqlExpr e2 /= s2 then
-    RtFail "\{src}  ==> render is not a fixpoint: `\{s2}` vs `\{renderSqlExpr e2}`"
+    RtFail
+      "\{src}  ==> render is not a fixpoint: `\{s2}` vs `\{renderSqlExpr e2}`"
   else
     RtOk
 
@@ -133,7 +135,7 @@ rtFailures : List String -> List String
 rtFailures [] = []
 -- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
 -- lint-disable-next-line rule-duplicate-body
-rtFailures (s::rest) = match roundTrip s
+rtFailures (s :: rest) = match roundTrip s
   RtOk => rtFailures rest
   RtFail m => m :: rtFailures rest
 
@@ -187,7 +189,7 @@ precCases = [
 
 precFailures : List (String, String) -> List String
 precFailures [] = []
-precFailures ((src, want)::rest) = match parseSqlExpr src
+precFailures ((src, want) :: rest) = match parseSqlExpr src
   Err e => "\{src}  ==> parse failed: \{e}" :: precFailures rest
   Ok tree => precCompare src want (dumpExpr tree) (precFailures rest)
 
@@ -198,7 +200,7 @@ precCompare src want got rest =
   if want == got then
     rest
   else
-    "\{src}\n      want: \{want}\n      got : \{got}"::rest
+    "\{src}\n      want: \{want}\n      got : \{got}" :: rest
 
 -- ---------------------------------------------------------------------------
 -- Report

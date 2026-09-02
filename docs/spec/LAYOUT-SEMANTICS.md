@@ -366,8 +366,14 @@ the herald's block (structuring its arms/statements), even though it is inside
 brackets. The locked herald set is:
 
 ```
-match    do    function    record    bare-INDENT block
+match    do    function    record    bare-INDENT block    =>  (line-final)
 ```
+
+A line-final `=>` — a lambda head — arms the lambda's block body
+(`map (x =>⏎  let y = x * 2⏎  y) xs`), in any argument position; this is the
+one keyword-less way the bare-INDENT block is reachable inside brackets. A `,`
+at the bracket's own level closes such a block exactly as the closer does
+(`(x =>⏎  …,` — the comma belongs to the enclosing bracket, not the block).
 
 (`let … in` multi-binding groups and bracketed `if/then/else` are **DEFERRED** —
 they stay rejected inside brackets, owing to the own-line-`in` and dangling-else
@@ -398,8 +404,13 @@ no-parser→layout-feedback rule); the close is driven by the explicit
 bracket-aware frame, not by parser feedback.
 
 **Frame model.** Each open bracket carries a small **bracket frame**
-`(entryDepth, openedContexts)` interleaved with the bracket-depth counter; nested
-heralds push further contexts onto the same frame. This is a *targeted* extension
+(`BracketFrame liveContexts savedOpener` in `compiler/frontend/lexer.mdk`):
+the count of nested layout contexts the bracket has opened, and the `match`
+opener flag as it stood when the bracket opened — saved at the opener and
+restored at the closer, so a `match` header's flag survives its scrutinee's own
+brackets (`match (a, b)⏎  arms`) but never leaks *into* them (a wrapped
+scrutinee `match (a,⏎  b)` is free-form, not an arms block). Nested heralds push
+further contexts onto the same frame. This is a *targeted* extension
 (not a full Haskell `L` rewrite): the free-form default is preserved, and layout
 is re-enabled only on the herald-armed path.
 

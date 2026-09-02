@@ -144,7 +144,8 @@ checkNlen len nlen =
   if bitAnd (bitNot len) mask16 == nlen then
     Ok ()
   else
-    Err "stored block: NLEN (\{nlen}) is not the one's complement of LEN (\{len})"
+    Err
+      "stored block: NLEN (\{nlen}) is not the one's complement of LEN (\{len})"
 
 -- Push every byte of `bytes` onto `out`, in order — this is what makes a
 -- stored block's payload part of the sliding window, not just part of the
@@ -216,7 +217,11 @@ lookupTable arr i name = match get i arr
 --   `huffman.mdk`): `lengthBase`/`lengthExtra` are indexed by
 --   `lenSym - 257`, but `distBase`/`distExtra` are indexed by the BARE
 --   distance symbol `dsym` — not `dsym - 257`, not `dsym - 1`.
-inflateLengthDistance : Huffman -> Int -> BitReader -> Vector Int -> Result String Unit
+inflateLengthDistance : Huffman ->
+  Int ->
+  BitReader ->
+  Vector Int ->
+  Result String Unit
 inflateLengthDistance distHuff lenSym r out = do
   lenBase <- lookupTable lengthBase (lenSym - 257) "lengthBase"
   lenExtraBits <- lookupTable lengthExtra (lenSym - 257) "lengthExtra"
@@ -230,7 +235,8 @@ inflateLengthDistance distHuff lenSym r out = do
 -- plain match-arm guard rather than nested inside a `do` block.
 distanceFor : Int -> Int -> BitReader -> Vector Int -> Result String Unit
 distanceFor dsym len r out =
-  if dsym > maxDistSym then Err "inflate: invalid distance symbol \{dsym} (must be 0..\{maxDistSym})"
+  if dsym > maxDistSym then
+    Err "inflate: invalid distance symbol \{dsym} (must be 0..\{maxDistSym})"
   else do
     distBaseV <- lookupTable distBase dsym "distBase"
     distExtraBits <- lookupTable distExtra dsym "distExtra"
@@ -244,7 +250,11 @@ distanceFor dsym len r out =
 --   stream. Shared by fixed-Huffman (`fixedLitLen`/`fixedDist`) and
 --   dynamic-Huffman (the block's own decoded tables) blocks — see the
 --   module header.
-inflateHuffmanBlock : Huffman -> Huffman -> BitReader -> Vector Int -> Result String Unit
+inflateHuffmanBlock : Huffman ->
+  Huffman ->
+  BitReader ->
+  Vector Int ->
+  Result String Unit
 inflateHuffmanBlock litHuff distHuff r out = match decodeSym litHuff r
   Err e => Err e
   Ok sym if sym < 256 =>
@@ -254,7 +264,9 @@ inflateHuffmanBlock litHuff distHuff r out = match decodeSym litHuff r
   Ok sym if sym <= maxLenSym => match inflateLengthDistance distHuff sym r out
     Err e => Err e
     Ok _ => inflateHuffmanBlock litHuff distHuff r out
-  Ok sym => Err "inflate: invalid literal/length symbol \{sym} (must be 0..\{maxLenSym} or \{symEndOfBlock})"
+  Ok sym =>
+    Err
+      "inflate: invalid literal/length symbol \{sym} (must be 0..\{maxLenSym} or \{symEndOfBlock})"
 
 -- | Fixed-Huffman blocks (BTYPE 01): the RFC 1951 §3.2.6 fixed literal/length
 --   and distance tables, unchanged from Phase 2.
@@ -299,7 +311,11 @@ readClLengths r nClen =
   let lens = make numClSymbols 0
   readClLengthsGo r 0 nClen lens
 
-readClLengthsGo : BitReader -> Int -> Int -> Array Int -> Result String (Array Int)
+readClLengthsGo : BitReader ->
+  Int ->
+  Int ->
+  Array Int ->
+  Result String (Array Int)
 readClLengthsGo r i nClen lens
   | i >= nClen = Ok lens
   | otherwise = do
@@ -330,7 +346,9 @@ readDynamicHeader r = do
 -- table) rather than writing out of bounds. Returns the new write index.
 fillRepeat : Array Int -> Int -> Int -> Int -> Int -> Result String Int
 fillRepeat lens i total val count =
-  if i + count > total then Err "dynamic Huffman: code-length repeat runs past the end of the table (have \{total} entries, run would reach \{i + count})"
+  if i + count > total then
+    Err
+      "dynamic Huffman: code-length repeat runs past the end of the table (have \{total} entries, run would reach \{i + count})"
   else
     let _ = fillRepeatGo lens i (i + count) val
     Ok (i + count)
@@ -355,7 +373,13 @@ readCodeLengths clHuff r total =
   let lens = make total 0
   readCodeLengthsGo clHuff r lens 0 total (-1)
 
-readCodeLengthsGo : Huffman -> BitReader -> Array Int -> Int -> Int -> Int -> Result String (Array Int)
+readCodeLengthsGo : Huffman ->
+  BitReader ->
+  Array Int ->
+  Int ->
+  Int ->
+  Int ->
+  Result String (Array Int)
 readCodeLengthsGo clHuff r lens i total prevLen
   | i >= total = Ok lens
   | otherwise = match decodeSym clHuff r
@@ -363,12 +387,15 @@ readCodeLengthsGo clHuff r lens i total prevLen
     Ok sym if sym < symRepPrev =>
       lens[i] := sym
       readCodeLengthsGo clHuff r lens (i + 1) total sym
-    Ok sym if sym == symRepPrev => if prevLen < 0 then Err "dynamic Huffman: repeat-previous code (16) with no previous code length to repeat"
-    else match getBits 2 r
-      Err e => Err e
-      Ok extra => match fillRepeat lens i total prevLen (3 + extra)
+    Ok sym if sym == symRepPrev =>
+      if prevLen < 0 then
+        Err
+          "dynamic Huffman: repeat-previous code (16) with no previous code length to repeat"
+      else match getBits 2 r
         Err e => Err e
-        Ok i2 => readCodeLengthsGo clHuff r lens i2 total prevLen
+        Ok extra => match fillRepeat lens i total prevLen (3 + extra)
+          Err e => Err e
+          Ok i2 => readCodeLengthsGo clHuff r lens i2 total prevLen
     Ok sym if sym == symRepZero3 => match getBits 3 r
       Err e => Err e
       Ok extra => match fillRepeat lens i total 0 (3 + extra)
@@ -413,7 +440,9 @@ inflateBlock btype r out
   | btype == btypeDynamicHuffman = inflateDynamicHuffman r out
   | btype == btypeReserved =
     Err "invalid DEFLATE block: BTYPE=3 is reserved (RFC 1951 §3.2.3)"
-  | otherwise = panic "inflateBlock: BTYPE \{btype} out of the 0..3 range getBits 2 can produce (unreachable)"
+  | otherwise =
+    panic
+      "inflateBlock: BTYPE \{btype} out of the 0..3 range getBits 2 can produce (unreachable)"
 
 -- Read BFINAL (1 bit) + BTYPE (2 bits), both LSB-first, decode one block,
 -- and loop until a block with BFINAL=1.
@@ -455,7 +484,8 @@ checkIsize ours stored =
   if bitAnd ours mask32 == stored then
     Ok ()
   else
-    Err "gzip trailer ISIZE mismatch: computed \{ours} (mod 2^32), trailer says \{stored}"
+    Err
+      "gzip trailer ISIZE mismatch: computed \{ours} (mod 2^32), trailer says \{stored}"
 
 {- | Decode a whole `.gz` member: parse the header, inflate the DEFLATE
    payload between the header and the 8-byte trailer, then validate BOTH
@@ -494,13 +524,15 @@ gunzipMember bytes = do
 -- `python3 -c "import zlib; print(zlib.decompress(open('h.gz','rb').read(), 16+zlib.MAX_WBITS))"`
 -- on these exact bytes prints `b'hello'`).
 helloGz : Array Int
-helloGz = arrayFromList
-  [
-    31, 139, 8, 0, 0, 0, 0, 0, 0, 3, 203, 72, 205, 201, 201, 7, 0, 134, 166, 16,
-    54, 5, 0, 0, 0,
-  ]
+helloGz = arrayFromList [
+  31, 139, 8, 0, 0, 0, 0, 0, 0, 3, 203, 72, 205, 201, 201, 7, 0, 134, 166, 16,
+  54, 5, 0, 0, 0
+]
 
-test "gunzipMember on real hello.gz (fixed Huffman) round-trips to \"hello\"" = expectEqual (Ok (arrayFromList [104, 101, 108, 108, 111])) (gunzipMember helloGz)
+test "gunzipMember on real hello.gz (fixed Huffman) round-trips to \"hello\"" =
+  expectEqual
+    (Ok (arrayFromList [104, 101, 108, 108, 111]))
+    (gunzipMember helloGz)
 
 -- `python3 -c "print('ab'*37)" | gzip -n -c` — a repetitive input that
 -- exercises fixed-Huffman BACK-REFERENCES (not just literals like
@@ -511,22 +543,21 @@ test "gunzipMember on real hello.gz (fixed Huffman) round-trips to \"hello\"" = 
 -- covered by `copyBack`'s own unit tests above, now exercised end to end
 -- through Huffman decoding.
 abRepeatedGz : Array Int
-abRepeatedGz = arrayFromList
-  [
-    31, 139, 8, 0, 0, 0, 0, 0, 0, 3, 75, 76, 74, 164, 18, 4, 0, 12, 130, 171,
-    154, 74, 0, 0, 0,
-  ]
+abRepeatedGz = arrayFromList [
+  31, 139, 8, 0, 0, 0, 0, 0, 0, 3, 75, 76, 74, 164, 18, 4, 0, 12, 130, 171, 154,
+  74, 0, 0, 0
+]
 
 abRepeatedBin : Array Int
-abRepeatedBin = arrayFromList
-  [
-    97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97,
-    98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98,
-    97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97,
-    98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98,
-  ]
+abRepeatedBin = arrayFromList [
+  97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97,
+  98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98,
+  97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97,
+  98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98
+]
 
-test "gunzipMember: fixed-Huffman with distance=2 back-references round-trips" = expectEqual (Ok abRepeatedBin) (gunzipMember abRepeatedGz)
+test "gunzipMember: fixed-Huffman with distance=2 back-references round-trips" =
+  expectEqual (Ok abRepeatedBin) (gunzipMember abRepeatedGz)
 
 -- ---------------------------------------------------------------------------
 -- Dynamic Huffman (BTYPE 10, Phase 3) — raw DEFLATE stream (no gzip
@@ -552,36 +583,34 @@ test "gunzipMember: fixed-Huffman with distance=2 back-references round-trips" =
 -- ---------------------------------------------------------------------------
 
 dynBytes : Array Int
-dynBytes = arrayFromList
-  [
-    205, 204, 193, 13, 128, 32, 16, 68, 209, 86, 166, 2, 123, 26, 216, 5, 9, 44,
-    107, 4, 15, 88, 189, 148, 225, 233, 31, 94, 242, 243, 91, 46, 140, 201, 89,
-    226, 206, 173, 52, 152, 10, 43, 17, 93, 20, 178, 58, 109, 83, 104, 30, 43,
-    68, 83, 227, 84, 140, 101, 193, 27, 206, 39, 37, 99, 63, 144, 127, 51, 249,
-    0,
-  ]
+dynBytes = arrayFromList [
+  205, 204, 193, 13, 128, 32, 16, 68, 209, 86, 166, 2, 123, 26, 216, 5, 9, 44,
+  107, 4, 15, 88, 189, 148, 225, 233, 31, 94, 242, 243, 91, 46, 140, 201, 89,
+  226, 206, 173, 52, 152, 10, 43, 17, 93, 20, 178, 58, 109, 83, 104, 30, 43, 68,
+  83, 227, 84, 140, 101, 193, 27, 206, 39, 37, 99, 63, 144, 127, 51, 249, 0
+]
 
 -- The plaintext `dynBytes` decodes to (ASCII bytes of the shuffled-word text
 -- above, repeated 3 times) — from the SAME python invocation, `list(data)`.
 dynExpected : Array Int
-dynExpected = arrayFromList
-  [
-    103, 122, 105, 112, 32, 115, 116, 97, 116, 105, 99, 32, 115, 116, 114, 101,
-    97, 109, 32, 109, 101, 100, 97, 107, 97, 32, 99, 111, 100, 101, 32, 100,
-    121, 110, 97, 109, 105, 99, 32, 98, 108, 111, 99, 107, 32, 100, 101, 102,
-    108, 97, 116, 101, 32, 115, 121, 109, 98, 111, 108, 32, 104, 117, 102, 102,
-    109, 97, 110, 46, 32, 103, 122, 105, 112, 32, 115, 116, 97, 116, 105, 99,
-    32, 115, 116, 114, 101, 97, 109, 32, 109, 101, 100, 97, 107, 97, 32, 99,
-    111, 100, 101, 32, 100, 121, 110, 97, 109, 105, 99, 32, 98, 108, 111, 99,
-    107, 32, 100, 101, 102, 108, 97, 116, 101, 32, 115, 121, 109, 98, 111, 108,
-    32, 104, 117, 102, 102, 109, 97, 110, 46, 32, 103, 122, 105, 112, 32, 115,
-    116, 97, 116, 105, 99, 32, 115, 116, 114, 101, 97, 109, 32, 109, 101, 100,
-    97, 107, 97, 32, 99, 111, 100, 101, 32, 100, 121, 110, 97, 109, 105, 99, 32,
-    98, 108, 111, 99, 107, 32, 100, 101, 102, 108, 97, 116, 101, 32, 115, 121,
-    109, 98, 111, 108, 32, 104, 117, 102, 102, 109, 97, 110, 46, 32,
-  ]
+dynExpected = arrayFromList [
+  103, 122, 105, 112, 32, 115, 116, 97, 116, 105, 99, 32, 115, 116, 114, 101,
+  97, 109, 32, 109, 101, 100, 97, 107, 97, 32, 99, 111, 100, 101, 32, 100, 121,
+  110, 97, 109, 105, 99, 32, 98, 108, 111, 99, 107, 32, 100, 101, 102, 108, 97,
+  116, 101, 32, 115, 121, 109, 98, 111, 108, 32, 104, 117, 102, 102, 109, 97,
+  110, 46, 32, 103, 122, 105, 112, 32, 115, 116, 97, 116, 105, 99, 32, 115, 116,
+  114, 101, 97, 109, 32, 109, 101, 100, 97, 107, 97, 32, 99, 111, 100, 101, 32,
+  100, 121, 110, 97, 109, 105, 99, 32, 98, 108, 111, 99, 107, 32, 100, 101, 102,
+  108, 97, 116, 101, 32, 115, 121, 109, 98, 111, 108, 32, 104, 117, 102, 102,
+  109, 97, 110, 46, 32, 103, 122, 105, 112, 32, 115, 116, 97, 116, 105, 99, 32,
+  115, 116, 114, 101, 97, 109, 32, 109, 101, 100, 97, 107, 97, 32, 99, 111, 100,
+  101, 32, 100, 121, 110, 97, 109, 105, 99, 32, 98, 108, 111, 99, 107, 32, 100,
+  101, 102, 108, 97, 116, 101, 32, 115, 121, 109, 98, 111, 108, 32, 104, 117,
+  102, 102, 109, 97, 110, 46, 32
+]
 
-test "inflate: real dynamic-Huffman raw DEFLATE stream (zlib -15) round-trips" = expectEqual (Ok dynExpected) (inflate dynBytes)
+test "inflate: real dynamic-Huffman raw DEFLATE stream (zlib -15) round-trips" =
+  expectEqual (Ok dynExpected) (inflate dynBytes)
 
 -- ---------------------------------------------------------------------------
 -- Hand-derived dynamic-Huffman error path: a repeat-previous code-length
@@ -620,7 +649,11 @@ repeatFirstBytes =
   let _ = putCodeMSB 1 1 w  -- the block body's first code-length symbol: code "1" -> symbol 16
   finishBitWriter w
 
-test "inflate: dynamic Huffman rejects repeat-code 16 as the FIRST code-length symbol (no previous length)" = expectEqual (Err "dynamic Huffman: repeat-previous code (16) with no previous code length to repeat") (inflate repeatFirstBytes)
+test "inflate: dynamic Huffman rejects repeat-code 16 as the FIRST code-length symbol (no previous length)" =
+  expectEqual
+    (Err
+      "dynamic Huffman: repeat-previous code (16) with no previous code length to repeat")
+    (inflate repeatFirstBytes)
 
 -- `head -c 200 /dev/urandom > rand.bin && gzip -1 -n -c rand.bin` — genuinely
 -- incompressible input, so gzip falls back to a STORED block (there is no
@@ -631,43 +664,40 @@ test "inflate: dynamic Huffman rejects repeat-code 16 as the FIRST code-length s
 -- `python3 -c "import zlib; d=open('rand.bin','rb').read(); print(zlib.crc32(d), len(d))"`
 -- -> 547945378 200.
 randGz : Array Int
-randGz = arrayFromList
-  [
-    31, 139, 8, 0, 0, 0, 0, 0, 4, 3, 1, 200, 0, 55, 255, 190, 246, 7, 148, 140,
-    204, 149, 34, 157, 59, 105, 78, 139, 12, 231, 77, 123, 149, 186, 225, 117,
-    173, 39, 30, 68, 168, 225, 77, 156, 131, 16, 184, 216, 6, 73, 248, 122, 225,
-    141, 220, 91, 157, 16, 255, 181, 8, 13, 100, 202, 137, 199, 185, 210, 108,
-    225, 18, 33, 5, 206, 152, 26, 254, 127, 84, 202, 154, 167, 124, 252, 141,
-    136, 108, 34, 7, 38, 231, 155, 60, 142, 124, 93, 53, 248, 19, 246, 162, 230,
-    25, 186, 135, 220, 205, 123, 92, 159, 122, 220, 40, 141, 230, 159, 22, 167,
-    37, 109, 108, 254, 2, 19, 56, 91, 180, 254, 214, 119, 115, 189, 255, 31, 16,
-    146, 246, 3, 23, 72, 163, 157, 187, 251, 204, 138, 106, 133, 111, 74, 231,
-    32, 221, 125, 127, 246, 204, 166, 219, 42, 153, 120, 174, 43, 151, 52, 168,
-    18, 217, 6, 225, 250, 65, 150, 113, 82, 56, 11, 243, 88, 99, 138, 25, 128,
-    232, 218, 51, 248, 151, 250, 176, 60, 177, 73, 157, 39, 184, 131, 101, 125,
-    101, 91, 229, 23, 154, 250, 197, 248, 98, 90, 106, 191, 88, 196, 3, 162,
-    251, 168, 32, 200, 0, 0, 0,
-  ]
+randGz = arrayFromList [
+  31, 139, 8, 0, 0, 0, 0, 0, 4, 3, 1, 200, 0, 55, 255, 190, 246, 7, 148, 140,
+  204, 149, 34, 157, 59, 105, 78, 139, 12, 231, 77, 123, 149, 186, 225, 117,
+  173, 39, 30, 68, 168, 225, 77, 156, 131, 16, 184, 216, 6, 73, 248, 122, 225,
+  141, 220, 91, 157, 16, 255, 181, 8, 13, 100, 202, 137, 199, 185, 210, 108,
+  225, 18, 33, 5, 206, 152, 26, 254, 127, 84, 202, 154, 167, 124, 252, 141, 136,
+  108, 34, 7, 38, 231, 155, 60, 142, 124, 93, 53, 248, 19, 246, 162, 230, 25,
+  186, 135, 220, 205, 123, 92, 159, 122, 220, 40, 141, 230, 159, 22, 167, 37,
+  109, 108, 254, 2, 19, 56, 91, 180, 254, 214, 119, 115, 189, 255, 31, 16, 146,
+  246, 3, 23, 72, 163, 157, 187, 251, 204, 138, 106, 133, 111, 74, 231, 32, 221,
+  125, 127, 246, 204, 166, 219, 42, 153, 120, 174, 43, 151, 52, 168, 18, 217, 6,
+  225, 250, 65, 150, 113, 82, 56, 11, 243, 88, 99, 138, 25, 128, 232, 218, 51,
+  248, 151, 250, 176, 60, 177, 73, 157, 39, 184, 131, 101, 125, 101, 91, 229,
+  23, 154, 250, 197, 248, 98, 90, 106, 191, 88, 196, 3, 162, 251, 168, 32, 200,
+  0, 0, 0
+]
 
 -- The 200 raw bytes `randGz` decompresses to (the payload bytes of `randGz`
 -- between the 10-byte header + 5-byte block header, and the 8-byte trailer).
 randBin : Array Int
-randBin = arrayFromList
-  [
-    190, 246, 7, 148, 140, 204, 149, 34, 157, 59, 105, 78, 139, 12, 231, 77,
-    123, 149, 186, 225, 117, 173, 39, 30, 68, 168, 225, 77, 156, 131, 16, 184,
-    216, 6, 73, 248, 122, 225, 141, 220, 91, 157, 16, 255, 181, 8, 13, 100, 202,
-    137, 199, 185, 210, 108, 225, 18, 33, 5, 206, 152, 26, 254, 127, 84, 202,
-    154, 167, 124, 252, 141, 136, 108, 34, 7, 38, 231, 155, 60, 142, 124, 93,
-    53, 248, 19, 246, 162, 230, 25, 186, 135, 220, 205, 123, 92, 159, 122, 220,
-    40, 141, 230, 159, 22, 167, 37, 109, 108, 254, 2, 19, 56, 91, 180, 254, 214,
-    119, 115, 189, 255, 31, 16, 146, 246, 3, 23, 72, 163, 157, 187, 251, 204,
-    138, 106, 133, 111, 74, 231, 32, 221, 125, 127, 246, 204, 166, 219, 42, 153,
-    120, 174, 43, 151, 52, 168, 18, 217, 6, 225, 250, 65, 150, 113, 82, 56, 11,
-    243, 88, 99, 138, 25, 128, 232, 218, 51, 248, 151, 250, 176, 60, 177, 73,
-    157, 39, 184, 131, 101, 125, 101, 91, 229, 23, 154, 250, 197, 248, 98, 90,
-    106, 191, 88, 196, 3,
-  ]
+randBin = arrayFromList [
+  190, 246, 7, 148, 140, 204, 149, 34, 157, 59, 105, 78, 139, 12, 231, 77, 123,
+  149, 186, 225, 117, 173, 39, 30, 68, 168, 225, 77, 156, 131, 16, 184, 216, 6,
+  73, 248, 122, 225, 141, 220, 91, 157, 16, 255, 181, 8, 13, 100, 202, 137, 199,
+  185, 210, 108, 225, 18, 33, 5, 206, 152, 26, 254, 127, 84, 202, 154, 167, 124,
+  252, 141, 136, 108, 34, 7, 38, 231, 155, 60, 142, 124, 93, 53, 248, 19, 246,
+  162, 230, 25, 186, 135, 220, 205, 123, 92, 159, 122, 220, 40, 141, 230, 159,
+  22, 167, 37, 109, 108, 254, 2, 19, 56, 91, 180, 254, 214, 119, 115, 189, 255,
+  31, 16, 146, 246, 3, 23, 72, 163, 157, 187, 251, 204, 138, 106, 133, 111, 74,
+  231, 32, 221, 125, 127, 246, 204, 166, 219, 42, 153, 120, 174, 43, 151, 52,
+  168, 18, 217, 6, 225, 250, 65, 150, 113, 82, 56, 11, 243, 88, 99, 138, 25,
+  128, 232, 218, 51, 248, 151, 250, 176, 60, 177, 73, 157, 39, 184, 131, 101,
+  125, 101, 91, 229, 23, 154, 250, 197, 248, 98, 90, 106, 191, 88, 196, 3
+]
 
 test "gunzipMember: real stored-block .gz round-trips byte for byte" =
   expectEqual (Ok randBin) (gunzipMember randGz)
@@ -679,11 +709,15 @@ corruptedNlenGz = arrayFromList (setAt 13 56 (toList randGz))
 
 setAt : Int -> a -> List a -> List a
 setAt _ _ [] = []
-setAt 0 v (_::rest) = v::rest
-setAt i v (x::rest) = x :: setAt (i - 1) v rest
+setAt 0 v (_ :: rest) = v :: rest
+setAt i v (x :: rest) = x :: setAt (i - 1) v rest
 
-test "gunzipMember: a corrupted NLEN is rejected" = match gunzipMember corruptedNlenGz
-  Err msg => expectEqual "stored block: NLEN (65336) is not the one's complement of LEN (200)" msg
+test "gunzipMember: a corrupted NLEN is rejected" = match (gunzipMember
+  corruptedNlenGz)
+  Err msg =>
+    expectEqual
+      "stored block: NLEN (65336) is not the one's complement of LEN (200)"
+      msg
   Ok _ => fail "expected Err on corrupted NLEN"
 
 -- Truncate mid-payload (keep only the header + block header + a handful of
@@ -701,8 +735,12 @@ corruptedCrcGz : Array Int
 corruptedCrcGz =
   arrayFromList (setAt (arrayLength randGz - 8) 0 (toList randGz))
 
-test "gunzipMember: a corrupted trailer CRC-32 is rejected" = match gunzipMember corruptedCrcGz
-  Err msg => expectEqual "gzip trailer CRC-32 mismatch: computed 547945378, trailer says 547945216" msg
+test "gunzipMember: a corrupted trailer CRC-32 is rejected" = match (gunzipMember
+  corruptedCrcGz)
+  Err msg =>
+    expectEqual
+      "gzip trailer CRC-32 mismatch: computed 547945378, trailer says 547945216"
+      msg
   Ok _ => fail "expected Err on a corrupted trailer CRC-32"
 
 -- ---------------------------------------------------------------------------
@@ -717,26 +755,32 @@ copyBackResult seed distance len =
 
 -- Design-doc-verified shape: `distance=1, length=4` over `[65,66]` is
 -- run-length encoding of the trailing byte, `66`, four more times.
-test "copyBack: distance=1 (RLE) repeats the trailing byte" = expectEqual
-  (Ok (arrayFromList [65, 66, 66, 66, 66, 66]))
-  (copyBackResult [65, 66] 1 4)
+test "copyBack: distance=1 (RLE) repeats the trailing byte" =
+  expectEqual
+    (Ok (arrayFromList [65, 66, 66, 66, 66, 66]))
+    (copyBackResult [65, 66] 1 4)
 
 -- `distance == length(out)` is legal and refers to the very FIRST output
 -- byte: over `[65, 66, 67]`, distance=3, len=2 reads index 0 then index 1
 -- (which by then is the just-copied 65), yielding `[65, 66, 67, 65, 66]`.
-test "copyBack: distance == outLen refers to the first output byte (legal)" = expectEqual
-  (Ok (arrayFromList [65, 66, 67, 65, 66]))
-  (copyBackResult [65, 66, 67] 3 2)
+test "copyBack: distance == outLen refers to the first output byte (legal)" =
+  expectEqual
+    (Ok (arrayFromList [65, 66, 67, 65, 66]))
+    (copyBackResult [65, 66, 67] 3 2)
 
 -- A general overlap case: `distance=2, length=5` over `[1, 2]` alternates
 -- the two seed bytes, since each copied byte becomes a source two positions
 -- later: seed `1,2` followed by 5 more copies `1,2,1,2,1`.
-test "copyBack: distance=2, length=5 alternates the seed bytes" = expectEqual
-  (Ok (arrayFromList [1, 2, 1, 2, 1, 2, 1]))
-  (copyBackResult [1, 2] 2 5)
+test "copyBack: distance=2, length=5 alternates the seed bytes" =
+  expectEqual
+    (Ok (arrayFromList [1, 2, 1, 2, 1, 2, 1]))
+    (copyBackResult [1, 2] 2 5)
 
 -- `distance > length(out)` is a malformed stream, not a wrap-around: `Err`.
-test "copyBack: distance > outLen is rejected" = match copyBackResult [65, 66] 5 1
+test "copyBack: distance > outLen is rejected" = match (copyBackResult
+  [65, 66]
+  5
+  1)
   Err msg =>
     expectEqual "copyBack: distance 5 exceeds current output length 2" msg
   Ok _ => fail "expected Err on distance > outLen"
@@ -757,7 +801,8 @@ test "copyBack: distance <= 0 is rejected" = match copyBackResult [65, 66] 0 1
 -- independent of what bytes actually land there.
 prop "copyBack grows the output by exactly `length`, for any legal distance" (seed : List Int) (distRaw : Int) (lenRaw : Int) =
   let seedLen = length seed
-  if seedLen == 0 then True  -- no legal distance exists over an empty window
+  if seedLen == 0 then
+    True  -- no legal distance exists over an empty window
   else
     let distance = 1 + abs distRaw % seedLen
     let len = abs lenRaw % 64
@@ -781,7 +826,12 @@ storedBlockStream bytes =
   let nlenLow = bitAnd nlen 255
   let nlenHigh = shiftRight nlen 8
   arrayFromList
-    (1 :: lenLow :: lenHigh :: nlenLow :: nlenHigh :: map (b => bitAnd b 255) bytes)
+    (1
+      :: lenLow
+      :: lenHigh
+      :: nlenLow
+      :: nlenHigh
+      :: map (b => bitAnd b 255) bytes)
 
 prop "inflate of a hand-built single stored block round-trips arbitrary bytes" (bytes : List Int) =
   let masked = map (b => bitAnd b 255) bytes

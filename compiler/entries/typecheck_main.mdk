@@ -15,7 +15,9 @@ import types.typecheck.{checkToLines, checkOneToLinesWithRuntime}
 main = match args ()
   [targetPath] => withTarget targetPath
   [runtimePath, targetPath] => withRuntime runtimePath targetPath
-  _ => ePutStrLn "usage: medaka run compiler/entries/typecheck_main.mdk [runtime.mdk] <file.mdk>"
+  _ =>
+    ePutStrLn
+      "usage: medaka run compiler/entries/typecheck_main.mdk [runtime.mdk] <file.mdk>"
 
 withTarget : String -> <IO> Unit
 withTarget targetPath = match readFile targetPath

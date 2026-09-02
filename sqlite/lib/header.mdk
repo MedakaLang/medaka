@@ -24,15 +24,14 @@ import byteparser.{
 }
 
 -- | The parsed header fields the read path uses.
-public export data DbHeader =
-  | DbHeader {
-      pageSize : Int,
-      pageCount : Int,
-      encoding : Int,
-      reserved : Int,
-      schemaCookie : Int,
-      readVersion : Int,
-    }
+public export data DbHeader = DbHeader {
+  pageSize : Int,
+  pageCount : Int,
+  encoding : Int,
+  reserved : Int,
+  schemaCookie : Int,
+  readVersion : Int,
+}
 
 export
 headerPageSize : DbHeader -> Int
@@ -57,10 +56,24 @@ headerReadVersion h = h.readVersion
 -- The expected magic bytes: "SQLite format 3\000".
 export
 magicBytes : List Int
-magicBytes =
-  [ 83, 81, 76, 105, 116, 101, 32  -- "SQLite "
-  , 102, 111, 114, 109, 97, 116    -- "format"
-  , 32, 51, 0 ]                    -- " 3\000"
+magicBytes = [
+  83,
+  81,
+  76,
+  105,
+  116,
+  101,
+  32,  -- "SQLite "
+  102,
+  111,
+  114,
+  109,
+  97,
+  116,  -- "format"
+  32,
+  51,
+  0,
+]  -- " 3\000"
 
 -- | Compare a parsed byte list with the expected magic; fail with a message.
 checkMagic : List Int -> ByteParser Unit
@@ -72,7 +85,7 @@ checkMagic got =
 -- Structural equality on List Int (avoids importing list/core derive here).
 listIntEq : List Int -> List Int -> Bool
 listIntEq [] [] = True
-listIntEq (x::xs) (y::ys) = if x == y then listIntEq xs ys else False
+listIntEq (x :: xs) (y :: ys) = if x == y then listIntEq xs ys else False
 listIntEq _ _ = False
 
 -- | The header parser: reads and validates the 100-byte header.
@@ -106,26 +119,24 @@ parseHeader = do
   encoding <- beUint 4  -- offset 56
   _ <- takeBytes 40  -- offsets 60..99: remainder of header
   let pageSize = if rawPageSize == 1 then 65536 else rawPageSize
-  pure
-    DbHeader {
-      pageSize = pageSize,
-      pageCount = pageCount,
-      encoding = encoding,
-      reserved = reserved,
-      schemaCookie = schemaCookie,
-      readVersion = readVer,
-    }
+  pure DbHeader {
+    pageSize = pageSize,
+    pageCount = pageCount,
+    encoding = encoding,
+    reserved = reserved,
+    schemaCookie = schemaCookie,
+    readVersion = readVer,
+  }
 
 -- | Render a parsed header (or error) as "pageSize|pageCount|encoding" for
 --   doctests.
 export
 showHeader : Result String DbHeader -> String
 showHeader (Err e) = "Err: \{e}"
-showHeader (Ok h) = stringConcat
-  [
-    intToString h.pageSize,
-    "|",
-    intToString h.pageCount,
-    "|",
-    intToString h.encoding,
-  ]
+showHeader (Ok h) = stringConcat [
+  intToString h.pageSize,
+  "|",
+  intToString h.pageCount,
+  "|",
+  intToString h.encoding,
+]

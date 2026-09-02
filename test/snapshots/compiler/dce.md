@@ -1,5 +1,5 @@
 # META
-source_lines=172
+source_lines=185
 stages=DESUGAR,MARK
 # SOURCE
 -- DEAD-CODE ELIMINATION for the native LLVM emit path (Stage 3 #2a).
@@ -51,10 +51,10 @@ dceFilter decls = filterReachable (reachableNames decls) decls
 -- `reach` is a HashMap-as-set, so `has` is O(1) average and this is O(#decls).
 filterReachable : HashMap String Unit -> List Decl -> List Decl
 filterReachable _ [] = []
-filterReachable reach ((DFunDef pub n ps body)::rest)
+filterReachable reach ((DFunDef pub n ps body) :: rest)
   | has n reach = DFunDef pub n ps body :: filterReachable reach rest
   | otherwise = filterReachable reach rest
-filterReachable reach (d::rest) = d :: filterReachable reach rest
+filterReachable reach (d :: rest) = d :: filterReachable reach rest
 
 -- ── prelude-reference canonicalization (post-mangle synthesized refs) ────────
 -- The emit drivers run `mangleUnits` BEFORE `elaborateModules`, renaming every
@@ -91,11 +91,11 @@ definedFnNamesInto [] _ = ()
 -- program `check` and `medaka run` both accept.  (Write the attribute above a
 -- SIGNATURE instead and it wraps the DSig, leaving the DFunDef bare — which is why
 -- this only reproduces on the no-signature form.)
-definedFnNamesInto ((DAttrib _ d)::rest) s = definedFnNamesInto (d::rest) s
-definedFnNamesInto ((DFunDef _ n _ _)::rest) s =
+definedFnNamesInto ((DAttrib _ d) :: rest) s = definedFnNamesInto (d :: rest) s
+definedFnNamesInto ((DFunDef _ n _ _) :: rest) s =
   let _ = setInPlace n () s
   definedFnNamesInto rest s
-definedFnNamesInto (_::rest) s = definedFnNamesInto rest s
+definedFnNamesInto (_ :: rest) s = definedFnNamesInto rest s
 
 -- ── reachability ───────────────────────────────────────────────────────────
 -- Transitive closure of the roots over the DFunDef call graph, collected into a
@@ -107,7 +107,8 @@ reachableNames decls =
   let defined = definedFnNames decls
   let graph = funGraph defined decls
   let seen = new ()
-  let _ = closure graph seen (map (canonRef defined) ("main" :: emittingRoots decls))
+  let _ =
+    closure graph seen (map (canonRef defined) ("main" :: emittingRoots decls))
   seen
 
 -- name -> refs(body) as a HashMap (multi-clause defs merged). O(1)
@@ -120,15 +121,24 @@ funGraph defined decls =
   let _ = funGraphInto defined decls g
   g
 
-funGraphInto : HashMap String Unit -> List Decl -> HashMap String (List String) -> Unit
+funGraphInto : HashMap String Unit ->
+  List Decl ->
+  HashMap String (List String) ->
+  Unit
 funGraphInto _ [] _ = ()
 -- #1037: see definedFnNamesInto — an attributed definition must still contribute
 -- its call-graph edges.
-funGraphInto defined ((DAttrib _ d)::rest) g = funGraphInto defined (d::rest) g
-funGraphInto defined ((DFunDef _ n ps body)::rest) g =
-  let _ = setInPlace n (map (canonRef defined) (declRefs (DFunDef False n ps body)) ++ findWithDefault [] n g) g
+funGraphInto defined ((DAttrib _ d) :: rest) g =
+  funGraphInto defined (d :: rest) g
+funGraphInto defined ((DFunDef _ n ps body) :: rest) g =
+  let _ =
+    setInPlace
+      n
+      (map (canonRef defined) (declRefs (DFunDef False n ps body))
+        ++ findWithDefault [] n g)
+      g
   funGraphInto defined rest g
-funGraphInto defined (_::rest) g = funGraphInto defined rest g
+funGraphInto defined (_ :: rest) g = funGraphInto defined rest g
 
 -- roots from emitting non-DFunDef decls: impl-method + interface-default bodies.
 -- (declRefs walks an impl's method bodies / an interface's default bodies; it is
@@ -137,7 +147,7 @@ funGraphInto defined (_::rest) g = funGraphInto defined rest g
 -- becoming roots.)
 emittingRoots : List Decl -> List String
 emittingRoots [] = []
-emittingRoots (d::rest)
+emittingRoots (d :: rest)
   | isEmittingDecl d = declRefs d ++ emittingRoots rest
   | otherwise = emittingRoots rest
 
@@ -164,9 +174,12 @@ isEmittingDecl _ = False
 -- refs.  `has` skips already-processed names, so every name is inserted once
 -- → O(reachable + edges) with O(1)-average membership and O(1) graph lookup.
 -- The resulting `seen` set is the same set the old list-based closure produced.
-closure : HashMap String (List String) -> HashMap String Unit -> List String -> Unit
+closure : HashMap String (List String) ->
+  HashMap String Unit ->
+  List String ->
+  Unit
 closure _ _ [] = ()
-closure graph seen (w::work)
+closure graph seen (w :: work)
   | has w seen = closure graph seen work
   | otherwise =
     let _ = setInPlace w () seen
