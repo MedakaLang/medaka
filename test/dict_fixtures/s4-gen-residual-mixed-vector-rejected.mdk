@@ -19,14 +19,14 @@
 -- concrete impl-head pattern against an unbound goal variable and so can only select an
 -- impl that is generic exactly where the goal is still free.
 --
--- ⚠️ THIS FIXTURE, NOT ITS LEGAL SIBLING, IS WHAT DRAINS ON THIS CHANGE.  The legal
--- cell of 1560 (`f 5 True`, whose correct answer is `w:int-bool` at exit 0) is still
--- blocked by a SEPARATE, PRE-EXISTING class: at a multi-parameter interface the
--- conditional impl's `requires` is routed to a NULL element dict, so the binary faults
--- regardless of this reduction.  Measured independently of every inference channel --
--- writing the context out by hand (`f : Conv a b => a -> b -> String`) faults identically
--- on a binary built from `main`.  That is issue 1318 / #1161 (a dict slot is a
--- PREDICATE, #607 item 3), and issue 1560's own pin is deliberately retained for it.
+-- This reject is one half of the #1560 drain.  Its legal sibling (`f 5 True`) is now
+-- covered by `s4-joint-residual-rdict-native.mdk`: the residual is one complete
+-- `Conv t u` predicate, the caller supplies exactly one dict, and that dict is forwarded
+-- as RDict to the conditional impl.  Evaluator, built native, scheme, and kept-IR
+-- assertions jointly pin `start` then `w:int-bool`; the direct multi-parameter control
+-- pins `start` then `int-bool`.  The old NULL element-dict failure was the shattered-slot
+-- consumer class retired by the predicate-slot carrier, so no must-fail pin remains.
+-- Keep this row as the reject/located-diagnostic half of the same semantic boundary.
 data Wrap a = Wrap a
 
 data NoConv = NoConv
