@@ -463,6 +463,20 @@ corpus = []
 toolchain = ["wasm-tools", "node>=24"]
 
 [[gate]]
+name = "pds/test/atsyntax_vectors"
+area = "engines"
+shard = "gates_8"
+project = "pds"
+tiers = ["merge"]
+cost = "medium"
+kind = "exec"
+run = "pds/test/atsyntax_vectors.sh"
+oracles = []
+sources = ["pds/*"]
+corpus = []
+toolchain = []
+
+[[gate]]
 name = "pds/test/car_vectors"
 area = "engines"
 shard = "gates_8"
@@ -617,6 +631,20 @@ corpus = []
 toolchain = []
 
 [[gate]]
+name = "pds/test/lexjson_vectors"
+area = "engines"
+shard = "gates_3"
+project = "pds"
+tiers = ["merge"]
+cost = "medium"
+kind = "exec"
+run = "pds/test/lexjson_vectors.sh"
+oracles = []
+sources = ["pds/*"]
+corpus = []
+toolchain = []
+
+[[gate]]
 name = "pds/test/mst_vectors"
 area = "engines"
 shard = "gates_8"
@@ -653,6 +681,22 @@ tiers = ["merge"]
 cost = "medium"
 kind = "exec"
 run = "pds/test/protocol_all_engines.sh"
+oracles = []
+sources = ["pds/*"]
+corpus = []
+toolchain = ["wasm-tools", "node>=24"]
+
+[[gate]]
+name = "pds/test/read_routes_all_engines"
+area = "engines"
+shard = "gates_1"
+project = "pds"
+tiers = ["merge"]
+# Repository-free by construction (see the script header): no signing, so the
+# eval arm is seconds, not the >10-minute band #2181 removed from this project.
+cost = "medium"
+kind = "exec"
+run = "pds/test/read_routes_all_engines.sh"
 oracles = []
 sources = ["pds/*"]
 corpus = []
@@ -1465,7 +1509,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_check_batch"
 area = "types"
-shard = "gates_2"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1633,7 +1677,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_core_ir_prelude"
 area = "eval"
-shard = "gates_7"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1717,7 +1761,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_diagnostics"
 area = "types"
-shard = "gates_2"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1787,7 +1831,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_stdlib_conventions"
 area = "tools"
-shard = "gates_7"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1815,7 +1859,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_effect_hole"
 area = "infra"
-shard = "gates_7"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1907,6 +1951,20 @@ kind = "exec"
 run = "test/diff_compiler_eval_json.sh"
 oracles = []
 sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_eval_json.sh"]
+corpus = ["test/error_quality_fixtures"]
+toolchain = []
+
+[[gate]]
+name = "diff_compiler_error_quality_baseline"
+area = "diagnostics"
+shard = "gates_2"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+run = "test/diff_compiler_error_quality_baseline.sh"
+oracles = []
+sources = ["compiler/frontend/*", "compiler/types/*", "compiler/eval/*", "compiler/backend/*", "compiler/driver/diagnostics.mdk", "test/error_quality_fixtures/capture.sh", "test/diff_compiler_error_quality_baseline.sh"]
 corpus = ["test/error_quality_fixtures"]
 toolchain = []
 
@@ -2515,7 +2573,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_os_entropy"
 area = "infra"
-shard = "gates_2"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2641,7 +2699,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_project_enrolment"
 area = "soundness"
-shard = "gates_6"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2935,7 +2993,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_snapshot_frontend"
 area = "frontend"
-shard = "gates_8"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3847,7 +3905,7 @@ name = "gates_1"
 full_cores = true
 wasm_arm = true
 rationale = "test/gate_shards/gates_1.txt"
-pinned_gates = ["pds/test/protocol_all_engines", "diff_compiler_engines", "diff_compiler_rejection_parity"]
+pinned_gates = ["pds/test/protocol_all_engines", "pds/test/read_routes_all_engines", "diff_compiler_engines", "diff_compiler_rejection_parity"]
 
 [[shard]]
 name = "gates_2"

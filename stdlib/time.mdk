@@ -138,7 +138,7 @@ public export data DateTime =
       minute : Int,
       second : Int,
     }
-deriving (Eq, Ord, Debug)
+  deriving (Eq, Ord, Debug)
 
 -- Days since 1970-01-01 for a civil (y, m, d).  Hinnant's days_from_civil.
 daysFromCivil : Int -> Int -> Int -> Int

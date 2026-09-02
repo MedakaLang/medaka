@@ -599,10 +599,10 @@ fi
 # whole point of `engines` is WHICH gates are on it (diff_compiler_engines needs
 # a whole runner; the other two ride along for the same wasm toolchain), and a
 # check that counted three members would pass a swap.
-if grep -q '^pinned_gates = \["pds/test/protocol_all_engines", "diff_compiler_engines", "diff_compiler_rejection_parity"\]$' "$TMP/real_before.toml"; then
-  ok "the real engines row declares its three pinned gates, by name"
+if grep -q '^pinned_gates = \["pds/test/protocol_all_engines", "pds/test/read_routes_all_engines", "diff_compiler_engines", "diff_compiler_rejection_parity"\]$' "$TMP/real_before.toml"; then
+  ok "the real engines row declares its four pinned gates, by name"
 else
-  bad "test/gates.toml's engines row does not declare the expected three pinned gates"
+  bad "test/gates.toml's engines row does not declare the expected four pinned gates"
   grep -n 'pinned_gates' "$TMP/real_before.toml" | sed -e 's/^/        /'
 fi
 

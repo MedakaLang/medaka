@@ -2,7 +2,13 @@
 
    The router consumes an already framed HTTP request. Successful requests
    become typed calls; every failure owns a deterministic standard JSON HTTP
-   response and cannot carry a dispatchable call. -}
+   response and cannot carry a dispatchable call.
+
+   Two atproto paths are NOT XRPC methods — `/.well-known/did.json` and
+   `/.well-known/atproto-did` — and they are routed here, as their own
+   `WellKnown` class, rather than beside the seam: `handle`/`handleBytes` see
+   one router and one `Store` transition for every path a client can ask for.
+   Everything else outside `/xrpc/` remains a 404. -}
 
 import json.{Json, Json(..), jObject, stringify}
 import string.{fromUtf8, toUtf8}
@@ -48,12 +54,27 @@ export data Endpoint = Endpoint String EndpointKind
 -- bounds duplicate admission and lookup even though both preserve order.
 export data Registry = Registry (List Endpoint)
 
+{- | The two atproto paths that are NOT XRPC methods and therefore have no
+   NSID at all: `/.well-known/did.json` (this PDS's own did:web document) and
+   `/.well-known/atproto-did` (the hosted account's DID as bare text).
+
+   They are a route CLASS of their own rather than a synthesized NSID: an NSID
+   is what the registry is keyed by and what `validateNsid` admits, and neither
+   path is one. Routing them as a fake NSID would put an unadmittable name in
+   the one table whose invariant is that every key passed NSID admission. -}
+public export data WellKnown = WellKnownDidDocument | WellKnownAtprotoDid
+
+{- | One dispatchable route the router produced. Five of the six arms are XRPC
+   methods keyed by an admitted NSID; `WellKnownCall` is the non-XRPC
+   well-known class, which carries no NSID and no query parameters (both
+   well-known paths are defined to take none). -}
 public export data XrpcCall =
   | QueryCall String (List QueryParam)
   | ProcedureNoInputCall String (List QueryParam)
   | ProcedureJsonCall String (List QueryParam) Json
   | ProcedureTextCall String (List QueryParam) MediaType String
   | ProcedureRawCall String (List QueryParam) MediaType (Array Int)
+  | WellKnownCall WellKnown
 
 export data XrpcFailure = XrpcFailure Int String String Response
 
@@ -182,18 +203,42 @@ hasPrefix input prefix i =
 slice : Array Int -> Int -> Int -> Array Int
 slice input start size = arrayMakeWith size (i => input[start + i])
 
-data XrpcPath = NonXrpcPath | InvalidXrpcPath | XrpcPath String
+{- | The path classification the router routes on. `NonXrpcPath` is the
+   residual: every path that is neither under `/xrpc/` nor one of the two
+   well-knowns, and it is still a 404. -}
+data XrpcPath =
+  | NonXrpcPath
+  | InvalidXrpcPath
+  | XrpcPath String
+  | WellKnownPath WellKnown
+
+didDocumentPath : String
+didDocumentPath = "/.well-known/did.json"
+
+atprotoDidPath : String
+atprotoDidPath = "/.well-known/atproto-did"
 
 xrpcPath : String -> XrpcPath
 xrpcPath path =
   let bytes = toUtf8 path
   let prefix = toUtf8 "/xrpc/"
-  if not (hasPrefix bytes prefix 0) then
+  if path == didDocumentPath then
+    WellKnownPath WellKnownDidDocument
+  else if path == atprotoDidPath then
+    WellKnownPath WellKnownAtprotoDid
+  else if not (hasPrefix bytes prefix 0) then
     NonXrpcPath
   else if arrayLength bytes == arrayLength prefix then
     InvalidXrpcPath
   else
     XrpcPath (fromUtf8 (slice bytes (arrayLength prefix) (arrayLength bytes - arrayLength prefix)))
+
+-- | The one request path each well-known route class is reached at. This is
+-- the single spelling of both paths; routing and handlers share it.
+export
+wellKnownPath : WellKnown -> String
+wellKnownPath WellKnownDidDocument = didDocumentPath
+wellKnownPath WellKnownAtprotoDid = atprotoDidPath
 
 hasBodyFraming : List Header -> Bool
 hasBodyFraming [] = False
@@ -349,12 +394,25 @@ routeEndpoint (Endpoint nsid SubscriptionEndpoint) request _ =
   else
     notImplemented "XRPC subscription is not implemented: \{nsid}"
 
+{- | Both well-knowns are plain GETs with no request body and no query
+   parameters; they are graded exactly as a query endpoint is, minus the
+   registry lookup they cannot have. -}
+routeWellKnown : WellKnown -> Request -> RouteResult
+routeWellKnown wellKnown request =
+  if requestMethod request /= "GET" then
+    methodNotAllowed "atproto well-known paths require GET"
+  else if requestBodyLength request > 0 || hasBodyFraming (requestHeaders request) then
+    invalidRequest "atproto well-known paths do not accept request body framing"
+  else
+    RouteCall (WellKnownCall wellKnown)
+
 -- | Route one fully framed request through the immutable structural registry.
 export
 routeRequest : Registry -> Request -> RouteResult
 routeRequest (Registry endpoints) request = match parseTargetQuery request
   Err _ => invalidRequest "Invalid XRPC query parameters"
   Ok (path, params) => match xrpcPath path
+    WellKnownPath wellKnown => routeWellKnown wellKnown request
     NonXrpcPath => notFound "XRPC route not found"
     InvalidXrpcPath => invalidRequest "Invalid XRPC method path"
     XrpcPath nsid => match validateNsid nsid

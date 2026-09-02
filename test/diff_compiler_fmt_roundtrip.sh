@@ -26,10 +26,18 @@
 # fixture corpora (test/fmt_fixtures, test/parse_fixtures) — the broadest round-trip
 # sweep any fmt gate in this tree runs.
 #
+# Two further invariants over that same corpus, both #2159:
+#   IDEMPOTENCY   — fmt(fmt(x)) must equal fmt(x) byte-for-byte (a second fmt pass on
+#                   fmt's own output must be a no-op).
+#   NO TRAILING WS — fmt's own canonical output must never end a line in a space/tab.
+# Both route through the same known-divergence ledger as the AST-fidelity check
+# below, since it is keyed by file path, not by which invariant diverges.
+#
 # Usage:  sh test/diff_compiler_fmt_roundtrip.sh [files...]
-# Exit:   0 every file's parse-before == parse-after (and at least one file was
-#         checked); 1 a mismatch, OR zero files checked (a gate that runs nothing
-#         must FAIL, not pass); 2 an oracle binary is missing.
+# Exit:   0 every file's parse-before == parse-after AND fmt is idempotent AND fmt's
+#         output has no trailing whitespace (and at least one file was checked);
+#         1 a mismatch, OR zero files checked (a gate that runs nothing must FAIL,
+#         not pass); 2 an oracle binary is missing.
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -147,25 +155,60 @@ for f in $files; do
     exit 1
   fi
 
+  # IDEMPOTENCY: fmt(fmt(x)) must equal fmt(x) byte-for-byte — a formatter that keeps
+  # reshaping its own output on every re-run never converges, so the pre-commit hook's
+  # forced fmt pass would keep dirtying files that a human already ran fmt on (#2159).
+  twice="$WORKDIR/$n.twice.mdk"
+  "$FMT" "$formatted" 2>/dev/null > "$twice"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf 'FAIL %s: fmt_main crashed (exit %d) re-formatting the formatted output (idempotency pass)\n' "$rel" "$rc"
+    exit 1
+  fi
+  idem_ok=1
+  cmp -s "$formatted" "$twice" || idem_ok=0
+
+  # NO TRAILING HORIZONTAL WHITESPACE: fmt's own canonical output must never end a
+  # line in a space or tab (#2159) — trailing whitespace fmt introduces itself cannot
+  # be blamed on the input.
+  ws_lines="$(grep -nE '[ 	]+$' "$formatted" 2>/dev/null)"
+  ws_ok=1
+  [ -z "$ws_lines" ] || ws_ok=0
+
+  ast_ok=1
+  [ "$before" = "$after" ] || ast_ok=0
+
   if is_known "$rel"; then
     seen_known="$seen_known $rel"
-    if [ "$before" = "$after" ]; then
-      # Accidental fix: a ledgered divergence now round-trips clean. FAIL loudly so
-      # the ledger cannot silently retain a fixed entry.
+    if [ "$ast_ok" -eq 1 ] && [ "$idem_ok" -eq 1 ] && [ "$ws_ok" -eq 1 ]; then
+      # Accidental fix: a ledgered divergence now round-trips clean on every checked
+      # invariant. FAIL loudly so the ledger cannot silently retain a fixed entry.
       fail=$((fail + 1))
-      printf 'FAIL %s — known divergence (#142) now passes: remove it from test/fmt_roundtrip_known_divergence.txt and close the tracking issue\n' "$rel"
+      printf 'FAIL %s — known divergence (#142) now passes AST/idempotency/whitespace: remove it from test/fmt_roundtrip_known_divergence.txt and close the tracking issue\n' "$rel"
     else
       kdiv=$((kdiv + 1))
       kdiv_names="$kdiv_names $rel"
+      [ "$ast_ok" -eq 1 ] || printf '  (known) %s: AST divergence\n' "$rel"
+      [ "$idem_ok" -eq 1 ] || printf '  (known) %s: fmt is not idempotent\n' "$rel"
+      [ "$ws_ok" -eq 1 ] || printf '  (known) %s: trailing whitespace in fmt output\n' "$rel"
     fi
-  elif [ "$before" = "$after" ]; then
+  elif [ "$ast_ok" -eq 1 ] && [ "$idem_ok" -eq 1 ] && [ "$ws_ok" -eq 1 ]; then
     pass=$((pass + 1))
   else
     fail=$((fail + 1))
-    printf 'FAIL %s (fmt round-trip changed the AST — not in the known-divergence ledger)\n' "$rel"
-    printf '%s\n' "$before" > "$WORKDIR/$n.before.sexp"
-    printf '%s\n' "$after" > "$WORKDIR/$n.after.sexp"
-    diff -u "$WORKDIR/$n.before.sexp" "$WORKDIR/$n.after.sexp" | sed 's/^/    /'
+    if [ "$ast_ok" -eq 0 ]; then
+      printf 'FAIL %s (fmt round-trip changed the AST — not in the known-divergence ledger)\n' "$rel"
+      printf '%s\n' "$before" > "$WORKDIR/$n.before.sexp"
+      printf '%s\n' "$after" > "$WORKDIR/$n.after.sexp"
+      diff -u "$WORKDIR/$n.before.sexp" "$WORKDIR/$n.after.sexp" | sed 's/^/    /'
+    fi
+    if [ "$idem_ok" -eq 0 ]; then
+      printf 'FAIL %s (fmt is not idempotent: fmt(fmt(x)) != fmt(x) — not in the known-divergence ledger)\n' "$rel"
+      diff -u "$formatted" "$twice" | sed 's/^/    /'
+    fi
+    if [ "$ws_ok" -eq 0 ]; then
+      printf 'FAIL %s (fmt output has trailing horizontal whitespace — not in the known-divergence ledger)\n' "$rel"
+      printf '%s\n' "$ws_lines" | sed 's/^/    /'
+    fi
   fi
 done
 

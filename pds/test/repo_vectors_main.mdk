@@ -320,7 +320,7 @@ runHostile did secret repo path presentRecord =
   let missingPrev = mustEncode (DcMap (removeField "prev" fields))
   let badVersion = mustEncode (DcMap (setField "version" (DcInt 2) fields))
   let badSig = mustEncode (DcMap (setField "sig" (DcBytes (arrayMake 64 0)) fields))
-  let tampered = 
+  let tampered =
     let bytes = arrayCopy signed
     let () = A.setInPlace (arrayLength bytes - 1) (bitXor bytes[arrayLength bytes - 1] 1) bytes
     bytes

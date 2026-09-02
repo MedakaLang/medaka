@@ -1,8 +1,11 @@
 # A self-hosted atproto PDS in Medaka
 
-**Status:** ACTIVE (2026-08-29) — Phases 0–2 are complete in the current tree.
-Phase 3 is next, but remains gated on the Async v2 runtime arc (#500) and the
-graded-interface implementation work (#823/#824).
+**Status:** ACTIVE (2026-09-01) — Phases 0–2 are complete in the current tree,
+and so is the PURE half of Phase 4 (#1697): the nine atproto record/sync/identity
+endpoints and the two well-known paths, all as pure `Store -> Response`
+functions. Phase 3 is next, but remains gated on the Async v2 runtime arc (#500)
+and the graded-interface implementation work (#823/#824); everything left in
+Phase 4 is the part that needs it.
 
 A Personal Data Server for the AT Protocol, written in Medaka, hosted on the
 dev box behind Caddy. This is simultaneously the most demanding Medaka program
@@ -355,12 +358,31 @@ overlap, and on **#823/#824** for the `do` surface every handler is written in. 
 accept loop over the async net surface, the request lifecycle, connection lifetime and
 timeouts. Small by construction — Phase 2 left it nothing but wiring.
 
-**Phase 4 — a standalone PDS.** `did:web` identity document, account bootstrap,
-`createSession`/`refreshSession` and JWT signing (reusing Phase 0), record CRUD
-(`createRecord`/`putRecord`/`deleteRecord`/`getRecord`/`listRecords`/`applyWrites`),
-blob upload and retrieval, `com.atproto.sync.getRepo`/`getLatestCommit`/`listBlobs`,
-`resolveHandle`, and the well-knowns. Deployed behind Caddy under systemd. **This is
-the first phase with a running, useful artifact.**
+**Phase 4 — a standalone PDS.** *Pure half COMPLETE in the current tree
+(#1697); the rest is Phase-3-gated.*
+
+Shipped, all in `pds/lib/handlers.mdk` as pure functions over the Phase-2 seam:
+record CRUD `createRecord`/`putRecord`/`deleteRecord`/`getRecord`/`listRecords`
+(with `limit`/`reverse`/`cursor`), `describeRepo`,
+`com.atproto.sync.getRepo`/`getLatestCommit`,
+`com.atproto.identity.resolveHandle`, the `did:web` identity document at
+`/.well-known/did.json`, and `/.well-known/atproto-did`. The two well-knowns are
+their own explicitly-typed route class in `pds/lib/xrpc.mdk`, not synthesized
+NSIDs, and reach the handler through the same `routeRequest`/`handle` seam as
+every XRPC method. `sync.getRepo` returns `repoExportCar`'s bytes verbatim,
+graded byte-for-byte against the provenance-pinned corpus.
+
+Deliberately NOT shipped in the pure half, and each refused rather than faked:
+authentication of any kind (there is none — the pure core is not safe to expose
+as it stands), lexicon record validation (`validate: true` is refused),
+`describeRepo`'s `didDoc` (no DID resolver, so any document would be invented),
+`sync.getRepo`'s `since` (no incremental sync), and `validationStatus`.
+
+Still owed, and Phase-3-gated: account bootstrap,
+`createSession`/`refreshSession` and JWT signing (reusing Phase 0),
+`applyWrites`, blob upload/retrieval and `com.atproto.sync.listBlobs`,
+multi-repository and blob-storage policy, and deployment behind Caddy under
+systemd. **That is the first point with a running, useful artifact.**
 
 **Phase 4.5 — read-only web view** (P13). Repo, collections, and individual records
 rendered as HTML from the same process and router. No new protocol surface; makes the

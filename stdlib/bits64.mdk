@@ -28,7 +28,7 @@ import core.{Ordering}
    first: `U64 l0 l1 l2 l3` is `l0 + l1 * 2^16 + l2 * 2^32 + l3 * 2^48`. -}
 public export data U64 =
   | U64 Int Int Int Int
-deriving (Eq, Debug, Display, Hashable)
+  deriving (Eq, Debug, Display, Hashable)
 
 -- # Construction
 

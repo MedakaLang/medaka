@@ -1,7 +1,7 @@
 cmd: medaka check
 exit: 1
 ---
-test/error_quality_fixtures/typecheck/do_bind_nested_explicit_andthen.mdk:15:15: 'andThen' expects a container (like List or Array) here, but got Bool. Pass a List or Array, or convert the Bool to one first.
+error: test/error_quality_fixtures/typecheck/do_bind_nested_explicit_andthen.mdk:15:15: 'andThen' expects a container (like List or Array) here, but got Bool. Pass a List or Array, or convert the Bool to one first.
   |
 15 |   x <- andThen badBool (y => Ok 1)
   |                ^
