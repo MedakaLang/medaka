@@ -1,6 +1,6 @@
 // medaka_lang.js — wires the hand-written Medaka tokenizer (medaka_tokenizer.js)
 // into a CodeMirror 6 StreamLanguage, and defines a dark HighlightStyle matching
-// the playground palette (bg #0d1117 / text #c9d1d9, accents #e2b96f / #58a6ff).
+// the playground palette (bg #0e1320 / text #d6dde8, accents #5fd38f / #8ab4ff).
 //
 // Imports CodeMirror through the `codemirror` bare specifier resolved by the
 // import-map in index.html to the vendored single-ESM bundle
@@ -19,6 +19,7 @@ const tokenTable = {
   character: tags.character,
   number: tags.number,
   typeName: tags.typeName,
+  constructor: tags.className,
   variableName: tags.variableName,
   operator: tags.operator,
   punctuation: tags.punctuation,
@@ -41,16 +42,17 @@ const medakaStream = StreamLanguage.define({
 
 // Dark highlight style — cohesive with the two named UI accents.
 export const medakaHighlightStyle = HighlightStyle.define([
-  { tag: tags.keyword, color: '#e2b96f' },
+  { tag: tags.keyword, color: '#5fd38f' },
   { tag: tags.comment, color: '#6e7781', fontStyle: 'italic' },
-  { tag: tags.string, color: '#7ee787' },
-  { tag: tags.character, color: '#7ee787' },
-  { tag: tags.special(tags.string), color: '#d2a8ff' },
-  { tag: tags.escape, color: '#d2a8ff' },
+  { tag: tags.string, color: '#f0c674' },
+  { tag: tags.character, color: '#f0c674' },
+  { tag: tags.special(tags.string), color: '#ffb86c' },
+  { tag: tags.escape, color: '#ffb86c' },
   { tag: tags.number, color: '#79c0ff' },
-  { tag: tags.bool, color: '#58a6ff' },
-  { tag: tags.typeName, color: '#58a6ff' },
-  { tag: tags.variableName, color: '#c9d1d9' },
+  { tag: tags.bool, color: '#8ab4ff' },
+  { tag: tags.typeName, color: '#8ab4ff' },
+  { tag: tags.className, color: '#d29cf5' },
+  { tag: tags.variableName, color: '#d6dde8' },
   { tag: tags.operator, color: '#a9b1ba' },
   { tag: tags.punctuation, color: '#8b949e' },
 ]);

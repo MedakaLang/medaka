@@ -50,7 +50,7 @@ Tutorial-style onboarding, not a spec. Not yet cross-linked into this index's st
 | [`09-modules-and-projects.md`](guide/09-modules-and-projects.md) | Modules & Projects | — |
 | [`10-tooling-and-workflow.md`](guide/10-tooling-and-workflow.md) | Tooling & Workflow | — |
 | [`OUTLINE.md`](guide/OUTLINE.md) | Medaka Guide — Outline | — |
-| [`haskell-ocaml-delta.md`](guide/haskell-ocaml-delta.md) | Medaka for Haskell and OCaml Readers | — |
+| [`haskell-ocaml-delta.md`](guide/haskell-ocaml-delta.md) | For Haskell and OCaml Readers | — |
 
 ### design — open/partial work
 

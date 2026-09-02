@@ -46,7 +46,7 @@ const escapeHtml = (s) =>
 // An unexpected class would produce a `tok-` span with no CSS rule, i.e. silent
 // under-highlighting, so it is refused loudly instead.
 const TOKEN_CLASSES = new Set([
-  'keyword', 'comment', 'string', 'character', 'number', 'typeName',
+  'keyword', 'comment', 'string', 'character', 'number', 'typeName', 'constructor',
   'variableName', 'operator', 'punctuation', 'bool', 'escape', 'interpolation',
 ]);
 
