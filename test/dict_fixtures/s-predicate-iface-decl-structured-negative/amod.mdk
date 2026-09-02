@@ -1,0 +1,13 @@
+import zmod.{bMeth}
+
+public export data Wrap a = Wrap a
+
+export interface Same a where
+  aMeth : a -> Int
+
+export impl Same (Wrap Int) where
+  aMeth _ = 100
+
+export
+badStructured : Same (Wrap a) => Wrap a -> Int
+badStructured x = bMeth x

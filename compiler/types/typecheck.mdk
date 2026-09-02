@@ -6944,6 +6944,8 @@ data CSlot = CSlot { csIface : IfaceRef, csId : Int }
 -- contribute every id in their argument vector.  This slice stores neither type: the
 -- live legacy producers below round-trip through it only as a migration audit.
 data PredicateSlotArgs = PSArgsUnknown | PSArgsKnown (List Mono)
+data PredicateRequest =
+  | PredicateRequest { prIface : IfaceRef, prArgs : PredicateSlotArgs }
 data PredicateSlot =
   | PredicateSlot {
       psIface : IfaceRef,
@@ -8311,7 +8313,7 @@ data PerRun = PerRun {
     -- lead argument alone (iface name, arg vector, dict param name).  A vector is the
     -- same predicate as another iff they have equal length and `monoSameGiven` holds at
     -- every position, in order — see `monoVecSameGiven`.
-    activeDictPreds : Ref (List (String, List Mono, String)),
+    activeDictPreds : Ref (List (PredicateSlot, String)),
     -- #1154 RESIDUAL: the impl-`requires` twin of `enclPreds`.  One entry per dict slot
     -- an impl's `requires` opens: the tyvar ids the slot is keyed on, and the WHOLE
     -- predicate that slot discharges.  `activeDictVars` above cannot answer a body's
@@ -11307,16 +11309,6 @@ dropN n xs
   | otherwise = match xs
     [] => []
     _::rest => dropN (n - 1) rest
-
--- dedup (iface, id) pairs, keeping first occurrence (so declared slots stay leading).
--- #242: routed through the canonical O(n·log n) `support.util.dedupBy` (was a
--- private O(n²) `List`-as-a-set scan).  The iface name is length-prefixed so the
--- key is injective for ANY name content.
-dedupPairs : List (String, Int) -> List (String, Int)
-dedupPairs xs = dedupBy slotKey xs
-
-slotKey : (String, Int) -> String
-slotKey (iface, id) = lenKey iface ++ intToString id
 
 -- U1b (#1482): the `CSlot` analogue's key.  ⚠️ Keyed on the interface SPELLING,
 -- deliberately — this key feeds the dedup that decides how many dict slots a constrained
@@ -18853,16 +18845,15 @@ firstDictForEncl id pfx ((eid, ename)::rest)
 -- the instantiated argument vector when the occurrence let one be recovered), NOT
 -- just the constraint var — see `enclDictVarOf`.  `None` reproduces the pre-#1177
 -- tyvar-keyed lookup exactly.
-activeDictVarOfEncl : Option Predicate -> Mono -> String -> Option String
-activeDictVarOfEncl goal m encl = match enclDictVarOf goal m encl
-  Some dname => Some dname
-  -- #1154 RESIDUAL: the impl-`requires` channel, asked by PREDICATE, between the
-  -- signature channel and the historical tyvar-id scan.  It answers only where an impl
-  -- `requires` slot of THIS method carries the goal's interface at the goal's variable;
-  -- everything else falls through to `activeDictVarForEncl` unchanged.
-  None => match implReqDictVarOf goal m encl
-    Some dname => Some dname
-    None => activeDictVarForEncl m encl
+activeDictVarOfEncl : Option PredicateRequest -> Mono -> String -> Option String
+activeDictVarOfEncl None m encl = activeDictVarForEncl m encl
+activeDictVarOfEncl (Some request) m encl =
+  -- A complete predicate request is terminal: a miss must not be overwritten by
+  -- the scalar tyvar-id registry, whose key cannot distinguish declarations or
+  -- complete argument vectors.  The None arm above is the legacy scalar control.
+  orElseOpt
+    (enclDictVarOf (Some request) m encl)
+    (implReqDictVarOf (Some request) m encl)
 
 -- 🚨 #1154 RESIDUAL: AN IMPL-`requires` SITE IS RESOLVED BY ITS PREDICATE, NOT BY ITS
 -- CONSTRAINT VAR'S ID — the same rule #1177 established for the SIGNATURE `=>` channel,
@@ -18883,31 +18874,25 @@ activeDictVarOfEncl goal m encl = match enclDictVarOf goal m encl
 -- the CONSUMPTION side, in which slot the impl BODY reads.  A fix aimed at the routing
 -- ladder would have moved nothing.
 --
--- ⚠️ FAILING TO MATCH FALLS BACK, deliberately, exactly as `enclSlotIndex` does: a goal
--- with no recoverable interface, a var no `requires` slot of this method is keyed on, or
--- an interface no entry names, all answer as they did before.  Two passes, most specific
--- first, for `enclSlotIndex`'s reason — a `requires` may name one interface twice at
--- different arguments (`Ix a Char, Ix a Bool`), where only the recorded vector separates
--- the two slots.
-implReqDictVarOf : Option Predicate -> Mono -> String -> Option String
+-- A complete request uses one exact pass.  A miss is terminal at
+-- `activeDictVarOfEncl`; only an explicit no-predicate route may consult scalar state.
+implReqDictVarOf : Option PredicateRequest -> Mono -> String -> Option String
 implReqDictVarOf None _ _ = None
-implReqDictVarOf (Some p) m encl
+implReqDictVarOf (Some request) m encl
   | encl == "" = None
   | otherwise = match normalize m
     TVar cell =>
       let entries = perRun.value.implReqPredicateSlots.value
       let pfx = "$dict_\{encl}_"
-      match implReqPick (tyvarId cell) p pfx True entries
-        Some dname => Some dname
-        None => implReqPick (tyvarId cell) p pfx False entries
-    TApp a _ => implReqDictVarOf (Some p) a encl
+      implReqPick (tyvarId cell) request pfx entries
+    TApp a _ => implReqDictVarOf (Some request) a encl
     _ => None
 
-implReqPick : Int -> Predicate -> String -> Bool -> List (String, PredicateSlot) -> Option String
-implReqPick _ _ _ _ [] = None
-implReqPick target p pfx needArgs ((dname, slot)::rest)
-  | startsWith pfx dname && containsI target slot.psBoundIds && slot.psIface.irName /= "" && slot.psIface.irName == p.iface.irName && (not needArgs || predArgsAgreeSameInstantiation p.args (predicateSlotKnownArgs slot.psArgs)) = Some dname
-  | otherwise = implReqPick target p pfx needArgs rest
+implReqPick : Int -> PredicateRequest -> String -> List (String, PredicateSlot) -> Option String
+implReqPick _ _ _ [] = None
+implReqPick target request pfx ((dname, slot)::rest)
+  | startsWith pfx dname && containsI target slot.psBoundIds && predicateRequestMatchesSlot request slot = Some dname
+  | otherwise = implReqPick target request pfx rest
 
 predicateSlotKnownArgs : PredicateSlotArgs -> List Mono
 predicateSlotKnownArgs PSArgsUnknown = []
@@ -18923,20 +18908,9 @@ predicateSlotKnownArgs (PSArgsKnown args) = args
 -- predicates — a meaning-preserving edit — moved the answer from 116 to the correct
 -- 227, on both engines, at exit 0, with `check --json` clean.
 --
--- The slots are id-parallel to `funConstraintIfacesRef` (both projections come off ONE
--- `CSlot` list, `setFunConstraintEntry`) and prefix-parallel to `funConstraintArgsRef`
--- (#1161 F-3a-ii), so the whole predicate of each slot is recoverable HERE without any
--- new table — see `enclPreds`.
---
--- ⚠️ FAILING TO MATCH FALLS BACK TO THE HISTORICAL FIRST-ID SCAN, deliberately, and
--- that is what keeps this change narrow.  A goal with no recoverable interface (a
--- top-level constrained call routed through EKNestedTop, a method absent from
--- `methodIfaceParamsRef`), a slot registered by `registerInferredFor` with an
--- unrecoverable iface (`""`), and a super slot appended past `pairSlots`' truncation
--- all answer exactly as they did before.  The ONLY sites whose answer moves are those
--- where a LATER slot at the same id carries the goal's interface and an earlier one
--- does not — i.e. precisely the #1177 shape.
-enclDictVarOf : Option Predicate -> Mono -> String -> Option String
+-- `funPredicateSlotsRef` carries the authoritative slots in order, so this lookup
+-- never has to reconstruct a predicate from parallel scalar tables.
+enclDictVarOf : Option PredicateRequest -> Mono -> String -> Option String
 enclDictVarOf goal m encl
   | encl == "" = None
   | otherwise = match normalize m
@@ -18948,115 +18922,48 @@ enclDictVarOf goal m encl
 -- the slot index [target]'s dict param sits at in [encl]'s own constraint slots:
 -- by PREDICATE when the goal supplies one and a slot answers it, else the historical
 -- first-tyvar-id match.
-enclSlotIndex : Option Predicate -> Int -> String -> Option Int
+enclSlotIndex : Option PredicateRequest -> Int -> String -> Option Int
 enclSlotIndex None target encl = indexOfId target (enclSlotIds encl)
-enclSlotIndex (Some p) target encl = match indexOfPred target p (enclPreds encl)
-  Some i => Some i
-  None => indexOfId target (enclSlotIds encl)
+enclSlotIndex (Some request) target encl =
+  indexOfPred target request (enclPreds encl)
 
 enclSlotIds : String -> List Int
 enclSlotIds encl =
   predicateSlotIdsAt encl perRun.value.funPredicateSlotsRef.value
 
 -- [encl]'s own constraint slots as PREDICATES, in slot order: each slot's interface
--- and the argument vector its signature recorded, paired with the tyvar id the slot
--- is keyed on.  `Predicate` is reused rather than a second n-ary shape invented.
--- The vector list is a PREFIX of the slots (`keptConstraintArgs`, and
--- `registerInferredFor` records `[]` for an unrecovered slot), so a slot past its end —
--- or one whose recorded vector is empty — gets `args = []`
--- — which `predArgsAgreeEncl` reads as "no vector to disambiguate on", never as a match.
+-- and the argument vector its signature recorded, paired with every bound tyvar id.
 enclPreds : String -> List PredicateSlot
 enclPreds encl =
   optionOr
     []
     (lookupPredicateSlots encl perRun.value.funPredicateSlotsRef.value)
 
--- TWO PASSES, MOST SPECIFIC FIRST, and the order is behaviour: a context may name one
--- interface twice over one variable at different arguments (`(Ix a Char, Ix a Bool)`),
--- where the iface alone cannot tell the two slots apart and only the recorded argument
--- vector can.  Pass 1 requires both; pass 2 requires the interface alone, which is what
--- answers #1177's `(Dbg a, Ix a Char)`.
-indexOfPred : Int -> Predicate -> List PredicateSlot -> Option Int
-indexOfPred target p preds = match indexOfPredGo 0 target p True preds
-  Some i => Some i
-  None => indexOfPredGo 0 target p False preds
+-- Stable one-pass predicate lookup.  Known/Known vector disagreement cannot downgrade
+-- to interface-only or scalar matching.
+indexOfPred : Int -> PredicateRequest -> List PredicateSlot -> Option Int
+indexOfPred target request preds = indexOfPredGo 0 target request preds
 
-indexOfPredGo : Int -> Int -> Predicate -> Bool -> List PredicateSlot -> Option Int
-indexOfPredGo _ _ _ _ [] = None
-indexOfPredGo i target p needArgs (sp::rest)
-  | containsI target sp.psBoundIds && sp.psIface.irName /= "" && sp.psIface.irName == p.iface.irName && (not needArgs || predArgsAgreeSameInstantiation p.args (predicateSlotKnownArgs sp.psArgs)) = Some i
-  | otherwise = indexOfPredGo (i + 1) target p needArgs rest
+indexOfPredGo : Int -> Int -> PredicateRequest -> List PredicateSlot -> Option Int
+indexOfPredGo _ _ _ [] = None
+indexOfPredGo i target request (sp::rest)
+  | containsI target sp.psBoundIds && predicateRequestMatchesSlot request sp =
+    Some i
+  | otherwise = indexOfPredGo (i + 1) target request rest
 
--- 🚨 S-nonlead-arg-identity (#1904) — THE ENCLOSING-SCOPE ROUTING RELATION, and it is
--- deliberately a SIBLING of `predArgsAgree` rather than a change to it.
---
--- THE CONTRACT ANSWER, for this channel: two argument vectors are the same predicate iff
--- they have equal length and, AT EVERY POSITION IN ORDER, either both sides normalize to
--- a type VARIABLE and those variables have the SAME tyvar id, or `monoHeadAgrees` holds
--- (head-tycon-wise, and only where both sides are ground).  The first disjunct is the new
--- half; the second is `predArgsAgree` unchanged.
---
--- WHY THE ID COMPARISON IS AVAILABLE HERE and not at `predArgsAgree`'s other caller.
--- `predArgsAgree`'s header states — correctly, for `implReqPick`'s impl-`requires`
--- channel — that its two vectors live in DIFFERENT instantiations, so a variable position
--- "carries no information here".  MEASURED, panic-instrumented at `indexOfPred`, on
--- `probes/p1904_both.mdk`: for a BODY occurrence of the ENCLOSING function's OWN declared
--- predicate the two vectors are in the SAME instantiation and the ids CORRESPOND —
--- `goal=Ix[v98,v100,v99] slots=[id98:Ix[v98,v99,v100]]`.  `declaredConstraintArgs`' own
--- header says why: `constraintVarIfaceMonos` (which mints the slot IDS) and
--- `constraintVarArgMonos` (which mints these VECTORS) are called on ONE signature
--- instantiation's `snd inst` in `preunifySigsEx`, so a slot's `csId` is literally one of
--- its own vector's tyvar ids — and `enclPreds`' subject is the ENCLOSING fn, always local,
--- so nothing re-instantiates between the recording and this lookup.
---
--- ⚠️ SCOPED NARROWER THAN `predArgsAgree` ON PURPOSE.  `indexOfPredGo` is reached only
--- from `indexOfPred` ← `enclSlotIndex` ← `enclDictVarOf`, i.e. only the enclosing-fn
--- channel the measurement covers.  `implReqPick`/`implReqDictVarOf` keep calling
--- `predArgsAgree`: that channel's vectors come from an impl's `requires` in the IMPL's
--- tyvar space, which this dispatch did NOT measure, and widening it on the unverified
--- assumption that the same correspondence holds is exactly what the header warns against.
---
--- WHAT IT FIXES: `(Ix a b c, Ix a c b)` is all-tyvar at every position, so
--- `monoHeadAgrees` returned `None`-agrees-with-everything at each one, pass 1 matched
--- SLOT 0 for both `ix n x y` and `ix n y x`, and the second dict slot the key half opens
--- was dead — `333 + 333 = 666` where the answer is `333 + 111 = 444`.
---
--- ⚠️ FAILING TO MATCH STILL FALLS BACK, exactly as before: a pass-1 miss drops to pass 2
--- (interface-only) and then to the historical first-id scan, so this can only ever move a
--- site that pass 1 was previously answering with a WRONG slot — never one it was
--- answering `None` for.  A goal whose position is an unsolved variable with an id from a
--- genuinely different instantiation stops matching in pass 1 and is answered by pass 2,
--- i.e. by the interface alone, which is where such a goal sat before `predArgsAgree`
--- existed at all.
-predArgsAgreeSameInstantiation : List Mono -> List Mono -> Bool
-predArgsAgreeSameInstantiation [] _ = False
-predArgsAgreeSameInstantiation _ [] = False
-predArgsAgreeSameInstantiation gs vs
-  | listLen gs /= listLen vs = False
-  | otherwise = argPosAgreeEncl gs vs
+-- The single request/slot routing relation.  Declaration identity is complete and
+-- fail-closed.  Known vectors compare recursively at every position; interface-only
+-- compatibility is available only when at least one side explicitly says Unknown.
+predicateRequestMatchesSlot : PredicateRequest -> PredicateSlot -> Bool
+predicateRequestMatchesSlot request slot = request.prIface.irName /= ""
+  && slot.psIface.irName /= ""
+  && sameIfaceDecl request.prIface slot.psIface
+  && predicateRequestArgsMatch request.prArgs slot.psArgs
 
-argPosAgreeEncl : List Mono -> List Mono -> Bool
-argPosAgreeEncl (g::gs) (v::vs) = monoPosAgreesEncl g v && argPosAgreeEncl gs vs
-argPosAgreeEncl _ _ = True
-
--- ONE position of the relation above: TWO VARIABLES compare by IDENTITY (the
--- `monoSameGiven` `TVar`/`TVar` arm, which is what makes this the same notion of "same
--- predicate" slice 2 landed on the given channel); every other pairing — including a
--- variable against a ground type, where the instantiations genuinely may not line up —
--- keeps `monoHeadAgrees`' permissive head-tycon rule verbatim.
-monoPosAgreesEncl : Mono -> Mono -> Bool
-monoPosAgreesEncl a b = match normalize a
-  TVar c1 => match normalize b
-    TVar c2 => tyvarId c1 == tyvarId c2
-    _ => monoHeadAgrees a b
-  _ => monoHeadAgrees a b
-
-monoHeadAgrees : Mono -> Mono -> Bool
-monoHeadAgrees a b = match headTyconNameMono a
-  None => True
-  Some x => match headTyconNameMono b
-    None => True
-    Some y => x == y
+predicateRequestArgsMatch : PredicateSlotArgs -> PredicateSlotArgs -> Bool
+predicateRequestArgsMatch (PSArgsKnown requestArgs) (PSArgsKnown slotArgs) =
+  monoVecSameGiven requestArgs slotArgs
+predicateRequestArgsMatch _ _ = True
 
 -- #1177: the predicate a METHOD occurrence discharges — the interface [name] is
 -- declared by, plus its full instantiated type-parameter vector when [fullMono] lets
@@ -19073,21 +18980,23 @@ monoHeadAgrees a b = match headTyconNameMono a
 -- origin — so nothing selects differently today.  What it buys is that the goal side
 -- is no longer laundered through `OriginUnresolved`, which is the precondition for
 -- re-keying those two comparators onto `sameTyConHead`.
-goalPredOf : String -> Mono -> Option Predicate
-goalPredOf name fullMono = map
-  (ifr => Predicate {
-    iface = ifr,
-    args = optionOr [] (ifaceParamMonos name fullMono),
-  })
-  (admittedIfaceFor name)
+goalPredOf : String -> Mono -> Option PredicateRequest
+goalPredOf name fullMono =
+  let args = match ifaceParamMonos name fullMono
+    Some xs => PSArgsKnown xs
+    None => PSArgsUnknown
+  map
+    (ifr => PredicateRequest { prIface = ifr, prArgs = args })
+    (admittedIfaceFor name)
 
 -- the operator/unop form: the node carries one operand mono, not a method occurrence,
 -- so no argument vector is recoverable (`stampOpRouteVal` says the same).  Every
 -- operator interface is single-param anyway, so the interface alone is the predicate.
 -- Same SLICE-1 supply as `goalPredOf` above, same table, same reasoning.
-goalPredOfOp : String -> Option Predicate
-goalPredOfOp name =
-  map (ifr => Predicate { iface = ifr, args = [] }) (admittedIfaceFor name)
+goalPredOfOp : String -> Option PredicateRequest
+goalPredOfOp name = map
+  (ifr => PredicateRequest { prIface = ifr, prArgs = PSArgsUnknown })
+  (admittedIfaceFor name)
 
 -- Phase 151 / Gap G: stamp each comparison/equality OPERATOR site's EBinOp route
 -- ref with the resolved Eq/Ord impl key (RKey) — but ONLY when the operand type
@@ -19217,13 +19126,12 @@ resolveOpSites isBinop implTable ((PendingEntry method tagRef operandMono encl k
 -- So `-x` on an impl's own abstract `requires`-bound tyvar stays on the structural
 -- builtin (RNone) via a top-level fn's own declared constraint slot, never
 -- activeDictVarOf — a residual, not a regression (mirrors the `++` residual exactly).
-opDictVarOf : Bool -> String -> Mono -> Bool -> String -> Option String
-opDictVarOf True "append" m _ encl =
-  enclDictVarOf (goalPredOfOp "append") m encl
-opDictVarOf True name m inImpl encl
+opDictVarOf : Option PredicateRequest -> Bool -> String -> Mono -> Bool -> String -> Option String
+opDictVarOf request True "append" m _ encl = enclDictVarOf request m encl
+opDictVarOf request True _ m inImpl encl
   | inImpl = activeDictVarOf m
-  | otherwise = enclDictVarOf (goalPredOfOp name) m encl
-opDictVarOf False name m _ encl = enclDictVarOf (goalPredOfOp name) m encl
+  | otherwise = enclDictVarOf request m encl
+opDictVarOf request False _ m _ encl = enclDictVarOf request m encl
 
 -- #156 S3c: a thin adapter over `entail` (EKOp kind).  `entail`'s ladder IS this
 -- resolver's ladder: assum = opDictVarOf → RDict; inst = stampOpRouteVal (builtin head →
@@ -24117,56 +24025,46 @@ entail implTable name m encl kind = match entailAssum m encl name kind
 -- because it recurses to the spine head and a structured subject has a TCon there.
 -- Strictly additive: every goal the tyvar path already answers routes exactly as before.
 entailAssum : Mono -> String -> String -> EntailKind -> Option String
-entailAssum m encl name kind = match entailAssumVar m encl name kind
-  Some dname => Some dname
-  None => match ifaceOfMethodName name
-    Some iface => activeDictPredOf iface (goalVecOfKind name m kind) encl
-    None => None
+entailAssum m encl name kind =
+  let request = goalRequestOfKind name kind
+  match entailAssumVar request m encl name kind
+    Some dname => Some dname
+    None => match request
+      Some req => activeDictPredOf req m encl
+      None => None
 
--- #1956: the GOAL PREDICATE's whole argument vector at this site, which is what the
--- vector-keyed given registry is keyed on.  Each arm is the SAME projection `entailInst`
--- selects its impl row on, one rung down the ladder — so the rung that ANSWERS a goal
--- from an in-scope dict and the rung that SELECTS an impl for it ask about one and the
--- same predicate.  Reading `m` alone here is #1956: `m` is a single position (the
--- discriminating mono), and a multi-parameter predicate is not identified by it.
---   * EKReturn / EKArg — `ifaceParamMonos`, exactly `entailInst`'s `paramMonos`/`goals`,
---     falling back to `[m]` when the method has no registered interface (unchanged
---     single-position behaviour for a plain `=>`-constrained fn).
---   * EKNestedTop — `m::rest`: the kind stores only the TAIL past arg 0 on purpose (arg
---     0 lives in `entail`'s own [m] so the two copies cannot drift), and `entailInst`'s
---     own arm reassembles it the same way for `keyForSiteByIface`.
---   * EKOp — `[m]`: an operator node carries one operand mono and no method occurrence,
---     so no vector is recoverable; every operator interface is single-param anyway
---     (`goalPredOfOp` and `stampOpRouteVal` say the same).
-goalVecOfKind : String -> Mono -> EntailKind -> List Mono
-goalVecOfKind name m (EKReturn fullMono _) =
-  optionOr [m] (ifaceParamMonos name fullMono)
-goalVecOfKind name m (EKArg fullMono) =
-  optionOr [m] (ifaceParamMonos name fullMono)
-goalVecOfKind _ m (EKNestedTop _ _ _ _ rest) = m::rest
-goalVecOfKind _ m (EKOp _ _) = [m]
+goalRequestOfKind : String -> EntailKind -> Option PredicateRequest
+goalRequestOfKind name (EKReturn fullMono _) = goalPredOf name fullMono
+goalRequestOfKind name (EKArg fullMono) = goalPredOf name fullMono
+goalRequestOfKind name (EKOp _ _) = goalPredOfOp name
+goalRequestOfKind _ (EKNestedTop _ _ _ _ _) = None
 
 -- assum: which in-scope dict-param (if any) does [m]'s head constraint var read?  The
 -- genuine/arg kinds prefer the enclosing method's own slot (activeDictVarOfEncl); the
 -- nested/top kind uses the plain encl-aware lookup (activeDictVarForEncl); the op kind
 -- routes through opDictVarOf (isBinop/inImpl-keyed, needs the method [name]).  [name] is
 -- ignored by the non-op kinds.
-entailAssumVar : Mono -> String -> String -> EntailKind -> Option String
+entailAssumVar : Option PredicateRequest -> Mono -> String -> String -> EntailKind -> Option String
 -- #1177: the genuine/arg kinds now hand `activeDictVarOfEncl` the site's PREDICATE —
 -- [name]'s interface plus the vector `ifaceParamMonos` recovers from the kind's own
 -- full occurrence mono, the SAME vector `entailInst` selects the impl row on — so the
 -- slot the body reads and the impl the site dispatches to answer one question.  The
 -- nested/top kind keeps `activeDictVarForEncl` (no predicate: [name] there is a
 -- constrained FUNCTION, not a method occurrence).
-entailAssumVar m encl name (EKReturn fullMono _) =
-  activeDictVarOfEncl (goalPredOf name fullMono) m encl
-entailAssumVar m encl _ (EKNestedTop iface _ _ _ rest) = match activeFunDictPredOf iface.irName (m::rest) encl
+entailAssumVar request m encl _ (EKReturn _ _) =
+  activeDictVarOfEncl request m encl
+entailAssumVar _ m encl _ (EKNestedTop iface _ _ _ rest) = match activeFunDictPredOf (PredicateRequest { prIface = iface, prArgs = PSArgsKnown (m::rest) }) encl
   Some dname => Some dname
-  None => activeDictVarForEncl m encl
-entailAssumVar m encl name (EKArg fullMono) =
-  activeDictVarOfEncl (goalPredOf name fullMono) m encl
-entailAssumVar m encl name (EKOp isBinop inImpl) =
-  opDictVarOf isBinop name m inImpl encl
+  -- #1318 residual: EKNestedTop can still carry OriginUnresolved (#1507).  Preserve
+  -- its pre-migration spelling fallback until that producer has declaration identity.
+  None => match activeFunDictPredOfResidual iface.irName (m::rest) encl
+    Some dname => Some dname
+    None => activeDictVarForEncl m encl
+entailAssumVar request m encl _ (EKArg _) = activeDictVarOfEncl request m encl
+entailAssumVar request m encl name (EKOp isBinop inImpl) =
+  -- #1318 residual: the in-impl non-append operator arm in opDictVarOf retains its
+  -- historical scalar bypass; fixing its parameter-offset contract is later work.
+  opDictVarOf request isBinop name m inImpl encl
 
 entailAssumRoute : String -> EntailKind -> Route
 entailAssumRoute dname (EKReturn _ isRp) =
@@ -26648,8 +26546,45 @@ inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (Metho
   -- Registering BEFORE inference recorded the pre-unification id; the in-body
   -- site could become the surviving root instead, so activeDictVarOf missed it →
   -- RNone → `'++' requires Semigroup`.  Mirrors registerImplRequires's ordering.
-  registerMethodDictSlots mname 0 ids (snd inst)
+  let _ = registerMethodDictSlots mname 0 ids (snd inst)
+  -- The predicate-keyed twin of the scalar registrations above.  Instantiate the
+  -- authoritative method carrier with this very default-body substitution, then
+  -- publish the same slots into the lexical given registry before route resolution.
+  -- A complete request miss is terminal, so this carrier is not optional.
+  let slots = methodLevelPredicateSlots
+    typarams
+    mty
+    (instantiateNamedMonos (snd st) (snd inst))
+  registerSlotPredGivens mname 0 slots
 inferDefaultMethod _ _ _ _ _ = ()
+
+instantiateNamedMonos : List (String, Mono) -> List (Int, Mono) -> List (String, Mono)
+instantiateNamedMonos [] _ = []
+instantiateNamedMonos ((name, mono)::rest) subst =
+  (name, substMono subst [] mono) :: instantiateNamedMonos rest subst
+
+methodLevelPredicateSlots : List String -> Ty -> List (String, Mono) -> List PredicateSlot
+methodLevelPredicateSlots typarams (TyConstrained cs t) tvMap = flatMap (methodLevelPredicateSlot typarams tvMap) cs
+  ++ methodLevelPredicateSlots typarams t tvMap
+methodLevelPredicateSlots typarams (TyEffect _ _ t) tvMap =
+  methodLevelPredicateSlots typarams t tvMap
+methodLevelPredicateSlots _ _ _ = []
+
+methodLevelPredicateSlot : List String -> List (String, Mono) -> Constraint -> List PredicateSlot
+methodLevelPredicateSlot typarams tvMap c
+  | isEmptyL (constraintNonParamVars typarams c) = []
+  | otherwise =
+    let args = map (fromAstType tvMap) c.constraintArgs
+    [
+      PredicateSlot {
+        psIface = IfaceRef {
+          irName = constraintIface c,
+          irOrigin = c.constraintOrigin,
+        },
+        psArgs = PSArgsKnown args,
+        psBoundIds = dedupI (flatMap monoTyvarIds args),
+      }
+    ]
 
 -- Infer a default method body against [expectedTy], suppressing this unify if the
 -- body itself already detected a type error (GATE S2).  Medaka ACCUMULATES rather
@@ -27472,10 +27407,9 @@ checkOneCallObligation deferNonGround univ iface occs loc =
   -- presence half is what #1539 owns.
   else if iface.irName == "Num" && not (builtinClassPresent BNum) then ()
   -- #838 I4: the ONE per-channel branch (see checkCallObligations).  IMPL channel
-  -- (deferNonGround) defers a non-ground obligation unconditionally — byte-identical to
-  -- the retired checkOneImplObligation step 7; its genuine ambiguities arrive via the
-  -- CALL channel (registerAmbiguousConstraints → PCallSlot).  CALL channel runs the
-  -- RULE 2/3 undetermined-var analysis.
+  -- (deferNonGround) defers a non-ground obligation unconditionally; the signed-body
+  -- coverage census below verifies that its complete predicate is declared.  CALL
+  -- channel runs the RULE 2/3 undetermined-var analysis.
   else if not (allConcreteHeads args) then
     if deferNonGround then () else checkUndeterminedObligations univ iface args loc
   -- 🚨 #1867 (S1): A TRUNCATED GOAL IS UNDER-DETERMINED, NOT DECIDABLE HERE.
@@ -28557,6 +28491,14 @@ inferImplMethod env allProg iface implTvMap headMonos (ImplMethod mname pats bod
     -- the route, so register the var → dict-param mapping here (AFTER body inference,
     -- so each var is its surviving union-find root, mirroring registerMethodDictSlots).
     let _ = registerImplMethodDicts mname ifaceParams mty extraMap
+    -- Complete-predicate twin: specialized default copies and explicit impl methods
+    -- publish the method-level slots from THIS body instantiation.  The generic
+    -- default's carrier belongs to a distinct tyvar population and cannot answer a
+    -- Known request under recursive mono identity.
+    let _ = registerSlotPredGivens
+      mname
+      0
+      (methodLevelPredicateSlots ifaceParams mty extraMap)
     -- #837: schemeObligationsRef restore RETIRED (see snapshot site above).
     perRun.value.inRigidityBodyRef := False
     perRun.value.currentImplBody := False
@@ -29201,7 +29143,8 @@ registerReqSlots mname implTvMap slot ((Require { requireHead = iface, requireAr
   let argMonos = map (a => fromAstType implTvMap a) rargs
   let ids = flatMap monoTyvarIds argMonos
   let _ = registerEachActive ids (dictParamName mname slot)
-  let _ = registerPredGiven iface argMonos (dictParamName mname slot)
+  let reqIface = IfaceRef { irName = iface, irOrigin = ro }
+  let _ = registerPredGiven reqIface argMonos (dictParamName mname slot)
   -- #1154 RESIDUAL: record the WHOLE predicate beside the ids, in the SAME op that
   -- registers them, so the two can never be written apart (`setFunConstraintEntry`'s
   -- rule, one channel over).  `registerPredGiven` above cannot serve this: it is
@@ -29249,20 +29192,9 @@ registerReqSlots mname implTvMap slot ((Require { requireHead = iface, requireAr
 -- would, and this is deliberately not unification.  Pinned by
 -- test/build_diff_fixtures/impl_requires_structured_rigid_control.mdk.
 --
--- ⚠️ STRUCTURED vectors ONLY (the `allList monoIsBareTyvar` guard — a vector EVERY one of
--- whose positions is a bare tyvar registers nothing) — a MINIMALITY guard, kept because
--- the all-bare case buys nothing and costs surface, not because a gate caught it.  A
--- bare-tyvar
--- given (`requires S a`) is already answered by `activeDictVars`, which `entailAssum`
--- consults FIRST, so registering it here could only ever produce a second answer to an
--- already-answered goal.  It would also opt that goal into this registry's one sharp edge:
--- `monoSameGiven` compares TVar to TVar by ID, and ids here are not unique forever — see
--- the G4 note at `currentImplBody` ("an operand could normalize to an unsolved tyvar whose
--- id collides with a stale activeDictVars entry left by a previously-inferred impl"), which
--- `activeDictVarOf` is scope-gated against by the `inImpl` flag and this lookup is not.
--- A STRUCTURED subject is matched head-first down a TCon spine, so it answers only a goal
--- of the same shape at the same interface, and the id comparison is reached only after that
--- shape already agrees.
+-- All-bare impl `requires` vectors stay on the historical scalar path.  Function
+-- carriers have a distinct Known-slot writer (`registerSlotPredGivens`) because their
+-- complete multi-parameter identity is required by EKNestedTop.
 --
 -- ⚠️ #1956 WIDENS THAT SHARP EDGE TO MORE POSITIONS, and does not introduce a new one.
 -- A vector like `[Wrap a, b]` is admitted because SOME position is structured, but its
@@ -29273,14 +29205,18 @@ registerReqSlots mname implTvMap slot ((Require { requireHead = iface, requireAr
 -- which is why this is a widening of an existing hazard rather than a new one.  Removing
 -- it is the same scoped-projection question `activeDictVarOf`'s `inImpl` gate answers,
 -- and belongs with the key-side work (#1904), not here.
-registerPredGiven : String -> List Mono -> String -> Unit
+registerPredGiven : IfaceRef -> List Mono -> String -> Unit
 registerPredGiven _ [] _ = ()
 registerPredGiven iface args dname
   | allList monoIsBareTyvar args = ()
-  | otherwise = perRun.value.activeDictPreds := (iface, args, dname)::perRun.value.activeDictPreds.value
+  | otherwise =
+    let slot = PredicateSlot {
+      psIface = iface,
+      psArgs = PSArgsKnown args,
+      psBoundIds = dedupI (flatMap monoTyvarIds args),
+    }
+    perRun.value.activeDictPreds := (slot, dname)::perRun.value.activeDictPreds.value
 
--- True iff [m] normalizes to a bare type VARIABLE (the given shape `activeDictVars`
--- already covers). `TApp`/`TCon`/`TFun` are the STRUCTURED shapes it cannot see.
 monoIsBareTyvar : Mono -> Bool
 monoIsBareTyvar m = match normalize m
   TVar _ => True
@@ -29331,33 +29267,71 @@ monoVecSameGiven _ _ = False
 
 -- assum lookup over the predicate-keyed givens: the in-scope dict param holding evidence
 -- for `iface subject`.  PREFERS the entry owned by the enclosing method [encl] (`$dict_
--- <encl>_<slot>`) for exactly the reason `activeDictVarForEncl` does: registerImplRequires
--- registers every method of an impl against the SAME given, so a global first-match would
--- return whichever method registered LAST — a dict param out of scope in this body.
-activeDictPredOf : String -> List Mono -> String -> Option String
-activeDictPredOf iface goalArgs encl =
+-- <encl>_<slot>`) for exactly the reason `activeDictVarForEncl` does.
+activeDictPredOf : PredicateRequest -> Mono -> String -> Option String
+activeDictPredOf request targetMono encl =
   let preds = perRun.value.activeDictPreds.value
-  match firstPredForEncl iface goalArgs "$dict_\{encl}_" preds
+  let local = if encl == "" then None
+  else match request.prArgs
+    PSArgsKnown _ => firstPredForEncl request "$dict_\{encl}_" preds
+    PSArgsUnknown => match predicateTargetId targetMono
+      Some target => firstPredForEnclAt target request "$dict_\{encl}_" preds
+      None => None
+  match local
     Some dname => Some dname
-    None => firstPredForEncl iface goalArgs "" preds
+    None => match request.prArgs
+      PSArgsKnown _ => firstPredForEncl request "" preds
+      PSArgsUnknown => match predicateTargetId targetMono
+        Some target => firstPredForEnclAt target request "" preds
+        None => None
+
+predicateTargetId : Mono -> Option Int
+predicateTargetId m = match normalize m
+  TVar cell => Some (tyvarId cell)
+  TApp a _ => predicateTargetId a
+  _ => None
 
 -- Function-carrier predicate evidence is lexical to [encl].  Unlike activeDictPredOf,
 -- this lookup deliberately has no global fallback: activeDictPreds accumulates across
 -- functions, so an unscoped hit could route stale evidence from a different body.
-activeFunDictPredOf : String -> List Mono -> String -> Option String
-activeFunDictPredOf _ _ "" = None
-activeFunDictPredOf iface goalArgs encl =
+activeFunDictPredOf : PredicateRequest -> String -> Option String
+activeFunDictPredOf _ "" = None
+activeFunDictPredOf request encl =
   firstPredForEncl
-    iface
-    goalArgs
+    request
     ("$dict_" ++ encl ++ "_")
     perRun.value.activeDictPreds.value
 
-firstPredForEncl : String -> List Mono -> String -> List (String, List Mono, String) -> Option String
-firstPredForEncl _ _ _ [] = None
-firstPredForEncl iface goalArgs pfx ((eiface, eargs, ename)::rest)
-  | eiface == iface && startsWith pfx ename && monoVecSameGiven eargs goalArgs = Some ename
-  | otherwise = firstPredForEncl iface goalArgs pfx rest
+firstPredForEncl : PredicateRequest -> String -> List (PredicateSlot, String) -> Option String
+firstPredForEncl _ _ [] = None
+firstPredForEncl request pfx ((slot, ename)::rest)
+  | startsWith pfx ename && predicateRequestMatchesSlot request slot =
+    Some ename
+  | otherwise = firstPredForEncl request pfx rest
+
+firstPredForEnclAt : Int -> PredicateRequest -> String -> List (PredicateSlot, String) -> Option String
+firstPredForEnclAt _ _ _ [] = None
+firstPredForEnclAt target request pfx ((slot, ename)::rest)
+  | containsI target slot.psBoundIds && startsWith pfx ename && predicateRequestMatchesSlot request slot = Some ename
+  | otherwise = firstPredForEnclAt target request pfx rest
+
+-- Explicit #1318 EKNestedTop residual: this is the one spelling-keyed lookup retained
+-- for a producer that can still supply OriginUnresolved.  Complete method requests do
+-- not reach it.
+activeFunDictPredOfResidual : String -> List Mono -> String -> Option String
+activeFunDictPredOfResidual _ _ "" = None
+activeFunDictPredOfResidual iface args encl =
+  firstPredForEnclResidual
+    iface
+    args
+    ("$dict_" ++ encl ++ "_")
+    perRun.value.activeDictPreds.value
+
+firstPredForEnclResidual : String -> List Mono -> String -> List (PredicateSlot, String) -> Option String
+firstPredForEnclResidual _ _ _ [] = None
+firstPredForEnclResidual iface args pfx ((slot, ename)::rest)
+  | slot.psIface.irName == iface && startsWith pfx ename && predicateRequestArgsMatch (PSArgsKnown args) slot.psArgs = Some ename
+  | otherwise = firstPredForEnclResidual iface args pfx rest
 
 -- the interface a method NAME belongs to, for the predicate-keyed assum lookup.  A
 -- non-method [name] (a top-level constrained call routed through EKNestedTop) is absent
@@ -31223,12 +31197,6 @@ registerEachActiveId (id::rest) dname =
 -- that no selector call may be reachable from `entailAssum`.  This restores an EARLIER
 -- rung's ability to answer; it does not re-select.
 --
--- Strictly ADDITIVE by construction, via `registerPredGiven`'s own two guards: a
--- bare-tyvar context (`Shw a => …`) hits `monoIsBareTyvar` and registers nothing (the
--- tyvar-id path above still answers it byte-identically), and a multi-parameter predicate
--- (`Ix a Char => …`) misses the `[subject]` pattern and registers nothing.  Only a
--- STRUCTURED SINGLE-SUBJECT context gains an answer it did not have.
---
 -- [slot] counts dict params the way `registerMemberSlots`' `kept` does, so the nth kept
 -- slot gets `dictParamName m n`.  The vector list is legitimately a PREFIX of the slots
 -- (`keptConstraintArgs` stops when its input runs out — see `setFunConstraintEntry`), so
@@ -31236,14 +31204,53 @@ registerEachActiveId (id::rest) dname =
 registerSlotPredGivens : String -> Int -> List PredicateSlot -> Unit
 registerSlotPredGivens _ _ [] = ()
 registerSlotPredGivens m slot (s::srest) =
-  let _ = registerFunPredGiven s.psIface.irName s.psArgs (dictParamName m slot)
+  let _ = registerFunPredGiven s (dictParamName m slot)
   registerSlotPredGivens m (slot + 1) srest
 
-registerFunPredGiven : String -> PredicateSlotArgs -> String -> Unit
-registerFunPredGiven _ PSArgsUnknown _ = ()
-registerFunPredGiven iface (PSArgsKnown args) dname =
-  perRun.value.activeDictPreds :=
-    (iface, args, dname)::perRun.value.activeDictPreds.value
+registerFunPredGiven : PredicateSlot -> String -> Unit
+registerFunPredGiven slot dname
+  | slot.psIface.irName == "" = ()
+  | otherwise =
+    registerFunPredGivenSlots (predicateSlotSelfAndSupers slot) dname
+
+registerFunPredGivenSlots : List PredicateSlot -> String -> Unit
+registerFunPredGivenSlots [] _ = ()
+registerFunPredGivenSlots (slot::rest) dname =
+  perRun.value.activeDictPreds := (slot, dname)::perRun.value.activeDictPreds.value
+  registerFunPredGivenSlots rest dname
+
+-- A dictionary supplied for one predicate also supplies every transitive
+-- superinterface.  This is routing-only: all aliases retain the SAME dict parameter,
+-- so it does not alter dict arity.  Unlike `expandSupersVecs`, this closure is ungated
+-- because prelude chains (`Thenable` -> `Applicative` -> `Mappable`) are evidence too.
+-- Unknown vectors stay direct-only: projecting a superclass argument without the
+-- sub-predicate's positional vector would invent identity.
+predicateSlotSelfAndSupers : PredicateSlot -> List PredicateSlot
+predicateSlotSelfAndSupers slot = slot :: predicateSlotKnownSupers slot
+
+predicateSlotKnownSupers : PredicateSlot -> List PredicateSlot
+predicateSlotKnownSupers slot = match slot.psArgs
+  PSArgsUnknown => []
+  PSArgsKnown args => match ifaceSupersOf driverState.value.superDeclsRef.value slot.psIface.irName
+    None => []
+    Some (typarams, supers) => if listLen args /= listLen typarams then []
+    else
+      let direct = flatMap (predicateSuperSlot (zipL typarams args)) supers
+      direct ++ flatMap predicateSlotKnownSupers direct
+
+predicateSuperSlot : List (String, Mono) -> Super -> List PredicateSlot
+predicateSuperSlot subst (Super { superHead = superName, superParams = params, superOrigin = so }) =
+  let mapped = filterMaybeMonos (map (p => lookupAssoc p subst) params)
+  if listLen mapped /= listLen params then
+    []
+  else
+    [
+      PredicateSlot {
+        psIface = IfaceRef { irName = superName, irOrigin = so },
+        psArgs = PSArgsKnown mapped,
+        psBoundIds = dedupI (flatMap monoTyvarIds mapped),
+      }
+    ]
 
 -- Pass B: infer each member's clauses, unifying with its placeholder.
 -- Phase 73 (bidirectional, signature-driven parameter typing): a member WITH a
@@ -31845,7 +31852,7 @@ oblArgKey m = match normalize m
 -- dedup, and the declared set is a handful of entries, so it stays a scan.
 containsVecObl : VecObl -> List VecObl -> Bool
 containsVecObl _ [] = False
-containsVecObl o (o2::rest) = o.voIface.irName == o2.voIface.irName && eqIntList o.voIds o2.voIds
+containsVecObl o (o2::rest) = sameIfaceDecl o.voIface o2.voIface && eqIntList o.voIds o2.voIds
   || containsVecObl o rest
 
 eqIntList : List Int -> List Int -> Bool
@@ -32379,13 +32386,14 @@ goalDefersOpenWorld iface args = not (monoVectorClosed args)
 -- exit 0.  The invariant is that this gate admits EXACTLY what that registry can answer.
 goalMatchesGiven : IfaceRef -> List Mono -> Bool
 goalMatchesGiven _ [] = False
-goalMatchesGiven iface args =
-  anyGivenMatches iface.irName args perRun.value.activeDictPreds.value
+goalMatchesGiven iface args = anyGivenMatches
+  PredicateRequest { prIface = iface, prArgs = PSArgsKnown args }
+  perRun.value.activeDictPreds.value
 
-anyGivenMatches : String -> List Mono -> List (String, List Mono, String) -> Bool
-anyGivenMatches _ _ [] = False
-anyGivenMatches iface args ((eiface, eargs, _)::rest) = eiface == iface && monoVecSameGiven eargs args
-  || anyGivenMatches iface args rest
+anyGivenMatches : PredicateRequest -> List (PredicateSlot, String) -> Bool
+anyGivenMatches _ [] = False
+anyGivenMatches request ((slot, _)::rest) = predicateRequestMatchesSlot request slot
+  || anyGivenMatches request rest
 
 -- COULD a given for this goal still be registered, once the enclosing binding finishes
 -- generalizing?  Both conditions are `registerPredGiven`'s own, because it is the only
@@ -32605,14 +32613,13 @@ boundTyvarIds boundIds (d::rest) = match normalize d
 schemeIds : Scheme -> List Int
 schemeIds (Forall ids _ _) = ids
 
--- shatter vector obligations into (iface, id) pairs — the currency of the
+-- shatter vector obligations into (interface declaration, id) pairs — the currency of the
 -- coverage subset test.  See checkSigConstraintCoverage's header.
--- ⚠️ Drops to the SPELLING currency on purpose — the coverage (subset) test compares
--- an INFERRED constraint against a DECLARED one written in the same signature, which is
--- a "did you write this down" question, not an identity question.
-pairsOfVecObls : List VecObl -> List (String, Int)
+-- A signed body's inferred predicate is covered only by the same interface declaration;
+-- same spelling from a foreign module is not evidence.
+pairsOfVecObls : List VecObl -> List (IfaceRef, Int)
 pairsOfVecObls [] = []
-pairsOfVecObls (o::rest) = map (id => (o.voIface.irName, id)) o.voIds
+pairsOfVecObls (o::rest) = map (id => (o.voIface, id)) o.voIds
   ++ pairsOfVecObls rest
 
 -- ── signature-constraint soundness check ─────────────────────────────────────
@@ -32654,7 +32661,7 @@ checkSigConstraintOne regs sigs sigTvMaps callObls addedObls m sch = match omLoo
     let inferredA = pairsOfVecObls (schemeObligationsOf (schemeIds sch) addedObls)
     let inferredFwd = pairsOfVecObls (forwardedVecObls (schemeIds sch) callObls)
     let inferredB = inferredIfacePairs m (schemeIds sch)
-    let inferred = dedupPairs (inferredA ++ inferredFwd ++ inferredB)
+    let inferred = dedupIfacePairs (inferredA ++ inferredFwd ++ inferredB)
     let _ = reportUncovered m sigTvMaps declaredPairs inferred
     let declaredVecs = censusSuperCloseVec driverState.value.superDeclsRef.value (declaredSchemeOblsFor sigTvMaps m (schemeIds sch))
     let inferredVecs = schemeObligationsOf (schemeIds sch) addedObls ++ forwardedVecObls (schemeIds sch) callObls
@@ -32662,21 +32669,21 @@ checkSigConstraintOne regs sigs sigTvMaps callObls addedObls m sch = match omLoo
 
 -- inferred (iface, id) pairs from the marked path: each inferred constraint var id
 -- paired with its recovered iface (skip an id whose iface can't be recovered).
-inferredIfacePairs : String -> List Int -> List (String, Int)
+inferredIfacePairs : String -> List Int -> List (IfaceRef, Int)
 inferredIfacePairs m boundIds =
   flatMap (pairIface m) (inferredConstraintIds m boundIds)
 
-pairIface : String -> Int -> List (String, Int)
+pairIface : String -> Int -> List (IfaceRef, Int)
 pairIface m id =
   let ir = ifaceForInferredId m id
   match ir.irName
     "" => []
-    iface => [(iface, id)]
+    _ => [(ir, id)]
 
 -- the declared (iface, id) constraint pairs of member m: each declared constraint
 -- mono normalized to its surviving tyvar id (single-param shape; concrete-grounded
 -- constraints — no tyvar — carry no dict slot and are skipped).
-declaredPairsFor : String -> List (String, List (IfaceRef, List Mono), List (List Mono)) -> List (String, Int)
+declaredPairsFor : String -> List (String, List (IfaceRef, List Mono), List (List Mono)) -> List (IfaceRef, Int)
 declaredPairsFor m regs = flatMap declaredPairOne (regIfaceMonosFor m regs)
 
 -- #1161 (F-3a-ii): a reg is a triple, so its (iface, mono) component needs a named
@@ -32703,38 +32710,32 @@ regIfaceMonosOf (_, ims, _) = ims
 ifaceMonoName : (IfaceRef, List Mono) -> List (String, Mono)
 ifaceMonoName (ir, monos) = map (mono => (ir.irName, mono)) monos
 
-declaredPairOne : (IfaceRef, List Mono) -> List (String, Int)
-declaredPairOne (iface, monos) =
-  map (id => (iface.irName, id)) (abstractSlotIds monos)
+declaredPairOne : (IfaceRef, List Mono) -> List (IfaceRef, Int)
+declaredPairOne (iface, monos) = map (id => (iface, id)) (abstractSlotIds monos)
 
 -- UNGATED transitive super-closure over declared (iface, id) slots — mirrors
 -- expandSupersPairs but WITHOUT the userIfaceNamesRef gate, so prelude super chains
 -- (Applicative requires Mappable, Thenable requires Applicative, …) are included.
 -- (The gated expandSupersPairs stays user-only because its slots drive dict arity;
 -- this closure only feeds the read-only subset test, so gating is not needed here.)
-censusSuperClose : List Decl -> List (String, Int) -> List (String, Int)
+censusSuperClose : List Decl -> List (IfaceRef, Int) -> List (IfaceRef, Int)
 censusSuperClose allDecls declared =
   censusSuperCloseFix allDecls declared declared
 
-censusSuperCloseFix : List Decl -> List (String, Int) -> List (String, Int) -> List (String, Int)
+censusSuperCloseFix : List Decl -> List (IfaceRef, Int) -> List (IfaceRef, Int) -> List (IfaceRef, Int)
 censusSuperCloseFix allDecls acc frontier =
-  let next = dedupPairs (acc ++ flatMap (censusSuperSlotsOf allDecls) frontier)
+  let next = dedupIfacePairs (acc ++ flatMap (censusSuperSlotsOf allDecls) frontier)
   if listLen next == listLen acc then
     acc
   else
     censusSuperCloseFix allDecls next (dropN (listLen acc) next)
 
--- ⚠️ Drops each super slot back to the SPELLING currency (`csIface.irName`): this
--- closure only feeds the read-only coverage subset test, which asks "did the signature
--- declare this", not an identity question.  See `pairsOfVecObls`.
-censusSuperSlotsOf : List Decl -> (String, Int) -> List (String, Int)
-censusSuperSlotsOf allDecls (iface, id) = match ifaceSupersOf allDecls iface
+censusSuperSlotsOf : List Decl -> (IfaceRef, Int) -> List (IfaceRef, Int)
+censusSuperSlotsOf allDecls (iface, id) = match ifaceSupersOf allDecls iface.irName
   None => []
   Some (typarams, supers) =>
     let subst = zipL typarams (replicate (listLen typarams) id)
-    map
-      (sl => (sl.csIface.irName, sl.csId))
-      (flatMap (superSlotOf subst) supers)
+    map (sl => (sl.csIface, sl.csId)) (flatMap (superSlotOf subst) supers)
 
 -- #619/#607 item 4: VECTOR-valued transitive super-closure over declared constraint
 -- vectors.  Unlike censusSuperClose (which collapses each predicate to per-arg pairs),
@@ -32783,22 +32784,22 @@ superSlotVecOf subst (Super { superHead = superName, superParams = params, super
 -- of the vector's args (allPairsIn False) — so a genuinely absent constraint reports
 -- ONCE, via reportUncovered, and only the cross-pairing (all args present, joint
 -- vector absent) reports here.  Arity < 2 is fully handled by the pair test.
-reportUncoveredVec : String -> List (String, Ty, List (String, Mono)) -> List (String, Int) -> List VecObl -> List VecObl -> Unit
+reportUncoveredVec : String -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, Int) -> List VecObl -> List VecObl -> Unit
 reportUncoveredVec _ _ _ _ [] = ()
 reportUncoveredVec m sigTvMaps declaredPairs declaredVecs (o::rest) =
   let _ = if listLen o.voIds < 2 then
     ()
   else if containsVecObl o declaredVecs then
     ()
-  else if not (allPairsIn o.voIface.irName o.voIds declaredPairs) then
+  else if not (allPairsIn o.voIface o.voIds declaredPairs) then
     ()
   else
     pushTypeError "T-MISSING-CONSTRAINT" (missingConstraintVecMsg m o.voIface.irName (map (varNameForId sigTvMaps m) o.voIds))
   reportUncoveredVec m sigTvMaps declaredPairs declaredVecs rest
 
-allPairsIn : String -> List Int -> List (String, Int) -> Bool
+allPairsIn : IfaceRef -> List Int -> List (IfaceRef, Int) -> Bool
 allPairsIn iface ids declaredPairs =
-  allList (id => containsPair (iface, id) declaredPairs) ids
+  allList (id => containsIfacePair (iface, id) declaredPairs) ids
 
 missingConstraintVecMsg : String -> String -> List String -> String
 missingConstraintVecMsg name iface varNames =
@@ -32806,19 +32807,26 @@ missingConstraintVecMsg name iface varNames =
   "Could not deduce '\{pred}' from the signature of '\{name}'. Its body requires it; add '\{pred} =>' to the declared type"
 
 -- one type_error per inferred (iface, id) not covered by the declared-closed set.
-reportUncovered : String -> List (String, Ty, List (String, Mono)) -> List (String, Int) -> List (String, Int) -> Unit
+reportUncovered : String -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, Int) -> List (IfaceRef, Int) -> Unit
 reportUncovered _ _ _ [] = ()
 reportUncovered m sigTvMaps declared ((iface, id)::rest) =
-  let _ = if containsPair (iface, id) declared then
+  let _ = if containsIfacePair (iface, id) declared then
     ()
   else
-    pushTypeError "T-MISSING-CONSTRAINT" (missingConstraintMsg m iface (varNameForId sigTvMaps m id))
+    pushTypeError "T-MISSING-CONSTRAINT" (missingConstraintMsg m iface.irName (varNameForId sigTvMaps m id))
   reportUncovered m sigTvMaps declared rest
 
-containsPair : (String, Int) -> List (String, Int) -> Bool
-containsPair _ [] = False
-containsPair (i, d) ((i2, d2)::rest) = i == i2 && d == d2
-  || containsPair (i, d) rest
+containsIfacePair : (IfaceRef, Int) -> List (IfaceRef, Int) -> Bool
+containsIfacePair _ [] = False
+containsIfacePair (i, d) ((i2, d2)::rest) = sameIfaceDecl i i2 && d == d2
+  || containsIfacePair (i, d) rest
+
+dedupIfacePairs : List (IfaceRef, Int) -> List (IfaceRef, Int)
+dedupIfacePairs xs = dedupBy ifacePairKey xs
+
+ifacePairKey : (IfaceRef, Int) -> String
+ifacePairKey (iface, id) = regKeyRender (regKeyOfTab (oblIfaceKey iface))
+  ++ intToString id
 
 -- recover the sig-tyvar NAME for a constraint var id (for a readable message);
 -- falls back to "a" if the id isn't found among the member's sig tyvars.

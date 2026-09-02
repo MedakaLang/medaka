@@ -1,0 +1,6 @@
+import reexport.{Same}
+import reexport.*
+
+export
+reexportValue : Int
+reexportValue = reexported 1

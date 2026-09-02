@@ -1,0 +1,19 @@
+-- Predicate-order twin of s3-implreq-nested-positional-identity.mdk.
+data W a b c = W a b c
+
+interface Ix a b where
+  ix : a -> b -> Int
+
+impl Ix Int (List Char) where
+  ix _ _ = 300
+
+impl Ix Int (List Bool) where
+  ix _ _ = 100
+
+interface Sz s where
+  sz : s -> Int
+
+impl Sz (W a b c) requires Ix a (List c), Ix a (List b) where
+  sz (W n x y) = ix n [x] + ix n [y]
+
+main = println (sz (W 5 'z' True))
