@@ -1066,19 +1066,16 @@ fi
 echo "  ok: $carrier_count_actual TyConOrigin mention(s) in ast.mdk (name-set + positional)"
 
 # ── #1318 B-4 predicate-slot producer-authority ratchet ─────────────────────
-# Function and impl-`requires` predicate slots now have one mutable authority. The
-# function consumer is carrier-native: one complete predicate owns one dict slot, known
-# vectors feed scoped nested evidence, and compatibility projections never re-shatter it.
+# Function, impl-`requires`, method, recursive, and cross-module consumers share
+# record-valued carriers. One complete predicate owns one dict slot; argument vectors
+# and method quantifier positions are fields of that slot, never parallel authorities.
 predicate_slot_src="$ROOT/compiler/types/typecheck.mdk"
 predicate_slot_required='data PredicateSlotArgs = PSArgsUnknown | PSArgsKnown (List Mono)
 data PredicateSlot =
 | PredicateSlot {
-legacyCSlotsOfPredicateSlots : List PredicateSlot -> List CSlot
-legacyArgsOfPredicateSlots : List PredicateSlot -> Option (List (List Mono))
-predicateSlotOfImplReq : (String, List Int, Predicate) -> (String, PredicateSlot)
-legacyImplReqOfPredicateSlot : (String, PredicateSlot) -> (String, List Int, Predicate)
-predicateSlotShadowCompare : List PredicateSlot -> List PredicateSlot -> Unit
-let _ = shadowImplReqEntry entry
+data MethodPredicateSlot =
+| MethodPredicateSlot {
+implReqPredicateSlot : (String, List Int, Predicate) -> (String, PredicateSlot)
 setFunConstraintEntry : String -> List PredicateSlot -> Unit
 registerActiveDictVars : String -> Int -> List PredicateSlot -> Unit
 recordCallObligations : List CSlot -> List Mono -> List (List Mono) -> Unit
@@ -1089,12 +1086,29 @@ activeFunDictPredOf : String -> List Mono -> String -> Option String
 entailAssumVar m encl _ (EKNestedTop iface _ _ _ rest) = match activeFunDictPredOf iface.irName (m::rest) encl
 implReqPredicateSlots : Ref (List (String, PredicateSlot))
 funPredicateSlotsRef : Ref (List (String, List PredicateSlot))
+methodPredicateSlotsRef : Ref (List (String, List MethodPredicateSlot))
 crossModuleFunPredicateSlotsRef : Ref (List (String, List PredicateSlot))
 crossModuleFunPredicateSlotsQualRef : Ref (List ((String, String), List PredicateSlot))
+crossModuleMethodPredicateSlotsRef : Ref (List (String, List MethodPredicateSlot))
+crossModuleMethodPredicateSlotsQualRef : Ref (List ((String, String), List MethodPredicateSlot))
 perRun.value.funPredicateSlotsRef :=
 perRun.value.implReqPredicateSlots :=
+perRun.value.methodPredicateSlotsRef :=
 crossRun.value.crossModuleFunPredicateSlotsRef :=
-let _ = setRef crossRun.value.crossModuleFunPredicateSlotsQualRef'
+let _ = setRef crossRun.value.crossModuleFunPredicateSlotsQualRef
+crossRun.value.crossModuleMethodPredicateSlotsRef :=
+let _ = setRef crossRun.value.crossModuleMethodPredicateSlotsQualRef
+registerMethodConstraints : List String -> String -> Ty -> List (String, Mono) -> List Int -> Unit
+setMethodPredicateSlotEntry : String -> List MethodPredicateSlot -> Unit
+methodDictArityOf : String -> Int
+resolveMethodDicts : ImplBuckets -> List (Ref (List Route), List PredicateSlot) -> Unit
+methodPredicateRoute : ImplBuckets -> PredicateSlot -> Route
+realizeRecDictApps : ImplBuckets -> List RecDictApp -> Unit
+recRoutes : ImplBuckets -> String -> Mono -> List PredicateSlot -> List Route
+recRoute : ImplBuckets -> String -> Mono -> PredicateSlot -> Route
+scopePredicateSlots : List ((String, String), List PredicateSlot) -> OrdMap Unit -> List Decl -> List (String, List PredicateSlot)
+scopeMethodPredicateSlots : List ((String, String), List MethodPredicateSlot) -> OrdMap Unit -> List (String, List MethodPredicateSlot)
+attributeMethodModulePredicateSlots : String -> List Decl -> List (String, List MethodPredicateSlot) -> List ((String, String), List MethodPredicateSlot)'
 
 printf '%s\n' "$predicate_slot_required" | while IFS= read -r required; do
   if ! grep -Fq "$required" "$predicate_slot_src"; then
@@ -1131,7 +1145,29 @@ crossModuleFunConstraintsRef
 crossModuleFunConstraintsQualRef
 crossModuleFunConstraintIfacesRef
 crossModuleFunConstraintIfacesQualRef
-crossModuleFunConstraintArgsQualRef'
+crossModuleFunConstraintArgsQualRef
+methodConstraintsRef
+methodConstraintIdsRef
+methodConstraintPositionsRef
+crossModuleMethodConstraintsRef
+crossModuleMethodConstraintsQualRef
+legacyCSlotsOfPredicateSlots
+legacyArgsOfPredicateSlots
+predicateSlotOfImplReq
+legacyImplReqOfPredicateSlot
+predicateSlotShadowCompare
+shadowImplReqEntry
+unknownPredicateSlot
+unknownPredicateSlotsEntry
+unknownPredicateSlotsTable
+predicateSlotIdsEntry
+predicateSlotIdsTable
+alignedMethodConstraintIds
+positionMatch
+bestAlignedEntry
+countInSubst
+scopeMethodArities
+attributeMethodModuleConstraints'
 
 printf '%s\n' "$predicate_slot_retired" | while IFS= read -r retired; do
   if grep -w "$retired" "$predicate_slot_src" \
@@ -1140,7 +1176,7 @@ printf '%s\n' "$predicate_slot_retired" | while IFS= read -r retired; do
     exit 1
   fi
 done || exit 1
-echo "  ok: #1318 predicate-slot producer authority present; retired mutable authorities absent"
+echo "  ok: #1318 predicate-slot exclusive authority present; retired split authorities absent"
 
 # ── #1111 Stage A-2 unit A-2.8: registry keying ratchet ─────────────────────
 # Mechanical enforcement for the registry-keying arc (re-keying ~15

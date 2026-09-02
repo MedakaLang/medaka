@@ -4,6 +4,7 @@ activeDictPredOf : String -> List Mono -> String -> Option String
 activeDictVarForEncl : Mono -> String -> Option String
 activeDictVarOf : Mono -> Option String
 activeDictVarOfEncl : Option Predicate -> Mono -> String -> Option String
+activeFunDictPredOf : String -> List Mono -> String -> Option String
 addAliasDecl : String -> TyConOrigin -> List String -> Ty -> Int -> Bool -> Bool -> DataEnv -> DataEnv
 addCtor : TcEnv -> String -> Scheme -> TcEnv
 addCtorIdentCand : TcEnv -> String -> TyConOrigin -> String -> (Map String (List (Ident, String, Scheme)), List String) -> (Map String (List (Ident, String, Scheme)), List String)
@@ -63,7 +64,6 @@ aliasSchemeEntry : List (String, List (String, Scheme)) -> String -> (String, Sc
 aliasSchemes : List (String, List (String, Scheme)) -> String -> List (String, Scheme) -> List (String, Scheme)
 aliasUniverseAt : Int -> List (TabKey, AliasDecl) -> List (TabKey, (List String, Ty))
 aliasVisibleTo : Int -> AliasDecl -> Bool
-alignedMethodConstraintIds : String -> List (Int, Mono) -> Option (List Int)
 allArrowEffs : Mono -> List EffRow
 allConcreteHeads : List Mono -> Bool
 allCoreFns : List String -> Bool
@@ -89,7 +89,7 @@ ambiguousOverlapMsg : String -> List Mono -> List KeyEntry -> String
 andList : List String -> String
 annotTooGeneralMsg : Ty -> String
 anyArgMentions : List String -> List Ty -> Bool
-anyClaimRow : List Int -> List (String, List (List Mono)) -> Bool
+anyClaimRow : List Int -> List (String, List PredicateSlot) -> Bool
 anyClauseEagerlyRefsGroup : List String -> List FunClause -> Bool
 anyConcreteHead : List Mono -> Bool
 anyContainsI : List Int -> List Int -> Bool
@@ -132,7 +132,6 @@ argDispatchOfDecl : Decl -> List (String, Int)
 argDispatchOfDeclById : Decl -> List ((IfaceRef, String), Int)
 argDispatchOfMethod : List String -> IfaceMethod -> List (String, Int)
 argDispatchOfMethodById : IfaceRef -> List String -> IfaceMethod -> List ((IfaceRef, String), Int)
-argHeadsAgree : List Mono -> List Mono -> Bool
 argImplDictRoutesFor : Map String (List ImplEntry) -> String -> String -> Mono -> List Route
 argImplDictRoutesForEncl : Map String (List ImplEntry) -> String -> String -> String -> Mono -> List Mono -> List Route
 argImplReqRoutes : Map String (List ImplEntry) -> String -> List (String, Mono) -> List Require -> Int -> Int -> List Route
@@ -170,7 +169,7 @@ attachEntryDiag : TcDiag -> List (String, (List TcDiag, List TcDiag)) -> List (S
 attachEntryDiagOpt : Option String -> List (String, (List TcDiag, List TcDiag)) -> List (String, (List TcDiag, List TcDiag))
 attachEntryWarn : TcDiag -> List (String, (List TcDiag, List TcDiag)) -> List (String, (List TcDiag, List TcDiag))
 attachEntryWarnOpt : Option String -> List (String, (List TcDiag, List TcDiag)) -> List (String, (List TcDiag, List TcDiag))
-attributeMethodModuleArities : String -> List Decl -> List (String, List Int) -> List ((String, String), List Int)
+attributeMethodModulePredicateSlots : String -> List Decl -> List (String, List MethodPredicateSlot) -> List ((String, String), List MethodPredicateSlot)
 attributeModuleEntries : String -> List Decl -> List (String, a) -> List ((String, String), a)
 attributeModuleSchemeObls : String -> List Decl -> List ((String, String), List VecObl) -> List ((String, Int), List VecObl) -> List ((String, String), List VecObl)
 attributeSchemeOblsGo : String -> Map String Unit -> Map String Unit -> List ((String, Int), List VecObl) -> List ((String, String), List VecObl)
@@ -179,7 +178,6 @@ axisSub : List (String, Param) -> (String, Param) -> Bool
 axisUnion : List (String, Param) -> List (String, Param) -> List String
 bangOnBoolHelp : String
 bangOnBoolMsg : String
-bestAlignedEntry : List (Int, Mono) -> List (String, List Int) -> Int -> Option (List Int) -> Option (List Int)
 bestFieldCandidate : String -> Int -> List String -> Option (String, Int) -> Option (String, Int)
 bindOutsideDoMsg : String
 bindRecPatFieldsFresh : TcEnv -> List RecPatField -> List (String, Scheme)
@@ -455,9 +453,9 @@ concreteHeadVarIds : Mono -> List Int
 concreteReqMatchByIface : IfaceRef -> List Mono -> Option (List (String, Mono), List Require)
 consOp : Mono -> Mono -> Mono
 consSiteFn : String -> a -> Map String (List a) -> Map String (List a)
-constrainedSigArity : Decl -> List (String, List Int)
 constrainedSigName : Decl -> List String
 constrainedSigNames : List Decl -> List String
+constrainedSigPredicateSlots : Decl -> List (String, List PredicateSlot)
 constraintArgMono : Ty -> List (String, Mono) -> Option Mono
 constraintArgMonos : List Ty -> List (String, Mono) -> Option (List Mono)
 constraintArgVarName : Ty -> Option String
@@ -465,6 +463,7 @@ constraintArgVarNames : Constraint -> List String
 constraintFirstNonParam : List String -> Constraint -> List String
 constraintIface : Constraint -> String
 constraintIsMethodLevel : List String -> Constraint -> Bool
+constraintMethodPredicateSlot : List String -> List (String, Mono) -> List Int -> Constraint -> List MethodPredicateSlot
 constraintMonosOf : List Int -> List (Int, Mono) -> List Mono
 constraintNameMonos : List String -> List (String, Mono) -> List Mono
 constraintNonParamVars : List String -> Constraint -> List String
@@ -486,7 +485,6 @@ containsPair : (String, Int) -> List (String, Int) -> Bool
 containsRowKey : String -> List CeRow -> Bool
 containsVecObl : VecObl -> List VecObl -> Bool
 coreShadowMapFor : List Decl -> List (String, String) -> List (String, String)
-countInSubst : List Int -> List (Int, Mono) -> Int
 crossRun : Ref CrossRun
 cslotKey : CSlot -> String
 cslotVecKey : (CSlot, List Mono) -> String
@@ -594,7 +592,6 @@ declOwnedBy : String -> String -> TyConOrigin -> Bool
 declRefNames : Decl -> List String
 declTopFnNames : List Decl -> List String
 declaredArgEffNames : Ty -> List String
-declaredConstraintArgs : String -> List (List Mono)
 declaredConstraintFor : String -> CDeclared
 declaredConstraintIds : String -> List Int
 declaredCrossModuleObls : String -> Option (List VecObl)
@@ -659,7 +656,7 @@ dictPass : List String -> List Decl -> List Decl
 dictPassDecl : Map String Unit -> List String -> Decl -> Decl
 dictPassLetBind : Map String Unit -> LetBind -> LetBind
 dictPassModulesIfEnabled : List String -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
-dictPassModulesScoped : List String -> List ((String, String), List Int) -> List Decl -> List (String, List Decl) -> List (String, List Decl) -> List (String, List Decl)
+dictPassModulesScoped : List String -> List ((String, String), List PredicateSlot) -> List Decl -> List (String, List Decl) -> List (String, List Decl) -> List (String, List Decl)
 dictVarSatisfiesIface : String -> Int -> List (String, Mono) -> Bool
 directImports : String -> List (String, List Decl) -> List String
 directInferredPredOf : List Int -> (IfaceRef, List Mono, Option Loc) -> List (IfaceRef, Int, List Mono)
@@ -747,7 +744,7 @@ emptyImplEnv : ImplEnv
 emptyImplUniverse : ImplUniverse
 emptyShadowDicts : ShadowDicts
 enclDictVarOf : Option Predicate -> Mono -> String -> Option String
-enclPreds : String -> List (Int, Predicate)
+enclPreds : String -> List PredicateSlot
 enclSlot : String -> Mono -> Option Int
 enclSlotIds : String -> List Int
 enclSlotIndex : Option Predicate -> Int -> String -> Option Int
@@ -775,12 +772,11 @@ exemptInPlaceIndexMutHeads : List String
 exitLevel : Unit -> Unit
 expandAliasHeadTy : Ty -> Ty
 expandAliasHeadTyWith : List (TabKey, (List String, Ty)) -> Ty -> Ty
+expandFunPredicateSlots : List Decl -> List (String, List PredicateSlot) -> List (String, List PredicateSlot)
 expandIoInBound : List Atom -> List Atom
-expandSupersCross : List Decl -> List (String, List Int) -> List (String, List IfaceRef) -> List (String, List (List Mono)) -> (List (String, List Int), List (String, List IfaceRef))
-expandSupersEntry : List Decl -> List (String, List IfaceRef) -> List (String, List (List Mono)) -> (String, List Int) -> (String, List Int)
+expandPredicateSlotEntry : List Decl -> (String, List PredicateSlot) -> (String, List PredicateSlot)
+expandPredicateSlots : List Decl -> List PredicateSlot -> List PredicateSlot
 expandSupersFix : List Decl -> List (CSlot, List Mono) -> List (CSlot, List Mono) -> List (CSlot, List Mono)
-expandSupersIfaceEntry : List Decl -> (String, List IfaceRef) -> (String, List IfaceRef)
-expandSupersPairs : List Decl -> List CSlot -> List CSlot
 expandSupersTable : List Decl -> Unit
 expandSupersVecs : List Decl -> List (CSlot, List Mono) -> List (CSlot, List Mono)
 expectedParamTypes : Mono -> Int -> List Mono
@@ -954,11 +950,10 @@ guardEVars : Guard -> List String
 guardSites : Guard -> List (Ref Route)
 hadMatchWarnings : Unit -> Bool
 hadTypeErrors : Unit -> Bool
-hasAssocSL2 : String -> List (String, List Int) -> Bool
 hasDupI : List Int -> Bool
 hasImportDefiner : String -> Bool
-hasKeySL2 : String -> List (String, List Int) -> Bool
 hasMethodLevelConstraint : List String -> Ty -> Bool
+hasPredicateSlots : String -> List (String, List PredicateSlot) -> Bool
 headAnnotTy : Ty -> Mono
 headAtomsOr : List (List Atom) -> List Atom
 headBucketKey : Option HeadKey -> RegKey
@@ -979,8 +974,6 @@ headTyconTy : Ty -> Option HeadKey
 headlessBucketKey : RegKey
 holeFillParam : String -> List (String, Expr) -> Option Expr -> Param
 idConflictHelp : (String, TyConOrigin, TyConOrigin) -> String
-idsForIfaceSlots : List IfaceRef -> List Int
-idsForIfaceSlotsGo : Int -> List IfaceRef -> List Int
 ieAddRows : List ImplRow -> ImplEnv -> ImplEnv
 ieAnyRowForIface : List ImplRow -> IfaceRef -> Bool
 ieBuildSnaps : List ImplRow -> List (Int, ImplUniverse)
@@ -1105,7 +1098,8 @@ implMethodEVars : ImplMethod -> List String
 implMethodName : ImplMethod -> String
 implMethodNameTc : ImplMethod -> String
 implReqDictVarOf : Option Predicate -> Mono -> String -> Option String
-implReqPick : Int -> Predicate -> String -> Bool -> List (String, List Int, Predicate) -> Option String
+implReqPick : Int -> Predicate -> String -> Bool -> List (String, PredicateSlot) -> Option String
+implReqPredicateSlot : (String, List Int, Predicate) -> (String, PredicateSlot)
 implRowHasReqs : List Require -> Bool
 implRowMatchesSuper : TabKey -> String -> List Ty -> ImplRow -> Bool
 implRowsOf : String -> Int -> Int -> List (IfaceRef, List Ty, List Require, List String) -> List ImplRow
@@ -1137,8 +1131,8 @@ indexOfId : Int -> List Int -> Option Int
 indexOfIdGo : Int -> Int -> List Int -> Option Int
 indexOfInt : Int -> List Int -> Int
 indexOfIntGo : Int -> List Int -> Int -> Int
-indexOfPred : Int -> Predicate -> List (Int, Predicate) -> Option Int
-indexOfPredGo : Int -> Int -> Predicate -> Bool -> List (Int, Predicate) -> Option Int
+indexOfPred : Int -> Predicate -> List PredicateSlot -> Option Int
+indexOfPredGo : Int -> Int -> Predicate -> Bool -> List PredicateSlot -> Option Int
 indexRowEqCheck : List Atom -> List Atom -> List Atom -> List Atom -> Unit
 indexRowMismatchMsg : List Atom -> List Atom -> String
 infer : TcEnv -> Expr -> Mono
@@ -1242,10 +1236,10 @@ inferVar : TcEnv -> String -> Mono
 inferVarId : TcEnv -> String -> Int -> Mono
 inferVarPlainId : TcEnv -> String -> Int -> Mono
 inferVariantUpdate : TcEnv -> String -> Expr -> List FieldAssign -> Mono
-inferredArgsOpt : List (List Mono) -> Option (List (List Mono))
 inferredConstraintIds : String -> List Int -> List Int
 inferredIfacePairs : String -> List Int -> List (String, Int)
 inferredPredLead : (IfaceRef, Int, List Mono) -> Int
+inferredPredicateSlots : String -> List Int -> List (IfaceRef, Int, List Mono) -> List PredicateSlot
 inferredVecFor : IfaceRef -> Int -> List (IfaceRef, Int, List Mono) -> List Mono
 initialEnv : TcEnv
 innerDefaultMethod : String -> String
@@ -1264,11 +1258,15 @@ insertVariantIdents : TcEnv -> String -> TyConOrigin -> List Variant -> (Map Str
 instRefMid : InstRef -> String
 instRefSeq : InstRef -> Int
 instantiate : Scheme -> Mono
+instantiateMethodPredicateSlot : MethodPredicateSlot -> List (Int, Mono) -> Option PredicateSlot
+instantiateMethodPredicateSlots : List MethodPredicateSlot -> List (Int, Mono) -> List PredicateSlot
 instantiateRecord : RecordInfo -> (Mono, List (String, Mono))
 instantiateRecordShared : RecordInfo -> (List (Int, Mono), Mono)
 instantiateSigTracked : Ty -> (Mono, List (String, Mono))
 instantiateTracked : Scheme -> (Mono, List (Int, Mono))
 instantiateVarTrackedId : String -> Int -> Scheme -> Mono
+instantiatedMethodPredicate : MethodPredicateSlot -> List (Int, Mono) -> List (Int, Mono) -> PredicateSlot
+instantiatedMethodPredicateArgs : PredicateSlotArgs -> List (Int, Mono) -> PredicateSlotArgs
 intercalateComma : List String -> String
 intersectDeclAtoms : List (List Atom) -> List Atom
 ioAliasLabels : List String
@@ -1304,7 +1302,6 @@ keepBetterField : String -> Int -> Option (String, Int) -> Option (String, Int)
 keepBoundResidual : (IfaceRef, List Int, List Mono) -> VecObl
 keepBoundResidualPred : List Int -> (IfaceRef, List Mono) -> List (IfaceRef, List Int, List Mono)
 keepGroupNames : Map String Unit -> List String -> List String
-keptConstraintArgs : List (IfaceRef, List Mono) -> List (List Mono) -> List (List Mono)
 keyEntryIdx : KeyEntry -> Int
 keyEntryIface : KeyEntry -> String
 keyEntryOfRow : ImplRow -> List KeyEntry
@@ -1345,9 +1342,6 @@ locSameFileAsError : Option Loc -> Bool
 localPinIds : Int -> Int -> List Int
 localPinPairs : Int -> Int -> List (Int, String)
 lookupAssocI : Int -> List (Int, a) -> Option a
-lookupAssocS : String -> List (String, List IfaceRef) -> Option (List IfaceRef)
-lookupAssocSL2 : String -> List (String, List Int) -> Option (List Int)
-lookupAssocVecs : String -> List (String, List (List Mono)) -> Option (List (List Mono))
 lookupAxis : String -> List (String, Param) -> Option Param
 lookupAxisOrTop : String -> List (String, Param) -> Param -> Param
 lookupBy : (a -> a -> Bool) -> a -> List (a, b) -> Option b
@@ -1358,6 +1352,8 @@ lookupIdxById : IfaceRef -> String -> List ((IfaceRef, String), Int) -> Option I
 lookupIfaceById : Int -> List VecObl -> Option IfaceRef
 lookupLocalFlag : TcEnv -> String -> Bool
 lookupMethodCand : Ident -> List (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Option (IfaceRef, List String, Ty, List (String, List Kind))
+lookupMethodPredicateSlots : String -> List (String, List MethodPredicateSlot) -> Option (List MethodPredicateSlot)
+lookupPredicateSlots : String -> List (String, List PredicateSlot) -> Option (List PredicateSlot)
 lookupQualPayload : String -> String -> List ((String, String), a) -> Option a
 lookupRecordByMangledHead : Mono -> String -> String -> Option (String, RecordInfo)
 lookupRecordByName : String -> Option RecordInfo
@@ -1420,9 +1416,13 @@ methodMembersOf : List String -> Loc -> List UseMember
 methodOccArgIdPairs : UObligation -> List (Int, String)
 methodOccArgIdPairsAt : String -> List String -> Ty -> Mono -> List (Int, String)
 methodOccArgPairs : Unit -> List (Int, String)
+methodPredicateRoute : Map String (List ImplEntry) -> PredicateSlot -> Route
+methodPredicateRoutes : Map String (List ImplEntry) -> List PredicateSlot -> List Route
+methodPredicateSlotsOfType : List String -> Ty -> List (String, Mono) -> List Int -> List MethodPredicateSlot
 methodRet : Ty -> Ty
 methodSchemes : List (String, List Kind) -> List String -> List IfaceMethod -> List (String, Scheme)
 methodSchemesPure : List (String, List Kind) -> List IfaceMethod -> List (String, Scheme)
+methodSlotSubst : List Int -> List Int -> List (Int, Mono) -> Option (List (Int, Mono))
 methodTyOf : String -> List IfaceMethod -> Option Ty
 methodsPerMidGo : List (String, List String) -> List (String, List Decl) -> List (String, List String)
 mintParamReprs : List Kind -> List Mono
@@ -1495,6 +1495,7 @@ nthArgMono : Int -> Mono -> Option Mono
 nthFunDomain : Int -> Mono -> Option Mono
 nthInt : Int -> List Int -> Int
 nthKindList : Int -> List (List Kind) -> Option (List Kind)
+nthMethodMono : Int -> List Mono -> Mono
 nthMono : Int -> List Mono -> Option Mono
 nthTy : Int -> List Ty -> Option Ty
 numArithOp : Mono -> Mono -> Mono
@@ -1544,7 +1545,6 @@ ownMethodIdent : List Decl -> String -> Option Ident
 ownerCandidates : List String -> List (String, RecordInfo)
 pairIface : String -> Int -> List (String, Int)
 pairRecordByName : String -> Option (String, RecordInfo)
-pairSlots : List Int -> List IfaceRef -> List CSlot
 pairsOfVecObls : List VecObl -> List (String, Int)
 paramIsTopDomain : Param -> Bool
 paramMonoOf : List (String, Mono) -> String -> Mono
@@ -1600,7 +1600,6 @@ polarityEq : Polarity -> Polarity -> Bool
 polarityPublicKeys : List Decl -> List TabKey
 populateEffectDomains : List Decl -> Unit
 populateGo : List Decl -> Unit
-positionMatch : String -> List (Int, Mono) -> List (String, List Int) -> Option (List Int)
 ppApp : Ref (List (Int, String)) -> Ref Int -> Int -> Mono -> Mono -> String
 ppConName : String -> String
 ppConstraint : Constraint -> String
@@ -1633,8 +1632,18 @@ prePassImplMethodScoped : ArgRw -> ImplMethod -> ImplMethod
 prePassLetBindScoped : ArgRw -> LetBind -> LetBind
 prePassModulePair : List String -> (String, List Decl) -> (String, List Decl)
 prePassModulePairArg : List String -> List String -> List String -> List String -> List (String, String) -> (String, List Decl) -> (String, List Decl)
-predArgsAgree : List Mono -> List Mono -> Bool
-predArgsAgreeEncl : List Mono -> List Mono -> Bool
+predArgsAgreeSameInstantiation : List Mono -> List Mono -> Bool
+predicateSlotArgs : List PredicateSlot -> List (List Mono)
+predicateSlotCSlots : List PredicateSlot -> List CSlot
+predicateSlotFromExpanded : Map String PredicateSlot -> (CSlot, List Mono) -> PredicateSlot
+predicateSlotIds : List PredicateSlot -> List Int
+predicateSlotIdsAt : String -> List (String, List PredicateSlot) -> List Int
+predicateSlotIndex : List PredicateSlot -> Map String PredicateSlot -> Map String PredicateSlot
+predicateSlotKnownArgs : PredicateSlotArgs -> List Mono
+predicateSlotTableWithoutArgs : List (a, List PredicateSlot) -> List (a, List PredicateSlot)
+predicateSlotView : PredicateSlot -> (CSlot, List Mono)
+predicateSlotWithoutArgs : PredicateSlot -> PredicateSlot
+predicateSlotsWithoutArgs : List PredicateSlot -> List PredicateSlot
 preferConcrete : Mono -> Mono -> Mono
 prefixConcrete : String -> String
 prefixPatternErrMsg : String -> String -> String
@@ -1651,7 +1660,6 @@ processSCC : TcEnv -> List (String, Ty) -> Map String (List (List Pat, Expr)) ->
 processSCCs : TcEnv -> List (String, Ty) -> Map String (List (List Pat, Expr)) -> List (List String) -> List (String, Scheme)
 processTopGroups : TcEnv -> List (String, Ty) -> List (String, (List Pat, Expr)) -> List String -> List (String, Scheme)
 productNorm : List (String, Param) -> Param
-promotedConstraintIfaces : List String -> List (String, List IfaceRef) -> List (String, List IfaceRef)
 promotedConstraints : List String -> List (String, a) -> List (String, a)
 propParamName : PropParam -> String
 propParamNamesTc : List PropParam -> List String
@@ -1679,23 +1687,25 @@ qualConstraintDecl : String -> Option CDeclared
 qualConstraintFor : String -> Option (List CSlot)
 qualConstraintIds : String -> Option (List Int)
 qualConstraintKey : String -> Option (String, String)
-qualDeclOf : String -> String -> List Int -> CDeclared
+qualDeclOf : String -> String -> List PredicateSlot -> CDeclared
 qualSchemeOblsFor : String -> Option (List VecObl)
 quoteStr : String -> String
 quotedNames : List String -> String
 rangeFromCount : Int -> Int -> List Int
-realizeRecDictApps : List RecDictApp -> Unit
+realizeRecDictApps : Map String (List ImplEntry) -> List RecDictApp -> Unit
 recFieldMono : List (String, Mono) -> Field -> (String, Mono)
 recPatFieldVarsTc : RecPatField -> List String
-recRoute : String -> Mono -> Int -> Route
-recRoutes : String -> Mono -> List Int -> List Route
+recPredicateArgs : Mono -> PredicateSlot -> Option (List Mono)
+recRoute : Map String (List ImplEntry) -> String -> Mono -> PredicateSlot -> Route
+recRoutes : Map String (List ImplEntry) -> String -> Mono -> List PredicateSlot -> List Route
+recSlotSubst : Mono -> List Int -> Option (List (Int, Mono))
 receiverTypeIdent : Mono -> Option Ident
 recordAbsorptions : List Atom -> Ref Effvar -> Unit
 recordArgSiteFn : String -> Int -> Mono -> Unit
 recordArgStamp : String -> Ref Route -> Ref (List Route) -> Int -> Mono -> Unit
 recordArithSite : String -> Ref Route -> Mono -> Unit
 recordBinopSite : String -> Ref Route -> Mono -> Unit
-recordCallObligations : List CSlot -> List Mono -> Unit
+recordCallObligations : List CSlot -> List Mono -> List (List Mono) -> Unit
 recordCandForType : Ident -> List (Ident, String, RecordInfo) -> Option RecordInfo
 recordCandImported : List Decl -> String -> (Ident, String, RecordInfo) -> Bool
 recordCandInfo : (Ident, String, RecordInfo) -> RecordInfo
@@ -1747,7 +1757,7 @@ reexportedMethodNames : List (String, List String) -> List Decl -> List String
 reexportedMethodsOf : List (String, List String) -> Decl -> List String
 regIfaceMonosFor : String -> List (String, List (IfaceRef, List Mono), List (List Mono)) -> List (IfaceRef, List Mono)
 regIfaceMonosOf : (String, List (IfaceRef, List Mono), List (List Mono)) -> List (IfaceRef, List Mono)
-registerActiveDictVars : String -> Int -> List Int -> Unit
+registerActiveDictVars : String -> Int -> List PredicateSlot -> Unit
 registerAllData : TcEnv -> List Decl -> TcEnv
 registerAllDataGo : TcEnv -> List Decl -> TcEnv
 registerAmbiguousConstraints : List UObligation -> List Mono -> Unit
@@ -1758,6 +1768,7 @@ registerDispatchMonos : IfaceRef -> List Mono -> Option Loc -> Int -> List Int -
 registerEachActive : List Int -> String -> Unit
 registerEachActiveId : List Int -> String -> Unit
 registerEffectDomain : String -> Option String -> Unit
+registerFunPredGiven : String -> PredicateSlotArgs -> String -> Unit
 registerImplMethodDictOne : String -> Int -> String -> List (String, Mono) -> Unit
 registerImplMethodDicts : String -> List String -> Ty -> List (String, Mono) -> Unit
 registerImplMethodDictsGo : String -> Int -> List String -> List (String, Mono) -> Unit
@@ -1766,7 +1777,7 @@ registerInferredConstraints : List (String, Ty) -> List (IfaceRef, List Mono, Op
 registerInferredFor : String -> List Int -> List (IfaceRef, Int, List Mono) -> Unit
 registerLocalScheme : String -> Scheme -> Int -> Int -> Int -> Unit
 registerMember : String -> List (IfaceRef, List Mono) -> List (List Mono) -> Unit
-registerMemberSlots : String -> Int -> List (IfaceRef, List Mono) -> List CSlot
+registerMemberSlots : String -> Int -> List (IfaceRef, List Mono) -> List (List Mono) -> List PredicateSlot
 registerMethodConstraints : List String -> String -> Ty -> List (String, Mono) -> List Int -> Unit
 registerMethodDictSlots : String -> Int -> List Int -> List (Int, Mono) -> Unit
 registerMethodIfaceParamsAll : List Decl -> Unit
@@ -1779,7 +1790,7 @@ registerPredGiven : String -> List Mono -> String -> Unit
 registerRecordInfoKeyed : TyConOrigin -> String -> String -> List String -> List Field -> Unit
 registerReqSlots : String -> List (String, Mono) -> Int -> List Require -> Unit
 registerSchemeObligations : Map String Int -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> List (String, Scheme) -> Unit
-registerSlotPredGivens : String -> Int -> List CSlot -> List (List Mono) -> Unit
+registerSlotPredGivens : String -> Int -> List PredicateSlot -> Unit
 registerVariants : TyConOrigin -> TcEnv -> String -> List String -> List Variant -> TcEnv
 registersElementDict : String -> List String -> Bool
 rejectCyclicAliases : Unit -> Unit
@@ -1839,7 +1850,7 @@ resolveFieldByOwners : Mono -> String -> Option (String, RecordInfo)
 resolveFieldOwnersNarrowed : Mono -> String -> List String -> Option (String, RecordInfo)
 resolveFieldRecord : Mono -> String -> Option (String, RecordInfo)
 resolveMemberRows : (String, String) -> List (String, a) -> List (String, a)
-resolveMethodDicts : Map String (List ImplEntry) -> List (Ref (List Route), List Mono) -> Unit
+resolveMethodDicts : Map String (List ImplEntry) -> List (Ref (List Route), List PredicateSlot) -> Unit
 resolveOpSite : Bool -> Map String (List ImplEntry) -> String -> Ref Route -> Mono -> Bool -> String -> Unit
 resolveOpSites : Bool -> Map String (List ImplEntry) -> List PendingEntry -> Unit
 resolveRLocalSite : List Decl -> Map String (List ImplEntry) -> String -> Ref Route -> Mono -> String -> List Mono -> List IfaceRef -> List (List Mono) -> Unit
@@ -1873,7 +1884,6 @@ routeOf : Map String (List ImplEntry) -> IfaceRef -> String -> Undetermined -> M
 routeOfD : Map String (List ImplEntry) -> IfaceRef -> String -> Undetermined -> Mono -> List Mono -> Int -> Int -> Route
 routeRDictName : Route -> List String
 routeUndeterminedTop : List Decl -> Map String (List ImplEntry) -> String -> Route
-routesOfMonos : Map String (List ImplEntry) -> List Mono -> List Route
 routesOfMonosTop : List Decl -> Map String (List ImplEntry) -> List Mono -> List IfaceRef -> List Route
 routesOfMonosTopV : List Decl -> Map String (List ImplEntry) -> List Mono -> List IfaceRef -> List (List Mono) -> List Route
 rowArgAtomsApp : List (String, List Kind) -> TyConOrigin -> String -> List Ty -> List (String, List Atom) -> List (String, List Atom)
@@ -1900,8 +1910,8 @@ schemeMono : Scheme -> Mono
 schemeOblEntriesFor : String -> UsePath -> List ((String, String), List VecObl) -> List (String, List VecObl)
 schemeObligationsOf : List Int -> List UObligation -> List VecObl
 schemeOblsForMember : List (String, Ty, List (String, Mono)) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> String -> Scheme -> List VecObl
-scopeArities : List ((String, String), List Int) -> Map String Unit -> List Decl -> List (String, List Int)
-scopeMethodArities : List ((String, String), List Int) -> Map String Unit -> List (String, List Int)
+scopeMethodPredicateSlots : List ((String, String), List MethodPredicateSlot) -> Map String Unit -> List (String, List MethodPredicateSlot)
+scopePredicateSlots : List ((String, String), List PredicateSlot) -> Map String Unit -> List Decl -> List (String, List PredicateSlot)
 scopeShadowsCore : Unit -> Unit
 scopeShadowsForGroup : List String -> Unit
 scopeShadowsUser : Unit -> Unit
@@ -1925,13 +1935,11 @@ selfNameRows : List Decl -> List (String, a) -> List (String, a)
 selfQualEntries : String -> Map String Unit -> List ((String, String), a) -> List (String, a)
 setCardCap : Int
 setCoherenceUserDecls : List Decl -> Unit
-setCrossFunConstraintTables : (List (String, List Int), List (String, List IfaceRef)) -> Unit
 setDictEligible : List String -> Unit
-setFunConstraintEntry : String -> List CSlot -> Option (List (List Mono)) -> Unit
-setFunConstraintTables : (List (String, List Int), List (String, List IfaceRef)) -> Unit
+setFunConstraintEntry : String -> List PredicateSlot -> Unit
 setLocIfSome : Option Loc -> Unit
 setMainSchemeIfEntry : Bool -> List (String, Scheme) -> Unit
-setMethodConstraintEntry : String -> List Int -> List Int -> Unit
+setMethodPredicateSlotEntry : String -> List MethodPredicateSlot -> Unit
 setNumlitFloats : Unit -> Unit
 setNumlitFloatsGo : List (Mono, Ref (Option Float), Int, Ref Route) -> Unit
 setStdlibOwnership : Bool -> List String -> Unit
@@ -1956,6 +1964,7 @@ sigConstraintArgTys : Ty -> List (List Ty)
 sigConstraints : Ty -> List (IfaceRef, List String)
 sigConstraintsOf : Ty -> List Constraint
 sigNamesToSet : List (String, Ty) -> Map String Unit -> Map String Unit
+sigPredicateSlot : (IfaceRef, List String) -> PredicateSlot
 sigToScheme : Ty -> Scheme
 sigToSchemeTvs : Ty -> (Scheme, List (String, Mono))
 sigToSchemeTvsIn : List (String, List Kind) -> Ty -> (Scheme, List (String, Mono))
@@ -2168,8 +2177,7 @@ wildSchemeOblEntry : String -> ((String, String), List VecObl) -> List (String, 
 wrapIf : Bool -> String -> String
 xmodOblArgId : Mono -> List Int
 xmodVecObl : CSlot -> List Mono -> VecObl
-zerosL : Int -> List Int
 zipIfaceMethodSchemeIds : List (IfaceRef, String) -> List (String, Scheme) -> List ((IfaceRef, String), Scheme)
-zipSlotArgs : List CSlot -> List (List Mono) -> List (Int, Predicate)
+zipMethodSlotSubst : List Int -> List Int -> List Mono -> List (Int, Mono)
 zipSlotVecs : List CSlot -> List (List Mono) -> List (CSlot, List Mono)
 zipUnify : List Mono -> List Mono -> Unit

@@ -1,0 +1,14 @@
+-- Recursive one-slot-per-predicate discriminator.  `Ix a b` is ONE predicate
+-- even though it mentions two quantified variables, so `countDown` abstracts and
+-- recursively forwards exactly one dict.  Flattening its two bound ids into two
+-- routes shifts every recursive value argument and cannot produce the spec answer 7.
+interface Ix a b where
+  ix : a -> b -> Int
+
+impl Ix Int Bool where
+  ix n flag = if flag then n + 2 else n
+
+countDown : Ix a b => Int -> a -> b -> Int
+countDown n x y = if n <= 0 then ix x y else countDown (n - 1) x y
+
+main = println (countDown 2 5 True)
