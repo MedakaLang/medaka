@@ -112,9 +112,10 @@ if [ -d "$LIBGOLDENDIR" ]; then
   # via the golden tree) so a rebucketing regression cannot be blessed away.
   # Matched on the ENTRY HEADER line, not anywhere in the page — both fixtures'
   # own header prose names the impl, so a bare substring grep is satisfied by
-  # documentation about the rule rather than by the rule holding.
-  if grep -q '^## .Sizeish (Array Int).$' "$LIBTMPDIR/array.md" 2>/dev/null \
-    && ! grep -q '^## .Sizeish (Array Int).$' "$LIBTMPDIR/gamma.md" 2>/dev/null; then
+  # documentation about the rule rather than by the rule holding. A documented
+  # impl renders as a `###` entry inside the page's closing Instances section.
+  if grep -q '^##* .Sizeish (Array Int).$' "$LIBTMPDIR/array.md" 2>/dev/null \
+    && ! grep -q '^##* .Sizeish (Array Int).$' "$LIBTMPDIR/gamma.md" 2>/dev/null; then
     pass=$((pass + 1))
     printf 'ok   library-mode impl rebucketing (Sizeish (Array Int) -> array.md)\n'
   else
@@ -122,7 +123,7 @@ if [ -d "$LIBGOLDENDIR" ]; then
     printf 'FAIL library-mode impl rebucketing (Sizeish (Array Int) is not filed on array.md)\n'
   fi
   # ... and the declaring module still keeps an impl on a type it DECLARES.
-  if grep -q '^## .Sizeish Widget.$' "$LIBTMPDIR/gamma.md" 2>/dev/null; then
+  if grep -q '^##* .Sizeish Widget.$' "$LIBTMPDIR/gamma.md" 2>/dev/null; then
     pass=$((pass + 1))
     printf 'ok   library-mode impl rebucketing (Sizeish Widget stays on gamma.md)\n'
   else
@@ -136,8 +137,8 @@ if [ -d "$LIBGOLDENDIR" ]; then
   # rendered entries, missed the private declaration, and filed the impl on
   # gadget.md. Both halves asserted: it IS on owner.md and is NOT on gadget.md
   # — a one-sided check passes if the entry vanishes entirely.
-  if grep -q '^## .Countish Gadget.$' "$LIBTMPDIR/owner.md" 2>/dev/null \
-    && ! grep -q '^## .Countish Gadget.$' "$LIBTMPDIR/gadget.md" 2>/dev/null; then
+  if grep -q '^##* .Countish Gadget.$' "$LIBTMPDIR/owner.md" 2>/dev/null \
+    && ! grep -q '^##* .Countish Gadget.$' "$LIBTMPDIR/gadget.md" 2>/dev/null; then
     pass=$((pass + 1))
     printf 'ok   library-mode impl rebucketing (private-type owner keeps Countish Gadget)\n'
   else
@@ -164,18 +165,19 @@ fi
 
 # S2-2: doc's example detection == doctest.mdk's `-- > ` rule. The fixture holds
 # one real doctest and one `-->`-shaped decoy. Cross-checked against `medaka
-# test` itself, which is the authority on how many doctests the file has — the
-# marker claims "run by `medaka test`" and this is that claim, measured.
+# test` itself, which is the authority on how many doctests the file has — a
+# rendered example claims to be a verified doctest, and this is that claim,
+# measured: one fenced example, one doctest run.
 DTFIX="$FIXDIR/doctest_marker.mdk"
 if [ -f "$DTFIX" ]; then
-  markers="$("$MEDAKA" doc "$DTFIX" 2>/dev/null | grep -c 'doctest — run by')"
+  fences="$("$MEDAKA" doc "$DTFIX" 2>/dev/null | grep -c '^```medaka$')"
   ran="$("$MEDAKA" test "$DTFIX" 2>/dev/null | grep -c '^  ok  ')"
-  if [ "$markers" = "1" ] && [ "$ran" = "1" ]; then
+  if [ "$fences" = "1" ] && [ "$ran" = "1" ]; then
     pass=$((pass + 1))
-    printf 'ok   doctest marker agrees with medaka test (1 marker, 1 doctest run)\n'
+    printf 'ok   rendered examples agree with medaka test (1 fenced example, 1 doctest run)\n'
   else
     fail=$((fail + 1))
-    printf 'FAIL doctest marker disagrees with medaka test (%s marker(s) rendered, %s doctest(s) actually run)\n' "$markers" "$ran"
+    printf 'FAIL rendered examples disagree with medaka test (%s fenced example(s), %s doctest(s) actually run)\n' "$fences" "$ran"
   fi
   # ... and the decoy renders as escaped prose, never inside a fence.
   if "$MEDAKA" doc "$DTFIX" 2>/dev/null | grep -q '^\\> fakeExample 1$'; then

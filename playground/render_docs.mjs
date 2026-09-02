@@ -180,14 +180,15 @@ function encodeProgram(src) {
 }
 
 // ── doctest fences ──────────────────────────────────────────────────────────
-// `medaka doc` labels every doctest it publishes with this exact line, on its
-// own, immediately above the fence — `renderDocSegment (ExampleSeg ls)`,
-// compiler/tools/doc.mdk, which emits it for EVERY `ExampleSeg` and nothing
-// else. That makes it a structural signal from the generator's own output, and
-// it is the ONLY signal this renderer is allowed to use here: a doctest fence
-// is one whose generator said so, never one that happens to live under
-// `docs/stdlib` (a `--src`/doc-set comparison would be a per-caller flag, and
-// would misclassify the identical construct anywhere else it appears).
+// `medaka doc` publishes every doctest as a `medaka` fence whose first line is
+// the `> expr` prompt — `renderDocSegment (ExampleSeg ls)`, compiler/tools/
+// doc.mdk, and an `ExampleSeg` starts at a `> ` line by construction
+// (`isExampleStart`). A Medaka program cannot begin with `> `, so the prompt is
+// a structural signal from the generator's own output, and it is the ONLY
+// signal this renderer is allowed to use here: a doctest fence is one shaped
+// as a transcript, never one that happens to live under `docs/stdlib` (a
+// `--src`/doc-set comparison would be a per-caller flag, and would misclassify
+// the identical construct anywhere else it appears).
 //
 // Val ruling (#2384): a doctest gets NO runnability footer at all — neither a
 // ▶ link nor a "not runnable" note. It is a transcript of an expression and its
@@ -197,23 +198,16 @@ function encodeProgram(src) {
 // `classifyRunnable` still classifies these fences exactly as before (they
 // define no top-level `main`), and every other not-runnable fence, the guide's
 // 67 `medaka` fragments included, keeps its note.
-const DOCTEST_MARKER = '*(doctest — run by `medaka test`)*';
+export const DOCTEST_PROMPT = /^> /;
 
-// Mark each top-level `code` token that the marker paragraph introduces. Run as
-// marked's `processAllTokens` hook: the `code` renderer sees one token at a
-// time and cannot look backwards, so the adjacency has to be resolved here,
-// where the sibling order is still visible. Blank lines between the paragraph
-// and the fence are `space` tokens and do not break the adjacency.
+// Mark each top-level `code` token that is a doctest transcript. Run as
+// marked's `processAllTokens` hook so the classification lives in one place
+// the `code` renderer and any test can share.
 export function markDoctestFences(tokens) {
-  let marked = false;
   for (const tok of tokens) {
-    if (tok.type === 'space') continue;
-    if (tok.type === 'paragraph' && tok.raw.trim() === DOCTEST_MARKER) {
-      marked = true;
-      continue;
+    if (tok.type === 'code') {
+      tok.isDoctest = (tok.lang ?? '').trim() === 'medaka' && DOCTEST_PROMPT.test(tok.text);
     }
-    if (tok.type === 'code') tok.isDoctest = marked;
-    marked = false;
   }
   return tokens;
 }

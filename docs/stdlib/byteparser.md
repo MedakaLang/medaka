@@ -34,6 +34,8 @@ data BResult a
   | BErr String Int
 ```
 
+Instances: [`Mappable`](#mappable-bresult)
+
 Parse result: success carries the value and the position just past what
   was consumed; failure carries an error message and the failure position.
   `public export` so downstream modules (e.g. a SQLite record decoder) can
@@ -47,6 +49,8 @@ data ByteParser a
   = ByteParser (Array Int -> Int -> BResult a)
 ```
 
+Instances: `Mappable`, `Applicative`, `Thenable`, [`Alternative`](#alternative-byteparser)
+
 A byte-level parser is a function from (byte array, position) to BResult.
 
 ## `runBP`
@@ -56,15 +60,6 @@ runBP : ByteParser a -> Array Int -> Int -> BResult a
 ```
 
 Run the wrapped function directly.
-
-## `Mappable BResult`
-
-```
-impl Mappable BResult
-```
-
-Mappable instance for BResult: map over the success value; pass errors
-  through unchanged.  Higher-kinded impl uses the BARE head `BResult`.
 
 ## `onOk`
 
@@ -77,34 +72,6 @@ Position-threading bind for BResult.  On success, passes the value and
 
   Lets callers chain position-threading steps without repeating the
   `BErr m ep => BErr m ep` pass-through boilerplate.
-
-## `Mappable ByteParser`
-
-```
-impl Mappable ByteParser
-```
-
-## `Applicative ByteParser`
-
-```
-impl Applicative ByteParser
-```
-
-## `Thenable ByteParser`
-
-```
-impl Thenable ByteParser
-```
-
-## `Alternative ByteParser`
-
-```
-impl Alternative ByteParser
-```
-
-Left-biased, full-backtracking alternative.
-  `noMatch` always fails; `orElse p q` tries `p`, and on failure re-runs
-  `q` from the ORIGINAL position.
 
 ## `failWith`
 
@@ -122,9 +89,6 @@ satisfy : (Int -> Bool) -> ByteParser Int
 
 Consume one byte if it satisfies the predicate.
 
-
-*(doctest — run by `medaka test`)*
-
 ```medaka
 > runByteParser (satisfy (b => b == 65)) (arrayFromList [65, 66, 67])
 Ok 65
@@ -140,9 +104,6 @@ anyByte : ByteParser Int
 
 Consume any single byte.
 
-
-*(doctest — run by `medaka test`)*
-
 ```medaka
 > runByteParser anyByte (arrayFromList [42])
 Ok 42
@@ -155,9 +116,6 @@ byte : Int -> ByteParser Int
 ```
 
 Consume exactly the given byte value.
-
-
-*(doctest — run by `medaka test`)*
 
 ```medaka
 > runByteParser (byte 0xFF) (arrayFromList [255, 0])
@@ -173,9 +131,6 @@ eof : ByteParser Unit
 ```
 
 Match the end of input.  Yields Unit; consumes nothing.
-
-
-*(doctest — run by `medaka test`)*
 
 ```medaka
 > runByteParser eof (arrayFromList [])
@@ -201,9 +156,6 @@ many : ByteParser a -> ByteParser (List a)
 Zero-or-more.  Uses explicit position threading (a loop), since `many`
   of a parser that consumes nothing must terminate.
 
-
-*(doctest — run by `medaka test`)*
-
 ```medaka
 > runByteParser (many (byte 1)) (arrayFromList [1, 1, 1, 2])
 Ok [1, 1, 1]
@@ -216,9 +168,6 @@ some : ByteParser a -> ByteParser (List a)
 ```
 
 One-or-more.
-
-
-*(doctest — run by `medaka test`)*
 
 ```medaka
 > runByteParser (some (byte 2)) (arrayFromList [2, 2, 3])
@@ -250,9 +199,6 @@ optional : ByteParser a -> ByteParser (Option a)
 ```
 
 Try `p`; produce `Some` on success, `None` (consuming nothing) on failure.
-
-
-*(doctest — run by `medaka test`)*
 
 ```medaka
 > runByteParser (optional (byte 5)) (arrayFromList [5])
@@ -297,9 +243,6 @@ takeBytes : Int -> ByteParser (List Int)
 
 Read exactly N bytes, returning them as a List Int.
 
-
-*(doctest — run by `medaka test`)*
-
 ```medaka
 > runByteParser (takeBytes 3) (arrayFromList [10, 20, 30, 40])
 Ok [10, 20, 30]
@@ -323,8 +266,6 @@ Read a big-endian unsigned integer of exactly N bytes (N in 1..8).
 
 Examples (big-endian 2-byte: [0x01, 0x02] → 258):
 
-*(doctest — run by `medaka test`)*
-
 ```medaka
 > runByteParser (beUint 2) (arrayFromList [1, 2])
 Ok 258
@@ -345,9 +286,6 @@ Read a big-endian SIGNED integer of exactly N bytes (N in 1..8),
 
 The sign bit is the MSB of the first byte.  For an N-byte integer the sign
 threshold is 128 * 256^(N-1) = 2^(8*N-1).
-
-
-*(doctest — run by `medaka test`)*
 
 ```medaka
 > runByteParser (beSint 1) (arrayFromList [255])
@@ -370,9 +308,6 @@ Read a 64-bit IEEE 754 big-endian float as a Medaka Float.
 Consumes exactly 8 bytes in big-endian order and reinterprets their bit
 pattern as an IEEE 754 double via `bytesToFloat64`.
 
-
-*(doctest — run by `medaka test`)*
-
 ```medaka
 > runByteParser beFloat64 (arrayFromList [63, 248, 0, 0, 0, 0, 0, 0])
 Ok 1.5
@@ -390,8 +325,6 @@ Read a little-endian unsigned integer of exactly N bytes (N in 1..8).
   Least-significant byte first (mirror of `beUint`).
 
 Examples (little-endian 2-byte: [0x02, 0x01] → 258):
-
-*(doctest — run by `medaka test`)*
 
 ```medaka
 > runByteParser (leUint 2) (arrayFromList [2, 1])
@@ -411,9 +344,6 @@ leSint : Int -> ByteParser Int
 Read a little-endian SIGNED integer of exactly N bytes (N in 1..8),
   two's-complement.  Mirror of `beSint`: least-significant byte first,
   with the sign bit in the MSB of the LAST byte.
-
-
-*(doctest — run by `medaka test`)*
 
 ```medaka
 > runByteParser (leSint 1) (arrayFromList [255])
@@ -437,9 +367,6 @@ Read a 64-bit IEEE 754 little-endian float as a Medaka Float.
   reinterpreting the bit pattern via `bytesToFloat64` (which expects
   big-endian byte order).
 
-
-*(doctest — run by `medaka test`)*
-
 ```medaka
 > runByteParser leFloat64 (arrayFromList [0, 0, 0, 0, 0, 0, 248, 63])
 Ok 1.5
@@ -456,13 +383,31 @@ runByteParser : ByteParser a -> Array Int -> Result String a
 Run a `ByteParser` over the full byte array starting at position 0.
   Reports the success value or a positioned error message.
 
-
-*(doctest — run by `medaka test`)*
-
 ```medaka
 > runByteParser (byte 42) (arrayFromList [42])
 Ok 42
 > runByteParser (byte 42) (arrayFromList [7])
 Err "unexpected byte at byte 0"
 ```
+
+## Instances
+
+### `Mappable BResult`
+
+```
+impl Mappable BResult
+```
+
+Mappable instance for BResult: map over the success value; pass errors
+  through unchanged.  Higher-kinded impl uses the BARE head `BResult`.
+
+### `Alternative ByteParser`
+
+```
+impl Alternative ByteParser
+```
+
+Left-biased, full-backtracking alternative.
+  `noMatch` always fails; `orElse p q` tries `p`, and on failure re-runs
+  `q` from the ORIGINAL position.
 

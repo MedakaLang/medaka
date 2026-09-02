@@ -1,75 +1,87 @@
 # list
 
-list.mdk — operations on List a
-See STDLIB.md for the full implementation plan.
+Operations on `List a`.
 
-## `Filterable`
+A list is an immutable singly linked sequence. Every operation here returns
+a new list and leaves its argument unchanged. Functions that could fail on
+an empty list or an out-of-range index return an `Option` instead of
+panicking.
+
+The generic container operations (`map`, `filter`, `fold`, `length`, `elem`,
+`sum`, `maximum`, `any`, `all`, and the rest of the `Foldable` and
+`Traversable` interfaces) are defined in the prelude and work on lists
+without an import. This module holds what is specific to lists.
+
+## Re-exports
+
+### `Filterable`
 
 ```
 Filterable : re-export of core.Filterable
 ```
 
-Re-export the Filterable container ops so they're discoverable as
-`list.filter` / `list.filterMap`.
+Re-exported from the prelude so that `list.filter` and `list.filterMap`
+resolve when the module is imported qualified.
 
-## `filter`
+### `filter`
 
 ```
 filter : (a -> Bool) -> b a -> b a
 ```
 
-Re-export the Filterable container ops so they're discoverable as
-`list.filter` / `list.filterMap`.
+Re-exported from the prelude so that `list.filter` and `list.filterMap`
+resolve when the module is imported qualified.
 
-## `filterMap`
+### `filterMap`
 
 ```
 filterMap : (a -> Option b) -> c a -> c b
 ```
 
-Re-export the Filterable container ops so they're discoverable as
-`list.filter` / `list.filterMap`.
+Re-exported from the prelude so that `list.filter` and `list.filterMap`
+resolve when the module is imported qualified.
 
-## `singleton`
+## Construction
+
+### `singleton`
 
 ```
 singleton : a -> List a
 ```
 
-## `range`
+A list holding one element.
+
+```medaka
+> singleton 5
+[5]
+```
+
+### `range`
 
 ```
 range : Int -> Int -> List Int
 ```
 
-The half-open integer interval `[lo, hi)` — `lo` up to but excluding `hi`.
-Empty when `lo >= hi`.
+The integers from `lo` up to, but not including, `hi`.
 
-
-*(doctest — run by `medaka test`)*
+Empty when `lo >= hi`. `[lo..hi]` is the literal form.
 
 ```medaka
 > range 2 5
 [2, 3, 4]
-> range 5 5
-[]
-> range 5 2
-[]
-> range 0 1
-[0]
 ```
 
-## `rangeStep`
+### `rangeStep`
 
 ```
 rangeStep : Int -> Int -> Int -> List Int
 ```
 
-`rangeStep lo hi step` — arithmetic sequence from `lo`, stepping by `step`,
-stopping before `hi`.  Empty when `step` points away from `hi` (or is `0`).
+The integers from `lo` towards `hi` in steps of `step`, stopping before
+`hi`.
 
-
-*(doctest — run by `medaka test`)*
+A negative `step` counts down. Empty when `step` is `0` or points away
+from `hi`.
 
 ```medaka
 > rangeStep 0 10 3
@@ -78,142 +90,198 @@ stopping before `hi`.  Empty when `step` points away from `hi` (or is `0`).
 [5, 3, 1]
 ```
 
-## `replicate`
+### `replicate`
 
 ```
 replicate : Int -> a -> List a
 ```
 
-A list of `n` copies of `x` (empty when `n <= 0`).
+A list of `n` copies of `x`.
 
-Built by doubling (`replicateDbl`) rather than one recursive call per
-copy, so the interpreted call depth is `O(log n)` instead of `O(n)` —
-the same shape `String.repeat` had before #1728.
-
-
-*(doctest — run by `medaka test`)*
+Empty when `n <= 0`. Safe for large `n`: the call depth grows with
+`log n`, not `n`.
 
 ```medaka
 > replicate 3 0
 [0, 0, 0]
 ```
 
-*(doctest — run by `medaka test`)*
-
-```medaka
-> replicate 0 0
-[]
-```
-
-*(doctest — run by `medaka test`)*
-
-```medaka
-> take 3 (replicate 30000 1)
-[1, 1, 1]
-```
-
-## `iterate`
+### `iterate`
 
 ```
 iterate : Int -> (a -> <e> a) -> a -> <e> List a
 ```
 
-`[x, f x, f (f x), …]` of length `n`.  Empty when `n <= 0`.
+The first `n` results of applying `f` repeatedly, starting from `x`:
+`[x, f x, f (f x), ...]`.
 
-
-*(doctest — run by `medaka test`)*
+Empty when `n <= 0`.
 
 ```medaka
 > iterate 4 (n => n * 2) 1
 [1, 2, 4, 8]
-> iterate 0 (n => n * 2) 1
-[]
-> iterate 1 (n => n * 2) 1
-[1]
 ```
 
-## `unfold`
+### `unfold`
 
 ```
 unfold : (b -> <e> Option (a, b)) -> b -> <e> List a
 ```
 
-Build a list from a seed: `gen` returns `Some (element, nextSeed)` to emit
-an element and continue, or `None` to stop.
+Builds a list from a seed.
 
-
-*(doctest — run by `medaka test`)*
+`gen` is called with the current seed. It returns `Some (element, next)` to
+emit `element` and continue from `next`, or `None` to stop.
 
 ```medaka
 > unfold (n => if n > 5 then None else Some (n, n + 1)) 1
 [1, 2, 3, 4, 5]
-> unfold (n => if n > 0 then None else Some (n, n + 1)) 1
-[]
-> unfold (n => if n > 0 then None else Some (n, n + 1)) 0
-[0]
 ```
 
-## `reverse`
+## Accessing elements
+
+### `head`
+
+```
+head : List a -> Option a
+```
+
+The first element, or `None` when the list is empty.
+
+```medaka
+> head [1, 2, 3]
+Some 1
+> head ([] : List Int)
+None
+```
+
+### `tail`
+
+```
+tail : List a -> Option (List a)
+```
+
+Everything after the first element, or `None` when the list is empty.
+
+```medaka
+> tail [1, 2, 3]
+Some [2, 3]
+> tail [1]
+Some []
+```
+
+### `uncons`
+
+```
+uncons : List a -> Option (a, List a)
+```
+
+The first element and the rest, or `None` when the list is empty.
+
+```medaka
+> uncons [1, 2, 3]
+Some (1, [2, 3])
+```
+
+### `last`
+
+```
+last : List a -> Option a
+```
+
+The last element, or `None` when the list is empty.
+
+```medaka
+> last [1, 2, 3]
+Some 3
+```
+
+### `init`
+
+```
+init : List a -> Option (List a)
+```
+
+Everything except the last element, or `None` when the list is empty.
+
+```medaka
+> init [1, 2, 3]
+Some [1, 2]
+> init [1]
+Some []
+```
+
+### `get`
+
+```
+get : Int -> List a -> Option a
+```
+
+The element at index `i`, counting from `0`, or `None` when `i` is out
+of range.
+
+Walks the list from the front, so the cost grows with `i`.
+
+```medaka
+> get 1 ["a", "b", "c"]
+Some "b"
+> get 5 ["a", "b", "c"]
+None
+```
+
+## Transformation
+
+### `reverse`
 
 ```
 reverse : List a -> List a
 ```
 
-The list in reverse order.  Tail-recursive accumulator — safe on long
-lists where right-leaning recursion would overflow the stack.
+The list in reverse order.
 
-
-*(doctest — run by `medaka test`)*
+Safe on long lists.
 
 ```medaka
 > reverse [1, 2, 3]
 [3, 2, 1]
 ```
 
-## `intersperse`
+### `intersperse`
 
 ```
 intersperse : a -> List a -> List a
 ```
 
-Insert `sep` between every pair of adjacent elements.
-
-
-*(doctest — run by `medaka test`)*
+The list with `sep` placed between each pair of adjacent elements.
 
 ```medaka
 > intersperse 0 [1, 2, 3]
 [1, 0, 2, 0, 3]
 ```
 
-## `intercalate`
+### `intercalate`
 
 ```
 intercalate : List a -> List (List a) -> List a
 ```
 
-Concatenate the inner lists with `sep` between them — `intersperse` then
-flatten.
-
-
-*(doctest — run by `medaka test`)*
+The inner lists joined into one, with `sep` between each pair.
 
 ```medaka
 > intercalate [0] [[1], [2, 3], [4]]
 [1, 0, 2, 3, 0, 4]
 ```
 
-## `transpose`
+### `transpose`
 
 ```
 transpose : List (List a) -> List (List a)
 ```
 
-Turn rows into columns.  Ragged rows are allowed: shorter rows simply
-contribute nothing to the later columns.
+The rows of a list of lists turned into columns.
 
-
-*(doctest — run by `medaka test`)*
+Rows may have different lengths. A short row contributes nothing to the
+columns beyond its end.
 
 ```medaka
 > transpose [[1, 2, 3], [4, 5, 6]]
@@ -222,150 +290,181 @@ contribute nothing to the later columns.
 [[1, 3, 4], [2, 5], [6]]
 ```
 
-## `subsequences`
+### `subsequences`
 
 ```
 subsequences : List a -> List (List a)
 ```
 
-Every subsequence (subset preserving order), `2^n` of them.
+Every subsequence of the list: each subset of its elements, in their
+original order.
 
-
-*(doctest — run by `medaka test`)*
+A list of `n` elements has `2^n` subsequences.
 
 ```medaka
 > subsequences [1, 2, 3]
 [[], [1], [2], [1, 2], [3], [1, 3], [2, 3], [1, 2, 3]]
 ```
 
-## `permutations`
+### `permutations`
 
 ```
 permutations : List a -> List (List a)
 ```
 
-Every ordering of the list, `n!` of them (lexicographic by original
-position).
+Every ordering of the list's elements.
 
-
-*(doctest — run by `medaka test`)*
+A list of `n` elements has `n!` permutations. They are produced in
+lexicographic order of the original positions.
 
 ```medaka
 > permutations [1, 2, 3]
 [[1, 2, 3], [1, 3, 2], [2, 1, 3], [2, 3, 1], [3, 1, 2], [3, 2, 1]]
 ```
 
-## `scanLeft`
+## Folds and scans
+
+### `scanLeft`
 
 ```
 scanLeft : (b -> a -> <e> b) -> b -> List a -> <e> List b
 ```
 
-Like `fold`, but keeping every intermediate accumulator (so the result is
-one longer than the input).
+Every intermediate value of a left fold, starting with the seed.
 
-
-*(doctest — run by `medaka test`)*
+The result is one element longer than the input.
 
 ```medaka
 > scanLeft (acc x => acc + x) 0 [1, 2, 3]
 [0, 1, 3, 6]
 ```
 
-## `scanRight`
+### `scanRight`
 
 ```
 scanRight : (a -> b -> <e> b) -> b -> List a -> <e> List b
 ```
 
-Right-associated `scanLeft`: every intermediate of a right fold.
-
-
-*(doctest — run by `medaka test`)*
+Every intermediate value of a right fold, ending with the seed.
 
 ```medaka
 > scanRight (x acc => x + acc) 0 [1, 2, 3]
 [6, 5, 3, 0]
 ```
 
-## `findIndex`
+### `reduce`
+
+```
+reduce : (a -> a -> <e> a) -> List a -> <e> Option a
+```
+
+A left fold that uses the first element as the seed.
+
+`None` when the list is empty. `fold` is the form that takes a seed.
+
+```medaka
+> reduce (x y => x + y) [1, 2, 3, 4]
+Some 10
+```
+
+### `maximumBy`
+
+```
+maximumBy : (a -> a -> <e> Ordering) -> List a -> <e> Option a
+```
+
+The largest element according to `cmp`, or `None` when the list is
+empty.
+
+When several elements compare equal, the first one wins. `maximum` is the
+form that uses the `Ord` instance.
+
+```medaka
+> maximumBy (x y => compare (x % 10) (y % 10)) [23, 47, 15]
+Some 47
+```
+
+### `minimumBy`
+
+```
+minimumBy : (a -> a -> <e> Ordering) -> List a -> <e> Option a
+```
+
+The smallest element according to `cmp`, or `None` when the list is
+empty.
+
+When several elements compare equal, the first one wins. `minimum` is the
+form that uses the `Ord` instance.
+
+```medaka
+> minimumBy (x y => compare (x % 10) (y % 10)) [23, 47, 15]
+Some 23
+```
+
+## Search
+
+### `findIndex`
 
 ```
 findIndex : (a -> <e> Bool) -> List a -> <e> Option Int
 ```
 
-Index of the first element satisfying the predicate, or `None`.
-
-
-*(doctest — run by `medaka test`)*
+The index of the first element satisfying `p`, or `None`.
 
 ```medaka
 > findIndex (x => x > 2) [1, 2, 3, 4]
 Some 2
 ```
 
-## `findIndices`
+### `findIndices`
 
 ```
 findIndices : (a -> <e> Bool) -> List a -> <e> List Int
 ```
 
-Indices of every element satisfying the predicate.
-
-
-*(doctest — run by `medaka test`)*
+The indices of every element satisfying `p`.
 
 ```medaka
 > findIndices (x => x > 2) [1, 3, 2, 4]
 [1, 3]
 ```
 
-## `elemIndex`
+### `elemIndex`
 
 ```
 elemIndex : Eq a => a -> List a -> Option Int
 ```
 
-Index of the first occurrence of `x` (by `Eq`), or `None`.
-
-
-*(doctest — run by `medaka test`)*
+The index of the first element equal to `x`, or `None`.
 
 ```medaka
 > elemIndex 3 [1, 2, 3, 2]
 Some 2
 ```
 
-## `elemIndices`
+### `elemIndices`
 
 ```
 elemIndices : Eq a => a -> List a -> List Int
 ```
 
-Indices of every occurrence of `x` (by `Eq`).
-
-
-*(doctest — run by `medaka test`)*
+The indices of every element equal to `x`.
 
 ```medaka
 > elemIndices 2 [1, 2, 3, 2]
 [1, 3]
-> elemIndices 9 [1, 2, 3]
-[]
 ```
 
-## `lookup`
+### `lookup`
 
 ```
 lookup : Eq k => k -> List (k, v) -> Option v
 ```
 
-Look `key` up in an association list, returning the first match.
-`O(n)` — for a large or long-lived table reach for `map.Map` (`O(log n)`)
-or `hash_map.HashMap` instead.
+The value paired with `key` in an association list, or `None`.
 
-
-*(doctest — run by `medaka test`)*
+The first matching pair wins. Each lookup scans the list, so for a large or
+long-lived table use `map.Map` or `hash_map.HashMap`.
 
 ```medaka
 > lookup 2 [(1, "a"), (2, "b")]
@@ -374,229 +473,147 @@ Some "b"
 None
 ```
 
-## `findMap`
+### `findMap`
 
 ```
 findMap : (a -> <e> Option b) -> List a -> <e> Option b
 ```
 
-The first non-`None` result of `f` — `find` and `map` in a single pass,
-without rebuilding the list.  Short-circuits on the first hit.
+The first `Some` produced by applying `f` to the elements in order, or
+`None`.
 
-
-*(doctest — run by `medaka test`)*
+Stops at the first hit, so `f` is not applied to the remaining elements.
 
 ```medaka
 > findMap (x => if x > 2 then Some (x * 10) else None) [1, 2, 3, 4]
 Some 30
-> findMap (x => if x > 9 then Some x else None) [1, 2, 3]
-None
 ```
 
-## `reduce`
+## Indexed
 
-```
-reduce : (a -> a -> <e> a) -> List a -> <e> Option a
-```
-
-Left-fold using the first element as the seed — `None` on an empty list.
-Named `reduce` rather than `foldl1`: it needs no seed, so it reads as
-"reduce the list to one value".
-
-
-*(doctest — run by `medaka test`)*
-
-```medaka
-> reduce (x y => x + y) [1, 2, 3, 4]
-Some 10
-> reduce (x y => if x > y then x else y) [3, 1, 2]
-Some 3
-> reduce (x y => x + y) ([] : List Int)
-None
-```
-
-## `maximumBy`
-
-```
-maximumBy : (a -> a -> <e> Ordering) -> List a -> <e> Option a
-```
-
-Largest element by a custom comparator, or `None` when empty.  Ties keep
-the *first* of the equal elements.  `maximum` (core) is the `Ord` case.
-
-
-*(doctest — run by `medaka test`)*
-
-```medaka
-> maximumBy (x y => compare (x % 10) (y % 10)) [23, 47, 15]
-Some 47
-> maximumBy compare ([] : List Int)
-None
-```
-
-## `minimumBy`
-
-```
-minimumBy : (a -> a -> <e> Ordering) -> List a -> <e> Option a
-```
-
-Smallest element by a custom comparator, or `None` when empty.  Ties keep
-the *first* of the equal elements.  `minimum` (core) is the `Ord` case.
-
-
-*(doctest — run by `medaka test`)*
-
-```medaka
-> minimumBy (x y => compare (x % 10) (y % 10)) [23, 47, 15]
-Some 23
-> minimumBy compare ([] : List Int)
-None
-```
-
-## `mapWithIndex`
+### `mapWithIndex`
 
 ```
 mapWithIndex : (Int -> a -> <e> b) -> List a -> <e> List b
 ```
 
-`map`, but `f` also receives each element's 0-based index.
-
-
-*(doctest — run by `medaka test`)*
+Like `map`, with `f` also receiving each element's index, counting
+from `0`.
 
 ```medaka
 > mapWithIndex (i x => i * x) [1, 2, 3]
 [0, 2, 6]
-> mapWithIndex (i x => i + x) [10, 20]
-[10, 21]
 ```
 
-## `indexed`
+### `indexed`
 
 ```
 indexed : List a -> List (Int, a)
 ```
 
-Pair every element with its 0-based index.
-
-
-*(doctest — run by `medaka test`)*
+Each element paired with its index, counting from `0`.
 
 ```medaka
 > indexed ["a", "b", "c"]
 [(0, "a"), (1, "b"), (2, "c")]
 ```
 
-## `mapAccumL`
+### `mapAccumL`
 
 ```
 mapAccumL : (s -> a -> <e> (s, b)) -> s -> List a -> <e> (s, List b)
 ```
 
-Left-to-right `map` threading an accumulator: `f` sees the running state
-and each element, and returns the new state plus the mapped element.
-Returns the final state and the mapped list.
+A `map` that threads a state value from left to right.
 
-
-*(doctest — run by `medaka test`)*
+`f` receives the state and an element, and returns the new state and the
+mapped element. The result is the final state and the mapped list.
 
 ```medaka
 > mapAccumL (s x => (s + x, s)) 0 [1, 2, 3]
 (6, [0, 1, 3])
 ```
 
-## `mapAccumR`
+### `mapAccumR`
 
 ```
 mapAccumR : (s -> a -> <e> (s, b)) -> s -> List a -> <e> (s, List b)
 ```
 
-Like `mapAccumL`, but threads the accumulator right-to-left.  The output
-list stays in the input's order.
+Like `mapAccumL`, but threads the state from right to left.
 
-
-*(doctest — run by `medaka test`)*
+The mapped list keeps the input's order.
 
 ```medaka
 > mapAccumR (s x => (s + x, s)) 0 [1, 2, 3]
 (6, [5, 3, 0])
 ```
 
-## `insertAt`
+## Positional edits
+
+### `insertAt`
 
 ```
 insertAt : Int -> a -> List a -> List a
 ```
 
-Insert `x` so that it lands at index `i`, shifting the rest right.
-`i <= 0` prepends; `i >= length` appends.
+The list with `x` inserted at index `i`, shifting the following elements
+right.
 
-
-*(doctest — run by `medaka test`)*
+An index at or below `0` prepends; an index at or beyond the length
+appends.
 
 ```medaka
 > insertAt 1 9 [1, 2, 3]
 [1, 9, 2, 3]
-> insertAt 0 9 [1, 2]
-[9, 1, 2]
-> insertAt 7 9 [1, 2]
-[1, 2, 9]
 ```
 
-## `updateAt`
+### `updateAt`
 
 ```
 updateAt : Int -> a -> List a -> List a
 ```
 
-Replace the element at index `i` with `x`.  Out-of-range leaves the list
-unchanged.
+The list with the element at index `i` replaced by `x`.
 
-
-*(doctest — run by `medaka test`)*
+Unchanged when `i` is out of range.
 
 ```medaka
 > updateAt 1 9 [1, 2, 3]
 [1, 9, 3]
-> updateAt 7 9 [1, 2]
-[1, 2]
 ```
 
-## `removeAt`
+### `removeAt`
 
 ```
 removeAt : Int -> List a -> List a
 ```
 
-Drop the element at index `i`.  Out-of-range leaves the list unchanged.
+The list without the element at index `i`.
 
-
-*(doctest — run by `medaka test`)*
+Unchanged when `i` is out of range.
 
 ```medaka
 > removeAt 1 [1, 2, 3]
 [1, 3]
-> removeAt 7 [1, 2]
-[1, 2]
 ```
 
-## `take`
+## Sublists
+
+### `take`
 
 ```
 take : Int -> List a -> List a
 ```
 
-First `n` elements (fewer if the list is shorter).
-
-
-*(doctest — run by `medaka test`)*
+The first `n` elements, or the whole list when it has fewer.
 
 ```medaka
 > take 2 [1, 2, 3, 4]
 [1, 2]
 ```
 
-## `drop`
+### `drop`
 
 ```
 drop : Int -> List a -> List a
@@ -604,251 +621,187 @@ drop : Int -> List a -> List a
 
 Everything after the first `n` elements.
 
-
-*(doctest — run by `medaka test`)*
-
 ```medaka
 > drop 2 [1, 2, 3, 4]
 [3, 4]
 ```
 
-## `takeWhile`
+### `takeWhile`
 
 ```
 takeWhile : (a -> <e> Bool) -> List a -> <e> List a
 ```
 
-Longest prefix whose elements all satisfy the predicate.
-
-
-*(doctest — run by `medaka test`)*
+The longest prefix whose elements all satisfy `p`.
 
 ```medaka
 > takeWhile (x => x < 3) [1, 2, 3, 1]
 [1, 2]
-> takeWhile (x => x < 9) [1, 2, 3]
-[1, 2, 3]
-> takeWhile (x => x < 0) [1, 2, 3]
-[]
-> takeWhile (x => x < 3) ([] : List Int)
-[]
 ```
 
-## `dropWhile`
+### `dropWhile`
 
 ```
 dropWhile : (a -> <e> Bool) -> List a -> <e> List a
 ```
 
-Drop the longest prefix whose elements satisfy the predicate.
-
-
-*(doctest — run by `medaka test`)*
+The list without its longest prefix of elements satisfying `p`.
 
 ```medaka
 > dropWhile (x => x < 3) [1, 2, 3, 1]
 [3, 1]
-> dropWhile (x => x < 9) [1, 2, 3]
-[]
-> dropWhile (x => x < 0) [1, 2, 3]
-[1, 2, 3]
-> dropWhile (x => x < 3) ([] : List Int)
-[]
 ```
 
-## `span`
+### `span`
 
 ```
 span : (a -> <e> Bool) -> List a -> <e> (List a, List a)
 ```
 
-`(takeWhile p xs, dropWhile p xs)`, in a single pass.
+The longest prefix satisfying `p`, and the rest of the list.
 
-
-*(doctest — run by `medaka test`)*
+Equivalent to `(takeWhile p xs, dropWhile p xs)` in one pass.
 
 ```medaka
 > span (x => x < 3) [1, 2, 3, 1]
 ([1, 2], [3, 1])
-> span (x => x < 9) [1, 2, 3]
-([1, 2, 3], [])
-> span (x => x < 0) [1, 2, 3]
-([], [1, 2, 3])
-> span (x => x < 3) ([] : List Int)
-([], [])
 ```
 
-## `break`
+### `break`
 
 ```
 break : (a -> <e> Bool) -> List a -> <e> (List a, List a)
 ```
 
-`span` with the predicate negated: split at the first element that *does*
-satisfy `p`.
+The prefix before the first element satisfying `p`, and the rest of the
+list.
 
-
-*(doctest — run by `medaka test`)*
+The same as `span` with the predicate negated.
 
 ```medaka
 > break (x => x > 2) [1, 2, 3, 1]
 ([1, 2], [3, 1])
-> break (x => x > 9) [1, 2, 3]
-([1, 2, 3], [])
-> break (x => x > 0) [1, 2, 3]
-([], [1, 2, 3])
-> break (x => x > 2) ([] : List Int)
-([], [])
 ```
 
-## `splitAt`
+### `splitAt`
 
 ```
 splitAt : Int -> List a -> (List a, List a)
 ```
 
-`(take n xs, drop n xs)`, in a single pass.
+The first `n` elements, and the rest of the list.
 
-
-*(doctest — run by `medaka test`)*
+Equivalent to `(take n xs, drop n xs)` in one pass.
 
 ```medaka
 > splitAt 2 [1, 2, 3, 4]
 ([1, 2], [3, 4])
 ```
 
-## `sliceClamped`
+### `sliceClamped`
 
 ```
 sliceClamped : Int -> Int -> List a -> List a
 ```
 
-`sliceClamped lo hi xs` — the elements at indices `[lo, hi)`.  Clamps (never
-panics); use `xs.[lo..hi]` (the `Slice` interface) for the panicking form.
+The elements at indices `[lo, hi)`.
 
-
-*(doctest — run by `medaka test`)*
+Indices are clamped to the list, so an out-of-range slice is shorter
+rather than a panic. `xs.[lo..hi]` is the panicking form.
 
 ```medaka
 > sliceClamped 1 3 [10, 20, 30, 40]
 [20, 30]
 ```
 
-## `chunks`
+### `chunks`
 
 ```
 chunks : Int -> List a -> List (List a)
 ```
 
-Split into consecutive groups of `n` (the last group may be shorter).
-Empty when `n <= 0`.
+The list split into consecutive groups of `n` elements.
 
-
-*(doctest — run by `medaka test`)*
+The last group holds whatever remains, so it may be shorter. Empty when
+`n <= 0`.
 
 ```medaka
 > chunks 2 [1, 2, 3, 4, 5]
 [[1, 2], [3, 4], [5]]
 ```
 
-## `dropWhileEnd`
+### `dropWhileEnd`
 
 ```
 dropWhileEnd : (a -> <e> Bool) -> List a -> <e> List a
 ```
 
-Drop the longest *suffix* whose elements all satisfy the predicate — the
-mirror of `dropWhile`.  Trailing-whitespace trimming is the usual reason.
-
-
-*(doctest — run by `medaka test`)*
+The list without its longest suffix of elements satisfying `p`.
 
 ```medaka
 > dropWhileEnd (x => x == 0) [1, 2, 0, 0]
 [1, 2]
-> dropWhileEnd (x => x == 0) [0, 1, 0]
-[0, 1]
-> dropWhileEnd (x => x == 0) [0, 0]
-[]
 ```
 
-## `takeWhileEnd`
+### `takeWhileEnd`
 
 ```
 takeWhileEnd : (a -> <e> Bool) -> List a -> <e> List a
 ```
 
-The longest *suffix* whose elements all satisfy the predicate — the mirror
-of `takeWhile`.
-
-
-*(doctest — run by `medaka test`)*
+The longest suffix whose elements all satisfy `p`.
 
 ```medaka
 > takeWhileEnd (x => x > 1) [1, 2, 3]
 [2, 3]
-> takeWhileEnd (x => x > 9) [1, 2, 3]
-[]
-> takeWhileEnd (x => x > 0) [1, 2]
-[1, 2]
 ```
 
-## `split`
+### `split`
 
 ```
 split : Eq a => List a -> List a -> List (List a)
 ```
 
-Split on every occurrence of the separator *sublist*, dropping the
-separators.  The list analogue of `string.split` — same needle-first
-argument order, and an empty separator likewise yields `[xs]`.
-(`splitAt` is the unrelated positional one, which takes an `Int`.)
+The list split at every occurrence of the separator `sep`, with the
+separators removed.
 
-
-*(doctest — run by `medaka test`)*
+An empty separator yields the whole list as the only piece. This is the
+list form of `string.split`; `splitAt` is the positional split.
 
 ```medaka
 > split [0] [1, 0, 2, 0, 3]
 [[1], [2], [3]]
-> split [0, 0] [1, 0, 0, 2]
-[[1], [2]]
-> split [9] [1, 2]
-[[1, 2]]
 > split [0] [0, 1]
 [[], [1]]
 ```
 
-## `startsWith`
+## Sublist predicates
+
+### `startsWith`
 
 ```
 startsWith : Eq a => List a -> List a -> Bool
 ```
 
-True when `prefix` is a leading sublist of `xs`.  Every list starts with
-the empty list.
+Whether the list begins with `prefix`.
 
-
-*(doctest — run by `medaka test`)*
+Every list begins with the empty list. `elem` is the test for a single
+element.
 
 ```medaka
 > startsWith [1, 2] [1, 2, 3]
 True
 > startsWith [2, 3] [1, 2, 3]
 False
-> startsWith ([] : List Int) [1]
-True
 ```
 
-## `endsWith`
+### `endsWith`
 
 ```
 endsWith : Eq a => List a -> List a -> Bool
 ```
 
-True when `suffix` is a trailing sublist of `xs`.
-
-
-*(doctest — run by `medaka test`)*
+Whether the list ends with `suffix`.
 
 ```medaka
 > endsWith [2, 3] [1, 2, 3]
@@ -857,480 +810,355 @@ True
 False
 ```
 
-## `containsSub`
+### `containsSub`
 
 ```
 containsSub : Eq a => List a -> List a -> Bool
 ```
 
-True when `sub` occurs as a contiguous run anywhere in `xs`.  `O(n*m)`
-naive scan — fine for short needles; for text prefer `string.contains`,
-which is host-backed.
+Whether `sub` occurs as a contiguous run anywhere in the list.
 
-
-*(doctest — run by `medaka test`)*
+The scan costs `O(n * m)`. For text, `string.contains` is faster.
 
 ```medaka
 > containsSub [2, 3] [1, 2, 3, 4]
 True
 > containsSub [2, 4] [1, 2, 3, 4]
 False
-> containsSub ([] : List Int) [1]
-True
 ```
 
-## `sortBy`
+## Sorting
+
+### `sortBy`
 
 ```
 sortBy : (a -> a -> <e> Ordering) -> List a -> <e> List a
 ```
 
-Stable sort with a custom comparator (bottom-up is unnecessary; a plain
-recursive merge sort is stable and `O(n log n)`).
+The list sorted by `cmp`.
 
-
-*(doctest — run by `medaka test`)*
+The sort is stable: elements that compare equal keep their original
+order. It costs `O(n log n)`.
 
 ```medaka
 > sortBy (x y => compare y x) [3, 1, 2]
 [3, 2, 1]
 ```
 
-## `sort`
+### `sort`
 
 ```
 sort : Ord a => List a -> List a
 ```
 
-Ascending stable sort by the `Ord` instance.
+The list sorted in ascending order.
 
-
-*(doctest — run by `medaka test`)*
+The sort is stable.
 
 ```medaka
 > sort [3, 1, 2, 1]
 [1, 1, 2, 3]
 ```
 
-## `sortOn`
+### `sortOn`
 
 ```
 sortOn : Ord b => (a -> <e> b) -> List a -> <e> List a
 ```
 
-Sort by a derived key, computing the key once per element via a
-decorate–sort–undecorate pass (the key may be expensive, so this avoids
-recomputing it inside every comparison).
+The list sorted in ascending order of `key`.
 
-
-*(doctest — run by `medaka test`)*
+`key` is computed once per element, so it may be expensive. The sort is
+stable.
 
 ```medaka
 > sortOn (x => 0 - x) [1, 3, 2]
 [3, 2, 1]
 ```
 
-## `nubBy`
+### `nubBy`
 
 ```
 nubBy : (a -> a -> <e> Bool) -> List a -> <e> List a
 ```
 
-Drop duplicates by a custom equality, keeping the first occurrence.
-`O(n²)` baseline.
+The list with duplicates removed, where `same` decides which elements
+are duplicates.
 
-
-*(doctest — run by `medaka test`)*
+The first occurrence is kept. Costs `O(n^2)`.
 
 ```medaka
 > nubBy (x y => x == y) [1, 2, 1, 3, 2]
 [1, 2, 3]
 ```
 
-## `nub`
+### `nub`
 
 ```
 nub : Eq a => List a -> List a
 ```
 
-Drop duplicates by `Eq`, keeping the first occurrence.
+The list with duplicate elements removed.
 
-
-*(doctest — run by `medaka test`)*
+The first occurrence is kept. Costs `O(n^2)`; for large lists, build a
+`set.Set` or `hash_set.HashSet` instead.
 
 ```medaka
 > nub [1, 2, 1, 3, 2, 1]
 [1, 2, 3]
 ```
 
-## `deleteBy`
+### `deleteBy`
 
 ```
 deleteBy : (a -> a -> <e> Bool) -> a -> List a -> <e> List a
 ```
 
-Remove the *first* element matching a custom equality; unchanged when
-nothing matches.
+The list without the first element that `same` matches against `x`.
 
-
-*(doctest — run by `medaka test`)*
+Unchanged when nothing matches.
 
 ```medaka
 > deleteBy (x y => x == y) 2 [1, 2, 3, 2]
 [1, 3, 2]
 ```
 
-## `delete`
+### `delete`
 
 ```
 delete : Eq a => a -> List a -> List a
 ```
 
-Remove the *first* occurrence of `x` (by `Eq`); unchanged when absent.
-Only the first — `filter (/= x) xs` removes every occurrence.
+The list without the first occurrence of `x`.
 
-
-*(doctest — run by `medaka test`)*
+Unchanged when `x` is absent. `filter (/= x)` removes every occurrence.
 
 ```medaka
 > delete 2 [1, 2, 3, 2]
 [1, 3, 2]
-> delete 9 [1, 2]
-[1, 2]
 ```
 
-## `groupBy`
+## Grouping
+
+### `groupBy`
 
 ```
 groupBy : (a -> a -> <e> Bool) -> List a -> <e> List (List a)
 ```
 
-Group maximal runs of adjacent elements that satisfy the equivalence.
-
-
-*(doctest — run by `medaka test`)*
+The list split into runs of adjacent elements that `same` considers
+equivalent.
 
 ```medaka
 > groupBy (x y => x == y) [1, 1, 2, 3, 3, 3]
 [[1, 1], [2], [3, 3, 3]]
 ```
 
-## `group`
+### `group`
 
 ```
 group : Eq a => List a -> List (List a)
 ```
 
-Group maximal runs of adjacent equal elements (by `Eq`).
-
-
-*(doctest — run by `medaka test`)*
+The list split into runs of adjacent equal elements.
 
 ```medaka
 > group [1, 1, 2, 3, 3]
 [[1, 1], [2], [3, 3]]
 ```
 
-## `partition`
+### `partition`
 
 ```
 partition : (a -> <e> Bool) -> List a -> <e> (List a, List a)
 ```
 
-`(filter p xs, filter (not . p) xs)`, in a single pass.
+The elements satisfying `p`, and the elements that do not.
 
-
-*(doctest — run by `medaka test`)*
+Both parts keep the input's order.
 
 ```medaka
 > partition (x => x > 2) [1, 2, 3, 4]
 ([3, 4], [1, 2])
 ```
 
-## `somes`
+### `somes`
 
 ```
 somes : List (Option a) -> List a
 ```
 
-Keep the `Some`s, drop the `None`s.
-
-
-*(doctest — run by `medaka test`)*
+The values inside the `Some`s, with the `None`s dropped.
 
 ```medaka
 > somes [Some 1, None, Some 3]
 [1, 3]
-> somes ([] : List (Option Int))
-[]
 ```
 
-## `oks`
+### `oks`
 
 ```
 oks : List (Result e a) -> List a
 ```
 
-Keep the `Ok` values, drop the `Err`s.
-
-
-*(doctest — run by `medaka test`)*
+The values inside the `Ok`s, with the `Err`s dropped.
 
 ```medaka
 > oks [Ok 1, Err "boom", Ok 3]
 [1, 3]
 ```
 
-## `errs`
+### `errs`
 
 ```
 errs : List (Result e a) -> List e
 ```
 
-Keep the `Err` values, drop the `Ok`s.
-
-
-*(doctest — run by `medaka test`)*
+The values inside the `Err`s, with the `Ok`s dropped.
 
 ```medaka
 > errs [Ok 1, Err "boom", Ok 3]
 ["boom"]
 ```
 
-## `partitionResults`
+### `partitionResults`
 
 ```
 partitionResults : List (Result e a) -> (List e, List a)
 ```
 
-Split into `(errs, oks)` in a single pass.
-
-
-*(doctest — run by `medaka test`)*
+The `Err` values and the `Ok` values, as two lists.
 
 ```medaka
 > partitionResults [Ok 1, Err "boom", Ok 3]
 (["boom"], [1, 3])
 ```
 
-## `tally`
+### `tally`
 
 ```
 tally : Eq a => List a -> List (a, Int)
 ```
 
-Count occurrences of each distinct element (by `Eq`), in first-seen order.
+Each distinct element paired with the number of times it occurs.
 
-
-*(doctest — run by `medaka test`)*
+Elements appear in the order they were first seen.
 
 ```medaka
 > tally [1, 2, 1, 3, 1, 2]
 [(1, 3), (2, 2), (3, 1)]
 ```
 
-## `head`
+## Zipping
 
-```
-head : List a -> Option a
-```
-
-## `tail`
-
-```
-tail : List a -> Option (List a)
-```
-
-## `uncons`
-
-```
-uncons : List a -> Option (a, List a)
-```
-
-Split off the first element — `head` and `tail` in one match, which is
-what you want when destructuring a list you cannot pattern-match on
-directly.  `None` exactly when the list is empty.
-
-
-*(doctest — run by `medaka test`)*
-
-```medaka
-> uncons [1, 2, 3]
-Some (1, [2, 3])
-> uncons [1]
-Some (1, [])
-> uncons ([] : List Int)
-None
-```
-
-## `last`
-
-```
-last : List a -> Option a
-```
-
-## `init`
-
-```
-init : List a -> Option (List a)
-```
-
-## `get`
-
-```
-get : Int -> List a -> Option a
-```
-
-## `zip`
+### `zip`
 
 ```
 zip : List a -> List b -> List (a, b)
 ```
 
-Pair up elements of two lists positionally.  The result is as long as
-the *shorter* input; trailing elements of the longer one are dropped.
+The elements of two lists paired up by position.
 
-
-*(doctest — run by `medaka test`)*
+The result is as long as the shorter input. Extra elements of the longer
+one are dropped.
 
 ```medaka
 > zip [1, 2, 3] [10, 20]
 [(1, 10), (2, 20)]
-> zip [] [1, 2]
-[]
 ```
 
-## `zip3`
+### `zip3`
 
 ```
 zip3 : List a -> List b -> List c -> List (a, b, c)
 ```
 
-Like `zip`, but for three lists, producing triples.  Stops at the
-shortest input.
+The elements of three lists grouped into triples by position.
 
-
-*(doctest — run by `medaka test`)*
+The result is as long as the shortest input.
 
 ```medaka
 > zip3 [1, 2] [3, 4] [5, 6]
 [(1, 3, 5), (2, 4, 6)]
-> zip3 [1, 2, 3] [4, 5] [6]
-[(1, 4, 6)]
 ```
 
-## `zipWith`
+### `zipWith`
 
 ```
 zipWith : (a -> b -> <e> c) -> List a -> List b -> <e> List c
 ```
 
-Combine two lists element-wise with `f`, stopping at the shorter.
-`zip` is the special case `zipWith (x y => (x, y))`.
+The elements of two lists combined by position with `f`.
 
-
-*(doctest — run by `medaka test`)*
+The result is as long as the shorter input. `zip` is `zipWith` with a
+pairing function.
 
 ```medaka
 > zipWith (x y => x + y) [1, 2, 3] [10, 20, 30]
 [11, 22, 33]
-> zipWith (x y => x * y) [1, 2, 3, 4] [10, 20]
-[10, 40]
 ```
 
-## `zip4`
+### `zip4`
 
 ```
 zip4 : List a -> List b -> List c -> List d -> List (a, b, c, d)
 ```
 
-Like `zip3`, but for four lists, producing 4-tuples.  Stops at the
-shortest input.
+The elements of four lists grouped into 4-tuples by position.
 
-
-*(doctest — run by `medaka test`)*
+The result is as long as the shortest input.
 
 ```medaka
 > zip4 [1, 2] [3, 4] [5, 6] [7, 8]
 [(1, 3, 5, 7), (2, 4, 6, 8)]
-> zip4 [1, 2] [3] [5, 6] [7, 8]
-[(1, 3, 5, 7)]
 ```
 
-## `zipWith3`
+### `zipWith3`
 
 ```
 zipWith3 : (a -> b -> c -> <e> d) -> List a -> List b -> List c -> <e> List d
 ```
 
-Like `zipWith`, but for three lists.  `zip3` is the special case
-`zipWith3 (x y z => (x, y, z))`.
+The elements of three lists combined by position with `f`.
 
-
-*(doctest — run by `medaka test`)*
+The result is as long as the shortest input.
 
 ```medaka
 > zipWith3 (x y z => x + y + z) [1, 2] [10, 20] [100, 200]
 [111, 222]
-> zipWith3 (x y z => x + y + z) [1, 2, 3] [10, 20] [100]
-[111]
 ```
 
-## `unzip`
+### `unzip`
 
 ```
 unzip : List (a, b) -> (List a, List b)
 ```
 
-Split a list of pairs into a pair of lists — the inverse of `zip`.
-
-
-*(doctest — run by `medaka test`)*
+A list of pairs separated into a pair of lists. The inverse of `zip`.
 
 ```medaka
 > unzip [(1, 2), (3, 4)]
 ([1, 3], [2, 4])
-> unzip []
-([], [])
 ```
 
-## `unzip3`
+### `unzip3`
 
 ```
 unzip3 : List (a, b, c) -> (List a, List b, List c)
 ```
 
-Split a list of triples into three lists — the inverse of `zip3`.
-
-
-*(doctest — run by `medaka test`)*
+A list of triples separated into three lists. The inverse of `zip3`.
 
 ```medaka
 > unzip3 [(1, 2, 3), (4, 5, 6)]
 ([1, 4], [2, 5], [3, 6])
-> unzip3 ([] : List (Int, Int, Int))
-([], [], [])
 ```
 
-## `Eq (List a)`
+## Instances
 
-```
-impl Eq (List a) requires Eq a
-```
+- `List`: `Eq`, `Semigroup`, `Monoid`, [`Ord`](#ord-list-a), `Debug`, `Display`, `Hashable`, `Mappable`, `Applicative`, `Thenable`, `Alternative`, [`Index`](#index-list-a-int-a), [`Slice`](#slice-list-a), `Foldable`, `Traversable`, [`Filterable`](#filterable-list), `Arbitrary`
 
-## `Semigroup (List a)`
-
-```
-impl Semigroup (List a)
-```
-
-## `Monoid (List a)`
-
-```
-impl Monoid (List a)
-```
-
-## `Ord (List a)`
+### `Ord (List a)`
 
 ```
 impl Ord (List a) requires Ord a
@@ -1339,49 +1167,7 @@ impl Ord (List a) requires Ord a
 Lexicographic ordering: compare element-wise, and a proper prefix sorts
 before any list that extends it (`[1] < [1, 2]`, `[] < [0]`).
 
-## `Debug (List a)`
-
-```
-impl Debug (List a) requires Debug a
-```
-
-## `Display (List a)`
-
-```
-impl Display (List a) requires Display a
-```
-
-## `Hashable (List a)`
-
-```
-impl Hashable (List a) requires Hashable a
-```
-
-## `Mappable List`
-
-```
-impl Mappable List
-```
-
-## `Applicative List`
-
-```
-impl Applicative List
-```
-
-## `Thenable List`
-
-```
-impl Thenable List
-```
-
-## `Alternative List`
-
-```
-impl Alternative List
-```
-
-## `Index (List a) Int a`
+### `Index (List a) Int a`
 
 ```
 impl Index (List a) Int a
@@ -1393,7 +1179,7 @@ list has no random access, so this walks `i` cons cells; prefer `Array`/
 (E-INDEX-OOB) when `i` is out of range.  No `IndexMut` impl: `List` is
 immutable / has no in-place element write.
 
-## `Slice (List a)`
+### `Slice (List a)`
 
 ```
 impl Slice (List a)
@@ -1403,33 +1189,12 @@ impl Slice (List a)
 cons chain.  Out-of-range bounds are CLAMPED (never panics), matching the
 interpreter's list-slice contract.
 
-
-*(doctest — run by `medaka test`)*
-
 ```medaka
 > slice [10, 20, 30, 40] 1 3
 [20, 30]
 ```
 
-## `Foldable List`
-
-```
-impl Foldable List
-```
-
-## `Traversable List`
-
-```
-impl Traversable List
-```
-
-Each `traverse` impl is a SINGLE clause with an inner `match`, not separate
-per-constructor clauses: the multi-clause form of a generic `Thenable m =>`
-method whose body has a return-position `pure` loops in eval (dict-passing ×
-multi-clause desugar).  Do not split them back out.
-lint-disable-next-line rule-match-on-param
-
-## `Filterable List`
+### `Filterable List`
 
 ```
 impl Filterable List
@@ -1439,25 +1204,8 @@ impl Filterable List
 `filter` name is in scope for the rest of the stdlib; `list.mdk`
 re-exports it for discoverability.
 
-
-*(doctest — run by `medaka test`)*
-
 ```medaka
 > filter (x => x > 2) [1, 2, 3, 4]
 [3, 4]
 ```
-
-## `Arbitrary (List a)`
-
-```
-impl Arbitrary (List a) requires Arbitrary a
-```
-
-The instance form of `arbitraryList` (sheet row H-7).  `arbitraryList` stays
-as the explicit-generator escape hatch — a generator that is not the type's
-`Arbitrary` instance, or a longer list, still needs it.  This impl is what
-lets a HAND-WRITTEN generator call `arbitrary` at `List a` and compose.
-⚠️ It is NOT what makes `prop … (xs : List Int)` work: `medaka test`'s
-runner generates from the declared TYPE, not from `Arbitrary` (see the
-note above the laws below).  `maxLen` is 10, matching `arbitraryString`.
 
