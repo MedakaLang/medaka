@@ -511,6 +511,27 @@ cRunMainForEffect binds = match lookupBinding "main" binds
   Some v => force v
   None => VUnit
 
+-- ── the single-program driver seam (#1954) ────────────────────────────────────
+-- `ctorFieldOrdersRef` is INTERPRETER state, not lowering state: only the
+-- tree-walking record machinery reads it (the backends read
+-- `declaredRecordFieldOrders` instead), so lowering has no business seeding it.
+-- `cevalModules` already seeds it for the multi-module path; these two wrappers
+-- are the single-program analog, so every `ceval*` entry point gets the table
+-- from an INTERPRETER driver rather than as a side effect of `lowerProgram`.
+-- Callers pass the SAME decl list they lowered — for the elaborated corpora that
+-- is the post-`annotateProgram` / post-`elaborate*` list, not the raw parameters.
+export
+cevalMainOf : List Decl -> CProgram -> String
+cevalMainOf decls prog =
+  ctorFieldOrdersRef := buildCtorFieldOrders decls
+  cevalMain prog
+
+export
+cevalOutputOf : List Decl -> CProgram -> String
+cevalOutputOf decls prog =
+  ctorFieldOrdersRef := buildCtorFieldOrders decls
+  cevalOutput prog
+
 -- ── multi-module evaluation (per-module Core-IR frames over a shared global) ──
 -- The Core-IR analog of eval.mdk's evalModules — the loader-driven path that runs
 -- the compiler's own module graph through the Core IR.  Structure mirrors the AST

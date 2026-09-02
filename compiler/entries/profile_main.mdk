@@ -50,8 +50,10 @@ import types.typecheck.{
 }
 import eval.eval.{funNamesOf, dropShadowedExp}
 import ir.core_ir_lower.{
+  ifaceImplHeadTable,
   declaredRecordFieldOrders,
   lowerProgramEmit,
+  EmitTarget(..),
   returnsSelfTable,
   selfFnParamTable,
   methodIfaceTable,
@@ -68,7 +70,7 @@ import backend.llvm_emit.{emitProgram, makeEmitInput}
 -- names above. Aliased on import, exactly as tools/snapshot.mdk does for the same
 -- clash. The `W` suffix marks the WasmGC peer; the un-suffixed names stay LLVM's, so
 -- an unqualified `emitProgram` in this file still means what it has always meant.
-import backend.wasm_emit.{emitProgram as wasmText, makeWasmEmitInput}
+import backend.wasm_emit.{emitProgram as wasmText, makeWasmEmitInputFull}
 import tools.fmt.{formatSource}
 import frontend.exhaust.{checkGuardExhaustivenessWith}
 import support.timer.{
@@ -234,6 +236,12 @@ runStaged on targetPath rsrc csrc tsrc =
     (declSigTypeNames rDecls ++ declSigTypeNames combined)
     (mainTypeIsUnit ()) (mainTypeIsFloat ()) 0 [] [] targetPath (declaredRecordFieldOrders combined)
     (validateFfiExternTypeNames (checkedFfiExternTypeNames combined))
+    -- `combined`, not `live`: this driver builds every other input table from
+    -- `combined` too, and DCE (which produces `live`) runs in its OWN timed stage
+    -- below, so reading it here would move that stage's work into `elaborate`.  The
+    -- head table is a strict superset of `live`'s, and this driver DISCARDS its
+    -- emitted IR (it measures stages), so the difference is unobservable.
+    (ifaceImplHeadTable combined)
   let tEl1 = now ()
   let _ = emitPhaseAO on "elaborate" (tEl1 - tEl0) (allocSnap () - aEl0) declsOp (opSnap () - oEl0)
   -- dce: source DCE, as the real build driver does it in default (whole-module) mode.
@@ -268,7 +276,10 @@ runStaged on targetPath rsrc csrc tsrc =
   let tLw0 = now ()
   let aLw0 = allocSnap ()
   let oLw0 = opSnap ()
-  let cprog = lowerProgramEmit live
+  -- #1970: `cprog` is REUSED for both the LLVM `emit` stage right below and the
+  -- separately-timed WASM stage further down (see the comment there) -- one
+  -- lowering feeds both backends, so this cannot narrow to either.
+  let cprog = lowerProgramEmit TargetBothUnknown live
   let tLw1 = now ()
   let _ = emitPhaseAO on "lower" (tLw1 - tLw0) (allocSnap () - aLw0) declsOp (opSnap () - oLw0)
   let tE0 = now ()
@@ -391,7 +402,7 @@ runStaged on targetPath rsrc csrc tsrc =
 wasmStage : Bool -> Bool -> List Decl -> List Decl -> CProgram -> String -> <IO> Unit
 wasmStage _ False _ _ _ _ = ()
 wasmStage on True runtimeDecls live cprog declsOp =
-  let input = makeWasmEmitInput (methodIfaceTable live) (declSigTypeNames runtimeDecls ++ declSigTypeNames live) (ctorFieldTypeNames live) (mainTypeIsFloat ()) (declaredRecordFieldOrders live)
+  let input = makeWasmEmitInputFull (methodIfaceTable live) (declSigTypeNames runtimeDecls ++ declSigTypeNames live) (ctorFieldTypeNames live) (mainTypeIsFloat ()) (declaredRecordFieldOrders live) [] (ifaceImplHeadTable live)
   let tWe0 = now ()
   let aWe0 = allocSnap ()
   let oWe0 = opSnap ()
