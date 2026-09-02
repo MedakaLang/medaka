@@ -6,31 +6,31 @@
 -- fills: plain integers, the binary-fixture shape the issue reports
 gzbytes = [|
   31, 139, 8, 0, 0, 0, 0, 0, 4, 3, 1, 200, 0, 55, 255, 190, 246, 7, 148, 140,
-  204, 149, 34, 157,
+  204, 149, 34, 157
 |]
 
 -- fills: radix and separator lexemes survive (printer keeps the source lexeme)
 radixes = [
   0xD800, 0xD801, 1_000, 0xFF, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
-  0x18, 0x19, 0x1A,
+  0x18, 0x19, 0x1A
 ]
 
 -- fills: unary minus over a numeric literal is still a numeric literal
 deltas = [
   -1, -2, -3, -4, -5, -6, -7, -8, -9, -10, -11, -12, -13, -14, -15, -16, -17,
-  -18, -19, -20, -21,
+  -18, -19, -20, -21
 ]
 
 -- fills: character literals
 letters = [
   'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o',
-  'p', 'q', 'r', 's',
+  'p', 'q', 'r', 's'
 ]
 
 -- fills: floats
 weights = [
   1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5, 10.5, 11.5, 12.5, 13.5, 14.5,
-  15.5, 16.5, 17.5,
+  15.5, 16.5, 17.5
 ]
 
 -- unchanged: fits the budget, so it stays on one line either way
@@ -38,79 +38,27 @@ narrow = [1, 2, 3]
 
 -- unchanged: strings are OUT of scope — one element per line
 words = [
-  "alpha",
-  "bravo",
-  "charlie",
-  "delta",
-  "echo",
-  "foxtrot",
-  "golf",
-  "hotel",
-  "india",
-  "juliett",
+  "alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel",
+  "india", "juliett"
 ]
 
 -- unchanged: identifiers are OUT of scope — one element per line
 refs = [
-  narrow,
-  narrow,
-  narrow,
-  narrow,
-  narrow,
-  narrow,
-  narrow,
-  narrow,
-  narrow,
-  narrow,
-  narrow,
-  narrow,
+  narrow, narrow, narrow, narrow, narrow, narrow, narrow, narrow, narrow,
+  narrow, narrow, narrow
 ]
 
 -- unchanged: booleans are OUT of scope — one element per line
 flags = [
-  True,
-  False,
-  True,
-  False,
-  True,
-  False,
-  True,
-  False,
-  True,
-  False,
-  True,
-  False,
-  True,
-  False,
+  True, False, True, False, True, False, True, False, True, False, True, False,
+  True, False
 ]
 
 -- unchanged: a compound element disqualifies the whole literal, even when the
 -- literal also contains numbers
 mixed = [
-  1,
-  2,
-  3,
-  4,
-  5,
-  6,
-  7,
-  8,
-  9,
-  10,
-  11,
-  12,
-  13,
-  14,
-  15,
-  16,
-  17,
-  18,
-  19,
-  20,
-  21,
-  22,
-  23,
-  narrow,
+  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
+  23, narrow
 ]
 
 -- unchanged: nested literals are compound elements, so the OUTER list does not

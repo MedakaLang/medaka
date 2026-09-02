@@ -1,5 +1,5 @@
 # META
-source_lines=148
+source_lines=142
 stages=DESUGAR,MARK
 # SOURCE
 {- | Hexadecimal encoding and decoding of bytes.
@@ -52,7 +52,7 @@ encodeGo bytes i upper acc
   | i < 0 = acc
   | otherwise =
     let (hi, lo) = byteToHexChars (byteAt i bytes) upper
-    encodeGo bytes (i - 1) upper (hi :: lo::acc)
+    encodeGo bytes (i - 1) upper (hi :: lo :: acc)
 
 {- | The bytes as lowercase hex, two digits per byte.
 
@@ -61,11 +61,8 @@ encodeGo bytes i upper acc
 export
 encode : Array Int -> String
 encode bytes =
-  stringFromChars (arrayFromList (encodeGo
-    bytes
-    (arrayLength bytes - 1)
-    False
-    []))
+  stringFromChars
+    (arrayFromList (encodeGo bytes (arrayLength bytes - 1) False []))
 
 -- > encode ([||] : Array Int)
 -- ""
@@ -79,11 +76,8 @@ encode bytes =
 export
 encodeUpper : Array Int -> String
 encodeUpper bytes =
-  stringFromChars (arrayFromList (encodeGo
-    bytes
-    (arrayLength bytes - 1)
-    True
-    []))
+  stringFromChars
+    (arrayFromList (encodeGo bytes (arrayLength bytes - 1) True []))
 
 {- | The UTF-8 bytes of a string as lowercase hex.
 

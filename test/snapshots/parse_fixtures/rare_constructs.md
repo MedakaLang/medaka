@@ -86,10 +86,11 @@ shape s = match s
 leftSection = (2 * _)
 cmpSection = (== 0)
 notFlag b = not b
-classify = x => match x
-  0 => "zero"
-  n if n < 0 => "neg"
-  n => "pos"
+classify =
+  x => match x
+    0 => "zero"
+    n if n < 0 => "neg"
+    n => "pos"
 arrRange = [|1..5|]
 arrRangeIncl = [|0..=9|]
 sliceIt xs = xs.[1..3]

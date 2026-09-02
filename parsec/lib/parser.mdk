@@ -55,25 +55,22 @@ runP (ParserE f) input pos = f input pos
 -- top-level functions since multi-clause guard syntax can't be inlined.
 
 export impl DeferredMappable ParserE where
-  deferMap g p = ParserE (input pos =>
-    match runP p input pos
-      POk a pos2 => POk (g a) pos2
-      PErr m ep => PErr m ep)
+  deferMap g p = ParserE (input pos => match runP p input pos
+    POk a pos2 => POk (g a) pos2
+    PErr m ep => PErr m ep)
 
 export impl DeferredApplicative ParserE where
   deferPure a = ParserE (_ pos => POk a pos)
-  deferAp pf pa = ParserE (input pos =>
-    match runP pf input pos
-      PErr m ep => PErr m ep
-      POk f pos2 => match runP pa input pos2
-        POk a pos3 => POk (f a) pos3
-        PErr m2 ep2 => PErr m2 ep2)
+  deferAp pf pa = ParserE (input pos => match runP pf input pos
+    PErr m ep => PErr m ep
+    POk f pos2 => match runP pa input pos2
+      POk a pos3 => POk (f a) pos3
+      PErr m2 ep2 => PErr m2 ep2)
 
 export impl DeferredThenable ParserE where
-  deferThen p k = ParserE (input pos =>
-    match runP p input pos
-      PErr m ep => PErr m ep
-      POk a pos2 => runP (k a) input pos2)
+  deferThen p k = ParserE (input pos => match runP p input pos
+    PErr m ep => PErr m ep
+    POk a pos2 => runP (k a) input pos2)
 
 -- Left-biased, full-backtracking alternative.  Plain functions rather than an
 -- `Alternative` impl: that interface `requires Applicative f` at kind
@@ -100,10 +97,9 @@ noMatch = ParserE (_ pos => PErr "noMatch" pos)
 
 export
 orElse : ParserE e a -> ParserE e a -> ParserE e a
-orElse p q = ParserE (input pos =>
-  match runP p input pos
-    POk a pos2 => POk a pos2
-    PErr m1 e1 => keepFarther m1 e1 (runP q input pos))
+orElse p q = ParserE (input pos => match runP p input pos
+  POk a pos2 => POk a pos2
+  PErr m1 e1 => keepFarther m1 e1 (runP q input pos))
 
 -- Keep whichever of the two failures reached farther into the input; a success
 -- from the right branch always wins outright.  Ties favour the LEFT branch.
@@ -233,7 +229,7 @@ manyGo p input pos acc = match runP p input pos
     if pos2 == pos then
       POk (reverse acc) pos2  -- no progress: stop to avoid a loop
     else
-      manyGo p input pos2 (a::acc)
+      manyGo p input pos2 (a :: acc)
 
 -- | One-or-more.  Written with `do`-notation to EXERCISE Thenable Parser.
 export
@@ -241,7 +237,7 @@ some : Parser a -> Parser (List a)
 some p = defer
   x <- p
   xs <- many p
-  deferPure (x::xs)
+  deferPure (x :: xs)
 
 -- | Alias for `some`.
 export
@@ -256,7 +252,7 @@ sepBy1 p sep = defer
   xs <- many (defer
     _ <- sep
     p)
-  deferPure (x::xs)
+  deferPure (x :: xs)
 
 -- | Zero-or-more `p` separated by `sep`.
 export
@@ -281,7 +277,7 @@ between open close p = defer
 export
 choice : List (Parser a) -> Parser a
 choice [] = failWith "choice: no alternatives"
-choice (q::rest) = orElse q (choice rest)
+choice (q :: rest) = orElse q (choice rest)
 
 -- | Match a literal string, yielding it back.
 export
@@ -326,7 +322,11 @@ chainl1Rest p op acc = defer
   f <- optional op
   chainl1Step p op acc f
 
-chainl1Step : Parser a -> Parser (a -> a -> a) -> a -> Option (a -> a -> a) -> Parser a
+chainl1Step : Parser a ->
+  Parser (a -> a -> a) ->
+  a ->
+  Option (a -> a -> a) ->
+  Parser a
 chainl1Step _ _ acc None = deferPure acc
 chainl1Step p op acc (Some f) = defer
   y <- p

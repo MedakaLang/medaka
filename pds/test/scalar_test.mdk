@@ -65,13 +65,15 @@ decBytes bs =
 
 decGo : Array Int -> Int -> Unit
 decGo out i =
-  if i < 0 then ()
+  if i < 0 then
+    ()
   else
     let v = out[i]
     if v == 0 then
       out[i] := 255
       decGo out (i - 1)
-    else A.setInPlace i (v - 1) out
+    else
+      A.setInPlace i (v - 1) out
 
 -- 32 big-endian bytes, incremented by one.
 incBytes : Array Int -> Array Int
@@ -82,13 +84,15 @@ incBytes bs =
 
 incGo : Array Int -> Int -> Unit
 incGo out i =
-  if i < 0 then ()
+  if i < 0 then
+    ()
   else
     let v = out[i]
     if v == 255 then
       out[i] := 0
       incGo out (i - 1)
-    else A.setInPlace i (v + 1) out
+    else
+      A.setInPlace i (v + 1) out
 
 -- 32 big-endian bytes, halved (v >> 1).
 halveBytes : Array Int -> Array Int
@@ -99,7 +103,8 @@ halveBytes bs =
 
 halveGo : Array Int -> Array Int -> Int -> Int -> Unit
 halveGo bs out i carry =
-  if i >= 32 then ()
+  if i >= 32 then
+    ()
   else
     let cur = bs[i]
     out[i] := shiftRight cur 1 + shiftLeft carry 7
@@ -115,7 +120,7 @@ nBytes : Array Int
 nBytes = [|
   0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
   0xff, 0xff, 0xfe, 0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b, 0xbf, 0xd2,
-  0x5e, 0x8c, 0xd0, 0x36, 0x41, 0x41,
+  0x5e, 0x8c, 0xd0, 0x36, 0x41, 0x41
 |]
 
 nPlus1Bytes : Array Int
@@ -144,9 +149,10 @@ limbBits = [16, 32, 48, 64, 80, 96, 112, 128, 144, 160, 176, 192, 208, 224, 240]
 
 -- One representative element per limb boundary, plus a few small ones.
 sampleBytes : List (Array Int)
-sampleBytes = [bitBytes 0, bitBytes 1, bitBytes 255]
-  ++ map bitBytes limbBits
-  ++ map (k => decBytes (bitBytes k)) limbBits
+sampleBytes =
+  [bitBytes 0, bitBytes 1, bitBytes 255]
+    ++ map bitBytes limbBits
+    ++ map (k => decBytes (bitBytes k)) limbBits
 
 samples : List Sc
 samples = map scFromBytesReduce sampleBytes
@@ -160,7 +166,7 @@ allPairs : (Sc -> Sc -> Bool) -> Bool
 allPairs f = pairsGo f samples samples2
 
 pairsGo : (Sc -> Sc -> Bool) -> List Sc -> List Sc -> Bool
-pairsGo f (a::ax) (b::bx) = f a b && pairsGo f ax bx
+pairsGo f (a :: ax) (b :: bx) = f a b && pairsGo f ax bx
 pairsGo _ _ _ = True
 
 -- The third operand is derived from the first, so every triple is distinct
@@ -169,7 +175,7 @@ allTriples : (Sc -> Sc -> Sc -> Bool) -> Bool
 allTriples f = triplesGo f samples samples2
 
 triplesGo : (Sc -> Sc -> Sc -> Bool) -> List Sc -> List Sc -> Bool
-triplesGo f (a::ax) (b::bx) = f a b (scAdd a scOne) && triplesGo f ax bx
+triplesGo f (a :: ax) (b :: bx) = f a b (scAdd a scOne) && triplesGo f ax bx
 triplesGo _ _ _ = True
 
 -- ── The sample list is NON-EMPTY ──────────────────────────────────────
@@ -178,7 +184,8 @@ triplesGo _ _ _ = True
 -- emptied `sampleBytes` would turn the whole file green while testing
 -- nothing.
 
-test "the sample lists are non-empty (guards every `all` below from going vacuous)" = expectEqual (length samples) 33
+test "the sample lists are non-empty (guards every `all` below from going vacuous)" =
+  expectEqual (length samples) 33
 
 test "the offset sample list matches it in length" =
   expectEqual (length samples2) 33
@@ -195,21 +202,32 @@ test "a - b = a + (-b)" =
 
 test "a - a = 0" = expectTrue (all (a => scIsZero (scSub a a)) samples)
 
-test "(a + b) + c = a + (b + c)" = expectTrue (allTriples (a b c =>
-  scEqual (scAdd (scAdd a b) c) (scAdd a (scAdd b c))))
+test "(a + b) + c = a + (b + c)" =
+  expectTrue
+    (allTriples (a b c => scEqual (scAdd (scAdd a b) c) (scAdd a (scAdd b c))))
 
 test "a + b = b + a" =
   expectTrue (allPairs (a b => scEqual (scAdd a b) (scAdd b a)))
 
 test "-0 = 0" = expectTrue (scIsZero (scNegate scZero))
 
-test "fixed-control zero/equality bits agree with the public predicates" = expectTrue (all (a => scZeroBit a == (if scIsZero a then 1 else 0) && scEqualBit a a == 1 && scEqualBit a (scAdd a scOne) == 0) samples)
+test "fixed-control zero/equality bits agree with the public predicates" =
+  expectTrue
+    (all
+      (a =>
+        scZeroBit a == (if scIsZero a then 1 else 0)
+          && scEqualBit a a == 1
+          && scEqualBit a (scAdd a scOne) == 0)
+      samples)
 
-test "fixed-control select visits both choices without changing their values" = expectTrue (allPairs (a b => scEqual (scSelect 0 a b) a && scEqual (scSelect 1 a b) b))
+test "fixed-control select visits both choices without changing their values" =
+  expectTrue
+    (allPairs (a b => scEqual (scSelect 0 a b) a && scEqual (scSelect 1 a b) b))
 
 test "fixed-control negation agrees with scalar negation, including zero" =
   expectTrue
-    (scEqual (scNegateCt scZero) scZero && all (a => scEqual (scNegateCt a) (scNegate a)) samples)
+    (scEqual (scNegateCt scZero) scZero
+      && all (a => scEqual (scNegateCt a) (scNegate a)) samples)
 
 -- ── Multiplicative structure ──────────────────────────────────────────
 
@@ -217,14 +235,17 @@ test "a * 1 = a" = expectTrue (all (a => scEqual (scMul a scOne) a) samples)
 
 test "a * 0 = 0" = expectTrue (all (a => scIsZero (scMul a scZero)) samples)
 
-test "(a * b) * c = a * (b * c)" = expectTrue (allTriples (a b c =>
-  scEqual (scMul (scMul a b) c) (scMul a (scMul b c))))
+test "(a * b) * c = a * (b * c)" =
+  expectTrue
+    (allTriples (a b c => scEqual (scMul (scMul a b) c) (scMul a (scMul b c))))
 
 test "a * b = b * a" =
   expectTrue (allPairs (a b => scEqual (scMul a b) (scMul b a)))
 
-test "a * (b + c) = a*b + a*c" = expectTrue (allTriples (a b c =>
-  scEqual (scMul a (scAdd b c)) (scAdd (scMul a b) (scMul a c))))
+test "a * (b + c) = a*b + a*c" =
+  expectTrue
+    (allTriples (a b c =>
+      scEqual (scMul a (scAdd b c)) (scAdd (scMul a b) (scMul a c))))
 
 -- ⚠️ SUBSET, DELIBERATELY, AND MEASURED. `scInverse` is Fermat over `n-2`:
 -- ~451 scalar multiplies, ~11 s per call under the tree-walking interpreter
@@ -243,21 +264,21 @@ test "a * (b + c) = a*b + a*c" = expectTrue (allTriples (a b c =>
 -- The six: the low bit, the top bit, a mid-limb boundary, the first limb
 -- boundary, an all-ones-below-a-boundary value at limb 0, and one at limb 15.
 invSamples : List Sc
-invSamples = map
-  scFromBytesReduce
-  [
-    bitBytes 0,
-    bitBytes 255,
-    bitBytes 128,
-    bitBytes 16,
-    decBytes (bitBytes 16),
-    decBytes (bitBytes 240),
-  ]
+invSamples = map scFromBytesReduce [
+  bitBytes 0,
+  bitBytes 255,
+  bitBytes 128,
+  bitBytes 16,
+  decBytes (bitBytes 16),
+  decBytes (bitBytes 240),
+]
 
 test "the inverse-sample list is non-empty (this `all` cannot go vacuous)" =
   expectEqual (length invSamples) 6
 
-test "a * inverse a = 1 for every non-zero a (representative limb positions)" = expectTrue (all (a => scIsZero a || scEqual (scMul a (scInverse a)) scOne) invSamples)
+test "a * inverse a = 1 for every non-zero a (representative limb positions)" =
+  expectTrue
+    (all (a => scIsZero a || scEqual (scMul a (scInverse a)) scOne) invSamples)
 
 -- `inverse 0 = 0` is the settled convention (RUN-PDS0-016 Q1): a TOTAL
 -- function matching libsecp256k1, pinned executably by the corpus's `inv 0`
@@ -279,20 +300,17 @@ test "fromBytes >> toBytes round-trips at every limb boundary" =
 test "toBytes is 32 bytes" =
   expectTrue (all (a => arrayLength (scToBytes a) == 32) samples)
 
-test "fromBytes REJECTS n" = expectTrue
-  (match scFromBytes nBytes
-    Err _ => True
-    Ok _ => False)
+test "fromBytes REJECTS n" = expectTrue (match scFromBytes nBytes
+  Err _ => True
+  Ok _ => False)
 
-test "fromBytes REJECTS n+1" = expectTrue
-  (match scFromBytes nPlus1Bytes
-    Err _ => True
-    Ok _ => False)
+test "fromBytes REJECTS n+1" = expectTrue (match scFromBytes nPlus1Bytes
+  Err _ => True
+  Ok _ => False)
 
-test "fromBytes REJECTS 2^256-1" = expectTrue
-  (match scFromBytes allOnes
-    Err _ => True
-    Ok _ => False)
+test "fromBytes REJECTS 2^256-1" = expectTrue (match scFromBytes allOnes
+  Err _ => True
+  Ok _ => False)
 
 test "fromBytes ACCEPTS n-1 (the last canonical value)" = expectTrue
   (match scFromBytes nMinus1Bytes
@@ -334,7 +352,10 @@ test "isHigh (n-1) is True" = expectTrue (scIsHigh nMinus1)
 
 test "fixed-control high bit agrees at every low-S boundary" =
   expectTrue
-    (scHighBit nHalf == 0 && scHighBit nHalfPlus1 == 1 && scHighBit scZero == 0 && scHighBit nMinus1 == 1)
+    (scHighBit nHalf == 0
+      && scHighBit nHalfPlus1 == 1
+      && scHighBit scZero == 0
+      && scHighBit nMinus1 == 1)
 
 -- 2 * n_h = n - 1, so n_h really is floor(n/2): a check on the DERIVATION
 -- above, independent of scIsHigh.

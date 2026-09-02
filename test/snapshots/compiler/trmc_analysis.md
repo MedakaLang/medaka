@@ -1,5 +1,5 @@
 # META
-source_lines=1309
+source_lines=1674
 stages=DESUGAR,MARK
 # SOURCE
 -- TRMC eligibility analysis (TRMC-DESIGN.md §"Phase 1 scope" + §"Backend portability").
@@ -62,14 +62,14 @@ public export data SelfRef = SelfByVar String | SelfByMethod String String
 
 export
 flattenApp : CExpr -> List CExpr -> (CExpr, List CExpr)
-flattenApp (CApp f a) acc = flattenApp f (a::acc)
+flattenApp (CApp f a) acc = flattenApp f (a :: acc)
 flattenApp hd acc = (hd, acc)
 
 -- ── small list helpers ────────────────────────────────────────────
 export
 lengthS : List a -> Int
 lengthS [] = 0
-lengthS (_::xs) = 1 + lengthS xs
+lengthS (_ :: xs) = 1 + lengthS xs
 
 export
 freeVars : List String -> CExpr -> List String
@@ -95,22 +95,20 @@ freeVars b (CList es) = freeVarsList b es
 freeVars b (CRangeList lo hi _) = freeVars b lo ++ freeVars b hi
 freeVars b (CRecord _ fields) = freeVarsFields b fields
 freeVars b (CFieldAccess ex _ _) = freeVars b ex
-freeVars b (CRecordUpdate _ base updates) = freeVars b base
-  ++ freeVarsFields b updates
-freeVars b (CVariantUpdate _ base updates) = freeVars b base
-  ++ freeVarsFields b updates
+freeVars b (CRecordUpdate _ base updates) =
+  freeVars b base ++ freeVarsFields b updates
+freeVars b (CVariantUpdate _ base updates) =
+  freeVars b base ++ freeVarsFields b updates
 freeVars b (CArray es) = freeVarsList b es
 freeVars b (CRangeArray lo hi _) = freeVars b lo ++ freeVars b hi
 freeVars b (CIndex a i) = freeVars b a ++ freeVars b i
 freeVars b (CSlice a lo hi _) = freeVars b a ++ freeVars b lo ++ freeVars b hi
 freeVars b (CStringIndex a i) = freeVars b a ++ freeVars b i
-freeVars b (CStringSlice a lo hi _) = freeVars b a
-  ++ freeVars b lo
-  ++ freeVars b hi
+freeVars b (CStringSlice a lo hi _) =
+  freeVars b a ++ freeVars b lo ++ freeVars b hi
 freeVars b (CListIndex a i) = freeVars b a ++ freeVars b i
-freeVars b (CListSlice a lo hi _) = freeVars b a
-  ++ freeVars b lo
-  ++ freeVars b hi
+freeVars b (CListSlice a lo hi _) =
+  freeVars b a ++ freeVars b lo ++ freeVars b hi
 freeVars b (CMethod _ route implRoutes methRoutes) =
   routeDictNames b (route :: implRoutes ++ methRoutes)
 freeVars b (CDict _ routes) = routeDictNames b routes
@@ -122,55 +120,57 @@ freeVars _ _ = []
 export
 routeDictNames : List String -> List Route -> List String
 routeDictNames _ [] = []
-routeDictNames b ((RDict d)::rest) = (if contains d b then [] else [d])
-  ++ routeDictNames b rest
-routeDictNames b ((RDictFwd d)::rest) = (if contains d b then [] else [d])
-  ++ routeDictNames b rest
+routeDictNames b ((RDict d) :: rest) =
+  (if contains d b then [] else [d]) ++ routeDictNames b rest
+routeDictNames b ((RDictFwd d) :: rest) =
+  (if contains d b then [] else [d]) ++ routeDictNames b rest
 -- S-1: an RLocal route carries the shadowing standalone's OWN constraint dicts, and
 -- one of those slots can be an RDict — a constrained caller forwarding its own dict
 -- param into the standalone (`outer : Num a => a -> a; outer v = size v`).  That name
 -- is a genuine free local: recurse.  Empty dicts (every unconstrained standalone) ⇒
 -- [] ⇒ byte-identical to the pre-S1 catch-all.
-routeDictNames b ((RLocal _ dicts)::rest) = routeDictNames b dicts
-  ++ routeDictNames b rest
-routeDictNames b (_::rest) = routeDictNames b rest
+routeDictNames b ((RLocal _ dicts) :: rest) =
+  routeDictNames b dicts ++ routeDictNames b rest
+routeDictNames b (_ :: rest) = routeDictNames b rest
 
 export
 freeVarsFields : List String -> List CField -> List String
 freeVarsFields _ [] = []
-freeVarsFields b ((CField _ ex)::rest) = freeVars b ex ++ freeVarsFields b rest
+freeVarsFields b ((CField _ ex) :: rest) =
+  freeVars b ex ++ freeVarsFields b rest
 
 export
 freeVarsList : List String -> List CExpr -> List String
 freeVarsList _ [] = []
-freeVarsList b (e::rest) = freeVars b e ++ freeVarsList b rest
+freeVarsList b (e :: rest) = freeVars b e ++ freeVarsList b rest
 
 export
 freeVarsArms : List String -> List CArm -> List String
 freeVarsArms _ [] = []
-freeVarsArms b ((CArm pat _ body)::rest) = freeVars (patVars pat ++ b) body
-  ++ freeVarsArms b rest
+freeVarsArms b ((CArm pat _ body) :: rest) =
+  freeVars (patVars pat ++ b) body ++ freeVarsArms b rest
 
 export
 freeVarsStmts : List String -> List CStmt -> List String
 freeVarsStmts _ [] = []
-freeVarsStmts b ((CSExpr ex)::rest) = freeVars b ex ++ freeVarsStmts b rest
-freeVarsStmts b ((CSLet _ pat ex)::rest) = freeVars b ex
-  ++ freeVarsStmts (patVars pat ++ b) rest
-freeVarsStmts b ((CSAssign _ ex)::rest) = freeVars b ex ++ freeVarsStmts b rest
-freeVarsStmts b (_::rest) = freeVarsStmts b rest
+freeVarsStmts b ((CSExpr ex) :: rest) = freeVars b ex ++ freeVarsStmts b rest
+freeVarsStmts b ((CSLet _ pat ex) :: rest) =
+  freeVars b ex ++ freeVarsStmts (patVars pat ++ b) rest
+freeVarsStmts b ((CSAssign _ ex) :: rest) =
+  freeVars b ex ++ freeVarsStmts b rest
+freeVarsStmts b (_ :: rest) = freeVarsStmts b rest
 
 export
 freeVarsBinds : List String -> List CBind -> List String
 freeVarsBinds _ [] = []
-freeVarsBinds b ((CBind _ [CClause [] rhs])::rest) = freeVars b rhs
-  ++ freeVarsBinds b rest
-freeVarsBinds b (_::rest) = freeVarsBinds b rest
+freeVarsBinds b ((CBind _ [CClause [] rhs]) :: rest) =
+  freeVars b rhs ++ freeVarsBinds b rest
+freeVarsBinds b (_ :: rest) = freeVarsBinds b rest
 
 export
 bindNames : List CBind -> List String
 bindNames [] = []
-bindNames (b::rest) = bindName b :: bindNames rest
+bindNames (b :: rest) = bindName b :: bindNames rest
 
 export
 bindName : CBind -> String
@@ -190,7 +190,7 @@ patVars _ = []
 export
 patVarsList : List Pat -> List String
 patVarsList [] = []
-patVarsList (p::rest) = patVars p ++ patVarsList rest
+patVarsList (p :: rest) = patVars p ++ patVarsList rest
 
 export
 patVarNames : List Pat -> List String
@@ -208,23 +208,38 @@ patVarNames ps = patVarsList ps
 -- interp- and native-emit produce identical IR (fixpoint holds by construction).
 -- `ic`/`ar` are the (backend-neutral) ctor lookups (`isCtor`/`ctorArity`).
 export
-trmcEligible : (String -> Bool) -> (String -> Int) -> SelfRef -> Int -> List (List Pat, CExpr) -> Bool
-trmcEligible ic ar self arity clauses = trmcClausesOk ic ar self arity clauses
-  && trmcAnyCons ic ar self arity clauses
+trmcEligible : (String -> Bool) ->
+  (String -> Int) ->
+  SelfRef ->
+  Int ->
+  List (List Pat, CExpr) ->
+  Bool
+trmcEligible ic ar self arity clauses =
+  trmcClausesOk ic ar self arity clauses && trmcAnyCons ic ar self arity clauses
 
 -- every clause body is TRMC-safe (no misplaced self-call).
 export
-trmcClausesOk : (String -> Bool) -> (String -> Int) -> SelfRef -> Int -> List (List Pat, CExpr) -> Bool
+trmcClausesOk : (String -> Bool) ->
+  (String -> Int) ->
+  SelfRef ->
+  Int ->
+  List (List Pat, CExpr) ->
+  Bool
 trmcClausesOk _ _ _ _ [] = True
-trmcClausesOk ic ar self arity ((_, body)::rest) = trmcBodyOk ic ar self arity body
-  && trmcClausesOk ic ar self arity rest
+trmcClausesOk ic ar self arity ((_, body) :: rest) =
+  trmcBodyOk ic ar self arity body && trmcClausesOk ic ar self arity rest
 
 -- at least one clause has an eligible cons/ctor-tail leaf.
 export
-trmcAnyCons : (String -> Bool) -> (String -> Int) -> SelfRef -> Int -> List (List Pat, CExpr) -> Bool
+trmcAnyCons : (String -> Bool) ->
+  (String -> Int) ->
+  SelfRef ->
+  Int ->
+  List (List Pat, CExpr) ->
+  Bool
 trmcAnyCons _ _ _ _ [] = False
-trmcAnyCons ic ar self arity ((_, body)::rest) = trmcBodyHasCons ic ar self arity body
-  || trmcAnyCons ic ar self arity rest
+trmcAnyCons ic ar self arity ((_, body) :: rest) =
+  trmcBodyHasCons ic ar self arity body || trmcAnyCons ic ar self arity rest
 
 -- a tail expr is TRMC-safe: descend through CIf/CLet/CLetGroup wrappers; at a
 -- leaf, either it is an eligible ctor-tail (`Ctor f… (self-call)`, the LAST field
@@ -235,14 +250,20 @@ trmcAnyCons ic ar self arity ((_, body)::rest) = trmcBodyHasCons ic ar self arit
 -- recursion outside an eligible tail leaf MUST be caught here, TRMC-DESIGN
 -- §"SAFETY-CRITICAL", or it is silently accepted and MISCOMPILED).
 export
-trmcBodyOk : (String -> Bool) -> (String -> Int) -> SelfRef -> Int -> CExpr -> Bool
-trmcBodyOk ic ar self arity (CIf c t f) = selfFree self c
-  && trmcBodyOk ic ar self arity t
-  && trmcBodyOk ic ar self arity f
-trmcBodyOk ic ar self arity (CLet _ _ rhs b) = selfFree self rhs
-  && trmcBodyOk ic ar self arity b
-trmcBodyOk ic ar self arity (CLetGroup binds b) = not (selfRefersToBinds self binds)
-  && trmcBodyOk ic ar self arity b
+trmcBodyOk : (String -> Bool) ->
+  (String -> Int) ->
+  SelfRef ->
+  Int ->
+  CExpr ->
+  Bool
+trmcBodyOk ic ar self arity (CIf c t f) =
+  selfFree self c
+    && trmcBodyOk ic ar self arity t
+    && trmcBodyOk ic ar self arity f
+trmcBodyOk ic ar self arity (CLet _ _ rhs b) =
+  selfFree self rhs && trmcBodyOk ic ar self arity b
+trmcBodyOk ic ar self arity (CLetGroup binds b) =
+  not (selfRefersToBinds self binds) && trmcBodyOk ic ar self arity b
 -- B-match-descent (TRMC-DESIGN §"Phase 2 sub-part 3"): a tail-position decision
 -- tree (CDecision — `lowerMatch` lowers a constructor/list/tuple/literal match to
 -- this; a non-treeable CMatch has NO emit arm and is left to disqualify) is
@@ -253,8 +274,8 @@ trmcBodyOk ic ar self arity (CLetGroup binds b) = not (selfRefersToBinds self bi
 -- list, build no cell).  Any self-call in a NON-tail position inside an arm is
 -- caught by `trmcBodyOk`'s leaf check (`selfFree` is SelfRef-directed, so a
 -- dispatched self-recursion is not blind).
-trmcBodyOk ic ar self arity (CDecision scrut arms _) = selfFree self scrut
-  && trmcArmsOk ic ar self arity arms
+trmcBodyOk ic ar self arity (CDecision scrut arms _) =
+  selfFree self scrut && trmcArmsOk ic ar self arity arms
 trmcBodyOk ic ar self arity ex =
   if isCtorTail ic ar self arity ex then
     True
@@ -266,21 +287,27 @@ trmcBodyOk ic ar self arity ex =
 -- every match-arm body is TRMC-safe in tail position (guards must be self-free —
 -- a self-call inside a guard would run outside the loop's tail position).
 export
-trmcArmsOk : (String -> Bool) -> (String -> Int) -> SelfRef -> Int -> List CArm -> Bool
+trmcArmsOk : (String -> Bool) ->
+  (String -> Int) ->
+  SelfRef ->
+  Int ->
+  List CArm ->
+  Bool
 trmcArmsOk _ _ _ _ [] = True
-trmcArmsOk ic ar self arity ((CArm _ guards body)::rest) = trmcGuardsSelfFree self guards
-  && trmcBodyOk ic ar self arity body
-  && trmcArmsOk ic ar self arity rest
+trmcArmsOk ic ar self arity ((CArm _ guards body) :: rest) =
+  trmcGuardsSelfFree self guards
+    && trmcBodyOk ic ar self arity body
+    && trmcArmsOk ic ar self arity rest
 
 -- every guard expr is self-free (guards run before the arm body, not in tail
 -- position — a self-call there can't be a tail leaf).
 export
 trmcGuardsSelfFree : SelfRef -> List CGuard -> Bool
 trmcGuardsSelfFree _ [] = True
-trmcGuardsSelfFree self ((CGBool c)::rest) = selfFree self c
-  && trmcGuardsSelfFree self rest
-trmcGuardsSelfFree self ((CGBind _ c)::rest) = selfFree self c
-  && trmcGuardsSelfFree self rest
+trmcGuardsSelfFree self ((CGBool c) :: rest) =
+  selfFree self c && trmcGuardsSelfFree self rest
+trmcGuardsSelfFree self ((CGBind _ c) :: rest) =
+  selfFree self c && trmcGuardsSelfFree self rest
 
 -- does a tail expr (under the same wrappers) reach an eligible ctor-tail leaf?
 -- (The plain-tail self-call leaf is NOT a "cons" — it builds no cell — so it does
@@ -288,9 +315,14 @@ trmcGuardsSelfFree self ((CGBind _ c)::rest) = selfFree self c
 -- tail recursion) is left to the musttail path, not TRMC.  At least one cons/ctor
 -- tail must exist to warrant the destination-passing loop.)
 export
-trmcBodyHasCons : (String -> Bool) -> (String -> Int) -> SelfRef -> Int -> CExpr -> Bool
-trmcBodyHasCons ic ar self arity (CIf _ t f) = trmcBodyHasCons ic ar self arity t
-  || trmcBodyHasCons ic ar self arity f
+trmcBodyHasCons : (String -> Bool) ->
+  (String -> Int) ->
+  SelfRef ->
+  Int ->
+  CExpr ->
+  Bool
+trmcBodyHasCons ic ar self arity (CIf _ t f) =
+  trmcBodyHasCons ic ar self arity t || trmcBodyHasCons ic ar self arity f
 trmcBodyHasCons ic ar self arity (CLet _ _ _ b) =
   trmcBodyHasCons ic ar self arity b
 trmcBodyHasCons ic ar self arity (CLetGroup _ b) =
@@ -300,10 +332,16 @@ trmcBodyHasCons ic ar self arity (CDecision _ arms _) =
 trmcBodyHasCons ic ar self arity ex = isCtorTail ic ar self arity ex
 
 export
-trmcArmsHaveCons : (String -> Bool) -> (String -> Int) -> SelfRef -> Int -> List CArm -> Bool
+trmcArmsHaveCons : (String -> Bool) ->
+  (String -> Int) ->
+  SelfRef ->
+  Int ->
+  List CArm ->
+  Bool
 trmcArmsHaveCons _ _ _ _ [] = False
-trmcArmsHaveCons ic ar self arity ((CArm _ _ body)::rest) = trmcBodyHasCons ic ar self arity body
-  || trmcArmsHaveCons ic ar self arity rest
+trmcArmsHaveCons ic ar self arity ((CArm _ _ body) :: rest) =
+  trmcBodyHasCons ic ar self arity body
+    || trmcArmsHaveCons ic ar self arity rest
 
 -- the eligible ctor-tail shape (Phase 2 Axis A — general single-constructor
 -- LAST-field TMC).  Two cases, both: the LAST field is a SATURATED self-recursive
@@ -316,9 +354,14 @@ trmcArmsHaveCons ic ar self arity ((CArm _ _ body)::rest) = trmcBodyHasCons ic a
 -- `self` is a SelfRef: SelfByVar (top-level define) → the self-call spine head is
 -- `CVar self`; SelfByMethod (Phase 2 B-dispatch) → `CMethod method (RKey tag) …`.
 export
-isCtorTail : (String -> Bool) -> (String -> Int) -> SelfRef -> Int -> CExpr -> Bool
-isCtorTail _ _ self arity (CBinPrim "::" head tail _) = selfFree self head
-  && isSelfSatApp self arity tail
+isCtorTail : (String -> Bool) ->
+  (String -> Int) ->
+  SelfRef ->
+  Int ->
+  CExpr ->
+  Bool
+isCtorTail _ _ self arity (CBinPrim "::" head tail _) =
+  selfFree self head && isSelfSatApp self arity tail
 isCtorTail ic ar self arity ex = match flattenApp ex []
   (CVar ctor _, fields) =>
     if ic ctor && lengthS fields == ar ctor && ar ctor >= 1 then
@@ -338,14 +381,15 @@ ctorTailFieldsOk self arity fields = match splitLastF fields
 export
 allSelfFreeF : SelfRef -> List CExpr -> Bool
 allSelfFreeF _ [] = True
-allSelfFreeF self (x::rest) = selfFree self x && allSelfFreeF self rest
+allSelfFreeF self (x :: rest) = selfFree self x && allSelfFreeF self rest
 
 -- split a non-empty list into (leading elements, last element).
 export
 splitLastF : List a -> Option (List a, a)
 splitLastF [] = None
 splitLastF [x] = Some ([], x)
-splitLastF (x::rest) = map ((lead, last) => (x::lead, last)) (splitLastF rest)
+splitLastF (x :: rest) =
+  map ((lead, last) => (x :: lead, last)) (splitLastF rest)
 
 -- `ex` is a SATURATED self-call at the LOWERED `arity`.  SelfByVar: a
 -- `CVar self`-headed spine (`arity` value args), or — F2(b) shape (a) — a
@@ -361,9 +405,10 @@ splitLastF (x::rest) = map ((lead, last) => (x::lead, last)) (splitLastF rest)
 export
 isSelfSatApp : SelfRef -> Int -> CExpr -> Bool
 isSelfSatApp self arity ex = match flattenApp ex []
-  (CDict f routes, args) => isSelfHead self (CDict f routes)
-    && dictRoutesForwarded routes
-    && listLen args + listLen routes == arity
+  (CDict f routes, args) =>
+    isSelfHead self (CDict f routes)
+      && dictRoutesForwarded routes
+      && listLen args + listLen routes == arity
   (hd, args) => isSelfHead self hd && listLen args == arity
 
 -- is `hd` the head of a self-call for this SelfRef?  A top-level define with a
@@ -372,8 +417,8 @@ export
 isSelfHead : SelfRef -> CExpr -> Bool
 isSelfHead (SelfByVar self) (CVar f _) = f == self
 isSelfHead (SelfByVar self) (CDict f _) = f == self
-isSelfHead (SelfByMethod method tag) (CMethod m route _ _) = m == method
-  && routeIsKey tag route
+isSelfHead (SelfByMethod method tag) (CMethod m route _ _) =
+  m == method && routeIsKey tag route
 isSelfHead _ _ = False
 
 -- every route is a forwarded dict param (`RDict`/`RDictFwd`) — the only shapes a
@@ -381,8 +426,8 @@ isSelfHead _ _ = False
 -- or rebound witness; reject (the TMC loop leaves the dict slots untouched).
 dictRoutesForwarded : List Route -> Bool
 dictRoutesForwarded [] = True
-dictRoutesForwarded ((RDict _)::rest) = dictRoutesForwarded rest
-dictRoutesForwarded ((RDictFwd _)::rest) = dictRoutesForwarded rest
+dictRoutesForwarded ((RDict _) :: rest) = dictRoutesForwarded rest
+dictRoutesForwarded ((RDictFwd _) :: rest) = dictRoutesForwarded rest
 dictRoutesForwarded _ = False
 
 -- a route is `RKey tag …` for this tag (the concrete-impl dispatch a dispatched
@@ -401,8 +446,8 @@ routeIsKey _ _ = False
 -- SelfByMethod: the CMethod-aware walk.
 export
 selfFree : SelfRef -> CExpr -> Bool
-selfFree (SelfByVar self) ex = not (contains self (freeVars [] ex))
-  && not (mentionsSelfDict self ex)
+selfFree (SelfByVar self) ex =
+  not (contains self (freeVars [] ex)) && not (mentionsSelfDict self ex)
 selfFree (SelfByMethod method tag) ex = not (mentionsSelfMethod method tag ex)
 
 -- does `ex` mention the self-method `method`@`tag` (a `CMethod method (RKey tag)`
@@ -413,91 +458,96 @@ selfFree (SelfByMethod method tag) ex = not (mentionsSelfMethod method tag ex)
 -- recursion DROPPED → silent miscompile.  This full structural walk closes that.
 export
 mentionsSelfMethod : String -> String -> CExpr -> Bool
-mentionsSelfMethod method tag (CMethod m route _ _) = m == method
-  && routeIsKey tag route
-mentionsSelfMethod method tag (CApp f a) = mentionsSelfMethod method tag f
-  || mentionsSelfMethod method tag a
+mentionsSelfMethod method tag (CMethod m route _ _) =
+  m == method && routeIsKey tag route
+mentionsSelfMethod method tag (CApp f a) =
+  mentionsSelfMethod method tag f || mentionsSelfMethod method tag a
 mentionsSelfMethod method tag (CLam _ b) = mentionsSelfMethod method tag b
-mentionsSelfMethod method tag (CLet _ _ rhs b) = mentionsSelfMethod method tag rhs
-  || mentionsSelfMethod method tag b
-mentionsSelfMethod method tag (CLetGroup binds b) = mentionsSelfMethodBinds method tag binds
-  || mentionsSelfMethod method tag b
+mentionsSelfMethod method tag (CLet _ _ rhs b) =
+  mentionsSelfMethod method tag rhs || mentionsSelfMethod method tag b
+mentionsSelfMethod method tag (CLetGroup binds b) =
+  mentionsSelfMethodBinds method tag binds || mentionsSelfMethod method tag b
 mentionsSelfMethod method tag (CBlock stmts) =
   mentionsSelfMethodStmts method tag stmts
-mentionsSelfMethod method tag (CIf c t f) = mentionsSelfMethod method tag c
-  || mentionsSelfMethod method tag t
-  || mentionsSelfMethod method tag f
-mentionsSelfMethod method tag (CBinPrim _ l r _) = mentionsSelfMethod method tag l
-  || mentionsSelfMethod method tag r
+mentionsSelfMethod method tag (CIf c t f) =
+  mentionsSelfMethod method tag c
+    || mentionsSelfMethod method tag t
+    || mentionsSelfMethod method tag f
+mentionsSelfMethod method tag (CBinPrim _ l r _) =
+  mentionsSelfMethod method tag l || mentionsSelfMethod method tag r
 mentionsSelfMethod method tag (CUnOp _ x) = mentionsSelfMethod method tag x
-mentionsSelfMethod method tag (CMatch s arms) = mentionsSelfMethod method tag s
-  || mentionsSelfMethodArms method tag arms
-mentionsSelfMethod method tag (CDecision s arms _) = mentionsSelfMethod method tag s
-  || mentionsSelfMethodArms method tag arms
+mentionsSelfMethod method tag (CMatch s arms) =
+  mentionsSelfMethod method tag s || mentionsSelfMethodArms method tag arms
+mentionsSelfMethod method tag (CDecision s arms _) =
+  mentionsSelfMethod method tag s || mentionsSelfMethodArms method tag arms
 mentionsSelfMethod method tag (CTuple xs) = mentionsSelfMethodList method tag xs
 mentionsSelfMethod method tag (CList xs) = mentionsSelfMethodList method tag xs
 mentionsSelfMethod method tag (CArray xs) = mentionsSelfMethodList method tag xs
-mentionsSelfMethod method tag (CRangeList lo hi _) = mentionsSelfMethod method tag lo
-  || mentionsSelfMethod method tag hi
-mentionsSelfMethod method tag (CRangeArray lo hi _) = mentionsSelfMethod method tag lo
-  || mentionsSelfMethod method tag hi
+mentionsSelfMethod method tag (CRangeList lo hi _) =
+  mentionsSelfMethod method tag lo || mentionsSelfMethod method tag hi
+mentionsSelfMethod method tag (CRangeArray lo hi _) =
+  mentionsSelfMethod method tag lo || mentionsSelfMethod method tag hi
 mentionsSelfMethod method tag (CRecord _ fields) =
   mentionsSelfMethodFields method tag fields
 mentionsSelfMethod method tag (CFieldAccess ex _ _) =
   mentionsSelfMethod method tag ex
-mentionsSelfMethod method tag (CRecordUpdate _ base ups) = mentionsSelfMethod method tag base
-  || mentionsSelfMethodFields method tag ups
-mentionsSelfMethod method tag (CVariantUpdate _ base ups) = mentionsSelfMethod method tag base
-  || mentionsSelfMethodFields method tag ups
-mentionsSelfMethod method tag (CIndex a i) = mentionsSelfMethod method tag a
-  || mentionsSelfMethod method tag i
-mentionsSelfMethod method tag (CSlice a lo hi _) = mentionsSelfMethod method tag a
-  || mentionsSelfMethod method tag lo
-  || mentionsSelfMethod method tag hi
-mentionsSelfMethod method tag (CStringIndex a i) = mentionsSelfMethod method tag a
-  || mentionsSelfMethod method tag i
-mentionsSelfMethod method tag (CStringSlice a lo hi _) = mentionsSelfMethod method tag a
-  || mentionsSelfMethod method tag lo
-  || mentionsSelfMethod method tag hi
-mentionsSelfMethod method tag (CListIndex a i) = mentionsSelfMethod method tag a
-  || mentionsSelfMethod method tag i
-mentionsSelfMethod method tag (CListSlice a lo hi _) = mentionsSelfMethod method tag a
-  || mentionsSelfMethod method tag lo
-  || mentionsSelfMethod method tag hi
+mentionsSelfMethod method tag (CRecordUpdate _ base ups) =
+  mentionsSelfMethod method tag base || mentionsSelfMethodFields method tag ups
+mentionsSelfMethod method tag (CVariantUpdate _ base ups) =
+  mentionsSelfMethod method tag base || mentionsSelfMethodFields method tag ups
+mentionsSelfMethod method tag (CIndex a i) =
+  mentionsSelfMethod method tag a || mentionsSelfMethod method tag i
+mentionsSelfMethod method tag (CSlice a lo hi _) =
+  mentionsSelfMethod method tag a
+    || mentionsSelfMethod method tag lo
+    || mentionsSelfMethod method tag hi
+mentionsSelfMethod method tag (CStringIndex a i) =
+  mentionsSelfMethod method tag a || mentionsSelfMethod method tag i
+mentionsSelfMethod method tag (CStringSlice a lo hi _) =
+  mentionsSelfMethod method tag a
+    || mentionsSelfMethod method tag lo
+    || mentionsSelfMethod method tag hi
+mentionsSelfMethod method tag (CListIndex a i) =
+  mentionsSelfMethod method tag a || mentionsSelfMethod method tag i
+mentionsSelfMethod method tag (CListSlice a lo hi _) =
+  mentionsSelfMethod method tag a
+    || mentionsSelfMethod method tag lo
+    || mentionsSelfMethod method tag hi
 mentionsSelfMethod _ _ _ = False
 
 export
 mentionsSelfMethodList : String -> String -> List CExpr -> Bool
 mentionsSelfMethodList _ _ [] = False
-mentionsSelfMethodList method tag (x::rest) = mentionsSelfMethod method tag x
-  || mentionsSelfMethodList method tag rest
+mentionsSelfMethodList method tag (x :: rest) =
+  mentionsSelfMethod method tag x || mentionsSelfMethodList method tag rest
 
 export
 mentionsSelfMethodArms : String -> String -> List CArm -> Bool
 mentionsSelfMethodArms _ _ [] = False
-mentionsSelfMethodArms method tag ((CArm _ guards body)::rest) = mentionsSelfMethodGuards method tag guards
-  || mentionsSelfMethod method tag body
-  || mentionsSelfMethodArms method tag rest
+mentionsSelfMethodArms method tag ((CArm _ guards body) :: rest) =
+  mentionsSelfMethodGuards method tag guards
+    || mentionsSelfMethod method tag body
+    || mentionsSelfMethodArms method tag rest
 
 export
 mentionsSelfMethodGuards : String -> String -> List CGuard -> Bool
 mentionsSelfMethodGuards _ _ [] = False
-mentionsSelfMethodGuards method tag ((CGBool c)::rest) = mentionsSelfMethod method tag c
-  || mentionsSelfMethodGuards method tag rest
-mentionsSelfMethodGuards method tag ((CGBind _ c)::rest) = mentionsSelfMethod method tag c
-  || mentionsSelfMethodGuards method tag rest
+mentionsSelfMethodGuards method tag ((CGBool c) :: rest) =
+  mentionsSelfMethod method tag c || mentionsSelfMethodGuards method tag rest
+mentionsSelfMethodGuards method tag ((CGBind _ c) :: rest) =
+  mentionsSelfMethod method tag c || mentionsSelfMethodGuards method tag rest
 
 export
 mentionsSelfMethodFields : String -> String -> List CField -> Bool
 mentionsSelfMethodFields _ _ [] = False
-mentionsSelfMethodFields method tag ((CField _ v)::rest) = mentionsSelfMethod method tag v
-  || mentionsSelfMethodFields method tag rest
+mentionsSelfMethodFields method tag ((CField _ v) :: rest) =
+  mentionsSelfMethod method tag v || mentionsSelfMethodFields method tag rest
 
 export
 mentionsSelfMethodStmts : String -> String -> List CStmt -> Bool
 mentionsSelfMethodStmts _ _ [] = False
-mentionsSelfMethodStmts method tag (s::rest) = mentionsSelfMethodStmt method tag s
-  || mentionsSelfMethodStmts method tag rest
+mentionsSelfMethodStmts method tag (s :: rest) =
+  mentionsSelfMethodStmt method tag s || mentionsSelfMethodStmts method tag rest
 
 export
 mentionsSelfMethodStmt : String -> String -> CStmt -> Bool
@@ -510,14 +560,16 @@ mentionsSelfMethodStmt method tag (CSAssign _ ex) =
 export
 mentionsSelfMethodBinds : String -> String -> List CBind -> Bool
 mentionsSelfMethodBinds _ _ [] = False
-mentionsSelfMethodBinds method tag ((CBind _ clauses)::rest) = mentionsSelfMethodClauses method tag clauses
-  || mentionsSelfMethodBinds method tag rest
+mentionsSelfMethodBinds method tag ((CBind _ clauses) :: rest) =
+  mentionsSelfMethodClauses method tag clauses
+    || mentionsSelfMethodBinds method tag rest
 
 export
 mentionsSelfMethodClauses : String -> String -> List CClause -> Bool
 mentionsSelfMethodClauses _ _ [] = False
-mentionsSelfMethodClauses method tag ((CClause _ body)::rest) = mentionsSelfMethod method tag body
-  || mentionsSelfMethodClauses method tag rest
+mentionsSelfMethodClauses method tag ((CClause _ body) :: rest) =
+  mentionsSelfMethod method tag body
+    || mentionsSelfMethodClauses method tag rest
 
 -- does `ex` mention `self` as a `CDict self …` head ANYWHERE in its tree?  The
 -- CDict analog of `mentionsSelfMethod` (same safety-critical role): `freeVars
@@ -527,81 +579,84 @@ mentionsSelfMethodClauses method tag ((CClause _ body)::rest) = mentionsSelfMeth
 export
 mentionsSelfDict : String -> CExpr -> Bool
 mentionsSelfDict self (CDict f _) = f == self
-mentionsSelfDict self (CApp f a) = mentionsSelfDict self f
-  || mentionsSelfDict self a
+mentionsSelfDict self (CApp f a) =
+  mentionsSelfDict self f || mentionsSelfDict self a
 mentionsSelfDict self (CLam _ b) = mentionsSelfDict self b
-mentionsSelfDict self (CLet _ _ rhs b) = mentionsSelfDict self rhs
-  || mentionsSelfDict self b
-mentionsSelfDict self (CLetGroup binds b) = mentionsSelfDictBinds self binds
-  || mentionsSelfDict self b
+mentionsSelfDict self (CLet _ _ rhs b) =
+  mentionsSelfDict self rhs || mentionsSelfDict self b
+mentionsSelfDict self (CLetGroup binds b) =
+  mentionsSelfDictBinds self binds || mentionsSelfDict self b
 mentionsSelfDict self (CBlock stmts) = mentionsSelfDictStmts self stmts
-mentionsSelfDict self (CIf c t f) = mentionsSelfDict self c
-  || mentionsSelfDict self t
-  || mentionsSelfDict self f
-mentionsSelfDict self (CBinPrim _ l r _) = mentionsSelfDict self l
-  || mentionsSelfDict self r
+mentionsSelfDict self (CIf c t f) =
+  mentionsSelfDict self c || mentionsSelfDict self t || mentionsSelfDict self f
+mentionsSelfDict self (CBinPrim _ l r _) =
+  mentionsSelfDict self l || mentionsSelfDict self r
 mentionsSelfDict self (CUnOp _ x) = mentionsSelfDict self x
-mentionsSelfDict self (CMatch s arms) = mentionsSelfDict self s
-  || mentionsSelfDictArms self arms
-mentionsSelfDict self (CDecision s arms _) = mentionsSelfDict self s
-  || mentionsSelfDictArms self arms
+mentionsSelfDict self (CMatch s arms) =
+  mentionsSelfDict self s || mentionsSelfDictArms self arms
+mentionsSelfDict self (CDecision s arms _) =
+  mentionsSelfDict self s || mentionsSelfDictArms self arms
 mentionsSelfDict self (CTuple xs) = mentionsSelfDictList self xs
 mentionsSelfDict self (CList xs) = mentionsSelfDictList self xs
 mentionsSelfDict self (CArray xs) = mentionsSelfDictList self xs
-mentionsSelfDict self (CRangeList lo hi _) = mentionsSelfDict self lo
-  || mentionsSelfDict self hi
-mentionsSelfDict self (CRangeArray lo hi _) = mentionsSelfDict self lo
-  || mentionsSelfDict self hi
+mentionsSelfDict self (CRangeList lo hi _) =
+  mentionsSelfDict self lo || mentionsSelfDict self hi
+mentionsSelfDict self (CRangeArray lo hi _) =
+  mentionsSelfDict self lo || mentionsSelfDict self hi
 mentionsSelfDict self (CRecord _ fields) = mentionsSelfDictFields self fields
 mentionsSelfDict self (CFieldAccess ex _ _) = mentionsSelfDict self ex
-mentionsSelfDict self (CRecordUpdate _ base ups) = mentionsSelfDict self base
-  || mentionsSelfDictFields self ups
-mentionsSelfDict self (CVariantUpdate _ base ups) = mentionsSelfDict self base
-  || mentionsSelfDictFields self ups
-mentionsSelfDict self (CIndex a i) = mentionsSelfDict self a
-  || mentionsSelfDict self i
-mentionsSelfDict self (CSlice a lo hi _) = mentionsSelfDict self a
-  || mentionsSelfDict self lo
-  || mentionsSelfDict self hi
-mentionsSelfDict self (CStringIndex a i) = mentionsSelfDict self a
-  || mentionsSelfDict self i
-mentionsSelfDict self (CStringSlice a lo hi _) = mentionsSelfDict self a
-  || mentionsSelfDict self lo
-  || mentionsSelfDict self hi
-mentionsSelfDict self (CListIndex a i) = mentionsSelfDict self a
-  || mentionsSelfDict self i
-mentionsSelfDict self (CListSlice a lo hi _) = mentionsSelfDict self a
-  || mentionsSelfDict self lo
-  || mentionsSelfDict self hi
+mentionsSelfDict self (CRecordUpdate _ base ups) =
+  mentionsSelfDict self base || mentionsSelfDictFields self ups
+mentionsSelfDict self (CVariantUpdate _ base ups) =
+  mentionsSelfDict self base || mentionsSelfDictFields self ups
+mentionsSelfDict self (CIndex a i) =
+  mentionsSelfDict self a || mentionsSelfDict self i
+mentionsSelfDict self (CSlice a lo hi _) =
+  mentionsSelfDict self a
+    || mentionsSelfDict self lo
+    || mentionsSelfDict self hi
+mentionsSelfDict self (CStringIndex a i) =
+  mentionsSelfDict self a || mentionsSelfDict self i
+mentionsSelfDict self (CStringSlice a lo hi _) =
+  mentionsSelfDict self a
+    || mentionsSelfDict self lo
+    || mentionsSelfDict self hi
+mentionsSelfDict self (CListIndex a i) =
+  mentionsSelfDict self a || mentionsSelfDict self i
+mentionsSelfDict self (CListSlice a lo hi _) =
+  mentionsSelfDict self a
+    || mentionsSelfDict self lo
+    || mentionsSelfDict self hi
 mentionsSelfDict _ _ = False
 
 mentionsSelfDictList : String -> List CExpr -> Bool
 mentionsSelfDictList _ [] = False
-mentionsSelfDictList self (x::rest) = mentionsSelfDict self x
-  || mentionsSelfDictList self rest
+mentionsSelfDictList self (x :: rest) =
+  mentionsSelfDict self x || mentionsSelfDictList self rest
 
 mentionsSelfDictArms : String -> List CArm -> Bool
 mentionsSelfDictArms _ [] = False
-mentionsSelfDictArms self ((CArm _ guards body)::rest) = mentionsSelfDictGuards self guards
-  || mentionsSelfDict self body
-  || mentionsSelfDictArms self rest
+mentionsSelfDictArms self ((CArm _ guards body) :: rest) =
+  mentionsSelfDictGuards self guards
+    || mentionsSelfDict self body
+    || mentionsSelfDictArms self rest
 
 mentionsSelfDictGuards : String -> List CGuard -> Bool
 mentionsSelfDictGuards _ [] = False
-mentionsSelfDictGuards self ((CGBool c)::rest) = mentionsSelfDict self c
-  || mentionsSelfDictGuards self rest
-mentionsSelfDictGuards self ((CGBind _ c)::rest) = mentionsSelfDict self c
-  || mentionsSelfDictGuards self rest
+mentionsSelfDictGuards self ((CGBool c) :: rest) =
+  mentionsSelfDict self c || mentionsSelfDictGuards self rest
+mentionsSelfDictGuards self ((CGBind _ c) :: rest) =
+  mentionsSelfDict self c || mentionsSelfDictGuards self rest
 
 mentionsSelfDictFields : String -> List CField -> Bool
 mentionsSelfDictFields _ [] = False
-mentionsSelfDictFields self ((CField _ v)::rest) = mentionsSelfDict self v
-  || mentionsSelfDictFields self rest
+mentionsSelfDictFields self ((CField _ v) :: rest) =
+  mentionsSelfDict self v || mentionsSelfDictFields self rest
 
 mentionsSelfDictStmts : String -> List CStmt -> Bool
 mentionsSelfDictStmts _ [] = False
-mentionsSelfDictStmts self (s::rest) = mentionsSelfDictStmt self s
-  || mentionsSelfDictStmts self rest
+mentionsSelfDictStmts self (s :: rest) =
+  mentionsSelfDictStmt self s || mentionsSelfDictStmts self rest
 
 mentionsSelfDictStmt : String -> CStmt -> Bool
 mentionsSelfDictStmt self (CSExpr ex) = mentionsSelfDict self ex
@@ -610,13 +665,13 @@ mentionsSelfDictStmt self (CSAssign _ ex) = mentionsSelfDict self ex
 
 mentionsSelfDictBinds : String -> List CBind -> Bool
 mentionsSelfDictBinds _ [] = False
-mentionsSelfDictBinds self ((CBind _ clauses)::rest) = mentionsSelfDictClauses self clauses
-  || mentionsSelfDictBinds self rest
+mentionsSelfDictBinds self ((CBind _ clauses) :: rest) =
+  mentionsSelfDictClauses self clauses || mentionsSelfDictBinds self rest
 
 mentionsSelfDictClauses : String -> List CClause -> Bool
 mentionsSelfDictClauses _ [] = False
-mentionsSelfDictClauses self ((CClause _ body)::rest) = mentionsSelfDict self body
-  || mentionsSelfDictClauses self rest
+mentionsSelfDictClauses self ((CClause _ body) :: rest) =
+  mentionsSelfDict self body || mentionsSelfDictClauses self rest
 
 -- drop the first `n` elements — the emitters use this to skip a dict-carrying
 -- self-call's LOOP-INVARIANT leading dict slots when storing recomputed args
@@ -627,7 +682,7 @@ dropFirstN : Int -> List a -> List a
 dropFirstN n xs
   | n <= 0 = xs
 dropFirstN _ [] = []
-dropFirstN n (_::rest) = dropFirstN (n - 1) rest
+dropFirstN n (_ :: rest) = dropFirstN (n - 1) rest
 
 -- does any nullary let-group binding's RHS reference `self`?  (Only the nullary
 -- shape is descendable here; a parametric where-helper that called `self` would
@@ -635,17 +690,17 @@ dropFirstN n (_::rest) = dropFirstN (n - 1) rest
 export
 selfRefersToBinds : SelfRef -> List CBind -> Bool
 selfRefersToBinds _ [] = False
-selfRefersToBinds self ((CBind _ [CClause [] rhs])::rest) = not (selfFree self rhs)
-  || selfRefersToBinds self rest
-selfRefersToBinds self ((CBind _ clauses)::rest) = selfRefersToBindClauses self clauses
-  || selfRefersToBinds self rest
-selfRefersToBinds self (_::rest) = selfRefersToBinds self rest
+selfRefersToBinds self ((CBind _ [CClause [] rhs]) :: rest) =
+  not (selfFree self rhs) || selfRefersToBinds self rest
+selfRefersToBinds self ((CBind _ clauses) :: rest) =
+  selfRefersToBindClauses self clauses || selfRefersToBinds self rest
+selfRefersToBinds self (_ :: rest) = selfRefersToBinds self rest
 
 export
 selfRefersToBindClauses : SelfRef -> List CClause -> Bool
 selfRefersToBindClauses _ [] = False
-selfRefersToBindClauses self ((CClause _ body)::rest) = not (selfFree self body)
-  || selfRefersToBindClauses self rest
+selfRefersToBindClauses self ((CClause _ body) :: rest) =
+  not (selfFree self body) || selfRefersToBindClauses self rest
 
 -- the recursion args of an eligible ctor-tail's self-call (the LAST field's
 -- saturated self CApp-spine args).  Works for both the `::` form and a general
@@ -742,7 +797,7 @@ dispMembersOf (DispGroup _ members) = members
 export
 dispGroupOf : List DispGroup -> String -> Option DispGroup
 dispGroupOf [] _ = None
-dispGroupOf ((DispGroup root members)::rest) name =
+dispGroupOf ((DispGroup root members) :: rest) name =
   if contains name members then
     Some (DispGroup root members)
   else
@@ -751,7 +806,7 @@ dispGroupOf ((DispGroup root members)::rest) name =
 -- ── clause/arm accessors shared by the detection and both emitters ───────────
 export
 clauseArityOf : List CClause -> Int
-clauseArityOf ((CClause pats _)::_) = listLen pats
+clauseArityOf ((CClause pats _) :: _) = listLen pats
 clauseArityOf [] = 0
 
 export
@@ -767,14 +822,14 @@ armBody (CArm _ _ body) = body
 export
 allBoolGuards : List CGuard -> Bool
 allBoolGuards [] = True
-allBoolGuards ((CGBool _)::rest) = allBoolGuards rest
+allBoolGuards ((CGBool _) :: rest) = allBoolGuards rest
 allBoolGuards _ = False
 
 export
 lastStmtExpr : List CStmt -> Option CExpr
 lastStmtExpr [] = None
 lastStmtExpr [CSExpr ex] = Some ex
-lastStmtExpr (_::rest) = lastStmtExpr rest
+lastStmtExpr (_ :: rest) = lastStmtExpr rest
 
 -- a non-dict define: no clause has a leading `$dict…` param.  Guards ONLY the
 -- (b′) dispatch-graph path now: a group has heterogeneous member arities and
@@ -787,7 +842,7 @@ dispNonDict : List CClause -> Bool
 dispNonDict clauses = not (anyList dispClauseHasLeadingDict clauses)
 
 dispClauseHasLeadingDict : CClause -> Bool
-dispClauseHasLeadingDict (CClause ((PVar x _)::_) _) = dispIsDictParamName x
+dispClauseHasLeadingDict (CClause ((PVar x _) :: _) _) = dispIsDictParamName x
 dispClauseHasLeadingDict _ = False
 
 dispIsDictParamName : String -> Bool
@@ -807,21 +862,19 @@ dispIsDictParamName x = startsWith "$dict" x
 export
 dictCountUniform : List (List Pat) -> Bool
 dictCountUniform [] = True
-dictCountUniform (pats::rest) = dictCountUniformGo (leadingDictCount pats) rest
+dictCountUniform (pats :: rest) =
+  dictCountUniformGo (leadingDictCount pats) rest
 
 dictCountUniformGo : Int -> List (List Pat) -> Bool
 dictCountUniformGo _ [] = True
-dictCountUniformGo n (pats::rest) = leadingDictCount pats == n
-  && dictCountUniformGo n rest
+dictCountUniformGo n (pats :: rest) =
+  leadingDictCount pats == n && dictCountUniformGo n rest
 
 -- count of leading `$dict…` params in one clause's param list.
 export
 leadingDictCount : List Pat -> Int
-leadingDictCount ((PVar x _)::rest) =
-  if dispIsDictParamName x then
-    1 + leadingDictCount rest
-  else
-    0
+leadingDictCount ((PVar x _) :: rest) =
+  if dispIsDictParamName x then 1 + leadingDictCount rest else 0
 leadingDictCount _ = 0
 
 -- CClause-shaped wrapper (the wasm emitter's clause representation).
@@ -847,7 +900,14 @@ pairPatsOf (pats, _) = pats
 -- external-entry check must see references from value-bind bodies too); `impls`
 -- = the lowered impl/default entries (their bodies can call into a group).
 export
-detectDispatchGroups : (String -> String) -> (String -> Bool) -> (String -> Int) -> (String -> Int -> List CClause -> Bool) -> List CBind -> List CBind -> List CImplEntry -> List DispGroup
+detectDispatchGroups : (String -> String) ->
+  (String -> Bool) ->
+  (String -> Int) ->
+  (String -> Int -> List CClause -> Bool) ->
+  List CBind ->
+  List CBind ->
+  List CImplEntry ->
+  List DispGroup
 detectDispatchGroups cf isFn fa s1 binds allBinds impls =
   -- pass 0: global tables.  `consTargets` = the bottom callee of every peeled
   -- tail spine cons (root-candidacy pre-gate: only a fn somebody conses onto can
@@ -862,37 +922,159 @@ detectDispatchGroups cf isFn fa s1 binds allBinds impls =
   -- table: the keys are the bind names the pass already computed.
   let fnSet = omFromNames (map bindName binds) omEmpty
   let bindIx = omFromPairs (reverseL (map (b => (bindName b, b)) binds)) omEmpty
-  let consTargets = omFromNames (flatMap (b => dispBindConsTargets cf isFn fa fnSet b) binds) omEmpty
+  let consTargets =
+    omFromNames
+      (flatMap (b => dispBindConsTargets cf isFn fa fnSet b) binds)
+      omEmpty
   let headsMap = map (b => (bindName b, dedup (dispBindHeads cf b))) allBinds
   -- `reverseL` so the FIRST headsMap entry wins on a duplicate name, matching the
   -- `lookupAssoc` first-match this replaces (see ordmap.omFromPairs).
   let headsIx = omFromPairs (reverseL headsMap) omEmpty
   let implHeads = dedup (flatMap (e => dispImplEntryHeads cf e) impls)
-  dispDetectGo cf isFn fa s1 fnSet bindIx headsMap headsIx implHeads consTargets binds [] omEmpty omEmpty
+  dispDetectGo
+    cf
+    isFn
+    fa
+    s1
+    fnSet
+    bindIx
+    headsMap
+    headsIx
+    implHeads
+    consTargets
+    binds
+    []
+    omEmpty
+    omEmpty
 
 -- `claimed` = the running member set of every ACCEPTED group (v7 disjointness).
 -- `doomed`  = fns PROVEN to tail-reach a claimed fn, so no group containing one can
 --             ever validate.  See dispMarkDoomed: it is what makes the growth walk
 --             linear in the number of candidate roots instead of quadratic (#1029).
-dispDetectGo : (String -> String) -> (String -> Bool) -> (String -> Int) -> (String -> Int -> List CClause -> Bool) -> OrdMap Unit -> OrdMap CBind -> List (String, List String) -> OrdMap (List String) -> List String -> OrdMap Unit -> List CBind -> List DispGroup -> OrdMap Unit -> OrdMap Unit -> List DispGroup
+dispDetectGo : (String -> String) ->
+  (String -> Bool) ->
+  (String -> Int) ->
+  (String -> Int -> List CClause -> Bool) ->
+  OrdMap Unit ->
+  OrdMap CBind ->
+  List (String, List String) ->
+  OrdMap (List String) ->
+  List String ->
+  OrdMap Unit ->
+  List CBind ->
+  List DispGroup ->
+  OrdMap Unit ->
+  OrdMap Unit ->
+  List DispGroup
 dispDetectGo _ _ _ _ _ _ _ _ _ _ [] accepted _ _ = reverseL accepted
-dispDetectGo cf isFn fa s1 fnSet bindIx headsMap headsIx implHeads consTargets (b::rest) accepted claimed doomed = match dispTryRoot cf isFn fa s1 fnSet bindIx headsMap headsIx implHeads consTargets claimed doomed b
-  (Some grp, doomed2) => dispDetectGo cf isFn fa s1 fnSet bindIx headsMap headsIx implHeads consTargets rest (grp::accepted) (omFromNames (dispMembersOf grp) claimed) doomed2
-  (None, doomed2) => dispDetectGo cf isFn fa s1 fnSet bindIx headsMap headsIx implHeads consTargets rest accepted claimed doomed2
+dispDetectGo cf isFn fa s1 fnSet bindIx headsMap headsIx implHeads consTargets (b :: rest) accepted claimed doomed =
+  match (dispTryRoot
+    cf
+    isFn
+    fa
+    s1
+    fnSet
+    bindIx
+    headsMap
+    headsIx
+    implHeads
+    consTargets
+    claimed
+    doomed
+    b)
+    (Some grp, doomed2) =>
+      dispDetectGo
+        cf
+        isFn
+        fa
+        s1
+        fnSet
+        bindIx
+        headsMap
+        headsIx
+        implHeads
+        consTargets
+        rest
+        (grp :: accepted)
+        (omFromNames (dispMembersOf grp) claimed)
+        doomed2
+    (None, doomed2) =>
+      dispDetectGo
+        cf
+        isFn
+        fa
+        s1
+        fnSet
+        bindIx
+        headsMap
+        headsIx
+        implHeads
+        consTargets
+        rest
+        accepted
+        claimed
+        doomed2
 
 -- the bind's group if it roots a valid one, else None — plus the (possibly extended)
 -- `doomed` set.  `claimed` replaces the old `flatMap dispMembersOf accepted`, which
 -- rebuilt that whole list once per candidate root.
-dispTryRoot : (String -> String) -> (String -> Bool) -> (String -> Int) -> (String -> Int -> List CClause -> Bool) -> OrdMap Unit -> OrdMap CBind -> List (String, List String) -> OrdMap (List String) -> List String -> OrdMap Unit -> OrdMap Unit -> OrdMap Unit -> CBind -> (Option DispGroup, OrdMap Unit)
+dispTryRoot : (String -> String) ->
+  (String -> Bool) ->
+  (String -> Int) ->
+  (String -> Int -> List CClause -> Bool) ->
+  OrdMap Unit ->
+  OrdMap CBind ->
+  List (String, List String) ->
+  OrdMap (List String) ->
+  List String ->
+  OrdMap Unit ->
+  OrdMap Unit ->
+  OrdMap Unit ->
+  CBind ->
+  (Option DispGroup, OrdMap Unit)
 dispTryRoot cf isFn fa s1 fnSet bindIx headsMap headsIx implHeads consTargets claimed doomed (CBind root clauses) =
   let arity = clauseArityOf clauses
-  if arity > 0 && dispNonDict clauses && omHasKey root consTargets && not (omHasKey root claimed) && not (omHasKey root doomed) then match dispGrow cf isFn fa bindIx fnSet claimed root [root] [] [root] (omInsert root () omEmpty) omEmpty doomed
+  if arity > 0
+    && dispNonDict clauses
+    && omHasKey root consTargets
+    && not (omHasKey root claimed)
+    && not
+      (omHasKey
+        root
+        doomed) then match (dispGrow
+    cf
+    isFn
+    fa
+    bindIx
+    fnSet
+    claimed
+    root
+    [root]
+    []
+    [root]
+    (omInsert root () omEmpty)
+    omEmpty
+    doomed)
     (Some members, doomed2) => (
-      dispValidate cf isFn fa s1 bindIx headsMap headsIx implHeads claimed root arity clauses members,
+      dispValidate
+        cf
+        isFn
+        fa
+        s1
+        bindIx
+        headsMap
+        headsIx
+        implHeads
+        claimed
+        root
+        arity
+        clauses
+        members,
       doomed2,
     )
     (None, doomed2) => (None, doomed2)
-  else (None, doomed)
+  else
+    (None, doomed)
 
 -- the post-growth soundness checks.  Some ⇒ accept; None ⇒ no transform.
 --   v2 the group builds a Cons spine somewhere;
@@ -905,26 +1087,53 @@ dispTryRoot cf isFn fa s1 fnSet bindIx headsMap headsIx implHeads consTargets cl
 --   v5 a Stage-1-claimable singleton stays with Stage-1 (its local-dest loop
 --      needs no group machinery at all);
 --   v7 groups are disjoint (a claimed member is never re-grouped).
-dispValidate : (String -> String) -> (String -> Bool) -> (String -> Int) -> (String -> Int -> List CClause -> Bool) -> OrdMap CBind -> List (String, List String) -> OrdMap (List String) -> List String -> OrdMap Unit -> String -> Int -> List CClause -> List String -> Option DispGroup
+dispValidate : (String -> String) ->
+  (String -> Bool) ->
+  (String -> Int) ->
+  (String -> Int -> List CClause -> Bool) ->
+  OrdMap CBind ->
+  List (String, List String) ->
+  OrdMap (List String) ->
+  List String ->
+  OrdMap Unit ->
+  String ->
+  Int ->
+  List CClause ->
+  List String ->
+  Option DispGroup
 dispValidate cf isFn fa s1 bindIx headsMap headsIx implHeads claimed root arity clauses members =
-  if anyList (m => omHasKey m claimed) members then None
+  if anyList (m => omHasKey m claimed) members then
+    None
   else
     let memberSet = omFromNames members omEmpty
-    if not (dispGroupHasSpineCons cf isFn fa bindIx memberSet members) then None
-    else if members == [root] && s1 root arity clauses then None
+    if not (dispGroupHasSpineCons cf isFn fa bindIx memberSet members) then
+      None
+    else if members == [root] && s1 root arity clauses then
+      None
     else
       -- `omHasKey h headsIx` is the old `contains h (map fst headsMap)`: headsIx's
       -- key set IS headsMap's name column.
-      let nt = filterList (h => omHasKey h headsIx) (dedup (flatMap (m => dispMemberNonTailHeads cf isFn fa bindIx memberSet m) members))
+      let nt =
+        filterList
+          (h => omHasKey h headsIx)
+          (dedup
+            (flatMap
+              (m => dispMemberNonTailHeads cf isFn fa bindIx memberSet m)
+              members))
       let closure = dispBfs headsIx nt []
       -- an oversize helper closure ⇒ same-group isolation not cheaply provable ⇒ reject.
-      if listLen closure > 256 then None
-      else if anyList (h => omHasKey h memberSet) closure then None
+      if listLen closure > 256 then
+        None
+      else if anyList (h => omHasKey h memberSet) closure then
+        None
       else
         let innerSet = omDelete root memberSet
-        if anyList (p => dispEntryRefs memberSet innerSet p) headsMap then None
-        else if anyList (h => omHasKey h innerSet) implHeads then None
-        else Some (DispGroup root members)
+        if anyList (p => dispEntryRefs memberSet innerSet p) headsMap then
+          None
+        else if anyList (h => omHasKey h innerSet) implHeads then
+          None
+        else
+          Some (DispGroup root members)
 
 -- does a bind OUTSIDE the group reference a non-root member?
 dispEntryRefs : OrdMap Unit -> OrdMap Unit -> (String, List String) -> Bool
@@ -938,20 +1147,21 @@ dispEntryRefs memberSet innerSet (name, heads) =
 -- (the caller treats a past-cap closure as un-provable and rejects the group).
 dispBfs : OrdMap (List String) -> List String -> List String -> List String
 dispBfs _ [] visited = visited
-dispBfs headsIx (h::rest) visited =
-  if contains h visited || listLen visited > 256 then dispBfs headsIx rest visited
+dispBfs headsIx (h :: rest) visited =
+  if contains h visited || listLen visited > 256 then
+    dispBfs headsIx rest visited
   else
     let nexts = match omLookup h headsIx
       Some hs => hs
       None => []
-    dispBfs headsIx (nexts ++ rest) (h::visited)
+    dispBfs headsIx (nexts ++ rest) (h :: visited)
 
 -- peel a chain of conses `h1 :: h2 :: … :: bottom` → (heads, bottom).
 export
 dispPeelCons : CExpr -> (List CExpr, CExpr)
 dispPeelCons (CBinPrim "::" h t _) =
   let (hs, b) = dispPeelCons t
-  (h::hs, b)
+  (h :: hs, b)
 dispPeelCons e = ([], e)
 
 -- a spine-cons leaf `<h1> :: … :: f <saturated>` where `ok f` holds: Some (peeled
@@ -959,7 +1169,12 @@ dispPeelCons e = ([], e)
 -- classifier is shared by detection, validation, and the leaf emit, so the three
 -- agree exactly on what is (and is not) a spine cons.
 export
-dispSpineParts : (String -> String) -> (String -> Bool) -> (String -> Int) -> (String -> Bool) -> CExpr -> Option (List CExpr, String, List CExpr)
+dispSpineParts : (String -> String) ->
+  (String -> Bool) ->
+  (String -> Int) ->
+  (String -> Bool) ->
+  CExpr ->
+  Option (List CExpr, String, List CExpr)
 dispSpineParts cf isFn fa ok e = match dispPeelCons e
   ([], _) => None
   (heads, bottom) => match flattenApp bottom []
@@ -972,13 +1187,24 @@ dispSpineParts cf isFn fa ok e = match dispPeelCons e
     _ => None
 
 -- pass 0: the bottom-target names of every peeled tail-position spine cons.
-dispBindConsTargets : (String -> String) -> (String -> Bool) -> (String -> Int) -> OrdMap Unit -> CBind -> List String
+dispBindConsTargets : (String -> String) ->
+  (String -> Bool) ->
+  (String -> Int) ->
+  OrdMap Unit ->
+  CBind ->
+  List String
 dispBindConsTargets cf isFn fa fnSet (CBind _ clauses) =
   flatMap (c => dispExprConsTargets cf isFn fa fnSet (clauseBodyOf c)) clauses
 
-dispExprConsTargets : (String -> String) -> (String -> Bool) -> (String -> Int) -> OrdMap Unit -> CExpr -> List String
-dispExprConsTargets cf isFn fa fnSet (CIf _ t f) = dispExprConsTargets cf isFn fa fnSet t
-  ++ dispExprConsTargets cf isFn fa fnSet f
+dispExprConsTargets : (String -> String) ->
+  (String -> Bool) ->
+  (String -> Int) ->
+  OrdMap Unit ->
+  CExpr ->
+  List String
+dispExprConsTargets cf isFn fa fnSet (CIf _ t f) =
+  dispExprConsTargets cf isFn fa fnSet t
+    ++ dispExprConsTargets cf isFn fa fnSet f
 dispExprConsTargets cf isFn fa fnSet (CLet _ _ _ b) =
   dispExprConsTargets cf isFn fa fnSet b
 dispExprConsTargets cf isFn fa fnSet (CBlock stmts) = match lastStmtExpr stmts
@@ -986,9 +1212,10 @@ dispExprConsTargets cf isFn fa fnSet (CBlock stmts) = match lastStmtExpr stmts
   None => []
 dispExprConsTargets cf isFn fa fnSet (CDecision _ arms _) =
   flatMap (a => dispExprConsTargets cf isFn fa fnSet (armBody a)) arms
-dispExprConsTargets cf isFn fa fnSet other = match dispSpineParts cf isFn fa (f => omHasKey f fnSet) other
-  Some (_, f, _) => [f]
-  None => []
+dispExprConsTargets cf isFn fa fnSet other =
+  match dispSpineParts cf isFn fa (f => omHasKey f fnSet) other
+    Some (_, f, _) => [f]
+    None => []
 
 -- a saturated direct call to `root` (canonicalized): flattenApp head is `CVar f`,
 -- `cf f == root`, arg count == arity.
@@ -1010,49 +1237,45 @@ allCallHeads cf (CVar f _) = [cf f]
 allCallHeads cf (CApp f a) = allCallHeads cf f ++ allCallHeads cf a
 allCallHeads cf (CLam _ b) = allCallHeads cf b
 allCallHeads cf (CLet _ _ e1 e2) = allCallHeads cf e1 ++ allCallHeads cf e2
-allCallHeads cf (CLetGroup binds b) = flatMap (bd => dispBindHeads cf bd) binds
-  ++ allCallHeads cf b
+allCallHeads cf (CLetGroup binds b) =
+  flatMap (bd => dispBindHeads cf bd) binds ++ allCallHeads cf b
 allCallHeads cf (CBlock stmts) = flatMap (allCallHeadsStmt cf) stmts
-allCallHeads cf (CIf c t f) = allCallHeads cf c
-  ++ allCallHeads cf t
-  ++ allCallHeads cf f
+allCallHeads cf (CIf c t f) =
+  allCallHeads cf c ++ allCallHeads cf t ++ allCallHeads cf f
 allCallHeads cf (CBinPrim _ l r _) = allCallHeads cf l ++ allCallHeads cf r
 allCallHeads cf (CUnOp _ x) = allCallHeads cf x
-allCallHeads cf (CMatch s arms) = allCallHeads cf s
-  ++ flatMap (allArmHeads cf) arms
-allCallHeads cf (CDecision s arms _) = allCallHeads cf s
-  ++ flatMap (allArmHeads cf) arms
+allCallHeads cf (CMatch s arms) =
+  allCallHeads cf s ++ flatMap (allArmHeads cf) arms
+allCallHeads cf (CDecision s arms _) =
+  allCallHeads cf s ++ flatMap (allArmHeads cf) arms
 allCallHeads cf (CTuple es) = flatMap (allCallHeads cf) es
 allCallHeads cf (CList es) = flatMap (allCallHeads cf) es
 allCallHeads cf (CArray es) = flatMap (allCallHeads cf) es
 allCallHeads cf (CRecord _ fs) =
   flatMap (f => allCallHeads cf (dispFieldExpr f)) fs
 allCallHeads cf (CFieldAccess x _ _) = allCallHeads cf x
-allCallHeads cf (CRecordUpdate _ base fs) = allCallHeads cf base
-  ++ flatMap (f => allCallHeads cf (dispFieldExpr f)) fs
-allCallHeads cf (CVariantUpdate _ base fs) = allCallHeads cf base
-  ++ flatMap (f => allCallHeads cf (dispFieldExpr f)) fs
+allCallHeads cf (CRecordUpdate _ base fs) =
+  allCallHeads cf base ++ flatMap (f => allCallHeads cf (dispFieldExpr f)) fs
+allCallHeads cf (CVariantUpdate _ base fs) =
+  allCallHeads cf base ++ flatMap (f => allCallHeads cf (dispFieldExpr f)) fs
 allCallHeads cf (CRangeList lo hi _) = allCallHeads cf lo ++ allCallHeads cf hi
 allCallHeads cf (CRangeArray lo hi _) = allCallHeads cf lo ++ allCallHeads cf hi
 allCallHeads cf (CIndex a i) = allCallHeads cf a ++ allCallHeads cf i
-allCallHeads cf (CSlice a lo hi _) = allCallHeads cf a
-  ++ allCallHeads cf lo
-  ++ allCallHeads cf hi
+allCallHeads cf (CSlice a lo hi _) =
+  allCallHeads cf a ++ allCallHeads cf lo ++ allCallHeads cf hi
 allCallHeads cf (CStringIndex a i) = allCallHeads cf a ++ allCallHeads cf i
-allCallHeads cf (CStringSlice a lo hi _) = allCallHeads cf a
-  ++ allCallHeads cf lo
-  ++ allCallHeads cf hi
+allCallHeads cf (CStringSlice a lo hi _) =
+  allCallHeads cf a ++ allCallHeads cf lo ++ allCallHeads cf hi
 allCallHeads cf (CListIndex a i) = allCallHeads cf a ++ allCallHeads cf i
-allCallHeads cf (CListSlice a lo hi _) = allCallHeads cf a
-  ++ allCallHeads cf lo
-  ++ allCallHeads cf hi
+allCallHeads cf (CListSlice a lo hi _) =
+  allCallHeads cf a ++ allCallHeads cf lo ++ allCallHeads cf hi
 allCallHeads _ _ = []
 
 -- an arm's heads, INCLUDING its guard expressions (a guard runs before the arm
 -- body is selected — a group-fn reference there is just as live as one in the body).
 allArmHeads : (String -> String) -> CArm -> List String
-allArmHeads cf (CArm _ guards body) = flatMap (dispGuardHeads cf) guards
-  ++ allCallHeads cf body
+allArmHeads cf (CArm _ guards body) =
+  flatMap (dispGuardHeads cf) guards ++ allCallHeads cf body
 
 dispGuardHeads : (String -> String) -> CGuard -> List String
 dispGuardHeads cf (CGBool c) = allCallHeads cf c
@@ -1095,11 +1318,38 @@ dispFieldExpr (CField _ e) = e
 -- `parents` records, per added member, WHICH member pulled it in (the BFS tree); it
 -- exists only so a v7 bail can mark the whole discovery path doomed.  Returns the
 -- member list and the (possibly extended) `doomed` set.
-dispGrow : (String -> String) -> (String -> Bool) -> (String -> Int) -> OrdMap CBind -> OrdMap Unit -> OrdMap Unit -> String -> List String -> List String -> List String -> OrdMap Unit -> OrdMap String -> OrdMap Unit -> (Option (List String), OrdMap Unit)
+dispGrow : (String -> String) ->
+  (String -> Bool) ->
+  (String -> Int) ->
+  OrdMap CBind ->
+  OrdMap Unit ->
+  OrdMap Unit ->
+  String ->
+  List String ->
+  List String ->
+  List String ->
+  OrdMap Unit ->
+  OrdMap String ->
+  OrdMap Unit ->
+  (Option (List String), OrdMap Unit)
 dispGrow _ _ _ _ _ _ _ [] [] accRev _ _ doomed =
   (Some (reverseL accRev), doomed)
-dispGrow cf isFn fa bindIx fnSet claimed root [] back accRev accSet parents doomed = dispGrow cf isFn fa bindIx fnSet claimed root (reverseL back) [] accRev accSet parents doomed
-dispGrow cf isFn fa bindIx fnSet claimed root (m::rest) back accRev accSet parents doomed =
+dispGrow cf isFn fa bindIx fnSet claimed root [] back accRev accSet parents doomed =
+  dispGrow
+    cf
+    isFn
+    fa
+    bindIx
+    fnSet
+    claimed
+    root
+    (reverseL back)
+    []
+    accRev
+    accSet
+    parents
+    doomed
+dispGrow cf isFn fa bindIx fnSet claimed root (m :: rest) back accRev accSet parents doomed =
   match omLookup m bindIx
     None => (None, doomed)
     Some (CBind _ clauses) =>
@@ -1108,13 +1358,28 @@ dispGrow cf isFn fa bindIx fnSet claimed root (m::rest) back accRev accSet paren
       -- clauses (singleOp dispatch on a Char, `layout` dispatch on the RawTok
       -- head) — the clause-chain emit handles them and the context redirect
       -- reaches each arm's leaves.
-      if not (dispNonDict clauses) then (None, doomed)
+      if not (dispNonDict clauses) then
+        (None, doomed)
       else match dispMemberTailsOk cf isFn fa fnSet root clauses
         None => (None, doomed)
-        Some newMembers => match dispAddNew newMembers claimed doomed m accRev accSet parents []
-          None => (None, dispMarkDoomed parents m doomed)
-          Some (accRev2, accSet2, parents2, addedRev) =>
-            dispGrow cf isFn fa bindIx fnSet claimed root rest (addedRev ++ back) accRev2 accSet2 parents2 doomed
+        Some newMembers =>
+          match dispAddNew newMembers claimed doomed m accRev accSet parents []
+            None => (None, dispMarkDoomed parents m doomed)
+            Some (accRev2, accSet2, parents2, addedRev) =>
+              dispGrow
+                cf
+                isFn
+                fa
+                bindIx
+                fnSet
+                claimed
+                root
+                rest
+                (addedRev ++ back)
+                accRev2
+                accSet2
+                parents2
+                doomed
 
 -- Fold the newly-referenced members into (accRev, accSet, parents), returning also the
 -- additions in REVERSE order (ready to splice onto the queue's reversed back).
@@ -1127,16 +1392,32 @@ dispGrow cf isFn fa bindIx fnSet claimed root (m::rest) back accRev accSet paren
 -- family is what removes the outer factor of the near-cubic (#1029): a long chain of
 -- candidate roots used to re-grow the entire remaining family once per root only to
 -- have `dispValidate` throw it away on v7.
-dispAddNew : List String -> OrdMap Unit -> OrdMap Unit -> String -> List String -> OrdMap Unit -> OrdMap String -> List String -> Option (List String, OrdMap Unit, OrdMap String, List String)
+dispAddNew : List String ->
+  OrdMap Unit ->
+  OrdMap Unit ->
+  String ->
+  List String ->
+  OrdMap Unit ->
+  OrdMap String ->
+  List String ->
+  Option (List String, OrdMap Unit, OrdMap String, List String)
 dispAddNew [] _ _ _ accRev accSet parents addedRev =
   Some (accRev, accSet, parents, addedRev)
-dispAddNew (n::rest) claimed doomed m accRev accSet parents addedRev =
+dispAddNew (n :: rest) claimed doomed m accRev accSet parents addedRev =
   if omHasKey n accSet then
     dispAddNew rest claimed doomed m accRev accSet parents addedRev
   else if omHasKey n claimed || omHasKey n doomed then
     None
   else
-    dispAddNew rest claimed doomed m (n::accRev) (omInsert n () accSet) (omInsert n m parents) (n::addedRev)
+    dispAddNew
+      rest
+      claimed
+      doomed
+      m
+      (n :: accRev)
+      (omInsert n () accSet)
+      (omInsert n m parents)
+      (n :: addedRev)
 
 -- WHY THIS IS SOUND, and it is the one inference in this file worth re-deriving before
 -- you touch it.  `m` was being scanned when a tail-referenced name turned out to be
@@ -1159,7 +1440,8 @@ dispAddNew (n::rest) claimed doomed m accRev accSet parents addedRev =
 -- early can only under-mark.
 dispMarkDoomed : OrdMap String -> String -> OrdMap Unit -> OrdMap Unit
 dispMarkDoomed parents m doomed =
-  if omHasKey m doomed then doomed
+  if omHasKey m doomed then
+    doomed
   else
     let d2 = omInsert m () doomed
     match omLookup m parents
@@ -1173,49 +1455,77 @@ dispMarkDoomed parents m doomed =
 export
 dispFindBind : List CBind -> String -> Option CBind
 dispFindBind [] _ = None
-dispFindBind ((CBind n cs)::rest) m =
-  if n == m then
-    Some (CBind n cs)
-  else
-    dispFindBind rest m
+dispFindBind ((CBind n cs) :: rest) m =
+  if n == m then Some (CBind n cs) else dispFindBind rest m
 
 -- check every clause's every tail leaf; collect the NEW group fns referenced by case-(2)
 -- cons bottoms and case-(3) tail-calls.  Returns None if any leaf is an unsupported shape.
-dispMemberTailsOk : (String -> String) -> (String -> Bool) -> (String -> Int) -> OrdMap Unit -> String -> List CClause -> Option (List String)
+dispMemberTailsOk : (String -> String) ->
+  (String -> Bool) ->
+  (String -> Int) ->
+  OrdMap Unit ->
+  String ->
+  List CClause ->
+  Option (List String)
 dispMemberTailsOk cf isFn fa fnSet root clauses =
   dispClausesGo cf isFn fa fnSet root clauses []
 
-dispClausesGo : (String -> String) -> (String -> Bool) -> (String -> Int) -> OrdMap Unit -> String -> List CClause -> List String -> Option (List String)
+dispClausesGo : (String -> String) ->
+  (String -> Bool) ->
+  (String -> Int) ->
+  OrdMap Unit ->
+  String ->
+  List CClause ->
+  List String ->
+  Option (List String)
 dispClausesGo _ _ _ _ _ [] found = Some found
-dispClausesGo cf isFn fa fnSet root ((CClause _ body)::rest) found = match dispLeavesOk cf isFn fa fnSet root body found
-  None => None
-  Some found2 => dispClausesGo cf isFn fa fnSet root rest found2
+dispClausesGo cf isFn fa fnSet root ((CClause _ body) :: rest) found =
+  match dispLeavesOk cf isFn fa fnSet root body found
+    None => None
+    Some found2 => dispClausesGo cf isFn fa fnSet root rest found2
 
 -- descend the tail wrappers; check each leaf; accumulate referenced new group fns.
 -- (Block-prefix statements, let-RHSs, guards, and scrutinees are validated by
 -- dispValidate's v3 non-tail-heads walk against the FINAL member set.)
-dispLeavesOk : (String -> String) -> (String -> Bool) -> (String -> Int) -> OrdMap Unit -> String -> CExpr -> List String -> Option (List String)
-dispLeavesOk cf isFn fa fnSet root (CIf _ t f) found = match dispLeavesOk cf isFn fa fnSet root t found
-  None => None
-  Some f2 => dispLeavesOk cf isFn fa fnSet root f f2
+dispLeavesOk : (String -> String) ->
+  (String -> Bool) ->
+  (String -> Int) ->
+  OrdMap Unit ->
+  String ->
+  CExpr ->
+  List String ->
+  Option (List String)
+dispLeavesOk cf isFn fa fnSet root (CIf _ t f) found =
+  match dispLeavesOk cf isFn fa fnSet root t found
+    None => None
+    Some f2 => dispLeavesOk cf isFn fa fnSet root f f2
 dispLeavesOk cf isFn fa fnSet root (CLet False (PVar _ _) _ b) found =
   dispLeavesOk cf isFn fa fnSet root b found
 dispLeavesOk cf isFn fa fnSet root (CLet False PWild _ b) found =
   dispLeavesOk cf isFn fa fnSet root b found
-dispLeavesOk cf isFn fa fnSet root (CBlock stmts) found = match lastStmtExpr stmts
-  Some ex => dispLeavesOk cf isFn fa fnSet root ex found
-  None => None
+dispLeavesOk cf isFn fa fnSet root (CBlock stmts) found =
+  match lastStmtExpr stmts
+    Some ex => dispLeavesOk cf isFn fa fnSet root ex found
+    None => None
 dispLeavesOk cf isFn fa fnSet root (CDecision _ arms _) found =
   dispArmsOk cf isFn fa fnSet root arms found
 dispLeavesOk cf isFn fa fnSet root other found =
   dispLeafOk cf isFn fa fnSet root other found
 
-dispArmsOk : (String -> String) -> (String -> Bool) -> (String -> Int) -> OrdMap Unit -> String -> List CArm -> List String -> Option (List String)
+dispArmsOk : (String -> String) ->
+  (String -> Bool) ->
+  (String -> Int) ->
+  OrdMap Unit ->
+  String ->
+  List CArm ->
+  List String ->
+  Option (List String)
 dispArmsOk _ _ _ _ _ [] found = Some found
-dispArmsOk cf isFn fa fnSet root ((CArm _ guards body)::rest) found =
+dispArmsOk cf isFn fa fnSet root ((CArm _ guards body) :: rest) found =
   -- only ordinary bool guards (the same restriction the tail emit honors); a refutable
   -- guard binder would complicate the leaf rewrite — reject the group.
-  if not (allBoolGuards guards) then None
+  if not (allBoolGuards guards) then
+    None
   else match dispLeavesOk cf isFn fa fnSet root body found
     None => None
     Some f2 => dispArmsOk cf isFn fa fnSet root rest f2
@@ -1223,24 +1533,35 @@ dispArmsOk cf isFn fa fnSet root ((CArm _ guards body)::rest) found =
 -- classify a single LEAF.  peeled spine cons bottoming in a saturated user-fn call
 -- ⇒ ok + the bottom fn joins the group.  bare saturated tail-call to a user fn ⇒ ok
 -- + it joins.  base (no reference to root) ⇒ ok.  Anything else ⇒ None.
-dispLeafOk : (String -> String) -> (String -> Bool) -> (String -> Int) -> OrdMap Unit -> String -> CExpr -> List String -> Option (List String)
+dispLeafOk : (String -> String) ->
+  (String -> Bool) ->
+  (String -> Int) ->
+  OrdMap Unit ->
+  String ->
+  CExpr ->
+  List String ->
+  Option (List String)
 dispLeafOk cf isFn fa fnSet root e found =
   match dispSpineParts cf isFn fa (f => omHasKey f fnSet) e
     Some (heads, f, _) =>
       -- the heads become the cells' lead fields; one that re-enters the root would
       -- run a nested spine build mid-leaf — poison the group.  (Non-root member
       -- references in heads are caught by dispValidate v3.)
-      if anyListM (h => dispCallsRoot cf root h) heads then None
-      else Some (f :: found)
+      if anyListM (h => dispCallsRoot cf root h) heads then
+        None
+      else
+        Some (f :: found)
     None => match flattenApp e []
-      ((CVar f0 _), args) =>
+      (CVar f0 _, args) =>
         let f = cf f0
         if omHasKey f fnSet && isFn f && listLen args == fa f then
           -- saturated tail-call to a user fn (the root included): pull it into the
           -- group (case 3).  Its own tails are validated when the worklist reaches it.
           Some (f :: found)
-        else if dispLeafIsBase cf root e then Some found
-        else None
+        else if dispLeafIsBase cf root e then
+          Some found
+        else
+          None
       _ => if dispLeafIsBase cf root e then Some found else None
 
 -- a BASE leaf: a value with NO call to `root` and no tail-call into a group fn — e.g. `[]`,
@@ -1250,13 +1571,29 @@ dispLeafIsBase : (String -> String) -> String -> CExpr -> Bool
 dispLeafIsBase cf root e = not (dispCallsRoot cf root e)
 
 -- the group built a Cons spine somewhere (sanity: the dest carries Cons cells).
-dispGroupHasSpineCons : (String -> String) -> (String -> Bool) -> (String -> Int) -> OrdMap CBind -> OrdMap Unit -> List String -> Bool
+dispGroupHasSpineCons : (String -> String) ->
+  (String -> Bool) ->
+  (String -> Int) ->
+  OrdMap CBind ->
+  OrdMap Unit ->
+  List String ->
+  Bool
 dispGroupHasSpineCons cf isFn fa bindIx memberSet members =
   anyListM (m => dispMemberHasSpineCons cf isFn fa bindIx memberSet m) members
 
-dispMemberHasSpineCons : (String -> String) -> (String -> Bool) -> (String -> Int) -> OrdMap CBind -> OrdMap Unit -> String -> Bool
+dispMemberHasSpineCons : (String -> String) ->
+  (String -> Bool) ->
+  (String -> Int) ->
+  OrdMap CBind ->
+  OrdMap Unit ->
+  String ->
+  Bool
 dispMemberHasSpineCons cf isFn fa bindIx memberSet m = match omLookup m bindIx
-  Some (CBind _ cs) => anyListM (c => isNonEmptyL (dispExprConsTargets cf isFn fa memberSet (clauseBodyOf c))) cs
+  Some (CBind _ cs) =>
+    anyListM
+      (c =>
+        isNonEmptyL (dispExprConsTargets cf isFn fa memberSet (clauseBodyOf c)))
+      cs
   None => False
 
 -- v3 walk: every fn-name head in a member body that is NOT on a sanctioned tail edge
@@ -1264,51 +1601,79 @@ dispMemberHasSpineCons cf isFn fa bindIx memberSet m = match omLookup m bindIx
 -- structural descent EXACTLY, so detection, validation, and emit classify each leaf
 -- identically.  Collected: if-conds, let-RHSs, block prefixes, scrutinees, guards,
 -- cons heads, sanctioned-call args, and whole base exprs.
-dispMemberNonTailHeads : (String -> String) -> (String -> Bool) -> (String -> Int) -> OrdMap CBind -> OrdMap Unit -> String -> List String
+dispMemberNonTailHeads : (String -> String) ->
+  (String -> Bool) ->
+  (String -> Int) ->
+  OrdMap CBind ->
+  OrdMap Unit ->
+  String ->
+  List String
 dispMemberNonTailHeads cf isFn fa bindIx memberSet m = match omLookup m bindIx
-  Some (CBind _ clauses) => flatMap (c => dispNonTailHeads cf isFn fa memberSet (clauseBodyOf c)) clauses
+  Some (CBind _ clauses) =>
+    flatMap
+      (c => dispNonTailHeads cf isFn fa memberSet (clauseBodyOf c))
+      clauses
   None => []
 
-dispNonTailHeads : (String -> String) -> (String -> Bool) -> (String -> Int) -> OrdMap Unit -> CExpr -> List String
-dispNonTailHeads cf isFn fa memberSet (CIf c t f) = allCallHeads cf c
-  ++ dispNonTailHeads cf isFn fa memberSet t
-  ++ dispNonTailHeads cf isFn fa memberSet f
-dispNonTailHeads cf isFn fa memberSet (CLet False (PVar _ _) rhs b) = allCallHeads cf rhs
-  ++ dispNonTailHeads cf isFn fa memberSet b
-dispNonTailHeads cf isFn fa memberSet (CLet False PWild rhs b) = allCallHeads cf rhs
-  ++ dispNonTailHeads cf isFn fa memberSet b
+dispNonTailHeads : (String -> String) ->
+  (String -> Bool) ->
+  (String -> Int) ->
+  OrdMap Unit ->
+  CExpr ->
+  List String
+dispNonTailHeads cf isFn fa memberSet (CIf c t f) =
+  allCallHeads cf c
+    ++ dispNonTailHeads cf isFn fa memberSet t
+    ++ dispNonTailHeads cf isFn fa memberSet f
+dispNonTailHeads cf isFn fa memberSet (CLet False (PVar _ _) rhs b) =
+  allCallHeads cf rhs ++ dispNonTailHeads cf isFn fa memberSet b
+dispNonTailHeads cf isFn fa memberSet (CLet False PWild rhs b) =
+  allCallHeads cf rhs ++ dispNonTailHeads cf isFn fa memberSet b
 dispNonTailHeads cf isFn fa memberSet (CBlock stmts) =
   dispStmtNonTailHeads cf isFn fa memberSet stmts
-dispNonTailHeads cf isFn fa memberSet (CDecision scrut arms _) = allCallHeads cf scrut
-  ++ flatMap (a => dispArmNonTailHeads cf isFn fa memberSet a) arms
-dispNonTailHeads cf isFn fa memberSet leaf = match dispSpineParts cf isFn fa (f => omHasKey f memberSet) leaf
-  Some (heads, _, args) => flatMap (allCallHeads cf) heads
-    ++ flatMap (allCallHeads cf) args
-  None => match flattenApp leaf []
-    (CVar f0 _, args) =>
-      let f = cf f0
-      if omHasKey f memberSet && listLen args == fa f then
-        flatMap (allCallHeads cf) args
-      else
-        allCallHeads cf leaf
-    _ => allCallHeads cf leaf
+dispNonTailHeads cf isFn fa memberSet (CDecision scrut arms _) =
+  allCallHeads cf scrut
+    ++ flatMap (a => dispArmNonTailHeads cf isFn fa memberSet a) arms
+dispNonTailHeads cf isFn fa memberSet leaf =
+  match dispSpineParts cf isFn fa (f => omHasKey f memberSet) leaf
+    Some (heads, _, args) =>
+      flatMap (allCallHeads cf) heads ++ flatMap (allCallHeads cf) args
+    None => match flattenApp leaf []
+      (CVar f0 _, args) =>
+        let f = cf f0
+        if omHasKey f memberSet && listLen args == fa f then
+          flatMap (allCallHeads cf) args
+        else
+          allCallHeads cf leaf
+      _ => allCallHeads cf leaf
 
-dispArmNonTailHeads : (String -> String) -> (String -> Bool) -> (String -> Int) -> OrdMap Unit -> CArm -> List String
-dispArmNonTailHeads cf isFn fa memberSet (CArm _ guards body) = flatMap (dispGuardHeads cf) guards
-  ++ dispNonTailHeads cf isFn fa memberSet body
+dispArmNonTailHeads : (String -> String) ->
+  (String -> Bool) ->
+  (String -> Int) ->
+  OrdMap Unit ->
+  CArm ->
+  List String
+dispArmNonTailHeads cf isFn fa memberSet (CArm _ guards body) =
+  flatMap (dispGuardHeads cf) guards
+    ++ dispNonTailHeads cf isFn fa memberSet body
 
-dispStmtNonTailHeads : (String -> String) -> (String -> Bool) -> (String -> Int) -> OrdMap Unit -> List CStmt -> List String
+dispStmtNonTailHeads : (String -> String) ->
+  (String -> Bool) ->
+  (String -> Int) ->
+  OrdMap Unit ->
+  List CStmt ->
+  List String
 dispStmtNonTailHeads cf isFn fa memberSet [CSExpr ex] =
   dispNonTailHeads cf isFn fa memberSet ex
-dispStmtNonTailHeads cf isFn fa memberSet (s::rest) = allCallHeadsStmt cf s
-  ++ dispStmtNonTailHeads cf isFn fa memberSet rest
+dispStmtNonTailHeads cf isFn fa memberSet (s :: rest) =
+  allCallHeadsStmt cf s ++ dispStmtNonTailHeads cf isFn fa memberSet rest
 dispStmtNonTailHeads _ _ _ _ [] = []
 
 -- effectful anyList: the spine-cons / call-head walks thread effectful
 -- hooks, so a short-circuiting any over an effectful predicate is needed.
 anyListM : (a -> Bool) -> List a -> Bool
 anyListM _ [] = False
-anyListM p (x::rest) =
+anyListM p (x :: rest) =
   let h = p x
   if h then True else anyListM p rest
 # DESUGAR

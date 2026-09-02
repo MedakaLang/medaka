@@ -341,6 +341,7 @@ negUnary : ParserE <> Expr
 negUnaryFor : Token -> ParserE <> Expr
 nestDepthRef : Ref Int
 nestTooDeepMsg : String
+newtypeDerives : Token -> ParserE <> (List DeriveRef)
 nextSigIsPipe : Array Token -> Int -> Int -> Bool
 noExportedAlias : Bool -> UsePath -> ParserE <> Unit
 noMemberAlias : String -> ParserE <> Unit
@@ -516,6 +517,8 @@ recordPatFields : ParserE <> (List RecPatField, Bool)
 recordPatFieldsFor : Token -> ParserE <> (List RecPatField, Bool)
 recordPatFieldsRest : RecPatField -> Token -> ParserE <> (List RecPatField, Bool)
 recordRemovedMsg : String
+recordTrailingComma : Int -> ParserE <> Unit
+recordUnitStart : Int -> Int -> ParserE <> Unit
 reservedIdentKeyword : Token -> Option String
 reservedKeywordMsg : String -> String
 reservedOrPatFail : Token -> ParserE <> Pat
@@ -557,6 +560,8 @@ tokIdxOrNone : Array Token -> Int -> Option Int
 tokOffsetAt : Int -> Int
 tokOffsetAtArr : Array (Int, Int) -> Int -> Int
 trailingArrowLeftoverMsg : Token -> String -> String
+trailingCommaLocs : Unit -> List (Int, Int)
+trailingCommaLocsRef : Ref (List (Int, Int))
 tupleCtorTailFor : Int -> Token -> ParserE <> Ty
 tupleCtorTyName : Int -> String
 tupleCtorTyOfArity : Int -> ParserE <> Ty
@@ -573,6 +578,9 @@ tyParamsP : ParserE <> (List (String, Option KindAnn))
 tyTupleOrSingle : List Ty -> Ty
 unaryFor : Token -> ParserE <> Expr
 unexpectedLeftoverMsg : String -> Array Token -> Array Int -> Int -> Int -> String
+unitStarts : Unit -> List (Int, Int, Int)
+unitStartsRef : Ref (List (Int, Int, Int))
+unrecordSoleStmt : List DoStmt -> ParserE <> Unit
 upperAtomRest : String -> Token -> ParserE <> Pat
 upperBrace : String -> ParserE <> Expr
 upperNameFor : Token -> ParserE <> String

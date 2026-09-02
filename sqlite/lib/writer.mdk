@@ -47,12 +47,17 @@ public export data ColType =
   | TReal  -- REAL affinity (8-byte IEEE 754 float on disk)
 
 -- | One column definition.
-public export data Column =
-  | Column { colName : String, colType : ColType, isPrimaryKey : Bool }
+public export data Column = Column {
+  colName : String,
+  colType : ColType,
+  isPrimaryKey : Bool,
+}
 
 -- | A table schema: a name and an ordered list of columns.
-public export data TableSchema =
-  | TableSchema { schemaTableName : String, columns : List Column }
+public export data TableSchema = TableSchema {
+  schemaTableName : String,
+  columns : List Column,
+}
 
 -- ---------------------------------------------------------------------------
 -- CREATE TABLE SQL generation
@@ -100,10 +105,11 @@ createTableSql (TableSchema { schemaTableName, columns }) =
 -- or `None` if no such column exists.
 export
 schemaIpkIndex : TableSchema -> Option Int
-schemaIpkIndex (TableSchema { columns, ... }) = findIndex
-  (c => match c
-    Column { isPrimaryKey, ... } => isPrimaryKey)
-  columns
+schemaIpkIndex (TableSchema { columns, ... }) =
+  findIndex
+    (c => match c
+      Column { isPrimaryKey, ... } => isPrimaryKey)
+    columns
 
 -- ---------------------------------------------------------------------------
 -- Column count validation
@@ -112,7 +118,7 @@ schemaIpkIndex (TableSchema { columns, ... }) = findIndex
 -- | Validate that every row has exactly `expected` cells.
 validateRows : Int -> List (List Cell) -> Result String Unit
 validateRows _ [] = Ok ()
-validateRows expected (r::rest) =
+validateRows expected (r :: rest) =
   let got = length r
   if got == expected then
     validateRows expected rest
@@ -136,7 +142,10 @@ validateRows expected (r::rest) =
 --   no size limit on a TEXT/BLOB value.
 -- * Returns `Err` on a row width mismatch or an IPK type mismatch.
 export
-writeTable : String -> TableSchema -> List (List Cell) -> <FileWrite> Result String Unit
+writeTable : String ->
+  TableSchema ->
+  List (List Cell) ->
+  <FileWrite> Result String Unit
 writeTable path schema rows = match schema
   TableSchema { schemaTableName = name, columns } => do
     let colCount = length columns
@@ -172,7 +181,8 @@ buildTable schema rows = match schema
 -- | Convert one `(schema, rows)` entry into the low-level dbwriter spec,
 -- validating row width and deriving the CREATE text + IPK index from the
 -- schema.  Pure (Result monad); no effect.
-tableSpec : (TableSchema, List (List Cell)) -> Result String (String, String, Option Int, List (List Cell))
+tableSpec : (TableSchema, List (List Cell)) ->
+  Result String (String, String, Option Int, List (List Cell))
 tableSpec (schema, rows) = match schema
   TableSchema { schemaTableName = name, columns } => do
     let colCount = length columns
@@ -183,11 +193,13 @@ tableSpec (schema, rows) = match schema
 
 -- Map every `(schema, rows)` entry to its spec, short-circuiting on the first
 -- validation error.
-collectSpecs : List (TableSchema, List (List Cell)) -> List (String, String, Option Int, List (List Cell)) -> Result String (List (String, String, Option Int, List (List Cell)))
+collectSpecs : List (TableSchema, List (List Cell)) ->
+  List (String, String, Option Int, List (List Cell)) ->
+  Result String (List (String, String, Option Int, List (List Cell)))
 collectSpecs [] acc = Ok (reverse acc)
-collectSpecs (t::rest) acc = do
+collectSpecs (t :: rest) acc = do
   spec <- tableSpec t
-  collectSpecs rest (spec::acc)
+  collectSpecs rest (spec :: acc)
 
 -- | Build the byte image of a multi-table SQLite database from a list of
 -- `(schema, rows)` entries.  The single-table case (`[entry]`) produces the
@@ -201,7 +213,9 @@ buildTables tables = do
 
 -- | Build a multi-table SQLite database and `writeFileBytes` it to `path`.
 export
-writeTables : String -> List (TableSchema, List (List Cell)) -> <FileWrite> Result String Unit
+writeTables : String ->
+  List (TableSchema, List (List Cell)) ->
+  <FileWrite> Result String Unit
 writeTables path tables = do
   img <- buildTables tables
   writeFileBytes path img
@@ -220,7 +234,7 @@ writeTables path tables = do
 -- | Validate that every explicit-rowid row has exactly `expected` cells.
 validateRowsExplicit : Int -> List (Int, List Cell) -> Result String Unit
 validateRowsExplicit _ [] = Ok ()
-validateRowsExplicit expected ((_, r)::rest) =
+validateRowsExplicit expected ((_, r) :: rest) =
   let got = length r
   if got == expected then
     validateRowsExplicit expected rest
@@ -229,7 +243,8 @@ validateRowsExplicit expected ((_, r)::rest) =
 
 -- | Convert one explicit-rowid `(schema, rows)` entry into the low-level
 -- dbwriter spec, validating row width and deriving CREATE text + IPK index.
-tableSpecExplicit : (TableSchema, List (Int, List Cell)) -> Result String (String, String, Option Int, List (Int, List Cell))
+tableSpecExplicit : (TableSchema, List (Int, List Cell)) ->
+  Result String (String, String, Option Int, List (Int, List Cell))
 tableSpecExplicit (schema, rows) = match schema
   TableSchema { schemaTableName = name, columns } => do
     let colCount = length columns
@@ -238,22 +253,27 @@ tableSpecExplicit (schema, rows) = match schema
     let ipk = schemaIpkIndex schema
     Ok (name, sql, ipk, rows)
 
-collectSpecsExplicit : List (TableSchema, List (Int, List Cell)) -> List (String, String, Option Int, List (Int, List Cell)) -> Result String (List (String, String, Option Int, List (Int, List Cell)))
+collectSpecsExplicit : List (TableSchema, List (Int, List Cell)) ->
+  List (String, String, Option Int, List (Int, List Cell)) ->
+  Result String (List (String, String, Option Int, List (Int, List Cell)))
 collectSpecsExplicit [] acc = Ok (reverse acc)
-collectSpecsExplicit (t::rest) acc = do
+collectSpecsExplicit (t :: rest) acc = do
   spec <- tableSpecExplicit t
-  collectSpecsExplicit rest (spec::acc)
+  collectSpecsExplicit rest (spec :: acc)
 
 -- | Build the byte image of a multi-table database from explicit-rowid entries.
 export
-buildTablesExplicit : List (TableSchema, List (Int, List Cell)) -> Result String (Array Int)
+buildTablesExplicit : List (TableSchema, List (Int, List Cell)) ->
+  Result String (Array Int)
 buildTablesExplicit tables = do
   specs <- collectSpecsExplicit tables []
   buildDatabaseMultiExplicit specs
 
 -- | Build an explicit-rowid multi-table database and `writeFileBytes` it.
 export
-writeTablesExplicit : String -> List (TableSchema, List (Int, List Cell)) -> <FileWrite> Result String Unit
+writeTablesExplicit : String ->
+  List (TableSchema, List (Int, List Cell)) ->
+  <FileWrite> Result String Unit
 writeTablesExplicit path tables = do
   img <- buildTablesExplicit tables
   writeFileBytes path img
@@ -277,7 +297,10 @@ writeTablesExplicit path tables = do
 -- | Build the byte image of a single table plus its secondary indexes.
 --   `indexes` is a list of `(indexName, columnName)`.
 export
-buildTableWithIndexes : TableSchema -> List (List Cell) -> List (String, String) -> Result String (Array Int)
+buildTableWithIndexes : TableSchema ->
+  List (List Cell) ->
+  List (String, String) ->
+  Result String (Array Int)
 buildTableWithIndexes schema rows indexes = match schema
   TableSchema { schemaTableName = name, columns } => do
     let colCount = length columns
@@ -289,19 +312,35 @@ buildTableWithIndexes schema rows indexes = match schema
 
 -- | Build a single-table-with-indexes database and `writeFileBytes` it.
 export
-writeTableWithIndexes : String -> TableSchema -> List (List Cell) -> List (String, String) -> <FileWrite> Result String Unit
+writeTableWithIndexes : String ->
+  TableSchema ->
+  List (List Cell) ->
+  List (String, String) ->
+  <FileWrite> Result String Unit
 writeTableWithIndexes path schema rows indexes = do
   img <- buildTableWithIndexes schema rows indexes
   writeFileBytes path img
 
 -- Turn each `(indexName, columnName)` into the low-level dbwriter index spec.
-collectIndexSpecs : String -> List Column -> Option Int -> List (List Cell) -> List (String, String) -> List (String, String, String, List (Cell, Int)) -> Result String (List (String, String, String, List (Cell, Int)))
+collectIndexSpecs : String ->
+  List Column ->
+  Option Int ->
+  List (List Cell) ->
+  List (String, String) ->
+  List (String, String, String, List (Cell, Int)) ->
+  Result String (List (String, String, String, List (Cell, Int)))
 collectIndexSpecs _ _ _ _ [] acc = Ok (reverse acc)
-collectIndexSpecs tbl cols ipk rows ((idxName, col)::rest) acc = do
+collectIndexSpecs tbl cols ipk rows ((idxName, col) :: rest) acc = do
   spec <- oneIndexSpec tbl cols ipk rows idxName col
-  collectIndexSpecs tbl cols ipk rows rest (spec::acc)
+  collectIndexSpecs tbl cols ipk rows rest (spec :: acc)
 
-oneIndexSpec : String -> List Column -> Option Int -> List (List Cell) -> String -> String -> Result String (String, String, String, List (Cell, Int))
+oneIndexSpec : String ->
+  List Column ->
+  Option Int ->
+  List (List Cell) ->
+  String ->
+  String ->
+  Result String (String, String, String, List (Cell, Int))
 oneIndexSpec tbl cols ipk rows idxName col = do
   colIdx <- requireColumn tbl col (columnIndexOf cols col)
   _ <- refuseIpkIndex tbl col colIdx ipk
@@ -317,7 +356,8 @@ requireColumn tbl col None =
 refuseIpkIndex : String -> String -> Int -> Option Int -> Result String Unit
 refuseIpkIndex tbl col colIdx (Some p) =
   if colIdx == p then
-    Err "cannot index the INTEGER PRIMARY KEY column '\{col}' of '\{tbl}' — it is the rowid alias (v1 limitation)"
+    Err
+      "cannot index the INTEGER PRIMARY KEY column '\{col}' of '\{tbl}' — it is the rowid alias (v1 limitation)"
   else
     Ok ()
 refuseIpkIndex _ _ _ None = Ok ()
@@ -329,27 +369,31 @@ columnIndexOf cols col = colIdxGo cols (toUpper col) 0
 
 colIdxGo : List Column -> String -> Int -> Option Int
 colIdxGo [] _ _ = None
-colIdxGo ((Column { colName, ... })::rest) target i =
-  if toUpper colName == target then
-    Some i
-  else
-    colIdxGo rest target (i + 1)
+colIdxGo ((Column { colName, ... }) :: rest) target i =
+  if toUpper colName == target then Some i else colIdxGo rest target (i + 1)
 
 -- Extract `(keyCell, rowid)` for the indexed column from every row, threading
 -- the auto-rowid.  The rowid derivation MIRRORS the table writer's
 -- (`dbwriter.rowidFor`): the IPK column value for an IPK table, else 1..N.
-indexEntries : Option Int -> Int -> Int -> List (List Cell) -> List (Cell, Int) -> Result String (List (Cell, Int))
+indexEntries : Option Int ->
+  Int ->
+  Int ->
+  List (List Cell) ->
+  List (Cell, Int) ->
+  Result String (List (Cell, Int))
 indexEntries _ _ _ [] acc = Ok (reverse acc)
-indexEntries ipk colIdx auto (row::rest) acc = do
+indexEntries ipk colIdx auto (row :: rest) acc = do
   rid <- rowidOfRow ipk auto row
   let key = keyOf colIdx row
-  indexEntries ipk colIdx (auto + 1) rest ((key, rid)::acc)
+  indexEntries ipk colIdx (auto + 1) rest ((key, rid) :: acc)
 
 rowidOfRow : Option Int -> Int -> List Cell -> Result String Int
 rowidOfRow None auto _ = Ok auto
 rowidOfRow (Some p) _ cells = match get p cells
   Some (CInt v) => Ok v
-  _ => Err "INTEGER PRIMARY KEY column must be a non-NULL integer to build an index"
+  _ =>
+    Err
+      "INTEGER PRIMARY KEY column must be a non-NULL integer to build an index"
 
 keyOf : Int -> List Cell -> Cell
 keyOf colIdx row = match get colIdx row

@@ -58,16 +58,21 @@ fixtureValue name = match name
       DcMap [
         (
           "with",
-          DcMap [("objects", DcMap [("!", DcString "!")]), ("4", DcString "nested")],
-        )
+          DcMap [
+            ("objects", DcMap [("!", DcString "!")]),
+            ("4", DcString "nested"),
+          ],
+        ),
       ],
-    )
+    ),
   ]
   "null" => DcNull
   "string-Hello__world!" => DcString "Hello world!"
   "string-水" => DcString "水"
   "true" => DcBool True
-  "cid-bafyreidj5idub6mapiupjwjsyyxhyhedxycv4vihfsicm2vt46o7morwlm" => DcLink (mustCid "bafyreidj5idub6mapiupjwjsyyxhyhedxycv4vihfsicm2vt46o7morwlm")
+  "cid-bafyreidj5idub6mapiupjwjsyyxhyhedxycv4vihfsicm2vt46o7morwlm" =>
+    DcLink
+      (mustCid "bafyreidj5idub6mapiupjwjsyyxhyhedxycv4vihfsicm2vt46o7morwlm")
   _ => panic "dagcbor_cid_vectors: unsupported fixture \{name}"
 
 runRow : String -> <IO> Int
@@ -82,18 +87,24 @@ runRow line = match split "\t" line
     let parsedCidText = match cidFromString expectedCidText
       Err message => "ERR:\{message}"
       Ok cid => cidToString cid
-    let ok = constructed == Ok expectedBytes && decodedReencoded == Ok expectedBytes && calculatedCidText == expectedCidText && parsedCidText == expectedCidText
+    let ok =
+      constructed == Ok expectedBytes
+        && decodedReencoded == Ok expectedBytes
+        && calculatedCidText == expectedCidText
+        && parsedCidText == expectedCidText
     if ok then
       let () = println "ROW \{name} PASS construct decode-reencode cid base32"
       1
     else
-      let () = println "ROW \{name} FAIL construct=\{debug constructed} reencode=\{debug decodedReencoded} cid=\{calculatedCidText} parsed=\{parsedCidText}"
+      let () =
+        println
+          "ROW \{name} FAIL construct=\{debug constructed} reencode=\{debug decodedReencoded} cid=\{calculatedCidText} parsed=\{parsedCidText}"
       0
   _ => panic "dagcbor_cid_vectors: malformed corpus row: \{line}"
 
 runRows : List String -> Int -> <IO> Int
 runRows [] count = count
-runRows (line::rest) count =
+runRows (line :: rest) count =
   if line == "" || startsWith "#" line then
     runRows rest count
   else
@@ -102,12 +113,13 @@ runRows (line::rest) count =
 rejectContains : String -> String -> Result String a -> <IO> Int
 -- lint-disable-next-line rule-match-on-param
 rejectContains label witness result = match result
-  Err message => if contains witness message then
-    let () = println "MALFORMED \{label} PASS route=\{witness}"
-    1
-  else
-    let () = println "MALFORMED \{label} FAIL wrong-route=\{message}"
-    0
+  Err message =>
+    if contains witness message then
+      let () = println "MALFORMED \{label} PASS route=\{witness}"
+      1
+    else
+      let () = println "MALFORMED \{label} FAIL wrong-route=\{message}"
+      0
   Ok _ =>
     let () = println "MALFORMED \{label} FAIL accepted"
     0
@@ -120,36 +132,113 @@ setAt index value bytes =
 
 runMalformed : <IO> Int
 runMalformed =
-  let linkHex = "d82a5825000171122069ea0740f9807a28f4d932c62e7c1c83be055e55072c90266ab3e79df63a365b"
+  let linkHex =
+    "d82a5825000171122069ea0740f9807a28f4d932c62e7c1c83be055e55072c90266ab3e79df63a365b"
   let linkBytes = mustHex linkHex
-  let linkCidBytes = mustHex "0171122069ea0740f9807a28f4d932c62e7c1c83be055e55072c90266ab3e79df63a365b"
-  let canonicalCid = "bafyreidj5idub6mapiupjwjsyyxhyhedxycv4vihfsicm2vt46o7morwlm"
-  let upperBody = "b" ++ toUpper (stringSlice 1 (stringLength canonicalCid) canonicalCid)
+  let linkCidBytes =
+    mustHex
+      "0171122069ea0740f9807a28f4d932c62e7c1c83be055e55072c90266ab3e79df63a365b"
+  let canonicalCid =
+    "bafyreidj5idub6mapiupjwjsyyxhyhedxycv4vihfsicm2vt46o7morwlm"
+  let upperBody =
+    "b" ++ toUpper (stringSlice 1 (stringLength canonicalCid) canonicalCid)
   let checks = [
-    rejectContains "shortest-integer-positive" "shortest integer/length" (dagCborDecode (mustHex "1817")),
-    rejectContains "shortest-integer-negative" "shortest integer/length" (dagCborDecode (mustHex "3817")),
-    rejectContains "shortest-length-bytes" "shortest integer/length" (dagCborDecode (mustHex "5800")),
-    rejectContains "shortest-length-text" "shortest integer/length" (dagCborDecode (mustHex "7800")),
-    rejectContains "shortest-length-array" "shortest integer/length" (dagCborDecode (mustHex "9800")),
-    rejectContains "shortest-length-map" "shortest integer/length" (dagCborDecode (mustHex "b800")),
-    rejectContains "map-ordering" "deterministic order" (dagCborDecode (mustHex "a2616201616102")),
-    rejectContains "map-duplicate" "duplicate map key" (dagCborDecode (mustHex "a2616101616102")),
-    rejectContains "map-non-string-key" "map key is not a string" (dagCborDecode (mustHex "a10101")),
-    rejectContains "tag42-only" "only tag 42" (dagCborDecode (mustHex "d82b40")),
-    rejectContains "tag42-shortest" "shortest integer/length" (dagCborDecode (mustHex "d9002a40")),
-    rejectContains "tag42-identity" "leading identity byte" (dagCborDecode (setAt 4 1 linkBytes)),
-    rejectContains "tag42-cid-codec-route" "tag-42 CID: cid: codec" (dagCborDecode (setAt 6 0x70 linkBytes)),
-    rejectContains "cid-codec" "cid: codec" (cidFromBytes (setAt 1 0x70 linkCidBytes)),
-    rejectContains "cid-hash" "cid: hash code" (cidFromBytes (setAt 2 0x13 linkCidBytes)),
-    rejectContains "cid-length" "cid: SHA-256 digest length" (cidFromBytes (setAt 3 0x1f linkCidBytes)),
-    rejectContains "base32-padding" "padding is not allowed" (cidFromString (canonicalCid ++ "=")),
-    rejectContains "base32-case" "uppercase is not canonical" (cidFromString upperBody),
-    rejectContains "base32-alphabet" "invalid alphabet character" (cidFromString "b1"),
-    rejectContains "truncation" "truncated value" (dagCborDecode (mustHex "81")),
-    rejectContains "trailing-bytes" "trailing bytes" (dagCborDecode (mustHex "f600")),
-    rejectContains "indefinite-length" "indefinite-length" (dagCborDecode (mustHex "9f01ff")),
-    rejectContains "float" "floats" (dagCborDecode (mustHex "fb0000000000000000")),
-    rejectContains "invalid-utf8" "invalid UTF-8" (dagCborDecode (mustHex "61ff")),
+    rejectContains
+      "shortest-integer-positive"
+      "shortest integer/length"
+      (dagCborDecode (mustHex "1817")),
+    rejectContains
+      "shortest-integer-negative"
+      "shortest integer/length"
+      (dagCborDecode (mustHex "3817")),
+    rejectContains
+      "shortest-length-bytes"
+      "shortest integer/length"
+      (dagCborDecode (mustHex "5800")),
+    rejectContains
+      "shortest-length-text"
+      "shortest integer/length"
+      (dagCborDecode (mustHex "7800")),
+    rejectContains
+      "shortest-length-array"
+      "shortest integer/length"
+      (dagCborDecode (mustHex "9800")),
+    rejectContains
+      "shortest-length-map"
+      "shortest integer/length"
+      (dagCborDecode (mustHex "b800")),
+    rejectContains
+      "map-ordering"
+      "deterministic order"
+      (dagCborDecode (mustHex "a2616201616102")),
+    rejectContains
+      "map-duplicate"
+      "duplicate map key"
+      (dagCborDecode (mustHex "a2616101616102")),
+    rejectContains
+      "map-non-string-key"
+      "map key is not a string"
+      (dagCborDecode (mustHex "a10101")),
+    rejectContains
+      "tag42-only"
+      "only tag 42"
+      (dagCborDecode (mustHex "d82b40")),
+    rejectContains
+      "tag42-shortest"
+      "shortest integer/length"
+      (dagCborDecode (mustHex "d9002a40")),
+    rejectContains
+      "tag42-identity"
+      "leading identity byte"
+      (dagCborDecode (setAt 4 1 linkBytes)),
+    rejectContains
+      "tag42-cid-codec-route"
+      "tag-42 CID: cid: codec"
+      (dagCborDecode (setAt 6 0x70 linkBytes)),
+    rejectContains
+      "cid-codec"
+      "cid: codec"
+      (cidFromBytes (setAt 1 0x70 linkCidBytes)),
+    rejectContains
+      "cid-hash"
+      "cid: hash code"
+      (cidFromBytes (setAt 2 0x13 linkCidBytes)),
+    rejectContains
+      "cid-length"
+      "cid: SHA-256 digest length"
+      (cidFromBytes (setAt 3 0x1f linkCidBytes)),
+    rejectContains
+      "base32-padding"
+      "padding is not allowed"
+      (cidFromString (canonicalCid ++ "=")),
+    rejectContains
+      "base32-case"
+      "uppercase is not canonical"
+      (cidFromString upperBody),
+    rejectContains
+      "base32-alphabet"
+      "invalid alphabet character"
+      (cidFromString "b1"),
+    rejectContains
+      "truncation"
+      "truncated value"
+      (dagCborDecode (mustHex "81")),
+    rejectContains
+      "trailing-bytes"
+      "trailing bytes"
+      (dagCborDecode (mustHex "f600")),
+    rejectContains
+      "indefinite-length"
+      "indefinite-length"
+      (dagCborDecode (mustHex "9f01ff")),
+    rejectContains
+      "float"
+      "floats"
+      (dagCborDecode (mustHex "fb0000000000000000")),
+    rejectContains
+      "invalid-utf8"
+      "invalid UTF-8"
+      (dagCborDecode (mustHex "61ff")),
   ]
   sum checks
 
@@ -161,8 +250,11 @@ main = match args ()
       let external = runRows rows 0
       let malformed = runMalformed
       let () = println "external: \{intToString external}/17 IPLD rows"
-      let () = println "malformed: \{intToString malformed}/24 rejected on named routes"
-      if external == 17 && malformed == 24 then println "TOTAL: PASS"
+      let () =
+        println
+          "malformed: \{intToString malformed}/24 rejected on named routes"
+      if external == 17 && malformed == 24 then
+        println "TOTAL: PASS"
       else
         let () = println "TOTAL: FAIL"
         exit 1

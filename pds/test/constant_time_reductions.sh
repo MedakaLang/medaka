@@ -228,27 +228,27 @@ source_shape_ok() {
   body=$2
   case "$name" in
     canonicalize) expected='1918979222 101' ;; carryAll) expected='3784023453 28' ;;
-    carryFoldRound) expected='702085150 126' ;; carryGo) expected='2473884978 265' ;;
+    carryFoldRound) expected='702085150 126' ;; carryGo) expected='2159207857 267' ;;
     carryPass) expected='1250453555 31' ;; carryPassGo) expected='1857917920 284' ;;
-    copyLow) expected='2185712744 111' ;;
-    foldAccum) expected='1811712224 107' ;; foldAccumRow) expected='2020878519 156' ;;
+    copyLow) expected='3444459846 115' ;;
+    foldAccum) expected='305940905 111' ;; foldAccumRow) expected='1512181526 160' ;;
     foldOnce) expected='1770996279 84' ;; reduceCarry) expected='2596813441 92' ;;
     reduceFixed) expected='736687942 206' ;; reduceWide) expected='1389933683 128' ;;
-    selectNCandidate) expected='868510668 210' ;; selectPCandidate) expected='1063104259 208' ;;
-    subNCandidate) expected='3519783463 226' ;; subNSelect) expected='1155645251 125' ;;
+    selectNCandidate) expected='1327350681 214' ;; selectPCandidate) expected='3621980786 212' ;;
+    subNCandidate) expected='196465499 230' ;; subNSelect) expected='1155645251 125' ;;
     subPCandidate) expected='714167625 342' ;; subPSelect) expected='764393686 125' ;;
     feZeroBit) expected='1598842918 42' ;; feZeroBorrow) expected='2456388451 212' ;;
     feEqualBit) expected='243104385 56' ;; feEqualBorrow) expected='1904311731 242' ;;
-    feSelect) expected='564879547 108' ;; feSelectGo) expected='3738294658 157' ;;
+    feSelect) expected='564879547 108' ;; feSelectGo) expected='3969226401 161' ;;
     feNegateCt) expected='2668735364 126' ;; feNegateCtGo) expected='2165366212 310' ;;
     rawFe) expected='714619739 33' ;;
-    scZeroBit) expected='1698366246 42' ;; scZeroBorrow) expected='2082986577 156' ;;
-    scEqualBit) expected='1611320584 56' ;; scEqualBorrow) expected='3496656700 174' ;;
-    scSelect) expected='1808119660 108' ;; scSelectGo) expected='161536967 159' ;;
-    scHighBit) expected='601342344 46' ;; scHighBorrow) expected='1879936321 172' ;;
-    scNegateCt) expected='1370341835 126' ;; scNegateCtGo) expected='3026427442 224' ;;
+    scZeroBit) expected='1698366246 42' ;; scZeroBorrow) expected='2943287382 160' ;;
+    scEqualBit) expected='1611320584 56' ;; scEqualBorrow) expected='2696023600 178' ;;
+    scSelect) expected='1808119660 108' ;; scSelectGo) expected='2097560298 163' ;;
+    scHighBit) expected='601342344 46' ;; scHighBorrow) expected='807202238 176' ;;
+    scNegateCt) expected='1370341835 126' ;; scNegateCtGo) expected='1321952515 228' ;;
     rawSc) expected='3051169895 33' ;;
-    takeHigh) expected='2180466419 148' ;; *) return 1 ;;
+    takeHigh) expected='2788456482 152' ;; *) return 1 ;;
   esac
   actual=$(cksum "$body" | awk '{ print $1 " " $2 }')
   [ "$actual" = "$expected" ]
@@ -319,7 +319,7 @@ source_helpers_ok() {
     source_writes_allocations_ok "$body" || return 1
     source_write_shape_ok "$name" "$body" || return 1
     if [ "$name" = carryGo ]; then
-      grep -F -q 'if i >= nWide then if carry /= 0 then panic' "$body" || return 1
+      tr -s '[:space:]' ' ' < "$body" | grep -F -q 'if i >= nWide then if carry /= 0 then panic' || return 1
     fi
   done
   return 0

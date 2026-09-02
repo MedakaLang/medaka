@@ -56,27 +56,32 @@ main = driveModules runEmit
 runEmit : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
 runEmit runtimeDecls coreDecls modules =
   let (coreMangled, modulesMangled) = mangleUnits coreDecls modules
-  let (coreD, modules2) = elaborateModules runtimeDecls coreMangled modulesMangled
+  let (coreD, modules2) =
+    elaborateModules runtimeDecls coreMangled modulesMangled
   let allDecls0 = coreD ++ flatMap snd modules2
   -- GAP CENSUS: do NOT run dceFilter.  DCE roots reachability from `main`, and the
   -- census input (all_modules_entry) has NO main — DCE would prune EVERY plain
   -- top-level function and the census would see nothing.  We want to emit the FULL
   -- graph to measure every node, so keep all decls.
   let allDecls = allDecls0
-  let _ = preludeReturnPosDictNames coreD allDecls ++ preludeArgPosDictNames coreD allDecls ++ constrainedSigNames allDecls
-  let input = makeWasmEmitInputFull
-    (methodIfaceTable allDecls)
-    (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
-    []
-    False
-    (declaredRecordFieldOrders allDecls)
-    []
-    (ifaceImplHeadTable allDecls)
+  let _ =
+    preludeReturnPosDictNames coreD allDecls
+      ++ preludeArgPosDictNames coreD allDecls
+      ++ constrainedSigNames allDecls
+  let input =
+    makeWasmEmitInputFull
+      (methodIfaceTable allDecls)
+      (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
+      []
+      False
+      (declaredRecordFieldOrders allDecls)
+      []
+      (ifaceImplHeadTable allDecls)
   let gaps = emitProgramGaps input (lowerProgramEmit TargetWasm allDecls)
   printGaps gaps
 
 printGaps : List String -> <IO> Unit
 printGaps [] = ()
-printGaps (g::rest) =
+printGaps (g :: rest) =
   let _ = putStrLn g
   printGaps rest

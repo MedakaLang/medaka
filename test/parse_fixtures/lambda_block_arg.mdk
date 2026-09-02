@@ -1,0 +1,17 @@
+-- A lambda whose body is a statement block, written directly as a
+-- parenthesized argument — in any argument position, not only the last
+-- (#834): a line-final `=>` inside a bracket arms the block.
+wrap : (Unit -> String) -> Int -> (Unit -> String, Int)
+wrap f n = (f, n)
+
+pair : (Unit -> String, Int)
+pair = wrap (u =>
+  let s = "woof"
+  s) 1
+
+doubled : List Int -> List Int
+doubled xs = map (x =>
+  let y = x * 2
+  y) xs
+
+main = putStrLn ((fst pair) ())

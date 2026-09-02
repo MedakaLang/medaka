@@ -1,5 +1,5 @@
 # META
-source_lines=1982
+source_lines=1983
 stages=DESUGAR,MARK
 # SOURCE
 {- | The prelude: the types, interfaces, and functions every Medaka program
@@ -81,7 +81,7 @@ export impl Eq Unit where
 
 export impl Eq (List a) requires Eq a where
   eq [] [] = True
-  eq (x::xs) (y::ys) = eq x y && eq xs ys
+  eq (x :: xs) (y :: ys) = eq x y && eq xs ys
   eq _ _ = False
 
 export impl Eq (Option a) requires Eq a where
@@ -102,17 +102,12 @@ export impl Eq (a, b, c) requires Eq a, Eq b, Eq c where
   eq (a1, b1, c1) (a2, b2, c2) = eq a1 a2 && eq b1 b2 && eq c1 c2
 
 export impl Eq (a, b, c, d) requires Eq a, Eq b, Eq c, Eq d where
-  eq (a1, b1, c1, d1) (a2, b2, c2, d2) = eq a1 a2
-    && eq b1 b2
-    && eq c1 c2
-    && eq d1 d2
+  eq (a1, b1, c1, d1) (a2, b2, c2, d2) =
+    eq a1 a2 && eq b1 b2 && eq c1 c2 && eq d1 d2
 
 export impl Eq (a, b, c, d, e) requires Eq a, Eq b, Eq c, Eq d, Eq e where
-  eq (a1, b1, c1, d1, e1) (a2, b2, c2, d2, e2) = eq a1 a2
-    && eq b1 b2
-    && eq c1 c2
-    && eq d1 d2
-    && eq e1 e2
+  eq (a1, b1, c1, d1, e1) (a2, b2, c2, d2, e2) =
+    eq a1 a2 && eq b1 b2 && eq c1 c2 && eq d1 d2 && eq e1 e2
 
 {- | Types with an associative combining operation.
 
@@ -297,7 +292,7 @@ export impl Ord (List a) requires Ord a where
   compare [] [] = Eq
   compare [] _ = Lt
   compare _ [] = Gt
-  compare (x::xs) (y::ys) = thenCmp (compare x y) (compare xs ys)
+  compare (x :: xs) (y :: ys) = thenCmp (compare x y) (compare xs ys)
 
 -- | `None` sorts before every `Some`; two `Some`s compare by their contents.
 export impl Ord (Option a) requires Ord a where
@@ -379,7 +374,7 @@ export impl Debug Char where
 debugListItems : Debug a => List a -> String
 debugListItems [] = ""
 debugListItems [x] = debug x
-debugListItems (y::rest) = "\{debug y}, \{debugListItems rest}"
+debugListItems (y :: rest) = "\{debug y}, \{debugListItems rest}"
 
 export impl Debug (List a) requires Debug a where
   debug xs = "[\{debugListItems xs}]"
@@ -407,10 +402,7 @@ export impl Debug (Array a) requires Debug a where
 -- `deriving (Eq)` over a field of array type builds without an `import array`.
 export impl Eq (Array a) requires Eq a where
   eq a b =
-    if arrayLength a /= arrayLength b then
-      False
-    else
-      eqGo a b 0 (arrayLength a)
+    if arrayLength a /= arrayLength b then False else eqGo a b 0 (arrayLength a)
 
 eqGo : Eq a => Array a -> Array a -> Int -> Int -> Bool
 eqGo a b i n =
@@ -441,10 +433,7 @@ export impl Ord (Array a) requires Ord a where
 -- Unconstrained array-to-list walk, for `Ord (Array a)` above.
 arrItems : Array a -> Int -> Int -> List a
 arrItems arr i n =
-  if i >= n then
-    []
-  else
-    arrayGetUnsafe i arr :: arrItems arr (i + 1) n
+  if i >= n then [] else arrayGetUnsafe i arr :: arrItems arr (i + 1) n
 
 export impl Debug (Option a) requires Debug a where
   debug None = "None"
@@ -509,7 +498,7 @@ export impl Display Char where
 displayListItems : Display a => List a -> String
 displayListItems [] = ""
 displayListItems [x] = display x
-displayListItems (y::rest) = "\{y}, \{displayListItems rest}"
+displayListItems (y :: rest) = "\{y}, \{displayListItems rest}"
 
 export impl Display (List a) requires Display a where
   display xs = "[\{displayListItems xs}]"
@@ -605,7 +594,12 @@ derivedHasTopLevelSpace : Array Char -> Int -> Int -> Int -> Bool
 derivedHasTopLevelSpace chars i n depth
   | i >= n = False
   | arrayGetUnsafe i chars == ' ' && depth == 0 = True
-  | otherwise = derivedHasTopLevelSpace chars (i + 1) n (derivedNextDepth (arrayGetUnsafe i chars) depth)
+  | otherwise =
+    derivedHasTopLevelSpace
+      chars
+      (i + 1)
+      n
+      (derivedNextDepth (arrayGetUnsafe i chars) depth)
 
 derivedNextDepth : Char -> Int -> Int
 -- lint-disable-next-line rule-dead-code
@@ -669,7 +663,7 @@ export impl Hashable (Result e a) requires Hashable e, Hashable a where
 -- Left-fold: acc starts at 0, each element: acc = acc*33 + hash x.
 hashListItems : Hashable a => Int -> List a -> Int
 hashListItems acc [] = acc
-hashListItems acc (x::xs) = hashListItems (acc * 33 + hash x) xs
+hashListItems acc (x :: xs) = hashListItems (acc * 33 + hash x) xs
 
 export impl Hashable (List a) requires Hashable a where
   hash xs = hashListItems 0 xs
@@ -812,7 +806,7 @@ export interface Mappable f where
 
 export impl Mappable List where
   map _ [] = []
-  map f (x::xs) = f x :: map f xs
+  map f (x :: xs) = f x :: map f xs
 
 export impl Mappable Option where
   map f (Some a) = Some (f a)
@@ -849,7 +843,7 @@ export interface Applicative f requires Mappable f where
 export impl Applicative List where
   pure a = [a]
   ap [] _ = []
-  ap (f::fs) xs = map f xs ++ ap fs xs
+  ap (f :: fs) xs = map f xs ++ ap fs xs
 
 export impl Applicative Option where
   pure a = Some a
@@ -973,7 +967,7 @@ deferUnless b m = if b then deferPure () else m
 export
 foldThen : Thenable m => (b -> a -> <e> m b) -> b -> List a -> <e> m b
 foldThen _ z [] = pure z
-foldThen f z (x::xs) = andThen (f z x) (z2 => foldThen f z2 xs)
+foldThen f z (x :: xs) = andThen (f z x) (z2 => foldThen f z2 xs)
 
 {- | Runs an action `n` times and collects the results in order.
 
@@ -994,9 +988,9 @@ repeatThen n action
 export
 filterThen : Thenable m => (a -> <e> m Bool) -> List a -> <e> m (List a)
 filterThen _ [] = pure []
-filterThen f (x::xs) = andThen
-  (f x)
-  (keep => andThen (filterThen f xs) (rest => pure (if keep then x::rest else rest)))
+filterThen f (x :: xs) = andThen (f x) (keep => andThen (filterThen
+  f
+  xs) (rest => pure (if keep then x :: rest else rest)))
 
 -- The doctest also pins the fn-first argument order: a reorder is silent
 -- wherever both arguments still typecheck, but a lambda is not a `List`.
@@ -1007,7 +1001,7 @@ filterThen f (x::xs) = andThen
 export
 forEach : Thenable m => (a -> <e> m Unit) -> List a -> <e> m Unit
 forEach _ [] = pure ()
-forEach f (x::xs) = andThen (f x) (_ => forEach f xs)
+forEach f (x :: xs) = andThen (f x) (_ => forEach f xs)
 
 {- | Runs each action in the list in order, discarding the results.
 
@@ -1016,7 +1010,7 @@ forEach f (x::xs) = andThen (f x) (_ => forEach f xs)
 export
 runEach : Thenable m => List (m a) -> m Unit
 runEach [] = pure ()
-runEach (x::xs) = andThen x (_ => runEach xs)
+runEach (x :: xs) = andThen x (_ => runEach xs)
 
 export impl Thenable List where
   andThen [] _ = []
@@ -1024,13 +1018,13 @@ export impl Thenable List where
     where
       -- Tail-recursive reverse (core has no `reverse`; that lives in `list.mdk`).
       revAcc [] acc = acc
-      revAcc (x::rest) acc = revAcc rest (x :: acc)
+      revAcc (x :: rest) acc = revAcc rest (x :: acc)
       -- `concatRev` folds `f x ++ acc` over the REVERSED input, rebuilding
       -- `f a ++ f b ++ f c` by `++` associativity.  Its recursive call is the
       -- whole body (tail ⇒ no stack growth — depth was previously the outer-list
       -- length under the non-tail `f x ++ andThen xs f`); the `++` is iterative.
       concatRev [] acc = acc
-      concatRev (x::rest) acc = concatRev rest (f x ++ acc)
+      concatRev (x :: rest) acc = concatRev rest (f x ++ acc)
 
 export impl Thenable Option where
   andThen None _ = None
@@ -1200,7 +1194,8 @@ export impl Index (Array a) Int a where
    Panics with an index error when `i` is out of range. -}
 export impl IndexMut (Array a) Int a where
   setIndex arr i v =
-    if i < 0 || i >= arrayLength arr then indexErrorAt i
+    if i < 0 || i >= arrayLength arr then
+      indexErrorAt i
     else
       let _ = arraySetUnsafe i v arr
       arr
@@ -1212,7 +1207,7 @@ export impl IndexMut (Array a) Int a where
    instance. -}
 export impl Index (List a) Int a where
   index [] _ = indexError "index out of bounds"
-  index (h::t) i = if i <= 0 then h else index t (i - 1)
+  index (h :: t) i = if i <= 0 then h else index t (i - 1)
 
 {- | `s[i]` is the character at codepoint position `i`.
 
@@ -1266,7 +1261,7 @@ export impl Slice (List a) where
 -- `[lo, hi)`, stop at `hi` or end-of-list (clamps, mirror of eval's listSliceGo).
 sliceListGo : List a -> Int -> Int -> Int -> List a
 sliceListGo [] _ _ _ = []
-sliceListGo (x::xs) i lo hi
+sliceListGo (x :: xs) i lo hi
   | i >= hi = []
   | i >= lo = x :: sliceListGo xs (i + 1) lo hi
   | otherwise = sliceListGo xs (i + 1) lo hi
@@ -1275,9 +1270,9 @@ sliceListGo (x::xs) i lo hi
 -- accumulate stack frames proportional to list length.
 export impl Foldable List where
   fold _ acc [] = acc
-  fold f acc (x::xs) = fold f (f acc x) xs
+  fold f acc (x :: xs) = fold f (f acc x) xs
   foldRight _ acc [] = acc
-  foldRight f acc (x::xs) = f x (foldRight f acc xs)
+  foldRight f acc (x :: xs) = f x (foldRight f acc xs)
   toList = identity
   isEmpty [] = True
   isEmpty _ = False
@@ -1346,7 +1341,7 @@ export interface Traversable t requires Mappable t, Foldable t where
 export impl Traversable List where
   traverse f xs = match xs
     [] => pure []
-    x::rest => andThen (f x) (y => map (y :: _) (traverse f rest))
+    x :: rest => andThen (f x) (y => map (y :: _) (traverse f rest))
 
 -- lint-disable-next-line rule-match-on-param
 export impl Traversable Option where
@@ -1478,7 +1473,7 @@ minimum = fold step None
    [3, 4] -}
 export impl Filterable List where
   filterMap _ [] = []
-  filterMap f (x::xs) = match f x
+  filterMap f (x :: xs) = match f x
     Some y => y :: filterMap f xs
     None => filterMap f xs
 
@@ -1799,8 +1794,10 @@ public export data Rep =
   deriving (Eq, Debug)
 
 -- | A named field inside an `RRecord`.
-public export data RField =
-  | RField { fld_name : String, fld_rep : Rep }
+public export data RField = RField {
+  fld_name : String,
+  fld_rep : Rep,
+}
   deriving (Eq, Debug)
 
 {- | Types with a structural representation.
@@ -1885,13 +1882,15 @@ prop "map2 on Some matches direct application" (a : Int) (b : Int) =
 prop "map3 on Some matches direct application" (a : Int) (b : Int) (c : Int) =
   eq (map3 (x y z => x + y + z) (Some a) (Some b) (Some c)) (Some (a + b + c))
 
-prop "mapFirst on Result generalizes mapErr" (n : Int) = eq
-  (mapFirst (x => x + 1) (Err n : Result Int Int))
-  (mapErr (x => x + 1) (Err n))
+prop "mapFirst on Result generalizes mapErr" (n : Int) =
+  eq
+    (mapFirst (x => x + 1) (Err n : Result Int Int))
+    (mapErr (x => x + 1) (Err n))
 
-prop "foldThen with Some agrees with a pure fold" (xs : List Int) = eq
-  (foldThen (acc x => Some (acc + x)) 0 xs)
-  (Some (fold (acc x => acc + x) 0 xs))
+prop "foldThen with Some agrees with a pure fold" (xs : List Int) =
+  eq
+    (foldThen (acc x => Some (acc + x)) 0 xs)
+    (Some (fold (acc x => acc + x) 0 xs))
 
 -- ─── Instance laws ───────────────────────────────────────────────────────
 {- Two things constrain how these are written.
@@ -1956,10 +1955,11 @@ prop "Eq/Debug on Rep reach through RRecord into a nested field" (n : Int) (nm :
     && eq (debug a) (debug b)
     && not (eq (debug a) (debug c))
 
-prop "Eq Rep separates the primitive leaves" (n : Int) = eq (RInt n) (RInt n)
-  && not (eq (RInt n) RUnit)
-  && not (eq (RCon "A" []) (RCon "B" []))
-  && not (eq (RCon "A" [RInt n]) (RCon "A" []))
+prop "Eq Rep separates the primitive leaves" (n : Int) =
+  eq (RInt n) (RInt n)
+    && not (eq (RInt n) RUnit)
+    && not (eq (RCon "A" []) (RCon "B" []))
+    && not (eq (RCon "A" [RInt n]) (RCon "A" []))
 
 -- LAW: `Ord (Array a)` is `Ord (List a)` transported along
 -- `toList`/`arrayFromList` — same lexicographic order, and consistent with
@@ -1974,7 +1974,8 @@ prop "Ord Array is consistent with Eq Array" (xs : List Int) (ys : List Int) =
   let b = arrayFromList ys
   eq (eq (compare a b) Eq) (eq a b)
 
-prop "Ord Array: a proper prefix sorts before its extension" (xs : List Int) (y : Int) = eq (compare (arrayFromList xs) (arrayFromList (xs ++ [y]))) Lt
+prop "Ord Array: a proper prefix sorts before its extension" (xs : List Int) (y : Int) =
+  eq (compare (arrayFromList xs) (arrayFromList (xs ++ [y]))) Lt
 
 -- LAW: `Hashable (Array a)` agrees with `Hashable (List a)` on the same
 -- elements (the peer relationship), and equal arrays hash equally (the

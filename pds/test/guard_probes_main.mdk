@@ -34,10 +34,8 @@ main = match args ()
   ["sha256-edges"] =>
     let d = sha256 (arrayFromList [0, 255])
     println "OK sha256-edges len=\{intToString (arrayLength d)}"
-  ["base58-over"] =>
-    println (base58btcEncode (arrayFromList [0, 256]))
-  ["base58-under"] =>
-    println (base58btcEncode (arrayFromList [0, 0 - 1]))
+  ["base58-over"] => println (base58btcEncode (arrayFromList [0, 256]))
+  ["base58-under"] => println (base58btcEncode (arrayFromList [0, 0 - 1]))
   ["base58-edges"] =>
     println "OK base58-edges value=\{base58btcEncode (arrayFromList [0, 255])}"
   -- unsigned-varint encodes non-negative values only.

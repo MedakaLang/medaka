@@ -106,10 +106,13 @@ if [ "$#" -gt 0 ]; then
   files="$*"
   full_run=0
 else
-  files="$ROOT/compiler/frontend/*.mdk $ROOT/compiler/types/*.mdk $ROOT/compiler/ir/*.mdk \
-$ROOT/compiler/backend/*.mdk $ROOT/compiler/eval/*.mdk $ROOT/compiler/driver/*.mdk \
-$ROOT/compiler/tools/*.mdk $ROOT/compiler/support/*.mdk $ROOT/compiler/entries/*.mdk \
-$ROOT/stdlib/*.mdk $ROOT/test/fmt_fixtures/*.mdk $ROOT/test/parse_fixtures/*.mdk"
+  # EVERY tracked .mdk outside test/ (#2500: the old hand-listed corpus missed
+  # pds/, sqlite/, parsec/ and gzip/, which is where the last two formatter bugs
+  # were found) plus the two formatter fixture corpora.  test/ itself holds
+  # many fixtures that are MEANT not to parse, so it is not swept wholesale; a
+  # parse failure on any file listed here is a hard failure of this gate.
+  files="$(cd "$ROOT" && git ls-files '*.mdk' | grep -v '^test/' | sed "s|^|$ROOT/|") \
+$ROOT/test/fmt_fixtures/*.mdk $ROOT/test/parse_fixtures/*.mdk"
   full_run=1
 fi
 

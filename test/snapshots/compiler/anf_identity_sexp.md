@@ -1,5 +1,5 @@
 # META
-source_lines=34
+source_lines=47
 stages=DESUGAR,MARK
 # SOURCE
 -- Stable, lossless rendering for X-A's preparatory StableNodeId substrate.
@@ -29,9 +29,22 @@ errorSexp NegativeStructuralIndex = "negative-structural-index"
 
 export
 stableNodeIdToSexp : StableNodeId -> String
-stableNodeIdToSexp nodeId = foldStableNodeId
-  (path startLine startCol endLine endCol childPath role => node "stable-node-id" [escStr path, node "span" [intToString startLine, intToString startCol, intToString endLine, intToString endCol], node "child-path" [slist (map intToString childPath)], roleSexp role])
-  nodeId
+stableNodeIdToSexp nodeId =
+  foldStableNodeId
+    (path startLine startCol endLine endCol childPath role => node
+      "stable-node-id"
+      [
+        escStr path,
+        node "span" [
+          intToString startLine,
+          intToString startCol,
+          intToString endLine,
+          intToString endCol,
+        ],
+        node "child-path" [slist (map intToString childPath)],
+        roleSexp role,
+      ])
+    nodeId
 
 export
 stableNodeIdErrorToSexp : StableNodeIdError -> String

@@ -35,7 +35,9 @@ import list.{reverse}
 
 -- One low-level explicit-rowid spec: (name, createSql, ipkColIdx, rows).
 -- `rows` are (rowid, cells) in rowid-ascending order.
-specOf : Db -> SchemaEntry -> Result String (String, String, Option Int, List (Int, List Cell))
+specOf : Db ->
+  SchemaEntry ->
+  Result String (String, String, Option Int, List (Int, List Cell))
 specOf db entry = do
   let name = schemaName entry
   (pkIdx, rows) <- scanTableRowsIpk db name
@@ -43,13 +45,17 @@ specOf db entry = do
   Ok (name, schemaSql entry, pkIdx, explicitRows)
 
 -- Build an explicit-rowid spec for every `type='table'` schema entry.
-specsOf : Db -> List SchemaEntry -> List (String, String, Option Int, List (Int, List Cell)) -> Result String (List (String, String, Option Int, List (Int, List Cell)))
+specsOf : Db ->
+  List SchemaEntry ->
+  List (String, String, Option Int, List (Int, List Cell)) ->
+  Result String (List (String, String, Option Int, List (Int, List Cell)))
 specsOf _ [] acc = Ok (reverse acc)
-specsOf db (e::rest) acc =
+specsOf db (e :: rest) acc =
   if schemaType e == "table" then do
     spec <- specOf db e
-    specsOf db rest (spec::acc)
-  else specsOf db rest acc
+    specsOf db rest (spec :: acc)
+  else
+    specsOf db rest acc
 
 roundtrip : String -> String -> <IO, FileRead, FileWrite> Unit
 roundtrip inPath outPath = match openDb inPath
@@ -60,7 +66,9 @@ roundtrip inPath outPath = match openDb inPath
       Err e => println "Error scanning tables: \{e}"
       Ok specs => writeOut outPath specs
 
-writeOut : String -> List (String, String, Option Int, List (Int, List Cell)) -> <IO, FileWrite> Unit
+writeOut : String ->
+  List (String, String, Option Int, List (Int, List Cell)) ->
+  <IO, FileWrite> Unit
 writeOut outPath specs = match buildDatabaseMultiExplicit specs
   Err e => println "Error building: \{e}"
   Ok img => match writeFileBytes outPath img

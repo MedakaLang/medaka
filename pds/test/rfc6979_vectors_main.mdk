@@ -18,7 +18,7 @@ zero32 = arrayMake 32 0
 oneBytes : Array Int
 oneBytes = [|
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-  0, 0, 0, 0, 0, 1,
+  0, 0, 0, 0, 0, 1
 |]
 
 bytes : String -> Array Int
@@ -46,7 +46,8 @@ fail counts label =
 
 candidate1Probe : Sc -> Array Int -> Array Int -> Array Int -> Bool
 candidate1Probe key digest candidate0 candidate1 =
-  let (normal0, normal1, selectedValid, selected) = rfc6979InjectedNonceProbeForTest key digest zero32 0 oneBytes 1
+  let (normal0, normal1, selectedValid, selected) =
+    rfc6979InjectedNonceProbeForTest key digest zero32 0 oneBytes 1
   normal0 == candidate0
     && normal1 == candidate1
     && normal0 /= normal1
@@ -55,7 +56,8 @@ candidate1Probe key digest candidate0 candidate1 =
 
 exhaustionProbe : Sc -> Array Int -> Array Int -> Array Int -> Bool
 exhaustionProbe key digest candidate0 candidate1 =
-  let (normal0, normal1, validBit, selected) = rfc6979InjectedNonceProbeForTest key digest zero32 0 oneBytes 0
+  let (normal0, normal1, validBit, selected) =
+    rfc6979InjectedNonceProbeForTest key digest zero32 0 oneBytes 0
   normal0 == candidate0
     && normal1 == candidate1
     && normal0 /= normal1
@@ -64,14 +66,17 @@ exhaustionProbe key digest candidate0 candidate1 =
 
 runProbes : Array Int -> Sc -> Array Int -> Array Int -> Array Int -> <IO> Unit
 runProbes counts key digest candidate0 candidate1 =
-  let () = if candidate1Probe key digest candidate0 candidate1 then
-    let () = bump counts 2
-    println "PROBE candidate-1-selection: PASS schedule=2 aggregate=1"
-  else fail counts "candidate-1-selection probe"
+  let () =
+    if candidate1Probe key digest candidate0 candidate1 then
+      let () = bump counts 2
+      println "PROBE candidate-1-selection: PASS schedule=2 aggregate=1"
+    else
+      fail counts "candidate-1-selection probe"
   if exhaustionProbe key digest candidate0 candidate1 then
     let () = bump counts 2
     println "PROBE two-candidate-exhaustion: PASS schedule=2 aggregate=0"
-  else fail counts "two-candidate-exhaustion probe"
+  else
+    fail counts "two-candidate-exhaustion probe"
 
 runRow : Array Int -> Int -> String -> <IO> Unit
 runRow counts lineNo text = match split " " (trim text)
@@ -84,13 +89,15 @@ runRow counts lineNo text = match split " " (trim text)
       if row == "0" then
         let () = println "CANDIDATE1 row=0 k=\{encode candidate1}"
         runProbes counts key digest candidate0 candidate1
-      else ()
-    else fail counts "row \{row} candidate-0 expected=\{expectedK} got=\{encode candidate0}"
+    else
+      fail
+        counts
+        "row \{row} candidate-0 expected=\{expectedK} got=\{encode candidate0}"
   _ => fail counts "line \{intToString lineNo} malformed signing row"
 
 runRows : Array Int -> List String -> Int -> <IO> Unit
 runRows counts [] _ = ()
-runRows counts (row::rest) lineNo =
+runRows counts (row :: rest) lineNo =
   let () = runRow counts lineNo row
   runRows counts rest (lineNo + 1)
 
@@ -101,9 +108,13 @@ main = match args ()
     Ok rows =>
       let counts = arrayMake 3 0
       let () = runRows counts rows 1
-      let () = println "counted: \{intToString counts[0]}/\{intToString (counts[0] + counts[1])} rows ok"
-      let () = println "probes: \{intToString counts[2]}/2 exceptional routes ok"
-      if counts[0] == 80 && counts[1] == 0 && counts[2] == 2 then println "TOTAL: PASS"
+      let () =
+        println
+          "counted: \{intToString counts[0]}/\{intToString (counts[0] + counts[1])} rows ok"
+      let () =
+        println "probes: \{intToString counts[2]}/2 exceptional routes ok"
+      if counts[0] == 80 && counts[1] == 0 && counts[2] == 2 then
+        println "TOTAL: PASS"
       else
         let () = println "TOTAL: FAIL"
         exit 1

@@ -16,10 +16,10 @@ import lib.recordfmt.{Cell, CNull, CInt, CText}
 import lib.sqlstmt.{parseSelect, renderSelect}
 
 -- ── Column output alias (`AS` and the bare form) ────────────────────────────
-test "SELECT … AS alias renames the output column" = expectEqual
-  (q "SELECT name AS n FROM users ORDER BY id")
-  (Ok
-    [
+test "SELECT … AS alias renames the output column" =
+  expectEqual
+    (q "SELECT name AS n FROM users ORDER BY id")
+    (Ok [
       [CText "Alice"],
       [CText "Bob"],
       [CText "Carol"],
@@ -27,10 +27,10 @@ test "SELECT … AS alias renames the output column" = expectEqual
       [CText "Eve"],
     ])
 
-test "SELECT … bare alias (no AS) is equivalent" = expectEqual
-  (q "SELECT name n FROM users ORDER BY id")
-  (Ok
-    [
+test "SELECT … bare alias (no AS) is equivalent" =
+  expectEqual
+    (q "SELECT name n FROM users ORDER BY id")
+    (Ok [
       [CText "Alice"],
       [CText "Bob"],
       [CText "Carol"],
@@ -42,25 +42,31 @@ test "count(*) AS c aliases an aggregate" =
   expectEqual (q "SELECT count(*) AS c FROM users") (Ok [[CInt 5]])
 
 -- ── Table alias + alias-qualified column ref (`AS` and the bare form) ───────
-test "table alias (AS) resolves an alias-qualified column ref" = expectEqual
-  (q "SELECT u.name FROM users AS u WHERE u.age > 20 ORDER BY u.id")
-  (Ok [[CText "Alice"], [CText "Carol"], [CText "Dave"]])
+test "table alias (AS) resolves an alias-qualified column ref" =
+  expectEqual
+    (q "SELECT u.name FROM users AS u WHERE u.age > 20 ORDER BY u.id")
+    (Ok [[CText "Alice"], [CText "Carol"], [CText "Dave"]])
 
-test "table alias (bare, no AS) is equivalent" = expectEqual
-  (q "SELECT u.name FROM users u WHERE u.age > 20 ORDER BY u.id")
-  (Ok [[CText "Alice"], [CText "Carol"], [CText "Dave"]])
+test "table alias (bare, no AS) is equivalent" =
+  expectEqual
+    (q "SELECT u.name FROM users u WHERE u.age > 20 ORDER BY u.id")
+    (Ok [[CText "Alice"], [CText "Carol"], [CText "Dave"]])
 
 -- ── Aliased JOIN, alias-qualified on both sides ─────────────────────────────
 -- users id 1..5; orders (oid,uid,amount) — oid 14's uid 99 has no matching
 -- user, so INNER JOIN drops it; oid 12's amount is NULL and still matches.
-test "aliased INNER JOIN keeps only matching rows, alias-qualified both sides" = expectEqual (q "SELECT o.amount FROM users u INNER JOIN orders o ON u.id = o.uid ORDER BY o.oid") (Ok [[CInt 100], [CInt 250], [CNull], [CInt 50]])
+test "aliased INNER JOIN keeps only matching rows, alias-qualified both sides" =
+  expectEqual
+    (q
+      "SELECT o.amount FROM users u INNER JOIN orders o ON u.id = o.uid ORDER BY o.oid")
+    (Ok [[CInt 100], [CInt 250], [CNull], [CInt 50]])
 
 -- ── Column alias + table alias together, with GROUP BY ──────────────────────
-test "column alias + table alias together, with GROUP BY" = expectEqual
-  (q
-    "SELECT u.name AS who, count(*) AS c FROM users u GROUP BY u.name ORDER BY u.name")
-  (Ok
-    [
+test "column alias + table alias together, with GROUP BY" =
+  expectEqual
+    (q
+      "SELECT u.name AS who, count(*) AS c FROM users u GROUP BY u.name ORDER BY u.name")
+    (Ok [
       [CText "Alice", CInt 1],
       [CText "Bob", CInt 1],
       [CText "Carol", CInt 1],

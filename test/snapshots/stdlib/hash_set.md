@@ -1,5 +1,5 @@
 # META
-source_lines=279
+source_lines=291
 stages=DESUGAR,MARK
 # SOURCE
 {- | A mutable set of distinct elements, keyed by hash.
@@ -72,7 +72,7 @@ fromList xs =
 
 insertAll : (Eq a, Hashable a) => List a -> HashSet a -> Unit
 insertAll [] _ = ()
-insertAll (x::rest) s =
+insertAll (x :: rest) s =
   insertInPlace x s
   insertAll rest s
 
@@ -88,7 +88,7 @@ size (HashSet _ count) = !count
 
 bucketHas : Eq a => a -> List a -> Bool
 bucketHas _ [] = False
-bucketHas x (y::rest)
+bucketHas x (y :: rest)
   | x == y = True
   | otherwise = bucketHas x rest
 
@@ -108,7 +108,7 @@ has x (HashSet buckets _) =
 
 bucketRemove : Eq a => a -> List a -> List a
 bucketRemove _ [] = []
-bucketRemove x (y::rest)
+bucketRemove x (y :: rest)
   | x == y = rest
   | otherwise = y :: bucketRemove x rest
 
@@ -122,7 +122,13 @@ insertInPlace x (HashSet buckets count) =
   let idx = slotOf x (arrayLength arr)
   insertAt x arr idx buckets count
 
-insertAt : (Eq a, Hashable a) => a -> Array (List a) -> Int -> Ref (Array (List a)) -> Ref Int -> Unit
+insertAt : (Eq a, Hashable a) =>
+  a ->
+  Array (List a) ->
+  Int ->
+  Ref (Array (List a)) ->
+  Ref Int ->
+  Unit
 insertAt x arr idx buckets count
   | bucketHas x (arrayGetUnsafe idx arr) = ()
   | otherwise =
@@ -144,7 +150,13 @@ resize buckets count =
   count := 0
   reinsertAll oldArr 0 (arrayLength oldArr) buckets count
 
-reinsertAll : Hashable a => Array (List a) -> Int -> Int -> Ref (Array (List a)) -> Ref Int -> Unit
+reinsertAll : Hashable a =>
+  Array (List a) ->
+  Int ->
+  Int ->
+  Ref (Array (List a)) ->
+  Ref Int ->
+  Unit
 reinsertAll oldArr i n buckets count
   | i >= n = ()
   | otherwise =
@@ -153,7 +165,7 @@ reinsertAll oldArr i n buckets count
 
 reinsertBucket : Hashable a => List a -> Ref (Array (List a)) -> Ref Int -> Unit
 reinsertBucket [] _ _ = ()
-reinsertBucket (x::rest) buckets count =
+reinsertBucket (x :: rest) buckets count =
   putRaw x buckets count
   reinsertBucket rest buckets count
 
@@ -192,11 +204,11 @@ elemList (HashSet buckets _) = collectElems !buckets 0 (arrayLength !buckets) []
 
 foldrElems : (a -> b -> <e> b) -> b -> List a -> <e> b
 foldrElems _ z [] = z
-foldrElems f z (x::rest) = f x (foldrElems f z rest)
+foldrElems f z (x :: rest) = f x (foldrElems f z rest)
 
 foldlElems : (b -> a -> <e> b) -> b -> List a -> <e> b
 foldlElems _ z [] = z
-foldlElems f z (x::rest) = foldlElems f (f z x) rest
+foldlElems f z (x :: rest) = foldlElems f (f z x) rest
 
 -- ── Instances ───────────────────────────────────────────────────────────
 
@@ -217,7 +229,7 @@ export impl Foldable HashSet where
 
 allIn : (Eq a, Hashable a) => List a -> HashSet a -> Bool
 allIn [] _ = True
-allIn (x::rest) s
+allIn (x :: rest) s
   | has x s = allIn rest s
   | otherwise = False
 
@@ -245,7 +257,7 @@ export impl Debug (HashSet a) requires Debug a where
 displayItems : Display a => List a -> String
 displayItems [] = ""
 displayItems [x] = "\{x}"
-displayItems (y::rest) = "\{y}, \{displayItems rest}"
+displayItems (y :: rest) = "\{y}, \{displayItems rest}"
 
 {- | `display` renders a set as `HashSet { x, ... }` with the elements in
    ascending order, so the text depends only on the elements.
@@ -263,8 +275,8 @@ export impl Display (HashSet a) requires Display a, Ord a where
 
 ascendingL : Ord a => List a -> Bool
 ascendingL [] = True
-ascendingL (_::[]) = True
-ascendingL (x::y::rest) = lte x y && ascendingL (y::rest)
+ascendingL (_ :: []) = True
+ascendingL (x :: y :: rest) = lte x y && ascendingL (y :: rest)
 
 -- LAW: `Display` must depend on the VALUE, not on the set's internal layout.
 -- Rebuilding from its own elements, and from those elements reversed (which

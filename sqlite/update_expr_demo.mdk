@@ -30,7 +30,12 @@ allRows : Expr Bool
 allRows = eGe (eColInt "id") (eLitI 0)
 
 -- Run one UPDATE and print "<label>: updated N rows" (or an error).
-runOne : String -> String -> List Assign -> Expr Bool -> String -> <IO, FileRead, FileWrite> Unit
+runOne : String ->
+  String ->
+  List Assign ->
+  Expr Bool ->
+  String ->
+  <IO, FileRead, FileWrite> Unit
 runOne path table asgns where_ label = match update path table asgns where_
   Err e => println "\{label}: Error: \{e}"
   Ok n => println "\{label}: updated \{n} rows"
@@ -38,30 +43,61 @@ runOne path table asgns where_ label = match update path table asgns where_
 main : <IO, FileRead, FileWrite> Unit
 main = match args ()
   [path] =>
-    let _ = runOne path "t1"
-              [assign "total" (eAdd (eColInt "total") (eLitI 10))]
-              (eGe (eColInt "total") (eLitI 50)) "t1 total+=10 WHERE total>=50"
-    let _ = runOne path "t2"
-              [assign "x" (eMul (eColInt "x") (eLitI 2))]
-              allRows "t2 x*=2"
-    let _ = runOne path "t3"
-              [assign "c" (eAdd (eColInt "a") (eColInt "b"))]
-              allRows "t3 c=a+b"
-    let _ = runOne path "t4"
-              [assign "n" (eDiv (eColInt "n") (eLitI 2))]
-              allRows "t4 n=n/2"
-    let _ = runOne path "t5"
-              [assign "n" (eDiv (eColInt "n") (eColInt "d"))]
-              allRows "t5 n=n/d (div by zero)"
-    let _ = runOne path "t6"
-              [assign "n" (eMod (eColInt "n") (eLitI 3))]
-              allRows "t6 n=n%3"
-    let _ = runOne path "t7"
-              [assign "a" (eColInt "b"), assign "b" (eColInt "a")]
-              allRows "t7 swap a,b"
+    let _ =
+      runOne
+        path
+        "t1"
+        [assign "total" (eAdd (eColInt "total") (eLitI 10))]
+        (eGe (eColInt "total") (eLitI 50))
+        "t1 total+=10 WHERE total>=50"
+    let _ =
+      runOne
+        path
+        "t2"
+        [assign "x" (eMul (eColInt "x") (eLitI 2))]
+        allRows
+        "t2 x*=2"
+    let _ =
+      runOne
+        path
+        "t3"
+        [assign "c" (eAdd (eColInt "a") (eColInt "b"))]
+        allRows
+        "t3 c=a+b"
+    let _ =
+      runOne
+        path
+        "t4"
+        [assign "n" (eDiv (eColInt "n") (eLitI 2))]
+        allRows
+        "t4 n=n/2"
+    let _ =
+      runOne
+        path
+        "t5"
+        [assign "n" (eDiv (eColInt "n") (eColInt "d"))]
+        allRows
+        "t5 n=n/d (div by zero)"
+    let _ =
+      runOne
+        path
+        "t6"
+        [assign "n" (eMod (eColInt "n") (eLitI 3))]
+        allRows
+        "t6 n=n%3"
+    let _ =
+      runOne
+        path
+        "t7"
+        [assign "a" (eColInt "b"), assign "b" (eColInt "a")]
+        allRows
+        "t7 swap a,b"
     -- Float-in-Cell arithmetic (the type-lost-Float-prone shape): p := p * 1.5.
-    runOne path "t8"
+    runOne
+      path
+      "t8"
       [assign "p" (eMul (eColFloat "p") (eLitF 1.5))]
-      allRows "t8 p*=1.5 (float)"
+      allRows
+      "t8 p*=1.5 (float)"
 
   _ => println "usage: update_expr_demo <path>"

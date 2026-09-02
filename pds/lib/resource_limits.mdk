@@ -62,7 +62,8 @@ export
 checkHttpHeaderBytes : Int -> Result String Unit
 checkHttpHeaderBytes size =
   if size > maxHttpHeaderBytes then
-    Err "http: combined header and trailer section exceeds 65536-byte resource limit"
+    Err
+      "http: combined header and trailer section exceeds 65536-byte resource limit"
   else
     Ok ()
 

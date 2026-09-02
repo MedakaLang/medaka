@@ -32,10 +32,7 @@ test "two plus two" = expectEqual 4 (2 + 2)
 (DTest false "two plus two" (EApp (EApp (EVar "expectEqual") (ELit (LInt 4))) (EBinOp "+" (ELit (LInt 2)) (ELit (LInt 2)))))
 # PRINTER
 expectEqual expected actual =
-  if eq expected actual then
-    Pass
-  else
-    Fail "mismatch"
+  if eq expected actual then Pass else Fail "mismatch"
 goTests t = match runExpectation t
   Pass =>
     println "ok"

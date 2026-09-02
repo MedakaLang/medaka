@@ -59,8 +59,16 @@ main = match buildDatabaseMulti specs
   Ok bytes => match fromBytes bytes
     Err e => println "fromBytes error: \{e}"
     Ok db =>
-      let _ = runQ db "-- table alias + alias-qualified ref + column alias --" "SELECT name AS n FROM users u WHERE u.age > 20"
-      let _ = runQ db "-- table alias, alias.col projected --" "SELECT u.name, u.age FROM users AS u WHERE u.age IS NOT NULL"
+      let _ =
+        runQ
+          db
+          "-- table alias + alias-qualified ref + column alias --"
+          "SELECT name AS n FROM users u WHERE u.age > 20"
+      let _ =
+        runQ
+          db
+          "-- table alias, alias.col projected --"
+          "SELECT u.name, u.age FROM users AS u WHERE u.age IS NOT NULL"
       runQ
         db
         "-- aliased JOIN, alias-qualified on both sides + column alias --"

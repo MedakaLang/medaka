@@ -32,14 +32,14 @@ key0 : Array Int
 key0 = [|
   97, 112, 112, 46, 98, 115, 107, 121, 46, 102, 101, 101, 100, 46, 112, 111,
   115, 116, 47, 109, 101, 100, 97, 107, 97, 45, 100, 101, 112, 116, 104, 45, 48,
-  45, 48,
+  45, 48
 |]
 
 key1 : Array Int
 key1 = [|
   97, 112, 112, 46, 98, 115, 107, 121, 46, 102, 101, 101, 100, 46, 112, 111,
   115, 116, 47, 109, 101, 100, 97, 107, 97, 45, 100, 101, 112, 116, 104, 45, 49,
-  45, 53,
+  45, 53
 |]
 
 value0 : Cid
@@ -73,7 +73,8 @@ test "replace changes only the selected value" =
   let tree = mustTree (mstFromEntries [(key0, value0), (key1, value1)])
   let updated = mustTree (mstReplace key0 value1 tree)
   expectTrue
-    (mstLookup key0 updated == Some value1 && mstLookup key1 updated == Some value1)
+    (mstLookup key0 updated == Some value1
+      && mstLookup key1 updated == Some value1)
 
 test "replace rejects a missing key" =
   expectTrue (isErr (mstReplace key0 value1 mstEmpty))
@@ -91,7 +92,8 @@ test "delete-to-empty restores the canonical empty root" =
 
 test "from-entries rejects empty and duplicate keys" =
   expectTrue
-    (isErr (mstFromEntries [([||], value0)]) && isErr (mstFromEntries [(key0, value0), (key0, value1)]))
+    (isErr (mstFromEntries [([||], value0)])
+      && isErr (mstFromEntries [(key0, value0), (key0, value1)]))
 
 test "entry and root byte views are defensive copies" =
   let tree = mustTree (mstInsert key0 value0 mstEmpty)

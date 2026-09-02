@@ -315,23 +315,23 @@ driver_expected=$(printf '%s\n' "$driver_allowed" | awk 'NF{print $1}' | LC_ALL=
 declenvs_expected=$(printf '%s\n' "$declenvs_allowed" | awk 'NF{print $1}' | LC_ALL=C sort)
 declenvmodule_expected=$(printf '%s\n' "$declenvmodule_allowed" | awk 'NF{print $1}' | LC_ALL=C sort)
 
-cross_actual=$(sed -n '/^data CrossRun = CrossRun {$/,/^  }$/p' "$TC" \
+cross_actual=$(sed -n '/^data CrossRun = CrossRun {$/,/^}$/p' "$TC" \
   | strip_comments \
   | sed -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*:.*/\1/' \
   | grep -E '^[A-Za-z_][A-Za-z0-9_]*$' \
   | LC_ALL=C sort)
-driver_actual=$(sed -n '/^  | DriverState {$/,/^    }$/p' "$TC" \
+driver_actual=$(sed -n '/^data DriverState = DriverState {$/,/^}$/p' "$TC" \
   | strip_comments \
   | sed -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*:.*/\1/' \
   | grep -E '^[A-Za-z_][A-Za-z0-9_]*$' \
   | LC_ALL=C sort)
 
-declenvs_actual=$(sed -n '/^data DeclEnvs = DeclEnvs {$/,/^  }$/p' "$TC" \
+declenvs_actual=$(sed -n '/^data DeclEnvs = DeclEnvs {$/,/^}$/p' "$TC" \
   | strip_comments \
   | sed -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*:.*/\1/' \
   | grep -E '^[A-Za-z_][A-Za-z0-9_]*$' \
   | LC_ALL=C sort)
-declenvmodule_actual=$(sed -n '/^data DeclEnvModule = DeclEnvModule {$/,/^  }$/p' "$TC" \
+declenvmodule_actual=$(sed -n '/^data DeclEnvModule = DeclEnvModule {$/,/^}$/p' "$TC" \
   | strip_comments \
   | sed -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*:.*/\1/' \
   | grep -E '^[A-Za-z_][A-Za-z0-9_]*$' \

@@ -79,11 +79,11 @@ blobSchema = TableSchema {
 }
 
 blobRows : List (List Cell)
-blobRows =
-  [ [ CInt 1, CBlob (arrayFromList [72, 101, 108, 108, 111]) ]   -- "Hello"
-  , [ CInt 2, CBlob (arrayFromList [0, 1, 2, 255])            ]   -- binary data
-  , [ CInt 3, CNull                                           ]   -- NULL blob
-  ]
+blobRows = [
+  [CInt 1, CBlob (arrayFromList [72, 101, 108, 108, 111])],  -- "Hello"
+  [CInt 2, CBlob (arrayFromList [0, 1, 2, 255])],  -- binary data
+  [CInt 3, CNull],  -- NULL blob
+]
 
 -- ---------------------------------------------------------------------------
 -- Schema 4: reals — WITH REAL (float) column

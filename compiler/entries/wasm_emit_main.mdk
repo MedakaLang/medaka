@@ -32,7 +32,8 @@ import backend.wasm_emit.{emitProgram, makeWasmEmitInputFull}
 
 main = match args ()
   [targetPath] => withTarget targetPath
-  _ => ePutStrLn "usage: medaka run compiler/entries/wasm_emit_main.mdk <file.mdk>"
+  _ =>
+    ePutStrLn "usage: medaka run compiler/entries/wasm_emit_main.mdk <file.mdk>"
 
 withTarget : String -> <IO> Unit
 withTarget targetPath = match readFile targetPath
@@ -41,6 +42,14 @@ withTarget targetPath = match readFile targetPath
     -- the SAME decl list that is lowered, so the head table and the lowered
     -- program's impl entries are projections of one program.
     let annotated = annotateProgram decls
-    let input = makeWasmEmitInputFull [] (declSigTypeNames decls) (ctorFieldTypeNames decls) False (declaredRecordFieldOrders decls) [] (ifaceImplHeadTable annotated)
+    let input =
+      makeWasmEmitInputFull
+        []
+        (declSigTypeNames decls)
+        (ctorFieldTypeNames decls)
+        False
+        (declaredRecordFieldOrders decls)
+        []
+        (ifaceImplHeadTable annotated)
     putStr (emitProgram input (lowerProgramEmit TargetWasm annotated))
   Err msg => ePutStrLn msg

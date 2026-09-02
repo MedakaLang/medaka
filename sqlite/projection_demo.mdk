@@ -81,25 +81,51 @@ main = match args ()
     Err e => println "open error: \{e}"
     Ok db =>
       -- (a) computed arithmetic column (a+b) plus a plain column (name).
-      let _ = runIS db "-- SELECT a+b, name ORDER BY name --"
-                (withOrderBy "name" True
-                  (withColumns [ unExpr (eAdd (eColInt "a") (eColInt "b"))
-                               , unExpr (eColText "name") ]
-                    (selectFrom "nums")))
+      let _ =
+        runIS
+          db
+          "-- SELECT a+b, name ORDER BY name --"
+          (withOrderBy
+            "name"
+            True
+            (withColumns
+              [
+                unExpr (eAdd (eColInt "a") (eColInt "b")),
+                unExpr (eColText "name"),
+              ]
+              (selectFrom "nums")))
       -- (b) projection reordering/subsetting: table is (id, a, b, name); project name, id.
-      let _ = runSI db "-- SELECT name, id ORDER BY id --"
-                (withOrderBy "id" True
-                  (withColumns [ unExpr (eColText "name")
-                               , unExpr (eColInt "id") ]
-                    (selectFrom "nums")))
+      let _ =
+        runSI
+          db
+          "-- SELECT name, id ORDER BY id --"
+          (withOrderBy
+            "id"
+            True
+            (withColumns
+              [unExpr (eColText "name"), unExpr (eColInt "id")]
+              (selectFrom "nums")))
       -- (c) computed column over a JOIN: users.name, orders.total + 10.
-      let _ = runSI db "-- SELECT users.name, orders.total+10 JOIN ORDER BY orders.total --"
-                (withOrderBy "orders.total" True
-                  (withColumns [ unExpr (eColText "users.name")
-                               , unExpr (eAdd (eColInt "orders.total") (eLitI 10)) ]
-                    (innerJoin "orders" (eEq (eColInt "users.id") (eColInt "orders.uid"))
-                      (selectFrom "users"))))
+      let _ =
+        runSI
+          db
+          "-- SELECT users.name, orders.total+10 JOIN ORDER BY orders.total --"
+          (withOrderBy
+            "orders.total"
+            True
+            (withColumns
+              [
+                unExpr (eColText "users.name"),
+                unExpr (eAdd (eColInt "orders.total") (eLitI 10)),
+              ]
+              (innerJoin
+                "orders"
+                (eEq (eColInt "users.id") (eColInt "orders.uid"))
+                (selectFrom "users"))))
       -- (d) computed projection + DISTINCT: a*0 collapses every row to one 0.
-      runIDistinct db "-- SELECT DISTINCT a*0 --"
-        (withColumns [ unExpr (eMul (eColInt "a") (eLitI 0)) ]
+      runIDistinct
+        db
+        "-- SELECT DISTINCT a*0 --"
+        (withColumns
+          [unExpr (eMul (eColInt "a") (eLitI 0))]
           (selectFrom "nums"))

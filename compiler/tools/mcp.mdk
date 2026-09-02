@@ -131,12 +131,11 @@ responseMsg idJson result =
 
 -- A JSON-RPC error envelope: { jsonrpc, id, error: { code, message } }.
 errorMsg : Json -> Int -> String -> Json
-errorMsg idJson code message = jObject
-  [
-    ("jsonrpc", JString "2.0"),
-    ("id", idJson),
-    ("error", jObject [("code", JInt code), ("message", JString message)]),
-  ]
+errorMsg idJson code message = jObject [
+  ("jsonrpc", JString "2.0"),
+  ("id", idJson),
+  ("error", jObject [("code", JInt code), ("message", JString message)]),
+]
 
 -- ── field accessors (copied from lsp.mdk) ────────────────────────────────────
 
@@ -256,11 +255,16 @@ logMcpCall method name args = match getEnv "MEDAKA_MCP_LOG"
 attachStaleness : (Unit -> <IO> Option String) -> Json -> <IO> Json
 attachStaleness stalenessCheck result = match stalenessCheck ()
   None => result
-  Some compilerDir => jsonObjectAppend "staleBinary" (JString (stringConcat [
-    "this server's binary predates the compiler source at ",
-    compilerDir,
-    " — results may reflect the OLD compiler. Rebuild with 'make medaka' and reconnect (/mcp).",
-  ])) result
+  Some compilerDir =>
+    jsonObjectAppend
+      "staleBinary"
+      (JString
+        (stringConcat [
+          "this server's binary predates the compiler source at ",
+          compilerDir,
+          " — results may reflect the OLD compiler. Rebuild with 'make medaka' and reconnect (/mcp).",
+        ]))
+      result
 
 -- Append one (key, value) pair onto a `JObject`'s own Array-backed pairs,
 -- preserving insertion order (json.mdk's own invariant).  A total fallback
@@ -289,15 +293,14 @@ jsonPairsToListGo arr i n
 -- changes on every commit and would make this protocol field permanently
 -- unpinnable by a golden (issue #74 W8 follow-up).
 initializeResultFor : String -> String -> Json
-initializeResultFor protocolVersion serverVersion = jObject
-  [
-    ("protocolVersion", JString protocolVersion),
-    ("capabilities", jObject [("tools", jObject [])]),
-    (
-      "serverInfo",
-      jObject [("name", JString "medaka"), ("version", JString serverVersion)],
-    ),
-  ]
+initializeResultFor protocolVersion serverVersion = jObject [
+  ("protocolVersion", JString protocolVersion),
+  ("capabilities", jObject [("tools", jObject [])]),
+  (
+    "serverInfo",
+    jObject [("name", JString "medaka"), ("version", JString serverVersion)],
+  ),
+]
 
 -- tools/list response: { tools: [ {name,description,inputSchema}, ... ] } — the
 -- descriptor array is DERIVED from `mcpTools`, never hand-maintained.
@@ -329,67 +332,94 @@ data McpTool =
 -- every agent's context window on every session.
 mcpTools : List McpTool
 mcpTools = [
-  McpTool "medaka_check" "FIRST CHOICE over shelling out to `medaka check` for any type-check/diagnostic query: returns the same structured JSON `medaka check --json` emits (stable `code`, `range`, `severity`, `help`, and a machine-applicable `fix` where available) — act on it directly instead of parsing CLI text. Provide exactly one of `file` or `source`." medakaCheckSchema runCheckTool,
-  McpTool "medaka_type_at" "FIRST CHOICE for \"what type is this\" instead of re-deriving it by hand — infer the type/scheme at a position (stateless hover). Give `file` plus `line` and either `col` (0-based, LSP-style) or `symbol` (a name to locate on that line — no column counting); returns `<name> : <type>`. A miss names the identifiers actually on that line instead of a bare empty result." medakaTypeAtSchema runTypeAtTool,
-  McpTool "medaka_symbols" "FIRST CHOICE for a file's outline instead of grepping for `data`/`impl`/`fn` headers — lists top-level declarations with source ranges. Give `file`; parse-only, so it works even on a file with type errors. One entry per multi-clause function, not one-per-clause. A parse failure returns a distinct `{\"parseError\":true,\"line\",\"col\",\"message\"}` isError, never a silently-empty list." medakaSymbolsSchema runSymbolsTool,
-  McpTool "medaka_definition" "FIRST CHOICE for \"where is X defined\" WITHIN THIS FILE instead of grepping — go-to-definition. Give `file` plus `line` and either `col` (0-based, LSP-style) or `symbol` (a name to locate on that line — no column counting). INTRA-FILE ONLY: a name defined elsewhere returns empty — reach for `medaka_references` on a cross-file lookup instead. A miss names the identifiers actually on that line instead of a bare empty result." medakaDefinitionSchema runDefinitionTool,
-  McpTool "medaka_references" "FIRST CHOICE for \"find every use of X\" instead of grep — resolves by BINDER IDENTITY, not spelling, so it is correct under shadowing, import aliasing, and same-name-in-different-modules, where grep is not. Give `file` plus 0-based `line`/`col`; optional `includeDeclaration` (default true). Project-wide, read-only; never descends into stdlib bodies." medakaReferencesSchema runReferencesTool,
-  McpTool "medaka_fmt" "FIRST CHOICE for formatting Medaka source instead of shelling out to `medaka fmt`. Provide exactly one of `file` or `source`. NEVER writes to disk — apply the returned text yourself. Pass `check: true` for a clean/dirty verdict only (no full text)." medakaFmtSchema runFmtTool,
-  McpTool "medaka_lint" "FIRST CHOICE for style-linting Medaka source instead of shelling out to `medaka lint`. Give `paths` (array of file paths); narrow with comma-separated `deny`/`only`/`disable`. Report-only (no autofix) — same diagnostic schema as `medaka_check`." medakaLintSchema runLintTool,
+  McpTool
+    "medaka_check"
+    "FIRST CHOICE over shelling out to `medaka check` for any type-check/diagnostic query: returns the same structured JSON `medaka check --json` emits (stable `code`, `range`, `severity`, `help`, and a machine-applicable `fix` where available) — act on it directly instead of parsing CLI text. Provide exactly one of `file` or `source`."
+    medakaCheckSchema
+    runCheckTool,
+  McpTool
+    "medaka_type_at"
+    "FIRST CHOICE for \"what type is this\" instead of re-deriving it by hand — infer the type/scheme at a position (stateless hover). Give `file` plus `line` and either `col` (0-based, LSP-style) or `symbol` (a name to locate on that line — no column counting); returns `<name> : <type>`. A miss names the identifiers actually on that line instead of a bare empty result."
+    medakaTypeAtSchema
+    runTypeAtTool,
+  McpTool
+    "medaka_symbols"
+    "FIRST CHOICE for a file's outline instead of grepping for `data`/`impl`/`fn` headers — lists top-level declarations with source ranges. Give `file`; parse-only, so it works even on a file with type errors. One entry per multi-clause function, not one-per-clause. A parse failure returns a distinct `{\"parseError\":true,\"line\",\"col\",\"message\"}` isError, never a silently-empty list."
+    medakaSymbolsSchema
+    runSymbolsTool,
+  McpTool
+    "medaka_definition"
+    "FIRST CHOICE for \"where is X defined\" WITHIN THIS FILE instead of grepping — go-to-definition. Give `file` plus `line` and either `col` (0-based, LSP-style) or `symbol` (a name to locate on that line — no column counting). INTRA-FILE ONLY: a name defined elsewhere returns empty — reach for `medaka_references` on a cross-file lookup instead. A miss names the identifiers actually on that line instead of a bare empty result."
+    medakaDefinitionSchema
+    runDefinitionTool,
+  McpTool
+    "medaka_references"
+    "FIRST CHOICE for \"find every use of X\" instead of grep — resolves by BINDER IDENTITY, not spelling, so it is correct under shadowing, import aliasing, and same-name-in-different-modules, where grep is not. Give `file` plus 0-based `line`/`col`; optional `includeDeclaration` (default true). Project-wide, read-only; never descends into stdlib bodies."
+    medakaReferencesSchema
+    runReferencesTool,
+  McpTool
+    "medaka_fmt"
+    "FIRST CHOICE for formatting Medaka source instead of shelling out to `medaka fmt`. Provide exactly one of `file` or `source`. NEVER writes to disk — apply the returned text yourself. Pass `check: true` for a clean/dirty verdict only (no full text)."
+    medakaFmtSchema
+    runFmtTool,
+  McpTool
+    "medaka_lint"
+    "FIRST CHOICE for style-linting Medaka source instead of shelling out to `medaka lint`. Give `paths` (array of file paths); narrow with comma-separated `deny`/`only`/`disable`. Report-only (no autofix) — same diagnostic schema as `medaka_check`."
+    medakaLintSchema
+    runLintTool,
   McpTool "medaka_test" mcpTestDescription medakaTestSchema runTestTool,
 ]
 
 -- The `tools/list` descriptor for one tool: { name, description, inputSchema }.
 toolDescriptor : McpTool -> Json
-toolDescriptor (McpTool name desc schema _) = jObject
-  [
-    ("name", JString name),
-    ("description", JString desc),
-    ("inputSchema", schema),
-  ]
+toolDescriptor (McpTool name desc schema _) = jObject [
+  ("name", JString name),
+  ("description", JString desc),
+  ("inputSchema", schema),
+]
 
 -- Dispatch a tools/call by tool name against `mcpTools`.  `None` ⇒ no such tool
 -- (caller emits JSON-RPC -32601).  `Some result` ⇒ the tool's result Json.
 callTool : String -> String -> String -> String -> Json -> <IO> Option Json
-callTool runtimeSrc coreSrc stdlibDir name args = map
-  ((McpTool _ _ _ handler) => handler runtimeSrc coreSrc stdlibDir args)
-  (lookupTool name mcpTools)
+callTool runtimeSrc coreSrc stdlibDir name args =
+  map
+    ((McpTool _ _ _ handler) => handler runtimeSrc coreSrc stdlibDir args)
+    (lookupTool name mcpTools)
 
 lookupTool : String -> List McpTool -> Option McpTool
 lookupTool _ [] = None
-lookupTool name (t::ts) = match t
+lookupTool name (t :: ts) = match t
   McpTool n _ _ _ => if n == name then Some t else lookupTool name ts
 
 -- ── medaka_check tool ─────────────────────────────────────────────────────────
 
 -- inputSchema: exactly one of `file` (path) or `source` (inline text).
 medakaCheckSchema : Json
-medakaCheckSchema = jObject
-  [
-    ("type", JString "object"),
-    (
-      "properties",
-      jObject [
-        (
-          "file",
-          jObject [
-            ("type", JString "string"),
-            ("description", JString "Path to a .mdk file to check."),
-          ],
-        ),
-        (
-          "source",
-          jObject [
-            ("type", JString "string"),
-            (
-              "description",
-              JString "Inline Medaka source to check (no file on disk).",
-            ),
-          ],
-        ),
-      ],
-    ),
-  ]
+medakaCheckSchema = jObject [
+  ("type", JString "object"),
+  (
+    "properties",
+    jObject [
+      (
+        "file",
+        jObject [
+          ("type", JString "string"),
+          ("description", JString "Path to a .mdk file to check."),
+        ],
+      ),
+      (
+        "source",
+        jObject [
+          ("type", JString "string"),
+          (
+            "description",
+            JString "Inline Medaka source to check (no file on disk).",
+          ),
+        ],
+      ),
+    ],
+  ),
+]
 
 -- Stable synthetic filename for inline `source` checks — never a temp path, so a
 -- transcript golden over a `source` call is path-free and portable.
@@ -398,14 +428,13 @@ syntheticSourceName = "<source>"
 
 -- Wrap a text payload as an MCP tool result: { content:[{type:text,text}], isError }.
 toolTextResult : String -> Bool -> Json
-toolTextResult text isErr = jObject
-  [
-    (
-      "content",
-      jArray [jObject [("type", JString "text"), ("text", JString text)]],
-    ),
-    ("isError", JBool isErr),
-  ]
+toolTextResult text isErr = jObject [
+  (
+    "content",
+    jArray [jObject [("type", JString "text"), ("text", JString text)]],
+  ),
+  ("isError", JBool isErr),
+]
 
 -- An argument-validation failure, surfaced as an isError:true tool result (NOT a
 -- crash, NOT a JSON-RPC error — the call was well-formed, its arguments weren't).
@@ -425,16 +454,26 @@ toolArgError msg = toolTextResult msg True
 -- discarded and checkJsonFile re-reads `path` for the real run, full import
 -- resolution).
 runCheckTool : String -> String -> String -> Json -> <IO> Json
-runCheckTool runtimeSrc coreSrc stdlibDir args = match (fieldStr "file" args, fieldStr "source" args)
-  (Some _, Some _) => toolArgError "medaka_check: provide exactly one of 'file' or 'source', not both"
-  (None, None) => toolArgError "medaka_check: missing argument — provide exactly one of 'file' or 'source'"
+runCheckTool runtimeSrc coreSrc stdlibDir args = match (
+  fieldStr "file" args,
+  fieldStr "source" args,
+)
+  (Some _, Some _) =>
+    toolArgError
+      "medaka_check: provide exactly one of 'file' or 'source', not both"
+  (None, None) =>
+    toolArgError
+      "medaka_check: missing argument — provide exactly one of 'file' or 'source'"
   (Some path, None) => match readFile path
-    Err e => toolArgError (stringConcat ["medaka_check: cannot read file '", path, "': ", e])
+    Err e =>
+      toolArgError
+        (stringConcat ["medaka_check: cannot read file '", path, "': ", e])
     Ok _ =>
       let (json, hasErr) = checkJsonFile False runtimeSrc coreSrc path stdlibDir
       toolTextResult json hasErr
   (None, Some src) =>
-    let (json, hasErr) = checkJsonSingle "" False runtimeSrc coreSrc syntheticSourceName src
+    let (json, hasErr) =
+      checkJsonSingle "" False runtimeSrc coreSrc syntheticSourceName src
     toolTextResult json hasErr
 
 -- ── symbol-name addressing (#849) ───────────────────────────────────────────
@@ -512,7 +551,7 @@ symbolColsOnLine text symbol = symbolColsGo (identifiersInLine text) symbol
 
 symbolColsGo : List (String, Int) -> String -> List Int
 symbolColsGo [] _ = []
-symbolColsGo ((name, col)::rest) symbol
+symbolColsGo ((name, col) :: rest) symbol
   | name == symbol = col :: symbolColsGo rest symbol
   | otherwise = symbolColsGo rest symbol
 
@@ -534,53 +573,54 @@ identColDesc pair =
 -- optional in the schema (JSON Schema can't express "exactly one of"), so
 -- the handler enforces that.
 medakaTypeAtSchema : Json
-medakaTypeAtSchema = jObject
-  [
-    ("type", JString "object"),
-    (
-      "properties",
-      jObject [
-        (
-          "file",
-          jObject [
-            ("type", JString "string"),
-            ("description", JString "Path to the .mdk file to query."),
-          ],
-        ),
-        (
-          "line",
-          jObject [
-            ("type", JString "integer"),
-            (
-              "description",
-              JString "0-based line of the position (LSP-style, first line is 0).",
-            ),
-          ],
-        ),
-        (
-          "col",
-          jObject [
-            ("type", JString "integer"),
-            (
-              "description",
-              JString "0-based column (LSP-style). Alternative to 'symbol' — provide exactly one.",
-            ),
-          ],
-        ),
-        (
-          "symbol",
-          jObject [
-            ("type", JString "string"),
-            (
-              "description",
-              JString "Name to locate on 'line' instead of counting columns — resolved server-side against the line's own text. Alternative to 'col' — provide exactly one.",
-            ),
-          ],
-        ),
-      ],
-    ),
-    ("required", jArray [JString "file", JString "line"]),
-  ]
+medakaTypeAtSchema = jObject [
+  ("type", JString "object"),
+  (
+    "properties",
+    jObject [
+      (
+        "file",
+        jObject [
+          ("type", JString "string"),
+          ("description", JString "Path to the .mdk file to query."),
+        ],
+      ),
+      (
+        "line",
+        jObject [
+          ("type", JString "integer"),
+          (
+            "description",
+            JString "0-based line of the position (LSP-style, first line is 0).",
+          ),
+        ],
+      ),
+      (
+        "col",
+        jObject [
+          ("type", JString "integer"),
+          (
+            "description",
+            JString
+              "0-based column (LSP-style). Alternative to 'symbol' — provide exactly one.",
+          ),
+        ],
+      ),
+      (
+        "symbol",
+        jObject [
+          ("type", JString "string"),
+          (
+            "description",
+            JString
+              "Name to locate on 'line' instead of counting columns — resolved server-side against the line's own text. Alternative to 'col' — provide exactly one.",
+          ),
+        ],
+      ),
+    ],
+  ),
+  ("required", jArray [JString "file", JString "line"]),
+]
 
 -- medaka_type_at handler: read `file` from disk and infer the type at `line`
 -- plus either `col` (unchanged) or `symbol` (#849 — resolved to a column by
@@ -594,48 +634,71 @@ medakaTypeAtSchema = jObject
 -- arguments ⇒ an isError result (the arguments were malformed, not the
 -- call).
 runTypeAtTool : String -> String -> String -> Json -> <IO> Json
-runTypeAtTool runtimeSrc coreSrc _stdlibDir args = match (fieldStr "file" args, fieldInt "line" args)
+runTypeAtTool runtimeSrc coreSrc _stdlibDir args = match (
+  fieldStr "file" args,
+  fieldInt "line" args,
+)
   (Some path, Some line) => match readFile path
-    Err e => toolArgError (stringConcat ["medaka_type_at: cannot read file '", path, "': ", e])
+    Err e =>
+      toolArgError
+        (stringConcat ["medaka_type_at: cannot read file '", path, "': ", e])
     Ok src => match (fieldInt "col" args, fieldSymbol args)
-      (Some _, Some _) => toolArgError "medaka_type_at: provide exactly one of 'col' (integer) or 'symbol' (string), not both"
-      (None, None) => toolArgError "medaka_type_at: missing argument — provide 'col' (integer) or 'symbol' (string)"
+      (Some _, Some _) =>
+        toolArgError
+          "medaka_type_at: provide exactly one of 'col' (integer) or 'symbol' (string), not both"
+      (None, None) =>
+        toolArgError
+          "medaka_type_at: missing argument — provide 'col' (integer) or 'symbol' (string)"
       (Some col, None) => typeAtOneCol runtimeSrc coreSrc path src line col
       (None, Some symbol) => match lineTextAt src line
-        None => toolTextResult (stringConcat [
-          "medaka_type_at: line ",
-          intToString line,
-          " does not exist in '",
-          path,
-          "'",
-        ]) False
+        None =>
+          toolTextResult
+            (stringConcat [
+              "medaka_type_at: line ",
+              intToString line,
+              " does not exist in '",
+              path,
+              "'",
+            ])
+            False
         Some lineText => match symbolColsOnLine lineText symbol
-          [] => toolTextResult (stringConcat [
-            "no identifier named '",
-            symbol,
-            "' on line ",
-            intToString line,
-            " of '",
-            path,
-            "' — identifiers on this line: ",
-            describeIdentifiers (identifiersInLine lineText),
-          ]) False
+          [] =>
+            toolTextResult
+              (stringConcat [
+                "no identifier named '",
+                symbol,
+                "' on line ",
+                intToString line,
+                " of '",
+                path,
+                "' — identifiers on this line: ",
+                describeIdentifiers (identifiersInLine lineText),
+              ])
+              False
           [col] => typeAtOneCol runtimeSrc coreSrc path src line col
           cols => typeAtManyCols runtimeSrc coreSrc path src line symbol cols
-  _ => toolArgError "medaka_type_at: missing or invalid argument — require 'file' (string), 'line' (integer), and one of 'col' (integer) or 'symbol' (string)"
+  _ =>
+    toolArgError
+      "medaka_type_at: missing or invalid argument — require 'file' (string), 'line' (integer), and one of 'col' (integer) or 'symbol' (string)"
 
 -- Resolve one (line, col) via the existing stateless hover harness
 -- (tools.lsp.typeAtPoint).  A miss is enriched with the identifiers actually
 -- on that line (#849) — applies to BOTH addressing modes, since a col-mode
 -- miss is exactly the ambiguity #849 reports.
 typeAtOneCol : String -> String -> String -> String -> Int -> Int -> <IO> Json
-typeAtOneCol runtimeSrc coreSrc path src line col = match typeAtPoint runtimeSrc coreSrc path src line col
-  Some ty => toolTextResult ty False
-  None => toolTextResult (typeAtMissNote src line col) False
+typeAtOneCol runtimeSrc coreSrc path src line col =
+  match typeAtPoint runtimeSrc coreSrc path src line col
+    Some ty => toolTextResult ty False
+    None => toolTextResult (typeAtMissNote src line col) False
 
 typeAtMissNote : String -> Int -> Int -> String
 typeAtMissNote src line col = match lineTextAt src line
-  None => stringConcat ["no symbol at line ", intToString line, " col ", intToString col]
+  None => stringConcat [
+    "no symbol at line ",
+    intToString line,
+    " col ",
+    intToString col,
+  ]
   Some lineText => stringConcat [
     "no symbol at line ",
     intToString line,
@@ -648,7 +711,14 @@ typeAtMissNote src line col = match lineTextAt src line
 -- `symbol` matched more than one identifier on `line` — report EACH
 -- resolved type rather than silently picking the first (#849's "or all
 -- matches if ambiguous, returning each").
-typeAtManyCols : String -> String -> String -> String -> Int -> String -> List Int -> <IO> Json
+typeAtManyCols : String ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  String ->
+  List Int ->
+  <IO> Json
 typeAtManyCols runtimeSrc coreSrc path src line symbol cols =
   let header = stringConcat [
     "'",
@@ -660,11 +730,17 @@ typeAtManyCols runtimeSrc coreSrc path src line symbol cols =
     " matches:",
   ]
   let bodies = typeAtColLines runtimeSrc coreSrc path src line cols
-  toolTextResult (joinWith "\n" (header::bodies)) False
+  toolTextResult (joinWith "\n" (header :: bodies)) False
 
-typeAtColLines : String -> String -> String -> String -> Int -> List Int -> <IO> List String
+typeAtColLines : String ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  List Int ->
+  <IO> List String
 typeAtColLines _runtimeSrc _coreSrc _path _src _line [] = []
-typeAtColLines runtimeSrc coreSrc path src line (col::rest) =
+typeAtColLines runtimeSrc coreSrc path src line (col :: rest) =
   let here = match typeAtPoint runtimeSrc coreSrc path src line col
     Some ty => stringConcat ["  col ", intToString col, ": ", ty]
     None => stringConcat ["  col ", intToString col, ": no symbol"]
@@ -674,26 +750,25 @@ typeAtColLines runtimeSrc coreSrc path src line (col::rest) =
 
 -- inputSchema: `file` (path), required.
 medakaSymbolsSchema : Json
-medakaSymbolsSchema = jObject
-  [
-    ("type", JString "object"),
-    (
-      "properties",
-      jObject [
-        (
-          "file",
-          jObject [
-            ("type", JString "string"),
-            (
-              "description",
-              JString "Path to the .mdk file to list symbols for.",
-            ),
-          ],
-        )
-      ],
-    ),
-    ("required", jArray [JString "file"]),
-  ]
+medakaSymbolsSchema = jObject [
+  ("type", JString "object"),
+  (
+    "properties",
+    jObject [
+      (
+        "file",
+        jObject [
+          ("type", JString "string"),
+          (
+            "description",
+            JString "Path to the .mdk file to list symbols for.",
+          ),
+        ],
+      ),
+    ],
+  ),
+  ("required", jArray [JString "file"]),
+]
 
 -- Turn resolved source into a symbols result.  Parse FIRST (via parseResult, the
 -- same located-diagnostic path medaka_fmt uses) so a genuinely empty/no-decl file
@@ -704,12 +779,16 @@ medakaSymbolsSchema = jObject
 -- `[]` on unparseable input, which is exactly the ambiguity we resolve here.
 symbolsResult : String -> Json
 symbolsResult src = match parseResult src
-  Err e => toolTextResult (stringify (jObject [
-    ("parseError", JBool True),
-    ("line", JInt (parseErrorLine e)),
-    ("col", JInt (parseErrorCol e)),
-    ("message", JString (parseErrorMessage e)),
-  ])) True
+  Err e =>
+    toolTextResult
+      (stringify
+        (jObject [
+          ("parseError", JBool True),
+          ("line", JInt (parseErrorLine e)),
+          ("col", JInt (parseErrorCol e)),
+          ("message", JString (parseErrorMessage e)),
+        ]))
+      True
   Ok _ => toolTextResult (stringify (jArray (documentSymbols src))) False
 
 -- medaka_symbols handler: read `file` from disk and return its top-level decl
@@ -720,9 +799,13 @@ symbolsResult src = match parseResult src
 -- file returns — so a caller can tell 'no decls' from 'parser bailed' (#300 p1).
 runSymbolsTool : String -> String -> String -> Json -> <IO> Json
 runSymbolsTool _runtimeSrc _coreSrc _stdlibDir args = match fieldStr "file" args
-  None => toolArgError "medaka_symbols: missing or invalid argument — require 'file' (string)"
+  None =>
+    toolArgError
+      "medaka_symbols: missing or invalid argument — require 'file' (string)"
   Some path => match readFile path
-    Err e => toolArgError (stringConcat ["medaka_symbols: cannot read file '", path, "': ", e])
+    Err e =>
+      toolArgError
+        (stringConcat ["medaka_symbols: cannot read file '", path, "': ", e])
     Ok src => symbolsResult src
 
 -- ── medaka_definition tool ───────────────────────────────────────────────────
@@ -742,8 +825,8 @@ medakaDefinitionSchema = medakaTypeAtSchema
 -- positionLine/positionChar, the same accessors the real LSP request handler
 -- uses).
 positionParams : Int -> Int -> Json
-positionParams line col = jObject
-  [("position", jObject [("line", JInt line), ("character", JInt col)])]
+positionParams line col =
+  jObject [("position", jObject [("line", JInt line), ("character", JInt col)])]
 
 -- One (line, col) resolved via the existing stateless, INTRA-FILE-ONLY
 -- harness (tools.lsp.definitionResult) — a HIT is returned EXACTLY as
@@ -755,9 +838,10 @@ positionParams line col = jObject
 -- here".  Applies to BOTH addressing modes — a col-mode miss is exactly the
 -- ambiguity #849 reports.
 definitionAtCol : String -> String -> Int -> Int -> Json
-definitionAtCol path src line col = match definitionResult path src (positionParams line col)
-  JNull => definitionMissNote line (Some col) src
-  hit => hit
+definitionAtCol path src line col =
+  match definitionResult path src (positionParams line col)
+    JNull => definitionMissNote line (Some col) src
+    hit => hit
 
 -- Shared miss-note shape for medaka_definition: an empty `matches`, a short
 -- `note`, and (when the line exists) the identifiers actually on it.
@@ -789,19 +873,17 @@ identPairJson pair =
 -- (#849's "or all matches if ambiguous, returning each") rather than
 -- silently picking the first.
 definitionManyCols : String -> String -> Int -> String -> List Int -> Json
-definitionManyCols path src line symbol cols = jObject
-  [
-    ("ambiguous", JBool True),
-    ("symbol", JString symbol),
-    ("matches", jArray (map (definitionOneMatch path src line) cols)),
-  ]
+definitionManyCols path src line symbol cols = jObject [
+  ("ambiguous", JBool True),
+  ("symbol", JString symbol),
+  ("matches", jArray (map (definitionOneMatch path src line) cols)),
+]
 
 definitionOneMatch : String -> String -> Int -> Int -> Json
-definitionOneMatch path src line col = jObject
-  [
-    ("col", JInt col),
-    ("result", definitionResult path src (positionParams line col)),
-  ]
+definitionOneMatch path src line col = jObject [
+  ("col", JInt col),
+  ("result", definitionResult path src (positionParams line col)),
+]
 
 -- medaka_definition handler: read `file` from disk and resolve the
 -- identifier at `line` plus either `col` (unchanged) or `symbol` (#849 —
@@ -813,108 +895,139 @@ definitionOneMatch path src line col = jObject
 -- call); every other outcome (hit, miss, ambiguous, out-of-range line) is a
 -- CLEAN, ACTIONABLE result, never a crash.
 runDefinitionTool : String -> String -> String -> Json -> <IO> Json
-runDefinitionTool _runtimeSrc _coreSrc _stdlibDir args = match (fieldStr "file" args, fieldInt "line" args)
+runDefinitionTool _runtimeSrc _coreSrc _stdlibDir args = match (
+  fieldStr "file" args,
+  fieldInt "line" args,
+)
   (Some path, Some line) => match readFile path
-    Err e => toolArgError (stringConcat ["medaka_definition: cannot read file '", path, "': ", e])
+    Err e =>
+      toolArgError
+        (stringConcat ["medaka_definition: cannot read file '", path, "': ", e])
     Ok src => match (fieldInt "col" args, fieldSymbol args)
-      (Some _, Some _) => toolArgError "medaka_definition: provide exactly one of 'col' (integer) or 'symbol' (string), not both"
-      (None, None) => toolArgError "medaka_definition: missing argument — provide 'col' (integer) or 'symbol' (string)"
+      (Some _, Some _) =>
+        toolArgError
+          "medaka_definition: provide exactly one of 'col' (integer) or 'symbol' (string), not both"
+      (None, None) =>
+        toolArgError
+          "medaka_definition: missing argument — provide 'col' (integer) or 'symbol' (string)"
       (Some col, None) =>
         toolTextResult (stringify (definitionAtCol path src line col)) False
       (None, Some symbol) => match lineTextAt src line
-        None => toolTextResult (stringify (jObject [
-          ("matches", jArray []),
-          (
-            "note",
-            JString (stringConcat ["line ", intToString line, " does not exist in '", path, "'"]),
-          ),
-        ])) False
+        None =>
+          toolTextResult
+            (stringify
+              (jObject [
+                ("matches", jArray []),
+                (
+                  "note",
+                  JString
+                    (stringConcat [
+                      "line ",
+                      intToString line,
+                      " does not exist in '",
+                      path,
+                      "'",
+                    ]),
+                ),
+              ]))
+            False
         Some lineText => match symbolColsOnLine lineText symbol
-          [] => toolTextResult (stringify (jObject [
-            ("matches", jArray []),
-            (
-              "note",
-              JString (stringConcat [
-                "no identifier named '",
-                symbol,
-                "' on line ",
-                intToString line,
-                " of '",
-                path,
-                "'",
-              ]),
-            ),
-            (
-              "identifiersOnLine",
-              jArray (map identPairJson (identifiersInLine lineText)),
-            ),
-          ])) False
-          [col] => toolTextResult (stringify (definitionAtCol path src line col)) False
-          cols => toolTextResult (stringify (definitionManyCols path src line symbol cols)) False
-  _ => toolArgError "medaka_definition: missing or invalid argument — require 'file' (string), 'line' (integer), and one of 'col' (integer) or 'symbol' (string)"
+          [] =>
+            toolTextResult
+              (stringify
+                (jObject [
+                  ("matches", jArray []),
+                  (
+                    "note",
+                    JString
+                      (stringConcat [
+                        "no identifier named '",
+                        symbol,
+                        "' on line ",
+                        intToString line,
+                        " of '",
+                        path,
+                        "'",
+                      ]),
+                  ),
+                  (
+                    "identifiersOnLine",
+                    jArray (map identPairJson (identifiersInLine lineText)),
+                  ),
+                ]))
+              False
+          [col] =>
+            toolTextResult (stringify (definitionAtCol path src line col)) False
+          cols =>
+            toolTextResult
+              (stringify (definitionManyCols path src line symbol cols))
+              False
+  _ =>
+    toolArgError
+      "medaka_definition: missing or invalid argument — require 'file' (string), 'line' (integer), and one of 'col' (integer) or 'symbol' (string)"
 
 -- ── medaka_references tool ───────────────────────────────────────────────────
 
 -- inputSchema: `file` (path) plus `line`/`col`, the 0-based LSP-style
 -- position; optional `includeDeclaration` (boolean, default true, F6).
 medakaReferencesSchema : Json
-medakaReferencesSchema = jObject
-  [
-    ("type", JString "object"),
-    (
-      "properties",
-      jObject [
-        (
-          "file",
-          jObject [
-            ("type", JString "string"),
-            ("description", JString "Path to the .mdk file to query."),
-          ],
-        ),
-        (
-          "line",
-          jObject [
-            ("type", JString "integer"),
-            (
-              "description",
-              JString "0-based line of the position (LSP-style, first line is 0).",
-            ),
-          ],
-        ),
-        (
-          "col",
-          jObject [
-            ("type", JString "integer"),
-            (
-              "description",
-              JString "0-based column of the position (LSP-style, first column is 0).",
-            ),
-          ],
-        ),
-        (
-          "includeDeclaration",
-          jObject [
-            ("type", JString "boolean"),
-            (
-              "description",
-              JString "Include the symbol's own declaration site in the result. Default true.",
-            ),
-          ],
-        ),
-      ],
-    ),
-    ("required", jArray [JString "file", JString "line", JString "col"]),
-  ]
+medakaReferencesSchema = jObject [
+  ("type", JString "object"),
+  (
+    "properties",
+    jObject [
+      (
+        "file",
+        jObject [
+          ("type", JString "string"),
+          ("description", JString "Path to the .mdk file to query."),
+        ],
+      ),
+      (
+        "line",
+        jObject [
+          ("type", JString "integer"),
+          (
+            "description",
+            JString "0-based line of the position (LSP-style, first line is 0).",
+          ),
+        ],
+      ),
+      (
+        "col",
+        jObject [
+          ("type", JString "integer"),
+          (
+            "description",
+            JString
+              "0-based column of the position (LSP-style, first column is 0).",
+          ),
+        ],
+      ),
+      (
+        "includeDeclaration",
+        jObject [
+          ("type", JString "boolean"),
+          (
+            "description",
+            JString
+              "Include the symbol's own declaration site in the result. Default true.",
+          ),
+        ],
+      ),
+    ],
+  ),
+  ("required", jArray [JString "file", JString "line", JString "col"]),
+]
 
 -- Synthesize a `{ position, context: { includeDeclaration } }` params Json —
 -- the shape `tools.lsp.referencesResult` expects (`positionLine`/
 -- `positionChar` plus `includeDeclarationOf`'s `context.includeDeclaration`).
 referencesParams : Int -> Int -> Bool -> Json
-referencesParams line col includeDecl = jObject
-  [
-    ("position", jObject [("line", JInt line), ("character", JInt col)]),
-    ("context", jObject [("includeDeclaration", JBool includeDecl)]),
-  ]
+referencesParams line col includeDecl = jObject [
+  ("position", jObject [("line", JInt line), ("character", JInt col)]),
+  ("context", jObject [("includeDeclaration", JBool includeDecl)]),
+]
 
 -- medaka_references handler: read `file` from disk and resolve the identifier
 -- at (line, col) to every use across the WHOLE PROJECT (cross-file, unlike
@@ -929,61 +1042,77 @@ referencesParams line col includeDecl = jObject
 -- nothing indexed, returns an empty `[]` result — never a crash, never a
 -- wrong hit.
 runReferencesTool : String -> String -> String -> Json -> <IO> Json
-runReferencesTool runtimeSrc coreSrc _stdlibDir args = match (fieldStr "file" args, fieldInt "line" args, fieldInt "col" args)
+runReferencesTool runtimeSrc coreSrc _stdlibDir args = match (
+  fieldStr "file" args,
+  fieldInt "line" args,
+  fieldInt "col" args,
+)
   (Some path, Some line, Some col) => match readFile path
-    Err e => toolArgError (stringConcat ["medaka_references: cannot read file '", path, "': ", e])
+    Err e =>
+      toolArgError
+        (stringConcat ["medaka_references: cannot read file '", path, "': ", e])
     Ok src =>
       let includeDecl = fieldBoolOr "includeDeclaration" True args
       let uri = uriOfPath path
       let docs = docsPut uri src emptyDocs
-      let result = referencesResult runtimeSrc coreSrc uri src (referencesParams line col includeDecl) docs
+      let result =
+        referencesResult
+          runtimeSrc
+          coreSrc
+          uri
+          src
+          (referencesParams line col includeDecl)
+          docs
       toolTextResult (stringify result) False
-  _ => toolArgError "medaka_references: missing or invalid argument — require 'file' (string), 'line' (integer), and 'col' (integer)"
+  _ =>
+    toolArgError
+      "medaka_references: missing or invalid argument — require 'file' (string), 'line' (integer), and 'col' (integer)"
 
 -- ── medaka_fmt tool ───────────────────────────────────────────────────────────
 
 -- inputSchema: exactly one of `file` (path) or `source` (inline text); optional
 -- `check` (boolean, default false — see medakaFmtSchema's own "check" doc).
 medakaFmtSchema : Json
-medakaFmtSchema = jObject
-  [
-    ("type", JString "object"),
-    (
-      "properties",
-      jObject [
-        (
-          "file",
-          jObject [
-            ("type", JString "string"),
-            (
-              "description",
-              JString "Path to a .mdk file to format. READ ONLY — the file is never written; the formatted text is returned for the caller to apply.",
-            ),
-          ],
-        ),
-        (
-          "source",
-          jObject [
-            ("type", JString "string"),
-            (
-              "description",
-              JString "Inline Medaka source to format (no file on disk).",
-            ),
-          ],
-        ),
-        (
-          "check",
-          jObject [
-            ("type", JString "boolean"),
-            (
-              "description",
-              JString "If true, report clean/dirty instead of returning the formatted text (default false).",
-            ),
-          ],
-        ),
-      ],
-    ),
-  ]
+medakaFmtSchema = jObject [
+  ("type", JString "object"),
+  (
+    "properties",
+    jObject [
+      (
+        "file",
+        jObject [
+          ("type", JString "string"),
+          (
+            "description",
+            JString
+              "Path to a .mdk file to format. READ ONLY — the file is never written; the formatted text is returned for the caller to apply.",
+          ),
+        ],
+      ),
+      (
+        "source",
+        jObject [
+          ("type", JString "string"),
+          (
+            "description",
+            JString "Inline Medaka source to format (no file on disk).",
+          ),
+        ],
+      ),
+      (
+        "check",
+        jObject [
+          ("type", JString "boolean"),
+          (
+            "description",
+            JString
+              "If true, report clean/dirty instead of returning the formatted text (default false).",
+          ),
+        ],
+      ),
+    ],
+  ),
+]
 
 -- Boolean field accessor with a default: absent key or a non-boolean JSON
 -- value both fall back to `dflt` (an argument-shape error, not a crash — the
@@ -1010,12 +1139,19 @@ fmtResult check src = match parseResult src
       ", col ",
       intToString (parseErrorCol e),
     ]
-    toolArgError (stringConcat
-      ["medaka_fmt: source does not parse (", loc, "): ", parseErrorMessage e])
+    toolArgError
+      (stringConcat [
+        "medaka_fmt: source does not parse (",
+        loc,
+        "): ",
+        parseErrorMessage e,
+      ])
   Ok _ =>
     let formatted = formatSource src
     if check then
-      toolTextResult (stringify (jObject [("clean", JBool (formatted == src))])) False
+      toolTextResult
+        (stringify (jObject [("clean", JBool (formatted == src))]))
+        False
     else
       toolTextResult formatted False
 
@@ -1030,10 +1166,16 @@ runFmtTool : String -> String -> String -> Json -> <IO> Json
 runFmtTool _runtimeSrc _coreSrc _stdlibDir args =
   let check = fieldBoolOr "check" False args
   match (fieldStr "file" args, fieldStr "source" args)
-    (Some _, Some _) => toolArgError "medaka_fmt: provide exactly one of 'file' or 'source', not both"
-    (None, None) => toolArgError "medaka_fmt: missing argument — provide exactly one of 'file' or 'source'"
+    (Some _, Some _) =>
+      toolArgError
+        "medaka_fmt: provide exactly one of 'file' or 'source', not both"
+    (None, None) =>
+      toolArgError
+        "medaka_fmt: missing argument — provide exactly one of 'file' or 'source'"
     (Some path, None) => match readFile path
-      Err e => toolArgError (stringConcat ["medaka_fmt: cannot read file '", path, "': ", e])
+      Err e =>
+        toolArgError
+          (stringConcat ["medaka_fmt: cannot read file '", path, "': ", e])
       Ok src => fmtResult check src
     (None, Some src) => fmtResult check src
 
@@ -1045,54 +1187,56 @@ runFmtTool _runtimeSrc _coreSrc _stdlibDir args =
 -- equivalent — a suggesting rule must prove its fix compiles (TOOLING.md /
 -- #56) and report-only sidesteps that for v1.
 medakaLintSchema : Json
-medakaLintSchema = jObject
-  [
-    ("type", JString "object"),
-    (
-      "properties",
-      jObject [
-        (
-          "paths",
-          jObject [
-            ("type", JString "array"),
-            ("items", jObject [("type", JString "string")]),
-            ("description", JString "Paths to .mdk files to lint."),
-          ],
-        ),
-        (
-          "deny",
-          jObject [
-            ("type", JString "string"),
-            (
-              "description",
-              JString "Comma-separated rule names to promote to error severity (mirrors --deny).",
-            ),
-          ],
-        ),
-        (
-          "only",
-          jObject [
-            ("type", JString "string"),
-            (
-              "description",
-              JString "Comma-separated rule names to keep, dropping findings from every other rule (mirrors --only).",
-            ),
-          ],
-        ),
-        (
-          "disable",
-          jObject [
-            ("type", JString "string"),
-            (
-              "description",
-              JString "Comma-separated rule names to suppress (mirrors --disable).",
-            ),
-          ],
-        ),
-      ],
-    ),
-    ("required", jArray [JString "paths"]),
-  ]
+medakaLintSchema = jObject [
+  ("type", JString "object"),
+  (
+    "properties",
+    jObject [
+      (
+        "paths",
+        jObject [
+          ("type", JString "array"),
+          ("items", jObject [("type", JString "string")]),
+          ("description", JString "Paths to .mdk files to lint."),
+        ],
+      ),
+      (
+        "deny",
+        jObject [
+          ("type", JString "string"),
+          (
+            "description",
+            JString
+              "Comma-separated rule names to promote to error severity (mirrors --deny).",
+          ),
+        ],
+      ),
+      (
+        "only",
+        jObject [
+          ("type", JString "string"),
+          (
+            "description",
+            JString
+              "Comma-separated rule names to keep, dropping findings from every other rule (mirrors --only).",
+          ),
+        ],
+      ),
+      (
+        "disable",
+        jObject [
+          ("type", JString "string"),
+          (
+            "description",
+            JString
+              "Comma-separated rule names to suppress (mirrors --disable).",
+          ),
+        ],
+      ),
+    ],
+  ),
+  ("required", jArray [JString "paths"]),
+]
 
 -- Convert a JArray's backing Array into a List. arrayLength/arrayGetUnsafe are
 -- core builtins (no stdlib import needed) — mirrors eval.mdk's arrayToListG,
@@ -1118,8 +1262,8 @@ pathsArg args = match get "paths" args
 
 allJsonStrings : List Json -> Option (List String)
 allJsonStrings [] = Some []
-allJsonStrings (j::rest) = match (asString j, allJsonStrings rest)
-  (Some s, Some ss) => Some (s::ss)
+allJsonStrings (j :: rest) = match (asString j, allJsonStrings rest)
+  (Some s, Some ss) => Some (s :: ss)
   _ => None
 
 -- Optional comma-separated rule-name-list argument -> `List String`. Absent or
@@ -1141,19 +1285,25 @@ lintNameListArg key args = match fieldStr key args
 -- `idx` is the stdlib reference index, built ONCE by the caller and threaded:
 -- it is the same value for every path in the request, and rebuilding it per
 -- path would re-parse the whole stdlib once per target file.
-lintPathsToDiagTriples : StdlibIndex -> List String -> List String -> List String -> List String -> <IO> List (String, String, List Diag)
+lintPathsToDiagTriples : StdlibIndex ->
+  List String ->
+  List String ->
+  List String ->
+  List String ->
+  <IO> List (String, String, List Diag)
 lintPathsToDiagTriples _ _ _ _ [] = []
-lintPathsToDiagTriples idx disable only deny (p::rest) =
-  lintFileDiagTriple idx disable only deny p ::
-    lintPathsToDiagTriples idx disable only deny rest
+lintPathsToDiagTriples idx disable only deny (p :: rest) =
+  lintFileDiagTriple idx disable only deny p
+    :: lintPathsToDiagTriples idx disable only deny rest
 
 anyTripleHasErr : List (String, String, List Diag) -> Bool
 anyTripleHasErr [] = False
-anyTripleHasErr ((_, _, diags)::rest) = anyDiagErr diags || anyTripleHasErr rest
+anyTripleHasErr ((_, _, diags) :: rest) =
+  anyDiagErr diags || anyTripleHasErr rest
 
 anyDiagErr : List Diag -> Bool
 anyDiagErr [] = False
-anyDiagErr (d::rest) = diagIsError d || anyDiagErr rest
+anyDiagErr (d :: rest) = diagIsError d || anyDiagErr rest
 
 -- medaka_lint handler: run the lint pipeline (all rules, inline
 -- `-- lint-disable-*` suppression, then the `disable`/`only`/`deny` filters)
@@ -1166,7 +1316,9 @@ anyDiagErr (d::rest) = diagIsError d || anyDiagErr rest
 -- seed rule defaults to SevWarning.
 runLintTool : String -> String -> String -> Json -> <IO> Json
 runLintTool _runtimeSrc _coreSrc _stdlibDir args = match pathsArg args
-  None => toolArgError "medaka_lint: missing or invalid argument — require 'paths' (array of strings)"
+  None =>
+    toolArgError
+      "medaka_lint: missing or invalid argument — require 'paths' (array of strings)"
   Some paths =>
     let disable = lintNameListArg "disable" args
     let only = lintNameListArg "only" args
@@ -1191,42 +1343,45 @@ mcpTestEngines = [EngInterp]
 
 mcpTestEngineHasNative : List Engine -> Bool
 mcpTestEngineHasNative [] = False
-mcpTestEngineHasNative (EngNative::_) = True
-mcpTestEngineHasNative (_::rest) = mcpTestEngineHasNative rest
+mcpTestEngineHasNative (EngNative :: _) = True
+mcpTestEngineHasNative (_ :: rest) = mcpTestEngineHasNative rest
 
 -- The caveat sentence, derived from `engines`: interpreter-only gets the
 -- original #81 warning; a list that includes the native engine gets an
 -- honest statement instead of a now-false "results are eval-only" claim.
 mcpTestCaveat : List Engine -> String
 mcpTestCaveat engines
-  | mcpTestEngineHasNative engines = "Results include the NATIVE backend engine (not just the interpreter) — a native-only miscompile is observed here."
-  | otherwise = "⚠️ RESULTS ARE UNDER THE INTERPRETER (\{engineName EngInterp}), NOT the native backend — report as \"passes under eval\", never unqualified (#81)."
+  | mcpTestEngineHasNative engines =
+    "Results include the NATIVE backend engine (not just the interpreter) — a native-only miscompile is observed here."
+  | otherwise =
+    "⚠️ RESULTS ARE UNDER THE INTERPRETER (\{engineName EngInterp}), NOT the native backend — report as \"passes under eval\", never unqualified (#81)."
 
 mcpTestDescription : String
-mcpTestDescription = "FIRST CHOICE for running a file's doctests/property tests instead of `medaka test` via Bash. Give `file`. \{mcpTestCaveat mcpTestEngines} Bare `test \"…\"` decls are NOT run here."
+mcpTestDescription =
+  "FIRST CHOICE for running a file's doctests/property tests instead of `medaka test` via Bash. Give `file`. \{mcpTestCaveat mcpTestEngines} Bare `test \"…\"` decls are NOT run here."
 
 -- inputSchema: `file` (path), required.
 medakaTestSchema : Json
-medakaTestSchema = jObject
-  [
-    ("type", JString "object"),
-    (
-      "properties",
-      jObject [
-        (
-          "file",
-          jObject [
-            ("type", JString "string"),
-            (
-              "description",
-              JString "Path to the .mdk file whose doctests (and property tests, if any) to run.",
-            ),
-          ],
-        )
-      ],
-    ),
-    ("required", jArray [JString "file"]),
-  ]
+medakaTestSchema = jObject [
+  ("type", JString "object"),
+  (
+    "properties",
+    jObject [
+      (
+        "file",
+        jObject [
+          ("type", JString "string"),
+          (
+            "description",
+            JString
+              "Path to the .mdk file whose doctests (and property tests, if any) to run.",
+          ),
+        ],
+      ),
+    ],
+  ),
+  ("required", jArray [JString "file"]),
+]
 
 -- The per-example fields, keyed by outcome.  A smoke example (no expected line)
 -- that evaluated cleanly is `Pass` with no expected/actual; a `Fail` carries
@@ -1244,17 +1399,17 @@ exResultFields (Errored msg) =
 exampleJson : (Example, ExResult) -> Json
 exampleJson (ex, res) =
   jObject
-    ([("line", JInt (exampleLine ex)), ("input", JString (exampleInput ex))] ++ exResultFields res)
+    ([("line", JInt (exampleLine ex)), ("input", JString (exampleInput ex))]
+      ++ exResultFields res)
 
 doctestsJson : RunResult -> Json
-doctestsJson run = jObject
-  [
-    ("total", JInt (runPassed run + runFailed run + runErrors run)),
-    ("passed", JInt (runPassed run)),
-    ("failed", JInt (runFailed run)),
-    ("errors", JInt (runErrors run)),
-    ("examples", jArray (map exampleJson (runDetails run))),
-  ]
+doctestsJson run = jObject [
+  ("total", JInt (runPassed run + runFailed run + runErrors run)),
+  ("passed", JInt (runPassed run)),
+  ("failed", JInt (runFailed run)),
+  ("errors", JInt (runErrors run)),
+  ("examples", jArray (map exampleJson (runDetails run))),
+]
 
 propJson : PropResult -> Json
 -- Structurally identical to medaka_cli.mdk's `cliTestReportJson`-side
@@ -1262,25 +1417,24 @@ propJson : PropResult -> Json
 -- same `PropResult` shape for their own independent JSON envelope; neither
 -- module imports the other, so not worth a shared module for one 5-line fn.
 -- lint-disable-next-line rule-duplicate-body
-propJson p = jObject
-  [
-    ("name", JString (propResultName p)),
-    ("status", JString (if propResultPassed p then "pass" else "fail")),
-    ("detail", JString (propResultDetail p)),
-  ]
+propJson p = jObject [
+  ("name", JString (propResultName p)),
+  ("status", JString (if propResultPassed p then "pass" else "fail")),
+  ("detail", JString (propResultDetail p)),
+]
 
 allPropsPass : List PropResult -> Bool
 allPropsPass [] = True
-allPropsPass (p::rest) = propResultPassed p && allPropsPass rest
+allPropsPass (p :: rest) = propResultPassed p && allPropsPass rest
 
 countPassProps : List PropResult -> Int
 countPassProps [] = 0
-countPassProps (p::rest) =
+countPassProps (p :: rest) =
   (if propResultPassed p then 1 else 0) + countPassProps rest
 
 countFailProps : List PropResult -> Int
 countFailProps [] = 0
-countFailProps (p::rest) =
+countFailProps (p :: rest) =
   (if propResultPassed p then 0 else 1) + countFailProps rest
 
 -- The first (today: only) doctest run, keyed off whichever engine actually
@@ -1288,7 +1442,7 @@ countFailProps (p::rest) =
 -- that produced it, so this never has to assume which one that was.
 primaryDoctestRun : List (Engine, RunResult) -> RunResult
 primaryDoctestRun [] = RunResult 0 0 0 0 []
-primaryDoctestRun ((_, run)::_) = run
+primaryDoctestRun ((_, run) :: _) = run
 
 -- The run OVERALL passed iff the module type-checked (or was exempted, #1443)
 -- AND every engine's doctest run and every property passed.  Drives both the
@@ -1296,30 +1450,31 @@ primaryDoctestRun ((_, run)::_) = run
 -- means doctests/props never ran (mirrors `runTestReport`'s gate short-
 -- circuit), so it alone forces `False` regardless of `runs`/`props` (both are
 -- empty in that case anyway).
-testReportOk : Option String -> List (Engine, RunResult) -> List PropResult -> Bool
-testReportOk typeError runs props = isNone typeError
-  && allDoctestRunsOk runs
-  && allPropsPass props
+testReportOk : Option String ->
+  List (Engine, RunResult) ->
+  List PropResult ->
+  Bool
+testReportOk typeError runs props =
+  isNone typeError && allDoctestRunsOk runs && allPropsPass props
 
 allDoctestRunsOk : List (Engine, RunResult) -> Bool
 allDoctestRunsOk [] = True
-allDoctestRunsOk ((_, run)::rest) = runFailed run == 0
-  && runErrors run == 0
-  && allDoctestRunsOk rest
+allDoctestRunsOk ((_, run) :: rest) =
+  runFailed run == 0 && runErrors run == 0 && allDoctestRunsOk rest
 
 -- The engine name(s) that actually produced `runs` — DERIVED, never a literal
 -- "eval": a hardcoded string would silently start lying the day this tool
 -- runs more than the interpreter.
 doctestRunEngineNames : List (Engine, RunResult) -> List Engine
 doctestRunEngineNames [] = []
-doctestRunEngineNames ((e, _)::rest) = e :: doctestRunEngineNames rest
+doctestRunEngineNames ((e, _) :: rest) = e :: doctestRunEngineNames rest
 
 -- Today `runs` is always a singleton (`mcpTestEngines == [EngInterp]`), so the
 -- top-level "engine" field is that one engine's name — derived from the list
 -- that actually ran, never a bare literal.
 primaryEngineName : List Engine -> String
 primaryEngineName [] = "unknown"
-primaryEngineName (e::_) = engineName e
+primaryEngineName (e :: _) = engineName e
 
 -- #1443: present iff `runTestReport`'s typecheck gate rejected the module —
 -- `doctests`/`properties`/`summary` are then the untouched empty defaults
@@ -1351,35 +1506,44 @@ typecheckSkippedField True = [("typecheckSkipped", JBool True)]
 -- engines that WOULD have run (`mcpTestEngines`) when a type error short-
 -- circuited the run before any engine touched it (`runs` is `[]` there, so
 -- `doctestRunEngineNames runs` would wrongly read "unknown").
-testReportJson : String -> Option String -> List (Engine, RunResult) -> List PropResult -> Bool -> Json
+testReportJson : String ->
+  Option String ->
+  List (Engine, RunResult) ->
+  List PropResult ->
+  Bool ->
+  Json
 testReportJson path typeError runs props typecheckSkipped =
-  let engines = if isNone typeError then
-    doctestRunEngineNames runs
-  else
-    mcpTestEngines
+  let engines =
+    if isNone typeError then doctestRunEngineNames runs else mcpTestEngines
   jObject
     ([
-      ("file", JString path),
-      ("engine", JString (primaryEngineName engines)),
-      ("note", JString (mcpTestCaveat engines)),
-    ] ++ typeErrorField typeError ++ typecheckSkippedField typecheckSkipped ++ [
-      ("doctests", doctestsJson (primaryDoctestRun runs)),
-      ("properties", jArray (map propJson props)),
-      (
-        "summary",
-        jObject [
-          (
-            "passed",
-            JInt (runPassed (primaryDoctestRun runs) + countPassProps props),
-          ),
-          (
-            "failed",
-            JInt (runFailed (primaryDoctestRun runs) + runErrors (primaryDoctestRun runs) + countFailProps props),
-          ),
-          ("ok", JBool (testReportOk typeError runs props)),
-        ],
-      ),
-    ])
+        ("file", JString path),
+        ("engine", JString (primaryEngineName engines)),
+        ("note", JString (mcpTestCaveat engines)),
+      ]
+      ++ typeErrorField typeError
+      ++ typecheckSkippedField typecheckSkipped
+      ++ [
+        ("doctests", doctestsJson (primaryDoctestRun runs)),
+        ("properties", jArray (map propJson props)),
+        (
+          "summary",
+          jObject [
+            (
+              "passed",
+              JInt (runPassed (primaryDoctestRun runs) + countPassProps props),
+            ),
+            (
+              "failed",
+              JInt
+                (runFailed (primaryDoctestRun runs)
+                  + runErrors (primaryDoctestRun runs)
+                  + countFailProps props),
+            ),
+            ("ok", JBool (testReportOk typeError runs props)),
+          ],
+        ),
+      ])
 
 -- medaka_test handler: read `file`, run its doctests + props through the
 -- non-printing structured reporter (tools.test_cmd.runTestReport), and return
@@ -1391,9 +1555,13 @@ testReportJson path typeError runs props typecheckSkipped =
 -- `note`, DERIVED from `mcpTestEngines` — see the tool description too.
 runTestTool : String -> String -> String -> Json -> <IO> Json
 runTestTool runtimeSrc coreSrc stdlibDir args = match fieldStr "file" args
-  None => toolArgError "medaka_test: missing or invalid argument — require 'file' (string)"
+  None =>
+    toolArgError
+      "medaka_test: missing or invalid argument — require 'file' (string)"
   Some path => match readFile path
-    Err e => toolArgError (stringConcat ["medaka_test: cannot read file '", path, "': ", e])
+    Err e =>
+      toolArgError
+        (stringConcat ["medaka_test: cannot read file '", path, "': ", e])
     Ok tsrc =>
       -- #2295 (d): `runTestReport` also returns the `test "…"` phase's
       -- structured results (a 4th tuple element, for `medaka test --json`'s
@@ -1403,25 +1571,47 @@ runTestTool runtimeSrc coreSrc stdlibDir args = match fieldStr "file" args
       -- False`, which (F3) also means the test-decl phase is never EVALUATED
       -- here, not merely unreported — a panicking `test "…"` decl in the
       -- target file can no longer crash the MCP server on this path.
-      let (typeError, runs, props, _testResults, typecheckSkipped) = runTestReport mcpTestEngines runtimeSrc coreSrc path tsrc stdlibDir 100 None False
+      let (typeError, runs, props, _testResults, typecheckSkipped) =
+        runTestReport
+          mcpTestEngines
+          runtimeSrc
+          coreSrc
+          path
+          tsrc
+          stdlibDir
+          100
+          None
+          False
       toolTextResult
         (stringify (testReportJson path typeError runs props typecheckSkipped))
         (not (testReportOk typeError runs props))
 
 -- ── tools/call handler ───────────────────────────────────────────────────────
 
-handleToolsCall : String -> String -> String -> Json -> Json -> (Unit -> <IO> Option String) -> <IO> Unit
-handleToolsCall runtimeSrc coreSrc stdlibDir idJson params stalenessCheck = match fieldStr "name" params
-  None =>
-    writeMessage (errorMsg idJson (0 - 32602) "tools/call: missing 'name'")
-  Some name =>
-    let args = fieldOr "arguments" params
-    let _ = logMcpCall "tools/call" name (stringify args)
-    match callTool runtimeSrc coreSrc stdlibDir name args
-      None => writeMessage (errorMsg idJson (0 - 32601) (stringConcat ["Unknown tool: ", name]))
-      Some result =>
-        let augmented = attachStaleness stalenessCheck result
-        writeMessage (responseMsg idJson augmented)
+handleToolsCall : String ->
+  String ->
+  String ->
+  Json ->
+  Json ->
+  (Unit -> <IO> Option String) ->
+  <IO> Unit
+handleToolsCall runtimeSrc coreSrc stdlibDir idJson params stalenessCheck =
+  match fieldStr "name" params
+    None =>
+      writeMessage (errorMsg idJson (0 - 32602) "tools/call: missing 'name'")
+    Some name =>
+      let args = fieldOr "arguments" params
+      let _ = logMcpCall "tools/call" name (stringify args)
+      match callTool runtimeSrc coreSrc stdlibDir name args
+        None =>
+          writeMessage
+            (errorMsg
+              idJson
+              (0 - 32601)
+              (stringConcat ["Unknown tool: ", name]))
+        Some result =>
+          let augmented = attachStaleness stalenessCheck result
+          writeMessage (responseMsg idJson augmented)
 
 -- ── request dispatch ─────────────────────────────────────────────────────────
 
@@ -1435,54 +1625,93 @@ handleToolsCall runtimeSrc coreSrc stdlibDir idJson params stalenessCheck = matc
 -- *notification* is ignored.  A top-level batch array (`[{...},{...}]`) is not
 -- a supported transport shape here — it gets one Invalid Request error rather
 -- than being silently dropped.
-dispatchMsg : String -> String -> String -> Json -> (Unit -> <IO> Option String) -> String -> <IO> Unit
-dispatchMsg runtimeSrc coreSrc stdlibDir msg stalenessCheck serverVersion = match asArray msg
-  Some _ => writeMessage
-    (errorMsg JNull (0 - 32600) "Invalid Request: batch requests are not supported")
-  None => match methodOf msg
-    None => logMcp "ignored: message has no string 'method' field"
-    Some meth =>
-      let params = fieldOr "params" msg
-      -- tools/call gets its own richer line (tool name + args) inside
-      -- handleToolsCall — don't double-log it here.
-      let _ = if meth == "tools/call" then unit else logMcpCall meth "" ""
-      if meth == "notifications/initialized" then unit
-      else match get "id" msg
-        None => unit -- notification: no response for ANY method
-        Some idJson =>
-          if meth == "initialize" then
-            writeMessage (responseMsg idJson (initializeResultFor (negotiateVersion msg) serverVersion))
-          else
-            if meth == "ping" then writeMessage (responseMsg idJson (jObject []))
+dispatchMsg : String ->
+  String ->
+  String ->
+  Json ->
+  (Unit -> <IO> Option String) ->
+  String ->
+  <IO> Unit
+dispatchMsg runtimeSrc coreSrc stdlibDir msg stalenessCheck serverVersion =
+  match asArray msg
+    Some _ =>
+      writeMessage
+        (errorMsg
+          JNull
+          (0 - 32600)
+          "Invalid Request: batch requests are not supported")
+    None => match methodOf msg
+      None => logMcp "ignored: message has no string 'method' field"
+      Some meth =>
+        let params = fieldOr "params" msg
+        -- tools/call gets its own richer line (tool name + args) inside
+        -- handleToolsCall — don't double-log it here.
+        let _ = if meth == "tools/call" then unit else logMcpCall meth "" ""
+        if meth == "notifications/initialized" then
+          unit
+        else match get "id" msg
+          None => unit  -- notification: no response for ANY method
+          Some idJson =>
+            if meth == "initialize" then
+              writeMessage
+                (responseMsg
+                  idJson
+                  (initializeResultFor (negotiateVersion msg) serverVersion))
+            else if meth == "ping" then
+              writeMessage (responseMsg idJson (jObject []))
+            else if meth == "shutdown" then
+              writeMessage (responseMsg idJson (jObject []))
+            else if meth == "tools/list" then
+              writeMessage (responseMsg idJson toolsListResult)
+            else if meth == "tools/call" then
+              handleToolsCall
+                runtimeSrc
+                coreSrc
+                stdlibDir
+                idJson
+                params
+                stalenessCheck
             else
-              if meth == "shutdown" then writeMessage (responseMsg idJson (jObject []))
-              else
-                if meth == "tools/list" then writeMessage (responseMsg idJson toolsListResult)
-                else
-                  if meth == "tools/call" then
-                    handleToolsCall runtimeSrc coreSrc stdlibDir idJson params stalenessCheck
-                  else writeMessage
-                    (errorMsg idJson (0 - 32601) (stringConcat ["Method not found: ", meth]))
+              writeMessage
+                (errorMsg
+                  idJson
+                  (0 - 32601)
+                  (stringConcat ["Method not found: ", meth]))
 
 -- ── read loop ────────────────────────────────────────────────────────────────
 
 -- Parse and dispatch one input line.  Blank lines and malformed JSON are logged
 -- to stderr and skipped, never crashing the stream.
-handleLine : String -> String -> String -> String -> (Unit -> <IO> Option String) -> String -> <IO> Unit
+handleLine : String ->
+  String ->
+  String ->
+  String ->
+  (Unit -> <IO> Option String) ->
+  String ->
+  <IO> Unit
 handleLine runtimeSrc coreSrc stdlibDir raw stalenessCheck serverVersion =
   let line = stripCR raw
-  if line == "" then unit
+  if line == "" then
+    unit
   else match parse line
     Err e => logMcp (stringConcat ["parse error (skipped): ", e])
-    Ok msg => dispatchMsg runtimeSrc coreSrc stdlibDir msg stalenessCheck serverVersion
+    Ok msg =>
+      dispatchMsg runtimeSrc coreSrc stdlibDir msg stalenessCheck serverVersion
 
 -- The session loop: one JSON object per line until stdin EOF (clean shutdown).
-serveLoop : String -> String -> String -> (Unit -> <IO> Option String) -> String -> <IO> Unit
-serveLoop runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion = match readLineOpt ()
-  None => unit
-  Some raw =>
-    let _ = handleLine runtimeSrc coreSrc stdlibDir raw stalenessCheck serverVersion
-    serveLoop runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion
+serveLoop : String ->
+  String ->
+  String ->
+  (Unit -> <IO> Option String) ->
+  String ->
+  <IO> Unit
+serveLoop runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
+  match readLineOpt ()
+    None => unit
+    Some raw =>
+      let _ =
+        handleLine runtimeSrc coreSrc stdlibDir raw stalenessCheck serverVersion
+      serveLoop runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion
 
 -- Public entry point for the driver (`runMcpCmd` in medaka_cli.mdk).  The prelude
 -- sources + stdlib dir are threaded in so tools can run the compiler pipeline
@@ -1492,7 +1721,12 @@ serveLoop runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion = match read
 -- `serverVersion` is medaka_cli.mdk's bare `medakaVersion` literal (issue
 -- #74 W8), threaded down the same way rather than restating a literal here.
 export
-runMcpServer : String -> String -> String -> (Unit -> <IO> Option String) -> String -> <IO> Unit
+runMcpServer : String ->
+  String ->
+  String ->
+  (Unit -> <IO> Option String) ->
+  String ->
+  <IO> Unit
 runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
   let _ = logMcp "medaka mcp server start"
   serveLoop runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion

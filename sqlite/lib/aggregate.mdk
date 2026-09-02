@@ -124,14 +124,13 @@ aggExpr (AggMax c) = EAgg FnMax (Some (ECol c))
 
 -- | An aggregate query: source table, optional WHERE, GROUP BY columns (empty =
 --   whole-table single group), the aggregate select-list, optional HAVING.
-public export data AggQuery =
-  | AggQuery {
-      from : String,
-      where_ : Option SqlExpr,
-      groupBy : List String,
-      aggs : List Agg,
-      having : Option SqlExpr,
-    }
+public export data AggQuery = AggQuery {
+  from : String,
+  where_ : Option SqlExpr,
+  groupBy : List String,
+  aggs : List Agg,
+  having : Option SqlExpr,
+}
 
 -- | A bare aggregate query over a table with an aggregate select-list, no
 --   WHERE / GROUP BY / HAVING.
@@ -209,7 +208,10 @@ export
 toSelect : AggQuery -> Select
 toSelect (AggQuery { from = tbl, where_ = w, groupBy = gcols, aggs = aggs, having = h }) =
   let keyExprs = map ECol gcols
-  let base = withColumns (keyExprs ++ map aggExpr aggs) (withGroupExprs keyExprs (selectFrom tbl))
+  let base =
+    withColumns
+      (keyExprs ++ map aggExpr aggs)
+      (withGroupExprs keyExprs (selectFrom tbl))
   applyHaving aggs h (applyWhere w base)
 
 applyWhere : Option SqlExpr -> Select -> Select
@@ -243,11 +245,8 @@ substAggNames aggs (ENotNull e) = ENotNull (substAggNames aggs e)
 
 findAggByName : List Agg -> String -> Option Agg
 findAggByName [] _ = None
-findAggByName (a::rest) name =
-  if aggName a == name then
-    Some a
-  else
-    findAggByName rest name
+findAggByName (a :: rest) name =
+  if aggName a == name then Some a else findAggByName rest name
 
 -- ---------------------------------------------------------------------------
 -- queryAgg : now just "lower, then run the one engine"
