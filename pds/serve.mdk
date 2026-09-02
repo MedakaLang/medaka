@@ -1,0 +1,206 @@
+{- | `pds/serve.mdk` — the PDS entry point: admit a configuration, rehydrate the
+   account repository from disk, bind the loopback listener, and serve.
+
+   Every configuration value arrives as a command-line flag and is admitted
+   before anything is bound: a bad DID, handle, or hostname is rejected by
+   `lib.server_core`'s `makeAccount`, an unreadable or non-hex signing key by
+   `readSecretBytes`, a data directory that is not a directory by `requireDir`,
+   and a repository whose head does not verify under the configured key by
+   `lib.repo`'s `repoFromBlocks`. Every one of those exits nonzero. There is no
+   default for any of them, so a misconfigured server never starts serving
+   something other than what was asked for.
+
+   The bind address is not configurable at all: `shell.server`'s `bindLoopback`
+   takes only a port.
+
+   The signing key is read here and handed to `lib.repo`, which is the only
+   thing that needs it, and to nothing else. It is never printed, and neither is
+   the `Store` that transitively holds it. -}
+
+import args.{
+  Args,
+  ArgSpec,
+  flag,
+  flagValue,
+  intValue,
+  parseArgs,
+  spec,
+  switch,
+  value,
+}
+import async.{Async, liftIO}
+import fs.{isDir}
+import hex.{decode}
+import lib.handlers.{pdsServer}
+import lib.repo.{
+  Repo,
+  repoCommitCid,
+  repoExportBlocks,
+  repoFromBlocks,
+  repoInitFromKeyBytes,
+  repoLatestCommit,
+}
+import lib.server_core.{Server, makeAccount}
+import lib.sign.{SecretKey, secretKeyFromBytes}
+import lib.store.{Store, storeFromRepo}
+import lib.tid.{Tid, tidEncode}
+import net.{Listener, listenPort}
+import shell.persist.{persistLoad, persistSave}
+import shell.server.{bindLoopback, runServer}
+import string.{toInt, trim}
+import time.{now}
+
+serveSpec : ArgSpec
+serveSpec = spec "serve" [
+  value ["--did"] "DID" "the repository owner's DID",
+  value ["--handle"] "HANDLE" "the repository owner's handle",
+  value ["--hostname"] "HOST" "this PDS's own hostname",
+  value ["--key"] "PATH" "file holding the hex-encoded secp256k1 signing key",
+  value ["--data"] "DIR" "existing directory holding the persisted repository",
+  intValue ["--port"] "N" "loopback TCP port to bind; 0 picks a free one",
+  switch ["--init"] "create the genesis repository in an empty data directory",
+]
+
+abort : String -> <Stderr> Unit
+abort message =
+  let () = ePutStrLn message
+  exit 1
+
+required : String -> Args -> Result String String
+required name parsed = match flagValue name parsed
+  Some given => Ok given
+  None => Err "missing required flag \{name}"
+
+requiredPort : Args -> Result String Int
+requiredPort parsed = do
+  text <- required "--port" parsed
+  match toInt text
+    None => Err "--port is not an integer: \{text}"
+    Some port =>
+      if port < 0 || port > 65535 then
+        Err "--port must be in 0..65535"
+      else
+        Ok port
+
+-- The key never reaches a diagnostic: the read error names the path, and
+-- `hex.decode`'s own messages do not echo what they were given.
+readSecretBytes : String -> <FileRead "_"> Result String (Array Int)
+readSecretBytes path = do
+  text <- match readFile path
+    Err message => Err "unreadable signing key \{path}: \{message}"
+    Ok given => Ok given
+  match decode (trim text)
+    Err message => Err "signing key \{path} is not hex: \{message}"
+    Ok bytes => Ok bytes
+
+requireDir : String -> <FileRead "_"> Result String Unit
+requireDir dir = match isDir dir
+  Err message => Err "data directory \{dir}: \{message}"
+  Ok False => Err "data directory \{dir} is not a directory"
+  Ok True => Ok ()
+
+genesisTid : Unit -> <Clock> Result String Tid
+genesisTid u = tidEncode (floatToInt (now u * 1000000.0)) 0
+
+{- | Create and persist the genesis repository. `--init` refuses a directory
+   that already holds one rather than writing over it, so a rerun of a serving
+   command cannot silently discard an account's history. -}
+initRepo : String ->
+  String ->
+  Array Int ->
+  <Clock, FileRead "_", FileWrite "_"> Result String Repo
+initRepo dir did keyBytes = do
+  genesis <- genesisTid ()
+  repo <- repoInitFromKeyBytes did keyBytes genesis
+  blocks <- repoExportBlocks repo
+  () <- persistSave dir (repoCommitCid (repoLatestCommit repo)) blocks
+  Ok repo
+
+loadRepo : String -> String -> SecretKey -> <FileRead "_"> Result String Repo
+loadRepo dir did secret = do
+  (head, blocks) <- persistLoad dir
+  repoFromBlocks did secret head blocks
+
+openRepo : Bool ->
+  String ->
+  String ->
+  Array Int ->
+  SecretKey ->
+  <Clock, FileRead "_", FileWrite "_"> Result String Repo
+openRepo False dir did _ secret = loadRepo dir did secret
+openRepo True dir did keyBytes secret = match loadRepo dir did secret
+  Ok _ => Err "--init refuses \{dir}: it already holds a repository"
+  Err _ => initRepo dir did keyBytes
+
+{- | Everything the server needs, or the first reason it may not run: the
+   configured server, its initial store, the data directory, and the port. -}
+configure : Args ->
+  <Clock, FileRead "_", FileWrite "_"> Result String (Server, Store, String, Int)
+configure parsed = do
+  did <- required "--did" parsed
+  handle <- required "--handle" parsed
+  hostname <- required "--hostname" parsed
+  keyPath <- required "--key" parsed
+  dir <- required "--data" parsed
+  port <- requiredPort parsed
+  account <- makeAccount did handle hostname
+  server <- pdsServer account
+  keyBytes <- readSecretBytes keyPath
+  secret <- secretKeyFromBytes keyBytes
+  () <- requireDir dir
+  repo <- openRepo (flag "--init" parsed) dir did keyBytes secret
+  Ok (server, storeFromRepo repo, dir, port)
+
+-- The readiness line is flushed explicitly: stdout is block-buffered when it is
+-- a pipe or a file, and a supervisor that waits for this line before connecting
+-- would otherwise wait for a process that never exits.
+ready : Int -> <Stdout> Unit
+ready port =
+  let () = putStrLn "serve: listening on 127.0.0.1:\{intToString port}"
+  flushStdout ()
+
+reportOutcome : Result String Unit -> <Stderr> Unit
+reportOutcome (Ok ()) = ()
+reportOutcome (Err message) = abort "serve: accept loop ended: \{message}"
+
+announce : Int ->
+  Listener ->
+  Store ->
+  String ->
+  Server ->
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Stderr, Stdout | e> Unit
+announce port lis store dir server = defer
+  _ <- liftIO (u => ready port)
+  storeRef <- liftIO (u => Ref store)
+  outcome <- runServer server dir storeRef lis
+  liftIO (u => reportOutcome outcome)
+
+bound : Server ->
+  Store ->
+  String ->
+  Result String Listener ->
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Stderr, Stdout | e> Unit
+bound _ _ _ (Err message) = liftIO (u => abort "serve: bind failed: \{message}")
+bound server store dir (Ok lis) = defer
+  port <- liftIO (u => listenPort lis)
+  match port
+    Err message =>
+      liftIO (u => abort "serve: listener port unavailable: \{message}")
+    Ok given => announce given lis store dir server
+
+start : Result String (Server, Store, String, Int) ->
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Stderr, Stdout | e> Unit
+start (Err message) = liftIO (u => abort "serve: \{message}")
+start (Ok (server, store, dir, port)) = defer
+  listener <- liftIO (u => bindLoopback port)
+  bound server store dir listener
+
+main : Async <Clock, Env, FileRead "_", FileWrite "_", Net "_", Stderr, Stdout> Unit
+main = defer
+  argv <- liftIO (u => args ())
+  match parseArgs serveSpec argv
+    -- `args` already renders a finished sentence naming the verb.
+    Err message => liftIO (u => abort message)
+    Ok parsed => defer
+      configured <- liftIO (u => configure parsed)
+      start configured

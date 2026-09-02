@@ -7,7 +7,7 @@ covers strict secp256k1 signing and `did:key`, canonical DAG-CBOR/CIDs, the
 atproto MST, verified CAR/block storage, signed repository transitions, strict
 HTTP/1.1 framing, structural XRPC routing, explicit immutable handler state, and
 the nine atproto record/sync/identity endpoints plus the two well-known paths.
-Phase 3's socket shell is next but remains dependency-gated; see
+Phase 3's socket shell now serves that core over a loopback listener; see
 `docs/design/ATPROTO-PDS-DESIGN.md` for the full design.
 
 ## Layout
@@ -33,23 +33,34 @@ Phase 3's socket shell is next but remains dependency-gated; see
   `sync.getLatestCommit`/`identity.resolveHandle`), and the two non-XRPC
   well-known paths.
 - `pds/shell/` — native-only effectful adapters. `pds/shell/blockfile.mdk`
-  stores blocks as flat sharded CID-to-bytes files (design row P7) and
+  stores blocks as flat sharded CID-to-bytes files (design row P7),
   `pds/shell/persist.mdk` persists and reloads the account repository's head
-  commit. The dependency runs one way only: a shell module may import
-  `pds/lib/`, and no `pds/lib/` module may ever import `pds/shell/` — the pure
-  core performs no I/O (P14), so reconstruction logic lives in
-  `pds/lib/repo.mdk`'s `repoFromBlocks` and the shell stays a thin effectful
-  wrapper. Nothing here takes a `Repo` or a `SecretKey`, so no signing key can
-  reach a file through it.
+  commit, and `pds/shell/server.mdk` is the loopback accept loop and the
+  per-connection HTTP/1.1 lifecycle. The dependency runs one way only: a shell
+  module may import `pds/lib/`, and no `pds/lib/` module may ever import
+  `pds/shell/` — the pure core performs no I/O (P14), so reconstruction logic
+  lives in `pds/lib/repo.mdk`'s `repoFromBlocks` and the shell stays a thin
+  effectful wrapper. No signing key can reach a file through this directory:
+  nothing here takes a `SecretKey`, `blockfile.mdk` and `persist.mdk` take
+  neither a `SecretKey` nor a `Repo`, and `server.mdk` reaches a `Repo` only to
+  export the block graph the account's own head already names.
+- `pds/serve.mdk` — the entry point. It admits every configuration value before
+  binding anything, rehydrates the repository from disk under the configured
+  signing key, and hands `pds/shell/server.mdk` a listener and the one
+  `Ref Store` all connection tasks share. Its `main` is an `Async` value, so
+  `medaka build pds/serve.mdk` produces a program the async scheduler drives.
+  The bind address is not configurable: `bindLoopback` takes a port and the
+  address is a literal.
 - `pds/test/` — in-language `medaka test` suites (`*_test.mdk`) plus gate
   scripts that run them (`*.sh`). Every gate must be placed explicitly in
   exactly one `ci.yml` shard by measured cost; directory location alone does
   not enroll it.
 
-`pds/medaka.toml` intentionally has no `entry` key and there is no
-`pds/main.mdk`: the manifest reader (`compiler/driver/loader.mdk`) never
-reads `entry` — its only job is to mark the project root so `pds/test/*.mdk`
-can `import lib.<mod>`.
+`pds/medaka.toml` intentionally has no `entry` key: the manifest reader
+(`compiler/driver/loader.mdk`) never reads `entry` — its only job is to mark
+the project root so `pds/test/*.mdk` and `pds/serve.mdk` can
+`import lib.<mod>`. `pds/serve.mdk` is therefore named by path, not by the
+manifest, and is not called `pds/main.mdk` for that reason.
 
 ## Running the gate locally
 
