@@ -109,7 +109,14 @@ import driver.diagnostics.{
   Diag,
   diagIsError,
 }
-import support.util.{listLen, joinNl, isNonEmptyL, filterList, endsWith}
+import support.util.{
+  listLen,
+  joinNl,
+  isNonEmptyL,
+  filterList,
+  endsWith,
+  splitOnChar,
+}
 import support.path.{dirOf}
 
 -- `medaka test --filter <substring>`: does `needle` occur anywhere in
@@ -257,7 +264,7 @@ runTest engines runtimeP coreP target roots cases filterOpt = match readPreludeF
 -- convention (AGENTS.md) so a compiler-/stdlib-internal test sibling is always
 -- type-checked, never silently swallowed the way `test/ported/*.mdk` and
 -- `sqlite/test/*_test.mdk` deliberately still are.
-typecheckExempt : String -> List Decl -> String -> Bool
+typecheckExempt : String -> List Decl -> String -> <IO> Bool
 typecheckExempt target userDecls tsrc
   | isNonEmptyL (extractExamples (collectComments tsrc)) = False
   | isNewVehiclePath target = False
@@ -270,9 +277,35 @@ typecheckExempt target userDecls tsrc
 -- convention, share only the suffix, and keep the exemption unchanged.  Scoped
 -- by PATH so the two `_test.mdk` families stay distinguishable: suffix alone
 -- cannot tell them apart.
-isNewVehiclePath : String -> Bool
-isNewVehiclePath target = endsWith "_test.mdk" target
-  && (substringMatch "compiler/" target || substringMatch "stdlib/" target)
+--
+-- The path test is a `/`-delimited SEGMENT match over the CANONICALIZED target,
+-- not a substring test over the string the CLI was handed.  Both halves are
+-- load-bearing, and a bare `substringMatch "compiler/"` got each one wrong in
+-- the opposite direction:
+--   • canonicalization, because the classification must not depend on the
+--     invocation FORM.  `medaka test compiler/types/x_test.mdk` and, from
+--     inside that directory, `medaka test x_test.mdk` name the same module; the
+--     second carries no `compiler/` substring, so the substring form silently
+--     re-exempted the file the convention exists to guard.
+--   • segment matching, because `compiler`/`stdlib` must be real path
+--     components.  A tree under `…/mycompiler/…` or `…/newstdlib/…` contains
+--     the substring without containing the directory, and the substring form
+--     newly type-checked files (the sqlite corpus among them) that are
+--     deliberately exempt.
+-- `canonicalizePath` returns its input unchanged on an unresolvable path, so an
+-- already-relative, already-`compiler/`-rooted target still classifies the same.
+isNewVehiclePath : String -> <IO> Bool
+isNewVehiclePath target =
+  if endsWith "_test.mdk" target then
+    hasVehicleSegment (canonicalizePath target)
+  else
+    False
+
+-- Is `compiler` or `stdlib` a whole `/`-delimited component of `path`?
+hasVehicleSegment : String -> Bool
+hasVehicleSegment path = isNonEmptyL (filterList
+  (seg => seg == "compiler" || seg == "stdlib")
+  (splitOnChar '/' path))
 
 doctestGate : String -> List String -> String -> String -> String -> List Decl -> <IO> Option String
 doctestGate target roots rsrc csrc tsrc userDecls

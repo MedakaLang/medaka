@@ -94,6 +94,11 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 pass=0; fail=0
 
+# The working directory each cell's `medaka test` runs in. Every cell but q names
+# an absolute target, so "." reproduces the pre-q behaviour exactly; q sets it to
+# the fixture's own directory because the INVOCATION FORM is what that cell pins.
+CASE_DIR="."
+
 # ── fixtures ─────────────────────────────────────────────────────────────────
 # a: zero doctests, zero test/prop decls, does not typecheck (issue #1229's own repro).
 cat > "$TMP/a_nodoc_broken.mdk" <<'EOF'
@@ -180,6 +185,36 @@ f x = x + 1
 test "t" = f "x" == 3
 EOF
 
+# q/r/s: issue #2513 (isNewVehiclePath path-narrowing) — the narrowing decides on
+# CANONICALIZED PATH COMPONENTS, not on a substring of the string the CLI was
+# handed. n/o/p only ever exercise an absolute `$TMP/compiler/...` target, which is
+# the one shape a bare `substringMatch "compiler/"` gets right, so they were blind
+# to both directions of the substring bug.
+#   q  the SAME vehicle as n, named RELATIVELY from inside its own directory. The
+#      target string carries no `compiler/` at all, so the substring form re-exempted
+#      it — silently reopening the very hole the narrowing exists to close, for every
+#      human or agent who runs `medaka test` from inside the directory they are
+#      editing. Must fail identically to n.
+#   r/s the inverse leak: `compiler`/`stdlib` occurring as a substring of a directory
+#      NAME rather than as a component. `mycompiler/` and `newstdlib/` are not the
+#      tree's `compiler/`/`stdlib/`, so a file under them keeps the exemption exactly
+#      as `sqlite/test/*_test.mdk` does (cell p's shape) — the substring form started
+#      type-checking them. One cell per disjunct, for the same reason n and o are
+#      separate.
+mkdir -p "$TMP/mycompiler/sqlite/test" "$TMP/newstdlib"
+cat > "$TMP/mycompiler/sqlite/test/r_substring_not_component_test.mdk" <<'EOF'
+f : Int -> Int
+f x = x + 1
+
+test "t" = f "x" == 3
+EOF
+cat > "$TMP/newstdlib/s_substring_not_component_test.mdk" <<'EOF'
+f : Int -> Int
+f x = x + 1
+
+test "t" = f "x" == 3
+EOF
+
 # j: a module carrying BOTH a doctest and a `test "…"` decl. Doctest presence WINS
 # (the first guard), so this module IS type-checked — and therefore must NOT announce
 # a skip. It is the negative control for the announcement: a version that printed the
@@ -222,7 +257,7 @@ EOF
 run_case() {
   name="$1"; target="$2"; want_code="$3"; shift 3
   out="$TMP/$name.out"
-  "$MEDAKA" test "$target" > "$out" 2>&1
+  ( cd "$CASE_DIR" || exit 99; "$MEDAKA" test "$target" ) > "$out" 2>&1
   got_code=$?
 
   if [ "$got_code" -ne "$want_code" ]; then
@@ -251,7 +286,7 @@ run_case() {
 refute_case() {
   name="$1"; target="$2"; want_code="$3"; shift 3
   out="$TMP/$name.out"
-  "$MEDAKA" test "$target" > "$out" 2>&1
+  ( cd "$CASE_DIR" || exit 99; "$MEDAKA" test "$target" ) > "$out" 2>&1
   got_code=$?
 
   if [ "$got_code" -ne "$want_code" ]; then
@@ -339,6 +374,21 @@ run_case 'o narrowing: stdlib-prefix vehicle no longer exempt' "$TMP/stdlib/o_na
 # alone must NOT narrow the exemption (this is the shape `sqlite/test/*_test.mdk`
 # shares), so it still exempts and dies the old, uninformative way cell l does.
 run_case 'p suffix alone insufficient: stays exempt' "$TMP/p_suffix_only_stays_exempt_test.mdk" 1 \
+  'note: typechecking was skipped for' "runtime error [E-PANIC]: unknown op '+'"
+
+# q: cell n's fixture, reached by a bare relative name from inside its own directory.
+# Same module, same classification — the narrowing must not depend on how the target
+# was spelled. A substring-keyed predicate exempts this and dies the cell-l way, so
+# asserting the exit code alone would not discriminate: both shapes exit 1.
+CASE_DIR="$TMP/compiler/types"
+run_case 'q narrowing survives a relative invocation form' 'n_narrow_compiler_vehicle_test.mdk' 1 \
+  'requires it to `medaka check` first' 'Type mismatch: Int vs String'
+CASE_DIR="."
+
+run_case 'r substring is not a component (mycompiler): stays exempt' "$TMP/mycompiler/sqlite/test/r_substring_not_component_test.mdk" 1 \
+  'note: typechecking was skipped for' "runtime error [E-PANIC]: unknown op '+'"
+
+run_case 's substring is not a component (newstdlib): stays exempt' "$TMP/newstdlib/s_substring_not_component_test.mdk" 1 \
   'note: typechecking was skipped for' "runtime error [E-PANIC]: unknown op '+'"
 
 refute_case 'j doctest wins: no skip announced' "$TMP/j_doctest_beats_testdecl.mdk" 0 \
