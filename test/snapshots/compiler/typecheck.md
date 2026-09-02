@@ -1,5 +1,5 @@
 # META
-source_lines=38821
+source_lines=38841
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -14413,7 +14413,13 @@ inferExpected env (ELoc l e) expected =
   currentLoc := Some l
   inferExpected env e expected
 inferExpected env e expected =
-  if monoHasNonCovariantSlot expected then match appSpineExpr e
+  -- The order only matters when an ARROW ROW sits inside a type-constructor
+  -- slot (that is the only thing the variance gate compares), so a purely
+  -- structural pre-check (`monoHasArrowInSlot`) runs first; the polarity
+  -- table (a list, scanned per lookup) is consulted only for the rare
+  -- expected types that have such a slot.  Measured: the unconditional table
+  -- walk per signed clause cost ~1% Ir on hello-world `check`.
+  if monoHasArrowInSlot expected && monoHasNonCovariantSlot expected then match appSpineExpr e
     (hd, args) =>
       if isEmptyL args || not (plainAppHead env hd) then
         infer env e
@@ -14529,6 +14535,20 @@ resultAfterArrows n t
 -- variance gate can fire, and so the only ones for which the inference order
 -- matters (`inferExpected`).  Walks under arrows and applications; an
 -- unregistered head, a bare variable, or an index row contributes nothing.
+-- does [t] have an arrow anywhere INSIDE a type-constructor argument?  Purely
+-- structural — no table — so it is the cheap first filter for `inferExpected`.
+monoHasArrowInSlot : Mono -> Bool
+monoHasArrowInSlot t = match normalize t
+  TApp a b => monoHasArrow b || monoHasArrowInSlot a
+  TFun a _ b => monoHasArrowInSlot a || monoHasArrowInSlot b
+  _ => False
+
+monoHasArrow : Mono -> Bool
+monoHasArrow t = match normalize t
+  TFun _ _ _ => True
+  TApp a b => monoHasArrow a || monoHasArrow b
+  _ => False
+
 monoHasNonCovariantSlot : Mono -> Bool
 monoHasNonCovariantSlot t = match normalize t
   TApp a b => monoSlotNonCovariant a
@@ -41205,7 +41225,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "unifySpineProbe" ((PVar "ft") (PCons (PVar "a") (PVar "rest"))) (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false (PVar "eff") (EApp (EVar "openRow") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "ft")) (EApp (EApp (EApp (EVar "TFun") (EVar "a")) (EVar "eff")) (EVar "r")))) (DoExpr (EApp (EApp (EVar "unifySpineProbe") (EVar "r")) (EVar "rest")))))
 (DTypeSig false "inferExpected" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyFun (TyCon "Mono") (TyCon "Mono")))))
 (DFunDef false "inferExpected" ((PVar "env") (PCon "ELoc" (PVar "l") (PVar "e")) (PVar "expected")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentLoc")) (EApp (EVar "Some") (EVar "l")))) (DoExpr (EApp (EApp (EApp (EVar "inferExpected") (EVar "env")) (EVar "e")) (EVar "expected")))))
-(DFunDef false "inferExpected" ((PVar "env") (PVar "e") (PVar "expected")) (EIf (EApp (EVar "monoHasNonCovariantSlot") (EVar "expected")) (EMatch (EApp (EVar "appSpineExpr") (EVar "e")) (arm (PTuple (PVar "hd") (PVar "args")) () (EIf (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "args")) (EApp (EVar "not") (EApp (EApp (EVar "plainAppHead") (EVar "env")) (EVar "hd")))) (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e")) (EApp (EApp (EApp (EApp (EVar "inferAppResultFirst") (EVar "env")) (EVar "hd")) (EVar "args")) (EVar "expected"))))) (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e"))))
+(DFunDef false "inferExpected" ((PVar "env") (PVar "e") (PVar "expected")) (EIf (EBinOp "&&" (EApp (EVar "monoHasArrowInSlot") (EVar "expected")) (EApp (EVar "monoHasNonCovariantSlot") (EVar "expected"))) (EMatch (EApp (EVar "appSpineExpr") (EVar "e")) (arm (PTuple (PVar "hd") (PVar "args")) () (EIf (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "args")) (EApp (EVar "not") (EApp (EApp (EVar "plainAppHead") (EVar "env")) (EVar "hd")))) (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e")) (EApp (EApp (EApp (EApp (EVar "inferAppResultFirst") (EVar "env")) (EVar "hd")) (EVar "args")) (EVar "expected"))))) (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e"))))
 (DTypeSig false "appSpineExpr" (TyFun (TyCon "Expr") (TyTuple (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr")))))
 (DFunDef false "appSpineExpr" ((PCon "EApp" (PVar "f") (PVar "x"))) (EBlock (DoLet false false (PVar "s") (EApp (EVar "appSpineExpr") (EVar "f"))) (DoExpr (ETuple (EApp (EVar "fst") (EVar "s")) (EBinOp "++" (EApp (EVar "snd") (EVar "s")) (EListLit (EVar "x")))))))
 (DFunDef false "appSpineExpr" ((PCon "ELoc" PWild (PCon "EApp" (PVar "f") (PVar "x")))) (EApp (EVar "appSpineExpr") (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x"))))
@@ -41230,6 +41250,10 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "rowSubCheck" (PWild PWild PWild) (ELit LUnit))
 (DTypeSig false "resultAfterArrows" (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "Mono")))))
 (DFunDef false "resultAfterArrows" ((PVar "n") (PVar "t")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EApp (EVar "Some") (EVar "t")) (EIf (EVar "otherwise") (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TFun" PWild PWild (PVar "b")) () (EApp (EApp (EVar "resultAfterArrows") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "b"))) (arm PWild () (EVar "None"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "monoHasArrowInSlot" (TyFun (TyCon "Mono") (TyCon "Bool")))
+(DFunDef false "monoHasArrowInSlot" ((PVar "t")) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EBinOp "||" (EApp (EVar "monoHasArrow") (EVar "b")) (EApp (EVar "monoHasArrowInSlot") (EVar "a")))) (arm (PCon "TFun" (PVar "a") PWild (PVar "b")) () (EBinOp "||" (EApp (EVar "monoHasArrowInSlot") (EVar "a")) (EApp (EVar "monoHasArrowInSlot") (EVar "b")))) (arm PWild () (EVar "False"))))
+(DTypeSig false "monoHasArrow" (TyFun (TyCon "Mono") (TyCon "Bool")))
+(DFunDef false "monoHasArrow" ((PVar "t")) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TFun" PWild PWild PWild) () (EVar "True")) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EBinOp "||" (EApp (EVar "monoHasArrow") (EVar "a")) (EApp (EVar "monoHasArrow") (EVar "b")))) (arm PWild () (EVar "False"))))
 (DTypeSig false "monoHasNonCovariantSlot" (TyFun (TyCon "Mono") (TyCon "Bool")))
 (DFunDef false "monoHasNonCovariantSlot" ((PVar "t")) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EBinOp "||" (EBinOp "||" (EApp (EVar "monoSlotNonCovariant") (EVar "a")) (EApp (EVar "monoHasNonCovariantSlot") (EVar "a"))) (EApp (EVar "monoHasNonCovariantSlot") (EVar "b")))) (arm (PCon "TFun" (PVar "a") PWild (PVar "b")) () (EBinOp "||" (EApp (EVar "monoHasNonCovariantSlot") (EVar "a")) (EApp (EVar "monoHasNonCovariantSlot") (EVar "b")))) (arm PWild () (EVar "False"))))
 (DTypeSig false "monoSlotNonCovariant" (TyFun (TyCon "Mono") (TyCon "Bool")))
@@ -47508,7 +47532,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "unifySpineProbe" ((PVar "ft") (PCons (PVar "a") (PVar "rest"))) (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false (PVar "eff") (EApp (EVar "openRow") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "ft")) (EApp (EApp (EApp (EVar "TFun") (EVar "a")) (EVar "eff")) (EVar "r")))) (DoExpr (EApp (EApp (EVar "unifySpineProbe") (EVar "r")) (EVar "rest")))))
 (DTypeSig false "inferExpected" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyFun (TyCon "Mono") (TyCon "Mono")))))
 (DFunDef false "inferExpected" ((PVar "env") (PCon "ELoc" (PVar "l") (PVar "e")) (PVar "expected")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentLoc")) (EApp (EVar "Some") (EVar "l")))) (DoExpr (EApp (EApp (EApp (EVar "inferExpected") (EVar "env")) (EVar "e")) (EVar "expected")))))
-(DFunDef false "inferExpected" ((PVar "env") (PVar "e") (PVar "expected")) (EIf (EApp (EVar "monoHasNonCovariantSlot") (EVar "expected")) (EMatch (EApp (EVar "appSpineExpr") (EVar "e")) (arm (PTuple (PVar "hd") (PVar "args")) () (EIf (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "args")) (EApp (EVar "not") (EApp (EApp (EVar "plainAppHead") (EVar "env")) (EVar "hd")))) (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e")) (EApp (EApp (EApp (EApp (EVar "inferAppResultFirst") (EVar "env")) (EVar "hd")) (EVar "args")) (EVar "expected"))))) (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e"))))
+(DFunDef false "inferExpected" ((PVar "env") (PVar "e") (PVar "expected")) (EIf (EBinOp "&&" (EApp (EVar "monoHasArrowInSlot") (EVar "expected")) (EApp (EVar "monoHasNonCovariantSlot") (EVar "expected"))) (EMatch (EApp (EVar "appSpineExpr") (EVar "e")) (arm (PTuple (PVar "hd") (PVar "args")) () (EIf (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "args")) (EApp (EVar "not") (EApp (EApp (EVar "plainAppHead") (EVar "env")) (EVar "hd")))) (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e")) (EApp (EApp (EApp (EApp (EVar "inferAppResultFirst") (EVar "env")) (EVar "hd")) (EVar "args")) (EVar "expected"))))) (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e"))))
 (DTypeSig false "appSpineExpr" (TyFun (TyCon "Expr") (TyTuple (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr")))))
 (DFunDef false "appSpineExpr" ((PCon "EApp" (PVar "f") (PVar "x"))) (EBlock (DoLet false false (PVar "s") (EApp (EVar "appSpineExpr") (EVar "f"))) (DoExpr (ETuple (EApp (EVar "fst") (EVar "s")) (EBinOp "++" (EApp (EVar "snd") (EVar "s")) (EListLit (EVar "x")))))))
 (DFunDef false "appSpineExpr" ((PCon "ELoc" PWild (PCon "EApp" (PVar "f") (PVar "x")))) (EApp (EVar "appSpineExpr") (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x"))))
@@ -47533,6 +47557,10 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "rowSubCheck" (PWild PWild PWild) (ELit LUnit))
 (DTypeSig false "resultAfterArrows" (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "Mono")))))
 (DFunDef false "resultAfterArrows" ((PVar "n") (PVar "t")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EApp (EVar "Some") (EVar "t")) (EIf (EVar "otherwise") (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TFun" PWild PWild (PVar "b")) () (EApp (EApp (EVar "resultAfterArrows") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "b"))) (arm PWild () (EVar "None"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "monoHasArrowInSlot" (TyFun (TyCon "Mono") (TyCon "Bool")))
+(DFunDef false "monoHasArrowInSlot" ((PVar "t")) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EBinOp "||" (EApp (EVar "monoHasArrow") (EVar "b")) (EApp (EVar "monoHasArrowInSlot") (EVar "a")))) (arm (PCon "TFun" (PVar "a") PWild (PVar "b")) () (EBinOp "||" (EApp (EVar "monoHasArrowInSlot") (EVar "a")) (EApp (EVar "monoHasArrowInSlot") (EVar "b")))) (arm PWild () (EVar "False"))))
+(DTypeSig false "monoHasArrow" (TyFun (TyCon "Mono") (TyCon "Bool")))
+(DFunDef false "monoHasArrow" ((PVar "t")) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TFun" PWild PWild PWild) () (EVar "True")) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EBinOp "||" (EApp (EVar "monoHasArrow") (EVar "a")) (EApp (EVar "monoHasArrow") (EVar "b")))) (arm PWild () (EVar "False"))))
 (DTypeSig false "monoHasNonCovariantSlot" (TyFun (TyCon "Mono") (TyCon "Bool")))
 (DFunDef false "monoHasNonCovariantSlot" ((PVar "t")) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EBinOp "||" (EBinOp "||" (EApp (EVar "monoSlotNonCovariant") (EVar "a")) (EApp (EVar "monoHasNonCovariantSlot") (EVar "a"))) (EApp (EVar "monoHasNonCovariantSlot") (EVar "b")))) (arm (PCon "TFun" (PVar "a") PWild (PVar "b")) () (EBinOp "||" (EApp (EVar "monoHasNonCovariantSlot") (EVar "a")) (EApp (EVar "monoHasNonCovariantSlot") (EVar "b")))) (arm PWild () (EVar "False"))))
 (DTypeSig false "monoSlotNonCovariant" (TyFun (TyCon "Mono") (TyCon "Bool")))

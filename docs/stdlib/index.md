@@ -125,7 +125,7 @@ A buffer for building byte arrays.
 
 ## [`byteparser`](byteparser.md)
 
-Parser combinators over bytes.
+byteparser — a binary parser-combinator library for Medaka.
 
 - [`BResult`](byteparser.md#bresult)
 - [`ByteParserE`](byteparser.md#byteparsere)
@@ -140,8 +140,6 @@ Parser combinators over bytes.
 - [`byte`](byteparser.md#byte)
 - [`eof`](byteparser.md#eof)
 - [`peek`](byteparser.md#peek)
-- [`takeBytes`](byteparser.md#takebytes)
-- [`takeSlice`](byteparser.md#takeslice)
 - [`many`](byteparser.md#many)
 - [`some`](byteparser.md#some)
 - [`sepBy1`](byteparser.md#sepby1)
@@ -150,6 +148,8 @@ Parser combinators over bytes.
 - [`between`](byteparser.md#between)
 - [`choice`](byteparser.md#choice)
 - [`chainl1`](byteparser.md#chainl1)
+- [`takeBytes`](byteparser.md#takebytes)
+- [`takeSlice`](byteparser.md#takeslice)
 - [`beUint`](byteparser.md#beuint)
 - [`beSint`](byteparser.md#besint)
 - [`beFloat64`](byteparser.md#befloat64)
