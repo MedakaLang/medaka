@@ -391,6 +391,8 @@ Operations on `List a`.
 
 ## [`map`](map.md)
 
+An immutable map from keys to values, ordered by key.
+
 - [`Map`](map.md#map)
 - [`singleton`](map.md#singleton)
 - [`fromList`](map.md#fromlist)
