@@ -69,6 +69,7 @@ import support.timer.{
   flushPerfSinkProse,
 }
 import string.{toInt}
+import list.{sortOn}
 -- S-cli-onto-args (#2355): the ONE argument parser.  Every verb's flag
 -- vocabulary below is an `ArgSpec` value, so its `(known: …)` roster, its
 -- rejection sentences and what it actually parses are three renderings of one
@@ -3600,7 +3601,17 @@ runDocLibraryTargets outDir targets =
           -- pages, the index and the inventory all read the same (already
           -- re-filed) entry lists — an impl cannot be on one page and indexed
           -- under another.
-          Ok mds => writeLibraryOutputs outDir (rebucketLibraryImpls mds)
+          --
+          -- `targets` arrives in whatever order the shell/CLI handed it
+          -- (`stdlib/*.mdk` glob expansion), which is locale-dependent —
+          -- collation of `.` vs `_` differs across LC_COLLATE settings, so
+          -- e.g. `net.mdk`/`net_async.mdk` can swap places between machines.
+          -- Sort by module name here so index.md/inventory.json are
+          -- byte-identical regardless of invocation order.
+          Ok mds =>
+            writeLibraryOutputs
+              outDir
+              (rebucketLibraryImpls (sortOn mdName mds))
 
 -- `makeDir` (global extern) errors EEXIST on an already-present directory;
 -- tolerate that one case, exactly like `fs.mdk`'s `mkdirAll` does for its own
