@@ -1,5 +1,5 @@
 # META
-source_lines=2085
+source_lines=2243
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-duplicate-body
@@ -141,7 +141,7 @@ docsPut uri src (Docs xs) = Docs ((uri, src) :: docsRemove uri xs)
 
 docsRemove : String -> List (String, String) -> List (String, String)
 docsRemove _ [] = []
-docsRemove uri ((k, v)::rest)
+docsRemove uri ((k, v) :: rest)
   | k == uri = docsRemove uri rest
   | otherwise = (k, v) :: docsRemove uri rest
 
@@ -158,13 +158,12 @@ jRange sl sc el ec =
 
 -- A single LSP Diagnostic object.  severity: 1=Error, 2=Warning (LSP spec).
 jDiagnostic : Int -> Json -> String -> Json
-jDiagnostic sev range msg = jObject
-  [
-    ("range", range),
-    ("severity", JInt sev),
-    ("source", JString "medaka"),
-    ("message", JString msg),
-  ]
+jDiagnostic sev range msg = jObject [
+  ("range", range),
+  ("severity", JInt sev),
+  ("source", JString "medaka"),
+  ("message", JString msg),
+]
 
 severityCode : Severity -> Int
 severityCode SevError = 1
@@ -239,7 +238,7 @@ docsGet uri (Docs xs) = docsLookup uri xs
 
 docsLookup : String -> List (String, String) -> Option String
 docsLookup _ [] = None
-docsLookup uri ((k, v)::rest)
+docsLookup uri ((k, v) :: rest)
   | k == uri = Some v
   | otherwise = docsLookup uri rest
 
@@ -316,11 +315,13 @@ identifierAt src line col =
   let len = arrayLength arr
   match offsetOfLineCol arr line col
     None => None
-    Some pos => if not (isIdentChar (arrayGetUnsafe pos arr)) then None
-    else
-      let s = identStart arr pos
-      let e = identStop arr len pos
-      Some (stringSlice s e src)
+    Some pos =>
+      if not (isIdentChar (arrayGetUnsafe pos arr)) then
+        None
+      else
+        let s = identStart arr pos
+        let e = identStop arr len pos
+        Some (stringSlice s e src)
 
 -- 0-based (line, character) of a byte offset.  Used to turn occurrence offsets
 -- back into LSP Positions (mirror offset_to_position).
@@ -345,7 +346,10 @@ occurrences src name =
 occGo : String -> Array Char -> Int -> String -> Int -> Int -> List Int
 occGo src arr len name nlen i
   | i + nlen > len = []
-  | windowEq src i name nlen && (i == 0 || not (isIdentChar (arrayGetUnsafe (i - 1) arr))) && (i + nlen == len || not (isIdentChar (arrayGetUnsafe (i + nlen) arr))) = i :: occGo src arr len name nlen (i + nlen)
+  | windowEq src i name nlen
+    && (i == 0 || not (isIdentChar (arrayGetUnsafe (i - 1) arr)))
+    && (i + nlen == len || not (isIdentChar (arrayGetUnsafe (i + nlen) arr))) =
+    i :: occGo src arr len name nlen (i + nlen)
   | otherwise = occGo src arr len name nlen (i + 1)
 
 windowEq : String -> Int -> String -> Int -> Bool
@@ -390,14 +394,13 @@ innerDecl d = d
 -- `range` — see `renderSymbol`). Kept as separate params (rather than always
 -- reusing `range`) so a real name span can differ from the enclosing range.
 jSymbol : String -> Int -> Json -> Json -> List Json -> Json
-jSymbol name kind range selRange children = jObject
-  [
-    ("name", JString name),
-    ("kind", JInt kind),
-    ("range", range),
-    ("selectionRange", selRange),
-    ("children", jArray children),
-  ]
+jSymbol name kind range selRange children = jObject [
+  ("name", JString name),
+  ("kind", JInt kind),
+  ("range", range),
+  ("selectionRange", selRange),
+  ("children", jArray children),
+]
 
 -- One outline child symbol carrying its OWN name-token range/selectionRange
 -- (#331, increment 2): use the child's name `Loc` when the parser found one,
@@ -422,22 +425,25 @@ fieldName (Field n _) = n
 -- produces `locs` in exactly this order — keep the two in lockstep.
 variantKids : Json -> List (Option Loc) -> List Variant -> List Json
 variantKids _ _ [] = []
-variantKids fb locs ((Variant _ (ConNamed fs True))::vs) =
+variantKids fb locs ((Variant _ (ConNamed fs True)) :: vs) =
   let step = fieldKidsStep fb locs (map fieldName fs)
   fst step ++ variantKids fb (snd step) vs
-variantKids fb [] ((Variant vn _)::vs) =
+variantKids fb [] ((Variant vn _) :: vs) =
   jChildLoc vn 22 fb None :: variantKids fb [] vs
-variantKids fb (l::ls) ((Variant vn _)::vs) =
+variantKids fb (l :: ls) ((Variant vn _) :: vs) =
   jChildLoc vn 22 fb l :: variantKids fb ls vs
 
 -- One Field child (kind 8) per field name, consuming a `Loc` each; returns the
 -- kids plus the leftover `Loc`s for the next variant.
-fieldKidsStep : Json -> List (Option Loc) -> List String -> (List Json, List (Option Loc))
+fieldKidsStep : Json ->
+  List (Option Loc) ->
+  List String ->
+  (List Json, List (Option Loc))
 fieldKidsStep _ locs [] = ([], locs)
-fieldKidsStep fb [] (fn::fns) =
+fieldKidsStep fb [] (fn :: fns) =
   let rest = fieldKidsStep fb [] fns
   (jChildLoc fn 8 fb None :: fst rest, snd rest)
-fieldKidsStep fb (l::ls) (fn::fns) =
+fieldKidsStep fb (l :: ls) (fn :: fns) =
   let rest = fieldKidsStep fb ls fns
   (jChildLoc fn 8 fb l :: fst rest, snd rest)
 
@@ -445,9 +451,9 @@ fieldKidsStep fb (l::ls) (fn::fns) =
 -- consuming a `Loc` each in order.
 zipKids : Json -> Int -> List (Option Loc) -> List String -> List Json
 zipKids _ _ _ [] = []
-zipKids fb kind [] (nm::nms) =
+zipKids fb kind [] (nm :: nms) =
   jChildLoc nm kind fb None :: zipKids fb kind [] nms
-zipKids fb kind (l::ls) (nm::nms) =
+zipKids fb kind (l :: ls) (nm :: nms) =
   jChildLoc nm kind fb l :: zipKids fb kind ls nms
 
 ifaceMethodName : IfaceMethod -> String
@@ -473,36 +479,39 @@ letBindName (LetBind n _) = n
 -- child name-token `Loc`s (`declPosChildLocs`), consumed in the SAME order the
 -- children are emitted below.  ⚠️ The order here IS the invariant the parser's
 -- `declChildSpansOf` mirrors — change one, change both.
-symbolPartsOfDecl : Decl -> Json -> List (Option Loc) -> Option (String, Int, Bool, List Json)
+symbolPartsOfDecl : Decl ->
+  Json ->
+  List (Option Loc) ->
+  Option (String, Int, Bool, List Json)
 symbolPartsOfDecl d range childLocs = match innerDecl d
-    DTypeSig _ name _ => Some (name, 13, True, [])
-    DExtern _ name _ => Some (name, 12, False, [])
-    DFunDef _ name _ _ => Some (name, 12, True, [])
-    DLetGroup _ binds => match binds
-      [] => None
-      (LetBind n0 _)::_ =>
-        let kids = zipKids range 12 childLocs (map letBindName binds)
-        Some (n0, 12, True, kids)
-    DData { dataName = name, dataCtors = variants } =>
-      -- records (the `data X = { … }` short form, nameOmitted) expose their
-      -- fields as child symbols (kind 8); ordinary variants show their ctor name.
-      let kids = variantKids range childLocs variants
-      Some (name, 10, False, kids)
-    DInterface { name = n, methods = ms, ... } =>
-      let kids = zipKids range 6 childLocs (map ifaceMethodName ms)
-      Some (n, 11, False, kids)
-    DImpl { iface = ifc, methods = ms, ... } =>
-      let label = implLabel ifc
-      let kids = zipKids range 6 childLocs (map implMethodName ms)
-      Some (label, 5, False, kids)
-    DTypeAlias { tyAliasName = name } => Some (name, 26, False, [])
-    DNewtype { newtypeName = name } => Some (name, 23, False, [])
-    DUse _ _ _ => None
-    DProp _ name _ _ => Some (name, 12, False, [])
-    DTest _ name _ => Some (name, 12, False, [])
-    DBench _ name _ => Some (name, 12, False, [])
-    DEffect _ name _ => Some (name, 24, False, [])
-    DAttrib _ _ => None  -- unreachable post innerDecl
+  DTypeSig _ name _ => Some (name, 13, True, [])
+  DExtern _ name _ => Some (name, 12, False, [])
+  DFunDef _ name _ _ => Some (name, 12, True, [])
+  DLetGroup _ binds => match binds
+    [] => None
+    (LetBind n0 _) :: _ =>
+      let kids = zipKids range 12 childLocs (map letBindName binds)
+      Some (n0, 12, True, kids)
+  DData { dataName = name, dataCtors = variants } =>
+    -- records (the `data X = { … }` short form, nameOmitted) expose their
+    -- fields as child symbols (kind 8); ordinary variants show their ctor name.
+    let kids = variantKids range childLocs variants
+    Some (name, 10, False, kids)
+  DInterface { name = n, methods = ms, ... } =>
+    let kids = zipKids range 6 childLocs (map ifaceMethodName ms)
+    Some (n, 11, False, kids)
+  DImpl { iface = ifc, methods = ms, ... } =>
+    let label = implLabel ifc
+    let kids = zipKids range 6 childLocs (map implMethodName ms)
+    Some (label, 5, False, kids)
+  DTypeAlias { tyAliasName = name } => Some (name, 26, False, [])
+  DNewtype { newtypeName = name } => Some (name, 23, False, [])
+  DUse _ _ _ => None
+  DProp _ name _ _ => Some (name, 12, False, [])
+  DTest _ name _ => Some (name, 12, False, [])
+  DBench _ name _ => Some (name, 12, False, [])
+  DEffect _ name _ => Some (name, 24, False, [])
+  DAttrib _ _ => None  -- unreachable post innerDecl
 -- Variable
 -- Function
 -- Function
@@ -533,7 +542,10 @@ export
 documentSymbols : String -> List Json
 documentSymbols src = match parseWithPositionsOpt src
   None => []
-  Some (decls, positions) => map renderSymbol (collapseSymbols (symbolParts decls (positionsDecls positions)))
+  Some (decls, positions) =>
+    map
+      renderSymbol
+      (collapseSymbols (symbolParts decls (positionsDecls positions)))
 
 -- One outline row before collapse: name, LSP SymbolKind, 0-based start/end line,
 -- whether it's a signature/clause row (only those coalesce — see
@@ -546,12 +558,14 @@ data SymRow = SymRow String Int Int Int Bool (List Json) (Option Loc)
 -- Zip decls with positions (1:1; defensive truncation to the shorter list) into
 -- SymRow rows, dropping non-outline decls.
 symbolParts : List Decl -> List DeclPos -> List SymRow
-symbolParts (d::ds) (p::ps) =
+symbolParts (d :: ds) (p :: ps) =
   let sl = declPosLine p - 1
   let el = declPosEndLine p - 1
   match symbolPartsOfDecl d (jRange sl 0 el 0) (declPosChildLocs p)
     None => symbolParts ds ps
-    Some (name, kind, clauseLike, kids) => SymRow name kind sl el clauseLike kids (declPosNameLoc p) :: symbolParts ds ps
+    Some (name, kind, clauseLike, kids) =>
+      SymRow name kind sl el clauseLike kids (declPosNameLoc p)
+        :: symbolParts ds ps
 symbolParts _ _ = []
 
 -- Collapse a signature+clauses run — consecutive rows that share the EXACT same
@@ -566,11 +580,16 @@ symbolParts _ _ = []
 -- the kept start line `s0`, same as the OCaml/line-based fields already do.
 collapseSymbols : List SymRow -> List SymRow
 collapseSymbols [] = []
-collapseSymbols (x::xs) = collapseGo x xs
+collapseSymbols (x :: xs) = collapseGo x xs
 
 collapseGo : SymRow -> List SymRow -> List SymRow
 collapseGo cur [] = [cur]
-collapseGo (SymRow n0 k0 s0 e0 cl0 c0 nl0) ((SymRow n1 k1 s1 e1 cl1 c1 nl1)::rest) = if n0 == n1 && cl0 && cl1 then collapseGo (SymRow n0 k1 s0 e1 True (c0 ++ c1) nl0) rest else SymRow n0 k0 s0 e0 cl0 c0 nl0 :: collapseGo (SymRow n1 k1 s1 e1 cl1 c1 nl1) rest
+collapseGo (SymRow n0 k0 s0 e0 cl0 c0 nl0) ((SymRow n1 k1 s1 e1 cl1 c1 nl1) :: rest) =
+  if n0 == n1 && cl0 && cl1 then
+    collapseGo (SymRow n0 k1 s0 e1 True (c0 ++ c1) nl0) rest
+  else
+    SymRow n0 k0 s0 e0 cl0 c0 nl0
+      :: collapseGo (SymRow n1 k1 s1 e1 cl1 c1 nl1) rest
 
 renderSymbol : SymRow -> Json
 renderSymbol (SymRow name kind sl el _ kids nameLoc) =
@@ -631,13 +650,13 @@ declChildNames d = match innerDecl d
 -- contributes its single ctor name.
 dataChildNames : List Variant -> List String
 dataChildNames [] = []
-dataChildNames ((Variant _ (ConNamed fs True))::vs) = map fieldName fs
-  ++ dataChildNames vs
-dataChildNames ((Variant vn _)::vs) = vn :: dataChildNames vs
+dataChildNames ((Variant _ (ConNamed fs True)) :: vs) =
+  map fieldName fs ++ dataChildNames vs
+dataChildNames ((Variant vn _) :: vs) = vn :: dataChildNames vs
 
 anyName : List String -> String -> Bool
 anyName [] _ = False
-anyName (x::xs) name = x == name || anyName xs name
+anyName (x :: xs) name = x == name || anyName xs name
 
 -- 0-based index of the first occurrence of `name` in `xs`, or `None`.
 indexOfName : String -> List String -> Option Int
@@ -645,17 +664,14 @@ indexOfName name xs = indexOfNameGo name xs 0
 
 indexOfNameGo : String -> List String -> Int -> Option Int
 indexOfNameGo _ [] _ = None
-indexOfNameGo name (x::xs) i =
-  if x == name then
-    Some i
-  else
-    indexOfNameGo name xs (i + 1)
+indexOfNameGo name (x :: xs) i =
+  if x == name then Some i else indexOfNameGo name xs (i + 1)
 
 -- The `Option Loc` at 0-based index `i` of `ls`, or `None` if out of range.
 locAtIndex : Int -> List (Option Loc) -> Option Loc
 locAtIndex _ [] = None
-locAtIndex 0 (l::_) = l
-locAtIndex i (_::ls) = locAtIndex (i - 1) ls
+locAtIndex 0 (l :: _) = l
+locAtIndex i (_ :: ls) = locAtIndex (i - 1) ls
 
 -- The DeclPos of the first decl defining `name`, or None.
 definitionRange : String -> String -> Option Json
@@ -669,7 +685,7 @@ definitionRange src name = match parseWithPositionsOpt src
 -- whole-decl range only when the parser's name-finder didn't resolve a span
 -- for that particular name.
 defZip : List Decl -> List DeclPos -> String -> Option Json
-defZip (d::ds) (p::ps) name = match defZipDeclMatch d p name
+defZip (d :: ds) (p :: ps) name = match defZipDeclMatch d p name
   Some j => Some j
   None => defZip ds ps name
 defZip _ _ _ = None
@@ -677,7 +693,10 @@ defZip _ _ _ = None
 defZipDeclMatch : Decl -> DeclPos -> String -> Option Json
 defZipDeclMatch d p name
   | declOwnNameMatches d name = Some (defZipLocOr (declPosNameLoc p) p)
-  | otherwise = map (k => defZipLocOr (locAtIndex k (declPosChildLocs p)) p) (indexOfName name (declChildNames d))
+  | otherwise =
+    map
+      (k => defZipLocOr (locAtIndex k (declPosChildLocs p)) p)
+      (indexOfName name (declChildNames d))
 
 defZipLocOr : Option Loc -> DeclPos -> Json
 defZipLocOr (Some l) _ = jRangeOfLoc l
@@ -718,8 +737,13 @@ docSchemes runtimeSrc coreSrc src =
     Err _ => None
     Ok userRaw =>
       let userDecls = desugar userRaw
-      let preludeKey = Some (desugaredPreludeKey runtimeSrc, desugaredPreludeKey coreSrc)
-      let (preludeSchemes, ownSchemes) = checkOneSchemeFullK preludeKey runtimeDecls coreDecls ("__user__", userDecls)
+      let preludeKey =
+        Some (desugaredPreludeKey runtimeSrc, desugaredPreludeKey coreSrc)
+      let (preludeSchemes, ownSchemes) = checkOneSchemeFullK
+        preludeKey
+        runtimeDecls
+        coreDecls
+        ("__user__", userDecls)
       Some (ownSchemes ++ preludeSchemes)
 
 -- core.mdk always parses; unwrap its parseResult (defensive None → []).
@@ -731,7 +755,7 @@ unwrapDecls (Err _) = []
 -- List.assoc_opt).
 lookupSchemeL : String -> List (String, Scheme) -> Option Scheme
 lookupSchemeL _ [] = None
-lookupSchemeL name ((n, s)::rest)
+lookupSchemeL name ((n, s) :: rest)
   | name == n = Some s
   | otherwise = lookupSchemeL name rest
 
@@ -750,7 +774,10 @@ lookupSchemeL name ((n, s)::rest)
 -- (cheap), then build the env (potentially loading the project graph), so an
 -- off-identifier hover never pays for a typecheck/load.
 hoverFor : String -> String -> String -> String -> Json -> Docs -> <IO> Json
-hoverFor runtimeSrc coreSrc uri src params docs = match (positionLine params, positionChar params)
+hoverFor runtimeSrc coreSrc uri src params docs = match (
+  positionLine params,
+  positionChar params,
+)
   (Some line, Some col) => match identifierAt src line col
     None => JNull
     Some name => match hoverEnvFor runtimeSrc coreSrc uri src docs
@@ -779,30 +806,43 @@ hoverFor runtimeSrc coreSrc uri src params docs = match (positionLine params, po
 -- not in scope — the caller maps that to a clean "no symbol" result, never a
 -- crash.
 export
-typeAtPoint : String -> String -> String -> String -> Int -> Int -> <IO> Option String
+typeAtPoint : String ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  Int ->
+  <IO> Option String
 -- Not a single-monad passthrough bind: identifierAt/hoverScheme are pure Option
 -- while hoverEnvFor is <IO> Option, and the nesting deliberately mirrors hoverFor's
 -- load-bearing order — a `do` block cannot express the mixed pure/IO steps.
 -- lint-disable-next-line rule-bind-chain-to-do
-typeAtPoint runtimeSrc coreSrc filePath src line col = match identifierAt src line col
-  None => None
-  Some name =>
-    let uri = uriOfPath filePath
-    let docs = docsPut uri src emptyDocs
-    match hoverEnvFor runtimeSrc coreSrc uri src docs
-      None => None
-      Some env => match hoverSchemeAt name src line col env
+typeAtPoint runtimeSrc coreSrc filePath src line col =
+  match identifierAt src line col
+    None => None
+    Some name =>
+      let uri = uriOfPath filePath
+      let docs = docsPut uri src emptyDocs
+      match hoverEnvFor runtimeSrc coreSrc uri src docs
         None => None
-        Some (sch, isLocal) =>
-          let pfx = sigLeadingEff name (unwrapDecls (parseResult src))
-          Some (stringConcat [name, " : ", pfx, ppHoverScheme isLocal name sch])
+        Some env => match hoverSchemeAt name src line col env
+          None => None
+          Some (sch, isLocal) =>
+            let pfx = sigLeadingEff name (unwrapDecls (parseResult src))
+            Some
+              (stringConcat [name, " : ", pfx, ppHoverScheme isLocal name sch])
 
 -- The hover lookup env for the buffer.  A buffer with a non-core sibling import
 -- goes through the multi-module project pipeline (loads the import graph; the
 -- entry's own schemes are returned and its locals + import-scoped seed land in the
 -- hover side-channels), so imported names resolve.  A single-file buffer keeps the
 -- fast `docSchemes` path (core + runtime + this buffer only).
-hoverEnvFor : String -> String -> String -> String -> Docs -> <IO> Option (List (String, Scheme))
+hoverEnvFor : String ->
+  String ->
+  String ->
+  String ->
+  Docs ->
+  <IO> Option (List (String, Scheme))
 hoverEnvFor runtimeSrc coreSrc uri src docs
   | bufferHasImports src = projectEntryEnv runtimeSrc coreSrc uri docs
   | otherwise = docSchemes runtimeSrc coreSrc src
@@ -811,7 +851,11 @@ hoverEnvFor runtimeSrc coreSrc uri src docs
 -- fallback as publishProjectDiagnostics) and return the ENTRY module's own
 -- schemes.  Side effect: the entry's locals + import-scoped seed (runtime + core
 -- + imported names) are left in the typecheck hover side-channels.
-projectEntryEnv : String -> String -> String -> Docs -> <IO> Option (List (String, Scheme))
+projectEntryEnv : String ->
+  String ->
+  String ->
+  Docs ->
+  <IO> Option (List (String, Scheme))
 projectEntryEnv runtimeSrc coreSrc uri docs =
   let rootFile = pathOfUri uri
   let projectDir = findProjectRootOrSelf (dirOfPath rootFile)
@@ -856,7 +900,12 @@ hoverScheme name env = match lookupSchemeL name env
 -- consulted first ONLY when a local binding of that name actually covers the
 -- cursor; otherwise the original `env` → local → seed order runs untouched, so
 -- every non-shadowing hover in the buffer answers exactly as before.
-hoverSchemeAt : String -> String -> Int -> Int -> List (String, Scheme) -> Option (Scheme, Bool)
+hoverSchemeAt : String ->
+  String ->
+  Int ->
+  Int ->
+  List (String, Scheme) ->
+  Option (Scheme, Bool)
 hoverSchemeAt name src line col env = match localSchemeAt name line col src
   Some s => Some (s, True)
   None => hoverScheme name env
@@ -890,12 +939,15 @@ localSchemeAt name line col src = match parseWithPositionsOpt src
     let cl = line + 1
     match declIndexAt decls 0 cl
       None => None
-      Some di => latestLocal None (localCandidates name cl col di decls (currentLocalSchemesLoc ()))
+      Some di =>
+        latestLocal
+          None
+          (localCandidates name cl col di decls (currentLocalSchemesLoc ()))
 
 -- Index of the top-level decl whose start..end line range contains `l` (1-based).
 declIndexAt : List DeclPos -> Int -> Int -> Option Int
 declIndexAt [] _ _ = None
-declIndexAt (p::rest) i l
+declIndexAt (p :: rest) i l
   | declPosLine p <= l && l <= declPosEndLine p = Some i
   | otherwise = declIndexAt rest (i + 1) l
 
@@ -911,20 +963,28 @@ locAtOrBefore l1 c1 l2 c2 = l1 < l2 || l1 == l2 && c1 <= c2
 -- The recorded locals of `name` that could be in scope at (cl, cc), as
 -- (binder line, binder col, scheme).  A binder with no `Loc` (a desugared
 -- do-bind, say) can never qualify — it has no position to compare.
-localCandidates : String -> Int -> Int -> Int -> List DeclPos -> List (String, Option Loc, Scheme) -> List (Int, Int, Scheme)
+localCandidates : String ->
+  Int ->
+  Int ->
+  Int ->
+  List DeclPos ->
+  List (String, Option Loc, Scheme) ->
+  List (Int, Int, Scheme)
 localCandidates _ _ _ _ _ [] = []
-localCandidates name cl cc di decls ((n, Some (Loc _ bl bc _ _), sch)::rest)
+localCandidates name cl cc di decls ((n, Some (Loc _ bl bc _ _), sch) :: rest)
   | n == name && locAtOrBefore bl bc cl cc && declIndexIs decls bl di =
     (bl, bc, sch) :: localCandidates name cl cc di decls rest
-localCandidates name cl cc di decls (_::rest) =
+localCandidates name cl cc di decls (_ :: rest) =
   localCandidates name cl cc di decls rest
 
 -- The candidate whose binder starts LAST (innermost shadow wins).
-latestLocal : Option (Int, Int, Scheme) -> List (Int, Int, Scheme) -> Option Scheme
+latestLocal : Option (Int, Int, Scheme) ->
+  List (Int, Int, Scheme) ->
+  Option Scheme
 latestLocal None [] = None
 latestLocal (Some (_, _, s)) [] = Some s
-latestLocal None (c::rest) = latestLocal (Some c) rest
-latestLocal (Some (pl, pc, ps)) ((bl, bc, bs)::rest)
+latestLocal None (c :: rest) = latestLocal (Some c) rest
+latestLocal (Some (pl, pc, ps)) ((bl, bc, bs) :: rest)
   | locAtOrBefore pl pc bl bc = latestLocal (Some (bl, bc, bs)) rest
   | otherwise = latestLocal (Some (pl, pc, ps)) rest
 
@@ -949,10 +1009,7 @@ latestLocal (Some (pl, pc, ps)) ((bl, bc, bs)::rest)
 -- binding does register its obligations (#816) — and never the prelude store.
 ppHoverScheme : Bool -> String -> Scheme -> String
 ppHoverScheme isLocal n s =
-  if isLocal then
-    ppSchemeNamed n s
-  else
-    ppSchemeNamedFull n s
+  if isLocal then ppSchemeNamed n s else ppSchemeNamedFull n s
 
 -- The leading effect annotation of NAME's top-level signature, rendered as a
 -- `<IO> ` prefix (trailing space), or "" if none.  `from_ast_type` drops a
@@ -961,7 +1018,7 @@ ppHoverScheme isLocal n s =
 -- otherwise renders as bare `Unit`.  Recover it from the written sig for display.
 sigLeadingEff : String -> List Decl -> String
 sigLeadingEff _ [] = ""
-sigLeadingEff name (d::ds) = match sigLeadingEffOne name d
+sigLeadingEff name (d :: ds) = match sigLeadingEffOne name d
   Some pfx => pfx
   None => sigLeadingEff name ds
 
@@ -999,13 +1056,12 @@ renderEffAtom (nm, Some p) = stringConcat [nm, " \"", p, "\""]
 jHover : String -> String -> Json
 jHover name ty =
   let value = stringConcat ["```medaka\n", name, " : ", ty, "\n```"]
-  jObject
-    [
-      (
-        "contents",
-        jObject [("kind", JString "markdown"), ("value", JString value)],
-      )
-    ]
+  jObject [
+    (
+      "contents",
+      jObject [("kind", JString "markdown"), ("value", JString value)],
+    ),
+  ]
 
 handleHover : String -> String -> Json -> Json -> Docs -> <IO> Unit
 handleHover runtimeSrc coreSrc idJson params docs =
@@ -1030,14 +1086,15 @@ prefixBefore src line col =
     None => ""
     Some lineStart =>
       let stop = lineStart + col - 1
-      if stop < lineStart then ""
+      if stop < lineStart then
+        ""
+      else if stop >= len then
+        ""
+      else if not (isIdentChar (arrayGetUnsafe stop arr)) then
+        ""
       else
-        if stop >= len then ""
-        else
-          if not (isIdentChar (arrayGetUnsafe stop arr)) then ""
-          else
-            let start = prefixStart arr lineStart stop
-            stringSlice start (stop + 1) src
+        let start = prefixStart arr lineStart stop
+        stringSlice start (stop + 1) src
 
 -- Byte offset of the start of 0-based `line`, or None if it doesn't exist.
 offsetOfLineStart : Array Char -> Int -> Int -> Option Int
@@ -1066,24 +1123,42 @@ prefixStart arr lineStart i
 -- slice before concatenating them (see `ppHoverScheme` for why a local may not be
 -- rendered through `ppSchemeNamedFull`).  Tagging happens at the slice, not here,
 -- because by the time the slices are one flat list the tiers are indistinguishable.
-filterCompletions : String -> List String -> List (String, Scheme, Bool) -> List Json
+filterCompletions : String ->
+  List String ->
+  List (String, Scheme, Bool) ->
+  List Json
 filterCompletions _ _ [] = []
-filterCompletions prefix seen ((n, s, isLocal)::rest)
-  | startsWith prefix n && not (anyName seen n) = jCompletionItem n (ppHoverScheme isLocal n s) :: filterCompletions prefix (n::seen) rest
+filterCompletions prefix seen ((n, s, isLocal) :: rest)
+  | startsWith prefix n && not (anyName seen n) =
+    jCompletionItem n (ppHoverScheme isLocal n s)
+      :: filterCompletions prefix (n :: seen) rest
   | otherwise = filterCompletions prefix seen rest
 
 -- One CompletionItem { label, kind, detail }.  kind 3 = Function (LSP spec).
 jCompletionItem : String -> String -> Json
-jCompletionItem label detail = jObject
-  [("label", JString label), ("kind", JInt 3), ("detail", JString detail)]
+jCompletionItem label detail = jObject [
+  ("label", JString label),
+  ("kind", JInt 3),
+  ("detail", JString detail),
+]
 
-completionFor : String -> String -> String -> String -> Json -> Docs -> <IO> Json
-completionFor runtimeSrc coreSrc uri src params docs = match (positionLine params, positionChar params)
-  (Some line, Some col) => match completionEnvFor runtimeSrc coreSrc uri src docs
-    None => JNull
-    Some env =>
-      let prefix = prefixBefore src line col
-      jArray (filterCompletions prefix [] env)
+completionFor : String ->
+  String ->
+  String ->
+  String ->
+  Json ->
+  Docs ->
+  <IO> Json
+completionFor runtimeSrc coreSrc uri src params docs = match (
+  positionLine params,
+  positionChar params,
+)
+  (Some line, Some col) =>
+    match completionEnvFor runtimeSrc coreSrc uri src docs
+      None => JNull
+      Some env =>
+        let prefix = prefixBefore src line col
+        jArray (filterCompletions prefix [] env)
   _ => JNull
 
 -- Completion suggests names from the env directly (no side-channel fallback like
@@ -1091,9 +1166,20 @@ completionFor runtimeSrc coreSrc uri src params docs = match (positionLine param
 -- entry's own schemes + its locals + its import-scoped seed (core + runtime +
 -- imported names).  A single-file buffer keeps `docSchemes` unchanged — adding
 -- the seed/locals there would change the single-file completion golden.
-completionEnvFor : String -> String -> String -> String -> Docs -> <IO> Option (List (String, Scheme, Bool))
+completionEnvFor : String ->
+  String ->
+  String ->
+  String ->
+  Docs ->
+  <IO> Option (List (String, Scheme, Bool))
 completionEnvFor runtimeSrc coreSrc uri src docs
-  | bufferHasImports src = map (own => tagTier False own ++ tagTier True (currentLocalSchemes ()) ++ tagTier False (currentSeedSchemes ())) (projectEntryEnv runtimeSrc coreSrc uri docs)
+  | bufferHasImports src =
+    map
+      (own =>
+        tagTier False own
+          ++ tagTier True (currentLocalSchemes ())
+          ++ tagTier False (currentSeedSchemes ()))
+      (projectEntryEnv runtimeSrc coreSrc uri docs)
   | otherwise = map (tagTier False) (docSchemes runtimeSrc coreSrc src)
 
 -- Stamp one completion-env slice with its tier (True = a genuine local binder).
@@ -1101,7 +1187,7 @@ completionEnvFor runtimeSrc coreSrc uri src docs
 -- wins dedup still resolves a shadowed name to exactly the entry it did before.
 tagTier : Bool -> List (String, Scheme) -> List (String, Scheme, Bool)
 tagTier _ [] = []
-tagTier isLocal ((n, s)::rest) = (n, s, isLocal) :: tagTier isLocal rest
+tagTier isLocal ((n, s) :: rest) = (n, s, isLocal) :: tagTier isLocal rest
 
 handleCompletion : String -> String -> Json -> Json -> Docs -> <IO> Unit
 handleCompletion runtimeSrc coreSrc idJson params docs =
@@ -1128,14 +1214,14 @@ declBindingName : Decl -> Option String
 declBindingName d = match innerDecl d
   DFunDef _ n _ _ => Some n
   DLetGroup _ binds => match binds
-    (LetBind n _)::_ => Some n
+    (LetBind n _) :: _ => Some n
     [] => None
   _ => None
 
 -- Whether `prog` carries an explicit DTypeSig for `name` (mirror has_explicit_sig).
 hasExplicitSig : List Decl -> String -> Bool
 hasExplicitSig [] _ = False
-hasExplicitSig (d::rest) name = match innerDecl d
+hasExplicitSig (d :: rest) name = match innerDecl d
   DTypeSig _ n _ => n == name || hasExplicitSig rest name
   _ => hasExplicitSig rest name
 
@@ -1176,32 +1262,43 @@ inlayHints runtimeSrc coreSrc src = match docSchemes runtimeSrc coreSrc src
 inlayNamePos : String -> DeclPos -> Option (Int, Int)
 inlayNamePos src p = match declPosNameLoc p
   Some (Loc _ sl _ _ ec) => Some (sl - 1, ec)
-  None => map (col => (declPosLine p - 1, col)) (columnAfterName src (declPosLine p - 1))
+  None =>
+    map
+      (col => (declPosLine p - 1, col))
+      (columnAfterName src (declPosLine p - 1))
 
 -- decls passed twice: `allDecls` for the has-explicit-sig scan, `ds` walked.
 -- Deliberately `ppSchemeNamed`, not `ppSchemeNamedFull`: `name` always comes from
 -- `declBindingName d`, i.e. the BUFFER's own top-level binder, so it is always a HIT in
 -- `perRun.schemeDefIdsRef` and `ppSchemeNamedFull` would take the same arm 1 anyway — the
 -- prelude-obligation fallback the "Full" variant adds can never fire here.
-inlayZip : String -> List Decl -> List Decl -> List DeclPos -> List (String, Scheme) -> List Json
-inlayZip src allDecls (d::ds) (p::ps) env = match declBindingName d
+inlayZip : String ->
+  List Decl ->
+  List Decl ->
+  List DeclPos ->
+  List (String, Scheme) ->
+  List Json
+inlayZip src allDecls (d :: ds) (p :: ps) env = match declBindingName d
   None => inlayZip src allDecls ds ps env
-  Some name => if hasExplicitSig allDecls name then inlayZip src allDecls ds ps env
-  else match lookupSchemeL name env
-    None => inlayZip src allDecls ds ps env
-    Some sch => match inlayNamePos src p
+  Some name =>
+    if hasExplicitSig allDecls name then
+      inlayZip src allDecls ds ps env
+    else match lookupSchemeL name env
       None => inlayZip src allDecls ds ps env
-      Some (line, col) => jInlayHint line col (stringConcat [": ", ppSchemeNamed name sch]) :: inlayZip src allDecls ds ps env
+      Some sch => match inlayNamePos src p
+        None => inlayZip src allDecls ds ps env
+        Some (line, col) =>
+          jInlayHint line col (stringConcat [": ", ppSchemeNamed name sch])
+            :: inlayZip src allDecls ds ps env
 inlayZip _ _ _ _ _ = []
 
 -- One InlayHint { position, label, paddingLeft } (mirror the OCaml create).
 jInlayHint : Int -> Int -> String -> Json
-jInlayHint line col label = jObject
-  [
-    ("position", jPosition line col),
-    ("label", JString label),
-    ("paddingLeft", JBool True),
-  ]
+jInlayHint line col label = jObject [
+  ("position", jPosition line col),
+  ("label", JString label),
+  ("paddingLeft", JBool True),
+]
 
 handleInlayHint : String -> String -> Json -> Json -> Docs -> <IO> Unit
 handleInlayHint runtimeSrc coreSrc idJson params docs =
@@ -1251,7 +1348,8 @@ logFilePath _ = match getEnv "MEDAKA_LSP_LOG"
 logLine : String -> <IO> Unit
 logLine s =
   let ts = wallTimeSec ()
-  let _ = appendFile (logFilePath ()) (stringConcat [floatToString ts, " ", s, "\n"])
+  let _ =
+    appendFile (logFilePath ()) (stringConcat [floatToString ts, " ", s, "\n"])
   ()
 
 -- ── JSON-RPC framing ────────────────────────────────────────────────────────
@@ -1282,8 +1380,11 @@ responseMsg idJson result =
 
 -- A JSON-RPC notification envelope: { jsonrpc, method, params }.
 notificationMsg : String -> Json -> Json
-notificationMsg meth params = jObject
-  [("jsonrpc", JString "2.0"), ("method", JString meth), ("params", params)]
+notificationMsg meth params = jObject [
+  ("jsonrpc", JString "2.0"),
+  ("method", JString meth),
+  ("params", params),
+]
 
 -- ── header reading ──────────────────────────────────────────────────────────
 --
@@ -1299,7 +1400,8 @@ readHeaders lenAcc = match readLineOpt ()
   None => None
   Some raw =>
     let line = stripCR raw
-    if line == "" then Some lenAcc
+    if line == "" then
+      Some lenAcc
     else
       let lenAcc2 = match parseContentLength line
         Some n => n
@@ -1316,7 +1418,12 @@ parseContentLength line =
   let prefix = "Content-Length:"
   let pn = stringLength prefix
   if stringLength line >= pn && stringSlice 0 pn line == prefix then
-    parseDigits (stringToChars (stringSlice pn (stringLength line) line)) 0 (arrayLength (stringToChars (stringSlice pn (stringLength line) line))) 0 False
+    parseDigits
+      (stringToChars (stringSlice pn (stringLength line) line))
+      0
+      (arrayLength (stringToChars (stringSlice pn (stringLength line) line)))
+      0
+      False
   else
     None
 
@@ -1326,7 +1433,13 @@ parseDigits : Array Char -> Int -> Int -> Int -> Bool -> Option Int
 parseDigits arr i n acc seen
   | i >= n = if seen then Some acc else None
   | arrayGetUnsafe i arr == ' ' && not seen = parseDigits arr (i + 1) n acc seen
-  | isDigit (arrayGetUnsafe i arr) = parseDigits arr (i + 1) n (acc * 10 + (charCode (arrayGetUnsafe i arr) - 48)) True
+  | isDigit (arrayGetUnsafe i arr) =
+    parseDigits
+      arr
+      (i + 1)
+      n
+      (acc * 10 + (charCode (arrayGetUnsafe i arr) - 48))
+      True
   | otherwise = if seen then Some acc else None
 
 {- ── textDocument/semanticTokens/full ────────────────────────────────────────
@@ -1375,17 +1488,16 @@ semanticLegend = [
 ]
 
 semanticTokensOptions : Json
-semanticTokensOptions = jObject
-  [
-    (
-      "legend",
-      jObject [
-        ("tokenTypes", jArray (map JString semanticLegend)),
-        ("tokenModifiers", jArray []),
-      ],
-    ),
-    ("full", JBool True),
-  ]
+semanticTokensOptions = jObject [
+  (
+    "legend",
+    jObject [
+      ("tokenTypes", jArray (map JString semanticLegend)),
+      ("tokenModifiers", jArray []),
+    ],
+  ),
+  ("full", JBool True),
+]
 
 {- Token → semantic role, threaded with a small syntactic CONTEXT so the same
    token SHAPE colors by ROLE: an uppercase name is a `type` in type position but
@@ -1465,8 +1577,10 @@ roleOf (TUpper _) _ _ MIfaceOne = Some 7  -- interface/impl name → typeclass
 roleOf (TUpper _) _ _ MIfaceMany = Some 7  -- requires/deriving names → typeclass
 roleOf (TUpper _) _ _ mode = Some (upperRole mode)
 roleOf (TIdent _) depth lineStart _ =
-  if lineStart && (depth == 0) then Some 3      -- top-level definition head
-  else None                                      -- local / param / reference
+  if lineStart && depth == 0 then
+    Some 3  -- top-level definition head
+  else
+    None  -- local / param / reference
 roleOf (TBacktickIdent _) _ _ _ = Some 3
 roleOf (TString _) _ _ _ = Some 5
 roleOf (TChar _) _ _ _ = Some 5
@@ -1522,23 +1636,25 @@ classify tok (SemCtx depth ls mode) =
 semToksOf : Array Char -> List Token -> List (Int, Int) -> SemCtx -> List SemTok
 semToksOf _ [] _ _ = []
 semToksOf _ _ [] _ = []
-semToksOf arr (t::ts) ((s, e)::ps) ctx = match classify t ctx
+semToksOf arr (t :: ts) ((s, e) :: ps) ctx = match classify t ctx
   (roleOpt, ctx2) => match roleOpt
     None => semToksOf arr ts ps ctx2
-    Some ty => if s >= e then semToksOf arr ts ps ctx2
-    else match (posOfOffset arr s, posOfOffset arr e)
-      ((sl, sc), (el, ec)) =>
-        if sl == el then
-          SemTok sl sc (ec - sc) ty :: semToksOf arr ts ps ctx2
-        else
-          semToksOf arr ts ps ctx2
+    Some ty =>
+      if s >= e then
+        semToksOf arr ts ps ctx2
+      else match (posOfOffset arr s, posOfOffset arr e)
+        ((sl, sc), (el, ec)) =>
+          if sl == el then
+            SemTok sl sc (ec - sc) ty :: semToksOf arr ts ps ctx2
+          else
+            semToksOf arr ts ps ctx2
 
 {- Delta-encode the (start-ordered) SemTok list into the flat 5-int LSP array.
    prevLine/prevChar start at 0, so the first token's deltaLine is its absolute
    line; deltaChar is relative to prevChar only when deltaLine == 0. -}
 encodeSemToks : Int -> Int -> List SemTok -> List Int
 encodeSemToks _ _ [] = []
-encodeSemToks prevLine prevChar ((SemTok line ch len ty)::rest) =
+encodeSemToks prevLine prevChar ((SemTok line ch len ty) :: rest) =
   let dLine = line - prevLine
   let dChar = if dLine == 0 then ch - prevChar else ch
   dLine :: dChar :: len :: ty :: 0 :: encodeSemToks line ch rest
@@ -1563,28 +1679,27 @@ semanticTokensData src =
 -- `true`).  The richer providers
 -- (hover/completion/inlayHint) and ELoc expr-precise ranges are later slices.
 initializeResult : Json
-initializeResult = jObject
-  [
-    (
-      "capabilities",
-      jObject [
-        ("textDocumentSync", JInt 1),
-        ("documentFormattingProvider", JBool True),
-        ("documentSymbolProvider", JBool True),
-        ("definitionProvider", JBool True),
-        ("documentHighlightProvider", JBool True),
-        ("referencesProvider", JBool True),
-        ("hoverProvider", JBool True),
-        ("completionProvider", jObject []),
-        ("inlayHintProvider", JBool True),
-        ("semanticTokensProvider", semanticTokensOptions),
-      ],
-    ),
-    (
-      "serverInfo",
-      jObject [("name", JString "medaka-lsp"), ("version", JString "0.1.0")],
-    ),
-  ]
+initializeResult = jObject [
+  (
+    "capabilities",
+    jObject [
+      ("textDocumentSync", JInt 1),
+      ("documentFormattingProvider", JBool True),
+      ("documentSymbolProvider", JBool True),
+      ("definitionProvider", JBool True),
+      ("documentHighlightProvider", JBool True),
+      ("referencesProvider", JBool True),
+      ("hoverProvider", JBool True),
+      ("completionProvider", jObject []),
+      ("inlayHintProvider", JBool True),
+      ("semanticTokensProvider", semanticTokensOptions),
+    ],
+  ),
+  (
+    "serverInfo",
+    jObject [("name", JString "medaka-lsp"), ("version", JString "0.1.0")],
+  ),
+]
 
 -- Build + send a publishDiagnostics notification for one uri.
 publishDiagnostics : String -> String -> String -> String -> <IO> Unit
@@ -1664,8 +1779,8 @@ bufferHasImports src = match parseResult src
 
 anyImport : List Decl -> Bool
 anyImport [] = False
-anyImport ((DUse _ path _)::rest) = not (isCoreImport path) || anyImport rest
-anyImport (_::rest) = anyImport rest
+anyImport ((DUse _ path _) :: rest) = not (isCoreImport path) || anyImport rest
+anyImport (_ :: rest) = anyImport rest
 
 -- core is the implicit prelude — an `import core.{…}` is not a sibling dep.
 isCoreImport : UsePath -> Bool
@@ -1679,7 +1794,7 @@ useHead (UseAlias ns _) = headOr "" ns
 
 headOr : String -> List String -> String
 headOr d [] = d
-headOr _ (x::_) = x
+headOr _ (x :: _) = x
 
 -- Run analyzeProject over the graph rooted at the edited file and publish one
 -- notification per file in the result (clean files → []).  `docs` already holds
@@ -1700,7 +1815,17 @@ publishProjectDiagnostics runtimeSrc coreSrc uri docs =
   -- (no internal-extern restriction, no `--allow-internal` concept in the
   -- LSP); kept unguarded here too (`allowInternal = True`, `trustedMods = []`)
   -- so a live-edit session never flags what a build-time `check` wouldn't.
-  let results = analyzeProject True [] projectCache projectParseCache read rootFile [projectDir, stdlibDir] runtimeSrc coreSrc
+  let results =
+    analyzeProject
+      True
+      []
+      projectCache
+      projectParseCache
+      read
+      rootFile
+      [projectDir, stdlibDir]
+      runtimeSrc
+      coreSrc
   publishEach results
 -- Module root = nearest ancestor with medaka.toml (NOT the file's own dir), so
 -- a nested module's imports (rooted at the project dir) resolve.  Falls back to
@@ -1717,10 +1842,14 @@ lspMedakaRoot dflt = match getEnv "MEDAKA_ROOT"
 -- mapping the loader file path back to a file:// uri (mirror DocumentUri.of_path).
 publishEach : List (String, List Diag) -> <IO> Unit
 publishEach [] = ()
-publishEach ((file, ds)::rest) =
+publishEach ((file, ds) :: rest) =
   let uri = uriOfPath file
-  let params = jObject [("uri", JString uri), ("diagnostics", jArray (map (diagToJson "") ds))]
-  let _ = writeMessage (notificationMsg "textDocument/publishDiagnostics" params)
+  let params = jObject [
+    ("uri", JString uri),
+    ("diagnostics", jArray (map (diagToJson "") ds)),
+  ]
+  let _ =
+    writeMessage (notificationMsg "textDocument/publishDiagnostics" params)
   publishEach rest
 
 -- Choose the single-document or project path for a freshly-edited buffer.
@@ -1736,24 +1865,26 @@ publishFor runtimeSrc coreSrc uri text docs =
 -- didChange: params.textDocument.uri + params.contentChanges[last].text
 --            (Full sync: the last change replaces the whole document).
 handleDidOpen : String -> String -> Json -> Docs -> <IO> Docs
-handleDidOpen runtimeSrc coreSrc params docs = match fieldStr "uri" (fieldOr "textDocument" params)
-  None => docs
-  Some uri => match fieldStr "text" (fieldOr "textDocument" params)
+handleDidOpen runtimeSrc coreSrc params docs =
+  match fieldStr "uri" (fieldOr "textDocument" params)
     None => docs
-    Some text =>
-      let docs2 = docsPut uri text docs
-      let _ = publishFor runtimeSrc coreSrc uri text docs2
-      docs2
+    Some uri => match fieldStr "text" (fieldOr "textDocument" params)
+      None => docs
+      Some text =>
+        let docs2 = docsPut uri text docs
+        let _ = publishFor runtimeSrc coreSrc uri text docs2
+        docs2
 
 handleDidChange : String -> String -> Json -> Docs -> <IO> Docs
-handleDidChange runtimeSrc coreSrc params docs = match fieldStr "uri" (fieldOr "textDocument" params)
-  None => docs
-  Some uri => match lastChangeText (fieldOr "contentChanges" params)
+handleDidChange runtimeSrc coreSrc params docs =
+  match fieldStr "uri" (fieldOr "textDocument" params)
     None => docs
-    Some text =>
-      let docs2 = docsPut uri text docs
-      let _ = publishFor runtimeSrc coreSrc uri text docs2
-      docs2
+    Some uri => match lastChangeText (fieldOr "contentChanges" params)
+      None => docs
+      Some text =>
+        let docs2 = docsPut uri text docs
+        let _ = publishFor runtimeSrc coreSrc uri text docs2
+        docs2
 
 -- ── B.10.3 request handlers ─────────────────────────────────────────────────
 -- Each looks the doc up in the store and writes a JSON-RPC response.  A missing
@@ -1799,7 +1930,10 @@ handleDefinition idJson params docs =
 -- relative in the result (path-stable for a golden).
 export
 definitionResult : String -> String -> Json -> Json
-definitionResult uri src params = match (positionLine params, positionChar params)
+definitionResult uri src params = match (
+  positionLine params,
+  positionChar params,
+)
   (Some line, Some col) => match identifierAt src line col
     None => JNull
     Some name => match definitionRange src name
@@ -1850,8 +1984,17 @@ handleReferences runtimeSrc coreSrc idJson params docs =
 -- root alone, never the separate stdlib root, so it never descends into
 -- stdlib/prelude bodies.
 export
-referencesResult : String -> String -> String -> String -> Json -> Docs -> <IO> Json
-referencesResult runtimeSrc coreSrc uri src params docs = match (positionLine params, positionChar params)
+referencesResult : String ->
+  String ->
+  String ->
+  String ->
+  Json ->
+  Docs ->
+  <IO> Json
+referencesResult runtimeSrc coreSrc uri src params docs = match (
+  positionLine params,
+  positionChar params,
+)
   (Some line, Some col) => match identifierAt src line col
     None => jArray []
     Some _ =>
@@ -1863,7 +2006,8 @@ referencesResult runtimeSrc coreSrc uri src params docs = match (positionLine pa
       -- are 0-based, hence `line + 1`. `col` is 0-based in both conventions.
       match binderAt idx rootFile (line + 1) col
         None => jArray []
-        Some key => jArray (referenceLocations idx key (includeDeclarationOf params))
+        Some key =>
+          jArray (referenceLocations idx key (includeDeclarationOf params))
   _ => jArray []
 
 -- Every recorded use of `key`, plus its def site(s) when `includeDecl`. `defsOf`
@@ -1904,13 +2048,14 @@ referenceLocations idx key includeDecl =
 
 -- (path, then start line, then start char) — see `referenceLocations`.
 compareUseLoc : (String, Loc) -> (String, Loc) -> Ordering
-compareUseLoc (p1, Loc _ sl1 sc1 _ _) (p2, Loc _ sl2 sc2 _ _) = match compare p1 p2
-  Lt => Lt
-  Gt => Gt
-  Eq => match compare sl1 sl2
+compareUseLoc (p1, Loc _ sl1 sc1 _ _) (p2, Loc _ sl2 sc2 _ _) =
+  match compare p1 p2
     Lt => Lt
     Gt => Gt
-    Eq => compare sc1 sc2
+    Eq => match compare sl1 sl2
+      Lt => Lt
+      Gt => Gt
+      Eq => compare sc1 sc2
 
 locationJson : (String, Loc) -> Json
 locationJson (path, loc) =
@@ -1985,64 +2130,77 @@ public export data Step = Step Docs Bool
 dispatch : String -> String -> Json -> Docs -> <IO> Step
 dispatch runtimeSrc coreSrc msg docs = match methodOf msg
   None => Step docs True
-  Some meth => if meth == "initialize" then
-    let _ = writeMessage (responseMsg (requestId msg) initializeResult)
-    Step docs True
-  else
-    if meth == "initialized" then Step docs True
+  Some meth =>
+    if meth == "initialize" then
+      let _ = writeMessage (responseMsg (requestId msg) initializeResult)
+      Step docs True
+    else if meth == "initialized" then
+      Step docs True
+    else if meth == "textDocument/didOpen" then
+      let docs2 = handleDidOpen runtimeSrc coreSrc (fieldOr "params" msg) docs
+      Step docs2 True
+    else if meth == "textDocument/didChange" then
+      let docs2 = handleDidChange runtimeSrc coreSrc (fieldOr "params" msg) docs
+      Step docs2 True
+    else if meth == "textDocument/formatting" then
+      let _ = handleFormatting (requestId msg) (fieldOr "params" msg) docs
+      Step docs True
+    else if meth == "textDocument/documentSymbol" then
+      let _ = handleDocumentSymbol (requestId msg) (fieldOr "params" msg) docs
+      Step docs True
+    else if meth == "textDocument/definition" then
+      let _ = handleDefinition (requestId msg) (fieldOr "params" msg) docs
+      Step docs True
+    else if meth == "textDocument/documentHighlight" then
+      let _ = handleHighlight (requestId msg) (fieldOr "params" msg) docs
+      Step docs True
+    else if meth == "textDocument/references" then
+      let _ =
+        handleReferences
+          runtimeSrc
+          coreSrc
+          (requestId msg)
+          (fieldOr "params" msg)
+          docs
+      Step docs True
+    else if meth == "textDocument/hover" then
+      let _ =
+        handleHover
+          runtimeSrc
+          coreSrc
+          (requestId msg)
+          (fieldOr "params" msg)
+          docs
+      Step docs True
+    else if meth == "textDocument/completion" then
+      let _ =
+        handleCompletion
+          runtimeSrc
+          coreSrc
+          (requestId msg)
+          (fieldOr "params" msg)
+          docs
+      Step docs True
+    else if meth == "textDocument/inlayHint" then
+      let _ =
+        handleInlayHint
+          runtimeSrc
+          coreSrc
+          (requestId msg)
+          (fieldOr "params" msg)
+          docs
+      Step docs True
+    else if meth == "textDocument/semanticTokens/full" then
+      let _ = handleSemanticTokens (requestId msg) (fieldOr "params" msg) docs
+      Step docs True
+    else if meth == "shutdown" then
+      let _ = writeMessage (responseMsg (requestId msg) JNull)
+      Step docs True
+    else if meth == "exit" then
+      let _ = logLine "exit (clean shutdown)"
+      Step docs False
     else
-      if meth == "textDocument/didOpen" then
-        let docs2 = handleDidOpen runtimeSrc coreSrc (fieldOr "params" msg) docs
-        Step docs2 True
-      else
-        if meth == "textDocument/didChange" then
-          let docs2 = handleDidChange runtimeSrc coreSrc (fieldOr "params" msg) docs
-          Step docs2 True
-        else
-          if meth == "textDocument/formatting" then
-            let _ = handleFormatting (requestId msg) (fieldOr "params" msg) docs
-            Step docs True
-          else
-            if meth == "textDocument/documentSymbol" then
-              let _ = handleDocumentSymbol (requestId msg) (fieldOr "params" msg) docs
-              Step docs True
-            else
-              if meth == "textDocument/definition" then
-                let _ = handleDefinition (requestId msg) (fieldOr "params" msg) docs
-                Step docs True
-              else
-                if meth == "textDocument/documentHighlight" then
-                  let _ = handleHighlight (requestId msg) (fieldOr "params" msg) docs
-                  Step docs True
-                else
-                  if meth == "textDocument/references" then
-                    let _ = handleReferences runtimeSrc coreSrc (requestId msg) (fieldOr "params" msg) docs
-                    Step docs True
-                  else
-                    if meth == "textDocument/hover" then
-                      let _ = handleHover runtimeSrc coreSrc (requestId msg) (fieldOr "params" msg) docs
-                      Step docs True
-                    else
-                      if meth == "textDocument/completion" then
-                        let _ = handleCompletion runtimeSrc coreSrc (requestId msg) (fieldOr "params" msg) docs
-                        Step docs True
-                      else
-                        if meth == "textDocument/inlayHint" then
-                          let _ = handleInlayHint runtimeSrc coreSrc (requestId msg) (fieldOr "params" msg) docs
-                          Step docs True
-                        else
-                          if meth == "textDocument/semanticTokens/full" then
-                            let _ = handleSemanticTokens (requestId msg) (fieldOr "params" msg) docs
-                            Step docs True
-                          else
-                            if meth == "shutdown" then
-                              let _ = writeMessage (responseMsg (requestId msg) JNull)
-                              Step docs True
-                            else
-                              if meth == "exit" then
-                                let _ = logLine "exit (clean shutdown)"
-                                Step docs False
-                              else Step docs True  -- unrecognized method — ignore
+      Step docs True  -- unrecognized method — ignore
 -- a response/unknown — ignore, keep going
 
 -- stop the loop

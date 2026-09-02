@@ -185,12 +185,14 @@ When a lambda's whole job is to match on its argument, write `x => match x` and 
 the arms underneath. This shows up a lot in arguments to `map`:
 
 ```medaka
-main = println (map
-  (x => match x
-    Some n if n > 100 => "a big \{n}"
-    Some n => "just \{n}"
-    None => "nothing")
-  [Some 5, Some 500, None])
+main =
+  println
+    (map
+      (x => match x
+        Some n if n > 100 => "a big \{n}"
+        Some n => "just \{n}"
+        None => "nothing")
+      [Some 5, Some 500, None])
 ```
 
 ```medaka-expect

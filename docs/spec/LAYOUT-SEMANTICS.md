@@ -253,25 +253,30 @@ There are four, applied at two different stages.
 ### 5.0 The two operator sets (asymmetric — note carefully)
 
 ```
-TRAILING-continuation ops (≈20): prev token that absorbs the next deeper line
-    +  -  *  /  %  ++  ::  ==  /=  <  >  <=  >=  &&  ||  |>  >>  <<  `ident`
-    (arrows -> => <- are EXCLUDED; trailing `-` is always binary here)
+TRAILING-continuation ops (≈21): prev token that absorbs the next deeper line
+    +  -  *  /  %  ++  ::  ==  /=  <  >  <=  >=  &&  ||  |>  >>  <<  `ident`  in
+    (arrows -> => <- are EXCLUDED; trailing `-` is always binary here;
+     a trailing `in` continues a `let … in` onto its deeper body line)
 
-LEADING-continuation ops (7): next-line-initial token that continues prev line
-    |>  >>  <<  &&  ||  ++  ::
+LEADING-continuation ops: next-line-initial token that continues prev line
+    every binary operator:  |>  >>  <<  &&  ||  ++  ::  ==  /=  <  >  <=  >=
+                            +  *  /  %   and  `- ` (minus followed by a space)
+    (arrows -> => <- and `=` never lead; a tight `-1`/`-x` is an atom, so a
+     leading `-` continues ONLY when whitespace follows it)
 ```
 
-The leading set is a **strict subset** of the trailing set. The difference is
-deliberate: `+`, `-`, `*`, `/` may *trail* a line (`x +⏎ y`), but may **not**
-*lead* one (`x⏎ + y` is **not** a continuation — leading `-`/`*`/`+` is
-ambiguous with unary minus / a section / a fresh term, so it opens a block
-instead). Only operators that are unambiguously infix-and-nothing-else may lead.
+The one operator that needs a rule is `-`: at the start of a line a tight `-1`
+or `-x` is a negative literal / negation (an atom, which opens a block or
+continues an application by rule 3 below), while a spaced `- x` is the binary
+operator continuing the previous line. Every other operator is
+infix-and-nothing-else at the start of a line, so it always continues.
 
 ### 5.1 Leading-operator continuation (Stage A)
 
-If, after a newline, the first non-whitespace begins one of the 7 leading ops,
-the scanner emits the operator token and **no `Nl`** — the line is glued to the
-previous one. `a⏎  |> f` lexes as `a |> f`.
+If, after a newline, the first non-whitespace begins a binary operator (per
+the table above), the scanner emits the operator token and **no `Nl`** — the
+line is glued to the previous one. `a⏎  |> f` lexes as `a |> f`; `a⏎  + b`
+lexes as `a + b`.
 
 ### 5.2 Comment transparency (Stage A) — see §3.
 
@@ -361,8 +366,14 @@ the herald's block (structuring its arms/statements), even though it is inside
 brackets. The locked herald set is:
 
 ```
-match    do    function    record    bare-INDENT block
+match    do    function    record    bare-INDENT block    =>  (line-final)
 ```
+
+A line-final `=>` — a lambda head — arms the lambda's block body
+(`map (x =>⏎  let y = x * 2⏎  y) xs`), in any argument position; this is the
+one keyword-less way the bare-INDENT block is reachable inside brackets. A `,`
+at the bracket's own level closes such a block exactly as the closer does
+(`(x =>⏎  …,` — the comma belongs to the enclosing bracket, not the block).
 
 (`let … in` multi-binding groups and bracketed `if/then/else` are **DEFERRED** —
 they stay rejected inside brackets, owing to the own-line-`in` and dangling-else
@@ -393,8 +404,13 @@ no-parser→layout-feedback rule); the close is driven by the explicit
 bracket-aware frame, not by parser feedback.
 
 **Frame model.** Each open bracket carries a small **bracket frame**
-`(entryDepth, openedContexts)` interleaved with the bracket-depth counter; nested
-heralds push further contexts onto the same frame. This is a *targeted* extension
+(`BracketFrame liveContexts savedOpener` in `compiler/frontend/lexer.mdk`):
+the count of nested layout contexts the bracket has opened, and the `match`
+opener flag as it stood when the bracket opened — saved at the opener and
+restored at the closer, so a `match` header's flag survives its scrutinee's own
+brackets (`match (a, b)⏎  arms`) but never leaks *into* them (a wrapped
+scrutinee `match (a,⏎  b)` is free-form, not an arms block). Nested heralds push
+further contexts onto the same frame. This is a *targeted* extension
 (not a full Haskell `L` rewrite): the free-form default is preserved, and layout
 is re-enabled only on the herald-armed path.
 

@@ -62,10 +62,7 @@ bigRow i = [CInt i, CText "item_\{intToString i}"]
 
 bigRows : Int -> Int -> List (List Cell) -> List (List Cell)
 bigRows i n acc =
-  if i > n then
-    reverse acc
-  else
-    bigRows (i + 1) n (bigRow i :: acc)
+  if i > n then reverse acc else bigRows (i + 1) n (bigRow i :: acc)
 
 main : <IO> Unit
 main = match args ()
@@ -74,7 +71,8 @@ main = match args ()
 
 run : Int -> String -> <IO> Unit
 run n out =
-  let tables = [(usersSchema, usersRows), (bigSchema, bigRows 1 n []), (kvSchema, kvRows)]
+  let tables =
+    [(usersSchema, usersRows), (bigSchema, bigRows 1 n []), (kvSchema, kvRows)]
   match writeTables out tables
     Err e => println "Error: \{e}"
     Ok _ => println "wrote \{out} (users=3 big=\{intToString n} kv=3)"

@@ -82,16 +82,16 @@ showTomlValue (TArray xs) = "TArray [\{showTomlValues xs}]"
 
 showTomlValues : List TomlValue -> String
 showTomlValues [] = ""
-showTomlValues (v::[]) = showTomlValue v
-showTomlValues (v::rest) = "\{showTomlValue v}, \{showTomlValues rest}"
+showTomlValues (v :: []) = showTomlValue v
+showTomlValues (v :: rest) = "\{showTomlValue v}, \{showTomlValues rest}"
 
 showPair : (String, TomlValue) -> String
 showPair (k, v) = "\{k} = \{showTomlValue v}"
 
 showPairs : List (String, TomlValue) -> String
 showPairs [] = "(empty)"
-showPairs (p::[]) = showPair p
-showPairs (p::rest) = "\{showPair p}\n  \{showPairs rest}"
+showPairs (p :: []) = showPair p
+showPairs (p :: rest) = "\{showPair p}\n  \{showPairs rest}"
 
 export
 showTomlDoc : TomlDoc -> String
@@ -99,8 +99,8 @@ showTomlDoc (TomlDoc tables) = joinTables tables
 
 joinTables : List TomlTable -> String
 joinTables [] = ""
-joinTables (t::[]) = showTable t
-joinTables (t::rest) = "\{showTable t}\n\{joinTables rest}"
+joinTables (t :: []) = showTable t
+joinTables (t :: rest) = "\{showTable t}\n\{joinTables rest}"
 
 showTable : TomlTable -> String
 showTable (TomlTable name pairs) =
@@ -223,7 +223,7 @@ applySign (Some _) n = 0 - n
 
 foldDigits : List Char -> Int -> Int
 foldDigits [] acc = acc
-foldDigits (d::rest) acc = foldDigits rest (acc * 10 + (charCode d - 48))
+foldDigits (d :: rest) acc = foldDigits rest (acc * 10 + (charCode d - 48))
 
 -- ---------------------------------------------------------------------------
 -- Boolean parser
@@ -232,9 +232,10 @@ foldDigits (d::rest) acc = foldDigits rest (acc * 10 + (charCode d - 48))
 -- Boolean parser.
 export
 parseBool : Parser Bool
-parseBool = orElse
-  (deferMap (_ => True) (string "true"))
-  (deferMap (_ => False) (string "false"))
+parseBool =
+  orElse
+    (deferMap (_ => True) (string "true"))
+    (deferMap (_ => False) (string "false"))
 
 -- ---------------------------------------------------------------------------
 -- Array parser (forward-declared via mutual helpers)
@@ -264,13 +265,12 @@ parseArray =
 -- prefix-free from each other; try string before int; try int before array
 -- (no ambiguity, but keep consistent ordering).
 parseValue : Parser TomlValue
-parseValue = choice
-  [
-    parseArray,
-    deferMap TStr quotedString,
-    deferMap TBool parseBool,
-    deferMap TInt parseInt,
-  ]
+parseValue = choice [
+  parseArray,
+  deferMap TStr quotedString,
+  deferMap TBool parseBool,
+  deferMap TInt parseInt,
+]
 
 -- ---------------------------------------------------------------------------
 -- Key = value line
@@ -335,7 +335,7 @@ tomlDoc = defer
   _ <- skipBlankLines
   _ <- eof
   let topTable = TomlTable "" topPairs
-  deferPure (TomlDoc (topTable::sections))
+  deferPure (TomlDoc (topTable :: sections))
 
 -- ---------------------------------------------------------------------------
 -- Public entry point

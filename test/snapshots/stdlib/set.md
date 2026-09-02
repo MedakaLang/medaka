@@ -1,5 +1,5 @@
 # META
-source_lines=681
+source_lines=675
 stages=DESUGAR,MARK
 # SOURCE
 {- | An immutable set of distinct elements, ordered by `Ord`.
@@ -71,18 +71,12 @@ balance x l r
 
 rotateL : a -> Set a -> Set a -> Set a
 rotateL x l (r@(Bin _ _ rl rr)) =
-  if size rl < 2 * size rr then
-    singleL x l r
-  else
-    doubleL x l r
+  if size rl < 2 * size rr then singleL x l r else doubleL x l r
 rotateL x l Tip = panic "Set.rotateL: empty right subtree"
 
 rotateR : a -> Set a -> Set a -> Set a
 rotateR x (l@(Bin _ _ ll lr)) r =
-  if size lr < 2 * size ll then
-    singleR x l r
-  else
-    doubleR x l r
+  if size lr < 2 * size ll then singleR x l r else doubleR x l r
 rotateR x Tip r = panic "Set.rotateR: empty left subtree"
 
 singleL : a -> Set a -> Set a -> Set a
@@ -494,7 +488,7 @@ export impl Debug (Set a) requires Debug a where
 displaySetItems : Display a => List a -> String
 displaySetItems [] = ""
 displaySetItems [x] = "\{x}"
-displaySetItems (y::rest) = "\{y}, \{displaySetItems rest}"
+displaySetItems (y :: rest) = "\{y}, \{displaySetItems rest}"
 
 {- | `display` renders a set in its literal syntax, `Set { x, ... }`.
 
@@ -558,7 +552,7 @@ balancedAt l r =
 ascending : Ord a => List a -> Bool
 ascending [] = True
 ascending [x] = True
-ascending (x::y::rest) = lt x y && ascending (y::rest)
+ascending (x :: y :: rest) = lt x y && ascending (y :: rest)
 
 -- ── Properties ──────────────────────────────────────────────────────────
 

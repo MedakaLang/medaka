@@ -11,7 +11,8 @@ import lib.rowtype.{tCells}
 import lib.sqlstmt.{queryString, queryStringDistinct}
 
 usersSql : String
-usersSql = "CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT, age INTEGER, city TEXT)"
+usersSql =
+  "CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT, age INTEGER, city TEXT)"
 
 ordersSql : String
 ordersSql =

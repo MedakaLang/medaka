@@ -1,5 +1,5 @@
 # META
-source_lines=836
+source_lines=840
 stages=DESUGAR,MARK
 # SOURCE
 {- | An immutable map from keys to values, ordered by key.
@@ -81,19 +81,13 @@ balance k v l r
 -- grandchild outweighs its right.
 rotateL : k -> v -> Map k v -> Map k v -> Map k v
 rotateL k v l (r@(Bin _ _ _ rl rr)) =
-  if size rl < 2 * size rr then
-    singleL k v l r
-  else
-    doubleL k v l r
+  if size rl < 2 * size rr then singleL k v l r else doubleL k v l r
 rotateL k v l Tip = panic "Map.rotateL: empty right subtree"
 
 -- Left subtree too heavy: mirror of rotateL.
 rotateR : k -> v -> Map k v -> Map k v -> Map k v
 rotateR k v (l@(Bin _ _ _ ll lr)) r =
-  if size lr < 2 * size ll then
-    singleR k v l r
-  else
-    doubleR k v l r
+  if size lr < 2 * size ll then singleR k v l r else doubleR k v l r
 rotateR k v Tip r = panic "Map.rotateR: empty left subtree"
 
 singleL : k -> v -> Map k v -> Map k v -> Map k v
@@ -392,7 +386,7 @@ foldlWithKey f z (Bin _ k v l r) = foldlWithKey f (f (foldlWithKey f z l) k v) r
    [(1, 10), (2, 20), (3, 30)] -}
 export
 toList : Map k v -> List (k, v)
-toList m = foldrWithKey (k v acc => (k, v)::acc) [] m
+toList m = foldrWithKey (k v acc => (k, v) :: acc) [] m
 
 {- | The keys, in ascending order.
 
@@ -400,7 +394,7 @@ toList m = foldrWithKey (k v acc => (k, v)::acc) [] m
    [1, 2, 3] -}
 export
 keys : Map k v -> List k
-keys m = foldrWithKey (k _ acc => k::acc) [] m
+keys m = foldrWithKey (k _ acc => k :: acc) [] m
 
 {- | The values, in ascending order of their keys.
 
@@ -408,7 +402,7 @@ keys m = foldrWithKey (k _ acc => k::acc) [] m
    [10, 20, 30] -}
 export
 values : Map k v -> List v
-values m = foldrWithKey (k v acc => v::acc) [] m
+values m = foldrWithKey (k v acc => v :: acc) [] m
 
 {- | The map with `f` applied to every value, where `f` also receives the
    key.
@@ -640,7 +634,7 @@ export impl Debug (Map k v) requires Debug k, Debug v where
 displayMapEntries : (Display k, Display v) => List (k, v) -> String
 displayMapEntries [] = ""
 displayMapEntries [(k, v)] = "\{k} => \{v}"
-displayMapEntries ((k, v)::rest) = "\{k} => \{v}, \{displayMapEntries rest}"
+displayMapEntries ((k, v) :: rest) = "\{k} => \{v}, \{displayMapEntries rest}"
 
 {- | `display` renders a map in its literal syntax, `Map { k => v, ... }`.
 
@@ -704,7 +698,7 @@ balancedAt l r =
 ascending : Ord a => List a -> Bool
 ascending [] = True
 ascending [x] = True
-ascending (x::y::rest) = lt x y && ascending (y::rest)
+ascending (x :: y :: rest) = lt x y && ascending (y :: rest)
 
 -- ── Properties ──────────────────────────────────────────────────────────
 
@@ -714,15 +708,18 @@ prop "fromList builds a well-formed tree" (xs : List (Int, Int)) =
 prop "keys come out strictly ascending" (xs : List (Int, Int)) =
   ascending (keys (fromList xs))
 
-prop "insert then lookup returns the inserted value" (k : Int) (v : Int) (xs : List (Int, Int)) = eq (get k (set k v (fromList xs))) (Some v)
+prop "insert then lookup returns the inserted value" (k : Int) (v : Int) (xs : List (Int, Int)) =
+  eq (get k (set k v (fromList xs))) (Some v)
 
-prop "insert preserves well-formedness" (k : Int) (v : Int) (xs : List (Int, Int)) = wellFormed (set k v (fromList xs))
+prop "insert preserves well-formedness" (k : Int) (v : Int) (xs : List (Int, Int)) =
+  wellFormed (set k v (fromList xs))
 
 prop "delete removes the key and preserves well-formedness" (k : Int) (xs : List (Int, Int)) =
   let m = delete k (fromList xs)
   not (has k m) && wellFormed m
 
-prop "union preserves well-formedness" (xs : List (Int, Int)) (ys : List (Int, Int)) = wellFormed (union (fromList xs) (fromList ys))
+prop "union preserves well-formedness" (xs : List (Int, Int)) (ys : List (Int, Int)) =
+  wellFormed (union (fromList xs) (fromList ys))
 
 prop "union is left-biased on shared keys" (k : Int) (xs : List (Int, Int)) =
   let l = set k 1 (fromList xs)
@@ -748,7 +745,13 @@ naiveDifference a b = foldrWithKey (k _ acc => delete k acc) a b
 naiveIntersectionWith : Ord k => (v -> w -> x) -> Map k v -> Map k w -> Map k x
 naiveIntersectionWith f a b = foldrWithKey (naiveIntersectStep f b) Tip a
 
-naiveIntersectStep : Ord k => (v -> w -> x) -> Map k w -> k -> v -> Map k x -> Map k x
+naiveIntersectStep : Ord k =>
+  (v -> w -> x) ->
+  Map k w ->
+  k ->
+  v ->
+  Map k x ->
+  Map k x
 naiveIntersectStep f b k v acc = match get k b
   None => acc
   Some w => set k (f v w) acc
@@ -764,7 +767,8 @@ prop "union agrees with naive fold-insert" (xs : List (Int, Int)) (ys : List (In
   let b = fromList ys
   eq (toList (union a b)) (toList (naiveUnion a b))
 
-prop "union keys stay strictly ascending" (xs : List (Int, Int)) (ys : List (Int, Int)) = ascending (keys (union (fromList xs) (fromList ys)))
+prop "union keys stay strictly ascending" (xs : List (Int, Int)) (ys : List (Int, Int)) =
+  ascending (keys (union (fromList xs) (fromList ys)))
 
 prop "unionWith agrees with naive and stays well-formed" (xs : List (Int, Int)) (ys : List (Int, Int)) =
   let a = fromList xs

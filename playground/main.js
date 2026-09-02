@@ -37,9 +37,7 @@ main =
   println "hello from Medaka!"
 `,
   shapes: `-- A tiny shape calculator
-data Shape
-  = Circle Float
-  | Rect Float Float
+data Shape = Circle Float | Rect Float Float
 
 area : Shape -> Float
 area (Circle r) = 3.14159 * r * r

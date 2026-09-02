@@ -1,5 +1,5 @@
 # META
-source_lines=4555
+source_lines=4892
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage (single-file
@@ -271,25 +271,25 @@ resErrorLoc (DuplicateInterfaceMethod _ _ _ l) = l
 -- membership-tested, so they stay plain lists.
 -- `fieldOwners` is (field, owner) pairs; `ifaceMethods` is (iface, methods).
 public export data Env = Env {
-    values : OrdMap Unit,
-    types : OrdMap Unit,
-    ctors : OrdMap Unit,
-    fields : List String,
-    fieldOwners : List (String, String),
-    fieldOwnersIdx : OrdMap (List String),  -- `fieldOwners` indexed by field name (built ONCE, see `buildFieldOwnerIndex`):
-    interfaces : List String,  -- field -> its owners in registration order.  `ownersOf` probes this in
-    ifaceMethods : List (String, List String),  -- O(log fields) instead of the O(fields) linear scan of `fieldOwners` it used
-    effects : List String,  -- to do per field mention — the wide-record resolve quadratic (#984).  The
-    imported : OrdMap Unit,  -- plain `fieldOwners` list is kept only for the rare `ownsAnyField` error path.
-    importedModuleValues : List (String, List String),
-    ambiguous : List (String, List String),
-    ctorAmbiguous : List (String, List String),
-    typeAmbiguous : List (String, List String),
-    ifaceAmbiguous : List (String, List String),
-    internalGuard : OrdMap Unit,
-    sugValues : List SugCand,  -- the did-you-mean candidate POOLS, materialized ONCE per `Env`
-    sugTypes : List SugCand,  -- (see `SugCand`) instead of per unbound name — #1016.
-  }  -- imported module (needs a selective import, not a typo fix; audit #5).
+  values : OrdMap Unit,
+  types : OrdMap Unit,
+  ctors : OrdMap Unit,
+  fields : List String,
+  fieldOwners : List (String, String),
+  fieldOwnersIdx : OrdMap (List String),  -- `fieldOwners` indexed by field name (built ONCE, see `buildFieldOwnerIndex`):
+  interfaces : List String,  -- field -> its owners in registration order.  `ownersOf` probes this in
+  ifaceMethods : List (String, List String),  -- O(log fields) instead of the O(fields) linear scan of `fieldOwners` it used
+  effects : List String,  -- to do per field mention — the wide-record resolve quadratic (#984).  The
+  imported : OrdMap Unit,  -- plain `fieldOwners` list is kept only for the rare `ownsAnyField` error path.
+  importedModuleValues : List (String, List String),
+  ambiguous : List (String, List String),
+  ctorAmbiguous : List (String, List String),
+  typeAmbiguous : List (String, List String),
+  ifaceAmbiguous : List (String, List String),
+  internalGuard : OrdMap Unit,
+  sugValues : List SugCand,  -- the did-you-mean candidate POOLS, materialized ONCE per `Env`
+  sugTypes : List SugCand,  -- (see `SugCand`) instead of per unbound name — #1016.
+}  -- imported module (needs a selective import, not a typo fix; audit #5).
 -- (modId, expValues) pairs for every non-`core` module this file `import`s
 -- (multi-module path only; single-file `buildEnv` leaves this `[]`) — lets
 -- #674: CONSTRUCTOR name → its ≥2 explicitly-importing module ids (ctor peer of `ambiguous`)
@@ -312,7 +312,9 @@ public export data Env = Env {
 -- legitimately appears in user programs post-desugar.
 export
 internalExterns : List String
-internalExterns = ["arrayGetUnsafe", "arraySetUnsafe", "arrayBlit", "arrayFill", "bytesToFloat64"]
+internalExterns = [
+  "arrayGetUnsafe", "arraySetUnsafe", "arrayBlit", "arrayFill", "bytesToFloat64"
+]
 
 -- The internal-extern guard list for a module given whether internal access is
 -- permitted (a trusted module / `--allow-internal`): empty ⇒ no restriction.
@@ -330,10 +332,12 @@ internalGuardFor False = internalExterns
 buildFieldOwnerIndex : List (String, String) -> OrdMap (List String)
 buildFieldOwnerIndex pairs = omMapValues reverseL (indexOwners pairs omEmpty)
 
-indexOwners : List (String, String) -> OrdMap (List String) -> OrdMap (List String)
+indexOwners : List (String, String) ->
+  OrdMap (List String) ->
+  OrdMap (List String)
 indexOwners [] m = m
-indexOwners ((f, owner)::rest) m = match omLookup f m
-  Some os => indexOwners rest (omInsert f (owner::os) m)
+indexOwners ((f, owner) :: rest) m = match omLookup f m
+  Some os => indexOwners rest (omInsert f (owner :: os) m)
   None => indexOwners rest (omInsert f [owner] m)
 
 -- the owners registered for a field name in the field-owner multimap.
@@ -406,8 +410,8 @@ checkType _ _ (TyVar _) = []
 checkType cur env (TyApp a b) = checkType cur env a ++ checkType cur env b
 checkType cur env (TyFun a b) = checkType cur env a ++ checkType cur env b
 checkType cur env (TyTuple ts) = flatMap (checkType cur env) ts
-checkType cur env (TyEffect labels _ t) = flatMap (checkEffect cur env) (map fst labels)
-  ++ checkType cur env t
+checkType cur env (TyEffect labels _ t) =
+  flatMap (checkEffect cur env) (map fst labels) ++ checkType cur env t
 -- ⚠️ The predicates are checked with `cur` WIDENED by the constrained type's own
 -- first span, not with the bare `cur`.  A `Constraint` carries no `Loc` (see
 -- `ambiguousIfaceErrors`), and at DECL level `cur` is `None`, so `f : Speak a =>
@@ -416,8 +420,9 @@ checkType cur env (TyEffect labels _ t) = flatMap (checkEffect cur env) (map fst
 -- is the nearer enclosing span, from an `EAnnot` inside a body).  This also
 -- narrows the pre-existing `UnknownInterface` at this site from `<unknown
 -- location>` to the signature it was written in.
-checkType cur env (TyConstrained cs t) = flatMap (checkConstraint (orElseLoc cur (firstTyLoc t)) env) cs
-  ++ checkType cur env t
+checkType cur env (TyConstrained cs t) =
+  flatMap (checkConstraint (orElseLoc cur (firstTyLoc t)) env) cs
+    ++ checkType cur env t
 -- A bare row atom (#997) wraps no inner type, but its labels are the same
 -- written effect labels a `TyEffect` carries — validate them the same way.
 checkType cur env (TyRow labels _ _) =
@@ -473,9 +478,9 @@ ambiguousTypeErrors env n loc =
 -- where a local binder cannot appear, so there is nothing for a scope test to exclude and
 -- neither of these two callers even receives the `Scope`.
 ambiguousCtorErrors : Env -> String -> Option Loc -> List ResError
-ambiguousCtorErrors env n loc = whenL
-  (isCtorAmbiguous env n)
-  [AmbiguousConstructor n (ctorAmbigMods env n) loc]
+ambiguousCtorErrors env n loc = whenL (isCtorAmbiguous env n) [
+  AmbiguousConstructor n (ctorAmbigMods env n) loc,
+]
 
 -- ── the RECORD-HEAD verdict: exactly ONE of the two peers ──────────────────
 -- A record head (`recPatHead` / `recCreateHead`) may be spelled either way — a TYPE
@@ -520,22 +525,29 @@ ambiguousHeadErrors env n loc = match ambiguousTypeErrors env n loc
 -- The `Require` / `DImpl.iface` locators are a strict IMPROVEMENT on their
 -- co-located `UnknownInterface`, which passes a literal `None`.
 ambiguousIfaceErrors : Env -> String -> Option Loc -> List ResError
-ambiguousIfaceErrors env n loc = whenL
-  (isIfaceAmbiguous env n)
-  [AmbiguousInterface n (ifaceAmbigMods env n) loc]
+ambiguousIfaceErrors env n loc = whenL (isIfaceAmbiguous env n) [
+  AmbiguousInterface n (ifaceAmbigMods env n) loc,
+]
 
 checkConstraint : Option Loc -> Env -> Constraint -> List ResError
-checkConstraint cur env (Constraint { constraintHead = iface, constraintArgs = args }) = (if contains iface env.interfaces then ambiguousIfaceErrors env iface (orElseLoc (firstTyLocList args) cur) else [UnknownInterface iface cur]) ++ flatMap (checkType cur env) args
+checkConstraint cur env (Constraint { constraintHead = iface, constraintArgs = args }) =
+  (if contains iface env.interfaces then
+      ambiguousIfaceErrors env iface (orElseLoc (firstTyLocList args) cur)
+    else
+      [UnknownInterface iface cur])
+    ++ flatMap (checkType cur env) args
 
 -- ── check_pat ─────────────────────────────────────────────────────────────
 checkPat : Option Loc -> Env -> Pat -> List ResError
-checkPat cur env (PCon c ps) = (if omHasKey c env.ctors || omHasKey c env.imported then
-    -- in scope — but a cross-module duplicate ctor (≥2 explicitly-importing
-    -- modules) is AMBIGUOUS at this use site (#674); local ctors are excluded
-    -- from ctorAmbiguous, so this only fires on a genuine import collision.
-    ambiguousCtorErrors env c cur
-  else [UnknownConstructor c cur (suggestCtor c)])
-  ++ flatMap (checkPat cur env) ps
+checkPat cur env (PCon c ps) =
+  (if omHasKey c env.ctors || omHasKey c env.imported then
+      -- in scope — but a cross-module duplicate ctor (≥2 explicitly-importing
+      -- modules) is AMBIGUOUS at this use site (#674); local ctors are excluded
+      -- from ctorAmbiguous, so this only fires on a genuine import collision.
+      ambiguousCtorErrors env c cur
+    else
+      [UnknownConstructor c cur (suggestCtor c)])
+    ++ flatMap (checkPat cur env) ps
 checkPat cur env (PCons a b) = checkPat cur env a ++ checkPat cur env b
 checkPat cur env (PTuple ps) = flatMap (checkPat cur env) ps
 checkPat cur env (PList ps) = flatMap (checkPat cur env) ps
@@ -544,8 +556,8 @@ checkPat cur env (PRec name fields _) = checkRecPat cur env name fields
 checkPat _ _ _ = []
 
 checkRecPat : Option Loc -> Env -> String -> List RecPatField -> List ResError
-checkRecPat cur env name fields = recPatHead cur env name
-  ++ flatMap (checkRecField cur env name) fields
+checkRecPat cur env name fields =
+  recPatHead cur env name ++ flatMap (checkRecField cur env name) fields
 
 recPatHead : Option Loc -> Env -> String -> List ResError
 recPatHead cur env name =
@@ -566,8 +578,8 @@ recPatHead cur env name =
     [UnknownType name cur (suggestType env name)]
 
 checkRecField : Option Loc -> Env -> String -> RecPatField -> List ResError
-checkRecField cur env owner (RecPatField fname _ popt) = fieldCheck cur env owner fname
-  ++ recFieldSub cur env popt
+checkRecField cur env owner (RecPatField fname _ popt) =
+  fieldCheck cur env owner fname ++ recFieldSub cur env popt
 
 fieldCheck : Option Loc -> Env -> String -> String -> List ResError
 fieldCheck cur env owner fname =
@@ -580,22 +592,24 @@ fieldCheck cur env owner fname =
 -- with zero owners is that it was exported abstractly (`export` without `public`),
 -- whereas a local definition always registers its fields.  Distinguish that case
 -- from a genuinely-unknown field with a clearer message.
-fieldVerdict : Option Loc -> Env -> String -> String -> List String -> List ResError
+fieldVerdict : Option Loc ->
+  Env ->
+  String ->
+  String ->
+  List String ->
+  List ResError
 fieldVerdict cur env owner fname [] =
   if omHasKey owner env.types && not (ownsAnyField owner env.fieldOwners) then
     [AbstractFieldAccess owner fname cur]
   else
     [UnknownField fname cur]
 fieldVerdict cur env owner fname owners =
-  if contains owner owners then
-    []
-  else
-    [FieldNotInRecord fname owner cur]
+  if contains owner owners then [] else [FieldNotInRecord fname owner cur]
 
 -- does `owner` own ANY field in the field-owner multimap?
 ownsAnyField : String -> List (String, String) -> Bool
 ownsAnyField _ [] = False
-ownsAnyField owner ((_, o)::rest)
+ownsAnyField owner ((_, o) :: rest)
   | o == owner = True
   | otherwise = ownsAnyField owner rest
 
@@ -640,7 +654,7 @@ scopeExtend ns (Scope names mem) = Scope (ns ++ names) (omFromNames ns mem)
 
 -- extend with a single name (mirroring the old `n :: scope`)
 scopeAdd : String -> Scope -> Scope
-scopeAdd n (Scope names mem) = Scope (n::names) (omInsert n () mem)
+scopeAdd n (Scope names mem) = Scope (n :: names) (omInsert n () mem)
 
 -- ── check_expr (scope = locally-bound names) ──────────────────────────────
 -- `cur` (Stage B): the innermost enclosing `ELoc` span, threaded so every error
@@ -663,26 +677,29 @@ checkExpr _ _ _ (EDictAt _ _) =
   panic
     "unreachable: EDictAt is introduced by typecheck elaboration after resolve"
 checkExpr cur env scope (EVar n) = checkVar cur env scope n
-checkExpr cur env scope (EApp f x) = checkExpr cur env scope f
-  ++ checkExpr cur env scope x
-checkExpr cur env scope (ELam pats body) = flatMap (checkPat cur env) pats
-  ++ patGroupDupErrors cur "parameter list" pats
-  ++ checkExpr cur env (scopeExtend (patsBindings pats) scope) body
+checkExpr cur env scope (EApp f x) =
+  checkExpr cur env scope f ++ checkExpr cur env scope x
+checkExpr cur env scope (ELam pats body) =
+  flatMap (checkPat cur env) pats
+    ++ patGroupDupErrors cur "parameter list" pats
+    ++ checkExpr cur env (scopeExtend (patsBindings pats) scope) body
 checkExpr cur env scope (ELet _ isRec pat e1 e2) =
   checkLet cur env scope isRec pat e1 e2
 checkExpr cur env scope (ELetGroup binds body) =
   checkLetGroup cur env scope binds body
-checkExpr cur env scope (EMatch e0 arms) = checkExpr cur env scope e0
-  ++ flatMap (checkArm cur env scope) arms
-checkExpr cur env scope (EIf c t el) = checkExpr cur env scope c
-  ++ checkExpr cur env scope t
-  ++ checkExpr cur env scope el
-checkExpr cur env scope (EBinOp _ a b _) = checkExpr cur env scope a
-  ++ checkExpr cur env scope b
+checkExpr cur env scope (EMatch e0 arms) =
+  checkExpr cur env scope e0 ++ flatMap (checkArm cur env scope) arms
+checkExpr cur env scope (EIf c t el) =
+  checkExpr cur env scope c
+    ++ checkExpr cur env scope t
+    ++ checkExpr cur env scope el
+checkExpr cur env scope (EBinOp _ a b _) =
+  checkExpr cur env scope a ++ checkExpr cur env scope b
 checkExpr cur env scope (EUnOp _ a _) = checkExpr cur env scope a
-checkExpr cur env scope (EInfix op a b) = checkVar cur env scope op
-  ++ checkExpr cur env scope a
-  ++ checkExpr cur env scope b
+checkExpr cur env scope (EInfix op a b) =
+  checkVar cur env scope op
+    ++ checkExpr cur env scope a
+    ++ checkExpr cur env scope b
 checkExpr cur env scope (EFieldAccess e0 _ _) = checkExpr cur env scope e0
 -- EMapLit/ESetLit are lowered to `fromEntries …` by desugar's
 -- lowerContainerLiterals BEFORE resolve runs, so these arms are unreachable.
@@ -695,25 +712,26 @@ checkExpr _ _ _ (ESetLit _ _) =
 checkExpr cur env scope (ETuple es) = flatMap (checkExpr cur env scope) es
 checkExpr cur env scope (EListLit es) = flatMap (checkExpr cur env scope) es
 checkExpr cur env scope (EArrayLit es) = flatMap (checkExpr cur env scope) es
-checkExpr cur env scope (ERangeList lo hi _) = checkExpr cur env scope lo
-  ++ checkExpr cur env scope hi
-checkExpr cur env scope (ERangeArray lo hi _) = checkExpr cur env scope lo
-  ++ checkExpr cur env scope hi
-checkExpr cur env scope (ESlice e0 lo hi _ _) = checkExpr cur env scope e0
-  ++ checkExpr cur env scope lo
-  ++ checkExpr cur env scope hi
-checkExpr cur env scope (EIndex e0 i _) = checkExpr cur env scope e0
-  ++ checkExpr cur env scope i
-checkExpr cur env scope (EAnnot e0 t) = checkExpr cur env scope e0
-  ++ checkType cur env t
+checkExpr cur env scope (ERangeList lo hi _) =
+  checkExpr cur env scope lo ++ checkExpr cur env scope hi
+checkExpr cur env scope (ERangeArray lo hi _) =
+  checkExpr cur env scope lo ++ checkExpr cur env scope hi
+checkExpr cur env scope (ESlice e0 lo hi _ _) =
+  checkExpr cur env scope e0
+    ++ checkExpr cur env scope lo
+    ++ checkExpr cur env scope hi
+checkExpr cur env scope (EIndex e0 i _) =
+  checkExpr cur env scope e0 ++ checkExpr cur env scope i
+checkExpr cur env scope (EAnnot e0 t) =
+  checkExpr cur env scope e0 ++ checkType cur env t
 -- EHeadAnnot is the synthetic `:~` head-pin desugar emits for Map/Set literals
 -- (`fromEntries [...] :~ Map _k _v`).  The container type (Map/Set/…) is a real
 -- type, so validate it like EAnnot via checkType — except the multi-module env
 -- already carries imported types so an `import map`-bearing program resolves
 -- `Map`, while a bare `Map { … }` with no import resolves to UnknownType — both
 -- are accepted here without a resolve error (Phase 108).
-checkExpr cur env scope (EHeadAnnot e0 t) = checkExpr cur env scope e0
-  ++ checkType cur env t
+checkExpr cur env scope (EHeadAnnot e0 t) =
+  checkExpr cur env scope e0 ++ checkType cur env t
 checkExpr cur env scope (EBlock stmts) = checkStmts cur env scope stmts
 checkExpr cur env scope (EDo _ stmts) = checkStmts cur env scope stmts
 checkExpr cur env scope (EStringInterp parts) =
@@ -724,8 +742,8 @@ checkExpr cur env scope (ERecordCreate name fs) =
   checkRecordCreate cur env scope name fs
 checkExpr cur env scope (ERecordUpdate e0 fs _) =
   checkRecordUpdate cur env scope e0 fs
-checkExpr cur env scope (EVariantUpdate con e0 fs) = checkExpr cur env scope e0
-  ++ checkRecordCreate cur env scope con fs
+checkExpr cur env scope (EVariantUpdate con e0 fs) =
+  checkExpr cur env scope e0 ++ checkRecordCreate cur env scope con fs
 checkExpr cur env scope (EAsPat _ e0) =
   AsPatternMisplaced cur :: checkExpr cur env scope e0
 checkExpr cur env scope (ESection s) = checkSection cur env scope s
@@ -759,7 +777,7 @@ checkVar cur env scope n
 -- edit-distance/Haskell-alias UnboundVariable suggestion.
 unboundVarErrors : Option Loc -> Env -> Scope -> String -> List ResError
 unboundVarErrors cur env scope n = match modulesExportingName env n
-  m::_ => [UnboundVariableExported n m cur]
+  m :: _ => [UnboundVariableExported n m cur]
   [] =>
     if isImportedModuleName env n then
       [UnboundVariableIsModule n cur]
@@ -856,10 +874,11 @@ startsWithAt : Array Char -> Bool
 startsWithAt cs = arrayLength cs > 0 && arrayGetUnsafe 0 cs == '@'
 
 lookupValue : Env -> Scope -> String -> Bool
-lookupValue env scope n = scopeMem n scope
-  || omHasKey n env.values
-  || omHasKey n env.ctors
-  || omHasKey n env.imported
+lookupValue env scope n =
+  scopeMem n scope
+    || omHasKey n env.values
+    || omHasKey n env.ctors
+    || omHasKey n env.imported
 
 -- "did you mean" for an unbound name: the nearest in-scope value name by
 -- Levenshtein distance (ERROR-QUALITY §4.1).  Suggest only when the distance is
@@ -907,9 +926,10 @@ haskellCtorAliases =
 -- above (as opposed to falling out of generic edit-distance search)?  Used by
 -- `ppResError` to decide whether to append the "(… is Haskell …)" note.
 isHaskellAliasPair : String -> String -> Bool
-isHaskellAliasPair bad sug = optStrEq (lookupAssoc bad haskellTypeAliases) sug
-  || optStrEq (lookupAssoc bad haskellValueAliases) sug
-  || optStrEq (lookupAssoc bad haskellCtorAliases) sug
+isHaskellAliasPair bad sug =
+  optStrEq (lookupAssoc bad haskellTypeAliases) sug
+    || optStrEq (lookupAssoc bad haskellValueAliases) sug
+    || optStrEq (lookupAssoc bad haskellCtorAliases) sug
 
 optStrEq : Option String -> String -> Bool
 optStrEq (Some x) sug = x == sug
@@ -936,9 +956,10 @@ haskellNote bad sug =
 -- mistyped local outranks an equidistant prelude name (a local typo most likely
 -- meant a local).
 suggestName : Env -> Scope -> String -> Option String
-suggestName env scope n = match lookupAssoc n (haskellValueAliases ++ haskellCtorAliases)
-  Some sug => Some sug
-  None => suggestNameFuzzy env scope n
+suggestName env scope n =
+  match lookupAssoc n (haskellValueAliases ++ haskellCtorAliases)
+    Some sug => Some sug
+    None => suggestNameFuzzy env scope n
 
 suggestNameFuzzy : Env -> Scope -> String -> Option String
 suggestNameFuzzy env scope n
@@ -1084,7 +1105,16 @@ charMask sh n = charMaskGo sh (stringToChars n) 0 0
 charMaskGo : Int -> Array Char -> Int -> Int -> Int
 charMaskGo sh cs i acc
   | i >= arrayLength cs = acc
-  | otherwise = charMaskGo sh cs (i + 1) (bitOr acc (shiftLeft 1 (bitAnd (shiftRight (hashChar (arrayGetUnsafe i cs)) sh) 31)))
+  | otherwise =
+    charMaskGo
+      sh
+      cs
+      (i + 1)
+      (bitOr
+        acc
+        (shiftLeft
+          1
+          (bitAnd (shiftRight (hashChar (arrayGetUnsafe i cs)) sh) 31)))
 
 -- Does `x` have at most `k` bits set?  Clears the lowest set bit (`x & (x - 1)`)
 -- at most `k` times — O(k) with k = 2*lim <= 4, never a full popcount.
@@ -1099,9 +1129,12 @@ bitsAtMost k x
 bestOfPool : SugQuery -> List SugCand -> Option String
 bestOfPool q cands = map ((best, _) => best) (bestInPool q cands None)
 
-bestInPool : SugQuery -> List SugCand -> Option (String, Int) -> Option (String, Int)
+bestInPool : SugQuery ->
+  List SugCand ->
+  Option (String, Int) ->
+  Option (String, Int)
 bestInPool _ [] acc = acc
-bestInPool q ((SugCand c clen cm1 cm2 cm3 cup)::cs) acc
+bestInPool q ((SugCand c clen cm1 cm2 cm3 cup) :: cs) acc
   | sugRejects q c clen cm1 cm2 cm3 cup = bestInPool q cs acc
   | otherwise = bestInPool q cs (scoreCand q c acc)
 
@@ -1112,9 +1145,12 @@ bestInPool q ((SugCand c clen cm1 cm2 cm3 cup)::cs) acc
 bestOfNames : SugQuery -> List String -> Option String
 bestOfNames q ns = map ((best, _) => best) (bestInNames q ns None)
 
-bestInNames : SugQuery -> List String -> Option (String, Int) -> Option (String, Int)
+bestInNames : SugQuery ->
+  List String ->
+  Option (String, Int) ->
+  Option (String, Int)
 bestInNames _ [] acc = acc
-bestInNames q (c::cs) acc
+bestInNames q (c :: cs) acc
   | sugRejectsName q c (stringLength c) (startsUpper c) = bestInNames q cs acc
   | otherwise = bestInNames q cs (scoreCand q c acc)
 
@@ -1125,19 +1161,18 @@ bestInNames q (c::cs) acc
 -- are pure, so their order cannot change the verdict.
 -- lint-disable-next-line rule-duplicate-body
 sugRejects : SugQuery -> String -> Int -> Int -> Int -> Int -> Bool -> Bool
-sugRejects (SugQuery n lim qlen qm1 qm2 qm3 qup) c clen cm1 cm2 cm3 cup = not (sameCase qup cup)
-  || clen < qlen - lim
-  || clen > qlen + lim
-  || not (bitsAtMost (2 * lim) (bitXor qm1 cm1))
-  || not (bitsAtMost (2 * lim) (bitXor qm2 cm2))
-  || not (bitsAtMost (2 * lim) (bitXor qm3 cm3))
-  || c == n
+sugRejects (SugQuery n lim qlen qm1 qm2 qm3 qup) c clen cm1 cm2 cm3 cup =
+  not (sameCase qup cup)
+    || clen < qlen - lim
+    || clen > qlen + lim
+    || not (bitsAtMost (2 * lim) (bitXor qm1 cm1))
+    || not (bitsAtMost (2 * lim) (bitXor qm2 cm2))
+    || not (bitsAtMost (2 * lim) (bitXor qm3 cm3))
+    || c == n
 
 sugRejectsName : SugQuery -> String -> Int -> Bool -> Bool
-sugRejectsName (SugQuery n lim qlen _ _ _ qup) c clen cup = not (sameCase qup cup)
-  || clen < qlen - lim
-  || clen > qlen + lim
-  || c == n
+sugRejectsName (SugQuery n lim qlen _ _ _ qup) c clen cup =
+  not (sameCase qup cup) || clen < qlen - lim || clen > qlen + lim || c == n
 
 -- Monomorphic Bool equality: `==` here would be a dict-dispatched `Eq` method
 -- call in the pool scan's inner loop (compiler/AGENTS.md, "the exception that is
@@ -1166,9 +1201,8 @@ scoreCand (SugQuery n lim _ _ _ _ _) c acc =
 -- (`stringSlice` ALLOCATES, so this is precomputed into `SugCand`/`SugQuery`
 -- rather than re-derived per candidate — see `SugCand`.)
 startsUpper : String -> Bool
-startsUpper s = stringLength s > 0
-  && stringSlice 0 1 s >= "A"
-  && stringSlice 0 1 s <= "Z"
+startsUpper s =
+  stringLength s > 0 && stringSlice 0 1 s >= "A" && stringSlice 0 1 s <= "Z"
 
 keepBetter : String -> Int -> Option (String, Int) -> Option (String, Int)
 keepBetter c d None = Some (c, d)
@@ -1177,9 +1211,17 @@ keepBetter c d (Some (bc, bd))
   | d == bd && c < bc = Some (c, d)
   | otherwise = Some (bc, bd)
 
-checkLet : Option Loc -> Env -> Scope -> Bool -> Pat -> Expr -> Expr -> List ResError
-checkLet cur env scope True (PVar f _) e1 e2 = checkExpr cur env (scopeAdd f scope) e1
-  ++ checkExpr cur env (scopeAdd f scope) e2
+checkLet : Option Loc ->
+  Env ->
+  Scope ->
+  Bool ->
+  Pat ->
+  Expr ->
+  Expr ->
+  List ResError
+checkLet cur env scope True (PVar f _) e1 e2 =
+  checkExpr cur env (scopeAdd f scope) e1
+    ++ checkExpr cur env (scopeAdd f scope) e2
 -- non-recursive (or rec with non-var pat): the bound names are NOT in scope on
 -- the RHS.  An UnboundVariable for one of them ⇒ the user likely forgot `rec`,
 -- so re-target it as NonRecursiveValueLet.
@@ -1192,14 +1234,16 @@ checkLet cur env scope _ pat e1 e2 =
 
 rewriteNonRec : List String -> ResError -> ResError
 rewriteNonRec bound (UnboundVariable n l s) =
-  if contains n bound then
-    NonRecursiveValueLet n l
-  else
-    UnboundVariable n l s
+  if contains n bound then NonRecursiveValueLet n l else UnboundVariable n l s
 rewriteNonRec _ e = e
 
 -- where-group: all group names are in scope for every clause body + the result
-checkLetGroup : Option Loc -> Env -> Scope -> List LetBind -> Expr -> List ResError
+checkLetGroup : Option Loc ->
+  Env ->
+  Scope ->
+  List LetBind ->
+  Expr ->
+  List ResError
 checkLetGroup cur env scope binds body =
   let scope2 = scopeExtend (map letBindName binds) scope
   flatMap (checkLetBind cur env scope2) binds ++ checkExpr cur env scope2 body
@@ -1208,8 +1252,9 @@ letBindName : LetBind -> String
 letBindName (LetBind n _) = n
 
 checkLetBind : Option Loc -> Env -> Scope -> LetBind -> List ResError
-checkLetBind cur env scope (LetBind n clauses) = letBindDupErrors cur n clauses
-  ++ flatMap (checkFunClause cur env scope) clauses
+checkLetBind cur env scope (LetBind n clauses) =
+  letBindDupErrors cur n clauses
+    ++ flatMap (checkFunClause cur env scope) clauses
 
 -- A let/where binding whose clause run includes a NULLARY clause (`y = e`, no
 -- params) yet has >1 clause is a duplicate value binding — the exact analog of
@@ -1220,19 +1265,18 @@ checkLetBind cur env scope (LetBind n clauses) = letBindDupErrors cur n clauses
 -- Flags every clause after the first; loc = that clause's body span.
 letBindDupErrors : Option Loc -> String -> List FunClause -> List ResError
 letBindDupErrors cur n clauses =
-  if hasNullaryClause clauses then
-    dupClauseTail cur n False clauses
-  else
-    []
+  if hasNullaryClause clauses then dupClauseTail cur n False clauses else []
 
 hasNullaryClause : List FunClause -> Bool
 hasNullaryClause [] = False
-hasNullaryClause ((FunClause ps _)::rest) = isEmptyL ps || hasNullaryClause rest
+hasNullaryClause ((FunClause ps _) :: rest) =
+  isEmptyL ps || hasNullaryClause rest
 
 dupClauseTail : Option Loc -> String -> Bool -> List FunClause -> List ResError
 dupClauseTail _ _ _ [] = []
-dupClauseTail cur n seen ((FunClause _ body)::rest) = whenL seen [DuplicateValueBinding n (orElseLoc (firstExprLoc body) cur)]
-  ++ dupClauseTail cur n True rest
+dupClauseTail cur n seen ((FunClause _ body) :: rest) =
+  whenL seen [DuplicateValueBinding n (orElseLoc (firstExprLoc body) cur)]
+    ++ dupClauseTail cur n True rest
 
 -- Parameter patterns are checked BEFORE the body's expr walk ever sees an
 -- ELoc, so a bare `cur` (often None here — e.g. a top-level where-group)
@@ -1259,19 +1303,27 @@ checkArm cur env scope (Arm pat gs body) =
 -- Resolve an arm's guard qualifiers left-to-right, threading each pattern-bind's
 -- binders into the LATER qualifiers AND the arm body.  Returns the accumulated errors and the body's scope.  A `GBind`
 -- also resolves its bind expression in the pre-bind scope and checks its pattern.
-checkArmGuards : Option Loc -> Env -> Scope -> List Guard -> (List ResError, Scope)
+checkArmGuards : Option Loc ->
+  Env ->
+  Scope ->
+  List Guard ->
+  (List ResError, Scope)
 checkArmGuards _ _ scope [] = ([], scope)
-checkArmGuards cur env scope ((GBool e)::rest) =
+checkArmGuards cur env scope ((GBool e) :: rest) =
   let (rErrs, scope2) = checkArmGuards cur env scope rest
   (checkExpr cur env scope e ++ rErrs, scope2)
-checkArmGuards cur env scope ((GBind p e)::rest) =
-  let here = checkExpr cur env scope e ++ checkPat cur env p ++ patGroupDupErrors cur "pattern" [p]
-  let (rErrs, scope2) = checkArmGuards cur env (scopeExtend (patBindings p) scope) rest
+checkArmGuards cur env scope ((GBind p e) :: rest) =
+  let here =
+    checkExpr cur env scope e
+      ++ checkPat cur env p
+      ++ patGroupDupErrors cur "pattern" [p]
+  let (rErrs, scope2) =
+    checkArmGuards cur env (scopeExtend (patBindings p) scope) rest
   (here ++ rErrs, scope2)
 
 checkGuardArm : Option Loc -> Env -> Scope -> GuardArm -> List ResError
-checkGuardArm cur env scope (GuardArm gs body) = flatMap (checkGuard cur env scope) gs
-  ++ checkExpr cur env scope body
+checkGuardArm cur env scope (GuardArm gs body) =
+  flatMap (checkGuard cur env scope) gs ++ checkExpr cur env scope body
 
 checkGuard : Option Loc -> Env -> Scope -> Guard -> List ResError
 checkGuard cur env scope (GBool e) = checkExpr cur env scope e
@@ -1279,28 +1331,35 @@ checkGuard cur env scope (GBind _ e) = checkExpr cur env scope e
 
 checkStmts : Option Loc -> Env -> Scope -> List DoStmt -> List ResError
 checkStmts _ _ _ [] = []
-checkStmts cur env scope (s::rest) =
+checkStmts cur env scope (s :: rest) =
   let (errs, scope2) = checkStmt cur env scope s
   errs ++ checkStmts cur env scope2 rest
 
 checkStmt : Option Loc -> Env -> Scope -> DoStmt -> (List ResError, Scope)
 checkStmt cur env scope (DoExpr e) = (checkExpr cur env scope e, scope)
 checkStmt cur env scope (DoBind p e) = (
-  checkPat cur env p ++ patGroupDupErrors cur "pattern" [p] ++ checkExpr cur env scope e,
+  checkPat cur env p
+    ++ patGroupDupErrors cur "pattern" [p]
+    ++ checkExpr cur env scope e,
   scopeExtend (patBindings p) scope,
 )
 checkStmt cur env scope (DoLet _ False p e) = (
-  checkPat cur env p ++ patGroupDupErrors cur "pattern" [p] ++ checkExpr cur env scope e,
+  checkPat cur env p
+    ++ patGroupDupErrors cur "pattern" [p]
+    ++ checkExpr cur env scope e,
   scopeExtend (patBindings p) scope,
 )
 checkStmt cur env scope (DoLet _ True p e) = (
-  checkPat cur env p ++ patGroupDupErrors cur "pattern" [p] ++ checkExpr cur env (scopeExtend (patBindings p) scope) e,
+  checkPat cur env p
+    ++ patGroupDupErrors cur "pattern" [p]
+    ++ checkExpr cur env (scopeExtend (patBindings p) scope) e,
   scopeExtend (patBindings p) scope,
 )
 -- beta: a bare reassignment `x = e` (no `let`) of an existing binding is an
 -- error — bindings are immutable. Still check the RHS so its errors surface too.
 checkStmt cur env scope (DoAssign x e) = (
-  ReassignImmutable x (orElseLoc (firstExprLoc e) cur) :: checkExpr cur env scope e,
+  ReassignImmutable x (orElseLoc (firstExprLoc e) cur)
+    :: checkExpr cur env scope e,
   scope,
 )
 checkStmt cur env scope (DoFieldAssign _ _ e) =
@@ -1315,16 +1374,23 @@ checkFieldAssign cur env scope (FieldAssign _ e) = checkExpr cur env scope e
 
 -- record create `C { f = v, … }`: head must be a record type / named ctor; if so,
 -- each field must belong to it; then check the value exprs
-checkRecordCreate : Option Loc -> Env -> Scope -> String -> List FieldAssign -> List ResError
-checkRecordCreate cur env scope name fs = recCreateHead cur env name fs
-  ++ flatMap (checkFieldAssign cur env scope) fs
+checkRecordCreate : Option Loc ->
+  Env ->
+  Scope ->
+  String ->
+  List FieldAssign ->
+  List ResError
+checkRecordCreate cur env scope name fs =
+  recCreateHead cur env name fs ++ flatMap (checkFieldAssign cur env scope) fs
 
 recCreateHead : Option Loc -> Env -> String -> List FieldAssign -> List ResError
 recCreateHead cur env name fs
   -- #1110: the expression-position peer of `recPatHead` — same head, same two sets,
   -- same single verdict; see that site's comment and `ambiguousHeadErrors` (#1253).
-  | omHasKey name env.types || omHasKey name env.imported || omHasKey name env.ctors = ambiguousHeadErrors env name cur
-    ++ flatMap (recCreateField cur env name) fs
+  | omHasKey name env.types
+    || omHasKey name env.imported
+    || omHasKey name env.ctors =
+    ambiguousHeadErrors env name cur ++ flatMap (recCreateField cur env name) fs
   | otherwise = [UnknownType name cur (suggestType env name)]
 
 recCreateField : Option Loc -> Env -> String -> FieldAssign -> List ResError
@@ -1333,13 +1399,18 @@ recCreateField cur env owner (FieldAssign fname _) =
 
 -- record update `{ e | f = v, … }`: the receiver's type isn't pinned, so only
 -- flag a field unknown to *every* record (no FieldNotInRecord here)
-checkRecordUpdate : Option Loc -> Env -> Scope -> Expr -> List FieldAssign -> List ResError
-checkRecordUpdate cur env scope e0 fs = checkExpr cur env scope e0
-  ++ flatMap (recUpdateField cur env scope) fs
+checkRecordUpdate : Option Loc ->
+  Env ->
+  Scope ->
+  Expr ->
+  List FieldAssign ->
+  List ResError
+checkRecordUpdate cur env scope e0 fs =
+  checkExpr cur env scope e0 ++ flatMap (recUpdateField cur env scope) fs
 
 recUpdateField : Option Loc -> Env -> Scope -> FieldAssign -> List ResError
-recUpdateField cur env scope (FieldAssign fname v) = checkExpr cur env scope v
-  ++ fieldKnownErr cur env fname
+recUpdateField cur env scope (FieldAssign fname v) =
+  checkExpr cur env scope v ++ fieldKnownErr cur env fname
 
 fieldKnownErr : Option Loc -> Env -> String -> List ResError
 fieldKnownErr cur env fname =
@@ -1358,9 +1429,10 @@ checkSection cur env scope (SecLeft e _) = checkExpr cur env scope e
 -- Decl-level entry: `cur` starts at `None` (no enclosing expr span yet); the body's `ELoc`
 -- wrappers re-set it as the expr walk descends.
 checkDecl : Env -> Decl -> List ResError
-checkDecl env (DFunDef _ _ pats body) = flatMap (checkPat (firstExprLoc body) env) pats
-  ++ patGroupDupErrors (firstExprLoc body) "parameter list" pats
-  ++ checkExpr None env (mkScope (patsBindings pats)) body
+checkDecl env (DFunDef _ _ pats body) =
+  flatMap (checkPat (firstExprLoc body) env) pats
+    ++ patGroupDupErrors (firstExprLoc body) "parameter list" pats
+    ++ checkExpr None env (mkScope (patsBindings pats)) body
 checkDecl env (DLetGroup _ binds) =
   -- top-level where-group: all group names are in scope for every clause body
   -- (mutual recursion).
@@ -1388,8 +1460,9 @@ checkFieldType : Env -> Field -> List ResError
 checkFieldType env (Field _ t) = checkType None env t
 
 checkProp : Env -> List PropParam -> Expr -> List ResError
-checkProp env params body = flatMap (checkPropParamTy env) params
-  ++ checkExpr None env (mkScope (map propParamName params)) body
+checkProp env params body =
+  flatMap (checkPropParamTy env) params
+    ++ checkExpr None env (mkScope (map propParamName params)) body
 
 checkPropParamTy : Env -> PropParam -> List ResError
 checkPropParamTy env (PropParam _ _ t) = checkType None env t
@@ -1398,8 +1471,8 @@ propParamName : PropParam -> String
 propParamName (PropParam x _ _) = x
 
 checkInterfaceDecl : Env -> List Super -> List IfaceMethod -> List ResError
-checkInterfaceDecl env supers methods = flatMap (checkSuper env) supers
-  ++ flatMap (checkIfaceMethod env) methods
+checkInterfaceDecl env supers methods =
+  flatMap (checkSuper env) supers ++ flatMap (checkIfaceMethod env) methods
 
 -- ⚠️ The `None` is structural, not an oversight — see `ambiguousIfaceErrors`.
 checkSuper : Env -> Super -> List ResError
@@ -1411,9 +1484,10 @@ checkSuper env (Super { superHead = iface }) =
 
 checkIfaceMethod : Env -> IfaceMethod -> List ResError
 checkIfaceMethod env (IfaceMethod _ t None _) = checkType None env t
-checkIfaceMethod env (IfaceMethod _ t (Some (MethodDefault pats body)) _) = checkType None env t
-  ++ flatMap (checkPat (firstExprLoc body) env) pats
-  ++ checkExpr None env (mkScope (patsBindings pats)) body
+checkIfaceMethod env (IfaceMethod _ t (Some (MethodDefault pats body)) _) =
+  checkType None env t
+    ++ flatMap (checkPat (firstExprLoc body) env) pats
+    ++ checkExpr None env (mkScope (patsBindings pats)) body
 
 -- `firstTyLocList tyargs` is the impl HEAD's own span (`impl Iface Ty1 Ty2…`) —
 -- the locator `firstTyLoc`'s doc comment names for exactly this position, and the
@@ -1433,38 +1507,49 @@ checkIfaceMethod env (IfaceMethod _ t (Some (MethodDefault pats body)) _) = chec
 -- `env.interfaces`' `iaIfaces` are filtered from the SAME `expInterfaces` over the
 -- SAME `importedNamesMM` names, so an ambiguous interface is necessarily in scope
 -- and the two verdicts are mutually exclusive by construction.
-checkImplDecl : Env -> String -> List Ty -> List Require -> List ImplMethod -> List ResError
-checkImplDecl env iface tyargs reqs methods = flatMap (checkType None env) tyargs
-  ++ flatMap (checkRequire env) reqs
-  ++ flatMap (checkImplMethod env) methods
-  ++ checkImplIface env iface methods
-  ++ ambiguousIfaceErrors env iface (firstTyLocList tyargs)
+checkImplDecl : Env ->
+  String ->
+  List Ty ->
+  List Require ->
+  List ImplMethod ->
+  List ResError
+checkImplDecl env iface tyargs reqs methods =
+  flatMap (checkType None env) tyargs
+    ++ flatMap (checkRequire env) reqs
+    ++ flatMap (checkImplMethod env) methods
+    ++ checkImplIface env iface methods
+    ++ ambiguousIfaceErrors env iface (firstTyLocList tyargs)
 
 checkRequire : Env -> Require -> List ResError
-checkRequire env (Require { requireHead = iface, requireArgs = tys }) = (if contains iface env.interfaces then ambiguousIfaceErrors env iface (firstTyLocList tys) else [UnknownInterface iface None])
-  ++ flatMap (checkType None env) tys
+checkRequire env (Require { requireHead = iface, requireArgs = tys }) =
+  (if contains iface env.interfaces then
+      ambiguousIfaceErrors env iface (firstTyLocList tys)
+    else
+      [UnknownInterface iface None])
+    ++ flatMap (checkType None env) tys
 
 checkImplMethod : Env -> ImplMethod -> List ResError
-checkImplMethod env (ImplMethod _ pats body) = flatMap (checkPat (firstExprLoc body) env) pats
-  ++ checkExpr None env (mkScope (patsBindings pats)) body
+checkImplMethod env (ImplMethod _ pats body) =
+  flatMap (checkPat (firstExprLoc body) env) pats
+    ++ checkExpr None env (mkScope (patsBindings pats)) body
 
 checkImplIface : Env -> String -> List ImplMethod -> List ResError
 checkImplIface env iface methods
   | not (contains iface env.interfaces) = [UnknownInterface iface None]
-  | otherwise = flatMap (checkMethodMember iface (ifaceMethodsOf iface env.ifaceMethods)) methods
+  | otherwise =
+    flatMap
+      (checkMethodMember iface (ifaceMethodsOf iface env.ifaceMethods))
+      methods
 
 ifaceMethodsOf : String -> List (String, List String) -> List String
 ifaceMethodsOf _ [] = []
-ifaceMethodsOf iface ((i, ms)::rest)
+ifaceMethodsOf iface ((i, ms) :: rest)
   | i == iface = ms
   | otherwise = ifaceMethodsOf iface rest
 
 checkMethodMember : String -> List String -> ImplMethod -> List ResError
 checkMethodMember iface known (ImplMethod mname _ _) =
-  if contains mname known then
-    []
-  else
-    [MethodNotInInterface mname iface None]
+  if contains mname known then [] else [MethodNotInInterface mname iface None]
 
 -- ── Primitives (hardcoded) ───────────────────────────────────────────────
 isTupleCtorTyName : String -> Bool
@@ -1486,33 +1571,33 @@ primitiveConstructors = ["True", "False"]
 -- ── Name extractors (over runtime / prelude / user decls) ─────────────────
 externNames : List Decl -> List String
 externNames [] = []
-externNames ((DExtern _ n _)::rest) = n :: externNames rest
-externNames (_::rest) = externNames rest
+externNames ((DExtern _ n _) :: rest) = n :: externNames rest
+externNames (_ :: rest) = externNames rest
 
 dataRecordNames : List Decl -> List String
 dataRecordNames [] = []
-dataRecordNames ((DData { dataName = n })::rest) = n :: dataRecordNames rest
-dataRecordNames ((DTypeAlias { tyAliasName = n })::rest) =
+dataRecordNames ((DData { dataName = n }) :: rest) = n :: dataRecordNames rest
+dataRecordNames ((DTypeAlias { tyAliasName = n }) :: rest) =
   n :: dataRecordNames rest
-dataRecordNames ((DNewtype { newtypeName = n })::rest) =
+dataRecordNames ((DNewtype { newtypeName = n }) :: rest) =
   n :: dataRecordNames rest
-dataRecordNames ((DAttrib _ d)::rest) = dataRecordNames (d::rest)
-dataRecordNames (_::rest) = dataRecordNames rest
+dataRecordNames ((DAttrib _ d) :: rest) = dataRecordNames (d :: rest)
+dataRecordNames (_ :: rest) = dataRecordNames rest
 
 -- user/platform effect labels declared with `effect Foo` (Phase 146 gap 2)
 effectNames : List Decl -> List String
 effectNames [] = []
-effectNames ((DEffect _ n _)::rest) = n :: effectNames rest
-effectNames ((DAttrib _ d)::rest) = effectNames (d::rest)
-effectNames (_::rest) = effectNames rest
+effectNames ((DEffect _ n _) :: rest) = n :: effectNames rest
+effectNames ((DAttrib _ d) :: rest) = effectNames (d :: rest)
+effectNames (_ :: rest) = effectNames rest
 
 ctorNames : List Decl -> List String
 ctorNames [] = []
-ctorNames ((DData { dataCtors = vs })::rest) = map variantName vs
-  ++ ctorNames rest
-ctorNames ((DNewtype { newtypeCtor = con })::rest) = con :: ctorNames rest
-ctorNames ((DAttrib _ d)::rest) = ctorNames (d::rest)
-ctorNames (_::rest) = ctorNames rest
+ctorNames ((DData { dataCtors = vs }) :: rest) =
+  map variantName vs ++ ctorNames rest
+ctorNames ((DNewtype { newtypeCtor = con }) :: rest) = con :: ctorNames rest
+ctorNames ((DAttrib _ d) :: rest) = ctorNames (d :: rest)
+ctorNames (_ :: rest) = ctorNames rest
 
 variantName : Variant -> String
 variantName (Variant n _) = n
@@ -1525,40 +1610,40 @@ implMethodNm (ImplMethod n _ _) = n
 
 interfaceList : List Decl -> List (String, List String)
 interfaceList [] = []
-interfaceList ((DInterface { name = n, methods, ... })::rest) =
+interfaceList ((DInterface { name = n, methods, ... }) :: rest) =
   (n, map ifaceMethodNm methods) :: interfaceList rest
-interfaceList (_::rest) = interfaceList rest
+interfaceList (_ :: rest) = interfaceList rest
 
 -- prelude value names (DFunDef/DTypeSig + DImpl & DInterface method names)
 preludeValueNames : List Decl -> List String
 preludeValueNames [] = []
-preludeValueNames ((DFunDef _ n _ _)::rest) = n :: preludeValueNames rest
-preludeValueNames ((DTypeSig _ n _)::rest) = n :: preludeValueNames rest
-preludeValueNames ((DImpl { methods, ... })::rest) = map implMethodNm methods
-  ++ preludeValueNames rest
-preludeValueNames ((DInterface { methods, ... })::rest) = map ifaceMethodNm methods
-  ++ preludeValueNames rest
-preludeValueNames ((DAttrib _ d)::rest) = preludeValueNames (d::rest)
-preludeValueNames (_::rest) = preludeValueNames rest
+preludeValueNames ((DFunDef _ n _ _) :: rest) = n :: preludeValueNames rest
+preludeValueNames ((DTypeSig _ n _) :: rest) = n :: preludeValueNames rest
+preludeValueNames ((DImpl { methods, ... }) :: rest) =
+  map implMethodNm methods ++ preludeValueNames rest
+preludeValueNames ((DInterface { methods, ... }) :: rest) =
+  map ifaceMethodNm methods ++ preludeValueNames rest
+preludeValueNames ((DAttrib _ d) :: rest) = preludeValueNames (d :: rest)
+preludeValueNames (_ :: rest) = preludeValueNames rest
 
 -- user value names (DFunDef/DTypeSig/DExtern + DInterface methods; NOT DImpl)
 userValueNames : List Decl -> List String
 userValueNames [] = []
-userValueNames ((DFunDef _ n _ _)::rest) = n :: userValueNames rest
-userValueNames ((DTypeSig _ n _)::rest) = n :: userValueNames rest
-userValueNames ((DExtern _ n _)::rest) = n :: userValueNames rest
-userValueNames ((DLetGroup _ bs)::rest) = map letBindName bs
-  ++ userValueNames rest
-userValueNames ((DInterface { methods, ... })::rest) = map ifaceMethodNm methods
-  ++ userValueNames rest
-userValueNames ((DAttrib _ d)::rest) = userValueNames (d::rest)
-userValueNames (_::rest) = userValueNames rest
+userValueNames ((DFunDef _ n _ _) :: rest) = n :: userValueNames rest
+userValueNames ((DTypeSig _ n _) :: rest) = n :: userValueNames rest
+userValueNames ((DExtern _ n _) :: rest) = n :: userValueNames rest
+userValueNames ((DLetGroup _ bs) :: rest) =
+  map letBindName bs ++ userValueNames rest
+userValueNames ((DInterface { methods, ... }) :: rest) =
+  map ifaceMethodNm methods ++ userValueNames rest
+userValueNames ((DAttrib _ d) :: rest) = userValueNames (d :: rest)
+userValueNames (_ :: rest) = userValueNames rest
 
 fieldOwnersOf : List Decl -> List (String, String)
 fieldOwnersOf [] = []
-fieldOwnersOf ((DData { dataCtors = vs })::rest) = flatMap variantFieldOwners vs
-  ++ fieldOwnersOf rest
-fieldOwnersOf (_::rest) = fieldOwnersOf rest
+fieldOwnersOf ((DData { dataCtors = vs }) :: rest) =
+  flatMap variantFieldOwners vs ++ fieldOwnersOf rest
+fieldOwnersOf (_ :: rest) = fieldOwnersOf rest
 
 recordFieldOwner : String -> Field -> (String, String)
 recordFieldOwner owner (Field fname _) = (fname, owner)
@@ -1571,9 +1656,9 @@ variantFieldOwners (Variant _ (ConPos _)) = []
 -- single-file import stub: names brought into scope (core import = no-op)
 importedNames : List Decl -> List String
 importedNames [] = []
-importedNames ((DUse _ path _)::rest) = useImportNames path
-  ++ importedNames rest
-importedNames (_::rest) = importedNames rest
+importedNames ((DUse _ path _) :: rest) =
+  useImportNames path ++ importedNames rest
+importedNames (_ :: rest) = importedNames rest
 
 useImportNames : UsePath -> List String
 useImportNames path = if useModId path == "core" then [] else useStubNames path
@@ -1590,10 +1675,7 @@ useStubNames (UseAlias _ _) = []
 
 useModId : UsePath -> String
 useModId (UseName ns) =
-  if listLen ns > 1 then
-    joinDot (initList ns)
-  else
-    firstOr "" ns
+  if listLen ns > 1 then joinDot (initList ns) else firstOr "" ns
 useModId (UseGroup ns _) = joinDot ns
 useModId (UseWild ns) = joinDot ns
 useModId (UseAlias ns _) = joinDot ns
@@ -1601,11 +1683,11 @@ useModId (UseAlias ns _) = joinDot ns
 lastOf : List String -> String
 lastOf [] = ""
 lastOf [x] = x
-lastOf (_::rest) = lastOf rest
+lastOf (_ :: rest) = lastOf rest
 
 firstOr : String -> List String -> String
 firstOr d [] = d
-firstOr _ (x::_) = x
+firstOr _ (x :: _) = x
 
 export
 programIsCore : List Decl -> Bool
@@ -1613,13 +1695,13 @@ programIsCore prog = hasOrdering prog && hasFoldable prog
 
 hasOrdering : List Decl -> Bool
 hasOrdering [] = False
-hasOrdering ((DData { dataName = "Ordering" })::_) = True
-hasOrdering (_::rest) = hasOrdering rest
+hasOrdering ((DData { dataName = "Ordering" }) :: _) = True
+hasOrdering (_ :: rest) = hasOrdering rest
 
 hasFoldable : List Decl -> Bool
 hasFoldable [] = False
-hasFoldable ((DInterface { name = "Foldable", ... })::_) = True
-hasFoldable (_::rest) = hasFoldable rest
+hasFoldable ((DInterface { name = "Foldable", ... }) :: _) = True
+hasFoldable (_ :: rest) = hasFoldable rest
 
 -- ── build_env ─────────────────────────────────────────────────────────────
 buildEnv : List Decl -> List Decl -> List Decl -> List String -> Env
@@ -1632,9 +1714,16 @@ buildEnv runtimeDecls preludeDecls prog internalGuard =
   let pFieldOwners = whenL seed (fieldOwnersOf preludeDecls)
   let uIfaces = interfaceList prog
   let imported = importedNames prog
-  let valuesM = omFromNames (externNames runtimeDecls ++ pValues ++ userValueNames prog ++ imported) omEmpty
-  let typesM = omFromNames (primitiveTypes ++ pTypes ++ dataRecordNames prog ++ imported) omEmpty
-  let ctorsM = omFromNames (primitiveConstructors ++ pCtors ++ ctorNames prog) omEmpty
+  let valuesM =
+    omFromNames
+      (externNames runtimeDecls ++ pValues ++ userValueNames prog ++ imported)
+      omEmpty
+  let typesM =
+    omFromNames
+      (primitiveTypes ++ pTypes ++ dataRecordNames prog ++ imported)
+      omEmpty
+  let ctorsM =
+    omFromNames (primitiveConstructors ++ pCtors ++ ctorNames prog) omEmpty
   let importedM = omFromNames imported omEmpty
   Env {
     values = valuesM,
@@ -1679,7 +1768,8 @@ buildErrors : List Decl -> List Decl -> List ResError
 buildErrors preludeDecls prog =
   let dupValErrs = dupValueBindingErrors prog
   let nullaryDupNames = map dvbName dupValErrs
-  let sigDups = filterOutNamesIn nullaryDupNames dupSigName (dupSignatureErrors prog)
+  let sigDups =
+    filterOutNamesIn nullaryDupNames dupSigName (dupSignatureErrors prog)
   let sigDupNames = map dupSigName sigDups
   let contigErrs = filterOutNamesIn sigDupNames dbName (contiguityErrors prog)
   externWithBodyErrors (externNames prog) prog
@@ -1732,9 +1822,12 @@ dbName (DuplicateBinding n _) = n
 dbName _ = ""
 
 -- drop entries whose name (per `nameOf`) is in `names`
-filterOutNamesIn : List String -> (ResError -> String) -> List ResError -> List ResError
+filterOutNamesIn : List String ->
+  (ResError -> String) ->
+  List ResError ->
+  List ResError
 filterOutNamesIn _ _ [] = []
-filterOutNamesIn names nameOf (e::rest)
+filterOutNamesIn names nameOf (e :: rest)
   | contains (nameOf e) names = filterOutNamesIn names nameOf rest
   | otherwise = e :: filterOutNamesIn names nameOf rest
 
@@ -1758,7 +1851,7 @@ dupSignatureErrors prog = dupSigGo prog omEmpty
 
 dupSigGo : List Decl -> OrdMap (Option Loc) -> List ResError
 dupSigGo [] _ = []
-dupSigGo (d::rest) seen = match dupSigOf d
+dupSigGo (d :: rest) seen = match dupSigOf d
   Some (n, loc) => match omLookup n seen
     Some earlierLoc => DuplicateSignature n loc earlierLoc :: dupSigGo rest seen
     None => dupSigGo rest (omInsert n loc seen)
@@ -1786,7 +1879,7 @@ dupValueBindingErrors prog = dupValGo None False prog
 -- a nullary clause has already appeared in that run.
 dupValGo : Option String -> Bool -> List Decl -> List ResError
 dupValGo _ _ [] = []
-dupValGo run sawNullary (d::rest)
+dupValGo run sawNullary (d :: rest)
   | isTransparentDecl d = dupValGo run sawNullary rest
   | otherwise = match dupValClause d
     Some (n, isNull, loc) =>
@@ -1843,7 +1936,7 @@ contiguityErrors prog = contigGo omEmpty [] prog
 -- holds more than a single decl's binders (opened2 ⊆ ns), so it is O(1)-sized.
 contigGo : OrdMap Unit -> List String -> List Decl -> List ResError
 contigGo _ _ [] = []
-contigGo closed opened (d::rest)
+contigGo closed opened (d :: rest)
   | isTransparentDecl d = contigGo closed opened rest
   | otherwise =
     let ns = declBindNames d
@@ -1862,27 +1955,27 @@ contigGo closed opened (d::rest)
 -- names from `opened` that are still bound by the current decl (stay open)
 filterKeepOpen : List String -> List String -> List String
 filterKeepOpen _ [] = []
-filterKeepOpen ns (o::os)
+filterKeepOpen ns (o :: os)
   | contains o ns = o :: filterKeepOpen ns os
   | otherwise = filterKeepOpen ns os
 
 -- add every `opened` name NOT in `stillOpen` to the closed set
 closeMissing : List String -> List String -> OrdMap Unit -> OrdMap Unit
 closeMissing [] _ closed = closed
-closeMissing (o::os) stillOpen closed
+closeMissing (o :: os) stillOpen closed
   | contains o stillOpen = closeMissing os stillOpen closed
   | otherwise = closeMissing os stillOpen (omInsert o () closed)
 
 -- drop every name in `ns` from the closed set
 deleteAllStr : List String -> OrdMap Unit -> OrdMap Unit
 deleteAllStr [] closed = closed
-deleteAllStr (n::ns) closed = deleteAllStr ns (omDelete n closed)
+deleteAllStr (n :: ns) closed = deleteAllStr ns (omDelete n closed)
 
 -- a bound name that is in the closed set is a non-contiguous re-appearance.
 -- Stage B: carry the offending decl's source span (first ELoc in its body).
 newlyDuplicated : Option Loc -> OrdMap Unit -> List String -> List ResError
 newlyDuplicated _ _ [] = []
-newlyDuplicated loc closed (n::ns)
+newlyDuplicated loc closed (n :: ns)
   | omHasKey n closed = DuplicateBinding n loc :: newlyDuplicated loc closed ns
   | otherwise = newlyDuplicated loc closed ns
 
@@ -1926,19 +2019,20 @@ firstExprLoc _ = None
 
 firstLocList : List Expr -> Option Loc
 firstLocList [] = None
-firstLocList (e::rest) = orElseLoc (firstExprLoc e) (firstLocList rest)
+firstLocList (e :: rest) = orElseLoc (firstExprLoc e) (firstLocList rest)
 
 unionStr : List String -> List String -> List String
 unionStr acc [] = acc
-unionStr acc (x::xs)
+unionStr acc (x :: xs)
   | contains x acc = unionStr acc xs
   | otherwise = unionStr (acc ++ [x]) xs
 
 externWithBodyErrors : List String -> List Decl -> List ResError
 externWithBodyErrors _ [] = []
-externWithBodyErrors externs ((DFunDef _ n _ _)::rest) = (if contains n externs then [ExternWithBody n None] else [])
-  ++ externWithBodyErrors externs rest
-externWithBodyErrors externs (_::rest) = externWithBodyErrors externs rest
+externWithBodyErrors externs ((DFunDef _ n _ _) :: rest) =
+  (if contains n externs then [ExternWithBody n None] else [])
+    ++ externWithBodyErrors externs rest
+externWithBodyErrors externs (_ :: rest) = externWithBodyErrors externs rest
 
 duplicateErrors : List Decl -> List Decl -> List ResError
 duplicateErrors preludeDecls prog =
@@ -1948,7 +2042,9 @@ duplicateErrors preludeDecls prog =
   let ifaceSeed = whenL seed (map fst (interfaceList preludeDecls))
   map (dupErr "type") (findDups typeSeed (dataRecordNames prog))
     ++ map (dupErr "constructor") (findDups ctorSeed (ctorNames prog))
-    ++ map (dupErr "interface") (findDups ifaceSeed (map fst (interfaceList prog)))
+    ++ map
+      (dupErr "interface")
+      (findDups ifaceSeed (map fst (interfaceList prog)))
     ++ ifaceMethodCollisions prog
 
 dupErr : String -> String -> ResError
@@ -2005,22 +2101,27 @@ ifaceMethodCollisions prog =
 -- so a method name repeated WITHIN one interface is not reported here. That shape
 -- is a different (and today unchecked) defect; folding it in silently would be a
 -- third narrowing nobody scoped.
-ifaceMethodCollisionsGo : OrdMap String -> List (String, List String) -> List ResError
+ifaceMethodCollisionsGo : OrdMap String ->
+  List (String, List String) ->
+  List ResError
 ifaceMethodCollisionsGo _ [] = []
-ifaceMethodCollisionsGo seen ((iname, ms)::rest) = ifaceMethodErrs iname seen ms
-  ++ ifaceMethodCollisionsGo (addIfaceMethods iname ms seen) rest
+ifaceMethodCollisionsGo seen ((iname, ms) :: rest) =
+  ifaceMethodErrs iname seen ms
+    ++ ifaceMethodCollisionsGo (addIfaceMethods iname ms seen) rest
 
 ifaceMethodErrs : String -> OrdMap String -> List String -> List ResError
 ifaceMethodErrs _ _ [] = []
-ifaceMethodErrs iname seen (m::rest) = match omLookup m seen
-  Some prev => DuplicateInterfaceMethod m prev iname None :: ifaceMethodErrs iname seen rest
+ifaceMethodErrs iname seen (m :: rest) = match omLookup m seen
+  Some prev =>
+    DuplicateInterfaceMethod m prev iname None
+      :: ifaceMethodErrs iname seen rest
   None => ifaceMethodErrs iname seen rest
 
 -- first declarer wins, so a name colliding three ways names the SAME first
 -- interface in both reports rather than chaining.
 addIfaceMethods : String -> List String -> OrdMap String -> OrdMap String
 addIfaceMethods _ [] seen = seen
-addIfaceMethods iname (m::rest) seen
+addIfaceMethods iname (m :: rest) seen
   | omHasKey m seen = addIfaceMethods iname rest seen
   | otherwise = addIfaceMethods iname rest (omInsert m iname seen)
 
@@ -2028,10 +2129,10 @@ addIfaceMethods iname (m::rest) seen
 -- is a separate walk and not an arm added to `interfaceList`.
 ownInterfaceMethods : List Decl -> List (String, List String)
 ownInterfaceMethods [] = []
-ownInterfaceMethods ((DInterface { name = n, methods, ... })::rest) =
+ownInterfaceMethods ((DInterface { name = n, methods, ... }) :: rest) =
   (n, map ifaceMethodNm methods) :: ownInterfaceMethods rest
-ownInterfaceMethods ((DAttrib _ d)::rest) = ownInterfaceMethods (d::rest)
-ownInterfaceMethods (_::rest) = ownInterfaceMethods rest
+ownInterfaceMethods ((DAttrib _ d) :: rest) = ownInterfaceMethods (d :: rest)
+ownInterfaceMethods (_ :: rest) = ownInterfaceMethods rest
 
 -- names that are already present when declared (order-sensitive, like add_unique).
 --
@@ -2048,7 +2149,7 @@ findDups seen names = findDupsGo (omFromNames seen omEmpty) names
 
 findDupsGo : OrdMap Unit -> List String -> List String
 findDupsGo _ [] = []
-findDupsGo seen (n::rest)
+findDupsGo seen (n :: rest)
   | omHasKey n seen = n :: findDupsGo seen rest
   | otherwise = findDupsGo (omInsert n () seen) rest
 
@@ -2064,9 +2165,8 @@ resErrorSexp (UnboundVariableExported n m _) =
   "(UnboundVariableExported \{escStr n} \{escStr m})"
 resErrorSexp (UnboundVariableIsModule n _) =
   "(UnboundVariableIsModule \{escStr n})"
-resErrorSexp (UnknownConstructor n _ _) = "(UnknownConstructor "
-  ++ escStr n
-  ++ ")"
+resErrorSexp (UnknownConstructor n _ _) =
+  "(UnknownConstructor " ++ escStr n ++ ")"
 -- NOTE: the suggestion field is deliberately NOT serialized here either (mirrors
 -- UnboundVariable above) — keeps the resolve_modules gate's sexp stable.
 resErrorSexp (UnknownType n _ _) = "(UnknownType " ++ escStr n ++ ")"
@@ -2076,9 +2176,8 @@ resErrorSexp (FieldNotInRecord f r _) =
   "(FieldNotInRecord \{escStr f} \{escStr r})"
 resErrorSexp (DuplicateDefinition k n _) =
   "(DuplicateDefinition \{escStr k} \{escStr n})"
-resErrorSexp (InternalExternAccess n _) = "(InternalExternAccess "
-  ++ escStr n
-  ++ ")"
+resErrorSexp (InternalExternAccess n _) =
+  "(InternalExternAccess " ++ escStr n ++ ")"
 resErrorSexp (UnknownInterface n _) = "(UnknownInterface " ++ escStr n ++ ")"
 resErrorSexp (MethodNotInInterface m i _) =
   "(MethodNotInInterface \{escStr m} \{escStr i})"
@@ -2092,31 +2191,24 @@ resErrorSexp (NewtypeCtorNotExported n m _) =
 resErrorSexp (AbstractFieldAccess t f _) =
   "(AbstractFieldAccess \{escStr t} \{escStr f})"
 resErrorSexp (UnknownModule n _) = "(UnknownModule " ++ escStr n ++ ")"
-resErrorSexp (NonRecursiveValueLet n _) = "(NonRecursiveValueLet "
-  ++ escStr n
-  ++ ")"
+resErrorSexp (NonRecursiveValueLet n _) =
+  "(NonRecursiveValueLet " ++ escStr n ++ ")"
 resErrorSexp (DuplicateBinding n _) = "(DuplicateBinding " ++ escStr n ++ ")"
-resErrorSexp (DuplicateValueBinding n _) = "(DuplicateValueBinding "
-  ++ escStr n
-  ++ ")"
-resErrorSexp (DuplicateSignature n _ _) = "(DuplicateSignature "
-  ++ escStr n
-  ++ ")"
+resErrorSexp (DuplicateValueBinding n _) =
+  "(DuplicateValueBinding " ++ escStr n ++ ")"
+resErrorSexp (DuplicateSignature n _ _) =
+  "(DuplicateSignature " ++ escStr n ++ ")"
 resErrorSexp (DuplicateBinder k n _) =
   "(DuplicateBinder \{escStr k} \{escStr n})"
 resErrorSexp (AsPatternMisplaced _) = "AsPatternMisplaced"
-resErrorSexp (AmbiguousOccurrence n mods _) = "(AmbiguousOccurrence "
-  ++ joinWith " " (escStr n :: map escStr mods)
-  ++ ")"
-resErrorSexp (AmbiguousConstructor n mods _) = "(AmbiguousConstructor "
-  ++ joinWith " " (escStr n :: map escStr mods)
-  ++ ")"
-resErrorSexp (AmbiguousType n mods _) = "(AmbiguousType "
-  ++ joinWith " " (escStr n :: map escStr mods)
-  ++ ")"
-resErrorSexp (AmbiguousInterface n mods _) = "(AmbiguousInterface "
-  ++ joinWith " " (escStr n :: map escStr mods)
-  ++ ")"
+resErrorSexp (AmbiguousOccurrence n mods _) =
+  "(AmbiguousOccurrence " ++ joinWith " " (escStr n :: map escStr mods) ++ ")"
+resErrorSexp (AmbiguousConstructor n mods _) =
+  "(AmbiguousConstructor " ++ joinWith " " (escStr n :: map escStr mods) ++ ")"
+resErrorSexp (AmbiguousType n mods _) =
+  "(AmbiguousType " ++ joinWith " " (escStr n :: map escStr mods) ++ ")"
+resErrorSexp (AmbiguousInterface n mods _) =
+  "(AmbiguousInterface " ++ joinWith " " (escStr n :: map escStr mods) ++ ")"
 resErrorSexp (ReassignImmutable n _) = "(ReassignImmutable " ++ escStr n ++ ")"
 resErrorSexp (DuplicateInterfaceMethod m a b _) =
   "(DuplicateInterfaceMethod \{escStr m} \{escStr a} \{escStr b})"
@@ -2128,7 +2220,8 @@ resErrorSexp (DuplicateInterfaceMethod m a b _) =
 -- locations are never conflated.
 locKey : Option Loc -> String
 locKey None = "-"
-locKey (Some (Loc f sl sc el ec)) = "\{f}:\{intToString sl}:\{intToString sc}:\{intToString el}:\{intToString ec}"
+locKey (Some (Loc f sl sc el ec)) =
+  "\{f}:\{intToString sl}:\{intToString sc}:\{intToString el}:\{intToString ec}"
 
 -- Collapse consecutive-or-not errors that render identically (same
 -- resErrorCode + ppResError message + location).  This mainly hits a typo'd
@@ -2166,7 +2259,11 @@ resolveProgram runtimeDecls preludeDecls prog =
 -- `internalGuard` (empty ⇒ unrestricted).  The single-file `medaka check` error
 -- path passes `internalGuardFor allowInternal`.
 export
-resolveProgramG2 : List String -> List Decl -> List Decl -> List Decl -> List ResError
+resolveProgramG2 : List String ->
+  List Decl ->
+  List Decl ->
+  List Decl ->
+  List ResError
 resolveProgramG2 internalGuard runtimeDecls preludeDecls prog =
   let env = buildEnv runtimeDecls preludeDecls prog internalGuard
   dedupResErrors (buildErrors preludeDecls prog ++ flatMap (checkDecl env) prog)
@@ -2176,17 +2273,18 @@ resolveProgramG2 internalGuard runtimeDecls preludeDecls prog =
 export
 ppResError : ResError -> String
 ppResError (UnboundVariable n _ s) = match s
-  Some sug => "Unbound variable: \{n}. Did you mean '\{sug}'"
-    ++ haskellNote n sug
+  Some sug =>
+    "Unbound variable: \{n}. Did you mean '\{sug}'" ++ haskellNote n sug
   None => "Unbound variable: \{n}"
 ppResError (UnboundVariableExported n m _) =
   "Unbound variable: \{n}. (Did you forget to 'import \{m}.{\{n}}'?)"
-ppResError (UnboundVariableIsModule n _) = "Unbound variable: \{n}. '\{n}' is an imported module, not a value — a bare "
-  ++ "'import \{n}' binds no names. Bind what you need: 'import \{n}.{name, "
-  ++ "...}', or 'import \{n} as M' then 'M.name'"
+ppResError (UnboundVariableIsModule n _) =
+  "Unbound variable: \{n}. '\{n}' is an imported module, not a value — a bare "
+    ++ "'import \{n}' binds no names. Bind what you need: 'import \{n}.{name, "
+    ++ "...}', or 'import \{n} as M' then 'M.name'"
 ppResError (UnknownConstructor n _ s) = match s
-  Some sug => "Unknown constructor: \{n}. Did you mean '\{sug}'"
-    ++ haskellNote n sug
+  Some sug =>
+    "Unknown constructor: \{n}. Did you mean '\{sug}'" ++ haskellNote n sug
   None => "Unknown constructor: " ++ n
 ppResError (UnknownType n _ s) = match s
   Some sug => "Unknown type: \{n}. Did you mean '\{sug}'" ++ haskellNote n sug
@@ -2203,28 +2301,39 @@ ppResError (DuplicateDefinition k n _) = "Duplicate \{k}: \{n}"
 ppResError (UnknownInterface n _) = "Unknown interface: " ++ n
 ppResError (MethodNotInInterface m i _) =
   "Method '\{m}' is not part of interface '\{i}'"
-ppResError (ExternWithBody n _) = "Extern '"
-  ++ n
-  ++ "' must not have a definition body"
+ppResError (ExternWithBody n _) =
+  "Extern '" ++ n ++ "' must not have a definition body"
 ppResError (PrivateNameAccess n m _) =
   "Module '\{m}' has no exported name '\{n}'"
-ppResError (NoExportedConstructors n m _) = "'\{n}' exports no constructors from module '\{m}' (exported abstractly). Remove `(..)` or export with `public export`"
-ppResError (NewtypeCtorNotExported n m _) = "'\{n}' exports no constructors: a `newtype`'s constructor is always module-private, and `public` is a parse error on `newtype`. Expose it with an accessor function, or declare '\{n}' as a `public export data` with one variant"
-ppResError (AbstractFieldAccess t f _) = "'\{t}' is exported abstractly. Field '\{f}' is not accessible; declare it `public export` to expose its fields"
+ppResError (NoExportedConstructors n m _) =
+  "'\{n}' exports no constructors from module '\{m}' (exported abstractly). Remove `(..)` or export with `public export`"
+ppResError (NewtypeCtorNotExported n m _) =
+  "'\{n}' exports no constructors: a `newtype`'s constructor is always module-private, and `public` is a parse error on `newtype`. Expose it with an accessor function, or declare '\{n}' as a `public export data` with one variant"
+ppResError (AbstractFieldAccess t f _) =
+  "'\{t}' is exported abstractly. Field '\{f}' is not accessible; declare it `public export` to expose its fields"
 ppResError (UnknownModule n _) = "Unknown module: " ++ n
-ppResError (AsPatternMisplaced _) = "`@` as-patterns are only allowed in a binding position (a lambda parameter, a do-block bind, or a match pattern)"
-ppResError (NonRecursiveValueLet n _) = "'\{n}' is not in scope in its own binding. Non-function `let` is not recursive; write `let rec \{n} = ...` (RHS must be a lambda)"
-ppResError (DuplicateBinding n _) = "Clauses of '\{n}' must be contiguous. An earlier same-named binding is separated by another declaration; group all clauses (and the signature) together"
-ppResError (DuplicateValueBinding n _) = "Duplicate binding '\{n}': it is already defined in this scope. A value binding has exactly one definition — rename this one or remove it"
-ppResError (DuplicateSignature n _ (Some (Loc _ l _ _ _))) = "'\{n}' is already defined at line \{intToString l}. A name may have only one type signature — rename or remove this duplicate definition, or merge the clauses into a single multi-clause function if that was the intent"
-ppResError (DuplicateSignature n _ None) = "'\{n}' is already defined earlier in this file. A name may have only one type signature — rename or remove this duplicate definition, or merge the clauses into a single multi-clause function if that was the intent"
-ppResError (DuplicateBinder k n _) = "Duplicate binder: '\{n}' is bound more than once in this \{k}. Each binder must be distinct — rename one occurrence"
-ppResError (AmbiguousOccurrence n mods _) = "Ambiguous occurrence: '\{n}' is exported by \{ambigModPhrase mods}. Qualify, or select with `import <mod>.{\{n}}`"
+ppResError (AsPatternMisplaced _) =
+  "`@` as-patterns are only allowed in a binding position (a lambda parameter, a do-block bind, or a match pattern)"
+ppResError (NonRecursiveValueLet n _) =
+  "'\{n}' is not in scope in its own binding. Non-function `let` is not recursive; write `let rec \{n} = ...` (RHS must be a lambda)"
+ppResError (DuplicateBinding n _) =
+  "Clauses of '\{n}' must be contiguous. An earlier same-named binding is separated by another declaration; group all clauses (and the signature) together"
+ppResError (DuplicateValueBinding n _) =
+  "Duplicate binding '\{n}': it is already defined in this scope. A value binding has exactly one definition — rename this one or remove it"
+ppResError (DuplicateSignature n _ (Some (Loc _ l _ _ _))) =
+  "'\{n}' is already defined at line \{intToString l}. A name may have only one type signature — rename or remove this duplicate definition, or merge the clauses into a single multi-clause function if that was the intent"
+ppResError (DuplicateSignature n _ None) =
+  "'\{n}' is already defined earlier in this file. A name may have only one type signature — rename or remove this duplicate definition, or merge the clauses into a single multi-clause function if that was the intent"
+ppResError (DuplicateBinder k n _) =
+  "Duplicate binder: '\{n}' is bound more than once in this \{k}. Each binder must be distinct — rename one occurrence"
+ppResError (AmbiguousOccurrence n mods _) =
+  "Ambiguous occurrence: '\{n}' is exported by \{ambigModPhrase mods}. Qualify, or select with `import <mod>.{\{n}}`"
 -- No `Type.\{n}` spelling exists (a qualified constructor is a parse error), so the
 -- fix is a selective import of ONE owning type: `import <mod>.{T(..)}` — bringing in
 -- only that module's constructors — with the other left as a bare `import <mod>` (or
 -- without `(..)`), which binds its impls but not its constructors.  Never "qualify".
-ppResError (AmbiguousConstructor n mods _) = "Ambiguous constructor: '\{n}' is brought into scope by \{ambigModPhrase mods}. Import the constructors of only one — e.g. `import <mod>.{T(..)}` — and drop the other's `(..)`"
+ppResError (AmbiguousConstructor n mods _) =
+  "Ambiguous constructor: '\{n}' is brought into scope by \{ambigModPhrase mods}. Import the constructors of only one — e.g. `import <mod>.{T(..)}` — and drop the other's `(..)`"
 -- Neither remedy the VALUE peer offers exists for a type or an interface, so the
 -- copy must not borrow its wording.  "Qualify" is impossible: `import m as A` binds
 -- m's VALUES as `A.name`, and an alias-qualified name in TYPE position is a parse
@@ -2232,11 +2341,14 @@ ppResError (AmbiguousConstructor n mods _) = "Ambiguous constructor: '\{n}' is b
 -- too: only a value member may be renamed, so `import m.{Foo as Bar}` is rejected.
 -- That leaves exactly one fix — name it, rather than gesture at the two that do not
 -- work: import the name from one module and drop it from the other's list.
-ppResError (AmbiguousType n mods _) = "Ambiguous type: '\{n}' is brought into scope by \{ambigModPhrase mods}. A type name can be neither qualified nor aliased, so import it from only one — drop '\{n}' from the other's import list"
-ppResError (AmbiguousInterface n mods _) = "Ambiguous interface: '\{n}' is brought into scope by \{ambigModPhrase mods}. An interface name can be neither qualified nor aliased, so import it from only one — drop '\{n}' from the other's import list"
-ppResError (InternalExternAccess n _) = "'"
-  ++ n
-  ++ "' is an internal-only primitive. Cannot be used outside the standard library (pass --allow-internal to override)"
+ppResError (AmbiguousType n mods _) =
+  "Ambiguous type: '\{n}' is brought into scope by \{ambigModPhrase mods}. A type name can be neither qualified nor aliased, so import it from only one — drop '\{n}' from the other's import list"
+ppResError (AmbiguousInterface n mods _) =
+  "Ambiguous interface: '\{n}' is brought into scope by \{ambigModPhrase mods}. An interface name can be neither qualified nor aliased, so import it from only one — drop '\{n}' from the other's import list"
+ppResError (InternalExternAccess n _) =
+  "'"
+    ++ n
+    ++ "' is an internal-only primitive. Cannot be used outside the standard library (pass --allow-internal to override)"
 -- ⚠️ THE HELP TEXT SAYS THE NARROWING OUT LOUD, DELIBERATELY. This rejects a
 -- program shape that compiled before (two interfaces sharing a method name at
 -- DISJOINT receivers ran fine), so the message must not pretend the program was
@@ -2244,8 +2356,10 @@ ppResError (InternalExternAccess n _) = "'"
 -- interfaces plus the fix. The parenthetical bounds the rule: a collision with a
 -- PRELUDE method is a different case, ruled a warning-not-error by
 -- docs/spec/SHADOW-SEMANTICS.md S1-PRELUDE (#1499), and is NOT what this fires on.
-ppResError (DuplicateInterfaceMethod m a b _) = "Method '\{m}' is declared by two interfaces in this module: '\{a}' and '\{b}'. Two interfaces declared together may not share a method name — an occurrence of '\{m}' could not be attributed to either. Rename the method in one of them, or merge the two interfaces. (A method name shared with a PRELUDE interface is a different case and stays legal.)"
-ppResError (ReassignImmutable n _) = "Cannot reassign '\{n}' — bindings are immutable. To bind a new value, shadow it with `let \{n} = ...`. For mutable state, use a `Ref`: `let \{n} = Ref 0`, then write `\{n} := !\{n} + 1` (read the cell with `!\{n}`)"
+ppResError (DuplicateInterfaceMethod m a b _) =
+  "Method '\{m}' is declared by two interfaces in this module: '\{a}' and '\{b}'. Two interfaces declared together may not share a method name — an occurrence of '\{m}' could not be attributed to either. Rename the method in one of them, or merge the two interfaces. (A method name shared with a PRELUDE interface is a different case and stays legal.)"
+ppResError (ReassignImmutable n _) =
+  "Cannot reassign '\{n}' — bindings are immutable. To bind a new value, shadow it with `let \{n} = ...`. For mutable state, use a `Ref`: `let \{n} = Ref 0`, then write `\{n} := !\{n} + 1` (read the cell with `!\{n}`)"
 
 -- Stable diagnostic code (DIAGNOSTIC-CODES-DESIGN §2) for a resolve error — one
 -- `R-*` code per ResError constructor.  Authored here (a single chokepoint), so
@@ -2287,7 +2401,7 @@ resErrorCode (DuplicateInterfaceMethod _ _ _ _) = "R-DUPLICATE-IFACE-METHOD"
 -- Two modules → "both `a` and `b`";
 -- otherwise a comma-separated list of backtick-quoted module names.
 ambigModPhrase : List String -> String
-ambigModPhrase (a::b::[]) = "both `\{a}` and `\{b}`"
+ambigModPhrase (a :: b :: []) = "both `\{a}` and `\{b}`"
 ambigModPhrase mods = joinWith ", " (map (m => "`" ++ m ++ "`") mods)
 
 -- one human-readable error message per line (the harness sorts)
@@ -2306,13 +2420,13 @@ resolveToLines runtimeDecls preludeDecls prog =
 export
 singleFileImportErrors : List Decl -> List ResError
 singleFileImportErrors [] = []
-singleFileImportErrors ((DUse _ path _)::rest) =
+singleFileImportErrors ((DUse _ path _) :: rest) =
   let mid = useModId path
   if mid == "core" || mid == "" then
     singleFileImportErrors rest
   else
     UnknownModule mid None :: singleFileImportErrors rest
-singleFileImportErrors (_::rest) = singleFileImportErrors rest
+singleFileImportErrors (_ :: rest) = singleFileImportErrors rest
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- Multi-module path.
@@ -2328,23 +2442,23 @@ singleFileImportErrors (_::rest) = singleFileImportErrors rest
 -- The public interface of a resolved module
 -- (exp_fields is dropped — consumers only read field OWNERS).
 public export data ModuleExports = ModuleExports {
-    modId : String,
-    expValues : List String,
-    expTypes : List String,
-    expCtors : List String,
-    expTypeCtors : List (String, List String),
-    expFieldOwners : List (String, String),
-    expInterfaces : List String,
-    expIfaceMethods : List (String, List String),
-    expEffects : List String,  -- exported effect labels (Phase 146)
-    -- (ctorName, typeName) pairs for `export newtype` decls (#1311) — a
-    -- newtype's ctor is unconditionally module-private (typecheck's
-    -- `publicDataDecls` never publishes it), so unlike `expCtors`/
-    -- `expTypeCtors` this table exists ONLY to let the import path refuse it
-    -- with a located, explanatory diagnostic instead of silently admitting it
-    -- and leaving typecheck to fail with a bare `Unbound variable`.
-    expNewtypeCtors : List (String, String),
-  }
+  modId : String,
+  expValues : List String,
+  expTypes : List String,
+  expCtors : List String,
+  expTypeCtors : List (String, List String),
+  expFieldOwners : List (String, String),
+  expInterfaces : List String,
+  expIfaceMethods : List (String, List String),
+  expEffects : List String,  -- exported effect labels (Phase 146)
+  -- (ctorName, typeName) pairs for `export newtype` decls (#1311) — a
+  -- newtype's ctor is unconditionally module-private (typecheck's
+  -- `publicDataDecls` never publishes it), so unlike `expCtors`/
+  -- `expTypeCtors` this table exists ONLY to let the import path refuse it
+  -- with a located, explanatory diagnostic instead of silently admitting it
+  -- and leaving typecheck to fail with a bare `Unbound variable`.
+  expNewtypeCtors : List (String, String),
+}
 -- public type → its exported ctors
 -- (field, owner type/ctor)
 
@@ -2354,7 +2468,7 @@ public export data ModuleExports = ModuleExports {
 -- keep the elements of `names` that are members of `domain`
 filterContains : List String -> List String -> List String
 filterContains _ [] = []
-filterContains domain (n::rest)
+filterContains domain (n :: rest)
   | contains n domain = n :: filterContains domain rest
   | otherwise = filterContains domain rest
 
@@ -2362,7 +2476,7 @@ filterContains domain (n::rest)
 -- `omHasKey` per element instead of `filterContains`'s O(n) `contains`).
 filterInSet : OrdMap Unit -> List String -> List String
 filterInSet _ [] = []
-filterInSet domain (n::rest)
+filterInSet domain (n :: rest)
   | omHasKey n domain = n :: filterInSet domain rest
   | otherwise = filterInSet domain rest
 
@@ -2378,10 +2492,11 @@ findExports mid known = omLookup mid known
 
 -- exported under any value/type/ctor/interface category (lib's imported_names is_pub)
 isPubExp : ModuleExports -> String -> Bool
-isPubExp exp n = contains n exp.expValues
-  || contains n exp.expTypes
-  || contains n exp.expCtors
-  || contains n exp.expInterfaces
+isPubExp exp n =
+  contains n exp.expValues
+    || contains n exp.expTypes
+    || contains n exp.expCtors
+    || contains n exp.expInterfaces
 
 typeCtorsOf : String -> ModuleExports -> Option (List String)
 typeCtorsOf name exp = lookupAssoc name exp.expTypeCtors
@@ -2397,8 +2512,8 @@ isNewtypeExport name exp = contains name (map snd exp.expNewtypeCtors)
 -- ── usePaths / pubUsePaths ─────────────────────────────────────────────────
 usePathsOf : List Decl -> List UsePath
 usePathsOf [] = []
-usePathsOf ((DUse _ path _)::rest) = path :: usePathsOf rest
-usePathsOf (_::rest) = usePathsOf rest
+usePathsOf ((DUse _ path _) :: rest) = path :: usePathsOf rest
+usePathsOf (_ :: rest) = usePathsOf rest
 
 -- Like usePathsOf but keeps each import's own source Loc alongside its path —
 -- used only by the collectImports chain, which attaches the loc to any
@@ -2406,13 +2521,13 @@ usePathsOf (_::rest) = usePathsOf rest
 -- dummy {0,0}/`<unknown location>`).
 usePathLocsOf : List Decl -> List (UsePath, Loc)
 usePathLocsOf [] = []
-usePathLocsOf ((DUse _ path loc)::rest) = (path, loc) :: usePathLocsOf rest
-usePathLocsOf (_::rest) = usePathLocsOf rest
+usePathLocsOf ((DUse _ path loc) :: rest) = (path, loc) :: usePathLocsOf rest
+usePathLocsOf (_ :: rest) = usePathLocsOf rest
 
 pubUsePaths : List Decl -> List UsePath
 pubUsePaths [] = []
-pubUsePaths ((DUse True path _)::rest) = path :: pubUsePaths rest
-pubUsePaths (_::rest) = pubUsePaths rest
+pubUsePaths ((DUse True path _) :: rest) = path :: pubUsePaths rest
+pubUsePaths (_ :: rest) = pubUsePaths rest
 
 -- ── imported_names + expand_member ─────────────────────────────────────────
 -- Names a use-path brings into scope, plus the privacy / abstract-ctor errors.
@@ -2421,7 +2536,8 @@ importedNamesMM (UseName ns) exp =
   if listLen ns > 1 then
     let nm = lastOf ns
     ([nm], pubErr exp nm)
-  else ([], [])
+  else
+    ([], [])
 importedNamesMM (UseGroup _ members) exp =
   let expanded = flatMap (expandMemberNames exp) members
   let names = map localOfExpanded expanded
@@ -2433,7 +2549,11 @@ importedNamesMM (UseGroup _ members) exp =
 -- import: the user never named the ctor, so there is no import member to
 -- locate a refusal on — same reasoning `.*` already applies to abstract data.
 importedNamesMM (UseWild _) exp = (
-  exp.expValues ++ exp.expTypes ++ filterList (c => not (contains c (map fst exp.expNewtypeCtors))) exp.expCtors,
+  exp.expValues
+    ++ exp.expTypes
+    ++ filterList
+      (c => not (contains c (map fst exp.expNewtypeCtors)))
+      exp.expCtors,
   [],
 )
 -- `import m as A` binds m's exported VALUES as `A.name`, and nothing unqualified.
@@ -2444,20 +2564,14 @@ importedNamesMM (UseAlias _ a) exp = (map (qualifiedLocal a) exp.expValues, [])
 
 pubErr : ModuleExports -> String -> List ResError
 pubErr exp n =
-  if isPubExp exp n then
-    []
-  else
-    [PrivateNameAccess n exp.modId None]
+  if isPubExp exp n then [] else [PrivateNameAccess n exp.modId None]
 
 -- Like pubErr but carries the offending member's own source Loc (from a
 -- UseGroup member) so the diagnostic squiggles just that name, not the whole
 -- import statement (RESOLVER-DIAG-LOCATION-DESIGN.md F3 follow-up).
 pubErrLoc : ModuleExports -> (String, Loc) -> List ResError
 pubErrLoc exp (n, loc) =
-  if isPubExp exp n then
-    []
-  else
-    [PrivateNameAccess n exp.modId (Some loc)]
+  if isPubExp exp n then [] else [PrivateNameAccess n exp.modId (Some loc)]
 
 -- expand_member: `T(..)` → the type plus its exported ctors; a plain member is
 -- itself.  `T(..)` on an abstractly-exported type is a NoExportedConstructors.
@@ -2476,9 +2590,10 @@ pubErrLoc exp (n, loc) =
 -- arms below refuse it explicitly rather than let it fall through to the
 -- generic paths, which would silently admit it exactly as #1311 found.
 expandMemberNames : ModuleExports -> UseMember -> List (String, String, Loc)
-expandMemberNames exp (m@(UseMember name False loc _)) = match newtypeTypeOfCtor name exp
-  Some _ => []  -- refused; see expandMemberErrs
-  None => [(name, useMemberLocal m, loc)]
+expandMemberNames exp (m@(UseMember name False loc _)) =
+  match newtypeTypeOfCtor name exp
+    Some _ => []  -- refused; see expandMemberErrs
+    None => [(name, useMemberLocal m, loc)]
 expandMemberNames exp (m@(UseMember name True loc _))
   | isNewtypeExport name exp =
     -- keep the TYPE name bound (mirrors abstract `data`: `NT` itself is
@@ -2496,9 +2611,10 @@ pubErrExpanded : ModuleExports -> (String, String, Loc) -> List ResError
 pubErrExpanded exp (origin, _, loc) = pubErrLoc exp (origin, loc)
 
 expandMemberErrs : ModuleExports -> UseMember -> List ResError
-expandMemberErrs exp (UseMember name False loc _) = match newtypeTypeOfCtor name exp
-  Some tyName => [NewtypeCtorNotExported tyName exp.modId (Some loc)]
-  None => []
+expandMemberErrs exp (UseMember name False loc _) =
+  match newtypeTypeOfCtor name exp
+    Some tyName => [NewtypeCtorNotExported tyName exp.modId (Some loc)]
+    None => []
 expandMemberErrs exp (UseMember name True loc _)
   | isNewtypeExport name exp =
     [NewtypeCtorNotExported name exp.modId (Some loc)]
@@ -2511,16 +2627,15 @@ expandMemberErrs exp (UseMember name True loc _)
         []
 
 -- ── import contributions to the env ────────────────────────────────────────
-public export data ImportAdds =
-  | ImportAdds {
-      iaImported : List String,
-      iaValues : List String,
-      iaTypes : List String,
-      iaCtors : List String,
-      iaIfaces : List String,
-      iaFieldOwners : List (String, String),
-      iaErrors : List ResError,
-    }
+public export data ImportAdds = ImportAdds {
+  iaImported : List String,
+  iaValues : List String,
+  iaTypes : List String,
+  iaCtors : List String,
+  iaIfaces : List String,
+  iaFieldOwners : List (String, String),
+  iaErrors : List ResError,
+}
 
 emptyAdds : ImportAdds
 emptyAdds = ImportAdds {
@@ -2552,7 +2667,8 @@ collectImports known prog = foldImports known (usePathLocsOf prog)
 -- DIRECTLY-imported module id (not the original definer → re-export safe).
 importValueNames : OrdMap ModuleExports -> UsePath -> List String
 importValueNames known path =
-  if useModId path == "core" then []
+  if useModId path == "core" then
+    []
   else match findExports (useModId path) known
     None => []
     Some exp =>
@@ -2577,15 +2693,15 @@ addProvenance : OrdMap (List String) -> String -> String -> OrdMap (List String)
 addProvenance prov n mid = match omLookup n prov
   None => omInsert n [mid] prov
   Some mids =>
-    if contains mid mids then
-      prov
-    else
-      omInsert n (mids ++ [mid]) prov
+    if contains mid mids then prov else omInsert n (mids ++ [mid]) prov
 
 -- Fold the value names of one import (all tagged with the same mid) into prov.
-addImportProvenance : OrdMap (List String) -> String -> List String -> OrdMap (List String)
+addImportProvenance : OrdMap (List String) ->
+  String ->
+  List String ->
+  OrdMap (List String)
 addImportProvenance prov _ [] = prov
-addImportProvenance prov mid (n::rest) =
+addImportProvenance prov mid (n :: rest) =
   addImportProvenance (addProvenance prov n mid) mid rest
 
 -- Provenance over every non-core import in the program, in decl order
@@ -2593,14 +2709,18 @@ addImportProvenance prov mid (n::rest) =
 valueProvenance : OrdMap ModuleExports -> List UsePath -> OrdMap (List String)
 valueProvenance known paths = foldProvenance known omEmpty paths
 
-foldProvenance : OrdMap ModuleExports -> OrdMap (List String) -> List UsePath -> OrdMap (List String)
+foldProvenance : OrdMap ModuleExports ->
+  OrdMap (List String) ->
+  List UsePath ->
+  OrdMap (List String)
 foldProvenance _ prov [] = prov
-foldProvenance known prov (p::rest) =
+foldProvenance known prov (p :: rest) =
   let mid = useModId p
-  let prov2 = if mid == "core" then
-    prov
-  else
-    addImportProvenance prov mid (importValueNames known p)
+  let prov2 =
+    if mid == "core" then
+      prov
+    else
+      addImportProvenance prov mid (importValueNames known p)
   foldProvenance known prov2 rest
 
 -- Materialize the name→mids provenance map into the (name, mids) assoc that
@@ -2623,9 +2743,11 @@ ambiguousSet known prog =
   let sameMod = userValueNames prog
   keepAmbiguous sameMod (provToPairs prov)
 
-keepAmbiguous : List String -> List (String, List String) -> List (String, List String)
+keepAmbiguous : List String ->
+  List (String, List String) ->
+  List (String, List String)
 keepAmbiguous _ [] = []
-keepAmbiguous sameMod ((n, mids)::rest)
+keepAmbiguous sameMod ((n, mids) :: rest)
   | listLen mids >= 2 && not (contains n sameMod) =
     (n, mids) :: keepAmbiguous sameMod rest
   | otherwise = keepAmbiguous sameMod rest
@@ -2643,7 +2765,8 @@ keepAmbiguous sameMod ((n, mids)::rest)
 -- directly-imported module id (re-export safe, like importValueNames).
 importCtorNames : OrdMap ModuleExports -> UsePath -> List String
 importCtorNames known path =
-  if useModId path == "core" then []
+  if useModId path == "core" then
+    []
   else match findExports (useModId path) known
     None => []
     Some exp =>
@@ -2654,19 +2777,25 @@ importCtorNames known path =
 ctorProvenance : OrdMap ModuleExports -> List UsePath -> OrdMap (List String)
 ctorProvenance known paths = foldCtorProvenance known omEmpty paths
 
-foldCtorProvenance : OrdMap ModuleExports -> OrdMap (List String) -> List UsePath -> OrdMap (List String)
+foldCtorProvenance : OrdMap ModuleExports ->
+  OrdMap (List String) ->
+  List UsePath ->
+  OrdMap (List String)
 foldCtorProvenance _ prov [] = prov
-foldCtorProvenance known prov (p::rest) =
+foldCtorProvenance known prov (p :: rest) =
   let mid = useModId p
-  let prov2 = if mid == "core" then
-    prov
-  else
-    addImportProvenance prov mid (importCtorNames known p)
+  let prov2 =
+    if mid == "core" then
+      prov
+    else
+      addImportProvenance prov mid (importCtorNames known p)
   foldCtorProvenance known prov2 rest
 
 -- Keep only ctor names bound by ≥2 distinct modules AND not defined by a
 -- same-module top-level `data`/`newtype` (a real local ctor wins).
-ctorAmbiguousSet : OrdMap ModuleExports -> List Decl -> List (String, List String)
+ctorAmbiguousSet : OrdMap ModuleExports ->
+  List Decl ->
+  List (String, List String)
 ctorAmbiguousSet known prog =
   let prov = ctorProvenance known (usePathsOf prog)
   let sameMod = ctorNames prog
@@ -2725,45 +2854,60 @@ expInterfacesOf exp = exp.expInterfaces
 -- export namespace.  `filterInSet` (not `filterContains`) for the same reason
 -- `importCtorNames` uses it — an `export import m.*` chain grows both lists with
 -- depth, and an O(n) membership test there is the #925 cubic.
-importNamesIn : (ModuleExports -> List String) -> OrdMap ModuleExports -> UsePath -> List String
+importNamesIn : (ModuleExports -> List String) ->
+  OrdMap ModuleExports ->
+  UsePath ->
+  List String
 importNamesIn nsOf known path =
-  if useModId path == "core" then []
+  if useModId path == "core" then
+    []
   else match findExports (useModId path) known
     None => []
     Some exp =>
       let (names, _) = importedNamesMM path exp
       filterInSet (omFromNames (nsOf exp) omEmpty) names
 
-foldNamespaceProvenance : (OrdMap ModuleExports -> UsePath -> List String) -> OrdMap ModuleExports -> OrdMap (List String) -> List UsePath -> OrdMap (List String)
+foldNamespaceProvenance : (OrdMap ModuleExports -> UsePath -> List String) ->
+  OrdMap ModuleExports ->
+  OrdMap (List String) ->
+  List UsePath ->
+  OrdMap (List String)
 foldNamespaceProvenance _ _ prov [] = prov
-foldNamespaceProvenance namesOf known prov (p::rest) =
+foldNamespaceProvenance namesOf known prov (p :: rest) =
   let mid = useModId p
-  let prov2 = if mid == "core" then
-    prov
-  else
-    addImportProvenance prov mid (namesOf known p)
+  let prov2 =
+    if mid == "core" then
+      prov
+    else
+      addImportProvenance prov mid (namesOf known p)
   foldNamespaceProvenance namesOf known prov2 rest
 
 -- Keep only type names bound by ≥2 distinct modules AND not declared by a
 -- same-module `data`/`newtype`/`type` (a real local declaration wins, exactly as it
 -- does for values and ctors — see `tyOriginScope`'s precedence argument, which
 -- states the same rule for identity).
-typeAmbiguousSet : OrdMap ModuleExports -> List Decl -> List (String, List String)
+typeAmbiguousSet : OrdMap ModuleExports ->
+  List Decl ->
+  List (String, List String)
 typeAmbiguousSet known prog =
-  let prov = foldNamespaceProvenance importTypeNames known omEmpty (usePathsOf prog)
+  let prov =
+    foldNamespaceProvenance importTypeNames known omEmpty (usePathsOf prog)
   keepAmbiguous (dataRecordNames prog) (provToPairs prov)
 
 -- The interface peer.  `interfaceNamesOf` (not `map fst (interfaceList prog)`) is
 -- the local-declaration set, because it has the `DAttrib` arm — an `@attr`-wrapped
 -- `interface` still settles its own name.
-ifaceAmbiguousSet : OrdMap ModuleExports -> List Decl -> List (String, List String)
+ifaceAmbiguousSet : OrdMap ModuleExports ->
+  List Decl ->
+  List (String, List String)
 ifaceAmbiguousSet known prog =
-  let prov = foldNamespaceProvenance importIfaceNames known omEmpty (usePathsOf prog)
+  let prov =
+    foldNamespaceProvenance importIfaceNames known omEmpty (usePathsOf prog)
   keepAmbiguous (interfaceNamesOf prog) (provToPairs prov)
 
 foldImports : OrdMap ModuleExports -> List (UsePath, Loc) -> ImportAdds
 foldImports _ [] = emptyAdds
-foldImports known ((p, loc)::rest) =
+foldImports known ((p, loc) :: rest) =
   mergeAdds (oneImport known p loc) (foldImports known rest)
 
 oneImport : OrdMap ModuleExports -> UsePath -> Loc -> ImportAdds
@@ -2776,7 +2920,8 @@ oneImport known path loc =
   -- (see coreUseErrors), which is the one pass BOTH resolve paths run — validating here
   -- would leave the single-file path, and therefore a lone `medaka check <exporter>.mdk`,
   -- silent.
-  if mid == "core" then emptyAdds
+  if mid == "core" then
+    emptyAdds
   else match findExports mid known
     None => stubOrUnknown known path mid loc
     Some exp => realImport exp path loc
@@ -2788,15 +2933,16 @@ stubOrUnknown known path mid loc =
   -- #926: `known` is a Map now; "any prior module known" is `omSize known > 0`
   -- (was `isNonEmpty` on the list).  Same predicate: the first module resolves with
   -- an empty index (single-file stub); every later one has a non-empty index.
-  if omSize known > 0 then ImportAdds {
-    iaImported = [],
-    iaValues = [],
-    iaTypes = [],
-    iaCtors = [],
-    iaIfaces = [],
-    iaFieldOwners = [],
-    iaErrors = [UnknownModule mid (Some loc)],
-  }
+  if omSize known > 0 then
+    ImportAdds {
+      iaImported = [],
+      iaValues = [],
+      iaTypes = [],
+      iaCtors = [],
+      iaIfaces = [],
+      iaFieldOwners = [],
+      iaErrors = [UnknownModule mid (Some loc)],
+    }
   else
     let names = useStubNames path
     ImportAdds {
@@ -2846,9 +2992,11 @@ withResErrorLoc _ e = e
 
 -- field-ownership pairs whose owner is an exported type/ctor (copied into scope
 -- so field access / record patterns over imported records resolve)
-ownedFieldOwners : ModuleExports -> List (String, String) -> List (String, String)
+ownedFieldOwners : ModuleExports ->
+  List (String, String) ->
+  List (String, String)
 ownedFieldOwners _ [] = []
-ownedFieldOwners exp ((f, o)::rest)
+ownedFieldOwners exp ((f, o) :: rest)
   | contains o exp.expTypes || contains o exp.expCtors =
     (f, o) :: ownedFieldOwners exp rest
   | otherwise = ownedFieldOwners exp rest
@@ -2884,22 +3032,29 @@ ownedFieldOwners exp ((f, o)::rest)
 -- name collision of that shape is always also flagged by
 -- `ambiguousIfaceErrors` (`AmbiguousInterface`), which does not depend on
 -- import order, so the order-dependent diagnostic never appears alone.
-importedIfaceMethods : OrdMap ModuleExports -> List Decl -> List (String, List String)
+importedIfaceMethods : OrdMap ModuleExports ->
+  List Decl ->
+  List (String, List String)
 importedIfaceMethods known prog =
   flatMap (oneImportIfaceMethods known) (usePathsOf prog)
 
-oneImportIfaceMethods : OrdMap ModuleExports -> UsePath -> List (String, List String)
+oneImportIfaceMethods : OrdMap ModuleExports ->
+  UsePath ->
+  List (String, List String)
 oneImportIfaceMethods known path =
   let mid = useModId path
-  if mid == "core" then []
+  if mid == "core" then
+    []
   else match findExports mid known
     None => []
     Some exp =>
       filterIfaceMethods (importIfaceNames known path) exp.expIfaceMethods
 
-filterIfaceMethods : List String -> List (String, List String) -> List (String, List String)
+filterIfaceMethods : List String ->
+  List (String, List String) ->
+  List (String, List String)
 filterIfaceMethods _ [] = []
-filterIfaceMethods pathIfaces ((iface, ms)::rest)
+filterIfaceMethods pathIfaces ((iface, ms) :: rest)
   | contains iface pathIfaces =
     (iface, ms) :: filterIfaceMethods pathIfaces rest
   | otherwise = filterIfaceMethods pathIfaces rest
@@ -2911,13 +3066,19 @@ importedEffects known prog = flatMap (oneImportEffects known) (usePathsOf prog)
 oneImportEffects : OrdMap ModuleExports -> UsePath -> List String
 oneImportEffects known path =
   let mid = useModId path
-  if mid == "core" then []
+  if mid == "core" then
+    []
   else match findExports mid known
     None => []
     Some exp => exp.expEffects
 
 -- ── buildEnv (multi-module): like buildEnv but validating imports ──────────
-buildEnvMM : List Decl -> List Decl -> OrdMap ModuleExports -> List Decl -> List String -> (Env, List ResError)
+buildEnvMM : List Decl ->
+  List Decl ->
+  OrdMap ModuleExports ->
+  List Decl ->
+  List String ->
+  (Env, List ResError)
 buildEnvMM runtimeDecls preludeDecls known prog internalGuard =
   let seed = not (programIsCore prog)
   let pTypes = whenL seed (dataRecordNames preludeDecls)
@@ -2931,17 +3092,34 @@ buildEnvMM runtimeDecls preludeDecls known prog internalGuard =
   let impIfaceMethods = importedIfaceMethods known prog
   let impEffects = importedEffects known prog
   let impModValues = importedModuleValueSets known prog
-  let valuesM = omFromNames (externNames runtimeDecls ++ pValues ++ userValueNames prog ++ adds.iaValues) omEmpty
-  let typesM = omFromNames (primitiveTypes ++ pTypes ++ dataRecordNames prog ++ adds.iaTypes) omEmpty
-  let ctorsM = omFromNames (primitiveConstructors ++ pCtors ++ ctorNames prog ++ adds.iaCtors) omEmpty
+  let valuesM =
+    omFromNames
+      (externNames runtimeDecls
+        ++ pValues
+        ++ userValueNames prog
+        ++ adds.iaValues)
+      omEmpty
+  let typesM =
+    omFromNames
+      (primitiveTypes ++ pTypes ++ dataRecordNames prog ++ adds.iaTypes)
+      omEmpty
+  let ctorsM =
+    omFromNames
+      (primitiveConstructors ++ pCtors ++ ctorNames prog ++ adds.iaCtors)
+      omEmpty
   let importedM = omFromNames adds.iaImported omEmpty
   let env = Env {
     values = valuesM,
     types = typesM,
     ctors = ctorsM,
-    fields = map fst pFieldOwners ++ map fst (fieldOwnersOf prog) ++ map fst adds.iaFieldOwners,
+    fields =
+      map fst pFieldOwners
+        ++ map fst (fieldOwnersOf prog)
+        ++ map fst adds.iaFieldOwners,
     fieldOwners = pFieldOwners ++ fieldOwnersOf prog ++ adds.iaFieldOwners,
-    fieldOwnersIdx = buildFieldOwnerIndex (pFieldOwners ++ fieldOwnersOf prog ++ adds.iaFieldOwners),
+    fieldOwnersIdx =
+      buildFieldOwnerIndex
+        (pFieldOwners ++ fieldOwnersOf prog ++ adds.iaFieldOwners),
     interfaces = baseIfaces,
     ifaceMethods = pIfaces ++ uIfaces ++ impIfaceMethods,
     effects = effectNames prog ++ impEffects,
@@ -2961,14 +3139,19 @@ buildEnvMM runtimeDecls preludeDecls known prog internalGuard =
 -- regardless of import form (bare `UseName`, selective `UseGroup`, wildcard) —
 -- used only to answer "is this unbound name exported by a module I already
 -- import?" (audit #5), not to bind any names into scope.
-importedModuleValueSets : OrdMap ModuleExports -> List Decl -> List (String, List String)
+importedModuleValueSets : OrdMap ModuleExports ->
+  List Decl ->
+  List (String, List String)
 importedModuleValueSets known prog =
   flatMap (oneImportedModuleValues known) (usePathsOf prog)
 
-oneImportedModuleValues : OrdMap ModuleExports -> UsePath -> List (String, List String)
+oneImportedModuleValues : OrdMap ModuleExports ->
+  UsePath ->
+  List (String, List String)
 oneImportedModuleValues known path =
   let mid = useModId path
-  if mid == "core" then []
+  if mid == "core" then
+    []
   else match findExports mid known
     None => []
     Some exp => [(mid, exp.expValues)]
@@ -3006,24 +3189,35 @@ coreExports preludeDecls = ModuleExports {
 -- `T(..)` expansion for `import core.{Option(..)}`.
 typeCtorsAllOf : List Decl -> List (String, List String)
 typeCtorsAllOf [] = []
-typeCtorsAllOf ((DNewtype { newtypeName = n, newtypeCtor = con })::rest) =
+typeCtorsAllOf ((DNewtype { newtypeName = n, newtypeCtor = con }) :: rest) =
   (n, [con]) :: typeCtorsAllOf rest
-typeCtorsAllOf ((DData { dataName = n, dataCtors = vs })::rest) =
+typeCtorsAllOf ((DData { dataName = n, dataCtors = vs }) :: rest) =
   (n, map variantName vs) :: typeCtorsAllOf rest
-typeCtorsAllOf ((DAttrib _ d)::rest) = typeCtorsAllOf (d::rest)
-typeCtorsAllOf (_::rest) = typeCtorsAllOf rest
+typeCtorsAllOf ((DAttrib _ d) :: rest) = typeCtorsAllOf (d :: rest)
+typeCtorsAllOf (_ :: rest) = typeCtorsAllOf rest
 
 -- ── build_exports ──────────────────────────────────────────────────────────
-buildExports : ModuleExports -> OrdMap ModuleExports -> String -> List Decl -> Env -> ModuleExports
+buildExports : ModuleExports ->
+  OrdMap ModuleExports ->
+  String ->
+  List Decl ->
+  Env ->
+  ModuleExports
 buildExports coreExp known modId prog env = ModuleExports {
   modId = modId,
-  expValues = expValuesDirect prog ++ publicIfaceMethodVals prog env ++ reExpValues coreExp known prog,
+  expValues =
+    expValuesDirect prog
+      ++ publicIfaceMethodVals prog env
+      ++ reExpValues coreExp known prog,
   expTypes = expTypesDirect prog ++ reExpTypes coreExp known prog,
   expCtors = expCtorsDirect prog ++ reExpCtors coreExp known prog,
   expTypeCtors = expTypeCtorsDirect prog,
-  expFieldOwners = expFieldOwnersDirect prog ++ reExpFieldOwners coreExp known prog,
-  expInterfaces = expInterfacesDirect prog ++ reExpInterfaces coreExp known prog,
-  expIfaceMethods = expIfaceMethodsDirect prog ++ reExpIfaceMethods coreExp known prog,
+  expFieldOwners =
+    expFieldOwnersDirect prog ++ reExpFieldOwners coreExp known prog,
+  expInterfaces =
+    expInterfacesDirect prog ++ reExpInterfaces coreExp known prog,
+  expIfaceMethods =
+    expIfaceMethodsDirect prog ++ reExpIfaceMethods coreExp known prog,
   expEffects = expEffectsDirect prog ++ reExpEffects coreExp known prog,
   expNewtypeCtors = expNewtypeCtorsDirect prog,
 }
@@ -3035,18 +3229,20 @@ buildExports coreExp known modId prog env = ModuleExports {
 -- simply not visible to import at all, same as today).
 expNewtypeCtorsDirect : List Decl -> List (String, String)
 expNewtypeCtorsDirect [] = []
-expNewtypeCtorsDirect ((DNewtype { newtypePub = True, newtypeName = n, newtypeCtor = con })::rest) = (con, n) :: expNewtypeCtorsDirect rest
-expNewtypeCtorsDirect ((DAttrib _ d)::rest) = expNewtypeCtorsDirect (d::rest)
-expNewtypeCtorsDirect (_::rest) = expNewtypeCtorsDirect rest
+expNewtypeCtorsDirect ((DNewtype { newtypePub = True, newtypeName = n, newtypeCtor = con }) :: rest) =
+  (con, n) :: expNewtypeCtorsDirect rest
+expNewtypeCtorsDirect ((DAttrib _ d) :: rest) =
+  expNewtypeCtorsDirect (d :: rest)
+expNewtypeCtorsDirect (_ :: rest) = expNewtypeCtorsDirect rest
 
 -- pub DTypeSig/DExtern/DFunDef
 expValuesDirect : List Decl -> List String
 expValuesDirect [] = []
-expValuesDirect ((DTypeSig True n _)::rest) = n :: expValuesDirect rest
-expValuesDirect ((DExtern True n _)::rest) = n :: expValuesDirect rest
-expValuesDirect ((DFunDef True n _ _)::rest) = n :: expValuesDirect rest
-expValuesDirect ((DAttrib _ d)::rest) = expValuesDirect (d::rest)
-expValuesDirect (_::rest) = expValuesDirect rest
+expValuesDirect ((DTypeSig True n _) :: rest) = n :: expValuesDirect rest
+expValuesDirect ((DExtern True n _) :: rest) = n :: expValuesDirect rest
+expValuesDirect ((DFunDef True n _ _) :: rest) = n :: expValuesDirect rest
+expValuesDirect ((DAttrib _ d) :: rest) = expValuesDirect (d :: rest)
+expValuesDirect (_ :: rest) = expValuesDirect rest
 
 -- methods of PUBLIC interfaces that are bound as values (lib's final iter loop)
 publicIfaceMethodVals : List Decl -> Env -> List String
@@ -3058,68 +3254,72 @@ keepBoundMethods env ms = filterInSet env.values ms
 
 pubIfaceMethodSets : List Decl -> List (List String)
 pubIfaceMethodSets [] = []
-pubIfaceMethodSets ((DInterface { pub = True, methods, ... })::rest) =
+pubIfaceMethodSets ((DInterface { pub = True, methods, ... }) :: rest) =
   map ifaceMethodNm methods :: pubIfaceMethodSets rest
-pubIfaceMethodSets ((DAttrib _ d)::rest) = pubIfaceMethodSets (d::rest)
-pubIfaceMethodSets (_::rest) = pubIfaceMethodSets rest
+pubIfaceMethodSets ((DAttrib _ d) :: rest) = pubIfaceMethodSets (d :: rest)
+pubIfaceMethodSets (_ :: rest) = pubIfaceMethodSets rest
 
 -- pub newtype + VisPublic/VisAbstract data & record (the type name only)
 expTypesDirect : List Decl -> List String
 expTypesDirect [] = []
-expTypesDirect ((DNewtype { newtypePub = True, newtypeName = n })::rest) =
+expTypesDirect ((DNewtype { newtypePub = True, newtypeName = n }) :: rest) =
   n :: expTypesDirect rest
-expTypesDirect ((DData { dataVis = VisPublic, dataName = n })::rest) =
+expTypesDirect ((DData { dataVis = VisPublic, dataName = n }) :: rest) =
   n :: expTypesDirect rest
-expTypesDirect ((DData { dataVis = VisAbstract, dataName = n })::rest) =
+expTypesDirect ((DData { dataVis = VisAbstract, dataName = n }) :: rest) =
   n :: expTypesDirect rest
-expTypesDirect ((DTypeAlias { tyAliasPub = True, tyAliasName = n })::rest) =
+expTypesDirect ((DTypeAlias { tyAliasPub = True, tyAliasName = n }) :: rest) =
   n :: expTypesDirect rest
-expTypesDirect ((DAttrib _ d)::rest) = expTypesDirect (d::rest)
-expTypesDirect (_::rest) = expTypesDirect rest
+expTypesDirect ((DAttrib _ d) :: rest) = expTypesDirect (d :: rest)
+expTypesDirect (_ :: rest) = expTypesDirect rest
 
 -- pub newtype ctor + VisPublic data ctors (VisAbstract exports NO ctors)
 expCtorsDirect : List Decl -> List String
 expCtorsDirect [] = []
-expCtorsDirect ((DNewtype { newtypePub = True, newtypeCtor = con })::rest) =
+expCtorsDirect ((DNewtype { newtypePub = True, newtypeCtor = con }) :: rest) =
   con :: expCtorsDirect rest
-expCtorsDirect ((DData { dataVis = VisPublic, dataCtors = vs })::rest) = map variantName vs
-  ++ expCtorsDirect rest
-expCtorsDirect ((DAttrib _ d)::rest) = expCtorsDirect (d::rest)
-expCtorsDirect (_::rest) = expCtorsDirect rest
+expCtorsDirect ((DData { dataVis = VisPublic, dataCtors = vs }) :: rest) =
+  map variantName vs ++ expCtorsDirect rest
+expCtorsDirect ((DAttrib _ d) :: rest) = expCtorsDirect (d :: rest)
+expCtorsDirect (_ :: rest) = expCtorsDirect rest
 
 expTypeCtorsDirect : List Decl -> List (String, List String)
 expTypeCtorsDirect [] = []
-expTypeCtorsDirect ((DNewtype { newtypePub = True, newtypeName = n, newtypeCtor = con })::rest) = (n, [con]) :: expTypeCtorsDirect rest
-expTypeCtorsDirect ((DData { dataVis = VisPublic, dataName = n, dataCtors = vs })::rest) = (n, map variantName vs) :: expTypeCtorsDirect rest
-expTypeCtorsDirect ((DAttrib _ d)::rest) = expTypeCtorsDirect (d::rest)
-expTypeCtorsDirect (_::rest) = expTypeCtorsDirect rest
+expTypeCtorsDirect ((DNewtype { newtypePub = True, newtypeName = n, newtypeCtor = con }) :: rest) =
+  (n, [con]) :: expTypeCtorsDirect rest
+expTypeCtorsDirect ((DData { dataVis = VisPublic, dataName = n, dataCtors = vs }) :: rest) =
+  (n, map variantName vs) :: expTypeCtorsDirect rest
+expTypeCtorsDirect ((DAttrib _ d) :: rest) = expTypeCtorsDirect (d :: rest)
+expTypeCtorsDirect (_ :: rest) = expTypeCtorsDirect rest
 
 -- field owners for PUBLIC data (named-field variants) + record
 expFieldOwnersDirect : List Decl -> List (String, String)
 expFieldOwnersDirect [] = []
-expFieldOwnersDirect ((DData { dataVis = VisPublic, dataCtors = vs })::rest) = flatMap variantFieldOwners vs
-  ++ expFieldOwnersDirect rest
-expFieldOwnersDirect ((DAttrib _ d)::rest) = expFieldOwnersDirect (d::rest)
-expFieldOwnersDirect (_::rest) = expFieldOwnersDirect rest
+expFieldOwnersDirect ((DData { dataVis = VisPublic, dataCtors = vs }) :: rest) =
+  flatMap variantFieldOwners vs ++ expFieldOwnersDirect rest
+expFieldOwnersDirect ((DAttrib _ d) :: rest) = expFieldOwnersDirect (d :: rest)
+expFieldOwnersDirect (_ :: rest) = expFieldOwnersDirect rest
 
 expInterfacesDirect : List Decl -> List String
 expInterfacesDirect [] = []
-expInterfacesDirect ((DInterface { pub = True, name = n, ... })::rest) =
+expInterfacesDirect ((DInterface { pub = True, name = n, ... }) :: rest) =
   n :: expInterfacesDirect rest
-expInterfacesDirect ((DAttrib _ d)::rest) = expInterfacesDirect (d::rest)
-expInterfacesDirect (_::rest) = expInterfacesDirect rest
+expInterfacesDirect ((DAttrib _ d) :: rest) = expInterfacesDirect (d :: rest)
+expInterfacesDirect (_ :: rest) = expInterfacesDirect rest
 
 expIfaceMethodsDirect : List Decl -> List (String, List String)
 expIfaceMethodsDirect [] = []
-expIfaceMethodsDirect ((DInterface { pub = True, name = n, methods, ... })::rest) = (n, map ifaceMethodNm methods) :: expIfaceMethodsDirect rest
-expIfaceMethodsDirect ((DAttrib _ d)::rest) = expIfaceMethodsDirect (d::rest)
-expIfaceMethodsDirect (_::rest) = expIfaceMethodsDirect rest
+expIfaceMethodsDirect ((DInterface { pub = True, name = n, methods, ... }) :: rest) =
+  (n, map ifaceMethodNm methods) :: expIfaceMethodsDirect rest
+expIfaceMethodsDirect ((DAttrib _ d) :: rest) =
+  expIfaceMethodsDirect (d :: rest)
+expIfaceMethodsDirect (_ :: rest) = expIfaceMethodsDirect rest
 
 expEffectsDirect : List Decl -> List String
 expEffectsDirect [] = []
-expEffectsDirect ((DEffect True n _)::rest) = n :: expEffectsDirect rest
-expEffectsDirect ((DAttrib _ d)::rest) = expEffectsDirect (d::rest)
-expEffectsDirect (_::rest) = expEffectsDirect rest
+expEffectsDirect ((DEffect True n _) :: rest) = n :: expEffectsDirect rest
+expEffectsDirect ((DAttrib _ d) :: rest) = expEffectsDirect (d :: rest)
+expEffectsDirect (_ :: rest) = expEffectsDirect rest
 
 reExpEffects : ModuleExports -> OrdMap ModuleExports -> List Decl -> List String
 reExpEffects coreExp known prog =
@@ -3145,7 +3345,8 @@ reexportBindings (UseName ns) _ =
   if listLen ns > 1 then
     let n = lastOf ns
     [(n, n)]
-  else []
+  else
+    []
 reexportBindings (UseGroup _ members) src =
   map dropLocOfExpanded (flatMap (expandMemberNames src) members)
 reexportBindings (UseWild _) src =
@@ -3204,7 +3405,10 @@ reExpCtorsFrom : UsePath -> ModuleExports -> List String
 reExpCtorsFrom path src =
   localsExportedFrom src.expCtors (reexportBindings path src)
 
-reExpInterfaces : ModuleExports -> OrdMap ModuleExports -> List Decl -> List String
+reExpInterfaces : ModuleExports ->
+  OrdMap ModuleExports ->
+  List Decl ->
+  List String
 reExpInterfaces coreExp known prog =
   flatMap (overPubUse coreExp known reExpInterfacesFrom) (pubUsePaths prog)
 
@@ -3219,7 +3423,10 @@ reExpInterfacesFrom : UsePath -> ModuleExports -> List String
 reExpInterfacesFrom path src =
   filterContains src.expInterfaces (reexportOrigins path src)
 
-reExpIfaceMethods : ModuleExports -> OrdMap ModuleExports -> List Decl -> List (String, List String)
+reExpIfaceMethods : ModuleExports ->
+  OrdMap ModuleExports ->
+  List Decl ->
+  List (String, List String)
 reExpIfaceMethods coreExp known prog =
   flatMap (overPubUse coreExp known reExpIfaceMethodsFrom) (pubUsePaths prog)
 
@@ -3231,10 +3438,13 @@ reExpIfaceMethodsFrom path src =
 
 ifaceMethodPairs : ModuleExports -> List String -> List (String, List String)
 ifaceMethodPairs _ [] = []
-ifaceMethodPairs src (i::rest) =
+ifaceMethodPairs src (i :: rest) =
   (i, ifaceMethodsOf i src.expIfaceMethods) :: ifaceMethodPairs src rest
 
-reExpFieldOwners : ModuleExports -> OrdMap ModuleExports -> List Decl -> List (String, String)
+reExpFieldOwners : ModuleExports ->
+  OrdMap ModuleExports ->
+  List Decl ->
+  List (String, String)
 reExpFieldOwners coreExp known prog =
   flatMap (overPubUse coreExp known reExpFieldOwnersFrom) (pubUsePaths prog)
 
@@ -3246,7 +3456,7 @@ reExpFieldOwnersFrom path src =
 
 ownersForTypes : List String -> List (String, String) -> List (String, String)
 ownersForTypes _ [] = []
-ownersForTypes types ((f, o)::rest)
+ownersForTypes types ((f, o) :: rest)
   | contains o types = (f, o) :: ownersForTypes types rest
   | otherwise = ownersForTypes types rest
 
@@ -3259,33 +3469,58 @@ ownersForTypes types ((f, o)::rest)
 -- so `stdlib/list.mdk`'s `export import core.{Filterable, filter, filterMap}`
 -- re-exported NOTHING and `import list.{filter}` failed with "Module 'list' has no
 -- exported name 'filter'", while `medaka check stdlib/list.mdk` stayed clean.
-overPubUse : ModuleExports -> OrdMap ModuleExports -> (UsePath -> ModuleExports -> List b) -> UsePath -> List b
+overPubUse : ModuleExports ->
+  OrdMap ModuleExports ->
+  (UsePath -> ModuleExports -> List b) ->
+  UsePath ->
+  List b
 overPubUse coreExp known f path =
   let mid = useModId path
-  if mid == "core" then f path coreExp
+  if mid == "core" then
+    f path coreExp
   else match findExports mid known
     None => []
     Some src => f path src
 
 -- ── resolve_module + multi-module driver ───────────────────────────────────
 export
-resolveModule : List Decl -> List Decl -> OrdMap ModuleExports -> String -> List Decl -> (ModuleExports, List ResError)
+resolveModule : List Decl ->
+  List Decl ->
+  OrdMap ModuleExports ->
+  String ->
+  List Decl ->
+  (ModuleExports, List ResError)
 resolveModule runtimeDecls preludeDecls known modId prog =
   resolveModuleG [] runtimeDecls preludeDecls known modId prog
 
 -- Like resolveModule but with an explicit internal-extern guard list for this
 -- module (empty ⇒ trusted: a stdlib module, or `--allow-internal`).
 export
-resolveModuleG : List String -> List Decl -> List Decl -> OrdMap ModuleExports -> String -> List Decl -> (ModuleExports, List ResError)
+resolveModuleG : List String ->
+  List Decl ->
+  List Decl ->
+  OrdMap ModuleExports ->
+  String ->
+  List Decl ->
+  (ModuleExports, List ResError)
 resolveModuleG internalGuard runtimeDecls preludeDecls known modId prog =
-  let (env, importErrs) = buildEnvMM runtimeDecls preludeDecls known prog internalGuard
-  let errs = dedupResErrors (buildErrors preludeDecls prog ++ importErrs ++ flatMap (checkDecl env) prog)
+  let (env, importErrs) =
+    buildEnvMM runtimeDecls preludeDecls known prog internalGuard
+  let errs =
+    dedupResErrors
+      (buildErrors preludeDecls prog
+        ++ importErrs
+        ++ flatMap (checkDecl env) prog)
   let exp = buildExports (coreExports preludeDecls) known modId prog env
   (exp, errs)
 
 -- thread resolveModule over modules in dependency-first order, accumulating
 -- exports; collect the union of every module's errors (the harness sorts).
-resolveModulesErrors : List Decl -> List Decl -> OrdMap ModuleExports -> List (String, List Decl) -> List ResError
+resolveModulesErrors : List Decl ->
+  List Decl ->
+  OrdMap ModuleExports ->
+  List (String, List Decl) ->
+  List ResError
 resolveModulesErrors rt pre known mods =
   resolveModulesErrorsG True [] rt pre known mods
 
@@ -3301,19 +3536,36 @@ resolveModulesErrors rt pre known mods =
 -- the two renderers (flat union of raw errors vs per-module `file:L:C:`
 -- located-by-path) are lifted to the two callers below instead of duplicated
 -- here.
-resolveModulesErrorsPairsG : Bool -> List String -> List Decl -> List Decl -> OrdMap ModuleExports -> List (String, List Decl) -> List (String, List ResError)
+resolveModulesErrorsPairsG : Bool ->
+  List String ->
+  List Decl ->
+  List Decl ->
+  OrdMap ModuleExports ->
+  List (String, List Decl) ->
+  List (String, List ResError)
 resolveModulesErrorsPairsG _ _ _ _ _ [] = []
-resolveModulesErrorsPairsG allowInternal trustedMods rt pre known ((mid, prog)::rest) =
-  let guard = if allowInternal || contains mid trustedMods then
-    []
-  else
-    internalExterns
+resolveModulesErrorsPairsG allowInternal trustedMods rt pre known ((mid, prog) :: rest) =
+  let guard =
+    if allowInternal || contains mid trustedMods then [] else internalExterns
   let (exp, errs) = resolveModuleG guard rt pre known mid prog
-  (mid, errs) :: resolveModulesErrorsPairsG allowInternal trustedMods rt pre (omInsert exp.modId exp known) rest
+  (mid, errs)
+    :: resolveModulesErrorsPairsG
+      allowInternal
+      trustedMods
+      rt
+      pre
+      (omInsert exp.modId exp known)
+      rest
 
 -- Flat union of every module's raw errors, in dependency-first order — the
 -- renderer `resolveModulesToLinesG`/`resolveModulesErrors` want.
-resolveModulesErrorsG : Bool -> List String -> List Decl -> List Decl -> OrdMap ModuleExports -> List (String, List Decl) -> List ResError
+resolveModulesErrorsG : Bool ->
+  List String ->
+  List Decl ->
+  List Decl ->
+  OrdMap ModuleExports ->
+  List (String, List Decl) ->
+  List ResError
 resolveModulesErrorsG allowInternal trustedMods rt pre known mods =
   flatMap
     snd
@@ -3322,17 +3574,36 @@ resolveModulesErrorsG allowInternal trustedMods rt pre known mods =
 -- one S-expression per diagnostic (the harness sorts); matches
 -- `diagdump --resolve-modules` over the same ordered module list.
 export
-resolveModulesToLines : List Decl -> List Decl -> List (String, List Decl) -> String
+resolveModulesToLines : List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  String
 resolveModulesToLines runtimeDecls preludeDecls mods =
-  joinNl (map
-    resErrorSexp
-    (resolveModulesErrors runtimeDecls preludeDecls omEmpty mods))
+  joinNl
+    (map
+      resErrorSexp
+      (resolveModulesErrors runtimeDecls preludeDecls omEmpty mods))
 
 -- Guarded variant of resolveModulesToLines (S-expr output) for the `medaka check`
 -- exit-code predicate: `allowInternal` / `trustedMods` decide per-module trust.
 export
-resolveModulesToLinesG : Bool -> List String -> List Decl -> List Decl -> List (String, List Decl) -> String
-resolveModulesToLinesG allowInternal trustedMods runtimeDecls preludeDecls mods = joinNl (map resErrorSexp (resolveModulesErrorsG allowInternal trustedMods runtimeDecls preludeDecls omEmpty mods))
+resolveModulesToLinesG : Bool ->
+  List String ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  String
+resolveModulesToLinesG allowInternal trustedMods runtimeDecls preludeDecls mods =
+  joinNl
+    (map
+      resErrorSexp
+      (resolveModulesErrorsG
+        allowInternal
+        trustedMods
+        runtimeDecls
+        preludeDecls
+        omEmpty
+        mods))
 
 -- (REMOVED, #1440) `resolveModulesToHumane` had zero callers — it was
 -- imported by `compiler/tools/check.mdk` and `compiler/driver/medaka_cli.mdk`
@@ -3383,10 +3654,27 @@ resolveModulesToLinesG allowInternal trustedMods runtimeDecls preludeDecls mods 
 -- the whole point of #41/#186/#1360 and must not be "improved" into a
 -- single-`target` fallback.
 export
-resolveModulesErrorsByFile : List (String, String) -> Bool -> List String -> List Decl -> List Decl -> List (String, List Decl) -> List (String, List ResError)
-resolveModulesErrorsByFile modPaths allowInternal trustedMods runtimeDecls preludeDecls mods = map (fileOfModuleErrors modPaths) (resolveModulesErrorsPairsG allowInternal trustedMods runtimeDecls preludeDecls omEmpty mods)
+resolveModulesErrorsByFile : List (String, String) ->
+  Bool ->
+  List String ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  List (String, List ResError)
+resolveModulesErrorsByFile modPaths allowInternal trustedMods runtimeDecls preludeDecls mods =
+  map
+    (fileOfModuleErrors modPaths)
+    (resolveModulesErrorsPairsG
+      allowInternal
+      trustedMods
+      runtimeDecls
+      preludeDecls
+      omEmpty
+      mods)
 
-fileOfModuleErrors : List (String, String) -> (String, List ResError) -> (String, List ResError)
+fileOfModuleErrors : List (String, String) ->
+  (String, List ResError) ->
+  (String, List ResError)
 fileOfModuleErrors modPaths (mid, errs) =
   let file = match lookupAssoc mid modPaths
     Some p => p
@@ -3433,28 +3721,29 @@ lookupBindId env n = match omLookup n env
 -- (non-duplicate) names every real pattern binds.
 insertZero : List String -> OrdMap Int -> OrdMap Int
 insertZero [] env = env
-insertZero (n::rest) env = insertZero rest (omInsert n 0 env)
+insertZero (n :: rest) env = insertZero rest (omInsert n 0 env)
 
 -- per-parameter shadow-insert, in signature order — a LATER param's name wins a
 -- same-name collision, matching the old paramZeroFrames' reverseL (innermost =
 -- last param).
 insertParams : List Pat -> OrdMap Int -> OrdMap Int
 insertParams [] env = env
-insertParams (p::rest) env = insertParams rest (insertZero (patBindings p) env)
+insertParams (p :: rest) env =
+  insertParams rest (insertZero (patBindings p) env)
 
 -- top-level value binder names, in decl order (DFunDef + DLetGroup members).
 topBinderNames : List Decl -> List String
 topBinderNames [] = []
-topBinderNames ((DFunDef _ n _ _)::rest) = n :: topBinderNames rest
-topBinderNames ((DLetGroup _ binds)::rest) = map letBindName binds
-  ++ topBinderNames rest
-topBinderNames ((DAttrib _ d)::rest) = topBinderNames (d::rest)
-topBinderNames (_::rest) = topBinderNames rest
+topBinderNames ((DFunDef _ n _ _) :: rest) = n :: topBinderNames rest
+topBinderNames ((DLetGroup _ binds) :: rest) =
+  map letBindName binds ++ topBinderNames rest
+topBinderNames ((DAttrib _ d) :: rest) = topBinderNames (d :: rest)
+topBinderNames (_ :: rest) = topBinderNames rest
 
 -- number distinct names monotonically from `i` (ids are 1-based; 0 is sentinel).
 numberFrom : Int -> List String -> List (String, Int)
 numberFrom _ [] = []
-numberFrom i (n::rest) = (n, i) :: numberFrom (i + 1) rest
+numberFrom i (n :: rest) = (n, i) :: numberFrom (i + 1) rest
 
 -- ── the walk ────────────────────────────────────────────────────────────────
 stampExpr : OrdMap Int -> Expr -> Expr
@@ -3546,10 +3835,10 @@ stampArm env (Arm pat gs body) =
 
 stampGuards : OrdMap Int -> List Guard -> (List Guard, OrdMap Int)
 stampGuards scope [] = ([], scope)
-stampGuards scope ((GBool e)::rest) =
+stampGuards scope ((GBool e) :: rest) =
   let (rest2, scope2) = stampGuards scope rest
   (GBool (stampExpr scope e) :: rest2, scope2)
-stampGuards scope ((GBind p e)::rest) =
+stampGuards scope ((GBind p e) :: rest) =
   let e2 = stampExpr scope e
   let (rest2, scope2) = stampGuards (insertZero (patBindings p) scope) rest
   (GBind p e2 :: rest2, scope2)
@@ -3561,16 +3850,16 @@ stampGuardArm env (GuardArm gs body) =
 
 stampStmts : OrdMap Int -> List DoStmt -> List DoStmt
 stampStmts _ [] = []
-stampStmts env ((DoExpr e)::rest) =
+stampStmts env ((DoExpr e) :: rest) =
   DoExpr (stampExpr env e) :: stampStmts env rest
-stampStmts env ((DoLet m r p e)::rest) =
-  DoLet m r p (stampExpr env e) ::
-    stampStmts (insertZero (patBindings p) env) rest
-stampStmts env ((DoBind p e)::rest) =
+stampStmts env ((DoLet m r p e) :: rest) =
+  DoLet m r p (stampExpr env e)
+    :: stampStmts (insertZero (patBindings p) env) rest
+stampStmts env ((DoBind p e) :: rest) =
   DoBind p (stampExpr env e) :: stampStmts (insertZero (patBindings p) env) rest
-stampStmts env ((DoAssign x e)::rest) =
+stampStmts env ((DoAssign x e) :: rest) =
   DoAssign x (stampExpr env e) :: stampStmts (insertZero [x] env) rest
-stampStmts env ((DoFieldAssign x fs e)::rest) =
+stampStmts env ((DoFieldAssign x fs e) :: rest) =
   DoFieldAssign x fs (stampExpr env e) :: stampStmts env rest
 
 stampInterp : OrdMap Int -> InterpPart -> InterpPart
@@ -3608,7 +3897,12 @@ stampDecl _ d = d
 
 stampIfaceMethod : OrdMap Int -> IfaceMethod -> IfaceMethod
 stampIfaceMethod _ (IfaceMethod nm ty None mloc) = IfaceMethod nm ty None mloc
-stampIfaceMethod top (IfaceMethod nm ty (Some (MethodDefault pats body)) mloc) = IfaceMethod nm ty (Some (MethodDefault pats (stampExpr (insertParams pats top) body))) mloc
+stampIfaceMethod top (IfaceMethod nm ty (Some (MethodDefault pats body)) mloc) =
+  IfaceMethod
+    nm
+    ty
+    (Some (MethodDefault pats (stampExpr (insertParams pats top) body)))
+    mloc
 
 stampImplMethod : OrdMap Int -> ImplMethod -> ImplMethod
 stampImplMethod top (ImplMethod nm pats body) =
@@ -3764,7 +4058,11 @@ stampBindingIds decls =
 -- resolve would reject: an occurrence resolve reports as ambiguous still gets a
 -- diagnostic, and this map merely says which declaration the head would name if it
 -- is legal.  Diagnosing the ambiguity is the NEXT PR's job, not this map's.
-tyOriginScope : List (String, String) -> OrdMap (List (String, String)) -> String -> List Decl -> OrdMap TyConOrigin
+tyOriginScope : List (String, String) ->
+  OrdMap (List (String, String)) ->
+  String ->
+  List Decl ->
+  OrdMap TyConOrigin
 --
 -- ⚠️ #1110 PR C: THIS MAP NOW HOLDS TWO NAMESPACES, and they are kept apart by a
 -- KEY TAG, not by being two maps — a type under its bare name, an interface under
@@ -3778,8 +4076,11 @@ tyOriginScope coreTypes known mid prog =
   -- a single line and hides the very thing this function's comment argues about.
   let builtinLayer = builtinTyOrigins
   let preludeLayer = map importedTyOrigin coreTypes
-  let importLayer = map importedTyOrigin (flatMap (importedTypeOrigins known) (usePathsOf prog))
-  let ownLayer = map (ownTyOrigin mid) (dataRecordNames prog) ++ map (ownIfaceOrigin mid) (interfaceNamesOf prog)
+  let importLayer =
+    map importedTyOrigin (flatMap (importedTypeOrigins known) (usePathsOf prog))
+  let ownLayer =
+    map (ownTyOrigin mid) (dataRecordNames prog)
+      ++ map (ownIfaceOrigin mid) (interfaceNamesOf prog)
   omFromPairs (builtinLayer ++ preludeLayer ++ importLayer ++ ownLayer) omEmpty
 
 -- `dataRecordNames` is the ALL-declarations extractor (`expTypesDirect` is the
@@ -3845,10 +4146,14 @@ builtinTyOrigin n = (n, OriginBuiltin)
 -- arrives already tagged, so it behaves exactly as a type does, including the
 -- ordering above.  The two namespaces share this function, so they cannot diverge
 -- on it.
-typeOriginExports : OrdMap (List (String, String)) -> String -> List Decl -> List (String, String)
-typeOriginExports known mid prog = flatMap (importedTypeOrigins known) (pubUsePaths prog)
-  ++ map (typeDeclaredIn mid) (expTypesDirect prog)
-  ++ map (ifaceDeclaredIn mid) (expInterfacesDirect prog)
+typeOriginExports : OrdMap (List (String, String)) ->
+  String ->
+  List Decl ->
+  List (String, String)
+typeOriginExports known mid prog =
+  flatMap (importedTypeOrigins known) (pubUsePaths prog)
+    ++ map (typeDeclaredIn mid) (expTypesDirect prog)
+    ++ map (ifaceDeclaredIn mid) (expInterfacesDirect prog)
 
 typeDeclaredIn : String -> String -> (String, String)
 typeDeclaredIn mid n = (n, mid)
@@ -3856,19 +4161,21 @@ typeDeclaredIn mid n = (n, mid)
 -- The (localName, definerModId) pairs one use path brings into TYPE scope.
 -- `core` is skipped: the prelude is prepended to every module rather than
 -- imported, so its types are seeded directly by `tyOriginScope`.
-importedTypeOrigins : OrdMap (List (String, String)) -> UsePath -> List (String, String)
+importedTypeOrigins : OrdMap (List (String, String)) ->
+  UsePath ->
+  List (String, String)
 importedTypeOrigins known path =
-  if useModId path == "core" then []
+  if useModId path == "core" then
+    []
   else match omLookup (useModId path) known
     None => []
     Some src => importedTypeOriginsFrom path src
 
-importedTypeOriginsFrom : UsePath -> List (String, String) -> List (String, String)
+importedTypeOriginsFrom : UsePath ->
+  List (String, String) ->
+  List (String, String)
 importedTypeOriginsFrom (UseName ns) src =
-  if listLen ns > 1 then
-    keepTypeOrigins src [(lastOf ns, lastOf ns)]
-  else
-    []
+  if listLen ns > 1 then keepTypeOrigins src [(lastOf ns, lastOf ns)] else []
 importedTypeOriginsFrom (UseGroup _ members) src =
   keepTypeOrigins src (map useMemberBinding members)
 importedTypeOriginsFrom (UseWild _) src = src
@@ -3902,7 +4209,9 @@ useMemberBinding (m@(UseMember name _ _ _)) = (name, useMemberLocal m)
 -- Measured, not argued: `test/origin_fixtures/ifaces/` chains `deep` -> `mid` ->
 -- `main_ifaces` with `mid` doing both, and the golden reads `Baton 1 mod:mid` /
 -- `iface:Relay 1 mod:mid`.
-keepTypeOrigins : List (String, String) -> List (String, String) -> List (String, String)
+keepTypeOrigins : List (String, String) ->
+  List (String, String) ->
+  List (String, String)
 keepTypeOrigins src bindings =
   let definers = omFromPairs src omEmpty
   flatMap (bindTypeOrigin definers) bindings
@@ -3915,8 +4224,9 @@ keepTypeOrigins src bindings =
 -- bare name would silently bind no interface at all: every `iface:` row would miss,
 -- and the whole imported-interface layer would be quietly empty.
 bindTypeOrigin : OrdMap String -> (String, String) -> List (String, String)
-bindTypeOrigin definers (origin, local) = bindOneOrigin definers origin local
-  ++ bindOneOrigin definers (ifaceKey origin) (ifaceKey local)
+bindTypeOrigin definers (origin, local) =
+  bindOneOrigin definers origin local
+    ++ bindOneOrigin definers (ifaceKey origin) (ifaceKey local)
 
 bindOneOrigin : OrdMap String -> String -> String -> List (String, String)
 bindOneOrigin definers key local = match omLookup key definers
@@ -4062,10 +4372,7 @@ stampDeclOrigin _ d = d
 -- to stamp); the arm exists so that stays a stated fact rather than a wildcard.
 fillDeclOrigin : String -> TyConOrigin -> TyConOrigin
 fillDeclOrigin mid OriginUnresolved =
-  if mid == "" then
-    OriginUnresolved
-  else
-    OriginModule mid
+  if mid == "" then OriginUnresolved else OriginModule mid
 fillDeclOrigin _ OriginBuiltin = OriginBuiltin
 fillDeclOrigin _ (o@(OriginModule _)) = o
 
@@ -4178,7 +4485,10 @@ fillDeclOrigin _ (o@(OriginModule _)) = o
 -- pinned value with both pins silent.  Nothing is lost by hosting it here: both
 -- consumers already import this module.
 export
-mapOriginsInDecl : (Ty -> (Ty, Bool)) -> (String -> String -> TyConOrigin -> TyConOrigin) -> Decl -> Decl
+mapOriginsInDecl : (Ty -> (Ty, Bool)) ->
+  (String -> String -> TyConOrigin -> TyConOrigin) ->
+  Decl ->
+  Decl
 mapOriginsInDecl fTy fIface d =
   mapIfaceOccDeclLocal fIface (fst (mapTyInDecl (mapOriginsInTy fTy fIface) d))
 
@@ -4193,7 +4503,10 @@ mapOriginsInDecl fTy fIface d =
 -- a `TyConstrained` observes the already-stamped constraints rather than a
 -- half-rewritten node.  Nothing in the tree does that today; the order is fixed
 -- here so it does not have to be rediscovered.
-mapOriginsInTy : (Ty -> (Ty, Bool)) -> (String -> String -> TyConOrigin -> TyConOrigin) -> Ty -> (Ty, Bool)
+mapOriginsInTy : (Ty -> (Ty, Bool)) ->
+  (String -> String -> TyConOrigin -> TyConOrigin) ->
+  Ty ->
+  (Ty, Bool)
 mapOriginsInTy fTy fIface (TyConstrained cs t) =
   fTy (TyConstrained (map (mapConstraintOcc fIface) cs) t)
 mapOriginsInTy fTy _ t = fTy t
@@ -4203,14 +4516,19 @@ mapOriginsInTy fTy _ t = fTy t
 -- from projected fields resets an acquired identity, and the immunity rule makes
 -- that reset permanent.  `test/typecheck_compiler_source.sh` pins the file set
 -- allowed to call those mint helpers, and this file is deliberately not in it.
-mapConstraintOcc : (String -> String -> TyConOrigin -> TyConOrigin) -> Constraint -> Constraint
-mapConstraintOcc f (c@(Constraint { constraintHead = n, constraintOrigin = o })) = Constraint { c | constraintOrigin = f "constraintOrigin" n o }
+mapConstraintOcc : (String -> String -> TyConOrigin -> TyConOrigin) ->
+  Constraint ->
+  Constraint
+mapConstraintOcc f (c@(Constraint { constraintHead = n, constraintOrigin = o })) =
+  Constraint { c | constraintOrigin = f "constraintOrigin" n o }
 
 mapSuperOcc : (String -> String -> TyConOrigin -> TyConOrigin) -> Super -> Super
 mapSuperOcc f (s@(Super { superHead = n, superOrigin = o })) =
   Super { s | superOrigin = f "superOrigin" n o }
 
-mapRequireOcc : (String -> String -> TyConOrigin -> TyConOrigin) -> Require -> Require
+mapRequireOcc : (String -> String -> TyConOrigin -> TyConOrigin) ->
+  Require ->
+  Require
 mapRequireOcc f (r@(Require { requireHead = n, requireOrigin = o })) =
   Require { r | requireOrigin = f "requireOrigin" n o }
 
@@ -4230,10 +4548,15 @@ mapRequireOcc f (r@(Require { requireHead = n, requireOrigin = o })) =
 -- ⚠️ The `DAttrib` arm is load-bearing for the same reason `stampDeclOrigin`'s is:
 -- `@deprecated`/`@inline` WRAP the decl they annotate, so a `@must_use impl …`
 -- would otherwise never be stamped at all.
-mapIfaceOccDeclLocal : (String -> String -> TyConOrigin -> TyConOrigin) -> Decl -> Decl
+mapIfaceOccDeclLocal : (String -> String -> TyConOrigin -> TyConOrigin) ->
+  Decl ->
+  Decl
 mapIfaceOccDeclLocal f (d@(DInterface { ifaceOrigin = _, supers })) =
   DInterface { d | supers = map (mapSuperOcc f) supers }
-mapIfaceOccDeclLocal f (d@(DImpl { implOrigin = o, iface = n, reqs })) = DImpl { d | implOrigin = f "implOrigin" n o, reqs = map (mapRequireOcc f) reqs }
+mapIfaceOccDeclLocal f (d@(DImpl { implOrigin = o, iface = n, reqs })) = DImpl { d |
+  implOrigin = f "implOrigin" n o,
+  reqs = map (mapRequireOcc f) reqs,
+}
 mapIfaceOccDeclLocal f (DAttrib attrs d) =
   DAttrib attrs (mapIfaceOccDeclLocal f d)
 mapIfaceOccDeclLocal _ d = d
@@ -4258,7 +4581,11 @@ mapIfaceOccDeclLocal _ d = d
 -- aid, not a build gate.  `OriginBuiltin` is unreachable for an interface — the
 -- language provides no built-in interfaces, `Eq`/`Ord`/`Debug` are declarations in
 -- `stdlib/core.mdk` — and the arm exists so that stays a stated fact.
-fillIfaceOccOrigin : OrdMap TyConOrigin -> String -> String -> TyConOrigin -> TyConOrigin
+fillIfaceOccOrigin : OrdMap TyConOrigin ->
+  String ->
+  String ->
+  TyConOrigin ->
+  TyConOrigin
 fillIfaceOccOrigin scope _ n OriginUnresolved =
   optionOr OriginUnresolved (omLookup (ifaceKey n) scope)
 fillIfaceOccOrigin _ _ _ OriginBuiltin = OriginBuiltin
@@ -4298,10 +4625,10 @@ ownIfaceOrigin mid n = (ifaceKey n, OriginModule mid)
 -- `@attr`-wrapped interface.
 interfaceNamesOf : List Decl -> List String
 interfaceNamesOf [] = []
-interfaceNamesOf ((DInterface { name = n, ifaceOrigin = _ })::rest) =
+interfaceNamesOf ((DInterface { name = n, ifaceOrigin = _ }) :: rest) =
   n :: interfaceNamesOf rest
-interfaceNamesOf ((DAttrib _ d)::rest) = interfaceNamesOf (d::rest)
-interfaceNamesOf (_::rest) = interfaceNamesOf rest
+interfaceNamesOf ((DAttrib _ d) :: rest) = interfaceNamesOf (d :: rest)
+interfaceNamesOf (_ :: rest) = interfaceNamesOf rest
 
 -- ── the resolve → typecheck channel ─────────────────────────────────────────
 -- Resolve's other entries return `List ResError` and nothing else, so the drivers
@@ -4323,9 +4650,13 @@ interfaceNamesOf (_::rest) = interfaceNamesOf rest
 -- module's exported type origins forward the way `resolveModulesErrorsG` threads
 -- `ModuleExports`.  Returns the stamped prelude and the stamped modules.
 export
-stampGraphTyOrigins : List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
+stampGraphTyOrigins : List Decl ->
+  List (String, List Decl) ->
+  (List Decl, List (String, List Decl))
 stampGraphTyOrigins coreDecls modules =
-  let coreTypes = map (typeDeclaredIn "core") (dataRecordNames coreDecls) ++ map (ifaceDeclaredIn "core") (interfaceNamesOf coreDecls)
+  let coreTypes =
+    map (typeDeclaredIn "core") (dataRecordNames coreDecls)
+      ++ map (ifaceDeclaredIn "core") (interfaceNamesOf coreDecls)
   let coreS = stampOneModule coreTypes omEmpty "core" coreDecls
   (coreS, stampModulesGo coreTypes omEmpty modules)
 
@@ -4335,17 +4666,24 @@ stampGraphTyOrigins coreDecls modules =
 -- (type AND interface, one walk): the two are independent (the occurrence scope is
 -- built from `dataRecordNames`/`interfaceNamesOf`, which read names, not origins),
 -- so the order is for readability only.
-stampOneModule : List (String, String) -> OrdMap (List (String, String)) -> String -> List Decl -> List Decl
+stampOneModule : List (String, String) ->
+  OrdMap (List (String, String)) ->
+  String ->
+  List Decl ->
+  List Decl
 stampOneModule coreTypes known mid prog =
   stampTyOrigins
     (tyOriginScope coreTypes known mid prog)
     (stampDeclOrigins mid prog)
 
-stampModulesGo : List (String, String) -> OrdMap (List (String, String)) -> List (String, List Decl) -> List (String, List Decl)
+stampModulesGo : List (String, String) ->
+  OrdMap (List (String, String)) ->
+  List (String, List Decl) ->
+  List (String, List Decl)
 stampModulesGo _ _ [] = []
-stampModulesGo coreTypes known ((mid, prog)::rest) =
-  (mid, stampOneModule coreTypes known mid prog) ::
-    stampModulesGo
+stampModulesGo coreTypes known ((mid, prog) :: rest) =
+  (mid, stampOneModule coreTypes known mid prog)
+    :: stampModulesGo
       coreTypes
       (omInsert mid (typeOriginExports known mid prog) known)
       rest
@@ -4455,7 +4793,8 @@ flatTyOriginScope coreDecls =
   omFromPairs
     (map
       importedTyOrigin
-      (map (typeDeclaredIn "core") (dataRecordNames coreDecls) ++ map (ifaceDeclaredIn "core") (interfaceNamesOf coreDecls)))
+      (map (typeDeclaredIn "core") (dataRecordNames coreDecls)
+        ++ map (ifaceDeclaredIn "core") (interfaceNamesOf coreDecls)))
     (omFromPairs builtinTyOrigins omEmpty)
 
 -- ── #1280: the scope `stdlib/runtime.mdk`'s EXTERN signatures are stamped under ─
@@ -4547,8 +4886,6 @@ noteOriginTrace : String -> List Decl -> Unit
 noteOriginTrace label decls =
   if !originTraceEnabled then
     originTraceLog := !originTraceLog ++ [(label, decls)]
-  else
-    ()
 
 -- Drain: the recorded (label, decls) pairs in call order, log emptied.
 export

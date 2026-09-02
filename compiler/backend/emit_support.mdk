@@ -87,24 +87,21 @@ eagerVars b (CList es) = eagerVarsList b es
 eagerVars b (CRangeList lo hi _) = eagerVars b lo ++ eagerVars b hi
 eagerVars b (CRecord _ fields) = eagerVarsFields b fields
 eagerVars b (CFieldAccess ex _ _) = eagerVars b ex
-eagerVars b (CRecordUpdate _ base updates) = eagerVars b base
-  ++ eagerVarsFields b updates
-eagerVars b (CVariantUpdate _ base updates) = eagerVars b base
-  ++ eagerVarsFields b updates
+eagerVars b (CRecordUpdate _ base updates) =
+  eagerVars b base ++ eagerVarsFields b updates
+eagerVars b (CVariantUpdate _ base updates) =
+  eagerVars b base ++ eagerVarsFields b updates
 eagerVars b (CArray es) = eagerVarsList b es
 eagerVars b (CRangeArray lo hi _) = eagerVars b lo ++ eagerVars b hi
 eagerVars b (CIndex a i) = eagerVars b a ++ eagerVars b i
 eagerVars b (CStringIndex a i) = eagerVars b a ++ eagerVars b i
-eagerVars b (CStringSlice a lo hi _) = eagerVars b a
-  ++ eagerVars b lo
-  ++ eagerVars b hi
+eagerVars b (CStringSlice a lo hi _) =
+  eagerVars b a ++ eagerVars b lo ++ eagerVars b hi
 eagerVars b (CListIndex a i) = eagerVars b a ++ eagerVars b i
-eagerVars b (CListSlice a lo hi _) = eagerVars b a
-  ++ eagerVars b lo
-  ++ eagerVars b hi
-eagerVars b (CSlice a lo hi _) = eagerVars b a
-  ++ eagerVars b lo
-  ++ eagerVars b hi
+eagerVars b (CListSlice a lo hi _) =
+  eagerVars b a ++ eagerVars b lo ++ eagerVars b hi
+eagerVars b (CSlice a lo hi _) =
+  eagerVars b a ++ eagerVars b lo ++ eagerVars b hi
 -- a `CDict` head is a saturated call to the named top-level function — an eager
 -- callee edge (the routes it carries hold no CExpr, so nothing to descend).
 eagerVars b (CDict name _) = if omHasKey name b then [] else [name]
@@ -112,12 +109,12 @@ eagerVars _ _ = []
 
 eagerVarsList : OrdMap Unit -> List CExpr -> List String
 eagerVarsList _ [] = []
-eagerVarsList b (e::rest) = eagerVars b e ++ eagerVarsList b rest
+eagerVarsList b (e :: rest) = eagerVars b e ++ eagerVarsList b rest
 
 eagerVarsArms : OrdMap Unit -> List CArm -> List String
 eagerVarsArms _ [] = []
-eagerVarsArms b ((CArm pat gs body)::rest) = eagerVarsGuarded (omFromNames (patVars pat) b) gs body
-  ++ eagerVarsArms b rest
+eagerVarsArms b ((CArm pat gs body) :: rest) =
+  eagerVarsGuarded (omFromNames (patVars pat) b) gs body ++ eagerVarsArms b rest
 
 -- an arm's guard chain + body.  A guard is EAGER — it runs when the arm is
 -- tested, so a global it reads is a real init-order edge (dropping the whole
@@ -127,30 +124,30 @@ eagerVarsArms b ((CArm pat gs body)::rest) = eagerVarsGuarded (omFromNames (patV
 -- as the arm's own pattern does, so thread them rather than scanning flat.
 eagerVarsGuarded : OrdMap Unit -> List CGuard -> CExpr -> List String
 eagerVarsGuarded b [] body = eagerVars b body
-eagerVarsGuarded b ((CGBool c)::rest) body = eagerVars b c
-  ++ eagerVarsGuarded b rest body
-eagerVarsGuarded b ((CGBind pat e)::rest) body = eagerVars b e
-  ++ eagerVarsGuarded (omFromNames (patVars pat) b) rest body
+eagerVarsGuarded b ((CGBool c) :: rest) body =
+  eagerVars b c ++ eagerVarsGuarded b rest body
+eagerVarsGuarded b ((CGBind pat e) :: rest) body =
+  eagerVars b e ++ eagerVarsGuarded (omFromNames (patVars pat) b) rest body
 
 eagerVarsFields : OrdMap Unit -> List CField -> List String
 eagerVarsFields _ [] = []
-eagerVarsFields b ((CField _ ex)::rest) = eagerVars b ex
-  ++ eagerVarsFields b rest
+eagerVarsFields b ((CField _ ex) :: rest) =
+  eagerVars b ex ++ eagerVarsFields b rest
 
 eagerVarsStmts : OrdMap Unit -> List CStmt -> List String
 eagerVarsStmts _ [] = []
-eagerVarsStmts b ((CSExpr ex)::rest) = eagerVars b ex ++ eagerVarsStmts b rest
-eagerVarsStmts b ((CSLet _ pat ex)::rest) = eagerVars b ex
-  ++ eagerVarsStmts (omFromNames (patVars pat) b) rest
-eagerVarsStmts b ((CSAssign _ ex)::rest) = eagerVars b ex
-  ++ eagerVarsStmts b rest
-eagerVarsStmts b (_::rest) = eagerVarsStmts b rest
+eagerVarsStmts b ((CSExpr ex) :: rest) = eagerVars b ex ++ eagerVarsStmts b rest
+eagerVarsStmts b ((CSLet _ pat ex) :: rest) =
+  eagerVars b ex ++ eagerVarsStmts (omFromNames (patVars pat) b) rest
+eagerVarsStmts b ((CSAssign _ ex) :: rest) =
+  eagerVars b ex ++ eagerVarsStmts b rest
+eagerVarsStmts b (_ :: rest) = eagerVarsStmts b rest
 
 eagerVarsBinds : OrdMap Unit -> List CBind -> List String
 eagerVarsBinds _ [] = []
-eagerVarsBinds b ((CBind _ [CClause [] rhs])::rest) = eagerVars b rhs
-  ++ eagerVarsBinds b rest
-eagerVarsBinds b (_::rest) = eagerVarsBinds b rest
+eagerVarsBinds b ((CBind _ [CClause [] rhs]) :: rest) =
+  eagerVars b rhs ++ eagerVarsBinds b rest
+eagerVarsBinds b (_ :: rest) = eagerVarsBinds b rest
 
 -- ── eager-reachability closure (Stage B of #553) ─────────────────────────────
 -- The init-order topo sort needs, for each value global, the OTHER value globals
@@ -186,19 +183,21 @@ bindEagerCallees (CBind _ clauses) = dedup (clauseEagerVars clauses)
 
 clauseEagerVars : List CClause -> List String
 clauseEagerVars [] = []
-clauseEagerVars ((CClause params body)::rest) = eagerVars (omFromNames (paramBound params) omEmpty) body
-  ++ clauseEagerVars rest
+clauseEagerVars ((CClause params body) :: rest) =
+  eagerVars (omFromNames (paramBound params) omEmpty) body
+    ++ clauseEagerVars rest
 
 paramBound : List Pat -> List String
 paramBound [] = []
-paramBound (p::rest) = patVars p ++ paramBound rest
+paramBound (p :: rest) = patVars p ++ paramBound rest
 
 -- names of the nullary single-clause bindings — the value globals whose init
 -- order the sort decides; reach sets are restricted to these.
 valGlobalNames : List CBind -> List String
 valGlobalNames [] = []
-valGlobalNames ((CBind name [CClause [] _])::rest) = name :: valGlobalNames rest
-valGlobalNames (_::rest) = valGlobalNames rest
+valGlobalNames ((CBind name [CClause [] _]) :: rest) =
+  name :: valGlobalNames rest
+valGlobalNames (_ :: rest) = valGlobalNames rest
 
 -- eager call-graph adjacency, restricted to real top-level bind names so an edge
 -- to a constructor / not-emitted name never becomes a graph node.  Membership is
@@ -206,10 +205,11 @@ valGlobalNames (_::rest) = valGlobalNames rest
 -- O(V) per edge = O(V*E), the exact quadratic #553 warns against.
 eagerCalleesMap : OrdMap Unit -> List CBind -> OrdMap (List String)
 eagerCalleesMap _ [] = omEmpty
-eagerCalleesMap nameSet (b::rest) = omInsert
-  (bindName b)
-  (filterList (n => omHasKey n nameSet) (bindEagerCallees b))
-  (eagerCalleesMap nameSet rest)
+eagerCalleesMap nameSet (b :: rest) =
+  omInsert
+    (bindName b)
+    (filterList (n => omHasKey n nameSet) (bindEagerCallees b))
+    (eagerCalleesMap nameSet rest)
 
 -- reach(name) = the value globals a binding eagerly reaches through calls,
 -- transitively.  Least fixpoint over the eager call graph, condensed by
@@ -254,15 +254,20 @@ eagerReachMap binds =
 -- Σᵥ|reach(v)| is Θ(V²) by construction, so materializing it as one list per name
 -- is Θ(V²) cons cells no matter how it is computed.  What is removed is the
 -- log factor and the per-element TREE allocation — the term that dominated.
-foldReachSCCs : OrdMap Unit -> OrdMap (List String) -> List (List String) -> OrdMap (List String, OrdMap Unit) -> OrdMap (List String, OrdMap Unit)
+foldReachSCCs : OrdMap Unit ->
+  OrdMap (List String) ->
+  List (List String) ->
+  OrdMap (List String, OrdMap Unit) ->
+  OrdMap (List String, OrdMap Unit)
 foldReachSCCs _ _ [] acc = acc
-foldReachSCCs valSet adj (scc::rest) acc =
+foldReachSCCs valSet adj (scc :: rest) acc =
   let direct = dedup (unionLookup scc adj)
   -- sources, in the order the old `dedup (… ++ …)` saw them: this SCC's own
   -- direct value-global callees, then each callee's reach list.  The LAST
   -- callee's list is held back as the shareable tail; everything before it is
   -- concatenated and deduped as `earlier`.
-  let earlier = dedup (filterList (n => omHasKey n valSet) direct ++ initReach direct acc)
+  let earlier =
+    dedup (filterList (n => omHasKey n valSet) direct ++ initReach direct acc)
   let reached = mergeReach earlier (lastReach direct acc)
   foldReachSCCs valSet adj rest (insertReach scc reached acc)
 
@@ -271,31 +276,36 @@ foldReachSCCs valSet adj (scc::rest) acc =
 -- ⚠️ The `overlap` test is what buys the sharing: when no name of `earlier` is in
 -- the tail's set, NOTHING is deleted from `tailList` and it is reused verbatim as
 -- the result's tail instead of being filtered into a fresh copy.
-mergeReach : List String -> (List String, OrdMap Unit) -> (List String, OrdMap Unit)
+mergeReach : List String ->
+  (List String, OrdMap Unit) ->
+  (List String, OrdMap Unit)
 mergeReach earlier (tailList, tailSet) =
   let earlierSet = omFromNames earlier omEmpty
   let overlap = anyMember earlier tailSet
-  let kept = if overlap then
-    filterList (n => not (omHasKey n earlierSet)) tailList
-  else
-    tailList
+  let kept =
+    if overlap then
+      filterList (n => not (omHasKey n earlierSet)) tailList
+    else
+      tailList
   (earlier ++ kept, omFromNames earlier tailSet)
 
 anyMember : List String -> OrdMap Unit -> Bool
 anyMember [] _ = False
-anyMember (n::rest) s = if omHasKey n s then True else anyMember rest s
+anyMember (n :: rest) s = if omHasKey n s then True else anyMember rest s
 
 -- the reach lists of every key BUT THE LAST, concatenated in key order.
 initReach : List String -> OrdMap (List String, OrdMap Unit) -> List String
 initReach [] _ = []
 initReach [_] _ = []
-initReach (n::rest) m = reachListOf n m ++ initReach rest m
+initReach (n :: rest) m = reachListOf n m ++ initReach rest m
 
 -- the LAST key's reach pair — the one `mergeReach` may share.
-lastReach : List String -> OrdMap (List String, OrdMap Unit) -> (List String, OrdMap Unit)
+lastReach : List String ->
+  OrdMap (List String, OrdMap Unit) ->
+  (List String, OrdMap Unit)
 lastReach [] _ = ([], omEmpty)
 lastReach [n] m = optionOr ([], omEmpty) (omLookup n m)
-lastReach (_::rest) m = lastReach rest m
+lastReach (_ :: rest) m = lastReach rest m
 
 reachListOf : String -> OrdMap (List String, OrdMap Unit) -> List String
 reachListOf n m = fst (optionOr ([], omEmpty) (omLookup n m))
@@ -303,11 +313,14 @@ reachListOf n m = fst (optionOr ([], omEmpty) (omLookup n m))
 -- concat (default []) of the OrdMap lookups over a list of keys.
 unionLookup : List String -> OrdMap (List String) -> List String
 unionLookup [] _ = []
-unionLookup (n::rest) m = optionOr [] (omLookup n m) ++ unionLookup rest m
+unionLookup (n :: rest) m = optionOr [] (omLookup n m) ++ unionLookup rest m
 
-insertReach : List String -> (List String, OrdMap Unit) -> OrdMap (List String, OrdMap Unit) -> OrdMap (List String, OrdMap Unit)
+insertReach : List String ->
+  (List String, OrdMap Unit) ->
+  OrdMap (List String, OrdMap Unit) ->
+  OrdMap (List String, OrdMap Unit)
 insertReach [] _ acc = acc
-insertReach (n::rest) reached acc =
+insertReach (n :: rest) reached acc =
   insertReach rest reached (omInsert n reached acc)
 
 -- the value globals a value binding depends on EAGERLY, transitively through
@@ -331,7 +344,7 @@ bindEagerReach _ _ = []
 export
 bindNameMap : List CBind -> OrdMap CBind
 bindNameMap [] = omEmpty
-bindNameMap (b::rest) = omInsert (bindName b) b (bindNameMap rest)
+bindNameMap (b :: rest) = omInsert (bindName b) b (bindNameMap rest)
 
 -- ── #561 PR-A: lazy-global classification (native fast-path predicate) ────────
 -- The topo sort (Stage B, above) makes eager init CORRECT wherever a static init
@@ -373,79 +386,76 @@ eagerHasMethod (CVar _ _) = False
 eagerHasMethod (CLit _) = False
 eagerHasMethod (CApp f a) = eagerHasMethod f || eagerHasMethod a
 eagerHasMethod (CLet _ _ e1 e2) = eagerHasMethod e1 || eagerHasMethod e2
-eagerHasMethod (CLetGroup binds body) = bindsHaveMethod binds
-  || eagerHasMethod body
+eagerHasMethod (CLetGroup binds body) =
+  bindsHaveMethod binds || eagerHasMethod body
 eagerHasMethod (CBlock stmts) = stmtsHaveMethod stmts
-eagerHasMethod (CIf c t f) = eagerHasMethod c
-  || eagerHasMethod t
-  || eagerHasMethod f
+eagerHasMethod (CIf c t f) =
+  eagerHasMethod c || eagerHasMethod t || eagerHasMethod f
 eagerHasMethod (CBinPrim _ l r _) = eagerHasMethod l || eagerHasMethod r
 eagerHasMethod (CUnOp _ x) = eagerHasMethod x
 eagerHasMethod (CMatch scrut arms) = eagerHasMethod scrut || armsHaveMethod arms
-eagerHasMethod (CDecision scrut arms _) = eagerHasMethod scrut
-  || armsHaveMethod arms
+eagerHasMethod (CDecision scrut arms _) =
+  eagerHasMethod scrut || armsHaveMethod arms
 eagerHasMethod (CTuple es) = listHaveMethod es
 eagerHasMethod (CList es) = listHaveMethod es
 eagerHasMethod (CRangeList lo hi _) = eagerHasMethod lo || eagerHasMethod hi
 eagerHasMethod (CRangeArray lo hi _) = eagerHasMethod lo || eagerHasMethod hi
 eagerHasMethod (CRecord _ fields) = fieldsHaveMethod fields
 eagerHasMethod (CFieldAccess ex _ _) = eagerHasMethod ex
-eagerHasMethod (CRecordUpdate _ base updates) = eagerHasMethod base
-  || fieldsHaveMethod updates
-eagerHasMethod (CVariantUpdate _ base updates) = eagerHasMethod base
-  || fieldsHaveMethod updates
+eagerHasMethod (CRecordUpdate _ base updates) =
+  eagerHasMethod base || fieldsHaveMethod updates
+eagerHasMethod (CVariantUpdate _ base updates) =
+  eagerHasMethod base || fieldsHaveMethod updates
 eagerHasMethod (CArray es) = listHaveMethod es
 eagerHasMethod (CIndex a i) = eagerHasMethod a || eagerHasMethod i
 eagerHasMethod (CStringIndex a i) = eagerHasMethod a || eagerHasMethod i
-eagerHasMethod (CStringSlice a lo hi _) = eagerHasMethod a
-  || eagerHasMethod lo
-  || eagerHasMethod hi
+eagerHasMethod (CStringSlice a lo hi _) =
+  eagerHasMethod a || eagerHasMethod lo || eagerHasMethod hi
 eagerHasMethod (CListIndex a i) = eagerHasMethod a || eagerHasMethod i
-eagerHasMethod (CListSlice a lo hi _) = eagerHasMethod a
-  || eagerHasMethod lo
-  || eagerHasMethod hi
-eagerHasMethod (CSlice a lo hi _) = eagerHasMethod a
-  || eagerHasMethod lo
-  || eagerHasMethod hi
+eagerHasMethod (CListSlice a lo hi _) =
+  eagerHasMethod a || eagerHasMethod lo || eagerHasMethod hi
+eagerHasMethod (CSlice a lo hi _) =
+  eagerHasMethod a || eagerHasMethod lo || eagerHasMethod hi
 eagerHasMethod _ = False
 
 listHaveMethod : List CExpr -> Bool
 listHaveMethod [] = False
-listHaveMethod (e::rest) = eagerHasMethod e || listHaveMethod rest
+listHaveMethod (e :: rest) = eagerHasMethod e || listHaveMethod rest
 
 -- a let-group descends ONLY its nullary single-clause binds' rhss, exactly as
 -- eagerVarsBinds does — a nested function's body is deferred to its own call.
 bindsHaveMethod : List CBind -> Bool
 bindsHaveMethod [] = False
-bindsHaveMethod ((CBind _ [CClause [] rhs])::rest) = eagerHasMethod rhs
-  || bindsHaveMethod rest
-bindsHaveMethod (_::rest) = bindsHaveMethod rest
+bindsHaveMethod ((CBind _ [CClause [] rhs]) :: rest) =
+  eagerHasMethod rhs || bindsHaveMethod rest
+bindsHaveMethod (_ :: rest) = bindsHaveMethod rest
 
 stmtsHaveMethod : List CStmt -> Bool
 stmtsHaveMethod [] = False
-stmtsHaveMethod ((CSExpr ex)::rest) = eagerHasMethod ex || stmtsHaveMethod rest
-stmtsHaveMethod ((CSLet _ _ ex)::rest) = eagerHasMethod ex
-  || stmtsHaveMethod rest
-stmtsHaveMethod ((CSAssign _ ex)::rest) = eagerHasMethod ex
-  || stmtsHaveMethod rest
-stmtsHaveMethod (_::rest) = stmtsHaveMethod rest
+stmtsHaveMethod ((CSExpr ex) :: rest) =
+  eagerHasMethod ex || stmtsHaveMethod rest
+stmtsHaveMethod ((CSLet _ _ ex) :: rest) =
+  eagerHasMethod ex || stmtsHaveMethod rest
+stmtsHaveMethod ((CSAssign _ ex) :: rest) =
+  eagerHasMethod ex || stmtsHaveMethod rest
+stmtsHaveMethod (_ :: rest) = stmtsHaveMethod rest
 
 armsHaveMethod : List CArm -> Bool
 armsHaveMethod [] = False
-armsHaveMethod ((CArm _ gs body)::rest) = guardsHaveMethod gs
-  || eagerHasMethod body
-  || armsHaveMethod rest
+armsHaveMethod ((CArm _ gs body) :: rest) =
+  guardsHaveMethod gs || eagerHasMethod body || armsHaveMethod rest
 
 guardsHaveMethod : List CGuard -> Bool
 guardsHaveMethod [] = False
-guardsHaveMethod ((CGBool c)::rest) = eagerHasMethod c || guardsHaveMethod rest
-guardsHaveMethod ((CGBind _ e)::rest) = eagerHasMethod e
-  || guardsHaveMethod rest
+guardsHaveMethod ((CGBool c) :: rest) =
+  eagerHasMethod c || guardsHaveMethod rest
+guardsHaveMethod ((CGBind _ e) :: rest) =
+  eagerHasMethod e || guardsHaveMethod rest
 
 fieldsHaveMethod : List CField -> Bool
 fieldsHaveMethod [] = False
-fieldsHaveMethod ((CField _ ex)::rest) = eagerHasMethod ex
-  || fieldsHaveMethod rest
+fieldsHaveMethod ((CField _ ex) :: rest) =
+  eagerHasMethod ex || fieldsHaveMethod rest
 
 -- a binding is DIRECTLY method-tainted if any of its clause bodies dispatches
 -- eagerly (a value global has one nullary clause; a helper fn may have several, and
@@ -455,24 +465,24 @@ bindDirectMethod (CBind _ clauses) = clausesHaveMethod clauses
 
 clausesHaveMethod : List CClause -> Bool
 clausesHaveMethod [] = False
-clausesHaveMethod ((CClause _ body)::rest) = eagerHasMethod body
-  || clausesHaveMethod rest
+clausesHaveMethod ((CClause _ body) :: rest) =
+  eagerHasMethod body || clausesHaveMethod rest
 
 -- the set of bind names that dispatch eagerly in their own body (the taint SOURCES,
 -- alongside cycle membership computed during the fold).
 methodTaintSet : List CBind -> OrdMap Unit
 methodTaintSet [] = omEmpty
-methodTaintSet (b::rest) =
+methodTaintSet (b :: rest) =
   let m = methodTaintSet rest
   if bindDirectMethod b then omInsert (bindName b) () m else m
 
 lengthGt1 : List String -> Bool
-lengthGt1 (_::_::_) = True
+lengthGt1 (_ :: _ :: _) = True
 lengthGt1 _ = False
 
 anyKeyIn : List String -> OrdMap Unit -> Bool
 anyKeyIn [] _ = False
-anyKeyIn (n::rest) s = omHasKey n s || anyKeyIn rest s
+anyKeyIn (n :: rest) s = omHasKey n s || anyKeyIn rest s
 
 -- a name self-loops when its own eager callees include itself (`x = x + 1`); a
 -- singleton SCC does NOT record this on its own, so it is tested explicitly.
@@ -481,23 +491,27 @@ selfLoops n adj = contains n (optionOr [] (omLookup n adj))
 
 anySelfLoop : List String -> OrdMap (List String) -> Bool
 anySelfLoop [] _ = False
-anySelfLoop (n::rest) adj = selfLoops n adj || anySelfLoop rest adj
+anySelfLoop (n :: rest) adj = selfLoops n adj || anySelfLoop rest adj
 
 -- callees of every member of an SCC, concatenated (for the successor-taint check).
 sccCallees : List String -> OrdMap (List String) -> List String
 sccCallees [] _ = []
-sccCallees (n::rest) adj = optionOr [] (omLookup n adj) ++ sccCallees rest adj
+sccCallees (n :: rest) adj = optionOr [] (omLookup n adj) ++ sccCallees rest adj
 
 insertAllKeys : List String -> OrdMap Unit -> OrdMap Unit
 insertAllKeys [] acc = acc
-insertAllKeys (n::rest) acc = insertAllKeys rest (omInsert n () acc)
+insertAllKeys (n :: rest) acc = insertAllKeys rest (omInsert n () acc)
 
 -- fold the SCC DAG in reverse-topological order (callees before callers), marking an
 -- SCC's members tainted when the SCC is a cycle (nontrivial, or a self-loop), OR a
 -- member dispatches eagerly (`methodSet`), OR a callee SCC is already tainted.
-foldTaintSCCs : OrdMap (List String) -> OrdMap Unit -> List (List String) -> OrdMap Unit -> OrdMap Unit
+foldTaintSCCs : OrdMap (List String) ->
+  OrdMap Unit ->
+  List (List String) ->
+  OrdMap Unit ->
+  OrdMap Unit
 foldTaintSCCs _ _ [] acc = acc
-foldTaintSCCs adj methodSet (scc::rest) acc =
+foldTaintSCCs adj methodSet (scc :: rest) acc =
   let cyclic = lengthGt1 scc || anySelfLoop scc adj
   let direct = anyKeyIn scc methodSet
   let succ = anyKeyIn (sccCallees scc adj) acc
@@ -586,10 +600,7 @@ ftLabelOf x =
 export
 labelFallthrough : CExpr -> String -> CExpr
 labelFallthrough (e@(CVar x r)) label =
-  if x == fallthroughName then
-    CVar (ftPrefix ++ label) r
-  else
-    e
+  if x == fallthroughName then CVar (ftPrefix ++ label) r else e
 labelFallthrough (CApp f a) label =
   CApp (labelFallthrough f label) (labelFallthrough a label)
 labelFallthrough (CIf c t f) label =
@@ -603,10 +614,11 @@ labelFallthrough (CLetGroup binds b) label =
   CLetGroup binds (labelFallthrough b label)
 labelFallthrough (CBlock stmts) label =
   CBlock (map (s => labelFallthroughStmt s label) stmts)
-labelFallthrough (CDecision scrut arms tree) label = CDecision
-  (labelFallthrough scrut label)
-  (map (a => labelFallthroughArm a label) arms)
-  tree
+labelFallthrough (CDecision scrut arms tree) label =
+  CDecision
+    (labelFallthrough scrut label)
+    (map (a => labelFallthroughArm a label) arms)
+    tree
 labelFallthrough e _ = e
 
 labelFallthroughStmt : CStmt -> String -> CStmt
@@ -619,10 +631,11 @@ labelFallthroughStmt (CSAssign x e) label =
   CSAssign x (labelFallthrough e label)
 
 labelFallthroughArm : CArm -> String -> CArm
-labelFallthroughArm (CArm p gs b) label = CArm
-  p
-  (map (g => labelFallthroughGuard g label) gs)
-  (labelFallthrough b label)
+labelFallthroughArm (CArm p gs b) label =
+  CArm
+    p
+    (map (g => labelFallthroughGuard g label) gs)
+    (labelFallthrough b label)
 
 labelFallthroughGuard : CGuard -> String -> CGuard
 labelFallthroughGuard (CGBool e) label = CGBool (labelFallthrough e label)

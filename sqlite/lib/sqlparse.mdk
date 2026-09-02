@@ -193,8 +193,9 @@ import hex.{decode, encodeUpper}
 
 subqueryParserHole : Ref (Parser Compound)
 subqueryParserHole =
-  Ref (failWith
-    "IN (SELECT …) subqueries require the statement parser (lib.sqlstmt)")
+  Ref
+    (failWith
+      "IN (SELECT …) subqueries require the statement parser (lib.sqlstmt)")
 
 subqueryRenderHole : Ref (Compound -> String)
 subqueryRenderHole = Ref (_ => "<IN-subquery renderer not installed>")
@@ -316,7 +317,7 @@ word : Parser String
 word = defer
   c <- satisfy identStart
   cs <- many (satisfy identChar)
-  deferPure (fromChars (c::cs))
+  deferPure (fromChars (c :: cs))
 
 -- ---------------------------------------------------------------------------
 -- Keywords
@@ -401,10 +402,10 @@ isReserved w = elem (toUpper w) reservedWords
 -- Err "expected keyword 'NOT' at 0"
 export
 keyword : String -> Parser Unit
-keyword kw = label
-  "expected keyword '\{kw}'"
-  (attempt
-    (defer
+keyword kw =
+  label
+    "expected keyword '\{kw}'"
+    (attempt (defer
       w <- lexeme word
       keywordCheck kw w))
 
@@ -428,12 +429,13 @@ keywordCheck kw w =
 -- Err "expected a column name at 0"
 export
 sqlIdent : Parser String
-sqlIdent = label
-  "expected a column name"
-  (attempt (lexeme
-    (defer
-      w <- qualWord
-      identCheck w)))
+sqlIdent =
+  label
+    "expected a column name"
+    (attempt
+      (lexeme (defer
+        w <- qualWord
+        identCheck w)))
 
 -- `word` optionally followed by `.word`, rejoined with the dot.
 qualWord : Parser String
@@ -538,9 +540,10 @@ notCall name (Some _) =
 -- Ok "LBlob X'4142'"
 export
 literal : Parser Literal
-literal = label
-  "expected a literal"
-  (choice [nullLit, boolLit, blobLit, numLit, textLit])
+literal =
+  label
+    "expected a literal"
+    (choice [nullLit, boolLit, blobLit, numLit, textLit])
 
 -- NULL.  `keyword` gives word-granularity, so a column `nullable` is safe.
 nullLit : Parser Literal
@@ -551,20 +554,22 @@ nullLit = defer
 -- TRUE / FALSE, mapped to the integer literals SQLite itself uses under the
 -- hood (`typeof(TRUE)` is `"integer"`, `TRUE = 1` is true, verified).
 boolLit : Parser Literal
-boolLit = orElse
-  (deferMap (_ => LInt 1) (keyword "TRUE"))
-  (deferMap (_ => LInt 0) (keyword "FALSE"))
+boolLit =
+  orElse
+    (deferMap (_ => LInt 1) (keyword "TRUE"))
+    (deferMap (_ => LInt 0) (keyword "FALSE"))
 
 -- An integer or float: [-] digits [ . digits ] [ (e|E) [+|-] digits ].
 -- Presence of a fraction or an exponent makes it a Float, otherwise an Int.
 numLit : Parser Literal
-numLit = attempt (lexeme
-  (defer
-    sgn <- optional (char '-')
-    ds <- many1 digit
-    fr <- optional fracPart
-    ex <- optional expPart
-    numFrom (signText sgn) (fromChars ds) fr ex))
+numLit =
+  attempt
+    (lexeme (defer
+      sgn <- optional (char '-')
+      ds <- many1 digit
+      fr <- optional fracPart
+      ex <- optional expPart
+      numFrom (signText sgn) (fromChars ds) fr ex))
 
 signText : Option Char -> String
 signText None = ""
@@ -608,12 +613,11 @@ floatFrom s = match toFloat s
 
 -- A single-quoted string; `''` is an escaped single quote.
 textLit : Parser Literal
-textLit = lexeme
-  (defer
-    _ <- char '\''
-    cs <- many strChar
-    _ <- char '\''
-    deferPure (LText (fromChars cs)))
+textLit = lexeme (defer
+  _ <- char '\''
+  cs <- many strChar
+  _ <- char '\''
+  deferPure (LText (fromChars cs)))
 
 -- Inside a string: an escaped `''` (yielding one quote), else any non-quote char.
 -- Order matters — `escapedQuote` must be tried first, or the closing quote would
@@ -622,26 +626,25 @@ strChar : Parser Char
 strChar = orElse escapedQuote (satisfy (/= '\''))
 
 escapedQuote : Parser Char
-escapedQuote = attempt
-  (defer
-    _ <- char '\''
-    _ <- char '\''
-    deferPure '\'')
+escapedQuote = attempt (defer
+  _ <- char '\''
+  _ <- char '\''
+  deferPure '\'')
 
 -- A hex blob literal: X'48656C6C6F' (or lowercase x).
 blobLit : Parser Literal
-blobLit = attempt (lexeme
-  (defer
-    _ <- satisfy (c => c == 'x' || c == 'X')
-    _ <- char '\''
-    cs <- many (satisfy isHexDigit)
-    _ <- char '\''
-    blobFrom (fromChars cs)))
+blobLit =
+  attempt
+    (lexeme (defer
+      _ <- satisfy (c => c == 'x' || c == 'X')
+      _ <- char '\''
+      cs <- many (satisfy isHexDigit)
+      _ <- char '\''
+      blobFrom (fromChars cs)))
 
 isHexDigit : Char -> Bool
-isHexDigit c = c >= '0' && c <= '9'
-  || c >= 'a' && c <= 'f'
-  || c >= 'A' && c <= 'F'
+isHexDigit c =
+  c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
 
 blobFrom : String -> Parser Literal
 blobFrom s = match decode s
@@ -735,15 +738,14 @@ cmpSuffixes l = defer
   cmpSuffixTail l h
 
 cmpSuffixHead : Parser SuffixHead
-cmpSuffixHead = choice
-  [
-    deferMap (_ => HIs) (keyword "IS"),
-    negatedSuffixHead,
-    deferMap (_ => HLike False) (keyword "LIKE"),
-    deferMap (_ => HIn False) (keyword "IN"),
-    deferMap (_ => HBetween False) (keyword "BETWEEN"),
-    deferMap HCmp cmpOp,
-  ]
+cmpSuffixHead = choice [
+  deferMap (_ => HIs) (keyword "IS"),
+  negatedSuffixHead,
+  deferMap (_ => HLike False) (keyword "LIKE"),
+  deferMap (_ => HIn False) (keyword "IN"),
+  deferMap (_ => HBetween False) (keyword "BETWEEN"),
+  deferMap HCmp cmpOp,
+]
 
 -- `NOT LIKE` / `NOT IN` / `NOT BETWEEN`.  Once `NOT` itself matches (a clean,
 -- non-consuming failure otherwise — `keyword` is internally `attempt`-wrapped,
@@ -755,12 +757,11 @@ negatedSuffixHead = defer
   negatedSuffixTail
 
 negatedSuffixTail : Parser SuffixHead
-negatedSuffixTail = choice
-  [
-    deferMap (_ => HLike True) (keyword "LIKE"),
-    deferMap (_ => HIn True) (keyword "IN"),
-    deferMap (_ => HBetween True) (keyword "BETWEEN"),
-  ]
+negatedSuffixTail = choice [
+  deferMap (_ => HLike True) (keyword "LIKE"),
+  deferMap (_ => HIn True) (keyword "IN"),
+  deferMap (_ => HBetween True) (keyword "BETWEEN"),
+]
 
 cmpSuffixTail : SqlExpr -> Option SuffixHead -> Parser SqlExpr
 cmpSuffixTail l None = deferPure l
@@ -821,17 +822,16 @@ nullTest (Some _) = ENotNull
 -- The comparison operators.  LONGEST FIRST: `<=` before `<`, `<>` before `<`,
 -- `==` before `=`, or the shorter token would win and strand the second char.
 cmpOp : Parser CmpOp
-cmpOp = choice
-  [
-    cmpTok "<=" OpLe,
-    cmpTok "<>" OpNe,
-    cmpTok ">=" OpGe,
-    cmpTok "!=" OpNe,
-    cmpTok "==" OpEq,
-    cmpTok "<" OpLt,
-    cmpTok ">" OpGt,
-    cmpTok "=" OpEq,
-  ]
+cmpOp = choice [
+  cmpTok "<=" OpLe,
+  cmpTok "<>" OpNe,
+  cmpTok ">=" OpGe,
+  cmpTok "!=" OpNe,
+  cmpTok "==" OpEq,
+  cmpTok "<" OpLt,
+  cmpTok ">" OpGt,
+  cmpTok "=" OpEq,
+]
 
 cmpTok : String -> CmpOp -> Parser CmpOp
 cmpTok s op = defer
@@ -887,9 +887,10 @@ arithTok s op = defer
 -- reason as always: `count`/`length`/etc. are NOT reserved words, so `column`
 -- would happily eat the name and strand the `(`.
 atom : Parser SqlExpr
-atom = label
-  "expected an expression"
-  (choice [parens, litAtom, negAtom, caseExpr, aggCall, fnCall, column])
+atom =
+  label
+    "expected an expression"
+    (choice [parens, litAtom, negAtom, caseExpr, aggCall, fnCall, column])
 
 -- The recursive reference to `sqlExpr` is in a do-continuation, NOT in argument
 -- position.  Writing this as `between (symbol "(") (symbol ")") sqlExpr` would
@@ -958,7 +959,10 @@ elseClause = defer
   _ <- keyword "ELSE"
   sqlExpr
 
-buildCase : Option SqlExpr -> List (SqlExpr, SqlExpr) -> Option SqlExpr -> Parser SqlExpr
+buildCase : Option SqlExpr ->
+  List (SqlExpr, SqlExpr) ->
+  Option SqlExpr ->
+  Parser SqlExpr
 buildCase None whens els = deferPure (ECase whens els)
 buildCase (Some subj) whens els =
   deferPure (ECase (map (simpleWhen subj) whens) els)
@@ -1003,12 +1007,11 @@ fnCall = defer
 -- `(`.  Wrapped in `attempt`, exactly like `aggHead` — an unknown name (or a
 -- known one used bare) rewinds cleanly to position 0.
 fnHead : Parser String
-fnHead = attempt
-  (defer
-    w <- lexeme word
-    name <- scalarFnName w
-    _ <- symbol "("
-    deferPure name)
+fnHead = attempt (defer
+  w <- lexeme word
+  name <- scalarFnName w
+  _ <- symbol "("
+  deferPure name)
 
 scalarFnName : String -> Parser String
 scalarFnName w =
@@ -1018,20 +1021,18 @@ scalarFnName w =
     failWith "not a scalar function"
 
 isScalarFnName : String -> Bool
-isScalarFnName name = elem
-  name
-  [
-    "LENGTH",
-    "UPPER",
-    "LOWER",
-    "SUBSTR",
-    "TRIM",
-    "LTRIM",
-    "RTRIM",
-    "REPLACE",
-    "COALESCE",
-    "IFNULL",
-  ]
+isScalarFnName name = elem name [
+  "LENGTH",
+  "UPPER",
+  "LOWER",
+  "SUBSTR",
+  "TRIM",
+  "LTRIM",
+  "RTRIM",
+  "REPLACE",
+  "COALESCE",
+  "IFNULL",
+]
 
 fnFromArgs : String -> List SqlExpr -> Parser SqlExpr
 fnFromArgs "LENGTH" [a] = deferPure (EFn "LENGTH" [a])
@@ -1094,12 +1095,11 @@ aggCall = defer
 -- the operand and the `)` are mandatory and their failures propagate (they are
 -- deeper than `column`'s, so parsec's farthest-failure rule keeps them).
 aggHead : Parser AggFn
-aggHead = attempt
-  (defer
-    w <- lexeme word
-    fn <- aggFnOf w
-    _ <- symbol "("
-    deferPure fn)
+aggHead = attempt (defer
+  w <- lexeme word
+  fn <- aggFnOf w
+  _ <- symbol "("
+  deferPure fn)
 
 aggFnOf : String -> Parser AggFn
 aggFnOf w = match lookupAggFn (toUpper w)
@@ -1246,7 +1246,7 @@ renderSqlExpr (EFn name args) =
 
 renderCaseWhensText : List (SqlExpr, SqlExpr) -> String
 renderCaseWhensText [] = ""
-renderCaseWhensText ((c, r)::rest) =
+renderCaseWhensText ((c, r) :: rest) =
   "WHEN \{renderSqlExpr c} THEN \{renderSqlExpr r} \{renderCaseWhensText rest}"
 
 renderCaseElseText : Option SqlExpr -> String
@@ -1345,7 +1345,7 @@ dumpExpr (EFn name args) = "EFn \{name} [\{join ", " (map dumpExpr args)}]"
 dumpCaseWhens : List (SqlExpr, SqlExpr) -> String
 dumpCaseWhens [] = ""
 dumpCaseWhens [(c, r)] = "((\{dumpExpr c}), (\{dumpExpr r}))"
-dumpCaseWhens ((c, r)::rest) =
+dumpCaseWhens ((c, r) :: rest) =
   "((\{dumpExpr c}), (\{dumpExpr r})), \{dumpCaseWhens rest}"
 
 dumpCaseElse : Option SqlExpr -> String

@@ -29,9 +29,10 @@ refutable = defer
 -- nested: a `defer` block as an argument, and a `do` block inside a `defer` one
 nested : Async <Stdout> Int
 nested = defer
-  x <- deferPure (unOpt (do
-    n <- Some 20
-    pure (n + 1)))
+  x <- deferPure
+    (unOpt (do
+      n <- Some 20
+      pure (n + 1)))
   deferPure (x + 21)
 
 unOpt : Option Int -> Int

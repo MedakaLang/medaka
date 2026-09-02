@@ -85,8 +85,11 @@ import support.opcount.{setOpCounting, opSnap}
 import support.util.{listLen}
 
 main = match args ()
-  runtimePath::corePath::targetPath::_ => run runtimePath corePath targetPath
-  _ => ePutStrLn "usage: MEDAKA_PERF=1 medaka run compiler/entries/profile_main.mdk <runtime.mdk> <core.mdk> <target.mdk>"
+  runtimePath :: corePath :: targetPath :: _ =>
+    run runtimePath corePath targetPath
+  _ =>
+    ePutStrLn
+      "usage: MEDAKA_PERF=1 medaka run compiler/entries/profile_main.mdk <runtime.mdk> <core.mdk> <target.mdk>"
 
 run : String -> String -> String -> <IO> Unit
 run runtimePath corePath targetPath = match readFile runtimePath
@@ -122,13 +125,27 @@ runStaged on targetPath rsrc csrc tsrc =
   let rDecls = desugar rRaw
   let cDecls = desugar cRaw
   let tPP1 = now ()
-  let _ = emitPhaseAO on "parse-prelude" (tPP1 - tPP0) (allocSnap () - aPP0) "runtime+core" (opSnap () - oPP0)
+  let _ =
+    emitPhaseAO
+      on
+      "parse-prelude"
+      (tPP1 - tPP0)
+      (allocSnap () - aPP0)
+      "runtime+core"
+      (opSnap () - oPP0)
   let tP0 = now ()
   let aP0 = allocSnap ()
   let oP0 = opSnap ()
   let raw = parse tsrc
   let tP1 = now ()
-  let _ = emitPhaseAO on "parse" (tP1 - tP0) (allocSnap () - aP0) (intToString (listLen raw) ++ " decls") (opSnap () - oP0)
+  let _ =
+    emitPhaseAO
+      on
+      "parse"
+      (tP1 - tP0)
+      (allocSnap () - aP0)
+      (intToString (listLen raw) ++ " decls")
+      (opSnap () - oP0)
   -- GUARD EXHAUSTIVENESS. This pass was INVISIBLE to this profiler until 2026-07-13,
   -- and that blind spot is exactly why a quadratic hid in it.
   --
@@ -148,8 +165,14 @@ runStaged on targetPath rsrc csrc tsrc =
   let oX0 = opSnap ()
   let _ = checkGuardExhaustivenessWith cRaw raw
   let tX1 = now ()
-  let _ = emitPhaseAO on "exhaust-guards" (tX1 - tX0) (allocSnap () - aX0)
-            (intToString (listLen raw) ++ " decls") (opSnap () - oX0)
+  let _ =
+    emitPhaseAO
+      on
+      "exhaust-guards"
+      (tX1 - tX0)
+      (allocSnap () - aX0)
+      (intToString (listLen raw) ++ " decls")
+      (opSnap () - oX0)
   let tD0 = now ()
   let aD0 = allocSnap ()
   let oD0 = opSnap ()
@@ -157,19 +180,40 @@ runStaged on targetPath rsrc csrc tsrc =
   let tD1 = now ()
   let nDecls = listLen desugared
   let declsOp = intToString nDecls ++ " decls"
-  let _ = emitPhaseAO on "desugar" (tD1 - tD0) (allocSnap () - aD0) declsOp (opSnap () - oD0)
+  let _ =
+    emitPhaseAO
+      on
+      "desugar"
+      (tD1 - tD0)
+      (allocSnap () - aD0)
+      declsOp
+      (opSnap () - oD0)
   let tR0 = now ()
   let aR0 = allocSnap ()
   let oR0 = opSnap ()
   let _ = resolveToLines rRaw cRaw desugared
   let tR1 = now ()
-  let _ = emitPhaseAO on "resolve" (tR1 - tR0) (allocSnap () - aR0) declsOp (opSnap () - oR0)
+  let _ =
+    emitPhaseAO
+      on
+      "resolve"
+      (tR1 - tR0)
+      (allocSnap () - aR0)
+      declsOp
+      (opSnap () - oR0)
   let tM0 = now ()
   let aM0 = allocSnap ()
   let oM0 = opSnap ()
   let _ = markWithPrelude cDecls desugared
   let tM1 = now ()
-  let _ = emitPhaseAO on "mark" (tM1 - tM0) (allocSnap () - aM0) declsOp (opSnap () - oM0)
+  let _ =
+    emitPhaseAO
+      on
+      "mark"
+      (tM1 - tM0)
+      (allocSnap () - aM0)
+      declsOp
+      (opSnap () - oM0)
   let tT0 = now ()
   let aT0 = allocSnap ()
   let oT0 = opSnap ()
@@ -178,7 +222,14 @@ runStaged on targetPath rsrc csrc tsrc =
   -- (S-migrate-tool-consumers-remainder).
   let _ = checkOneToLinesWithRuntime rDecls cDecls desugared
   let tT1 = now ()
-  let _ = emitPhaseAO on "typecheck" (tT1 - tT0) (allocSnap () - aT0) declsOp (opSnap () - oT0)
+  let _ =
+    emitPhaseAO
+      on
+      "typecheck"
+      (tT1 - tT0)
+      (allocSnap () - aT0)
+      declsOp
+      (opSnap () - oT0)
   -- BACKEND. History of when these stages were added:
   -- `compiler/PERF-RESULTS.md` "History note — entries/profile_main.mdk gained backend
   -- stages". Same lesson as `exhaust-guards` above, one pipeline half later: an
@@ -222,27 +273,45 @@ runStaged on targetPath rsrc csrc tsrc =
   let userNames = funNamesOf desugared
   let livePrelude = dropShadowedExp userNames cDecls
   let combined = livePrelude ++ desugared
-  let dictNames = preludeReturnPosDictNames livePrelude combined
-        ++ preludeArgPosDictNames livePrelude combined
-        ++ constrainedSigNames desugared
+  let dictNames =
+    preludeReturnPosDictNames livePrelude combined
+      ++ preludeArgPosDictNames livePrelude combined
+      ++ constrainedSigNames desugared
   let elaborated = elaborateDict rDecls dictNames userNames combined
   -- Input indexing is elaboration work; keep it outside the emit timer.  The FFI
   -- projection is post-elaboration so it consumes the same canonical alias shape
   -- the declaration guards accepted.
-  let input = makeEmitInput
-    (returnsSelfTable combined) (selfFnParamTable combined) (methodIfaceTable combined)
-    (methodConstraintIfaces combined) (ctorFieldTypeNames combined)
-    (declSigTypeNames rDecls ++ declSigTypeNames combined)
-    (mainTypeIsUnit ()) (mainTypeIsFloat ()) 0 [] [] targetPath (declaredRecordFieldOrders combined)
-    (validateFfiExternTypeNames (checkedFfiExternTypeNames combined))
-    -- `combined`, not `live`: this driver builds every other input table from
-    -- `combined` too, and DCE (which produces `live`) runs in its OWN timed stage
-    -- below, so reading it here would move that stage's work into `elaborate`.  The
-    -- head table is a strict superset of `live`'s, and this driver DISCARDS its
-    -- emitted IR (it measures stages), so the difference is unobservable.
-    (ifaceImplHeadTable combined)
+  let input =
+    makeEmitInput
+      (returnsSelfTable combined)
+      (selfFnParamTable combined)
+      (methodIfaceTable combined)
+      (methodConstraintIfaces combined)
+      (ctorFieldTypeNames combined)
+      (declSigTypeNames rDecls ++ declSigTypeNames combined)
+      (mainTypeIsUnit ())
+      (mainTypeIsFloat ())
+      0
+      []
+      []
+      targetPath
+      (declaredRecordFieldOrders combined)
+      (validateFfiExternTypeNames (checkedFfiExternTypeNames combined))
+      -- `combined`, not `live`: this driver builds every other input table from
+      -- `combined` too, and DCE (which produces `live`) runs in its OWN timed stage
+      -- below, so reading it here would move that stage's work into `elaborate`.  The
+      -- head table is a strict superset of `live`'s, and this driver DISCARDS its
+      -- emitted IR (it measures stages), so the difference is unobservable.
+      (ifaceImplHeadTable combined)
   let tEl1 = now ()
-  let _ = emitPhaseAO on "elaborate" (tEl1 - tEl0) (allocSnap () - aEl0) declsOp (opSnap () - oEl0)
+  let _ =
+    emitPhaseAO
+      on
+      "elaborate"
+      (tEl1 - tEl0)
+      (allocSnap () - aEl0)
+      declsOp
+      (opSnap () - oEl0)
   -- dce: source DCE, as the real build driver does it in default (whole-module) mode.
   -- Ran in the same untimed gap; its reachable-name closure is a List-as-set suspect
   -- (issue #882). Bracketed only — dceFilter's input/output are unchanged.
@@ -251,7 +320,14 @@ runStaged on targetPath rsrc csrc tsrc =
   let oDc0 = opSnap ()
   let live = dceFilter elaborated
   let tDc1 = now ()
-  let _ = emitPhaseAO on "dce" (tDc1 - tDc0) (allocSnap () - aDc0) declsOp (opSnap () - oDc0)
+  let _ =
+    emitPhaseAO
+      on
+      "dce"
+      (tDc1 - tDc0)
+      (allocSnap () - aDc0)
+      declsOp
+      (opSnap () - oDc0)
   -- mangle: universal per-module private-name de-collision (issue #882). The real emit
   -- drivers (entry_support.runEmitWith) run mangleUnits BEFORE elaborateModules,
   -- renaming a unit's PRIVATE defs to `<mid>__name` so cross-module bare-name collisions
@@ -264,10 +340,17 @@ runStaged on targetPath rsrc csrc tsrc =
   let tMg0 = now ()
   let aMg0 = allocSnap ()
   let oMg0 = opSnap ()
-  let (mgCore, mgMods) = mangleUnits cDecls (("target", desugared)::[])
+  let (mgCore, mgMods) = mangleUnits cDecls (("target", desugared) :: [])
   let _ = listLen mgCore + listLen mgMods
   let tMg1 = now ()
-  let _ = emitPhaseAO on "mangle" (tMg1 - tMg0) (allocSnap () - aMg0) declsOp (opSnap () - oMg0)
+  let _ =
+    emitPhaseAO
+      on
+      "mangle"
+      (tMg1 - tMg0)
+      (allocSnap () - aMg0)
+      declsOp
+      (opSnap () - oMg0)
   -- tLw*/aLw* — NOT tL*: the `lint` stage below independently uses tL0/tL1/aL0.
   -- Both stages landed in the same merge; today the shadowing is harmless only
   -- because these are consumed before lint rebinds them, which is exactly the kind
@@ -280,13 +363,27 @@ runStaged on targetPath rsrc csrc tsrc =
   -- lowering feeds both backends, so this cannot narrow to either.
   let cprog = lowerProgramEmit TargetBothUnknown live
   let tLw1 = now ()
-  let _ = emitPhaseAO on "lower" (tLw1 - tLw0) (allocSnap () - aLw0) declsOp (opSnap () - oLw0)
+  let _ =
+    emitPhaseAO
+      on
+      "lower"
+      (tLw1 - tLw0)
+      (allocSnap () - aLw0)
+      declsOp
+      (opSnap () - oLw0)
   let tE0 = now ()
   let aE0 = allocSnap ()
   let oE0 = opSnap ()
   let _ = emitProgram input cprog
   let tE1 = now ()
-  let _ = emitPhaseAO on "emit" (tE1 - tE0) (allocSnap () - aE0) declsOp (opSnap () - oE0)
+  let _ =
+    emitPhaseAO
+      on
+      "emit"
+      (tE1 - tE0)
+      (allocSnap () - aE0)
+      declsOp
+      (opSnap () - oE0)
   -- WASM EMIT — issue #359's second half (the llvm `emit` stage above grades only
   -- llvm_emit; this stage grades the separate ~10k-line wasm_emit backend, which
   -- has its own complexity class from llvm's — see #381/#401). DCE-exercised
@@ -307,7 +404,14 @@ runStaged on targetPath rsrc csrc tsrc =
   let oF0 = opSnap ()
   let _ = formatSource tsrc
   let tF1 = now ()
-  let _ = emitPhaseAO on "fmt" (tF1 - tF0) (allocSnap () - aF0) "format" (opSnap () - oF0)
+  let _ =
+    emitPhaseAO
+      on
+      "fmt"
+      (tF1 - tF0)
+      (allocSnap () - aF0)
+      "format"
+      (opSnap () - oF0)
   -- lint: the PER-FILE lint tier (lintProgram over allRules on the RAW pre-desugar
   -- AST). Profiled because it was not, and its dead-code rule's reachability pass
   -- (reachableNames -> mergeRefs/bfsReach) is an assoc-list-as-map that allocates
@@ -346,7 +450,14 @@ runStaged on targetPath rsrc csrc tsrc =
   let oL0 = opSnap ()
   let _ = lintProgram lidx allRules "target.mdk" tsrc lpos lprog
   let tL1 = now ()
-  let _ = emitPhaseAO on "lint" (tL1 - tL0) (allocSnap () - aL0) declsOp (opSnap () - oL0)
+  let _ =
+    emitPhaseAO
+      on
+      "lint"
+      (tL1 - tL0)
+      (allocSnap () - aL0)
+      declsOp
+      (opSnap () - oL0)
   emitTotalA on (tL1 - tTotal) (allocSnap () - aTotal)
 
 -- The `wasm-emit` stage, OPT-IN on MEDAKA_PERF_WASM (2nd arg). Off => `()`, and the
@@ -365,10 +476,24 @@ runStaged on targetPath rsrc csrc tsrc =
 -- Input construction sits inside the off-switch but outside the timer. Nothing else
 -- in this driver reads these Wasm-only indexes, so skipping them cannot perturb the
 -- LLVM rows or the total allocation when MEDAKA_PERF_WASM is disabled.
-wasmStage : Bool -> Bool -> List Decl -> List Decl -> CProgram -> String -> <IO> Unit
+wasmStage : Bool ->
+  Bool ->
+  List Decl ->
+  List Decl ->
+  CProgram ->
+  String ->
+  <IO> Unit
 wasmStage _ False _ _ _ _ = ()
 wasmStage on True runtimeDecls live cprog declsOp =
-  let input = makeWasmEmitInputFull (methodIfaceTable live) (declSigTypeNames runtimeDecls ++ declSigTypeNames live) (ctorFieldTypeNames live) (mainTypeIsFloat ()) (declaredRecordFieldOrders live) [] (ifaceImplHeadTable live)
+  let input =
+    makeWasmEmitInputFull
+      (methodIfaceTable live)
+      (declSigTypeNames runtimeDecls ++ declSigTypeNames live)
+      (ctorFieldTypeNames live)
+      (mainTypeIsFloat ())
+      (declaredRecordFieldOrders live)
+      []
+      (ifaceImplHeadTable live)
   let tWe0 = now ()
   let aWe0 = allocSnap ()
   let oWe0 = opSnap ()

@@ -79,7 +79,7 @@ parsePrelude src = match lookupAssoc src !preludeCacheRef
 -- drop any existing entry with this key (so a re-parse refreshes its position).
 dropKeyP : String -> List (String, List Decl) -> List (String, List Decl)
 dropKeyP _ [] = []
-dropKeyP k ((k2, v)::rest)
+dropKeyP k ((k2, v) :: rest)
   | k == k2 = dropKeyP k rest
   | otherwise = (k2, v) :: dropKeyP k rest
 
@@ -88,7 +88,7 @@ dropKeyP k ((k2, v)::rest)
 export
 takeFirstN : Int -> List a -> List a
 takeFirstN _ [] = []
-takeFirstN n (x::xs)
+takeFirstN n (x :: xs)
   | n <= 0 = []
   | otherwise = x :: takeFirstN (n - 1) xs
 # DESUGAR

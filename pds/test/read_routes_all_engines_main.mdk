@@ -37,7 +37,8 @@ accountHostText : String
 accountHostText = "pds.example"
 
 expectedDidDocument : String
-expectedDidDocument = "{\"@context\":[\"https://www.w3.org/ns/did/v1\"],\"id\":\"did:web:pds.example\",\"service\":[{\"id\":\"#atproto_pds\",\"type\":\"AtprotoPersonalDataServer\",\"serviceEndpoint\":\"https://pds.example\"}]}"
+expectedDidDocument =
+  "{\"@context\":[\"https://www.w3.org/ns/did/v1\"],\"id\":\"did:web:pds.example\",\"service\":[{\"id\":\"#atproto_pds\",\"type\":\"AtprotoPersonalDataServer\",\"serviceEndpoint\":\"https://pds.example\"}]}"
 
 mustAccount : Account
 mustAccount = match makeAccount accountDidText accountHandleText accountHostText
@@ -71,7 +72,10 @@ headerEnd : Array Int -> Int -> Int
 headerEnd bytes i =
   if i + 3 >= arrayLength bytes then
     panic "read_routes: response has no header terminator"
-  else if bytes[i] == 13 && bytes[i + 1] == 10 && bytes[i + 2] == 13 && bytes[i + 3] == 10 then
+  else if bytes[i] == 13
+    && bytes[i + 1] == 10
+    && bytes[i + 2] == 13
+    && bytes[i + 3] == 10 then
     i
   else
     headerEnd bytes (i + 1)
@@ -86,7 +90,7 @@ bodyText bytes =
 
 statusText : Array Int -> String
 statusText bytes = match split " " (headText bytes)
-  _::code::_ => code
+  _ :: code :: _ => code
   _ => "<no-status>"
 
 hasContentType : String -> Array Int -> Bool
@@ -106,10 +110,11 @@ errorCode bytes = match parse (bodyText bytes)
    literal readback of the successor store, not a claim: an unconfigured store
    has no repository and no blobs, and no route here may create either. -}
 storeIsEmpty : Store -> Bool
-storeIsEmpty store = storeSize store == 0
-  && (match storeRepo store
-    None => True
-    Some _ => False)
+storeIsEmpty store =
+  storeSize store == 0
+    && (match storeRepo store
+      None => True
+      Some _ => False)
 
 check : String -> Bool -> String -> <IO> Int
 check label ok detail =
@@ -124,7 +129,11 @@ okCell : String -> Array Int -> String -> String -> <IO> Int
 okCell label request contentType expectedBody =
   let (next, response) = handleBytes mustServer storeEmpty request
   let status = statusText response
-  let ok = status == "200" && hasContentType contentType response && bodyText response == expectedBody && storeIsEmpty next
+  let ok =
+    status == "200"
+      && hasContentType contentType response
+      && bodyText response == expectedBody
+      && storeIsEmpty next
   check
     label
     ok
@@ -146,26 +155,131 @@ identityRoute query = xrpc "com.atproto.identity.resolveHandle\{query}"
 
 runCells : <IO> Unit
 runCells =
-  let didJson = okCell "wellknown-did-json" (getRequest "/.well-known/did.json") "application/json" expectedDidDocument
-  let atprotoDid = okCell "wellknown-atproto-did" (getRequest "/.well-known/atproto-did") "text/plain; charset=utf-8" accountDidText
-  let wellKnownPost = failCell "wellknown-post-rejected" (postRequest "/.well-known/did.json") "405" "MethodNotAllowed"
-  let wellKnownFramed = failCell "wellknown-body-framing-rejected" (getWithBodyFraming "/.well-known/atproto-did") "400" "InvalidRequest"
-  let favicon = failCell "non-xrpc-still-404" (getRequest "/favicon.ico") "404" "NotFound"
-  let sibling = failCell "well-known-sibling-still-404" (getRequest "/.well-known/openid-configuration") "404" "NotFound"
-  let resolve = okCell "resolve-handle" (getRequest (identityRoute "?handle=\{accountHandleText}")) "application/json" "{\"did\":\"\{accountDidText}\"}"
-  let resolveUnknown = failCell "resolve-handle-unknown" (getRequest (identityRoute "?handle=stranger.example")) "400" "HandleNotFound"
-  let resolveRepeated = failCell "resolve-handle-repeated-param" (getRequest (identityRoute "?handle=a.example&handle=b.example")) "400" "InvalidRequest"
-  let resolveMissing = failCell "resolve-handle-missing-param" (getRequest (identityRoute "")) "400" "InvalidRequest"
-  let getRecord = failCell "get-record-unconfigured" (getRequest (xrpc "com.atproto.repo.getRecord?repo=\{accountDidText}&collection=app.bsky.feed.post&rkey=medaka-a")) "400" "RepoNotFound"
-  let listRecords = failCell "list-records-unconfigured" (getRequest (xrpc "com.atproto.repo.listRecords?repo=\{accountDidText}&collection=app.bsky.feed.post")) "400" "RepoNotFound"
-  let describeRepo = failCell "describe-repo-unconfigured" (getRequest (xrpc "com.atproto.repo.describeRepo?repo=\{accountDidText}")) "400" "RepoNotFound"
-  let getRepo = failCell "get-repo-unconfigured" (getRequest (xrpc "com.atproto.sync.getRepo?did=\{accountDidText}")) "400" "RepoNotFound"
-  let latestCommit = failCell "get-latest-commit-unconfigured" (getRequest (xrpc "com.atproto.sync.getLatestCommit?did=\{accountDidText}")) "400" "RepoNotFound"
-  let readNeedsGet = failCell "read-route-requires-get" (postRequest (xrpc "com.atproto.repo.describeRepo?repo=\{accountDidText}")) "405" "MethodNotAllowed"
-  let unregistered = failCell "unregistered-xrpc-still-404" (getRequest (xrpc "com.atproto.repo.listMissingBlobs")) "404" "NotFound"
-  let cells = didJson + atprotoDid + wellKnownPost + wellKnownFramed + favicon + sibling + resolve + resolveUnknown + resolveRepeated + resolveMissing + getRecord + listRecords + describeRepo + getRepo + latestCommit + readNeedsGet + unregistered
+  let didJson =
+    okCell
+      "wellknown-did-json"
+      (getRequest "/.well-known/did.json")
+      "application/json"
+      expectedDidDocument
+  let atprotoDid =
+    okCell
+      "wellknown-atproto-did"
+      (getRequest "/.well-known/atproto-did")
+      "text/plain; charset=utf-8"
+      accountDidText
+  let wellKnownPost =
+    failCell
+      "wellknown-post-rejected"
+      (postRequest "/.well-known/did.json")
+      "405"
+      "MethodNotAllowed"
+  let wellKnownFramed =
+    failCell
+      "wellknown-body-framing-rejected"
+      (getWithBodyFraming "/.well-known/atproto-did")
+      "400"
+      "InvalidRequest"
+  let favicon =
+    failCell "non-xrpc-still-404" (getRequest "/favicon.ico") "404" "NotFound"
+  let sibling =
+    failCell
+      "well-known-sibling-still-404"
+      (getRequest "/.well-known/openid-configuration")
+      "404"
+      "NotFound"
+  let resolve =
+    okCell
+      "resolve-handle"
+      (getRequest (identityRoute "?handle=\{accountHandleText}"))
+      "application/json"
+      "{\"did\":\"\{accountDidText}\"}"
+  let resolveUnknown =
+    failCell
+      "resolve-handle-unknown"
+      (getRequest (identityRoute "?handle=stranger.example"))
+      "400"
+      "HandleNotFound"
+  let resolveRepeated =
+    failCell
+      "resolve-handle-repeated-param"
+      (getRequest (identityRoute "?handle=a.example&handle=b.example"))
+      "400"
+      "InvalidRequest"
+  let resolveMissing =
+    failCell
+      "resolve-handle-missing-param"
+      (getRequest (identityRoute ""))
+      "400"
+      "InvalidRequest"
+  let getRecord =
+    failCell
+      "get-record-unconfigured"
+      (getRequest
+        (xrpc
+          "com.atproto.repo.getRecord?repo=\{accountDidText}&collection=app.bsky.feed.post&rkey=medaka-a"))
+      "400"
+      "RepoNotFound"
+  let listRecords =
+    failCell
+      "list-records-unconfigured"
+      (getRequest
+        (xrpc
+          "com.atproto.repo.listRecords?repo=\{accountDidText}&collection=app.bsky.feed.post"))
+      "400"
+      "RepoNotFound"
+  let describeRepo =
+    failCell
+      "describe-repo-unconfigured"
+      (getRequest (xrpc "com.atproto.repo.describeRepo?repo=\{accountDidText}"))
+      "400"
+      "RepoNotFound"
+  let getRepo =
+    failCell
+      "get-repo-unconfigured"
+      (getRequest (xrpc "com.atproto.sync.getRepo?did=\{accountDidText}"))
+      "400"
+      "RepoNotFound"
+  let latestCommit =
+    failCell
+      "get-latest-commit-unconfigured"
+      (getRequest
+        (xrpc "com.atproto.sync.getLatestCommit?did=\{accountDidText}"))
+      "400"
+      "RepoNotFound"
+  let readNeedsGet =
+    failCell
+      "read-route-requires-get"
+      (postRequest
+        (xrpc "com.atproto.repo.describeRepo?repo=\{accountDidText}"))
+      "405"
+      "MethodNotAllowed"
+  let unregistered =
+    failCell
+      "unregistered-xrpc-still-404"
+      (getRequest (xrpc "com.atproto.repo.listMissingBlobs"))
+      "404"
+      "NotFound"
+  let cells =
+    didJson
+      + atprotoDid
+      + wellKnownPost
+      + wellKnownFramed
+      + favicon
+      + sibling
+      + resolve
+      + resolveUnknown
+      + resolveRepeated
+      + resolveMissing
+      + getRecord
+      + listRecords
+      + describeRepo
+      + getRepo
+      + latestCommit
+      + readNeedsGet
+      + unregistered
   let () = println "cells: \{intToString cells}/17 repository-free routes"
-  if cells == 17 then println "TOTAL: PASS"
+  if cells == 17 then
+    println "TOTAL: PASS"
   else
     let () = println "TOTAL: FAIL"
     exit 1

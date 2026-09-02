@@ -37,13 +37,12 @@ import test.{expectEqual}
 -- | LSB-first bit reader over an immutable byte array. `hold` accumulates
 --   bits pulled from `src` starting at `pos`; `count` is how many of the low
 --   bits of `hold` are valid. Refilled a whole byte at a time.
-public export data BitReader =
-  | BitReader {
-      src : Array Int,
-      pos : Ref Int,
-      hold : Ref Int,
-      count : Ref Int,
-    }
+public export data BitReader = BitReader {
+  src : Array Int,
+  pos : Ref Int,
+  hold : Ref Int,
+  count : Ref Int,
+}
 
 -- | A fresh reader positioned at the start of `bytes`.
 export
@@ -56,14 +55,17 @@ newBitReader bytes =
 -- or the input is exhausted.
 refillBits : Int -> BitReader -> Result String Unit
 refillBits n r =
-  if r.count.value >= n then Ok ()
+  if r.count.value >= n then
+    Ok ()
   else match get r.pos.value r.src
     Some b =>
       let _ = r.hold := bitOr r.hold.value (shiftLeft b r.count.value)
       let _ = r.count := r.count.value + 8
       let _ = r.pos := r.pos.value + 1
       refillBits n r
-    None => Err "getBits: unexpected end of input (need \{n} bit(s), have \{r.count.value} buffered)"
+    None =>
+      Err
+        "getBits: unexpected end of input (need \{n} bit(s), have \{r.count.value} buffered)"
 
 -- | Consume and return the next `n` bits, LSB-first (the first bit read is
 --   the LOWEST unread bit of the stream, and it becomes bit 0 of the
@@ -77,7 +79,8 @@ refillBits n r =
 export
 getBits : Int -> BitReader -> Result String Int
 getBits n r =
-  if n < 0 || n > 32 then Err "getBits: width \{intToString n} out of range (must be 0..32)"
+  if n < 0 || n > 32 then
+    Err "getBits: width \{intToString n} out of range (must be 0..32)"
   else do
     _ <- refillBits n r
     let v = bitAnd r.hold.value (shiftLeft 1 n - 1)
@@ -93,7 +96,8 @@ export
 alignByte : BitReader -> Unit
 alignByte r =
   let extra = r.count.value % 8
-  if extra == 0 then ()
+  if extra == 0 then
+    ()
   else
     let _ = r.hold := shiftRight r.hold.value extra
     r.count := r.count.value - extra
@@ -132,8 +136,11 @@ getBytesAlignedGo n r out
 -- | LSB-first bit writer. `hold`/`count` mirror the reader's accumulator;
 --   whenever 8 or more valid bits are buffered, whole bytes are flushed to
 --   `buf` (low byte first). `buf` is the growable output.
-public export data BitWriter =
-  | BitWriter { buf : Vector Int, hold : Ref Int, count : Ref Int }
+public export data BitWriter = BitWriter {
+  buf : Vector Int,
+  hold : Ref Int,
+  count : Ref Int,
+}
 
 -- | A fresh, empty writer.
 export
@@ -148,7 +155,6 @@ flushBytes w =
     let _ = w.hold := shiftRight w.hold.value 8
     let _ = w.count := w.count.value - 8
     flushBytes w
-  else ()
 
 -- | Append the low `n` bits of `v`, LSB-first (the same convention `getBits`
 --   reads back): bit 0 of `v` is written first and lands as the next unread
@@ -168,7 +174,8 @@ flushBytes w =
 export
 putBits : Int -> Int -> BitWriter -> Unit
 putBits v n w =
-  if n < 0 || n > 32 then panic "putBits: width \{intToString n} out of range (must be 0..32)"
+  if n < 0 || n > 32 then
+    panic "putBits: width \{intToString n} out of range (must be 0..32)"
   else
     let masked = bitAnd v (shiftLeft 1 n - 1)
     let _ = w.hold := bitOr w.hold.value (shiftLeft masked w.count.value)
@@ -187,7 +194,8 @@ putCodeMSB v width w = putCodeMSBGo v (width - 1) w
 
 putCodeMSBGo : Int -> Int -> BitWriter -> Unit
 putCodeMSBGo v i w =
-  if i < 0 then ()
+  if i < 0 then
+    ()
   else
     let _ = putBits (bitAnd (shiftRight v i) 1) 1 w
     putCodeMSBGo v (i - 1) w
@@ -229,7 +237,8 @@ finishBitWriter w =
 
 -- (helper backing the design-doc test below — three sequential reads off one
 -- reader, returned together since each `test` is a single expression)
-threeReads : Array Int -> (Result String Int, Result String Int, Result String Int)
+threeReads : Array Int ->
+  (Result String Int, Result String Int, Result String Int)
 threeReads bytes =
   let r = newBitReader bytes
   let a = getBits 4 r
@@ -240,9 +249,10 @@ threeReads bytes =
 test "design-doc LSB-first shape: [0xAB,0xCD] read 4,4,8 -> 11,10,205" =
   expectEqual (Ok 11, Ok 10, Ok 205) (threeReads [|0xAB, 0xCD|])
 
-test "getBits past end of input returns Err, not garbage or a hang" = expectEqual
-  (Err "getBits: unexpected end of input (need 9 bit(s), have 8 buffered)")
-  (getBits 9 (newBitReader [|0xFF|]))
+test "getBits past end of input returns Err, not garbage or a hang" =
+  expectEqual
+    (Err "getBits: unexpected end of input (need 9 bit(s), have 8 buffered)")
+    (getBits 9 (newBitReader [|0xFF|]))
 
 -- After reading 3 bits of 0xFF (all-ones byte), 5 bits remain buffered from
 -- that byte; `alignByte` must discard exactly those 5, so the next read
@@ -254,7 +264,8 @@ alignThenRead =
   let _ = alignByte r
   getBits 8 r
 
-test "alignByte mid-byte discards exactly the unread fraction of the current byte" = expectEqual (Ok 0) alignThenRead
+test "alignByte mid-byte discards exactly the unread fraction of the current byte" =
+  expectEqual (Ok 0) alignThenRead
 
 -- After 4 bits read and an align, the reader must be sitting at byte index 1
 -- (byte 0 fully consumed by the align), so `getBytesAligned 3` returns bytes
@@ -287,7 +298,8 @@ codeBytes v width =
 -- stream, the code's first-emitted bit (its MSB, 0) lands at bit 0 of the
 -- output byte — a byte-aligned width-8 code comes out as the BIT REVERSAL
 -- of its value: 0b01110001 reversed is 0b10001110 = 128+8+4+2 = 142.
-test "putCodeMSB, byte-aligned width 8: literal 65's fixed code 113 (0b01110001) -> 142 (0b10001110)" = expectEqual [|142|] (codeBytes 113 8)
+test "putCodeMSB, byte-aligned width 8: literal 65's fixed code 113 (0b01110001) -> 142 (0b10001110)" =
+  expectEqual [|142|] (codeBytes 113 8)
 
 -- A non-byte-aligned width, where the "just reverse the byte" shortcut does
 -- NOT apply and a real bug would hide: a 5-bit flat distance code, symbol 13
@@ -296,7 +308,8 @@ test "putCodeMSB, byte-aligned width 8: literal 65's fixed code 113 (0b01110001)
 -- 5-bit reversal (0,1,1,0,1 -> read back low-to-high as 0,1,1,0,1 => bit0=0,
 -- bit1=1, bit2=1, bit3=0, bit4=1 => value 2+4+16 = 22 = 0b10110); the
 -- unused top 3 bits of the byte are zero-padded by `finishBitWriter`.
-test "putCodeMSB, non-byte-aligned width 5: code 13 (0b01101) -> 22 (0b10110), zero-padded" = expectEqual [|22|] (codeBytes 13 5)
+test "putCodeMSB, non-byte-aligned width 5: code 13 (0b01101) -> 22 (0b10110), zero-padded" =
+  expectEqual [|22|] (codeBytes 13 5)
 
 -- ---------------------------------------------------------------------------
 -- Properties (`prop`) — the real coverage: generated data, not hand-picked
@@ -305,16 +318,16 @@ test "putCodeMSB, non-byte-aligned width 5: code 13 (0b01101) -> 22 (0b10110), z
 
 writeAllFixed : List Int -> Int -> BitWriter -> Unit
 writeAllFixed [] width w = ()
-writeAllFixed (v::rest) width w =
+writeAllFixed (v :: rest) width w =
   let _ = putBits v width w
   writeAllFixed rest width w
 
 readAllFixed : List Int -> Int -> BitReader -> Result String (List Int)
 readAllFixed [] width r = Ok []
-readAllFixed (_::rest) width r = do
+readAllFixed (_ :: rest) width r = do
   v <- getBits width r
   vs <- readAllFixed rest width r
-  Ok (v::vs)
+  Ok (v :: vs)
 
 -- `putBits`/`getBits` round-trip for arbitrary `Int` values (including
 -- negative — `prop`'s Int generator draws from -1000..1000) at a single
@@ -334,7 +347,7 @@ prop "putBits/getBits round-trip: arbitrary Int values (incl. negative) at a sha
 
 writeAllCodesMSB : List Int -> Int -> BitWriter -> Unit
 writeAllCodesMSB [] width w = ()
-writeAllCodesMSB (v::rest) width w =
+writeAllCodesMSB (v :: rest) width w =
   let _ = putCodeMSB v width w
   writeAllCodesMSB rest width w
 
@@ -347,17 +360,18 @@ readCodeMSB width r = readCodeMSBGo width 0 r
 
 readCodeMSBGo : Int -> Int -> BitReader -> Result String Int
 readCodeMSBGo remaining acc r =
-  if remaining <= 0 then Ok acc
+  if remaining <= 0 then
+    Ok acc
   else do
     bit <- getBits 1 r
     readCodeMSBGo (remaining - 1) (acc * 2 + bit) r
 
 readAllCodesMSB : List Int -> Int -> BitReader -> Result String (List Int)
 readAllCodesMSB [] width r = Ok []
-readAllCodesMSB (_::rest) width r = do
+readAllCodesMSB (_ :: rest) width r = do
   v <- readCodeMSB width r
   vs <- readAllCodesMSB rest width r
-  Ok (v::vs)
+  Ok (v :: vs)
 
 -- Same shape as the `putBits` property, but for the MSB-first code path —
 -- generated data covering BOTH bit orders this module implements, rather
@@ -375,14 +389,14 @@ prop "putCodeMSB / MSB-first read round-trip: arbitrary Int values at a shared w
 
 sumList : List Int -> Int
 sumList [] = 0
-sumList (x::rest) = x + sumList rest
+sumList (x :: rest) = x + sumList rest
 
 ceilDiv : Int -> Int -> Int
 ceilDiv a b = (a + b - 1) / b
 
 consumeWidths : List Int -> BitReader -> Result String Unit
 consumeWidths [] r = Ok ()
-consumeWidths (width::rest) r = do
+consumeWidths (width :: rest) r = do
   _ <- getBits width r
   consumeWidths rest r
 

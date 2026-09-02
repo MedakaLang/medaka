@@ -1,5 +1,5 @@
 # META
-source_lines=647
+source_lines=646
 stages=DESUGAR,MARK
 # SOURCE
 {- | A command-line argument parser.
@@ -85,13 +85,12 @@ public export data Trailing =
    `["--write", "-w"]`. The first is the canonical name: the key recorded
    in `Args.given` and queried by `flag` and `flagValue`, whichever
    spelling was typed. -}
-public export data FlagSpec =
-  | FlagSpec {
-      names : List String,
-      arity : Arity,
-      summary : String,
-      visibility : Visibility,
-    }
+public export data FlagSpec = FlagSpec {
+  names : List String,
+  arity : Arity,
+  summary : String,
+  visibility : Visibility,
+}
   deriving (Eq, Debug)
 
 {- | A command's whole argument vocabulary.
@@ -101,14 +100,13 @@ public export data FlagSpec =
    with `-` still reaches the command. When `True`, it is flag-shaped and
    goes to the `unknown` policy like an undeclared `--x`. A lone `-` is a
    positional either way. -}
-public export data ArgSpec =
-  | ArgSpec {
-      verb : String,
-      flags : List FlagSpec,
-      trailing : Trailing,
-      unknown : Unknown,
-      strictDash : Bool,
-    }
+public export data ArgSpec = ArgSpec {
+  verb : String,
+  flags : List FlagSpec,
+  trailing : Trailing,
+  unknown : Unknown,
+  strictDash : Bool,
+}
   deriving (Eq, Debug)
 
 {- | The result of a successful parse.
@@ -117,12 +115,11 @@ public export data ArgSpec =
    order given, so `flagValue` takes the first occurrence and `lastValue`
    the last. `positionals` holds the arguments no flag claimed, and `rest`
    holds the trailing section. -}
-public export data Args =
-  | Args {
-      given : List (String, Option String),
-      positionals : List String,
-      rest : List String,
-    }
+public export data Args = Args {
+  given : List (String, Option String),
+  positionals : List String,
+  rest : List String,
+}
   deriving (Eq, Debug)
 
 -- # Building a specification
@@ -238,7 +235,7 @@ withStrictDash sp = { sp | strictDash = True }
 export
 canonical : FlagSpec -> String
 canonical f = match f.names
-  n::_ => n
+  n :: _ => n
   [] => ""
 
 {- | Every name of every flag, in declaration order.
@@ -253,7 +250,7 @@ rosterOf sp = rosterGo sp.flags
 
 rosterGo : List FlagSpec -> List String
 rosterGo [] = []
-rosterGo (f::rest) = f.names ++ rosterGo rest
+rosterGo (f :: rest) = f.names ++ rosterGo rest
 
 -- Render a name set the way every rejection sentence does: a verb with no
 -- flags at all says `none`, not an empty parenthesis.
@@ -267,7 +264,8 @@ knownSet ns = join ", " ns
    "medaka fmt: unrecognized flag '--zzz' (known: --write, -w)" -}
 export
 unknownFlagMessage : ArgSpec -> String -> String
-unknownFlagMessage sp tok = "medaka \{sp.verb}: unrecognized flag '\{tok}' (known: \{knownSet (rosterOf sp)})"
+unknownFlagMessage sp tok =
+  "medaka \{sp.verb}: unrecognized flag '\{tok}' (known: \{knownSet (rosterOf sp)})"
 
 -- > unknownFlagMessage (spec "doc" []) "--zzz"
 -- "medaka doc: unrecognized flag '--zzz' (known: none)"
@@ -331,19 +329,19 @@ flagLabel f =
 
 publicFlags : List FlagSpec -> List FlagSpec
 publicFlags [] = []
-publicFlags (f::rest) = match f.visibility
+publicFlags (f :: rest) = match f.visibility
   Public => f :: publicFlags rest
   Internal => publicFlags rest
 
 labelWidth : List FlagSpec -> Int -> Int
 labelWidth [] acc = acc
-labelWidth (f::rest) acc =
+labelWidth (f :: rest) acc =
   let n = stringLength (flagLabel f)
   labelWidth rest (max n acc)
 
 helpLines : List FlagSpec -> Int -> String
 helpLines [] _ = ""
-helpLines (f::rest) w =
+helpLines (f :: rest) w =
   let lbl = flagLabel f
   let line = "  \{lbl}\{repeat (w - stringLength lbl + 3) " "}\{f.summary}"
   match rest
@@ -372,9 +370,10 @@ usageExitCode = 1
    Err "medaka fmt: unrecognized flag '--zzz' (known: --write, -w)" -}
 export
 parseArgs : ArgSpec -> List String -> Result String Args
-parseArgs sp argv = map
-  ((gs, ps, rs) => Args { given = gs, positionals = ps, rest = rs })
-  (scanArgs sp argv)
+parseArgs sp argv =
+  map
+    ((gs, ps, rs) => Args { given = gs, positionals = ps, rest = rs })
+    (scanArgs sp argv)
 
 -- A known switch, then the same flag by its short spelling:
 -- > map (a => flag "--write" a) (parseArgs (spec "fmt" [switch ["--write", "-w"] "w"]) ["--write"])
@@ -436,7 +435,7 @@ type Scan = Result String (List (String, Option String), List String, List Strin
 -- accumulated backwards and nothing has to be reversed.
 scanArgs : ArgSpec -> List String -> Scan
 scanArgs _ [] = Ok ([], [], [])
-scanArgs sp (t::rest)
+scanArgs sp (t :: rest)
   | t == "--" && isAfterSeparator sp.trailing = Ok ([], [], rest)
   | isFlagToken sp t = scanFlag sp t rest
   | isRaw sp.trailing = Ok ([], [t], rest)
@@ -456,8 +455,8 @@ scanArgs sp (t::rest)
 isFlagToken : ArgSpec -> String -> Bool
 isFlagToken sp t
   | startsWith "--" t = True
-  | startsWith "-" t && stringLength t > 1 = isDeclaredShort sp t
-    || sp.strictDash
+  | startsWith "-" t && stringLength t > 1 =
+    isDeclaredShort sp t || sp.strictDash
   | otherwise = False
 
 isDeclaredShort : ArgSpec -> String -> Bool
@@ -479,10 +478,10 @@ isRaw TrailingRaw = True
 isRaw _ = False
 
 consPositional : String -> Scan -> Scan
-consPositional t r = map ((gs, ps, rs) => (gs, t::ps, rs)) r
+consPositional t r = map ((gs, ps, rs) => (gs, t :: ps, rs)) r
 
 consGiven : (String, Option String) -> Scan -> Scan
-consGiven g r = map ((gs, ps, rs) => (g::gs, ps, rs)) r
+consGiven g r = map ((gs, ps, rs) => (g :: gs, ps, rs)) r
 
 scanFlag : ArgSpec -> String -> List String -> Scan
 scanFlag sp t rest = match findFlag t sp.flags
@@ -497,7 +496,7 @@ scanKnown sp t f rest = match f.arity
   Switch => consGiven (canonical f, None) (scanArgs sp rest)
   _ => match rest
     [] => Err (missingValueMessage sp t)
-    v::rest2 => match checkValue sp t f.arity v
+    v :: rest2 => match checkValue sp t f.arity v
       Err m => Err m
       Ok _ => consGiven (canonical f, Some v) (scanArgs sp rest2)
 
@@ -521,14 +520,11 @@ scanUnclaimed sp t rest = match sp.unknown
     Some (nm, v) => consGiven (nm, Some v) (scanArgs sp rest)
     None => match rest
       [] => consGiven (t, None) (scanArgs sp [])
-      v::rest2 => consGiven (t, Some v) (scanArgs sp rest2)
+      v :: rest2 => consGiven (t, Some v) (scanArgs sp rest2)
 
 checkValue : ArgSpec -> String -> Arity -> String -> Result String Unit
 checkValue sp flg (OneOf ms _) v =
-  if hasName v ms then
-    Ok ()
-  else
-    Err (invalidValueMessage sp flg v)
+  if hasName v ms then Ok () else Err (invalidValueMessage sp flg v)
 checkValue sp flg (IntValue _) v = match toInt v
   Some _ => Ok ()
   None => Err (invalidValueMessage sp flg v)
@@ -536,13 +532,13 @@ checkValue _ _ _ _ = Ok ()
 
 findFlag : String -> List FlagSpec -> Option FlagSpec
 findFlag _ [] = None
-findFlag nm (f::rest)
+findFlag nm (f :: rest)
   | hasName nm f.names = Some f
   | otherwise = findFlag nm rest
 
 hasName : String -> List String -> Bool
 hasName _ [] = False
-hasName nm (n::rest) = n == nm || hasName nm rest
+hasName nm (n :: rest) = n == nm || hasName nm rest
 
 -- `--flag=v` → `("--flag", "v")`.  An `=` at position 0 is not a split.
 splitEq : String -> Option (String, String)
@@ -569,7 +565,7 @@ flag nm a = hasKey nm a.given
 
 hasKey : String -> List (String, Option String) -> Bool
 hasKey _ [] = False
-hasKey nm ((k, _)::rest) = k == nm || hasKey nm rest
+hasKey nm ((k, _) :: rest) = k == nm || hasKey nm rest
 
 {- | The value of the flag's first occurrence, or `None`.
 
@@ -581,7 +577,7 @@ flagValue nm a = firstValue nm a.given
 
 firstValue : String -> List (String, Option String) -> Option String
 firstValue _ [] = None
-firstValue nm ((k, v)::rest)
+firstValue nm ((k, v) :: rest)
   | k == nm = v
   | otherwise = firstValue nm rest
 
@@ -593,9 +589,12 @@ export
 lastValue : String -> Args -> Option String
 lastValue nm a = lastValueGo nm a.given None
 
-lastValueGo : String -> List (String, Option String) -> Option String -> Option String
+lastValueGo : String ->
+  List (String, Option String) ->
+  Option String ->
+  Option String
 lastValueGo _ [] acc = acc
-lastValueGo nm ((k, v)::rest) acc
+lastValueGo nm ((k, v) :: rest) acc
   | k == nm = lastValueGo nm rest v
   | otherwise = lastValueGo nm rest acc
 
@@ -609,7 +608,7 @@ flagValues nm a = valuesGo nm a.given
 
 valuesGo : String -> List (String, Option String) -> List String
 valuesGo _ [] = []
-valuesGo nm ((k, v)::rest)
+valuesGo nm ((k, v) :: rest)
   | k == nm = match v
     Some s => s :: valuesGo nm rest
     None => valuesGo nm rest

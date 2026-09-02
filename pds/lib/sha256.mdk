@@ -74,7 +74,7 @@ k = [|
   0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
   0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a,
   0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
-  0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+  0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
 |]
 
 -- ── Bit / word arithmetic ────────────────────────────────────────────
@@ -127,24 +127,28 @@ scheduleWord byteOf i =
   let b1 = byteOf (i * 4 + 1)
   let b2 = byteOf (i * 4 + 2)
   let b3 = byteOf (i * 4 + 3)
-  mask32 (bitOr
-    (bitOr (bitOr (shiftLeft b0 24) (shiftLeft b1 16)) (shiftLeft b2 8))
-    b3)
+  mask32
+    (bitOr
+      (bitOr (bitOr (shiftLeft b0 24) (shiftLeft b1 16)) (shiftLeft b2 8))
+      b3)
 
 fillFirst16 : Array Int -> (Int -> Int) -> Int -> Unit
 fillFirst16 w byteOf i =
-  if i >= 16 then ()
+  if i >= 16 then
+    ()
   else
     setInPlace i (scheduleWord byteOf i) w
     fillFirst16 w byteOf (i + 1)
 
 extendSchedule : Array Int -> Int -> Unit
 extendSchedule w i =
-  if i >= 64 then ()
+  if i >= 64 then
+    ()
   else
     let s0 = smallSigma0 (wordAt w (i - 15))
     let s1 = smallSigma1 (wordAt w (i - 2))
-    let v = mask32 (mask32 (mask32 (wordAt w (i - 16) + s0) + wordAt w (i - 7)) + s1)
+    let v =
+      mask32 (mask32 (mask32 (wordAt w (i - 16) + s0) + wordAt w (i - 7)) + s1)
     setInPlace i v w
     extendSchedule w (i + 1)
 
@@ -163,9 +167,13 @@ type State = (Int, Int, Int, Int, Int, Int, Int, Int)
 
 compressRounds : Array Int -> State -> Int -> State
 compressRounds w (a, b, c, d, e, f, g, h) t =
-  if t >= 64 then (a, b, c, d, e, f, g, h)
+  if t >= 64 then
+    (a, b, c, d, e, f, g, h)
   else
-    let t1 = mask32 (mask32 (mask32 (mask32 (h + bigSigma1 e) + ch e f g) + wordAt k t) + wordAt w t)
+    let t1 =
+      mask32
+        (mask32 (mask32 (mask32 (h + bigSigma1 e) + ch e f g) + wordAt k t)
+          + wordAt w t)
     let t2 = mask32 (bigSigma0 a + maj a b c)
     let a' = mask32 (t1 + t2)
     let e' = mask32 (d + t1)
@@ -176,7 +184,8 @@ compressRounds w (a, b, c, d, e, f, g, h) t =
 compressBlock : (Int -> Int) -> State -> State
 compressBlock byteOf (h0, h1, h2, h3, h4, h5, h6, h7) =
   let w = buildSchedule byteOf
-  let (a, b, c, d, e, f, g, h) = compressRounds w (h0, h1, h2, h3, h4, h5, h6, h7) 0
+  let (a, b, c, d, e, f, g, h) =
+    compressRounds w (h0, h1, h2, h3, h4, h5, h6, h7) 0
   (
     mask32 (h0 + a),
     mask32 (h1 + b),
@@ -194,7 +203,8 @@ compressBlock byteOf (h0, h1, h2, h3, h4, h5, h6, h7) =
 -- the message is ever made.
 processFullBlocks : Array Int -> Int -> State -> Int -> State
 processFullBlocks msg numFull st blockIdx =
-  if blockIdx >= numFull then st
+  if blockIdx >= numFull then
+    st
   else
     let base = blockIdx * 64
     processFullBlocks
@@ -207,7 +217,8 @@ processFullBlocks msg numFull st blockIdx =
 -- the last 8 bytes of the padded block: writes it there.
 writeLenGo : Array Int -> Int -> Int -> Int -> Unit
 writeLenGo out offset bitLen i =
-  if i >= 8 then ()
+  if i >= 8 then
+    ()
   else
     let shiftAmt = (7 - i) * 8
     setInPlace (offset + i) (bitAnd (shiftRight bitLen shiftAmt) 255) out
@@ -248,7 +259,8 @@ processTail tail st =
 -- million-frame stack overflow, not a slowdown.
 byteDomainOk : Array Int -> Int -> Int -> Bool
 byteDomainOk msg len i =
-  if i >= len then True
+  if i >= len then
+    True
   else
     let b = msg[i]
     if b < 0 || b > 255 then False else byteDomainOk msg len (i + 1)

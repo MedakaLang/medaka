@@ -1,5 +1,5 @@
 # META
-source_lines=68
+source_lines=67
 stages=DESUGAR,MARK
 # SOURCE
 -- Implementation of `medaka new <name>`.
@@ -13,20 +13,20 @@ nameContainsChar c name = isSome (stringIndexOf (charToStr c) name)
 
 -- True if the project name is invalid.
 invalidName : String -> Bool
-invalidName name = name == ""
-  || name == "."
-  || name == ".."
-  || nameContainsChar '/' name
-  || nameContainsChar '\\' name
+invalidName name =
+  name == ""
+    || name == "."
+    || name == ".."
+    || nameContainsChar '/' name
+    || nameContainsChar '\\' name
 
 -- File templates, interpolating the project name where needed.
 tomlTemplate : String -> String
-tomlTemplate name = stringConcat
-  [
-    "[package]\nname = \"",
-    name,
-    "\"\nversion = \"0.1.0\"\nentry = \"main.mdk\"\n",
-  ]
+tomlTemplate name = stringConcat [
+  "[package]\nname = \"",
+  name,
+  "\"\nversion = \"0.1.0\"\nentry = \"main.mdk\"\n",
+]
 
 mainTemplate : String
 mainTemplate = "main : <IO> Unit\nmain = println \"Hello, Medaka\"\n"
@@ -55,21 +55,20 @@ newProject name =
   if invalidName name then
     let _ = ePutStrLn ("medaka new: invalid project name: \"" ++ name ++ "\"")
     2
-  else
-    if fileExists name then
-      let _ = ePutStrLn ("medaka new: path already exists: " ++ name)
+  else if fileExists name then
+    let _ = ePutStrLn ("medaka new: path already exists: " ++ name)
+    1
+  else match makeDir name
+    Err msg =>
+      let _ = ePutStrLn ("medaka new: mkdir failed: " ++ msg)
       1
-    else match makeDir name
-      Err msg =>
-        let _ = ePutStrLn ("medaka new: mkdir failed: " ++ msg)
-        1
-      Ok _ =>
-        let _ = writeProjectFile (name ++ "/medaka.toml") (tomlTemplate name)
-        let _ = writeProjectFile (name ++ "/main.mdk") mainTemplate
-        let _ = writeProjectFile (name ++ "/.gitignore") gitignoreTemplate
-        let _ = writeProjectFile (name ++ "/README.md") (readmeTemplate name)
-        let _ = putStrLn ("Created " ++ name ++ "/")
-        0
+    Ok _ =>
+      let _ = writeProjectFile (name ++ "/medaka.toml") (tomlTemplate name)
+      let _ = writeProjectFile (name ++ "/main.mdk") mainTemplate
+      let _ = writeProjectFile (name ++ "/.gitignore") gitignoreTemplate
+      let _ = writeProjectFile (name ++ "/README.md") (readmeTemplate name)
+      let _ = putStrLn ("Created " ++ name ++ "/")
+      0
 # DESUGAR
 (DTypeSig false "nameContainsChar" (TyFun (TyCon "Char") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "nameContainsChar" ((PVar "c") (PVar "name")) (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (EApp (EVar "charToStr") (EVar "c"))) (EVar "name"))))

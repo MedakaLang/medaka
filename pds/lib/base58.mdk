@@ -87,7 +87,8 @@ charAtA i arr = match get i arr
 -- scan that allocates nothing.
 byteDomainOk : Array Int -> Int -> Int -> Bool
 byteDomainOk bytes len i =
-  if i >= len then True
+  if i >= len then
+    True
   else
     let b = bytes[i]
     if b < 0 || b > 255 then False else byteDomainOk bytes len (i + 1)
@@ -112,7 +113,8 @@ countLeadingZeroBytes bytes i
 carryByteIntoDigits : Array Int -> Int -> Int -> Int -> Int -> Int
 carryByteIntoDigits buf size i carry length =
   let j = size - 1 - i
-  if carry == 0 && i >= length || j < 0 then i
+  if carry == 0 && i >= length || j < 0 then
+    i
   else
     let cur = carry + 256 * byteAt j buf
     buf[j] := cur % 58
@@ -216,7 +218,8 @@ digitValueOrErr c = match digitIndexOf c 0
 -- value, `Err` naming the first offending character.
 collectDigitValues : Array Char -> Int -> Int -> Result String (List Int)
 collectDigitValues chars i n =
-  if i >= n then Ok []
+  if i >= n then
+    Ok []
   else match digitValueOrErr (charAtA i chars)
     Err e => Err e
     Ok d => map (d :: _) (collectDigitValues chars (i + 1) n)
@@ -225,7 +228,8 @@ collectDigitValues chars i n =
 carryDigitIntoBytes : Array Int -> Int -> Int -> Int -> Int -> Int
 carryDigitIntoBytes buf size i carry length =
   let j = size - 1 - i
-  if carry == 0 && i >= length || j < 0 then i
+  if carry == 0 && i >= length || j < 0 then
+    i
   else
     let cur = carry + 58 * byteAt j buf
     buf[j] := cur % 256
@@ -233,7 +237,7 @@ carryDigitIntoBytes buf size i carry length =
 
 foldDigitsIntoBytes : List Int -> Array Int -> Int -> Int -> Int
 foldDigitsIntoBytes [] buf size length = length
-foldDigitsIntoBytes (d::rest) buf size length =
+foldDigitsIntoBytes (d :: rest) buf size length =
   let newLength = carryDigitIntoBytes buf size 0 d length
   foldDigitsIntoBytes rest buf size newLength
 
@@ -269,7 +273,8 @@ base58btcDecode s =
   -- itself O(n)-deep on the interpreter, so a check placed any later would be
   -- reached only after the stack it exists to protect had already been spent.
   if n > base58btcMaxInputChars then
-    Err "base58btcDecode: input longer than \{intToString base58btcMaxInputChars} characters (denial-of-service guard, not a protocol limit)"
+    Err
+      "base58btcDecode: input longer than \{intToString base58btcMaxInputChars} characters (denial-of-service guard, not a protocol limit)"
   else
     let zeroes = countLeadingOneChars chars 0 n
     match collectDigitValues chars zeroes n
@@ -280,5 +285,6 @@ base58btcDecode s =
         let buf = make size 0
         let length = foldDigitsIntoBytes digits buf size 0
         let start = size - length
-        Ok (arrayFromList
-          (replicateInt 0 zeroes ++ collectBytesFrom buf start size))
+        Ok
+          (arrayFromList
+            (replicateInt 0 zeroes ++ collectBytesFrom buf start size))

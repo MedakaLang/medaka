@@ -104,7 +104,7 @@ wasmReachFilter (CProgram groups ctorArs ctorTypes impls) =
 -- below are effectful folds, not value folds.
 forEachU : (a -> Unit) -> List a -> Unit
 forEachU _ [] = ()
-forEachU f (x::xs) = let _ = f x in forEachU f xs
+forEachU f (x :: xs) = let _ = f x in forEachU f xs
 
 bindKey : CBind -> String
 bindKey (CBind name _) = name
@@ -152,29 +152,45 @@ memoRootNames groups =
 
 -- key -> the keys its bodies reference.  A binding and a same-named method merge
 -- into one entry (over-approximation in the keep direction only).
-refGraph : HashMap String Unit -> List CBind -> List CImplEntry -> HashMap String (List String)
+refGraph : HashMap String Unit ->
+  List CBind ->
+  List CImplEntry ->
+  HashMap String (List String)
 refGraph defined groups impls =
   let g = new ()
   let _ = forEachU (b => addBindEdges defined g b) groups
   let _ = forEachU (e => addImplEdges defined g e) impls
   g
 
-addBindEdges : HashMap String Unit -> HashMap String (List String) -> CBind -> Unit
+addBindEdges : HashMap String Unit ->
+  HashMap String (List String) ->
+  CBind ->
+  Unit
 addBindEdges defined g (CBind name clauses) =
   addEdges defined g name (flatMap refsClause clauses)
 
-addImplEdges : HashMap String Unit -> HashMap String (List String) -> CImplEntry -> Unit
+addImplEdges : HashMap String Unit ->
+  HashMap String (List String) ->
+  CImplEntry ->
+  Unit
 addImplEdges defined g (CImplEntry method _ body) =
   addEdges defined g method (refsImplBody body)
 
-addEdges : HashMap String Unit -> HashMap String (List String) -> String -> List String -> Unit
+addEdges : HashMap String Unit ->
+  HashMap String (List String) ->
+  String ->
+  List String ->
+  Unit
 addEdges defined g key refs =
   setInPlace key (map (canonKey defined) refs ++ findWithDefault [] key g) g
 
 -- BFS worklist closure; `has` skips already-processed keys so each is expanded once.
-closure : HashMap String (List String) -> HashMap String Unit -> List String -> Unit
+closure : HashMap String (List String) ->
+  HashMap String Unit ->
+  List String ->
+  Unit
 closure _ _ [] = ()
-closure graph seen (w::work)
+closure graph seen (w :: work)
   | has w seen = closure graph seen work
   | otherwise =
     let _ = setInPlace w () seen

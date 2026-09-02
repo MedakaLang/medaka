@@ -18,10 +18,10 @@ matchHeadAs xs = match xs
 (DFunDef false "tailAsCons" ((PCons (PVar "x") (PAs "t" (PCons (PVar "y") PWild)))) (EVar "t"))
 (DFunDef false "matchHeadAs" ((PVar "xs")) (EMatch (EVar "xs") (arm (PCons (PAs "t" (PCon "A" PWild)) (PVar "rest")) () (EVar "t")) (arm PWild () (EVar "xs"))))
 # PRINTER
-headAsCons ((t@(A _))::rest) = t
-tailAsCons (x::t@(y::_)) = t
+headAsCons ((t@(A _)) :: rest) = t
+tailAsCons (x :: t@(y :: _)) = t
 matchHeadAs xs = match xs
-  (t@(A _))::rest => t
+  (t@(A _)) :: rest => t
   _ => xs
 # DESUGAR
 (DFunDef false "headAsCons" ((PCons (PAs "t" (PCon "A" PWild)) (PVar "rest"))) (EVar "t"))

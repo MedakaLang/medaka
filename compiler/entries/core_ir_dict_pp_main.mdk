@@ -31,6 +31,9 @@ runDict runtimeDecls preludeDecls userDecls =
   let userNames = funNamesOf userDecls
   let livePrelude = dropShadowedExp userNames preludeDecls
   let combined = livePrelude ++ userDecls
-  let dictNames = preludeReturnPosDictNames livePrelude combined ++ preludeArgPosDictNames livePrelude combined ++ constrainedSigNames userDecls
+  let dictNames =
+    preludeReturnPosDictNames livePrelude combined
+      ++ preludeArgPosDictNames livePrelude combined
+      ++ constrainedSigNames userDecls
   let decls = elaborateDict runtimeDecls dictNames userNames combined
   cevalMainOf decls (lowerProgram decls)

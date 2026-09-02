@@ -34,7 +34,8 @@ two32 : Array Int
 two32 = bytes "0000000000000000000000000000000000000000000000000000000000000002"
 
 expectedCompact : String
-expectedCompact = "a0b37f8fba683cc68f6574cd43b39f0343a50008bf6ccea9d13231d9e7e2e1e411edc8d307254296264aebfc3dc76cd8b668373a072fd64665b50000e9fcce52"
+expectedCompact =
+  "a0b37f8fba683cc68f6574cd43b39f0343a50008bf6ccea9d13231d9e7e2e1e411edc8d307254296264aebfc3dc76cd8b668373a072fd64665b50000e9fcce52"
 
 highSCompact : Array Int
 highSCompact =
@@ -64,27 +65,48 @@ expectRejected label compact = match ecdsaSignatureFromCompact compact
   Ok _ => panic "constant_time_signing: \{label} compact input was accepted"
 
 main =
-  let key = scalar "0000000000000000000000000000000000000000000000000000000000000001"
+  let key =
+    scalar "0000000000000000000000000000000000000000000000000000000000000001"
   let (validBit, _, _, _, _, compact) = ecdsaSignDigestForTest key zero32
-  let () = if validBit == 1 && encode compact == expectedCompact then
-    println "sign:\{encode compact}"
-  else
-    panic "constant_time_signing: exact signature drifted"
-  let ((normal0, normal1), (candidate0Valid, candidate0R, candidate0RawS, candidate0LowS), (candidate1Valid, candidate1R, candidate1RawS, candidate1LowS), (selected1, selected1Compact)) = ecdsaInjectedSignProbeForTest key zero32 one32 0 two32 1
-  let candidate1Ok = normal0 /= normal1 && candidate0Valid == 0 && candidate1Valid == 1 && selected1 == 1 && candidate0R /= candidate1R && encode selected1Compact == encode candidate1R ++ encode candidate1LowS
-  let () = if candidate1Ok then
-    println "candidate-1:computations=2:c0.valid=0:c0.r=\{encode candidate0R}:c0.raw_s=\{encode candidate0RawS}:c0.low_s=\{encode candidate0LowS}:c1.valid=1:c1.r=\{encode candidate1R}:c1.raw_s=\{encode candidate1RawS}:c1.low_s=\{encode candidate1LowS}"
-  else
-    panic "constant_time_signing: complete candidate-1 seam disconnected"
-  let ((exhaustNormal0, exhaustNormal1), (exhaust0Valid, exhaust0R, exhaust0RawS, exhaust0LowS), (exhaust1Valid, exhaust1R, exhaust1RawS, exhaust1LowS), (exhausted, exhaustedCompact)) = ecdsaInjectedSignProbeForTest key zero32 one32 0 two32 0
-  let exhaustionOk = exhaustNormal0 == normal0 && exhaustNormal1 == normal1 && exhaust0Valid == 0 && exhaust1Valid == 0 && exhausted == 0 && arrayLength exhaustedCompact == 64
-  let () = if exhaustionOk then
-    println "exhaustion:computations=2:c0.valid=0:c0.r=\{encode exhaust0R}:c0.raw_s=\{encode exhaust0RawS}:c0.low_s=\{encode exhaust0LowS}:c1.valid=0:c1.r=\{encode exhaust1R}:c1.raw_s=\{encode exhaust1RawS}:c1.low_s=\{encode exhaust1LowS}:aggregate=0"
-  else
-    panic "constant_time_signing: complete exhaustion seam disconnected"
-  let () = if not (ecdsaVerifyRawForTest generatorPoint zero32 highR highS) then
-    expectRejected "high-s:compact=reject:verify" highSCompact
-  else
-    panic "constant_time_signing: high-s verifier boundary accepted"
+  let () =
+    if validBit == 1 && encode compact == expectedCompact then
+      println "sign:\{encode compact}"
+    else
+      panic "constant_time_signing: exact signature drifted"
+  let ((normal0, normal1), (candidate0Valid, candidate0R, candidate0RawS, candidate0LowS), (candidate1Valid, candidate1R, candidate1RawS, candidate1LowS), (selected1, selected1Compact)) =
+    ecdsaInjectedSignProbeForTest key zero32 one32 0 two32 1
+  let candidate1Ok =
+    normal0 /= normal1
+      && candidate0Valid == 0
+      && candidate1Valid == 1
+      && selected1 == 1
+      && candidate0R /= candidate1R
+      && encode selected1Compact == encode candidate1R ++ encode candidate1LowS
+  let () =
+    if candidate1Ok then
+      println
+        "candidate-1:computations=2:c0.valid=0:c0.r=\{encode candidate0R}:c0.raw_s=\{encode candidate0RawS}:c0.low_s=\{encode candidate0LowS}:c1.valid=1:c1.r=\{encode candidate1R}:c1.raw_s=\{encode candidate1RawS}:c1.low_s=\{encode candidate1LowS}"
+    else
+      panic "constant_time_signing: complete candidate-1 seam disconnected"
+  let ((exhaustNormal0, exhaustNormal1), (exhaust0Valid, exhaust0R, exhaust0RawS, exhaust0LowS), (exhaust1Valid, exhaust1R, exhaust1RawS, exhaust1LowS), (exhausted, exhaustedCompact)) =
+    ecdsaInjectedSignProbeForTest key zero32 one32 0 two32 0
+  let exhaustionOk =
+    exhaustNormal0 == normal0
+      && exhaustNormal1 == normal1
+      && exhaust0Valid == 0
+      && exhaust1Valid == 0
+      && exhausted == 0
+      && arrayLength exhaustedCompact == 64
+  let () =
+    if exhaustionOk then
+      println
+        "exhaustion:computations=2:c0.valid=0:c0.r=\{encode exhaust0R}:c0.raw_s=\{encode exhaust0RawS}:c0.low_s=\{encode exhaust0LowS}:c1.valid=0:c1.r=\{encode exhaust1R}:c1.raw_s=\{encode exhaust1RawS}:c1.low_s=\{encode exhaust1LowS}:aggregate=0"
+    else
+      panic "constant_time_signing: complete exhaustion seam disconnected"
+  let () =
+    if not (ecdsaVerifyRawForTest generatorPoint zero32 highR highS) then
+      expectRejected "high-s:compact=reject:verify" highSCompact
+    else
+      panic "constant_time_signing: high-s verifier boundary accepted"
   let () = expectRejected "malformed" (arrayMake 63 0)
   println "PASS signing-value-carrier"
