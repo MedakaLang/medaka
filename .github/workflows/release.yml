@@ -56,7 +56,7 @@ jobs:
         run: make dist
 
       - name: Smoke-test the produced tarball
-        run: sh test/dist_install_smoke.sh
+        run: sh test/dist_install_smoke.sh dist/*.tar.gz
 
       - name: Upload tarball
         uses: actions/upload-artifact@v4
@@ -97,7 +97,7 @@ jobs:
         run: make dist
 
       - name: Smoke-test the produced tarball
-        run: sh test/dist_install_smoke.sh
+        run: sh test/dist_install_smoke.sh dist/*.tar.gz
 
       - name: Upload tarball
         uses: actions/upload-artifact@v4
@@ -148,7 +148,7 @@ jobs:
           cat SHA256SUMS
 
       - name: Create/update GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: |
             dist/*.tar.gz

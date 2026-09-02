@@ -251,6 +251,14 @@ FP_COMPILER="$(src_fingerprint_compiler)"
 BUILD_COMMIT=""
 if command -v git >/dev/null 2>&1 && [ -e "$ROOT/.git" ]; then
   BUILD_COMMIT="$(cd "$ROOT" && git rev-parse --short HEAD 2>/dev/null)"
+  # #2514 review F-12: a modified tree otherwise reports a clean commit,
+  # which is exactly backwards for a field whose only purpose is triaging bug
+  # reports ("bug reports are useless without it", the S-3 mission this
+  # provenance string exists for) — a `-dirty` suffix is the difference
+  # between a usable and a misleading answer for every local/dev build.
+  if [ -n "$BUILD_COMMIT" ] && [ -n "$(cd "$ROOT" && git status --porcelain 2>/dev/null)" ]; then
+    BUILD_COMMIT="${BUILD_COMMIT}-dirty"
+  fi
 fi
 BUILD_DATE="$(date -u +%Y-%m-%d 2>/dev/null)"
 

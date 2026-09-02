@@ -9,26 +9,38 @@
 # (`medaka build`), and executes the produced binary. All three must succeed
 # with no reference back to this repo — that's what "relocatable" means.
 #
-# Usage:  sh test/dist_install_smoke.sh
+# Usage:  sh test/dist_install_smoke.sh [tarball]
+#   tarball  smoke-test THIS already-built tarball instead of packaging a
+#            fresh one — release.yml passes the exact file it is about to
+#            upload/checksum/publish, so the artifact validated here and the
+#            artifact that ships are provably the same bytes (#2514 review
+#            F-5: a smoke test that repackages diverges from what's shipped).
+#            Omitted: packages a fresh tarball via scripts/make_dist.sh, as
+#            a local/CI gate run does.
 # Exit:   0 all three steps succeed; 1 any step fails; 2 setup failure
 #         (missing build, tar not found).
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MEDAKA_BIN="$ROOT/medaka"
-
-[ -x "$MEDAKA_BIN" ] || { echo "build native first: make medaka (missing $MEDAKA_BIN)"; exit 2; }
+GIVEN_TARBALL="${1:-}"
 
 DIST_TMP="$(mktemp -d "${TMPDIR:-/tmp}/dist_smoke_build.XXXXXX")" || exit 2
 INSTALL_TMP="$(mktemp -d "${TMPDIR:-/tmp}/dist_smoke_install.XXXXXX")" || exit 2
 cleanup() { rm -rf "$DIST_TMP" "$INSTALL_TMP"; }
 trap cleanup EXIT INT TERM
 
-TARBALL="$(sh "$ROOT/scripts/make_dist.sh" "$DIST_TMP")" || {
-  echo "make_dist.sh failed to produce a tarball"
-  exit 2
-}
-[ -f "$TARBALL" ] || { echo "make_dist.sh reported $TARBALL but it does not exist"; exit 2; }
+if [ -n "$GIVEN_TARBALL" ]; then
+  [ -f "$GIVEN_TARBALL" ] || { echo "dist_install_smoke.sh: given tarball does not exist: $GIVEN_TARBALL"; exit 2; }
+  TARBALL="$GIVEN_TARBALL"
+else
+  [ -x "$MEDAKA_BIN" ] || { echo "build native first: make medaka (missing $MEDAKA_BIN)"; exit 2; }
+  TARBALL="$(sh "$ROOT/scripts/make_dist.sh" "$DIST_TMP")" || {
+    echo "make_dist.sh failed to produce a tarball"
+    exit 2
+  }
+  [ -f "$TARBALL" ] || { echo "make_dist.sh reported $TARBALL but it does not exist"; exit 2; }
+fi
 
 tar -C "$INSTALL_TMP" -xzf "$TARBALL" || { echo "failed to unpack $TARBALL"; exit 2; }
 
@@ -36,7 +48,7 @@ tar -C "$INSTALL_TMP" -xzf "$TARBALL" || { echo "failed to unpack $TARBALL"; exi
 TREE="$(find "$INSTALL_TMP" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
 [ -n "$TREE" ] || { echo "no top-level dir found under $INSTALL_TMP"; exit 2; }
 
-for f in medaka medaka_emitter stdlib runtime/medaka_rt.c; do
+for f in medaka medaka_emitter stdlib runtime/medaka_rt.c LICENSE README.md; do
   [ -e "$TREE/$f" ] || { echo "unpacked tree missing $f"; exit 1; }
 done
 

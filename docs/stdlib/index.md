@@ -591,8 +591,6 @@ The host primitives.
 - [`args`](runtime.md#args)
 - [`getEnv`](runtime.md#getenv)
 - [`executablePath`](runtime.md#executablepath)
-- [`buildCommit`](runtime.md#buildcommit)
-- [`buildDate`](runtime.md#builddate)
 - [`runCommand`](runtime.md#runcommand)
 - [`exit`](runtime.md#exit)
 - [`panic`](runtime.md#panic)

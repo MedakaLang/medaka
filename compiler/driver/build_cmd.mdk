@@ -1240,16 +1240,22 @@ withEmitHalf half prog args =
 -- `main` is neither a fn bind nor a value bind) — it exists only to give the loader
 -- a graph to walk.  DCE is off in this mode, so what lands in the object is the
 -- WHOLE prelude, not what the stub happened to reach.
+-- #2514 review F-3: same probeClang gap as emitRtObj above — this entry
+-- point had libgcMissingError's dedup but not the clang probe, so it still
+-- printed the raw "clang failed compiling the prelude object /
+-- No such file or directory" pair when clang was absent.
 export
 emitPreludeObj : String -> String -> String -> String -> <IO> BuildResult
-emitPreludeObj cc root medaka outObjPath = match makeTempDir ()
-  Err e =>
-    BuildErr
-      "error: could not create a scratch directory for the prelude compile: \{e}"
-  Ok tmpDir =>
-    let res = emitPreludeObjIn cc root medaka outObjPath tmpDir
-    let _ = cleanupTempDir tmpDir
-    res
+emitPreludeObj cc root medaka outObjPath = match probeClang cc
+  None => BuildErr (clangMissingError cc)
+  Some _ => match makeTempDir ()
+    Err e =>
+      BuildErr
+        "error: could not create a scratch directory for the prelude compile: \{e}"
+    Ok tmpDir =>
+      let res = emitPreludeObjIn cc root medaka outObjPath tmpDir
+      let _ = cleanupTempDir tmpDir
+      res
 
 emitPreludeObjIn : String ->
   String ->
@@ -1323,7 +1329,18 @@ emitPreludeObjIn cc root medaka outObjPath tmpDir = match detectGC cc tmpDir
 -- point: it removes the drift surface that this optimization keeps rediscovering.
 export
 emitRtObj : String -> String -> String -> <IO> BuildResult
-emitRtObj cc root outObjPath = match makeTempDir ()
+emitRtObj cc root outObjPath = match probeClang cc
+  None => BuildErr (clangMissingError cc)
+  Some _ => emitRtObjGo cc root outObjPath
+
+-- The original body, unmoved — split out only so the up-front probe above
+-- doesn't force reindenting this whole function under a match arm (same
+-- shape as runBuildNativeRoots/runBuildNativeRootsGo above; #2514 review F-3
+-- — this entry point had libgcMissingError's dedup but not probeClang's,
+-- so it still printed the raw "clang failed compiling runtime object /
+-- No such file or directory" pair when clang was absent).
+emitRtObjGo : String -> String -> String -> <IO> BuildResult
+emitRtObjGo cc root outObjPath = match makeTempDir ()
   Err e =>
     BuildErr
       "error: could not create a scratch directory for the runtime compile: \{e}"

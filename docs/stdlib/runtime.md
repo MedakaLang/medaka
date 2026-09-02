@@ -243,18 +243,6 @@ executablePath : Unit -> <Env> String
 
 The absolute path of the running executable.
 
-### `buildCommit`
-
-```
-buildCommit : Unit -> <Env> String
-```
-
-### `buildDate`
-
-```
-buildDate : Unit -> <Env> String
-```
-
 ### `runCommand`
 
 ```
