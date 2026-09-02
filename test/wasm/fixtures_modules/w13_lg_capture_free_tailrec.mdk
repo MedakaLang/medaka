@@ -1,0 +1,20 @@
+-- S-4 (prologue half): a CAPTURE-FREE lifted let-group member's `$clos` depends on
+-- nothing at runtime, so it must be read from a hoisted module global rather than
+-- rebuilt -- at the use site AND in every lifted member's prologue.  `sumTo` is a
+-- `where` worker reached by a tail self-call, so its prologue runs once per recursion
+-- step; before the hoist each step allocated a fresh `$argarr` + `$clos`.  `dbl` is the
+-- block-`let` (emitSelfRecLocalBind) shape, whose use-site rebuild had no hoisted
+-- branch at all.  Counterpart of w12_where_capture, whose group DOES capture and so
+-- must keep rebuilding.
+-- f 10 = 55, g 3 = 6 -> 61.
+f : Int -> Int
+f k = sumTo 0 k
+  where
+    sumTo acc n = if n == 0 then acc else sumTo (acc + n) (n - 1)
+
+g : Int -> Int
+g k =
+  let dbl n acc = if n == 0 then acc else dbl (n - 1) (acc + 2)
+  dbl k 0
+
+main = f 10 + g 3

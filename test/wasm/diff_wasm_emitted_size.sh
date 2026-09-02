@@ -88,13 +88,13 @@ TYPED_FUNCS_CEIL=110
 # every ceiling above still improves (fewer bytes/funcs/ratio look like a win
 # when they're actually fixtures dropping out). A gap appearing at all here is
 # itself the regression signal this gate exists to catch.
-MODULES_OK_EXACT=43
+MODULES_OK_EXACT=44
 PLAIN_OK_EXACT=157
 TYPED_OK_EXACT=9
 
 # ── F1's wasm-opt-derived function-count floor (F2/S2-4) ───────────────────
 # 1,518 — a FIXED historical reference number from F1's research pass (the
-# whole 43-fixture modules corpus, aggregate), not a fresh reachability
+# modules corpus as it stood then, aggregate), not a fresh reachability
 # computation (that would violate the S1^S5 shared-decision constraint — see
 # the header note above). Used only as the denominator for a second,
 # function-level ratio the contract's §7 exit criterion 2 literally asks for
