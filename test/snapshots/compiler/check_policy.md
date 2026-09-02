@@ -225,7 +225,7 @@ collectEVars (ESlice a b c _ _) = collectEVars a
   ++ collectEVars c
 collectEVars (EIndex a b _) = collectEVars a ++ collectEVars b
 collectEVars (EBlock stmts) = concatMapCP collectStmt stmts
-collectEVars (EDo stmts) = concatMapCP collectStmt stmts
+collectEVars (EDo _ stmts) = concatMapCP collectStmt stmts
 collectEVars _ = []
 
 collectBind : LetBind -> List String
@@ -816,7 +816,7 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DFunDef false "collectEVars" ((PCon "ESlice" (PVar "a") (PVar "b") (PVar "c") PWild PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "collectEVars") (EVar "a")) (EApp (EVar "collectEVars") (EVar "b"))) (EApp (EVar "collectEVars") (EVar "c"))))
 (DFunDef false "collectEVars" ((PCon "EIndex" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EVar "collectEVars") (EVar "a")) (EApp (EVar "collectEVars") (EVar "b"))))
 (DFunDef false "collectEVars" ((PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "concatMapCP") (EVar "collectStmt")) (EVar "stmts")))
-(DFunDef false "collectEVars" ((PCon "EDo" (PVar "stmts"))) (EApp (EApp (EVar "concatMapCP") (EVar "collectStmt")) (EVar "stmts")))
+(DFunDef false "collectEVars" ((PCon "EDo" PWild (PVar "stmts"))) (EApp (EApp (EVar "concatMapCP") (EVar "collectStmt")) (EVar "stmts")))
 (DFunDef false "collectEVars" (PWild) (EListLit))
 (DTypeSig false "collectBind" (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "collectBind" ((PCon "LetBind" PWild (PVar "clauses"))) (EApp (EApp (EVar "concatMapCP") (EVar "collectClause")) (EVar "clauses")))
@@ -1039,7 +1039,7 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DFunDef false "collectEVars" ((PCon "ESlice" (PVar "a") (PVar "b") (PVar "c") PWild PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "collectEVars") (EVar "a")) (EApp (EVar "collectEVars") (EVar "b"))) (EApp (EVar "collectEVars") (EVar "c"))))
 (DFunDef false "collectEVars" ((PCon "EIndex" (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EVar "collectEVars") (EVar "a")) (EApp (EVar "collectEVars") (EVar "b"))))
 (DFunDef false "collectEVars" ((PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "concatMapCP") (EVar "collectStmt")) (EVar "stmts")))
-(DFunDef false "collectEVars" ((PCon "EDo" (PVar "stmts"))) (EApp (EApp (EVar "concatMapCP") (EVar "collectStmt")) (EVar "stmts")))
+(DFunDef false "collectEVars" ((PCon "EDo" PWild (PVar "stmts"))) (EApp (EApp (EVar "concatMapCP") (EVar "collectStmt")) (EVar "stmts")))
 (DFunDef false "collectEVars" (PWild) (EListLit))
 (DTypeSig false "collectBind" (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "collectBind" ((PCon "LetBind" PWild (PVar "clauses"))) (EApp (EApp (EVar "concatMapCP") (EVar "collectClause")) (EVar "clauses")))

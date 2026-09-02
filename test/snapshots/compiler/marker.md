@@ -347,7 +347,7 @@ collectVars (ESlice e0 lo hi _ _) = collectVars e0
   ++ collectVars lo
   ++ collectVars hi
 collectVars (EBlock stmts) = flatMap doStmtVars stmts
-collectVars (EDo stmts) = flatMap doStmtVars stmts
+collectVars (EDo _ stmts) = flatMap doStmtVars stmts
 collectVars (EAnnot e0 _) = collectVars e0
 collectVars (EStringInterp parts) = flatMap interpVars parts
 collectVars (EGuards arms) = flatMap guardArmVars arms
@@ -477,7 +477,7 @@ localBoundExpr (ESlice e0 lo hi _ _) = localBoundExpr e0
   ++ localBoundExpr lo
   ++ localBoundExpr hi
 localBoundExpr (EBlock stmts) = flatMap doStmtBound stmts
-localBoundExpr (EDo stmts) = flatMap doStmtBound stmts
+localBoundExpr (EDo _ stmts) = flatMap doStmtBound stmts
 localBoundExpr (EAnnot e0 _) = localBoundExpr e0
 localBoundExpr (EStringInterp parts) = flatMap interpBound parts
 localBoundExpr (EGuards arms) = flatMap guardArmBound arms
@@ -722,7 +722,7 @@ markerFor preludeProg =
 (DFunDef false "collectVars" ((PCon "ERangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EVar "collectVars") (EVar "lo")) (EApp (EVar "collectVars") (EVar "hi"))))
 (DFunDef false "collectVars" ((PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") PWild PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "collectVars") (EVar "e0")) (EApp (EVar "collectVars") (EVar "lo"))) (EApp (EVar "collectVars") (EVar "hi"))))
 (DFunDef false "collectVars" ((PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "flatMap") (EVar "doStmtVars")) (EVar "stmts")))
-(DFunDef false "collectVars" ((PCon "EDo" (PVar "stmts"))) (EApp (EApp (EVar "flatMap") (EVar "doStmtVars")) (EVar "stmts")))
+(DFunDef false "collectVars" ((PCon "EDo" PWild (PVar "stmts"))) (EApp (EApp (EVar "flatMap") (EVar "doStmtVars")) (EVar "stmts")))
 (DFunDef false "collectVars" ((PCon "EAnnot" (PVar "e0") PWild)) (EApp (EVar "collectVars") (EVar "e0")))
 (DFunDef false "collectVars" ((PCon "EStringInterp" (PVar "parts"))) (EApp (EApp (EVar "flatMap") (EVar "interpVars")) (EVar "parts")))
 (DFunDef false "collectVars" ((PCon "EGuards" (PVar "arms"))) (EApp (EApp (EVar "flatMap") (EVar "guardArmVars")) (EVar "arms")))
@@ -800,7 +800,7 @@ markerFor preludeProg =
 (DFunDef false "localBoundExpr" ((PCon "ERangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EVar "localBoundExpr") (EVar "lo")) (EApp (EVar "localBoundExpr") (EVar "hi"))))
 (DFunDef false "localBoundExpr" ((PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") PWild PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "localBoundExpr") (EVar "e0")) (EApp (EVar "localBoundExpr") (EVar "lo"))) (EApp (EVar "localBoundExpr") (EVar "hi"))))
 (DFunDef false "localBoundExpr" ((PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "flatMap") (EVar "doStmtBound")) (EVar "stmts")))
-(DFunDef false "localBoundExpr" ((PCon "EDo" (PVar "stmts"))) (EApp (EApp (EVar "flatMap") (EVar "doStmtBound")) (EVar "stmts")))
+(DFunDef false "localBoundExpr" ((PCon "EDo" PWild (PVar "stmts"))) (EApp (EApp (EVar "flatMap") (EVar "doStmtBound")) (EVar "stmts")))
 (DFunDef false "localBoundExpr" ((PCon "EAnnot" (PVar "e0") PWild)) (EApp (EVar "localBoundExpr") (EVar "e0")))
 (DFunDef false "localBoundExpr" ((PCon "EStringInterp" (PVar "parts"))) (EApp (EApp (EVar "flatMap") (EVar "interpBound")) (EVar "parts")))
 (DFunDef false "localBoundExpr" ((PCon "EGuards" (PVar "arms"))) (EApp (EApp (EVar "flatMap") (EVar "guardArmBound")) (EVar "arms")))
@@ -991,7 +991,7 @@ markerFor preludeProg =
 (DFunDef false "collectVars" ((PCon "ERangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EVar "collectVars") (EVar "lo")) (EApp (EVar "collectVars") (EVar "hi"))))
 (DFunDef false "collectVars" ((PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") PWild PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "collectVars") (EVar "e0")) (EApp (EVar "collectVars") (EVar "lo"))) (EApp (EVar "collectVars") (EVar "hi"))))
 (DFunDef false "collectVars" ((PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EDictApp "flatMap") (EVar "doStmtVars")) (EVar "stmts")))
-(DFunDef false "collectVars" ((PCon "EDo" (PVar "stmts"))) (EApp (EApp (EDictApp "flatMap") (EVar "doStmtVars")) (EVar "stmts")))
+(DFunDef false "collectVars" ((PCon "EDo" PWild (PVar "stmts"))) (EApp (EApp (EDictApp "flatMap") (EVar "doStmtVars")) (EVar "stmts")))
 (DFunDef false "collectVars" ((PCon "EAnnot" (PVar "e0") PWild)) (EApp (EVar "collectVars") (EVar "e0")))
 (DFunDef false "collectVars" ((PCon "EStringInterp" (PVar "parts"))) (EApp (EApp (EDictApp "flatMap") (EVar "interpVars")) (EVar "parts")))
 (DFunDef false "collectVars" ((PCon "EGuards" (PVar "arms"))) (EApp (EApp (EDictApp "flatMap") (EVar "guardArmVars")) (EVar "arms")))
@@ -1069,7 +1069,7 @@ markerFor preludeProg =
 (DFunDef false "localBoundExpr" ((PCon "ERangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EVar "localBoundExpr") (EVar "lo")) (EApp (EVar "localBoundExpr") (EVar "hi"))))
 (DFunDef false "localBoundExpr" ((PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") PWild PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "localBoundExpr") (EVar "e0")) (EApp (EVar "localBoundExpr") (EVar "lo"))) (EApp (EVar "localBoundExpr") (EVar "hi"))))
 (DFunDef false "localBoundExpr" ((PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EDictApp "flatMap") (EVar "doStmtBound")) (EVar "stmts")))
-(DFunDef false "localBoundExpr" ((PCon "EDo" (PVar "stmts"))) (EApp (EApp (EDictApp "flatMap") (EVar "doStmtBound")) (EVar "stmts")))
+(DFunDef false "localBoundExpr" ((PCon "EDo" PWild (PVar "stmts"))) (EApp (EApp (EDictApp "flatMap") (EVar "doStmtBound")) (EVar "stmts")))
 (DFunDef false "localBoundExpr" ((PCon "EAnnot" (PVar "e0") PWild)) (EApp (EVar "localBoundExpr") (EVar "e0")))
 (DFunDef false "localBoundExpr" ((PCon "EStringInterp" (PVar "parts"))) (EApp (EApp (EDictApp "flatMap") (EVar "interpBound")) (EVar "parts")))
 (DFunDef false "localBoundExpr" ((PCon "EGuards" (PVar "arms"))) (EApp (EApp (EDictApp "flatMap") (EVar "guardArmBound")) (EVar "arms")))

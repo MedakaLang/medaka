@@ -172,7 +172,7 @@ exprSexp (EIndex a i _) = node "EIndex" [exprSexp a, exprSexp i]
 exprSexp (EAnnot e t) = node "EAnnot" [exprSexp e, tySexp t]
 exprSexp (EHeadAnnot e t) = node "EHeadAnnot" [exprSexp e, tySexp t]
 exprSexp (EBlock stmts) = node "EBlock" (map doStmtSexp stmts)
-exprSexp (EDo stmts) = node "EDo" (map doStmtSexp stmts)
+exprSexp (EDo d stmts) = node (deferNodeName d) (map doStmtSexp stmts)
 exprSexp (EStringInterp parts) = node "EStringInterp" (map interpPartSexp parts)
 exprSexp (EGuards arms) = node "EGuards" (map guardArmSexp arms)
 exprSexp (ERecordCreate n fs) =
@@ -332,3 +332,9 @@ usePathSexp (UseAlias ids a) =
 export
 programToSexp : List Decl -> String
 programToSexp prog = joinNl (map declSexp prog)
+
+-- a `defer` block is a distinct surface construct from `do` (#824), so it gets
+-- its own S-expression head rather than an extra flag field.
+deferNodeName : Bool -> String
+deferNodeName True = "EDefer"
+deferNodeName False = "EDo"

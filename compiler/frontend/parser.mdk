@@ -940,6 +940,7 @@ parseAtomRaw = do
     TLet => parseLet
     TMatch => parseMatch
     TDo => parseDo
+    TDefer => parseDefer
     TInterpOpen _ => parseInterp
     _ => failP "expected atom"
 
@@ -1146,7 +1147,7 @@ interpRestFor e _ = failP "expected interpolation mid/end"
 -- Bracket block-expressions (LAYOUT-BRACKETS-DESIGN.md, Gate B).  The locked
 -- herald set is match/do/record/bare-INDENT block.  All of those
 -- EXCEPT the bare-INDENT block already reach bracket element positions because
--- parseAtomRaw dispatches TMatch/TDo (and records via TUpper/TLBrace)
+-- parseAtomRaw dispatches TMatch/TDo/TDefer (and records via TUpper/TLBrace)
 -- as atoms, so parseExpr reaches them.  The one herald NOT reachable from the
 -- expression chain is the bare-INDENT block (it lives only in the decl-body
 -- `indentedBody`).  parseBracketBlock is the dedicated, contained reader for it;
@@ -1723,6 +1724,7 @@ reservedIdentKeyword TPublic = Some "public"
 reservedIdentKeyword TWhere = Some "where"
 reservedIdentKeyword TOf = Some "of"
 reservedIdentKeyword TDo = Some "do"
+reservedIdentKeyword TDefer = Some "defer"
 reservedIdentKeyword TAs = Some "as"
 reservedIdentKeyword TExtern = Some "extern"
 reservedIdentKeyword TRequires = Some "requires"
@@ -3574,12 +3576,21 @@ blockOrExpr stmts = EBlock stmts
 
 -- `do <INDENT stmt block DEDENT>` → a monadic do-block
 parseDo : Parser Expr
-parseDo = do
-  expectTok TDo
+parseDo = parseDoBlock TDo False
+
+-- `defer <INDENT stmt block DEDENT>` → a deferred do-block (#824).  Identical
+-- grammar to `do`; only the EDo flag differs, which routes desugar to
+-- `deferThen`/`deferPure` instead of `andThen`/`pure`.
+parseDefer : Parser Expr
+parseDefer = parseDoBlock TDefer True
+
+parseDoBlock : Token -> Bool -> Parser Expr
+parseDoBlock herald deferred = do
+  expectTok herald
   expectTok TIndent
   stmts <- parseStmts
   expectTok TDedent
-  pure (EDo stmts)
+  pure (EDo deferred stmts)
 
 -- statements, NEWLINE-separated, until the block's DEDENT
 -- A statement-let / where RHS, or a lambda body (`lamTailRaw`): a bare-INDENT
@@ -4451,7 +4462,7 @@ declBlockRhs _ = False
 bodyIsBlock : Expr -> Bool
 bodyIsBlock (ELoc _ e) = bodyIsBlock e
 bodyIsBlock (EBlock _) = True
-bodyIsBlock (EDo _) = True
+bodyIsBlock (EDo _ _) = True
 bodyIsBlock _ = False
 
 -- Index just past the first INDENT in [i, e) (the block opener); `e` if none.

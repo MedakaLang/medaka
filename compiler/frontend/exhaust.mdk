@@ -878,7 +878,7 @@ collectLetBinds (ESlice e0 lo hi _ _) = collectLetBinds e0
   ++ collectLetBinds lo
   ++ collectLetBinds hi
 collectLetBinds (EBlock stmts) = flatMap doStmtBinds stmts
-collectLetBinds (EDo stmts) = flatMap doStmtBinds stmts
+collectLetBinds (EDo _ stmts) = flatMap doStmtBinds stmts
 collectLetBinds (EAnnot e0 _) = collectLetBinds e0
 collectLetBinds (EStringInterp parts) = flatMap interpBinds parts
 collectLetBinds (EGuards arms) = flatMap guardArmBinds arms

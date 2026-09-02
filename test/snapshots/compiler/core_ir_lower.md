@@ -2337,7 +2337,7 @@ payloadArityL (ConNamed fs _) = listLen fs
 nodeTag : Expr -> String
 nodeTag (ESection _) = "ESection"
 nodeTag (EGuards _) = "EGuards"
-nodeTag (EDo _) = "EDo"
+nodeTag (EDo _ _) = "EDo"
 nodeTag (EStringInterp _) = "EStringInterp"
 nodeTag (EVariantUpdate _ _ _) = "EVariantUpdate"
 nodeTag (EMapLit _ _) = "EMapLit"
@@ -3064,7 +3064,7 @@ nodeTag _ = "?"
 (DTypeSig false "nodeTag" (TyFun (TyCon "Expr") (TyCon "String")))
 (DFunDef false "nodeTag" ((PCon "ESection" PWild)) (ELit (LString "ESection")))
 (DFunDef false "nodeTag" ((PCon "EGuards" PWild)) (ELit (LString "EGuards")))
-(DFunDef false "nodeTag" ((PCon "EDo" PWild)) (ELit (LString "EDo")))
+(DFunDef false "nodeTag" ((PCon "EDo" PWild PWild)) (ELit (LString "EDo")))
 (DFunDef false "nodeTag" ((PCon "EStringInterp" PWild)) (ELit (LString "EStringInterp")))
 (DFunDef false "nodeTag" ((PCon "EVariantUpdate" PWild PWild PWild)) (ELit (LString "EVariantUpdate")))
 (DFunDef false "nodeTag" ((PCon "EMapLit" PWild PWild)) (ELit (LString "EMapLit")))
@@ -3791,7 +3791,7 @@ nodeTag _ = "?"
 (DTypeSig false "nodeTag" (TyFun (TyCon "Expr") (TyCon "String")))
 (DFunDef false "nodeTag" ((PCon "ESection" PWild)) (ELit (LString "ESection")))
 (DFunDef false "nodeTag" ((PCon "EGuards" PWild)) (ELit (LString "EGuards")))
-(DFunDef false "nodeTag" ((PCon "EDo" PWild)) (ELit (LString "EDo")))
+(DFunDef false "nodeTag" ((PCon "EDo" PWild PWild)) (ELit (LString "EDo")))
 (DFunDef false "nodeTag" ((PCon "EStringInterp" PWild)) (ELit (LString "EStringInterp")))
 (DFunDef false "nodeTag" ((PCon "EVariantUpdate" PWild PWild PWild)) (ELit (LString "EVariantUpdate")))
 (DFunDef false "nodeTag" ((PCon "EMapLit" PWild PWild)) (ELit (LString "EMapLit")))

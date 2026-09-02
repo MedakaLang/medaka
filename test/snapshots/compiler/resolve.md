@@ -715,7 +715,7 @@ checkExpr cur env scope (EAnnot e0 t) = checkExpr cur env scope e0
 checkExpr cur env scope (EHeadAnnot e0 t) = checkExpr cur env scope e0
   ++ checkType cur env t
 checkExpr cur env scope (EBlock stmts) = checkStmts cur env scope stmts
-checkExpr cur env scope (EDo stmts) = checkStmts cur env scope stmts
+checkExpr cur env scope (EDo _ stmts) = checkStmts cur env scope stmts
 checkExpr cur env scope (EStringInterp parts) =
   flatMap (checkInterp cur env scope) parts
 checkExpr cur env scope (EGuards arms) =
@@ -3506,7 +3506,7 @@ stampExpr env (EIndex e0 i r) = EIndex (stampExpr env e0) (stampExpr env i) r
 stampExpr env (EAnnot e0 t) = EAnnot (stampExpr env e0) t
 stampExpr env (EHeadAnnot e0 t) = EHeadAnnot (stampExpr env e0) t
 stampExpr env (EBlock stmts) = EBlock (stampStmts env stmts)
-stampExpr env (EDo stmts) = EDo (stampStmts env stmts)
+stampExpr env (EDo d stmts) = EDo d (stampStmts env stmts)
 stampExpr env (EStringInterp parts) =
   EStringInterp (map (stampInterp env) parts)
 stampExpr env (EGuards arms) = EGuards (map (stampGuardArm env) arms)
@@ -4731,7 +4731,7 @@ takeOriginTrace _ =
 (DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "EAnnot" (PVar "e0") (PVar "t"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "e0")) (EApp (EApp (EApp (EVar "checkType") (EVar "cur")) (EVar "env")) (EVar "t"))))
 (DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "EHeadAnnot" (PVar "e0") (PVar "t"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "e0")) (EApp (EApp (EApp (EVar "checkType") (EVar "cur")) (EVar "env")) (EVar "t"))))
 (DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EVar "checkStmts") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "stmts")))
-(DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "EDo" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EVar "checkStmts") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "stmts")))
+(DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "EDo" PWild (PVar "stmts"))) (EApp (EApp (EApp (EApp (EVar "checkStmts") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "stmts")))
 (DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "EStringInterp" (PVar "parts"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "checkInterp") (EVar "cur")) (EVar "env")) (EVar "scope"))) (EVar "parts")))
 (DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "EGuards" (PVar "arms"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "checkGuardArm") (EVar "cur")) (EVar "env")) (EVar "scope"))) (EVar "arms")))
 (DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "ERecordCreate" (PVar "name") (PVar "fs"))) (EApp (EApp (EApp (EApp (EApp (EVar "checkRecordCreate") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "name")) (EVar "fs")))
@@ -5629,7 +5629,7 @@ takeOriginTrace _ =
 (DFunDef false "stampExpr" ((PVar "env") (PCon "EAnnot" (PVar "e0") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "e0"))) (EVar "t")))
 (DFunDef false "stampExpr" ((PVar "env") (PCon "EHeadAnnot" (PVar "e0") (PVar "t"))) (EApp (EApp (EVar "EHeadAnnot") (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "e0"))) (EVar "t")))
 (DFunDef false "stampExpr" ((PVar "env") (PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EVar "stampStmts") (EVar "env")) (EVar "stmts"))))
-(DFunDef false "stampExpr" ((PVar "env") (PCon "EDo" (PVar "stmts"))) (EApp (EVar "EDo") (EApp (EApp (EVar "stampStmts") (EVar "env")) (EVar "stmts"))))
+(DFunDef false "stampExpr" ((PVar "env") (PCon "EDo" (PVar "d") (PVar "stmts"))) (EApp (EApp (EVar "EDo") (EVar "d")) (EApp (EApp (EVar "stampStmts") (EVar "env")) (EVar "stmts"))))
 (DFunDef false "stampExpr" ((PVar "env") (PCon "EStringInterp" (PVar "parts"))) (EApp (EVar "EStringInterp") (EApp (EApp (EVar "map") (EApp (EVar "stampInterp") (EVar "env"))) (EVar "parts"))))
 (DFunDef false "stampExpr" ((PVar "env") (PCon "EGuards" (PVar "arms"))) (EApp (EVar "EGuards") (EApp (EApp (EVar "map") (EApp (EVar "stampGuardArm") (EVar "env"))) (EVar "arms"))))
 (DFunDef false "stampExpr" ((PVar "env") (PCon "ERecordCreate" (PVar "name") (PVar "fs"))) (EApp (EApp (EVar "ERecordCreate") (EVar "name")) (EApp (EApp (EVar "map") (EApp (EVar "stampFieldAssign") (EVar "env"))) (EVar "fs"))))
@@ -5966,7 +5966,7 @@ takeOriginTrace _ =
 (DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "EAnnot" (PVar "e0") (PVar "t"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "e0")) (EApp (EApp (EApp (EVar "checkType") (EVar "cur")) (EVar "env")) (EVar "t"))))
 (DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "EHeadAnnot" (PVar "e0") (PVar "t"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "e0")) (EApp (EApp (EApp (EVar "checkType") (EVar "cur")) (EVar "env")) (EVar "t"))))
 (DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EVar "checkStmts") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "stmts")))
-(DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "EDo" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EVar "checkStmts") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "stmts")))
+(DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "EDo" PWild (PVar "stmts"))) (EApp (EApp (EApp (EApp (EVar "checkStmts") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "stmts")))
 (DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "EStringInterp" (PVar "parts"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "checkInterp") (EVar "cur")) (EVar "env")) (EVar "scope"))) (EVar "parts")))
 (DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "EGuards" (PVar "arms"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "checkGuardArm") (EVar "cur")) (EVar "env")) (EVar "scope"))) (EVar "arms")))
 (DFunDef false "checkExpr" ((PVar "cur") (PVar "env") (PVar "scope") (PCon "ERecordCreate" (PVar "name") (PVar "fs"))) (EApp (EApp (EApp (EApp (EApp (EVar "checkRecordCreate") (EVar "cur")) (EVar "env")) (EVar "scope")) (EVar "name")) (EVar "fs")))
@@ -6864,7 +6864,7 @@ takeOriginTrace _ =
 (DFunDef false "stampExpr" ((PVar "env") (PCon "EAnnot" (PVar "e0") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "e0"))) (EVar "t")))
 (DFunDef false "stampExpr" ((PVar "env") (PCon "EHeadAnnot" (PVar "e0") (PVar "t"))) (EApp (EApp (EVar "EHeadAnnot") (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "e0"))) (EVar "t")))
 (DFunDef false "stampExpr" ((PVar "env") (PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EVar "stampStmts") (EVar "env")) (EVar "stmts"))))
-(DFunDef false "stampExpr" ((PVar "env") (PCon "EDo" (PVar "stmts"))) (EApp (EVar "EDo") (EApp (EApp (EVar "stampStmts") (EVar "env")) (EVar "stmts"))))
+(DFunDef false "stampExpr" ((PVar "env") (PCon "EDo" (PVar "d") (PVar "stmts"))) (EApp (EApp (EVar "EDo") (EVar "d")) (EApp (EApp (EVar "stampStmts") (EVar "env")) (EVar "stmts"))))
 (DFunDef false "stampExpr" ((PVar "env") (PCon "EStringInterp" (PVar "parts"))) (EApp (EVar "EStringInterp") (EApp (EApp (EMethodRef "map") (EApp (EVar "stampInterp") (EVar "env"))) (EVar "parts"))))
 (DFunDef false "stampExpr" ((PVar "env") (PCon "EGuards" (PVar "arms"))) (EApp (EVar "EGuards") (EApp (EApp (EMethodRef "map") (EApp (EVar "stampGuardArm") (EVar "env"))) (EVar "arms"))))
 (DFunDef false "stampExpr" ((PVar "env") (PCon "ERecordCreate" (PVar "name") (PVar "fs"))) (EApp (EApp (EVar "ERecordCreate") (EVar "name")) (EApp (EApp (EMethodRef "map") (EApp (EVar "stampFieldAssign") (EVar "env"))) (EVar "fs"))))

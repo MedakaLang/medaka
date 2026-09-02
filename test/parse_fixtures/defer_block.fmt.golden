@@ -1,0 +1,43 @@
+-- `defer` blocks (#824): the same statement grammar as `do`, lowered to
+-- `deferThen`/`deferPure` instead of `andThen`/`pure`.  This fixture pins the
+-- surface shapes only — parse, print, and a byte-for-byte fmt round-trip.
+import async.{Async, runAsync, liftIO}
+
+-- bare-statement and bind forms
+plain : Async <Stdout> Int
+plain = defer
+  x <- liftIO (u => 20)
+  y <- deferPure 22
+  deferPure (x + y)
+
+-- a `let` statement between two binds
+withLet : Async <Stdout> Int
+withLet = defer
+  x <- deferPure 20
+  let d = 22
+  y <- deferPure d
+  deferPure (x + y)
+
+-- a refutable bind pattern lowers through the same match-and-fallthrough
+-- continuation a `do` bind does
+refutable : Async <Stdout> Int
+refutable = defer
+  (Some x) <- deferPure (Some 20)
+  (a, b) <- deferPure (2, 20)
+  deferPure (x + a + b)
+
+-- nested: a `defer` block as an argument, and a `do` block inside a `defer` one
+nested : Async <Stdout> Int
+nested = defer
+  x <- deferPure (unOpt (do
+    n <- Some 20
+    pure (n + 1)))
+  deferPure (x + 21)
+
+unOpt : Option Int -> Int
+unOpt (Some n) = n
+unOpt None = 0
+
+main =
+  println
+    (runAsync plain + runAsync withLet + runAsync refutable + runAsync nested)
