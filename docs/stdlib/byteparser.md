@@ -34,13 +34,13 @@ data BResult a
   | BErr String Int
 ```
 
-Instances: [`Mappable`](#mappable-bresult)
-
 Parse result: success carries the value and the position just past what
   was consumed; failure carries an error message and the failure position.
   `public export` so downstream modules (e.g. a SQLite record decoder) can
   pattern-match `BOk`/`BErr` directly when they need byte-precise position
   control beyond what the monadic combinators give.
+
+Instances: [`Mappable`](#mappable-bresult)
 
 ## `ByteParser`
 
@@ -49,9 +49,9 @@ data ByteParser a
   = ByteParser (Array Int -> Int -> BResult a)
 ```
 
-Instances: `Mappable`, `Applicative`, `Thenable`, [`Alternative`](#alternative-byteparser)
-
 A byte-level parser is a function from (byte array, position) to BResult.
+
+Instances: `Mappable`, `Applicative`, `Thenable`, [`Alternative`](#alternative-byteparser)
 
 ## `runBP`
 

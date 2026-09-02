@@ -726,10 +726,10 @@ the right.
 impl Index String Int Char
 ```
 
-`index s i` is the codepoint `Char` of `s` at position `i` (`s[i]` sugar
-dispatches here; codepoints, not grapheme clusters -- matches `toChars`).
-Raises the coded `indexError` (E-INDEX-OOB) when `i` is out of range.  No
-`IndexMut` impl: `String` is immutable.
+`s[i]` is the character at codepoint position `i`.
+
+Panics with an index error when `i` is out of range. Positions count
+codepoints, matching `string.toChars`.
 
 ### `Slice String`
 
@@ -737,9 +737,9 @@ Raises the coded `indexError` (E-INDEX-OOB) when `i` is out of range.  No
 impl Slice String
 ```
 
-`slice s lo hi` is the substring of `s` over `[lo, hi)` (codepoints).
-Out-of-range bounds are clamped by the underlying `stringSlice`, matching
-stdlib `String.sliceClamped`.
+The substring over codepoint positions `[lo, hi)`.
+
+Out-of-range bounds are clamped to the string.
 
 ```medaka
 > slice "hello" 1 4

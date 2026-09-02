@@ -1,36 +1,33 @@
 # META
-source_lines=1907
+source_lines=1936
 stages=DESUGAR,MARK
 # SOURCE
-{- core.mdk — the foundation every other Medaka module rests on.
+{- | The prelude: the types, interfaces, and functions every Medaka program
+   can use without an import.
 
-   This file is automatically loaded as the implicit prelude by the native
-   compiler pipeline (stdlib/runtime.mdk + stdlib/core.mdk, read from
-   MEDAKA_ROOT at startup), so everything declared here is in scope without
-   an `import`.  See STDLIB.md for the full plan and Module 1 checklist.
+   This module defines `Option`, `Result`, and `Ordering`; the interface
+   hierarchy (`Eq`, `Ord`, `Semigroup`, `Monoid`, `Debug`, `Display`,
+   `Hashable`, `Num`, `Bounded`, `Mappable`, `Applicative`, `Thenable`,
+   `Alternative`, `Bimappable`, `Foldable`, `Filterable`, `Traversable`,
+   `Index`, `Slice`, `FromEntries`) with instances for the built-in types;
+   and the standalone helpers for booleans, options, results, and functions.
+   The container-specific operations live in their own modules (`list`,
+   `array`, `map`, and so on). -}
 
-   Layout:
-     1. Foundational data types (Ordering, Option, Result)
-     2. Interface hierarchy in dependency order:
-          Eq → Ord, Semigroup → Monoid, Debug, Num, Bounded,
-          Mappable → Applicative → Thenable, Foldable
-        Each interface is followed by its impls for built-in types.
-     3. Standalone helpers (Bool, Option, Result, Foldable, utility)
-     4. Arbitrary (property-testing generator interface)
+-- Loaded as the implicit prelude (stdlib/runtime.mdk + stdlib/core.mdk, read
+-- from MEDAKA_ROOT at startup).  Interfaces appear in dependency order, each
+-- followed by its impls for the built-in types.
+--
+-- Style: strict evaluation, so prefer tail-recursive helpers in `where`
+-- clauses over right-leaning recursion when traversing potentially-large
+-- data.
 
-   Style notes:
-     * Strict evaluation: prefer tail-recursive helpers in `where` clauses
-       over right-leaning recursion when traversing potentially-large data.
-     * `default` on an impl is only required when more than one impl is
-       visible for the same head; we mark the `Result e` instances `default`
-       so a user can later add an `Err`-mapping variant. -}
+-- # Data types
 
--- ─── 1. Data types ──────────────────────────────────────────────────────
-
--- | Three-way comparison result, produced by `Ord.compare`.
+-- | The result of a three-way comparison, produced by `compare`.
 public export data Ordering = Lt | Eq | Gt
 
-{- | A value that may be absent.  Medaka's name for Haskell's `Maybe`.
+{- | A value that may be absent.
 
    > isSome (Some 1)
    True
@@ -39,7 +36,9 @@ public export data Ordering = Lt | Eq | Gt
 public export data Option a = Some a | None
 
 {- | A computation that either succeeded with `Ok a` or failed with `Err e`.
-   Errors are data; pattern-match to handle them.  See language-design.md.
+
+   Errors are ordinary values. Pattern-match to handle them, or use the
+   `Thenable` instance and `do` notation to sequence steps that may fail.
 
    > isOk (Ok 1)
    True
@@ -47,15 +46,17 @@ public export data Option a = Some a | None
    False -}
 public export data Result e a = Ok a | Err e
 
--- ─── 2. Interfaces and built-in impls ───────────────────────────────────
+-- # Equality and ordering
 
-{- | Structural equality.  Reflexive, symmetric, transitive.
-   `==` on primitives is a builtin and does *not* dispatch through this
-   interface; the impls below exist so generic `Eq a => ...` code works. -}
+{- | Equality.
+
+   `eq` must be reflexive, symmetric, and transitive. The `==` operator on
+   the primitive types is built in and does not go through this interface;
+   the instances here are what let generic `Eq a =>` code work. -}
 export interface Eq a where
   eq : a -> a -> Bool
 
--- | Negation of `eq`.  Standalone so impls cannot make it disagree with `eq`.
+-- | The negation of `eq`.
 export
 neq : Eq a => a -> a -> Bool
 neq x y = not (eq x y)
@@ -113,9 +114,10 @@ export impl Eq (a, b, c, d, e) requires Eq a, Eq b, Eq c, Eq d, Eq e where
     && eq d1 d2
     && eq e1 e2
 
-{- | Associative combine.  Backs the `++` operator and is the parent of
-   `Monoid`.  Implementations *must* satisfy
-       append a (append b c) == append (append a b) c. -}
+{- | Types with an associative combining operation.
+
+   `append` backs the `++` operator. It must be associative:
+   `append a (append b c)` equals `append (append a b) c`. -}
 export interface Semigroup a where
   append : a -> a -> a
 
@@ -125,9 +127,10 @@ export impl Semigroup (List a) where
 export impl Semigroup String where
   append s1 s2 = s1 ++ s2
 
-{- | A `Semigroup` with an identity element.  Laws:
-       append empty x == x       (left identity)
-       append x empty == x       (right identity) -}
+{- | A `Semigroup` with an identity element.
+
+   `empty` must be a left and right identity for `append`:
+   `append empty x` and `append x empty` both equal `x`. -}
 export interface Monoid a requires Semigroup a where
   empty : a
 
@@ -137,9 +140,11 @@ export impl Monoid (List a) where
 export impl Monoid String where
   empty = ""
 
-{- | Total ordering.  `compare` is the primitive method; the comparison
-   helpers all have defaults expressed through it, but impls may override
-   any of them for performance or to encode special semantics (e.g. NaN). -}
+{- | Types with a total order.
+
+   `compare` is the only method an instance must define. The comparison
+   helpers `lt`, `gt`, `lte`, `gte`, `min`, and `max` default to definitions
+   in terms of `compare`, and an instance may override them. -}
 export interface Ord a requires Eq a where
   compare : a -> a -> Ordering
   lt : a -> a -> Bool
@@ -167,44 +172,26 @@ export interface Ord a requires Eq a where
     Lt => y
     _ => x
 
-{- | `clamp lo hi x` constrains `x` into the inclusive interval `[lo, hi]`.
-   Precondition: `lo <= hi`; otherwise the result is `lo`.
+{- | `x` limited to the inclusive range `[lo, hi]`.
+
+   Requires `lo <= hi`; otherwise the result is `lo`.
 
    > clamp 0 10 5
    5
-   > clamp 0 10 (-3)
-   0
    > clamp 0 10 99
    10 -}
 export
 clamp : Ord a => a -> a -> a -> a
 clamp lo hi = min hi >> max lo
 
-{- | `isEven n` is `True` when `n` is divisible by 2 (negatives included).
-
-   > isEven 4
-   True
-   > isEven 7
-   False -}
-export
-isEven : Int -> Bool
-isEven n = n % 2 == 0
-
-{- | `isOdd n` is `True` when `n` is not divisible by 2.
-
-   > isOdd 3
-   True
-   > isOdd 8
-   False -}
-export
-isOdd : Int -> Bool
-isOdd n = n % 2 /= 0
+-- > clamp 0 10 (-3)
+-- 0
 
 export impl Ord Int where
   compare a b = if a < b then Lt else if a > b then Gt else Eq
 
--- | `True` when `x`'s IEEE-754 sign bit is set.  Deliberately NOT `x < 0.0`:
--- this also holds for −0.0 (which compares EQUAL to +0.0) and for −NaN (which
+-- `True` when `x`'s IEEE-754 sign bit is set.  Deliberately not `x < 0.0`:
+-- this also holds for -0.0 (which compares equal to +0.0) and for -NaN (which
 -- compares False against everything), and those two are exactly the cases no
 -- arithmetic predicate can see.  Reads the sign out of the big-endian IEEE
 -- encoding, so it costs an 8-byte Array; `compare` reaches it only for zeros
@@ -212,54 +199,45 @@ export impl Ord Int where
 floatSignBit : Float -> Bool
 floatSignBit x = arrayGetUnsafe 0 (floatToBytes64 x) >= 128
 
--- | totalOrder sign tie-break, used ONLY by `compareNaN` to place −NaN below
--- +NaN (issue #758): `compare` no longer separates −0.0 from +0.0 — the zero
--- sign is normalised away so `compare (−0.0) (+0.0) = Eq`, matching `Eq Float`.
+-- totalOrder sign tie-break, used only by `compareNaN` to place -NaN below
+-- +NaN.  `compare` does not separate -0.0 from +0.0: the zero sign is
+-- normalised away so `compare (-0.0) (+0.0) = Eq`, matching `Eq Float`.
 compareBySign : Float -> Float -> Ordering
 compareBySign a b = match (floatSignBit a, floatSignBit b)
   (True, False) => Lt
   (False, True) => Gt
   _ => Eq
 
--- | totalOrder for a pair where `< > ==` were ALL False — i.e. at least one
--- operand is a NaN.  −NaN sits below every non-NaN, +NaN above every non-NaN;
+-- totalOrder for a pair where `< > ==` were all False, i.e. at least one
+-- operand is a NaN.  -NaN sits below every non-NaN, +NaN above every non-NaN;
 -- two NaNs of the same sign are `Eq`.  `x /= x` is the NaN test (IEEE's only
 -- self-inequality); it is inlined rather than calling `isNaN`, which lives in
--- `math.mdk` — the prelude cannot import it, and this is not a big enough
--- reason to promote it into the prelude's public surface.
+-- `math.mdk` and cannot be imported by the prelude.
 compareNaN : Float -> Float -> Ordering
 compareNaN a b
   | a /= a && b /= b = compareBySign a b
   | a /= a = if floatSignBit a then Lt else Gt
   | otherwise = if floatSignBit b then Gt else Lt
 
-{- | `Ord Float` is IEEE-754 **totalOrder** (issue #360):
+{- | Floats are totally ordered, NaN included:
 
-     −NaN < −inf < … < −0.0 < +0.0 < … < +inf < +NaN
+   ```
+   -NaN < -inf < ... < -0.0 = +0.0 < ... < +inf < +NaN
+   ```
 
-   so `compare`, `min`/`max` and therefore `sort` are deterministic on NaN data
-   and never crash.  The previous `if a < b … else Eq` shape returned `Eq` for
-   `compare nan x` at EVERY `x`, which is not a total order at all: it broke
-   transitivity (`nan Eq 1.0` and `nan Eq 3.0`, yet `1.0 /= 3.0`), so a sorted
-   result was only an accident of the algorithm.
+   `compare` agrees with `==` on every non-NaN value, so `-0.0` and `0.0`
+   compare `Eq`. Two NaNs of the same sign also compare `Eq`, even though
+   `nan == nan` is `False`. This makes `sort`, `min`, and `max` deterministic
+   on data that contains NaN.
 
-   Deliberate divergence: `compare x y == Eq` coincides with `x == y` for every
-   non-NaN value — in particular `compare (−0.0) (+0.0) = Eq`, matching
-   `-0.0 == 0.0` (issue #758): the equal-branch normalises the zero sign away
-   rather than tie-breaking it.  NaN is the SOLE residual: `compare nan nan = Eq`
-   while `nan == nan = False`, because IEEE `==` is non-reflexive at NaN and no
-   total order can be — the trade Rust's `f64::total_cmp` and Java's
-   `Double.compare` make too.
-
-   ⚠️  The four relational overrides below are LOAD-BEARING, do not delete them.
-   `< <= > >=` at Float are primitive IEEE predicates on every path, and all
-   four are False at a NaN operand (EMITTER-SEMANTICS N5, issue #305).  Ord's
-   interface DEFAULTS derive them from `compare`, so without these overrides the
-   Float dict would hand them totalOrder and silently make `nan < 1.0` True —
-   re-opening the S0 that #305 closed.  `min`/`max` keep their compare-derived
-   defaults on purpose: they are not IEEE predicates, and #360 asks for them to
-   be total. -}
--- (guards are not accepted in an impl method body — hence the `if` chain)
+   `lt`, `gt`, `lte`, and `gte` are the IEEE comparisons, and are all `False`
+   when either operand is NaN. -}
+-- The four relational overrides are required.  `< <= > >=` at Float are the
+-- primitive IEEE predicates on every path and all four are False at a NaN
+-- operand; the interface defaults would derive them from `compare` and make
+-- `nan < 1.0` True.  `min`/`max` keep their compare-derived defaults on
+-- purpose: they are not IEEE predicates and are meant to be total.
+-- (guards are not accepted in an impl method body, hence the `if` chain)
 export impl Ord Float where
   compare a b =
     if a < b then
@@ -267,8 +245,8 @@ export impl Ord Float where
     else if a > b then
       Gt
     else if a == b then
-      -- IEEE-equal: the only sign-differing equal pair is ±0.0, and #758 rules
-      -- it `Eq` (normalise the zero sign away) so `compare` agrees with `Eq`.
+      -- IEEE-equal: the only sign-differing equal pair is ±0.0, normalised to
+      -- `Eq` so `compare` agrees with `Eq`.
       Eq
     else
       compareNaN a b
@@ -283,7 +261,7 @@ export impl Ord String where
 export impl Ord Char where
   compare a b = if a < b then Lt else if a > b then Gt else Eq
 
--- | Lexicographic chaining: take the first non-`Eq` result, else the second.
+-- Lexicographic chaining: take the first non-`Eq` result, else the second.
 -- Private helper backing the tuple `Ord` impls below.
 thenCmp : Ordering -> Ordering -> Ordering
 thenCmp Eq o = o
@@ -312,8 +290,9 @@ export impl Ord (a, b, c, d, e) requires Ord a, Ord b, Ord c, Ord d, Ord e where
         (compare b1 b2)
         (thenCmp (compare c1 c2) (thenCmp (compare d1 d2) (compare e1 e2))))
 
-{- | Lexicographic ordering: compare element-wise, and a proper prefix sorts
-   before any list that extends it (`[1] < [1, 2]`, `[] < [0]`). -}
+{- | Lists compare lexicographically: element by element, with a proper
+   prefix sorting before any list that extends it (`[1] < [1, 2]`,
+   `[] < [0]`). -}
 export impl Ord (List a) requires Ord a where
   compare [] [] = Eq
   compare [] _ = Lt
@@ -334,13 +313,15 @@ export impl Ord (Result e a) requires Ord e, Ord a where
   compare (Ok _) (Err _) = Gt
   compare (Ok x) (Ok y) = compare x y
 
-{- | Human-readable string rendering.  Backs `medaka test` doctests, which
-   compare a result's `debug` against the expected text (GHCi/doctest parity).
-   `Debug Int`/`Float`/`Bool`/`Unit`/`List`/`Option`/`Result` and the tuple
-   impls live here; `Debug String`/`Debug Char` live in `string.mdk`.
-   Numeric/Bool `debug` matches the interpreter's `pp_value` (so it agrees with
-   `println`); `String`/`Char` render *quoted* (round-trippable, so `debug`
-   intentionally differs from `println` — cf. Haskell `debug` vs `putStr`). -}
+-- # Rendering
+
+{- | Types with a developer-facing text rendering.
+
+   `debug` renders a value as Medaka source: strings and characters are
+   quoted and escaped, constructors are shown by name, and lists, arrays,
+   and tuples use their literal syntax. `medaka test` compares a doctest's
+   result against its expected text with `debug`. `Display` is the
+   user-facing counterpart, which leaves strings unquoted. -}
 export interface Debug a where
   debug : a -> String
 
@@ -362,10 +343,10 @@ export impl Debug Ordering where
   debug Eq = "Eq"
   debug Gt = "Gt"
 
--- Eq/Ord for Ordering are HAND-WRITTEN (not `deriving`): the `Eq` data
--- CONSTRUCTOR collides with the `Eq` class name, so `deriving (Eq)` is
+-- Eq/Ord for Ordering are hand-written (not `deriving`): the `Eq` data
+-- constructor collides with the `Eq` class name, so `deriving (Eq)` is
 -- ambiguous.  Without these, `o == Lt` check-accepts and `run`s but `build`
--- FAILS (no Ord/Eq Ordering binary).  Rank Lt < Eq < Gt.
+-- fails (no Ord/Eq Ordering binary).  Rank Lt < Eq < Gt.
 export impl Eq Ordering where
   eq Lt Lt = True
   eq Eq Eq = True
@@ -381,12 +362,11 @@ export impl Ord Ordering where
   compare _ Eq = Gt
   compare Gt Gt = Eq
 
--- `Debug String`/`Debug Char` render a *quoted, escaped literal* (`debug "hi"` is
--- `"hi"`, `debug 'a'` is `'a'`) via the `debugStringLit`/`debugCharLit` externs —
--- round-trippable, matching Haskell, and distinct from `println`'s raw output.
--- They live here in the prelude (not `string.mdk`) so that `debug`-ing a String
--- or Char — the most common doctest result type — resolves without importing
--- `string`, alongside the other primitive `Debug` impls (Phase 92).
+-- `Debug String`/`Debug Char` render a quoted, escaped literal (`debug "hi"` is
+-- `"hi"`, `debug 'a'` is `'a'`) via the `debugStringLit`/`debugCharLit`
+-- externs.  They live in the prelude (not `string.mdk`) so that `debug`-ing a
+-- String or Char, the most common doctest result type, resolves without
+-- importing `string`.
 export impl Debug String where
   debug s = debugStringLit s
 
@@ -395,8 +375,7 @@ export impl Debug Char where
 
 -- Comma-joined element rendering for `Debug (List a)`: a top-level recursive
 -- constrained helper.  Its self-call forwards the `Debug a` dictionary and the
--- impl body forwards its own `requires Debug a` dict into it (Phase 74 follow-up
--- fix to dictionary passing for recursive constrained functions).
+-- impl body forwards its own `requires Debug a` dict into it.
 debugListItems : Debug a => List a -> String
 debugListItems [] = ""
 debugListItems [x] = debug x
@@ -415,13 +394,12 @@ debugArrayItems arr i n
   | otherwise =
     "\{debug (arrayGetUnsafe i arr)}, \{debugArrayItems arr (i + 1) n}"
 
-{- | Bracketed, comma-separated rendering matching the interpreter's printer
-   (`[|1, 2, 3|]`), so `debug` agrees with `println` on arrays.  Lives in
-   `core.mdk` (not `array.mdk`) so array literals render without an explicit
-   `import array`.
+-- Lives in `core.mdk` (not `array.mdk`) so array literals render without an
+-- explicit `import array`.
+{- | Arrays render in their literal syntax, `[|1, 2, 3|]`.
 
-   > debug [|1, 2, 3|] == "[|1, 2, 3|]"
-   True -}
+   > debug [|1, 2, 3|]
+   "[|1, 2, 3|]" -}
 export impl Debug (Array a) requires Debug a where
   debug arr = "[|\{debugArrayItems arr 0 (arrayLength arr)}|]"
 
@@ -443,21 +421,19 @@ eqGo a b i n =
   else
     False
 
-{- | Lexicographic, exactly like `Ord (List a)` — `Array` is `List`'s
-   random-access peer, so `compare` on two arrays agrees element-for-element
-   with `compare` on their element lists, and a prefix sorts before its
-   extensions (sheet row A-5).  Lives here rather than in `array.mdk` for the
-   same reason `Eq (Array a)` does: `deriving (Ord)` over a field of array
-   type must build without an `import array`.
-
-   ⚠️ The body delegates to `Ord (List a)` rather than walking the arrays
-   directly on purpose.  A hand-written walk needs an `Ord a`-constrained
-   top-level helper, and calling one of those from an `impl Ord …` body IN
-   THIS MODULE panics at run time with `unbound identifier: $dict_max_0` (the
-   same shape compiles and runs correctly in any other module, and `Eq`- and
-   `Hashable`-constrained helpers are fine from here).  Filed in the sprint
-   report; delegation sidesteps it and makes the "agrees with `Ord (List a)`"
-   law true by construction. -}
+{- | Arrays compare lexicographically, exactly as the lists of their
+   elements would. -}
+-- Lives here rather than in `array.mdk` for the same reason `Eq (Array a)`
+-- does: `deriving (Ord)` over a field of array type must build without an
+-- `import array`.
+--
+-- The body delegates to `Ord (List a)` rather than walking the arrays
+-- directly on purpose.  A hand-written walk needs an `Ord a`-constrained
+-- top-level helper, and calling one of those from an `impl Ord …` body in
+-- this module panics at run time with `unbound identifier: $dict_max_0` (the
+-- same shape compiles and runs correctly in any other module, and `Eq`- and
+-- `Hashable`-constrained helpers are fine from here).  Delegation sidesteps it
+-- and makes the "agrees with `Ord (List a)`" law true by construction.
 export impl Ord (Array a) requires Ord a where
   compare a b =
     compare (arrItems a 0 (arrayLength a)) (arrItems b 0 (arrayLength b))
@@ -493,14 +469,12 @@ export impl Debug (a, b, c, d, e) requires Debug a, Debug b, Debug c, Debug d, D
   debug (a, b, c, d, e) =
     "(\{debug a}, \{debug b}, \{debug c}, \{debug d}, \{debug e})"
 
-{- | Display rendering for string interpolation.  A `"\{e}"` hole desugars to
-   `display e`, so this is what `\{...}` calls.  Unlike `Debug`, `Display` does
-   *not* quote `String`/`Char` (interpolating a string splices its characters,
-   it doesn't debug a quoted literal) — this is the Debug-vs-Display split.  For
-   every other type `display` matches `debug`'s output, recursing with `display`
-   so nested strings stay unquoted too.  Lives in `core.mdk` (not `string.mdk`
-   like `Debug String`) because interpolation is core syntax: a bare `"\{name}"`
-   can't depend on an imported module.  `deriving (Display)` mirrors
+{- | Types with a user-facing text rendering.
+
+   `display` is what string interpolation calls: `"\{e}"` is `display e`.
+   It differs from `debug` in one way: strings and characters are spliced in
+   as they are, not quoted. For every other type it matches `debug`, and
+   nested strings stay unquoted. `deriving (Display)` works like
    `deriving (Debug)`. -}
 export interface Display a where
   display : a -> String
@@ -548,12 +522,11 @@ displayArrayItems arr i n
   | otherwise =
     "\{display (arrayGetUnsafe i arr)}, \{displayArrayItems arr (i + 1) n}"
 
-{- | Renders `[|1, 2, 3|]`, matching `debug` but with unquoted elements (the
-   Display convention).  In `core.mdk` alongside `Debug (Array a)` so array
-   literals interpolate without an explicit `import array`.
+{- | Arrays render in their literal syntax, `[|1, 2, 3|]`, with the elements
+   unquoted.
 
-   > display [|1, 2, 3|] == "[|1, 2, 3|]"
-   True -}
+   > display [|1, 2, 3|]
+   "[|1, 2, 3|]" -}
 export impl Display (Array a) requires Display a where
   display arr = "[|\{displayArrayItems arr 0 (arrayLength arr)}|]"
 
@@ -641,17 +614,21 @@ derivedNextDepth c depth
   | c == ')' || c == ']' || c == '}' = depth - 1
   | otherwise = depth
 
-{- | Hash code for use in hash tables.  Equal values (per `Eq`) must produce
-   the same hash — the contractual invariant.  Hash values need not be unique.
-   Primitive impls delegate to per-type externs (`hashInt`/`hashString`/… —
-   specified deterministic hashers, byte-identical across the tree-walker and the
-   native backend); the derived impls and the compound impls below
-   (`Option`/`Result`/`List`/tuples) share one djb2-style fold: seed with the
-   constructor ordinal, then `acc = acc * 33 + hash field` left-to-right over
-   fields.  `deriving (Hashable)` generates exactly that fold for `data`,
-   `record`, and `newtype` types (#422).  The fold is NOT masked non-negative:
-   `Int` wraps, so a hash may be negative.  Only eq-agreement is contractual —
-   hash_map/hash_set mask at the point of use (#416). -}
+-- # Hashing
+
+{- | Types that can be used as hash-table keys.
+
+   Values that are equal by `Eq` must have equal hashes. Hashes need not be
+   unique, and may be negative. The compound instances (`Option`, `Result`,
+   `List`, `Array`, tuples) and `deriving (Hashable)` all use the same fold
+   over the fields, so an array hashes the same as the list of its
+   elements. -}
+-- Primitive impls delegate to per-type externs (`hashInt`/`hashString`/…,
+-- deterministic and byte-identical across the tree-walker and the native
+-- backend).  The compound fold: seed with the constructor ordinal, then
+-- `acc = acc * 33 + hash field` left-to-right over fields.  `Int` wraps, so
+-- the result is not masked non-negative; hash_map/hash_set mask at the point
+-- of use.
 export interface Hashable a where
   hash : a -> Int
 
@@ -697,10 +674,9 @@ hashListItems acc (x::xs) = hashListItems (acc * 33 + hash x) xs
 export impl Hashable (List a) requires Hashable a where
   hash xs = hashListItems 0 xs
 
-{- | The same `acc * 33 + hash x` fold `Hashable (List a)` uses, so an array
-   and the list of the same elements hash EQUALLY — the peer relationship
-   sheet row A-5 ratifies.  Agrees with `Eq (Array a)` by construction: equal
-   arrays have equal elements in equal order, so they fold to the same seed. -}
+-- The same `acc * 33 + hash x` fold `Hashable (List a)` uses, so an array
+-- and the list of the same elements hash equally.  Agrees with `Eq (Array a)`
+-- by construction: equal arrays have equal elements in equal order.
 export impl Hashable (Array a) requires Hashable a where
   hash arr = hashArrGo 0 arr 0 (arrayLength arr)
 
@@ -724,28 +700,32 @@ export impl Hashable (a, b, c, d, e) requires Hashable a, Hashable b, Hashable c
   hash (a, b, c, d, e) =
     (((hash a * 33 + hash b) * 33 + hash c) * 33 + hash d) * 33 + hash e
 
-{- | Human-facing output (Phase 111).  `println`/`print` render via `Display`
-   (unquoted, user-facing) rather than dumping internal `VCon` structure, so a
-   `Map` prints `Map { 1 => 10 }`, not its weight-balanced tree.  For
-   round-trippable Debug-rendering output (strings/chars quoted, constructor
-   names visible), import `io.mdk` and use `inspect` (`inspect x = putStrLn
-   (debug x)`).  These are ordinary Medaka functions over the string-only
-   `putStr`/`putStrLn` externs, which moves the `Display` constraint into
-   Medaka where dict-passing works (an extern can't receive a dictionary). -}
+-- # Output
+
+{- | Writes a value to standard output, followed by a newline.
+
+   The value is rendered with `display`, so strings print without quotes
+   and a `Map` prints as `Map { 1 => 10 }`. For the `debug` rendering, use
+   `io.inspect`. -}
+-- Ordinary Medaka functions over the string-only `putStr`/`putStrLn`
+-- externs: the `Display` constraint has to live in Medaka, where dict-passing
+-- works (an extern can't receive a dictionary).
 export
 println : Display a => a -> <IO> Unit
 println x = putStrLn (display x)
 
+-- | Writes a value to standard output with no trailing newline. See `println`.
 export
 print : Display a => a -> <IO> Unit
 print x = putStr (display x)
 
-{- | Numeric arithmetic.  Backs `+`, `-`, `*`, `/` for user-defined numeric
-   types; the operators are hard-wired for `Int` and `Float` and only
-   dispatch through `add`/`sub`/... for other types.
+-- # Numbers
 
-   `div` is truncating for `Int` and true division for `Float`, matching
-   the host operator. -}
+{- | Numeric types.
+
+   The arithmetic operators are built in for `Int` and `Float`; on any other
+   type, `+`, `-`, `*`, and `/` dispatch to `add`, `sub`, `mul`, and `div`.
+   `div` truncates for `Int` and is true division for `Float`. -}
 export interface Num a requires Eq a where
   add : a -> a -> a
   sub : a -> a -> a
@@ -776,33 +756,57 @@ export impl Num Float where
   signum a = if a > 0.0 then 1.0 else if a < 0.0 then 0.0 - 1.0 else 0.0
   fromInt x = intToFloat x
 
-{- | Types with a smallest and largest representable value.
-   Impls for `Int`, `Char` etc. land once the corresponding extern
-   constants are added; the interface itself is here so generic
-   bounded-type code can be written today. -}
+{- | Whether `n` is divisible by two. Negative numbers included.
+
+   > isEven 4
+   True
+   > isEven 7
+   False -}
+export
+isEven : Int -> Bool
+isEven n = n % 2 == 0
+
+{- | Whether `n` is not divisible by two.
+
+   > isOdd 3
+   True -}
+export
+isOdd : Int -> Bool
+isOdd n = n % 2 /= 0
+
+-- > isOdd 8
+-- False
+
+-- | Types with a smallest and a largest value.
 export interface Bounded a where
   minBound : a
   maxBound : a
 
-{- | `Int` bounds are the platform's 63-bit native-integer limits.
+{- | The platform's 63-bit integer limits.
+
    > (minBound : Int) < (maxBound : Int)
    True -}
 export impl Bounded Int where
   minBound = intMinBound
   maxBound = intMaxBound
 
-{- | `Char` ranges over the Unicode scalar values, U+0000 to U+10FFFF.
-   > charCode (minBound : Char)
-   0
+{- | The Unicode scalar values, U+0000 to U+10FFFF.
+
    > charCode (maxBound : Char)
    1114111 -}
 export impl Bounded Char where
   minBound = charMinBound
   maxBound = charMaxBound
 
-{- | Structure-preserving map (a.k.a. Functor).  Laws:
-       map identity      == identity
-       map (g `compose` f) == map g `compose` map f -}
+-- > charCode (minBound : Char)
+-- 0
+
+-- # Mapping and sequencing
+
+{- | Containers whose elements can be transformed in place.
+
+   `map` must preserve the container's shape: `map identity` is the identity,
+   and `map (g << f)` equals `map g << map f`. -}
 export interface Mappable f where
   map : (a -> <e> b) -> f a -> <e> f b
 
@@ -814,21 +818,15 @@ export impl Mappable Option where
   map f (Some a) = Some (f a)
   map _ None = None
 
-{- `default` so a user-defined alternative (e.g. one that maps over the
-   `Err` side) can coexist without forcing every call site to qualify. -}
 export impl Mappable (Result e) where
   map f (Ok a) = Ok (f a)
   -- rebuilt (not returned as-is): `map _ e = e` would identify the method's
   -- `a`/`b`, which W3 method-scheme fidelity forbids (DICT-SEMANTICS §3)
   map _ (Err x) = Err x
 
-{- | Replace every element of a wrapped value with a constant, keeping the
-   structure — Haskell's `<$`.  `mapConst b fa == map (const b) fa`.
+{- | The container with every element replaced by `b`.
 
-   Value-first/data-last, like every other prelude combinator: the argument
-   the name is about comes first, and the container comes last so partial
-   application composes (#2306 E-2 renamed and reordered this from
-   `replaceWith : f a -> b -> f b`).
+   Equivalent to `map (const b)`.
 
    > mapConst 9 (Some 5)
    Some 9 -}
@@ -836,20 +834,22 @@ export
 mapConst : Mappable f => b -> f a -> f b
 mapConst b fa = map (_ => b) fa
 
-{- | `Mappable` plus the ability to lift a plain value and apply a wrapped
-   function to a wrapped argument.  Laws (identity, homomorphism,
-   interchange, composition) follow Haskell's `Applicative`. -}
+{- | Containers that can wrap a plain value and apply a wrapped function to a
+   wrapped argument.
+
+   `pure` wraps a value. `ap` applies a function inside one container to a
+   value inside another. The instances follow the usual applicative laws. -}
 export interface Applicative f requires Mappable f where
   pure : a -> f a
   ap : f (a -> b) -> f a -> f b
 
+-- List of functions × list of arguments → cross product of applications.
+-- Equivalent to `concatMap (f => map f xs) fs` but spelled out so we don't
+-- depend on `concatMap` at this point in the file.
 export impl Applicative List where
   pure a = [a]
   ap [] _ = []
   ap (f::fs) xs = map f xs ++ ap fs xs
-{- List of functions × list of arguments → cross product of applications.
-       Equivalent to `concatMap (f => map f xs) fs` but spelled out so we
-       don't depend on `concatMap` at this point in the file. -}
 
 export impl Applicative Option where
   pure a = Some a
@@ -857,64 +857,70 @@ export impl Applicative Option where
   ap _ None = None
   ap (Some f) (Some a) = Some (f a)
 
-{- `default` (like `Mappable (Result e)`) so an error-accumulating
-   alternative — a `Validation`-style applicative — can coexist. -}
 export impl Applicative (Result e) where
   pure a = Ok a
   ap (Ok f) (Ok a) = Ok (f a)
   ap (Err e) _ = Err e
   ap _ (Err e) = Err e
 
-{- | Lift a binary function over two applicative values — Haskell's `liftA2`.
+{- | Combines two wrapped values with a two-argument function.
+
+   For `Option` and `Result`, the result is `None` or the first `Err` when
+   either input is. For lists, `f` is applied to every pair.
 
    > map2 (a b => a + b) (Some 3) (Some 4)
    Some 7
-   > map2 (a b => a + b) (None : Option Int) (Some 4)
-   None
    > map2 (a b => a + b) [1, 2] [10, 20]
    [11, 21, 12, 22] -}
 export
 map2 : Applicative f => (a -> b -> c) -> f a -> f b -> f c
 map2 f fa fb = ap (map f fa) fb
 
-{- | Lift a ternary function over three applicative values — Haskell's `liftA3`.
+-- > map2 (a b => a + b) (None : Option Int) (Some 4)
+-- None
+
+{- | Combines three wrapped values with a three-argument function. See
+   `map2`.
 
    > map3 (a b c => a + b + c) (Some 1) (Some 2) (Some 3)
-   Some 6
-   > map3 (a b c => a + b + c) [1] [10, 20] [100]
-   [111, 121] -}
+   Some 6 -}
 export
 map3 : Applicative f => (a -> b -> c -> d) -> f a -> f b -> f c -> f d
 map3 f fa fb fc = ap (ap (map f fa) fb) fc
 
-{- | Sequencing of computations, threading the result.  Equivalent to
-   Haskell's `>>=` with arguments swapped to match the readable
-   "value first, then action" reading order.  Drives `do`-notation. -}
+-- > map3 (a b c => a + b + c) [1] [10, 20] [100]
+-- [111, 121]
+
+{- | Containers whose computations can be sequenced, each step seeing the
+   result of the last.
+
+   `andThen m f` runs `m`, then passes its result to `f`. It is what `do`
+   notation desugars to. For `Option` and `Result`, a `None` or `Err` stops
+   the sequence. -}
 export interface Thenable m requires Applicative m where
   andThen : m a -> (a -> <e> m b) -> <e> m b
 
--- | `andThen` with arguments flipped — the Haskell/Scala `flatMap`.
+-- | `andThen` with its arguments swapped.
 export
 flatMap : Thenable m => (a -> <e> m b) -> m a -> <e> m b
 flatMap f ma = andThen ma f
 
--- | Collapse one layer of nesting.  Haskell calls this `join`.
+-- | Removes one level of nesting: `Some (Some 1)` becomes `Some 1`.
 export
 flat : Thenable m => m (m a) -> m a
 flat x = andThen x identity
 
--- | Run an action only when the condition holds.
+-- | Runs an action only when the condition holds.
 export
 when : Thenable m => Bool -> m Unit -> m Unit
 when b m = if b then m else pure ()
 
--- | Run an action only when the condition is false.  Dual of `when`.
+-- | Runs an action only when the condition does not hold.
 export
 unless : Thenable m => Bool -> m Unit -> m Unit
 unless b m = if b then pure () else m
 
-{- | Monadic left fold: thread an accumulator through an effectful step, in
-   order, over a list.  Haskell's `foldM`.
+{- | A left fold whose step is an action, run in order over the list.
 
    > foldThen (acc x => Some (acc + x)) 0 [1, 2, 3]
    Some 6 -}
@@ -923,8 +929,9 @@ foldThen : Thenable m => (b -> a -> <e> m b) -> b -> List a -> <e> m b
 foldThen _ z [] = pure z
 foldThen f z (x::xs) = andThen (f z x) (z2 => foldThen f z2 xs)
 
-{- | Run an action `n` times and collect the results in order.  `n <= 0`
-   yields `pure []`.  Haskell's `replicateM`.
+{- | Runs an action `n` times and collects the results in order.
+
+   `pure []` when `n <= 0`.
 
    > repeatThen 3 (Some 7)
    Some [7, 7, 7] -}
@@ -934,8 +941,7 @@ repeatThen n action
   | n <= 0 = pure []
   | otherwise = andThen action (x => map (x :: _) (repeatThen (n - 1) action))
 
-{- | Keep the elements for which an effectful predicate returns `True`, in
-   order.  Haskell's `filterM`.
+{- | Keeps the elements for which an action returns `True`, in order.
 
    > filterThen (x => Some (x > 1)) [1, 2, 3]
    Some [2, 3] -}
@@ -946,14 +952,9 @@ filterThen f (x::xs) = andThen
   (f x)
   (keep => andThen (filterThen f xs) (rest => pure (if keep then x::rest else rest)))
 
-{- | Run an effectful action for each element, in order, discarding the
-   per-element results.  Haskell's `traverse_`/`for_` specialised to `List`.
-
-   Fn-first/data-last, matching `find`/`count`/`any`/`all`/`filterThen`
-   (#2306 E-1 reordered this from `List a -> (a -> m Unit) -> m Unit`).  The
-   doctest below is also the PIN for that order: a reorder is silent wherever
-   both arguments still typecheck, but a lambda is not a `List`, so this line
-   fails to typecheck under the old signature.
+-- The doctest also pins the fn-first argument order: a reorder is silent
+-- wherever both arguments still typecheck, but a lambda is not a `List`.
+{- | Runs an action for each element in order, discarding the results.
 
    > forEach (x => Some ()) [1, 2, 3]
    Some () -}
@@ -962,8 +963,7 @@ forEach : Thenable m => (a -> <e> m Unit) -> List a -> <e> m Unit
 forEach _ [] = pure ()
 forEach f (x::xs) = andThen (f x) (_ => forEach f xs)
 
-{- | Run each action in a list, in order, discarding the results.  Haskell's
-   `sequence_` specialised to `List`.
+{- | Runs each action in the list in order, discarding the results.
 
    > runEach [Some 1, Some 2]
    Some () -}
@@ -990,31 +990,21 @@ export impl Thenable Option where
   andThen None _ = None
   andThen (Some a) f = f a
 
-{- `default` (like the rest of the `Result e` family) so a short-circuiting
-   alternative can coexist with the standard error-propagating sequence. -}
 export impl Thenable (Result e) where
   andThen (Err e) _ = Err e
   andThen (Ok a) f = f a
 
-{- | Nondeterministic choice.  `noMatch` is the always-failing alternative
-   (identity for `orElse`); `orElse a b` tries `a` and, if it
-   "fails"/is-empty, falls back to `b` (left-biased).
+{- | Containers with a notion of failure and a fallback.
 
-   Laws:
-       orElse noMatch x == x          (left identity)
-       orElse x noMatch == x          (right identity)
-       orElse (orElse x y) z == orElse x (orElse y z)  (associativity)
+   `noMatch` is the failing value: `None`, or the empty list. `orElse a b`
+   is `a` unless `a` failed, in which case it is `b`. For lists, `orElse` is
+   concatenation. `noMatch` is the identity for `orElse`, and `orElse` is
+   associative.
 
-   > length (orElse [1, 2] [3])
-   3
-   > isEmpty (orElse ([] : List Int) [1])
-   False
-   > isSome (orElse (Some 1) (Some 2))
-   True
-   > isSome (orElse None (Some 2))
-   True
-   > isSome (orElse None (None : Option Int))
-   False -}
+   > orElse None (Some 2)
+   Some 2
+   > orElse [1, 2] [3]
+   [1, 2, 3] -}
 export interface Alternative f requires Applicative f where
   noMatch : f a
   orElse : f a -> f a -> f a
@@ -1028,8 +1018,17 @@ export impl Alternative Option where
   orElse (Some x) _ = Some x
   orElse None b = b
 
-{- | `guard True` succeeds with `pure ()`; `guard False` is the failing
-   `noMatch`.  Used to prune an `Alternative` computation on a condition.
+-- > isSome (orElse (Some 1) (Some 2))
+-- True
+-- > isSome (orElse None (None : Option Int))
+-- False
+-- > isEmpty (orElse ([] : List Int) [1])
+-- False
+
+{- | Succeeds when the condition holds and fails otherwise.
+
+   `guard True` is `pure ()`; `guard False` is `noMatch`. Use it to stop an
+   `Alternative` computation on a condition.
 
    > (guard True : Option Unit)
    Some ()
@@ -1040,10 +1039,12 @@ guard : Alternative f => Bool -> f Unit
 guard True = pure ()
 guard False = noMatch
 
-{- | Map over BOTH type parameters of a two-parameter type constructor —
-   Haskell's `Bifunctor`, renamed to fit `Mappable`/`Thenable`.  `mapFirst`
-   touches the left/`Err` side, `mapSecond` the right/`Ok` side; both have
-   defaults in terms of `bimap`.
+{- | Two-parameter types whose parameters can be mapped independently.
+
+   `bimap f g` applies `f` to the first parameter and `g` to the second.
+   `mapFirst` and `mapSecond` map one side and default to `bimap` with
+   `identity` on the other. For `Result`, the first side is `Err` and the
+   second is `Ok`.
 
    > bimap (n => n + 1) (n => n * 2) (Ok 5 : Result Int Int)
    Ok 10
@@ -1056,37 +1057,34 @@ export interface Bimappable p where
   mapSecond : (b -> <e> d) -> p a b -> <e> p a d
   mapSecond g = bimap identity g
 
-{- `mapFirst` on `Result` generalizes the standalone `mapErr`. -}
 export impl Bimappable Result where
   bimap f _ (Err e) = Err (f e)
   bimap _ g (Ok a) = Ok (g a)
 
-{- The bare 2-tuple constructor `(,)` as a `Bimappable`: `bimap` maps the two
-   fields independently.  `mapFirst`/`mapSecond` come from the interface
-   defaults, so they touch the left/right field respectively.
+{- | Pairs map each field independently.
 
    > bimap (x => x + 1) (y => y * 2) (3, 4)
    (4, 8)
    > mapFirst (x => x + 1) (3, 4)
-   (4, 4)
-   > mapSecond (y => y * 2) (3, 4)
-   (3, 8) -}
+   (4, 4) -}
 export impl Bimappable (,) where
   bimap f g (x, y) = (f x, g y)
 
-{- | Collapse a container down to a summary value.
+-- > mapSecond (y => y * 2) (3, 4)
+-- (3, 8)
 
-   `fold` is a strict left fold; `foldRight` is the natural recursive form
-   and is the one you want for operations that need to preserve element
-   order (or that would otherwise allocate a reversed accumulator).
+-- # Containers
 
-   `length`, `isEmpty`, and `foldMap` come with defaults so impls only
-   need to define `fold`, `foldRight`, and `toList`; override the others
-   when the data structure admits a faster implementation (e.g. O(1)
-   `length` for arrays).
+{- | Containers whose elements can be reduced to a single value.
 
-   > isEmpty (None : Option Int)
-   True
+   `fold` is a strict left fold. `foldRight` is the right fold, which
+   preserves element order in the result and is the one to use when the
+   step builds a structure. An instance defines `fold`, `foldRight`, and
+   `toList`; `foldMap`, `length`, and `isEmpty` have defaults, which an
+   instance may override where a faster version exists.
+
+   > fold (acc x => acc + x) 0 [1, 2, 3]
+   6
    > length (Some 5)
    1 -}
 export interface Foldable t where
@@ -1102,42 +1100,48 @@ export interface Foldable t where
     [] => True
     _ => False
 
-{- | Containers that can drop elements (and transform-while-dropping).
-   Modeled on Haskell's `witherable` Filterable: `filterMap` is the
-   primitive, `filter` falls out as a derived default.  Kept separate
-   from `Mappable` because not every functor can shrink — a fixed-shape
-   container has no sensible `filterMap`. -}
+-- > isEmpty (None : Option Int)
+-- True
+
+{- | Containers whose elements can be dropped.
+
+   `filterMap` keeps the `Some` results of applying a function to each
+   element. `filter` keeps the elements satisfying a predicate, and defaults
+   to a definition in terms of `filterMap`. Not every `Mappable` container
+   is `Filterable`: a fixed-shape container cannot shrink. -}
 export interface Filterable f requires Mappable f where
   filterMap : (a -> <e> Option b) -> f a -> <e> f b
   filter : (a -> <e> Bool) -> f a -> <e> f a
   filter p = filterMap (x => if p x then Some x else None)
 
-{- | Build a container `c` from a list of entries of type `e`.  Backs the
-   container-literal sugar: the compiler lowers `Map { k => v, … }` to
-   `fromEntries [(k, v), …]` and `Set { x, … }` to `fromEntries [x, …]`,
-   pinning the result type to the named container so this dispatches to that
-   container's impl.  `c` is the dispatch (result) type; `e` is its entry type
-   — for a map `(k, v)`, for a set the element.  Impls live with each container
-   (e.g. `impl FromEntries (Map k v) (k, v)` in map.mdk). -}
+{- | Containers that can be built from a list of entries.
+
+   The container literals desugar to `fromEntries`: `Map { k => v }` is
+   `fromEntries [(k, v)]` and `Set { x }` is `fromEntries [x]`, with the
+   result type pinned to the named container. `c` is the container and `e`
+   its entry type: `(k, v)` for a map, the element for a set. Each container
+   module defines its own instance. -}
 export interface FromEntries c e where
   fromEntries : List e -> c
 
-{- | Read access to a container `c` keyed by `k`, yielding a `v`.  `index c k`
-   looks up the value at key/index `k`; impls raise the coded `indexError`
-   abort (E-INDEX-OOB) on an out-of-range index or missing key. -}
+{- | Containers that can be read at a key.
+
+   `index c k` is the value at `k`; the `c[k]` syntax dispatches here. An
+   instance panics with an index error when `k` is out of range or absent. -}
 export interface Index c k v where
   index : c -> k -> v
 
-{- | Write access to a container `c` keyed by `k`.  `setIndex c k v` writes
-   `v` at key/index `k`, returning the (possibly mutated in place) container.
-   Requires `Index c k v` (a container you can write into, you can also read
-   from). -}
+{- | Containers that can be written at a key.
+
+   `setIndex c k v` writes `v` at `k` and returns the container, mutated in
+   place where the container is mutable. -}
 export interface IndexMut c k v requires Index c k v where
   setIndex : c -> k -> v -> c
 
-{- | `index arr i` reads `arr`'s element at `i` (`arr[i]` sugar dispatches
-   here).  O(1).  Raises the coded `indexError` (E-INDEX-OOB) when `i` is
-   out of range -- use `get` for a safe `Option`-returning read instead. -}
+{- | `arr[i]` reads the element at `i` in `O(1)`.
+
+   Panics with an index error when `i` is out of range; `array.get` is the
+   `Option`-returning form. -}
 export impl Index (Array a) Int a where
   index arr i =
     if i < 0 || i >= arrayLength arr then
@@ -1145,9 +1149,9 @@ export impl Index (Array a) Int a where
     else
       arrayGetUnsafe i arr
 
-{- | `setIndex arr i v` writes `v` at `arr`'s index `i`, in place, and
-   returns `arr`.  O(1).  Raises the coded `indexError` (E-INDEX-OOB) when
-   `i` is out of range. -}
+{- | Writes the element at `i` in place, in `O(1)`.
+
+   Panics with an index error when `i` is out of range. -}
 export impl IndexMut (Array a) Int a where
   setIndex arr i v =
     if i < 0 || i >= arrayLength arr then indexErrorAt i
@@ -1155,36 +1159,35 @@ export impl IndexMut (Array a) Int a where
       let _ = arraySetUnsafe i v arr
       arr
 
-{- | `index xs i` is `xs`'s element at position `i`.  O(n) — a singly-linked
-   list has no random access, so this walks `i` cons cells; prefer `Array`/
-   `Vector` for index-heavy workloads.  Raises the coded `indexError`
-   (E-INDEX-OOB) when `i` is out of range.  No `IndexMut` impl: `List` is
-   immutable / has no in-place element write. -}
+{- | `xs[i]` walks the list to position `i`, so it costs `O(i)`.
+
+   Panics with an index error when `i` is out of range; `list.get` is the
+   `Option`-returning form. Lists are immutable, so there is no `IndexMut`
+   instance. -}
 export impl Index (List a) Int a where
   index [] _ = indexError "index out of bounds"
   index (h::t) i = if i <= 0 then h else index t (i - 1)
 
-{- | `index s i` is the codepoint `Char` of `s` at position `i` (`s[i]` sugar
-   dispatches here; codepoints, not grapheme clusters -- matches `toChars`).
-   Raises the coded `indexError` (E-INDEX-OOB) when `i` is out of range.  No
-   `IndexMut` impl: `String` is immutable. -}
+{- | `s[i]` is the character at codepoint position `i`.
+
+   Panics with an index error when `i` is out of range. Positions count
+   codepoints, matching `string.toChars`. -}
 export impl Index String Int Char where
   index s i =
     let cs = stringToChars s
     if i < 0 || i >= arrayLength cs then indexErrorAt i else arrayGetUnsafe i cs
 
-{- | Read-only slicing of a container `c` by a half-open index range.  `slice c lo
-   hi` yields the sub-container over indices `[lo, hi)`.  The surface sugar
-   `c.[lo..hi]` / `c.[lo..=hi]` desugars to a call here (#670; the inclusive `..=`
-   form normalizes to `slice c lo (hi + 1)` in desugar), so the receiver is
-   constrained to a real container: `42.[0..1]` is a "no impl of Slice for Int"
-   type error rather than a wrong-container heap read.  Parallels `Index`. -}
+{- | Containers that can be sliced by a half-open index range.
+
+   `slice c lo hi` is the sub-container over indices `[lo, hi)`. The
+   `c.[lo..hi]` and `c.[lo..=hi]` syntax dispatches here. -}
 export interface Slice c where
   slice : c -> Int -> Int -> c
 
-{- | `slice arr lo hi` copies `arr`'s elements over `[lo, hi)` into a fresh
-   `Array`.  O(hi - lo).  Raises the coded `sliceError` (E-SLICE-OOB) when the
-   range runs outside `arr` -- unlike stdlib `Array.sliceClamped`, which clamps.
+{- | Copies the elements over `[lo, hi)` into a new array, in `O(hi - lo)`.
+
+   Panics with a slice error when the range runs outside the array;
+   `array.sliceClamped` clamps instead.
 
    > slice [|10, 20, 30, 40, 50|] 1 3
    [|20, 30|] -}
@@ -1195,18 +1198,18 @@ export impl Slice (Array a) where
     else
       arrayMakeWith (hi - lo) (i => arrayGetUnsafe (lo + i) arr)
 
-{- | `slice s lo hi` is the substring of `s` over `[lo, hi)` (codepoints).
-   Out-of-range bounds are clamped by the underlying `stringSlice`, matching
-   stdlib `String.sliceClamped`.
+{- | The substring over codepoint positions `[lo, hi)`.
+
+   Out-of-range bounds are clamped to the string.
 
    > slice "hello" 1 4
    "ell" -}
 export impl Slice String where
   slice s lo hi = stringSlice lo hi s
 
-{- | `slice xs lo hi` is the sublist of `xs` over `[lo, hi)`.  O(hi) -- walks the
-   cons chain.  Out-of-range bounds are CLAMPED (never panics), matching the
-   interpreter's list-slice contract.
+{- | The sublist over `[lo, hi)`, in `O(hi)`.
+
+   Out-of-range bounds are clamped to the list.
 
    > slice [10, 20, 30, 40] 1 3
    [20, 30] -}
@@ -1222,6 +1225,8 @@ sliceListGo (x::xs) i lo hi
   | i >= lo = x :: sliceListGo xs (i + 1) lo hi
   | otherwise = sliceListGo xs (i + 1) lo hi
 
+-- `length` goes through the strict left fold; `1 + length xs` would
+-- accumulate stack frames proportional to list length.
 export impl Foldable List where
   fold _ acc [] = acc
   fold f acc (x::xs) = fold f (f acc x) xs
@@ -1231,13 +1236,8 @@ export impl Foldable List where
   isEmpty [] = True
   isEmpty _ = False
   length = fold (acc _ => acc + 1) 0
-{- Tail-recursive via the strict left fold; `1 + length xs` would
-       accumulate stack frames proportional to list length. -}
 
-{- `Option` and `Result e` each foldable as a 0-or-1-element container.
-   `default` on the Result impl mirrors `Mappable (Result e)`: a user-defined
-   alternative (e.g. folding over the `Err` side) can coexist without
-   forcing every call site to qualify. -}
+-- `Option` and `Result e` each fold as a 0-or-1-element container.
 export impl Foldable Option where
   fold _ acc None = acc
   fold f acc (Some x) = f acc x
@@ -1254,48 +1254,48 @@ export impl Foldable (Result e) where
   toList (Err _) = []
   toList (Ok x) = [x]
 
-{- | Containers that can be traversed left-to-right, running an effectful
-   function over each element and collecting the results inside the effect.
-   `Traversable` is `Mappable` + `Foldable` plus the ability to *commute* the
-   container with an applicative/monadic effect: `traverse` walks the structure,
-   `sequence` flips a container-of-effects into an effect-of-container.
+{- | Containers whose elements can be visited left to right with an action,
+   collecting the results inside the action's type.
 
-   For `Option`/`Result` the effect short-circuits on the first `None`/`Err`;
-   for any other `Thenable m` it threads `m` through the whole structure.
+   `traverse f` applies `f` to each element and gathers the results.
+   `sequence` turns a container of actions into an action producing the
+   container. With `Option` or `Result` as the action, the first `None` or
+   `Err` is the result.
 
    > traverse (x => if x > 0 then Some x else None) [1, 2, 3]
    Some [1, 2, 3]
-   > traverse (x => if x > 0 then Some x else None) [1, -2, 3]
-   None
-   > traverse (x => if x > 0 then Some (x + 1) else None) (Some 5)
-   Some Some 6
-   > traverse (x => if x > 0 then Ok x else Err x) [1, 2, 3]
-   Ok [1, 2, 3]
-   > traverse (x => if x > 0 then Ok x else Err x) [1, -2, 3]
-   Err -2
-   > sequence [Some 1, Some 2, Some 3]
-   Some [1, 2, 3]
-   > sequence [Some 1, None, Some 3]
-   None
-   > sequence [Ok 1, Ok 2, Ok 3]
-   Ok [1, 2, 3]
    > sequence [Ok 1, Err 99, Ok 3]
    Err 99 -}
 export interface Traversable t requires Mappable t, Foldable t where
   traverse : Thenable m => (a -> <e> m b) -> t a -> <e> m (t b)
   sequence : Thenable m => t (m a) -> m (t a)
   sequence ta = traverse identity ta
--- `sequence` is an interface DEFAULT: the desugar fill pass (fillImplDefaults)
+-- `sequence` is an interface default: the desugar fill pass (fillImplDefaults)
 -- synthesizes a concrete-receiver per-impl copy of this body into every impl,
 -- so each List/Option/Result instance dispatches `traverse` on its concrete
 -- receiver and codegens correctly.  Written eta-expanded (`sequence ta = …`,
 -- not point-free `sequence = traverse identity`): the point-free form loses the
 -- `m` dictionary and mis-dispatches the inner `pure` to the `t` instance.
 
-{- Each `traverse` impl is a SINGLE clause with an inner `match`, not separate
-   per-constructor clauses: the multi-clause form of a generic `Thenable m =>`
-   method whose body has a return-position `pure` loops in eval (dict-passing ×
-   multi-clause desugar).  Do not split them back out. -}
+-- > traverse (x => if x > 0 then Some x else None) [1, -2, 3]
+-- None
+-- > traverse (x => if x > 0 then Some (x + 1) else None) (Some 5)
+-- Some Some 6
+-- > traverse (x => if x > 0 then Ok x else Err x) [1, 2, 3]
+-- Ok [1, 2, 3]
+-- > traverse (x => if x > 0 then Ok x else Err x) [1, -2, 3]
+-- Err -2
+-- > sequence [Some 1, Some 2, Some 3]
+-- Some [1, 2, 3]
+-- > sequence [Some 1, None, Some 3]
+-- None
+-- > sequence [Ok 1, Ok 2, Ok 3]
+-- Ok [1, 2, 3]
+
+-- Each `traverse` impl is a single clause with an inner `match`, not separate
+-- per-constructor clauses: the multi-clause form of a generic `Thenable m =>`
+-- method whose body has a return-position `pure` loops in eval (dict-passing ×
+-- multi-clause desugar).  Do not split them back out.
 -- lint-disable-next-line rule-match-on-param
 export impl Traversable List where
   traverse f xs = match xs
@@ -1308,34 +1308,32 @@ export impl Traversable Option where
     None => pure None
     Some x => map Some (f x)
 
-{- `default` mirrors the `Foldable`/`Mappable (Result e)` impls so a
-   user-defined alternative can coexist without qualifying call sites. -}
 -- lint-disable-next-line rule-match-on-param
 export impl Traversable (Result e) where
   traverse f res = match res
     Err e => pure (Err e)
     Ok x => map Ok (f x)
 
--- ─── 3. Standalone helpers ──────────────────────────────────────────────
+-- # Folding
 
-{- Foldable helpers — generic over any Foldable container.
+-- These are generic over any `Foldable` and do not short-circuit, because
+-- `fold` itself doesn't.  Container-specific versions in `list.mdk`,
+-- `array.mdk`, etc. can short-circuit where it matters.
 
-   These do *not* short-circuit because `fold` itself doesn't; that's the
-   price of staying generic.  Container-specific versions in `list.mdk`,
-   `array.mdk`, etc. can short-circuit where it matters. -}
-
-{- | True when at least one element satisfies the predicate.
+{- | Whether at least one element satisfies `f`.
 
    > any (x => x > 2) [1, 2, 3]
-   True
-   > any (x => x > 10) [1, 2, 3]
-   False -}
+   True -}
 export
 any : Foldable t => (a -> <e> Bool) -> t a -> <e> Bool
 any f = fold (acc x => acc || f x) False
 
-{- | True when every element satisfies the predicate.  Vacuously true on
-   the empty container.
+-- > any (x => x > 10) [1, 2, 3]
+-- False
+
+{- | Whether every element satisfies `f`.
+
+   `True` on an empty container.
 
    > all (x => x > 0) [1, 2, 3]
    True
@@ -1345,9 +1343,12 @@ export
 all : Foldable t => (a -> <e> Bool) -> t a -> <e> Bool
 all f = fold (acc x => acc && f x) True
 
-{- | First element satisfying the predicate, or `None` if none do.
-   Latches the first hit via an as-pattern so subsequent elements don't
-   overwrite the answer. -}
+-- Latches the first hit via an as-pattern so later elements don't overwrite
+-- the answer.
+{- | The first element satisfying `f`, or `None`.
+
+   > find (x => x > 1) [1, 2, 3]
+   Some 2 -}
 export
 find : Foldable t => (a -> <e> Bool) -> t a -> <e> Option a
 find f = fold g None
@@ -1357,7 +1358,10 @@ find f = fold g None
       | f x = Some x
       | otherwise = None
 
--- | Number of elements satisfying the predicate.
+{- | The number of elements satisfying `f`.
+
+   > count isEven [1, 2, 3, 4]
+   2 -}
 export
 count : Foldable t => (a -> <e> Bool) -> t a -> <e> Int
 count f = fold g 0
@@ -1366,35 +1370,39 @@ count f = fold g 0
       | f x = acc + 1
       | otherwise = acc
 
-{- | Sum of a numeric foldable.  Identity is `0`; in practice this only
-   works for `Int` today because `(+)` is a builtin that doesn't yet
-   dispatch through `Num.add` for user-defined numeric types. -}
+{- | The sum of the elements. `0` for an empty container.
+
+   > sum [1, 2, 3]
+   6 -}
 export
 sum : (Foldable t, Num a) => t a -> a
 sum xs = fold (+) (fromInt 0) xs
 
--- | Product of a numeric foldable.  Identity is `1`.  Same caveat as `sum`.
+{- | The product of the elements. `1` for an empty container.
+
+   > product [2, 3, 4]
+   24 -}
 export
 product : (Foldable t, Num a) => t a -> a
 product xs = fold (*) (fromInt 1) xs
 
--- | True when the value appears in the container (by `Eq`).
+{- | Whether the value occurs in the container.
+
+   > elem 2 [1, 2, 3]
+   True -}
 export
 elem : (Foldable t, Eq a) => a -> t a -> Bool
 elem a = fold (acc x => acc || x == a) False
 
--- | True when the value does *not* appear in the container.  `not . elem`.
+-- | Whether the value does not occur in the container.
 export
 notElem : (Foldable t, Eq a) => a -> t a -> Bool
 notElem a xs = not (elem a xs)
 
-{- | Largest element by `Ord`, or `None` when the container is empty.  Generic
-   over any `Foldable` — `List`, `Array`, `Option`, … all reuse this one body.
+{- | The largest element, or `None` when the container is empty.
 
    > maximum [3, 1, 2]
-   Some 3
-   > maximum ([] : List Int)
-   None -}
+   Some 3 -}
 export
 maximum : (Foldable t, Ord a) => t a -> Option a
 maximum = fold step None
@@ -1402,7 +1410,10 @@ maximum = fold step None
     step None x = Some x
     step (Some m) x = Some (max m x)
 
-{- | Smallest element by `Ord`, or `None` when empty.  Generic, like `maximum`.
+-- > maximum ([] : List Int)
+-- None
+
+{- | The smallest element, or `None` when the container is empty.
 
    > minimum [3, 1, 2]
    Some 1 -}
@@ -1413,9 +1424,9 @@ minimum = fold step None
     step None x = Some x
     step (Some m) x = Some (min m x)
 
-{- | `Filterable List`.  Lives in `core` (rather than `list.mdk`) so the
-   `filter` name is in scope for the rest of the stdlib; `list.mdk`
-   re-exports it for discoverability.
+-- Lives in `core` (rather than `list.mdk`) so the `filter` name is in scope
+-- for the rest of the stdlib; `list.mdk` re-exports it.
+{- | `filter` and `filterMap` on lists.
 
    > filter (x => x > 2) [1, 2, 3, 4]
    [3, 4] -}
@@ -1425,9 +1436,9 @@ export impl Filterable List where
     Some y => y :: filterMap f xs
     None => filterMap f xs
 
--- ─── Bool helpers ───────────────────────────────────────────────────────
+-- # Booleans
 
--- | Alias for `True`, idiomatic in guard chains.
+-- | `True`, for the final guard of a guard chain.
 export
 otherwise : Bool
 otherwise = True
@@ -1438,39 +1449,44 @@ not : Bool -> Bool
 not True = False
 not False = True
 
-{- | Strict logical AND.  The lazy short-circuiting form is the `&&`
-   operator, which is hard-wired in the evaluator. -}
+{- | Logical and, with both arguments evaluated.
+
+   The `&&` operator evaluates its right operand only when the left is
+   `True`. -}
 export
 and : Bool -> Bool -> Bool
 and True True = True
 and _ _ = False
 
--- | Strict logical OR.  See `and` for the lazy form.
+{- | Logical or, with both arguments evaluated.
+
+   The `||` operator evaluates its right operand only when the left is
+   `False`. -}
 export
 or : Bool -> Bool -> Bool
 or False False = False
 or _ _ = True
 
--- | Exclusive OR.
+-- | Exclusive or.
 export
 xor : Bool -> Bool -> Bool
 xor a b = a /= b
 
--- ─── Option helpers ─────────────────────────────────────────────────────
+-- # Options
 
--- | True if the value is present.
+-- | Whether the value is `Some`.
 export
 isSome : Option a -> Bool
 isSome (Some _) = True
 isSome None = False
 
--- | True if the value is absent.
+-- | Whether the value is `None`.
 export
 isNone : Option a -> Bool
 isNone None = True
 isNone (Some _) = False
 
-{- | Unwrap with a default for `None`.
+{- | The value inside a `Some`, or the default for `None`.
 
    > optionOr 0 (Some 42)
    42
@@ -1481,11 +1497,8 @@ optionOr : a -> Option a -> a
 optionOr _ (Some a) = a
 optionOr d None = d
 
-{- | Eliminate an `Option` by supplying a default for `None` and a function
-   for `Some`.  Named for what it eliminates (Haskell calls it `maybe`).
-
-   Lived in a published one-entry `option` module until the
-   0.1.0 surface freeze moved it beside its own type (#2306 I-2).
+{- | Applies `f` to the value inside a `Some`, or returns the default for
+   `None`.
 
    > option 0 (x => x + 1) (Some 41)
    42
@@ -1496,46 +1509,55 @@ option : b -> (a -> <e> b) -> Option a -> <e> b
 option _ f (Some x) = f x
 option dflt _ None = dflt
 
--- | Turn an `Option` into a `Result`, supplying the error for `None`.
+{- | The option as a result, with `e` as the error for `None`.
+
+   > toResult "missing" (Some 1)
+   Ok 1
+   > toResult "missing" None
+   Err "missing" -}
 export
 toResult : e -> Option a -> Result e a
 toResult _ (Some a) = Ok a
 toResult e None = Err e
 
-{- | Forget the error: `Ok x → Some x`, `Err _ → None`.
-   Named to match the "from-Result" intuition; this is the inverse of
-   `toResult` modulo the discarded error value. -}
+{- | The result as an option, discarding the error.
+
+   > fromResult (Ok 1)
+   Some 1
+   > fromResult (Err "boom")
+   None -}
 export
 fromResult : Result e a -> Option a
 fromResult (Ok a) = Some a
 fromResult (Err _) = None
 
--- ─── Result helpers ─────────────────────────────────────────────────────
+-- # Results
 
--- | True if the result is `Ok`.
+-- | Whether the result is `Ok`.
 export
 isOk : Result e a -> Bool
 isOk (Ok _) = True
 isOk (Err _) = False
 
--- | True if the result is `Err`.
+-- | Whether the result is `Err`.
 export
 isErr : Result e a -> Bool
 isErr (Err _) = True
 isErr (Ok _) = False
 
-{- | Unwrap with a default for `Err`.  Named distinctly from
-   `optionOr` so the two don't collide when both are in scope. -}
+{- | The value inside an `Ok`, or the default for `Err`.
+
+   > resultOr 0 (Ok 42)
+   42
+   > resultOr 0 (Err "boom")
+   0 -}
 export
 resultOr : a -> Result e a -> a
 resultOr _ (Ok a) = a
 resultOr d (Err _) = d
 
-{- | Eliminate a `Result` by supplying a handler for `Err` and a handler for
-   `Ok`.  Named for what it eliminates (Haskell calls it `either`).
-
-   Lived in a published one-entry `result` module until the
-   0.1.0 surface freeze moved it beside its own type (#2306 I-2).
+{- | Applies `onErr` to the error of an `Err`, or `onOk` to the value of an
+   `Ok`.
 
    > result (e => 0) (x => x + 1) (Ok 41)
    42
@@ -1546,48 +1568,59 @@ result : (e -> <eff> c) -> (a -> <eff> c) -> Result e a -> <eff> c
 result _ onOk (Ok x) = onOk x
 result onErr _ (Err e) = onErr e
 
-{- | Apply a function to the `Err` side, leaving `Ok` alone.  The `Ok`
-   analogue is just `map` from `Mappable (Result e)`. -}
+{- | Applies `f` to the error of an `Err`, leaving an `Ok` unchanged.
+
+   `map` is the counterpart for the `Ok` side.
+
+   > mapErr (e => "failed: " ++ e) (Err "boom")
+   Err "failed: boom" -}
 export
 mapErr : (e -> f) -> Result e a -> Result f a
 mapErr f (Err e) = Err (f e)
 mapErr _ (Ok a) = Ok a
 
--- ─── Utility functions ──────────────────────────────────────────────────
+-- # Functions
 
--- | Return the argument unchanged.
+-- | Its argument, unchanged.
 export
 identity : a -> a
 identity x = x
 
-{- | First component of a pair.
+{- | The first component of a pair.
+
    > fst (1, 2)
    1 -}
 export
 fst : (a, b) -> a
 fst (a, _) = a
 
-{- | Second component of a pair.
+{- | The second component of a pair.
+
    > snd ("a", True)
    True -}
 export
 snd : (a, b) -> b
 snd (_, b) = b
 
-{- | Return the first argument; useful as a building block for ignoring
-   a callback's input (`map (const 0) xs == replicate (length xs) 0`). -}
+{- | A function that ignores its argument and returns `x`.
+
+   > map (const 0) [1, 2, 3]
+   [0, 0, 0] -}
 export
 const : a -> b -> a
 const x _ = x
 
--- | Swap the first two arguments of a binary function.
+{- | `f` with its two arguments swapped.
+
+   > flip (a b => a - b) 1 10
+   9 -}
 export
 flip : (a -> b -> <e> c) -> b -> a -> <e> c
 flip f b a = f a b
 
-{- | Apply a binary function `f` to two arguments after running each through a
-   projection `g` — the classic `on`.  `sortBy (on compare fst)` compares
-   pairs by their first component.
+{- | Applies `f` to the results of `g` on each argument.
+
+   `on compare fst` compares pairs by their first component.
 
    > on compare fst (1, 9) (2, 8)
    Lt -}
@@ -1595,8 +1628,8 @@ export
 on : (b -> b -> <e> c) -> (a -> b) -> a -> a -> <e> c
 on f g x y = f (g x) (g y)
 
-{- | Turn a function on a pair into a function of two arguments.  The inverse
-   of `uncurry`.  (Medaka tuples aren't auto-curried, so this is not free.)
+{- | A function on a pair as a function of two arguments. The inverse of
+   `uncurry`.
 
    > curry fst 1 2
    1 -}
@@ -1604,7 +1637,7 @@ export
 curry : ((a, b) -> <e> c) -> a -> b -> <e> c
 curry f a b = f (a, b)
 
-{- | Turn a two-argument function into a function on a pair.  The inverse of
+{- | A function of two arguments as a function on a pair. The inverse of
    `curry`.
 
    > uncurry (a b => a + b) (3, 4)
@@ -1613,8 +1646,9 @@ export
 uncurry : (a -> b -> <e> c) -> (a, b) -> <e> c
 uncurry f (a, b) = f a b
 
-{- | Run a wrapped computation for its structure/effect and discard the result,
-   replacing it with `Unit`.  Haskell calls this `void`.
+{- | The container with its contents replaced by `()`.
+
+   Use it to run a computation for its effect or structure alone.
 
    > discard (Some 5)
    Some () -}
@@ -1622,34 +1656,36 @@ export
 discard : Mappable f => f a -> f Unit
 discard fa = map (_ => ()) fa
 
-{- | Right-to-left function composition: `(compose g f) x == g (f x)`.
-   Spelled `<<` as an operator. -}
+{- | Right-to-left composition: `compose g f` applies `f`, then `g`. The
+   `<<` operator. -}
 export
 compose : (b -> <e> c) -> (a -> <e> b) -> a -> <e> c
 compose g f a = g (f a)
 
-{- | Left-to-right function composition: `(pipe f g) x == g (f x)`.
-   Spelled `>>` as an operator. -}
+{- | Left-to-right composition: `pipe f g` applies `f`, then `g`. The `>>`
+   operator. -}
 export
 pipe : (a -> <e> b) -> (b -> <e> c) -> a -> <e> c
 pipe f g a = g (f a)
 
-{- | Function application as a function.  Mainly useful for higher-order
-   code that wants to defer "actually call this" decisions. -}
+-- | Function application as a function: `apply f x` is `f x`.
 export
 apply : (a -> <e> b) -> a -> <e> b
 apply f a = f a
 
--- ─── 4. Arbitrary (property-test generators) ────────────────────────────
+-- # Property testing
 
-{- | Sources of random values for property-based testing (`prop` decls).
-   `arbitrary` produces a value in the `<Rand>` effect; `shrink` returns
-   progressively smaller candidates used to reduce a failing example. -}
+{- | Types that can generate random values for property tests.
+
+   `arbitrary` draws a value in the `<Rand>` effect. `shrink` lists smaller
+   candidates, tried in order to reduce a failing example; it defaults to
+   none. -}
 export interface Arbitrary a where
   arbitrary : Unit -> <Rand> a
   shrink : a -> List a
   shrink _ = []
 
+-- | Draws from `-1000` to `1000`. Shrinks towards `0`.
 export impl Arbitrary Int where
   arbitrary () = randomInt (-1000) 1000
   shrink 0 = []
@@ -1664,7 +1700,7 @@ export impl Arbitrary Float where
 export impl Arbitrary Char where
   arbitrary () = randomChar ()
 
--- | Generate a random string of 0–10 printable ASCII chars.
+-- | A random string of up to ten printable ASCII characters.
 export
 arbitraryString : Unit -> <Rand> String
 arbitraryString () = go (randomInt 0 10) ""
@@ -1675,7 +1711,7 @@ arbitraryString () = go (randomInt 0 10) ""
 export impl Arbitrary String where
   arbitrary () = arbitraryString ()
 
--- | Generate a list of up to `maxLen` elements using `gen`.
+-- | A random list of up to `maxLen` elements, each drawn with `gen`.
 export
 arbitraryList : (Unit -> <Rand> a) -> Int -> <Rand> List a
 arbitraryList gen maxLen = go (randomInt 0 maxLen) []
@@ -1683,33 +1719,28 @@ arbitraryList gen maxLen = go (randomInt 0 maxLen) []
     go 0 acc = acc
     go n acc = go (n - 1) (gen () :: acc)
 
-{- The instance form of `arbitraryList` (sheet row H-7).  `arbitraryList` stays
-   as the explicit-generator escape hatch — a generator that is not the type's
-   `Arbitrary` instance, or a longer list, still needs it.  This impl is what
-   lets a HAND-WRITTEN generator call `arbitrary` at `List a` and compose.
-   ⚠️ It is NOT what makes `prop … (xs : List Int)` work: `medaka test`'s
-   runner generates from the declared TYPE, not from `Arbitrary` (see the
-   note above the laws below).  `maxLen` is 10, matching `arbitraryString`. -}
+{- | A random list of up to ten elements drawn from the element's instance. -}
+-- `medaka test` generates `prop` parameters from their declared type, not
+-- from `Arbitrary`; this instance is for hand-written generators that call
+-- `arbitrary` at `List a`.  `arbitraryList` stays as the explicit-generator
+-- escape hatch for a different generator or a longer list.
 export impl Arbitrary (List a) requires Arbitrary a where
   arbitrary () = arbitraryList arbitrary 10
 
-{- | Half the draws are `None`.  `shrink` collapses a `Some` to `None`, which
-   is the only strictly smaller `Option` there is. -}
+-- | Half the draws are `None`. A `Some` shrinks to `None`.
 export impl Arbitrary (Option a) requires Arbitrary a where
   arbitrary () = if randomInt 0 1 == 0 then None else Some (arbitrary ())
   shrink (Some _) = [None]
   shrink None = []
 
--- ─── 4b. Generic (structural representation / `deriving (Generic)`) ──────
+-- # Generic representation
 
-{- | A uniform, flat structural view of any value.  `deriving (Generic)`
-   synthesises `to_rep`, turning a value into this tagged tree; a library
-   author writes one function over `Rep` and gets their typeclass for any
-   deriving type (serialisation, hashing, pretty-printing, …).
+{- | A uniform structural view of a value, produced by `deriving (Generic)`.
 
-   `RCon` carries a constructor's name and its positional fields' reps;
-   `RRecord` carries a record type's name and its named fields.  The
-   remaining constructors are primitive leaves. -}
+   `RCon` is a constructor with its name and positional fields; `RRecord` is
+   a record with its name and named fields. The other constructors are the
+   primitive leaves. A function written over `Rep` works for every type
+   that derives `Generic`. -}
 public export data Rep =
   | RCon String (List Rep)
   | RRecord String (List RField)
@@ -1726,10 +1757,10 @@ public export data RField =
   | RField { fld_name : String, fld_rep : Rep }
 deriving (Eq, Debug)
 
-{- | Types with a structural representation.  `to_rep` is synthesised by
-   `deriving (Generic)`.  `from_rep` is return-type polymorphic, which the
-   runtime cannot dispatch on arguments alone, so it is a stub for now —
-   the signature is fixed so a later phase can fill in real bodies. -}
+{- | Types with a structural representation.
+
+   `to_rep` is generated by `deriving (Generic)`. `from_rep` is not yet
+   implemented and panics when called. -}
 export interface Generic a where
   to_rep : a -> Rep
   from_rep : Rep -> a
@@ -1753,7 +1784,7 @@ export impl Generic Char where
 export impl Generic Unit where
   to_rep _ = RUnit
 
--- ─── 5. Properties (executed by `medaka test`) ──────────────────────────
+-- ─── Properties (executed by `medaka test`) ──────────────────────────────
 
 prop "neq is the negation of eq" (x : Int) (y : Int) = neq x y == not (eq x y)
 
@@ -1780,8 +1811,6 @@ prop "optionOr d (Some x) == x" (x : Int) (d : Int) = optionOr d (Some x) == x
 prop "toResult/fromResult round-trip on Some" (x : Int) =
   eq (fromResult (toResult "missing" (Some x))) (Some x)
 
--- The four props below came in with `option`/`result` from the one-entry
--- modules that #2306 I-2 folded into core.
 prop "option dflt f (Some x) == f x" (x : Int) (d : Int) =
   option d (n => n * 2) (Some x) == x * 2
 
@@ -1818,8 +1847,8 @@ prop "foldThen with Some agrees with a pure fold" (xs : List Int) = eq
   (foldThen (acc x => Some (acc + x)) 0 xs)
   (Some (fold (acc x => acc + x) 0 xs))
 
--- ─── Instance laws for the cells added by sheet rows H-7 and A-2 ─────────
-{- ⚠️ Two things constrain how these are written.
+-- ─── Instance laws ───────────────────────────────────────────────────────
+{- Two things constrain how these are written.
 
    1. `medaka test`'s property runner does NOT dispatch on `Arbitrary` — it
       generates from the declared TYPE (`prop_runner.mdk`'s `genForType`,
@@ -1847,7 +1876,7 @@ optInRange (Some x) = inIntRange x
 listInRange : List Int -> Bool
 listInRange xs = length xs <= 10 && all inIntRange xs
 
--- LAW (H-7): `Arbitrary (List a)` must DELEGATE to the element instance (every
+-- LAW: `Arbitrary (List a)` must DELEGATE to the element instance (every
 -- element inside `Arbitrary Int`'s own range), must respect the documented
 -- length bound, and must not be the degenerate always-empty generator — that
 -- last clause is why 50 draws are taken rather than one.
@@ -1855,23 +1884,23 @@ prop "Arbitrary (List a) delegates, bounds length, and is not degenerate" (n : I
   let draws = drawN 50 : List (List Int)
   all listInRange draws && any (xs => length xs > 0) draws
 
--- LAW (H-7): `Arbitrary (Option a)` must produce BOTH constructors — a
--- generator that only ever yielded `None` would satisfy every payload law
--- vacuously — and its `Some` payload must come from the element instance.
+-- LAW: `Arbitrary (Option a)` must produce BOTH constructors — a generator
+-- that only ever yielded `None` would satisfy every payload law vacuously —
+-- and its `Some` payload must come from the element instance.
 prop "Arbitrary (Option a) draws both constructors and delegates" (n : Int) =
   let draws = drawN 50 : List (Option Int)
   all optInRange draws && any isSome draws && any (o => not (isSome o)) draws
 
--- LAW (H-7): `shrink` must return strictly smaller values.  `None` is the only
+-- LAW: `shrink` must return strictly smaller values.  `None` is the only
 -- `Option` smaller than a `Some`, and nothing is smaller than `None`.
 prop "Arbitrary (Option a) shrinks Some to None and None no further" (x : Int) =
   let none = None : Option Int
   eq (shrink (Some x)) [none] && eq (shrink none) []
 
--- LAW (A-2): derived `Eq`/`Debug` on `Rep`/`RField` are structural and must
--- agree — the comparison has to reach through `RRecord`'s `List RField` into
--- each field's nested `Rep`, which is the whole point of a generic
--- representation being inspectable.
+-- LAW: derived `Eq`/`Debug` on `Rep`/`RField` are structural and must agree —
+-- the comparison has to reach through `RRecord`'s `List RField` into each
+-- field's nested `Rep`, which is the whole point of a generic representation
+-- being inspectable.
 prop "Eq/Debug on Rep reach through RRecord into a nested field" (n : Int) (nm : String) =
   let a = RRecord "R" [RField { fld_name = nm, fld_rep = RInt n }]
   let b = RRecord "R" [RField { fld_name = nm, fld_rep = RInt n }]
@@ -1886,7 +1915,7 @@ prop "Eq Rep separates the primitive leaves" (n : Int) = eq (RInt n) (RInt n)
   && not (eq (RCon "A" []) (RCon "B" []))
   && not (eq (RCon "A" [RInt n]) (RCon "A" []))
 
--- LAW (A-5): `Ord (Array a)` is `Ord (List a)` transported along
+-- LAW: `Ord (Array a)` is `Ord (List a)` transported along
 -- `toList`/`arrayFromList` — same lexicographic order, and consistent with
 -- `Eq (Array a)` (`compare` is `Eq` exactly when the arrays are equal).
 prop "Ord Array agrees with Ord List elementwise" (xs : List Int) (ys : List Int) =
@@ -1901,7 +1930,7 @@ prop "Ord Array is consistent with Eq Array" (xs : List Int) (ys : List Int) =
 
 prop "Ord Array: a proper prefix sorts before its extension" (xs : List Int) (y : Int) = eq (compare (arrayFromList xs) (arrayFromList (xs ++ [y]))) Lt
 
--- LAW (A-5): `Hashable (Array a)` agrees with `Hashable (List a)` on the same
+-- LAW: `Hashable (Array a)` agrees with `Hashable (List a)` on the same
 -- elements (the peer relationship), and equal arrays hash equally (the
 -- `Hashable`/`Eq` law that makes it usable as a `HashMap` key).
 prop "Hashable Array agrees with Hashable List" (xs : List Int) =
@@ -1938,10 +1967,6 @@ prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
 (DInterface true false "Ord" ("a") ((super "Eq" ("a"))) ((imethod "compare" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyCon "Ordering"))) None) (imethod "lt" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyCon "Bool"))) (mdef ((PVar "x") (PVar "y")) (EMatch (EApp (EApp (EVar "compare") (EVar "x")) (EVar "y")) (arm (PCon "Lt") () (EVar "True")) (arm PWild () (EVar "False"))))) (imethod "gt" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyCon "Bool"))) (mdef ((PVar "x") (PVar "y")) (EMatch (EApp (EApp (EVar "compare") (EVar "x")) (EVar "y")) (arm (PCon "Gt") () (EVar "True")) (arm PWild () (EVar "False"))))) (imethod "lte" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyCon "Bool"))) (mdef ((PVar "x") (PVar "y")) (EMatch (EApp (EApp (EVar "compare") (EVar "x")) (EVar "y")) (arm (PCon "Gt") () (EVar "False")) (arm PWild () (EVar "True"))))) (imethod "gte" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyCon "Bool"))) (mdef ((PVar "x") (PVar "y")) (EMatch (EApp (EApp (EVar "compare") (EVar "x")) (EVar "y")) (arm (PCon "Lt") () (EVar "False")) (arm PWild () (EVar "True"))))) (imethod "min" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) (mdef ((PVar "x") (PVar "y")) (EMatch (EApp (EApp (EVar "compare") (EVar "x")) (EVar "y")) (arm (PCon "Gt") () (EVar "y")) (arm PWild () (EVar "x"))))) (imethod "max" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) (mdef ((PVar "x") (PVar "y")) (EMatch (EApp (EApp (EVar "compare") (EVar "x")) (EVar "y")) (arm (PCon "Lt") () (EVar "y")) (arm PWild () (EVar "x")))))))
 (DTypeSig true "clamp" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))))))
 (DFunDef false "clamp" ((PVar "lo") (PVar "hi")) (EBinOp ">>" (EApp (EVar "min") (EVar "hi")) (EApp (EVar "max") (EVar "lo"))))
-(DTypeSig true "isEven" (TyFun (TyCon "Int") (TyCon "Bool")))
-(DFunDef false "isEven" ((PVar "n")) (EBinOp "==" (EBinOp "%" (EVar "n") (ELit (LInt 2))) (ELit (LInt 0))))
-(DTypeSig true "isOdd" (TyFun (TyCon "Int") (TyCon "Bool")))
-(DFunDef false "isOdd" ((PVar "n")) (EBinOp "/=" (EBinOp "%" (EVar "n") (ELit (LInt 2))) (ELit (LInt 0))))
 (DImpl true "Ord" ((TyCon "Int")) () ((im "compare" ((PVar "a") (PVar "b")) (EIf (EBinOp "<" (EVar "a") (EVar "b")) (EVar "Lt") (EIf (EBinOp ">" (EVar "a") (EVar "b")) (EVar "Gt") (EVar "Eq")))) (im "lt" ((PVar "x") (PVar "y")) (EMatch (EApp (EApp (EVar "compare") (EVar "x")) (EVar "y")) (arm (PCon "Lt") () (EVar "True")) (arm PWild () (EVar "False")))) (im "gt" ((PVar "x") (PVar "y")) (EMatch (EApp (EApp (EVar "compare") (EVar "x")) (EVar "y")) (arm (PCon "Gt") () (EVar "True")) (arm PWild () (EVar "False")))) (im "lte" ((PVar "x") (PVar "y")) (EMatch (EApp (EApp (EVar "compare") (EVar "x")) (EVar "y")) (arm (PCon "Gt") () (EVar "False")) (arm PWild () (EVar "True")))) (im "gte" ((PVar "x") (PVar "y")) (EMatch (EApp (EApp (EVar "compare") (EVar "x")) (EVar "y")) (arm (PCon "Lt") () (EVar "False")) (arm PWild () (EVar "True")))) (im "min" ((PVar "x") (PVar "y")) (EMatch (EApp (EApp (EVar "compare") (EVar "x")) (EVar "y")) (arm (PCon "Gt") () (EVar "y")) (arm PWild () (EVar "x")))) (im "max" ((PVar "x") (PVar "y")) (EMatch (EApp (EApp (EVar "compare") (EVar "x")) (EVar "y")) (arm (PCon "Lt") () (EVar "y")) (arm PWild () (EVar "x"))))))
 (DTypeSig false "floatSignBit" (TyFun (TyCon "Float") (TyCon "Bool")))
 (DFunDef false "floatSignBit" ((PVar "x")) (EBinOp ">=" (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "floatToBytes64") (EVar "x"))) (ELit (LInt 128))))
@@ -2052,6 +2077,10 @@ prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
 (DInterface true false "Num" ("a") ((super "Eq" ("a"))) ((imethod "add" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) None) (imethod "sub" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) None) (imethod "mul" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) None) (imethod "div" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) None) (imethod "negate" (TyFun (TyVar "a") (TyVar "a")) None) (imethod "abs" (TyFun (TyVar "a") (TyVar "a")) None) (imethod "signum" (TyFun (TyVar "a") (TyVar "a")) None) (imethod "fromInt" (TyFun (TyCon "Int") (TyVar "a")) None)))
 (DImpl true "Num" ((TyCon "Int")) () ((im "add" ((PVar "a") (PVar "b")) (EBinOp "+" (EVar "a") (EVar "b"))) (im "sub" ((PVar "a") (PVar "b")) (EBinOp "-" (EVar "a") (EVar "b"))) (im "mul" ((PVar "a") (PVar "b")) (EBinOp "*" (EVar "a") (EVar "b"))) (im "div" ((PVar "a") (PVar "b")) (EBinOp "/" (EVar "a") (EVar "b"))) (im "negate" ((PVar "a")) (EBinOp "-" (ELit (LInt 0)) (EVar "a"))) (im "abs" ((PVar "a")) (EIf (EBinOp "<" (EVar "a") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (EVar "a")) (EVar "a"))) (im "signum" ((PVar "a")) (EIf (EBinOp ">" (EVar "a") (ELit (LInt 0))) (ELit (LInt 1)) (EIf (EBinOp "<" (EVar "a") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))) (ELit (LInt 0))))) (im "fromInt" ((PVar "x")) (EVar "x"))))
 (DImpl true "Num" ((TyCon "Float")) () ((im "add" ((PVar "a") (PVar "b")) (EBinOp "+" (EVar "a") (EVar "b"))) (im "sub" ((PVar "a") (PVar "b")) (EBinOp "-" (EVar "a") (EVar "b"))) (im "mul" ((PVar "a") (PVar "b")) (EBinOp "*" (EVar "a") (EVar "b"))) (im "div" ((PVar "a") (PVar "b")) (EBinOp "/" (EVar "a") (EVar "b"))) (im "negate" ((PVar "a")) (EBinOp "-" (ELit (LFloat 0.0)) (EVar "a"))) (im "abs" ((PVar "a")) (EIf (EBinOp "<" (EVar "a") (ELit (LFloat 0.0))) (EBinOp "-" (ELit (LFloat 0.0)) (EVar "a")) (EVar "a"))) (im "signum" ((PVar "a")) (EIf (EBinOp ">" (EVar "a") (ELit (LFloat 0.0))) (ELit (LFloat 1.0)) (EIf (EBinOp "<" (EVar "a") (ELit (LFloat 0.0))) (EBinOp "-" (ELit (LFloat 0.0)) (ELit (LFloat 1.0))) (ELit (LFloat 0.0))))) (im "fromInt" ((PVar "x")) (EApp (EVar "intToFloat") (EVar "x")))))
+(DTypeSig true "isEven" (TyFun (TyCon "Int") (TyCon "Bool")))
+(DFunDef false "isEven" ((PVar "n")) (EBinOp "==" (EBinOp "%" (EVar "n") (ELit (LInt 2))) (ELit (LInt 0))))
+(DTypeSig true "isOdd" (TyFun (TyCon "Int") (TyCon "Bool")))
+(DFunDef false "isOdd" ((PVar "n")) (EBinOp "/=" (EBinOp "%" (EVar "n") (ELit (LInt 2))) (ELit (LInt 0))))
 (DInterface true false "Bounded" ("a") () ((imethod "minBound" (TyVar "a") None) (imethod "maxBound" (TyVar "a") None)))
 (DImpl true "Bounded" ((TyCon "Int")) () ((im "minBound" () (EVar "intMinBound")) (im "maxBound" () (EVar "intMaxBound"))))
 (DImpl true "Bounded" ((TyCon "Char")) () ((im "minBound" () (EVar "charMinBound")) (im "maxBound" () (EVar "charMaxBound"))))
@@ -2310,10 +2339,6 @@ prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
 (DInterface true false "Ord" ("a") ((super "Eq" ("a"))) ((imethod "compare" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyCon "Ordering"))) None) (imethod "lt" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyCon "Bool"))) (mdef ((PVar "x") (PVar "y")) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "x")) (EVar "y")) (arm (PCon "Lt") () (EVar "True")) (arm PWild () (EVar "False"))))) (imethod "gt" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyCon "Bool"))) (mdef ((PVar "x") (PVar "y")) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "x")) (EVar "y")) (arm (PCon "Gt") () (EVar "True")) (arm PWild () (EVar "False"))))) (imethod "lte" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyCon "Bool"))) (mdef ((PVar "x") (PVar "y")) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "x")) (EVar "y")) (arm (PCon "Gt") () (EVar "False")) (arm PWild () (EVar "True"))))) (imethod "gte" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyCon "Bool"))) (mdef ((PVar "x") (PVar "y")) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "x")) (EVar "y")) (arm (PCon "Lt") () (EVar "False")) (arm PWild () (EVar "True"))))) (imethod "min" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) (mdef ((PVar "x") (PVar "y")) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "x")) (EVar "y")) (arm (PCon "Gt") () (EVar "y")) (arm PWild () (EVar "x"))))) (imethod "max" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) (mdef ((PVar "x") (PVar "y")) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "x")) (EVar "y")) (arm (PCon "Lt") () (EVar "y")) (arm PWild () (EVar "x")))))))
 (DTypeSig true "clamp" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))))))
 (DFunDef false "clamp" ((PVar "lo") (PVar "hi")) (EBinOp ">>" (EApp (EMethodRef "min") (EVar "hi")) (EApp (EMethodRef "max") (EVar "lo"))))
-(DTypeSig true "isEven" (TyFun (TyCon "Int") (TyCon "Bool")))
-(DFunDef false "isEven" ((PVar "n")) (EBinOp "==" (EBinOp "%" (EVar "n") (ELit (LInt 2))) (ELit (LInt 0))))
-(DTypeSig true "isOdd" (TyFun (TyCon "Int") (TyCon "Bool")))
-(DFunDef false "isOdd" ((PVar "n")) (EBinOp "/=" (EBinOp "%" (EVar "n") (ELit (LInt 2))) (ELit (LInt 0))))
 (DImpl true "Ord" ((TyCon "Int")) () ((im "compare" ((PVar "a") (PVar "b")) (EIf (EBinOp "<" (EVar "a") (EVar "b")) (EVar "Lt") (EIf (EBinOp ">" (EVar "a") (EVar "b")) (EVar "Gt") (EVar "Eq")))) (im "lt" ((PVar "x") (PVar "y")) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "x")) (EVar "y")) (arm (PCon "Lt") () (EVar "True")) (arm PWild () (EVar "False")))) (im "gt" ((PVar "x") (PVar "y")) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "x")) (EVar "y")) (arm (PCon "Gt") () (EVar "True")) (arm PWild () (EVar "False")))) (im "lte" ((PVar "x") (PVar "y")) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "x")) (EVar "y")) (arm (PCon "Gt") () (EVar "False")) (arm PWild () (EVar "True")))) (im "gte" ((PVar "x") (PVar "y")) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "x")) (EVar "y")) (arm (PCon "Lt") () (EVar "False")) (arm PWild () (EVar "True")))) (im "min" ((PVar "x") (PVar "y")) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "x")) (EVar "y")) (arm (PCon "Gt") () (EVar "y")) (arm PWild () (EVar "x")))) (im "max" ((PVar "x") (PVar "y")) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "x")) (EVar "y")) (arm (PCon "Lt") () (EVar "y")) (arm PWild () (EVar "x"))))))
 (DTypeSig false "floatSignBit" (TyFun (TyCon "Float") (TyCon "Bool")))
 (DFunDef false "floatSignBit" ((PVar "x")) (EBinOp ">=" (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "floatToBytes64") (EVar "x"))) (ELit (LInt 128))))
@@ -2424,6 +2449,10 @@ prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
 (DInterface true false "Num" ("a") ((super "Eq" ("a"))) ((imethod "add" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) None) (imethod "sub" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) None) (imethod "mul" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) None) (imethod "div" (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a"))) None) (imethod "negate" (TyFun (TyVar "a") (TyVar "a")) None) (imethod "abs" (TyFun (TyVar "a") (TyVar "a")) None) (imethod "signum" (TyFun (TyVar "a") (TyVar "a")) None) (imethod "fromInt" (TyFun (TyCon "Int") (TyVar "a")) None)))
 (DImpl true "Num" ((TyCon "Int")) () ((im "add" ((PVar "a") (PVar "b")) (EBinOp "+" (EVar "a") (EVar "b"))) (im "sub" ((PVar "a") (PVar "b")) (EBinOp "-" (EVar "a") (EVar "b"))) (im "mul" ((PVar "a") (PVar "b")) (EBinOp "*" (EVar "a") (EVar "b"))) (im "div" ((PVar "a") (PVar "b")) (EBinOp "/" (EVar "a") (EVar "b"))) (im "negate" ((PVar "a")) (EBinOp "-" (ELit (LInt 0)) (EVar "a"))) (im "abs" ((PVar "a")) (EIf (EBinOp "<" (EVar "a") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (EVar "a")) (EVar "a"))) (im "signum" ((PVar "a")) (EIf (EBinOp ">" (EVar "a") (ELit (LInt 0))) (ELit (LInt 1)) (EIf (EBinOp "<" (EVar "a") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))) (ELit (LInt 0))))) (im "fromInt" ((PVar "x")) (EVar "x"))))
 (DImpl true "Num" ((TyCon "Float")) () ((im "add" ((PVar "a") (PVar "b")) (EBinOp "+" (EVar "a") (EVar "b"))) (im "sub" ((PVar "a") (PVar "b")) (EBinOp "-" (EVar "a") (EVar "b"))) (im "mul" ((PVar "a") (PVar "b")) (EBinOp "*" (EVar "a") (EVar "b"))) (im "div" ((PVar "a") (PVar "b")) (EBinOp "/" (EVar "a") (EVar "b"))) (im "negate" ((PVar "a")) (EBinOp "-" (ELit (LFloat 0.0)) (EVar "a"))) (im "abs" ((PVar "a")) (EIf (EBinOp "<" (EVar "a") (ELit (LFloat 0.0))) (EBinOp "-" (ELit (LFloat 0.0)) (EVar "a")) (EVar "a"))) (im "signum" ((PVar "a")) (EIf (EBinOp ">" (EVar "a") (ELit (LFloat 0.0))) (ELit (LFloat 1.0)) (EIf (EBinOp "<" (EVar "a") (ELit (LFloat 0.0))) (EBinOp "-" (ELit (LFloat 0.0)) (ELit (LFloat 1.0))) (ELit (LFloat 0.0))))) (im "fromInt" ((PVar "x")) (EApp (EVar "intToFloat") (EVar "x")))))
+(DTypeSig true "isEven" (TyFun (TyCon "Int") (TyCon "Bool")))
+(DFunDef false "isEven" ((PVar "n")) (EBinOp "==" (EBinOp "%" (EVar "n") (ELit (LInt 2))) (ELit (LInt 0))))
+(DTypeSig true "isOdd" (TyFun (TyCon "Int") (TyCon "Bool")))
+(DFunDef false "isOdd" ((PVar "n")) (EBinOp "/=" (EBinOp "%" (EVar "n") (ELit (LInt 2))) (ELit (LInt 0))))
 (DInterface true false "Bounded" ("a") () ((imethod "minBound" (TyVar "a") None) (imethod "maxBound" (TyVar "a") None)))
 (DImpl true "Bounded" ((TyCon "Int")) () ((im "minBound" () (EVar "intMinBound")) (im "maxBound" () (EVar "intMaxBound"))))
 (DImpl true "Bounded" ((TyCon "Char")) () ((im "minBound" () (EVar "charMinBound")) (im "maxBound" () (EVar "charMaxBound"))))

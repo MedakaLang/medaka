@@ -380,7 +380,7 @@ same `(i x)` callback order `list.mapWithIndex` uses.
 
 ## Instances
 
-- `Array`: [`Filterable`](#filterable-array), `Mappable`, `Foldable`, `Semigroup`, [`Monoid`](#monoid-array-a), [`Debug`](#debug-array-a), `Eq`, [`Ord`](#ord-array-a), [`Display`](#display-array-a), [`Hashable`](#hashable-array-a), [`Index`](#index-array-a-int-a), [`IndexMut`](#indexmut-array-a-int-a), [`Slice`](#slice-array-a)
+- `Array`: [`Filterable`](#filterable-array), `Mappable`, `Foldable`, `Semigroup`, [`Monoid`](#monoid-array-a), [`Debug`](#debug-array-a), `Eq`, [`Ord`](#ord-array-a), [`Display`](#display-array-a), `Hashable`, [`Index`](#index-array-a-int-a), [`IndexMut`](#indexmut-array-a-int-a), [`Slice`](#slice-array-a)
 
 ### `Filterable Array`
 
@@ -414,14 +414,11 @@ dispatches on its annotated *result* type (Phase 103):
 impl Debug (Array a) requires Debug a
 ```
 
-Bracketed, comma-separated rendering matching the interpreter's printer
-(`[|1, 2, 3|]`), so `debug` agrees with `println` on arrays.  Lives in
-`core.mdk` (not `array.mdk`) so array literals render without an explicit
-`import array`.
+Arrays render in their literal syntax, `[|1, 2, 3|]`.
 
 ```medaka
-> debug [|1, 2, 3|] == "[|1, 2, 3|]"
-True
+> debug [|1, 2, 3|]
+"[|1, 2, 3|]"
 ```
 
 ### `Ord (Array a)`
@@ -430,21 +427,8 @@ True
 impl Ord (Array a) requires Ord a
 ```
 
-Lexicographic, exactly like `Ord (List a)` — `Array` is `List`'s
-random-access peer, so `compare` on two arrays agrees element-for-element
-with `compare` on their element lists, and a prefix sorts before its
-extensions (sheet row A-5).  Lives here rather than in `array.mdk` for the
-same reason `Eq (Array a)` does: `deriving (Ord)` over a field of array
-type must build without an `import array`.
-
-⚠️ The body delegates to `Ord (List a)` rather than walking the arrays
-directly on purpose.  A hand-written walk needs an `Ord a`-constrained
-top-level helper, and calling one of those from an `impl Ord …` body IN
-THIS MODULE panics at run time with `unbound identifier: $dict_max_0` (the
-same shape compiles and runs correctly in any other module, and `Eq`- and
-`Hashable`-constrained helpers are fine from here).  Filed in the sprint
-report; delegation sidesteps it and makes the "agrees with `Ord (List a)`"
-law true by construction.
+Arrays compare lexicographically, exactly as the lists of their
+elements would.
 
 ### `Display (Array a)`
 
@@ -452,25 +436,13 @@ law true by construction.
 impl Display (Array a) requires Display a
 ```
 
-Renders `[|1, 2, 3|]`, matching `debug` but with unquoted elements (the
-Display convention).  In `core.mdk` alongside `Debug (Array a)` so array
-literals interpolate without an explicit `import array`.
+Arrays render in their literal syntax, `[|1, 2, 3|]`, with the elements
+unquoted.
 
 ```medaka
-> display [|1, 2, 3|] == "[|1, 2, 3|]"
-True
+> display [|1, 2, 3|]
+"[|1, 2, 3|]"
 ```
-
-### `Hashable (Array a)`
-
-```
-impl Hashable (Array a) requires Hashable a
-```
-
-The same `acc * 33 + hash x` fold `Hashable (List a)` uses, so an array
-and the list of the same elements hash EQUALLY — the peer relationship
-sheet row A-5 ratifies.  Agrees with `Eq (Array a)` by construction: equal
-arrays have equal elements in equal order, so they fold to the same seed.
 
 ### `Index (Array a) Int a`
 
@@ -478,9 +450,10 @@ arrays have equal elements in equal order, so they fold to the same seed.
 impl Index (Array a) Int a
 ```
 
-`index arr i` reads `arr`'s element at `i` (`arr[i]` sugar dispatches
-here).  O(1).  Raises the coded `indexError` (E-INDEX-OOB) when `i` is
-out of range -- use `get` for a safe `Option`-returning read instead.
+`arr[i]` reads the element at `i` in `O(1)`.
+
+Panics with an index error when `i` is out of range; `array.get` is the
+`Option`-returning form.
 
 ### `IndexMut (Array a) Int a`
 
@@ -488,9 +461,9 @@ out of range -- use `get` for a safe `Option`-returning read instead.
 impl IndexMut (Array a) Int a
 ```
 
-`setIndex arr i v` writes `v` at `arr`'s index `i`, in place, and
-returns `arr`.  O(1).  Raises the coded `indexError` (E-INDEX-OOB) when
-`i` is out of range.
+Writes the element at `i` in place, in `O(1)`.
+
+Panics with an index error when `i` is out of range.
 
 ### `Slice (Array a)`
 
@@ -498,9 +471,10 @@ returns `arr`.  O(1).  Raises the coded `indexError` (E-INDEX-OOB) when
 impl Slice (Array a)
 ```
 
-`slice arr lo hi` copies `arr`'s elements over `[lo, hi)` into a fresh
-`Array`.  O(hi - lo).  Raises the coded `sliceError` (E-SLICE-OOB) when the
-range runs outside `arr` -- unlike stdlib `Array.sliceClamped`, which clamps.
+Copies the elements over `[lo, hi)` into a new array, in `O(hi - lo)`.
+
+Panics with a slice error when the range runs outside the array;
+`array.sliceClamped` clamps instead.
 
 ```medaka
 > slice [|10, 20, 30, 40, 50|] 1 3

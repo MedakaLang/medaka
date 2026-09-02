@@ -149,6 +149,8 @@ byteparser — a binary parser-combinator library for Medaka.
 
 ## [`core`](core.md)
 
+The prelude: the types, interfaces, and functions every Medaka program can use without an import.
+
 - [`Ordering`](core.md#ordering)
 - [`Option`](core.md#option)
 - [`Result`](core.md#result)
@@ -158,14 +160,14 @@ byteparser — a binary parser-combinator library for Medaka.
 - [`Monoid`](core.md#monoid)
 - [`Ord`](core.md#ord)
 - [`clamp`](core.md#clamp)
-- [`isEven`](core.md#iseven)
-- [`isOdd`](core.md#isodd)
 - [`Debug`](core.md#debug)
 - [`Display`](core.md#display)
 - [`Hashable`](core.md#hashable)
 - [`println`](core.md#println)
 - [`print`](core.md#print)
 - [`Num`](core.md#num)
+- [`isEven`](core.md#iseven)
+- [`isOdd`](core.md#isodd)
 - [`Bounded`](core.md#bounded)
 - [`Mappable`](core.md#mappable)
 - [`mapConst`](core.md#mapconst)

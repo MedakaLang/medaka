@@ -8,8 +8,6 @@ data Validation e a
   | Success a
 ```
 
-Instances: `Mappable`, [`Applicative`](#applicative-validation-e), `Foldable`, `Traversable`, `Eq`, `Debug`, [`Semigroup`](#semigroup-validation-e-a), [`Display`](#display-validation-e-a)
-
 Validation's own `Failure`/`Success` — same shape as `Result`'s
 `Err`/`Ok`, distinguished by name so its different `Applicative` reads
 as intentional rather than a `Result` look-alike bug.
@@ -20,6 +18,8 @@ Ok 1
 > toResult (Failure "bad")
 Err "bad"
 ```
+
+Instances: `Mappable`, [`Applicative`](#applicative-validation-e), `Foldable`, `Traversable`, `Eq`, `Debug`, [`Semigroup`](#semigroup-validation-e-a), [`Display`](#display-validation-e-a)
 
 ## `toResult`
 

@@ -15,9 +15,10 @@ read.
 - **A doc comment is a `{- | ... -}` block, or a run of `-- |` lines, directly
   above a declaration.** Only marked comments render. An unmarked `--`
   comment is a note to maintainers and never reaches the reference, wherever
-  it sits. A note may sit directly above or below a `{- | -}` block; a
-  `-- |` run must start its own comment run, so separate it from a note with
-  a blank line.
+  it sits. Put a note directly above the doc block, not under it: `medaka
+  test` reads comment lines directly under an example as its expected
+  output, and a note separated from the block by a blank line becomes the
+  declaration's only comment, which hides the doc.
 - **A module header is a `{- | ... -}` block at the top of the file.** Its
   first sentence is the module's one-line summary in the library index.
 - **A section heading is a standalone `-- # Title` comment** between
