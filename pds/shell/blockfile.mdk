@@ -1,0 +1,98 @@
+{- | Native durable block storage: one flat sharded CID-to-bytes file per block.
+
+   A block store is a content-addressed immutable key/value map, which is the one
+   workload a filesystem already implements (`docs/design/ATPROTO-PDS-DESIGN.md`
+   row P7). A block lives at `<dir>/<shard>/<hex of its binary CID>`, sharded on
+   the first byte of its multihash DIGEST — every binary CID starts with the same
+   version and codec prefix, so sharding on the CID's own leading bytes would put
+   the whole repository in one directory. Writes land in `<dir>/.staging` and are
+   promoted with `rename`, so a reader never observes a half-written block and a
+   crash never leaves a torn one under a shard.
+
+   Nothing here trusts the disk. Bytes read back are returned as raw rows for
+   `blockStoreFromBlocks` to verify against their own CIDs; this module never
+   claims a row is valid, and never decodes one.
+
+   This module is an effectful shell (P14): it holds no protocol state, and its
+   signatures carry no `Repo` and no `SecretKey`, so no signing key can reach a
+   file through it. -}
+
+import hex.{decode, encode}
+import string.{take}
+import fs.{mkdirAll}
+import lib.cid.{Cid, cidDigest, cidFromBytes, cidToBytes}
+
+-- Temporary writes are promoted out of this directory, which is therefore the
+-- one entry under a block directory that is not a shard.
+stagingName : String
+stagingName = ".staging"
+
+cidKey : Cid -> String
+cidKey cid = encode (cidToBytes cid)
+
+-- | Directory holding one block's shard.
+blockShardDir : String -> Cid -> String
+blockShardDir dir cid = "\{dir}/\{take 2 (encode (cidDigest cid))}"
+
+-- | Absolute path of one block's file.
+blockFilePath : String -> Cid -> String
+blockFilePath dir cid = "\{blockShardDir dir cid}/\{cidKey cid}"
+
+writeOne : String -> Cid -> Array Int -> <FileRead "_", FileWrite "_"> Result String Unit
+writeOne dir cid bytes = do
+  () <- mkdirAll (blockShardDir dir cid)
+  let staged = "\{dir}/\{stagingName}/\{cidKey cid}"
+  () <- writeFileBytes staged bytes
+  rename staged (blockFilePath dir cid)
+
+writeRows : String -> List (Cid, Array Int) -> <FileRead "_", FileWrite "_"> Result String Unit
+writeRows _ [] = Ok ()
+writeRows dir ((cid, bytes)::rest) = match writeOne dir cid bytes
+  Err message => Err message
+  Ok () => writeRows dir rest
+
+{- | Write every row durably beneath `dir`. Writing a block that is already
+   present is idempotent: a block's name is its content, so the promoted file
+   carries exactly the bytes the old one did. -}
+export
+blockFileWrite : String -> List (Cid, Array Int) -> <FileRead "_", FileWrite "_"> Result String Unit
+blockFileWrite dir rows = do
+  () <- mkdirAll "\{dir}/\{stagingName}"
+  writeRows dir rows
+
+cidForName : String -> Result String Cid
+cidForName name = match decode name
+  Err message => Err "blockfile: block file name is not hex: \{message}"
+  Ok bytes => match cidFromBytes bytes
+    Err message => Err "blockfile: block file name is not a CID: \{message}"
+    Ok cid => Ok cid
+
+readLeaves : String -> String -> List String -> List (Cid, Array Int) -> <FileRead "_"> Result String (List (Cid, Array Int))
+readLeaves _ _ [] acc = Ok acc
+readLeaves dir shard (leaf::rest) acc = match cidForName leaf
+  Err message => Err message
+  Ok cid => match readFileBytes "\{dir}/\{shard}/\{leaf}"
+    Err message => Err "blockfile: unreadable block file: \{message}"
+    Ok bytes => readLeaves dir shard rest ((cid, bytes)::acc)
+
+readShards : String -> List String -> List (Cid, Array Int) -> <FileRead "_"> Result String (List (Cid, Array Int))
+readShards _ [] acc = Ok acc
+readShards dir (shard::rest) acc =
+  if shard == stagingName then readShards dir rest acc
+  else match listDir "\{dir}/\{shard}"
+    Err message => Err "blockfile: unreadable shard directory: \{message}"
+    Ok leaves => match readLeaves dir shard leaves acc
+      Err message => Err message
+      Ok next => readShards dir rest next
+
+{- | Read every persisted row beneath `dir`, in unspecified order.
+
+   The returned rows are UNVERIFIED bytes off disk paired with the CID their file
+   name spells. `blockStoreFromBlocks` is what proves each row's bytes hash to
+   that CID, and a tampered file fails there. An entry that is neither a shard nor
+   the staging directory fails loudly rather than being skipped. -}
+export
+blockFileRead : String -> <FileRead "_"> Result String (List (Cid, Array Int))
+blockFileRead dir = match listDir dir
+  Err message => Err "blockfile: unreadable block directory: \{message}"
+  Ok shards => readShards dir shards []

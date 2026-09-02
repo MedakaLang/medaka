@@ -1,0 +1,149 @@
+{- | P7 durable-store driver: two separate process invocations over one data
+   directory.
+
+   `save` builds a repository, writes records, and persists it. `load` rehydrates
+   from the persisted head plus blocks and prints the same summary. The gate runs
+   them as distinct processes and compares the summaries byte for byte, so a
+   repository that survived only inside one process cannot pass.
+
+   `reject` is the tamper route: it asserts the reload REJECTS a corrupted block
+   file rather than serving its bytes. -}
+
+import hex.{decode, encode}
+import string.{toUtf8}
+import lib.car.{carDecode}
+import lib.cid.{Cid, cidToString}
+import lib.dagcbor.{DagCbor(..)}
+import lib.repo.{
+  Repo,
+  repoCommitCid,
+  repoCreate,
+  repoExportBlocks,
+  repoExportCar,
+  repoFromBlocks,
+  repoInitFromKeyBytes,
+  repoLatestCommit,
+  repoList,
+  repoMutationState,
+}
+import lib.sha256.{sha256}
+import lib.sign.{SecretKey, secretKeyFromBytes}
+import lib.tid.{Tid, tidParse}
+import shell.persist.{persistLoad, persistSave}
+
+-- The gate greps every persisted file for this hex and for its raw bytes; it is
+-- the signing key the adapter must never be able to write.
+secretHex : String
+secretHex = "c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721"
+
+accountDid : String
+accountDid = "did:plc:persistencefixture000000"
+
+mustHex : String -> Array Int
+mustHex text = match decode text
+  Ok bytes => bytes
+  Err message => panic "store_persistence: malformed hex: \{message}"
+
+mustSecret : SecretKey
+mustSecret = match secretKeyFromBytes (mustHex secretHex)
+  Ok key => key
+  Err message => panic "store_persistence: malformed secret: \{message}"
+
+mustTid : String -> Tid
+mustTid text = match tidParse text
+  Ok tid => tid
+  Err message => panic "store_persistence: malformed TID: \{message}"
+
+mustRepo : Result String Repo -> Repo
+mustRepo (Ok repo) = repo
+mustRepo (Err message) =
+  panic "store_persistence: repository failed: \{message}"
+
+post : String -> DagCbor
+post text = DcMap
+  [
+    ("$type", DcString "app.bsky.feed.post"),
+    ("text", DcString text),
+    ("createdAt", DcString "2026-09-02T00:00:00.000Z"),
+  ]
+
+write : String -> String -> String -> Repo -> Repo
+write path text rev repo =
+  mustRepo (map
+    repoMutationState
+    (repoCreate (toUtf8 path) (post text) (mustTid rev) repo))
+
+-- | The repository the `save` route persists: three records at fixed revisions,
+-- so every byte of the result is deterministic.
+fixtureRepo : Repo
+fixtureRepo =
+  let base = mustRepo (repoInitFromKeyBytes accountDid (mustHex secretHex) (mustTid "3lba2s5ykxs2a"))
+  let one = write "app.bsky.feed.post/3lba2s5ykxs2b" "first" "3lba2s5ykxs2b" base
+  let two = write "app.bsky.feed.post/3lba2s5ykxs2c" "second" "3lba2s5ykxs2c" one
+  write "app.bsky.actor.profile/self" "third" "3lba2s5ykxs2d" two
+
+mustCar : Repo -> Array Int
+mustCar repo = match repoExportCar repo
+  Ok bytes => bytes
+  Err message => panic "store_persistence: CAR export failed: \{message}"
+
+{- | The whole observable identity of a repository: head commit CID, record
+   count, and the exact `sync.getRepo` CAR bytes (length plus their digest, so a
+   single flipped byte anywhere in the export changes the summary). -}
+summary : String -> Repo -> <IO> Unit
+summary label repo =
+  let car = mustCar repo
+  let records = match repoList repo
+    Ok rows => length rows
+    Err message => panic "store_persistence: listing failed: \{message}"
+  let roots = match carDecode car
+    Ok _ => "decodes"
+    Err message =>
+      panic "store_persistence: exported CAR does not decode: \{message}"
+  let () = println "\{label} head \{cidToString (repoCommitCid (repoLatestCommit repo))}"
+  let () = println "\{label} records \{intToString records}"
+  let () = println "\{label} car \{intToString (arrayLength car)} \{encode (sha256 car)} \{roots}"
+  ()
+
+blocksOf : Repo -> List (Cid, Array Int)
+blocksOf repo = match repoExportBlocks repo
+  Ok rows => rows
+  Err message => panic "store_persistence: block export failed: \{message}"
+
+runSave : String -> <IO, FileRead "_", FileWrite "_"> Unit
+runSave dir =
+  let repo = fixtureRepo
+  match persistSave dir (repoCommitCid (repoLatestCommit repo)) (blocksOf repo)
+    Err message => panic "store_persistence: save failed: \{message}"
+    Ok () =>
+      let () = summary "SAVE" repo
+      println "SAVE: PASS"
+
+reload : String -> <FileRead "_"> Result String Repo
+reload dir = do
+  (head, blocks) <- persistLoad dir
+  repoFromBlocks accountDid mustSecret head blocks
+
+runLoad : String -> <IO, FileRead "_"> Unit
+runLoad dir = match reload dir
+  Err message => panic "store_persistence: load failed: \{message}"
+  Ok repo =>
+    let () = summary "LOAD" repo
+    println "LOAD: PASS"
+
+-- | A tampered block file must be rejected, never served.
+runReject : String -> <IO, FileRead "_"> Unit
+runReject dir = match reload dir
+  Ok _ =>
+    let () = println "REJECT: FAIL tampered store reloaded"
+    exit 1
+  Err message =>
+    let () = println "REJECT: PASS \{message}"
+    ()
+
+main : <IO, Env, FileRead "_", FileWrite "_"> Unit
+main = match args ()
+  ["save", dir] => runSave dir
+  ["load", dir] => runLoad dir
+  ["reject", dir] => runReject dir
+  _ => panic "usage: store_persistence_main <save|load|reject> <dir>"

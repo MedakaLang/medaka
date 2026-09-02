@@ -1,0 +1,55 @@
+{- | Native durable persistence for one account repository.
+
+   A repository on disk is exactly two things: its head commit CID, and the block
+   graph that head reaches. `persistSave` writes both; `persistLoad` reads both
+   back. Neither reconstructs anything — rehydrating a `Repo` is `lib.repo`'s
+   `repoFromBlocks`, which is pure, and which the caller reaches with the signing
+   key it already holds from configuration (P14: the pure core performs no I/O,
+   and this shell owns no reconstruction logic).
+
+   The signing key is never persisted. It cannot be: nothing in this module's
+   signatures is a `Repo` or a `SecretKey`, so there is no value here to write one
+   out of. A reload therefore always needs the configured key, and
+   `repoFromBlocks` rejects a graph whose head does not verify under it.
+
+   The head file is promoted with `rename` after its blocks are durable, so a
+   crash mid-save leaves the previous head pointing at a graph that is still
+   wholly present. -}
+
+import fs.{mkdirAll}
+import lib.cid.{Cid, cidFromString, cidToString}
+import shell.blockfile.{blockFileRead, blockFileWrite}
+
+blocksDir : String -> String
+blocksDir dir = "\{dir}/blocks"
+
+headPath : String -> String
+headPath dir = "\{dir}/head"
+
+{- | Persist a repository's head commit CID and its complete block graph beneath
+   `dir`. The blocks are written first: the head is the last thing to move, so it
+   never names a graph that is not yet on disk. -}
+export
+persistSave : String -> Cid -> List (Cid, Array Int) -> <FileRead "_", FileWrite "_"> Result String Unit
+persistSave dir head blocks = do
+  () <- mkdirAll dir
+  () <- blockFileWrite (blocksDir dir) blocks
+  let staged = "\{headPath dir}.tmp"
+  () <- writeFile staged (cidToString head)
+  rename staged (headPath dir)
+
+{- | Read back the persisted head commit CID and every persisted block row.
+
+   The rows are unverified disk bytes; `repoFromBlocks` is what verifies them, so
+   a caller must never treat this result as trusted state on its own. -}
+export
+persistLoad : String -> <FileRead "_"> Result String (Cid, List (Cid, Array Int))
+persistLoad dir = do
+  text <- match readFile (headPath dir)
+    Err message => Err "persist: unreadable head file: \{message}"
+    Ok value => Ok value
+  head <- match cidFromString text
+    Err message => Err "persist: head file is not a CID: \{message}"
+    Ok value => Ok value
+  blocks <- blockFileRead (blocksDir dir)
+  Ok (head, blocks)

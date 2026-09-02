@@ -32,6 +32,15 @@ Phase 3's socket shell is next but remains dependency-gated; see
   queries (`getRecord`/`listRecords`/`describeRepo`/`sync.getRepo`/
   `sync.getLatestCommit`/`identity.resolveHandle`), and the two non-XRPC
   well-known paths.
+- `pds/shell/` — native-only effectful adapters. `pds/shell/blockfile.mdk`
+  stores blocks as flat sharded CID-to-bytes files (design row P7) and
+  `pds/shell/persist.mdk` persists and reloads the account repository's head
+  commit. The dependency runs one way only: a shell module may import
+  `pds/lib/`, and no `pds/lib/` module may ever import `pds/shell/` — the pure
+  core performs no I/O (P14), so reconstruction logic lives in
+  `pds/lib/repo.mdk`'s `repoFromBlocks` and the shell stays a thin effectful
+  wrapper. Nothing here takes a `Repo` or a `SecretKey`, so no signing key can
+  reach a file through it.
 - `pds/test/` — in-language `medaka test` suites (`*_test.mdk`) plus gate
   scripts that run them (`*.sh`). Every gate must be placed explicitly in
   exactly one `ci.yml` shard by measured cost; directory location alone does

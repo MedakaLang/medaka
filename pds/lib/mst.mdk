@@ -7,8 +7,10 @@
    and link invariants cannot be bypassed.
 
    `mstValidateNodeBytes` and `mstValidateBlocks` provide strict validation of
-   canonical node bytes and a complete reachable node-block graph. Constructing
-   an editable tree from imported blocks is intentionally outside this slice. -}
+   canonical node bytes and a complete reachable node-block graph. `mstFromBlocks`
+   rebuilds an editable tree from such a graph: it proves every invariant with
+   that validator before reading an entry, and rejects any rebuild whose root CID
+   differs from the supplied one. -}
 
 -- The byte-range validator is intentionally local at each untrusted boundary.
 -- lint-disable-file rule-duplicate-body
@@ -521,3 +523,32 @@ export
 mstValidateBlocks : Cid -> List (Cid, Array Int) -> Result String Unit
 mstValidateBlocks root blocks =
   validateBlocksWithTraversalLimit maxMstTraversalDepth root blocks
+
+blockEntryPairs : List DecodedEntry -> List (Array Int, Cid) -> List (Array Int, Cid)
+blockEntryPairs [] acc = acc
+blockEntryPairs ((DecodedEntry key leaf _)::rest) acc =
+  blockEntryPairs rest ((arrayCopy key, leaf)::acc)
+
+blockEntries : List (Cid, Array Int) -> List (Array Int, Cid) -> Result String (List (Array Int, Cid))
+blockEntries [] acc = Ok acc
+blockEntries ((_, bytes)::rest) acc = match decodeNode bytes
+  Err message => Err message
+  Ok (DecodedNode _ entries) => blockEntries rest (blockEntryPairs entries acc)
+
+{- | Rebuild an editable tree from the complete reachable node-block graph under
+   `root`, in any input order.
+
+   `mstValidateBlocks` proves depth, ordering, prefix compression, link, and
+   reachability invariants before a single entry is read, and the rebuilt root
+   CID must equal `root` — so a graph that decodes to any other tree is rejected
+   rather than returned. -}
+export
+mstFromBlocks : Cid -> List (Cid, Array Int) -> Result String Mst
+mstFromBlocks root blocks = do
+  _ <- mstValidateBlocks root blocks
+  entries <- blockEntries blocks []
+  tree <- mstFromEntries entries
+  if cidEqual (mstRootCid tree) root then
+    Ok tree
+  else
+    Err "mst: rebuilt tree root does not match the supplied root"
