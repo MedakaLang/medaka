@@ -1,5 +1,5 @@
 # META
-source_lines=1594
+source_lines=1596
 stages=DESUGAR,MARK
 # SOURCE
 -- Identity + registry substrate — Stage A-2 unit A-2.0
@@ -209,10 +209,11 @@ originModuleOf origin = identOriginFold "" (m => m) origin
 -- argument. Treat the result as OPAQUE. EXACTLY FOUR netstrings, always.
 export
 identKey : Ident -> String
-identKey (Ident ns origin name) = lenKey (nsTag ns)
-  ++ lenKey (originTag origin)
-  ++ lenKey (originModuleOf origin)
-  ++ lenKey name
+identKey (Ident ns origin name) =
+  lenKey (nsTag ns)
+    ++ lenKey (originTag origin)
+    ++ lenKey (originModuleOf origin)
+    ++ lenKey name
 
 -- The `TabKey` renderer — `TkIdent` is `identKey` verbatim, so an
 -- identity-bearing key renders exactly as it did before A-2.4 widened
@@ -240,10 +241,8 @@ identKey (Ident ns origin name) = lenKey (nsTag ns)
 export
 tabKeyRender : TabKey -> String
 tabKeyRender (TkIdent ident) = identKey ident
-tabKeyRender (TkBare ns name) = lenKey (nsTag ns)
-  ++ lenKey "bare"
-  ++ lenKey ""
-  ++ lenKey name
+tabKeyRender (TkBare ns name) =
+  lenKey (nsTag ns) ++ lenKey "bare" ++ lenKey "" ++ lenKey name
 
 -- A tuple of identities, rendered by plain concatenation. Injective on its
 -- own: each element contributes exactly four netstrings, so a stream of `4n`
@@ -405,9 +404,8 @@ regKeyOrdinals (RegKey _ ords) = ords
 -- without assuming anything about tag or name spellings.
 export
 regKeyRender : RegKey -> String
-regKeyRender (RegKey keys ords) = lenKey "\{listLen keys}"
-  ++ tabKeys keys
-  ++ joinWith "" (map ordKey ords)
+regKeyRender (RegKey keys ords) =
+  lenKey "\{listLen keys}" ++ tabKeys keys ++ joinWith "" (map ordKey ords)
 
 -- ── Registry: LAST-WRITE-WINS map from a RegKey to ONE value ──────────────
 -- Stores the ORIGINAL `RegKey` alongside each value (not just its rendered
@@ -496,7 +494,8 @@ regFromEntries entries = regFromEntriesGo entries regEmpty
 
 regFromEntriesGo : List (RegKey, v) -> Registry v -> Registry v
 regFromEntriesGo [] acc = acc
-regFromEntriesGo ((k, v)::rest) acc = regFromEntriesGo rest (regInsertK k v acc)
+regFromEntriesGo ((k, v) :: rest) acc =
+  regFromEntriesGo rest (regInsertK k v acc)
 
 -- Whole-table copy, the `perRun` ↔ `crossRun` shape (`types/typecheck.mdk`
 -- copies whole tables between the two in both directions). RIGHT-BIASED: an
@@ -525,7 +524,7 @@ mregAddK : RegKey -> v -> MultiRegistry v -> MultiRegistry v
 mregAddK k v (MultiRegistry m) =
   let s = regKeyRender k
   match omLookup s m
-    Some (_, vs) => MultiRegistry (omInsert s (k, v::vs) m)
+    Some (_, vs) => MultiRegistry (omInsert s (k, v :: vs) m)
     None => MultiRegistry (omInsert s (k, [v]) m)
 
 export
@@ -622,11 +621,11 @@ mregMerge older newer = mregMergeGo (mregEntries newer) older
 
 mregMergeGo : List (RegKey, List v) -> MultiRegistry v -> MultiRegistry v
 mregMergeGo [] acc = acc
-mregMergeGo ((k, vs)::rest) acc = mregMergeGo rest (mregAddAll k vs acc)
+mregMergeGo ((k, vs) :: rest) acc = mregMergeGo rest (mregAddAll k vs acc)
 
 mregAddAll : RegKey -> List v -> MultiRegistry v -> MultiRegistry v
 mregAddAll _ [] acc = acc
-mregAddAll k (v::vs) acc = mregAddAll k vs (mregAddK k v acc)
+mregAddAll k (v :: vs) acc = mregAddAll k vs (mregAddK k v acc)
 
 -- ── SetRegistry: membership only ──────────────────────────────────────────
 -- Stores the `RegKey` as its value so the set can be ENUMERATED, which
@@ -670,7 +669,7 @@ sregMerge older newer = sregMergeGo (sregKeys newer) older
 
 sregMergeGo : List RegKey -> SetRegistry -> SetRegistry
 sregMergeGo [] acc = acc
-sregMergeGo (k::rest) acc = sregMergeGo rest (sregAddK k acc)
+sregMergeGo (k :: rest) acc = sregMergeGo rest (sregAddK k acc)
 
 -- ── The COMPOSITE assoc-list half (A-2.4) ─────────────────────────────────
 -- `lookupTab`'s peer for a table whose key carries ORDINALS as well as
@@ -691,12 +690,12 @@ regKeyEq (RegKey k1 o1) (RegKey k2 o2) = intsEq o1 o2 && tabKeysEq k1 k2
 
 intsEq : List Int -> List Int -> Bool
 intsEq [] [] = True
-intsEq (a::as2) (b::bs) = a == b && intsEq as2 bs
+intsEq (a :: as2) (b :: bs) = a == b && intsEq as2 bs
 intsEq _ _ = False
 
 tabKeysEq : List TabKey -> List TabKey -> Bool
 tabKeysEq [] [] = True
-tabKeysEq (a::as2) (b::bs) = tabKeyEq a b && tabKeysEq as2 bs
+tabKeysEq (a :: as2) (b :: bs) = tabKeyEq a b && tabKeysEq as2 bs
 tabKeysEq _ _ = False
 
 -- FIRST match wins, exactly as `lookupTab` and the `lookupAssoc` it replaces —
@@ -706,7 +705,8 @@ tabKeysEq _ _ = False
 export
 lookupReg : RegKey -> List (RegKey, v) -> Option v
 lookupReg _ [] = None
-lookupReg k ((k2, v)::rest) = if regKeyEq k k2 then Some v else lookupReg k rest
+lookupReg k ((k2, v) :: rest) =
+  if regKeyEq k k2 then Some v else lookupReg k rest
 -- ── HeadKey: the result of projecting a type's HEAD TYPE CONSTRUCTOR ──────
 -- Stage A-2 unit A-2.2 (#1111).  `types/typecheck.mdk`'s head projections —
 -- `headTyconMono : Mono -> …` (the GOAL side of a dispatch key) and
@@ -963,9 +963,10 @@ headBucketKey (Some (HkRigid _)) = None
 -- different position — the two conflations a bare-name vector admits.
 export
 dispKeyRender : RegKey -> List (Int, String) -> String
-dispKeyRender base rigids = lenKey (regKeyRender base)
-  ++ lenKey "\{listLen rigids}"
-  ++ joinWith "" (map ((i, name) => ordKey i ++ lenKey name) rigids)
+dispKeyRender base rigids =
+  lenKey (regKeyRender base)
+    ++ lenKey "\{listLen rigids}"
+    ++ joinWith "" (map ((i, name) => ordKey i ++ lenKey name) rigids)
 
 -- ── Deliberately NOT added, with the table each omission affects ───────────
 --   * NO `Display` for `Ident`/`RegKey` — see `Ident` in `frontend/ast.mdk`:
@@ -1123,7 +1124,7 @@ regAllNs = regFromEntries (zipNsValues allNsIdents 1)
 
 zipNsValues : List Ident -> Int -> List (RegKey, Int)
 zipNsValues [] _ = []
-zipNsValues (i::rest) n = (regKeyOf i, n) :: zipNsValues rest (n + 1)
+zipNsValues (i :: rest) n = (regKeyOf i, n) :: zipNsValues rest (n + 1)
 
 -- Composite-key fixtures: the same identity at two different ordinal slots,
 -- and two different identity TUPLES sharing a member.
@@ -1135,10 +1136,11 @@ regSlots =
     (regInsertK (regKeyAt identIfaceFooM 0) 10 regEmpty)
 
 regPairs : Registry Int
-regPairs = regInsertK
-  (regKeyN [identIfaceFooM, identTypeBarM])
-  2
-  (regInsertK (regKeyN [identIfaceFooM, identTypeFooM]) 1 regEmpty)
+regPairs =
+  regInsertK
+    (regKeyN [identIfaceFooM, identTypeBarM])
+    2
+    (regInsertK (regKeyN [identIfaceFooM, identTypeFooM]) 1 regEmpty)
 
 -- mregAdd, called in OPPOSITE orders under the SAME Ident with the SAME two
 -- values — demonstrates no registration is lost to call order.
