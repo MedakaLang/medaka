@@ -1,4 +1,4 @@
--- Self-hosted property-test runner — port of lib/prop_runner.ml.
+-- Self-hosted property-test runner.
 --
 -- For each `prop "name" (x : T) (y : U) … = body` declaration: generate random
 -- inputs for each parameter (structurally, from the type), evaluate the body in
@@ -86,7 +86,7 @@ buildTyDefs (d::rest) = match d
   DNewtype { newtypeName = name, newtypeParams = params, newtypeCtor = con, newtypeFieldTy = fty } => (name, TDData params [Variant con (ConPos [fty])]) :: buildTyDefs rest
   _ => buildTyDefs rest
 
--- ── type substitution + spine peeling (mirror lib/prop_runner.ml) ────────────
+-- ── type substitution + spine peeling ─────────────────────────────────────
 
 substTy : List (String, Ty) -> Ty -> Ty
 substTy subst (TyVar v) = match lookupAssoc v subst
@@ -450,7 +450,7 @@ nthList (x::_) 0 = x
 nthList (_::xs) n = nthList xs (n - 1)
 nthList [] _ = panic "nthList: index out of range"
 
--- ── shrinking (native; mirror lib/prop_runner.ml shrink_native) ──────────────
+-- ── shrinking (native) ──────────────────────────────────────────────────────
 
 shrinkValue : Ty -> Value e -> List (Value e)
 shrinkValue ty v = match (ty, v)
@@ -579,7 +579,7 @@ printCounterexample ((x, v)::rest) =
 escStrLocal : String -> String
 escStrLocal s = "\"" ++ s ++ "\""
 
--- ── greedy shrink (mirror lib/prop_runner.ml shrink_loop) ────────────────────
+-- ── greedy shrink ───────────────────────────────────────────────────────────
 
 -- Fuel cap: defense-in-depth against a future shrink arm reintroducing a
 -- non-decreasing candidate (as `shrinkInt` did before this cap existed — see
@@ -668,8 +668,8 @@ propNameMatches sub (DProp _ name _ _) = substringMatch sub name
 propNameMatches _ _ = False
 
 -- Run every prop; print the trailing summary; return True iff all passed.
--- Output exactly mirrors lib/prop_runner.ml's run_all (no leading line; one
--- `Testing … OK/FAILED` per prop; a blank line then `N passed, M failed`).
+-- Output: no leading line; one
+-- `Testing … OK/FAILED` per prop; a blank line then `N passed, M failed`.
 -- `cases` overrides the hardcoded 100-draw sample count (`medaka test --cases
 -- <n>`, #2295); `filterOpt` restricts to props whose name contains a
 -- substring (`--filter`).

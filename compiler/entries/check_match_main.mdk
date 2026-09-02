@@ -1,5 +1,5 @@
 -- Entry point for the self-hosted type-aware match-exhaustiveness check
--- (`check_match` in lib/exhaust.ml, invoked from typecheck):
+-- (`check_match` in compiler/frontend/exhaust.mdk, invoked from typecheck):
 --
 --   medaka run compiler/entries/check_match_main.mdk <runtime.mdk> <file.mdk>
 --

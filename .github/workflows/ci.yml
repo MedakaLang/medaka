@@ -1673,6 +1673,7 @@ jobs:
           bash test/wasm/diff_wasm.sh          || rc=1
           bash test/wasm/diff_wasm_typed.sh    || rc=1
           bash test/wasm/diff_playground_input.sh || rc=1
+          bash test/wasm/diff_visitor_cost_bytes.sh || rc=1
           bash test/wasm/diff_wasm_modules.sh  || rc=1
           bash test/wasm/diff_wasm_emitted_size.sh || rc=1
           bash test/wasm/diff_wasm_ffi_wall.sh || rc=1

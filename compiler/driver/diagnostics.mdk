@@ -1,11 +1,9 @@
 -- compiler/diagnostics.mdk — structured error pipeline (Phase A.4)
 --
--- Mirrors lib/diagnostics.ml: runs all pipeline stages accumulating diagnostics
+-- Runs all pipeline stages accumulating diagnostics
 -- WITHOUT exit-on-first-error, returning a structured List Diag.
 --
--- Design note: lib/diagnostics.ml carries Ast.loc (file/line/col) on every
--- Diag because the OCaml AST threads source positions through every node.
--- B.10.2b: the compiler AST now carries expr-level spans via the transparent
+-- B.10.2b: the compiler AST carries expr-level spans via the transparent
 -- `ELoc` wrapper, and typecheck pairs each error with the `currentLoc` span in
 -- effect at the push site (`checkProgramDiags` returns `(msg, Option Loc)`).  So
 -- `Diag` carries an `Option Loc` — `Some` for type errors (expr-level span),
@@ -649,7 +647,7 @@ nthLineArr srcLines n
 
 -- ── single-file analysis ───────────────────────────────────────────────────
 --
--- Mirrors lib/diagnostics.ml's `analyze`: runs parse → desugar → resolve →
+-- `analyze`: runs parse → desugar → resolve →
 -- guard-exhaustiveness → typecheck, accumulating all stages' diagnostics.
 -- Does NOT stop on the first error (errors accumulate).
 --
@@ -853,7 +851,7 @@ analyzeToLines runtimeSrc coreSrc progSrc =
 
 -- ── multi-file / project-wide analysis (B.10.5) ─────────────────────────────
 --
--- Mirror of lib/diagnostics.ml's `analyze_project` (:335-479): load a root file's
+-- `analyzeProject`: load a root file's
 -- transitive import graph with an unsaved-buffer override, then run desugar /
 -- resolve / typecheck per module, BUCKETING every diagnostic by its file so the
 -- LSP can publish one set of squiggles per file.  Clean files publish `[]` (their

@@ -1,9 +1,9 @@
 # META
-source_lines=4555
+source_lines=4554
 stages=DESUGAR,MARK
 # SOURCE
--- Self-hosted resolve stage — Stage 2 port of `lib/resolve.ml` (single-file
--- path: `resolve_program`).  Runs after desugar.  Collects every binding name
+-- Self-hosted resolve stage (single-file
+-- path: `resolveProgram`).  Runs after desugar.  Collects every binding name
 -- into a name environment (seeded with primitives + runtime externs + the
 -- prelude) and walks the decls reporting references that aren't in scope:
 -- unbound variables, unknown constructors / types / effects / interfaces,
@@ -88,10 +88,10 @@ import support.util.{
   dedupBy,
 }
 
--- ── Errors (mirror lib/resolve.ml's `error`) ──────────────────────────────
+-- ── Errors ──────────────────────────────────────────────────────────────
 -- Stage B (WS-4 / F6): every ctor carries a trailing `Option Loc` — the source
--- span of the offending node (mirror of lib/resolve.ml pairing each error with
--- `!current_loc`).  Expression-position errors carry the enclosing `ELoc` span
+-- span of the offending node, paired with the current location as tracked
+-- during the walk.  Expression-position errors carry the enclosing `ELoc` span
 -- threaded through the walk; decl/build-phase errors with no node in scope carry
 -- `None` (rendered as the oracle's dummy {0,0} range / `<unknown location>`).
 public export data ResError =
@@ -384,7 +384,7 @@ patGroupDupErrors loc kind ps =
 
 -- ── check_type ────────────────────────────────────────────────────────────
 -- `cur` (Stage B) is the enclosing `ELoc` span threaded from the expr walk (or
--- `None` at decl level), mirroring lib/resolve.ml's `!current_loc`.
+-- `None` at decl level).
 checkType : Option Loc -> Env -> Ty -> List ResError
 checkType cur env (TyCon { tyConName = n, tyConLoc = loc }) =
   if omHasKey n env.types || omHasKey n env.imported || isTupleCtorTyName n then
@@ -644,8 +644,8 @@ scopeAdd n (Scope names mem) = Scope (n::names) (omInsert n () mem)
 
 -- ── check_expr (scope = locally-bound names) ──────────────────────────────
 -- `cur` (Stage B): the innermost enclosing `ELoc` span, threaded so every error
--- emitted while walking the expr carries that span (mirror lib/resolve.ml's
--- `!current_loc`, set by its `ELoc` arm).  `None` until the first ELoc.
+-- emitted while walking the expr carries that span, set by the `ELoc` arm
+-- below.  `None` until the first ELoc.
 checkExpr : Option Loc -> Env -> Scope -> Expr -> List ResError
 checkExpr _ _ _ (ELit _) = []
 checkExpr _ _ _ (ENumLit _ _ _ _) = []  -- PLAN.md #11: a literal, nothing to bind
@@ -710,8 +710,8 @@ checkExpr cur env scope (EAnnot e0 t) = checkExpr cur env scope e0
 -- (`fromEntries [...] :~ Map _k _v`).  The container type (Map/Set/…) is a real
 -- type, so validate it like EAnnot via checkType — except the multi-module env
 -- already carries imported types so an `import map`-bearing program resolves
--- `Map`, while a bare `Map { … }` with no import resolves to UnknownType, both
--- matching the OCaml oracle (lib/resolve.ml EHeadAnnot arm, Phase 108).
+-- `Map`, while a bare `Map { … }` with no import resolves to UnknownType — both
+-- are accepted here without a resolve error (Phase 108).
 checkExpr cur env scope (EHeadAnnot e0 t) = checkExpr cur env scope e0
   ++ checkType cur env t
 checkExpr cur env scope (EBlock stmts) = checkStmts cur env scope stmts
@@ -730,8 +730,7 @@ checkExpr cur env scope (EAsPat _ e0) =
   AsPatternMisplaced cur :: checkExpr cur env scope e0
 checkExpr cur env scope (ESection s) = checkSection cur env scope s
 -- ELoc captures its span into `cur` (Stage B), then recurses — so any error in
--- the wrapped subtree is attributed to this span (mirror lib/resolve.ml's ELoc
--- arm setting `current_loc`).
+-- the wrapped subtree is attributed to this span.
 checkExpr _ env scope (ELoc l e) = checkExpr (Some l) env scope e
 checkExpr cur env scope (EDoOrigin _ e) = checkExpr cur env scope e
 
@@ -1183,7 +1182,7 @@ checkLet cur env scope True (PVar f _) e1 e2 = checkExpr cur env (scopeAdd f sco
   ++ checkExpr cur env (scopeAdd f scope) e2
 -- non-recursive (or rec with non-var pat): the bound names are NOT in scope on
 -- the RHS.  An UnboundVariable for one of them ⇒ the user likely forgot `rec`,
--- so re-target it as NonRecursiveValueLet (mirrors lib/resolve.ml's rewrite).
+-- so re-target it as NonRecursiveValueLet.
 checkLet cur env scope _ pat e1 e2 =
   let bound = patBindings pat
   checkPat cur env pat
@@ -1258,8 +1257,7 @@ checkArm cur env scope (Arm pat gs body) =
     ++ checkExpr cur env scope2 body
 
 -- Resolve an arm's guard qualifiers left-to-right, threading each pattern-bind's
--- binders into the LATER qualifiers AND the arm body (mirror of lib/resolve.ml's
--- EMatch fold).  Returns the accumulated errors and the body's scope.  A `GBind`
+-- binders into the LATER qualifiers AND the arm body.  Returns the accumulated errors and the body's scope.  A `GBind`
 -- also resolves its bind expression in the pre-bind scope and checks its pattern.
 checkArmGuards : Option Loc -> Env -> Scope -> List Guard -> (List ResError, Scope)
 checkArmGuards _ _ scope [] = ([], scope)
@@ -1357,8 +1355,7 @@ checkSection cur env scope (SecRight _ e) = checkExpr cur env scope e
 checkSection cur env scope (SecLeft e _) = checkExpr cur env scope e
 
 -- ── check_decl ────────────────────────────────────────────────────────────
--- Decl-level entry: `cur` starts at `None` (no enclosing expr span yet, mirror
--- lib/resolve.ml resetting `current_loc := None` per decl); the body's `ELoc`
+-- Decl-level entry: `cur` starts at `None` (no enclosing expr span yet); the body's `ELoc`
 -- wrappers re-set it as the expr walk descends.
 checkDecl : Env -> Decl -> List ResError
 checkDecl env (DFunDef _ _ pats body) = flatMap (checkPat (firstExprLoc body) env) pats
@@ -1366,7 +1363,7 @@ checkDecl env (DFunDef _ _ pats body) = flatMap (checkPat (firstExprLoc body) en
   ++ checkExpr None env (mkScope (patsBindings pats)) body
 checkDecl env (DLetGroup _ binds) =
   -- top-level where-group: all group names are in scope for every clause body
-  -- (mutual recursion), mirroring lib/resolve.ml's DLetGroup arm.
+  -- (mutual recursion).
   flatMap (checkLetBind None env (mkScope (map letBindName binds))) binds
 checkDecl env (DTypeSig _ _ t) = checkType None env t
 checkDecl env (DExtern _ _ t) = checkType None env t
@@ -1469,7 +1466,7 @@ checkMethodMember iface known (ImplMethod mname _ _) =
   else
     [MethodNotInInterface mname iface None]
 
--- ── Primitives (hardcoded, mirror lib/resolve.ml) ────────────────────────
+-- ── Primitives (hardcoded) ───────────────────────────────────────────────
 isTupleCtorTyName : String -> Bool
 isTupleCtorTyName n = contains n tupleCtorTyNames
 
@@ -1813,7 +1810,7 @@ isEmptyL _ = False
 -- Phase 148: the clauses of a top-level value binding must be contiguous.  Two
 -- same-named DFunDef/DLetGroup clause-runs separated by an intervening clause-body
 -- decl are silently coalesced into one multi-clause function; flag the gap.
--- Mirrors lib/resolve.ml's check_contiguous_bindings.  Walk decls tracking opened
+-- Walk decls tracking opened
 -- (names in their current contiguous run of clause bodies) and closed (a run that
 -- ended); reaching a closed name re-opens it AND is the error.  A clause-body decl
 -- closes every open name it does not itself bind.  Type signatures (DTypeSig) are
@@ -1881,16 +1878,15 @@ deleteAllStr [] closed = closed
 deleteAllStr (n::ns) closed = deleteAllStr ns (omDelete n closed)
 
 -- a bound name that is in the closed set is a non-contiguous re-appearance.
--- Stage B: carry the offending decl's source span (first ELoc in its body, mirror
--- lib/resolve.ml's `decl_loc`).
+-- Stage B: carry the offending decl's source span (first ELoc in its body).
 newlyDuplicated : Option Loc -> OrdMap Unit -> List String -> List ResError
 newlyDuplicated _ _ [] = []
 newlyDuplicated loc closed (n::ns)
   | omHasKey n closed = DuplicateBinding n loc :: newlyDuplicated loc closed ns
   | otherwise = newlyDuplicated loc closed ns
 
--- decl_loc: the first ELoc span found in a pre-order walk of a decl's body
--- (mirror lib/resolve.ml's `decl_loc`, which uses Desugar.map_expr to grab the
+-- declLoc: the first ELoc span found in a pre-order walk of a decl's body
+-- (walks the body via mapExpr to grab the
 -- first ELoc).  DFunDef only; other decls have no body span → None.
 declLoc : Decl -> Option Loc
 declLoc (DAttrib _ d) = declLoc d
@@ -2174,7 +2170,7 @@ resolveProgramG2 internalGuard runtimeDecls preludeDecls prog =
   let env = buildEnv runtimeDecls preludeDecls prog internalGuard
   dedupResErrors (buildErrors preludeDecls prog ++ flatMap (checkDecl env) prog)
 
--- Human-readable message for a ResError (mirrors lib/resolve.ml's pp_error).
+-- Human-readable message for a ResError.
 -- Used by diagnostics.mdk to produce "error: <msg>" lines.  Loc-independent.
 export
 ppResError : ResError -> String
@@ -2287,7 +2283,7 @@ resErrorCode (InternalExternAccess _ _) = "R-INTERNAL-EXTERN"
 resErrorCode (ReassignImmutable _ _) = "R-IMMUTABLE-ASSIGN"
 resErrorCode (DuplicateInterfaceMethod _ _ _ _) = "R-DUPLICATE-IFACE-METHOD"
 
--- Mirror lib/resolve.ml's mod_phrase: two modules → "both `a` and `b`";
+-- Two modules → "both `a` and `b`";
 -- otherwise a comma-separated list of backtick-quoted module names.
 ambigModPhrase : List String -> String
 ambigModPhrase (a::b::[]) = "both `\{a}` and `\{b}`"
@@ -2301,7 +2297,7 @@ resolveToLines runtimeDecls preludeDecls prog =
 
 -- ── Single-file import validation ─────────────────────────────────────────
 -- In single-file mode the loader is absent, so resolve_program stubs unknown
--- imports into scope (mirroring lib/resolve.ml's behaviour when known_modules=[]).
+-- imports into scope.
 -- This function catches DUse declarations that reference a non-core module and
 -- emits UnknownModule — used by check.mdk BEFORE running resolveToLines so the
 -- pipeline halts with the correct error category rather than falling through to
@@ -2318,7 +2314,7 @@ singleFileImportErrors ((DUse _ path _)::rest) =
 singleFileImportErrors (_::rest) = singleFileImportErrors rest
 
 -- ══════════════════════════════════════════════════════════════════════════
--- Multi-module path — port of lib/resolve.ml's `resolve_module`.
+-- Multi-module path.
 --
 -- Resolves one module against the EXPORTS of previously-resolved modules
 -- (dependency-first), so imports are validated against what a module actually
@@ -2328,8 +2324,8 @@ singleFileImportErrors (_::rest) = singleFileImportErrors rest
 -- interface, threaded into the next module's `known` set by the driver.
 -- ══════════════════════════════════════════════════════════════════════════
 
--- The public interface of a resolved module (mirror lib/resolve.ml's
--- module_exports; exp_fields is dropped — consumers only read field OWNERS).
+-- The public interface of a resolved module
+-- (exp_fields is dropped — consumers only read field OWNERS).
 public export data ModuleExports = ModuleExports {
     modId : String,
     expValues : List String,
@@ -2592,7 +2588,7 @@ addImportProvenance prov mid (n::rest) =
   addImportProvenance (addProvenance prov n mid) mid rest
 
 -- Provenance over every non-core import in the program, in decl order
--- (mirrors lib/resolve.ml's left-to-right List.iter so mod-id order matches).
+-- (left-to-right, so mod-id order matches declaration order).
 valueProvenance : OrdMap ModuleExports -> List UsePath -> OrdMap (List String)
 valueProvenance known paths = foldProvenance known omEmpty paths
 
@@ -4220,12 +4216,15 @@ mapRequireOcc f (r@(Require { requireHead = n, requireOrigin = o })) =
 -- The three occurrences that are DECL FIELDS rather than `Ty` positions, so no
 -- `Ty`-callback can reach them: `DInterface.supers`, `DImpl.reqs`, `DImpl.iface`.
 --
--- 🚨 Every arm names a label NO SIBLING CONSTRUCTOR HAS (`ifaceOrigin` for
--- `DInterface`, `implOrigin` for `DImpl`) — a record pattern matches by LABEL SET
--- with the constructor DISCARDED under the interpreter, so an arm keyed on the
--- shared `methods` would take `DImpl` values into the `DInterface` arm on `run`
--- while the built binary compared correctly.  See `frontend/ast.mdk`'s `Decl`
--- comment for the measured run≠build table.
+-- ⚠️ Every arm names a label NO SIBLING CONSTRUCTOR HAS (`ifaceOrigin` for
+-- `DInterface`, `implOrigin` for `DImpl`).  That USED to be a correctness
+-- requirement — the interpreter's record match discarded the constructor, so an
+-- arm keyed on the shared `methods` took `DImpl` values into the `DInterface` arm
+-- on `run` while the built binary compared correctly.  Fixed by #1217/#1462:
+-- `matchPat`'s `VRecord` arm (`eval/eval.mdk`) compares `ctor == ctor2` before it
+-- looks at any field, so these arms are safe on their constructors alone.  Keep
+-- the discipline as defensive style — it keeps each arm legible.  See
+-- `frontend/ast.mdk`'s `Decl` comment for the authoritative statement.
 --
 -- ⚠️ The `DAttrib` arm is load-bearing for the same reason `stampDeclOrigin`'s is:
 -- `@deprecated`/`@inline` WRAP the decl they annotate, so a `@must_use impl …`

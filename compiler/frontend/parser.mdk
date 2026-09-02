@@ -1,4 +1,4 @@
--- Self-hosted Medaka parser — Stage 1 port of `lib/parser.mly`.  A monadic
+-- Self-hosted Medaka parser.  A monadic
 -- *combinator* parser over `List Token` from the lexer: a `Parser` monad
 -- (`Mappable`/`Applicative`/`Thenable` impls) with `do`-notation, and
 -- combinators (`many`/`sepBy1`/`choice`/`chainl1`).  Precedence is the stratified
@@ -955,7 +955,7 @@ upperTail x _ = pure (EVar x)
 
 -- After `Con {`: a constructor-tagged variant update `Con { e | f = v, … }`
 -- (a `|` follows the leading expr), or the unified `Con { kv_or_e, … }` form,
--- which classifies (mirroring lib/parser.mly) into a record create (`f = v`
+-- which classifies into a record create (`f = v`
 -- fields + puns), a map literal (`k => v` entries), or a set literal (bare
 -- elements).  `orElse` backtracks, so try the update form first — its leading
 -- `parseExpr` fails fast at the first `=`/`=>`/`,`/`}` (no `|`).
@@ -1025,8 +1025,7 @@ kvKVorElemFor e TFatArrow = do
 kvKVorElemFor e _ = pure (KvElem e)
 
 -- classify: any field → record create (Elem puns to `n = n`); else any map
--- entry → map literal; else → set literal.  (Mirrors lib/parser.mly's
--- `UPPER LBRACE … RBRACE` action; mixed-kind braces are user errors.)
+-- entry → map literal; else → set literal.  (Mixed-kind braces are user errors.)
 classifyBrace : String -> List KvItem -> Expr
 classifyBrace name items
   | anyField items = ERecordCreate name (map kvToField items)
@@ -1076,7 +1075,7 @@ parseRecordUpdate = do
   pure (ERecordUpdate e (map (desugarDottedField e) fields) (Ref ""))
 
 -- a record-update field `path = expr` (dotted path) or a pun `name`
--- (mirrors lib/parser.mly `record_field_expr`).
+-- (a dotted-path update field).
 recordFieldExpr : Parser (List String, Expr)
 recordFieldExpr = do
   path <- sepBy1 identNameP (expectTok TDot)
@@ -1093,7 +1092,6 @@ recordFieldExprRest _ _ = failP "expected = in record-update field"
 
 -- desugar a dotted-path update field against the update base:
 -- `{ base | a.b.c = v }` → ("a", { base.a | b = { base.a.b | c = v } })
--- (mirrors lib/parser.mly `desugar_dotted_field`).
 desugarDottedField : Expr -> (List String, Expr) -> FieldAssign
 desugarDottedField base (path, value) = match path
   [field] => FieldAssign field value
@@ -1381,7 +1379,7 @@ ifKind TLet = ifLet
 ifKind _ = ifPlain
 
 -- `if let pat = e then t else f` desugars (at parse) to a two-arm match, exactly
--- like lib/parser.mly: `match e { pat => t; _ => f }`.  Always has an else.
+-- to `match e { pat => t; _ => f }`.  Always has an else.
 ifLet : Parser Expr
 ifLet = do
   expectTok TLet
@@ -1421,8 +1419,7 @@ branchBlock = parseBracketBlock
 
 -- expression-level `let`: `let [mut] pat = e in e2`, function-let
 -- `let f a… = e in e2`, annotated `let [mut] x : ty = e in e2`, and
--- mutually-recursive `let rec f = … with g = … in e2` (→ ELetGroup).  Mirrors
--- the `expr_lam` LET productions in lib/parser.mly.
+-- mutually-recursive `let rec f = … with g = … in e2` (→ ELetGroup).
 parseLet : Parser Expr
 parseLet = do
   expectTok TLet
@@ -1799,14 +1796,12 @@ parsePatAtomRaw = do
 
 -- atom-level uppercase: a record pattern `C { … }` or a bare nullary ctor `C`
 -- (an *applied* ctor `C p…` needs parens at atom level, like the OCaml grammar).
--- Mirrors lib/parser.mly's `pat_atom: UPPER | UPPER LBRACE record_pat_fields RBRACE`.
 upperAtomRest : String -> Token -> Parser Pat
 upperAtomRest c TLBrace = recordPat c
 upperAtomRest c _ = pure (PCon c [])
 
 -- A function-definition parameter: a `pat_atom`, plus the `@` as-pattern
--- (`x@atom`).  Mirrors lib/parser.mly's `param_pat = pat_atom | IDENT AS_AT
--- pat_atom`.  `orElse` backtracks, so a plain-ident / non-`@` param falls
+-- (`x@atom`).  `orElse` backtracks, so a plain-ident / non-`@` param falls
 -- through to parsePatAtom.
 parseParamPat : Parser Pat
 parseParamPat = orElse parseParamAsPat parsePatAtom
@@ -2484,7 +2479,7 @@ letRecDeclClause = do
   pure (name, pats, body)
 
 -- declaration attribute `@deprecated "msg"` / `@inline` / `@must_use` wrapping
--- the following decl (mirrors lib/parser.mly `AT IDENT [STRING] newlines decl`).
+-- the following decl.
 parseAttrib : Parser Decl
 parseAttrib = do
   expectTok TAt
@@ -3077,7 +3072,7 @@ implMethodRest _ _ _ = failP "expected = or | in impl method"
 
 -- a Haskell-style `where` scoping over ALL guard arms (it sits at the guards'
 -- indentation, inside their INDENT block): `guards WHERE INDENT bindings DEDENT
--- newlines` → ELetGroup wrapping the EGuards.  Mirrors lib/parser.mly line 406.
+-- newlines` → ELetGroup wrapping the EGuards.
 guardArmsWhereOpt : List GuardArm -> Parser Expr
 guardArmsWhereOpt arms = do
   t <- peekP
@@ -3729,8 +3724,8 @@ parseProgram = do
   many declThenNoise
 
 -- ── Position side-channel ─────────────────────────────────────────────────
--- Mirrors lib/parser_state.ml's three channels, surfaced for `medaka fmt`'s
--- comment-interleaving engine (lib/printer.ml `format_program`):
+-- Three channels, surfaced for `medaka fmt`'s
+-- comment-interleaving engine (`format_program`):
 --   * decl_positions  — per top-level decl, a (line, end_line) pair, in source
 --                        order;
 --   * variant_lines   — start line of each `data` variant, flat across the file
@@ -4513,7 +4508,6 @@ parseWithPositionsOpt src = match tokenizeWithLines src
           else None
 
 -- Check that the parse consumed all tokens (no trailing garbage), panic on error.
--- Mirrors lib/loader.ml: raises Failure "Parse error" on Parser.Error or Failure.
 resultDecls : Array Token -> PR (List Decl) -> List Decl
 resultDecls _ (PErr _ _) = panic "parse error"
 resultDecls _ (PFatal _ _) = panic "parse error"
@@ -4560,10 +4554,9 @@ parseLocated src = match tokenizeWithOffsetPairs src
 -- purely-additive non-panicking entry: it returns the same parse on success and
 -- a located, structured `ParseError` on failure, leaving `parse` byte-identical.
 --
--- `ParseError line col message` mirrors `lib/loader.ml`'s
---   ParseError { file; line; col; message }
--- (the `file` field is the caller's concern — not carried here), with the same
--- `L:C` numbering the OCaml oracle prints: 1-based line, 0-based column derived
+-- `ParseError line col message` carries
+--   { line; col; message }
+-- with 1-based line, 0-based column derived
 -- from the error token's char offset via the lexer's `offsetToLineCol`.
 public export data ParseError = ParseError Int Int String
 

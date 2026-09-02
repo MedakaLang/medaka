@@ -4,7 +4,7 @@ stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka REPL (Stage 4, Phase B.9)
 --
--- Mirrors lib/repl.ml behaviour:
+-- Behaviour:
 --   * Prompt `> ` (continuation `  `) on stdout
 --   * Declaration input: print `val x : T` per new binding, `type T` / `record T`
 --     / `interface I` for new data/record/interface declarations
@@ -25,7 +25,7 @@ stages=DESUGAR,MARK
 --   4. Resolve errors: safe list return.  Typecheck: checkOneDiags.
 --      Eval: can panic on runtime errors (same as OCaml REPL).
 --
--- Known divergence from lib/repl.ml:
+-- Known limitations:
 --   * No source-location info on errors (compiler AST is location-stripped).
 --   * No :load / :reload commands.
 
