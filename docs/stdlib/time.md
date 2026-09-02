@@ -1,17 +1,31 @@
 # time
 
-## `Duration`
+Durations, a UTC calendar, and the clock.
+
+`Duration` is a span of time in whole milliseconds, built with `millis`,
+`seconds`, `minutes`, `hours`, and `days`. `DateTime` is a civil date
+and time in UTC; `fromEpochSeconds` and `toEpochSeconds` convert to and
+from Unix time, and `formatIso` and `parseIso` convert to and from ISO
+8601 text. There is no time zone support: every `DateTime` is UTC.
+
+`now`, `monotonic`, `elapsedSince`, and `sleep` read and wait on the
+host clock. Under the interpreter the clock returns fixed values and
+`sleep` does nothing; in a built program they use the real clock.
+
+## Durations
+
+### `Duration`
 
 ```
 data Duration
   = Duration Int
 ```
 
-A time span, stored as a whole number of MILLISECONDS.
+A span of time, in whole milliseconds.
 
 Instances: `Eq`, `Ord`, `Debug`, [`Display`](#display-duration), [`Semigroup`](#semigroup-duration), [`Monoid`](#monoid-duration)
 
-## `millis`
+### `millis`
 
 ```
 millis : Int -> Duration
@@ -24,7 +38,7 @@ A duration of `n` milliseconds.
 250
 ```
 
-## `seconds`
+### `seconds`
 
 ```
 seconds : Int -> Duration
@@ -37,7 +51,7 @@ A duration of `n` seconds.
 5000
 ```
 
-## `minutes`
+### `minutes`
 
 ```
 minutes : Int -> Duration
@@ -50,7 +64,7 @@ A duration of `n` minutes.
 120
 ```
 
-## `hours`
+### `hours`
 
 ```
 hours : Int -> Duration
@@ -63,7 +77,7 @@ A duration of `n` hours.
 3600
 ```
 
-## `days`
+### `days`
 
 ```
 days : Int -> Duration
@@ -76,236 +90,230 @@ A duration of `n` days.
 86400
 ```
 
-## `toMillis`
+### `toMillis`
 
 ```
 toMillis : Duration -> Int
 ```
 
-The duration as whole milliseconds.
+The duration in whole milliseconds.
 
-## `toSeconds`
+### `toSeconds`
 
 ```
 toSeconds : Duration -> Int
 ```
 
-The duration as whole seconds (truncated toward zero).
+The duration in whole seconds, rounded towards zero.
 
 ```medaka
 > toSeconds (millis 2500)
 2
 ```
 
-## `toMinutes`
+### `toMinutes`
 
 ```
 toMinutes : Duration -> Int
 ```
 
-The duration as whole minutes (truncated toward zero).
+The duration in whole minutes, rounded towards zero.
 
 ```medaka
 > toMinutes (seconds 150)
 2
 ```
 
-## `toHours`
+### `toHours`
 
 ```
 toHours : Duration -> Int
 ```
 
-The duration as whole hours (truncated toward zero).
+The duration in whole hours, rounded towards zero.
 
 ```medaka
 > toHours (minutes 150)
 2
 ```
 
-## `toDays`
+### `toDays`
 
 ```
 toDays : Duration -> Int
 ```
 
-The duration as whole days (truncated toward zero).
+The duration in whole days, rounded towards zero.
 
 ```medaka
 > toDays (hours 50)
 2
 ```
 
-## `addDuration`
+### `addDuration`
 
 ```
 addDuration : Duration -> Duration -> Duration
 ```
 
-Add two durations.
+The sum of two durations.
+
+`++` on durations is the same operation.
 
 ```medaka
 > toMillis (addDuration (seconds 1) (millis 500))
 1500
 ```
 
-## `subDuration`
+### `subDuration`
 
 ```
 subDuration : Duration -> Duration -> Duration
 ```
 
-Subtract the second duration from the first.
+The first duration less the second.
 
 ```medaka
 > toMillis (subDuration (seconds 2) (millis 500))
 1500
 ```
 
-## `DateTime`
+## Dates and times
+
+### `DateTime`
 
 ```
 data DateTime
   = DateTime { year : Int, month : Int, day : Int, hour : Int, minute : Int, second : Int }
 ```
 
-A civil UTC date-and-time.  `month` is 1-12, `day` is 1-31.
+A civil date and time in UTC.
+
+`month` runs from 1 to 12 and `day` from 1 to 31. Values compare in
+field order, which is chronological order for valid dates.
 
 Instances: `Eq`, `Ord`, `Debug`, [`Display`](#display-datetime)
 
-## `fromEpochSeconds`
+### `fromEpochSeconds`
 
 ```
 fromEpochSeconds : Int -> DateTime
 ```
 
-Convert Unix epoch seconds (UTC) to a civil `DateTime`.  Supports
-negative (pre-1970) inputs.
+The UTC date and time at a number of seconds since the Unix epoch.
+
+Negative values, before 1970, work too.
 
 ```medaka
 > formatIso (fromEpochSeconds 0)
 "1970-01-01T00:00:00Z"
 > formatIso (fromEpochSeconds 1000000000)
 "2001-09-09T01:46:40Z"
-> formatIso (fromEpochSeconds 951782400)
-"2000-02-29T00:00:00Z"
-> formatIso (fromEpochSeconds 1709164800)
-"2024-02-29T00:00:00Z"
-> formatIso (fromEpochSeconds (0 - 1))
-"1969-12-31T23:59:59Z"
 ```
 
-## `toEpochSeconds`
+### `toEpochSeconds`
 
 ```
 toEpochSeconds : DateTime -> Int
 ```
 
-Convert a civil `DateTime` (UTC) to Unix epoch seconds.  Inverse of
-`fromEpochSeconds`.
+The number of seconds since the Unix epoch at a UTC date and time. The
+inverse of `fromEpochSeconds`.
 
 ```medaka
 > toEpochSeconds (fromEpochSeconds 1000000000)
 1000000000
 ```
 
-## `formatIso`
+### `formatIso`
 
 ```
 formatIso : DateTime -> String
 ```
 
-Render a `DateTime` as ISO 8601 `YYYY-MM-DDThh:mm:ssZ` (zero-padded, UTC).
+The date and time in ISO 8601 form, `YYYY-MM-DDThh:mm:ssZ`.
 
 ```medaka
 > formatIso (DateTime { year = 2024, month = 3, day = 5, hour = 7, minute = 8, second = 9 })
 "2024-03-05T07:08:09Z"
 ```
 
-## `parseIso`
+### `parseIso`
 
 ```
 parseIso : String -> Option DateTime
 ```
 
-Parse ISO 8601 `YYYY-MM-DDThh:mm:ssZ` (UTC only, exactly the shape
-`formatIso` emits), or `None`.  This is the exact inverse of `formatIso`:
-the candidate is accepted only if re-rendering it reproduces the input
-byte-for-byte, so no alternate spelling of the same instant (`+7` for `07`,
-a lowercase `t`, a missing pad) is silently accepted.
+The date and time written in ISO 8601 form, `YYYY-MM-DDThh:mm:ssZ`, or
+`None`.
+
+Exactly the form `formatIso` produces is accepted, and nothing else: no
+other time zone, no missing zero padding, no lowercase `t`.
 
 ```medaka
-> parseIso "2024-03-05T07:08:09Z" == Some (DateTime { year = 2024, month = 3, day = 5, hour = 7, minute = 8, second = 9 })
-True
 > map toEpochSeconds (parseIso "1970-01-01T00:00:00Z")
 Some 0
-> parseIso "2024-03-05 07:08:09Z"
-None
 > parseIso "2024-13-05T07:08:09Z"
-None
-> parseIso "not a date"
 None
 ```
 
-## `now`
+## The clock
+
+### `now`
 
 ```
 now : Unit -> <Clock> Float
 ```
 
-Current wall-clock time in Unix epoch seconds (Float).
+The current wall-clock time in seconds since the Unix epoch.
 
-## `nowDateTime`
+### `nowDateTime`
 
 ```
 nowDateTime : Unit -> <Clock> DateTime
 ```
 
-Current UTC civil time, from the wall clock (floored to whole seconds).
+The current UTC date and time, to the second.
 
-## `monotonic`
+### `monotonic`
 
 ```
 monotonic : Unit -> <Clock> Float
 ```
 
-A monotonic-clock reading in seconds (immune to wall-clock adjustment).
-Use two readings to time an interval, or `elapsedSince`.
+A reading of the monotonic clock, in seconds.
 
-## `elapsedSince`
+The monotonic clock is unaffected by adjustments to the wall clock, so
+two readings measure an interval. See `elapsedSince`.
+
+### `elapsedSince`
 
 ```
 elapsedSince : Float -> <Clock> Float
 ```
 
-Seconds elapsed on the monotonic clock since an earlier `monotonic ()`
-reading.  Time a block with `let t0 = monotonic ()  … elapsedSince t0`.
+The seconds elapsed since an earlier `monotonic` reading.
 
-## `sleep`
+Time a computation with `let t0 = monotonic ()`, the computation, then
+`elapsedSince t0`.
+
+### `sleep`
 
 ```
 sleep : Duration -> <Clock> Unit
 ```
 
-Sleep for a `Duration`.
+Pauses the program for a duration.
 
-Takes a `Duration`, not a bare `Int`: `sleep 5` used to mean five
-MILLISECONDS while reading as five seconds, and the type could not warn
-anyone (#2306 J-1).  Now the unit is in the value — `sleep (seconds 5)`,
-`sleep (millis 5)` — and the old `sleepSeconds` is gone with it, since
-`seconds` already says that.
+`sleep (seconds 5)` and `sleep (millis 5)` say their unit.
 
-`sleepSeconds` below is UNCHANGED: it was never the ambiguous one — the
-row cites it as the proof that this module already knew units belong
-somewhere the reader can see them.
-
-## `sleepSeconds`
+### `sleepSeconds`
 
 ```
 sleepSeconds : Int -> <Clock> Unit
 ```
 
-Sleep for `s` seconds.  Equivalent to `sleep (seconds s)`.
+Pauses the program for `s` seconds. The same as `sleep (seconds s)`.
 
 ## Instances
 
@@ -315,7 +323,8 @@ Sleep for `s` seconds.  Equivalent to `sleep (seconds s)`.
 impl Display Duration
 ```
 
-A `Duration` displays as its whole millisecond count with an `ms` suffix.
+`display` renders a duration as its millisecond count with an `ms`
+suffix.
 
 ### `Display DateTime`
 
@@ -323,7 +332,7 @@ A `Duration` displays as its whole millisecond count with an `ms` suffix.
 impl Display DateTime
 ```
 
-A `DateTime` displays as its ISO 8601 rendering — `display == formatIso`.
+`display` renders a date and time in ISO 8601 form, like `formatIso`.
 
 ### `Semigroup Duration`
 
@@ -331,7 +340,7 @@ A `DateTime` displays as its ISO 8601 rendering — `display == formatIso`.
 impl Semigroup Duration
 ```
 
-`addDuration` is the associative append.
+`++` on durations is `addDuration`.
 
 ### `Monoid Duration`
 
@@ -339,5 +348,5 @@ impl Semigroup Duration
 impl Monoid Duration
 ```
 
-`millis 0` is the identity for `addDuration`.
+`empty` is the zero duration.
 

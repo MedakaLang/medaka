@@ -1,6 +1,21 @@
 # args
 
-## `Arity`
+A command-line argument parser.
+
+Describe a command's flags as a value, an `ArgSpec` built with `spec`
+and the flag constructors (`switch`, `value`, `oneOf`, `intValue`), then
+`parseArgs` turns an argument list into an `Args` or a finished error
+sentence. Because the specification is a value, the help text, the
+`(known: ...)` list in an error, and the parser itself all come from the
+same source and cannot disagree.
+
+A flag with a value accepts both `--flag v` and `--flag=v`. Every name
+in a flag's `names` list is accepted; the first is the canonical name
+the query functions use.
+
+## Specifications
+
+### `Arity`
 
 ```
 data Arity
@@ -11,20 +26,17 @@ data Arity
   | IntValue String
 ```
 
-What a flag does with the token that follows it.
+What a flag does with the token after it.
 
-`Switch` takes no value.  `Value`/`ValueList`/`OneOf`/`IntValue` all take
-one, in either C1 spelling (`--flag v` or `--flag=v`).  The trailing
-`String` on each value-taking arm is the help METAVAR (`PATH`, `N`, …);
-`OneOf` additionally carries the closed set its value must belong to, and
-`IntValue` requires the value to parse as an integer.
-
-`ValueList` differs from `Value` only in how it renders in help
-(`--flag=<A,B>`) — splitting the comma list is the consumer's business.
+`Switch` takes no value. The others take one, and carry the name shown
+for it in help, such as `PATH` or `N`. `OneOf` also carries the set the
+value must belong to; `IntValue` requires the value to be an integer;
+`ValueList` is a comma-separated list, shown in help as `--flag=<M>` and
+split by the caller.
 
 Instances: `Eq`, `Debug`
 
-## `Visibility`
+### `Visibility`
 
 ```
 data Visibility
@@ -32,11 +44,12 @@ data Visibility
   | Internal
 ```
 
-Whether a flag appears in `helpBlockOf`.  Both kinds appear in `rosterOf`.
+Whether a flag appears in `helpBlockOf`. Both kinds appear in
+`rosterOf` and are parsed.
 
 Instances: `Eq`, `Debug`
 
-## `Unknown`
+### `Unknown`
 
 ```
 data Unknown
@@ -44,17 +57,15 @@ data Unknown
   | CollectUnknown
 ```
 
-What happens to a `--`-shaped token that no `FlagSpec` claims.
+What happens to a flag-shaped token no `FlagSpec` claims.
 
-`RejectUnknown` is the C2 default.  `CollectUnknown` exists for a future
-`codemod` migration (not yet done — F1, review finding, #2355), whose flag
-vocabulary is per-codemod and therefore not statically knowable: an
-unclaimed token is recorded in `given`, consuming the following token as
-its value.
+`RejectUnknown` makes it an error. `CollectUnknown` records it in
+`given`, taking the next token as its value, for a command whose flags
+are not known in advance.
 
 Instances: `Eq`, `Debug`
 
-## `Trailing`
+### `Trailing`
 
 ```
 data Trailing
@@ -63,59 +74,50 @@ data Trailing
   | TrailingAfterSeparator
 ```
 
-How the verb treats a raw trailing section.
+How the command treats arguments after its own.
 
-* `TrailingReject` — there is none.  `--` is not special and falls to the
-unknown-flag path like any other `--`-shaped token.
-* `TrailingRaw` — the FIRST positional ends flag scanning; everything after
-it is the callee's argv, `--` included and NOT consumed (`medaka run`).
-* `TrailingAfterSeparator` — the first bare `--` is consumed as a
-separator and everything after it lands in `rest`.
+`TrailingReject` means there are none, so `--` is an ordinary unknown
+flag. `TrailingRaw` ends flag scanning at the first positional and
+leaves everything after it, `--` included, in `rest`.
+`TrailingAfterSeparator` consumes the first `--` and puts everything
+after it in `rest`.
 
 Instances: `Eq`, `Debug`
 
-## `FlagSpec`
+### `FlagSpec`
 
 ```
 data FlagSpec
   = FlagSpec { names : List String, arity : Arity, summary : String, visibility : Visibility }
 ```
 
-One flag, with every spelling it answers to.
+One flag and every spelling it answers to.
 
-`names` carries complete tokens including their dashes, longest-canonical
-first: `["--write", "-w"]`.  The head is the CANONICAL name — the key
-`parseArgs` records in `Args.given` and the one `flag`/`flagValue` query
-by, whichever spelling the user typed.
+`names` holds complete tokens with their dashes, such as
+`["--write", "-w"]`. The first is the canonical name: the key recorded
+in `Args.given` and queried by `flag` and `flagValue`, whichever
+spelling was typed.
 
 Instances: `Eq`, `Debug`
 
-## `ArgSpec`
+### `ArgSpec`
 
 ```
 data ArgSpec
   = ArgSpec { verb : String, flags : List FlagSpec, trailing : Trailing, unknown : Unknown, strictDash : Bool }
 ```
 
-One verb's whole argument vocabulary.  This is the value everything else
-  in this module is a rendering of.
+A command's whole argument vocabulary.
 
-`strictDash` (S-5, #2355 residual A): whether an UNDECLARED single-dash
-token (`-foo`, not `--foo`) is flag-shaped at all. `False` (the default,
-via `spec`) is `isFlagToken`'s original lenient reading — an undeclared
-`-x` is left to the positional/raw path, because a short token is also how
-a filename starting with `-` reaches the CLI (the AS-FILENAME hole this
-flag exists to let a verb opt OUT of). `True` (`withStrictDash`) makes an
-undeclared `-x` flag-shaped like `--x` is: it flows into the SAME
-`unknown` policy (`RejectUnknown`'s `unknownFlagMessage`, by default) that
-an unclaimed `--`-shaped token already gets. Opt in per-verb, never
-tree-wide by changing `isFlagToken`'s default — a verb that genuinely
-wants positionals starting with `-` (a filename literally named `-` stays
-exempt either way: `stringLength t > 1` guards that) keeps `False`.
+`strictDash` controls an undeclared single-dash token such as `-x`.
+When `False`, the default, it is a positional, so a file name starting
+with `-` still reaches the command. When `True`, it is flag-shaped and
+goes to the `unknown` policy like an undeclared `--x`. A lone `-` is a
+positional either way.
 
 Instances: `Eq`, `Debug`
 
-## `Args`
+### `Args`
 
 ```
 data Args
@@ -124,211 +126,208 @@ data Args
 
 The result of a successful parse.
 
-`given` keeps argv order, so a verb that wants first-occurrence semantics
-calls `flagValue` and one that wants last-occurrence calls `lastValue` —
-the tree contains both conventions and this module deliberately picks
-neither for you.
+`given` holds each flag by its canonical name with its value, in the
+order given, so `flagValue` takes the first occurrence and `lastValue`
+the last. `positionals` holds the arguments no flag claimed, and `rest`
+holds the trailing section.
 
 Instances: `Eq`, `Debug`
 
-## `switch`
+## Building a specification
+
+### `switch`
 
 ```
 switch : List String -> String -> FlagSpec
 ```
 
-A flag taking no value.
+A flag that takes no value.
 
 ```medaka
 > canonical (switch ["--write", "-w"] "rewrite in place")
 "--write"
 ```
 
-## `value`
+### `value`
 
 ```
 value : List String -> String -> String -> FlagSpec
 ```
 
-A flag taking one value, with a help metavar.
+A flag that takes one value, shown in help under the given name.
 
 ```medaka
 > flagLabel (value ["--out", "-o"] "PATH" "where to write")
 "--out, -o <PATH>"
 ```
 
-## `valueList`
+### `valueList`
 
 ```
 valueList : List String -> String -> String -> FlagSpec
 ```
 
-A flag whose value is a comma-separated list.  Renders as `--flag=<M>` in
-help; the split itself is the consumer's business.
+A flag whose value is a comma-separated list.
+
+The parser does not split the list; the caller does.
 
 ```medaka
 > flagLabel (valueList ["--stages"] "STAGES" "stages to render")
 "--stages=<STAGES>"
 ```
 
-## `oneOf`
+### `oneOf`
 
 ```
 oneOf : List String -> List String -> String -> FlagSpec
 ```
 
-A flag whose value must be a member of a closed set.  The metavar is the
-set itself, so help and the rejection sentence stay in step.
+A flag whose value must be one of a fixed set.
+
+Help and the error for a bad value both list the set.
 
 ```medaka
 > flagLabel (oneOf ["--engine"] ["eval", "native"] "which engine")
 "--engine <eval|native>"
 ```
 
-## `intValue`
+### `intValue`
 
 ```
 intValue : List String -> String -> String -> FlagSpec
 ```
 
-A flag whose value must parse as an integer.
+A flag whose value must be an integer.
 
 ```medaka
 > flagLabel (intValue ["--jobs"] "N" "worker count")
 "--jobs <N>"
 ```
 
-## `internal`
+### `internal`
 
 ```
 internal : FlagSpec -> FlagSpec
 ```
 
-Hide a flag from `helpBlockOf`.  It stays in `rosterOf` and stays
-parseable — an internal flag the rejection sentence refused to name would
-be a worse lie than one help omits.
+The flag hidden from help.
+
+It is still parsed and still listed in `rosterOf`.
 
 ```medaka
 > helpBlockOf (spec "check" [internal (switch ["--allow-internal"] "x")])
 ""
 ```
 
-## `spec`
+### `spec`
 
 ```
 spec : String -> List FlagSpec -> ArgSpec
 ```
 
-A verb's spec with the conservative defaults: no trailing section,
-unknown flags rejected.
+A specification for the command `v` with the given flags, no trailing
+section, and unknown flags rejected.
 
 ```medaka
 > rosterOf (spec "fmt" [switch ["--write", "-w"] "rewrite in place"])
 ["--write", "-w"]
 ```
 
-## `withTrailing`
+### `withTrailing`
 
 ```
 withTrailing : Trailing -> ArgSpec -> ArgSpec
 ```
 
-Give a spec a trailing-section policy.
+The specification with a trailing-section policy.
 
-## `withUnknown`
+### `withUnknown`
 
 ```
 withUnknown : Unknown -> ArgSpec -> ArgSpec
 ```
 
-Give a spec an unknown-token policy.
+The specification with an unknown-flag policy.
 
-## `withStrictDash`
+### `withStrictDash`
 
 ```
 withStrictDash : ArgSpec -> ArgSpec
 ```
 
-Opt a spec into treating an UNDECLARED single-dash token as flag-shaped
-(C2-rejectable) rather than a positional. See `ArgSpec.strictDash`.
+The specification with undeclared single-dash tokens treated as flags.
+
+See `ArgSpec`.
 
 ```medaka
 > parseArgs (withStrictDash (spec "x" [])) ["-foo"]
 Err "medaka x: unrecognized flag '-foo' (known: none)"
 ```
 
-## `canonical`
+## Renderings of a specification
+
+### `canonical`
 
 ```
 canonical : FlagSpec -> String
 ```
 
-The head of `names` — the key `parseArgs` records whichever spelling was
-typed.
+A flag's canonical name, the first in its `names`.
 
 ```medaka
 > canonical (switch ["-w"] "rewrite in place")
 "-w"
 ```
 
-## `rosterOf`
+### `rosterOf`
 
 ```
 rosterOf : ArgSpec -> List String
 ```
 
-The `(known: …)` set, in declaration order: EVERY name of every flag,
-short spellings included.
+Every name of every flag, in declaration order.
 
-An earlier draft filtered this to `--`-prefixed names on the theory that no
-verb exposed a short flag yet.  That premise was false — `fmt` renders `-w`
-and `build` renders `-o` in their `(known: …)` sentences today — so the
-filter was a silent narrowing, not a deferral, and it is gone.
+This is the `(known: ...)` list in an unknown-flag error.
 
 ```medaka
 > rosterOf (spec "run" [switch ["--json"] "j", switch ["--release", "-r"] "r"])
 ["--json", "--release", "-r"]
 ```
 
-## `unknownFlagMessage`
+### `unknownFlagMessage`
 
 ```
 unknownFlagMessage : ArgSpec -> String -> String
 ```
 
-The ratified C2 sentence (`docs/ops/CLI-CONFORMANCE.md` §2), rendered in
-exactly one place.
+The error for a flag the specification does not know.
 
 ```medaka
 > unknownFlagMessage (spec "fmt" [switch ["--write", "-w"] "w"]) "--zzz"
 "medaka fmt: unrecognized flag '--zzz' (known: --write, -w)"
-> unknownFlagMessage (spec "doc" []) "--zzz"
-"medaka doc: unrecognized flag '--zzz' (known: none)"
 ```
 
-## `missingValueMessage`
+### `missingValueMessage`
 
 ```
 missingValueMessage : ArgSpec -> String -> String
 ```
 
-The ratified missing-value sentence.  `flg` is the token as the user
-spelled it, not the canonical name.
+The error for a flag given without its value. `flg` is the flag as
+typed.
 
 ```medaka
 > missingValueMessage (spec "build" [value ["-o"] "PATH" "out"]) "-o"
 "medaka build: -o requires a value"
 ```
 
-## `invalidValueMessage`
+### `invalidValueMessage`
 
 ```
 invalidValueMessage : ArgSpec -> String -> String -> String
 ```
 
-C2's shape one level down: the flag was recognized, its VALUE was not.
-`OneOf` names the set the same way C2 names the flag set; `IntValue` says
-what it wanted.
+The error for a value a `OneOf` or `IntValue` flag does not accept.
 
 ```medaka
 > invalidValueMessage (spec "test" [oneOf ["--engine"] ["eval", "native"] "e"]) "--engine" "zzz"
@@ -337,198 +336,118 @@ what it wanted.
 "medaka gate: --jobs: expected an integer, got 'x'"
 ```
 
-## `helpBlockOf`
+### `helpBlockOf`
 
 ```
 helpBlockOf : ArgSpec -> String
 ```
 
-The flag half of a `--help` block: two columns, `Internal` flags omitted,
-no trailing newline.  A spec with no public flags renders `""`.
+The flag table of a help message: one row per public flag, in two
+columns, with no trailing newline.
+
+`""` when the specification has no public flags.
 
 ```medaka
 > helpBlockOf (spec "fmt" [switch ["--write", "-w"] "rewrite in place", value ["--out"] "PATH" "where to write"])
 "  --write, -w    rewrite in place\n  --out <PATH>   where to write"
 ```
 
-## `flagLabel`
+### `flagLabel`
 
 ```
 flagLabel : FlagSpec -> String
 ```
 
-The left column of one help row: every spelling, then the metavar.
+The left column of a flag's help row: every spelling, then its value
+name.
 
 ```medaka
 > flagLabel (switch ["--check"] "check only")
 "--check"
 ```
 
-## `usageExitCode`
+### `usageExitCode`
 
 ```
 usageExitCode : Int
 ```
 
-The C3 exit code for every usage error this module can report — one
-number, so a verb never has to decide.
+The exit code for a usage error.
 
 ```medaka
 > usageExitCode
 1
 ```
 
-## `parseArgs`
+## Parsing
+
+### `parseArgs`
 
 ```
 parseArgs : ArgSpec -> List String -> Result String Args
 ```
 
-Parse argv against a spec.  `Err` carries the finished sentence, ready
-for stderr; the caller exits `usageExitCode`.
-
-A known switch, then the same flag by its short spelling:
-
-```medaka
-> map (a => flag "--write" a) (parseArgs (spec "fmt" [switch ["--write", "-w"] "w"]) ["--write"])
-Ok True
-> map (a => flag "--write" a) (parseArgs (spec "fmt" [switch ["--write", "-w"] "w"]) ["-w"])
-Ok True
-```
-
-C1 — both value spellings reach the same canonical key:
+The arguments parsed against a specification, or `Err` with an error
+sentence ready to print. A caller that prints it exits with
+`usageExitCode`.
 
 ```medaka
-> map (a => flagValue "--out" a) (parseArgs (spec "fmt" [value ["--out", "-o"] "PATH" "o"]) ["--out", "x"])
-Ok Some "x"
-> map (a => flagValue "--out" a) (parseArgs (spec "fmt" [value ["--out", "-o"] "PATH" "o"]) ["--out=x"])
-Ok Some "x"
 > map (a => flagValue "--out" a) (parseArgs (spec "fmt" [value ["--out", "-o"] "PATH" "o"]) ["-o", "x"])
 Ok Some "x"
-> map (a => flagValue "--out" a) (parseArgs (spec "fmt" [value ["--out", "-o"] "PATH" "o"]) ["-o=x"])
-Ok Some "x"
-```
-
-C2 — an unclaimed `--`-shaped token, and a value flag with nothing after it:
-
-```medaka
-> map (_ => "ok") (parseArgs (spec "fmt" [switch ["--write", "-w"] "w"]) ["--zzz"])
-Err "medaka fmt: unrecognized flag '--zzz' (known: --write, -w)"
-> map (_ => "ok") (parseArgs (spec "fmt" [value ["--out"] "PATH" "o"]) ["--out"])
-Err "medaka fmt: --out requires a value"
-```
-
-C2 stops at `--`.  An UNDECLARED single-dash token is not a flag-shaped
-token at all — it is a positional, exactly as the CLI treats it today, so
-that a filename beginning with `-` is not rejected here:
-
-```medaka
-> map (a => a.positionals) (parseArgs (spec "check" [switch ["--json"] "j"]) ["-zzz", "f.mdk"])
-Ok ["-zzz", "f.mdk"]
-```
-
-Positionals, in order, unclaimed by any flag:
-
-```medaka
 > map (a => a.positionals) (parseArgs (spec "fmt" [switch ["--write"] "w"]) ["a.mdk", "--write", "b.mdk"])
 Ok ["a.mdk", "b.mdk"]
+> map (_ => "ok") (parseArgs (spec "fmt" [switch ["--write", "-w"] "w"]) ["--zzz"])
+Err "medaka fmt: unrecognized flag '--zzz' (known: --write, -w)"
 ```
 
-`OneOf` and `IntValue` check the value they took, in either spelling, and
-render C2's shape one level down when it does not belong:
+## Querying a parse
 
-```medaka
-> map (a => flagValue "--engine" a) (parseArgs (spec "test" [oneOf ["--engine"] ["eval", "native"] "e"]) ["--engine", "native"])
-Ok Some "native"
-> map (_ => "ok") (parseArgs (spec "test" [oneOf ["--engine"] ["eval", "native"] "e"]) ["--engine=zzz"])
-Err "medaka test: --engine: unrecognized value 'zzz' (known: eval, native)"
-> map (a => flagValue "--jobs" a) (parseArgs (spec "gate" [intValue ["--jobs"] "N" "j"]) ["--jobs", "-3"])
-Ok Some "-3"
-> map (_ => "ok") (parseArgs (spec "gate" [intValue ["--jobs"] "N" "j"]) ["--jobs", "x"])
-Err "medaka gate: --jobs: expected an integer, got 'x'"
-```
-
-`TrailingReject` (the default) gives `--` no meaning, so it rejects like
-any other unclaimed token:
-
-```medaka
-> map (_ => "ok") (parseArgs (spec "fmt" [switch ["--write"] "w"]) ["--"])
-Err "medaka fmt: unrecognized flag '--' (known: --write)"
-```
-
-`TrailingRaw` ends the scan at the first positional; a literal `--` after
-it reaches the callee UNCONSUMED, and so does a `--`-shaped token the spec
-never heard of:
-
-```medaka
-> map (a => a.rest) (parseArgs (withTrailing TrailingRaw (spec "run" [switch ["--json"] "j"])) ["p.mdk", "--", "--foo"])
-Ok ["--", "--foo"]
-> map (a => a.rest) (parseArgs (withTrailing TrailingRaw (spec "run" [switch ["--json"] "j"])) ["--json", "p.mdk", "--zzz"])
-Ok ["--zzz"]
-```
-
-`TrailingAfterSeparator` consumes exactly ONE `--`; a second one is data:
-
-```medaka
-> map (a => a.rest) (parseArgs (withTrailing TrailingAfterSeparator (spec "gate" [switch ["--json"] "j"])) ["--json", "--", "--x", "--"])
-Ok ["--x", "--"]
-```
-
-`CollectUnknown` records a token no `FlagSpec` claims, for the one verb
-(`codemod`) whose vocabulary is not statically knowable:
-
-```medaka
-> map (a => flagValue "--anything" a) (parseArgs (withUnknown CollectUnknown (spec "codemod" [])) ["--anything", "v"])
-Ok Some "v"
-```
-
-## `flag`
+### `flag`
 
 ```
 flag : String -> Args -> Bool
 ```
 
-Was this flag given at all?
+Whether the flag was given.
 
 ```medaka
 > map (a => flag "--write" a) (parseArgs (spec "fmt" [switch ["--write", "-w"] "w"]) [])
 Ok False
 ```
 
-## `flagValue`
+### `flagValue`
 
 ```
 flagValue : String -> Args -> Option String
 ```
 
-The FIRST occurrence's value.
+The value of the flag's first occurrence, or `None`.
 
 ```medaka
 > map (a => flagValue "--out" a) (parseArgs (spec "fmt" [value ["--out"] "P" "o"]) ["--out", "a", "--out", "b"])
 Ok Some "a"
 ```
 
-## `lastValue`
+### `lastValue`
 
 ```
 lastValue : String -> Args -> Option String
 ```
 
-The LAST occurrence's value.  Both conventions live in the tree; the
-verb picks.
+The value of the flag's last occurrence, or `None`.
 
 ```medaka
 > map (a => lastValue "--out" a) (parseArgs (spec "fmt" [value ["--out"] "P" "o"]) ["--out", "a", "--out", "b"])
 Ok Some "b"
 ```
 
-## `flagValues`
+### `flagValues`
 
 ```
 flagValues : String -> Args -> List String
 ```
 
-Every occurrence's value, in argv order.
+The values of every occurrence of the flag, in order.
 
 ```medaka
 > map (a => flagValues "--out" a) (parseArgs (spec "fmt" [value ["--out"] "P" "o"]) ["--out", "a", "--out", "b"])

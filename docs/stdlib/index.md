@@ -2,6 +2,8 @@
 
 ## [`args`](args.md)
 
+A command-line argument parser.
+
 - [`Arity`](args.md#arity)
 - [`Visibility`](args.md#visibility)
 - [`Unknown`](args.md#unknown)
@@ -71,14 +73,18 @@ Operations on `Array a`.
 
 ## [`base64`](base64.md)
 
+Base64 encoding and decoding of bytes, per RFC 4648.
+
 - [`encode`](base64.md#encode)
 - [`encodeUrlSafe`](base64.md#encodeurlsafe)
+- [`encodeString`](base64.md#encodestring)
 - [`decode`](base64.md#decode)
 - [`decodeUrlSafe`](base64.md#decodeurlsafe)
-- [`encodeString`](base64.md#encodestring)
 - [`decodeString`](base64.md#decodestring)
 
 ## [`bits64`](bits64.md)
+
+Unsigned 64-bit arithmetic.
 
 - [`U64`](bits64.md#u64)
 - [`zero`](bits64.md#zero)
@@ -99,27 +105,27 @@ Operations on `Array a`.
 
 ## [`bytebuilder`](bytebuilder.md)
 
-bytebuilder — a byte-level output builder for Medaka.
+A buffer for building byte arrays.
 
 - [`Builder`](bytebuilder.md#builder)
 - [`newBuilder`](bytebuilder.md#newbuilder)
+- [`buildArray`](bytebuilder.md#buildarray)
 - [`emitU8`](bytebuilder.md#emitu8)
+- [`emitBytes`](bytebuilder.md#emitbytes)
 - [`emitU16BE`](bytebuilder.md#emitu16be)
 - [`emitU24BE`](bytebuilder.md#emitu24be)
 - [`emitU32BE`](bytebuilder.md#emitu32be)
 - [`emitU16LE`](bytebuilder.md#emitu16le)
 - [`emitU24LE`](bytebuilder.md#emitu24le)
 - [`emitU32LE`](bytebuilder.md#emitu32le)
-- [`emitBytes`](bytebuilder.md#emitbytes)
 - [`emitBeSint`](bytebuilder.md#emitbesint)
 - [`emitBeUint`](bytebuilder.md#emitbeuint)
 - [`emitLeSint`](bytebuilder.md#emitlesint)
 - [`emitLeUint`](bytebuilder.md#emitleuint)
-- [`buildArray`](bytebuilder.md#buildarray)
 
 ## [`byteparser`](byteparser.md)
 
-byteparser — a binary parser-combinator library for Medaka.
+Parser combinators over bytes.
 
 - [`BResult`](byteparser.md#bresult)
 - [`ByteParserE`](byteparser.md#byteparsere)
@@ -134,6 +140,8 @@ byteparser — a binary parser-combinator library for Medaka.
 - [`byte`](byteparser.md#byte)
 - [`eof`](byteparser.md#eof)
 - [`peek`](byteparser.md#peek)
+- [`takeBytes`](byteparser.md#takebytes)
+- [`takeSlice`](byteparser.md#takeslice)
 - [`many`](byteparser.md#many)
 - [`some`](byteparser.md#some)
 - [`sepBy1`](byteparser.md#sepby1)
@@ -142,8 +150,6 @@ byteparser — a binary parser-combinator library for Medaka.
 - [`between`](byteparser.md#between)
 - [`choice`](byteparser.md#choice)
 - [`chainl1`](byteparser.md#chainl1)
-- [`takeBytes`](byteparser.md#takebytes)
-- [`takeSlice`](byteparser.md#takeslice)
 - [`beUint`](byteparser.md#beuint)
 - [`beSint`](byteparser.md#besint)
 - [`beFloat64`](byteparser.md#befloat64)
@@ -252,14 +258,16 @@ The prelude: the types, interfaces, and functions every Medaka program can use w
 
 ## [`fs`](fs.md)
 
+Filesystem helpers built on the host file primitives.
+
 - [`FileStat`](fs.md#filestat)
 - [`stat`](fs.md#stat)
-- [`copyFile`](fs.md#copyfile)
-- [`mkdirAll`](fs.md#mkdirall)
-- [`walkDir`](fs.md#walkdir)
 - [`isDir`](fs.md#isdir)
 - [`isFile`](fs.md#isfile)
 - [`fileSize`](fs.md#filesize)
+- [`copyFile`](fs.md#copyfile)
+- [`mkdirAll`](fs.md#mkdirall)
+- [`walkDir`](fs.md#walkdir)
 
 ## [`hash_map`](hash_map.md)
 
@@ -292,6 +300,8 @@ A mutable set of distinct elements, keyed by hash.
 - [`deleteInPlace`](hash_set.md#deleteinplace)
 
 ## [`hex`](hex.md)
+
+Hexadecimal encoding and decoding of bytes.
 
 - [`encode`](hex.md#encode)
 - [`encodeUpper`](hex.md#encodeupper)
@@ -446,6 +456,8 @@ An immutable map from keys to values, ordered by key.
 
 ## [`math`](math.md)
 
+Floating-point math and a few integer helpers.
+
 - [`toRadians`](math.md#toradians)
 - [`toDegrees`](math.md#todegrees)
 - [`isNaN`](math.md#isnan)
@@ -462,6 +474,8 @@ An immutable map from keys to values, ordered by key.
 
 ## [`net`](net.md)
 
+TCP connections and name resolution.
+
 - [`Connection`](net.md#connection)
 - [`Listener`](net.md#listener)
 - [`resolve`](net.md#resolve)
@@ -471,21 +485,23 @@ An immutable map from keys to values, ordered by key.
 - [`accept`](net.md#accept)
 - [`send`](net.md#send)
 - [`recv`](net.md#recv)
-- [`shutdown`](net.md#shutdown)
-- [`close`](net.md#close)
-- [`closeListener`](net.md#closelistener)
-- [`setTimeout`](net.md#settimeout)
 - [`sendAll`](net.md#sendall)
 - [`recvAll`](net.md#recvall)
 - [`sendString`](net.md#sendstring)
 - [`recvString`](net.md#recvstring)
 - [`sendLine`](net.md#sendline)
 - [`recvLine`](net.md#recvline)
+- [`shutdown`](net.md#shutdown)
+- [`close`](net.md#close)
+- [`closeListener`](net.md#closelistener)
+- [`setTimeout`](net.md#settimeout)
 - [`withConnection`](net.md#withconnection)
 - [`withListener`](net.md#withlistener)
 - [`serveLoop`](net.md#serveloop)
 
 ## [`nonempty`](nonempty.md)
+
+A list with at least one element.
 
 - [`NonEmpty`](nonempty.md#nonempty)
 - [`singleton`](nonempty.md#singleton)
@@ -495,6 +511,8 @@ An immutable map from keys to values, ordered by key.
 - [`minimum`](nonempty.md#minimum)
 
 ## [`path`](path.md)
+
+Manipulation of `/`-separated paths as text.
 
 - [`dirname`](path.md#dirname)
 - [`basename`](path.md#basename)
@@ -718,6 +736,8 @@ Operations on `String` and `Char`.
 
 ## [`test`](test.md)
 
+Assertions for unit tests.
+
 - [`Expectation`](test.md#expectation)
 - [`pass`](test.md#pass)
 - [`fail`](test.md#fail)
@@ -731,6 +751,8 @@ Operations on `String` and `Char`.
 - [`runTests`](test.md#runtests)
 
 ## [`time`](time.md)
+
+Durations, a UTC calendar, and the clock.
 
 - [`Duration`](time.md#duration)
 - [`millis`](time.md#millis)
@@ -759,6 +781,8 @@ Operations on `String` and `Char`.
 
 ## [`toml`](toml.md)
 
+A reader for a subset of TOML.
+
 - [`TomlValue`](toml.md#tomlvalue)
 - [`Toml`](toml.md#toml)
 - [`parse`](toml.md#parse)
@@ -770,6 +794,8 @@ Operations on `String` and `Char`.
 - [`tableEntry`](toml.md#tableentry)
 
 ## [`validation`](validation.md)
+
+A result type that collects every error instead of stopping at the first.
 
 - [`Validation`](validation.md#validation)
 - [`toResult`](validation.md#toresult)

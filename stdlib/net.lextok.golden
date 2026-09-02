@@ -1,0 +1,916 @@
+NEWLINE
+IMPORT
+IDENT "array"
+DOT_LBRACE
+IDENT "drop"
+RBRACE
+NEWLINE
+IMPORT
+IDENT "vector"
+DOT_LBRACE
+UPPER "Vector"
+COMMA
+IDENT "new"
+COMMA
+IDENT "push"
+COMMA
+IDENT "toArray"
+RBRACE
+NEWLINE
+IMPORT
+IDENT "string"
+DOT_LBRACE
+IDENT "toUtf8"
+COMMA
+IDENT "fromUtf8"
+RBRACE
+NEWLINE
+EXPORT
+DATA
+UPPER "Connection"
+EQUAL
+UPPER "Connection"
+UPPER "Int"
+NEWLINE
+EXPORT
+DATA
+UPPER "Listener"
+EQUAL
+UPPER "Listener"
+UPPER "Int"
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "resolve"
+COLON
+UPPER "String"
+ARROW
+LT
+UPPER "Net"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+LPAREN
+UPPER "List"
+UPPER "String"
+RPAREN
+NEWLINE
+IDENT "resolve"
+IDENT "host"
+EQUAL
+IDENT "netResolve"
+IDENT "host"
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "connect"
+COLON
+UPPER "String"
+ARROW
+UPPER "Int"
+ARROW
+LT
+UPPER "Net"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+UPPER "Connection"
+NEWLINE
+IDENT "connect"
+IDENT "host"
+IDENT "port"
+EQUAL
+IDENT "map"
+UPPER "Connection"
+LPAREN
+IDENT "netTcpConnect"
+IDENT "host"
+IDENT "port"
+RPAREN
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "listen"
+COLON
+UPPER "String"
+ARROW
+UPPER "Int"
+ARROW
+LT
+UPPER "Net"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+UPPER "Listener"
+NEWLINE
+IDENT "listen"
+IDENT "addr"
+IDENT "port"
+EQUAL
+IDENT "map"
+UPPER "Listener"
+LPAREN
+IDENT "netTcpListen"
+IDENT "addr"
+IDENT "port"
+RPAREN
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "listenPort"
+COLON
+UPPER "Listener"
+ARROW
+LT
+UPPER "Net"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+UPPER "Int"
+NEWLINE
+IDENT "listenPort"
+LPAREN
+UPPER "Listener"
+IDENT "fd"
+RPAREN
+EQUAL
+IDENT "netListenPort"
+IDENT "fd"
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "accept"
+COLON
+UPPER "Listener"
+ARROW
+LT
+UPPER "Net"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+UPPER "Connection"
+NEWLINE
+IDENT "accept"
+LPAREN
+UPPER "Listener"
+IDENT "fd"
+RPAREN
+EQUAL
+IDENT "map"
+UPPER "Connection"
+LPAREN
+IDENT "netTcpAccept"
+IDENT "fd"
+RPAREN
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "send"
+COLON
+UPPER "Connection"
+ARROW
+UPPER "Array"
+UPPER "Int"
+ARROW
+LT
+UPPER "Net"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+UPPER "Int"
+NEWLINE
+IDENT "send"
+LPAREN
+UPPER "Connection"
+IDENT "fd"
+RPAREN
+IDENT "bs"
+EQUAL
+IDENT "netSend"
+IDENT "fd"
+IDENT "bs"
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "recv"
+COLON
+UPPER "Connection"
+ARROW
+UPPER "Int"
+ARROW
+LT
+UPPER "Net"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+LPAREN
+UPPER "Array"
+UPPER "Int"
+RPAREN
+NEWLINE
+IDENT "recv"
+LPAREN
+UPPER "Connection"
+IDENT "fd"
+RPAREN
+IDENT "n"
+EQUAL
+IDENT "netRecv"
+IDENT "fd"
+IDENT "n"
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "sendAll"
+COLON
+UPPER "Connection"
+ARROW
+UPPER "Array"
+UPPER "Int"
+ARROW
+LT
+UPPER "Net"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+UPPER "Unit"
+NEWLINE
+IDENT "sendAll"
+IDENT "conn"
+IDENT "bs"
+EQUAL
+INDENT
+IF
+IDENT "arrayLength"
+IDENT "bs"
+EQ_EQ
+INT 0
+THEN
+UPPER "Ok"
+LPAREN
+RPAREN
+ELSE
+MATCH
+IDENT "send"
+IDENT "conn"
+IDENT "bs"
+INDENT
+UPPER "Err"
+IDENT "e"
+FAT_ARROW
+UPPER "Err"
+IDENT "e"
+NEWLINE
+UPPER "Ok"
+INT 0
+FAT_ARROW
+UPPER "Err"
+STRING "net.sendAll: 0 bytes written (connection stalled)"
+NEWLINE
+UPPER "Ok"
+IDENT "n"
+FAT_ARROW
+IDENT "sendAll"
+IDENT "conn"
+LPAREN
+IDENT "drop"
+IDENT "n"
+IDENT "bs"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "recvAllLoop"
+COLON
+UPPER "Connection"
+ARROW
+UPPER "Vector"
+UPPER "Int"
+ARROW
+LT
+UPPER "Net"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+LPAREN
+UPPER "Array"
+UPPER "Int"
+RPAREN
+NEWLINE
+IDENT "recvAllLoop"
+IDENT "conn"
+IDENT "buf"
+EQUAL
+MATCH
+IDENT "recv"
+IDENT "conn"
+INT 4096
+INDENT
+UPPER "Err"
+IDENT "e"
+FAT_ARROW
+UPPER "Err"
+IDENT "e"
+NEWLINE
+UPPER "Ok"
+IDENT "chunk"
+FAT_ARROW
+IF
+IDENT "arrayLength"
+IDENT "chunk"
+EQ_EQ
+INT 0
+THEN
+UPPER "Ok"
+LPAREN
+IDENT "toArray"
+IDENT "buf"
+RPAREN
+ELSE
+INDENT
+LET
+UNDERSCORE
+EQUAL
+IDENT "fold"
+LPAREN
+IDENT "acc"
+IDENT "b"
+FAT_ARROW
+LET
+UNDERSCORE
+EQUAL
+IDENT "push"
+IDENT "b"
+IDENT "buf"
+IN
+IDENT "acc"
+RPAREN
+LPAREN
+RPAREN
+IDENT "chunk"
+NEWLINE
+IDENT "recvAllLoop"
+IDENT "conn"
+IDENT "buf"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "recvAll"
+COLON
+UPPER "Connection"
+ARROW
+LT
+UPPER "Net"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+LPAREN
+UPPER "Array"
+UPPER "Int"
+RPAREN
+NEWLINE
+IDENT "recvAll"
+IDENT "conn"
+EQUAL
+IDENT "recvAllLoop"
+IDENT "conn"
+LPAREN
+IDENT "new"
+LPAREN
+RPAREN
+RPAREN
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "sendString"
+COLON
+UPPER "Connection"
+ARROW
+UPPER "String"
+ARROW
+LT
+UPPER "Net"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+UPPER "Unit"
+NEWLINE
+IDENT "sendString"
+IDENT "conn"
+IDENT "s"
+EQUAL
+IDENT "sendAll"
+IDENT "conn"
+LPAREN
+IDENT "toUtf8"
+IDENT "s"
+RPAREN
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "recvString"
+COLON
+UPPER "Connection"
+ARROW
+LT
+UPPER "Net"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+UPPER "String"
+NEWLINE
+IDENT "recvString"
+IDENT "conn"
+EQUAL
+IDENT "map"
+IDENT "fromUtf8"
+LPAREN
+IDENT "recvAll"
+IDENT "conn"
+RPAREN
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "sendLine"
+COLON
+UPPER "Connection"
+ARROW
+UPPER "String"
+ARROW
+LT
+UPPER "Net"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+UPPER "Unit"
+NEWLINE
+IDENT "sendLine"
+IDENT "conn"
+IDENT "s"
+EQUAL
+IDENT "sendString"
+IDENT "conn"
+LPAREN
+IDENT "s"
+PLUSPLUS
+STRING "\n"
+RPAREN
+NEWLINE
+IDENT "recvLineLoop"
+COLON
+UPPER "Connection"
+ARROW
+UPPER "Vector"
+UPPER "Int"
+ARROW
+LT
+UPPER "Net"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+LPAREN
+UPPER "Option"
+UPPER "String"
+RPAREN
+NEWLINE
+IDENT "recvLineLoop"
+IDENT "conn"
+IDENT "buf"
+EQUAL
+INDENT
+MATCH
+IDENT "recv"
+IDENT "conn"
+INT 1
+INDENT
+UPPER "Err"
+IDENT "e"
+FAT_ARROW
+UPPER "Err"
+IDENT "e"
+NEWLINE
+UPPER "Ok"
+IDENT "chunk"
+FAT_ARROW
+INDENT
+IF
+IDENT "arrayLength"
+IDENT "chunk"
+EQ_EQ
+INT 0
+THEN
+INDENT
+IF
+IDENT "isEmpty"
+IDENT "buf"
+THEN
+UPPER "Ok"
+UPPER "None"
+ELSE
+UPPER "Ok"
+LPAREN
+UPPER "Some"
+LPAREN
+IDENT "fromUtf8"
+LPAREN
+IDENT "toArray"
+IDENT "buf"
+RPAREN
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
+ELSE
+INDENT
+LET
+IDENT "b"
+EQUAL
+IDENT "arrayGetUnsafe"
+INT 0
+IDENT "chunk"
+NEWLINE
+IF
+IDENT "b"
+EQ_EQ
+INT 10
+THEN
+UPPER "Ok"
+LPAREN
+UPPER "Some"
+LPAREN
+IDENT "fromUtf8"
+LPAREN
+IDENT "toArray"
+IDENT "buf"
+RPAREN
+RPAREN
+RPAREN
+ELSE
+INDENT
+LET
+UNDERSCORE
+EQUAL
+IDENT "push"
+IDENT "b"
+IDENT "buf"
+NEWLINE
+IDENT "recvLineLoop"
+IDENT "conn"
+IDENT "buf"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "recvLine"
+COLON
+UPPER "Connection"
+ARROW
+LT
+UPPER "Net"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+LPAREN
+UPPER "Option"
+UPPER "String"
+RPAREN
+NEWLINE
+IDENT "recvLine"
+IDENT "conn"
+EQUAL
+IDENT "recvLineLoop"
+IDENT "conn"
+LPAREN
+IDENT "new"
+LPAREN
+RPAREN
+RPAREN
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "shutdown"
+COLON
+UPPER "Connection"
+ARROW
+UPPER "Int"
+ARROW
+LT
+UPPER "Net"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+UPPER "Unit"
+NEWLINE
+IDENT "shutdown"
+LPAREN
+UPPER "Connection"
+IDENT "fd"
+RPAREN
+IDENT "how"
+EQUAL
+IDENT "netShutdown"
+IDENT "fd"
+IDENT "how"
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "close"
+COLON
+UPPER "Connection"
+ARROW
+LT
+UPPER "Net"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+UPPER "Unit"
+NEWLINE
+IDENT "close"
+LPAREN
+UPPER "Connection"
+IDENT "fd"
+RPAREN
+EQUAL
+IDENT "netClose"
+IDENT "fd"
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "closeListener"
+COLON
+UPPER "Listener"
+ARROW
+LT
+UPPER "Net"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+UPPER "Unit"
+NEWLINE
+IDENT "closeListener"
+LPAREN
+UPPER "Listener"
+IDENT "fd"
+RPAREN
+EQUAL
+IDENT "netClose"
+IDENT "fd"
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "setTimeout"
+COLON
+UPPER "Connection"
+ARROW
+UPPER "Int"
+ARROW
+LT
+UPPER "Net"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+UPPER "Unit"
+NEWLINE
+IDENT "setTimeout"
+LPAREN
+UPPER "Connection"
+IDENT "fd"
+RPAREN
+IDENT "ms"
+EQUAL
+IDENT "netSetTimeout"
+IDENT "fd"
+IDENT "ms"
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "withConnection"
+COLON
+UPPER "String"
+ARROW
+UPPER "Int"
+ARROW
+LPAREN
+UPPER "Connection"
+ARROW
+LT
+UPPER "Net"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+IDENT "a"
+RPAREN
+ARROW
+LT
+UPPER "Net"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+IDENT "a"
+NEWLINE
+IDENT "withConnection"
+IDENT "host"
+IDENT "port"
+IDENT "body"
+EQUAL
+MATCH
+IDENT "connect"
+IDENT "host"
+IDENT "port"
+INDENT
+UPPER "Err"
+IDENT "e"
+FAT_ARROW
+UPPER "Err"
+IDENT "e"
+NEWLINE
+UPPER "Ok"
+IDENT "conn"
+FAT_ARROW
+INDENT
+LET
+IDENT "r"
+EQUAL
+IDENT "body"
+IDENT "conn"
+NEWLINE
+LET
+UNDERSCORE
+EQUAL
+IDENT "close"
+IDENT "conn"
+NEWLINE
+IDENT "r"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "withListener"
+COLON
+UPPER "String"
+ARROW
+UPPER "Int"
+ARROW
+LPAREN
+UPPER "Listener"
+ARROW
+LT
+UPPER "Net"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+IDENT "a"
+RPAREN
+ARROW
+LT
+UPPER "Net"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+IDENT "a"
+NEWLINE
+IDENT "withListener"
+IDENT "addr"
+IDENT "port"
+IDENT "body"
+EQUAL
+MATCH
+IDENT "listen"
+IDENT "addr"
+IDENT "port"
+INDENT
+UPPER "Err"
+IDENT "e"
+FAT_ARROW
+UPPER "Err"
+IDENT "e"
+NEWLINE
+UPPER "Ok"
+IDENT "lis"
+FAT_ARROW
+INDENT
+LET
+IDENT "r"
+EQUAL
+IDENT "body"
+IDENT "lis"
+NEWLINE
+LET
+UNDERSCORE
+EQUAL
+IDENT "closeListener"
+IDENT "lis"
+NEWLINE
+IDENT "r"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "serveLoop"
+COLON
+UPPER "Listener"
+ARROW
+LPAREN
+UPPER "Connection"
+ARROW
+LT
+UPPER "Net"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+UPPER "Unit"
+RPAREN
+ARROW
+LT
+UPPER "Net"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+UPPER "Unit"
+NEWLINE
+IDENT "serveLoop"
+IDENT "lis"
+IDENT "handle"
+EQUAL
+MATCH
+IDENT "accept"
+IDENT "lis"
+INDENT
+UPPER "Err"
+IDENT "e"
+FAT_ARROW
+UPPER "Err"
+IDENT "e"
+NEWLINE
+UPPER "Ok"
+IDENT "conn"
+FAT_ARROW
+INDENT
+LET
+UNDERSCORE
+EQUAL
+IDENT "handle"
+IDENT "conn"
+NEWLINE
+LET
+UNDERSCORE
+EQUAL
+IDENT "close"
+IDENT "conn"
+NEWLINE
+IDENT "serveLoop"
+IDENT "lis"
+IDENT "handle"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+NEWLINE
+EOF
