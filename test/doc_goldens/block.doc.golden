@@ -6,6 +6,3 @@
 blockFn : Int -> Int
 ```
 
-A block-comment documented function.
-Spanning two lines.
-

@@ -6,5 +6,3 @@
 classify : Int -> String
 ```
 
-Classifies an int.
-
