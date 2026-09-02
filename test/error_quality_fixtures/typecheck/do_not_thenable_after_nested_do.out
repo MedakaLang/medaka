@@ -1,7 +1,7 @@
 cmd: medaka check
 exit: 1
 ---
-test/error_quality_fixtures/typecheck/do_not_thenable_after_nested_do.mdk:15:7: `do` requires a Thenable impl (e.g. `Option`/`Result`). For IO sequencing use a bare indented block, not `do`
+error: test/error_quality_fixtures/typecheck/do_not_thenable_after_nested_do.mdk:15:7: `do` requires a Thenable impl (e.g. `Option`/`Result`). For IO sequencing use a bare indented block, not `do`
   |
 15 |   a <- do
   |        ^

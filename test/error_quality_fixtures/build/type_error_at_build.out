@@ -1,7 +1,7 @@
 cmd: medaka build
 exit: 1
 ---
-test/error_quality_fixtures/build/type_error_at_build.mdk:1:29: No impl of Num for String
+error: test/error_quality_fixtures/build/type_error_at_build.mdk:1:23: No impl of Num for String
   |
 1 | main = println (debug ("x" + 1))
-  |                              ^
+  |                        ^
