@@ -1,15 +1,17 @@
 running doctests in stdlib/hash_set.mdk
-  ok   stdlib/hash_set.mdk:55: size (fromList [1, 2, 3, 2, 1])
-  ok   stdlib/hash_set.mdk:69: has 2 (fromList [1, 2, 3])
-  ok   stdlib/hash_set.mdk:71: has 9 (fromList [1, 2, 3])
-  ok   stdlib/hash_set.mdk:139: size (fromList [1, 2, 3, 4, 5, 6, 7, 8, 8, 1])
-  ok   stdlib/hash_set.mdk:191: toList (fromList [1, 1, 2]) /= []
-  ok   stdlib/hash_set.mdk:193: length (fromList [3, 1, 2, 1])
-  ok   stdlib/hash_set.mdk:210: eq (fromList [1, 2, 3]) (fromList [3, 2, 1, 2])
-  ok   stdlib/hash_set.mdk:240: display (fromList [3, 1, 2]) == "HashSet { 1, 2, 3 }"
-  ok   stdlib/hash_set.mdk:242: display (new () : HashSet Int) == "HashSet {}"
+  ok   stdlib/hash_set.mdk:49: size (new () : HashSet Int)
+  ok   stdlib/hash_set.mdk:57: size (fromList [1, 2, 3, 2, 1])
+  ok   stdlib/hash_set.mdk:66: size (fromList [1, 2, 3, 4, 5, 6, 7, 8, 8, 1])
+  ok   stdlib/hash_set.mdk:79: size (fromList [1, 2, 3])
+  ok   stdlib/hash_set.mdk:93: has 2 (fromList [1, 2, 3])
+  ok   stdlib/hash_set.mdk:95: has 9 (fromList [1, 2, 3])
+  ok   stdlib/hash_set.mdk:202: length (fromList [3, 1, 2, 1])
+  ok   stdlib/hash_set.mdk:211: toList (fromList [1, 1, 2]) /= []
+  ok   stdlib/hash_set.mdk:223: eq (fromList [1, 2, 3]) (fromList [3, 2, 1, 2])
+  ok   stdlib/hash_set.mdk:249: display (fromList [3, 1, 2])
+  ok   stdlib/hash_set.mdk:251: display (new () : HashSet Int)
 
-stdlib/hash_set.mdk: 9/9 passed
+stdlib/hash_set.mdk: 11/11 passed
 Testing "Display HashSet is layout-independent" ... OK (100 tests)
 Testing "Display HashSet agrees with Eq and lists elements ascending" ... OK (100 tests)
 

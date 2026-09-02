@@ -35,6 +35,8 @@
 
 ## [`array`](array.md)
 
+Operations on `Array a`.
+
 - [`singleton`](array.md#singleton)
 - [`make`](array.md#make)
 - [`makeWith`](array.md#makewith)
@@ -149,6 +151,8 @@ byteparser — a binary parser-combinator library for Medaka.
 
 ## [`core`](core.md)
 
+The prelude: the types, interfaces, and functions every Medaka program can use without an import.
+
 - [`Ordering`](core.md#ordering)
 - [`Option`](core.md#option)
 - [`Result`](core.md#result)
@@ -158,14 +162,14 @@ byteparser — a binary parser-combinator library for Medaka.
 - [`Monoid`](core.md#monoid)
 - [`Ord`](core.md#ord)
 - [`clamp`](core.md#clamp)
-- [`isEven`](core.md#iseven)
-- [`isOdd`](core.md#isodd)
 - [`Debug`](core.md#debug)
 - [`Display`](core.md#display)
 - [`Hashable`](core.md#hashable)
 - [`println`](core.md#println)
 - [`print`](core.md#print)
 - [`Num`](core.md#num)
+- [`isEven`](core.md#iseven)
+- [`isOdd`](core.md#isodd)
 - [`Bounded`](core.md#bounded)
 - [`Mappable`](core.md#mappable)
 - [`mapConst`](core.md#mapconst)
@@ -250,15 +254,17 @@ byteparser — a binary parser-combinator library for Medaka.
 
 ## [`hash_map`](hash_map.md)
 
+A mutable hash table from keys to values.
+
 - [`HashMap`](hash_map.md#hashmap)
 - [`new`](hash_map.md#new)
+- [`fromList`](hash_map.md#fromlist)
 - [`size`](hash_map.md#size)
 - [`isEmpty`](hash_map.md#isempty)
 - [`get`](hash_map.md#get)
 - [`has`](hash_map.md#has)
 - [`findWithDefault`](hash_map.md#findwithdefault)
 - [`setInPlace`](hash_map.md#setinplace)
-- [`fromList`](hash_map.md#fromlist)
 - [`deleteInPlace`](hash_map.md#deleteinplace)
 - [`toList`](hash_map.md#tolist)
 - [`keys`](hash_map.md#keys)
@@ -266,12 +272,14 @@ byteparser — a binary parser-combinator library for Medaka.
 
 ## [`hash_set`](hash_set.md)
 
+A mutable set of distinct elements, keyed by hash.
+
 - [`HashSet`](hash_set.md#hashset)
 - [`new`](hash_set.md#new)
+- [`fromList`](hash_set.md#fromlist)
 - [`size`](hash_set.md#size)
 - [`has`](hash_set.md#has)
 - [`insertInPlace`](hash_set.md#insertinplace)
-- [`fromList`](hash_set.md#fromlist)
 - [`deleteInPlace`](hash_set.md#deleteinplace)
 
 ## [`hex`](hex.md)
@@ -284,6 +292,8 @@ byteparser — a binary parser-combinator library for Medaka.
 
 ## [`io`](io.md)
 
+Output to standard error, debug printing, and helpers for files and the environment.
+
 - [`eprint`](io.md#eprint)
 - [`eprintln`](io.md#eprintln)
 - [`inspect`](io.md#inspect)
@@ -291,6 +301,8 @@ byteparser — a binary parser-combinator library for Medaka.
 - [`getEnvOr`](io.md#getenvor)
 
 ## [`json`](json.md)
+
+A JSON value type with a parser and a serializer.
 
 - [`Json`](json.md#json)
 - [`jArray`](json.md#jarray)
@@ -388,6 +400,8 @@ Operations on `List a`.
 - [`unzip3`](list.md#unzip3)
 
 ## [`map`](map.md)
+
+An immutable map from keys to values, ordered by key.
 
 - [`Map`](map.md#map)
 - [`singleton`](map.md#singleton)
@@ -488,43 +502,38 @@ Operations on `List a`.
 
 ## [`runtime`](runtime.md)
 
+The host primitives.
+
 - [`putStr`](runtime.md#putstr)
 - [`putStrLn`](runtime.md#putstrln)
+- [`ePutStr`](runtime.md#eputstr)
+- [`ePutStrLn`](runtime.md#eputstrln)
+- [`flushStdout`](runtime.md#flushstdout)
+- [`readLine`](runtime.md#readline)
+- [`readLineOpt`](runtime.md#readlineopt)
+- [`readAll`](runtime.md#readall)
+- [`readExactly`](runtime.md#readexactly)
 - [`Ref`](runtime.md#ref)
 - [`setRef`](runtime.md#setref)
-- [`hashInt`](runtime.md#hashint)
-- [`hashFloat`](runtime.md#hashfloat)
-- [`hashString`](runtime.md#hashstring)
-- [`hashChar`](runtime.md#hashchar)
-- [`hashBool`](runtime.md#hashbool)
-- [`pi`](runtime.md#pi)
-- [`e`](runtime.md#e)
-- [`readLine`](runtime.md#readline)
 - [`readFile`](runtime.md#readfile)
 - [`readFileBytes`](runtime.md#readfilebytes)
-- [`bitAnd`](runtime.md#bitand)
-- [`bitOr`](runtime.md#bitor)
-- [`bitXor`](runtime.md#bitxor)
-- [`shiftLeft`](runtime.md#shiftleft)
-- [`shiftRight`](runtime.md#shiftright)
-- [`bitNot`](runtime.md#bitnot)
 - [`writeFile`](runtime.md#writefile)
 - [`writeFileBytes`](runtime.md#writefilebytes)
-- [`runCommand`](runtime.md#runcommand)
-- [`exit`](runtime.md#exit)
-- [`panic`](runtime.md#panic)
-- [`args`](runtime.md#args)
-- [`getEnv`](runtime.md#getenv)
-- [`executablePath`](runtime.md#executablepath)
+- [`appendFile`](runtime.md#appendfile)
 - [`fileExists`](runtime.md#fileexists)
 - [`canonicalizePath`](runtime.md#canonicalizepath)
-- [`appendFile`](runtime.md#appendfile)
 - [`listDir`](runtime.md#listdir)
 - [`makeDir`](runtime.md#makedir)
 - [`removeFile`](runtime.md#removefile)
 - [`rename`](runtime.md#rename)
 - [`removeDir`](runtime.md#removedir)
 - [`statFile`](runtime.md#statfile)
+- [`args`](runtime.md#args)
+- [`getEnv`](runtime.md#getenv)
+- [`executablePath`](runtime.md#executablepath)
+- [`runCommand`](runtime.md#runcommand)
+- [`exit`](runtime.md#exit)
+- [`panic`](runtime.md#panic)
 - [`netResolve`](runtime.md#netresolve)
 - [`netTcpConnect`](runtime.md#nettcpconnect)
 - [`netTcpListen`](runtime.md#nettcplisten)
@@ -535,12 +544,6 @@ Operations on `List a`.
 - [`netShutdown`](runtime.md#netshutdown)
 - [`netClose`](runtime.md#netclose)
 - [`netSetTimeout`](runtime.md#netsettimeout)
-- [`ePutStr`](runtime.md#eputstr)
-- [`ePutStrLn`](runtime.md#eputstrln)
-- [`readLineOpt`](runtime.md#readlineopt)
-- [`readAll`](runtime.md#readall)
-- [`readExactly`](runtime.md#readexactly)
-- [`flushStdout`](runtime.md#flushstdout)
 - [`wallTimeSec`](runtime.md#walltimesec)
 - [`monotonicSec`](runtime.md#monotonicsec)
 - [`sleepMs`](runtime.md#sleepms)
@@ -551,10 +554,26 @@ Operations on `List a`.
 - [`randomChar`](runtime.md#randomchar)
 - [`setSeed`](runtime.md#setseed)
 - [`osEntropyBytes`](runtime.md#osentropybytes)
-- [`charToStr`](runtime.md#chartostr)
+- [`hashInt`](runtime.md#hashint)
+- [`hashFloat`](runtime.md#hashfloat)
+- [`hashString`](runtime.md#hashstring)
+- [`hashChar`](runtime.md#hashchar)
+- [`hashBool`](runtime.md#hashbool)
+- [`pi`](runtime.md#pi)
+- [`e`](runtime.md#e)
+- [`intMinBound`](runtime.md#intminbound)
+- [`intMaxBound`](runtime.md#intmaxbound)
+- [`charMinBound`](runtime.md#charminbound)
+- [`charMaxBound`](runtime.md#charmaxbound)
 - [`intToFloat`](runtime.md#inttofloat)
 - [`floatToInt`](runtime.md#floattoint)
 - [`floatRem`](runtime.md#floatrem)
+- [`bitAnd`](runtime.md#bitand)
+- [`bitOr`](runtime.md#bitor)
+- [`bitXor`](runtime.md#bitxor)
+- [`shiftLeft`](runtime.md#shiftleft)
+- [`shiftRight`](runtime.md#shiftright)
+- [`bitNot`](runtime.md#bitnot)
 - [`sqrt`](runtime.md#sqrt)
 - [`cbrt`](runtime.md#cbrt)
 - [`exp`](runtime.md#exp)
@@ -579,10 +598,6 @@ Operations on `List a`.
 - [`hypot`](runtime.md#hypot)
 - [`intBitsToFloat`](runtime.md#intbitstofloat)
 - [`floatToBytes64`](runtime.md#floattobytes64)
-- [`intMinBound`](runtime.md#intminbound)
-- [`intMaxBound`](runtime.md#intmaxbound)
-- [`charMinBound`](runtime.md#charminbound)
-- [`charMaxBound`](runtime.md#charmaxbound)
 - [`intToString`](runtime.md#inttostring)
 - [`floatToString`](runtime.md#floattostring)
 - [`arrayLength`](runtime.md#arraylength)
@@ -594,6 +609,7 @@ Operations on `List a`.
 - [`stringFromChars`](runtime.md#stringfromchars)
 - [`stringToUtf8Bytes`](runtime.md#stringtoutf8bytes)
 - [`stringFromUtf8Bytes`](runtime.md#stringfromutf8bytes)
+- [`charToStr`](runtime.md#chartostr)
 - [`charCode`](runtime.md#charcode)
 - [`charFromCode`](runtime.md#charfromcode)
 - [`stringLength`](runtime.md#stringlength)
@@ -613,6 +629,8 @@ Operations on `List a`.
 - [`stringToLower`](runtime.md#stringtolower)
 
 ## [`set`](set.md)
+
+An immutable set of distinct elements, ordered by `Ord`.
 
 - [`Set`](set.md#set)
 - [`singleton`](set.md#singleton)
@@ -634,6 +652,8 @@ Operations on `List a`.
 - [`wellFormed`](set.md#wellformed)
 
 ## [`string`](string.md)
+
+Operations on `String` and `Char`.
 
 - [`isDigit`](string.md#isdigit)
 - [`isAlpha`](string.md#isalpha)
@@ -747,6 +767,8 @@ Operations on `List a`.
 - [`fromResult`](validation.md#fromresult)
 
 ## [`vector`](vector.md)
+
+A growable, mutable array.
 
 - [`Vector`](vector.md#vector)
 - [`new`](vector.md#new)

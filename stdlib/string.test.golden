@@ -1,72 +1,75 @@
 running doctests in stdlib/string.mdk
-  ok   stdlib/string.mdk:62: isDigit '7'
-  ok   stdlib/string.mdk:64: isDigit 'x'
-  ok   stdlib/string.mdk:103: fromDigit '7'
-  ok   stdlib/string.mdk:105: fromDigit 'f'
-  ok   stdlib/string.mdk:107: fromDigit 'z'
-  ok   stdlib/string.mdk:122: toDigit 7
-  ok   stdlib/string.mdk:124: toDigit 12
-  ok   stdlib/string.mdk:126: toDigit 42
-  ok   stdlib/string.mdk:146: arrayLength (toChars "héllo→")
-  ok   stdlib/string.mdk:155: fromChars ['h', 'i']
-  ok   stdlib/string.mdk:165: arrayLength (toUtf8 "héllo")
-  ok   stdlib/string.mdk:174: fromUtf8 (toUtf8 "héllo→")
-  ok   stdlib/string.mdk:182: utf8ByteLength "héllo"
-  ok   stdlib/string.mdk:193: toInt "42"
-  ok   stdlib/string.mdk:195: toInt "-7"
-  ok   stdlib/string.mdk:197: toInt "12x"
-  ok   stdlib/string.mdk:199: toInt "4611686018427387903"
-  ok   stdlib/string.mdk:201: toInt "4611686018427387904"
-  ok   stdlib/string.mdk:203: toInt "-4611686018427387904"
-  ok   stdlib/string.mdk:205: toInt "-4611686018427387905"
-  ok   stdlib/string.mdk:207: toInt "99999999999999999999"
-  ok   stdlib/string.mdk:262: toFloat "3.5"
-  ok   stdlib/string.mdk:264: toFloat "nope"
-  ok   stdlib/string.mdk:276: startsWith "he" "hello"
-  ok   stdlib/string.mdk:278: startsWith "lo" "hello"
-  ok   stdlib/string.mdk:286: endsWith "lo" "hello"
-  ok   stdlib/string.mdk:298: stripPrefix "he" "hello"
-  ok   stdlib/string.mdk:300: stripPrefix "xy" "hello"
-  ok   stdlib/string.mdk:302: stripPrefix "" "hi"
-  ok   stdlib/string.mdk:304: stripPrefix "hello" "hello"
-  ok   stdlib/string.mdk:317: stripSuffix "lo" "hello"
-  ok   stdlib/string.mdk:319: stripSuffix "xy" "hello"
+  ok   stdlib/string.mdk:39: isDigit '7'
+  ok   stdlib/string.mdk:41: isDigit 'x'
+  ok   stdlib/string.mdk:81: fromDigit '7'
+  ok   stdlib/string.mdk:83: fromDigit 'f'
+  ok   stdlib/string.mdk:89: fromDigit 'z'
+  ok   stdlib/string.mdk:102: toDigit 7
+  ok   stdlib/string.mdk:104: toDigit 12
+  ok   stdlib/string.mdk:113: toDigit 42
+  ok   stdlib/string.mdk:127: arrayLength (toChars "héllo→")
+  ok   stdlib/string.mdk:138: fromChars ['h', 'i']
+  ok   stdlib/string.mdk:149: arrayLength (toUtf8 "héllo")
+  ok   stdlib/string.mdk:160: fromUtf8 (toUtf8 "héllo→")
+  ok   stdlib/string.mdk:171: utf8ByteLength "héllo"
+  ok   stdlib/string.mdk:183: toInt "42"
+  ok   stdlib/string.mdk:185: toInt "12x"
+  ok   stdlib/string.mdk:193: toInt "-7"
+  ok   stdlib/string.mdk:195: toInt "4611686018427387903"
+  ok   stdlib/string.mdk:197: toInt "4611686018427387904"
+  ok   stdlib/string.mdk:199: toInt "-4611686018427387904"
+  ok   stdlib/string.mdk:201: toInt "-4611686018427387905"
+  ok   stdlib/string.mdk:203: toInt "99999999999999999999"
+  ok   stdlib/string.mdk:254: toFloat "3.5"
+  ok   stdlib/string.mdk:256: toFloat "nope"
+  ok   stdlib/string.mdk:266: startsWith "he" "hello"
+  ok   stdlib/string.mdk:268: startsWith "lo" "hello"
+  ok   stdlib/string.mdk:276: endsWith "lo" "hello"
+  ok   stdlib/string.mdk:289: stripPrefix "he" "hello"
+  ok   stdlib/string.mdk:291: stripPrefix "xy" "hello"
+  ok   stdlib/string.mdk:301: stripPrefix "" "hi"
+  ok   stdlib/string.mdk:303: stripPrefix "hello" "hello"
+  ok   stdlib/string.mdk:309: stripSuffix "lo" "hello"
+  ok   stdlib/string.mdk:311: stripSuffix "xy" "hello"
   ok   stdlib/string.mdk:321: stripSuffix "" "hi"
-  ok   stdlib/string.mdk:334: contains "ell" "hello"
-  ok   stdlib/string.mdk:336: contains "xyz" "hello"
-  ok   stdlib/string.mdk:346: indexOf "lo" "hello"
-  ok   stdlib/string.mdk:348: indexOf "z" "hello"
-  ok   stdlib/string.mdk:358: lastIndexOf "l" "hello"
-  ok   stdlib/string.mdk:360: lastIndexOf "z" "hello"
-  ok   stdlib/string.mdk:376: countOccurrences "l" "hello"
-  ok   stdlib/string.mdk:378: countOccurrences "ll" "lllll"
-  ok   stdlib/string.mdk:400: concat ["a", "bc", "d"]
-  ok   stdlib/string.mdk:408: join ", " ["a", "b", "c"]
-  ok   stdlib/string.mdk:426: repeat 3 "ab"
-  ok   stdlib/string.mdk:429: repeat 0 "ab"
-  ok   stdlib/string.mdk:432: repeat (0 - 1) "ab"
+  ok   stdlib/string.mdk:328: contains "ell" "hello"
+  ok   stdlib/string.mdk:330: contains "xyz" "hello"
+  ok   stdlib/string.mdk:339: indexOf "lo" "hello"
+  ok   stdlib/string.mdk:341: indexOf "z" "hello"
+  ok   stdlib/string.mdk:353: lastIndexOf "l" "hello"
+  ok   stdlib/string.mdk:355: lastIndexOf "z" "hello"
+  ok   stdlib/string.mdk:374: countOccurrences "l" "hello"
+  ok   stdlib/string.mdk:376: countOccurrences "ll" "lllll"
+  ok   stdlib/string.mdk:393: prepend "un" "do"
+  ok   stdlib/string.mdk:401: concat ["a", "bc", "d"]
+  ok   stdlib/string.mdk:409: join ", " ["a", "b", "c"]
+  ok   stdlib/string.mdk:425: repeat 3 "ab"
+  ok   stdlib/string.mdk:431: repeat 0 "ab"
+  ok   stdlib/string.mdk:433: repeat (0 - 1) "ab"
   ok   stdlib/string.mdk:435: stringLength (repeat 30000 "x")
-  ok   stdlib/string.mdk:460: reverse "abc"
-  ok   stdlib/string.mdk:488: trim "  hi  "
-  ok   stdlib/string.mdk:519: toUpper "Straße"
-  ok   stdlib/string.mdk:528: toLower "HÉLLO"
-  ok   stdlib/string.mdk:536: capitalize "hello"
-  ok   stdlib/string.mdk:550: replace "l" "L" "hello"
-  ok   stdlib/string.mdk:568: replaceAll "l" "L" "hello"
-  ok   stdlib/string.mdk:590: sliceClamped 1 4 "hello"
-  ok   stdlib/string.mdk:598: take 3 "hello"
-  ok   stdlib/string.mdk:606: drop 3 "hello"
-  ok   stdlib/string.mdk:614: splitAt 2 "hello"
-  ok   stdlib/string.mdk:622: split "," "a,b,c"
-  ok   stdlib/string.mdk:624: split "," "abc"
-  ok   stdlib/string.mdk:637: lines "a\nb\nc"
-  ok   stdlib/string.mdk:650: stripCR "ab\r"
-  ok   stdlib/string.mdk:652: stripCR "ab"
-  ok   stdlib/string.mdk:665: words "  hello   world "
-  ok   stdlib/string.mdk:687: unlines ["a", "b"]
-  ok   stdlib/string.mdk:702: unwords ["a", "b", "c"]
-  ok   stdlib/string.mdk:712: padLeft 5 '.' "ab"
-  ok   stdlib/string.mdk:724: padRight 5 '.' "ab"
-  ok   stdlib/string.mdk:737: center 5 '.' "ab"
+  ok   stdlib/string.mdk:459: reverse "abc"
+  ok   stdlib/string.mdk:472: trimLeft "  hi  "
+  ok   stdlib/string.mdk:482: trimRight "  hi  "
+  ok   stdlib/string.mdk:492: trim "  hi  "
+  ok   stdlib/string.mdk:523: toUpper "Straße"
+  ok   stdlib/string.mdk:533: toLower "HÉLLO"
+  ok   stdlib/string.mdk:541: capitalize "hello"
+  ok   stdlib/string.mdk:556: replace "l" "L" "hello"
+  ok   stdlib/string.mdk:577: replaceAll "l" "L" "hello"
+  ok   stdlib/string.mdk:601: sliceClamped 1 4 "hello"
+  ok   stdlib/string.mdk:609: take 3 "hello"
+  ok   stdlib/string.mdk:617: drop 3 "hello"
+  ok   stdlib/string.mdk:625: splitAt 2 "hello"
+  ok   stdlib/string.mdk:636: split "," "a,b,c"
+  ok   stdlib/string.mdk:638: split "," "abc"
+  ok   stdlib/string.mdk:653: lines "a\nb\nc"
+  ok   stdlib/string.mdk:663: stripCR "ab\r"
+  ok   stdlib/string.mdk:665: stripCR "ab"
+  ok   stdlib/string.mdk:679: words "  hello   world "
+  ok   stdlib/string.mdk:701: unlines ["a", "b"]
+  ok   stdlib/string.mdk:716: unwords ["a", "b", "c"]
+  ok   stdlib/string.mdk:728: padLeft 5 '.' "ab"
+  ok   stdlib/string.mdk:742: padRight 5 '.' "ab"
+  ok   stdlib/string.mdk:757: center 5 '.' "ab"
 
-stdlib/string.mdk: 69/69 passed
+stdlib/string.mdk: 72/72 passed

@@ -1,5 +1,9 @@
 cmd: medaka build
 exit: 1
 ---
+warning: test/error_quality_fixtures/build/main_takes_unit.mdk:1:10: 'main' must be a value of type Unit. Write 'main = …', not 'main () = …' or 'main x = …' ('medaka run' never applies main; it forces a zero-arg main for its effects)
+  |
+1 | main () = println "this never runs"
+  |           ^
 error: emitter failed compiling test/error_quality_fixtures/build/main_takes_unit.mdk
 runtime error [E-PANIC]: llvm: 'main' in test/error_quality_fixtures/build/main_takes_unit.mdk must be a zero-arg value: write 'main = …', not 'main () = …' or 'main x = …'. ('medaka run'/'build' never applies main; it forces a zero-arg main for its effects.)

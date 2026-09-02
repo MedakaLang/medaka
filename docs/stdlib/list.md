@@ -1156,7 +1156,7 @@ A list of triples separated into three lists. The inverse of `zip3`.
 
 ## Instances
 
-- `List`: `Eq`, `Semigroup`, `Monoid`, [`Ord`](#ord-list-a), `Debug`, `Display`, `Hashable`, `Mappable`, `Applicative`, `Thenable`, `Alternative`, [`Index`](#index-list-a-int-a), [`Slice`](#slice-list-a), `Foldable`, `Traversable`, [`Filterable`](#filterable-list), `Arbitrary`
+- `List`: `Eq`, `Semigroup`, `Monoid`, [`Ord`](#ord-list-a), `Debug`, `Display`, `Hashable`, `Mappable`, `Applicative`, `Thenable`, `Alternative`, [`Index`](#index-list-a-int-a), [`Slice`](#slice-list-a), `Foldable`, `Traversable`, [`Filterable`](#filterable-list), [`Arbitrary`](#arbitrary-list-a)
 
 ### `Ord (List a)`
 
@@ -1164,8 +1164,9 @@ A list of triples separated into three lists. The inverse of `zip3`.
 impl Ord (List a) requires Ord a
 ```
 
-Lexicographic ordering: compare element-wise, and a proper prefix sorts
-before any list that extends it (`[1] < [1, 2]`, `[] < [0]`).
+Lists compare lexicographically: element by element, with a proper
+prefix sorting before any list that extends it (`[1] < [1, 2]`,
+`[] < [0]`).
 
 ### `Index (List a) Int a`
 
@@ -1173,11 +1174,11 @@ before any list that extends it (`[1] < [1, 2]`, `[] < [0]`).
 impl Index (List a) Int a
 ```
 
-`index xs i` is `xs`'s element at position `i`.  O(n) — a singly-linked
-list has no random access, so this walks `i` cons cells; prefer `Array`/
-`Vector` for index-heavy workloads.  Raises the coded `indexError`
-(E-INDEX-OOB) when `i` is out of range.  No `IndexMut` impl: `List` is
-immutable / has no in-place element write.
+`xs[i]` walks the list to position `i`, so it costs `O(i)`.
+
+Panics with an index error when `i` is out of range; `list.get` is the
+`Option`-returning form. Lists are immutable, so there is no `IndexMut`
+instance.
 
 ### `Slice (List a)`
 
@@ -1185,9 +1186,9 @@ immutable / has no in-place element write.
 impl Slice (List a)
 ```
 
-`slice xs lo hi` is the sublist of `xs` over `[lo, hi)`.  O(hi) -- walks the
-cons chain.  Out-of-range bounds are CLAMPED (never panics), matching the
-interpreter's list-slice contract.
+The sublist over `[lo, hi)`, in `O(hi)`.
+
+Out-of-range bounds are clamped to the list.
 
 ```medaka
 > slice [10, 20, 30, 40] 1 3
@@ -1200,12 +1201,18 @@ interpreter's list-slice contract.
 impl Filterable List
 ```
 
-`Filterable List`.  Lives in `core` (rather than `list.mdk`) so the
-`filter` name is in scope for the rest of the stdlib; `list.mdk`
-re-exports it for discoverability.
+`filter` and `filterMap` on lists.
 
 ```medaka
 > filter (x => x > 2) [1, 2, 3, 4]
 [3, 4]
 ```
+
+### `Arbitrary (List a)`
+
+```
+impl Arbitrary (List a) requires Arbitrary a
+```
+
+A random list of up to ten elements drawn from the element's instance.
 
