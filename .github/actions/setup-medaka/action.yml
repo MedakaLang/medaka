@@ -188,7 +188,8 @@ runs:
 
         # ...and the EMITTER's provenance stamp must equal what stage A would compute
         # from THIS tree. Mirrors src_fingerprint_full() in
-        # test/build_native_medaka.sh (compiler/**.mdk + runtime/*.c, names AND
+        # test/build_native_medaka.sh (compiler/**.mdk, excluding *_test.mdk
+        # siblings (AGENTS.md [P-TEST-SIBLING]), + runtime/*.c, names AND
         # contents, repo-relative, LC_ALL=C sorted). This is NOT the source of the
         # safety guarantee — the same-SHA checkout invariant above already makes the
         # ENTIRE tree identical between producer and consumer (Makefile, stdlib/*,
@@ -198,7 +199,7 @@ runs:
         # emitter that predates a parser change, or was copied in from elsewhere)
         # hasn't.
         stamped="$(cat .medaka_emitter.srcstamp)"
-        live="$( { find compiler -name '*.mdk' -print; find runtime -name '*.c' -print; } \
+        live="$( { find compiler -name '*.mdk' -not -name '*_test.mdk' -print; find runtime -name '*.c' -print; } \
                  | LC_ALL=C sort \
                  | while IFS= read -r f; do printf '%s\n' "$f"; cat "$f"; done \
                  | sha256sum | cut -d' ' -f1 )"
