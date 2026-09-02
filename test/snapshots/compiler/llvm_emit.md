@@ -1,5 +1,5 @@
 # META
-source_lines=12420
+source_lines=12492
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -199,6 +199,7 @@ import ir.core_ir_lower.{
   canonPat,
   ifaceImplRouteKeys,
   ifaceDeclHeadUnique,
+  declHeadOfRouteWord,
   ifaceIdsAtTag,
   ifaceMethodArityKey,
   ifaceWordOfKey,
@@ -6270,83 +6271,139 @@ emitMethodArgDispatch e method argOps =
 -- so those sites take the same branch as before.  With [raw] non-empty and [emittable]
 -- empty at >=2 groups, `emitArgTagDispatchWith … []` emits exactly what
 -- `emitArgTagDispatch` did.  Only the single-group case changes shape.
--- #2445: THE UNDECIDABLE-BY-CONSTRUCTION REFUSAL.  Every arm of the arg-tag chain
+-- #2445: THE UNDECIDABLE-BY-CONSTRUCTION TRAP.  Every arm of the arg-tag chain
 -- below tests the receiver cell's CONSTRUCTOR tag (`emitTagMatch`/`ctorsOfType`), and
 -- a group's tag is its impl's HEAD tycon -- so two declared impls of one interface at
 -- the SAME head (`impl Wrap (Pair Int)` and `impl Wrap (Pair String)`) mint two arms
 -- whose `icmp eq` compares against the IDENTICAL constant.  The second arm is dead
 -- code and the first one wins every receiver, at exit 0, with no diagnostic: measured
--- `1|1` where the semantics and `medaka run` both say `1|2`.  The single-group
--- shortcut (`emitArgTagCovered`) folds the same collision even harder -- an
--- unconditional direct call with no tag test at all -- which is the shape a
--- group-duplicate check structurally cannot see, because when the sibling head
--- INHERITS the default `tagsMinus` has already deleted the shared tag string from the
--- uncovered set and only one group survives.
+-- `1|1` where the semantics and `medaka run` both say `1|2`.
 --
--- So the refusal is keyed on the DECLARATION facts, not on the emitted arm set, and it
--- sits at the route's single entry rather than inside the chain: `ifaceDeclHeadUnique`
--- (`core_ir_lower`, the same predicate `declTagOrKey` and typecheck's
--- `ieCountHeadByIface` already answer route keys with) says whether this interface has
--- more than one declared impl at this head.  More than one and the runtime tag CANNOT
--- decide between them, so we refuse the whole route with a `gapE` -- loud -- instead of
--- emitting a chain that silently picks an arm.
+-- This USED to be a `gapE` refusal of the whole `medaka build`, keyed on the
+-- DECLARATION facts at the route's single entry.  That shape cannot be scoped, and the
+-- measurement is in the sprint's F-1 report: for a genuine collision
+-- (`A6…__no_local`) and for a program that declares the colliding impls but never
+-- CONSTRUCTS a receiver at that head, the emitter's static candidate set at this seam
+-- is IDENTICAL in shape -- a duplicate `Pair`-tagged arm in the chain it is about to
+-- emit.  The two differ only in which receivers the program builds at RUN TIME, a
+-- whole-program receiver-reachability fact the emitter does not have.  So any static
+-- test that refuses the true positive also refuses the correct unreachable-collision
+-- program, and any test that admits the latter re-admits the S0.
 --
--- ⚠️ INHERITED FAIL-OPEN, stated so this is not read as total: `ifaceDeclHeadUnique`
--- answers True ("unique, safe") when `ifaceImplHeadsRef` is UNINSTALLED, so a driver
--- that never lowered through `lowerImpls` degrades to today's silent output rather
--- than refusing.  The guard is a floor on the installed path, not a proof.
+-- The loudness is therefore RETIMED, not scoped: emit the chain as normal, but for the
+-- specific arm(s) whose head tag is shared by two or more declared impls, emit
+-- `@mdk_dispatch_ambiguous` instead of the impl call.  That scopes the guard by ACTUAL
+-- receiver, exactly the way the interpreter's `checkArgTagDecidable` already is (which
+-- is why eval never had this false positive -- only the build-time-refusal design did).
+-- Both engines stay loud on an undecidable cell; only the PHASE moves, and moving it is
+-- what stops an unreachable collision being collateral damage.
 --
--- Byte-identity: every interface in the tree today whose method reaches an arg-tag
--- site has at most one declared impl per head (the one live witness,
+-- The site's head multiset is `groups` (each already a HEAD tag) plus the inheriting
+-- declared impls `raw` -- and `raw` carries ROUTE WORDS, which at a collision are
+-- canonical KEYS and never string-equal the bare head.  `declHeadOfRouteWord` maps each
+-- back to its head first; skipping that step fails OPEN on exactly the "one impl
+-- defines, sibling at the same head inherits the default" shape the guard exists to
+-- catch (`RAW_same_head_sibling_inherits`).  Reading the site's own two lists, rather
+-- than a whole-program scan by bare interface NAME, is also what stops two unrelated
+-- same-spelled interfaces false-colliding: each contributes its own single group and
+-- nothing at the site is a duplicate (`ifaceDeclHeadUnique` is bare-name-keyed and did
+-- collide them).
+--
+-- ⚠️ INHERITED FAIL-OPEN, stated so this is not read as total: `declHeadOfRouteWord`
+-- answers "" when `ifaceImplHeadsRef` is UNINSTALLED, so a driver that never lowered
+-- through `lowerImpls` sees only the group heads and degrades toward today's silent
+-- output rather than trapping.  The guard is a floor on the installed path, not a proof.
+--
+-- Byte-identity: every interface in the tree today whose method reaches an arg-tag site
+-- has at most one declared impl per head (the one live witness,
 -- `test/dict_fixtures/i7-flatten-arm-fresh-universe.mdk`, chains prelude `fold` over
--- List/Option/Result), so the predicate is True at every tag and every such site takes
--- the unchanged branch below.
-argTagHeadCollision : Emit -> String -> List ImplGroup -> List String -> Bool
-argTagHeadCollision e method groups raw =
+-- List/Option/Result), so the colliding-head list is EMPTY at every such site and every
+-- arm emits the unchanged call below.  The only tree-wide IR change is the preamble's
+-- one extra `declare` line.
+argTagCollidingHeads : Emit -> String -> List ImplGroup -> List String -> List String
+argTagCollidingHeads e method groups raw =
   let iface = methodIfaceOfInput e method
   if iface == "" then
-    False
+    []
   else
-    anyGroupHeadCollides iface groups || anyList (t => not (ifaceDeclHeadUnique iface t)) raw
+    dupStrings (groupHeadTags groups ++ rawHeadTags iface raw) [] []
 
-anyGroupHeadCollides : String -> List ImplGroup -> Bool
-anyGroupHeadCollides _ [] = False
-anyGroupHeadCollides iface (g::rest)
-  | not (ifaceDeclHeadUnique iface (groupTag g)) = True
-  | otherwise = anyGroupHeadCollides iface rest
+groupHeadTags : List ImplGroup -> List String
+groupHeadTags [] = []
+groupHeadTags (g::rest) = groupTag g :: groupHeadTags rest
+
+-- the head tycons the inheriting declared impls sit at, dropping any route word no
+-- declared impl of [iface] answers to (an uninstalled decl table, or a word minted for
+-- some other interface).
+rawHeadTags : String -> List String -> List String
+rawHeadTags _ [] = []
+rawHeadTags iface (w::rest) =
+  let t = declHeadOfRouteWord iface w
+  if t == "" then rawHeadTags iface rest else t :: rawHeadTags iface rest
+
+-- the members of [xs] that occur more than once, each reported once.
+dupStrings : List String -> List String -> List String -> List String
+dupStrings [] _ dups = reverseL dups
+dupStrings (x::rest) seen dups
+  | contains x seen && not (contains x dups) = dupStrings rest seen (x::dups)
+  | otherwise = dupStrings rest (x::seen) dups
+
+-- is THIS arm's head tag one the runtime constructor tag cannot decide?
+argTagArmAmbiguous : List String -> String -> Bool
+argTagArmAmbiguous colliding tag = contains tag colliding
+
+-- the trapped arm body: loud at run time, in place of the impl/default call this arm
+-- would otherwise make.  `noreturn`, so the block does not fall through.
+emitAmbiguousArm : Emit -> Unit
+emitAmbiguousArm e =
+  let _ = emit e "  call void @mdk_dispatch_ambiguous()"
+  emit e "  unreachable"
 
 emitArgTagRoute : Emit -> String -> List ImplGroup -> List String -> List String -> List String -> (String, LTy)
-emitArgTagRoute e method groups emittable raw argOps
-  | argTagHeadCollision e method groups raw = gapE e "arg-tag dispatch for method '\{method}' is undecidable: interface '\{methodIfaceOfInput e method}' declares more than one impl at the same type head, so the receiver's runtime constructor tag cannot choose between them"
-  | otherwise = emitArgTagRouteGo e method groups emittable raw argOps
+emitArgTagRoute e method groups emittable raw argOps =
+  emitArgTagRouteGo
+    e
+    method
+    groups
+    emittable
+    raw
+    argOps
+    (argTagCollidingHeads e method groups raw)
 
-emitArgTagRouteGo : Emit -> String -> List ImplGroup -> List String -> List String -> List String -> (String, LTy)
+emitArgTagRouteGo : Emit -> String -> List ImplGroup -> List String -> List String -> List String -> List String -> (String, LTy)
 -- no inheriting head at all: the arm set the entries give IS the whole answer, and
 -- every branch here is the pre-#1046 one (byte-identical IR).
-emitArgTagRouteGo e method groups [] [] argOps =
-  emitArgTagCovered e method groups argOps
+emitArgTagRouteGo e method groups [] [] argOps colliding =
+  emitArgTagCovered e method groups argOps colliding
 -- heads inherit the default but none can carry an arm — chain anyway, so the
 -- untestable heads reach the loud terminal instead of the shortcut.
-emitArgTagRouteGo e method groups [] _ argOps =
-  emitArgTagDispatchWith e method groups [] argOps
+emitArgTagRouteGo e method groups [] _ argOps colliding =
+  emitArgTagDispatchWith e method groups [] argOps colliding
 -- #1046: at least one DECLARED impl of this interface inherits the default rather than
 -- defining [method], so it contributes no entry and is missing from `groups`.  A runtime
 -- test is required even at one group.
-emitArgTagRouteGo e method groups uncovered _ argOps =
-  emitArgTagDispatchWith e method groups uncovered argOps
+emitArgTagRouteGo e method groups uncovered _ argOps colliding =
+  emitArgTagDispatchWith e method groups uncovered argOps colliding
 
 -- the fully-covered route: the pre-#1046 shape, split out only so `emitArgTagRoute`
 -- does not match on a parameter it also passes through.
-emitArgTagCovered : Emit -> String -> List ImplGroup -> List String -> (String, LTy)
-emitArgTagCovered e method [g] argOps =
+--
+-- #2445: the one-group arm is an UNCONDITIONAL direct call with NO tag test and no
+-- block of its own, so it is the one arm that could not carry a per-arm trap.  It never
+-- needs one, and that is a property of the caller, not a hope: this clause is reached
+-- only from `emitArgTagRouteGo`'s `[] []` branch, where `raw` is empty, so the site's
+-- head multiset IS `[groupTag g]` — a one-element list, which `dupStrings` cannot report
+-- a duplicate in.  `colliding` is empty here by construction, hence unread.
+emitArgTagCovered : Emit -> String -> List ImplGroup -> List String -> List String -> (String, LTy)
+emitArgTagCovered e method [g] argOps _ =
   emitImplCallSat
     e
     (implFnName (groupSymTag g) method)
     argOps
     (methodArityOfTag e method (groupTag g))
     LTInt
-emitArgTagCovered e method groups argOps =
-  emitArgTagDispatch e method groups argOps
+emitArgTagCovered e method groups argOps colliding =
+  emitArgTagDispatch e method groups argOps colliding
 
 -- #1046: the interface's declared-impl route keys that no ENTRY of [method] covers
 -- — the method-less impls, which inherit the interface default.  `implGroupsForMethod`
@@ -6414,36 +6471,36 @@ emitDefaultArgTag e method argOps =
 
 -- #1046: the same chain, plus a default-synthesis arm per inheriting head.  Split
 -- from `emitArgTagDispatch` only so the covered case keeps its exact old call shape.
-emitArgTagDispatchWith : Emit -> String -> List ImplGroup -> List String -> List String -> (String, LTy)
-emitArgTagDispatchWith e method groups uncovered argOps
+emitArgTagDispatchWith : Emit -> String -> List ImplGroup -> List String -> List String -> List String -> (String, LTy)
+emitArgTagDispatchWith e method groups uncovered argOps colliding
   | headPos (groupPositionsOf (headGroup groups)) >= lengthS argOps = gapE e ("arg-tag dispatch for method '" ++ method ++ "': discriminating arg position not supplied (under-applied / unapplied method)")
-  | otherwise = emitArgTagDispatchGo e method groups uncovered argOps (headPos (groupPositionsOf (headGroup groups)))
+  | otherwise = emitArgTagDispatchGo e method groups uncovered argOps colliding (headPos (groupPositionsOf (headGroup groups)))
 
-emitArgTagDispatch : Emit -> String -> List ImplGroup -> List String -> (String, LTy)
-emitArgTagDispatch e method groups argOps
+emitArgTagDispatch : Emit -> String -> List ImplGroup -> List String -> List String -> (String, LTy)
+emitArgTagDispatch e method groups argOps colliding
   | headPos (groupPositionsOf (headGroup groups)) >= lengthS argOps = gapE e ("arg-tag dispatch for method '" ++ method ++ "': discriminating arg position not supplied (under-applied / unapplied method)")
-  | otherwise = emitArgTagDispatchGo e method groups [] argOps (headPos (groupPositionsOf (headGroup groups)))
+  | otherwise = emitArgTagDispatchGo e method groups [] argOps colliding (headPos (groupPositionsOf (headGroup groups)))
 
-emitArgTagDispatchGo : Emit -> String -> List ImplGroup -> List String -> List String -> Int -> (String, LTy)
-emitArgTagDispatchGo e method groups uncovered argOps discrimPos =
+emitArgTagDispatchGo : Emit -> String -> List ImplGroup -> List String -> List String -> List String -> Int -> (String, LTy)
+emitArgTagDispatchGo e method groups uncovered argOps colliding discrimPos =
   let discrimWord = nthStr argOps discrimPos
   let tagReg = loadDiscriminant e discrimWord
   let slot = freshReg e
   let _ = emit e ("  " ++ slot ++ " = alloca i64")
   let endL = "argdispend" ++ intToString (freshLocal e)
-  let _ = emitArgDispatchChain e method tagReg groups uncovered argOps slot endL
+  let _ = emitArgDispatchChain e method tagReg groups uncovered argOps colliding slot endL
   let _ = emit e (endL ++ ":")
   let r = freshReg e
   let _ = emit e "  \{r} = load i64, ptr \{slot}"
   (r, LTInt)
 
-emitArgDispatchChain : Emit -> String -> String -> List ImplGroup -> List String -> List String -> String -> String -> Unit
+emitArgDispatchChain : Emit -> String -> String -> List ImplGroup -> List String -> List String -> List String -> String -> String -> Unit
 -- #1046: the impl arms are exhausted; the chain continues into the inheriting-head
 -- default arms, whose own empty case is #1958's loud trap.  [uncovered] empty ⇒ the
 -- trap is reached immediately, exactly as before.
-emitArgDispatchChain e method tagReg [] uncovered argOps slot endL =
-  emitArgDefaultChain e method tagReg uncovered argOps slot endL
-emitArgDispatchChain e method tagReg (g::rest) uncovered argOps slot endL =
+emitArgDispatchChain e method tagReg [] uncovered argOps colliding slot endL =
+  emitArgDefaultChain e method tagReg uncovered argOps colliding slot endL
+emitArgDispatchChain e method tagReg (g::rest) uncovered argOps colliding slot endL =
   let tag = groupTag g
   let cond = emitTagMatch e tagReg (ctorsOfType e tag)
   let n = intToString (freshLocal e)
@@ -6451,13 +6508,22 @@ emitArgDispatchChain e method tagReg (g::rest) uncovered argOps slot endL =
   let next = "argnext" ++ n
   let _ = emit e "  br i1 \{cond}, label %\{yes}, label %\{next}"
   let _ = emit e (yes ++ ":")
-  -- F10: saturate against this group's own declared arity, the same answer the
-  -- single-group site above already takes (see emitDispatchArmBody).
-  let (rv, _) = emitKnownFnSat e (implFnName (groupSymTag g) method) argOps (methodArityOfTag e method tag) LTInt
-  let _ = emit e "  store i64 \{rv}, ptr \{slot}"
-  let _ = emit e ("  br label %" ++ endL)
+  -- #2445: the tag TEST is still emitted — it is what scopes the trap to the receivers
+  -- that actually reach this head — but the arm body becomes the loud trap, because two
+  -- or more declared impls answer to this one constant and the call this arm would make
+  -- is a coin-flip between them.  Every sibling arm at a non-colliding head is
+  -- untouched.  The trap is `noreturn`, so this block terminates and no `store`/`br` to
+  -- the join label follows.
+  let _ = if argTagArmAmbiguous colliding tag then
+            emitAmbiguousArm e
+          else
+            -- F10: saturate against this group's own declared arity, the same answer the
+            -- single-group site above already takes (see emitDispatchArmBody).
+            let (rv, _) = emitKnownFnSat e (implFnName (groupSymTag g) method) argOps (methodArityOfTag e method tag) LTInt
+            let _ = emit e "  store i64 \{rv}, ptr \{slot}"
+            emit e ("  br label %" ++ endL)
   let _ = emit e (next ++ ":")
-  emitArgDispatchChain e method tagReg rest uncovered argOps slot endL
+  emitArgDispatchChain e method tagReg rest uncovered argOps colliding slot endL
 
 -- #1046: the tail of the arg-tag chain — one `@mdk_default_<method>_<tag>` arm per
 -- head that inherits the interface default (`argTagUncovered`).  The peer of the dict
@@ -6471,11 +6537,11 @@ emitArgDispatchChain e method tagReg (g::rest) uncovered argOps slot endL =
 -- means the receiver's runtime tag matched neither an impl arm nor an inheriting head,
 -- so the trap is kept rather than a bare `unreachable`: `unreachable` is UB that
 -- `clang -O1+` may fold the preceding test away against.
-emitArgDefaultChain : Emit -> String -> String -> List String -> List String -> String -> String -> Unit
-emitArgDefaultChain e _ _ [] _ _ _ =
+emitArgDefaultChain : Emit -> String -> String -> List String -> List String -> List String -> String -> String -> Unit
+emitArgDefaultChain e _ _ [] _ _ _ _ =
   let _ = emit e "  call void @mdk_dispatch_no_impl()"
   emit e "  unreachable"
-emitArgDefaultChain e method tagReg (tag::rest) argOps slot endL = match defaultForAt e method tag
+emitArgDefaultChain e method tagReg (tag::rest) argOps colliding slot endL = match defaultForAt e method tag
   None =>
     let _ = emit e "  call void @mdk_dispatch_no_impl()"
     emit e "  unreachable"
@@ -6486,17 +6552,23 @@ emitArgDefaultChain e method tagReg (tag::rest) argOps slot endL = match default
     let next = "argdefnext" ++ n
     let _ = emit e "  br i1 \{cond}, label %\{yes}, label %\{next}"
     let _ = emit e (yes ++ ":")
-    let fname = defaultFnName tag method
-    let _ = ensureDefaultEmitted e fname tag method entry
-    -- the arity `emitDefaultDefine` eta-expands the body to, with its dict/`requires`
-    -- prefixes known to be zero here (argDefaultEmittable) — so caller and callee
-    -- agree by the same ruler rather than by coincidence.
-    let arity = maxInt (methodArityOfEntry e entry method) (listLen (implPats entry))
-    let (rv, _) = emitKnownFnSat e fname argOps arity LTInt
-    let _ = emit e "  store i64 \{rv}, ptr \{slot}"
-    let _ = emit e ("  br label %" ++ endL)
+    -- #2445, the default-arm half of the retiming: an inheriting head that another
+    -- declared impl also sits at is just as undecidable as a defining one, so it gets
+    -- the same trapped body under the same tag test.
+    let _ = if argTagArmAmbiguous colliding tag then
+              emitAmbiguousArm e
+            else
+              let fname = defaultFnName tag method
+              let _ = ensureDefaultEmitted e fname tag method entry
+              -- the arity `emitDefaultDefine` eta-expands the body to, with its
+              -- dict/`requires` prefixes known to be zero here (argDefaultEmittable) —
+              -- so caller and callee agree by the same ruler rather than by coincidence.
+              let arity = maxInt (methodArityOfEntry e entry method) (listLen (implPats entry))
+              let (rv, _) = emitKnownFnSat e fname argOps arity LTInt
+              let _ = emit e "  store i64 \{rv}, ptr \{slot}"
+              emit e ("  br label %" ++ endL)
     let _ = emit e (next ++ ":")
-    emitArgDefaultChain e method tagReg rest argOps slot endL
+    emitArgDefaultChain e method tagReg rest argOps colliding slot endL
 
 -- an i1 that is true when the loaded ctor tag equals ANY of a type's constructor
 -- tags (OR-chain of icmp eq against each hashName).
@@ -12425,7 +12497,7 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "ifaceIdMatches" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CProgram" true) (mem "CArm" true) (mem "CGuard" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true))))
-(DUse false (UseGroup ("ir" "core_ir_lower") ((mem "compileTree" false) (mem "canonPat" false) (mem "ifaceImplRouteKeys" false) (mem "ifaceDeclHeadUnique" false) (mem "ifaceIdsAtTag" false) (mem "ifaceMethodArityKey" false) (mem "ifaceWordOfKey" false))))
+(DUse false (UseGroup ("ir" "core_ir_lower") ((mem "compileTree" false) (mem "canonPat" false) (mem "ifaceImplRouteKeys" false) (mem "ifaceDeclHeadUnique" false) (mem "declHeadOfRouteWord" false) (mem "ifaceIdsAtTag" false) (mem "ifaceMethodArityKey" false) (mem "ifaceWordOfKey" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinNl" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "startsWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "isNonEmptyL" false))))
 (DUse false (UseGroup ("backend" "llvm_preamble") ((mem "preambleLines" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omSize" false) (mem "omEmpty" false) (mem "omKeys" false))))
@@ -13444,20 +13516,30 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DFunDef false "tagsMinus" ((PCons (PVar "t") (PVar "rest")) (PVar "covered")) (EIf (EApp (EApp (EVar "contains") (EVar "t")) (EVar "covered")) (EApp (EApp (EVar "tagsMinus") (EVar "rest")) (EVar "covered")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "t") (EApp (EApp (EVar "tagsMinus") (EVar "rest")) (EVar "covered"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "emitMethodArgDispatch" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy"))))))
 (DFunDef false "emitMethodArgDispatch" ((PVar "e") (PVar "method") (PVar "argOps")) (EBlock (DoLet false false (PVar "groups") (EApp (EApp (EVar "implGroupsForMethod") (EVar "e")) (EVar "method"))) (DoExpr (EMatch (EVar "groups") (arm (PList) () (EApp (EApp (EApp (EVar "emitDefaultArgTag") (EVar "e")) (EVar "method")) (EVar "argOps"))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagRoute") (EVar "e")) (EVar "method")) (EVar "groups")) (EApp (EApp (EVar "argTagUncovered") (EVar "e")) (EVar "method"))) (EApp (EApp (EVar "argTagUncoveredRaw") (EVar "e")) (EVar "method"))) (EVar "argOps")))))))
-(DTypeSig false "argTagHeadCollision" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))))
-(DFunDef false "argTagHeadCollision" ((PVar "e") (PVar "method") (PVar "groups") (PVar "raw")) (EBlock (DoLet false false (PVar "iface") (EApp (EApp (EVar "methodIfaceOfInput") (EVar "e")) (EVar "method"))) (DoExpr (EIf (EBinOp "==" (EVar "iface") (ELit (LString ""))) (EVar "False") (EBinOp "||" (EApp (EApp (EVar "anyGroupHeadCollides") (EVar "iface")) (EVar "groups")) (EApp (EApp (EVar "anyList") (ELam ((PVar "t")) (EApp (EVar "not") (EApp (EApp (EVar "ifaceDeclHeadUnique") (EVar "iface")) (EVar "t"))))) (EVar "raw")))))))
-(DTypeSig false "anyGroupHeadCollides" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyCon "Bool"))))
-(DFunDef false "anyGroupHeadCollides" (PWild (PList)) (EVar "False"))
-(DFunDef false "anyGroupHeadCollides" ((PVar "iface") (PCons (PVar "g") (PVar "rest"))) (EIf (EApp (EVar "not") (EApp (EApp (EVar "ifaceDeclHeadUnique") (EVar "iface")) (EApp (EVar "groupTag") (EVar "g")))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EVar "anyGroupHeadCollides") (EVar "iface")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "argTagCollidingHeads" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "argTagCollidingHeads" ((PVar "e") (PVar "method") (PVar "groups") (PVar "raw")) (EBlock (DoLet false false (PVar "iface") (EApp (EApp (EVar "methodIfaceOfInput") (EVar "e")) (EVar "method"))) (DoExpr (EIf (EBinOp "==" (EVar "iface") (ELit (LString ""))) (EListLit) (EApp (EApp (EApp (EVar "dupStrings") (EBinOp "++" (EApp (EVar "groupHeadTags") (EVar "groups")) (EApp (EApp (EVar "rawHeadTags") (EVar "iface")) (EVar "raw")))) (EListLit)) (EListLit))))))
+(DTypeSig false "groupHeadTags" (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "groupHeadTags" ((PList)) (EListLit))
+(DFunDef false "groupHeadTags" ((PCons (PVar "g") (PVar "rest"))) (EBinOp "::" (EApp (EVar "groupTag") (EVar "g")) (EApp (EVar "groupHeadTags") (EVar "rest"))))
+(DTypeSig false "rawHeadTags" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "rawHeadTags" (PWild (PList)) (EListLit))
+(DFunDef false "rawHeadTags" ((PVar "iface") (PCons (PVar "w") (PVar "rest"))) (EBlock (DoLet false false (PVar "t") (EApp (EApp (EVar "declHeadOfRouteWord") (EVar "iface")) (EVar "w"))) (DoExpr (EIf (EBinOp "==" (EVar "t") (ELit (LString ""))) (EApp (EApp (EVar "rawHeadTags") (EVar "iface")) (EVar "rest")) (EBinOp "::" (EVar "t") (EApp (EApp (EVar "rawHeadTags") (EVar "iface")) (EVar "rest")))))))
+(DTypeSig false "dupStrings" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "dupStrings" ((PList) PWild (PVar "dups")) (EApp (EVar "reverseL") (EVar "dups")))
+(DFunDef false "dupStrings" ((PCons (PVar "x") (PVar "rest")) (PVar "seen") (PVar "dups")) (EIf (EBinOp "&&" (EApp (EApp (EVar "contains") (EVar "x")) (EVar "seen")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "x")) (EVar "dups")))) (EApp (EApp (EApp (EVar "dupStrings") (EVar "rest")) (EVar "seen")) (EBinOp "::" (EVar "x") (EVar "dups"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "dupStrings") (EVar "rest")) (EBinOp "::" (EVar "x") (EVar "seen"))) (EVar "dups")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "argTagArmAmbiguous" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "argTagArmAmbiguous" ((PVar "colliding") (PVar "tag")) (EApp (EApp (EVar "contains") (EVar "tag")) (EVar "colliding")))
+(DTypeSig false "emitAmbiguousArm" (TyFun (TyCon "Emit") (TyCon "Unit")))
+(DFunDef false "emitAmbiguousArm" ((PVar "e")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "  call void @mdk_dispatch_ambiguous()")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "  unreachable"))))))
 (DTypeSig false "emitArgTagRoute" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy")))))))))
-(DFunDef false "emitArgTagRoute" ((PVar "e") (PVar "method") (PVar "groups") (PVar "emittable") (PVar "raw") (PVar "argOps")) (EIf (EApp (EApp (EApp (EApp (EVar "argTagHeadCollision") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "raw")) (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "arg-tag dispatch for method '")) (EApp (EVar "display") (EVar "method"))) (ELit (LString "' is undecidable: interface '"))) (EApp (EVar "display") (EApp (EApp (EVar "methodIfaceOfInput") (EVar "e")) (EVar "method")))) (ELit (LString "' declares more than one impl at the same type head, so the receiver's runtime constructor tag cannot choose between them")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagRouteGo") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "emittable")) (EVar "raw")) (EVar "argOps")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "emitArgTagRouteGo" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy")))))))))
-(DFunDef false "emitArgTagRouteGo" ((PVar "e") (PVar "method") (PVar "groups") (PList) (PList) (PVar "argOps")) (EApp (EApp (EApp (EApp (EVar "emitArgTagCovered") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "argOps")))
-(DFunDef false "emitArgTagRouteGo" ((PVar "e") (PVar "method") (PVar "groups") (PList) PWild (PVar "argOps")) (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatchWith") (EVar "e")) (EVar "method")) (EVar "groups")) (EListLit)) (EVar "argOps")))
-(DFunDef false "emitArgTagRouteGo" ((PVar "e") (PVar "method") (PVar "groups") (PVar "uncovered") PWild (PVar "argOps")) (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatchWith") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "uncovered")) (EVar "argOps")))
-(DTypeSig false "emitArgTagCovered" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy")))))))
-(DFunDef false "emitArgTagCovered" ((PVar "e") (PVar "method") (PList (PVar "g")) (PVar "argOps")) (EApp (EApp (EApp (EApp (EApp (EVar "emitImplCallSat") (EVar "e")) (EApp (EApp (EVar "implFnName") (EApp (EVar "groupSymTag") (EVar "g"))) (EVar "method"))) (EVar "argOps")) (EApp (EApp (EApp (EVar "methodArityOfTag") (EVar "e")) (EVar "method")) (EApp (EVar "groupTag") (EVar "g")))) (EVar "LTInt")))
-(DFunDef false "emitArgTagCovered" ((PVar "e") (PVar "method") (PVar "groups") (PVar "argOps")) (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatch") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "argOps")))
+(DFunDef false "emitArgTagRoute" ((PVar "e") (PVar "method") (PVar "groups") (PVar "emittable") (PVar "raw") (PVar "argOps")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagRouteGo") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "emittable")) (EVar "raw")) (EVar "argOps")) (EApp (EApp (EApp (EApp (EVar "argTagCollidingHeads") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "raw"))))
+(DTypeSig false "emitArgTagRouteGo" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy"))))))))))
+(DFunDef false "emitArgTagRouteGo" ((PVar "e") (PVar "method") (PVar "groups") (PList) (PList) (PVar "argOps") (PVar "colliding")) (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagCovered") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "argOps")) (EVar "colliding")))
+(DFunDef false "emitArgTagRouteGo" ((PVar "e") (PVar "method") (PVar "groups") (PList) PWild (PVar "argOps") (PVar "colliding")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatchWith") (EVar "e")) (EVar "method")) (EVar "groups")) (EListLit)) (EVar "argOps")) (EVar "colliding")))
+(DFunDef false "emitArgTagRouteGo" ((PVar "e") (PVar "method") (PVar "groups") (PVar "uncovered") PWild (PVar "argOps") (PVar "colliding")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatchWith") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "uncovered")) (EVar "argOps")) (EVar "colliding")))
+(DTypeSig false "emitArgTagCovered" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy"))))))))
+(DFunDef false "emitArgTagCovered" ((PVar "e") (PVar "method") (PList (PVar "g")) (PVar "argOps") PWild) (EApp (EApp (EApp (EApp (EApp (EVar "emitImplCallSat") (EVar "e")) (EApp (EApp (EVar "implFnName") (EApp (EVar "groupSymTag") (EVar "g"))) (EVar "method"))) (EVar "argOps")) (EApp (EApp (EApp (EVar "methodArityOfTag") (EVar "e")) (EVar "method")) (EApp (EVar "groupTag") (EVar "g")))) (EVar "LTInt")))
+(DFunDef false "emitArgTagCovered" ((PVar "e") (PVar "method") (PVar "groups") (PVar "argOps") (PVar "colliding")) (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatch") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "argOps")) (EVar "colliding")))
 (DTypeSig false "argTagUncovered" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "argTagUncovered" ((PVar "e") (PVar "method")) (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "argDefaultEmittable") (EVar "e")) (EVar "method"))) (EApp (EApp (EVar "argTagUncoveredRaw") (EVar "e")) (EVar "method"))))
 (DTypeSig false "argTagUncoveredRaw" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
@@ -13466,18 +13548,18 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DFunDef false "argDefaultEmittable" ((PVar "e") (PVar "method") (PVar "tag")) (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "ctorsOfType") (EVar "e")) (EVar "tag"))) (EBinOp "<=" (EApp (EVar "listLen") (EApp (EApp (EVar "methodConstraintIfacesOf") (EVar "e")) (EVar "method"))) (ELit (LInt 0)))) (EBinOp "<=" (EApp (EApp (EApp (EVar "innerDefaultReqCount") (EVar "e")) (EVar "method")) (EVar "tag")) (ELit (LInt 0)))))
 (DTypeSig false "emitDefaultArgTag" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy"))))))
 (DFunDef false "emitDefaultArgTag" ((PVar "e") (PVar "method") (PVar "argOps")) (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "arg-tag dispatch for method '")) (EVar "method")) (ELit (LString "' has no impl groups (unresolved RNone fallback)")))))
-(DTypeSig false "emitArgTagDispatchWith" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy"))))))))
-(DFunDef false "emitArgTagDispatchWith" ((PVar "e") (PVar "method") (PVar "groups") (PVar "uncovered") (PVar "argOps")) (EIf (EBinOp ">=" (EApp (EVar "headPos") (EApp (EVar "groupPositionsOf") (EApp (EVar "headGroup") (EVar "groups")))) (EApp (EVar "lengthS") (EVar "argOps"))) (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "arg-tag dispatch for method '")) (EVar "method")) (ELit (LString "': discriminating arg position not supplied (under-applied / unapplied method)")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatchGo") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "uncovered")) (EVar "argOps")) (EApp (EVar "headPos") (EApp (EVar "groupPositionsOf") (EApp (EVar "headGroup") (EVar "groups"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "emitArgTagDispatch" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy")))))))
-(DFunDef false "emitArgTagDispatch" ((PVar "e") (PVar "method") (PVar "groups") (PVar "argOps")) (EIf (EBinOp ">=" (EApp (EVar "headPos") (EApp (EVar "groupPositionsOf") (EApp (EVar "headGroup") (EVar "groups")))) (EApp (EVar "lengthS") (EVar "argOps"))) (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "arg-tag dispatch for method '")) (EVar "method")) (ELit (LString "': discriminating arg position not supplied (under-applied / unapplied method)")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatchGo") (EVar "e")) (EVar "method")) (EVar "groups")) (EListLit)) (EVar "argOps")) (EApp (EVar "headPos") (EApp (EVar "groupPositionsOf") (EApp (EVar "headGroup") (EVar "groups"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "emitArgTagDispatchGo" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyTuple (TyCon "String") (TyCon "LTy")))))))))
-(DFunDef false "emitArgTagDispatchGo" ((PVar "e") (PVar "method") (PVar "groups") (PVar "uncovered") (PVar "argOps") (PVar "discrimPos")) (EBlock (DoLet false false (PVar "discrimWord") (EApp (EApp (EVar "nthStr") (EVar "argOps")) (EVar "discrimPos"))) (DoLet false false (PVar "tagReg") (EApp (EApp (EVar "loadDiscriminant") (EVar "e")) (EVar "discrimWord"))) (DoLet false false (PVar "slot") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EVar "slot")) (ELit (LString " = alloca i64"))))) (DoLet false false (PVar "endL") (EBinOp "++" (ELit (LString "argdispend")) (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e"))))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgDispatchChain") (EVar "e")) (EVar "method")) (EVar "tagReg")) (EVar "groups")) (EVar "uncovered")) (EVar "argOps")) (EVar "slot")) (EVar "endL"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "endL") (ELit (LString ":"))))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "r"))) (ELit (LString " = load i64, ptr "))) (EApp (EVar "display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (ETuple (EVar "r") (EVar "LTInt")))))
-(DTypeSig false "emitArgDispatchChain" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit"))))))))))
-(DFunDef false "emitArgDispatchChain" ((PVar "e") (PVar "method") (PVar "tagReg") (PList) (PVar "uncovered") (PVar "argOps") (PVar "slot") (PVar "endL")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgDefaultChain") (EVar "e")) (EVar "method")) (EVar "tagReg")) (EVar "uncovered")) (EVar "argOps")) (EVar "slot")) (EVar "endL")))
-(DFunDef false "emitArgDispatchChain" ((PVar "e") (PVar "method") (PVar "tagReg") (PCons (PVar "g") (PVar "rest")) (PVar "uncovered") (PVar "argOps") (PVar "slot") (PVar "endL")) (EBlock (DoLet false false (PVar "tag") (EApp (EVar "groupTag") (EVar "g"))) (DoLet false false (PVar "cond") (EApp (EApp (EApp (EVar "emitTagMatch") (EVar "e")) (EVar "tagReg")) (EApp (EApp (EVar "ctorsOfType") (EVar "e")) (EVar "tag")))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "yes") (EBinOp "++" (ELit (LString "argyes")) (EVar "n"))) (DoLet false false (PVar "next") (EBinOp "++" (ELit (LString "argnext")) (EVar "n"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "display") (EVar "cond"))) (ELit (LString ", label %"))) (EApp (EVar "display") (EVar "yes"))) (ELit (LString ", label %"))) (EApp (EVar "display") (EVar "next"))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "yes") (ELit (LString ":"))))) (DoLet false false (PTuple (PVar "rv") PWild) (EApp (EApp (EApp (EApp (EApp (EVar "emitKnownFnSat") (EVar "e")) (EApp (EApp (EVar "implFnName") (EApp (EVar "groupSymTag") (EVar "g"))) (EVar "method"))) (EVar "argOps")) (EApp (EApp (EApp (EVar "methodArityOfTag") (EVar "e")) (EVar "method")) (EVar "tag"))) (EVar "LTInt"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EVar "display") (EVar "rv"))) (ELit (LString ", ptr "))) (EApp (EVar "display") (EVar "slot"))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL")))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "next") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgDispatchChain") (EVar "e")) (EVar "method")) (EVar "tagReg")) (EVar "rest")) (EVar "uncovered")) (EVar "argOps")) (EVar "slot")) (EVar "endL")))))
-(DTypeSig false "emitArgDefaultChain" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit")))))))))
-(DFunDef false "emitArgDefaultChain" ((PVar "e") PWild PWild (PList) PWild PWild PWild) (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "  call void @mdk_dispatch_no_impl()")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "  unreachable"))))))
-(DFunDef false "emitArgDefaultChain" ((PVar "e") (PVar "method") (PVar "tagReg") (PCons (PVar "tag") (PVar "rest")) (PVar "argOps") (PVar "slot") (PVar "endL")) (EMatch (EApp (EApp (EApp (EVar "defaultForAt") (EVar "e")) (EVar "method")) (EVar "tag")) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "  call void @mdk_dispatch_no_impl()")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "  unreachable")))))) (arm (PCon "Some" (PVar "entry")) () (EBlock (DoLet false false (PVar "cond") (EApp (EApp (EApp (EVar "emitTagMatch") (EVar "e")) (EVar "tagReg")) (EApp (EApp (EVar "ctorsOfType") (EVar "e")) (EVar "tag")))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "yes") (EBinOp "++" (ELit (LString "argdefyes")) (EVar "n"))) (DoLet false false (PVar "next") (EBinOp "++" (ELit (LString "argdefnext")) (EVar "n"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "display") (EVar "cond"))) (ELit (LString ", label %"))) (EApp (EVar "display") (EVar "yes"))) (ELit (LString ", label %"))) (EApp (EVar "display") (EVar "next"))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "yes") (ELit (LString ":"))))) (DoLet false false (PVar "fname") (EApp (EApp (EVar "defaultFnName") (EVar "tag")) (EVar "method"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "ensureDefaultEmitted") (EVar "e")) (EVar "fname")) (EVar "tag")) (EVar "method")) (EVar "entry"))) (DoLet false false (PVar "arity") (EApp (EApp (EVar "maxInt") (EApp (EApp (EApp (EVar "methodArityOfEntry") (EVar "e")) (EVar "entry")) (EVar "method"))) (EApp (EVar "listLen") (EApp (EVar "implPats") (EVar "entry"))))) (DoLet false false (PTuple (PVar "rv") PWild) (EApp (EApp (EApp (EApp (EApp (EVar "emitKnownFnSat") (EVar "e")) (EVar "fname")) (EVar "argOps")) (EVar "arity")) (EVar "LTInt"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EVar "display") (EVar "rv"))) (ELit (LString ", ptr "))) (EApp (EVar "display") (EVar "slot"))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL")))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "next") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgDefaultChain") (EVar "e")) (EVar "method")) (EVar "tagReg")) (EVar "rest")) (EVar "argOps")) (EVar "slot")) (EVar "endL")))))))
+(DTypeSig false "emitArgTagDispatchWith" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy")))))))))
+(DFunDef false "emitArgTagDispatchWith" ((PVar "e") (PVar "method") (PVar "groups") (PVar "uncovered") (PVar "argOps") (PVar "colliding")) (EIf (EBinOp ">=" (EApp (EVar "headPos") (EApp (EVar "groupPositionsOf") (EApp (EVar "headGroup") (EVar "groups")))) (EApp (EVar "lengthS") (EVar "argOps"))) (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "arg-tag dispatch for method '")) (EVar "method")) (ELit (LString "': discriminating arg position not supplied (under-applied / unapplied method)")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatchGo") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "uncovered")) (EVar "argOps")) (EVar "colliding")) (EApp (EVar "headPos") (EApp (EVar "groupPositionsOf") (EApp (EVar "headGroup") (EVar "groups"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "emitArgTagDispatch" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy"))))))))
+(DFunDef false "emitArgTagDispatch" ((PVar "e") (PVar "method") (PVar "groups") (PVar "argOps") (PVar "colliding")) (EIf (EBinOp ">=" (EApp (EVar "headPos") (EApp (EVar "groupPositionsOf") (EApp (EVar "headGroup") (EVar "groups")))) (EApp (EVar "lengthS") (EVar "argOps"))) (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "arg-tag dispatch for method '")) (EVar "method")) (ELit (LString "': discriminating arg position not supplied (under-applied / unapplied method)")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatchGo") (EVar "e")) (EVar "method")) (EVar "groups")) (EListLit)) (EVar "argOps")) (EVar "colliding")) (EApp (EVar "headPos") (EApp (EVar "groupPositionsOf") (EApp (EVar "headGroup") (EVar "groups"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "emitArgTagDispatchGo" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyTuple (TyCon "String") (TyCon "LTy"))))))))))
+(DFunDef false "emitArgTagDispatchGo" ((PVar "e") (PVar "method") (PVar "groups") (PVar "uncovered") (PVar "argOps") (PVar "colliding") (PVar "discrimPos")) (EBlock (DoLet false false (PVar "discrimWord") (EApp (EApp (EVar "nthStr") (EVar "argOps")) (EVar "discrimPos"))) (DoLet false false (PVar "tagReg") (EApp (EApp (EVar "loadDiscriminant") (EVar "e")) (EVar "discrimWord"))) (DoLet false false (PVar "slot") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EVar "slot")) (ELit (LString " = alloca i64"))))) (DoLet false false (PVar "endL") (EBinOp "++" (ELit (LString "argdispend")) (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e"))))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgDispatchChain") (EVar "e")) (EVar "method")) (EVar "tagReg")) (EVar "groups")) (EVar "uncovered")) (EVar "argOps")) (EVar "colliding")) (EVar "slot")) (EVar "endL"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "endL") (ELit (LString ":"))))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "r"))) (ELit (LString " = load i64, ptr "))) (EApp (EVar "display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (ETuple (EVar "r") (EVar "LTInt")))))
+(DTypeSig false "emitArgDispatchChain" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit")))))))))))
+(DFunDef false "emitArgDispatchChain" ((PVar "e") (PVar "method") (PVar "tagReg") (PList) (PVar "uncovered") (PVar "argOps") (PVar "colliding") (PVar "slot") (PVar "endL")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgDefaultChain") (EVar "e")) (EVar "method")) (EVar "tagReg")) (EVar "uncovered")) (EVar "argOps")) (EVar "colliding")) (EVar "slot")) (EVar "endL")))
+(DFunDef false "emitArgDispatchChain" ((PVar "e") (PVar "method") (PVar "tagReg") (PCons (PVar "g") (PVar "rest")) (PVar "uncovered") (PVar "argOps") (PVar "colliding") (PVar "slot") (PVar "endL")) (EBlock (DoLet false false (PVar "tag") (EApp (EVar "groupTag") (EVar "g"))) (DoLet false false (PVar "cond") (EApp (EApp (EApp (EVar "emitTagMatch") (EVar "e")) (EVar "tagReg")) (EApp (EApp (EVar "ctorsOfType") (EVar "e")) (EVar "tag")))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "yes") (EBinOp "++" (ELit (LString "argyes")) (EVar "n"))) (DoLet false false (PVar "next") (EBinOp "++" (ELit (LString "argnext")) (EVar "n"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "display") (EVar "cond"))) (ELit (LString ", label %"))) (EApp (EVar "display") (EVar "yes"))) (ELit (LString ", label %"))) (EApp (EVar "display") (EVar "next"))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "yes") (ELit (LString ":"))))) (DoLet false false PWild (EIf (EApp (EApp (EVar "argTagArmAmbiguous") (EVar "colliding")) (EVar "tag")) (EApp (EVar "emitAmbiguousArm") (EVar "e")) (EBlock (DoLet false false (PTuple (PVar "rv") PWild) (EApp (EApp (EApp (EApp (EApp (EVar "emitKnownFnSat") (EVar "e")) (EApp (EApp (EVar "implFnName") (EApp (EVar "groupSymTag") (EVar "g"))) (EVar "method"))) (EVar "argOps")) (EApp (EApp (EApp (EVar "methodArityOfTag") (EVar "e")) (EVar "method")) (EVar "tag"))) (EVar "LTInt"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EVar "display") (EVar "rv"))) (ELit (LString ", ptr "))) (EApp (EVar "display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL"))))))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "next") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgDispatchChain") (EVar "e")) (EVar "method")) (EVar "tagReg")) (EVar "rest")) (EVar "uncovered")) (EVar "argOps")) (EVar "colliding")) (EVar "slot")) (EVar "endL")))))
+(DTypeSig false "emitArgDefaultChain" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit"))))))))))
+(DFunDef false "emitArgDefaultChain" ((PVar "e") PWild PWild (PList) PWild PWild PWild PWild) (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "  call void @mdk_dispatch_no_impl()")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "  unreachable"))))))
+(DFunDef false "emitArgDefaultChain" ((PVar "e") (PVar "method") (PVar "tagReg") (PCons (PVar "tag") (PVar "rest")) (PVar "argOps") (PVar "colliding") (PVar "slot") (PVar "endL")) (EMatch (EApp (EApp (EApp (EVar "defaultForAt") (EVar "e")) (EVar "method")) (EVar "tag")) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "  call void @mdk_dispatch_no_impl()")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "  unreachable")))))) (arm (PCon "Some" (PVar "entry")) () (EBlock (DoLet false false (PVar "cond") (EApp (EApp (EApp (EVar "emitTagMatch") (EVar "e")) (EVar "tagReg")) (EApp (EApp (EVar "ctorsOfType") (EVar "e")) (EVar "tag")))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "yes") (EBinOp "++" (ELit (LString "argdefyes")) (EVar "n"))) (DoLet false false (PVar "next") (EBinOp "++" (ELit (LString "argdefnext")) (EVar "n"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "display") (EVar "cond"))) (ELit (LString ", label %"))) (EApp (EVar "display") (EVar "yes"))) (ELit (LString ", label %"))) (EApp (EVar "display") (EVar "next"))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "yes") (ELit (LString ":"))))) (DoLet false false PWild (EIf (EApp (EApp (EVar "argTagArmAmbiguous") (EVar "colliding")) (EVar "tag")) (EApp (EVar "emitAmbiguousArm") (EVar "e")) (EBlock (DoLet false false (PVar "fname") (EApp (EApp (EVar "defaultFnName") (EVar "tag")) (EVar "method"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "ensureDefaultEmitted") (EVar "e")) (EVar "fname")) (EVar "tag")) (EVar "method")) (EVar "entry"))) (DoLet false false (PVar "arity") (EApp (EApp (EVar "maxInt") (EApp (EApp (EApp (EVar "methodArityOfEntry") (EVar "e")) (EVar "entry")) (EVar "method"))) (EApp (EVar "listLen") (EApp (EVar "implPats") (EVar "entry"))))) (DoLet false false (PTuple (PVar "rv") PWild) (EApp (EApp (EApp (EApp (EApp (EVar "emitKnownFnSat") (EVar "e")) (EVar "fname")) (EVar "argOps")) (EVar "arity")) (EVar "LTInt"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EVar "display") (EVar "rv"))) (ELit (LString ", ptr "))) (EApp (EVar "display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL"))))))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "next") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgDefaultChain") (EVar "e")) (EVar "method")) (EVar "tagReg")) (EVar "rest")) (EVar "argOps")) (EVar "colliding")) (EVar "slot")) (EVar "endL")))))))
 (DTypeSig false "emitTagMatch" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "emitTagMatch" ((PVar "e") PWild (PList)) (EApp (EApp (EVar "gapStr") (EVar "e")) (ELit (LString "arg-tag dispatch on impl type that owns no constructors (primitive receiver carries no cell tag)"))))
 (DFunDef false "emitTagMatch" ((PVar "e") (PVar "tagReg") (PList (PVar "c"))) (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "r"))) (ELit (LString " = icmp eq i64 "))) (EApp (EVar "display") (EVar "tagReg"))) (ELit (LString ", "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EApp (EVar "cellTag") (EVar "e")) (EVar "c"))))) (ELit (LString ""))))) (DoExpr (EVar "r"))))
@@ -14761,7 +14843,7 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "ifaceIdMatches" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CProgram" true) (mem "CArm" true) (mem "CGuard" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true))))
-(DUse false (UseGroup ("ir" "core_ir_lower") ((mem "compileTree" false) (mem "canonPat" false) (mem "ifaceImplRouteKeys" false) (mem "ifaceDeclHeadUnique" false) (mem "ifaceIdsAtTag" false) (mem "ifaceMethodArityKey" false) (mem "ifaceWordOfKey" false))))
+(DUse false (UseGroup ("ir" "core_ir_lower") ((mem "compileTree" false) (mem "canonPat" false) (mem "ifaceImplRouteKeys" false) (mem "ifaceDeclHeadUnique" false) (mem "declHeadOfRouteWord" false) (mem "ifaceIdsAtTag" false) (mem "ifaceMethodArityKey" false) (mem "ifaceWordOfKey" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinNl" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "startsWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "isNonEmptyL" false))))
 (DUse false (UseGroup ("backend" "llvm_preamble") ((mem "preambleLines" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omSize" false) (mem "omEmpty" false) (mem "omKeys" false))))
@@ -15780,20 +15862,30 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DFunDef false "tagsMinus" ((PCons (PVar "t") (PVar "rest")) (PVar "covered")) (EIf (EApp (EApp (EVar "contains") (EVar "t")) (EVar "covered")) (EApp (EApp (EVar "tagsMinus") (EVar "rest")) (EVar "covered")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "t") (EApp (EApp (EVar "tagsMinus") (EVar "rest")) (EVar "covered"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "emitMethodArgDispatch" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy"))))))
 (DFunDef false "emitMethodArgDispatch" ((PVar "e") (PVar "method") (PVar "argOps")) (EBlock (DoLet false false (PVar "groups") (EApp (EApp (EVar "implGroupsForMethod") (EVar "e")) (EVar "method"))) (DoExpr (EMatch (EVar "groups") (arm (PList) () (EApp (EApp (EApp (EVar "emitDefaultArgTag") (EVar "e")) (EVar "method")) (EVar "argOps"))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagRoute") (EVar "e")) (EVar "method")) (EVar "groups")) (EApp (EApp (EVar "argTagUncovered") (EVar "e")) (EVar "method"))) (EApp (EApp (EVar "argTagUncoveredRaw") (EVar "e")) (EVar "method"))) (EVar "argOps")))))))
-(DTypeSig false "argTagHeadCollision" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))))
-(DFunDef false "argTagHeadCollision" ((PVar "e") (PVar "method") (PVar "groups") (PVar "raw")) (EBlock (DoLet false false (PVar "iface") (EApp (EApp (EVar "methodIfaceOfInput") (EVar "e")) (EVar "method"))) (DoExpr (EIf (EBinOp "==" (EVar "iface") (ELit (LString ""))) (EVar "False") (EBinOp "||" (EApp (EApp (EVar "anyGroupHeadCollides") (EVar "iface")) (EVar "groups")) (EApp (EApp (EVar "anyList") (ELam ((PVar "t")) (EApp (EVar "not") (EApp (EApp (EVar "ifaceDeclHeadUnique") (EVar "iface")) (EVar "t"))))) (EVar "raw")))))))
-(DTypeSig false "anyGroupHeadCollides" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyCon "Bool"))))
-(DFunDef false "anyGroupHeadCollides" (PWild (PList)) (EVar "False"))
-(DFunDef false "anyGroupHeadCollides" ((PVar "iface") (PCons (PVar "g") (PVar "rest"))) (EIf (EApp (EVar "not") (EApp (EApp (EVar "ifaceDeclHeadUnique") (EVar "iface")) (EApp (EVar "groupTag") (EVar "g")))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EVar "anyGroupHeadCollides") (EVar "iface")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "argTagCollidingHeads" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "argTagCollidingHeads" ((PVar "e") (PVar "method") (PVar "groups") (PVar "raw")) (EBlock (DoLet false false (PVar "iface") (EApp (EApp (EVar "methodIfaceOfInput") (EVar "e")) (EVar "method"))) (DoExpr (EIf (EBinOp "==" (EVar "iface") (ELit (LString ""))) (EListLit) (EApp (EApp (EApp (EVar "dupStrings") (EBinOp "++" (EApp (EVar "groupHeadTags") (EVar "groups")) (EApp (EApp (EVar "rawHeadTags") (EVar "iface")) (EVar "raw")))) (EListLit)) (EListLit))))))
+(DTypeSig false "groupHeadTags" (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "groupHeadTags" ((PList)) (EListLit))
+(DFunDef false "groupHeadTags" ((PCons (PVar "g") (PVar "rest"))) (EBinOp "::" (EApp (EVar "groupTag") (EVar "g")) (EApp (EVar "groupHeadTags") (EVar "rest"))))
+(DTypeSig false "rawHeadTags" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "rawHeadTags" (PWild (PList)) (EListLit))
+(DFunDef false "rawHeadTags" ((PVar "iface") (PCons (PVar "w") (PVar "rest"))) (EBlock (DoLet false false (PVar "t") (EApp (EApp (EVar "declHeadOfRouteWord") (EVar "iface")) (EVar "w"))) (DoExpr (EIf (EBinOp "==" (EVar "t") (ELit (LString ""))) (EApp (EApp (EVar "rawHeadTags") (EVar "iface")) (EVar "rest")) (EBinOp "::" (EVar "t") (EApp (EApp (EVar "rawHeadTags") (EVar "iface")) (EVar "rest")))))))
+(DTypeSig false "dupStrings" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "dupStrings" ((PList) PWild (PVar "dups")) (EApp (EVar "reverseL") (EVar "dups")))
+(DFunDef false "dupStrings" ((PCons (PVar "x") (PVar "rest")) (PVar "seen") (PVar "dups")) (EIf (EBinOp "&&" (EApp (EApp (EVar "contains") (EVar "x")) (EVar "seen")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "x")) (EVar "dups")))) (EApp (EApp (EApp (EVar "dupStrings") (EVar "rest")) (EVar "seen")) (EBinOp "::" (EVar "x") (EVar "dups"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "dupStrings") (EVar "rest")) (EBinOp "::" (EVar "x") (EVar "seen"))) (EVar "dups")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "argTagArmAmbiguous" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "argTagArmAmbiguous" ((PVar "colliding") (PVar "tag")) (EApp (EApp (EVar "contains") (EVar "tag")) (EVar "colliding")))
+(DTypeSig false "emitAmbiguousArm" (TyFun (TyCon "Emit") (TyCon "Unit")))
+(DFunDef false "emitAmbiguousArm" ((PVar "e")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "  call void @mdk_dispatch_ambiguous()")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "  unreachable"))))))
 (DTypeSig false "emitArgTagRoute" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy")))))))))
-(DFunDef false "emitArgTagRoute" ((PVar "e") (PVar "method") (PVar "groups") (PVar "emittable") (PVar "raw") (PVar "argOps")) (EIf (EApp (EApp (EApp (EApp (EVar "argTagHeadCollision") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "raw")) (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "arg-tag dispatch for method '")) (EApp (EMethodRef "display") (EVar "method"))) (ELit (LString "' is undecidable: interface '"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "methodIfaceOfInput") (EVar "e")) (EVar "method")))) (ELit (LString "' declares more than one impl at the same type head, so the receiver's runtime constructor tag cannot choose between them")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagRouteGo") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "emittable")) (EVar "raw")) (EVar "argOps")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "emitArgTagRouteGo" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy")))))))))
-(DFunDef false "emitArgTagRouteGo" ((PVar "e") (PVar "method") (PVar "groups") (PList) (PList) (PVar "argOps")) (EApp (EApp (EApp (EApp (EVar "emitArgTagCovered") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "argOps")))
-(DFunDef false "emitArgTagRouteGo" ((PVar "e") (PVar "method") (PVar "groups") (PList) PWild (PVar "argOps")) (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatchWith") (EVar "e")) (EVar "method")) (EVar "groups")) (EListLit)) (EVar "argOps")))
-(DFunDef false "emitArgTagRouteGo" ((PVar "e") (PVar "method") (PVar "groups") (PVar "uncovered") PWild (PVar "argOps")) (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatchWith") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "uncovered")) (EVar "argOps")))
-(DTypeSig false "emitArgTagCovered" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy")))))))
-(DFunDef false "emitArgTagCovered" ((PVar "e") (PVar "method") (PList (PVar "g")) (PVar "argOps")) (EApp (EApp (EApp (EApp (EApp (EVar "emitImplCallSat") (EVar "e")) (EApp (EApp (EVar "implFnName") (EApp (EVar "groupSymTag") (EVar "g"))) (EVar "method"))) (EVar "argOps")) (EApp (EApp (EApp (EVar "methodArityOfTag") (EVar "e")) (EVar "method")) (EApp (EVar "groupTag") (EVar "g")))) (EVar "LTInt")))
-(DFunDef false "emitArgTagCovered" ((PVar "e") (PVar "method") (PVar "groups") (PVar "argOps")) (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatch") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "argOps")))
+(DFunDef false "emitArgTagRoute" ((PVar "e") (PVar "method") (PVar "groups") (PVar "emittable") (PVar "raw") (PVar "argOps")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagRouteGo") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "emittable")) (EVar "raw")) (EVar "argOps")) (EApp (EApp (EApp (EApp (EVar "argTagCollidingHeads") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "raw"))))
+(DTypeSig false "emitArgTagRouteGo" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy"))))))))))
+(DFunDef false "emitArgTagRouteGo" ((PVar "e") (PVar "method") (PVar "groups") (PList) (PList) (PVar "argOps") (PVar "colliding")) (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagCovered") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "argOps")) (EVar "colliding")))
+(DFunDef false "emitArgTagRouteGo" ((PVar "e") (PVar "method") (PVar "groups") (PList) PWild (PVar "argOps") (PVar "colliding")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatchWith") (EVar "e")) (EVar "method")) (EVar "groups")) (EListLit)) (EVar "argOps")) (EVar "colliding")))
+(DFunDef false "emitArgTagRouteGo" ((PVar "e") (PVar "method") (PVar "groups") (PVar "uncovered") PWild (PVar "argOps") (PVar "colliding")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatchWith") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "uncovered")) (EVar "argOps")) (EVar "colliding")))
+(DTypeSig false "emitArgTagCovered" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy"))))))))
+(DFunDef false "emitArgTagCovered" ((PVar "e") (PVar "method") (PList (PVar "g")) (PVar "argOps") PWild) (EApp (EApp (EApp (EApp (EApp (EVar "emitImplCallSat") (EVar "e")) (EApp (EApp (EVar "implFnName") (EApp (EVar "groupSymTag") (EVar "g"))) (EVar "method"))) (EVar "argOps")) (EApp (EApp (EApp (EVar "methodArityOfTag") (EVar "e")) (EVar "method")) (EApp (EVar "groupTag") (EVar "g")))) (EVar "LTInt")))
+(DFunDef false "emitArgTagCovered" ((PVar "e") (PVar "method") (PVar "groups") (PVar "argOps") (PVar "colliding")) (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatch") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "argOps")) (EVar "colliding")))
 (DTypeSig false "argTagUncovered" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "argTagUncovered" ((PVar "e") (PVar "method")) (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "argDefaultEmittable") (EVar "e")) (EVar "method"))) (EApp (EApp (EVar "argTagUncoveredRaw") (EVar "e")) (EVar "method"))))
 (DTypeSig false "argTagUncoveredRaw" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
@@ -15802,18 +15894,18 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DFunDef false "argDefaultEmittable" ((PVar "e") (PVar "method") (PVar "tag")) (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "ctorsOfType") (EVar "e")) (EVar "tag"))) (EBinOp "<=" (EApp (EVar "listLen") (EApp (EApp (EVar "methodConstraintIfacesOf") (EVar "e")) (EVar "method"))) (ELit (LInt 0)))) (EBinOp "<=" (EApp (EApp (EApp (EVar "innerDefaultReqCount") (EVar "e")) (EVar "method")) (EVar "tag")) (ELit (LInt 0)))))
 (DTypeSig false "emitDefaultArgTag" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy"))))))
 (DFunDef false "emitDefaultArgTag" ((PVar "e") (PVar "method") (PVar "argOps")) (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "arg-tag dispatch for method '")) (EVar "method")) (ELit (LString "' has no impl groups (unresolved RNone fallback)")))))
-(DTypeSig false "emitArgTagDispatchWith" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy"))))))))
-(DFunDef false "emitArgTagDispatchWith" ((PVar "e") (PVar "method") (PVar "groups") (PVar "uncovered") (PVar "argOps")) (EIf (EBinOp ">=" (EApp (EVar "headPos") (EApp (EVar "groupPositionsOf") (EApp (EVar "headGroup") (EVar "groups")))) (EApp (EVar "lengthS") (EVar "argOps"))) (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "arg-tag dispatch for method '")) (EVar "method")) (ELit (LString "': discriminating arg position not supplied (under-applied / unapplied method)")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatchGo") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "uncovered")) (EVar "argOps")) (EApp (EVar "headPos") (EApp (EVar "groupPositionsOf") (EApp (EVar "headGroup") (EVar "groups"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "emitArgTagDispatch" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy")))))))
-(DFunDef false "emitArgTagDispatch" ((PVar "e") (PVar "method") (PVar "groups") (PVar "argOps")) (EIf (EBinOp ">=" (EApp (EVar "headPos") (EApp (EVar "groupPositionsOf") (EApp (EVar "headGroup") (EVar "groups")))) (EApp (EVar "lengthS") (EVar "argOps"))) (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "arg-tag dispatch for method '")) (EVar "method")) (ELit (LString "': discriminating arg position not supplied (under-applied / unapplied method)")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatchGo") (EVar "e")) (EVar "method")) (EVar "groups")) (EListLit)) (EVar "argOps")) (EApp (EVar "headPos") (EApp (EVar "groupPositionsOf") (EApp (EVar "headGroup") (EVar "groups"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "emitArgTagDispatchGo" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyTuple (TyCon "String") (TyCon "LTy")))))))))
-(DFunDef false "emitArgTagDispatchGo" ((PVar "e") (PVar "method") (PVar "groups") (PVar "uncovered") (PVar "argOps") (PVar "discrimPos")) (EBlock (DoLet false false (PVar "discrimWord") (EApp (EApp (EVar "nthStr") (EVar "argOps")) (EVar "discrimPos"))) (DoLet false false (PVar "tagReg") (EApp (EApp (EVar "loadDiscriminant") (EVar "e")) (EVar "discrimWord"))) (DoLet false false (PVar "slot") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EVar "slot")) (ELit (LString " = alloca i64"))))) (DoLet false false (PVar "endL") (EBinOp "++" (ELit (LString "argdispend")) (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e"))))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgDispatchChain") (EVar "e")) (EVar "method")) (EVar "tagReg")) (EVar "groups")) (EVar "uncovered")) (EVar "argOps")) (EVar "slot")) (EVar "endL"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "endL") (ELit (LString ":"))))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "r"))) (ELit (LString " = load i64, ptr "))) (EApp (EMethodRef "display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (ETuple (EVar "r") (EVar "LTInt")))))
-(DTypeSig false "emitArgDispatchChain" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit"))))))))))
-(DFunDef false "emitArgDispatchChain" ((PVar "e") (PVar "method") (PVar "tagReg") (PList) (PVar "uncovered") (PVar "argOps") (PVar "slot") (PVar "endL")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgDefaultChain") (EVar "e")) (EVar "method")) (EVar "tagReg")) (EVar "uncovered")) (EVar "argOps")) (EVar "slot")) (EVar "endL")))
-(DFunDef false "emitArgDispatchChain" ((PVar "e") (PVar "method") (PVar "tagReg") (PCons (PVar "g") (PVar "rest")) (PVar "uncovered") (PVar "argOps") (PVar "slot") (PVar "endL")) (EBlock (DoLet false false (PVar "tag") (EApp (EVar "groupTag") (EVar "g"))) (DoLet false false (PVar "cond") (EApp (EApp (EApp (EVar "emitTagMatch") (EVar "e")) (EVar "tagReg")) (EApp (EApp (EVar "ctorsOfType") (EVar "e")) (EVar "tag")))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "yes") (EBinOp "++" (ELit (LString "argyes")) (EVar "n"))) (DoLet false false (PVar "next") (EBinOp "++" (ELit (LString "argnext")) (EVar "n"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EMethodRef "display") (EVar "cond"))) (ELit (LString ", label %"))) (EApp (EMethodRef "display") (EVar "yes"))) (ELit (LString ", label %"))) (EApp (EMethodRef "display") (EVar "next"))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "yes") (ELit (LString ":"))))) (DoLet false false (PTuple (PVar "rv") PWild) (EApp (EApp (EApp (EApp (EApp (EVar "emitKnownFnSat") (EVar "e")) (EApp (EApp (EVar "implFnName") (EApp (EVar "groupSymTag") (EVar "g"))) (EVar "method"))) (EVar "argOps")) (EApp (EApp (EApp (EVar "methodArityOfTag") (EVar "e")) (EVar "method")) (EVar "tag"))) (EVar "LTInt"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EMethodRef "display") (EVar "rv"))) (ELit (LString ", ptr "))) (EApp (EMethodRef "display") (EVar "slot"))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL")))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "next") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgDispatchChain") (EVar "e")) (EVar "method")) (EVar "tagReg")) (EVar "rest")) (EVar "uncovered")) (EVar "argOps")) (EVar "slot")) (EVar "endL")))))
-(DTypeSig false "emitArgDefaultChain" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit")))))))))
-(DFunDef false "emitArgDefaultChain" ((PVar "e") PWild PWild (PList) PWild PWild PWild) (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "  call void @mdk_dispatch_no_impl()")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "  unreachable"))))))
-(DFunDef false "emitArgDefaultChain" ((PVar "e") (PVar "method") (PVar "tagReg") (PCons (PVar "tag") (PVar "rest")) (PVar "argOps") (PVar "slot") (PVar "endL")) (EMatch (EApp (EApp (EApp (EVar "defaultForAt") (EVar "e")) (EVar "method")) (EVar "tag")) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "  call void @mdk_dispatch_no_impl()")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "  unreachable")))))) (arm (PCon "Some" (PVar "entry")) () (EBlock (DoLet false false (PVar "cond") (EApp (EApp (EApp (EVar "emitTagMatch") (EVar "e")) (EVar "tagReg")) (EApp (EApp (EVar "ctorsOfType") (EVar "e")) (EVar "tag")))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "yes") (EBinOp "++" (ELit (LString "argdefyes")) (EVar "n"))) (DoLet false false (PVar "next") (EBinOp "++" (ELit (LString "argdefnext")) (EVar "n"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EMethodRef "display") (EVar "cond"))) (ELit (LString ", label %"))) (EApp (EMethodRef "display") (EVar "yes"))) (ELit (LString ", label %"))) (EApp (EMethodRef "display") (EVar "next"))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "yes") (ELit (LString ":"))))) (DoLet false false (PVar "fname") (EApp (EApp (EVar "defaultFnName") (EVar "tag")) (EVar "method"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "ensureDefaultEmitted") (EVar "e")) (EVar "fname")) (EVar "tag")) (EVar "method")) (EVar "entry"))) (DoLet false false (PVar "arity") (EApp (EApp (EVar "maxInt") (EApp (EApp (EApp (EVar "methodArityOfEntry") (EVar "e")) (EVar "entry")) (EVar "method"))) (EApp (EVar "listLen") (EApp (EVar "implPats") (EVar "entry"))))) (DoLet false false (PTuple (PVar "rv") PWild) (EApp (EApp (EApp (EApp (EApp (EVar "emitKnownFnSat") (EVar "e")) (EVar "fname")) (EVar "argOps")) (EVar "arity")) (EVar "LTInt"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EMethodRef "display") (EVar "rv"))) (ELit (LString ", ptr "))) (EApp (EMethodRef "display") (EVar "slot"))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL")))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "next") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgDefaultChain") (EVar "e")) (EVar "method")) (EVar "tagReg")) (EVar "rest")) (EVar "argOps")) (EVar "slot")) (EVar "endL")))))))
+(DTypeSig false "emitArgTagDispatchWith" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy")))))))))
+(DFunDef false "emitArgTagDispatchWith" ((PVar "e") (PVar "method") (PVar "groups") (PVar "uncovered") (PVar "argOps") (PVar "colliding")) (EIf (EBinOp ">=" (EApp (EVar "headPos") (EApp (EVar "groupPositionsOf") (EApp (EVar "headGroup") (EVar "groups")))) (EApp (EVar "lengthS") (EVar "argOps"))) (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "arg-tag dispatch for method '")) (EVar "method")) (ELit (LString "': discriminating arg position not supplied (under-applied / unapplied method)")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatchGo") (EVar "e")) (EVar "method")) (EVar "groups")) (EVar "uncovered")) (EVar "argOps")) (EVar "colliding")) (EApp (EVar "headPos") (EApp (EVar "groupPositionsOf") (EApp (EVar "headGroup") (EVar "groups"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "emitArgTagDispatch" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy"))))))))
+(DFunDef false "emitArgTagDispatch" ((PVar "e") (PVar "method") (PVar "groups") (PVar "argOps") (PVar "colliding")) (EIf (EBinOp ">=" (EApp (EVar "headPos") (EApp (EVar "groupPositionsOf") (EApp (EVar "headGroup") (EVar "groups")))) (EApp (EVar "lengthS") (EVar "argOps"))) (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "arg-tag dispatch for method '")) (EVar "method")) (ELit (LString "': discriminating arg position not supplied (under-applied / unapplied method)")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgTagDispatchGo") (EVar "e")) (EVar "method")) (EVar "groups")) (EListLit)) (EVar "argOps")) (EVar "colliding")) (EApp (EVar "headPos") (EApp (EVar "groupPositionsOf") (EApp (EVar "headGroup") (EVar "groups"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "emitArgTagDispatchGo" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyTuple (TyCon "String") (TyCon "LTy"))))))))))
+(DFunDef false "emitArgTagDispatchGo" ((PVar "e") (PVar "method") (PVar "groups") (PVar "uncovered") (PVar "argOps") (PVar "colliding") (PVar "discrimPos")) (EBlock (DoLet false false (PVar "discrimWord") (EApp (EApp (EVar "nthStr") (EVar "argOps")) (EVar "discrimPos"))) (DoLet false false (PVar "tagReg") (EApp (EApp (EVar "loadDiscriminant") (EVar "e")) (EVar "discrimWord"))) (DoLet false false (PVar "slot") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EVar "slot")) (ELit (LString " = alloca i64"))))) (DoLet false false (PVar "endL") (EBinOp "++" (ELit (LString "argdispend")) (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e"))))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgDispatchChain") (EVar "e")) (EVar "method")) (EVar "tagReg")) (EVar "groups")) (EVar "uncovered")) (EVar "argOps")) (EVar "colliding")) (EVar "slot")) (EVar "endL"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "endL") (ELit (LString ":"))))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "r"))) (ELit (LString " = load i64, ptr "))) (EApp (EMethodRef "display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (ETuple (EVar "r") (EVar "LTInt")))))
+(DTypeSig false "emitArgDispatchChain" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit")))))))))))
+(DFunDef false "emitArgDispatchChain" ((PVar "e") (PVar "method") (PVar "tagReg") (PList) (PVar "uncovered") (PVar "argOps") (PVar "colliding") (PVar "slot") (PVar "endL")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgDefaultChain") (EVar "e")) (EVar "method")) (EVar "tagReg")) (EVar "uncovered")) (EVar "argOps")) (EVar "colliding")) (EVar "slot")) (EVar "endL")))
+(DFunDef false "emitArgDispatchChain" ((PVar "e") (PVar "method") (PVar "tagReg") (PCons (PVar "g") (PVar "rest")) (PVar "uncovered") (PVar "argOps") (PVar "colliding") (PVar "slot") (PVar "endL")) (EBlock (DoLet false false (PVar "tag") (EApp (EVar "groupTag") (EVar "g"))) (DoLet false false (PVar "cond") (EApp (EApp (EApp (EVar "emitTagMatch") (EVar "e")) (EVar "tagReg")) (EApp (EApp (EVar "ctorsOfType") (EVar "e")) (EVar "tag")))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "yes") (EBinOp "++" (ELit (LString "argyes")) (EVar "n"))) (DoLet false false (PVar "next") (EBinOp "++" (ELit (LString "argnext")) (EVar "n"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EMethodRef "display") (EVar "cond"))) (ELit (LString ", label %"))) (EApp (EMethodRef "display") (EVar "yes"))) (ELit (LString ", label %"))) (EApp (EMethodRef "display") (EVar "next"))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "yes") (ELit (LString ":"))))) (DoLet false false PWild (EIf (EApp (EApp (EVar "argTagArmAmbiguous") (EVar "colliding")) (EVar "tag")) (EApp (EVar "emitAmbiguousArm") (EVar "e")) (EBlock (DoLet false false (PTuple (PVar "rv") PWild) (EApp (EApp (EApp (EApp (EApp (EVar "emitKnownFnSat") (EVar "e")) (EApp (EApp (EVar "implFnName") (EApp (EVar "groupSymTag") (EVar "g"))) (EVar "method"))) (EVar "argOps")) (EApp (EApp (EApp (EVar "methodArityOfTag") (EVar "e")) (EVar "method")) (EVar "tag"))) (EVar "LTInt"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EMethodRef "display") (EVar "rv"))) (ELit (LString ", ptr "))) (EApp (EMethodRef "display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL"))))))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "next") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgDispatchChain") (EVar "e")) (EVar "method")) (EVar "tagReg")) (EVar "rest")) (EVar "uncovered")) (EVar "argOps")) (EVar "colliding")) (EVar "slot")) (EVar "endL")))))
+(DTypeSig false "emitArgDefaultChain" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit"))))))))))
+(DFunDef false "emitArgDefaultChain" ((PVar "e") PWild PWild (PList) PWild PWild PWild PWild) (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "  call void @mdk_dispatch_no_impl()")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "  unreachable"))))))
+(DFunDef false "emitArgDefaultChain" ((PVar "e") (PVar "method") (PVar "tagReg") (PCons (PVar "tag") (PVar "rest")) (PVar "argOps") (PVar "colliding") (PVar "slot") (PVar "endL")) (EMatch (EApp (EApp (EApp (EVar "defaultForAt") (EVar "e")) (EVar "method")) (EVar "tag")) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "  call void @mdk_dispatch_no_impl()")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "  unreachable")))))) (arm (PCon "Some" (PVar "entry")) () (EBlock (DoLet false false (PVar "cond") (EApp (EApp (EApp (EVar "emitTagMatch") (EVar "e")) (EVar "tagReg")) (EApp (EApp (EVar "ctorsOfType") (EVar "e")) (EVar "tag")))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "yes") (EBinOp "++" (ELit (LString "argdefyes")) (EVar "n"))) (DoLet false false (PVar "next") (EBinOp "++" (ELit (LString "argdefnext")) (EVar "n"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EMethodRef "display") (EVar "cond"))) (ELit (LString ", label %"))) (EApp (EMethodRef "display") (EVar "yes"))) (ELit (LString ", label %"))) (EApp (EMethodRef "display") (EVar "next"))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "yes") (ELit (LString ":"))))) (DoLet false false PWild (EIf (EApp (EApp (EVar "argTagArmAmbiguous") (EVar "colliding")) (EVar "tag")) (EApp (EVar "emitAmbiguousArm") (EVar "e")) (EBlock (DoLet false false (PVar "fname") (EApp (EApp (EVar "defaultFnName") (EVar "tag")) (EVar "method"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "ensureDefaultEmitted") (EVar "e")) (EVar "fname")) (EVar "tag")) (EVar "method")) (EVar "entry"))) (DoLet false false (PVar "arity") (EApp (EApp (EVar "maxInt") (EApp (EApp (EApp (EVar "methodArityOfEntry") (EVar "e")) (EVar "entry")) (EVar "method"))) (EApp (EVar "listLen") (EApp (EVar "implPats") (EVar "entry"))))) (DoLet false false (PTuple (PVar "rv") PWild) (EApp (EApp (EApp (EApp (EApp (EVar "emitKnownFnSat") (EVar "e")) (EVar "fname")) (EVar "argOps")) (EVar "arity")) (EVar "LTInt"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EMethodRef "display") (EVar "rv"))) (ELit (LString ", ptr "))) (EApp (EMethodRef "display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL"))))))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "next") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgDefaultChain") (EVar "e")) (EVar "method")) (EVar "tagReg")) (EVar "rest")) (EVar "argOps")) (EVar "colliding")) (EVar "slot")) (EVar "endL")))))))
 (DTypeSig false "emitTagMatch" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "emitTagMatch" ((PVar "e") PWild (PList)) (EApp (EApp (EVar "gapStr") (EVar "e")) (ELit (LString "arg-tag dispatch on impl type that owns no constructors (primitive receiver carries no cell tag)"))))
 (DFunDef false "emitTagMatch" ((PVar "e") (PVar "tagReg") (PList (PVar "c"))) (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "r"))) (ELit (LString " = icmp eq i64 "))) (EApp (EMethodRef "display") (EVar "tagReg"))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EApp (EVar "cellTag") (EVar "e")) (EVar "c"))))) (ELit (LString ""))))) (DoExpr (EVar "r"))))

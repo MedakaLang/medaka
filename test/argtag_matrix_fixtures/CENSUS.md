@@ -138,7 +138,9 @@ hatch working, and it is why the region is observable at all.
 | `A4…__B2_one_default` | undecidable | `meow\|int` | ✅ `meow\|int` | build aborts, exit 1 |
 | `A5…__B1_both_defined` | bug | `[meow]\|meow` | E-PANIC, exit 1 | E-NONEXHAUSTIVE, exit 1 |
 | `A5…__B2_one_default` | bug | `box\|meow` | ✅ `box\|meow` | 🚨 `box\|box` **silent, exit 0** |
-| `A6…__no_local` | undecidable | `1\|2` | E-AMBIGUOUS-DISPATCH, exit 1 | build refuses, exit 1 |
+| `A6…__no_local` | undecidable | `1\|2` | E-AMBIGUOUS-DISPATCH, exit 1 | builds; E-AMBIGUOUS-DISPATCH at run, exit 1 |
+| `A6…__one_default` | undecidable | `9\|2` | E-AMBIGUOUS-DISPATCH, exit 1 | builds; E-AMBIGUOUS-DISPATCH at run, exit 1 |
+| `A7…__one_default` | decidable | `9\|2` | ✅ | ✅ |
 | `CONTROL…__not_pinned` | decidable | `woof\|meow//woof\|meow` | ✅ | ✅ |
 
 ### A1_distinct_user_heads__B1_both_defined
@@ -273,16 +275,74 @@ The binary printed `1` twice at exit 0 where the semantics say `1` then `2`; `me
 printed `1` twice as well. That is the silent fold this corpus exists to name, observed on
 the arg-tag chain itself rather than inferred from it.
 
-Both engines now refuse loudly (`emitArgTagRoute`'s `argTagHeadCollision` on the native
-side, `checkArgTagDecidable` on eval). The class stays `undecidable-by-construction`: the
+Both engines now refuse loudly. The class stays `undecidable-by-construction`: the
 runtime constructor tag is strictly weaker than the type identity the choice needs, and no
 narrowing of `T-LOCAL-CONSTRAINED-MONO` can reach this cell at all — it is not in the
 pinned region.
 
-⚠️ **Honest limit.** `ifaceDeclHeadUnique` answers "unique, safe" when
-`ifaceImplHeadsRef` is uninstalled, so a driver that never lowered through `lowerImpls`
-still emits the silent chain. This cell pins the installed path, which is every path
+⚠️ **This cell's `build`/`exec` lines MOVED in #2445 F-1-v2, and the class did not.**
+S-3 landed the native half as a `gapE` REFUSAL of the whole `medaka build` (exit 1, no
+binary). That refusal could not be scoped, and F-1 measured why: a program that declares
+these same colliding impls but never CONSTRUCTS a `Pair` receiver presents an IDENTICAL
+static candidate set at `emitArgTagRoute` — a duplicate `Pair`-tagged arm in the chain
+about to be emitted — yet is perfectly decidable and must build. The two differ only in
+a whole-program receiver-reachability fact the emitter does not have, so any static test
+that refuses this cell also refuses that correct program.
+
+The loudness is therefore RETIMED rather than scoped: the chain is emitted as normal and
+only the arms at a colliding head carry `@mdk_dispatch_ambiguous` instead of their impl
+call. This cell now BUILDS at exit 0 and traps at exit 1 on the first `go (Pair 1 True)`,
+before printing anything. That is the same verdict at a later phase — the cell is no more
+decidable than it was — and it scopes the guard by ACTUAL receiver, exactly the way eval's
+`checkArgTagDecidable` already did. Re-deriving a build-time refusal here would restore a
+false positive on unreachable collisions; re-deriving `1|1` would restore the S0.
+
+⚠️ **Honest limit.** `declHeadOfRouteWord` answers `""` when `ifaceImplHeadsRef` is
+uninstalled, so a driver that never lowered through `lowerImpls` sees only the group heads
+and still emits the silent chain. This cell pins the installed path, which is every path
 `medaka build`/`run` take today; it is a floor, not a proof.
+
+### A6_same_head_chain_reached__one_default
+
+**`undecidable-by-construction`**, and the RAW LEG of the native guard — the one leg
+nothing else in this corpus reaches on the chain path. `A6__no_local` with the `Pair Int`
+impl left method-less, so the interface default supplies `wsize` for it.
+
+The mechanism is worth stating because it is where a plausible fix fails OPEN. The
+inheriting impl contributes no `CImplEntry`, so `implGroupsForMethod` yields exactly ONE
+group here and a duplicate test over the group tags alone finds no collision at all — it
+would emit a single-arm chain and silently answer `2|2`. The second `Pair` lives in `raw`
+(the interface's declared route words minus what this method's entries cover), and `raw`'s
+words are canonical KEYS at a collision, precisely because `declRouteKey` mints the bare
+head only when the head IS unique. So `main::Wrap|(Pair Int)|` never string-compares equal
+to the group's bare `Pair`, and a duplicate test over `map groupTag groups ++ raw` reports
+"no collision" on exactly the shape the guard exists to catch. `declHeadOfRouteWord` maps
+each raw word back to its head first, which is what keeps this cell loud.
+
+Both engines refuse loudly on the first `go (Pair 1 True)`: eval at check-free run time
+via `checkArgTagDecidable`, the binary via the retimed `@mdk_dispatch_ambiguous` arm. The
+correct answer, `9|2`, needs the type identity behind the `Pair` tag and is unreachable on
+this route whichever impl spelling is used — which is the same statement `A2__B2` makes
+about axis B, made here on the chain rather than before it.
+
+### A7_distinct_heads_chain_reached__one_default
+
+**`decidable`, and the NEGATIVE CONTROL for `A6__one_default`.** Every ingredient of that
+cell is present — a non-empty `raw` leg, an inheriting declared impl, the arg-tag chain
+route, a higher-kinded interface, no `let`-local — with the collision removed: the
+inheriting impl sits at `Solo` and the defining one at `Pair Int`, two distinct runtime
+constructor tags.
+
+It exists because the retimed guard's failure mode in the other direction is invisible
+without it. A guard that trapped on the mere PRESENCE of a raw entry, or that compared
+raw's route words against head tags by the wrong ruler and matched something, would fire
+here and be wrong to — and it would look exactly like the correct behaviour on
+`A6__one_default`. Correct on both engines (`9` then `2`).
+
+**If this cell ever goes red the guard over-fires, not the region** — it is not evidence
+about #2032. Note it is also the one `B2` cell in the corpus whose native default arm is
+CORRECT; `A1__B2` and `A5__B2` answer with the defining impl's body at exit 0, which is
+their own separate `bug` and not this cell's business.
 
 ### CONTROL_toplevel_helper__not_pinned
 
