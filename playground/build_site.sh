@@ -55,6 +55,7 @@ mkdir -p "$SITE/vendor/wat2wasm" "$SITE/vendor/codemirror" "$SITE/dist"
 
 # Static page + JS glue (editor modules included)
 cp "$SCRIPT_DIR/index.html"          "$SITE/"
+cp "$SCRIPT_DIR/404.html"            "$SITE/"
 cp "$SCRIPT_DIR/favicon.svg"         "$SITE/"
 cp "$SCRIPT_DIR/og-card.png"         "$SITE/"
 cp "$SCRIPT_DIR/main.js"             "$SITE/"
