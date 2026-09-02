@@ -37,6 +37,400 @@ record above it.
 
 ---
 
+## SURVEY AMENDMENT (2026-09-02)
+
+**Standing of this block.** A three-round read-only survey graded this document against the
+tree: round 1, fourteen line-range readers over `compiler/types/typecheck.mdk` plus the
+upstream, downstream and sibling seams, and four isolated extractors over the architecture
+docs, the three specs, eighteen design docs and 133 open issues; round 2, eight synthesizers
+re-reading code for anything load-bearing; round 3, a fresh cold build, four probe agents
+running real programs under `MEDAKA_STRICT=1` against all three verbs, and one feasibility
+analysis of the three structural moves. An **independent adversarial review** of the survey's
+plan and reasoning followed (2026-09-02, HEAD `2be89ab9c`, read-only, sourcing tagged
+`[checked]`/`[relayed]` per claim); its corrections are folded in below and it is the source of
+SA-3's obligations-versus-routes split, SA-4's per-step feasibility corrections, SA-9 and
+SA-10. **Verdict: amend, do not replace.** §1's five laws and the S→A→B/C/D→E→F spine stand.
+§2's component model was drawn from the spec downward rather than the code upward; §6's Stage E
+is ordered by risk rather than by leverage. Where this block and the sections below it
+disagree, this block is the later evidence and governs; the specs remain the authority over
+both.
+
+### SA-1. The component model, re-cut to what the code has
+
+§2's seven components leave four large responsibilities un-owned and define two that the code
+does not have as units. The amended set is eight:
+
+| component | contract | change from §2 |
+|---|---|---|
+| **K** — declaration analysis | whole-graph CE/IE/DataEnv **and the per-module seed layer it has not absorbed** | R folded in; the "assembled once" clause corrected (SA-2) |
+| **I** — inference | the `infer` recursion, kept structurally intact | unchanged |
+| **Sh** — shadow resolution | definer/importer shadow dispatch, value-position pinning, standalone dict computation | **NEW.** 1,043 code lines, larger than ENTAIL (556) and COHERENCE (265) combined, today split four ways: I (the six-arm `inferAppExpr` ladder), K (shadow sets from `universeIfaceMethodsRef`), E (per-module `prePassModulePairArg` filtering), S (`resolveRLocalSites`). L1 already names "the shadow resolution function" as a spec judgment and SHADOW-SEMANTICS §3 already has its table; §2 gave it no home |
+| **S** — solving | ONE entailment engine **and the stamper schedule as one owned contract** | the schedule is now inside S's contract, not adjacent to it: there are two stamper sequences (`elabModuleStamp:42870-42890` vs `elaborateDict:19956-19966`), they run in different orders, and the flat one omits `resolveRLocalSites` entirely, so L15's stated override rule is unenforceable there |
+| **E** — elaboration / driver | one driver, one mode, marking on the schedule | unchanged in intent; re-sequenced (SA-4) |
+| **G** — global checks | coherence, escape/launder, kinds, exhaustiveness bridge | unchanged |
+| **Dg** — diagnostics | **an owned region of `typecheck.mdk` with a single gateway, not an extracted module** | **replaces the withdrawn D.** 1,471 code lines, the largest single orphan, created by F-2's withdrawal and never re-homed. D failed as a *module* extraction because every pass pushes; the phase form is buildable (SA-4 step 3) |
+| **X** — **the lifetime discipline** | a cell's reset point is **the record it lives in**, never a hand-written `:= …` in a driver. Its subjects are the 20 `CrossRun` accumulators, their four `Qual` twins, the snapshot/restore round trip `resetState` forces, and the two memo layers | **NEW, and deliberately not "a bucket of cross-module state"** — every other component is a judgment, and a component whose contract is *where state lives* is the God-record renamed. X is the substrate SA-4 step 5 needs and the 485 live `perRun.value` references do not have. The memo layers (`checkCoreMemoized:40640`, `CoreCheckMemo:40539`, `ChainMemo:41077`, `copyCrossRun:40558`, `copyDriverState:40591`; PR #2494/#2507, landed 2026-09-02 after this document's last amendment) **whole-cell swap `perRun` and `crossRun`** (`:40646-40647`, `:41106-41107`) — a fifth state-lifecycle axis the "four kept bundles" model (§2, *Cross-cutting substrate*) does not contain |
+
+**R's status is an owner decision, not a law, and either answer leaves K holding the code.**
+The identity-acquisition function lives in `resolve.mdk` (`:4644`, *"Acquire identity for a
+whole module GRAPH"*) and is **called through** from typecheck's own preamble. The reason is a
+build-configuration fact, stated first-hand at `compiler/frontend/resolve.mdk:4630-4642`:
+`medaka build` shells out to a separate `medaka_emitter` process whose pipeline
+(`driveModules → runEmitWith → mangleUnits → elaborateModules`) never runs resolve —
+**resolve's resolution pass is DCE'd out of that binary** — so data threaded from a `check`-path
+driver cannot reach it, and identity acquired that way would exist on `check` and not on
+`build`. ⚠️ **Do not record "R is a fiction" or "fold R into K" as a constraint the plan
+inherits.** R is reachable by call-through; whether the emitter binary *should* run resolve is
+an owner question (SA-10 Q3). What is settled either way: the ~1,300 stranded lines inside
+typecheck are **#1288's duplicates**, not R (SA-6).
+
+**S owns the drain order; Sh owns the RLocal decision. Write the two-owner sequence down.**
+`resolveRLocalSites` is **deliberately not routed through `entail`**, and DICT §3 conformance
+*requires* that rather than permitting it (`:21212-21220`): the pass implements §4 `(var)`'s
+first premise — binding selection — and reads shadow facts (`isDefinerShadow`,
+`definerShadowNamesRef`) that are **not** components of entailment's domain `(IE, CE, P, π)`.
+Folding it into the one entailment function would make that function depend on inputs outside
+its spec-given domain. So one ordered sequence has two owners, and SA-4 step 5's "the channels
+collapse" must not be read as collapsing this leg.
+
+### SA-2. Three status corrections
+
+Status in §6 is otherwise **conservative**: of 22 "X is now handled by Y" claims, 18 verify
+true and several un-annotated units (S-1, S-3, D-2, B-3, D-1, D-2/#1119) have landed. Three
+claims overclaim:
+
+- **F-3 is not COMPLETE.** `DICT-SEMANTICS.md` §11's own C1 row records the (a)-vs-(c)
+  divergence closed at F-3d **but the enforcing site GOAL-BLIND** — it folds over declared
+  impls and never a goal, with a live counterexample where a deformed candidate set defeats it
+  — and cites **#1154 (OPEN, S0)**. Corroborated: `cohScan`/`cohClassify` walk impl *pairs*
+  (`:22374-22620`).
+- **A-1's "no comparison reads the identity field yet" is FALSIFIED.** `sameTyConHead` /
+  `tyConIdsConflict` (`compiler/frontend/ast.mdk:622-634`) are consumed by `unifyN`'s `TCon`
+  arm (`:9595-9596`), by coherence `cohGoR`/`cohEqR` (`:22039`, `:22162`) and by `matchStep`
+  (`:26752-26789`). The residual A-1 does **not** name: DICT §11 I6.1 is OWED —
+  `headTyconMono:28279` / `monoHeadCon` still answer `Some n` for a rigid, so a rigid remains
+  usable as a dispatch key.
+- **K's contract "assembled once and never per-module" is FALSIFIED every module.**
+  `declEnvSeedDataUniverse` writes **7** `PerRun` refs per module (`:4684-4717`);
+  `appendUniverseAccums` / `appendDataUniverse` grow `CrossRun` at **9** per-module sites
+  (`:37709`, `:37890`); the constructor overlay is rebuilt per module (`:39780-40024`). K's
+  amended contract is whole-graph environments **plus** an owned per-module seed layer.
+
+### SA-3. State lifetime is the unstated precondition of E-3 → E-4 — and I5 is met for obligations only
+
+**The lifetime constraint.** `resetState` re-mints `PerRun` per module, and L14 pins the
+resolvers to the window before it (`:42842-42846`: *"the tyvar cells are still bound (the next
+module's `resetState` hasn't run yet)"*). Two cheaper escapes are refuted: not calling
+`resetState` at all (five field families are per-module *by meaning*), and moving only the
+pending lists out (`entail`'s `assum` arm reads `perRun.activeDictVars` at `:21356`/`:21378`
+and `perRun.activeDictPreds` at `:33093`/`:33125`/`:33159`).
+
+**Stated as a scheduling rule: any E-3 → E-4 schedule needs a `PerRun` lifetime split first.**
+§6 schedules E-3 → E-4 without one, which is scheduling something that cannot be built. The
+split is #2547 unit 1 and is a prerequisite of #2548.
+
+🚨 **DICT §6.2 T4's normative precondition — *"T4 MUST NOT be implemented before I5"* — is met
+for OBLIGATIONS ONLY. It is FALSE for ROUTES.** `moduleImplUniv` routes through
+`ieCandidacyVisibleAt`, which is `True`, so obligation candidacy is whole-graph regardless of
+ordinal (`:28643-28660`). But **`elabModuleStamp` builds `stampImplTable = buildImplTable
+implDecls` (`:42868`) over the topological PREFIX** (core + earlier modules + this one), and
+every `entail`-routed resolver reads that prefix table. `inst` commitment is exactly what T4
+governs and exactly what its normative constraint is about; DICT §11's I5 row still reads
+PARTIAL, *"cumulative, not global"* — stale on the obligation half, **correct on the route
+half**.
+
+Consequences the plan must carry, not discover: the quiescence unit (#2548) must build the route
+table **once over `allDecls`, in the same change**; that is an **I5 widening with an acceptance
+delta** (a newly visible more-specific instance silently changes an answer); and the pin that
+used to hold that consequence class — `1072-overlap-xmod-bare-head-arm-order` — **is gone from
+the tree** (`:28660-28663`). **Re-pin I5 consequence class 3 before #2548** (SA-9).
+
+### SA-4. Stage E, re-sequenced by leverage
+
+The **only production consumer of the `Flat` arm** is `elaborateModules`'s own promotion
+fallback re-entering it (`:41945` → `discoverPromotedJoint:20159` → `checkProgramSeeded:20175`
+→ `checkProgramSeededSplit:28465` → `checkBodyImpl (Flat …)` at `:28519`). Every other Flat
+consumer is a gate or probe entry plus `medaka snapshot`. E-1's premise at §6 is also wrong in
+the reader's favour: `medaka check <file>` never reaches Flat — the single-file front door wraps
+the file as `[("__user__", prog)]` and takes the **Module** arm (`:33356-33365`,
+`checkOneToLinesWithRuntime:41667-41670`). E-2 is therefore cheaper than §6 prices it, and E-1's
+residual surface is test infrastructure.
+
+Seven steps, in this order, with the dependency reasons measured in the feasibility analysis:
+
+1. **Cheap gates and repairs, before any interior surgery.** The promissory-comment lint rule
+   (#2550), the `Expr`/`Decl` catch-all **census with a pinned count** (#2551 — ⚠️ *not* a lint
+   rule: lint has no type environment, its oracle is constructors only, so a ratchet over
+   function clauses whose parameter is `Expr`-typed is not expressible there), the export
+   narrowing (#2552), and the `PerRun` field-comment repair (#2553).
+   ⚠️ Two items in this step are **not** cheap as the survey priced them:
+   - The `hadTypeErrors` gate inside `runEmitWith` (`compiler/entries/entry_support.mdk:203-228`,
+     absence self-documented at `:20136` and `:41772-41779`) is **#2089's fix, not a new unit**,
+     and `runEmitWith` is the **bootstrap's own path** (`llvm_emit_modules_main` is what
+     `test/build_native_medaka.sh` runs). `:41772` records a **false** elaborate-path reject on
+     the compiler's own graph. So it is a few lines **plus a measured selfcompile fixpoint with
+     the gate on, C3a and C3b named separately**, and warn-first (`MEDAKA_STRICT`-style) versus
+     hard is an owner decision (SA-10 Q2) — the same fail-closed-on-our-own-graph care step 4
+     takes.
+   - **The two G2 S0s belong here, not in "decisions that are yours".** `isLetrecGroup`'s
+     "always a function group" (`:34946-34949`, **#2554**) and `sigIsFun`'s point-free
+     relaxation (`:35508`, **#2556**) are one predicate each, confirmed on a fresh binary,
+     silently wrong under `build`. Under [W-SEVERITY] they outrank most of steps 2–7 per line.
+     Each needs a `must_fail_fixtures` pin **before** the fix so [G-MUST-FAIL] drains it. The
+     third new S0 — the closed-closed row arm laundering `<IO>` through a plain generic
+     function (**#2557**) — is harder; it is unification-side and orthogonal by E-ORTHO, and no
+     step below owns it.
+2. **#2543 — delete the Flat re-entry** (E-2a): promotion discovery as a Module-arm
+   `foldModules` fixpoint. **Landable as one unit**: the joint Flat pass computes nothing the
+   Module fold cannot, it deletes `dropShadowedCore` (`:20219-20227`) outright rather than
+   porting it, and it needs one `resetCrossModuleState` per iteration (the Module arm's
+   `appendUniverseAccums:28633` grows the `crossRun` accumulators K times otherwise). It does
+   change the discovery *schedule* (one flat SCC over a joint program → per-module SCCs in
+   dependency order), so run `cond_impl_third_module` with the discovery arm swapped **before
+   cutting the slice** — `test/diff_compiler_flat_vs_onemodule.sh:67-70` records that FLAT and
+   MODULE disagree there today, and it is the one place the change is not behaviour-preserving
+   by construction. Gate on the full eight-gate + two-golden-family list, not the two headline
+   fixtures.
+   ⚠️ **After this, E-2b is NOT "a deletion of a dead arm".** The Flat arm stays live for
+   `elaborateDict`'s consumers, one of which is `compiler/tools/snapshot.mdk:632` — the tool
+   that produces `test/snapshots`, a corpus that includes compiler source ([T-SNAPSHOT-SELF]).
+   E-2b is therefore a **suite-wide golden re-derivation with a per-file explanation criterion**
+   (never a bless — [WT-GOLDEN-ENSHRINES]), plus retiring `flat_vs_onemodule`'s FLAT rows and
+   `check_wrapper_callers` / `test/CHECK-WRAPPER-CALLERS.txt`. Budget it as a unit.
+3. **#2544 — report from the residual** (M4): constraint failures become obligations left
+   unsolved, rendered by one pass at quiescence; `elaborateModules` returns the residual
+   diagnostics alongside the decls. This is **Dg built as a phase**, and it closes the Bool-only
+   channel behind #1910/#2089. ⚠️ [W-QUIETER] in the loud direction: the new messages are
+   untested by construction and must be built from the D2 rule ledger, not from the diff. Two
+   silent shape changes to state up front: the residual must be reported **per goal with its
+   own `Loc`** (today's attribution is by position in `typeErrors` per module, and OD5's dedup
+   key is message-text-only — a text-keyed renderer re-introduces the suppressed-check bug OD5
+   forbids), and the memo path installs snapshotted obligations on a hit (`:40646-40648`), so
+   residual reporting must be memoized the same way or the LSP loses diagnostics on cached
+   prefixes.
+4. **#2546 — unify the impl-body inference form** (Q3a), after re-measuring the recorded reason
+   at `:29134-29137`, which no longer describes the function it cites (`inferUserImplBodies`
+   now infers parametric heads at `:29520` and keeps its diagnostics at `:29431-29441`).
+   🚨 **The survey named the wrong instrument.** `diff_compiler_llvm_typed` and
+   `llvm_typed_ir` drive `llvm_emit_typed_main` — the `elaborateDict`/**Flat** path, the arm
+   step 2 removes from production — so green goldens there say nothing about the Module arm
+   `medaka build` runs. The production instrument is `run_check_agreement` + `dict_semantics` +
+   `engines` + `argtag_matrix` driven through `./medaka build`, plus the LEG A golden.
+   🚨 **And this is a `build`-side ACCEPTANCE change, not "one `if` goes".** The windowed form
+   rolls back `obls` as well as `implObls`, and `obls` is checked unconditionally on both paths,
+   so the emit arm drops undecidable-now impl-body obligations it rejects on today. That is the
+   OD6 direction and OD6(b) licenses the decidability filter, but it is **silent (fewer
+   rejections) and untested by construction**: census the delta over the corpus and pin it
+   before flipping. Turning the impl-obligation check on for the emit path stays a **separate
+   owner decision** — fail-closed on the compiler's own graph, the adjacent version already
+   declined in writing at `:41781-41787`.
+5. **#2547 — THREE units, landed separately.** Bundling destroys golden attribution: a golden
+   that moves under a bundled 1+2+3 cannot be attributed to a refactor or to a fix.
+   1. **The lifetime split** (X's substrate): the pending lists, `numlitRefs`, `activeDictVars`,
+      `activeDictPreds`, `funPredicateSlotsRef`'s given role, and `tyvarCounter`/`effvarCounter`
+      move to a graph-lifetime record; carriers gain a module id; `methodIfaceParamsRef` and
+      `definerShadowNamesRef` are snapshotted per module. **Behaviour-preserving by intent.**
+      Gate: every route golden unchanged, **plus `perf_scaling`** — a graph-lifetime
+      `activeDictVars` makes its lookup a linear scan over the whole graph. ⚠️ Enumerate the
+      cells before slicing: the sources say eleven, twelve and thirteen and are inconsistent.
+   2. **The channel merge** into one `Obligation` with an **abstract `oDest : EvDest`**.
+      Behaviour-preserving by intent; touches the ~thirteen producers. **The `EvDest`
+      abstraction is load-bearing for the sequence**: step 6 drains into today's `Ref Route`
+      cells and step 7 swaps the representation, so without it the drain is written twice.
+   3. **The given-environment re-keying** (`gGiven` replacing the four flat tables) — this **is**
+      SC-2 / #1318 and it is **behaviour-changing**. Gate: the #1154/#1177-class pins draining
+      under [G-MUST-FAIL]'s inverted polarity, plus new pins. It must introduce the
+      **interface-identity type SC-1 keys on**, because SC-1 and SC-2 have a stated lockstep
+      precondition (identity-keying `IE` while `Predicate` stayed bare once made obligations
+      universally unsatisfiable); sharing the substrate is what lets them land separately.
+   Also under unit 1: both memo layers install `perRun := freshPerRun ()` on a hit (`:40646`,
+   `:41106`) — after the split a hit must reset or restore the graph-lifetime record too (latent
+   before step 7, live after) — and `inferPropBodies:29345-29353` brackets three pending lists
+   around prop inference, a bracket that then straddles graph-lifetime state.
+6. **#2548 — one whole-graph resolve pass at quiescence** (M3/Q2). The nine resolver calls and
+   `setNumlitFloats` leave `elabModuleStamp` for one ordered drain at the end of
+   `elaborateModules`, **and the route table is built once over `allDecls` in the same change**
+   (SA-3). This is T4 and #1116's one stamper-order table. Depends on 5 unit 1; and on 2,
+   because `discoverPromotedModules:20146-20152` names `resetState` as the mechanism keeping
+   discovery residue off exactly the cells this makes graph-lifetime.
+   🚨 **Two clauses this step would silently reinterpret.**
+   - **T4 is coupled to SC-3.** T4 says a goal still non-closed at quiescence is *rejected as
+     ambiguous, never committed to a default instance*. Today `pickMostSpecificEntry` falls back
+     to declaration order (`:25385`) and OD3 has a sole-impl default. Draining at quiescence
+     while keeping the fallback moves declaration-order defaulting to a **larger candidate
+     set** — a silent answer change. Land with SC-3 (reject on non-unique minimum), or land with
+     the T4 reject stubbed to a warning and say so. **Owner decision** (SA-10 Q1).
+   - **Moving `setNumlitFloats` is NOT "D1's second placement point".** `setNumlitFloats`
+     (`:30969-30980`) **stamps**: it reads each literal's solved type and writes
+     Float/Int/leave-route. It defaults nothing. D1's quiescence half is *defaulting a surviving
+     `Num` metavariable to `Int` at quiescence*, ordered **before** any T4 ambiguity rejection,
+     under D4's ownership rule. Moving the stamper is correct and necessary and is **not** that
+     step; no unit currently provides a `defaultGroupNum`-shaped step at quiescence.
+7. **#2549 — evidence as bindings** (M2). `EMethodAt`/`EDictAt` carry an evidence id and
+   `dictPass` consumes the group's evidence sink. This deletes `implInferEnabled`, the double
+   typecheck per `run`/`build`, and the promotion fixpoint; **E-2, E-4 and E-5 fall out** rather
+   than being peers. It is an emitter-contract change and needs the LSP/playground solve-cost
+   measurement first (measure **Ir**, not wall — after step 5 unit 1 the given tables are
+   graph-lifetime linear scans, so the check-path cost is that scan times every site).
+   🚨 **"`Route` survives only below `dictPass`" is wrong, and so is the survey's item 10.**
+   `dictPass` **produces** `EMethodAt` nodes carrying routes (`:27827-27842`) and the
+   interpreter reads them (`eval.mdk`: `methodAtNarrow:1580-1593`, `dictOfRoute:1546`,
+   `routeTag:1514`). Under M2 `eval.mdk`'s `EMethodAt` arm must consume evidence bindings —
+   which is what D-SEL wants — and that interpreter work must be costed. The two **emitters** do
+   read `Route` from Core IR data (`wasm_emit.mdk:4734`, *"carries the resolved Routes as DATA
+   on CMethod/CDict"*), so they are genuinely below lowering and can stay.
+   🚨 **`RNone` is a runtime dispatch decision today.** `methodAtNarrow env _ v RNone =
+   narrowUnrouted env v` (`eval.mdk:1580`); default-body sibling calls are `RNone` *by
+   construction* because a default body has no impl to key to, and the LLVM emitter mirrors it
+   as `emitDefaultRKey` (`llvm_emit.mdk:5583`). M2's "solving is not optional" makes every site
+   an evidence site **except a default body**, which has no dict parameter to be evidence for
+   while G1 is unimplemented tree-wide. So M2 either keeps `RNone` as a **declared, pinned**
+   optimization under D-SEL's side condition, or takes B-1/G1 as a prerequisite — **owner
+   decision** (SA-10 Q4), and it decides whether M2 is one move or two. Until `eval` has no
+   `Route` arm, M2 is half-landed and the `engines` gate is the only witness between
+   "compatible with D-SEL" and "two semantics".
+
+⚠️ **One survey framing to correct while reading §5 of this document:** the check and elaborate
+drivers share 77% of the code and that shared body is **identical except at three gated sites**
+(`:29138`, `:29156`, `:29266`). The seam claim is right; "77% of the code inverts its behaviour"
+is rhetoric.
+
+### SA-5. B-1's owed scope decision has a published answer
+
+§6 records B-1 (#993) as "scope decision still owed in its design doc"; the owed decision is
+whether instance-context evidence is captured recursively. **It is captured at construction, as
+arguments** — GHC's `EvDFunApp dfun tys evs`, where the context evidence is passed to the dfun
+and never re-resolved. **D-EV-DEF** (`docs/spec/DICT-SEMANTICS.md:215-224`) already specifies
+that shape. B-1 is also under-prioritized: `entailSuper` and `SupersPath` **do not exist
+anywhere in `compiler/`** (0 hits, tree-wide); supers are flattened into extra dict slots by
+`expandSupersFix`/`expandSupersVecs` (`:12469-12725`), which is the re-resolution L4 forbids.
+L4 is 0-for-2 on it and #1125/#1127 are both DRAINED-BY "B-1 + B-2, both required", with B-2
+closed.
+
+### SA-6. #1288 is a deduplication inside typecheck, not a relocation
+
+Roughly 1,300 code lines of identity derivation sit inside typecheck under comments naming
+`resolve.mdk` as their home: the scope-override ladders for methods, constructors and records
+(`:23300-24230`, 321 lines), and import admission + identity-graph indexes + the constructor
+overlay (`:38420-40430`, 768 lines). R cannot absorb them (SA-1). **#1288 is therefore scoped as
+a deduplication inside typecheck across those three families**, and it appears in no §6 unit
+today.
+
+### SA-7. Two ratchets L5 owes
+
+- **A fixture ratchet.** L5(b) requires a conformance fixture per normative clause, derived from
+  the clause by hand. DICT mandates one per clause and most rows have none; EFFECTS mandates
+  none; A-3.6's own widening is unfixtured by this document's admission. Four I5 consequence
+  classes are unpinned.
+- **A freshness ratchet on §11 itself.** The §11 enforcement tables are the arc's single most
+  load-bearing artifact — they surfaced most of the survey's spec grading, 42 of 117 rows
+  non-conformant — and they are the plan's only executable surface. **The M1 row rotted**;
+  re-derive the tables before trusting them, and gate the re-derivation.
+
+### SA-8. The plan's justification, restated
+
+**"Delete the slop" is not supported by measurement; "retire buckets (iii)+(iv)" is.** Dead
+code is four lines (`wReset`). Undocumented duplication is 733 lines (4.2% of code); another
+836 lines sit in families whose own comments name the duplication as deliberate. Total
+removable-on-inspection material is ~1,900 code lines, ~11%.
+
+What a real identity substrate retires is bucket **(iii)** cross-module identity plumbing —
+2,803 code lines and 4,304 comment lines — plus bucket **(iv)** Flat/Module/check/elaborate
+driver duplication — 1,296 code lines and 1,642 comment lines: **4,099 code lines (~23%) and
+~5,900 comment lines**, whose distinguishing artifact (29 `X`/`XAt`/`XById` suffix twins) is
+migration scaffolding by construction. Comment mass is a *symptom*: the identity arc carries 34%
+of the file's comments on 12% of its code, so retiring the arc retires the prose, and deleting
+the prose first would destroy the only record of why each table is keyed as it is.
+
+⚠️ **Do not size this work off today's raw line count.** 22% of today's code lines are the
+2026-09-02 formatter reflow. The pre-reflow baseline is **13,778 code lines**.
+
+### SA-9. Prerequisites the sequence needs, each before the step that needs it
+
+- **A `must_fail` pin before every fix**, not after — [G-MUST-FAIL]'s inverted polarity is what
+  drains it. That covers the two G2 S0s and the #2090 repro at step 1, and #1910 at step 3.
+- **I5 consequence-class-3 pin** (a silent answer change from a newly visible more-specific
+  instance) — **before step 6**. The old `1072-overlap-xmod-bare-head-arm-order` pin is gone
+  from the tree (`:28660-28663`), so the widening in SA-3 would land unpinned.
+- **The `assum`-before-`inst` precedence fixture** — **before step 6**. No gate today
+  distinguishes a *well-typed wrong route*: every value golden of an accepted program records
+  it as green. A grader written afterwards can only confirm whatever the new code does.
+- **A `build`-side acceptance census for step 4**, and a **source fingerprint baked into
+  `medaka_emitter`** before it: `build_cmd.mdk` and the emitter entry carry no staleness check,
+  and step 4's own instrument is check-versus-build agreement — a stale emitter turns that gate
+  into a comparison of two typecheckers. (`make medaka` rebuilds both in one run, so this bites
+  on [B-NO-EDIT-DURING-BUILD] slips and `./medaka`-only rebuild paths.)
+- **Golden budget, every step.** Compiler source is in the snapshot corpus and
+  `test/selfproc_goldens/legA/types.typecheck.golden` moves with any top-level binding change;
+  [T-LEGA-REBASE] applies at every merge and the queue serializes landings, so **each step is
+  one PR with a re-derived golden, never a rebase-accepted one**. Step 5 unit 1 may renumber
+  printed tyvar ids (unresolved — trace the printers first). Step 6 will red
+  `diff_compiler_must_fail` on every pin it drains; name the expected pins in the PR.
+- **Out-of-scope, stated rather than implied.** **SC-1** (identity-keyed cross-module
+  namespaces, the heaviest single drain at ≈60 weighted points) has **no step**; "after 5" is
+  neither in nor out — decide (SA-10 Q6). Likewise DICT §3 W2, §5.1 M3, §8 I7 (literals and
+  operators), §6.2 T1/T3, and the five EFFECTS declared-kind rules have no owner; the sequence
+  above schedules T4 alone. And **CP3/T6** is a standing divergence, not a T4 consequence:
+  nothing commits at the site today (module end), and after step 6 it is graph end.
+
+### SA-10. Owner questions this block raises and does not decide
+
+1. May step 6 land **without SC-3** — keeping declaration-order fallback at a wider candidate
+   set (unpinned silent-answer change), or stubbing T4's reject as a warning?
+2. Is a fail-closed reject on the compiler's own graph acceptable for the `runEmitWith` gate at
+   step 1, or must it land **warn-first** under `MEDAKA_STRICT`?
+3. **Should the emitter binary run resolve?** If yes, R is a real component and #1288 is a
+   relocation; if no, R stays a call-through and #1288 is a deduplication. This block assumes
+   the second (SA-1, SA-6) because that is what the code does, not because it was decided.
+4. Under M2, does **`RNone`** survive as a declared, pinned runtime-narrowing optimization under
+   D-SEL's side condition, or does **B-1/G1 become a prerequisite of step 7**?
+5. Do the **two G2 S0s** get fixed in step 1 (one predicate each, pins first), or filed and
+   deferred behind the rearchitecture?
+6. Is **SC-1** in this plan or out of it?
+7. Is the **playground/LSP fast path a hard budget** (a number step 7 must not exceed) or a
+   measurement to report? A budget changes whether step 7 can be cut at all.
+
+**RULED (Val, 2026-09-02; recorded on #1122).** These are decisions, not proposals.
+
+1. **Warn first, then decide.** Step 6 lands with T4's reject stubbed as a `W-` diagnostic;
+   census how often it fires on the compiler's own source and the fixture corpus; decide SC-3
+   on the measured set. (#2548)
+2. **Warn-first; hard under `MEDAKA_STRICT=1`.** The `runEmitWith` gate prints the discarded
+   diagnostics and continues; exit 1 only under strict. A self-compile fixpoint (C3a and C3b
+   named separately) is measured with the gate on before it flips to hard. (#2089)
+3. **Deferred until after M2.** Whether the emitter binary runs resolve is decided once
+   evidence-as-bindings removes the double typecheck. Until then #1288 is scoped as
+   consolidation inside typecheck without committing to relocation or deduplication; SA-1's
+   "fold R into K" and SA-6's "deduplication" read as the code's current shape, not a ruling.
+4. **`RNone` stays, pinned; M2 first.** Its runtime narrowing is a uniformly-applied refining
+   optimization under DICT §7's side condition, pinned with a fixture. B-1/G1 is not a
+   prerequisite of step 7; default bodies get evidence when B-1 lands. (#2549, #993)
+5. **Fix both now, in step 1.** #2554 and #2556 are one-predicate HM-core fixes with pins in
+   place; one small PR after #2560 merges, with the HM-core spec's value-restriction paragraph
+   written from the fix. #2557 stays filed. (#2554, #2556, #2555)
+6. **SC-1 is in, as step 8**, after #2547's third unit, consuming the interface-identity type
+   that unit introduces. Filed as #2563.
+7. **Soft budget.** Step 7 lands if the memo-path regression on playground analyze and
+   `import list` is under an agreed ceiling of about 25% Ir; the memoized-solve follow-up is
+   filed regardless. Measured in instructions, never wall time. (#2549)
+
+Consequences for SA-4: step 1 gains the two S0 fixes; step 6 reads "drain with the T4 reject
+as a warning, census, then SC-3"; a step 8 (SC-1, #2563) follows step 5's third unit.
+
+### SA-11. Artifacts
+
+The survey's reports, including every `file:line` behind the claims above, are under
+`/var/tmp/medaka-scratch/claude-0/-root-medaka/956cc057-04d9-41ae-be68-81a9efe2179a/scratchpad/`:
+`survey/wave1/R01`–`R14`, `R15-siblings`, `R16-upstream`, `R17-downstream`;
+`survey/docs/D1-arch-docs`, `D2-specs`, `D3-design-docs`, `docs/issues/I1-open-issues`;
+`survey/wave2/W2-A-state-map` (state), `W2-B-pipeline` (drivers and the generate/solve seam),
+`W2-C-hm-core`, `W2-D-verification`, `W2-E-slop-census`, `W2-F-plan-vs-code` (this block's
+source), `W2-G-ghc-comparison`, `W2-H-issues-to-mechanisms`, `W2-I-flat-reach`;
+`survey/wave3/P-hm`, `P-xmod`, `P-rows`, `P-s0`, `W3-feasibility` (the SA-4 dependency
+reasons), with the probe programs under `probes/`. Epic #1122 carries the amended DAG.
+
+---
+
 ## 1. Design laws
 
 Every recurring defect class in this subsystem's history violates one of five

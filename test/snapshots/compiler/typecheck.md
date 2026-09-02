@@ -7900,8 +7900,8 @@ data CDeclared = CDeclared {
 -- FIX-shadow-arity-skew: the shadow route's expanded dict slots, the SAME three
 -- slot-parallel projections `inferDictAtFound` hands `pushDictApp` — monos, route WORDS
 -- (iface spellings), and each slot's call-instantiated predicate ARGUMENT VECTOR.  The
--- vectors were the residual `declaredConstraintArgs`' header named as "STILL LIVE, same
--- shape": `SKRLocal` carried only the first two, so `resolveRLocalSites` selected every
+-- vectors are the shape `declaredConstraintFor` fills its `cdArgs` from
+-- (`predicateSlotArgs`): `SKRLocal` carried only the first two, so `resolveRLocalSites` selected every
 -- shadow-route slot with the SCALAR `routesOfMonosTop` goal and a multi-argument
 -- predicate shattered into `Ix Int _`, first-declared-wins.  They travel as ONE record
 -- for the reason `CDeclared` does: three parallel lists a reader must re-align is the
@@ -9335,18 +9335,18 @@ data PerRun = PerRun {
 -- freshPerRun re-mints it, so a stale entry cannot label a later module.
 
 -- Construct every field fresh (each reproduces its former top-level ref's initial).
--- ⚠️ NO COUNT HERE, deliberately.  This line read "all 64 field-Refs" and was wrong on
--- `main` before #1557 A-3.5c touched it (the record had 65 fields, only 60 of them
--- `Ref` — the other 5 are `Windowed`), so decrementing it to 63 propagated an
--- inherited error with a fresh-looking number.  Derive it instead:
---   sed -n '/^data PerRun = PerRun {$/,/^  }/p' compiler/types/typecheck.mdk \
---     | grep -cE '^    [a-zA-Z][A-Za-z0-9_]* : '            # fields
---   ... | grep -cE '^    [a-zA-Z][A-Za-z0-9_]* : Ref '      # of which Refs
--- ⚠️ `/^  }/`, NOT `/^  }$/` — this record's closing brace carries a trailing comment
--- (`}  -- generalization dictForwardedIds declined, as …`), so the anchored form does
--- not match it, the sed range runs on to the next record and the count comes back
--- inflated.  Measured while writing this comment: the anchored form says 73, the
--- correct one 65.  A derivation is only honest if someone ran it.
+-- NO COUNT HERE, deliberately: a number written into this comment has twice gone stale
+-- without anyone touching the record — once by inheriting an already-wrong figure, once
+-- when a whole-file reflow moved the indentation this recipe anchors on.  Derive it:
+--   sed -n '/^data PerRun = PerRun {$/,/^}/p' compiler/types/typecheck.mdk \
+--     | grep -cE '^  [a-zA-Z][A-Za-z0-9_]* : '            # fields
+--   ... | grep -cE '^  [a-zA-Z][A-Za-z0-9_]* : Ref '      # of which Refs
+-- Both anchors are load-bearing.  The END anchor is `/^}/`: this record's closing brace
+-- sits at column 0 and carries a trailing comment (`}  -- generalization
+-- dictForwardedIds declined, as …`), so `/^  }/` and `/^  }$/` both miss it and the
+-- range runs on into the next record instead.  The FIELD anchor is TWO leading spaces;
+-- the four-space form this recipe once used matches nothing and silently returns 0.
+-- A derivation is only honest if someone ran it — so run it, don't read a number here.
 freshPerRun : Unit -> PerRun
 freshPerRun _ = PerRun {
   tyvarCounter = Ref 0,
@@ -12248,8 +12248,8 @@ declaredConstraintFor name = match qualConstraintDecl name
             slots
             (lookupAssoc name perRun.value.funConstraintDeclaredRef.value),
         -- the LOCAL / wildcard / re-export / check-path arm keeps the bare-name vector
-        -- table this slice did not touch — `declaredConstraintArgs`, the same lookup
-        -- `enclPreds` uses for the ENCLOSING fn.
+        -- table `funPredicateSlotsRef`, projected by `predicateSlotArgs` — the same
+        -- lookup `enclPreds` uses for the ENCLOSING fn.
         cdArgs = predicateSlotArgs stored,
       }
 
@@ -12424,8 +12424,8 @@ instantiateTracked (Forall ids evars t) =
 -- slot (`expandSupersVecs`).  A slot whose vector is empty — an inferred/promoted fn, a
 -- super whose params did not all resolve — still yields the singleton `[m]`, the scalar
 -- goal `routesOfMonosTop` already used.  ⚠️ A CROSS-MODULE CALLEE IS NO LONGER IN THAT
--- LIST: S-xmod-vector-supply (#1868/#1867) gave it a real vector — see
--- `declaredConstraintArgs`' header.
+-- LIST: S-xmod-vector-supply (#1868/#1867) gave it a real vector — see the `cdArgs`
+-- arms of `declaredConstraintFor` (`grep -n 'cdArgs = predicateSlotArgs'`).
 callArgVecsV : List (CSlot, List Mono) -> List (Int, Mono) -> List (List Mono)
 callArgVecsV [] _ = []
 callArgVecsV ((s, v) :: rest) subst = match lookupAssocI s.csId subst
@@ -12806,18 +12806,18 @@ checkStmtNotDiscarded t e
 -- no separate route/interface lookup needed. A future persistent-container
 -- `IndexMut` impl (`setIndex` returning a NEW value) would need EXCLUDING from
 -- `exemptInPlaceIndexMutHeads`, not just narrowing further.
--- `setIndex` is an `IndexMut` interface method, so `marker.mdk` rewrites every
--- `EVar` naming it to `EMethodRef` before typecheck ever sees it — except this
--- driver has TWO whole-program entry points (`checkModulesDiags`, used by
--- `check`, vs `elaborateModules`, used by `build`/`run`; see harden-typechecker
--- skill), and only the latter runs with `implInferEnabled` on, which stamps
--- the call's resolved dispatch route onto the node BEFORE this check runs,
--- turning `EMethodRef "setIndex"` into `EMethodAt "setIndex" …` — reproduced:
--- `medaka check` on sqlite/lib/dbwriter.mdk was clean while `medaka build`
--- rejected the same file, because `stmtCalleeName` didn't yet cover
--- `EMethodAt`/`EDictAt`. So `stmtCalleeName` must handle both stamped forms
--- alongside the unstamped `EMethodRef`, where `appSpineName` (this file's
--- other spine-name walk, used elsewhere) covers neither.
+-- `setIndex` is an `IndexMut` interface method, so which node shape this walk
+-- is handed depends on the driver: this file has TWO whole-program entry
+-- points (`checkModulesDiags`, used by `check`, vs `elaborateModules`, used by
+-- `build`/`run`; see harden-typechecker skill), and only the latter runs with
+-- `implInferEnabled` on and runs the dict pre-pass `prePassDictArg`, which
+-- stamps the call's resolved dispatch route onto the node BEFORE this check
+-- runs, minting `EMethodAt "setIndex" …`. Under `check` no mark pass runs and
+-- the node is still a bare `EVar` — reproduced: `medaka check` on
+-- sqlite/lib/dbwriter.mdk was clean while `medaka build` rejected the same
+-- file, because `stmtCalleeName` didn't yet cover `EMethodAt`/`EDictAt`. So it
+-- must cover the stamped forms alongside the bare ones, where `appSpineName`
+-- (this file's other spine-name walk, used elsewhere) covers neither.
 stmtCalleeName : Expr -> Option String
 stmtCalleeName (ELoc _ e) = stmtCalleeName e
 stmtCalleeName (EDoOrigin _ e) = stmtCalleeName e
@@ -16809,10 +16809,10 @@ stampRoutes (r :: rest) =
 --
 -- ⚠️ Unify against the RECEIVER, not against the caller's head type `ft`.  On the
 -- UN-MANGLED path `ft` is the permissive interface-METHOD scheme, not the standalone's
--- (the two doc-comments in inferDefinerShadowApp contradict each other on this; `:5050`
--- is the correct one).  Unifying the standalone's `a -> a` against the method's
--- `a -> a -> Bool` is an OCCURS-CHECK failure — "Cannot construct infinite type" on the
--- perfectly legal `eq : Num a => a -> a`.  The receiver is common to both.
+-- (the two doc-comments in inferDefinerShadowApp contradict each other; the one inside
+-- `inferDefinerShadowAppAt` — `grep -n 'UN-MANGLED path'` — is the correct one).  Unifying
+-- the standalone's `a -> a` against the method's `a -> a -> Bool` is an OCCURS-CHECK failure
+-- ("Cannot construct infinite type") on the legal `eq : Num a => a -> a`; the receiver is common.
 --
 -- Returns the slot-ordered (monos, ifaces) that routesOfMonosTop turns into Routes, and
 -- records the call's impl obligations so `size "hi"` (⇒ `Num String`, which has no
@@ -17695,8 +17695,8 @@ inferMatch env scrutTy arms =
 -- Type-aware exhaustiveness (`check_match`): run AFTER the arms have unified
 -- the scrutinee type, so `scrutTy` is fully resolved when we read its head.
 
--- The non-exhaustive-`match` warning (note the em-dash).  The redundancy pass
--- is not ported — only the exhaustiveness warning.  When the Maranget witness
+-- The non-exhaustive-`match` warning (note the em-dash).  Coverage only; the
+-- redundancy pass has its own string, `unreachableArmWarning`.  When the witness
 -- algorithm can name the uncovered case (`nonExhaustiveMsg`) the message is
 -- specialised to name the scrutinee type + the missing constructor; this
 -- generic form is the fallback if no witness is recoverable.
@@ -19144,10 +19144,10 @@ methodOccArgIdPairsAt iface typarams mty occ =
 -- already takes), so this is O(sites in this body), never O(module).
 --
 -- ⚠️ BOTH channels are read, and that is LOAD-BEARING, not belt-and-braces.  The two
--- typecheck entry points MARK DIFFERENT TREES: the run/emit path (elaborateModules)
+-- typecheck entry points SEE DIFFERENT TREES: the run/emit path (elaborateModules)
 -- marks constrained-fn occurrences EDictAt (`prePassDictArg … dictNames0 …`) so its
--- sites land in `dictApps`, while the CHECK path (markModules) passes `prePassDict
--- rpNames []` — an EMPTY dict-name set, deliberately, since check needs no routes — so
+-- sites land in `dictApps`, while the CHECK path (checkModulesDiags) runs NO mark pass
+-- at all — deliberately, since check needs no routes and mints no dict apps — so
 -- `dictApps` is empty there and only the CALL-OBLIGATION channel sees the constraint.
 -- Pinning on `dictApps` alone declines generalization on the emit path while `check`
 -- still generalizes, and the two then disagree: `check` greens a local helper used at
@@ -32095,8 +32095,8 @@ effectLaunderMsg iface mname escaping =
 --     (IO-expanded, as the §5 escape check) — an atom unification poured into
 --     the var from a position whose declared row lacks it is an intrinsic
 --     effect the caller erases by instantiating the var to <>; and the vars'
---     tails are pairwise distinct (aliasing an INSTANCE-HEAD row param is
---     admitted — the #817 carve-out; see checkImplEffVarRigidity).
+--     tails are pairwise distinct.  Aliasing an INSTANCE-HEAD row param is
+--     REJECTED (`T-IMPL-TOO-SPECIFIC`); see checkImplEffVarRigidity.
 -- Union-find bindings are monotone, so a var unbound-and-distinct AFTER unify
 -- was never constrained DURING it: this is observationally the skolem check.
 -- All lists here are the handful of quantified vars of one method signature.
@@ -32460,17 +32460,17 @@ anyContainsI (x :: xs) ys = containsI x ys || anyContainsI xs ys
 
 -- the effect half of the rigidity check: atom containment per declared
 -- occurrence, then tail distinctness among the METHOD's own effect vars.
--- ⚠️ #817 carve-out: a method effect var unifying with an INSTANCE-HEAD row
--- parameter (`impl Mappable (Async e)`, whose Suspend arm stores the callback
--- and so forces method `e'` ~ head `e`) is deliberately ADMITTED — the
--- impl-head types' row tails are NOT in the dup set.  It is a real residual
--- laundering channel (verified: a pure-typed thunk returned through `Async`
--- performs Stdout when forced — issue #817), but rejecting it would outlaw
--- Async v1's shipped Mappable/Thenable impls, which cannot be written
--- otherwise: the sound result row `e ⊔ e'` is inexpressible with `f` fixed to
--- `Async e`.  Resolution is design-scoped (#817); until then this check
--- preserves main's behavior for that channel exactly.  (The TYPE-var half has
--- no such carve-out: a method type var may never alias an impl-head type var.)
+-- A method effect var aliasing an INSTANCE-HEAD row parameter is REJECTED, not
+-- admitted: `checkMethodRigidityCore` pushes `T-IMPL-TOO-SPECIFIC` when a
+-- method effect var's tail is among `monoIndexEffvarIds` of the head monos,
+-- before it calls this function.  What used to need the exception was Async
+-- v1's `impl Mappable (Async e)`, whose `Suspend` arm stored the callback and
+-- so forced method `e'` ~ head `e`; with the `Deferred*` family the head is the
+-- bare constructor and the callback row rides the index, so no legal impl needs
+-- that identification.  This function's own dup set is therefore the METHOD's
+-- own effect vars only — impl-head row tails never enter it.  (The TYPE-var
+-- half never had an exception either: a method type var may never alias an
+-- impl-head type var.)
 checkImplEffVarRigidity : String ->
   List (String, List Kind) ->
   Ty ->
@@ -36790,7 +36790,7 @@ inferredPredLead (_, id, _) = id
 -- interface too is load-bearing — `registerInferredFor` opens ONE slot per id, so two
 -- predicates on different interfaces (`Ix a b`, `Jx a c`) can share a lead id, and the
 -- wrong one's vector would substitute to a wrong-but-concrete goal, which
--- `declaredConstraintArgs`' header measures as strictly worse than missing.
+-- is strictly worse than supplying no vector at all.
 -- [] when nothing matches — the slot then keeps the scalar per-tyvar goal
 -- (`substArgVec`'s empty arm) that EVERY inferred slot had before this slice, which is
 -- the "leave it uncovered" arm, not an invented vector.
@@ -39535,11 +39535,11 @@ ambiguousAdmitted occ path amb = match importedBindings path
 -- single dotted `EVar "A.g"` by desugar's `rewriteAliasQual` (via `qualifiedLocal`), so
 -- the alias spelling is a plain string lookup and needs no separate walk.
 --
--- `allEVars` has no `EMethodRef` arm, and does not need one for this caller: the rows
--- being filtered come from `ambiguousExportRows` → `modulePubDefiners` → `pubTopFnNames`,
--- which is `declTopFnNames` INTERSECTED with the exported names — top-level FN
--- definitions only.  An interface method name can never be in `amb`, so a call site the
--- marker rewrote `EVar`→`EMethodRef` can never be the occurrence we are looking for.
+-- `allEVars` has no `EMethodRef` arm and does not need one: no production verb ever
+-- constructs that node (it does carry `EMethodAt`/`EDictAt`, the shapes the elaborate
+-- driver's dict pre-pass actually mints).  Independently of shape, the rows being filtered
+-- come from `ambiguousExportRows` → `modulePubDefiners` → `pubTopFnNames`, i.e.
+-- `declTopFnNames` ∩ exports — so an interface method name can never be in `amb` at all.
 moduleRefNameSet : List Decl -> OrdMap Unit
 moduleRefNameSet decls = namesToSet (flatMap declRefNames decls) omEmpty
 

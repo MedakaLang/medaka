@@ -1,0 +1,18 @@
+f0 : Unit -> <> Unit
+f0 () = ()
+
+cb2 : (Unit -> <> Unit) -> Int
+cb2 f =
+  let _ = f ()
+  0
+
+coerce : a -> a -> a
+coerce x y = y
+
+honest : (Unit -> <> Unit) -> Int
+honest = coerce cb2 cb2
+
+main : <IO> Unit
+main =
+  let _ = honest f0
+  println "CONTROL-OK"

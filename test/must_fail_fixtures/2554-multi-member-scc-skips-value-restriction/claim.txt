@@ -1,0 +1,32 @@
+issue: 2554
+what: isLetrecGroup answers True for ANY dependency SCC with more than one member
+what: (compiler/types/typecheck.mdk:34946-34949, "a multi-member SCC is a
+what: mutually-recursive group (always a function group)"), so sccSchemes' `plainVal =
+what: isLetrec || ...` (:35505-35510) short-circuits the value restriction for the whole
+what: group and never consults memberClauseIsValue.  A zero-arg EXPANSIVE member — here
+what: `cell = Ref (helper 0)` — riding along in a 2-member SCC is therefore generalized:
+what: check prints `cell : Ref (Option a)` at exit 0 with zero diagnostics, writeString
+what: stores a boxed String through one instantiation, readInt reads it back through
+what: another, and the built binary prints a raw pointer as an Int at exit 0.  The
+what: singleton case is rejected correctly (T-TYPE-MISMATCH), so the multi-member SCC
+what: short circuit is the whole defect.  DICT-SEMANTICS §4.1 G2 (value-restriction gate,
+what: whose conformance table names sccSchemes as the top-level enforcement site) and
+what: EFFECTS-SEMANTICS §6 (value restriction).
+cmd: check main.mdk
+exit: 0
+stdout-line: cell : Ref (Option a)
+control: check control.mdk
+why-control: control.mdk is the SAME two-member SCC (`cell` <-> `helper`, `cell`
+why-control: expansive and zero-arg) with every use at ONE element type, so no
+why-control: instantiation gap can open — it must check clean at exit 0, proving SCC
+why-control: formation, the Ref cycle and the mutation are all intact.  The bug is
+why-control: specifically the TWO DIFFERENT instantiations in main.mdk.  (An accept
+why-control: control is required here: this harness cannot express a correctly-REJECTED
+why-control: control — #1144.  The sharper one, a single-binding `cell = Ref None` used
+why-control: at Int and String, is quoted in the issue and rejects with three
+why-control: T-TYPE-MISMATCH.)
+why-note: The pin is check's scheme line, NOT the binary's stdout: the binary prints a
+why-note: raw pointer reinterpreted as an Int, which moves with ASLR (three runs gave
+why-note: 47449054182008 / 46951472636536 / 47441397029496).
+why-note: A fix makes the per-member expansiveness test decide multi-member SCCs too,
+why-note: main.mdk then fails to check (Int vs String), and this row drains.
