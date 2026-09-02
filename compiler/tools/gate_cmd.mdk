@@ -1561,7 +1561,7 @@ nonBlank s = stringTrim s /= ""
 gitLsFilesSh : String -> List String -> <IO> Result String (List String)
 gitLsFilesSh root args =
   match runCommandOk "git" (["-C", root] ++ args ++ ["*.sh"])
-    Err e => Err "git ls-files failed to run: \{e}"
+    Err e => Err "git ls-files failed: \{e}"
     Ok (out, _) => Ok (filterList nonBlank (splitNl out))
 
 gateCandidates : String -> <IO> Result String (List String)

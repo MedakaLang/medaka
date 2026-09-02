@@ -1,5 +1,5 @@
 # META
-source_lines=412
+source_lines=414
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/native_doctest.mdk — the NATIVE doctest execution engine
@@ -262,10 +262,12 @@ buildAndRun target entryPath outPath tmpDir examples synthResults =
     Err rep =>
       Err
         "native doctest runner: could not build \{target} natively\n\{ppBuildReport rep}"
-    -- The report's notes are deliberately dropped on SUCCESS: this runner
-    -- always builds with keep-IR off (nothing to note), and the probe's own
-    -- stdout is the doctest transcript — emitter chatter spliced into it would
-    -- be read as test output.
+    -- The report's notes are deliberately dropped on SUCCESS even though
+    -- MEDAKA_KEEP_IR=1 can still force this runner to keep IR
+    -- (effectiveKeepIr ORs the env var in regardless of the False passed
+    -- here) — the probe's own stdout is the doctest transcript, and emitter
+    -- chatter spliced into it would be read as test output, so any note must
+    -- not surface either way.
     Ok _ => match runCommand outPath []
       Err e =>
         Err "native doctest runner: could not run the compiled probe: \{e}"

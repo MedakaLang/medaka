@@ -474,15 +474,6 @@ keepIrOutcome path contents = match writeFile path contents
     ],
   )
 
--- #1693: on a FAILED emitter run, its stderr is already folded into the
--- buildErr message above (`\{emitErr}`). On SUCCESS it used to be dropped on
--- the floor — the only way to see it was to bypass `medaka build` entirely
--- and shell out to `./medaka_emitter` directly. It rides on the report's
--- `emitterStderr` field instead, so a clean build still surfaces whatever the
--- emitter wrote along the way (progress/diagnostic chatter is expected to be
--- low-volume).  Not a `Diag`: it is unclassified third-party text, and the
--- plain CLI has always printed it verbatim, with no severity prefix.
-
 -- ---- the build pipeline ----
 -- root  = repo root (assets live under it)
 -- medaka = path to the medaka exe (for the emit shell-out)
@@ -836,17 +827,15 @@ probeWasmTools _ = match runCommand "wasm-tools" ["--version"]
 wasmAssemble : String -> String -> String -> <IO> Result BuildReport BuildReport
 wasmAssemble watPath outPath inputAbs =
   match runCommandOk "wasm-tools" ["parse", watPath, "-o", outPath]
-    Err e =>
-      buildErr "error: wasm-tools parse failed assembling \{inputAbs}\n\{e}"
+    Err e => buildErr "error: assembling \{inputAbs} failed\n\{e}"
     Ok _ =>
       match runCommandOk "wasm-tools" ["validate", "--features=all", outPath]
-        Err e => buildErr "error: wasm-tools validate rejected \{outPath}\n\{e}"
+        Err e => buildErr "error: validating \{outPath} failed\n\{e}"
         Ok _ =>
           match (runCommandOk "wasm-tools" [
             "strip", "--all", outPath, "-o", outPath
           ])
-            Err e =>
-              buildErr "error: wasm-tools strip failed on \{outPath}\n\{e}"
+            Err e => buildErr "error: stripping \{outPath} failed\n\{e}"
             Ok _ => buildOk "built \{inputAbs} -> \{outPath}"
 -- EMIT STEP.  Two paths, selected by the MEDAKA_EMITTER env var:
 --   * set   → invoke that NATIVE EMITTER BINARY directly (OCaml-free path — the
@@ -1320,7 +1309,7 @@ clangLinkTimed cc rtC llPath outPath inputAbs tmpDir libFlags perfOn tLink0 =
       let tClang = now ()
       let _ = emitPhase perfOn "clang" (tClang - tRtObj) inputAbs
       match ccRes
-        Err e => buildErr "error: clang failed linking \{inputAbs}\n\{e}"
+        Err e => buildErr "error: linking \{inputAbs} failed\n\{e}"
         Ok _ => buildOk "built \{inputAbs} -> \{outPath}"
 
 -- ---- the prelude object (issue #118) ---------------------------------------
@@ -1481,7 +1470,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
             ++ gcCflags
             ++ ["-c", rtC, "-o", outObjPath]
         match runCommandOk cc ccArgs
-          Err e => buildErr "error: clang failed compiling runtime object\n\{e}"
+          Err e => buildErr "error: compiling runtime object failed\n\{e}"
           Ok _ => buildOk "compiled runtime object -> \{outObjPath}"
     let _ = cleanupTempDir tmpDir
     res
