@@ -1,5 +1,5 @@
 # META
-source_lines=76
+source_lines=111
 stages=DESUGAR,MARK
 # SOURCE
 {- | Output to standard error, debug printing, and helpers for files and
@@ -71,6 +71,41 @@ export
 readLines : String -> <IO> Result String (List String)
 readLines path = map splitLines (readFile path)
 
+-- # Commands
+
+{- | Runs a program with arguments and waits for it, folding a spawn
+   failure and a nonzero exit into one `Err`.
+
+   `Ok` carries the captured stdout and stderr on a zero exit. `Err` names
+   the command and carries the host's message on a spawn failure, or the
+   exit code and captured stderr on a nonzero exit.
+
+   > runCommandOk "true" []
+   Ok ("", "") -}
+export
+runCommandOk : String ->
+  List String ->
+  <Exec "_"> Result String (String, String)
+runCommandOk cmd args = match runCommand cmd args
+  Err e => Err "\{cmd}: \{e}"
+  Ok (0, out, err) => Ok (out, err)
+  Ok (code, _, err) => Err (if err == "" then
+    "\{cmd} exited \{intToString code}"
+  else
+    "\{cmd} exited \{intToString code}: \{err}")
+
+-- Edge cases: a nonzero exit threads stderr into the message, and a
+-- program the host cannot find still exits (127, from the forked child's
+-- own failed `execvp` writing its errno string) rather than failing to
+-- spawn, so it is the nonzero branch below, not the `Err e` branch, that
+-- fires. The `Err e` branch fires only on a fork/temp-file failure at the
+-- OS level (runtime/medaka_rt.c's `mdk_run_command`), which no fixture can
+-- reliably force.
+-- > runCommandOk "sh" ["-c", "printf err >&2; exit 3"]
+-- Err "sh exited 3: err"
+-- > runCommandOk "medaka-io-doctest-no-such-command" []
+-- Err "medaka-io-doctest-no-such-command exited 127: No such file or directory"
+
 -- # Environment
 
 -- | The value of the environment variable `name`, or `fallback` when it is
@@ -91,6 +126,8 @@ getEnvOr name fallback = optionOr fallback (getEnv name)
 (DFunDef false "splitLines" ((PVar "s")) (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "\n"))) (EVar "s")) (arm (PCon "None") () (EIf (EBinOp "==" (EVar "s") (ELit (LString ""))) (EListLit) (EListLit (EApp (EVar "stripCR") (EVar "s"))))) (arm (PCon "Some" (PVar "i")) () (EBinOp "::" (EApp (EVar "stripCR") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "s"))) (EApp (EVar "splitLines") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")))))))
 (DTypeSig true "readLines" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "readLines" ((PVar "path")) (EApp (EApp (EVar "map") (EVar "splitLines")) (EApp (EVar "readFile") (EVar "path"))))
+(DTypeSig true "runCommandOk" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((hole "Exec")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "String")))))))
+(DFunDef false "runCommandOk" ((PVar "cmd") (PVar "args")) (EMatch (EApp (EApp (EVar "runCommand") (EVar "cmd")) (EVar "args")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "cmd"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") (PVar "err"))) () (EApp (EVar "Ok") (ETuple (EVar "out") (EVar "err")))) (arm (PCon "Ok" (PTuple (PVar "code") PWild (PVar "err"))) () (EApp (EVar "Err") (EIf (EBinOp "==" (EVar "err") (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "cmd"))) (ELit (LString " exited "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "cmd"))) (ELit (LString " exited "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "err"))) (ELit (LString ""))))))))
 (DTypeSig true "getEnvOr" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String")))))
 (DFunDef false "getEnvOr" ((PVar "name") (PVar "fallback")) (EApp (EApp (EVar "optionOr") (EVar "fallback")) (EApp (EVar "getEnv") (EVar "name"))))
 # MARK
@@ -106,5 +143,7 @@ getEnvOr name fallback = optionOr fallback (getEnv name)
 (DFunDef false "splitLines" ((PVar "s")) (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "\n"))) (EVar "s")) (arm (PCon "None") () (EIf (EBinOp "==" (EVar "s") (ELit (LString ""))) (EListLit) (EListLit (EApp (EVar "stripCR") (EVar "s"))))) (arm (PCon "Some" (PVar "i")) () (EBinOp "::" (EApp (EVar "stripCR") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "s"))) (EApp (EVar "splitLines") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")))))))
 (DTypeSig true "readLines" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "readLines" ((PVar "path")) (EApp (EApp (EMethodRef "map") (EVar "splitLines")) (EApp (EVar "readFile") (EVar "path"))))
+(DTypeSig true "runCommandOk" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((hole "Exec")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "String")))))))
+(DFunDef false "runCommandOk" ((PVar "cmd") (PVar "args")) (EMatch (EApp (EApp (EVar "runCommand") (EVar "cmd")) (EVar "args")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "cmd"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") (PVar "err"))) () (EApp (EVar "Ok") (ETuple (EVar "out") (EVar "err")))) (arm (PCon "Ok" (PTuple (PVar "code") PWild (PVar "err"))) () (EApp (EVar "Err") (EIf (EBinOp "==" (EVar "err") (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "cmd"))) (ELit (LString " exited "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "cmd"))) (ELit (LString " exited "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "err"))) (ELit (LString ""))))))))
 (DTypeSig true "getEnvOr" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String")))))
 (DFunDef false "getEnvOr" ((PVar "name") (PVar "fallback")) (EApp (EApp (EVar "optionOr") (EVar "fallback")) (EApp (EVar "getEnv") (EVar "name"))))

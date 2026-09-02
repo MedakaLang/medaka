@@ -26,6 +26,7 @@
 
 import support.util.{stringTrim, joinWith}
 import string.{words}
+import io.{runCommandOk}
 import support.timer.{perfEnabled, now, emitPhase}
 import driver.loader.{entrySearchRoots, findProjectRootOrSelf, readForeignLibs}
 import support.path.{dirOf, chopExt, joinPath}
@@ -231,14 +232,11 @@ stripTrailingUnit s =
 -- template is accepted by both GNU and BSD mktemp (dual-platform).
 export
 makeTempDir : Unit -> <IO> Result String String
-makeTempDir _ = match runCommand "mktemp" ["-d", "/tmp/medaka_build_XXXXXX"]
+makeTempDir _ = match runCommandOk "mktemp" ["-d", "/tmp/medaka_build_XXXXXX"]
   Err e => Err e
-  Ok (0, out, _) =>
+  Ok (out, _) =>
     let dir = stringTrim out
     if dir == "" then Err "mktemp -d printed no path" else Ok dir
-  Ok (_, _, mtErr) =>
-    let msg = stringTrim mtErr
-    Err (if msg == "" then "mktemp -d failed" else msg)
 
 -- Best-effort unlink of every entry the build staged in the scratch dir.  The
 -- driver only ever writes flat files there, so removeFile suffices.
@@ -319,6 +317,7 @@ detectGC cc tmpDir =
   if gcPrefix /= "" then
     detectGCPrefix gcPrefix
   else match runCommand "pkg-config" ["--exists", "bdw-gc"]
+    -- fail-open-by-design: a pkg-config miss falls through to the brew probe.
     Ok (0, _, _) =>
       let cflags = gcQuery "pkg-config" ["--cflags", "bdw-gc"]
       let libs = gcQuery "pkg-config" ["--libs", "bdw-gc"]
@@ -341,6 +340,8 @@ detectGCPrefix prefix =
   else
     None
 
+-- fail-open-by-design: a nonzero exit here reports "" — same fallback as
+-- a spawn failure below — since the caller has no better flags to offer.
 gcQuery : String -> List String -> <IO> String
 gcQuery prog args = match runCommand prog args
   Ok (_, out, _) => stringTrim out
@@ -348,6 +349,7 @@ gcQuery prog args = match runCommand prog args
 
 detectGCBrew : String -> String -> <IO> Option (List String, List String)
 detectGCBrew cc tmpDir = match runCommand "brew" ["--prefix", "bdw-gc"]
+  -- fail-open-by-design: a brew miss falls through to the bare -lgc probe.
   Ok (0, out, _) =>
     let prefix = stringTrim out
     if prefix /= "" && fileExists (joinPath prefix "include/gc.h") then
@@ -368,6 +370,8 @@ detectGCBare cc tmpDir =
   let probeOut = joinPath tmpDir "gcprobe.out"
   let _ = writeFile probe "#include <gc.h>\nint main(void){return 0;}\n"
   match runCommand cc [probe, "-lgc", "-o", probeOut]
+    -- fail-open-by-design: a failed bare-lgc probe reports "no libgc found"
+    -- (None), the final detectGC arm, not a build error of its own.
     Ok (0, _, _) => Some ([], ["-lgc"])
     _ => None
 
@@ -378,6 +382,8 @@ detectGCBare cc tmpDir =
 -- clangMissingError above.
 libgcMissingError : Unit -> <IO> String
 libgcMissingError _ = match runCommand "uname" ["-s"]
+  -- fail-open-by-design: an unreadable/absent `uname` falls open to the
+  -- Linux/GNU-flavored advice below, the same default the `_` arm gives.
   Ok (0, out, _) =>
     if stringTrim out == "Darwin" then
       "error: libgc (bdw-gc) not found — install bdw-gc: brew install bdw-gc (or set GC_PREFIX to its install prefix)"
@@ -407,6 +413,8 @@ gcSectionsCflags = ["-ffunction-sections", "-fdata-sections"]
 -- (matches every other best-effort probe in this file).
 gcSectionsLinkFlag : Unit -> <IO> String
 gcSectionsLinkFlag _ = match runCommand "uname" ["-s"]
+  -- fail-open-by-design: an unreadable/absent `uname` falls open to the
+  -- GNU link flag below, the same default the `_` arm gives.
   Ok (0, out, _) =>
     if stringTrim out == "Darwin" then
       "-Wl,-dead_strip"
@@ -541,6 +549,8 @@ runBuildNativeIn root medaka cc inputAbs outPath tmpDir keepIrCli =
 -- link step (issue #2514).
 probeClang : String -> <IO> Option Unit
 probeClang cc = match runCommand cc ["--version"]
+  -- fail-open-by-design: any non-clean version check reports "missing"
+  -- (None), same as a spawn failure, so the caller shows clangMissingError.
   Ok (0, _, _) => Some ()
   _ => None
 
@@ -549,6 +559,8 @@ probeClang cc = match runCommand cc ["--version"]
 -- actually running rather than always reading macOS advice.
 clangMissingError : String -> <IO> String
 clangMissingError cc = match runCommand "uname" ["-s"]
+  -- fail-open-by-design: an unreadable/absent `uname` falls open to the
+  -- Linux/GNU-flavored advice below, the same default the `_` arm gives.
   Ok (0, out, _) =>
     if stringTrim out == "Darwin" then
       "error: \{cc} not found — install the Xcode Command Line Tools: xcode-select --install"
@@ -807,6 +819,8 @@ runBuildWasmIn root medaka inputAbs outPath tmpDir keepIrCli =
 -- requirement).  `wasm-tools --version` exits 0 iff the tool is reachable.
 probeWasmTools : Unit -> <IO> Option Unit
 probeWasmTools _ = match runCommand "wasm-tools" ["--version"]
+  -- fail-open-by-design: any non-clean version check reports "missing"
+  -- (None), same as a spawn failure — the caller reports the tool absent.
   Ok (0, _, _) => Some ()
   _ => None
 
@@ -821,25 +835,19 @@ probeWasmTools _ = match runCommand "wasm-tools" ["--version"]
 -- never goes through this function, so names stay intact there.
 wasmAssemble : String -> String -> String -> <IO> Result BuildReport BuildReport
 wasmAssemble watPath outPath inputAbs =
-  match runCommand "wasm-tools" ["parse", watPath, "-o", outPath]
-    Err e => buildErr ("error: could not run wasm-tools parse: " ++ e)
-    Ok (0, _, _) =>
-      match runCommand "wasm-tools" ["validate", "--features=all", outPath]
-        Err e => buildErr ("error: could not run wasm-tools validate: " ++ e)
-        Ok (0, _, _) =>
-          match (runCommand "wasm-tools" [
+  match runCommandOk "wasm-tools" ["parse", watPath, "-o", outPath]
+    Err e =>
+      buildErr "error: wasm-tools parse failed assembling \{inputAbs}\n\{e}"
+    Ok _ =>
+      match runCommandOk "wasm-tools" ["validate", "--features=all", outPath]
+        Err e => buildErr "error: wasm-tools validate rejected \{outPath}\n\{e}"
+        Ok _ =>
+          match (runCommandOk "wasm-tools" [
             "strip", "--all", outPath, "-o", outPath
           ])
-            Err e => buildErr ("error: could not run wasm-tools strip: " ++ e)
-            Ok (0, _, _) => buildOk "built \{inputAbs} -> \{outPath}"
-            Ok (_, _, stripErr) =>
-              buildErr
-                "error: wasm-tools strip failed on \{outPath}\n\{stripErr}"
-        Ok (_, _, valErr) =>
-          buildErr "error: wasm-tools validate rejected \{outPath}\n\{valErr}"
-    Ok (_, _, parseErr) =>
-      buildErr
-        "error: wasm-tools parse failed assembling \{inputAbs}\n\{parseErr}"
+            Err e =>
+              buildErr "error: wasm-tools strip failed on \{outPath}\n\{e}"
+            Ok _ => buildOk "built \{inputAbs} -> \{outPath}"
 -- EMIT STEP.  Two paths, selected by the MEDAKA_EMITTER env var:
 --   * set   → invoke that NATIVE EMITTER BINARY directly (OCaml-free path — the
 --             clang(seed) binary from test/bootstrap_from_seed.sh).  Args are the
@@ -937,6 +945,10 @@ foreignLibErrGo cc tmpDir projRoot probeC ((name, dir) :: rest) =
   match runCommand cc ([probeC, "-o", probeOut] ++ libLinkFlags [(name, dir)])
     Err e =>
       "error: could not run clang (\{cc}) to check foreign library '\{name}': \{e}"
+    -- bucket-adjacent, not fail-open and not converted: a probe failure here
+    -- deliberately replaces the probe's own stderr with missingLibMsg, a
+    -- purpose-built diagnostic naming the library/manifest key/searched
+    -- dirs — intentional UX, not lost information.
     Ok (0, _, _) => foreignLibErrGo cc tmpDir projRoot probeC rest
     Ok (_, _, _) => missingLibMsg projRoot name dir
 
@@ -1080,6 +1092,8 @@ rtObjCacheKey cc rtC optFlag gcCflags tmpDir =
         "else cksum; fi; } | cut -d' ' -f1",
       ]
       match runCommand "sh" ["-c", script, "sh", cc, flagsPath, rtC]
+        -- fail-open-by-design: "" on any failure, per cachedRtObj's contract
+        -- above (caller skips the cache entirely on a miss).
         Ok (0, out, _) => stringTrim out
         _ => ""
 
@@ -1126,6 +1140,8 @@ rtObjUsable objPath =
     "printf '%s\\n' \"$syms\" | grep -qE ' T _?main$'\n",
   ]
   match runCommand "sh" ["-c", script, "sh", objPath]
+    -- fail-open-by-design: FAIL-OPEN IN BOTH DIRECTIONS, per the comment
+    -- above (no `nm` -> accept; `nm` finds no `main` -> reject+self-repair).
     Ok (0, _, _) => True
     _ => False
 
@@ -1142,7 +1158,13 @@ populateRtObj : String ->
   <IO> String
 populateRtObj cc rtC optFlag gcCflags dir objPath =
   match runCommand "mkdir" ["-p", dir]
+    -- fail-open-by-design (all 4 arms below): "" on any failure, per
+    -- cachedRtObj's contract above (caller skips the cache entirely and
+    -- compiles medaka_rt.c inline instead).
+
+    -- fail-open-by-design: mkdir failure -> "".
     Ok (0, _, _) => match runCommand "mktemp" [joinPath dir "rtobj_XXXXXX"]
+      -- fail-open-by-design: mktemp failure -> "".
       Ok (0, tOut, _) =>
         let tmpObj = stringTrim tOut
         if tmpObj == "" then
@@ -1154,7 +1176,9 @@ populateRtObj cc rtC optFlag gcCflags dir objPath =
               ++ gcCflags
               ++ ["-c", rtC, "-o", tmpObj]
           match runCommand cc ccArgs
+            -- fail-open-by-design: compile failure -> "".
             Ok (0, _, _) => match runCommand "mv" ["-f", tmpObj, objPath]
+              -- fail-open-by-design: mv failure -> "".
               Ok (0, _, _) => objPath
               _ =>
                 let _ = removeFile tmpObj
@@ -1292,14 +1316,12 @@ clangLinkTimed cc rtC llPath outPath inputAbs tmpDir libFlags perfOn tLink0 =
       -- ONCE, after the clang child exits, without duplicating the row across three
       -- result arms.  Medaka is strict, so this runs clang exactly where the
       -- `match` used to.
-      let ccRes = runCommand cc clangArgs
+      let ccRes = runCommandOk cc clangArgs
       let tClang = now ()
       let _ = emitPhase perfOn "clang" (tClang - tRtObj) inputAbs
       match ccRes
-        Err e => buildErr "error: could not run clang (\{cc}): \{e}"
-        Ok (0, _, _) => buildOk "built \{inputAbs} -> \{outPath}"
-        Ok (_, _, ccErr) =>
-          buildErr "error: clang failed linking \{inputAbs}\n\{ccErr}"
+        Err e => buildErr "error: clang failed linking \{inputAbs}\n\{e}"
+        Ok _ => buildOk "built \{inputAbs} -> \{outPath}"
 
 -- ---- the prelude object (issue #118) ---------------------------------------
 -- MEDAKA_PRELUDE_OBJ, honoured only when it names a file that exists (same
@@ -1406,17 +1428,16 @@ emitPreludeObjIn cc root medaka outObjPath tmpDir = match detectGC cc tmpDir
                       ++ gcSectionsCflags
                       ++ gcCflags
                       ++ ["-c", llPath, "-o", outObjPath]
-                  match runCommand cc ccArgs
-                    Err e => buildErr "error: could not run clang (\{cc}): \{e}"
-                    Ok (0, _, _) =>
+                  match runCommandOk cc ccArgs
+                    Err e =>
+                      buildErr
+                        "error: clang failed compiling the prelude object\n\{e}"
+                    Ok _ =>
                       withBuildNotes
                         None
                         emitErr
                         []
                         (buildOk "compiled prelude object -> \{outObjPath}")
-                    Ok (_, _, ccErr) =>
-                      buildErr
-                        "error: clang failed compiling the prelude object\n\{ccErr}"
 
 -- ---- precompile the C runtime object (`medaka build --emit-rt-obj <path>`) ----
 -- Compile runtime/medaka_rt.c to a standalone object with EXACTLY the flags
@@ -1459,10 +1480,8 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
             ++ gcSectionsCflags
             ++ gcCflags
             ++ ["-c", rtC, "-o", outObjPath]
-        match runCommand cc ccArgs
-          Err e => buildErr "error: could not run clang (\{cc}): \{e}"
-          Ok (0, _, _) => buildOk "compiled runtime object -> \{outObjPath}"
-          Ok (_, _, ccErr) =>
-            buildErr "error: clang failed compiling runtime object\n\{ccErr}"
+        match runCommandOk cc ccArgs
+          Err e => buildErr "error: clang failed compiling runtime object\n\{e}"
+          Ok _ => buildOk "compiled runtime object -> \{outObjPath}"
     let _ = cleanupTempDir tmpDir
     res

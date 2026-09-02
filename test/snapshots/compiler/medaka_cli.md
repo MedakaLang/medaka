@@ -1,5 +1,5 @@
 # META
-source_lines=4899
+source_lines=4901
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/medaka_cli.mdk — the native `medaka` CLI dispatcher (Phase C
@@ -350,6 +350,8 @@ liveSourceFingerprint root =
     " | cut -d' ' -f1"
   ]
   match runCommand "sh" ["-c", script]
+    -- fail-open-by-design: any failure (no perl, no hash tool, spawn error)
+    -- reports None, per the comment above ("the check silently skips").
     Ok (0, out, _) =>
       let h = stringTrim out
       if h == "" then None else Some h
