@@ -989,7 +989,7 @@ renderEntry sectioned entries (DocEntry name sig doc kind _) =
     _ => ""
   let rendered = renderDocProse doc
   let docBlock = if rendered == "" then "" else "\n" ++ rendered ++ "\n"
-  "\{header}\{sigBlock}\{instances}\{docBlock}\n"
+  "\{header}\{sigBlock}\{docBlock}\{instances}\n"
 
 -- Every impl entry on the page whose head type constructor is `tyName`.
 instancesOf : String -> List DocEntry -> List DocEntry

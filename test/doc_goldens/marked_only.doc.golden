@@ -34,9 +34,9 @@ data Wrap
   = Wrap Int
 ```
 
-Instances: `Eq`, `Debug`, [`Ord`](#ord-wrap), `Display`
-
 A wrapper. Its undocumented instances are listed under it.
+
+Instances: `Eq`, `Debug`, [`Ord`](#ord-wrap), `Display`
 
 ## Instances
 

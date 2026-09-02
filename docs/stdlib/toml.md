@@ -19,9 +19,9 @@ data Toml
   = Toml (List (String, TomlValue))
 ```
 
-Instances: `Eq`, `Debug`, [`Display`](#display-toml)
-
 A parsed TOML document: a flat list of (qualifiedKey, value) pairs.
+
+Instances: `Eq`, `Debug`, [`Display`](#display-toml)
 
 ## `parse`
 

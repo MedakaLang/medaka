@@ -336,7 +336,7 @@ toolchain = ["wasm-tools", "node>=24"]
 [[gate]]
 name = "sqlite/test/select_oracle"
 area = "engines"
-shard = "gates_2"
+shard = "gates_6"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -507,7 +507,7 @@ toolchain = ["wasm-tools", "node>=24"]
 [[gate]]
 name = "pds/test/constant_time_public_key"
 area = "engines"
-shard = "gates_2"
+shard = "gates_6"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -1509,7 +1509,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_check_batch"
 area = "types"
-shard = "gates_2"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1537,7 +1537,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_check_json"
 area = "types"
-shard = "gates_2"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1565,7 +1565,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_check_modules"
 area = "types"
-shard = "gates_7"
+shard = "gates_8"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1593,7 +1593,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_check"
 area = "types"
-shard = "gates_2"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1761,7 +1761,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_diagnostics"
 area = "types"
-shard = "gates_2"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1969,6 +1969,20 @@ corpus = ["test/error_quality_fixtures"]
 toolchain = []
 
 [[gate]]
+name = "diff_compiler_error_quality_baseline"
+area = "diagnostics"
+shard = "gates_2"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+run = "test/diff_compiler_error_quality_baseline.sh"
+oracles = []
+sources = ["compiler/frontend/*", "compiler/types/*", "compiler/eval/*", "compiler/backend/*", "compiler/driver/diagnostics.mdk", "test/error_quality_fixtures/capture.sh", "test/diff_compiler_error_quality_baseline.sh"]
+corpus = ["test/error_quality_fixtures"]
+toolchain = []
+
+[[gate]]
 name = "diff_compiler_eval_list_batch"
 area = "eval"
 shard = "gates_8"
@@ -2027,7 +2041,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_eval_run_batch"
 area = "eval"
-shard = "gates_7"
+shard = "gates_8"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2139,7 +2153,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_flat_vs_onemodule"
 area = "infra"
-shard = "gates_2"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2531,7 +2545,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_mcp"
 area = "tools"
-shard = "gates_2"
+shard = "gates_8"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -2559,7 +2573,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_origin_agreement"
 area = "infra"
-shard = "gates_2"
+shard = "gates_8"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2937,7 +2951,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_snapshot_bless"
 area = "frontend"
-shard = "gates_7"
+shard = "gates_8"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3105,7 +3119,7 @@ toolchain = ["clang", "valgrind"]
 [[gate]]
 name = "diff_compiler_test_native"
 area = "infra"
-shard = "gates_6"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"

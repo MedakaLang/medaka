@@ -7,11 +7,11 @@ data FileStat
   = FileStat { size : Int, isDir : Bool, isFile : Bool, mtime : Float }
 ```
 
-Instances: `Eq`, `Debug`
-
 The metadata `statFile` (stat(2)) returns for a path:
 `size` in bytes, `isDir`/`isFile` type flags, and `mtime` (modification
 time, seconds since the Unix epoch).
+
+Instances: `Eq`, `Debug`
 
 ## `stat`
 

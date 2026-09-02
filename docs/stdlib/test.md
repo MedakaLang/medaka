@@ -8,9 +8,9 @@ data Expectation
   | Fail String
 ```
 
-Instances: `Eq`, `Debug`
-
 The result of a single test expectation.
+
+Instances: `Eq`, `Debug`
 
 ## `pass`
 
