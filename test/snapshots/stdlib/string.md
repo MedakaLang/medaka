@@ -1,67 +1,44 @@
 # META
-source_lines=753
+source_lines=773
 stages=DESUGAR,MARK
 # SOURCE
--- string.mdk — operations on String and Char
--- See STDLIB.md (Module 3) for the full implementation plan.
---
--- Design notes
--- ────────────
--- String is an immutable sequence of Unicode codepoints (scalar values),
--- UTF-8 backed; Char is one codepoint.  This module is a thin Medaka layer
--- over the kernel externs in stdlib/runtime.mdk.
---
--- Performance posture (Medaka is a *practical* functional language): under the
--- hood we favour what the machine likes — contiguous `Array Char` with O(1)
--- indexing and the direct string externs (`stringSlice`/`stringConcat`/
--- `stringCompare`/`stringLength`) — over a `List Char` of cons cells.  Three
--- tiers, fastest first:
+{- | Operations on `String` and `Char`.
+
+   A string is an immutable sequence of Unicode codepoints, and a `Char` is
+   one codepoint. Positions and lengths count codepoints, not bytes and not
+   grapheme clusters. Character classification and case mapping are ASCII
+   only: a non-ASCII character is never a letter, digit, or space to these
+   functions, and passes through `toUpper` and `toLower` unchanged.
+
+   `length` and `isEmpty` are not defined here, to leave the `Foldable`
+   methods of those names unshadowed. Use `stringLength s` and `s == ""`.
+   `intToString` renders an integer. -}
+
+-- Performance posture: under the hood this module favors what the machine
+-- likes, a contiguous `Array Char` with O(1) indexing and the direct string
+-- externs (`stringSlice`/`stringConcat`/`stringCompare`/`stringLength`), over
+-- a `List Char` of cons cells.  Three tiers, fastest first:
 --   1. operate on the String directly (no char materialization): `take`/`drop`/
---      `sliceClamped`, `startsWith`/`endsWith` (slice + `==`), `concat`/`join`/`repeat`,
---      and substring search via the host `stringIndexOf` — `indexOf`, and
---      `contains`/`split`/`replace*` derived from it;
+--      `sliceClamped`, `startsWith`/`endsWith` (slice + `==`), `concat`/`join`/
+--      `repeat`, and substring search via the host `stringIndexOf` (`indexOf`,
+--      and `contains`/`split`/`replace*` derived from it);
 --   2. decode once to `Array Char`, scan by index, rebuild via `stringFromChars`
 --      or carve out `stringSlice`s: `trim*`, `words`, `reverse`, `capitalize`,
 --      `toInt`;
 --   3. `List Char` is avoided internally.
--- The user-facing signatures stay conventional; the array/index machinery is an
--- implementation detail.
 --
--- Naming choices (this file holds *both* Char and String utilities, so some
--- short names would collide):
---   • `toUpper`/`toLower` here are the *String* versions — ASCII-only
---     byte-wise case mapping (issue #417): "Straße" → "STRAßE", not
---     "STRASSE".  For a single Char, call the kernel externs
---     `charToUpper`/`charToLower` (Char → Char, also ASCII-only — identity on
---     any non-ASCII codepoint).
---   • `length`/`isEmpty` are *not* defined: they'd clash with the `Foldable`
---     methods of the same name.  Use the global `stringLength`, or `s == ""`.
---   • Integer rendering is the global `intToString` (clashes with `Num.fromInt`
---     otherwise); `toInt`/`toFloat` parse, `stringToFloat` is the float extern.
---
--- Containers: the collection functions (`split`/`words`/`lines`/`concat`/
--- `join`/`unlines`/`unwords`) are `List`-typed — the conventional, pattern-
--- matchable form.  `toChars` is the one `Array` function (element decomposition,
--- where indexing/perf matter).  No List/Array duals: `List → Array` is the
--- global `arrayFromList` (no import) and `Array → List` is `Array.toList`, so a
--- caller who prefers the other container converts in one call rather than us
--- doubling the API surface.
+-- The collection functions (`split`/`words`/`lines`/`concat`/`join`/`unlines`/
+-- `unwords`) are `List`-typed; `toChars` is the one `Array` function.  No
+-- List/Array duals: `arrayFromList` and `array.toList` convert in one call.
 
 import core.{Eq, Ord, Debug, Foldable, Mappable, Option, Ordering}
 
--- ── Rendering ─────────────────────────────────────────────────────────────
--- `Debug String` and `Debug Char` now live in the core prelude (`core.mdk`)
--- alongside the other primitive `Debug` impls, so `debug`-ing a String/Char
--- resolves without importing `string` (Phase 92).  Both render a quoted,
--- escaped, round-trippable literal — `debug "hi"` is `"hi"`, `debug 'a'` is `'a'`
--- — distinct from `println`, which emits the raw characters.
+-- `Debug String`/`Debug Char` and the other primitive instances live in the
+-- prelude (`core.mdk`), so they resolve without importing `string`.
 
--- ── Char operations ─────────────────────────────────────────────────────────
--- ASCII-exact predicates (isDigit/fromDigit/toDigit) compute on the
--- codepoint directly; the classification wrappers below (isAlpha/isSpace/…)
--- wrap ASCII-only kernel externs (issue #417 — no Unicode tables exist).
+-- # Characters
 
-{- | True for the ASCII decimal digits `'0'`..`'9'`.
+{- | Whether `c` is an ASCII decimal digit, `'0'` to `'9'`.
 
    > isDigit '7'
    True
@@ -71,48 +48,50 @@ export
 isDigit : Char -> Bool
 isDigit c = charCode c >= 48 && charCode c <= 57
 
--- | True for any Unicode letter.
+-- | Whether `c` is an ASCII letter.
 export
 isAlpha : Char -> Bool
 isAlpha c = charIsAlpha c
 
--- | True for a Unicode letter or an ASCII digit.
+-- | Whether `c` is an ASCII letter or digit.
 export
 isAlphaNum : Char -> Bool
 isAlphaNum c = charIsAlpha c || isDigit c
 
--- | True for any Unicode whitespace.
+-- | Whether `c` is ASCII whitespace.
 export
 isSpace : Char -> Bool
 isSpace c = charIsSpace c
 
--- | True for an uppercase letter.
+-- | Whether `c` is an ASCII uppercase letter.
 export
 isUpper : Char -> Bool
 isUpper c = charIsUpper c
 
--- | True for a lowercase letter.
+-- | Whether `c` is an ASCII lowercase letter.
 export
 isLower : Char -> Bool
 isLower c = charIsLower c
 
--- | True for a Unicode punctuation character.
+-- | Whether `c` is ASCII punctuation.
 export
 isPunct : Char -> Bool
 isPunct c = charIsPunct c
 
-{- | `'0'`..`'9'` → `Some 0`..`Some 9`, `'a'`..`'f'`/`'A'`..`'F'` →
-   `Some 10`..`Some 15`, anything else `None`.
+{- | The value of a hexadecimal digit: `'0'` to `'9'` give `0` to `9`, and
+   `'a'` to `'f'` or `'A'` to `'F'` give `10` to `15`. `None` for any other
+   character.
 
    > fromDigit '7'
    Some 7
    > fromDigit 'f'
-   Some 15
-   > fromDigit 'z'
-   None -}
+   Some 15 -}
 export
 fromDigit : Char -> Option Int
 fromDigit c = digitVal (charCode c)
+
+-- > fromDigit 'z'
+-- None
 
 digitVal : Int -> Option Int
 digitVal n
@@ -121,14 +100,13 @@ digitVal n
   | n >= 65 && n <= 70 = Some (n - 55)
   | otherwise = None
 
-{- | Inverse of `fromDigit` for `0`..`15` (lowercase hex); `None` otherwise.
+{- | The lowercase hexadecimal digit for a value from `0` to `15`, or `None`
+   outside that range. The inverse of `fromDigit`.
 
    > toDigit 7
    Some '7'
    > toDigit 12
-   Some 'c'
-   > toDigit 42
-   None -}
+   Some 'c' -}
 export
 toDigit : Int -> Option Char
 toDigit n
@@ -136,16 +114,19 @@ toDigit n
   | n >= 10 && n <= 15 = charFromCode (n + 87)
   | otherwise = None
 
--- ── Conversion ──────────────────────────────────────────────────────────────
+-- > toDigit 42
+-- None
 
--- | A one-character string.
+-- # Conversion
+
+-- | A string holding one character.
 export
 fromChar : Char -> String
 fromChar c = charToStr c
 
-{- | The codepoints of a string as an array (not grapheme clusters).  Returns
-   the native `Array Char` — call `Array.toList` if you want a `List Char`, so
-   the list conversion is opt-in rather than forced.
+{- | The codepoints of a string, as an array.
+
+   `array.toList` turns the result into a `List Char` when one is needed.
 
    > arrayLength (toChars "héllo→")
    6 -}
@@ -153,8 +134,10 @@ export
 toChars : String -> Array Char
 toChars s = stringToChars s
 
-{- | Build a string from a `List Char`.  For an `Array Char` (e.g. the result
-   of `toChars`), use the kernel `stringFromChars` directly.
+{- | A string built from a list of characters.
+
+   For an `Array Char`, such as the result of `toChars`, use
+   `stringFromChars`.
 
    > fromChars ['h', 'i']
    "hi" -}
@@ -162,9 +145,10 @@ export
 fromChars : List Char -> String
 fromChars cs = stringFromChars (arrayFromList cs)
 
-{- | The raw UTF-8 bytes of a string as an `Array Int` (each 0..255), in order.
-   This is the encoded byte stream, NOT the codepoints — a multi-byte codepoint
-   contributes several bytes (`toChars` gives codepoints instead).
+{- | The UTF-8 encoding of a string, one byte (`0` to `255`) per element.
+
+   A codepoint outside ASCII contributes several bytes; `toChars` gives the
+   codepoints instead.
 
    > arrayLength (toUtf8 "héllo")
    6 -}
@@ -172,8 +156,10 @@ export
 toUtf8 : String -> Array Int
 toUtf8 s = stringToUtf8Bytes s
 
-{- | Rebuild a string from a UTF-8 `Array Int` byte stream (low 8 bits of each).
-   The inverse of `toUtf8` on valid UTF-8: `fromUtf8 (toUtf8 s) == s`.
+{- | The string encoded by an array of UTF-8 bytes.
+
+   Only the low eight bits of each element are used. On valid UTF-8,
+   `fromUtf8 (toUtf8 s)` is `s`.
 
    > fromUtf8 (toUtf8 "héllo→")
    "héllo→" -}
@@ -181,7 +167,10 @@ export
 fromUtf8 : Array Int -> String
 fromUtf8 bytes = stringFromUtf8Bytes bytes
 
-{- | The number of UTF-8 bytes a string encodes to (>= its codepoint count).
+{- | The number of bytes in the string's UTF-8 encoding.
+
+   At least the codepoint count, and larger when the string has non-ASCII
+   characters.
 
    > utf8ByteLength "héllo"
    6 -}
@@ -189,32 +178,34 @@ export
 utf8ByteLength : String -> Int
 utf8ByteLength s = arrayLength (toUtf8 s)
 
-{- | Parse a decimal integer, an optional leading `-`/`+` allowed; `None` on
-   any other character, the empty string, or a magnitude outside the `Int`
-   range (`intMinBound`..`intMaxBound`) — out-of-range input is rejected
-   rather than silently wrapping.
+{- | The integer written in decimal in `s`, with an optional leading `-` or
+   `+`.
+
+   `None` when `s` is empty, contains any other character, or names a value
+   outside the `Int` range.
 
    > toInt "42"
    Some 42
-   > toInt "-7"
-   Some -7
    > toInt "12x"
-   None
-   > toInt "4611686018427387903"
-   Some 4611686018427387903
-   > toInt "4611686018427387904"
-   None
-   > toInt "-4611686018427387904"
-   Some -4611686018427387904
-   > toInt "-4611686018427387905"
-   None
-   > toInt "99999999999999999999"
    None -}
 export
 toInt : String -> Option Int
 toInt s =
   let a = toChars s
   parseInt a (arrayLength a)
+
+-- > toInt "-7"
+-- Some -7
+-- > toInt "4611686018427387903"
+-- Some 4611686018427387903
+-- > toInt "4611686018427387904"
+-- None
+-- > toInt "-4611686018427387904"
+-- Some -4611686018427387904
+-- > toInt "-4611686018427387905"
+-- None
+-- > toInt "99999999999999999999"
+-- None
 
 parseInt : Array Char -> Int -> Option Int
 parseInt a n = if n == 0 then None else parseSign a n (arrayGetUnsafe 0 a)
@@ -261,7 +252,8 @@ finishInt seen acc negative =
   else
     Some (0 - acc)
 
-{- | Parse a decimal float; `None` on failure.
+{- | The floating-point number written in `s`, or `None` when `s` is not
+   one.
 
    > toFloat "3.5"
    Some 3.5
@@ -271,11 +263,9 @@ export
 toFloat : String -> Option Float
 toFloat s = stringToFloat s
 
--- ── Inspection ──────────────────────────────────────────────────────────────
--- `length`/`isEmpty` intentionally omitted (see header) — use `stringLength`.
+-- # Searching
 
-{- | True when `s` begins with `prefix`.  Tier 1: a slice + compare, no char
-   decoding.
+{- | Whether `s` begins with `prefix`.
 
    > startsWith "he" "hello"
    True
@@ -285,7 +275,7 @@ export
 startsWith : String -> String -> Bool
 startsWith prefix s = stringSlice 0 (stringLength prefix) s == prefix
 
-{- | True when `s` ends with `suffix`.
+{- | Whether `s` ends with `suffix`.
 
    > endsWith "lo" "hello"
    True -}
@@ -295,18 +285,15 @@ endsWith suffix s =
   stringSlice (stringLength s - stringLength suffix) (stringLength s) s ==
     suffix
 
-{- | Remove `prefix` from the front of `s`, or `None` when `s` doesn't start
-   with it.  The `Option` is the point: unlike `drop (length prefix)` it tells
-   you whether the prefix was actually there.
+{- | `s` without its leading `prefix`, or `None` when `s` does not begin
+   with it.
+
+   Unlike `drop`, the result says whether the prefix was there.
 
    > stripPrefix "he" "hello"
    Some "llo"
    > stripPrefix "xy" "hello"
-   None
-   > stripPrefix "" "hi"
-   Some "hi"
-   > stripPrefix "hello" "hello"
-   Some "" -}
+   None -}
 export
 stripPrefix : String -> String -> Option String
 stripPrefix prefix s =
@@ -315,15 +302,18 @@ stripPrefix prefix s =
   else
     None
 
-{- | Remove `suffix` from the end of `s`, or `None` when `s` doesn't end with
+-- > stripPrefix "" "hi"
+-- Some "hi"
+-- > stripPrefix "hello" "hello"
+-- Some ""
+
+{- | `s` without its trailing `suffix`, or `None` when `s` does not end with
    it.
 
    > stripSuffix "lo" "hello"
    Some "hel"
    > stripSuffix "xy" "hello"
-   None
-   > stripSuffix "" "hi"
-   Some "hi" -}
+   None -}
 export
 stripSuffix : String -> String -> Option String
 stripSuffix suffix s =
@@ -332,8 +322,12 @@ stripSuffix suffix s =
   else
     None
 
-{- | True when `needle` occurs anywhere in `haystack` (the empty string is
-   contained in everything).
+-- > stripSuffix "" "hi"
+-- Some "hi"
+
+{- | Whether `needle` occurs anywhere in `haystack`.
+
+   The empty string occurs in every string.
 
    > contains "ell" "hello"
    True
@@ -343,9 +337,8 @@ export
 contains : String -> String -> Bool
 contains needle haystack = isSome (indexOf needle haystack)
 
-{- | Codepoint index of the first occurrence of `needle` in `haystack`, or
-   `None`.  Host-backed byte search (`stringIndexOf`) reported as a codepoint
-   index — no interpreted per-char scan.
+{- | The position of the first occurrence of `needle` in `haystack`, or
+   `None`.
 
    > indexOf "lo" "hello"
    Some 3
@@ -355,9 +348,11 @@ export
 indexOf : String -> String -> Option Int
 indexOf needle haystack = stringIndexOf needle haystack
 
-{- | Codepoint index of the *last* occurrence of `needle` in `haystack`, or
-   `None`.  Walks forward from each hit (advancing one codepoint so overlapping
-   matches still count), keeping the latest.
+{- | The position of the last occurrence of `needle` in `haystack`, or
+   `None`.
+
+   Occurrences may overlap. An empty needle is found at the end of the
+   string.
 
    > lastIndexOf "l" "hello"
    Some 3
@@ -369,13 +364,16 @@ lastIndexOf needle haystack
   | needle == "" = Some (stringLength haystack)
   | otherwise = lastIndexOfGo needle haystack 0 None
 
+-- Walks forward from each hit, advancing one codepoint so overlapping
+-- matches still count, and keeps the latest.
 lastIndexOfGo : String -> String -> Int -> Option Int -> Option Int
 lastIndexOfGo needle haystack from acc = match indexOf needle (stringSlice from (stringLength haystack) haystack)
   None => acc
   Some i => lastIndexOfGo needle haystack (from + i + 1) (Some (from + i))
 
-{- | Number of non-overlapping occurrences of `needle` in `haystack` (`0` for
-   the empty needle).
+{- | The number of non-overlapping occurrences of `needle` in `haystack`.
+
+   `0` for an empty needle.
 
    > countOccurrences "l" "hello"
    2
@@ -392,14 +390,17 @@ countGo needle nlen haystack acc = match indexOf needle haystack
   None => acc
   Some i => countGo needle nlen (stringSlice (i + nlen) (stringLength haystack) haystack) (acc + 1)
 
--- ── Transformation ──────────────────────────────────────────────────────────
+-- # Building
 
--- | Prepend a prefix; `flip` of `Semigroup.append`.
+{- | `pre` followed by `s`.
+
+   > prepend "un" "do"
+   "undo" -}
 export
 prepend : String -> String -> String
 prepend pre s = pre ++ s
 
-{- | Concatenate all strings in order.
+{- | The strings joined end to end.
 
    > concat ["a", "bc", "d"]
    "abcd" -}
@@ -407,7 +408,7 @@ export
 concat : List String -> String
 concat parts = stringConcat parts
 
-{- | Concatenate with `sep` between each adjacent pair.
+{- | The strings joined with `sep` between each adjacent pair.
 
    > join ", " ["a", "b", "c"]
    "a, b, c" -}
@@ -420,31 +421,28 @@ intersperse _ [] = []
 intersperse _ (x::[]) = [x]
 intersperse sep (x::xs) = x :: sep :: intersperse sep xs
 
-{- | Repeat the string `n` times (empty when `n <= 0`).
+{- | `s` repeated `n` times.
 
-   Built by doubling (`repeatDbl`) rather than one recursive call per copy,
-   so the interpreted call depth is `O(log n)` instead of `O(n)` — a
-   linear-depth version hits the evaluator's call-depth cap around n ≈ 25000
-   (#1728).
+   Empty when `n <= 0`. Safe for large `n`: the call depth grows with
+   `log n`, not `n`.
 
    > repeat 3 "ab"
-   "ababab"
-
-   > repeat 0 "ab"
-   ""
-
-   > repeat (0 - 1) "ab"
-   ""
-
-   > stringLength (repeat 30000 "x")
-   30000 -}
+   "ababab" -}
 export
 repeat : Int -> String -> String
 repeat n s = repeatDbl n s
 
--- | `k <= 0` bottoms out at `""`; otherwise halve `k`, double the halved
---   result, and append one more `s` when `k` is odd. `k / 2` shrinks the
---   argument geometrically, so the call chain is `O(log k)` deep.
+-- > repeat 0 "ab"
+-- ""
+-- > repeat (0 - 1) "ab"
+-- ""
+-- > stringLength (repeat 30000 "x")
+-- 30000
+
+-- `k <= 0` bottoms out at `""`; otherwise halve `k`, double the halved
+-- result, and append one more `s` when `k` is odd.  `k / 2` shrinks the
+-- argument geometrically, so the call chain is `O(log k)` deep; a linear
+-- version hit the evaluator's call-depth cap around n ≈ 25000.
 repeatDbl : Int -> String -> String
 repeatDbl k s =
   if k <= 0 then ""
@@ -452,14 +450,15 @@ repeatDbl k s =
     let h = repeatDbl (k / 2) s
     if isEven k then h ++ h else h ++ h ++ s
 
--- | A list of `n` copies of `x` (empty when `n <= 0`). Still used by the
---   padding helpers below, whose `n` is a display width (small in
---   practice) rather than a caller-controlled repeat count — #1728 scoped
---   the doubling fix to `repeat` itself.
+-- A list of `n` copies of `x` (empty when `n <= 0`).  Used by the padding
+-- helpers below, whose `n` is a display width (small in practice) rather
+-- than a caller-controlled repeat count.
 replic : Int -> a -> List a
 replic n x = if n <= 0 then [] else x :: replic (n - 1) x
 
-{- | Reverse the codepoints of a string.
+-- # Transformation
+
+{- | The string with its characters in reverse order.
 
    > reverse "abc"
    "cba" -}
@@ -472,22 +471,27 @@ reverse s =
 reverseArr : Array Char -> Int -> Array Char
 reverseArr a n = arrayMakeWith n (i => arrayGetUnsafe (n - 1 - i) a)
 
-{- | Strip leading whitespace.  Finds the first non-space codepoint index, then
-   slices — no rebuild. -}
+{- | The string without its leading whitespace.
+
+   > trimLeft "  hi  "
+   "hi  " -}
 export
 trimLeft : String -> String
 trimLeft s =
   let a = toChars s
   stringSlice (firstNonSpace a 0 (arrayLength a)) (stringLength s) s
 
--- | Strip trailing whitespace.
+{- | The string without its trailing whitespace.
+
+   > trimRight "  hi  "
+   "  hi" -}
 export
 trimRight : String -> String
 trimRight s =
   let a = toChars s
   stringSlice 0 (lastNonSpace a (arrayLength a - 1) + 1) s
 
-{- | Strip whitespace from both ends.
+{- | The string without leading or trailing whitespace.
 
    > trim "  hi  "
    "hi" -}
@@ -516,9 +520,9 @@ firstSpace a i n
   | isSpace (arrayGetUnsafe i a) = i
   | otherwise = firstSpace a (i + 1) n
 
-{- | Uppercase every character. **ASCII-only** (issue #417): a non-ASCII byte
-   passes through unchanged, so this is byte-wise `'a'..'z'` mapping, not
-   Unicode case folding — it never expands 1→N (`ß` stays `ß`, not `SS`).
+{- | The string with every ASCII letter in uppercase.
+
+   Other characters are unchanged, so `ß` stays `ß`.
 
    > toUpper "Straße"
    "STRAßE" -}
@@ -526,8 +530,9 @@ export
 toUpper : String -> String
 toUpper s = stringToUpper s
 
-{- | Lowercase every character. **ASCII-only** (issue #417): a non-ASCII byte
-   passes through unchanged.
+{- | The string with every ASCII letter in lowercase.
+
+   Other characters are unchanged.
 
    > toLower "HÉLLO"
    "hÉllo" -}
@@ -535,7 +540,7 @@ export
 toLower : String -> String
 toLower s = stringToLower s
 
-{- | Uppercase the first character, leave the rest alone.
+{- | The string with its first character in uppercase.
 
    > capitalize "hello"
    "Hello" -}
@@ -548,8 +553,9 @@ capitalize s =
   else
     charToStr (charToUpper (arrayGetUnsafe 0 a)) ++ stringSlice 1 (stringLength s) s
 
-{- | Replace the first occurrence of `old` with `new`; unchanged if absent or
-   if `old` is empty.
+{- | The string with the first occurrence of `old` replaced by `new`.
+
+   Unchanged when `old` is absent or empty.
 
    > replace "l" "L" "hello"
    "heLlo" -}
@@ -567,7 +573,10 @@ spliceAt i oldLen new s = stringSlice 0 i s
   ++ new
   ++ stringSlice (i + oldLen) (stringLength s) s
 
-{- | Replace every non-overlapping occurrence of `old` with `new`.
+{- | The string with every non-overlapping occurrence of `old` replaced by
+   `new`.
+
+   Unchanged when `old` is empty.
 
    > replaceAll "l" "L" "hello"
    "heLLo" -}
@@ -586,10 +595,12 @@ replaceAllGo oldLen old new s = match indexOf old s
     ++ new
     ++ replaceAllGo oldLen old new (stringSlice (i + oldLen) (stringLength s) s)
 
--- ── Slicing and splitting ────────────────────────────────────────────────────
+-- # Slicing and splitting
 
-{- | Substring `[lo, hi)` by codepoint, clamped to the string bounds (never
-   panics; use `s.[lo..hi]` to panic on OOB instead).
+{- | The characters at positions `[lo, hi)`.
+
+   Positions are clamped to the string, so an out-of-range slice is shorter
+   rather than a panic. `s.[lo..hi]` is the panicking form.
 
    > sliceClamped 1 4 "hello"
    "ell" -}
@@ -597,7 +608,7 @@ export
 sliceClamped : Int -> Int -> String -> String
 sliceClamped lo hi s = stringSlice lo hi s
 
-{- | First `n` codepoints (fewer if shorter).
+{- | The first `n` characters, or the whole string when it is shorter.
 
    > take 3 "hello"
    "hel" -}
@@ -605,7 +616,7 @@ export
 take : Int -> String -> String
 take n s = stringSlice 0 n s
 
-{- | Drop the first `n` codepoints.
+{- | Everything after the first `n` characters.
 
    > drop 3 "hello"
    "lo" -}
@@ -613,7 +624,7 @@ export
 drop : Int -> String -> String
 drop n s = stringSlice n (stringLength s) s
 
-{- | `(take n s, drop n s)`.
+{- | The first `n` characters, and the rest.
 
    > splitAt 2 "hello"
    ("he", "llo") -}
@@ -621,7 +632,10 @@ export
 splitAt : Int -> String -> (String, String)
 splitAt n s = (take n s, drop n s)
 
-{- | Split on `sep`, dropping the separators.  An empty `sep` yields `[s]`.
+{- | The pieces of `s` between occurrences of `sep`, with the separators
+   removed.
+
+   An empty separator yields the whole string as the only piece.
 
    > split "," "a,b,c"
    ["a", "b", "c"]
@@ -636,7 +650,9 @@ splitGo sepLen sep s = match indexOf sep s
   None => [s]
   Some i => stringSlice 0 i s :: splitGo sepLen sep (stringSlice (i + sepLen) (stringLength s) s)
 
-{- | Split into lines on `\n`, also stripping a trailing `\r` (so `\r\n` works).
+{- | The lines of `s`, split on `\n`.
+
+   A `\r` before the `\n` is removed, so Windows line endings work too.
 
    > lines "a\nb\nc"
    ["a", "b", "c"] -}
@@ -644,12 +660,9 @@ export
 lines : String -> List String
 lines s = map stripCR (split nl s)
 
-{- | Drop one trailing `\r`, so a CRLF line reads as its content.  Idempotent
-   on a line that has none.
+{- | The line without one trailing `\r`.
 
-   The `string` function `io.stripCR` used to duplicate: a `String -> String`
-   transformation has no business in the IO module, so #2306 I-3 exported this
-   one and deleted that one.
+   Unchanged when there is none.
 
    > stripCR "ab\r"
    "ab"
@@ -663,8 +676,9 @@ stripCR line =
   else
     line
 
-{- | Split on runs of whitespace, dropping empty fields.  Each word is a
-   `stringSlice` of the original — no per-char rebuild.
+{- | The words of `s`: the runs of characters between whitespace.
+
+   Leading, trailing, and repeated whitespace produce no empty words.
 
    > words "  hello   world "
    ["hello", "world"] -}
@@ -686,7 +700,7 @@ wordsEmit : Array Char -> Int -> String -> Int -> Int -> List String
 wordsEmit a n s start e =
   stringSlice start e s :: wordsFrom a n s (firstNonSpace a e n)
 
-{- | Join with `\n` and append a trailing newline.
+{- | The lines joined with `\n`, with a newline after each one.
 
    > unlines ["a", "b"]
    "a\nb\n" -}
@@ -697,11 +711,11 @@ unlines parts = stringConcat (map addNL parts)
 addNL : String -> String
 addNL p = p ++ nl
 
-{- A single newline. -}
+-- A single newline.
 nl : String
 nl = "\n"
 
-{- | Join with single spaces.
+{- | The words joined with single spaces.
 
    > unwords ["a", "b", "c"]
    "a b c" -}
@@ -709,9 +723,11 @@ export
 unwords : List String -> String
 unwords parts = join " " parts
 
--- ── Padding ──────────────────────────────────────────────────────────────────
+-- # Padding
 
-{- | Left-pad with `c` up to total length `n` (unchanged if already `>= n`).
+{- | The string padded on the left with `c` to length `n`.
+
+   Unchanged when it is already at least `n` long.
 
    > padLeft 5 '.' "ab"
    "...ab" -}
@@ -723,7 +739,9 @@ padLeft n c s =
   else
     stringConcat (replic (n - stringLength s) (charToStr c)) ++ s
 
-{- | Right-pad with `c` up to total length `n`.
+{- | The string padded on the right with `c` to length `n`.
+
+   Unchanged when it is already at least `n` long.
 
    > padRight 5 '.' "ab"
    "ab..." -}
@@ -735,8 +753,10 @@ padRight n c s =
   else
     s ++ stringConcat (replic (n - stringLength s) (charToStr c))
 
-{- | Center the string in width `n`, padding with `c`; any odd extra goes on
-   the right.
+{- | The string centered in a field of width `n`, padded with `c`.
+
+   When the padding is odd, the extra character goes on the right.
+   Unchanged when the string is already at least `n` long.
 
    > center 5 '.' "ab"
    ".ab.." -}

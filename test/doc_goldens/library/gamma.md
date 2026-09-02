@@ -7,9 +7,9 @@ data Widget
   = Widget Int
 ```
 
-Instances: [`Sizeish`](#sizeish-widget)
-
 A tiny type declared HERE.
+
+Instances: [`Sizeish`](#sizeish-widget)
 
 ## `Sizeish`
 

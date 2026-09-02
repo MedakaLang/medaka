@@ -1,35 +1,31 @@
 # META
-source_lines=353
+source_lines=357
 stages=DESUGAR,MARK
 # SOURCE
-{- hash_map.mdk — a mutable hash table (Module 6).
+{- | A mutable hash table from keys to values.
 
-   See STDLIB.md (Module 6) for the plan.
+   `HashMap k v` gives `O(1)` average lookup, insertion, and deletion. The
+   writing operations, `setInPlace` and `deleteInPlace`, change the table in
+   place and return `Unit`; every other operation reads it. Iteration order
+   is unspecified. Use `map` instead when you want an immutable value or
+   ordered keys.
 
-   `HashMap k v` is a **mutable** hash table — separate chaining (each bucket a
-   `List (k, v)`) in an `Array` held by a `Ref` so it can be swapped on resize,
-   plus a `Ref Int` count. This is the *performance* counterpart to the
-   persistent ordered `Map` (map.mdk): O(1) average lookup/insert, but updates
-   mutate in place (untracked — no effect in the signature) rather than
-   returning a fresh map. Reach for `Map` when you want persistence/ordering;
-   reach for `HashMap` when you want raw speed and a single owner.
+   Keys need `Eq` and `Hashable`, and the two must agree: equal keys must
+   hash equally. `deriving (Hashable)` gives a key type an instance that
+   agrees with its derived `Eq`. -}
 
-   Keys hash via the `Hashable` typeclass method `hash`. It must agree with the
-   key's `Eq`, which holds for every structural `Eq` impl (all the built-ins) —
-   a *custom* `Eq` that isn't structural would break it, so don't key a
-   HashMap on such a type. A custom key type gets a structural impl from
-   `deriving (Hashable)` (#422); hand-write `impl Hashable T` only when the
-   derived fold is not what you want. A hash may be NEGATIVE (the fold wraps) —
-   `slotOf` masks the sign off before indexing, so that is safe (#416).
-   Iteration order is unspecified (hash order).
-
-   The mutating ops sequence mutation statements in block bodies. A conditional
-   mutation whose body is a multi-statement block (`deleteAt`) uses an **else-less
-   `if`** (Phases 118 & 122 — both the block branch and the missing `else`
-   survive `medaka fmt`), dropping the noisy `| otherwise = ()`. The rest stay as
-   **guards**: `maybeResize` (the fmt'd else-less form would be one over-long
-   line, since its single-application body can't soft-break) and the recursion
-   base-cases (`reinsertAll`, `collectBuckets`), where `| i >= n` reads best. -}
+-- Separate chaining: each bucket is a `List (k, v)` in an `Array` held by a
+-- `Ref` so it can be swapped on resize, plus a `Ref Int` count.  Mutation is
+-- untracked (no effect in the signature).  A hash may be NEGATIVE (the fold
+-- wraps); `slotOf` masks the sign off before indexing.
+--
+-- The mutating ops sequence mutation statements in block bodies.  A
+-- conditional mutation whose body is a multi-statement block (`deleteAt`)
+-- uses an else-less `if` (both the block branch and the missing `else`
+-- survive `medaka fmt`), dropping the noisy `| otherwise = ()`.  The rest stay
+-- as guards: `maybeResize` (the fmt'd else-less form would be one over-long
+-- line, since its single-application body can't soft-break) and the recursion
+-- base-cases (`reinsertAll`, `collectBuckets`), where `| i >= n` reads best.
 
 -- hash_map/hash_set share identical resize/rehash bodies over DISTINCT ADTs; consolidation needs a shared-core refactor (out of scope).
 -- lint-disable-file rule-duplicate-body
@@ -37,8 +33,8 @@ stages=DESUGAR,MARK
 import core.{Eq, Ord, Debug, Display, Option, Mappable, Hashable, Index}
 import list as L
 
-{- `HashMap buckets count`: `!buckets` is the bucket array (each slot a
-   chain), `!count` is the live entry count. Both are mutated in place. -}
+{- | The hash table type. Its fields are the bucket array and the entry
+   count, both mutable. -}
 public export data HashMap k v = HashMap (Ref (Array (List (k, v)))) (Ref Int)
 
 initialCapacity : Int
@@ -47,31 +43,56 @@ initialCapacity = 8
 {- Bucket index of a key at a given capacity (cap > 0). The `Hashable` contract
    requires only eq-agreement, NOT a non-negative hash, so a contract-compliant
    user impl may hand us any `Int` — and `%` on a negative dividend is negative,
-   which would index the bucket array out of bounds (issue #416: an OOB
-   `arrayGetUnsafe`). Clearing the sign bit maps every `Int`, `intMinBound`
-   included, into `[0, intMaxBound]` before the `%`. -}
+   which would index the bucket array out of bounds. Clearing the sign bit maps
+   every `Int`, `intMinBound` included, into `[0, intMaxBound]` before the `%`. -}
 slotOf : Hashable k => k -> Int -> Int
 slotOf key cap = bitAnd (hash key) intMaxBound % cap
 
--- ── Construction ────────────────────────────────────────────────────────
+-- # Construction
 
-{- | A fresh, empty hash table. Takes `Unit` (not a nullary value) so each call
-   allocates its own table rather than sharing one mutable cell. -}
+{- | A new, empty table.
+
+   Each call allocates its own table, which is why it takes `Unit`.
+
+   > size (new () : HashMap Int Int)
+   0 -}
 export
 new : Unit -> HashMap k v
 new _ = HashMap (Ref (arrayMake initialCapacity [])) (Ref 0)
 
--- ── Query (pure reads) ──────────────────────────────────────────────────
+{- | A table holding the pairs of an association list.
 
-{- | Number of entries. O(1).
+   When a key appears more than once, the later pair wins.
 
    > size (fromList [(1, 10), (2, 20), (1, 30)])
+   2 -}
+export
+fromList : (Eq k, Hashable k) => List (k, v) -> HashMap k v
+fromList pairs =
+  let m = new ()
+  insertAll pairs m
+  m
+
+-- > size (fromList [(1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6), (7, 7), (8, 8)])
+-- 8
+
+insertAll : (Eq k, Hashable k) => List (k, v) -> HashMap k v -> Unit
+insertAll [] _ = ()
+insertAll ((k, v)::rest) m =
+  setInPlace k v m
+  insertAll rest m
+
+-- # Query
+
+{- | The number of entries, in `O(1)`.
+
+   > size (fromList [(1, 10), (2, 20)])
    2 -}
 export
 size : HashMap k v -> Int
 size (HashMap _ count) = !count
 
-{- | `True` when there are no entries.
+{- | Whether the table has no entries.
 
    > isEmpty (new () : HashMap Int Int)
    True -}
@@ -85,7 +106,7 @@ bucketLookup key ((k, v)::rest)
   | key == k = Some v
   | otherwise = bucketLookup key rest
 
-{- | The value at a key, or `None`.
+{- | The value at `key`, or `None` when the key is absent.
 
    > get 2 (fromList [(1, 10), (2, 20)])
    Some 20
@@ -97,7 +118,7 @@ get key (HashMap buckets _) =
   let arr = !buckets
   bucketLookup key (arrayGetUnsafe (slotOf key (arrayLength arr)) arr)
 
-{- | `True` when the key is present.
+{- | Whether `key` is present.
 
    > has 2 (fromList [(1, 10), (2, 20)])
    True -}
@@ -105,7 +126,7 @@ export
 has : (Eq k, Hashable k) => k -> HashMap k v -> Bool
 has key m = isSome (get key m)
 
-{- | Value at a key, or a fallback.
+{- | The value at `key`, or `d` when the key is absent.
 
    > findWithDefault 0 9 (fromList [(1, 10)])
    0 -}
@@ -133,10 +154,11 @@ bucketRemove key ((k, v)::rest)
   | key == k = rest
   | otherwise = (k, v) :: bucketRemove key rest
 
--- ── Insertion (mutating) ────────────────────────────────────────────────
+-- # Insertion
 
-{- | Insert (or overwrite) the value at a key, in place. Resizes (doubling)
-   when the load factor passes 0.75. -}
+{- | Stores `val` at `key`, replacing any existing value.
+
+   The table is changed in place and grows as needed. -}
 export
 setInPlace : (Eq k, Hashable k) => k -> v -> HashMap k v -> Unit
 setInPlace key val (HashMap buckets count) =
@@ -153,6 +175,7 @@ insertAt key val arr idx buckets count
     count := !count + 1
     maybeResize buckets count
 
+-- Doubles the bucket array when the load factor passes 0.75.
 maybeResize : (Eq k, Hashable k) => Ref (Array (List (k, v))) -> Ref Int -> Unit
 maybeResize buckets count
   | !count * 4 > arrayLength !buckets * 3 = resize buckets count
@@ -187,26 +210,11 @@ putRaw key val buckets count =
   arraySetUnsafe idx ((key, val) :: arrayGetUnsafe idx arr) arr
   count := !count + 1
 
-{- | Build a table from an association list (later pairs win on duplicates).
+-- # Deletion
 
-   > size (fromList [(1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6), (7, 7), (8, 8)])
-   8 -}
-export
-fromList : (Eq k, Hashable k) => List (k, v) -> HashMap k v
-fromList pairs =
-  let m = new ()
-  insertAll pairs m
-  m
+{- | Removes the entry at `key` from the table, in place.
 
-insertAll : (Eq k, Hashable k) => List (k, v) -> HashMap k v -> Unit
-insertAll [] _ = ()
-insertAll ((k, v)::rest) m =
-  setInPlace k v m
-  insertAll rest m
-
--- ── Deletion (mutating) ─────────────────────────────────────────────────
-
-{- | Remove a key, in place. A no-op when absent. -}
+   Nothing happens when the key is absent. -}
 export
 deleteInPlace : (Eq k, Hashable k) => k -> HashMap k v -> Unit
 deleteInPlace key (HashMap buckets count) =
@@ -220,30 +228,31 @@ deleteAt key arr idx count =
     arraySetUnsafe idx (bucketRemove key (arrayGetUnsafe idx arr)) arr
     count := !count - 1
 
--- ── Iteration (pure; order unspecified) ─────────────────────────────────
+-- # Iteration
 
 collectBuckets : Array (List (k, v)) -> Int -> Int -> List (k, v) -> List (k, v)
 collectBuckets arr i n acc
   | i >= n = acc
   | otherwise = collectBuckets arr (i + 1) n (arrayGetUnsafe i arr ++ acc)
 
--- PRIVATE collector behind the exported `toList`.  It is deliberately NOT
+-- Private collector behind the exported `toList`.  It is deliberately not
 -- named `toList` itself: `toList` is a `Foldable` method (returning
--- *elements*), and `HashMap` isn't `Foldable`, so a file-local `toList` used
+-- elements), and `HashMap` isn't `Foldable`, so a file-local `toList` used
 -- from the definitions below risks being read as the method and mistyped
--- (`List v` vs the pairs `List (k, v)`).  It was exported as `entries` until
--- the 0.1.0 surface freeze; `toList` is now the one public spelling, matching
--- `map` and every other container (#2306 B-3).
+-- (`List v` vs the pairs `List (k, v)`).
 entries : HashMap k v -> List (k, v)
 entries (HashMap buckets _) =
   collectBuckets !buckets 0 (arrayLength !buckets) []
 
-{- | All key/value pairs, in unspecified (hash) order. -}
+{- | The entries as pairs, in unspecified order.
+
+   > toList (fromList [(5, 50)])
+   [(5, 50)] -}
 export
 toList : HashMap k v -> List (k, v)
 toList m = entries m
 
-{- | All keys, in unspecified order.
+{- | The keys, in unspecified order.
 
    > keys (fromList [(5, 50)])
    [5] -}
@@ -251,7 +260,7 @@ export
 keys : HashMap k v -> List k
 keys m = map fst (entries m)
 
-{- | All values, in unspecified order.
+{- | The values, in unspecified order.
 
    > values (fromList [(5, 50)])
    [50] -}
@@ -267,29 +276,26 @@ allEntriesIn ((k, v)::rest) m
   | get k m == Some v = allEntriesIn rest m
   | otherwise = False
 
-{- | Order-independent equality: same entries, regardless of internal layout.
+{- | Two tables are equal when they hold the same entries, whatever their
+   internal layout.
 
    > eq (fromList [(1, 10), (2, 20)]) (fromList [(2, 20), (1, 10)])
    True -}
 export impl Eq (HashMap k v) requires Eq k, Eq v, Hashable k where
   eq a b = if size a /= size b then False else allEntriesIn (entries a) b
 
-{- | Rendered as `fromList [(k, v), …]` in hash order (so the exact text is
-   layout-dependent — don't rely on it for equality; use `eq`). -}
+{- | `debug` renders a table as `fromList [(k, v), ...]` in internal order,
+   so the text depends on the table's layout. Compare tables with `eq`, not
+   by their rendering. -}
 export impl Debug (HashMap k v) requires Debug k, Debug v where
   debug m = "fromList \{debug (entries m)}"
 
-{- ── Display, and the order it fixes (sheet row A-4) ───────────────────────
-
-   `Debug` above renders in HASH order, which is layout-dependent by design.
-   `Display` may not be: a rendering that changes when the table is rebuilt
-   with the same entries is not a rendering of the VALUE.  So `Display` sorts
-   by KEY, which is why it asks for `Ord k` that `Debug` does not — that
-   ordering choice IS row A-4's ratification, and the law it buys is
-   `display m == display (fromList (toList m))`.
-
-   The sort is `list.sortOn fst`: one ordering routine for the whole stdlib,
-   rather than a private copy in every printing path. -}
+-- `Debug` above renders in hash order, which is layout-dependent by design.
+-- `Display` may not be: a rendering that changes when the table is rebuilt
+-- with the same entries is not a rendering of the value.  So `Display` sorts
+-- by key, which is why it asks for `Ord k` that `Debug` does not, and the law
+-- it buys is `display m == display (fromList (toList m))`.  The sort is
+-- `list.sortOn fst`: one ordering routine for the whole stdlib.
 
 -- Comma-joined `k => v` entries, mirroring `map.mdk`'s `displayMapEntries`.
 displayEntries : (Display k, Display v) => List (k, v) -> String
@@ -297,23 +303,22 @@ displayEntries [] = ""
 displayEntries [(k, v)] = "\{k} => \{v}"
 displayEntries ((k, v)::rest) = "\{k} => \{v}, \{displayEntries rest}"
 
-{- | The *display* form, peer of `Display (Map k v)`'s `Map { k => v, … }`,
-   with the entries in ascending KEY order so the text depends only on the
-   value and not on the table's internal layout.
+{- | `display` renders a table as `HashMap { k => v, ... }` with the entries
+   in ascending key order, so the text depends only on the entries.
 
-   > display (fromList [(2, 20), (1, 10)]) == "HashMap { 1 => 10, 2 => 20 }"
-   True
-   > display (new () : HashMap Int Int) == "HashMap {}"
-   True -}
+   > display (fromList [(2, 20), (1, 10)])
+   "HashMap { 1 => 10, 2 => 20 }"
+   > display (new () : HashMap Int Int)
+   "HashMap {}" -}
 export impl Display (HashMap k v) requires Display k, Display v, Ord k where
   display m = match L.sortOn fst (entries m)
     [] => "HashMap {}"
     es => "HashMap { \{displayEntries es} }"
 
-{- | `index m k` reads `m`'s value at key `k` (`m[k]` sugar dispatches here),
-   the peer of `Index (Map k v) k v`.  Raises the coded `indexError`
-   (E-INDEX-OOB) when the key is absent -- use `get` for a safe
-   `Option`-returning read instead.
+{- | `m[k]` is the value at `k`.
+
+   Panics with an index error when the key is absent; `get` is the
+   `Option`-returning form.
 
    > (fromList [(1, 10), (2, 20)])[2]
    20 -}
@@ -322,14 +327,13 @@ export impl Index (HashMap k v) k v requires Eq k, Hashable k where
     Some v => v
     None => indexError "key not found"
 
--- ── Property tests (sheet row A-4) ──────────────────────────────────────
+-- ── Property tests ──────────────────────────────────────────────────────
 
 -- LAW: `Display` must depend on the VALUE, not on the table's internal
 -- layout.  Rebuilding a table from its own entries (and from those entries
 -- reversed, which lands them in different buckets in a different order) must
--- not change the rendering.  This is the law A-4 names for the ordering
--- choice, and it is what `Debug` -- documented as hash-ordered -- cannot
--- satisfy.
+-- not change the rendering.  This is the law the ordering choice exists for,
+-- and it is what `Debug` -- documented as hash-ordered -- cannot satisfy.
 prop "Display HashMap is layout-independent" (xs : List (Int, Int)) =
   let m = fromList xs
   display m == display (fromList (toList m))
@@ -365,6 +369,11 @@ prop "Index HashMap agrees with get on present keys" (xs : List (Int, Int)) =
 (DFunDef false "slotOf" ((PVar "key") (PVar "cap")) (EBinOp "%" (EApp (EApp (EVar "bitAnd") (EApp (EVar "hash") (EVar "key"))) (EVar "intMaxBound")) (EVar "cap")))
 (DTypeSig true "new" (TyFun (TyCon "Unit") (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v"))))
 (DFunDef false "new" (PWild) (EApp (EApp (EVar "HashMap") (EApp (EVar "Ref") (EApp (EApp (EVar "arrayMake") (EVar "initialCapacity")) (EListLit)))) (EApp (EVar "Ref") (ELit (LInt 0)))))
+(DTypeSig true "fromList" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")))))
+(DFunDef false "fromList" ((PVar "pairs")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "insertAll") (EVar "pairs")) (EVar "m"))) (DoExpr (EVar "m"))))
+(DTypeSig false "insertAll" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyCon "Unit")))))
+(DFunDef false "insertAll" ((PList) PWild) (ELit LUnit))
+(DFunDef false "insertAll" ((PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest")) (PVar "m")) (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "k")) (EVar "v")) (EVar "m"))) (DoExpr (EApp (EApp (EVar "insertAll") (EVar "rest")) (EVar "m")))))
 (DTypeSig true "size" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyCon "Int")))
 (DFunDef false "size" ((PCon "HashMap" PWild (PVar "count"))) (EUnOp "!" (EVar "count")))
 (DTypeSig true "isEmpty" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyCon "Bool")))
@@ -402,11 +411,6 @@ prop "Index HashMap agrees with get on present keys" (xs : List (Int, Int)) =
 (DFunDef false "reinsertBucket" ((PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest")) (PVar "buckets") (PVar "count")) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "putRaw") (EVar "k")) (EVar "v")) (EVar "buckets")) (EVar "count"))) (DoExpr (EApp (EApp (EApp (EVar "reinsertBucket") (EVar "rest")) (EVar "buckets")) (EVar "count")))))
 (DTypeSig false "putRaw" (TyConstrained ((cstr "Hashable" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyCon "Unit")))))))
 (DFunDef false "putRaw" ((PVar "key") (PVar "val") (PVar "buckets") (PVar "count")) (EBlock (DoLet false false (PVar "arr") (EUnOp "!" (EVar "buckets"))) (DoLet false false (PVar "idx") (EApp (EApp (EVar "slotOf") (EVar "key")) (EApp (EVar "arrayLength") (EVar "arr")))) (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "idx")) (EBinOp "::" (ETuple (EVar "key") (EVar "val")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "idx")) (EVar "arr")))) (EVar "arr"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "count")) (EBinOp "+" (EUnOp "!" (EVar "count")) (ELit (LInt 1)))))))
-(DTypeSig true "fromList" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")))))
-(DFunDef false "fromList" ((PVar "pairs")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "insertAll") (EVar "pairs")) (EVar "m"))) (DoExpr (EVar "m"))))
-(DTypeSig false "insertAll" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyCon "Unit")))))
-(DFunDef false "insertAll" ((PList) PWild) (ELit LUnit))
-(DFunDef false "insertAll" ((PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest")) (PVar "m")) (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "k")) (EVar "v")) (EVar "m"))) (DoExpr (EApp (EApp (EVar "insertAll") (EVar "rest")) (EVar "m")))))
 (DTypeSig true "deleteInPlace" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyCon "Unit")))))
 (DFunDef false "deleteInPlace" ((PVar "key") (PCon "HashMap" (PVar "buckets") (PVar "count"))) (EBlock (DoLet false false (PVar "arr") (EUnOp "!" (EVar "buckets"))) (DoLet false false (PVar "idx") (EApp (EApp (EVar "slotOf") (EVar "key")) (EApp (EVar "arrayLength") (EVar "arr")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "deleteAt") (EVar "key")) (EVar "arr")) (EVar "idx")) (EVar "count")))))
 (DTypeSig false "deleteAt" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v")))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyCon "Unit")))))))
@@ -449,6 +453,11 @@ prop "Index HashMap agrees with get on present keys" (xs : List (Int, Int)) =
 (DFunDef false "slotOf" ((PVar "key") (PVar "cap")) (EBinOp "%" (EApp (EApp (EVar "bitAnd") (EApp (EMethodRef "hash") (EVar "key"))) (EVar "intMaxBound")) (EVar "cap")))
 (DTypeSig true "new" (TyFun (TyCon "Unit") (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v"))))
 (DFunDef false "new" (PWild) (EApp (EApp (EVar "HashMap") (EApp (EVar "Ref") (EApp (EApp (EVar "arrayMake") (EVar "initialCapacity")) (EListLit)))) (EApp (EVar "Ref") (ELit (LInt 0)))))
+(DTypeSig true "fromList" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")))))
+(DFunDef false "fromList" ((PVar "pairs")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EDictApp "insertAll") (EVar "pairs")) (EVar "m"))) (DoExpr (EVar "m"))))
+(DTypeSig false "insertAll" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyCon "Unit")))))
+(DFunDef false "insertAll" ((PList) PWild) (ELit LUnit))
+(DFunDef false "insertAll" ((PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest")) (PVar "m")) (EBlock (DoExpr (EApp (EApp (EApp (EDictApp "setInPlace") (EVar "k")) (EVar "v")) (EVar "m"))) (DoExpr (EApp (EApp (EDictApp "insertAll") (EVar "rest")) (EVar "m")))))
 (DTypeSig true "size" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyCon "Int")))
 (DFunDef false "size" ((PCon "HashMap" PWild (PVar "count"))) (EUnOp "!" (EDictApp "count")))
 (DTypeSig true "isEmpty#shadow" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyCon "Bool")))
@@ -486,11 +495,6 @@ prop "Index HashMap agrees with get on present keys" (xs : List (Int, Int)) =
 (DFunDef false "reinsertBucket" ((PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest")) (PVar "buckets") (PVar "count")) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EDictApp "putRaw") (EVar "k")) (EVar "v")) (EVar "buckets")) (EDictApp "count"))) (DoExpr (EApp (EApp (EApp (EDictApp "reinsertBucket") (EVar "rest")) (EVar "buckets")) (EDictApp "count")))))
 (DTypeSig false "putRaw" (TyConstrained ((cstr "Hashable" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyCon "Unit")))))))
 (DFunDef false "putRaw" ((PVar "key") (PVar "val") (PVar "buckets") (PVar "count")) (EBlock (DoLet false false (PVar "arr") (EUnOp "!" (EVar "buckets"))) (DoLet false false (PVar "idx") (EApp (EApp (EDictApp "slotOf") (EVar "key")) (EApp (EVar "arrayLength") (EVar "arr")))) (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "idx")) (EBinOp "::" (ETuple (EVar "key") (EVar "val")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "idx")) (EVar "arr")))) (EVar "arr"))) (DoExpr (EApp (EApp (EVar "setRef") (EDictApp "count")) (EBinOp "+" (EUnOp "!" (EDictApp "count")) (ELit (LInt 1)))))))
-(DTypeSig true "fromList" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")))))
-(DFunDef false "fromList" ((PVar "pairs")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EDictApp "insertAll") (EVar "pairs")) (EVar "m"))) (DoExpr (EVar "m"))))
-(DTypeSig false "insertAll" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyCon "Unit")))))
-(DFunDef false "insertAll" ((PList) PWild) (ELit LUnit))
-(DFunDef false "insertAll" ((PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest")) (PVar "m")) (EBlock (DoExpr (EApp (EApp (EApp (EDictApp "setInPlace") (EVar "k")) (EVar "v")) (EVar "m"))) (DoExpr (EApp (EApp (EDictApp "insertAll") (EVar "rest")) (EVar "m")))))
 (DTypeSig true "deleteInPlace" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyCon "Unit")))))
 (DFunDef false "deleteInPlace" ((PVar "key") (PCon "HashMap" (PVar "buckets") (PVar "count"))) (EBlock (DoLet false false (PVar "arr") (EUnOp "!" (EVar "buckets"))) (DoLet false false (PVar "idx") (EApp (EApp (EDictApp "slotOf") (EVar "key")) (EApp (EVar "arrayLength") (EVar "arr")))) (DoExpr (EApp (EApp (EApp (EApp (EDictApp "deleteAt") (EVar "key")) (EVar "arr")) (EVar "idx")) (EDictApp "count")))))
 (DTypeSig false "deleteAt" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v")))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyCon "Unit")))))))

@@ -11,8 +11,6 @@ data Arity
   | IntValue String
 ```
 
-Instances: `Eq`, `Debug`
-
 What a flag does with the token that follows it.
 
 `Switch` takes no value.  `Value`/`ValueList`/`OneOf`/`IntValue` all take
@@ -24,6 +22,8 @@ one, in either C1 spelling (`--flag v` or `--flag=v`).  The trailing
 `ValueList` differs from `Value` only in how it renders in help
 (`--flag=<A,B>`) — splitting the comma list is the consumer's business.
 
+Instances: `Eq`, `Debug`
+
 ## `Visibility`
 
 ```
@@ -32,9 +32,9 @@ data Visibility
   | Internal
 ```
 
-Instances: `Eq`, `Debug`
-
 Whether a flag appears in `helpBlockOf`.  Both kinds appear in `rosterOf`.
+
+Instances: `Eq`, `Debug`
 
 ## `Unknown`
 
@@ -44,8 +44,6 @@ data Unknown
   | CollectUnknown
 ```
 
-Instances: `Eq`, `Debug`
-
 What happens to a `--`-shaped token that no `FlagSpec` claims.
 
 `RejectUnknown` is the C2 default.  `CollectUnknown` exists for a future
@@ -53,6 +51,8 @@ What happens to a `--`-shaped token that no `FlagSpec` claims.
 vocabulary is per-codemod and therefore not statically knowable: an
 unclaimed token is recorded in `given`, consuming the following token as
 its value.
+
+Instances: `Eq`, `Debug`
 
 ## `Trailing`
 
@@ -63,8 +63,6 @@ data Trailing
   | TrailingAfterSeparator
 ```
 
-Instances: `Eq`, `Debug`
-
 How the verb treats a raw trailing section.
 
 * `TrailingReject` — there is none.  `--` is not special and falls to the
@@ -74,14 +72,14 @@ it is the callee's argv, `--` included and NOT consumed (`medaka run`).
 * `TrailingAfterSeparator` — the first bare `--` is consumed as a
 separator and everything after it lands in `rest`.
 
+Instances: `Eq`, `Debug`
+
 ## `FlagSpec`
 
 ```
 data FlagSpec
   = FlagSpec { names : List String, arity : Arity, summary : String, visibility : Visibility }
 ```
-
-Instances: `Eq`, `Debug`
 
 One flag, with every spelling it answers to.
 
@@ -90,14 +88,14 @@ first: `["--write", "-w"]`.  The head is the CANONICAL name — the key
 `parseArgs` records in `Args.given` and the one `flag`/`flagValue` query
 by, whichever spelling the user typed.
 
+Instances: `Eq`, `Debug`
+
 ## `ArgSpec`
 
 ```
 data ArgSpec
   = ArgSpec { verb : String, flags : List FlagSpec, trailing : Trailing, unknown : Unknown, strictDash : Bool }
 ```
-
-Instances: `Eq`, `Debug`
 
 One verb's whole argument vocabulary.  This is the value everything else
   in this module is a rendering of.
@@ -115,6 +113,8 @@ tree-wide by changing `isFlagToken`'s default — a verb that genuinely
 wants positionals starting with `-` (a filename literally named `-` stays
 exempt either way: `stringLength t > 1` guards that) keeps `False`.
 
+Instances: `Eq`, `Debug`
+
 ## `Args`
 
 ```
@@ -122,14 +122,14 @@ data Args
   = Args { given : List (String, Option String), positionals : List String, rest : List String }
 ```
 
-Instances: `Eq`, `Debug`
-
 The result of a successful parse.
 
 `given` keeps argv order, so a verb that wants first-occurrence semantics
 calls `flagValue` and one that wants last-occurrence calls `lastValue` —
 the tree contains both conventions and this module deliberately picks
 neither for you.
+
+Instances: `Eq`, `Debug`
 
 ## `switch`
 

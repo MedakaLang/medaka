@@ -7,9 +7,9 @@ data Duration
   = Duration Int
 ```
 
-Instances: `Eq`, `Ord`, `Debug`, [`Display`](#display-duration), [`Semigroup`](#semigroup-duration), [`Monoid`](#monoid-duration)
-
 A time span, stored as a whole number of MILLISECONDS.
+
+Instances: `Eq`, `Ord`, `Debug`, [`Display`](#display-duration), [`Semigroup`](#semigroup-duration), [`Monoid`](#monoid-duration)
 
 ## `millis`
 
@@ -169,9 +169,9 @@ data DateTime
   = DateTime { year : Int, month : Int, day : Int, hour : Int, minute : Int, second : Int }
 ```
 
-Instances: `Eq`, `Ord`, `Debug`, [`Display`](#display-datetime)
-
 A civil UTC date-and-time.  `month` is 1-12, `day` is 1-31.
+
+Instances: `Eq`, `Ord`, `Debug`, [`Display`](#display-datetime)
 
 ## `fromEpochSeconds`
 

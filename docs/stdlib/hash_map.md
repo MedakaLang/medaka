@@ -1,56 +1,96 @@
 # hash_map
 
-## `HashMap`
+A mutable hash table from keys to values.
+
+`HashMap k v` gives `O(1)` average lookup, insertion, and deletion. The
+writing operations, `setInPlace` and `deleteInPlace`, change the table in
+place and return `Unit`; every other operation reads it. Iteration order
+is unspecified. Use `map` instead when you want an immutable value or
+ordered keys.
+
+Keys need `Eq` and `Hashable`, and the two must agree: equal keys must
+hash equally. `deriving (Hashable)` gives a key type an instance that
+agrees with its derived `Eq`.
+
+### `HashMap`
 
 ```
 data HashMap k v
   = HashMap (Ref (Array (List (k, v)))) (Ref Int)
 ```
 
+The hash table type. Its fields are the bucket array and the entry
+count, both mutable.
+
 Instances: [`Eq`](#eq-hashmap-k-v), [`Debug`](#debug-hashmap-k-v), [`Display`](#display-hashmap-k-v), [`Index`](#index-hashmap-k-v-k-v)
 
-## `new`
+## Construction
+
+### `new`
 
 ```
 new : Unit -> HashMap k v
 ```
 
-A fresh, empty hash table. Takes `Unit` (not a nullary value) so each call
-allocates its own table rather than sharing one mutable cell.
+A new, empty table.
 
-## `size`
+Each call allocates its own table, which is why it takes `Unit`.
+
+```medaka
+> size (new () : HashMap Int Int)
+0
+```
+
+### `fromList`
 
 ```
-size : HashMap k v -> Int
+fromList : (Eq k, Hashable k) => List (k, v) -> HashMap k v
 ```
 
-Number of entries. O(1).
+A table holding the pairs of an association list.
+
+When a key appears more than once, the later pair wins.
 
 ```medaka
 > size (fromList [(1, 10), (2, 20), (1, 30)])
 2
 ```
 
-## `isEmpty`
+## Query
+
+### `size`
+
+```
+size : HashMap k v -> Int
+```
+
+The number of entries, in `O(1)`.
+
+```medaka
+> size (fromList [(1, 10), (2, 20)])
+2
+```
+
+### `isEmpty`
 
 ```
 isEmpty : HashMap k v -> Bool
 ```
 
-`True` when there are no entries.
+Whether the table has no entries.
 
 ```medaka
 > isEmpty (new () : HashMap Int Int)
 True
 ```
 
-## `get`
+### `get`
 
 ```
 get : (Eq k, Hashable k) => k -> HashMap k v -> Option v
 ```
 
-The value at a key, or `None`.
+The value at `key`, or `None` when the key is absent.
 
 ```medaka
 > get 2 (fromList [(1, 10), (2, 20)])
@@ -59,90 +99,91 @@ Some 20
 None
 ```
 
-## `has`
+### `has`
 
 ```
 has : (Eq k, Hashable k) => k -> HashMap k v -> Bool
 ```
 
-`True` when the key is present.
+Whether `key` is present.
 
 ```medaka
 > has 2 (fromList [(1, 10), (2, 20)])
 True
 ```
 
-## `findWithDefault`
+### `findWithDefault`
 
 ```
 findWithDefault : (Eq k, Hashable k) => v -> k -> HashMap k v -> v
 ```
 
-Value at a key, or a fallback.
+The value at `key`, or `d` when the key is absent.
 
 ```medaka
 > findWithDefault 0 9 (fromList [(1, 10)])
 0
 ```
 
-## `setInPlace`
+## Insertion
+
+### `setInPlace`
 
 ```
 setInPlace : (Eq k, Hashable k) => k -> v -> HashMap k v -> Unit
 ```
 
-Insert (or overwrite) the value at a key, in place. Resizes (doubling)
-when the load factor passes 0.75.
+Stores `val` at `key`, replacing any existing value.
 
-## `fromList`
+The table is changed in place and grows as needed.
 
-```
-fromList : (Eq k, Hashable k) => List (k, v) -> HashMap k v
-```
+## Deletion
 
-Build a table from an association list (later pairs win on duplicates).
-
-```medaka
-> size (fromList [(1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6), (7, 7), (8, 8)])
-8
-```
-
-## `deleteInPlace`
+### `deleteInPlace`
 
 ```
 deleteInPlace : (Eq k, Hashable k) => k -> HashMap k v -> Unit
 ```
 
-Remove a key, in place. A no-op when absent.
+Removes the entry at `key` from the table, in place.
 
-## `toList`
+Nothing happens when the key is absent.
+
+## Iteration
+
+### `toList`
 
 ```
 toList : HashMap k v -> List (k, v)
 ```
 
-All key/value pairs, in unspecified (hash) order.
+The entries as pairs, in unspecified order.
 
-## `keys`
+```medaka
+> toList (fromList [(5, 50)])
+[(5, 50)]
+```
+
+### `keys`
 
 ```
 keys : HashMap k v -> List k
 ```
 
-All keys, in unspecified order.
+The keys, in unspecified order.
 
 ```medaka
 > keys (fromList [(5, 50)])
 [5]
 ```
 
-## `values`
+### `values`
 
 ```
 values : HashMap k v -> List v
 ```
 
-All values, in unspecified order.
+The values, in unspecified order.
 
 ```medaka
 > values (fromList [(5, 50)])
@@ -157,7 +198,8 @@ All values, in unspecified order.
 impl Eq (HashMap k v) requires Eq k, Eq v, Hashable k
 ```
 
-Order-independent equality: same entries, regardless of internal layout.
+Two tables are equal when they hold the same entries, whatever their
+internal layout.
 
 ```medaka
 > eq (fromList [(1, 10), (2, 20)]) (fromList [(2, 20), (1, 10)])
@@ -170,8 +212,9 @@ True
 impl Debug (HashMap k v) requires Debug k, Debug v
 ```
 
-Rendered as `fromList [(k, v), …]` in hash order (so the exact text is
-layout-dependent — don't rely on it for equality; use `eq`).
+`debug` renders a table as `fromList [(k, v), ...]` in internal order,
+so the text depends on the table's layout. Compare tables with `eq`, not
+by their rendering.
 
 ### `Display (HashMap k v)`
 
@@ -179,15 +222,14 @@ layout-dependent — don't rely on it for equality; use `eq`).
 impl Display (HashMap k v) requires Display k, Display v, Ord k
 ```
 
-The *display* form, peer of `Display (Map k v)`'s `Map { k => v, … }`,
-with the entries in ascending KEY order so the text depends only on the
-value and not on the table's internal layout.
+`display` renders a table as `HashMap { k => v, ... }` with the entries
+in ascending key order, so the text depends only on the entries.
 
 ```medaka
-> display (fromList [(2, 20), (1, 10)]) == "HashMap { 1 => 10, 2 => 20 }"
-True
-> display (new () : HashMap Int Int) == "HashMap {}"
-True
+> display (fromList [(2, 20), (1, 10)])
+"HashMap { 1 => 10, 2 => 20 }"
+> display (new () : HashMap Int Int)
+"HashMap {}"
 ```
 
 ### `Index (HashMap k v) k v`
@@ -196,10 +238,10 @@ True
 impl Index (HashMap k v) k v requires Eq k, Hashable k
 ```
 
-`index m k` reads `m`'s value at key `k` (`m[k]` sugar dispatches here),
-the peer of `Index (Map k v) k v`.  Raises the coded `indexError`
-(E-INDEX-OOB) when the key is absent -- use `get` for a safe
-`Option`-returning read instead.
+`m[k]` is the value at `k`.
+
+Panics with an index error when the key is absent; `get` is the
+`Option`-returning form.
 
 ```medaka
 > (fromList [(1, 10), (2, 20)])[2]
