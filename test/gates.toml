@@ -807,6 +807,20 @@ corpus = []
 toolchain = []
 
 [[gate]]
+name = "pds/test/store_persistence"
+area = "engines"
+shard = "gates_6"
+project = "pds"
+tiers = ["merge"]
+cost = "medium"
+kind = "exec"
+run = "pds/test/store_persistence.sh"
+oracles = []
+sources = ["pds/*"]
+corpus = []
+toolchain = []
+
+[[gate]]
 name = "pds/test/trust_boundary_guards"
 area = "engines"
 shard = "gates_7"
@@ -1075,7 +1089,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/rowid_roundtrip_oracle"
 area = "engines"
-shard = "gates_8"
+shard = "gates_2"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -1201,7 +1215,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "bootstrap_resolve"
 area = "frontend"
-shard = "gates_7"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1271,7 +1285,7 @@ toolchain = []
 [[gate]]
 name = "check_build_oracles_for_consistency"
 area = "types"
-shard = "gates_7"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1663,7 +1677,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_core_ir_modules"
 area = "eval"
-shard = "gates_7"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1957,7 +1971,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_eval_json"
 area = "eval"
-shard = "gates_7"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2069,7 +2083,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_eval_scaling"
 area = "eval"
-shard = "gates_8"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "heavy"
@@ -2447,7 +2461,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_llvm"
 area = "backend"
-shard = "gates_8"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -3007,7 +3021,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_snapshot_frontend"
 area = "frontend"
-shard = "gates_2"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3245,7 +3259,7 @@ toolchain = ["wasm-tools", "node>=24"]
 [[gate]]
 name = "diff_async"
 area = "infra"
-shard = "gates_8"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3936,6 +3950,34 @@ oracles = []
 sources = ["test/diff_compiler_guide_render.sh", "playground/render_docs.mjs", "playground/build_guide.sh", "playground/build_stdlib_docs.sh", "playground/guide_render_test.mjs", "playground/vendor/marked/marked.js", "docs/guide/*.md", "docs/stdlib/*.md"]
 corpus = ["docs/guide", "docs/stdlib"]
 toolchain = ["node>=24"]
+
+[[gate]]
+name = "pds/test/serve_e2e"
+area = "engines"
+shard = "gates_8"
+project = "pds"
+tiers = ["merge"]
+cost = "heavy"
+kind = "exec"
+run = "pds/test/serve_e2e.sh"
+oracles = []
+sources = ["pds/*"]
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "pds/test/lib_boundary"
+area = "engines"
+shard = "gates_8"
+project = "pds"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+run = "pds/test/lib_boundary.sh"
+oracles = []
+sources = ["pds/lib/*"]
+corpus = []
+toolchain = []
 
 # S-1-dist-tarball (#74 D3: native distribution, Linux tarball arm; tracking
 # #2514). Proves scripts/make_dist.sh's tarball is genuinely relocatable: builds

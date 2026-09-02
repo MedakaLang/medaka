@@ -47,12 +47,26 @@ public export data HttpParseFailure =
   | HttpMalformed String
   | HttpResourceExcess String
 
-malformed : String -> Result HttpParseFailure a
-malformed message = Err (HttpMalformed message)
+-- | Outcome of framing a byte buffer that may still be growing. `Incomplete`
+-- carries the diagnostic the one-shot parser reports for the same input, so a
+-- buffer that a stream could still complete stays distinguishable from one
+-- that no further byte can rescue without changing any existing message.
+data FrameError = Incomplete String | Fatal HttpParseFailure
 
-resourceExcess : Result String Unit -> Result HttpParseFailure Unit
+settle : Result FrameError a -> Result HttpParseFailure a
+settle (Ok value) = Ok value
+settle (Err (Incomplete message)) = Err (HttpMalformed message)
+settle (Err (Fatal failure)) = Err failure
+
+malformed : String -> Result FrameError a
+malformed message = Err (Fatal (HttpMalformed message))
+
+incomplete : String -> Result FrameError a
+incomplete message = Err (Incomplete message)
+
+resourceExcess : Result String Unit -> Result FrameError Unit
 resourceExcess (Ok ()) = Ok ()
-resourceExcess (Err message) = Err (HttpResourceExcess message)
+resourceExcess (Err message) = Err (Fatal (HttpResourceExcess message))
 
 export
 httpParseFailureMessage : HttpParseFailure -> String
@@ -224,32 +238,31 @@ findByte input pos end wanted =
   else
     findByte input (pos + 1) end wanted
 
-findCrlf : String ->
-  Array Int ->
-  Int ->
-  Int ->
-  Int ->
-  Result HttpParseFailure Int
+findCrlf : String -> Array Int -> Int -> Int -> Int -> Result FrameError Int
 findCrlf label input start pos limit =
   if pos - start > limit then
-    Err (HttpResourceExcess "http: \{label} exceeds its resource limit")
+    Err (Fatal (HttpResourceExcess "http: \{label} exceeds its resource limit"))
   else if pos >= arrayLength input then
-    malformed "http: truncated \{label}; expected CRLF"
+    incomplete "http: truncated \{label}; expected CRLF"
   else if input[pos] == 10 then
     malformed "http: bare LF in \{label}"
   else if input[pos] == 13 then
-    if pos + 1 >= arrayLength input || input[pos + 1] /= 10 then
+    -- A trailing CR is the one-shot parser's bare CR and a stream's half-read
+    -- CRLF, so it keeps that diagnostic while staying completable.
+    if pos + 1 >= arrayLength input then
+      incomplete "http: bare CR in \{label}"
+    else if input[pos + 1] /= 10 then
       malformed "http: bare CR in \{label}"
     else
       Ok pos
   else
     findCrlf label input start (pos + 1) limit
 
-parseRequestLine : Array Int -> Result HttpParseFailure RequestLine
-parseRequestLine input = do
-  end <- findCrlf "request line" input 0 0 maxHttpRequestLineBytes
-  () <- resourceExcess (checkHttpRequestLineBytes end)
-  firstSpace <- match findByte input 0 end 32
+parseRequestLine : Array Int -> Int -> Result FrameError RequestLine
+parseRequestLine input start = do
+  end <- findCrlf "request line" input start start maxHttpRequestLineBytes
+  () <- resourceExcess (checkHttpRequestLineBytes (end - start))
+  firstSpace <- match findByte input start end 32
     None =>
       malformed
         "http: malformed request line; expected METHOD SP TARGET SP HTTP/1.1"
@@ -259,7 +272,7 @@ parseRequestLine input = do
       malformed
         "http: malformed request line; expected METHOD SP TARGET SP HTTP/1.1"
     Some pos => Ok pos
-  if firstSpace == 0 || not (allToken input 0 firstSpace) then
+  if firstSpace == start || not (allToken input start firstSpace) then
     malformed "http: invalid method token"
   else if secondSpace == firstSpace + 1 then
     malformed "http: empty request target"
@@ -273,7 +286,7 @@ parseRequestLine input = do
   else
     Ok
       (RequestLine
-        (fromUtf8 (slice input 0 firstSpace))
+        (fromUtf8 (slice input start (firstSpace - start)))
         (fromUtf8 (slice input (firstSpace + 1) (secondSpace - firstSpace - 1)))
         (end + 2))
 
@@ -291,7 +304,7 @@ trimRightOws input start end =
   else
     end
 
-parseHeaderLine : Array Int -> Int -> Int -> Result HttpParseFailure Header
+parseHeaderLine : Array Int -> Int -> Int -> Result FrameError Header
 parseHeaderLine input start end =
   if input[start] == 32 || input[start] == 9 then
     malformed "http: obsolete folded header lines are forbidden"
@@ -318,7 +331,7 @@ forbiddenTrailer (Header name _) =
     || name == "host"
     || name == "connection"
 
-checkFieldCount : Bool -> Int -> Result HttpParseFailure Unit
+checkFieldCount : Bool -> Int -> Result FrameError Unit
 checkFieldCount trailer count =
   if trailer then
     resourceExcess (checkHttpTrailerFields count)
@@ -332,7 +345,7 @@ parseFields : Array Int ->
   Int ->
   Bool ->
   List Header ->
-  Result HttpParseFailure HeaderBlock
+  Result FrameError HeaderBlock
 parseFields input pos sectionStart priorBytes count trailer acc = do
   end <- findCrlf
     (if trailer then "trailer field" else "header field")
@@ -383,7 +396,7 @@ asciiEqualCiGo value expected i =
 asciiEqualCi : Array Int -> String -> Bool
 asciiEqualCi value expected = asciiEqualCiGo value (toUtf8 expected) 0
 
-parseDecimalGo : Array Int -> Int -> Int -> Result HttpParseFailure Int
+parseDecimalGo : Array Int -> Int -> Int -> Result FrameError Int
 parseDecimalGo value i acc =
   if i >= arrayLength value then
     Ok acc
@@ -398,7 +411,7 @@ parseDecimalGo value i acc =
       else
         parseDecimalGo value (i + 1) (acc * 10 + digit)
 
-parseContentLength : Array Int -> Result HttpParseFailure Int
+parseContentLength : Array Int -> Result FrameError Int
 parseContentLength value =
   if arrayLength value == 0 then
     malformed "http: empty Content-Length"
@@ -407,7 +420,7 @@ parseContentLength value =
     () <- resourceExcess (checkHttpBodyBytes size)
     Ok size
 
-selectBodyMode : List Header -> Result HttpParseFailure BodyMode
+selectBodyMode : List Header -> Result FrameError BodyMode
 selectBodyMode headers =
   let clCount = countNamed "content-length" headers
   let teCount = countNamed "transfer-encoding" headers
@@ -439,7 +452,7 @@ scanTokenEnd value pos end =
   else
     pos
 
-parseConnectionValue : Array Int -> Int -> Bool -> Result HttpParseFailure Bool
+parseConnectionValue : Array Int -> Int -> Bool -> Result FrameError Bool
 parseConnectionValue value pos sawClose =
   let end = arrayLength value
   let start = trimLeftOws value pos end
@@ -459,7 +472,7 @@ parseConnectionValue value pos sawClose =
       else
         parseConnectionValue value (after + 1) closeNow
 
-keepAliveFromHeaders : List Header -> Result HttpParseFailure Bool
+keepAliveFromHeaders : List Header -> Result FrameError Bool
 keepAliveFromHeaders [] = Ok True
 keepAliveFromHeaders ((Header name value) :: rest) = do
   restKeepAlive <- keepAliveFromHeaders rest
@@ -610,7 +623,7 @@ validHostAuthority value =
     Some colon =>
       colon > 0 && validRegName value 0 colon && allDigits value (colon + 1) end
 
-validateHost : List Header -> Result HttpParseFailure Unit
+validateHost : List Header -> Result FrameError Unit
 validateHost headers =
   if countNamed "host" headers /= 1 then
     malformed "http: HTTP/1.1 requires exactly one Host field"
@@ -622,13 +635,10 @@ validateHost headers =
         Ok ()
     None => malformed "http: missing Host field"
 
-readSliceAt : Array Int ->
-  Int ->
-  Int ->
-  Result HttpParseFailure (Array Int, Int)
+readSliceAt : Array Int -> Int -> Int -> Result FrameError (Array Int, Int)
 readSliceAt input pos size = match runBP (takeSlice size) input pos
   BErr _ errorPos =>
-    malformed "http: truncated body at byte \{intToString errorPos}"
+    incomplete "http: truncated body at byte \{intToString errorPos}"
   BOk bytes next => Ok (bytes, next)
 
 emitArray : Array Int -> Int -> Builder -> Unit
@@ -650,7 +660,7 @@ hexDigit byte =
   else
     None
 
-parseHexSizeGo : Array Int -> Int -> Int -> Int -> Result HttpParseFailure Int
+parseHexSizeGo : Array Int -> Int -> Int -> Int -> Result FrameError Int
 parseHexSizeGo input pos end acc =
   if pos >= end then
     Ok acc
@@ -658,7 +668,9 @@ parseHexSizeGo input pos end acc =
     None => malformed "http: invalid chunk size"
     Some digit =>
       if acc > (maxHttpBodyBytes - digit) / 16 then
-        Err (HttpResourceExcess "http: chunk size exceeds decoded body limit")
+        Err
+          (Fatal
+            (HttpResourceExcess "http: chunk size exceeds decoded body limit"))
       else
         parseHexSizeGo input (pos + 1) end (acc * 16 + digit)
 
@@ -669,7 +681,7 @@ skipOws input pos end =
   else
     pos
 
-scanQuoted : Array Int -> Int -> Int -> Result HttpParseFailure Int
+scanQuoted : Array Int -> Int -> Int -> Result FrameError Int
 scanQuoted input pos end =
   if pos >= end then
     malformed "http: unterminated quoted chunk extension"
@@ -693,10 +705,7 @@ scanQuoted input pos end =
     else
       malformed "http: control byte in quoted chunk extension"
 
-parseChunkExtensionValue : Array Int ->
-  Int ->
-  Int ->
-  Result HttpParseFailure Int
+parseChunkExtensionValue : Array Int -> Int -> Int -> Result FrameError Int
 parseChunkExtensionValue input pos end =
   if pos >= end then
     malformed "http: missing chunk extension value"
@@ -709,7 +718,7 @@ parseChunkExtensionValue input pos end =
     else
       Ok valueEnd
 
-parseChunkExtensionsGo : Array Int -> Int -> Int -> Result HttpParseFailure Unit
+parseChunkExtensionsGo : Array Int -> Int -> Int -> Result FrameError Unit
 parseChunkExtensionsGo input pos end =
   let start = skipOws input pos end
   if start == end then
@@ -732,7 +741,7 @@ parseChunkExtensionsGo input pos end =
       else
         parseChunkExtensionsGo input afterName end
 
-parseChunkSize : Array Int -> Int -> Int -> Result HttpParseFailure Int
+parseChunkSize : Array Int -> Int -> Int -> Result FrameError Int
 parseChunkSize input start end =
   let semi = match findByte input start end 59
     None => end
@@ -750,7 +759,7 @@ parseChunked : Array Int ->
   Builder ->
   Int ->
   Int ->
-  Result HttpParseFailure ParsedBody
+  Result FrameError ParsedBody
 parseChunked input pos headerBytes out total count = do
   lineEnd <- findCrlf "chunk-size line" input pos pos maxHttpHeaderBytes
   size <- parseChunkSize input pos lineEnd
@@ -764,19 +773,18 @@ parseChunked input pos headerBytes out total count = do
       0
       True
       []
-    if finalPos /= arrayLength input then
-      malformed "http: bytes after framed chunked request"
-    else
-      Ok (ParsedBody (buildArray out) trailers finalPos)
+    Ok (ParsedBody (buildArray out) trailers finalPos)
   else do
     () <- resourceExcess (checkHttpChunks (count + 1))
     if size > maxHttpBodyBytes - total then
       Err
-        (HttpResourceExcess "http: decoded chunked body exceeds resource limit")
+        (Fatal
+          (HttpResourceExcess
+            "http: decoded chunked body exceeds resource limit"))
     else do
       (chunk, afterChunk) <- readSliceAt input dataPos size
       if afterChunk + 2 > arrayLength input then
-        malformed "http: truncated CRLF after chunk data"
+        incomplete "http: truncated CRLF after chunk data"
       else if input[afterChunk] /= 13 || input[afterChunk + 1] /= 10 then
         malformed "http: missing CRLF after chunk data"
       else
@@ -789,47 +797,107 @@ parseChunked input pos headerBytes out total count = do
           (total + size)
           (count + 1)
 
-parseBody : BodyMode ->
-  Array Int ->
-  Int ->
-  Int ->
-  Result HttpParseFailure ParsedBody
-parseBody NoBody input pos _ =
-  if pos /= arrayLength input then
-    malformed "http: unframed or trailing request bytes"
-  else
-    Ok (ParsedBody [||] [] pos)
+-- | Frame the body and report the index one past its last byte. Bytes beyond
+-- that index belong to whatever follows the request, so rejecting them is the
+-- one-shot parser's job rather than the body framer's.
+parseBody : BodyMode -> Array Int -> Int -> Int -> Result FrameError ParsedBody
+parseBody NoBody _ pos _ = Ok (ParsedBody [||] [] pos)
 parseBody (FixedBody size) input pos _ = do
   (body, finalPos) <- readSliceAt input pos size
-  if finalPos /= arrayLength input then
-    malformed "http: bytes after framed fixed-length request"
-  else
-    Ok (ParsedBody body [] finalPos)
+  Ok (ParsedBody body [] finalPos)
 parseBody ChunkedBody input pos headerBytes =
   parseChunked input pos headerBytes (newBuilder ()) 0 0
 
--- | Parse one complete request while preserving structural failure class.
-export
-parseRequestClassified : Array Int -> Result HttpParseFailure Request
-parseRequestClassified input = do
+-- | The diagnostic each body mode reports for bytes past its own frame.
+trailingMessage : BodyMode -> String
+trailingMessage NoBody = "http: unframed or trailing request bytes"
+trailingMessage (FixedBody _) = "http: bytes after framed fixed-length request"
+trailingMessage ChunkedBody = "http: bytes after framed chunked request"
+
+data FramedRequest = FramedRequest Request BodyMode Int
+
+frameRequestAt : Array Int -> Int -> Result FrameError FramedRequest
+frameRequestAt input start = do
+  (RequestLine method target headerPos) <- parseRequestLine input start
+  (HeaderBlock headers bodyPos headerBytes) <- parseFields
+    input
+    headerPos
+    headerPos
+    0
+    0
+    False
+    []
+  () <- validateHost headers
+  mode <- selectBodyMode headers
+  keepAlive <- keepAliveFromHeaders headers
+  (ParsedBody body trailers finalPos) <- parseBody
+    mode
+    input
+    bodyPos
+    headerBytes
+  Ok
+    (FramedRequest
+      (Request method target headers trailers body keepAlive)
+      mode
+      finalPos)
+
+parseWholeBuffer : Array Int -> Result FrameError Request
+parseWholeBuffer input = do
   () <- resourceExcess (checkHttpRequestBytes (arrayLength input))
   if not (validBytes input 0) then
     malformed "http: input element outside byte range 0..255"
   else do
-    (RequestLine method target headerPos) <- parseRequestLine input
-    (HeaderBlock headers bodyPos headerBytes) <- parseFields
-      input
-      headerPos
-      headerPos
-      0
-      0
-      False
-      []
-    () <- validateHost headers
-    mode <- selectBodyMode headers
-    keepAlive <- keepAliveFromHeaders headers
-    (ParsedBody body trailers _) <- parseBody mode input bodyPos headerBytes
-    Ok (Request method target headers trailers body keepAlive)
+    (FramedRequest request mode finalPos) <- frameRequestAt input 0
+    if finalPos /= arrayLength input then
+      malformed (trailingMessage mode)
+    else
+      Ok request
+
+-- | Parse one complete request while preserving structural failure class.
+export
+parseRequestClassified : Array Int -> Result HttpParseFailure Request
+parseRequestClassified input = settle (parseWholeBuffer input)
+
+-- | Where a scan over a byte buffer stopped. `HttpNeedMore` is the one verdict
+-- more bytes can change; `HttpFramedAt` reports the index one past the last
+-- byte of the framed request, which is where the next one begins.
+public export data HttpFrame =
+  | HttpNeedMore
+  | HttpFramedAt Int
+  | HttpFrameFailed HttpParseFailure
+
+requestBytesVerdict : Int -> HttpFrame -> HttpFrame
+requestBytesVerdict size framed = match checkHttpRequestBytes size
+  Ok () => framed
+  Err message => HttpFrameFailed (HttpResourceExcess message)
+
+-- | Find the end of the first complete request at or after `start`. A buffer
+-- whose pending bytes already exceed the per-request ceiling is rejected
+-- rather than left pending, so a caller can bound what it buffers.
+export
+scanRequestBoundary : Array Int -> Int -> HttpFrame
+scanRequestBoundary input start =
+  if start < 0 || start > arrayLength input then
+    HttpFrameFailed (HttpMalformed "http: scan offset outside buffer")
+  else if not (validBytes input start) then
+    HttpFrameFailed
+      (HttpMalformed "http: input element outside byte range 0..255")
+  else match frameRequestAt input start
+    Ok (FramedRequest _ _ finalPos) =>
+      requestBytesVerdict (finalPos - start) (HttpFramedAt finalPos)
+    Err (Incomplete _) =>
+      requestBytesVerdict (arrayLength input - start) HttpNeedMore
+    Err (Fatal failure) => HttpFrameFailed failure
+
+-- | Parse the frame `[start, end)` exactly as `parseRequestClassified` parses
+-- that region on its own, so a scanned boundary and a parse cannot disagree.
+export
+parseRequestAt : Array Int -> Int -> Int -> Result HttpParseFailure Request
+parseRequestAt input start end =
+  if start < 0 || end < start || end > arrayLength input then
+    Err (HttpMalformed "http: request frame bounds outside buffer")
+  else
+    parseRequestClassified (slice input start (end - start))
 
 -- | Compatibility wrapper retaining the original diagnostic-facing API.
 export
