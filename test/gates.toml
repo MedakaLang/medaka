@@ -633,7 +633,7 @@ toolchain = []
 [[gate]]
 name = "pds/test/lexjson_vectors"
 area = "engines"
-shard = "gates_4"
+shard = "gates_3"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -1677,7 +1677,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_core_ir_prelude"
 area = "eval"
-shard = "gates_7"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1831,7 +1831,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_stdlib_conventions"
 area = "tools"
-shard = "gates_7"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1859,7 +1859,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_effect_hole"
 area = "infra"
-shard = "gates_7"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2559,7 +2559,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_os_entropy"
 area = "infra"
-shard = "gates_2"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2685,7 +2685,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_project_enrolment"
 area = "soundness"
-shard = "gates_6"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2979,7 +2979,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_snapshot_frontend"
 area = "frontend"
-shard = "gates_8"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3851,7 +3851,7 @@ name = "gates_1"
 full_cores = true
 wasm_arm = true
 rationale = "test/gate_shards/gates_1.txt"
-pinned_gates = ["pds/test/protocol_all_engines", "diff_compiler_engines", "diff_compiler_rejection_parity"]
+pinned_gates = ["pds/test/protocol_all_engines", "pds/test/read_routes_all_engines", "diff_compiler_engines", "diff_compiler_rejection_parity"]
 
 [[shard]]
 name = "gates_2"
