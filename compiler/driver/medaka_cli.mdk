@@ -31,10 +31,9 @@ import tools.fmt.{formatSource}
 import tools.gate_cmd.{gateHelpText, runGateCmd}
 import tools.new_cmd.{newProject}
 import driver.build_cmd.{
-  BuildResult,
-  BuildOk,
-  BuildErr,
+  BuildReport,
   BuildTarget,
+  ppBuildReport,
   TNative,
   TWasm,
   runBuild,
@@ -150,6 +149,10 @@ import driver.diagnostics.{
   cjFixJson,
   mkDiag,
   checkJsonFile,
+  checkJsonFileParts,
+  CheckJson(..),
+  ppCheckJson,
+  cjFoldIntoFile,
   readFileSafe,
   diagIsError,
   findMainFunDef,
@@ -343,6 +346,8 @@ liveSourceFingerprint root =
     " | cut -d' ' -f1"
   ]
   match runCommand "sh" ["-c", script]
+    -- fail-open-by-design: any failure (no perl, no hash tool, spawn error)
+    -- reports None, per the comment above ("the check silently skips").
     Ok (0, out, _) =>
       let h = stringTrim out
       if h == "" then None else Some h
@@ -393,8 +398,7 @@ checkSourceStaleness argv = match sourceStalenessVerdict ()
         ++ compilerDir
         ++ " — it may be stale; rebuild with 'make medaka'."
     if envOr "MEDAKA_STRICT" "" /= "" then
-      let _ = ePutStrLn msg
-      exit 1
+      dieMsg msg
     else if runJsonInvocation argv then
       pendingStaleNotice := Some msg
     else
@@ -431,12 +435,34 @@ flushStaleNoticeProse _ = match !pendingStaleNotice
 -- the `[perf]` lines (emitted as each phase ends), then the error.  Both
 -- flushes are no-ops when nothing was staged, so every non-`--json` run and
 -- every run without MEDAKA_PERF is byte-identical.
+-- The tree's uniform print-and-exit shape outside `run`'s flush-then-print
+-- path (#2264 shape B): print `msg` to stderr and exit 1.  Structurally
+-- identical to `entries/entry_support.failWith`, but not consolidatable with
+-- it here: that module is documented as `medaka run`-only scaffolding, free
+-- to import the whole compiler, which `medaka_cli.mdk` — compiled into the
+-- shipped binary and part of the emitter seed graph — cannot do.
+dieMsg : String -> <IO> Unit
+dieMsg msg =
+  let _ = ePutStrLn msg
+  exit 1
+
 runAbort : String -> <IO> Unit
 runAbort msg =
   let _ = flushStaleNoticeProse ()
   let _ = flushPerfSinkProse ()
-  let _ = ePutStrLn msg
-  exit 1
+  dieMsg msg
+
+-- `run`'s success chain repeatedly unwraps a `Result String a`, aborting via
+-- `runAbort` on `Err`; `orExit` is that unwrap made generic, so each step in
+-- the chain composes as one flat `let` instead of nesting the rest of the
+-- function inside the `Ok` arm.  The `panic` below never runs — `runAbort`'s
+-- `exit` ends the process first — it exists only so both match arms share
+-- type `a`.
+orExit : Result String a -> <IO> a
+orExit (Ok v) = v
+orExit (Err msg) =
+  let _ = runAbort msg
+  panic msg
 
 -- #2445 S-1: the env half of the TEST-ONLY unpin hatch.  The whole argument for the
 -- hatch — and for why it must NOT be set by a user — lives on `localPinPairs`
@@ -556,8 +582,7 @@ usage _ =
 unknownSubcommand : String -> <IO> Unit
 unknownSubcommand sub =
   let _ = ePutStrLn ("medaka: unknown subcommand '" ++ sub ++ "'")
-  let _ = ePutStrLn "  run `medaka help` for the list of subcommands"
-  exit 1
+  dieMsg "  run `medaka help` for the list of subcommands"
 
 -- ── check ─────────────────────────────────────────────────────────────────
 -- PARSE-ERROR-LOCATION Stage 1: render a located `ParseError` through the SAME
@@ -649,13 +674,9 @@ runCheckCmd argv =
       let stdlibDir = root ++ "/stdlib"
       let roots = entrySearchRoots (dirOf2 target) ++ [stdlibDir]
       match readPreludeFile rtPath
-        Err msg =>
-          let _ = ePutStrLn msg
-          exit 1
+        Err msg => dieMsg msg
         Ok rsrc => match readPreludeFile corePath
-          Err msg =>
-            let _ = ePutStrLn msg
-            exit 1
+          Err msg => dieMsg msg
           Ok csrc =>
             if jsonMode then
               -- E: `--types` requests a human-text scheme dump; the `--json`
@@ -670,13 +691,9 @@ runCheckCmd argv =
                     "medaka check: --types has no effect under --json (envelope has no scheme-dump field)"
               runCheckJsonCmd allowInternal rsrc csrc target stdlibDir
             else match readFile target
-              Err msg =>
-                let _ = ePutStrLn msg
-                exit 1
+              Err msg => dieMsg msg
               Ok tsrc => match parseResult tsrc
-                Err e =>
-                  let _ = ePutStrLn (ppParseError tsrc target e)
-                  exit 1
+                Err e => dieMsg (ppParseError tsrc target e)
                 -- Load with parseLocated (real ELoc spans), mirroring `run`
                 -- (line ~678): plain loadProgram uses placeholder-loc `parse`,
                 -- which collapses every span to 1:0, so an import-bearing
@@ -1085,9 +1102,7 @@ checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target m
           Some (emid, edecls) => mainShapeWarnings rtD coreD modsD edecls
           None => []
         emitLocatedWarnings tsrc target mainWarns
-    _ =>
-      let _ = ePutStrLn resDiags
-      exit 1
+    _ => dieMsg resDiags
 
 -- ── main-shape beginner-footgun warning (0.1.0 audit #3; #1236) ─────────────
 -- `medaka run` evaluates top-level bindings and checks `main` EXISTS but never
@@ -1261,7 +1276,7 @@ cjBuildFailedJson target msg = cjAllToJson [
 -- structured diagnostics to `check --json` on the same file — same code, same
 -- envelope), then, only if clean, the real emit+clang build. A build-stage
 -- failure (emitter/clang) becomes a `cjBuildFailedJson` envelope instead of the
--- plain rendered `BuildErr` text; a clean build prints the (empty-diagnostics)
+-- plain rendered error text; a clean build prints the (empty-diagnostics)
 -- gate JSON as its success marker, mirroring `check --json`'s clean output —
 -- no separate "built X -> Y" prose on this channel, so a machine consumer sees
 -- exactly one shape regardless of outcome.
@@ -1290,10 +1305,10 @@ runBuildJsonCmd a allowInternal root stdlibDir input outOpt target =
             let _ = println (cjBuildFailedJson input msg)
             exit 1
           Ok csrc =>
-            let (json, hasErr) =
-              checkJsonFile allowInternal rsrc csrc input stdlibDir
+            let (cj, hasErr) =
+              checkJsonFileParts allowInternal rsrc csrc input stdlibDir
             if hasErr then
-              let _ = println json
+              let _ = println (ppCheckJson cj)
               exit 1
             else
               let medaka = envOr "MEDAKA" "medaka"
@@ -1303,9 +1318,21 @@ runBuildJsonCmd a allowInternal root stdlibDir input outOpt target =
                 Some o => o
                 None => defaultOutPath target input
               match runBuild root medaka cc target input outPath keepIrCli
-                BuildOk _ => println json
-                BuildErr msg =>
-                  let _ = println (cjBuildFailedJson input msg)
+                -- #2243: the build's own notes (a failed `--keep-ir` copy)
+                -- join the entry file's `diagnostics` array rather than
+                -- vanishing with the status line this channel never prints.
+                -- `CjRendered` is the hand-built parse-error envelope, which
+                -- only ever arrives with `hasErr` set — unreachable here.
+                Ok rep => match cj
+                  CjRendered json => println json
+                  CjParts entry triples =>
+                    println
+                      (cjAllToJson (cjFoldIntoFile entry rep.notes triples))
+                -- A build-stage FAILURE already carried its notes: they are
+                -- part of the rendered message, exactly as the plain CLI
+                -- prints them, inside the one R-BUILD-FAILED diagnostic.
+                Err rep =>
+                  let _ = println (cjBuildFailedJson input (ppBuildReport rep))
                   exit 1
 
 -- The `{"files":[...]}` envelope for a target that could not be read at all —
@@ -1683,8 +1710,7 @@ assertFmtNoDashTargets : List String -> <IO> Unit
 assertFmtNoDashTargets [] = ()
 assertFmtNoDashTargets (x :: rest) =
   if stringLength x > 0 && stringSlice 0 1 x == "-" then
-    let _ = ePutStrLn (unknownFlagMessage fmtArgSpec x)
-    exit 1
+    dieMsg (unknownFlagMessage fmtArgSpec x)
   else
     assertFmtNoDashTargets rest
 
@@ -1707,14 +1733,11 @@ fmtModeGo ((k, _) :: rest) m
 -- and format each, aggregating. `--stdout` only makes sense for one file.
 fmtManyTargets : FmtMode -> List String -> <IO> Unit
 fmtManyTargets FmtStdout _ =
-  let _ = ePutStrLn "medaka fmt: --stdout requires exactly one file"
-  exit 1
+  dieMsg "medaka fmt: --stdout requires exactly one file"
 fmtManyTargets mode targets =
   let files = flatMap expandLintTarget targets
   match files
-    [] =>
-      let _ = ePutStrLn "medaka fmt: no .mdk files found"
-      exit 1
+    [] => dieMsg "medaka fmt: no .mdk files found"
     _ =>
       let (hadErr, changed) = fmtFilesGo mode files (False, 0)
       let _ = match mode
@@ -1803,32 +1826,22 @@ fmtModeConflict argv =
 
 fmtOne : FmtMode -> String -> <IO> Unit
 fmtOne mode file = match readFile file
-  Err msg =>
-    let _ = ePutStrLn "\{file}: \{msg}"
-    exit 1
+  Err msg => dieMsg "\{file}: \{msg}"
   -- PARSE-ERROR-LOCATION Stage 1: surface a located parse error before
   -- formatSource's panicking `parse` fires a bare `parse error`.
   Ok src => match parseResult src
-    Err e =>
-      let _ = ePutStrLn (ppParseError src file e)
-      exit 1
+    Err e => dieMsg (ppParseError src file e)
     Ok _ =>
       let formatted = formatSource src
       match mode
         FmtStdout => putStr formatted
         FmtCheck =>
-          if formatted == src then
-            ()
-          else
-            let _ = ePutStrLn (file ++ ": not formatted")
-            exit 1
+          if formatted == src then () else dieMsg (file ++ ": not formatted")
         FmtWrite =>
           if formatted == src then
             putStrLn "already formatted"
           else match writeFile file formatted
-            Err msg =>
-              let _ = ePutStrLn "\{file}: \{msg}"
-              exit 1
+            Err msg => dieMsg "\{file}: \{msg}"
             Ok _ => putStrLn "formatted 1 file"
 
 -- ── codemod ────────────────────────────────────────────────────────────────
@@ -1885,19 +1898,13 @@ runCodemodCmd (name :: rest) = match findCodemod name
         ePutStrLn "medaka codemod: unknown codemod '\{name}'"
     listCodemodsAndExit ()
   Some cm => match splitCodemodArgv rest CmDry [] []
-    Err msg =>
-      let _ = ePutStrLn msg
-      exit 1
+    Err msg => dieMsg msg
     Ok (mode, cargs, targets) => match codemodMk cm cargs
-      Err msg =>
-        let _ = ePutStrLn "medaka codemod \{name}: \{msg}"
-        exit 1
+      Err msg => dieMsg "medaka codemod \{name}: \{msg}"
       Ok xf =>
         let files = flatMap expandLintTarget targets
         match files
-          [] =>
-            let _ = ePutStrLn "medaka codemod: no .mdk files found"
-            exit 1
+          [] => dieMsg "medaka codemod: no .mdk files found"
           _ => match mode
             CmStdout => match files
               [one] => codemodStdout xf (codemodWarnDecls cm cargs) one
@@ -1926,8 +1933,7 @@ listCodemodsAndExit _ =
       "Usage: medaka codemod <name> [flags] [--write|--stdout] <paths...>"
   let _ = ePutStrLn ""
   let _ = ePutStrLn "Available codemods:"
-  let _ = ePutStrLn codemodListing
-  exit 1
+  dieMsg codemodListing
 
 -- Split the post-name argv into (mode, codemod-flags, paths).  --write/--stdout
 -- are consumed as modes; any other `--flag` is a codemod flag that consumes the
@@ -1983,13 +1989,9 @@ codemodStdout : (Decl -> (Decl, Bool)) ->
   String ->
   <IO> Unit
 codemodStdout xf warnFn file = match readFile file
-  Err msg =>
-    let _ = ePutStrLn "\{file}: \{msg}"
-    exit 1
+  Err msg => dieMsg "\{file}: \{msg}"
   Ok src => match codemodSource xf src
-    Err e =>
-      let _ = ePutStrLn (ppParseError src file e)
-      exit 1
+    Err e => dieMsg (ppParseError src file e)
     Ok result =>
       let _ = emitCodemodWarns warnFn file src
       match result
@@ -2078,8 +2080,7 @@ runNewCmd [arg] =
     -- all, so its known set is empty.  (The bare `medaka new` usage error
     -- below exits 1 too -- C3's convergence, no verb exits 2.)
     let _ = ePutStrLn (unknownFlagMessage newArgSpec arg)
-    let _ = ePutStrLn newUsageLine
-    exit 1
+    dieMsg newUsageLine
   else
     let code = newProject arg
     if code == 0 then () else exit code
@@ -2090,11 +2091,8 @@ runNewCmd args = match filterList (startsWith "-") args
 
   flagTok :: _ =>
     let _ = ePutStrLn (unknownFlagMessage newArgSpec flagTok)
-    let _ = ePutStrLn newUsageLine
-    exit 1
-  [] =>
-    let _ = ePutStrLn newUsageLine
-    exit 1
+    dieMsg newUsageLine
+  [] => dieMsg newUsageLine
 
 -- ── build ─────────────────────────────────────────────────────────────────
 -- Mirrors bin/main.ml's `build` arm (Build_cmd.run) + build_main.mdk: parse
@@ -2168,10 +2166,8 @@ runBuildModes a = match flagValue "--emit-rt-obj" a
     let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
     let cc = envOr "CC" "clang"
     match emitRtObj cc root objPath
-      BuildOk msg => println msg
-      BuildErr msg =>
-        let _ = ePutStrLn msg
-        exit 1
+      Ok rep => println (ppBuildReport rep)
+      Err rep => dieMsg (ppBuildReport rep)
   None => match flagValue "--emit-prelude-obj" a
     -- `medaka build --emit-prelude-obj <path>`: precompile stdlib/core.mdk to a
     -- reusable object with EXACTLY the flags a normal link would apply, then exit
@@ -2184,10 +2180,8 @@ runBuildModes a = match flagValue "--emit-rt-obj" a
       let cc = envOr "CC" "clang"
       let medaka = envOr "MEDAKA" "./medaka"
       match emitPreludeObj cc root medaka objPath
-        BuildOk msg => println msg
-        BuildErr msg =>
-          let _ = ePutStrLn msg
-          exit 1
+        Ok rep => println (ppBuildReport rep)
+        Err rep => dieMsg (ppBuildReport rep)
     -- #1078: `--json` is now a recognized flag (claimed by `buildArgSpec`,
     -- above) rather than a phantom second positional. Dispatch to a
     -- dedicated function per mode rather than inlining the branch here —
@@ -2206,13 +2200,10 @@ runBuildPlainCmd a =
   let perfOn = perfEnabled ()
   let perfT0 = now ()
   match parseBuildArgs a
-    Err msg =>
-      let _ = ePutStrLn msg
-      exit 1
+    Err msg => dieMsg msg
     Ok (input, outOpt, target) =>
       if not (fileExists input) then
-        let _ = ePutStrLn ("error: no such file: " ++ input)
-        exit 1
+        dieMsg ("error: no such file: " ++ input)
       else
         let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
         let medaka = envOr "MEDAKA" "medaka"
@@ -2224,9 +2215,7 @@ runBuildPlainCmd a =
           Some o => o
           None => defaultOutPath target input
         match typecheckGate allowInternal root inputAbs
-          TGErr msg =>
-            let _ = ePutStrLn msg
-            exit 1
+          TGErr msg => dieMsg msg
           -- Warnings BEFORE the emitter runs, so they precede clang's own output
           -- and any `built <in> -> <out>` line — the same order `check` uses and
           -- the order a reader scanning a build log expects.  They never change
@@ -2236,14 +2225,12 @@ runBuildPlainCmd a =
             let perfTTc = now ()
             let _ = emitPhase perfOn "typecheck" (perfTTc - perfT0) input
             match runBuild root medaka cc target inputAbs outPath keepIrCli
-              BuildOk msg =>
+              Ok rep =>
                 let perfTEmit = now ()
                 let _ = emitPhase perfOn "emit" (perfTEmit - perfTTc) input
                 let _ = emitTotal perfOn (perfTEmit - perfT0)
-                println msg
-              BuildErr msg =>
-                let _ = ePutStrLn msg
-                exit 1
+                println (ppBuildReport rep)
+              Err rep => dieMsg (ppBuildReport rep)
 
 -- `medaka build --json`'s own argument-parsing arm: a flag error still goes
 -- through `parseBuildArgs`, but a bad-args message is now the JSON envelope
@@ -2780,189 +2767,176 @@ runRunCmd argv =
       -- (eval.mdk's pArgs reads this Ref): `medaka run prog.mdk a b` ⇒ ["a","b"],
       -- matching what the same program's compiled binary sees.
       progArgsRef := progArgs
-      match readPreludeFile rtPath
-        Err msg => runAbort msg
-        Ok rsrc => match readPreludeFile corePath
-          Err msg => runAbort msg
-          -- Parse the user modules with parseLocated (real ELoc spans) so a
-          -- runtime error (E-*) can report a correct file:L:C.  Plain loadProgram
-          -- uses placeholder-loc `parse`, which collapses every span to 1:0.
-          -- Structurally identical decls → eval output byte-identical.
-          -- PARSE-ERROR-LOCATION Stage 1: surface a located parse error on the
-          -- ENTRY file.  An IMPORTED module's parse error is located by the loader
-          -- itself (#100) and rendered by moduleLoadErrText, so neither one is a
-          -- bare `parse error` panic any more.  Error-path only; valid input is
-          -- unaffected.
-          Ok csrc => match parseResult (readFileSafe target)
-            Err e => runAbort (ppParseError (readFileSafe target) target e)
-            -- #186/#1360: keep the loader's per-module PATHS instead of dropping
-            -- them at the load site.  They were already being carried here and
-            -- discarded one line later, which is why every imported module's
-            -- resolve error had to fall back to the entry file's path.
-            Ok _ => match loadProgramFilesLocatedE (_ => None) target roots
-              Err lerr =>
-                runAbort
-                  (moduleLoadErrText
-                    (readFileSafe target)
-                    target
-                    stdlibDir
-                    lerr)
-              Ok modsWithPath =>
-                let mods = map dropModPath modsWithPath
-                let pathMap = map modIdToPath modsWithPath
-                -- #1542: same per-module (modId -> path) map #41 already built
-                -- here for resolve-phase attribution, now ALSO published to the
-                -- evaluator so a RUNTIME error raised inside an imported module
-                -- reports THAT module's file instead of the entry's.
-                modulePathMap := pathMap
-                -- S-1/#2234 (F-converge): same content-keyed prelude memo `check`
-                -- already routes through; consumed live by `elaborateModules` below.
-                let rtD = desugaredPrelude rsrc
-                let coreD = desugaredPrelude csrc
-                let modsD = map desugarPair mods
-                let trusted = projectTrustedMods target roots stdlibDir mods
-                -- #2072: the FFI-stamp discriminator, published to typecheck alongside the
-                -- #1713 reference-trust set above.  DIFFERENT predicate, deliberately: this
-                -- one is stdlib-root ownership with NO `allow-internal` opt-out.
-                let (flatStdlib, ownedStdlib) =
-                  stdlibOwnership target roots stdlibDir mods
-                let _ = setStdlibOwnership flatStdlib ownedStdlib
-                let perfTLoad = now ()
-                let _ = emitPhase perfOn "load" (perfTLoad - perfT0) target
-                -- Route by module count, mirroring `checkRoute` EXACTLY, so that
-                -- `run` accepts/rejects the SAME set of programs `medaka check`
-                -- does (beta P0-1 / P1-8).  The old gate was resolve-errors +
-                -- elaborate + hadTypeErrors for ALL programs — a WEAKER predicate
-                -- than check's: it missed constraint/no-impl/coherence errors
-                -- (so run silently executed ill-typed programs) AND spuriously
-                -- fired on some check-clean programs (standalone-fn-shadows-iface).
-                -- S-3/#164 (F-converge): match on the RAW `mods` rather than the
-                -- desugared `modsD` so this arm can hand `analyzeFrom` the loader's
-                -- own raw, real-span decls (`analyzeFrom` desugars internally, and
-                -- its guard-exhaustiveness/`checkDerives` passes need the RAW tree).
-                -- `desugarPair` preserves the module id and `map` preserves length,
-                -- so the routing decision and `runMid` are unchanged.
-                match mods
-                  [(runMid, runDecls)] =>
-                    -- Single-file: gate on the SAME located analysis `check`
-                    -- uses (analyzeLocatedG → checkImplObligations et al.) and
-                    -- render byte-identical caret diagnostics via ppDiagCliSrc,
-                    -- instead of the opaque "type error in <file>" message (P1-8).
-                    let tsrc = readFileSafe target
-                    -- S-3/#164 (F-converge): `analyzeFrom` with the loader's decls,
-                    -- skipping `analyzeLocatedG`'s redundant `parseLocated tsrc`.
-                    -- ⚠️ Predicate preserved EXACTLY: unlike `typecheckGateRoute`'s
-                    -- single-module arm, `run`'s never consulted the `trusted` set —
-                    -- only the bare `--allow-internal` flag.  That asymmetry is
-                    -- pre-existing; this parity slice does not change it.
-                    let diags =
-                      analyzeFrom
-                        runMid
-                        rsrc
-                        csrc
-                        runDecls
-                        (internalGuardFor allowInternal)
-                    let errs = filter isDiagError diags
-                    match errs
-                      [] =>
-                        let _ = resetTypeErrorsSticky ()
-                        let elaborated = elaborateRun rtD coreD modsD
-                        let perfTCheck = now ()
-                        let _ =
-                          emitPhase
-                            perfOn
-                            "check"
-                            (perfTCheck - perfTLoad)
-                            target
-                        -- #2400 / F4: SINGLE-FILE only, so `allWarnTriples` carries
-                        -- the FULL warning set here (it filters `isDiagWarn`, not
-                        -- `runBuildWarnCodes`; see its note).
-                        -- `finishRunEval` carries this triple down BOTH channels
-                        -- (human `renderTripleWarnings`, `--json` `pendingRunDiags`),
-                        -- so widening here widens both in lockstep.  The multi-module
-                        -- arm below keeps `projWarns` on the coherence allowlist.
-                        finishRunEval
-                          target
-                          jsonMode
-                          elaborated
-                          mods
-                          (allWarnTriples tsrc target diags)
-                          (runEvalPerf perfOn target perfT0 perfTCheck)
-                      _ =>
-                        runAbort
-                          (joinNl
-                            (map
-                              (ppDiagCliLines (srcLinesArr tsrc) target)
-                              errs))
-                  _ =>
-                    -- Multi-module: gate on `locatedProjectErrors` — the SAME
-                    -- analyzeProject predicate `checkRoute`'s multi-module arm uses —
-                    -- so `run` rejects exactly the graphs `check` rejects (bug #40).
-                    --
-                    -- The old gate here was resolve + elaborateModules +
-                    -- hadTypeErrors, which is BLIND to constraint / missing-impl
-                    -- errors: elaborateModules sets implInferEnabled, and typecheck
-                    -- skips checkImplObligations under it.  So multi-module `run`
-                    -- EXECUTED an ill-typed program (`println "\{Foo 1}"` with no
-                    -- Display impl) and died on an unrelated `intToString: not an Int`
-                    -- panic, while `check` on the same program printed the real
-                    -- located `No impl of Display for Foo`.  See typecheckGateRoute
-                    -- for why this is not an over-rejection.
-                    -- #186/#1360: per-module attribution via the loader's
-                    -- `pathMap`, the same seam `checkRoute` uses (#41).
-                    let resDiags =
-                      ppResolveErrorsByFile
-                        (resolveModulesErrorsByFile
-                          pathMap
-                          allowInternal
-                          trusted
-                          rtD
-                          coreD
-                          modsD)
-                    match resDiags
-                      -- `locatedProjectDiags`, not `locatedProjectErrors`: the same
-                      -- single `analyzeProject` pass, but keeping the WARNINGS the
-                      -- errors-only accessor discarded (see its own note).
-                      "" =>
-                        match (locatedProjectDiags
+      let rsrc = orExit (readPreludeFile rtPath)
+      let csrc = orExit (readPreludeFile corePath)
+      -- Parse the user modules with parseLocated (real ELoc spans) so a
+      -- runtime error (E-*) can report a correct file:L:C.  Plain loadProgram
+      -- uses placeholder-loc `parse`, which collapses every span to 1:0.
+      -- Structurally identical decls → eval output byte-identical.
+      -- PARSE-ERROR-LOCATION Stage 1: surface a located parse error on the
+      -- ENTRY file.  An IMPORTED module's parse error is located by the loader
+      -- itself (#100) and rendered by moduleLoadErrText, so neither one is a
+      -- bare `parse error` panic any more.  Error-path only; valid input is
+      -- unaffected.
+      let tsrc = readFileSafe target
+      let _ = orExit (mapErr (ppParseError tsrc target) (parseResult tsrc))
+      -- #186/#1360: keep the loader's per-module PATHS instead of dropping
+      -- them at the load site.  They were already being carried here and
+      -- discarded one line later, which is why every imported module's
+      -- resolve error had to fall back to the entry file's path.
+      -- `moduleLoadErrText` renders in `<IO>`, so this step stays a local
+      -- match rather than composing through `orExit`/`mapErr` (both fixed to
+      -- a pure error-rendering function).
+      let modsWithPath = match loadProgramFilesLocatedE (_ => None) target roots
+        Err lerr =>
+          let _ =
+            runAbort
+              (moduleLoadErrText (readFileSafe target) target stdlibDir lerr)
+          panic "unreachable"
+        Ok mp => mp
+      let mods = map dropModPath modsWithPath
+      let pathMap = map modIdToPath modsWithPath
+      -- #1542: same per-module (modId -> path) map #41 already built
+      -- here for resolve-phase attribution, now ALSO published to the
+      -- evaluator so a RUNTIME error raised inside an imported module
+      -- reports THAT module's file instead of the entry's.
+      modulePathMap := pathMap
+      -- S-1/#2234 (F-converge): same content-keyed prelude memo `check`
+      -- already routes through; consumed live by `elaborateModules` below.
+      let rtD = desugaredPrelude rsrc
+      let coreD = desugaredPrelude csrc
+      let modsD = map desugarPair mods
+      let trusted = projectTrustedMods target roots stdlibDir mods
+      -- #2072: the FFI-stamp discriminator, published to typecheck alongside the
+      -- #1713 reference-trust set above.  DIFFERENT predicate, deliberately: this
+      -- one is stdlib-root ownership with NO `allow-internal` opt-out.
+      let (flatStdlib, ownedStdlib) =
+        stdlibOwnership target roots stdlibDir mods
+      let _ = setStdlibOwnership flatStdlib ownedStdlib
+      let perfTLoad = now ()
+      let _ = emitPhase perfOn "load" (perfTLoad - perfT0) target
+      -- Route by module count, mirroring `checkRoute` EXACTLY, so that
+      -- `run` accepts/rejects the SAME set of programs `medaka check`
+      -- does (beta P0-1 / P1-8).  The old gate was resolve-errors +
+      -- elaborate + hadTypeErrors for ALL programs — a WEAKER predicate
+      -- than check's: it missed constraint/no-impl/coherence errors
+      -- (so run silently executed ill-typed programs) AND spuriously
+      -- fired on some check-clean programs (standalone-fn-shadows-iface).
+      -- S-3/#164 (F-converge): match on the RAW `mods` rather than the
+      -- desugared `modsD` so this arm can hand `analyzeFrom` the loader's
+      -- own raw, real-span decls (`analyzeFrom` desugars internally, and
+      -- its guard-exhaustiveness/`checkDerives` passes need the RAW tree).
+      -- `desugarPair` preserves the module id and `map` preserves length,
+      -- so the routing decision and `runMid` are unchanged.
+      match mods
+        [(runMid, runDecls)] =>
+          -- Single-file: gate on the SAME located analysis `check`
+          -- uses (analyzeLocatedG → checkImplObligations et al.) and
+          -- render byte-identical caret diagnostics via ppDiagCliSrc,
+          -- instead of the opaque "type error in <file>" message (P1-8).
+          let tsrc = readFileSafe target
+          -- S-3/#164 (F-converge): `analyzeFrom` with the loader's decls,
+          -- skipping `analyzeLocatedG`'s redundant `parseLocated tsrc`.
+          -- ⚠️ Predicate preserved EXACTLY: unlike `typecheckGateRoute`'s
+          -- single-module arm, `run`'s never consulted the `trusted` set —
+          -- only the bare `--allow-internal` flag.  That asymmetry is
+          -- pre-existing; this parity slice does not change it.
+          let diags =
+            analyzeFrom
+              runMid
+              rsrc
+              csrc
+              runDecls
+              (internalGuardFor allowInternal)
+          let errs = filter isDiagError diags
+          match errs
+            [] =>
+              let _ = resetTypeErrorsSticky ()
+              let elaborated = elaborateRun rtD coreD modsD
+              let perfTCheck = now ()
+              let _ = emitPhase perfOn "check" (perfTCheck - perfTLoad) target
+              -- #2400 / F4: SINGLE-FILE only, so `allWarnTriples` carries
+              -- the FULL warning set here (it filters `isDiagWarn`, not
+              -- `runBuildWarnCodes`; see its note).
+              -- `finishRunEval` carries this triple down BOTH channels
+              -- (human `renderTripleWarnings`, `--json` `pendingRunDiags`),
+              -- so widening here widens both in lockstep.  The multi-module
+              -- arm below keeps `projWarns` on the coherence allowlist.
+              finishRunEval
+                target
+                jsonMode
+                elaborated
+                mods
+                (allWarnTriples tsrc target diags)
+                (runEvalPerf perfOn target perfT0 perfTCheck)
+            _ =>
+              runAbort
+                (joinNl (map (ppDiagCliLines (srcLinesArr tsrc) target) errs))
+        _ =>
+          -- Multi-module: gate on `locatedProjectErrors` — the SAME
+          -- analyzeProject predicate `checkRoute`'s multi-module arm uses —
+          -- so `run` rejects exactly the graphs `check` rejects (bug #40).
+          --
+          -- The old gate here was resolve + elaborateModules +
+          -- hadTypeErrors, which is BLIND to constraint / missing-impl
+          -- errors: elaborateModules sets implInferEnabled, and typecheck
+          -- skips checkImplObligations under it.  So multi-module `run`
+          -- EXECUTED an ill-typed program (`println "\{Foo 1}"` with no
+          -- Display impl) and died on an unrelated `intToString: not an Int`
+          -- panic, while `check` on the same program printed the real
+          -- located `No impl of Display for Foo`.  See typecheckGateRoute
+          -- for why this is not an over-rejection.
+          -- #186/#1360: per-module attribution via the loader's
+          -- `pathMap`, the same seam `checkRoute` uses (#41).
+          let resDiags =
+            ppResolveErrorsByFile
+              (resolveModulesErrorsByFile
+                pathMap
+                allowInternal
+                trusted
+                rtD
+                coreD
+                modsD)
+          match resDiags
+            -- `locatedProjectDiags`, not `locatedProjectErrors`: the same
+            -- single `analyzeProject` pass, but keeping the WARNINGS the
+            -- errors-only accessor discarded (see its own note).
+            "" =>
+              match (locatedProjectDiags
+                allowInternal
+                trusted
+                target
+                roots
+                rsrc
+                csrc)
+                (Some errText, _, _) => runAbort errText
+                (None, projWarns, _) =>
+                  let _ = resetTypeErrorsSticky ()
+                  let elaborated = elaborateRun rtD coreD modsD
+                  match hadTypeErrors ()
+                    True =>
+                      -- Belt-and-braces: anything only the emit/eval
+                      -- elaboration can see still aborts before eval.
+                      runAbort
+                        (locatedOrGeneric
                           allowInternal
                           trusted
                           target
                           roots
                           rsrc
                           csrc)
-                          (Some errText, _, _) => runAbort errText
-                          (None, projWarns, _) =>
-                            let _ = resetTypeErrorsSticky ()
-                            let elaborated = elaborateRun rtD coreD modsD
-                            match hadTypeErrors ()
-                              True =>
-                                -- Belt-and-braces: anything only the emit/eval
-                                -- elaboration can see still aborts before eval.
-                                runAbort
-                                  (locatedOrGeneric
-                                    allowInternal
-                                    trusted
-                                    target
-                                    roots
-                                    rsrc
-                                    csrc)
-                              False =>
-                                let perfTCheck = now ()
-                                let _ =
-                                  emitPhase
-                                    perfOn
-                                    "check"
-                                    (perfTCheck - perfTLoad)
-                                    target
-                                finishRunEval
-                                  target
-                                  jsonMode
-                                  elaborated
-                                  mods
-                                  projWarns
-                                  (runEvalPerf perfOn target perfT0 perfTCheck)
-                      _ => runAbort resDiags
+                    False =>
+                      let perfTCheck = now ()
+                      let _ =
+                        emitPhase perfOn "check" (perfTCheck - perfTLoad) target
+                      finishRunEval
+                        target
+                        jsonMode
+                        elaborated
+                        mods
+                        projWarns
+                        (runEvalPerf perfOn target perfT0 perfTCheck)
+            _ => runAbort resDiags
 -- G1 (SOUNDNESS): typecheck the WHOLE module graph and abort before
 -- eval on ANY type error.  elaborateModules route-stamps via the
 -- per-module typecheck (checkModuleFullImpl), which pushes into the
@@ -3132,17 +3106,11 @@ runTestCmd argv0 =
   -- check and that normalisation are both `args.mdk`'s job now.
   let a = requireArgs testArgSpec argv0
   match parseTestEngines a
-    Err msg =>
-      let _ = ePutStrLn "medaka test: \{msg}"
-      exit 1
+    Err msg => dieMsg "medaka test: \{msg}"
     Ok engines => match parseTestCasesFlag a
-      Err msg =>
-        let _ = ePutStrLn "medaka test: \{msg}"
-        exit 1
+      Err msg => dieMsg "medaka test: \{msg}"
       Ok casesOpt => match parseTestIntFlag "--seed" a
-        Err msg =>
-          let _ = ePutStrLn "medaka test: \{msg}"
-          exit 1
+        Err msg => dieMsg "medaka test: \{msg}"
         Ok seedOpt =>
           let _ = match seedOpt
             Some s => seedPropRng s
@@ -3253,17 +3221,11 @@ runTestJsonCmd engines cases filterOpt target =
   let corePath = root ++ "/stdlib/core.mdk"
   let stdlibDir = root ++ "/stdlib"
   match readPreludeFile rtPath
-    Err e =>
-      let _ = ePutStrLn e
-      exit 1
+    Err e => dieMsg e
     Ok rsrc => match readPreludeFile corePath
-      Err e =>
-        let _ = ePutStrLn e
-        exit 1
+      Err e => dieMsg e
       Ok csrc => match readFile target
-        Err e =>
-          let _ = ePutStrLn e
-          exit 1
+        Err e => dieMsg e
         Ok tsrc =>
           let (typeError, runs, props, tests, typecheckSkipped) =
             runTestReport
@@ -3451,9 +3413,7 @@ runTestManyTargets : List Engine ->
 runTestManyTargets engines cases filterOpt targets =
   let files = flatMap expandLintTarget targets
   match files
-    [] =>
-      let _ = ePutStrLn "medaka test: no .mdk files found"
-      exit 1
+    [] => dieMsg "medaka test: no .mdk files found"
     _ =>
       let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
       let rtPath = root ++ "/stdlib/runtime.mdk"
@@ -3545,12 +3505,9 @@ runDocCmd argv =
 -- later positional at exit 0.  `doc` is single-file, so a second target is a
 -- usage error — mirrors `check`'s own extra-positional arm.
 runDocTargets : List String -> <IO> Unit
-runDocTargets [] =
-  let _ = ePutStrLn "usage: medaka doc <file.mdk>"
-  exit 1
+runDocTargets [] = dieMsg "usage: medaka doc <file.mdk>"
 runDocTargets (_ :: _ :: _) =
-  let _ = ePutStrLn "usage: medaka doc <file.mdk> (doc takes exactly one file)"
-  exit 1
+  dieMsg "usage: medaka doc <file.mdk> (doc takes exactly one file)"
 runDocTargets (target :: _) =
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let rtPath = root ++ "/stdlib/runtime.mdk"
@@ -3558,17 +3515,11 @@ runDocTargets (target :: _) =
   let stdlibDir = root ++ "/stdlib"
   let roots = entrySearchRoots (dirOf2 target) ++ [stdlibDir]
   match readPreludeFile rtPath
-    Err msg =>
-      let _ = ePutStrLn msg
-      exit 1
+    Err msg => dieMsg msg
     Ok rsrc => match readPreludeFile corePath
-      Err msg =>
-        let _ = ePutStrLn msg
-        exit 1
+      Err msg => dieMsg msg
       Ok csrc => match readFile target
-        Err msg =>
-          let _ = ePutStrLn msg
-          exit 1
+        Err msg => dieMsg msg
         Ok tsrc => putStr (runDoc rsrc csrc tsrc target roots)
 
 -- ── doc: library mode (S-doc-library-mode) ──────────────────────────────────
@@ -3576,29 +3527,20 @@ runDocTargets (target :: _) =
 -- write one page per module, one index, one inventory.
 runDocLibraryTargets : String -> List String -> <IO> Unit
 runDocLibraryTargets _ [] =
-  let _ = ePutStrLn "usage: medaka doc --out DIR <file.mdk> [<file.mdk> ...]"
-  exit 1
+  dieMsg "usage: medaka doc --out DIR <file.mdk> [<file.mdk> ...]"
 runDocLibraryTargets outDir targets =
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let rtPath = root ++ "/stdlib/runtime.mdk"
   let corePath = root ++ "/stdlib/core.mdk"
   let stdlibDir = root ++ "/stdlib"
   match readPreludeFile rtPath
-    Err msg =>
-      let _ = ePutStrLn msg
-      exit 1
+    Err msg => dieMsg msg
     Ok rsrc => match readPreludeFile corePath
-      Err msg =>
-        let _ = ePutStrLn msg
-        exit 1
+      Err msg => dieMsg msg
       Ok csrc => match ensureOutDir outDir
-        Err msg =>
-          let _ = ePutStrLn msg
-          exit 1
+        Err msg => dieMsg msg
         Ok _ => match collectModuleDocs rsrc csrc stdlibDir targets
-          Err msg =>
-            let _ = ePutStrLn msg
-            exit 1
+          Err msg => dieMsg msg
           -- `rebucketLibraryImpls` runs at the `List ModuleDoc` level, after
           -- every module is computed and before ANY output is written, so the
           -- pages, the index and the inventory all read the same (already
@@ -3687,9 +3629,7 @@ writeLibraryFile : String -> String -> String -> <IO> Unit
 writeLibraryFile outDir name contents =
   match writeFile (joinPath outDir name) contents
     Ok _ => ()
-    Err msg =>
-      let _ = ePutStrLn msg
-      exit 1
+    Err msg => dieMsg msg
 
 -- ── check-policy ───────────────────────────────────────────────────────────
 -- WS-1a of EFFECTS-CONFORMANCE-ROADMAP.md.  Mirrors bin/main.ml's `check-policy`
@@ -3762,17 +3702,11 @@ runCheckPolicyArgs (PolicyArgs (Some target) allow fn) =
   let rtPath = root ++ "/stdlib/runtime.mdk"
   let corePath = root ++ "/stdlib/core.mdk"
   match readPreludeFile rtPath
-    Err msg =>
-      let _ = ePutStrLn msg
-      exit 1
+    Err msg => dieMsg msg
     Ok rsrc => match readPreludeFile corePath
-      Err msg =>
-        let _ = ePutStrLn msg
-        exit 1
+      Err msg => dieMsg msg
       Ok csrc => match readFile target
-        Err msg =>
-          let _ = ePutStrLn msg
-          exit 1
+        Err msg => dieMsg msg
         Ok tsrc => match runCheckPolicy rsrc csrc tsrc allow fn
           -- runCheckPolicy forces the accepted-plugin evaluation before it
           -- returns, so an evaluation panic cannot leak an acceptance verdict.
@@ -3836,24 +3770,17 @@ runManifestCmd argv0 =
 
 runManifestArgs : ManifestArgs -> <IO> Unit
 runManifestArgs (ManifestArgs None _) =
-  let _ = ePutStrLn "usage: medaka manifest <file.mdk> [--fn name]"
-  exit 1
+  dieMsg "usage: medaka manifest <file.mdk> [--fn name]"
 runManifestArgs (ManifestArgs (Some target) fn) =
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let rtPath = root ++ "/stdlib/runtime.mdk"
   let corePath = root ++ "/stdlib/core.mdk"
   match readPreludeFile rtPath
-    Err msg =>
-      let _ = ePutStrLn msg
-      exit 1
+    Err msg => dieMsg msg
     Ok rsrc => match readPreludeFile corePath
-      Err msg =>
-        let _ = ePutStrLn msg
-        exit 1
+      Err msg => dieMsg msg
       Ok csrc => match readFile target
-        Err msg =>
-          let _ = ePutStrLn msg
-          exit 1
+        Err msg => dieMsg msg
         Ok tsrc => putStr (runManifest rsrc csrc tsrc fn)
 
 -- ── lint ──────────────────────────────────────────────────────────────────
@@ -4217,9 +4144,7 @@ lintTargetExists t = match listDir t
 -- this one fires when every named target DID exist and simply held no `.mdk`.
 assertLintTargetsNonEmpty : List String -> <IO> Unit
 assertLintTargetsNonEmpty (_ :: _) = ()
-assertLintTargetsNonEmpty [] =
-  let _ = ePutStrLn "medaka lint: no .mdk files found"
-  exit 1
+assertLintTargetsNonEmpty [] = dieMsg "medaka lint: no .mdk files found"
 
 assertLintTargetsExist : List String -> <IO> Unit
 assertLintTargetsExist [] = ()
@@ -4229,8 +4154,7 @@ assertLintTargetsExist targets =
     ()
   else
     let _ = ePutStrLn "medaka lint: these targets do not exist:"
-    let _ = ePutStrLn (joinNl (map (m => "  \{m}") missing))
-    exit 1
+    dieMsg (joinNl (map (m => "  \{m}") missing))
 
 -- Resolve file args to a concrete list of .mdk paths.
 -- Empty args → project root mode (find medaka.toml, list top-level .mdk files).
@@ -4540,8 +4464,7 @@ assertSnapshotTargetsExist files =
     ()
   else
     let _ = ePutStrLn "medaka snapshot: these targets do not exist:"
-    let _ = ePutStrLn (joinNl (map (m => "  \{m}") missing))
-    exit 1
+    dieMsg (joinNl (map (m => "  \{m}") missing))
 
 -- Lock 1, on its own, with its own message.  A `--bless` naming nothing is refused BEFORE
 -- target expansion, so the refusal cannot be confused with "your glob matched no files".
@@ -4736,13 +4659,9 @@ runReplCmd [] =
   let rtPath = root ++ "/stdlib/runtime.mdk"
   let corePath = root ++ "/stdlib/core.mdk"
   match readPreludeFile rtPath
-    Err msg =>
-      let _ = ePutStrLn msg
-      exit 1
+    Err msg => dieMsg msg
     Ok rsrc => match readPreludeFile corePath
-      Err msg =>
-        let _ = ePutStrLn msg
-        exit 1
+      Err msg => dieMsg msg
       Ok csrc =>
         -- S-1/#2234 (F-converge): content-keyed prelude memo, same as every other
         -- verb's route; consumed live by `initSession` below.
@@ -4759,8 +4678,7 @@ runReplCmd ("-h" :: _) =
 runReplCmd (bad :: _) =
   -- C2: `repl` takes no flags, so its known set is empty.
   let _ = ePutStrLn (unknownFlagMessage replArgSpec bad)
-  let _ = ePutStrLn replUsageLine
-  exit 1
+  dieMsg replUsageLine
 
 -- ── lsp ───────────────────────────────────────────────────────────────────
 -- Mirrors bin/main.ml's `lsp` arm (Lsp_server.run) + lsp_main.mdk: read
@@ -4805,8 +4723,7 @@ runLspCmd ("-h" :: _) =
 runLspCmd (bad :: _) =
   -- C2: `lsp` takes no flags either.
   let _ = ePutStrLn (unknownFlagMessage lspArgSpec bad)
-  let _ = ePutStrLn lspUsageLine
-  exit 1
+  dieMsg lspUsageLine
 
 runLspServerFromEnv : Unit -> <IO> Unit
 runLspServerFromEnv _ =
@@ -4814,13 +4731,9 @@ runLspServerFromEnv _ =
   let rtPath = root ++ "/stdlib/runtime.mdk"
   let corePath = root ++ "/stdlib/core.mdk"
   match readPreludeFile rtPath
-    Err msg =>
-      let _ = ePutStrLn msg
-      exit 1
+    Err msg => dieMsg msg
     Ok rsrc => match readPreludeFile corePath
-      Err msg =>
-        let _ = ePutStrLn msg
-        exit 1
+      Err msg => dieMsg msg
       Ok csrc => runServer rsrc csrc
 
 -- Short usage blurb for `medaka mcp --help` / `-h` — mirrors the one-line
@@ -4873,12 +4786,8 @@ runMcpServerFromEnv _ =
   let corePath = root ++ "/stdlib/core.mdk"
   let stdlibDir = root ++ "/stdlib"
   match readPreludeFile rtPath
-    Err msg =>
-      let _ = ePutStrLn msg
-      exit 1
+    Err msg => dieMsg msg
     Ok rsrc => match readPreludeFile corePath
-      Err msg =>
-        let _ = ePutStrLn msg
-        exit 1
+      Err msg => dieMsg msg
       Ok csrc =>
         runMcpServer rsrc csrc stdlibDir sourceStalenessVerdict medakaVersion

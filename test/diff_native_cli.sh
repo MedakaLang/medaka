@@ -472,5 +472,43 @@ case "$tc_got2" in
     printf '  got:  [%s]\n' "$tc_got2" ;;
 esac
 
+# ── build --json surfaces build-stage notes (#2243) ───────────────────────
+# `medaka build --json` used to print the front-end gate's envelope verbatim on
+# a successful build, so anything the BUILD stage itself had to say — a
+# `--keep-ir` copy that failed — reached the plain CLI and vanished from the
+# machine channel.  A directory at `<out>.ll` makes that copy fail
+# deterministically without making the build fail (the note is best-effort by
+# design, see keepIrOutcome in compiler/driver/build_cmd.mdk).  Both arms must
+# exit 0: the plain one printing its long-standing wording unchanged, the JSON
+# one carrying the same warning as a W-KEEP-IR-FAILED diagnostic inside the one
+# {"files":[...]} envelope rather than on a second channel.
+ki_dir="$TMP/ki_plain.bin.ll"
+rm -rf "$ki_dir"; mkdir -p "$ki_dir"
+ki_plain="$(MEDAKA_ROOT="$ROOT" MEDAKA_EMITTER="$EMITTER" bound "$MEDAKA" build \
+  "$FIX/run/hello.mdk" -o "$TMP/ki_plain.bin" --keep-ir 2>&1)"
+ki_plain_rc=$?
+case "$ki_plain$ki_plain_rc" in
+  *"warning: could not keep IR at $ki_dir: "*0)
+    pass=$((pass+1)); printf 'ok   build/keep-ir-plain-warning\n' ;;
+  *)
+    fail=$((fail+1))
+    printf 'FAIL build/keep-ir-plain-warning (want "warning: could not keep IR at %s: ..." and exit 0)\n' "$ki_dir"
+    printf '  got:  [%s] rc=%s\n' "$ki_plain" "$ki_plain_rc" ;;
+esac
+
+ki_jdir="$TMP/ki_json.bin.ll"
+rm -rf "$ki_jdir"; mkdir -p "$ki_jdir"
+ki_json="$(MEDAKA_ROOT="$ROOT" MEDAKA_EMITTER="$EMITTER" bound "$MEDAKA" build --json \
+  "$FIX/run/hello.mdk" -o "$TMP/ki_json.bin" --keep-ir 2>/dev/null)"
+ki_json_rc=$?
+case "$ki_json$ki_json_rc" in
+  *'"code":"W-KEEP-IR-FAILED"'*"could not keep IR at $ki_jdir"*0)
+    pass=$((pass+1)); printf 'ok   build/keep-ir-json-warning\n' ;;
+  *)
+    fail=$((fail+1))
+    printf 'FAIL build/keep-ir-json-warning (want a W-KEEP-IR-FAILED diagnostic naming %s, exit 0)\n' "$ki_jdir"
+    printf '  got:  [%s] rc=%s\n' "$ki_json" "$ki_json_rc" ;;
+esac
+
 printf '\n%d ok, %d failing\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

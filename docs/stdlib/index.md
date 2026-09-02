@@ -337,6 +337,7 @@ Output to standard error, debug printing, and helpers for files and the environm
 - [`eprintln`](io.md#eprintln)
 - [`inspect`](io.md#inspect)
 - [`readLines`](io.md#readlines)
+- [`runCommandOk`](io.md#runcommandok)
 - [`getEnvOr`](io.md#getenvor)
 
 ## [`json`](json.md)
