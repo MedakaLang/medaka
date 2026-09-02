@@ -5,7 +5,7 @@ A JSON value type with a parser and a serializer.
 `parse` turns JSON text into a `Json` value and `stringify` turns a value
 back into compact text. Arrays and objects are stored in arrays, so
 indexing is `O(1)` and an object keeps its keys in source order. The
-accessors (`lookup`, `at`, `asString`, and the rest) take a value apart
+accessors (`get`, `at`, `asString`, and the rest) take a value apart
 without pattern matching.
 
 Integers and floats are kept apart, so `3` parses as `JInt 3` and
@@ -107,10 +107,10 @@ Err "invalid literal, expected 'null'"
 
 ## Accessors
 
-### `lookup`
+### `get`
 
 ```
-lookup : String -> Json -> Option Json
+get : String -> Json -> Option Json
 ```
 
 The value at `key` in a `JObject`, or `None` when the key is absent or
@@ -119,9 +119,9 @@ the value is not an object.
 The lookup scans the members in order.
 
 ```medaka
-> lookup "b" (jObject [("a", JInt 1), ("b", JInt 2)])
+> get "b" (jObject [("a", JInt 1), ("b", JInt 2)])
 Some 2
-> lookup "z" (jObject [("a", JInt 1)])
+> get "z" (jObject [("a", JInt 1)])
 None
 ```
 

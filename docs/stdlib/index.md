@@ -319,7 +319,7 @@ A JSON value type with a parser and a serializer.
 - [`jObject`](json.md#jobject)
 - [`stringify`](json.md#stringify)
 - [`parse`](json.md#parse)
-- [`lookup`](json.md#lookup)
+- [`get`](json.md#get)
 - [`at`](json.md#at)
 - [`asString`](json.md#asstring)
 - [`asInt`](json.md#asint)
@@ -469,6 +469,7 @@ TCP connections and name resolution.
 
 - [`Connection`](net.md#connection)
 - [`Listener`](net.md#listener)
+- [`Shutdown`](net.md#shutdown)
 - [`resolve`](net.md#resolve)
 - [`connect`](net.md#connect)
 - [`listen`](net.md#listen)
@@ -532,7 +533,6 @@ The host primitives.
 - [`readAll`](runtime.md#readall)
 - [`readExactly`](runtime.md#readexactly)
 - [`Ref`](runtime.md#ref)
-- [`setRef`](runtime.md#setref)
 - [`readFile`](runtime.md#readfile)
 - [`readFileBytes`](runtime.md#readfilebytes)
 - [`writeFile`](runtime.md#writefile)
@@ -768,7 +768,6 @@ Durations, a UTC calendar, and the clock.
 - [`monotonic`](time.md#monotonic)
 - [`elapsedSince`](time.md#elapsedsince)
 - [`sleep`](time.md#sleep)
-- [`sleepSeconds`](time.md#sleepseconds)
 
 ## [`toml`](toml.md)
 
@@ -811,8 +810,8 @@ A growable, mutable array.
 - [`swap`](vector.md#swap)
 - [`clear`](vector.md#clear)
 - [`mapInPlace`](vector.md#mapinplace)
-- [`insertAt`](vector.md#insertat)
-- [`removeAt`](vector.md#removeat)
-- [`sortBy`](vector.md#sortby)
-- [`sort`](vector.md#sort)
+- [`insertAtInPlace`](vector.md#insertatinplace)
+- [`removeAtInPlace`](vector.md#removeatinplace)
+- [`sortInPlaceBy`](vector.md#sortinplaceby)
+- [`sortInPlace`](vector.md#sortinplace)
 

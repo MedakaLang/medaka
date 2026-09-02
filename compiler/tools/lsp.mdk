@@ -37,7 +37,7 @@ import json.{
   jArray,
   stringify,
   parse,
-  lookup,
+  get,
   asString,
   asInt,
 }
@@ -1209,15 +1209,15 @@ handleInlayHint runtimeSrc coreSrc idJson params docs =
 -- ── request-position helpers ────────────────────────────────────────────────
 -- Pull params.position.{line,character} (0-based) from a request message.
 positionLine : Json -> Option Int
-positionLine params = match lookup "position" params
-  Some pos => match lookup "line" pos
+positionLine params = match get "position" params
+  Some pos => match get "line" pos
     Some v => asInt v
     None => None
   None => None
 
 positionChar : Json -> Option Int
-positionChar params = match lookup "position" params
-  Some pos => match lookup "character" pos
+positionChar params = match get "position" params
+  Some pos => match get "character" pos
     Some v => asInt v
     None => None
   None => None
@@ -1913,9 +1913,9 @@ locationJson (path, loc) =
 -- `params.context.includeDeclaration` (LSP `ReferenceContext`). Missing
 -- `context`/field, or a non-bool value, defaults to `True` (F6, locked).
 includeDeclarationOf : Json -> Bool
-includeDeclarationOf params = match lookup "context" params
+includeDeclarationOf params = match get "context" params
   None => True
-  Some ctx => match lookup "includeDeclaration" ctx
+  Some ctx => match get "includeDeclaration" ctx
     Some (JBool b) => b
     _ => True
 
@@ -1955,12 +1955,12 @@ lastChangeText _ = None
 
 -- json field accessors specialized to the shapes we read.
 fieldOr : String -> Json -> Json
-fieldOr key j = match lookup key j
+fieldOr key j = match get key j
   Some v => v
   None => JNull
 
 fieldStr : String -> Json -> Option String
-fieldStr key j = match lookup key j
+fieldStr key j = match get key j
   Some v => asString v
   None => None
 
