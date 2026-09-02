@@ -56,7 +56,10 @@ fi
 # count here so a hand-edited site/ cannot be published half-populated. DERIVED
 # from main.js's own EXTRA_MODULES list rather than a hand-picked number: that
 # list moves independently of this script, and a hardcoded floor silently goes
-# stale (and falsely FAILS a correctly-built site/) the moment it does.
+# stale (and falsely FAILS a correctly-built site/) the moment it does — a
+# hardcoded `22` here went stale the moment EXTRA_MODULES' own count last
+# moved (e.g. the mut_array->vector rename) and silently blocked every deploy
+# with a FAIL that had nothing to do with a half-populated site.
 mdk_expected=$(( 2 + $(sed -n '/^const EXTRA_MODULES = \[/,/\];/p' "$SCRIPT_DIR/main.js" \
                     | grep -o "'[a-z_0-9]*'" | tr -d "'" | wc -l | tr -d ' ') ))
 mdk_count=$(find "$SITE/dist" -name '*.mdk' | wc -l | tr -d ' ')
