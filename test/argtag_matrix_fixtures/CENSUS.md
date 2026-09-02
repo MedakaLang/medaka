@@ -297,10 +297,11 @@ decidable than it was — and it scopes the guard by ACTUAL receiver, exactly th
 `checkArgTagDecidable` already did. Re-deriving a build-time refusal here would restore a
 false positive on unreachable collisions; re-deriving `1|1` would restore the S0.
 
-⚠️ **Honest limit.** `declHeadOfRouteWord` answers `""` when `ifaceImplHeadsRef` is
-uninstalled, so a driver that never lowered through `lowerImpls` sees only the group heads
-and still emits the silent chain. This cell pins the installed path, which is every path
-`medaka build`/`run` take today; it is a floor, not a proof.
+⚠️ **Honest limit.** `declHeadOfRouteWord` answers `""` when the driver's decl-derived
+heads table (`e.input.ifaceImplHeads`) is empty, so a driver that never lowered through
+`lowerImpls` sees only the group heads and still emits the silent chain. This cell pins
+the installed path, which is every path `medaka build`/`run` take today; it is a floor,
+not a proof.
 
 ### A6_same_head_chain_reached__one_default
 
