@@ -1033,7 +1033,11 @@ public export data Expr =
   -- dispatches by the literal's named type (mirror of lib/ast.ml's EHeadAnnot).
   | EHeadAnnot Expr Ty
   | EBlock (List DoStmt)
-  | EDo (List DoStmt)
+  -- Monadic block.  The Bool is the DEFERRED flag: False for a `do` block
+  -- (desugars to `andThen`/`pure`), True for a `defer` block (desugars to
+  -- `deferThen`/`deferPure`, the graded Deferred* family).  Both share every
+  -- statement form, continuation shape, and layout rule.
+  | EDo Bool (List DoStmt)
   | EStringInterp (List InterpPart)
   | EGuards (List GuardArm)
   | ERecordCreate String (List FieldAssign)
@@ -1831,9 +1835,9 @@ mapTyInExpr f (EHeadAnnot e0 t) =
 mapTyInExpr f (EBlock stmts) =
   let (ss2, c) = mapDoStmtsB f stmts
   (EBlock ss2, c)
-mapTyInExpr f (EDo stmts) =
+mapTyInExpr f (EDo d stmts) =
   let (ss2, c) = mapDoStmtsB f stmts
-  (EDo ss2, c)
+  (EDo d ss2, c)
 mapTyInExpr f (EStringInterp parts) =
   let (ps2, c) = mapInterpsB f parts
   (EStringInterp ps2, c)

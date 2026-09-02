@@ -2333,7 +2333,7 @@ payloadArityL (ConNamed fs _) = listLen fs
 nodeTag : Expr -> String
 nodeTag (ESection _) = "ESection"
 nodeTag (EGuards _) = "EGuards"
-nodeTag (EDo _) = "EDo"
+nodeTag (EDo _ _) = "EDo"
 nodeTag (EStringInterp _) = "EStringInterp"
 nodeTag (EVariantUpdate _ _ _) = "EVariantUpdate"
 nodeTag (EMapLit _ _) = "EMapLit"

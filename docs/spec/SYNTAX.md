@@ -452,6 +452,28 @@ result = do
 (lowers to `andThen`/`pure`). For imperative IO sequencing, use a **bare**
 indented block, not `do`.
 
+## defer blocks (`defer` keyword)
+
+```medaka
+import async.{Async, runAsync, liftIO}
+
+prog : Async <Stdout> Int
+prog = defer
+  x <- liftIO (u => 20)
+  y <- deferPure 22
+  deferPure (x + y)
+```
+
+`defer` is a `do` block over the graded `Deferred*` family in the prelude
+(`DeferredMappable.deferMap`, `DeferredApplicative.deferPure`/`deferAp`,
+`DeferredThenable.deferThen`) rather than `Mappable`/`Applicative`/`Thenable`.
+Every statement form (`x <- e`, a bare `e`, `let`), the refutable-pattern
+lowering, and the layout rules are identical to `do`; only the two methods the
+block lowers to differ — `deferThen`/`deferPure` instead of `andThen`/`pure`.
+It exists so an effect-indexed constructor such as `Async (e : Effect) a`, whose
+bind changes the effect index, can still be written in statement form. The
+keyword is unrelated to Go's or Zig's scope-exit `defer`.
+
 ## Data types
 
 ```medaka
@@ -990,14 +1012,14 @@ your identifiers is on this list first** — that is the classic symptom of
 hitting a reserved word where the parser expected a name, and it is a much
 more common cause than an actual parser bug.
 
-As of 2026-08-09 that command yields 30 spellings:
+As of 2026-09-02 that command yields 31 spellings:
 
 ```
-as        bench     data      default   deriving  do        effect
-else      export    extern    function  if        impl      import
-in        interface let       match     mut       newtype   of
-prop      public    rec       requires  test      then      type
-where     with
+as        bench     data      default   defer     deriving  do
+effect    else      export    extern    function  if        impl
+import    in        interface let       match     mut       newtype
+of        prop      public    rec       requires  test      then
+type      where     with
 ```
 
 ⚠️ **`record` is NOT on this list.** It was, until #62; it is now an ordinary

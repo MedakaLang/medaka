@@ -1,0 +1,10 @@
+-- `defer` blocks (#824) over the prelude's graded Deferred* family: the same
+-- statement grammar as `do`, lowered to `deferThen`/`deferPure`.  Runs on all
+-- three engines (eval / native / wasm) and must print 42 on each.
+import async.{Async, runAsync, liftIO}
+prog : Async <Stdout> Int
+prog = defer
+  x <- liftIO (u => 20)
+  y <- deferPure 22
+  deferPure (x + y)
+main = println (runAsync prog)

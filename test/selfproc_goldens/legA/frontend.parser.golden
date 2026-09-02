@@ -257,6 +257,11 @@ isTStringTok : Token -> Bool
 isTUpperTok : Token -> Bool
 joinComma : List String -> String
 joinSemi : List String -> String
+kindArrowRest : KindAnn -> Token -> Parser KindAnn
+kindAtomEmit : KindAnn -> Parser KindAnn
+kindAtomFor : Token -> Parser KindAnn
+kindAtomP : Parser KindAnn
+kindP : Parser KindAnn
 kvElemToField : Expr -> FieldAssign
 kvElems : List KvItem -> List Expr
 kvKVorElemFor : Expr -> Token -> Parser KvItem
@@ -385,7 +390,9 @@ parseCompose : Parser Expr
 parseCons : Parser Expr
 parseData : DataVis -> Parser Decl
 parseDecl : Parser Decl
+parseDefer : Parser Expr
 parseDo : Parser Expr
+parseDoBlock : Token -> Bool -> Parser Expr
 parseEffect : Bool -> Parser Decl
 parseEffectTy : Parser Ty
 parseErrorCol : ParseError -> Int
@@ -557,6 +564,9 @@ tyApplyAll : Ty -> List Ty -> Ty
 tyArrowSkipLayout : Token -> Parser Bool
 tyArrowTail : Ty -> Parser Ty
 tyFor : Token -> Parser Ty
+tyParamFor : Token -> Parser (String, Option KindAnn)
+tyParamP : Parser (String, Option KindAnn)
+tyParamsP : Parser (List (String, Option KindAnn))
 tyTupleOrSingle : List Ty -> Ty
 unaryFor : Token -> Parser Expr
 unexpectedLeftoverMsg : String -> Array Token -> Array Int -> Int -> Int -> String

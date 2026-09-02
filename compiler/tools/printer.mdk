@@ -714,7 +714,7 @@ exprPrec (ELetGroup _ _) = precTop
 exprPrec (EIf _ _ _) = precTop
 exprPrec (EMatch _ _) = precTop
 exprPrec (EBlock _) = precTop
-exprPrec (EDo _) = precTop
+exprPrec (EDo _ _) = precTop
 exprPrec (EAnnot _ _) = precTop
 exprPrec (EHeadAnnot _ _) = precTop
 exprPrec (EGuards _) = precTop
@@ -731,7 +731,7 @@ isBlockBody : Expr -> Bool
 isBlockBody (ELoc _ e) = isBlockBody e
 isBlockBody (EMatch _ _) = True
 isBlockBody (EBlock _) = True
-isBlockBody (EDo _) = True
+isBlockBody (EDo _ _) = True
 isBlockBody (EGuards _) = True
 isBlockBody (EIf _ t e) = isBlockBody t || isBlockBody e
 isBlockBody _ = False
@@ -805,6 +805,12 @@ printExpr minPrec e =
   let ep = exprPrec e
   let d = printExprRaw e
   if ep < minPrec then Cat (text "(") (Cat d (text ")")) else d
+
+-- the surface herald an EDo prints back as: `defer` when its deferred flag is
+-- set (#824), else `do`.  fmt round-trip depends on this.
+doKeyword : Bool -> String
+doKeyword True = "defer"
+doKeyword False = "do"
 
 printExprRaw : Expr -> Doc
 printExprRaw (ELit l) = printLit l
@@ -899,8 +905,10 @@ printExprRaw (ESection (SecLeft e op)) =
 printExprRaw (EAsPat x e) = Cat (text x) (Cat (text "@") (printExpr precAtom e))
 printExprRaw (EBlock stmts) =
   indentBlock (sepBy Hardline (map printDoStmt stmts))
-printExprRaw (EDo stmts) =
-  Cat (text "do") (indentBlock (sepBy Hardline (map printDoStmt stmts)))
+printExprRaw (EDo d stmts) =
+  Cat
+    (text (doKeyword d))
+    (indentBlock (sepBy Hardline (map printDoStmt stmts)))
 printExprRaw (EAnnot e t) =
   Cat (printExpr precTop e) (Cat (text " : ") (printType t))
 printExprRaw (EHeadAnnot e _) = printExpr precTop e
@@ -1080,7 +1088,7 @@ printIfBody c t e
 -- already emits `do\n  …`/`match sc\n  …`.  (peels ELoc.)
 isDoMatchFnBody : Expr -> Bool
 isDoMatchFnBody (ELoc _ e) = isDoMatchFnBody e
-isDoMatchFnBody (EDo _) = True
+isDoMatchFnBody (EDo _ _) = True
 isDoMatchFnBody (EMatch _ _) = True
 isDoMatchFnBody _ = False
 
@@ -1105,7 +1113,7 @@ printExprBodyW : Bool -> Expr -> Doc
 printExprBodyW wrapApp (ELoc _ e) = printExprBodyW wrapApp e
 printExprBodyW _ (EMatch sc arms) = printExprRaw (EMatch sc arms)
 printExprBodyW _ (EBlock stmts) = printExprRaw (EBlock stmts)
-printExprBodyW _ (EDo stmts) = printExprRaw (EDo stmts)
+printExprBodyW _ (EDo d stmts) = printExprRaw (EDo d stmts)
 printExprBodyW wrapApp (EBinOp op l r rf)
   | isContinuationOp op = printChain op (EBinOp op l r rf)
   | otherwise = printExpr precTop (EBinOp op l r rf)
@@ -1290,7 +1298,7 @@ declBlockLen _ = 0
 blockLenBody : Expr -> Int
 blockLenBody (ELoc _ e) = blockLenBody e
 blockLenBody (EBlock stmts) = listLen stmts
-blockLenBody (EDo stmts) = listLen stmts
+blockLenBody (EDo _ stmts) = listLen stmts
 blockLenBody _ = 0
 
 headOpt : List (Option String) -> Option String
@@ -1317,10 +1325,10 @@ printBlockCommentedRhs : Expr -> List (Option String) -> Doc
 printBlockCommentedRhs (ELoc _ e) comments = printBlockCommentedRhs e comments
 printBlockCommentedRhs (EBlock stmts) comments =
   Cat (text " =") (indentBlock (stmtsCommented stmts comments))
-printBlockCommentedRhs (EDo stmts) comments =
+printBlockCommentedRhs (EDo d stmts) comments =
   Cat
     (text " = ")
-    (Cat (text "do") (indentBlock (stmtsCommented stmts comments)))
+    (Cat (text (doKeyword d)) (indentBlock (stmtsCommented stmts comments)))
 printBlockCommentedRhs body _ = printDefRhs body
 
 -- Print a whole DFunDef (optionally @attr-wrapped) whose body is a bare/do
@@ -1560,7 +1568,7 @@ printDefRhsGeneral body = match printIfRhs body
   Some g => Cat (text " =") g
   None => match body
     EMatch sc arms => Cat (text " = ") (printExprBody (EMatch sc arms))
-    EDo stmts => Cat (text " = ") (printExprBody (EDo stmts))
+    EDo d stmts => Cat (text " = ") (printExprBody (EDo d stmts))
     -- Application body: hang one indent-line below `=` (head on its own line),
     -- then let the spine break THERE if it still overflows — instead of keeping
     -- the head on the `=` line with a mangled `head⏎  arg⏎  arg` spine.  EXCEPT a
@@ -1635,7 +1643,7 @@ isSelfIndentingArg : Expr -> Bool
 isSelfIndentingArg (ELoc _ e) = isSelfIndentingArg e
 isSelfIndentingArg (ELam _ _) = True
 isSelfIndentingArg (EBlock _) = True
-isSelfIndentingArg (EDo _) = True
+isSelfIndentingArg (EDo _ _) = True
 isSelfIndentingArg (EMatch _ _) = True
 isSelfIndentingArg (EIf _ _ _) = True
 isSelfIndentingArg (ERecordCreate _ _) = True

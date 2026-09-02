@@ -1260,7 +1260,7 @@ renameScoped rm bound (ELetGroup binds e2) =
 renameScoped rm bound (EMatch e0 arms) =
   EMatch (renameScoped rm bound e0) (map (renameArm rm bound) arms)
 renameScoped rm bound (EBlock stmts) = EBlock (renameStmts rm bound stmts)
-renameScoped rm bound (EDo stmts) = EDo (renameStmts rm bound stmts)
+renameScoped rm bound (EDo d stmts) = EDo d (renameStmts rm bound stmts)
 -- non-binder composites: recurse children with the same bound
 renameScoped rm bound (ELoc l e) = ELoc l (renameScoped rm bound e)
 renameScoped rm bound (EDoOrigin l e) = EDoOrigin l (renameScoped rm bound e)

@@ -15822,6 +15822,9 @@ isDoLoweredAndThenCallee _ = False
 isDoLoweredAndThenCalleeExpr : Expr -> Bool
 isDoLoweredAndThenCalleeExpr (ELoc _ e) = isDoLoweredAndThenCalleeExpr e
 isDoLoweredAndThenCalleeExpr (EDoOrigin _ (EVar "andThen")) = True
+-- `defer` blocks (#824) lower through the same `callAndThen` with `deferThen`
+-- as the bind method, so they get the same tailored reframing.
+isDoLoweredAndThenCalleeExpr (EDoOrigin _ (EVar "deferThen")) = True
 -- `resolve` rewrites every surviving `EVar` to `EVarId name id` (a stable
 -- per-binding identity) — by the time `inferApp` runs, the callee `lowerDo`
 -- tagged is `EVarId "andThen" _`, not the raw `EVar` it started as. Debugged
@@ -15829,6 +15832,7 @@ isDoLoweredAndThenCalleeExpr (EDoOrigin _ (EVar "andThen")) = True
 -- never actually fires post-resolve; keep it anyway as the honest pre-resolve
 -- shape (harmless — `EDoOrigin _ (EVar "andThen")` just never matches here).
 isDoLoweredAndThenCalleeExpr (EDoOrigin _ (EVarId "andThen" _)) = True
+isDoLoweredAndThenCalleeExpr (EDoOrigin _ (EVarId "deferThen" _)) = True
 isDoLoweredAndThenCalleeExpr _ = False
 
 -- P0-16 beginner call-syntax hint.  A newcomer writes `add(1, 2)` (C/Python/JS
@@ -17324,7 +17328,7 @@ eagerRefs (ERangeList lo hi _) = eagerRefs lo ++ eagerRefs hi
 eagerRefs (ERangeArray lo hi _) = eagerRefs lo ++ eagerRefs hi
 eagerRefs (ESlice e0 lo hi _ _) = eagerRefs e0 ++ eagerRefs lo ++ eagerRefs hi
 eagerRefs (EBlock stmts) = flatMap eagerRefsDoStmt stmts
-eagerRefs (EDo stmts) = flatMap eagerRefsDoStmt stmts
+eagerRefs (EDo _ stmts) = flatMap eagerRefsDoStmt stmts
 eagerRefs (EAnnot e0 _) = eagerRefs e0
 eagerRefs (EHeadAnnot e0 _) = eagerRefs e0
 eagerRefs (EStringInterp parts) = flatMap eagerRefsInterp parts
@@ -18728,7 +18732,7 @@ rewriteArgScoped rw bound (EMatch e0 arms) =
   EMatch (rewriteArgScoped rw bound e0) (map (rewriteArgArm rw bound) arms)
 rewriteArgScoped rw bound (EBlock stmts) =
   EBlock (rewriteArgStmts rw bound stmts)
-rewriteArgScoped rw bound (EDo stmts) = EDo (rewriteArgStmts rw bound stmts)
+rewriteArgScoped rw bound (EDo d stmts) = EDo d (rewriteArgStmts rw bound stmts)
 -- non-binder composites: recurse children with the same bound
 rewriteArgScoped rw bound (ELoc l e) = ELoc l (rewriteArgScoped rw bound e)
 rewriteArgScoped rw bound (EDoOrigin l e) =

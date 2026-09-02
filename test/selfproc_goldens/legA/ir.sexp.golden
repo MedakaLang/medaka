@@ -3,6 +3,7 @@ attrSexp : Attr -> String
 boolStr : Bool -> String
 constraintSexp : Constraint -> String
 declSexp : Decl -> String
+deferNodeName : Bool -> String
 doStmtSexp : DoStmt -> String
 effAtomSexp : (String, Option String) -> String
 exprSexp : Expr -> String

@@ -1,5 +1,5 @@
 # META
-source_lines=334
+source_lines=340
 stages=DESUGAR,MARK
 # SOURCE
 -- Structural S-expression dump of the self-host AST, mirroring dev/astdump.ml
@@ -176,7 +176,7 @@ exprSexp (EIndex a i _) = node "EIndex" [exprSexp a, exprSexp i]
 exprSexp (EAnnot e t) = node "EAnnot" [exprSexp e, tySexp t]
 exprSexp (EHeadAnnot e t) = node "EHeadAnnot" [exprSexp e, tySexp t]
 exprSexp (EBlock stmts) = node "EBlock" (map doStmtSexp stmts)
-exprSexp (EDo stmts) = node "EDo" (map doStmtSexp stmts)
+exprSexp (EDo d stmts) = node (deferNodeName d) (map doStmtSexp stmts)
 exprSexp (EStringInterp parts) = node "EStringInterp" (map interpPartSexp parts)
 exprSexp (EGuards arms) = node "EGuards" (map guardArmSexp arms)
 exprSexp (ERecordCreate n fs) =
@@ -336,6 +336,12 @@ usePathSexp (UseAlias ids a) =
 export
 programToSexp : List Decl -> String
 programToSexp prog = joinNl (map declSexp prog)
+
+-- a `defer` block is a distinct surface construct from `do` (#824), so it gets
+-- its own S-expression head rather than an extra flag field.
+deferNodeName : Bool -> String
+deferNodeName True = "EDefer"
+deferNodeName False = "EDo"
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Attr" true))))
 (DUse false (UseGroup ("support" "util") ((mem "escStr" false) (mem "joinNl" false) (mem "joinWith" false))))
@@ -423,7 +429,7 @@ programToSexp prog = joinNl (map declSexp prog)
 (DFunDef false "exprSexp" ((PCon "EAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "node") (ELit (LString "EAnnot"))) (EListLit (EApp (EVar "exprSexp") (EVar "e")) (EApp (EVar "tySexp") (EVar "t")))))
 (DFunDef false "exprSexp" ((PCon "EHeadAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "node") (ELit (LString "EHeadAnnot"))) (EListLit (EApp (EVar "exprSexp") (EVar "e")) (EApp (EVar "tySexp") (EVar "t")))))
 (DFunDef false "exprSexp" ((PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "node") (ELit (LString "EBlock"))) (EApp (EApp (EVar "map") (EVar "doStmtSexp")) (EVar "stmts"))))
-(DFunDef false "exprSexp" ((PCon "EDo" (PVar "stmts"))) (EApp (EApp (EVar "node") (ELit (LString "EDo"))) (EApp (EApp (EVar "map") (EVar "doStmtSexp")) (EVar "stmts"))))
+(DFunDef false "exprSexp" ((PCon "EDo" (PVar "d") (PVar "stmts"))) (EApp (EApp (EVar "node") (EApp (EVar "deferNodeName") (EVar "d"))) (EApp (EApp (EVar "map") (EVar "doStmtSexp")) (EVar "stmts"))))
 (DFunDef false "exprSexp" ((PCon "EStringInterp" (PVar "parts"))) (EApp (EApp (EVar "node") (ELit (LString "EStringInterp"))) (EApp (EApp (EVar "map") (EVar "interpPartSexp")) (EVar "parts"))))
 (DFunDef false "exprSexp" ((PCon "EGuards" (PVar "arms"))) (EApp (EApp (EVar "node") (ELit (LString "EGuards"))) (EApp (EApp (EVar "map") (EVar "guardArmSexp")) (EVar "arms"))))
 (DFunDef false "exprSexp" ((PCon "ERecordCreate" (PVar "n") (PVar "fs"))) (EApp (EApp (EVar "node") (ELit (LString "ERecordCreate"))) (EListLit (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "fieldAssignSexp")) (EVar "fs"))))))
@@ -510,6 +516,9 @@ programToSexp prog = joinNl (map declSexp prog)
 (DFunDef false "usePathSexp" ((PCon "UseAlias" (PVar "ids") (PVar "a"))) (EApp (EApp (EVar "node") (ELit (LString "UseAlias"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "escStr")) (EVar "ids"))) (EApp (EVar "escStr") (EVar "a")))))
 (DTypeSig true "programToSexp" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))
 (DFunDef false "programToSexp" ((PVar "prog")) (EApp (EVar "joinNl") (EApp (EApp (EVar "map") (EVar "declSexp")) (EVar "prog"))))
+(DTypeSig false "deferNodeName" (TyFun (TyCon "Bool") (TyCon "String")))
+(DFunDef false "deferNodeName" ((PCon "True")) (ELit (LString "EDefer")))
+(DFunDef false "deferNodeName" ((PCon "False")) (ELit (LString "EDo")))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Attr" true))))
 (DUse false (UseGroup ("support" "util") ((mem "escStr" false) (mem "joinNl" false) (mem "joinWith" false))))
@@ -597,7 +606,7 @@ programToSexp prog = joinNl (map declSexp prog)
 (DFunDef false "exprSexp" ((PCon "EAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "node") (ELit (LString "EAnnot"))) (EListLit (EApp (EVar "exprSexp") (EVar "e")) (EApp (EVar "tySexp") (EVar "t")))))
 (DFunDef false "exprSexp" ((PCon "EHeadAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "node") (ELit (LString "EHeadAnnot"))) (EListLit (EApp (EVar "exprSexp") (EVar "e")) (EApp (EVar "tySexp") (EVar "t")))))
 (DFunDef false "exprSexp" ((PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "node") (ELit (LString "EBlock"))) (EApp (EApp (EMethodRef "map") (EVar "doStmtSexp")) (EVar "stmts"))))
-(DFunDef false "exprSexp" ((PCon "EDo" (PVar "stmts"))) (EApp (EApp (EVar "node") (ELit (LString "EDo"))) (EApp (EApp (EMethodRef "map") (EVar "doStmtSexp")) (EVar "stmts"))))
+(DFunDef false "exprSexp" ((PCon "EDo" (PVar "d") (PVar "stmts"))) (EApp (EApp (EVar "node") (EApp (EVar "deferNodeName") (EVar "d"))) (EApp (EApp (EMethodRef "map") (EVar "doStmtSexp")) (EVar "stmts"))))
 (DFunDef false "exprSexp" ((PCon "EStringInterp" (PVar "parts"))) (EApp (EApp (EVar "node") (ELit (LString "EStringInterp"))) (EApp (EApp (EMethodRef "map") (EVar "interpPartSexp")) (EVar "parts"))))
 (DFunDef false "exprSexp" ((PCon "EGuards" (PVar "arms"))) (EApp (EApp (EVar "node") (ELit (LString "EGuards"))) (EApp (EApp (EMethodRef "map") (EVar "guardArmSexp")) (EVar "arms"))))
 (DFunDef false "exprSexp" ((PCon "ERecordCreate" (PVar "n") (PVar "fs"))) (EApp (EApp (EVar "node") (ELit (LString "ERecordCreate"))) (EListLit (EApp (EVar "escStr") (EVar "n")) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "fieldAssignSexp")) (EVar "fs"))))))
@@ -684,3 +693,6 @@ programToSexp prog = joinNl (map declSexp prog)
 (DFunDef false "usePathSexp" ((PCon "UseAlias" (PVar "ids") (PVar "a"))) (EApp (EApp (EVar "node") (ELit (LString "UseAlias"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "escStr")) (EVar "ids"))) (EApp (EVar "escStr") (EVar "a")))))
 (DTypeSig true "programToSexp" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))
 (DFunDef false "programToSexp" ((PVar "prog")) (EApp (EVar "joinNl") (EApp (EApp (EMethodRef "map") (EVar "declSexp")) (EVar "prog"))))
+(DTypeSig false "deferNodeName" (TyFun (TyCon "Bool") (TyCon "String")))
+(DFunDef false "deferNodeName" ((PCon "True")) (ELit (LString "EDefer")))
+(DFunDef false "deferNodeName" ((PCon "False")) (ELit (LString "EDo")))

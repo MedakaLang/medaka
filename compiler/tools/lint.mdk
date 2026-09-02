@@ -2100,7 +2100,7 @@ collectBindHits orc e = tailHitOf orc e
   ++ flatMap (collectBindHits orc) (childExprs e)
 
 tailHitOf : Oracle -> Expr -> List String
-tailHitOf orc (EDo stmts) = hitNameOf orc stmts
+tailHitOf orc (EDo _ stmts) = hitNameOf orc stmts
 tailHitOf orc (EBlock stmts) = hitNameOf orc stmts
 tailHitOf _ _ = []
 
@@ -2134,7 +2134,7 @@ childExprs (EIndex a i _) = [a, i]
 childExprs (EAnnot e _) = [e]
 childExprs (EHeadAnnot e _) = [e]
 childExprs (EBlock stmts) = flatMap stmtExprs stmts
-childExprs (EDo stmts) = flatMap stmtExprs stmts
+childExprs (EDo _ stmts) = flatMap stmtExprs stmts
 childExprs (EStringInterp parts) = flatMap interpPartExprs parts
 childExprs (EGuards arms) = flatMap guardArmExprs arms
 childExprs (ERecordCreate _ fs) = map fieldAssignExpr fs
@@ -2242,9 +2242,9 @@ rewriteBindExpr orc (EIndex a i r) =
 rewriteBindExpr orc (EAnnot e t) = EAnnot (rewriteBindExpr orc e) t
 rewriteBindExpr orc (EHeadAnnot e t) = EHeadAnnot (rewriteBindExpr orc e) t
 rewriteBindExpr orc (EBlock stmts) =
-  EBlock (collapseBindTail orc (map (rewriteBindStmt orc) stmts))
-rewriteBindExpr orc (EDo stmts) =
-  EDo (collapseBindTail orc (map (rewriteBindStmt orc) stmts))
+  EBlock (collapseBindTail orc False (map (rewriteBindStmt orc) stmts))
+rewriteBindExpr orc (EDo d stmts) =
+  EDo d (collapseBindTail orc d (map (rewriteBindStmt orc) stmts))
 rewriteBindExpr orc (EStringInterp parts) =
   EStringInterp (map (rewriteBindInterp orc) parts)
 rewriteBindExpr orc (EGuards arms) =
@@ -2263,19 +2263,27 @@ rewriteBindExpr _ e = e
 -- collapse a (already child-rewritten) statement list: if its last two statements
 -- are the irrefutable bind-then-match shape, replace them with `pat <- e` plus the
 -- arm body's statements spliced inline.
-collapseBindTail : Oracle -> List DoStmt -> List DoStmt
-collapseBindTail orc stmts = match bindMatchTail orc stmts
+collapseBindTail : Oracle -> Bool -> List DoStmt -> List DoStmt
+collapseBindTail orc host stmts = match bindMatchTail orc stmts
   Some (prefix, _, pat, boundE, body) => prefix
-    ++ (DoBind pat boundE :: bodyToStmts body)
+    ++ (DoBind pat boundE :: bodyToStmts host body)
   None => stmts
 
--- the arm body as statements: a do/bare block contributes its own statements
--- (flattened into the outer block); anything else becomes a final expr-statement.
-bodyToStmts : Expr -> List DoStmt
-bodyToStmts e = match unwrapLoc e
-  EDo stmts => stmts
+-- the arm body as statements: a bare block, or a monadic block heralded the SAME
+-- way as the host (`host`: the enclosing block's deferred flag), contributes its
+-- own statements flattened into the outer block; anything else — including a
+-- `defer` block inside a `do` block or vice versa, whose statements bind through
+-- a different interface family (#824) — becomes a final expr-statement.
+bodyToStmts : Bool -> Expr -> List DoStmt
+bodyToStmts host e = match unwrapLoc e
+  EDo d stmts => whenSameHerald host d stmts e
   EBlock stmts => stmts
   _ => [DoExpr e]
+
+whenSameHerald : Bool -> Bool -> List DoStmt -> Expr -> List DoStmt
+whenSameHerald host d stmts e
+  | host == d = stmts
+  | otherwise = [DoExpr e]
 
 rewriteBindStmt : Oracle -> DoStmt -> DoStmt
 rewriteBindStmt orc (DoExpr e) = DoExpr (rewriteBindExpr orc e)
@@ -2517,7 +2525,7 @@ rewriteLamExpr (EIndex a i r) = EIndex (rewriteLamExpr a) (rewriteLamExpr i) r
 rewriteLamExpr (EAnnot e t) = EAnnot (rewriteLamExpr e) t
 rewriteLamExpr (EHeadAnnot e t) = EHeadAnnot (rewriteLamExpr e) t
 rewriteLamExpr (EBlock stmts) = EBlock (map rewriteLamStmt stmts)
-rewriteLamExpr (EDo stmts) = EDo (map rewriteLamStmt stmts)
+rewriteLamExpr (EDo d stmts) = EDo d (map rewriteLamStmt stmts)
 rewriteLamExpr (EStringInterp parts) =
   EStringInterp (map rewriteLamInterp parts)
 rewriteLamExpr (EGuards arms) = EGuards (map rewriteLamGuardArm arms)
@@ -2756,7 +2764,7 @@ rewriteIfMaxMinExpr (EIndex a i r) =
 rewriteIfMaxMinExpr (EAnnot e t) = EAnnot (rewriteIfMaxMinExpr e) t
 rewriteIfMaxMinExpr (EHeadAnnot e t) = EHeadAnnot (rewriteIfMaxMinExpr e) t
 rewriteIfMaxMinExpr (EBlock stmts) = EBlock (map rewriteIfMaxMinStmt stmts)
-rewriteIfMaxMinExpr (EDo stmts) = EDo (map rewriteIfMaxMinStmt stmts)
+rewriteIfMaxMinExpr (EDo d stmts) = EDo d (map rewriteIfMaxMinStmt stmts)
 rewriteIfMaxMinExpr (EStringInterp parts) =
   EStringInterp (map rewriteIfMaxMinInterp parts)
 rewriteIfMaxMinExpr (EGuards arms) = EGuards (map rewriteIfMaxMinGuardArm arms)
@@ -3023,8 +3031,8 @@ rewriteAndThenPureMapExpr (EHeadAnnot e t) =
   EHeadAnnot (rewriteAndThenPureMapExpr e) t
 rewriteAndThenPureMapExpr (EBlock stmts) =
   EBlock (map rewriteAndThenPureMapStmt stmts)
-rewriteAndThenPureMapExpr (EDo stmts) =
-  EDo (map rewriteAndThenPureMapStmt stmts)
+rewriteAndThenPureMapExpr (EDo d stmts) =
+  EDo d (map rewriteAndThenPureMapStmt stmts)
 rewriteAndThenPureMapExpr (EStringInterp parts) =
   EStringInterp (map rewriteAndThenPureMapInterp parts)
 rewriteAndThenPureMapExpr (EGuards arms) =
@@ -3146,7 +3154,7 @@ mapChildExprs g (EIndex a i r) = EIndex (g a) (g i) r
 mapChildExprs g (EAnnot e t) = EAnnot (g e) t
 mapChildExprs g (EHeadAnnot e t) = EHeadAnnot (g e) t
 mapChildExprs g (EBlock stmts) = EBlock (map (mapChildStmt g) stmts)
-mapChildExprs g (EDo stmts) = EDo (map (mapChildStmt g) stmts)
+mapChildExprs g (EDo d stmts) = EDo d (map (mapChildStmt g) stmts)
 mapChildExprs g (EStringInterp parts) =
   EStringInterp (map (mapChildInterp g) parts)
 mapChildExprs g (EGuards arms) = EGuards (map (mapChildGuardArm g) arms)
