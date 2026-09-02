@@ -56,7 +56,7 @@
 
 import frontend.ast.{Decl, DFunDef, DData, DInterface}
 import driver.build_cmd.{
-  BuildResult(..),
+  ppBuildReport,
   makeTempDir,
   cleanupTempDir,
   runBuildNativeRoots,
@@ -255,9 +255,14 @@ buildAndRun target entryPath outPath tmpDir examples synthResults =
     tmpDir
     False
     extraRoots)
-    BuildErr msg =>
-      Err "native doctest runner: could not build \{target} natively\n\{msg}"
-    BuildOk _ => match runCommand outPath []
+    Err rep =>
+      Err
+        "native doctest runner: could not build \{target} natively\n\{ppBuildReport rep}"
+    -- The report's notes are deliberately dropped on SUCCESS: this runner
+    -- always builds with keep-IR off (nothing to note), and the probe's own
+    -- stdout is the doctest transcript — emitter chatter spliced into it would
+    -- be read as test output.
+    Ok _ => match runCommand outPath []
       Err e =>
         Err "native doctest runner: could not run the compiled probe: \{e}"
       Ok (code, out, errOut) =>

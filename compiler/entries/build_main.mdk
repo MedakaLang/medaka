@@ -14,11 +14,9 @@
 -- input's basename sans .mdk.
 
 import driver.build_cmd.{
-  BuildResult,
-  BuildOk,
-  BuildErr,
   TNative,
   runBuild,
+  ppBuildReport,
   envOr,
 }
 import support.util.{reverseL}
@@ -42,9 +40,9 @@ main = match parseArgs (args ())
         Some o => o
         None => chopExt (baseOf input)
       match runBuild root medaka cc TNative inputAbs outPath False
-        BuildOk msg => println msg
-        BuildErr msg =>
-          let _ = ePutStrLn msg
+        Ok rep => println (ppBuildReport rep)
+        Err rep =>
+          let _ = ePutStrLn (ppBuildReport rep)
           exit 1
 
 -- Make a relative input absolute against the repo root's parent is wrong; the

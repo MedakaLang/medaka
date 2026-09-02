@@ -31,10 +31,9 @@ import tools.fmt.{formatSource}
 import tools.gate_cmd.{gateHelpText, runGateCmd}
 import tools.new_cmd.{newProject}
 import driver.build_cmd.{
-  BuildResult,
-  BuildOk,
-  BuildErr,
+  BuildReport,
   BuildTarget,
+  ppBuildReport,
   TNative,
   TWasm,
   runBuild,
@@ -150,6 +149,10 @@ import driver.diagnostics.{
   cjFixJson,
   mkDiag,
   checkJsonFile,
+  checkJsonFileParts,
+  CheckJson(..),
+  ppCheckJson,
+  cjFoldIntoFile,
   readFileSafe,
   diagIsError,
   findMainFunDef,
@@ -1261,7 +1264,7 @@ cjBuildFailedJson target msg = cjAllToJson [
 -- structured diagnostics to `check --json` on the same file — same code, same
 -- envelope), then, only if clean, the real emit+clang build. A build-stage
 -- failure (emitter/clang) becomes a `cjBuildFailedJson` envelope instead of the
--- plain rendered `BuildErr` text; a clean build prints the (empty-diagnostics)
+-- plain rendered error text; a clean build prints the (empty-diagnostics)
 -- gate JSON as its success marker, mirroring `check --json`'s clean output —
 -- no separate "built X -> Y" prose on this channel, so a machine consumer sees
 -- exactly one shape regardless of outcome.
@@ -1290,10 +1293,10 @@ runBuildJsonCmd a allowInternal root stdlibDir input outOpt target =
             let _ = println (cjBuildFailedJson input msg)
             exit 1
           Ok csrc =>
-            let (json, hasErr) =
-              checkJsonFile allowInternal rsrc csrc input stdlibDir
+            let (cj, hasErr) =
+              checkJsonFileParts allowInternal rsrc csrc input stdlibDir
             if hasErr then
-              let _ = println json
+              let _ = println (ppCheckJson cj)
               exit 1
             else
               let medaka = envOr "MEDAKA" "medaka"
@@ -1303,9 +1306,21 @@ runBuildJsonCmd a allowInternal root stdlibDir input outOpt target =
                 Some o => o
                 None => defaultOutPath target input
               match runBuild root medaka cc target input outPath keepIrCli
-                BuildOk _ => println json
-                BuildErr msg =>
-                  let _ = println (cjBuildFailedJson input msg)
+                -- #2243: the build's own notes (a failed `--keep-ir` copy)
+                -- join the entry file's `diagnostics` array rather than
+                -- vanishing with the status line this channel never prints.
+                -- `CjRendered` is the hand-built parse-error envelope, which
+                -- only ever arrives with `hasErr` set — unreachable here.
+                Ok rep => match cj
+                  CjRendered json => println json
+                  CjParts entry triples =>
+                    println
+                      (cjAllToJson (cjFoldIntoFile entry rep.notes triples))
+                -- A build-stage FAILURE already carried its notes: they are
+                -- part of the rendered message, exactly as the plain CLI
+                -- prints them, inside the one R-BUILD-FAILED diagnostic.
+                Err rep =>
+                  let _ = println (cjBuildFailedJson input (ppBuildReport rep))
                   exit 1
 
 -- The `{"files":[...]}` envelope for a target that could not be read at all —
@@ -2168,9 +2183,9 @@ runBuildModes a = match flagValue "--emit-rt-obj" a
     let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
     let cc = envOr "CC" "clang"
     match emitRtObj cc root objPath
-      BuildOk msg => println msg
-      BuildErr msg =>
-        let _ = ePutStrLn msg
+      Ok rep => println (ppBuildReport rep)
+      Err rep =>
+        let _ = ePutStrLn (ppBuildReport rep)
         exit 1
   None => match flagValue "--emit-prelude-obj" a
     -- `medaka build --emit-prelude-obj <path>`: precompile stdlib/core.mdk to a
@@ -2184,9 +2199,9 @@ runBuildModes a = match flagValue "--emit-rt-obj" a
       let cc = envOr "CC" "clang"
       let medaka = envOr "MEDAKA" "./medaka"
       match emitPreludeObj cc root medaka objPath
-        BuildOk msg => println msg
-        BuildErr msg =>
-          let _ = ePutStrLn msg
+        Ok rep => println (ppBuildReport rep)
+        Err rep =>
+          let _ = ePutStrLn (ppBuildReport rep)
           exit 1
     -- #1078: `--json` is now a recognized flag (claimed by `buildArgSpec`,
     -- above) rather than a phantom second positional. Dispatch to a
@@ -2236,13 +2251,13 @@ runBuildPlainCmd a =
             let perfTTc = now ()
             let _ = emitPhase perfOn "typecheck" (perfTTc - perfT0) input
             match runBuild root medaka cc target inputAbs outPath keepIrCli
-              BuildOk msg =>
+              Ok rep =>
                 let perfTEmit = now ()
                 let _ = emitPhase perfOn "emit" (perfTEmit - perfTTc) input
                 let _ = emitTotal perfOn (perfTEmit - perfT0)
-                println msg
-              BuildErr msg =>
-                let _ = ePutStrLn msg
+                println (ppBuildReport rep)
+              Err rep =>
+                let _ = ePutStrLn (ppBuildReport rep)
                 exit 1
 
 -- `medaka build --json`'s own argument-parsing arm: a flag error still goes
