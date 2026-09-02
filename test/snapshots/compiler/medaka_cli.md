@@ -1,5 +1,5 @@
 # META
-source_lines=4432
+source_lines=4417
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/medaka_cli.mdk — the native `medaka` CLI dispatcher (Phase C
@@ -224,7 +224,6 @@ import tools.doc.{
   renderModulePage,
   renderIndex,
   libraryInventoryJson,
-  excludedLibraryModule,
   rebucketLibraryImpls,
 }
 import tools.lint.{
@@ -3171,7 +3170,7 @@ docHelpText = stringConcat
     "\n",
     "Library mode (--out DIR) writes one Markdown page per module, an\n",
     "index.md linking them, and an inventory.json (name -> module ->\n",
-    "signature) into DIR. `async`-named modules are excluded by design.\n",
+    "signature) into DIR.\n",
     "\n",
     "  --out DIR   output directory; enables library mode\n",
   ]
@@ -3225,53 +3224,39 @@ runDocTargets (target::_) =
         Ok tsrc => putStr (runDoc rsrc csrc tsrc target roots)
 
 -- ── doc: library mode (S-doc-library-mode) ──────────────────────────────────
--- `medaka doc --out DIR <file.mdk> [<file.mdk> ...]`: drop any `async`-named
--- target (rule, not a hand-kept list — `excludedLibraryModule`,
--- `tools.doc`), read + doc every remaining target, write one page per
--- module, one index, one inventory.
+-- `medaka doc --out DIR <file.mdk> [<file.mdk> ...]`: read + doc every target,
+-- write one page per module, one index, one inventory.
 runDocLibraryTargets : String -> List String -> <IO> Unit
 runDocLibraryTargets _ [] =
   let _ = ePutStrLn "usage: medaka doc --out DIR <file.mdk> [<file.mdk> ...]"
   exit 1
-runDocLibraryTargets outDir targets = match dropExcludedTargets targets
-  [] =>
-    let _ = ePutStrLn "medaka doc --out: every target was excluded (e.g. an async-named module) — nothing to document"
-    exit 1
-  kept =>
-    let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
-    let rtPath = root ++ "/stdlib/runtime.mdk"
-    let corePath = root ++ "/stdlib/core.mdk"
-    let stdlibDir = root ++ "/stdlib"
-    match readPreludeFile rtPath
+runDocLibraryTargets outDir targets =
+  let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+  let rtPath = root ++ "/stdlib/runtime.mdk"
+  let corePath = root ++ "/stdlib/core.mdk"
+  let stdlibDir = root ++ "/stdlib"
+  match readPreludeFile rtPath
+    Err msg =>
+      let _ = ePutStrLn msg
+      exit 1
+    Ok rsrc => match readPreludeFile corePath
       Err msg =>
         let _ = ePutStrLn msg
         exit 1
-      Ok rsrc => match readPreludeFile corePath
+      Ok csrc => match ensureOutDir outDir
         Err msg =>
           let _ = ePutStrLn msg
           exit 1
-        Ok csrc => match ensureOutDir outDir
+        Ok _ => match collectModuleDocs rsrc csrc stdlibDir targets
           Err msg =>
             let _ = ePutStrLn msg
             exit 1
-          Ok _ => match collectModuleDocs rsrc csrc stdlibDir kept
-            Err msg =>
-              let _ = ePutStrLn msg
-              exit 1
-            -- `rebucketLibraryImpls` runs at the `List ModuleDoc` level, after
-            -- every module is computed and before ANY output is written, so the
-            -- pages, the index and the inventory all read the same (already
-            -- re-filed) entry lists — an impl cannot be on one page and indexed
-            -- under another.
-            Ok mds => writeLibraryOutputs outDir (rebucketLibraryImpls mds)
-
-dropExcludedTargets : List String -> List String
-dropExcludedTargets [] = []
-dropExcludedTargets (t::ts) =
-  if excludedLibraryModule (chopExt (baseOf t)) then
-    dropExcludedTargets ts
-  else
-    t :: dropExcludedTargets ts
+          -- `rebucketLibraryImpls` runs at the `List ModuleDoc` level, after
+          -- every module is computed and before ANY output is written, so the
+          -- pages, the index and the inventory all read the same (already
+          -- re-filed) entry lists — an impl cannot be on one page and indexed
+          -- under another.
+          Ok mds => writeLibraryOutputs outDir (rebucketLibraryImpls mds)
 
 -- `makeDir` (global extern) errors EEXIST on an already-present directory;
 -- tolerate that one case, exactly like `fs.mdk`'s `mkdirAll` does for its own
@@ -4464,7 +4449,7 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("tools" "repl") ((mem "initSession" false) (mem "replLoop" false))))
 (DUse false (UseGroup ("tools" "lsp") ((mem "runServer" false))))
 (DUse false (UseGroup ("tools" "mcp") ((mem "runMcpServer" false))))
-(DUse false (UseGroup ("tools" "doc") ((mem "runDoc" false) (mem "ModuleDoc" false) (mem "computeModuleDoc" false) (mem "mdName" false) (mem "renderModulePage" false) (mem "renderIndex" false) (mem "libraryInventoryJson" false) (mem "excludedLibraryModule" false) (mem "rebucketLibraryImpls" false))))
+(DUse false (UseGroup ("tools" "doc") ((mem "runDoc" false) (mem "ModuleDoc" false) (mem "computeModuleDoc" false) (mem "mdName" false) (mem "renderModulePage" false) (mem "renderIndex" false) (mem "libraryInventoryJson" false) (mem "rebucketLibraryImpls" false))))
 (DUse false (UseGroup ("tools" "lint") ((mem "allRules" false) (mem "lintProgram" false) (mem "StdlibIndex" false) (mem "buildStdlibIndex" false) (mem "applySuppressions" false) (mem "applySuppressionsMulti" false) (mem "applySuppressionsDirs" false) (mem "applySuppressionsMultiDirs" false) (mem "collectDirectives" false) (mem "findingToDiag" false) (mem "Finding" false) (mem "Directive" false) (mem "applyFixes" false) (mem "runCrossFileRules" false) (mem "runCrossFileRulesFromOccs" false) (mem "crossFileCacheSound" false) (mem "fileDupOccs" false) (mem "allRuleNames" false) (mem "applyFindingFilters" false) (mem "applyFindingDeny" false) (mem "isFindingError" false) (mem "lintFileDiagTriple" false) (mem "splitLintNames" false) (mem "stdlibFingerprint" false))))
 (DUse false (UseGroup ("tools" "lint_cache") ((mem "LintEntry" true) (mem "contentHashOf" false) (mem "ruleSetStamp" false) (mem "cacheDirOf" false) (mem "loadEntry" false) (mem "storeEntries" false))))
 (DUse false (UseGroup ("tools" "codemod") ((mem "findCodemod" false) (mem "codemodMk" false) (mem "codemodWarnDecls" false) (mem "codemodListing" false) (mem "codemodSource" false))))
@@ -4823,7 +4808,7 @@ runMcpServerFromEnv _ =
 (DFunDef false "testFilesGo" (PWild PWild PWild PWild PWild PWild (PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "testFilesGo" ((PVar "engines") (PVar "rtPath") (PVar "corePath") (PVar "stdlibDir") (PVar "cases") (PVar "filterOpt") (PCons (PVar "f") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf2") (EVar "f"))) (EListLit (EVar "stdlibDir")))) (DoLet false false (PVar "ok") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTest") (EVar "engines")) (EVar "rtPath")) (EVar "corePath")) (EVar "f")) (EVar "roots")) (EVar "cases")) (EVar "filterOpt"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "testFilesGo") (EVar "engines")) (EVar "rtPath")) (EVar "corePath")) (EVar "stdlibDir")) (EVar "cases")) (EVar "filterOpt")) (EVar "rest")) (EBinOp "||" (EVar "acc") (EApp (EVar "not") (EVar "ok")))))))
 (DTypeSig false "docHelpText" (TyCon "String"))
-(DFunDef false "docHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka doc — Generate Markdown documentation for a file or module library\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka doc <file.mdk>\n")) (ELit (LString "  medaka doc --out DIR <file.mdk> [<file.mdk> ...]\n")) (ELit (LString "\n")) (ELit (LString "Single-file mode prints Markdown for every PUBLIC declaration (with\n")) (ELit (LString "inferred type schemes) in <file.mdk> to stdout.\n")) (ELit (LString "\n")) (ELit (LString "Library mode (--out DIR) writes one Markdown page per module, an\n")) (ELit (LString "index.md linking them, and an inventory.json (name -> module ->\n")) (ELit (LString "signature) into DIR. `async`-named modules are excluded by design.\n")) (ELit (LString "\n")) (ELit (LString "  --out DIR   output directory; enables library mode\n")))))
+(DFunDef false "docHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka doc — Generate Markdown documentation for a file or module library\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka doc <file.mdk>\n")) (ELit (LString "  medaka doc --out DIR <file.mdk> [<file.mdk> ...]\n")) (ELit (LString "\n")) (ELit (LString "Single-file mode prints Markdown for every PUBLIC declaration (with\n")) (ELit (LString "inferred type schemes) in <file.mdk> to stdout.\n")) (ELit (LString "\n")) (ELit (LString "Library mode (--out DIR) writes one Markdown page per module, an\n")) (ELit (LString "index.md linking them, and an inventory.json (name -> module ->\n")) (ELit (LString "signature) into DIR.\n")) (ELit (LString "\n")) (ELit (LString "  --out DIR   output directory; enables library mode\n")))))
 (DTypeSig false "docArgSpec" (TyCon "ArgSpec"))
 (DFunDef false "docArgSpec" () (EApp (EVar "withStrictDash") (EApp (EApp (EVar "spec") (ELit (LString "doc"))) (EListLit (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--out")))) (ELit (LString "DIR"))) (ELit (LString "output directory; enables library mode")))))))
 (DTypeSig false "runDocCmd" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
@@ -4834,10 +4819,7 @@ runMcpServerFromEnv _ =
 (DFunDef false "runDocTargets" ((PCons (PVar "target") PWild)) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf2") (EVar "target"))) (EListLit (EVar "stdlibDir")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "rtPath")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "csrc")) () (EMatch (EApp (EVar "readFile") (EVar "target")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "tsrc")) () (EApp (EVar "putStr") (EApp (EApp (EApp (EApp (EApp (EVar "runDoc") (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "target")) (EVar "roots"))))))))))))
 (DTypeSig false "runDocLibraryTargets" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit")))))
 (DFunDef false "runDocLibraryTargets" (PWild (PList)) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (ELit (LString "usage: medaka doc --out DIR <file.mdk> [<file.mdk> ...]")))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))))
-(DFunDef false "runDocLibraryTargets" ((PVar "outDir") (PVar "targets")) (EMatch (EApp (EVar "dropExcludedTargets") (EVar "targets")) (arm (PList) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (ELit (LString "medaka doc --out: every target was excluded (e.g. an async-named module) — nothing to document")))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PVar "kept") () (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "rtPath")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "csrc")) () (EMatch (EApp (EVar "ensureOutDir") (EVar "outDir")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EApp (EApp (EVar "collectModuleDocs") (EVar "rsrc")) (EVar "csrc")) (EVar "stdlibDir")) (EVar "kept")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "mds")) () (EApp (EApp (EVar "writeLibraryOutputs") (EVar "outDir")) (EApp (EVar "rebucketLibraryImpls") (EVar "mds"))))))))))))))))
-(DTypeSig false "dropExcludedTargets" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "dropExcludedTargets" ((PList)) (EListLit))
-(DFunDef false "dropExcludedTargets" ((PCons (PVar "t") (PVar "ts"))) (EIf (EApp (EVar "excludedLibraryModule") (EApp (EVar "chopExt") (EApp (EVar "baseOf") (EVar "t")))) (EApp (EVar "dropExcludedTargets") (EVar "ts")) (EBinOp "::" (EVar "t") (EApp (EVar "dropExcludedTargets") (EVar "ts")))))
+(DFunDef false "runDocLibraryTargets" ((PVar "outDir") (PVar "targets")) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "rtPath")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "csrc")) () (EMatch (EApp (EVar "ensureOutDir") (EVar "outDir")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EApp (EApp (EVar "collectModuleDocs") (EVar "rsrc")) (EVar "csrc")) (EVar "stdlibDir")) (EVar "targets")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "mds")) () (EApp (EApp (EVar "writeLibraryOutputs") (EVar "outDir")) (EApp (EVar "rebucketLibraryImpls") (EVar "mds"))))))))))))))
 (DTypeSig false "ensureOutDir" (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "ensureOutDir" ((PVar "dir")) (EMatch (EApp (EVar "makeDir") (EVar "dir")) (arm (PCon "Ok" PWild) () (EApp (EVar "Ok") (ELit LUnit))) (arm (PCon "Err" (PVar "e")) () (EIf (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (ELit (LString "exists"))) (EVar "e"))) (EApp (EVar "Ok") (ELit LUnit)) (EApp (EVar "Err") (EVar "e"))))))
 (DTypeSig false "collectModuleDocs" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "ModuleDoc")))))))))
@@ -5039,7 +5021,7 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("tools" "repl") ((mem "initSession" false) (mem "replLoop" false))))
 (DUse false (UseGroup ("tools" "lsp") ((mem "runServer" false))))
 (DUse false (UseGroup ("tools" "mcp") ((mem "runMcpServer" false))))
-(DUse false (UseGroup ("tools" "doc") ((mem "runDoc" false) (mem "ModuleDoc" false) (mem "computeModuleDoc" false) (mem "mdName" false) (mem "renderModulePage" false) (mem "renderIndex" false) (mem "libraryInventoryJson" false) (mem "excludedLibraryModule" false) (mem "rebucketLibraryImpls" false))))
+(DUse false (UseGroup ("tools" "doc") ((mem "runDoc" false) (mem "ModuleDoc" false) (mem "computeModuleDoc" false) (mem "mdName" false) (mem "renderModulePage" false) (mem "renderIndex" false) (mem "libraryInventoryJson" false) (mem "rebucketLibraryImpls" false))))
 (DUse false (UseGroup ("tools" "lint") ((mem "allRules" false) (mem "lintProgram" false) (mem "StdlibIndex" false) (mem "buildStdlibIndex" false) (mem "applySuppressions" false) (mem "applySuppressionsMulti" false) (mem "applySuppressionsDirs" false) (mem "applySuppressionsMultiDirs" false) (mem "collectDirectives" false) (mem "findingToDiag" false) (mem "Finding" false) (mem "Directive" false) (mem "applyFixes" false) (mem "runCrossFileRules" false) (mem "runCrossFileRulesFromOccs" false) (mem "crossFileCacheSound" false) (mem "fileDupOccs" false) (mem "allRuleNames" false) (mem "applyFindingFilters" false) (mem "applyFindingDeny" false) (mem "isFindingError" false) (mem "lintFileDiagTriple" false) (mem "splitLintNames" false) (mem "stdlibFingerprint" false))))
 (DUse false (UseGroup ("tools" "lint_cache") ((mem "LintEntry" true) (mem "contentHashOf" false) (mem "ruleSetStamp" false) (mem "cacheDirOf" false) (mem "loadEntry" false) (mem "storeEntries" false))))
 (DUse false (UseGroup ("tools" "codemod") ((mem "findCodemod" false) (mem "codemodMk" false) (mem "codemodWarnDecls" false) (mem "codemodListing" false) (mem "codemodSource" false))))
@@ -5398,7 +5380,7 @@ runMcpServerFromEnv _ =
 (DFunDef false "testFilesGo" (PWild PWild PWild PWild PWild PWild (PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "testFilesGo" ((PVar "engines") (PVar "rtPath") (PVar "corePath") (PVar "stdlibDir") (PVar "cases") (PVar "filterOpt") (PCons (PVar "f") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf2") (EVar "f"))) (EListLit (EVar "stdlibDir")))) (DoLet false false (PVar "ok") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTest") (EVar "engines")) (EVar "rtPath")) (EVar "corePath")) (EVar "f")) (EVar "roots")) (EVar "cases")) (EVar "filterOpt"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "testFilesGo") (EVar "engines")) (EVar "rtPath")) (EVar "corePath")) (EVar "stdlibDir")) (EVar "cases")) (EVar "filterOpt")) (EVar "rest")) (EBinOp "||" (EVar "acc") (EApp (EVar "not") (EVar "ok")))))))
 (DTypeSig false "docHelpText" (TyCon "String"))
-(DFunDef false "docHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka doc — Generate Markdown documentation for a file or module library\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka doc <file.mdk>\n")) (ELit (LString "  medaka doc --out DIR <file.mdk> [<file.mdk> ...]\n")) (ELit (LString "\n")) (ELit (LString "Single-file mode prints Markdown for every PUBLIC declaration (with\n")) (ELit (LString "inferred type schemes) in <file.mdk> to stdout.\n")) (ELit (LString "\n")) (ELit (LString "Library mode (--out DIR) writes one Markdown page per module, an\n")) (ELit (LString "index.md linking them, and an inventory.json (name -> module ->\n")) (ELit (LString "signature) into DIR. `async`-named modules are excluded by design.\n")) (ELit (LString "\n")) (ELit (LString "  --out DIR   output directory; enables library mode\n")))))
+(DFunDef false "docHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka doc — Generate Markdown documentation for a file or module library\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka doc <file.mdk>\n")) (ELit (LString "  medaka doc --out DIR <file.mdk> [<file.mdk> ...]\n")) (ELit (LString "\n")) (ELit (LString "Single-file mode prints Markdown for every PUBLIC declaration (with\n")) (ELit (LString "inferred type schemes) in <file.mdk> to stdout.\n")) (ELit (LString "\n")) (ELit (LString "Library mode (--out DIR) writes one Markdown page per module, an\n")) (ELit (LString "index.md linking them, and an inventory.json (name -> module ->\n")) (ELit (LString "signature) into DIR.\n")) (ELit (LString "\n")) (ELit (LString "  --out DIR   output directory; enables library mode\n")))))
 (DTypeSig false "docArgSpec" (TyCon "ArgSpec"))
 (DFunDef false "docArgSpec" () (EApp (EVar "withStrictDash") (EApp (EApp (EVar "spec") (ELit (LString "doc"))) (EListLit (EApp (EApp (EApp (EVar "value") (EListLit (ELit (LString "--out")))) (ELit (LString "DIR"))) (ELit (LString "output directory; enables library mode")))))))
 (DTypeSig false "runDocCmd" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
@@ -5409,10 +5391,7 @@ runMcpServerFromEnv _ =
 (DFunDef false "runDocTargets" ((PCons (PVar "target") PWild)) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf2") (EVar "target"))) (EListLit (EVar "stdlibDir")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "rtPath")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "csrc")) () (EMatch (EApp (EVar "readFile") (EVar "target")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "tsrc")) () (EApp (EVar "putStr") (EApp (EApp (EApp (EApp (EApp (EVar "runDoc") (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "target")) (EVar "roots"))))))))))))
 (DTypeSig false "runDocLibraryTargets" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit")))))
 (DFunDef false "runDocLibraryTargets" (PWild (PList)) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (ELit (LString "usage: medaka doc --out DIR <file.mdk> [<file.mdk> ...]")))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))))
-(DFunDef false "runDocLibraryTargets" ((PVar "outDir") (PVar "targets")) (EMatch (EApp (EVar "dropExcludedTargets") (EVar "targets")) (arm (PList) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (ELit (LString "medaka doc --out: every target was excluded (e.g. an async-named module) — nothing to document")))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PVar "kept") () (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "rtPath")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "csrc")) () (EMatch (EApp (EVar "ensureOutDir") (EVar "outDir")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EApp (EApp (EVar "collectModuleDocs") (EVar "rsrc")) (EVar "csrc")) (EVar "stdlibDir")) (EVar "kept")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "mds")) () (EApp (EApp (EVar "writeLibraryOutputs") (EVar "outDir")) (EApp (EVar "rebucketLibraryImpls") (EVar "mds"))))))))))))))))
-(DTypeSig false "dropExcludedTargets" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "dropExcludedTargets" ((PList)) (EListLit))
-(DFunDef false "dropExcludedTargets" ((PCons (PVar "t") (PVar "ts"))) (EIf (EApp (EVar "excludedLibraryModule") (EApp (EVar "chopExt") (EApp (EVar "baseOf") (EVar "t")))) (EApp (EVar "dropExcludedTargets") (EVar "ts")) (EBinOp "::" (EVar "t") (EApp (EVar "dropExcludedTargets") (EVar "ts")))))
+(DFunDef false "runDocLibraryTargets" ((PVar "outDir") (PVar "targets")) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "rtPath")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "csrc")) () (EMatch (EApp (EVar "ensureOutDir") (EVar "outDir")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EApp (EApp (EVar "collectModuleDocs") (EVar "rsrc")) (EVar "csrc")) (EVar "stdlibDir")) (EVar "targets")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "mds")) () (EApp (EApp (EVar "writeLibraryOutputs") (EVar "outDir")) (EApp (EVar "rebucketLibraryImpls") (EVar "mds"))))))))))))))
 (DTypeSig false "ensureOutDir" (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "ensureOutDir" ((PVar "dir")) (EMatch (EApp (EVar "makeDir") (EVar "dir")) (arm (PCon "Ok" PWild) () (EApp (EVar "Ok") (ELit LUnit))) (arm (PCon "Err" (PVar "e")) () (EIf (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (ELit (LString "exists"))) (EVar "e"))) (EApp (EVar "Ok") (ELit LUnit)) (EApp (EVar "Err") (EVar "e"))))))
 (DTypeSig false "collectModuleDocs" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "ModuleDoc")))))))))

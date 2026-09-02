@@ -100,6 +100,7 @@ What's in the standard library, what's planned, module-by-module status.
 | [`STDLIB.md`](stdlib/STDLIB.md) | Medaka Standard Library — Design Notes & Roadmap | — |
 | [`args.md`](stdlib/args.md) | args | — |
 | [`array.md`](stdlib/array.md) | array | — |
+| [`async.md`](stdlib/async.md) | async | — |
 | [`base64.md`](stdlib/base64.md) | base64 | — |
 | [`bits64.md`](stdlib/bits64.md) | bits64 | — |
 | [`bytebuilder.md`](stdlib/bytebuilder.md) | bytebuilder | — |
