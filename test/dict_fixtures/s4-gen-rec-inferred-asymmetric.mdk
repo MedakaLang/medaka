@@ -3,16 +3,15 @@
 -- class. `oddSz`'s body never mentions an `Sz` method, so it can acquire the
 -- predicate only from the GROUP.
 --
--- 🚨 PINNED DIVERGENCE -- **#1133** (OPEN, S1: loud breakage, `verified`).
--- Found 2026-07-30 while removing an inert claim from
+-- REGRESSION GUARD -- #1133 drained by preserving the operator site's evidence
+-- owner through `entailInst` / `stampOpRouteVal`.  Found 2026-07-30 while removing
+-- an inert claim from
 -- `s4-gen-rec-inferred-context.mdk` (adversarial-review finding F6: that fixture
 -- had `sz w` in BOTH bodies, so it could not distinguish per-binding from group
 -- sourcing). Making the discriminator real is what exposed this. Independently
--- reproduced by the orchestrator before filing; the three controls below are
--- recorded in the issue.
--- Severity as observed: **S1, loud breakage** -- `check` accepts and prints the
--- CORRECT schemes; NEITHER engine will then execute the program. No silent
--- wrongness: both failures are loud, located and name the missing dict.
+-- reproduced by the orchestrator before filing.  Before the drain `check` printed
+-- the correct schemes, but eval and native rejected with an unbound
+-- `$dict_evenSz_0`; the controls below isolated the trigger.
 --
 -- SPEC ANSWER (hand-derived): §4 `gen-rec` says `P'` is "the predicates deferred
 -- to the (mutually) RECURSIVE GROUP" and that the group shares "ONE `λ d̄.`
@@ -24,18 +23,10 @@
 --   VALUES:  `sz w` = 1 at `w = (1 : Int)` and `oddSz` steps by the literal 1,
 --            so both arms decrement by one:                    => True, True
 --
--- OBSERVED on this binary:
---   check  ACCEPT (exit 0) -- and it reports BOTH schemes correctly, i.e. the
---          group-wide `P'` attribution in §4 `gen-rec` is right at the TYPE level
---   run    REJECT -- `runtime error [E-PANIC]: unbound identifier: $dict_evenSz_0`
---   build  REJECT -- `error: emitter failed compiling …`
---          `runtime error [E-PANIC]: unbound dict witness '$dict_…__evenSz_0' in
---           emit env (dict not threaded to this site)`
---
--- So the SCHEME says the group shares a dict prefix and the ELABORATION does not
--- thread it: exactly §4's named failure mode ("a recursive call site that
--- re-enters entailment instead of passing `d₁…dₘ`", §10's `gen-rec` bullet),
--- caught one step earlier than a wrong value.
+-- CURRENT: check accepts with both schemes above; eval and native both print
+-- `True` then `True`.  The cross-call's operator-instantiated element route now
+-- carries the enclosing binding's dict instead of erasing its owner and borrowing
+-- global scalar state.
 --
 -- 🔬 TWO CONTROLS, both in the corpus, isolating the trigger to
 -- INFERRED + MUTUAL + ASYMMETRIC:
@@ -46,12 +37,11 @@
 --   * `s4-gen-rec-inferred-context.mdk` -- the same INFERRED group with BOTH
 --     bodies dispatching runs fine. So neither "inferred" nor "mutual" alone is
 --     the trigger; the asymmetry is.
--- MIRROR-CHECKED: swapping which body dispatches fails symmetrically, naming
--- `$dict_oddSz_0` instead -- so this is not direction-dependent.
+-- HISTORICAL MIRROR: swapping which body dispatched failed symmetrically, naming
+-- `$dict_oddSz_0` instead -- so the original defect was not direction-dependent.
 --
--- ⚠️ THIS ROW PINS A BROKEN BUILD ON PURPOSE. It goes RED the day either engine
--- starts executing it, which is the signal to re-pin it to ALL_EXACT `True\nTrue`
--- and close #1133.
+-- This drained row now pins ALL_EXACT `True\nTrue`; either engine losing the shared
+-- group dict makes the regression loud again.
 interface Sz a where
   sz : a -> Int
 

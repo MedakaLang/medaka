@@ -8130,7 +8130,7 @@ sitesFor fn idx = optionOr [] (omLookup fn idx)
 -- cells are still bound).  Reset per pass by resetState, like pendingSites.
 -- D3b-1: also carries the method name + the EMethodAt impl-dicts ref, so a
 -- concrete site whose head names a parametric `requires` impl can thread the
--- element dict (resolveArgStamp → argImplDictRoutesFor), exactly as the
+-- element dict (resolveArgStamp → argImplDictRoutesForEncl), exactly as the
 -- return-position pendingSites carry implRef for resolveSite.
 -- #156 S3a: entries are `PendingEntry`s of kind `SKArg`.
 
@@ -19747,22 +19747,21 @@ activeDictVarOf m = match normalize m
   TApp a _ => activeDictVarOf a
   _ => None
 
--- activeDictVarOf, but PREFER the activeDictVars entry whose dict-param name belongs
--- to the enclosing method [encl] (`$dict_<encl>_<slot>`).  registerImplRequires
+-- The lexical active-dict lookup: return an activeDictVars entry only when its
+-- dict-param name belongs to the enclosing method [encl]
+-- (`$dict_<encl>_<slot>`).  registerImplRequires
 -- registers EVERY method of an impl under the SAME impl tyvar id (`impl Ord (List a)`
 -- registers `a`'s id once per compare/lt/gt/min/max/… each to `$dict_<method>_<slot>`),
 -- so the global first-match `activeDictVarOf` returns whichever method registered
 -- LAST — inside `compare`'s body that wrongly yields `$dict_max_0` (out of compare's
 -- scope → emitter "unbound dict witness").  Picking the [encl]-owned entry keeps each
--- method body's element-dict route bound to ITS OWN leading param.  encl == "" or no
--- match ⇒ fall back to the global lookup (genuine element dict from another impl).
+-- method body's element-dict route bound to ITS OWN leading param.  An empty owner or
+-- owner-prefix miss is not evidence: it must not borrow an unrelated global entry.
 activeDictVarForEncl : Mono -> String -> Option String
 activeDictVarForEncl m encl
-  | encl == "" = activeDictVarOf m
+  | encl == "" = None
   | otherwise = match normalize m
-    TVar cell => match firstDictForEncl (tyvarId cell) ("$dict_" ++ encl ++ "_") perRun.value.activeDictVars.value
-      Some dname => Some dname
-      None => activeDictVarOf m
+    TVar cell => firstDictForEncl (tyvarId cell) ("$dict_" ++ encl ++ "_") perRun.value.activeDictVars.value
     TApp a _ => activeDictVarForEncl a encl
     _ => None
 
@@ -19778,13 +19777,12 @@ firstDictForEncl id pfx ((eid, ename)::rest)
 -- the siblings unify to one id; activeDictVars (global, uncleared) maps that id to
 -- whichever sibling registered it LAST — so an arg-stamp inside `evenCat` would
 -- forward `$dict_oddCat_0` (out of scope in evenCat's body).  Preferring encl's own
--- slot keeps the forwarded dict the one actually bound in the body.  Falls back to
--- the global lookup when the var is not one of encl's (a genuine element dict from a
--- different in-scope impl).
+-- slot keeps the forwarded dict the one actually bound in the body.  A miss is None;
+-- evidence owned by a different impl is not in scope here.
 -- #1177: [goal] is the PREDICATE the use site has to discharge (its interface, and
 -- the instantiated argument vector when the occurrence let one be recovered), NOT
--- just the constraint var — see `enclDictVarOf`.  `None` reproduces the pre-#1177
--- tyvar-keyed lookup exactly.
+-- just the constraint var — see `enclDictVarOf`.  `None` selects the legacy scalar
+-- lookup, still bounded by the same lexical owner.
 activeDictVarOfEncl : Option PredicateRequest -> Mono -> String -> Option String
 activeDictVarOfEncl None m encl = activeDictVarForEncl m encl
 activeDictVarOfEncl (Some request) m encl =
@@ -20099,7 +20097,7 @@ resolveOpSite isBinop implTable method tagRef operandMono inImpl encl = match fs
 -- head's Ord impl HAS `requires` (parametric, e.g. tuple / `List a` / `Box a`).  This
 -- stamps the RKey route with the SAME element-dict reqs as the `==`/`eq` path, but
 -- keyed on the INNER same-interface `compare` (the relational method has no own impl
--- at this head, so `argImplDictRoutesFor` keyed on it would find nothing).
+-- at this head, so `argImplDictRoutesForEncl` keyed on it would find nothing).
 -- binopMethodApp forwards them as the EMethodAt impl-dicts; emitDefaultRKey passes
 -- them as leading words to `@mdk_default_<op>_<tag>`, whose emitDefaultDefine
 -- eta-PREPENDS the matching dict params and threads them into the inner
@@ -20122,8 +20120,8 @@ resolveOpSite isBinop implTable method tagRef operandMono inImpl encl = match fs
 -- Else a concrete non-builtin head → `RKey key reqs` with the element `requires` dicts
 -- PACKED into the primary route's reqs (binopRouteSplit later rips them onto the
 -- EMethodAt impl-dict ref).  Byte-identical to the pre-S3c stampOpRoute stamper.
-stampOpRouteVal : Bool -> ImplBuckets -> String -> Mono -> String -> Route
-stampOpRouteVal isBinop implTable method operandMono tag =
+stampOpRouteVal : Bool -> ImplBuckets -> String -> String -> Mono -> String -> Route
+stampOpRouteVal isBinop implTable encl method operandMono tag =
   let isBuiltin = if isBinop then
     binopBuiltinHead method tag
   else
@@ -20145,7 +20143,7 @@ stampOpRouteVal isBinop implTable method operandMono tag =
       if ieDefinesReqMethodAt perRun.value.bodyImplEnvRef.value method (headTyconMono operandMono) then method else innerDefaultMethod method
     else
       method
-    let reqs = argImplDictRoutesFor implTable dictMethod tag operandMono
+    let reqs = argImplDictRoutesForEncl implTable encl dictMethod tag operandMono [operandMono]
     RKey key reqs
 -- Gap #21 (CLOSED): element reqs are now forwarded unconditionally on both eval and
 -- emit paths.  The impl method `eq`/`compare` carries leading `$dict_*` params
@@ -20167,8 +20165,8 @@ innerDefaultMethod m =
 -- 🚨 THE PREDECESSOR (`implDefinesMethodAt`, over the cumulative-prefix
 -- `ImplBuckets`) WAS THE LAST "ONE DECISION, TWO SUBSTRATES" SITE, and it was
 -- MEASURED, not inferred.  Its answer chooses the METHOD NAME
--- (`method` vs `innerDefaultMethod method`) that `argImplDictRoutesFor`/
--- `argImplDictRoutesForEncl` then SELECT ON over the graph-global `IE`
+-- (`method` vs `innerDefaultMethod method`) that `argImplDictRoutesForEncl` then
+-- SELECTS ON over the graph-global `IE`
 -- (`bodyImplEnvRef`) — so a prefix miss did not merely lose a route, it handed the
 -- global selector a DIFFERENT GOAL for the same program.  Repro (`.claude/sprint-b/
 -- repair/F1-verdicts.md` finding 6): an `impl Cmp (Box a) requires Cmp a` defining
@@ -23009,9 +23007,9 @@ implEntryFromTys iface (headTy::rest) reqs methods = match headTyconNameTy headT
 --    was actually costing a wrong answer.  Fixed.
 --
 --  • `implEntryFromTys` / ImplBuckets holds only requires-BEARING impls and is read
---    by `findImplEntry` (the iface-UNKNOWN `""` FIRST-MATCH fallback) and
---    `argImplDictRoutesFor`, each via `bucketOf tag` at the
---    GOAL's head.  (ARCH B-2.1-h moved the third reader, `implDefinesMethodAt`, onto
+--    by `findImplEntry` (the iface-UNKNOWN `""` FIRST-MATCH fallback) via
+--    `bucketOf tag` at the GOAL's head.  (ARCH B-2.1-h moved the other reader,
+--    `implDefinesMethodAt`, onto
 --    graph-global `IE` as `ieDefinesReqMethodAt` — it kept the requires-only filter,
 --    so this bullet's argument still covers it, one substrate over.)  Registering a headless entry under `noneHeadTag` here without also
 --    unioning those lookups is inert — nothing would ever look the bucket up — and
@@ -25156,8 +25154,8 @@ entailInst implTable name m encl tag (EKArg fullMono) =
     RKey routeKey [],
     argImplDictRoutesForEncl implTable encl dictName tag m goals,
   )
-entailInst implTable name m _ tag (EKOp isBinop _) =
-  (stampOpRouteVal isBinop implTable name m tag, [])
+entailInst implTable name m encl tag (EKOp isBinop _) =
+  (stampOpRouteVal isBinop implTable encl name m tag, [])
 
 entailFallback : ImplBuckets -> EntailKind -> Route
 entailFallback _ (EKReturn _ _) = RNone
@@ -25168,9 +25166,8 @@ entailFallback _ (EKOp _ _) = RNone
 
 -- ONE constrained-call-arg route resolver — collapses routeOfMono (encl="",
 -- KeepNone) / routeOfMonoEncl (KeepNone) / routeOfMonoTop (encl="", CountImpls).
--- [encl] == "" ⇒ global activeDictVarOf (activeDictVarForEncl short-circuits); else
--- the enclosing method's own constraint-var dict.  [policy] decides the undetermined
--- arm (see Undetermined).
+-- Only a non-empty [encl] can supply an active dict, and only from that owner's
+-- constraint-var slots.  [policy] decides the undetermined arm (see Undetermined).
 routeOf : ImplBuckets -> IfaceRef -> String -> Undetermined -> Mono -> Route
 routeOf implTable iface encl policy m =
   routeOfD implTable iface encl policy m [] 0 0
@@ -25517,7 +25514,7 @@ selectReqImpl implTable iface tag m goals
 -- (RDict); a concrete element (`MyList Int`) materializes a static RKey.  #217: the
 -- return position (implDictRoutesIn) now shares this same aware requires recursion — the
 -- two chains were unified; this entry runs for emit-path arg stamps specifically.
--- #609: the operator entry.  The goal is the singleton [mono] — and unlike the
+-- #609: the operator route passes the singleton [mono] — and unlike the
 -- deferred EKNestedTop case this is not a scope cut, it is EXACT: every interface
 -- owning an operator method is single-param (`Eq a`, `Ord a`, `Num a`,
 -- `Semigroup a`, `Monoid a` in stdlib/core.mdk), so `itys` has length 1, the
@@ -25525,14 +25522,10 @@ selectReqImpl implTable iface tag m goals
 -- reduces to matchTyMono hty m.  Should a multi-param interface ever own an
 -- operator, entryHeadMatches degrades to the arg-0 fallback rather than
 -- mis-selecting.
-argImplDictRoutesFor : ImplBuckets -> String -> String -> Mono -> List Route
-argImplDictRoutesFor implTable name tag mono =
-  argImplDictRoutesForEncl implTable "" name tag mono [mono]
-
 -- encl-aware variant: thread the ENCLOSING method [encl] so the recursively-routed
 -- element dicts forward [encl]'s own `$dict_<encl>_<slot>` params (not whichever
--- method registered the shared impl tyvar id LAST — see activeDictVarForEncl).  encl
--- == "" recovers the original global routing (binop path, single-method impls).
+-- method registered the shared impl tyvar id LAST — see activeDictVarForEncl).  An
+-- empty [encl] has no lexical dict owner and therefore cannot forward one.
 -- #203 (H): the arg/op-position element routes.  Was a FIRST-MATCH scan of the
 -- ImplBuckets [tag] bucket (blind to no-requires siblings, see implDictRoutesForFull);
 -- now selects the MOST-SPECIFIC matching impl over the graph-global impl universe (`IE`)
@@ -25640,7 +25633,7 @@ recRoutes implTable encl mono (slot::rest) =
 -- For one of the callee's constraint ids, recover the live occurrence type from
 -- [mono] (the var the body unified it to).  Concrete head → RKey; still a
 -- constraint variable that is one of [encl]'s own → forward [encl]'s dict param
--- (RDict, the slot it sits at); otherwise fall back to the global routing.
+-- (RDict, the slot it sits at); otherwise leave the route unresolved.
 recRoute : ImplBuckets -> String -> Mono -> PredicateSlot -> Route
 recRoute implTable encl mono slot = match recPredicateArgs mono slot
   Some (g0::gs) => routeOfD implTable slot.psIface encl KeepNone g0 gs 0 0

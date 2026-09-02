@@ -137,7 +137,6 @@ argDispatchOfDecl : Decl -> List (String, Int)
 argDispatchOfDeclById : Decl -> List ((IfaceRef, String), Int)
 argDispatchOfMethod : List String -> IfaceMethod -> List (String, Int)
 argDispatchOfMethodById : IfaceRef -> List String -> IfaceMethod -> List ((IfaceRef, String), Int)
-argImplDictRoutesFor : Map String (List ImplEntry) -> String -> String -> Mono -> List Route
 argImplDictRoutesForEncl : Map String (List ImplEntry) -> String -> String -> String -> Mono -> List Mono -> List Route
 argImplReqRoutes : Map String (List ImplEntry) -> String -> List (String, Mono) -> List Require -> Int -> Int -> List Route
 argImplRequiresRoutes : Map String (List ImplEntry) -> IfaceRef -> String -> String -> Mono -> List Mono -> Int -> Int -> List Route
@@ -2101,7 +2100,7 @@ splitOnFirstEqGo : String -> Int -> Int -> Option Int
 splitOnFirstEqStr : String -> Option Int
 splitOnSemi : String -> List String
 splitOnSemiGo : String -> Int -> Int -> List String -> List String
-stampOpRouteVal : Bool -> Map String (List ImplEntry) -> String -> Mono -> String -> Route
+stampOpRouteVal : Bool -> Map String (List ImplEntry) -> String -> String -> Mono -> String -> Route
 stampRLocalOrFallback : Bool -> Ref Route -> String -> List Route -> Unit
 stampRoutes : List (Ref Route) -> Unit
 standaloneSchemeFor : TcEnv -> String -> String -> Option Scheme

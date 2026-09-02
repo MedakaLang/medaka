@@ -308,21 +308,14 @@
 #   is no quiescence pass (§11's T3/T4 row). Pinned as a KNOWN-BAD row in BOTH
 #   Section 4 ledgers (run and build) -- and the run-arm ledger was ADDED for it,
 #   since `RUN-DIFF` previously had no known-bad branch at all.
-# * s4-gen-rec-inferred-asymmetric -- #1133 (OPEN, S1 `verified`). LOUD BREAKAGE.
-#   An INFERRED
-#   mutually-recursive group in which only ONE body dispatches on the class:
-#   `check` accepts AND reports both schemes correctly as `Sz a =>`, then NEITHER
-#   engine will execute it -- `run` E-PANICs `unbound identifier:
-#   $dict_evenSz_0`, `build` dies `unbound dict witness '$dict_…__evenSz_0' in
-#   emit env (dict not threaded to this site)`. So the type level agrees with §4
-#   `gen-rec` (the group shares one dict prefix) and the elaboration does not
-#   thread it -- §4's own named failure mode, caught one step before it could be a
-#   wrong value. Two controls in the corpus isolate the trigger to INFERRED +
-#   MUTUAL + ASYMMETRIC: the ascribed twin runs, and the symmetric inferred row
-#   runs. Mirror-checked (swapping which body dispatches fails symmetrically).
-#   FOUND BY FIXING AN INERT ASSERTION -- the symmetric row used to claim it
-#   discriminated group from per-binding sourcing, which it could not; making the
-#   discriminator real is what exposed this.
+# * s4-gen-rec-inferred-asymmetric -- #1133 DRAINED. An INFERRED mutually-recursive
+#   group in which only ONE body dispatches used to typecheck with both correct
+#   `Sz a =>` schemes, then fail on both engines with an unbound `$dict_evenSz_0`.
+#   The operator route erased its enclosing evidence owner before recursively
+#   routing the selected impl's requirements. Preserving that owner through
+#   `entailInst` / `stampOpRouteVal` makes the group share its one dict prefix as §4
+#   requires; check, eval and native now agree on `True` / `True`. The ascribed and
+#   symmetric controls remain, and the asymmetric row is re-pinned to ALL_EXACT.
 # * s5-phantom-determined-use-rejected -- #1134 (OPEN, S3 `verified`).
 #   OVER-REJECTION. Inside
 #   `useBoth : Mk a => a -> Int` the `Mk a` dict is in scope over a RIGID `a`, so
@@ -574,7 +567,7 @@ s4-requires-depth-at-limit-control.mdk|THE AT-LIMIT CONTROL for the row above an
 s4-gen-rec-shared-dict-params.mdk|§4 `gen-rec` (#44 vein): a mutually-recursive group shares ONE `λ d̄.` prefix; recursive occurrences reuse the group`s dict params instead of re-entering entailment|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|True\nTrue|
 s4-gen-rec-nary-one-predicate-slot.mdk|§4 `gen-rec` n-ary slot discriminator: `Ix a b` is one predicate with two bound ids, so the recursive call forwards exactly one dict and the exact answer remains 7. Re-shattering ids into cardinality shifts the recursive arguments|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|7|
 s4-gen-rec-inferred-context.mdk|§4 `gen-rec` with the context INFERRED rather than ascribed -- the `gen` sourcing, a different code path from its `gen-sig` twin per #610`s mechanism note. ⚠️ BOTH bodies dispatch, so this row does NOT discriminate group sourcing from per-binding sourcing (an earlier revision wrongly claimed it did); it is a regression guard on the schemes and values. The discriminating form is the asymmetric row below|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|True\nTrue|
-s4-gen-rec-inferred-asymmetric.mdk|§4 `gen-rec` DISCRIMINATOR -- LEDGER #1133 (OPEN, S1 LOUD BREAKAGE): an INFERRED mutually-recursive group in which only ONE body dispatches. check ACCEPTS and reports BOTH schemes as `Sz a =>` (the group-wide `P` attribution is right), then NEITHER engine will execute it -- run E-PANICs `unbound identifier: $dict_evenSz_0`, build dies `unbound dict witness ... in emit env (dict not threaded to this site)`. §4`s named failure mode, caught before it can become a wrong value. Controls: the ascribed twin and the symmetric row both run fine; mirroring which body dispatches fails symmetrically|ACCEPT|REJECT|REJECT|NONE||
+s4-gen-rec-inferred-asymmetric.mdk|§4 `gen-rec` DISCRIMINATOR -- #1133 DRAINED: an INFERRED mutually-recursive group in which only ONE body dispatches must still share the group`s `Sz a` dict. Preserving the operator site`s evidence owner threads that dict through the asymmetric cross-call; check reports both `Sz a =>` schemes and eval/native now agree on the hand-derived `True` / `True`. Controls: the ascribed twin and symmetric inferred row remain unchanged|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|True\nTrue|
 s5-return-position-dispatch.mdk|§5 RESULT position: `mk : Int -> a` has no argument whose runtime tag reveals the instance, so dispatch can only come from the statically-determined dictionary. Both calls pass an identical Int literal|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|1\n2|
 s5-phantom-ambiguous-use-rejected.mdk|§5 PHANTOM position, AMBIGUOUS use: §4 `var` cannot discharge `Mk ?a` with nothing fixing `?a`, so the SPEC rejects it too (§5 says only HOW a phantom dispatches, never that this program resolves). CONFORMANT ON THE VERDICT, with the caveat that spec and impl reject at different SITES -- spec the use, impl the declaration -- which the spec leaves unspecified|REJECT|REJECT|REJECT|NONE||T-PHANTOM-METHOD
 s5-phantom-determined-use-rejected.mdk|§5 PHANTOM position, DETERMINED use -- LEDGER #1134 (OPEN, S3 OVER-REJECTION): inside `useBoth : Mk a => a -> Int` the dict is in scope over a RIGID `a`, so §3 `assum` discharges it and §5 `(method)` projects -- the spec ACCEPTS and prints 7. The checker rejects at the DECLARATION regardless. Paired with the ambiguous row this proves the impl rejects a strict SUPERSET of what the spec does. ⚠️ Drains on #1134 (BEHAVIOUR), never on #1107 (d), which is spec-only and changes no behaviour|REJECT|REJECT|REJECT|NONE||T-PHANTOM-METHOD

@@ -1155,6 +1155,45 @@ printf '%s\n' "$predicate_slot_old_consumers" | while IFS= read -r retired; do
   fi
 done || exit 1
 
+# Deferred operator routes keep their lexical evidence owner through the concrete-head
+# stamper.  The scalar registry is global and uncleared, so an empty owner or an
+# owner-prefix miss must not borrow another method's dict.  The direct in-impl operator
+# bypass remains a separately tracked residual and is pinned independently below.
+lexical_dict_block="$(sed -n '/^activeDictVarForEncl :/,/^firstDictForEncl :/p' "$predicate_slot_src")"
+printf '%s\n' "$lexical_dict_block" | grep -Fq '| encl == "" = None' || {
+  echo "FAIL: activeDictVarForEncl must reject an empty evidence owner"
+  exit 1
+}
+printf '%s\n' "$lexical_dict_block" | grep -Fq 'TVar cell => firstDictForEncl' || {
+  echo "FAIL: activeDictVarForEncl must reject an owner-prefix miss"
+  exit 1
+}
+if printf '%s\n' "$lexical_dict_block" | grep -Fq 'activeDictVarOf m'; then
+  echo "FAIL: activeDictVarForEncl retains a non-lexical global fallback"
+  exit 1
+fi
+
+operator_owner_required='stampOpRouteVal : Bool -> ImplBuckets -> String -> String -> Mono -> String -> Route
+let reqs = argImplDictRoutesForEncl implTable encl dictMethod tag operandMono [operandMono]
+entailInst implTable name m encl tag (EKOp isBinop _) =
+(stampOpRouteVal isBinop implTable encl name m tag, [])'
+printf '%s\n' "$operator_owner_required" | while IFS= read -r required; do
+  if ! grep -Fq "$required" "$predicate_slot_src"; then
+    echo "FAIL: operator route dropped its evidence owner: $required"
+    exit 1
+  fi
+done || exit 1
+if grep -Fq 'argImplDictRoutesFor :' "$predicate_slot_src"; then
+  echo "FAIL: owner-erasing argImplDictRoutesFor wrapper remains"
+  exit 1
+fi
+
+op_dict_block="$(sed -n '/^opDictVarOf :/,/^resolveOpSite :/p' "$predicate_slot_src")"
+printf '%s\n' "$op_dict_block" | grep -Fq '| inImpl = activeDictVarOf m' || {
+  echo "FAIL: direct opDictVarOf in-impl residual moved during the lexical cutoff"
+  exit 1
+}
+
 predicate_relation_uses=$(grep -F 'predicateRequestMatchesSlot request' "$predicate_slot_src" \
   | grep -cvE '^[[:space:]]*--')
 if [ "$predicate_relation_uses" -ne 6 ]; then
