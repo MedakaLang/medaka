@@ -579,7 +579,11 @@ interface Greeter a where                    -- default method body
   greet : a -> String                        -- the default body's sig MUST mention `a`
   greet x = "Hello!"                         -- (dispatch needs it in the signature)
 
-interface Empty a                            -- marker interface (no `where`)
+interface Empty a  -- marker interface (no `where`)
+
+data Widget = Widget
+
+impl Empty Widget  -- an impl needs no `where` either, when its interface has no methods
 
 impl Eq2 Int where
   eq2 a b = a == b

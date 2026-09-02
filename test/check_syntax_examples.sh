@@ -132,24 +132,6 @@ trap 'rm -rf "$WORK"' EXIT INT TERM
 check_fmt() {
   fmt_target="$1"
   fmt_label="$2"
-  # KNOWN `medaka fmt` DEFECT (found while adding this check, not yet filed
-  # as an issue): a bodyless `interface X a` (no `where`, no methods — a
-  # valid, documented marker-interface shape) is not round-tripped by fmt;
-  # it synthesizes a spurious `where` plus an empty/whitespace body line
-  # regardless of any trailing comment. SYNTAX.md's "Empty a" example exists
-  # specifically to demonstrate the where-less form and says so in its own
-  # comment ("no `where`") — canonicalizing it to fmt's output would delete
-  # the very construct the example teaches, which this gate must not do
-  # (it only enforces STYLE, never rewrites what an example demonstrates).
-  # Exempt by content, not path/line, so this cannot silently widen to cover
-  # an unrelated future block at the same spot — matches only the exact
-  # bodyless-interface header shape known to be unformattable. This skips
-  # the fmt check for the WHOLE containing file (the block this construct
-  # sits in is checked as one unit), not just this one line; the rest of
-  # that block was hand-verified canonical when this exemption was added.
-  if grep -q '^interface [A-Za-z_][A-Za-z0-9_]* [a-z][A-Za-z0-9_]*[[:space:]]*\(--.*\)\?$' "$fmt_target" 2>/dev/null; then
-    return 0
-  fi
   # A medaka-project block's per-file extraction (check_project_block) keeps
   # the blank line that separates one `-- file:` section from the next as
   # part of the extracted file — that separator is markdown structure, not
