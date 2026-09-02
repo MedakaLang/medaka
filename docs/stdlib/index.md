@@ -500,6 +500,19 @@ TCP connections and name resolution.
 - [`withListener`](net.md#withlistener)
 - [`serveLoop`](net.md#serveloop)
 
+## [`net_async`](net_async.md)
+
+- [`accept`](net_async.md#accept)
+- [`recv`](net_async.md#recv)
+- [`recvWithin`](net_async.md#recvwithin)
+- [`send`](net_async.md#send)
+- [`sendAll`](net_async.md#sendall)
+- [`sendAllWithin`](net_async.md#sendallwithin)
+- [`sendString`](net_async.md#sendstring)
+- [`close`](net_async.md#close)
+- [`closeListener`](net_async.md#closelistener)
+- [`serve`](net_async.md#serve)
+
 ## [`nonempty`](nonempty.md)
 
 A list with at least one element.
@@ -571,6 +584,11 @@ The host primitives.
 - [`netShutdown`](runtime.md#netshutdown)
 - [`netClose`](runtime.md#netclose)
 - [`netSetTimeout`](runtime.md#netsettimeout)
+- [`ioPoll`](runtime.md#iopoll)
+- [`netSetNonblock`](runtime.md#netsetnonblock)
+- [`netTryAccept`](runtime.md#nettryaccept)
+- [`netTryRecv`](runtime.md#nettryrecv)
+- [`netTrySend`](runtime.md#nettrysend)
 - [`wallTimeSec`](runtime.md#walltimesec)
 - [`monotonicSec`](runtime.md#monotonicsec)
 - [`sleepMs`](runtime.md#sleepms)

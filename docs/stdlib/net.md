@@ -3,8 +3,8 @@
 TCP connections and name resolution.
 
 `connect` opens a connection and `listen` and `accept` receive them.
-`Connection` and `Listener` are opaque handles: they cannot be built from
-a raw descriptor or confused with each other. `sendAll` and `recvAll`
+`Connection` and `Listener` are distinct handle types, so one cannot be
+passed where the other is expected. `sendAll` and `recvAll`
 loop until every byte is transferred, and `sendString`, `recvString`,
 `sendLine`, and `recvLine` work in UTF-8 text. `withConnection`,
 `withListener`, and `serveLoop` close their handle when the body

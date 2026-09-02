@@ -19,6 +19,7 @@
 -- Every scheduler queue is ordinary GC-visible Medaka data held in `Ref`s local
 -- to one `runAsyncIO` call; the runtime owns no descriptors and no C-side state.
 
+import array.{fromList}
 import list.{partition}
 import time.{Duration, millis, toMillis}
 
@@ -53,7 +54,7 @@ export data Async (e : Effect) a =
 -- simply retries, so a spurious wake is harmless.  `WaitRead` and `WaitWrite`
 -- name a file descriptor; `WaitUntil` is a monotonic deadline in seconds;
 -- `WaitFlag` is set when a spawned task finishes.
-export data Wait =
+public export data Wait =
   | WaitRead Int
   | WaitWrite Int
   | WaitUntil Float
@@ -136,6 +137,35 @@ finish done cell a =
   cell := Some a
   done := True
   Done ()
+
+{- | Parks the task until any one of `waits` is satisfied.
+
+   The building block for descriptor waits and deadlines: `net_async` parks
+   on `[WaitRead fd]`, or on `[WaitRead fd, deadline]` to give up after a
+   `Duration`. A woken task retries, so a spurious wake is harmless. Needs
+   `runAsyncIO`. -}
+export
+awaitAny : List Wait -> Async e Unit
+awaitAny waits = Await waits (u => Done ())
+
+{- | A deadline `d` from now, as a wait for `awaitAny`.
+
+   Reads the clock, so `<Clock>` joins `e`. -}
+export
+deadlineAfter : Duration -> Async e Wait
+deadlineAfter d = Suspend (u =>
+  Done (WaitUntil (monotonicSec () + intToFloat (toMillis d) / 1000.0)))
+
+{- | Whether a deadline from `deadlineAfter` has passed.
+
+   Any other wait is never expired. Reads the clock. -}
+export
+expired : Wait -> Async e Bool
+expired w = Suspend (u => Done (expiredAt (monotonicSec ()) w))
+
+expiredAt : Float -> Wait -> Bool
+expiredAt now (WaitUntil t) = t <= now
+expiredAt _ _ = False
 
 {- | Waits for a spawned task and yields its value.
 
@@ -243,7 +273,7 @@ storeResult cell a =
 
 -- One scheduler round: step the head of the run queue, or wake parked tasks
 -- when the queue is empty.  Tail-recursive so compiled code loops.
-schedule : Ref (List (Async e Unit)) -> Ref (List (List Wait, Unit -> <e> Async e Unit)) -> <Clock | e> Unit
+schedule : Ref (List (Async e Unit)) -> Ref (List (List Wait, Unit -> <e> Async e Unit)) -> <Clock, Net "_" | e> Unit
 schedule queue parked = match !queue
   t::rest =>
     queue := rest
@@ -272,7 +302,7 @@ pushBack queue t = queue := !queue ++ [t]
 
 -- Nothing is runnable: move every task whose wait is satisfied back to the
 -- queue, or sleep until the earliest deadline, or report a deadlock.
-wakeParked : Ref (List (Async e Unit)) -> Ref (List (List Wait, Unit -> <e> Async e Unit)) -> <Clock> Unit
+wakeParked : Ref (List (Async e Unit)) -> Ref (List (List Wait, Unit -> <e> Async e Unit)) -> <Clock, Net "_"> Unit
 wakeParked queue parked =
   let now = monotonicSec ()
   let (ready, waiting) = partition (p => isReady now p) !parked
@@ -280,13 +310,61 @@ wakeParked queue parked =
     _::_ =>
       parked := waiting
       requeue queue ready
-    [] => match earliestDeadline waiting
-      Some t => sleepMs (floatToInt ((t - now) * 1000.0) + 1)
-      None =>
-        if any (p => any isFdWait (fst p)) waiting then
-          panic "async: waiting on a file descriptor needs the network runtime, which is not available yet"
-        else
-          panic "async: every remaining task is waiting on a task that can never finish (deadlock)"
+    [] => match fdWaitsOf waiting
+      [] => match earliestDeadline waiting
+        Some t => sleepMs (millisUntil now t)
+        None => panic "async: every remaining task is waiting on a task that can never finish (deadlock)"
+      fdWaits =>
+        let timeout = match earliestDeadline waiting
+          Some t => millisUntil now t
+          None => -1
+        match ioPoll (fromList (map pollFd fdWaits)) (fromList (map pollInterest fdWaits)) timeout
+          Err e => panic ("async: poll failed: " ++ e)
+          Ok readiness =>
+            let satisfied = satisfiedWaits fdWaits (toList readiness)
+            let (woke, still) = partition (p => any (w => waitSatisfied satisfied w) (fst p)) waiting
+            parked := still
+            requeue queue woke
+
+millisUntil : Float -> Float -> Int
+millisUntil now t = max 0 (floatToInt ((t - now) * 1000.0) + 1)
+
+-- Every descriptor wait across the park table, one poll entry each.
+fdWaitsOf : List (List Wait, Unit -> <e> Async e Unit) -> List Wait
+fdWaitsOf [] = []
+fdWaitsOf ((ws, _)::rest) = filter isFdWait ws ++ fdWaitsOf rest
+
+pollFd : Wait -> Int
+pollFd (WaitRead fd) = fd
+pollFd (WaitWrite fd) = fd
+pollFd _ = -1
+
+pollInterest : Wait -> Int
+pollInterest (WaitRead _) = 1
+pollInterest (WaitWrite _) = 2
+pollInterest _ = 0
+
+-- The waits whose parallel readiness word is non-zero.
+satisfiedWaits : List Wait -> List Int -> List Wait
+satisfiedWaits (w::ws) (r::rs) =
+  if r == 0 then
+    satisfiedWaits ws rs
+  else
+    w :: satisfiedWaits ws rs
+satisfiedWaits _ _ = []
+
+waitSatisfied : List Wait -> Wait -> Bool
+waitSatisfied sat (WaitRead fd) = any (w => isReadOf fd w) sat
+waitSatisfied sat (WaitWrite fd) = any (w => isWriteOf fd w) sat
+waitSatisfied _ _ = False
+
+isReadOf : Int -> Wait -> Bool
+isReadOf fd (WaitRead x) = x == fd
+isReadOf _ _ = False
+
+isWriteOf : Int -> Wait -> Bool
+isWriteOf fd (WaitWrite x) = x == fd
+isWriteOf _ _ = False
 
 requeue : Ref (List (Async e Unit)) -> List (List Wait, Unit -> <e> Async e Unit) -> Unit
 requeue _ [] = ()
