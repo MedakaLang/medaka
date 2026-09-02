@@ -1103,7 +1103,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/sql_oracle"
 area = "engines"
-shard = "gates_6"
+shard = "gates_8"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -1411,7 +1411,7 @@ toolchain = []
 [[gate]]
 name = "check_syntax_examples"
 area = "docs"
-shard = "gates_7"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2475,7 +2475,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_llvm_symbol_collision"
 area = "backend"
-shard = "gates_2"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -3820,7 +3820,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_check_ir_floor"
 area = "infra"
-shard = "gates_6"
+shard = "gates_8"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3829,6 +3829,20 @@ run = "test/diff_compiler_check_ir_floor.sh"
 oracles = []
 sources = ["test/diff_compiler_check_ir_floor.sh", "compiler/backend/llvm_emit.mdk", "compiler/eval/eval.mdk", "compiler/tools/test_cmd.mdk"]
 corpus = []
+toolchain = ["clang", "valgrind"]
+
+[[gate]]
+name = "diff_compiler_emitted_code_floor"
+area = "infra"
+shard = "gates_6"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+run = "test/diff_compiler_emitted_code_floor.sh"
+oracles = []
+sources = ["test/diff_compiler_emitted_code_floor.sh", "compiler/backend/llvm_emit.mdk", "compiler/backend/trmc_analysis.mdk", "compiler/ir/dce.mdk"]
+corpus = ["test/bench_fixtures"]
 toolchain = ["clang", "valgrind"]
 
 # Every help/usage string must describe the CLI that actually exists (#2354,

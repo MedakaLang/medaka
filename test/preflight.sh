@@ -810,6 +810,10 @@ while IFS= read -r f; do
       # F-3-backend-arm-gap: gates.toml's diff_compiler_check_ir_floor.sources lists
       # llvm_emit.mdk (F-2/F-S3-6) — same reasoning as F-S3-7's compiler/eval/* addition.
       add 'diff_compiler_check_ir_floor'
+      # F8: gates.toml's diff_compiler_emitted_code_floor.sources also lists
+      # compiler/backend/llvm_emit.mdk (and trmc_analysis.mdk/ir/dce.mdk) — same
+      # backend-arm-gap reasoning as diff_compiler_check_ir_floor above.
+      add 'diff_compiler_emitted_code_floor'
       need_fixpoint=1 ;;
 
     # #1131: driver/loader.mdk is a cited DICT-SEMANTICS site.

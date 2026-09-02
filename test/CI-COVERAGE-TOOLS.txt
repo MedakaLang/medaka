@@ -112,6 +112,21 @@ test/arch_census                derived architecture census (#2289, S-arch-censu
                                 skill's job, not this script's). Always exits 0 and asserts
                                 nothing. See the script header.
 
+test/o2_survivor_census         report-only census over test/o2_survivor_fixtures/
+                                (#2357, S2-o2-survivor-report, `make
+                                o2-survivor-census`): for each single-construct
+                                probe (one comparison/arithmetic construct per
+                                file), emits pre-`-O2` LLVM IR via `medaka build
+                                --keep-ir`, runs `clang -O2 -S -emit-llvm`, and
+                                buckets what survives in the probe's own
+                                function — opaque runtime calls, live
+                                allocations, redundant loads, non-collapsed tag
+                                arithmetic. A probe whose build or whose -O2
+                                pass fails reports MISSING, never a silent 0.
+                                Always exits 0 and asserts nothing — no
+                                gate/gates.toml involvement by design. See the
+                                script header.
+
 test/cli_conformance_census    derived CLI conformance census (#2354, S-conformance-table,
                                 `make cli-conformance-census`): re-derives
                                 docs/ops/CLI-CONFORMANCE.md's machine-checkable columns —
