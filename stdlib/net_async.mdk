@@ -8,7 +8,6 @@
 -- descriptor plus a `WaitUntil`; the task itself decides to give up, so no
 -- task is ever dropped (docs/design/ASYNC-RUNTIME-DESIGN.md §0a).
 
-import array.{drop}
 import async.{Async, Wait(..), liftIO, spawn, awaitAny, deadlineAfter, expired}
 import net.{Connection(..), Listener(..)}
 import net as N
@@ -107,35 +106,56 @@ sendStep _ _ (Err e) = deferPure (Err e)
 -- | Sends every byte, parking as needed.
 export
 sendAll : Connection -> Array Int -> Async <Net "_" | e> (Result String Unit)
-sendAll conn bytes =
-  if length bytes == 0 then
+sendAll conn bytes = sendFrom conn bytes 0
+
+-- The loop keeps an offset into the one array rather than slicing it, and the
+-- extern copies at most 64 KiB per call, so a large payload costs its own
+-- length, not its length squared.
+sendFrom : Connection -> Array Int -> Int -> Async <Net "_" | e> (Result String Unit)
+sendFrom conn bytes off =
+  if off >= arrayLength bytes then
     deferPure (Ok ())
   else
-    deferThen (send conn bytes) (r => sendAllStep conn bytes r)
+    deferThen (liftIO (u => trySendFrom conn bytes off)) (step => sendFromStep conn bytes off step)
 
-sendAllStep : Connection -> Array Int -> Result String Int -> Async <Net "_" | e> (Result String Unit)
-sendAllStep conn bytes (Ok n) = sendAll conn (drop n bytes)
-sendAllStep _ _ (Err e) = deferPure (Err e)
+trySendFrom : Connection -> Array Int -> Int -> <Net "_"> Result String (Option Int)
+trySendFrom (Connection fd) bytes off = match netSetNonblock fd True
+  Ok _ => netTrySendFrom fd bytes off
+  Err e => Err e
+
+sendFromStep : Connection -> Array Int -> Int -> Result String (Option Int) -> Async <Net "_" | e> (Result String Unit)
+sendFromStep (Connection fd) bytes off (Ok None) =
+  deferThen (awaitAny [WaitWrite fd]) (_ => sendFrom (Connection fd) bytes off)
+sendFromStep conn bytes off (Ok (Some n)) = sendFrom conn bytes (off + n)
+sendFromStep _ _ _ (Err e) = deferPure (Err e)
 
 -- | `sendAll` that gives up after `d` with `Err "timed out"`.
 export
 sendAllWithin : Duration -> Connection -> Array Int -> Async <Clock, Net "_" | e> (Result String Unit)
 sendAllWithin d conn bytes =
-  deferThen (deadlineAfter d) (dl => sendUntil dl conn bytes)
+  deferThen (deadlineAfter d) (dl => sendUntil dl conn bytes 0)
 
-sendUntil : Wait -> Connection -> Array Int -> Async <Clock, Net "_" | e> (Result String Unit)
-sendUntil dl conn bytes =
-  if length bytes == 0 then
+-- The deadline is checked before every attempt, so no round of work runs
+-- past it unobserved.
+sendUntil : Wait -> Connection -> Array Int -> Int -> Async <Clock, Net "_" | e> (Result String Unit)
+sendUntil dl conn bytes off =
+  if off >= arrayLength bytes then
     deferPure (Ok ())
   else
-    deferThen (liftIO (u => trySend conn bytes)) (step => sendUntilStep dl conn bytes step)
+    deferThen (expired dl) (late => if late then deferPure (Err "timed out") else sendUntilTry dl conn bytes off)
 
-sendUntilStep : Wait -> Connection -> Array Int -> Result String (Option Int) -> Async <Clock, Net "_" | e> (Result String Unit)
-sendUntilStep dl (Connection fd) bytes (Ok None) = deferThen
-  (expired dl)
-  (late => if late then deferPure (Err "timed out") else deferThen (awaitAny [WaitWrite fd, dl]) (_ => sendUntil dl (Connection fd) bytes))
-sendUntilStep dl conn bytes (Ok (Some n)) = sendUntil dl conn (drop n bytes)
-sendUntilStep _ _ _ (Err e) = deferPure (Err e)
+sendUntilTry : Wait -> Connection -> Array Int -> Int -> Async <Clock, Net "_" | e> (Result String Unit)
+sendUntilTry dl conn bytes off = deferThen
+  (liftIO (u => trySendFrom conn bytes off))
+  (step => sendUntilStep dl conn bytes off step)
+
+sendUntilStep : Wait -> Connection -> Array Int -> Int -> Result String (Option Int) -> Async <Clock, Net "_" | e> (Result String Unit)
+sendUntilStep dl (Connection fd) bytes off (Ok None) = deferThen
+  (awaitAny [WaitWrite fd, dl])
+  (_ => sendUntil dl (Connection fd) bytes off)
+sendUntilStep dl conn bytes off (Ok (Some n)) =
+  sendUntil dl conn bytes (off + n)
+sendUntilStep _ _ _ _ (Err e) = deferPure (Err e)
 
 -- | Sends a string as UTF-8, parking as needed.
 export

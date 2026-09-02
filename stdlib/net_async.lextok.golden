@@ -1,11 +1,5 @@
 NEWLINE
 IMPORT
-IDENT "array"
-DOT_LBRACE
-IDENT "drop"
-RBRACE
-NEWLINE
-IMPORT
 IDENT "async"
 DOT_LBRACE
 UPPER "Async"
@@ -883,52 +877,18 @@ IDENT "sendAll"
 IDENT "conn"
 IDENT "bytes"
 EQUAL
-INDENT
-IF
-IDENT "length"
+IDENT "sendFrom"
+IDENT "conn"
 IDENT "bytes"
-EQ_EQ
 INT 0
-THEN
-INDENT
-IDENT "deferPure"
-LPAREN
-UPPER "Ok"
-LPAREN
-RPAREN
-RPAREN
 NEWLINE
-DEDENT
-ELSE
-INDENT
-IDENT "deferThen"
-LPAREN
-IDENT "send"
-IDENT "conn"
-IDENT "bytes"
-RPAREN
-LPAREN
-IDENT "r"
-FAT_ARROW
-IDENT "sendAllStep"
-IDENT "conn"
-IDENT "bytes"
-IDENT "r"
-RPAREN
-NEWLINE
-DEDENT
-NEWLINE
-DEDENT
-NEWLINE
-IDENT "sendAllStep"
+IDENT "sendFrom"
 COLON
 UPPER "Connection"
 ARROW
 UPPER "Array"
 UPPER "Int"
 ARROW
-UPPER "Result"
-UPPER "String"
 UPPER "Int"
 ARROW
 UPPER "Async"
@@ -944,23 +904,191 @@ UPPER "String"
 UPPER "Unit"
 RPAREN
 NEWLINE
-IDENT "sendAllStep"
+IDENT "sendFrom"
 IDENT "conn"
 IDENT "bytes"
+IDENT "off"
+EQUAL
+INDENT
+IF
+IDENT "off"
+GEQ
+IDENT "arrayLength"
+IDENT "bytes"
+THEN
+INDENT
+IDENT "deferPure"
 LPAREN
 UPPER "Ok"
-IDENT "n"
-RPAREN
-EQUAL
-IDENT "sendAll"
-IDENT "conn"
 LPAREN
-IDENT "drop"
-IDENT "n"
-IDENT "bytes"
+RPAREN
 RPAREN
 NEWLINE
-IDENT "sendAllStep"
+DEDENT
+ELSE
+INDENT
+IDENT "deferThen"
+LPAREN
+IDENT "liftIO"
+LPAREN
+IDENT "u"
+FAT_ARROW
+IDENT "trySendFrom"
+IDENT "conn"
+IDENT "bytes"
+IDENT "off"
+RPAREN
+RPAREN
+LPAREN
+IDENT "step"
+FAT_ARROW
+IDENT "sendFromStep"
+IDENT "conn"
+IDENT "bytes"
+IDENT "off"
+IDENT "step"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "trySendFrom"
+COLON
+UPPER "Connection"
+ARROW
+UPPER "Array"
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+LT
+UPPER "Net"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+LPAREN
+UPPER "Option"
+UPPER "Int"
+RPAREN
+NEWLINE
+IDENT "trySendFrom"
+LPAREN
+UPPER "Connection"
+IDENT "fd"
+RPAREN
+IDENT "bytes"
+IDENT "off"
+EQUAL
+MATCH
+IDENT "netSetNonblock"
+IDENT "fd"
+UPPER "True"
+INDENT
+UPPER "Ok"
+UNDERSCORE
+FAT_ARROW
+IDENT "netTrySendFrom"
+IDENT "fd"
+IDENT "bytes"
+IDENT "off"
+NEWLINE
+UPPER "Err"
+IDENT "e"
+FAT_ARROW
+UPPER "Err"
+IDENT "e"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "sendFromStep"
+COLON
+UPPER "Connection"
+ARROW
+UPPER "Array"
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Result"
+UPPER "String"
+LPAREN
+UPPER "Option"
+UPPER "Int"
+RPAREN
+ARROW
+UPPER "Async"
+LT
+UPPER "Net"
+STRING "_"
+PIPE
+IDENT "e"
+GT
+LPAREN
+UPPER "Result"
+UPPER "String"
+UPPER "Unit"
+RPAREN
+NEWLINE
+IDENT "sendFromStep"
+LPAREN
+UPPER "Connection"
+IDENT "fd"
+RPAREN
+IDENT "bytes"
+IDENT "off"
+LPAREN
+UPPER "Ok"
+UPPER "None"
+RPAREN
+EQUAL
+INDENT
+IDENT "deferThen"
+LPAREN
+IDENT "awaitAny"
+LBRACKET
+UPPER "WaitWrite"
+IDENT "fd"
+RBRACKET
+RPAREN
+LPAREN
+UNDERSCORE
+FAT_ARROW
+IDENT "sendFrom"
+LPAREN
+UPPER "Connection"
+IDENT "fd"
+RPAREN
+IDENT "bytes"
+IDENT "off"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "sendFromStep"
+IDENT "conn"
+IDENT "bytes"
+IDENT "off"
+LPAREN
+UPPER "Ok"
+LPAREN
+UPPER "Some"
+IDENT "n"
+RPAREN
+RPAREN
+EQUAL
+IDENT "sendFrom"
+IDENT "conn"
+IDENT "bytes"
+LPAREN
+IDENT "off"
+PLUS
+IDENT "n"
+RPAREN
+NEWLINE
+IDENT "sendFromStep"
+UNDERSCORE
 UNDERSCORE
 UNDERSCORE
 LPAREN
@@ -1018,6 +1146,7 @@ IDENT "sendUntil"
 IDENT "dl"
 IDENT "conn"
 IDENT "bytes"
+INT 0
 RPAREN
 NEWLINE
 DEDENT
@@ -1029,6 +1158,8 @@ ARROW
 UPPER "Connection"
 ARROW
 UPPER "Array"
+UPPER "Int"
+ARROW
 UPPER "Int"
 ARROW
 UPPER "Async"
@@ -1050,13 +1181,14 @@ IDENT "sendUntil"
 IDENT "dl"
 IDENT "conn"
 IDENT "bytes"
+IDENT "off"
 EQUAL
 INDENT
 IF
-IDENT "length"
+IDENT "off"
+GEQ
+IDENT "arrayLength"
 IDENT "bytes"
-EQ_EQ
-INT 0
 THEN
 INDENT
 IDENT "deferPure"
@@ -1071,13 +1203,74 @@ ELSE
 INDENT
 IDENT "deferThen"
 LPAREN
+IDENT "expired"
+IDENT "dl"
+RPAREN
+LPAREN
+IDENT "late"
+FAT_ARROW
+IF
+IDENT "late"
+THEN
+IDENT "deferPure"
+LPAREN
+UPPER "Err"
+STRING "timed out"
+RPAREN
+ELSE
+IDENT "sendUntilTry"
+IDENT "dl"
+IDENT "conn"
+IDENT "bytes"
+IDENT "off"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "sendUntilTry"
+COLON
+UPPER "Wait"
+ARROW
+UPPER "Connection"
+ARROW
+UPPER "Array"
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Async"
+LT
+UPPER "Clock"
+COMMA
+UPPER "Net"
+STRING "_"
+PIPE
+IDENT "e"
+GT
+LPAREN
+UPPER "Result"
+UPPER "String"
+UPPER "Unit"
+RPAREN
+NEWLINE
+IDENT "sendUntilTry"
+IDENT "dl"
+IDENT "conn"
+IDENT "bytes"
+IDENT "off"
+EQUAL
+IDENT "deferThen"
+LPAREN
 IDENT "liftIO"
 LPAREN
 IDENT "u"
 FAT_ARROW
-IDENT "trySend"
+IDENT "trySendFrom"
 IDENT "conn"
 IDENT "bytes"
+IDENT "off"
 RPAREN
 RPAREN
 LPAREN
@@ -1087,12 +1280,9 @@ IDENT "sendUntilStep"
 IDENT "dl"
 IDENT "conn"
 IDENT "bytes"
+IDENT "off"
 IDENT "step"
 RPAREN
-NEWLINE
-DEDENT
-NEWLINE
-DEDENT
 NEWLINE
 IDENT "sendUntilStep"
 COLON
@@ -1101,6 +1291,8 @@ ARROW
 UPPER "Connection"
 ARROW
 UPPER "Array"
+UPPER "Int"
+ARROW
 UPPER "Int"
 ARROW
 UPPER "Result"
@@ -1132,28 +1324,12 @@ UPPER "Connection"
 IDENT "fd"
 RPAREN
 IDENT "bytes"
+IDENT "off"
 LPAREN
 UPPER "Ok"
 UPPER "None"
 RPAREN
 EQUAL
-IDENT "deferThen"
-LPAREN
-IDENT "expired"
-IDENT "dl"
-RPAREN
-LPAREN
-IDENT "late"
-FAT_ARROW
-IF
-IDENT "late"
-THEN
-IDENT "deferPure"
-LPAREN
-UPPER "Err"
-STRING "timed out"
-RPAREN
-ELSE
 IDENT "deferThen"
 LPAREN
 IDENT "awaitAny"
@@ -1174,13 +1350,14 @@ UPPER "Connection"
 IDENT "fd"
 RPAREN
 IDENT "bytes"
-RPAREN
+IDENT "off"
 RPAREN
 NEWLINE
 IDENT "sendUntilStep"
 IDENT "dl"
 IDENT "conn"
 IDENT "bytes"
+IDENT "off"
 LPAREN
 UPPER "Ok"
 LPAREN
@@ -1189,16 +1366,21 @@ IDENT "n"
 RPAREN
 RPAREN
 EQUAL
+INDENT
 IDENT "sendUntil"
 IDENT "dl"
 IDENT "conn"
-LPAREN
-IDENT "drop"
-IDENT "n"
 IDENT "bytes"
+LPAREN
+IDENT "off"
+PLUS
+IDENT "n"
 RPAREN
 NEWLINE
+DEDENT
+NEWLINE
 IDENT "sendUntilStep"
+UNDERSCORE
 UNDERSCORE
 UNDERSCORE
 UNDERSCORE

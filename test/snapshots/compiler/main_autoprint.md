@@ -1,5 +1,5 @@
 # META
-source_lines=357
+source_lines=372
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/main_autoprint.mdk — shared composite-`main` auto-print wrap.
@@ -46,6 +46,7 @@ import frontend.ast.{
 import types.typecheck.{
   mainTypeIsUnit,
   mainTypeIsAsync,
+  mainAsyncPayloadIsUnit,
   checkOneDiagsSynthetic,
   setCoherenceUserDecls,
   TcDiag,
@@ -301,13 +302,27 @@ asyncModuleId = "async"
 export
 shouldAsyncWrapMain : String -> List (String, List Decl) -> Bool
 shouldAsyncWrapMain driver modules =
-  if not (mainTypeIsAsync ()) then False
+  if not (mainTypeIsAsync () && mainAsyncPayloadIsUnit ()) then False
   else match entryPair modules
     None => False
     Some (_, decls) => match findMainParams decls
       Some [] =>
         any (p => fst p == asyncModuleId && definesFun driver (snd p)) modules
       _ => False
+
+-- The one `Async` main shape the drivers cannot take: a payload other than
+-- `Unit` (`main : Async e Int`).  Every driver reports this before the rewrite
+-- so the failure is this message, not the driver's own unification error.
+-- Requires the caller to have run an elaborate first.
+export
+asyncMainShapeError : List (String, List Decl) -> Option String
+asyncMainShapeError modules =
+  if not (mainTypeIsAsync ()) || mainAsyncPayloadIsUnit () then None
+  else match entryPair modules
+    None => None
+    Some (_, decls) => match findMainParams decls
+      Some [] => Some "main : Async e a must have a Unit payload (`main : Async e Unit`) — the driver runs the program for its effects and has nowhere to put a value; print it inside the program instead"
+      _ => None
 
 definesFun : String -> List Decl -> Bool
 definesFun _ [] = False
@@ -361,7 +376,7 @@ wrapAsyncMainDecl (DAttrib a d) = DAttrib a (wrapAsyncMainDecl d)
 wrapAsyncMainDecl d = d
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Pat" false) (mem "Loc" true) (mem "UsePath" true) (mem "UseMember" true))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "mainTypeIsUnit" false) (mem "mainTypeIsAsync" false) (mem "checkOneDiagsSynthetic" false) (mem "setCoherenceUserDecls" false) (mem "TcDiag" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "mainTypeIsUnit" false) (mem "mainTypeIsAsync" false) (mem "mainAsyncPayloadIsUnit" false) (mem "checkOneDiagsSynthetic" false) (mem "setCoherenceUserDecls" false) (mem "TcDiag" false))))
 (DTypeSig false "entryPair" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "entryPair" ((PList)) (EVar "None"))
 (DFunDef false "entryPair" ((PList (PVar "p"))) (EApp (EVar "Some") (EVar "p")))
@@ -415,7 +430,9 @@ wrapAsyncMainDecl d = d
 (DTypeSig false "asyncModuleId" (TyCon "String"))
 (DFunDef false "asyncModuleId" () (ELit (LString "async")))
 (DTypeSig true "shouldAsyncWrapMain" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Bool"))))
-(DFunDef false "shouldAsyncWrapMain" ((PVar "driver") (PVar "modules")) (EIf (EApp (EVar "not") (EApp (EVar "mainTypeIsAsync") (ELit LUnit))) (EVar "False") (EMatch (EApp (EVar "entryPair") (EVar "modules")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PTuple PWild (PVar "decls"))) () (EMatch (EApp (EVar "findMainParams") (EVar "decls")) (arm (PCon "Some" (PList)) () (EApp (EApp (EVar "any") (ELam ((PVar "p")) (EBinOp "&&" (EBinOp "==" (EApp (EVar "fst") (EVar "p")) (EVar "asyncModuleId")) (EApp (EApp (EVar "definesFun") (EVar "driver")) (EApp (EVar "snd") (EVar "p")))))) (EVar "modules"))) (arm PWild () (EVar "False")))))))
+(DFunDef false "shouldAsyncWrapMain" ((PVar "driver") (PVar "modules")) (EIf (EApp (EVar "not") (EBinOp "&&" (EApp (EVar "mainTypeIsAsync") (ELit LUnit)) (EApp (EVar "mainAsyncPayloadIsUnit") (ELit LUnit)))) (EVar "False") (EMatch (EApp (EVar "entryPair") (EVar "modules")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PTuple PWild (PVar "decls"))) () (EMatch (EApp (EVar "findMainParams") (EVar "decls")) (arm (PCon "Some" (PList)) () (EApp (EApp (EVar "any") (ELam ((PVar "p")) (EBinOp "&&" (EBinOp "==" (EApp (EVar "fst") (EVar "p")) (EVar "asyncModuleId")) (EApp (EApp (EVar "definesFun") (EVar "driver")) (EApp (EVar "snd") (EVar "p")))))) (EVar "modules"))) (arm PWild () (EVar "False")))))))
+(DTypeSig true "asyncMainShapeError" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "asyncMainShapeError" ((PVar "modules")) (EIf (EBinOp "||" (EApp (EVar "not") (EApp (EVar "mainTypeIsAsync") (ELit LUnit))) (EApp (EVar "mainAsyncPayloadIsUnit") (ELit LUnit))) (EVar "None") (EMatch (EApp (EVar "entryPair") (EVar "modules")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple PWild (PVar "decls"))) () (EMatch (EApp (EVar "findMainParams") (EVar "decls")) (arm (PCon "Some" (PList)) () (EApp (EVar "Some") (ELit (LString "main : Async e a must have a Unit payload (`main : Async e Unit`) — the driver runs the program for its effects and has nowhere to put a value; print it inside the program instead")))) (arm PWild () (EVar "None")))))))
 (DTypeSig false "definesFun" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool"))))
 (DFunDef false "definesFun" (PWild (PList)) (EVar "False"))
 (DFunDef false "definesFun" ((PVar "n") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EApp (EVar "definesFun") (EVar "n")) (EBinOp "::" (EVar "d") (EVar "rest"))))
@@ -439,7 +456,7 @@ wrapAsyncMainDecl d = d
 (DFunDef false "wrapAsyncMainDecl" ((PVar "d")) (EVar "d"))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Pat" false) (mem "Loc" true) (mem "UsePath" true) (mem "UseMember" true))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "mainTypeIsUnit" false) (mem "mainTypeIsAsync" false) (mem "checkOneDiagsSynthetic" false) (mem "setCoherenceUserDecls" false) (mem "TcDiag" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "mainTypeIsUnit" false) (mem "mainTypeIsAsync" false) (mem "mainAsyncPayloadIsUnit" false) (mem "checkOneDiagsSynthetic" false) (mem "setCoherenceUserDecls" false) (mem "TcDiag" false))))
 (DTypeSig false "entryPair" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "entryPair" ((PList)) (EVar "None"))
 (DFunDef false "entryPair" ((PList (PVar "p"))) (EApp (EVar "Some") (EVar "p")))
@@ -493,7 +510,9 @@ wrapAsyncMainDecl d = d
 (DTypeSig false "asyncModuleId" (TyCon "String"))
 (DFunDef false "asyncModuleId" () (ELit (LString "async")))
 (DTypeSig true "shouldAsyncWrapMain" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Bool"))))
-(DFunDef false "shouldAsyncWrapMain" ((PVar "driver") (PVar "modules")) (EIf (EApp (EVar "not") (EApp (EVar "mainTypeIsAsync") (ELit LUnit))) (EVar "False") (EMatch (EApp (EVar "entryPair") (EVar "modules")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PTuple PWild (PVar "decls"))) () (EMatch (EApp (EVar "findMainParams") (EVar "decls")) (arm (PCon "Some" (PList)) () (EApp (EApp (EDictApp "any") (ELam ((PVar "p")) (EBinOp "&&" (EBinOp "==" (EApp (EVar "fst") (EVar "p")) (EVar "asyncModuleId")) (EApp (EApp (EVar "definesFun") (EVar "driver")) (EApp (EVar "snd") (EVar "p")))))) (EVar "modules"))) (arm PWild () (EVar "False")))))))
+(DFunDef false "shouldAsyncWrapMain" ((PVar "driver") (PVar "modules")) (EIf (EApp (EVar "not") (EBinOp "&&" (EApp (EVar "mainTypeIsAsync") (ELit LUnit)) (EApp (EVar "mainAsyncPayloadIsUnit") (ELit LUnit)))) (EVar "False") (EMatch (EApp (EVar "entryPair") (EVar "modules")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PTuple PWild (PVar "decls"))) () (EMatch (EApp (EVar "findMainParams") (EVar "decls")) (arm (PCon "Some" (PList)) () (EApp (EApp (EDictApp "any") (ELam ((PVar "p")) (EBinOp "&&" (EBinOp "==" (EApp (EVar "fst") (EVar "p")) (EVar "asyncModuleId")) (EApp (EApp (EVar "definesFun") (EVar "driver")) (EApp (EVar "snd") (EVar "p")))))) (EVar "modules"))) (arm PWild () (EVar "False")))))))
+(DTypeSig true "asyncMainShapeError" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "asyncMainShapeError" ((PVar "modules")) (EIf (EBinOp "||" (EApp (EVar "not") (EApp (EVar "mainTypeIsAsync") (ELit LUnit))) (EApp (EVar "mainAsyncPayloadIsUnit") (ELit LUnit))) (EVar "None") (EMatch (EApp (EVar "entryPair") (EVar "modules")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple PWild (PVar "decls"))) () (EMatch (EApp (EVar "findMainParams") (EVar "decls")) (arm (PCon "Some" (PList)) () (EApp (EVar "Some") (ELit (LString "main : Async e a must have a Unit payload (`main : Async e Unit`) — the driver runs the program for its effects and has nowhere to put a value; print it inside the program instead")))) (arm PWild () (EVar "None")))))))
 (DTypeSig false "definesFun" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool"))))
 (DFunDef false "definesFun" (PWild (PList)) (EVar "False"))
 (DFunDef false "definesFun" ((PVar "n") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EApp (EVar "definesFun") (EVar "n")) (EBinOp "::" (EVar "d") (EVar "rest"))))
