@@ -106,7 +106,19 @@ debug = (re.search(r"\b(why does\w*|why is|why won'?t|why do\w*|debug\w*|diagnos
                   r"\b(eval|interpreter|native|wasm|build)\b",
                   prompt, re.IGNORECASE)
 
-if not roadmap and not stdlib and not mcp and not sprint and not gates and not debug:
+# Write-tests task: "write/add tests for X". Verb-anchored so it doesn't fire
+# on every mention of "test" in the repo (e.g. "the test failed", handled by
+# `gates`'s fail_word instead) -- requires an authoring verb next to a
+# tests/testing/unit test noun.
+write_tests = re.search(
+    r"\b(write|add|create)\b.{0,30}\b(unit\s+)?tests?\b",
+    prompt, re.IGNORECASE,
+) or re.search(
+    r"\btest(?:ing)?\b.{0,20}\bfor\b.{0,40}\b(this|the)\b.{0,20}\bmodule\b",
+    prompt, re.IGNORECASE,
+)
+
+if not roadmap and not stdlib and not mcp and not sprint and not gates and not debug and not write_tests:
     sys.exit(0)
 
 if roadmap:
@@ -192,6 +204,22 @@ if gates:
         "- Adding a fixture, capturing/blessing a golden, or writing a new "
         "gate -> load gates (shared-corpus consumers, CI shard registration, "
         "and the dash-not-bash shell half).\n"
+        "Triage reminder, not a directive."
+    )
+
+if write_tests:
+    print(
+        "Skill triage (write-tests task detected): load `write-tests` before "
+        "picking a vehicle -- doctest / prop / a `*_test.mdk` sibling / a "
+        "shell gate are NOT interchangeable, and the fixture nearby is not "
+        "automatically the right model.\n"
+        "- Doctest -> short, exported-function example a reader benefits from.\n"
+        "- `prop` -> an algebraic law over generated inputs.\n"
+        "- `test` block in `<module>_test.mdk` -> unit/regression, especially "
+        "against unexported machinery (see compiler/types/registry_test.mdk).\n"
+        "- Shell / `medaka gate` -> cross-engine, golden, or CLI-contract "
+        "claims whose subject is compiled-binary behavior; load `gates` for "
+        "authoring it.\n"
         "Triage reminder, not a directive."
     )
 
