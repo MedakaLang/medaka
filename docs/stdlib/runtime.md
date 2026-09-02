@@ -6,745 +6,1055 @@
 > exists (`string.toUpper`, `string.toFloat`), and reach for a name on this
 > page only when no library module covers it.
 
-## `putStr`
+The host primitives.
+
+Every name here is an `extern` implemented by the runtime, in scope in
+every program without an import. Most have a friendlier form in a
+library module (`string.toUpper` over `stringToUpper`, `io.readLines`
+over `readFile`); use this page when no library module covers what you
+need.
+
+An effect on a return type (`<Stdout>`, `<FileRead "_">`, `<Net "_">`,
+`<IO>`) names what the primitive touches. A primitive with no effect is
+pure. Mutation of a `Ref` or an array carries no effect.
+
+## Output
+
+### `putStr`
 
 ```
 putStr : String -> <Stdout> Unit
 ```
 
-## `putStrLn`
+Writes a string to standard output.
+
+### `putStrLn`
 
 ```
 putStrLn : String -> <Stdout> Unit
 ```
 
-## `Ref`
+Writes a string and a newline to standard output.
 
-```
-Ref : a -> Ref a
-```
-
-## `setRef`
-
-```
-setRef : Ref a -> a -> Unit
-```
-
-## `hashInt`
-
-```
-hashInt : Int -> Int
-```
-
-## `hashFloat`
-
-```
-hashFloat : Float -> Int
-```
-
-## `hashString`
-
-```
-hashString : String -> Int
-```
-
-## `hashChar`
-
-```
-hashChar : Char -> Int
-```
-
-## `hashBool`
-
-```
-hashBool : Bool -> Int
-```
-
-## `pi`
-
-```
-pi : Float
-```
-
-## `e`
-
-```
-e : Float
-```
-
-## `readLine`
-
-```
-readLine : Unit -> <Stdin> String
-```
-
-## `readFile`
-
-```
-readFile : String -> <FileRead _> Result String String
-```
-
-## `readFileBytes`
-
-```
-readFileBytes : String -> <FileRead _> Result String (Array Int)
-```
-
-## `bitAnd`
-
-```
-bitAnd : Int -> Int -> Int
-```
-
-## `bitOr`
-
-```
-bitOr : Int -> Int -> Int
-```
-
-## `bitXor`
-
-```
-bitXor : Int -> Int -> Int
-```
-
-## `shiftLeft`
-
-```
-shiftLeft : Int -> Int -> Int
-```
-
-## `shiftRight`
-
-```
-shiftRight : Int -> Int -> Int
-```
-
-## `bitNot`
-
-```
-bitNot : Int -> Int
-```
-
-## `writeFile`
-
-```
-writeFile : String -> String -> <FileWrite _> Result String Unit
-```
-
-## `writeFileBytes`
-
-```
-writeFileBytes : String -> Array Int -> <FileWrite _> Result String Unit
-```
-
-## `runCommand`
-
-```
-runCommand : String -> List String -> <Exec _> Result String (Int, String, String)
-```
-
-## `exit`
-
-```
-exit : Int -> Unit
-```
-
-## `panic`
-
-```
-panic : String -> a
-```
-
-## `args`
-
-```
-args : Unit -> <Env> List String
-```
-
-## `getEnv`
-
-```
-getEnv : String -> <Env _> Option String
-```
-
-## `executablePath`
-
-```
-executablePath : Unit -> <Env> String
-```
-
-## `fileExists`
-
-```
-fileExists : String -> <FileRead _> Bool
-```
-
-## `canonicalizePath`
-
-```
-canonicalizePath : String -> <FileRead _> String
-```
-
-## `appendFile`
-
-```
-appendFile : String -> String -> <FileWrite _> Result String Unit
-```
-
-## `listDir`
-
-```
-listDir : String -> <FileRead _> Result String (List String)
-```
-
-## `makeDir`
-
-```
-makeDir : String -> <FileWrite _> Result String Unit
-```
-
-## `removeFile`
-
-```
-removeFile : String -> <FileWrite _> Result String Unit
-```
-
-## `rename`
-
-```
-rename : String -> String -> <FileWrite _> Result String Unit
-```
-
-## `removeDir`
-
-```
-removeDir : String -> <FileWrite _> Result String Unit
-```
-
-## `statFile`
-
-```
-statFile : String -> <FileRead _> Result String (Int, Bool, Bool, Float)
-```
-
-## `netResolve`
-
-```
-netResolve : String -> <Net _> Result String (List String)
-```
-
-## `netTcpConnect`
-
-```
-netTcpConnect : String -> Int -> <Net _> Result String Int
-```
-
-## `netTcpListen`
-
-```
-netTcpListen : String -> Int -> <Net _> Result String Int
-```
-
-## `netListenPort`
-
-```
-netListenPort : Int -> <Net _> Result String Int
-```
-
-## `netTcpAccept`
-
-```
-netTcpAccept : Int -> <Net _> Result String Int
-```
-
-## `netSend`
-
-```
-netSend : Int -> Array Int -> <Net _> Result String Int
-```
-
-## `netRecv`
-
-```
-netRecv : Int -> Int -> <Net _> Result String (Array Int)
-```
-
-## `netShutdown`
-
-```
-netShutdown : Int -> Int -> <Net _> Result String Unit
-```
-
-## `netClose`
-
-```
-netClose : Int -> <Net _> Result String Unit
-```
-
-## `netSetTimeout`
-
-```
-netSetTimeout : Int -> Int -> <Net _> Result String Unit
-```
-
-## `ePutStr`
+### `ePutStr`
 
 ```
 ePutStr : String -> <Stderr> Unit
 ```
 
-## `ePutStrLn`
+Writes a string to standard error.
+
+### `ePutStrLn`
 
 ```
 ePutStrLn : String -> <Stderr> Unit
 ```
 
-## `readLineOpt`
+Writes a string and a newline to standard error.
 
-```
-readLineOpt : Unit -> <Stdin> Option String
-```
-
-## `readAll`
-
-```
-readAll : Unit -> <Stdin> String
-```
-
-## `readExactly`
-
-```
-readExactly : Int -> <Stdin> Option String
-```
-
-## `flushStdout`
+### `flushStdout`
 
 ```
 flushStdout : Unit -> <Stdout> Unit
 ```
 
-## `wallTimeSec`
+Flushes buffered standard output.
+
+## Input
+
+### `readLine`
+
+```
+readLine : Unit -> <Stdin> String
+```
+
+Reads one line from standard input, without its newline.
+
+### `readLineOpt`
+
+```
+readLineOpt : Unit -> <Stdin> Option String
+```
+
+Reads one line from standard input, or `None` at end of input.
+
+### `readAll`
+
+```
+readAll : Unit -> <Stdin> String
+```
+
+Reads all of standard input.
+
+### `readExactly`
+
+```
+readExactly : Int -> <Stdin> Option String
+```
+
+Reads exactly `n` bytes from standard input, or `None` at end of input
+or on a short read.
+
+## Mutable references
+
+### `Ref`
+
+```
+Ref : a -> Ref a
+```
+
+A new mutable cell holding a value. Read it with `!r` and write it
+with `r := v`.
+
+### `setRef`
+
+```
+setRef : Ref a -> a -> Unit
+```
+
+Replaces the value in a cell. The same as `r := v`.
+
+## Files
+
+### `readFile`
+
+```
+readFile : String -> <FileRead _> Result String String
+```
+
+The contents of a file as a string, or `Err` with the host's message.
+
+### `readFileBytes`
+
+```
+readFileBytes : String -> <FileRead _> Result String (Array Int)
+```
+
+The contents of a file as bytes, `0` to `255` each, or `Err` with the
+host's message.
+
+### `writeFile`
+
+```
+writeFile : String -> String -> <FileWrite _> Result String Unit
+```
+
+Writes a string to a file, replacing any existing contents.
+
+### `writeFileBytes`
+
+```
+writeFileBytes : String -> Array Int -> <FileWrite _> Result String Unit
+```
+
+Writes bytes, `0` to `255` each, to a file, replacing any existing
+contents.
+
+### `appendFile`
+
+```
+appendFile : String -> String -> <FileWrite _> Result String Unit
+```
+
+Appends a string to a file, creating it when it does not exist.
+
+### `fileExists`
+
+```
+fileExists : String -> <FileRead _> Bool
+```
+
+Whether a path exists.
+
+### `canonicalizePath`
+
+```
+canonicalizePath : String -> <FileRead _> String
+```
+
+The absolute path with `.`, `..`, and symbolic links resolved. The
+input, unchanged, when it cannot be resolved.
+
+### `listDir`
+
+```
+listDir : String -> <FileRead _> Result String (List String)
+```
+
+The names of the entries in a directory.
+
+### `makeDir`
+
+```
+makeDir : String -> <FileWrite _> Result String Unit
+```
+
+Creates a directory.
+
+### `removeFile`
+
+```
+removeFile : String -> <FileWrite _> Result String Unit
+```
+
+Deletes a file.
+
+### `rename`
+
+```
+rename : String -> String -> <FileWrite _> Result String Unit
+```
+
+Moves or renames a path.
+
+### `removeDir`
+
+```
+removeDir : String -> <FileWrite _> Result String Unit
+```
+
+Removes an empty directory.
+
+### `statFile`
+
+```
+statFile : String -> <FileRead _> Result String (Int, Bool, Bool, Float)
+```
+
+A path's size in bytes, whether it is a directory, whether it is a
+regular file, and its modification time in seconds. `fs.stat` returns the
+same as a record.
+
+## Processes and environment
+
+### `args`
+
+```
+args : Unit -> <Env> List String
+```
+
+The command-line arguments after the program name.
+
+### `getEnv`
+
+```
+getEnv : String -> <Env _> Option String
+```
+
+The value of an environment variable, or `None` when it is unset.
+
+### `executablePath`
+
+```
+executablePath : Unit -> <Env> String
+```
+
+The absolute path of the running executable.
+
+### `runCommand`
+
+```
+runCommand : String -> List String -> <Exec _> Result String (Int, String, String)
+```
+
+Runs a program with arguments and waits for it. `Ok` carries the exit
+code, the captured standard output, and the captured standard error; a
+non-zero exit code is still `Ok`. `Err` carries the host's message when
+the program could not be started.
+
+### `exit`
+
+```
+exit : Int -> Unit
+```
+
+Ends the program with an exit code.
+
+### `panic`
+
+```
+panic : String -> a
+```
+
+Aborts the program with a message. Panics cannot be caught.
+
+## Networking
+
+### `netResolve`
+
+```
+netResolve : String -> <Net _> Result String (List String)
+```
+
+The numeric addresses a host name resolves to.
+
+### `netTcpConnect`
+
+```
+netTcpConnect : String -> Int -> <Net _> Result String Int
+```
+
+Opens a TCP connection to a host and port. The result is the
+connection's descriptor.
+
+### `netTcpListen`
+
+```
+netTcpListen : String -> Int -> <Net _> Result String Int
+```
+
+Starts listening for TCP connections on an address and port. Port `0`
+picks a free port. The result is the listener's descriptor.
+
+### `netListenPort`
+
+```
+netListenPort : Int -> <Net _> Result String Int
+```
+
+The port a listener is bound to. Use it after listening on port `0`.
+
+### `netTcpAccept`
+
+```
+netTcpAccept : Int -> <Net _> Result String Int
+```
+
+Waits for the next connection on a listener. The result is the
+connection's descriptor.
+
+### `netSend`
+
+```
+netSend : Int -> Array Int -> <Net _> Result String Int
+```
+
+Sends bytes on a connection. The result is the number of bytes
+written, which may be fewer than given.
+
+### `netRecv`
+
+```
+netRecv : Int -> Int -> <Net _> Result String (Array Int)
+```
+
+Receives up to `n` bytes from a connection. An empty array means the
+other side has closed.
+
+### `netShutdown`
+
+```
+netShutdown : Int -> Int -> <Net _> Result String Unit
+```
+
+Shuts down one or both directions of a connection: `0` for reading,
+`1` for writing, `2` for both.
+
+### `netClose`
+
+```
+netClose : Int -> <Net _> Result String Unit
+```
+
+Closes a descriptor.
+
+### `netSetTimeout`
+
+```
+netSetTimeout : Int -> Int -> <Net _> Result String Unit
+```
+
+Sets a connection's send and receive timeout in milliseconds. `0`
+means no timeout.
+
+## Time
+
+### `wallTimeSec`
 
 ```
 wallTimeSec : Unit -> <Clock> Float
 ```
 
-## `monotonicSec`
+The wall-clock time in seconds since the epoch.
+
+### `monotonicSec`
 
 ```
 monotonicSec : Unit -> <Clock> Float
 ```
 
-## `sleepMs`
+A monotonic clock reading in seconds, for measuring intervals.
+
+### `sleepMs`
 
 ```
 sleepMs : Int -> <Clock> Unit
 ```
 
-## `allocBytes`
+Pauses the program for a number of milliseconds.
+
+### `allocBytes`
 
 ```
 allocBytes : Unit -> <IO> Float
 ```
 
-## `randomInt`
+The total number of bytes the program has allocated.
+
+## Random numbers
+
+### `randomInt`
 
 ```
 randomInt : Int -> Int -> <Rand> Int
 ```
 
-## `randomBool`
+A random integer between `lo` and `hi`, inclusive.
+
+### `randomBool`
 
 ```
 randomBool : Unit -> <Rand> Bool
 ```
 
-## `randomFloat`
+A random boolean.
+
+### `randomFloat`
 
 ```
 randomFloat : Unit -> <Rand> Float
 ```
 
-## `randomChar`
+A random float.
+
+### `randomChar`
 
 ```
 randomChar : Unit -> <Rand> Char
 ```
 
-## `setSeed`
+A random character.
+
+### `setSeed`
 
 ```
 setSeed : Int -> <Rand> Unit
 ```
 
-## `osEntropyBytes`
+Seeds the random number generator, making the following draws
+repeatable.
+
+### `osEntropyBytes`
 
 ```
 osEntropyBytes : Int -> <Rand> Array Int
 ```
 
-Return exactly `n` bytes from the operating system entropy
-source. Panics for a negative length or if the host source fails. This is
-intentionally separate from the deterministic, seedable `random*` family.
+Exactly `n` bytes from the operating system's entropy source.
+Independent of `setSeed`. Panics for a negative length or when the source
+fails.
 
-## `charToStr`
+## Hashing
 
-```
-charToStr : Char -> String
-```
-
-## `intToFloat`
+### `hashInt`
 
 ```
-intToFloat : Int -> Float
+hashInt : Int -> Int
 ```
 
-## `floatToInt`
+The hash of an integer.
+
+### `hashFloat`
 
 ```
-floatToInt : Float -> Int
+hashFloat : Float -> Int
 ```
 
-## `floatRem`
+The hash of a float.
+
+### `hashString`
 
 ```
-floatRem : Float -> Float -> Float
+hashString : String -> Int
 ```
 
-## `sqrt`
+The hash of a string.
+
+### `hashChar`
 
 ```
-sqrt : Float -> Float
+hashChar : Char -> Int
 ```
 
-## `cbrt`
+The hash of a character.
+
+### `hashBool`
 
 ```
-cbrt : Float -> Float
+hashBool : Bool -> Int
 ```
 
-## `exp`
+The hash of a boolean.
+
+## Numbers
+
+### `pi`
 
 ```
-exp : Float -> Float
+pi : Float
 ```
 
-## `log`
+The constant π.
+
+### `e`
 
 ```
-log : Float -> Float
+e : Float
 ```
 
-## `log2`
+The constant e, the base of natural logarithms.
 
-```
-log2 : Float -> Float
-```
-
-## `log10`
-
-```
-log10 : Float -> Float
-```
-
-## `sin`
-
-```
-sin : Float -> Float
-```
-
-## `cos`
-
-```
-cos : Float -> Float
-```
-
-## `tan`
-
-```
-tan : Float -> Float
-```
-
-## `asin`
-
-```
-asin : Float -> Float
-```
-
-## `acos`
-
-```
-acos : Float -> Float
-```
-
-## `atan`
-
-```
-atan : Float -> Float
-```
-
-## `sinh`
-
-```
-sinh : Float -> Float
-```
-
-## `cosh`
-
-```
-cosh : Float -> Float
-```
-
-## `tanh`
-
-```
-tanh : Float -> Float
-```
-
-## `floor`
-
-```
-floor : Float -> Float
-```
-
-## `ceil`
-
-```
-ceil : Float -> Float
-```
-
-## `round`
-
-```
-round : Float -> Float
-```
-
-## `trunc`
-
-```
-trunc : Float -> Float
-```
-
-## `pow`
-
-```
-pow : Float -> Float -> Float
-```
-
-## `atan2`
-
-```
-atan2 : Float -> Float -> Float
-```
-
-## `hypot`
-
-```
-hypot : Float -> Float -> Float
-```
-
-## `intBitsToFloat`
-
-```
-intBitsToFloat : Int -> Float
-```
-
-## `floatToBytes64`
-
-```
-floatToBytes64 : Float -> Array Int
-```
-
-## `intMinBound`
+### `intMinBound`
 
 ```
 intMinBound : Int
 ```
 
-## `intMaxBound`
+The smallest `Int`.
+
+### `intMaxBound`
 
 ```
 intMaxBound : Int
 ```
 
-## `charMinBound`
+The largest `Int`.
+
+### `charMinBound`
 
 ```
 charMinBound : Char
 ```
 
-## `charMaxBound`
+The smallest `Char`, U+0000.
+
+### `charMaxBound`
 
 ```
 charMaxBound : Char
 ```
 
-## `intToString`
+The largest `Char`, U+10FFFF.
+
+### `intToFloat`
+
+```
+intToFloat : Int -> Float
+```
+
+An integer as a float.
+
+### `floatToInt`
+
+```
+floatToInt : Float -> Int
+```
+
+A float truncated towards zero as an integer.
+
+### `floatRem`
+
+```
+floatRem : Float -> Float -> Float
+```
+
+The remainder of `a / b` with the sign of `a`, as the `%` operator
+computes it for floats.
+
+### `bitAnd`
+
+```
+bitAnd : Int -> Int -> Int
+```
+
+Bitwise and.
+
+### `bitOr`
+
+```
+bitOr : Int -> Int -> Int
+```
+
+Bitwise or.
+
+### `bitXor`
+
+```
+bitXor : Int -> Int -> Int
+```
+
+Bitwise exclusive or.
+
+### `shiftLeft`
+
+```
+shiftLeft : Int -> Int -> Int
+```
+
+`a` shifted left by `n` bits.
+
+### `shiftRight`
+
+```
+shiftRight : Int -> Int -> Int
+```
+
+`a` shifted right by `n` bits, filling with zeros.
+
+### `bitNot`
+
+```
+bitNot : Int -> Int
+```
+
+Bitwise complement.
+
+## Math
+
+### `sqrt`
+
+```
+sqrt : Float -> Float
+```
+
+The square root.
+
+### `cbrt`
+
+```
+cbrt : Float -> Float
+```
+
+The cube root.
+
+### `exp`
+
+```
+exp : Float -> Float
+```
+
+e raised to the power `x`.
+
+### `log`
+
+```
+log : Float -> Float
+```
+
+The natural logarithm.
+
+### `log2`
+
+```
+log2 : Float -> Float
+```
+
+The base-2 logarithm.
+
+### `log10`
+
+```
+log10 : Float -> Float
+```
+
+The base-10 logarithm.
+
+### `sin`
+
+```
+sin : Float -> Float
+```
+
+The sine of an angle in radians.
+
+### `cos`
+
+```
+cos : Float -> Float
+```
+
+The cosine of an angle in radians.
+
+### `tan`
+
+```
+tan : Float -> Float
+```
+
+The tangent of an angle in radians.
+
+### `asin`
+
+```
+asin : Float -> Float
+```
+
+The arc sine, in radians.
+
+### `acos`
+
+```
+acos : Float -> Float
+```
+
+The arc cosine, in radians.
+
+### `atan`
+
+```
+atan : Float -> Float
+```
+
+The arc tangent, in radians.
+
+### `sinh`
+
+```
+sinh : Float -> Float
+```
+
+The hyperbolic sine.
+
+### `cosh`
+
+```
+cosh : Float -> Float
+```
+
+The hyperbolic cosine.
+
+### `tanh`
+
+```
+tanh : Float -> Float
+```
+
+The hyperbolic tangent.
+
+### `floor`
+
+```
+floor : Float -> Float
+```
+
+The largest integral value not greater than `x`.
+
+### `ceil`
+
+```
+ceil : Float -> Float
+```
+
+The smallest integral value not less than `x`.
+
+### `round`
+
+```
+round : Float -> Float
+```
+
+The nearest integral value, with halves rounded away from zero.
+
+### `trunc`
+
+```
+trunc : Float -> Float
+```
+
+The integral part of `x`, rounding towards zero.
+
+### `pow`
+
+```
+pow : Float -> Float -> Float
+```
+
+`x` raised to the power `y`.
+
+### `atan2`
+
+```
+atan2 : Float -> Float -> Float
+```
+
+The angle in radians of the point `(x, y)`, given as `atan2 y x`.
+
+### `hypot`
+
+```
+hypot : Float -> Float -> Float
+```
+
+The length of the hypotenuse, `sqrt (x * x + y * y)`, without
+intermediate overflow.
+
+### `intBitsToFloat`
+
+```
+intBitsToFloat : Int -> Float
+```
+
+The float whose IEEE 754 bit pattern is the given integer.
+
+### `floatToBytes64`
+
+```
+floatToBytes64 : Float -> Array Int
+```
+
+A float as its eight big-endian IEEE 754 bytes, `0` to `255` each. The
+inverse of `bytesToFloat64`.
+
+## Rendering
+
+### `intToString`
 
 ```
 intToString : Int -> String
 ```
 
-## `floatToString`
+An integer in decimal.
+
+### `floatToString`
 
 ```
 floatToString : Float -> String
 ```
 
-## `arrayLength`
+A float in decimal.
+
+## Arrays
+
+### `arrayLength`
 
 ```
 arrayLength : Array a -> Int
 ```
 
-## `arrayMake`
+The number of elements.
+
+### `arrayMake`
 
 ```
 arrayMake : Int -> a -> Array a
 ```
 
-## `arrayMakeWith`
+A new array of `n` copies of a value.
+
+### `arrayMakeWith`
 
 ```
 arrayMakeWith : Int -> (Int -> a) -> Array a
 ```
 
-## `arrayCopy`
+A new array of length `n` whose element at each index `i` is `f i`.
+
+### `arrayCopy`
 
 ```
 arrayCopy : Array a -> Array a
 ```
 
-## `arrayFromList`
+A new array with the same elements.
+
+### `arrayFromList`
 
 ```
 arrayFromList : List a -> Array a
 ```
 
-## `stringToChars`
+A new array holding the elements of a list.
+
+## Strings
+
+### `stringToChars`
 
 ```
 stringToChars : String -> Array Char
 ```
 
-## `stringFromChars`
+The codepoints of a string.
+
+### `stringFromChars`
 
 ```
 stringFromChars : Array Char -> String
 ```
 
-## `stringToUtf8Bytes`
+A string built from an array of characters.
+
+### `stringToUtf8Bytes`
 
 ```
 stringToUtf8Bytes : String -> Array Int
 ```
 
-## `stringFromUtf8Bytes`
+The UTF-8 encoding of a string, one byte (`0` to `255`) per element.
+
+### `stringFromUtf8Bytes`
 
 ```
 stringFromUtf8Bytes : Array Int -> String
 ```
 
-## `charCode`
+The string encoded by an array of UTF-8 bytes. Only the low eight bits
+of each element are used.
+
+### `charToStr`
+
+```
+charToStr : Char -> String
+```
+
+A one-character string.
+
+### `charCode`
 
 ```
 charCode : Char -> Int
 ```
 
-## `charFromCode`
+A character's codepoint.
+
+### `charFromCode`
 
 ```
 charFromCode : Int -> Option Char
 ```
 
-## `stringLength`
+The character with a codepoint, or `None` when the codepoint is not a
+Unicode scalar value.
+
+### `stringLength`
 
 ```
 stringLength : String -> Int
 ```
 
-## `stringSlice`
+The number of codepoints in a string.
+
+### `stringSlice`
 
 ```
 stringSlice : Int -> Int -> String -> String
 ```
 
-## `stringConcat`
+The characters at positions `[lo, hi)`, clamped to the string.
+
+### `stringConcat`
 
 ```
 stringConcat : List String -> String
 ```
 
-## `stringIndexOf`
+The strings joined end to end.
+
+### `stringIndexOf`
 
 ```
 stringIndexOf : String -> String -> Option Int
 ```
 
-## `stringCompare`
+The position of the first occurrence of `needle` in `haystack`, or
+`None`.
+
+### `stringCompare`
 
 ```
 stringCompare : String -> String -> Ordering
 ```
 
-## `stringToFloat`
+The ordering of two strings, by codepoint.
+
+### `stringToFloat`
 
 ```
 stringToFloat : String -> Option Float
 ```
 
-## `charIsAlpha`
+The float written in a string, or `None`.
+
+## Characters
+
+### `charIsAlpha`
 
 ```
 charIsAlpha : Char -> Bool
 ```
 
-## `charIsSpace`
+Whether a character is an ASCII letter.
+
+### `charIsSpace`
 
 ```
 charIsSpace : Char -> Bool
 ```
 
-## `charIsUpper`
+Whether a character is ASCII whitespace.
+
+### `charIsUpper`
 
 ```
 charIsUpper : Char -> Bool
 ```
 
-## `charIsLower`
+Whether a character is an ASCII uppercase letter.
+
+### `charIsLower`
 
 ```
 charIsLower : Char -> Bool
 ```
 
-## `charIsPunct`
+Whether a character is an ASCII lowercase letter.
+
+### `charIsPunct`
 
 ```
 charIsPunct : Char -> Bool
 ```
 
-## `charToUpper`
+Whether a character is ASCII punctuation.
+
+### `charToUpper`
 
 ```
 charToUpper : Char -> Char
 ```
 
-## `charToLower`
+An ASCII letter in uppercase. Any other character is unchanged.
+
+### `charToLower`
 
 ```
 charToLower : Char -> Char
 ```
 
-## `stringToUpper`
+An ASCII letter in lowercase. Any other character is unchanged.
+
+### `stringToUpper`
 
 ```
 stringToUpper : String -> String
 ```
 
-## `stringToLower`
+A string with every ASCII letter in uppercase.
+
+### `stringToLower`
 
 ```
 stringToLower : String -> String
 ```
+
+A string with every ASCII letter in lowercase.
 
