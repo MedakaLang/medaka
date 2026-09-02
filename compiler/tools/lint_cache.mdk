@@ -46,6 +46,7 @@
 
 import frontend.ast.{Loc(..)}
 import driver.diagnostics.{Severity(..)}
+import io.{runCommandOk}
 import tools.lint.{Finding(..), Directive(..), DirScope(..)}
 import support.util.{joinWith, listLen, filterList, splitOnChar, stringTrim}
 import support.char.{isAlnum}
@@ -468,11 +469,8 @@ dropLastSeg (x :: rest) = x :: dropLastSeg rest
 -- A staging dir unique to THIS process, inside the cache dir (see storeEntries).
 makeStagingDir : String -> <IO> Result String String
 makeStagingDir cacheDir =
-  match runCommand "mktemp" ["-d", "\{cacheDir}/.staging_XXXXXX"]
-    Err msg => Err (if msg == "" then "mktemp -d failed" else msg)
-    Ok (code, out, err) =>
-      if code /= 0 then
-        Err (if err == "" then "mktemp -d failed" else err)
-      else
-        let dir = stringTrim out
-        if dir == "" then Err "mktemp -d printed no path" else Ok dir
+  match runCommandOk "mktemp" ["-d", "\{cacheDir}/.staging_XXXXXX"]
+    Err e => Err e
+    Ok (out, _) =>
+      let dir = stringTrim out
+      if dir == "" then Err "mktemp -d printed no path" else Ok dir
