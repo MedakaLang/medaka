@@ -235,7 +235,7 @@ extern assertSnapshot : String -> String -> <IO> Unit
 -- Public, bounds-checked indexing goes through `arr[i]` (panics on OOB).
 extern arrayLength : Array a -> Int
 extern arrayMake : Int -> a -> Array a
-extern arrayMakeWith : Int -> (Int -> a) -> Array a
+extern arrayMakeWith : Int -> (Int -> <e> a) -> <e> Array a
 extern arrayGetUnsafe : Int -> Array a -> a
 extern arraySetUnsafe : Int -> a -> Array a -> Unit
 extern arrayCopy : Array a -> Array a

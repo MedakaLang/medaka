@@ -1370,6 +1370,10 @@ unifyJoinRows isIndex r1 r2 =
   let fb = rowFlat r2
   let ma = snd fa
   let mb = snd fb
+  let common = filterList (c => cellIn c mb) ma
+  -- a SHARED flexible member can absorb either side's leftovers too:
+  -- `x ⊔ R` against `x` is solved by `x := x' ⊔ R` (both sides gain R).
+  let cflex = filterList (c => not (isRigidCell c)) common
   let onlyA = filterList (c => not (cellIn c mb)) ma
   let onlyB = filterList (c => not (cellIn c ma)) mb
   let rigidA = filterList isRigidCell onlyA
@@ -1378,33 +1382,21 @@ unifyJoinRows isIndex r1 r2 =
   let flexB = filterList (c => not (isRigidCell c)) onlyB
   let dA = atomsDiff (fst fa) (fst fb)
   let dB = atomsDiff (fst fb) (fst fa)
-  if isNonEmptyL flexA && isNonEmptyL flexB then
-    let v3 = freshEffvarAt (minI (minLevelOf flexA) (minLevelOf flexB))
-    let _ = bindEach flexA (rowOfMembers dB (v3::rigidB))
-    let _ = bindEach flexB (rowOfMembers dA (v3::rigidA))
-    recordAbsorptions (dA ++ dB) v3
-  else
-    if isNonEmptyL flexA then
-      let _ = if isNonEmptyL rigidA then joinMismatch isIndex fa fb else ()
-      let _ = if isEmptyL rigidB then
-        joinSideCheck isIndex dA dB (fst fa) (fst fb)
-      else
-        ()
-      bindEach flexA (rowOfMembers dB rigidB)
-    else
-      if isNonEmptyL flexB then
-        let _ = if isNonEmptyL rigidB then joinMismatch isIndex fa fb else ()
-        let _ = if isEmptyL rigidA then
-          joinSideCheck isIndex dB dA (fst fb) (fst fa)
-        else
-          ()
-        bindEach flexB (rowOfMembers dA rigidA)
-      else
-        let _ = if isNonEmptyL rigidA || isNonEmptyL rigidB then
-          joinMismatch isIndex fa fb
-        else
-          ()
-        if isIndex then indexRowEqCheck dA dB (fst fa) (fst fb) else ()
+  -- A's leftovers (rigidA, dA) must be absorbed on B's side: by B's own
+  -- flexible leftovers if any, else by a shared flexible member.
+  let bindC = isNonEmptyL cflex && ((isNonEmptyL rigidA && isEmptyL flexB) || (isNonEmptyL rigidB && isEmptyL flexA) || (isNonEmptyL dA && isEmptyL flexB) || (isNonEmptyL dB && isEmptyL flexA))
+  let useV3 = (isNonEmptyL flexA && isNonEmptyL flexB) || bindC
+  let v3s = if useV3 then [freshEffvarAt (minLevelOf (flexA ++ flexB ++ cflex))] else []
+  let _ = if isNonEmptyL rigidA && isEmptyL flexB && not bindC then joinMismatch isIndex fa fb else ()
+  let _ = if isNonEmptyL rigidB && isEmptyL flexA && not bindC then joinMismatch isIndex fa fb else ()
+  let _ = if isNonEmptyL dA && isEmptyL flexB && not bindC then joinSideCheck isIndex dA dB (fst fa) (fst fb) else ()
+  let _ = if isNonEmptyL dB && isEmptyL flexA && not bindC then joinSideCheck isIndex dB dA (fst fb) (fst fa) else ()
+  let _ = bindEach flexA (rowOfMembers dB (v3s ++ rigidB))
+  let _ = bindEach flexB (rowOfMembers dA (v3s ++ rigidA))
+  let _ = if bindC then bindEach cflex (rowOfMembers (atomsUnion dA dB) (v3s ++ rigidA ++ rigidB)) else ()
+  match v3s
+    (v3::_) => recordAbsorptions (dA ++ dB) v3
+    [] => ()
 
 cellIn : Ref Effvar -> List (Ref Effvar) -> Bool
 cellIn c cs = anyList (d => effvarId d == effvarId c) cs
@@ -1424,9 +1416,10 @@ joinSideCheck False _ _ lOpen lClosed =
   effectLeakCheck (atomsEscape lOpen lClosed) lClosed
 
 joinMismatch : Bool -> (List Atom, List (Ref Effvar)) -> (List Atom, List (Ref Effvar)) -> Unit
-joinMismatch isIndex fa fb = pushTypeError
-  (if isIndex then "T-EFFECT-INDEX-MISMATCH" else "T-EFFECT-LEAK")
-  (joinMismatchMsg (renderFlatRow fa) (renderFlatRow fb))
+joinMismatch isIndex fa fb =
+  pushTypeError
+  if isIndex then "T-EFFECT-INDEX-MISMATCH" else "T-EFFECT-LEAK"
+  joinMismatchMsg (renderFlatRow fa) (renderFlatRow fb)
 
 renderFlatRow : (List Atom, List (Ref Effvar)) -> String
 renderFlatRow f =
@@ -1491,6 +1484,16 @@ unifyRowPlain (EffRow l1 (Some v1)) (EffRow l2 (Some v2))
     let v3 = freshEffvarAt (minI (effvarLevel v1) (effvarLevel v2))
     let d21 = atomsDiff l2 l1
     let d12 = atomsDiff l1 l2
+    -- #821: rigidity follows the REPRESENTATIVE.  A method effect variable of
+    -- the impl body being checked (`rigidEffvarsRef`) linked into the shared
+    -- fresh tail makes that tail rigid too, so `performEffect`/`unifyJoinRows`
+    -- still see the variable after `inferApp` has unified the callee's row
+    -- with a fresh one.  Two rigid tails meeting here still identify (the dup
+    -- check downstream reports it), exactly as before.
+    let _ = if isRigidCell v1 || isRigidCell v2 then
+      perRun.value.rigidEffvarsRef := effvarId v3 :: perRun.value.rigidEffvarsRef.value
+    else
+      ()
     v1 := (ELink (EffRow d21 (Some v3)))
     v2 := (ELink (EffRow d12 (Some v3)))
     -- #839 2a: both diffs vanish into the shared fresh tail v3; record them
@@ -27573,11 +27576,13 @@ inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (Metho
   -- whole body inference — which is broader than any one unify, and is why no
   -- unify-level failure signal could have answered this: `inferDefaultMethodBody`
   -- also pushes T-EFFECT-LAUNDER, and contains its own gated unify.
-  -- #821: rigid window for the default body, mirroring the impl seam.
-  let savedRigid = perRun.value.rigidEffvarsRef.value
-  perRun.value.rigidEffvarsRef := monoIndexEffvarIds (fst inst)
+  -- #821: NO rigid window for a default body (mirrors the empty eager set it
+  -- passes to the D-3 check).  The default's expected type is an instantiated
+  -- scheme whose unannotated arrows carry FRESH rows, and only the method's
+  -- NAMED effect variables may be rigid; marking every arrow row rigid made an
+  -- ordinary default body (`loud x = "<" ++ speak x ++ ">"`) a join mismatch
+  -- in the elaboration pass.  Joins inside default bodies are a residual.
   let (bodyErred, actualTy) = erredDuring (_ => inferDefaultMethodBody mname subject defLoc env (fst inst) pats body)
-  perRun.value.rigidEffvarsRef := savedRigid
   let _ = if bodyErred then
     ()
   else
@@ -29427,7 +29432,12 @@ inferImplMethod env allProg iface implTvMap headMonos (ImplMethod mname pats bod
     -- meeting in an ambient row join rather than being identified.
     let savedRigid = perRun.value.rigidEffvarsRef.value
     perRun.value.rigidEffvarsRef := map effvarIdOf effMap
-    let actual = inferClauses env [(pats, body)]
+    -- #821/#825: the clause parameters are CHECKED against the declared
+    -- domains (Phase 73's peel) rather than inferred fresh, so a callback's
+    -- row IS the method's rigid `e` inside the body.  Performing it under a
+    -- pure stored arrow then meets `<>` as a rigid leftover — the #825 launder
+    -- becomes a mismatch — and two rigid rows performed together JOIN.
+    let actual = inferLamChecked env (expectedParamTypes (normalize expected) (listLen pats)) pats body
     perRun.value.rigidEffvarsRef := savedRigid
     let launderLoc = orElseLoc (implBodyLoc body) (firstTyLoc mty)
     -- #803 (S0): bound the impl body's latent effect on EVERY arrow down to the method's
