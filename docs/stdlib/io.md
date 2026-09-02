@@ -65,6 +65,26 @@ cannot be read.
 Lines are split on `\n`, with a `\r` before it removed. A trailing
 newline does not produce a final empty line.
 
+## Commands
+
+### `runCommandOk`
+
+```
+runCommandOk : String -> List String -> <Exec _> Result String (String, String)
+```
+
+Runs a program with arguments and waits for it, folding a spawn
+failure and a nonzero exit into one `Err`.
+
+`Ok` carries the captured stdout and stderr on a zero exit. `Err` names
+the command and carries the host's message on a spawn failure, or the
+exit code and captured stderr on a nonzero exit.
+
+```medaka
+> runCommandOk "true" []
+Ok ("", "")
+```
+
 ## Environment
 
 ### `getEnvOr`

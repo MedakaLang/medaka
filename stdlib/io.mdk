@@ -67,6 +67,41 @@ export
 readLines : String -> <IO> Result String (List String)
 readLines path = map splitLines (readFile path)
 
+-- # Commands
+
+{- | Runs a program with arguments and waits for it, folding a spawn
+   failure and a nonzero exit into one `Err`.
+
+   `Ok` carries the captured stdout and stderr on a zero exit. `Err` names
+   the command and carries the host's message on a spawn failure, or the
+   exit code and captured stderr on a nonzero exit.
+
+   > runCommandOk "true" []
+   Ok ("", "") -}
+export
+runCommandOk : String ->
+  List String ->
+  <Exec "_"> Result String (String, String)
+runCommandOk cmd args = match runCommand cmd args
+  Err e => Err "\{cmd}: \{e}"
+  Ok (0, out, err) => Ok (out, err)
+  Ok (code, _, err) => Err (if err == "" then
+    "\{cmd} exited \{intToString code}"
+  else
+    "\{cmd} exited \{intToString code}: \{err}")
+
+-- Edge cases: a nonzero exit threads stderr into the message, and a
+-- program the host cannot find still exits (127, from the forked child's
+-- own failed `execvp` writing its errno string) rather than failing to
+-- spawn, so it is the nonzero branch below, not the `Err e` branch, that
+-- fires. The `Err e` branch fires only on a fork/temp-file failure at the
+-- OS level (runtime/medaka_rt.c's `mdk_run_command`), which no fixture can
+-- reliably force.
+-- > runCommandOk "sh" ["-c", "printf err >&2; exit 3"]
+-- Err "sh exited 3: err"
+-- > runCommandOk "medaka-io-doctest-no-such-command" []
+-- Err "medaka-io-doctest-no-such-command exited 127: No such file or directory"
+
 -- # Environment
 
 -- | The value of the environment variable `name`, or `fallback` when it is

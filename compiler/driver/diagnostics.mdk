@@ -1624,21 +1624,23 @@ relDiagTriple : String ->
   (String, String, List Diag)
 relDiagTriple root (path, src, diags) = (relDiagPath root path, src, diags)
 
--- Fold [warns] into the ONE (path, src, diags) triple whose path matches
--- [path] (the entry always has a bucket, even a clean one — `seedAll`), so the
--- main-shape warning lands INSIDE the entry file's existing `diagnostics`
+-- Fold [extra] into the ONE (path, src, diags) triple whose path matches
+-- [path] (the entry always has a bucket, even a clean one — `seedAll`), so an
+-- extra diagnostic lands INSIDE the entry file's existing `diagnostics`
 -- array instead of manufacturing a second, duplicate `{"file": ...}` entry for
--- the same path.  A no-match ([] warns, or a path `analyzeProject` never
--- bucketed) leaves the list untouched.
-mergeMainWarns : String ->
+-- the same path.  A no-match ([] extra, or a path `analyzeProject` never
+-- bucketed) leaves the list untouched.  Two callers: the main-shape warning
+-- below, and `build --json`'s build-stage notes (#2243).
+export
+cjFoldIntoFile : String ->
   List Diag ->
   List (String, String, List Diag) ->
   List (String, String, List Diag)
-mergeMainWarns _ [] triples = triples
-mergeMainWarns _ _ [] = []
-mergeMainWarns path warns ((p, s, ds) :: rest)
-  | p == path = (p, s, ds ++ warns) :: rest
-  | otherwise = (p, s, ds) :: mergeMainWarns path warns rest
+cjFoldIntoFile _ [] triples = triples
+cjFoldIntoFile _ _ [] = []
+cjFoldIntoFile path extra ((p, s, ds) :: rest)
+  | p == path = (p, s, ds ++ extra) :: rest
+  | otherwise = (p, s, ds) :: cjFoldIntoFile path extra rest
 
 -- ── main-shape beginner-footgun warning (0.1.0 audit #3; #1236) ─────────────
 -- `medaka run` evaluates top-level bindings and checks `main` EXISTS but never
@@ -1851,6 +1853,24 @@ cjParseErrJson target src e =
 -- file on disk to resolve imports against) and for a no-import file.  `target` is
 -- the value that lands in each diagnostic's `file` field (cjRangeOfLoc ignores the
 -- filename inside each Loc), so an inline check can pass a stable synthetic name.
+--
+-- A `check --json` envelope, before it is serialized.  Nearly every shape is
+-- the ordinary (file, source, diagnostics) triples `cjAllToJson` renders, and
+-- `CjParts` also carries the ENTRY's path key — the value a caller needs to
+-- fold diagnostics of its own into the right file's bucket, since the
+-- multi-module arm relativizes paths.  The located parse-error envelope is
+-- hand-built (`cjParseErrJson` computes a range `cjDiagnostic` does not), so
+-- it can only be handed back already rendered; it always travels with
+-- `hasErr = True`, which is why no caller has to fold into it.
+public export data CheckJson =
+  | CjRendered String
+  | CjParts String (List (String, String, List Diag))
+
+export
+ppCheckJson : CheckJson -> String
+ppCheckJson (CjRendered json) = json
+ppCheckJson (CjParts _ triples) = cjAllToJson triples
+
 export
 checkJsonSingle : String ->
   Bool ->
@@ -1860,8 +1880,21 @@ checkJsonSingle : String ->
   String ->
   (String, Bool)
 checkJsonSingle modName allowInternal rsrc csrc target src =
+  let (cj, hasErr) =
+    checkJsonSingleParts modName allowInternal rsrc csrc target src
+  (ppCheckJson cj, hasErr)
+
+export
+checkJsonSingleParts : String ->
+  Bool ->
+  String ->
+  String ->
+  String ->
+  String ->
+  (CheckJson, Bool)
+checkJsonSingleParts modName allowInternal rsrc csrc target src =
   match parseResult src
-    Err e => (cjParseErrJson target src e, True)
+    Err e => (CjRendered (cjParseErrJson target src e), True)
     Ok _ =>
       let diags = analyzeLocatedG modName allowInternal rsrc csrc src
       let hasErr = anyList diagIsError diags
@@ -1878,7 +1911,7 @@ checkJsonSingle modName allowInternal rsrc csrc target src =
         else
           let entryRaw = parseLocated src
           mainShapeWarnings [] [] [(target, desugar entryRaw)] entryRaw
-      (cjAllToJson [(target, src, diags ++ mainWarns)], hasErr)
+      (CjParts target [(target, src, diags ++ mainWarns)], hasErr)
 
 -- File check → JSON.  Reads `target`, then routes exactly like runCheckJsonCmd:
 -- parse error → single diag; load error (bad import) → R-MODULE-LOAD diag with the
@@ -1893,16 +1926,31 @@ checkJsonFile : Bool ->
   String ->
   <IO> (String, Bool)
 checkJsonFile allowInternal rsrc csrc target stdlibDir =
+  let (cj, hasErr) = checkJsonFileParts allowInternal rsrc csrc target stdlibDir
+  (ppCheckJson cj, hasErr)
+
+-- The same check, one step before serialization — see `CheckJson`.  `medaka
+-- build --json` runs this rather than `checkJsonFile` so it can fold its own
+-- build-stage notes into the SAME `{"files":[…]}` envelope (#2243) instead of
+-- opening a second channel for them.
+export
+checkJsonFileParts : Bool ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <IO> (CheckJson, Bool)
+checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
   let src = readFileSafe target
   let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]
   match parseResult src
-    Err e => (cjParseErrJson target src e, True)
+    Err e => (CjRendered (cjParseErrJson target src e), True)
     Ok _ => match loadProgramE target roots
       -- #100: a parse/lex error in an IMPORTED module serializes exactly like one
       -- in the entry — same `P-*`/`L-*` code, same real range — only attributed to
       -- the MODULE's file and rendered against the module's OWN source.
       Err (LoadParseFailed mpath msrc pe) =>
-        (cjParseErrJson mpath msrc pe, True)
+        (CjRendered (cjParseErrJson mpath msrc pe), True)
       Err (LoadMsg lmsg) =>
         let mloc = match unknownModuleIdOf lmsg
           None => None
@@ -1918,7 +1966,7 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
               None => ""
               Some _ => availableModulesHint stdlibDir)
         (
-          cjAllToJson [
+          CjParts target [
             (target, src, [Diag SevError "R-MODULE-LOAD" jmsg mloc mhelp None]),
           ],
           True,
@@ -1932,7 +1980,7 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
           let (flatStdlib, ownedStdlib) =
             stdlibOwnership target roots stdlibDir mods
           let _ = setStdlibOwnership flatStdlib ownedStdlib
-          checkJsonSingle
+          checkJsonSingleParts
             mid
             (allowInternal || contains mid trusted)
             rsrc
@@ -1986,8 +2034,8 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
           let triples = map readDiagSrc results
           let root = dirOf stdlibDir
           let relTriples = map (relDiagTriple root) triples
+          let entryKey = relDiagPath root target
           (
-            cjAllToJson
-              (mergeMainWarns (relDiagPath root target) mainWarns relTriples),
+            CjParts entryKey (cjFoldIntoFile entryKey mainWarns relTriples),
             hasErr,
           )

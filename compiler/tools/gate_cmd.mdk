@@ -38,6 +38,7 @@ import json.{Json, JString, JInt, JFloat, JBool, jArray, jObject, stringify}
 import driver.build_cmd.{envOr, defaultMedakaRoot}
 import driver.loader.{readDeps}
 import support.path.{joinPath}
+import io.{runCommandOk}
 import args.{
   ArgSpec,
   Args,
@@ -924,14 +925,11 @@ stripSlash s =
 makeGateScratch : String -> <IO> Result String String
 makeGateScratch root = match runCommand "mkdir" ["-p", root]
   Err e => Err e
-  Ok _ => match runCommand "mktemp" ["-d", "\{root}/medaka_gate_XXXXXX"]
+  Ok _ => match runCommandOk "mktemp" ["-d", "\{root}/medaka_gate_XXXXXX"]
     Err e => Err e
-    Ok (0, out, _) =>
+    Ok (out, _) =>
       let d = stringTrim out
       if d == "" then Err "mktemp -d printed no path" else Ok d
-    Ok (_, _, mtErr) =>
-      let msg = stringTrim mtErr
-      Err (if msg == "" then "mktemp -d failed" else msg)
 
 -- Best-effort recursive removal.  A gate writes an arbitrary TREE under its
 -- scratch dir (fixtures, oracle output, its own nested mktemp dirs), so the
@@ -1560,19 +1558,11 @@ nonBlank s = stringTrim s /= ""
 -- (every ledgered tool/oracle reports as *missing*, which reds loud) — but an
 -- empty candidate list can't itself say "verify couldn't check anything," so
 -- this one needs an explicit top-level error instead.
-gitExitMsg : Int -> String -> String
-gitExitMsg code msg =
-  if msg == "" then
-    "git ls-files exited \{intToString code}"
-  else
-    "git ls-files exited \{intToString code}: \{msg}"
-
 gitLsFilesSh : String -> List String -> <IO> Result String (List String)
 gitLsFilesSh root args =
-  match runCommand "git" (["-C", root] ++ args ++ ["*.sh"])
-    Err e => Err "git ls-files failed to run: \{e}"
-    Ok (0, out, _) => Ok (filterList nonBlank (splitNl out))
-    Ok (code, _, err) => Err (gitExitMsg code (stringTrim err))
+  match runCommandOk "git" (["-C", root] ++ args ++ ["*.sh"])
+    Err e => Err "git ls-files failed: \{e}"
+    Ok (out, _) => Ok (filterList nonBlank (splitNl out))
 
 gateCandidates : String -> <IO> Result String (List String)
 gateCandidates root = match gitLsFilesSh root ["ls-files"]
