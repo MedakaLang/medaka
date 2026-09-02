@@ -40,7 +40,7 @@ import core.{Ordering}
 -- `l0 + l1*2^16 + l2*2^32 + l3*2^48`, each limb in `[0, 2^16)`.
 public export data U64 =
   | U64 Int Int Int Int
-deriving (Eq, Debug, Display, Hashable)
+  deriving (Eq, Debug, Display, Hashable)
 
 -- ── Construction ────────────────────────────────────────────────────────
 

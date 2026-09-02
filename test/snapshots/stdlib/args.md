@@ -62,7 +62,7 @@ public export data Arity =
   | ValueList String
   | OneOf (List String) String
   | IntValue String
-deriving (Eq, Debug)
+  deriving (Eq, Debug)
 
 -- | Whether a flag appears in `helpBlockOf`.  Both kinds appear in `rosterOf`.
 public export data Visibility = Public | Internal deriving (Eq, Debug)
@@ -88,7 +88,7 @@ public export data Trailing =
   | TrailingReject
   | TrailingRaw
   | TrailingAfterSeparator
-deriving (Eq, Debug)
+  deriving (Eq, Debug)
 
 {- | One flag, with every spelling it answers to.
 
@@ -103,7 +103,7 @@ public export data FlagSpec =
       summary : String,
       visibility : Visibility,
     }
-deriving (Eq, Debug)
+  deriving (Eq, Debug)
 
 -- | One verb's whole argument vocabulary.  This is the value everything else
 --   in this module is a rendering of.
@@ -128,7 +128,7 @@ public export data ArgSpec =
       unknown : Unknown,
       strictDash : Bool,
     }
-deriving (Eq, Debug)
+  deriving (Eq, Debug)
 
 {- | The result of a successful parse.
 
@@ -142,7 +142,7 @@ public export data Args =
       positionals : List String,
       rest : List String,
     }
-deriving (Eq, Debug)
+  deriving (Eq, Debug)
 
 -- ── Building a spec ────────────────────────────────────────────────────────
 

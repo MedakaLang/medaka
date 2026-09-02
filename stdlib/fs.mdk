@@ -27,7 +27,7 @@ import string.{contains}
      time, seconds since the Unix epoch). -}
 public export data FileStat =
   | FileStat { size : Int, isDir : Bool, isFile : Bool, mtime : Float }
-deriving (Eq, Debug)
+  deriving (Eq, Debug)
 
 {- | `stat path` — like `statFile`, but wraps the raw tuple in a `FileStat`.
      `Err` (strerror) if the path cannot be stat'd (e.g. does not exist). -}
