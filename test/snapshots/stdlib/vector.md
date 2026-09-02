@@ -1,26 +1,26 @@
 # META
-source_lines=442
+source_lines=480
 stages=DESUGAR,MARK
 # SOURCE
-{- vector.mdk — a growable array (a dynamic array, `Vec` in Rust, `vector` in
-   C++, `ArrayList` in Java).
+{- | A growable, mutable array.
 
-   `Array a` (Module 4) is **fixed-size**: O(1) random access, but no `push`/
-   `pop`.  `Vector a` is the growable counterpart — backed by an
-   `Array a` with spare capacity, so `push` is amortized O(1) (the backing
-   doubles when full, like the hash tables in Module 6).  Reach for `Array` when
-   the length is known up front; reach for `Vector` when you accumulate.
+   `Vector a` holds its elements in an array with spare capacity, so `push`
+   costs amortized `O(1)` and indexing is `O(1)`. The writing operations
+   change the vector in place and return `Unit`. Use `array` when the length
+   is known up front, and `Vector` when elements accumulate.
 
-   Representation: `Vector backing len` where `!backing` is the backing
-   array (its `arrayLength` is the *capacity*) and `!len` is the number of
-   live elements (`0 <= len <= capacity`).  Both are `Ref`s, mutated in place.
-   Slots `[len, capacity)` are scratch — never read; they hold
-   whatever value last filled them (the most recent `push`'s element on a grow).
+   `length` is the number of elements; `capacity` is the size of the backing
+   store, which doubles when it fills. The `Foldable` instance makes
+   `toList`, `sum`, `elem`, and `any` work on a vector. -}
 
-   Iteration / instances only ever touch the live range `[0, len)`, so the
-   scratch tail is invisible.  `empty`/`new` start at capacity 0 and allocate on
-   first `push`, using the pushed element as the fill — so no dummy/default
-   value is needed to construct one. -}
+-- Representation: `Vector backing len` where `!backing` is the backing array
+-- (its `arrayLength` is the capacity) and `!len` is the number of live
+-- elements (`0 <= len <= capacity`).  Both are `Ref`s, mutated in place.
+-- Slots `[len, capacity)` are scratch, never read; they hold whatever value
+-- last filled them (the most recent `push`'s element on a grow).  Iteration
+-- and instances only ever touch the live range `[0, len)`.  `new` starts at
+-- capacity 0 and allocates on first `push`, using the pushed element as the
+-- fill, so no dummy value is needed to construct one.
 
 import core.{
   Eq,
@@ -34,30 +34,36 @@ import core.{
   IndexMut,
 }
 
-{- `list` is aliased rather than name-imported: this module's own `insertAt`/
-   `removeAt`/`sortBy`/`sort` are the SAME names, so a selective import would
-   collide.  The list versions define the semantics these four transport onto
-   the vector, so delegating is what keeps the two in step. -}
+-- `list` is aliased rather than name-imported: this module's own `insertAt`/
+-- `removeAt`/`sortBy`/`sort` are the same names, so a selective import would
+-- collide.  The list versions define the semantics these four transport onto
+-- the vector, so delegating is what keeps the two in step.
 import list as L
 
-{- `Vector backing len`: `!backing` is the capacity-sized store,
-   `!len` the live count; both mutated in place. -}
+{- | The vector type. Its fields are the backing array and the element
+   count, both mutable. -}
 public export data Vector a = Vector (Ref (Array a)) (Ref Int)
 
 -- Live element count (internal; the public name is `Foldable.length`).
 count : Vector a -> Int
 count (Vector _ len) = !len
 
--- ── Construction ────────────────────────────────────────────────────────
+-- # Construction
 
-{- | A fresh, empty vector (capacity 0; grows on first `push`).  Takes `Unit`,
-   not a nullary value, so each call allocates its own cells. -}
+{- | A new, empty vector.
+
+   Each call allocates its own vector, which is why it takes `Unit`. The
+   backing store is allocated on the first `push`.
+
+   > length (new () : Vector Int)
+   0 -}
 export
 new : Unit -> Vector a
 new _ = Vector (Ref [||]) (Ref 0)
 
-{- | Build a vector from a list, preserving order.  Capacity equals the length
-   (the next `push` triggers a grow).
+{- | A vector holding the elements of a list, in order.
+
+   The capacity equals the length, so the next `push` grows the store.
 
    > length (fromList [1, 2, 3])
    3 -}
@@ -67,17 +73,21 @@ fromList xs =
   let arr = arrayFromList xs
   Vector (Ref arr) (Ref (arrayLength arr))
 
-{- | Wrap a *copy* of an array as a vector (so later mutation does not disturb
-   the caller's array). -}
+{- | A vector holding a copy of an array's elements.
+
+   Later changes to the vector do not affect the array.
+
+   > toList (fromArray [|1, 2|])
+   [1, 2] -}
 export
 fromArray : Array a -> Vector a
 fromArray arr =
   let c = arrayCopy arr
   Vector (Ref c) (Ref (arrayLength c))
 
--- ── Observation (pure reads) ────────────────────────────────────────────
+-- # Reading
 
-{- | Capacity of the backing store (`>= length`).  Grows by doubling.
+{- | The size of the backing store, which is at least `length`.
 
    > capacity (fromList [1, 2, 3])
    3 -}
@@ -85,7 +95,7 @@ export
 capacity : Vector a -> Int
 capacity (Vector backing _) = arrayLength !backing
 
-{- | Element at an index, or `None` when out of the live range `[0, length)`.
+{- | The element at index `i`, or `None` when `i` is out of range.
 
    > get 1 (fromList [10, 20, 30])
    Some 20
@@ -97,10 +107,10 @@ get i (Vector backing len)
   | i >= 0 && i < !len = Some (arrayGetUnsafe i !backing)
   | otherwise = None
 
-{- | `index ma i` reads `ma`'s element at `i` (`ma[i]` sugar dispatches here),
-   over the live range `[0, length)`.  O(1).  Raises the coded `indexError`
-   (E-INDEX-OOB) when `i` is out of range -- use `get` for a safe
-   `Option`-returning read instead. -}
+{- | `v[i]` is the element at index `i`, in `O(1)`.
+
+   Panics with an index error when `i` is out of range; `get` is the
+   `Option`-returning form. -}
 export impl Index (Vector a) Int a where
   index (Vector backing len) i =
     if i >= 0 && i < !len then
@@ -108,7 +118,7 @@ export impl Index (Vector a) Int a where
     else
       indexErrorAt i
 
-{- | First element, or `None` when empty.
+{- | The first element, or `None` when the vector is empty.
 
    > first (fromList [10, 20, 30])
    Some 10 -}
@@ -116,7 +126,7 @@ export
 first : Vector a -> Option a
 first ma = get 0 ma
 
-{- | Last element, or `None` when empty.
+{- | The last element, or `None` when the vector is empty.
 
    > last (fromList [10, 20, 30])
    Some 30 -}
@@ -124,7 +134,7 @@ export
 last : Vector a -> Option a
 last ma = get (count ma - 1) ma
 
--- ── Conversion ──────────────────────────────────────────────────────────
+-- # Conversion
 
 elemsGo : Array a -> Int -> List a -> List a
 elemsGo arr i acc
@@ -135,9 +145,7 @@ elemsGo arr i acc
 elems : Vector a -> List a
 elems (Vector backing len) = elemsGo !backing (!len - 1) []
 
-{- | Snapshot the live range into a fresh fixed-size `Array a`.  (Shown here via
-   the `arrayLength` kernel primitive — `Array`'s own `Foldable`/`Debug` live in
-   `array.mdk`, which this module does not import.)
+{- | A new array holding the vector's elements.
 
    > arrayLength (toArray (fromList [1, 2, 3]))
    3 -}
@@ -147,10 +155,14 @@ toArray (Vector backing len) =
   let arr = !backing
   arrayMakeWith !len (i => arrayGetUnsafe i arr)
 
--- ── Mutation (effectful — modify in place) ──────────────────────────────
+-- # Mutation
 
-{- | Append an element, growing (doubling) the backing store when it is full.
-   Amortized O(1). -}
+{- | Appends `x` to the end of the vector.
+
+   Amortized `O(1)`: the backing store doubles when it is full.
+
+   > let v = fromList [1, 2] in let _ = push 3 v in toList v
+   [1, 2, 3] -}
 export
 push : a -> Vector a -> Unit
 push x (Vector backing len)
@@ -166,8 +178,13 @@ push x (Vector backing len)
     backing := newArr
     len := oldLen + 1
 
-{- | Remove and return the last element, or `None` when empty.  Keeps capacity
-   (no shrink). -}
+{- | Removes and returns the last element, or `None` when the vector is
+   empty.
+
+   The capacity is kept.
+
+   > pop (fromList [1, 2, 3])
+   Some 3 -}
 export
 pop : Vector a -> Option a
 pop (Vector backing len)
@@ -178,17 +195,21 @@ pop (Vector backing len)
     len := i
     Some x
 
-{- | Overwrite the element at an index.  Panics when out of the live range
-   `[0, length)` (use `push` to extend). -}
+{- | Replaces the element at index `i` with `x`.
+
+   Panics when `i` is out of range; `push` extends the vector.
+
+   > let v = fromList [1, 2, 3] in let _ = setInPlace 1 9 v in toList v
+   [1, 9, 3] -}
 export
 setInPlace : Int -> a -> Vector a -> Unit
 setInPlace i x (Vector backing len)
   | i >= 0 && i < !len = arraySetUnsafe i x !backing
   | otherwise = panic "Vector.setInPlace: index out of bounds"
 
-{- | `setIndex ma i v` writes `v` at `ma`'s index `i`, in place, over the live
-   range `[0, length)`, and returns `ma`.  O(1).  Raises the coded
-   `indexError` (E-INDEX-OOB) when `i` is out of range. -}
+{- | `v[i] = x` replaces the element at index `i` in place, in `O(1)`.
+
+   Panics with an index error when `i` is out of range. -}
 export impl IndexMut (Vector a) Int a where
   setIndex (Vector backing len) i v =
     if i >= 0 && i < !len then
@@ -196,7 +217,12 @@ export impl IndexMut (Vector a) Int a where
       Vector backing len
     else indexErrorAt i
 
-{- | Exchange the elements at two indices.  Caller ensures both are in range. -}
+{- | Exchanges the elements at indices `i` and `j`.
+
+   Both indices must be in range.
+
+   > let v = fromList [1, 2, 3] in let _ = swap 0 2 v in toList v
+   [3, 2, 1] -}
 export
 swap : Int -> Int -> Vector a -> Unit
 swap i j (Vector backing _) =
@@ -206,7 +232,12 @@ swap i j (Vector backing _) =
   arraySetUnsafe i xj arr
   arraySetUnsafe j xi arr
 
-{- | Drop all elements (length 0), retaining the allocated capacity. -}
+{- | Removes every element.
+
+   The capacity is kept.
+
+   > let v = fromList [1, 2, 3] in let _ = clear v in length v
+   0 -}
 export
 clear : Vector a -> Unit
 clear (Vector _ len) = len := 0
@@ -218,24 +249,23 @@ mapInPlaceGo f arr i n
     arraySetUnsafe i (f (arrayGetUnsafe i arr)) arr
     mapInPlaceGo f arr (i + 1) n
 
-{- | Apply `f` to every live element in place. -}
+{- | Replaces every element with `f` applied to it.
+
+   > let v = fromList [1, 2, 3] in let _ = mapInPlace (x => x * 10) v in toList v
+   [10, 20, 30] -}
 export
 mapInPlace : (a -> a) -> Vector a -> Unit
 mapInPlace f (Vector backing len) = mapInPlaceGo f !backing 0 !len
 
-{- ── Positional edits and sorting (sheet row H-5) ──────────────────────
+-- # Editing and sorting
 
-   All four MUTATE and return `Unit`, which is `vector`'s half of the F-3
-   mutation contract (`map`/`set`/`list` return the container; `hash_map`/
-   `hash_set`/`array`/`vector` return `Unit`).  Index handling matches
-   `list.insertAt`/`list.removeAt` exactly: both CLAMP rather than panic, so
-   `insertAt` with a too-large index appends and `removeAt` out of range is a
-   no-op.
-
-   `isEmpty` is deliberately NOT added here even though row H-5 names it:
-   `impl Foldable Vector` below already defines `isEmpty`, so a module-level
-   one would shadow the method -- the #2428 collision, which row H-2 rules out
-   explicitly ("do not add a module-level `isEmpty`"). -}
+-- All four mutate and return `Unit`, which is `vector`'s half of the mutation
+-- contract (`map`/`set`/`list` return the container; `hash_map`/`hash_set`/
+-- `array`/`vector` return `Unit`).  Index handling matches `list.insertAt`/
+-- `list.removeAt` exactly: both clamp rather than panic.
+--
+-- `isEmpty` is deliberately not added here: `impl Foldable Vector` below
+-- already defines it, so a module-level one would shadow the method.
 
 -- Push every element of a list, in order.
 pushAll : List a -> Vector a -> Unit
@@ -251,41 +281,49 @@ refill ma xs =
   clear ma
   pushAll xs ma
 
-{- | Insert `x` so that it lands at index `i`, shifting the rest right.
-   `i <= 0` prepends; `i >= length` appends.  Grows the backing store when
-   full, like `push`.
+{- | Inserts `x` at index `i`, shifting the following elements right.
 
-   > let ma = fromList [1, 2, 3] in let _ = insertAt 1 9 ma in toList ma
-   [1, 9, 2, 3]
-   > let ma = fromList [1, 2] in let _ = insertAt 7 9 ma in toList ma
-   [1, 2, 9] -}
+   An index at or below `0` prepends; an index at or beyond the length
+   appends.
+
+   > let v = fromList [1, 2, 3] in let _ = insertAt 1 9 v in toList v
+   [1, 9, 2, 3] -}
 export
 insertAt : Int -> a -> Vector a -> Unit
 insertAt i x ma = refill ma (L.insertAt i x (elems ma))
 
-{- | Drop the element at index `i`.  Out of range leaves the vector unchanged.
+-- > let v = fromList [1, 2] in let _ = insertAt 7 9 v in toList v
+-- [1, 2, 9]
 
-   > let ma = fromList [1, 2, 3] in let _ = removeAt 1 ma in toList ma
-   [1, 3]
-   > let ma = fromList [1, 2] in let _ = removeAt 7 ma in toList ma
-   [1, 2] -}
+{- | Removes the element at index `i`.
+
+   Nothing happens when `i` is out of range.
+
+   > let v = fromList [1, 2, 3] in let _ = removeAt 1 v in toList v
+   [1, 3] -}
 export
 removeAt : Int -> Vector a -> Unit
 removeAt i ma = refill ma (L.removeAt i (elems ma))
 
-{- | Sort the live range in place with the supplied comparison.  Stable --
-   equal elements keep their original relative order -- because `list.sortBy`,
-   which does the work, is.
+-- > let v = fromList [1, 2] in let _ = removeAt 7 v in toList v
+-- [1, 2]
 
-   > let ma = fromList [3, 1, 4, 1, 5] in let _ = sortBy compare ma in toList ma
+{- | Sorts the elements in place by `cmp`.
+
+   The sort is stable: elements that compare equal keep their original
+   order.
+
+   > let v = fromList [3, 1, 4, 1, 5] in let _ = sortBy compare v in toList v
    [1, 1, 3, 4, 5] -}
 export
 sortBy : (a -> a -> <e> Ordering) -> Vector a -> <e> Unit
 sortBy cmp ma = refill ma (L.sortBy cmp (elems ma))
 
-{- | Sort the live range in place by the `Ord` instance.
+{- | Sorts the elements in place in ascending order.
 
-   > let ma = fromList [3, 1, 2] in let _ = sort ma in toList ma
+   The sort is stable.
+
+   > let v = fromList [3, 1, 2] in let _ = sort v in toList v
    [1, 2, 3] -}
 export
 sort : Ord a => Vector a -> Unit
@@ -305,13 +343,11 @@ foldRightGo f z arr i
 
 -- ── Instances ───────────────────────────────────────────────────────────
 
-{- | Folds over the live range (in order), so `toList`/`length`/`sum`/`elem`/
-   `any`/… all work on a `Vector`.
+{- | The `Foldable` methods visit the elements in order, so `toList`,
+   `length`, `sum`, `elem`, and `any` work on a vector.
 
    > sum (fromList [1, 2, 3, 4])
-   10
-   > length (fromList [9, 8, 7])
-   3 -}
+   10 -}
 export impl Foldable Vector where
   fold f z (Vector backing len) = foldGo f z !backing 0 !len
   foldRight f z (Vector backing len) = foldRightGo f z !backing (!len - 1)
@@ -319,27 +355,29 @@ export impl Foldable Vector where
   isEmpty (Vector _ len) = !len == 0
   length (Vector _ len) = !len
 
-{- | Element-wise equality over the live ranges (capacity is irrelevant).
+-- > length (fromList [9, 8, 7])
+-- 3
+
+{- | Two vectors are equal when they hold equal elements in the same order.
+   Capacity does not matter.
 
    > eq (fromList [1, 2, 3]) (fromList [1, 2, 3])
    True -}
 export impl Eq (Vector a) requires Eq a where
   eq a b = if count a /= count b then False else eq (elems a) (elems b)
 
-{- | Rendered as `fromList [a, …]` over the live range.
+{- | `debug` renders a vector as `fromList [x, ...]`.
 
-   > debug (fromList [1, 2, 3]) == "fromList [1, 2, 3]"
-   True -}
+   > debug (fromList [1, 2, 3])
+   "fromList [1, 2, 3]" -}
 export impl Debug (Vector a) requires Debug a where
   debug ma = "fromList \{debug (elems ma)}"
 
-{- | Same `fromList [...]` shape as `Debug`, over the live range, with the
-   elements rendered by THEIR `Display` (so strings lose their quotes).
-   `Vector` was the one container in the surface that `println` could not
-   take (sheet row A-4).
+{- | `display` renders a vector as `fromList [x, ...]`, with the elements
+   in their own `display` form.
 
-   > display (fromList [1, 2, 3]) == "fromList [1, 2, 3]"
-   True -}
+   > display (fromList ["a", "b"])
+   "fromList [a, b]" -}
 export impl Display (Vector a) requires Display a where
   display ma = "fromList \{display (elems ma)}"
 
@@ -386,7 +424,7 @@ sortedAndStable (a::b::rest) = coarseKey a <= coarseKey b
   && (coarseKey a < coarseKey b || posOf a < posOf b)
   && sortedAndStable (b::rest)
 
--- LAW (H-5): `sort` agrees with an independent sort oracle, so it is both
+-- LAW: `sort` agrees with an independent sort oracle, so it is both
 -- ascending AND a permutation of the input -- either property alone is
 -- satisfiable by a wrong implementation (`[]` is ascending; the identity is a
 -- permutation).
@@ -395,7 +433,7 @@ prop "sort agrees with an independent insertion sort" (xs : List Int) =
   sort ma
   eq (toList ma) (naiveSort xs)
 
--- LAW (H-5): sorting an already-sorted vector changes nothing.
+-- LAW: sorting an already-sorted vector changes nothing.
 prop "sort is idempotent" (xs : List Int) =
   let ma = fromList xs
   sort ma
@@ -403,7 +441,7 @@ prop "sort is idempotent" (xs : List Int) =
   sort ma
   eq (toList ma) once
 
--- LAW (H-5): `sortBy` is STABLE -- sorting on a coarse key must leave tied
+-- LAW: `sortBy` is STABLE -- sorting on a coarse key must leave tied
 -- elements in their original relative order.  A total-order oracle cannot see
 -- this, which is why it gets its own law.
 prop "sortBy is stable on ties" (xs : List Int) =
@@ -411,7 +449,7 @@ prop "sortBy is stable on ties" (xs : List Int) =
   sortBy (a b => compare (coarseKey a) (coarseKey b)) ma
   sortedAndStable (toList ma) && length ma == length (fromList xs)
 
--- LAW (H-5): `insertAt` grows the vector by one and lands `x` at the CLAMPED
+-- LAW: `insertAt` grows the vector by one and lands `x` at the CLAMPED
 -- index; `removeAt` at that same index undoes it exactly.  Stating them as a
 -- round trip pins both functions' index conventions at once.
 prop "insertAt lands at the clamped index and removeAt undoes it" (xs : List Int) (n : Int) (x : Int) =
@@ -423,15 +461,15 @@ prop "insertAt lands at the clamped index and removeAt undoes it" (xs : List Int
   removeAt i ma
   grew && landed && eq (toList ma) xs
 
--- LAW (H-5): `removeAt` out of range is a NO-OP -- not a panic, and not a
--- silent edit of the nearest element (`list.removeAt`'s ratified behaviour).
+-- LAW: `removeAt` out of range is a NO-OP -- not a panic, and not a silent
+-- edit of the nearest element (`list.removeAt`'s behavior).
 prop "removeAt out of range is a no-op" (xs : List Int) =
   let ma = fromList xs
   removeAt (length ma) ma
   removeAt (0 - 1) ma
   eq (toList ma) xs
 
--- LAW (A-4): `Display (Vector a)` renders the LIVE range in the same
+-- LAW: `Display (Vector a)` renders the LIVE range in the same
 -- `fromList [...]` shape as `Debug`, and agrees with `Eq` -- equal vectors
 -- render identically, unequal ones do not.  The `push`-then-`pop` clause is
 -- what proves the scratch tail past `len` stays invisible.

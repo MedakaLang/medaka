@@ -77,6 +77,39 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MEDAKA="$ROOT/medaka"
 
+# ── optional extraction dump (consumed by test/first_hour_census.sh) ───────
+# When SYNTAX_EXTRACT_DIR is set, every extracted ```medaka / ```medaka-project
+# block is ALSO copied there (as well as being checked, exactly as always) —
+# a manifest.tsv row records how to find it. This is the one reusable
+# extraction seam licensed by S-first-hour-rank's packet (F9): it rides along
+# on the SAME extraction/parsing state machine below rather than duplicating
+# it, and does nothing (no directory, no manifest, zero behavior change) when
+# the variable is unset — which is how this script's own checked/failed/exit
+# behavior stays byte-for-byte unchanged for every other caller.
+SYNTAX_EXTRACT_DIR="${SYNTAX_EXTRACT_DIR:-}"
+extract_counter=0
+extract_dump_medaka() {
+  [ -n "$SYNTAX_EXTRACT_DIR" ] || return 0
+  extract_counter=$((extract_counter + 1))
+  dest="$SYNTAX_EXTRACT_DIR/mdk_$(printf '%04d' "$extract_counter").mdk"
+  cp "$1" "$dest"
+  printf '%s\tmedaka\t%s:%s\t%s\n' "$extract_counter" "$doc_label" "$2" "$dest" \
+    >> "$SYNTAX_EXTRACT_DIR/manifest.tsv"
+}
+extract_dump_project() {
+  [ -n "$SYNTAX_EXTRACT_DIR" ] || return 0
+  extract_counter=$((extract_counter + 1))
+  dest_dir="$SYNTAX_EXTRACT_DIR/proj_$(printf '%04d' "$extract_counter")"
+  cp -r "$1" "$dest_dir"
+  mains=""
+  for mf in "$dest_dir"/main*.mdk; do
+    [ -e "$mf" ] || continue
+    mains="$mains $(basename "$mf")"
+  done
+  printf '%s\tproject\t%s:%s\t%s\t%s\n' "$extract_counter" "$doc_label" "$2" "$dest_dir" "$mains" \
+    >> "$SYNTAX_EXTRACT_DIR/manifest.tsv"
+}
+
 if [ ! -x "$MEDAKA" ]; then
   echo "check_syntax_examples: native binary not found/executable at $MEDAKA" >&2
   echo "check_syntax_examples: build it first (make medaka) — refusing to skip-and-exit-0" >&2
@@ -322,6 +355,7 @@ check_medaka_block() {
 $out"
   fi
   check_fmt "$check_file" "$doc_label:$check_line (medaka block)"
+  extract_dump_medaka "$check_file" "$check_line"
 
   # Offer this example to a ```medaka-expect block that may follow. The
   # snapshot is a copy: $blockfile is reused by the next block in the document.
@@ -391,6 +425,7 @@ $out"
     [ -e "$pf" ] || continue
     check_fmt "$pf" "$doc_label:$project_line (medaka-project, file $(basename "$pf"))"
   done
+  extract_dump_project "$pdir" "$project_line"
 
   # Offer this example to a ```medaka-expect block that may follow. "The"
   # stdout of a project with several entry points is not well defined, so the

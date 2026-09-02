@@ -113,6 +113,7 @@ fieldCheck : Option Loc -> Env -> String -> String -> List ResError
 fieldKnownErr : Option Loc -> Env -> String -> List ResError
 fieldOwnersOf : List Decl -> List (String, String)
 fieldVerdict : Option Loc -> Env -> String -> String -> List String -> List ResError
+fileOfModuleErrors : List (String, String) -> (String, List ResError) -> (String, List ResError)
 fillDeclOrigin : String -> TyConOrigin -> TyConOrigin
 fillIfaceOccOrigin : Map String TyConOrigin -> String -> String -> TyConOrigin -> TyConOrigin
 filterContains : List String -> List String -> List String
@@ -229,8 +230,6 @@ patBindings : Pat -> List String
 patGroupDupErrors : Option Loc -> String -> List Pat -> List ResError
 patsBindings : List Pat -> List String
 ppResError : ResError -> String
-ppResErrorLocated : ResError -> String
-ppResErrorLocatedF : String -> ResError -> String
 preludeValueNames : List Decl -> List String
 primitiveConstructors : List String
 primitiveTypes : List String
@@ -269,7 +268,6 @@ recUpdateVerdict : Option Loc -> String -> List String -> List ResError
 recordFieldOwner : String -> Field -> (String, String)
 reexportBindings : UsePath -> ModuleExports -> List (String, String)
 reexportOrigins : UsePath -> ModuleExports -> List String
-renderModuleErrorsByPath : List (String, String) -> (String, List ResError) -> List String
 resErrorCode : ResError -> String
 resErrorDedupKey : ResError -> String
 resErrorDidYouMean : ResError -> Option (String, String)
@@ -278,10 +276,9 @@ resErrorSexp : ResError -> String
 resolveModule : List Decl -> List Decl -> Map String ModuleExports -> String -> List Decl -> (ModuleExports, List ResError)
 resolveModuleG : List String -> List Decl -> List Decl -> Map String ModuleExports -> String -> List Decl -> (ModuleExports, List ResError)
 resolveModulesErrors : List Decl -> List Decl -> Map String ModuleExports -> List (String, List Decl) -> List ResError
-resolveModulesErrorsByPathGo : List (String, String) -> Bool -> List String -> List Decl -> List Decl -> Map String ModuleExports -> List (String, List Decl) -> List String
+resolveModulesErrorsByFile : List (String, String) -> Bool -> List String -> List Decl -> List Decl -> List (String, List Decl) -> List (String, List ResError)
 resolveModulesErrorsG : Bool -> List String -> List Decl -> List Decl -> Map String ModuleExports -> List (String, List Decl) -> List ResError
 resolveModulesErrorsPairsG : Bool -> List String -> List Decl -> List Decl -> Map String ModuleExports -> List (String, List Decl) -> List (String, List ResError)
-resolveModulesToHumaneByPath : List (String, String) -> Bool -> List String -> List Decl -> List Decl -> List (String, List Decl) -> String
 resolveModulesToLines : List Decl -> List Decl -> List (String, List Decl) -> String
 resolveModulesToLinesG : Bool -> List String -> List Decl -> List Decl -> List (String, List Decl) -> String
 resolveProgram : List Decl -> List Decl -> List Decl -> List ResError

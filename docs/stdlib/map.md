@@ -1,6 +1,19 @@
 # map
 
-## `Map`
+An immutable map from keys to values, ordered by key.
+
+`Map k v` is a balanced binary search tree. Lookup, insertion, and
+deletion cost `O(log n)`, and `size` is `O(1)`. Every operation returns a
+new map and leaves the original unchanged; the two share whatever
+structure they have in common, so keeping old versions is cheap.
+
+Keys are ordered by their `Ord` instance, and `toList`, `keys`, `values`,
+and the folds visit entries in ascending key order. The `Map { k => v }`
+literal builds a map; the empty map is `empty`. For keys that are
+`Hashable` but not `Ord`, or when order does not matter, see
+`hash_map`.
+
+### `Map`
 
 ```
 data Map k v
@@ -8,47 +21,40 @@ data Map k v
   | Bin Int k v (Map k v) (Map k v)
 ```
 
+The map type.
+
+`Tip` is the empty tree and `Bin` is an interior node holding its
+subtree's size, a key, a value, and the left and right subtrees. The
+constructors are visible for pattern matching, but build maps with the
+functions in this module, which keep the tree balanced.
+
 Instances: [`Index`](#index-map-k-v-k-v), [`Mappable`](#mappable-map-k), [`Filterable`](#filterable-map-k), [`Eq`](#eq-map-k-v), [`Ord`](#ord-map-k-v), [`Debug`](#debug-map-k-v), [`Display`](#display-map-k-v), [`Semigroup`](#semigroup-map-k-v), [`FromEntries`](#fromentries-map-k-v-k-v), [`Monoid`](#monoid-map-k-v)
 
-## `singleton`
+## Construction
+
+### `singleton`
 
 ```
 singleton : k -> v -> Map k v
 ```
 
-A map with a single entry.
+A map with one entry.
 
 ```medaka
 > size (singleton 1 "a")
 1
 ```
 
-## `fromList`
+### `fromList`
 
 ```
 fromList : Ord k => List (k, v) -> Map k v
 ```
 
-Build a map from an association list.  Later pairs win on duplicate keys.
+A map holding the pairs of an association list.
 
-The `Map { k => v, … }` literal is sugar for `fromList` (it lowers to a
-`FromEntries` dispatch pinned at `Map`, see the impl at the bottom of this
-file):
-
-```medaka
-> size (Map { 1 => 10, 2 => 20, 3 => 30 })
-3
-> findWithDefault 0 2 (Map { 1 => 10, 2 => 20 })
-20
-```
-
-The empty literal `Map { }` works too (Phase 114); annotate to fix the
-element types the empty braces leave open:
-
-```medaka
-> size (Map { } : Map Int Int)
-0
-```
+When a key appears more than once, the later pair wins. The
+`Map { k => v, ... }` literal is the same operation.
 
 ```medaka
 > keys (fromList [(3, 0), (1, 0), (2, 0)])
@@ -57,39 +63,41 @@ element types the empty braces leave open:
 20
 ```
 
-## `size`
+## Query
+
+### `size`
 
 ```
 size : Map k v -> Int
 ```
 
-Number of entries.  O(1) — read straight off the root's cached size.
+The number of entries, in `O(1)`.
 
 ```medaka
 > size (fromList [(1, 10), (2, 20), (1, 30)])
 2
 ```
 
-## `isEmpty`
+### `isEmpty`
 
 ```
 isEmpty : Map k v -> Bool
 ```
 
-`True` when the map has no entries.
+Whether the map has no entries.
 
 ```medaka
 > isEmpty (empty : Map Int Int)
 True
 ```
 
-## `get`
+### `get`
 
 ```
 get : Ord k => k -> Map k v -> Option v
 ```
 
-Look up the value at a key.
+The value at `k`, or `None` when the key is absent.
 
 ```medaka
 > get 2 (fromList [(1, 10), (2, 20)])
@@ -98,13 +106,13 @@ Some 20
 None
 ```
 
-## `has`
+### `has`
 
 ```
 has : Ord k => k -> Map k v -> Bool
 ```
 
-`True` when the key is present.
+Whether `k` is present.
 
 ```medaka
 > has 2 (fromList [(1, 10), (2, 20)])
@@ -113,13 +121,13 @@ True
 False
 ```
 
-## `findWithDefault`
+### `findWithDefault`
 
 ```
 findWithDefault : Ord k => v -> k -> Map k v -> v
 ```
 
-Value at a key, or a fallback when the key is absent.
+The value at `k`, or `d` when the key is absent.
 
 ```medaka
 > findWithDefault 0 2 (fromList [(1, 10), (2, 20)])
@@ -128,295 +136,338 @@ Value at a key, or a fallback when the key is absent.
 0
 ```
 
-## `set`
+## Insertion
+
+### `set`
 
 ```
 set : Ord k => k -> v -> Map k v -> Map k v
 ```
 
-Insert a key/value pair, replacing any existing value at the key.
+The map with `v` stored at `k`, replacing any existing value.
 
 ```medaka
 > findWithDefault 0 2 (set 2 99 (fromList [(1, 10), (2, 20)]))
 99
 ```
 
-## `insertWith`
+### `insertWith`
 
 ```
 insertWith : Ord k => (v -> v -> v) -> k -> v -> Map k v -> Map k v
 ```
 
-Insert with a combining function.  On a collision the new value is
-`f newValue oldValue`; on a fresh key the value is stored as-is.
+The map with `v` stored at `k`, combining with an existing value.
+
+When `k` is already present, the stored value becomes `f v old`. When it
+is absent, `v` is stored as it is.
 
 ```medaka
 > findWithDefault 0 1 (insertWith (n o => n + o) 1 5 (fromList [(1, 10)]))
 15
 ```
 
-## `adjust`
+### `adjust`
 
 ```
 adjust : Ord k => (v -> v) -> k -> Map k v -> Map k v
 ```
 
-Apply a function to the value at a key, if present.  A no-op when the key
-is absent.  The tree shape is unchanged, so no rebalancing is needed.
+The map with `f` applied to the value at `k`.
+
+Unchanged when `k` is absent.
 
 ```medaka
 > findWithDefault 0 1 (adjust (n => n * 10) 1 (fromList [(1, 5), (2, 6)]))
 50
 ```
 
-## `delete`
+## Deletion
+
+### `delete`
 
 ```
 delete : Ord k => k -> Map k v -> Map k v
 ```
 
-Remove a key.  A no-op when the key is absent.
+The map without the entry at `k`.
+
+Unchanged when `k` is absent.
 
 ```medaka
 > has 2 (delete 2 (fromList [(1, 10), (2, 20)]))
 False
-> size (delete 9 (fromList [(1, 10), (2, 20)]))
-2
 ```
 
-## `minView`
+## Minimum and maximum
+
+### `minView`
 
 ```
 minView : Map k v -> Option (k, v, Map k v)
 ```
 
-Split off the smallest entry: `Some (key, value, rest)`, or `None` when
-empty.  `rest` stays balanced.
+The smallest entry and the map without it, or `None` when the map is
+empty.
 
-## `maxView`
+```medaka
+> minView (fromList [(2, "b"), (1, "a")])
+Some (1, "a", fromList [(2, "b")])
+```
+
+### `maxView`
 
 ```
 maxView : Map k v -> Option (k, v, Map k v)
 ```
 
-Split off the largest entry: `Some (key, value, rest)`, or `None`.
+The largest entry and the map without it, or `None` when the map is
+empty.
 
-## `getMin`
+```medaka
+> maxView (fromList [(2, "b"), (1, "a")])
+Some (2, "b", fromList [(1, "a")])
+```
+
+### `getMin`
 
 ```
 getMin : Map k v -> Option (k, v)
 ```
 
-Smallest key/value, or `None`.
+The entry with the smallest key, or `None` when the map is empty.
 
 ```medaka
 > getMin (fromList [(3, 0), (1, 0), (2, 0)])
 Some (1, 0)
 ```
 
-## `getMax`
+### `getMax`
 
 ```
 getMax : Map k v -> Option (k, v)
 ```
 
-Largest key/value, or `None`.
+The entry with the largest key, or `None` when the map is empty.
 
 ```medaka
 > getMax (fromList [(3, 0), (1, 0), (2, 0)])
 Some (3, 0)
 ```
 
-## `deleteMin`
+### `deleteMin`
 
 ```
 deleteMin : Map k v -> Map k v
 ```
 
-Drop the smallest entry (a no-op on the empty map).
+The map without its smallest entry.
+
+Unchanged when the map is empty.
 
 ```medaka
 > keys (deleteMin (fromList [(3, 0), (1, 0), (2, 0)]))
 [2, 3]
 ```
 
-## `deleteMax`
+### `deleteMax`
 
 ```
 deleteMax : Map k v -> Map k v
 ```
 
-Drop the largest entry (a no-op on the empty map).
+The map without its largest entry.
+
+Unchanged when the map is empty.
 
 ```medaka
 > keys (deleteMax (fromList [(3, 0), (1, 0), (2, 0)]))
 [1, 2]
 ```
 
-## `foldrWithKey`
+## Folds and traversal
+
+### `foldrWithKey`
 
 ```
 foldrWithKey : (k -> v -> b -> <e> b) -> b -> Map k v -> <e> b
 ```
 
-Right fold over key/value pairs in ascending key order.
+A right fold over the entries in ascending key order.
 
-## `foldlWithKey`
+```medaka
+> foldrWithKey (k v acc => k :: acc) [] (fromList [(2, 0), (1, 0)])
+[1, 2]
+```
+
+### `foldlWithKey`
 
 ```
 foldlWithKey : (b -> k -> v -> <e> b) -> b -> Map k v -> <e> b
 ```
 
-Left fold over key/value pairs in ascending key order.
+A left fold over the entries in ascending key order.
 
-## `toList`
+```medaka
+> foldlWithKey (acc k v => acc + v) 0 (fromList [(1, 10), (2, 20)])
+30
+```
+
+### `toList`
 
 ```
 toList : Map k v -> List (k, v)
 ```
 
-All key/value pairs, ascending by key.
+The entries as pairs, in ascending key order.
 
 ```medaka
 > toList (fromList [(2, 20), (1, 10), (3, 30)])
 [(1, 10), (2, 20), (3, 30)]
 ```
 
-## `keys`
+### `keys`
 
 ```
 keys : Map k v -> List k
 ```
 
-All keys, ascending.
+The keys, in ascending order.
 
 ```medaka
 > keys (fromList [(2, 0), (3, 0), (1, 0)])
 [1, 2, 3]
 ```
 
-## `values`
+### `values`
 
 ```
 values : Map k v -> List v
 ```
 
-All values, ordered by their keys.
+The values, in ascending order of their keys.
 
 ```medaka
 > values (fromList [(2, 20), (1, 10), (3, 30)])
 [10, 20, 30]
 ```
 
-## `mapWithKey`
+### `mapWithKey`
 
 ```
 mapWithKey : (k -> v -> <e> w) -> Map k v -> <e> Map k w
 ```
 
-Map a function over the values, keeping keys and structure.  The key is
-passed alongside the value.
+The map with `f` applied to every value, where `f` also receives the
+key.
+
+`map` is the form whose function sees only the value.
 
 ```medaka
 > values (mapWithKey (k v => k + v) (fromList [(1, 10), (2, 20)]))
 [11, 22]
 ```
 
-## `filterWithKey`
+## Filtering
+
+### `filterWithKey`
 
 ```
 filterWithKey : Ord k => (k -> v -> <e> Bool) -> Map k v -> <e> Map k v
 ```
 
-Keep only the entries whose key/value satisfy the predicate.
+The entries whose key and value satisfy `p`.
+
+`filter` is the form whose predicate sees only the value.
 
 ```medaka
 > keys (filterWithKey (k v => v > 15) (fromList [(1, 10), (2, 20), (3, 30)]))
 [2, 3]
 ```
 
-## `union`
+## Combining
+
+### `union`
 
 ```
 union : Ord k => Map k v -> Map k v -> Map k v
 ```
 
-Left-biased union: on a shared key the value from the first map wins.
+The entries of both maps. On a shared key, the first map's value wins.
+
+`++` on maps is `union`.
 
 ```medaka
 > findWithDefault 0 1 (union (fromList [(1, 1)]) (fromList [(1, 2), (2, 2)]))
 1
-> size (union (fromList [(1, 1)]) (fromList [(1, 2), (2, 2)]))
-2
 ```
 
-## `unionWith`
+### `unionWith`
 
 ```
 unionWith : Ord k => (v -> v -> v) -> Map k v -> Map k v -> Map k v
 ```
 
-Union with a combining function for shared keys: `f leftValue rightValue`.
+The entries of both maps. On a shared key, the value is `f left right`.
 
 ```medaka
 > findWithDefault 0 1 (unionWith (x y => x + y) (fromList [(1, 1)]) (fromList [(1, 2)]))
 3
 ```
 
-## `difference`
+### `difference`
 
 ```
 difference : Ord k => Map k v -> Map k w -> Map k v
 ```
 
-Keys present in the first map but not the second (values from the first).
+The entries of the first map whose keys are absent from the second.
 
 ```medaka
 > keys (difference (fromList [(1, 0), (2, 0), (3, 0)]) (fromList [(2, 0)]))
 [1, 3]
 ```
 
-## `intersectionWith`
+### `intersectionWith`
 
 ```
 intersectionWith : Ord k => (v -> w -> x) -> Map k v -> Map k w -> Map k x
 ```
 
-Keys present in both maps, combined with `f leftValue rightValue`.
+The keys present in both maps, each with the value `f left right`.
 
 ```medaka
 > toList (intersectionWith (x y => x + y) (fromList [(1, 10), (2, 20)]) (fromList [(2, 2), (3, 3)]))
 [(2, 22)]
 ```
 
-## `intersection`
+### `intersection`
 
 ```
 intersection : Ord k => Map k v -> Map k w -> Map k v
 ```
 
-Keys present in both maps, keeping the LEFT map's value — the plain form
-of `intersectionWith`, matching how `union` is the plain form of
-`unionWith` and how `set.intersection` is left-biased.
+The keys present in both maps, each with the first map's value.
 
 ```medaka
 > toList (intersection (fromList [(1, 10), (2, 20)]) (fromList [(2, 2), (3, 3)]))
 [(2, 20)]
 ```
 
-## `wellFormed`
+## Invariants
+
+### `wellFormed`
 
 ```
 wellFormed : Ord k => Map k v -> Bool
 ```
 
-Check the three structural invariants at every node: the search-tree
-order (left keys < node key < right keys), the cached `size` matching the
-actual subtree size, and the weight-balance bound (neither sibling more than
-`delta` times the other).  A correct sequence of operations always leaves a
-map `wellFormed`; it is exported as a debugging aid and as the backbone of
-this module's property tests.  Re-walks subtrees for the order check, so it
-is O(n log n) — not for hot paths.
+Whether the map's internal tree satisfies its invariants: keys in
+search order, correct cached sizes, and balanced subtrees.
+
+Every map built with this module's functions is well formed. This is a
+debugging aid and the basis of the module's property tests. It costs
+`O(n log n)`.
 
 ## Instances
 
@@ -426,11 +477,11 @@ is O(n log n) — not for hot paths.
 impl Index (Map k v) k v requires Ord k
 ```
 
-`index m k` looks up `m`'s value at key `k` (`m[k]` sugar dispatches
-here).  Raises the coded `indexError` (E-INDEX-OOB) when the key is
-absent -- use `get` for a safe `Option`-returning read instead.  Note the
-flipped argument order vs. `get k m`: the `Index` interface always takes
-the container first (`index m k`).
+`m[k]` is the value at `k`.
+
+Panics with an index error when the key is absent; `get` is the
+`Option`-returning form. The `Index` interface takes the map first, so
+this is `index m k` where `get` is `get k m`.
 
 ### `Mappable (Map k)`
 
@@ -438,7 +489,7 @@ the container first (`index m k`).
 impl Mappable (Map k)
 ```
 
-Map over the values, keys and structure preserved.
+`map` applies a function to every value, keeping the keys.
 
 ```medaka
 > values (map (n => n * 10) (fromList [(1, 1), (2, 2)]))
@@ -451,10 +502,9 @@ Map over the values, keys and structure preserved.
 impl Filterable (Map k)
 ```
 
-Drop (and transform) values, keys and order preserved.  `filterMap` is the
-primitive; the interface's default `filter` falls out of it.  Note this
-folds over VALUES — the key-aware form is the module-level `filterWithKey`,
-which stays because the interface's callback cannot see a key.
+`filter` and `filterMap` test each value, keeping the keys of the
+entries that survive. `filterWithKey` is the form that also sees the
+key.
 
 ### `Eq (Map k v)`
 
@@ -462,8 +512,8 @@ which stays because the interface's callback cannot see a key.
 impl Eq (Map k v) requires Eq k, Eq v
 ```
 
-Structural equality: same keys mapped to equal values.  Compared through
-the canonical ascending association list, so tree *shape* doesn't matter.
+Two maps are equal when they hold the same keys with equal values,
+regardless of how they were built.
 
 ```medaka
 > eq (fromList [(1, 10), (2, 20)]) (fromList [(2, 20), (1, 10)])
@@ -476,9 +526,7 @@ True
 impl Ord (Map k v) requires Ord k, Ord v
 ```
 
-Lexicographic ordering through the canonical ascending association list,
-so two maps order by their `(key, value)` pairs and a proper prefix sorts
-first.  Enables nesting (`Map (Set k) v`) and sorting `List (Map …)`.
+Maps compare lexicographically by their ascending `(key, value)` pairs.
 
 ```medaka
 > compare (fromList [(1, 10)]) (fromList [(1, 20)])
@@ -491,13 +539,11 @@ Lt
 impl Debug (Map k v) requires Debug k, Debug v
 ```
 
-Rendered as `fromList [(k, v), …]`, mirroring the constructor that would
-rebuild it.  (Doctest compares against a literal: `Debug String` lives in
-string.mdk, out of this module's isolated test context.)
+`debug` renders a map as `fromList [(k, v), ...]`.
 
 ```medaka
-> debug (fromList [(1, 10), (2, 20)]) == "fromList [(1, 10), (2, 20)]"
-True
+> debug (fromList [(1, 10), (2, 20)])
+"fromList [(1, 10), (2, 20)]"
 ```
 
 ### `Display (Map k v)`
@@ -506,14 +552,13 @@ True
 impl Display (Map k v) requires Display k, Display v
 ```
 
-The *display* form — the Phase-108 literal `Map { k => v, … }` (empty →
-`Map {}`), as opposed to Debug's re-evaluable `fromList [(k, v), …]`.
+`display` renders a map in its literal syntax, `Map { k => v, ... }`.
 
 ```medaka
-> display (fromList [(1, 10), (2, 20)]) == "Map { 1 => 10, 2 => 20 }"
-True
-> display (empty : Map Int Int) == "Map {}"
-True
+> display (fromList [(1, 10), (2, 20)])
+"Map { 1 => 10, 2 => 20 }"
+> display (empty : Map Int Int)
+"Map {}"
 ```
 
 ### `Semigroup (Map k v)`
@@ -522,10 +567,7 @@ True
 impl Semigroup (Map k v) requires Ord k
 ```
 
-`++` on maps is left-biased union (the left map wins on shared keys).
-
-`append` dispatches on its first `Map` argument, so the `Ord k` it needs to
-merge threads in by the ordinary route.
+`++` on maps is `union`: the left map wins on shared keys.
 
 ### `FromEntries (Map k v) (k, v)`
 
@@ -533,9 +575,7 @@ merge threads in by the ordinary route.
 impl FromEntries (Map k v) (k, v) requires Ord k
 ```
 
-Backs the `Map { k => v, … }` literal: the compiler lowers that to
-`fromEntries [(k, v), …]` pinned at `Map`, dispatching here.  The `Ord k`
-the build needs threads in by the ordinary return-position route.
+The `Map { k => v, ... }` literal builds its map through this instance.
 
 ### `Monoid (Map k v)`
 
@@ -543,10 +583,7 @@ the build needs threads in by the ordinary return-position route.
 impl Monoid (Map k v) requires Ord k
 ```
 
-`Monoid.empty` for `Map` is the empty tree.  `empty` is nullary and so
-dispatches on its *result* type (Phase 103); the impl's `requires Ord k`
-carries no dict here because `Tip` needs none, so a return-position `empty :
-Map k v` grounds cleanly.
+`empty` is the map with no entries.
 
 ```medaka
 > isEmpty (empty : Map Int Int)

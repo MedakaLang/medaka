@@ -1,30 +1,35 @@
--- THE DISCRIMINATING NEGATIVE CONTROL for section 5 (F-3d, #614/#311): a program
--- that carries a typecheck-stage warning which is NOT the demoted coherence one.
+-- ORIGINALLY the discriminating negative control for section 5 (F-3d, #614/#311):
+-- a program that carries a typecheck-stage warning which is NOT the demoted
+-- coherence one, for a single-file program with no imports.
 --
--- WHAT IT PINS. F-3d surfaces `W-INCOMPARABLE-IMPLS` on `run` and `build`, because
--- that diagnostic was LOUD on those verbs before the demotion and would otherwise
--- have gone silent. It must surface NOTHING ELSE. Every other warning on the
--- `matchWarnings` channel was already invisible on `run`/`build` before F-3d and
--- stays that way -- not a regression, and not F-3d's to change.
+-- WHAT F-3d PINNED (superseded below): `run`/`build` surface `W-INCOMPARABLE-IMPLS`
+-- because that diagnostic was LOUD on those verbs before the demotion and would
+-- otherwise have gone silent, and F-3d asserted it surfaced NOTHING ELSE --
+-- correct at the time because F-3d's allowlist (`runBuildWarnCodes`) was the ONLY
+-- gate on `run`/`build` warnings, single-file or not.
 --
 -- ⚠️ WHY THIS FIXTURE EXISTS RATHER THAN A CLEAN ONE. The first negative controls
 -- for this section were `s3-min-subsumes` and `s8-i2-global-instance-env`, which
--- assert empty run/build stderr -- and they are INERT against the regression they
--- were written for: neither program produces ANY channel warning, so they read
--- `EMPTY` whether the filter is one code or the whole channel. Verified by
--- experiment: with `isCoherenceWarn` widened to accept every warning and the
--- compiler rebuilt, all nine section-5 rows still passed. THIS file is the one that
--- can fail -- it has a real `W-NONEXHAUSTIVE` for `check` to report and for
--- `run`/`build` to withhold, so the two verbs' behaviour is separable.
+-- assert empty run/build stderr -- and they are INERT against a widened filter:
+-- neither program produces ANY channel warning, so they read `EMPTY` regardless.
+-- THIS file has a real `W-NONEXHAUSTIVE`, so it can actually discriminate.
 --
--- THE REGRESSION IT GUARDS, measured before the narrowing: surfacing the whole
--- channel emitted ~96% false positives, because the channel is populated over the
--- module GRAPH and `checkGuardExhaustivenessWith` takes its constructor oracle from
--- the graph rather than from the scrutinee's own type -- so a fully exhaustive
--- `List` match is told to add a `Text _` case (issue 1185, PRE-EXISTING and not
--- F-3d's). `medaka build compiler/driver/medaka_cli.mdk` went from 0 to 4896 stderr
--- lines, making `build` ~200x noisier than `check` and inverting which verb is the
--- diagnostic one.
+-- THE #1185 SPEW F-3d's NARROWING GUARDED AGAINST is a MODULE-GRAPH phenomenon:
+-- `checkGuardExhaustivenessWith` draws its constructor oracle from the whole
+-- graph rather than the scrutinee's own type, so an imported constructor
+-- universe can make an exhaustive match look partial (measured: `medaka build
+-- compiler/driver/medaka_cli.mdk` went from 0 to 4896 stderr lines). This
+-- program is SINGLE-FILE with no imports, so it never had an imported
+-- constructor universe to draw from -- it was never actually at risk, it just
+-- happened to double as the fixture that could tell the allowlist from the
+-- whole channel while F-3d's arm covered every verb uniformly.
+--
+-- UPDATED BY S-warning-parity (#2400/F4): single-file `run`/`build` now filter
+-- `isDiagWarn` (the WHOLE channel), not `runBuildWarnCodes` -- deliberately,
+-- because single-file has no imported constructor universe and so cannot hit
+-- #1185's spew (verified there by experiment: a same-file multi-clause function
+-- beside an unrelated multi-constructor type produced no false warning). The
+-- narrowing stays in force on the MULTI-MODULE arms, which still can hit #1185.
 --
 -- SPEC ANSWER (hand-derived): nothing in DICT-SEMANTICS is at issue here -- `hue`'s
 -- match is genuinely non-exhaustive (no `Blue` arm), which is a §-less exhaustiveness
@@ -32,8 +37,10 @@
 -- its interface. The program is well-typed, `main` calls `hue Red` which IS covered,
 -- so it runs and prints 1.
 --
--- OBSERVED: check ACCEPTS and reports `W-NONEXHAUSTIVE`; run and build ACCEPT,
--- print 1, and say NOTHING on stderr.
+-- OBSERVED (current): check ACCEPTS and reports `W-NONEXHAUSTIVE`; run and build
+-- ACCEPT, print 1, and now ALSO report `W-NONEXHAUSTIVE` on stderr (F4's
+-- intentional single-file widening -- see test/diff_compiler_dict_semantics.sh
+-- section 5 for the pinned assertion).
 data Colour = Red | Green | Blue
 
 interface Sized a where

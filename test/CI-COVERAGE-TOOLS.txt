@@ -67,11 +67,14 @@ test/gate_cost_collect         the AUTOMATED half of #2180's baseline auto-advan
                                compiler itself; it has no pass/fail assertion of its own.
 
 # ── golden capture ──
-# CHECK=1 turns this one into a comparison, but its DEFAULT action is to WRITE the goldens
-# and nothing invokes it with CHECK=1. It is a blessing action, exactly like capture_goldens.
-# (If the error-quality corpus is ever wired into CI it goes in a shard as CHECK=1 — and
-# then this line comes out.)
-test/error_quality_fixtures/capture   captures the error-quality baseline .out goldens.
+# CHECK=1 turns this one into a comparison, but its DEFAULT action (no env var) is to WRITE
+# the goldens — still a blessing action, exactly like capture_goldens. #2446/S-diag-census
+# wired the CHECK=1 comparison into CI via a thin wrapper,
+# test/diff_compiler_error_quality_baseline.sh (in a shard, in test/gates.toml), which sets
+# CHECK=1 and execs this script — so THIS entry does not "come out": capture.sh itself is
+# still a bare `sh capture.sh` blessing action, and the wrapper is the registry's `run` target.
+test/error_quality_fixtures/capture   captures the error-quality baseline .out goldens (its
+                                       CHECK=1 comparison mode is gated via the wrapper above).
 
 # ── measurement (no pass/fail verdict) ──
 test/bench                     perf harness. Reports numbers; asserts nothing.
@@ -122,6 +125,37 @@ test/cli_conformance_census    derived CLI conformance census (#2354, S-conforma
                                 help/parse-arm agreement gate; this is the map that slice
                                 works from. See the script header.
 
+test/diag_census               derived error-quality conformance census (#2446, S-diag-
+                                census, `make diag-census`): re-derives, per fixture in
+                                test/error_quality_fixtures/, the machine-checkable facts
+                                GRADING.md's L/X/A columns used to be hand-typed from —
+                                human-channel prefix, caret presence, real location,
+                                --json code/kind/range presence, diagnostic count — plus a
+                                documented-vs-observed diagnostic-code coverage set against
+                                compiler/DIAGNOSTIC-CODES-DESIGN.md. Always exits 0 and
+                                asserts nothing; the ENFORCING check that the corpus's
+                                captured .out baselines haven't silently drifted is
+                                test/diff_compiler_error_quality_baseline.sh. See the
+                                script header.
+
+test/first_hour_census         mutation census over the docs guide corpus, ranked by
+                                first-hour reachability (#2446, S-first-hour-rank,
+                                `make first-hour-census`): extracts every checkable
+                                ```medaka / ```medaka-project example via
+                                test/check_syntax_examples.sh's own SYNTAX_EXTRACT_DIR
+                                seam, applies a small fixed set of "plausible beginner
+                                mistake" mutations (drop a closing paren/brace, drop an
+                                import line, drop a match-arm, typo an identifier,
+                                remove one indent level) to each, runs
+                                `medaka check --json` on every mutant, and tabulates
+                                which diagnostic CODE fires how often — except the
+                                P-PARSE umbrella, ranked by MESSAGE TEXT instead (F8:
+                                60 `failP` sites collapse to one code). A mutant that
+                                type-checks clean is its own SILENT-ACCEPT bucket.
+                                Always exits 0 and asserts nothing; sibling of
+                                test/diag_census, not a rewrite of it — different
+                                corpus (docs, not hand-authored fixtures) and a
+                                mutation step in between. See the script header.
 test/slop_census               composing entry point over the slop-burndown crusade's (#2276)
                                 member censuses (#2304, S-slop-census, `make slop-census`): a
                                 registry, encoded as data in the script, of every member census

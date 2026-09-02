@@ -1,77 +1,78 @@
 # META
-source_lines=73
+source_lines=74
 stages=DESUGAR,MARK
 # SOURCE
-{- io.mdk — files, standard streams, environment, and process I/O.
+{- | Output to standard error, debug printing, and helpers for files and
+   the environment.
 
-   See STDLIB.md (Module 7) for the plan.
+   The primitive operations are in scope without an import: `readFile`,
+   `writeFile`, `appendFile`, `readLine`, `readLineOpt`, `readAll`, `args`,
+   `getEnv`, `fileExists`, `listDir`, `exit`, `putStr`, `putStrLn`,
+   `ePutStr`, and `ePutStrLn`, plus `print` and `println` from the prelude.
+   This module adds the convenience layer on top of them.
 
-   The irreducible host primitives are `extern`s in stdlib/runtime.mdk, so they
-   are **global** (no import needed): `readFile`/`writeFile`/`appendFile`,
-   `readLine`/`readLineOpt`/`readAll`, `args`, `getEnv`, `fileExists`, `listDir`,
-   `exit`, `putStr`/`putStrLn` (and the prelude's `print`/`println`), and the
-   stderr pair `ePutStr`/`ePutStrLn`. This module adds the ergonomic layer on
-   top — `Display`-based stderr output, line-oriented file reading, and an
-   `Option`-smoothing environment helper.
-
-   Conventions: file ops return `Result String _` with the host error message in
-   `Err`; `getEnv` returns `Option`. There is no IO monad — an action runs when
-   it is evaluated, so you can `match readFile path` directly. -}
+   File operations return `Result String a`, with the host's error message
+   in `Err`. There is no IO monad: an action runs when it is evaluated, so
+   `match readFile path` works directly. -}
 
 import core.{Debug, Display, Option, Result, optionOr}
 import string.{stripCR}
 
--- ── Standard error (Display, mirroring the prelude's print/println) ──────
+-- # Standard error
 
-{- | Write a value to stderr (no trailing newline), rendered via `Display` —
-   the stderr analog of the prelude's `print`. -}
+{- | Writes a value to standard error with no trailing newline.
+
+   The value is rendered with `display`, like `print`. -}
 export
 eprint : Display a => a -> <IO> Unit
 eprint x = ePutStr (display x)
 
-{- | Write a value to stderr followed by a newline — the stderr analog of
-   `println`. Use for diagnostics and errors so they don't pollute stdout. -}
+{- | Writes a value to standard error, followed by a newline.
+
+   The value is rendered with `display`, like `println`. Use it for
+   diagnostics and errors so they do not mix with standard output. -}
 export
 eprintln : Display a => a -> <IO> Unit
 eprintln x = ePutStrLn (display x)
 
--- ── Debug output ─────────────────────────────────────────────────────────
+-- # Debug output
 
-{- | Print a value via `Debug` followed by a newline — the `Debug`-rendering
-   analog of `println`.  Unlike `println` (which uses `Display` and is
-   user-facing), `inspect` produces round-trippable output: strings and chars
-   are quoted, ADTs print with constructor names and field values.  Handy for
-   tracing intermediate values without a custom `Display` impl. -}
+{- | Writes a value to standard output in its `debug` rendering, followed by
+   a newline.
+
+   Unlike `println`, strings and characters are quoted and constructors are
+   shown by name, so the output reads as Medaka source. Use it to trace
+   values without writing a `Display` instance. -}
 export
 inspect : Debug a => a -> <IO> Unit
 inspect x = putStrLn (debug x)
 
--- ── Files ────────────────────────────────────────────────────────────────
+-- # Files
 
-{- Line splitting is done here over the global `string*` kernel externs (in
-   runtime.mdk) rather than `import string.{lines}`, because `string.lines`
-   deliberately *keeps* the final empty line a trailing newline produces,
-   whereas readLines drops it — so this stays a local helper.  Splits on `\n`,
-   dropping a trailing `\r` (so CRLF files work) and the final empty line a
-   trailing newline would otherwise produce.
-
-   `stripCR` itself is `string.stripCR` and is imported: it is a pure
-   `String -> String` transformation, and this module used to export a second
-   copy of it (#2306 I-3). -}
+-- Line splitting is done here over the global `string*` kernel externs (in
+-- runtime.mdk) rather than `import string.{lines}`, because `string.lines`
+-- deliberately keeps the final empty line a trailing newline produces,
+-- whereas readLines drops it.  Splits on `\n`, dropping a trailing `\r` (so
+-- CRLF files work) and the final empty line a trailing newline would
+-- otherwise produce.  `stripCR` is `string.stripCR`, imported.
 splitLines : String -> List String
 splitLines s = match stringIndexOf "\n" s
   None => if s == "" then [] else [stripCR s]
   Some i => stripCR (stringSlice 0 i s) :: splitLines (stringSlice (i + 1) (stringLength s) s)
 
-{- | Read a file and split it into lines, or `Err` with the host message on a
-   read failure. The trailing newline does not produce a final empty line. -}
+{- | The lines of a file, or `Err` with the host's message when the file
+   cannot be read.
+
+   Lines are split on `\n`, with a `\r` before it removed. A trailing
+   newline does not produce a final empty line. -}
 export
 readLines : String -> <IO> Result String (List String)
 readLines path = map splitLines (readFile path)
 
--- ── Environment ──────────────────────────────────────────────────────────
+-- # Environment
 
-{- | An environment variable's value, or `fallback` when it is unset. -}
+-- | The value of the environment variable `name`, or `fallback` when it is
+-- unset.
 export
 getEnvOr : String -> String -> <IO> String
 getEnvOr name fallback = optionOr fallback (getEnv name)

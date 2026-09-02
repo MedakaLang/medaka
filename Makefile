@@ -13,7 +13,7 @@
 MEDAKA_SCRATCH ?= /var/tmp/medaka-scratch
 export TMPDIR := $(shell mkdir -p $(MEDAKA_SCRATCH) 2>/dev/null && echo $(MEDAKA_SCRATCH) || echo /tmp)
 
-.PHONY: medaka emitter seed bootstrap seed-health check-self test gates snapshot-check preflight ci clean help docs-links docs-index gen-ci agent-doc-symbols pr-helper-test fmt-clean-census cli-conformance-census comment-census arch-census slop-census
+.PHONY: medaka emitter seed bootstrap seed-health check-self test gates snapshot-check preflight ci clean help docs-links docs-index gen-ci agent-doc-symbols pr-helper-test fmt-clean-census cli-conformance-census diag-census first-hour-census comment-census arch-census slop-census
 
 ## medaka  — build the native OCaml-free `medaka` CLI (CANONICAL).
 ##           WARM (./medaka_emitter present): 2-stage rebuild from current source,
@@ -202,6 +202,25 @@ fmt-clean-census: medaka
 cli-conformance-census: medaka
 	sh test/cli_conformance_census.sh
 
+## diag-census — re-derive the error-quality conformance table over
+##           test/error_quality_fixtures/ (human-channel prefix, caret,
+##           real location, --json code/kind/range, diagnostic count, plus
+##           documented-vs-observed diagnostic-code coverage). Derived, not
+##           hand-maintained — see test/diag_census.sh's header. Needs a
+##           built ./medaka. Always exits 0: a census, not a gate — the
+##           enforcing check is test/diff_compiler_error_quality_baseline.sh.
+diag-census: medaka
+	sh test/diag_census.sh
+
+## first-hour-census — mutation census over the docs guide corpus, ranked by
+##           first-hour reachability (extract every checkable guide example,
+##           apply a small set of beginner-mistake mutations, tabulate which
+##           diagnostic code — or, for P-PARSE, which message text — fires
+##           how often). Derived, not hand-maintained — see
+##           test/first_hour_census.sh's header. Needs a built ./medaka.
+##           Always exits 0: a census, not a gate.
+first-hour-census: medaka
+	sh test/first_hour_census.sh
 ## comment-census — report the seven comment-register classes (#2281) by
 ##           line over compiler/*.mdk + stdlib/*.mdk: history narration,
 ##           reviewer-addressed ruling vocabulary, tombstones, emoji shouts,

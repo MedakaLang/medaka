@@ -1509,7 +1509,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_check_batch"
 area = "types"
-shard = "gates_2"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1761,7 +1761,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_diagnostics"
 area = "types"
-shard = "gates_2"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1951,6 +1951,20 @@ kind = "exec"
 run = "test/diff_compiler_eval_json.sh"
 oracles = []
 sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_eval_json.sh"]
+corpus = ["test/error_quality_fixtures"]
+toolchain = []
+
+[[gate]]
+name = "diff_compiler_error_quality_baseline"
+area = "diagnostics"
+shard = "gates_2"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+run = "test/diff_compiler_error_quality_baseline.sh"
+oracles = []
+sources = ["compiler/frontend/*", "compiler/types/*", "compiler/eval/*", "compiler/backend/*", "compiler/driver/diagnostics.mdk", "test/error_quality_fixtures/capture.sh", "test/diff_compiler_error_quality_baseline.sh"]
 corpus = ["test/error_quality_fixtures"]
 toolchain = []
 

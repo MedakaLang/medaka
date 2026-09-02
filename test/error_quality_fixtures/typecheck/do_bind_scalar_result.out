@@ -1,7 +1,7 @@
 cmd: medaka check
 exit: 1
 ---
-test/error_quality_fixtures/typecheck/do_bind_scalar_result.mdk:10:9: this `do` block needs a Thenable value here (like `Option` or `Result`), but got Bool. If Bool isn't itself monadic, use 'let' instead of '<-' to bind it.
+error: test/error_quality_fixtures/typecheck/do_bind_scalar_result.mdk:10:9: this `do` block needs a Thenable value here (like `Option` or `Result`), but got Bool. If Bool isn't itself monadic, use 'let' instead of '<-' to bind it.
   |
 10 |     x <- b
   |          ^
