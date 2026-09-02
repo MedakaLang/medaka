@@ -853,13 +853,24 @@ is the *uncharged* signature this section's own examples give (`gmap : (a →^{e
 exercises and what #823 was on course to ship while the fork stood unmade (it
 is now made — the resolution above). §6.7, finding 2, gives the mechanism.
 
-The full family with independent grades remains the ideal; graded-lite is a
-narrower first surface realized *within* it once the kind exists, not a
-free-standing shortcut. Design driver and phased plan: #820 (interface heads /
-kinds first — #822 — then the graded-lite surface; stdlib/Async migration #823;
-`do`-notation routing #824; the independent-grade algebra of #821 — a
-multi-tail `EffRow` join, today unrepresentable — sequenced last, behind the
-same surface).
+**Independent grades (#821) are LANDED.** A row's tail cell may stand for a
+JOIN of several tails (`EJoin` in `compiler/types/typecheck.mdk`); written
+`<L | e | e2>` for a row with labels and `f (e | e2) b` in an index slot. The
+discipline above holds in the implementation: unification never decomposes a
+join — a join is solved only by binding its FLEXIBLE members to the other
+side's residue (the open-absorbs rule generalized to sets), a rigid member (a
+method effect variable inside the impl body being checked) is never bound,
+and a rigid member with nothing to match is a mismatch (`unifyJoinRows`). A
+join with fewer than two unbound members is a plain row again, so joins are
+only ever visible where two genuinely distinct variables meet: inside a graded
+impl body, where performing `e` (forcing the argument) and `e2` (applying the
+callback) into one ambient row now yields `e ⊔ e2` instead of forcing
+`e ~ e2` (`performEffect` joins rather than links when a tail is rigid), and
+in a written join. Graded-lite (one shared grade) remains valid and is what
+the prelude's `Deferred*` family ships; the join form is the general one.
+Design driver and phased plan: #820 (interface heads / kinds first — #822 —
+then the graded-lite surface; stdlib/Async migration #823; `do`-notation
+routing #824; the join algebra #821).
 
 **Orthogonality to dictionaries (restated).** When an interface method's signature
 carries an effect variable (`andThen : m a → (a →^e m b) →^e m b`), the effect var
@@ -1211,10 +1222,10 @@ probed, for a reason that is itself worth recording:
   form.
 - the **join** form `gmap : (a →^{e₂} b) → f e a → f (e ⊔ e₂) b` — index and
   callback row are *distinct* names, so the co-occurrence rule does not fire.
-  **DERIVED, not observed: the join spelling does not parse today.** Both
-  `f (e | e2) b` and `f <e | e2> b` are hard parse errors (*"unexpected `(`;
-  expected a dedent"* / *"unexpected `<`; …"*), which is #821's content — a
-  type-level row join is unrepresentable while `EffRow` carries one optional tail.
+  (Historical: until #821 landed the join spelling did not parse — a type-level
+  row join was unrepresentable while `EffRow` carried one optional tail. It
+  parses now, `f (e | e2) b` / `<L | e | e2>`; the point below describes the
+  pre-#821 tree.)
   The result is read off `anySlotIsRow` (`compiler/types/typecheck.mdk:8299-8302`),
   which fires only when a **bare name** at slot *i* also appears in that same
   signature's tail set. The nearest *expressible* analogue —
