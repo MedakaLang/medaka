@@ -776,7 +776,7 @@ jobs:
             # is a ruleset change, not an edit here. It is a bare executor number by
             # construction (#2178): a name that cannot describe contents cannot lie
             # about them. What failed is reported by AREA, from the registry.
-            pattern: "'pds/test/protocol_all_engines' 'pds/test/read_routes_all_engines' 'diff_compiler_engines' 'diff_compiler_rejection_parity'"
+            pattern: "'pds/test/protocol_all_engines' 'pds/test/read_routes_all_engines' 'diff_compiler_engines' 'diff_compiler_rejection_parity' 'dist_install_smoke'"
             full_cores: "1"
             wasm_arm: "1"
           - name: gates_2
