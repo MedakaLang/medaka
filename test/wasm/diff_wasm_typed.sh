@@ -74,7 +74,7 @@ for sym in WGapMode WasmEmit freshWasmEmit emitProgramRecord; do
     exit 1
   }
 done
-grep -F '  | Prog WasmProgramIndex (List String) (List String) Bool (List CImplEntry) WasmEmitInput WasmEmit' "$WASM_SRC" >/dev/null || {
+printf '%s' "$WASM_FLAT" | grep -F '| Prog WasmProgramIndex (List String) (List String) Bool (List CImplEntry) WasmEmitInput WasmEmit' >/dev/null || {
   echo "FAIL wasm typed index ratchet: Prog must retain its index fields plus one WasmEmit field"
   exit 1
 }
@@ -82,7 +82,7 @@ if grep -E '^(strSegsRef|strSegIdRef)[[:space:]]*:' "$WASM_SRC" >/dev/null; then
   echo "FAIL wasm typed string-state ratchet: retired ambient segment authority remains"
   exit 1
 fi
-if grep -F 'implSelfCtxRef' "$WASM_SRC" >/dev/null; then
+if printf '%s' "$WASM_FLAT" | grep -F 'implSelfCtxRef' >/dev/null; then
   echo "FAIL wasm typed impl-self-state ratchet: retired ambient authority remains"
   exit 1
 fi
@@ -137,18 +137,18 @@ done
   echo "FAIL H2B6-WTRMC-CLEAR-ROUTES: expected two independent-function clears/restores"
   exit 1
 }
-grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' "$WASM_SRC" >/dev/null &&
-  [ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+printf '%s' "$WASM_FLAT" | grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' >/dev/null &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
   echo "FAIL H2B6-WTRMC-CLEAR-ROUTES: strict, record, census freshness routes changed"
   exit 1
 }
 # X-W.H: wDispCtx is now a WasmEmit field too (it was the last ambient neighbour of
 # trmcCtx).  Same assertion, re-anchored: the dispatch context is still its OWN carrier
 # with its OWN save/set/restore routes, not folded into trmcCtx.
-[ "$(grep -F 'let _ = setRef (progEmit prog).wDispCtx WDispOff' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] &&
-  [ "$(grep -F 'let _ = setRef (progEmit prog).wDispCtx savedDisp' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] &&
-  grep -F 'wDispCtx : Ref WDispCtx' "$WASM_SRC" >/dev/null &&
-  grep -F 'wDispCtx = Ref WDispOff' "$WASM_SRC" >/dev/null || {
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let _ = setRef (progEmit prog).wDispCtx WDispOff' | wc -l | tr -d '[:space:]')" -eq 2 ] &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let _ = setRef (progEmit prog).wDispCtx savedDisp' | wc -l | tr -d '[:space:]')" -eq 2 ] &&
+  printf '%s' "$WASM_FLAT" | grep -F 'wDispCtx : Ref WDispCtx' >/dev/null &&
+  printf '%s' "$WASM_FLAT" | grep -F 'wDispCtx = Ref WDispOff' >/dev/null || {
   echo "FAIL H2B6-WTRMC-CLEAR-ROUTES: nearest-miss wDispCtx carrier/clear routes changed"
   exit 1
 }
@@ -180,21 +180,21 @@ for required in \
   'let names = "$mdk_pap" :: reverseL !emit.functionReferences' \
   'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' \
   'let emit = freshWasmEmit WGapRecord'; do
-  grep -F -- "$required" "$WASM_SRC" >/dev/null || {
+  printf '%s' "$WASM_FLAT" | grep -F -- "$required" >/dev/null || {
     echo "FAIL H2B7-CARRIER: missing $required"
     exit 1
   }
 done
-[ "$(grep -F 'freshLamId (progEmit prog)' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 3 ] || {
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'freshLamId (progEmit prog)' | wc -l | tr -d '[:space:]')" -eq 3 ] || {
   echo "FAIL H2B7-ROUTES: expected three lambda-id routes"
   exit 1
 }
-[ "$(grep -F 'addLiftedNamed (progEmit prog)' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] &&
-  [ "$(grep -F 'noteFuncRef (progEmit prog)' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 6 ] || {
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'addLiftedNamed (progEmit prog)' | wc -l | tr -d '[:space:]')" -eq 2 ] &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'noteFuncRef (progEmit prog)' | wc -l | tr -d '[:space:]')" -eq 6 ] || {
   echo "FAIL H2B7-ROUTES: named lifts or function-reference routes changed"
   exit 1
 }
-grep -F 'emitScalarProgram emit fnNames valNames groups' "$WASM_SRC" >/dev/null || {
+printf '%s' "$WASM_FLAT" | grep -F 'emitScalarProgram emit fnNames valNames groups' >/dev/null || {
   echo "FAIL H2B7-NEAREST-MISS: scalar emission route changed"
   exit 1
 }
@@ -216,7 +216,7 @@ for required in \
   'emitDivZeroGuard (progEmit prog) op ("$__divr" ++ intToString d)' \
   'wasmTrap (progEmit prog) "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match"' \
   'wasmTrapBytes (progEmit prog) "runtime error [E-PANIC]: "'; do
-  grep -F -- "$required" "$WASM_SRC" >/dev/null || {
+  printf '%s' "$WASM_FLAT" | grep -F -- "$required" >/dev/null || {
     echo "FAIL H2B8-CARRIER: missing $required"
     exit 1
   }
@@ -226,7 +226,7 @@ done
 # whenever useValueArith was set at all, #371's over-broad fix) to exactly ONE —
 # the isArithOp branch's OWN div/mod-specific arm — since the isCmpOp branch never
 # reaches $mdk_value_div/$mdk_value_mod's guard, and add/sub/mul never do either.
-[ "$(grep -F 'let _ = setRef (progEmit prog).trapImportNeeded True' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let _ = setRef (progEmit prog).trapImportNeeded True' | wc -l | tr -d '[:space:]')" -eq 1 ] || {
   echo "FAIL H2B8-WRITERS: expected exactly one explicit poly-runtime writer (S2/#2359: div/mod-only)"
   exit 1
 }
@@ -240,12 +240,12 @@ for required in \
   'setRef emit.useEPut True' \
   '(progEmit prog).useEPut.value' \
   'let trapImport = if (progEmit prog).useEPut.value || (progEmit prog).trapImportNeeded.value then stderrByteImportLines else []'; do
-  grep -F -- "$required" "$WASM_SRC" >/dev/null || {
+  printf '%s' "$WASM_FLAT" | grep -F -- "$required" >/dev/null || {
     echo "FAIL H2B9-EPUT-AUTHORITY: missing $required"
     exit 1
   }
 done
-[ "$(grep -F 'setRef emit.useEPut True' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useEPut True' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
   echo "FAIL H2B9-EPUT-WRITERS: expected panic and ePut scan writers"
   exit 1
 }
@@ -268,7 +268,7 @@ fi
 for required in \
   'useRecUpdate : Ref Bool' \
   'useRecUpdate = Ref'; do
-  grep -F -- "$required" "$WASM_SRC" >/dev/null || {
+  printf '%s' "$WASM_FLAT" | grep -F -- "$required" >/dev/null || {
     echo "FAIL H2B9-RECUPDATE-AUTHORITY: missing $required"
     exit 1
   }
@@ -298,20 +298,20 @@ for required in \
   'noteW8Binop emit "%" = setRef emit.useDivGuard True' \
   'let dv = if !emit.useDivGuard then ["    (local $__sdivr i64)"] else []' \
   'let dv = if !emit.useDivGuard then ["(local $__sdivr i64)"] else []'; do
-  grep -F -- "$required" "$WASM_SRC" >/dev/null || {
+  printf '%s' "$WASM_FLAT" | grep -F -- "$required" >/dev/null || {
     echo "FAIL H2B9-DIV-AUTHORITY: missing $required"
     exit 1
   }
 done
-[ "$(grep -F 'w7LocalDecls (progEmit prog)' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 9 ] || {
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'w7LocalDecls (progEmit prog)' | wc -l | tr -d '[:space:]')" -eq 9 ] || {
   echo "FAIL H2B9-DIV-AUTHORITY: expected nine ref-local declaration callers"
   exit 1
 }
-[ "$(grep -F 'setRef emit.useRecUpdate True' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useRecUpdate True' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
   echo "FAIL H2B9-RECUPDATE-AUTHORITY: expected two update scan writers"
   exit 1
 }
-grep -F 'scanExprW7 emit (CFieldAccess ex _ _) = scanExprW7 emit ex' "$WASM_SRC" >/dev/null &&
+printf '%s' "$WASM_FLAT" | grep -F 'scanExprW7 emit (CFieldAccess ex _ _) = scanExprW7 emit ex' >/dev/null &&
   ! grep -A 1 -F 'scanExprW7 emit (CRecord _ fields) =' "$WASM_SRC" | grep -F 'useRecUpdate' >/dev/null || {
   echo "FAIL H2B9-RECUPDATE-NEAREST-MISS: plain record construction/access changed authority"
   exit 1
@@ -326,7 +326,7 @@ for required in \
   'setRef emit.useHash True' \
   '|| !emit.useRng || !emit.useHash || !emit.useFloat' \
   'setRef emit.useFloatRng True in setRef emit.useRng True'; do
-  grep -F -- "$required" "$WASM_SRC" >/dev/null || {
+  printf '%s' "$WASM_FLAT" | grep -F -- "$required" >/dev/null || {
     echo "FAIL H2B9-RNG-HASH-AUTHORITY: missing $required"
     exit 1
   }
@@ -362,22 +362,22 @@ for required in \
   'useFileBytes = Ref False' \
   'setRef emit.useFileBytes True' \
   '(progEmit prog).useFileBytes.value'; do
-  grep -F -- "$required" "$WASM_SRC" >/dev/null || {
+  printf '%s' "$WASM_FLAT" | grep -F -- "$required" >/dev/null || {
     echo "FAIL A4-FILEBYTES-CARRIER: missing $required"
     exit 1
   }
 done
-grep -F 'then let _ = setRef emit.useIO True in let _ = setRef emit.useArray True in let _ = setRef emit.useStr True in setRef emit.useFileBytes True' "$WASM_SRC" >/dev/null &&
-  grep -F '++ (if (progEmit prog).useFileBytes.value then fileBytesHostImportLines else [])' "$WASM_SRC" >/dev/null &&
-  grep -F 'let fileBytesRt = if (progEmit prog).useFileBytes.value then fileBytesRuntimeLines else []' "$WASM_SRC" >/dev/null &&
+printf '%s' "$WASM_FLAT" | grep -F 'then let _ = setRef emit.useIO True in let _ = setRef emit.useArray True in let _ = setRef emit.useStr True in setRef emit.useFileBytes True' >/dev/null &&
+  printf '%s' "$WASM_FLAT" | grep -F '++ (if (progEmit prog).useFileBytes.value then fileBytesHostImportLines else [])' >/dev/null &&
+  printf '%s' "$WASM_FLAT" | grep -F 'let fileBytesRt = if (progEmit prog).useFileBytes.value then fileBytesRuntimeLines else []' >/dev/null &&
   ! grep -E 'setRef emit\.useFileBytes False|setRef useFileBytesRef False' "$WASM_SRC" >/dev/null || {
     echo "FAIL A4-FILEBYTES-ROUTES: producer, cofactors, drains, or reset changed"
     exit 1
   }
-[ "$(grep -F 'setRef emit.useFileBytes True' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$(grep -F '(progEmit prog).useFileBytes.value' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] &&
-  grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' "$WASM_SRC" >/dev/null &&
-  [ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useFileBytes True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F '(progEmit prog).useFileBytes.value' | wc -l | tr -d '[:space:]')" -eq 2 ] &&
+  printf '%s' "$WASM_FLAT" | grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' >/dev/null &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
     echo "FAIL A4-FILEBYTES-ROUTES: writer/read cardinality or fresh routes changed"
     exit 1
   }
@@ -385,7 +385,7 @@ A4_IO_IMPORT_LINE="$(grep -n -F 'if (progEmit prog).useIO.value then ioHostImpor
 A4_FILEBYTES_IMPORT_LINE="$(grep -n -F '(progEmit prog).useFileBytes.value then fileBytesHostImportLines' "$WASM_SRC" | cut -d: -f1)"
 [ -n "$A4_IO_IMPORT_LINE" ] && [ -n "$A4_FILEBYTES_IMPORT_LINE" ] &&
   [ "$A4_IO_IMPORT_LINE" -lt "$A4_FILEBYTES_IMPORT_LINE" ] &&
-  grep -F '++ strCodecRt ++ charFromCodeRt ++ charClassRt ++ ioHostRt ++ ioArgsRt ++ fileBytesRt ++ floatStrRt' "$WASM_SRC" >/dev/null || {
+  printf '%s' "$WASM_FLAT" | grep -F '++ strCodecRt ++ charFromCodeRt ++ charClassRt ++ ioHostRt ++ ioArgsRt ++ fileBytesRt ++ floatStrRt' >/dev/null || {
     echo "FAIL A4-FILEBYTES-ORDER: import/runtime order changed"
     exit 1
   }
@@ -399,7 +399,7 @@ for required in \
   'CVar "writeFileBytes" AGlobal' \
   'CVar "readFile" AGlobal' \
   'CArray [CLit (LInt 1)]'; do
-  grep -F -- "$required" "$TYPED_ENTRY" >/dev/null || {
+  printf '%s' "$TYPED_FLAT" | grep -F -- "$required" >/dev/null || {
     echo "FAIL A4-FILEBYTES-HARNESS: missing $required"
     exit 1
   }
@@ -417,21 +417,21 @@ for required in \
   'useArgs = Ref False' \
   'setRef emit.useArgs True' \
   '(progEmit prog).useArgs.value'; do
-  grep -F -- "$required" "$WASM_SRC" >/dev/null || {
+  printf '%s' "$WASM_FLAT" | grep -F -- "$required" >/dev/null || {
     echo "FAIL A3-ARGS-CARRIER: missing $required"
     exit 1
   }
 done
-grep -F 'if name == "args" then setRef emit.useArgs True else ()' "$WASM_SRC" >/dev/null &&
-  grep -F 'let ioArgsRt = if (progEmit prog).useArgs.value then ioArgsRuntimeLines else []' "$WASM_SRC" >/dev/null &&
+printf '%s' "$WASM_FLAT" | grep -F 'if name == "args" then setRef emit.useArgs True' >/dev/null &&
+  printf '%s' "$WASM_FLAT" | grep -F 'let ioArgsRt = if (progEmit prog).useArgs.value then ioArgsRuntimeLines else []' >/dev/null &&
   ! grep -E 'setRef emit\.useArgs False|setRef useArgsRef False' "$WASM_SRC" >/dev/null || {
     echo "FAIL A3-ARGS-ROUTES: writer, drain, or reset changed"
     exit 1
   }
-[ "$(grep -F 'setRef emit.useArgs True' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$(grep -F '(progEmit prog).useArgs.value' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' "$WASM_SRC" >/dev/null &&
-  [ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useArgs True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F '(progEmit prog).useArgs.value' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  printf '%s' "$WASM_FLAT" | grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' >/dev/null &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
     echo "FAIL A3-ARGS-ROUTES: writer/read cardinality or fresh routes changed"
     exit 1
   }
@@ -442,7 +442,7 @@ for required in \
   'CVar "args" AGlobal' \
   'CVar "readFile" AGlobal' \
   'CList [CLit (LString "args-nearest")]'; do
-  grep -F -- "$required" "$TYPED_ENTRY" >/dev/null || {
+  printf '%s' "$TYPED_FLAT" | grep -F -- "$required" >/dev/null || {
     echo "FAIL A3-ARGS-HARNESS: missing $required"
     exit 1
   }
@@ -460,22 +460,22 @@ for required in \
   'useFloatStr = Ref False' \
   'setRef emit.useFloatStr True' \
   '(progEmit prog).useFloatStr.value'; do
-  grep -F -- "$required" "$WASM_SRC" >/dev/null || {
+  printf '%s' "$WASM_FLAT" | grep -F -- "$required" >/dev/null || {
     echo "FAIL A2-FLOATSTR-CARRIER: missing $required"
     exit 1
   }
 done
-grep -F 'then let _ = setRef emit.useFloatStr True in let _ = setRef emit.useFloat True in let _ = setRef emit.useStr True in setRef emit.useIO True' "$WASM_SRC" >/dev/null &&
-  grep -F '++ (if (progEmit prog).useFloatStr.value then floatStrImportLines else [])' "$WASM_SRC" >/dev/null &&
-  grep -F 'let floatStrRt = if (progEmit prog).useFloatStr.value then floatStrRuntimeLines else []' "$WASM_SRC" >/dev/null &&
+printf '%s' "$WASM_FLAT" | grep -F 'then let _ = setRef emit.useFloatStr True in let _ = setRef emit.useFloat True in let _ = setRef emit.useStr True in setRef emit.useIO True' >/dev/null &&
+  printf '%s' "$WASM_FLAT" | grep -F '++ (if (progEmit prog).useFloatStr.value then floatStrImportLines else [])' >/dev/null &&
+  printf '%s' "$WASM_FLAT" | grep -F 'let floatStrRt = if (progEmit prog).useFloatStr.value then floatStrRuntimeLines else []' >/dev/null &&
   ! grep -E 'setRef emit\.useFloatStr False|setRef useFloatStrRef False' "$WASM_SRC" >/dev/null || {
     echo "FAIL A2-FLOATSTR-ROUTES: writer, cofactors, drains, or reset changed"
     exit 1
   }
-[ "$(grep -F 'setRef emit.useFloatStr True' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$(grep -F '(progEmit prog).useFloatStr.value' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] &&
-  grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' "$WASM_SRC" >/dev/null &&
-  [ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useFloatStr True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F '(progEmit prog).useFloatStr.value' | wc -l | tr -d '[:space:]')" -eq 2 ] &&
+  printf '%s' "$WASM_FLAT" | grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' >/dev/null &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
     echo "FAIL A2-FLOATSTR-ROUTES: writer/read cardinality or fresh routes changed"
     exit 1
   }
@@ -483,7 +483,7 @@ A2_FLOATSTR_IMPORT_LINE="$(grep -n -F '(progEmit prog).useFloatStr.value then fl
 A2_IO_IMPORT_LINE="$(grep -n -F 'if (progEmit prog).useIO.value then ioHostImportLines else []' "$WASM_SRC" | cut -d: -f1)"
 [ -n "$A2_FLOATSTR_IMPORT_LINE" ] && [ -n "$A2_IO_IMPORT_LINE" ] &&
   [ "$A2_FLOATSTR_IMPORT_LINE" -lt "$A2_IO_IMPORT_LINE" ] &&
-  grep -F '++ strCodecRt ++ charFromCodeRt ++ charClassRt ++ ioHostRt ++ ioArgsRt ++ fileBytesRt ++ floatStrRt' "$WASM_SRC" >/dev/null || {
+  printf '%s' "$WASM_FLAT" | grep -F '++ strCodecRt ++ charFromCodeRt ++ charClassRt ++ ioHostRt ++ ioArgsRt ++ fileBytesRt ++ floatStrRt' >/dev/null || {
     echo "FAIL A2-FLOATSTR-ORDER: import/runtime order changed"
     exit 1
   }
@@ -494,7 +494,7 @@ for required in \
   'CVar "stringToFloat" AGlobal' \
   'CVar "intToFloat" AGlobal' \
   'CVar "readFile" AGlobal'; do
-  grep -F -- "$required" "$TYPED_ENTRY" >/dev/null || {
+  printf '%s' "$TYPED_FLAT" | grep -F -- "$required" >/dev/null || {
     echo "FAIL A2-FLOATSTR-HARNESS: missing $required"
     exit 1
   }
@@ -510,23 +510,23 @@ fi
 for required in \
   'useCharClass : Ref Bool' \
   'useCharClass = Ref'; do
-  [ "$(grep -F -- "$required" "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F -- "$required" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
     echo "FAIL H2B-LR-CHARCLASS-CARRIER: missing or duplicate $required"
     exit 1
   }
 done
-grep -F 'then setRef emit.useCharClass True else ()' "$WASM_SRC" >/dev/null &&
-  grep -F '|| !emit.useCharClass || !emit.useIO' "$WASM_SRC" >/dev/null &&
-  grep -F 'let charClassRt = if (progEmit prog).useCharClass.value then charClassRuntimeLines else []' "$WASM_SRC" >/dev/null &&
+printf '%s' "$WASM_FLAT" | grep -F 'then setRef emit.useCharClass True' >/dev/null &&
+  printf '%s' "$WASM_FLAT" | grep -F '|| !emit.useCharClass || !emit.useIO' >/dev/null &&
+  printf '%s' "$WASM_FLAT" | grep -F 'let charClassRt = if (progEmit prog).useCharClass.value then charClassRuntimeLines else []' >/dev/null &&
   ! grep -E 'setRef emit\.useCharClass False|setRef useCharClassRef False' "$WASM_SRC" >/dev/null || {
     echo "FAIL H2B-LR-CHARCLASS-ROUTES: writer, operational read, or reset changed"
     exit 1
   }
-[ "$(grep -F 'setRef emit.useCharClass True' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$(grep -F '!emit.useCharClass' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$(grep -F '(progEmit prog).useCharClass.value' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' "$WASM_SRC" >/dev/null &&
-  [ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useCharClass True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F '!emit.useCharClass' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F '(progEmit prog).useCharClass.value' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  printf '%s' "$WASM_FLAT" | grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' >/dev/null &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
     echo "FAIL H2B-LR-CHARCLASS-ROUTES: writer/read cardinality or fresh route changed"
     exit 1
   }
@@ -537,20 +537,20 @@ fi
 for required in \
   'useFloatRng : Ref Bool' \
   'useFloatRng = Ref'; do
-  [ "$(grep -F -- "$required" "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F -- "$required" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
     echo "FAIL H2B-LR-FLOATRNG-CARRIER: missing or duplicate $required"
     exit 1
   }
 done
-grep -F 'then let _ = setRef emit.useFloatRng True in setRef emit.useRng True else ()' "$WASM_SRC" >/dev/null &&
+printf '%s' "$WASM_FLAT" | grep -F 'then let _ = setRef emit.useFloatRng True in setRef emit.useRng True' >/dev/null &&
   ! grep -E 'setRef emit\.useFloatRng False|setRef useFloatRngRef False' "$WASM_SRC" >/dev/null || {
     echo "FAIL H2B-LR-FLOATRNG-ROUTES: writer, operational read, or reset changed"
     exit 1
   }
-[ "$(grep -F 'setRef emit.useFloatRng True' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$(grep -F '(progEmit prog).useFloatRng.value' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' "$WASM_SRC" >/dev/null &&
-  [ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useFloatRng True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F '(progEmit prog).useFloatRng.value' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  printf '%s' "$WASM_FLAT" | grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' >/dev/null &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
     echo "FAIL H2B-LR-FLOATRNG-ROUTES: writer/read cardinality or fresh route changed"
     exit 1
   }
@@ -561,34 +561,34 @@ fi
 for required in \
   'useStrCodec : Ref Bool' \
   'useStrCodec = Ref'; do
-  [ "$(grep -F -- "$required" "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F -- "$required" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
     echo "FAIL H2B-LR-STRCODEC-CARRIER: missing or duplicate $required"
     exit 1
   }
 done
-grep -F 'let _ = if contains name ["stringToChars", "stringFromChars"]' "$WASM_SRC" >/dev/null &&
-  grep -F 'then let _ = setRef emit.useStrCodec True in let _ = setRef emit.useStr True in let _ = setRef emit.useArray True in setRef emit.useStrLeaf True else ()' "$WASM_SRC" >/dev/null &&
-  grep -F 'let _ = if contains name ["stringToUtf8Bytes", "stringFromUtf8Bytes"]' "$WASM_SRC" >/dev/null &&
-  grep -F 'then let _ = setRef emit.useStrCodec True in let _ = setRef emit.useStr True in setRef emit.useArray True else ()' "$WASM_SRC" >/dev/null &&
+printf '%s' "$WASM_FLAT" | grep -F 'let _ = if contains name ["stringToChars", "stringFromChars"]' >/dev/null &&
+  printf '%s' "$WASM_FLAT" | grep -F 'then let _ = setRef emit.useStrCodec True in let _ = setRef emit.useStr True in let _ = setRef emit.useArray True in setRef emit.useStrLeaf True' >/dev/null &&
+  printf '%s' "$WASM_FLAT" | grep -F 'let _ = if contains name ["stringToUtf8Bytes", "stringFromUtf8Bytes"]' >/dev/null &&
+  printf '%s' "$WASM_FLAT" | grep -F 'then let _ = setRef emit.useStrCodec True in let _ = setRef emit.useStr True in setRef emit.useArray True' >/dev/null &&
   ! grep -E 'setRef emit\.useStrCodec False|setRef useStrCodecRef False' "$WASM_SRC" >/dev/null || {
     echo "FAIL H2B-LR-STRCODEC-ROUTES: producers, cofactors, or reset changed"
     exit 1
   }
-[ "$(grep -F 'setRef emit.useStrCodec True' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] &&
-  [ "$(grep -F '(progEmit prog).useStrCodec.value' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' "$WASM_SRC" >/dev/null &&
-  [ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useStrCodec True' | wc -l | tr -d '[:space:]')" -eq 2 ] &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F '(progEmit prog).useStrCodec.value' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  printf '%s' "$WASM_FLAT" | grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' >/dev/null &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
     echo "FAIL H2B-LR-STRCODEC-ROUTES: writer/reader cardinality or fresh route changed"
     exit 1
   }
-if grep -F 'useValueCmpRef' "$WASM_SRC" >/dev/null; then
+if printf '%s' "$WASM_FLAT" | grep -F 'useValueCmpRef' >/dev/null; then
   echo "FAIL H2B-LR-AUTHORITY-SET: retired ValueCmp ambient authority remains"
   exit 1
 fi
 for required in \
   'useValueCmp : Ref Bool' \
   'useValueCmp = Ref False'; do
-  [ "$(grep -F -- "$required" "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F -- "$required" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
     echo "FAIL H2B-LR-VALUECMP-CARRIER: missing or duplicate $required"
     exit 1
   }
@@ -597,15 +597,15 @@ VALUECMP_WRITER_LINE="$(grep -n -F 'let _ = setRef (progEmit prog).useValueCmp T
 [ -n "$VALUECMP_WRITER_LINE" ] &&
   [ "$(sed -n "$((VALUECMP_WRITER_LINE + 1))p" "$WASM_SRC")" = '    let _ = setRef (progEmit prog).useStrSearch True' ] &&
   [ "$(sed -n "$((VALUECMP_WRITER_LINE + 2))p" "$WASM_SRC")" = '    let _ = setRef (progEmit prog).useStrLeaf True' ] &&
-  grep -F 'let valueCmpRt = if (progEmit prog).useValueCmp.value then valueEqRuntimeLines else []' "$WASM_SRC" >/dev/null &&
+  printf '%s' "$WASM_FLAT" | grep -F 'let valueCmpRt = if (progEmit prog).useValueCmp.value then valueEqRuntimeLines else []' >/dev/null &&
   ! grep -E 'setRef (emit|\(progEmit prog\))\.useValueCmp False|setRef useValueCmpRef False' "$WASM_SRC" >/dev/null || {
     echo "FAIL H2B-LR-VALUECMP-ROUTES: writer, cofactors, reader, or reset changed"
     exit 1
   }
-[ "$(grep -F 'setRef (progEmit prog).useValueCmp True' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$(grep -F '(progEmit prog).useValueCmp.value' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' "$WASM_SRC" >/dev/null &&
-  [ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef (progEmit prog).useValueCmp True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F '(progEmit prog).useValueCmp.value' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  printf '%s' "$WASM_FLAT" | grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' >/dev/null &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
     echo "FAIL H2B-LR-VALUECMP-ROUTES: writer/reader cardinality or fresh route changed"
     exit 1
   }
@@ -616,7 +616,7 @@ fi
 for required in \
   'useMath : Ref Bool' \
   'useMath = Ref'; do
-  [ "$(grep -F -- "$required" "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F -- "$required" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
     echo "FAIL H2B-LR-MATH-CARRIER: missing or duplicate $required"
     exit 1
   }
@@ -647,11 +647,11 @@ FLOATSTR_IMPORT_LINE="$(grep -n -F 'floatStrImportLines else []' "$WASM_SRC" | c
   [ -n "$MATH_IMPORT_LINE" ] &&
   [ -n "$FLOAT_IMPORT_LINE" ] &&
   [ -n "$FLOATSTR_IMPORT_LINE" ] &&
-  [ "$(grep -F 'let _ = if isFloatMathExternW name then setRef emit.useFloat True else ()' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$(grep -F 'let _ = if isMathHostExternW name then setRef emit.useMath True else ()' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$(grep -F 'mathHostImportLines else []' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$(grep -F 'floatFmtImportLines else []' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$(grep -F 'floatStrImportLines else []' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let _ = if isFloatMathExternW name then setRef emit.useFloat True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let _ = if isMathHostExternW name then setRef emit.useMath True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'mathHostImportLines else []' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'floatFmtImportLines else []' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'floatStrImportLines else []' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
   [ "$MATH_FLOAT_COFACTOR_LINE" -lt "$MATH_WRITER_LINE" ] &&
   [ "$FLOAT_IMPORT_LINE" -lt "$MATH_IMPORT_LINE" ] &&
   [ "$MATH_IMPORT_LINE" -lt "$FLOATSTR_IMPORT_LINE" ] &&
@@ -659,10 +659,10 @@ FLOATSTR_IMPORT_LINE="$(grep -n -F 'floatStrImportLines else []' "$WASM_SRC" | c
     echo "FAIL H2B-LR-MATH-ROUTES: cofactor, import order, or reset changed"
     exit 1
   }
-[ "$(grep -F 'setRef emit.useMath True' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$(grep -F '(progEmit prog).useMath.value' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' "$WASM_SRC" >/dev/null &&
-  [ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useMath True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F '(progEmit prog).useMath.value' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  printf '%s' "$WASM_FLAT" | grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' >/dev/null &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
     echo "FAIL H2B-LR-MATH-ROUTES: writer/reader cardinality or fresh route changed"
     exit 1
   }
@@ -675,24 +675,24 @@ for required in \
   'useCharFromCode = Ref False' \
   'setRef emit.useCharFromCode True' \
   '(progEmit prog).useCharFromCode.value'; do
-  grep -F -- "$required" "$WASM_SRC" >/dev/null || {
+  printf '%s' "$WASM_FLAT" | grep -F -- "$required" >/dev/null || {
     echo "FAIL H2B11-CHAR-FROM-CODE-AUTHORITY: missing $required"
     exit 1
   }
 done
-grep -F 'let _ = if name == "charFromCode" then setRef emit.useCharFromCode True else ()' "$WASM_SRC" >/dev/null &&
-  grep -F 'let charFromCodeRt = if (progEmit prog).useCharFromCode.value then ' "$WASM_SRC" >/dev/null &&
+printf '%s' "$WASM_FLAT" | grep -F 'let _ = if name == "charFromCode" then setRef emit.useCharFromCode True' >/dev/null &&
+  printf '%s' "$WASM_FLAT" | grep -F 'let charFromCodeRt = if (progEmit prog).useCharFromCode.value then ' >/dev/null &&
   ! grep -E 'setRef emit\.useCharFromCode False|setRef useCharFromCodeRef False' "$WASM_SRC" >/dev/null || {
   echo "FAIL H2B11-CHAR-FROM-CODE-ROUTES: writer, reader, or retired reset changed"
   exit 1
 }
-[ "$(grep -F 'setRef emit.useCharFromCode True' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$(grep -F '(progEmit prog).useCharFromCode.value' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useCharFromCode True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F '(progEmit prog).useCharFromCode.value' | wc -l | tr -d '[:space:]')" -eq 1 ] || {
   echo "FAIL H2B11-CHAR-FROM-CODE-ROUTES: expected one charFromCode writer and reader"
   exit 1
 }
-grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' "$WASM_SRC" >/dev/null &&
-  [ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+printf '%s' "$WASM_FLAT" | grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' >/dev/null &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
   echo "FAIL H2B11-CHAR-FROM-CODE-ROUTES: strict, record, census freshness routes changed"
   exit 1
 }
@@ -705,24 +705,24 @@ for required in \
   'useFloatHash = Ref False' \
   'setRef emit.useFloatHash True' \
   '(progEmit prog).useFloatHash.value'; do
-  grep -F -- "$required" "$WASM_SRC" >/dev/null || {
+  printf '%s' "$WASM_FLAT" | grep -F -- "$required" >/dev/null || {
     echo "FAIL H2B10-FLOAT-HASH-AUTHORITY: missing $required"
     exit 1
   }
 done
-grep -F 'let _ = if name == "hashFloat" then let _ = setRef emit.useFloatHash True in setRef emit.useHash True else ()' "$WASM_SRC" >/dev/null &&
-  grep -F 'let hashFloatRt = if (progEmit prog).useFloatHash.value then hashFloatRuntimeLines else []' "$WASM_SRC" >/dev/null &&
+printf '%s' "$WASM_FLAT" | grep -F 'let _ = if name == "hashFloat" then let _ = setRef emit.useFloatHash True in setRef emit.useHash True' >/dev/null &&
+  printf '%s' "$WASM_FLAT" | grep -F 'let hashFloatRt = if (progEmit prog).useFloatHash.value then hashFloatRuntimeLines else []' >/dev/null &&
   ! grep -E 'setRef emit\.useFloatHash False|setRef useFloatHashRef False' "$WASM_SRC" >/dev/null || {
   echo "FAIL H2B10-FLOAT-HASH-ROUTES: writer, reader, or retired reset changed"
   exit 1
 }
-[ "$(grep -F 'setRef emit.useFloatHash True' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$(grep -F '(progEmit prog).useFloatHash.value' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useFloatHash True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F '(progEmit prog).useFloatHash.value' | wc -l | tr -d '[:space:]')" -eq 1 ] || {
   echo "FAIL H2B10-FLOAT-HASH-ROUTES: expected one hashFloat writer and reader"
   exit 1
 }
-grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' "$WASM_SRC" >/dev/null &&
-  [ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+printf '%s' "$WASM_FLAT" | grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' >/dev/null &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
   echo "FAIL H2B10-FLOAT-HASH-ROUTES: strict, record, census freshness routes changed"
   exit 1
 }
@@ -733,7 +733,7 @@ for required in \
   'currentBindingOfW emit = !emit.currentBinding' \
   'setCurrentBindingOfW : WasmEmit -> String -> Unit' \
   'setCurrentBindingOfW emit name = setRef emit.currentBinding name'; do
-  [ "$(grep -F -- "$required" "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F -- "$required" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
     echo "FAIL H2B5-CARRIER: missing $required"
     exit 1
   }
@@ -742,19 +742,19 @@ if grep -E '^curBindRef[[:space:]]*[:=]' "$WASM_SRC" >/dev/null; then
   echo "FAIL H2B5-AUTHORITY-SET: retired current-binding authority remains ambient"
   exit 1
 fi
-[ "$(grep -F 'setCurrentBindingOfW (progEmit prog)' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setCurrentBindingOfW (progEmit prog)' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
   echo "FAIL H2B5-ROUTES: expected exactly two current-binding setter call sites"
   exit 1
 }
-[ "$(grep -F 'currentBindingOfW (progEmit prog)' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] &&
-  [ "$(grep -F '++ currentBindingOfW emit ++' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$(grep -F 'currentBindingOfW' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 5 ] &&
-  [ "$(grep -F 'setCurrentBindingOfW' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 4 ] || {
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'currentBindingOfW (progEmit prog)' | wc -l | tr -d '[:space:]')" -eq 2 ] &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F '++ currentBindingOfW emit ++' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'currentBindingOfW' | wc -l | tr -d '[:space:]')" -eq 5 ] &&
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setCurrentBindingOfW' | wc -l | tr -d '[:space:]')" -eq 4 ] || {
   echo "FAIL H2B5-ROUTES: expected exactly three current-binding getter call sites"
   exit 1
 }
-grep -F 'patName emit _ =' "$WASM_SRC" >/dev/null &&
-  grep -F 'currentBindingOfW emit ++ "]")' "$WASM_SRC" >/dev/null || {
+printf '%s' "$WASM_FLAT" | grep -F 'patName emit _ =' >/dev/null &&
+  printf '%s' "$WASM_FLAT" | grep -F 'currentBindingOfW emit ++ "]")' >/dev/null || {
   echo "FAIL H2B5-PATNAME-STRUCTURAL: patName fallback is not routed through WasmEmit"
   exit 1
 }
@@ -762,7 +762,7 @@ if grep -E 'let (saved|old|prior|previous)[A-Za-z0-9_]*[[:space:]]*=[[:space:]]*
   echo "FAIL H2B5-NO-RESTORE: current-binding save/restore is forbidden"
   exit 1
 fi
-[ "$(grep -F 'emit.currentBinding' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'emit.currentBinding' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
   echo "FAIL H2B5-NO-RESTORE: current-binding alias/reset/restore route added"
   exit 1
 }
@@ -788,7 +788,7 @@ for required in \
   'let emit = freshWasmEmit WGapRecord' \
   'let dataSegs = emitDataSegs (progEmit prog)' \
   'emitRefExpr prog env d (CLit l) = emitLitRef (progEmit prog) l'; do
-  grep -F -- "$required" "$WASM_SRC" >/dev/null || {
+  printf '%s' "$WASM_FLAT" | grep -F -- "$required" >/dev/null || {
     echo "FAIL wasm typed string-state ratchet: missing $required"
     exit 1
   }
@@ -813,7 +813,7 @@ for required in \
   'printEvents "IMPL_SELF_CENSUS_U_GAP" censusEvents' \
   'implSelfIntentionalGap' \
   'missingImplSelfGap'; do
-  grep -F -- "$required" "$TYPED_ENTRY" >/dev/null || {
+  printf '%s' "$TYPED_FLAT" | grep -F -- "$required" >/dev/null || {
     echo "FAIL wasm typed impl-self-state ratchet: missing $required"
     exit 1
   }
@@ -832,7 +832,7 @@ for required in \
   'CBIND_NOWRITER_STRICT' \
   'CBIND_POSTLIFT_STRICT' \
   'CBIND_MALFORMED_REF_ROUTE'; do
-  grep -F -- "$required" "$TYPED_ENTRY" >/dev/null || {
+  printf '%s' "$TYPED_FLAT" | grep -F -- "$required" >/dev/null || {
     echo "FAIL CBIND-CAPTURE-MARKERS: missing $required"
     exit 1
   }
@@ -1044,7 +1044,7 @@ for required in \
   'addDefaultDefW' \
   '(emitDefaultDefineW prog fname tag method entry)' \
   'reverseL (progEmit prog).defaultDefinitions.value'; do
-  grep -F -- "$required" "$WASM_SRC" >/dev/null || {
+  printf '%s' "$WASM_FLAT" | grep -F -- "$required" >/dev/null || {
     case "$required" in
       *emittedDefaultNames*|*defaultAlreadyEmittedW*|*markDefaultEmittedW*) id=H2B4-DEFAULT-NAMES ;;
       *) id=H2B4-DEFAULT-DEFS ;;
@@ -1057,7 +1057,7 @@ done
   echo "FAIL H2B4-DEFAULT-DEFS: strict and census default drains must both preserve reverse/flatten order"
   exit 1
 }
-[ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
   echo "FAIL wasm typed string-state ratchet: record and census must each own one fresh WasmEmit"
   exit 1
 }
@@ -1069,7 +1069,7 @@ for required_call in \
     exit 1
   }
 done
-[ "$(grep -F 'emitLitRef (progEmit prog) (LString s)' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 3 ] || {
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'emitLitRef (progEmit prog) (LString s)' | wc -l | tr -d '[:space:]')" -eq 3 ] || {
   echo "FAIL wasm typed string-state ratchet: incomplete string-literal routing"
   exit 1
 }
@@ -1077,7 +1077,7 @@ for required in \
   'stringCensusProgram : CProgram' \
   'CBind "censusString" [CClause [] (CLit (LString "census-string"))]' \
   'let censusEvents = emitProgramGaps gapStateInput stringCensusProgram'; do
-  grep -F -- "$required" "$TYPED_ENTRY" >/dev/null || {
+  printf '%s' "$TYPED_FLAT" | grep -F -- "$required" >/dev/null || {
     echo "FAIL wasm typed string-state ratchet: dedicated string census is absent"
     exit 1
   }
@@ -1100,7 +1100,7 @@ for required in \
   'CBind "defaultCensusGap" [CClause [] (CVar "missingDefaultCensus" AGlobal)]' \
   'CBind "main" [CClause [] (CLit (LInt 0))]' \
   'CImplEntry "synthDefault" 0 (CImplDefault "DefaultFace" [PVar "value" defaultStateLoc] (CLit (LInt 29)))'; do
-  grep -F -- "$required" "$TYPED_ENTRY" >/dev/null || {
+  printf '%s' "$TYPED_FLAT" | grep -F -- "$required" >/dev/null || {
     echo "FAIL H2B4-DEFAULT-DEFS: default-state harness is missing $required"
     exit 1
   }
@@ -1116,7 +1116,7 @@ for required in \
   'lambdaStateProgram : Int -> CProgram' \
   'CBind "lambdaCensus"' \
   'CBind "lambdaIntentionalGap"'; do
-  grep -F -- "$required" "$TYPED_ENTRY" >/dev/null || {
+  printf '%s' "$TYPED_FLAT" | grep -F -- "$required" >/dev/null || {
     echo "FAIL H2B7-LAMBDA-HARNESS: missing $required"
     exit 1
   }
@@ -2294,7 +2294,7 @@ for required in \
   '"TRAP_P2"' \
   'trapStateAbortProgram : CProgram' \
   'CBind "trapIntentionalGap"'; do
-  grep -F -- "$required" "$TYPED_ENTRY" >/dev/null || {
+  printf '%s' "$TYPED_FLAT" | grep -F -- "$required" >/dev/null || {
     echo "FAIL H2B8-TRAP-HARNESS: missing $required"
     exit 1
   }
