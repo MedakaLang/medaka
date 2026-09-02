@@ -1,5 +1,5 @@
 # META
-source_lines=478
+source_lines=476
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_cache.mdk — the on-disk cache behind `medaka lint --cache` (#395).
@@ -50,6 +50,7 @@ stages=DESUGAR,MARK
 
 import frontend.ast.{Loc(..)}
 import driver.diagnostics.{Severity(..)}
+import io.{runCommandOk}
 import tools.lint.{Finding(..), Directive(..), DirScope(..)}
 import support.util.{joinWith, listLen, filterList, splitOnChar, stringTrim}
 import support.char.{isAlnum}
@@ -472,17 +473,15 @@ dropLastSeg (x :: rest) = x :: dropLastSeg rest
 -- A staging dir unique to THIS process, inside the cache dir (see storeEntries).
 makeStagingDir : String -> <IO> Result String String
 makeStagingDir cacheDir =
-  match runCommand "mktemp" ["-d", "\{cacheDir}/.staging_XXXXXX"]
-    Err msg => Err (if msg == "" then "mktemp -d failed" else msg)
-    Ok (code, out, err) =>
-      if code /= 0 then
-        Err (if err == "" then "mktemp -d failed" else err)
-      else
-        let dir = stringTrim out
-        if dir == "" then Err "mktemp -d printed no path" else Ok dir
+  match runCommandOk "mktemp" ["-d", "\{cacheDir}/.staging_XXXXXX"]
+    Err e => Err e
+    Ok (out, _) =>
+      let dir = stringTrim out
+      if dir == "" then Err "mktemp -d printed no path" else Ok dir
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
+(DUse false (UseGroup ("io") ((mem "runCommandOk" false))))
 (DUse false (UseGroup ("tools" "lint") ((mem "Finding" true) (mem "Directive" true) (mem "DirScope" true))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "listLen" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "stringTrim" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false))))
@@ -593,10 +592,11 @@ makeStagingDir cacheDir =
 (DFunDef false "dropLastSeg" ((PList PWild)) (EListLit))
 (DFunDef false "dropLastSeg" ((PCons (PVar "x") (PVar "rest"))) (EBinOp "::" (EVar "x") (EApp (EVar "dropLastSeg") (EVar "rest"))))
 (DTypeSig false "makeStagingDir" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
-(DFunDef false "makeStagingDir" ((PVar "cacheDir")) (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "cacheDir"))) (ELit (LString "/.staging_XXXXXX"))))) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "Err") (EIf (EBinOp "==" (EVar "msg") (ELit (LString ""))) (ELit (LString "mktemp -d failed")) (EVar "msg")))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "err"))) () (EIf (EBinOp "/=" (EVar "code") (ELit (LInt 0))) (EApp (EVar "Err") (EIf (EBinOp "==" (EVar "err") (ELit (LString ""))) (ELit (LString "mktemp -d failed")) (EVar "err"))) (EBlock (DoLet false false (PVar "dir") (EApp (EVar "stringTrim") (EVar "out"))) (DoExpr (EIf (EBinOp "==" (EVar "dir") (ELit (LString ""))) (EApp (EVar "Err") (ELit (LString "mktemp -d printed no path"))) (EApp (EVar "Ok") (EVar "dir")))))))))
+(DFunDef false "makeStagingDir" ((PVar "cacheDir")) (EMatch (EApp (EApp (EVar "runCommandOk") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "cacheDir"))) (ELit (LString "/.staging_XXXXXX"))))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "dir") (EApp (EVar "stringTrim") (EVar "out"))) (DoExpr (EIf (EBinOp "==" (EVar "dir") (ELit (LString ""))) (EApp (EVar "Err") (ELit (LString "mktemp -d printed no path"))) (EApp (EVar "Ok") (EVar "dir"))))))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
+(DUse false (UseGroup ("io") ((mem "runCommandOk" false))))
 (DUse false (UseGroup ("tools" "lint") ((mem "Finding" true) (mem "Directive" true) (mem "DirScope" true))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "listLen" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "stringTrim" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false))))
@@ -707,4 +707,4 @@ makeStagingDir cacheDir =
 (DFunDef false "dropLastSeg" ((PList PWild)) (EListLit))
 (DFunDef false "dropLastSeg" ((PCons (PVar "x") (PVar "rest"))) (EBinOp "::" (EVar "x") (EApp (EVar "dropLastSeg") (EVar "rest"))))
 (DTypeSig false "makeStagingDir" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
-(DFunDef false "makeStagingDir" ((PVar "cacheDir")) (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "cacheDir"))) (ELit (LString "/.staging_XXXXXX"))))) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "Err") (EIf (EBinOp "==" (EVar "msg") (ELit (LString ""))) (ELit (LString "mktemp -d failed")) (EVar "msg")))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "err"))) () (EIf (EBinOp "/=" (EVar "code") (ELit (LInt 0))) (EApp (EVar "Err") (EIf (EBinOp "==" (EVar "err") (ELit (LString ""))) (ELit (LString "mktemp -d failed")) (EVar "err"))) (EBlock (DoLet false false (PVar "dir") (EApp (EVar "stringTrim") (EVar "out"))) (DoExpr (EIf (EBinOp "==" (EVar "dir") (ELit (LString ""))) (EApp (EVar "Err") (ELit (LString "mktemp -d printed no path"))) (EApp (EVar "Ok") (EVar "dir")))))))))
+(DFunDef false "makeStagingDir" ((PVar "cacheDir")) (EMatch (EApp (EApp (EVar "runCommandOk") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "cacheDir"))) (ELit (LString "/.staging_XXXXXX"))))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "dir") (EApp (EVar "stringTrim") (EVar "out"))) (DoExpr (EIf (EBinOp "==" (EVar "dir") (ELit (LString ""))) (EApp (EVar "Err") (ELit (LString "mktemp -d printed no path"))) (EApp (EVar "Ok") (EVar "dir"))))))))
