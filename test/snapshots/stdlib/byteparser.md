@@ -76,7 +76,7 @@ export impl Mappable BResult where
 --   Lets callers chain position-threading steps without repeating the
 --   `BErr m ep => BErr m ep` pass-through boilerplate.
 export
-onOk : BResult a -> (a -> Int -> BResult b) -> BResult b
+onOk : BResult a -> (a -> Int -> <e> BResult b) -> <e> BResult b
 onOk (BErr m ep) _ = BErr m ep
 onOk (BOk a pos) k = k a pos
 
@@ -445,7 +445,7 @@ runByteParser p bytes = match runBP p bytes 0
 (DTypeSig true "runBP" (TyFun (TyApp (TyApp (TyCon "ByteParserE") (TyVar "e")) (TyVar "a")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "BResult") (TyVar "a")))))))
 (DFunDef false "runBP" ((PCon "ByteParserE" (PVar "f")) (PVar "input") (PVar "pos")) (EApp (EApp (EVar "f") (EVar "input")) (EVar "pos")))
 (DImpl true "Mappable" ((TyCon "BResult")) () ((im "map" ((PVar "f") (PCon "BOk" (PVar "a") (PVar "p"))) (EApp (EApp (EVar "BOk") (EApp (EVar "f") (EVar "a"))) (EVar "p"))) (im "map" (PWild (PCon "BErr" (PVar "m") (PVar "p"))) (EApp (EApp (EVar "BErr") (EVar "m")) (EVar "p")))))
-(DTypeSig true "onOk" (TyFun (TyApp (TyCon "BResult") (TyVar "a")) (TyFun (TyFun (TyVar "a") (TyFun (TyCon "Int") (TyApp (TyCon "BResult") (TyVar "b")))) (TyApp (TyCon "BResult") (TyVar "b")))))
+(DTypeSig true "onOk" (TyFun (TyApp (TyCon "BResult") (TyVar "a")) (TyFun (TyFun (TyVar "a") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "BResult") (TyVar "b"))))) (TyEffect () (Some "e") (TyApp (TyCon "BResult") (TyVar "b"))))))
 (DFunDef false "onOk" ((PCon "BErr" (PVar "m") (PVar "ep")) PWild) (EApp (EApp (EVar "BErr") (EVar "m")) (EVar "ep")))
 (DFunDef false "onOk" ((PCon "BOk" (PVar "a") (PVar "pos")) (PVar "k")) (EApp (EApp (EVar "k") (EVar "a")) (EVar "pos")))
 (DImpl true "DeferredMappable" ((TyCon "ByteParserE")) () ((im "deferMap" ((PVar "g") (PVar "p")) (EApp (EVar "ByteParserE") (ELam ((PVar "input") (PVar "pos")) (EApp (EApp (EVar "onOk") (EApp (EApp (EApp (EVar "runBP") (EVar "p")) (EVar "input")) (EVar "pos"))) (ELam ((PVar "a") (PVar "p2")) (EApp (EApp (EVar "BOk") (EApp (EVar "g") (EVar "a"))) (EVar "p2")))))))))
@@ -526,7 +526,7 @@ runByteParser p bytes = match runBP p bytes 0
 (DTypeSig true "runBP" (TyFun (TyApp (TyApp (TyCon "ByteParserE") (TyVar "e")) (TyVar "a")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "BResult") (TyVar "a")))))))
 (DFunDef false "runBP" ((PCon "ByteParserE" (PVar "f")) (PVar "input") (PVar "pos")) (EApp (EApp (EVar "f") (EVar "input")) (EVar "pos")))
 (DImpl true "Mappable" ((TyCon "BResult")) () ((im "map" ((PVar "f") (PCon "BOk" (PVar "a") (PVar "p"))) (EApp (EApp (EVar "BOk") (EApp (EVar "f") (EVar "a"))) (EVar "p"))) (im "map" (PWild (PCon "BErr" (PVar "m") (PVar "p"))) (EApp (EApp (EVar "BErr") (EVar "m")) (EVar "p")))))
-(DTypeSig true "onOk" (TyFun (TyApp (TyCon "BResult") (TyVar "a")) (TyFun (TyFun (TyVar "a") (TyFun (TyCon "Int") (TyApp (TyCon "BResult") (TyVar "b")))) (TyApp (TyCon "BResult") (TyVar "b")))))
+(DTypeSig true "onOk" (TyFun (TyApp (TyCon "BResult") (TyVar "a")) (TyFun (TyFun (TyVar "a") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "BResult") (TyVar "b"))))) (TyEffect () (Some "e") (TyApp (TyCon "BResult") (TyVar "b"))))))
 (DFunDef false "onOk" ((PCon "BErr" (PVar "m") (PVar "ep")) PWild) (EApp (EApp (EVar "BErr") (EVar "m")) (EVar "ep")))
 (DFunDef false "onOk" ((PCon "BOk" (PVar "a") (PVar "pos")) (PVar "k")) (EApp (EApp (EVar "k") (EVar "a")) (EVar "pos")))
 (DImpl true "DeferredMappable" ((TyCon "ByteParserE")) () ((im "deferMap" ((PVar "g") (PVar "p")) (EApp (EVar "ByteParserE") (ELam ((PVar "input") (PVar "pos")) (EApp (EApp (EVar "onOk") (EApp (EApp (EApp (EVar "runBP") (EVar "p")) (EVar "input")) (EVar "pos"))) (ELam ((PVar "a") (PVar "p2")) (EApp (EApp (EVar "BOk") (EApp (EVar "g") (EVar "a"))) (EVar "p2")))))))))

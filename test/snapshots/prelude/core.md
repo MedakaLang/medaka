@@ -1,5 +1,5 @@
 # META
-source_lines=1907
+source_lines=1953
 stages=TYPES
 # SOURCE
 {- core.mdk — the foundation every other Medaka module rests on.
@@ -912,6 +912,52 @@ when b m = if b then m else pure ()
 export
 unless : Thenable m => Bool -> m Unit -> m Unit
 unless b m = if b then pure () else m
+
+{- | The DEFERRED family (EFFECTS-SEMANTICS §6, "graded interfaces").  `Mappable`
+   / `Applicative` / `Thenable` above charge the callback's effect row on the
+   method's own arrow: the effect happens NOW, at the call, which is right for a
+   strict container.  The `Deferred*` family instead records the effect in the
+   container's `Effect`-kinded INDEX: nothing happens at `deferMap`/`deferThen`;
+   the registered effects fire later, at the container's own eliminator
+   (`runAsync` for `Async`).  Construction is therefore genuinely pure — a
+   `Async <IO> Int` can be built inside a function typed `<>`.
+
+   The two families are peers, not a general and a special case (§6.6), so the
+   method names are distinct on purpose: sharing `map`/`andThen` would make
+   `do`-notation pick one interface for both.  `defer` blocks desugar to
+   `deferThen`/`deferPure` the way `do` blocks desugar to `andThen`/`pure`.
+
+   The grade is graded-lite: one shared effect variable per signature.  An
+   impl MUST store its callback under the container's own `<e>` thunk rather
+   than apply it (`deferMap g (Done a) = Suspend (u => Done (g a))`, never
+   `Done (g a)`); applying it eagerly performs `<e>` on an arrow the signature
+   declares pure and is rejected (`T-EFFECT-INDEX-EAGER`). -}
+export interface DeferredMappable (f : Effect -> Type -> Type) where
+  deferMap : (a -> <e> b) -> f e a -> f e b
+
+export interface DeferredApplicative (f : Effect -> Type -> Type) requires DeferredMappable f where
+  deferPure : a -> f e a
+  deferAp : f e (a -> b) -> f e a -> f e b
+
+export interface DeferredThenable (f : Effect -> Type -> Type) requires DeferredApplicative f where
+  deferThen : f e a -> (a -> <e> f e b) -> f e b
+
+-- | `deferThen` with arguments flipped.
+export
+deferFlatMap : DeferredThenable m => (a -> <e> m e b) -> m e a -> m e b
+deferFlatMap f ma = deferThen ma f
+
+-- | `when` for the deferred family: run the action only when the condition
+-- holds.  A distinct name because `when`'s `Thenable m => m Unit` cannot
+-- describe an `Effect`-indexed container.
+export
+deferWhen : DeferredApplicative m => Bool -> m e Unit -> m e Unit
+deferWhen b m = if b then m else deferPure ()
+
+-- | `unless` for the deferred family.  Dual of `deferWhen`.
+export
+deferUnless : DeferredApplicative m => Bool -> m e Unit -> m e Unit
+deferUnless b m = if b then deferPure () else m
 
 {- | Monadic left fold: thread an accumulator through an effectful step, in
    order, over a list.  Haskell's `foldM`.
@@ -1937,6 +1983,10 @@ map : (a -> b) -> c a -> c b
 pure : a -> b a
 ap : a (b -> c) -> a b -> a c
 andThen : a b -> (b -> a c) -> a c
+deferMap : (a -> b) -> c d a -> c d b
+deferPure : a -> b c a
+deferAp : a b (c -> d) -> a b c -> a b d
+deferThen : a b c -> (c -> a b d) -> a b d
 noMatch : a b
 orElse : a b -> a b -> a b
 bimap : (a -> b) -> (c -> d) -> e a c -> e b d
@@ -1993,6 +2043,9 @@ identity : a -> a
 flat : Thenable a => a (a b) -> a b
 when : Thenable a => Bool -> a Unit -> a Unit
 unless : Thenable a => Bool -> a Unit -> a Unit
+deferFlatMap : DeferredThenable b => (a -> b c d) -> b c a -> b c d
+deferWhen : DeferredApplicative a => Bool -> a b Unit -> a b Unit
+deferUnless : DeferredApplicative a => Bool -> a b Unit -> a b Unit
 foldThen : Thenable c => (a -> b -> c a) -> a -> List b -> c a
 repeatThen : Thenable a => Int -> a b -> a (List b)
 filterThen : Thenable b => (a -> b Bool) -> List a -> b (List a)

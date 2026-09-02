@@ -239,7 +239,7 @@ extern assertSnapshot : String -> String -> <IO> Unit
 -- Public, bounds-checked indexing goes through `arr[i]` (panics on OOB).
 extern arrayLength : Array a -> Int
 extern arrayMake : Int -> a -> Array a
-extern arrayMakeWith : Int -> (Int -> a) -> Array a
+extern arrayMakeWith : Int -> (Int -> <e> a) -> <e> Array a
 extern arrayGetUnsafe : Int -> Array a -> a
 extern arraySetUnsafe : Int -> a -> Array a -> Unit
 extern arrayCopy : Array a -> Array a
@@ -402,7 +402,7 @@ extern stringToLower : String -> String
 (DExtern false "assertSnapshot" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))
 (DExtern false "arrayLength" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyCon "Int")))
 (DExtern false "arrayMake" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyApp (TyCon "Array") (TyVar "a")))))
-(DExtern false "arrayMakeWith" (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "Int") (TyVar "a")) (TyApp (TyCon "Array") (TyVar "a")))))
+(DExtern false "arrayMakeWith" (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyVar "a"))) (TyEffect () (Some "e") (TyApp (TyCon "Array") (TyVar "a"))))))
 (DExtern false "arrayGetUnsafe" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyVar "a"))))
 (DExtern false "arraySetUnsafe" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyCon "Unit")))))
 (DExtern false "arrayCopy" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyApp (TyCon "Array") (TyVar "a"))))
@@ -541,7 +541,7 @@ extern stringToLower : String -> String
 (DExtern false "assertSnapshot" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))
 (DExtern false "arrayLength" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyCon "Int")))
 (DExtern false "arrayMake" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyApp (TyCon "Array") (TyVar "a")))))
-(DExtern false "arrayMakeWith" (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "Int") (TyVar "a")) (TyApp (TyCon "Array") (TyVar "a")))))
+(DExtern false "arrayMakeWith" (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyVar "a"))) (TyEffect () (Some "e") (TyApp (TyCon "Array") (TyVar "a"))))))
 (DExtern false "arrayGetUnsafe" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyVar "a"))))
 (DExtern false "arraySetUnsafe" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyCon "Unit")))))
 (DExtern false "arrayCopy" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyApp (TyCon "Array") (TyVar "a"))))
