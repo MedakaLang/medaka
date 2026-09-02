@@ -35,6 +35,13 @@
 #      the writer must print its `Error:` and NOT create a database at all.
 #   9. REAL-keyed and BLOB-keyed indexes: integrity_check=ok + correct differential
 #      queries (numeric order for REAL, BINARY/memcmp order for BLOB).
+#   10. THE READ SIDE (S-index-pages): a database built by the REAL sqlite3 CLI
+#       directly (not the Medaka writer) — 300 distinct rows plus one row keyed
+#       long enough to force an overflow-page spill, sized to also force an
+#       index-INTERIOR page (confirmed via `dbstat`, not assumed) — is decoded
+#       by `sqlite/index_read_probe.mdk` (`lib.btree.scanIndexPage`)
+#       and diffed byte-for-byte against sqlite3's own
+#       `SELECT col, rowid ... ORDER BY col, rowid`.
 #
 # The binary .db is regenerated each run (never committed); only this script and
 # the golden live in git.
@@ -63,6 +70,7 @@ WRITER="$BINDIR/sqlite_index_writer"
 FILLER="$BINDIR/sqlite_index_filler"
 TYPER="$BINDIR/sqlite_index_typer"
 READER="$BINDIR/sqlite_reader"
+IDXREADER="$BINDIR/sqlite_index_read_probe"
 export MEDAKA_ROOT="$ROOT"
 export MEDAKA_EMITTER="$ROOT/medaka_emitter"
 
@@ -70,6 +78,7 @@ export MEDAKA_EMITTER="$ROOT/medaka_emitter"
 "$MEDAKA" build sqlite/index_write_demo.mdk -o "$WRITER" >/dev/null
 "$MEDAKA" build sqlite/index_fill_demo.mdk -o "$FILLER" >/dev/null
 "$MEDAKA" build sqlite/index_types_demo.mdk -o "$TYPER" >/dev/null
+"$MEDAKA" build sqlite/index_read_probe.mdk -o "$IDXREADER" >/dev/null
 
 # 2. Build the Medaka reader binary (for the self round-trip gate).
 "$MEDAKA" build sqlite/main.mdk -o "$READER" >/dev/null
@@ -274,5 +283,53 @@ diff -q <(printf '2\n4\n') <(sqlite3 "$TYPEDB" "SELECT id FROM mixed INDEXED BY 
 # BLOB entries in BINARY (memcmp) order via the index.
 diff -q <(printf "3|X'00'\n1|X'01'\n2|X'0203'\n4|X'0203'\n5|X'FF'\n") <(sqlite3 "$TYPEDB" "SELECT id, quote(b) FROM mixed INDEXED BY idx_b WHERE b>=X'00';") >/dev/null || { echo "FAIL: BLOB order"; g9=1; }
 if [ "$g9" = "0" ]; then echo "OK: REAL + BLOB indexes correct (dup keys, completeness, BINARY order)"; else fail=1; fi
+
+# ---------------------------------------------------------------------------
+# Gate 10: THE READ SIDE — index-interior + overflow-spill decoding
+# (S-index-pages), against a database the REAL sqlite3 CLI wrote directly.
+# ---------------------------------------------------------------------------
+
+echo "=== Gate 10: real-sqlite3 index read (interior page + overflow spill) ==="
+READDB="$(mktemp -d)/index_read.db"
+READSQL="$(mktemp)"
+rm -f "$READDB"
+
+{
+  echo "CREATE TABLE t(id INTEGER PRIMARY KEY, col TEXT);"
+  n=1
+  while [ "$n" -le 300 ]; do
+    printf "INSERT INTO t VALUES (%d, 'key-%06d-abcdefghijklmnopqrstuvwxyz');\n" "$n" "$n"
+    n=$((n + 1))
+  done
+  # One key long enough to spill onto an overflow page (indexMaxLocalPayload
+  # is ~1002 bytes for a 4096-byte page; 1200 'z's comfortably exceeds it).
+  longkey="$(printf 'z%.0s' $(seq 1 1200))"
+  echo "INSERT INTO t VALUES (301, '$longkey');"
+  echo "CREATE INDEX idx_col ON t(col);"
+} > "$READSQL"
+sqlite3 "$READDB" < "$READSQL"
+
+g10=0
+[ "$(sqlite3 "$READDB" "PRAGMA integrity_check;")" = "ok" ] || { echo "FAIL: read-side db integrity_check"; g10=1; }
+# Confirm — not assume — that this db actually exercises an index-INTERIOR
+# page and an overflow page, per dbstat (sqlite3's pagetype introspection).
+NINTERNAL="$(sqlite3 "$READDB" "SELECT count(*) FROM dbstat WHERE name='idx_col' AND pagetype='internal';")"
+NOVERFLOW="$(sqlite3 "$READDB" "SELECT count(*) FROM dbstat WHERE name='idx_col' AND pagetype='overflow';")"
+if [ "${NINTERNAL:-0}" -ge 1 ] && [ "${NOVERFLOW:-0}" -ge 1 ]; then
+  echo "OK: idx_col has $NINTERNAL internal page(s) and $NOVERFLOW overflow page(s)"
+else
+  echo "FAIL: idx_col did not reach an interior page + overflow spill (internal=$NINTERNAL overflow=$NOVERFLOW) — raise the row count or key length"
+  g10=1
+fi
+EXPECTED="$(sqlite3 "$READDB" "SELECT col, rowid FROM t ORDER BY col, rowid;")"
+ACTUAL="$("$IDXREADER" "$READDB" idx_col)"
+if [ "$EXPECTED" = "$ACTUAL" ]; then
+  echo "OK: decoded index listing matches sqlite3's own SELECT ... ORDER BY (301 entries, incl. the spilled key)"
+else
+  echo "FAIL: decoded index listing differs from sqlite3"
+  diff <(printf '%s\n' "$EXPECTED") <(printf '%s\n' "$ACTUAL") | head -20
+  g10=1
+fi
+[ "$g10" = "0" ] || fail=1
 
 exit "$fail"

@@ -1,0 +1,245 @@
+-- | In-language test for the secondary-index equality seek
+--   (`lib.indexlookup.seekByIndex`, S-index-seek).
+--
+-- The property under test is AGREEMENT WITH A FULL SCAN, as a SET: for every
+-- key shape a v1 index can hold — INTEGER, TEXT, REAL, BLOB, a NULL key, and
+-- duplicate keys — the rowids `seekByIndex` returns must be exactly the rowids
+-- a `scanTableRows` filtered by the same equality yields.  Both the fixtures
+-- and the equality are the same ones `sqlite/index_write_demo.mdk` and
+-- `sqlite/index_types_demo.mdk` write, built purely here (no IO) via
+-- `lib.writer.buildTableWithIndexes` so a `test "…"` declaration can use them.
+--
+-- Rows are compared by rowid: `Row` derives no `Eq`, and a rowid identifies a
+-- table row uniquely, so a rowid-set match IS a row-set match.
+--
+-- Fixtures are deliberately TINY (five rows).  `medaka test` runs this through
+-- the tree-walking interpreter, where every decoded leaf costs real time.
+--
+-- Run: `medaka test sqlite/test/index_seek_test.mdk` from the sqlite root.
+
+import test.{Expectation, Pass, Fail, expectEqual}
+import lib.writer.{
+  TableSchema,
+  Column,
+  ColType,
+  TInteger,
+  TText,
+  TReal,
+  TBlob,
+  buildTableWithIndexes,
+}
+import lib.sqlite.{Db, fromBytes, scanTableRows}
+import lib.btree.{Row, rowRowid, rowCells}
+import lib.indexlookup.{seekByIndex}
+import lib.dbwriter.{compareCellsSqlite}
+import lib.recordfmt.{Cell, CNull, CInt, CText, CFloat, CBlob}
+import list.{sort, get}
+
+-- ---------------------------------------------------------------------------
+-- Fixture A — people(id, name, age): TEXT and INTEGER keys, a NULL, duplicates
+-- ---------------------------------------------------------------------------
+
+peopleSchema : TableSchema
+peopleSchema = TableSchema {
+  schemaTableName = "people",
+  columns = [
+    Column { colName = "id", colType = TInteger, isPrimaryKey = True },
+    Column { colName = "name", colType = TText, isPrimaryKey = False },
+    Column { colName = "age", colType = TInteger, isPrimaryKey = False },
+  ],
+}
+
+peopleRows : List (List Cell)
+peopleRows = [
+  [CInt 1, CText "bob", CInt 30],
+  [CInt 2, CText "alice", CInt 25],
+  [CInt 3, CText "carol", CNull],
+  [CInt 4, CText "bob", CInt 40],
+  [CInt 5, CText "dave", CInt 25],
+]
+
+peopleDb : Result String Db
+peopleDb = do
+  bytes <- buildTableWithIndexes peopleSchema peopleRows [
+    ("idx_name", "name"),
+    ("idx_age", "age"),
+  ]
+  fromBytes bytes
+
+-- ---------------------------------------------------------------------------
+-- Fixture B — mixed(id, r, b): REAL and BLOB keys, duplicates in both
+-- ---------------------------------------------------------------------------
+--
+-- Deliberately NOT a copy of `sqlite/index_types_demo.mdk`'s row set: row 6
+-- makes both 1.5 (REAL) and X'0203' (BLOB) THREE-way duplicate keys, so the
+-- seek is checked against a run longer than a pair.
+
+mixedSchema : TableSchema
+mixedSchema = TableSchema {
+  schemaTableName = "mixed",
+  columns = [
+    Column { colName = "id", colType = TInteger, isPrimaryKey = True },
+    Column { colName = "r", colType = TReal, isPrimaryKey = False },
+    Column { colName = "b", colType = TBlob, isPrimaryKey = False },
+  ],
+}
+
+mixedRows : List (List Cell)
+mixedRows = [
+  [CInt 1, CFloat 1.5, CBlob (arrayFromList [1])],
+  [CInt 2, CFloat 2.5, CBlob (arrayFromList [2, 3])],
+  [CInt 3, CFloat 1.5, CBlob (arrayFromList [0])],
+  [CInt 4, CFloat 3.5, CBlob (arrayFromList [2, 3])],
+  [CInt 5, CFloat 2.5, CBlob (arrayFromList [255])],
+  [CInt 6, CFloat 1.5, CBlob (arrayFromList [2, 3])],
+]
+
+mixedDb : Result String Db
+mixedDb = do
+  bytes <- buildTableWithIndexes mixedSchema mixedRows [
+    ("idx_r", "r"),
+    ("idx_b", "b"),
+  ]
+  fromBytes bytes
+
+-- ---------------------------------------------------------------------------
+-- The oracle: a full scan filtered by the same equality
+-- ---------------------------------------------------------------------------
+
+-- The rowids a full table scan keeps for `column = target`, using the same
+-- record-order equality the seek uses, so the two arms differ ONLY in HOW they
+-- reach the rows — never in what "equal" means.  A NULL target keeps nothing,
+-- which is what a real WHERE clause does.
+scanRowids : Db -> String -> Int -> Cell -> Result String (List Int)
+scanRowids db table colIdx target = do
+  rows <- scanTableRows db table
+  Ok (sort (map rowRowid (filter (rowMatches colIdx target) rows)))
+
+rowMatches : Int -> Cell -> Row -> Bool
+rowMatches colIdx target row = match (target, get colIdx (rowCells row))
+  (CNull, _) => False
+  (_, Some cell) => cellEq cell target
+  (_, None) => False
+
+cellEq : Cell -> Cell -> Bool
+cellEq a b = match compareCellsSqlite a b
+  Eq => True
+  _ => False
+
+seekRowids : Db -> String -> String -> Cell -> Result String (List Int)
+seekRowids db table column target =
+  map (rows => sort (map rowRowid rows)) (seekByIndex db table column target)
+
+-- One agreement case: seek and scan must return the SAME rowid set.  Both
+-- sides are sorted, so the comparison is order-independent.
+agrees : Result String Db -> String -> String -> Int -> Cell -> Expectation
+agrees (Err e) _ _ _ _ = Fail "fixture failed to build: \{e}"
+agrees (Ok db) table column colIdx target = match (
+  seekRowids db table column target,
+  scanRowids db table colIdx target,
+)
+  (Ok got, Ok want) => expectEqual want got
+  (Err e, _) => Fail "seek errored: \{e}"
+  (_, Err e) => Fail "scan errored: \{e}"
+
+-- ---------------------------------------------------------------------------
+-- Agreement across every key shape
+-- ---------------------------------------------------------------------------
+
+test "index seek: TEXT key with duplicates agrees with the filtered scan" =
+  agrees peopleDb "people" "name" 1 (CText "bob")
+
+test "index seek: unique TEXT key agrees with the filtered scan" =
+  agrees peopleDb "people" "name" 1 (CText "alice")
+
+test "index seek: INTEGER key with duplicates agrees with the filtered scan" =
+  agrees peopleDb "people" "age" 2 (CInt 25)
+
+test "index seek: unique INTEGER key agrees with the filtered scan" =
+  agrees peopleDb "people" "age" 2 (CInt 30)
+
+test "index seek: REAL key with duplicates agrees with the filtered scan" =
+  agrees mixedDb "mixed" "r" 1 (CFloat 2.5)
+
+test "index seek: three-way duplicate REAL key agrees with the filtered scan" =
+  agrees mixedDb "mixed" "r" 1 (CFloat 1.5)
+
+test "index seek: BLOB key with duplicates agrees with the filtered scan" =
+  agrees mixedDb "mixed" "b" 2 (CBlob (arrayFromList [2, 3]))
+
+test "index seek: single-byte BLOB key agrees with the filtered scan" =
+  agrees mixedDb "mixed" "b" 2 (CBlob (arrayFromList [255]))
+
+-- Empty match: a target no row holds. The index is walked, nothing matches.
+test "index seek: TEXT target present in no row returns no rows" =
+  agrees peopleDb "people" "name" 1 (CText "zoe")
+
+test "index seek: INTEGER target present in no row returns no rows" =
+  agrees peopleDb "people" "age" 2 (CInt 99)
+
+test "index seek: BLOB target present in no row returns no rows" =
+  agrees mixedDb "mixed" "b" 2 (CBlob (arrayFromList [7, 7]))
+
+-- ---------------------------------------------------------------------------
+-- The NULL contract, asserted directly and not merely via `agrees`
+-- ---------------------------------------------------------------------------
+--
+-- `idx_age` DOES store a NULL key (row 3), and `compareCellsSqlite CNull
+-- CNull` is `Eq` — so without the explicit guard in `seekByIndex` this query
+-- would return row 3.  SQL says `age = NULL` is never true, so it must not.
+
+nullSeek : Result String (List Int)
+nullSeek = do
+  db <- peopleDb
+  seekRowids db "people" "age" CNull
+
+test "index seek: a NULL target matches nothing, though the index stores NULL" =
+  expectEqual (Ok []) nullSeek
+
+-- Corroborates that the NULL key really is in the index, so the assertion
+-- above is not vacuously green on an index that never held one.
+nullKeyIsIndexed : Result String Bool
+nullKeyIsIndexed = do
+  db <- peopleDb
+  rows <- scanTableRows db "people"
+  Ok (any rowMatchesNullAge rows)
+
+rowMatchesNullAge : Row -> Bool
+rowMatchesNullAge row = match get 2 (rowCells row)
+  Some CNull => True
+  _ => False
+
+test "index seek fixture: the age column really does hold a NULL" =
+  expectEqual (Ok True) nullKeyIsIndexed
+
+-- ---------------------------------------------------------------------------
+-- No index is an error, not an empty result
+-- ---------------------------------------------------------------------------
+--
+-- The planner must be able to tell "seek unavailable, go scan" from "seeked,
+-- found nothing".  `people.id` carries no secondary index (it is the rowid
+-- alias, which v1 refuses to index at all).
+
+-- Must be specifically the "no index on this column" error
+-- (`lib.indexlookup.servingGo`'s fixed message shape), not any `Err` at all —
+-- a table-not-found, a schema-parse failure, or an arity error must not be
+-- able to pass this test by accident.
+unservedColumn : Result String (Result String (List Row))
+unservedColumn = do
+  db <- peopleDb
+  Ok (seekByIndex db "people" "id" (CInt 1))
+
+test "index seek: an unindexed column is the no-index Err, not any other Err" =
+  expectEqual (Ok (Err "no index on people.id")) unservedColumn
+
+-- ---------------------------------------------------------------------------
+-- Identifier case folds, as it does for a table name
+-- ---------------------------------------------------------------------------
+
+caseFolded : Result String (List Int)
+caseFolded = do
+  db <- peopleDb
+  seekRowids db "PEOPLE" "NaMe" (CText "bob")
+
+test "index seek: table and column names fold ASCII case" =
+  expectEqual (Ok [1, 4]) caseFolded

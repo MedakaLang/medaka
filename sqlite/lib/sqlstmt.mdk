@@ -106,17 +106,12 @@ import parsec.lib.parser.{
 }
 import lib.sqlparse.{
   sqlExpr,
-  sqlIdent,
-  keyword,
-  symbol,
-  lexeme,
-  word,
-  isReserved,
   hasAgg,
   renderSqlExpr,
   setSubqueryParser,
   setSubqueryRenderer,
 }
+import lib.sqltoken.{sqlIdent, keyword, symbol, lexeme, word, isReserved}
 import lib.schemadef.{
   CreateTable,
   createTableP,

@@ -1,0 +1,91 @@
+-- | In-language test for the index-page decoders (`lib.btree.scanIndexPage`
+--   family, S-index-pages).
+--
+-- Builds an in-memory fixture via `lib.dbwriter.buildDatabaseMultiWithIndexes`
+-- with a TEXT-keyed index (`idx_name`) and an INT-keyed index (`idx_age`, with
+-- a NULL key and duplicate keys), then decodes both index B-trees back with
+-- `lib.sqlite.scanIndexRows` and checks the result against the `(Cell, Int)`
+-- entries that went in — hand-sorted into SQLite's record order (NULL <
+-- numbers < text; ties on the key broken by rowid), the same order
+-- `lib.dbwriter.encodeIndexCells` sorts into before writing.
+--
+-- Run: `medaka test sqlite/test/index_decode_test.mdk` from the sqlite root.
+
+import test.{expectEqual}
+import lib.dbwriter.{buildDatabaseMultiWithIndexes}
+import lib.sqlite.{Db, fromBytes, scanIndexRows}
+import lib.recordfmt.{Cell, CNull, CInt, CText}
+
+peopleSql : String
+peopleSql =
+  "CREATE TABLE people(id INTEGER PRIMARY KEY, name TEXT, age INTEGER)"
+
+peopleRows : List (List Cell)
+peopleRows = [
+  [CInt 1, CText "bob", CInt 30],
+  [CInt 2, CText "alice", CInt 25],
+  [CInt 3, CText "carol", CNull],
+  [CInt 4, CText "bob", CInt 40],
+  [CInt 5, CText "dave", CInt 25],
+]
+
+-- Unsorted (key, rowid) entries as a caller would supply them.
+nameEntries : List (Cell, Int)
+nameEntries = [
+  (CText "bob", 1),
+  (CText "alice", 2),
+  (CText "carol", 3),
+  (CText "bob", 4),
+  (CText "dave", 5),
+]
+
+ageEntries : List (Cell, Int)
+ageEntries =
+  [(CInt 30, 1), (CInt 25, 2), (CNull, 3), (CInt 40, 4), (CInt 25, 5)]
+
+fixture : Result String Db
+fixture = do
+  bytes <- buildDatabaseMultiWithIndexes
+    [("people", peopleSql, Some 0, peopleRows)]
+    [
+      (
+        "idx_name",
+        "people",
+        "CREATE INDEX idx_name ON people(name)",
+        nameEntries,
+      ),
+      ("idx_age", "people", "CREATE INDEX idx_age ON people(age)", ageEntries),
+    ]
+  fromBytes bytes
+
+-- Hand-sorted BINARY text order; ties (both "bob") broken by rowid ascending.
+expectedName : List (List Cell, Int)
+expectedName = [
+  ([CText "alice"], 2),
+  ([CText "bob"], 1),
+  ([CText "bob"], 4),
+  ([CText "carol"], 3),
+  ([CText "dave"], 5),
+]
+
+-- Hand-sorted SQLite record order: NULL first, then numbers ascending; ties
+-- (both 25) broken by rowid ascending.
+expectedAge : List (List Cell, Int)
+expectedAge = [
+  ([CNull], 3),
+  ([CInt 25], 2),
+  ([CInt 25], 5),
+  ([CInt 30], 1),
+  ([CInt 40], 4),
+]
+
+decodeIndex : String -> Result String (List (List Cell, Int))
+decodeIndex name = do
+  db <- fixture
+  scanIndexRows db name
+
+test "index decode: TEXT-keyed idx_name round-trips in SQLite record order" =
+  expectEqual (decodeIndex "idx_name") (Ok expectedName)
+
+test "index decode: INT-keyed idx_age round-trips (NULL first, ties by rowid)" =
+  expectEqual (decodeIndex "idx_age") (Ok expectedAge)

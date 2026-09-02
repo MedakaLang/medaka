@@ -24,7 +24,15 @@ import lib.header.{
   headerReadVersion,
   headerReserved,
 }
-import lib.btree.{Row, rowRowid, rowCells, decodeLeafPage, scanTablePage}
+import lib.btree.{
+  Row,
+  rowRowid,
+  rowCells,
+  decodeLeafPage,
+  scanTablePage,
+  seekTablePage,
+  scanIndexPage,
+}
 import lib.recordfmt.{Cell, CNull, CInt, CText, CBlob, CFloat, cellToString}
 import list.{reverse}
 
@@ -173,6 +181,46 @@ scanTableRows db name = do
   let hdrOff = hdrOffsetOf db n
   scanTablePage bytes ps (usableOf db) n hdrOff
 
+-- | Seek a single row of a table B-tree by rowid, descending the tree along
+--   the one root-to-leaf path that can contain it instead of visiting every
+--   page (`scanTableRows`/`scanTableRowsIpk`).  `Ok None` means no row with
+--   that rowid exists — not an error.
+export
+seekTableRow : Db -> String -> Int -> Result String (Option Row)
+seekTableRow db name target = do
+  entry <- findTable db name
+  let bytes = dbBytes db
+  let ps = headerPageSize (dbHeader db)
+  let n = entry.rootPage
+  let hdrOff = hdrOffsetOf db n
+  seekTablePage bytes ps (usableOf db) n hdrOff target
+
+-- | Find an index by name in the schema (`etype == "index"`).  Case-sensitive
+--   — unlike `findTable`, an index name is never referenced from ordinary SQL,
+--   so there is no user-facing case-fold to honour here.
+export
+findIndex : Db -> String -> Result String SchemaEntry
+findIndex db name = flatMap (findIndexGo name) (readSchema db)
+
+findIndexGo : String -> List SchemaEntry -> Result String SchemaEntry
+findIndexGo name [] = Err "index not found: \{name}"
+findIndexGo name (e :: rest) =
+  if e.etype == "index" && e.ename == name then Ok e else findIndexGo name rest
+
+-- | Scan all entries of an index B-tree by name, handling both index-leaf
+--   (0x0A) and index-interior (0x02) pages.  Mirrors `scanTableRows` but for
+--   the index-page family (`lib.btree.scanIndexPage`); entries come back as
+--   `(key cells, rowid)` in key order.
+export
+scanIndexRows : Db -> String -> Result String (List (List Cell, Int))
+scanIndexRows db name = do
+  entry <- findIndex db name
+  let bytes = dbBytes db
+  let ps = headerPageSize (dbHeader db)
+  let n = entry.rootPage
+  let hdrOff = hdrOffsetOf db n
+  scanIndexPage bytes ps (usableOf db) n hdrOff
+
 -- | Like `scanTableRows` but also returns the INTEGER PRIMARY KEY column index
 --   (if any) parsed from the schema's CREATE TABLE SQL.  Both the dump path and
 --   the typed query path should use this so the IPK substitution is shared.
@@ -241,7 +289,11 @@ columnIndex : String -> String -> Option Int
 columnIndex sql col =
   ciScan (stringToChars sql) (lowerChars (stringToChars col))
 
--- Lowercase an array of ASCII chars (non-letters pass through).
+-- | Lowercase an array of ASCII chars (non-letters pass through) — the fold
+--   SQLite applies to identifiers, and the one `findTable` and `columnIndex`
+--   compare through.  Exported so a sibling module matching a schema
+--   identifier folds case the same way rather than inventing a second rule.
+export
 lowerChars : Array Char -> Array Char
 lowerChars arr = arrayFromList (lowerCharsGo arr 0 (arrayLength arr) [])
 

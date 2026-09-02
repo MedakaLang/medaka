@@ -1,0 +1,132 @@
+-- | sqlite.lib.indexlookup — equality lookup through a secondary index.
+--
+-- `seekByIndex db table column target` answers `WHERE table.column = target`
+-- by going through the secondary index that covers that column instead of
+-- decoding every row of the table: it walks the index B-tree for the entries
+-- whose key equals `target`, then fetches ONLY those rowids from the table
+-- B-tree via `lib.sqlite.seekTableRow`.  A table row that does not match is
+-- never decoded.
+--
+-- Key equality is SQLite's own record order — NULL < numbers < text < blob by
+-- storage class, numbers by numeric value, text/blob by BINARY collation — and
+-- it is the WRITER's `lib.dbwriter.compareCellsSqlite` verbatim, not a second
+-- implementation.  Reader and writer disagreeing about record order would mean
+-- an index this library wrote is an index this library cannot search.
+--
+-- Two contract points a caller (the query planner) must know:
+--
+--   * NO INDEX IS A HARD ERROR, not an empty result.  `Ok []` means "the index
+--     exists and nothing matches"; `Err` means "seek unavailable here".  A
+--     planner that must fall back to a full scan can only tell those apart if
+--     they are different answers.
+--   * A NULL target matches NOTHING.  `col = NULL` is never true in SQL, so
+--     `seekByIndex … CNull` is `Ok []` even though the index does store NULL
+--     keys and `compareCellsSqlite CNull CNull` is `Eq`.  The guard is here,
+--     explicitly, rather than left to the comparison — which resolves the
+--     other way.
+--
+-- v1 secondary indexes are single-column (`lib.schemadef.parseCreateIndex`
+-- refuses any other form), so an index entry carries exactly one key cell.
+
+import lib.btree.{Row}
+import lib.dbwriter.{compareCellsSqlite}
+import lib.recordfmt.{Cell, CNull}
+import lib.schemadef.{parseCreateIndex, ixTable, ixColumn}
+import lib.sqlite.{
+  Db,
+  SchemaEntry,
+  lowerChars,
+  readSchema,
+  scanIndexRows,
+  schemaName,
+  schemaSql,
+  schemaType,
+  seekTableRow,
+}
+import list.{reverse}
+
+-- | The rows of `table` whose `column` equals `target`, found through the
+--   secondary index on that column.  Rows come back in index-key order (which,
+--   for a single equality target, is rowid order among the duplicates).
+--
+--   `Err` if no index serves the column — the caller decides whether to fall
+--   back to a scan; `Ok []` if the index has no entry equal to `target`.
+export
+seekByIndex : Db -> String -> String -> Cell -> Result String (List Row)
+seekByIndex db table column target = do
+  entry <- findServingIndex db table column
+  if isNullTarget target then
+    Ok []
+  else do
+    indexed <- scanIndexRows db (schemaName entry)
+    rowids <- matchingRowids target indexed []
+    fetchRows db table rowids []
+
+-- `x = NULL` is never true in SQL, whatever the index holds.
+isNullTarget : Cell -> Bool
+isNullTarget CNull = True
+isNullTarget _ = False
+
+-- | The `sqlite_master` entry of the index covering `table`.`column`, if any.
+--   Both names fold ASCII case, as `lib.sqlite.findTable` folds a table name.
+export
+findServingIndex : Db -> String -> String -> Result String SchemaEntry
+findServingIndex db table column =
+  flatMap (servingGo table column) (readSchema db)
+
+servingGo : String -> String -> List SchemaEntry -> Result String SchemaEntry
+servingGo table column [] = Err "no index on \{table}.\{column}"
+servingGo table column (e :: rest) =
+  if servesColumn table column e then Ok e else servingGo table column rest
+
+-- A schema entry serves the column if it is an index whose stored CREATE INDEX
+-- text names that table and that column.  An index whose `sql` this library
+-- cannot parse (a form v1 does not model, e.g. multi-column or partial) is not
+-- a candidate — better a scan than a seek down an index we misunderstand.
+servesColumn : String -> String -> SchemaEntry -> Bool
+servesColumn table column e =
+  if schemaType e /= "index" then
+    False
+  else match parseCreateIndex (schemaSql e)
+    Err _ => False
+    Ok ix => identEq (ixTable ix) table && identEq (ixColumn ix) column
+
+identEq : String -> String -> Bool
+identEq a b = lowerChars (stringToChars a) == lowerChars (stringToChars b)
+
+-- Keep the rowid of every index entry whose key equals the target, in index
+-- order.  The WHOLE entry list is filtered, so duplicate keys all survive.
+matchingRowids : Cell ->
+  List (List Cell, Int) ->
+  List Int ->
+  Result String (List Int)
+matchingRowids _ [] acc = Ok (reverse acc)
+matchingRowids target ((keyCells, rid) :: rest) acc = do
+  key <- soleKey keyCells
+  if keyMatches key target then
+    matchingRowids target rest (rid :: acc)
+  else
+    matchingRowids target rest acc
+
+soleKey : List Cell -> Result String Cell
+soleKey [k] = Ok k
+soleKey ks =
+  Err
+    "index entry carries \{intToString (length ks)} key columns; v1 indexes are single-column"
+
+keyMatches : Cell -> Cell -> Bool
+keyMatches key target = match compareCellsSqlite key target
+  Eq => True
+  _ => False
+
+-- Fetch one table row per matched rowid.  A rowid the index names but the
+-- table has no row for is corruption, not an empty result — say so.
+fetchRows : Db -> String -> List Int -> List Row -> Result String (List Row)
+fetchRows _ _ [] acc = Ok (reverse acc)
+fetchRows db table (rid :: rest) acc = do
+  found <- seekTableRow db table rid
+  match found
+    Some row => fetchRows db table rest (row :: acc)
+    None =>
+      Err
+        "index points at rowid \{intToString rid}, which table '\{table}' has no row for"

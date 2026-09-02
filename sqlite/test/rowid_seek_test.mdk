@@ -1,0 +1,138 @@
+-- | In-language test for the single-path rowid seek (`lib.sqlite.seekTableRow`
+--   / `lib.btree.seekTablePage`, S-rowid-seek).
+--
+-- Builds a fixture with enough rows that the table b-tree is forced to a real
+-- multi-leaf, table-interior root page (0x05) — the shape `scanInteriorCells`
+-- and the new seek descent both have to navigate — then checks that the seek
+-- agrees with the full-scan `scanTableRows` for EVERY rowid actually present,
+-- plus that a rowid below the first / above the last present both come back
+-- `Ok None`, not an error or a wrong row.
+--
+-- Run: `medaka test sqlite/test/rowid_seek_test.mdk` from the sqlite root.
+
+import test.{Expectation, Pass, Fail, expectEqual, expectAll}
+import lib.dbwriter.{buildDatabaseMulti}
+import lib.header.{headerPageSize}
+import lib.sqlite.{
+  Db,
+  fromBytes,
+  dbHeader,
+  dbBytes,
+  findTable,
+  schemaRootPage,
+  scanTableRows,
+  seekTableRow,
+}
+import lib.btree.{Row, rowRowid, rowCells, pageType, pageTableInterior}
+import lib.recordfmt.{Cell, CInt, CText}
+
+tableName : String
+tableName = "t"
+
+createSql : String
+createSql = "CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT)"
+
+-- `medaka test` runs this fixture through the tree-walking interpreter, which
+-- decodes every row on a target leaf on EACH seek (not just the matched row) —
+-- so unlike `multipage_write_oracle.sh`'s N=700 (a NATIVE `medaka build`
+-- run), a small row count forces the same table-interior shape (0x05) far
+-- more cheaply here: padding each row to ~310 bytes means ~13 rows fill a
+-- leaf, so n=30 already needs 3 leaves + an interior root, at a fraction of
+-- the interpreted decode cost 700 unpadded rows would cost.
+n : Int
+n = 30
+
+paddingLen : Int
+paddingLen = 300
+
+padGo : Int -> String -> String
+padGo k acc
+  | k <= 0 = acc
+  | otherwise = padGo (k - 1) (acc ++ "x")
+
+-- Fixed-length filler text so every row is large enough to force the split;
+-- identical across rows since only the rowid needs to be distinct.
+padding : String
+padding = padGo paddingLen ""
+
+mkRow : Int -> List Cell
+mkRow i = [CInt i, CText padding]
+
+rows : List (List Cell)
+rows = map mkRow [1..=n]
+
+fixture : Result String Db
+fixture = do
+  bytes <- buildDatabaseMulti [(tableName, createSql, Some 0, rows)]
+  fromBytes bytes
+
+-- The B-tree header offset for a page: page 1 is displaced by the 100-byte
+-- file header, every other page's header starts at its page base
+-- (`lib.btree.dbHeaderSize` / `lib.sqlite.hdrOffsetOf`'s rule, restated here
+-- since `hdrOffsetOf` itself is not exported).
+hdrOffsetFor : Db -> Int -> Int
+hdrOffsetFor db pageNum =
+  let ps = headerPageSize (dbHeader db)
+  let base = (pageNum - 1) * ps
+  if pageNum == 1 then base + 100 else base
+
+rootPageType : Result String Int
+rootPageType = do
+  db <- fixture
+  entry <- findTable db tableName
+  pageType (dbBytes db) (hdrOffsetFor db (schemaRootPage entry))
+
+test "rowid seek fixture: root page is a real table-interior page (0x05)" =
+  expectEqual (Ok pageTableInterior) rootPageType
+
+-- Compare a scanned row against what `seekTableRow` returns for the same
+-- rowid, as `(rowid, cells)` pairs — `Row` itself derives no `Eq`/`Debug`.
+checkRowid : Db -> Row -> Expectation
+checkRowid db row = match seekTableRow db tableName (rowRowid row)
+  Ok (Some got) =>
+    expectEqual (rowRowid row, rowCells row) (rowRowid got, rowCells got)
+  Ok None =>
+    Fail "rowid \{intToString (rowRowid row)}: seek found no row (expected one)"
+  Err e => Fail "rowid \{intToString (rowRowid row)}: seek errored: \{e}"
+
+allRowsMatch : Result String Expectation
+allRowsMatch = do
+  db <- fixture
+  scanned <- scanTableRows db tableName
+  Ok (expectAll (map (checkRowid db) scanned))
+
+test "rowid seek: agrees with full scan for every rowid present in the fixture" =
+  expectEqual (Ok Pass) allRowsMatch
+
+-- `allRowsMatch` passes vacuously if `scanTableRows` regresses to `Ok []` —
+-- `expectAll [] = Pass` and nothing above asserts a nonzero row count.
+scannedRowCount : Result String Int
+scannedRowCount = do
+  db <- fixture
+  scanned <- scanTableRows db tableName
+  Ok (length scanned)
+
+test "rowid seek fixture: t holds thirty rows" =
+  expectEqual (Ok n) scannedRowCount
+
+expectNoneRow : Result String (Option Row) -> Expectation
+expectNoneRow (Ok None) = Pass
+expectNoneRow (Ok (Some r)) =
+  Fail "expected no row but got rowid \{intToString (rowRowid r)}"
+expectNoneRow (Err e) = Fail "unexpected error: \{e}"
+
+belowRange : Result String (Option Row)
+belowRange = do
+  db <- fixture
+  seekTableRow db tableName 0
+
+aboveRange : Result String (Option Row)
+aboveRange = do
+  db <- fixture
+  seekTableRow db tableName (n + 1)
+
+test "rowid seek: below the first present rowid returns Ok None" =
+  expectNoneRow belowRange
+
+test "rowid seek: above the last present rowid returns Ok None" =
+  expectNoneRow aboveRange
