@@ -1,0 +1,19 @@
+cell = Ref (helper 0)
+
+helper : Int -> Option a
+helper n =
+  let f = (u => cell)
+  None
+
+writeString : Unit -> Unit
+writeString u = cell := Some "hello"
+
+readInt : Unit -> Int
+readInt u =
+  match !cell
+    Some n => n
+    None => -1
+
+main =
+  let _ = writeString ()
+  println (readInt ())

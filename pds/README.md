@@ -1,13 +1,26 @@
 # pds/
 
 The self-hosted atproto PDS (Personal Data Server) written in Medaka. Phases
-0–2 and the pure half of Phase 4 of the umbrella design (#1697) are complete in
+0–3 and the pure half of Phase 4 of the umbrella design (#1697) are complete in
 this tree: the pure core
 covers strict secp256k1 signing and `did:key`, canonical DAG-CBOR/CIDs, the
 atproto MST, verified CAR/block storage, signed repository transitions, strict
 HTTP/1.1 framing, structural XRPC routing, explicit immutable handler state, and
 the nine atproto record/sync/identity endpoints plus the two well-known paths.
-Phase 3's socket shell is next but remains dependency-gated; see
+Phase 3's socket shell (#2481, #2525) serves that core over a loopback listener:
+`pds/serve.mdk` admits a configuration, rehydrates or initializes the account
+repository, and hands `pds/shell/server.mdk`'s accept loop a listener and the
+shared `Ref Store`. `pds/test/serve_e2e.sh` grades it end to end (queries,
+pipelining, keep-alive, a chunked-transfer write, every one of the nine XRPC
+NSIDs and both well-knowns driven over the socket, a malformed request, an
+over-cap body, the idle-connection timeout, and restart-and-resume across a
+process boundary), and `pds/test/lib_boundary.sh` proves the `pds/lib` ⇄
+`pds/shell` boundary holds (no `pds/lib` import of `pds/shell`, every
+`pds/lib` export explicitly signed, and no such signature effect-bearing —
+the signature check is what stops an unannotated export from carrying an
+inferred effect row past the effect check). The bind address is loopback-only and
+nothing here authenticates a request — deliberately: authentication is the
+gate on ever exposing this server past loopback, not a gap in this phase. See
 `docs/design/ATPROTO-PDS-DESIGN.md` for the full design.
 
 ## Layout
@@ -32,15 +45,35 @@ Phase 3's socket shell is next but remains dependency-gated; see
   queries (`getRecord`/`listRecords`/`describeRepo`/`sync.getRepo`/
   `sync.getLatestCommit`/`identity.resolveHandle`), and the two non-XRPC
   well-known paths.
+- `pds/shell/` — native-only effectful adapters. `pds/shell/blockfile.mdk`
+  stores blocks as flat sharded CID-to-bytes files (design row P7),
+  `pds/shell/persist.mdk` persists and reloads the account repository's head
+  commit, and `pds/shell/server.mdk` is the loopback accept loop and the
+  per-connection HTTP/1.1 lifecycle. The dependency runs one way only: a shell
+  module may import `pds/lib/`, and no `pds/lib/` module may ever import
+  `pds/shell/` — the pure core performs no I/O (P14), so reconstruction logic
+  lives in `pds/lib/repo.mdk`'s `repoFromBlocks` and the shell stays a thin
+  effectful wrapper. No signing key can reach a file through this directory:
+  nothing here takes a `SecretKey`, `blockfile.mdk` and `persist.mdk` take
+  neither a `SecretKey` nor a `Repo`, and `server.mdk` reaches a `Repo` only to
+  export the block graph the account's own head already names.
+- `pds/serve.mdk` — the entry point. It admits every configuration value before
+  binding anything, rehydrates the repository from disk under the configured
+  signing key, and hands `pds/shell/server.mdk` a listener and the one
+  `Ref Store` all connection tasks share. Its `main` is an `Async` value, so
+  `medaka build pds/serve.mdk` produces a program the async scheduler drives.
+  The bind address is not configurable: `bindLoopback` takes a port and the
+  address is a literal.
 - `pds/test/` — in-language `medaka test` suites (`*_test.mdk`) plus gate
   scripts that run them (`*.sh`). Every gate must be placed explicitly in
   exactly one `ci.yml` shard by measured cost; directory location alone does
   not enroll it.
 
-`pds/medaka.toml` intentionally has no `entry` key and there is no
-`pds/main.mdk`: the manifest reader (`compiler/driver/loader.mdk`) never
-reads `entry` — its only job is to mark the project root so `pds/test/*.mdk`
-can `import lib.<mod>`.
+`pds/medaka.toml` intentionally has no `entry` key: the manifest reader
+(`compiler/driver/loader.mdk`) never reads `entry` — its only job is to mark
+the project root so `pds/test/*.mdk` and `pds/serve.mdk` can
+`import lib.<mod>`. `pds/serve.mdk` is therefore named by path, not by the
+manifest, and is not called `pds/main.mdk` for that reason.
 
 ## Running the gate locally
 

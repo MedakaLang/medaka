@@ -35,8 +35,8 @@ rationale, and post-mortems, follow the links — and don't assume detail that i
 **Order** (`compiler/driver/medaka_cli.mdk` — *not* file listing order):
 
 ```
-lexer.mdk → parser.mdk → ast.mdk → desugar.mdk → resolve.mdk → marker.mdk
-  → typecheck.mdk (runs exhaust.mdk internally) → eval.mdk
+lexer.mdk → parser.mdk → ast.mdk → desugar.mdk → resolve.mdk
+  → typecheck.mdk (runs exhaust.mdk internally; own dict pre-pass) → eval.mdk
   [all compiler/frontend/ except typecheck.mdk (types/), eval.mdk (eval/)]
 ```
 
@@ -55,7 +55,7 @@ patterns.
 | AST | `compiler/frontend/ast.mdk` | Node types + source locations |
 | Desugar | `compiler/frontend/desugar.mdk` | `deriving`, record puns, `EGuards`/`ESection`/`EStringInterp`/`EDo`, default-method specialization |
 | Resolve | `compiler/frontend/resolve.mdk` | Name binding, single/multi-module |
-| Mark | `compiler/frontend/marker.mdk` | Post desugar+resolve, pre typecheck. `EVar`→`EMethodRef` (impl key per call site) |
+| Mark | `compiler/frontend/marker.mdk` | ⚠️ **[P-NO-MARK-PASS]** NOT on `check`/`run`/`build`. `markWithPrelude` — the `EVar`→`EMethodRef` pass — is reached only from `tools/snapshot.mdk` and two `entries/` probes, so **no production verb ever sees an `EMethodRef`**. `run`/`build` mark dicts inside typecheck's own `prePassDict`/`prePassDictArg`, which mint `EMethodAt`/`EDictAt`; `check` runs no mark pass at all. The FILE is still live, for `preludeStandaloneShadows` (`driver/diagnostics.mdk`), `declRefs` (`ir/dce.mdk`) and `localBoundNames` (typecheck) |
 | Typecheck | `compiler/types/typecheck.mdk` | Hindley-Milner + interfaces + effects; invokes Exhaust per `EMatch` |
 | Exhaust | `compiler/frontend/exhaust.mdk` | Maranget pattern-matrix; called *from* typecheck |
 | Eval | `compiler/eval/eval.mdk` | Tree-walking interpreter; dict-passing dispatch |

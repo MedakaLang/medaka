@@ -1,0 +1,516 @@
+{- | Gate A (`pds/test/serve_e2e.sh`) test client: a plain synchronous socket
+   driver over `stdlib/net`, one subcommand per acceptance case. This is a
+   test client, not another server, so it deliberately does NOT use
+   `net_async` — `pds/shell/server.mdk` is the only thing in this tree that
+   needs the async scheduler.
+
+   Every route prints its case name and `PASS`/`FAIL` on the last line
+   (`pds/test/store_persistence_main.mdk`'s convention); the shell gate reads
+   that line and nothing else. -}
+
+import array.{concat, sliceClamped}
+import json.{Json(..), jObject, stringify}
+import net.{Connection, close, connect, recv, sendAll, setTimeout}
+import string.{
+  contains,
+  drop,
+  fromChars,
+  fromUtf8,
+  lines,
+  split,
+  startsWith,
+  toChars,
+  toInt,
+  toUtf8,
+  trim,
+}
+import time.{Duration, elapsedSince, monotonic, seconds}
+
+-- # Small ad-hoc helpers this test driver owns
+
+-- `pds/lib/http.mdk` never needs a response PARSER — the server only ever
+-- serializes responses, never reads one — so a minimal one lives here,
+-- test-only, reading exactly what `serializeResponse` always produces: a
+-- status line, headers, and a `content-length:` body (never chunked; see
+-- `serializeResponse`).
+
+hexDigits : Array Char
+hexDigits = toChars "0123456789abcdef"
+
+hexDigitChar : Int -> Char
+hexDigitChar d = hexDigits[d]
+
+toHexGo : Int -> List Char -> List Char
+toHexGo n acc =
+  if n == 0 then acc else toHexGo (n / 16) (hexDigitChar (n % 16) :: acc)
+
+-- | Lowercase hex text of a non-negative `Int`, no leading zeros (a valid
+-- HTTP chunk-size line).
+toHexString : Int -> String
+toHexString n = if n == 0 then "0" else fromChars (toHexGo n [])
+
+appendBytes : Array Int -> Array Int -> Array Int
+appendBytes left right = concat [|left, right|]
+
+-- | Byte offset of the first `\r\n\r\n` at or after `i`, if any.
+findHeaderEnd : Array Int -> Int -> Option Int
+findHeaderEnd buf i =
+  if i + 4 > arrayLength buf then
+    None
+  else if buf[i] == 13
+    && buf[i + 1] == 10
+    && buf[i + 2] == 13
+    && buf[i + 3] == 10 then
+    Some i
+  else
+    findHeaderEnd buf (i + 1)
+
+statusOf : String -> Result String Int
+statusOf statusLine = match split " " statusLine
+  _ :: code :: _ => match toInt code
+    Some n => Ok n
+    None => Err "serve_client: unparsable status code in '\{statusLine}'"
+  _ => Err "serve_client: unparsable status line '\{statusLine}'"
+
+contentLengthOf : List String -> Result String Int
+contentLengthOf [] = Err "serve_client: response has no content-length header"
+contentLengthOf (line :: rest) =
+  -- Response headers are always lowercase (`serializeResponse` emits them
+  -- that way), so a plain case-sensitive `startsWith` is enough here.
+  if startsWith "content-length:" line then match toInt (trim (drop 15 line))
+    Some n => Ok n
+    None => Err "serve_client: unparsable content-length in '\{line}'"
+  else
+    contentLengthOf rest
+
+parseHeaderBlock : Array Int -> Result String (Int, Int)
+parseHeaderBlock headerBytes = match lines (fromUtf8 headerBytes)
+  [] => Err "serve_client: empty response header block"
+  statusLine :: rest => do
+    status <- statusOf statusLine
+    len <- contentLengthOf rest
+    Ok (status, len)
+
+recvAtLeast : Connection ->
+  Array Int ->
+  Int ->
+  <Net "_"> Result String (Array Int)
+recvAtLeast conn buf need =
+  if arrayLength buf >= need then
+    Ok buf
+  else match recv conn 65536
+    Err message => Err message
+    Ok chunk =>
+      if arrayLength chunk == 0 then
+        Err "serve_client: connection closed mid-response"
+      else
+        recvAtLeast conn (appendBytes buf chunk) need
+
+{- | Reads one complete HTTP response starting at the front of `pending`
+   (bytes already buffered from a previous read, `[||]` for a fresh
+   connection), receiving more as needed. Returns the status code, the body
+   bytes, and whatever bytes were buffered past the end of this response —
+   the next pipelined response's bytes, on a connection that has one. -}
+readResponse : Connection ->
+  Array Int ->
+  <Net "_"> Result String (Int, Array Int, Array Int)
+readResponse conn pending = match findHeaderEnd pending 0
+  Some headerEnd => do
+    let bodyStart = headerEnd + 4
+    (status, len) <- parseHeaderBlock (sliceClamped 0 headerEnd pending)
+    let need = bodyStart + len
+    full <- recvAtLeast conn pending need
+    Ok (
+      status,
+      sliceClamped bodyStart need full,
+      sliceClamped need (arrayLength full) full,
+    )
+  None => match recv conn 4096
+    Err message => Err message
+    Ok chunk =>
+      if arrayLength chunk == 0 then
+        Err "serve_client: connection closed before response headers"
+      else
+        readResponse conn (appendBytes pending chunk)
+
+mustConnect : Int -> <Net "_"> Connection
+mustConnect port = match connect "127.0.0.1" port
+  Ok conn => conn
+  Err message => panic "serve_client: connect failed: \{message}"
+
+mustSend : Connection -> Array Int -> <Net "_"> Unit
+mustSend conn bytes = match sendAll conn bytes
+  Ok () => ()
+  Err message => panic "serve_client: send failed: \{message}"
+
+-- # Request builders
+
+hostHeader : String
+hostHeader = "Host: 127.0.0.1\r\n"
+
+getRequest : String -> Array Int
+getRequest path = toUtf8 "GET \{path} HTTP/1.1\r\n\{hostHeader}\r\n"
+
+oneChunk : Array Int -> Array Int
+oneChunk chunkBytes = concat [|
+  toUtf8 "\{toHexString (arrayLength chunkBytes)}\r\n",
+  chunkBytes,
+  toUtf8 "\r\n",
+|]
+
+finalChunk : Array Int
+finalChunk = toUtf8 "0\r\n\r\n"
+
+-- | A `content-length` JSON POST, the ordinary shape the three write
+-- procedures take when nothing is testing chunked transfer encoding.
+postRequest : String -> String -> Array Int
+postRequest path bodyJson =
+  let body = toUtf8 bodyJson
+  concat [|
+    toUtf8
+      "POST \{path} HTTP/1.1\r\n\{hostHeader}Content-Type: application/json\r\nContent-Length: \{intToString (arrayLength body)}\r\n\r\n",
+    body,
+  |]
+
+chunkedPostRequest : String -> String -> Array Int
+chunkedPostRequest path bodyJson =
+  let body = toUtf8 bodyJson
+  let n = arrayLength body
+  let mid = n / 2
+  let head =
+    toUtf8
+      "POST \{path} HTTP/1.1\r\n\{hostHeader}Content-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n"
+  concat [|
+    head,
+    oneChunk (sliceClamped 0 mid body),
+    oneChunk (sliceClamped mid n body),
+    finalChunk,
+  |]
+
+-- # Fixture JSON
+
+createRecordJson : String -> String -> String -> String -> String
+createRecordJson did collection rkey text =
+  stringify
+    (jObject [
+      ("repo", JString did),
+      ("collection", JString collection),
+      ("rkey", JString rkey),
+      (
+        "record",
+        JObject [|
+          ("$type", JString "app.bsky.feed.post"),
+          ("text", JString text),
+          ("createdAt", JString "2026-09-02T00:00:00.000Z"),
+        |],
+      ),
+    ])
+
+deleteRecordJson : String -> String -> String -> String
+deleteRecordJson did collection rkey =
+  stringify
+    (jObject [
+      ("repo", JString did),
+      ("collection", JString collection),
+      ("rkey", JString rkey),
+    ])
+
+xrpcPath : String -> String
+xrpcPath nsid = "/xrpc/\{nsid}"
+
+createRecordPath : String
+createRecordPath = xrpcPath "com.atproto.repo.createRecord"
+
+getRecordPath : String -> String -> String -> String
+getRecordPath did collection rkey =
+  "\{xrpcPath "com.atproto.repo.getRecord"}?repo=\{did}&collection=\{collection}&rkey=\{rkey}"
+
+atprotoDidPath : String
+atprotoDidPath = "/.well-known/atproto-did"
+
+didJsonPath : String
+didJsonPath = "/.well-known/did.json"
+
+-- # Cases
+
+report : String -> Bool -> String -> <IO> Unit
+report label ok detail =
+  if ok then
+    println "\{label}: PASS \{detail}"
+  else
+    let () = println "\{label}: FAIL \{detail}"
+    exit 1
+
+expectStatus : String ->
+  Int ->
+  Result String (Int, Array Int, Array Int) ->
+  <IO> Unit
+expectStatus label _ (Err message) = report label False message
+expectStatus label want (Ok (got, _, _)) =
+  report
+    label
+    (got == want)
+    "status \{intToString got} (wanted \{intToString want})"
+
+ignoreResult : Result String a -> Unit
+ignoreResult (Ok _) = ()
+ignoreResult (Err _) = ()
+
+runQuery : Int -> String -> <IO, Net "_"> Unit
+runQuery port did =
+  let conn = mustConnect port
+  let () = mustSend conn (getRequest atprotoDidPath)
+  let result = readResponse conn [||]
+  let () = expectStatus "QUERY" 200 result
+  let () = match result
+    Ok (_, body, _) =>
+      if trim (fromUtf8 body) == did then
+        ()
+      else
+        report
+          "QUERY"
+          False
+          "body '\{fromUtf8 body}' did not echo the hosted DID"
+    Err _ => ()
+  ignoreResult (close conn)
+
+runPipeline : Int -> <IO, Net "_"> Unit
+runPipeline port =
+  let conn = mustConnect port
+  let both = appendBytes (getRequest atprotoDidPath) (getRequest atprotoDidPath)
+  let () = mustSend conn both
+  let first = readResponse conn [||]
+  let () = match first
+    Err message => report "PIPELINE" False "first response: \{message}"
+    Ok (s1, _, rest) =>
+      let second = readResponse conn rest
+      match second
+        Err message => report "PIPELINE" False "second response: \{message}"
+        Ok (s2, _, _) =>
+          report
+            "PIPELINE"
+            (s1 == 200 && s2 == 200)
+            "statuses \{intToString s1}, \{intToString s2}"
+  ignoreResult (close conn)
+
+runKeepalive : Int -> <IO, Net "_"> Unit
+runKeepalive port =
+  let conn = mustConnect port
+  let () = mustSend conn (getRequest atprotoDidPath)
+  let first = readResponse conn [||]
+  let () = match first
+    Err message => report "KEEPALIVE" False "first response: \{message}"
+    Ok (s1, _, rest) =>
+      let () = mustSend conn (getRequest atprotoDidPath)
+      let second = readResponse conn rest
+      match second
+        Err message => report "KEEPALIVE" False "second response: \{message}"
+        Ok (s2, _, _) =>
+          report
+            "KEEPALIVE"
+            (s1 == 200 && s2 == 200)
+            "two requests over one connection: \{intToString s1}, \{intToString s2}"
+  ignoreResult (close conn)
+
+runChunked : Int -> String -> String -> String -> String -> <IO, Net "_"> Unit
+runChunked port did collection rkey text =
+  let conn = mustConnect port
+  let () =
+    mustSend
+      conn
+      (chunkedPostRequest
+        createRecordPath
+        (createRecordJson did collection rkey text))
+  let result = readResponse conn [||]
+  let () = expectStatus "CHUNKED" 200 result
+  let () = match result
+    Ok (_, body, _) =>
+      let bodyText = fromUtf8 body
+      if contains "\"uri\"" bodyText then
+        ()
+      else
+        report "CHUNKED" False "response body missing 'uri': \{bodyText}"
+    Err _ => ()
+  ignoreResult (close conn)
+
+runMalformed : Int -> <IO, Net "_"> Unit
+runMalformed port =
+  let conn = mustConnect port
+  let () = mustSend conn (toUtf8 "THIS IS NOT AN HTTP REQUEST\r\n\r\n")
+  let result = readResponse conn [||]
+  let () = expectStatus "MALFORMED" 400 result
+  ignoreResult (close conn)
+
+overcapFillerBytes : Int
+overcapFillerBytes = 6400000
+
+runOvercap : Int -> <IO, Net "_"> Unit
+runOvercap port =
+  let conn = mustConnect port
+  let filler = arrayMakeWith overcapFillerBytes (_ => 65)
+  let request =
+    appendBytes
+      (toUtf8
+        "POST /xrpc/com.atproto.repo.createRecord HTTP/1.1\r\n\{hostHeader}Content-Type: application/json\r\nContent-Length: \{intToString overcapFillerBytes}\r\n\r\n")
+      filler
+  -- The server may close its read side as soon as the buffered request passes
+  -- the cap, which can break this multi-megabyte write before the 413 it has
+  -- already decided on can be read back. That closure IS the rejection, so it
+  -- counts as one. What does not count: any status other than 413, or a server
+  -- that accepted the whole over-cap body and then answered nothing.
+  let sent = sendAll conn request
+  let result = readResponse conn [||]
+  let () = match result
+    Ok (got, _, _) =>
+      report "OVERCAP" (got == 413) "status \{intToString got} (wanted 413)"
+    Err message => match sent
+      Err sendMessage =>
+        report
+          "OVERCAP"
+          True
+          "connection closed mid-send, rejecting the over-cap body (send: \{sendMessage}; read: \{message})"
+      Ok () =>
+        report
+          "OVERCAP"
+          False
+          "whole over-cap body was accepted and no response followed: \{message}"
+  ignoreResult (close conn)
+
+idleWaitCeiling : Duration
+idleWaitCeiling = seconds 40
+
+runIdle : Int -> <IO, Net "_", Clock> Unit
+runIdle port =
+  let conn = mustConnect port
+  let _ = setTimeout conn idleWaitCeiling
+  let t0 = monotonic ()
+  let result = recv conn 1
+  let elapsed = elapsedSince t0
+  let () = match result
+    Ok bytes =>
+      report
+        "IDLE"
+        (arrayLength bytes == 0)
+        "server closed after \{floatToString elapsed}s (\{intToString (arrayLength bytes)} bytes)"
+    Err message =>
+      report
+        "IDLE"
+        False
+        "recv error after \{floatToString elapsed}s: \{message}"
+  ignoreResult (close conn)
+
+-- | Drive one route on a connection of its own and require `want`.
+checkRoute : String -> Int -> Int -> Array Int -> <IO, Net "_"> Unit
+checkRoute label port want request =
+  let conn = mustConnect port
+  let () = mustSend conn request
+  let () = expectStatus label want (readResponse conn [||])
+  ignoreResult (close conn)
+
+{- | The endpoints the other cases do not already drive, so that all nine XRPC
+   NSIDs and both well-knowns are proven by this gate rather than by reading
+   the routing table. `createRecord` is CHUNKED's, `getRecord` is RESUME's, and
+   `/.well-known/atproto-did` is QUERY's; the rest are here.
+
+   `putRecord` and `deleteRecord` do mutate, so they work on a scratch record
+   key of their own and the delete puts the repository back — RESUME reads the
+   fixture record after a process restart and must still find it. -}
+runEndpoints : Int -> String -> String -> String -> String -> <IO, Net "_"> Unit
+runEndpoints port did handle collection rkey =
+  let scratch = "\{rkey}scratch"
+  let () =
+    checkRoute
+      "LISTRECORDS"
+      port
+      200
+      (getRequest
+        "\{xrpcPath "com.atproto.repo.listRecords"}?repo=\{did}&collection=\{collection}")
+  let () =
+    checkRoute
+      "DESCRIBEREPO"
+      port
+      200
+      (getRequest "\{xrpcPath "com.atproto.repo.describeRepo"}?repo=\{did}")
+  let () =
+    checkRoute
+      "GETREPO"
+      port
+      200
+      (getRequest "\{xrpcPath "com.atproto.sync.getRepo"}?did=\{did}")
+  let () =
+    checkRoute
+      "GETLATESTCOMMIT"
+      port
+      200
+      (getRequest "\{xrpcPath "com.atproto.sync.getLatestCommit"}?did=\{did}")
+  let () =
+    checkRoute
+      "RESOLVEHANDLE"
+      port
+      200
+      (getRequest
+        "\{xrpcPath "com.atproto.identity.resolveHandle"}?handle=\{handle}")
+  let () = checkRoute "DIDJSON" port 200 (getRequest didJsonPath)
+  let () =
+    checkRoute
+      "PUTRECORD"
+      port
+      200
+      (postRequest
+        (xrpcPath "com.atproto.repo.putRecord")
+        (createRecordJson
+          did
+          collection
+          scratch
+          "pds serve_e2e scratch record"))
+  checkRoute
+    "DELETERECORD"
+    port
+    200
+    (postRequest
+      (xrpcPath "com.atproto.repo.deleteRecord")
+      (deleteRecordJson did collection scratch))
+
+runResume : Int -> String -> String -> String -> String -> <IO, Net "_"> Unit
+runResume port did collection rkey text =
+  let conn = mustConnect port
+  let () = mustSend conn (getRequest (getRecordPath did collection rkey))
+  let result = readResponse conn [||]
+  let () = expectStatus "RESUME" 200 result
+  let () = match result
+    Ok (_, body, _) =>
+      let bodyText = fromUtf8 body
+      if contains text bodyText then
+        ()
+      else
+        report
+          "RESUME"
+          False
+          "resumed record body missing fixture text: \{bodyText}"
+    Err _ => ()
+  ignoreResult (close conn)
+
+usage : String
+usage =
+  "usage: serve_client_main <query|pipeline|keepalive|chunked|endpoints|malformed|overcap|idle|resume> ..."
+
+main : <IO, Env, Net "_", Clock> Unit
+main = match args ()
+  ["query", port, did] => runQuery (mustPort port) did
+  ["pipeline", port] => runPipeline (mustPort port)
+  ["keepalive", port] => runKeepalive (mustPort port)
+  ["chunked", port, did, collection, rkey, text] =>
+    runChunked (mustPort port) did collection rkey text
+  ["endpoints", port, did, handle, collection, rkey] =>
+    runEndpoints (mustPort port) did handle collection rkey
+  ["malformed", port] => runMalformed (mustPort port)
+  ["overcap", port] => runOvercap (mustPort port)
+  ["idle", port] => runIdle (mustPort port)
+  ["resume", port, did, collection, rkey, text] =>
+    runResume (mustPort port) did collection rkey text
+  _ => panic usage
+
+mustPort : String -> Int
+mustPort text = match toInt text
+  Some n => n
+  None => panic "serve_client: not a port: \{text}"

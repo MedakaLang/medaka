@@ -1,5 +1,5 @@
 # META
-source_lines=2459
+source_lines=2463
 stages=DESUGAR,MARK
 # SOURCE
 -- Pretty printer for Medaka, producing parseable source from the AST
@@ -2410,6 +2410,10 @@ ppTyPrec p (TyEffect effs tail t) =
   let inside = ppEffInside effs tail
   let s = "<\{inside}> \{ppTyPrec 0 t}"
   if p >= 1 then "(" ++ s ++ ")" else s
+-- Intentional cross-file duplicate of doc.mdk's `ppTyP` clause: the two
+-- printers are a divergent-by-design pair (doc renders through its own
+-- `ppEffInsideDoc`/`ppConstrDoc`), so the shared clause is not consolidated.
+-- lint-disable-next-line rule-duplicate-body
 ppTyPrec _ (TyRow [] (a :: b :: rest) _) =
   "(\{joinWith " | " (a :: b :: rest)})"
 ppTyPrec _ (TyRow effs tail _) = "<\{ppEffInside effs tail}>"
