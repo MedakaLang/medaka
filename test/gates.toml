@@ -3817,6 +3817,20 @@ sources = ["test/diff_compiler_check_ir_floor.sh", "compiler/backend/llvm_emit.m
 corpus = []
 toolchain = ["clang", "valgrind"]
 
+[[gate]]
+name = "diff_compiler_emitted_code_floor"
+area = "infra"
+shard = "gates_6"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+run = "test/diff_compiler_emitted_code_floor.sh"
+oracles = []
+sources = ["test/diff_compiler_emitted_code_floor.sh", "compiler/backend/llvm_emit.mdk", "compiler/backend/trmc_analysis.mdk", "compiler/ir/dce.mdk"]
+corpus = ["test/bench_fixtures"]
+toolchain = ["clang", "valgrind"]
+
 # Every help/usage string must describe the CLI that actually exists (#2354,
 # S-help-truthfulness). Asserts three agreement properties, all derived from the
 # BINARY through test/cli_conformance_lib.sh — the same derivation
