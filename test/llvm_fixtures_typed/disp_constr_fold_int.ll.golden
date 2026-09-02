@@ -192,13 +192,8 @@ entry:
 }
 define i64 @mdk_total(i64 %arg0, i64 %arg1) {
 entry:
-  %t0 = call ptr @mdk_alloc(i64 16)
-  store i64 2, ptr %t0
-  %t1 = getelementptr i8, ptr %t0, i64 8
-  store i64 ptrtoint (ptr @mdk_lam1 to i64), ptr %t1
-  %t2 = ptrtoint ptr %t0 to i64
-  %t3 = call i64 @mdk_impl_Bag_fold(i64 %t2, i64 1, i64 %arg1)
-  ret i64 %t3
+  %t0 = call i64 @mdk_impl_Bag_fold(i64 ptrtoint (ptr @mdk_cc_2 to i64), i64 1, i64 %arg1)
+  ret i64 %t0
 }
 
 define i64 @mdk_impl_Bag_fold(i64 %arg0, i64 %arg1, i64 %arg2) {
@@ -278,3 +273,5 @@ entry:
   %t0 = call i64 @mdk_num_add(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
+
+@mdk_cc_2 = internal constant [2 x i64] [i64 2, i64 ptrtoint (ptr @mdk_lam1 to i64)]

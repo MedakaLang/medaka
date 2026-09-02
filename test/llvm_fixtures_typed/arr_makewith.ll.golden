@@ -171,50 +171,45 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  %t0 = call ptr @mdk_alloc(i64 16)
-  store i64 1, ptr %t0
-  %t1 = getelementptr i8, ptr %t0, i64 8
-  store i64 ptrtoint (ptr @mdk_lam0 to i64), ptr %t1
-  %t2 = ptrtoint ptr %t0 to i64
-  %t3 = ashr i64 11, 1
-  %t4 = add i64 %t3, 1
-  %t5 = mul i64 %t4, 8
-  %t6 = call ptr @mdk_alloc(i64 %t5)
-  store i64 %t3, ptr %t6
-  %t8 = alloca i64
-  store i64 0, ptr %t8
-  br label %mw_cond7
-mw_cond7:
-  %t9 = load i64, ptr %t8
-  %t10 = icmp sge i64 %t9, %t3
-  br i1 %t10, label %mw_done7, label %mw_body7
-mw_body7:
-  %t11 = shl i64 %t9, 1
-  %t12 = or i64 %t11, 1
-  %t13 = inttoptr i64 %t2 to ptr
-  %t14 = getelementptr i8, ptr %t13, i64 8
-  %t15 = load i64, ptr %t14
-  %t16 = inttoptr i64 %t15 to ptr
-  %t17 = call i64 %t16(i64 %t2, i64 %t12)
-  %t18 = add i64 %t9, 1
-  %t19 = mul i64 %t18, 8
-  %t20 = getelementptr i8, ptr %t6, i64 %t19
-  store i64 %t17, ptr %t20
-  %t21 = add i64 %t9, 1
-  store i64 %t21, ptr %t8
-  br label %mw_cond7
-mw_done7:
-  %t22 = ptrtoint ptr %t6 to i64
-  store i64 %t22, ptr @mdk_g_a
-  %t23 = load i64, ptr @mdk_g_a
-  %t24 = ashr i64 7, 1
-  %t25 = inttoptr i64 %t23 to ptr
-  %t26 = add i64 %t24, 1
-  %t27 = mul i64 %t26, 8
-  %t28 = getelementptr i8, ptr %t25, i64 %t27
-  %t29 = load i64, ptr %t28
-  %t30 = ashr i64 %t29, 1
-  call void @mdk_print_int(i64 %t30)
+  %t0 = ashr i64 11, 1
+  %t1 = add i64 %t0, 1
+  %t2 = mul i64 %t1, 8
+  %t3 = call ptr @mdk_alloc(i64 %t2)
+  store i64 %t0, ptr %t3
+  %t5 = alloca i64
+  store i64 0, ptr %t5
+  br label %mw_cond4
+mw_cond4:
+  %t6 = load i64, ptr %t5
+  %t7 = icmp sge i64 %t6, %t0
+  br i1 %t7, label %mw_done4, label %mw_body4
+mw_body4:
+  %t8 = shl i64 %t6, 1
+  %t9 = or i64 %t8, 1
+  %t10 = inttoptr i64 ptrtoint (ptr @mdk_cc_1 to i64) to ptr
+  %t11 = getelementptr i8, ptr %t10, i64 8
+  %t12 = load i64, ptr %t11
+  %t13 = inttoptr i64 %t12 to ptr
+  %t14 = call i64 %t13(i64 ptrtoint (ptr @mdk_cc_1 to i64), i64 %t9)
+  %t15 = add i64 %t6, 1
+  %t16 = mul i64 %t15, 8
+  %t17 = getelementptr i8, ptr %t3, i64 %t16
+  store i64 %t14, ptr %t17
+  %t18 = add i64 %t6, 1
+  store i64 %t18, ptr %t5
+  br label %mw_cond4
+mw_done4:
+  %t19 = ptrtoint ptr %t3 to i64
+  store i64 %t19, ptr @mdk_g_a
+  %t20 = load i64, ptr @mdk_g_a
+  %t21 = ashr i64 7, 1
+  %t22 = inttoptr i64 %t20 to ptr
+  %t23 = add i64 %t21, 1
+  %t24 = mul i64 %t23, 8
+  %t25 = getelementptr i8, ptr %t22, i64 %t24
+  %t26 = load i64, ptr %t25
+  %t27 = ashr i64 %t26, 1
+  call void @mdk_print_int(i64 %t27)
   ret i32 0
 }
 @mdk_g_a = global i64 0
@@ -223,3 +218,5 @@ entry:
   %t0 = call i64 @mdk_num_mul(i64 %arg0, i64 %arg0)
   ret i64 %t0
 }
+
+@mdk_cc_1 = internal constant [2 x i64] [i64 1, i64 ptrtoint (ptr @mdk_lam0 to i64)]
