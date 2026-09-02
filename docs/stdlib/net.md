@@ -1,223 +1,254 @@
 # net
 
-## `Connection`
+TCP connections and name resolution.
+
+`connect` opens a connection and `listen` and `accept` receive them.
+`Connection` and `Listener` are opaque handles: they cannot be built from
+a raw descriptor or confused with each other. `sendAll` and `recvAll`
+loop until every byte is transferred, and `sendString`, `recvString`,
+`sendLine`, and `recvLine` work in UTF-8 text. `withConnection`,
+`withListener`, and `serveLoop` close their handle when the body
+finishes, on the `Ok` and `Err` paths alike.
+
+Every operation returns `Result String a`, with the host's error message
+in `Err`. Networking works only in a program built for the native
+backend: the interpreter does not bind the `net` primitives, and the
+WebAssembly backend rejects a program that imports this module.
+
+## Handles
+
+### `Connection`
 
 ```
 data Connection
   = Connection Int
 ```
 
-A connected TCP socket (from `connect` or `accept`). Opaque — wraps the raw
-fd, but the constructor is private so a `Connection` can't be fabricated or
-confused with a `Listener`.
+A connected TCP socket, from `connect` or `accept`.
 
-## `Listener`
+### `Listener`
 
 ```
 data Listener
   = Listener Int
 ```
 
-A listening TCP socket (from `listen`), not yet accepted.
+A listening TCP socket, from `listen`.
 
-## `resolve`
+## Clients
+
+### `resolve`
 
 ```
 resolve : String -> <Net _> Result String (List String)
 ```
 
-Resolve a hostname to its numeric IP address strings (`getaddrinfo`).
+The numeric addresses a host name resolves to.
 
-Non-executing example (net is unbound under `medaka run`; see module doc):
-`resolve "localhost"` yields `Ok ["127.0.0.1", …]`.
+`resolve "localhost"` gives `Ok ["127.0.0.1"]` or similar.
 
-## `connect`
+### `connect`
 
 ```
 connect : String -> Int -> <Net _> Result String Connection
 ```
 
-Connect to `host`:`port` (DNS resolution happens internally). Prefer
-`withConnection` over a bare `connect` unless you need to hold the
-connection across a larger scope than one bracketed call.
+A connection to `host` on `port`.
 
-## `listen`
+The host name is resolved first. `withConnection` is the form that
+closes the connection for you.
+
+## Servers
+
+### `listen`
 
 ```
 listen : String -> Int -> <Net _> Result String Listener
 ```
 
-Bind + listen on `addr`:`port` (port `0` picks an OS-assigned ephemeral
-port — pair with `listenPort` to discover it; this is what makes a
-single-process loopback self-test hermetic).
+A listener bound to `addr` on `port`.
 
-## `listenPort`
+Port `0` lets the system pick a free port; `listenPort` reports which.
+
+### `listenPort`
 
 ```
 listenPort : Listener -> <Net _> Result String Int
 ```
 
-The actual bound port of a `Listener` (useful after `listen addr 0`).
+The port a listener is bound to.
 
-## `accept`
+### `accept`
 
 ```
 accept : Listener -> <Net _> Result String Connection
 ```
 
-Block until a peer connects, then return the accepted `Connection`.
+Waits for the next connection to a listener.
 
-## `send`
+## Transfer
+
+### `send`
 
 ```
 send : Connection -> Array Int -> <Net _> Result String Int
 ```
 
-One `send(2)` call. May write FEWER bytes than given (`Ok n` with
-`n < length bs`) — use `sendAll` unless you are handling short writes
-yourself.
+Sends bytes in one call. The result is the number of bytes written,
+which may be fewer than given.
 
-## `recv`
+`sendAll` is the form that sends everything.
+
+### `recv`
 
 ```
 recv : Connection -> Int -> <Net _> Result String (Array Int)
 ```
 
-One `recv(2)` call, at most `n` bytes. `Ok []` (an empty `Array`) means the
-peer closed the connection (EOF) — use `recvAll` to read to EOF.
+Receives up to `n` bytes in one call.
 
-## `shutdown`
+An empty array means the peer has closed the connection. `recvAll` is the
+form that reads to the end.
 
-```
-shutdown : Connection -> Int -> <Net _> Result String Unit
-```
-
-Shut down `how` (0=read, 1=write, 2=both) of a connection without closing
-the fd. Rarely needed directly — `close`/the brackets are the common path.
-
-## `close`
-
-```
-close : Connection -> <Net _> Result String Unit
-```
-
-Close a connection's fd. Idempotent-safe (a double `close` is `Ok`, per the
-C shim). Prefer `withConnection`, which calls this for you on every path.
-
-## `closeListener`
-
-```
-closeListener : Listener -> <Net _> Result String Unit
-```
-
-Close a listener's fd (mirrors `close`, for the `Listener` handle).
-
-## `setTimeout`
-
-```
-setTimeout : Connection -> Int -> <Net _> Result String Unit
-```
-
-Set the socket read/write timeout in milliseconds (`0` = blocking, no
-timeout). Recommended on any long-lived connection — a blocking-only model
-needs a timeout to avoid hanging forever on a stalled peer.
-
-## `sendAll`
+### `sendAll`
 
 ```
 sendAll : Connection -> Array Int -> <Net _> Result String Unit
 ```
 
-Write every byte of `bs`, looping over `send` as needed (BSD `send` may
-write fewer bytes than asked — see `send`'s doc). `Err` on the first failed
-`send`. A `send` that legitimately reports `0` written on a non-empty buffer
-is treated as a stalled connection and reported as `Err`, so this loop is
-guaranteed to terminate.
+Sends every byte, looping over `send` as needed.
 
-## `recvAll`
+`Err` on the first failed send, or when a send writes nothing, which is
+treated as a stalled connection.
+
+### `recvAll`
 
 ```
 recvAll : Connection -> <Net _> Result String (Array Int)
 ```
 
-Read until the peer closes the connection (EOF), accumulating every chunk.
-`Err` on the first failed `recv` (whatever has been read so far is
-discarded — a partial read is not distinguishable from a fresh failure).
+Receives everything until the peer closes the connection.
 
-## `sendString`
+`Err` on the first failed receive; whatever was read before it is
+discarded.
+
+## Text
+
+### `sendString`
 
 ```
 sendString : Connection -> String -> <Net _> Result String Unit
 ```
 
-Encode `s` as UTF-8 and write every byte (`sendAll`).
+Sends a string as UTF-8, every byte of it.
 
-## `recvString`
+### `recvString`
 
 ```
 recvString : Connection -> <Net _> Result String String
 ```
 
-Read to EOF and decode the bytes as UTF-8 (`recvAll` + `fromUtf8`). Use
-`recvString` only when the peer is expected to close after writing (e.g. a
-one-shot request/response); for a persistent connection, size a `recv`/
-`recvN` read explicitly instead.
+Receives everything until the peer closes the connection, decoded as
+UTF-8.
 
-## `sendLine`
+For a connection that stays open, read a line at a time with `recvLine`
+or a bounded amount with `recv`.
+
+### `sendLine`
 
 ```
 sendLine : Connection -> String -> <Net _> Result String Unit
 ```
 
-Send `s` followed by `"\n"`, UTF-8 encoded (`sendAll`).
+Sends a string as UTF-8 followed by a newline.
 
-## `recvLine`
+### `recvLine`
 
 ```
 recvLine : Connection -> <Net _> Result String (Option String)
 ```
 
-Read one line (up to and excluding `"\n"`), byte at a time. `Some line` on
-a complete or EOF-terminated line with content; `None` at a clean EOF with
-nothing buffered. Byte-at-a-time `recv` keeps this simple and correct
-(no read-ahead buffer to manage across calls) at the cost of a syscall per
-byte — fine for line-oriented protocols exchanging small messages, not
-recommended for bulk transfer (use `recvAll`/`recv` there).
+Receives one line, without its newline.
 
-## `withConnection`
+`None` when the peer has closed the connection and nothing was pending.
+A final line with no newline is still returned. Reads one byte per call,
+so it suits small line-based messages, not bulk transfer.
+
+## Lifecycle
+
+### `shutdown`
+
+```
+shutdown : Connection -> Int -> <Net _> Result String Unit
+```
+
+Shuts down one or both directions of a connection without closing it:
+`0` for reading, `1` for writing, `2` for both.
+
+### `close`
+
+```
+close : Connection -> <Net _> Result String Unit
+```
+
+Closes a connection.
+
+Closing twice is not an error. `withConnection` closes for you.
+
+### `closeListener`
+
+```
+closeListener : Listener -> <Net _> Result String Unit
+```
+
+Closes a listener.
+
+### `setTimeout`
+
+```
+setTimeout : Connection -> Int -> <Net _> Result String Unit
+```
+
+Sets a connection's send and receive timeout in milliseconds.
+
+`0` means no timeout. Set one on any long-lived connection so a stalled
+peer cannot block forever.
+
+### `withConnection`
 
 ```
 withConnection : String -> Int -> (Connection -> <Net _> Result String a) -> <Net _> Result String a
 ```
 
-Connect to `host`:`port`, run `body` on the resulting `Connection`, and
-close it afterward NO MATTER what `body` returns (`Ok` or `Err`). Returns
-`body`'s result. If `connect` itself fails, `body` never runs and there is
-nothing to close.
+Connects to `host` on `port`, runs `body` on the connection, and closes
+it whatever `body` returns.
 
-Non-executing example:
+The result is `body`'s result, or the connection error when connecting
+fails, in which case `body` does not run.
+
 `withConnection "127.0.0.1" 9000 (conn => sendString conn "hi")`
 
-## `withListener`
+### `withListener`
 
 ```
 withListener : String -> Int -> (Listener -> <Net _> Result String a) -> <Net _> Result String a
 ```
 
-Bind + listen on `addr`:`port`, run `body` on the resulting `Listener`, and
-close it afterward NO MATTER what `body` returns. Returns `body`'s result.
+Listens on `addr` and `port`, runs `body` on the listener, and closes
+it whatever `body` returns.
 
-## `serveLoop`
+The result is `body`'s result, or the error when listening fails.
+
+### `serveLoop`
 
 ```
 serveLoop : Listener -> (Connection -> <Net _> Result String Unit) -> <Net _> Result String Unit
 ```
 
-Accept connections from `lis` in a loop, handing each to `handle` and
-closing it afterward (the per-connection bracket keeps one handler's `Err`
-from leaking that connection's fd or aborting the loop). Recurses forever —
-a listener-level `accept` failure propagates up and ends the loop; a
-per-connection `handle` failure does not (it's swallowed after closing, so
-the server keeps serving). Pair with `withListener` to close the listener
-itself when the loop does end.
+Accepts connections forever, running `handle` on each and closing it
+afterwards.
+
+A failure in `handle` closes that connection and the loop continues. A
+failure in `accept` ends the loop with the error. Pair it with
+`withListener` to close the listener when the loop ends.
 

@@ -1,0 +1,3672 @@
+NEWLINE
+IMPORT
+IDENT "string"
+DOT_LBRACE
+IDENT "trim"
+COMMA
+IDENT "lines"
+COMMA
+IDENT "toInt"
+COMMA
+IDENT "startsWith"
+COMMA
+IDENT "drop"
+COMMA
+IDENT "indexOf"
+COMMA
+IDENT "contains"
+RBRACE
+NEWLINE
+IMPORT
+IDENT "core"
+DOT_LBRACE
+UPPER "Display"
+RBRACE
+NEWLINE
+PUBLIC
+EXPORT
+DATA
+UPPER "TomlValue"
+EQUAL
+INDENT
+PIPE
+UPPER "TStr"
+UPPER "String"
+NEWLINE
+PIPE
+UPPER "TArr"
+LPAREN
+UPPER "List"
+UPPER "String"
+RPAREN
+NEWLINE
+PIPE
+UPPER "TInt"
+UPPER "Int"
+NEWLINE
+PIPE
+UPPER "TBool"
+UPPER "Bool"
+NEWLINE
+DEDENT
+NEWLINE
+PUBLIC
+EXPORT
+DATA
+UPPER "Toml"
+EQUAL
+UPPER "Toml"
+LPAREN
+UPPER "List"
+LPAREN
+UPPER "String"
+COMMA
+UPPER "TomlValue"
+RPAREN
+RPAREN
+NEWLINE
+IDENT "listReverse"
+COLON
+UPPER "List"
+IDENT "a"
+ARROW
+UPPER "List"
+IDENT "a"
+NEWLINE
+IDENT "listReverse"
+EQUAL
+IDENT "listRevGo"
+LBRACKET
+RBRACKET
+NEWLINE
+IDENT "listRevGo"
+COLON
+UPPER "List"
+IDENT "a"
+ARROW
+UPPER "List"
+IDENT "a"
+ARROW
+UPPER "List"
+IDENT "a"
+NEWLINE
+IDENT "listRevGo"
+IDENT "acc"
+LBRACKET
+RBRACKET
+EQUAL
+IDENT "acc"
+NEWLINE
+IDENT "listRevGo"
+IDENT "acc"
+LPAREN
+IDENT "x"
+CONS
+IDENT "xs"
+RPAREN
+EQUAL
+IDENT "listRevGo"
+LPAREN
+IDENT "x"
+CONS
+IDENT "acc"
+RPAREN
+IDENT "xs"
+NEWLINE
+IDENT "stripComment"
+COLON
+UPPER "String"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "stripComment"
+IDENT "s"
+EQUAL
+INDENT
+LET
+IDENT "arr"
+EQUAL
+IDENT "stringToChars"
+IDENT "s"
+NEWLINE
+LET
+IDENT "n"
+EQUAL
+IDENT "arrayLength"
+IDENT "arr"
+NEWLINE
+IDENT "stripCommentGo"
+IDENT "arr"
+INT 0
+IDENT "n"
+UPPER "False"
+LBRACKET
+RBRACKET
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "stripCommentGo"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+ARROW
+UPPER "List"
+UPPER "Char"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "stripCommentGo"
+IDENT "arr"
+IDENT "i"
+IDENT "n"
+IDENT "inStr"
+IDENT "acc"
+INDENT
+PIPE
+IDENT "i"
+GEQ
+IDENT "n"
+EQUAL
+IDENT "stringFromChars"
+LPAREN
+IDENT "arrayFromList"
+LPAREN
+IDENT "listReverse"
+IDENT "acc"
+RPAREN
+RPAREN
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "stripCommentStep"
+IDENT "arr"
+IDENT "i"
+IDENT "n"
+IDENT "inStr"
+IDENT "acc"
+LPAREN
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "arr"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "stripCommentStep"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Bool"
+ARROW
+UPPER "List"
+UPPER "Char"
+ARROW
+UPPER "Char"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "stripCommentStep"
+IDENT "arr"
+IDENT "i"
+IDENT "n"
+IDENT "inStr"
+IDENT "acc"
+IDENT "c"
+INDENT
+PIPE
+IDENT "charCode"
+IDENT "c"
+EQ_EQ
+INT 34
+EQUAL
+IDENT "stripCommentGo"
+IDENT "arr"
+LPAREN
+IDENT "i"
+PLUS
+INT 1
+RPAREN
+IDENT "n"
+LPAREN
+IDENT "not"
+IDENT "inStr"
+RPAREN
+LPAREN
+IDENT "c"
+CONS
+IDENT "acc"
+RPAREN
+NEWLINE
+PIPE
+IDENT "charCode"
+IDENT "c"
+EQ_EQ
+INT 35
+AND
+IDENT "not"
+IDENT "inStr"
+EQUAL
+INDENT
+IDENT "stringFromChars"
+LPAREN
+IDENT "arrayFromList"
+LPAREN
+IDENT "listReverse"
+IDENT "acc"
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "stripCommentGo"
+IDENT "arr"
+LPAREN
+IDENT "i"
+PLUS
+INT 1
+RPAREN
+IDENT "n"
+IDENT "inStr"
+LPAREN
+IDENT "c"
+CONS
+IDENT "acc"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "parseQuotedStr"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Result"
+UPPER "String"
+LPAREN
+UPPER "String"
+COMMA
+UPPER "Int"
+RPAREN
+NEWLINE
+IDENT "parseQuotedStr"
+IDENT "arr"
+IDENT "i"
+INDENT
+PIPE
+IDENT "i"
+GEQ
+IDENT "arrayLength"
+IDENT "arr"
+EQUAL
+UPPER "Err"
+STRING "unexpected end of input"
+NEWLINE
+PIPE
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "arr"
+EQ_EQ
+CHAR "\""
+EQUAL
+IDENT "parseQuotedBody"
+IDENT "arr"
+LPAREN
+IDENT "i"
+PLUS
+INT 1
+RPAREN
+LBRACKET
+RBRACKET
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+UPPER "Err"
+STRING "expected '\"'"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "parseQuotedBody"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "List"
+UPPER "Char"
+ARROW
+UPPER "Result"
+UPPER "String"
+LPAREN
+UPPER "String"
+COMMA
+UPPER "Int"
+RPAREN
+NEWLINE
+IDENT "parseQuotedBody"
+IDENT "arr"
+IDENT "i"
+IDENT "acc"
+INDENT
+PIPE
+IDENT "i"
+GEQ
+IDENT "arrayLength"
+IDENT "arr"
+EQUAL
+UPPER "Err"
+STRING "unterminated string"
+NEWLINE
+PIPE
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "arr"
+EQ_EQ
+CHAR "\""
+EQUAL
+INDENT
+UPPER "Ok"
+LPAREN
+IDENT "stringFromChars"
+LPAREN
+IDENT "arrayFromList"
+LPAREN
+IDENT "listReverse"
+IDENT "acc"
+RPAREN
+RPAREN
+COMMA
+IDENT "i"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "parseQuotedBody"
+IDENT "arr"
+LPAREN
+IDENT "i"
+PLUS
+INT 1
+RPAREN
+LPAREN
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "arr"
+CONS
+IDENT "acc"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "parseArrayValue"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Result"
+UPPER "String"
+LPAREN
+UPPER "List"
+UPPER "String"
+COMMA
+UPPER "Int"
+RPAREN
+NEWLINE
+IDENT "parseArrayValue"
+IDENT "arr"
+IDENT "i"
+INDENT
+PIPE
+IDENT "i"
+GEQ
+IDENT "arrayLength"
+IDENT "arr"
+EQUAL
+UPPER "Err"
+STRING "unexpected end of input"
+NEWLINE
+PIPE
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "arr"
+EQ_EQ
+CHAR "["
+EQUAL
+IDENT "parseArrayItems"
+IDENT "arr"
+LPAREN
+IDENT "i"
+PLUS
+INT 1
+RPAREN
+LBRACKET
+RBRACKET
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+UPPER "Err"
+STRING "expected '['"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "parseArrayItems"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "Result"
+UPPER "String"
+LPAREN
+UPPER "List"
+UPPER "String"
+COMMA
+UPPER "Int"
+RPAREN
+NEWLINE
+IDENT "parseArrayItems"
+IDENT "arr"
+IDENT "i"
+IDENT "acc"
+INDENT
+PIPE
+IDENT "i"
+GEQ
+IDENT "arrayLength"
+IDENT "arr"
+EQUAL
+UPPER "Err"
+STRING "unterminated array"
+NEWLINE
+PIPE
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "arr"
+EQ_EQ
+CHAR "]"
+EQUAL
+UPPER "Ok"
+LPAREN
+IDENT "listReverse"
+IDENT "acc"
+COMMA
+IDENT "i"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+PIPE
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "arr"
+EQ_EQ
+CHAR " "
+EQUAL
+IDENT "parseArrayItems"
+IDENT "arr"
+LPAREN
+IDENT "i"
+PLUS
+INT 1
+RPAREN
+IDENT "acc"
+NEWLINE
+PIPE
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "arr"
+EQ_EQ
+CHAR "\t"
+EQUAL
+IDENT "parseArrayItems"
+IDENT "arr"
+LPAREN
+IDENT "i"
+PLUS
+INT 1
+RPAREN
+IDENT "acc"
+NEWLINE
+PIPE
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "arr"
+EQ_EQ
+CHAR "\""
+EQUAL
+IDENT "parseArrayItemStr"
+IDENT "arr"
+IDENT "i"
+IDENT "acc"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+UPPER "Err"
+LPAREN
+IDENT "stringConcat"
+LBRACKET
+STRING "unexpected char in array: '"
+COMMA
+IDENT "charToStr"
+LPAREN
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "arr"
+RPAREN
+COMMA
+STRING "'"
+RBRACKET
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "parseArrayItemStr"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "Result"
+UPPER "String"
+LPAREN
+UPPER "List"
+UPPER "String"
+COMMA
+UPPER "Int"
+RPAREN
+NEWLINE
+IDENT "parseArrayItemStr"
+IDENT "arr"
+IDENT "i"
+IDENT "acc"
+EQUAL
+MATCH
+IDENT "parseQuotedStr"
+IDENT "arr"
+IDENT "i"
+INDENT
+UPPER "Err"
+IDENT "e"
+FAT_ARROW
+UPPER "Err"
+IDENT "e"
+NEWLINE
+UPPER "Ok"
+LPAREN
+IDENT "s"
+COMMA
+IDENT "j"
+RPAREN
+FAT_ARROW
+IDENT "parseArraySep"
+IDENT "arr"
+IDENT "j"
+LPAREN
+IDENT "s"
+CONS
+IDENT "acc"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "parseArraySep"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "Result"
+UPPER "String"
+LPAREN
+UPPER "List"
+UPPER "String"
+COMMA
+UPPER "Int"
+RPAREN
+NEWLINE
+IDENT "parseArraySep"
+IDENT "arr"
+IDENT "i"
+IDENT "acc"
+INDENT
+PIPE
+IDENT "i"
+GEQ
+IDENT "arrayLength"
+IDENT "arr"
+EQUAL
+UPPER "Err"
+STRING "unterminated array"
+NEWLINE
+PIPE
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "arr"
+EQ_EQ
+CHAR " "
+EQUAL
+IDENT "parseArraySep"
+IDENT "arr"
+LPAREN
+IDENT "i"
+PLUS
+INT 1
+RPAREN
+IDENT "acc"
+NEWLINE
+PIPE
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "arr"
+EQ_EQ
+CHAR "\t"
+EQUAL
+IDENT "parseArraySep"
+IDENT "arr"
+LPAREN
+IDENT "i"
+PLUS
+INT 1
+RPAREN
+IDENT "acc"
+NEWLINE
+PIPE
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "arr"
+EQ_EQ
+CHAR ","
+EQUAL
+IDENT "parseArrayItems"
+IDENT "arr"
+LPAREN
+IDENT "i"
+PLUS
+INT 1
+RPAREN
+IDENT "acc"
+NEWLINE
+PIPE
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "arr"
+EQ_EQ
+CHAR "]"
+EQUAL
+UPPER "Ok"
+LPAREN
+IDENT "listReverse"
+IDENT "acc"
+COMMA
+IDENT "i"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+UPPER "Err"
+LPAREN
+IDENT "stringConcat"
+LBRACKET
+STRING "expected ',' or ']' in array, found: '"
+COMMA
+IDENT "charToStr"
+LPAREN
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "arr"
+RPAREN
+COMMA
+STRING "'"
+COMMA
+RBRACKET
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "skipSpaces"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "skipSpaces"
+IDENT "arr"
+IDENT "i"
+IDENT "n"
+INDENT
+PIPE
+IDENT "i"
+GEQ
+IDENT "n"
+EQUAL
+IDENT "n"
+NEWLINE
+PIPE
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "arr"
+EQ_EQ
+CHAR " "
+EQUAL
+IDENT "skipSpaces"
+IDENT "arr"
+LPAREN
+IDENT "i"
+PLUS
+INT 1
+RPAREN
+IDENT "n"
+NEWLINE
+PIPE
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "arr"
+EQ_EQ
+CHAR "\t"
+EQUAL
+IDENT "skipSpaces"
+IDENT "arr"
+LPAREN
+IDENT "i"
+PLUS
+INT 1
+RPAREN
+IDENT "n"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "i"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "parseKv"
+COLON
+UPPER "String"
+ARROW
+UPPER "Result"
+UPPER "String"
+LPAREN
+UPPER "String"
+COMMA
+UPPER "TomlValue"
+RPAREN
+NEWLINE
+IDENT "parseKv"
+IDENT "line"
+EQUAL
+INDENT
+LET
+IDENT "arr"
+EQUAL
+IDENT "stringToChars"
+IDENT "line"
+NEWLINE
+LET
+IDENT "n"
+EQUAL
+IDENT "arrayLength"
+IDENT "arr"
+NEWLINE
+IDENT "findEq"
+IDENT "arr"
+IDENT "n"
+INT 0
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "findEq"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Result"
+UPPER "String"
+LPAREN
+UPPER "String"
+COMMA
+UPPER "TomlValue"
+RPAREN
+NEWLINE
+IDENT "findEq"
+IDENT "arr"
+IDENT "n"
+IDENT "i"
+INDENT
+PIPE
+IDENT "i"
+GEQ
+IDENT "n"
+EQUAL
+UPPER "Err"
+LPAREN
+IDENT "stringConcat"
+LBRACKET
+STRING "expected '=' in: "
+COMMA
+IDENT "stringFromChars"
+IDENT "arr"
+RBRACKET
+RPAREN
+NEWLINE
+PIPE
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "arr"
+EQ_EQ
+CHAR "="
+EQUAL
+IDENT "parseKvAfterEq"
+IDENT "arr"
+IDENT "n"
+IDENT "i"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "findEq"
+IDENT "arr"
+IDENT "n"
+LPAREN
+IDENT "i"
+PLUS
+INT 1
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "parseKvAfterEq"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Result"
+UPPER "String"
+LPAREN
+UPPER "String"
+COMMA
+UPPER "TomlValue"
+RPAREN
+NEWLINE
+IDENT "parseKvAfterEq"
+IDENT "arr"
+IDENT "n"
+IDENT "eq"
+EQUAL
+INDENT
+LET
+IDENT "keyRaw"
+EQUAL
+IDENT "stringFromChars"
+LPAREN
+IDENT "arrayMakeWith"
+IDENT "eq"
+LPAREN
+IDENT "k"
+FAT_ARROW
+IDENT "arrayGetUnsafe"
+IDENT "k"
+IDENT "arr"
+RPAREN
+RPAREN
+NEWLINE
+LET
+IDENT "key"
+EQUAL
+IDENT "trim"
+IDENT "keyRaw"
+NEWLINE
+IF
+IDENT "contains"
+STRING "."
+IDENT "key"
+THEN
+INDENT
+UPPER "Err"
+LPAREN
+IDENT "stringConcat"
+LBRACKET
+STRING "dotted key '"
+COMMA
+IDENT "key"
+COMMA
+STRING "' is not supported: use table headers instead"
+RBRACKET
+RPAREN
+NEWLINE
+DEDENT
+ELSE
+INDENT
+LET
+IDENT "valStart"
+EQUAL
+IDENT "skipSpaces"
+IDENT "arr"
+LPAREN
+IDENT "eq"
+PLUS
+INT 1
+RPAREN
+IDENT "n"
+NEWLINE
+IDENT "parseKvValue"
+IDENT "arr"
+IDENT "n"
+IDENT "valStart"
+IDENT "key"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "parseKvValue"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "String"
+ARROW
+UPPER "Result"
+UPPER "String"
+LPAREN
+UPPER "String"
+COMMA
+UPPER "TomlValue"
+RPAREN
+NEWLINE
+IDENT "parseKvValue"
+IDENT "arr"
+IDENT "n"
+IDENT "i"
+IDENT "key"
+INDENT
+PIPE
+IDENT "i"
+GEQ
+IDENT "n"
+EQUAL
+UPPER "Err"
+LPAREN
+IDENT "stringConcat"
+LBRACKET
+STRING "missing value for key: "
+COMMA
+IDENT "key"
+RBRACKET
+RPAREN
+NEWLINE
+PIPE
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "arr"
+EQ_EQ
+CHAR "\""
+EQUAL
+IDENT "parseKvStr"
+IDENT "arr"
+IDENT "i"
+IDENT "key"
+NEWLINE
+PIPE
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "arr"
+EQ_EQ
+CHAR "["
+EQUAL
+IDENT "parseKvArr"
+IDENT "arr"
+IDENT "i"
+IDENT "key"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "parseKvScalar"
+LPAREN
+IDENT "restOfLine"
+IDENT "arr"
+IDENT "n"
+IDENT "i"
+RPAREN
+IDENT "key"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "checkLineConsumed"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "String"
+ARROW
+UPPER "Result"
+UPPER "String"
+UPPER "Unit"
+NEWLINE
+IDENT "checkLineConsumed"
+IDENT "arr"
+IDENT "j"
+IDENT "key"
+EQUAL
+INDENT
+LET
+IDENT "trailing"
+EQUAL
+IDENT "restOfLine"
+IDENT "arr"
+LPAREN
+IDENT "arrayLength"
+IDENT "arr"
+RPAREN
+IDENT "j"
+NEWLINE
+IF
+IDENT "trailing"
+EQ_EQ
+STRING ""
+THEN
+INDENT
+UPPER "Ok"
+LPAREN
+RPAREN
+NEWLINE
+DEDENT
+ELSE
+INDENT
+UPPER "Err"
+LPAREN
+IDENT "stringConcat"
+LBRACKET
+STRING "trailing content after value for key '"
+COMMA
+IDENT "key"
+COMMA
+STRING "': "
+COMMA
+IDENT "trailing"
+RBRACKET
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "parseKvStr"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "String"
+ARROW
+UPPER "Result"
+UPPER "String"
+LPAREN
+UPPER "String"
+COMMA
+UPPER "TomlValue"
+RPAREN
+NEWLINE
+IDENT "parseKvStr"
+IDENT "arr"
+IDENT "i"
+IDENT "key"
+EQUAL
+MATCH
+IDENT "parseQuotedStr"
+IDENT "arr"
+IDENT "i"
+INDENT
+UPPER "Err"
+IDENT "e"
+FAT_ARROW
+UPPER "Err"
+IDENT "e"
+NEWLINE
+UPPER "Ok"
+LPAREN
+IDENT "s"
+COMMA
+IDENT "j"
+RPAREN
+FAT_ARROW
+IDENT "map"
+LPAREN
+UNDERSCORE
+FAT_ARROW
+LPAREN
+IDENT "key"
+COMMA
+UPPER "TStr"
+IDENT "s"
+RPAREN
+RPAREN
+LPAREN
+IDENT "checkLineConsumed"
+IDENT "arr"
+IDENT "j"
+IDENT "key"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "parseKvArr"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "String"
+ARROW
+UPPER "Result"
+UPPER "String"
+LPAREN
+UPPER "String"
+COMMA
+UPPER "TomlValue"
+RPAREN
+NEWLINE
+IDENT "parseKvArr"
+IDENT "arr"
+IDENT "i"
+IDENT "key"
+EQUAL
+MATCH
+IDENT "parseArrayValue"
+IDENT "arr"
+IDENT "i"
+INDENT
+UPPER "Err"
+IDENT "e"
+FAT_ARROW
+UPPER "Err"
+IDENT "e"
+NEWLINE
+UPPER "Ok"
+LPAREN
+IDENT "xs"
+COMMA
+IDENT "j"
+RPAREN
+FAT_ARROW
+IDENT "map"
+LPAREN
+UNDERSCORE
+FAT_ARROW
+LPAREN
+IDENT "key"
+COMMA
+UPPER "TArr"
+IDENT "xs"
+RPAREN
+RPAREN
+LPAREN
+IDENT "checkLineConsumed"
+IDENT "arr"
+IDENT "j"
+IDENT "key"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "restOfLine"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "restOfLine"
+IDENT "arr"
+IDENT "n"
+IDENT "i"
+EQUAL
+IDENT "trim"
+LPAREN
+IDENT "stringFromChars"
+LPAREN
+IDENT "arrayMakeWith"
+LPAREN
+IDENT "n"
+MINUS
+IDENT "i"
+RPAREN
+LPAREN
+IDENT "j"
+FAT_ARROW
+IDENT "arrayGetUnsafe"
+LPAREN
+IDENT "i"
+PLUS
+IDENT "j"
+RPAREN
+IDENT "arr"
+RPAREN
+RPAREN
+RPAREN
+NEWLINE
+IDENT "parseKvScalar"
+COLON
+UPPER "String"
+ARROW
+UPPER "String"
+ARROW
+UPPER "Result"
+UPPER "String"
+LPAREN
+UPPER "String"
+COMMA
+UPPER "TomlValue"
+RPAREN
+NEWLINE
+IDENT "parseKvScalar"
+IDENT "tok"
+IDENT "key"
+INDENT
+PIPE
+IDENT "tok"
+EQ_EQ
+STRING "true"
+EQUAL
+UPPER "Ok"
+LPAREN
+IDENT "key"
+COMMA
+UPPER "TBool"
+UPPER "True"
+RPAREN
+NEWLINE
+PIPE
+IDENT "tok"
+EQ_EQ
+STRING "false"
+EQUAL
+UPPER "Ok"
+LPAREN
+IDENT "key"
+COMMA
+UPPER "TBool"
+UPPER "False"
+RPAREN
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+MATCH
+IDENT "toInt"
+IDENT "tok"
+INDENT
+UPPER "Some"
+IDENT "n"
+FAT_ARROW
+UPPER "Ok"
+LPAREN
+IDENT "key"
+COMMA
+UPPER "TInt"
+IDENT "n"
+RPAREN
+NEWLINE
+UPPER "None"
+FAT_ARROW
+UPPER "Err"
+LPAREN
+IDENT "stringConcat"
+LBRACKET
+STRING "unsupported value for key '"
+COMMA
+IDENT "key"
+COMMA
+STRING "': "
+COMMA
+IDENT "tok"
+COMMA
+STRING " (expected a quoted string, a string array, an integer, or true/false)"
+COMMA
+RBRACKET
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+DATA
+UPPER "Header"
+EQUAL
+UPPER "HTable"
+UPPER "String"
+PIPE
+UPPER "HArrayTable"
+UPPER "String"
+NEWLINE
+IDENT "parseHeader"
+COLON
+UPPER "String"
+ARROW
+UPPER "Option"
+UPPER "Header"
+NEWLINE
+IDENT "parseHeader"
+IDENT "s"
+EQUAL
+INDENT
+LET
+IDENT "n"
+EQUAL
+IDENT "stringLength"
+IDENT "s"
+NEWLINE
+IF
+IDENT "n"
+GEQ
+INT 4
+AND
+IDENT "stringSlice"
+INT 0
+INT 2
+IDENT "s"
+EQ_EQ
+STRING "[["
+AND
+IDENT "stringSlice"
+LPAREN
+IDENT "n"
+MINUS
+INT 2
+RPAREN
+IDENT "n"
+IDENT "s"
+EQ_EQ
+STRING "]]"
+THEN
+INDENT
+UPPER "Some"
+LPAREN
+UPPER "HArrayTable"
+LPAREN
+IDENT "trim"
+LPAREN
+IDENT "stringSlice"
+INT 2
+LPAREN
+IDENT "n"
+MINUS
+INT 2
+RPAREN
+IDENT "s"
+RPAREN
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
+ELSE
+IF
+IDENT "n"
+GEQ
+INT 2
+AND
+IDENT "stringSlice"
+INT 0
+INT 1
+IDENT "s"
+EQ_EQ
+STRING "["
+AND
+IDENT "stringSlice"
+LPAREN
+IDENT "n"
+MINUS
+INT 1
+RPAREN
+IDENT "n"
+IDENT "s"
+EQ_EQ
+STRING "]"
+THEN
+INDENT
+UPPER "Some"
+LPAREN
+UPPER "HTable"
+LPAREN
+IDENT "trim"
+LPAREN
+IDENT "stringSlice"
+INT 1
+LPAREN
+IDENT "n"
+MINUS
+INT 1
+RPAREN
+IDENT "s"
+RPAREN
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
+ELSE
+INDENT
+UPPER "None"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "qualifyKey"
+COLON
+UPPER "String"
+ARROW
+UPPER "String"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "qualifyKey"
+IDENT "section"
+IDENT "key"
+INDENT
+PIPE
+IDENT "section"
+EQ_EQ
+STRING ""
+EQUAL
+IDENT "key"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "stringConcat"
+LBRACKET
+IDENT "section"
+COMMA
+STRING "."
+COMMA
+IDENT "key"
+RBRACKET
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "seenCount"
+COLON
+UPPER "String"
+ARROW
+UPPER "List"
+LPAREN
+UPPER "String"
+COMMA
+UPPER "Int"
+RPAREN
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "seenCount"
+UNDERSCORE
+LBRACKET
+RBRACKET
+EQUAL
+INT 0
+NEWLINE
+IDENT "seenCount"
+IDENT "name"
+LPAREN
+LPAREN
+IDENT "k"
+COMMA
+IDENT "c"
+RPAREN
+CONS
+IDENT "rest"
+RPAREN
+INDENT
+PIPE
+IDENT "k"
+EQ_EQ
+IDENT "name"
+EQUAL
+IDENT "c"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "seenCount"
+IDENT "name"
+IDENT "rest"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "bumpCount"
+COLON
+UPPER "String"
+ARROW
+UPPER "List"
+LPAREN
+UPPER "String"
+COMMA
+UPPER "Int"
+RPAREN
+ARROW
+UPPER "List"
+LPAREN
+UPPER "String"
+COMMA
+UPPER "Int"
+RPAREN
+NEWLINE
+IDENT "bumpCount"
+IDENT "name"
+LBRACKET
+RBRACKET
+EQUAL
+LBRACKET
+LPAREN
+IDENT "name"
+COMMA
+INT 1
+RPAREN
+RBRACKET
+NEWLINE
+IDENT "bumpCount"
+IDENT "name"
+LPAREN
+LPAREN
+IDENT "k"
+COMMA
+IDENT "c"
+RPAREN
+CONS
+IDENT "rest"
+RPAREN
+INDENT
+PIPE
+IDENT "k"
+EQ_EQ
+IDENT "name"
+EQUAL
+LPAREN
+IDENT "k"
+COMMA
+IDENT "c"
+PLUS
+INT 1
+RPAREN
+CONS
+IDENT "rest"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+LPAREN
+IDENT "k"
+COMMA
+IDENT "c"
+RPAREN
+CONS
+IDENT "bumpCount"
+IDENT "name"
+IDENT "rest"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "parseLinesAcc"
+COLON
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "String"
+ARROW
+UPPER "List"
+LPAREN
+UPPER "String"
+COMMA
+UPPER "Int"
+RPAREN
+ARROW
+UPPER "List"
+LPAREN
+UPPER "String"
+COMMA
+UPPER "TomlValue"
+RPAREN
+ARROW
+UPPER "Result"
+UPPER "String"
+LPAREN
+UPPER "List"
+LPAREN
+UPPER "String"
+COMMA
+UPPER "TomlValue"
+RPAREN
+RPAREN
+NEWLINE
+IDENT "parseLinesAcc"
+LBRACKET
+RBRACKET
+UNDERSCORE
+UNDERSCORE
+IDENT "acc"
+EQUAL
+UPPER "Ok"
+LPAREN
+IDENT "listReverse"
+IDENT "acc"
+RPAREN
+NEWLINE
+IDENT "parseLinesAcc"
+LPAREN
+IDENT "l"
+CONS
+IDENT "ls"
+RPAREN
+IDENT "section"
+IDENT "counts"
+IDENT "acc"
+EQUAL
+INDENT
+LET
+IDENT "trimmed"
+EQUAL
+IDENT "trim"
+LPAREN
+IDENT "stripComment"
+IDENT "l"
+RPAREN
+NEWLINE
+IF
+IDENT "trimmed"
+EQ_EQ
+STRING ""
+THEN
+IDENT "parseLinesAcc"
+IDENT "ls"
+IDENT "section"
+IDENT "counts"
+IDENT "acc"
+ELSE
+MATCH
+IDENT "parseHeader"
+IDENT "trimmed"
+INDENT
+UPPER "Some"
+LPAREN
+UPPER "HTable"
+IDENT "hdr"
+RPAREN
+FAT_ARROW
+IDENT "parseLinesAcc"
+IDENT "ls"
+IDENT "hdr"
+IDENT "counts"
+IDENT "acc"
+NEWLINE
+UPPER "Some"
+LPAREN
+UPPER "HArrayTable"
+IDENT "hdr"
+RPAREN
+FAT_ARROW
+INDENT
+LET
+IDENT "idx"
+EQUAL
+IDENT "seenCount"
+IDENT "hdr"
+IDENT "counts"
+NEWLINE
+IDENT "parseLinesAcc"
+IDENT "ls"
+LPAREN
+IDENT "stringConcat"
+LBRACKET
+IDENT "hdr"
+COMMA
+STRING "."
+COMMA
+IDENT "intToString"
+IDENT "idx"
+RBRACKET
+RPAREN
+LPAREN
+IDENT "bumpCount"
+IDENT "hdr"
+IDENT "counts"
+RPAREN
+IDENT "acc"
+NEWLINE
+DEDENT
+NEWLINE
+UPPER "None"
+FAT_ARROW
+MATCH
+IDENT "parseKv"
+IDENT "trimmed"
+INDENT
+UPPER "Err"
+IDENT "e"
+FAT_ARROW
+UPPER "Err"
+IDENT "e"
+NEWLINE
+UPPER "Ok"
+LPAREN
+IDENT "k"
+COMMA
+IDENT "v"
+RPAREN
+FAT_ARROW
+INDENT
+IDENT "parseLinesAcc"
+IDENT "ls"
+IDENT "section"
+IDENT "counts"
+LPAREN
+LPAREN
+IDENT "qualifyKey"
+IDENT "section"
+IDENT "k"
+COMMA
+IDENT "v"
+RPAREN
+CONS
+IDENT "acc"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "parse"
+COLON
+UPPER "String"
+ARROW
+UPPER "Result"
+UPPER "String"
+UPPER "Toml"
+NEWLINE
+IDENT "parse"
+IDENT "s"
+EQUAL
+IDENT "map"
+UPPER "Toml"
+LPAREN
+IDENT "parseLinesAcc"
+LPAREN
+IDENT "lines"
+IDENT "s"
+RPAREN
+STRING ""
+LBRACKET
+RBRACKET
+LBRACKET
+RBRACKET
+RPAREN
+NEWLINE
+IDENT "lookupKvs"
+COLON
+UPPER "String"
+ARROW
+UPPER "List"
+LPAREN
+UPPER "String"
+COMMA
+UPPER "TomlValue"
+RPAREN
+ARROW
+UPPER "Option"
+UPPER "TomlValue"
+NEWLINE
+IDENT "lookupKvs"
+UNDERSCORE
+LBRACKET
+RBRACKET
+EQUAL
+UPPER "None"
+NEWLINE
+IDENT "lookupKvs"
+IDENT "key"
+LPAREN
+LPAREN
+IDENT "k"
+COMMA
+IDENT "v"
+RPAREN
+CONS
+IDENT "rest"
+RPAREN
+INDENT
+PIPE
+IDENT "k"
+EQ_EQ
+IDENT "key"
+EQUAL
+UPPER "Some"
+IDENT "v"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "lookupKvs"
+IDENT "key"
+IDENT "rest"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "parseGetStr"
+COLON
+UPPER "String"
+ARROW
+UPPER "String"
+ARROW
+UPPER "Option"
+UPPER "String"
+NEWLINE
+IDENT "parseGetStr"
+IDENT "field"
+IDENT "src"
+EQUAL
+MATCH
+IDENT "parse"
+IDENT "src"
+INDENT
+UPPER "Err"
+UNDERSCORE
+FAT_ARROW
+UPPER "None"
+NEWLINE
+UPPER "Ok"
+IDENT "doc"
+FAT_ARROW
+IDENT "getString"
+IDENT "field"
+IDENT "doc"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "parseGetArr"
+COLON
+UPPER "String"
+ARROW
+UPPER "String"
+ARROW
+UPPER "Option"
+LPAREN
+UPPER "List"
+UPPER "String"
+RPAREN
+NEWLINE
+IDENT "parseGetArr"
+IDENT "field"
+IDENT "src"
+EQUAL
+MATCH
+IDENT "parse"
+IDENT "src"
+INDENT
+UPPER "Err"
+UNDERSCORE
+FAT_ARROW
+UPPER "None"
+NEWLINE
+UPPER "Ok"
+IDENT "doc"
+FAT_ARROW
+IDENT "getArray"
+IDENT "field"
+IDENT "doc"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "parseGetInt"
+COLON
+UPPER "String"
+ARROW
+UPPER "String"
+ARROW
+UPPER "Option"
+UPPER "Int"
+NEWLINE
+IDENT "parseGetInt"
+IDENT "field"
+IDENT "src"
+EQUAL
+MATCH
+IDENT "parse"
+IDENT "src"
+INDENT
+UPPER "Err"
+UNDERSCORE
+FAT_ARROW
+UPPER "None"
+NEWLINE
+UPPER "Ok"
+IDENT "doc"
+FAT_ARROW
+IDENT "getInt"
+IDENT "field"
+IDENT "doc"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "parseGetBool"
+COLON
+UPPER "String"
+ARROW
+UPPER "String"
+ARROW
+UPPER "Option"
+UPPER "Bool"
+NEWLINE
+IDENT "parseGetBool"
+IDENT "field"
+IDENT "src"
+EQUAL
+MATCH
+IDENT "parse"
+IDENT "src"
+INDENT
+UPPER "Err"
+UNDERSCORE
+FAT_ARROW
+UPPER "None"
+NEWLINE
+UPPER "Ok"
+IDENT "doc"
+FAT_ARROW
+IDENT "getBool"
+IDENT "field"
+IDENT "doc"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "parseTableCount"
+COLON
+UPPER "String"
+ARROW
+UPPER "String"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "parseTableCount"
+IDENT "name"
+IDENT "src"
+EQUAL
+MATCH
+IDENT "parse"
+IDENT "src"
+INDENT
+UPPER "Err"
+UNDERSCORE
+FAT_ARROW
+INT 0
+NEWLINE
+UPPER "Ok"
+IDENT "doc"
+FAT_ARROW
+IDENT "tableCount"
+IDENT "name"
+IDENT "doc"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "parseTableEntryStr"
+COLON
+UPPER "String"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "String"
+ARROW
+UPPER "String"
+ARROW
+UPPER "Option"
+UPPER "String"
+NEWLINE
+IDENT "parseTableEntryStr"
+IDENT "name"
+IDENT "i"
+IDENT "field"
+IDENT "src"
+EQUAL
+MATCH
+IDENT "parse"
+IDENT "src"
+INDENT
+UPPER "Err"
+UNDERSCORE
+FAT_ARROW
+UPPER "None"
+NEWLINE
+UPPER "Ok"
+IDENT "doc"
+FAT_ARROW
+MATCH
+IDENT "tableEntry"
+IDENT "name"
+IDENT "i"
+IDENT "doc"
+INDENT
+UPPER "None"
+FAT_ARROW
+UPPER "None"
+NEWLINE
+UPPER "Some"
+IDENT "e"
+FAT_ARROW
+IDENT "getString"
+IDENT "field"
+IDENT "e"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "getString"
+COLON
+UPPER "String"
+ARROW
+UPPER "Toml"
+ARROW
+UPPER "Option"
+UPPER "String"
+NEWLINE
+IDENT "getString"
+IDENT "key"
+LPAREN
+UPPER "Toml"
+IDENT "kvs"
+RPAREN
+EQUAL
+MATCH
+IDENT "lookupKvs"
+IDENT "key"
+IDENT "kvs"
+INDENT
+UPPER "Some"
+LPAREN
+UPPER "TStr"
+IDENT "s"
+RPAREN
+FAT_ARROW
+UPPER "Some"
+IDENT "s"
+NEWLINE
+UNDERSCORE
+FAT_ARROW
+UPPER "None"
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "getArray"
+COLON
+UPPER "String"
+ARROW
+UPPER "Toml"
+ARROW
+UPPER "Option"
+LPAREN
+UPPER "List"
+UPPER "String"
+RPAREN
+NEWLINE
+IDENT "getArray"
+IDENT "key"
+LPAREN
+UPPER "Toml"
+IDENT "kvs"
+RPAREN
+EQUAL
+MATCH
+IDENT "lookupKvs"
+IDENT "key"
+IDENT "kvs"
+INDENT
+UPPER "Some"
+LPAREN
+UPPER "TArr"
+IDENT "xs"
+RPAREN
+FAT_ARROW
+UPPER "Some"
+IDENT "xs"
+NEWLINE
+UNDERSCORE
+FAT_ARROW
+UPPER "None"
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "getInt"
+COLON
+UPPER "String"
+ARROW
+UPPER "Toml"
+ARROW
+UPPER "Option"
+UPPER "Int"
+NEWLINE
+IDENT "getInt"
+IDENT "key"
+LPAREN
+UPPER "Toml"
+IDENT "kvs"
+RPAREN
+EQUAL
+MATCH
+IDENT "lookupKvs"
+IDENT "key"
+IDENT "kvs"
+INDENT
+UPPER "Some"
+LPAREN
+UPPER "TInt"
+IDENT "n"
+RPAREN
+FAT_ARROW
+UPPER "Some"
+IDENT "n"
+NEWLINE
+UNDERSCORE
+FAT_ARROW
+UPPER "None"
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "getBool"
+COLON
+UPPER "String"
+ARROW
+UPPER "Toml"
+ARROW
+UPPER "Option"
+UPPER "Bool"
+NEWLINE
+IDENT "getBool"
+IDENT "key"
+LPAREN
+UPPER "Toml"
+IDENT "kvs"
+RPAREN
+EQUAL
+MATCH
+IDENT "lookupKvs"
+IDENT "key"
+IDENT "kvs"
+INDENT
+UPPER "Some"
+LPAREN
+UPPER "TBool"
+IDENT "b"
+RPAREN
+FAT_ARROW
+UPPER "Some"
+IDENT "b"
+NEWLINE
+UNDERSCORE
+FAT_ARROW
+UPPER "None"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "tableIdxOf"
+COLON
+UPPER "String"
+ARROW
+UPPER "String"
+ARROW
+UPPER "Option"
+UPPER "Int"
+NEWLINE
+IDENT "tableIdxOf"
+IDENT "prefix"
+IDENT "key"
+EQUAL
+INDENT
+IF
+IDENT "not"
+LPAREN
+IDENT "startsWith"
+IDENT "prefix"
+IDENT "key"
+RPAREN
+THEN
+UPPER "None"
+ELSE
+INDENT
+LET
+IDENT "rest"
+EQUAL
+IDENT "drop"
+LPAREN
+IDENT "stringLength"
+IDENT "prefix"
+RPAREN
+IDENT "key"
+NEWLINE
+MATCH
+IDENT "indexOf"
+STRING "."
+IDENT "rest"
+INDENT
+UPPER "None"
+FAT_ARROW
+UPPER "None"
+NEWLINE
+UPPER "Some"
+IDENT "d"
+FAT_ARROW
+IDENT "toInt"
+LPAREN
+IDENT "stringSlice"
+INT 0
+IDENT "d"
+IDENT "rest"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "tableCountGo"
+COLON
+UPPER "String"
+ARROW
+UPPER "List"
+LPAREN
+UPPER "String"
+COMMA
+UPPER "TomlValue"
+RPAREN
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "tableCountGo"
+UNDERSCORE
+LBRACKET
+RBRACKET
+IDENT "best"
+EQUAL
+IDENT "best"
+NEWLINE
+IDENT "tableCountGo"
+IDENT "prefix"
+LPAREN
+LPAREN
+IDENT "k"
+COMMA
+UNDERSCORE
+RPAREN
+CONS
+IDENT "rest"
+RPAREN
+IDENT "best"
+EQUAL
+MATCH
+IDENT "tableIdxOf"
+IDENT "prefix"
+IDENT "k"
+INDENT
+UPPER "None"
+FAT_ARROW
+IDENT "tableCountGo"
+IDENT "prefix"
+IDENT "rest"
+IDENT "best"
+NEWLINE
+UPPER "Some"
+IDENT "i"
+FAT_ARROW
+IDENT "tableCountGo"
+IDENT "prefix"
+IDENT "rest"
+LPAREN
+IDENT "max"
+LPAREN
+IDENT "i"
+PLUS
+INT 1
+RPAREN
+IDENT "best"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "tableCount"
+COLON
+UPPER "String"
+ARROW
+UPPER "Toml"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "tableCount"
+IDENT "name"
+LPAREN
+UPPER "Toml"
+IDENT "kvs"
+RPAREN
+EQUAL
+IDENT "tableCountGo"
+LPAREN
+IDENT "stringConcat"
+LBRACKET
+IDENT "name"
+COMMA
+STRING "."
+RBRACKET
+RPAREN
+IDENT "kvs"
+INT 0
+NEWLINE
+IDENT "stripTablePrefix"
+COLON
+UPPER "String"
+ARROW
+UPPER "List"
+LPAREN
+UPPER "String"
+COMMA
+UPPER "TomlValue"
+RPAREN
+ARROW
+UPPER "List"
+LPAREN
+UPPER "String"
+COMMA
+UPPER "TomlValue"
+RPAREN
+NEWLINE
+IDENT "stripTablePrefix"
+UNDERSCORE
+LBRACKET
+RBRACKET
+EQUAL
+LBRACKET
+RBRACKET
+NEWLINE
+IDENT "stripTablePrefix"
+IDENT "prefix"
+LPAREN
+LPAREN
+IDENT "k"
+COMMA
+IDENT "v"
+RPAREN
+CONS
+IDENT "rest"
+RPAREN
+INDENT
+PIPE
+IDENT "startsWith"
+IDENT "prefix"
+IDENT "k"
+EQUAL
+INDENT
+LPAREN
+IDENT "drop"
+LPAREN
+IDENT "stringLength"
+IDENT "prefix"
+RPAREN
+IDENT "k"
+COMMA
+IDENT "v"
+RPAREN
+CONS
+IDENT "stripTablePrefix"
+IDENT "prefix"
+IDENT "rest"
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "stripTablePrefix"
+IDENT "prefix"
+IDENT "rest"
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "tableEntry"
+COLON
+UPPER "String"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Toml"
+ARROW
+UPPER "Option"
+UPPER "Toml"
+NEWLINE
+IDENT "tableEntry"
+IDENT "name"
+IDENT "i"
+LPAREN
+UPPER "Toml"
+IDENT "kvs"
+RPAREN
+EQUAL
+INDENT
+IF
+IDENT "i"
+LT
+INT 0
+OR
+IDENT "i"
+GEQ
+IDENT "tableCount"
+IDENT "name"
+LPAREN
+UPPER "Toml"
+IDENT "kvs"
+RPAREN
+THEN
+INDENT
+UPPER "None"
+NEWLINE
+DEDENT
+ELSE
+INDENT
+UPPER "Some"
+LPAREN
+UPPER "Toml"
+LPAREN
+IDENT "stripTablePrefix"
+LPAREN
+IDENT "stringConcat"
+LBRACKET
+IDENT "name"
+COMMA
+STRING "."
+COMMA
+IDENT "intToString"
+IDENT "i"
+COMMA
+STRING "."
+RBRACKET
+RPAREN
+IDENT "kvs"
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "eqTomlValue"
+COLON
+UPPER "TomlValue"
+ARROW
+UPPER "TomlValue"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "eqTomlValue"
+LPAREN
+UPPER "TStr"
+IDENT "a"
+RPAREN
+LPAREN
+UPPER "TStr"
+IDENT "b"
+RPAREN
+EQUAL
+IDENT "a"
+EQ_EQ
+IDENT "b"
+NEWLINE
+IDENT "eqTomlValue"
+LPAREN
+UPPER "TArr"
+IDENT "a"
+RPAREN
+LPAREN
+UPPER "TArr"
+IDENT "b"
+RPAREN
+EQUAL
+IDENT "eqStrLists"
+IDENT "a"
+IDENT "b"
+NEWLINE
+IDENT "eqTomlValue"
+LPAREN
+UPPER "TInt"
+IDENT "a"
+RPAREN
+LPAREN
+UPPER "TInt"
+IDENT "b"
+RPAREN
+EQUAL
+IDENT "a"
+EQ_EQ
+IDENT "b"
+NEWLINE
+IDENT "eqTomlValue"
+LPAREN
+UPPER "TBool"
+IDENT "a"
+RPAREN
+LPAREN
+UPPER "TBool"
+IDENT "b"
+RPAREN
+EQUAL
+IDENT "a"
+EQ_EQ
+IDENT "b"
+NEWLINE
+IDENT "eqTomlValue"
+UNDERSCORE
+UNDERSCORE
+EQUAL
+UPPER "False"
+NEWLINE
+IDENT "eqStrLists"
+COLON
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "eqStrLists"
+LBRACKET
+RBRACKET
+LBRACKET
+RBRACKET
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "eqStrLists"
+LPAREN
+IDENT "x"
+CONS
+IDENT "xs"
+RPAREN
+LPAREN
+IDENT "y"
+CONS
+IDENT "ys"
+RPAREN
+EQUAL
+IDENT "x"
+EQ_EQ
+IDENT "y"
+AND
+IDENT "eqStrLists"
+IDENT "xs"
+IDENT "ys"
+NEWLINE
+IDENT "eqStrLists"
+UNDERSCORE
+UNDERSCORE
+EQUAL
+UPPER "False"
+NEWLINE
+IDENT "eqKvList"
+COLON
+UPPER "List"
+LPAREN
+UPPER "String"
+COMMA
+UPPER "TomlValue"
+RPAREN
+ARROW
+UPPER "List"
+LPAREN
+UPPER "String"
+COMMA
+UPPER "TomlValue"
+RPAREN
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "eqKvList"
+LBRACKET
+RBRACKET
+LBRACKET
+RBRACKET
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "eqKvList"
+LPAREN
+LPAREN
+IDENT "k1"
+COMMA
+IDENT "v1"
+RPAREN
+CONS
+IDENT "rest1"
+RPAREN
+LPAREN
+LPAREN
+IDENT "k2"
+COMMA
+IDENT "v2"
+RPAREN
+CONS
+IDENT "rest2"
+RPAREN
+EQUAL
+IDENT "k1"
+EQ_EQ
+IDENT "k2"
+AND
+IDENT "eqTomlValue"
+IDENT "v1"
+IDENT "v2"
+AND
+IDENT "eqKvList"
+IDENT "rest1"
+IDENT "rest2"
+NEWLINE
+IDENT "eqKvList"
+UNDERSCORE
+UNDERSCORE
+EQUAL
+UPPER "False"
+NEWLINE
+EXPORT
+IMPL
+UPPER "Eq"
+UPPER "TomlValue"
+WHERE
+INDENT
+IDENT "eq"
+EQUAL
+IDENT "eqTomlValue"
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+IMPL
+UPPER "Eq"
+UPPER "Toml"
+WHERE
+INDENT
+IDENT "eq"
+LPAREN
+UPPER "Toml"
+IDENT "a"
+RPAREN
+LPAREN
+UPPER "Toml"
+IDENT "b"
+RPAREN
+EQUAL
+IDENT "eqKvList"
+IDENT "a"
+IDENT "b"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "debugTomlValue"
+COLON
+UPPER "TomlValue"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "debugTomlValue"
+LPAREN
+UPPER "TStr"
+IDENT "s"
+RPAREN
+EQUAL
+IDENT "stringConcat"
+LBRACKET
+STRING "TStr "
+COMMA
+IDENT "debug"
+IDENT "s"
+RBRACKET
+NEWLINE
+IDENT "debugTomlValue"
+LPAREN
+UPPER "TArr"
+IDENT "xs"
+RPAREN
+EQUAL
+IDENT "stringConcat"
+LBRACKET
+STRING "TArr "
+COMMA
+IDENT "debugStrList"
+IDENT "xs"
+RBRACKET
+NEWLINE
+IDENT "debugTomlValue"
+LPAREN
+UPPER "TInt"
+IDENT "n"
+RPAREN
+EQUAL
+IDENT "stringConcat"
+LBRACKET
+STRING "TInt "
+COMMA
+IDENT "intToString"
+IDENT "n"
+RBRACKET
+NEWLINE
+IDENT "debugTomlValue"
+LPAREN
+UPPER "TBool"
+IDENT "b"
+RPAREN
+EQUAL
+INDENT
+IDENT "stringConcat"
+LBRACKET
+STRING "TBool "
+COMMA
+IF
+IDENT "b"
+THEN
+STRING "True"
+ELSE
+STRING "False"
+RBRACKET
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "debugStrList"
+COLON
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "debugStrList"
+IDENT "xs"
+EQUAL
+IDENT "stringConcat"
+LBRACKET
+STRING "["
+COMMA
+IDENT "joinDebugStrs"
+IDENT "xs"
+COMMA
+STRING "]"
+RBRACKET
+NEWLINE
+IDENT "joinDebugStrs"
+COLON
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "joinDebugStrs"
+LBRACKET
+RBRACKET
+EQUAL
+STRING ""
+NEWLINE
+IDENT "joinDebugStrs"
+LPAREN
+IDENT "x"
+CONS
+LBRACKET
+RBRACKET
+RPAREN
+EQUAL
+IDENT "debug"
+IDENT "x"
+NEWLINE
+IDENT "joinDebugStrs"
+LPAREN
+IDENT "x"
+CONS
+IDENT "xs"
+RPAREN
+EQUAL
+IDENT "stringConcat"
+LBRACKET
+IDENT "debug"
+IDENT "x"
+COMMA
+STRING ", "
+COMMA
+IDENT "joinDebugStrs"
+IDENT "xs"
+RBRACKET
+NEWLINE
+IDENT "debugKvPair"
+COLON
+LPAREN
+UPPER "String"
+COMMA
+UPPER "TomlValue"
+RPAREN
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "debugKvPair"
+LPAREN
+IDENT "k"
+COMMA
+IDENT "v"
+RPAREN
+EQUAL
+IDENT "stringConcat"
+LBRACKET
+STRING "("
+COMMA
+IDENT "debug"
+IDENT "k"
+COMMA
+STRING ", "
+COMMA
+IDENT "debugTomlValue"
+IDENT "v"
+COMMA
+STRING ")"
+RBRACKET
+NEWLINE
+IDENT "debugKvList"
+COLON
+UPPER "List"
+LPAREN
+UPPER "String"
+COMMA
+UPPER "TomlValue"
+RPAREN
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "debugKvList"
+LBRACKET
+RBRACKET
+EQUAL
+STRING ""
+NEWLINE
+IDENT "debugKvList"
+LPAREN
+IDENT "p"
+CONS
+LBRACKET
+RBRACKET
+RPAREN
+EQUAL
+IDENT "debugKvPair"
+IDENT "p"
+NEWLINE
+IDENT "debugKvList"
+LPAREN
+IDENT "p"
+CONS
+IDENT "ps"
+RPAREN
+EQUAL
+IDENT "stringConcat"
+LBRACKET
+IDENT "debugKvPair"
+IDENT "p"
+COMMA
+STRING ", "
+COMMA
+IDENT "debugKvList"
+IDENT "ps"
+RBRACKET
+NEWLINE
+EXPORT
+IMPL
+UPPER "Debug"
+UPPER "TomlValue"
+WHERE
+INDENT
+IDENT "debug"
+EQUAL
+IDENT "debugTomlValue"
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+IMPL
+UPPER "Debug"
+UPPER "Toml"
+WHERE
+INDENT
+IDENT "debug"
+LPAREN
+UPPER "Toml"
+IDENT "kvs"
+RPAREN
+EQUAL
+IDENT "stringConcat"
+LBRACKET
+STRING "Toml ["
+COMMA
+IDENT "debugKvList"
+IDENT "kvs"
+COMMA
+STRING "]"
+RBRACKET
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "displayTomlValue"
+COLON
+UPPER "TomlValue"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "displayTomlValue"
+LPAREN
+UPPER "TStr"
+IDENT "s"
+RPAREN
+EQUAL
+IDENT "debug"
+IDENT "s"
+NEWLINE
+IDENT "displayTomlValue"
+LPAREN
+UPPER "TArr"
+IDENT "xs"
+RPAREN
+EQUAL
+IDENT "debugStrList"
+IDENT "xs"
+NEWLINE
+IDENT "displayTomlValue"
+LPAREN
+UPPER "TInt"
+IDENT "n"
+RPAREN
+EQUAL
+IDENT "intToString"
+IDENT "n"
+NEWLINE
+IDENT "displayTomlValue"
+LPAREN
+UPPER "TBool"
+IDENT "b"
+RPAREN
+EQUAL
+IF
+IDENT "b"
+THEN
+STRING "true"
+ELSE
+STRING "false"
+NEWLINE
+IDENT "displayKvPair"
+COLON
+LPAREN
+UPPER "String"
+COMMA
+UPPER "TomlValue"
+RPAREN
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "displayKvPair"
+LPAREN
+IDENT "k"
+COMMA
+IDENT "v"
+RPAREN
+EQUAL
+IDENT "stringConcat"
+LBRACKET
+IDENT "k"
+COMMA
+STRING " = "
+COMMA
+IDENT "displayTomlValue"
+IDENT "v"
+RBRACKET
+NEWLINE
+IDENT "displayKvList"
+COLON
+UPPER "List"
+LPAREN
+UPPER "String"
+COMMA
+UPPER "TomlValue"
+RPAREN
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "displayKvList"
+LBRACKET
+RBRACKET
+EQUAL
+STRING ""
+NEWLINE
+IDENT "displayKvList"
+LPAREN
+IDENT "p"
+CONS
+LBRACKET
+RBRACKET
+RPAREN
+EQUAL
+IDENT "displayKvPair"
+IDENT "p"
+NEWLINE
+IDENT "displayKvList"
+LPAREN
+IDENT "p"
+CONS
+IDENT "ps"
+RPAREN
+EQUAL
+IDENT "stringConcat"
+LBRACKET
+IDENT "displayKvPair"
+IDENT "p"
+COMMA
+STRING ", "
+COMMA
+IDENT "displayKvList"
+IDENT "ps"
+RBRACKET
+NEWLINE
+EXPORT
+IMPL
+UPPER "Display"
+UPPER "TomlValue"
+WHERE
+INDENT
+IDENT "display"
+EQUAL
+IDENT "displayTomlValue"
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+IMPL
+UPPER "Display"
+UPPER "Toml"
+WHERE
+INDENT
+IDENT "display"
+LPAREN
+UPPER "Toml"
+LBRACKET
+RBRACKET
+RPAREN
+EQUAL
+STRING "Toml {}"
+NEWLINE
+IDENT "display"
+LPAREN
+UPPER "Toml"
+IDENT "kvs"
+RPAREN
+EQUAL
+IDENT "stringConcat"
+LBRACKET
+STRING "Toml { "
+COMMA
+IDENT "displayKvList"
+IDENT "kvs"
+COMMA
+STRING " }"
+RBRACKET
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "mkPackage"
+COLON
+UPPER "String"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "mkPackage"
+IDENT "v"
+EQUAL
+IDENT "stringConcat"
+LBRACKET
+STRING "[package]\nname = \"demo\"\nversion = \""
+COMMA
+IDENT "v"
+COMMA
+STRING "\""
+RBRACKET
+NEWLINE
+PROP
+STRING "a section key round-trips an Int-derived value"
+LPAREN
+IDENT "n"
+COLON
+UPPER "Int"
+RPAREN
+EQUAL
+INDENT
+IDENT "parseGetStr"
+STRING "package.version"
+LPAREN
+IDENT "mkPackage"
+LPAREN
+IDENT "intToString"
+IDENT "n"
+RPAREN
+RPAREN
+EQ_EQ
+UPPER "Some"
+LPAREN
+IDENT "intToString"
+IDENT "n"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+PROP
+STRING "a sibling key is stable regardless of the varying value"
+LPAREN
+IDENT "n"
+COLON
+UPPER "Int"
+RPAREN
+EQUAL
+INDENT
+IDENT "parseGetStr"
+STRING "package.name"
+LPAREN
+IDENT "mkPackage"
+LPAREN
+IDENT "intToString"
+IDENT "n"
+RPAREN
+RPAREN
+EQ_EQ
+UPPER "Some"
+STRING "demo"
+NEWLINE
+DEDENT
+NEWLINE
+PROP
+STRING "parse is deterministic"
+LPAREN
+IDENT "n"
+COLON
+UPPER "Int"
+RPAREN
+EQUAL
+INDENT
+IDENT "parse"
+LPAREN
+IDENT "mkPackage"
+LPAREN
+IDENT "intToString"
+IDENT "n"
+RPAREN
+RPAREN
+EQ_EQ
+IDENT "parse"
+LPAREN
+IDENT "mkPackage"
+LPAREN
+IDENT "intToString"
+IDENT "n"
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "mkInt"
+COLON
+UPPER "Int"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "mkInt"
+IDENT "n"
+EQUAL
+IDENT "stringConcat"
+LBRACKET
+STRING "[limits]\nretries = "
+COMMA
+IDENT "intToString"
+IDENT "n"
+RBRACKET
+NEWLINE
+PROP
+STRING "an unquoted integer round-trips as TInt"
+LPAREN
+IDENT "n"
+COLON
+UPPER "Int"
+RPAREN
+EQUAL
+INDENT
+IDENT "parseGetInt"
+STRING "limits.retries"
+LPAREN
+IDENT "mkInt"
+IDENT "n"
+RPAREN
+EQ_EQ
+UPPER "Some"
+IDENT "n"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "mkGates"
+COLON
+UPPER "Int"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "mkGates"
+IDENT "k"
+EQUAL
+IDENT "stringConcat"
+LBRACKET
+STRING "[[gate]]\nname = \"g"
+COMMA
+IDENT "intToString"
+IDENT "k"
+COMMA
+STRING "\"\n[[gate]]\nname = \"h"
+COMMA
+IDENT "intToString"
+IDENT "k"
+COMMA
+STRING "\"\n"
+COMMA
+RBRACKET
+NEWLINE
+PROP
+STRING "array-of-tables entries stay separate"
+LPAREN
+IDENT "k"
+COLON
+UPPER "Int"
+RPAREN
+EQUAL
+IDENT "parseTableCount"
+STRING "gate"
+LPAREN
+IDENT "mkGates"
+IDENT "k"
+RPAREN
+EQ_EQ
+INT 2
+AND
+IDENT "parseTableEntryStr"
+STRING "gate"
+INT 0
+STRING "name"
+LPAREN
+IDENT "mkGates"
+IDENT "k"
+RPAREN
+EQ_EQ
+UPPER "Some"
+LPAREN
+STRING "g"
+PLUSPLUS
+IDENT "intToString"
+IDENT "k"
+RPAREN
+AND
+IDENT "parseTableEntryStr"
+STRING "gate"
+INT 1
+STRING "name"
+LPAREN
+IDENT "mkGates"
+IDENT "k"
+RPAREN
+EQ_EQ
+UPPER "Some"
+LPAREN
+STRING "h"
+PLUSPLUS
+IDENT "intToString"
+IDENT "k"
+RPAREN
+NEWLINE
+PROP
+STRING "Display TomlValue separates the four variants"
+LPAREN
+IDENT "n"
+COLON
+UPPER "Int"
+RPAREN
+LPAREN
+IDENT "b"
+COLON
+UPPER "Bool"
+RPAREN
+EQUAL
+INDENT
+LET
+IDENT "s"
+EQUAL
+IDENT "intToString"
+IDENT "n"
+NEWLINE
+LET
+IDENT "vs"
+EQUAL
+LBRACKET
+UPPER "TStr"
+IDENT "s"
+COMMA
+UPPER "TArr"
+LBRACKET
+IDENT "s"
+RBRACKET
+COMMA
+UPPER "TInt"
+IDENT "n"
+COMMA
+UPPER "TBool"
+IDENT "b"
+RBRACKET
+NEWLINE
+IDENT "allDistinct"
+LPAREN
+IDENT "map"
+IDENT "display"
+IDENT "vs"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "allDistinct"
+COLON
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "allDistinct"
+LBRACKET
+RBRACKET
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "allDistinct"
+LPAREN
+IDENT "x"
+CONS
+IDENT "rest"
+RPAREN
+EQUAL
+IDENT "all"
+LPAREN
+IDENT "x"
+NEQ
+UNDERSCORE
+RPAREN
+IDENT "rest"
+AND
+IDENT "allDistinct"
+IDENT "rest"
+NEWLINE
+PROP
+STRING "Display Toml agrees with Eq Toml"
+LPAREN
+IDENT "k"
+COLON
+UPPER "String"
+RPAREN
+LPAREN
+IDENT "n"
+COLON
+UPPER "Int"
+RPAREN
+EQUAL
+INDENT
+LET
+IDENT "a"
+EQUAL
+UPPER "Toml"
+LBRACKET
+LPAREN
+IDENT "k"
+COMMA
+UPPER "TInt"
+IDENT "n"
+RPAREN
+RBRACKET
+NEWLINE
+LET
+IDENT "b"
+EQUAL
+UPPER "Toml"
+LBRACKET
+LPAREN
+IDENT "k"
+COMMA
+UPPER "TInt"
+IDENT "n"
+RPAREN
+RBRACKET
+NEWLINE
+LET
+IDENT "c"
+EQUAL
+UPPER "Toml"
+LBRACKET
+LPAREN
+IDENT "k"
+COMMA
+UPPER "TInt"
+LPAREN
+IDENT "n"
+PLUS
+INT 1
+RPAREN
+RPAREN
+RBRACKET
+NEWLINE
+LET
+IDENT "d"
+EQUAL
+UPPER "Toml"
+LBRACKET
+LPAREN
+IDENT "k"
+PLUSPLUS
+STRING "x"
+COMMA
+UPPER "TInt"
+IDENT "n"
+RPAREN
+RBRACKET
+NEWLINE
+IDENT "display"
+IDENT "a"
+EQ_EQ
+IDENT "display"
+IDENT "b"
+AND
+IDENT "eq"
+IDENT "a"
+IDENT "b"
+AND
+IDENT "not"
+LPAREN
+IDENT "display"
+IDENT "a"
+EQ_EQ
+IDENT "display"
+IDENT "c"
+RPAREN
+AND
+IDENT "not"
+LPAREN
+IDENT "display"
+IDENT "a"
+EQ_EQ
+IDENT "display"
+IDENT "d"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+PROP
+STRING "Display Toml renders every entry"
+LPAREN
+IDENT "k"
+COLON
+UPPER "String"
+RPAREN
+LPAREN
+IDENT "n"
+COLON
+UPPER "Int"
+RPAREN
+EQUAL
+INDENT
+LET
+IDENT "one"
+EQUAL
+IDENT "display"
+LPAREN
+UPPER "Toml"
+LBRACKET
+LPAREN
+IDENT "k"
+COMMA
+UPPER "TInt"
+IDENT "n"
+RPAREN
+RBRACKET
+RPAREN
+NEWLINE
+LET
+IDENT "two"
+EQUAL
+IDENT "display"
+LPAREN
+UPPER "Toml"
+LBRACKET
+LPAREN
+IDENT "k"
+COMMA
+UPPER "TInt"
+IDENT "n"
+RPAREN
+COMMA
+LPAREN
+IDENT "k"
+PLUSPLUS
+STRING "2"
+COMMA
+UPPER "TInt"
+IDENT "n"
+RPAREN
+RBRACKET
+RPAREN
+NEWLINE
+IDENT "stringLength"
+IDENT "two"
+GT
+IDENT "stringLength"
+IDENT "one"
+AND
+IDENT "contains"
+LPAREN
+IDENT "displayTomlValue"
+LPAREN
+UPPER "TInt"
+IDENT "n"
+RPAREN
+RPAREN
+IDENT "two"
+NEWLINE
+DEDENT
+NEWLINE
+NEWLINE
+EOF

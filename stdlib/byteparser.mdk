@@ -1,75 +1,57 @@
--- | byteparser — a binary parser-combinator library for Medaka.
---
+{- | Parser combinators over bytes.
+
+   A `ByteParser a` reads an `Array Int` of bytes from a position and
+   produces a value or a positioned error. Build parsers from the
+   primitives (`byte`, `satisfy`, `takeBytes`, `beUint`, `leSint`, and the
+   rest), combine them with `do` notation and the combinators (`many`,
+   `optional`, `choice`, `between`), and run one with `runByteParser`.
+
+   `orElse` backtracks fully: when the first parser fails, the second runs
+   from the same position. `bytebuilder` is the module that writes bytes. -}
+
 -- A structural transcription of `parsec/lib/parser.mdk` with `Array Char`
 -- replaced by `Array Int` (bytes), `Char` replaced by `Int`, and
 -- char-specific helpers replaced by byte/binary-specific primitives.
---
--- A `ByteParser a` wraps a function from (byte array + position) to a
--- `BResult a`, which is either success (value + new position) or failure
--- (message + position).  Position threading is EXPLICIT — there is no hidden
--- state monad; every primitive returns the position it consumed up to.
---
--- The type is given `Mappable` / `Applicative` / `Thenable` instances so that
--- `do`-notation sequences parsers, and an `Alternative` instance whose
--- `orElse` is LEFT-BIASED with FULL BACKTRACKING: `orElse p q` tries `p` at
--- the current position; if `p` fails it runs `q` at the SAME position (the
--- input is immutable and we never mutate the position on failure, so
--- backtracking is automatic).
---
--- Binary-specific primitives:
---   `beUint n`  — big-endian unsigned n-byte integer
---   `beSint n`  — big-endian signed n-byte integer (two's-complement)
---   `beFloat64` — 64-bit IEEE 754 big-endian float
---   `leUint n`  — little-endian unsigned n-byte integer
---   `leSint n`  — little-endian signed n-byte integer (two's-complement)
---   `leFloat64` — 64-bit IEEE 754 little-endian float
+-- Position threading is explicit: there is no hidden state monad; every
+-- primitive returns the position it consumed up to.
 
 import list.{reverse}
 
--- ---------------------------------------------------------------------------
--- Result and parser types
--- ---------------------------------------------------------------------------
+-- # Types
 
--- | Parse result: success carries the value and the position just past what
---   was consumed; failure carries an error message and the failure position.
---   `public export` so downstream modules (e.g. a SQLite record decoder) can
---   pattern-match `BOk`/`BErr` directly when they need byte-precise position
---   control beyond what the monadic combinators give.
+{- | The outcome of a parse: `BOk` with the value and the position just
+   past what was consumed, or `BErr` with a message and the position of
+   the failure.
+
+   Match on it directly when a decoder needs byte-precise control of the
+   position. -}
 public export data BResult a = BOk a Int | BErr String Int
 
--- | A byte-level parser is a function from (byte array, position) to BResult.
+-- | A parser: a function from the input bytes and a position to a result.
 public export data ByteParser a = ByteParser (Array Int -> Int -> BResult a)
 
--- | Run the wrapped function directly.
+-- | Runs a parser at a position in the input.
 export
 runBP : ByteParser a -> Array Int -> Int -> BResult a
 runBP (ByteParser f) input pos = f input pos
 
--- ---------------------------------------------------------------------------
--- BResult helpers
--- ---------------------------------------------------------------------------
-
--- | Mappable instance for BResult: map over the success value; pass errors
---   through unchanged.  Higher-kinded impl uses the BARE head `BResult`.
+-- | `map` transforms a successful result's value and leaves an error as it
+-- is.
 export impl Mappable BResult where
   map f (BOk a p) = BOk (f a) p
   map _ (BErr m p) = BErr m p
 
--- | Position-threading bind for BResult.  On success, passes the value and
---   the new position to the continuation; on failure, short-circuits.
---
---   Lets callers chain position-threading steps without repeating the
---   `BErr m ep => BErr m ep` pass-through boilerplate.
+{- | Passes a successful result's value and position to a continuation, or
+   returns the error as it is.
+
+   Chains position-threading steps without repeating the error
+   pass-through. -}
 export
 onOk : BResult a -> (a -> Int -> BResult b) -> BResult b
 onOk (BErr m ep) _ = BErr m ep
 onOk (BOk a pos) k = k a pos
 
--- ---------------------------------------------------------------------------
--- Typeclass instances
--- ---------------------------------------------------------------------------
---
--- Higher-kinded impls use the BARE constructor head: `ByteParser`, not
+-- Higher-kinded impls use the bare constructor head: `ByteParser`, not
 -- `ByteParser a`.
 
 export impl Mappable ByteParser where
@@ -87,9 +69,8 @@ export impl Thenable ByteParser where
   andThen p k = ByteParser (input pos =>
     onOk (runBP p input pos) (a p2 => runBP (k a) input p2))
 
--- | Left-biased, full-backtracking alternative.
---   `noMatch` always fails; `orElse p q` tries `p`, and on failure re-runs
---   `q` from the ORIGINAL position.
+{- | `orElse p q` runs `p`, and when it fails runs `q` from the same
+   position. `noMatch` always fails. -}
 export impl Alternative ByteParser where
   noMatch = ByteParser (_ pos => BErr "noMatch" pos)
   orElse p q = ByteParser (input pos =>
@@ -97,21 +78,19 @@ export impl Alternative ByteParser where
       BOk a pos2 => BOk a pos2
       BErr _ _ => runBP q input pos)
 
--- ---------------------------------------------------------------------------
--- Primitives
--- ---------------------------------------------------------------------------
+-- # Primitives
 
--- | Fail unconditionally with a message.
+-- | A parser that always fails with a message.
 export
 failWith : String -> ByteParser a
 failWith msg = ByteParser (_ pos => BErr msg pos)
 
--- | Consume one byte if it satisfies the predicate.
---
--- > runByteParser (satisfy (b => b == 65)) (arrayFromList [65, 66, 67])
--- Ok 65
--- > runByteParser (satisfy (b => b == 65)) (arrayFromList [99])
--- Err "unexpected byte at byte 0"
+{- | One byte satisfying a predicate.
+
+   > runByteParser (satisfy (b => b == 65)) (arrayFromList [65, 66, 67])
+   Ok 65
+   > runByteParser (satisfy (b => b == 65)) (arrayFromList [99])
+   Err "unexpected byte at byte 0" -}
 export
 satisfy : (Int -> Bool) -> ByteParser Int
 satisfy pred = ByteParser (satisfyStep pred)
@@ -122,30 +101,30 @@ satisfyStep pred input pos
   | pred input[pos] = BOk input[pos] (pos + 1)
   | otherwise = BErr "unexpected byte" pos
 
--- | Consume any single byte.
---
--- > runByteParser anyByte (arrayFromList [42])
--- Ok 42
+{- | Any one byte.
+
+   > runByteParser anyByte (arrayFromList [42])
+   Ok 42 -}
 export
 anyByte : ByteParser Int
 anyByte = satisfy (_ => True)
 
--- | Consume exactly the given byte value.
---
--- > runByteParser (byte 0xFF) (arrayFromList [255, 0])
--- Ok 255
--- > runByteParser (byte 0x00) (arrayFromList [1])
--- Err "unexpected byte at byte 0"
+{- | Exactly the byte `b`.
+
+   > runByteParser (byte 0xFF) (arrayFromList [255, 0])
+   Ok 255
+   > runByteParser (byte 0x00) (arrayFromList [1])
+   Err "unexpected byte at byte 0" -}
 export
 byte : Int -> ByteParser Int
 byte b = satisfy (== b)
 
--- | Match the end of input.  Yields Unit; consumes nothing.
---
--- > runByteParser eof (arrayFromList [])
--- Ok ()
--- > runByteParser eof (arrayFromList [1])
--- Err "expected end of input at byte 0"
+{- | The end of the input. Consumes nothing.
+
+   > runByteParser eof (arrayFromList [])
+   Ok ()
+   > runByteParser eof (arrayFromList [1])
+   Err "expected end of input at byte 0" -}
 export
 eof : ByteParser Unit
 eof = ByteParser eofStep
@@ -155,7 +134,7 @@ eofStep input pos
   | pos >= arrayLength input = BOk () pos
   | otherwise = BErr "expected end of input" pos
 
--- | Peek at the current byte without consuming it.
+-- | The next byte, without consuming it.
 export
 peek : ByteParser Int
 peek = ByteParser (input pos =>
@@ -164,15 +143,33 @@ peek = ByteParser (input pos =>
   else
     BOk input[pos] pos)
 
--- ---------------------------------------------------------------------------
--- Combinators
--- ---------------------------------------------------------------------------
+{- | Exactly `n` bytes, as a list.
 
--- | Zero-or-more.  Uses explicit position threading (a loop), since `many`
---   of a parser that consumes nothing must terminate.
---
--- > runByteParser (many (byte 1)) (arrayFromList [1, 1, 1, 2])
--- Ok [1, 1, 1]
+   > runByteParser (takeBytes 3) (arrayFromList [10, 20, 30, 40])
+   Ok [10, 20, 30] -}
+export
+takeBytes : Int -> ByteParser (List Int)
+takeBytes n = ByteParser (takeBytesGo n [])
+
+takeBytesGo : Int -> List Int -> Array Int -> Int -> BResult (List Int)
+takeBytesGo n acc input pos
+  | n <= 0 = BOk (reverse acc) pos
+  | pos >= arrayLength input = BErr "unexpected end of input" pos
+  | otherwise = takeBytesGo (n - 1) (input[pos]::acc) input (pos + 1)
+
+-- | Exactly `n` bytes, as an array.
+export
+takeSlice : Int -> ByteParser (Array Int)
+takeSlice n = map arrayFromList (takeBytes n)
+
+-- # Combinators
+
+{- | Zero or more repetitions of a parser, as a list.
+
+   Stops when the parser fails or consumes nothing.
+
+   > runByteParser (many (byte 1)) (arrayFromList [1, 1, 1, 2])
+   Ok [1, 1, 1] -}
 export
 many : ByteParser a -> ByteParser (List a)
 many p = ByteParser (input pos => manyGo p input pos [])
@@ -186,12 +183,12 @@ manyGo p input pos acc = match runBP p input pos
     else
       manyGo p input pos2 (a::acc)
 
--- | One-or-more.
---
--- > runByteParser (some (byte 2)) (arrayFromList [2, 2, 3])
--- Ok [2, 2]
--- > runByteParser (some (byte 2)) (arrayFromList [3])
--- Err "unexpected byte at byte 0"
+{- | One or more repetitions of a parser, as a list.
+
+   > runByteParser (some (byte 2)) (arrayFromList [2, 2, 3])
+   Ok [2, 2]
+   > runByteParser (some (byte 2)) (arrayFromList [3])
+   Err "unexpected byte at byte 0" -}
 export
 some : ByteParser a -> ByteParser (List a)
 some p = do
@@ -199,7 +196,7 @@ some p = do
   xs <- many p
   pure (x::xs)
 
--- | One-or-more `p` separated by `sep`.
+-- | One or more repetitions of `p`, separated by `sep`.
 export
 sepBy1 : ByteParser a -> ByteParser b -> ByteParser (List a)
 sepBy1 p sep = do
@@ -209,22 +206,22 @@ sepBy1 p sep = do
     p)
   pure (x::xs)
 
--- | Zero-or-more `p` separated by `sep`.
+-- | Zero or more repetitions of `p`, separated by `sep`.
 export
 sepBy : ByteParser a -> ByteParser b -> ByteParser (List a)
 sepBy p sep = orElse (sepBy1 p sep) (pure [])
 
--- | Try `p`; produce `Some` on success, `None` (consuming nothing) on failure.
---
--- > runByteParser (optional (byte 5)) (arrayFromList [5])
--- Ok Some 5
--- > runByteParser (optional (byte 5)) (arrayFromList [9])
--- Ok None
+{- | `Some` the parser's value, or `None` when it fails, consuming nothing.
+
+   > runByteParser (optional (byte 5)) (arrayFromList [5])
+   Ok Some 5
+   > runByteParser (optional (byte 5)) (arrayFromList [9])
+   Ok None -}
 export
 optional : ByteParser a -> ByteParser (Option a)
 optional p = orElse (map Some p) (pure None)
 
--- | `between open close p` parses `open`, then `p`, then `close`, yielding `p`.
+-- | `open`, then `p`, then `close`, keeping only `p`'s value.
 export
 between : ByteParser open -> ByteParser close -> ByteParser a -> ByteParser a
 between open close p = do
@@ -233,17 +230,18 @@ between open close p = do
   _ <- close
   pure x
 
--- | First successful parser in the list; fails if all fail.
+-- | The first parser in the list that succeeds. Fails when all of them
+-- fail.
 export
 choice : List (ByteParser a) -> ByteParser a
 choice [] = failWith "choice: no alternatives"
 choice (q::rest) = orElse q (choice rest)
 
--- | Left-associative chaining of `p` separated by operator parser `op`
---   whose value is a binary function.
 -- Structurally identical to compiler/frontend/parser.mdk's chainl1, but over
--- a different parser type (ByteParser vs token Parser) — not soundly
+-- a different parser type (ByteParser vs token Parser); not soundly
 -- shareable without a generic Monad/Alternative abstraction.
+{- | One or more `p` separated by `op`, folded from the left with the
+   function `op` produces. -}
 export
 chainl1 : ByteParser a -> ByteParser (a -> a -> a) -> ByteParser a
 -- lint-disable-next-line rule-duplicate-body
@@ -259,41 +257,21 @@ chainl1Rest p op acc = orElse
     chainl1Rest p op (f acc y))
   (pure acc)
 
--- | Read exactly N bytes, returning them as a List Int.
---
--- > runByteParser (takeBytes 3) (arrayFromList [10, 20, 30, 40])
--- Ok [10, 20, 30]
+-- # Integers and floats
+
+{- | An unsigned integer of `n` bytes, from 1 to 8, most significant byte
+   first.
+
+   > runByteParser (beUint 2) (arrayFromList [1, 2])
+   Ok 258 -}
 export
-takeBytes : Int -> ByteParser (List Int)
-takeBytes n = ByteParser (takeBytesGo n [])
+beUint : Int -> ByteParser Int
+beUint n = ByteParser (beUintGo n 0)
 
-takeBytesGo : Int -> List Int -> Array Int -> Int -> BResult (List Int)
-takeBytesGo n acc input pos
-  | n <= 0 = BOk (reverse acc) pos
-  | pos >= arrayLength input = BErr "unexpected end of input" pos
-  | otherwise = takeBytesGo (n - 1) (input[pos]::acc) input (pos + 1)
-
--- | Read exactly N bytes, returning them as an Array Int slice.
-export
-takeSlice : Int -> ByteParser (Array Int)
-takeSlice n = map arrayFromList (takeBytes n)
-
--- ---------------------------------------------------------------------------
--- Binary-specific primitives
--- ---------------------------------------------------------------------------
-
--- | Read a big-endian unsigned integer of exactly N bytes (N in 1..8).
---
--- Examples (big-endian 2-byte: [0x01, 0x02] → 258):
--- > runByteParser (beUint 2) (arrayFromList [1, 2])
--- Ok 258
 -- > runByteParser (beUint 1) (arrayFromList [255])
 -- Ok 255
 -- > runByteParser (beUint 4) (arrayFromList [0, 0, 1, 0])
 -- Ok 256
-export
-beUint : Int -> ByteParser Int
-beUint n = ByteParser (beUintGo n 0)
 
 beUintGo : Int -> Int -> Array Int -> Int -> BResult Int
 beUintGo n acc input pos
@@ -301,20 +279,15 @@ beUintGo n acc input pos
   | pos >= arrayLength input = BErr "unexpected end of input" pos
   | otherwise = beUintGo (n - 1) (acc * 256 + input[pos]) input (pos + 1)
 
--- | Read a big-endian SIGNED integer of exactly N bytes (N in 1..8),
---   two's-complement.
---
 -- The sign bit is the MSB of the first byte.  For an N-byte integer the sign
 -- threshold is 128 * 256^(N-1) = 2^(8*N-1).
---
--- > runByteParser (beSint 1) (arrayFromList [255])
--- Ok -1
--- > runByteParser (beSint 1) (arrayFromList [127])
--- Ok 127
--- > runByteParser (beSint 2) (arrayFromList [255, 255])
--- Ok -1
--- > runByteParser (beSint 2) (arrayFromList [0, 1])
--- Ok 1
+{- | A two's complement signed integer of `n` bytes, from 1 to 8, most
+   significant byte first.
+
+   > runByteParser (beSint 1) (arrayFromList [255])
+   Ok -1
+   > runByteParser (beSint 2) (arrayFromList [0, 1])
+   Ok 1 -}
 export
 beSint : Int -> ByteParser Int
 beSint n = do
@@ -322,37 +295,41 @@ beSint n = do
   let threshold = pow2 (8 * n - 1)
   pure (if u >= threshold then u - threshold * 2 else u)
 
--- | 2^n implemented with left-shift (works for n in 0..62 on 63-bit Int).
+-- > runByteParser (beSint 1) (arrayFromList [127])
+-- Ok 127
+-- > runByteParser (beSint 2) (arrayFromList [255, 255])
+-- Ok -1
+
+-- 2^n implemented with left-shift (works for n in 0..62 on 63-bit Int).
 pow2 : Int -> Int
 pow2 n = shiftLeft 1 n
 
--- | Read a 64-bit IEEE 754 big-endian float as a Medaka Float.
--- Consumes exactly 8 bytes in big-endian order and reinterprets their bit
--- pattern as an IEEE 754 double via `bytesToFloat64`.
---
--- > runByteParser beFloat64 (arrayFromList [63, 248, 0, 0, 0, 0, 0, 0])
--- Ok 1.5
--- > runByteParser beFloat64 (arrayFromList [192, 0, 0, 0, 0, 0, 0, 0])
--- Ok -2.0
+{- | A 64-bit IEEE 754 float, most significant byte first.
+
+   > runByteParser beFloat64 (arrayFromList [63, 248, 0, 0, 0, 0, 0, 0])
+   Ok 1.5 -}
 export
 beFloat64 : ByteParser Float
 beFloat64 = do
   arr <- takeSlice 8
   pure (bytesToFloat64 arr 0)
 
--- | Read a little-endian unsigned integer of exactly N bytes (N in 1..8).
---   Least-significant byte first (mirror of `beUint`).
---
--- Examples (little-endian 2-byte: [0x02, 0x01] → 258):
--- > runByteParser (leUint 2) (arrayFromList [2, 1])
--- Ok 258
+-- > runByteParser beFloat64 (arrayFromList [192, 0, 0, 0, 0, 0, 0, 0])
+-- Ok -2.0
+
+{- | An unsigned integer of `n` bytes, from 1 to 8, least significant byte
+   first.
+
+   > runByteParser (leUint 2) (arrayFromList [2, 1])
+   Ok 258 -}
+export
+leUint : Int -> ByteParser Int
+leUint n = ByteParser (leUintGo n 0 0)
+
 -- > runByteParser (leUint 1) (arrayFromList [255])
 -- Ok 255
 -- > runByteParser (leUint 4) (arrayFromList [0, 1, 0, 0])
 -- Ok 256
-export
-leUint : Int -> ByteParser Int
-leUint n = ByteParser (leUintGo n 0 0)
 
 leUintGo : Int -> Int -> Int -> Array Int -> Int -> BResult Int
 leUintGo n shift acc input pos
@@ -360,18 +337,13 @@ leUintGo n shift acc input pos
   | pos >= arrayLength input = BErr "unexpected end of input" pos
   | otherwise = leUintGo (n - 1) (shift + 8) (acc + input[pos] * pow2 shift) input (pos + 1)
 
--- | Read a little-endian SIGNED integer of exactly N bytes (N in 1..8),
---   two's-complement.  Mirror of `beSint`: least-significant byte first,
---   with the sign bit in the MSB of the LAST byte.
---
--- > runByteParser (leSint 1) (arrayFromList [255])
--- Ok -1
--- > runByteParser (leSint 1) (arrayFromList [127])
--- Ok 127
--- > runByteParser (leSint 2) (arrayFromList [255, 255])
--- Ok -1
--- > runByteParser (leSint 2) (arrayFromList [1, 0])
--- Ok 1
+{- | A two's complement signed integer of `n` bytes, from 1 to 8, least
+   significant byte first.
+
+   > runByteParser (leSint 1) (arrayFromList [255])
+   Ok -1
+   > runByteParser (leSint 2) (arrayFromList [1, 0])
+   Ok 1 -}
 export
 leSint : Int -> ByteParser Int
 leSint n = do
@@ -379,32 +351,33 @@ leSint n = do
   let threshold = pow2 (8 * n - 1)
   pure (if u >= threshold then u - threshold * 2 else u)
 
--- | Read a 64-bit IEEE 754 little-endian float as a Medaka Float.
---   Consumes exactly 8 bytes in little-endian order; reverses them before
---   reinterpreting the bit pattern via `bytesToFloat64` (which expects
---   big-endian byte order).
---
--- > runByteParser leFloat64 (arrayFromList [0, 0, 0, 0, 0, 0, 248, 63])
--- Ok 1.5
--- > runByteParser leFloat64 (arrayFromList [0, 0, 0, 0, 0, 0, 0, 192])
--- Ok -2.0
+-- > runByteParser (leSint 1) (arrayFromList [127])
+-- Ok 127
+-- > runByteParser (leSint 2) (arrayFromList [255, 255])
+-- Ok -1
+
+{- | A 64-bit IEEE 754 float, least significant byte first.
+
+   > runByteParser leFloat64 (arrayFromList [0, 0, 0, 0, 0, 0, 248, 63])
+   Ok 1.5 -}
 export
 leFloat64 : ByteParser Float
 leFloat64 = do
   bytes <- takeBytes 8
   pure (bytesToFloat64 (arrayFromList (reverse bytes)) 0)
 
--- ---------------------------------------------------------------------------
--- Entry point
--- ---------------------------------------------------------------------------
+-- > runByteParser leFloat64 (arrayFromList [0, 0, 0, 0, 0, 0, 0, 192])
+-- Ok -2.0
 
--- | Run a `ByteParser` over the full byte array starting at position 0.
---   Reports the success value or a positioned error message.
---
--- > runByteParser (byte 42) (arrayFromList [42])
--- Ok 42
--- > runByteParser (byte 42) (arrayFromList [7])
--- Err "unexpected byte at byte 0"
+-- # Running a parser
+
+{- | The value a parser produces from the start of the input, or `Err` with
+   the message and the byte position of the failure.
+
+   > runByteParser (byte 42) (arrayFromList [42])
+   Ok 42
+   > runByteParser (byte 42) (arrayFromList [7])
+   Err "unexpected byte at byte 0" -}
 export
 runByteParser : ByteParser a -> Array Int -> Result String a
 runByteParser p bytes = match runBP p bytes 0

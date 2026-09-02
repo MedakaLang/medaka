@@ -1,78 +1,80 @@
 # hex
 
-## `encode`
+Hexadecimal encoding and decoding of bytes.
+
+Bytes are an `Array Int` with each element from `0` to `255`, the same
+form `readFileBytes` and `writeFileBytes` use. Each byte becomes two hex
+digits, most significant first. `encode` produces lowercase digits and
+`decode` accepts either case.
+
+## Encoding
+
+### `encode`
 
 ```
 encode : Array Int -> String
 ```
 
-Bytes → lowercase hex string, two characters per byte, most-significant
-nibble first.
+The bytes as lowercase hex, two digits per byte.
 
 ```medaka
 > encode (fromList [255, 0, 16])
 "ff0010"
-> encode ([||] : Array Int)
-""
-> encode (fromList [0])
-"00"
 ```
 
-## `encodeUpper`
+### `encodeUpper`
 
 ```
 encodeUpper : Array Int -> String
 ```
 
-Bytes → uppercase hex string.
+The bytes as uppercase hex, two digits per byte.
 
 ```medaka
 > encodeUpper (fromList [255, 0, 16])
 "FF0010"
 ```
 
-## `encodeString`
+### `encodeString`
 
 ```
 encodeString : String -> String
 ```
 
-UTF-8 bytes of `s` → lowercase hex string.
+The UTF-8 bytes of a string as lowercase hex.
 
 ```medaka
 > encodeString "Hello"
 "48656c6c6f"
 ```
 
-## `decode`
+## Decoding
+
+### `decode`
 
 ```
 decode : String -> Result String (Array Int)
 ```
 
-Hex string → bytes.  `Err` on odd length or any non-hex-digit character
-(uppercase and lowercase digits both accepted; no whitespace skipping).
+The bytes written in a hex string.
+
+`Err` when the string has an odd length or any character that is not a
+hex digit. Whitespace is not skipped.
 
 ```medaka
 > decode "ff0010"
 Ok [|255, 0, 16|]
-> decode "FF0010"
-Ok [|255, 0, 16|]
-> decode ""
-Ok [||]
-> decode "f"
-Err "hex.decode: odd-length input"
 > decode "zz"
 Err "hex.decode: invalid hex digit"
 ```
 
-## `decodeString`
+### `decodeString`
 
 ```
 decodeString : String -> Result String String
 ```
 
-Hex string → UTF-8-decoded String.
+The string whose UTF-8 bytes are written in a hex string.
 
 ```medaka
 > decodeString "48656c6c6f"

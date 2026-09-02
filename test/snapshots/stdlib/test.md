@@ -1,18 +1,23 @@
 # META
-source_lines=154
+source_lines=164
 stages=DESUGAR,MARK
 # SOURCE
--- test.mdk — unit testing library.
--- Import what you need: `import test.{expectEqual, expectTrue, …}`
--- Run with: `medaka test your_file.mdk`
--- See STDLIB.md for the division-of-labour between doctests / props / tests.
+{- | Assertions for unit tests.
 
-{- | The result of a single test expectation. -}
+   An assertion produces an `Expectation`: `Pass`, or `Fail` with a
+   message. Write a test as `test "name" = expectEqual expected actual`,
+   and run the file with `medaka test`, which also runs the doctests and
+   `prop` declarations it finds. `runTests` runs a list of tests from an
+   ordinary program instead.
+
+   Import what you need: `import test.{expectEqual, expectTrue}`. -}
+
+-- | The result of one assertion.
 public export data Expectation = Pass | Fail String deriving (Eq, Debug)
 
--- ── Primitive assertions ─────────────────────────────────────────────────
+-- # Assertions
 
-{- | Always passes.
+{- | An assertion that always passes.
 
    > pass
    Pass -}
@@ -20,7 +25,7 @@ export
 pass : Expectation
 pass = Pass
 
-{- | Fails with the given message.
+{- | An assertion that fails with a message.
 
    > fail "not ready"
    Fail "not ready" -}
@@ -28,7 +33,7 @@ export
 fail : String -> Expectation
 fail msg = Fail msg
 
-{- | Passes when the `Bool` is `True`.
+{- | Passes when the value is `True`.
 
    > expectTrue True
    Pass
@@ -39,7 +44,7 @@ expectTrue : Bool -> Expectation
 expectTrue True = Pass
 expectTrue False = Fail "expected True but got False"
 
-{- | Passes when the `Bool` is `False`.
+{- | Passes when the value is `False`.
 
    > expectFalse False
    Pass
@@ -51,6 +56,8 @@ expectFalse False = Pass
 expectFalse True = Fail "expected False but got True"
 
 {- | Passes when the two values are equal.
+
+   The message names both values in their `debug` form.
 
    > expectEqual 42 42
    Pass
@@ -64,7 +71,7 @@ expectEqual expected actual =
   else
     Fail "expected \{debug expected} but got \{debug actual}"
 
-{- | Passes when the two values are not equal.
+{- | Passes when the two values differ.
 
    > expectNotEqual 1 2
    Pass
@@ -78,7 +85,7 @@ expectNotEqual expected actual =
   else
     Fail ("expected values to differ but both were " ++ debug actual)
 
-{- | Passes when `actual < expected`.
+{- | Passes when `actual` is less than `expected`.
 
    > expectLessThan 10 3
    Pass
@@ -92,7 +99,7 @@ expectLessThan expected actual =
   else
     Fail "expected \{debug actual} < \{debug expected}"
 
-{- | Passes when `actual > expected`.
+{- | Passes when `actual` is greater than `expected`.
 
    > expectGreaterThan 0 5
    Pass
@@ -111,8 +118,9 @@ expectAllStep : Expectation -> Expectation -> Expectation
 expectAllStep (Fail msg) _ = Fail msg
 expectAllStep Pass e = e
 
-{- | Combine a list of expectations: passes only when all of them pass.
-   The first `Fail` is returned immediately.
+{- | Passes when every expectation in the list passes.
+
+   The result is the first `Fail`, when there is one.
 
    > expectAll [Pass, Pass, Pass]
    Pass
@@ -122,7 +130,7 @@ export
 expectAll : List Expectation -> Expectation
 expectAll es = fold expectAllStep Pass es
 
--- ── Test runner ──────────────────────────────────────────────────────────
+-- # Running tests
 
 goTests : List (String, Unit -> Expectation) -> Int -> Int -> <IO> Bool
 goTests [] passed failed =
@@ -136,15 +144,17 @@ goTests ((name, thunk)::rest) passed failed = match thunk ()
     println "  FAIL \{name}: \{msg}"
     goTests rest passed (failed + 1)
 
-{- | Run a list of `(name, thunk)` test pairs.  Prints each result and a
-   final summary; returns `True` when all tests pass. -}
+{- | Runs a list of named tests, printing each result and a summary.
+
+   Each test is a name and a function from `Unit` to an `Expectation`.
+   Returns `True` when every test passes. -}
 export
 runTests : List (String, Unit -> Expectation) -> <IO> Bool
 runTests tests = goTests tests 0 0
 
 -- ── Instance laws ────────────────────────────────────────────────────────
--- LAW (A-2): derived `Eq Expectation` must separate the two constructors AND
--- the payload — an assertion library whose results compare equal regardless of
+-- LAW: derived `Eq Expectation` must separate the two constructors AND the
+-- payload; an assertion library whose results compare equal regardless of
 -- the failure message would make every `expectEqual` over an `Expectation`
 -- pass vacuously.
 prop "Eq Expectation separates constructors and payloads" (m : String) = pass == pass
@@ -152,7 +162,7 @@ prop "Eq Expectation separates constructors and payloads" (m : String) = pass ==
   && pass == fail m == False
   && fail m == fail (m ++ "!") == False
 
--- LAW (A-2): `Debug` agrees with `Eq` — equal expectations render identically,
+-- LAW: `Debug` agrees with `Eq`: equal expectations render identically,
 -- distinguishable ones render differently.
 prop "Debug Expectation agrees with Eq" (m : String) = debug (fail m) == debug (fail m)
   && debug (fail m) == debug pass == False
