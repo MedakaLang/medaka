@@ -600,7 +600,7 @@ test "prefix return-position" = expectEqual 1 pickNResult
 --              t_pf_dispatch_both_list, t_pf_dispatch_both_option
 
 myMax : (Foldable t, Ord a) => t a -> Option a
-myMax = fold stepMax None where
+myMax xs = fold stepMax None xs where
   stepMax None x = Some x
   stepMax (Some m) x = Some (max m x)
 

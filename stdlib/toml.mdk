@@ -34,7 +34,7 @@ public export data Toml = Toml (List (String, TomlValue))
 -- ── Helpers ──────────────────────────────────────────────────────────────────
 
 listReverse : List a -> List a
-listReverse = listRevGo []
+listReverse xs = listRevGo [] xs
 
 listRevGo : List a -> List a -> List a
 listRevGo acc [] = acc

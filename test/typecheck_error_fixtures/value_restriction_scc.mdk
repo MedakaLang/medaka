@@ -1,0 +1,29 @@
+-- Value restriction inside a multi-member SCC (issue 2554).  `cell` and `helper`
+-- are mutually recursive (helper mentions cell under a lambda), so they form one
+-- binding group.  `cell = Ref (helper 0)` is a zero-argument EXPANSIVE binding:
+-- generalizing it would make one mutable cell polymorphic, written at String
+-- and read at Int (the native binary printed a garbage integer at exit 0).
+-- DICT-SEMANTICS §4.1 G2 gates generalization per binding on syntactic value-
+-- hood; membership in a mutually-recursive group grants no exemption, so `cell`
+-- stays monomorphic and the two uses at different types are a type error.  The
+-- golden's second line (`No impl of Num for String`) is the cascade from the
+-- `-1` literal in `readInt` once `cell` has been pinned at `Option String`.
+cell = Ref (helper 0)
+
+helper : Int -> Option a
+helper n =
+  let f = (u => cell)
+  None
+
+writeString : Unit -> Unit
+writeString u = cell := Some "hello"
+
+readInt : Unit -> Int
+readInt u =
+  match !cell
+    Some n => n
+    None => -1
+
+main =
+  let _ = writeString ()
+  println (readInt ())

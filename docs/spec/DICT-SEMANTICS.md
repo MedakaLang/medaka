@@ -721,11 +721,41 @@ tracked as #1082, gated on this clause).
   constructor-only. The three sibling arms (`ETuple`, `EListLit`, `ERecordCreate`) fold
   with `allList isNonexpansive` and always did.
 
+  - **#2554 and #2556 (fixed 2026-09-02) — two EXEMPTIONS, not two holes in the
+    set.** The predicate's arms matched this definition, but `sccSchemes` consulted
+    it only *conditionally*: a member of a multi-member binding group was generalized
+    unconditionally ("a mutually-recursive group is always a function group" — false
+    for a zero-argument member such as `cell = Ref (helper 0)` whose sibling merely
+    closes over it), and a **signed** binding whose *post-unification type* was an
+    arrow was generalized regardless of its RHS (`weird : a -> a; weird = mk ()`,
+    where `mk ()` allocates one cell and returns a closure over it). Both are the
+    #1093 shape one level up — a rule stated in terms of something other than the
+    bound expression's syntax — and both produced a polymorphic mutable cell:
+    `check` exit 0, the native binary printing a garbage integer (#2554) or
+    segfaulting (#2556). The fix deletes both exemptions: the decision is per
+    binding, on the clauses' syntax alone, on every group shape and whether or not a
+    signature is present. Consequence for authors: a point-free signed binding whose
+    RHS is an application is expansive — write `maximum xs = fold step None xs`, not
+    `maximum = fold step None` (`stdlib/core.mdk` and `stdlib/toml.mdk` were
+    changed accordingly). Pinned by `test/typecheck_error_fixtures/
+    value_restriction_scc.mdk` and `value_restriction_sig_pointfree.mdk`.
+
+    Two consequences, both ruled 2026-09-02 (spec as written): a declared
+    polymorphic signature over an expansive body is now a **definition-site error**
+    (`T-SIG-OVER-EXPANSIVE`, `HM-CORE-SEMANTICS.md` §1 clause 4) rather than the
+    #830 silent narrowing — this retires the "point-free constrained CAF" of Phase 89
+    (`sumOf : (Foldable t, Num a) => t a -> a; sumOf = fold (+) 0`), whose dictionary
+    prefix over a non-value is exactly what this clause forbids; and the predicate
+    treats a dictionary-marked variable (`EMethodAt`/`EDictAt`/`EMethodRef`, minted
+    by `run`/`build`'s pre-pass) as the variable it is, so `callMin = min` is a value
+    under every verb.
+
   ⚠️ **This paragraph does NOT assert that the implementation's predicate is now
-  exactly this clause's set, and G3 below is NOT thereby discharged.** Both #1139 and
-  #1150 were closed one hole at a time; establishing set equality is a separate
-  argument this document has not made, and its 🚨 has been wrong about "the hole that
-  is live" twice. What has changed is that no hole in the predicate is currently known.
+  exactly this clause's set, and G3 below is NOT thereby discharged.** #1139, #1150,
+  #2554 and #2556 were closed one hole at a time; establishing set equality is a
+  separate argument this document has not made, and its 🚨 has been wrong about "the
+  hole that is live" three times. What has changed is that no hole in the predicate
+  is currently known, and that the predicate is now consulted **unconditionally**.
 
 - **G3 — Evaluation-timing neutrality, and exactly what it is contingent on.**
   Wrapping a bound expression `e` as `λd̄. e` moves `e`'s evaluation from binding time

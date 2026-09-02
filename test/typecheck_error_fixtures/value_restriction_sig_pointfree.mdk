@@ -1,0 +1,31 @@
+-- Value restriction on a SIGNED point-free binding (issue 2556).  `weird = mk ()`
+-- is an application: evaluating it runs `mk`, which allocates ONE Ref and returns
+-- a closure over it.  A signature `weird : a -> a` does not make the RHS a value —
+-- generalizing it shares that one cell across every instantiation, so a String
+-- read back through the Int instantiation segfaulted the native binary.  Under
+-- DICT-SEMANTICS §4.1 G2 the decision is syntactic: `weird` stays monomorphic,
+-- and its two uses at Int and String are a type error.  (Write
+-- `weird x = mk () x` to make it a value.)
+mk : Unit -> (a -> a)
+mk u =
+  let r = Ref None
+  (x =>
+    match !r
+      None =>
+        r := Some x
+        x
+      Some y => y)
+
+weird : a -> a
+weird = mk ()
+
+useInt : Int -> Int
+useInt n = weird n
+
+useString : String -> String
+useString s = weird s
+
+main =
+  let i = useInt 42
+  let s = useString "oops"
+  println i

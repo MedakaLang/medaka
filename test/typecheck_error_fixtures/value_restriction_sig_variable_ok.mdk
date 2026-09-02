@@ -1,0 +1,14 @@
+-- The positive control for the value-restriction signature rule: a point-free
+-- binding whose RHS is a bare VARIABLE is a syntactic value, so a polymorphic,
+-- constrained signature over it is honored — `callMin = min` generalizes and
+-- dispatches at Int and at String.  `run`/`build` rewrite the method reference
+-- into a dictionary-marked node before typechecking; the value predicate must
+-- see through that marking, or the same program is a value under `check` and
+-- expansive under `build`.  This fixture is expected to typecheck (empty golden).
+callMin : Ord a => a -> a -> a
+callMin = min
+
+main : <IO> Unit
+main =
+  let _ = println (debug (callMin 3 7))
+  println (callMin "a" "z")
