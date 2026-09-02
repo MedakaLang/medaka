@@ -1,5 +1,5 @@
 # META
-source_lines=1685
+source_lines=1673
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/doc.mdk — the native `medaka doc` documentation extractor.
@@ -394,8 +394,8 @@ ppIfaceMethod (IfaceMethod mname mty _ _) = "  \{mname} : \{ppTyDoc mty}"
 -- can reach those 138 externs by importing them — they are visible only because
 -- runtime.mdk IS the prelude.  Every OTHER module's `pub = False` decls are
 -- genuinely private helpers and stay undocumented, which is why this is a
--- per-module exception (keyed on the derived module name, mirroring
--- `excludedLibraryModule`) and not a global "ignore `pub`" relaxation.
+-- per-module exception (keyed on the derived module name) and not a global
+-- "ignore `pub`" relaxation.
 renderSig : Bool -> Decl -> List (String, Scheme) -> Option (String, String)
 renderSig _ (DTypeSig True name ty) schemes =
   Some (name, valueSig name schemes (Some ty))
@@ -438,9 +438,10 @@ dataVisPrivate VisPrivate = True
 dataVisPrivate _ = False
 
 -- The one module whose unexported `extern`s are documented anyway (hole (c)).
--- Keyed on the DERIVED module name (post `baseOf`/`chopExt`), exactly like
--- `excludedLibraryModule` — a fixture module named `runtime` gets the same
--- treatment, so the rule is testable without touching `stdlib/runtime.mdk`.
+-- Keyed on the DERIVED module name (post `baseOf`/`chopExt`, the same value
+-- that becomes the page's heading and filename) — a fixture module named
+-- `runtime` gets the same treatment, so the rule is testable without touching
+-- `stdlib/runtime.mdk`.
 preludeOnlyModule : String -> Bool
 preludeOnlyModule moduleName = moduleName == "runtime"
 
@@ -1301,19 +1302,6 @@ renderModulePage : ModuleDoc -> String
 renderModulePage (ModuleDoc name header entries _) =
   renderMarkdown name header entries
 
--- `async` is excluded from library mode BY CONSTRUCTION: the rule keys on the
--- module's own derived NAME (post `chopExt`/`baseOf`, the same value that
--- becomes the page's `# name` heading and filename), not on the literal path
--- `stdlib/async.mdk` — so a fixture module also named `async` (anywhere) is
--- excluded too, not just the real stdlib one.  Async's design is locked
--- (ASYNC-DESIGN.md) but excluded from the public docs per the 0.1.0 epic
--- decision (project_0_1_0_epic_rederivation memory: "async EXCLUDED from
--- docs").  A single named check, not a growable list, is the rule this slice
--- is licensed to add — widening it needs a fresh decision, not a bigger list.
-export
-excludedLibraryModule : String -> Bool
-excludedLibraryModule moduleName = moduleName == "async"
-
 -- ── impl rebucketing: file an impl under the TYPE's page (hole (b)) ─────────
 --
 -- `impl Debug (Array a)` / `Eq (Array a)` / `Display (Array a)` are declared in
@@ -2009,8 +1997,6 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser = match (projectEntrySch
 (DFunDef false "firstEntryDoc" ((PCons (PCon "DocEntry" PWild PWild (PVar "doc") PWild PWild) PWild)) (EVar "doc"))
 (DTypeSig true "renderModulePage" (TyFun (TyCon "ModuleDoc") (TyCon "String")))
 (DFunDef false "renderModulePage" ((PCon "ModuleDoc" (PVar "name") (PVar "header") (PVar "entries") PWild)) (EApp (EApp (EApp (EVar "renderMarkdown") (EVar "name")) (EVar "header")) (EVar "entries")))
-(DTypeSig true "excludedLibraryModule" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "excludedLibraryModule" ((PVar "moduleName")) (EBinOp "==" (EVar "moduleName") (ELit (LString "async"))))
 (DTypeSig true "rebucketLibraryImpls" (TyFun (TyApp (TyCon "List") (TyCon "ModuleDoc")) (TyApp (TyCon "List") (TyCon "ModuleDoc"))))
 (DFunDef false "rebucketLibraryImpls" ((PVar "mds")) (EBlock (DoLet false false (PVar "owners") (EApp (EApp (EVar "concatMapDoc") (EVar "typeOwnersOf")) (EVar "mds"))) (DoLet false false (PVar "mentions") (EApp (EApp (EVar "map") (EVar "moduleMentionIndex")) (EVar "mds"))) (DoLet false false (PVar "moved") (EApp (EApp (EVar "concatMapDoc") (EApp (EApp (EVar "movedFrom") (EVar "owners")) (EVar "mentions"))) (EVar "mds"))) (DoExpr (EApp (EApp (EVar "map") (EApp (EApp (EApp (EVar "rebucketOne") (EVar "owners")) (EVar "mentions")) (EVar "moved"))) (EVar "mds")))))
 (DTypeSig false "typeOwnersOf" (TyFun (TyCon "ModuleDoc") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
@@ -2415,8 +2401,6 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser = match (projectEntrySch
 (DFunDef false "firstEntryDoc" ((PCons (PCon "DocEntry" PWild PWild (PVar "doc") PWild PWild) PWild)) (EVar "doc"))
 (DTypeSig true "renderModulePage" (TyFun (TyCon "ModuleDoc") (TyCon "String")))
 (DFunDef false "renderModulePage" ((PCon "ModuleDoc" (PVar "name") (PVar "header") (PVar "entries") PWild)) (EApp (EApp (EApp (EVar "renderMarkdown") (EVar "name")) (EVar "header")) (EVar "entries")))
-(DTypeSig true "excludedLibraryModule" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "excludedLibraryModule" ((PVar "moduleName")) (EBinOp "==" (EVar "moduleName") (ELit (LString "async"))))
 (DTypeSig true "rebucketLibraryImpls" (TyFun (TyApp (TyCon "List") (TyCon "ModuleDoc")) (TyApp (TyCon "List") (TyCon "ModuleDoc"))))
 (DFunDef false "rebucketLibraryImpls" ((PVar "mds")) (EBlock (DoLet false false (PVar "owners") (EApp (EApp (EVar "concatMapDoc") (EVar "typeOwnersOf")) (EVar "mds"))) (DoLet false false (PVar "mentions") (EApp (EApp (EMethodRef "map") (EVar "moduleMentionIndex")) (EVar "mds"))) (DoLet false false (PVar "moved") (EApp (EApp (EVar "concatMapDoc") (EApp (EApp (EVar "movedFrom") (EVar "owners")) (EVar "mentions"))) (EVar "mds"))) (DoExpr (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EVar "rebucketOne") (EVar "owners")) (EVar "mentions")) (EVar "moved"))) (EVar "mds")))))
 (DTypeSig false "typeOwnersOf" (TyFun (TyCon "ModuleDoc") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))

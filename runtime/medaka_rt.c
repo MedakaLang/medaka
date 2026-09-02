@@ -62,6 +62,8 @@
 #include <netinet/tcp.h>
 #include <netdb.h>
 #include <arpa/inet.h>
+#include <poll.h>
+#include <fcntl.h>
 #include <stdint.h>
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
@@ -2297,6 +2299,114 @@ long long mdk_net_set_timeout(long long fd_tagged, long long ms_tagged) {
   if (setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv) != 0)
     return mdk_err(mdk_str_cstr(strerror(errno)));
   return mdk_ok(1);  /* Ok () */
+}
+
+/* ── Readiness shims for the async runtime (ASYNC-RUNTIME-DESIGN.md §4.2) ─────
+ * The scheduler in stdlib/async.mdk parks a task on a descriptor and makes ONE
+ * poll(2) call when nothing is runnable.  These shims are exactly the syscalls
+ * Medaka cannot make itself: poll, O_NONBLOCK, and would-block-aware
+ * accept/recv/send.  Would-block is `Ok None`; `Ok (Some x)` carries the same
+ * payload the blocking sibling returns; `Err` is real errno text.  All buffers
+ * are GC-allocated like the blocking shims above.  POSIX only, so one code
+ * path serves Linux and macOS. */
+
+/* ioPoll : Array Int -> Array Int -> Int -> Result String (Array Int)
+ * fds and interests are parallel arrays (interest bit 1 = readable, bit 2 =
+ * writable); timeout is milliseconds (-1 = wait forever).  Returns one
+ * readiness word per fd: bit 1 readable, bit 2 writable.  An error or hangup
+ * condition marks the fd readable AND writable so the parked task retries its
+ * syscall and surfaces the error through the ordinary Result path. */
+long long mdk_io_poll(long long fds_arr, long long ints_arr, long long timeout_tagged) {
+  const long long *fds = (const long long *)fds_arr;
+  const long long *ints = (const long long *)ints_arr;
+  long long n = fds[0];
+  if (ints[0] != n) return mdk_err(mdk_str_cstr("ioPoll: fds and interests differ in length"));
+  int timeout = (int)(timeout_tagged >> 1);
+  struct pollfd *pfds = (struct pollfd *)mdk_alloc(sizeof(struct pollfd) * (n ? n : 1));
+  for (long long i = 0; i < n; i++) {
+    long long interest = ints[i + 1] >> 1;
+    pfds[i].fd = MDK_NET_UNTAG(fds[i + 1]);
+    pfds[i].events = (short)(((interest & 1) ? POLLIN : 0) | ((interest & 2) ? POLLOUT : 0));
+    pfds[i].revents = 0;
+  }
+  int rc = poll(pfds, (nfds_t)n, timeout);
+  if (rc < 0 && errno != EINTR) return mdk_err(mdk_str_cstr(strerror(errno)));
+  long long *cell = (long long *)mdk_alloc(8 * (n + 1));
+  cell[0] = n;
+  for (long long i = 0; i < n; i++) {
+    long long ready = 0;
+    if (rc > 0) {
+      short re = pfds[i].revents;
+      if (re & (POLLIN | POLLPRI)) ready |= 1;
+      if (re & POLLOUT) ready |= 2;
+      if (re & (POLLERR | POLLHUP | POLLNVAL)) ready |= 3;
+    }
+    cell[i + 1] = (ready << 1) | 1;
+  }
+  return mdk_ok((long long)cell);
+}
+
+/* netSetNonblock : fd -> Bool -> Result String Unit — fcntl O_NONBLOCK on/off. */
+long long mdk_net_set_nonblock(long long fd_tagged, long long on_tagged) {
+  int fd = MDK_NET_UNTAG(fd_tagged);
+  int on = (int)(on_tagged >> 1);
+  int flags = fcntl(fd, F_GETFL, 0);
+  if (flags < 0) return mdk_err(mdk_str_cstr(strerror(errno)));
+  flags = on ? (flags | O_NONBLOCK) : (flags & ~O_NONBLOCK);
+  if (fcntl(fd, F_SETFL, flags) < 0) return mdk_err(mdk_str_cstr(strerror(errno)));
+  return mdk_ok(1);  /* Ok () */
+}
+
+static int mdk_net_would_block(int e) {
+  return e == EAGAIN || e == EWOULDBLOCK || e == EINPROGRESS || e == EINTR;
+}
+
+/* netTryAccept : listening fd -> Result String (Option Int) — None = would-block. */
+long long mdk_net_try_accept(long long lis_tagged) {
+  int c = accept(MDK_NET_UNTAG(lis_tagged), NULL, NULL);
+  if (c < 0) {
+    if (mdk_net_would_block(errno)) return mdk_ok(mdk_none());
+    return mdk_err(mdk_str_cstr(strerror(errno)));
+  }
+#ifdef SO_NOSIGPIPE
+  { int on = 1; setsockopt(c, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof on); }
+#endif
+  return mdk_ok(mdk_some(MDK_NET_TAG(c)));
+}
+
+/* netTryRecv : fd -> maxBytes -> Result String (Option (Array Int))
+ * None = would-block; Some [] = EOF (matches netRecv). */
+long long mdk_net_try_recv(long long fd_tagged, long long max_tagged) {
+  long long max = max_tagged >> 1;
+  unsigned char *buf = (unsigned char *)mdk_alloc(max > 0 ? max : 1);
+  ssize_t r = recv(MDK_NET_UNTAG(fd_tagged), buf, (size_t)(max > 0 ? max : 0), 0);
+  if (r < 0) {
+    if (mdk_net_would_block(errno)) return mdk_ok(mdk_none());
+    return mdk_err(mdk_str_cstr(strerror(errno)));
+  }
+  long long *cell = (long long *)mdk_alloc(8 * (r + 1));
+  cell[0] = (long long)r;
+  for (ssize_t i = 0; i < r; i++) cell[i + 1] = (((long long)buf[i]) << 1) | 1;
+  return mdk_ok(mdk_some((long long)cell));
+}
+
+/* netTrySend : fd -> Array Int -> Result String (Option Int)
+ * None = would-block; Some n = bytes written (may be short). */
+long long mdk_net_try_send(long long fd_tagged, long long arr) {
+  const long long *a = (const long long *)arr;
+  long long n = a[0];
+  unsigned char *buf = (unsigned char *)mdk_alloc(n ? n : 1);
+  for (long long i = 0; i < n; i++) buf[i] = (unsigned char)((a[i + 1] >> 1) & 0xFF);
+  int flags = 0;
+#ifdef MSG_NOSIGNAL
+  flags = MSG_NOSIGNAL;
+#endif
+  ssize_t w = send(MDK_NET_UNTAG(fd_tagged), buf, (size_t)n, flags);
+  if (w < 0) {
+    if (mdk_net_would_block(errno)) return mdk_ok(mdk_none());
+    return mdk_err(mdk_str_cstr(strerror(errno)));
+  }
+  return mdk_ok(mdk_some(MDK_NET_TAG((long long)w)));
 }
 
 /* ---------------------------------------------------------------------------

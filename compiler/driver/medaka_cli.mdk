@@ -220,7 +220,6 @@ import tools.doc.{
   renderModulePage,
   renderIndex,
   libraryInventoryJson,
-  excludedLibraryModule,
   rebucketLibraryImpls,
 }
 import tools.lint.{
@@ -3486,7 +3485,7 @@ docHelpText = stringConcat [
   "inferred type schemes) in <file.mdk> to stdout.\n", "\n",
   "Library mode (--out DIR) writes one Markdown page per module, an\n",
   "index.md linking them, and an inventory.json (name -> module ->\n",
-  "signature) into DIR. `async`-named modules are excluded by design.\n", "\n",
+  "signature) into DIR.\n", "\n",
   "  --out DIR   output directory; enables library mode\n"
 ]
 
@@ -3541,55 +3540,39 @@ runDocTargets (target :: _) =
         Ok tsrc => putStr (runDoc rsrc csrc tsrc target roots)
 
 -- ── doc: library mode (S-doc-library-mode) ──────────────────────────────────
--- `medaka doc --out DIR <file.mdk> [<file.mdk> ...]`: drop any `async`-named
--- target (rule, not a hand-kept list — `excludedLibraryModule`,
--- `tools.doc`), read + doc every remaining target, write one page per
--- module, one index, one inventory.
+-- `medaka doc --out DIR <file.mdk> [<file.mdk> ...]`: read + doc every target,
+-- write one page per module, one index, one inventory.
 runDocLibraryTargets : String -> List String -> <IO> Unit
 runDocLibraryTargets _ [] =
   let _ = ePutStrLn "usage: medaka doc --out DIR <file.mdk> [<file.mdk> ...]"
   exit 1
-runDocLibraryTargets outDir targets = match dropExcludedTargets targets
-  [] =>
-    let _ =
-      ePutStrLn
-        "medaka doc --out: every target was excluded (e.g. an async-named module) — nothing to document"
-    exit 1
-  kept =>
-    let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
-    let rtPath = root ++ "/stdlib/runtime.mdk"
-    let corePath = root ++ "/stdlib/core.mdk"
-    let stdlibDir = root ++ "/stdlib"
-    match readPreludeFile rtPath
+runDocLibraryTargets outDir targets =
+  let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+  let rtPath = root ++ "/stdlib/runtime.mdk"
+  let corePath = root ++ "/stdlib/core.mdk"
+  let stdlibDir = root ++ "/stdlib"
+  match readPreludeFile rtPath
+    Err msg =>
+      let _ = ePutStrLn msg
+      exit 1
+    Ok rsrc => match readPreludeFile corePath
       Err msg =>
         let _ = ePutStrLn msg
         exit 1
-      Ok rsrc => match readPreludeFile corePath
+      Ok csrc => match ensureOutDir outDir
         Err msg =>
           let _ = ePutStrLn msg
           exit 1
-        Ok csrc => match ensureOutDir outDir
+        Ok _ => match collectModuleDocs rsrc csrc stdlibDir targets
           Err msg =>
             let _ = ePutStrLn msg
             exit 1
-          Ok _ => match collectModuleDocs rsrc csrc stdlibDir kept
-            Err msg =>
-              let _ = ePutStrLn msg
-              exit 1
-            -- `rebucketLibraryImpls` runs at the `List ModuleDoc` level, after
-            -- every module is computed and before ANY output is written, so the
-            -- pages, the index and the inventory all read the same (already
-            -- re-filed) entry lists — an impl cannot be on one page and indexed
-            -- under another.
-            Ok mds => writeLibraryOutputs outDir (rebucketLibraryImpls mds)
-
-dropExcludedTargets : List String -> List String
-dropExcludedTargets [] = []
-dropExcludedTargets (t :: ts) =
-  if excludedLibraryModule (chopExt (baseOf t)) then
-    dropExcludedTargets ts
-  else
-    t :: dropExcludedTargets ts
+          -- `rebucketLibraryImpls` runs at the `List ModuleDoc` level, after
+          -- every module is computed and before ANY output is written, so the
+          -- pages, the index and the inventory all read the same (already
+          -- re-filed) entry lists — an impl cannot be on one page and indexed
+          -- under another.
+          Ok mds => writeLibraryOutputs outDir (rebucketLibraryImpls mds)
 
 -- `makeDir` (global extern) errors EEXIST on an already-present directory;
 -- tolerate that one case, exactly like `fs.mdk`'s `mkdirAll` does for its own

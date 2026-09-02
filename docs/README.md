@@ -59,7 +59,7 @@ Live design docs: **OPEN** = not started, **PARTIAL** = in progress. Read before
 | Doc | What it is | Status |
 |-----|------------|--------|
 | [`ARGS-DESIGN.md`](design/ARGS-DESIGN.md) | ARGS-DESIGN.md — one argument parser for sixteen verbs | DECIDED |
-| [`ASYNC-RUNTIME-DESIGN.md`](design/ASYNC-RUNTIME-DESIGN.md) | Async runtime v2 — the ASYNC-DESIGN §5 swap | DESIGN LOCKED |
+| [`ASYNC-RUNTIME-DESIGN.md`](design/ASYNC-RUNTIME-DESIGN.md) | Async runtime v2 — the ASYNC-DESIGN §5 swap | IMPLEMENTED 2026-09-02 |
 | [`AT-IMPL-PORT-DESIGN.md`](design/AT-IMPL-PORT-DESIGN.md) | `@Impl` Named-Instance-Selection Hint — Native Port Design | SUPERSEDED |
 | [`ATPROTO-PDS-CONSTANT-TIME.md`](design/ATPROTO-PDS-CONSTANT-TIME.md) | atproto PDS field/scalar constant-time reduction contract | implemented and landed for #1724 |
 | [`ATPROTO-PDS-DESIGN.md`](design/ATPROTO-PDS-DESIGN.md) | A self-hosted atproto PDS in Medaka | ACTIVE |
@@ -100,6 +100,7 @@ What's in the standard library, what's planned, module-by-module status.
 | [`STDLIB.md`](stdlib/STDLIB.md) | Medaka Standard Library — Design Notes & Roadmap | — |
 | [`args.md`](stdlib/args.md) | args | — |
 | [`array.md`](stdlib/array.md) | array | — |
+| [`async.md`](stdlib/async.md) | async | — |
 | [`base64.md`](stdlib/base64.md) | base64 | — |
 | [`bits64.md`](stdlib/bits64.md) | bits64 | — |
 | [`bytebuilder.md`](stdlib/bytebuilder.md) | bytebuilder | — |
@@ -116,6 +117,7 @@ What's in the standard library, what's planned, module-by-module status.
 | [`map.md`](stdlib/map.md) | map | — |
 | [`math.md`](stdlib/math.md) | math | — |
 | [`net.md`](stdlib/net.md) | net | — |
+| [`net_async.md`](stdlib/net_async.md) | net_async | — |
 | [`nonempty.md`](stdlib/nonempty.md) | nonempty | — |
 | [`path.md`](stdlib/path.md) | path | — |
 | [`runtime.md`](stdlib/runtime.md) | runtime | — |

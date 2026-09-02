@@ -34,16 +34,14 @@ if [ "$status" -ne 0 ]; then
 fi
 
 # Expected file set, derived INDEPENDENTLY of whatever the generator actually
-# wrote: one .md per stdlib/*.mdk module (skipping the same `async` exclusion
-# `excludedLibraryModule` applies, compiler/tools/doc.mdk), plus index.md and
-# inventory.json. Iterating this list (rather than "whatever landed in
-# $TMPDIR") is what catches a partial run — a generator that writes 2 of 31
-# files and exits 0 would otherwise report "2 ok, 0 failing".
+# wrote: one .md per stdlib/*.mdk module, plus index.md and inventory.json.
+# Iterating this list (rather than "whatever landed in $TMPDIR") is what
+# catches a partial run — a generator that writes 2 of 31 files and exits 0
+# would otherwise report "2 ok, 0 failing".
 expected="$TMPDIR/.expected"
 : > "$expected"
 for f in "$ROOT"/stdlib/*.mdk; do
   name="$(basename "$f" .mdk)"
-  [ "$name" = "async" ] && continue
   printf '%s.md\n' "$name" >> "$expected"
 done
 printf 'index.md\ninventory.json\n' >> "$expected"

@@ -246,6 +246,35 @@ extern netClose : Int -> <Net "_"> Result String Unit
 -- means no timeout.
 extern netSetTimeout : Int -> Int -> <Net "_"> Result String Unit
 
+-- ## Readiness
+--
+-- The async runtime's non-blocking half (`stdlib/async.mdk`, `net_async`).
+-- Would-block is `Ok None`; `Ok (Some x)` carries what the blocking sibling
+-- returns; `Err` is the host's error message.
+
+-- | Waits until any of `fds` is ready, or `timeoutMs` passes (`-1` waits
+-- forever). `interests` is parallel to `fds`: bit 1 asks for readable, bit 2
+-- for writable. The result is parallel too: bit 1 readable, bit 2 writable,
+-- both bits on an error or hangup so a retry surfaces the error.
+extern ioPoll : Array Int ->
+  Array Int ->
+  Int ->
+  <Net "_"> Result String (Array Int)
+
+-- | Switches a socket's non-blocking mode on or off.
+extern netSetNonblock : Int -> Bool -> <Net "_"> Result String Unit
+
+-- | `netTcpAccept` that returns `None` instead of blocking.
+extern netTryAccept : Int -> <Net "_"> Result String (Option Int)
+
+-- | `netRecv` that returns `None` instead of blocking. `Some []` is end of
+-- stream.
+extern netTryRecv : Int -> Int -> <Net "_"> Result String (Option (Array Int))
+
+-- | `netSend` that returns `None` instead of blocking. `Some n` is the count
+-- written, which may be short.
+extern netTrySend : Int -> Array Int -> <Net "_"> Result String (Option Int)
+
 -- # Time
 
 -- | The wall-clock time in seconds since the epoch.

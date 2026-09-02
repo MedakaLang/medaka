@@ -1,0 +1,107 @@
+-- The observable win of the async runtime: one thread, one listener, an
+-- accept loop that spawns a handler per connection, and a slow client that
+-- does not stall a fast one.  Prints the order events complete in; the fast
+-- client's round trip finishes while the slow client is still asleep.
+-- Also exercises the deadline form: a client that never receives a reply
+-- gets `Err "timed out"` from `recvWithin` and the program still exits,
+-- because closing the listener ends the `serve` loop.
+import async.{Async, liftIO, sleep, spawn, spawnTask, await, concurrent}
+import net.{Listener, Connection, listen, listenPort, connect}
+import net as N
+import net_async as A
+import list.{reverse}
+import time.{millis}
+import string.{fromUtf8, join}
+
+log : Ref (List String)
+log = Ref []
+
+note : String -> Async e Unit
+note s = liftIO (u => log := s :: !log)
+
+showBytes : Result String (Array Int) -> String
+showBytes r = match r
+  Ok bs => fromUtf8 bs
+  Err e => "Err " ++ e
+
+-- Every helper is row-polymorphic (`<… | e>`): an effect row in a type
+-- argument is invariant, so the statements of one `defer` block must share
+-- one index, and `main`'s index is the join of all of them.
+
+-- Echo everything until the peer closes.
+echo : Connection -> Async <Net "_" | e> (Result String Unit)
+echo conn = deferThen (A.recv conn 64) (r => echoStep conn r)
+
+echoStep : Connection -> Result String (Array Int) -> Async <Net "_" | e> (Result String Unit)
+echoStep conn (Ok bs) =
+  if length bs == 0 then deferPure (Ok ())
+  else deferThen (A.sendAll conn bs) (_ => echo conn)
+echoStep _ (Err e) = deferPure (Err e)
+
+-- The slow client: two messages with a nap in between.
+slowClient : Int -> Async <Clock, Net "_" | e> Unit
+slowClient port = defer
+  conn <- liftIO (u => connect "127.0.0.1" port)
+  match conn
+    Err e => note ("slow: connect failed " ++ e)
+    Ok c => defer
+      _ <- A.sendString c "slow-1"
+      r1 <- A.recv c 64
+      _ <- note ("slow got " ++ showBytes r1)
+      _ <- sleep (millis 300)
+      _ <- A.sendString c "slow-2"
+      r2 <- A.recv c 64
+      _ <- note ("slow got " ++ showBytes r2)
+      _ <- A.close c
+      note "slow done"
+
+-- The fast client: one round trip, started after the slow one.
+fastClient : Int -> Async <Clock, Net "_" | e> Unit
+fastClient port = defer
+  _ <- sleep (millis 50)
+  conn <- liftIO (u => connect "127.0.0.1" port)
+  match conn
+    Err e => note ("fast: connect failed " ++ e)
+    Ok c => defer
+      _ <- A.sendString c "fast"
+      r <- A.recv c 64
+      _ <- note ("fast got " ++ showBytes r)
+      _ <- A.close c
+      note "fast done"
+
+-- A client whose server never answers: the deadline fires.
+silentClient : Int -> Async <Clock, Net "_" | e> Unit
+silentClient port = defer
+  conn <- liftIO (u => connect "127.0.0.1" port)
+  match conn
+    Err e => note ("silent: connect failed " ++ e)
+    Ok c => defer
+      r <- A.recvWithin (millis 100) c 8
+      _ <- note ("silent got " ++ showBytes r)
+      _ <- A.close c
+      note "silent done"
+
+-- A server that accepts and holds the connection open without replying.
+hold : Connection -> Async <Clock, Net "_" | e> (Result String Unit)
+hold _ = deferThen (sleep (millis 400)) (_ => deferPure (Ok ()))
+
+main : Async <Clock, Net "_", Stdout> Unit
+main = defer
+  lis <- liftIO (u => listen "127.0.0.1" 0)
+  quiet <- liftIO (u => listen "127.0.0.1" 0)
+  match (lis, quiet)
+    (Ok l, Ok q) => defer
+      port <- liftIO (u => listenPort l)
+      qport <- liftIO (u => listenPort q)
+      match (port, qport)
+        (Ok p, Ok qp) => defer
+          server <- spawnTask (A.serve l echo)
+          holder <- spawnTask (A.serve q hold)
+          _ <- concurrent [slowClient p, fastClient p, silentClient qp]
+          _ <- A.closeListener l
+          _ <- A.closeListener q
+          _ <- await server
+          _ <- await holder
+          liftIO (u => putStrLn (join "\n" (reverse !log)))
+        _ => liftIO (u => putStrLn "listenPort failed")
+    _ => liftIO (u => putStrLn "listen failed")

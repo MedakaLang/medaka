@@ -1,5 +1,5 @@
 # META
-source_lines=591
+source_lines=620
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -249,6 +249,35 @@ extern netClose : Int -> <Net "_"> Result String Unit
 -- | Sets a connection's send and receive timeout in milliseconds. `0`
 -- means no timeout.
 extern netSetTimeout : Int -> Int -> <Net "_"> Result String Unit
+
+-- ## Readiness
+--
+-- The async runtime's non-blocking half (`stdlib/async.mdk`, `net_async`).
+-- Would-block is `Ok None`; `Ok (Some x)` carries what the blocking sibling
+-- returns; `Err` is the host's error message.
+
+-- | Waits until any of `fds` is ready, or `timeoutMs` passes (`-1` waits
+-- forever). `interests` is parallel to `fds`: bit 1 asks for readable, bit 2
+-- for writable. The result is parallel too: bit 1 readable, bit 2 writable,
+-- both bits on an error or hangup so a retry surfaces the error.
+extern ioPoll : Array Int ->
+  Array Int ->
+  Int ->
+  <Net "_"> Result String (Array Int)
+
+-- | Switches a socket's non-blocking mode on or off.
+extern netSetNonblock : Int -> Bool -> <Net "_"> Result String Unit
+
+-- | `netTcpAccept` that returns `None` instead of blocking.
+extern netTryAccept : Int -> <Net "_"> Result String (Option Int)
+
+-- | `netRecv` that returns `None` instead of blocking. `Some []` is end of
+-- stream.
+extern netTryRecv : Int -> Int -> <Net "_"> Result String (Option (Array Int))
+
+-- | `netSend` that returns `None` instead of blocking. `Some n` is the count
+-- written, which may be short.
+extern netTrySend : Int -> Array Int -> <Net "_"> Result String (Option Int)
 
 -- # Time
 
@@ -642,6 +671,11 @@ extern stringToLower : String -> String
 (DExtern false "netShutdown" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DExtern false "netClose" (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
 (DExtern false "netSetTimeout" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DExtern false "ioPoll" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int"))))))))
+(DExtern false "netSetNonblock" (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DExtern false "netTryAccept" (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))))))
+(DExtern false "netTryRecv" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyApp (TyCon "Array") (TyCon "Int"))))))))
+(DExtern false "netTrySend" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int")))))))
 (DExtern false "wallTimeSec" (TyFun (TyCon "Unit") (TyEffect ("Clock") None (TyCon "Float"))))
 (DExtern false "monotonicSec" (TyFun (TyCon "Unit") (TyEffect ("Clock") None (TyCon "Float"))))
 (DExtern false "sleepMs" (TyFun (TyCon "Int") (TyEffect ("Clock") None (TyCon "Unit"))))
@@ -781,6 +815,11 @@ extern stringToLower : String -> String
 (DExtern false "netShutdown" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DExtern false "netClose" (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
 (DExtern false "netSetTimeout" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DExtern false "ioPoll" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int"))))))))
+(DExtern false "netSetNonblock" (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DExtern false "netTryAccept" (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))))))
+(DExtern false "netTryRecv" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyApp (TyCon "Array") (TyCon "Int"))))))))
+(DExtern false "netTrySend" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int")))))))
 (DExtern false "wallTimeSec" (TyFun (TyCon "Unit") (TyEffect ("Clock") None (TyCon "Float"))))
 (DExtern false "monotonicSec" (TyFun (TyCon "Unit") (TyEffect ("Clock") None (TyCon "Float"))))
 (DExtern false "sleepMs" (TyFun (TyCon "Int") (TyEffect ("Clock") None (TyCon "Unit"))))

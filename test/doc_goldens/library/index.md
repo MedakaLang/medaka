@@ -8,6 +8,10 @@
 
 - [`firstOrZero`](array.md#firstorzero)
 
+## [`async`](async.md)
+
+- [`shouldNeverAppear`](async.md#shouldneverappear)
+
 ## [`beta`](beta.md)
 
 - [`increment`](beta.md#increment)

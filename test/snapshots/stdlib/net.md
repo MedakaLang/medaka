@@ -1,12 +1,12 @@
 # META
-source_lines=258
+source_lines=259
 stages=DESUGAR,MARK
 # SOURCE
 {- | TCP connections and name resolution.
 
    `connect` opens a connection and `listen` and `accept` receive them.
-   `Connection` and `Listener` are opaque handles: they cannot be built from
-   a raw descriptor or confused with each other. `sendAll` and `recvAll`
+   `Connection` and `Listener` are distinct handle types, so one cannot be
+   passed where the other is expected. `sendAll` and `recvAll`
    loop until every byte is transferred, and `sendString`, `recvString`,
    `sendLine`, and `recvLine` work in UTF-8 text. `withConnection`,
    `withListener`, and `serveLoop` close their handle when the body
@@ -32,14 +32,15 @@ import time.{Duration, toMillis}
 
 -- # Handles
 
--- Constructors are not exported: user code can hold a `Connection`/`Listener`
--- but cannot construct, inspect, or forge one from a raw `Int`.
+-- The constructors are public so the sibling `net_async` module can reach the
+-- descriptor: a `Listener` and a `Connection` stay unconfusable with each
+-- other, but either can be built from a raw `Int`.
 
 -- | A connected TCP socket, from `connect` or `accept`.
-export data Connection = Connection Int
+public export data Connection = Connection Int
 
 -- | A listening TCP socket, from `listen`.
-export data Listener = Listener Int
+public export data Listener = Listener Int
 
 -- | Which direction of a connection `shutdown` closes.
 public export data Shutdown = ShutdownRead | ShutdownWrite | ShutdownBoth
@@ -265,8 +266,8 @@ serveLoop lis handle = match accept lis
 (DUse false (UseGroup ("vector") ((mem "Vector" false) (mem "new" false) (mem "push" false) (mem "toArray" false))))
 (DUse false (UseGroup ("string") ((mem "toUtf8" false) (mem "fromUtf8" false))))
 (DUse false (UseGroup ("time") ((mem "Duration" false) (mem "toMillis" false))))
-(DData Abstract "Connection" () ((variant "Connection" (ConPos (TyCon "Int")))) ())
-(DData Abstract "Listener" () ((variant "Listener" (ConPos (TyCon "Int")))) ())
+(DData Public "Connection" () ((variant "Connection" (ConPos (TyCon "Int")))) ())
+(DData Public "Listener" () ((variant "Listener" (ConPos (TyCon "Int")))) ())
 (DData Public "Shutdown" () ((variant "ShutdownRead" (ConPos)) (variant "ShutdownWrite" (ConPos)) (variant "ShutdownBoth" (ConPos))) ())
 (DTypeSig true "resolve" (TyFun (TyCon "String") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "resolve" ((PVar "host")) (EApp (EVar "netResolve") (EVar "host")))
@@ -321,8 +322,8 @@ serveLoop lis handle = match accept lis
 (DUse false (UseGroup ("vector") ((mem "Vector" false) (mem "new" false) (mem "push" false) (mem "toArray" false))))
 (DUse false (UseGroup ("string") ((mem "toUtf8" false) (mem "fromUtf8" false))))
 (DUse false (UseGroup ("time") ((mem "Duration" false) (mem "toMillis" false))))
-(DData Abstract "Connection" () ((variant "Connection" (ConPos (TyCon "Int")))) ())
-(DData Abstract "Listener" () ((variant "Listener" (ConPos (TyCon "Int")))) ())
+(DData Public "Connection" () ((variant "Connection" (ConPos (TyCon "Int")))) ())
+(DData Public "Listener" () ((variant "Listener" (ConPos (TyCon "Int")))) ())
 (DData Public "Shutdown" () ((variant "ShutdownRead" (ConPos)) (variant "ShutdownWrite" (ConPos)) (variant "ShutdownBoth" (ConPos))) ())
 (DTypeSig true "resolve" (TyFun (TyCon "String") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "resolve" ((PVar "host")) (EApp (EVar "netResolve") (EVar "host")))
