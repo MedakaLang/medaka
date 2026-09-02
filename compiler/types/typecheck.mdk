@@ -124,6 +124,7 @@ import types.registry.{
 import frontend.desugar.{mapProg}
 import frontend.marker.{localBoundNames}
 import frontend.resolve.{
+  programIsCore,
   stampBindingIds,
   stampGraphTyOrigins,
   stampFlatTyOrigins,
@@ -37750,11 +37751,24 @@ checkModulesEntryFullK preludeKey runtimeDecls coreDecls modules =
 -- `None` = unkeyed, no memo.
 checkModulesEntryFullSplitK : Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), List (String, Scheme), List TcDiag, List TcDiag)
 checkModulesEntryFullSplitK preludeKey runtimeDecls coreDecls0 modules0 =
+  -- The single-file front door loads stdlib/core.mdk twice: once as its prelude and
+  -- once as the singleton `__user__` module.  Resolve already owns the syntactic
+  -- self-test that prevents double-seeding core.  Apply that same authority before
+  -- identity stamping, so one declaration graph is not stamped once as `core` and
+  -- again as `__user__`.  `None` also prevents the empty prelude pass from sharing a
+  -- memo key with the separately loaded declarations we deliberately dropped.
+  -- Partial lookalikes remain ordinary because `programIsCore` requires BOTH halves.
+  let (effectivePreludeKey, effectiveCoreDecls0, effectiveModules0) = match modules0
+    [(_, prog)] => if programIsCore prog then
+      (None, [], [("core", prog)])
+    else
+      (preludeKey, coreDecls0, modules0)
+    _ => (preludeKey, coreDecls0, modules0)
   -- #1110: acquire type-constructor identity over the whole graph before anything
   -- typechecks; the rebind shadows the raw params so no line below can read the
   -- unstamped tree.  See `checkModulesPreamble` for why it is here and not there.
-  let (coreDecls, modules) = stampGraphTyOrigins coreDecls0 modules0
-  let (runtimeSeed, coreSchemes) = checkModulesPreambleK preludeKey runtimeDecls coreDecls modules
+  let (coreDecls, modules) = stampGraphTyOrigins effectiveCoreDecls0 effectiveModules0
+  let (runtimeSeed, coreSchemes) = checkModulesPreambleK effectivePreludeKey runtimeDecls coreDecls modules
   -- #154 PR-C: cmEntryWorker also routes through checkModuleFullDiags, reading BOTH
   -- accData and accAll exactly as cmDiagsWorker does → both concats RETAINED (byte-identity
   -- witness, not the perf-gate path).

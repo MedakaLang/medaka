@@ -1,5 +1,5 @@
 # META
-source_lines=4554
+source_lines=4555
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage (single-file
@@ -1607,6 +1607,7 @@ firstOr : String -> List String -> String
 firstOr d [] = d
 firstOr _ (x::_) = x
 
+export
 programIsCore : List Decl -> Bool
 programIsCore prog = hasOrdering prog && hasFoldable prog
 
@@ -5029,7 +5030,7 @@ takeOriginTrace _ =
 (DTypeSig false "firstOr" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "firstOr" ((PVar "d") (PList)) (EVar "d"))
 (DFunDef false "firstOr" (PWild (PCons (PVar "x") PWild)) (EVar "x"))
-(DTypeSig false "programIsCore" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))
+(DTypeSig true "programIsCore" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))
 (DFunDef false "programIsCore" ((PVar "prog")) (EBinOp "&&" (EApp (EVar "hasOrdering") (EVar "prog")) (EApp (EVar "hasFoldable") (EVar "prog"))))
 (DTypeSig false "hasOrdering" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))
 (DFunDef false "hasOrdering" ((PList)) (EVar "False"))
@@ -6258,7 +6259,7 @@ takeOriginTrace _ =
 (DTypeSig false "firstOr" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "firstOr" ((PVar "d") (PList)) (EVar "d"))
 (DFunDef false "firstOr" (PWild (PCons (PVar "x") PWild)) (EVar "x"))
-(DTypeSig false "programIsCore" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))
+(DTypeSig true "programIsCore" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))
 (DFunDef false "programIsCore" ((PVar "prog")) (EBinOp "&&" (EApp (EVar "hasOrdering") (EVar "prog")) (EApp (EVar "hasFoldable") (EVar "prog"))))
 (DTypeSig false "hasOrdering" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))
 (DFunDef false "hasOrdering" ((PList)) (EVar "False"))
