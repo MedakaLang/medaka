@@ -1,5 +1,5 @@
 # META
-source_lines=12188
+source_lines=12217
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-prefer-assign-op
@@ -2217,6 +2217,14 @@ scanExprW7 emit (CVar x _) =
 -- would false-positive; useFloat is instead forced by a Float literal, a Float
 -- extern, OR a Float-kinded main, post-scan in emitProgram.)
 scanExprW7 emit (CLit (LFloat _)) = setRef emit.useFloat True
+-- A String/Char literal forces the $str rep.  `programUsesStr` already sees
+-- literals in top-level bindings; this scan is the only one that walks impl
+-- method bodies, so without this arm a prelude impl such as
+-- `impl Monoid String where empty = ""` is emitted naming `$u8arr` while the
+-- type section omits it.  A Unit `main` is the shape with no other string
+-- demand (no output at all), so it was the shape that failed to assemble.
+scanExprW7 emit (CLit (LString _)) = setRef emit.useStr True
+scanExprW7 emit (CLit (LChar _)) = setRef emit.useStr True
 scanExprW7 emit (CLam _ b) = scanExprW7 emit b
 scanExprW7 emit (CBinPrim op l r _) =
   let _ = noteW8Binop emit op in let _ = scanExprW7 emit l in scanExprW7 emit r
@@ -4044,6 +4052,10 @@ refMainKind prog (CLit (LString _)) = WStr
 refMainKind prog (CLit (LChar _)) = WChar
 -- W8b: a Float literal main auto-prints via floatToString (shortest-round-trip since #57).
 refMainKind prog (CLit (LFloat _)) = WFloat
+-- `main = ()` is a Unit main: nothing to auto-print (the same contract as a
+-- `putStrLn …` main).  Without this arm the literal fell to the `other => WInt`
+-- default and the i31 0 was printed as a trailing `0`.
+refMainKind _ (CLit LUnit) = WUnit
 -- the Bool constructors as values (a dispatched main `… else False`); also lets a
 -- CIf whose arms are dispatch calls recover Bool-ness from a literal-Bool branch.
 refMainKind prog (CVar "True" _) = WBool
@@ -4092,7 +4104,12 @@ refMainKind prog (CApp f a) = match appHead f
     else if fnReturnsFloat prog fn then
       -- W-SQLITE-4: a call to a user fn whose declared sig returns Float (`main = f 2.5`).
       WFloat
-    else if isUnitExtern fn then
+    else if isUnitExtern fn || declRetTypeOf prog fn == "Unit" then
+      -- a call whose head DECLARES a Unit return (`println`, `print`, a user
+      -- wrapper) is Unit wherever it sits in main's body — under an else-less
+      -- `if`, a `match` arm, a block tail — not only as main's top-level head
+      -- (which `mainBodyIsUnit` already covers).  #2424: `main = if True then
+      -- println "b"` printed `b` then a spurious `0`.
       WUnit
     else if methodReturnsBoolW prog fn then
       -- composite-autoprint parity: a bare `main = myeq a b` calls a dispatched
@@ -4105,8 +4122,20 @@ refMainKind prog (CApp f a) = match appHead f
       refMainKind prog (appHead f)
   -- a resolved dispatch head (`main = myeq a b` lowers to CApp (CMethod/CDict …) …):
   -- same composite-autoprint Bool recovery as the CVar method case above.
-  CMethod fn _ _ _ => if methodReturnsBoolW prog fn then WBool else WInt
-  CDict fn _ => if methodReturnsBoolW prog fn then WBool else WInt
+  CMethod fn _ _ _ =>
+    if declRetTypeOf prog fn == "Unit" then
+      WUnit
+    else if methodReturnsBoolW prog fn then
+      WBool
+    else
+      WInt
+  CDict fn _ =>
+    if declRetTypeOf prog fn == "Unit" then
+      WUnit
+    else if methodReturnsBoolW prog fn then
+      WBool
+    else
+      WInt
   h => refMainKind prog h
 -- W-SQLITE-4: a nullary Float-typed binding used as a value main (`main = h`, `h : Float`).
 refMainKind prog (CVar x _) = if fnReturnsFloat prog x then WFloat else WInt
@@ -12538,6 +12567,8 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "scanExprW7" ((PVar "emit") (PCon "CApp" (PVar "f") (PVar "a"))) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args")) (EApp (EApp (EVar "flattenApp") (EApp (EApp (EVar "CApp") (EVar "f")) (EVar "a"))) (EListLit))) (DoLet false false PWild (EApp (EApp (EVar "scanW7Head") (EVar "emit")) (EVar "hd"))) (DoExpr (EApp (EApp (EVar "forEachU") (ELam ((PVar "arg")) (EApp (EApp (EVar "scanExprW7") (EVar "emit")) (EVar "arg")))) (EVar "args")))))
 (DFunDef false "scanExprW7" ((PVar "emit") (PCon "CVar" (PVar "x") PWild)) (EIf (EBinOp "==" (EVar "x") (ELit (LString "Ref"))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useRefBox")) (EVar "True")) (EApp (EApp (EVar "noteW8Extern") (EVar "emit")) (EVar "x"))))
 (DFunDef false "scanExprW7" ((PVar "emit") (PCon "CLit" (PCon "LFloat" PWild))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useFloat")) (EVar "True")))
+(DFunDef false "scanExprW7" ((PVar "emit") (PCon "CLit" (PCon "LString" PWild))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStr")) (EVar "True")))
+(DFunDef false "scanExprW7" ((PVar "emit") (PCon "CLit" (PCon "LChar" PWild))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStr")) (EVar "True")))
 (DFunDef false "scanExprW7" ((PVar "emit") (PCon "CLam" PWild (PVar "b"))) (EApp (EApp (EVar "scanExprW7") (EVar "emit")) (EVar "b")))
 (DFunDef false "scanExprW7" ((PVar "emit") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") PWild)) (ELet false PWild (EApp (EApp (EVar "noteW8Binop") (EVar "emit")) (EVar "op")) (ELet false PWild (EApp (EApp (EVar "scanExprW7") (EVar "emit")) (EVar "l")) (EApp (EApp (EVar "scanExprW7") (EVar "emit")) (EVar "r")))))
 (DFunDef false "scanExprW7" ((PVar "emit") (PCon "CUnOp" PWild (PVar "x"))) (EApp (EApp (EVar "scanExprW7") (EVar "emit")) (EVar "x")))
@@ -12896,6 +12927,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "refMainKind" ((PVar "prog") (PCon "CLit" (PCon "LString" PWild))) (EVar "WStr"))
 (DFunDef false "refMainKind" ((PVar "prog") (PCon "CLit" (PCon "LChar" PWild))) (EVar "WChar"))
 (DFunDef false "refMainKind" ((PVar "prog") (PCon "CLit" (PCon "LFloat" PWild))) (EVar "WFloat"))
+(DFunDef false "refMainKind" (PWild (PCon "CLit" (PCon "LUnit"))) (EVar "WUnit"))
 (DFunDef false "refMainKind" ((PVar "prog") (PCon "CVar" (PLit (LString "True")) PWild)) (EVar "WBool"))
 (DFunDef false "refMainKind" ((PVar "prog") (PCon "CVar" (PLit (LString "False")) PWild)) (EVar "WBool"))
 (DFunDef false "refMainKind" ((PVar "prog") (PCon "CVar" (PLit (LString "pi")) PWild)) (EVar "WFloat"))
@@ -12908,7 +12940,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "refMainKind" ((PVar "prog") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EVar "refMainKindBlock") (EVar "prog")) (EVar "stmts")))
 (DFunDef false "refMainKind" ((PVar "prog") (PCon "CDecision" PWild (PVar "arms") PWild)) (EApp (EApp (EVar "refMainKindArms") (EVar "prog")) (EVar "arms")))
 (DFunDef false "refMainKind" ((PVar "prog") (PCon "CMatch" PWild (PVar "arms"))) (EApp (EApp (EVar "refMainKindArms") (EVar "prog")) (EVar "arms")))
-(DFunDef false "refMainKind" ((PVar "prog") (PCon "CApp" (PVar "f") (PVar "a"))) (EMatch (EApp (EVar "appHead") (EVar "f")) (arm (PCon "CVar" (PVar "fn") PWild) () (EIf (EApp (EVar "isStrReturningExtern") (EVar "fn")) (EVar "WStr") (EIf (EApp (EApp (EVar "contains") (EVar "fn")) (EListLit (ELit (LString "randomBool")) (ELit (LString "charIsAlpha")) (ELit (LString "charIsSpace")) (ELit (LString "charIsUpper")) (ELit (LString "charIsLower")) (ELit (LString "charIsPunct")))) (EVar "WBool") (EIf (EApp (EApp (EVar "contains") (EVar "fn")) (EListLit (ELit (LString "randomChar")) (ELit (LString "charToUpper")) (ELit (LString "charToLower")))) (EVar "WChar") (EIf (EApp (EApp (EVar "contains") (EVar "fn")) (EListLit (ELit (LString "intToFloat")) (ELit (LString "randomFloat")))) (EVar "WFloat") (EIf (EApp (EApp (EVar "fnReturnsFloat") (EVar "prog")) (EVar "fn")) (EVar "WFloat") (EIf (EApp (EVar "isUnitExtern") (EVar "fn")) (EVar "WUnit") (EIf (EApp (EApp (EVar "methodReturnsBoolW") (EVar "prog")) (EVar "fn")) (EVar "WBool") (EApp (EApp (EVar "refMainKind") (EVar "prog")) (EApp (EVar "appHead") (EVar "f"))))))))))) (arm (PCon "CMethod" (PVar "fn") PWild PWild PWild) () (EIf (EApp (EApp (EVar "methodReturnsBoolW") (EVar "prog")) (EVar "fn")) (EVar "WBool") (EVar "WInt"))) (arm (PCon "CDict" (PVar "fn") PWild) () (EIf (EApp (EApp (EVar "methodReturnsBoolW") (EVar "prog")) (EVar "fn")) (EVar "WBool") (EVar "WInt"))) (arm (PVar "h") () (EApp (EApp (EVar "refMainKind") (EVar "prog")) (EVar "h")))))
+(DFunDef false "refMainKind" ((PVar "prog") (PCon "CApp" (PVar "f") (PVar "a"))) (EMatch (EApp (EVar "appHead") (EVar "f")) (arm (PCon "CVar" (PVar "fn") PWild) () (EIf (EApp (EVar "isStrReturningExtern") (EVar "fn")) (EVar "WStr") (EIf (EApp (EApp (EVar "contains") (EVar "fn")) (EListLit (ELit (LString "randomBool")) (ELit (LString "charIsAlpha")) (ELit (LString "charIsSpace")) (ELit (LString "charIsUpper")) (ELit (LString "charIsLower")) (ELit (LString "charIsPunct")))) (EVar "WBool") (EIf (EApp (EApp (EVar "contains") (EVar "fn")) (EListLit (ELit (LString "randomChar")) (ELit (LString "charToUpper")) (ELit (LString "charToLower")))) (EVar "WChar") (EIf (EApp (EApp (EVar "contains") (EVar "fn")) (EListLit (ELit (LString "intToFloat")) (ELit (LString "randomFloat")))) (EVar "WFloat") (EIf (EApp (EApp (EVar "fnReturnsFloat") (EVar "prog")) (EVar "fn")) (EVar "WFloat") (EIf (EBinOp "||" (EApp (EVar "isUnitExtern") (EVar "fn")) (EBinOp "==" (EApp (EApp (EVar "declRetTypeOf") (EVar "prog")) (EVar "fn")) (ELit (LString "Unit")))) (EVar "WUnit") (EIf (EApp (EApp (EVar "methodReturnsBoolW") (EVar "prog")) (EVar "fn")) (EVar "WBool") (EApp (EApp (EVar "refMainKind") (EVar "prog")) (EApp (EVar "appHead") (EVar "f"))))))))))) (arm (PCon "CMethod" (PVar "fn") PWild PWild PWild) () (EIf (EBinOp "==" (EApp (EApp (EVar "declRetTypeOf") (EVar "prog")) (EVar "fn")) (ELit (LString "Unit"))) (EVar "WUnit") (EIf (EApp (EApp (EVar "methodReturnsBoolW") (EVar "prog")) (EVar "fn")) (EVar "WBool") (EVar "WInt")))) (arm (PCon "CDict" (PVar "fn") PWild) () (EIf (EBinOp "==" (EApp (EApp (EVar "declRetTypeOf") (EVar "prog")) (EVar "fn")) (ELit (LString "Unit"))) (EVar "WUnit") (EIf (EApp (EApp (EVar "methodReturnsBoolW") (EVar "prog")) (EVar "fn")) (EVar "WBool") (EVar "WInt")))) (arm (PVar "h") () (EApp (EApp (EVar "refMainKind") (EVar "prog")) (EVar "h")))))
 (DFunDef false "refMainKind" ((PVar "prog") (PCon "CVar" (PVar "x") PWild)) (EIf (EApp (EApp (EVar "fnReturnsFloat") (EVar "prog")) (EVar "x")) (EVar "WFloat") (EVar "WInt")))
 (DFunDef false "refMainKind" ((PVar "prog") (PVar "other")) (EVar "WInt"))
 (DTypeSig false "methodReturnsBoolW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyCon "Bool"))))
@@ -14780,6 +14812,8 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "scanExprW7" ((PVar "emit") (PCon "CApp" (PVar "f") (PVar "a"))) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args")) (EApp (EApp (EVar "flattenApp") (EApp (EApp (EVar "CApp") (EVar "f")) (EVar "a"))) (EListLit))) (DoLet false false PWild (EApp (EApp (EVar "scanW7Head") (EVar "emit")) (EVar "hd"))) (DoExpr (EApp (EApp (EVar "forEachU") (ELam ((PVar "arg")) (EApp (EApp (EVar "scanExprW7") (EVar "emit")) (EVar "arg")))) (EVar "args")))))
 (DFunDef false "scanExprW7" ((PVar "emit") (PCon "CVar" (PVar "x") PWild)) (EIf (EBinOp "==" (EVar "x") (ELit (LString "Ref"))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useRefBox")) (EVar "True")) (EApp (EApp (EVar "noteW8Extern") (EVar "emit")) (EVar "x"))))
 (DFunDef false "scanExprW7" ((PVar "emit") (PCon "CLit" (PCon "LFloat" PWild))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useFloat")) (EVar "True")))
+(DFunDef false "scanExprW7" ((PVar "emit") (PCon "CLit" (PCon "LString" PWild))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStr")) (EVar "True")))
+(DFunDef false "scanExprW7" ((PVar "emit") (PCon "CLit" (PCon "LChar" PWild))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStr")) (EVar "True")))
 (DFunDef false "scanExprW7" ((PVar "emit") (PCon "CLam" PWild (PVar "b"))) (EApp (EApp (EVar "scanExprW7") (EVar "emit")) (EVar "b")))
 (DFunDef false "scanExprW7" ((PVar "emit") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") PWild)) (ELet false PWild (EApp (EApp (EVar "noteW8Binop") (EVar "emit")) (EVar "op")) (ELet false PWild (EApp (EApp (EVar "scanExprW7") (EVar "emit")) (EVar "l")) (EApp (EApp (EVar "scanExprW7") (EVar "emit")) (EVar "r")))))
 (DFunDef false "scanExprW7" ((PVar "emit") (PCon "CUnOp" PWild (PVar "x"))) (EApp (EApp (EVar "scanExprW7") (EVar "emit")) (EVar "x")))
@@ -15138,6 +15172,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "refMainKind" ((PVar "prog") (PCon "CLit" (PCon "LString" PWild))) (EVar "WStr"))
 (DFunDef false "refMainKind" ((PVar "prog") (PCon "CLit" (PCon "LChar" PWild))) (EVar "WChar"))
 (DFunDef false "refMainKind" ((PVar "prog") (PCon "CLit" (PCon "LFloat" PWild))) (EVar "WFloat"))
+(DFunDef false "refMainKind" (PWild (PCon "CLit" (PCon "LUnit"))) (EVar "WUnit"))
 (DFunDef false "refMainKind" ((PVar "prog") (PCon "CVar" (PLit (LString "True")) PWild)) (EVar "WBool"))
 (DFunDef false "refMainKind" ((PVar "prog") (PCon "CVar" (PLit (LString "False")) PWild)) (EVar "WBool"))
 (DFunDef false "refMainKind" ((PVar "prog") (PCon "CVar" (PLit (LString "pi")) PWild)) (EVar "WFloat"))
@@ -15150,7 +15185,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "refMainKind" ((PVar "prog") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EVar "refMainKindBlock") (EVar "prog")) (EVar "stmts")))
 (DFunDef false "refMainKind" ((PVar "prog") (PCon "CDecision" PWild (PVar "arms") PWild)) (EApp (EApp (EVar "refMainKindArms") (EVar "prog")) (EVar "arms")))
 (DFunDef false "refMainKind" ((PVar "prog") (PCon "CMatch" PWild (PVar "arms"))) (EApp (EApp (EVar "refMainKindArms") (EVar "prog")) (EVar "arms")))
-(DFunDef false "refMainKind" ((PVar "prog") (PCon "CApp" (PVar "f") (PVar "a"))) (EMatch (EApp (EVar "appHead") (EVar "f")) (arm (PCon "CVar" (PVar "fn") PWild) () (EIf (EApp (EVar "isStrReturningExtern") (EVar "fn")) (EVar "WStr") (EIf (EApp (EApp (EVar "contains") (EVar "fn")) (EListLit (ELit (LString "randomBool")) (ELit (LString "charIsAlpha")) (ELit (LString "charIsSpace")) (ELit (LString "charIsUpper")) (ELit (LString "charIsLower")) (ELit (LString "charIsPunct")))) (EVar "WBool") (EIf (EApp (EApp (EVar "contains") (EVar "fn")) (EListLit (ELit (LString "randomChar")) (ELit (LString "charToUpper")) (ELit (LString "charToLower")))) (EVar "WChar") (EIf (EApp (EApp (EVar "contains") (EVar "fn")) (EListLit (ELit (LString "intToFloat")) (ELit (LString "randomFloat")))) (EVar "WFloat") (EIf (EApp (EApp (EVar "fnReturnsFloat") (EVar "prog")) (EVar "fn")) (EVar "WFloat") (EIf (EApp (EVar "isUnitExtern") (EVar "fn")) (EVar "WUnit") (EIf (EApp (EApp (EVar "methodReturnsBoolW") (EVar "prog")) (EVar "fn")) (EVar "WBool") (EApp (EApp (EVar "refMainKind") (EVar "prog")) (EApp (EVar "appHead") (EVar "f"))))))))))) (arm (PCon "CMethod" (PVar "fn") PWild PWild PWild) () (EIf (EApp (EApp (EVar "methodReturnsBoolW") (EVar "prog")) (EVar "fn")) (EVar "WBool") (EVar "WInt"))) (arm (PCon "CDict" (PVar "fn") PWild) () (EIf (EApp (EApp (EVar "methodReturnsBoolW") (EVar "prog")) (EVar "fn")) (EVar "WBool") (EVar "WInt"))) (arm (PVar "h") () (EApp (EApp (EVar "refMainKind") (EVar "prog")) (EVar "h")))))
+(DFunDef false "refMainKind" ((PVar "prog") (PCon "CApp" (PVar "f") (PVar "a"))) (EMatch (EApp (EVar "appHead") (EVar "f")) (arm (PCon "CVar" (PVar "fn") PWild) () (EIf (EApp (EVar "isStrReturningExtern") (EVar "fn")) (EVar "WStr") (EIf (EApp (EApp (EVar "contains") (EVar "fn")) (EListLit (ELit (LString "randomBool")) (ELit (LString "charIsAlpha")) (ELit (LString "charIsSpace")) (ELit (LString "charIsUpper")) (ELit (LString "charIsLower")) (ELit (LString "charIsPunct")))) (EVar "WBool") (EIf (EApp (EApp (EVar "contains") (EVar "fn")) (EListLit (ELit (LString "randomChar")) (ELit (LString "charToUpper")) (ELit (LString "charToLower")))) (EVar "WChar") (EIf (EApp (EApp (EVar "contains") (EVar "fn")) (EListLit (ELit (LString "intToFloat")) (ELit (LString "randomFloat")))) (EVar "WFloat") (EIf (EApp (EApp (EVar "fnReturnsFloat") (EVar "prog")) (EVar "fn")) (EVar "WFloat") (EIf (EBinOp "||" (EApp (EVar "isUnitExtern") (EVar "fn")) (EBinOp "==" (EApp (EApp (EVar "declRetTypeOf") (EVar "prog")) (EVar "fn")) (ELit (LString "Unit")))) (EVar "WUnit") (EIf (EApp (EApp (EVar "methodReturnsBoolW") (EVar "prog")) (EVar "fn")) (EVar "WBool") (EApp (EApp (EVar "refMainKind") (EVar "prog")) (EApp (EVar "appHead") (EVar "f"))))))))))) (arm (PCon "CMethod" (PVar "fn") PWild PWild PWild) () (EIf (EBinOp "==" (EApp (EApp (EVar "declRetTypeOf") (EVar "prog")) (EVar "fn")) (ELit (LString "Unit"))) (EVar "WUnit") (EIf (EApp (EApp (EVar "methodReturnsBoolW") (EVar "prog")) (EVar "fn")) (EVar "WBool") (EVar "WInt")))) (arm (PCon "CDict" (PVar "fn") PWild) () (EIf (EBinOp "==" (EApp (EApp (EVar "declRetTypeOf") (EVar "prog")) (EVar "fn")) (ELit (LString "Unit"))) (EVar "WUnit") (EIf (EApp (EApp (EVar "methodReturnsBoolW") (EVar "prog")) (EVar "fn")) (EVar "WBool") (EVar "WInt")))) (arm (PVar "h") () (EApp (EApp (EVar "refMainKind") (EVar "prog")) (EVar "h")))))
 (DFunDef false "refMainKind" ((PVar "prog") (PCon "CVar" (PVar "x") PWild)) (EIf (EApp (EApp (EVar "fnReturnsFloat") (EVar "prog")) (EVar "x")) (EVar "WFloat") (EVar "WInt")))
 (DFunDef false "refMainKind" ((PVar "prog") (PVar "other")) (EVar "WInt"))
 (DTypeSig false "methodReturnsBoolW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyCon "Bool"))))

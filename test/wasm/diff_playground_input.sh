@@ -61,5 +61,25 @@ EOF
 printf '%s\n' 42 > "$WORK/expected"
 if [ -x "$MODULES" ] && "$MODULES" "$RUNTIME" "$CORE" "$WORK/input.mdk" "$WORK" >"$WORK/modules-int-control.wat" 2>"$WORK/modules-int-control.emit.err"; then check_wat modules-int-control "$WORK/modules-int-control.wat"; else bad "Int-control modules emitter failed"; cat "$WORK/modules-int-control.emit.err"; fi
 if [ -f "$PLAYGROUND" ] && node "$ROOT/playground/dev_compile_node.mjs" "$PLAYGROUND" "$RUNTIME" "$CORE" "$WORK/input.mdk" >"$WORK/playground-int-control.wat" 2>"$WORK/playground-int-control.emit.err"; then check_wat playground-int-control "$WORK/playground-int-control.wat"; else bad "Int-control playground compiler failed"; cat "$WORK/playground-int-control.emit.err"; fi
+# A Unit main is the one program shape with NO output: nothing in the user's code
+# forces the $str rep, so the string types are gated off while the prelude's
+# `impl Monoid String where empty = ""` is still emitted naming $u8arr.  The
+# module then fails to ASSEMBLE, which the playground reports as a compiler
+# failure.  Expected stdout is empty and the wasm must parse + validate.
+cat > "$WORK/input.mdk" <<'EOF'
+main : <IO> Unit
+main = ()
+EOF
+: > "$WORK/expected"
+if [ -x "$MODULES" ] && "$MODULES" "$RUNTIME" "$CORE" "$WORK/input.mdk" "$WORK" >"$WORK/modules-unit-main.wat" 2>"$WORK/modules-unit-main.emit.err"; then check_wat modules-unit-main "$WORK/modules-unit-main.wat"; else bad "Unit-main modules emitter failed"; cat "$WORK/modules-unit-main.emit.err"; fi
+if [ -f "$PLAYGROUND" ] && node "$ROOT/playground/dev_compile_node.mjs" "$PLAYGROUND" "$RUNTIME" "$CORE" "$WORK/input.mdk" >"$WORK/playground-unit-main.wat" 2>"$WORK/playground-unit-main.emit.err"; then check_wat playground-unit-main "$WORK/playground-unit-main.wat"; else bad "Unit-main playground compiler failed"; cat "$WORK/playground-unit-main.emit.err"; fi
+# #2424: a Unit-returning call BELOW main's top-level head (here under an else-less
+# `if`) was routed to the Int printer, so `b` was followed by a spurious `0`.
+cat > "$WORK/input.mdk" <<'EOF'
+main = if True then println "b"
+EOF
+printf '%s\n' b > "$WORK/expected"
+if [ -x "$MODULES" ] && "$MODULES" "$RUNTIME" "$CORE" "$WORK/input.mdk" "$WORK" >"$WORK/modules-elseless-if.wat" 2>"$WORK/modules-elseless-if.emit.err"; then check_wat modules-elseless-if "$WORK/modules-elseless-if.wat"; else bad "Else-less-if modules emitter failed"; cat "$WORK/modules-elseless-if.emit.err"; fi
+if [ -f "$PLAYGROUND" ] && node "$ROOT/playground/dev_compile_node.mjs" "$PLAYGROUND" "$RUNTIME" "$CORE" "$WORK/input.mdk" >"$WORK/playground-elseless-if.wat" 2>"$WORK/playground-elseless-if.emit.err"; then check_wat playground-elseless-if "$WORK/playground-elseless-if.wat"; else bad "Else-less-if playground compiler failed"; cat "$WORK/playground-elseless-if.emit.err"; fi
 printf '%d checks, %d failing\n' "$checks" "$fail"
 [ "$checks" -gt 0 ] && [ "$fail" -eq 0 ]
