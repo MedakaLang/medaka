@@ -470,6 +470,13 @@ printType (TyTuple ts) =
 printType (TyEffect es tail t) =
   let inside = effectInside es tail
   Cat (text "<") (Cat inside (Cat (text "> ") (printTypeAppLhs t)))
+-- A join with no labels is written `(e | e2)`, not `<e | e2>` — the
+-- parenthesised spelling is the one an Effect-kinded type-ARGUMENT slot takes
+-- (`f (e | e2) b`), and a bare row atom only ever appears in such a slot.  A
+-- labelled join keeps the angle spelling (`<L | e | e2>`), which has no
+-- parenthesised form.
+printType (TyRow [] (a::b::rest) _) =
+  Cat (text "(") (Cat (text (joinWith " | " (a :: b::rest))) (text ")"))
 printType (TyRow es tail _) =
   Cat (text "<") (Cat (effectInside es tail) (text ">"))
 printType (TyConstrained cs t) =
@@ -478,11 +485,13 @@ printType (TyConstrained cs t) =
     _ => Cat (text "(") (Cat (sepBy (text ", ") (map printConstraint cs)) (text ")"))
   Cat csDoc (Cat (text " => ") (printType t))
 
-effectInside : List (String, Option String) -> Option String -> Doc
-effectInside es None = sepBy (text ", ") (map effAtomDoc es)
-effectInside [] (Some v) = text v
-effectInside es (Some v) =
-  Cat (sepBy (text ", ") (map effAtomDoc es)) (Cat (text " | ") (text v))
+effectInside : List (String, Option String) -> List String -> Doc
+effectInside es [] = sepBy (text ", ") (map effAtomDoc es)
+effectInside [] tails = text (joinWith " | " tails)
+effectInside es tails =
+  Cat
+    (sepBy (text ", ") (map effAtomDoc es))
+    (Cat (text " | ") (text (joinWith " | " tails)))
 
 -- one row atom as a Doc: the label, or label + space + quoted param.
 effAtomDoc : (String, Option String) -> Doc
@@ -2053,6 +2062,12 @@ ppTyPrec p (TyEffect effs tail t) =
   let inside = ppEffInside effs tail
   let s = "<\{inside}> \{ppTyPrec 0 t}"
   if p >= 1 then "(" ++ s ++ ")" else s
+-- A label-free join renders in its parenthesised type-argument spelling, as
+-- `printType` does (`f (e | e2) b`).
+-- Intentional cross-file duplicate of doc.mdk's `ppTyP` clause; not consolidating
+-- (same divergent-by-design printer trio as `ppEffAtom` below).
+-- lint-disable-next-line rule-duplicate-body
+ppTyPrec _ (TyRow [] (a::b::rest) _) = "(\{joinWith " | " (a :: b::rest)})"
 -- A bare row atom (#997) is already atomic (no wrapped type), so — unlike
 -- `TyEffect` above — it never needs precedence-parens at any `p`.
 ppTyPrec _ (TyRow effs tail _) = "<\{ppEffInside effs tail}>"
@@ -2062,10 +2077,11 @@ ppTyPrec _ (TyConstrained cs t) =
     _ => "(" ++ joinWith ", " (map ppConstr cs) ++ ")"
   "\{csStr} => \{ppTyPrec 0 t}"
 
-ppEffInside : List (String, Option String) -> Option String -> String
-ppEffInside effs None = joinWith ", " (map ppEffAtom effs)
-ppEffInside [] (Some v) = v
-ppEffInside effs (Some v) = "\{joinWith ", " (map ppEffAtom effs)} | \{v}"
+ppEffInside : List (String, Option String) -> List String -> String
+ppEffInside effs [] = joinWith ", " (map ppEffAtom effs)
+ppEffInside [] tails = joinWith " | " tails
+ppEffInside effs tails =
+  "\{joinWith ", " (map ppEffAtom effs)} | \{joinWith " | " tails}"
 
 -- a row atom renders as the label, or label + space + quoted param,
 -- byte-identical to lib/printer.ml TyEffect atom rendering.

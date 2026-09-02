@@ -100,6 +100,12 @@ ppTyP p (TyFun a b) =
 ppTyP p (TyEffect effs tail t) =
   let s = "<\{ppEffInsideDoc effs tail}> \{ppTyP 0 t}"
   if p >= 1 then "(" ++ s ++ ")" else s
+-- A label-free join takes its parenthesised type-argument spelling
+-- (`f (e | e2) b`), matching printer.mdk.
+-- Intentional cross-file duplicate of printer.mdk's `ppTyPrec` clause; not
+-- consolidating (same divergent-by-design printer trio as `ppEffAtomDoc` below).
+-- lint-disable-next-line rule-duplicate-body
+ppTyP _ (TyRow [] (a::b::rest) _) = "(\{joinWith " | " (a :: b::rest)})"
 -- A bare row atom (#997) is already atomic (no wrapped type), so — unlike
 -- `TyEffect` above — it never needs precedence-parens at any `p`.
 ppTyP _ (TyRow effs tail _) = "<\{ppEffInsideDoc effs tail}>"
@@ -112,14 +118,16 @@ ppTyP _ (TyConstrained cs t) =
 -- shared `<...>` row-body renderer for `TyEffect`/`TyRow` (factored out of
 -- `TyEffect`'s arm above so `TyRow` doesn't duplicate it — lint's
 -- rule-duplicate-body would flag an inlined copy).
-ppEffInsideDoc : List (String, Option String) -> Option String -> String
-ppEffInsideDoc effs tail =
+ppEffInsideDoc : List (String, Option String) -> List String -> String
+ppEffInsideDoc effs tails =
   let labs = map ppEffAtomDoc effs
-  match tail
-    None => joinWith ", " labs
-    Some v => match effs
-      [] => v
-      _ => "\{joinWith ", " labs} | \{v}"
+  match tails
+    [] => joinWith ", " labs
+    _ =>
+      let tls = joinWith " | " tails
+      match effs
+        [] => tls
+        _ => "\{joinWith ", " labs} | \{tls}"
 
 -- effect atom: `l` | `l _` (inferred hole) | `l "dom"` (domain-carrying).
 -- Mirror pp_atom in pp_ty_prec: None=>l, Some "_" => l ++ " _", Some s => l ++ " " ++ %S

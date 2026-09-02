@@ -90,9 +90,9 @@ tySexp (TyApp a b) = node "TyApp" [tySexp a, tySexp b]
 tySexp (TyFun a b) = node "TyFun" [tySexp a, tySexp b]
 tySexp (TyTuple ts) = node "TyTuple" (map tySexp ts)
 tySexp (TyEffect labels tail t) =
-  node "TyEffect" [slist (map effAtomSexp labels), optStrSexp tail, tySexp t]
+  node "TyEffect" [slist (map effAtomSexp labels), tailSexp tail, tySexp t]
 tySexp (TyRow labels tail _) =
-  node "TyRow" [slist (map effAtomSexp labels), optStrSexp tail]
+  node "TyRow" [slist (map effAtomSexp labels), tailSexp tail]
 tySexp (TyConstrained cs t) =
   node "TyConstrained" [slist (map constraintSexp cs), tySexp t]
 
@@ -101,6 +101,14 @@ constraintSexp (Constraint { constraintHead = iface, constraintArgs = args }) =
   node "cstr" (escStr iface :: map tySexp args)
 
 export
+-- A row's tail variables (#821): a join carries several.  Nought and one
+-- render as the `None`/`Some` they used to be, so only a genuine join moves
+-- a golden.
+tailSexp : List String -> String
+tailSexp [] = "None"
+tailSexp [n] = node "Some" [escStr n]
+tailSexp ns = node "Join" (map escStr ns)
+
 optStrSexp : Option String -> String
 optStrSexp (Some s) = node "Some" [escStr s]
 optStrSexp None = "None"

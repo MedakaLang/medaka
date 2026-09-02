@@ -1,5 +1,5 @@
 # META
-source_lines=4815
+source_lines=4811
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -1821,16 +1821,12 @@ rowVarsOf (TyCon { tyConName = _ }) = []
 rowVarsOf (TyApp f x) = rowVarsOf f ++ rowVarsOf x
 rowVarsOf (TyFun a b) = rowVarsOf a ++ rowVarsOf b
 rowVarsOf (TyTuple ts) = flatMap rowVarsOf ts
-rowVarsOf (TyEffect _ tl t) = optNameL tl ++ rowVarsOf t
+rowVarsOf (TyEffect _ tl t) = tl ++ rowVarsOf t
 rowVarsOf (TyConstrained cs t) = flatMap constrRowVars cs ++ rowVarsOf t
-rowVarsOf (TyRow _ tl _) = optNameL tl
+rowVarsOf (TyRow _ tl _) = tl
 
 constrRowVars : Constraint -> List String
 constrRowVars (Constraint { constraintArgs = args }) = flatMap rowVarsOf args
-
-optNameL : Option String -> List String
-optNameL None = []
-optNameL (Some v) = [v]
 
 tyCanonIn : List String -> List String -> Ty -> String
 tyCanonIn tvs _ (TyVar v) = "%t" ++ intToString (indexIn v tvs)
@@ -1849,7 +1845,7 @@ tyCanonIn tvs rvs (TyConstrained cs t) = "(=> \{joinWith " " (sortUniqS (map (co
 constrCanon : List String -> List String -> Constraint -> String
 constrCanon tvs rvs (Constraint { constraintHead = h, constraintArgs = args }) = "[\{h} \{joinWith " " (map (tyCanonIn tvs rvs) args)}]"
 
-rowCanon : List String -> List (String, Option String) -> Option String -> String
+rowCanon : List String -> List (String, Option String) -> List String -> String
 rowCanon rvs es tl =
   "{\{joinWith " " (sortUniqS (map rowAtomCanon es))}\{rowTailCanon rvs tl}}"
 
@@ -1857,9 +1853,9 @@ rowAtomCanon : (String, Option String) -> String
 rowAtomCanon (l, None) = l
 rowAtomCanon (l, Some s) = "\{l}=\{s}"
 
-rowTailCanon : List String -> Option String -> String
-rowTailCanon _ None = ""
-rowTailCanon rvs (Some v) = " |%r" ++ intToString (indexIn v rvs)
+rowTailCanon : List String -> List String -> String
+rowTailCanon rvs tls =
+  joinWith "" (map (v => " |%r" ++ intToString (indexIn v rvs)) tls)
 
 -- position of `x` in `xs`, or -1 when absent — unreachable, since the order
 -- lists are collected from the very type being rendered.
@@ -5304,14 +5300,11 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "rowVarsOf" ((PCon "TyApp" (PVar "f") (PVar "x"))) (EBinOp "++" (EApp (EVar "rowVarsOf") (EVar "f")) (EApp (EVar "rowVarsOf") (EVar "x"))))
 (DFunDef false "rowVarsOf" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "rowVarsOf") (EVar "a")) (EApp (EVar "rowVarsOf") (EVar "b"))))
 (DFunDef false "rowVarsOf" ((PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "flatMap") (EVar "rowVarsOf")) (EVar "ts")))
-(DFunDef false "rowVarsOf" ((PCon "TyEffect" PWild (PVar "tl") (PVar "t"))) (EBinOp "++" (EApp (EVar "optNameL") (EVar "tl")) (EApp (EVar "rowVarsOf") (EVar "t"))))
+(DFunDef false "rowVarsOf" ((PCon "TyEffect" PWild (PVar "tl") (PVar "t"))) (EBinOp "++" (EVar "tl") (EApp (EVar "rowVarsOf") (EVar "t"))))
 (DFunDef false "rowVarsOf" ((PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "constrRowVars")) (EVar "cs")) (EApp (EVar "rowVarsOf") (EVar "t"))))
-(DFunDef false "rowVarsOf" ((PCon "TyRow" PWild (PVar "tl") PWild)) (EApp (EVar "optNameL") (EVar "tl")))
+(DFunDef false "rowVarsOf" ((PCon "TyRow" PWild (PVar "tl") PWild)) (EVar "tl"))
 (DTypeSig false "constrRowVars" (TyFun (TyCon "Constraint") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "constrRowVars" ((PRec "Constraint" ((rf "constraintArgs" (PVar "args"))) false)) (EApp (EApp (EVar "flatMap") (EVar "rowVarsOf")) (EVar "args")))
-(DTypeSig false "optNameL" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "optNameL" ((PCon "None")) (EListLit))
-(DFunDef false "optNameL" ((PCon "Some" (PVar "v"))) (EListLit (EVar "v")))
 (DTypeSig false "tyCanonIn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyCon "String")))))
 (DFunDef false "tyCanonIn" ((PVar "tvs") PWild (PCon "TyVar" (PVar "v"))) (EBinOp "++" (ELit (LString "%t")) (EApp (EVar "intToString") (EApp (EApp (EVar "indexIn") (EVar "v")) (EVar "tvs")))))
 (DFunDef false "tyCanonIn" (PWild PWild (PRec "TyCon" ((rf "tyConName" (PVar "n"))) false)) (EBinOp "++" (ELit (LString "#")) (EVar "n")))
@@ -5323,14 +5316,13 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "tyCanonIn" ((PVar "tvs") (PVar "rvs") (PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(=> ")) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EVar "sortUniqS") (EApp (EApp (EVar "map") (EApp (EApp (EVar "constrCanon") (EVar "tvs")) (EVar "rvs"))) (EVar "cs")))))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EApp (EVar "tyCanonIn") (EVar "tvs")) (EVar "rvs")) (EVar "t")))) (ELit (LString ")"))))
 (DTypeSig false "constrCanon" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Constraint") (TyCon "String")))))
 (DFunDef false "constrCanon" ((PVar "tvs") (PVar "rvs") (PRec "Constraint" ((rf "constraintHead" (PVar "h")) (rf "constraintArgs" (PVar "args"))) false)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EVar "display") (EVar "h"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "map") (EApp (EApp (EVar "tyCanonIn") (EVar "tvs")) (EVar "rvs"))) (EVar "args"))))) (ELit (LString "]"))))
-(DTypeSig false "rowCanon" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String")))))
+(DTypeSig false "rowCanon" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "rowCanon" ((PVar "rvs") (PVar "es") (PVar "tl")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "{")) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EVar "sortUniqS") (EApp (EApp (EVar "map") (EVar "rowAtomCanon")) (EVar "es")))))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EApp (EVar "rowTailCanon") (EVar "rvs")) (EVar "tl")))) (ELit (LString "}"))))
 (DTypeSig false "rowAtomCanon" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyCon "String")))
 (DFunDef false "rowAtomCanon" ((PTuple (PVar "l") (PCon "None"))) (EVar "l"))
 (DFunDef false "rowAtomCanon" ((PTuple (PVar "l") (PCon "Some" (PVar "s")))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "l"))) (ELit (LString "="))) (EApp (EVar "display") (EVar "s"))) (ELit (LString ""))))
-(DTypeSig false "rowTailCanon" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))
-(DFunDef false "rowTailCanon" (PWild (PCon "None")) (ELit (LString "")))
-(DFunDef false "rowTailCanon" ((PVar "rvs") (PCon "Some" (PVar "v"))) (EBinOp "++" (ELit (LString " |%r")) (EApp (EVar "intToString") (EApp (EApp (EVar "indexIn") (EVar "v")) (EVar "rvs")))))
+(DTypeSig false "rowTailCanon" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
+(DFunDef false "rowTailCanon" ((PVar "rvs") (PVar "tls")) (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EVar "map") (ELam ((PVar "v")) (EBinOp "++" (ELit (LString " |%r")) (EApp (EVar "intToString") (EApp (EApp (EVar "indexIn") (EVar "v")) (EVar "rvs")))))) (EVar "tls"))))
 (DTypeSig false "indexIn" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Int"))))
 (DFunDef false "indexIn" ((PVar "x") (PVar "xs")) (EApp (EApp (EApp (EVar "indexInGo") (EVar "x")) (EVar "xs")) (ELit (LInt 0))))
 (DTypeSig false "indexInGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyCon "Int")))))
@@ -6905,14 +6897,11 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "rowVarsOf" ((PCon "TyApp" (PVar "f") (PVar "x"))) (EBinOp "++" (EApp (EVar "rowVarsOf") (EVar "f")) (EApp (EVar "rowVarsOf") (EVar "x"))))
 (DFunDef false "rowVarsOf" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "rowVarsOf") (EVar "a")) (EApp (EVar "rowVarsOf") (EVar "b"))))
 (DFunDef false "rowVarsOf" ((PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EDictApp "flatMap") (EVar "rowVarsOf")) (EVar "ts")))
-(DFunDef false "rowVarsOf" ((PCon "TyEffect" PWild (PVar "tl") (PVar "t"))) (EBinOp "++" (EApp (EVar "optNameL") (EVar "tl")) (EApp (EVar "rowVarsOf") (EVar "t"))))
+(DFunDef false "rowVarsOf" ((PCon "TyEffect" PWild (PVar "tl") (PVar "t"))) (EBinOp "++" (EVar "tl") (EApp (EVar "rowVarsOf") (EVar "t"))))
 (DFunDef false "rowVarsOf" ((PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "constrRowVars")) (EVar "cs")) (EApp (EVar "rowVarsOf") (EVar "t"))))
-(DFunDef false "rowVarsOf" ((PCon "TyRow" PWild (PVar "tl") PWild)) (EApp (EVar "optNameL") (EVar "tl")))
+(DFunDef false "rowVarsOf" ((PCon "TyRow" PWild (PVar "tl") PWild)) (EVar "tl"))
 (DTypeSig false "constrRowVars" (TyFun (TyCon "Constraint") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "constrRowVars" ((PRec "Constraint" ((rf "constraintArgs" (PVar "args"))) false)) (EApp (EApp (EDictApp "flatMap") (EVar "rowVarsOf")) (EVar "args")))
-(DTypeSig false "optNameL" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "optNameL" ((PCon "None")) (EListLit))
-(DFunDef false "optNameL" ((PCon "Some" (PVar "v"))) (EListLit (EVar "v")))
 (DTypeSig false "tyCanonIn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyCon "String")))))
 (DFunDef false "tyCanonIn" ((PVar "tvs") PWild (PCon "TyVar" (PVar "v"))) (EBinOp "++" (ELit (LString "%t")) (EApp (EVar "intToString") (EApp (EApp (EVar "indexIn") (EVar "v")) (EVar "tvs")))))
 (DFunDef false "tyCanonIn" (PWild PWild (PRec "TyCon" ((rf "tyConName" (PVar "n"))) false)) (EBinOp "++" (ELit (LString "#")) (EVar "n")))
@@ -6924,14 +6913,13 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "tyCanonIn" ((PVar "tvs") (PVar "rvs") (PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(=> ")) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EVar "sortUniqS") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "constrCanon") (EVar "tvs")) (EVar "rvs"))) (EVar "cs")))))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "tyCanonIn") (EVar "tvs")) (EVar "rvs")) (EVar "t")))) (ELit (LString ")"))))
 (DTypeSig false "constrCanon" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Constraint") (TyCon "String")))))
 (DFunDef false "constrCanon" ((PVar "tvs") (PVar "rvs") (PRec "Constraint" ((rf "constraintHead" (PVar "h")) (rf "constraintArgs" (PVar "args"))) false)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EMethodRef "display") (EVar "h"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "tyCanonIn") (EVar "tvs")) (EVar "rvs"))) (EVar "args"))))) (ELit (LString "]"))))
-(DTypeSig false "rowCanon" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String")))))
+(DTypeSig false "rowCanon" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "rowCanon" ((PVar "rvs") (PVar "es") (PVar "tl")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "{")) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EVar "sortUniqS") (EApp (EApp (EMethodRef "map") (EVar "rowAtomCanon")) (EVar "es")))))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EApp (EVar "rowTailCanon") (EVar "rvs")) (EVar "tl")))) (ELit (LString "}"))))
 (DTypeSig false "rowAtomCanon" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyCon "String")))
 (DFunDef false "rowAtomCanon" ((PTuple (PVar "l") (PCon "None"))) (EVar "l"))
 (DFunDef false "rowAtomCanon" ((PTuple (PVar "l") (PCon "Some" (PVar "s")))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "l"))) (ELit (LString "="))) (EApp (EMethodRef "display") (EVar "s"))) (ELit (LString ""))))
-(DTypeSig false "rowTailCanon" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))
-(DFunDef false "rowTailCanon" (PWild (PCon "None")) (ELit (LString "")))
-(DFunDef false "rowTailCanon" ((PVar "rvs") (PCon "Some" (PVar "v"))) (EBinOp "++" (ELit (LString " |%r")) (EApp (EVar "intToString") (EApp (EApp (EVar "indexIn") (EVar "v")) (EVar "rvs")))))
+(DTypeSig false "rowTailCanon" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
+(DFunDef false "rowTailCanon" ((PVar "rvs") (PVar "tls")) (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "v")) (EBinOp "++" (ELit (LString " |%r")) (EApp (EVar "intToString") (EApp (EApp (EVar "indexIn") (EVar "v")) (EVar "rvs")))))) (EVar "tls"))))
 (DTypeSig false "indexIn" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Int"))))
 (DFunDef false "indexIn" ((PVar "x") (PVar "xs")) (EApp (EApp (EApp (EVar "indexInGo") (EVar "x")) (EVar "xs")) (ELit (LInt 0))))
 (DTypeSig false "indexInGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyCon "Int")))))

@@ -1817,16 +1817,12 @@ rowVarsOf (TyCon { tyConName = _ }) = []
 rowVarsOf (TyApp f x) = rowVarsOf f ++ rowVarsOf x
 rowVarsOf (TyFun a b) = rowVarsOf a ++ rowVarsOf b
 rowVarsOf (TyTuple ts) = flatMap rowVarsOf ts
-rowVarsOf (TyEffect _ tl t) = optNameL tl ++ rowVarsOf t
+rowVarsOf (TyEffect _ tl t) = tl ++ rowVarsOf t
 rowVarsOf (TyConstrained cs t) = flatMap constrRowVars cs ++ rowVarsOf t
-rowVarsOf (TyRow _ tl _) = optNameL tl
+rowVarsOf (TyRow _ tl _) = tl
 
 constrRowVars : Constraint -> List String
 constrRowVars (Constraint { constraintArgs = args }) = flatMap rowVarsOf args
-
-optNameL : Option String -> List String
-optNameL None = []
-optNameL (Some v) = [v]
 
 tyCanonIn : List String -> List String -> Ty -> String
 tyCanonIn tvs _ (TyVar v) = "%t" ++ intToString (indexIn v tvs)
@@ -1845,7 +1841,7 @@ tyCanonIn tvs rvs (TyConstrained cs t) = "(=> \{joinWith " " (sortUniqS (map (co
 constrCanon : List String -> List String -> Constraint -> String
 constrCanon tvs rvs (Constraint { constraintHead = h, constraintArgs = args }) = "[\{h} \{joinWith " " (map (tyCanonIn tvs rvs) args)}]"
 
-rowCanon : List String -> List (String, Option String) -> Option String -> String
+rowCanon : List String -> List (String, Option String) -> List String -> String
 rowCanon rvs es tl =
   "{\{joinWith " " (sortUniqS (map rowAtomCanon es))}\{rowTailCanon rvs tl}}"
 
@@ -1853,9 +1849,9 @@ rowAtomCanon : (String, Option String) -> String
 rowAtomCanon (l, None) = l
 rowAtomCanon (l, Some s) = "\{l}=\{s}"
 
-rowTailCanon : List String -> Option String -> String
-rowTailCanon _ None = ""
-rowTailCanon rvs (Some v) = " |%r" ++ intToString (indexIn v rvs)
+rowTailCanon : List String -> List String -> String
+rowTailCanon rvs tls =
+  joinWith "" (map (v => " |%r" ++ intToString (indexIn v rvs)) tls)
 
 -- position of `x` in `xs`, or -1 when absent — unreachable, since the order
 -- lists are collected from the very type being rendered.

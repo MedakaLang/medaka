@@ -2011,23 +2011,26 @@ parseEffectTy = do
   inner <- parseTy
   pure (mkEffect body inner)
 
-mkEffect : (List (String, Option String), Option String) -> Ty -> Ty
+mkEffect : (List (String, Option String), List String) -> Ty -> Ty
 mkEffect (labels, tail) inner = TyEffect labels tail inner
 
-effectBody : Parser (List (String, Option String), Option String)
+effectBody : Parser (List (String, Option String), List String)
 effectBody = do
   t <- peekP
   effectBodyFor t
 
-effectBodyFor : Token -> Parser (List (String, Option String), Option String)
+effectBodyFor : Token -> Parser (List (String, Option String), List String)
 effectBodyFor (TUpper _) = do
   labels <- sepBy1 effAtomP (expectTok TComma)
   tail <- pipeTail
   pure (labels, tail)
+-- A leading tail var may itself be joined with more (`<e | e2>`, #821), so the
+-- rest of the row is the same `| name` loop the labelled form uses.
 effectBodyFor (TIdent _) = do
   v <- identNameP
-  pure ([], Some v)
-effectBodyFor _ = pure ([], None)
+  rest <- pipeTail
+  pure ([], v::rest)
+effectBodyFor _ = pure ([], [])
 
 -- a row atom is a label with an optional Prefix-pattern param:
 -- `Foo` (atomic), `Net "a.com/*"` (written param), or `Net _` (an inferred
@@ -2142,17 +2145,21 @@ joinSemi xs = joinWith ";" xs
 joinComma : List String -> String
 joinComma xs = joinWith "," xs
 
-pipeTail : Parser (Option String)
+-- Zero or more `| name` tail variables.  Several make the row a JOIN (#821):
+-- `<Stdout | e | e2>` is the row of Stdout together with everything e or e2
+-- can perform.
+pipeTail : Parser (List String)
 pipeTail = do
   t <- peekP
   pipeTailFor t
 
-pipeTailFor : Token -> Parser (Option String)
+pipeTailFor : Token -> Parser (List String)
 pipeTailFor TPipe = do
   advance
   v <- identNameP
-  pure (Some v)
-pipeTailFor _ = pure None
+  rest <- pipeTail
+  pure (v::rest)
+pipeTailFor _ = pure []
 
 upperNameP : Parser String
 upperNameP = do
@@ -2255,7 +2262,7 @@ parseBareEffectAtom = do
   q <- getPos
   pure (mkRow body (locOfSpan s q))
 
-mkRow : (List (String, Option String), Option String) -> Loc -> Ty
+mkRow : (List (String, Option String), List String) -> Loc -> Ty
 mkRow (labels, tail) loc = TyRow labels tail (Some loc)
 
 tyTupleOrSingle : List Ty -> Ty
@@ -2274,7 +2281,27 @@ parseTyParen = do
 -- path.
 parseTyParenBody : Token -> Parser Ty
 parseTyParenBody TComma = parseTupleCtorTail 0
-parseTyParenBody _ = do
+-- `(e | e2)` in an Effect-kinded type-ARGUMENT slot is a bare row whose tail
+-- is a join (#821), the parenthesised spelling of `<e | e2>`: `f (e | e2) b`.
+-- Only a `|` right after the ident selects it, so `(e)` and `(e, f)` keep
+-- their ordinary parenthesised/tuple readings.
+parseTyParenBody (TIdent _) = do
+  t2 <- peek2P
+  parseTyParenIdent t2
+parseTyParenBody _ = parseTyParenTuple
+
+parseTyParenIdent : Token -> Parser Ty
+parseTyParenIdent TPipe = do
+  s <- getPos
+  v <- identNameP
+  rest <- pipeTail
+  expectTok TRParen
+  q <- getPos
+  pure (TyRow [] (v::rest) (Some (locOfSpan s q)))
+parseTyParenIdent _ = parseTyParenTuple
+
+parseTyParenTuple : Parser Ty
+parseTyParenTuple = do
   ts <- sepBy1 parseTy (expectTok TComma)
   optTrailingCommaTuple ts
   expectTok TRParen

@@ -31,6 +31,7 @@ requireSexp : Require -> String
 sectionSexp : Section -> String
 slist : List String -> String
 superSexp : Super -> String
+tailSexp : List String -> String
 tySexp : Ty -> String
 useMemberSexp : UseMember -> String
 usePathSexp : UsePath -> String

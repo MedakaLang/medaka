@@ -741,9 +741,7 @@ tyMentions (TyConstrained _ t) params = tyMentions t params
 -- untyped-eval vs typed-core-IR pair — same precedent as typecheck.mdk's
 -- and doc.mdk's ppEffAtomTy).
 -- lint-disable-next-line rule-duplicate-body
-tyMentions (TyRow _ tail _) params = match tail
-  Some v => contains v params
-  None => False
+tyMentions (TyRow _ tail _) params = anyList (v => contains v params) tail
 
 -- ── environment ───────────────────────────────────────────────────────────
 export

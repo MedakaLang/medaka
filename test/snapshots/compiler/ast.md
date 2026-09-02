@@ -695,7 +695,7 @@ public export data Ty =
   | TyApp Ty Ty
   | TyFun Ty Ty
   | TyTuple (List Ty)
-  | TyEffect (List (String, Option String)) (Option String) Ty
+  | TyEffect (List (String, Option String)) (List String) Ty
   | TyConstrained (List Constraint) Ty
   -- A row/grade written BARE in a type-ARGUMENT slot (#997), e.g. the
   -- `<Stdout>` of `Async <Stdout> Unit`.  Distinct from `TyEffect` — which
@@ -705,7 +705,7 @@ public export data Ty =
   -- to be Unit", so a real constructor is required rather than a filler Ty
   -- (a filler is print-ambiguous with a genuine wrapped type of the same
   -- shape, e.g. `Foo (<Stdout> Unit)` where `Unit` is a real payload type).
-  | TyRow (List (String, Option String)) (Option String) (Option Loc)
+  | TyRow (List (String, Option String)) (List String) (Option Loc)
 
 -- Build a `TyCon` whose module identity has NOT been acquired yet (#1110).
 -- This is the ONE producer of `OriginUnresolved`, and every construction site
@@ -2028,7 +2028,7 @@ mapKvsB f ((k, v)::rest) =
 (DFunDef false "sameTyConHead" ((PVar "n1") (PVar "o1") (PVar "n2") (PVar "o2")) (EBinOp "&&" (EBinOp "==" (EVar "n1") (EVar "n2")) (EApp (EVar "not") (EApp (EApp (EVar "tyConIdsConflict") (EVar "o1")) (EVar "o2")))))
 (DTypeSig false "tyConIdsConflict" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "TyConOrigin") (TyCon "Bool"))))
 (DFunDef false "tyConIdsConflict" ((PVar "o1") (PVar "o2")) (EMatch (ETuple (EApp (EVar "identOriginOf") (EVar "o1")) (EApp (EVar "identOriginOf") (EVar "o2"))) (arm (PTuple (PCon "Some" (PVar "i1")) (PCon "Some" (PVar "i2"))) () (EBinOp "/=" (EVar "i1") (EVar "i2"))) (arm PWild () (EVar "False"))))
-(DData Public "Ty" () ((variant "TyCon" (ConNamed (field "tyConName" (TyCon "String")) (field "tyConLoc" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "tyConOrigin" (TyCon "TyConOrigin")))) (variant "TyVar" (ConPos (TyCon "String"))) (variant "TyApp" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyFun" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyTuple" (ConPos (TyApp (TyCon "List") (TyCon "Ty")))) (variant "TyEffect" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Ty"))) (variant "TyConstrained" (ConPos (TyApp (TyCon "List") (TyCon "Constraint")) (TyCon "Ty"))) (variant "TyRow" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
+(DData Public "Ty" () ((variant "TyCon" (ConNamed (field "tyConName" (TyCon "String")) (field "tyConLoc" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "tyConOrigin" (TyCon "TyConOrigin")))) (variant "TyVar" (ConPos (TyCon "String"))) (variant "TyApp" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyFun" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyTuple" (ConPos (TyApp (TyCon "List") (TyCon "Ty")))) (variant "TyEffect" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty"))) (variant "TyConstrained" (ConPos (TyApp (TyCon "List") (TyCon "Constraint")) (TyCon "Ty"))) (variant "TyRow" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
 (DTypeSig true "tyConUnresolved" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Ty"))))
 (DFunDef false "tyConUnresolved" ((PVar "n") (PVar "l")) (ERecordCreate "TyCon" ((fa "tyConName" (EVar "n")) (fa "tyConLoc" (EVar "l")) (fa "tyConOrigin" (EVar "OriginUnresolved")))))
 (DTypeSig true "tyConBuiltin" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Ty"))))
@@ -2315,7 +2315,7 @@ mapKvsB f ((k, v)::rest) =
 (DFunDef false "sameTyConHead" ((PVar "n1") (PVar "o1") (PVar "n2") (PVar "o2")) (EBinOp "&&" (EBinOp "==" (EVar "n1") (EVar "n2")) (EApp (EVar "not") (EApp (EApp (EVar "tyConIdsConflict") (EVar "o1")) (EVar "o2")))))
 (DTypeSig false "tyConIdsConflict" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "TyConOrigin") (TyCon "Bool"))))
 (DFunDef false "tyConIdsConflict" ((PVar "o1") (PVar "o2")) (EMatch (ETuple (EApp (EVar "identOriginOf") (EVar "o1")) (EApp (EVar "identOriginOf") (EVar "o2"))) (arm (PTuple (PCon "Some" (PVar "i1")) (PCon "Some" (PVar "i2"))) () (EBinOp "/=" (EVar "i1") (EVar "i2"))) (arm PWild () (EVar "False"))))
-(DData Public "Ty" () ((variant "TyCon" (ConNamed (field "tyConName" (TyCon "String")) (field "tyConLoc" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "tyConOrigin" (TyCon "TyConOrigin")))) (variant "TyVar" (ConPos (TyCon "String"))) (variant "TyApp" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyFun" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyTuple" (ConPos (TyApp (TyCon "List") (TyCon "Ty")))) (variant "TyEffect" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Ty"))) (variant "TyConstrained" (ConPos (TyApp (TyCon "List") (TyCon "Constraint")) (TyCon "Ty"))) (variant "TyRow" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
+(DData Public "Ty" () ((variant "TyCon" (ConNamed (field "tyConName" (TyCon "String")) (field "tyConLoc" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "tyConOrigin" (TyCon "TyConOrigin")))) (variant "TyVar" (ConPos (TyCon "String"))) (variant "TyApp" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyFun" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyTuple" (ConPos (TyApp (TyCon "List") (TyCon "Ty")))) (variant "TyEffect" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty"))) (variant "TyConstrained" (ConPos (TyApp (TyCon "List") (TyCon "Constraint")) (TyCon "Ty"))) (variant "TyRow" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
 (DTypeSig true "tyConUnresolved" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Ty"))))
 (DFunDef false "tyConUnresolved" ((PVar "n") (PVar "l")) (ERecordCreate "TyCon" ((fa "tyConName" (EVar "n")) (fa "tyConLoc" (EVar "l")) (fa "tyConOrigin" (EVar "OriginUnresolved")))))
 (DTypeSig true "tyConBuiltin" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Ty"))))
