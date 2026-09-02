@@ -637,6 +637,8 @@ Operations on `List a`.
 
 ## [`string`](string.md)
 
+Operations on `String` and `Char`.
+
 - [`isDigit`](string.md#isdigit)
 - [`isAlpha`](string.md#isalpha)
 - [`isAlphaNum`](string.md#isalphanum)
