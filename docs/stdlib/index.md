@@ -760,6 +760,8 @@ Operations on `String` and `Char`.
 
 ## [`vector`](vector.md)
 
+A growable, mutable array.
+
 - [`Vector`](vector.md#vector)
 - [`new`](vector.md#new)
 - [`fromList`](vector.md#fromlist)

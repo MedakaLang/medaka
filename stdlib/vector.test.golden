@@ -1,24 +1,32 @@
 running doctests in stdlib/vector.mdk
-  ok   stdlib/vector.mdk:58: length (fromList [1, 2, 3])
-  ok   stdlib/vector.mdk:78: capacity (fromList [1, 2, 3])
-  ok   stdlib/vector.mdk:86: get 1 (fromList [10, 20, 30])
-  ok   stdlib/vector.mdk:88: get 5 (fromList [10, 20, 30])
-  ok   stdlib/vector.mdk:109: first (fromList [10, 20, 30])
-  ok   stdlib/vector.mdk:117: last (fromList [10, 20, 30])
-  ok   stdlib/vector.mdk:138: arrayLength (toArray (fromList [1, 2, 3]))
-  ok   stdlib/vector.mdk:254: let ma = fromList [1, 2, 3] in let _ = insertAt 1 9 ma in toList ma
-  ok   stdlib/vector.mdk:256: let ma = fromList [1, 2] in let _ = insertAt 7 9 ma in toList ma
-  ok   stdlib/vector.mdk:264: let ma = fromList [1, 2, 3] in let _ = removeAt 1 ma in toList ma
-  ok   stdlib/vector.mdk:266: let ma = fromList [1, 2] in let _ = removeAt 7 ma in toList ma
-  ok   stdlib/vector.mdk:276: let ma = fromList [3, 1, 4, 1, 5] in let _ = sortBy compare ma in toList ma
-  ok   stdlib/vector.mdk:284: let ma = fromList [3, 1, 2] in let _ = sort ma in toList ma
-  ok   stdlib/vector.mdk:307: sum (fromList [1, 2, 3, 4])
-  ok   stdlib/vector.mdk:309: length (fromList [9, 8, 7])
-  ok   stdlib/vector.mdk:320: eq (fromList [1, 2, 3]) (fromList [1, 2, 3])
-  ok   stdlib/vector.mdk:327: debug (fromList [1, 2, 3]) == "fromList [1, 2, 3]"
-  ok   stdlib/vector.mdk:337: display (fromList [1, 2, 3]) == "fromList [1, 2, 3]"
+  ok   stdlib/vector.mdk:54: length (new () : Vector Int)
+  ok   stdlib/vector.mdk:64: length (fromList [1, 2, 3])
+  ok   stdlib/vector.mdk:76: toList (fromArray [|1, 2|])
+  ok   stdlib/vector.mdk:88: capacity (fromList [1, 2, 3])
+  ok   stdlib/vector.mdk:96: get 1 (fromList [10, 20, 30])
+  ok   stdlib/vector.mdk:98: get 5 (fromList [10, 20, 30])
+  ok   stdlib/vector.mdk:119: first (fromList [10, 20, 30])
+  ok   stdlib/vector.mdk:127: last (fromList [10, 20, 30])
+  ok   stdlib/vector.mdk:146: arrayLength (toArray (fromList [1, 2, 3]))
+  ok   stdlib/vector.mdk:160: let v = fromList [1, 2] in let _ = push 3 v in toList v
+  ok   stdlib/vector.mdk:182: pop (fromList [1, 2, 3])
+  ok   stdlib/vector.mdk:198: let v = fromList [1, 2, 3] in let _ = setInPlace 1 9 v in toList v
+  ok   stdlib/vector.mdk:220: let v = fromList [1, 2, 3] in let _ = swap 0 2 v in toList v
+  ok   stdlib/vector.mdk:235: let v = fromList [1, 2, 3] in let _ = clear v in length v
+  ok   stdlib/vector.mdk:250: let v = fromList [1, 2, 3] in let _ = mapInPlace (x => x * 10) v in toList v
+  ok   stdlib/vector.mdk:285: let v = fromList [1, 2, 3] in let _ = insertAt 1 9 v in toList v
+  ok   stdlib/vector.mdk:291: let v = fromList [1, 2] in let _ = insertAt 7 9 v in toList v
+  ok   stdlib/vector.mdk:298: let v = fromList [1, 2, 3] in let _ = removeAt 1 v in toList v
+  ok   stdlib/vector.mdk:304: let v = fromList [1, 2] in let _ = removeAt 7 v in toList v
+  ok   stdlib/vector.mdk:312: let v = fromList [3, 1, 4, 1, 5] in let _ = sortBy compare v in toList v
+  ok   stdlib/vector.mdk:322: let v = fromList [3, 1, 2] in let _ = sort v in toList v
+  ok   stdlib/vector.mdk:345: sum (fromList [1, 2, 3, 4])
+  ok   stdlib/vector.mdk:354: length (fromList [9, 8, 7])
+  ok   stdlib/vector.mdk:360: eq (fromList [1, 2, 3]) (fromList [1, 2, 3])
+  ok   stdlib/vector.mdk:367: debug (fromList [1, 2, 3])
+  ok   stdlib/vector.mdk:375: display (fromList ["a", "b"])
 
-stdlib/vector.mdk: 18/18 passed
+stdlib/vector.mdk: 26/26 passed
 Testing "sort agrees with an independent insertion sort" ... OK (100 tests)
 Testing "sort is idempotent" ... OK (100 tests)
 Testing "sortBy is stable on ties" ... OK (100 tests)
