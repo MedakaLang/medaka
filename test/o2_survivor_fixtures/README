@@ -1,0 +1,16 @@
+o2_survivor_fixtures/ — corpus for test/o2_survivor_census.sh
+
+Naming contract (required, silently enforced by the census script):
+
+  - Every probe file must define a top-level binding named `probe`.
+  - The file's basename must match the probe's mangled symbol name: a file
+    `<basename>.mdk` must produce `mdk_<basename>__probe` in the emitted
+    LLVM IR (compiler/backend/private_mangle.mdk's module-qualified
+    mangling).
+  - Each file must also define `main` (zero-arg, per T-MAIN-ZERO-ARG) so
+    `medaka build` succeeds — the census only inspects the emitted IR for
+    `probe`, but a missing `main` fails the build outright.
+
+Violating the basename/symbol match is silent: the census reports MISSING
+for that probe ("`@mdk_<basename>__probe` not found in the -O2 output")
+rather than an error naming the mismatch.

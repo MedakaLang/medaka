@@ -1,0 +1,5 @@
+-- o2_survivor_census.sh corpus probe: single construct `String == String`.
+probe : String -> String -> Bool
+probe a b = a == b
+
+main = println (probe "x" "y")
