@@ -26,8 +26,10 @@ import lib.sqlite.{
   findTable,
   schemaSql,
   pkColumnIndex,
+  seekTableRow,
 }
 import lib.btree.{Row}
+import lib.indexlookup.{seekByIndex}
 import lib.rowtype.{RowType, rtDecode}
 import list.{reverse, take, drop, sortBy, nub}
 import string.{join, fromChars, replaceAll, toInt, toFloat}
@@ -2270,7 +2272,174 @@ runPipeline db sel0 = do
   runPipelineCore db sel
 
 runPipelineCore : Db -> Select -> Result String (List (List Cell))
-runPipelineCore db (Select { from = tbl, fromAlias = fa, joins = js, where_ = w, groupBy = gb, having = h, orderBy = ob, columns = cols }) =
+runPipelineCore db sel =
+  if isSingleTableSelect sel then
+    runPipelineWithPlan db (planFor db sel) sel
+  else
+    runPipelineJoined db sel
+
+-- | True for the un-aliased, un-joined shape — the only one the planner serves.
+--   An aliased or joined FROM resolves columns through the join machinery, whose
+--   combined row layout no single-table seek can produce.
+isSingleTableSelect : Select -> Bool
+isSingleTableSelect (Select { fromAlias = fa, joins = js }) = match (fa, js)
+  (None, []) => True
+  _ => False
+
+-- ---------------------------------------------------------------------------
+-- Access plans
+--
+-- A plan says only HOW the candidate rows reach the WHERE filter, never WHICH
+-- rows survive it: the filter runs unchanged over whatever the plan produced.
+-- So a plan may only ever be a SUBSET of the scan's rows that still contains
+-- every row the filter would keep — under-planning (falling back to `PlanScan`)
+-- is always safe, and no plan can turn a right answer into a wrong one.
+--
+-- That subset property holds only because `cmpOrder` (the filter's comparator)
+-- and `compareCellsSqlite` (the seek's comparator, `lib.dbwriter`) agree on
+-- equality for every `seekableTarget`; the blob exclusion below is the one
+-- known instance where they don't, not the whole of the rule — a future
+-- change to either comparator must recheck this agreement before widening
+-- `seekableTarget`.
+-- ---------------------------------------------------------------------------
+
+-- | How a single-table query's candidate rows are produced.  `PlanSeekRowid`
+--   descends the table B-tree to one rowid; `PlanSeekIndex col target` is an
+--   ATTEMPT to seek `col`'s secondary index (`lib.indexlookup.seekByIndex`),
+--   falling back to a scan if no index serves `col`.
+public export data Plan =
+  | PlanScan
+  | PlanSeekRowid Int
+  | PlanSeekIndex String Cell
+  deriving (Eq, Debug)
+
+-- | The access plan for a single-table query: the first top-level `AND`
+--   conjunct of the WHERE clause that has `column = literal` shape decides
+--   the plan, even when that conjunct turns out to be unseekable — a later
+--   conjunct is not searched for a better one — else `PlanScan`.
+--
+--   The table is read only for its CREATE TABLE text; a table this database
+--   does not have plans a scan, so the missing-table `Err` still comes from row
+--   production rather than from here.
+export
+planFor : Db -> Select -> Plan
+planFor db (Select { from = tbl, where_ = w }) = match w
+  None => PlanScan
+  Some e => match findTable db tbl
+    Err _ => PlanScan
+    Ok entry => match conjunctsOf e []
+      None => PlanScan
+      Some cs => firstSeekableConjunct (schemaSql entry) cs
+
+-- The top-level `AND` spine, flattened left-to-right.  `None` when an `OR`
+-- appears anywhere on it: a disjunction is satisfiable by rows outside any one
+-- branch's key range, so nothing beneath it is a sound access path.
+conjunctsOf : SqlExpr -> List SqlExpr -> Option (List SqlExpr)
+conjunctsOf (EAnd a b) acc = match conjunctsOf b acc
+  None => None
+  Some rest => conjunctsOf a rest
+conjunctsOf (EOr _ _) _ = None
+conjunctsOf e acc = Some (e :: acc)
+
+-- The FIRST conjunct of `column = literal` shape decides the plan, even when
+-- that conjunct turns out to be unseekable — a later conjunct is not searched
+-- for a better one.
+firstSeekableConjunct : String -> List SqlExpr -> Plan
+firstSeekableConjunct _ [] = PlanScan
+firstSeekableConjunct createSql (e :: rest) = match eqColLit e
+  None => firstSeekableConjunct createSql rest
+  Some (col, lit) => planForEquality createSql col lit
+
+-- The `column = literal` shape, in either operand order.
+eqColLit : SqlExpr -> Option (String, Literal)
+eqColLit (EBin OpEq (ECol c) (ELit l)) = Some (c, l)
+eqColLit (EBin OpEq (ELit l) (ECol c)) = Some (c, l)
+eqColLit _ = None
+
+planForEquality : String -> String -> Literal -> Plan
+planForEquality createSql col lit =
+  if not (seekableTarget lit) then
+    PlanScan
+  else if isRowidColumn createSql col then match lit
+    -- `id = 5.0` matches under the scan (`cmpOrder` compares CInt and CFloat
+    -- numerically) but a rowid seek takes an `Int`; coercing it here would be
+    -- this planner inventing a value the query never wrote.
+    LInt n => PlanSeekRowid n
+    _ => PlanScan
+  else
+    PlanSeekIndex col (litToCell lit)
+
+-- | Which literal targets a plan may seek on.
+--
+--   Blobs may not: `cmpOrder` (this file, the filter's comparison) orders two
+--   blobs by BYTE COUNT alone, while the index seek compares byte content.  A
+--   planned blob equality would therefore return strictly fewer rows than the
+--   filter admits — the two paths disagree, and it is the filter that is wrong.
+--   The exclusion lifts when the filter's blob comparison is fixed.
+seekableTarget : Literal -> Bool
+seekableTarget (LBlob _) = False
+seekableTarget _ = True
+
+-- Is this column name the table's rowid?  MIRRORS `mkLookup`'s resolution —
+-- `columnIndex` first, so a real user column named `rowid` shadows the alias —
+-- because the planner and the filter must agree on which column a name denotes.
+isRowidColumn : String -> String -> Bool
+isRowidColumn createSql name = match columnIndex createSql name
+  Some i => pkColumnIndex createSql == Some i
+  None => isRowidAlias name && pkColumnIndex createSql /= None
+
+-- | The candidate rows a plan produces for a single-table query — what the
+--   WHERE filter sees, before it runs.  Exposed so a test can count them.
+export
+planCandidateRows : Db -> Plan -> Select -> Result String (List (List Cell))
+planCandidateRows db plan (Select { from = tbl }) = do
+  entry <- findTable db tbl
+  planRowCells db plan tbl (schemaSql entry)
+
+planRowCells : Db ->
+  Plan ->
+  String ->
+  String ->
+  Result String (List (List Cell))
+planRowCells db plan tbl createSql = do
+  rows <- planRows db plan tbl
+  Ok (map (rowCellsWithIpk (pkColumnIndex createSql)) rows)
+
+-- A seek the database cannot serve — no index, an index shape this library
+-- does not model, a corrupt one — falls back to the full scan.  Narrowing is
+-- an optimization, never a precondition.
+planRows : Db -> Plan -> String -> Result String (List Row)
+planRows db PlanScan tbl = do
+  (_, rows) <- scanTableRowsIpk db tbl
+  Ok rows
+planRows db (PlanSeekRowid rid) tbl = do
+  found <- seekTableRow db tbl rid
+  match found
+    None => Ok []
+    Some row => Ok [row]
+planRows db (PlanSeekIndex col target) tbl = match seekByIndex db tbl col target
+  Ok rows => Ok rows
+  Err _ => planRows db PlanScan tbl
+
+-- | The single-table pipeline under an explicit plan.  Same stages, same order,
+--   same errors as the joined path (`findTable` → row production →
+--   `compileWhere`); only the row source differs.
+export
+runPipelineWithPlan : Db -> Plan -> Select -> Result String (List (List Cell))
+runPipelineWithPlan db plan (Select { from = tbl, where_ = w, groupBy = gb, having = h, orderBy = ob, columns = cols }) =
+  do
+    entry <- findTable db tbl
+    let lookup = mkLookup (schemaSql entry)
+    rawRows <- planRowCells db plan tbl (schemaSql entry)
+    pred <- compileWhere lookup w
+    let kept = filter pred rawRows
+    if isAggregate gb h ob cols then
+      runGrouped lookup gb h ob cols kept
+    else
+      runFlat lookup ob cols kept
+
+runPipelineJoined : Db -> Select -> Result String (List (List Cell))
+runPipelineJoined db (Select { from = tbl, fromAlias = fa, joins = js, where_ = w, groupBy = gb, having = h, orderBy = ob, columns = cols }) =
   do
     (lookup, rawRows) <- sourceRows db tbl fa js
     pred <- compileWhere lookup w
@@ -2281,24 +2450,17 @@ runPipelineCore db (Select { from = tbl, fromAlias = fa, joins = js, where_ = w,
       runFlat lookup ob cols kept
 
 -- FROM + JOINs → (combined column resolver, materialized wide rows).
--- The no-join case keeps its own single-table lookup (`columnIndex` over the one
--- CREATE TABLE) rather than routing through the join machinery, so a plain
--- single-table query behaves exactly as it did before joins existed.
 --
 -- An aliased `from` table with NO joins still routes through the join machinery
 -- (a one-table `mkJoinLookup`) so that `alias.column` resolves and the real name
--- is hidden — matching SQLite.  The fast single-table path is reserved for the
--- un-aliased, un-joined common case, keeping its resolution byte-identical.
+-- is hidden — matching SQLite.  The un-aliased, un-joined case never reaches
+-- here: `runPipelineCore` sends it down the planned single-table path, whose
+-- lookup is `mkLookup` over the one CREATE TABLE.
 sourceRows : Db ->
   String ->
   Option String ->
   List Join ->
   Result String (String -> Option Int, List (List Cell))
-sourceRows db tbl None [] = do
-  entry <- findTable db tbl
-  let lookup = mkLookup (schemaSql entry)
-  (pkIdx, rows) <- scanTableRowsIpk db tbl
-  Ok (lookup, map (rowCellsWithIpk pkIdx) rows)
 sourceRows db tbl fromAlias js = do
   let fromRef = (tbl, optOr fromAlias tbl)
   infos <- gatherJoinInfos db (fromRef :: map joinRefPair js) 0 []

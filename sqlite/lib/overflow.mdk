@@ -1,11 +1,13 @@
 -- | sqlite.lib.overflow — SQLite's overflow-page threshold arithmetic.
 --
--- THE single source of truth for how a table-leaf cell's payload is split
--- between the leaf page and an overflow-page chain.  Both the READ path
+-- THE single source of truth for how a table-leaf OR index cell's payload is
+-- split between its page and an overflow-page chain.  Both the READ path
 -- (`btree.mdk`, which reassembles a spilled payload) and the WRITE path
 -- (`dbwriter.mdk`, which produces the split) call these functions, so the two
 -- sides cannot drift: the writer is by construction the exact inverse of the
--- reader.
+-- reader.  Table-leaf and index cells share the same floor (`minLocalPayload`)
+-- and overflow-page capacity, but use DIFFERENT local maxima
+-- (`maxLocalPayload` vs. `indexMaxLocalPayload`) — see each below.
 --
 -- ## The layout (SQLite file-format §1.6 "Cell payload overflow pages")
 --
@@ -95,6 +97,54 @@ export
 localPayloadSize : Int -> Int -> Int
 localPayloadSize usable payloadLen =
   let x = maxLocalPayload usable
+  if payloadLen <= x then
+    payloadLen
+  else
+    let m = minLocalPayload usable
+    let k = m + (payloadLen - m) % overflowCapacity usable
+    if k <= x then k else m
+
+-- ---------------------------------------------------------------------------
+-- Index pages — a DIFFERENT local-max than a table-leaf cell
+-- ---------------------------------------------------------------------------
+
+-- | `X` for an INDEX page (leaf or interior) — SQLite gives an index cell a
+--   smaller local share than a table-leaf cell.  The floor `M`
+--   (`minLocalPayload`) and the overflow-page capacity are unchanged; only the
+--   local maximum differs.
+--
+-- > indexMaxLocalPayload 4096
+-- 1002
+-- > indexMaxLocalPayload 512
+-- 102
+export
+indexMaxLocalPayload : Int -> Int
+indexMaxLocalPayload usable = (usable - 12) * 64 / 255 - 23
+
+-- | Index-cell equivalent of `localPayloadSize`: same `K`/`M` split
+--   arithmetic, keyed off `indexMaxLocalPayload` instead of the table-leaf `X`.
+--
+-- A payload at or below the index `X` (1002 for `usable = 4096`) is entirely
+-- local:
+--
+-- > localPayloadSizeIndex 4096 1002
+-- 1002
+--
+-- One byte over spills; `K` = 489 + (1003-489) % 4092 = 1003, still over `X`,
+-- so the local share collapses to the floor `M` = 489:
+--
+-- > localPayloadSizeIndex 4096 1003
+-- 489
+--
+-- A large payload can wrap back under `X`: for a 5085-byte payload,
+-- `K` = 489 + (5085-489) % 4092 = 993, which is `<= X`, so 993 bytes stay local:
+--
+-- > localPayloadSizeIndex 4096 5085
+-- 993
+export
+localPayloadSizeIndex : Int -> Int -> Int
+localPayloadSizeIndex usable payloadLen =
+  let x = indexMaxLocalPayload usable
   if payloadLen <= x then
     payloadLen
   else

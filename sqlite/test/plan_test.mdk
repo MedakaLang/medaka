@@ -1,0 +1,406 @@
+-- | In-language test for the single-table access planner (`lib.select`'s
+--   `Plan`/`planFor`/`runPipelineWithPlan`, S-plan).
+--
+-- The property under test is EQUIVALENCE WITH A FULL SCAN, as an ORDERED row
+-- list: for every query, the plan `planFor` chooses must return exactly what a
+-- forced `PlanScan` returns.  A plan may only narrow the WHERE filter's input,
+-- never decide the answer, so any query at all is a legal case — including the
+-- ones the planner declines to seek.
+--
+-- The second property is NARROWING: on a fixture built so that it is true by
+-- construction, a seek plan's candidate-row count is strictly below the table's
+-- row count.  Without it the equivalence law would be satisfied by a planner
+-- that never plans anything.
+--
+-- Fixtures are deliberately TINY (six rows).  `medaka test` runs this through
+-- the tree-walking interpreter, where every decoded leaf costs real time.
+--
+-- Run: `medaka test sqlite/test/plan_test.mdk` from the sqlite root.
+
+import test.{Expectation, Fail, expectEqual}
+import lib.writer.{
+  TableSchema,
+  Column,
+  ColType,
+  TInteger,
+  TText,
+  TReal,
+  TBlob,
+  buildTableWithIndexes,
+}
+import lib.sqlite.{Db, fromBytes, scanTableRows}
+import lib.recordfmt.{Cell, CNull, CInt, CText, CFloat, CBlob}
+import lib.select.{
+  Select,
+  SqlExpr,
+  ECol,
+  ELit,
+  EBin,
+  OpEq,
+  OpGt,
+  EOr,
+  Literal,
+  LInt,
+  LText,
+  LFloat,
+  LBlob,
+  LNull,
+  Plan,
+  PlanScan,
+  PlanSeekRowid,
+  PlanSeekIndex,
+  selectFrom,
+  withWhere,
+  mkE,
+  planFor,
+  planCandidateRows,
+  runPipelineWithPlan,
+  eColInt,
+  eColText,
+  eLitI,
+  eLitT,
+  eEq,
+  eAnd,
+}
+
+-- ---------------------------------------------------------------------------
+-- Fixtures
+-- ---------------------------------------------------------------------------
+
+-- An in-memory database holding one indexed table.  Every fixture below is
+-- this call with different rows, so the fixtures differ only in their DATA.
+buildDb : TableSchema ->
+  List (List Cell) ->
+  List (String, String) ->
+  Result String Db
+buildDb sch rows indexes = do
+  bytes <- buildTableWithIndexes sch rows indexes
+  fromBytes bytes
+
+-- ---------------------------------------------------------------------------
+-- Fixture A — people(id, name, age, city)
+--
+-- `name` and `age` are indexed; `city` deliberately is NOT, so a plan that
+-- names it exercises the "seek unavailable, fall back to the scan" arm.  `age`
+-- holds a NULL and a duplicate; `id` is the INTEGER PRIMARY KEY, so `id` and
+-- `rowid` are the same column.
+-- ---------------------------------------------------------------------------
+
+peopleSchema : TableSchema
+peopleSchema = TableSchema {
+  schemaTableName = "people",
+  columns = [
+    Column { colName = "id", colType = TInteger, isPrimaryKey = True },
+    Column { colName = "name", colType = TText, isPrimaryKey = False },
+    Column { colName = "age", colType = TInteger, isPrimaryKey = False },
+    Column { colName = "city", colType = TText, isPrimaryKey = False },
+  ],
+}
+
+peopleRows : List (List Cell)
+peopleRows = [
+  [CInt 1, CText "bob", CInt 30, CText "nyc"],
+  [CInt 2, CText "alice", CInt 25, CText "sfo"],
+  [CInt 3, CText "carol", CNull, CText "nyc"],
+  [CInt 4, CText "bob", CInt 40, CText "pdx"],
+  [CInt 5, CText "dave", CInt 25, CText "nyc"],
+  [CInt 6, CText "erin", CInt 30, CText "sfo"],
+]
+
+peopleDb : Result String Db
+peopleDb =
+  buildDb peopleSchema peopleRows [("idx_name", "name"), ("idx_age", "age")]
+
+-- ---------------------------------------------------------------------------
+-- Fixture B — mixed(id, r, b): the REAL and BLOB key shapes
+-- ---------------------------------------------------------------------------
+
+mixedSchema : TableSchema
+mixedSchema = TableSchema {
+  schemaTableName = "mixed",
+  columns = [
+    Column { colName = "id", colType = TInteger, isPrimaryKey = True },
+    Column { colName = "r", colType = TReal, isPrimaryKey = False },
+    Column { colName = "b", colType = TBlob, isPrimaryKey = False },
+  ],
+}
+
+mixedRows : List (List Cell)
+mixedRows = [
+  [CInt 1, CFloat 1.5, CBlob (arrayFromList [1])],
+  [CInt 2, CFloat 2.5, CBlob (arrayFromList [2, 3])],
+  [CInt 3, CFloat 1.5, CBlob (arrayFromList [0])],
+  [CInt 4, CFloat 3.5, CBlob (arrayFromList [4, 5])],
+]
+
+mixedDb : Result String Db
+mixedDb = buildDb mixedSchema mixedRows [("idx_r", "r"), ("idx_b", "b")]
+
+-- ---------------------------------------------------------------------------
+-- Fixture C — a table with an index and no rows at all
+-- ---------------------------------------------------------------------------
+
+emptySchema : TableSchema
+emptySchema = TableSchema {
+  schemaTableName = "blank",
+  columns = [
+    Column { colName = "id", colType = TInteger, isPrimaryKey = True },
+    Column { colName = "name", colType = TText, isPrimaryKey = False },
+  ],
+}
+
+emptyDb : Result String Db
+emptyDb = buildDb emptySchema [] [("idx_blank_name", "name")]
+
+-- ---------------------------------------------------------------------------
+-- Query construction
+-- ---------------------------------------------------------------------------
+
+-- A WHERE clause built from the untyped `SqlExpr` core, for the shapes the
+-- phantom `Expr` layer has no smart constructor for (BLOB and NULL literals,
+-- a reversed `literal = column`).
+whereRaw : SqlExpr -> Select -> Select
+whereRaw e sel = withWhere (mkE e) sel
+
+-- ---------------------------------------------------------------------------
+-- The law: the chosen plan and a forced full scan agree, in order
+-- ---------------------------------------------------------------------------
+
+agrees : Result String Db -> Select -> Expectation
+agrees (Err e) _ = Fail "fixture failed to build: \{e}"
+agrees (Ok db) sel =
+  expectEqual
+    (runPipelineWithPlan db PlanScan sel)
+    (runPipelineWithPlan db (planFor db sel) sel)
+
+-- Fixture A: an INTEGER PRIMARY KEY equality is a rowid seek.
+test "plan: rowid equality agrees with the forced scan" =
+  agrees
+    peopleDb
+    (withWhere (eEq (eColInt "id") (eLitI 4)) (selectFrom "people"))
+
+test "plan: the `rowid` alias agrees with the forced scan" =
+  agrees
+    peopleDb
+    (withWhere (eEq (eColInt "rowid") (eLitI 2)) (selectFrom "people"))
+
+test "plan: a rowid no row carries agrees with the forced scan" =
+  agrees
+    peopleDb
+    (withWhere (eEq (eColInt "id") (eLitI 99)) (selectFrom "people"))
+
+-- Fixture A: indexed INTEGER and TEXT keys, including a duplicate key.
+test "plan: indexed INTEGER equality with duplicates agrees with the forced scan" =
+  agrees
+    peopleDb
+    (withWhere (eEq (eColInt "age") (eLitI 25)) (selectFrom "people"))
+
+test "plan: indexed TEXT equality with duplicates agrees with the forced scan" =
+  agrees
+    peopleDb
+    (withWhere (eEq (eColText "name") (eLitT "bob")) (selectFrom "people"))
+
+-- Fixture B: the REAL and BLOB key shapes.
+test "plan: indexed REAL equality agrees with the forced scan" =
+  agrees
+    mixedDb
+    (whereRaw (EBin OpEq (ECol "r") (ELit (LFloat 1.5))) (selectFrom "mixed"))
+
+test "plan: indexed BLOB equality agrees with the forced scan" =
+  agrees
+    mixedDb
+    (whereRaw
+      (EBin OpEq (ECol "b") (ELit (LBlob (arrayFromList [2, 3]))))
+      (selectFrom "mixed"))
+
+-- `col = NULL` is never true; both arms must produce no rows.
+test "plan: a NULL-targeting equality agrees with the forced scan" =
+  agrees
+    peopleDb
+    (whereRaw (EBin OpEq (ECol "age") (ELit LNull)) (selectFrom "people"))
+
+-- The planned conjunct narrows; the OTHER conjunct still has to be applied.
+test "plan: a residual conjunct still filters the seeked rows" =
+  agrees
+    peopleDb
+    (withWhere
+      (eAnd
+        (eEq (eColInt "age") (eLitI 25))
+        (eEq (eColText "name") (eLitT "dave")))
+      (selectFrom "people"))
+
+-- Reversed operand order is the same equality.
+test "plan: `literal = column` agrees with the forced scan" =
+  agrees
+    peopleDb
+    (whereRaw (EBin OpEq (ELit (LInt 25)) (ECol "age")) (selectFrom "people"))
+
+-- A column with no index: the plan names a seek, row production falls back.
+test "plan: an unindexed column falls back and agrees with the forced scan" =
+  agrees
+    peopleDb
+    (withWhere (eEq (eColText "city") (eLitT "nyc")) (selectFrom "people"))
+
+-- Shapes the planner declines.
+test "plan: a range predicate agrees with the forced scan" =
+  agrees
+    peopleDb
+    (whereRaw (EBin OpGt (ECol "age") (ELit (LInt 25))) (selectFrom "people"))
+
+test "plan: a top-level OR agrees with the forced scan" =
+  agrees
+    peopleDb
+    (whereRaw
+      (EOr
+        (EBin OpEq (ECol "age") (ELit (LInt 25)))
+        (EBin OpEq (ECol "name") (ELit (LText "bob"))))
+      (selectFrom "people"))
+
+test "plan: no WHERE clause at all agrees with the forced scan" =
+  agrees peopleDb (selectFrom "people")
+
+test "plan: an equality on an empty table agrees with the forced scan" =
+  agrees
+    emptyDb
+    (withWhere (eEq (eColText "name") (eLitT "zoe")) (selectFrom "blank"))
+
+-- ---------------------------------------------------------------------------
+-- Which plan was chosen
+--
+-- The equivalence law above is satisfied by a planner that never plans, so the
+-- plan itself is asserted directly.
+-- ---------------------------------------------------------------------------
+
+chosen : Result String Db -> Select -> Result String Plan
+chosen dbr sel = map (db => planFor db sel) dbr
+
+test "planFor: an INTEGER PRIMARY KEY equality is a rowid seek" =
+  expectEqual
+    (Ok (PlanSeekRowid 4))
+    (chosen
+      peopleDb
+      (withWhere (eEq (eColInt "id") (eLitI 4)) (selectFrom "people")))
+
+test "planFor: the `rowid` alias is a rowid seek" =
+  expectEqual
+    (Ok (PlanSeekRowid 2))
+    (chosen
+      peopleDb
+      (withWhere (eEq (eColInt "rowid") (eLitI 2)) (selectFrom "people")))
+
+test "planFor: a non-rowid column equality is an index seek" =
+  expectEqual
+    (Ok (PlanSeekIndex "age" (CInt 25)))
+    (chosen
+      peopleDb
+      (withWhere (eEq (eColInt "age") (eLitI 25)) (selectFrom "people")))
+
+-- A float against the rowid matches under the scan (`cmpOrder` compares CInt
+-- and CFloat numerically) but is not an Int, so it is never coerced into a seek.
+test "planFor: a FLOAT literal against the rowid stays a scan" =
+  expectEqual
+    (Ok PlanScan)
+    (chosen
+      peopleDb
+      (whereRaw
+        (EBin OpEq (ECol "id") (ELit (LFloat 4.0)))
+        (selectFrom "people")))
+
+-- The filter's blob comparison orders blobs by byte COUNT, the index seek by
+-- byte CONTENT.  Until that is fixed, planning a blob equality would make the
+-- two arms disagree, so blob targets are never planned.
+test "planFor: a BLOB target stays a scan" =
+  expectEqual
+    (Ok PlanScan)
+    (chosen
+      mixedDb
+      (whereRaw
+        (EBin OpEq (ECol "b") (ELit (LBlob (arrayFromList [2, 3]))))
+        (selectFrom "mixed")))
+
+-- The blob exclusion in `seekableTarget` is load-bearing, not accidentally
+-- unreachable: forced BY HAND (bypassing `planFor`, through the exported
+-- `Plan`/`runPipelineWithPlan` API) a `PlanSeekIndex` on "b" disagrees with
+-- the forced scan on this exact fixture, because `cmpOrder` (the filter)
+-- matches blobs by byte COUNT while the index seek matches byte CONTENT —
+-- `mixed` holds two 2-byte blobs ([2,3] on id 2, [4,5] on id 4), so the scan's
+-- filter admits both while a content seek on [2,3] admits only id 2.
+forcedBlobSelect : Select
+forcedBlobSelect =
+  whereRaw
+    (EBin OpEq (ECol "b") (ELit (LBlob (arrayFromList [2, 3]))))
+    (selectFrom "mixed")
+
+forcedBlobSeekRows : Result String (List (List Cell))
+forcedBlobSeekRows = do
+  db <- mixedDb
+  runPipelineWithPlan
+    db
+    (PlanSeekIndex "b" (CBlob (arrayFromList [2, 3])))
+    forcedBlobSelect
+
+forcedBlobScanRows : Result String (List (List Cell))
+forcedBlobScanRows = do
+  db <- mixedDb
+  runPipelineWithPlan db PlanScan forcedBlobSelect
+
+test "plan: a forced BLOB index seek returns fewer rows than the forced scan" =
+  expectEqual
+    (Ok 1, Ok 2)
+    (map length forcedBlobSeekRows, map length forcedBlobScanRows)
+
+test "planFor: a top-level OR stays a scan" =
+  expectEqual
+    (Ok PlanScan)
+    (chosen
+      peopleDb
+      (whereRaw
+        (EOr
+          (EBin OpEq (ECol "age") (ELit (LInt 25)))
+          (EBin OpEq (ECol "name") (ELit (LText "bob"))))
+        (selectFrom "people")))
+
+-- ---------------------------------------------------------------------------
+-- Narrowing: fewer rows reach the filter than the table holds
+-- ---------------------------------------------------------------------------
+
+candidateCount : Result String Db -> Select -> Result String Int
+candidateCount dbr sel = do
+  db <- dbr
+  rows <- planCandidateRows db (planFor db sel) sel
+  Ok (length rows)
+
+tableRowCount : Result String Db -> String -> Result String Int
+tableRowCount dbr table = do
+  db <- dbr
+  rows <- scanTableRows db table
+  Ok (length rows)
+
+test "narrowing fixture: people holds six rows" =
+  expectEqual (Ok 6) (tableRowCount peopleDb "people")
+
+test "narrowing: a rowid seek presents one candidate row, not six" =
+  expectEqual
+    (Ok 1)
+    (candidateCount
+      peopleDb
+      (withWhere (eEq (eColInt "id") (eLitI 4)) (selectFrom "people")))
+
+test "narrowing: an index seek presents two candidate rows, not six" =
+  expectEqual
+    (Ok 2)
+    (candidateCount
+      peopleDb
+      (withWhere (eEq (eColInt "age") (eLitI 25)) (selectFrom "people")))
+
+-- The fallback arm, counted: an unindexed column presents the WHOLE table, so
+-- the narrowing assertions above are measuring the seek and not the fixture.
+test "narrowing: an unindexed column presents every row" =
+  expectEqual
+    (Ok 6)
+    (candidateCount
+      peopleDb
+      (withWhere (eEq (eColText "city") (eLitT "nyc")) (selectFrom "people")))
+
+test "narrowing: a plain scan presents every row" =
+  expectEqual (Ok 6) (candidateCount peopleDb (selectFrom "people"))
