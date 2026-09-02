@@ -2828,6 +2828,8 @@ isFileExtern name = contains name [
   "runCommand",
   "executablePath",
   "buildFingerprint",
+  "buildCommit",
+  "buildDate",
 ]
 
 emitFileExtern : Emit ->
@@ -2956,6 +2958,18 @@ emitFileExtern e env "buildFingerprint" args = match emitArgs e env args
     let _ = emit e "  \{r} = call i64 @mdk_build_fingerprint(i64 \{u})"
     (r, LTStr)
   _ => panic "llvm: buildFingerprint takes one (Unit) argument"
+emitFileExtern e env "buildCommit" args = match emitArgs e env args
+  [u] =>
+    let r = freshReg e
+    let _ = emit e "  \{r} = call i64 @mdk_build_commit(i64 \{u})"
+    (r, LTStr)
+  _ => panic "llvm: buildCommit takes one (Unit) argument"
+emitFileExtern e env "buildDate" args = match emitArgs e env args
+  [u] =>
+    let r = freshReg e
+    let _ = emit e "  \{r} = call i64 @mdk_build_date(i64 \{u})"
+    (r, LTStr)
+  _ => panic "llvm: buildDate takes one (Unit) argument"
 emitFileExtern e _ name _ = gapE e ("unsupported file extern " ++ name)
 
 -- Net externs (NET-DESIGN.md).  A SEPARATE family from isFileExtern — deliberately,

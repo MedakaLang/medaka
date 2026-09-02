@@ -51,3 +51,7 @@ _build/
 # Wrangler's local cache, created by playground/deploy_cloudflare.sh. Regenerable, and
 # it can hold account metadata — never commit it.
 /.wrangler/
+
+# `make dist` / scripts/make_dist.sh output tarball. Regenerable; dist/linux-spike/
+# is separate, tracked, historical source and is unaffected by this pattern.
+/dist/*.tar.gz

@@ -1,5 +1,5 @@
 # META
-source_lines=1669
+source_lines=1671
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/doc.mdk — the native `medaka doc` documentation extractor.
@@ -1234,6 +1234,8 @@ docOnlyExcluded = [
   "debugStringLit",
   "debugCharLit",
   "buildFingerprint",
+  "buildCommit",
+  "buildDate",
 ]
 
 dropInternalExterns : Bool -> List DocEntry -> List DocEntry
@@ -1978,7 +1980,7 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DTypeSig true "mdName" (TyFun (TyCon "ModuleDoc") (TyCon "String")))
 (DFunDef false "mdName" ((PCon "ModuleDoc" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig false "docOnlyExcluded" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "docOnlyExcluded" () (EListLit (ELit (LString "__fallthrough__")) (ELit (LString "setRef")) (ELit (LString "stashRunStdout")) (ELit (LString "enableRunStdoutFlush")) (ELit (LString "assertSnapshot")) (ELit (LString "indexError")) (ELit (LString "indexErrorAt")) (ELit (LString "sliceError")) (ELit (LString "debugStringLit")) (ELit (LString "debugCharLit")) (ELit (LString "buildFingerprint"))))
+(DFunDef false "docOnlyExcluded" () (EListLit (ELit (LString "__fallthrough__")) (ELit (LString "setRef")) (ELit (LString "stashRunStdout")) (ELit (LString "enableRunStdoutFlush")) (ELit (LString "assertSnapshot")) (ELit (LString "indexError")) (ELit (LString "indexErrorAt")) (ELit (LString "sliceError")) (ELit (LString "debugStringLit")) (ELit (LString "debugCharLit")) (ELit (LString "buildFingerprint")) (ELit (LString "buildCommit")) (ELit (LString "buildDate"))))
 (DTypeSig false "dropInternalExterns" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyApp (TyCon "List") (TyCon "DocEntry")))))
 (DFunDef false "dropInternalExterns" ((PCon "False") (PVar "entries")) (EVar "entries"))
 (DFunDef false "dropInternalExterns" ((PCon "True") (PVar "entries")) (EApp (EApp (EVar "filter") (ELam ((PVar "e")) (EApp (EVar "not") (EApp (EVar "isInternalExtern") (EVar "e"))))) (EVar "entries")))
@@ -2382,7 +2384,7 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DTypeSig true "mdName" (TyFun (TyCon "ModuleDoc") (TyCon "String")))
 (DFunDef false "mdName" ((PCon "ModuleDoc" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig false "docOnlyExcluded" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "docOnlyExcluded" () (EListLit (ELit (LString "__fallthrough__")) (ELit (LString "setRef")) (ELit (LString "stashRunStdout")) (ELit (LString "enableRunStdoutFlush")) (ELit (LString "assertSnapshot")) (ELit (LString "indexError")) (ELit (LString "indexErrorAt")) (ELit (LString "sliceError")) (ELit (LString "debugStringLit")) (ELit (LString "debugCharLit")) (ELit (LString "buildFingerprint"))))
+(DFunDef false "docOnlyExcluded" () (EListLit (ELit (LString "__fallthrough__")) (ELit (LString "setRef")) (ELit (LString "stashRunStdout")) (ELit (LString "enableRunStdoutFlush")) (ELit (LString "assertSnapshot")) (ELit (LString "indexError")) (ELit (LString "indexErrorAt")) (ELit (LString "sliceError")) (ELit (LString "debugStringLit")) (ELit (LString "debugCharLit")) (ELit (LString "buildFingerprint")) (ELit (LString "buildCommit")) (ELit (LString "buildDate"))))
 (DTypeSig false "dropInternalExterns" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyApp (TyCon "List") (TyCon "DocEntry")))))
 (DFunDef false "dropInternalExterns" ((PCon "False") (PVar "entries")) (EVar "entries"))
 (DFunDef false "dropInternalExterns" ((PCon "True") (PVar "entries")) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "e")) (EApp (EVar "not") (EApp (EVar "isInternalExtern") (EVar "e"))))) (EVar "entries")))

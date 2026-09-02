@@ -69,6 +69,7 @@ import support.timer.{
   flushPerfSinkProse,
 }
 import string.{toInt}
+import list.{sortOn}
 -- S-cli-onto-args (#2355): the ONE argument parser.  Every verb's flag
 -- vocabulary below is an `ArgSpec` value, so its `(known: …)` roster, its
 -- rejection sentences and what it actually parses are three renderings of one
@@ -275,8 +276,8 @@ import tools.check_policy.{
   ManifestArgs(..),
 }
 
--- FLAG for user confirmation: exact version string/format not yet confirmed —
--- using "0.1.0-preview" (the 0.1.0 public-preview target named in AGENTS.md)
+-- FLAG for user confirmation: exact version NUMBER not yet confirmed — using
+-- "0.1.0-preview" (the 0.1.0 public-preview target named in AGENTS.md)
 -- pending sign-off. No existing version constant was found elsewhere in
 -- compiler/ (lsp.mdk hardcodes a literal "0.1.0" for its own protocol reply;
 -- new_cmd.mdk hardcodes a literal "0.1.0" into scaffolded medaka.toml — neither
@@ -284,8 +285,31 @@ import tools.check_policy.{
 medakaVersion : String
 medakaVersion = "0.1.0-preview"
 
+-- Full version string: version + commit + build date, from the ONE stamping
+-- seam (issue #74 W8) — test/build_native_medaka.sh bakes commit/build-date
+-- alongside the existing MEDAKA_SRC_FP stamp, surfaced via the `buildCommit`/
+-- `buildDate` externs (same #ifdef/empty-on-absent contract as
+-- `buildFingerprint`). Degrades to just the bare version when neither is
+-- baked (a dev/interpreted run, or a shipped binary with no provenance).
+-- Used by `printVersion` (CLI `--version`) only. MCP's `initialize` handshake
+-- reports the bare `medakaVersion` instead, not this — a per-build string
+-- that changes on every commit is unstable as a protocol field and unpinnable
+-- by any golden.
+medakaVersionString : Unit -> <IO> String
+medakaVersionString _ =
+  let commit = buildCommit ()
+  let date = buildDate ()
+  if commit == "" && date == "" then
+    "medaka " ++ medakaVersion
+  else if commit == "" then
+    "medaka \{medakaVersion} (built \{date})"
+  else if date == "" then
+    "medaka \{medakaVersion} (\{commit})"
+  else
+    "medaka \{medakaVersion} (\{commit}, built \{date})"
+
 printVersion : Unit -> <IO> Unit
-printVersion _ = putStrLn ("medaka " ++ medakaVersion)
+printVersion _ = putStrLn (medakaVersionString ())
 
 -- ── staleness guard (issue #89) ─────────────────────────────────────────────
 -- A ./medaka built in tree Y but run against tree X's NEWER compiler sources
@@ -3580,7 +3604,17 @@ runDocLibraryTargets outDir targets =
           -- pages, the index and the inventory all read the same (already
           -- re-filed) entry lists — an impl cannot be on one page and indexed
           -- under another.
-          Ok mds => writeLibraryOutputs outDir (rebucketLibraryImpls mds)
+          --
+          -- `targets` arrives in whatever order the shell/CLI handed it
+          -- (`stdlib/*.mdk` glob expansion), which is locale-dependent —
+          -- collation of `.` vs `_` differs across LC_COLLATE settings, so
+          -- e.g. `net.mdk`/`net_async.mdk` can swap places between machines.
+          -- Sort by module name here so index.md/inventory.json are
+          -- byte-identical regardless of invocation order.
+          Ok mds =>
+            writeLibraryOutputs
+              outDir
+              (rebucketLibraryImpls (sortOn mdName mds))
 
 -- `makeDir` (global extern) errors EEXIST on an already-present directory;
 -- tolerate that one case, exactly like `fs.mdk`'s `mkdirAll` does for its own
@@ -4846,4 +4880,5 @@ runMcpServerFromEnv _ =
       Err msg =>
         let _ = ePutStrLn msg
         exit 1
-      Ok csrc => runMcpServer rsrc csrc stdlibDir sourceStalenessVerdict
+      Ok csrc =>
+        runMcpServer rsrc csrc stdlibDir sourceStalenessVerdict medakaVersion

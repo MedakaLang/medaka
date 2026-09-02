@@ -246,6 +246,27 @@ src_fingerprint_full() {
 # anyway; runtime/*.c is linked into the emitter binary, so it counts too — issue #182).
 FP_FULL="$(src_fingerprint_full)"
 FP_COMPILER="$(src_fingerprint_compiler)"
+
+# VERSION PROVENANCE (issue #74 W8): commit + build date baked alongside
+# FP_COMPILER below, at the SAME clang link, so `medaka --version` can report
+# where a binary came from. Both degrade to empty on failure (a `.git`-less
+# dist tarball, or no `git`/`date` in PATH) — never error the build. Portable
+# across [B-DUAL-PLATFORM]: `git rev-parse --short` and `date -u +%Y-%m-%d`
+# behave identically on GNU/Linux and BSD/macOS.
+BUILD_COMMIT=""
+if command -v git >/dev/null 2>&1 && [ -e "$ROOT/.git" ]; then
+  BUILD_COMMIT="$(cd "$ROOT" && git rev-parse --short HEAD 2>/dev/null)"
+  # #2514 review F-12: a modified tree otherwise reports a clean commit,
+  # which is exactly backwards for a field whose only purpose is triaging bug
+  # reports ("bug reports are useless without it", the S-3 mission this
+  # provenance string exists for) — a `-dirty` suffix is the difference
+  # between a usable and a misleading answer for every local/dev build.
+  if [ -n "$BUILD_COMMIT" ] && [ -n "$(cd "$ROOT" && git status --porcelain 2>/dev/null)" ]; then
+    BUILD_COMMIT="${BUILD_COMMIT}-dirty"
+  fi
+fi
+BUILD_DATE="$(date -u +%Y-%m-%d 2>/dev/null)"
+
 STAMP_FP=""
 [ -f "$SRC_STAMP" ] && STAMP_FP="$(cat "$SRC_STAMP" 2>/dev/null)"
 if [ "$FORCE_EMITTER_REBUILD" != "1" ] && [ -x "$EMITTER" ] && [ -n "$STAMP_FP" ] && [ "$STAMP_FP" = "$FP_FULL" ]; then
@@ -337,7 +358,7 @@ else
   # partially-written $OUT, only last-writer-wins on which COMPLETE build stuck.
   OUT_NEW="$OUT.new.$$"
   rm -f "$OUT_NEW"
-  if ! "$CC" -pthread "$CLI_OPT" "-DMEDAKA_SRC_FP=$FP_COMPILER" $GC_SECTION_CFLAGS $GC_CFLAGS "$CLI_LL" "$RT" $GC_LIBS "$GC_SECTION_LDFLAGS" -lm -o "$OUT_NEW" 2>"$WORK/cc.err"; then
+  if ! "$CC" -pthread "$CLI_OPT" "-DMEDAKA_SRC_FP=$FP_COMPILER" "-DMEDAKA_SRC_COMMIT=\"$BUILD_COMMIT\"" "-DMEDAKA_SRC_BUILD_DATE=\"$BUILD_DATE\"" $GC_SECTION_CFLAGS $GC_CFLAGS "$CLI_LL" "$RT" $GC_LIBS "$GC_SECTION_LDFLAGS" -lm -o "$OUT_NEW" 2>"$WORK/cc.err"; then
     rm -f "$OUT_NEW"
     echo "FAIL (clang medaka): $(cat "$WORK/cc.err")"; exit 1
   fi

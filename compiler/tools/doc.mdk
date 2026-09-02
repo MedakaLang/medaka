@@ -1230,6 +1230,8 @@ docOnlyExcluded = [
   "debugStringLit",
   "debugCharLit",
   "buildFingerprint",
+  "buildCommit",
+  "buildDate",
 ]
 
 dropInternalExterns : Bool -> List DocEntry -> List DocEntry

@@ -3937,6 +3937,30 @@ sources = ["test/diff_compiler_guide_render.sh", "playground/render_docs.mjs", "
 corpus = ["docs/guide", "docs/stdlib"]
 toolchain = ["node>=24"]
 
+# S-1-dist-tarball (#74 D3: native distribution, Linux tarball arm; tracking
+# #2514). Proves scripts/make_dist.sh's tarball is genuinely relocatable: builds
+# it, unpacks it into a scratch dir OUTSIDE the repo, and runs `medaka run` +
+# `medaka build` + the built binary with MEDAKA_ROOT unset.
+#
+# ⚠️ `shard` below is a GUESS, as every brand-new gate's must be
+# ([W-SHARD-DERIVED], #2178): it has no row in test/gate_cost_baseline.json
+# yet, so `medaka gate balance` HARD-REFUSES to place it until an unnarrowed
+# CI run measures it, and `ci-gen-drift` reds until the follow-up `medaka gate
+# balance && make gen-ci` commit — expected, not a bug in this slice.
+[[gate]]
+name = "dist_install_smoke"
+area = "infra"
+shard = "gates_7"
+project = "compiler"
+tiers = ["merge"]
+cost = "medium"
+kind = "exec"
+run = "test/dist_install_smoke.sh"
+oracles = []
+sources = ["test/dist_install_smoke.sh", "scripts/make_dist.sh", "Makefile"]
+corpus = []
+toolchain = []
+
 # ── the `gates` matrix rows (S-1, #2177) ─────────────────────────────────────
 #
 # One `[[shard]]` per row of ci.yml's `gates` job matrix, in matrix order.

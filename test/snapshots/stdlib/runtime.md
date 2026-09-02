@@ -1,5 +1,5 @@
 # META
-source_lines=627
+source_lines=637
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -137,6 +137,16 @@ extern executablePath : Unit -> <Env> String
 -- binary).  The CLI recomputes the same fingerprint over the live compiler/
 -- sources and warns when they diverge (the staleness guard).  Native-only.
 extern buildFingerprint : Unit -> <Env> String
+
+-- Short commit hash this binary was built from, baked the same way as
+-- `buildFingerprint` (-DMEDAKA_SRC_COMMIT). "" when not baked, or when the
+-- build tree had no `.git` (e.g. a packaged dist tarball). Native-only.
+extern buildCommit : Unit -> <Env> String
+
+-- UTC build date (YYYY-MM-DD) this binary was built on, baked the same way
+-- as `buildFingerprint` (-DMEDAKA_SRC_BUILD_DATE). "" when not baked.
+-- Native-only.
+extern buildDate : Unit -> <Env> String
 
 -- | Runs a program with arguments and waits for it. `Ok` carries the exit
 -- code, the captured standard output, and the captured standard error; a
@@ -658,6 +668,8 @@ extern stringToLower : String -> String
 (DExtern false "getEnv" (TyFun (TyCon "String") (TyEffect ((hole "Env")) None (TyApp (TyCon "Option") (TyCon "String")))))
 (DExtern false "executablePath" (TyFun (TyCon "Unit") (TyEffect ("Env") None (TyCon "String"))))
 (DExtern false "buildFingerprint" (TyFun (TyCon "Unit") (TyEffect ("Env") None (TyCon "String"))))
+(DExtern false "buildCommit" (TyFun (TyCon "Unit") (TyEffect ("Env") None (TyCon "String"))))
+(DExtern false "buildDate" (TyFun (TyCon "Unit") (TyEffect ("Env") None (TyCon "String"))))
 (DExtern false "runCommand" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((hole "Exec")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))))))
 (DExtern false "exit" (TyFun (TyCon "Int") (TyCon "Unit")))
 (DExtern false "panic" (TyFun (TyCon "String") (TyVar "a")))
@@ -803,6 +815,8 @@ extern stringToLower : String -> String
 (DExtern false "getEnv" (TyFun (TyCon "String") (TyEffect ((hole "Env")) None (TyApp (TyCon "Option") (TyCon "String")))))
 (DExtern false "executablePath" (TyFun (TyCon "Unit") (TyEffect ("Env") None (TyCon "String"))))
 (DExtern false "buildFingerprint" (TyFun (TyCon "Unit") (TyEffect ("Env") None (TyCon "String"))))
+(DExtern false "buildCommit" (TyFun (TyCon "Unit") (TyEffect ("Env") None (TyCon "String"))))
+(DExtern false "buildDate" (TyFun (TyCon "Unit") (TyEffect ("Env") None (TyCon "String"))))
 (DExtern false "runCommand" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((hole "Exec")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))))))
 (DExtern false "exit" (TyFun (TyCon "Int") (TyCon "Unit")))
 (DExtern false "panic" (TyFun (TyCon "String") (TyVar "a")))
