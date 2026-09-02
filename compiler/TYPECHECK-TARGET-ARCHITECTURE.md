@@ -390,6 +390,33 @@ the prose first would destroy the only record of why each table is keyed as it i
 7. Is the **playground/LSP fast path a hard budget** (a number step 7 must not exceed) or a
    measurement to report? A budget changes whether step 7 can be cut at all.
 
+**RULED (Val, 2026-09-02; recorded on #1122).** These are decisions, not proposals.
+
+1. **Warn first, then decide.** Step 6 lands with T4's reject stubbed as a `W-` diagnostic;
+   census how often it fires on the compiler's own source and the fixture corpus; decide SC-3
+   on the measured set. (#2548)
+2. **Warn-first; hard under `MEDAKA_STRICT=1`.** The `runEmitWith` gate prints the discarded
+   diagnostics and continues; exit 1 only under strict. A self-compile fixpoint (C3a and C3b
+   named separately) is measured with the gate on before it flips to hard. (#2089)
+3. **Deferred until after M2.** Whether the emitter binary runs resolve is decided once
+   evidence-as-bindings removes the double typecheck. Until then #1288 is scoped as
+   consolidation inside typecheck without committing to relocation or deduplication; SA-1's
+   "fold R into K" and SA-6's "deduplication" read as the code's current shape, not a ruling.
+4. **`RNone` stays, pinned; M2 first.** Its runtime narrowing is a uniformly-applied refining
+   optimization under DICT §7's side condition, pinned with a fixture. B-1/G1 is not a
+   prerequisite of step 7; default bodies get evidence when B-1 lands. (#2549, #993)
+5. **Fix both now, in step 1.** #2554 and #2556 are one-predicate HM-core fixes with pins in
+   place; one small PR after #2560 merges, with the HM-core spec's value-restriction paragraph
+   written from the fix. #2557 stays filed. (#2554, #2556, #2555)
+6. **SC-1 is in, as step 8**, after #2547's third unit, consuming the interface-identity type
+   that unit introduces. Filed as #2563.
+7. **Soft budget.** Step 7 lands if the memo-path regression on playground analyze and
+   `import list` is under an agreed ceiling of about 25% Ir; the memoized-solve follow-up is
+   filed regardless. Measured in instructions, never wall time. (#2549)
+
+Consequences for SA-4: step 1 gains the two S0 fixes; step 6 reads "drain with the T4 reject
+as a warning, census, then SC-3"; a step 8 (SC-1, #2563) follows step 5's third unit.
+
 ### SA-11. Artifacts
 
 The survey's reports, including every `file:line` behind the claims above, are under
