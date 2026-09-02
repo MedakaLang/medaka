@@ -328,7 +328,7 @@ The Cause-B residual tracked in PLAN means: the `elaborateModules` path (the mul
 >
 > **Generality:** fixes the SIGSEGV for ALL container interface-impl bodies that delegate a constrained
 > method through a value whose element type is an abstract impl-`requires` var — Map/Set/HashMap/Array/
-> MutArray Eq/Ord/Debug/Display, at any nesting depth (verified `Map Int (Map Int String)` —
+> Vector Eq/Ord/Debug/Display, at any nesting depth (verified `Map Int (Map Int String)` —
 > 2-level container nesting — renders correctly). Not coupled to #55. **Verified repros** (native
 > build+run == interpreter): `a == b`→`True`, `a == c`→`False`; `debug m`→`fromList [(1, "a")]`;
 > `display m`→`Map { 1 => x, 2 => y }`; `compare c a`→`Lt`; `Set` eq/debug; nested Map. Already-working

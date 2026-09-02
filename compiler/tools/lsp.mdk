@@ -15,8 +15,8 @@
 --            resolve/typecheck diagnostics span the whole document, parse
 --            errors use parseResult's located line/col).
 --
--- Mirrors lib/lsp_server.ml's framing (`Content-Length: N\r\n\r\n` then exactly
--- N body bytes) and handle_initialize's capability set, but only advertises
+-- Framing (`Content-Length: N\r\n\r\n` then exactly
+-- N body bytes) and the initialize capability set, but only advertises
 -- what B.10 implements: textDocumentSync = Full (1).  Hover/completion/
 -- definition/symbols/highlight/inlay and the ELoc expr-level ranges are LATER
 -- slices and are deliberately NOT advertised here.
@@ -169,8 +169,8 @@ severityCode SevWarning = 2
 -- ── diagnostics → LSP (expr-level) ──────────────────────────────────────────
 --
 -- B.10.2b: type-error Diags now carry the ELoc span captured at the push site
--- (`Some Loc`), so they map to an expr-level LSP range — mirror of the OCaml
--- LSP's `range_of_loc` (lib/lsp_server.ml:100): a 1-based `Loc` line maps to a
+-- (`Some Loc`), so they map to an expr-level LSP range:
+-- a 1-based `Loc` line maps to a
 -- 0-based LSP line (line-1), the col is already 0-based.  Resolve / guard /
 -- match diagnostics carry `None` (the compiler pipeline doesn't locate them) and
 -- fall back to the whole-document range.  Parse errors keep using parseResult's
@@ -240,10 +240,10 @@ docsLookup uri ((k, v)::rest)
   | otherwise = docsLookup uri rest
 
 -- ── textDocument/formatting ─────────────────────────────────────────────────
--- Mirror lib/lsp_server.ml handle_formatting: run the formatter; if the text is
+-- Run the formatter; if the text is
 -- unchanged return [] (no edits); otherwise return ONE TextEdit replacing the
 -- whole document with the formatted source.  The replaced range is
--- (0,0)..(lineCount+1, 0) — mirrors OCaml full_document_range, which uses
+-- (0,0)..(lineCount+1, 0), using
 -- `nl = newline_count + 1` for the end line so every line (incl. the last) is
 -- covered without knowing its width.  A formatter/parse failure yields [] here
 -- rather than crashing (the compiler formatSource is total on parseable input;
@@ -263,7 +263,6 @@ formattingEdits src = match parseResult src
 -- unparseable → no edits (client keeps buffer)
 
 -- ── identifier-at-cursor + occurrence scan (pure string ops) ────────────────
--- Mirrors lib/lsp_server.ml is_ident_char / identifier_at / find_all_occurrences.
 
 -- Byte offset of 0-based (line, col): walk to the line start, add col.  Returns
 -- None if the line doesn't exist or the offset is past EOF.
@@ -681,7 +680,7 @@ defZipLocOr (Some l) _ = jRangeOfLoc l
 defZipLocOr None p = jRange (declPosLine p - 1) 0 (declPosEndLine p - 1) 0
 
 -- ── typecheck-env build (hover / completion / inlayHint) ────────────────────
--- Mirror lib/lsp_server.ml's handlers, which run `Typecheck.check_program prog`
+-- The handlers run `checkProgram prog`
 -- (which prepends the prelude) and look names up in the returned env.  The
 -- handlers need the FULL visible env — a hover or a completion lands on a
 -- prelude name (`map`, `println`) as readily as on one the buffer declares — so
@@ -732,7 +731,7 @@ lookupSchemeL name ((n, s)::rest)
   | otherwise = lookupSchemeL name rest
 
 -- ── textDocument/hover ──────────────────────────────────────────────────────
--- Mirror handle_hover (lib/lsp_server.ml:482): identifier-at-cursor → checkProgram
+-- handle_hover: identifier-at-cursor → checkProgram
 -- env → lookup → a Hover whose contents is a Markdown MarkupContent rendering
 --   ```medaka
 --   <name> : <type>
@@ -1011,10 +1010,9 @@ handleHover runtimeSrc coreSrc idJson params docs =
   writeMessage (responseMsg idJson result)
 
 -- ── textDocument/completion ─────────────────────────────────────────────────
--- Mirror handle_completion (lib/lsp_server.ml:693): the identifier prefix ending
+-- handle_completion: the identifier prefix ending
 -- just before the cursor → env names with that prefix → CompletionItem[]
--- { label, kind, detail }.  kind = Function (3) for every item (OCaml's
--- completion_kind_for_scheme defaults to Function); detail = ppScheme.  Names are
+-- { label, kind, detail }.  kind = Function (3) for every item; detail = ppScheme.  Names are
 -- emitted in env order, deduplicated, prefix-filtered — mirroring
 -- filter_completions.
 prefixBefore : String -> Int -> Int -> String
@@ -1108,7 +1106,7 @@ handleCompletion runtimeSrc coreSrc idJson params docs =
   writeMessage (responseMsg idJson result)
 
 -- ── textDocument/inlayHint ──────────────────────────────────────────────────
--- Mirror handle_inlay_hint (lib/lsp_server.ml:759): for each top-level decl that
+-- For each top-level decl that
 -- binds a value (DFunDef, or the first name of a DLetGroup) AND has no explicit
 -- DTypeSig in the program AND is in the typecheck env, emit one hint at the
 -- column right after its name on its start line, labelled `: <ppScheme>` with
@@ -1555,7 +1553,7 @@ semanticTokensData src =
 -- The `initialize` result: serverInfo + the B.10 capability set.
 -- textDocumentSync = 1 (Full).  B.10.3 adds the decl/textual providers:
 -- formatting / documentSymbol / definition / documentHighlight (each a plain
--- `true`, mirroring lib/lsp_server.ml's `Bool true`).  The richer providers
+-- `true`).  The richer providers
 -- (hover/completion/inlayHint) and ELoc expr-precise ranges are later slices.
 initializeResult : Json
 initializeResult = jObject
@@ -1592,11 +1590,11 @@ publishDiagnostics runtimeSrc coreSrc uri src =
 --
 -- When the edited buffer imports a sibling module, run analyzeProject over the
 -- whole import graph (with the OPEN BUFFERS as unsaved-source overrides) and
--- publish one publishDiagnostics PER affected file — the self-hosted analog of
--- lib/lsp_server.ml's publish_project_diagnostics.  A buffer with no (non-core)
+-- publish one publishDiagnostics PER affected file.
+-- A buffer with no (non-core)
 -- imports keeps the single-document path (publishDiagnostics above).
 --
--- Simplifications vs the OCaml LSP (consistent with the single-root compiler
+-- Simplifications (consistent with the single-root compiler
 -- loader, which has no medaka.toml / multi-root support — see loader.mdk):
 --   * project_dir = the DIRECTORY OF THE EDITED FILE (the loader's default root),
 --     not a medaka.toml / .git walk-up (no Project_config port in compiler).

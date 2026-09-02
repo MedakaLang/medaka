@@ -42,32 +42,64 @@ set +a
 redact() { sed -e "s/${CLOUDFLARE_API_TOKEN}/***REDACTED***/g"; }
 
 # ── The site must be built, and complete ────────────────────────────────────
-# `site/guide` joins the trigger deliberately: a site/ assembled BEFORE the guide
-# was wired in (#2386, S-site-wiring) has index.html and playground.wasm and would
-# otherwise have sailed straight past this into a deploy with no guide at all —
-# and with playground/index.html's new Guide/Quickstart links 404ing.
-if [ ! -f "$SITE/index.html" ] || [ ! -f "$SITE/dist/playground.wasm" ] || [ ! -d "$SITE/guide" ]; then
+# `site/guide` and `site/stdlib` join the trigger deliberately: a site/
+# assembled before either was wired in (#2386 guide / #2384 stdlib) has
+# index.html and playground.wasm and would otherwise have sailed straight past
+# this into a deploy missing one of them — and with playground/index.html's
+# nav links to it 404ing.
+if [ ! -f "$SITE/index.html" ] || [ ! -f "$SITE/dist/playground.wasm" ] || [ ! -d "$SITE/guide" ] || [ ! -d "$SITE/stdlib" ]; then
   echo "[deploy] site/ not built — running build_site.sh ..."
   bash "$SCRIPT_DIR/build_site.sh" >/dev/null
 fi
 
 # build_site.sh already verifies every asset main.js fetches; re-assert the
-# count here so a hand-edited site/ cannot be published half-populated.
+# count here so a hand-edited site/ cannot be published half-populated. DERIVED
+# from main.js's own EXTRA_MODULES list rather than a hand-picked number: that
+# list moves independently of this script, and a hardcoded floor silently goes
+# stale (and falsely FAILS a correctly-built site/) the moment it does — a
+# hardcoded `22` here went stale the moment EXTRA_MODULES' own count last
+# moved (e.g. the mut_array->vector rename) and silently blocked every deploy
+# with a FAIL that had nothing to do with a half-populated site.
+mdk_expected=$(( 2 + $(sed -n '/^const EXTRA_MODULES = \[/,/\];/p' "$SCRIPT_DIR/main.js" \
+                    | grep -o "'[a-z_0-9]*'" | tr -d "'" | wc -l | tr -d ' ') ))
 mdk_count=$(find "$SITE/dist" -name '*.mdk' | wc -l | tr -d ' ')
-if [ "$mdk_count" -lt 22 ]; then
-  echo "FAIL: site/dist has $mdk_count .mdk files, expected >=22. Re-run build_site.sh." >&2
+if [ "$mdk_count" -lt "$mdk_expected" ]; then
+  echo "FAIL: site/dist has $mdk_count .mdk files, expected >=$mdk_expected (runtime.mdk + core.mdk + main.js's EXTRA_MODULES). Re-run build_site.sh." >&2
   exit 1
 fi
 
-# Same re-assert for the guide, and DERIVED from docs/guide/ rather than pinned to
-# a number: the .mdk floor above is a fixed `>=22` because main.js's module list
-# moves independently of this script, but the guide's page count is exactly
-# "docs/guide/*.md minus OUTLINE.md", which is knowable here. A chapter added to
-# the repo and missing from site/ is a stale build, not a smaller guide.
+# Same re-assert for the guide, also DERIVED rather than hand-typed: the
+# guide's page count is exactly "docs/guide/*.md minus OUTLINE.md", which is
+# knowable here. A chapter added to the repo and missing from site/ is a stale
+# build, not a smaller guide.
 guide_expected=$(find "$ROOT/docs/guide" -maxdepth 1 -name '*.md' ! -name 'OUTLINE.md' | wc -l | tr -d ' ')
 guide_count=$(find "$SITE/guide" -maxdepth 1 -name '*.html' | wc -l | tr -d ' ')
 if [ "$guide_count" -lt "$guide_expected" ]; then
   echo "FAIL: site/guide has $guide_count pages, docs/guide names $guide_expected. Re-run build_site.sh." >&2
+  exit 1
+fi
+
+# Same re-assert, same reason, for the stdlib reference (#2384). Expected count
+# is DERIVED from docs/stdlib/*.md minus build_stdlib_docs.sh's own --exclude
+# list, read back out of that script rather than restated here — one copy of
+# the exclusion set, the same discipline playground/verify_stdlib_deploy.sh
+# and build_site.sh's own stdlib check already use.
+stdlib_exclude="$(sed -n 's/^  --exclude \(.*\) \\$/\1/p' "$SCRIPT_DIR/build_stdlib_docs.sh")"
+if [ -z "$stdlib_exclude" ]; then
+  echo "FAIL: could not read the --exclude list out of playground/build_stdlib_docs.sh" >&2
+  exit 1
+fi
+stdlib_expected=0
+for m in "$ROOT"/docs/stdlib/*.md; do
+  b="$(basename "$m")"
+  case ",$stdlib_exclude," in
+    *",$b,"*) ;;
+    *) stdlib_expected=$((stdlib_expected + 1)) ;;
+  esac
+done
+stdlib_count=$(find "$SITE/stdlib" -maxdepth 1 -name '*.html' | wc -l | tr -d ' ')
+if [ "$stdlib_count" -lt "$stdlib_expected" ]; then
+  echo "FAIL: site/stdlib has $stdlib_count pages, docs/stdlib names $stdlib_expected (minus $stdlib_exclude). Re-run build_site.sh." >&2
   exit 1
 fi
 

@@ -25,12 +25,12 @@
 #     doctests that used to assert full-Unicode case-folding to the ASCII-only
 #     truth the native runtime actually implements; #505 un-deferred once that
 #     was confirmed on a fresh build)
-#   stdlib/array.mdk / stdlib/mut_array.mdk / stdlib/map.mdk (#1712 un-deferred):
+#   stdlib/array.mdk / stdlib/vector.mdk / stdlib/map.mdk (#1712 un-deferred):
 #     these three modules had ZERO doctests/props running under any CI-enforced
-#     gate — the deferral note below used to claim array/mut_array's props had
+#     gate — the deferral note below used to claim array/vector's props had
 #     RNG-draw-dependent shrunk counterexamples and map needed hash-table work,
 #     but re-verification found all three run clean end-to-end natively (30/30 +
-#     7/7 props for array, 11/11 for mut_array, 40/40 + 16/16 props for map) —
+#     7/7 props for array, 11/11 for vector, 40/40 + 16/16 props for map) —
 #     the deferral had gone stale. This is the worked-example gap: array.mdk's
 #     Array.concat/concatLookup carried a documented O(outer*total) quadratic
 #     plus a boundary hazard around empty inner arrays that nothing here would
@@ -114,7 +114,7 @@ else
          $ROOT/stdlib/hash_map.mdk \
          $ROOT/stdlib/hash_set.mdk \
          $ROOT/stdlib/array.mdk \
-         $ROOT/stdlib/mut_array.mdk \
+         $ROOT/stdlib/vector.mdk \
          $ROOT/stdlib/map.mdk \
          $ROOT/test/compiler_test_fixtures/mixed.mdk \
          $ROOT/test/compiler_test_fixtures/sum_dict.mdk \

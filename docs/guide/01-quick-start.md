@@ -1,12 +1,18 @@
 # Quick Start
 
-The quickest way to follow along is [the playground](https://medaka-lang.dev), where
-you can run every example in this guide right in your browser. If you'd rather work
-locally, `medaka run <file.mdk>` type-checks and runs a program in one step.
+The fastest way to follow along is [the playground](https://medaka-lang.dev), which
+runs every example in this guide in your browser. To work locally instead, put a
+program in a file ending in `.mdk` and run it with:
 
-## "Hello World" in Medaka
+```
+medaka run hello.mdk
+```
 
-Every Medaka program begins by declaring `main`.
+That type-checks the program and runs it in one step.
+
+## Hello, world
+
+A Medaka program starts at `main`.
 
 ```medaka
 main = println "Hello world!"
@@ -18,33 +24,24 @@ Running it prints:
 Hello world!
 ```
 
-`main` is a zero-argument *value* of type `Unit`, normally an effectful expression
-such as a `println`. `medaka run` forces `main` for its effects; it never applies
-`main` as a function and never prints its result.
+`main` is a value, not a function. You define it with `main = …` and never with
+parameters. When you run the program, `main` is evaluated for its effects, in this
+case printing a line.
 
-> ⚠️ **Write `main = …`, not `main () = …`.** A `main` that takes an argument is a
-> different thing — a function nobody calls — so `run` and `build` refuse it rather
-> than doing nothing:
+> ⚠️ **Write `main = …`, not `main () = …`.** A `main` with a parameter is a
+> function that nothing ever calls. The compiler warns about it under `medaka check`,
+> and `medaka run` and `medaka build` refuse to go ahead:
 >
 > ```
 > warning: hello.mdk:1:10: 'main' must be a value of type Unit. Write 'main = …',
 > not 'main () = …' or 'main x = …' ('medaka run' never applies main; it forces a
 > zero-arg main for its effects)
 > ```
->
-> `medaka check` reports this as a *warning* and still exits 0 — the declaration is
-> perfectly well-typed, it just isn't an entry point. `medaka run` and `medaka build`
-> exit non-zero. Don't rely on a green `check` alone to tell you a program will run.
 
-## Doing more than one thing
+## Doing several things
 
-`main` can be an indented block of statements rather than a single expression — the
-block is just a sequence, run top to bottom.
-
-> **Coming from Haskell?** There is no `do` keyword involved and no special IO type.
-> A block of statements here is plain sequential evaluation, not monadic binding —
-> see [`do` and Thenables](08-do-and-thenables.md) for what `do` is actually for in
-> Medaka.
+To do more than one thing, put the statements on separate lines, indented under
+`main`. They run top to bottom.
 
 ```medaka
 main =
@@ -57,22 +54,27 @@ What's in the box?
 A fish.
 ```
 
-> ⚠️ **Indentation is significant.** The block above is a block because both `println`
-> lines sit at the same deeper indentation than `main`. Medaka has no braces and no
-> semicolons; layout is the syntax. Get it wrong and the error usually shows up as
-> something else entirely — an inconsistently indented statement is frequently reported
-> as `Unbound variable`, because the compiler has closed the block before reaching your
-> line. If a name you can plainly see is reported as unbound, check the columns first.
+That is all there is to sequencing in Medaka. There is no special keyword for a
+block of statements and no wrapper type around IO. Chapter 7 explains how the
+compiler still keeps track of which functions do IO.
+
+> ⚠️ **Indentation is the syntax.** Medaka has no braces and no semicolons. The two
+> `println` lines above form a block because they are indented under `main` by the
+> same amount. When the indentation is wrong, the error is often not about
+> indentation: a statement indented one space too far or too little is frequently
+> reported as `Unbound variable`, because the compiler closed the block before it
+> reached your line. If a name you can plainly see is reported as unbound, check the
+> columns first.
 
 ## Comments
 
-Single-line comments begin with `--` and run to the end of the line. Block comments are
-delimited by `{-` and `-}`, and they nest, so you can comment out a region that already
-contains a block comment.
+A line comment starts with `--` and runs to the end of the line. A block comment is
+written between `{-` and `-}`, and block comments nest, so you can comment out a
+region that already contains one.
 
 ```medaka
--- A single-line comment.
-main = println (2 + 5)  -- ...which can also sit at the end of a line.
+-- A line comment.
+main = println (2 + 5)  -- A comment can also follow code.
 ```
 
 ```medaka-expect
@@ -80,9 +82,8 @@ main = println (2 + 5)  -- ...which can also sit at the end of a line.
 ```
 
 ```medaka
-{- This is a block comment.
-   It can span multiple lines, and {- it nests -} cleanly.
-   This will print 7 to stdout. -}
+{- A block comment.
+   It can span several lines, and {- it nests -} cleanly. -}
 main = println (2 + 5)
 ```
 
@@ -90,8 +91,5 @@ main = println (2 + 5)
 7
 ```
 
-## What just happened
-
-You now have the shape of a Medaka program: a `main` value, an indented block for
-doing several things in order, and `println` to see the results. The next chapter fills
-in what goes *inside* it — [values, bindings, and types](02-expressions.md).
+Next: [values, bindings, and types](02-expressions.md), which is what goes on the
+right-hand side of those statements.

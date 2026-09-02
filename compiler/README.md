@@ -1399,7 +1399,7 @@ to retrofit, so design them into the initial phases:
   single freeze" when fed a cons-built list. Added `util.joinWith`/`intersperseStr`
   and routed `joinNl`/`joinSp`/`renderToks`/`escFrom` through it (lex 8× **2.34→1.01s,
   2.3×**; scaling now linear; byte-identical). Under the tree-walker a vendored
-  `mut_array` StringBuilder would be *slower* (Medaka-level per-char push vs native
+  `vector` StringBuilder would be *slower* (Medaka-level per-char push vs native
   concat) and force mutation through pure recursion — rejected on measurement.
   **Key finding: the win is in joins over MANY elements (alloc/GC count), not joins
   of a few large strings** — `renderAll`-style joins of ~96 file outputs measured
@@ -1446,7 +1446,7 @@ profilable):
 - **Static typeclass dispatch** — confirm `EMethodRef` routes resolved at
   elaboration aren't re-searched at runtime in `VMulti`; full monomorphization is
   an LLVM-era concern.
-- **Stdlib hygiene** — prefer `Array`/`mut_array` over `List` in hot paths, keep
+- **Stdlib hygiene** — prefer `Array`/`vector` over `List` in hot paths, keep
   common ops tail-recursive, and cache the elaborated+evaluated prelude so the
   many small runs (doctests, test suite) don't re-install it each time.
 

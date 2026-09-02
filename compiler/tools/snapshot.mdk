@@ -166,9 +166,11 @@ import frontend.marker.{markWithPrelude}
 import ir.sexp.{programToSexp}
 import ir.core_ir.{CProgram}
 import ir.core_ir_lower.{
+  ifaceImplHeadTable,
   declaredRecordFieldOrders,
   lowerProgram,
   lowerProgramEmit,
+  EmitTarget(..),
   returnsSelfTable,
   selfFnParamTable,
   methodIfaceTable,
@@ -196,7 +198,10 @@ import backend.llvm_emit.{emitProgramRecord, makeEmitInput}
 -- A member alias gives the Wasm emitter a distinct local name, so BOTH backends are driven from ONE process
 -- over ONE lowered CProgram.  (This is what retired `tools/snap_wasm.mdk`, a re-export
 -- shim that existed solely because Medaka had no import aliasing.)
-import backend.wasm_emit.{emitProgramRecord as wasmRecord, makeWasmEmitInput}
+import backend.wasm_emit.{
+  emitProgramRecord as wasmRecord,
+  makeWasmEmitInputFull,
+}
 import support.util.{
   joinNl,
   joinWith,
@@ -617,7 +622,10 @@ emitBoth root sel runtimeDecls userDecls =
   let userNames = funNamesOf userDecls
   let dictNames = constrainedSigNames userDecls
   let allDecls = elaborateDict runtimeDecls dictNames userNames userDecls
-  let cp = lowerProgramEmit allDecls
+  -- #1970: this ONE lowered CProgram feeds BOTH backends below (`llvmOf`/`wasmOf`),
+  -- so it cannot pass `TargetNative` or `TargetWasm` -- either would narrow the
+  -- guard for the backend that does not get to see it here.
+  let cp = lowerProgramEmit TargetBothUnknown allDecls
   let _ = if wants sel "LLVM" then
     emitSection root "LLVM" (llvmOf runtimeDecls allDecls cp)
   else
@@ -629,13 +637,13 @@ emitBoth root sel runtimeDecls userDecls =
 
 llvmOf : List Decl -> List Decl -> CProgram -> String
 llvmOf runtimeDecls allDecls cp =
-  let input = makeEmitInput (returnsSelfTable allDecls) (selfFnParamTable allDecls) (methodIfaceTable allDecls) (methodConstraintIfaces allDecls) (ctorFieldTypeNames allDecls) (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls) (mainTypeIsUnit ()) (mainTypeIsFloat ()) 0 [] [] "" (declaredRecordFieldOrders allDecls) (ffiExternTypeNames runtimeDecls allDecls)
+  let input = makeEmitInput (returnsSelfTable allDecls) (selfFnParamTable allDecls) (methodIfaceTable allDecls) (methodConstraintIfaces allDecls) (ctorFieldTypeNames allDecls) (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls) (mainTypeIsUnit ()) (mainTypeIsFloat ()) 0 [] [] "" (declaredRecordFieldOrders allDecls) (ffiExternTypeNames runtimeDecls allDecls) (ifaceImplHeadTable allDecls)
   let (text, gaps) = emitProgramRecord input cp
   withGaps ";" text gaps
 
 wasmOf : List Decl -> List Decl -> CProgram -> String
 wasmOf runtimeDecls allDecls cp =
-  let input = makeWasmEmitInput (methodIfaceTable allDecls) (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls) (ctorFieldTypeNames allDecls) False (declaredRecordFieldOrders allDecls)
+  let input = makeWasmEmitInputFull (methodIfaceTable allDecls) (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls) (ctorFieldTypeNames allDecls) False (declaredRecordFieldOrders allDecls) [] (ifaceImplHeadTable allDecls)
   let (text, gaps) = wasmRecord input cp
   withGaps ";;" text gaps
 

@@ -86,7 +86,7 @@ Support files:
 
 `stdlib/` modules: `runtime.mdk` (extern catalog), `core.mdk` (**only auto-prelude**),
 `list`/`string`/`array`, `map`/`set` (ordered trees), `hash_map`/`hash_set` (mutable hash),
-`mut_array` (growable vector), `json`, `byteparser`/`bytebuilder` (parser-combinator libraries
+`vector` (growable array), `json`, `byteparser`/`bytebuilder` (parser-combinator libraries
 for hand-rolled binary/text parsing and building — `parsec` is a separate, more general
 parser-combinator project under its own manifest, not part of `stdlib/`), `io.mdk` (ergonomic
 layer over `runtime.mdk` IO), `args` (one CLI argument parser — a verb's flag vocabulary is a
@@ -159,7 +159,12 @@ REFUSES to run in the same commit that adds it — enrol with a guessed `shard`,
 gen-ci` as a follow-up commit (or trigger `gh workflow run ci.yml --ref <branch>` first to
 get a real sample before merging). Registration rules, the `test/CI-COVERAGE-EXCEPTIONS.txt`
 escape hatch, and `[W-SHARD-COST]` (shards are filled by cost, never by theme): the `gates`
-skill. ⚠️ **[W-SHARD-NEUTRAL] The eight executor rows are named `gates_1`…`gates_8` and mean
+skill. 🚨 **[W-MODULE-BLIND] A module outside every entry's import closure is invisible to
+`make medaka`, `make check-self`, and `test/typecheck_compiler_source.sh`** — none of those
+walk it, so a defect injected into it is caught by nothing (MEASURED, `compiler/types/
+registry.mdk`: the Makefile's `test:` target now names such a module explicitly, since
+`medaka test <file>` typechecks the file before running its doctests). Full incident:
+`.claude/dossier/workflow.md`. ⚠️ **[W-SHARD-NEUTRAL] The eight executor rows are named `gates_1`…`gates_8` and mean
 nothing** (#2178, 2026-08-30) — a row name cannot describe its contents, so it is not allowed
 to try. The thematic names (`gates (frontend)`, `gates (sqlite)`, …) are RETIRED; a doc or
 comment that still names one is describing the pre-rename tree. What a failure was ABOUT comes
@@ -634,6 +639,30 @@ Each of these was paid for in an incident — pointers, not post-mortems.
   `diff_native_cli.sh`. Given this bullet's own history of a false "fixed" retraction, still
   diff a comment-bearing record decl by eye after `fmt --write` rather than trusting this note
   alone.
+- ⚠️ **[T-COMMENT-REGISTER]** A source comment should state a constraint the
+  code itself cannot show — not narrate its own history. Provenance and
+  litigation (why a decision was made, who ruled on what, what a PR debated)
+  belong on the issue or in `.claude/dossier/`, linked by reference, not
+  written into the source; a comment that reads as reviewer-addressed prose
+  (`refuted`, `ratified`, `"ruling"`) or a draft's self-narration (`earlier
+  cut`, `this PR`) is describing the PR, not the code, and rots the moment
+  the PR merges. No emoji shouts (🚨/⚠️/🔒) in source comments. A dead-path
+  citation — a repo-relative path the comment names that no longer exists,
+  the OCaml reference compiler under `lib/` removed 2026-06-26 being the
+  biggest instance — is this same register: provably wrong regardless of
+  what it says. When relocating a paragraph out of source rather than
+  deleting it outright, the pointer left behind MUST name the destination as
+  a **repo-relative path** (e.g. `compiler/STAGE2-DESIGN.md` §4), never a
+  bare prose description — this is currently unverified by any gate
+  (`test/check_doc_links.sh` builds its corpus from `git ls-files '*.md'`,
+  markdown only, so a pointer left in an `.mdk` source comment is never
+  scanned; `test/check_agent_doc_symbols.sh` likewise treats `.md` files as
+  the citing corpus and `.mdk`/`.c` source only as the resolution target, not
+  as a source of citations to check) — a stale relocation pointer is caught
+  only by a human, enforced by review, not by a gate. An unreachable
+  relocation is a deletion with extra steps.
+  `make comment-census` (`test/comment_register_census.sh`, #2281) derives a
+  current on-demand report of these registers; it is not a gate.
 - ⚠️ **[T-SHARED-CORPUS]** A fixture directory is a SHARED CORPUS — add/move/delete enrolls you
   in gates you never named. ENUMERATE every consumer, run all of them. Never trust a count —
   derive it, word-bound the grep both sides (`grep -n 'Word-boundaries' test/preflight.sh`).
@@ -766,6 +795,8 @@ The two that must reach you before you load it — both silent:
 | **perf-hunt** | Stage slow, or `diff_compiler_perf_scaling.sh` red. |
 | **benchmark-emitter** | `compiler/backend/*` change to measure, or a suspicious fixpoint failure. |
 | **add-lsp-capability** | Add/extend an LSP feature. |
+| **architecture** | Where a new file/subcommand/subsystem/helper BELONGS, and the standing DECLINED register a planner must not relitigate. Read before adding a file or writing a contract's Surface row. Drift detector: `make arch-census`. |
+| **style-review** | The end-of-sprint craft pass (duplication, comment register, test vehicle, placement, diagnostics, docs, CLI shape) — every section a pointer, plus the demands it must NOT make. Once per sprint, never per-PR. |
 | **pr-review** | Review an agent-authored PR diff for craft. Read-only, after CI green. |
 | **bug-hunt** | Adversarial S0/S1 hunt. Best right after a batch closes. |
 

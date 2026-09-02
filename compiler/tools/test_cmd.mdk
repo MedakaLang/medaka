@@ -463,8 +463,8 @@ singleRootId roots target =
 -- When the file under test IS the prelude (`medaka test stdlib/core.mdk`), it
 -- already declares everything the prelude provides, so prepending the prelude
 -- would duplicate every top-level decl (two `Bounded Char` impls, etc.) and
--- corrupt return-position dispatch.  Mirror lib/doctest.ml's `program_is_core`
--- guard: skip the prelude prepend for core.
+-- corrupt return-position dispatch.  Mirror the `programIsCore` guard below:
+-- skip the prelude prepend for core.
 -- Single-file (no-import) path, DRIVER-COLLAPSE Phase 1+3: route the degenerate
 -- no-import file through the SAME multi-module path as an import-bearing one — the
 -- 1-module wrappers (elaborateOne → evalOne).  elaborateModules owns the dict-set
@@ -494,8 +494,8 @@ runSingle runtimeDecls coreDecls target userDecls roots examples synthDecls synt
 -- equivalent return-position dict-set via its own `moduleDictNames`.  The
 -- `medaka test stdlib/core.mdk` canary guards the neq-hang.
 
--- Mirror of lib/typecheck.ml's program_is_core (also compiler/resolve.mdk's
--- programIsCore): the prelude is the unique program declaring BOTH the
+-- Mirror of compiler/resolve.mdk's
+-- programIsCore: the prelude is the unique program declaring BOTH the
 -- `Ordering` data type and the `Foldable` interface.
 programIsCore : List Decl -> Bool
 programIsCore prog = pcHasOrdering prog && pcHasFoldable prog
@@ -551,7 +551,7 @@ injectIntoLast _ [] = []
 injectIntoLast synthDecls [(mid, decls)] = [(mid, decls ++ synthDecls)]
 injectIntoLast synthDecls (x::rest) = x :: injectIntoLast synthDecls rest
 
--- ── doctest reporting (mirrors lib/test_cmd.ml) ──────────────────────────────
+-- ── doctest reporting ─────────────────────────────────────────────────────
 
 -- The per-example lines and the `(F failed, E errors)` suffix moved to
 -- `tools/doctest.mdk` (#81 Stage 2), beside `RunResult`: a native engine must

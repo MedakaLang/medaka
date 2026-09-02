@@ -1,8 +1,8 @@
 # META
-source_lines=4387
+source_lines=4385
 stages=DESUGAR,MARK
 # SOURCE
--- Self-hosted eval stage — Stage-1 capstone, port of lib/eval.ml's tree-walking
+-- Self-hosted eval stage — Stage-1 capstone, the tree-walking
 -- interpreter.  SLICE 1: the engine core — literals, variables, application,
 -- lambdas, let / letrec / let-groups, match (with guards), if, binary/unary
 -- operators, tuples, lists, ADTs (constructors + pattern matching), and
@@ -161,7 +161,7 @@ public export data Value e =
 -- kind-inference note on `Value`.
 public export data EvalEnv v = EvalEnv (List (List (String, Ref v)))
 
--- ── value rendering (mirrors lib/eval.ml pp_value byte-for-byte) ───────────
+-- ── value rendering ──────────────────────────────────────────────────────
 export
 ppValue : Value e -> String
 ppValue (VInt n) = intToString n
@@ -284,7 +284,7 @@ containsInt _ [] = False
 containsInt x (y::ys) = x == y || containsInt x ys
 
 -- ── typeclass dispatch: ctor→type table + runtime tag ─────────────────────
--- A process-global ctor→type map (mirrors lib/eval.ml's ctor_to_type Hashtbl);
+-- A process-global ctor→type map;
 -- evalProgram seeds it before any dispatch.  Reading it stays pure (ref read).
 export
 ctorToTypeRef : Ref (List (String, String))
@@ -777,7 +777,7 @@ lookupFrames (frame::rest) name = match lookupFrameCell frame name
   Some cell => forceCell cell name
   None => lookupFrames rest name
 
--- C5 (mirror lib/eval.ml:223 lookup_method): resolve a method occurrence to the
+-- C5: resolve a method occurrence to the
 -- coalesced method binding (the dispatcher), looking PAST a nearer same-named
 -- non-method shadow.  This matters only when a name is both an interface method and
 -- an explicitly-imported standalone (e.g. box's `toList`/`isEmpty` vs Foldable's):
@@ -1049,7 +1049,7 @@ matchRecFields ((RecPatField fname _ mp)::rest) recFields = match lookupAssoc fn
 
 -- Zip a registered ctor's field order with its positional VCon vals into a
 -- name->value assoc, so a record pattern can match a named-field data variant
--- (mirrors lib/eval.ml match_pat's PRec/VCon arm via ctor_field_order).
+-- (via ctor_field_order).
 zipFieldOrder : List String -> List (Value e) -> List (String, Value e)
 zipFieldOrder [] _ = []
 zipFieldOrder _ [] = []
@@ -1141,7 +1141,7 @@ reTag t key pos seen r
 
 -- filter VMulti candidates by the arg's runtime tag, but only those candidates
 -- that are at a dispatching slot; if every tagged candidate is filtered out,
--- keep the original set (mirrors lib/eval.ml's should_filter logic)
+-- keep the original set
 filterByTag : List (Value e) -> Value e -> List (Value e)
 filterByTag vs arg
   | not (anyList isDispatching vs) = vs
@@ -1177,7 +1177,7 @@ narrowMethod env method (VMulti vs) tag =
 -- A single-impl interface method binds to a BARE VTypedImpl (never coalesced into
 -- a VMulti).  A resolved route (non-empty tag) still has to strip its dispatch
 -- wrapper for a nullary return-position body — there's only one impl, so it IS the
--- chosen one — mirroring lib/eval.ml's Phase-96 strip, which fires for any
+-- chosen one — the Phase-96 strip, which fires for any
 -- VTypedImpl after routing.  An empty tag (RNone / unresolved) leaves it for
 -- arg-tag fallback.
 narrowMethod _ _ (VTypedImpl t k p s inner) "" = VTypedImpl t k p s inner
@@ -1280,7 +1280,7 @@ isDefaultCand _ = True
 -- is a terminal value (a nullary return-position method like `empty`/`minBound`
 -- that is never applied — its wrapper must not leak into the program).  A body
 -- still awaiting application (a closure / partial impl, e.g. `pure`) keeps the
--- wrapper so `apply` strips the tag on application.  Mirrors lib/eval.ml Phase 96.
+-- wrapper so `apply` strips the tag on application.  (Phase 96.)
 stripResolved : Value e -> <e> Value e
 stripResolved (VTypedImpl t k p s inner) =
   stripBody (VTypedImpl t k p s inner) inner
@@ -1541,8 +1541,7 @@ eval env (ERangeList lo hi incl) =
   evalRange (eval env lo) (eval env hi) incl rangeListMk
 eval env (ERangeArray lo hi incl) =
   evalRange (eval env lo) (eval env hi) incl rangeArrayMk
--- ELoc records the current source location before recursing (mirror of
--- lib/eval.ml's ELoc arm, which sets current_loc).  runtimePanic reads
+-- ELoc records the current source location before recursing.  runtimePanic reads
 -- currentEvalLoc so a runtime error carries file:L:C.  Purely a side channel
 -- for diagnostics: on a successful eval nothing reads it, so valid-program
 -- output is byte-identical.
@@ -1556,9 +1555,9 @@ eval _ _ = panic "eval: unsupported node"
 -- of this interface for the concrete receiver but the name has an explicitly-
 -- imported/local standalone (which the import frame binds ahead of the global
 -- method VMulti).  Resolve the standalone with a plain lookupEnv, unnarrowed and
--- with no dict folding (mirror lib/eval.ml:816 EMethodRef RLocal).  Every other
+-- with no dict folding.  Every other
 -- route is a genuine method dispatch: resolve the VMulti past any nearer same-
--- named standalone shadow with lookupMethod (C5 / lib/eval.ml:223), then narrow.
+-- named standalone shadow with lookupMethod (C5), then narrow.
 evalMethodAt : EvalEnv (Value e) -> String -> Route -> List Route -> List Route -> <e> Value e
 -- P0-18: the carried String is the MANGLED standalone symbol on the emit path;
 -- "" (the un-mangled run/check path) falls back to the bare method name.
@@ -1801,7 +1800,7 @@ evalFieldAssign env (FieldAssign k e) = (k, eval env e)
 
 -- A named-field DATA constructor (registered in ctorFieldOrdersRef) builds a
 -- positional VCon, reordering the field assignments into declaration order
--- (mirrors lib/eval.ml ERecordCreate's ctor_field_order path). Plain record
+-- (via the ctor_field_order path). Plain record
 -- declarations are not registered and fall through to VRecord.
 recordCreateVals : String -> List String -> List (String, Value e) -> List (Value e)
 recordCreateVals _ [] _ = []
@@ -2110,8 +2109,7 @@ funDefs [] = []
 funDefs ((DFunDef _ n pats body)::rest) = (n, (pats, body)) :: funDefs rest
 -- Top-level `let rec … with …` (DLetGroup): each binding behaves exactly like a
 -- multi-clause DFunDef — flatten to (name, (pats, body)) entries so installGroups
--- coalesces its clauses into a VMulti and the names enter the eval frame.  Mirrors
--- lib/eval.ml's DLetGroup install arm.
+-- coalesces its clauses into a VMulti and the names enter the eval frame.
 funDefs ((DLetGroup _ binds)::rest) = letGroupDefs binds ++ funDefs rest
 funDefs ((DAttrib _ d)::rest) = funDefs (d::rest)
 funDefs (_::rest) = funDefs rest
@@ -2270,7 +2268,7 @@ positionsByName iface mname (((_, i, m), p)::rest)
 
 -- A point-free (no-param) impl/default body: if the method is return-position
 -- (no discriminating arg) defer it as a memoising VThunk; otherwise eta-expand so
--- the discriminating argument still reaches the body (mirrors lib/eval.ml Phase 121).
+-- the discriminating argument still reaches the body (Phase 121).
 --
 -- TYPECHECK-AUDIT C6: the nullary return-position thunk is nested in a
 -- VTypedImpl's `inner` field inside a VMulti list (not in a Ref cell of its own),
@@ -3326,8 +3324,9 @@ pArrayMakeWith (VInt n) f = VArray (arrayFromList (buildWith f 0 n))
 pArrayMakeWith _ _ = panic "arrayMakeWith: bad operands"
 
 -- arrayCopy : Array a -> Array a — a fresh, mutation-independent copy.  Routes
--- to the host `arrayCopy` extern (eval.mdk is compiled by the reference, so the
--- runtime extern is in scope), mirroring lib/eval.ml's Array.copy.
+-- to the host `arrayCopy` extern (this file is itself compiled by the native
+-- compiler and links against the C runtime, so the runtime extern is in
+-- scope).
 pArrayCopy : Value e -> <e> Value e
 pArrayCopy (VArray a) = VArray (arrayCopy a)
 pArrayCopy _ = panic "arrayCopy: not an Array"
@@ -3451,7 +3450,7 @@ runMainForEffect binds = match lookupBinding "main" binds
   None => runtimePanic "E-NO-MAIN" noMainMsg
 
 -- ── multi-module evaluation (per-module frames over a shared global) ───────
--- Port of lib/eval.ml's eval_modules.  The prelude (core) installs GLOBALLY
+-- The prelude (core) installs GLOBALLY
 -- (all its names global); each loaded module's top-level funDefs are LOCAL, so
 -- same-named functions across modules stay isolated (Phase 110), while ctors
 -- and impl methods coalesce GLOBALLY into one coherent VMulti per interface
@@ -3679,8 +3678,7 @@ rootLocals (_::rest) = rootLocals rest
 -- imports ∪ globals — flattened to (name, value).  The prop runner evaluates a
 -- prop body against this single frame, and a prop references not only the
 -- file's own helpers (locals) and imported names but also prelude methods like
--- `eq`/`compare` (globals), which rootLocals alone omits.  Mirrors lib/eval.ml's
--- eval_modules_root_env.
+-- `eq`/`compare` (globals), which rootLocals alone omits.
 export
 evalModulesRootEnv : List Decl -> List (String, List Decl) -> <e> List (String, Value e)
 evalModulesRootEnv preludeDecls modules =
@@ -3885,7 +3883,7 @@ ctorNamesOfDecl (DData { dataVis = VisPublic, dataName = tyname, dataCtors = var
 ctorNamesOfDecl _ = []
 
 -- value names a DUse binds, resolved to the exporting module's exported cells
--- (mirrors lib/eval.ml build_imports); names resolving to a ctor/global are
+-- names resolving to a ctor/global are
 -- omitted (reached via the global frame instead).
 export
 importFrameOf : List (String, ModExports (Value e)) -> List Decl -> List (String, Ref (Value e))

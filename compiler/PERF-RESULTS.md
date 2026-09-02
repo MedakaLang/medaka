@@ -1022,3 +1022,14 @@ Stage 1 shrank the emitter binary ~11% (dropped unwind scaffolding) — size, no
 **Conclusion: clang attribute hints are not a lever here.** The bottleneck is GC alloc
 density (transient-cell rate) + string/IO churn, NOT call-overhead / unwind / aliasing.
 Future perf work must reduce ALLOCATION RATE (fewer transient cells), not annotate IR.
+
+## History note — `entries/profile_main.mdk` gained backend stages (2026-07-16)
+
+Until 2026-07-16, `compiler/entries/profile_main.mdk`'s per-stage profiler stopped at
+`typecheck`, so `test/diff_compiler_perf_scaling.sh`'s O(n²) detector graded no backend
+stage and every emitter quadratic was invisible to it (issue #359). The profiler was
+extended to also grade `elaborate`/`dce`/`mangle`/`lower`/`emit` (and, opt-in, the wasm
+backend — see `docs/spec/WASM-SEMANTICS.md` §6). The caveats on how to read those
+per-stage numbers (DCE is exercised, the prelude constant is not subtracted, the run is
+single-file-only) live in `entries/profile_main.mdk` itself, beside the stages they
+describe, not here.

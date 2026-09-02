@@ -1,8 +1,8 @@
 # META
-source_lines=579
+source_lines=578
 stages=DESUGAR,MARK
 # SOURCE
--- Self-hosted method_marker stage — Stage 1 port of `lib/method_marker.ml`.
+-- Self-hosted method_marker stage.
 -- Runs after desugar, before typecheck.  Rewrites every interface-method
 -- occurrence `EVar m` to `EMethodRef m`, and every user constrained-function
 -- occurrence `EVar f` (signature carries `=>`) to `EDictApp f` (the typecheck-
@@ -113,8 +113,8 @@ markProgram methods constrained prog = map (markDecl methods constrained) prog
 -- desugar.mapDecl's catch-all SKIPS DLetGroup (and DBench) bodies, so a
 -- constrained-fn reference or interface-method occurrence inside a top-level
 -- `let rec … with …` body would never be marked → its call site never gets a
--- dict route → the dict-passed callee is under-applied.  Mirror lib/method_marker.ml's
--- dedicated mark_decl: handle DLetGroup/DAttrib here, delegate everything else to
+-- dict route → the dict-passed callee is under-applied.  This dedicated
+-- markDecl handles DLetGroup/DAttrib here, delegating everything else to
 -- mapDecl (whose expr recursion is complete).
 markDecl : OrdMap Unit -> OrdMap Unit -> Decl -> Decl
 markDecl methods constrained (DLetGroup pub binds) =
@@ -139,8 +139,7 @@ markFunClause f (FunClause pats body) = FunClause pats (mapExpr f body)
 -- (let/lambda/match binder) is excluded from the rename, because shadowRename's
 -- plain substitution renames the top-level def + reference sites but NOT the
 -- local binder, so a body reference under the local `let name = …` would
--- mis-resolve to the renamed top-level def instead of the in-scope local.
--- Mirrors lib/method_marker.ml's `not (Hashtbl.mem locals n)` guard.)
+-- mis-resolve to the renamed top-level def instead of the in-scope local.)
 shadowRename : List String -> List Decl -> List Decl
 shadowRename preludeMethods prog =
   applyRenames (shadowRenames preludeMethods prog) prog
@@ -187,7 +186,7 @@ subName renames x
 -- user's references as EDictApp.  Mirror of mark_with_prelude's adjustment:
 -- remove from the constrained set any *droppable* prelude plain-fn name the user
 -- shadows and does not itself re-declare constrained.  "Droppable" = not
--- referenced by any other prelude decl: count/find (mut_array/array) are
+-- referenced by any other prelude decl: count/find (vector/array) are
 -- droppable and get removed; clamp (used in a core prop) is NOT, so guards.mdk's
 -- shadow doesn't remove it and its `clamp` references stay marked.
 preludePlainFnNames : List Decl -> List String
@@ -423,7 +422,7 @@ interpVars (InterpExpr e) = collectVars e
 mapLitPairVars : (Expr, Expr) -> List String
 mapLitPairVars (k, v) = collectVars k ++ collectVars v
 
--- ── Local-binder collection (mirror of lib/method_marker.ml local_bound_names) ─
+-- ── Local-binder collection ───────────────────────────────────────────────
 -- Every name bound by a *local* pattern anywhere in the program: clause/lambda
 -- params, let/match/do/comprehension/guard binders.  A prelude-method name in
 -- this set is rebound locally somewhere, so shadowRename's plain substitution

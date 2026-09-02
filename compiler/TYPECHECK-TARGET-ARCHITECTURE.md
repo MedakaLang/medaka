@@ -404,7 +404,7 @@ Three changes only:
   - **every type parameter gets a computed polarity** (covariant /
     contravariant / mixed) from its field occurrences, propagated transitively
     through nominal types; contravariant-or-mixed occurrence ⇒ no covariant row
-    leniency at that argument. Write channels (`Ref`/`MutArray`/`HashMap`,
+    leniency at that argument. Write channels (`Ref`/`Vector`/`HashMap`,
     #1098) are the co∧contra *special case* of this rule, not the rule — a
     contravariant occurrence in an ordinary immutable datatype
     (`data Taker a = MkTaker (a -> Int)` holding an effect-bearing arrow) is
@@ -2106,6 +2106,59 @@ deletes them, and re-keying their counting scans re-introduced #1277 in a
 measured experiment); `universeRegisteredIfacesRef` stays bare; the three
 `*CollidedRef` detectors stay bare (merging by bare name is their purpose).
 
+### 9.5a PR2 as executed — the reader flip, its measurement, and A-3.6's widening
+
+§9.5 above is the design as written *before* PR2 landed; this subsection records what
+actually happened, so the code site (`moduleImplUniv` in `compiler/types/typecheck.mdk`,
+`grep -n 'THE .IE. READER FLIP'`) can keep pointers and its two tripwires rather than the
+whole narrative.
+
+**WAS → NOW.** WAS (#154 PR3, retired by PR2): `ImplUniverse obUnivConcreteRef.value
+obUnivHeadlessRef.value obUnivIfaceTagsRef.value` — three `CrossRun` accumulators grown one
+module at a time by `appendUniverseAccums prog0`. Those three fields are GONE, not merely
+unread: these were their only readers, so leaving them would have left two sources of truth
+for "what impls exist" (design law L1) and the `cross_allowed` ratchet would still carry three
+rows the unit exists to retire. NOW: a projection of the whole-graph `IE` through
+`ieUniverseAt`. A-3.5b later added a second `IE` read, `ieRowsVisibleAt`, so "the ONE place"
+is no longer true and must not be re-instated at the code site.
+
+**The `ieShadowCompare` instrument is gone with it.** §9.5's PR1 remedy shipped a hard `panic`
+into the released compiler for exactly one job — measuring the §9.5 equality before the flip
+committed to it. PR2 deleted it, on a strictly stronger measurement than PR1's per-module
+slice.
+
+**WHY THE FLIP IS EQUALITY-PRESERVING, MEASURED AND NOT ASSUMED.** §9.5's argument is the
+conjunction of (a) the fold algebra and (b) `DL`, the decl-list identity the algebra assumes
+rather than shows. PR1's `ieShadowCompare` measured the per-module SLICE. PR2 measured the
+proposition the flip actually rests on: the WHOLE PREFIX universe at the read site — both
+`MultiRegistry` buckets and the tag `Registry`, digested key-by-key and entry-by-entry in
+bucket order, `IE` against the accumulator, panicking on any disagreement. Run over the
+compiler's own graph (both the `checkModules` and the `elaborateModules` driver), `make
+check-self`, the multi-module differential gates, and 193 multi-module fixture projects: ZERO
+disagreements. Fail-capable in two directions, both executed — projecting at `ord - 1`
+panicked with the prelude's whole population on one side and an empty universe on the other,
+and a name-triggered control proved `medaka check` on a two-module project reaches the line
+carrying a real module id at a real ordinal. That measurement, not the algebra alone, is why
+the binding is allowed to exist.
+
+**A-3.6 (#1558) removed the ordinal-prefix filter, and that is where the C4/I2 claim is
+cashed.** PR2's own comment said the projection was "filtered to this module's ordinal
+prefix … the filter stays ON here (it must)", which was PR2 correctly refusing to do A-3.6's
+job early. A-3.6 has now done it: `ieSnapAt` routes through `ieCandidacyVisibleAt`, which is
+`True`, so the binding is the WHOLE GRAPH's impl universe regardless of `mid`'s ordinal.
+Everything an obligation check on the multi-module path knows about which impls exist comes
+from that line, and it now knows the same thing in every module — which is what *"import
+scoping never decides which instances exist"* (§8 I5) means operationally.
+
+⚠️ **What this widens, said out loud.** #1482's measurement showed topological prefix scoping
+was accidentally load-bearing for #1438's same-spelled-interface shape, so #1438's reach grows
+at this line. That is expected and licensed by §8 I5, not a regression — but it is an
+acceptance delta. 🚨 The pin PR2's comment named as the grader,
+`test/must_fail_fixtures/1072-overlap-xmod-bare-head-arm-order`, **no longer exists in the
+tree** (derive: `ls test/must_fail_fixtures | grep 1072`), so the widening currently has no
+named grading fixture. Whoever next touches this line should re-establish one rather than read
+the absence as "already drained".
+
 ### 9.6 The subsumption enumeration — derived by SHAPE, not by prefix
 
 Derived three ways, because a `universe*` prefix grep provably misses members
@@ -2498,12 +2551,94 @@ category error the retired ban at `recordImplObligation` (`compiler/types/typech
 in-source, from #1480 through U1b) asserted. That same ruling carries the re-export-merge
 carve-out §10.7's own census note records below, and an explicit scope limit: the ruling
 does not by itself license deleting the bare compatibility leg (§10.4/§10.5 remain the
-authority on that). Full argument, kept in-source rather than only here so a future reader
-hits it before reinstating the ban: `grep -n 'U1c (#1507)' compiler/types/typecheck.mdk`.
+authority on that). This section is the argument's home; `recordImplObligation`
+(`compiler/types/typecheck.mdk`, `grep -n 'U1c (#1507)'`) keeps a pointer whose own sentence
+states the live rule, so a reader at the code site learns the constraint without leaving it.
+
+**The retired ban's premise, and why it was wrong.** From #1480 until U1c a DO-NOT-RESTORE
+ban stood at `recordImplObligation`'s method-occurrence arm. Its premise: `stampDeclOrigin`
+("which module DECLARES this interface") and `fillIfaceOccOrigin` ("what did this occurrence
+RESOLVE to") are two stampers answering two INCOMPARABLE questions. That premise was wrong —
+they answer the SAME question, "which interface declaration does this name denote", from two
+vantage points that PRODUCE THE SAME VALUE wherever resolution has a unique answer, which
+`fillIfaceOccOrigin` (via `mapOriginsInDecl`, run in the same scope as every other occurrence
+stamp) guarantees for exactly the programs that reach that line. Do NOT reinstate the ban on a
+bare assertion that the two layers are "different".
+
+⚠️ **The carve-out: "resolve diagnoses every ambiguous case" is FALSE as a blanket claim**,
+and an earlier revision of the in-source paragraph asserted it anyway — a refutation of that
+sentence is exactly the shape that would license reinstating the ban, so the limit has to be
+explicit. MEASURED, both arms, with two modules each declaring an interface with the same
+method name (`p.IP.mth`, `g.IG.mth`) merged into a third via `export import p.{IP,mth}` +
+`export import g.{IG,mth}`: a DIRECT double import of the same name is what resolve catches
+(`Ambiguous occurrence: 'mth' is exported by both …`, per `importedMethodEntry`); a RE-EXPORT
+MERGE of the same collision is **not caught by resolve at all** — `check` exits 0 or 1
+depending on nothing but which `export import` line comes first, with no diagnostic either
+way. In that shape `scopedMethodEntry` cannot decide it, so `overrideScopedMethods` keeps the
+floor's arbitrary last-registered answer and `recordImplObligation` silently inherits it. So:
+the two values disagree only in the ambiguous case, unambiguous cases genuinely agree, and a
+DIRECT import ambiguity genuinely is rejected upstream — but a RE-EXPORT-MERGE ambiguity is
+not. Do not cite "resolve already rejects the ambiguous case" as blanket cover. (Adjacent to
+the open #1288 re-export-merge family; not this unit's to fix. ⚠️ Only ONE of the two arms is
+pinned: `test/must_fail_fixtures/1530-xmod-method-name-collision-reexport-merge` pins the
+REJECT arm — exit 1, `No impl of IP for W`, naming an interface the program never mentions.
+The SILENT-ACCEPT arm — swap the two `export import` lines and the same program exits 0 with
+zero diagnostics — is MEASURED but deliberately NOT pinned, by that fixture or any other; its
+`claim.txt` says so in as many words, and gives the reason: a `must_fail` row asserts one
+verb's exit+stdout, so pinning an "exit 0, prints a plausible-looking value" arm as a positive
+number would let a wrong fix swap the reject arm's value without draining the class.)
 
 **The change is one token.** `recordImplObligation`'s `pushPendingObl (ifaceRefBare
 iface.irName) …` becomes `pushPendingObl iface …` — `iface` is already the identity-carrying
-`IfaceRef` `methodIfaceParamsRef` held; the retired code was discarding it.
+`IfaceRef` `methodIfaceParamsRef` held; the retired code was discarding it. Operationally the
+site now discriminates METHOD-OCCURRENCE goals the same way the other three call sites always
+did, so the #1438 collision shape reached through a bare method call is REJECTED rather than
+silently accepted.
+
+**The other decl-layer goal sites, and the standing condition that guards them.** An earlier
+revision of the in-source comment claimed `recordImplObligation` was the ONE decl-layer goal
+producer and "the other three are all OCCURRENCE layer". That was true of the sites examined
+and FALSE OF THE SET. Census (`grep -n builtinIfaceRef compiler/types/typecheck.mdk`):
+`recordIfaceObligation`, `inferNumLitBare`, `numCallObls` and `numDictObls` all build their
+goal from `builtinIfaceRef` → `builtinClassOrigin` → `builtinClassesRef`, and
+`builtinClassesGo` populates that table by reading `DInterface { ifaceOrigin }`. Four more
+decl-layer goals making the same cross-layer comparison U1c cured at this site.
+
+They are unreachable TODAY, and the reason is NOT that they are occurrence-layer — it is that
+no user declaration can reach that table's population. MEASURED on both arms: a module IN the
+import graph redeclaring one of the four spellings is rejected `Duplicate interface:
+Semigroup`, exit 1; a module NOT in the graph is never loaded at all (arbitrary garbage, and
+`check` still exits 0), so it contributes no `DInterface` to `builtinClassesGo`'s walk; and a
+user `core.mdk` cannot shadow the prelude — `import core.{n}` for a name only the user's file
+declares is unresolvable, exit 1. 🚨 The resulting STANDING CONDITION — the defect returns at
+those four sites if the duplicate-interface guard is relaxed, if §7.1 U1 makes the prelude a
+node (at which point §8 I4 makes two same-spelled declarations legal, which is precisely what
+removes the guard), or if a fifth `BuiltinClass` is added whose spelling the guard does not
+cover — is kept **in-source at `builtinIfaceRef`'s own definition**, because it is a condition
+those sites must maintain rather than a fact about U1c. The safety is a property of the
+LANGUAGE's current namespace rules, not of this channel.
+
+**What "third and last" means, and what it does not.** `recordImplObligation` is the THIRD and
+last of the `ifaceRefBare` GOAL PRODUCERS — U1b retired the other two
+(`schemeObligationsRef`, `funConstraintIfacesRef`). Two other goal producers
+(`recordSigConstraintObls`, `recordMethodLevelSlotObls` via `constraintOrigin`,
+`reqToObligation` via `requireOrigin`) already carried identity before U1c, filled by the SAME
+walk in the SAME scope as `implOrigin`, so they agree with it by construction.
+⚠️ **That is NOT a claim that the `ImplUniverse` channel has only three or four goal producers
+total.** It does not: `recordCallObligations`' `PCallSlot` predicate, the
+`builtinIfaceRef`-derived sites above, and others besides all push a `Predicate` into the same
+channel — a derived count of the WHOLE set is at least six. "Last of the three" means only
+"last of the sites that ever minted `ifaceRefBare`", the narrow claim the census supports; do
+not read it as "last of N total producers" for any N not independently re-derived.
+
+**Why identity at this site matters — #1288's own reproduction, verbatim and measured.** A
+`mid.mdk` doing `export import p.*` + `export import g.*` merges two unrelated `Same`
+interfaces; an importer's `impl Same P` gets `implOrigin = g` while the method `pmth` it
+defines belongs to `p.Same`, and the goal `TkIdent p Same` misses the impl's `TkIdent g Same`
+bucket. Result: `No impl of Same for P` on a program whose `impl Same P` is three lines up,
+with no syntax available to say which `Same` was meant. The bare compatibility leg does NOT
+cover this — it protects goal-WITHOUT-identity against impl-WITH-identity, and this is
+goal-with-identity against impl-with-a-DIFFERENT-identity.
 
 **Census check, done rather than assumed — and narrower than an earlier revision claimed.**
 After this change exactly one `ifaceRefBare` call site remains besides its own definition —
@@ -2582,6 +2717,197 @@ adjacent to the OPEN #1288 re-export-merge family), noted here so it is not redi
 as "caused by U1c".
 
 ---
+
+## 11. A-2.0 registry substrate — the `RegKey` design record
+
+Relocated verbatim (with the Medaka `-- ` comment prefix stripped) from
+`compiler/types/registry.mdk`, which carried it as in-source header prose for the module
+landing the `Registry`/`MultiRegistry`/`SetRegistry` combinators (A-2.0, #1111, §2 K / §6 A-2
+above). A pointer sentence stands at the extraction site in source.
+
+### 11.1 What the target tables need: COMPOSITE keys (`RegKey`)
+
+An `Ident` names ONE declaration, and at least five tables A-2 must convert
+are keyed by a TUPLE. Sizing the API to `Ident` alone would force each of
+those conversions to re-invent a bare-string composite INSIDE the identity
+(e.g. stuffing `"Foo@3"` into an `Ident`'s name field), which re-introduces
+exactly the un-keyed string this arc exists to remove and forces a lie
+about which `Ns` the thing is in. So `RegKey` is the key type and `Ident`
+is its one-element case:
+
+  ⚠️ #1112 A-3.4 PR2 renamed one row's ANCHOR, not its key: the concrete
+  obligation bucket used to be cited as `obUnivConcreteRef`, a `CrossRun`
+  accumulator that unit DELETED. The key is unchanged; it is minted by
+  `insertUnivImplAt` into `ImplUniverse`, which the Module path now gets
+  from `ieUniverseAt` and the Flat path from `buildImplUniverse`.
+
+  | table                            | key                      | site          |
+  |----------------------------------|--------------------------|---------------|
+  | `universeIfaceParamKinds`        | TabKey × Int  ✅ A-2.4    | typecheck.mdk |
+  | `ImplUniverse` concrete bucket   | Ident × Ident            | typecheck.mdk |
+  | `checkCallObligationsU` dedup    | Ident × [Option Ident]   | typecheck.mdk |
+  | `methodReqCountRef`              | Ident × Ident            | eval.mdk      |
+  | `ifaceDispatchRef`               | Ident × Ident            | eval.mdk      |
+
+Three of the five are pure identity tuples (`regKeyN`); one pairs an
+identity with a parameter SLOT, which is an ordinal and not a declaration —
+it has no namespace and no origin, so it is carried in `RegKey`'s second
+component (`regKeyTabAt`) rather than faked as an `Ident`.
+
+⚠️ ROW 1 SAID `Ident × Int` UNTIL A-2.4 CONVERTED IT, AND THE CORRECTION IS
+NOT COSMETIC. `Ident` has no identity-less inhabitant by design, and this
+table is read on the FLAT driver path as well as the module path
+(`checkGradedImplTys` ← `checkBodyImpl`, shared by both arms), where every
+user declaration is `OriginUnresolved` until #1115. An `Ident`-only key
+would have silently stopped registering and looking up anything there — see
+`RegKey`'s own doc-comment for the full derivation. The remaining four rows
+are stated as A-2.0 sized them; the unit that converts each owes the same
+question ("is this table read on the flat path?") rather than inheriting
+this row's answer.
+
+🚨 `ifaceDispatchRef` HAS NOW BEEN ASKED THAT QUESTION, AND THE ANSWER IS
+YES — SO ITS ROW ABOVE IS MIS-SIZED. #1113 Phase 4 re-keyed that table and
+measured the flat-path half: the flat/loader-less drivers (`medaka check`
+on a no-import file, `lsp`, `repl`, `doc`, the playground) stamp nothing
+(`stampFlatTyOrigins`), so on those paths EVERY row and EVERY query carries
+the absent identity and an `ifaceIdMatches` tier answers None for all of
+them. Its key is therefore NOT the `Ident × Ident` this row states: it is
+TWO-TIERED — identity when one is present, bare SPELLING when it is not —
+and `lookupPositions` (`eval.mdk`) is where both tiers live.
+
+⚠️ A `regKeyN [ifaceIdent, methodIdent]` conversion DELETES THE SPELLING
+TIER, and the loss is silent: `Ident` has no identity-less inhabitant, so
+every flat-path lookup would miss and fall through `lookupPositions`' `[0]`
+fail-open default, quietly changing arg-tag admissibility — and therefore
+dispatch — on all five drivers above. That is ROW 1's hazard exactly, one
+row down, which is why this is written here rather than left for the next
+agent to re-derive. Until identity SUPPLY is total (#1115 E-1 gives the
+flat path module ids) this row's honest sizing is `(Ident | String) ×
+String`; at total supply the spelling tier becomes dead and the row becomes
+true as written. `methodReqCountRef` — installed from the same decl list by
+the same call — has NOT been asked this question and still owes it.
+
+🚨 THE FIFTH ROW IS `[Option Ident]`, NOT `[Ident]`, AND THE DIFFERENCE
+RE-OPENS #607. This row read `Ident × [Ident]` until round 2 of this PR's
+review; that shape is not merely imprecise, it is a live conflation hazard,
+so the derivation is spelled out here rather than left to the next unit.
+The key today is (`types/typecheck.mdk:15171`):
+
+    let key = joinWith "," (iface :: map (o2 => optionOr "" (headTyconMono o2)) occs)
+
+`headTyconMono : Mono -> Option String`, so a POSITION CAN BE ABSENT and
+the `""` is a POSITIONAL PLACEHOLDER, not a name. Absent positions really
+do reach this key on the dedup channel: `checkOneCallObligation` has an
+explicit `else if not (allConcreteHeads args)` arm (`:15214-15215`) which
+on the CALL channel (`dedup=True`) runs `checkUndeterminedObligations`, so
+a non-ground obligation is checked AND its key is added to `seen`.
+
+Concrete failure the `[Ident]` shape invites. Take `interface Ix a b` and
+two CALL-channel obligations `Ix Int b0` (argument 1 undetermined) and
+`Ix a0 Int` (argument 0 undetermined). Today the keys are `"Ix,Int,"` and
+`"Ix,,Int"` — DISTINCT, so both get an ambiguity diagnostic. Convert to
+`regKeyN (ifaceIdent :: presentHeads)` — which is what `Ident × [Ident]`
+implies, since an `Ident` cannot be absent — and both become the SAME
+`RegKey`; the `dedup && contains key seen` guard skips the second and ONE
+DIAGNOSTIC IS SILENTLY LOST. That is exactly the conflation the
+whole-vector key was introduced to prevent (`typecheck.mdk:15161-15163`,
+#607), re-introduced by a key shape that cannot express absence.
+
+The chosen ENCODING, so the next unit does not have to re-derive one. Absence is
+positional, so carry the positions in the ordinal block, which is what it
+is for:
+
+    regKeyNAt (ifaceIdent :: presentHeads) (arity :: presentIndices)
+
+where `presentHeads` are the identities of the positions whose
+`headTyconMono` was `Some`, in argument order, and `presentIndices` are
+those positions' 0-based indices. Injective: `regKeyRender` already reads
+the ident count, then exactly `4n` netstrings, then ordinals, so the two
+blocks never interfere. On the example, `Ix Int b0` renders with ordinals
+`[2, 0]` and `Ix a0 Int` with `[2, 1]` — different keys, both diagnostics
+kept. The `arity` element is not decoration: WITHOUT it the encoding is
+injective only if an interface's arity is fixed, which is true today but is
+an unstated premise living in another file; with it, injectivity is a
+property of the encoding alone.
+
+⚠️ A SECOND ABSENCE, in the same row, from a different cause. Turning a
+`headTyconMono` name into an `Ident` needs that head's `TyConOrigin` —
+`Mono`'s `TCon String TyConOrigin` carries one — and on the FLAT
+single-file path it is `OriginUnresolved`, so `mkIdent` returns `None`
+there for a position whose head IS concrete. So `Option` in this row covers
+two distinct facts: "this argument has no head type constructor" and "this
+head has no module identity yet". The conversion must not collapse them
+into one placeholder: the first is a property of the obligation and must
+key differently per position (above); the second is the Module-path-only
+residual `Ns`' doc-comment in `frontend/ast.mdk` states, and on the flat
+path this table simply keeps its string key until #1115 (E-1).
+
+`regKeyRender`'s injectivity, in one line: the leading netstring is the
+IDENT COUNT `n`, so a decoder reads `n`, then exactly `4n` netstrings (the
+identity block), and everything after is ordinals. No reading depends on
+what any tag or name happens to look like.
+
+⚠️ THE COUNT PREFIX IS DEFENSE IN DEPTH, AND IT HAS NO BEHAVIOURAL WITNESS
+— verified by mutation, not asserted. Deleting it leaves the render
+injective ANYWAY today, because the alternative reading (an ordinal
+netstring mistaken for the start of an identity group) would need some
+`nsTag` to be a decimal-digit string, and none is. MEASURED 2026-08-03:
+deleting the prefix left every PROPERTY-level doctest in this file passing
+(76/76 at the time), which is why the three `startsWith "1:…"` assertions
+below were added — they are the only thing that reds it. RE-MEASURED on the
+round-2 file (93 doctests): deleting the prefix gives 90/93, and the three
+failures are exactly those three lines. So the
+prefix buys exactly one thing: it makes injectivity independent of
+`nsTag`'s alphabet, an invariant that otherwise lives silently in a
+different function and that a seventh namespace could break without any
+signal. It is kept for that reason, and those three doctests exist solely
+because no property-level test can distinguish its presence.
+
+⚠️ COUNTING THE BYTE-SHAPE ASSERTIONS: they fall in two groups with two
+different jobs. `startsWith "1:…"` lines pin the ident-COUNT prefix,
+described in this paragraph; `identKey … == "…"` and `tabKeyRender (TkBare
+…)` lines pin the origin/bare TAG, described at their own sites further
+down (A-2.4 added one of each: a count-prefix line on a `TabKey`-built key,
+and `tabKeyRender (TkBare NsType "Foo") == "4:type4:bare0:3:Foo"`). All are
+the documented exception to `registry.mdk`'s opacity contract. DERIVE the
+count from the file, never re-encode it — and match `TkBare`, not the wider
+`Tk`, which also catches the identity-arm PROPERTY line (`tabKeyRender
+(TkIdent …) == identKey …`) that asserts no bytes at all:
+`grep -c '^-- > \(startsWith "1:\|identKey ident.* == "\|tabKeyRender (TkBare\)' `
+`compiler/types/registry.mdk`.
+
+### 11.2 `regInsert` conflict handling (decided for the A-2.0 unit only)
+
+Per `docs/spec/DICT-SEMANTICS.md` §8 I4, declarations are never rejected —
+only USE sites are — so once every table is keyed by `Ident`, two
+genuinely distinct declarations get genuinely distinct identities and
+coexist; a `regInsert` collision after re-keying means the REGISTRY'S OWN
+KEYING is broken (a compiler bug), not a user error to diagnose at the
+declaration. `regInsert` is therefore LAST-WRITE-WINS, matching every
+existing `universe*` table's current behavior, and `regInsertChecked`
+returns a `Bool` alongside the new registry saying whether an existing
+entry under that exact key was overwritten — the signal a later unit
+(A-2.8) can turn into a diagnostic once the diagnostic-code family
+question (`T-INTERNAL-REGISTRY-CONFLICT` vs. a resolve-phase
+`R-AMBIGUOUS-*` code) is settled. Deliberately NOT decided here.
+So `Registry` is a LAST-WRITE-WINS map, and it must not be described as
+a "write-once-or-diagnose" one — that phrase belongs to this design doc's
+own description of what A-2 will EVENTUALLY deliver, not to the substrate
+module's own behavior today.
+
+### 11.3 What a conversion still has to review, table by table (NOT "pure")
+
+A re-keying is NOT automatically behavior-preserving. At least one named
+target: `regEntries` enumerates in `regKeyRender` order (a
+sorted `OrdMap`), while several targets are assoc `List`s enumerated in
+DECLARATION order — `rejectCyclicAliases` (`types/typecheck.mdk`) walks
+its alias table in that order and `emitCyclicAliasErrors` emits in the
+order the DFS produced, so converting it moves DIAGNOSTIC ORDER and hence
+goldens. Every conversion PR owes an explicit answer to "does any consumer
+of this table depend on its enumeration order?", and where the answer is
+yes it owes either an order-preserving side list or a reviewed golden
+move. What IS preserved by construction is the last-write-wins RESOLUTION
+of a duplicate key, not the ORDER a whole-table walk produces.
 
 ## References
 

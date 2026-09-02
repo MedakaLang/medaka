@@ -829,9 +829,9 @@ over `HashMap a Unit`, same reasoning as `set` over `Map a Unit`).
 - **Instances:** `Foldable`, `Eq` (order-independent), `Debug`.
 - 7 doctests.
 
-### `mut_array` ✅ implemented — see Module 8 below
+### `vector` ✅ implemented — see Module 8 below
 
-A growable mutable array (vector) over the fixed-size `Array` — `stdlib/mut_array.mdk`. See **Module 8** for the full API. (This `⏳ unstarted` note was stale; corrected 2026-06-18.)
+A growable array over the fixed-size `Array` — `stdlib/vector.mdk`. See **Module 8** for the full API. (This `⏳ unstarted` note was stale; corrected 2026-06-18.)
 
 ### Compiler notes
 
@@ -881,14 +881,14 @@ stdin-line iteration helpers, `withFile`-style bracketing, `removeFile`/`rename`
 
 ---
 
-## Module 8 — `mut_array` ✅ implemented
+## Module 8 — `vector` ✅ implemented
 
-A **growable mutable array** (dynamic array / vector) — `stdlib/mut_array.mdk`.
-The counterpart to the fixed-size `Array` (Module 4): `MutArray a` is backed by
+A **growable mutable array** (dynamic array / vector) — `stdlib/vector.mdk`.
+The counterpart to the fixed-size `Array` (Module 4): `Vector a` is backed by
 an `Array a` with spare capacity, so `push` is **amortized O(1)** (the backing
 doubles when full, the same resize trick as the Module 6 hash tables).
 
-**Representation.** `data MutArray a = MutArray (Ref (Array a)) (Ref Int)` —
+**Representation.** `data Vector a = Vector (Ref (Array a)) (Ref Int)` —
 `backing.value` is the capacity-sized store, `len.value` the live count
 (`0 <= len <= capacity`). Slots `[len, capacity)` are scratch (never read). The
 type is declared in the module and registered via the normal `DData` pipeline,
@@ -898,13 +898,13 @@ so it is **not** in `resolve.ml`'s `primitive_types` (mirrors `Map`/`Set`).
 first `push`, using the pushed element as the grow-fill — so constructing an
 empty vector needs no default value of `a`.
 
-- ✅ Construction: `new : Unit -> MutArray a`, `fromList`, `fromArray` (copies)
+- ✅ Construction: `new : Unit -> Vector a`, `fromList`, `fromArray` (copies)
 - ✅ Observation (pure): `capacity`, `get` (bounds-checked `Option`), `first`,
   `last`; `length`/`isEmpty`/`toList` via `Foldable`
 - ✅ Conversion: `toArray` (snapshot of the live range into a fresh `Array`)
 - ✅ Mutation (untracked, no effect row): `push` (amortized O(1), doubling), `pop` (returns
   `Option`), `set` (panics OOB), `swap`, `clear` (keeps capacity), `mapInPlace`
-- ✅ Instances: `Foldable MutArray` (index-based folds, never allocates a list),
+- ✅ Instances: `Foldable Vector` (index-based folds, never allocates a list),
   `Eq` (element-wise over the live range), `Debug` (`fromList [..]`)
 - 11 doctests. **Skipped:** `Mappable` (use `mapInPlace`, or `toList`→`map`);
   growth/shrink heuristics beyond doubling.
@@ -916,7 +916,7 @@ claimed a "pre-existing, language-level" limitation: that a **generic
 its argument's instance came from an *imported* module (while direct method
 calls like `length v`/`toList v` worked). **That is no longer true** —
 empirically `sum`/`maximum`/`minimum`/`product` over imported `array`,
-`mut_array`, `set`, and `hash_set` instances all dispatch correctly on `main`.
+`vector`, `set`, and `hash_set` instances all dispatch correctly on `main`.
 The cross-module dict-passing gap was closed by the eval-driver ordering work in
 **Phases 125–126** (`eval_modules`/`eval_modules_root_env` thread the full
 local∪imports∪global env, so the generic helper's internal dict resolves against
@@ -1029,7 +1029,7 @@ names were dropped on promotion.)
 ## Module 12 — `bytebuilder` ✅ implemented
 
 `stdlib/bytebuilder.mdk` — the symmetric **byte-output builder**, inverse of
-`byteparser`.  A `Builder` backed by a growable `MutArray Int` accumulates bytes
+`byteparser`.  A `Builder` backed by a growable `Vector Int` accumulates bytes
 in amortised-O(1) `push`; `buildArray` freezes the emission-order range into a
 fixed `Array Int` (no reverse pass).  Each `emit*` writes in the byte order its
 matching `byteparser` decoder expects, so `encode → decode` round-trips exactly.
@@ -1342,7 +1342,7 @@ an effect label).
 | 6 hash_map | `hash_map.mdk` | M | `set`/`delete`/`fromList` mutate in place, untracked; all queries pure |
 | 6 hash_set | `hash_set.mdk` | M | Same as hash_map |
 | 7 io | `io.mdk` | H (`<IO>`) | Entirely host-capability; not available without the `<IO>` grant |
-| 8 mut_array | `mut_array.mdk` | M | `push`/`pop`/`set`/`swap`/`clear`/`mapInPlace` mutate in place, untracked; capacity/length queries pure |
+| 8 vector | `vector.mdk` | M | `push`/`pop`/`set`/`swap`/`clear`/`mapInPlace` mutate in place, untracked; capacity/length queries pure |
 | 9 json | `json.mdk` | P | `parse`/`stringify` are fully pure; transiently allocates arrays but the mutation never escapes |
 | 25 args | `args.mdk` | P | Fully pure; a CLI spec is data, parsing is a fold over it |
 | 10 test | `test.mdk` | P + H | `Expectation` ADT + assertion helpers are P; `runTests` → `<IO>` (prints results to stdout) |

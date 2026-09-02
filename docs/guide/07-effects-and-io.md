@@ -1,26 +1,14 @@
 # Effects & IO
 
-Here is the mechanism, up front: **in Medaka, imperative IO is a bare indented block.**
-No `do` keyword, no wrapper type to unwrap — you write the statements one under the
-other and they happen in that order.
+You have been doing IO since chapter 1: a `println` in `main` prints. This chapter
+explains what the compiler was tracking while you did it, and how to read and write
+the effect row that appears in a signature.
 
-```medaka
-main =
-  println "reading the ledger"
-  println "3 entries"
-  println "done"
-```
+## IO is a sequence of statements
 
-```medaka-expect
-reading the ledger
-3 entries
-done
-```
-
-That is the whole mechanism. An indented block under `=` is a sequence of statements
-whose value is the value of the last one; a statement that performs IO performs it
-where it is written. `let` works inside such a block, so does `if`, so does a nested
-block, and so does a call to another function that does IO.
+To do several things in order, write them one per line, indented under the
+definition. There is no keyword to open such a block and no wrapper type around the
+result.
 
 ```medaka
 banner : String -> <IO> Unit
@@ -42,81 +30,16 @@ August
 month closed
 ```
 
-If you are coming from Haskell or F#, the instinct is to reach for `do`. Do
-not. `do` exists in Medaka and [chapter 8](08-do-and-thenables.md) is about it, but it
-is sugar for chaining `Option`, `Result`, and other `Thenable` values, and it does not
-sequence IO. The compiler says so directly:
+A block's value is the value of its last statement. `let`, `if`, nested blocks, and
+calls to other functions that do IO all work inside one. The only rule is that a
+statement whose value is not `Unit` cannot stand on its own; the compiler will not let
+a result be thrown away silently.
 
-```
-error: probe.mdk:3:12: this `do` block needs a Thenable value here (like `Option` or
-`Result`), but got Unit. If Unit isn't itself monadic, use 'let' instead of '<-' to
-bind it.
-  |
-3 |     println "step one"
-  |             ^
-```
+## The effect row
 
-(A second, cascading "Ambiguous instance for `Display`" error follows it, pointing at
-the `do` keyword; fixing the first makes it go away too.)
-
-Side by side, so the difference is concrete. The bare block sequences three effects
-and produces `Unit`:
-
-```medaka
-main =
-  println "step one"
-  println "step two"
-  println "step three"
-```
-
-```medaka-expect
-step one
-step two
-step three
-```
-
-The `do` block chains three computations that might each fail, and produces an
-`Option`:
-
-```medaka
-step : Int -> Option Int
-step n = if n < 100 then Some (n * 2) else None
-
-chain : Int -> Option Int
-chain start = do
-  a <- step start
-  b <- step a
-  c <- step b
-  pure c
-
-main =
-  println (chain 1)
-  println (chain 40)
-```
-
-```medaka-expect
-Some 8
-None
-```
-
-Same keyword-free layout, entirely different job. One is *when things happen*; the
-other is *what happens if a step declines to produce a value*.
-
-> ⚠️ **`<-` is only legal inside a `do` block.** It is the one construct that reliably
-> leaks from the `Thenable` world into the IO one, because it is what every other
-> language's IO block is built from. In a bare block it is a located error naming the
-> fix:
->
-> ```
-> error: probe.mdk:5:16: `<-` bind is only valid inside a `do` block. For IO
-> sequencing use a bare indented block without `<-`
-> ```
-
-## The effect row is the contract
-
-If IO is not tracked by a wrapper type, what stops any function anywhere from
-printing? The type does. A signature may carry an **effect row** — a comma-separated
-list of labels in angle brackets, sitting where the arrow's effects belong.
+If IO is not marked by a wrapper type, what stops any function from printing? The
+signature does. A function type can carry an effect row, a list of labels in angle
+brackets in front of the result type:
 
 ```medaka
 double : Int -> Int
@@ -135,26 +58,28 @@ main =
 loud
 ```
 
-`double` has no row, which means it performs no effects, and the compiler holds it to
-that. Adding a `println` to its body is a type error, not a code review comment:
+`shout` says `<IO>`, so it may print. `double` has no row, which means it performs no
+effects, and the compiler holds it to that. Add a `println` to its body and checking
+fails:
 
 ```
 error: probe.mdk:4:2: Effectful value used where <> is allowed, but it performs <IO>
 error: probe.mdk:4:2: Function 'double' declared with <> but also performs <IO>
 ```
 
-This is the payoff. A function's *signature* tells you whether calling it can touch
-the world, and the answer is checked. You do not have to read the body, and you do
-not have to trust a naming convention.
+So a signature tells you whether a function can touch the outside world, and the
+answer is checked. You do not have to read the body, and you do not have to trust a
+naming convention.
 
-Rows are inferred, so you only write one when you want the documentation — but on a
-top-level definition you almost always do.
+Effect rows are inferred like everything else, so the compiler would have worked out
+`<IO>` for `shout` on its own. Write the row on top-level definitions anyway, for the
+same reason you write the rest of the signature.
 
-## The labels are capabilities
+## Labels name capabilities
 
-Every label in a row names a host capability. The built-in vocabulary is `Stdout`,
-`Stderr`, `Stdin`, `Clock`, `Env`, `Exec`, `Rand`, `Net`, `FileRead`, `FileWrite`,
-and `FFI`, and you can write them individually:
+Each label in a row names something in the host environment. The built-in labels
+are `Stdout`, `Stderr`, `Stdin`, `Clock`, `Env`, `Exec`, `Rand`, `Net`, `FileRead`,
+`FileWrite`, and `FFI`. A row can name them individually:
 
 ```medaka
 nap : Int -> <Clock> Unit
@@ -174,12 +99,11 @@ main =
 unset
 ```
 
-`IO` is the coarse alias over that vocabulary: a bound of `<IO>` admits any of the
-narrow labels above except `FFI`, which has to be named literally because it crosses
-out of the language. So `<Clock, IO>` is legal, and means exactly what `<IO>` means —
-`IO` already covers `Clock`. Write `<IO>` when you mean "this touches the world", and
-write the narrow labels when you want the signature to be specific about *which* part
-of the world.
+`IO` is the umbrella label. A row of `<IO>` permits any of the labels above except
+`FFI`, which has to be named on its own because it leaves the language. Write `<IO>`
+when you mean "this touches the world" and the specific labels when you want the
+signature to say which part of the world. `<Clock, IO>` is legal and means the same
+as `<IO>`, since `IO` already includes `Clock`.
 
 ```medaka
 tick : String -> <Clock, IO> Unit
@@ -197,20 +121,50 @@ first
 second
 ```
 
-Going the other way does not work: `println` is declared `<IO>` in the prelude, so a
-function that calls it cannot claim the narrower `<Stdout>`. Narrowing what a caller
-must permit is the unsafe direction, and it is refused.
+A function cannot claim a narrower row than the functions it calls. `println` is
+declared `<IO>` in the prelude, so a function that calls it cannot be annotated
+`<Stdout>`. Narrowing what a caller has to permit would hide an effect, and the
+compiler refuses it.
 
-Custom `effect` labels, the capability platform that decides who may supply one, and
-effect *variables* (`<e>`, and open rows like `<IO | e>`) are all real and all out of
-scope here — see [the syntax reference](../spec/SYNTAX.md) for the spellings.
+You can declare your own labels with `effect`, and rows can contain variables
+(`<e>`) and open tails (`<IO | e>`) so that a higher-order function can pass its
+argument's effects through. Those are out of scope for this guide; the
+[syntax reference](../spec/SYNTAX.md) has the spellings.
+
+## What `do` is not
+
+If you have used a language where IO lives in a `do` block, do not reach for `do`
+here. Medaka has `do`, and chapter 8 is about it, but it is for chaining `Option`,
+`Result`, and similar values, not for sequencing IO. Putting `println` statements in
+a `do` block is an error:
+
+```
+error: probe.mdk:3:12: this `do` block needs a Thenable value here (like `Option` or
+`Result`), but got Unit. If Unit isn't itself monadic, use 'let' instead of '<-' to
+bind it.
+  |
+3 |     println "step one"
+  |             ^
+```
+
+A second error, `Ambiguous instance for Display`, follows it and points at the `do`
+keyword. It is a consequence of the first. Fixing the first clears both.
+
+> ⚠️ **`<-` only works inside `do`.** It is the piece of `do` syntax that most often
+> leaks into a plain block, because it is what other languages build IO blocks from.
+> In a plain block it is an error that names the fix:
+>
+> ```
+> error: probe.mdk:5:16: `<-` bind is only valid inside a `do` block. For IO
+> sequencing use a bare indented block without `<-`
+> ```
 
 ## Mutation is not an effect
 
-`Ref` cells, from [chapter 2](02-expressions.md), are the other thing people mean by
-"side effect", and Medaka deliberately does not track them. Writing a cell carries no
-effect label, so a function that allocates a `Ref`, mutates it, and reads it back is
-*pure* — and the compiler agrees:
+`Ref` cells, from chapter 2, are the other thing people mean by "side effect", and
+Medaka does not track them. Writing to a cell carries no label. A function that
+allocates a `Ref`, mutates it, and reads it back is pure as far as the type system
+is concerned:
 
 ```medaka
 sumTo : Int -> Int
@@ -227,21 +181,23 @@ main = println (sumTo 10)
 55
 ```
 
-`sumTo` has no row and does not need one. The reasoning is that a `Ref` created
-inside a function and never handed out is invisible from the outside: same input,
-same output. What the effect row tracks is the *observable* boundary — the console,
-the filesystem, the clock, the network — not every assignment.
+`sumTo` has no row and needs none. A `Ref` created inside a function and never
+handed out is invisible from outside: same input, same output. (The `let _ =` is
+there because `map step …` produces a `List Unit`, and a statement is not allowed
+to discard a non-`Unit` value silently. Binding it to `_` says the discard is
+intended.) The row tracks the
+observable boundary, meaning the console, the filesystem, the clock, and the
+network, not every assignment.
 
-> ⚠️ **An empty effect row is not a purity certificate.** It says the function cannot
-> reach the world; it does not say the function never mutates. A `Ref` that is passed
-> in as an argument and written to is still `<>`, and its writes are still visible to
-> whoever handed it over. Read the parameter types, not just the row.
+> ⚠️ **An empty row does not mean "no mutation".** It means the function cannot
+> reach the world. A `Ref` passed in as an argument can still be written to by a
+> function with no row, and the caller sees the write. Read the parameter types, not
+> only the row.
 
 ## The expense log, from a file
 
-The running example has been a literal list so far. Real ledgers live on disk. File
-access is `<IO>` like everything else, and the read hands back a `Result` because it
-can fail.
+The ledger has been a literal list so far. Real ledgers live on disk. File access is
+`<IO>` like everything else, and the read returns a `Result` because it can fail.
 
 ```medaka
 import io.{readLines}
@@ -270,18 +226,16 @@ wrote expenses.log
 2
 ```
 
-Two shapes are worth copying out of that. The failure is a value — `readLines`
-returns `Result String (List String)`, so there is nothing to catch and nothing that
-can be forgotten, only a `match` you cannot skip. And the effects and the failures
-are tracked by two *different* mechanisms that happen to appear together: `<IO>` in
-the row says the function touches the disk, `Result` in the return type says the
-touch might not work. Neither one implies the other.
+The failure is a value. `readLines` returns `Result String (List String)`, so there
+is nothing to catch and nothing to forget, only a `match` you cannot skip. Notice
+also that the effect and the failure are tracked separately. `<IO>` in the row says
+the function touches the disk. `Result` in the return type says the touch might not
+work. Neither implies the other.
 
-> **Coming from Haskell?** `readLines path` is not an `IO (Either …)` action you
-> build and then run — it *is* the read, performed where you wrote it, and its type
-> is the value it produced. The effect row replaces the `IO` wrapper, so there is no
-> `runIO`, no unwrapping, and no `IO` in a type constructor position.
+> **Coming from Haskell?** `readLines path` is not an action you build and later
+> run. It performs the read where it is written, and its type is the value it
+> produced. The effect row replaces the `IO` wrapper, so there is no `IO` in a type
+> constructor position anywhere.
 
-Turning those lines into `Expense` values is a chain of steps that can each fail —
-which is exactly the job `do` was built for, and exactly where
-[chapter 8](08-do-and-thenables.md) picks up.
+Turning those lines into `Expense` values is a chain of steps that can each fail,
+which is the job of `do`. [Chapter 8](08-do-and-thenables.md) picks up there.

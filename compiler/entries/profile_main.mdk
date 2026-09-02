@@ -50,8 +50,10 @@ import types.typecheck.{
 }
 import eval.eval.{funNamesOf, dropShadowedExp}
 import ir.core_ir_lower.{
+  ifaceImplHeadTable,
   declaredRecordFieldOrders,
   lowerProgramEmit,
+  EmitTarget(..),
   returnsSelfTable,
   selfFnParamTable,
   methodIfaceTable,
@@ -68,7 +70,7 @@ import backend.llvm_emit.{emitProgram, makeEmitInput}
 -- names above. Aliased on import, exactly as tools/snapshot.mdk does for the same
 -- clash. The `W` suffix marks the WasmGC peer; the un-suffixed names stay LLVM's, so
 -- an unqualified `emitProgram` in this file still means what it has always meant.
-import backend.wasm_emit.{emitProgram as wasmText, makeWasmEmitInput}
+import backend.wasm_emit.{emitProgram as wasmText, makeWasmEmitInputFull}
 import tools.fmt.{formatSource}
 import frontend.exhaust.{checkGuardExhaustivenessWith}
 import support.timer.{
@@ -177,11 +179,10 @@ runStaged on targetPath rsrc csrc tsrc =
   let _ = checkOneToLinesWithRuntime rDecls cDecls desugared
   let tT1 = now ()
   let _ = emitPhaseAO on "typecheck" (tT1 - tT0) (allocSnap () - aT0) declsOp (opSnap () - oT0)
-  -- BACKEND. Until 2026-07-16 this profiler stopped at typecheck, so the O(n^2)
-  -- detector (test/diff_compiler_perf_scaling.sh) graded NO backend stage and every
-  -- emitter quadratic was invisible to it (issue #359). Same lesson as
-  -- `exhaust-guards` above, one pipeline half later: an unprofiled stage is an
-  -- unprofilable bug.
+  -- BACKEND. History of when these stages were added:
+  -- `compiler/PERF-RESULTS.md` "History note — entries/profile_main.mdk gained backend
+  -- stages". Same lesson as `exhaust-guards` above, one pipeline half later: an
+  -- unprofiled stage is an unprofilable bug.
   --
   -- Mirrors entries/llvm_emit_typed_main.mdk (the typed LLVM driver): elaborateDict
   -- stamps dict routes, lowerProgramEmit produces Core IR, emitProgram renders the
@@ -234,6 +235,12 @@ runStaged on targetPath rsrc csrc tsrc =
     (declSigTypeNames rDecls ++ declSigTypeNames combined)
     (mainTypeIsUnit ()) (mainTypeIsFloat ()) 0 [] [] targetPath (declaredRecordFieldOrders combined)
     (validateFfiExternTypeNames (checkedFfiExternTypeNames combined))
+    -- `combined`, not `live`: this driver builds every other input table from
+    -- `combined` too, and DCE (which produces `live`) runs in its OWN timed stage
+    -- below, so reading it here would move that stage's work into `elaborate`.  The
+    -- head table is a strict superset of `live`'s, and this driver DISCARDS its
+    -- emitted IR (it measures stages), so the difference is unobservable.
+    (ifaceImplHeadTable combined)
   let tEl1 = now ()
   let _ = emitPhaseAO on "elaborate" (tEl1 - tEl0) (allocSnap () - aEl0) declsOp (opSnap () - oEl0)
   -- dce: source DCE, as the real build driver does it in default (whole-module) mode.
@@ -268,7 +275,10 @@ runStaged on targetPath rsrc csrc tsrc =
   let tLw0 = now ()
   let aLw0 = allocSnap ()
   let oLw0 = opSnap ()
-  let cprog = lowerProgramEmit live
+  -- #1970: `cprog` is REUSED for both the LLVM `emit` stage right below and the
+  -- separately-timed WASM stage further down (see the comment there) -- one
+  -- lowering feeds both backends, so this cannot narrow to either.
+  let cprog = lowerProgramEmit TargetBothUnknown live
   let tLw1 = now ()
   let _ = emitPhaseAO on "lower" (tLw1 - tLw0) (allocSnap () - aLw0) declsOp (opSnap () - oLw0)
   let tE0 = now ()
@@ -277,46 +287,13 @@ runStaged on targetPath rsrc csrc tsrc =
   let _ = emitProgram input cprog
   let tE1 = now ()
   let _ = emitPhaseAO on "emit" (tE1 - tE0) (allocSnap () - aE0) declsOp (opSnap () - oE0)
-  -- WASM EMIT — the second half of issue #359. The `emit` stage above grades ONLY
-  -- llvm_emit; wasm_emit is a whole separate ~10k-line backend that was just as
-  -- unprofiled, and it is not a hypothetical: #381 was a CUBIC in WasmGC ctor-switch
-  -- emission (O(ctors x branches x table)), fixed by #401 for a 53x win at N=400.
-  -- Nothing but this stage stops it coming back.
-  --
-  -- ⚠️ THE TWO BACKENDS DIVERGE ON EXACTLY THIS AXIS, which is why one `emit` stage
-  -- cannot stand in for both: `ctorOrdinal`'s whole-table scan is SHARED, but only
-  -- wasm nests it inside a (slot, branch) loop — so the same shape that is quadratic
-  -- on llvm was cubic on wasm. A wasm regression is structurally invisible to the
-  -- llvm row and vice versa.
-  --
-  -- Mirrors entries/wasm_emit_modules_main.mdk's `emitTail` (the REAL wasm build
-  -- path): the same WasmEmitInput producers fed from the SAME post-DCE decls
-  -- (`live`), then emitProgram over the Core IR.
-  --
-  -- `cprog` IS REUSED FROM THE `lower` STAGE ABOVE — deliberately, and it is not a
-  -- shortcut. Core IR is backend-agnostic (both llvm_emit_modules_main and
-  -- wasm_emit_modules_main emit from the identical `lowerProgramEmit allDecls`), so
-  -- re-lowering would time lowering twice and fold it into a stage named "wasm-emit".
-  -- Rule 1 of the gate: grade a stage, never a sum.
-  --
-  -- WasmEmitInput construction sits OUTSIDE the timer: it is table-building, not
-  -- emission. The same caveats as `lower`/`emit` apply verbatim —
-  -- DCE exercised, prelude constant NOT subtracted, single-file/no-link — so read a
-  -- ratio here as a LOWER BOUND on the true exponent.
-  --
-  -- No wasm TOOLCHAIN is needed: emitProgram renders TEXT WAT and this stage never
-  -- assembles or runs it, so this adds no node/wasm-tools dependency to the gate's CI
-  -- shard. That is NOT the same as free, and the difference is worth stating: wasm_emit
-  -- is ~10x slower than llvm_emit on identical input (~0.215 s vs ~0.021 s just for the
-  -- prelude, 42 s vs 12 s at xref N=16000).
-  --
-  -- ⚠️ SO IT IS OPT-IN, VIA MEDAKA_PERF_WASM — see wasmStage below. This stage used to
-  -- run on EVERY invocation the gate made, which cost `gates (types)` ~277 s and made it
-  -- the CI CRITICAL PATH at 12 min against engines' 3.7 min. The old note here priced
-  -- that at "~5 minutes, paid deliberately: `types` is not the critical path (`gates
-  -- (engines)`, ~5.8 min, is)" — both halves of that premise have since gone stale, and
-  -- the conclusion with them. Shards are scheduled by COST, so a stage that outgrows its
-  -- shard's budget has to be re-priced, not grandfathered.
+  -- WASM EMIT — issue #359's second half (the llvm `emit` stage above grades only
+  -- llvm_emit; this stage grades the separate ~10k-line wasm_emit backend, which
+  -- has its own complexity class from llvm's — see #381/#401). DCE-exercised
+  -- exactly as `lower`/`emit` are, needs no wasm toolchain (renders text WAT
+  -- only, never assembled/run), and is opt-in via MEDAKA_PERF_WASM (see
+  -- `wasmStage` below) because it is ~10x slower than llvm_emit on identical
+  -- input. Full backend-divergence spec: `docs/spec/WASM-SEMANTICS.md` §6.
   let _ = wasmStage on (perfWasmEnabled ()) rDecls live cprog declsOp
   -- fmt: the whole comment-preserving format pass (collectComments +
   -- parseWithPositions + formatProgram).  Profiled because it was NOT before, and
@@ -391,7 +368,7 @@ runStaged on targetPath rsrc csrc tsrc =
 wasmStage : Bool -> Bool -> List Decl -> List Decl -> CProgram -> String -> <IO> Unit
 wasmStage _ False _ _ _ _ = ()
 wasmStage on True runtimeDecls live cprog declsOp =
-  let input = makeWasmEmitInput (methodIfaceTable live) (declSigTypeNames runtimeDecls ++ declSigTypeNames live) (ctorFieldTypeNames live) (mainTypeIsFloat ()) (declaredRecordFieldOrders live)
+  let input = makeWasmEmitInputFull (methodIfaceTable live) (declSigTypeNames runtimeDecls ++ declSigTypeNames live) (ctorFieldTypeNames live) (mainTypeIsFloat ()) (declaredRecordFieldOrders live) [] (ifaceImplHeadTable live)
   let tWe0 = now ()
   let aWe0 = allocSnap ()
   let oWe0 = opSnap ()

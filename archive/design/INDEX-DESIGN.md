@@ -109,7 +109,7 @@ Signatures (assuming F0 fixed; `index`/`setIndex` bodies elided):
 | String | `impl Index String Int Char` | `Int` | `Char` | Codepoint-indexed → **`Char`** (today's `stringIndexCp`, `eval.mdk:1136`). `k`/`v` fixed, no type var. |
 
 `IndexMut` impls: `Array` (in-place, `<Mut>`), `Map` (functional insert → new `Map`), possibly
-`MutArray`. `String`/`List` write is a Fork (F5) — likely **read-only** (no `setIndex`), since
+`Vector`. `String`/`List` write is a Fork (F5) — likely **read-only** (no `setIndex`), since
 immutable-String write and O(n) List write are both footguns.
 
 ### Bounds → `E-INDEX-OOB` across the three backends (already mapped)
@@ -217,13 +217,13 @@ rewriteSugar (EBinOp ":=" lhs rhs _)                = callBin "setRef" lhs rhs  
 Clean and local; no parser change needed for the write form beyond the bare-`[` postfix (§3) so
 `a[i]` (no dot) reaches the LHS. `a.[i] := v` works with zero parser change.
 
-**Fork F3 (functional-update vs in-place):** does `setIndex` mutate (`Array`/`MutArray`, `<Mut>`,
+**Fork F3 (functional-update vs in-place):** does `setIndex` mutate (`Array`/`Vector`, `<Mut>`,
 returns the same container) or return a fresh container (`Map`, immutable)? The interface signature
 `setIndex : c -> k -> v -> <Mut> c` covers both, but the *semantics* differ per container and this
 should be a conscious decision (see Forks). For `Array` today the natural answer is **in-place +
 `<Mut>`** (matches the mutable-Array model); for `Map` it's **functional** (returns a new `Map`, and
 `m[k] := v` would need `m` to be rebindable — awkward under immutable `let`, argues for `IndexMut`
-being **Array/MutArray-only** initially).
+being **Array/Vector-only** initially).
 
 ---
 
@@ -284,7 +284,7 @@ Each fork lists options and my recommendation.
   fast paths, more surgery). **Recommend 2a** for extensibility; both need F0.
 
 - **F3 — Functional-update vs in-place write (per container).** (a) `IndexMut` is **in-place +
-  `<Mut>`**, offered only for `Array`/`MutArray`; `Map` write is functional and *not* via `[]:=`;
+  `<Mut>`**, offered only for `Array`/`Vector`; `Map` write is functional and *not* via `[]:=`;
   (b) `setIndex` returns a fresh `c` for all (immutable everywhere); (c) both, per-container.
   **Recommend (a)** — `a[i] := v` reads as mutation; immutable containers keep their existing
   functional `insert`/`set`. Revisit if a functional `m[k] := v` (rebind) is wanted.
@@ -297,7 +297,7 @@ Each fork lists options and my recommendation.
 
 - **F5 — String write & List write.** (a) read-only (no `IndexMut String`/`List`); (b) provide them.
   **Recommend (a)** — immutable-String element write is semantically odd and O(n) List write is a
-  footgun; keep writes to `Array`/`MutArray`.
+  footgun; keep writes to `Array`/`Vector`.
 
 - **F6 — Multi-key `a[i, j]`.** (a) out of scope (2-D via chaining `a[i][j]` only); (b) support
   `a[i,j]` as sugar (needs a new AST arg-list node + parser + a variadic `index`). **Recommend (a)** —

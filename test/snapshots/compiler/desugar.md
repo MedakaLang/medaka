@@ -1,12 +1,11 @@
 # META
-source_lines=1074
+source_lines=1072
 stages=DESUGAR,MARK
 # SOURCE
--- Self-hosted desugar stage — Stage 1 port of `lib/desugar.ml`.  Lowers surface
+-- Self-hosted desugar stage.  Lowers surface
 -- sugar (guards, sections, string interpolation, list comprehensions, do-blocks,
 -- `?`, record puns, `deriving`, interface defaults) into the core AST.  Runs
--- after the parser, before resolve — purely syntactic, no type info.  Validated
--- byte-for-byte against `dev/astdump.exe --desugar` (test/diff_compiler_desugar.sh).
+-- after the parser, before resolve — purely syntactic, no type info.
 --
 -- The reference `desugar_program` runs eight passes in a fixed order; this file
 -- ports them incrementally.  `mapExpr`/`mapDecl` are the shared bottom-up
@@ -72,8 +71,8 @@ mapExpr : (Expr -> Expr) -> Expr -> Expr
 mapExpr f e = f (mapKids f e)
 
 mapKids : (Expr -> Expr) -> Expr -> Expr
--- ELoc is transparent: recurse into the wrapped expr, preserve the loc (mirror
--- of lib/desugar.ml's `map_expr` ELoc arm).  Without this the wildcard below
+-- ELoc is transparent: recurse into the wrapped expr, preserve the loc.
+-- Without this the wildcard below
 -- would stop the rewrite at the wrapper and never reach the atom inside.
 mapKids f (ELoc l e) = ELoc l (mapExpr f e)
 mapKids f (EDoOrigin l e) = EDoOrigin l (mapExpr f e)
@@ -202,7 +201,7 @@ binMethod m a b body =
   ImplMethod m [PVar a (Loc "" 0 0 0 0), PVar b (Loc "" 0 0 0 0)] body
 
 -- ── Pass: desugar_sugar (guards / function / sections / interpolation) ────
--- Mirror of lib/desugar.ml's rewrite_sugar, applied bottom-up by mapProg.
+-- Applied bottom-up by mapProg.
 rewriteSugar : Expr -> Expr
 rewriteSugar (EGuards arms) = guardsToCore arms
 rewriteSugar (ESection s) = sectionToCore s
@@ -291,9 +290,8 @@ concatLeft acc [] = acc
 concatLeft acc (e::rest) = concatLeft (binOp "++" acc e) rest
 
 -- ── Pass: lower_do_blocks (do-notation → andThen/pure chains) ─────────────
--- Mirror of lib/desugar.ml's rewrite_do/lower_do.  Only EDo is lowered; bare
--- EBlock survives (the reference leaves it for eval).  The do_tag the reference
--- EDo carries is ignored by lowering, so the self-host EDo (no tag) suffices.
+-- Only EDo is lowered; bare
+-- EBlock survives (left for eval).
 -- check_do_wellformed (which rejects DoAssign/DoFieldAssign/empty in a do-block)
 -- is validation-only and skipped — those never appear in a well-formed EDo.
 rewriteDo : Expr -> Expr
@@ -381,9 +379,9 @@ anyRefutable [] = False
 anyRefutable (p::ps) = isRefutable p || anyRefutable ps
 
 -- ── Pass: expand_decl (`deriving` → generated impls) ──────────────────────
--- Mirror of lib/desugar.ml's expand_decl + the Eq/Debug/Display/Ord/Generic
--- derivers, PLUS `Hashable` (#422), which has no counterpart in the reference —
--- it generates the djb2 fold core.mdk's `Hashable` doc specifies.  A
+-- The Eq/Debug/Display/Ord/Generic
+-- derivers, PLUS `Hashable` (#422), which
+-- generates the djb2 fold core.mdk's `Hashable` doc specifies.  A
 -- `data`/`newtype` with derives becomes the decl (derives cleared)
 -- followed by one generated impl per derived interface; a `newtype` derives via
 -- a synthetic single-variant data deriver.  Generated bodies are core (no sugar),
@@ -403,7 +401,7 @@ expandDecl (DAttrib attrs d) = attribHead attrs (expandDecl d)
 expandDecl d = [d]
 
 -- DAttrib wraps a single decl; expanding the inner decl may yield generated
--- impls — keep the attribute on the head, leave the impls bare (lib/desugar.ml).
+-- impls — keep the attribute on the head, leave the impls bare.
 attribHead : List Attr -> List Decl -> List Decl
 attribHead _ [] = []
 attribHead attrs (first::rest) = DAttrib attrs first :: rest
@@ -422,6 +420,7 @@ deriveImpls f (d::ds) = match f (deriveRefName d)
 -- hand-typed list to rot.
 -- The generator is a THUNK on purpose: Medaka is strict, so an eager
 -- `List (String, Decl)` would run every deriver on every lookup.
+export
 dataDerivers : String -> List String -> List Variant -> List (String, Unit -> Decl)
 dataDerivers name params variants = [
   ("Eq", _ => applyDeriveParams name params (deriveEqData name variants)),
@@ -459,11 +458,12 @@ deriveForData name params variants iface =
 -- data derivers produce the right tagged rendering via a synthetic variant.
 -- The newtype deriver table — the newtype counterpart of `dataDerivers`, and
 -- likewise the single source of both the lookup and the diagnostic's copy.
--- It is deliberately SHORTER than `dataDerivers`: `Generic` (and `Num`) go
--- through specialized newtype derivers in lib/desugar.ml that this port has not
--- taken, so a newtype genuinely cannot derive them here.  Keeping the two tables
+-- It is deliberately SHORTER than `dataDerivers`: `Generic` (and `Num`) would
+-- need their own specialized newtype derivers, which have never been
+-- implemented, so a newtype cannot derive them here.  Keeping the two tables
 -- separate is what stops the diagnostic from advertising `Generic` on a newtype
 -- that cannot have it.
+export
 newtypeDerivers : String -> List String -> String -> Ty -> List (String, Unit -> Decl)
 newtypeDerivers name params con fty =
   let synthetic = [Variant con (ConPos [fty])]
@@ -683,7 +683,7 @@ andLeft acc (e::rest) = andLeft (binOp "&&" acc e) rest
 
 -- Ord: one arm per (i, vi)×(j, vj) constructor pair.  Different constructors
 -- compare by declaration order (Lt/Gt); same constructor compares fields
--- lexicographically.  Mirror of lib/desugar.ml's derive_ord_data.
+-- lexicographically.
 deriveOrdData : String -> List Variant -> Decl
 deriveOrdData name variants = derivedImpl
   "Ord"
@@ -726,7 +726,7 @@ zipExprPairs (a::arest) (b::brest) =
   (EVar a, EVar b) :: zipExprPairs arest brest
 
 -- Lexicographic chain: `compare a b` per pair, short-circuiting on the first
--- non-Eq result.  Mirror of lib/desugar.ml's lex_compare_exprs.
+-- non-Eq result.
 lexCompareExprs : List (Expr, Expr) -> Expr
 lexCompareExprs [] = EVar "Eq"
 lexCompareExprs [(ea, eb)] = callBin "compare" ea eb
@@ -814,7 +814,7 @@ toRep x = EApp (EVar "to_rep") (EVar x)
 -- The parser splits an interface method with both a signature line (`f : T`,
 -- default None) and a default-clause line (`f p = body`, type TyVar "_", Some)
 -- into two entries; merge them by name into one (first-seen position, the real
--- type, the present default).  Mirror of lib/desugar.ml's merge_iface_methods.
+-- type, the present default).
 mergeIfaceDefaults : List Decl -> List Decl
 mergeIfaceDefaults prog = map mergeIfaceDecl prog
 
@@ -961,7 +961,6 @@ concatLists (xs::rest) = xs ++ concatLists rest
 -- `Name { a, b }` (all bare vars, no `=`) parses as ESetLit; when Name is a
 -- record type this is pun sugar for `Name { a = a, b = b }` → ERecordCreate.
 -- Runs before container-literal lowering so genuine Map/Set literals remain.
--- Mirror of lib/desugar.ml's desugar_record_puns.
 desugarRecordPuns : List Decl -> List Decl
 desugarRecordPuns prog =
   mapProg (rewriteRecordPun (collectRecordNames prog)) prog
@@ -1004,8 +1003,7 @@ punField _ = FieldAssign "" (EVar "")
 --   Map { k1 => v1, … }  ⇒  (fromEntries [(k1, v1), …] :~ Name _k _v)
 --   Set { e1, … }        ⇒  (fromEntries [e1, …]       :~ Name _a)
 -- The `:~` head-pin (EHeadAnnot) fixes the result type so `fromEntries`
--- dispatches by the literal's named type.  Mirror of lib/desugar.ml's
--- lower_container_literals (runs after record puns).
+-- dispatches by the literal's named type.  (Runs after record puns.)
 lowerContainerLiterals : List Decl -> List Decl
 lowerContainerLiterals prog = mapProg rewriteContainerLit prog
 
@@ -1263,14 +1261,14 @@ desugar prog = qualifyAliasRefs prog
 (DTypeSig false "deriveImpls" (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Decl"))) (TyFun (TyApp (TyCon "List") (TyCon "DeriveRef")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "deriveImpls" (PWild (PList)) (EListLit))
 (DFunDef false "deriveImpls" ((PVar "f") (PCons (PVar "d") (PVar "ds"))) (EMatch (EApp (EVar "f") (EApp (EVar "deriveRefName") (EVar "d"))) (arm (PCon "Some" (PVar "gen")) () (EBinOp "::" (EVar "gen") (EApp (EApp (EVar "deriveImpls") (EVar "f")) (EVar "ds")))) (arm (PCon "None") () (EApp (EApp (EVar "deriveImpls") (EVar "f")) (EVar "ds")))))
-(DTypeSig false "dataDerivers" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyFun (TyCon "Unit") (TyCon "Decl"))))))))
+(DTypeSig true "dataDerivers" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyFun (TyCon "Unit") (TyCon "Decl"))))))))
 (DFunDef false "dataDerivers" ((PVar "name") (PVar "params") (PVar "variants")) (EListLit (ETuple (ELit (LString "Eq")) (ELam (PWild) (EApp (EApp (EApp (EVar "applyDeriveParams") (EVar "name")) (EVar "params")) (EApp (EApp (EVar "deriveEqData") (EVar "name")) (EVar "variants"))))) (ETuple (ELit (LString "Ord")) (ELam (PWild) (EApp (EApp (EApp (EVar "applyDeriveParams") (EVar "name")) (EVar "params")) (EApp (EApp (EVar "deriveOrdData") (EVar "name")) (EVar "variants"))))) (ETuple (ELit (LString "Debug")) (ELam (PWild) (EApp (EApp (EApp (EVar "applyDeriveParams") (EVar "name")) (EVar "params")) (EApp (EApp (EApp (EApp (EVar "deriveShowData") (ELit (LString "Debug"))) (ELit (LString "debug"))) (EVar "name")) (EVar "variants"))))) (ETuple (ELit (LString "Display")) (ELam (PWild) (EApp (EApp (EApp (EVar "applyDeriveParams") (EVar "name")) (EVar "params")) (EApp (EApp (EApp (EApp (EVar "deriveShowData") (ELit (LString "Display"))) (ELit (LString "display"))) (EVar "name")) (EVar "variants"))))) (ETuple (ELit (LString "Generic")) (ELam (PWild) (EApp (EApp (EApp (EVar "applyDeriveParams") (EVar "name")) (EVar "params")) (EApp (EApp (EVar "deriveGenericData") (EVar "name")) (EVar "variants"))))) (ETuple (ELit (LString "Hashable")) (ELam (PWild) (EApp (EApp (EApp (EVar "applyDeriveParams") (EVar "name")) (EVar "params")) (EApp (EApp (EVar "deriveHashData") (EVar "name")) (EVar "variants")))))))
 (DTypeSig false "lookupDeriver" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyFun (TyCon "Unit") (TyCon "Decl")))) (TyApp (TyCon "Option") (TyCon "Decl")))))
 (DFunDef false "lookupDeriver" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupDeriver" ((PVar "n") (PCons (PTuple (PVar "k") (PVar "f")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "k")) (EApp (EVar "Some") (EApp (EVar "f") (ELit LUnit))) (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupDeriver") (EVar "n")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "deriveForData" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Decl")))))))
 (DFunDef false "deriveForData" ((PVar "name") (PVar "params") (PVar "variants") (PVar "iface")) (EApp (EApp (EVar "lookupDeriver") (EVar "iface")) (EApp (EApp (EApp (EVar "dataDerivers") (EVar "name")) (EVar "params")) (EVar "variants"))))
-(DTypeSig false "newtypeDerivers" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyFun (TyCon "Unit") (TyCon "Decl")))))))))
+(DTypeSig true "newtypeDerivers" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyFun (TyCon "Unit") (TyCon "Decl")))))))))
 (DFunDef false "newtypeDerivers" ((PVar "name") (PVar "params") (PVar "con") (PVar "fty")) (EBlock (DoLet false false (PVar "synthetic") (EListLit (EApp (EApp (EVar "Variant") (EVar "con")) (EApp (EVar "ConPos") (EListLit (EVar "fty")))))) (DoExpr (EListLit (ETuple (ELit (LString "Eq")) (ELam (PWild) (EApp (EApp (EApp (EVar "applyDeriveParams") (EVar "name")) (EVar "params")) (EApp (EApp (EVar "deriveEqData") (EVar "name")) (EVar "synthetic"))))) (ETuple (ELit (LString "Ord")) (ELam (PWild) (EApp (EApp (EApp (EVar "applyDeriveParams") (EVar "name")) (EVar "params")) (EApp (EApp (EVar "deriveOrdData") (EVar "name")) (EVar "synthetic"))))) (ETuple (ELit (LString "Debug")) (ELam (PWild) (EApp (EApp (EApp (EVar "applyDeriveParams") (EVar "name")) (EVar "params")) (EApp (EApp (EApp (EApp (EVar "deriveShowData") (ELit (LString "Debug"))) (ELit (LString "debug"))) (EVar "name")) (EVar "synthetic"))))) (ETuple (ELit (LString "Display")) (ELam (PWild) (EApp (EApp (EApp (EVar "applyDeriveParams") (EVar "name")) (EVar "params")) (EApp (EApp (EApp (EApp (EVar "deriveShowData") (ELit (LString "Display"))) (ELit (LString "display"))) (EVar "name")) (EVar "synthetic"))))) (ETuple (ELit (LString "Hashable")) (ELam (PWild) (EApp (EApp (EApp (EVar "applyDeriveParams") (EVar "name")) (EVar "params")) (EApp (EApp (EVar "deriveHashData") (EVar "name")) (EVar "synthetic")))))))))
 (DTypeSig false "deriveForNewtype" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Decl"))))))))
 (DFunDef false "deriveForNewtype" ((PVar "name") (PVar "params") (PVar "con") (PVar "fty") (PVar "iface")) (EApp (EApp (EVar "lookupDeriver") (EVar "iface")) (EApp (EApp (EApp (EApp (EVar "newtypeDerivers") (EVar "name")) (EVar "params")) (EVar "con")) (EVar "fty"))))
@@ -1687,14 +1685,14 @@ desugar prog = qualifyAliasRefs prog
 (DTypeSig false "deriveImpls" (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Decl"))) (TyFun (TyApp (TyCon "List") (TyCon "DeriveRef")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "deriveImpls" (PWild (PList)) (EListLit))
 (DFunDef false "deriveImpls" ((PVar "f") (PCons (PVar "d") (PVar "ds"))) (EMatch (EApp (EVar "f") (EApp (EVar "deriveRefName") (EVar "d"))) (arm (PCon "Some" (PVar "gen")) () (EBinOp "::" (EVar "gen") (EApp (EApp (EVar "deriveImpls") (EVar "f")) (EVar "ds")))) (arm (PCon "None") () (EApp (EApp (EVar "deriveImpls") (EVar "f")) (EVar "ds")))))
-(DTypeSig false "dataDerivers" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyFun (TyCon "Unit") (TyCon "Decl"))))))))
+(DTypeSig true "dataDerivers" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyFun (TyCon "Unit") (TyCon "Decl"))))))))
 (DFunDef false "dataDerivers" ((PVar "name") (PVar "params") (PVar "variants")) (EListLit (ETuple (ELit (LString "Eq")) (ELam (PWild) (EApp (EApp (EApp (EVar "applyDeriveParams") (EVar "name")) (EVar "params")) (EApp (EApp (EVar "deriveEqData") (EVar "name")) (EVar "variants"))))) (ETuple (ELit (LString "Ord")) (ELam (PWild) (EApp (EApp (EApp (EVar "applyDeriveParams") (EVar "name")) (EVar "params")) (EApp (EApp (EVar "deriveOrdData") (EVar "name")) (EVar "variants"))))) (ETuple (ELit (LString "Debug")) (ELam (PWild) (EApp (EApp (EApp (EVar "applyDeriveParams") (EVar "name")) (EVar "params")) (EApp (EApp (EApp (EApp (EVar "deriveShowData") (ELit (LString "Debug"))) (ELit (LString "debug"))) (EVar "name")) (EVar "variants"))))) (ETuple (ELit (LString "Display")) (ELam (PWild) (EApp (EApp (EApp (EVar "applyDeriveParams") (EVar "name")) (EVar "params")) (EApp (EApp (EApp (EApp (EVar "deriveShowData") (ELit (LString "Display"))) (ELit (LString "display"))) (EVar "name")) (EVar "variants"))))) (ETuple (ELit (LString "Generic")) (ELam (PWild) (EApp (EApp (EApp (EVar "applyDeriveParams") (EVar "name")) (EVar "params")) (EApp (EApp (EVar "deriveGenericData") (EVar "name")) (EVar "variants"))))) (ETuple (ELit (LString "Hashable")) (ELam (PWild) (EApp (EApp (EApp (EVar "applyDeriveParams") (EVar "name")) (EVar "params")) (EApp (EApp (EVar "deriveHashData") (EVar "name")) (EVar "variants")))))))
 (DTypeSig false "lookupDeriver" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyFun (TyCon "Unit") (TyCon "Decl")))) (TyApp (TyCon "Option") (TyCon "Decl")))))
 (DFunDef false "lookupDeriver" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupDeriver" ((PVar "n") (PCons (PTuple (PVar "k") (PVar "f")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "k")) (EApp (EVar "Some") (EApp (EVar "f") (ELit LUnit))) (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupDeriver") (EVar "n")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "deriveForData" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Decl")))))))
 (DFunDef false "deriveForData" ((PVar "name") (PVar "params") (PVar "variants") (PVar "iface")) (EApp (EApp (EVar "lookupDeriver") (EVar "iface")) (EApp (EApp (EApp (EVar "dataDerivers") (EVar "name")) (EVar "params")) (EVar "variants"))))
-(DTypeSig false "newtypeDerivers" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyFun (TyCon "Unit") (TyCon "Decl")))))))))
+(DTypeSig true "newtypeDerivers" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyFun (TyCon "Unit") (TyCon "Decl")))))))))
 (DFunDef false "newtypeDerivers" ((PVar "name") (PVar "params") (PVar "con") (PVar "fty")) (EBlock (DoLet false false (PVar "synthetic") (EListLit (EApp (EApp (EVar "Variant") (EVar "con")) (EApp (EVar "ConPos") (EListLit (EVar "fty")))))) (DoExpr (EListLit (ETuple (ELit (LString "Eq")) (ELam (PWild) (EApp (EApp (EApp (EVar "applyDeriveParams") (EVar "name")) (EVar "params")) (EApp (EApp (EVar "deriveEqData") (EVar "name")) (EVar "synthetic"))))) (ETuple (ELit (LString "Ord")) (ELam (PWild) (EApp (EApp (EApp (EVar "applyDeriveParams") (EVar "name")) (EVar "params")) (EApp (EApp (EVar "deriveOrdData") (EVar "name")) (EVar "synthetic"))))) (ETuple (ELit (LString "Debug")) (ELam (PWild) (EApp (EApp (EApp (EVar "applyDeriveParams") (EVar "name")) (EVar "params")) (EApp (EApp (EApp (EApp (EVar "deriveShowData") (ELit (LString "Debug"))) (ELit (LString "debug"))) (EVar "name")) (EVar "synthetic"))))) (ETuple (ELit (LString "Display")) (ELam (PWild) (EApp (EApp (EApp (EVar "applyDeriveParams") (EVar "name")) (EVar "params")) (EApp (EApp (EApp (EApp (EVar "deriveShowData") (ELit (LString "Display"))) (ELit (LString "display"))) (EVar "name")) (EVar "synthetic"))))) (ETuple (ELit (LString "Hashable")) (ELam (PWild) (EApp (EApp (EApp (EVar "applyDeriveParams") (EVar "name")) (EVar "params")) (EApp (EApp (EVar "deriveHashData") (EVar "name")) (EVar "synthetic")))))))))
 (DTypeSig false "deriveForNewtype" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Decl"))))))))
 (DFunDef false "deriveForNewtype" ((PVar "name") (PVar "params") (PVar "con") (PVar "fty") (PVar "iface")) (EApp (EApp (EVar "lookupDeriver") (EVar "iface")) (EApp (EApp (EApp (EApp (EVar "newtypeDerivers") (EVar "name")) (EVar "params")) (EVar "con")) (EVar "fty"))))
