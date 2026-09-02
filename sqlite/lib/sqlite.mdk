@@ -289,7 +289,11 @@ columnIndex : String -> String -> Option Int
 columnIndex sql col =
   ciScan (stringToChars sql) (lowerChars (stringToChars col))
 
--- Lowercase an array of ASCII chars (non-letters pass through).
+-- | Lowercase an array of ASCII chars (non-letters pass through) — the fold
+--   SQLite applies to identifiers, and the one `findTable` and `columnIndex`
+--   compare through.  Exported so a sibling module matching a schema
+--   identifier folds case the same way rather than inventing a second rule.
+export
 lowerChars : Array Char -> Array Char
 lowerChars arr = arrayFromList (lowerCharsGo arr 0 (arrayLength arr) [])
 
