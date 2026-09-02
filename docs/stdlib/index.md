@@ -252,15 +252,17 @@ The prelude: the types, interfaces, and functions every Medaka program can use w
 
 ## [`hash_map`](hash_map.md)
 
+A mutable hash table from keys to values.
+
 - [`HashMap`](hash_map.md#hashmap)
 - [`new`](hash_map.md#new)
+- [`fromList`](hash_map.md#fromlist)
 - [`size`](hash_map.md#size)
 - [`isEmpty`](hash_map.md#isempty)
 - [`get`](hash_map.md#get)
 - [`has`](hash_map.md#has)
 - [`findWithDefault`](hash_map.md#findwithdefault)
 - [`setInPlace`](hash_map.md#setinplace)
-- [`fromList`](hash_map.md#fromlist)
 - [`deleteInPlace`](hash_map.md#deleteinplace)
 - [`toList`](hash_map.md#tolist)
 - [`keys`](hash_map.md#keys)
