@@ -3243,6 +3243,20 @@ corpus = ["test/net_fixtures"]
 toolchain = ["wasm-tools", "node>=24"]
 
 [[gate]]
+name = "diff_async"
+area = "infra"
+shard = "gates_8"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+run = "test/diff_async.sh"
+oracles = []
+sources = []
+corpus = ["test/async_fixtures"]
+toolchain = []
+
+[[gate]]
 name = "effect_builtin_param_domain"
 area = "infra"
 shard = "gates_3"

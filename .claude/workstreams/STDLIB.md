@@ -96,3 +96,29 @@ Stdlib doctests are **single-file, all-or-nothing** — one malformed example ab
 **every doctest runs under the interpreter**, so a compiled-only bug is invisible to them; wrap `Array`
 in `toList` for stable output.
 </content>
+
+---
+
+## `stdlib/async.mdk` has TWO drivers on purpose — do not "fix" the panic arm
+
+`runAsync : Async e a -> <e> a` is the sequential driver: it runs a spawned child inline and
+**panics** on a timer or descriptor wait, naming `runAsyncIO`. `runAsyncIO : Async e a ->
+<Clock, Net "_" | e> a` is the scheduler. Folding the scheduler into `runAsync` would widen
+every pure async program's manifest with `Clock`/`Net` it never exercises, so the panic is the
+design (`docs/design/ASYNC-RUNTIME-DESIGN.md` R6), not a gap. A `main : Async e Unit` is
+rewritten by the driver (`main_autoprint.asyncWrapModules`) to apply `runAsyncIOMain` on the
+native target and under `medaka run`, and `runAsyncMain` on wasm (no clock host-imports) —
+four sites apply the rewrite (`entry_support.runEmitWith`, `playground_main.doEmit`,
+`medaka_cli.elaborateRun`, `entries/eval_autoprint_main`); the engines gate's eval leg runs the
+last one, not `medaka_cli`.
+
+Two typing facts every async-touching change trips over: an effect row in a type ARGUMENT is
+invariant (#1094), so the statements of one `defer` block share ONE index — write helpers
+row-polymorphic (`Async <Net "_" | e> …`), write labels not the `IO` alias, and prefer
+`putStrLn (display x)` over `println` inside `liftIO`; and a NAMED pure function passed as a
+`deferThen` continuation closes the index to `<>` — pass a lambda.
+
+`net_async` is native-only like `net`; it is verified by `test/diff_async.sh` (build-and-run
+over `test/async_fixtures/`), never by doctests. Adding a fixture there enrols it in that gate
+only; keep every ordering claim behind a sleep an order of magnitude longer than a loopback
+round trip.

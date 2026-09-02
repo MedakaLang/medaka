@@ -142,6 +142,12 @@ v1 impl can be a blocking `wallTimeSec` spin or a real sleep extern (decide at b
 
 ## 5. The swap — what v1 must NOT preclude
 
+**LANDED 2026-09-02** as the async runtime v2 arc (`docs/design/ASYNC-RUNTIME-DESIGN.md`,
+tracking #500): a `poll(2)` readiness reactor in `stdlib/async.mdk` (`runAsyncIO`),
+non-blocking externs, `spawn`/`Task`, per-operation deadlines, and `stdlib/net_async.mdk`.
+Cancellation, select/race, and streams stay open. The paragraph below is the v1 statement of
+the seam, kept as written.
+
 The deferred "robust" layer replaces the **scheduler internals only**:
 - **OS threads** (Boehm-aware) or an **event loop** over non-blocking syscalls (epoll/kqueue) for
   real I/O overlap + parallelism.

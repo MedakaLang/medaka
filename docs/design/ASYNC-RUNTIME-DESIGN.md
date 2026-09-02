@@ -1,6 +1,6 @@
 # Async runtime v2 — the ASYNC-DESIGN §5 swap
 
-**Status:** DESIGN LOCKED (2026-07-16, collaborative), AMENDED 2026-09-02 (§0a) — A1 IMPLEMENTED; implementation staged as
+**Status:** IMPLEMENTED 2026-09-02 (design locked 2026-07-16, amended §0a) — all four stages landed; the staging table marks each; implementation was staged as
 tracking issue #500 (stages #496 A1 · #497 A2 · #498 A3 · #499 A4). Nothing below
 is built yet; per-stage DONE markers land here as stages merge. Companion to
 [`archive/design/ASYNC-DESIGN.md`](../../archive/design/ASYNC-DESIGN.md) (v1, IMPLEMENTED),
@@ -268,9 +268,9 @@ works; it just doesn't overlap, and the docs say so (R4/G9).
 | Stage | Issue | Content | New C | Engines | Key gate |
 |---|---|---|---|---|---|
 | A1 ✅ DONE 2026-09-02 | #496 | `Await`/`Spawn` arms + `Wait`; run queue + park table; `sleep`; `spawn`/`spawnTask`/`await`; `concurrent` over spawn; `runAsyncIO`; `main : Async` dispatch on all three engines (#2506) | none | all 3 (wasm: sequential driver) | v1 doctests byte-identical; 3×`sleep 100ms` concurrent in 0.15s wall, 0.00s CPU; `test/engine_fixtures/async_main_dispatch.mdk` |
-| A2 | #497 | `ioPoll` + `netSetNonblock` + `netTry{Accept,Recv,Send}` | ~150–250 lines | native (+ ledger rows) | capability matrix green; would-block path exercised; dual-platform build |
-| A3 | #498 | fd parking; `awaitReadable`/`awaitWritable`; `asyncAccept`/`asyncRecv`/`asyncSend`; echo-server fixture | none | native | slow client doesn't block fast client — THE observable win |
-| A4 | #499 | v1-determinism guard gate; overlap gate (order-of-magnitude margins only — time is noisy); doc sweep; this doc → IMPLEMENTED | none | — | CI green across the board |
+| A2 ✅ DONE 2026-09-02 | #497 | `ioPoll` (parallel fd/interest arrays, readiness word per fd) + `netSetNonblock` + `netTry{Accept,Recv,Send}` | ~110 lines (`runtime/medaka_rt.c`) | native (+ ledger rows) | capability matrix green; would-block, poll-timeout, readiness-bit and EOF paths exercised by a native probe |
+| A3 ✅ DONE 2026-09-02 | #498 | fd parking (`ioPoll` from `wakeParked`); `awaitAny`/`deadlineAfter`/`expired` in `async.mdk`; `stdlib/net_async.mdk` (`accept`/`recv`/`send`/`sendAll`/`recvWithin`/`sendAllWithin`/`sendString`/`close`/`closeListener`/`serve`) | none | native | `test/async_fixtures/echo_overlap.mdk`: a slow client does not stall a fast one, a deadline fires, closing the listener ends `serve` — 0.40 s wall, 0.00 s CPU |
+| A4 ✅ DONE 2026-09-02 | #499 | `test/diff_async.sh` build-and-run gate over `test/async_fixtures/` (self-timed overlap fixture, order-of-magnitude margin); v1 determinism = the byte-identical v1 doctests + `engine_fixtures/async_main_dispatch.mdk`; doc sweep; this doc → IMPLEMENTED | none | — | CI green across the board |
 
 A1 ∥ A2 (independent); A3 needs both; A4 sweeps. A1 and A2 each touch compiler source
 (driver dispatch; `llvm_emit.mdk`) → fixpoint-gated, goldens blessed in the same commit,

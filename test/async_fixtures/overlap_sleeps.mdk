@@ -1,0 +1,13 @@
+-- Three tasks sleep 100 ms each under the scheduler; the whole run takes
+-- about one sleep, not three.  The program measures itself so the gate needs
+-- no wall-clock arithmetic: the margin is a factor of two and a half, which
+-- is an order-of-magnitude claim, not a tight one.
+import async.{Async, liftIO, sleep, concurrent}
+import time.{millis, monotonic}
+
+main : Async <Clock, Stdout> Unit
+main = defer
+  t0 <- liftIO (u => monotonic ())
+  _ <- concurrent [sleep (millis 100), sleep (millis 100), sleep (millis 100)]
+  t1 <- liftIO (u => monotonic ())
+  liftIO (u => putStrLn (if t1 - t0 < 0.25 then "overlapped" else "sequential"))

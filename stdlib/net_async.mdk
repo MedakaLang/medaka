@@ -1,0 +1,173 @@
+-- net_async.mdk — the non-blocking half of `net`, over the async scheduler.
+--
+-- Every operation here tries its syscall, and on would-block parks the task
+-- with `awaitAny` until the descriptor is ready, then retries.  Readiness is
+-- level-triggered, so a retry after any wake is correct.  The socket is
+-- switched to non-blocking mode by `accept`; a `Connection` from the blocking
+-- `net.connect` is switched on first use.  Deadlines are a wait set of the
+-- descriptor plus a `WaitUntil`; the task itself decides to give up, so no
+-- task is ever dropped (docs/design/ASYNC-RUNTIME-DESIGN.md §0a).
+
+import array.{drop}
+import async.{Async, Wait(..), liftIO, spawn, awaitAny, deadlineAfter, expired}
+import net.{Connection(..), Listener(..)}
+import net as N
+import string.{toUtf8}
+import time.{Duration}
+
+{- | TCP over the async scheduler: the `net` operations that park instead of
+   blocking, so many connections share one thread.
+
+   `accept`, `recv`, `send`, and `sendAll` mirror their `net` namesakes but
+   return `Async` values that park until the socket is ready. `recvWithin`
+   and `sendAllWithin` give up after a `Duration` with `Err "timed out"`.
+   `serve` is an accept loop that runs each connection's handler as its
+   own task and closes the connection when the handler finishes. Use
+   `import net_async as A` and call `A.accept`, `A.recv`, and so on.
+
+   Every operation performs `<Net "_">`, and the deadline forms also read
+   the clock. Drive the program with `runAsyncIO` or a `main : Async e Unit`.
+   Networking works only in a program built for the native target. -}
+
+-- | Accepts the next connection, parking until one arrives. The listener
+-- and the accepted socket are switched to non-blocking mode.
+export
+accept : Listener -> Async <Net "_" | e> (Result String Connection)
+accept lis =
+  deferThen (liftIO (u => tryAccept lis)) (step => acceptStep lis step)
+
+tryAccept : Listener -> <Net "_"> Result String (Option Connection)
+tryAccept (Listener fd) = match netSetNonblock fd True
+  Ok _ => match netTryAccept fd
+    Ok (Some c) => map (_ => Some (Connection c)) (netSetNonblock c True)
+    Ok None => Ok None
+    Err e => Err e
+  Err e => Err e
+
+acceptStep : Listener -> Result String (Option Connection) -> Async <Net "_" | e> (Result String Connection)
+acceptStep (Listener fd) (Ok None) =
+  deferThen (awaitAny [WaitRead fd]) (_ => accept (Listener fd))
+acceptStep _ (Ok (Some c)) = deferPure (Ok c)
+acceptStep _ (Err e) = deferPure (Err e)
+
+-- | Receives up to `n` bytes, parking until some arrive. An empty array is
+-- end of stream.
+export
+recv : Connection -> Int -> Async <Net "_" | e> (Result String (Array Int))
+recv conn n =
+  deferThen (liftIO (u => tryRecv conn n)) (step => recvStep conn n step)
+
+tryRecv : Connection -> Int -> <Net "_"> Result String (Option (Array Int))
+tryRecv (Connection fd) n = match netSetNonblock fd True
+  Ok _ => netTryRecv fd n
+  Err e => Err e
+
+recvStep : Connection -> Int -> Result String (Option (Array Int)) -> Async <Net "_" | e> (Result String (Array Int))
+recvStep (Connection fd) n (Ok None) =
+  deferThen (awaitAny [WaitRead fd]) (_ => recv (Connection fd) n)
+recvStep _ _ (Ok (Some bs)) = deferPure (Ok bs)
+recvStep _ _ (Err e) = deferPure (Err e)
+
+-- | `recv` that gives up after `d` with `Err "timed out"`.
+export
+recvWithin : Duration -> Connection -> Int -> Async <Clock, Net "_" | e> (Result String (Array Int))
+recvWithin d conn n = deferThen (deadlineAfter d) (dl => recvUntil dl conn n)
+
+recvUntil : Wait -> Connection -> Int -> Async <Clock, Net "_" | e> (Result String (Array Int))
+recvUntil dl conn n = deferThen
+  (liftIO (u => tryRecv conn n))
+  (step => recvUntilStep dl conn n step)
+
+recvUntilStep : Wait -> Connection -> Int -> Result String (Option (Array Int)) -> Async <Clock, Net "_" | e> (Result String (Array Int))
+recvUntilStep dl (Connection fd) n (Ok None) = deferThen
+  (expired dl)
+  (late => if late then deferPure (Err "timed out") else deferThen (awaitAny [WaitRead fd, dl]) (_ => recvUntil dl (Connection fd) n))
+recvUntilStep _ _ _ (Ok (Some bs)) = deferPure (Ok bs)
+recvUntilStep _ _ _ (Err e) = deferPure (Err e)
+
+-- | Sends what the socket will take now, parking until it takes some.
+-- The count may be short; `sendAll` loops.
+export
+send : Connection -> Array Int -> Async <Net "_" | e> (Result String Int)
+send conn bytes = deferThen
+  (liftIO (u => trySend conn bytes))
+  (step => sendStep conn bytes step)
+
+trySend : Connection -> Array Int -> <Net "_"> Result String (Option Int)
+trySend (Connection fd) bytes = match netSetNonblock fd True
+  Ok _ => netTrySend fd bytes
+  Err e => Err e
+
+sendStep : Connection -> Array Int -> Result String (Option Int) -> Async <Net "_" | e> (Result String Int)
+sendStep (Connection fd) bytes (Ok None) =
+  deferThen (awaitAny [WaitWrite fd]) (_ => send (Connection fd) bytes)
+sendStep _ _ (Ok (Some n)) = deferPure (Ok n)
+sendStep _ _ (Err e) = deferPure (Err e)
+
+-- | Sends every byte, parking as needed.
+export
+sendAll : Connection -> Array Int -> Async <Net "_" | e> (Result String Unit)
+sendAll conn bytes =
+  if length bytes == 0 then
+    deferPure (Ok ())
+  else
+    deferThen (send conn bytes) (r => sendAllStep conn bytes r)
+
+sendAllStep : Connection -> Array Int -> Result String Int -> Async <Net "_" | e> (Result String Unit)
+sendAllStep conn bytes (Ok n) = sendAll conn (drop n bytes)
+sendAllStep _ _ (Err e) = deferPure (Err e)
+
+-- | `sendAll` that gives up after `d` with `Err "timed out"`.
+export
+sendAllWithin : Duration -> Connection -> Array Int -> Async <Clock, Net "_" | e> (Result String Unit)
+sendAllWithin d conn bytes =
+  deferThen (deadlineAfter d) (dl => sendUntil dl conn bytes)
+
+sendUntil : Wait -> Connection -> Array Int -> Async <Clock, Net "_" | e> (Result String Unit)
+sendUntil dl conn bytes =
+  if length bytes == 0 then
+    deferPure (Ok ())
+  else
+    deferThen (liftIO (u => trySend conn bytes)) (step => sendUntilStep dl conn bytes step)
+
+sendUntilStep : Wait -> Connection -> Array Int -> Result String (Option Int) -> Async <Clock, Net "_" | e> (Result String Unit)
+sendUntilStep dl (Connection fd) bytes (Ok None) = deferThen
+  (expired dl)
+  (late => if late then deferPure (Err "timed out") else deferThen (awaitAny [WaitWrite fd, dl]) (_ => sendUntil dl (Connection fd) bytes))
+sendUntilStep dl conn bytes (Ok (Some n)) = sendUntil dl conn (drop n bytes)
+sendUntilStep _ _ _ (Err e) = deferPure (Err e)
+
+-- | Sends a string as UTF-8, parking as needed.
+export
+sendString : Connection -> String -> Async <Net "_" | e> (Result String Unit)
+sendString conn s = sendAll conn (toUtf8 s)
+
+-- | Closes a connection.
+export
+close : Connection -> Async <Net "_" | e> (Result String Unit)
+close conn = liftIO (u => N.close conn)
+
+-- | Closes a listener. A task parked in `accept` on it wakes with an error,
+-- which ends a `serve` loop.
+export
+closeListener : Listener -> Async <Net "_" | e> (Result String Unit)
+closeListener lis = liftIO (u => N.closeListener lis)
+
+{- | Accepts connections until `accept` fails, running `handle` on each in
+   a task of its own and closing the connection when the handler finishes.
+
+   A failure in `handle` closes that connection and the loop continues. A
+   failure in `accept`, including the listener being closed, ends the loop
+   with the error. -}
+export
+serve : Listener -> (Connection -> Async <Net "_" | e> (Result String Unit)) -> Async <Net "_" | e> (Result String Unit)
+serve lis handle = deferThen (accept lis) (r => serveStep lis handle r)
+
+serveStep : Listener -> (Connection -> Async <Net "_" | e> (Result String Unit)) -> Result String Connection -> Async <Net "_" | e> (Result String Unit)
+serveStep lis handle (Ok conn) =
+  deferThen (spawn (handleThenClose handle conn)) (_ => serve lis handle)
+serveStep _ _ (Err e) = deferPure (Err e)
+
+handleThenClose : (Connection -> Async <Net "_" | e> (Result String Unit)) -> Connection -> Async <Net "_" | e> Unit
+handleThenClose handle conn =
+  deferThen (handle conn) (_ => deferMap (_ => ()) (close conn))
