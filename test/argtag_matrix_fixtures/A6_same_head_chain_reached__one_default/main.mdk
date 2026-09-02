@@ -1,0 +1,27 @@
+-- A6/B2 — A6's same-head collision where one sibling INHERITS the interface default
+-- instead of defining the method. See CENSUS.md.
+--
+-- This is the RAW LEG of the emitter's head-collision guard, and nothing else in this
+-- corpus exercises it on the chain path: the inheriting impl contributes no entry, so
+-- `implGroupsForMethod` yields exactly ONE group and a duplicate test over the group
+-- tags alone sees no collision at all. The second `Pair` comes from `raw` (the
+-- interface's declared route words minus what this method's entries cover) — whose
+-- words are canonical KEYS here, precisely because the head is NOT unique, so they do
+-- not string-compare equal to the group's bare `Pair`. Mapping each back through
+-- `declHeadOfRouteWord` is what keeps this cell loud instead of failing open.
+interface Wrap f where
+  wsize : f a -> Int
+  wsize _ = 9
+
+data Pair a b = Pair a b
+
+impl Wrap (Pair Int) where
+
+impl Wrap (Pair String) where
+  wsize _ = 2
+
+go xs = wsize xs
+
+main =
+  let _ = println (go (Pair 1 True))
+  println (go (Pair "x" True))

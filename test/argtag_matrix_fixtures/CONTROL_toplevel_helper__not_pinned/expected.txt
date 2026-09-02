@@ -1,0 +1,6 @@
+class: decidable
+correct: woof|meow//woof|meow
+check: 0
+run: 0 | woof|meow//woof|meow
+build: 0 | built main.mdk -> <BIN>
+exec: 0 | woof|meow//woof|meow

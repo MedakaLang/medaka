@@ -1,0 +1,16 @@
+interface Speak a where
+  speak : a -> String
+  speak _ = "box"
+
+data Box a = Box a
+
+data Cat = Cat
+
+impl Speak (Box a) requires Speak a where
+
+impl Speak Cat where
+  speak _ = "meow"
+
+main =
+  let f = v => speak v
+  println (f (Box Cat) ++ "|" ++ f Cat)

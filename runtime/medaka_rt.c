@@ -749,6 +749,33 @@ noreturn void mdk_dispatch_no_impl(void) {
   fputs("runtime error [E-DISPATCH-NO-IMPL]: dispatch found no implementation matching the dict key\n", stderr);
   exit(1);
 }
+/* Arg-tag dispatch reached an arm whose runtime constructor tag is shared by two
+   or more DECLARED impls of the interface (#2445).  The receiver's cell tag is the
+   head tycon only -- it cannot tell `Pair Int _` from `Pair String _` -- so the
+   chain has two arms testing the identical constant and the first one would win
+   every receiver silently, at exit 0 (measured `1|1` where the semantics and
+   `medaka run` both say `1|2`).
+
+   The emitter used to refuse the whole `medaka build` at COMPILE time on the same
+   declaration facts.  That refusal could not be scoped: a program that declares the
+   colliding impls but never CONSTRUCTS a receiver at that head is perfectly
+   decidable, and the emitter's static view cannot tell it from a program that does
+   without a whole-program receiver-reachability analysis.  So the loudness is RETIMED
+   to run time here, which scopes it by ACTUAL receiver exactly the way the
+   interpreter's `checkArgTagDecidable` guard already is -- only the colliding arms
+   carry this trap, everything else in the chain emits its normal call.
+
+   Echoes the interpreter's `E-AMBIGUOUS-DISPATCH` wording MINUS the source location
+   and the receiver's type name (Core IR carries no loc, and this trap takes no
+   arguments -- same convention as its siblings above); nonzero exit. */
+noreturn void mdk_dispatch_ambiguous(void) {
+  mdk_flush_run_stdout_on_abort();
+  fputs("runtime error [E-AMBIGUOUS-DISPATCH]: arg-tag dispatch on this receiver is "
+        "undecidable: more than one impl is declared at that type head and the runtime "
+        "tag cannot choose between them\n",
+        stderr);
+  exit(1);
+}
 /* A refutable block-`let` (`let (Some y) = e` with no `else`) whose scrutinee did
    not match the pattern.  The interpreter's blockLet runtimePanics
    "E-LET-REFUTE"; the emitter previously destructured with NO tag check → an OOB

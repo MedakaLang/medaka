@@ -1,9 +1,0 @@
--- issue #1062: `loud`'s DEFAULT BODY calls the SIBLING method `speak`. That inner
--- call is the one the interpreter fails to re-narrow by the canonical impl key when
--- the receiver's head tycon collides across two impls.
-export interface Speak a where
-  speak : a -> String
-  speak _ = "DEFAULT"
-
-  loud : a -> String
-  loud x = "<" ++ speak x ++ ">"
