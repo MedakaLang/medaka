@@ -29431,7 +29431,7 @@ inferImplMethod env allProg iface implTvMap headMonos (ImplMethod mname pats bod
     let declArrows = allArrowEffs expected
     let actualArrows = allArrowEffs actual
     -- D-3 (#1095): read BEFORE the unify below closes the declared-pure arrows.
-    let eagerIdx = eagerIndexOnlyVars gscope mty effMap actualArrows
+    let eagerIdx = eagerIndexOnlyVars gscope mty effMap actualArrows expected actual
     let _ = unify expected actual
     let launderEsc = launderEscapeFromLog declArrows actualArrows (wWindow perRun.value.absorptions launderMark)
     -- True iff the launder query flagged this body — the post-unify effect-atom half
@@ -29970,30 +29970,63 @@ checkIndexOnlyEffVarsOpen subject effMap loc eager =
 
 -- the index-only vars of [mty] that some body arrow row (pre-unify) carries as
 -- its tail — i.e. the body performs them at call time.
-eagerIndexOnlyVars : List (String, List Kind) -> Ty -> List (String, Ref Effvar) -> List EffRow -> List String
-eagerIndexOnlyVars scope mty effMap actualArrows =
+-- ⚠️ THE BODY'S CELLS ARE NOT THE SIGNATURE'S CELLS.  At the impl seam the
+-- clause parameters are inferred fresh (`g : a -> <ρ> b`), and `ρ` is only
+-- identified with the declared `<e>` by the final `unify expected actual`.
+-- So the pre-unify arrow rows carry `ρ` (or whatever it has been linked to
+-- meanwhile), never `e` itself.  [expected]/[actual] are walked in parallel
+-- to pair each declared row cell with the actual cell at the same position
+-- (`pairRowCells`), and the scan asks whether any of a var's actual
+-- counterparts is a tail of some body arrow row.
+eagerIndexOnlyVars : List (String, List Kind) -> Ty -> List (String, Ref Effvar) -> List EffRow -> Mono -> Mono -> List String
+eagerIndexOnlyVars scope mty effMap actualArrows expected actual =
   let tails = flatMap rowTailId actualArrows
-  filterList (v => effVarCellIn v effMap tails) (indexOnlyEffVars scope mty)
+  let pairs = pairRowCells expected actual
+  filterList
+    (v => effVarCellPerformed v effMap pairs tails)
+    (indexOnlyEffVars scope mty)
+
+-- (declared cell id, actual cell id) for every row found at the same
+-- structural position of the two types — arrow latent rows and index rows,
+-- under applications and arrows.  Ids are read AFTER normalization, so a cell
+-- already linked during body inference reports its live representative.
+pairRowCells : Mono -> Mono -> List (Int, Int)
+pairRowCells d a = match normalize d
+  TFun d1 dr d2 => match normalize a
+    TFun a1 ar a2 => pairRows dr ar ++ pairRowCells d1 a1 ++ pairRowCells d2 a2
+    _ => []
+  TApp d1 d2 => match normalize a
+    TApp a1 a2 => pairRowCells d1 a1 ++ pairRowCells d2 a2
+    _ => []
+  TEff dr => match normalize a
+    TEff ar => pairRows dr ar
+    _ => []
+  _ => []
+
+pairRows : EffRow -> EffRow -> List (Int, Int)
+pairRows dr ar = match rowTailId dr
+  [did] => map (aid => (did, aid)) (rowTailId ar)
+  _ => []
+
+effVarCellPerformed : String -> List (String, Ref Effvar) -> List (Int, Int) -> List Int -> Bool
+effVarCellPerformed v effMap pairs tails = match lookupAssoc v effMap
+  Some cell =>
+    let did = effvarId cell
+    containsI did tails
+      || anyList (p => fst p == did && containsI (snd p) tails) pairs
+  None => False
 
 -- every unbound tail id the row reaches — a join contributes each member.
 rowTailId : EffRow -> List Int
 rowTailId row = map effvarId (snd (rowFlat row))
 
-effVarCellIn : String -> List (String, Ref Effvar) -> List Int -> Bool
-effVarCellIn v effMap tails = match lookupAssoc v effMap
-  Some cell => match rowTailId (EffRow [] (Some cell))
-    i::_ => containsI i tails
-    [] => False
-  None => False
-
 checkIndexOnlyGo : String -> List (String, Ref Effvar) -> Option Loc -> List String -> Unit
 checkIndexOnlyGo _ _ _ [] = ()
 checkIndexOnlyGo subject effMap loc (v::rest) =
-  let _ = match lookupAssoc v effMap
-    Some cell => match effrowNorm (EffRow [] (Some cell))
-      EffRow _ None => pushTypeErrorOnceAt "T-EFFECT-INDEX-EAGER" loc (indexEagerMsg subject v)
-      _ => ()
-    None => ()
+  -- [eager] already holds only the vars the body performed on a method arrow
+  -- (`eagerIndexOnlyVars`); whether the cell then closed (the pre-#821 unify)
+  -- or the ambient became a join (#821) is not the signal, the performing is.
+  let _ = pushTypeErrorOnceAt "T-EFFECT-INDEX-EAGER" loc (indexEagerMsg subject v)
   checkIndexOnlyGo subject effMap loc rest
 
 -- the method effect vars that ride an ARGUMENT (a callback row or a row-kinded
