@@ -1,0 +1,14 @@
+-- ESCAPE (d) — #2241 end-of-sprint review finding. A `where`-bound helper
+-- (`mkAdd`, arity 1) is OVER-APPLIED at its only call site (2 args instead
+-- of 1); its body returns a closure, so the extra argument applies that
+-- RESULT. `satOnlyUses`'s `CApp` arm answers False whenever the supplied
+-- argument count does not equal the binding's own arity, so an
+-- over-application must stay on the historical indirect path and split
+-- saturate+apply-extra (`emitIndirectArity`), never #2241's direct-call
+-- optimization (`e.directFn`).
+useOver : Int -> Int
+useOver x = mkAdd x 10
+  where
+    mkAdd n = (n + _)
+
+main = println "escape-overapplied result=\{debug (useOver 5)}"

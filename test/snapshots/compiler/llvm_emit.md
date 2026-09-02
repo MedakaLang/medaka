@@ -1,5 +1,5 @@
 # META
-source_lines=14235
+source_lines=14255
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -299,21 +299,29 @@ data GapMode = Strict | Record
 
 -- The CTFail target for a multi-clause function emitted as a CHAIN of single-clause
 
--- compile-time closure-arity table, keyed by the closure cell's SSA register
--- (`%tN`).  ⚠️ `%tN` is only unique WITHIN a define (issue #118 restarts the
--- register counter at each one), so this table is PER-DEFINE: `beginDefine`
--- clears it and `endDefine` restores the enclosing define's — otherwise `%t5` in
--- one function would answer a lookup for `%t5` in another and the indirect call
--- would saturate with the WRONG arity.  Sound because an entry can only be read
--- in the define that wrote it (the key is used verbatim as an SSA operand of the
--- emitted `call`, which LLVM requires to be defined in the same function).
+-- compile-time closure-arity table, keyed by the closure cell's WORD — either a
+-- per-define `%tN` SSA register (the heap-alloc path, `emitClosureAllocA`) or a
+-- `ptrtoint (ptr @mdk_cc_N to i64)` constant naming a module-level global (the
+-- capture-free path, `emitConstClosureA` — what `emitLamGo`/`emitLamPat` now use
+-- for most user lambdas, since they have no captures to force a heap cell).
+-- ⚠️ `%tN` is only unique WITHIN a define (issue #118 restarts the register
+-- counter at each one), so this table is PER-DEFINE: `beginDefine` clears it and
+-- `endDefine` restores the enclosing define's — otherwise `%t5` in one function
+-- would answer a lookup for `%t5` in another and the indirect call would
+-- saturate with the WRONG arity.  That per-define clearing is what keeps the
+-- SSA-register-keyed entries sound.  The constant-global-keyed entries need no
+-- such protection on their own: `@mdk_cc_N`'s `N` comes from `freshId`, a
+-- counter that is never reset (unlike the per-define `%tN` one), so no two
+-- closure-construction sites can ever mint the same word regardless of which
+-- define reads it — the per-define clearing is redundant safety for this
+-- subset, not the reason it's sound.
 --   Recorded when a user lambda's closure cell is allocated
--- (emitClosureAllocA); read at an INDIRECT call site (emitIndirect) so a let-bound
--- closure applied to MORE args than its arity (`(g 7) 9` where `g = (x => (y => …))`)
+-- (emitClosureAllocA / emitConstClosureA); read at an INDIRECT call site (emitIndirect) so a
+-- let-bound closure applied to MORE args than its arity (`(g 7) 9` where `g = (x => (y => …))`)
 -- saturates with the first `arity` args then applies the surplus to the returned
 -- closure (emitApplyAny) — mirroring emitOverApp for known fns.  Without this the
 -- indirect call passed ALL args to the arity-1 lifted code → arity mismatch →
--- garbage.  A miss (closure word not a recorded `%tN` — e.g. a captured/param
+-- garbage.  A miss (closure word not a recorded key — e.g. a captured/param
 -- closure) falls to emitApplyAny, which reads the closure's RUNTIME arity from the
 -- cell header (field 0) and dispatches exact / partial (PAP) / over application via
 -- the runtime @mdk_apply — so an opaque under-application no longer miscompiles.
@@ -329,8 +337,13 @@ data GapMode = Strict | Record
 -- the historical LTInt default → zero blast radius for them.
 
 -- compile-time DIRECT-CALL table for let-group local functions, keyed by the
--- closure cell's word (the same key domain as `e.closureArity`, so the same
--- PER-DEFINE scoping applies — `beginDefine` clears it, `endDefine` restores it).
+-- closure cell's word — the same mixed key domain as `e.closureArity` above
+-- (`emitGroupBind` calls the very same `emitConstClosureA` / `emitClosureAllocA`
+-- to build the cell and reuses the resulting word `w` as this table's key too),
+-- so the same split applies: entries keyed by a `ptrtoint (ptr @mdk_cc_N to i64)`
+-- constant can never collide, `N` coming from `freshId`'s never-reset counter,
+-- while entries keyed by a raw `%tN` SSA register still depend on the
+-- PER-DEFINE scoping — `beginDefine` clears it, `endDefine` restores it.
 -- The value is the lifted define's symbol and its arity.  An entry is written by
 -- `emitGroupBind` ONLY when `satOnlyUses` has proved that, over the rest of the
 -- group and its body, the bound name occurs exclusively as the head of an
@@ -1026,14 +1039,16 @@ freshReg e = "%t" ++ intToString (freshLocal e)
 
 -- ── the per-define gensym scope (issue #118) ────────────────────────────────
 -- Everything keyed on, or counting, a FUNCTION-SCOPED name: the `%tN`/label
--- counter plus the three tables keyed BY a `%tN` register — `e.closureArity`,
--- `e.closureRetTy` and `e.directFn`.  Once `%tN` restarts per define, a register name is only
--- unique WITHIN a define, so those tables must be scoped the same way or `%t5` in
--- one function would answer a lookup for `%t5` in another (a wrong closure arity
--- at an indirect call = silent miscompile).  Scoping them per define is sound
--- because a table entry can only ever be READ inside the define that WROTE it:
--- the key is used verbatim as an SSA operand of the emitted `call`, and LLVM
--- requires an operand to be defined in the same function.
+-- counter plus the three tables keyed BY the closure cell's word —
+-- `e.closureArity`, `e.closureRetTy` and `e.directFn` (full account: their own
+-- doc comments above).  Once `%tN` restarts per define, a register name is only
+-- unique WITHIN a define, so a table entry keyed by one must be scoped the same
+-- way or `%t5` in one function would answer a lookup for `%t5` in another (a
+-- wrong closure arity at an indirect call = silent miscompile).  Not every entry
+-- needs this protection — a `ptrtoint (ptr @mdk_cc_N to i64)` constant key is
+-- already globally unique (`N` from the never-reset `freshId`) regardless of
+-- scoping — but clearing per define costs nothing on that subset and is load-
+-- bearing on the `%tN`-keyed one, so all three tables are scoped uniformly.
 --
 -- It also fixes a latent leak — both tables previously grew for the whole program.
 data DefScope =
@@ -8823,12 +8838,17 @@ emitClosureAllocA e lamName arity captureWords =
 -- Cached by initializer content in its own cache (NOT `dictConstCache` — different
 -- value domain, and sharing it would let a dict and a closure alias one global).
 -- ⚠️ In practice this cache can never HIT: `lamName` is always minted from
--- `freshId` at the call site (`emitGroupBind`'s `mdk_lam<id>`, each eta-wrapper's
--- `mdk_eta_<name>_<id>` / `mdk_etac_<name>_<id>`), so `initBody`'s `ptrtoint`
--- operand is globally unique per closure and no two initializers can ever match.
--- Measured cost of the miss-only lookups: negligible (~159 `@mdk_cc_` globals,
--- ~12k string comparisons in a full `llvm_emit_main` build) — not worth removing
--- or restructuring, but the cache is dead weight, not working dedup.
+-- `freshId` at the call site (`emitGroupBind`'s `mdk_lam<id>`, `emitLamGo`'s and
+-- `emitLamPat`'s own `mdk_lam<id>` for a capture-free user lambda, each
+-- eta-wrapper's `mdk_eta_<name>_<id>` / `mdk_etac_<name>_<id>`), so `initBody`'s
+-- `ptrtoint` operand is globally unique per closure and no two initializers can
+-- ever match.  Measured cost of the miss-only lookups (re-measured after S-1
+-- routed capture-free user lambdas through this path too, not just eta-wrappers):
+-- 902 `@mdk_cc_` globals in a full self-hosting `llvm_emit_modules_main` build of
+-- this compiler, so up to ~406K miss comparisons (a linear scan against an
+-- ever-growing list before each miss) — still a linear list scan per call, not
+-- worth removing or restructuring, but the cache is dead weight, not working
+-- dedup.
 emitConstClosureCell : Emit -> String -> Int -> String
 emitConstClosureCell e lamName arity =
   let codePtr = "ptrtoint (ptr @" ++ lamName ++ " to i64)"

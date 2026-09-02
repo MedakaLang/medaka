@@ -1,0 +1,17 @@
+-- ESCAPE (a) — #2241 end-of-sprint review finding. A `where`-bound helper
+-- (`add1`) that LOOKS saturated-only at its call site is ALSO passed as a
+-- bare first-class ARGUMENT at a second call site. `satOnlyUses` walks every
+-- occurrence of the binding across the group and its body; a bare-name
+-- argument occurrence is neither a `CLit` nor a saturated `CApp` head, so it
+-- answers False for the WHOLE binding — #2241's direct-call optimization
+-- (`e.directFn`) must not fire, and `add1 x`'s call site must stay on the
+-- historical indirect path (closure-cell code_ptr load + indirect call).
+apply1 : (Int -> Int) -> Int -> Int
+apply1 f x = f x
+
+useArg : Int -> Int
+useArg x = add1 x + apply1 add1 x
+  where
+    add1 y = y + 1
+
+main = println "escape-argument result=\{debug (useArg 5)}"

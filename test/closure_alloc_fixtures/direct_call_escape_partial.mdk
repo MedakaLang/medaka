@@ -1,0 +1,17 @@
+-- ESCAPE (c) — #2241 end-of-sprint review finding. A `where`-bound helper
+-- (`add2`, arity 2) is PARTIALLY APPLIED: `add2 x` (1 arg supplied, not 2)
+-- is passed as a first-class ARGUMENT to `applyTo10`, never called directly
+-- with its full arity anywhere. `satOnlyUses`'s `CApp` arm answers False for
+-- the `add2 x` occurrence because its argument count (1) does not equal
+-- `add2`'s arity (2), so it must stay on the historical indirect path
+-- (which builds a residual PAP closure over the supplied args), never
+-- #2241's direct-call optimization (`e.directFn`).
+applyTo10 : (Int -> Int) -> Int
+applyTo10 f = f 10
+
+usePartial : Int -> Int
+usePartial x = applyTo10 (add2 x)
+  where
+    add2 a b = a + b
+
+main = println "escape-partial result=\{debug (usePartial 5)}"
