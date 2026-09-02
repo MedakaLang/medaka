@@ -8531,6 +8531,11 @@ goalSiteLoc = Ref None
 currentDoOrigin : Ref (Option Loc)
 currentDoOrigin = Ref None
 
+-- #824: True while inferring a `defer` block's lowered chain (see the
+-- `EDoOrigin` arm of `infer`); selects the wording of `recordDoMonadError`.
+currentDoDeferred : Ref Bool
+currentDoDeferred = Ref False
+
 -- C8b Gap 2 (diagnostic-quality parity): set to `Some methodName` around the
 -- OUTER unify of an interface default body against its declared return type, so a
 -- leaf TypeMismatch is reported as the oracle's specialized single line
@@ -9481,7 +9486,7 @@ recordDoMonadError doLoc =
     "T-DO-NOT-MONAD"
     1
     (Some doLoc)
-    doRequiresMonadMsg
+    (if !currentDoDeferred then deferRequiresMonadMsg else doRequiresMonadMsg)
     None
     None)
 
@@ -9491,6 +9496,9 @@ monoIsApp _ = False
 
 doRequiresMonadMsg : String
 doRequiresMonadMsg = "`do` requires a Thenable impl (e.g. `Option`/`Result`). For IO sequencing use a bare indented block, not `do`"
+
+deferRequiresMonadMsg : String
+deferRequiresMonadMsg = "`defer` requires a DeferredThenable impl — an effect-indexed constructor such as `Async` (its `defer` block registers effects in the index and performs nothing until forced). For a strict container (`Option`/`Result`/`List`) use `do`; for IO sequencing use a bare indented block"
 
 -- SYMMETRIC complement of doRequiresMonadMsg: a `<-` bind reached a bare
 -- (non-`do`) block.  `<-` is monadic-`do`-only; a bare indented block is IO
@@ -10881,11 +10889,27 @@ infer env (ELoc l e) =
 -- everywhere else it is handled — `mapKids`, `alpha`, `appSpineName`, …).
 infer env (EDoOrigin l e) =
   let prevDoOrigin = !currentDoOrigin
+  let prevDeferred = !currentDoDeferred
   currentDoOrigin := Some l
+  -- #824: the lowered chain's synthesized callee names the herald
+  -- (`deferThen` for a `defer` block), so the "requires a monad" reframe can
+  -- name the right interface.
+  currentDoDeferred := doChainIsDeferred e
   let t = infer env e
   currentDoOrigin := prevDoOrigin
+  currentDoDeferred := prevDeferred
   t
+
 infer _ _ = panic "typecheck: unsupported expression"
+
+-- is this lowered do-chain a `defer` block?  Its head callee is the tagged
+-- `deferThen` (see `callAndThen` in desugar.mdk).
+doChainIsDeferred : Expr -> Bool
+doChainIsDeferred (EApp f _) = doChainIsDeferred f
+doChainIsDeferred (ELoc _ e) = doChainIsDeferred e
+doChainIsDeferred (EDoOrigin _ (EVar "deferThen")) = True
+doChainIsDeferred (EDoOrigin _ (EVarId "deferThen" _)) = True
+doChainIsDeferred _ = False
 
 inferArrayLit : TcEnv -> List Expr -> Mono
 inferArrayLit env es =
