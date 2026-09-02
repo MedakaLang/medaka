@@ -10,7 +10,7 @@
 --
 -- It reuses the shipped use-site code `T-EFFECT-KIND-MISMATCH` — this is the MIRROR of
 -- that check (a type in a row slot rather than a row in a type slot), not a new rule.
-data Box e a = MkBox (Unit -> <e> a)
+data Box (e : Effect) a = MkBox (Unit -> <e> a)
 
 mk : Unit -> Unit
 mk u = ()

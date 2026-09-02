@@ -11,7 +11,7 @@
 --
 -- Delete the interface and the same file is correctly rejected on any build, which is
 -- what makes this discriminating: the ONLY thing that can flip it is kind leakage.
-interface G f where
+interface G (f : Effect -> Type -> Type) where
   g : f e a -> (a -> <e> f e b) -> f e b
 
 bad : f Int a -> f String a

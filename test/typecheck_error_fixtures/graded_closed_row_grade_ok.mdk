@@ -12,11 +12,11 @@
 -- #823 cannot add the graded core interfaces while this is rejected, so it is a
 -- workstream blocker, not polish.  Both spellings are checked here so the pair can never
 -- drift apart again.
-data Async e a = Done a | Suspend (Unit -> <e> Async e a)
+data Async (e : Effect) a = Done a | Suspend (Unit -> <e> Async e a)
 
 mkPure : a -> Async <> a
 mkPure x = Done x
 
-interface GT f where
+interface GT (f : Effect -> Type -> Type) where
   gth : f e a -> (a -> <e> f e b) -> f e b
   gpure : a -> f <> a

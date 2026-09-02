@@ -12,9 +12,9 @@
 -- The discriminator is per-DECLARATION, so both must cross the boundary or neither
 -- proves anything: a seed that published nothing would reject BOTH in the entry,
 -- and a seed that published everything unconditionally would accept both.
-export data Slot e = Slot (Unit -> <Stdout | e> Unit)
+export data Slot (e : Effect) = Slot (Unit -> <Stdout | e> Unit)
 
-export data Bare e = Bare (Unit -> <e> Unit)
+export data Bare (e : Effect) = Bare (Unit -> <e> Unit)
 
 export mkSlot : (Unit -> <Stdout | e> Unit) -> Slot e
 mkSlot f = Slot f

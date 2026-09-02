@@ -11,7 +11,7 @@
 -- went quiet (same reasoning as graded_head_wrong_kind_flat.mdk).
 data Box e a = Mk a
 
-interface GThenable f where
+interface GThenable (f : Effect -> Type -> Type) where
   gandThen : f e a -> (a -> <e> f e b) -> f e b
 
 impl GThenable Box where

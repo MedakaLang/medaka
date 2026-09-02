@@ -6,13 +6,13 @@
 -- and `pureInt : Int` printed `BOOM` on both engines.  The eager arm closes
 -- the rigid `e := <>`; that closing is what T-EFFECT-INDEX-EAGER reports.
 -- Its ACCEPT twin, graded_index_deferred_ok.mdk, differs by that one arm.
-data Box e a = Done a | Susp (Unit -> <e> a)
+data Box (e : Effect) a = Done a | Susp (Unit -> <e> a)
 
 runBox : Box e a -> <e> a
 runBox (Done a) = a
 runBox (Susp t) = t ()
 
-interface GMap f where
+interface GMap (f : Effect -> Type -> Type) where
   gmap : (a -> <e> b) -> f e a -> f e b
 
 impl GMap Box where

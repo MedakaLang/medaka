@@ -13,5 +13,5 @@
 -- just the user's own declared scheme — a #822 recurrence would NOT be caught by
 -- this file unless it also breaks `h` itself. See #2033 to re-home this pin onto a
 -- driver that still dumps the folded prelude.
-interface H f where
+interface H (f : Effect -> Type) where
   h : f e -> <e> Int

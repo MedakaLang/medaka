@@ -1,7 +1,7 @@
 -- #804/#1028 regression guard.  `Asy` is exported ABSTRACTLY — plain `export`,
 -- constructor PRIVATE — which is the standard opacity pattern and exactly how
--- `stdlib/async.mdk` declares `Async e a`.  Its first parameter is Row-kinded
--- (it appears in `Mk`'s field effect tail), and that KIND must reach an importer
+-- `stdlib/async.mdk` declares `Async (e : Effect) a`.  Its first parameter is
+-- Effect-kinded, declared on the head, and that KIND must reach an importer
 -- even though the constructor must not: see `registerOpaqueParamKinds` in
 -- compiler/types/typecheck.mdk.
 --
@@ -10,4 +10,4 @@
 -- takes the SILENT halves (inferred schemes), that one takes the REJECTION half (the pin's
 -- located T-EFFECT-UNDETERMINED assertion, inverted to an accept).  Neither covers the
 -- other — see the note in entry.mdk.
-export data Asy e a = Mk (Unit -> <e> a)
+export data Asy (e : Effect) a = Mk (Unit -> <e> a)

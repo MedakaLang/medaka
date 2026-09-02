@@ -33,7 +33,7 @@
 -- letters the surviving index independently, so one source `e` renders as an absent row
 -- on the arrow and as `b` on the index.  Same reason `unbox : Box a b -> b` shows no
 -- `<a>` on its result.
-data Box e a = MkBox (Unit -> <e> a)
+data Box (e : Effect) a = MkBox (Unit -> <e> a)
 
 unbox : Box e a -> <e> a
 unbox (MkBox t) = t ()

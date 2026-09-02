@@ -73,10 +73,10 @@ impl Own ET where
 impl Display ET where
   display e = "ET"
 
-interface OwnGraded f where
+interface OwnGraded (f : Effect -> Type -> Type) where
   ownThen : f e a -> (a -> <e> f e b) -> f e b
 
-public export data Asy e a = MkAsy (Unit -> <e> a)
+public export data Asy (e : Effect) a = MkAsy (Unit -> <e> a)
 
 impl OwnGraded Asy where
   ownThen a f = ownThen a f

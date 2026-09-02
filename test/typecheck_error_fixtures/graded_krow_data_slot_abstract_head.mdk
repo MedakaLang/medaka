@@ -1,16 +1,14 @@
--- #822: a KROW DATA slot feeding an ABSTRACT head, with NO interface in the file at all.
---
--- This pins behaviour the implementation comment used to declare IMPOSSIBLE ("an
--- unscoped seam withholds nothing, so the arm never fires there").  It does fire here:
--- `e` is row-kinded from `dataParamKindsRef` — nothing to do with graded interfaces —
--- so `rowArgNamesIn` reports it, the caller withholds it from the tyvar map, and the
--- abstract-headed `f e Int` therefore meets the row-slot test with an empty graded scope.
---
--- The result is a FIX, not a leak.  Pre-#822 that withheld `e` fell through
--- `fromAstTypeE (TyVar n)`'s `optionOr (TCon n)` and became a FABRICATED RIGID
--- `TCon "e"`: `getInner` inferred as `D a b -> b e Int`, an opaque constant no caller
--- could ever satisfy.  The golden below records `D a b -> b a Int` — a real variable.
-data D e f = MkD (Unit -> <e> Unit) (f e Int)
+-- #822, REWRITTEN for declared kinds (EFFECTS-SEMANTICS.md §6.1/§6.3): the
+-- original shape here fed an ABSTRACT higher-kinded parameter `f` a row via
+-- `f e Int` on a plain `data` head, with no interface anywhere in the file.
+-- That relied on `dataParamKindsRef`'s retired transitive inference; under
+-- declared kinds it is no longer just unannotated, it is UNWRITABLE: a `data`
+-- head parameter's arrow kind may not contain `Effect` at all -- only an
+-- `interface` head may declare `Effect -> Type -> Type` (§6.1's own
+-- rationale: only an interface parameter is a type CONSTRUCTOR abstracted
+-- over `f e a`, not `f`'s row PLUS its own row). This now pins that a `data`
+-- head cannot even express what the old inferred-abstract-head shape needed.
+data D (e : Effect) (f : Effect -> Type -> Type) = MkD (Unit -> <e> Unit) (f e Int)
 
 getInner : D e f -> f e Int
 getInner (MkD _ x) = x
