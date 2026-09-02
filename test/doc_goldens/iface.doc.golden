@@ -7,14 +7,10 @@ interface Sized a
   size : a -> Int
 ```
 
-Things that have a size.
-
 ## `Emitter`
 
 ```
 interface Emitter a
   emit : a -> <IO> Unit
 ```
-
-An effectful emitter.
 

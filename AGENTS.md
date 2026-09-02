@@ -93,7 +93,10 @@ layer over `runtime.mdk` IO), `args` (one CLI argument parser — a verb's flag 
 VALUE that the `(known: …)` roster and the parser are unified renderings of;
 `docs/design/ARGS-DESIGN.md`). **For "does the stdlib have X" ask the generated reference,
 [`docs/stdlib/index.md`](docs/stdlib/index.md)** (`./medaka doc --out docs/stdlib stdlib/*.mdk`)
-— name-by-name, regenerated from source, never hand-maintained.
+— name-by-name, regenerated from source, never hand-maintained. **Writing or
+editing a stdlib doc comment? The register is `stdlib/README.md` § "Writing
+documentation"** — what renders (marked blocks only), what a doc comment
+contains, and what stays out (history, issue numbers, implementation notes).
 
 Import forms: `import map.{Map, get}` (selective), `import map.*` (all exported), `import
 map as M` → `M.get` (**values only** — an alias-qualified name in *type* position is a parse

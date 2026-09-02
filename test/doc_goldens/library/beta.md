@@ -1,7 +1,5 @@
 # beta
 
-beta.mdk — tiny library-mode fixture module #2.
-
 ## `increment`
 
 ```

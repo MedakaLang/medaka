@@ -8,8 +8,6 @@ data Tree a
   | Node a (Tree a) (Tree a)
 ```
 
-A binary tree of values.
-
 ## `Color`
 
 ```
@@ -18,6 +16,4 @@ data Color
   | Green
   | Blue
 ```
-
-A simple enum.
 

@@ -1,35 +1,5 @@
 # net
 
-net.mdk — an ergonomic TCP/DNS layer over the host `net*` externs.
-
-The irreducible host primitives are `extern`s in stdlib/runtime.mdk:
-`netResolve`/`netTcpConnect`/`netTcpListen`/`netListenPort`/`netTcpAccept`/
-`netSend`/`netRecv`/`netShutdown`/`netClose`/`netSetTimeout`. They traffic raw
-tagged `Int` fds and are global (no import needed). This module (`import net`)
-wraps them in abstract `Connection`/`Listener` handles (unexported
-constructors — a caller cannot fabricate a fd, mix up a listening socket with
-a connected one, or do arithmetic on a handle), adds short-read/short-write
-loops (`sendAll`/`recvAll`), text convenience (`sendString`/`recvString`/
-`sendLine`/`recvLine`), and the leak-safety brackets `withConnection`/
-`withListener`/`serveLoop` (see NET-DESIGN.md §4: Medaka has no RAII/`finally`,
-so "always close on both the `Ok` and `Err` body path" is done here, not by
-the language).
-
-Conventions (mirroring stdlib/fs.mdk): every op returns `Result String _`
-with the host error message (errno strerror) in `Err`. There is no IO
-monad — an action runs when it is evaluated, so you can `match connect host
-port` directly.
-
-Scope: NATIVE/LLVM, build-only. Like every net extern, these execute only
-through the compiled (`medaka build`) path — `net` externs are unbound under
-the tree-walking interpreter (`medaka run`), exactly like `fs`/`io`'s file
-externs (NET-DESIGN.md §6). Doctests here would try to run through the
-interpreter and fail for that reason alone, so this module is verified by a
-compiled loopback fixture instead of `medaka test` doctests (NET-DESIGN.md
-§7's documented caveat) — doc-comments below show non-executing usage. Also
-native-only for a second reason: WasmGC has no raw-socket equivalent, so
-`medaka build --target wasm` rejects any program importing `net`.
-
 ## `Connection`
 
 ```

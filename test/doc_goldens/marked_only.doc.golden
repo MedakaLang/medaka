@@ -1,0 +1,53 @@
+# marked_only
+
+The lead paragraph. Only this marked block is the module header.
+
+A second paragraph of the header.
+
+## Building
+
+### `build`
+
+```
+build : Int -> Int
+```
+
+Builds a thing.
+
+```medaka
+> build 1
+2
+```
+
+### `unmarked`
+
+```
+unmarked : Int -> Int
+```
+
+## Types
+
+### `Wrap`
+
+```
+data Wrap
+  = Wrap Int
+```
+
+Instances: `Eq`, `Debug`, [`Ord`](#ord-wrap), `Display`
+
+A wrapper. Its undocumented instances are listed under it.
+
+## Instances
+
+- `(Wrap, Int)`: `Hashable`
+
+### `Ord Wrap`
+
+```
+impl Ord Wrap
+```
+
+Wraps compare by the wrapped number. This documented instance keeps its
+own entry and is linked from the type's instance line.
+

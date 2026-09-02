@@ -1,31 +1,28 @@
 # Library Index
 
-## `alpha` (1 entries)
+## [`alpha`](alpha.md)
 
 - [`double`](alpha.md#double)
 
-## `array` (2 entries)
+## [`array`](array.md)
 
 - [`firstOrZero`](array.md#firstorzero)
-- [`Sizeish (Array Int)`](array.md#sizeish-array-int)
 
-## `beta` (1 entries)
+## [`beta`](beta.md)
 
 - [`increment`](beta.md#increment)
 
-## `gadget` (1 entries)
+## [`gadget`](gadget.md)
 
 - [`tripled`](gadget.md#tripled)
 
-## `gamma` (3 entries)
+## [`gamma`](gamma.md)
 
 - [`Widget`](gamma.md#widget)
 - [`Sizeish`](gamma.md#sizeish)
-- [`Sizeish Widget`](gamma.md#sizeish-widget)
 
-## `owner` (3 entries)
+## [`owner`](owner.md)
 
 - [`Countish`](owner.md#countish)
-- [`Countish Gadget`](owner.md#countish-gadget)
 - [`mkGadget`](owner.md#mkgadget)
 

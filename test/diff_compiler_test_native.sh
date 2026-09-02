@@ -27,7 +27,7 @@
 #
 # Only ONE thing is a genuine pin, and it is the SMALLEST possible one: the expected
 # "N/N passed" count per named module, taken from AGENTS.md's already-measured clean
-# run (string 67/67, list 125/125, map 40/40). If a module's doctest count changes on
+# run (string 67/67, list 143/143, map 40/40). If a module's doctest count changes on
 # purpose (someone adds/removes a doctest), update the number in this script the same
 # turn — there is no `--bless` because there is nothing to capture, only a count to
 # read off the module and update by hand, same discipline as this repo's must-fail
@@ -124,7 +124,7 @@ bad() { printf 'FAIL: %s\n' "$*"; fail=1; }
 
 # ── module set (see header: NAMED, SMALL) ────────────────────────────────────────
 # module path : expected doctest count, measured clean per AGENTS.md.
-MODULES="stdlib/string.mdk:69 stdlib/list.mdk:125 stdlib/map.mdk:41"
+MODULES="stdlib/string.mdk:69 stdlib/list.mdk:143 stdlib/map.mdk:41"
 
 for entry in $MODULES; do
   mod="${entry%%:*}"

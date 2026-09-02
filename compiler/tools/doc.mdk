@@ -58,8 +58,10 @@ import string.{toLower}
 -- de_name / de_sig (never empty) / de_doc (stripped doc prose, may be "") /
 -- de_kind (S-doc-surface-truth: the ATTRIBUTION facts about the declaration
 -- this entry came from, threaded at extraction time rather than re-derived by
--- parsing `de_sig` back — the sig is a rendering, not a data structure).
-data DocEntry = DocEntry String String String DocKind
+-- parsing `de_sig` back — the sig is a rendering, not a data structure) /
+-- de_line (the declaration's source line, which is what places a `-- # Title`
+-- section heading relative to the entries around it).
+data DocEntry = DocEntry String String String DocKind Int
 
 -- What kind of declaration produced an entry, for the library-mode impl
 -- rebucketing pass (`rebucketLibraryImpls`).  `KTypeDecl` marks a `data`/
@@ -67,8 +69,16 @@ data DocEntry = DocEntry String String String DocKind
 -- `KImplOn` carries the head type-constructor name of the impl's FIRST type
 -- argument (`impl Debug (Array a)` -> `Some "Array"`), or `None` when the impl
 -- has no type arguments or its head is a type VARIABLE (`impl Debug a`), which
--- has no owner by construction.  Everything else is `KPlain`.
-data DocKind = KPlain | KTypeDecl | KImplOn (Option String)
+-- has no owner by construction.  `KSection` is not a declaration at all: a
+-- `-- # Title` comment between declarations, rendered as a page section and
+-- excluded from the index and the inventory.  Everything else is `KPlain`.
+data DocKind = KPlain | KTypeDecl | KImplOn (Option String) | KSection
+
+-- One row of the comment table: (source line, text, block).  `block` is the
+-- start line of the `{- -}` comment the row came from, or 0 for a line
+-- comment.  It is what lets `markedDoc` stop at the end of a doc block
+-- instead of absorbing a maintainer note written directly under it.
+type CommentRow = (Int, String, Int)
 
 -- ── small string helpers (builtins; mirror doctest's local wrappers) ────────
 dlen : String -> Int
@@ -195,9 +205,10 @@ unescapeGtPrefix line =
   else
     line
 
--- Expand a comment into (line, text) pairs.  Block comments expand to one entry
--- per inner line (bare trimmed).  Line comments → [(line, docLineBody text)].
-expandComment : Comment -> List (Int, String)
+-- Expand a comment into table rows.  Block comments expand to one row per
+-- inner line (bare trimmed), all tagged with the block's start line.  Line
+-- comments → [(line, docLineBody text, 0)].
+expandComment : Comment -> List CommentRow
 expandComment c =
   let t = commentText c
   if dlen t >= 2 && dsub 0 2 t == "{-" then
@@ -207,52 +218,99 @@ expandComment c =
     let inner = if n >= 4 then dsub 2 (n - 2) t else ""
     expandBlockLines (commentLine c) 0 (splitNl inner)
   else
-    [(commentLine c, docLineBody t)]
+    [(commentLine c, docLineBody t, 0)]
 
-expandBlockLines : Int -> Int -> List String -> List (Int, String)
+expandBlockLines : Int -> Int -> List String -> List CommentRow
 expandBlockLines _ _ [] = []
 expandBlockLines baseLine i (line::rest) =
-  (baseLine + i, stringTrim line) :: expandBlockLines baseLine (i + 1) rest
+  (baseLine + i, stringTrim line, baseLine) ::
+    expandBlockLines baseLine (i + 1) rest
 
 -- splitNl → support/util.mdk (imported above; #242 dedup of the splitNl cluster).
 
--- ── comment table: line -> text (assoc list; later entries win, like
+-- ── comment table: line -> row (assoc list; later entries win, like
 -- Hashtbl.replace which keeps the last inserted for a key) ──────────────────
 -- We build an assoc list, then look up by line.  build_comment_tbl iterates
--- comments in order, replacing per line; for lookup we want the LAST text set
+-- comments in order, replacing per line; for lookup we want the LAST row set
 -- for a line.  We keep insertion order and `lookupLast` returns the last match.
 
-buildCommentTbl : List Comment -> List (Int, String)
+buildCommentTbl : List Comment -> List CommentRow
 buildCommentTbl comments = concatMapDoc expandComment comments
 
 concatMapDoc : (a -> List b) -> List a -> List b
 concatMapDoc _ [] = []
 concatMapDoc f (x::xs) = f x ++ concatMapDoc f xs
 
--- Find the LAST (line,text) pair whose line matches (mirrors Hashtbl.replace
--- semantics: the last insertion for a key wins).
-lookupLineLast : List (Int, String) -> Int -> Option String
+-- Find the LAST row whose line matches (mirrors Hashtbl.replace semantics:
+-- the last insertion for a key wins).  Returns (text, block).
+lookupLineLast : List CommentRow -> Int -> Option (String, Int)
 lookupLineLast tbl line = lookupLineLastGo tbl line None
 
-lookupLineLastGo : List (Int, String) -> Int -> Option String -> Option String
+lookupLineLastGo : List CommentRow -> Int -> Option (String, Int) -> Option (String, Int)
 lookupLineLastGo [] _ acc = acc
-lookupLineLastGo ((l, t)::rest) line acc =
+lookupLineLastGo ((l, t, b)::rest) line acc =
   if l == line then
-    lookupLineLastGo rest line (Some t)
+    lookupLineLastGo rest line (Some (t, b))
   else
     lookupLineLastGo rest line acc
 
--- Return doc prose for the decl at [startLine]: the maximal consecutive block
--- of comments immediately above it (no line gap).  Newline-joined + trimmed.
-findDocForLine : List (Int, String) -> Int -> String
+-- Return doc prose for the decl at [startLine]: the doc comment inside the
+-- maximal consecutive run of comments immediately above it (no line gap),
+-- per `markedDoc`.  Newline-joined + trimmed.
+findDocForLine : List CommentRow -> Int -> String
 findDocForLine tbl startLine =
-  stringTrim (joinWith "\n" (collectDocLines tbl (startLine - 1) []))
+  markedDoc (collectDocLines tbl (startLine - 1) [])
 
 -- Collect backwards; accumulator ends up in ascending line order.
-collectDocLines : List (Int, String) -> Int -> List String -> List String
+collectDocLines : List CommentRow -> Int -> List CommentRow -> List CommentRow
 collectDocLines tbl line acc = match lookupLineLast tbl line
   None => acc
-  Some text => collectDocLines tbl (line - 1) (text::acc)
+  Some (t, b) => collectDocLines tbl (line - 1) ((line, t, b)::acc)
+
+-- THE RULE for what renders (`stdlib/README.md` § "Writing documentation"):
+-- only a MARKED comment is documentation.  Within a run of comment rows, the
+-- doc is the marker row and every row after it that belongs to the same
+-- comment: the rest of the `{- | -}` block, or the following line comments
+-- of a `-- |` run.  Rows before the marker and rows from a different comment
+-- after it are maintainer notes and are dropped.  A run with no marker
+-- documents nothing.
+--
+-- Where a marker may sit: on the run's first row (blank and decorative rows
+-- excepted, `markerEligibleAfter`), or on the FIRST row of a `{- -}` block
+-- anywhere in the run.  A `| ` deeper inside a line-comment run is user
+-- content — a wrapped `data` declaration or a table row (S2-3) — and must not
+-- start a doc; that is also why a `-- |` run cannot follow a note without a
+-- blank line between them.
+markedDoc : List CommentRow -> String
+markedDoc rows = match dropToMarker True rows
+  [] => ""
+  (_, t, b)::rest => stringTrim (joinWith "\n" (t :: sameBlockTexts b rest))
+
+dropToMarker : Bool -> List CommentRow -> List CommentRow
+dropToMarker _ [] = []
+dropToMarker atStart ((l, t, b)::rest)
+  | hasPipeMarker t && (atStart || b > 0 && l == b) = (l, t, b)::rest
+  | otherwise = dropToMarker (atStart && markerEligibleAfter t) rest
+
+sameBlockTexts : Int -> List CommentRow -> List String
+sameBlockTexts _ [] = []
+sameBlockTexts b ((_, t, b2)::rest) =
+  if b2 == b then
+    t :: sameBlockTexts b rest
+  else
+    []
+
+-- Section headings: every `-- # Title` line comment, as (line, title).  A
+-- section is a page-level grouping of the entries that follow it, not
+-- documentation of any one declaration, so it is collected from the whole
+-- table rather than attached to a decl.
+sectionsFrom : List CommentRow -> List (Int, String)
+sectionsFrom [] = []
+sectionsFrom ((l, t, b)::rest) =
+  if b == 0 && dlen t >= 2 && dsub 0 2 t == "# " then
+    (l, stringTrim (dsub 2 (dlen t) t)) :: sectionsFrom rest
+  else
+    sectionsFrom rest
 
 -- ── signature rendering ────────────────────────────────────────────────────
 
@@ -410,17 +468,17 @@ tyHeadName _ = None
 -- ── entry extraction ───────────────────────────────────────────────────────
 
 -- Expand a public DLetGroup into one (name, DocEntry) per binding.
-allLetgroupEntries : Bool -> List LetBind -> Int -> List (String, Scheme) -> List (Int, String) -> List (String, DocEntry)
+allLetgroupEntries : Bool -> List LetBind -> Int -> List (String, Scheme) -> List CommentRow -> List (String, DocEntry)
 allLetgroupEntries False _ _ _ _ = []
 allLetgroupEntries True bindings line schemes tbl =
   let doc = findDocForLine tbl line
-  letgroupEntriesGo bindings schemes doc
+  letgroupEntriesGo bindings schemes doc line
 
-letgroupEntriesGo : List LetBind -> List (String, Scheme) -> String -> List (String, DocEntry)
-letgroupEntriesGo [] _ _ = []
-letgroupEntriesGo ((LetBind name _)::rest) schemes doc =
+letgroupEntriesGo : List LetBind -> List (String, Scheme) -> String -> Int -> List (String, DocEntry)
+letgroupEntriesGo [] _ _ _ = []
+letgroupEntriesGo ((LetBind name _)::rest) schemes doc line =
   let sigStr = valueSig name schemes None
-  (name, DocEntry name sigStr doc KPlain) :: letgroupEntriesGo rest schemes doc
+  (name, DocEntry name sigStr doc KPlain line) :: letgroupEntriesGo rest schemes doc line
 
 -- ── derived instances (`deriving (…)`) ─────────────────────────────────────
 -- `public export data Duration = Duration Int deriving (Eq, Ord, Debug)`
@@ -457,17 +515,17 @@ hasDeriver tyName params (ShapeData variants) iface =
 hasDeriver tyName params (ShapeNewtype con fty) iface =
   elem iface (map fst (newtypeDerivers tyName params con fty))
 
-derivedEntries : String -> List String -> DeriveShape -> List DeriveRef -> List (String, DocEntry)
-derivedEntries _ _ _ [] = []
-derivedEntries tyName params shape (d::ds) =
+derivedEntries : String -> List String -> DeriveShape -> Int -> List DeriveRef -> List (String, DocEntry)
+derivedEntries _ _ _ _ [] = []
+derivedEntries tyName params shape line (d::ds) =
   let iface = deriveRefName d
-  let rest = derivedEntries tyName params shape ds
+  let rest = derivedEntries tyName params shape line ds
   if not (hasDeriver tyName params shape iface) then rest
   else
     let args = derivedHead tyName params
     let name = "\{iface} \{args}"
     let sigStr = "impl \{iface} \{args}\{derivedRequires iface params}"
-    (name, DocEntry name sigStr "" (KImplOn (Some tyName)))::rest
+    (name, DocEntry name sigStr "" (KImplOn (Some tyName)) line)::rest
 
 -- `T` with no params, `(T a b)` with them — `ppTyP 2`'s rendering of the head
 -- `appliedHead` builds.
@@ -498,13 +556,14 @@ derivesOf _ = None
 
 -- The type's own entry (exactly what the single-entry path would have made)
 -- followed by one entry per derived class.
-derivingEntries : Bool -> Decl -> Int -> List (String, Scheme) -> List (Int, String) -> (String, List String, List DeriveRef, DeriveShape) -> List (String, DocEntry)
+derivingEntries : Bool -> Decl -> Int -> List (String, Scheme) -> List CommentRow -> (String, List String, List DeriveRef, DeriveShape) -> List (String, DocEntry)
 derivingEntries bare decl line schemes tbl (tyName, params, derives, shape) =
   let doc = findDocForLine tbl line
   let own = match renderSig bare decl schemes
     None => []
-    Some (name, sigStr) => [(name, DocEntry name sigStr doc (declKind decl))]
-  own ++ derivedEntries tyName params shape derives
+    Some (name, sigStr) =>
+      [(name, DocEntry name sigStr doc (declKind decl) line)]
+  own ++ derivedEntries tyName params shape line derives
 
 -- ── re-exports (hole (a)) ───────────────────────────────────────────────────
 -- `export import core.{Filterable, filter, filterMap}` (`stdlib/list.mdk:8`,
@@ -535,7 +594,7 @@ derivingEntries bare decl line schemes tbl (tyName, params, derives, shape) =
 -- no value scheme anywhere by construction, so there is no signature to find,
 -- and naming the origin is a true statement about the module's surface rather
 -- than an inferred signature we cannot justify.
-reexportEntries : Int -> List (String, Scheme) -> List (Int, String) -> List (String, List (String, Scheme)) -> (List String, List UseMember) -> List (String, DocEntry)
+reexportEntries : Int -> List (String, Scheme) -> List CommentRow -> List (String, List (String, Scheme)) -> (List String, List UseMember) -> List (String, DocEntry)
 reexportEntries line schemes tbl origins (path, members) =
   let doc = findDocForLine tbl line
   let originMod = joinWith "." path
@@ -545,10 +604,11 @@ reexportEntries line schemes tbl origins (path, members) =
     schemes
     (originSchemesOf originMod origins)
     doc
+    line
 
-reexportEntriesGo : String -> List UseMember -> List (String, Scheme) -> List (String, Scheme) -> String -> List (String, DocEntry)
-reexportEntriesGo _ [] _ _ _ = []
-reexportEntriesGo originMod (m::rest) schemes originSchemes doc =
+reexportEntriesGo : String -> List UseMember -> List (String, Scheme) -> List (String, Scheme) -> String -> Int -> List (String, DocEntry)
+reexportEntriesGo _ [] _ _ _ _ = []
+reexportEntriesGo originMod (m::rest) schemes originSchemes doc line =
   let local = useMemberLocal m
   let origin = useMemberOrigin m
   let sigStr = match lookupScheme local schemes
@@ -556,7 +616,7 @@ reexportEntriesGo originMod (m::rest) schemes originSchemes doc =
     None => match lookupScheme origin originSchemes
       Some s => "\{local} : \{ppScheme s}"
       None => "\{local} : re-export of \{originMod}.\{origin}"
-  (local, DocEntry local sigStr doc KPlain) :: reexportEntriesGo originMod rest schemes originSchemes doc
+  (local, DocEntry local sigStr doc KPlain line) :: reexportEntriesGo originMod rest schemes originSchemes doc line
 
 -- The origin-module scheme table: dotted module id -> that module's own
 -- top-level schemes, for every `export import m.{…}` in the page's raw decls.
@@ -626,7 +686,7 @@ extractEntries bare decls positions schemes origins comments =
   reverseL (fst result)
 
 -- Fold over (decl, pos) pairs.  State: (revEntries, seenNames).  Returns it.
-extractFold : Bool -> List (Decl, DeclPos) -> List (String, Scheme) -> List (String, List (String, Scheme)) -> List (Int, String) -> List DocEntry -> List String -> (List DocEntry, List String)
+extractFold : Bool -> List (Decl, DeclPos) -> List (String, Scheme) -> List (String, List (String, Scheme)) -> List CommentRow -> List DocEntry -> List String -> (List DocEntry, List String)
 extractFold _ [] _ _ _ revEntries seen = (revEntries, seen)
 extractFold bare ((decl, dp)::rest) schemes origins tbl revEntries seen =
   let line = declPosLine dp
@@ -645,13 +705,32 @@ extractFold bare ((decl, dp)::rest) schemes origins tbl revEntries seen =
           schemes
           origins
           tbl
-          (DocEntry name sigStr doc (declKind decl) :: revEntries)
+          (DocEntry name sigStr doc (declKind decl) line :: revEntries)
           (name::seen)
+
+-- Interleave `-- # Title` sections with the entries by source line: a section
+-- precedes the first entry declared after it.  Both lists arrive in
+-- ascending line order.
+insertSections : List (Int, String) -> List DocEntry -> List DocEntry
+insertSections [] entries = entries
+insertSections ((l, title)::secs) [] =
+  sectionEntry l title :: insertSections secs []
+insertSections ((l, title)::secs) (e::es) =
+  if l < entryLine e then
+    sectionEntry l title :: insertSections secs (e::es)
+  else
+    e :: insertSections ((l, title)::secs) es
+
+sectionEntry : Int -> String -> DocEntry
+sectionEntry line title = DocEntry title "" "" KSection line
+
+entryLine : DocEntry -> Int
+entryLine (DocEntry _ _ _ _ line) = line
 
 -- The three decl shapes that expand to MANY entries (a `let` group, a
 -- re-exporting `export import`, a `data`/`newtype` with a `deriving (…)`
 -- clause); `None` means "one entry at most, ask `renderSig`".
-multiEntriesFor : Bool -> Decl -> Int -> List (String, Scheme) -> List (String, List (String, Scheme)) -> List (Int, String) -> Option (List (String, DocEntry))
+multiEntriesFor : Bool -> Decl -> Int -> List (String, Scheme) -> List (String, List (String, Scheme)) -> List CommentRow -> Option (List (String, DocEntry))
 multiEntriesFor bare decl line schemes origins tbl = match letgroupOf decl
   Some (isPub, bindings) =>
     Some (allLetgroupEntries isPub bindings line schemes tbl)
@@ -762,9 +841,16 @@ allBlankLines (x::xs) = x == "" && allBlankLines xs
 pushSeg : SegMode -> List String -> List DocSegment -> List DocSegment
 pushSeg _ [] segs = segs
 pushSeg ModeProse acc segs =
-  let ls = reverseL acc
+  let ls = reverseL (dropWhileBlank acc)
   if allBlankLines ls then segs else ProseSeg ls :: segs
 pushSeg ModeExample acc segs = ExampleSeg (reverseL acc) :: segs
+
+-- The accumulator is reversed, so its head is the run's LAST line: dropping
+-- leading blanks here trims the paragraph gap that precedes an example, which
+-- would otherwise render as a double blank line above the fence.
+dropWhileBlank : List String -> List String
+dropWhileBlank (""::rest) = dropWhileBlank rest
+dropWhileBlank ls = ls
 
 -- The `Bool` is marker eligibility: True while a Haddock `| ` marker could
 -- still legitimately open this doc block (see `markerEligibleAfter`).  It
@@ -789,28 +875,16 @@ docSegGo (line::rest) ModeExample _ acc segs =
 docSegments : List String -> List DocSegment
 docSegments lines = docSegGo lines ModeProse True [] []
 
--- An `ExampleSeg` is not decorative prose: `medaka test` EXTRACTS and RUNS it
--- (`compiler/tools/doctest.mdk`), so its expected-output lines are verified on
--- every test run.  A reader cannot tell that from a bare fenced block, so
--- S-doc-surface-truth (hole (d)) labels it.  THE RULE: the marker sits on its
--- own line immediately above the fence, italic so it reads as an annotation
--- rather than as part of the example, and it is emitted for EVERY
--- `ExampleSeg`.
---
--- That last clause is only honest because the segmenter and doctest agree on
--- what an example IS, and they agree because `docLineBody` (above) makes them:
--- it neutralises the ONE comment shape (`--> x`) whose body reached
--- `isExampleStart` without satisfying doctest's `-- > ` rule.  This used to
--- claim the agreement held "by construction" — it did not, and a `-->` line
--- got this marker while `medaka test` found zero doctests in the file (S2-2).
--- Change `isExampleStart` or `docLineBody` and this marker starts lying
--- again: they are one rule in two places, kept in step by
--- `isDoctestInputText`.
+-- An `ExampleSeg` is a doctest: `medaka test` extracts and runs it
+-- (`compiler/tools/doctest.mdk`), so every rendered example is a verified
+-- one.  The segmenter and doctest agree on what an example IS because
+-- `docLineBody` (above) neutralises the one comment shape (`--> x`) whose
+-- body would reach `isExampleStart` without satisfying doctest's `-- > `
+-- rule; `isDoctestInputText` is the single place that rule is spelled.
+-- Change `isExampleStart` or `docLineBody` together, never one alone.
 renderDocSegment : DocSegment -> String
 renderDocSegment (ProseSeg ls) = joinWith "\n" ls
-renderDocSegment (ExampleSeg ls) = "*(doctest — run by `medaka test`)*\n\n```medaka\n"
-  ++ joinWith "\n" ls
-  ++ "\n```"
+renderDocSegment (ExampleSeg ls) = "```medaka\n" ++ joinWith "\n" ls ++ "\n```"
 
 -- Render extracted doc prose (an entry's own doc, or a module's header
 -- comment) as valid Markdown: marker stripped, doctest examples fenced.
@@ -827,46 +901,153 @@ renderDocProse doc =
 -- this file's own header, lines 1-16, is followed by a blank line before the
 -- first `import`).  `tbl` is the same (line, text) assoc list `findDocForLine`
 -- reads; comments arrive from `collectComments` in ascending source order.
-moduleHeaderFrom : List (Int, String) -> String
+moduleHeaderFrom : List CommentRow -> String
 moduleHeaderFrom [] = ""
-moduleHeaderFrom ((startLine, text)::rest) =
-  stringTrim (joinWith
-    "\n"
-    (collectHeaderLines ((startLine, text)::rest) startLine))
+moduleHeaderFrom ((startLine, text, b)::rest) =
+  markedDoc (collectHeaderLines ((startLine, text, b)::rest) startLine)
 
-collectHeaderLines : List (Int, String) -> Int -> List String
+collectHeaderLines : List CommentRow -> Int -> List CommentRow
 collectHeaderLines tbl line = match lookupLineLast tbl line
   None => []
-  Some text => text :: collectHeaderLines tbl (line + 1)
+  Some (t, b) => (line, t, b) :: collectHeaderLines tbl (line + 1)
 
+-- A page: title, the header's lead paragraph, the entries, then a closing
+-- "Instances" section.  A `KSection` renders as a `##` section heading (and
+-- demotes every entry heading on the page to `###`).  An `impl` on a type
+-- (`Eq Int`, `Debug (List a)`) never gets a heading in the main run of the
+-- page: it is named on the "Instances" line under its type's entry when the
+-- page declares that type, and otherwise in the closing section's list,
+-- grouped by type.  An impl WITH prose of its own is also rendered as an
+-- entry inside the closing section, and the listings link to it.
 renderMarkdown : String -> String -> List DocEntry -> String
 renderMarkdown moduleName header entries =
   let titleBlock = "# " ++ moduleName ++ "\n\n"
   let headerProse = renderDocProse header
   let headerBlock = if headerProse == "" then "" else headerProse ++ "\n\n"
+  let sectioned = anyDoc isSection entries
+  let main = filterDoc (e => not (isListedImpl e)) entries
   stringConcat
-    (titleBlock :: primitiveLayerBanner moduleName :: headerBlock :: map renderEntry entries)
+    (titleBlock :: primitiveLayerBanner moduleName :: headerBlock :: map (renderEntry sectioned entries) main ++ [renderInstancesSection entries])
 
--- D-5 (#2306): the prelude-only page publishes 138 externs in a naming
--- convention that RIVALS the library layer's — `stringToUpper` sits beside
--- `string.toUpper`, `stringToFloat` beside `string.toFloat`.  The ruling KEEPS
--- `<type><Op>` and ratifies it as the LAYER MARKER (renaming would collide
--- head-on with the library names, which is why `stdlib/string.mdk` already
--- omits `length`/`isEmpty`), so the page has to SAY it is the primitive layer
--- rather than reading as a rival API of equal standing.  Rendered from the
--- module name, so it reaches library mode and single-file `medaka doc` alike.
+-- The prelude-only page publishes host externs whose `<type><Op>` names sit
+-- beside the library layer's (`stringToUpper` / `string.toUpper`); the page
+-- says which layer it is so the two do not read as rival APIs.  Rendered from
+-- the module name, so it reaches library mode and single-file `medaka doc`
+-- alike.
 primitiveLayerBanner : String -> String
 primitiveLayerBanner moduleName
-  | preludeOnlyModule moduleName = "> **This is the PRIMITIVE LAYER.** These names are host `extern`s: they\n> are in scope everywhere without an import, and they are deliberately\n> spelled `<type><Op>` (`stringToUpper`, `intToString`) to mark that.\n> Prefer the library name where one exists — `string.toUpper`,\n> `string.toFloat` — and reach for a name on this page only when no\n> library module covers it.\n\n"
+  | preludeOnlyModule moduleName = "> These are the host primitives. They are in scope everywhere without an\n> import, and their `<type><Op>` names (`stringToUpper`, `intToString`)\n> mark them as the primitive layer. Prefer the library name where one\n> exists (`string.toUpper`, `string.toFloat`), and reach for a name on this\n> page only when no library module covers it.\n\n"
   | otherwise = ""
 
-renderEntry : DocEntry -> String
-renderEntry (DocEntry name sig doc _) =
-  let header = "## `" ++ name ++ "`\n\n"
+isSection : DocEntry -> Bool
+isSection (DocEntry _ _ _ KSection _) = True
+isSection _ = False
+
+isImpl : DocEntry -> Bool
+isImpl (DocEntry _ _ _ (KImplOn _) _) = True
+isImpl _ = False
+
+-- An impl entry whose name carries at least one type argument (`Eq Int`,
+-- `Debug (a, b)`) — the shape the instance listings absorb.  `impl Foo` with
+-- no arguments has no type to be listed under and stays an ordinary entry.
+isListedImpl : DocEntry -> Bool
+isListedImpl (DocEntry name _ _ (KImplOn _) _) = instanceHead name /= ""
+isListedImpl _ = False
+
+anyDoc : (a -> Bool) -> List a -> Bool
+anyDoc _ [] = False
+anyDoc p (x::xs) = p x || anyDoc p xs
+
+-- The interface name of an impl entry: `Eq (List a)` -> `Eq`.
+instanceIface : String -> String
+instanceIface name = match stringIndexOf " " name
+  None => name
+  Some i => dsub 0 i name
+
+-- The type part of an impl entry's name: `Eq (List a)` -> `(List a)`,
+-- `Eq Int` -> `Int`, `Foo` -> "".
+instanceHead : String -> String
+instanceHead name = match stringIndexOf " " name
+  None => ""
+  Some i => dsub (i + 1) (dlen name) name
+
+-- What an impl is listed under: its head type constructor when it has one
+-- (`Eq (List a)` and `Mappable List` both file under `List`), else the
+-- literal type part of its name (`(a, b)` for a tuple instance).
+instanceKey : DocEntry -> String
+instanceKey (DocEntry _ _ _ (KImplOn (Some hd)) _) = hd
+instanceKey (DocEntry name _ _ _ _) = instanceHead name
+
+renderEntry : Bool -> List DocEntry -> DocEntry -> String
+renderEntry _ _ (DocEntry title _ _ KSection _) = "## " ++ title ++ "\n\n"
+renderEntry sectioned entries (DocEntry name sig doc kind _) =
+  let level = if sectioned then "### " else "## "
+  let header = "\{level}`\{name}`\n\n"
   let sigBlock = "```\n" ++ sig ++ "\n```\n"
+  let instances = match kind
+    KTypeDecl => instanceLine (instancesOf name entries)
+    _ => ""
   let rendered = renderDocProse doc
   let docBlock = if rendered == "" then "" else "\n" ++ rendered ++ "\n"
-  "\{header}\{sigBlock}\{docBlock}\n"
+  "\{header}\{sigBlock}\{instances}\{docBlock}\n"
+
+-- Every impl entry on the page whose head type constructor is `tyName`.
+instancesOf : String -> List DocEntry -> List DocEntry
+instancesOf tyName entries = filterDoc (e => implHeadIs tyName e) entries
+
+implHeadIs : String -> DocEntry -> Bool
+implHeadIs tyName (DocEntry _ _ _ (KImplOn (Some hd)) _) = hd == tyName
+implHeadIs _ _ = False
+
+-- `Instances: \`Eq\`, \`Ord\`, [\`Debug\`](#debug-list-a)` — a documented
+-- impl links to its own heading, an undocumented one is just named.
+instanceLine : List DocEntry -> String
+instanceLine [] = ""
+instanceLine impls = "\nInstances: "
+  ++ joinWith ", " (map instanceRef impls)
+  ++ "\n"
+
+instanceRef : DocEntry -> String
+instanceRef (DocEntry name _ doc _ _) =
+  let iface = "`" ++ instanceIface name ++ "`"
+  if doc == "" then iface else "[\{iface}](#\{slugifyAnchor name})"
+
+-- The closing section: one list line per type the page does not declare
+-- (`Eq Int` on `core`, `Debug (a, b)`), in first-seen order, followed by the
+-- documented impls as entries.  Empty when the page lists no impl at all.
+renderInstancesSection : List DocEntry -> String
+renderInstancesSection entries =
+  let listed = filterDoc isListedImpl entries
+  let orphans = filterDoc (e => not (hasTypeEntry entries e)) listed
+  let keys = uniqueDoc (map instanceKey orphans)
+  let bullets = match keys
+    [] => ""
+    _ => "\{joinWith "\n" (map (orphanLine orphans) keys)}\n\n"
+  let documented = stringConcat (map (renderEntry True entries) (filterDoc (e => entryDoc e /= "") listed))
+  match listed
+    [] => ""
+    _ => "## Instances\n\n\{bullets}\{documented}"
+
+orphanLine : List DocEntry -> String -> String
+orphanLine orphans key =
+  let mine = filterDoc (e => instanceKey e == key) orphans
+  "- `\{key}`: \{joinWith ", " (map instanceRef mine)}"
+
+hasTypeEntry : List DocEntry -> DocEntry -> Bool
+hasTypeEntry entries (DocEntry _ _ _ (KImplOn (Some hd)) _) =
+  anyDoc (e => isTypeNamed hd e) entries
+hasTypeEntry _ _ = False
+
+isTypeNamed : String -> DocEntry -> Bool
+isTypeNamed n (DocEntry name _ _ KTypeDecl _) = name == n
+isTypeNamed _ _ = False
+
+entryDoc : DocEntry -> String
+entryDoc (DocEntry _ _ doc _ _) = doc
+
+uniqueDoc : List String -> List String
+uniqueDoc [] = []
+uniqueDoc (x::xs) = x :: uniqueDoc (filterDoc (/= x) xs)
 
 -- ── top-level driver ────────────────────────────────────────────────────────
 -- Mirror bin/main.ml's `doc` arm: parse (capturing positions + comments),
@@ -944,7 +1125,7 @@ dropInternalExterns True entries =
   filter (e => not (isInternalExtern e)) entries
 
 isInternalExtern : DocEntry -> Bool
-isInternalExtern (DocEntry name _ _ _) = elem name internalExterns
+isInternalExtern (DocEntry name _ _ _ _) = elem name internalExterns
   || elem name docOnlyExcluded
 
 export
@@ -964,7 +1145,7 @@ computeModuleDoc runtimeSrc coreSrc src filename roots =
   ModuleDoc
     moduleName
     (dedupHeader header entries)
-    entries
+    (insertSections (sectionsFrom tbl) entries)
     (declaredTypeNames rawDecls)
 
 -- When the header comment sits directly above the FIRST decl with no gap
@@ -983,7 +1164,7 @@ dedupHeader header entries =
 
 firstEntryDoc : List DocEntry -> String
 firstEntryDoc [] = ""
-firstEntryDoc ((DocEntry _ _ doc _)::_) = doc
+firstEntryDoc ((DocEntry _ _ doc _ _)::_) = doc
 
 export
 renderModulePage : ModuleDoc -> String
@@ -1079,7 +1260,7 @@ moduleMentionIndex : ModuleDoc -> (String, List String)
 moduleMentionIndex (ModuleDoc n _ es _) = (n, map entrySigOf es)
 
 entrySigOf : DocEntry -> String
-entrySigOf (DocEntry _ sig _ _) = sig
+entrySigOf (DocEntry _ sig _ _ _) = sig
 
 ownerOfType : List (String, String) -> List (String, List String) -> String -> Option String
 ownerOfType owners mentions tyName = match lookupStrDoc tyName owners
@@ -1147,7 +1328,7 @@ lookupStrDoc k ((n, v)::rest) = if k == n then Some v else lookupStrDoc k rest
 
 -- `Some target` iff this entry is an impl that belongs on ANOTHER module's page.
 entryTarget : List (String, String) -> List (String, List String) -> String -> DocEntry -> Option String
-entryTarget owners mentions here (DocEntry _ _ _ (KImplOn (Some hd))) = match ownerOfType owners mentions hd
+entryTarget owners mentions here (DocEntry _ _ _ (KImplOn (Some hd)) _) = match ownerOfType owners mentions hd
   Some m => if m == here then None else Some m
   None => None
 entryTarget _ _ _ _ = None
@@ -1243,38 +1424,70 @@ libraryInventoryJson : List ModuleDoc -> Json
 libraryInventoryJson mds = jArray (concatMapDoc inventoryEntriesFor mds)
 
 inventoryEntriesFor : ModuleDoc -> List Json
-inventoryEntriesFor (ModuleDoc moduleName _ entries _) =
-  map (inventoryEntryJson moduleName) entries
+inventoryEntriesFor (ModuleDoc moduleName _ entries _) = map
+  (inventoryEntryJson moduleName)
+  (filterDoc (e => not (isSection e)) entries)
 
 inventoryEntryJson : String -> DocEntry -> Json
-inventoryEntryJson moduleName (DocEntry name sig _ _) = jObject
+inventoryEntryJson moduleName (DocEntry name sig _ _ _) = jObject
   [
     ("module", JString moduleName),
     ("name", JString name),
     ("signature", JString sig),
   ]
 
--- Index page: one section per module, linking every entry to its own page's
--- anchor.
+-- Index page: one heading per module (linked to its page) with the module's
+-- one-line summary, then a link to every function and type on the page.
+-- Instances are not listed: a reader looks a type up, not `Eq Int`.
 export
 renderIndex : List ModuleDoc -> String
 renderIndex mds =
   stringConcat ("# Library Index\n\n" :: map renderIndexModule mds)
 
 renderIndexModule : ModuleDoc -> String
-renderIndexModule (ModuleDoc name _ entries _) =
-  let count = intToString (listLenDoc entries)
-  let head = "## `\{name}` (\{count} entries)\n\n"
-  let links = joinWith "\n" (map (renderIndexLink name) entries)
-  "\{head}\{links}\n\n"
+renderIndexModule (ModuleDoc name header entries _) =
+  let head = "## [`\{name}`](\{name}.md)\n\n"
+  let summary = firstSentence (renderDocProse header)
+  let summaryBlock = if summary == "" then "" else summary ++ "\n\n"
+  let listed = filterDoc (e => not (isImpl e) && not (isSection e)) entries
+  let links = joinWith "\n" (map (renderIndexLink name) listed)
+  "\{head}\{summaryBlock}\{links}\n\n"
 
 renderIndexLink : String -> DocEntry -> String
-renderIndexLink moduleName (DocEntry name _ _ _) =
+renderIndexLink moduleName (DocEntry name _ _ _ _) =
   "- [`\{name}`](\{moduleName}.md#\{slugifyAnchor name})"
 
-listLenDoc : List a -> Int
-listLenDoc [] = 0
-listLenDoc (_::xs) = 1 + listLenDoc xs
+-- The first sentence of a prose block: up to and including the first `.`
+-- that ends a word, or the first line when there is none.  Newlines inside
+-- the sentence become spaces, since the source wraps at a fixed width.
+firstSentence : String -> String
+firstSentence prose =
+  let cs = stringToChars prose
+  let n = arrayLength cs
+  let cut = sentenceEnd cs 0 n
+  joinWith " " (splitNl (stringTrim (dsub 0 cut prose)))
+
+sentenceEnd : Array Char -> Int -> Int -> Int
+sentenceEnd cs i n =
+  if i >= n then firstLineEnd cs 0 n
+  else
+    let c = arrayGetUnsafe i cs
+    if c == '.' && (i + 1 >= n || isSentenceGap (arrayGetUnsafe (i + 1) cs)) then
+      i + 1
+    else
+      sentenceEnd cs (i + 1) n
+
+isSentenceGap : Char -> Bool
+isSentenceGap c = c == ' ' || c == '\n'
+
+firstLineEnd : Array Char -> Int -> Int -> Int
+firstLineEnd cs i n =
+  if i >= n then
+    n
+  else if arrayGetUnsafe i cs == '\n' then
+    i
+  else
+    firstLineEnd cs (i + 1) n
 
 -- Inferred schemes via the SAME multi-module loader path `check`/`run`/LSP
 -- project-hover use (`projectEntrySchemes`, driver.diagnostics) — loads the
