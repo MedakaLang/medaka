@@ -2018,25 +2018,31 @@ methodEffArgOccs scope (TyFun a b) = argPerformableOccs scope True a
   ++ methodEffArgOccs scope b
 methodEffArgOccs _ _ = []
 
+-- One `(tail var, the row's written atoms)` occurrence per tail variable.  A
+-- row is a JOIN when it names several (#821, `<Stdout | e | e2>`), and every
+-- collector below reports them all: a caller reads the row at each var
+-- independently, so a var left out would be a var nothing constrains.
+occsOfTails : List String -> List (String, Option String) -> List (String, List Atom)
+occsOfTails tails labels =
+  let atoms = atomsOfWritten labels
+  map (n => (n, atoms)) tails
+
 -- rows in an argument subtree, collected only where [perf] (the impl can call
 -- or run the value at this position); each arrow-LHS descent flips it.
 argPerformableOccs : List (String, List Kind) -> Bool -> Ty -> List (String, List Atom)
-argPerformableOccs scope perf (TyEffect labels (Some n) t) = (if perf then [(n, atomsOfWritten labels)] else [])
+argPerformableOccs scope perf (TyEffect labels tails t) = (if perf then occsOfTails tails labels else [])
   ++ argPerformableOccs scope perf t
-argPerformableOccs scope perf (TyEffect _ None t) =
-  argPerformableOccs scope perf t
 -- A bare row atom (#997) carries its own tail var + labels directly (no
 -- wrapped type to recurse into) — same treatment as the `TyEffect` arms
 -- above.  Without this, a KRow ctor-arg written as `Box <Stdout | e> Int`
 -- (as opposed to a bare `Box e Int`) was invisible to this collector, which
 -- made the impl-body T-EFFECT-LAUNDER check over-fire on it (see
 -- `effVarOccAtoms` below, which shares this gap).
-argPerformableOccs _ perf (TyRow labels (Some n) _) =
+argPerformableOccs _ perf (TyRow labels tails _) =
   if perf then
-    [(n, atomsOfWritten labels)]
+    occsOfTails tails labels
   else
     []
-argPerformableOccs _ _ (TyRow _ None _) = []
 argPerformableOccs scope perf (TyFun a b) = argPerformableOccs scope (not perf) a
   ++ argPerformableOccs scope perf b
 argPerformableOccs scope perf (TyTuple ts) =
@@ -2315,9 +2321,8 @@ krowSlotVarOccs scope perf h args = match lookupAssoc h scope
 -- merely what made it reachable from `effect_index_unrelated_ok.mdk`.
 methodEffRetOccs : List (String, List Kind) -> Ty -> List (String, List Atom)
 methodEffRetOccs scope (TyConstrained _ t) = methodEffRetOccs scope t
-methodEffRetOccs scope (TyEffect labels (Some n) t) =
-  (n, atomsOfWritten labels) :: methodEffRetOccs scope t
-methodEffRetOccs scope (TyEffect _ None t) = methodEffRetOccs scope t
+methodEffRetOccs scope (TyEffect labels tails t) = occsOfTails tails labels
+  ++ methodEffRetOccs scope t
 methodEffRetOccs scope (TyFun _ b) = methodEffRetOccs scope b
 methodEffRetOccs scope t =
   let occs = effVarOccAtoms t
@@ -2782,14 +2787,15 @@ declaredEffects (TyConstrained _ t) = declaredEffects t
 declaredEffects _ = []
 
 -- #797: the TAIL of that same first `<…>` — the field `declaredEffects` drops.
--- `None` is a genuinely CLOSED row (`<>`, `<Stdout>`); `Some v` is an OPEN one
--- (`<e>`, `<Stdout | e>`).  Arms mirror `declaredEffects` exactly, stopping at
--- the same node, so the two always describe ONE row.
-declaredEffectTail : Ty -> Option String
+-- No names is a genuinely CLOSED row (`<>`, `<Stdout>`); one or more is an OPEN
+-- one (`<e>`, `<Stdout | e>`, `<Stdout | e | e2>`).  Arms mirror
+-- `declaredEffects` exactly, stopping at the same node, so the two always
+-- describe ONE row.
+declaredEffectTail : Ty -> List String
 declaredEffectTail (TyFun _ ret) = declaredEffectTail ret
 declaredEffectTail (TyEffect _ tail _) = tail
 declaredEffectTail (TyConstrained _ t) = declaredEffectTail t
-declaredEffectTail _ = None
+declaredEffectTail _ = []
 
 -- #797: effect-tail names occurring in ARGUMENT positions of the signature,
 -- walking the same return spine `declaredEffects` walks and stopping at the same
@@ -2818,10 +2824,12 @@ declaredArgEffNames _ = []
 -- An argument-carried var (`g : (Int -> <e> Int) -> <e> Int`) is NOT open in this
 -- sense — the caller instantiates it, so a body adding <Stdout> would launder,
 -- and the pre-existing escape rejection stands unchanged.
+-- A JOIN is open when SOME member is free of the argument side: that member
+-- alone already admits whatever the body performs.
 declaredEffectsOpen : Ty -> Bool
-declaredEffectsOpen ty = match declaredEffectTail ty
-  None => False
-  Some v => not (contains v (declaredArgEffNames ty))
+declaredEffectsOpen ty =
+  let argNames = declaredArgEffNames ty
+  anyList (v => not (contains v argNames)) (declaredEffectTail ty)
 
 -- record metadata: name → (quantified param ids, result mono, field types).  A
 -- global Ref (like the reference's record table) so field access / create /
@@ -6888,14 +6896,13 @@ ceRowParamKindNamesAt key cur env = match ceLookupAt key cur env
 -- live `universeIfaceParamKinds` table; that table is retired and `ceParamKinds` IS
 -- the answer now, so these doctests grade the production computation directly.
 ceGradedMethod : IfaceMethod
-ceGradedMethod =
-  IfaceMethod
-    "run"
-    (TyFun
-      (TyApp (TyApp (TyVar "f") (TyVar "e")) (TyVar "a"))
-      (TyEffect [] (Some "e") (TyVar "a")))
-    None
-    None
+ceGradedMethod = IfaceMethod
+  "run"
+  (TyFun
+    (TyApp (TyApp (TyVar "f") (TyVar "e")) (TyVar "a"))
+    (TyEffect [] ["e"] (TyVar "a")))
+  None
+  None
 
 ceGradedIface : Decl
 ceGradedIface = DInterface {
@@ -10174,7 +10181,7 @@ effTailNames (TyCon { tyConName = _ }) = []
 effTailNames (TyApp a b) = effTailNames a ++ effTailNames b
 effTailNames (TyFun a b) = effTailNames a ++ effTailNames b
 effTailNames (TyTuple ts) = flatMap effTailNames ts
-effTailNames (TyEffect _ tail t) = tailNameList tail ++ effTailNames t
+effTailNames (TyEffect _ tail t) = tail ++ effTailNames t
 effTailNames (TyConstrained _ t) = effTailNames t
 -- A bare row atom (#997) carries its own tail var directly (no wrapped type
 -- to recurse into) — same tail-var-sharing contract as `TyEffect`'s arm
@@ -10191,11 +10198,7 @@ effTailNames (TyConstrained _ t) = effTailNames t
 -- exactly this reason and pairs this with the actually-kind-aware
 -- `rowArgNames`; this arm's over-counting is a residual channel of the same
 -- shape as that pre-existing gap, not a new one — see #784.
-effTailNames (TyRow _ tail _) = tailNameList tail
-
-tailNameList : Option String -> List String
-tailNameList None = []
-tailNameList (Some n) = [n]
+effTailNames (TyRow _ tail _) = tail
 
 freshEffMap : List String -> List (String, Ref Effvar)
 freshEffMap [] = []
@@ -10211,9 +10214,24 @@ astEffrowE etbl (TyEffect labels tail _) =
   EffRow (atomsOfWritten labels) (tailCell etbl tail)
 astEffrowE _ _ = pureRow
 
-tailCell : List (String, Ref Effvar) -> Option String -> Option (Ref Effvar)
-tailCell _ None = None
-tailCell etbl (Some n) = lookupAssoc n etbl
+-- The tail cell of a written row.  No names is a closed row; one name is that
+-- var's shared cell; several (#821) is their JOIN, so `<Stdout | e | e2>`
+-- elaborates to the row performing Stdout plus whatever either var does.  A
+-- name the table does not know contributes nothing, which is what the
+-- single-name case has always done by yielding `None`.
+tailCell : List (String, Ref Effvar) -> List String -> Option (Ref Effvar)
+tailCell _ [] = None
+tailCell etbl [n] = lookupAssoc n etbl
+tailCell etbl ns = match tailCellsOf etbl ns
+  [] => None
+  [cell] => Some cell
+  cells => Some (joinCellOf cells)
+
+tailCellsOf : List (String, Ref Effvar) -> List String -> List (Ref Effvar)
+tailCellsOf _ [] = []
+tailCellsOf etbl (n::ns) = match lookupAssoc n etbl
+  Some cell => cell :: tailCellsOf etbl ns
+  None => tailCellsOf etbl ns
 
 fromAstType : List (String, Mono) -> Ty -> Mono
 fromAstType tvs ty = fromAstTypeE [] tvs ty
@@ -10277,7 +10295,7 @@ fromAstTypeE etbl tvs (TyRow labels tail loc) =
 -- visible yet at this point in the file, so render the row body directly with
 -- the SAME row-body renderer that feeds it (`ppEffInsideTy`, further down —
 -- forward reference, fine: this module is resolved as a whole, not top-down).
-rowKindMismatchMsg : List (String, Option String) -> Option String -> String
+rowKindMismatchMsg : List (String, Option String) -> List String -> String
 rowKindMismatchMsg labels tail = "A row <\{ppEffInsideTy labels tail}> was written here, but this type-argument position isn't row-kinded — it expects an ordinary type, not an effect row. Rows can only be written where a type constructor's parameter has row kind (e.g. the `e` of `Async e a`)."
 
 -- A type alias applied to the wrong number of arguments — over-applied,
@@ -10535,8 +10553,8 @@ krowArgVarNames (KRow::ks) ((TyVar n)::as2) = n :: krowArgVarNames ks as2
 -- same var-name contribution, just spelled with labels attached. A CLOSED
 -- written row (`Box <Stdout> Int`, no tail var) pins no name and falls
 -- through to the catch-all below, same as any other non-`TyVar` arg.
-krowArgVarNames (KRow::ks) ((TyRow _ (Some n) _)::as2) =
-  n :: krowArgVarNames ks as2
+krowArgVarNames (KRow::ks) ((TyRow _ tails _)::as2) = tails
+  ++ krowArgVarNames ks as2
 krowArgVarNames (_::ks) (_::as2) = krowArgVarNames ks as2
 
 -- ── #2110: `rowArgNamesIn` WITH THE HEAD'S DECLARED ATOM GUARANTEE ────────
@@ -10592,9 +10610,8 @@ krowArgVarAtoms [] _ _ = []
 krowArgVarAtoms _ _ [] = []
 krowArgVarAtoms (KRow::ks) decls ((TyVar n)::as2) =
   (n, headAtomsOr decls) :: krowArgVarAtoms ks (restAtoms decls) as2
-krowArgVarAtoms (KRow::ks) decls ((TyRow labels (Some n) _)::as2) =
-  (n, atomsNorm (atomsOfWritten labels ++ headAtomsOr decls)) ::
-    krowArgVarAtoms ks (restAtoms decls) as2
+krowArgVarAtoms (KRow::ks) decls ((TyRow labels tails _)::as2) = map (n => (n, atomsNorm (atomsOfWritten labels ++ headAtomsOr decls))) tails
+  ++ krowArgVarAtoms ks (restAtoms decls) as2
 krowArgVarAtoms (_::ks) decls (_::as2) =
   krowArgVarAtoms ks (restAtoms decls) as2
 
@@ -17022,20 +17039,19 @@ inferParamRowAtoms params variants =
 paramRowAtomOccs : String -> Ty -> List (List Atom)
 paramRowAtomOccs p (TyVar n) = if n == p then [[]] else []
 paramRowAtomOccs _ (TyCon { tyConName = _ }) = []
-paramRowAtomOccs p (TyEffect labels (Some n) t) = (if n == p then [atomsOfWritten labels] else [])
+paramRowAtomOccs p (TyEffect labels tails t) = paramRowAtomsFor p tails labels
   ++ paramRowAtomOccs p t
-paramRowAtomOccs p (TyEffect _ None t) = paramRowAtomOccs p t
-paramRowAtomOccs p (TyRow labels (Some n) _) =
-  if n == p then
-    [atomsOfWritten labels]
-  else
-    []
-paramRowAtomOccs _ (TyRow _ None _) = []
+paramRowAtomOccs p (TyRow labels tails _) = paramRowAtomsFor p tails labels
 paramRowAtomOccs p (TyFun a b) = paramRowAtomOccs p a ++ paramRowAtomOccs p b
 paramRowAtomOccs p (TyTuple ts) = flatMap (paramRowAtomOccs p) ts
 paramRowAtomOccs p (TyApp a b) = paramRowAtomOccs p a ++ paramRowAtomOccs p b
 paramRowAtomOccs p (TyConstrained _ t) = paramRowAtomOccs p t
 paramRowAtomOccs _ _ = []
+
+-- The row's written atoms, once per tail var that IS [p] (a join names several).
+paramRowAtomsFor : String -> List String -> List (String, Option String) -> List (List Atom)
+paramRowAtomsFor p tails labels =
+  map (_ => atomsOfWritten labels) (filterList (== p) tails)
 
 -- The atoms present at EVERY occurrence, under the same subsumption relation
 -- the coverage check itself uses (`atomsEscape`, so `<IO>` at one occurrence
@@ -30083,16 +30099,14 @@ indexOnlyEffVars scope mty =
 -- slot (`TyRow`, `Box <Stdout | e> Unit`) — which promise rather than charge.
 methodEffChargedOccs : Ty -> List (String, List Atom)
 methodEffChargedOccs (TyConstrained _ t) = methodEffChargedOccs t
-methodEffChargedOccs (TyEffect labels (Some n) t) =
-  (n, atomsOfWritten labels) :: methodEffChargedOccs t
-methodEffChargedOccs (TyEffect _ None t) = methodEffChargedOccs t
+methodEffChargedOccs (TyEffect labels tails t) = occsOfTails tails labels
+  ++ methodEffChargedOccs t
 methodEffChargedOccs (TyFun _ b) = methodEffChargedOccs b
 methodEffChargedOccs t = effVarChargedOccs t
 
 effVarChargedOccs : Ty -> List (String, List Atom)
-effVarChargedOccs (TyEffect labels (Some n) t) =
-  (n, atomsOfWritten labels) :: effVarChargedOccs t
-effVarChargedOccs (TyEffect _ None t) = effVarChargedOccs t
+effVarChargedOccs (TyEffect labels tails t) = occsOfTails tails labels
+  ++ effVarChargedOccs t
 effVarChargedOccs (TyApp a b) = effVarChargedOccs a ++ effVarChargedOccs b
 effVarChargedOccs (TyFun a b) = effVarChargedOccs a ++ effVarChargedOccs b
 effVarChargedOccs (TyTuple ts) = flatMap effVarChargedOccs ts
@@ -30129,17 +30143,15 @@ effVarOccEscape n instAtoms ((m, declAtoms)::rest) =
 -- rows, data-arg rows).  Bare row-kinded ctor-arg slots (`Async e a`) carry no
 -- written atoms and are contributed by rowArgNames at the call site.
 effVarOccAtoms : Ty -> List (String, List Atom)
-effVarOccAtoms (TyEffect labels (Some n) t) =
-  (n, atomsOfWritten labels) :: effVarOccAtoms t
-effVarOccAtoms (TyEffect _ None t) = effVarOccAtoms t
+effVarOccAtoms (TyEffect labels tails t) = occsOfTails tails labels
+  ++ effVarOccAtoms t
 -- A bare row atom (#997) is a named-tail row occurrence exactly like
 -- `TyEffect` above, just with no wrapped type. Without this arm, a KRow
 -- ctor-arg written as `Box <Stdout | e> Int` was invisible to
 -- `checkImplEffVarRigidity`'s coverage set, so the impl-body T-EFFECT-LAUNDER
 -- check over-fired ("not sourced from any argument") on an argument that
 -- demonstrably DOES declare the atom.
-effVarOccAtoms (TyRow labels (Some n) _) = [(n, atomsOfWritten labels)]
-effVarOccAtoms (TyRow _ None _) = []
+effVarOccAtoms (TyRow labels tails _) = occsOfTails tails labels
 effVarOccAtoms (TyApp a b) = effVarOccAtoms a ++ effVarOccAtoms b
 effVarOccAtoms (TyFun a b) = effVarOccAtoms a ++ effVarOccAtoms b
 effVarOccAtoms (TyTuple ts) = flatMap effVarOccAtoms ts
@@ -32534,14 +32546,15 @@ checkEffectEscape sigs m effs = match omLookup m driverState.value.sigTyMapRef.v
 -- #797: [tail] renders alongside the atoms so an argument-carried open row —
 -- the one shape that still reaches this message with a tail — reports the row
 -- that was actually written (`<e>`, `<Stdout | e>`) instead of the false `<>`.
--- A closed row passes `None` and renders exactly as before.
-effectEscapeMsg : String -> List Atom -> Option String -> List Atom -> String
+-- A closed row passes no tail at all and renders exactly as before.
+effectEscapeMsg : String -> List Atom -> List String -> List Atom -> String
 effectEscapeMsg name declared tail extras = "Function '\{name}' declared with \{renderDeclaredRow declared tail} but also performs <\{renderAtoms extras}>"
 
-renderDeclaredRow : List Atom -> Option String -> String
-renderDeclaredRow declared None = "<\{renderAtoms declared}>"
-renderDeclaredRow [] (Some v) = "<\{v}>"
-renderDeclaredRow declared (Some v) = "<\{renderAtoms declared} | \{v}>"
+renderDeclaredRow : List Atom -> List String -> String
+renderDeclaredRow declared [] = "<\{renderAtoms declared}>"
+renderDeclaredRow [] tails = "<\{joinWith " | " tails}>"
+renderDeclaredRow declared tails =
+  "<\{renderAtoms declared} | \{joinWith " | " tails}>"
 
 -- generalize each member's (sig-and-body-unified) placeholder.  A signature was
 -- already unified into the placeholder by preunifySigs, so generalizing the
@@ -32693,6 +32706,9 @@ ppTy (TyApp a b) = "\{ppTy a} \{ppTyAtom b}"
 ppTy (TyFun a b) = "\{ppTyFunArg a} -> \{ppTy b}"
 ppTy (TyTuple ts) = "(" ++ joinWith ", " (map ppTy ts) ++ ")"
 ppTy (TyEffect effs tail t) = "<\{ppEffInsideTy effs tail}> \{ppTy t}"
+-- A label-free join takes the parenthesised type-argument spelling it is
+-- written in (`f (e | e2) b`), matching tools/printer.mdk.
+ppTy (TyRow [] (a::b::rest) _) = "(\{joinWith " | " (a :: b::rest)})"
 -- A bare row atom (#997): same row rendering as `TyEffect` above, minus the
 -- wrapped type it has none of.
 ppTy (TyRow effs tail _) = "<\{ppEffInsideTy effs tail}>"
@@ -32701,14 +32717,16 @@ ppTy (TyConstrained cs t) = "\{ppConstraints cs} => \{ppTy t}"
 -- shared `<...>` row-body renderer for `TyEffect`/`TyRow` (factored out of
 -- `TyEffect`'s arm above so `TyRow` doesn't duplicate it — lint's
 -- rule-duplicate-body would flag an inlined copy).
-ppEffInsideTy : List (String, Option String) -> Option String -> String
-ppEffInsideTy effs tail =
+ppEffInsideTy : List (String, Option String) -> List String -> String
+ppEffInsideTy effs tails =
   let labs = map ppEffAtomTy effs
-  match tail
-    None => joinWith ", " labs
-    Some v => match effs
-      [] => v
-      _ => "\{joinWith ", " labs} | \{v}"
+  match tails
+    [] => joinWith ", " labs
+    _ =>
+      let tls = joinWith " | " tails
+      match effs
+        [] => tls
+        _ => "\{joinWith ", " labs} | \{tls}"
 
 -- effect atom renderer for ppTy (mirrors OCaml pp_atom inside pp_ty_prec / TEff)
 ppEffAtomTy : (String, Option String) -> String

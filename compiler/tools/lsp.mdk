@@ -974,14 +974,16 @@ leadingEffOf (TyEffect labels tail _) =
 leadingEffOf _ = None
 
 -- Render a written effect row to surface syntax: `<IO>`, `<IO, State>`,
--- `<IO | e>`, `<e>` (mirrors parser.mdk effectBody: comma-separated labels, an
--- optional `| tail` var).
-renderEffRow : List (String, Option String) -> Option String -> String
-renderEffRow labels tail =
+-- `<IO | e>`, `<e>`, `<IO | e | e2>` (mirrors parser.mdk effectBody:
+-- comma-separated labels, then zero or more `| tail` vars).
+renderEffRow : List (String, Option String) -> List String -> String
+renderEffRow labels tails =
   let lbls = joinWith ", " (map renderEffAtom labels)
-  let body = match tail
-    None => lbls
-    Some v => if lbls == "" then v else stringConcat [lbls, " | ", v]
+  let body = match tails
+    [] => lbls
+    _ =>
+      let tls = joinWith " | " tails
+      if lbls == "" then tls else stringConcat [lbls, " | ", tls]
   stringConcat ["<", body, ">"]
 
 renderEffAtom : (String, Option String) -> String

@@ -119,8 +119,8 @@ effDomainP : Parser (Option String)
 effParamDispatch : Token -> Token -> Parser (Option String)
 effParamFor : Token -> Parser (Option String)
 effParamP : Parser (Option String)
-effectBody : Parser (List (String, Option String), Option String)
-effectBodyFor : Token -> Parser (List (String, Option String), Option String)
+effectBody : Parser (List (String, Option String), List String)
+effectBodyFor : Token -> Parser (List (String, Option String), List String)
 elseBranch : Parser Expr
 elsePresent : Parser Expr
 emit : a -> Parser a
@@ -327,10 +327,10 @@ methodNameStep : Array Token -> Int -> Int -> Int -> Bool -> Token -> List (Opti
 missingWhereIfaceMsg : String
 missingWhereImplMsg : String
 mkAttr : String -> Option String -> Attr
-mkEffect : (List (String, Option String), Option String) -> Ty -> Ty
+mkEffect : (List (String, Option String), List String) -> Ty -> Ty
 mkLocated : String -> Array Token -> Array Int -> Int -> String -> Int -> ParseError
 mkRec : String -> (List RecPatField, Bool) -> Pat
-mkRow : (List (String, Option String), Option String) -> Loc -> Ty
+mkRow : (List (String, Option String), List String) -> Loc -> Ty
 namedImplRemovedMsg : String
 negIntPat : Parser Pat
 negIntRng : Lit -> Parser Pat
@@ -469,6 +469,8 @@ parseTyAtomRaw : Parser Ty
 parseTyFun : Parser Ty
 parseTyParen : Parser Ty
 parseTyParenBody : Token -> Parser Ty
+parseTyParenIdent : Token -> Parser Ty
+parseTyParenTuple : Parser Ty
 parseTypeAlias : Bool -> Parser Decl
 parseUnary : Parser Expr
 parseUpperAtom : String -> Parser Expr
@@ -486,8 +488,8 @@ payloadFor : Token -> Parser ConPayload
 peek2P : Parser Token
 peekP : Parser Token
 peekTok : Array Token -> Int -> Token
-pipeTail : Parser (Option String)
-pipeTailFor : Token -> Parser (Option String)
+pipeTail : Parser (List String)
+pipeTailFor : Token -> Parser (List String)
 positionsChainLines : Positions -> List (List Int)
 positionsDecls : Positions -> List DeclPos
 positionsLastContentLine : Positions -> Int

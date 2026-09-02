@@ -159,7 +159,15 @@ applyTo : (a -> <e> b) -> a -> b  -- effect variable
 applyTo g v = g v
 run : (Unit -> <IO | e> a) -> <IO | e> a  -- open tail row
 run g = g ()
+relay : (Unit -> <IO | e | e2> a) -> <IO | e | e2> a  -- a JOIN of tail vars
+relay g = g ()
 ```
+
+A row may name several tail variables (#821): `<IO | e | e2>` is the row of `IO`
+together with whatever either variable performs.  In an `Effect`-kinded type-
+ARGUMENT slot a label-free join is written with parentheses instead of angle
+brackets — `jmap : (a -> <e2> b) -> f e a -> f (e | e2) b` — and that is the
+spelling the formatter prints back.
 
 Effect-label declarations (Phase 146 gap 2 — builtins are
 `IO, Rand, Stdout, Stderr, Stdin, Clock, Env, Exec, Net,
