@@ -1,5 +1,5 @@
 # META
-source_lines=39293
+source_lines=39311
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -8615,10 +8615,28 @@ currentMethodMismatch = Ref None
 --     `headTyconNameMono`, which is the pair THAT comment means.
 --
 -- Stage 2 query: did the last-elaborated `main` infer to an `Async`-headed type?
+-- The head must be the stdlib `async` module's `Async`, by origin — a user type
+-- that happens to be named `Async` is an ordinary value main.
 export
 mainTypeIsAsync : Unit -> Bool
 mainTypeIsAsync _ = match driverState.value.mainSchemeRef.value
-  Some (Forall _ _ t) => headTyconNameMono t == Some "Async"
+  Some (Forall _ _ t) => match headMonoNode t
+    TCon "Async" (OriginModule "async") => True
+    _ => False
+  None => False
+
+-- Stage 2 query: is the `Async` main's payload `Unit`?  The entry drivers
+-- (`runAsyncIOMain`/`runAsyncMain`) take `Async e Unit`, so any other payload
+-- is rejected with a diagnostic before the rewrite rather than by the driver's
+-- unification failure.
+export
+mainAsyncPayloadIsUnit : Unit -> Bool
+mainAsyncPayloadIsUnit _ = match driverState.value.mainSchemeRef.value
+  Some (Forall _ _ t) => match normalize t
+    TApp _ payload => match normalize payload
+      TCon "Unit" _ => True
+      _ => False
+    _ => False
   None => False
 
 -- Stage 3 query: did the last-elaborated `main` infer to a bare Unit return type
@@ -40564,7 +40582,9 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "currentMethodMismatch" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "currentMethodMismatch" () (EApp (EVar "Ref") (EVar "None")))
 (DTypeSig true "mainTypeIsAsync" (TyFun (TyCon "Unit") (TyCon "Bool")))
-(DFunDef false "mainTypeIsAsync" (PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef") "value") (arm (PCon "Some" (PCon "Forall" PWild PWild (PVar "t"))) () (EBinOp "==" (EApp (EVar "headTyconNameMono") (EVar "t")) (EApp (EVar "Some") (ELit (LString "Async"))))) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "mainTypeIsAsync" (PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef") "value") (arm (PCon "Some" (PCon "Forall" PWild PWild (PVar "t"))) () (EMatch (EApp (EVar "headMonoNode") (EVar "t")) (arm (PCon "TCon" (PLit (LString "Async")) (PCon "OriginModule" (PLit (LString "async")))) () (EVar "True")) (arm PWild () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
+(DTypeSig true "mainAsyncPayloadIsUnit" (TyFun (TyCon "Unit") (TyCon "Bool")))
+(DFunDef false "mainAsyncPayloadIsUnit" (PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef") "value") (arm (PCon "Some" (PCon "Forall" PWild PWild (PVar "t"))) () (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TApp" PWild (PVar "payload")) () (EMatch (EApp (EVar "normalize") (EVar "payload")) (arm (PCon "TCon" (PLit (LString "Unit")) PWild) () (EVar "True")) (arm PWild () (EVar "False")))) (arm PWild () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "mainTypeIsUnit" (TyFun (TyCon "Unit") (TyCon "Bool")))
 (DFunDef false "mainTypeIsUnit" (PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef") "value") (arm (PCon "Some" (PCon "Forall" PWild PWild (PVar "t"))) () (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TCon" (PLit (LString "Unit")) PWild) () (EVar "True")) (arm PWild () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "mainTypeIsFloat" (TyFun (TyCon "Unit") (TyCon "Bool")))
@@ -46937,7 +46957,9 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "currentMethodMismatch" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "currentMethodMismatch" () (EApp (EVar "Ref") (EVar "None")))
 (DTypeSig true "mainTypeIsAsync" (TyFun (TyCon "Unit") (TyCon "Bool")))
-(DFunDef false "mainTypeIsAsync" (PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef") "value") (arm (PCon "Some" (PCon "Forall" PWild PWild (PVar "t"))) () (EBinOp "==" (EApp (EVar "headTyconNameMono") (EVar "t")) (EApp (EVar "Some") (ELit (LString "Async"))))) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "mainTypeIsAsync" (PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef") "value") (arm (PCon "Some" (PCon "Forall" PWild PWild (PVar "t"))) () (EMatch (EApp (EVar "headMonoNode") (EVar "t")) (arm (PCon "TCon" (PLit (LString "Async")) (PCon "OriginModule" (PLit (LString "async")))) () (EVar "True")) (arm PWild () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
+(DTypeSig true "mainAsyncPayloadIsUnit" (TyFun (TyCon "Unit") (TyCon "Bool")))
+(DFunDef false "mainAsyncPayloadIsUnit" (PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef") "value") (arm (PCon "Some" (PCon "Forall" PWild PWild (PVar "t"))) () (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TApp" PWild (PVar "payload")) () (EMatch (EApp (EVar "normalize") (EVar "payload")) (arm (PCon "TCon" (PLit (LString "Unit")) PWild) () (EVar "True")) (arm PWild () (EVar "False")))) (arm PWild () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "mainTypeIsUnit" (TyFun (TyCon "Unit") (TyCon "Bool")))
 (DFunDef false "mainTypeIsUnit" (PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef") "value") (arm (PCon "Some" (PCon "Forall" PWild PWild (PVar "t"))) () (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TCon" (PLit (LString "Unit")) PWild) () (EVar "True")) (arm PWild () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "mainTypeIsFloat" (TyFun (TyCon "Unit") (TyCon "Bool")))
