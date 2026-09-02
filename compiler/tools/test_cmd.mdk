@@ -109,7 +109,7 @@ import driver.diagnostics.{
   Diag,
   diagIsError,
 }
-import support.util.{listLen, joinNl, isNonEmptyL, filterList}
+import support.util.{listLen, joinNl, isNonEmptyL, filterList, endsWith}
 import support.path.{dirOf}
 
 -- `medaka test --filter <substring>`: does `needle` occur anywhere in
@@ -251,14 +251,32 @@ runTest engines runtimeP coreP target roots cases filterOpt = match readPreludeF
 -- arm `runTestReport`/`medaka mcp`'s `medaka_test` uses, #1443).  Doctest
 -- presence still wins over the `test`/`prop` exemption (same precedence as
 -- before the factor-out).
-typecheckExempt : List Decl -> String -> Bool
-typecheckExempt userDecls tsrc
+--
+-- #1445/#2513: the exemption is narrowed by PATH, not just by decl shape —
+-- `isNewVehiclePath` below excludes the `[P-TEST-SIBLING]` `*_test.mdk`
+-- convention (AGENTS.md) so a compiler-/stdlib-internal test sibling is always
+-- type-checked, never silently swallowed the way `test/ported/*.mdk` and
+-- `sqlite/test/*_test.mdk` deliberately still are.
+typecheckExempt : String -> List Decl -> String -> Bool
+typecheckExempt target userDecls tsrc
   | isNonEmptyL (extractExamples (collectComments tsrc)) = False
+  | isNewVehiclePath target = False
   | otherwise = hasProps userDecls || hasTests userDecls
+
+-- The `[P-TEST-SIBLING]` convention (AGENTS.md): a `*_test.mdk` sibling under
+-- `compiler/` or `stdlib/` is the new in-tree test vehicle (S-2), and must not
+-- inherit the `test`/`prop` exemption meant for the eval-vs-check divergence
+-- corpus (`test/ported/*.mdk`, `sqlite/test/*_test.mdk`) — those predate this
+-- convention, share only the suffix, and keep the exemption unchanged.  Scoped
+-- by PATH so the two `_test.mdk` families stay distinguishable: suffix alone
+-- cannot tell them apart.
+isNewVehiclePath : String -> Bool
+isNewVehiclePath target = endsWith "_test.mdk" target
+  && (substringMatch "compiler/" target || substringMatch "stdlib/" target)
 
 doctestGate : String -> List String -> String -> String -> String -> List Decl -> <IO> Option String
 doctestGate target roots rsrc csrc tsrc userDecls
-  | typecheckExempt userDecls tsrc =
+  | typecheckExempt target userDecls tsrc =
     let _ = ePutStrLn (typecheckSkipNotice target userDecls)
     None
   | otherwise = typecheckErrors target roots rsrc csrc tsrc userDecls
@@ -272,7 +290,7 @@ doctestGate target roots rsrc csrc tsrc userDecls
 export
 typecheckGateResult : String -> List String -> String -> String -> String -> List Decl -> <IO> Option String
 typecheckGateResult target roots rsrc csrc tsrc userDecls
-  | typecheckExempt userDecls tsrc = None
+  | typecheckExempt target userDecls tsrc = None
   | otherwise = typecheckErrors target roots rsrc csrc tsrc userDecls
 
 -- Type-check the module the way `medaka check` does, routing by import-presence
@@ -877,7 +895,7 @@ runTestReport engines runtimeSrc coreSrc target tsrc stdlibDir cases filterOpt i
         doctestRuns,
         propResults,
         testResults,
-        typecheckExempt userDecls tsrc,
+        typecheckExempt target userDecls tsrc,
       )
 
 -- Doctest phase as pure data: extraction + runChosenOn per requested engine,

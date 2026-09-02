@@ -152,6 +152,34 @@ f x = x + 1
 test "t" = f "x" == 3
 EOF
 
+# n/o/p: issue #1445/#2513 — the `[P-TEST-SIBLING]` test-vehicle convention (S-2,
+# AGENTS.md) places a `*_test.mdk` sibling under `compiler/` or `stdlib/`, and that
+# sibling must NOT inherit the `hasTests`/`hasProps` exemption meant for the
+# eval-vs-check divergence corpus (`test/ported/*.mdk`, `sqlite/test/*_test.mdk`).
+# The narrowing is scoped by PATH (`compiler/`/`stdlib/` PLUS the `_test.mdk`
+# suffix), not by suffix alone — cell p is the discriminator: identical content,
+# `_test.mdk` suffix, but no `compiler/`/`stdlib/` prefix, so it must stay exempt
+# exactly like `sqlite/test/*_test.mdk` does.
+mkdir -p "$TMP/compiler/types" "$TMP/stdlib"
+cat > "$TMP/compiler/types/n_narrow_compiler_vehicle_test.mdk" <<'EOF'
+f : Int -> Int
+f x = x + 1
+
+test "t" = f "x" == 3
+EOF
+cat > "$TMP/stdlib/o_narrow_stdlib_vehicle_test.mdk" <<'EOF'
+f : Int -> Int
+f x = x + 1
+
+test "t" = f "x" == 3
+EOF
+cat > "$TMP/p_suffix_only_stays_exempt_test.mdk" <<'EOF'
+f : Int -> Int
+f x = x + 1
+
+test "t" = f "x" == 3
+EOF
+
 # j: a module carrying BOTH a doctest and a `test "…"` decl. Doctest presence WINS
 # (the first guard), so this module IS type-checked — and therefore must NOT announce
 # a skip. It is the negative control for the announcement: a version that printed the
@@ -297,6 +325,21 @@ run_case 'k announcement on the hasProps exemption' "$TMP/h_exempt_via_prop.mdk"
 run_case 'l 1680 repro: the panic is explained' "$TMP/i_1680_repro.mdk" 1 \
   'note: typechecking was skipped for' 'may therefore be an uncaught TYPE error' \
   "runtime error [E-PANIC]: unknown op '+'"
+
+# n/o: the `compiler/`/`stdlib/` test-vehicle sibling loses the exemption — it must
+# fail the SAME way cell a does (a real type error, not the exempted-and-panics
+# shape cells i/l pin), even though it carries a `test "…"` decl with no doctest.
+run_case 'n narrowing: compiler-prefix vehicle no longer exempt' "$TMP/compiler/types/n_narrow_compiler_vehicle_test.mdk" 1 \
+  'requires it to `medaka check` first' 'Type mismatch: Int vs String'
+
+run_case 'o narrowing: stdlib-prefix vehicle no longer exempt' "$TMP/stdlib/o_narrow_stdlib_vehicle_test.mdk" 1 \
+  'requires it to `medaka check` first' 'Type mismatch: Int vs String'
+
+# p: same content, `_test.mdk` suffix, but no `compiler/`/`stdlib/` prefix — suffix
+# alone must NOT narrow the exemption (this is the shape `sqlite/test/*_test.mdk`
+# shares), so it still exempts and dies the old, uninformative way cell l does.
+run_case 'p suffix alone insufficient: stays exempt' "$TMP/p_suffix_only_stays_exempt_test.mdk" 1 \
+  'note: typechecking was skipped for' "runtime error [E-PANIC]: unknown op '+'"
 
 refute_case 'j doctest wins: no skip announced' "$TMP/j_doctest_beats_testdecl.mdk" 0 \
   'typechecking was skipped'
