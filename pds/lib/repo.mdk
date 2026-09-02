@@ -158,6 +158,10 @@ normalizedAuthorityBytes path i end =
   else
     not (upperByte path[i]) && normalizedAuthorityBytes path (i + 1) end
 
+-- | Validate the collection NSID prefix of a repository path (bytes
+-- `0..end`); exported so `pds/test/atsyntax_vectors_main.mdk` can grade it
+-- against the official atproto interop NSID syntax corpus.
+export
 validateCollection : Array Int -> Int -> Result String Unit
 validateCollection path end = match validateNsidPrefix path end
   Ok () =>
@@ -182,6 +186,10 @@ validRkeyBytes path i =
   else
     rkeyByte path[i] && validRkeyBytes path (i + 1)
 
+-- | Validate a repository record key (bytes at `start..`); exported so
+-- `pds/test/atsyntax_vectors_main.mdk` can grade it against the official
+-- atproto interop record-key syntax corpus.
+export
 validateRkey : Array Int -> Int -> Result String Unit
 validateRkey path start =
   let size = arrayLength path - start

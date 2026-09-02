@@ -1,0 +1,21 @@
+# Generated only by pds/tools/gen_lexjson_corpus.sh.
+# Official @atproto/lex-cbor + @atproto/lex-json + @atproto/lex-data reference; exact package routes are in VECTOR-PROVENANCE.txt.
+# Columns: case-name<TAB>canonical-dagcbor-hex<TAB>lexicon-json-text.
+null	f6	null
+bool-true	f5	true
+bool-false	f4	false
+int-zero	00	0
+int-positive	193039	12345
+int-negative	3a000181cc	-98765
+int-large	1b001fffffffffffff	9007199254740991
+bytes-empty	40	{"$bytes":""}
+bytes-short	43010203	{"$bytes":"AQID"}
+bytes-long	5820d23f4316b4f2ff82f3490237bed59447c5562268e571e1de4e6ab103e529da42	{"$bytes":"0j9DFrTy/4LzSQI3vtWUR8VWImjlceHeTmqxA+Up2kI"}
+string-basic	6c68656c6c6f2c20776f726c64	"hello, world"
+string-unicode	68e6b0b420f09d849e	"水 𝄞"
+array-nested	84016374776f8203f6f5	[1,"two",[3,null],true]
+map-basic	a361610161626374776f6163f5	{"a":1,"b":"two","c":true}
+map-nested	a1656f75746572a165696e6e657283010203	{"outer":{"inner":[1,2,3]}}
+link-raw	d82a58250001551220571f02a679dbe19a1bfd85cf26a39176bf7d96b3ed71a169560a1b4c9bb4d01e	{"$link":"bafkreicxd4bkm6o34gnbx7mfz4tkhelwx56znm7nogqwsvqkdngjxngqdy"}
+link-cbor	d82a58250001711220140bd21e81f7b61c0176cfe0551c4315903e428f5a70f219ac6886bd4360ac88	{"$link":"bafyreiaubpjb5apxwyoac5wp4bkryqyvsa7efd22odzbtldiq26ugyfmra"}
+map-with-bytes-and-link	a363726566d82a58250001711220140bd21e81f7b61c0176cfe0551c4315903e428f5a70f219ac6886bd4360ac8864626c6f6243090807646e616d6565636f6d626f	{"ref":{"$link":"bafyreiaubpjb5apxwyoac5wp4bkryqyvsa7efd22odzbtldiq26ugyfmra"},"blob":{"$bytes":"CQgH"},"name":"combo"}
