@@ -150,5 +150,29 @@ console.log('\n=== Medaka tokenizer unit tests ===\n');
   check("char literal 'a'", typeOf(t, "'a'") === 'character', 'got ' + typeOf(t, "'a'"));
 }
 
+// N. type names vs data constructors (positional, see tokenizer header)
+{
+  const t = tokenize('data Shape\n  = Circle Float\n  | Rect Float Float\n\narea : Shape -> Float\narea (Circle r) = 3.14 * r * r\n\nmain =\n  let shapes = [Circle 1.0, Rect 3.0 4.0]\n  println "\\{map area shapes}"');
+  const kinds = (text) => t.filter((x) => x.text === text).map((x) => x.type);
+  check('data head is a typeName', kinds('Shape')[0] === 'typeName', 'got ' + kinds('Shape'));
+  check('ctor after `=` in data body', kinds('Circle')[0] === 'constructor', 'got ' + kinds('Circle'));
+  check('ctor after `|` in data body', kinds('Rect')[0] === 'constructor', 'got ' + kinds('Rect'));
+  check('ctor argument is a typeName', kinds('Float').every((k) => k === 'typeName'), 'got ' + kinds('Float'));
+  check('signature types after `:`', kinds('Shape')[1] === 'typeName', 'got ' + kinds('Shape'));
+  check('pattern position is a constructor', kinds('Circle')[1] === 'constructor', 'got ' + kinds('Circle'));
+  check('expression position is a constructor', kinds('Circle')[2] === 'constructor' && kinds('Rect')[1] === 'constructor',
+        'got ' + kinds('Circle') + ' / ' + kinds('Rect'));
+}
+{
+  const t = tokenize('let x : Int = Just 5\ntype Pair = (Int, Int)\nimpl Show Shape where\n  show (Circle r) = "c"\nimport map as M\nsizes = M.get 1 m');
+  check('annotated let: type before `=`', typeOf(t, 'Int') === 'typeName');
+  check('annotated let: ctor after `=`', typeOf(t, 'Just') === 'constructor', 'got ' + typeOf(t, 'Just'));
+  check('type alias rhs stays type position', t.filter((x) => x.text === 'Int').every((x) => x.type === 'typeName'));
+  check('impl head is type position', typeOf(t, 'Show') === 'typeName' && typeOf(t, 'Shape') === 'typeName');
+  check('impl body is expression position', typeOf(t, 'Circle') === 'constructor', 'got ' + typeOf(t, 'Circle'));
+  check('module alias stays neutral', t.filter((x) => x.text === 'M').every((x) => x.type === 'typeName'),
+        'got ' + t.filter((x) => x.text === 'M').map((x) => x.type));
+}
+
 console.log('\n=== ' + pass + ' pass / ' + fail + ' fail ===\n');
 process.exit(fail > 0 ? 1 : 0);
