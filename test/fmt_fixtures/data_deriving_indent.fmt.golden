@@ -1,0 +1,3 @@
+data Expense =
+  | { date : String, payee : String, amount : Float, category : Category }
+  deriving (Eq, Debug)

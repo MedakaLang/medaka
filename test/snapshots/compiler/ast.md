@@ -17,7 +17,7 @@ public export data Lit =
   | LChar String
   | LBool Bool
   | LUnit
-deriving (Eq)
+  deriving (Eq)
 
 -- A source-location span for an expression (`loc`):
 -- file, 1-based start line, 0-based start col, 1-based end line, 0-based end col.
@@ -202,7 +202,7 @@ public export data Ns =
   | NsCtor
   | NsField
   | NsValue
-deriving (Eq, Ord, Debug)
+  deriving (Eq, Ord, Debug)
 
 -- ── The origin half of an identity: NO "unresolved" inhabitant (§8 I6.3) ───
 -- `TyConOrigin` has THREE inhabitants and one of them, `OriginUnresolved`,
@@ -272,7 +272,7 @@ deriving (Eq, Ord, Debug)
 export data IdentOrigin =
   | IdentBuiltin
   | IdentModule String
-deriving (Eq, Ord, Debug)
+  deriving (Eq, Ord, Debug)
 
 -- The ONLY eliminator for an `IdentOrigin`, since the constructors above are
 -- module-private.  Total by construction: a consumer supplies the builtin
@@ -409,7 +409,7 @@ mkIdent ns origin name = map (io => Ident ns io name) (identOriginOf origin)
 public export data TabKey =
   | TkIdent Ident
   | TkBare Ns String
-deriving (Eq, Ord, Debug)
+  deriving (Eq, Ord, Debug)
 
 -- The ONE total mint. `mkIdent` answers "does this origin carry identity?";
 -- `None` is honest absence (an `OriginUnresolved` head on the flat/

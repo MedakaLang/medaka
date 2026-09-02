@@ -77,6 +77,39 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MEDAKA="$ROOT/medaka"
 
+# ── optional extraction dump (consumed by test/first_hour_census.sh) ───────
+# When SYNTAX_EXTRACT_DIR is set, every extracted ```medaka / ```medaka-project
+# block is ALSO copied there (as well as being checked, exactly as always) —
+# a manifest.tsv row records how to find it. This is the one reusable
+# extraction seam licensed by S-first-hour-rank's packet (F9): it rides along
+# on the SAME extraction/parsing state machine below rather than duplicating
+# it, and does nothing (no directory, no manifest, zero behavior change) when
+# the variable is unset — which is how this script's own checked/failed/exit
+# behavior stays byte-for-byte unchanged for every other caller.
+SYNTAX_EXTRACT_DIR="${SYNTAX_EXTRACT_DIR:-}"
+extract_counter=0
+extract_dump_medaka() {
+  [ -n "$SYNTAX_EXTRACT_DIR" ] || return 0
+  extract_counter=$((extract_counter + 1))
+  dest="$SYNTAX_EXTRACT_DIR/mdk_$(printf '%04d' "$extract_counter").mdk"
+  cp "$1" "$dest"
+  printf '%s\tmedaka\t%s:%s\t%s\n' "$extract_counter" "$doc_label" "$2" "$dest" \
+    >> "$SYNTAX_EXTRACT_DIR/manifest.tsv"
+}
+extract_dump_project() {
+  [ -n "$SYNTAX_EXTRACT_DIR" ] || return 0
+  extract_counter=$((extract_counter + 1))
+  dest_dir="$SYNTAX_EXTRACT_DIR/proj_$(printf '%04d' "$extract_counter")"
+  cp -r "$1" "$dest_dir"
+  mains=""
+  for mf in "$dest_dir"/main*.mdk; do
+    [ -e "$mf" ] || continue
+    mains="$mains $(basename "$mf")"
+  done
+  printf '%s\tproject\t%s:%s\t%s\t%s\n' "$extract_counter" "$doc_label" "$2" "$dest_dir" "$mains" \
+    >> "$SYNTAX_EXTRACT_DIR/manifest.tsv"
+}
+
 if [ ! -x "$MEDAKA" ]; then
   echo "check_syntax_examples: native binary not found/executable at $MEDAKA" >&2
   echo "check_syntax_examples: build it first (make medaka) — refusing to skip-and-exit-0" >&2
@@ -99,24 +132,6 @@ trap 'rm -rf "$WORK"' EXIT INT TERM
 check_fmt() {
   fmt_target="$1"
   fmt_label="$2"
-  # KNOWN `medaka fmt` DEFECT (found while adding this check, not yet filed
-  # as an issue): a bodyless `interface X a` (no `where`, no methods — a
-  # valid, documented marker-interface shape) is not round-tripped by fmt;
-  # it synthesizes a spurious `where` plus an empty/whitespace body line
-  # regardless of any trailing comment. SYNTAX.md's "Empty a" example exists
-  # specifically to demonstrate the where-less form and says so in its own
-  # comment ("no `where`") — canonicalizing it to fmt's output would delete
-  # the very construct the example teaches, which this gate must not do
-  # (it only enforces STYLE, never rewrites what an example demonstrates).
-  # Exempt by content, not path/line, so this cannot silently widen to cover
-  # an unrelated future block at the same spot — matches only the exact
-  # bodyless-interface header shape known to be unformattable. This skips
-  # the fmt check for the WHOLE containing file (the block this construct
-  # sits in is checked as one unit), not just this one line; the rest of
-  # that block was hand-verified canonical when this exemption was added.
-  if grep -q '^interface [A-Za-z_][A-Za-z0-9_]* [a-z][A-Za-z0-9_]*[[:space:]]*\(--.*\)\?$' "$fmt_target" 2>/dev/null; then
-    return 0
-  fi
   # A medaka-project block's per-file extraction (check_project_block) keeps
   # the blank line that separates one `-- file:` section from the next as
   # part of the extracted file — that separator is markdown structure, not
@@ -215,6 +230,47 @@ parse_fence_opener() {
   return 0
 }
 
+# #2404: a line that WANTED to be a Medaka fence opener but was rejected above.
+# CommonMark forbids backticks in a backtick fence's info string, so
+# "```medaka-nocheck: after a one-line `data` decl ..." is not an opener at all —
+# it is paragraph text, and the ``` meant to CLOSE it then reads as a fresh
+# opener that swallows the next real example up to the following closer. The
+# rejection is correct; the silence is the bug. Anything shaped like a Medaka
+# tag that did not parse as an opener is reported as a failure, so a doc that
+# renders wrongly on GitHub cannot also quietly shrink the checked corpus.
+# REJECT_INFO carries the offending text.
+looks_like_medaka_fence() {
+  reject_text="$1"
+  reject_indent=0
+  while [ "$reject_indent" -lt 3 ]; do
+    case "$reject_text" in
+      " "*) reject_text=${reject_text# }; reject_indent=$((reject_indent + 1)) ;;
+      *) break ;;
+    esac
+  done
+  case "$reject_text" in
+    \`\`\`*) ;;
+    *) return 1 ;;
+  esac
+  while :; do
+    case "$reject_text" in
+      \`*) reject_text=${reject_text#\`} ;;
+      *) break ;;
+    esac
+  done
+  while :; do
+    case "$reject_text" in
+      " "*) reject_text=${reject_text# } ;;
+      "	"*) reject_text=${reject_text#"	"} ;;
+      *) break ;;
+    esac
+  done
+  case "$reject_text" in
+    medaka*|mdk*) REJECT_INFO=$reject_text; return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # A closer uses the opener's character, is at least as long, permits at most
 # three leading spaces, and has only trailing whitespace after the run.
 is_matching_fence_closer() {
@@ -281,6 +337,7 @@ check_medaka_block() {
 $out"
   fi
   check_fmt "$check_file" "$doc_label:$check_line (medaka block)"
+  extract_dump_medaka "$check_file" "$check_line"
 
   # Offer this example to a ```medaka-expect block that may follow. The
   # snapshot is a copy: $blockfile is reused by the next block in the document.
@@ -350,6 +407,7 @@ $out"
     [ -e "$pf" ] || continue
     check_fmt "$pf" "$doc_label:$project_line (medaka-project, file $(basename "$pf"))"
   done
+  extract_dump_project "$pdir" "$project_line"
 
   # Offer this example to a ```medaka-expect block that may follow. "The"
   # stdout of a project with several entry points is not well defined, so the
@@ -511,6 +569,11 @@ check_document() {
           medaka-expect) ;;
           *) flush_pending ;;
         esac
+      elif looks_like_medaka_fence "$line"; then
+        failed=$((failed + 1))
+        doc_failed=$((doc_failed + 1))
+        fail_report="$fail_report
+=== FAIL: $doc_label:$lineno (malformed Medaka fence opener '$REJECT_INFO'; CommonMark forbids backticks in a backtick fence's info string — remove them or use a ~~~ fence) ==="
       fi
     else
       if is_matching_fence_closer "$line"; then

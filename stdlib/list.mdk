@@ -1,41 +1,58 @@
--- list.mdk — operations on List a
--- See STDLIB.md for the full implementation plan.
+{- | Operations on `List a`.
+
+   A list is an immutable singly linked sequence. Every operation here returns
+   a new list and leaves its argument unchanged. Functions that could fail on
+   an empty list or an out-of-range index return an `Option` instead of
+   panicking.
+
+   The generic container operations (`map`, `filter`, `fold`, `length`, `elem`,
+   `sum`, `maximum`, `any`, `all`, and the rest of the `Foldable` and
+   `Traversable` interfaces) are defined in the prelude and work on lists
+   without an import. This module holds what is specific to lists. -}
 
 import core.{Eq, Ord, Debug, Foldable, Mappable, Ordering, Option, Result}
 
--- Re-export the Filterable container ops so they're discoverable as
--- `list.filter` / `list.filterMap`.
+-- # Re-exports
+
+{- | Re-exported from the prelude so that `list.filter` and `list.filterMap`
+   resolve when the module is imported qualified. -}
 export import core.{Filterable, filter, filterMap}
 
--- `maximum`/`minimum`/`elem`/`notElem`/`sum`/`product`/`find`/`any`/`all`/
--- `count`/`fold`/`foldRight` are *not* defined here: they are generic over
--- `Foldable` in core (the prelude), so they already work on `List` directly.
--- `impl Ord (List a)` (lexicographic) likewise lives in core next to
--- `impl Eq (List a)`.
+-- `impl Eq (List a)`, `impl Ord (List a)` (lexicographic) and the other
+-- prelude instances for `List` live in core.mdk beside the interfaces.
 
--- Construction
+-- # Construction
 
+{- | A list holding one element.
+
+   > singleton 5
+   [5] -}
 export
 singleton : a -> List a
 singleton a = [a]
 
-{- | The half-open integer interval `[lo, hi)` — `lo` up to but excluding `hi`.
-   Empty when `lo >= hi`.
+{- | The integers from `lo` up to, but not including, `hi`.
+
+   Empty when `lo >= hi`. `[lo..hi]` is the literal form.
 
    > range 2 5
-   [2, 3, 4]
-   > range 5 5
-   []
-   > range 5 2
-   []
-   > range 0 1
-   [0] -}
+   [2, 3, 4] -}
 export
 range : Int -> Int -> List Int
 range lo hi = [lo..hi]
 
-{- | `rangeStep lo hi step` — arithmetic sequence from `lo`, stepping by `step`,
-   stopping before `hi`.  Empty when `step` points away from `hi` (or is `0`).
+-- > range 5 5
+-- []
+-- > range 5 2
+-- []
+-- > range 0 1
+-- [0]
+
+{- | The integers from `lo` towards `hi` in steps of `step`, stopping before
+   `hi`.
+
+   A negative `step` counts down. Empty when `step` is `0` or points away
+   from `hi`.
 
    > rangeStep 0 10 3
    [0, 3, 6, 9]
@@ -48,27 +65,30 @@ rangeStep lo hi step
   | step < 0 && lo > hi = lo :: rangeStep (lo + step) hi step
   | otherwise = []
 
-{- | A list of `n` copies of `x` (empty when `n <= 0`).
+-- > rangeStep 0 10 0
+-- []
+-- > rangeStep 0 10 (-1)
+-- []
 
-   Built by doubling (`replicateDbl`) rather than one recursive call per
-   copy, so the interpreted call depth is `O(log n)` instead of `O(n)` —
-   the same shape `String.repeat` had before #1728.
+{- | A list of `n` copies of `x`.
+
+   Empty when `n <= 0`. Safe for large `n`: the call depth grows with
+   `log n`, not `n`.
 
    > replicate 3 0
-   [0, 0, 0]
-
-   > replicate 0 0
-   []
-
-   > take 3 (replicate 30000 1)
-   [1, 1, 1] -}
+   [0, 0, 0] -}
 export
 replicate : Int -> a -> List a
 replicate n x = replicateDbl n x
 
--- | `k <= 0` bottoms out at `[]`; otherwise halve `k`, double the halved
---   result, and prepend one more `x` when `k` is odd. `k / 2` shrinks the
---   argument geometrically, so the call chain is `O(log k)` deep.
+-- > replicate 0 0
+-- []
+-- > take 3 (replicate 30000 1)
+-- [1, 1, 1]
+
+-- `k <= 0` bottoms out at `[]`; otherwise halve `k`, double the halved
+-- result, and prepend one more `x` when `k` is odd. `k / 2` shrinks the
+-- argument geometrically, so the call chain is `O(log k)` deep.
 replicateDbl : Int -> a -> List a
 replicateDbl k x =
   if k <= 0 then []
@@ -76,39 +96,134 @@ replicateDbl k x =
     let h = replicateDbl (k / 2) x
     if isEven k then h ++ h else x :: h ++ h
 
-{- | `[x, f x, f (f x), …]` of length `n`.  Empty when `n <= 0`.
+{- | The first `n` results of applying `f` repeatedly, starting from `x`:
+   `[x, f x, f (f x), ...]`.
+
+   Empty when `n <= 0`.
 
    > iterate 4 (n => n * 2) 1
-   [1, 2, 4, 8]
-   > iterate 0 (n => n * 2) 1
-   []
-   > iterate 1 (n => n * 2) 1
-   [1] -}
+   [1, 2, 4, 8] -}
 export
 iterate : Int -> (a -> <e> a) -> a -> <e> List a
 iterate n f x
   | n <= 0 = []
   | otherwise = x :: iterate (n - 1) f (f x)
 
-{- | Build a list from a seed: `gen` returns `Some (element, nextSeed)` to emit
-   an element and continue, or `None` to stop.
+-- > iterate 0 (n => n * 2) 1
+-- []
+-- > iterate 1 (n => n * 2) 1
+-- [1]
+
+{- | Builds a list from a seed.
+
+   `gen` is called with the current seed. It returns `Some (element, next)` to
+   emit `element` and continue from `next`, or `None` to stop.
 
    > unfold (n => if n > 5 then None else Some (n, n + 1)) 1
-   [1, 2, 3, 4, 5]
-   > unfold (n => if n > 0 then None else Some (n, n + 1)) 1
-   []
-   > unfold (n => if n > 0 then None else Some (n, n + 1)) 0
-   [0] -}
+   [1, 2, 3, 4, 5] -}
 export
 unfold : (b -> <e> Option (a, b)) -> b -> <e> List a
 unfold gen seed = match gen seed
   None => []
   Some (x, next) => x :: unfold gen next
 
--- Transformation
+-- > unfold (n => if n > 0 then None else Some (n, n + 1)) 1
+-- []
+-- > unfold (n => if n > 0 then None else Some (n, n + 1)) 0
+-- [0]
 
-{- | The list in reverse order.  Tail-recursive accumulator — safe on long
-   lists where right-leaning recursion would overflow the stack.
+-- # Accessing elements
+
+{- | The first element, or `None` when the list is empty.
+
+   > head [1, 2, 3]
+   Some 1
+   > head ([] : List Int)
+   None -}
+export
+head : List a -> Option a
+head [] = None
+head (x::_) = Some x
+
+{- | Everything after the first element, or `None` when the list is empty.
+
+   > tail [1, 2, 3]
+   Some [2, 3]
+   > tail [1]
+   Some [] -}
+export
+tail : List a -> Option (List a)
+tail [] = None
+tail (_::xs) = Some xs
+
+-- > tail ([] : List Int)
+-- None
+
+{- | The first element and the rest, or `None` when the list is empty.
+
+   > uncons [1, 2, 3]
+   Some (1, [2, 3]) -}
+export
+uncons : List a -> Option (a, List a)
+uncons [] = None
+uncons (x::xs) = Some (x, xs)
+
+-- > uncons [1]
+-- Some (1, [])
+-- > uncons ([] : List Int)
+-- None
+
+{- | The last element, or `None` when the list is empty.
+
+   > last [1, 2, 3]
+   Some 3 -}
+export
+last : List a -> Option a
+last [] = None
+last [x] = Some x
+last (x::xs) = last xs
+
+-- > last ([] : List Int)
+-- None
+
+{- | Everything except the last element, or `None` when the list is empty.
+
+   > init [1, 2, 3]
+   Some [1, 2]
+   > init [1]
+   Some [] -}
+export
+init : List a -> Option (List a)
+init [] = None
+init (x::[]) = Some []
+init (x::xs) = map (x :: _) (init xs)
+
+-- > init ([] : List Int)
+-- None
+
+{- | The element at index `i`, counting from `0`, or `None` when `i` is out
+   of range.
+
+   Walks the list from the front, so the cost grows with `i`.
+
+   > get 1 ["a", "b", "c"]
+   Some "b"
+   > get 5 ["a", "b", "c"]
+   None -}
+export
+get : Int -> List a -> Option a
+get _ [] = None
+get 0 (x::_) = Some x
+get i (_::xs) = get (i - 1) xs
+
+-- > get (-1) [1, 2]
+-- None
+
+-- # Transformation
+
+{- | The list in reverse order.
+
+   Safe on long lists.
 
    > reverse [1, 2, 3]
    [3, 2, 1] -}
@@ -119,7 +234,7 @@ reverse xs = go xs []
     go [] acc = acc
     go (y::ys) acc = go ys (y::acc)
 
-{- | Insert `sep` between every pair of adjacent elements.
+{- | The list with `sep` placed between each pair of adjacent elements.
 
    > intersperse 0 [1, 2, 3]
    [1, 0, 2, 0, 3] -}
@@ -129,8 +244,7 @@ intersperse _ [] = []
 intersperse _ [x] = [x]
 intersperse sep (x::xs) = x :: sep :: intersperse sep xs
 
-{- | Concatenate the inner lists with `sep` between them — `intersperse` then
-   flatten.
+{- | The inner lists joined into one, with `sep` between each pair.
 
    > intercalate [0] [[1], [2, 3], [4]]
    [1, 0, 2, 3, 0, 4] -}
@@ -138,8 +252,10 @@ export
 intercalate : List a -> List (List a) -> List a
 intercalate sep xss = flat (intersperse sep xss)
 
-{- | Turn rows into columns.  Ragged rows are allowed: shorter rows simply
-   contribute nothing to the later columns.
+{- | The rows of a list of lists turned into columns.
+
+   Rows may have different lengths. A short row contributes nothing to the
+   columns beyond its end.
 
    > transpose [[1, 2, 3], [4, 5, 6]]
    [[1, 4], [2, 5], [3, 6]]
@@ -152,7 +268,10 @@ transpose ([]::xss) = transpose xss
 transpose ((x::xs)::xss) =
   (x :: filterMap head xss) :: transpose (xs :: filterMap tail xss)
 
-{- | Every subsequence (subset preserving order), `2^n` of them.
+{- | Every subsequence of the list: each subset of its elements, in their
+   original order.
+
+   A list of `n` elements has `2^n` subsequences.
 
    > subsequences [1, 2, 3]
    [[], [1], [2], [1, 2], [3], [1, 3], [2, 3], [1, 2, 3]] -}
@@ -161,8 +280,10 @@ subsequences : List a -> List (List a)
 subsequences [] = [[]]
 subsequences (x::xs) = flatMap (sub => [sub, x::sub]) (subsequences xs)
 
-{- | Every ordering of the list, `n!` of them (lexicographic by original
-   position).
+{- | Every ordering of the list's elements.
+
+   A list of `n` elements has `n!` permutations. They are produced in
+   lexicographic order of the original positions.
 
    > permutations [1, 2, 3]
    [[1, 2, 3], [1, 3, 2], [2, 1, 3], [2, 3, 1], [3, 1, 2], [3, 2, 1]] -}
@@ -177,10 +298,11 @@ selections : List a -> List (a, List a)
 selections [] = []
 selections (x::xs) = (x, xs) :: map ((y, ys) => (y, x::ys)) (selections xs)
 
--- Folds and scans
+-- # Folds and scans
 
-{- | Like `fold`, but keeping every intermediate accumulator (so the result is
-   one longer than the input).
+{- | Every intermediate value of a left fold, starting with the seed.
+
+   The result is one element longer than the input.
 
    > scanLeft (acc x => acc + x) 0 [1, 2, 3]
    [0, 1, 3, 6] -}
@@ -189,7 +311,7 @@ scanLeft : (b -> a -> <e> b) -> b -> List a -> <e> List b
 scanLeft _ z [] = [z]
 scanLeft f z (x::xs) = z :: scanLeft f (f z x) xs
 
-{- | Right-associated `scanLeft`: every intermediate of a right fold.
+{- | Every intermediate value of a right fold, ending with the seed.
 
    > scanRight (x acc => x + acc) 0 [1, 2, 3]
    [6, 5, 3, 0] -}
@@ -200,9 +322,66 @@ scanRight f z (x::xs) = match scanRight f z xs
   q::qs => f x q :: q::qs
   [] => [f x z]
 
--- Search
+{- | A left fold that uses the first element as the seed.
 
-{- | Index of the first element satisfying the predicate, or `None`.
+   `None` when the list is empty. `fold` is the form that takes a seed.
+
+   > reduce (x y => x + y) [1, 2, 3, 4]
+   Some 10 -}
+export
+reduce : (a -> a -> <e> a) -> List a -> <e> Option a
+reduce _ [] = None
+reduce f (x::xs) = Some (go x xs)
+  where
+    go acc [] = acc
+    go acc (y::rest) = go (f acc y) rest
+
+-- > reduce (x y => if x > y then x else y) [3, 1, 2]
+-- Some 3
+-- > reduce (x y => x + y) ([] : List Int)
+-- None
+
+{- | The largest element according to `cmp`, or `None` when the list is
+   empty.
+
+   When several elements compare equal, the first one wins. `maximum` is the
+   form that uses the `Ord` instance.
+
+   > maximumBy (x y => compare (x % 10) (y % 10)) [23, 47, 15]
+   Some 47 -}
+export
+maximumBy : (a -> a -> <e> Ordering) -> List a -> <e> Option a
+maximumBy cmp xs = reduce pick xs
+  where
+    pick a b = match cmp b a
+      Gt => b
+      _ => a
+
+-- > maximumBy compare ([] : List Int)
+-- None
+
+{- | The smallest element according to `cmp`, or `None` when the list is
+   empty.
+
+   When several elements compare equal, the first one wins. `minimum` is the
+   form that uses the `Ord` instance.
+
+   > minimumBy (x y => compare (x % 10) (y % 10)) [23, 47, 15]
+   Some 23 -}
+export
+minimumBy : (a -> a -> <e> Ordering) -> List a -> <e> Option a
+minimumBy cmp xs = reduce pick xs
+  where
+    pick a b = match cmp b a
+      Lt => b
+      _ => a
+
+-- > minimumBy compare ([] : List Int)
+-- None
+
+-- # Search
+
+{- | The index of the first element satisfying `p`, or `None`.
 
    > findIndex (x => x > 2) [1, 2, 3, 4]
    Some 2 -}
@@ -215,7 +394,7 @@ findIndex p xs = go 0 xs
       | p x = Some i
       | otherwise = go (i + 1) rest
 
-{- | Indices of every element satisfying the predicate.
+{- | The indices of every element satisfying `p`.
 
    > findIndices (x => x > 2) [1, 3, 2, 4]
    [1, 3] -}
@@ -228,7 +407,7 @@ findIndices p xs = go 0 xs
       | p x = i :: go (i + 1) rest
       | otherwise = go (i + 1) rest
 
-{- | Index of the first occurrence of `x` (by `Eq`), or `None`.
+{- | The index of the first element equal to `x`, or `None`.
 
    > elemIndex 3 [1, 2, 3, 2]
    Some 2 -}
@@ -236,19 +415,21 @@ export
 elemIndex : Eq a => a -> List a -> Option Int
 elemIndex x xs = findIndex (== x) xs
 
-{- | Indices of every occurrence of `x` (by `Eq`).
+{- | The indices of every element equal to `x`.
 
    > elemIndices 2 [1, 2, 3, 2]
-   [1, 3]
-   > elemIndices 9 [1, 2, 3]
-   [] -}
+   [1, 3] -}
 export
 elemIndices : Eq a => a -> List a -> List Int
 elemIndices x xs = findIndices (== x) xs
 
-{- | Look `key` up in an association list, returning the first match.
-   `O(n)` — for a large or long-lived table reach for `map.Map` (`O(log n)`)
-   or `hash_map.HashMap` instead.
+-- > elemIndices 9 [1, 2, 3]
+-- []
+
+{- | The value paired with `key` in an association list, or `None`.
+
+   The first matching pair wins. Each lookup scans the list, so for a large or
+   long-lived table use `map.Map` or `hash_map.HashMap`.
 
    > lookup 2 [(1, "a"), (2, "b")]
    Some "b"
@@ -261,13 +442,13 @@ lookup key ((k, v)::rest)
   | key == k = Some v
   | otherwise = lookup key rest
 
-{- | The first non-`None` result of `f` — `find` and `map` in a single pass,
-   without rebuilding the list.  Short-circuits on the first hit.
+{- | The first `Some` produced by applying `f` to the elements in order, or
+   `None`.
+
+   Stops at the first hit, so `f` is not applied to the remaining elements.
 
    > findMap (x => if x > 2 then Some (x * 10) else None) [1, 2, 3, 4]
-   Some 30
-   > findMap (x => if x > 9 then Some x else None) [1, 2, 3]
-   None -}
+   Some 30 -}
 export
 findMap : (a -> <e> Option b) -> List a -> <e> Option b
 findMap _ [] = None
@@ -275,64 +456,16 @@ findMap f (x::rest) = match f x
   Some y => Some y
   None => findMap f rest
 
--- Non-empty folds
+-- > findMap (x => if x > 9 then Some x else None) [1, 2, 3]
+-- None
 
-{- | Left-fold using the first element as the seed — `None` on an empty list.
-   Named `reduce` rather than `foldl1`: it needs no seed, so it reads as
-   "reduce the list to one value".
+-- # Indexed
 
-   > reduce (x y => x + y) [1, 2, 3, 4]
-   Some 10
-   > reduce (x y => if x > y then x else y) [3, 1, 2]
-   Some 3
-   > reduce (x y => x + y) ([] : List Int)
-   None -}
-export
-reduce : (a -> a -> <e> a) -> List a -> <e> Option a
-reduce _ [] = None
-reduce f (x::xs) = Some (go x xs)
-  where
-    go acc [] = acc
-    go acc (y::rest) = go (f acc y) rest
-
-{- | Largest element by a custom comparator, or `None` when empty.  Ties keep
-   the *first* of the equal elements.  `maximum` (core) is the `Ord` case.
-
-   > maximumBy (x y => compare (x % 10) (y % 10)) [23, 47, 15]
-   Some 47
-   > maximumBy compare ([] : List Int)
-   None -}
-export
-maximumBy : (a -> a -> <e> Ordering) -> List a -> <e> Option a
-maximumBy cmp xs = reduce pick xs
-  where
-    pick a b = match cmp b a
-      Gt => b
-      _ => a
-
-{- | Smallest element by a custom comparator, or `None` when empty.  Ties keep
-   the *first* of the equal elements.  `minimum` (core) is the `Ord` case.
-
-   > minimumBy (x y => compare (x % 10) (y % 10)) [23, 47, 15]
-   Some 23
-   > minimumBy compare ([] : List Int)
-   None -}
-export
-minimumBy : (a -> a -> <e> Ordering) -> List a -> <e> Option a
-minimumBy cmp xs = reduce pick xs
-  where
-    pick a b = match cmp b a
-      Lt => b
-      _ => a
-
--- Indexed
-
-{- | `map`, but `f` also receives each element's 0-based index.
+{- | Like `map`, with `f` also receiving each element's index, counting
+   from `0`.
 
    > mapWithIndex (i x => i * x) [1, 2, 3]
-   [0, 2, 6]
-   > mapWithIndex (i x => i + x) [10, 20]
-   [10, 21] -}
+   [0, 2, 6] -}
 export
 mapWithIndex : (Int -> a -> <e> b) -> List a -> <e> List b
 mapWithIndex f xs = go 0 xs
@@ -340,7 +473,10 @@ mapWithIndex f xs = go 0 xs
     go _ [] = []
     go i (x::rest) = f i x :: go (i + 1) rest
 
-{- | Pair every element with its 0-based index.
+-- > mapWithIndex (i x => i + x) [10, 20]
+-- [10, 21]
+
+{- | Each element paired with its index, counting from `0`.
 
    > indexed ["a", "b", "c"]
    [(0, "a"), (1, "b"), (2, "c")] -}
@@ -348,9 +484,10 @@ export
 indexed : List a -> List (Int, a)
 indexed xs = mapWithIndex (i x => (i, x)) xs
 
-{- | Left-to-right `map` threading an accumulator: `f` sees the running state
-   and each element, and returns the new state plus the mapped element.
-   Returns the final state and the mapped list.
+{- | A `map` that threads a state value from left to right.
+
+   `f` receives the state and an element, and returns the new state and the
+   mapped element. The result is the final state and the mapped list.
 
    > mapAccumL (s x => (s + x, s)) 0 [1, 2, 3]
    (6, [0, 1, 3]) -}
@@ -362,8 +499,9 @@ mapAccumL f s (x::xs) =
   let (s3, ys) = mapAccumL f s2 xs
   (s3, y::ys)
 
-{- | Like `mapAccumL`, but threads the accumulator right-to-left.  The output
-   list stays in the input's order.
+{- | Like `mapAccumL`, but threads the state from right to left.
+
+   The mapped list keeps the input's order.
 
    > mapAccumR (s x => (s + x, s)) 0 [1, 2, 3]
    (6, [5, 3, 0]) -}
@@ -375,20 +513,19 @@ mapAccumR f s (x::xs) =
   let (s3, y) = f s2 x
   (s3, y::ys)
 
--- Positional edits
---
--- All three clamp rather than panic, matching `sliceClamped`/`take`: an index outside
--- the list is a no-op (`insertAt` clamps to the nearer end).
+-- # Positional edits
 
-{- | Insert `x` so that it lands at index `i`, shifting the rest right.
-   `i <= 0` prepends; `i >= length` appends.
+-- All three clamp rather than panic, matching `sliceClamped`/`take`: an index
+-- outside the list is a no-op (`insertAt` clamps to the nearer end).
+
+{- | The list with `x` inserted at index `i`, shifting the following elements
+   right.
+
+   An index at or below `0` prepends; an index at or beyond the length
+   appends.
 
    > insertAt 1 9 [1, 2, 3]
-   [1, 9, 2, 3]
-   > insertAt 0 9 [1, 2]
-   [9, 1, 2]
-   > insertAt 7 9 [1, 2]
-   [1, 2, 9] -}
+   [1, 9, 2, 3] -}
 export
 insertAt : Int -> a -> List a -> List a
 insertAt _ x [] = [x]
@@ -396,13 +533,17 @@ insertAt i x (y::rest)
   | i <= 0 = x :: y::rest
   | otherwise = y :: insertAt (i - 1) x rest
 
-{- | Replace the element at index `i` with `x`.  Out-of-range leaves the list
-   unchanged.
+-- > insertAt 0 9 [1, 2]
+-- [9, 1, 2]
+-- > insertAt 7 9 [1, 2]
+-- [1, 2, 9]
+
+{- | The list with the element at index `i` replaced by `x`.
+
+   Unchanged when `i` is out of range.
 
    > updateAt 1 9 [1, 2, 3]
-   [1, 9, 3]
-   > updateAt 7 9 [1, 2]
-   [1, 2] -}
+   [1, 9, 3] -}
 export
 updateAt : Int -> a -> List a -> List a
 updateAt _ _ [] = []
@@ -411,12 +552,15 @@ updateAt i x (y::rest)
   | i == 0 = x::rest
   | otherwise = y :: updateAt (i - 1) x rest
 
-{- | Drop the element at index `i`.  Out-of-range leaves the list unchanged.
+-- > updateAt 7 9 [1, 2]
+-- [1, 2]
+
+{- | The list without the element at index `i`.
+
+   Unchanged when `i` is out of range.
 
    > removeAt 1 [1, 2, 3]
-   [1, 3]
-   > removeAt 7 [1, 2]
-   [1, 2] -}
+   [1, 3] -}
 export
 removeAt : Int -> List a -> List a
 removeAt _ [] = []
@@ -425,9 +569,12 @@ removeAt i (y::rest)
   | i == 0 = rest
   | otherwise = y :: removeAt (i - 1) rest
 
--- Sublists
+-- > removeAt 7 [1, 2]
+-- [1, 2]
 
-{- | First `n` elements (fewer if the list is shorter).
+-- # Sublists
+
+{- | The first `n` elements, or the whole list when it has fewer.
 
    > take 2 [1, 2, 3, 4]
    [1, 2] -}
@@ -449,16 +596,10 @@ drop n (xs@(_::rest))
   | n <= 0 = xs
   | otherwise = drop (n - 1) rest
 
-{- | Longest prefix whose elements all satisfy the predicate.
+{- | The longest prefix whose elements all satisfy `p`.
 
    > takeWhile (x => x < 3) [1, 2, 3, 1]
-   [1, 2]
-   > takeWhile (x => x < 9) [1, 2, 3]
-   [1, 2, 3]
-   > takeWhile (x => x < 0) [1, 2, 3]
-   []
-   > takeWhile (x => x < 3) ([] : List Int)
-   [] -}
+   [1, 2] -}
 export
 takeWhile : (a -> <e> Bool) -> List a -> <e> List a
 takeWhile _ [] = []
@@ -466,16 +607,17 @@ takeWhile p (x::xs)
   | p x = x :: takeWhile p xs
   | otherwise = []
 
-{- | Drop the longest prefix whose elements satisfy the predicate.
+-- > takeWhile (x => x < 9) [1, 2, 3]
+-- [1, 2, 3]
+-- > takeWhile (x => x < 0) [1, 2, 3]
+-- []
+-- > takeWhile (x => x < 3) ([] : List Int)
+-- []
+
+{- | The list without its longest prefix of elements satisfying `p`.
 
    > dropWhile (x => x < 3) [1, 2, 3, 1]
-   [3, 1]
-   > dropWhile (x => x < 9) [1, 2, 3]
-   []
-   > dropWhile (x => x < 0) [1, 2, 3]
-   [1, 2, 3]
-   > dropWhile (x => x < 3) ([] : List Int)
-   [] -}
+   [3, 1] -}
 export
 dropWhile : (a -> <e> Bool) -> List a -> <e> List a
 dropWhile _ [] = []
@@ -483,16 +625,19 @@ dropWhile p (xs@(x::rest))
   | p x = dropWhile p rest
   | otherwise = xs
 
-{- | `(takeWhile p xs, dropWhile p xs)`, in a single pass.
+-- > dropWhile (x => x < 9) [1, 2, 3]
+-- []
+-- > dropWhile (x => x < 0) [1, 2, 3]
+-- [1, 2, 3]
+-- > dropWhile (x => x < 3) ([] : List Int)
+-- []
+
+{- | The longest prefix satisfying `p`, and the rest of the list.
+
+   Equivalent to `(takeWhile p xs, dropWhile p xs)` in one pass.
 
    > span (x => x < 3) [1, 2, 3, 1]
-   ([1, 2], [3, 1])
-   > span (x => x < 9) [1, 2, 3]
-   ([1, 2, 3], [])
-   > span (x => x < 0) [1, 2, 3]
-   ([], [1, 2, 3])
-   > span (x => x < 3) ([] : List Int)
-   ([], []) -}
+   ([1, 2], [3, 1]) -}
 export
 span : (a -> <e> Bool) -> List a -> <e> (List a, List a)
 span _ [] = ([], [])
@@ -500,22 +645,34 @@ span p (xs@(x::rest))
   | p x = let (a, b) = span p rest in (x::a, b)
   | otherwise = ([], xs)
 
-{- | `span` with the predicate negated: split at the first element that *does*
-   satisfy `p`.
+-- > span (x => x < 9) [1, 2, 3]
+-- ([1, 2, 3], [])
+-- > span (x => x < 0) [1, 2, 3]
+-- ([], [1, 2, 3])
+-- > span (x => x < 3) ([] : List Int)
+-- ([], [])
+
+{- | The prefix before the first element satisfying `p`, and the rest of the
+   list.
+
+   The same as `span` with the predicate negated.
 
    > break (x => x > 2) [1, 2, 3, 1]
-   ([1, 2], [3, 1])
-   > break (x => x > 9) [1, 2, 3]
-   ([1, 2, 3], [])
-   > break (x => x > 0) [1, 2, 3]
-   ([], [1, 2, 3])
-   > break (x => x > 2) ([] : List Int)
-   ([], []) -}
+   ([1, 2], [3, 1]) -}
 export
 break : (a -> <e> Bool) -> List a -> <e> (List a, List a)
 break p xs = span (x => not (p x)) xs
 
-{- | `(take n xs, drop n xs)`, in a single pass.
+-- > break (x => x > 9) [1, 2, 3]
+-- ([1, 2, 3], [])
+-- > break (x => x > 0) [1, 2, 3]
+-- ([], [1, 2, 3])
+-- > break (x => x > 2) ([] : List Int)
+-- ([], [])
+
+{- | The first `n` elements, and the rest of the list.
+
+   Equivalent to `(take n xs, drop n xs)` in one pass.
 
    > splitAt 2 [1, 2, 3, 4]
    ([1, 2], [3, 4]) -}
@@ -526,8 +683,10 @@ splitAt n (xs@(x::rest))
   | n <= 0 = ([], xs)
   | otherwise = let (a, b) = splitAt (n - 1) rest in (x::a, b)
 
-{- | `sliceClamped lo hi xs` — the elements at indices `[lo, hi)`.  Clamps (never
-   panics); use `xs.[lo..hi]` (the `Slice` interface) for the panicking form.
+{- | The elements at indices `[lo, hi)`.
+
+   Indices are clamped to the list, so an out-of-range slice is shorter
+   rather than a panic. `xs.[lo..hi]` is the panicking form.
 
    > sliceClamped 1 3 [10, 20, 30, 40]
    [20, 30] -}
@@ -535,8 +694,13 @@ export
 sliceClamped : Int -> Int -> List a -> List a
 sliceClamped lo hi xs = drop lo (take hi xs)
 
-{- | Split into consecutive groups of `n` (the last group may be shorter).
-   Empty when `n <= 0`.
+-- > sliceClamped 5 9 [1, 2]
+-- []
+
+{- | The list split into consecutive groups of `n` elements.
+
+   The last group holds whatever remains, so it may be shorter. Empty when
+   `n <= 0`.
 
    > chunks 2 [1, 2, 3, 4, 5]
    [[1, 2], [3, 4], [5]] -}
@@ -547,43 +711,43 @@ chunks n (xs@(_::_))
   | n <= 0 = []
   | otherwise = take n xs :: chunks n (drop n xs)
 
-{- | Drop the longest *suffix* whose elements all satisfy the predicate — the
-   mirror of `dropWhile`.  Trailing-whitespace trimming is the usual reason.
+-- > chunks 0 [1, 2]
+-- []
+
+{- | The list without its longest suffix of elements satisfying `p`.
 
    > dropWhileEnd (x => x == 0) [1, 2, 0, 0]
-   [1, 2]
-   > dropWhileEnd (x => x == 0) [0, 1, 0]
-   [0, 1]
-   > dropWhileEnd (x => x == 0) [0, 0]
-   [] -}
+   [1, 2] -}
 export
 dropWhileEnd : (a -> <e> Bool) -> List a -> <e> List a
 dropWhileEnd p xs = reverse (dropWhile p (reverse xs))
 
-{- | The longest *suffix* whose elements all satisfy the predicate — the mirror
-   of `takeWhile`.
+-- > dropWhileEnd (x => x == 0) [0, 1, 0]
+-- [0, 1]
+-- > dropWhileEnd (x => x == 0) [0, 0]
+-- []
+
+{- | The longest suffix whose elements all satisfy `p`.
 
    > takeWhileEnd (x => x > 1) [1, 2, 3]
-   [2, 3]
-   > takeWhileEnd (x => x > 9) [1, 2, 3]
-   []
-   > takeWhileEnd (x => x > 0) [1, 2]
-   [1, 2] -}
+   [2, 3] -}
 export
 takeWhileEnd : (a -> <e> Bool) -> List a -> <e> List a
 takeWhileEnd p xs = reverse (takeWhile p (reverse xs))
 
-{- | Split on every occurrence of the separator *sublist*, dropping the
-   separators.  The list analogue of `string.split` — same needle-first
-   argument order, and an empty separator likewise yields `[xs]`.
-   (`splitAt` is the unrelated positional one, which takes an `Int`.)
+-- > takeWhileEnd (x => x > 9) [1, 2, 3]
+-- []
+-- > takeWhileEnd (x => x > 0) [1, 2]
+-- [1, 2]
+
+{- | The list split at every occurrence of the separator `sep`, with the
+   separators removed.
+
+   An empty separator yields the whole list as the only piece. This is the
+   list form of `string.split`; `splitAt` is the positional split.
 
    > split [0] [1, 0, 2, 0, 3]
    [[1], [2], [3]]
-   > split [0, 0] [1, 0, 0, 2]
-   [[1], [2]]
-   > split [9] [1, 2]
-   [[1, 2]]
    > split [0] [0, 1]
    [[], [1]] -}
 export
@@ -601,36 +765,38 @@ split sep xs = go xs
     findSubTail _ [] = None
     findSubTail i (_::rest) = findSub (i + 1) rest
 
--- Sublist predicates
---
--- `startsWith`/`endsWith` are named to mirror `string.startsWith`/`endsWith`
--- (same needle-first argument order) rather than Haskell's `isPrefixOf`
--- family — they ask the same question of a different container, so they get
--- the same name.  For a *single element* rather than a sublist, `elem` (core,
--- over any `Foldable`) is what you want.
---
--- The third member does NOT mirror `string.contains`: it is `containsSub`
--- (#2306 J-3).  For a `String` the substring reading is the only one there
--- is, but a reader who meets `contains : List a -> List a -> Bool` expects
--- MEMBERSHIP and gets sub-sequence search, and the type warns them of
--- nothing — a call with two lists typechecks under either meaning.
+-- > split [0, 0] [1, 0, 0, 2]
+-- [[1], [2]]
+-- > split [9] [1, 2]
+-- [[1, 2]]
 
-{- | True when `prefix` is a leading sublist of `xs`.  Every list starts with
-   the empty list.
+-- # Sublist predicates
+
+-- `startsWith`/`endsWith` mirror `string.startsWith`/`endsWith` (same
+-- needle-first argument order) rather than Haskell's `isPrefixOf` family.
+-- The third member is `containsSub`, not `contains`: a reader who meets
+-- `contains : List a -> List a -> Bool` expects membership, and the type
+-- cannot warn them otherwise.
+
+{- | Whether the list begins with `prefix`.
+
+   Every list begins with the empty list. `elem` is the test for a single
+   element.
 
    > startsWith [1, 2] [1, 2, 3]
    True
    > startsWith [2, 3] [1, 2, 3]
-   False
-   > startsWith ([] : List Int) [1]
-   True -}
+   False -}
 export
 startsWith : Eq a => List a -> List a -> Bool
 startsWith [] _ = True
 startsWith _ [] = False
 startsWith (p::ps) (x::xs) = p == x && startsWith ps xs
 
-{- | True when `suffix` is a trailing sublist of `xs`.
+-- > startsWith ([] : List Int) [1]
+-- True
+
+{- | Whether the list ends with `suffix`.
 
    > endsWith [2, 3] [1, 2, 3]
    True
@@ -640,16 +806,14 @@ export
 endsWith : Eq a => List a -> List a -> Bool
 endsWith suffix xs = startsWith (reverse suffix) (reverse xs)
 
-{- | True when `sub` occurs as a contiguous run anywhere in `xs`.  `O(n*m)`
-   naive scan — fine for short needles; for text prefer `string.contains`,
-   which is host-backed.
+{- | Whether `sub` occurs as a contiguous run anywhere in the list.
+
+   The scan costs `O(n * m)`. For text, `string.contains` is faster.
 
    > containsSub [2, 3] [1, 2, 3, 4]
    True
    > containsSub [2, 4] [1, 2, 3, 4]
-   False
-   > containsSub ([] : List Int) [1]
-   True -}
+   False -}
 export
 containsSub : Eq a => List a -> List a -> Bool
 containsSub sub [] = startsWith sub []
@@ -657,10 +821,15 @@ containsSub sub (xs@(_::rest))
   | startsWith sub xs = True
   | otherwise = containsSub sub rest
 
--- Sorting
+-- > containsSub ([] : List Int) [1]
+-- True
 
-{- | Stable sort with a custom comparator (bottom-up is unnecessary; a plain
-   recursive merge sort is stable and `O(n log n)`).
+-- # Sorting
+
+{- | The list sorted by `cmp`.
+
+   The sort is stable: elements that compare equal keep their original
+   order. It costs `O(n log n)`.
 
    > sortBy (x y => compare y x) [3, 1, 2]
    [3, 2, 1] -}
@@ -680,7 +849,9 @@ merge cmp (xs@(x::xs')) (ys@(y::ys')) = match cmp x y
   Gt => y :: merge cmp xs ys'
   _ => x :: merge cmp xs' ys
 
-{- | Ascending stable sort by the `Ord` instance.
+{- | The list sorted in ascending order.
+
+   The sort is stable.
 
    > sort [3, 1, 2, 1]
    [1, 1, 2, 3] -}
@@ -688,9 +859,10 @@ export
 sort : Ord a => List a -> List a
 sort xs = sortBy compare xs
 
-{- | Sort by a derived key, computing the key once per element via a
-   decorate–sort–undecorate pass (the key may be expensive, so this avoids
-   recomputing it inside every comparison).
+{- | The list sorted in ascending order of `key`.
+
+   `key` is computed once per element, so it may be expensive. The sort is
+   stable.
 
    > sortOn (x => 0 - x) [1, 3, 2]
    [3, 2, 1] -}
@@ -700,8 +872,10 @@ sortOn key xs =
   let decorated = map (x => (key x, x)) xs
   map snd (sortBy ((k1, _) (k2, _) => compare k1 k2) decorated)
 
-{- | Drop duplicates by a custom equality, keeping the first occurrence.
-   `O(n²)` baseline.
+{- | The list with duplicates removed, where `same` decides which elements
+   are duplicates.
+
+   The first occurrence is kept. Costs `O(n^2)`.
 
    > nubBy (x y => x == y) [1, 2, 1, 3, 2]
    [1, 2, 3] -}
@@ -714,7 +888,10 @@ nubBy same xs = go xs []
       | any (s => same x s) seen = go rest seen
       | otherwise = x :: go rest (x::seen)
 
-{- | Drop duplicates by `Eq`, keeping the first occurrence.
+{- | The list with duplicate elements removed.
+
+   The first occurrence is kept. Costs `O(n^2)`; for large lists, build a
+   `set.Set` or `hash_set.HashSet` instead.
 
    > nub [1, 2, 1, 3, 2, 1]
    [1, 2, 3] -}
@@ -722,8 +899,9 @@ export
 nub : Eq a => List a -> List a
 nub xs = nubBy (==) xs
 
-{- | Remove the *first* element matching a custom equality; unchanged when
-   nothing matches.
+{- | The list without the first element that `same` matches against `x`.
+
+   Unchanged when nothing matches.
 
    > deleteBy (x y => x == y) 2 [1, 2, 3, 2]
    [1, 3, 2] -}
@@ -734,25 +912,28 @@ deleteBy same x (y::rest)
   | same x y = rest
   | otherwise = y :: deleteBy same x rest
 
-{- | Remove the *first* occurrence of `x` (by `Eq`); unchanged when absent.
-   Only the first — `filter (/= x) xs` removes every occurrence.
+{- | The list without the first occurrence of `x`.
+
+   Unchanged when `x` is absent. `filter (/= x)` removes every occurrence.
 
    > delete 2 [1, 2, 3, 2]
-   [1, 3, 2]
-   > delete 9 [1, 2]
-   [1, 2] -}
+   [1, 3, 2] -}
 export
 delete : Eq a => a -> List a -> List a
 delete x xs = deleteBy (==) x xs
+
+-- > delete 9 [1, 2]
+-- [1, 2]
 
 -- Set-like operations (`union` / `intersect` / `difference`) are deliberately
 -- absent: an `Eq`-based list version is `O(n*m)`, and `set.Set` already does
 -- each in `O(n log m)` with the same semantics.  Reach for `set`, or
 -- `hash_set` when the element is `Hashable`.
 
--- Grouping
+-- # Grouping
 
-{- | Group maximal runs of adjacent elements that satisfy the equivalence.
+{- | The list split into runs of adjacent elements that `same` considers
+   equivalent.
 
    > groupBy (x y => x == y) [1, 1, 2, 3, 3, 3]
    [[1, 1], [2], [3, 3, 3]] -}
@@ -763,7 +944,7 @@ groupBy same (x::xs) =
   let (grp, rest) = span (y => same x y) xs
   (x::grp) :: groupBy same rest
 
-{- | Group maximal runs of adjacent equal elements (by `Eq`).
+{- | The list split into runs of adjacent equal elements.
 
    > group [1, 1, 2, 3, 3]
    [[1, 1], [2], [3, 3]] -}
@@ -771,7 +952,9 @@ export
 group : Eq a => List a -> List (List a)
 group xs = groupBy (==) xs
 
-{- | `(filter p xs, filter (not . p) xs)`, in a single pass.
+{- | The elements satisfying `p`, and the elements that do not.
+
+   Both parts keep the input's order.
 
    > partition (x => x > 2) [1, 2, 3, 4]
    ([3, 4], [1, 2]) -}
@@ -782,19 +965,20 @@ partition p (x::xs) =
   let (yes, no) = partition p xs
   if p x then (x::yes, no) else (yes, x::no)
 
-{- | Keep the `Some`s, drop the `None`s.
+{- | The values inside the `Some`s, with the `None`s dropped.
 
    > somes [Some 1, None, Some 3]
-   [1, 3]
-   > somes ([] : List (Option Int))
-   [] -}
+   [1, 3] -}
 export
 somes : List (Option a) -> List a
 somes [] = []
 somes ((Some x)::rest) = x :: somes rest
 somes (None::rest) = somes rest
 
-{- | Keep the `Ok` values, drop the `Err`s.
+-- > somes ([] : List (Option Int))
+-- []
+
+{- | The values inside the `Ok`s, with the `Err`s dropped.
 
    > oks [Ok 1, Err "boom", Ok 3]
    [1, 3] -}
@@ -804,7 +988,7 @@ oks [] = []
 oks ((Ok x)::rest) = x :: oks rest
 oks ((Err _)::rest) = oks rest
 
-{- | Keep the `Err` values, drop the `Ok`s.
+{- | The values inside the `Err`s, with the `Ok`s dropped.
 
    > errs [Ok 1, Err "boom", Ok 3]
    ["boom"] -}
@@ -814,7 +998,7 @@ errs [] = []
 errs ((Err e)::rest) = e :: errs rest
 errs ((Ok _)::rest) = errs rest
 
-{- | Split into `(errs, oks)` in a single pass.
+{- | The `Err` values and the `Ok` values, as two lists.
 
    > partitionResults [Ok 1, Err "boom", Ok 3]
    (["boom"], [1, 3]) -}
@@ -828,7 +1012,9 @@ partitionResults ((Err e)::rest) =
   let (es, xs) = partitionResults rest
   (e::es, xs)
 
-{- | Count occurrences of each distinct element (by `Eq`), in first-seen order.
+{- | Each distinct element paired with the number of times it occurs.
+
+   Elements appear in the order they were first seen.
 
    > tally [1, 2, 1, 3, 1, 2]
    [(1, 3), (2, 2), (3, 1)] -}
@@ -843,74 +1029,30 @@ tally xs = go xs []
       | k == x = (k, c + 1)::kvs
       | otherwise = (k, c) :: bump x kvs
 
--- Inspection
--- `isEmpty` and `length` come from `impl Foldable List` in core.mdk.
+-- # Zipping
 
-export
-head : List a -> Option a
-head [] = None
-head (x::_) = Some x
+{- | The elements of two lists paired up by position.
 
-export
-tail : List a -> Option (List a)
-tail [] = None
-tail (_::xs) = Some xs
-
-{- | Split off the first element — `head` and `tail` in one match, which is
-   what you want when destructuring a list you cannot pattern-match on
-   directly.  `None` exactly when the list is empty.
-
-   > uncons [1, 2, 3]
-   Some (1, [2, 3])
-   > uncons [1]
-   Some (1, [])
-   > uncons ([] : List Int)
-   None -}
-export
-uncons : List a -> Option (a, List a)
-uncons [] = None
-uncons (x::xs) = Some (x, xs)
-
-export
-last : List a -> Option a
-last [] = None
-last [x] = Some x
-last (x::xs) = last xs
-
-export
-init : List a -> Option (List a)
-init [] = None
-init (x::[]) = Some []
-init (x::xs) = map (x :: _) (init xs)
-
-export
-get : Int -> List a -> Option a
-get _ [] = None
-get 0 (x::_) = Some x
-get i (_::xs) = get (i - 1) xs
-
--- Zipping
-
-{- | Pair up elements of two lists positionally.  The result is as long as
-   the *shorter* input; trailing elements of the longer one are dropped.
+   The result is as long as the shorter input. Extra elements of the longer
+   one are dropped.
 
    > zip [1, 2, 3] [10, 20]
-   [(1, 10), (2, 20)]
-   > zip [] [1, 2]
-   [] -}
+   [(1, 10), (2, 20)] -}
 export
 zip : List a -> List b -> List (a, b)
 zip [] _ = []
 zip _ [] = []
 zip (x::xs) (y::ys) = (x, y) :: zip xs ys
 
-{- | Like `zip`, but for three lists, producing triples.  Stops at the
-   shortest input.
+-- > zip [] [1, 2]
+-- []
+
+{- | The elements of three lists grouped into triples by position.
+
+   The result is as long as the shortest input.
 
    > zip3 [1, 2] [3, 4] [5, 6]
-   [(1, 3, 5), (2, 4, 6)]
-   > zip3 [1, 2, 3] [4, 5] [6]
-   [(1, 4, 6)] -}
+   [(1, 3, 5), (2, 4, 6)] -}
 export
 zip3 : List a -> List b -> List c -> List (a, b, c)
 zip3 [] _ _ = []
@@ -918,26 +1060,31 @@ zip3 _ [] _ = []
 zip3 _ _ [] = []
 zip3 (x::xs) (y::ys) (z::zs) = (x, y, z) :: zip3 xs ys zs
 
-{- | Combine two lists element-wise with `f`, stopping at the shorter.
-   `zip` is the special case `zipWith (x y => (x, y))`.
+-- > zip3 [1, 2, 3] [4, 5] [6]
+-- [(1, 4, 6)]
+
+{- | The elements of two lists combined by position with `f`.
+
+   The result is as long as the shorter input. `zip` is `zipWith` with a
+   pairing function.
 
    > zipWith (x y => x + y) [1, 2, 3] [10, 20, 30]
-   [11, 22, 33]
-   > zipWith (x y => x * y) [1, 2, 3, 4] [10, 20]
-   [10, 40] -}
+   [11, 22, 33] -}
 export
 zipWith : (a -> b -> <e> c) -> List a -> List b -> <e> List c
 zipWith _ [] _ = []
 zipWith _ _ [] = []
 zipWith f (x::xs) (y::ys) = f x y :: zipWith f xs ys
 
-{- | Like `zip3`, but for four lists, producing 4-tuples.  Stops at the
-   shortest input.
+-- > zipWith (x y => x * y) [1, 2, 3, 4] [10, 20]
+-- [10, 40]
+
+{- | The elements of four lists grouped into 4-tuples by position.
+
+   The result is as long as the shortest input.
 
    > zip4 [1, 2] [3, 4] [5, 6] [7, 8]
-   [(1, 3, 5, 7), (2, 4, 6, 8)]
-   > zip4 [1, 2] [3] [5, 6] [7, 8]
-   [(1, 3, 5, 7)] -}
+   [(1, 3, 5, 7), (2, 4, 6, 8)] -}
 export
 zip4 : List a -> List b -> List c -> List d -> List (a, b, c, d)
 zip4 [] _ _ _ = []
@@ -946,13 +1093,15 @@ zip4 _ _ [] _ = []
 zip4 _ _ _ [] = []
 zip4 (w::ws) (x::xs) (y::ys) (z::zs) = (w, x, y, z) :: zip4 ws xs ys zs
 
-{- | Like `zipWith`, but for three lists.  `zip3` is the special case
-   `zipWith3 (x y z => (x, y, z))`.
+-- > zip4 [1, 2] [3] [5, 6] [7, 8]
+-- [(1, 3, 5, 7)]
+
+{- | The elements of three lists combined by position with `f`.
+
+   The result is as long as the shortest input.
 
    > zipWith3 (x y z => x + y + z) [1, 2] [10, 20] [100, 200]
-   [111, 222]
-   > zipWith3 (x y z => x + y + z) [1, 2, 3] [10, 20] [100]
-   [111] -}
+   [111, 222] -}
 export
 zipWith3 : (a -> b -> c -> <e> d) -> List a -> List b -> List c -> <e> List d
 zipWith3 _ [] _ _ = []
@@ -960,32 +1109,36 @@ zipWith3 _ _ [] _ = []
 zipWith3 _ _ _ [] = []
 zipWith3 f (x::xs) (y::ys) (z::zs) = f x y z :: zipWith3 f xs ys zs
 
-{- | Split a list of pairs into a pair of lists — the inverse of `zip`.
+-- > zipWith3 (x y z => x + y + z) [1, 2, 3] [10, 20] [100]
+-- [111]
+
+{- | A list of pairs separated into a pair of lists. The inverse of `zip`.
 
    > unzip [(1, 2), (3, 4)]
-   ([1, 3], [2, 4])
-   > unzip []
-   ([], []) -}
+   ([1, 3], [2, 4]) -}
 export
 unzip : List (a, b) -> (List a, List b)
 unzip [] = ([], [])
 unzip ((x, y)::xys) = let (xs, ys) = unzip xys in (x::xs, y::ys)
 
-{- | Split a list of triples into three lists — the inverse of `zip3`.
+-- > unzip []
+-- ([], [])
+
+{- | A list of triples separated into three lists. The inverse of `zip3`.
 
    > unzip3 [(1, 2, 3), (4, 5, 6)]
-   ([1, 4], [2, 5], [3, 6])
-   > unzip3 ([] : List (Int, Int, Int))
-   ([], [], []) -}
+   ([1, 4], [2, 5], [3, 6]) -}
 export
 unzip3 : List (a, b, c) -> (List a, List b, List c)
 unzip3 [] = ([], [], [])
 unzip3 ((x, y, z)::rest) =
   let (xs, ys, zs) = unzip3 rest in (x::xs, y::ys, z::zs)
 
--- Effectful traversal lives in `core.mdk` as the `Traversable` interface:
--- `traverse`/`sequence` are now interface methods (List instance in core), so
--- they dispatch over any `Traversable`, not just `List`.
+-- > unzip3 ([] : List (Int, Int, Int))
+-- ([], [], [])
+
+-- `traverse`/`sequence` are `Traversable` interface methods in core.mdk, with
+-- the `List` instance beside them.
 
 -- ── Properties (executed by `medaka test`) ──────────────────────────────────
 

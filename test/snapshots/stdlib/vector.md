@@ -1,26 +1,26 @@
 # META
-source_lines=442
+source_lines=479
 stages=DESUGAR,MARK
 # SOURCE
-{- vector.mdk — a growable array (a dynamic array, `Vec` in Rust, `vector` in
-   C++, `ArrayList` in Java).
+{- | A growable, mutable array.
 
-   `Array a` (Module 4) is **fixed-size**: O(1) random access, but no `push`/
-   `pop`.  `Vector a` is the growable counterpart — backed by an
-   `Array a` with spare capacity, so `push` is amortized O(1) (the backing
-   doubles when full, like the hash tables in Module 6).  Reach for `Array` when
-   the length is known up front; reach for `Vector` when you accumulate.
+   `Vector a` holds its elements in an array with spare capacity, so `push`
+   costs amortized `O(1)` and indexing is `O(1)`. The writing operations
+   change the vector in place and return `Unit`. Use `array` when the length
+   is known up front, and `Vector` when elements accumulate.
 
-   Representation: `Vector backing len` where `!backing` is the backing
-   array (its `arrayLength` is the *capacity*) and `!len` is the number of
-   live elements (`0 <= len <= capacity`).  Both are `Ref`s, mutated in place.
-   Slots `[len, capacity)` are scratch — never read; they hold
-   whatever value last filled them (the most recent `push`'s element on a grow).
+   `length` is the number of elements; `capacity` is the size of the backing
+   store, which doubles when it fills. The `Foldable` instance makes
+   `toList`, `sum`, `elem`, and `any` work on a vector. -}
 
-   Iteration / instances only ever touch the live range `[0, len)`, so the
-   scratch tail is invisible.  `empty`/`new` start at capacity 0 and allocate on
-   first `push`, using the pushed element as the fill — so no dummy/default
-   value is needed to construct one. -}
+-- Representation: `Vector backing len` where `!backing` is the backing array
+-- (its `arrayLength` is the capacity) and `!len` is the number of live
+-- elements (`0 <= len <= capacity`).  Both are `Ref`s, mutated in place.
+-- Slots `[len, capacity)` are scratch, never read; they hold whatever value
+-- last filled them (the most recent `push`'s element on a grow).  Iteration
+-- and instances only ever touch the live range `[0, len)`.  `new` starts at
+-- capacity 0 and allocates on first `push`, using the pushed element as the
+-- fill, so no dummy value is needed to construct one.
 
 import core.{
   Eq,
@@ -34,30 +34,35 @@ import core.{
   IndexMut,
 }
 
-{- `list` is aliased rather than name-imported: this module's own `insertAt`/
-   `removeAt`/`sortBy`/`sort` are the SAME names, so a selective import would
-   collide.  The list versions define the semantics these four transport onto
-   the vector, so delegating is what keeps the two in step. -}
+-- The list versions of `insertAt`/`removeAt`/`sortBy` define the semantics
+-- the in-place mutators transport onto the vector, so delegating is what
+-- keeps the two in step.
 import list as L
 
-{- `Vector backing len`: `!backing` is the capacity-sized store,
-   `!len` the live count; both mutated in place. -}
+{- | The vector type. Its fields are the backing array and the element
+   count, both mutable. -}
 public export data Vector a = Vector (Ref (Array a)) (Ref Int)
 
 -- Live element count (internal; the public name is `Foldable.length`).
 count : Vector a -> Int
 count (Vector _ len) = !len
 
--- ── Construction ────────────────────────────────────────────────────────
+-- # Construction
 
-{- | A fresh, empty vector (capacity 0; grows on first `push`).  Takes `Unit`,
-   not a nullary value, so each call allocates its own cells. -}
+{- | A new, empty vector.
+
+   Each call allocates its own vector, which is why it takes `Unit`. The
+   backing store is allocated on the first `push`.
+
+   > length (new () : Vector Int)
+   0 -}
 export
 new : Unit -> Vector a
 new _ = Vector (Ref [||]) (Ref 0)
 
-{- | Build a vector from a list, preserving order.  Capacity equals the length
-   (the next `push` triggers a grow).
+{- | A vector holding the elements of a list, in order.
+
+   The capacity equals the length, so the next `push` grows the store.
 
    > length (fromList [1, 2, 3])
    3 -}
@@ -67,17 +72,21 @@ fromList xs =
   let arr = arrayFromList xs
   Vector (Ref arr) (Ref (arrayLength arr))
 
-{- | Wrap a *copy* of an array as a vector (so later mutation does not disturb
-   the caller's array). -}
+{- | A vector holding a copy of an array's elements.
+
+   Later changes to the vector do not affect the array.
+
+   > toList (fromArray [|1, 2|])
+   [1, 2] -}
 export
 fromArray : Array a -> Vector a
 fromArray arr =
   let c = arrayCopy arr
   Vector (Ref c) (Ref (arrayLength c))
 
--- ── Observation (pure reads) ────────────────────────────────────────────
+-- # Reading
 
-{- | Capacity of the backing store (`>= length`).  Grows by doubling.
+{- | The size of the backing store, which is at least `length`.
 
    > capacity (fromList [1, 2, 3])
    3 -}
@@ -85,7 +94,7 @@ export
 capacity : Vector a -> Int
 capacity (Vector backing _) = arrayLength !backing
 
-{- | Element at an index, or `None` when out of the live range `[0, length)`.
+{- | The element at index `i`, or `None` when `i` is out of range.
 
    > get 1 (fromList [10, 20, 30])
    Some 20
@@ -97,10 +106,10 @@ get i (Vector backing len)
   | i >= 0 && i < !len = Some (arrayGetUnsafe i !backing)
   | otherwise = None
 
-{- | `index ma i` reads `ma`'s element at `i` (`ma[i]` sugar dispatches here),
-   over the live range `[0, length)`.  O(1).  Raises the coded `indexError`
-   (E-INDEX-OOB) when `i` is out of range -- use `get` for a safe
-   `Option`-returning read instead. -}
+{- | `v[i]` is the element at index `i`, in `O(1)`.
+
+   Panics with an index error when `i` is out of range; `get` is the
+   `Option`-returning form. -}
 export impl Index (Vector a) Int a where
   index (Vector backing len) i =
     if i >= 0 && i < !len then
@@ -108,7 +117,7 @@ export impl Index (Vector a) Int a where
     else
       indexErrorAt i
 
-{- | First element, or `None` when empty.
+{- | The first element, or `None` when the vector is empty.
 
    > first (fromList [10, 20, 30])
    Some 10 -}
@@ -116,7 +125,7 @@ export
 first : Vector a -> Option a
 first ma = get 0 ma
 
-{- | Last element, or `None` when empty.
+{- | The last element, or `None` when the vector is empty.
 
    > last (fromList [10, 20, 30])
    Some 30 -}
@@ -124,7 +133,7 @@ export
 last : Vector a -> Option a
 last ma = get (count ma - 1) ma
 
--- ── Conversion ──────────────────────────────────────────────────────────
+-- # Conversion
 
 elemsGo : Array a -> Int -> List a -> List a
 elemsGo arr i acc
@@ -135,9 +144,7 @@ elemsGo arr i acc
 elems : Vector a -> List a
 elems (Vector backing len) = elemsGo !backing (!len - 1) []
 
-{- | Snapshot the live range into a fresh fixed-size `Array a`.  (Shown here via
-   the `arrayLength` kernel primitive — `Array`'s own `Foldable`/`Debug` live in
-   `array.mdk`, which this module does not import.)
+{- | A new array holding the vector's elements.
 
    > arrayLength (toArray (fromList [1, 2, 3]))
    3 -}
@@ -147,10 +154,14 @@ toArray (Vector backing len) =
   let arr = !backing
   arrayMakeWith !len (i => arrayGetUnsafe i arr)
 
--- ── Mutation (effectful — modify in place) ──────────────────────────────
+-- # Mutation
 
-{- | Append an element, growing (doubling) the backing store when it is full.
-   Amortized O(1). -}
+{- | Appends `x` to the end of the vector.
+
+   Amortized `O(1)`: the backing store doubles when it is full.
+
+   > let v = fromList [1, 2] in let _ = push 3 v in toList v
+   [1, 2, 3] -}
 export
 push : a -> Vector a -> Unit
 push x (Vector backing len)
@@ -166,8 +177,13 @@ push x (Vector backing len)
     backing := newArr
     len := oldLen + 1
 
-{- | Remove and return the last element, or `None` when empty.  Keeps capacity
-   (no shrink). -}
+{- | Removes and returns the last element, or `None` when the vector is
+   empty.
+
+   The capacity is kept.
+
+   > pop (fromList [1, 2, 3])
+   Some 3 -}
 export
 pop : Vector a -> Option a
 pop (Vector backing len)
@@ -178,17 +194,21 @@ pop (Vector backing len)
     len := i
     Some x
 
-{- | Overwrite the element at an index.  Panics when out of the live range
-   `[0, length)` (use `push` to extend). -}
+{- | Replaces the element at index `i` with `x`.
+
+   Panics when `i` is out of range; `push` extends the vector.
+
+   > let v = fromList [1, 2, 3] in let _ = setInPlace 1 9 v in toList v
+   [1, 9, 3] -}
 export
 setInPlace : Int -> a -> Vector a -> Unit
 setInPlace i x (Vector backing len)
   | i >= 0 && i < !len = arraySetUnsafe i x !backing
   | otherwise = panic "Vector.setInPlace: index out of bounds"
 
-{- | `setIndex ma i v` writes `v` at `ma`'s index `i`, in place, over the live
-   range `[0, length)`, and returns `ma`.  O(1).  Raises the coded
-   `indexError` (E-INDEX-OOB) when `i` is out of range. -}
+{- | `v[i] = x` replaces the element at index `i` in place, in `O(1)`.
+
+   Panics with an index error when `i` is out of range. -}
 export impl IndexMut (Vector a) Int a where
   setIndex (Vector backing len) i v =
     if i >= 0 && i < !len then
@@ -196,7 +216,12 @@ export impl IndexMut (Vector a) Int a where
       Vector backing len
     else indexErrorAt i
 
-{- | Exchange the elements at two indices.  Caller ensures both are in range. -}
+{- | Exchanges the elements at indices `i` and `j`.
+
+   Both indices must be in range.
+
+   > let v = fromList [1, 2, 3] in let _ = swap 0 2 v in toList v
+   [3, 2, 1] -}
 export
 swap : Int -> Int -> Vector a -> Unit
 swap i j (Vector backing _) =
@@ -206,7 +231,12 @@ swap i j (Vector backing _) =
   arraySetUnsafe i xj arr
   arraySetUnsafe j xi arr
 
-{- | Drop all elements (length 0), retaining the allocated capacity. -}
+{- | Removes every element.
+
+   The capacity is kept.
+
+   > let v = fromList [1, 2, 3] in let _ = clear v in length v
+   0 -}
 export
 clear : Vector a -> Unit
 clear (Vector _ len) = len := 0
@@ -218,24 +248,23 @@ mapInPlaceGo f arr i n
     arraySetUnsafe i (f (arrayGetUnsafe i arr)) arr
     mapInPlaceGo f arr (i + 1) n
 
-{- | Apply `f` to every live element in place. -}
+{- | Replaces every element with `f` applied to it.
+
+   > let v = fromList [1, 2, 3] in let _ = mapInPlace (x => x * 10) v in toList v
+   [10, 20, 30] -}
 export
 mapInPlace : (a -> a) -> Vector a -> Unit
 mapInPlace f (Vector backing len) = mapInPlaceGo f !backing 0 !len
 
-{- ── Positional edits and sorting (sheet row H-5) ──────────────────────
+-- # Editing and sorting
 
-   All four MUTATE and return `Unit`, which is `vector`'s half of the F-3
-   mutation contract (`map`/`set`/`list` return the container; `hash_map`/
-   `hash_set`/`array`/`vector` return `Unit`).  Index handling matches
-   `list.insertAt`/`list.removeAt` exactly: both CLAMP rather than panic, so
-   `insertAt` with a too-large index appends and `removeAt` out of range is a
-   no-op.
-
-   `isEmpty` is deliberately NOT added here even though row H-5 names it:
-   `impl Foldable Vector` below already defines `isEmpty`, so a module-level
-   one would shadow the method -- the #2428 collision, which row H-2 rules out
-   explicitly ("do not add a module-level `isEmpty`"). -}
+-- All four mutate and return `Unit`, which is `vector`'s half of the mutation
+-- contract (`map`/`set`/`list` return the container; `hash_map`/`hash_set`/
+-- `array`/`vector` return `Unit`).  Index handling matches `list.insertAt`/
+-- `list.removeAt` exactly: both clamp rather than panic.
+--
+-- `isEmpty` is deliberately not added here: `impl Foldable Vector` below
+-- already defines it, so a module-level one would shadow the method.
 
 -- Push every element of a list, in order.
 pushAll : List a -> Vector a -> Unit
@@ -251,45 +280,53 @@ refill ma xs =
   clear ma
   pushAll xs ma
 
-{- | Insert `x` so that it lands at index `i`, shifting the rest right.
-   `i <= 0` prepends; `i >= length` appends.  Grows the backing store when
-   full, like `push`.
+{- | Inserts `x` at index `i`, shifting the following elements right.
 
-   > let ma = fromList [1, 2, 3] in let _ = insertAt 1 9 ma in toList ma
-   [1, 9, 2, 3]
-   > let ma = fromList [1, 2] in let _ = insertAt 7 9 ma in toList ma
-   [1, 2, 9] -}
+   An index at or below `0` prepends; an index at or beyond the length
+   appends.
+
+   > let v = fromList [1, 2, 3] in let _ = insertAtInPlace 1 9 v in toList v
+   [1, 9, 2, 3] -}
 export
-insertAt : Int -> a -> Vector a -> Unit
-insertAt i x ma = refill ma (L.insertAt i x (elems ma))
+insertAtInPlace : Int -> a -> Vector a -> Unit
+insertAtInPlace i x ma = refill ma (L.insertAt i x (elems ma))
 
-{- | Drop the element at index `i`.  Out of range leaves the vector unchanged.
+-- > let v = fromList [1, 2] in let _ = insertAtInPlace 7 9 v in toList v
+-- [1, 2, 9]
 
-   > let ma = fromList [1, 2, 3] in let _ = removeAt 1 ma in toList ma
-   [1, 3]
-   > let ma = fromList [1, 2] in let _ = removeAt 7 ma in toList ma
-   [1, 2] -}
+{- | Removes the element at index `i`.
+
+   Nothing happens when `i` is out of range.
+
+   > let v = fromList [1, 2, 3] in let _ = removeAtInPlace 1 v in toList v
+   [1, 3] -}
 export
-removeAt : Int -> Vector a -> Unit
-removeAt i ma = refill ma (L.removeAt i (elems ma))
+removeAtInPlace : Int -> Vector a -> Unit
+removeAtInPlace i ma = refill ma (L.removeAt i (elems ma))
 
-{- | Sort the live range in place with the supplied comparison.  Stable --
-   equal elements keep their original relative order -- because `list.sortBy`,
-   which does the work, is.
+-- > let v = fromList [1, 2] in let _ = removeAtInPlace 7 v in toList v
+-- [1, 2]
 
-   > let ma = fromList [3, 1, 4, 1, 5] in let _ = sortBy compare ma in toList ma
+{- | Sorts the elements in place by `cmp`.
+
+   The sortInPlace is stable: elements that compare equal keep their original
+   order.
+
+   > let v = fromList [3, 1, 4, 1, 5] in let _ = sortInPlaceBy compare v in toList v
    [1, 1, 3, 4, 5] -}
 export
-sortBy : (a -> a -> <e> Ordering) -> Vector a -> <e> Unit
-sortBy cmp ma = refill ma (L.sortBy cmp (elems ma))
+sortInPlaceBy : (a -> a -> <e> Ordering) -> Vector a -> <e> Unit
+sortInPlaceBy cmp ma = refill ma (L.sortBy cmp (elems ma))
 
-{- | Sort the live range in place by the `Ord` instance.
+{- | Sorts the elements in place in ascending order.
 
-   > let ma = fromList [3, 1, 2] in let _ = sort ma in toList ma
+   The sortInPlace is stable.
+
+   > let v = fromList [3, 1, 2] in let _ = sortInPlace v in toList v
    [1, 2, 3] -}
 export
-sort : Ord a => Vector a -> Unit
-sort ma = sortBy compare ma
+sortInPlace : Ord a => Vector a -> Unit
+sortInPlace ma = sortInPlaceBy compare ma
 
 -- ── Folds (index-based; never allocate a list) ──────────────────────────
 
@@ -305,13 +342,11 @@ foldRightGo f z arr i
 
 -- ── Instances ───────────────────────────────────────────────────────────
 
-{- | Folds over the live range (in order), so `toList`/`length`/`sum`/`elem`/
-   `any`/… all work on a `Vector`.
+{- | The `Foldable` methods visit the elements in order, so `toList`,
+   `length`, `sum`, `elem`, and `any` work on a vector.
 
    > sum (fromList [1, 2, 3, 4])
-   10
-   > length (fromList [9, 8, 7])
-   3 -}
+   10 -}
 export impl Foldable Vector where
   fold f z (Vector backing len) = foldGo f z !backing 0 !len
   foldRight f z (Vector backing len) = foldRightGo f z !backing (!len - 1)
@@ -319,34 +354,36 @@ export impl Foldable Vector where
   isEmpty (Vector _ len) = !len == 0
   length (Vector _ len) = !len
 
-{- | Element-wise equality over the live ranges (capacity is irrelevant).
+-- > length (fromList [9, 8, 7])
+-- 3
+
+{- | Two vectors are equal when they hold equal elements in the same order.
+   Capacity does not matter.
 
    > eq (fromList [1, 2, 3]) (fromList [1, 2, 3])
    True -}
 export impl Eq (Vector a) requires Eq a where
   eq a b = if count a /= count b then False else eq (elems a) (elems b)
 
-{- | Rendered as `fromList [a, …]` over the live range.
+{- | `debug` renders a vector as `fromList [x, ...]`.
 
-   > debug (fromList [1, 2, 3]) == "fromList [1, 2, 3]"
-   True -}
+   > debug (fromList [1, 2, 3])
+   "fromList [1, 2, 3]" -}
 export impl Debug (Vector a) requires Debug a where
   debug ma = "fromList \{debug (elems ma)}"
 
-{- | Same `fromList [...]` shape as `Debug`, over the live range, with the
-   elements rendered by THEIR `Display` (so strings lose their quotes).
-   `Vector` was the one container in the surface that `println` could not
-   take (sheet row A-4).
+{- | `display` renders a vector as `fromList [x, ...]`, with the elements
+   in their own `display` form.
 
-   > display (fromList [1, 2, 3]) == "fromList [1, 2, 3]"
-   True -}
+   > display (fromList ["a", "b"])
+   "fromList [a, b]" -}
 export impl Display (Vector a) requires Display a where
   display ma = "fromList \{display (elems ma)}"
 
 -- ── Property tests ──────────────────────────────────────────────────────
 
--- An INDEPENDENT sort oracle (insertion sort, not a mergesort) so the laws
--- below cross-check `sortBy` against a different algorithm rather than
+-- An INDEPENDENT sortInPlace oracle (insertion sortInPlace, not a mergesort) so the laws
+-- below cross-check `sortInPlaceBy` against a different algorithm rather than
 -- against a rearrangement of itself.
 -- lint-disable-next-line rule-stdlib-reimpl
 naiveInsert : Ord a => a -> List a -> List a
@@ -370,7 +407,7 @@ tagFrom : Int -> List a -> List (Int, a)
 tagFrom _ [] = []
 tagFrom i (x::xs) = (i, x) :: tagFrom (i + 1) xs
 
--- A deliberately COARSE sort key, so ties are common.
+-- A deliberately COARSE sortInPlace key, so ties are common.
 coarseKey : (Int, Int) -> Int
 coarseKey (_, x) = if x < 0 then (0 - x) % 3 else x % 3
 
@@ -386,52 +423,52 @@ sortedAndStable (a::b::rest) = coarseKey a <= coarseKey b
   && (coarseKey a < coarseKey b || posOf a < posOf b)
   && sortedAndStable (b::rest)
 
--- LAW (H-5): `sort` agrees with an independent sort oracle, so it is both
+-- LAW: `sortInPlace` agrees with an independent sortInPlace oracle, so it is both
 -- ascending AND a permutation of the input -- either property alone is
 -- satisfiable by a wrong implementation (`[]` is ascending; the identity is a
 -- permutation).
-prop "sort agrees with an independent insertion sort" (xs : List Int) =
+prop "sortInPlace agrees with an independent insertion sortInPlace" (xs : List Int) =
   let ma = fromList xs
-  sort ma
+  sortInPlace ma
   eq (toList ma) (naiveSort xs)
 
--- LAW (H-5): sorting an already-sorted vector changes nothing.
-prop "sort is idempotent" (xs : List Int) =
+-- LAW: sorting an already-sorted vector changes nothing.
+prop "sortInPlace is idempotent" (xs : List Int) =
   let ma = fromList xs
-  sort ma
+  sortInPlace ma
   let once = toList ma
-  sort ma
+  sortInPlace ma
   eq (toList ma) once
 
--- LAW (H-5): `sortBy` is STABLE -- sorting on a coarse key must leave tied
+-- LAW: `sortInPlaceBy` is STABLE -- sorting on a coarse key must leave tied
 -- elements in their original relative order.  A total-order oracle cannot see
 -- this, which is why it gets its own law.
-prop "sortBy is stable on ties" (xs : List Int) =
+prop "sortInPlaceBy is stable on ties" (xs : List Int) =
   let ma = fromList (tagFrom 0 xs)
-  sortBy (a b => compare (coarseKey a) (coarseKey b)) ma
+  sortInPlaceBy (a b => compare (coarseKey a) (coarseKey b)) ma
   sortedAndStable (toList ma) && length ma == length (fromList xs)
 
--- LAW (H-5): `insertAt` grows the vector by one and lands `x` at the CLAMPED
--- index; `removeAt` at that same index undoes it exactly.  Stating them as a
+-- LAW: `insertAtInPlace` grows the vector by one and lands `x` at the CLAMPED
+-- index; `removeAtInPlace` at that same index undoes it exactly.  Stating them as a
 -- round trip pins both functions' index conventions at once.
-prop "insertAt lands at the clamped index and removeAt undoes it" (xs : List Int) (n : Int) (x : Int) =
+prop "insertAtInPlace lands at the clamped index and removeAtInPlace undoes it" (xs : List Int) (n : Int) (x : Int) =
   let ma = fromList xs
   let i = clampIdx n (length ma)
-  insertAt n x ma
+  insertAtInPlace n x ma
   let grew = length ma == length (fromList xs) + 1
   let landed = eq (get i ma) (Some x)
-  removeAt i ma
+  removeAtInPlace i ma
   grew && landed && eq (toList ma) xs
 
--- LAW (H-5): `removeAt` out of range is a NO-OP -- not a panic, and not a
--- silent edit of the nearest element (`list.removeAt`'s ratified behaviour).
-prop "removeAt out of range is a no-op" (xs : List Int) =
+-- LAW: `removeAtInPlace` out of range is a NO-OP -- not a panic, and not a silent
+-- edit of the nearest element (`list.removeAt`'s behavior).
+prop "removeAtInPlace out of range is a no-op" (xs : List Int) =
   let ma = fromList xs
-  removeAt (length ma) ma
-  removeAt (0 - 1) ma
+  removeAtInPlace (length ma) ma
+  removeAtInPlace (0 - 1) ma
   eq (toList ma) xs
 
--- LAW (A-4): `Display (Vector a)` renders the LIVE range in the same
+-- LAW: `Display (Vector a)` renders the LIVE range in the same
 -- `fromList [...]` shape as `Debug`, and agrees with `Eq` -- equal vectors
 -- render identically, unequal ones do not.  The `push`-then-`pop` clause is
 -- what proves the scratch tail past `len` stays invisible.
@@ -491,14 +528,14 @@ prop "Display Vector shows only the live range and agrees with Eq" (xs : List In
 (DFunDef false "pushAll" ((PCons (PVar "x") (PVar "xs")) (PVar "ma")) (EBlock (DoExpr (EApp (EApp (EVar "push") (EVar "x")) (EVar "ma"))) (DoExpr (EApp (EApp (EVar "pushAll") (EVar "xs")) (EVar "ma")))))
 (DTypeSig false "refill" (TyFun (TyApp (TyCon "Vector") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Unit"))))
 (DFunDef false "refill" ((PVar "ma") (PVar "xs")) (EBlock (DoExpr (EApp (EVar "clear") (EVar "ma"))) (DoExpr (EApp (EApp (EVar "pushAll") (EVar "xs")) (EVar "ma")))))
-(DTypeSig true "insertAt" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Vector") (TyVar "a")) (TyCon "Unit")))))
-(DFunDef false "insertAt" ((PVar "i") (PVar "x") (PVar "ma")) (EApp (EApp (EVar "refill") (EVar "ma")) (EApp (EApp (EApp (EVar "L.insertAt") (EVar "i")) (EVar "x")) (EApp (EVar "elems") (EVar "ma")))))
-(DTypeSig true "removeAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Vector") (TyVar "a")) (TyCon "Unit"))))
-(DFunDef false "removeAt" ((PVar "i") (PVar "ma")) (EApp (EApp (EVar "refill") (EVar "ma")) (EApp (EApp (EVar "L.removeAt") (EVar "i")) (EApp (EVar "elems") (EVar "ma")))))
-(DTypeSig true "sortBy" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Ordering")))) (TyFun (TyApp (TyCon "Vector") (TyVar "a")) (TyEffect () (Some "e") (TyCon "Unit")))))
-(DFunDef false "sortBy" ((PVar "cmp") (PVar "ma")) (EApp (EApp (EVar "refill") (EVar "ma")) (EApp (EApp (EVar "L.sortBy") (EVar "cmp")) (EApp (EVar "elems") (EVar "ma")))))
-(DTypeSig true "sort" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "Vector") (TyVar "a")) (TyCon "Unit"))))
-(DFunDef false "sort" ((PVar "ma")) (EApp (EApp (EVar "sortBy") (EVar "compare")) (EVar "ma")))
+(DTypeSig true "insertAtInPlace" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Vector") (TyVar "a")) (TyCon "Unit")))))
+(DFunDef false "insertAtInPlace" ((PVar "i") (PVar "x") (PVar "ma")) (EApp (EApp (EVar "refill") (EVar "ma")) (EApp (EApp (EApp (EVar "L.insertAt") (EVar "i")) (EVar "x")) (EApp (EVar "elems") (EVar "ma")))))
+(DTypeSig true "removeAtInPlace" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Vector") (TyVar "a")) (TyCon "Unit"))))
+(DFunDef false "removeAtInPlace" ((PVar "i") (PVar "ma")) (EApp (EApp (EVar "refill") (EVar "ma")) (EApp (EApp (EVar "L.removeAt") (EVar "i")) (EApp (EVar "elems") (EVar "ma")))))
+(DTypeSig true "sortInPlaceBy" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Ordering")))) (TyFun (TyApp (TyCon "Vector") (TyVar "a")) (TyEffect () (Some "e") (TyCon "Unit")))))
+(DFunDef false "sortInPlaceBy" ((PVar "cmp") (PVar "ma")) (EApp (EApp (EVar "refill") (EVar "ma")) (EApp (EApp (EVar "L.sortBy") (EVar "cmp")) (EApp (EVar "elems") (EVar "ma")))))
+(DTypeSig true "sortInPlace" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "Vector") (TyVar "a")) (TyCon "Unit"))))
+(DFunDef false "sortInPlace" ((PVar "ma")) (EApp (EApp (EVar "sortInPlaceBy") (EVar "compare")) (EVar "ma")))
 (DTypeSig false "foldGo" (TyFun (TyFun (TyVar "b") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "b")))) (TyFun (TyVar "b") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyVar "b"))))))))
 (DFunDef false "foldGo" ((PVar "f") (PVar "z") (PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "z") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "foldGo") (EVar "f")) (EApp (EApp (EVar "f") (EVar "z")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")))) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "foldRightGo" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "b") (TyEffect () (Some "e") (TyVar "b")))) (TyFun (TyVar "b") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyVar "b")))))))
@@ -526,11 +563,11 @@ prop "Display Vector shows only the live range and agrees with Eq" (xs : List In
 (DFunDef false "sortedAndStable" ((PList)) (EVar "True"))
 (DFunDef false "sortedAndStable" ((PCons PWild (PList))) (EVar "True"))
 (DFunDef false "sortedAndStable" ((PCons (PVar "a") (PCons (PVar "b") (PVar "rest")))) (EBinOp "&&" (EBinOp "&&" (EBinOp "<=" (EApp (EVar "coarseKey") (EVar "a")) (EApp (EVar "coarseKey") (EVar "b"))) (EBinOp "||" (EBinOp "<" (EApp (EVar "coarseKey") (EVar "a")) (EApp (EVar "coarseKey") (EVar "b"))) (EBinOp "<" (EApp (EVar "posOf") (EVar "a")) (EApp (EVar "posOf") (EVar "b"))))) (EApp (EVar "sortedAndStable") (EBinOp "::" (EVar "b") (EVar "rest")))))
-(DProp false "sort agrees with an independent insertion sort" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EVar "sort") (EVar "ma"))) (DoExpr (EApp (EApp (EVar "eq") (EApp (EVar "toList") (EVar "ma"))) (EApp (EVar "naiveSort") (EVar "xs"))))))
-(DProp false "sort is idempotent" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EVar "sort") (EVar "ma"))) (DoLet false false (PVar "once") (EApp (EVar "toList") (EVar "ma"))) (DoExpr (EApp (EVar "sort") (EVar "ma"))) (DoExpr (EApp (EApp (EVar "eq") (EApp (EVar "toList") (EVar "ma"))) (EVar "once")))))
-(DProp false "sortBy is stable on ties" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EApp (EApp (EVar "tagFrom") (ELit (LInt 0))) (EVar "xs")))) (DoExpr (EApp (EApp (EVar "sortBy") (ELam ((PVar "a") (PVar "b")) (EApp (EApp (EVar "compare") (EApp (EVar "coarseKey") (EVar "a"))) (EApp (EVar "coarseKey") (EVar "b"))))) (EVar "ma"))) (DoExpr (EBinOp "&&" (EApp (EVar "sortedAndStable") (EApp (EVar "toList") (EVar "ma"))) (EBinOp "==" (EApp (EVar "length") (EVar "ma")) (EApp (EVar "length") (EApp (EVar "fromList") (EVar "xs"))))))))
-(DProp false "insertAt lands at the clamped index and removeAt undoes it" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "n" (TyCon "Int")) (pp "x" (TyCon "Int"))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EVar "xs"))) (DoLet false false (PVar "i") (EApp (EApp (EVar "clampIdx") (EVar "n")) (EApp (EVar "length") (EVar "ma")))) (DoExpr (EApp (EApp (EApp (EVar "insertAt") (EVar "n")) (EVar "x")) (EVar "ma"))) (DoLet false false (PVar "grew") (EBinOp "==" (EApp (EVar "length") (EVar "ma")) (EBinOp "+" (EApp (EVar "length") (EApp (EVar "fromList") (EVar "xs"))) (ELit (LInt 1))))) (DoLet false false (PVar "landed") (EApp (EApp (EVar "eq") (EApp (EApp (EVar "get") (EVar "i")) (EVar "ma"))) (EApp (EVar "Some") (EVar "x")))) (DoExpr (EApp (EApp (EVar "removeAt") (EVar "i")) (EVar "ma"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EVar "grew") (EVar "landed")) (EApp (EApp (EVar "eq") (EApp (EVar "toList") (EVar "ma"))) (EVar "xs"))))))
-(DProp false "removeAt out of range is a no-op" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EVar "removeAt") (EApp (EVar "length") (EVar "ma"))) (EVar "ma"))) (DoExpr (EApp (EApp (EVar "removeAt") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1)))) (EVar "ma"))) (DoExpr (EApp (EApp (EVar "eq") (EApp (EVar "toList") (EVar "ma"))) (EVar "xs")))))
+(DProp false "sortInPlace agrees with an independent insertion sortInPlace" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EVar "sortInPlace") (EVar "ma"))) (DoExpr (EApp (EApp (EVar "eq") (EApp (EVar "toList") (EVar "ma"))) (EApp (EVar "naiveSort") (EVar "xs"))))))
+(DProp false "sortInPlace is idempotent" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EVar "sortInPlace") (EVar "ma"))) (DoLet false false (PVar "once") (EApp (EVar "toList") (EVar "ma"))) (DoExpr (EApp (EVar "sortInPlace") (EVar "ma"))) (DoExpr (EApp (EApp (EVar "eq") (EApp (EVar "toList") (EVar "ma"))) (EVar "once")))))
+(DProp false "sortInPlaceBy is stable on ties" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EApp (EApp (EVar "tagFrom") (ELit (LInt 0))) (EVar "xs")))) (DoExpr (EApp (EApp (EVar "sortInPlaceBy") (ELam ((PVar "a") (PVar "b")) (EApp (EApp (EVar "compare") (EApp (EVar "coarseKey") (EVar "a"))) (EApp (EVar "coarseKey") (EVar "b"))))) (EVar "ma"))) (DoExpr (EBinOp "&&" (EApp (EVar "sortedAndStable") (EApp (EVar "toList") (EVar "ma"))) (EBinOp "==" (EApp (EVar "length") (EVar "ma")) (EApp (EVar "length") (EApp (EVar "fromList") (EVar "xs"))))))))
+(DProp false "insertAtInPlace lands at the clamped index and removeAtInPlace undoes it" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "n" (TyCon "Int")) (pp "x" (TyCon "Int"))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EVar "xs"))) (DoLet false false (PVar "i") (EApp (EApp (EVar "clampIdx") (EVar "n")) (EApp (EVar "length") (EVar "ma")))) (DoExpr (EApp (EApp (EApp (EVar "insertAtInPlace") (EVar "n")) (EVar "x")) (EVar "ma"))) (DoLet false false (PVar "grew") (EBinOp "==" (EApp (EVar "length") (EVar "ma")) (EBinOp "+" (EApp (EVar "length") (EApp (EVar "fromList") (EVar "xs"))) (ELit (LInt 1))))) (DoLet false false (PVar "landed") (EApp (EApp (EVar "eq") (EApp (EApp (EVar "get") (EVar "i")) (EVar "ma"))) (EApp (EVar "Some") (EVar "x")))) (DoExpr (EApp (EApp (EVar "removeAtInPlace") (EVar "i")) (EVar "ma"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EVar "grew") (EVar "landed")) (EApp (EApp (EVar "eq") (EApp (EVar "toList") (EVar "ma"))) (EVar "xs"))))))
+(DProp false "removeAtInPlace out of range is a no-op" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EVar "removeAtInPlace") (EApp (EVar "length") (EVar "ma"))) (EVar "ma"))) (DoExpr (EApp (EApp (EVar "removeAtInPlace") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1)))) (EVar "ma"))) (DoExpr (EApp (EApp (EVar "eq") (EApp (EVar "toList") (EVar "ma"))) (EVar "xs")))))
 (DProp false "Display Vector shows only the live range and agrees with Eq" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "y" (TyCon "Int"))) (EBlock (DoLet false false (PVar "a") (EApp (EVar "fromList") (EVar "xs"))) (DoLet false false (PVar "b") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EVar "push") (EVar "y")) (EVar "b"))) (DoLet false false (PVar "differs") (EApp (EVar "not") (EApp (EApp (EVar "eq") (EApp (EVar "display") (EVar "a"))) (EApp (EVar "display") (EVar "b"))))) (DoLet false false PWild (EApp (EVar "pop") (EVar "b"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EVar "differs") (EApp (EApp (EVar "eq") (EApp (EVar "display") (EVar "a"))) (EApp (EVar "display") (EVar "b")))) (EApp (EApp (EVar "eq") (EApp (EVar "display") (EVar "a"))) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EVar "display") (EApp (EVar "display") (EVar "xs")))) (ELit (LString ""))))))))
 # MARK
 (DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Ord" false) (mem "Ordering" false) (mem "Debug" false) (mem "Display" false) (mem "Foldable" false) (mem "Option" false) (mem "Index" false) (mem "IndexMut" false))))
@@ -579,14 +616,14 @@ prop "Display Vector shows only the live range and agrees with Eq" (xs : List In
 (DFunDef false "pushAll" ((PCons (PVar "x") (PVar "xs")) (PVar "ma")) (EBlock (DoExpr (EApp (EApp (EVar "push") (EVar "x")) (EVar "ma"))) (DoExpr (EApp (EApp (EVar "pushAll") (EVar "xs")) (EVar "ma")))))
 (DTypeSig false "refill" (TyFun (TyApp (TyCon "Vector") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Unit"))))
 (DFunDef false "refill" ((PVar "ma") (PVar "xs")) (EBlock (DoExpr (EApp (EVar "clear") (EVar "ma"))) (DoExpr (EApp (EApp (EVar "pushAll") (EVar "xs")) (EVar "ma")))))
-(DTypeSig true "insertAt" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Vector") (TyVar "a")) (TyCon "Unit")))))
-(DFunDef false "insertAt" ((PVar "i") (PVar "x") (PVar "ma")) (EApp (EApp (EVar "refill") (EVar "ma")) (EApp (EApp (EApp (EVar "L.insertAt") (EVar "i")) (EVar "x")) (EApp (EVar "elems") (EVar "ma")))))
-(DTypeSig true "removeAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Vector") (TyVar "a")) (TyCon "Unit"))))
-(DFunDef false "removeAt" ((PVar "i") (PVar "ma")) (EApp (EApp (EVar "refill") (EVar "ma")) (EApp (EApp (EVar "L.removeAt") (EVar "i")) (EApp (EVar "elems") (EVar "ma")))))
-(DTypeSig true "sortBy" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Ordering")))) (TyFun (TyApp (TyCon "Vector") (TyVar "a")) (TyEffect () (Some "e") (TyCon "Unit")))))
-(DFunDef false "sortBy" ((PVar "cmp") (PVar "ma")) (EApp (EApp (EVar "refill") (EVar "ma")) (EApp (EApp (EVar "L.sortBy") (EVar "cmp")) (EApp (EVar "elems") (EVar "ma")))))
-(DTypeSig true "sort" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "Vector") (TyVar "a")) (TyCon "Unit"))))
-(DFunDef false "sort" ((PVar "ma")) (EApp (EApp (EVar "sortBy") (EMethodRef "compare")) (EVar "ma")))
+(DTypeSig true "insertAtInPlace" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Vector") (TyVar "a")) (TyCon "Unit")))))
+(DFunDef false "insertAtInPlace" ((PVar "i") (PVar "x") (PVar "ma")) (EApp (EApp (EVar "refill") (EVar "ma")) (EApp (EApp (EApp (EVar "L.insertAt") (EVar "i")) (EVar "x")) (EApp (EVar "elems") (EVar "ma")))))
+(DTypeSig true "removeAtInPlace" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Vector") (TyVar "a")) (TyCon "Unit"))))
+(DFunDef false "removeAtInPlace" ((PVar "i") (PVar "ma")) (EApp (EApp (EVar "refill") (EVar "ma")) (EApp (EApp (EVar "L.removeAt") (EVar "i")) (EApp (EVar "elems") (EVar "ma")))))
+(DTypeSig true "sortInPlaceBy" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Ordering")))) (TyFun (TyApp (TyCon "Vector") (TyVar "a")) (TyEffect () (Some "e") (TyCon "Unit")))))
+(DFunDef false "sortInPlaceBy" ((PVar "cmp") (PVar "ma")) (EApp (EApp (EVar "refill") (EVar "ma")) (EApp (EApp (EVar "L.sortBy") (EVar "cmp")) (EApp (EVar "elems") (EVar "ma")))))
+(DTypeSig true "sortInPlace" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "Vector") (TyVar "a")) (TyCon "Unit"))))
+(DFunDef false "sortInPlace" ((PVar "ma")) (EApp (EApp (EVar "sortInPlaceBy") (EMethodRef "compare")) (EVar "ma")))
 (DTypeSig false "foldGo" (TyFun (TyFun (TyVar "b") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "b")))) (TyFun (TyVar "b") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyVar "b"))))))))
 (DFunDef false "foldGo" ((PVar "f") (PVar "z") (PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "z") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "foldGo") (EVar "f")) (EApp (EApp (EVar "f") (EVar "z")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")))) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "foldRightGo" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "b") (TyEffect () (Some "e") (TyVar "b")))) (TyFun (TyVar "b") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyVar "b")))))))
@@ -614,9 +651,9 @@ prop "Display Vector shows only the live range and agrees with Eq" (xs : List In
 (DFunDef false "sortedAndStable" ((PList)) (EVar "True"))
 (DFunDef false "sortedAndStable" ((PCons PWild (PList))) (EVar "True"))
 (DFunDef false "sortedAndStable" ((PCons (PVar "a") (PCons (PVar "b") (PVar "rest")))) (EBinOp "&&" (EBinOp "&&" (EBinOp "<=" (EApp (EVar "coarseKey") (EVar "a")) (EApp (EVar "coarseKey") (EVar "b"))) (EBinOp "||" (EBinOp "<" (EApp (EVar "coarseKey") (EVar "a")) (EApp (EVar "coarseKey") (EVar "b"))) (EBinOp "<" (EApp (EVar "posOf") (EVar "a")) (EApp (EVar "posOf") (EVar "b"))))) (EApp (EVar "sortedAndStable") (EBinOp "::" (EVar "b") (EVar "rest")))))
-(DProp false "sort agrees with an independent insertion sort" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EDictApp "sort") (EVar "ma"))) (DoExpr (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "toList") (EVar "ma"))) (EApp (EDictApp "naiveSort") (EVar "xs"))))))
-(DProp false "sort is idempotent" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EDictApp "sort") (EVar "ma"))) (DoLet false false (PVar "once") (EApp (EMethodRef "toList") (EVar "ma"))) (DoExpr (EApp (EDictApp "sort") (EVar "ma"))) (DoExpr (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "toList") (EVar "ma"))) (EVar "once")))))
-(DProp false "sortBy is stable on ties" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EApp (EApp (EVar "tagFrom") (ELit (LInt 0))) (EVar "xs")))) (DoExpr (EApp (EApp (EVar "sortBy") (ELam ((PVar "a") (PVar "b")) (EApp (EApp (EMethodRef "compare") (EApp (EVar "coarseKey") (EVar "a"))) (EApp (EVar "coarseKey") (EVar "b"))))) (EVar "ma"))) (DoExpr (EBinOp "&&" (EApp (EVar "sortedAndStable") (EApp (EMethodRef "toList") (EVar "ma"))) (EBinOp "==" (EApp (EMethodRef "length") (EVar "ma")) (EApp (EMethodRef "length") (EApp (EVar "fromList") (EVar "xs"))))))))
-(DProp false "insertAt lands at the clamped index and removeAt undoes it" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "n" (TyCon "Int")) (pp "x" (TyCon "Int"))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EVar "xs"))) (DoLet false false (PVar "i") (EApp (EApp (EVar "clampIdx") (EVar "n")) (EApp (EMethodRef "length") (EVar "ma")))) (DoExpr (EApp (EApp (EApp (EVar "insertAt") (EVar "n")) (EVar "x")) (EVar "ma"))) (DoLet false false (PVar "grew") (EBinOp "==" (EApp (EMethodRef "length") (EVar "ma")) (EBinOp "+" (EApp (EMethodRef "length") (EApp (EVar "fromList") (EVar "xs"))) (ELit (LInt 1))))) (DoLet false false (PVar "landed") (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "get") (EVar "i")) (EVar "ma"))) (EApp (EVar "Some") (EVar "x")))) (DoExpr (EApp (EApp (EVar "removeAt") (EVar "i")) (EVar "ma"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EVar "grew") (EVar "landed")) (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "toList") (EVar "ma"))) (EVar "xs"))))))
-(DProp false "removeAt out of range is a no-op" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EVar "removeAt") (EApp (EMethodRef "length") (EVar "ma"))) (EVar "ma"))) (DoExpr (EApp (EApp (EVar "removeAt") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1)))) (EVar "ma"))) (DoExpr (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "toList") (EVar "ma"))) (EVar "xs")))))
+(DProp false "sortInPlace agrees with an independent insertion sortInPlace" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EDictApp "sortInPlace") (EVar "ma"))) (DoExpr (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "toList") (EVar "ma"))) (EApp (EDictApp "naiveSort") (EVar "xs"))))))
+(DProp false "sortInPlace is idempotent" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EDictApp "sortInPlace") (EVar "ma"))) (DoLet false false (PVar "once") (EApp (EMethodRef "toList") (EVar "ma"))) (DoExpr (EApp (EDictApp "sortInPlace") (EVar "ma"))) (DoExpr (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "toList") (EVar "ma"))) (EVar "once")))))
+(DProp false "sortInPlaceBy is stable on ties" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EApp (EApp (EVar "tagFrom") (ELit (LInt 0))) (EVar "xs")))) (DoExpr (EApp (EApp (EVar "sortInPlaceBy") (ELam ((PVar "a") (PVar "b")) (EApp (EApp (EMethodRef "compare") (EApp (EVar "coarseKey") (EVar "a"))) (EApp (EVar "coarseKey") (EVar "b"))))) (EVar "ma"))) (DoExpr (EBinOp "&&" (EApp (EVar "sortedAndStable") (EApp (EMethodRef "toList") (EVar "ma"))) (EBinOp "==" (EApp (EMethodRef "length") (EVar "ma")) (EApp (EMethodRef "length") (EApp (EVar "fromList") (EVar "xs"))))))))
+(DProp false "insertAtInPlace lands at the clamped index and removeAtInPlace undoes it" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "n" (TyCon "Int")) (pp "x" (TyCon "Int"))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EVar "xs"))) (DoLet false false (PVar "i") (EApp (EApp (EVar "clampIdx") (EVar "n")) (EApp (EMethodRef "length") (EVar "ma")))) (DoExpr (EApp (EApp (EApp (EVar "insertAtInPlace") (EVar "n")) (EVar "x")) (EVar "ma"))) (DoLet false false (PVar "grew") (EBinOp "==" (EApp (EMethodRef "length") (EVar "ma")) (EBinOp "+" (EApp (EMethodRef "length") (EApp (EVar "fromList") (EVar "xs"))) (ELit (LInt 1))))) (DoLet false false (PVar "landed") (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "get") (EVar "i")) (EVar "ma"))) (EApp (EVar "Some") (EVar "x")))) (DoExpr (EApp (EApp (EVar "removeAtInPlace") (EVar "i")) (EVar "ma"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EVar "grew") (EVar "landed")) (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "toList") (EVar "ma"))) (EVar "xs"))))))
+(DProp false "removeAtInPlace out of range is a no-op" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EVar "removeAtInPlace") (EApp (EMethodRef "length") (EVar "ma"))) (EVar "ma"))) (DoExpr (EApp (EApp (EVar "removeAtInPlace") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1)))) (EVar "ma"))) (DoExpr (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "toList") (EVar "ma"))) (EVar "xs")))))
 (DProp false "Display Vector shows only the live range and agrees with Eq" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "y" (TyCon "Int"))) (EBlock (DoLet false false (PVar "a") (EApp (EVar "fromList") (EVar "xs"))) (DoLet false false (PVar "b") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EVar "push") (EVar "y")) (EVar "b"))) (DoLet false false (PVar "differs") (EApp (EVar "not") (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "display") (EVar "a"))) (EApp (EMethodRef "display") (EVar "b"))))) (DoLet false false PWild (EApp (EVar "pop") (EVar "b"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EVar "differs") (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "display") (EVar "a"))) (EApp (EMethodRef "display") (EVar "b")))) (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "display") (EVar "a"))) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EMethodRef "display") (EApp (EMethodRef "display") (EVar "xs")))) (ELit (LString ""))))))))

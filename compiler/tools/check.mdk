@@ -137,7 +137,7 @@ checkHasErrors rsrc csrc tsrc =
 -- stays byte-identical (the CLI routes 1-module loads through runCheck).
 -- (#1440) No longer re-checks multi-module resolve diagnostics here: the ONE
 -- caller, `checkRoute` (`compiler/driver/medaka_cli.mdk`), already resolved
--- via `resolveModulesToHumaneByPath` and only reaches this function in its
+-- via `resolveModulesErrorsByFile` and only reaches this function in its
 -- `""` (no-resolve-errors) branch, so a second resolve pass here could only
 -- ever repeat that same `""` — `allowInternal`/`trustedMods` are unused now
 -- for the same reason (kept for signature stability with that call site).

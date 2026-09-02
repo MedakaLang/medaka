@@ -44,7 +44,7 @@ public export data Literal =
   | LFloat Float
   | LBlob (Array Int)
   | LNull
-deriving (Debug, Eq)
+  deriving (Debug, Eq)
 
 -- | A comparison operator.
 public export data CmpOp =
@@ -54,7 +54,7 @@ public export data CmpOp =
   | OpLe
   | OpGt
   | OpGe
-deriving (Eq, Debug)
+  deriving (Eq, Debug)
 
 -- | An arithmetic operator: `+`, `-`, `*`, `/` (division), `%` (modulo).
 public export data ArithOp =
@@ -63,7 +63,7 @@ public export data ArithOp =
   | AMul
   | ADiv
   | AMod
-deriving (Eq, Debug)
+  deriving (Eq, Debug)
 
 -- | An aggregate function.  `FnCount` is the only one that may appear with NO
 --   operand — that is `COUNT(*)`.
@@ -73,7 +73,7 @@ public export data AggFn =
   | FnAvg
   | FnMin
   | FnMax
-deriving (Eq, Debug)
+  deriving (Eq, Debug)
 
 -- | An untyped boolean/value expression tree.  `ECol`/`ELit` are leaves;
 --   `EBin` is a comparison; `EArith` is a numeric binary op; `EAnd`/`EOr`/`ENot`
@@ -128,7 +128,7 @@ public export data SqlExpr =
   | ECase (List (SqlExpr, SqlExpr)) (Option SqlExpr)
   | ECoalesce (List SqlExpr)
   | EFn String (List SqlExpr)
-deriving (Eq, Debug)
+  deriving (Eq, Debug)
 
 -- | The join kind, selecting WHICH rows of the nested loop survive (the combined
 --   column layout — `from`-cols then join-cols — is identical for every kind):
@@ -149,7 +149,7 @@ public export data JoinKind =
   | JRight
   | JFull
   | JCross
-deriving (Eq, Debug)
+  deriving (Eq, Debug)
 
 -- | A single JOIN clause: the joined table, its kind, its optional alias, and
 --   its ON predicate.  The ON expression references columns by qualified name
@@ -166,7 +166,7 @@ public export data Join =
       alias : Option String,
       on : SqlExpr,
     }
-deriving (Eq, Debug)
+  deriving (Eq, Debug)
 
 -- | A whole SELECT — the single query ADT.  One `Select`, one executor
 --   (`runPipeline`), running the real SQL evaluation order:
@@ -233,7 +233,7 @@ public export data Select =
       columns : List SqlExpr,
       columnAliases : List (Option String),
     }
-deriving (Eq, Debug)
+  deriving (Eq, Debug)
 
 -- | A SQL set operator combining two `selectCore`s.  `OpUnionAll` concatenates
 --   (duplicates kept); `OpUnion` concatenates then dedups; `OpIntersect` keeps
@@ -246,7 +246,7 @@ public export data SetOp =
   | OpUnionAll
   | OpIntersect
   | OpExcept
-deriving (Eq, Debug)
+  deriving (Eq, Debug)
 
 -- | A compound query: a first `selectCore`, a (possibly empty) left-associative
 --   list of `(setOp, selectCore)` arms, and the compound-level `ORDER BY` /
@@ -257,7 +257,7 @@ deriving (Eq, Debug)
 --   `offset` slots from colliding with `Select`'s same-named record fields.
 public export data Compound =
   | Compound Select (List (SetOp, Select)) (List (SqlExpr, Bool)) (Option Int) (Option Int)
-deriving (Eq, Debug)
+  deriving (Eq, Debug)
 
 -- | The canonical SQL keyword for a set operator (`UNION ALL` is two words).
 --   Shared by `runCompound`'s column-count error message and the compound

@@ -18,7 +18,7 @@
 #   1. DERIVES the current caller set: for every `.mdk` file under `compiler/` (other
 #      than `compiler/types/typecheck.mdk` itself, the family's home), parse its
 #      `import types.typecheck.{ ... }` block (which may span multiple lines) and
-#      record which of the 14 wrapper-family names it imports. A name mentioned only
+#      record which of the 16 wrapper-family names it imports. A name mentioned only
 #      in a comment (not imported) is NOT a caller — this gate is keyed on the import,
 #      matching how S-migrate-tool-consumers-remainder's own investigation avoided
 #      false positives from stale prose mentioning an old function name.
@@ -62,6 +62,11 @@ WRAP_NAMES = [
     # callers and the audit trail for the family's newest member would be blind,
     # exactly as it was for `checkToLines` below until 2026-08-26.
     "checkOneSchemeFull",
+    # The keyed siblings (PR #2494): same entries plus the prelude key for the
+    # core-check memo (`checkCoreMemoized`). `diagnostics.mdk`, `lsp.mdk` and
+    # `playground_main.mdk` moved onto them; the unkeyed names stay for callers
+    # that hand in a prelude the desugar cache did not mint.
+    "checkOneDiagsK", "checkOneSchemeFullK",
     "checkOneToLinesWithRuntime", "checkOneErrorsWithRuntime",
     # `checkToLines` (the prelude-free Flat entry) was MISSING from this list until
     # 2026-08-26, which made the gate demonstrably blind: a new caller importing it

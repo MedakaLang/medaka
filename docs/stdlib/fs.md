@@ -1,109 +1,99 @@
 # fs
 
-fs.mdk — a filesystem convenience layer over the host file externs.
+Filesystem helpers built on the host file primitives.
 
-The irreducible host primitives are `extern`s in stdlib/runtime.mdk, so they
-are **global** (no import needed): `readFile`/`writeFile`/`appendFile`,
-`readFileBytes`/`writeFileBytes`, `fileExists`, `listDir`, `makeDir`,
-`removeFile`/`rename`/`removeDir`, `statFile`, `canonicalizePath`. This
-module (`import fs`) adds the ergonomic layer on top — a `FileStat` record
-wrapping `statFile`'s raw tuple, plus composed helpers (`copyFile`,
-`mkdirAll`, `walkDir`, `isDir`/`isFile`/`fileSize`).
+The primitives are in scope without an import: `readFile`, `writeFile`,
+`appendFile`, `readFileBytes`, `writeFileBytes`, `fileExists`, `listDir`,
+`makeDir`, `removeFile`, `rename`, `removeDir`, `statFile`, and
+`canonicalizePath`. This module adds a `FileStat` record over
+`statFile`'s tuple and the composed operations `copyFile`, `mkdirAll`,
+`walkDir`, `isDir`, `isFile`, and `fileSize`.
 
-Conventions (mirroring stdlib/io.mdk): file ops return `Result String _`
-with the host error message (errno strerror) in `Err`. There is no IO monad —
-an action runs when it is evaluated, so you can `match copyFile src dst`
-directly.
+Every operation returns `Result String a`, with the host's error message
+in `Err`. File operations run only in a built program, not under the
+interpreter.
 
-Scope: NATIVE/LLVM. Like every file extern, these execute only through the
-compiled (`medaka build`) path, not the tree-walking interpreter.
+## Metadata
 
-## `FileStat`
+### `FileStat`
 
 ```
 data FileStat
   = FileStat { size : Int, isDir : Bool, isFile : Bool, mtime : Float }
 ```
 
-The metadata `statFile` (stat(2)) returns for a path:
-`size` in bytes, `isDir`/`isFile` type flags, and `mtime` (modification
-time, seconds since the Unix epoch).
+What `stat` reports about a path: its size in bytes, whether it is a
+directory, whether it is a regular file, and its modification time in
+seconds since the Unix epoch.
 
-## `Eq FileStat`
+Instances: `Eq`, `Debug`
 
-```
-impl Eq FileStat
-```
-
-## `Debug FileStat`
-
-```
-impl Debug FileStat
-```
-
-## `stat`
+### `stat`
 
 ```
 stat : String -> <FileRead _> Result String FileStat
 ```
 
-`stat path` — like `statFile`, but wraps the raw tuple in a `FileStat`.
-`Err` (strerror) if the path cannot be stat'd (e.g. does not exist).
+The metadata of a path as a `FileStat`, or `Err` when the path cannot
+be examined, for instance because it does not exist.
 
-## `copyFile`
-
-```
-copyFile : String -> String -> <FileRead _, FileWrite _> Result String Unit
-```
-
-`copyFile src dst` — byte-clean copy: read `src`'s raw bytes, write them to
-`dst` (truncating). Threads the `Result`, so a read failure short-circuits
-before any write.
-
-## `mkdirAll`
-
-```
-mkdirAll : String -> <FileWrite _> Result String Unit
-```
-
-`mkdirAll path` — create `path` and every missing parent directory (like
-`mkdir -p`). Recurses on `path.dirname`, so parents are created first. An
-already-existing directory (an `EEXIST`/"File exists" error from `makeDir`)
-is ignored; any other failure (e.g. permission denied) is reported. Stays
-`<FileWrite _>` — it never reads the filesystem, only writes.
-
-## `walkDir`
-
-```
-walkDir : String -> <FileRead _> Result String (List String)
-```
-
-`walkDir root` — recursively list everything under `root`. Returns FULL
-paths (each prefixed with `root` via `path.joinPath`), depth-first, and
-includes BOTH files and subdirectories. `Err` (strerror) on the first
-directory that cannot be read or entry that cannot be stat'd.
-
-## `isDir`
+### `isDir`
 
 ```
 isDir : String -> <FileRead _> Result String Bool
 ```
 
-`isDir path` — `Ok True` if `path` exists and is a directory.
+Whether a path exists and is a directory.
 
-## `isFile`
+### `isFile`
 
 ```
 isFile : String -> <FileRead _> Result String Bool
 ```
 
-`isFile path` — `Ok True` if `path` exists and is a regular file.
+Whether a path exists and is a regular file.
 
-## `fileSize`
+### `fileSize`
 
 ```
 fileSize : String -> <FileRead _> Result String Int
 ```
 
-`fileSize path` — the size of `path` in bytes.
+The size of a file in bytes.
+
+## Operations
+
+### `copyFile`
+
+```
+copyFile : String -> String -> <FileRead _, FileWrite _> Result String Unit
+```
+
+Copies the bytes of `src` to `dst`, replacing any existing `dst`.
+
+A read failure is reported before anything is written.
+
+### `mkdirAll`
+
+```
+mkdirAll : String -> <FileWrite _> Result String Unit
+```
+
+Creates a directory and every missing parent, like `mkdir -p`.
+
+A directory that already exists is not an error.
+
+### `walkDir`
+
+```
+walkDir : String -> <FileRead _> Result String (List String)
+```
+
+Every path under a directory, files and subdirectories both, depth
+first.
+
+Each result is the full path, joined onto `root`. `Err` on the first
+directory that cannot be read or entry that cannot be examined.
+
+## Instances
 

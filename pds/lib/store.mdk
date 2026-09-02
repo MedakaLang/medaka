@@ -1,6 +1,25 @@
 {- | Opaque immutable storage carrier for the pure PDS protocol core.
 
-   Phase 2 deliberately wraps only the verified content-addressed block store.
+   A `Store` has two halves.
+
+   The **blob half** is the verified content-addressed block store that Phase 2
+   shipped: raw blocks keyed by their own CID, with `storeGet`/`storePut`/
+   `storeSize` unchanged.
+
+   The **repository half** is the configured account's real signed repository
+   state (`lib.repo`'s `Repo`), which Phase 4 record writes transition. It is
+   `None` until an account is configured, because the protocol composition
+   (HTTP framing, routing, media negotiation) is meaningful — and is tested —
+   with no account at all; `storeEmpty` therefore stays free of key material
+   and of signing.
+
+   🔐 **A configured `Store` is SECRET-BEARING.** `Repo` owns the account's
+   secp256k1 `SecretKey` (it must, to sign every commit), so a `Store` built by
+   `storeFromRepo` transitively carries that secret. Nothing in this module
+   exposes it, and `Store`'s representation is private, but a caller that logs,
+   serializes, or otherwise copies a `Store` is copying the signing key. See
+   `pds/README.md` § "The Store is secret-bearing".
+
    Filesystem adapters, multiple repositories, and blob persistence belong to
    later phases and cannot leak effects through this interface. -}
 
@@ -12,26 +31,46 @@ import lib.blockstore.{
   blockStoreSize,
 }
 import lib.cid.{Cid}
+import lib.repo.{Repo}
 
 -- | Immutable verified protocol state. Its representation is private.
-export data Store = Store BlockStore
+export data Store = Store BlockStore (Option Repo)
 
--- | The empty protocol store.
+-- | The empty protocol store: no blobs, and no account configured.
 export
 storeEmpty : Store
-storeEmpty = Store blockStoreEmpty
+storeEmpty = Store blockStoreEmpty None
 
--- | Number of distinct verified blocks in the store.
+-- | A protocol store for one configured account repository, with no blobs.
+export
+storeFromRepo : Repo -> Store
+storeFromRepo repo = Store blockStoreEmpty (Some repo)
+
+-- | The configured account repository, or `None` when no account is set up.
+export
+storeRepo : Store -> Option Repo
+storeRepo (Store _ repo) = repo
+
+-- | Successor store carrying a transitioned account repository. The blob half
+-- is untouched.
+export
+storeWithRepo : Repo -> Store -> Store
+storeWithRepo repo (Store blocks _) = Store blocks (Some repo)
+
+-- | Number of distinct verified blocks in the blob half. The repository half
+-- keeps its own blocks and is not counted here.
 export
 storeSize : Store -> Int
-storeSize (Store blocks) = blockStoreSize blocks
+storeSize (Store blocks _) = blockStoreSize blocks
 
--- | Look up a block, returning a defensive copy.
+-- | Look up a blob-half block, returning a defensive copy.
 export
 storeGet : Cid -> Store -> Option (Array Int)
-storeGet cid (Store blocks) = blockStoreGet cid blocks
+storeGet cid (Store blocks _) = blockStoreGet cid blocks
 
--- | Verify and immutably insert a block, returning the successor store.
+-- | Verify and immutably insert a blob-half block, returning the successor
+-- store. The repository half is carried through unchanged.
 export
 storePut : Cid -> Array Int -> Store -> Result String Store
-storePut cid bytes (Store blocks) = map Store (blockStorePut cid bytes blocks)
+storePut cid bytes (Store blocks repo) =
+  map (blocks => Store blocks repo) (blockStorePut cid bytes blocks)

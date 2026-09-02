@@ -1,0 +1,342 @@
+{- | P4-D end-to-end read/sync driver.
+
+   Replays the provenance-pinned Phase-1 repository transcript
+   (`pds/test/vectors/repo_reference_corpus.txt`) through the full protocol
+   seam — the same four writes `pds/test/record_handlers_main.mdk` replays —
+   and then READS the resulting repository back through the same seam:
+   `com.atproto.repo.{getRecord, listRecords, describeRepo}` and
+   `com.atproto.sync.{getRepo, getLatestCommit}`.
+
+   Every read's answer is compared against the corpus's own pinned rows, not
+   against this implementation: the record CIDs are the `OP` rows' column 5,
+   the latest commit is the last `COMMIT` row's column 5, its revision is the
+   last `OP` row's column 6, and `sync.getRepo`'s body is compared BYTE FOR
+   BYTE against the `CAR` row — the official-atproto CAR of the transcript's
+   final state.
+
+   The `sync.getRepo` check is deliberately three-way. The response bytes must
+   equal `repoExportCar`'s output for the same repository (so the endpoint is
+   not emitting a second, parallel CAR), AND that must equal the corpus (so the
+   shared answer is the official one). Either equality alone would be
+   satisfiable by a wrong pair.
+
+   Compiled engines only, for the reason `pds/test/repo_vectors.sh`'s header
+   gives at length: the writes have to sign, and one `repoInit` under the
+   tree-walking interpreter does not complete in 600s. The repository-free
+   half of this slice's surface — the two well-knowns, `resolveHandle`, and
+   every read's unconfigured-store refusal — is graded on all three engines by
+   `pds/test/read_routes_all_engines.sh` instead. -}
+
+import json.{Json(..), jObject, get, parse, stringify}
+import hex.{decode, encode}
+import io.{readLines}
+import string.{fromUtf8, join, split, startsWith, toUtf8}
+import lib.dagcbor.{dagCborDecode}
+import lib.handlers.{pdsServer}
+import lib.lexjson.{dagCborToLexJson}
+import lib.repo.{Repo, repoExportCar, repoInitFromKeyBytes}
+import lib.server_core.{Account, Server, handleBytes, makeAccount}
+import lib.store.{Store, storeFromRepo, storeRepo}
+import lib.tid.{Tid, tidParse}
+
+accountHandleText : String
+accountHandleText = "medaka.example"
+
+accountHostText : String
+accountHostText = "pds.example"
+
+collectionText : String
+collectionText = "app.bsky.feed.post"
+
+mustHex : String -> Array Int
+mustHex text = match decode text
+  Ok bytes => bytes
+  Err message => panic "read_handlers: malformed hex: \{message}"
+
+mustTid : String -> Tid
+mustTid text = match tidParse text
+  Ok tid => tid
+  Err message => panic "read_handlers: malformed TID: \{message}"
+
+mustRecordJson : String -> Json
+mustRecordJson text = match dagCborDecode (mustHex text)
+  Ok value => dagCborToLexJson value
+  Err message => panic "read_handlers: malformed record: \{message}"
+
+mustAccount : String -> Account
+mustAccount did = match makeAccount did accountHandleText accountHostText
+  Ok account => account
+  Err message => panic "read_handlers: account setup failed: \{message}"
+
+mustServer : Account -> Server
+mustServer account = match pdsServer account
+  Ok server => server
+  Err message => panic "read_handlers: server setup failed: \{message}"
+
+mustRepo : String -> String -> Tid -> Repo
+mustRepo did secretHex rev = match repoInitFromKeyBytes did (mustHex secretHex) rev
+  Ok repo => repo
+  Err message => panic "read_handlers: repository init failed: \{message}"
+
+storeMustRepo : Store -> Repo
+storeMustRepo store = match storeRepo store
+  Some repo => repo
+  None => panic "read_handlers: store lost its repository"
+
+-- ── request framing ─────────────────────────────────────────────────────────
+
+procedureRequest : String -> String -> Array Int
+procedureRequest nsid body =
+  let bytes = toUtf8 body
+  toUtf8 "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{accountHostText}\r\nContent-Type: application/json\r\nContent-Length: \{intToString (arrayLength bytes)}\r\n\r\n"
+    ++ bytes
+
+queryRequest : String -> Array Int
+queryRequest target =
+  toUtf8 "GET /xrpc/\{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\r\n"
+
+-- ── response inspection ─────────────────────────────────────────────────────
+
+headerEnd : Array Int -> Int -> Int
+headerEnd bytes i =
+  if i + 3 >= arrayLength bytes then
+    panic "read_handlers: response has no header terminator"
+  else if bytes[i] == 13 && bytes[i + 1] == 10 && bytes[i + 2] == 13 && bytes[i + 3] == 10 then
+    i
+  else
+    headerEnd bytes (i + 1)
+
+responseBodyBytes : Array Int -> Array Int
+responseBodyBytes bytes =
+  let start = headerEnd bytes 0 + 4
+  arrayMakeWith (arrayLength bytes - start) (i => bytes[start + i])
+
+responseBodyText : Array Int -> String
+responseBodyText bytes = fromUtf8 (responseBodyBytes bytes)
+
+responseJson : Array Int -> Json
+responseJson bytes = match parse (responseBodyText bytes)
+  Ok value => value
+  Err message => panic "read_handlers: response body is not JSON: \{message}"
+
+fieldText : String -> Json -> String
+fieldText name value = match get name value
+  Some (JString text) => text
+  _ => "<missing:\{name}>"
+
+errorCode : Array Int -> String
+errorCode bytes = fieldText "error" (responseJson bytes)
+
+recordsOf : Json -> List Json
+recordsOf value = match get "records" value
+  Some (JArray items) => arrayEntries items 0 (arrayLength items)
+  _ => []
+
+arrayEntries : Array Json -> Int -> Int -> List Json
+arrayEntries items i n =
+  if i >= n then
+    []
+  else
+    items[i] :: arrayEntries items (i + 1) n
+
+rkeysOf : Json -> String
+rkeysOf value = join "," (map (fieldText "uri") (recordsOf value))
+
+-- ── the transcript ──────────────────────────────────────────────────────────
+
+createBody : String -> String -> String -> Json -> String
+createBody did collection rkey record = stringify (jObject
+  [
+    ("repo", JString did),
+    ("collection", JString collection),
+    ("rkey", JString rkey),
+    ("record", record),
+  ])
+
+deleteBody : String -> String -> String -> String
+deleteBody did collection rkey = stringify (jObject
+  [
+    ("repo", JString did),
+    ("collection", JString collection),
+    ("rkey", JString rkey),
+  ])
+
+splitPath : String -> (String, String)
+splitPath text = match split "/" text
+  [collection, rkey] => (collection, rkey)
+  _ => panic "read_handlers: malformed corpus path"
+
+runStep : String -> Server -> Store -> String -> <IO> Store
+runStep did server store opLine = match split "\t" opLine
+  ["OP", kind, pathHex, recordHex, _, _] =>
+    let (collection, rkey) = splitPath (fromUtf8 (mustHex pathHex))
+    let (nsid, body) = match kind
+      "CREATE" => (
+        "com.atproto.repo.createRecord",
+        createBody did collection rkey (mustRecordJson recordHex),
+      )
+      "UPDATE" => (
+        "com.atproto.repo.putRecord",
+        createBody did collection rkey (mustRecordJson recordHex),
+      )
+      "DELETE" =>
+        ("com.atproto.repo.deleteRecord", deleteBody did collection rkey)
+      _ => panic "read_handlers: unknown transcript operation \{kind}"
+    let (next, responseBytes) = handleBytes server store (procedureRequest nsid body)
+    if errorCode responseBytes == "<missing:error>" then next
+    else
+      let () = println "SETUP \{kind} FAIL \{responseBodyText responseBytes}"
+      let () = exit 1
+      next
+  _ => panic "read_handlers: malformed transcript row"
+
+-- ── read cells ──────────────────────────────────────────────────────────────
+
+check : String -> Bool -> String -> <IO> Int
+check label ok detail =
+  if ok then
+    let () = println "READ \{label} PASS \{detail}"
+    1
+  else
+    let () = println "READ \{label} FAIL \{detail}"
+    0
+
+readJson : Server -> Store -> String -> Json
+readJson server store target =
+  let (_, responseBytes) = handleBytes server store (queryRequest target)
+  responseJson responseBytes
+
+readError : Server -> Store -> String -> String
+readError server store target =
+  let (_, responseBytes) = handleBytes server store (queryRequest target)
+  errorCode responseBytes
+
+recordRoute : String -> String -> String
+recordRoute did rkey = "com.atproto.repo.getRecord?repo=\{did}&collection=\{collectionText}&rkey=\{rkey}"
+
+listRoute : String -> String -> String
+listRoute did suffix = "com.atproto.repo.listRecords?repo=\{did}&collection=\{collectionText}\{suffix}"
+
+{- | The three-way CAR equality: response bytes == `repoExportCar` == corpus.
+   Printed as lengths plus the first and last 32 hex digits so the evidence is
+   the bytes themselves rather than a boolean. -}
+carCell : Server -> Store -> String -> String -> <IO> Int
+carCell server store did corpusHex =
+  let (_, responseBytes) = handleBytes server store (queryRequest "com.atproto.sync.getRepo?did=\{did}")
+  let served = responseBodyBytes responseBytes
+  let exported = match repoExportCar (storeMustRepo store)
+    Ok bytes => bytes
+    Err message => panic "read_handlers: repoExportCar failed: \{message}"
+  let corpus = mustHex corpusHex
+  let servedHex = encode served
+  let ok = servedHex == encode exported && servedHex == encode corpus
+  check
+    "sync-getRepo-car-bytes"
+    ok
+    "served=\{intToString (arrayLength served)}B exported=\{intToString (arrayLength exported)}B corpus=\{intToString (arrayLength corpus)}B head=\{firstHex servedHex} tail=\{lastHex servedHex}"
+
+firstHex : String -> String
+firstHex text = stringSlice 0 32 text
+
+lastHex : String -> String
+lastHex text = stringSlice (stringLength text - 32) (stringLength text) text
+
+runReads : String -> Server -> Store -> Store -> String -> String -> String -> String -> <IO> Unit
+runReads did server mid final recordBCid commitCid commitRev carHex =
+  let uriA = "at://\{did}/\{collectionText}/medaka-a"
+  let uriB = "at://\{did}/\{collectionText}/medaka-b"
+  let routeB = recordRoute did "medaka-b"
+  let routeA = recordRoute did "medaka-a"
+  let routeWrongCid = "\{routeB}&cid=\{commitCid}"
+  let routeSince = "com.atproto.sync.getRepo?did=\{did}&since=3ke6kg3wk222b"
+  let getB = readJson server final routeB
+  let cellGetRecord = check "getRecord-medaka-b" (fieldText "uri" getB == uriB && fieldText "cid" getB == recordBCid) "uri=\{fieldText "uri" getB} cid=\{fieldText "cid" getB}"
+  let deletedError = readError server final routeA
+  let cellDeleted = check "getRecord-deleted-medaka-a" (deletedError == "RecordNotFound") "error=\{deletedError}"
+  let wrongCidError = readError server final routeWrongCid
+  let cellWrongCid = check "getRecord-cid-mismatch" (wrongCidError == "RecordNotFound") "error=\{wrongCidError}"
+  let listFinal = readJson server final (listRoute did "")
+  let finalUris = rkeysOf listFinal
+  let cellListFinal = check "listRecords-final" (finalUris == uriB) "uris=\{finalUris}"
+  let describe = readJson server final "com.atproto.repo.describeRepo?repo=\{did}"
+  let describeBody = stringify describe
+  let expectedDescribe = "{\"did\":\"\{did}\",\"handle\":\"\{accountHandleText}\",\"collections\":[\"\{collectionText}\"],\"handleIsCorrect\":true}"
+  let cellDescribe = check "describeRepo" (describeBody == expectedDescribe) "body=\{describeBody}"
+  let latest = readJson server final "com.atproto.sync.getLatestCommit?did=\{did}"
+  let cellLatest = check "sync-getLatestCommit" (fieldText "cid" latest == commitCid && fieldText "rev" latest == commitRev) "cid=\{fieldText "cid" latest} rev=\{fieldText "rev" latest}"
+  let cellCar = carCell server final did carHex
+  let sinceError = readError server final routeSince
+  let cellSince = check "sync-getRepo-since-refused" (sinceError == "InvalidRequest") "error=\{sinceError}"
+  let listMid = readJson server mid (listRoute did "")
+  let midUris = rkeysOf listMid
+  let cellOrder = check "listRecords-default-descending" (midUris == "\{uriB},\{uriA}") "uris=\{midUris}"
+  let listAsc = readJson server mid (listRoute did "&reverse=true")
+  let ascUris = rkeysOf listAsc
+  let cellAscending = check "listRecords-reverse-ascending" (ascUris == "\{uriA},\{uriB}") "uris=\{ascUris}"
+  let page1 = readJson server mid (listRoute did "&limit=1")
+  let page1Uris = rkeysOf page1
+  let page1Cursor = fieldText "cursor" page1
+  let cellPage1 = check "listRecords-limit-cursor" (page1Uris == uriB && page1Cursor == "medaka-b") "uris=\{page1Uris} cursor=\{page1Cursor}"
+  let page2 = readJson server mid (listRoute did "&limit=1&cursor=medaka-b")
+  let page2Uris = rkeysOf page2
+  let page2Cursor = fieldText "cursor" page2
+  let cellPage2 = check "listRecords-cursor-page-two" (page2Uris == uriA && page2Cursor == "<missing:cursor>") "uris=\{page2Uris} cursor=\{page2Cursor}"
+  let cells = cellGetRecord + cellDeleted + cellWrongCid + cellListFinal + cellDescribe + cellLatest + cellCar + cellSince + cellOrder + cellAscending + cellPage1 + cellPage2
+  let () = println "reads: \{intToString cells}/12 corpus-graded read routes"
+  if cells == 12 then println "TOTAL: PASS"
+  else
+    let () = println "TOTAL: FAIL"
+    exit 1
+
+-- ── driver ──────────────────────────────────────────────────────────────────
+
+initialTidFrom : String -> Tid
+initialTidFrom line = match split "\t" line
+  ["TID", _, _, text] => mustTid text
+  _ => panic "read_handlers: malformed initial TID row"
+
+columnOf : Int -> String -> String
+columnOf index line = pick index (split "\t" line)
+
+pick : Int -> List String -> String
+pick _ [] = panic "read_handlers: corpus row is too short"
+pick index (value::rest) = if index <= 0 then value else pick (index - 1) rest
+
+runTranscript : List String -> String -> String -> String -> String -> String -> String -> String -> <IO> Unit
+runTranscript ["META", did, secretHex] t0 op1 op2 op3 op4 commit4 carRow =
+  let account = mustAccount did
+  let server = mustServer account
+  let store = storeFromRepo (mustRepo did secretHex (initialTidFrom t0))
+  let s1 = runStep did server store op1
+  let s2 = runStep did server s1 op2
+  let s3 = runStep did server s2 op3
+  let s4 = runStep did server s3 op4
+  let () = println "setup: 4/4 transcript writes replayed through the seam"
+  runReads
+    did
+    server
+    s3
+    s4
+    (columnOf 4 op3)
+    (columnOf 4 commit4)
+    (columnOf 5 op4)
+    (columnOf 1 carRow)
+runTranscript _ _ _ _ _ _ _ _ = panic "read_handlers: malformed META row"
+
+runRows : List String -> <IO> Unit
+runRows [meta, t0, _, _, _, _, _, op1, _, _, _, op2, _, op3, _, op4, commit4, _, carRow, "END"] = runTranscript (split "\t" meta) t0 op1 op2 op3 op4 commit4 carRow
+runRows _ = panic "read_handlers: unexpected corpus shape"
+
+meaningful : String -> Bool
+meaningful line = line /= "" && not (startsWith "#" line)
+
+runRead : Result String (List String) -> <IO> Unit
+runRead (Err message) = panic "read_handlers: cannot read corpus: \{message}"
+runRead (Ok raw) = runRows (filter meaningful raw)
+
+runMain : List String -> <IO, Env, FileRead "_"> Unit
+runMain [corpusPath] = runRead (readLines corpusPath)
+runMain _ = panic "usage: read_handlers_main <ledger-owned-corpus>"
+
+main : <IO, Env, FileRead "_"> Unit
+main = runMain (args ())

@@ -1,65 +1,78 @@
 # io
 
-io.mdk — files, standard streams, environment, and process I/O.
+Output to standard error, debug printing, and helpers for files and
+the environment.
 
-See STDLIB.md (Module 7) for the plan.
+The primitive operations are in scope without an import: `readFile`,
+`writeFile`, `appendFile`, `readLine`, `readLineOpt`, `readAll`, `args`,
+`getEnv`, `fileExists`, `listDir`, `exit`, `putStr`, `putStrLn`,
+`ePutStr`, and `ePutStrLn`, plus `print` and `println` from the prelude.
+This module adds the convenience layer on top of them.
 
-The irreducible host primitives are `extern`s in stdlib/runtime.mdk, so they
-are **global** (no import needed): `readFile`/`writeFile`/`appendFile`,
-`readLine`/`readLineOpt`/`readAll`, `args`, `getEnv`, `fileExists`, `listDir`,
-`exit`, `putStr`/`putStrLn` (and the prelude's `print`/`println`), and the
-stderr pair `ePutStr`/`ePutStrLn`. This module adds the ergonomic layer on
-top — `Display`-based stderr output, line-oriented file reading, and an
-`Option`-smoothing environment helper.
+File operations return `Result String a`, with the host's error message
+in `Err`. There is no IO monad: an action runs when it is evaluated, so
+`match readFile path` works directly.
 
-Conventions: file ops return `Result String _` with the host error message in
-`Err`; `getEnv` returns `Option`. There is no IO monad — an action runs when
-it is evaluated, so you can `match readFile path` directly.
+## Standard error
 
-## `eprint`
+### `eprint`
 
 ```
 eprint : Display a => a -> <IO> Unit
 ```
 
-Write a value to stderr (no trailing newline), rendered via `Display` —
-the stderr analog of the prelude's `print`.
+Writes a value to standard error with no trailing newline.
 
-## `eprintln`
+The value is rendered with `display`, like `print`.
+
+### `eprintln`
 
 ```
 eprintln : Display a => a -> <IO> Unit
 ```
 
-Write a value to stderr followed by a newline — the stderr analog of
-`println`. Use for diagnostics and errors so they don't pollute stdout.
+Writes a value to standard error, followed by a newline.
 
-## `inspect`
+The value is rendered with `display`, like `println`. Use it for
+diagnostics and errors so they do not mix with standard output.
+
+## Debug output
+
+### `inspect`
 
 ```
 inspect : Debug a => a -> <IO> Unit
 ```
 
-Print a value via `Debug` followed by a newline — the `Debug`-rendering
-analog of `println`.  Unlike `println` (which uses `Display` and is
-user-facing), `inspect` produces round-trippable output: strings and chars
-are quoted, ADTs print with constructor names and field values.  Handy for
-tracing intermediate values without a custom `Display` impl.
+Writes a value to standard output in its `debug` rendering, followed by
+a newline.
 
-## `readLines`
+Unlike `println`, strings and characters are quoted and constructors are
+shown by name, so the output reads as Medaka source. Use it to trace
+values without writing a `Display` instance.
+
+## Files
+
+### `readLines`
 
 ```
 readLines : String -> <IO> Result String (List String)
 ```
 
-Read a file and split it into lines, or `Err` with the host message on a
-read failure. The trailing newline does not produce a final empty line.
+The lines of a file, or `Err` with the host's message when the file
+cannot be read.
 
-## `getEnvOr`
+Lines are split on `\n`, with a `\r` before it removed. A trailing
+newline does not produce a final empty line.
+
+## Environment
+
+### `getEnvOr`
 
 ```
 getEnvOr : String -> String -> <IO> String
 ```
 
-An environment variable's value, or `fallback` when it is unset.
+The value of the environment variable `name`, or `fallback` when it is
+unset.
 

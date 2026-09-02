@@ -7,14 +7,10 @@ data Point
   = Point { x : Int, y : Int }
 ```
 
-A 2D point.
-
 ## `Person`
 
 ```
 data Person a
   = Person { name : String, age : a }
 ```
-
-A named person.
 

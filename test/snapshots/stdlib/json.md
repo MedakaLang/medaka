@@ -1,49 +1,43 @@
 # META
-source_lines=702
+source_lines=719
 stages=DESUGAR,MARK
 # SOURCE
-{- json.mdk — a JSON value type with a parser and serializer.
+{- | A JSON value type with a parser and a serializer.
 
-   A from-scratch recursive-descent JSON implementation, written to exercise a
-   wide cross-section of the stdlib: a recursive ADT, `Array`-backed storage,
-   `Char`/`String` kernel handling, `Thenable`/`do`-notation error threading,
-   and the `Eq`/`Debug`/`Display` interfaces.
+   `parse` turns JSON text into a `Json` value and `stringify` turns a value
+   back into compact text. Arrays and objects are stored in arrays, so
+   indexing is `O(1)` and an object keeps its keys in source order. The
+   accessors (`get`, `at`, `asString`, and the rest) take a value apart
+   without pattern matching.
 
-   **Value model.**
-   ```
-   data Json = JNull | JBool Bool | JInt Int | JFloat Float | JString String
-             | JArray (Array Json) | JObject (Array (String, Json))
-   ```
-   Numbers split into `JInt`/`JFloat` so `3` round-trips as `3` (not `3.0`) and
-   the parser must classify int-vs-float. Arrays and objects are **`Array`-backed**
-   (not `List`): JSON payloads are often large, and a contiguous `Array` gives
-   O(1) indexing and compact, cache-friendly storage where a cons-list would cost
-   O(n) access and per-cell overhead. Objects are an `Array` of `(key, value)`
-   pairs — assoc-style (no `Map` dependency), so insertion order is preserved and
-   round-trips exactly; key lookup is linear.
+   Integers and floats are kept apart, so `3` parses as `JInt 3` and
+   `3.0` as `JFloat 3.0`. Object equality is positional: two objects with the
+   same pairs in a different order are not equal. -}
 
-   **Parsing** uses `Thenable (Result e)` and `do` notation to thread the
-   `(value, position)` pair through each parse step — `do { (v, j) <- step ;
-   next v j }` desugars to the `andThen` short-circuit on `Err` automatically.
-
-   Built on the stdlib it exists to exercise: `list.reverse`, `string.join`/
-   `fromChars`/`isDigit`/`toInt`, the `Thenable` monad interface, `do`
-   notation, plus the global `array*`/`string*`/`char*` externs. Equality is
-   hand-rolled element-wise (so the `Json` `Eq` recurses
-   through the `Array` fields without an `Eq (Array a)` dependency) and is
-   **positional** for objects (two objects with the same pairs in a different
-   order compare unequal — fine for round-tripping, which preserves order).
-
-   **Not handled (v1):** strict leading-zero / number-grammar rejection (the
-   number scan is lenient). `\uXXXX` surrogate pairs (astral codepoints) ARE
-   handled: a valid high/low pair decodes to its astral scalar value, and a
-   lone (unpaired) surrogate is a parse error, not silent corruption. -}
+-- A from-scratch recursive-descent implementation over an `Array Char` and a
+-- position, threading the `(value, position)` pair through each step with
+-- `Thenable (Result e)` and `do` notation.  Objects are an `Array` of
+-- `(key, value)` pairs (assoc-style, no `Map` dependency), so insertion
+-- order is preserved and round-trips exactly; key lookup is linear.
+-- Equality is hand-rolled element-wise so the `Json` `Eq` recurses through
+-- the `Array` fields without an `Eq (Array a)` dependency.
+--
+-- Not handled: strict leading-zero / number-grammar rejection (the number
+-- scan is lenient).  `\uXXXX` surrogate pairs ARE handled: a valid high/low
+-- pair decodes to its astral scalar value, and a lone surrogate is a parse
+-- error, not silent corruption.
 
 import core.{Eq, Debug, Display, Option, Result, Thenable, map}
 import list.{reverse}
 import array
 import string.{join, fromChars, isDigit, toInt}
 
+-- # The Json type
+
+{- | A JSON value.
+
+   `JArray` holds its elements in an array. `JObject` holds its members as
+   an array of key and value pairs, in source order. -}
 public export data Json =
   | JNull
   | JBool Bool
@@ -53,27 +47,30 @@ public export data Json =
   | JArray (Array Json)
   | JObject (Array (String, Json))
 
--- ── Construction helpers ────────────────────────────────────────────────
+-- # Construction
 
-{- | Build a `JArray` from a list (stored as a contiguous `Array`).
+{- | A `JArray` holding the elements of a list.
 
-   > stringify (jArray [JInt 1, JInt 2, JInt 3]) == "[1,2,3]"
-   True
-   > stringify (jArray []) == "[]"
-   True -}
+   > stringify (jArray [JInt 1, JInt 2, JInt 3])
+   "[1,2,3]" -}
 export
 jArray : List Json -> Json
 jArray xs = JArray (arrayFromList xs)
 
-{- | Build a `JObject` from a list of key/value pairs (order preserved).
+-- > stringify (jArray [])
+-- "[]"
 
-   > stringify (jObject [("a", JInt 1), ("b", JBool True)]) == "{\"a\":1,\"b\":true}"
-   True
-   > stringify (jObject []) == "{}"
-   True -}
+{- | A `JObject` holding the members of a list of key and value pairs, in
+   order.
+
+   > stringify (jObject [("a", JInt 1), ("b", JBool True)])
+   "{\"a\":1,\"b\":true}" -}
 export
 jObject : List (String, Json) -> Json
 jObject xs = JObject (arrayFromList xs)
+
+-- > stringify (jObject [])
+-- "{}"
 
 -- A codepoint to a `Char`, for the fixed control-char escapes below (`\n`
 -- `\t` `\r` `\b` `\f`) whose codes (10, 9, 13, 8, 12) are always valid scalar
@@ -85,7 +82,7 @@ charOfCode k = match charFromCode k
   Some c => c
   None => ' '
 
--- ── Serialization ───────────────────────────────────────────────────────
+-- # Serialization
 
 -- `floatToString` can emit a trailing-dot form (e.g. `1000.0` → "1000.") which
 -- is not valid JSON (a number needs a digit after the point).  Append a `0` in
@@ -148,16 +145,15 @@ memberStrings pairs i acc
     let s = stringConcat [escapeString (fst p), ":", stringify (snd p)]
     memberStrings pairs (i - 1) (s::acc)
 
-{- | Serialize a `Json` to compact JSON text (no insignificant whitespace).
+{- | The value as compact JSON text, with no whitespace between tokens.
 
-   > stringify JNull == "null"
-   True
-   > stringify (JArray (arrayFromList [JInt 1, JBool True])) == "[1,true]"
-   True
-   > stringify (jObject [("a", JInt 1), ("b", JString "hi")]) == "{\"a\":1,\"b\":\"hi\"}"
-   True
-   > stringify (JFloat 1000.0) == "1000.0"
-   True -}
+   Strings are escaped as JSON requires. A float always has a digit after
+   its decimal point, so the text parses again.
+
+   > stringify (jObject [("a", JInt 1), ("b", JString "hi")])
+   "{\"a\":1,\"b\":\"hi\"}"
+   > stringify (JFloat 1000.0)
+   "1000.0" -}
 export
 stringify : Json -> String
 stringify JNull = "null"
@@ -172,6 +168,11 @@ stringify (JArray arr) =
 stringify (JObject pairs) =
   let body = join "," (memberStrings pairs (arrayLength pairs - 1) [])
   stringConcat ["{", body, "}"]
+
+-- > stringify JNull
+-- "null"
+-- > stringify (JArray (arrayFromList [JInt 1, JBool True]))
+-- "[1,true]"
 
 -- ── Parsing (recursive descent over an Array Char + position) ────────────
 
@@ -465,37 +466,45 @@ dispatchValue arr j c
   | isDigit c = parseNumber arr j
   | otherwise = Err (stringConcat ["unexpected character '", charToStr c, "'"])
 
-{- | Parse JSON text into a `Json`, or an error message.
+-- # Parsing
 
-   > parse "null" == Ok JNull
-   True
-   > parse "[1, 2, 3]" == Ok (jArray [JInt 1, JInt 2, JInt 3])
-   True
-   > parse "  {\"k\": true}  " == Ok (jObject [("k", JBool True)])
-   True
+{- | The value written in JSON text, or `Err` with a message when the text
+   is not valid JSON.
+
+   Whitespace around the value is allowed. Anything after the value is an
+   error. Unicode escapes, including surrogate pairs, are decoded; a lone
+   surrogate is an error.
+
+   > parse "[1, 2, 3]"
+   Ok [1,2,3]
    > parse "nope"
-   Err "invalid literal, expected 'null'"
-   > parse "\"a\\u0041b\"" == Ok (JString "aAb")
-   True
-   > parse "\"\\uD834\\uDD1E\"" == Ok (JString "𝄞")
-   True
-   > parse "\"\\uD834\""
-   Err "invalid \\u escape"
-   > parse "\"\\uDC00\""
-   Err "invalid \\u escape"
-   > parse "1e+5" == Ok (JFloat 100000.0)
-   True
-   > parse "6.022e+23" == Ok (JFloat 6.022e23)
-   True
-   > parse (stringify (JFloat 1000000000000.0)) == Ok (JFloat 1000000000000.0)
-   True
-   > parse "1e+"
-   Err "invalid number"
-   > parse "1e"
-   Err "invalid number" -}
+   Err "invalid literal, expected 'null'" -}
 export
 parse : String -> Result String Json
 parse s = parseTop (stringToChars s)
+
+-- > parse "null"
+-- Ok null
+-- > parse "  {\"k\": true}  "
+-- Ok {"k":true}
+-- > parse "\"a\\u0041b\""
+-- Ok "aAb"
+-- > parse "\"\\uD834\\uDD1E\""
+-- Ok "𝄞"
+-- > parse "\"\\uD834\""
+-- Err "invalid \\u escape"
+-- > parse "\"\\uDC00\""
+-- Err "invalid \\u escape"
+-- > parse "1e+5"
+-- Ok 100000.0
+-- > parse "6.022e+23" == Ok (JFloat 6.022e23)
+-- True
+-- > parse (stringify (JFloat 1000000000000.0)) == Ok (JFloat 1000000000000.0)
+-- True
+-- > parse "1e+"
+-- Err "invalid number"
+-- > parse "1e"
+-- Err "invalid number"
 
 parseTop : Array Char -> Result String Json
 parseTop arr = do
@@ -507,18 +516,21 @@ ensureEnd arr j v
   | j >= arrayLength arr = Ok v
   | otherwise = Err "trailing characters after JSON value"
 
--- ── Accessors ───────────────────────────────────────────────────────────
+-- # Accessors
 
-{- | Value at a key in a `JObject` (linear scan), or `None`.
+{- | The value at `key` in a `JObject`, or `None` when the key is absent or
+   the value is not an object.
 
-   > lookup "b" (jObject [("a", JInt 1), ("b", JInt 2)]) == Some (JInt 2)
-   True
-   > lookup "z" (jObject [("a", JInt 1)]) == None
-   True -}
+   The lookup scans the members in order.
+
+   > get "b" (jObject [("a", JInt 1), ("b", JInt 2)])
+   Some 2
+   > get "z" (jObject [("a", JInt 1)])
+   None -}
 export
-lookup : String -> Json -> Option Json
-lookup key (JObject pairs) = lookupGo key pairs 0 (arrayLength pairs)
-lookup _ _ = None
+get : String -> Json -> Option Json
+get key (JObject pairs) = lookupGo key pairs 0 (arrayLength pairs)
+get _ _ = None
 
 lookupGo : String -> Array (String, Json) -> Int -> Int -> Option Json
 lookupGo key pairs i n
@@ -526,14 +538,13 @@ lookupGo key pairs i n
   | fst (arrayGetUnsafe i pairs) == key = Some (snd (arrayGetUnsafe i pairs))
   | otherwise = lookupGo key pairs (i + 1) n
 
-{- | Element at an index in a `JArray` (O(1)), or `None`.
+{- | The element at index `k` of a `JArray`, or `None` when `k` is out of
+   range or the value is not an array.
 
-   > at 1 (jArray [JInt 10, JInt 20, JInt 30]) == Some (JInt 20)
-   True
-   > at 5 (jArray [JInt 10]) == None
-   True
-   > at 0 (JInt 1) == None
-   True -}
+   > at 1 (jArray [JInt 10, JInt 20, JInt 30])
+   Some 20
+   > at 5 (jArray [JInt 10])
+   None -}
 export
 at : Int -> Json -> Option Json
 at k (JArray arr)
@@ -541,56 +552,57 @@ at k (JArray arr)
   | otherwise = None
 at _ _ = None
 
-{- | The `String` inside a `JString`, or `None`.
+-- > at 0 (JInt 1)
+-- None
 
-   > asString (JString "hi") == Some "hi"
-   True
-   > asString (JInt 1) == None
-   True -}
+{- | The string inside a `JString`, or `None` for any other value.
+
+   > asString (JString "hi")
+   Some "hi"
+   > asString (JInt 1)
+   None -}
 export
 asString : Json -> Option String
 asString (JString s) = Some s
 asString _ = None
 
-{- | The `Int` inside a `JInt`, or `None`.
+{- | The integer inside a `JInt`, or `None` for any other value.
 
-   > asInt (JInt 7) == Some 7
-   True
-   > asInt JNull == None
-   True -}
+   > asInt (JInt 7)
+   Some 7
+   > asInt JNull
+   None -}
 export
 asInt : Json -> Option Int
 asInt (JInt n) = Some n
 asInt _ = None
 
-{- | The `Float` inside a `JFloat`, or `None`.
+{- | The float inside a `JFloat`, or `None` for any other value.
 
-   > asFloat (JFloat 1.5) == Some 1.5
-   True
-   > asFloat (JInt 1) == None
-   True -}
+   > asFloat (JFloat 1.5)
+   Some 1.5
+   > asFloat (JInt 1)
+   None -}
 export
 asFloat : Json -> Option Float
 asFloat (JFloat f) = Some f
 asFloat _ = None
 
-{- | The `Bool` inside a `JBool`, or `None`.
+{- | The boolean inside a `JBool`, or `None` for any other value.
 
-   > asBool (JBool True) == Some True
-   True
-   > asBool JNull == None
-   True -}
+   > asBool (JBool True)
+   Some True
+   > asBool JNull
+   None -}
 export
 asBool : Json -> Option Bool
 asBool (JBool b) = Some b
 asBool _ = None
 
-{- | The backing `Array` of a `JArray`, or `None`.  (Re-wrap the result in
-   `JArray` with `map` to compare it as a `Json` — there is no `Eq (Array Json)`
-   in scope here.)
+{- | The elements of a `JArray`, or `None` for any other value.
 
-   > map JArray (asArray (jArray [JInt 1, JInt 2])) == Some (jArray [JInt 1, JInt 2])
-   True
+   > map arrayLength (asArray (jArray [JInt 1, JInt 2]))
+   Some 2
    > asArray (JInt 1) == None
    True -}
 export
@@ -598,19 +610,23 @@ asArray : Json -> Option (Array Json)
 asArray (JArray a) = Some a
 asArray _ = None
 
-{- | The key/value pairs of a `JObject`, or `None`.  Completes the `asX`
-   family: every `Json` variant's payload is now reachable by a partial
-   downcast.  (Re-wrap with `JObject` to compare as a `Json`, exactly as
-   `asArray` does — there is no `Eq (Array (String, Json))` in scope here.)
+-- > map JArray (asArray (jArray [JInt 1, JInt 2])) == Some (jArray [JInt 1, JInt 2])
+-- True
 
-   > map JObject (asObject (jObject [("a", JInt 1)])) == Some (jObject [("a", JInt 1)])
-   True
+{- | The members of a `JObject` as key and value pairs, or `None` for any
+   other value.
+
+   > map arrayLength (asObject (jObject [("a", JInt 1)]))
+   Some 1
    > asObject (JInt 1) == None
    True -}
 export
 asObject : Json -> Option (Array (String, Json))
 asObject (JObject pairs) = Some pairs
 asObject _ = None
+
+-- > map JObject (asObject (jObject [("a", JInt 1)])) == Some (jObject [("a", JInt 1)])
+-- True
 
 -- ── Instances ───────────────────────────────────────────────────────────
 
@@ -628,8 +644,9 @@ objEqJson a b i
     let pb = arrayGetUnsafe i b
     fst pa == fst pb && eq (snd pa) (snd pb) && objEqJson a b (i + 1)
 
-{- | Structural equality. Objects compare **positionally** (same pairs in the
-   same order), which is what `parse-then-stringify` preserves.
+{- | Values are equal when they have the same structure. Objects compare
+   member by member in order, so the same members in a different order are
+   not equal.
 
    > eq (parse "[1, 2]") (Ok (jArray [JInt 1, JInt 2]))
    True -}
@@ -643,11 +660,11 @@ export impl Eq Json where
   eq (JObject a) (JObject b) = arrayLength a == arrayLength b && objEqJson a b 0
   eq _ _ = False
 
-{- | `debug` renders compact JSON text (same as `stringify`). -}
+-- | `debug` renders a value as compact JSON text, the same as `stringify`.
 export impl Debug Json where
   debug j = stringify j
 
-{- | `display`/`\{…}` also render compact JSON text. -}
+-- | `display` renders a value as compact JSON text, the same as `stringify`.
 export impl Display Json where
   display j = stringify j
 
@@ -702,8 +719,8 @@ prop "at k recovers the k-th element of a JArray" (n : Int) =
   let k = if n < 0 then 0 - n else n
   at k (jArray (map JInt [0..=k])) == Some (JInt k)
 
-prop "lookup finds an inserted key" (k : Int) (v : Int) =
-  lookup (intToString k) (jObject [(intToString k, JInt v)]) == Some (JInt v)
+prop "get finds an inserted key" (k : Int) (v : Int) =
+  get (intToString k) (jObject [(intToString k, JInt v)]) == Some (JInt v)
 # DESUGAR
 (DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Debug" false) (mem "Display" false) (mem "Option" false) (mem "Result" false) (mem "Thenable" false) (mem "map" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
@@ -845,9 +862,9 @@ prop "lookup finds an inserted key" (k : Int) (v : Int) =
 (DFunDef false "parseTop" ((PVar "arr")) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "parseValue") (EVar "arr")) (ELit (LInt 0)))) (ELam ((PTuple (PVar "v") (PVar "j"))) (EApp (EApp (EApp (EVar "ensureEnd") (EVar "arr")) (EApp (EApp (EVar "skipWs") (EVar "arr")) (EVar "j"))) (EVar "v")))))
 (DTypeSig false "ensureEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Json") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Json"))))))
 (DFunDef false "ensureEnd" ((PVar "arr") (PVar "j") (PVar "v")) (EIf (EBinOp ">=" (EVar "j") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "Ok") (EVar "v")) (EIf (EVar "otherwise") (EApp (EVar "Err") (ELit (LString "trailing characters after JSON value"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "lookup" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "Json")))))
-(DFunDef false "lookup" ((PVar "key") (PCon "JObject" (PVar "pairs"))) (EApp (EApp (EApp (EApp (EVar "lookupGo") (EVar "key")) (EVar "pairs")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "pairs"))))
-(DFunDef false "lookup" (PWild PWild) (EVar "None"))
+(DTypeSig true "get" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "Json")))))
+(DFunDef false "get" ((PVar "key") (PCon "JObject" (PVar "pairs"))) (EApp (EApp (EApp (EApp (EVar "lookupGo") (EVar "key")) (EVar "pairs")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "pairs"))))
+(DFunDef false "get" (PWild PWild) (EVar "None"))
 (DTypeSig false "lookupGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "String") (TyCon "Json"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Json")))))))
 (DFunDef false "lookupGo" ((PVar "key") (PVar "pairs") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "None") (EIf (EBinOp "==" (EApp (EVar "fst") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "pairs"))) (EVar "key")) (EApp (EVar "Some") (EApp (EVar "snd") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "pairs")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "lookupGo") (EVar "key")) (EVar "pairs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig true "at" (TyFun (TyCon "Int") (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "Json")))))
@@ -891,7 +908,7 @@ prop "lookup finds an inserted key" (k : Int) (v : Int) =
 (DProp false "asObject recovers a built JObject" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "j") (EApp (EVar "jObject") (EApp (EApp (EVar "map") (ELam ((PVar "n")) (ETuple (EApp (EVar "intToString") (EVar "n")) (EApp (EVar "JInt") (EVar "n"))))) (EVar "xs")))) (DoExpr (EBinOp "==" (EApp (EApp (EVar "map") (EVar "JObject")) (EApp (EVar "asObject") (EVar "j"))) (EApp (EVar "Some") (EVar "j"))))))
 (DProp false "asObject rejects every non-object variant" ((pp "n" (TyCon "Int"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "asObject") (EApp (EVar "JInt") (EVar "n"))) (EVar "None")) (EBinOp "==" (EApp (EVar "asObject") (EVar "JNull")) (EVar "None"))) (EBinOp "==" (EApp (EVar "asObject") (EApp (EVar "JString") (EApp (EVar "intToString") (EVar "n")))) (EVar "None"))) (EBinOp "==" (EApp (EVar "asObject") (EApp (EVar "jArray") (EListLit (EApp (EVar "JInt") (EVar "n"))))) (EVar "None"))))
 (DProp false "at k recovers the k-th element of a JArray" ((pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "k") (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (EVar "n")) (EVar "n"))) (DoExpr (EBinOp "==" (EApp (EApp (EVar "at") (EVar "k")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EVar "JInt")) (ERangeList (ELit (LInt 0)) (EVar "k") true)))) (EApp (EVar "Some") (EApp (EVar "JInt") (EVar "k")))))))
-(DProp false "lookup finds an inserted key" ((pp "k" (TyCon "Int")) (pp "v" (TyCon "Int"))) (EBinOp "==" (EApp (EApp (EVar "lookup") (EApp (EVar "intToString") (EVar "k"))) (EApp (EVar "jObject") (EListLit (ETuple (EApp (EVar "intToString") (EVar "k")) (EApp (EVar "JInt") (EVar "v")))))) (EApp (EVar "Some") (EApp (EVar "JInt") (EVar "v")))))
+(DProp false "get finds an inserted key" ((pp "k" (TyCon "Int")) (pp "v" (TyCon "Int"))) (EBinOp "==" (EApp (EApp (EVar "get") (EApp (EVar "intToString") (EVar "k"))) (EApp (EVar "jObject") (EListLit (ETuple (EApp (EVar "intToString") (EVar "k")) (EApp (EVar "JInt") (EVar "v")))))) (EApp (EVar "Some") (EApp (EVar "JInt") (EVar "v")))))
 # MARK
 (DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Debug" false) (mem "Display" false) (mem "Option" false) (mem "Result" false) (mem "Thenable" false) (mem "map" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
@@ -1033,9 +1050,9 @@ prop "lookup finds an inserted key" (k : Int) (v : Int) =
 (DFunDef false "parseTop" ((PVar "arr")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "parseValue") (EVar "arr")) (ELit (LInt 0)))) (ELam ((PTuple (PVar "v") (PVar "j"))) (EApp (EApp (EApp (EVar "ensureEnd") (EVar "arr")) (EApp (EApp (EVar "skipWs") (EVar "arr")) (EVar "j"))) (EVar "v")))))
 (DTypeSig false "ensureEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Json") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Json"))))))
 (DFunDef false "ensureEnd" ((PVar "arr") (PVar "j") (PVar "v")) (EIf (EBinOp ">=" (EVar "j") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "Ok") (EVar "v")) (EIf (EVar "otherwise") (EApp (EVar "Err") (ELit (LString "trailing characters after JSON value"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "lookup" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "Json")))))
-(DFunDef false "lookup" ((PVar "key") (PCon "JObject" (PVar "pairs"))) (EApp (EApp (EApp (EApp (EVar "lookupGo") (EVar "key")) (EVar "pairs")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "pairs"))))
-(DFunDef false "lookup" (PWild PWild) (EVar "None"))
+(DTypeSig true "get" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "Json")))))
+(DFunDef false "get" ((PVar "key") (PCon "JObject" (PVar "pairs"))) (EApp (EApp (EApp (EApp (EVar "lookupGo") (EVar "key")) (EVar "pairs")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "pairs"))))
+(DFunDef false "get" (PWild PWild) (EVar "None"))
 (DTypeSig false "lookupGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "String") (TyCon "Json"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Json")))))))
 (DFunDef false "lookupGo" ((PVar "key") (PVar "pairs") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "None") (EIf (EBinOp "==" (EApp (EVar "fst") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "pairs"))) (EVar "key")) (EApp (EVar "Some") (EApp (EVar "snd") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "pairs")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "lookupGo") (EVar "key")) (EVar "pairs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig true "at" (TyFun (TyCon "Int") (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "Json")))))
@@ -1079,4 +1096,4 @@ prop "lookup finds an inserted key" (k : Int) (v : Int) =
 (DProp false "asObject recovers a built JObject" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "j") (EApp (EVar "jObject") (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (ETuple (EApp (EVar "intToString") (EVar "n")) (EApp (EVar "JInt") (EVar "n"))))) (EVar "xs")))) (DoExpr (EBinOp "==" (EApp (EApp (EMethodRef "map") (EVar "JObject")) (EApp (EVar "asObject") (EVar "j"))) (EApp (EVar "Some") (EVar "j"))))))
 (DProp false "asObject rejects every non-object variant" ((pp "n" (TyCon "Int"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "asObject") (EApp (EVar "JInt") (EVar "n"))) (EVar "None")) (EBinOp "==" (EApp (EVar "asObject") (EVar "JNull")) (EVar "None"))) (EBinOp "==" (EApp (EVar "asObject") (EApp (EVar "JString") (EApp (EVar "intToString") (EVar "n")))) (EVar "None"))) (EBinOp "==" (EApp (EVar "asObject") (EApp (EVar "jArray") (EListLit (EApp (EVar "JInt") (EVar "n"))))) (EVar "None"))))
 (DProp false "at k recovers the k-th element of a JArray" ((pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "k") (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (EVar "n")) (EVar "n"))) (DoExpr (EBinOp "==" (EApp (EApp (EVar "at") (EVar "k")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EVar "JInt")) (ERangeList (ELit (LInt 0)) (EVar "k") true)))) (EApp (EVar "Some") (EApp (EVar "JInt") (EVar "k")))))))
-(DProp false "lookup finds an inserted key" ((pp "k" (TyCon "Int")) (pp "v" (TyCon "Int"))) (EBinOp "==" (EApp (EApp (EVar "lookup") (EApp (EVar "intToString") (EVar "k"))) (EApp (EVar "jObject") (EListLit (ETuple (EApp (EVar "intToString") (EVar "k")) (EApp (EVar "JInt") (EVar "v")))))) (EApp (EVar "Some") (EApp (EVar "JInt") (EVar "v")))))
+(DProp false "get finds an inserted key" ((pp "k" (TyCon "Int")) (pp "v" (TyCon "Int"))) (EBinOp "==" (EApp (EApp (EVar "get") (EApp (EVar "intToString") (EVar "k"))) (EApp (EVar "jObject") (EListLit (ETuple (EApp (EVar "intToString") (EVar "k")) (EApp (EVar "JInt") (EVar "v")))))) (EApp (EVar "Some") (EApp (EVar "JInt") (EVar "v")))))

@@ -1,29 +1,18 @@
 # set
 
-set.mdk — an immutable, ordered set of unique elements.
+An immutable set of distinct elements, ordered by `Ord`.
 
-See STDLIB.md (Module 5) for the plan.
+`Set a` is a balanced binary search tree. Membership, insertion, and
+deletion cost `O(log n)`, and `size` is `O(1)`. Every operation returns a
+new set and leaves the original unchanged; the two share whatever
+structure they have in common.
 
-Design notes
-────────────
-`Set a` is a *weight-balanced binary search tree* — the same Adams / Haskell
-`Data.Set` scheme as `map.mdk`, but storing only an element per node (no
-value). The invariants are identical:
+`toList` and the `Foldable` methods visit elements in ascending order.
+The `Set { x, ... }` literal builds a set; the empty set is `empty`. For
+elements that are `Hashable` but not `Ord`, or when order does not
+matter, see `hash_set`.
 
-• search:   elements in the left subtree < node element < the right
-• balance:  neither subtree is more than `delta` (= 3) times the other
-
-maintained by the smart constructor `balance`. The structure is *persistent*
-(every op returns a fresh set sharing untouched subtrees), and ordering is by
-the element's `Ord`, so most operations carry an `Ord a` constraint while the
-pure walks (`size`, `toList`, the folds) do not.
-
-This is a standalone tree rather than a wrapper over `Map a Unit`: it keeps
-the module self-contained (no cross-module name clashes on `insert`/`union`/…)
-and avoids the per-node `Unit` payload. The balancing mirrors map.mdk's,
-which the property tests below re-verify.
-
-## `Set`
+### `Set`
 
 ```
 data Set a
@@ -31,83 +20,67 @@ data Set a
   | Bin Int a (Set a) (Set a)
 ```
 
-The representation. `Tip` is the empty set; `Bin size elem left right` is an
-interior node whose cached `size` is `1 + size left + size right`.
+The set type.
 
-## `singleton`
+`Tip` is the empty tree and `Bin` is an interior node holding its
+subtree's size, an element, and the left and right subtrees. The
+constructors are visible for pattern matching, but build sets with the
+functions in this module, which keep the tree balanced.
+
+Instances: [`Foldable`](#foldable-set), [`Eq`](#eq-set-a), [`Ord`](#ord-set-a), [`Debug`](#debug-set-a), [`Display`](#display-set-a), [`Semigroup`](#semigroup-set-a), [`FromEntries`](#fromentries-set-a-a), [`Monoid`](#monoid-set-a)
+
+## Construction
+
+### `singleton`
 
 ```
 singleton : a -> Set a
 ```
 
-A set with a single element.
-
-
-*(doctest — run by `medaka test`)*
+A set with one element.
 
 ```medaka
 > size (singleton 5)
 1
 ```
 
-## `fromList`
+### `fromList`
 
 ```
 fromList : Ord a => List a -> Set a
 ```
 
-Build a set from a list, dropping duplicates.
+A set holding the elements of a list, without duplicates.
 
-The `Set { x, … }` literal is sugar for `fromList` (it lowers to a
-`FromEntries` dispatch pinned at `Set`, see the impl at the bottom):
-
-
-*(doctest — run by `medaka test`)*
+The `Set { x, ... }` literal is the same operation.
 
 ```medaka
-> size (Set { 1, 2, 3, 2, 1 })
-3
 > toList (fromList [3, 1, 2, 3, 1])
 [1, 2, 3]
 ```
 
-The empty literal `Set { }` works too (Phase 114); annotate to fix the
-element type the empty braces leave open:
+## Query
 
-
-*(doctest — run by `medaka test`)*
-
-```medaka
-> size (Set { } : Set Int)
-0
-```
-
-## `size`
+### `size`
 
 ```
 size : Set a -> Int
 ```
 
-Number of elements. O(1) — read off the root's cached size.
-
-
-*(doctest — run by `medaka test`)*
+The number of elements, in `O(1)`.
 
 ```medaka
 > size (fromList [1, 2, 3, 2])
 3
 ```
 
-## `has`
+### `has`
 
 ```
 has : Ord a => a -> Set a -> Bool
 ```
 
-`True` when the element is present.
-
-
-*(doctest — run by `medaka test`)*
+Whether `x` is a member.
 
 ```medaka
 > has 2 (fromList [1, 2, 3])
@@ -116,242 +89,174 @@ True
 False
 ```
 
-## `insert`
+## Insertion and deletion
+
+### `insert`
 
 ```
 insert : Ord a => a -> Set a -> Set a
 ```
 
-Insert an element. A no-op (structurally) when already present.
+The set with `x` added.
 
-
-*(doctest — run by `medaka test`)*
+Unchanged when `x` is already a member.
 
 ```medaka
-> size (insert 2 (fromList [1, 2, 3]))
-3
 > size (insert 9 (fromList [1, 2, 3]))
 4
 ```
 
-## `delete`
+### `delete`
 
 ```
 delete : Ord a => a -> Set a -> Set a
 ```
 
-Remove an element. A no-op when absent.
+The set without `x`.
 
-
-*(doctest — run by `medaka test`)*
+Unchanged when `x` is not a member.
 
 ```medaka
 > has 2 (delete 2 (fromList [1, 2, 3]))
 False
 ```
 
-Deleting an absent element leaves the set unchanged:
+## Minimum and maximum
 
-
-*(doctest — run by `medaka test`)*
-
-```medaka
-> toList (delete 9 (fromList [1, 2, 3]))
-[1, 2, 3]
-> size (delete 9 (fromList [1, 2, 3]))
-3
-```
-
-## `minView`
+### `minView`
 
 ```
 minView : Set a -> Option (a, Set a)
 ```
 
-Split off the smallest element: `Some (elem, rest)`, or `None` when empty.
-
-
-*(doctest — run by `medaka test`)*
+The smallest element and the set without it, or `None` when the set is
+empty.
 
 ```medaka
-> minView (Set { } : Set Int)
-None
+> minView (fromList [2, 1, 3])
+Some (1, fromList [2, 3])
 ```
 
-## `maxView`
+### `maxView`
 
 ```
 maxView : Set a -> Option (a, Set a)
 ```
 
-Split off the largest element: `Some (elem, rest)`, or `None`.
-
-
-*(doctest — run by `medaka test`)*
+The largest element and the set without it, or `None` when the set is
+empty.
 
 ```medaka
-> maxView (Set { } : Set Int)
-None
+> maxView (fromList [2, 1, 3])
+Some (3, fromList [1, 2])
 ```
 
-## `getMin`
+### `getMin`
 
 ```
 getMin : Set a -> Option a
 ```
 
-Smallest element, or `None`.
-
-
-*(doctest — run by `medaka test`)*
+The smallest element, or `None` when the set is empty.
 
 ```medaka
 > getMin (fromList [3, 1, 2])
 Some 1
 ```
 
-## `getMax`
+### `getMax`
 
 ```
 getMax : Set a -> Option a
 ```
 
-Largest element, or `None`.
-
-
-*(doctest — run by `medaka test`)*
+The largest element, or `None` when the set is empty.
 
 ```medaka
 > getMax (fromList [3, 1, 2])
 Some 3
 ```
 
-## `deleteMin`
+### `deleteMin`
 
 ```
 deleteMin : Set a -> Set a
 ```
 
-Drop the smallest element (a no-op on the empty set).
+The set without its smallest element.
 
-
-*(doctest — run by `medaka test`)*
+Unchanged when the set is empty.
 
 ```medaka
 > toList (deleteMin (fromList [3, 1, 2]))
 [2, 3]
 ```
 
-## `deleteMax`
+### `deleteMax`
 
 ```
 deleteMax : Set a -> Set a
 ```
 
-Drop the largest element (a no-op on the empty set).
+The set without its largest element.
 
-
-*(doctest — run by `medaka test`)*
+Unchanged when the set is empty.
 
 ```medaka
 > toList (deleteMax (fromList [3, 1, 2]))
 [1, 2]
 ```
 
-## `union`
+## Set algebra
+
+### `union`
 
 ```
 union : Ord a => Set a -> Set a -> Set a
 ```
 
-Union — every element in either set.
+The elements in either set.
 
-
-*(doctest — run by `medaka test`)*
+`++` on sets is `union`.
 
 ```medaka
 > toList (union (fromList [1, 2]) (fromList [2, 3]))
 [1, 2, 3]
 ```
 
-Disjoint operands keep every element of both; a subset operand adds nothing:
-
-
-*(doctest — run by `medaka test`)*
-
-```medaka
-> toList (union (fromList [1, 2]) (fromList [3, 4]))
-[1, 2, 3, 4]
-> toList (union (fromList [1, 2, 3]) (fromList [2]))
-[1, 2, 3]
-```
-
-## `intersection`
+### `intersection`
 
 ```
 intersection : Ord a => Set a -> Set a -> Set a
 ```
 
-Intersection — elements in both sets.
-
-
-*(doctest — run by `medaka test`)*
+The elements in both sets.
 
 ```medaka
 > toList (intersection (fromList [1, 2, 3]) (fromList [2, 3, 4]))
 [2, 3]
 ```
 
-Disjoint operands intersect to empty; a subset operand is its own intersection:
-
-
-*(doctest — run by `medaka test`)*
-
-```medaka
-> toList (intersection (fromList [1, 2]) (fromList [3, 4]))
-[]
-> toList (intersection (fromList [1, 2, 3]) (fromList [2]))
-[2]
-```
-
-## `difference`
+### `difference`
 
 ```
 difference : Ord a => Set a -> Set a -> Set a
 ```
 
-Difference — elements in the first set but not the second.
-
-
-*(doctest — run by `medaka test`)*
+The elements of the first set that are not in the second.
 
 ```medaka
 > toList (difference (fromList [1, 2, 3]) (fromList [2]))
 [1, 3]
 ```
 
-Subtracting a disjoint set changes nothing; subtracting a superset empties it:
-
-
-*(doctest — run by `medaka test`)*
-
-```medaka
-> toList (difference (fromList [1, 2]) (fromList [3, 4]))
-[1, 2]
-> toList (difference (fromList [1, 2, 3]) (fromList [1, 2, 3]))
-[]
-```
-
-## `isSubsetOf`
+### `isSubsetOf`
 
 ```
 isSubsetOf : Ord a => Set a -> Set a -> Bool
 ```
 
-`True` when every element of the first set is in the second.
-
-
-*(doctest — run by `medaka test`)*
+Whether every element of the first set is in the second.
 
 ```medaka
 > isSubsetOf (fromList [1, 2]) (fromList [1, 2, 3])
@@ -360,19 +265,35 @@ True
 False
 ```
 
-## `Foldable Set`
+## Invariants
+
+### `wellFormed`
+
+```
+wellFormed : Ord a => Set a -> Bool
+```
+
+Whether the set's internal tree satisfies its invariants: elements in
+search order, correct cached sizes, and balanced subtrees.
+
+Every set built with this module's functions is well formed. This is a
+debugging aid and the basis of the module's property tests.
+
+```medaka
+> wellFormed (fromList [5, 3, 8, 1, 4, 7, 9, 2, 6])
+True
+```
+
+## Instances
+
+### `Foldable Set`
 
 ```
 impl Foldable Set
 ```
 
-`Foldable Set` folds over elements in ascending order — so `toList`,
-`length`, `elem`, `sum`, `maximum`, `any`/`all`, … all work on a set. (Unlike
-`Map`, whose `toList` means pairs, a set's elements *are* its `toList`, so the
-Foldable methods carry the natural meaning and there's no name clash.)
-
-
-*(doctest — run by `medaka test`)*
+The `Foldable` methods visit elements in ascending order, so `toList`,
+`length`, `elem`, `sum`, `maximum`, `any`, and `all` work on a set.
 
 ```medaka
 > toList (fromList [3, 1, 2, 1])
@@ -381,129 +302,87 @@ Foldable methods carry the natural meaning and there's no name clash.)
 3
 ```
 
-## `Eq (Set a)`
+### `Eq (Set a)`
 
 ```
 impl Eq (Set a) requires Eq a
 ```
 
-Structural equality: same elements (compared through the canonical
-ascending element list, so tree *shape* doesn't matter).
-
-
-*(doctest — run by `medaka test`)*
+Two sets are equal when they hold the same elements, regardless of how
+they were built.
 
 ```medaka
 > eq (fromList [1, 2, 3]) (fromList [3, 2, 1, 2])
 True
 ```
 
-## `Ord (Set a)`
+### `Ord (Set a)`
 
 ```
 impl Ord (Set a) requires Ord a
 ```
 
-Lexicographic ordering through the canonical ascending element list, so a
-proper prefix sorts first.  Enables nesting (`Set (Set a)`, `Map (Set a) v`).
-
-
-*(doctest — run by `medaka test`)*
+Sets compare lexicographically by their ascending element lists.
 
 ```medaka
 > compare (fromList [1, 2]) (fromList [1, 3])
 Lt
 ```
 
-## `Debug (Set a)`
+### `Debug (Set a)`
 
 ```
 impl Debug (Set a) requires Debug a
 ```
 
-Rendered as `fromList [a, …]`, the re-evaluable form (the `Set { … }`
-literal is the *display* form — see PLAN.md Phase 111). Doctest compares
-against a literal: `Debug String` is out of this module's test context.
-
-
-*(doctest — run by `medaka test`)*
+`debug` renders a set as `fromList [x, ...]`.
 
 ```medaka
-> debug (fromList [1, 2, 3]) == "fromList [1, 2, 3]"
-True
+> debug (fromList [1, 2, 3])
+"fromList [1, 2, 3]"
 ```
 
-## `Display (Set a)`
+### `Display (Set a)`
 
 ```
 impl Display (Set a) requires Display a
 ```
 
-The *display* form — the Phase-108 literal `Set { x, … }` (empty →
-`Set {}`), as opposed to Debug's re-evaluable `fromList [x, …]`.
-
-
-*(doctest — run by `medaka test`)*
+`display` renders a set in its literal syntax, `Set { x, ... }`.
 
 ```medaka
-> display (fromList [1, 2, 3]) == "Set { 1, 2, 3 }"
-True
-> display (empty : Set Int) == "Set {}"
-True
+> display (fromList [1, 2, 3])
+"Set { 1, 2, 3 }"
+> display (empty : Set Int)
+"Set {}"
 ```
 
-## `Semigroup (Set a)`
+### `Semigroup (Set a)`
 
 ```
 impl Semigroup (Set a) requires Ord a
 ```
 
-`++` on sets is union; `append` dispatches on its first `Set` argument, so
-the `Ord a` it needs threads in by the ordinary route.
+`++` on sets is `union`.
 
-## `FromEntries (Set a) a`
+### `FromEntries (Set a) a`
 
 ```
 impl FromEntries (Set a) a requires Ord a
 ```
 
-Backs the `Set { x, … }` literal: the compiler lowers that to
-`fromEntries [x, …]` pinned at `Set`, dispatching here.
+The `Set { x, ... }` literal builds its set through this instance.
 
-## `Monoid (Set a)`
+### `Monoid (Set a)`
 
 ```
 impl Monoid (Set a) requires Ord a
 ```
 
-`Monoid.empty` for `Set` is the empty tree (nullary, dispatched on its
-result type; Phase 103). `Tip` needs no dict, so it grounds cleanly.
-
-
-*(doctest — run by `medaka test`)*
+`empty` is the set with no elements.
 
 ```medaka
 > isEmpty (empty : Set Int)
-True
-```
-
-## `wellFormed`
-
-```
-wellFormed : Ord a => Set a -> Bool
-```
-
-Check the structural invariants at every node: search-tree order
-(left < node < right), the cached `size`, and the weight-balance bound.
-A correct sequence of operations always leaves a set `wellFormed`.
-
-
-*(doctest — run by `medaka test`)*
-
-```medaka
-> wellFormed (fromList [5, 3, 8, 1, 4, 7, 9, 2, 6])
-True
-> wellFormed (Set { } : Set Int)
 True
 ```
 

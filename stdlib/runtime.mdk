@@ -1,289 +1,586 @@
--- Built-in extern declarations.
--- Every name here must have a matching implementation in the native
--- interpreter, compiler/eval/eval.mdk. To add a new primitive: add an
--- extern line here, add its implementation to eval.mdk's primitive
--- dispatch, and (if non-pure) its effect annotation here ensures eff_env is
--- seeded automatically. See .claude/skills/add-primitive/SKILL.md for the
--- full procedure, including the LLVM/WasmGC backend wiring a primitive that
--- must also work under `medaka build` needs.
---
--- `pure` and `map` are *not* externs: they're interface methods of
--- Applicative and Mappable declared in stdlib/core.mdk, and dispatched
--- through user-written impl bodies.
+{- | The host primitives.
 
--- Raw string output (Phase 111).  `print`/`println` are *not* externs anymore:
--- they're Medaka functions in core.mdk that render via `Display` and call these.
+   Every name here is an `extern` implemented by the runtime, in scope in
+   every program without an import. Most have a friendlier form in a
+   library module (`string.toUpper` over `stringToUpper`, `io.readLines`
+   over `readFile`); use this page when no library module covers what you
+   need.
+
+   An effect on a return type (`<Stdout>`, `<FileRead "_">`, `<Net "_">`,
+   `<IO>`) names what the primitive touches. A primitive with no effect is
+   pure. Mutation of a `Ref` or an array carries no effect. -}
+
+-- Every name here must have a matching implementation in the native
+-- interpreter, compiler/eval/eval.mdk.  To add a new primitive: add an
+-- extern line here, add its implementation to eval.mdk's primitive dispatch,
+-- and (if non-pure) its effect annotation here ensures eff_env is seeded
+-- automatically.  See .claude/skills/add-primitive/SKILL.md for the full
+-- procedure, including the LLVM/WasmGC backend wiring a primitive that must
+-- also work under `medaka build` needs.
+--
+-- `pure` and `map` are not externs: they're interface methods of Applicative
+-- and Mappable declared in stdlib/core.mdk, and dispatched through
+-- user-written impl bodies.
+
+-- # Output
+
+-- `print`/`println` are Medaka functions in core.mdk that render via
+-- `Display` and call these.
+
+-- | Writes a string to standard output.
 extern putStr : String -> <Stdout> Unit
+
+-- | Writes a string and a newline to standard output.
 extern putStrLn : String -> <Stdout> Unit
-extern Ref : a -> Ref a
-extern setRef : Ref a -> a -> Unit
--- Per-type Hashable hashers — SPECIFIED deterministic algorithms, implemented
--- in runtime/medaka_rt.c: hashInt/hashChar/hashFloat = SplitMix64-finalizer
--- mix, hashString = FNV-1a, hashBool = 0/1; all masked to [0, 2^30)
--- (non-negative).  Replaced the old structural __hashRaw, which the
--- type-erased native runtime cannot replicate.  Called by the primitive
--- `Hashable` impls in core.mdk; derived/compound impls compose them via `hash`.
-extern hashInt : Int -> Int
-extern hashFloat : Float -> Int
-extern hashString : String -> Int
-extern hashChar : Char -> Int
-extern hashBool : Bool -> Int
-extern pi : Float
-extern e : Float
+
+-- | Writes a string to standard error.
+extern ePutStr : String -> <Stderr> Unit
+
+-- | Writes a string and a newline to standard error.
+extern ePutStrLn : String -> <Stderr> Unit
+
+-- | Flushes buffered standard output.
+extern flushStdout : Unit -> <Stdout> Unit
+
+-- # Input
+
+-- | Reads one line from standard input, without its newline.
 extern readLine : Unit -> <Stdin> String
+
+-- | Reads one line from standard input, or `None` at end of input.
+extern readLineOpt : Unit -> <Stdin> Option String
+
+-- | Reads all of standard input.
+extern readAll : Unit -> <Stdin> String
+
+-- | Reads exactly `n` bytes from standard input, or `None` at end of input
+-- or on a short read.
+extern readExactly : Int -> <Stdin> Option String
+
+-- # Mutable references
+
+-- | A new mutable cell holding a value. Read it with `!r` and write it
+-- with `r := v`.
+extern Ref : a -> Ref a
+
+-- The primitive behind `r := v`; the operator is the surface form and this
+-- name is kept out of the reference.
+extern setRef : Ref a -> a -> Unit
+
+-- # Files
+
+-- | The contents of a file as a string, or `Err` with the host's message.
 extern readFile : String -> <FileRead "_"> Result String String
--- Read a file as RAW BYTES (no UTF-8 decode): Ok (Array Int) of byte values
--- 0..255, or Err msg on failure.  Mirrors readFile but builds an Array of
--- tagged ints instead of a String.  For SQLite/binary read paths.
+
+-- | The contents of a file as bytes, `0` to `255` each, or `Err` with the
+-- host's message.
 extern readFileBytes : String -> <FileRead "_"> Result String (Array Int)
--- Bitwise / shift primitives (PURE).  Defined on the 63-bit Int rep.
--- shiftRight is LOGICAL (unsigned): C `>>` on the untagged value.
-extern bitAnd : Int -> Int -> Int
-extern bitOr : Int -> Int -> Int
-extern bitXor : Int -> Int -> Int
-extern shiftLeft : Int -> Int -> Int
-extern shiftRight : Int -> Int -> Int
-extern bitNot : Int -> Int
+
+-- | Writes a string to a file, replacing any existing contents.
 extern writeFile : String -> String -> <FileWrite "_"> Result String Unit
--- Write raw bytes (Array Int, values 0..255) to a file, truncating.  The
--- byte-clean write counterpart of readFileBytes.  Returns Ok () on success
--- or Err msg on failure.
+
+-- | Writes bytes, `0` to `255` each, to a file, replacing any existing
+-- contents.
 extern writeFileBytes : String -> Array Int -> <FileWrite "_"> Result String Unit
--- Run a subprocess: prog args -> Ok (exitCode, stdout, stderr) | Err osError.
--- Return type: Result String (Int, String, String) (Result e a: e=error, a=ok).
--- stdout and stderr are captured as strings.  On spawn failure (e.g. ENOENT)
--- returns Err with the OS error message; exit-code non-zero is still Ok.
--- Used by a Medaka-hosted medaka build to invoke clang and the emitter.
+
+-- | Appends a string to a file, creating it when it does not exist.
+extern appendFile : String -> String -> <FileWrite "_"> Result String Unit
+
+-- | Whether a path exists.
+extern fileExists : String -> <FileRead "_"> Bool
+
+-- | The absolute path with `.`, `..`, and symbolic links resolved. The
+-- input, unchanged, when it cannot be resolved.
+extern canonicalizePath : String -> <FileRead "_"> String
+
+-- | The names of the entries in a directory.
+extern listDir : String -> <FileRead "_"> Result String (List String)
+
+-- | Creates a directory.
+extern makeDir : String -> <FileWrite "_"> Result String Unit
+
+-- | Deletes a file.
+extern removeFile : String -> <FileWrite "_"> Result String Unit
+
+-- | Moves or renames a path.
+extern rename : String -> String -> <FileWrite "_"> Result String Unit
+
+-- | Removes an empty directory.
+extern removeDir : String -> <FileWrite "_"> Result String Unit
+
+-- | A path's size in bytes, whether it is a directory, whether it is a
+-- regular file, and its modification time in seconds. `fs.stat` returns the
+-- same as a record.
+extern statFile : String -> <FileRead "_"> Result String (Int, Bool, Bool, Float)
+
+-- # Processes and environment
+
+-- | The command-line arguments after the program name.
+extern args : Unit -> <Env> List String
+
+-- | The value of an environment variable, or `None` when it is unset.
+extern getEnv : String -> <Env "_"> Option String
+
+-- | The absolute path of the running executable.
+extern executablePath : Unit -> <Env> String
+
+-- Compiler-source fingerprint this binary was built from, baked at C-compile
+-- time by test/build_native_medaka.sh (-DMEDAKA_SRC_FP).  "" on any build
+-- path that does not bake it (cold seed bootstrap, oracle builds, a shipped
+-- binary).  The CLI recomputes the same fingerprint over the live compiler/
+-- sources and warns when they diverge (the staleness guard).  Native-only.
+extern buildFingerprint : Unit -> <Env> String
+
+-- | Runs a program with arguments and waits for it. `Ok` carries the exit
+-- code, the captured standard output, and the captured standard error; a
+-- non-zero exit code is still `Ok`. `Err` carries the host's message when
+-- the program could not be started.
 extern runCommand : String -> List String -> <Exec "_"> Result String (Int, String, String)
+
+-- | Ends the program with an exit code.
 extern exit : Int -> Unit
+
+-- | Aborts the program with a message. Panics cannot be caught.
 extern panic : String -> a
+
 -- Coded-OOB abort, for a container's own `Index`/`IndexMut` impl to raise on
--- out-of-bounds access.  Reuses the existing E-INDEX-OOB abort machinery every
--- backend already has for the built-in index paths (native @mdk_oob, wasm's
--- E-INDEX-OOB trap) -- unlike `panic`, which is always coded E-PANIC.
+-- out-of-bounds access.  Reuses the existing E-INDEX-OOB abort machinery
+-- every backend already has for the built-in index paths (native @mdk_oob,
+-- wasm's E-INDEX-OOB trap), unlike `panic`, which is always coded E-PANIC.
+
+-- | Aborts the program with an index error. For a container's own `Index`
+-- instance.
 extern indexError : String -> a
 
--- Coded-OOB abort carrying the offending index, for a container's own
--- `Index`/`IndexMut` impl (#1787).  Prefer this over `indexError` with an
--- interpolated message: `indexError`'s message is DROPPED by the native and wasm
--- backends (they raise a fixed-text E-INDEX-OOB abort), so interpolating one made
--- `run` and a built binary disagree, and the dead string-building cost enough LLVM
--- inline budget to stop `index`/`setIndex` inlining into hot loops.  Here the index
--- is formatted by the abort itself (native @mdk_oob_at), so every engine that can
--- report it does.
+-- Prefer this over `indexError` with an interpolated message: `indexError`'s
+-- message is dropped by the native and wasm backends (they raise a
+-- fixed-text E-INDEX-OOB abort), so interpolating one made `run` and a built
+-- binary disagree, and the dead string-building cost enough LLVM inline
+-- budget to stop `index`/`setIndex` inlining into hot loops.  Here the index
+-- is formatted by the abort itself (native @mdk_oob_at).
+
+-- | Aborts the program with an index error naming the offending index. For
+-- a container's own `Index` instance.
 extern indexErrorAt : Int -> a
 
--- Coded-OOB abort for a container's own `Slice` impl to raise on an
--- out-of-bounds slice range (#670).  Args are `(lo, hiIncl)` -- the original low
--- bound and the INCLUSIVE upper bound (adjusted end - 1) -- so the message reads
--- `slice [lo..hiIncl] out of bounds`, byte-identical to the interpreter's
--- `sliceArray` abort.  Reuses the existing E-SLICE-OOB abort machinery every
--- backend already has for the built-in slice path (native @mdk_slice_oob, wasm's
--- E-SLICE-OOB trap) -- unlike `panic`, which is always coded E-PANIC.
+-- Args are `(lo, hiIncl)`, the original low bound and the INCLUSIVE upper
+-- bound (adjusted end - 1), so the message reads `slice [lo..hiIncl] out of
+-- bounds`, byte-identical to the interpreter's `sliceArray` abort.  Reuses
+-- the E-SLICE-OOB abort machinery every backend already has.
+
+-- | Aborts the program with a slice error for the range `lo` to `hi`
+-- inclusive. For a container's own `Slice` instance.
 extern sliceError : Int -> Int -> a
 
 -- Internal `medaka run` plumbing ("run drops stdout on panic" fix). `run`'s
 -- tree-walking interpreter buffers a program's stdout in an in-language
 -- Ref<String> (eval.mdk's outputRef) and writes it out only after `main`
--- returns NORMALLY -- so a panicking program's buffered stdout used to be
--- silently discarded (Medaka panics are NOT catchable; there is no unwind
+-- returns normally, so a panicking program's buffered stdout used to be
+-- silently discarded (Medaka panics are not catchable; there is no unwind
 -- path back to that final write). These two internal-only externs let
 -- eval.mdk register the buffer with the native runtime so every abort path
 -- (panic / index-OOB / non-exhaustive-match / stack-overflow / a fatal
--- signal) can flush it before dying -- see runtime/medaka_rt.c's
+-- signal) can flush it before dying; see runtime/medaka_rt.c's
 -- mdk_flush_run_stdout_on_abort. Not for general use: `stashRunStdout` takes
 -- an O(1) pointer+length snapshot (no allocation, no observable effect by
 -- itself) and `enableRunStdoutFlush` is called exactly once, only by the
--- real `medaka run` CLI driver -- never by the pure differential-oracle eval
+-- real `medaka run` CLI driver, never by the pure differential-oracle eval
 -- probes, which share this same source but never call it, so their captured
 -- output is unaffected.
 extern stashRunStdout : String -> Unit
 extern enableRunStdoutFlush : Unit -> Unit
 
--- io Module 7.  Higher-level ergonomics (eprint/eprintln/readLines) live in
--- stdlib/io.mdk; these are the irreducible host primitives.
-extern args : Unit -> <Env> List String  -- program args after the script name
-extern getEnv : String -> <Env "_"> Option String  -- environment variable, or None
--- Absolute path of the running executable (realpath-resolved).  Lets a
--- relocated `medaka` binary derive an exe-relative default MEDAKA_ROOT instead
--- of assuming it runs inside the repo (DISTRIBUTION-DESIGN.md D1).
-extern executablePath : Unit -> <Env> String
--- Compiler-source fingerprint this binary was BUILT from, baked at C-compile
--- time by test/build_native_medaka.sh (-DMEDAKA_SRC_FP).  "" on any build path
--- that does not bake it (cold seed bootstrap, oracle builds, a shipped binary).
--- The CLI recomputes the same fingerprint over the LIVE compiler/ sources and
--- warns when they diverge (issue #89 staleness guard).  Native-only.
-extern buildFingerprint : Unit -> <Env> String
-extern fileExists : String -> <FileRead "_"> Bool
-extern canonicalizePath : String -> <FileRead "_"> String  -- realpath(3): resolve ./../symlinks to an absolute path; input unchanged on failure
-extern appendFile : String -> String -> <FileWrite "_"> Result String Unit
-extern listDir : String -> <FileRead "_"> Result String (List String)  -- directory entries (names)
-extern makeDir : String -> <FileWrite "_"> Result String Unit  -- create directory (mkdir 0o755)
-extern removeFile : String -> <FileWrite "_"> Result String Unit  -- unlink(2): delete a file.  Err (strerror) on failure
-extern rename : String -> String -> <FileWrite "_"> Result String Unit  -- rename(2) old new: move/rename a path.  Err (strerror) on failure
-extern removeDir : String -> <FileWrite "_"> Result String Unit  -- rmdir(2): remove an EMPTY directory only.  Err (strerror) on failure
--- stat(2): (sizeBytes, isDir, isFile, mtimeSeconds).  Err (strerror) if the path
--- does not exist / cannot be stat'd.  Mirrors runCommand's tuple-return shape.
-extern statFile : String -> <FileRead "_"> Result String (Int, Bool, Bool, Float)
--- Networking (native-only; unbound under `medaka run`, rejected by --target wasm).
--- Raw tagged-Int fds at the extern boundary; abstract Socket/Listener/Connection
--- newtypes are a stdlib concern (stdlib/net.mdk).  See NET-DESIGN.md.
-extern netResolve : String -> <Net "_"> Result String (List String)  -- getaddrinfo: hostname -> numeric IP strings
-extern netTcpConnect : String -> Int -> <Net "_"> Result String Int  -- host, port -> connected fd (does DNS internally)
-extern netTcpListen : String -> Int -> <Net "_"> Result String Int  -- bind addr, port (0=ephemeral) -> listening fd
-extern netListenPort : Int -> <Net "_"> Result String Int  -- listening fd -> actual bound port (for port 0)
-extern netTcpAccept : Int -> <Net "_"> Result String Int  -- listening fd -> accepted connection fd (blocks)
-extern netSend : Int -> Array Int -> <Net "_"> Result String Int  -- fd, bytes -> count actually written (may be < len)
-extern netRecv : Int -> Int -> <Net "_"> Result String (Array Int)  -- fd, maxBytes -> bytes read (empty Array = EOF)
-extern netShutdown : Int -> Int -> <Net "_"> Result String Unit  -- fd, how (0=read,1=write,2=both) -> shutdown(2)
-extern netClose : Int -> <Net "_"> Result String Unit  -- fd -> close(2); idempotent-safe in the C shim
-extern netSetTimeout : Int -> Int -> <Net "_"> Result String Unit  -- fd, milliseconds (0=blocking) -> SO_RCVTIMEO+SO_SNDTIMEO
-extern ePutStr : String -> <Stderr> Unit  -- raw stderr output
-extern ePutStrLn : String -> <Stderr> Unit
-extern readLineOpt : Unit -> <Stdin> Option String  -- one stdin line, None at EOF
-extern readAll : Unit -> <Stdin> String  -- all of stdin
-extern readExactly : Int -> <Stdin> Option String  -- read exactly N bytes; None at EOF or short read
-extern flushStdout : Unit -> <Stdout> Unit  -- flush buffered stdout (LSP stdio framing)
-extern wallTimeSec : Unit -> <Clock> Float  -- wall-clock time in seconds (gettimeofday)
-extern monotonicSec : Unit -> <Clock> Float  -- monotonic clock in seconds (clock_gettime CLOCK_MONOTONIC); for measuring intervals
-extern sleepMs : Int -> <Clock> Unit  -- sleep for N milliseconds (nanosleep)
-extern allocBytes : Unit -> <IO> Float  -- total GC-allocated bytes since process start (Gc.allocated_bytes proxy)
--- Internal: the terminator of a desugared guard chain (Phase 91).  Raises the
--- same "no clause matched" signal as a failed pattern, so when a function
--- clause's guards all fail, dispatch falls through to the next pattern clause
+-- Internal: the terminator of a desugared guard chain.  Raises the same "no
+-- clause matched" signal as a failed pattern, so when a function clause's
+-- guards all fail, dispatch falls through to the next pattern clause
 -- (Haskell semantics) instead of aborting.  Not meant for direct use.
 extern __fallthrough__ : Unit -> a
+
+extern assertSnapshot : String -> String -> <IO> Unit
+
+-- # Networking
+
+-- Native-only; unbound under `medaka run`, rejected by --target wasm.  Raw
+-- tagged-Int fds at the extern boundary; abstract Socket/Listener/Connection
+-- newtypes are a stdlib concern (stdlib/net.mdk).  See NET-DESIGN.md.
+
+-- | The numeric addresses a host name resolves to.
+extern netResolve : String -> <Net "_"> Result String (List String)
+
+-- | Opens a TCP connection to a host and port. The result is the
+-- connection's descriptor.
+extern netTcpConnect : String -> Int -> <Net "_"> Result String Int
+
+-- | Starts listening for TCP connections on an address and port. Port `0`
+-- picks a free port. The result is the listener's descriptor.
+extern netTcpListen : String -> Int -> <Net "_"> Result String Int
+
+-- | The port a listener is bound to. Use it after listening on port `0`.
+extern netListenPort : Int -> <Net "_"> Result String Int
+
+-- | Waits for the next connection on a listener. The result is the
+-- connection's descriptor.
+extern netTcpAccept : Int -> <Net "_"> Result String Int
+
+-- | Sends bytes on a connection. The result is the number of bytes
+-- written, which may be fewer than given.
+extern netSend : Int -> Array Int -> <Net "_"> Result String Int
+
+-- | Receives up to `n` bytes from a connection. An empty array means the
+-- other side has closed.
+extern netRecv : Int -> Int -> <Net "_"> Result String (Array Int)
+
+-- | Shuts down one or both directions of a connection: `0` for reading,
+-- `1` for writing, `2` for both.
+extern netShutdown : Int -> Int -> <Net "_"> Result String Unit
+
+-- | Closes a descriptor.
+extern netClose : Int -> <Net "_"> Result String Unit
+
+-- | Sets a connection's send and receive timeout in milliseconds. `0`
+-- means no timeout.
+extern netSetTimeout : Int -> Int -> <Net "_"> Result String Unit
+
+-- # Time
+
+-- | The wall-clock time in seconds since the epoch.
+extern wallTimeSec : Unit -> <Clock> Float
+
+-- | A monotonic clock reading in seconds, for measuring intervals.
+extern monotonicSec : Unit -> <Clock> Float
+
+-- | Pauses the program for a number of milliseconds.
+extern sleepMs : Int -> <Clock> Unit
+
+-- | The total number of bytes the program has allocated.
+extern allocBytes : Unit -> <IO> Float
+
+-- # Random numbers
+
+-- | A random integer between `lo` and `hi`, inclusive.
 extern randomInt : Int -> Int -> <Rand> Int
+
+-- | A random boolean.
 extern randomBool : Unit -> <Rand> Bool
+
+-- | A random float.
 extern randomFloat : Unit -> <Rand> Float
+
+-- | A random character.
 extern randomChar : Unit -> <Rand> Char
+
+-- | Seeds the random number generator, making the following draws
+-- repeatable.
 extern setSeed : Int -> <Rand> Unit
--- | Return exactly `n` bytes from the operating system entropy
--- source. Panics for a negative length or if the host source fails. This is
--- intentionally separate from the deterministic, seedable `random*` family.
+
+-- | Exactly `n` bytes from the operating system's entropy source.
+-- Independent of `setSeed`. Panics for a negative length or when the source
+-- fails.
 extern osEntropyBytes : Int -> <Rand> Array Int
-extern charToStr : Char -> String
+
+-- # Hashing
+
+-- Specified deterministic algorithms, implemented in runtime/medaka_rt.c:
+-- hashInt/hashChar/hashFloat = SplitMix64-finalizer mix, hashString =
+-- FNV-1a, hashBool = 0/1; all masked to [0, 2^30) (non-negative).  Called by
+-- the primitive `Hashable` impls in core.mdk; derived/compound impls compose
+-- them via `hash`.
+
+-- | The hash of an integer.
+extern hashInt : Int -> Int
+
+-- | The hash of a float.
+extern hashFloat : Float -> Int
+
+-- | The hash of a string.
+extern hashString : String -> Int
+
+-- | The hash of a character.
+extern hashChar : Char -> Int
+
+-- | The hash of a boolean.
+extern hashBool : Bool -> Int
+
+-- # Numbers
+
+-- | The constant π.
+extern pi : Float
+
+-- | The constant e, the base of natural logarithms.
+extern e : Float
+
+-- | The smallest `Int`.
+extern intMinBound : Int
+
+-- | The largest `Int`.
+extern intMaxBound : Int
+
+-- | The smallest `Char`, U+0000.
+extern charMinBound : Char
+
+-- | The largest `Char`, U+10FFFF.
+extern charMaxBound : Char
+
+-- | An integer as a float.
 extern intToFloat : Int -> Float
+
+-- | A float truncated towards zero as an integer.
 extern floatToInt : Float -> Int
--- floatRem a b = a - b * trunc(a/b)  (C fmod == LLVM frem).
--- Backs the `Float % Float` operator in the interpreter so `run` matches `build`
--- (which emits `frem` inline) EXACTLY.  Pure.
+
+-- | The remainder of `a / b` with the sign of `a`, as the `%` operator
+-- computes it for floats.
 extern floatRem : Float -> Float -> Float
--- ── libm math externs (native/LLVM only) ────────────────────────────────
+
+-- Bitwise / shift primitives (pure).  Defined on the 63-bit Int rep.
+-- shiftRight is logical (unsigned): C `>>` on the untagged value.
+
+-- | Bitwise and.
+extern bitAnd : Int -> Int -> Int
+
+-- | Bitwise or.
+extern bitOr : Int -> Int -> Int
+
+-- | Bitwise exclusive or.
+extern bitXor : Int -> Int -> Int
+
+-- | `a` shifted left by `n` bits.
+extern shiftLeft : Int -> Int -> Int
+
+-- | `a` shifted right by `n` bits, filling with zeros.
+extern shiftRight : Int -> Int -> Int
+
+-- | Bitwise complement.
+extern bitNot : Int -> Int
+
+-- # Math
+
 -- One-arg and two-arg transcendental / root / rounding functions, each a
--- direct call into the C runtime's math.h shim (mirrors floatRem/fmod).
--- All pure.  NOTE: wasm does NOT port these (they trap on wasm, like every
--- non-ported float extern); native/LLVM is the only backend.
+-- direct call into the C runtime's math.h shim (mirrors floatRem/fmod).  All
+-- pure.  wasm does not port these (they trap on wasm, like every non-ported
+-- float extern); native/LLVM is the only backend.
+
+-- | The square root.
 extern sqrt : Float -> Float
+
+-- | The cube root.
 extern cbrt : Float -> Float
+
+-- | e raised to the power `x`.
 extern exp : Float -> Float
+
+-- | The natural logarithm.
 extern log : Float -> Float
+
+-- | The base-2 logarithm.
 extern log2 : Float -> Float
+
+-- | The base-10 logarithm.
 extern log10 : Float -> Float
+
+-- | The sine of an angle in radians.
 extern sin : Float -> Float
+
+-- | The cosine of an angle in radians.
 extern cos : Float -> Float
+
+-- | The tangent of an angle in radians.
 extern tan : Float -> Float
+
+-- | The arc sine, in radians.
 extern asin : Float -> Float
+
+-- | The arc cosine, in radians.
 extern acos : Float -> Float
+
+-- | The arc tangent, in radians.
 extern atan : Float -> Float
+
+-- | The hyperbolic sine.
 extern sinh : Float -> Float
+
+-- | The hyperbolic cosine.
 extern cosh : Float -> Float
+
+-- | The hyperbolic tangent.
 extern tanh : Float -> Float
+
+-- | The largest integral value not greater than `x`.
 extern floor : Float -> Float
+
+-- | The smallest integral value not less than `x`.
 extern ceil : Float -> Float
+
+-- | The nearest integral value, with halves rounded away from zero.
 extern round : Float -> Float
+
+-- | The integral part of `x`, rounding towards zero.
 extern trunc : Float -> Float
+
+-- | `x` raised to the power `y`.
 extern pow : Float -> Float -> Float
+
+-- | The angle in radians of the point `(x, y)`, given as `atan2 y x`.
 extern atan2 : Float -> Float -> Float
+
+-- | The length of the hypotenuse, `sqrt (x * x + y * y)`, without
+-- intermediate overflow.
 extern hypot : Float -> Float -> Float
--- Bit-level reinterpretation of a 63-bit Int as an IEEE 754 double.
+
 -- Medaka Int is 63-bit (see intMaxBound), so this can only construct floats
 -- whose bit pattern fits in 63 bits; arbitrary 64-bit patterns (bit 62/63
 -- set: negative floats, large exponents, top-bit NaN/inf) must go through
--- `bytesToFloat64` instead.  Inverse of Int64.bits_of_float / C
--- memcpy(&bits,&d,8) for the patterns it can represent.  Pure.
-extern intBitsToFloat : Int -> Float
--- Read 8 bytes big-endian from `arr` starting at byte index `off` and
--- reinterpret as an IEEE 754 double.  Bytes in `arr` are Int values 0..255.
--- Pure (no IO; the array is read-only).
-extern bytesToFloat64 : Array Int -> Int -> Float
--- Inverse of `bytesToFloat64`: encode a Float as 8 big-endian IEEE 754 bytes
--- and return them as an Array of 8 Ints (each 0..255).  Pure.
-extern floatToBytes64 : Float -> Array Int
--- Platform bounds backing `impl Bounded Int`/`Bounded Char` in core.mdk.
--- Int bounds are the 63-bit tagged Int representation's limits; Char bounds are U+0000 / U+10FFFF.
-extern intMinBound : Int
-extern intMaxBound : Int
-extern charMinBound : Char
-extern charMaxBound : Char
--- Leaf renderers backing the `Debug` impls in core.mdk / string.mdk.  These
--- expose the same number formatting the native runtime's `println`/`Display`
--- path uses, so `debug` agrees with `println` on numbers.  Sibling internal
--- renderers produce the *quoted,
--- escaped* literal form (round-trippable into source) for other kinds, so
--- `debug` on a String intentionally differs from `println` (cf. Haskell
--- `show` vs `putStr`).
-extern intToString : Int -> String
-extern floatToString : Float -> String
-extern debugStringLit : String -> String
-extern debugCharLit : Char -> String
-extern assertSnapshot : String -> String -> <IO> Unit
+-- `bytesToFloat64` instead.
 
--- Array primitives.  These are the minimal kernel; stdlib/array.mdk is
--- built on top.  *Unsafe variants skip the bounds check — they're used by
--- stdlib internals where the surrounding loop already enforces validity.
--- Public, bounds-checked indexing goes through `arr[i]` (panics on OOB).
+-- | The float whose IEEE 754 bit pattern is the given integer.
+extern intBitsToFloat : Int -> Float
+
+-- | The float encoded by the eight big-endian bytes of an array starting at
+-- an offset. Bytes are `0` to `255`.
+extern bytesToFloat64 : Array Int -> Int -> Float
+
+-- | A float as its eight big-endian IEEE 754 bytes, `0` to `255` each. The
+-- inverse of `bytesToFloat64`.
+extern floatToBytes64 : Float -> Array Int
+
+-- # Rendering
+
+-- These expose the same number formatting the native runtime's `println`/
+-- `Display` path uses, so `debug` agrees with `println` on numbers.
+
+-- | An integer in decimal.
+extern intToString : Int -> String
+
+-- | A float in decimal.
+extern floatToString : Float -> String
+
+-- | A string as a quoted, escaped Medaka literal.
+extern debugStringLit : String -> String
+
+-- | A character as a quoted, escaped Medaka literal.
+extern debugCharLit : Char -> String
+
+-- # Arrays
+
+-- These are the minimal kernel; stdlib/array.mdk is built on top.  The
+-- unsafe variants skip the bounds check; they're used by stdlib internals
+-- where the surrounding loop already enforces validity.  Public,
+-- bounds-checked indexing goes through `arr[i]` (panics on OOB).
+
+-- | The number of elements.
 extern arrayLength : Array a -> Int
+
+-- | A new array of `n` copies of a value.
 extern arrayMake : Int -> a -> Array a
+
+-- | A new array of length `n` whose element at each index `i` is `f i`.
 extern arrayMakeWith : Int -> (Int -> a) -> Array a
+
+-- | The element at an index, with no bounds check. For library internals
+-- that have already checked the index.
 extern arrayGetUnsafe : Int -> Array a -> a
+
+-- | Replaces the element at an index, with no bounds check. For library
+-- internals that have already checked the index.
 extern arraySetUnsafe : Int -> a -> Array a -> Unit
+
+-- | A new array with the same elements.
 extern arrayCopy : Array a -> Array a
+
+-- | Copies `len` elements from a source array at an offset into a
+-- destination array at an offset, with no bounds check.
 extern arrayBlit : Array a -> Int -> Array a -> Int -> Int -> Unit
+
+-- | Replaces every element with a value.
 extern arrayFill : a -> Array a -> Unit
--- Pure wrapper.  Encapsulates "alloc + locally mutate + return fresh" as a
--- plain pure function (historical note: this used to matter because mutation
--- carried a `<Mut>` effect and Medaka has no effect masking; since mutation is
--- untracked, that concession is now moot — the function is just pure).
+
+-- | A new array holding the elements of a list.
 extern arrayFromList : List a -> Array a
 
--- String/Char kernel (Phase 75).  String is a sequence of Unicode codepoints,
--- UTF-8 backed; Char is one codepoint.  The bridge to Array Char + the few
--- codepoint-aware perf externs below are the minimal host surface; the bulk of
--- stdlib/string.mdk is written in Medaka on top.  Char classification/case
--- folding (charIs*/charTo*, below) is ASCII-only, not Unicode (issue #417).
+-- # Strings
+
+-- String is a sequence of Unicode codepoints, UTF-8 backed; Char is one
+-- codepoint.  The bridge to Array Char + the few codepoint-aware perf
+-- externs below are the minimal host surface; the bulk of stdlib/string.mdk
+-- is written in Medaka on top.
+
+-- | The codepoints of a string.
 extern stringToChars : String -> Array Char
+
+-- | A string built from an array of characters.
 extern stringFromChars : Array Char -> String
--- UTF-8 codec (BOTH directions).  stringToUtf8Bytes exposes the String's raw
--- UTF-8 backing as Int bytes 0..255 (O(n) copy, NO codepoint re-encode);
--- stringFromUtf8Bytes blits Int bytes (low 8 bits each) back into a String.
--- Decode is PERMISSIVE (bytes are blitted verbatim; the cached codepoint count
--- is recomputed by the standard non-continuation-byte rule).  For valid UTF-8
--- (e.g. SQLite text) `fromUtf8 (toUtf8 s) == s` byte-for-byte.
+
+-- Decode is permissive (bytes are blitted verbatim; the cached codepoint
+-- count is recomputed by the standard non-continuation-byte rule).  For
+-- valid UTF-8 (e.g. SQLite text) `fromUtf8 (toUtf8 s) == s` byte-for-byte.
+
+-- | The UTF-8 encoding of a string, one byte (`0` to `255`) per element.
 extern stringToUtf8Bytes : String -> Array Int
+
+-- | The string encoded by an array of UTF-8 bytes. Only the low eight bits
+-- of each element are used.
 extern stringFromUtf8Bytes : Array Int -> String
+
+-- | A one-character string.
+extern charToStr : Char -> String
+
+-- | A character's codepoint.
 extern charCode : Char -> Int
+
+-- | The character with a codepoint, or `None` when the codepoint is not a
+-- Unicode scalar value.
 extern charFromCode : Int -> Option Char
+
+-- | The number of codepoints in a string.
 extern stringLength : String -> Int
+
+-- | The characters at positions `[lo, hi)`, clamped to the string.
 extern stringSlice : Int -> Int -> String -> String
+
+-- | The strings joined end to end.
 extern stringConcat : List String -> String
+
+-- | The position of the first occurrence of `needle` in `haystack`, or
+-- `None`.
 extern stringIndexOf : String -> String -> Option Int
+
+-- | The ordering of two strings, by codepoint.
 extern stringCompare : String -> String -> Ordering
+
+-- | The float written in a string, or `None`.
 extern stringToFloat : String -> Option Float
 
--- Char classification & case folding (Phase 75).  **ASCII-only** (issue
--- #417) — plain 'a'..'z'/'A'..'Z' byte tests in runtime/medaka_rt.c, no
+-- # Characters
+
+-- ASCII-only: plain 'a'..'z'/'A'..'Z' byte tests in runtime/medaka_rt.c, no
 -- Unicode character database.  A non-ASCII byte (UTF-8 lead/continuation,
 -- >= 0x80) passes through every one of these unchanged: charToUpper/
 -- charToLower are Char -> Char and are the identity outside 'a'..'z'/
 -- 'A'..'Z'; stringToUpper/stringToLower are the same byte-wise ASCII map
--- over a String (NOT full Unicode case folding, and no 1 -> N expansion).
+-- over a String (not full Unicode case folding, and no 1 -> N expansion).
+
+-- | Whether a character is an ASCII letter.
 extern charIsAlpha : Char -> Bool
+
+-- | Whether a character is ASCII whitespace.
 extern charIsSpace : Char -> Bool
+
+-- | Whether a character is an ASCII uppercase letter.
 extern charIsUpper : Char -> Bool
+
+-- | Whether a character is an ASCII lowercase letter.
 extern charIsLower : Char -> Bool
+
+-- | Whether a character is ASCII punctuation.
 extern charIsPunct : Char -> Bool
+
+-- | An ASCII letter in uppercase. Any other character is unchanged.
 extern charToUpper : Char -> Char
+
+-- | An ASCII letter in lowercase. Any other character is unchanged.
 extern charToLower : Char -> Char
+
+-- | A string with every ASCII letter in uppercase.
 extern stringToUpper : String -> String
+
+-- | A string with every ASCII letter in lowercase.
 extern stringToLower : String -> String

@@ -6,18 +6,18 @@
 # import — or a brand-new caller file appearing — must update this ledger in the
 # SAME commit, or the gate reds. See the gate's own header for why this exists
 # (E-1 #1115, S-migrate-tool-consumers-remainder).
-compiler/driver/diagnostics.mdk : checkOneDiags
+compiler/driver/diagnostics.mdk : checkOneDiagsK
 compiler/entries/check_batch.mdk : checkOneToLinesWithRuntime
 compiler/entries/check_flat_diags_main.mdk : checkProgramDiags
 compiler/entries/check_match_main.mdk : checkMatchToLines
 compiler/entries/check_one_diags_main.mdk : checkOneDiags
 compiler/entries/origin_agreement_main.mdk : checkProgramSchemesWithRuntime
-compiler/entries/playground_main.mdk : checkOneSchemeFull
+compiler/entries/playground_main.mdk : checkOneSchemeFullK
 compiler/entries/profile_main.mdk : checkOneToLinesWithRuntime
 compiler/entries/selfproc_tc_probe.mdk : checkToLines
 compiler/entries/typecheck_main.mdk : checkOneToLinesWithRuntime,checkToLines
 compiler/tools/check.mdk : checkOneErrorsWithRuntime,checkOneToLinesWithRuntime
 compiler/tools/check_policy.mdk : checkOneSchemeFull
-compiler/tools/lsp.mdk : checkOneSchemeFull
+compiler/tools/lsp.mdk : checkOneSchemeFullK
 compiler/tools/repl.mdk : checkOneDiags,checkOneScheme
 compiler/tools/snapshot.mdk : checkOneToLinesWithRuntime

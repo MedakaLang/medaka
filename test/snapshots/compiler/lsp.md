@@ -1,5 +1,5 @@
 # META
-source_lines=2082
+source_lines=2083
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-duplicate-body
@@ -41,7 +41,7 @@ import json.{
   jArray,
   stringify,
   parse,
-  lookup,
+  get,
   asString,
   asInt,
 }
@@ -72,13 +72,13 @@ import frontend.parser.{
   declPosChildLocs,
 }
 import frontend.lexer.{Token(..), tokenizeWithOffsetPairs}
-import frontend.desugar_cache.{desugaredPrelude}
+import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
 import support.char.{isIdentChar, isDigit}
 import support.util.{maxI, utf8Len, joinWith, startsWith}
 import string.{stripCR}
 import frontend.desugar.{desugar}
 import types.typecheck.{
-  checkOneSchemeFull,
+  checkOneSchemeFullK,
   ppSchemeNamed,
   ppSchemeNamedFull,
   Scheme(..),
@@ -718,7 +718,8 @@ docSchemes runtimeSrc coreSrc src =
     Err _ => None
     Ok userRaw =>
       let userDecls = desugar userRaw
-      let (preludeSchemes, ownSchemes) = checkOneSchemeFull runtimeDecls coreDecls ("__user__", userDecls)
+      let preludeKey = Some (desugaredPreludeKey runtimeSrc, desugaredPreludeKey coreSrc)
+      let (preludeSchemes, ownSchemes) = checkOneSchemeFullK preludeKey runtimeDecls coreDecls ("__user__", userDecls)
       Some (ownSchemes ++ preludeSchemes)
 
 -- core.mdk always parses; unwrap its parseResult (defensive None → []).
@@ -1212,15 +1213,15 @@ handleInlayHint runtimeSrc coreSrc idJson params docs =
 -- ── request-position helpers ────────────────────────────────────────────────
 -- Pull params.position.{line,character} (0-based) from a request message.
 positionLine : Json -> Option Int
-positionLine params = match lookup "position" params
-  Some pos => match lookup "line" pos
+positionLine params = match get "position" params
+  Some pos => match get "line" pos
     Some v => asInt v
     None => None
   None => None
 
 positionChar : Json -> Option Int
-positionChar params = match lookup "position" params
-  Some pos => match lookup "character" pos
+positionChar params = match get "position" params
+  Some pos => match get "character" pos
     Some v => asInt v
     None => None
   None => None
@@ -1916,9 +1917,9 @@ locationJson (path, loc) =
 -- `params.context.includeDeclaration` (LSP `ReferenceContext`). Missing
 -- `context`/field, or a non-bool value, defaults to `True` (F6, locked).
 includeDeclarationOf : Json -> Bool
-includeDeclarationOf params = match lookup "context" params
+includeDeclarationOf params = match get "context" params
   None => True
-  Some ctx => match lookup "includeDeclaration" ctx
+  Some ctx => match get "includeDeclaration" ctx
     Some (JBool b) => b
     _ => True
 
@@ -1958,12 +1959,12 @@ lastChangeText _ = None
 
 -- json field accessors specialized to the shapes we read.
 fieldOr : String -> Json -> Json
-fieldOr key j = match lookup key j
+fieldOr key j = match get key j
   Some v => v
   None => JNull
 
 fieldStr : String -> Json -> Option String
-fieldStr key j = match lookup key j
+fieldStr key j = match get key j
   Some v => asString v
   None => None
 
@@ -2085,17 +2086,17 @@ runServer runtimeSrc coreSrc =
 unit : Unit
 unit = ()
 # DESUGAR
-(DUse false (UseGroup ("json") ((mem "Json" false) (mem "JNull" false) (mem "JBool" false) (mem "JInt" false) (mem "JString" false) (mem "JArray" false) (mem "JObject" false) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "lookup" false) (mem "asString" false) (mem "asInt" false))))
+(DUse false (UseGroup ("json") ((mem "Json" false) (mem "JNull" false) (mem "JBool" false) (mem "JInt" false) (mem "JString" false) (mem "JArray" false) (mem "JObject" false) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" false) (mem "Severity" false) (mem "SevError" false) (mem "SevWarning" false) (mem "analyzeLocated" false) (mem "analyzeProject" false) (mem "projectEntrySchemes" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "findProjectRootOrSelf" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseLocatedResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "parseWithPositions" false) (mem "parseWithPositionsOpt" false) (mem "positionsDecls" false) (mem "DeclPos" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenizeWithOffsetPairs" false))))
-(DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false))))
+(DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "desugaredPreludeKey" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isIdentChar" false) (mem "isDigit" false))))
 (DUse false (UseGroup ("support" "util") ((mem "maxI" false) (mem "utf8Len" false) (mem "joinWith" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("string") ((mem "stripCR" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneSchemeFull" false) (mem "ppSchemeNamed" false) (mem "ppSchemeNamedFull" false) (mem "Scheme" true) (mem "currentLocalSchemes" false) (mem "currentLocalSchemesLoc" false) (mem "currentSeedSchemes" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneSchemeFullK" false) (mem "ppSchemeNamed" false) (mem "ppSchemeNamedFull" false) (mem "Scheme" true) (mem "currentLocalSchemes" false) (mem "currentLocalSchemesLoc" false) (mem "currentSeedSchemes" false))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatSource" false))))
 (DUse false (UseGroup ("tools" "refindex") ((mem "RefIndex" false) (mem "buildRefIndexProject" false) (mem "binderAt" false) (mem "usesOf" false) (mem "defsOf" false))))
 (DUse false (UseGroup ("list") ((mem "sortBy" false))))
@@ -2244,7 +2245,7 @@ unit = ()
 (DFunDef false "defZipLocOr" ((PCon "Some" (PVar "l")) PWild) (EApp (EVar "jRangeOfLoc") (EVar "l")))
 (DFunDef false "defZipLocOr" ((PCon "None") (PVar "p")) (EApp (EApp (EApp (EApp (EVar "jRange") (EBinOp "-" (EApp (EVar "declPosLine") (EVar "p")) (ELit (LInt 1)))) (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "declPosEndLine") (EVar "p")) (ELit (LInt 1)))) (ELit (LInt 0))))
 (DTypeSig false "docSchemes" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))
-(DFunDef false "docSchemes" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src")) (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugaredPrelude") (EVar "runtimeSrc"))) (DoLet false false (PVar "coreDecls") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoExpr (EMatch (EApp (EVar "parseLocatedResult") (EVar "src")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "userRaw")) () (EBlock (DoLet false false (PVar "userDecls") (EApp (EVar "desugar") (EVar "userRaw"))) (DoLet false false (PTuple (PVar "preludeSchemes") (PVar "ownSchemes")) (EApp (EApp (EApp (EVar "checkOneSchemeFull") (EVar "runtimeDecls")) (EVar "coreDecls")) (ETuple (ELit (LString "__user__")) (EVar "userDecls")))) (DoExpr (EApp (EVar "Some") (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))))))))))
+(DFunDef false "docSchemes" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src")) (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugaredPrelude") (EVar "runtimeSrc"))) (DoLet false false (PVar "coreDecls") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoExpr (EMatch (EApp (EVar "parseLocatedResult") (EVar "src")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "userRaw")) () (EBlock (DoLet false false (PVar "userDecls") (EApp (EVar "desugar") (EVar "userRaw"))) (DoLet false false (PVar "preludeKey") (EApp (EVar "Some") (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "runtimeSrc")) (EApp (EVar "desugaredPreludeKey") (EVar "coreSrc"))))) (DoLet false false (PTuple (PVar "preludeSchemes") (PVar "ownSchemes")) (EApp (EApp (EApp (EApp (EVar "checkOneSchemeFullK") (EVar "preludeKey")) (EVar "runtimeDecls")) (EVar "coreDecls")) (ETuple (ELit (LString "__user__")) (EVar "userDecls")))) (DoExpr (EApp (EVar "Some") (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))))))))))
 (DTypeSig false "unwrapDecls" (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "unwrapDecls" ((PCon "Ok" (PVar "ds"))) (EVar "ds"))
 (DFunDef false "unwrapDecls" ((PCon "Err" PWild)) (EListLit))
@@ -2346,9 +2347,9 @@ unit = ()
 (DTypeSig false "handleInlayHint" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Unit"))))))))
 (DFunDef false "handleInlayHint" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "idJson") (PVar "params") (PVar "docs")) (EBlock (DoLet false false (PVar "result") (EMatch (EApp (EVar "requestUri") (EVar "params")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "uri")) () (EMatch (EApp (EApp (EVar "docsGet") (EVar "uri")) (EVar "docs")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "src")) () (EApp (EVar "jArray") (EApp (EApp (EApp (EVar "inlayHints") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "src")))))))) (DoExpr (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "result"))))))
 (DTypeSig false "positionLine" (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "Int"))))
-(DFunDef false "positionLine" ((PVar "params")) (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "position"))) (EVar "params")) (arm (PCon "Some" (PVar "pos")) () (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "line"))) (EVar "pos")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "asInt") (EVar "v"))) (arm (PCon "None") () (EVar "None")))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "positionLine" ((PVar "params")) (EMatch (EApp (EApp (EVar "get") (ELit (LString "position"))) (EVar "params")) (arm (PCon "Some" (PVar "pos")) () (EMatch (EApp (EApp (EVar "get") (ELit (LString "line"))) (EVar "pos")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "asInt") (EVar "v"))) (arm (PCon "None") () (EVar "None")))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "positionChar" (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "Int"))))
-(DFunDef false "positionChar" ((PVar "params")) (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "position"))) (EVar "params")) (arm (PCon "Some" (PVar "pos")) () (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "character"))) (EVar "pos")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "asInt") (EVar "v"))) (arm (PCon "None") () (EVar "None")))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "positionChar" ((PVar "params")) (EMatch (EApp (EApp (EVar "get") (ELit (LString "position"))) (EVar "params")) (arm (PCon "Some" (PVar "pos")) () (EMatch (EApp (EApp (EVar "get") (ELit (LString "character"))) (EVar "pos")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "asInt") (EVar "v"))) (arm (PCon "None") () (EVar "None")))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "requestUri" (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "requestUri" ((PVar "params")) (EApp (EApp (EVar "fieldStr") (ELit (LString "uri"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "textDocument"))) (EVar "params"))))
 (DTypeSig false "logFilePath" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "String"))))
@@ -2524,7 +2525,7 @@ unit = ()
 (DTypeSig false "locationJson" (TyFun (TyTuple (TyCon "String") (TyCon "Loc")) (TyCon "Json")))
 (DFunDef false "locationJson" ((PTuple (PVar "path") (PVar "loc"))) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "uri")) (EApp (EVar "JString") (EApp (EVar "uriOfPath") (EVar "path")))) (ETuple (ELit (LString "range")) (EApp (EVar "jRangeOfLoc") (EVar "loc"))))))
 (DTypeSig false "includeDeclarationOf" (TyFun (TyCon "Json") (TyCon "Bool")))
-(DFunDef false "includeDeclarationOf" ((PVar "params")) (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "context"))) (EVar "params")) (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PVar "ctx")) () (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "includeDeclaration"))) (EVar "ctx")) (arm (PCon "Some" (PCon "JBool" (PVar "b"))) () (EVar "b")) (arm PWild () (EVar "True"))))))
+(DFunDef false "includeDeclarationOf" ((PVar "params")) (EMatch (EApp (EApp (EVar "get") (ELit (LString "context"))) (EVar "params")) (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PVar "ctx")) () (EMatch (EApp (EApp (EVar "get") (ELit (LString "includeDeclaration"))) (EVar "ctx")) (arm (PCon "Some" (PCon "JBool" (PVar "b"))) () (EVar "b")) (arm PWild () (EVar "True"))))))
 (DTypeSig false "handleHighlight" (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Unit"))))))
 (DFunDef false "handleHighlight" ((PVar "idJson") (PVar "params") (PVar "docs")) (EBlock (DoLet false false (PVar "result") (EMatch (EApp (EVar "requestUri") (EVar "params")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "uri")) () (EMatch (EApp (EApp (EVar "docsGet") (EVar "uri")) (EVar "docs")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EVar "highlightResult") (EVar "src")) (EVar "params"))))))) (DoExpr (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "result"))))))
 (DTypeSig false "highlightResult" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyCon "Json"))))
@@ -2535,9 +2536,9 @@ unit = ()
 (DFunDef false "lastChangeText" ((PCon "JArray" (PVar "arr"))) (EIf (EBinOp "==" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 0))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EVar "fieldStr") (ELit (LString "text"))) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 1)))) (EVar "arr"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "lastChangeText" (PWild) (EVar "None"))
 (DTypeSig false "fieldOr" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyCon "Json"))))
-(DFunDef false "fieldOr" ((PVar "key") (PVar "j")) (EMatch (EApp (EApp (EVar "lookup") (EVar "key")) (EVar "j")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EVar "JNull"))))
+(DFunDef false "fieldOr" ((PVar "key") (PVar "j")) (EMatch (EApp (EApp (EVar "get") (EVar "key")) (EVar "j")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EVar "JNull"))))
 (DTypeSig false "fieldStr" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "fieldStr" ((PVar "key") (PVar "j")) (EMatch (EApp (EApp (EVar "lookup") (EVar "key")) (EVar "j")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "asString") (EVar "v"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "fieldStr" ((PVar "key") (PVar "j")) (EMatch (EApp (EApp (EVar "get") (EVar "key")) (EVar "j")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "asString") (EVar "v"))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "requestId" (TyFun (TyCon "Json") (TyCon "Json")))
 (DFunDef false "requestId" ((PVar "msg")) (EApp (EApp (EVar "fieldOr") (ELit (LString "id"))) (EVar "msg")))
 (DTypeSig false "methodOf" (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "String"))))
@@ -2554,17 +2555,17 @@ unit = ()
 (DTypeSig false "unit" (TyCon "Unit"))
 (DFunDef false "unit" () (ELit LUnit))
 # MARK
-(DUse false (UseGroup ("json") ((mem "Json" false) (mem "JNull" false) (mem "JBool" false) (mem "JInt" false) (mem "JString" false) (mem "JArray" false) (mem "JObject" false) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "lookup" false) (mem "asString" false) (mem "asInt" false))))
+(DUse false (UseGroup ("json") ((mem "Json" false) (mem "JNull" false) (mem "JBool" false) (mem "JInt" false) (mem "JString" false) (mem "JArray" false) (mem "JObject" false) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" false) (mem "Severity" false) (mem "SevError" false) (mem "SevWarning" false) (mem "analyzeLocated" false) (mem "analyzeProject" false) (mem "projectEntrySchemes" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "findProjectRootOrSelf" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseLocatedResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "parseWithPositions" false) (mem "parseWithPositionsOpt" false) (mem "positionsDecls" false) (mem "DeclPos" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenizeWithOffsetPairs" false))))
-(DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false))))
+(DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "desugaredPreludeKey" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isIdentChar" false) (mem "isDigit" false))))
 (DUse false (UseGroup ("support" "util") ((mem "maxI" false) (mem "utf8Len" false) (mem "joinWith" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("string") ((mem "stripCR" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneSchemeFull" false) (mem "ppSchemeNamed" false) (mem "ppSchemeNamedFull" false) (mem "Scheme" true) (mem "currentLocalSchemes" false) (mem "currentLocalSchemesLoc" false) (mem "currentSeedSchemes" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneSchemeFullK" false) (mem "ppSchemeNamed" false) (mem "ppSchemeNamedFull" false) (mem "Scheme" true) (mem "currentLocalSchemes" false) (mem "currentLocalSchemesLoc" false) (mem "currentSeedSchemes" false))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatSource" false))))
 (DUse false (UseGroup ("tools" "refindex") ((mem "RefIndex" false) (mem "buildRefIndexProject" false) (mem "binderAt" false) (mem "usesOf" false) (mem "defsOf" false))))
 (DUse false (UseGroup ("list") ((mem "sortBy" false))))
@@ -2713,7 +2714,7 @@ unit = ()
 (DFunDef false "defZipLocOr" ((PCon "Some" (PVar "l")) PWild) (EApp (EVar "jRangeOfLoc") (EVar "l")))
 (DFunDef false "defZipLocOr" ((PCon "None") (PVar "p")) (EApp (EApp (EApp (EApp (EVar "jRange") (EBinOp "-" (EApp (EVar "declPosLine") (EVar "p")) (ELit (LInt 1)))) (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "declPosEndLine") (EVar "p")) (ELit (LInt 1)))) (ELit (LInt 0))))
 (DTypeSig false "docSchemes" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))
-(DFunDef false "docSchemes" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src")) (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugaredPrelude") (EVar "runtimeSrc"))) (DoLet false false (PVar "coreDecls") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoExpr (EMatch (EApp (EVar "parseLocatedResult") (EVar "src")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "userRaw")) () (EBlock (DoLet false false (PVar "userDecls") (EApp (EVar "desugar") (EVar "userRaw"))) (DoLet false false (PTuple (PVar "preludeSchemes") (PVar "ownSchemes")) (EApp (EApp (EApp (EVar "checkOneSchemeFull") (EVar "runtimeDecls")) (EVar "coreDecls")) (ETuple (ELit (LString "__user__")) (EVar "userDecls")))) (DoExpr (EApp (EVar "Some") (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))))))))))
+(DFunDef false "docSchemes" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src")) (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugaredPrelude") (EVar "runtimeSrc"))) (DoLet false false (PVar "coreDecls") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoExpr (EMatch (EApp (EVar "parseLocatedResult") (EVar "src")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "userRaw")) () (EBlock (DoLet false false (PVar "userDecls") (EApp (EVar "desugar") (EVar "userRaw"))) (DoLet false false (PVar "preludeKey") (EApp (EVar "Some") (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "runtimeSrc")) (EApp (EVar "desugaredPreludeKey") (EVar "coreSrc"))))) (DoLet false false (PTuple (PVar "preludeSchemes") (PVar "ownSchemes")) (EApp (EApp (EApp (EApp (EVar "checkOneSchemeFullK") (EVar "preludeKey")) (EVar "runtimeDecls")) (EVar "coreDecls")) (ETuple (ELit (LString "__user__")) (EVar "userDecls")))) (DoExpr (EApp (EVar "Some") (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))))))))))
 (DTypeSig false "unwrapDecls" (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "unwrapDecls" ((PCon "Ok" (PVar "ds"))) (EVar "ds"))
 (DFunDef false "unwrapDecls" ((PCon "Err" PWild)) (EListLit))
@@ -2815,9 +2816,9 @@ unit = ()
 (DTypeSig false "handleInlayHint" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Unit"))))))))
 (DFunDef false "handleInlayHint" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "idJson") (PVar "params") (PVar "docs")) (EBlock (DoLet false false (PVar "result") (EMatch (EApp (EVar "requestUri") (EVar "params")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "uri")) () (EMatch (EApp (EApp (EVar "docsGet") (EVar "uri")) (EVar "docs")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "src")) () (EApp (EVar "jArray") (EApp (EApp (EApp (EVar "inlayHints") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "src")))))))) (DoExpr (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "result"))))))
 (DTypeSig false "positionLine" (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "Int"))))
-(DFunDef false "positionLine" ((PVar "params")) (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "position"))) (EVar "params")) (arm (PCon "Some" (PVar "pos")) () (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "line"))) (EVar "pos")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "asInt") (EVar "v"))) (arm (PCon "None") () (EVar "None")))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "positionLine" ((PVar "params")) (EMatch (EApp (EApp (EVar "get") (ELit (LString "position"))) (EVar "params")) (arm (PCon "Some" (PVar "pos")) () (EMatch (EApp (EApp (EVar "get") (ELit (LString "line"))) (EVar "pos")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "asInt") (EVar "v"))) (arm (PCon "None") () (EVar "None")))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "positionChar" (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "Int"))))
-(DFunDef false "positionChar" ((PVar "params")) (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "position"))) (EVar "params")) (arm (PCon "Some" (PVar "pos")) () (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "character"))) (EVar "pos")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "asInt") (EVar "v"))) (arm (PCon "None") () (EVar "None")))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "positionChar" ((PVar "params")) (EMatch (EApp (EApp (EVar "get") (ELit (LString "position"))) (EVar "params")) (arm (PCon "Some" (PVar "pos")) () (EMatch (EApp (EApp (EVar "get") (ELit (LString "character"))) (EVar "pos")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "asInt") (EVar "v"))) (arm (PCon "None") () (EVar "None")))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "requestUri" (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "requestUri" ((PVar "params")) (EApp (EApp (EVar "fieldStr") (ELit (LString "uri"))) (EApp (EApp (EVar "fieldOr") (ELit (LString "textDocument"))) (EVar "params"))))
 (DTypeSig false "logFilePath" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "String"))))
@@ -2993,7 +2994,7 @@ unit = ()
 (DTypeSig false "locationJson" (TyFun (TyTuple (TyCon "String") (TyCon "Loc")) (TyCon "Json")))
 (DFunDef false "locationJson" ((PTuple (PVar "path") (PVar "loc"))) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "uri")) (EApp (EVar "JString") (EApp (EVar "uriOfPath") (EVar "path")))) (ETuple (ELit (LString "range")) (EApp (EVar "jRangeOfLoc") (EVar "loc"))))))
 (DTypeSig false "includeDeclarationOf" (TyFun (TyCon "Json") (TyCon "Bool")))
-(DFunDef false "includeDeclarationOf" ((PVar "params")) (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "context"))) (EVar "params")) (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PVar "ctx")) () (EMatch (EApp (EApp (EVar "lookup") (ELit (LString "includeDeclaration"))) (EVar "ctx")) (arm (PCon "Some" (PCon "JBool" (PVar "b"))) () (EVar "b")) (arm PWild () (EVar "True"))))))
+(DFunDef false "includeDeclarationOf" ((PVar "params")) (EMatch (EApp (EApp (EVar "get") (ELit (LString "context"))) (EVar "params")) (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PVar "ctx")) () (EMatch (EApp (EApp (EVar "get") (ELit (LString "includeDeclaration"))) (EVar "ctx")) (arm (PCon "Some" (PCon "JBool" (PVar "b"))) () (EVar "b")) (arm PWild () (EVar "True"))))))
 (DTypeSig false "handleHighlight" (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyFun (TyCon "Docs") (TyEffect ("IO") None (TyCon "Unit"))))))
 (DFunDef false "handleHighlight" ((PVar "idJson") (PVar "params") (PVar "docs")) (EBlock (DoLet false false (PVar "result") (EMatch (EApp (EVar "requestUri") (EVar "params")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "uri")) () (EMatch (EApp (EApp (EVar "docsGet") (EVar "uri")) (EVar "docs")) (arm (PCon "None") () (EVar "JNull")) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EVar "highlightResult") (EVar "src")) (EVar "params"))))))) (DoExpr (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "result"))))))
 (DTypeSig false "highlightResult" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyCon "Json"))))
@@ -3004,9 +3005,9 @@ unit = ()
 (DFunDef false "lastChangeText" ((PCon "JArray" (PVar "arr"))) (EIf (EBinOp "==" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 0))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EVar "fieldStr") (ELit (LString "text"))) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 1)))) (EVar "arr"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "lastChangeText" (PWild) (EVar "None"))
 (DTypeSig false "fieldOr" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyCon "Json"))))
-(DFunDef false "fieldOr" ((PVar "key") (PVar "j")) (EMatch (EApp (EApp (EVar "lookup") (EVar "key")) (EVar "j")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EVar "JNull"))))
+(DFunDef false "fieldOr" ((PVar "key") (PVar "j")) (EMatch (EApp (EApp (EVar "get") (EVar "key")) (EVar "j")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EVar "JNull"))))
 (DTypeSig false "fieldStr" (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "fieldStr" ((PVar "key") (PVar "j")) (EMatch (EApp (EApp (EVar "lookup") (EVar "key")) (EVar "j")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "asString") (EVar "v"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "fieldStr" ((PVar "key") (PVar "j")) (EMatch (EApp (EApp (EVar "get") (EVar "key")) (EVar "j")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "asString") (EVar "v"))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "requestId" (TyFun (TyCon "Json") (TyCon "Json")))
 (DFunDef false "requestId" ((PVar "msg")) (EApp (EApp (EVar "fieldOr") (ELit (LString "id"))) (EVar "msg")))
 (DTypeSig false "methodOf" (TyFun (TyCon "Json") (TyApp (TyCon "Option") (TyCon "String"))))

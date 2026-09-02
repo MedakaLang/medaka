@@ -1,137 +1,107 @@
 # META
-source_lines=249
+source_lines=246
 stages=DESUGAR,MARK
 # SOURCE
-{- net.mdk — an ergonomic TCP/DNS layer over the host `net*` externs.
+{- | TCP connections and name resolution.
 
-   The irreducible host primitives are `extern`s in stdlib/runtime.mdk:
-   `netResolve`/`netTcpConnect`/`netTcpListen`/`netListenPort`/`netTcpAccept`/
-   `netSend`/`netRecv`/`netShutdown`/`netClose`/`netSetTimeout`. They traffic raw
-   tagged `Int` fds and are global (no import needed). This module (`import net`)
-   wraps them in abstract `Connection`/`Listener` handles (unexported
-   constructors — a caller cannot fabricate a fd, mix up a listening socket with
-   a connected one, or do arithmetic on a handle), adds short-read/short-write
-   loops (`sendAll`/`recvAll`), text convenience (`sendString`/`recvString`/
-   `sendLine`/`recvLine`), and the leak-safety brackets `withConnection`/
-   `withListener`/`serveLoop` (see NET-DESIGN.md §4: Medaka has no RAII/`finally`,
-   so "always close on both the `Ok` and `Err` body path" is done here, not by
-   the language).
+   `connect` opens a connection and `listen` and `accept` receive them.
+   `Connection` and `Listener` are opaque handles: they cannot be built from
+   a raw descriptor or confused with each other. `sendAll` and `recvAll`
+   loop until every byte is transferred, and `sendString`, `recvString`,
+   `sendLine`, and `recvLine` work in UTF-8 text. `withConnection`,
+   `withListener`, and `serveLoop` close their handle when the body
+   finishes, on the `Ok` and `Err` paths alike.
 
-   Conventions (mirroring stdlib/fs.mdk): every op returns `Result String _`
-   with the host error message (errno strerror) in `Err`. There is no IO
-   monad — an action runs when it is evaluated, so you can `match connect host
-   port` directly.
+   Every operation returns `Result String a`, with the host's error message
+   in `Err`. Networking works only in a program built for the native
+   backend: the interpreter does not bind the `net` primitives, and the
+   WebAssembly backend rejects a program that imports this module. -}
 
-   Scope: NATIVE/LLVM, build-only. Like every net extern, these execute only
-   through the compiled (`medaka build`) path — `net` externs are unbound under
-   the tree-walking interpreter (`medaka run`), exactly like `fs`/`io`'s file
-   externs (NET-DESIGN.md §6). Doctests here would try to run through the
-   interpreter and fail for that reason alone, so this module is verified by a
-   compiled loopback fixture instead of `medaka test` doctests (NET-DESIGN.md
-   §7's documented caveat) — doc-comments below show non-executing usage. Also
-   native-only for a second reason: WasmGC has no raw-socket equivalent, so
-   `medaka build --target wasm` rejects any program importing `net`. -}
+-- Medaka has no RAII / `finally` / catchable panics: a bracket acquires,
+-- runs the body, and closes unconditionally, then returns the body's
+-- result.  Because a `Result`-returning body has no non-local exit (a panic
+-- ends the process outright, reclaiming the fd for free), "run the body then
+-- close" is airtight (NET-DESIGN.md §4).  This module is verified by a
+-- compiled loopback fixture rather than doctests, which would run under the
+-- interpreter (NET-DESIGN.md §7).
 
 import array.{drop}
 import vector.{Vector, new, push, toArray}
 import string.{toUtf8, fromUtf8}
+import time.{Duration, toMillis}
 
--- ── Opaque handles ──────────────────────────────────────────────────────────
--- Constructors are NOT exported: user code can hold a `Connection`/`Listener`
+-- # Handles
+
+-- Constructors are not exported: user code can hold a `Connection`/`Listener`
 -- but cannot construct, inspect, or forge one from a raw `Int`.
 
-{- | A connected TCP socket (from `connect` or `accept`). Opaque — wraps the raw
-   fd, but the constructor is private so a `Connection` can't be fabricated or
-   confused with a `Listener`. -}
+-- | A connected TCP socket, from `connect` or `accept`.
 export data Connection = Connection Int
 
-{- | A listening TCP socket (from `listen`), not yet accepted. -}
+-- | A listening TCP socket, from `listen`.
 export data Listener = Listener Int
 
--- ── Client ───────────────────────────────────────────────────────────────
+-- | Which direction of a connection `shutdown` closes.
+public export data Shutdown = ShutdownRead | ShutdownWrite | ShutdownBoth
 
-{- | Resolve a hostname to its numeric IP address strings (`getaddrinfo`).
+-- # Clients
 
-   Non-executing example (net is unbound under `medaka run`; see module doc):
-   `resolve "localhost"` yields `Ok ["127.0.0.1", …]`. -}
+{- | The numeric addresses a host name resolves to.
+
+   `resolve "localhost"` gives `Ok ["127.0.0.1"]` or similar. -}
 export
 resolve : String -> <Net "_"> Result String (List String)
 resolve host = netResolve host
 
-{- | Connect to `host`:`port` (DNS resolution happens internally). Prefer
-   `withConnection` over a bare `connect` unless you need to hold the
-   connection across a larger scope than one bracketed call. -}
+{- | A connection to `host` on `port`.
+
+   The host name is resolved first. `withConnection` is the form that
+   closes the connection for you. -}
 export
 connect : String -> Int -> <Net "_"> Result String Connection
 connect host port = map Connection (netTcpConnect host port)
 
--- ── Server ───────────────────────────────────────────────────────────────
+-- # Servers
 
-{- | Bind + listen on `addr`:`port` (port `0` picks an OS-assigned ephemeral
-   port — pair with `listenPort` to discover it; this is what makes a
-   single-process loopback self-test hermetic). -}
+{- | A listener bound to `addr` on `port`.
+
+   Port `0` lets the system pick a free port; `listenPort` reports which. -}
 export
 listen : String -> Int -> <Net "_"> Result String Listener
 listen addr port = map Listener (netTcpListen addr port)
 
-{- | The actual bound port of a `Listener` (useful after `listen addr 0`). -}
+-- | The port a listener is bound to.
 export
 listenPort : Listener -> <Net "_"> Result String Int
 listenPort (Listener fd) = netListenPort fd
 
-{- | Block until a peer connects, then return the accepted `Connection`. -}
+-- | Waits for the next connection to a listener.
 export
 accept : Listener -> <Net "_"> Result String Connection
 accept (Listener fd) = map Connection (netTcpAccept fd)
 
--- ── Transfer (single call — may be short, see sendAll/recvAll) ────────────
+-- # Transfer
 
-{- | One `send(2)` call. May write FEWER bytes than given (`Ok n` with
-   `n < length bs`) — use `sendAll` unless you are handling short writes
-   yourself. -}
+{- | Sends bytes in one call. The result is the number of bytes written,
+   which may be fewer than given.
+
+   `sendAll` is the form that sends everything. -}
 export
 send : Connection -> Array Int -> <Net "_"> Result String Int
 send (Connection fd) bs = netSend fd bs
 
-{- | One `recv(2)` call, at most `n` bytes. `Ok []` (an empty `Array`) means the
-   peer closed the connection (EOF) — use `recvAll` to read to EOF. -}
+{- | Receives up to `n` bytes in one call.
+
+   An empty array means the peer has closed the connection. `recvAll` is the
+   form that reads to the end. -}
 export
 recv : Connection -> Int -> <Net "_"> Result String (Array Int)
 recv (Connection fd) n = netRecv fd n
 
--- ── Lifecycle ────────────────────────────────────────────────────────────
+{- | Sends every byte, looping over `send` as needed.
 
-{- | Shut down `how` (0=read, 1=write, 2=both) of a connection without closing
-   the fd. Rarely needed directly — `close`/the brackets are the common path. -}
-export
-shutdown : Connection -> Int -> <Net "_"> Result String Unit
-shutdown (Connection fd) how = netShutdown fd how
-
-{- | Close a connection's fd. Idempotent-safe (a double `close` is `Ok`, per the
-   C shim). Prefer `withConnection`, which calls this for you on every path. -}
-export
-close : Connection -> <Net "_"> Result String Unit
-close (Connection fd) = netClose fd
-
-{- | Close a listener's fd (mirrors `close`, for the `Listener` handle). -}
-export
-closeListener : Listener -> <Net "_"> Result String Unit
-closeListener (Listener fd) = netClose fd
-
-{- | Set the socket read/write timeout in milliseconds (`0` = blocking, no
-   timeout). Recommended on any long-lived connection — a blocking-only model
-   needs a timeout to avoid hanging forever on a stalled peer. -}
-export
-setTimeout : Connection -> Int -> <Net "_"> Result String Unit
-setTimeout (Connection fd) ms = netSetTimeout fd ms
-
--- ── Full-write / full-read loops (handle short send/recv) ─────────────────
-
-{- | Write every byte of `bs`, looping over `send` as needed (BSD `send` may
-   write fewer bytes than asked — see `send`'s doc). `Err` on the first failed
-   `send`. A `send` that legitimately reports `0` written on a non-empty buffer
-   is treated as a stalled connection and reported as `Err`, so this loop is
-   guaranteed to terminate. -}
+   `Err` on the first failed send, or when a send writes nothing, which is
+   treated as a stalled connection. -}
 export
 sendAll : Connection -> Array Int -> <Net "_"> Result String Unit
 sendAll conn bs =
@@ -149,29 +119,31 @@ recvAllLoop conn buf = match recv conn 4096
     let _ = fold (acc b => let _ = push b buf in acc) () chunk
     recvAllLoop conn buf
 
-{- | Read until the peer closes the connection (EOF), accumulating every chunk.
-   `Err` on the first failed `recv` (whatever has been read so far is
-   discarded — a partial read is not distinguishable from a fresh failure). -}
+{- | Receives everything until the peer closes the connection.
+
+   `Err` on the first failed receive; whatever was read before it is
+   discarded. -}
 export
 recvAll : Connection -> <Net "_"> Result String (Array Int)
 recvAll conn = recvAllLoop conn (new ())
 
--- ── Text convenience (UTF-8, via stdlib/string) ────────────────────────────
+-- # Text
 
-{- | Encode `s` as UTF-8 and write every byte (`sendAll`). -}
+-- | Sends a string as UTF-8, every byte of it.
 export
 sendString : Connection -> String -> <Net "_"> Result String Unit
 sendString conn s = sendAll conn (toUtf8 s)
 
-{- | Read to EOF and decode the bytes as UTF-8 (`recvAll` + `fromUtf8`). Use
-   `recvString` only when the peer is expected to close after writing (e.g. a
-   one-shot request/response); for a persistent connection, size a `recv`/
-   `recvN` read explicitly instead. -}
+{- | Receives everything until the peer closes the connection, decoded as
+   UTF-8.
+
+   For a connection that stays open, read a line at a time with `recvLine`
+   or a bounded amount with `recv`. -}
 export
 recvString : Connection -> <Net "_"> Result String String
 recvString conn = map fromUtf8 (recvAll conn)
 
-{- | Send `s` followed by `"\n"`, UTF-8 encoded (`sendAll`). -}
+-- | Sends a string as UTF-8 followed by a newline.
 export
 sendLine : Connection -> String -> <Net "_"> Result String Unit
 sendLine conn s = sendString conn (s ++ "\n")
@@ -192,29 +164,53 @@ recvLineLoop conn buf =
           let _ = push b buf
           recvLineLoop conn buf
 
-{- | Read one line (up to and excluding `"\n"`), byte at a time. `Some line` on
-   a complete or EOF-terminated line with content; `None` at a clean EOF with
-   nothing buffered. Byte-at-a-time `recv` keeps this simple and correct
-   (no read-ahead buffer to manage across calls) at the cost of a syscall per
-   byte — fine for line-oriented protocols exchanging small messages, not
-   recommended for bulk transfer (use `recvAll`/`recv` there). -}
+{- | Receives one line, without its newline.
+
+   `None` when the peer has closed the connection and nothing was pending.
+   A final line with no newline is still returned. Reads one byte per call,
+   so it suits small line-based messages, not bulk transfer. -}
 export
 recvLine : Connection -> <Net "_"> Result String (Option String)
 recvLine conn = recvLineLoop conn (new ())
 
--- ── Brackets (the blessed leak-safe pattern — NET-DESIGN.md §4) ───────────
--- Medaka has no RAII / `finally` / catchable panics: a bracket acquires, runs
--- the body, and closes UNCONDITIONALLY (on both the body's `Ok` and `Err`),
--- then returns the body's result. Because a `Result`-returning body has no
--- non-local exit (a panic ends the process outright, reclaiming the fd for
--- free), "run the body then close" is airtight — see NET-DESIGN.md §4.
+-- # Lifecycle
 
-{- | Connect to `host`:`port`, run `body` on the resulting `Connection`, and
-   close it afterward NO MATTER what `body` returns (`Ok` or `Err`). Returns
-   `body`'s result. If `connect` itself fails, `body` never runs and there is
-   nothing to close.
+-- | Shuts down one or both directions of a connection without closing it.
+export
+shutdown : Connection -> Shutdown -> <Net "_"> Result String Unit
+shutdown (Connection fd) how = netShutdown fd (shutdownCode how)
 
-   Non-executing example:
+shutdownCode : Shutdown -> Int
+shutdownCode ShutdownRead = 0
+shutdownCode ShutdownWrite = 1
+shutdownCode ShutdownBoth = 2
+
+{- | Closes a connection.
+
+   Closing twice is not an error. `withConnection` closes for you. -}
+export
+close : Connection -> <Net "_"> Result String Unit
+close (Connection fd) = netClose fd
+
+-- | Closes a listener.
+export
+closeListener : Listener -> <Net "_"> Result String Unit
+closeListener (Listener fd) = netClose fd
+
+{- | Sets a connection's send and receive timeout.
+
+   A zero duration means no timeout. Set one on any long-lived connection
+   so a stalled peer cannot block forever. -}
+export
+setTimeout : Connection -> Duration -> <Net "_"> Result String Unit
+setTimeout (Connection fd) d = netSetTimeout fd (toMillis d)
+
+{- | Connects to `host` on `port`, runs `body` on the connection, and closes
+   it whatever `body` returns.
+
+   The result is `body`'s result, or the connection error when connecting
+   fails, in which case `body` does not run.
+
    `withConnection "127.0.0.1" 9000 (conn => sendString conn "hi")` -}
 export
 withConnection : String -> Int -> (Connection -> <Net "_"> Result String a) -> <Net "_"> Result String a
@@ -225,8 +221,10 @@ withConnection host port body = match connect host port
     let _ = close conn
     r
 
-{- | Bind + listen on `addr`:`port`, run `body` on the resulting `Listener`, and
-   close it afterward NO MATTER what `body` returns. Returns `body`'s result. -}
+{- | Listens on `addr` and `port`, runs `body` on the listener, and closes
+   it whatever `body` returns.
+
+   The result is `body`'s result, or the error when listening fails. -}
 export
 withListener : String -> Int -> (Listener -> <Net "_"> Result String a) -> <Net "_"> Result String a
 withListener addr port body = match listen addr port
@@ -236,13 +234,12 @@ withListener addr port body = match listen addr port
     let _ = closeListener lis
     r
 
-{- | Accept connections from `lis` in a loop, handing each to `handle` and
-   closing it afterward (the per-connection bracket keeps one handler's `Err`
-   from leaking that connection's fd or aborting the loop). Recurses forever —
-   a listener-level `accept` failure propagates up and ends the loop; a
-   per-connection `handle` failure does not (it's swallowed after closing, so
-   the server keeps serving). Pair with `withListener` to close the listener
-   itself when the loop does end. -}
+{- | Accepts connections forever, running `handle` on each and closing it
+   afterwards.
+
+   A failure in `handle` closes that connection and the loop continues. A
+   failure in `accept` ends the loop with the error. Pair it with
+   `withListener` to close the listener when the loop ends. -}
 export
 serveLoop : Listener -> (Connection -> <Net "_"> Result String Unit) -> <Net "_"> Result String Unit
 serveLoop lis handle = match accept lis
@@ -255,8 +252,10 @@ serveLoop lis handle = match accept lis
 (DUse false (UseGroup ("array") ((mem "drop" false))))
 (DUse false (UseGroup ("vector") ((mem "Vector" false) (mem "new" false) (mem "push" false) (mem "toArray" false))))
 (DUse false (UseGroup ("string") ((mem "toUtf8" false) (mem "fromUtf8" false))))
+(DUse false (UseGroup ("time") ((mem "Duration" false) (mem "toMillis" false))))
 (DData Abstract "Connection" () ((variant "Connection" (ConPos (TyCon "Int")))) ())
 (DData Abstract "Listener" () ((variant "Listener" (ConPos (TyCon "Int")))) ())
+(DData Public "Shutdown" () ((variant "ShutdownRead" (ConPos)) (variant "ShutdownWrite" (ConPos)) (variant "ShutdownBoth" (ConPos))) ())
 (DTypeSig true "resolve" (TyFun (TyCon "String") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "resolve" ((PVar "host")) (EApp (EVar "netResolve") (EVar "host")))
 (DTypeSig true "connect" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Connection"))))))
@@ -271,14 +270,6 @@ serveLoop lis handle = match accept lis
 (DFunDef false "send" ((PCon "Connection" (PVar "fd")) (PVar "bs")) (EApp (EApp (EVar "netSend") (EVar "fd")) (EVar "bs")))
 (DTypeSig true "recv" (TyFun (TyCon "Connection") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int")))))))
 (DFunDef false "recv" ((PCon "Connection" (PVar "fd")) (PVar "n")) (EApp (EApp (EVar "netRecv") (EVar "fd")) (EVar "n")))
-(DTypeSig true "shutdown" (TyFun (TyCon "Connection") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
-(DFunDef false "shutdown" ((PCon "Connection" (PVar "fd")) (PVar "how")) (EApp (EApp (EVar "netShutdown") (EVar "fd")) (EVar "how")))
-(DTypeSig true "close" (TyFun (TyCon "Connection") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
-(DFunDef false "close" ((PCon "Connection" (PVar "fd"))) (EApp (EVar "netClose") (EVar "fd")))
-(DTypeSig true "closeListener" (TyFun (TyCon "Listener") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
-(DFunDef false "closeListener" ((PCon "Listener" (PVar "fd"))) (EApp (EVar "netClose") (EVar "fd")))
-(DTypeSig true "setTimeout" (TyFun (TyCon "Connection") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
-(DFunDef false "setTimeout" ((PCon "Connection" (PVar "fd")) (PVar "ms")) (EApp (EApp (EVar "netSetTimeout") (EVar "fd")) (EVar "ms")))
 (DTypeSig true "sendAll" (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DFunDef false "sendAll" ((PVar "conn") (PVar "bs")) (EIf (EBinOp "==" (EApp (EVar "arrayLength") (EVar "bs")) (ELit (LInt 0))) (EApp (EVar "Ok") (ELit LUnit)) (EMatch (EApp (EApp (EVar "send") (EVar "conn")) (EVar "bs")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PLit (LInt 0))) () (EApp (EVar "Err") (ELit (LString "net.sendAll: 0 bytes written (connection stalled)")))) (arm (PCon "Ok" (PVar "n")) () (EApp (EApp (EVar "sendAll") (EVar "conn")) (EApp (EApp (EVar "drop") (EVar "n")) (EVar "bs")))))))
 (DTypeSig false "recvAllLoop" (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Vector") (TyCon "Int")) (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int")))))))
@@ -295,6 +286,18 @@ serveLoop lis handle = match accept lis
 (DFunDef false "recvLineLoop" ((PVar "conn") (PVar "buf")) (EMatch (EApp (EApp (EVar "recv") (EVar "conn")) (ELit (LInt 1))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "chunk")) () (EIf (EBinOp "==" (EApp (EVar "arrayLength") (EVar "chunk")) (ELit (LInt 0))) (EIf (EApp (EVar "isEmpty") (EVar "buf")) (EApp (EVar "Ok") (EVar "None")) (EApp (EVar "Ok") (EApp (EVar "Some") (EApp (EVar "fromUtf8") (EApp (EVar "toArray") (EVar "buf")))))) (EBlock (DoLet false false (PVar "b") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "chunk"))) (DoExpr (EIf (EBinOp "==" (EVar "b") (ELit (LInt 10))) (EApp (EVar "Ok") (EApp (EVar "Some") (EApp (EVar "fromUtf8") (EApp (EVar "toArray") (EVar "buf"))))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "push") (EVar "b")) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "recvLineLoop") (EVar "conn")) (EVar "buf")))))))))))
 (DTypeSig true "recvLine" (TyFun (TyCon "Connection") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "recvLine" ((PVar "conn")) (EApp (EApp (EVar "recvLineLoop") (EVar "conn")) (EApp (EVar "new") (ELit LUnit))))
+(DTypeSig true "shutdown" (TyFun (TyCon "Connection") (TyFun (TyCon "Shutdown") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DFunDef false "shutdown" ((PCon "Connection" (PVar "fd")) (PVar "how")) (EApp (EApp (EVar "netShutdown") (EVar "fd")) (EApp (EVar "shutdownCode") (EVar "how"))))
+(DTypeSig false "shutdownCode" (TyFun (TyCon "Shutdown") (TyCon "Int")))
+(DFunDef false "shutdownCode" ((PCon "ShutdownRead")) (ELit (LInt 0)))
+(DFunDef false "shutdownCode" ((PCon "ShutdownWrite")) (ELit (LInt 1)))
+(DFunDef false "shutdownCode" ((PCon "ShutdownBoth")) (ELit (LInt 2)))
+(DTypeSig true "close" (TyFun (TyCon "Connection") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
+(DFunDef false "close" ((PCon "Connection" (PVar "fd"))) (EApp (EVar "netClose") (EVar "fd")))
+(DTypeSig true "closeListener" (TyFun (TyCon "Listener") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
+(DFunDef false "closeListener" ((PCon "Listener" (PVar "fd"))) (EApp (EVar "netClose") (EVar "fd")))
+(DTypeSig true "setTimeout" (TyFun (TyCon "Connection") (TyFun (TyCon "Duration") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DFunDef false "setTimeout" ((PCon "Connection" (PVar "fd")) (PVar "d")) (EApp (EApp (EVar "netSetTimeout") (EVar "fd")) (EApp (EVar "toMillis") (EVar "d"))))
 (DTypeSig true "withConnection" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "Connection") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyVar "a")))) (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyVar "a")))))))
 (DFunDef false "withConnection" ((PVar "host") (PVar "port") (PVar "body")) (EMatch (EApp (EApp (EVar "connect") (EVar "host")) (EVar "port")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "conn")) () (EBlock (DoLet false false (PVar "r") (EApp (EVar "body") (EVar "conn"))) (DoLet false false PWild (EApp (EVar "close") (EVar "conn"))) (DoExpr (EVar "r"))))))
 (DTypeSig true "withListener" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "Listener") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyVar "a")))) (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyVar "a")))))))
@@ -305,8 +308,10 @@ serveLoop lis handle = match accept lis
 (DUse false (UseGroup ("array") ((mem "drop" false))))
 (DUse false (UseGroup ("vector") ((mem "Vector" false) (mem "new" false) (mem "push" false) (mem "toArray" false))))
 (DUse false (UseGroup ("string") ((mem "toUtf8" false) (mem "fromUtf8" false))))
+(DUse false (UseGroup ("time") ((mem "Duration" false) (mem "toMillis" false))))
 (DData Abstract "Connection" () ((variant "Connection" (ConPos (TyCon "Int")))) ())
 (DData Abstract "Listener" () ((variant "Listener" (ConPos (TyCon "Int")))) ())
+(DData Public "Shutdown" () ((variant "ShutdownRead" (ConPos)) (variant "ShutdownWrite" (ConPos)) (variant "ShutdownBoth" (ConPos))) ())
 (DTypeSig true "resolve" (TyFun (TyCon "String") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "resolve" ((PVar "host")) (EApp (EVar "netResolve") (EVar "host")))
 (DTypeSig true "connect" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Connection"))))))
@@ -321,14 +326,6 @@ serveLoop lis handle = match accept lis
 (DFunDef false "send" ((PCon "Connection" (PVar "fd")) (PVar "bs")) (EApp (EApp (EVar "netSend") (EVar "fd")) (EVar "bs")))
 (DTypeSig true "recv" (TyFun (TyCon "Connection") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int")))))))
 (DFunDef false "recv" ((PCon "Connection" (PVar "fd")) (PVar "n")) (EApp (EApp (EVar "netRecv") (EVar "fd")) (EVar "n")))
-(DTypeSig true "shutdown" (TyFun (TyCon "Connection") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
-(DFunDef false "shutdown" ((PCon "Connection" (PVar "fd")) (PVar "how")) (EApp (EApp (EVar "netShutdown") (EVar "fd")) (EVar "how")))
-(DTypeSig true "close" (TyFun (TyCon "Connection") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
-(DFunDef false "close" ((PCon "Connection" (PVar "fd"))) (EApp (EVar "netClose") (EVar "fd")))
-(DTypeSig true "closeListener" (TyFun (TyCon "Listener") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
-(DFunDef false "closeListener" ((PCon "Listener" (PVar "fd"))) (EApp (EVar "netClose") (EVar "fd")))
-(DTypeSig true "setTimeout" (TyFun (TyCon "Connection") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
-(DFunDef false "setTimeout" ((PCon "Connection" (PVar "fd")) (PVar "ms")) (EApp (EApp (EVar "netSetTimeout") (EVar "fd")) (EVar "ms")))
 (DTypeSig true "sendAll" (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DFunDef false "sendAll" ((PVar "conn") (PVar "bs")) (EIf (EBinOp "==" (EApp (EVar "arrayLength") (EVar "bs")) (ELit (LInt 0))) (EApp (EVar "Ok") (ELit LUnit)) (EMatch (EApp (EApp (EVar "send") (EVar "conn")) (EVar "bs")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PLit (LInt 0))) () (EApp (EVar "Err") (ELit (LString "net.sendAll: 0 bytes written (connection stalled)")))) (arm (PCon "Ok" (PVar "n")) () (EApp (EApp (EVar "sendAll") (EVar "conn")) (EApp (EApp (EVar "drop") (EVar "n")) (EVar "bs")))))))
 (DTypeSig false "recvAllLoop" (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Vector") (TyCon "Int")) (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int")))))))
@@ -345,6 +342,18 @@ serveLoop lis handle = match accept lis
 (DFunDef false "recvLineLoop" ((PVar "conn") (PVar "buf")) (EMatch (EApp (EApp (EVar "recv") (EVar "conn")) (ELit (LInt 1))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "chunk")) () (EIf (EBinOp "==" (EApp (EVar "arrayLength") (EVar "chunk")) (ELit (LInt 0))) (EIf (EApp (EMethodRef "isEmpty") (EVar "buf")) (EApp (EVar "Ok") (EVar "None")) (EApp (EVar "Ok") (EApp (EVar "Some") (EApp (EVar "fromUtf8") (EApp (EVar "toArray") (EVar "buf")))))) (EBlock (DoLet false false (PVar "b") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "chunk"))) (DoExpr (EIf (EBinOp "==" (EVar "b") (ELit (LInt 10))) (EApp (EVar "Ok") (EApp (EVar "Some") (EApp (EVar "fromUtf8") (EApp (EVar "toArray") (EVar "buf"))))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "push") (EVar "b")) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "recvLineLoop") (EVar "conn")) (EVar "buf")))))))))))
 (DTypeSig true "recvLine" (TyFun (TyCon "Connection") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "recvLine" ((PVar "conn")) (EApp (EApp (EVar "recvLineLoop") (EVar "conn")) (EApp (EVar "new") (ELit LUnit))))
+(DTypeSig true "shutdown" (TyFun (TyCon "Connection") (TyFun (TyCon "Shutdown") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DFunDef false "shutdown" ((PCon "Connection" (PVar "fd")) (PVar "how")) (EApp (EApp (EVar "netShutdown") (EVar "fd")) (EApp (EVar "shutdownCode") (EVar "how"))))
+(DTypeSig false "shutdownCode" (TyFun (TyCon "Shutdown") (TyCon "Int")))
+(DFunDef false "shutdownCode" ((PCon "ShutdownRead")) (ELit (LInt 0)))
+(DFunDef false "shutdownCode" ((PCon "ShutdownWrite")) (ELit (LInt 1)))
+(DFunDef false "shutdownCode" ((PCon "ShutdownBoth")) (ELit (LInt 2)))
+(DTypeSig true "close" (TyFun (TyCon "Connection") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
+(DFunDef false "close" ((PCon "Connection" (PVar "fd"))) (EApp (EVar "netClose") (EVar "fd")))
+(DTypeSig true "closeListener" (TyFun (TyCon "Listener") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
+(DFunDef false "closeListener" ((PCon "Listener" (PVar "fd"))) (EApp (EVar "netClose") (EVar "fd")))
+(DTypeSig true "setTimeout" (TyFun (TyCon "Connection") (TyFun (TyCon "Duration") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DFunDef false "setTimeout" ((PCon "Connection" (PVar "fd")) (PVar "d")) (EApp (EApp (EVar "netSetTimeout") (EVar "fd")) (EApp (EVar "toMillis") (EVar "d"))))
 (DTypeSig true "withConnection" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "Connection") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyVar "a")))) (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyVar "a")))))))
 (DFunDef false "withConnection" ((PVar "host") (PVar "port") (PVar "body")) (EMatch (EApp (EApp (EVar "connect") (EVar "host")) (EVar "port")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "conn")) () (EBlock (DoLet false false (PVar "r") (EApp (EVar "body") (EVar "conn"))) (DoLet false false PWild (EApp (EVar "close") (EVar "conn"))) (DoExpr (EVar "r"))))))
 (DTypeSig true "withListener" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "Listener") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyVar "a")))) (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyVar "a")))))))

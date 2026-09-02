@@ -1,80 +1,61 @@
 # META
-source_lines=342
+source_lines=329
 stages=DESUGAR,MARK
 # SOURCE
-{- bits64.mdk — 64-bit-unsigned arithmetic over the 63-bit `Int` fixnum.
+{- | Unsigned 64-bit arithmetic.
 
-   Medaka's `Int` is a 63-bit fixnum that WRAPS on overflow, so it cannot hold
-   a `uint64` value (let alone a `uint64` product mod 2^64).  This module
-   emulates a `uint64` as four 16-bit limbs `U64 l0 l1 l2 l3`,
-   least-significant first — exactly the representation the compiler itself
-   hand-rolled in `compiler/eval/eval.mdk` to reproduce SplitMix64 / FNV-1a
-   faithfully while fixing issue #98.  The algorithms here mirror that proven
-   implementation.
+   `Int` is a 63-bit integer, so it cannot hold a 64-bit unsigned value.
+   `U64` represents one as four 16-bit limbs and provides the operations
+   with C's unsigned semantics: every result wraps modulo 2^64. Use it for
+   hashes, random number generators, checksums, and binary formats.
 
-   Why a `data` type and not a tuple alias (#2311): a transparent
-   `type U64 = (Int, Int, Int, Int)` alias let the prelude's generic tuple
-   `Ord` reach the limbs in the WRONG order — `compare` ordered by `l0` first
-   and silently disagreed with `cmp` on the same values, with no diagnostic.
-   The nullary-constructor newtype carries its own `Eq`/`Ord`/`Debug`/
-   `Display`/`Hashable`, and its `Ord` delegates to `cmp`, so the prelude and
-   this module can no longer answer differently.
+   The names `and`, `or`, `xor`, `add`, and `sub` shadow prelude names, so
+   import the module qualified: `import bits64 as B`. -}
 
-   Every intermediate stays well under the 63-bit range: a limb < 2^16, a
-   16×16 partial product < 2^32, and a column sum of four such products plus a
-   carry < 2^35 — so no native op ever overflows during a computation.
-
-   Use it for hashing, PRNGs, checksums, and binary/wire formats — anything
-   that needs the C `unsigned long long` overflow / bit semantics.  All ops are
-   modulo 2^64 (they wrap), matching C's unsigned arithmetic.
-
-   Operations are fn-first/data-last and carry no `64` suffix — the module is
-   already called `bits64`.  Import qualified (`import bits64 as B`) if you
-   also want the prelude's boolean `and`/`or`/`xor`, or the `Num` interface's
-   `add`/`sub`, in the same scope. -}
-
--- The SplitMix64/FNV-1a limb helpers the interpreter's RNG/hash externs are
--- built on (issue #98) now live HERE: `compiler/eval/eval.mdk` imports this
--- module instead of hand-rolling its own copy (issue #223), so the two share
--- one proven implementation.
+-- The limb representation is exactly the one the compiler itself
+-- hand-rolled in `compiler/eval/eval.mdk` to reproduce SplitMix64 / FNV-1a
+-- faithfully; `eval.mdk` now imports this module instead of keeping its own
+-- copy.  Every intermediate stays well under the 63-bit range: a limb <
+-- 2^16, a 16×16 partial product < 2^32, and a column sum of four such
+-- products plus a carry < 2^35, so no native op ever overflows during a
+-- computation.
+--
+-- Why a `data` type and not a tuple alias: a transparent
+-- `type U64 = (Int, Int, Int, Int)` alias let the prelude's generic tuple
+-- `Ord` reach the limbs in the wrong order (`compare` ordered by `l0` first
+-- and silently disagreed with `cmp`).  The constructor carries its own
+-- instances, and its `Ord` delegates to `cmp`.
 
 import core.{Ordering}
 
--- A `uint64` as four 16-bit limbs, least-significant first: the value is
--- `l0 + l1*2^16 + l2*2^32 + l3*2^48`, each limb in `[0, 2^16)`.
+{- | An unsigned 64-bit value as four 16-bit limbs, least significant
+   first: `U64 l0 l1 l2 l3` is `l0 + l1 * 2^16 + l2 * 2^32 + l3 * 2^48`. -}
 public export data U64 =
   | U64 Int Int Int Int
-deriving (Eq, Debug, Display, Hashable)
+  deriving (Eq, Debug, Display, Hashable)
 
--- ── Construction ────────────────────────────────────────────────────────
+-- # Construction
 
--- The all-zero `uint64`.
+-- | The value `0`.
 export
 zero : U64
 zero = U64 0 0 0 0
 
--- The `uint64` value 1.
+-- | The value `1`.
 export
 one : U64
 one = U64 1 0 0 0
 
-{- | Split a Medaka `Int` into `uint64` limbs, masking to the low 64 bits.
+-- Named `fromIntBits`, not `fromInt`, on purpose: `fromInt` is the `Num`
+-- interface method in `core.mdk`, and a top-level binding of that name is
+-- absorbed as a method definition and poisons inference for the whole module.
+{- | The low 64 bits of an `Int`.
 
-   Because each 16-bit window is masked immediately, this reproduces C's
-   `(unsigned long long)n` for negatives too (the two's-complement bits of a
-   window are the same under either shift convention).
+   A negative `Int` gives the same bits C's `(unsigned long long)` cast
+   would.
 
-   (Named `fromIntBits`, not `fromInt`, on purpose: `fromInt` is the `Num`
-   interface method in `core.mdk`, and a top-level binding of that name is
-   absorbed as a method definition and poisons inference for the whole
-   module.)
-
-   > fromIntBits 1
-   U64 1 0 0 0
    > fromIntBits 65536
-   U64 0 1 0 0
-   > fromIntBits 4294967296
-   U64 0 0 1 0 -}
+   U64 0 1 0 0 -}
 export
 fromIntBits : Int -> U64
 fromIntBits n =
@@ -84,9 +65,14 @@ fromIntBits n =
     (bitAnd (shiftRight n 32) 65535)
     (bitAnd (shiftRight n 48) 65535)
 
--- ── Predicates ──────────────────────────────────────────────────────────
+-- > fromIntBits 1
+-- U64 1 0 0 0
+-- > fromIntBits 4294967296
+-- U64 0 0 1 0
 
-{- | Is this `uint64` zero?
+-- # Comparison
+
+{- | Whether the value is `0`.
 
    > isZero (fromIntBits 0)
    True
@@ -96,15 +82,10 @@ export
 isZero : U64 -> Bool
 isZero (U64 a0 a1 a2 a3) = a0 == 0 && a1 == 0 && a2 == 0 && a3 == 0
 
-{- | Compare two `uint64` values (unsigned).  The `Ord U64` instance delegates
-   here, so `compare` and `cmp` can never disagree (#2311).
+{- | The unsigned ordering of two values. `compare` on `U64` is the same.
 
    > cmp (fromIntBits 1) (fromIntBits 2)
    Lt
-   > cmp (fromIntBits 2) (fromIntBits 2)
-   Eq
-   > cmp (fromIntBits 3) (fromIntBits 2)
-   Gt
    > cmp (U64 0 0 0 1) (U64 65535 65535 65535 0)
    Gt -}
 export
@@ -121,20 +102,21 @@ cmp (U64 a0 a1 a2 a3) (U64 b0 b1 b2 b3) =
   else
     Eq
 
--- Unsigned ordering, NOT the limb-lexicographic order a derived `Ord` would
--- produce: the limbs are least-significant FIRST, so the derived instance
--- would compare `l0` before `l3` and order values wrongly (#2311).
+-- > cmp (fromIntBits 2) (fromIntBits 2)
+-- Eq
+-- > cmp (fromIntBits 3) (fromIntBits 2)
+-- Gt
+
+-- | Values compare as unsigned integers, through `cmp`.
 export impl Ord U64 where
   compare a b = cmp a b
 
--- ── Arithmetic ──────────────────────────────────────────────────────────
+-- # Arithmetic
 
-{- | Addition mod 2^64 (wraps on overflow).
+{- | The sum modulo 2^64.
 
    > add (fromIntBits 1) (fromIntBits 2)
    U64 3 0 0 0
-   > add (fromIntBits 65535) (fromIntBits 1)
-   U64 0 1 0 0
    > add (U64 65535 65535 65535 65535) (fromIntBits 1)
    U64 0 0 0 0 -}
 export
@@ -146,10 +128,12 @@ add (U64 a0 a1 a2 a3) (U64 b0 b1 b2 b3) =
   let s3 = a3 + b3 + shiftRight s2 16
   U64 (bitAnd s0 65535) (bitAnd s1 65535) (bitAnd s2 65535) (bitAnd s3 65535)
 
-{- | Subtraction mod 2^64: `a - b`, wrapping when `b > a`.
+-- > add (fromIntBits 65535) (fromIntBits 1)
+-- U64 0 1 0 0
 
-   A negative limb difference masks to its low 16 bits (`+65536`), which IS
-   the borrow into the next limb.
+-- A negative limb difference masks to its low 16 bits (`+65536`), which is
+-- the borrow into the next limb.
+{- | The difference `a - b` modulo 2^64, wrapping when `b > a`.
 
    > sub (fromIntBits 5) (fromIntBits 3)
    U64 2 0 0 0
@@ -164,15 +148,12 @@ sub (U64 a0 a1 a2 a3) (U64 b0 b1 b2 b3) =
   let d3 = a3 - b3 - (if d2 < 0 then 1 else 0)
   U64 (bitAnd d0 65535) (bitAnd d1 65535) (bitAnd d2 65535) (bitAnd d3 65535)
 
-{- | Low 64 bits of the product `a * b` (i.e. `a * b mod 2^64`) — schoolbook
-   multiply keeping only the low four limbs.
+{- | The low 64 bits of the product.
 
    > mulLow (fromIntBits 7) (fromIntBits 6)
    U64 42 0 0 0
    > mulLow (fromIntBits 65536) (fromIntBits 65536)
-   U64 0 0 1 0
-   > mulLow (U64 0 0 0 1) (U64 0 1 0 0)
-   U64 0 0 0 0 -}
+   U64 0 0 1 0 -}
 export
 mulLow : U64 -> U64 -> U64
 mulLow (U64 a0 a1 a2 a3) (U64 b0 b1 b2 b3) =
@@ -182,10 +163,12 @@ mulLow (U64 a0 a1 a2 a3) (U64 b0 b1 b2 b3) =
   let c3 = a0 * b3 + a1 * b2 + a2 * b1 + a3 * b0 + shiftRight c2 16
   U64 (bitAnd c0 65535) (bitAnd c1 65535) (bitAnd c2 65535) (bitAnd c3 65535)
 
--- ── Bitwise ─────────────────────────────────────────────────────────────
+-- > mulLow (U64 0 0 0 1) (U64 0 1 0 0)
+-- U64 0 0 0 0
 
-{- | Bitwise AND.  Shadows the prelude's boolean `and` when imported
-   unqualified — import `bits64` qualified if you need both.
+-- # Bitwise operations
+
+{- | Bitwise and.
 
    > and (fromIntBits 12) (fromIntBits 10)
    U64 8 0 0 0 -}
@@ -194,8 +177,7 @@ and : U64 -> U64 -> U64
 and (U64 a0 a1 a2 a3) (U64 b0 b1 b2 b3) =
   U64 (bitAnd a0 b0) (bitAnd a1 b1) (bitAnd a2 b2) (bitAnd a3 b3)
 
-{- | Bitwise OR.  Shadows the prelude's boolean `or` when imported
-   unqualified.
+{- | Bitwise or.
 
    > or (fromIntBits 12) (fromIntBits 10)
    U64 14 0 0 0 -}
@@ -204,8 +186,7 @@ or : U64 -> U64 -> U64
 or (U64 a0 a1 a2 a3) (U64 b0 b1 b2 b3) =
   U64 (bitOr a0 b0) (bitOr a1 b1) (bitOr a2 b2) (bitOr a3 b3)
 
-{- | Bitwise XOR.  Shadows the prelude's boolean `xor` when imported
-   unqualified.
+{- | Bitwise exclusive or.
 
    > xor (fromIntBits 12) (fromIntBits 10)
    U64 6 0 0 0 -}
@@ -214,13 +195,13 @@ xor : U64 -> U64 -> U64
 xor (U64 a0 a1 a2 a3) (U64 b0 b1 b2 b3) =
   U64 (bitXor a0 b0) (bitXor a1 b1) (bitXor a2 b2) (bitXor a3 b3)
 
-{- | Limb `i` of a `uint64` — its bits `[16i, 16i+15]` as an `Int` in
-   `[0, 2^16)`.  Out-of-range `i` (`< 0` or `> 3`) reads as `0`.
+{- | Limb `i` of a value: bits `16i` to `16i + 15`, as an `Int` below
+   2^16.
+
+   `0` when `i` is outside `0` to `3`.
 
    > limbAt 2 (U64 10 20 30 40)
-   30
-   > limbAt 1 (fromIntBits 65536)
-   1 -}
+   30 -}
 export
 limbAt : Int -> U64 -> Int
 limbAt i (U64 a0 a1 a2 a3) =
@@ -234,6 +215,9 @@ limbAt i (U64 a0 a1 a2 a3) =
     a3
   else
     0
+
+-- > limbAt 1 (fromIntBits 65536)
+-- 1
 
 -- Whole-limb offset for a shift of `n` bits (n in [0, 63]).
 shiftWords : Int -> Int
@@ -257,13 +241,11 @@ shrLimb u ws bs i =
       (shiftLeft (limbAt (i + ws + 1) u) (16 - bs)))
     65535
 
-{- | Logical right shift by `n` bits, `n` in `[0, 63]`.  Vacated high bits are
-   filled with zeros (unsigned shift).
+{- | The value shifted right by `n` bits, from `0` to `63`, filling with
+   zeros.
 
    > shr 4 (fromIntBits 256)
    U64 16 0 0 0
-   > shr 16 (fromIntBits 65536)
-   U64 1 0 0 0
    > shr 63 (U64 0 0 0 32768)
    U64 1 0 0 0 -}
 export
@@ -277,6 +259,9 @@ shr n u =
     (shrLimb u ws bs 2)
     (shrLimb u ws bs 3)
 
+-- > shr 16 (fromIntBits 65536)
+-- U64 1 0 0 0
+
 -- One output limb of a left shift: high bits of limb `(i-ws)` plus the
 -- carried-in high bits of limb `(i-ws-1)`.
 shlLimb : U64 -> Int -> Int -> Int -> Int
@@ -287,13 +272,11 @@ shlLimb u ws bs i =
       (shiftRight (limbAt (i - ws - 1) u) (16 - bs)))
     65535
 
-{- | Logical left shift by `n` bits, `n` in `[0, 63]`.  Bits shifted past bit
-   63 are dropped (mod 2^64).
+{- | The value shifted left by `n` bits, from `0` to `63`. Bits shifted
+   past bit 63 are dropped.
 
    > shl 4 (fromIntBits 1)
    U64 16 0 0 0
-   > shl 16 (fromIntBits 1)
-   U64 0 1 0 0
    > shl 63 (fromIntBits 1)
    U64 0 0 0 32768 -}
 export
@@ -307,7 +290,10 @@ shl n u =
     (shlLimb u ws bs 2)
     (shlLimb u ws bs 3)
 
--- ── Division ────────────────────────────────────────────────────────────
+-- > shl 16 (fromIntBits 1)
+-- U64 0 1 0 0
+
+-- # Division
 
 -- Bit `i` (0 = LSB) of a `uint64`.
 bitAt : U64 -> Int -> Int
@@ -327,16 +313,14 @@ modGo dividend divisor rem i =
       _ => sub rem2 divisor
     modGo dividend divisor rem3 (i - 1)
 
-{- | Exact `uint64` modulo: `dividend mod divisor`, correct for any nonzero
-   divisor up to 2^64 - 1 (a running-remainder shortcut would be wrong for
-   large divisors).  A zero divisor is a caller error and yields `dividend`.
+{- | The remainder of `dividend` divided by `divisor`.
+
+   Exact for every non-zero divisor. A zero divisor gives back `dividend`.
 
    > mod (fromIntBits 17) (fromIntBits 5)
    U64 2 0 0 0
    > mod (U64 65535 65535 65535 65535) (fromIntBits 10)
-   U64 5 0 0 0
-   > mod (U64 0 0 0 32768) (fromIntBits 3)
-   U64 2 0 0 0 -}
+   U64 5 0 0 0 -}
 export
 mod : U64 -> U64 -> U64
 mod dividend divisor =
@@ -344,6 +328,9 @@ mod dividend divisor =
     dividend
   else
     modGo dividend divisor zero 63
+
+-- > mod (U64 0 0 0 32768) (fromIntBits 3)
+-- U64 2 0 0 0
 # DESUGAR
 (DUse false (UseGroup ("core") ((mem "Ordering" false))))
 (DData Public "U64" () ((variant "U64" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int")))) ())

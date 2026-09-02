@@ -1,0 +1,14 @@
+interface Speak a where
+  speak : a -> String
+  speak _ = "boxint"
+
+data Box a = Box a
+
+impl Speak (Box Int) where
+
+impl Speak (Box String) where
+  speak _ = "boxstr"
+
+main =
+  let f = v => speak v
+  println (f (Box 1) ++ "|" ++ f (Box "x"))

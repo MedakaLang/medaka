@@ -272,15 +272,15 @@ async function loadAssets() {
   if (assetsLoading) return assetsLoading;
 
   assetsLoading = (async () => {
-    const coreResps = await Promise.all([
+    // One wave: every fetch in flight at once (the extras used to wait for the
+    // four core responses to land first — a whole round trip on a cold visit).
+    const [wasmResp, runtimeResp, coreResp, wat2wasmResp, ...extraResps] = await Promise.all([
       fetch('dist/playground.wasm'),
       fetch('dist/runtime.mdk'),
       fetch('dist/core.mdk'),
       fetch('vendor/wat2wasm/wat2wasm_bg.wasm'),
+      ...EXTRA_MODULES.map((m) => fetch('dist/' + m + '.mdk')),
     ]);
-    const [wasmResp, runtimeResp, coreResp, wat2wasmResp] = coreResps;
-    const extraResps = await Promise.all(
-      EXTRA_MODULES.map((m) => fetch('dist/' + m + '.mdk')));
     for (const [name, r] of [
       ['dist/playground.wasm', wasmResp],
       ['dist/runtime.mdk',     runtimeResp],

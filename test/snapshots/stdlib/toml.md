@@ -1,62 +1,38 @@
 # META
-source_lines=806
+source_lines=732
 stages=DESUGAR,MARK
 # SOURCE
-{- toml.mdk — a minimal TOML subset sufficient to parse `medaka.toml` and
-   `test/gates.toml` (the gate registry, #2176).
+{- | A reader for a subset of TOML.
 
-   **Supported subset:**
-   - Top-level `[section]` headers (not nested tables or inline tables)
-   - Array-of-tables headers `[[section]]` (repeated; each occurrence opens a
-     new indexed entry — see *Value model* below)
-   - `key = "string"` values (double-quoted; backslash is passed through as-is)
-   - `key = ["array", "of", "strings"]` values
-   - `key = 42` / `key = -7` integer values
-   - `key = true` / `key = false` boolean values
-   - `#` line comments (stripped before parsing, respecting quoted strings)
-   - Blank lines ignored
+   `parse` reads a document with `[section]` and `[[table]]` headers and
+   keys whose values are double-quoted strings, arrays of strings,
+   integers, or booleans, with `#` comments. Anything else (floats, dates,
+   multi-line strings, inline tables, dotted keys, and escape sequences) is
+   an error, never silently dropped.
 
-   **Not supported** — and rejected LOUDLY with an `Err`, never silently
-   dropped:
-   - Float and datetime values
-   - Multiline strings (`"""…"""` / `'''…'''`)
-   - Inline tables (`{k = v}`)
-   - Dotted keys (`a.b = v`) — use table headers instead
-   - String escape sequences (backslash is literal)
+   The parsed `Toml` is a flat list of keys and values, with every key
+   qualified by its section: `name` under `[package]` is `"package.name"`,
+   and a key under the `i`-th `[[gate]]` header is `"gate.i.name"`. The
+   `get` functions look a value up by that qualified key; `tableCount` and
+   `tableEntry` work with array-of-table entries. There is no writer. -}
 
-   **Value model.**
-   ```
-   data TomlValue = TStr String | TArr (List String) | TInt Int | TBool Bool
-   ```
-   The parsed document is a flat association list of `(qualifiedKey, value)`
-   pairs.  EVERY key is qualified by its section: a key `k` under `[s]` is
-   stored as `"s.k"` (so `[package] name` is `"package.name"`, and
-   `[workspace] members` is `"workspace.members"`).  Keys before any header
-   stay bare.
-
-   A key `k` under the *i*-th (0-based) `[[t]]` header is stored as
-   `"t.<i>.k"`.  `tableCount` and `tableEntry` are the accessors for that
-   shape; `tableEntry` hands back `Some` sub-document whose keys are bare (so
-   the ordinary accessors work on it unchanged), or `None` for an index that
-   is out of range.
-
-   This module is the GENERAL TOML reader: it knows nothing about
-   `medaka.toml`'s schema.  The `[package]`/`[workspace]` accessors that used
-   to live here are the compiler's business and now live in
-   `compiler/support/manifest.mdk` (I-1). -}
+-- This module is the general TOML reader: it knows nothing about
+-- `medaka.toml`'s schema.  The `[package]`/`[workspace]` accessors live in
+-- `compiler/support/manifest.mdk`.
 
 import string.{trim, lines, toInt, startsWith, drop, indexOf, contains}
 import core.{Display}
 
--- ── Value type ──────────────────────────────────────────────────────────────
+-- # The document
 
+-- | A value: a string, an array of strings, an integer, or a boolean.
 public export data TomlValue =
-  | TStr String
-  | TArr (List String)
+  | TString String
+  | TArray (List String)
   | TInt Int
   | TBool Bool
 
--- | A parsed TOML document: a flat list of (qualifiedKey, value) pairs.
+-- | A parsed document: its keys, qualified by section, with their values.
 public export data Toml = Toml (List (String, TomlValue))
 
 -- ── Helpers ──────────────────────────────────────────────────────────────────
@@ -117,7 +93,7 @@ parseArrayValue arr i
   | otherwise = Err "expected '['"
 
 -- Skip spaces and parse a string item, or close on `]`.  Called at the start
--- of the array and again after each comma — i.e. wherever an item (or the
+-- of the array and again after each comma, i.e. wherever an item (or the
 -- close) is expected next.
 parseArrayItems : Array Char -> Int -> List String -> Result String (List String, Int)
 parseArrayItems arr i acc
@@ -134,8 +110,8 @@ parseArrayItemStr arr i acc = match parseQuotedStr arr i
   Ok (s, j) => parseArraySep arr j (s::acc)
 
 -- After a parsed item: only a `,` (another item may follow, a trailing comma
--- before `]` is fine) or `]` (close) is valid next.  Anything else — most
--- commonly another quoted item with no comma between, `["x" "y"]` — is a
+-- before `]` is fine) or `]` (close) is valid next.  Anything else, most
+-- commonly another quoted item with no comma between, `["x" "y"]`, is a
 -- malformed array and must be rejected loudly rather than silently accepted
 -- as two adjacent items.
 parseArraySep : Array Char -> Int -> List String -> Result String (List String, Int)
@@ -177,9 +153,8 @@ parseKvAfterEq : Array Char -> Int -> Int -> Result String (String, TomlValue)
 parseKvAfterEq arr n eq =
   let keyRaw = stringFromChars (arrayMakeWith eq (k => arrayGetUnsafe k arr))
   let key = trim keyRaw
-  -- Dotted keys (`foo.bar = "zzz"`) are unsupported — the module's header says
-  -- so explicitly ("use table headers instead"); reject loudly rather than
-  -- silently accepting a dot as an ordinary key character.
+  -- Dotted keys (`foo.bar = "zzz"`) are unsupported; reject loudly rather
+  -- than silently accepting a dot as an ordinary key character.
   if contains "." key then
     Err (stringConcat ["dotted key '", key, "' is not supported: use table headers instead"])
   else
@@ -194,10 +169,10 @@ parseKvValue arr n i key
   | otherwise = parseKvScalar (restOfLine arr n i) key
 
 -- After a value parser hands back `nextIndex`, the rest of the line must be
--- empty (once trimmed) — comments are already stripped upstream
+-- empty (once trimmed); comments are already stripped upstream
 -- (`stripComment`, called in `parseLinesAcc` before `parseKv` ever runs).
 -- Anything left over is trailing garbage: `name = "abc" this is garbage`, a
--- missing comma between array items (`["x" "y"]`), or — the same root cause —
+-- missing comma between array items (`["x" "y"]`), or, the same root cause,
 -- a triple-quoted string, whose second `"` of the opening `"""` reads as the
 -- closing quote and leaves `"x"""` unconsumed.
 checkLineConsumed : Array Char -> Int -> String -> Result String Unit
@@ -211,12 +186,12 @@ checkLineConsumed arr j key =
 parseKvStr : Array Char -> Int -> String -> Result String (String, TomlValue)
 parseKvStr arr i key = match parseQuotedStr arr i
   Err e => Err e
-  Ok (s, j) => map (_ => (key, TStr s)) (checkLineConsumed arr j key)
+  Ok (s, j) => map (_ => (key, TString s)) (checkLineConsumed arr j key)
 
 parseKvArr : Array Char -> Int -> String -> Result String (String, TomlValue)
 parseKvArr arr i key = match parseArrayValue arr i
   Err e => Err e
-  Ok (xs, j) => map (_ => (key, TArr xs)) (checkLineConsumed arr j key)
+  Ok (xs, j) => map (_ => (key, TArray xs)) (checkLineConsumed arr j key)
 
 -- The remaining characters of the line from `i`, trimmed.  Used for the
 -- unquoted scalar forms (integer / boolean), which run to end-of-line.
@@ -225,10 +200,10 @@ restOfLine arr n i = trim (stringFromChars (arrayMakeWith
   (n - i)
   (j => arrayGetUnsafe (i + j) arr)))
 
--- Unquoted scalar: `true`/`false`, or an integer.  ANYTHING else — an inline
--- table `{k = v}`, a float, a datetime, a bare word — is an ERROR, never a
--- silent drop: the whole point of this reader is that an unmodelled construct
--- is loud.
+-- Unquoted scalar: `true`/`false`, or an integer.  Anything else (an inline
+-- table `{k = v}`, a float, a datetime, a bare word) is an error, never a
+-- silent drop: the whole point of this reader is that an unmodelled
+-- construct is loud.
 parseKvScalar : String -> String -> Result String (String, TomlValue)
 parseKvScalar tok key
   | tok == "true" = Ok (key, TBool True)
@@ -261,10 +236,8 @@ parseHeader s =
   else
     None
 
--- Qualify a key relative to the current section.  Every section qualifies —
--- `[package]` is not special (it used to be, mirroring the removed
--- `lib/project_config.ml`; that asymmetry made `package` the one table whose
--- keys could collide with a pre-header bare key).
+-- Qualify a key relative to the current section.  Every section qualifies;
+-- `[package]` is not special.
 qualifyKey : String -> String -> String
 qualifyKey section key
   | section == "" = key
@@ -302,44 +275,34 @@ parseLinesAcc (l::ls) section counts acc =
       Ok (k, v) =>
         parseLinesAcc ls section counts ((qualifyKey section k, v)::acc)
 
-{- | Parse a TOML string (supported subset) into a `Toml` document, or an
-   error message describing the first parse failure.
+-- # Parsing
 
-   A `[package]` section — note every key is qualified by its section:
+{- | The document written in a TOML string, or `Err` with a message for
+   the first line that could not be read.
 
-   > parse "[package]\nname = \"hello\"\nversion = \"0.1.0\"" == Ok (Toml [("package.name", TStr "hello"), ("package.version", TStr "0.1.0")])
-   True
+   Keys are qualified by their section. Comments and blank lines are
+   ignored.
 
-   A `[workspace]` section with a string array:
-
-   > parse "[workspace]\nmembers = [\"pkg-a\", \"pkg-b\"]" == Ok (Toml [("workspace.members", TArr ["pkg-a", "pkg-b"])])
-   True
-
-   Integer and boolean values:
-
-   > parse "[limits]\nretries = 3\nverbose = true\noffset = -7" == Ok (Toml [("limits.retries", TInt 3), ("limits.verbose", TBool True), ("limits.offset", TInt (0 - 7))])
-   True
-
-   Repeated `[[gate]]` headers open successive indexed entries:
-
-   > parse "[[gate]]\nname = \"a\"\n[[gate]]\nname = \"b\"" == Ok (Toml [("gate.0.name", TStr "a"), ("gate.1.name", TStr "b")])
-   True
-
-   Comments and blank lines are ignored:
-
-   > parse "# just a comment\n\nname = \"x\"" == Ok (Toml [("name", TStr "x")])
-   True
-
-   Inline `#` after a value is stripped:
-
-   > parse "name = \"hello\" # a comment" == Ok (Toml [("name", TStr "hello")])
-   True -}
+   > parse "[package]\nname = \"hello\"\nversion = \"0.1.0\""
+   Ok Toml [("package.name", TString "hello"), ("package.version", TString "0.1.0")]
+   > parse "[[gate]]\nname = \"a\"\n[[gate]]\nname = \"b\""
+   Ok Toml [("gate.0.name", TString "a"), ("gate.1.name", TString "b")] -}
 export
 parse : String -> Result String Toml
 parse s = map Toml (parseLinesAcc (lines s) "" [] [])
 
--- Parse-error cases.  An unmodelled construct is an `Err`, NOT a silent drop:
--- a line with no `=`, a bare unquoted word, and an inline table each fail.
+-- > parse "[workspace]\nmembers = [\"pkg-a\", \"pkg-b\"]" == Ok (Toml [("workspace.members", TArray ["pkg-a", "pkg-b"])])
+-- True
+-- > parse "[limits]\nretries = 3\nverbose = true\noffset = -7" == Ok (Toml [("limits.retries", TInt 3), ("limits.verbose", TBool True), ("limits.offset", TInt (0 - 7))])
+-- True
+-- > parse "# just a comment\n\nname = \"x\"" == Ok (Toml [("name", TString "x")])
+-- True
+-- > parse "name = \"hello\" # a comment" == Ok (Toml [("name", TString "hello")])
+-- True
+
+-- Parse-error cases.  An unmodelled construct is an `Err`, not a silent
+-- drop: a line with no `=`, a bare unquoted word, and an inline table each
+-- fail.
 
 {- > parse "bad line no equals"
    Err "expected '=' in: bad line no equals"
@@ -362,7 +325,7 @@ parse s = map Toml (parseLinesAcc (lines s) "" [] [])
    regression):
 
    > parse "name = \"abc\""
-   Ok Toml [("name", TStr "abc")]
+   Ok Toml [("name", TString "abc")]
 
    Trailing garbage after a closed array value is rejected loudly:
 
@@ -379,18 +342,16 @@ parse s = map Toml (parseLinesAcc (lines s) "" [] [])
    regression):
 
    > parse "oracles = [\"x\", \"y\"]"
-   Ok Toml [("oracles", TArr ["x", "y"])]
+   Ok Toml [("oracles", TArray ["x", "y"])]
 
    A triple-quoted (multiline) string is rejected loudly rather than
-   mis-parsing to a wrong value — the header lists multiline strings as
-   unsupported, and this is the same "line fully consumed" check as the two
-   trailing-garbage cases above:
+   mis-parsing to a wrong value; this is the same "line fully consumed" check
+   as the two trailing-garbage cases above:
 
    > parse "name = \"\"\"x\"\"\""
    Err "trailing content after value for key 'name': \"x\"\"\""
 
-   A dotted key is rejected loudly — the header says to use table headers
-   instead:
+   A dotted key is rejected loudly:
 
    > parse "foo.bar = \"zzz\""
    Err "dotted key 'foo.bar' is not supported: use table headers instead"
@@ -399,9 +360,9 @@ parse s = map Toml (parseLinesAcc (lines s) "" [] [])
    regression):
 
    > parse "[foo]\nbar = \"zzz\""
-   Ok Toml [("foo.bar", TStr "zzz")] -}
+   Ok Toml [("foo.bar", TString "zzz")] -}
 
--- ── Accessors ────────────────────────────────────────────────────────────────
+-- # Accessors
 
 lookupKvs : String -> List (String, TomlValue) -> Option TomlValue
 lookupKvs _ [] = None
@@ -442,71 +403,47 @@ parseTableEntryStr name i field src = match parse src
     None => None
     Some e => getString field e
 
-{- | Look up a string value by (qualified) key.  Returns `None` if the key is
-   absent or holds an array.
+{- | The string at a qualified key, or `None` when the key is absent or
+   holds another kind of value.
 
    > parseGetStr "package.name" "[package]\nname = \"medaka\"\nversion = \"1.0.0\"\nentry = \"main.mdk\""
    Some "medaka"
-
-   Returns `None` for an array-valued key:
-
-   > parseGetStr "workspace.members" "[workspace]\nmembers = [\"a\"]"
-   None
-
-   Returns `None` for an absent key:
-
    > parseGetStr "missing" "[package]\nname = \"x\""
-   None
-
-   Returns `None` when the table itself is absent:
-
-   > parseGetStr "server.host" "[package]\nname = \"x\""
    None -}
 export
 getString : String -> Toml -> Option String
 getString key (Toml kvs) = match lookupKvs key kvs
-  Some (TStr s) => Some s
+  Some (TString s) => Some s
   _ => None
 
-{- | Look up an array-of-strings value by (qualified) key.  Returns `None` if
-   the key is absent or holds a string.
+-- > parseGetStr "workspace.members" "[workspace]\nmembers = [\"a\"]"
+-- None
+-- > parseGetStr "server.host" "[package]\nname = \"x\""
+-- None
+
+{- | The array of strings at a qualified key, or `None` when the key is
+   absent or holds another kind of value.
 
    > parseGetArr "workspace.members" "[workspace]\nmembers = [\"pkg-a\", \"pkg-b\"]"
    Some ["pkg-a", "pkg-b"]
-
-   Returns `None` for a string-valued key:
-
-   > parseGetArr "package.name" "[package]\nname = \"x\"\nversion = \"0.1.0\"\nentry = \"main.mdk\""
-   None
-
-   Returns `None` for an absent key:
-
-   > parseGetArr "workspace.members" "[package]\nname = \"x\""
-   None
-
-   An empty array yields `Some []`:
-
    > parseGetArr "workspace.members" "[workspace]\nmembers = []"
    Some [] -}
 export
 getArray : String -> Toml -> Option (List String)
 getArray key (Toml kvs) = match lookupKvs key kvs
-  Some (TArr xs) => Some xs
+  Some (TArray xs) => Some xs
   _ => None
 
-{- | Look up an integer value by (qualified) key.  `None` if the key is absent
-   or holds another type.
+-- > parseGetArr "package.name" "[package]\nname = \"x\"\nversion = \"0.1.0\"\nentry = \"main.mdk\""
+-- None
+-- > parseGetArr "workspace.members" "[package]\nname = \"x\""
+-- None
+
+{- | The integer at a qualified key, or `None` when the key is absent or
+   holds another kind of value.
 
    > parseGetInt "limits.retries" "[limits]\nretries = 3"
    Some 3
-
-   Negative integers parse:
-
-   > parseGetInt "limits.offset" "[limits]\noffset = -7" == Some (0 - 7)
-   True
-
-   `None` for a string-valued key:
-
    > parseGetInt "package.name" "[package]\nname = \"x\""
    None -}
 export
@@ -515,17 +452,14 @@ getInt key (Toml kvs) = match lookupKvs key kvs
   Some (TInt n) => Some n
   _ => None
 
-{- | Look up a boolean value by (qualified) key.  `None` if the key is absent
-   or holds another type.
+-- > parseGetInt "limits.offset" "[limits]\noffset = -7" == Some (0 - 7)
+-- True
+
+{- | The boolean at a qualified key, or `None` when the key is absent or
+   holds another kind of value.
 
    > parseGetBool "limits.verbose" "[limits]\nverbose = true"
    Some True
-
-   > parseGetBool "limits.verbose" "[limits]\nverbose = false"
-   Some False
-
-   `None` for an integer-valued key:
-
    > parseGetBool "limits.retries" "[limits]\nretries = 3"
    None -}
 export
@@ -534,7 +468,10 @@ getBool key (Toml kvs) = match lookupKvs key kvs
   Some (TBool b) => Some b
   _ => None
 
--- ── Array-of-tables accessors ───────────────────────────────────────────────
+-- > parseGetBool "limits.verbose" "[limits]\nverbose = false"
+-- Some False
+
+-- # Arrays of tables
 
 -- The 0-based index in a key of the shape `<name>.<idx>.<field>`, or None.
 tableIdxOf : String -> String -> Option Int
@@ -552,13 +489,10 @@ tableCountGo prefix ((k, _)::rest) best = match tableIdxOf prefix k
   None => tableCountGo prefix rest best
   Some i => tableCountGo prefix rest (max (i + 1) best)
 
-{- | How many `[[name]]` entries the document contains.
+{- | The number of `[[name]]` entries in the document.
 
    > parseTableCount "gate" "[[gate]]\nname = \"a\"\n[[gate]]\nname = \"b\""
    2
-
-   Zero when the table is absent:
-
    > parseTableCount "gate" "[package]\nname = \"x\""
    0 -}
 export
@@ -572,20 +506,14 @@ stripTablePrefix prefix ((k, v)::rest)
     (drop (stringLength prefix) k, v) :: stripTablePrefix prefix rest
   | otherwise = stripTablePrefix prefix rest
 
-{- | The `i`-th (0-based) `[[name]]` entry, as a sub-document whose keys are
-   bare — so `getString`/`getArray`/`getInt`/`getBool` apply unchanged.
-   `None` when `i` is out of range.
+{- | The `i`-th `[[name]]` entry, counting from `0`, as a document of its
+   own, or `None` when `i` is out of range.
 
-   `Option`, not a bare `Toml`, for the same reason `path.stripPrefix` is
-   (#2310's defect class): an out-of-range index used to come back as a
-   document in which every lookup happens to be `None`, so "no such entry" and
-   "an entry with no keys" were the same value.
+   The entry's keys are unqualified, so the `get` functions apply to it
+   directly.
 
    > parseTableEntryStr "gate" 1 "name" "[[gate]]\nname = \"a\"\n[[gate]]\nname = \"b\""
    Some "b"
-
-   An out-of-range index is `None`:
-
    > parseTableEntryStr "gate" 9 "name" "[[gate]]\nname = \"a\""
    None -}
 export
@@ -598,21 +526,21 @@ tableEntry name i (Toml kvs) =
 
 -- ── Eq and Debug instances ──────────────────────────────────────────────────
 
-{- | Structural equality on `TomlValue`.
+{- Structural equality on `TomlValue`.
 
-   > eqTomlValue (TStr "a") (TStr "a")
+   > eqTomlValue (TString "a") (TString "a")
    True
 
-   > eqTomlValue (TArr ["a", "b"]) (TArr ["a", "b"])
+   > eqTomlValue (TArray ["a", "b"]) (TArray ["a", "b"])
    True
 
    Different constructors never compare equal:
 
-   > eqTomlValue (TStr "a") (TArr ["a"])
+   > eqTomlValue (TString "a") (TArray ["a"])
    False -}
 eqTomlValue : TomlValue -> TomlValue -> Bool
-eqTomlValue (TStr a) (TStr b) = a == b
-eqTomlValue (TArr a) (TArr b) = eqStrLists a b
+eqTomlValue (TString a) (TString b) = a == b
+eqTomlValue (TArray a) (TArray b) = eqStrLists a b
 eqTomlValue (TInt a) (TInt b) = a == b
 eqTomlValue (TBool a) (TBool b) = a == b
 eqTomlValue _ _ = False
@@ -635,13 +563,13 @@ export impl Eq TomlValue where
 export impl Eq Toml where
   eq (Toml a) (Toml b) = eqKvList a b
 
-{- | Render a `TomlValue` for debugging.
+{- Render a `TomlValue` for debugging.
 
-   > debugTomlValue (TStr "hi")
-   "TStr \"hi\""
+   > debugTomlValue (TString "hi")
+   "TString \"hi\""
 
-   > debugTomlValue (TArr ["a", "b"])
-   "TArr [\"a\", \"b\"]"
+   > debugTomlValue (TArray ["a", "b"])
+   "TArray [\"a\", \"b\"]"
 
    > debugTomlValue (TInt 42)
    "TInt 42"
@@ -649,8 +577,8 @@ export impl Eq Toml where
    > debugTomlValue (TBool True)
    "TBool True" -}
 debugTomlValue : TomlValue -> String
-debugTomlValue (TStr s) = stringConcat ["TStr ", debug s]
-debugTomlValue (TArr xs) = stringConcat ["TArr ", debugStrList xs]
+debugTomlValue (TString s) = stringConcat ["TString ", debug s]
+debugTomlValue (TArray xs) = stringConcat ["TArray ", debugStrList xs]
 debugTomlValue (TInt n) = stringConcat ["TInt ", intToString n]
 debugTomlValue (TBool b) =
   stringConcat ["TBool ", if b then "True" else "False"]
@@ -677,24 +605,19 @@ export impl Debug TomlValue where
 export impl Debug Toml where
   debug (Toml kvs) = stringConcat ["Toml [", debugKvList kvs, "]"]
 
-{- ── Display (sheet row A-5) ──────────────────────────────────────────────
-
-   ⚠️ This is NOT a TOML renderer.  Emitting a document `parse` could read
-   back is row H-4, which is DEFERRED behind #2240 (the `toml`-onto-`parsec`
-   consolidation); shipping one here under the `Display` name would be that
-   deferred work wearing a disguise.  What `Display` owes is a stable,
-   legible rendering of the VALUE, in the same `T { … }` shape `Display (Map
-   k v)` and `Display (Set a)` use.
-
-   Values keep TOML's own spelling for their SCALARS (a string is quoted, a
-   bool is `true`/`false`) so that the four variants stay distinguishable --
-   an unquoted `TStr "1"` would render exactly like `TInt 1`, and a `Display`
-   that collapses two distinct values into one text is not a rendering of the
-   value.  That injectivity is the law under test. -}
+-- `Display` is not a TOML renderer.  Emitting a document `parse` could read
+-- back is deferred behind #2240 (the `toml`-onto-`parsec` consolidation);
+-- shipping one here under the `Display` name would be that deferred work
+-- wearing a disguise.  What `Display` owes is a stable, legible rendering of
+-- the value, in the same `T { … }` shape `Display (Map k v)` and
+-- `Display (Set a)` use.  Values keep TOML's own spelling for their scalars
+-- (a string is quoted, a bool is `true`/`false`) so that the four variants
+-- stay distinguishable: an unquoted `TString "1"` would render exactly like
+-- `TInt 1`.  That injectivity is the law under test.
 
 displayTomlValue : TomlValue -> String
-displayTomlValue (TStr s) = debug s
-displayTomlValue (TArr xs) = debugStrList xs
+displayTomlValue (TString s) = debug s
+displayTomlValue (TArray xs) = debugStrList xs
 displayTomlValue (TInt n) = intToString n
 displayTomlValue (TBool b) = if b then "true" else "false"
 
@@ -706,21 +629,24 @@ displayKvList [] = ""
 displayKvList (p::[]) = displayKvPair p
 displayKvList (p::ps) = stringConcat [displayKvPair p, ", ", displayKvList ps]
 
-{- | A `TomlValue` in TOML's own scalar spelling.
+{- | `display` renders a value in TOML's own spelling: a string quoted, a
+   boolean as `true` or `false`.
 
-   > display (TStr "hi")
+   > display (TString "hi")
    "\"hi\""
-   > display (TInt 42)
-   "42"
    > display (TBool True)
-   "true"
-   > display (TArr ["a", "b"])
-   "[\"a\", \"b\"]" -}
+   "true" -}
 export impl Display TomlValue where
   display = displayTomlValue
 
-{- | A whole document as `Toml { key = value, … }` (empty -> `Toml {}`),
-   mirroring `Display (Map k v)`'s `Map { … }`.
+-- > display (TInt 42)
+-- "42"
+-- > display (TArray ["a", "b"])
+-- "[\"a\", \"b\"]"
+
+{- | `display` renders a document as `Toml { key = value, ... }`.
+
+   This is not TOML text; `parse` cannot read it back.
 
    > display (Toml [("a.b", TInt 1), ("c", TBool False)])
    "Toml { a.b = 1, c = false }"
@@ -773,15 +699,15 @@ prop "array-of-tables entries stay separate" (k : Int) = parseTableCount "gate" 
   && parseTableEntryStr "gate" 0 "name" (mkGates k) == Some ("g" ++ intToString k)
   && parseTableEntryStr "gate" 1 "name" (mkGates k) == Some ("h" ++ intToString k)
 
--- ── Instance laws (sheet row A-5) ───────────────────────────────────────
+-- ── Instance laws ───────────────────────────────────────────────────────
 
 -- LAW: `Display TomlValue` is INJECTIVE across the four variants -- a
--- rendering that cannot tell a quoted `TStr "1"` from an `TInt 1` is not a
+-- rendering that cannot tell a quoted `TString "1"` from an `TInt 1` is not a
 -- rendering of the value.  This is the clause that pins the TOML scalar
 -- spelling (quotes, lowercase bools) rather than the prelude's.
 prop "Display TomlValue separates the four variants" (n : Int) (b : Bool) =
   let s = intToString n
-  let vs = [TStr s, TArr [s], TInt n, TBool b]
+  let vs = [TString s, TArray [s], TInt n, TBool b]
   allDistinct (map display vs)
 
 allDistinct : List String -> Bool
@@ -811,7 +737,7 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 # DESUGAR
 (DUse false (UseGroup ("string") ((mem "trim" false) (mem "lines" false) (mem "toInt" false) (mem "startsWith" false) (mem "drop" false) (mem "indexOf" false) (mem "contains" false))))
 (DUse false (UseGroup ("core") ((mem "Display" false))))
-(DData Public "TomlValue" () ((variant "TStr" (ConPos (TyCon "String"))) (variant "TArr" (ConPos (TyApp (TyCon "List") (TyCon "String")))) (variant "TInt" (ConPos (TyCon "Int"))) (variant "TBool" (ConPos (TyCon "Bool")))) ())
+(DData Public "TomlValue" () ((variant "TString" (ConPos (TyCon "String"))) (variant "TArray" (ConPos (TyApp (TyCon "List") (TyCon "String")))) (variant "TInt" (ConPos (TyCon "Int"))) (variant "TBool" (ConPos (TyCon "Bool")))) ())
 (DData Public "Toml" () ((variant "Toml" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue")))))) ())
 (DTypeSig false "listReverse" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))
 (DFunDef false "listReverse" () (EApp (EVar "listRevGo") (EListLit)))
@@ -849,9 +775,9 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 (DTypeSig false "checkLineConsumed" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DFunDef false "checkLineConsumed" ((PVar "arr") (PVar "j") (PVar "key")) (EBlock (DoLet false false (PVar "trailing") (EApp (EApp (EApp (EVar "restOfLine") (EVar "arr")) (EApp (EVar "arrayLength") (EVar "arr"))) (EVar "j"))) (DoExpr (EIf (EBinOp "==" (EVar "trailing") (ELit (LString ""))) (EApp (EVar "Ok") (ELit LUnit)) (EApp (EVar "Err") (EApp (EVar "stringConcat") (EListLit (ELit (LString "trailing content after value for key '")) (EVar "key") (ELit (LString "': ")) (EVar "trailing"))))))))
 (DTypeSig false "parseKvStr" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "TomlValue")))))))
-(DFunDef false "parseKvStr" ((PVar "arr") (PVar "i") (PVar "key")) (EMatch (EApp (EApp (EVar "parseQuotedStr") (EVar "arr")) (EVar "i")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "s") (PVar "j"))) () (EApp (EApp (EVar "map") (ELam (PWild) (ETuple (EVar "key") (EApp (EVar "TStr") (EVar "s"))))) (EApp (EApp (EApp (EVar "checkLineConsumed") (EVar "arr")) (EVar "j")) (EVar "key"))))))
+(DFunDef false "parseKvStr" ((PVar "arr") (PVar "i") (PVar "key")) (EMatch (EApp (EApp (EVar "parseQuotedStr") (EVar "arr")) (EVar "i")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "s") (PVar "j"))) () (EApp (EApp (EVar "map") (ELam (PWild) (ETuple (EVar "key") (EApp (EVar "TString") (EVar "s"))))) (EApp (EApp (EApp (EVar "checkLineConsumed") (EVar "arr")) (EVar "j")) (EVar "key"))))))
 (DTypeSig false "parseKvArr" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "TomlValue")))))))
-(DFunDef false "parseKvArr" ((PVar "arr") (PVar "i") (PVar "key")) (EMatch (EApp (EApp (EVar "parseArrayValue") (EVar "arr")) (EVar "i")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "xs") (PVar "j"))) () (EApp (EApp (EVar "map") (ELam (PWild) (ETuple (EVar "key") (EApp (EVar "TArr") (EVar "xs"))))) (EApp (EApp (EApp (EVar "checkLineConsumed") (EVar "arr")) (EVar "j")) (EVar "key"))))))
+(DFunDef false "parseKvArr" ((PVar "arr") (PVar "i") (PVar "key")) (EMatch (EApp (EApp (EVar "parseArrayValue") (EVar "arr")) (EVar "i")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "xs") (PVar "j"))) () (EApp (EApp (EVar "map") (ELam (PWild) (ETuple (EVar "key") (EApp (EVar "TArray") (EVar "xs"))))) (EApp (EApp (EApp (EVar "checkLineConsumed") (EVar "arr")) (EVar "j")) (EVar "key"))))))
 (DTypeSig false "restOfLine" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "restOfLine" ((PVar "arr") (PVar "n") (PVar "i")) (EApp (EVar "trim") (EApp (EVar "stringFromChars") (EApp (EApp (EVar "arrayMakeWith") (EBinOp "-" (EVar "n") (EVar "i"))) (ELam ((PVar "j")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (EVar "j"))) (EVar "arr")))))))
 (DTypeSig false "parseKvScalar" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "TomlValue"))))))
@@ -888,9 +814,9 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 (DTypeSig false "parseTableEntryStr" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))))
 (DFunDef false "parseTableEntryStr" ((PVar "name") (PVar "i") (PVar "field") (PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "doc")) () (EMatch (EApp (EApp (EApp (EVar "tableEntry") (EVar "name")) (EVar "i")) (EVar "doc")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "e")) () (EApp (EApp (EVar "getString") (EVar "field")) (EVar "e")))))))
 (DTypeSig true "getString" (TyFun (TyCon "String") (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "getString" ((PVar "key") (PCon "Toml" (PVar "kvs"))) (EMatch (EApp (EApp (EVar "lookupKvs") (EVar "key")) (EVar "kvs")) (arm (PCon "Some" (PCon "TStr" (PVar "s"))) () (EApp (EVar "Some") (EVar "s"))) (arm PWild () (EVar "None"))))
+(DFunDef false "getString" ((PVar "key") (PCon "Toml" (PVar "kvs"))) (EMatch (EApp (EApp (EVar "lookupKvs") (EVar "key")) (EVar "kvs")) (arm (PCon "Some" (PCon "TString" (PVar "s"))) () (EApp (EVar "Some") (EVar "s"))) (arm PWild () (EVar "None"))))
 (DTypeSig true "getArray" (TyFun (TyCon "String") (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "getArray" ((PVar "key") (PCon "Toml" (PVar "kvs"))) (EMatch (EApp (EApp (EVar "lookupKvs") (EVar "key")) (EVar "kvs")) (arm (PCon "Some" (PCon "TArr" (PVar "xs"))) () (EApp (EVar "Some") (EVar "xs"))) (arm PWild () (EVar "None"))))
+(DFunDef false "getArray" ((PVar "key") (PCon "Toml" (PVar "kvs"))) (EMatch (EApp (EApp (EVar "lookupKvs") (EVar "key")) (EVar "kvs")) (arm (PCon "Some" (PCon "TArray" (PVar "xs"))) () (EApp (EVar "Some") (EVar "xs"))) (arm PWild () (EVar "None"))))
 (DTypeSig true "getInt" (TyFun (TyCon "String") (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "getInt" ((PVar "key") (PCon "Toml" (PVar "kvs"))) (EMatch (EApp (EApp (EVar "lookupKvs") (EVar "key")) (EVar "kvs")) (arm (PCon "Some" (PCon "TInt" (PVar "n"))) () (EApp (EVar "Some") (EVar "n"))) (arm PWild () (EVar "None"))))
 (DTypeSig true "getBool" (TyFun (TyCon "String") (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyCon "Bool")))))
@@ -908,8 +834,8 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 (DTypeSig true "tableEntry" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyCon "Toml"))))))
 (DFunDef false "tableEntry" ((PVar "name") (PVar "i") (PCon "Toml" (PVar "kvs"))) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EApp (EVar "tableCount") (EVar "name")) (EApp (EVar "Toml") (EVar "kvs"))))) (EVar "None") (EApp (EVar "Some") (EApp (EVar "Toml") (EApp (EApp (EVar "stripTablePrefix") (EApp (EVar "stringConcat") (EListLit (EVar "name") (ELit (LString ".")) (EApp (EVar "intToString") (EVar "i")) (ELit (LString "."))))) (EVar "kvs"))))))
 (DTypeSig false "eqTomlValue" (TyFun (TyCon "TomlValue") (TyFun (TyCon "TomlValue") (TyCon "Bool"))))
-(DFunDef false "eqTomlValue" ((PCon "TStr" (PVar "a")) (PCon "TStr" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
-(DFunDef false "eqTomlValue" ((PCon "TArr" (PVar "a")) (PCon "TArr" (PVar "b"))) (EApp (EApp (EVar "eqStrLists") (EVar "a")) (EVar "b")))
+(DFunDef false "eqTomlValue" ((PCon "TString" (PVar "a")) (PCon "TString" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
+(DFunDef false "eqTomlValue" ((PCon "TArray" (PVar "a")) (PCon "TArray" (PVar "b"))) (EApp (EApp (EVar "eqStrLists") (EVar "a")) (EVar "b")))
 (DFunDef false "eqTomlValue" ((PCon "TInt" (PVar "a")) (PCon "TInt" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
 (DFunDef false "eqTomlValue" ((PCon "TBool" (PVar "a")) (PCon "TBool" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
 (DFunDef false "eqTomlValue" (PWild PWild) (EVar "False"))
@@ -924,8 +850,8 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 (DImpl true "Eq" ((TyCon "TomlValue")) () ((im "eq" () (EVar "eqTomlValue"))))
 (DImpl true "Eq" ((TyCon "Toml")) () ((im "eq" ((PCon "Toml" (PVar "a")) (PCon "Toml" (PVar "b"))) (EApp (EApp (EVar "eqKvList") (EVar "a")) (EVar "b")))))
 (DTypeSig false "debugTomlValue" (TyFun (TyCon "TomlValue") (TyCon "String")))
-(DFunDef false "debugTomlValue" ((PCon "TStr" (PVar "s"))) (EApp (EVar "stringConcat") (EListLit (ELit (LString "TStr ")) (EApp (EVar "debug") (EVar "s")))))
-(DFunDef false "debugTomlValue" ((PCon "TArr" (PVar "xs"))) (EApp (EVar "stringConcat") (EListLit (ELit (LString "TArr ")) (EApp (EVar "debugStrList") (EVar "xs")))))
+(DFunDef false "debugTomlValue" ((PCon "TString" (PVar "s"))) (EApp (EVar "stringConcat") (EListLit (ELit (LString "TString ")) (EApp (EVar "debug") (EVar "s")))))
+(DFunDef false "debugTomlValue" ((PCon "TArray" (PVar "xs"))) (EApp (EVar "stringConcat") (EListLit (ELit (LString "TArray ")) (EApp (EVar "debugStrList") (EVar "xs")))))
 (DFunDef false "debugTomlValue" ((PCon "TInt" (PVar "n"))) (EApp (EVar "stringConcat") (EListLit (ELit (LString "TInt ")) (EApp (EVar "intToString") (EVar "n")))))
 (DFunDef false "debugTomlValue" ((PCon "TBool" (PVar "b"))) (EApp (EVar "stringConcat") (EListLit (ELit (LString "TBool ")) (EIf (EVar "b") (ELit (LString "True")) (ELit (LString "False"))))))
 (DTypeSig false "debugStrList" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
@@ -943,8 +869,8 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 (DImpl true "Debug" ((TyCon "TomlValue")) () ((im "debug" () (EVar "debugTomlValue"))))
 (DImpl true "Debug" ((TyCon "Toml")) () ((im "debug" ((PCon "Toml" (PVar "kvs"))) (EApp (EVar "stringConcat") (EListLit (ELit (LString "Toml [")) (EApp (EVar "debugKvList") (EVar "kvs")) (ELit (LString "]")))))))
 (DTypeSig false "displayTomlValue" (TyFun (TyCon "TomlValue") (TyCon "String")))
-(DFunDef false "displayTomlValue" ((PCon "TStr" (PVar "s"))) (EApp (EVar "debug") (EVar "s")))
-(DFunDef false "displayTomlValue" ((PCon "TArr" (PVar "xs"))) (EApp (EVar "debugStrList") (EVar "xs")))
+(DFunDef false "displayTomlValue" ((PCon "TString" (PVar "s"))) (EApp (EVar "debug") (EVar "s")))
+(DFunDef false "displayTomlValue" ((PCon "TArray" (PVar "xs"))) (EApp (EVar "debugStrList") (EVar "xs")))
 (DFunDef false "displayTomlValue" ((PCon "TInt" (PVar "n"))) (EApp (EVar "intToString") (EVar "n")))
 (DFunDef false "displayTomlValue" ((PCon "TBool" (PVar "b"))) (EIf (EVar "b") (ELit (LString "true")) (ELit (LString "false"))))
 (DTypeSig false "displayKvPair" (TyFun (TyTuple (TyCon "String") (TyCon "TomlValue")) (TyCon "String")))
@@ -966,7 +892,7 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 (DTypeSig false "mkGates" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "mkGates" ((PVar "k")) (EApp (EVar "stringConcat") (EListLit (ELit (LString "[[gate]]\nname = \"g")) (EApp (EVar "intToString") (EVar "k")) (ELit (LString "\"\n[[gate]]\nname = \"h")) (EApp (EVar "intToString") (EVar "k")) (ELit (LString "\"\n")))))
 (DProp false "array-of-tables entries stay separate" ((pp "k" (TyCon "Int"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "parseTableCount") (ELit (LString "gate"))) (EApp (EVar "mkGates") (EVar "k"))) (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EApp (EApp (EVar "parseTableEntryStr") (ELit (LString "gate"))) (ELit (LInt 0))) (ELit (LString "name"))) (EApp (EVar "mkGates") (EVar "k"))) (EApp (EVar "Some") (EBinOp "++" (ELit (LString "g")) (EApp (EVar "intToString") (EVar "k")))))) (EBinOp "==" (EApp (EApp (EApp (EApp (EVar "parseTableEntryStr") (ELit (LString "gate"))) (ELit (LInt 1))) (ELit (LString "name"))) (EApp (EVar "mkGates") (EVar "k"))) (EApp (EVar "Some") (EBinOp "++" (ELit (LString "h")) (EApp (EVar "intToString") (EVar "k")))))))
-(DProp false "Display TomlValue separates the four variants" ((pp "n" (TyCon "Int")) (pp "b" (TyCon "Bool"))) (EBlock (DoLet false false (PVar "s") (EApp (EVar "intToString") (EVar "n"))) (DoLet false false (PVar "vs") (EListLit (EApp (EVar "TStr") (EVar "s")) (EApp (EVar "TArr") (EListLit (EVar "s"))) (EApp (EVar "TInt") (EVar "n")) (EApp (EVar "TBool") (EVar "b")))) (DoExpr (EApp (EVar "allDistinct") (EApp (EApp (EVar "map") (EVar "display")) (EVar "vs"))))))
+(DProp false "Display TomlValue separates the four variants" ((pp "n" (TyCon "Int")) (pp "b" (TyCon "Bool"))) (EBlock (DoLet false false (PVar "s") (EApp (EVar "intToString") (EVar "n"))) (DoLet false false (PVar "vs") (EListLit (EApp (EVar "TString") (EVar "s")) (EApp (EVar "TArray") (EListLit (EVar "s"))) (EApp (EVar "TInt") (EVar "n")) (EApp (EVar "TBool") (EVar "b")))) (DoExpr (EApp (EVar "allDistinct") (EApp (EApp (EVar "map") (EVar "display")) (EVar "vs"))))))
 (DTypeSig false "allDistinct" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))
 (DFunDef false "allDistinct" ((PList)) (EVar "True"))
 (DFunDef false "allDistinct" ((PCons (PVar "x") (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EVar "all") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "x") (EVar "_s")))) (EVar "rest")) (EApp (EVar "allDistinct") (EVar "rest"))))
@@ -975,7 +901,7 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 # MARK
 (DUse false (UseGroup ("string") ((mem "trim" false) (mem "lines" false) (mem "toInt" false) (mem "startsWith" false) (mem "drop" false) (mem "indexOf" false) (mem "contains" false))))
 (DUse false (UseGroup ("core") ((mem "Display" false))))
-(DData Public "TomlValue" () ((variant "TStr" (ConPos (TyCon "String"))) (variant "TArr" (ConPos (TyApp (TyCon "List") (TyCon "String")))) (variant "TInt" (ConPos (TyCon "Int"))) (variant "TBool" (ConPos (TyCon "Bool")))) ())
+(DData Public "TomlValue" () ((variant "TString" (ConPos (TyCon "String"))) (variant "TArray" (ConPos (TyApp (TyCon "List") (TyCon "String")))) (variant "TInt" (ConPos (TyCon "Int"))) (variant "TBool" (ConPos (TyCon "Bool")))) ())
 (DData Public "Toml" () ((variant "Toml" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue")))))) ())
 (DTypeSig false "listReverse" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))
 (DFunDef false "listReverse" () (EApp (EVar "listRevGo") (EListLit)))
@@ -1013,9 +939,9 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 (DTypeSig false "checkLineConsumed" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DFunDef false "checkLineConsumed" ((PVar "arr") (PVar "j") (PVar "key")) (EBlock (DoLet false false (PVar "trailing") (EApp (EApp (EApp (EVar "restOfLine") (EVar "arr")) (EApp (EVar "arrayLength") (EVar "arr"))) (EVar "j"))) (DoExpr (EIf (EBinOp "==" (EVar "trailing") (ELit (LString ""))) (EApp (EVar "Ok") (ELit LUnit)) (EApp (EVar "Err") (EApp (EVar "stringConcat") (EListLit (ELit (LString "trailing content after value for key '")) (EVar "key") (ELit (LString "': ")) (EVar "trailing"))))))))
 (DTypeSig false "parseKvStr" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "TomlValue")))))))
-(DFunDef false "parseKvStr" ((PVar "arr") (PVar "i") (PVar "key")) (EMatch (EApp (EApp (EVar "parseQuotedStr") (EVar "arr")) (EVar "i")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "s") (PVar "j"))) () (EApp (EApp (EMethodRef "map") (ELam (PWild) (ETuple (EVar "key") (EApp (EVar "TStr") (EVar "s"))))) (EApp (EApp (EApp (EVar "checkLineConsumed") (EVar "arr")) (EVar "j")) (EVar "key"))))))
+(DFunDef false "parseKvStr" ((PVar "arr") (PVar "i") (PVar "key")) (EMatch (EApp (EApp (EVar "parseQuotedStr") (EVar "arr")) (EVar "i")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "s") (PVar "j"))) () (EApp (EApp (EMethodRef "map") (ELam (PWild) (ETuple (EVar "key") (EApp (EVar "TString") (EVar "s"))))) (EApp (EApp (EApp (EVar "checkLineConsumed") (EVar "arr")) (EVar "j")) (EVar "key"))))))
 (DTypeSig false "parseKvArr" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "TomlValue")))))))
-(DFunDef false "parseKvArr" ((PVar "arr") (PVar "i") (PVar "key")) (EMatch (EApp (EApp (EVar "parseArrayValue") (EVar "arr")) (EVar "i")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "xs") (PVar "j"))) () (EApp (EApp (EMethodRef "map") (ELam (PWild) (ETuple (EVar "key") (EApp (EVar "TArr") (EVar "xs"))))) (EApp (EApp (EApp (EVar "checkLineConsumed") (EVar "arr")) (EVar "j")) (EVar "key"))))))
+(DFunDef false "parseKvArr" ((PVar "arr") (PVar "i") (PVar "key")) (EMatch (EApp (EApp (EVar "parseArrayValue") (EVar "arr")) (EVar "i")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "xs") (PVar "j"))) () (EApp (EApp (EMethodRef "map") (ELam (PWild) (ETuple (EVar "key") (EApp (EVar "TArray") (EVar "xs"))))) (EApp (EApp (EApp (EVar "checkLineConsumed") (EVar "arr")) (EVar "j")) (EVar "key"))))))
 (DTypeSig false "restOfLine" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "restOfLine" ((PVar "arr") (PVar "n") (PVar "i")) (EApp (EVar "trim") (EApp (EVar "stringFromChars") (EApp (EApp (EVar "arrayMakeWith") (EBinOp "-" (EVar "n") (EVar "i"))) (ELam ((PVar "j")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (EVar "j"))) (EVar "arr")))))))
 (DTypeSig false "parseKvScalar" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "TomlValue"))))))
@@ -1052,9 +978,9 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 (DTypeSig false "parseTableEntryStr" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))))
 (DFunDef false "parseTableEntryStr" ((PVar "name") (PVar "i") (PVar "field") (PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "doc")) () (EMatch (EApp (EApp (EApp (EVar "tableEntry") (EVar "name")) (EVar "i")) (EVar "doc")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "e")) () (EApp (EApp (EVar "getString") (EVar "field")) (EVar "e")))))))
 (DTypeSig true "getString" (TyFun (TyCon "String") (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "getString" ((PVar "key") (PCon "Toml" (PVar "kvs"))) (EMatch (EApp (EApp (EVar "lookupKvs") (EVar "key")) (EVar "kvs")) (arm (PCon "Some" (PCon "TStr" (PVar "s"))) () (EApp (EVar "Some") (EVar "s"))) (arm PWild () (EVar "None"))))
+(DFunDef false "getString" ((PVar "key") (PCon "Toml" (PVar "kvs"))) (EMatch (EApp (EApp (EVar "lookupKvs") (EVar "key")) (EVar "kvs")) (arm (PCon "Some" (PCon "TString" (PVar "s"))) () (EApp (EVar "Some") (EVar "s"))) (arm PWild () (EVar "None"))))
 (DTypeSig true "getArray" (TyFun (TyCon "String") (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "getArray" ((PVar "key") (PCon "Toml" (PVar "kvs"))) (EMatch (EApp (EApp (EVar "lookupKvs") (EVar "key")) (EVar "kvs")) (arm (PCon "Some" (PCon "TArr" (PVar "xs"))) () (EApp (EVar "Some") (EVar "xs"))) (arm PWild () (EVar "None"))))
+(DFunDef false "getArray" ((PVar "key") (PCon "Toml" (PVar "kvs"))) (EMatch (EApp (EApp (EVar "lookupKvs") (EVar "key")) (EVar "kvs")) (arm (PCon "Some" (PCon "TArray" (PVar "xs"))) () (EApp (EVar "Some") (EVar "xs"))) (arm PWild () (EVar "None"))))
 (DTypeSig true "getInt" (TyFun (TyCon "String") (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "getInt" ((PVar "key") (PCon "Toml" (PVar "kvs"))) (EMatch (EApp (EApp (EVar "lookupKvs") (EVar "key")) (EVar "kvs")) (arm (PCon "Some" (PCon "TInt" (PVar "n"))) () (EApp (EVar "Some") (EVar "n"))) (arm PWild () (EVar "None"))))
 (DTypeSig true "getBool" (TyFun (TyCon "String") (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyCon "Bool")))))
@@ -1072,8 +998,8 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 (DTypeSig true "tableEntry" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyCon "Toml"))))))
 (DFunDef false "tableEntry" ((PVar "name") (PVar "i") (PCon "Toml" (PVar "kvs"))) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EApp (EVar "tableCount") (EVar "name")) (EApp (EVar "Toml") (EVar "kvs"))))) (EVar "None") (EApp (EVar "Some") (EApp (EVar "Toml") (EApp (EApp (EVar "stripTablePrefix") (EApp (EVar "stringConcat") (EListLit (EVar "name") (ELit (LString ".")) (EApp (EVar "intToString") (EVar "i")) (ELit (LString "."))))) (EVar "kvs"))))))
 (DTypeSig false "eqTomlValue" (TyFun (TyCon "TomlValue") (TyFun (TyCon "TomlValue") (TyCon "Bool"))))
-(DFunDef false "eqTomlValue" ((PCon "TStr" (PVar "a")) (PCon "TStr" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
-(DFunDef false "eqTomlValue" ((PCon "TArr" (PVar "a")) (PCon "TArr" (PVar "b"))) (EApp (EApp (EVar "eqStrLists") (EVar "a")) (EVar "b")))
+(DFunDef false "eqTomlValue" ((PCon "TString" (PVar "a")) (PCon "TString" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
+(DFunDef false "eqTomlValue" ((PCon "TArray" (PVar "a")) (PCon "TArray" (PVar "b"))) (EApp (EApp (EVar "eqStrLists") (EVar "a")) (EVar "b")))
 (DFunDef false "eqTomlValue" ((PCon "TInt" (PVar "a")) (PCon "TInt" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
 (DFunDef false "eqTomlValue" ((PCon "TBool" (PVar "a")) (PCon "TBool" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
 (DFunDef false "eqTomlValue" (PWild PWild) (EVar "False"))
@@ -1088,8 +1014,8 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 (DImpl true "Eq" ((TyCon "TomlValue")) () ((im "eq" () (EVar "eqTomlValue"))))
 (DImpl true "Eq" ((TyCon "Toml")) () ((im "eq" ((PCon "Toml" (PVar "a")) (PCon "Toml" (PVar "b"))) (EApp (EApp (EVar "eqKvList") (EVar "a")) (EVar "b")))))
 (DTypeSig false "debugTomlValue" (TyFun (TyCon "TomlValue") (TyCon "String")))
-(DFunDef false "debugTomlValue" ((PCon "TStr" (PVar "s"))) (EApp (EVar "stringConcat") (EListLit (ELit (LString "TStr ")) (EApp (EMethodRef "debug") (EVar "s")))))
-(DFunDef false "debugTomlValue" ((PCon "TArr" (PVar "xs"))) (EApp (EVar "stringConcat") (EListLit (ELit (LString "TArr ")) (EApp (EVar "debugStrList") (EVar "xs")))))
+(DFunDef false "debugTomlValue" ((PCon "TString" (PVar "s"))) (EApp (EVar "stringConcat") (EListLit (ELit (LString "TString ")) (EApp (EMethodRef "debug") (EVar "s")))))
+(DFunDef false "debugTomlValue" ((PCon "TArray" (PVar "xs"))) (EApp (EVar "stringConcat") (EListLit (ELit (LString "TArray ")) (EApp (EVar "debugStrList") (EVar "xs")))))
 (DFunDef false "debugTomlValue" ((PCon "TInt" (PVar "n"))) (EApp (EVar "stringConcat") (EListLit (ELit (LString "TInt ")) (EApp (EVar "intToString") (EVar "n")))))
 (DFunDef false "debugTomlValue" ((PCon "TBool" (PVar "b"))) (EApp (EVar "stringConcat") (EListLit (ELit (LString "TBool ")) (EIf (EVar "b") (ELit (LString "True")) (ELit (LString "False"))))))
 (DTypeSig false "debugStrList" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
@@ -1107,8 +1033,8 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 (DImpl true "Debug" ((TyCon "TomlValue")) () ((im "debug" () (EVar "debugTomlValue"))))
 (DImpl true "Debug" ((TyCon "Toml")) () ((im "debug" ((PCon "Toml" (PVar "kvs"))) (EApp (EVar "stringConcat") (EListLit (ELit (LString "Toml [")) (EApp (EVar "debugKvList") (EVar "kvs")) (ELit (LString "]")))))))
 (DTypeSig false "displayTomlValue" (TyFun (TyCon "TomlValue") (TyCon "String")))
-(DFunDef false "displayTomlValue" ((PCon "TStr" (PVar "s"))) (EApp (EMethodRef "debug") (EVar "s")))
-(DFunDef false "displayTomlValue" ((PCon "TArr" (PVar "xs"))) (EApp (EVar "debugStrList") (EVar "xs")))
+(DFunDef false "displayTomlValue" ((PCon "TString" (PVar "s"))) (EApp (EMethodRef "debug") (EVar "s")))
+(DFunDef false "displayTomlValue" ((PCon "TArray" (PVar "xs"))) (EApp (EVar "debugStrList") (EVar "xs")))
 (DFunDef false "displayTomlValue" ((PCon "TInt" (PVar "n"))) (EApp (EVar "intToString") (EVar "n")))
 (DFunDef false "displayTomlValue" ((PCon "TBool" (PVar "b"))) (EIf (EVar "b") (ELit (LString "true")) (ELit (LString "false"))))
 (DTypeSig false "displayKvPair" (TyFun (TyTuple (TyCon "String") (TyCon "TomlValue")) (TyCon "String")))
@@ -1130,7 +1056,7 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 (DTypeSig false "mkGates" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "mkGates" ((PVar "k")) (EApp (EVar "stringConcat") (EListLit (ELit (LString "[[gate]]\nname = \"g")) (EApp (EVar "intToString") (EVar "k")) (ELit (LString "\"\n[[gate]]\nname = \"h")) (EApp (EVar "intToString") (EVar "k")) (ELit (LString "\"\n")))))
 (DProp false "array-of-tables entries stay separate" ((pp "k" (TyCon "Int"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "parseTableCount") (ELit (LString "gate"))) (EApp (EVar "mkGates") (EVar "k"))) (ELit (LInt 2))) (EBinOp "==" (EApp (EApp (EApp (EApp (EVar "parseTableEntryStr") (ELit (LString "gate"))) (ELit (LInt 0))) (ELit (LString "name"))) (EApp (EVar "mkGates") (EVar "k"))) (EApp (EVar "Some") (EBinOp "++" (ELit (LString "g")) (EApp (EVar "intToString") (EVar "k")))))) (EBinOp "==" (EApp (EApp (EApp (EApp (EVar "parseTableEntryStr") (ELit (LString "gate"))) (ELit (LInt 1))) (ELit (LString "name"))) (EApp (EVar "mkGates") (EVar "k"))) (EApp (EVar "Some") (EBinOp "++" (ELit (LString "h")) (EApp (EVar "intToString") (EVar "k")))))))
-(DProp false "Display TomlValue separates the four variants" ((pp "n" (TyCon "Int")) (pp "b" (TyCon "Bool"))) (EBlock (DoLet false false (PVar "s") (EApp (EVar "intToString") (EVar "n"))) (DoLet false false (PVar "vs") (EListLit (EApp (EVar "TStr") (EVar "s")) (EApp (EVar "TArr") (EListLit (EVar "s"))) (EApp (EVar "TInt") (EVar "n")) (EApp (EVar "TBool") (EVar "b")))) (DoExpr (EApp (EVar "allDistinct") (EApp (EApp (EMethodRef "map") (EMethodRef "display")) (EVar "vs"))))))
+(DProp false "Display TomlValue separates the four variants" ((pp "n" (TyCon "Int")) (pp "b" (TyCon "Bool"))) (EBlock (DoLet false false (PVar "s") (EApp (EVar "intToString") (EVar "n"))) (DoLet false false (PVar "vs") (EListLit (EApp (EVar "TString") (EVar "s")) (EApp (EVar "TArray") (EListLit (EVar "s"))) (EApp (EVar "TInt") (EVar "n")) (EApp (EVar "TBool") (EVar "b")))) (DoExpr (EApp (EVar "allDistinct") (EApp (EApp (EMethodRef "map") (EMethodRef "display")) (EVar "vs"))))))
 (DTypeSig false "allDistinct" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))
 (DFunDef false "allDistinct" ((PList)) (EVar "True"))
 (DFunDef false "allDistinct" ((PCons (PVar "x") (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EDictApp "all") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "x") (EVar "_s")))) (EVar "rest")) (EApp (EVar "allDistinct") (EVar "rest"))))

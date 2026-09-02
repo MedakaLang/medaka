@@ -1,0 +1,174 @@
+{- | P4-D: the routes that need NO repository, on all three engines.
+
+   Every cell here runs against `storeEmpty` — no account repository, and
+   therefore no signing. That is deliberate and is what makes an EVAL arm
+   possible at all: one `repoInit` under the tree-walking interpreter does not
+   complete in 600s on this box (measured in P4-C, and the reason
+   `pds/test/repo_vectors.sh` has no `medaka run` arm any more, #2208). The
+   repository-bearing read routes — `getRecord`, `listRecords`, `describeRepo`,
+   `sync.getRepo`, `sync.getLatestCommit` — are graded against the pinned
+   Phase-1 corpus by `pds/test/read_handlers_main.mdk` on the compiled engines
+   instead.
+
+   What IS gradeable on all three engines is exactly the part this slice added
+   to the ROUTER: the two non-XRPC well-known paths become their own route
+   class, `/favicon.ico` and friends still 404 exactly as before, the
+   well-knowns answer with the right bytes and the right media type, and every
+   repository-bearing read refuses cleanly with `RepoNotFound` on an
+   unconfigured server rather than answering something. `com.atproto.identity.
+   resolveHandle` needs no repository either, so it is graded here in full.
+
+   No cell may change the `Store`: every one of them asserts the successor is
+   still the empty, unconfigured store. -}
+
+import json.{Json(..), jObject, get, parse}
+import string.{contains, fromUtf8, split, toUtf8}
+import lib.handlers.{pdsServer}
+import lib.server_core.{Account, Server, handleBytes, makeAccount}
+import lib.store.{Store, storeEmpty, storeRepo, storeSize}
+
+accountDidText : String
+accountDidText = "did:key:zQ3shVc2UkAfJCdc1TR8E66J85h48P43r93q8jGPkPpjF9Ef9"
+
+accountHandleText : String
+accountHandleText = "medaka.example"
+
+accountHostText : String
+accountHostText = "pds.example"
+
+expectedDidDocument : String
+expectedDidDocument = "{\"@context\":[\"https://www.w3.org/ns/did/v1\"],\"id\":\"did:web:pds.example\",\"service\":[{\"id\":\"#atproto_pds\",\"type\":\"AtprotoPersonalDataServer\",\"serviceEndpoint\":\"https://pds.example\"}]}"
+
+mustAccount : Account
+mustAccount = match makeAccount accountDidText accountHandleText accountHostText
+  Ok account => account
+  Err message => panic "read_routes: account setup failed: \{message}"
+
+mustServer : Server
+mustServer = match pdsServer mustAccount
+  Ok server => server
+  Err message => panic "read_routes: server setup failed: \{message}"
+
+-- ── request framing ─────────────────────────────────────────────────────────
+
+getRequest : String -> Array Int
+getRequest target =
+  toUtf8 "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\r\n"
+
+getWithBodyFraming : String -> Array Int
+getWithBodyFraming target =
+  toUtf8
+    "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\nContent-Type: application/json\r\n\r\n"
+
+postRequest : String -> Array Int
+postRequest target =
+  toUtf8
+    "POST \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}"
+
+-- ── response inspection ─────────────────────────────────────────────────────
+
+headerEnd : Array Int -> Int -> Int
+headerEnd bytes i =
+  if i + 3 >= arrayLength bytes then
+    panic "read_routes: response has no header terminator"
+  else if bytes[i] == 13 && bytes[i + 1] == 10 && bytes[i + 2] == 13 && bytes[i + 3] == 10 then
+    i
+  else
+    headerEnd bytes (i + 1)
+
+headText : Array Int -> String
+headText bytes = fromUtf8 (arrayMakeWith (headerEnd bytes 0) (i => bytes[i]))
+
+bodyText : Array Int -> String
+bodyText bytes =
+  let start = headerEnd bytes 0 + 4
+  fromUtf8 (arrayMakeWith (arrayLength bytes - start) (i => bytes[start + i]))
+
+statusText : Array Int -> String
+statusText bytes = match split " " (headText bytes)
+  _::code::_ => code
+  _ => "<no-status>"
+
+hasContentType : String -> Array Int -> Bool
+hasContentType value bytes =
+  contains "content-type: \{value}\r\n" (headText bytes)
+
+errorCode : Array Int -> String
+errorCode bytes = match parse (bodyText bytes)
+  Ok value => match get "error" value
+    Some (JString code) => code
+    _ => "<no-error-field>"
+  Err _ => "<unparseable-body>"
+
+-- ── cells ───────────────────────────────────────────────────────────────────
+
+{- | A cell is a request against the empty store. `state=unchanged` is the
+   literal readback of the successor store, not a claim: an unconfigured store
+   has no repository and no blobs, and no route here may create either. -}
+storeIsEmpty : Store -> Bool
+storeIsEmpty store = storeSize store == 0
+  && (match storeRepo store
+    None => True
+    Some _ => False)
+
+check : String -> Bool -> String -> <IO> Int
+check label ok detail =
+  if ok then
+    let () = println "CELL \{label} PASS \{detail}"
+    1
+  else
+    let () = println "CELL \{label} FAIL \{detail}"
+    0
+
+okCell : String -> Array Int -> String -> String -> <IO> Int
+okCell label request contentType expectedBody =
+  let (next, response) = handleBytes mustServer storeEmpty request
+  let status = statusText response
+  let ok = status == "200" && hasContentType contentType response && bodyText response == expectedBody && storeIsEmpty next
+  check
+    label
+    ok
+    "status=\{status} media=\{contentType} body=\{bodyText response} state=unchanged"
+
+failCell : String -> Array Int -> String -> String -> <IO> Int
+failCell label request expectedStatus expectedCode =
+  let (next, response) = handleBytes mustServer storeEmpty request
+  let status = statusText response
+  let code = errorCode response
+  let ok = status == expectedStatus && code == expectedCode && storeIsEmpty next
+  check label ok "status=\{status} error=\{code} state=unchanged"
+
+xrpc : String -> String
+xrpc rest = "/xrpc/\{rest}"
+
+identityRoute : String -> String
+identityRoute query = xrpc "com.atproto.identity.resolveHandle\{query}"
+
+runCells : <IO> Unit
+runCells =
+  let didJson = okCell "wellknown-did-json" (getRequest "/.well-known/did.json") "application/json" expectedDidDocument
+  let atprotoDid = okCell "wellknown-atproto-did" (getRequest "/.well-known/atproto-did") "text/plain; charset=utf-8" accountDidText
+  let wellKnownPost = failCell "wellknown-post-rejected" (postRequest "/.well-known/did.json") "405" "MethodNotAllowed"
+  let wellKnownFramed = failCell "wellknown-body-framing-rejected" (getWithBodyFraming "/.well-known/atproto-did") "400" "InvalidRequest"
+  let favicon = failCell "non-xrpc-still-404" (getRequest "/favicon.ico") "404" "NotFound"
+  let sibling = failCell "well-known-sibling-still-404" (getRequest "/.well-known/openid-configuration") "404" "NotFound"
+  let resolve = okCell "resolve-handle" (getRequest (identityRoute "?handle=\{accountHandleText}")) "application/json" "{\"did\":\"\{accountDidText}\"}"
+  let resolveUnknown = failCell "resolve-handle-unknown" (getRequest (identityRoute "?handle=stranger.example")) "400" "HandleNotFound"
+  let resolveRepeated = failCell "resolve-handle-repeated-param" (getRequest (identityRoute "?handle=a.example&handle=b.example")) "400" "InvalidRequest"
+  let resolveMissing = failCell "resolve-handle-missing-param" (getRequest (identityRoute "")) "400" "InvalidRequest"
+  let getRecord = failCell "get-record-unconfigured" (getRequest (xrpc "com.atproto.repo.getRecord?repo=\{accountDidText}&collection=app.bsky.feed.post&rkey=medaka-a")) "400" "RepoNotFound"
+  let listRecords = failCell "list-records-unconfigured" (getRequest (xrpc "com.atproto.repo.listRecords?repo=\{accountDidText}&collection=app.bsky.feed.post")) "400" "RepoNotFound"
+  let describeRepo = failCell "describe-repo-unconfigured" (getRequest (xrpc "com.atproto.repo.describeRepo?repo=\{accountDidText}")) "400" "RepoNotFound"
+  let getRepo = failCell "get-repo-unconfigured" (getRequest (xrpc "com.atproto.sync.getRepo?did=\{accountDidText}")) "400" "RepoNotFound"
+  let latestCommit = failCell "get-latest-commit-unconfigured" (getRequest (xrpc "com.atproto.sync.getLatestCommit?did=\{accountDidText}")) "400" "RepoNotFound"
+  let readNeedsGet = failCell "read-route-requires-get" (postRequest (xrpc "com.atproto.repo.describeRepo?repo=\{accountDidText}")) "405" "MethodNotAllowed"
+  let unregistered = failCell "unregistered-xrpc-still-404" (getRequest (xrpc "com.atproto.repo.listMissingBlobs")) "404" "NotFound"
+  let cells = didJson + atprotoDid + wellKnownPost + wellKnownFramed + favicon + sibling + resolve + resolveUnknown + resolveRepeated + resolveMissing + getRecord + listRecords + describeRepo + getRepo + latestCommit + readNeedsGet + unregistered
+  let () = println "cells: \{intToString cells}/17 repository-free routes"
+  if cells == 17 then println "TOTAL: PASS"
+  else
+    let () = println "TOTAL: FAIL"
+    exit 1
+
+main : <IO> Unit
+main = runCells

@@ -1,190 +1,152 @@
 # nonempty
 
-nonempty — a guaranteed-non-empty list.
+A list with at least one element.
 
-`NonEmpty a` is a head element plus a (possibly empty) tail list, so it can
-never be empty by construction.  This lets `head`, `maximum`, and `minimum`
-be TOTAL — they return an `a`, not an `Option a` like the partial Foldable
-helpers on a plain `List`.
+`NonEmpty a` is a first element and a tail, so it cannot be empty. That
+makes `head`, `maximum`, and `minimum` total: they return the element
+itself rather than an `Option`. Build one with `singleton`, `fromList`,
+or the `NonEmpty` constructor.
 
-Import by bare name: `import nonempty` (this module is not auto-prelude), then
-call `nonempty.head`, `nonempty.maximum`, etc.
+Import the module by name, `import nonempty`, and call `nonempty.head`
+and the rest qualified, since the names overlap with `list`'s.
 
-## `NonEmpty`
+### `NonEmpty`
 
 ```
 data NonEmpty a
-  = NECons a (List a)
+  = NonEmpty a (List a)
 ```
 
-A head element plus a (possibly empty) tail.  Never empty.
+A first element and the rest of the list.
 
-## `singleton`
+Instances: [`Mappable`](#mappable-nonempty), [`Foldable`](#foldable-nonempty), `Traversable`, [`Semigroup`](#semigroup-nonempty-a), `Eq`, `Debug`, [`Display`](#display-nonempty-a)
+
+## Construction
+
+### `singleton`
 
 ```
 singleton : a -> NonEmpty a
 ```
 
-A `NonEmpty` holding exactly one element.
-
-
-*(doctest — run by `medaka test`)*
+A list holding one element.
 
 ```medaka
 > toList (singleton 9)
 [9]
-> head (singleton 9)
-9
 ```
 
-## `fromList`
+### `fromList`
 
 ```
 fromList : List a -> Option (NonEmpty a)
 ```
 
-Build a `NonEmpty` from a plain list, or `None` if the list is empty.
-Inverse of `toList` for non-empty inputs.
+A non-empty list holding the elements of a list, or `None` when the
+list is empty.
 
-
-*(doctest — run by `medaka test`)*
+The inverse of `toList`.
 
 ```medaka
-> fromList [1, 2, 3] == Some (NECons 1 [2, 3])
-True
+> fromList [1, 2, 3]
+Some NonEmpty [1, 2, 3]
 > fromList ([] : List Int)
 None
 ```
 
-## `head`
+## Accessing elements
+
+### `head`
 
 ```
 head : NonEmpty a -> a
 ```
 
-The first element.  Total (a `NonEmpty` always has one).
-
-
-*(doctest — run by `medaka test`)*
+The first element.
 
 ```medaka
-> head (NECons 7 [8, 9])
+> head (NonEmpty 7 [8, 9])
 7
 ```
 
-## `maximum`
+### `maximum`
 
 ```
 maximum : Ord a => NonEmpty a -> a
 ```
 
-The largest element.  Total.
-
-
-*(doctest — run by `medaka test`)*
+The largest element.
 
 ```medaka
-> maximum (NECons 3 [1, 4, 1, 5])
+> maximum (NonEmpty 3 [1, 4, 1, 5])
 5
 ```
 
-## `minimum`
+### `minimum`
 
 ```
 minimum : Ord a => NonEmpty a -> a
 ```
 
-The smallest element.  Total.
-
-
-*(doctest — run by `medaka test`)*
+The smallest element.
 
 ```medaka
-> minimum (NECons 3 [1, 4, 1, 5])
+> minimum (NonEmpty 3 [1, 4, 1, 5])
 1
 ```
 
-## `Mappable NonEmpty`
+## Instances
+
+### `Mappable NonEmpty`
 
 ```
 impl Mappable NonEmpty
 ```
 
-Map over every element, preserving non-emptiness.
-
-
-*(doctest — run by `medaka test`)*
+`map` applies a function to every element.
 
 ```medaka
-> toList (map (n => n * 2) (NECons 1 [2, 3]))
+> toList (map (n => n * 2) (NonEmpty 1 [2, 3]))
 [2, 4, 6]
 ```
 
-## `Foldable NonEmpty`
+### `Foldable NonEmpty`
 
 ```
 impl Foldable NonEmpty
 ```
 
-Fold over every element (head first).  `toList` recovers the plain list.
-
-
-*(doctest — run by `medaka test`)*
+The `Foldable` methods visit the elements in order, first element
+first. `toList` gives back the plain list.
 
 ```medaka
-> fold (acc y => acc + y) 0 (NECons 1 [2, 3])
-6
-> toList (NECons 1 [2, 3])
+> toList (NonEmpty 1 [2, 3])
 [1, 2, 3]
 ```
 
-## `Traversable NonEmpty`
-
-```
-impl Traversable NonEmpty
-```
-
-## `Semigroup (NonEmpty a)`
+### `Semigroup (NonEmpty a)`
 
 ```
 impl Semigroup (NonEmpty a)
 ```
 
-Append concatenates: the head of the left operand, then everything else.
-
-
-*(doctest — run by `medaka test`)*
+`++` concatenates two non-empty lists.
 
 ```medaka
-> toList (append (NECons 1 [2]) (NECons 3 [4]))
+> toList (append (NonEmpty 1 [2]) (NonEmpty 3 [4]))
 [1, 2, 3, 4]
 ```
 
-## `Eq (NonEmpty a)`
-
-```
-impl Eq (NonEmpty a) requires Eq a
-```
-
-## `Debug (NonEmpty a)`
-
-```
-impl Debug (NonEmpty a) requires Debug a
-```
-
-## `Display (NonEmpty a)`
+### `Display (NonEmpty a)`
 
 ```
 impl Display (NonEmpty a) requires Display a
 ```
 
-Human-facing rendering (backs `println` and `\{}` interpolation).
-
-
-*(doctest — run by `medaka test`)*
+`display` renders a non-empty list as `NonEmpty [x, ...]`.
 
 ```medaka
-> display (NECons 1 [2, 3])
+> display (NonEmpty 1 [2, 3])
 "NonEmpty [1, 2, 3]"
 ```
 

@@ -1,29 +1,34 @@
 # META
-source_lines=666
+source_lines=681
 stages=DESUGAR,MARK
 # SOURCE
-{- set.mdk — an immutable, ordered set of unique elements.
+{- | An immutable set of distinct elements, ordered by `Ord`.
 
-   See STDLIB.md (Module 5) for the plan.
+   `Set a` is a balanced binary search tree. Membership, insertion, and
+   deletion cost `O(log n)`, and `size` is `O(1)`. Every operation returns a
+   new set and leaves the original unchanged; the two share whatever
+   structure they have in common.
 
-   Design notes
-   ────────────
-   `Set a` is a *weight-balanced binary search tree* — the same Adams / Haskell
-   `Data.Set` scheme as `map.mdk`, but storing only an element per node (no
-   value). The invariants are identical:
+   `toList` and the `Foldable` methods visit elements in ascending order.
+   The `Set { x, ... }` literal builds a set; the empty set is `empty`. For
+   elements that are `Hashable` but not `Ord`, or when order does not
+   matter, see `hash_set`. -}
 
-     • search:   elements in the left subtree < node element < the right
-     • balance:  neither subtree is more than `delta` (= 3) times the other
-
-   maintained by the smart constructor `balance`. The structure is *persistent*
-   (every op returns a fresh set sharing untouched subtrees), and ordering is by
-   the element's `Ord`, so most operations carry an `Ord a` constraint while the
-   pure walks (`size`, `toList`, the folds) do not.
-
-   This is a standalone tree rather than a wrapper over `Map a Unit`: it keeps
-   the module self-contained (no cross-module name clashes on `insert`/`union`/…)
-   and avoids the per-node `Unit` payload. The balancing mirrors map.mdk's,
-   which the property tests below re-verify. -}
+-- `Set a` is a weight-balanced binary search tree, the same Adams / Haskell
+-- `Data.Set` scheme as `map.mdk`, but storing only an element per node (no
+-- value).  The invariants are identical:
+--
+--   • search:   elements in the left subtree < node element < the right
+--   • balance:  neither subtree is more than `delta` (= 3) times the other
+--
+-- maintained by the smart constructor `balance`.  Most operations carry an
+-- `Ord a` constraint while the pure walks (`size`, `toList`, the folds) do
+-- not.
+--
+-- This is a standalone tree rather than a wrapper over `Map a Unit`: it keeps
+-- the module self-contained (no cross-module name clashes on `insert`/
+-- `union`/…) and avoids the per-node `Unit` payload.  The balancing mirrors
+-- map.mdk's, which the property tests below re-verify.
 
 -- set/map are identical weight-balanced-tree bodies over DISTINCT ADTs; consolidation needs a Set = Map _ Unit refactor (out of scope).
 -- lint-disable-file rule-duplicate-body
@@ -41,8 +46,12 @@ import core.{
   FromEntries,
 }
 
-{- The representation. `Tip` is the empty set; `Bin size elem left right` is an
-   interior node whose cached `size` is `1 + size left + size right`. -}
+{- | The set type.
+
+   `Tip` is the empty tree and `Bin` is an interior node holding its
+   subtree's size, an element, and the left and right subtrees. The
+   constructors are visible for pattern matching, but build sets with the
+   functions in this module, which keep the tree balanced. -}
 public export data Set a = Tip | Bin Int a (Set a) (Set a)
 
 -- ── Internal smart constructors (mirror map.mdk) ────────────────────────
@@ -94,12 +103,12 @@ doubleR x1 (Bin _ x2 t1 (Bin _ x3 t2 t3)) t4 =
   bin x3 (bin x2 t1 t2) (bin x1 t3 t4)
 doubleR x1 _ t4 = panic "Set.doubleR: malformed left subtree"
 
--- ── Construction ────────────────────────────────────────────────────────
+-- # Construction
 
-{- The empty set is `Monoid.empty` (see `impl Monoid (Set a)` below); use `Tip`
-   internally. -}
+-- The empty set is `Monoid.empty` (see `impl Monoid (Set a)` below); use
+-- `Tip` internally.
 
-{- | A set with a single element.
+{- | A set with one element.
 
    > size (singleton 5)
    1 -}
@@ -107,28 +116,24 @@ export
 singleton : a -> Set a
 singleton x = Bin 1 x Tip Tip
 
-{- | Build a set from a list, dropping duplicates.
+{- | A set holding the elements of a list, without duplicates.
 
-   The `Set { x, … }` literal is sugar for `fromList` (it lowers to a
-   `FromEntries` dispatch pinned at `Set`, see the impl at the bottom):
+   The `Set { x, ... }` literal is the same operation.
 
-   > size (Set { 1, 2, 3, 2, 1 })
-   3
    > toList (fromList [3, 1, 2, 3, 1])
-   [1, 2, 3]
-
-   The empty literal `Set { }` works too (Phase 114); annotate to fix the
-   element type the empty braces leave open:
-
-   > size (Set { } : Set Int)
-   0 -}
+   [1, 2, 3] -}
 export
 fromList : Ord a => List a -> Set a
 fromList xs = fold (s x => insert x s) Tip xs
 
--- ── Query ───────────────────────────────────────────────────────────────
+-- > size (Set { 1, 2, 3, 2, 1 })
+-- 3
+-- > size (Set { } : Set Int)
+-- 0
 
-{- | Number of elements. O(1) — read off the root's cached size.
+-- # Query
+
+{- | The number of elements, in `O(1)`.
 
    > size (fromList [1, 2, 3, 2])
    3 -}
@@ -137,7 +142,7 @@ size : Set a -> Int
 size Tip = 0
 size (Bin s _ _ _) = s
 
-{- | `True` when the element is present.
+{- | Whether `x` is a member.
 
    > has 2 (fromList [1, 2, 3])
    True
@@ -151,12 +156,12 @@ has x (Bin _ y l r) = match compare x y
   Gt => has x r
   Eq => True
 
--- ── Insertion / deletion ────────────────────────────────────────────────
+-- # Insertion and deletion
 
-{- | Insert an element. A no-op (structurally) when already present.
+{- | The set with `x` added.
 
-   > size (insert 2 (fromList [1, 2, 3]))
-   3
+   Unchanged when `x` is already a member.
+
    > size (insert 9 (fromList [1, 2, 3]))
    4 -}
 export
@@ -167,17 +172,15 @@ insert x (Bin s y l r) = match compare x y
   Gt => balance y l (insert x r)
   Eq => Bin s x l r
 
-{- | Remove an element. A no-op when absent.
+-- > size (insert 2 (fromList [1, 2, 3]))
+-- 3
+
+{- | The set without `x`.
+
+   Unchanged when `x` is not a member.
 
    > has 2 (delete 2 (fromList [1, 2, 3]))
-   False
-
-   Deleting an absent element leaves the set unchanged:
-
-   > toList (delete 9 (fromList [1, 2, 3]))
-   [1, 2, 3]
-   > size (delete 9 (fromList [1, 2, 3]))
-   3 -}
+   False -}
 export
 delete : Ord a => a -> Set a -> Set a
 delete x Tip = Tip
@@ -185,6 +188,11 @@ delete x (Bin _ y l r) = match compare x y
   Lt => balance y (delete x l) r
   Gt => balance y l (delete x r)
   Eq => glue l r
+
+-- > toList (delete 9 (fromList [1, 2, 3]))
+-- [1, 2, 3]
+-- > size (delete 9 (fromList [1, 2, 3]))
+-- 3
 
 {- `glue` joins two subtrees that were siblings under a now-deleted node (every
    element on the left below every element on the right), promoting the max of
@@ -206,12 +214,13 @@ glueMin l r = match minView r
   None => l
   Some (x, r') => balance x l r'
 
--- ── Min / max ───────────────────────────────────────────────────────────
+-- # Minimum and maximum
 
-{- | Split off the smallest element: `Some (elem, rest)`, or `None` when empty.
+{- | The smallest element and the set without it, or `None` when the set is
+   empty.
 
-   > minView (Set { } : Set Int)
-   None -}
+   > minView (fromList [2, 1, 3])
+   Some (1, fromList [2, 3]) -}
 export
 minView : Set a -> Option (a, Set a)
 minView Tip = None
@@ -219,10 +228,14 @@ minView (Bin _ x l r) = match minView l
   None => Some (x, r)
   Some (xm, l') => Some (xm, balance x l' r)
 
-{- | Split off the largest element: `Some (elem, rest)`, or `None`.
+-- > minView (Set { } : Set Int)
+-- None
 
-   > maxView (Set { } : Set Int)
-   None -}
+{- | The largest element and the set without it, or `None` when the set is
+   empty.
+
+   > maxView (fromList [2, 1, 3])
+   Some (3, fromList [1, 2]) -}
 export
 maxView : Set a -> Option (a, Set a)
 maxView Tip = None
@@ -230,7 +243,10 @@ maxView (Bin _ x l r) = match maxView r
   None => Some (x, l)
   Some (xm, r') => Some (xm, balance x l r')
 
-{- | Smallest element, or `None`.
+-- > maxView (Set { } : Set Int)
+-- None
+
+{- | The smallest element, or `None` when the set is empty.
 
    > getMin (fromList [3, 1, 2])
    Some 1 -}
@@ -238,7 +254,7 @@ export
 getMin : Set a -> Option a
 getMin s = map ((x, _) => x) (minView s)
 
-{- | Largest element, or `None`.
+{- | The largest element, or `None` when the set is empty.
 
    > getMax (fromList [3, 1, 2])
    Some 3 -}
@@ -246,7 +262,9 @@ export
 getMax : Set a -> Option a
 getMax s = map ((x, _) => x) (maxView s)
 
-{- | Drop the smallest element (a no-op on the empty set).
+{- | The set without its smallest element.
+
+   Unchanged when the set is empty.
 
    > toList (deleteMin (fromList [3, 1, 2]))
    [2, 3] -}
@@ -256,7 +274,9 @@ deleteMin s = match minView s
   None => Tip
   Some (_, s') => s'
 
-{- | Drop the largest element (a no-op on the empty set).
+{- | The set without its largest element.
+
+   Unchanged when the set is empty.
 
    > toList (deleteMax (fromList [3, 1, 2]))
    [1, 2] -}
@@ -344,18 +364,16 @@ splitMember x (Bin _ y l r) = match compare x y
     (link y l below, found, above)
   Eq => (l, True, r)
 
--- ── Set algebra ─────────────────────────────────────────────────────────
+-- # Set algebra
 
-{- | Union — every element in either set.
+-- These operations are divide-and-conquer over the tree structure, costing
+-- `O(m log(n/m + 1))` for sets of sizes `m <= n`.
+
+{- | The elements in either set.
+
+   `++` on sets is `union`.
 
    > toList (union (fromList [1, 2]) (fromList [2, 3]))
-   [1, 2, 3]
-
-   Disjoint operands keep every element of both; a subset operand adds nothing:
-
-   > toList (union (fromList [1, 2]) (fromList [3, 4]))
-   [1, 2, 3, 4]
-   > toList (union (fromList [1, 2, 3]) (fromList [2]))
    [1, 2, 3] -}
 export
 union : Ord a => Set a -> Set a -> Set a
@@ -366,17 +384,15 @@ union (Bin _ x l r) b =
   -- `x`'s counterpart in `b` was dropped by `splitAt`, so the left set wins.
   link x (union l bl) (union r br)
 
-{- | Intersection — elements in both sets.
+-- > toList (union (fromList [1, 2]) (fromList [3, 4]))
+-- [1, 2, 3, 4]
+-- > toList (union (fromList [1, 2, 3]) (fromList [2]))
+-- [1, 2, 3]
+
+{- | The elements in both sets.
 
    > toList (intersection (fromList [1, 2, 3]) (fromList [2, 3, 4]))
-   [2, 3]
-
-   Disjoint operands intersect to empty; a subset operand is its own intersection:
-
-   > toList (intersection (fromList [1, 2]) (fromList [3, 4]))
-   []
-   > toList (intersection (fromList [1, 2, 3]) (fromList [2]))
-   [2] -}
+   [2, 3] -}
 export
 intersection : Ord a => Set a -> Set a -> Set a
 intersection Tip b = Tip
@@ -387,17 +403,15 @@ intersection (Bin _ x l r) b =
   let r2 = intersection r br
   if found then link x l2 r2 else link2 l2 r2
 
-{- | Difference — elements in the first set but not the second.
+-- > toList (intersection (fromList [1, 2]) (fromList [3, 4]))
+-- []
+-- > toList (intersection (fromList [1, 2, 3]) (fromList [2]))
+-- [2]
+
+{- | The elements of the first set that are not in the second.
 
    > toList (difference (fromList [1, 2, 3]) (fromList [2]))
-   [1, 3]
-
-   Subtracting a disjoint set changes nothing; subtracting a superset empties it:
-
-   > toList (difference (fromList [1, 2]) (fromList [3, 4]))
-   [1, 2]
-   > toList (difference (fromList [1, 2, 3]) (fromList [1, 2, 3]))
-   [] -}
+   [1, 3] -}
 export
 difference : Ord a => Set a -> Set a -> Set a
 difference Tip b = Tip
@@ -407,7 +421,12 @@ difference a (Bin _ x l r) =
   -- `splitAt` already dropped `x` from both halves, so it is simply not rebuilt.
   link2 (difference al l) (difference ar r)
 
-{- | `True` when every element of the first set is in the second.
+-- > toList (difference (fromList [1, 2]) (fromList [3, 4]))
+-- [1, 2]
+-- > toList (difference (fromList [1, 2, 3]) (fromList [1, 2, 3]))
+-- []
+
+{- | Whether every element of the first set is in the second.
 
    > isSubsetOf (fromList [1, 2]) (fromList [1, 2, 3])
    True
@@ -434,10 +453,8 @@ subsetGo (Bin _ x l r) b =
 
 -- ── Typeclass instances ─────────────────────────────────────────────────
 
-{- | `Foldable Set` folds over elements in ascending order — so `toList`,
-   `length`, `elem`, `sum`, `maximum`, `any`/`all`, … all work on a set. (Unlike
-   `Map`, whose `toList` means pairs, a set's elements *are* its `toList`, so the
-   Foldable methods carry the natural meaning and there's no name clash.)
+{- | The `Foldable` methods visit elements in ascending order, so `toList`,
+   `length`, `elem`, `sum`, `maximum`, `any`, and `all` work on a set.
 
    > toList (fromList [3, 1, 2, 1])
    [1, 2, 3]
@@ -451,28 +468,25 @@ export impl Foldable Set where
   isEmpty _ = False
   length s = size s
 
-{- | Structural equality: same elements (compared through the canonical
-   ascending element list, so tree *shape* doesn't matter).
+{- | Two sets are equal when they hold the same elements, regardless of how
+   they were built.
 
    > eq (fromList [1, 2, 3]) (fromList [3, 2, 1, 2])
    True -}
 export impl Eq (Set a) requires Eq a where
   eq a b = if size a /= size b then False else eq (toList a) (toList b)
 
-{- | Lexicographic ordering through the canonical ascending element list, so a
-   proper prefix sorts first.  Enables nesting (`Set (Set a)`, `Map (Set a) v`).
+{- | Sets compare lexicographically by their ascending element lists.
 
    > compare (fromList [1, 2]) (fromList [1, 3])
    Lt -}
 export impl Ord (Set a) requires Ord a where
   compare a b = compare (toList a) (toList b)
 
-{- | Rendered as `fromList [a, …]`, the re-evaluable form (the `Set { … }`
-   literal is the *display* form — see PLAN.md Phase 111). Doctest compares
-   against a literal: `Debug String` is out of this module's test context.
+{- | `debug` renders a set as `fromList [x, ...]`.
 
-   > debug (fromList [1, 2, 3]) == "fromList [1, 2, 3]"
-   True -}
+   > debug (fromList [1, 2, 3])
+   "fromList [1, 2, 3]" -}
 export impl Debug (Set a) requires Debug a where
   debug s = "fromList \{debug (toList s)}"
 
@@ -482,45 +496,43 @@ displaySetItems [] = ""
 displaySetItems [x] = "\{x}"
 displaySetItems (y::rest) = "\{y}, \{displaySetItems rest}"
 
-{- | The *display* form — the Phase-108 literal `Set { x, … }` (empty →
-   `Set {}`), as opposed to Debug's re-evaluable `fromList [x, …]`.
+{- | `display` renders a set in its literal syntax, `Set { x, ... }`.
 
-   > display (fromList [1, 2, 3]) == "Set { 1, 2, 3 }"
-   True
-   > display (empty : Set Int) == "Set {}"
-   True -}
+   > display (fromList [1, 2, 3])
+   "Set { 1, 2, 3 }"
+   > display (empty : Set Int)
+   "Set {}" -}
 export impl Display (Set a) requires Display a where
   display s = match toList s
     [] => "Set {}"
     xs => "Set { \{displaySetItems xs} }"
 
-{- | `++` on sets is union; `append` dispatches on its first `Set` argument, so
-   the `Ord a` it needs threads in by the ordinary route. -}
+-- | `++` on sets is `union`.
 export impl Semigroup (Set a) requires Ord a where
   append a b = union a b
 
-{- | Backs the `Set { x, … }` literal: the compiler lowers that to
-   `fromEntries [x, …]` pinned at `Set`, dispatching here. -}
+-- | The `Set { x, ... }` literal builds its set through this instance.
 export impl FromEntries (Set a) a requires Ord a where
   fromEntries es = fromList es
 
-{- | `Monoid.empty` for `Set` is the empty tree (nullary, dispatched on its
-   result type; Phase 103). `Tip` needs no dict, so it grounds cleanly.
+-- `empty` is nullary and dispatches on its result type; `Tip` needs no dict,
+-- so it grounds cleanly.
+{- | `empty` is the set with no elements.
 
    > isEmpty (empty : Set Int)
    True -}
 export impl Monoid (Set a) requires Ord a where
   empty = Tip
 
--- ── Structural invariants (for testing / debugging) ─────────────────────
+-- # Invariants
 
-{- | Check the structural invariants at every node: search-tree order
-   (left < node < right), the cached `size`, and the weight-balance bound.
-   A correct sequence of operations always leaves a set `wellFormed`.
+{- | Whether the set's internal tree satisfies its invariants: elements in
+   search order, correct cached sizes, and balanced subtrees.
+
+   Every set built with this module's functions is well formed. This is a
+   debugging aid and the basis of the module's property tests.
 
    > wellFormed (fromList [5, 3, 8, 1, 4, 7, 9, 2, 6])
-   True
-   > wellFormed (Set { } : Set Int)
    True -}
 export
 wellFormed : Ord a => Set a -> Bool
@@ -529,6 +541,9 @@ wellFormed (Bin s x l r) =
   let sizeOk = size l + size r + 1 == s
   let orderOk = allElems (e => lt e x) l && allElems (e => gt e x) r
   sizeOk && balancedAt l r && orderOk && wellFormed l && wellFormed r
+
+-- > wellFormed (Set { } : Set Int)
+-- True
 
 allElems : (a -> Bool) -> Set a -> Bool
 allElems p Tip = True
@@ -600,7 +615,7 @@ prop "difference elements stay in the first set" (xs : List Int) (ys : List Int)
 prop "deleting a member removes it" (x : Int) (xs : List Int) =
   not (has x (delete x (insert x (fromList xs))))
 
-{- The naive fold-insert bodies the join-based set algebra replaced (#423).
+{- The naive fold-insert bodies the join-based set algebra replaced.
    Obviously correct and obviously slow, which makes them the differential
    oracle for the fast versions: the properties below assert the two agree
    element-for-element on random inputs.  A join-based operation that silently
@@ -648,7 +663,7 @@ prop "isSubsetOf agrees with the naive fold" (xs : List Int) (ys : List Int) =
   let b = fromList ys
   eq (isSubsetOf a b) (naiveIsSubsetOf a b)
 
-prop "a subset of a union is recognised" (xs : List Int) (ys : List Int) =
+prop "a subset of a union is recognized" (xs : List Int) (ys : List Int) =
   let a = fromList xs
   isSubsetOf a (union a (fromList ys))
 
@@ -828,7 +843,7 @@ prop "link2 rejoins a split without its element" (x : Int) (xs : List Int) =
 (DProp false "intersection agrees with naive and stays well-formed" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "ys" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "a") (EApp (EVar "fromList") (EVar "xs"))) (DoLet false false (PVar "b") (EApp (EVar "fromList") (EVar "ys"))) (DoLet false false (PVar "got") (EApp (EApp (EVar "intersection") (EVar "a")) (EVar "b"))) (DoExpr (EBinOp "&&" (EApp (EApp (EVar "eq") (EApp (EVar "toList") (EVar "got"))) (EApp (EVar "toList") (EApp (EApp (EVar "naiveIntersection") (EVar "a")) (EVar "b")))) (EApp (EVar "wellFormed") (EVar "got"))))))
 (DProp false "difference agrees with naive and stays well-formed" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "ys" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "a") (EApp (EVar "fromList") (EVar "xs"))) (DoLet false false (PVar "b") (EApp (EVar "fromList") (EVar "ys"))) (DoLet false false (PVar "got") (EApp (EApp (EVar "difference") (EVar "a")) (EVar "b"))) (DoExpr (EBinOp "&&" (EApp (EApp (EVar "eq") (EApp (EVar "toList") (EVar "got"))) (EApp (EVar "toList") (EApp (EApp (EVar "naiveDifference") (EVar "a")) (EVar "b")))) (EApp (EVar "wellFormed") (EVar "got"))))))
 (DProp false "isSubsetOf agrees with the naive fold" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "ys" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "a") (EApp (EVar "fromList") (EVar "xs"))) (DoLet false false (PVar "b") (EApp (EVar "fromList") (EVar "ys"))) (DoExpr (EApp (EApp (EVar "eq") (EApp (EApp (EVar "isSubsetOf") (EVar "a")) (EVar "b"))) (EApp (EApp (EVar "naiveIsSubsetOf") (EVar "a")) (EVar "b"))))))
-(DProp false "a subset of a union is recognised" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "ys" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "a") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EVar "isSubsetOf") (EVar "a")) (EApp (EApp (EVar "union") (EVar "a")) (EApp (EVar "fromList") (EVar "ys")))))))
+(DProp false "a subset of a union is recognized" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "ys" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "a") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EVar "isSubsetOf") (EVar "a")) (EApp (EApp (EVar "union") (EVar "a")) (EApp (EVar "fromList") (EVar "ys")))))))
 (DProp false "splitAt partitions around the element and both halves stay well-formed" ((pp "x" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PTuple (PVar "below") (PVar "above")) (EApp (EApp (EVar "splitAt") (EVar "x")) (EApp (EVar "fromList") (EVar "xs")))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EVar "wellFormed") (EVar "below")) (EApp (EVar "wellFormed") (EVar "above"))) (EApp (EApp (EVar "allElems") (ELam ((PVar "b")) (EApp (EApp (EVar "lt") (EVar "b")) (EVar "x")))) (EVar "below"))) (EApp (EApp (EVar "allElems") (ELam ((PVar "a")) (EApp (EApp (EVar "gt") (EVar "a")) (EVar "x")))) (EVar "above"))))))
 (DProp false "link rebuilds a well-formed set from a split" ((pp "x" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PTuple (PVar "below") (PVar "above")) (EApp (EApp (EVar "splitAt") (EVar "x")) (EApp (EVar "fromList") (EVar "xs")))) (DoLet false false (PVar "rebuilt") (EApp (EApp (EApp (EVar "link") (EVar "x")) (EVar "below")) (EVar "above"))) (DoExpr (EBinOp "&&" (EApp (EVar "wellFormed") (EVar "rebuilt")) (EApp (EApp (EVar "has") (EVar "x")) (EVar "rebuilt"))))))
 (DProp false "link2 rejoins a split without its element" ((pp "x" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PTuple (PVar "below") (PVar "above")) (EApp (EApp (EVar "splitAt") (EVar "x")) (EApp (EVar "fromList") (EVar "xs")))) (DoLet false false (PVar "rebuilt") (EApp (EApp (EVar "link2") (EVar "below")) (EVar "above"))) (DoExpr (EBinOp "&&" (EApp (EVar "wellFormed") (EVar "rebuilt")) (EApp (EApp (EVar "eq") (EApp (EVar "toList") (EVar "rebuilt"))) (EApp (EVar "toList") (EApp (EApp (EVar "delete") (EVar "x")) (EApp (EVar "fromList") (EVar "xs")))))))))
@@ -992,7 +1007,7 @@ prop "link2 rejoins a split without its element" (x : Int) (xs : List Int) =
 (DProp false "intersection agrees with naive and stays well-formed" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "ys" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "a") (EApp (EDictApp "fromList") (EVar "xs"))) (DoLet false false (PVar "b") (EApp (EDictApp "fromList") (EVar "ys"))) (DoLet false false (PVar "got") (EApp (EApp (EDictApp "intersection") (EVar "a")) (EVar "b"))) (DoExpr (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "toList") (EVar "got"))) (EApp (EMethodRef "toList") (EApp (EApp (EDictApp "naiveIntersection") (EVar "a")) (EVar "b")))) (EApp (EDictApp "wellFormed") (EVar "got"))))))
 (DProp false "difference agrees with naive and stays well-formed" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "ys" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "a") (EApp (EDictApp "fromList") (EVar "xs"))) (DoLet false false (PVar "b") (EApp (EDictApp "fromList") (EVar "ys"))) (DoLet false false (PVar "got") (EApp (EApp (EDictApp "difference") (EVar "a")) (EVar "b"))) (DoExpr (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "toList") (EVar "got"))) (EApp (EMethodRef "toList") (EApp (EApp (EDictApp "naiveDifference") (EVar "a")) (EVar "b")))) (EApp (EDictApp "wellFormed") (EVar "got"))))))
 (DProp false "isSubsetOf agrees with the naive fold" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "ys" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "a") (EApp (EDictApp "fromList") (EVar "xs"))) (DoLet false false (PVar "b") (EApp (EDictApp "fromList") (EVar "ys"))) (DoExpr (EApp (EApp (EMethodRef "eq") (EApp (EApp (EDictApp "isSubsetOf") (EVar "a")) (EVar "b"))) (EApp (EApp (EDictApp "naiveIsSubsetOf") (EVar "a")) (EVar "b"))))))
-(DProp false "a subset of a union is recognised" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "ys" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "a") (EApp (EDictApp "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EDictApp "isSubsetOf") (EVar "a")) (EApp (EApp (EDictApp "union") (EVar "a")) (EApp (EDictApp "fromList") (EVar "ys")))))))
+(DProp false "a subset of a union is recognized" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "ys" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "a") (EApp (EDictApp "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EDictApp "isSubsetOf") (EVar "a")) (EApp (EApp (EDictApp "union") (EVar "a")) (EApp (EDictApp "fromList") (EVar "ys")))))))
 (DProp false "splitAt partitions around the element and both halves stay well-formed" ((pp "x" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PTuple (PVar "below") (PVar "above")) (EApp (EApp (EDictApp "splitAt") (EVar "x")) (EApp (EDictApp "fromList") (EVar "xs")))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EDictApp "wellFormed") (EVar "below")) (EApp (EDictApp "wellFormed") (EVar "above"))) (EApp (EApp (EVar "allElems") (ELam ((PVar "b")) (EApp (EApp (EMethodRef "lt") (EVar "b")) (EVar "x")))) (EVar "below"))) (EApp (EApp (EVar "allElems") (ELam ((PVar "a")) (EApp (EApp (EMethodRef "gt") (EVar "a")) (EVar "x")))) (EVar "above"))))))
 (DProp false "link rebuilds a well-formed set from a split" ((pp "x" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PTuple (PVar "below") (PVar "above")) (EApp (EApp (EDictApp "splitAt") (EVar "x")) (EApp (EDictApp "fromList") (EVar "xs")))) (DoLet false false (PVar "rebuilt") (EApp (EApp (EApp (EVar "link") (EVar "x")) (EVar "below")) (EVar "above"))) (DoExpr (EBinOp "&&" (EApp (EDictApp "wellFormed") (EVar "rebuilt")) (EApp (EApp (EDictApp "has") (EVar "x")) (EVar "rebuilt"))))))
 (DProp false "link2 rejoins a split without its element" ((pp "x" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PTuple (PVar "below") (PVar "above")) (EApp (EApp (EDictApp "splitAt") (EVar "x")) (EApp (EDictApp "fromList") (EVar "xs")))) (DoLet false false (PVar "rebuilt") (EApp (EApp (EVar "link2") (EVar "below")) (EVar "above"))) (DoExpr (EBinOp "&&" (EApp (EDictApp "wellFormed") (EVar "rebuilt")) (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "toList") (EVar "rebuilt"))) (EApp (EMethodRef "toList") (EApp (EApp (EDictApp "delete") (EVar "x")) (EApp (EDictApp "fromList") (EVar "xs")))))))))

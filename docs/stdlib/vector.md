@@ -1,96 +1,98 @@
 # vector
 
-vector.mdk — a growable array (a dynamic array, `Vec` in Rust, `vector` in
-C++, `ArrayList` in Java).
+A growable, mutable array.
 
-`Array a` (Module 4) is **fixed-size**: O(1) random access, but no `push`/
-`pop`.  `Vector a` is the growable counterpart — backed by an
-`Array a` with spare capacity, so `push` is amortized O(1) (the backing
-doubles when full, like the hash tables in Module 6).  Reach for `Array` when
-the length is known up front; reach for `Vector` when you accumulate.
+`Vector a` holds its elements in an array with spare capacity, so `push`
+costs amortized `O(1)` and indexing is `O(1)`. The writing operations
+change the vector in place and return `Unit`. Use `array` when the length
+is known up front, and `Vector` when elements accumulate.
 
-Representation: `Vector backing len` where `!backing` is the backing
-array (its `arrayLength` is the *capacity*) and `!len` is the number of
-live elements (`0 <= len <= capacity`).  Both are `Ref`s, mutated in place.
-Slots `[len, capacity)` are scratch — never read; they hold
-whatever value last filled them (the most recent `push`'s element on a grow).
+`length` is the number of elements; `capacity` is the size of the backing
+store, which doubles when it fills. The `Foldable` instance makes
+`toList`, `sum`, `elem`, and `any` work on a vector.
 
-Iteration / instances only ever touch the live range `[0, len)`, so the
-scratch tail is invisible.  `empty`/`new` start at capacity 0 and allocate on
-first `push`, using the pushed element as the fill — so no dummy/default
-value is needed to construct one.
-
-## `Vector`
+### `Vector`
 
 ```
 data Vector a
   = Vector (Ref (Array a)) (Ref Int)
 ```
 
-`Vector backing len`: `!backing` is the capacity-sized store,
-`!len` the live count; both mutated in place.
+The vector type. Its fields are the backing array and the element
+count, both mutable.
 
-## `new`
+Instances: [`Index`](#index-vector-a-int-a), [`IndexMut`](#indexmut-vector-a-int-a), [`Foldable`](#foldable-vector), [`Eq`](#eq-vector-a), [`Debug`](#debug-vector-a), [`Display`](#display-vector-a)
+
+## Construction
+
+### `new`
 
 ```
 new : Unit -> Vector a
 ```
 
-A fresh, empty vector (capacity 0; grows on first `push`).  Takes `Unit`,
-not a nullary value, so each call allocates its own cells.
+A new, empty vector.
 
-## `fromList`
+Each call allocates its own vector, which is why it takes `Unit`. The
+backing store is allocated on the first `push`.
+
+```medaka
+> length (new () : Vector Int)
+0
+```
+
+### `fromList`
 
 ```
 fromList : List a -> Vector a
 ```
 
-Build a vector from a list, preserving order.  Capacity equals the length
-(the next `push` triggers a grow).
+A vector holding the elements of a list, in order.
 
-
-*(doctest — run by `medaka test`)*
+The capacity equals the length, so the next `push` grows the store.
 
 ```medaka
 > length (fromList [1, 2, 3])
 3
 ```
 
-## `fromArray`
+### `fromArray`
 
 ```
 fromArray : Array a -> Vector a
 ```
 
-Wrap a *copy* of an array as a vector (so later mutation does not disturb
-the caller's array).
+A vector holding a copy of an array's elements.
 
-## `capacity`
+Later changes to the vector do not affect the array.
+
+```medaka
+> toList (fromArray [|1, 2|])
+[1, 2]
+```
+
+## Reading
+
+### `capacity`
 
 ```
 capacity : Vector a -> Int
 ```
 
-Capacity of the backing store (`>= length`).  Grows by doubling.
-
-
-*(doctest — run by `medaka test`)*
+The size of the backing store, which is at least `length`.
 
 ```medaka
 > capacity (fromList [1, 2, 3])
 3
 ```
 
-## `get`
+### `get`
 
 ```
 get : Int -> Vector a -> Option a
 ```
 
-Element at an index, or `None` when out of the live range `[0, length)`.
-
-
-*(doctest — run by `medaka test`)*
+The element at index `i`, or `None` when `i` is out of range.
 
 ```medaka
 > get 1 (fromList [10, 20, 30])
@@ -99,267 +101,277 @@ Some 20
 None
 ```
 
-## `Index (Vector a) Int a`
-
-```
-impl Index (Vector a) Int a
-```
-
-`index ma i` reads `ma`'s element at `i` (`ma[i]` sugar dispatches here),
-over the live range `[0, length)`.  O(1).  Raises the coded `indexError`
-(E-INDEX-OOB) when `i` is out of range -- use `get` for a safe
-`Option`-returning read instead.
-
-## `first`
+### `first`
 
 ```
 first : Vector a -> Option a
 ```
 
-First element, or `None` when empty.
-
-
-*(doctest — run by `medaka test`)*
+The first element, or `None` when the vector is empty.
 
 ```medaka
 > first (fromList [10, 20, 30])
 Some 10
 ```
 
-## `last`
+### `last`
 
 ```
 last : Vector a -> Option a
 ```
 
-Last element, or `None` when empty.
-
-
-*(doctest — run by `medaka test`)*
+The last element, or `None` when the vector is empty.
 
 ```medaka
 > last (fromList [10, 20, 30])
 Some 30
 ```
 
-## `toArray`
+## Conversion
+
+### `toArray`
 
 ```
 toArray : Vector a -> Array a
 ```
 
-Snapshot the live range into a fresh fixed-size `Array a`.  (Shown here via
-the `arrayLength` kernel primitive — `Array`'s own `Foldable`/`Debug` live in
-`array.mdk`, which this module does not import.)
-
-
-*(doctest — run by `medaka test`)*
+A new array holding the vector's elements.
 
 ```medaka
 > arrayLength (toArray (fromList [1, 2, 3]))
 3
 ```
 
-## `push`
+## Mutation
+
+### `push`
 
 ```
 push : a -> Vector a -> Unit
 ```
 
-Append an element, growing (doubling) the backing store when it is full.
-Amortized O(1).
+Appends `x` to the end of the vector.
 
-## `pop`
+Amortized `O(1)`: the backing store doubles when it is full.
+
+```medaka
+> let v = fromList [1, 2] in let _ = push 3 v in toList v
+[1, 2, 3]
+```
+
+### `pop`
 
 ```
 pop : Vector a -> Option a
 ```
 
-Remove and return the last element, or `None` when empty.  Keeps capacity
-(no shrink).
+Removes and returns the last element, or `None` when the vector is
+empty.
 
-## `setInPlace`
+The capacity is kept.
+
+```medaka
+> pop (fromList [1, 2, 3])
+Some 3
+```
+
+### `setInPlace`
 
 ```
 setInPlace : Int -> a -> Vector a -> Unit
 ```
 
-Overwrite the element at an index.  Panics when out of the live range
-`[0, length)` (use `push` to extend).
+Replaces the element at index `i` with `x`.
 
-## `IndexMut (Vector a) Int a`
+Panics when `i` is out of range; `push` extends the vector.
 
+```medaka
+> let v = fromList [1, 2, 3] in let _ = setInPlace 1 9 v in toList v
+[1, 9, 3]
 ```
-impl IndexMut (Vector a) Int a
-```
 
-`setIndex ma i v` writes `v` at `ma`'s index `i`, in place, over the live
-range `[0, length)`, and returns `ma`.  O(1).  Raises the coded
-`indexError` (E-INDEX-OOB) when `i` is out of range.
-
-## `swap`
+### `swap`
 
 ```
 swap : Int -> Int -> Vector a -> Unit
 ```
 
-Exchange the elements at two indices.  Caller ensures both are in range.
+Exchanges the elements at indices `i` and `j`.
 
-## `clear`
+Both indices must be in range.
+
+```medaka
+> let v = fromList [1, 2, 3] in let _ = swap 0 2 v in toList v
+[3, 2, 1]
+```
+
+### `clear`
 
 ```
 clear : Vector a -> Unit
 ```
 
-Drop all elements (length 0), retaining the allocated capacity.
+Removes every element.
 
-## `mapInPlace`
+The capacity is kept.
+
+```medaka
+> let v = fromList [1, 2, 3] in let _ = clear v in length v
+0
+```
+
+### `mapInPlace`
 
 ```
 mapInPlace : (a -> a) -> Vector a -> Unit
 ```
 
-Apply `f` to every live element in place.
-
-## `insertAt`
-
-```
-insertAt : Int -> a -> Vector a -> Unit
-```
-
-Insert `x` so that it lands at index `i`, shifting the rest right.
-`i <= 0` prepends; `i >= length` appends.  Grows the backing store when
-full, like `push`.
-
-
-*(doctest — run by `medaka test`)*
+Replaces every element with `f` applied to it.
 
 ```medaka
-> let ma = fromList [1, 2, 3] in let _ = insertAt 1 9 ma in toList ma
+> let v = fromList [1, 2, 3] in let _ = mapInPlace (x => x * 10) v in toList v
+[10, 20, 30]
+```
+
+## Editing and sorting
+
+### `insertAtInPlace`
+
+```
+insertAtInPlace : Int -> a -> Vector a -> Unit
+```
+
+Inserts `x` at index `i`, shifting the following elements right.
+
+An index at or below `0` prepends; an index at or beyond the length
+appends.
+
+```medaka
+> let v = fromList [1, 2, 3] in let _ = insertAtInPlace 1 9 v in toList v
 [1, 9, 2, 3]
-> let ma = fromList [1, 2] in let _ = insertAt 7 9 ma in toList ma
-[1, 2, 9]
 ```
 
-## `removeAt`
+### `removeAtInPlace`
 
 ```
-removeAt : Int -> Vector a -> Unit
+removeAtInPlace : Int -> Vector a -> Unit
 ```
 
-Drop the element at index `i`.  Out of range leaves the vector unchanged.
+Removes the element at index `i`.
 
-
-*(doctest — run by `medaka test`)*
+Nothing happens when `i` is out of range.
 
 ```medaka
-> let ma = fromList [1, 2, 3] in let _ = removeAt 1 ma in toList ma
+> let v = fromList [1, 2, 3] in let _ = removeAtInPlace 1 v in toList v
 [1, 3]
-> let ma = fromList [1, 2] in let _ = removeAt 7 ma in toList ma
-[1, 2]
 ```
 
-## `sortBy`
+### `sortInPlaceBy`
 
 ```
-sortBy : (a -> a -> <e> Ordering) -> Vector a -> <e> Unit
+sortInPlaceBy : (a -> a -> <e> Ordering) -> Vector a -> <e> Unit
 ```
 
-Sort the live range in place with the supplied comparison.  Stable --
-equal elements keep their original relative order -- because `list.sortBy`,
-which does the work, is.
+Sorts the elements in place by `cmp`.
 
-
-*(doctest — run by `medaka test`)*
+The sortInPlace is stable: elements that compare equal keep their original
+order.
 
 ```medaka
-> let ma = fromList [3, 1, 4, 1, 5] in let _ = sortBy compare ma in toList ma
+> let v = fromList [3, 1, 4, 1, 5] in let _ = sortInPlaceBy compare v in toList v
 [1, 1, 3, 4, 5]
 ```
 
-## `sort`
+### `sortInPlace`
 
 ```
-sort : Ord a => Vector a -> Unit
+sortInPlace : Ord a => Vector a -> Unit
 ```
 
-Sort the live range in place by the `Ord` instance.
+Sorts the elements in place in ascending order.
 
-
-*(doctest — run by `medaka test`)*
+The sortInPlace is stable.
 
 ```medaka
-> let ma = fromList [3, 1, 2] in let _ = sort ma in toList ma
+> let v = fromList [3, 1, 2] in let _ = sortInPlace v in toList v
 [1, 2, 3]
 ```
 
-## `Foldable Vector`
+## Instances
+
+### `Index (Vector a) Int a`
+
+```
+impl Index (Vector a) Int a
+```
+
+`v[i]` is the element at index `i`, in `O(1)`.
+
+Panics with an index error when `i` is out of range; `get` is the
+`Option`-returning form.
+
+### `IndexMut (Vector a) Int a`
+
+```
+impl IndexMut (Vector a) Int a
+```
+
+`v[i] = x` replaces the element at index `i` in place, in `O(1)`.
+
+Panics with an index error when `i` is out of range.
+
+### `Foldable Vector`
 
 ```
 impl Foldable Vector
 ```
 
-Folds over the live range (in order), so `toList`/`length`/`sum`/`elem`/
-`any`/… all work on a `Vector`.
-
-
-*(doctest — run by `medaka test`)*
+The `Foldable` methods visit the elements in order, so `toList`,
+`length`, `sum`, `elem`, and `any` work on a vector.
 
 ```medaka
 > sum (fromList [1, 2, 3, 4])
 10
-> length (fromList [9, 8, 7])
-3
 ```
 
-## `Eq (Vector a)`
+### `Eq (Vector a)`
 
 ```
 impl Eq (Vector a) requires Eq a
 ```
 
-Element-wise equality over the live ranges (capacity is irrelevant).
-
-
-*(doctest — run by `medaka test`)*
+Two vectors are equal when they hold equal elements in the same order.
+Capacity does not matter.
 
 ```medaka
 > eq (fromList [1, 2, 3]) (fromList [1, 2, 3])
 True
 ```
 
-## `Debug (Vector a)`
+### `Debug (Vector a)`
 
 ```
 impl Debug (Vector a) requires Debug a
 ```
 
-Rendered as `fromList [a, …]` over the live range.
-
-
-*(doctest — run by `medaka test`)*
+`debug` renders a vector as `fromList [x, ...]`.
 
 ```medaka
-> debug (fromList [1, 2, 3]) == "fromList [1, 2, 3]"
-True
+> debug (fromList [1, 2, 3])
+"fromList [1, 2, 3]"
 ```
 
-## `Display (Vector a)`
+### `Display (Vector a)`
 
 ```
 impl Display (Vector a) requires Display a
 ```
 
-Same `fromList [...]` shape as `Debug`, over the live range, with the
-elements rendered by THEIR `Display` (so strings lose their quotes).
-`Vector` was the one container in the surface that `println` could not
-take (sheet row A-4).
-
-
-*(doctest — run by `medaka test`)*
+`display` renders a vector as `fromList [x, ...]`, with the elements
+in their own `display` form.
 
 ```medaka
-> display (fromList [1, 2, 3]) == "fromList [1, 2, 3]"
-True
+> display (fromList ["a", "b"])
+"fromList [a, b]"
 ```
 

@@ -1,132 +1,134 @@
-{- time.mdk — durations + a UTC civil calendar, plus thin wrappers over the
-   `<Clock>` externs (`wallTimeSec` / `monotonicSec` / `sleepMs`).
+{- | Durations, a UTC calendar, and the clock.
 
-   Import with `import time.*` (or select names, e.g.
-   `import time.{fromEpochSeconds, formatIso}`).
+   `Duration` is a span of time in whole milliseconds, built with `millis`,
+   `seconds`, `minutes`, `hours`, and `days`. `DateTime` is a civil date
+   and time in UTC; `fromEpochSeconds` and `toEpochSeconds` convert to and
+   from Unix time, and `formatIso` and `parseIso` convert to and from ISO
+   8601 text. There is no time zone support: every `DateTime` is UTC.
 
-   ── Scope ──────────────────────────────────────────────────────────────
-   • UTC ONLY.  There is no timezone / DST database (that is a P2 follow-up).
-     Every `DateTime` here is civil UTC; `formatIso` always emits a `Z` suffix.
-   • The calendar core (`fromEpochSeconds` / `toEpochSeconds`) uses Howard
-     Hinnant's days-from-civil / civil-from-days algorithm — pure Int
-     arithmetic, correct across leap years and for negative (pre-1970) epochs.
-     Medaka's `/` truncates toward zero, so the seconds→days split uses a
-     `floorDiv` helper; Hinnant's own `era` adjustments already assume
-     truncating division, so they are used verbatim.  `floorDiv` itself now
-     lives in `math.mdk` (promoted in #433 — this file used to hand-roll a
-     private copy; same algorithm, unchanged).
+   `now`, `monotonic`, `elapsedSince`, and `sleep` read and wait on the
+   host clock. Under the interpreter the clock returns fixed values and
+   `sleep` does nothing; in a built program they use the real clock. -}
 
-   ── Effect labels ──────────────────────────────────────────────────────
-   The three externs all carry the `<Clock>` effect.  `sleepMs` reuses
-   `<Clock>` for cohesion with the time domain — there is no `<Sleep>` label
-   and adding one is out of scope.  Unlike the file externs, `<Clock>`
-   externs DO run under the interpreter (`medaka run`): there the interpreter
-   oracle has no FFI to the clock, so `wallTimeSec` / `monotonicSec` return
-   fixed plausible values and `sleepMs` is a no-op.  On native `build` they
-   call the real C clock / `nanosleep`. -}
+-- The calendar core (`fromEpochSeconds` / `toEpochSeconds`) uses Howard
+-- Hinnant's days-from-civil / civil-from-days algorithm: pure Int
+-- arithmetic, correct across leap years and for negative (pre-1970) epochs.
+-- Medaka's `/` truncates toward zero, so the seconds→days split uses
+-- `math.floorDiv`; Hinnant's own `era` adjustments already assume truncating
+-- division, so they are used verbatim.
+--
+-- The three externs all carry the `<Clock>` effect.  `sleepMs` reuses
+-- `<Clock>` for cohesion with the time domain; there is no `<Sleep>` label.
 
 import math.{floorDiv}
 import string.{sliceClamped, toInt}
 
--- ── Duration ────────────────────────────────────────────────────────────
--- | A time span, stored as a whole number of MILLISECONDS.
+-- # Durations
+
+-- | A span of time, in whole milliseconds.
 public export data Duration = Duration Int deriving (Eq, Ord, Debug)
 
--- | A duration of `n` milliseconds.
---
--- > toMillis (millis 250)
--- 250
+{- | A duration of `n` milliseconds.
+
+   > toMillis (millis 250)
+   250 -}
 export
 millis : Int -> Duration
 millis n = Duration n
 
--- | A duration of `n` seconds.
---
--- > toMillis (seconds 5)
--- 5000
+{- | A duration of `n` seconds.
+
+   > toMillis (seconds 5)
+   5000 -}
 export
 seconds : Int -> Duration
 seconds n = Duration (n * 1000)
 
--- | A duration of `n` minutes.
---
--- > toSeconds (minutes 2)
--- 120
+{- | A duration of `n` minutes.
+
+   > toSeconds (minutes 2)
+   120 -}
 export
 minutes : Int -> Duration
 minutes n = Duration (n * 60000)
 
--- | A duration of `n` hours.
---
--- > toSeconds (hours 1)
--- 3600
+{- | A duration of `n` hours.
+
+   > toSeconds (hours 1)
+   3600 -}
 export
 hours : Int -> Duration
 hours n = Duration (n * 3600000)
 
--- | A duration of `n` days.
---
--- > toSeconds (days 1)
--- 86400
+{- | A duration of `n` days.
+
+   > toSeconds (days 1)
+   86400 -}
 export
 days : Int -> Duration
 days n = Duration (n * 86400000)
 
--- | The duration as whole milliseconds.
+-- | The duration in whole milliseconds.
 export
 toMillis : Duration -> Int
 toMillis (Duration ms) = ms
 
--- | The duration as whole seconds (truncated toward zero).
---
--- > toSeconds (millis 2500)
--- 2
+{- | The duration in whole seconds, rounded towards zero.
+
+   > toSeconds (millis 2500)
+   2 -}
 export
 toSeconds : Duration -> Int
 toSeconds (Duration ms) = ms / 1000
 
--- | The duration as whole minutes (truncated toward zero).
---
--- > toMinutes (seconds 150)
--- 2
+{- | The duration in whole minutes, rounded towards zero.
+
+   > toMinutes (seconds 150)
+   2 -}
 export
 toMinutes : Duration -> Int
 toMinutes (Duration ms) = ms / 60000
 
--- | The duration as whole hours (truncated toward zero).
---
--- > toHours (minutes 150)
--- 2
+{- | The duration in whole hours, rounded towards zero.
+
+   > toHours (minutes 150)
+   2 -}
 export
 toHours : Duration -> Int
 toHours (Duration ms) = ms / 3600000
 
--- | The duration as whole days (truncated toward zero).
---
--- > toDays (hours 50)
--- 2
+{- | The duration in whole days, rounded towards zero.
+
+   > toDays (hours 50)
+   2 -}
 export
 toDays : Duration -> Int
 toDays (Duration ms) = ms / 86400000
 
--- | Add two durations.
---
--- > toMillis (addDuration (seconds 1) (millis 500))
--- 1500
+{- | The sum of two durations.
+
+   `++` on durations is the same operation.
+
+   > toMillis (addDuration (seconds 1) (millis 500))
+   1500 -}
 export
 addDuration : Duration -> Duration -> Duration
 addDuration (Duration a) (Duration b) = Duration (a + b)
 
--- | Subtract the second duration from the first.
---
--- > toMillis (subDuration (seconds 2) (millis 500))
--- 1500
+{- | The first duration less the second.
+
+   > toMillis (subDuration (seconds 2) (millis 500))
+   1500 -}
 export
 subDuration : Duration -> Duration -> Duration
 subDuration (Duration a) (Duration b) = Duration (a - b)
 
--- ── UTC civil calendar ──────────────────────────────────────────────────
--- | A civil UTC date-and-time.  `month` is 1-12, `day` is 1-31.
+-- # Dates and times
+
+{- | A civil date and time in UTC.
+
+   `month` runs from 1 to 12 and `day` from 1 to 31. Values compare in
+   field order, which is chronological order for valid dates. -}
 public export data DateTime =
   | DateTime {
       year : Int,
@@ -136,7 +138,7 @@ public export data DateTime =
       minute : Int,
       second : Int,
     }
-deriving (Eq, Ord, Debug)
+  deriving (Eq, Ord, Debug)
 
 -- Days since 1970-01-01 for a civil (y, m, d).  Hinnant's days_from_civil.
 daysFromCivil : Int -> Int -> Int -> Int
@@ -164,19 +166,14 @@ civilFromDays z0 =
   let m = if mp < 10 then mp + 3 else mp - 9
   (if m <= 2 then y + 1 else y, m, d)
 
--- | Convert Unix epoch seconds (UTC) to a civil `DateTime`.  Supports
--- negative (pre-1970) inputs.
---
--- > formatIso (fromEpochSeconds 0)
--- "1970-01-01T00:00:00Z"
--- > formatIso (fromEpochSeconds 1000000000)
--- "2001-09-09T01:46:40Z"
--- > formatIso (fromEpochSeconds 951782400)
--- "2000-02-29T00:00:00Z"
--- > formatIso (fromEpochSeconds 1709164800)
--- "2024-02-29T00:00:00Z"
--- > formatIso (fromEpochSeconds (0 - 1))
--- "1969-12-31T23:59:59Z"
+{- | The UTC date and time at a number of seconds since the Unix epoch.
+
+   Negative values, before 1970, work too.
+
+   > formatIso (fromEpochSeconds 0)
+   "1970-01-01T00:00:00Z"
+   > formatIso (fromEpochSeconds 1000000000)
+   "2001-09-09T01:46:40Z" -}
 export
 fromEpochSeconds : Int -> DateTime
 fromEpochSeconds secs =
@@ -192,11 +189,18 @@ fromEpochSeconds secs =
       second = sod % 60,
     }
 
--- | Convert a civil `DateTime` (UTC) to Unix epoch seconds.  Inverse of
--- `fromEpochSeconds`.
---
--- > toEpochSeconds (fromEpochSeconds 1000000000)
--- 1000000000
+-- > formatIso (fromEpochSeconds 951782400)
+-- "2000-02-29T00:00:00Z"
+-- > formatIso (fromEpochSeconds 1709164800)
+-- "2024-02-29T00:00:00Z"
+-- > formatIso (fromEpochSeconds (0 - 1))
+-- "1969-12-31T23:59:59Z"
+
+{- | The number of seconds since the Unix epoch at a UTC date and time. The
+   inverse of `fromEpochSeconds`.
+
+   > toEpochSeconds (fromEpochSeconds 1000000000)
+   1000000000 -}
 export
 toEpochSeconds : DateTime -> Int
 toEpochSeconds dt =
@@ -219,10 +223,10 @@ pad4 n =
   else
     intToString n
 
--- | Render a `DateTime` as ISO 8601 `YYYY-MM-DDThh:mm:ssZ` (zero-padded, UTC).
---
--- > formatIso (DateTime { year = 2024, month = 3, day = 5, hour = 7, minute = 8, second = 9 })
--- "2024-03-05T07:08:09Z"
+{- | The date and time in ISO 8601 form, `YYYY-MM-DDThh:mm:ssZ`.
+
+   > formatIso (DateTime { year = 2024, month = 3, day = 5, hour = 7, minute = 8, second = 9 })
+   "2024-03-05T07:08:09Z" -}
 export
 formatIso : DateTime -> String
 formatIso dt = "\{pad4 dt.year}-\{pad2 dt.month}-\{pad2 dt.day}T\{pad2 dt.hour}:\{pad2 dt.minute}:\{pad2 dt.second}Z"
@@ -245,21 +249,15 @@ isoFields (Some y) (Some mo) (Some d) (Some h) (Some mi) (Some sec) =
     None
 isoFields _ _ _ _ _ _ = None
 
-{- | Parse ISO 8601 `YYYY-MM-DDThh:mm:ssZ` (UTC only, exactly the shape
-   `formatIso` emits), or `None`.  This is the exact inverse of `formatIso`:
-   the candidate is accepted only if re-rendering it reproduces the input
-   byte-for-byte, so no alternate spelling of the same instant (`+7` for `07`,
-   a lowercase `t`, a missing pad) is silently accepted.
+{- | The date and time written in ISO 8601 form, `YYYY-MM-DDThh:mm:ssZ`, or
+   `None`.
 
-   > parseIso "2024-03-05T07:08:09Z" == Some (DateTime { year = 2024, month = 3, day = 5, hour = 7, minute = 8, second = 9 })
-   True
+   Exactly the form `formatIso` produces is accepted, and nothing else: no
+   other time zone, no missing zero padding, no lowercase `t`.
+
    > map toEpochSeconds (parseIso "1970-01-01T00:00:00Z")
    Some 0
-   > parseIso "2024-03-05 07:08:09Z"
-   None
    > parseIso "2024-13-05T07:08:09Z"
-   None
-   > parseIso "not a date"
    None -}
 export
 parseIso : String -> Option DateTime
@@ -269,71 +267,71 @@ parseIso s =
     None => None
   else None
 
--- ── Instances ───────────────────────────────────────────────────────────
-{- `Eq`/`Ord`/`Debug` are derived on both types (see the `data` decls).
-   Derived `Ord Duration` compares the stored millisecond count, so it agrees
-   with `toMillis`; derived `Ord DateTime` is lexicographic in field order
-   (year, month, day, hour, minute, second), so for civil-range values it
-   agrees with `toEpochSeconds`.  Both laws are property-tested below. -}
+-- > parseIso "2024-03-05T07:08:09Z" == Some (DateTime { year = 2024, month = 3, day = 5, hour = 7, minute = 8, second = 9 })
+-- True
+-- > parseIso "2024-03-05 07:08:09Z"
+-- None
+-- > parseIso "not a date"
+-- None
 
--- | A `Duration` displays as its whole millisecond count with an `ms` suffix.
+-- ── Instances ───────────────────────────────────────────────────────────
+-- `Eq`/`Ord`/`Debug` are derived on both types (see the `data` decls).
+-- Derived `Ord Duration` compares the stored millisecond count, so it agrees
+-- with `toMillis`; derived `Ord DateTime` is lexicographic in field order
+-- (year, month, day, hour, minute, second), so for civil-range values it
+-- agrees with `toEpochSeconds`.  Both laws are property-tested below.
+
+-- | `display` renders a duration as its millisecond count with an `ms`
+-- suffix.
 export impl Display Duration where
   display (Duration ms) = "\{intToString ms}ms"
 
--- | A `DateTime` displays as its ISO 8601 rendering — `display == formatIso`.
+-- | `display` renders a date and time in ISO 8601 form, like `formatIso`.
 export impl Display DateTime where
   display dt = formatIso dt
 
--- | `addDuration` is the associative append.
+-- | `++` on durations is `addDuration`.
 export impl Semigroup Duration where
   append a b = addDuration a b
 
--- | `millis 0` is the identity for `addDuration`.
+-- | `empty` is the zero duration.
 export impl Monoid Duration where
   empty = Duration 0
 
--- ── Effectful helpers (over the `<Clock>` externs) ──────────────────────
--- | Current wall-clock time in Unix epoch seconds (Float).
+-- # The clock
+
+-- | The current wall-clock time in seconds since the Unix epoch.
 export
 now : Unit -> <Clock> Float
 now u = wallTimeSec u
 
--- | Current UTC civil time, from the wall clock (floored to whole seconds).
+-- | The current UTC date and time, to the second.
 export
 nowDateTime : Unit -> <Clock> DateTime
 nowDateTime u = fromEpochSeconds (floatToInt (wallTimeSec u))
 
--- | A monotonic-clock reading in seconds (immune to wall-clock adjustment).
--- Use two readings to time an interval, or `elapsedSince`.
+{- | A reading of the monotonic clock, in seconds.
+
+   The monotonic clock is unaffected by adjustments to the wall clock, so
+   two readings measure an interval. See `elapsedSince`. -}
 export
 monotonic : Unit -> <Clock> Float
 monotonic u = monotonicSec u
 
--- | Seconds elapsed on the monotonic clock since an earlier `monotonic ()`
--- reading.  Time a block with `let t0 = monotonic ()  … elapsedSince t0`.
+{- | The seconds elapsed since an earlier `monotonic` reading.
+
+   Time a computation with `let t0 = monotonic ()`, the computation, then
+   `elapsedSince t0`. -}
 export
 elapsedSince : Float -> <Clock> Float
 elapsedSince start = monotonicSec () - start
 
-{- | Sleep for a `Duration`.
+{- | Pauses the program for a duration.
 
-   Takes a `Duration`, not a bare `Int`: `sleep 5` used to mean five
-   MILLISECONDS while reading as five seconds, and the type could not warn
-   anyone (#2306 J-1).  Now the unit is in the value — `sleep (seconds 5)`,
-   `sleep (millis 5)` — and the old `sleepSeconds` is gone with it, since
-   `seconds` already says that.
-
-   `sleepSeconds` below is UNCHANGED: it was never the ambiguous one — the
-   row cites it as the proof that this module already knew units belong
-   somewhere the reader can see them. -}
+   `sleep (seconds 5)` and `sleep (millis 5)` say their unit. -}
 export
 sleep : Duration -> <Clock> Unit
 sleep d = sleepMs (toMillis d)
-
--- | Sleep for `s` seconds.  Equivalent to `sleep (seconds s)`.
-export
-sleepSeconds : Int -> <Clock> Unit
-sleepSeconds s = sleepMs (s * 1000)
 
 -- Round-trip: epoch → civil → epoch is the identity (n constrained ≥ 0 to a
 -- sane band; negatives are supported too, see the `fromEpochSeconds (0 - 1)`
@@ -346,7 +344,7 @@ prop "epoch round-trips through the civil calendar" (n : Int) =
 sane : Int -> Int
 sane n = 1000000 + (if n < 0 then 0 - n else n) % 3000000000
 
--- LAW (H-3): `parseIso` is the exact inverse of `formatIso` — every value
+-- LAW: `parseIso` is the exact inverse of `formatIso`: every value
 -- `formatIso` can emit parses back to the SAME `DateTime`, and nothing else
 -- parses at all.
 prop "parseIso inverts formatIso" (n : Int) =
@@ -357,8 +355,8 @@ prop "parseIso rejects a corrupted separator" (n : Int) =
   let iso = formatIso (fromEpochSeconds (sane n))
   parseIso (sliceClamped 0 10 iso ++ " " ++ sliceClamped 11 20 iso) == None
 
--- LAW (H-3): the five `Duration` constructors and the five projections are
--- inverse at their own unit, and each projection truncates toward zero.
+-- LAW: the five `Duration` constructors and the five projections are inverse
+-- at their own unit, and each projection truncates toward zero.
 prop "Duration projections invert their constructors" (n : Int) =
   let k = (if n < 0 then 0 - n else n) % 100000
   toMillis (millis k) == k
@@ -375,20 +373,20 @@ prop "Duration projections are the coarser unit's floor" (n : Int) =
     && toHours d == toMinutes d / 60
     && toDays d == toHours d / 24
 
--- LAW (A-1): derived `Ord Duration` must agree with `toMillis` ordering, and
--- must be consistent with `Eq`.
+-- LAW: derived `Ord Duration` must agree with `toMillis` ordering, and must
+-- be consistent with `Eq`.
 prop "Ord Duration agrees with toMillis" (a : Int) (b : Int) = compare (millis a) (millis b) == compare a b
   && millis a == millis b == (a == b)
 
--- LAW (A-1): derived `Ord DateTime` must agree with `toEpochSeconds` ordering
--- on civil-range values, and must be consistent with `Eq`.
+-- LAW: derived `Ord DateTime` must agree with `toEpochSeconds` ordering on
+-- civil-range values, and must be consistent with `Eq`.
 prop "Ord DateTime agrees with toEpochSeconds" (a : Int) (b : Int) =
   let x = fromEpochSeconds (sane a)
   let y = fromEpochSeconds (sane b)
   compare x y == compare (toEpochSeconds x) (toEpochSeconds y)
     && x == y == (toEpochSeconds x == toEpochSeconds y)
 
--- LAW (A-1): `Display DateTime` IS `formatIso`; `Display Duration` renders the
+-- LAW: `Display DateTime` IS `formatIso`; `Display Duration` renders the
 -- millisecond count, so it round-trips through `toMillis`.
 prop "Display DateTime is formatIso" (n : Int) =
   let dt = fromEpochSeconds (sane n)
@@ -397,7 +395,7 @@ prop "Display DateTime is formatIso" (n : Int) =
 prop "Display Duration renders the millisecond count" (n : Int) =
   display (millis n) == intToString n ++ "ms"
 
--- LAW (A-1): `Semigroup`/`Monoid Duration` — associativity plus a two-sided
+-- LAW: `Semigroup`/`Monoid Duration`: associativity plus a two-sided
 -- identity.  These are the laws that license the instances at all.
 prop "Semigroup Duration is associative" (a : Int) (b : Int) (c : Int) =
   let l = append (append (millis a) (millis b)) (millis c)

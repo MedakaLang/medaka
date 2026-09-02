@@ -1,0 +1,7 @@
+cmd: medaka run
+exit: 1
+---
+warning: test/error_quality_fixtures/eval/main_not_unit_value.mdk:1:7: 'main' must be a value of type Unit (e.g. an IO action). 'medaka run' only forces main for its side effects and prints nothing for a plain value; wrap the intended effect, e.g. 'main = println "hi"'
+  |
+1 | main = 1 + 2
+  |        ^
