@@ -77,7 +77,7 @@ import test.{expectEqual, expectTrue, fail}
 --   sorted first by code length then by symbol value — the canonical order.
 public export data Huffman =
   | Huffman { counts : Array Int, symbols : Array Int }
-deriving (Eq, Debug)
+  deriving (Eq, Debug)
 
 -- Largest legal DEFLATE Huffman code length (RFC 1951 §3.2.7).
 maxCodeLen : Int
@@ -230,7 +230,8 @@ buildHuffmanWith allowSingle lengths =
    > buildHuffman [|2, 1, 3, 3|]
    Ok Huffman { counts = [|0, 1, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0|], symbols = [|1, 0, 2, 3|] }
 -}
-export buildHuffman : Array Int -> Result String Huffman
+export
+buildHuffman : Array Int -> Result String Huffman
 buildHuffman lengths = buildHuffmanWith True lengths
 
 {- | Like `buildHuffman`, but WITHOUT the RFC 1951 §3.2.7 single-length-1
@@ -242,7 +243,8 @@ buildHuffman lengths = buildHuffmanWith True lengths
    > buildHuffmanStrict [|1|]
    Err "buildHuffman: incomplete Huffman code (unused code space remains)"
 -}
-export buildHuffmanStrict : Array Int -> Result String Huffman
+export
+buildHuffmanStrict : Array Int -> Result String Huffman
 buildHuffmanStrict lengths = buildHuffmanWith False lengths
 
 {- | Decode one symbol: read a bit at a time, extending the running `code`
@@ -254,7 +256,8 @@ buildHuffmanStrict lengths = buildHuffmanWith False lengths
    > decodeSym fixedLitLen (newBitReader [|142|])
    Ok 65
 -}
-export decodeSym : Huffman -> BitReader -> Result String Int
+export
+decodeSym : Huffman -> BitReader -> Result String Int
 decodeSym h r = decodeSymGo h r 1 0 0 0
 
 decodeSymGo : Huffman -> BitReader -> Int -> Int -> Int -> Int -> Result String Int
@@ -289,7 +292,8 @@ fixedLitLenLengths = makeWith 288 fixedLitLenLenAt
 
 -- | The fixed literal/length Huffman table (RFC 1951 §3.2.6), used by
 --   fixed-Huffman (BTYPE 01) blocks.
-export fixedLitLen : Huffman
+export
+fixedLitLen : Huffman
 fixedLitLen = match buildHuffman fixedLitLenLengths
   Ok h => h
   Err msg => panic "fixedLitLen: buildHuffman rejected the RFC 1951 fixed table (unreachable): \{msg}"
@@ -298,7 +302,8 @@ fixedLitLen = match buildHuffman fixedLitLenLengths
 --   0-31 (RFC 1951 §3.2.6 — codes 30/31 are reserved and never occur in
 --   real data, but are still part of the fixed 32-code table, which is what
 --   makes it Kraft-complete: 30 real + 2 reserved codes at length 5).
-export fixedDist : Huffman
+export
+fixedDist : Huffman
 fixedDist = match buildHuffman (make 32 5)
   Ok h => h
   Err msg => panic "fixedDist: buildHuffman rejected the RFC 1951 fixed distance table (unreachable): \{msg}"
@@ -308,28 +313,32 @@ fixedDist = match buildHuffman (make 32 5)
 -- ---------------------------------------------------------------------------
 
 -- | Base length for length symbols 257..285, indexed by `symbol - 257`.
-export lengthBase : Array Int
+export
+lengthBase : Array Int
 lengthBase = [|
   3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67,
   83, 99, 115, 131, 163, 195, 227, 258,
 |]
 
 -- | Extra-bit count for length symbols 257..285, indexed by `symbol - 257`.
-export lengthExtra : Array Int
+export
+lengthExtra : Array Int
 lengthExtra = [|
   0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5,
   5, 5, 0,
 |]
 
 -- | Base distance for distance symbols 0..29, indexed by symbol.
-export distBase : Array Int
+export
+distBase : Array Int
 distBase = [|
   1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769,
   1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577,
 |]
 
 -- | Extra-bit count for distance symbols 0..29, indexed by symbol.
-export distExtra : Array Int
+export
+distExtra : Array Int
 distExtra = [|
   0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11,
   11, 12, 12, 13, 13,

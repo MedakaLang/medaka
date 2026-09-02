@@ -552,7 +552,7 @@ Consequences, and the division of labour with the #803 bound:
   the offending arrow pre-unification); in the idealized semantics it is subsumed by
   rigidity — a rigid `μ` on a declared arrow cannot absorb an intrinsic atom.
 
-**Known residual (#817).** One identification is *deliberately admitted*: a method
+**Former residual (#817) — RETIRED with #823.** One identification *was* deliberately admitted: a method
 effect variable unifying with an **instance-head effect parameter** (`impl Mappable
 (Async e)`, whose `Suspend` arm stores the callback and thereby forces the method's
 `e'` ≈ the head's `e`). It is a real laundering channel — the callback's effect is
@@ -563,8 +563,11 @@ container's row, so rejecting the identification would outlaw effect-polymorphic
 data's shipped functor/monad instances outright. The resolution is design-scoped and
 owned by #817 — and now specified: **graded interfaces** (below, and #820) make the
 container's index absorb the callback row by signature shape, after which this
-exception retires. The type-variable half has **no** such exception (a method type
-variable may never alias an instance-head type variable).
+exception retires — and has: `stdlib/async.mdk` implements the `Deferred*`
+family, and a method effect variable identified with an instance-head row
+parameter is now `T-IMPL-TOO-SPECIFIC` (`aliasesHeadRowMsg`). The type-variable
+half never had such an exception (a method type variable may never alias an
+instance-head type variable).
 
 Two deliberate design notes. **First**, rigidity is an over-approximation in one corner:
 an atom entering a rigid `μ` at a *purely contravariant* occurrence (the impl returns a
@@ -850,13 +853,24 @@ is the *uncharged* signature this section's own examples give (`gmap : (a →^{e
 exercises and what #823 was on course to ship while the fork stood unmade (it
 is now made — the resolution above). §6.7, finding 2, gives the mechanism.
 
-The full family with independent grades remains the ideal; graded-lite is a
-narrower first surface realized *within* it once the kind exists, not a
-free-standing shortcut. Design driver and phased plan: #820 (interface heads /
-kinds first — #822 — then the graded-lite surface; stdlib/Async migration #823;
-`do`-notation routing #824; the independent-grade algebra of #821 — a
-multi-tail `EffRow` join, today unrepresentable — sequenced last, behind the
-same surface).
+**Independent grades (#821) are LANDED.** A row's tail cell may stand for a
+JOIN of several tails (`EJoin` in `compiler/types/typecheck.mdk`); written
+`<L | e | e2>` for a row with labels and `f (e | e2) b` in an index slot. The
+discipline above holds in the implementation: unification never decomposes a
+join — a join is solved only by binding its FLEXIBLE members to the other
+side's residue (the open-absorbs rule generalized to sets), a rigid member (a
+method effect variable inside the impl body being checked) is never bound,
+and a rigid member with nothing to match is a mismatch (`unifyJoinRows`). A
+join with fewer than two unbound members is a plain row again, so joins are
+only ever visible where two genuinely distinct variables meet: inside a graded
+impl body, where performing `e` (forcing the argument) and `e2` (applying the
+callback) into one ambient row now yields `e ⊔ e2` instead of forcing
+`e ~ e2` (`performEffect` joins rather than links when a tail is rigid), and
+in a written join. Graded-lite (one shared grade) remains valid and is what
+the prelude's `Deferred*` family ships; the join form is the general one.
+Design driver and phased plan: #820 (interface heads / kinds first — #822 —
+then the graded-lite surface; stdlib/Async migration #823; `do`-notation
+routing #824; the join algebra #821).
 
 **Orthogonality to dictionaries (restated).** When an interface method's signature
 carries an effect variable (`andThen : m a → (a →^e m b) →^e m b`), the effect var
@@ -1066,7 +1080,7 @@ latent-row position, which demands `Effect`, and the head says `Type`. Symmetric
 `data Box (e : Effect) a = Mk e` fails: `Mk`'s field position demands a monotype.
 
 The diagnostic is **`T-EFFECT-KIND-MISMATCH`**. That name also **renames the
-shipped `T-ROW-KIND-MISMATCH`**, which today reports the *use*-site half of the
+shipped `T-ROW-KIND-MISMATCH`** (done), which reports the *use*-site half of the
 same rule ("a row was written here, but this type-argument position isn't
 row-kinded"); the rename follows the kind's name, since every other effect
 diagnostic already says *effect* (`T-EFFECT-LEAK`, `T-EFFECT-UNDETERMINED`,
@@ -1083,7 +1097,7 @@ not "rejected" — the parameter was simply **never `Effect`-kinded**, since
 `inferParamKinds` reads kindedness off a field's effect tail and there is no such
 field. Writing a row in that slot then drew the *use*-site error. Probed
 (2026-07-26): `data Box e a = Mk a` with `useBox : Box <Stdout> Int → Int` →
-`T-ROW-KIND-MISMATCH` at the row; the control `data Box e a = Mk (Unit →^e a)` →
+`T-EFFECT-KIND-MISMATCH` at the row; the control `data Box e a = Mk (Unit →^e a)` →
 `check` exit 0. So the phantom shape was unreachable rather than diagnosed.
 
 *As a declaration, in isolation: **legal**.* A phantom `Effect` parameter cannot
@@ -1208,10 +1222,10 @@ probed, for a reason that is itself worth recording:
   form.
 - the **join** form `gmap : (a →^{e₂} b) → f e a → f (e ⊔ e₂) b` — index and
   callback row are *distinct* names, so the co-occurrence rule does not fire.
-  **DERIVED, not observed: the join spelling does not parse today.** Both
-  `f (e | e2) b` and `f <e | e2> b` are hard parse errors (*"unexpected `(`;
-  expected a dedent"* / *"unexpected `<`; …"*), which is #821's content — a
-  type-level row join is unrepresentable while `EffRow` carries one optional tail.
+  (Historical: until #821 landed the join spelling did not parse — a type-level
+  row join was unrepresentable while `EffRow` carried one optional tail. It
+  parses now, `f (e | e2) b` / `<L | e | e2>`; the point below describes the
+  pre-#821 tree.)
   The result is read off `anySlotIsRow` (`compiler/types/typecheck.mdk:8299-8302`),
   which fires only when a **bare name** at slot *i* also appears in that same
   signature's tail set. The nearest *expressible* analogue —
@@ -1249,12 +1263,23 @@ in argument types. What generalizes is the **invariant on `φ`**, not a signatur
 so the obligation is a checkable property of each declared eliminator, not
 something an interface can impose.
 
-**The obligation itself is still unenforced for interface methods; the index it
-protects is no longer unchecked.** Probed on a binary built from `main`
-(2026-07-26), then independently reproduced and filed. These are conformance
-findings against §9, not claims about the spec.
+**Both halves are now enforced.** The index is checked at unification (#1094,
+below), and — since D-3 (#1095) — an interface method whose only non-argument
+occurrences of an argument-carried effect variable are result INDICES is
+checked at the **impl body**: the variable must stay OPEN. An impl that
+applies its `<e>`-callback (or forces an `<e>`-indexed argument) performs `e`
+on an arrow the signature declares pure, which closes `e := ⟨ ⟩` — and that
+closing is the whole signal, because the deferred arm (`Susp (u => g a)`)
+unifies `e` with the container's own thunk row and leaves it open. Reported as
+`T-EFFECT-INDEX-EAGER` from `checkImplEffVarRigidity`
+(`checkIndexOnlyEffVarsOpen`). The rule is deliberately scoped to index-only
+variables: a variable the method's own arrow charges may still close (that is
+#825's channel, pinned and out of scope). The eliminator obligation for
+ordinary functions is a consequence of §5's escape check (§6.9 Q4); for
+interface methods it is this rule.
 
-⚠️ **Status, 2026-07-30: Finding 1 is CLOSED; Finding 2 is OPEN.** The two findings
+⚠️ **Status, 2026-07-30 (superseded above, kept as the record): Finding 1 is
+CLOSED; Finding 2 was OPEN until D-3.** The two findings
 below were both live when this section was written and their statuses have since
 diverged. **#1094 closed 2026-07-27** (PR #1102): `unifyN (TEff r1) (TEff r2) =
 unifyIndexRow r1 r2` (`compiler/types/typecheck.mdk:3396`) now routes an
@@ -1431,7 +1456,7 @@ parameterising over the row. Verified:
 ```
 data Later e a = Now a | Wait (Unit -> <e> Later e a)
 data Holder e = H (Later e Int)      -- `e` is inferred Type, not Effect
-useIt : Holder <IO> -> Int           -- T-ROW-KIND-MISMATCH at the row
+useIt : Holder <IO> -> Int           -- T-EFFECT-KIND-MISMATCH at the row
 ```
 
 A declared `data Holder (e : Effect) = H (Later e Int)` states the intent directly
@@ -1471,12 +1496,11 @@ document three public retractions already (PRs #999/#1001).
   criticism that motivated the choice stands recorded: `DeferredMappable.gmap`
   paired a descriptive interface name with a cryptic, not-even-self-consistent
   prefix.
-- **Q2 — one diagnostic code or two.** §6.4's declaration-site contradiction and
-  the shipped use-site check are the same rule at two seams. Whether
-  `T-EFFECT-KIND-MISMATCH` covers both, or the declaration site takes its own code,
-  is a taxonomy decision for `compiler/DIAGNOSTIC-CODES-DESIGN.md` and is not made
-  here. (The *rename* of `T-ROW-KIND-MISMATCH` → `T-EFFECT-KIND-MISMATCH` **is**
-  decided.)
+- **Q2 — one diagnostic code or two. RESOLVED with the implementation: ONE code.**
+  `T-EFFECT-KIND-MISMATCH` (the renamed `T-ROW-KIND-MISMATCH`) covers the use-site
+  check, the declaration-site contradictions of §6.4 (a)/(b), the interface-head
+  cases, and the `requires`-chain disagreement of §6.5; the message text names
+  which seam fired. `compiler/DIAGNOSTIC-CODES-DESIGN.md` records the row.
 - **Q3 — a phantom-`Effect`-indexed type as a GRADED INSTANCE HEAD.** §6.4 settles
   the declaration (legal) and explicitly does not settle this. The reason to doubt
   is stated there; it needs deciding alongside #823's eager-arm fork, which is the
@@ -1506,14 +1530,15 @@ document three public retractions already (PRs #999/#1001).
   resolves to *consequence*, parked on #1094 for confirmation once the index is
   checked.
 
-  What is **not** resolved, and is the reason this entry stays open: the argument
-  above covers *declared* eliminators only. It does **not** extend to interface
-  method signatures, where #1095 shows a result-index occurrence being miscounted as
-  a charge (§6.7, finding 2) — there the escape check is not reached, so for methods
-  the obligation remains a genuine rule with nothing enforcing it. Falsifier for the
-  resolved half, should anyone find one: an eliminator that *runs* a registered
-  computation, carries a concrete non-empty index, and is nevertheless accepted. None
-  was found.
+  The other half — interface method signatures, where #1095 showed a result-index
+  occurrence being miscounted as a charge (§6.7, finding 2) — is **now a rule with
+  something enforcing it (D-3, #1095 closed)**: an index-only effect variable must
+  stay open through the impl body, `T-EFFECT-INDEX-EAGER` otherwise (§6.7). So Q4
+  resolves as *consequence* for declared eliminators and *rule* for methods, and
+  the rule is enforced at the one seam that can see the eager application. Falsifier
+  for the resolved half, should anyone find one: an eliminator that *runs* a
+  registered computation, carries a concrete non-empty index, and is nevertheless
+  accepted. None was found.
 - **Q5 — `type` aliases with an `Effect` parameter.** §6.2 admits the annotation on
   an alias head by symmetry with the other binding forms. Whether an alias may
   *abstract over* a row in a way its expansion does not (partial application,
@@ -1524,7 +1549,7 @@ document three public retractions already (PRs #999/#1001).
   ```
   data Later e a = Now a | Wait (Unit -> <e> Later e a)
   type LaterInt e = Later e Int
-  useIt : LaterInt <IO> -> Int          -- T-ROW-KIND-MISMATCH at the row
+  useIt : LaterInt <IO> -> Int          -- T-EFFECT-KIND-MISMATCH at the row
   ```
 
   — because the retired inference rule reads kindedness off a *variant field's*
@@ -1829,7 +1854,7 @@ re-read together, and the row is the one with a derivation.
 | §6.1 kind grammar (`Kind ::= Type \| Effect \| Kind → Kind`, `(name : κ)` syntax) | **UNIMPLEMENTED, re-confirmed at THREE independent layers (re-audited with lexer/AST vocabulary, not just parser vocabulary, per the W2 lesson).** Lexer: `TEffect` (`compiler/frontend/lexer.mdk:89`, keyword `"effect"` at `:455`) is the `effect Foo` DECLARATION token, not a kind keyword — no `TKind`/kind-colon token exists. Parser: `parseData:2924-2928`/`parseInterface:2607-2611` parse params as bare `many lowerNameP`. AST: `DData DataVis String (List String) …` (`compiler/frontend/ast.mdk:421`), `DInterface { typarams : List String, … }` (`:433`), `DTypeAlias`/`DNewtype` (`:445`,`:447`) all carry typarams as `List String` — there is no FIELD anywhere in the AST that could hold a kind even if parsed; `Attr = AttrDeprecated String \| AttrInline \| AttrMustUse` (`:406`) rules out an attribute-based side channel too. `data Kind = KType \| KRow` (`compiler/types/typecheck.mdk:1633`), no arrow kinds | N/A | the spec's §6.3 "Status correction" already says this precisely: #822 shipped only an *inferred* graded-lite kind, and declaration is what §6.8 says should retire that — it has not yet. Grepped `typecheck.mdk` for "declared kind"/"kind annotation": zero hits, consistent with the structural absence above |
 | §6.2 where a kind annotation is legal | **UNIMPLEMENTED** — moot; no annotation syntax exists to be legal or illegal anywhere yet | N/A | `DImpl { iface, tys : List Ty, … }` (`compiler/frontend/ast.mdk:437`) is consistent with "impl heads carry no annotation" only by *absence of any annotation grammar at all*, not by a dedicated rejection rule |
 | §6.3 kind-default / surgical rule (resolved kind = declared-or-inferred) | **UNIMPLEMENTED** as specified. Current mechanism is INFERENCE-ONLY: `inferParamKinds:8292` (`data`/`newtype` heads); `declGradedScope:8383`→`ifaceParamKindsOf:8399`→`anySlotIsRow:8416` (`interface` heads) | N/A — there is no *declared* half to combine with the inferred half | this is precisely the "two different inference rules for one concept" §6.8 says declaration retires — both are still live |
-| §6.4(a) `kind-decl` (declared kind contradicted by usage) | **UNIMPLEMENTED** as specified. Current analog is usage-site-only: `T-ROW-KIND-MISMATCH` at `compiler/types/typecheck.mdk:4085`,`4252`,`14072`; `T-IMPL-KIND-MISMATCH` at `:1405`,`:1429` | catches a usage inconsistent with the currently-INFERRED kind | no declaration exists yet to be contradicted — this is the *use*-site half of what §6.4 specifies, not the declaration-site half. The planned rename to `T-EFFECT-KIND-MISMATCH` (§6.4) has also not happened — both codes are still the pre-rename names |
+| §6.4(a) `kind-decl` (declared kind contradicted by usage) | **UNIMPLEMENTED** as specified. Current analog is usage-site-only: `T-EFFECT-KIND-MISMATCH` at `compiler/types/typecheck.mdk:4085`,`4252`,`14072`; `T-IMPL-KIND-MISMATCH` at `:1405`,`:1429` | catches a usage inconsistent with the currently-INFERRED kind | no declaration exists yet to be contradicted — this is the *use*-site half of what §6.4 specifies, not the declaration-site half. The planned rename to `T-EFFECT-KIND-MISMATCH` (§6.4) has also not happened — both codes are still the pre-rename names |
 | §6.4(b) phantom `Effect`-indexed parameter, legal as a declaration | **UNIMPLEMENTED** — moot; no declared-`Effect`-kind parameter can exist yet. `test/typecheck_error_fixtures/graded_ctor_phantom_arg.mdk` (confirmed present) still pins the OLD rejection under the inferred mechanism | N/A | the spec's own §6.4(b) says this fixture's verdict needs re-deciding once declaration lands — it has not been re-decided, and the fixture still asserts the pre-declaration behavior |
 | §6.5 `kind-req` (requires-chain kind agreement) | **UNIMPLEMENTED** as the declared-kind rule. Partial analog for impl-vs-interface only: `checkGradedImplHeads:1335`→`checkGradedImplTys:1368`→`checkGradedImplHead:1395` (`compiler/types/typecheck.mdk`) | impl head's kind vs. the interface slot's (inferred) kind | ⚠️ self-documented bare-name hazard at lines 1347-1367: the slot kinds were once keyed by `<iface>@<slot>` (bare interface NAME, not module identity) in a per-run table whose comment named the exact collision class (#1044, #1047) and called the severity "bounded... never silent wrongness in a program's types" — a claim not independently re-verified here. ⚠️ That hazard is CLOSED twice over: #1111 A-2.4 re-keyed the table to a module-qualified identity, and #1112 A-3.5c (#1557) retired it entirely in favour of stage K's `CE` (`ceRowParamKinds`, read at the reading module's ordinal through `ceSlotKindsAt`) |
 | §6.7 Finding 1 — `Effect`-kinded argument slot at unification | **NOW ENFORCED** (see the ⚠️ notice above the table). `unifyN (TEff r1) (TEff r2) = unifyIndexRow r1 r2` (`compiler/types/typecheck.mdk:3396`) → `unifyIndexRow:1040`/`unifyIndexRowN:1043`/`indexRowEqCheck:1056` | invariant-equality check on an `Effect`-kinded index slot — `F φ₁ τ̄`/`F φ₂ τ̄` interchangeable only when `φ₁ = φ₂` | equality-only on both closed-vs-closed and same-tail-open forms (`unifyIndexRowN:1044-1049`); routes to ordinary `unifyRowN` only when the two tails are provably different metavariables (genuine instantiation, not interchange) — this is exactly §9's "no direction of `≤` licensed at this slot" |

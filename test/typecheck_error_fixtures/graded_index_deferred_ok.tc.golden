@@ -1,0 +1,6 @@
+gmap : (a -> b) -> c d a -> c d b
+runBox : Box a b -> b
+loud : Int -> <Stdout> Int
+built : Box <Stdout> Int
+pureInt : Int
+main : Unit

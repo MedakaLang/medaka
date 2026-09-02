@@ -89,9 +89,9 @@ tySexp (TyApp a b) = node "TyApp" [tySexp a, tySexp b]
 tySexp (TyFun a b) = node "TyFun" [tySexp a, tySexp b]
 tySexp (TyTuple ts) = node "TyTuple" (map tySexp ts)
 tySexp (TyEffect labels tail t) =
-  node "TyEffect" [slist (map effAtomSexp labels), optStrSexp tail, tySexp t]
+  node "TyEffect" [slist (map effAtomSexp labels), tailSexp tail, tySexp t]
 tySexp (TyRow labels tail _) =
-  node "TyRow" [slist (map effAtomSexp labels), optStrSexp tail]
+  node "TyRow" [slist (map effAtomSexp labels), tailSexp tail]
 tySexp (TyConstrained cs t) =
   node "TyConstrained" [slist (map constraintSexp cs), tySexp t]
 
@@ -100,6 +100,14 @@ constraintSexp (Constraint { constraintHead = iface, constraintArgs = args }) =
   node "cstr" (escStr iface :: map tySexp args)
 
 export
+-- A row's tail variables (#821): a join carries several.  Nought and one
+-- render as the `None`/`Some` they used to be, so only a genuine join moves
+-- a golden.
+tailSexp : List String -> String
+tailSexp [] = "None"
+tailSexp [n] = node "Some" [escStr n]
+tailSexp ns = node "Join" (map escStr ns)
+
 optStrSexp : Option String -> String
 optStrSexp (Some s) = node "Some" [escStr s]
 optStrSexp None = "None"
@@ -171,7 +179,7 @@ exprSexp (EIndex a i _) = node "EIndex" [exprSexp a, exprSexp i]
 exprSexp (EAnnot e t) = node "EAnnot" [exprSexp e, tySexp t]
 exprSexp (EHeadAnnot e t) = node "EHeadAnnot" [exprSexp e, tySexp t]
 exprSexp (EBlock stmts) = node "EBlock" (map doStmtSexp stmts)
-exprSexp (EDo stmts) = node "EDo" (map doStmtSexp stmts)
+exprSexp (EDo d stmts) = node (deferNodeName d) (map doStmtSexp stmts)
 exprSexp (EStringInterp parts) = node "EStringInterp" (map interpPartSexp parts)
 exprSexp (EGuards arms) = node "EGuards" (map guardArmSexp arms)
 exprSexp (ERecordCreate n fs) =
@@ -331,3 +339,9 @@ usePathSexp (UseAlias ids a) =
 export
 programToSexp : List Decl -> String
 programToSexp prog = joinNl (map declSexp prog)
+
+-- a `defer` block is a distinct surface construct from `do` (#824), so it gets
+-- its own S-expression head rather than an extra flag field.
+deferNodeName : Bool -> String
+deferNodeName True = "EDefer"
+deferNodeName False = "EDo"

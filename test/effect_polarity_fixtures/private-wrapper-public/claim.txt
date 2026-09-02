@@ -1,0 +1,21 @@
+issue: #2112 (public wrapper over a PRIVATE write/contravariant type) — the SECOND
+  mechanism, found while closing the first: `public export` instead of abstract export.
+shape: byte-identical to private-wrapper except `wrap.mdk` says
+  `public export data Outer a = MkOuter (Inner a)`. `Inner` is still private and
+  is still the only declaration that mentions the write channel.
+spec: EFFECTS-SEMANTICS.md §9 + §5. `callBox` declares an EMPTY row and performs
+  `<Stdout>` if the widening is accepted, so it MUST be REJECTED.
+mechanism: an abstractly exported wrapper reaches an importer only through the
+  cross-module chain (`declEnvRowPolarityEntries`), which the first #2112 fix made
+  run its fixpoint over the whole module. A `public export` wrapper ALSO goes
+  through `appendDataUniverse` → `registerAllData … pubDecls`: the seed there ran
+  the fixpoint over the PUBLIC decls only (so `Inner` was missing and `Outer`
+  read the lenient `PCo` default), and `registerVariants` then RECOMPUTED `Outer`
+  from the same public-only table and prepended that lenient row in front of the
+  chain's correct one. Fixed by running the seed over the whole module
+  (`registerAllDataScoped`) and by `registerVariants` yielding to a row the seed
+  already wrote.
+measured (before the fix): check exit 0 for both the annotated-alias shape and the
+  identity-function shape (`sneak : Outer (Unit -> Unit) -> Outer (Unit -> <Stdout>
+  Unit); sneak w = w`); single-file `public export` of the same declarations was
+  correctly rejected, which is what isolated the universe path.

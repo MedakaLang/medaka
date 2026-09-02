@@ -19,7 +19,7 @@
 -- What the golden pins, and why each line can fail:
 --   * `w` writes a BARE row into `Widget`'s KRow slot.  A lookup that missed
 --     would fall to `appFallback`, the row would land in an ordinary type slot,
---     and `fromAstTypeE`'s `TyRow` arm would raise T-ROW-KIND-MISMATCH — the
+--     and `fromAstTypeE`'s `TyRow` arm would raise T-EFFECT-KIND-MISMATCH — the
 --     binding would vanish from the dump (#1090's symptom, on a name that
 --     collides with nothing).
 --   * `wrapped` writes the WRAPPED spelling of the same row.  A miss there is

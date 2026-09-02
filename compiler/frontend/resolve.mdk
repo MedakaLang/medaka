@@ -711,7 +711,7 @@ checkExpr cur env scope (EAnnot e0 t) = checkExpr cur env scope e0
 checkExpr cur env scope (EHeadAnnot e0 t) = checkExpr cur env scope e0
   ++ checkType cur env t
 checkExpr cur env scope (EBlock stmts) = checkStmts cur env scope stmts
-checkExpr cur env scope (EDo stmts) = checkStmts cur env scope stmts
+checkExpr cur env scope (EDo _ stmts) = checkStmts cur env scope stmts
 checkExpr cur env scope (EStringInterp parts) =
   flatMap (checkInterp cur env scope) parts
 checkExpr cur env scope (EGuards arms) =
@@ -3491,7 +3491,7 @@ stampExpr env (EIndex e0 i r) = EIndex (stampExpr env e0) (stampExpr env i) r
 stampExpr env (EAnnot e0 t) = EAnnot (stampExpr env e0) t
 stampExpr env (EHeadAnnot e0 t) = EHeadAnnot (stampExpr env e0) t
 stampExpr env (EBlock stmts) = EBlock (stampStmts env stmts)
-stampExpr env (EDo stmts) = EDo (stampStmts env stmts)
+stampExpr env (EDo d stmts) = EDo d (stampStmts env stmts)
 stampExpr env (EStringInterp parts) =
   EStringInterp (map (stampInterp env) parts)
 stampExpr env (EGuards arms) = EGuards (map (stampGuardArm env) arms)

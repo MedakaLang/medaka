@@ -1,10 +1,11 @@
--- #822 control pair, REJECT half.  `Box`'s first parameter is PHANTOM — no field
--- uses it in an effect position — so it is Type-kinded and `Box e Unit` pins
--- NOTHING about <e> (a Type-kinded var and a Row-kinded one may share a spelling
--- and still be independent variables).  <e> therefore rides only the callback, and
--- an impl applying it performs <e> on no declared row: T-EFFECT-ARG-UNCOVERED.
--- Its sibling graded_ctor_row_arg_ok.mdk differs by ONE constructor field and is
--- accepted — the pair is what proves the kind, not the spelling, decides.
+-- #822 control pair, REJECT half.  `Box`'s first parameter is PHANTOM and left
+-- UNANNOTATED — no field uses it in an effect position — so its resolved kind
+-- defaults to Type (declaring it `(e : Effect)` is legal on its own per
+-- EFFECTS-SEMANTICS.md §6.4(b), but this file pins the unannotated case) and
+-- `Box e Unit` pins NOTHING about <e> (a Type-kinded var and an Effect-kinded
+-- one may share a spelling and still be independent variables).  <e> therefore
+-- rides only the callback: T-EFFECT-ARG-UNCOVERED.  Its sibling
+-- graded_ctor_row_arg_ok.mdk differs by ONE annotated constructor field.
 data Box e a = Mk a
 
 interface GM t where

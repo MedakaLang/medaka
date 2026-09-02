@@ -1,42 +1,42 @@
-advance : Parser Token
+advance : ParserE <> Token
 advanceR : Token -> Int -> PR Token
-afterDefault : Bool -> Parser Decl
-afterDefaultFor : Bool -> Token -> Parser Decl
-afterExport : Parser Decl
-afterNoise : Parser Unit
-afterPublic : Parser Decl
-afterPublicFor : Int -> Token -> Parser Decl
-aliasName : Parser String
-aliasNameFor : Token -> Parser String
+afterDefault : Bool -> ParserE <> Decl
+afterDefaultFor : Bool -> Token -> ParserE <> Decl
+afterExport : ParserE <> Decl
+afterNoise : ParserE <> Unit
+afterPublic : ParserE <> Decl
+afterPublicFor : Int -> Token -> ParserE <> Decl
+aliasName : ParserE <> String
+aliasNameFor : Token -> ParserE <> String
 allChainLines : Array Token -> Array Int -> List (Decl, Int, Int) -> List (List Int)
 allVariantLines : Array Token -> Array Int -> List (Decl, Int, Int) -> List Int
-annotTail : Expr -> Parser Expr
+annotTail : Expr -> ParserE <> Expr
 anyField : List KvItem -> Bool
 anyKV : List KvItem -> Bool
-apPR : Parser (a -> b) -> Parser a -> Array Token -> Int -> PR b
-appArg : Bool -> Parser Expr
+apPR : ParserE a (b -> c) -> ParserE a b -> Array Token -> Int -> PR c
+appArg : Bool -> ParserE <> Expr
 appToParams : Expr -> List Pat
 appToPat : Expr -> Pat
 appToPatCtor : String -> List Expr -> Pat
 appToPatH : Expr -> List Expr -> Pat
 applyAll : Expr -> List Expr -> Expr
-armGuardFor : Token -> Parser (List Guard)
-armGuardOpt : Parser (List Guard)
-armsCons : Parser (List Arm)
-armsLoop : Parser (List Arm)
-arrayAfterComma : Expr -> Token -> Parser Expr
-arrayFor : Token -> Parser Expr
-arrayRangeAfter : Expr -> Bool -> Parser Expr
-arrayRest : Expr -> Token -> Parser Expr
-assignFromLhs : Expr -> Expr -> Parser DoStmt
-assignTail : Expr -> Parser Expr
-assignTailRaw : Expr -> Parser Expr
-attrArg : String -> Token -> Parser Attr
+armGuardFor : Token -> ParserE <> (List Guard)
+armGuardOpt : ParserE <> (List Guard)
+armsCons : ParserE <> (List Arm)
+armsLoop : ParserE <> (List Arm)
+arrayAfterComma : Expr -> Token -> ParserE <> Expr
+arrayFor : Token -> ParserE <> Expr
+arrayRangeAfter : Expr -> Bool -> ParserE <> Expr
+arrayRest : Expr -> Token -> ParserE <> Expr
+assignFromLhs : Expr -> Expr -> ParserE <> DoStmt
+assignTail : Expr -> ParserE <> Expr
+assignTailRaw : Expr -> ParserE <> Expr
+attrArg : String -> Token -> ParserE <> Attr
 backtickInfixMsg : String
-bareMinusSection : Parser Expr
-binOp : Token -> String -> Parser (Expr -> Expr -> Expr)
+bareMinusSection : ParserE <> Expr
+binOp : Token -> String -> ParserE <> (Expr -> Expr -> Expr)
 bindAnnot : Expr -> Ty -> Expr -> List DoStmt
-bindPR : Parser a -> (a -> Parser b) -> Array Token -> Int -> PR b
+bindPR : ParserE a b -> (b -> ParserE a c) -> Array Token -> Int -> PR c
 bindStmts : Expr -> Expr -> List DoStmt
 blockCommentMsg : String
 blockOrExpr : List DoStmt -> Expr
@@ -49,43 +49,43 @@ braceAfterEq : Array Token -> Int -> Int
 braceBlockFrom : Array Token -> Int -> Int -> Int -> Int
 braceBlockMsg : String
 braceHasBarAtTop : Array Token -> Int -> Int -> Bool
-braceItems : String -> Parser Expr
-braceItemsFor : String -> Token -> Parser Expr
-bracketIndexRest : Expr -> Expr -> Token -> Parser Expr
-bracketIndexTail : Expr -> Parser Expr
-branchBlock : Parser Expr
+braceItems : String -> ParserE <> Expr
+braceItemsFor : String -> Token -> ParserE <> Expr
+bracketIndexRest : Expr -> Expr -> Token -> ParserE <> Expr
+bracketIndexTail : Expr -> ParserE <> Expr
+branchBlock : ParserE <> Expr
 caseHasOfBeforeBoundary : Array Token -> Int -> Int -> Bool
 chainOpLinesAt : Array Token -> Array Int -> String -> Int -> Int -> Int -> Token -> List Int
 chainOpLinesGo : Array Token -> Array Int -> String -> Int -> Int -> Int -> List Int
 chainOpTokEq : String -> Token -> Bool
 chainOperandLines : Array Token -> Array Int -> String -> Int -> Int -> List Int
-chainl1 : Parser a -> Parser (a -> a -> a) -> Parser a
-chainl1More : Parser a -> Parser (a -> a -> a) -> a -> Parser a
-chainl1Rest : Parser a -> Parser (a -> a -> a) -> a -> Parser a
-charBound : Parser Lit
-charBoundFor : Token -> Parser Lit
-charPatRest : Lit -> Parser Pat
-choice : List (Parser a) -> Parser a
+chainl1 : ParserE <> a -> ParserE <> (a -> a -> a) -> ParserE <> a
+chainl1More : ParserE <> a -> ParserE <> (a -> a -> a) -> a -> ParserE <> a
+chainl1Rest : ParserE <> a -> ParserE <> (a -> a -> a) -> a -> ParserE <> a
+charBound : ParserE <> Lit
+charBoundFor : Token -> ParserE <> Lit
+charPatRest : Lit -> ParserE <> Pat
+choice : List (ParserE <> a) -> ParserE <> a
 classifyBrace : String -> List KvItem -> Expr
-cmpOp : Parser (Expr -> Expr -> Expr)
+cmpOp : ParserE <> (Expr -> Expr -> Expr)
 coalesceClauses : List (String, List Pat, Expr) -> List LetBind
 coalesceGo : String -> List FunClause -> List (String, List Pat, Expr) -> List LetBind
 coalesceStep : String -> List FunClause -> String -> List Pat -> Expr -> List (String, List Pat, Expr) -> List LetBind
 combineDerives : List DeriveRef -> List DeriveRef -> List DeriveRef
 concatMapC : List Ty -> List Constraint
 consField : RecPatField -> (List RecPatField, Bool) -> (List RecPatField, Bool)
-consTail : Expr -> Parser Expr
-constraintTail : Ty -> Parser Ty
+consTail : Expr -> ParserE <> Expr
+constraintTail : Ty -> ParserE <> Ty
 contextualKwName : Token -> String
 ctorOrVar : String -> Pat
 curryLam : List Pat -> Expr -> Expr
-dataAfterEq : String -> Token -> Parser (List Variant, List DeriveRef)
-dataBody : String -> Parser (List Variant, List DeriveRef)
-dataBodyFor : String -> Token -> Parser (List Variant, List DeriveRef)
+dataAfterEq : String -> Token -> ParserE <> (List Variant, List DeriveRef)
+dataBody : String -> ParserE <> (List Variant, List DeriveRef)
+dataBodyFor : String -> Token -> ParserE <> (List Variant, List DeriveRef)
 dataChildIdxs : Array Token -> Int -> Int -> List Variant -> List (Option Int)
-dataVariants : Parser (List Variant)
-dataVariantsN : String -> Parser (List Variant)
-dataVariantsNFor : String -> Token -> Parser (List Variant)
+dataVariants : ParserE <> (List Variant)
+dataVariantsN : String -> ParserE <> (List Variant)
+dataVariantsNFor : String -> Token -> ParserE <> (List Variant)
 declBlockRhs : Decl -> Bool
 declChainLines : Array Token -> Array Int -> Decl -> Int -> Int -> List Int
 declChainTopOp : Decl -> Option String
@@ -99,60 +99,60 @@ declPosEndLine : DeclPos -> Int
 declPosLine : DeclPos -> Int
 declPosNameLoc : DeclPos -> Option Loc
 declPosOf : Array Token -> Array Int -> Array (Int, Int) -> Array Int -> (Decl, Int, Int) -> DeclPos
-declThenNoise : Parser Decl
-declWithSpan : Parser (Decl, Int, Int)
+declThenNoise : ParserE <> Decl
+declWithSpan : ParserE <> (Decl, Int, Int)
 deepenLeftover : String -> Array Token -> Array Int -> Int -> Int -> ParseError
 defaultImplRemovedMsg : String
-derefArg : Parser Expr
-derefArgFor : Token -> Parser Expr
-derivedNameP : Parser DeriveRef
-derivingClause : Parser (List DeriveRef)
-derivingFor : Token -> Parser (List DeriveRef)
+derefArg : ParserE <> Expr
+derefArgFor : Token -> ParserE <> Expr
+derivedNameP : ParserE <> DeriveRef
+derivingClause : ParserE <> (List DeriveRef)
+derivingFor : Token -> ParserE <> (List DeriveRef)
 desugarDottedField : Expr -> (List String, Expr) -> FieldAssign
-dotFor : Expr -> Token -> Parser Expr
-dotTail : Expr -> Parser Expr
+dotFor : Expr -> Token -> ParserE <> Expr
+dotTail : Expr -> ParserE <> Expr
 dottedGo : Expr -> List String -> Expr -> Expr
 dropFirst : List a -> List a
-effAtomP : Parser (String, Option String)
-effDomainFor : Token -> Parser (Option String)
-effDomainP : Parser (Option String)
-effParamDispatch : Token -> Token -> Parser (Option String)
-effParamFor : Token -> Parser (Option String)
-effParamP : Parser (Option String)
-effectBody : Parser (List (String, Option String), Option String)
-effectBodyFor : Token -> Parser (List (String, Option String), Option String)
-elseBranch : Parser Expr
-elsePresent : Parser Expr
-emit : a -> Parser a
+effAtomP : ParserE <> (String, Option String)
+effDomainFor : Token -> ParserE <> (Option String)
+effDomainP : ParserE <> (Option String)
+effParamDispatch : Token -> Token -> ParserE <> (Option String)
+effParamFor : Token -> ParserE <> (Option String)
+effParamP : ParserE <> (Option String)
+effectBody : ParserE <> (List (String, Option String), List String)
+effectBodyFor : Token -> ParserE <> (List (String, Option String), List String)
+elseBranch : ParserE <> Expr
+elsePresent : ParserE <> Expr
+emit : a -> ParserE <> a
 encodeAxis : (String, String) -> String
 encodeProductParam : List (String, String) -> String
 encodeSetParam : List String -> String
 endsDecl : Token -> Bool
 eqGuardIfMsg : String
 eqGuardShapeFrom : Array Token -> Int -> Int -> Bool
-eqGuardShapeP : Parser Bool
-expectGo : Token -> Token -> Parser Unit
-expectMinus : Parser Unit
-expectMinusGo : Token -> Parser Unit
-expectTok : Token -> Parser Unit
-exprStmtFor : Expr -> Token -> Parser (List DoStmt)
+eqGuardShapeP : ParserE <> Bool
+expectGo : Token -> Token -> ParserE <> Unit
+expectMinus : ParserE <> Unit
+expectMinusGo : Token -> ParserE <> Unit
+expectTok : Token -> ParserE <> Unit
+exprStmtFor : Expr -> Token -> ParserE <> (List DoStmt)
 exprToParams : Expr -> List Pat
 exprToPat : Expr -> Pat
-externName : Parser String
-externNameFor : Token -> Parser String
+externName : ParserE <> String
+externNameFor : Token -> ParserE <> String
 extractConstraints : Ty -> List Constraint
-failIfAliasedMember : List UseMember -> Parser Unit
-failP : String -> Parser a
-fatalAtP : String -> Int -> Parser a
-fatalP : String -> Parser a
+failIfAliasedMember : List UseMember -> ParserE <> Unit
+failP : String -> ParserE <> a
+fatalAtP : String -> Int -> ParserE <> a
+fatalP : String -> ParserE <> a
 fieldNameGo : Array Token -> Int -> Int -> Int -> Bool -> List Int
 fieldNameIdxsIn : Array Token -> Int -> Int -> List Int
 fieldNameStep : Array Token -> Int -> Int -> Int -> Bool -> Token -> List Int
 fieldPathExtend : Option (String, List String) -> String -> Option (String, List String)
 findWhereIdx : Array Token -> Int -> Int -> Option Int
-finishBracketIndex : Expr -> Expr -> Parser Expr
-finishSingletonArray : Expr -> Parser Expr
-finishSingletonList : Expr -> Parser Expr
+finishBracketIndex : Expr -> Expr -> ParserE <> Expr
+finishSingletonArray : Expr -> ParserE <> Expr
+finishSingletonList : Expr -> ParserE <> Expr
 firstBacktickIdx : Array Token -> Int -> Int
 firstBangEqIdx : Array Token -> Int -> Int
 firstBlockCommentIdx : Array Token -> Int -> Int
@@ -172,71 +172,71 @@ firstWithIdx : Array Token -> Int -> Int
 flattenFieldPath : Expr -> Option (String, List String)
 foreignKwMsg : Token -> String
 functionRemovedMsg : String
-getPos : Parser Int
-guardArmsCons : Parser (List GuardArm)
-guardArmsLoop : Parser (List GuardArm)
-guardArmsWhereFor : List GuardArm -> Token -> Parser Expr
-guardArmsWhereOpt : List GuardArm -> Parser Expr
-guardFor : Expr -> Token -> Parser Guard
+getPos : ParserE <> Int
+guardArmsCons : ParserE <> (List GuardArm)
+guardArmsLoop : ParserE <> (List GuardArm)
+guardArmsWhereFor : List GuardArm -> Token -> ParserE <> Expr
+guardArmsWhereOpt : List GuardArm -> ParserE <> Expr
+guardFor : Expr -> Token -> ParserE <> Guard
 headIsNumeric : Expr -> Bool
 hsCaseOfMsg : String
 hsSigMsg : String
-identNameFor : Token -> Parser String
-identNameP : Parser String
-ifKind : Token -> Parser Expr
-ifLet : Parser Expr
-ifPlain : Parser Expr
-ifaceBody : Int -> Parser (List IfaceMethod)
-ifaceBodyFor : Int -> Token -> Parser (List IfaceMethod)
-ifaceMember : Parser IfaceMethod
-ifaceMemberRest : String -> Option Loc -> List Pat -> Token -> Parser IfaceMethod
-ifaceMembers : Parser (List IfaceMethod)
-ifaceMembersCons : Parser (List IfaceMethod)
-ifaceMembersLoop : Parser (List IfaceMethod)
-ifaceSuper : Parser (List Super)
-ifaceSuperEntry : Parser Super
-ifaceSuperFor : Token -> Parser (List Super)
-ifaceWhereBody : Token -> Parser (List IfaceMethod)
-implBody : Int -> Parser (List ImplMethod)
-implBodyFor : Int -> Token -> Parser (List ImplMethod)
-implHead : Bool -> Int -> Token -> Parser Decl
+identNameFor : Token -> ParserE <> String
+identNameP : ParserE <> String
+ifKind : Token -> ParserE <> Expr
+ifLet : ParserE <> Expr
+ifPlain : ParserE <> Expr
+ifaceBody : Int -> ParserE <> (List IfaceMethod)
+ifaceBodyFor : Int -> Token -> ParserE <> (List IfaceMethod)
+ifaceMember : ParserE <> IfaceMethod
+ifaceMemberRest : String -> Option Loc -> List Pat -> Token -> ParserE <> IfaceMethod
+ifaceMembers : ParserE <> (List IfaceMethod)
+ifaceMembersCons : ParserE <> (List IfaceMethod)
+ifaceMembersLoop : ParserE <> (List IfaceMethod)
+ifaceSuper : ParserE <> (List Super)
+ifaceSuperEntry : ParserE <> Super
+ifaceSuperFor : Token -> ParserE <> (List Super)
+ifaceWhereBody : Token -> ParserE <> (List IfaceMethod)
+implBody : Int -> ParserE <> (List ImplMethod)
+implBodyFor : Int -> Token -> ParserE <> (List ImplMethod)
+implHead : Bool -> Int -> Token -> ParserE <> Decl
 implHeadTokGo : Array Token -> Int -> Int -> Option Int
 implHeadTokIdx : Array Token -> Int -> Option Int
 implHeadTokStep : Array Token -> Int -> Int -> Token -> Option Int
-implMethod : Parser ImplMethod
-implMethodRest : String -> List Pat -> Token -> Parser ImplMethod
-implMethods : Parser (List ImplMethod)
-implMethodsCons : Parser (List ImplMethod)
-implMethodsLoop : Parser (List ImplMethod)
-implRequireEntry : Parser Require
-implRequires : Parser (List Require)
-implRequiresFor : Token -> Parser (List Require)
-implRest : Bool -> Int -> String -> Parser Decl
-implWhereBody : Token -> Parser (List ImplMethod)
-importIdent : Parser String
-importIdentFor : Token -> Parser String
-importMember : Parser UseMember
-importMemberFor : Int -> Token -> Parser UseMember
-importPathFor : List String -> Parser UsePath
-importPathForT : List String -> Token -> Parser UsePath
-importQualRest : Parser (List String)
-importQualRestFor : Token -> Parser (List String)
-importQuals : Parser (List String)
-indentedBody : Parser Expr
-indexOrSlice : Expr -> Parser Expr
-indexOrSliceRest : Expr -> Expr -> Token -> Parser Expr
+implMethod : ParserE <> ImplMethod
+implMethodRest : String -> List Pat -> Token -> ParserE <> ImplMethod
+implMethods : ParserE <> (List ImplMethod)
+implMethodsCons : ParserE <> (List ImplMethod)
+implMethodsLoop : ParserE <> (List ImplMethod)
+implRequireEntry : ParserE <> Require
+implRequires : ParserE <> (List Require)
+implRequiresFor : Token -> ParserE <> (List Require)
+implRest : Bool -> Int -> String -> ParserE <> Decl
+implWhereBody : Token -> ParserE <> (List ImplMethod)
+importIdent : ParserE <> String
+importIdentFor : Token -> ParserE <> String
+importMember : ParserE <> UseMember
+importMemberFor : Int -> Token -> ParserE <> UseMember
+importPathFor : List String -> ParserE <> UsePath
+importPathForT : List String -> Token -> ParserE <> UsePath
+importQualRest : ParserE <> (List String)
+importQualRestFor : Token -> ParserE <> (List String)
+importQuals : ParserE <> (List String)
+indentedBody : ParserE <> Expr
+indexOrSlice : Expr -> ParserE <> Expr
+indexOrSliceRest : Expr -> Expr -> Token -> ParserE <> Expr
 inlineLetMissingInMsg : String
-inlineTrailingDerives : Token -> Parser (List DeriveRef)
+inlineTrailingDerives : Token -> ParserE <> (List DeriveRef)
 innerDeclOf : Decl -> Decl
-intBound : Parser Lit
-intBoundFor : Token -> Parser Lit
+intBound : ParserE <> Lit
+intBoundFor : Token -> ParserE <> Lit
 intLitTooBigMsg : String
 intMinLit : Int
-intPatRest : Lit -> Parser Pat
-interpOpenFor : Token -> Parser String
-interpOpenStr : Parser String
-interpRest : Parser (List InterpPart)
-interpRestFor : Expr -> Token -> Parser (List InterpPart)
+intPatRest : Lit -> ParserE <> Pat
+interpOpenFor : Token -> ParserE <> String
+interpOpenStr : ParserE <> String
+interpRest : ParserE <> (List InterpPart)
+interpRestFor : Expr -> Token -> ParserE <> (List InterpPart)
 isBinderTok : Token -> Bool
 isBracketCloseTok : Token -> Bool
 isBracketOpenTok : Token -> Bool
@@ -258,13 +258,18 @@ isTStringTok : Token -> Bool
 isTUpperTok : Token -> Bool
 joinComma : List String -> String
 joinSemi : List String -> String
+kindArrowRest : KindAnn -> Token -> ParserE <> KindAnn
+kindAtomEmit : KindAnn -> ParserE <> KindAnn
+kindAtomFor : Token -> ParserE <> KindAnn
+kindAtomP : ParserE <> KindAnn
+kindP : ParserE <> KindAnn
 kvElemToField : Expr -> FieldAssign
 kvElems : List KvItem -> List Expr
-kvKVorElemFor : Expr -> Token -> Parser KvItem
+kvKVorElemFor : Expr -> Token -> ParserE <> KvItem
 kvPairs : List KvItem -> List (Expr, Expr)
 kvToField : KvItem -> FieldAssign
-lamTail : Expr -> Parser Expr
-lamTailRaw : Expr -> Parser Expr
+lamTail : Expr -> ParserE <> Expr
+lamTailRaw : Expr -> ParserE <> Expr
 lastContentIdx : Array Token -> Int -> Int -> Int
 lastContentLineGo : Array Token -> Array Int -> List (Decl, Int, Int) -> Int -> Int
 lastContentLineOf : Array Token -> Array Int -> List (Decl, Int, Int) -> Int
@@ -275,271 +280,275 @@ leadingIndentMsg : Token -> String -> Int -> String
 leftSectionGo : Expr -> Expr -> Expr
 leftSectionOrExpr : Expr -> Expr
 leftSectionRhs : Expr -> String -> Expr -> Expr -> Expr
-letExprKind : Token -> Parser Expr
-letFunTailFor : String -> Loc -> List Pat -> Expr -> Token -> Parser DoStmt
-letIdent : String -> Parser DoStmt
-letIdentBody : String -> Loc -> List Pat -> Token -> Parser DoStmt
-letIdentExpr : String -> Parser Expr
-letIdentExprRest : String -> Loc -> List Pat -> Token -> Parser Expr
-letIdentRest : String -> Loc -> List Pat -> Expr -> Parser DoStmt
-letKind : Token -> Parser DoStmt
+letExprKind : Token -> ParserE <> Expr
+letFunTailFor : String -> Loc -> List Pat -> Expr -> Token -> ParserE <> DoStmt
+letIdent : String -> ParserE <> DoStmt
+letIdentBody : String -> Loc -> List Pat -> Token -> ParserE <> DoStmt
+letIdentExpr : String -> ParserE <> Expr
+letIdentExprRest : String -> Loc -> List Pat -> Token -> ParserE <> Expr
+letIdentRest : String -> Loc -> List Pat -> Expr -> ParserE <> DoStmt
+letKind : Token -> ParserE <> DoStmt
 letMutRemovedMsg : String
-letPat : Parser DoStmt
-letPatExpr : Parser Expr
-letRecDeclClause : Parser (String, List Pat, Expr)
-letRecExpr : Parser Expr
-letRecInlineClause : Parser (String, List Pat, Expr)
-letRecStmt : Parser DoStmt
+letPat : ParserE <> DoStmt
+letPatExpr : ParserE <> Expr
+letRecDeclClause : ParserE <> (String, List Pat, Expr)
+letRecExpr : ParserE <> Expr
+letRecInlineClause : ParserE <> (String, List Pat, Expr)
+letRecStmt : ParserE <> DoStmt
 letRecWithRemovedMsg : String
-letTailFor : Pat -> Expr -> Token -> Parser DoStmt
+letTailFor : Pat -> Expr -> Token -> ParserE <> DoStmt
 lineAt : Array Int -> Int -> Int
 lineIsRecordBody : Array Token -> Int -> Int -> Bool -> Bool
 lineTrailingColonNoEq : Array Token -> Int -> Int -> Bool -> Bool -> Bool
-listAfterComma : Expr -> Token -> Parser Expr
-listFor : Token -> Parser Expr
-listRest : Expr -> Token -> Parser Expr
+listAfterComma : Expr -> Token -> ParserE <> Expr
+listFor : Token -> ParserE <> Expr
+listRest : Expr -> Token -> ParserE <> Expr
 locLineStartsRef : Ref (Array Int)
 locOfSpan : Int -> Int -> Loc
 locOfSpanWith : Array (Int, Int) -> Array Int -> Int -> Int -> Loc
 locOffsRef : Ref (Array (Int, Int))
 locSrcRef : Ref String
 locateOffset : Array Token -> Array Int -> Int -> Int -> Int
-located : Parser Expr -> Parser Expr
-lowerNameFor : Token -> Parser String
-lowerNameP : Parser String
-many : Parser a -> Parser (List a)
-manyGo : Parser a -> Array Token -> Int -> List a -> PR (List a)
-manyStep : Parser a -> Array Token -> Int -> Int -> List a -> a -> PR (List a)
+located : ParserE <> Expr -> ParserE <> Expr
+lowerNameFor : Token -> ParserE <> String
+lowerNameP : ParserE <> String
+many : ParserE <> a -> ParserE <> (List a)
+manyGo : ParserE <> a -> Array Token -> Int -> List a -> PR (List a)
+manyStep : ParserE <> a -> Array Token -> Int -> Int -> List a -> a -> PR (List a)
 mapPR : (a -> b) -> PR a -> PR b
 matchArmBarGuardMsg : String
 maxNestDepth : Int
-memberAliasFor : Int -> String -> Bool -> Token -> Parser UseMember
-memberAliasName : Parser String
-memberAliasNameFor : Token -> Parser String
-memberAliasOrNot : Int -> String -> Bool -> Parser UseMember
+memberAliasFor : Int -> String -> Bool -> Token -> ParserE <> UseMember
+memberAliasName : ParserE <> String
+memberAliasNameFor : Token -> ParserE <> String
+memberAliasOrNot : Int -> String -> Bool -> ParserE <> UseMember
 methodNameGo : Array Token -> Int -> Int -> Int -> Bool -> List (Option Int)
 methodNameIdxs : Array Token -> Int -> Int -> List (Option Int)
 methodNameStep : Array Token -> Int -> Int -> Int -> Bool -> Token -> List (Option Int)
 missingWhereIfaceMsg : String
 missingWhereImplMsg : String
 mkAttr : String -> Option String -> Attr
-mkEffect : (List (String, Option String), Option String) -> Ty -> Ty
+mkEffect : (List (String, Option String), List String) -> Ty -> Ty
 mkLocated : String -> Array Token -> Array Int -> Int -> String -> Int -> ParseError
 mkRec : String -> (List RecPatField, Bool) -> Pat
-mkRow : (List (String, Option String), Option String) -> Loc -> Ty
+mkRow : (List (String, Option String), List String) -> Loc -> Ty
 namedImplRemovedMsg : String
-negIntPat : Parser Pat
-negIntRng : Lit -> Parser Pat
-negLitArg : Bool -> Parser Expr
-negLitArgFor : Token -> Token -> Parser Expr
-negUnary : Parser Expr
-negUnaryFor : Token -> Parser Expr
+negIntPat : ParserE <> Pat
+negIntRng : Lit -> ParserE <> Pat
+negLitArg : Bool -> ParserE <> Expr
+negLitArgFor : Token -> Token -> ParserE <> Expr
+negUnary : ParserE <> Expr
+negUnaryFor : Token -> ParserE <> Expr
 nestDepthRef : Ref Int
 nestTooDeepMsg : String
 nextSigIsPipe : Array Token -> Int -> Int -> Bool
-noExportedAlias : Bool -> UsePath -> Parser Unit
-noMemberAlias : String -> Parser Unit
-noMemberAliasFor : String -> Token -> Parser Unit
-noTrailingAlias : String -> Parser Unit
-noTrailingAliasFor : String -> Token -> Parser Unit
+noExportedAlias : Bool -> UsePath -> ParserE <> Unit
+noMemberAlias : String -> ParserE <> Unit
+noMemberAliasFor : String -> Token -> ParserE <> Unit
+noTrailingAlias : String -> ParserE <> Unit
+noTrailingAliasFor : String -> Token -> ParserE <> Unit
 offsetAt : Array Int -> Int -> Int -> Int
-optPipe : Parser Unit
-optPipeFor : Token -> Parser Unit
-optTrailingComma : Parser Unit
-optTrailingCommaFor : Token -> Parser Unit
-optTrailingCommaTuple : List a -> Parser Unit
-orElse : Parser a -> Parser a -> Parser a
-orElseR : Parser a -> Parser a -> Array Token -> Int -> PR a
+optPipe : ParserE <> Unit
+optPipeFor : Token -> ParserE <> Unit
+optTrailingComma : ParserE <> Unit
+optTrailingCommaFor : Token -> ParserE <> Unit
+optTrailingCommaTuple : List a -> ParserE <> Unit
+orElse : ParserE <> a -> ParserE <> a -> ParserE <> a
+orElseR : ParserE <> a -> ParserE <> a -> Array Token -> Int -> PR a
 orElseRb : String -> Int -> PR a -> PR a
 paramsForCtor : String -> Expr -> List Pat
 paramsForHead : Expr -> Expr -> List Pat
-parenFor : Token -> Parser Expr
+parenFor : Token -> ParserE <> Expr
 parenResult : List Expr -> Expr
-parenSectionOr : Token -> Parser Expr
+parenSectionOr : Token -> ParserE <> Expr
 parse : String -> List Decl
-parseAdd : Parser Expr
-parseAnd : Parser Expr
-parseApp : Parser Expr
-parseAppend : Parser Expr
-parseArm : Parser Arm
-parseArms : Parser (List Arm)
-parseArray : Parser Expr
-parseAsPat : Parser Pat
-parseAspat : Parser Expr
-parseAspatAt : Parser Expr
-parseAspatAtRaw : Parser Expr
-parseAssign : Parser Expr
-parseAtom : Parser Expr
+parseAdd : ParserE <> Expr
+parseAnd : ParserE <> Expr
+parseApp : ParserE <> Expr
+parseAppend : ParserE <> Expr
+parseArm : ParserE <> Arm
+parseArms : ParserE <> (List Arm)
+parseArray : ParserE <> Expr
+parseAsPat : ParserE <> Pat
+parseAspat : ParserE <> Expr
+parseAspatAt : ParserE <> Expr
+parseAspatAtRaw : ParserE <> Expr
+parseAssign : ParserE <> Expr
+parseAtom : ParserE <> Expr
 parseAtomNestGo : Array Token -> Int -> PR Expr
 parseAtomNestRun : Array Token -> Int -> Int -> PR Expr
-parseAtomRaw : Parser Expr
-parseAttrib : Parser Decl
-parseBareEffectAtom : Parser Ty
-parseBench : Bool -> Parser Decl
-parseBody : Parser Expr
-parseBodyExpr : Parser Expr
-parseBracketBlock : Parser Expr
-parseBracketElem : Parser Expr
-parseBranch : Parser Expr
-parseCmp : Parser Expr
-parseCompose : Parser Expr
-parseCons : Parser Expr
-parseData : DataVis -> Parser Decl
-parseDecl : Parser Decl
-parseDo : Parser Expr
-parseEffect : Bool -> Parser Decl
-parseEffectTy : Parser Ty
+parseAtomRaw : ParserE <> Expr
+parseAttrib : ParserE <> Decl
+parseBareEffectAtom : ParserE <> Ty
+parseBench : Bool -> ParserE <> Decl
+parseBody : ParserE <> Expr
+parseBodyExpr : ParserE <> Expr
+parseBracketBlock : ParserE <> Expr
+parseBracketElem : ParserE <> Expr
+parseBranch : ParserE <> Expr
+parseCmp : ParserE <> Expr
+parseCompose : ParserE <> Expr
+parseCons : ParserE <> Expr
+parseData : DataVis -> ParserE <> Decl
+parseDecl : ParserE <> Decl
+parseDefer : ParserE <> Expr
+parseDo : ParserE <> Expr
+parseDoBlock : Token -> Bool -> ParserE <> Expr
+parseEffect : Bool -> ParserE <> Decl
+parseEffectTy : ParserE <> Ty
 parseErrorCol : ParseError -> Int
 parseErrorLine : ParseError -> Int
 parseErrorMessage : ParseError -> String
-parseExpr : Parser Expr
-parseExprStmt : Parser (List DoStmt)
-parseExtern : Bool -> Parser Decl
-parseField : Parser Field
-parseFunOrSig : Bool -> Parser Decl
-parseGuard : Parser Guard
-parseGuardArm : Parser GuardArm
-parseGuardArmBody : Parser GuardArm
-parseGuardArmFor : Token -> Parser GuardArm
-parseGuardArmIf : Bool -> Parser GuardArm
-parseGuardArms : Parser (List GuardArm)
-parseIf : Parser Expr
-parseImpl : Bool -> Parser Decl
-parseImport : Bool -> Parser Decl
-parseInfix : Parser Expr
-parseInterface : Bool -> Bool -> Parser Decl
-parseInterp : Parser Expr
-parseKvBlockElem : Parser KvItem
-parseKvField : Parser KvItem
-parseKvKVorElem : Parser KvItem
-parseKvOrE : Parser KvItem
-parseLam : Parser Expr
-parseLet : Parser Expr
-parseLetGroupDecl : Bool -> Parser Decl
-parseLetStmt : Parser DoStmt
-parseListE : Parser Expr
+parseExpr : ParserE <> Expr
+parseExprStmt : ParserE <> (List DoStmt)
+parseExtern : Bool -> ParserE <> Decl
+parseField : ParserE <> Field
+parseFunOrSig : Bool -> ParserE <> Decl
+parseGuard : ParserE <> Guard
+parseGuardArm : ParserE <> GuardArm
+parseGuardArmBody : ParserE <> GuardArm
+parseGuardArmFor : Token -> ParserE <> GuardArm
+parseGuardArmIf : Bool -> ParserE <> GuardArm
+parseGuardArms : ParserE <> (List GuardArm)
+parseIf : ParserE <> Expr
+parseImpl : Bool -> ParserE <> Decl
+parseImport : Bool -> ParserE <> Decl
+parseInfix : ParserE <> Expr
+parseInterface : Bool -> Bool -> ParserE <> Decl
+parseInterp : ParserE <> Expr
+parseKvBlockElem : ParserE <> KvItem
+parseKvField : ParserE <> KvItem
+parseKvKVorElem : ParserE <> KvItem
+parseKvOrE : ParserE <> KvItem
+parseLam : ParserE <> Expr
+parseLet : ParserE <> Expr
+parseLetGroupDecl : Bool -> ParserE <> Decl
+parseLetStmt : ParserE <> DoStmt
+parseListE : ParserE <> Expr
 parseLocated : String -> List Decl
 parseLocatedResult : String -> Result ParseError (List Decl)
-parseMatch : Parser Expr
-parseMul : Parser Expr
-parseNamedFields : Parser (List Field)
-parseNamedPayload : Parser ConPayload
-parseNewtype : Bool -> Parser Decl
-parseOr : Parser Expr
-parseParamAsPat : Parser Pat
-parseParamPat : Parser Pat
-parseParen : Parser Expr
-parseParenExpr : Parser Expr
-parsePat : Parser Pat
-parsePatApp : Parser Pat
-parsePatAtom : Parser Pat
+parseMatch : ParserE <> Expr
+parseMul : ParserE <> Expr
+parseNamedFields : ParserE <> (List Field)
+parseNamedPayload : ParserE <> ConPayload
+parseNewtype : Bool -> ParserE <> Decl
+parseOr : ParserE <> Expr
+parseParamAsPat : ParserE <> Pat
+parseParamPat : ParserE <> Pat
+parseParen : ParserE <> Expr
+parseParenExpr : ParserE <> Expr
+parsePat : ParserE <> Pat
+parsePatApp : ParserE <> Pat
+parsePatAtom : ParserE <> Pat
 parsePatAtomNestGo : Array Token -> Int -> PR Pat
 parsePatAtomNestRun : Array Token -> Int -> Int -> PR Pat
-parsePatAtomRaw : Parser Pat
-parsePatCons : Parser Pat
-parsePatList : Parser Pat
-parsePatParen : Parser Pat
-parsePayload : Parser ConPayload
-parsePipe : Parser Expr
-parsePostfix : Parser Expr
-parseProgram : Parser (List Decl)
-parseProp : Bool -> Parser Decl
-parseRecordUpdate : Parser Expr
+parsePatAtomRaw : ParserE <> Pat
+parsePatCons : ParserE <> Pat
+parsePatList : ParserE <> Pat
+parsePatParen : ParserE <> Pat
+parsePayload : ParserE <> ConPayload
+parsePipe : ParserE <> Expr
+parsePostfix : ParserE <> Expr
+parseProgram : ParserE <> (List Decl)
+parseProp : Bool -> ParserE <> Decl
+parseRecordUpdate : ParserE <> Expr
 parseResult : String -> Result ParseError (List Decl)
 parseResultWith : String -> List Token -> List Int -> Result ParseError (List Decl)
-parseRhsExpr : Parser Expr
-parseSectionOp : String -> Parser Expr
-parseStmt : Parser (List DoStmt)
-parseStmts : Parser (List DoStmt)
-parseTest : Bool -> Parser Decl
-parseTestRest : Bool -> Int -> Token -> Parser Decl
-parseTupleCtorTail : Int -> Parser Ty
-parseTy : Parser Ty
-parseTyApp : Parser Ty
-parseTyAtom : Parser Ty
+parseRhsExpr : ParserE <> Expr
+parseSectionOp : String -> ParserE <> Expr
+parseStmt : ParserE <> (List DoStmt)
+parseStmts : ParserE <> (List DoStmt)
+parseTest : Bool -> ParserE <> Decl
+parseTestRest : Bool -> Int -> Token -> ParserE <> Decl
+parseTupleCtorTail : Int -> ParserE <> Ty
+parseTy : ParserE <> Ty
+parseTyApp : ParserE <> Ty
+parseTyAtom : ParserE <> Ty
 parseTyAtomNestGo : Array Token -> Int -> PR Ty
 parseTyAtomNestRun : Array Token -> Int -> Int -> PR Ty
-parseTyAtomRaw : Parser Ty
-parseTyFun : Parser Ty
-parseTyParen : Parser Ty
-parseTyParenBody : Token -> Parser Ty
-parseTypeAlias : Bool -> Parser Decl
-parseUnary : Parser Expr
-parseUpperAtom : String -> Parser Expr
-parseVariant : Parser Variant
-parseWhereBinding : Parser (String, List Pat, Expr)
-parseWhereBindings : Parser (List (String, List Pat, Expr))
+parseTyAtomRaw : ParserE <> Ty
+parseTyFun : ParserE <> Ty
+parseTyParen : ParserE <> Ty
+parseTyParenBody : Token -> ParserE <> Ty
+parseTyParenIdent : Token -> ParserE <> Ty
+parseTyParenTuple : ParserE <> Ty
+parseTypeAlias : Bool -> ParserE <> Decl
+parseUnary : ParserE <> Expr
+parseUpperAtom : String -> ParserE <> Expr
+parseVariant : ParserE <> Variant
+parseWhereBinding : ParserE <> (String, List Pat, Expr)
+parseWhereBindings : ParserE <> (List (String, List Pat, Expr))
 parseWithPositions : String -> (List Decl, Positions)
 parseWithPositionsLocated : String -> (List Decl, Positions)
 parseWithPositionsOpt : String -> Option (List Decl, Positions)
-patAppFor : Token -> Parser Pat
-patConsTail : Pat -> Parser Pat
-patListFor : Token -> Parser Pat
-patParenFor : Token -> Parser Pat
-payloadFor : Token -> Parser ConPayload
-peek2P : Parser Token
-peekP : Parser Token
+patAppFor : Token -> ParserE <> Pat
+patConsTail : Pat -> ParserE <> Pat
+patListFor : Token -> ParserE <> Pat
+patParenFor : Token -> ParserE <> Pat
+payloadFor : Token -> ParserE <> ConPayload
+peek2P : ParserE <> Token
+peekP : ParserE <> Token
 peekTok : Array Token -> Int -> Token
-pipeTail : Parser (Option String)
-pipeTailFor : Token -> Parser (Option String)
+pipeTail : ParserE <> (List String)
+pipeTailFor : Token -> ParserE <> (List String)
 positionsChainLines : Positions -> List (List Int)
 positionsDecls : Positions -> List DeclPos
 positionsLastContentLine : Positions -> Int
 positionsVariantLines : Positions -> List Int
-postfixTail : Expr -> Parser Expr
-productAxes : Parser (List (String, String))
-productAxesMore : Parser (List (String, String))
-productAxesMoreFor : Token -> Token -> Parser (List (String, String))
-productAxis : Parser (String, String)
-productAxisVal : Parser String
-productAxisValFor : Token -> Parser String
-productParamP : Parser (Option String)
-programWithSpans : Parser (List (Decl, Int, Int))
-propParam : Parser PropParam
-rangeAfter : Expr -> Bool -> Parser Expr
-recordFieldExpr : Parser (List String, Expr)
-recordFieldExprRest : List String -> Token -> Parser (List String, Expr)
+postfixTail : Expr -> ParserE <> Expr
+productAxes : ParserE <> (List (String, String))
+productAxesMore : ParserE <> (List (String, String))
+productAxesMoreFor : Token -> Token -> ParserE <> (List (String, String))
+productAxis : ParserE <> (String, String)
+productAxisVal : ParserE <> String
+productAxisValFor : Token -> ParserE <> String
+productParamP : ParserE <> (Option String)
+programWithSpans : ParserE <> (List (Decl, Int, Int))
+propParam : ParserE <> PropParam
+rangeAfter : Expr -> Bool -> ParserE <> Expr
+recordFieldExpr : ParserE <> (List String, Expr)
+recordFieldExprRest : List String -> Token -> ParserE <> (List String, Expr)
 recordHeadIdx : Array Token -> Int -> Int
-recordPat : String -> Parser Pat
-recordPatField : Parser RecPatField
-recordPatFieldRest : String -> Loc -> Token -> Parser RecPatField
-recordPatFields : Parser (List RecPatField, Bool)
-recordPatFieldsFor : Token -> Parser (List RecPatField, Bool)
-recordPatFieldsRest : RecPatField -> Token -> Parser (List RecPatField, Bool)
+recordPat : String -> ParserE <> Pat
+recordPatField : ParserE <> RecPatField
+recordPatFieldRest : String -> Loc -> Token -> ParserE <> RecPatField
+recordPatFields : ParserE <> (List RecPatField, Bool)
+recordPatFieldsFor : Token -> ParserE <> (List RecPatField, Bool)
+recordPatFieldsRest : RecPatField -> Token -> ParserE <> (List RecPatField, Bool)
 recordRemovedMsg : String
 reservedIdentKeyword : Token -> Option String
 reservedKeywordMsg : String -> String
-reservedOrPatFail : Token -> Parser Pat
+reservedOrPatFail : Token -> ParserE <> Pat
 resultDecls : Array Token -> PR (List Decl) -> List Decl
 resultDeclsResult : String -> Array Token -> Array Int -> Int -> PR (List Decl) -> Result ParseError (List Decl)
 rhsStartIdx : Array Token -> Int -> Int -> Int -> Int
-rngPatRest : Lit -> Parser Lit -> Token -> Parser Pat
-runP : Parser a -> Array Token -> Int -> PR a
+rngPatRest : Lit -> ParserE <> Lit -> Token -> ParserE <> Pat
+runP : ParserE a b -> Array Token -> Int -> PR b
 sameLineWhereIfaceMsg : String
 sameLineWhereImplMsg : String
 scanForLetIn : Array Token -> Int -> Int -> Bool
 sectionOpStr : Token -> Option String
-sectionTail : String -> Token -> Parser Expr
+sectionTail : String -> Token -> ParserE <> Expr
 semicolonMsg : String
-sepBy1 : Parser a -> Parser b -> Parser (List a)
-sepThen : Parser a -> Parser b -> Parser b
+sepBy1 : ParserE <> a -> ParserE <> b -> ParserE <> (List a)
+sepThen : ParserE <> a -> ParserE <> b -> ParserE <> b
 setLocState : String -> Array (Int, Int) -> Unit
 skipLeadingModifiers : Array Token -> Int -> Int
 skipNewlineToks : Array Token -> Int -> Int -> Int
-skipNewlines : Parser Unit
-skipNlFor : Token -> Parser Unit
-skipNoise : Parser Unit
-skipNoiseFor : Token -> Parser Unit
-sliceHi : Expr -> Expr -> Bool -> Parser Expr
-spanDeclThenNoise : Parser (Decl, Int, Int)
+skipNewlines : ParserE <> Unit
+skipNlFor : Token -> ParserE <> Unit
+skipNoise : ParserE <> Unit
+skipNoiseFor : Token -> ParserE <> Unit
+sliceHi : Expr -> Expr -> Bool -> ParserE <> Expr
+spanDeclThenNoise : ParserE <> (Decl, Int, Int)
 spineHead : Expr -> Expr
 spineList : Expr -> List Expr
 spineOnto : Expr -> List Expr -> List Expr
-stmtFor : Token -> Parser (List DoStmt)
-stmtsCons : Parser (List DoStmt)
-stmtsLoop : Parser (List DoStmt)
-stringLitFor : Token -> Parser String
-stringLitP : Parser String
+stmtFor : Token -> ParserE <> (List DoStmt)
+stmtsCons : ParserE <> (List DoStmt)
+stmtsLoop : ParserE <> (List DoStmt)
+stringLitFor : Token -> ParserE <> String
+stringLitP : ParserE <> String
 stripLoc : Expr -> Expr
 stripLoc1 : Expr -> Expr
 tokEndOffsetAt : Int -> Int
@@ -548,25 +557,28 @@ tokIdxOrNone : Array Token -> Int -> Option Int
 tokOffsetAt : Int -> Int
 tokOffsetAtArr : Array (Int, Int) -> Int -> Int
 trailingArrowLeftoverMsg : Token -> String -> String
-tupleCtorTailFor : Int -> Token -> Parser Ty
+tupleCtorTailFor : Int -> Token -> ParserE <> Ty
 tupleCtorTyName : Int -> String
-tupleCtorTyOfArity : Int -> Parser Ty
+tupleCtorTyOfArity : Int -> ParserE <> Ty
 tuplePatOrSingle : List Pat -> Pat
 tyAppSpine : Ty -> Option (String, List Ty)
 tyAppSpineAcc : Ty -> List Ty -> Option (String, List Ty)
 tyApplyAll : Ty -> List Ty -> Ty
-tyArrowSkipLayout : Token -> Parser Bool
-tyArrowTail : Ty -> Parser Ty
-tyFor : Token -> Parser Ty
+tyArrowSkipLayout : Token -> ParserE <> Bool
+tyArrowTail : Ty -> ParserE <> Ty
+tyFor : Token -> ParserE <> Ty
+tyParamFor : Token -> ParserE <> (String, Option KindAnn)
+tyParamP : ParserE <> (String, Option KindAnn)
+tyParamsP : ParserE <> (List (String, Option KindAnn))
 tyTupleOrSingle : List Ty -> Ty
-unaryFor : Token -> Parser Expr
+unaryFor : Token -> ParserE <> Expr
 unexpectedLeftoverMsg : String -> Array Token -> Array Int -> Int -> Int -> String
-upperAtomRest : String -> Token -> Parser Pat
-upperBrace : String -> Parser Expr
-upperNameFor : Token -> Parser String
-upperNameP : Parser String
-upperPatRest : String -> Token -> Parser Pat
-upperTail : String -> Token -> Parser Expr
+upperAtomRest : String -> Token -> ParserE <> Pat
+upperBrace : String -> ParserE <> Expr
+upperNameFor : Token -> ParserE <> String
+upperNameP : ParserE <> String
+upperPatRest : String -> Token -> ParserE <> Pat
+upperTail : String -> Token -> ParserE <> Expr
 variantBoundaryAt : Array Token -> Int -> Int -> Int -> Bool -> Token -> List Int
 variantBoundaryGo : Array Token -> Int -> Int -> Int -> Bool -> List Int
 variantBoundaryIdxs : Array Token -> Int -> Int -> List Int
@@ -574,15 +586,15 @@ variantNoneIdxs : Variant -> List (Option Int)
 variantStartsAt : Array Token -> Array Int -> Int -> Int -> Int -> Bool -> Token -> List Int
 variantStartsGo : Array Token -> Array Int -> Int -> Int -> Int -> Bool -> List Int
 variantStartsIn : Array Token -> Array Int -> Int -> Int -> List Int
-variantUpdateTail : String -> Parser Expr
-variantsRest : Parser (List Variant)
-variantsRestFor : Token -> Parser (List Variant)
-whereBindRest : String -> List Pat -> Token -> Parser (String, List Pat, Expr)
-whereBindingsCons : Parser (List (String, List Pat, Expr))
-whereBindingsLoop : Parser (List (String, List Pat, Expr))
-whereEol : Expr -> Parser Expr
-whereTail : Expr -> Parser Expr
-withAllFor : Int -> String -> Token -> Parser UseMember
-withAllOrNot : Int -> String -> Parser UseMember
+variantUpdateTail : String -> ParserE <> Expr
+variantsRest : ParserE <> (List Variant)
+variantsRestFor : Token -> ParserE <> (List Variant)
+whereBindRest : String -> List Pat -> Token -> ParserE <> (String, List Pat, Expr)
+whereBindingsCons : ParserE <> (List (String, List Pat, Expr))
+whereBindingsLoop : ParserE <> (List (String, List Pat, Expr))
+whereEol : Expr -> ParserE <> Expr
+whereTail : Expr -> ParserE <> Expr
+withAllFor : Int -> String -> Token -> ParserE <> UseMember
+withAllOrNot : Int -> String -> ParserE <> UseMember
 zipFieldIdxs : List Field -> List Int -> List (Option Int)
 zipVariantIdxs : Array Token -> Int -> List Variant -> List Int -> List (Option Int)

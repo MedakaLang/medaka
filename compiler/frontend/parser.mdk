@@ -1,13 +1,15 @@
 -- Self-hosted Medaka parser.  A monadic
--- *combinator* parser over `List Token` from the lexer: a `Parser` monad
--- (`Mappable`/`Applicative`/`Thenable` impls) with `do`-notation, and
+-- *combinator* parser over `List Token` from the lexer: a `ParserE` monad
+-- (`DeferredMappable`/`DeferredApplicative`/`DeferredThenable` impls) with
+-- `defer`-notation, and
 -- combinators (`many`/`sepBy1`/`choice`/`chainl1`).  Precedence is the stratified
 -- ladder from parser.mly, one function per level.  Validated by the structural
 -- dump against `dev/astdump.exe` (see test/diff_compiler_parse.sh).
 --
 -- (Chosen over the direct recursive-descent version after Phase 136 unblocked
 -- recursive polymorphic combinators and a perf comparison showed monadic
--- combinators are perf-neutral here — it dogfoods Thenable/do far more.)
+-- combinators are perf-neutral here — it dogfoods DeferredThenable/defer far
+-- more.)
 --
 -- COVERAGE: the arithmetic+boolean+comparison+cons+append operator ladder, `=>`
 -- lambdas, single-line `if`/`let … in`, `match` with indented arms, postfix
@@ -19,6 +21,7 @@ import frontend.ast.{
   DeriveRef(..),
   Lit(..),
   Ty(..),
+  KindAnn(..),
   Constraint(..),
   Pat(..),
   RecPatField(..),
@@ -85,37 +88,48 @@ import support.char.{isUpper}
 -- literal) is discarded by the enclosing `many (appArg …)` and the user sees a
 -- generic "unexpected INT" from the leftover-token path instead.
 public export data PR a = POk a Int | PErr String Int | PFatal String Int
-public export data Parser a = Parser (Array Token -> Int -> PR a)
+-- A parser STORES its continuation under the stepping arrow rather than running
+-- it, so the honest type indexes the container by the row that arrow performs:
+-- `ParserE e a` is the DEFERRED family's shape (core.mdk `Deferred*`, #825), and
+-- the plain `Mappable`/`Applicative`/`Thenable` family cannot describe it — those
+-- charge a callback's row on the method's own arrow, which forces the stored
+-- arrow to be pure and would let an effectful callback run inside a value typed
+-- `<>`.  The compiler's own parsing performs nothing, so every signature below
+-- reads `Parser X` and means `ParserE <> X` through the alias.
+public export data ParserE (e : Effect) a =
+  | ParserE (Array Token -> Int -> <e> PR a)
 
-runP : Parser a -> Array Token -> Int -> PR a
-runP (Parser f) toks pos = f toks pos
+export type Parser a = ParserE <> a
 
-mapPR : (a -> b) -> PR a -> PR b
+runP : ParserE e a -> Array Token -> Int -> <e> PR a
+runP (ParserE f) toks pos = f toks pos
+
+mapPR : (a -> <e> b) -> PR a -> <e> PR b
 mapPR f (POk a pos) = POk (f a) pos
 mapPR _ (PErr e pos) = PErr e pos
 mapPR _ (PFatal e pos) = PFatal e pos
 
-impl Mappable Parser where
-  map f pa = Parser (toks pos => mapPR f (runP pa toks pos))
+impl DeferredMappable ParserE where
+  deferMap f pa = ParserE (toks pos => mapPR f (runP pa toks pos))
 
-apPR : Parser (a -> b) -> Parser a -> Array Token -> Int -> PR b
+apPR : ParserE e (a -> b) -> ParserE e a -> Array Token -> Int -> <e> PR b
 apPR pf pa toks pos = match runP pf toks pos
   POk f pos1 => mapPR f (runP pa toks pos1)
   PErr e pos1 => PErr e pos1
   PFatal e pos1 => PFatal e pos1
 
-impl Applicative Parser where
-  pure x = Parser (toks pos => POk x pos)
-  ap pf pa = Parser (toks pos => apPR pf pa toks pos)
+impl DeferredApplicative ParserE where
+  deferPure x = ParserE (toks pos => POk x pos)
+  deferAp pf pa = ParserE (toks pos => apPR pf pa toks pos)
 
-bindPR : Parser a -> (a -> Parser b) -> Array Token -> Int -> PR b
+bindPR : ParserE e a -> (a -> <e> ParserE e b) -> Array Token -> Int -> <e> PR b
 bindPR pa k toks pos = match runP pa toks pos
   POk a pos1 => runP (k a) toks pos1
   PErr e pos1 => PErr e pos1
   PFatal e pos1 => PFatal e pos1
 
-impl Thenable Parser where
-  andThen pa k = Parser (toks pos => bindPR pa k toks pos)
+impl DeferredThenable ParserE where
+  deferThen pa k = ParserE (toks pos => bindPR pa k toks pos)
 
 -- ── Primitives ──────────────────────────────────────────────────────────
 peekTok : Array Token -> Int -> Token
@@ -124,13 +138,13 @@ peekTok toks pos
   | otherwise = TEof
 
 failP : String -> Parser a
-failP msg = Parser (toks pos => PErr msg pos)
+failP msg = ParserE (toks pos => PErr msg pos)
 
 -- A COMMITTED failure at the current token (see `PR`).  Use only where no other
 -- production could possibly claim the token — the message is guaranteed to reach
 -- the user, so a wrong one cannot be backtracked away.
 fatalP : String -> Parser a
-fatalP msg = Parser (toks pos => PFatal msg pos)
+fatalP msg = ParserE (toks pos => PFatal msg pos)
 
 -- A COMMITTED failure reported at an EXPLICIT, previously-captured token index
 -- rather than the current position — for when the offending construct starts
@@ -147,23 +161,23 @@ fatalP msg = Parser (toks pos => PFatal msg pos)
 -- so it is only safe where — as here — no alternative production could ever
 -- have claimed this token (see `fatalP` above).
 fatalAtP : String -> Int -> Parser a
-fatalAtP msg pos0 = Parser (toks _pos => PFatal msg pos0)
+fatalAtP msg pos0 = ParserE (toks _pos => PFatal msg pos0)
 
 peekP : Parser Token
-peekP = Parser (toks pos => POk (peekTok toks pos) pos)
+peekP = ParserE (toks pos => POk (peekTok toks pos) pos)
 
 -- Peek the token ONE PAST the current (lookahead-2) without consuming.  Used by
 -- the WS-4 product effect-param clause to disambiguate a product axis (`Host=`)
 -- from a comma-separated next atom: a `TUpper` immediately FOLLOWED by `TEqual`
 -- starts a product axis.  Pure read of `pos + 1` (no advance).
 peek2P : Parser Token
-peek2P = Parser (toks pos => POk (peekTok toks (pos + 1)) pos)
+peek2P = ParserE (toks pos => POk (peekTok toks (pos + 1)) pos)
 
 -- Read the current token index without consuming.  Used by the position
 -- side-channel (`parseWithPositions`) to capture per-decl / per-variant token
 -- spans; does not affect parsing (it's a pure read of `pos`).
 getPos : Parser Int
-getPos = Parser (toks pos => POk pos pos)
+getPos = ParserE (toks pos => POk pos pos)
 
 -- ── Source-location capture (Phase B.10.2) ──────────────────────────────────
 -- The `located` combinator wraps an expr production in a transparent `ELoc`,
@@ -222,14 +236,14 @@ locOfSpan startIdx endIdx =
 
 -- Wrap an expr production in a transparent ELoc capturing its token span.
 located : Parser Expr -> Parser Expr
-located p = do
+located p = defer
   s <- getPos
   e <- p
   q <- getPos
-  pure (ELoc (locOfSpan s q) e)
+  deferPure (ELoc (locOfSpan s q) e)
 
 advance : Parser Token
-advance = Parser (toks pos => advanceR (peekTok toks pos) pos)
+advance = ParserE (toks pos => advanceR (peekTok toks pos) pos)
 
 advanceR : Token -> Int -> PR Token
 advanceR TEof pos = PErr "unexpected end of input" pos
@@ -237,12 +251,12 @@ advanceR t pos = POk t (pos + 1)
 
 -- consume one token, yield the given value
 emit : a -> Parser a
-emit x = do
+emit x = defer
   advance
-  pure x
+  deferPure x
 
 expectTok : Token -> Parser Unit
-expectTok t = do
+expectTok t = defer
   x <- peekP
   expectGo t x
 
@@ -254,7 +268,7 @@ expectGo t x =
     failP "unexpected \{describeToken x}; expected \{describeToken t}"
 
 identNameP : Parser String
-identNameP = do
+identNameP = defer
   t <- peekP
   identNameFor t
 
@@ -264,7 +278,7 @@ identNameFor _ = failP "expected identifier"
 
 -- ── Combinators ─────────────────────────────────────────────────────────
 orElse : Parser a -> Parser a -> Parser a
-orElse pa pb = Parser (toks pos => orElseR pa pb toks pos)
+orElse pa pb = ParserE (toks pos => orElseR pa pb toks pos)
 
 -- On a double failure, keep the FURTHEST-reached error (larger token index)
 -- rather than always the second alternative's.  This is the classic
@@ -293,7 +307,7 @@ choice (p::ps) = orElse p (choice ps)
 
 -- zero or more; primitive + progress-guarded so it can never loop
 many : Parser a -> Parser (List a)
-many p = Parser (toks pos => manyGo p toks pos [])
+many p = ParserE (toks pos => manyGo p toks pos [])
 
 manyGo : Parser a -> Array Token -> Int -> List a -> PR (List a)
 manyGo p toks pos acc = match runP p toks pos
@@ -307,15 +321,15 @@ manyStep p toks pos pos2 acc x
   | otherwise = POk (reverseL (x::acc)) pos2
 
 sepThen : Parser b -> Parser a -> Parser a
-sepThen sep p = do
+sepThen sep p = defer
   sep
   p
 
 sepBy1 : Parser a -> Parser b -> Parser (List a)
-sepBy1 p sep = do
+sepBy1 p sep = defer
   x <- p
   xs <- many (sepThen sep p)
-  pure (x::xs)
+  deferPure (x::xs)
 
 -- Consume an OPTIONAL trailing comma that `sepBy1` left positioned at (a
 -- trailing comma backtracks the failed element parse, leaving the parser AT the
@@ -324,37 +338,40 @@ sepBy1 p sep = do
 -- closing-delimiter `expectTok` to accept the trailing-comma-on-break form the
 -- formatter emits.
 optTrailingComma : Parser Unit
-optTrailingComma = do
+optTrailingComma = defer
   t <- peekP
   optTrailingCommaFor t
 
 optTrailingCommaFor : Token -> Parser Unit
-optTrailingCommaFor TComma = do
+optTrailingCommaFor TComma = defer
   advance
-  pure ()
-optTrailingCommaFor _ = pure ()
+  deferPure ()
+optTrailingCommaFor _ = deferPure ()
 
 -- Like `optTrailingComma`, but a no-op for a single-element paren group — a
 -- trailing comma after one element (`(x,)`) is NOT accepted, so `(x)` keeps its
 -- "parenthesized x" meaning (no 1-tuple ambiguity).
 optTrailingCommaTuple : List a -> Parser Unit
-optTrailingCommaTuple [_] = pure ()
+optTrailingCommaTuple [_] = deferPure ()
 optTrailingCommaTuple _ = optTrailingComma
 
--- Structurally identical to stdlib/byteparser.mdk's chainl1, but over a
--- different parser type (token Parser vs ByteParser) with no shared Monad
--- typeclass to hang a single generic version off of — not soundly shareable.
+-- Structurally identical to stdlib/byteparser.mdk's chainl1.  Both containers
+-- are `DeferredThenable` now, but the loop tail also needs `orElse`, which each
+-- provides as a plain function rather than through a shared interface
+-- (`Alternative` requires `Applicative` at kind `Type -> Type`, which an
+-- `Effect`-indexed container cannot satisfy) — so there is still nothing to hang
+-- a single generic version off of.
 chainl1 : Parser a -> Parser (a -> a -> a) -> Parser a
 -- lint-disable-next-line rule-duplicate-body
-chainl1 p op = do
+chainl1 p op = defer
   x <- p
   chainl1Rest p op x
 
 chainl1Rest : Parser a -> Parser (a -> a -> a) -> a -> Parser a
-chainl1Rest p op x = orElse (chainl1More p op x) (pure x)
+chainl1Rest p op x = orElse (chainl1More p op x) (deferPure x)
 
 chainl1More : Parser a -> Parser (a -> a -> a) -> a -> Parser a
-chainl1More p op x = do
+chainl1More p op x = defer
   f <- op
   y <- p
   chainl1Rest p op (f x y)
@@ -363,31 +380,31 @@ chainl1More p op x = do
 -- as a strict argument — the latter forces the value while it's being defined
 -- (a recursive-value init cycle → CamlinternalLazy.Undefined under strict eval).
 skipNewlines : Parser Unit
-skipNewlines = do
+skipNewlines = defer
   t <- peekP
   skipNlFor t
 
 skipNlFor : Token -> Parser Unit
-skipNlFor TNewline = do
+skipNlFor TNewline = defer
   advance
   skipNewlines
-skipNlFor _ = pure ()
+skipNlFor _ = deferPure ()
 
 -- ── Expressions ─────────────────────────────────────────────────────────
 -- ladder: lam → or → and → cmp → cons → append → add → mul → app → postfix → atom
 parseExpr : Parser Expr
-parseExpr = do
+parseExpr = defer
   e <- parseAssign
-  orElse (annotTail e) (pure e)
+  orElse (annotTail e) (deferPure e)
 
 -- `:=` reference assignment (mutation). Looser than lambda so the RHS may be a
 -- full lambda (`r := x => x`), right-associative (`a := b := c` ⇒ `a := (b := c)`)
 -- like OCaml. Desugars to `setRef lhs rhs` in `desugar.mdk` (an `EBinOp ":="` node
 -- survives resolve/typecheck only up to that lowering).
 parseAssign : Parser Expr
-parseAssign = do
+parseAssign = defer
   e <- parseLam
-  orElse (assignTail e) (pure e)
+  orElse (assignTail e) (deferPure e)
 
 assignTail : Expr -> Parser Expr
 assignTail lhs = located (assignTailRaw lhs)
@@ -411,22 +428,22 @@ assignTail lhs = located (assignTailRaw lhs)
 -- admits a trailing annotation on the RHS — `r := e : T` — which bare
 -- `parseAssign` did not; that matches every other RHS position.)
 assignTailRaw : Expr -> Parser Expr
-assignTailRaw lhs = do
+assignTailRaw lhs = defer
   expectTok TColonEq
   rhs <- parseRhsExpr
-  pure (EBinOp ":=" lhs rhs (Ref RNone))
+  deferPure (EBinOp ":=" lhs rhs (Ref RNone))
 
 -- expression type annotation `e : ty` (loosest level)
 annotTail : Expr -> Parser Expr
-annotTail e = do
+annotTail e = defer
   expectTok TColon
   t <- parseTy
-  pure (EAnnot e t)
+  deferPure (EAnnot e t)
 
 parseLam : Parser Expr
-parseLam = do
+parseLam = defer
   e <- parsePipe
-  orElse (lamTail e) (pure e)
+  orElse (lamTail e) (deferPure e)
 
 -- `|>` pipe (loosest operator), then `>>`/`<<` composition, then `||`…
 parsePipe : Parser Expr
@@ -445,10 +462,10 @@ lamTail e = located (lamTailRaw e)
 -- `parseExpr` has no TIndent case to read it.  Same production the decl body
 -- (`parseBody`) and a let/where RHS (`parseRhsExpr`) already use.
 lamTailRaw : Expr -> Parser Expr
-lamTailRaw e = do
+lamTailRaw e = defer
   expectTok TFatArrow
   body <- parseRhsExpr
-  pure (ELam (exprToParams e) body)
+  deferPure (ELam (exprToParams e) body)
 
 -- convert a lambda LHS expression to a parameter-pattern list (mirrors the
 -- reference `expr_to_pats`): an EApp spine with a lowercase head is a multi-arg
@@ -572,9 +589,9 @@ stripLoc1 (ELoc _ e) = e
 stripLoc1 e = e
 
 binOp : Token -> String -> Parser (Expr -> Expr -> Expr)
-binOp tk op = do
+binOp tk op = defer
   expectTok tk
-  pure (l r => EBinOp op l r (Ref RNone))
+  deferPure (l r => EBinOp op l r (Ref RNone))
 
 parseOr : Parser Expr
 parseOr = chainl1 parseAnd (binOp TOr "||")
@@ -598,15 +615,15 @@ cmpOp = choice
 
 -- `::` is right-associative
 parseCons : Parser Expr
-parseCons = do
+parseCons = defer
   x <- parseAppend
-  orElse (consTail x) (pure x)
+  orElse (consTail x) (deferPure x)
 
 consTail : Expr -> Parser Expr
-consTail x = do
+consTail x = defer
   expectTok TCons
   y <- parseCons
-  pure (EBinOp "::" x y (Ref RNone))
+  deferPure (EBinOp "::" x y (Ref RNone))
 
 parseAppend : Parser Expr
 parseAppend = chainl1 parseAdd (binOp TPlusPlus "++")
@@ -667,17 +684,17 @@ intLitTooBigMsg = "integer literal too large for Int (max 4611686018427387903)"
 
 -- unary minus, tighter than `*` (a leading `-` in operand position)
 parseUnary : Parser Expr
-parseUnary = do
+parseUnary = defer
   t <- peekP
   unaryFor t
 
 unaryFor : Token -> Parser Expr
 unaryFor TMinus = negUnary
 unaryFor TMinusTight = negUnary
-unaryFor TBang = do
+unaryFor TBang = defer
   advance
   e <- parseUnary
-  pure (EUnOp "!" e (Ref RNone))
+  deferPure (EUnOp "!" e (Ref RNone))
 unaryFor _ = parseInfix
 
 -- `-` in operand position.  A directly-following 2^62 literal is FUSED into a
@@ -687,20 +704,20 @@ unaryFor _ = parseInfix
 -- fusion `negLitArgFor` already does for a tight negative argument.  Anything
 -- else keeps the ordinary `EUnOp "-"` shape.
 negUnary : Parser Expr
-negUnary = do
+negUnary = defer
   t2 <- peek2P
   negUnaryFor t2
 
 negUnaryFor : Token -> Parser Expr
 negUnaryFor (TInt n lx)
-  | isIntMinLit n = located (do
+  | isIntMinLit n = located (defer
     advance
     advance
-    pure (ENumLit n (Ref None) (Ref RNone) ("-" ++ lx)))
-negUnaryFor _ = do
+    deferPure (ENumLit n (Ref None) (Ref RNone) ("-" ++ lx)))
+negUnaryFor _ = defer
   advance
   e <- parseUnary
-  pure (EUnOp "-" e (Ref RNone))
+  deferPure (EUnOp "-" e (Ref RNone))
 
 -- backtick infix application (``a `div` b``) has been removed.  The lexer still
 -- produces `TBacktickIdent` as a sentinel; a pre-grammar scan surfaces a located
@@ -709,10 +726,10 @@ parseInfix : Parser Expr
 parseInfix = parseApp
 
 parseApp : Parser Expr
-parseApp = do
+parseApp = defer
   head <- parseAspat
   args <- many (appArg (headIsNumeric head))
-  pure (applyAll head args)
+  deferPure (applyAll head args)
 
 -- One application argument.  Normally an aspat, but a TIGHT negative literal
 -- (`f -1` / `f -1.5`, lexed as TMinusTight INT/FLOAT) is grabbed as a
@@ -738,33 +755,33 @@ appArg headNum = orElse (negLitArg headNum) (orElse derefArg parseAspat)
 -- therefore needs parens; that is deliberate, since `!` chains are vanishingly
 -- rare and the alternative re-opens the greedy-operand ambiguity `-` had.
 derefArg : Parser Expr
-derefArg = do
+derefArg = defer
   t <- peekP
   derefArgFor t
 
 derefArgFor : Token -> Parser Expr
-derefArgFor TBang = do
+derefArgFor TBang = defer
   advance
   e <- parseAspat
-  pure (EUnOp "!" e (Ref RNone))
+  deferPure (EUnOp "!" e (Ref RNone))
 derefArgFor _ = failP "not a tight deref argument"
 
 negLitArg : Bool -> Parser Expr
 negLitArg True = failP "numeric head: tight minus stays subtraction"
-negLitArg False = do
+negLitArg False = defer
   t <- peekP
   t2 <- peek2P
   negLitArgFor t t2
 
 negLitArgFor : Token -> Token -> Parser Expr
-negLitArgFor TMinusTight (TInt n lx) = do
+negLitArgFor TMinusTight (TInt n lx) = defer
   advance
   advance
-  pure (ENumLit (negate n) (Ref None) (Ref RNone) ("-" ++ lx))
-negLitArgFor TMinusTight (TFloat f) = do
+  deferPure (ENumLit (negate n) (Ref None) (Ref RNone) ("-" ++ lx))
+negLitArgFor TMinusTight (TFloat f) = defer
   advance
   advance
-  pure (ELit (LFloat (negate f)))
+  deferPure (ELit (LFloat (negate f)))
 negLitArgFor _ _ = failP "not a tight negative literal argument"
 
 -- Is the application head a numeric literal (so a following `-N` is subtraction,
@@ -786,30 +803,30 @@ parseAspatAt : Parser Expr
 parseAspatAt = located parseAspatAtRaw
 
 parseAspatAtRaw : Parser Expr
-parseAspatAtRaw = do
+parseAspatAtRaw = defer
   x <- identNameP
   expectTok TAsAt
   sub <- parsePostfix
-  pure (EAsPat x sub)
+  deferPure (EAsPat x sub)
 
 applyAll : Expr -> List Expr -> Expr
 applyAll head [] = head
 applyAll head (a::rest) = applyAll (EApp head a) rest
 
 parsePostfix : Parser Expr
-parsePostfix = do
+parsePostfix = defer
   e <- parseAtom
   postfixTail e
 
 postfixTail : Expr -> Parser Expr
-postfixTail e = orElse (bracketIndexTail e) (orElse (dotTail e) (pure e))
+postfixTail e = orElse (bracketIndexTail e) (orElse (dotTail e) (deferPure e))
 
 -- bare `a[i]` postfix indexing (no dot) — fires only on the adjacency-lexed
 -- TLBracketTight token, so a spaced `a [i]` (application to a list literal)
 -- is untouched. Builds the SAME EIndex node dotTail's `.[i]` produces. Bare
 -- slice `a[i..j]`/`a[i..=j]` is deferred (#17) — clean error, not ESlice.
 bracketIndexTail : Expr -> Parser Expr
-bracketIndexTail e = do
+bracketIndexTail e = defer
   expectTok TLBracketTight
   lo <- parseExpr
   t <- peekP
@@ -826,25 +843,25 @@ bracketIndexRest _ _ _ = failP "expected ']' in index expression"
 -- shared by `bracketIndexRest`/`indexOrSliceRest`'s closing-`]` clause (#602):
 -- both readers land here once the index expression is complete.
 finishBracketIndex : Expr -> Expr -> Parser Expr
-finishBracketIndex e lo = do
+finishBracketIndex e lo = defer
   advance
   postfixTail (EIndex e lo (Ref "Array"))
 
 -- after a `.`: a field access `.field`, an index `.[i]`, or a slice `.[lo..hi]`
 dotTail : Expr -> Parser Expr
-dotTail e = do
+dotTail e = defer
   expectTok TDot
   t <- peekP
   dotFor e t
 
 dotFor : Expr -> Token -> Parser Expr
 dotFor e TLBracket = indexOrSlice e
-dotFor e _ = do
+dotFor e _ = defer
   f <- identNameP
   postfixTail (EFieldAccess e f (Ref ""))
 
 indexOrSlice : Expr -> Parser Expr
-indexOrSlice e = do
+indexOrSlice e = defer
   expectTok TLBracket
   lo <- parseExpr
   t <- peekP
@@ -857,7 +874,7 @@ indexOrSliceRest e lo TRBracket = finishBracketIndex e lo
 indexOrSliceRest _ _ _ = failP "expected .. ..= or ] in index/slice"
 
 sliceHi : Expr -> Expr -> Bool -> Parser Expr
-sliceHi e lo incl = do
+sliceHi e lo incl = defer
   advance
   hi <- parseExpr
   expectTok TRBracket
@@ -893,16 +910,16 @@ nestTooDeepMsg = "expression nesting too deep (limit \{intToString maxNestDepth}
 -- un-wrapped (exactly like parser.mly's `mkbin`/`EApp` rules), so their span is
 -- implicit from their wrapped leaf operands.
 --
--- Depth tracking is written directly over the raw `Parser` representation
--- (not `do`-notation) so the counter is restored on EVERY outcome — including
+-- Depth tracking is written directly over the raw `ParserE` representation
+-- (not `defer`-notation) so the counter is restored on EVERY outcome — including
 -- a non-fatal `PErr` from a failed speculative atom attempt, routine under
--- `orElse`/`chainl1` throughout this file. A `do`-sequenced decrement after
+-- `orElse`/`chainl1` throughout this file. A `defer`-sequenced decrement after
 -- `located parseAtomRaw` would never run on that path: `bindPR` short-circuits
 -- straight past subsequent binds on `PErr`/`PFatal`, which would leak an
 -- increment on every backtrack and eventually trip the cap on an ordinary
 -- (shallow) program.
 parseAtom : Parser Expr
-parseAtom = Parser parseAtomNestGo
+parseAtom = ParserE parseAtomNestGo
 
 parseAtomNestGo : Array Token -> Int -> PR Expr
 parseAtomNestGo toks pos =
@@ -920,7 +937,7 @@ parseAtomNestRun toks pos d =
   r
 
 parseAtomRaw : Parser Expr
-parseAtomRaw = do
+parseAtomRaw = defer
   t <- peekP
   match t
     TInt n _ if isIntMinLit n => fatalP intLitTooBigMsg
@@ -939,19 +956,20 @@ parseAtomRaw = do
     TLet => parseLet
     TMatch => parseMatch
     TDo => parseDo
+    TDefer => parseDefer
     TInterpOpen _ => parseInterp
     _ => failP "expected atom"
 
 -- a constructor (`Upper`) atom, or a record literal `Upper { field = e, … }`
 parseUpperAtom : String -> Parser Expr
-parseUpperAtom x = do
+parseUpperAtom x = defer
   advance
   t <- peekP
   upperTail x t
 
 upperTail : String -> Token -> Parser Expr
 upperTail x TLBrace = upperBrace x
-upperTail x _ = pure (EVar x)
+upperTail x _ = deferPure (EVar x)
 
 -- After `Con {`: a constructor-tagged variant update `Con { e | f = v, … }`
 -- (a `|` follows the leading expr), or the unified `Con { kv_or_e, … }` form,
@@ -960,37 +978,37 @@ upperTail x _ = pure (EVar x)
 -- elements).  `orElse` backtracks, so try the update form first — its leading
 -- `parseExpr` fails fast at the first `=`/`=>`/`,`/`}` (no `|`).
 upperBrace : String -> Parser Expr
-upperBrace x = do
+upperBrace x = defer
   expectTok TLBrace
   orElse (variantUpdateTail x) (braceItems x)
 
 variantUpdateTail : String -> Parser Expr
-variantUpdateTail x = do
+variantUpdateTail x = defer
   e <- parseExpr
   expectTok TPipe
   fields <- sepBy1 recordFieldExpr (expectTok TComma)
   optTrailingComma
   expectTok TRBrace
-  pure (EVariantUpdate x e (map (desugarDottedField e) fields))
+  deferPure (EVariantUpdate x e (map (desugarDottedField e) fields))
 
 -- a kv_or_e item: a record field `f = v`, a map entry `k => v`, or a bare
 -- element/pun.  The classification of the whole brace picks the node kind.
 data KvItem = KvField String Expr | KvKV Expr Expr | KvElem Expr
 
 braceItems : String -> Parser Expr
-braceItems x = do
+braceItems x = defer
   t <- peekP
   braceItemsFor x t
 
 braceItemsFor : String -> Token -> Parser Expr
-braceItemsFor x TRBrace = do
+braceItemsFor x TRBrace = defer
   advance
-  pure (classifyBrace x [])
-braceItemsFor x _ = do
+  deferPure (classifyBrace x [])
+braceItemsFor x _ = defer
   items <- sepBy1 parseKvOrE (expectTok TComma)
   optTrailingComma
   expectTok TRBrace
-  pure (classifyBrace x items)
+  deferPure (classifyBrace x items)
 
 -- `IDENT = expr` → field; `key => expr` → map entry; else a bare element.  The
 -- key is parsed at the pipe level (like the reference `expr_pipe`) so a `=>`
@@ -1000,29 +1018,29 @@ parseKvOrE = orElse parseKvField (orElse parseKvBlockElem parseKvKVorElem)
 
 -- Gate B: a bare-INDENT block as a record-field / set-element value.
 parseKvBlockElem : Parser KvItem
-parseKvBlockElem = do
+parseKvBlockElem = defer
   e <- parseBracketBlock
-  pure (KvElem e)
+  deferPure (KvElem e)
 
 parseKvField : Parser KvItem
-parseKvField = do
+parseKvField = defer
   name <- identNameP
   expectTok TEqual
   e <- parseBracketElem
-  pure (KvField name e)
+  deferPure (KvField name e)
 
 parseKvKVorElem : Parser KvItem
-parseKvKVorElem = do
+parseKvKVorElem = defer
   e <- parsePipe
   t <- peekP
   kvKVorElemFor e t
 
 kvKVorElemFor : Expr -> Token -> Parser KvItem
-kvKVorElemFor e TFatArrow = do
+kvKVorElemFor e TFatArrow = defer
   advance
   v <- parseExpr
-  pure (KvKV e v)
-kvKVorElemFor e _ = pure (KvElem e)
+  deferPure (KvKV e v)
+kvKVorElemFor e _ = deferPure (KvElem e)
 
 -- classify: any field → record create (Elem puns to `n = n`); else any map
 -- entry → map literal; else → set literal.  (Mixed-kind braces are user errors.)
@@ -1065,29 +1083,29 @@ kvElems (_::rest) = kvElems rest
 -- record update `{ e | field = e, … }`, including nested dotted-path fields
 -- `{ p | a.b.c = v }` desugared to nested ERecordUpdates.
 parseRecordUpdate : Parser Expr
-parseRecordUpdate = do
+parseRecordUpdate = defer
   expectTok TLBrace
   e <- parseExpr
   expectTok TPipe
   fields <- sepBy1 recordFieldExpr (expectTok TComma)
   optTrailingComma
   expectTok TRBrace
-  pure (ERecordUpdate e (map (desugarDottedField e) fields) (Ref ""))
+  deferPure (ERecordUpdate e (map (desugarDottedField e) fields) (Ref ""))
 
 -- a record-update field `path = expr` (dotted path) or a pun `name`
 -- (a dotted-path update field).
 recordFieldExpr : Parser (List String, Expr)
-recordFieldExpr = do
+recordFieldExpr = defer
   path <- sepBy1 identNameP (expectTok TDot)
   t <- peekP
   recordFieldExprRest path t
 
 recordFieldExprRest : List String -> Token -> Parser (List String, Expr)
-recordFieldExprRest path TEqual = do
+recordFieldExprRest path TEqual = defer
   advance
   e <- parseBracketElem
-  pure (path, e)
-recordFieldExprRest [x] _ = pure ([x], EVar x)
+  deferPure (path, e)
+recordFieldExprRest [x] _ = deferPure ([x], EVar x)
 recordFieldExprRest _ _ = failP "expected = in record-update field"
 
 -- desugar a dotted-path update field against the update base:
@@ -1110,13 +1128,13 @@ dottedGo cur [] value = value
 -- interpolated string: INTERP_OPEN <expr> (INTERP_MID <expr>)* INTERP_END,
 -- assembled into alternating InterpStr / InterpExpr parts
 parseInterp : Parser Expr
-parseInterp = do
+parseInterp = defer
   s0 <- interpOpenStr
   rest <- interpRest
-  pure (EStringInterp (InterpStr s0 :: rest))
+  deferPure (EStringInterp (InterpStr s0 :: rest))
 
 interpOpenStr : Parser String
-interpOpenStr = do
+interpOpenStr = defer
   t <- peekP
   interpOpenFor t
 
@@ -1125,25 +1143,25 @@ interpOpenFor (TInterpOpen s) = emit s
 interpOpenFor _ = failP "expected interpolation open"
 
 interpRest : Parser (List InterpPart)
-interpRest = do
+interpRest = defer
   e <- parseExpr
   t <- peekP
   interpRestFor e t
 
 interpRestFor : Expr -> Token -> Parser (List InterpPart)
-interpRestFor e (TInterpMid s) = do
+interpRestFor e (TInterpMid s) = defer
   advance
   rest <- interpRest
-  pure (InterpExpr e :: InterpStr s :: rest)
-interpRestFor e (TInterpEnd s) = do
+  deferPure (InterpExpr e :: InterpStr s :: rest)
+interpRestFor e (TInterpEnd s) = defer
   advance
-  pure [InterpExpr e, InterpStr s]
+  deferPure [InterpExpr e, InterpStr s]
 interpRestFor e _ = failP "expected interpolation mid/end"
 
 -- Bracket block-expressions (LAYOUT-BRACKETS-DESIGN.md, Gate B).  The locked
 -- herald set is match/do/record/bare-INDENT block.  All of those
 -- EXCEPT the bare-INDENT block already reach bracket element positions because
--- parseAtomRaw dispatches TMatch/TDo (and records via TUpper/TLBrace)
+-- parseAtomRaw dispatches TMatch/TDo/TDefer (and records via TUpper/TLBrace)
 -- as atoms, so parseExpr reaches them.  The one herald NOT reachable from the
 -- expression chain is the bare-INDENT block (it lives only in the decl-body
 -- `indentedBody`).  parseBracketBlock is the dedicated, contained reader for it;
@@ -1154,18 +1172,18 @@ interpRestFor e _ = failP "expected interpolation mid/end"
 -- brackets (Stage 3, pending), so these readers are not reachable on real input
 -- yet — they exist so the grammar has a target the future lexer tokens land on.
 parseBracketBlock : Parser Expr
-parseBracketBlock = do
+parseBracketBlock = defer
   expectTok TIndent
   stmts <- parseStmts
   expectTok TDedent
-  pure (blockOrExpr stmts)
+  deferPure (blockOrExpr stmts)
 
 -- a bracket element: a bare-INDENT block, or an ordinary expression.
 parseBracketElem : Parser Expr
 parseBracketElem = orElse parseBracketBlock parseExpr
 
 parseParen : Parser Expr
-parseParen = do
+parseParen = defer
   expectTok TLParen
   t <- peekP
   parenFor t
@@ -1186,15 +1204,15 @@ parenSectionOr t = match sectionOpStr t
 -- `(-)` is a bare section; `(-e)` is a parenthesised unary minus (orElse falls
 -- through). MINUS is excluded from the SecRight form, matching the grammar.
 bareMinusSection : Parser Expr
-bareMinusSection = do
+bareMinusSection = defer
   expectMinus
   expectTok TRParen
-  pure (ESection (SecBare "-"))
+  deferPure (ESection (SecBare "-"))
 
 -- Accept either spacing of bare minus (TMinus or the asymmetric-spaced
 -- TMinusTight) wherever a `-` operator token is required.
 expectMinus : Parser Unit
-expectMinus = do
+expectMinus = defer
   t <- peekP
   expectMinusGo t
 
@@ -1204,26 +1222,26 @@ expectMinusGo TMinusTight = emit ()
 expectMinusGo _ = failP "expected -"
 
 parseSectionOp : String -> Parser Expr
-parseSectionOp op = do
+parseSectionOp op = defer
   advance
   t <- peekP
   sectionTail op t
 
 sectionTail : String -> Token -> Parser Expr
-sectionTail op TRParen = do
+sectionTail op TRParen = defer
   advance
-  pure (ESection (SecBare op))
-sectionTail op _ = do
+  deferPure (ESection (SecBare op))
+sectionTail op _ = defer
   e <- parseExpr
   expectTok TRParen
-  pure (ESection (SecRight op e))
+  deferPure (ESection (SecRight op e))
 
 parseParenExpr : Parser Expr
-parseParenExpr = do
+parseParenExpr = defer
   es <- sepBy1 parseBracketElem (expectTok TComma)
   optTrailingCommaTuple es
   expectTok TRParen
-  pure (parenResult es)
+  deferPure (parenResult es)
 
 parenResult : List Expr -> Expr
 parenResult [e] = leftSectionOrExpr e
@@ -1270,14 +1288,14 @@ sectionOpStr TLCompose = Some "<<"
 sectionOpStr _ = None
 
 parseListE : Parser Expr
-parseListE = do
+parseListE = defer
   expectTok TLBracket
   t <- peekP
   listFor t
 
 listFor : Token -> Parser Expr
 listFor TRBracket = emit (EListLit [])
-listFor _ = do
+listFor _ = defer
   first <- parseBracketElem
   t <- peekP
   listRest first t
@@ -1286,7 +1304,7 @@ listFor _ = do
 listRest : Expr -> Token -> Parser Expr
 listRest first TDotDot = rangeAfter first False
 listRest first TDotDotEq = rangeAfter first True
-listRest first TComma = do
+listRest first TComma = defer
   advance
   t <- peekP
   listAfterComma first t
@@ -1297,38 +1315,38 @@ listRest _ _ = failP "expected , .. ..= or ]"
 -- bare single-element list (`[x]`) and a single-element list with a trailing
 -- comma (`[x,]`) land here once the closing bracket is seen.
 finishSingletonList : Expr -> Parser Expr
-finishSingletonList first = do
+finishSingletonList first = defer
   advance
-  pure (EListLit [first])
+  deferPure (EListLit [first])
 
 -- after the first element and a comma: a `]` here is a trailing comma on a
 -- single-element list (`[x,]`); otherwise parse the remaining elements (and
 -- accept a trailing comma after them too).
 listAfterComma : Expr -> Token -> Parser Expr
 listAfterComma first TRBracket = finishSingletonList first
-listAfterComma first _ = do
+listAfterComma first _ = defer
   rest <- sepBy1 parseBracketElem (expectTok TComma)
   optTrailingComma
   expectTok TRBracket
-  pure (EListLit (first::rest))
+  deferPure (EListLit (first::rest))
 
 rangeAfter : Expr -> Bool -> Parser Expr
-rangeAfter lo incl = do
+rangeAfter lo incl = defer
   advance
   hi <- parseExpr
   expectTok TRBracket
-  pure (ERangeList lo hi incl)
+  deferPure (ERangeList lo hi incl)
 
 -- array literal `[| e, … |]`
 parseArray : Parser Expr
-parseArray = do
+parseArray = defer
   expectTok TLArray
   t <- peekP
   arrayFor t
 
 arrayFor : Token -> Parser Expr
 arrayFor TRArray = emit (EArrayLit [])
-arrayFor _ = do
+arrayFor _ = defer
   first <- parseBracketElem
   t <- peekP
   arrayRest first t
@@ -1337,7 +1355,7 @@ arrayFor _ = do
 arrayRest : Expr -> Token -> Parser Expr
 arrayRest first TDotDot = arrayRangeAfter first False
 arrayRest first TDotDotEq = arrayRangeAfter first True
-arrayRest first TComma = do
+arrayRest first TComma = defer
   advance
   t <- peekP
   arrayAfterComma first t
@@ -1348,28 +1366,28 @@ arrayRest _ _ = failP "expected , .. ..= or |]"
 -- bare single-element array (`[|x|]`) and one with a trailing comma
 -- (`[|x,|]`) land here once the closing delimiter is seen.
 finishSingletonArray : Expr -> Parser Expr
-finishSingletonArray first = do
+finishSingletonArray first = defer
   advance
-  pure (EArrayLit [first])
+  deferPure (EArrayLit [first])
 
 -- single-element trailing comma `[|x,|]`: a `|]` after the comma closes it.
 arrayAfterComma : Expr -> Token -> Parser Expr
 arrayAfterComma first TRArray = finishSingletonArray first
-arrayAfterComma first _ = do
+arrayAfterComma first _ = defer
   rest <- sepBy1 parseBracketElem (expectTok TComma)
   optTrailingComma
   expectTok TRArray
-  pure (EArrayLit (first::rest))
+  deferPure (EArrayLit (first::rest))
 
 arrayRangeAfter : Expr -> Bool -> Parser Expr
-arrayRangeAfter lo incl = do
+arrayRangeAfter lo incl = defer
   advance
   hi <- parseExpr
   expectTok TRArray
-  pure (ERangeArray lo hi incl)
+  deferPure (ERangeArray lo hi incl)
 
 parseIf : Parser Expr
-parseIf = do
+parseIf = defer
   expectTok TIf
   t <- peekP
   ifKind t
@@ -1381,7 +1399,7 @@ ifKind _ = ifPlain
 -- `if let pat = e then t else f` desugars (at parse) to a two-arm match, exactly
 -- to `match e { pat => t; _ => f }`.  Always has an else.
 ifLet : Parser Expr
-ifLet = do
+ifLet = defer
   expectTok TLet
   pat <- parsePat
   expectTok TEqual
@@ -1390,22 +1408,22 @@ ifLet = do
   thenE <- parseExpr
   expectTok TElse
   elseE <- parseExpr
-  pure (EMatch scrut [Arm pat [] thenE, Arm PWild [] elseE])
+  deferPure (EMatch scrut [Arm pat [] thenE, Arm PWild [] elseE])
 
 ifPlain : Parser Expr
-ifPlain = do
+ifPlain = defer
   cond <- parseExpr
   expectTok TThen
   thenE <- parseBranch
   elseE <- elseBranch
-  pure (EIf cond thenE elseE)
+  deferPure (EIf cond thenE elseE)
 
 -- `else` is optional; an else-less `if` defaults the else branch to unit
 elseBranch : Parser Expr
-elseBranch = orElse elsePresent (pure (ELit LUnit))
+elseBranch = orElse elsePresent (deferPure (ELit LUnit))
 
 elsePresent : Parser Expr
-elsePresent = do
+elsePresent = defer
   expectTok TElse
   parseBranch
 
@@ -1421,7 +1439,7 @@ branchBlock = parseBracketBlock
 -- `let f a… = e in e2`, annotated `let [mut] x : ty = e in e2`, and
 -- mutually-recursive `let rec f = … with g = … in e2` (→ ELetGroup).
 parseLet : Parser Expr
-parseLet = do
+parseLet = defer
   expectTok TLet
   t <- peekP
   letExprKind t
@@ -1458,7 +1476,7 @@ functionRemovedMsg = "`function` is not a keyword — use `x => match x { … }`
 -- IDENT-led: function-let `let f a… = e` (params present), annotated
 -- `let x : ty = e`, or plain `let x = e`, each followed by `in e2`
 letIdentExpr : String -> Parser Expr
-letIdentExpr name = do
+letIdentExpr name = defer
   s <- getPos
   advance
   params <- many parseParamPat
@@ -1466,92 +1484,92 @@ letIdentExpr name = do
   letIdentExprRest name (locOfSpan s (s + 1)) params t
 
 letIdentExprRest : String -> Loc -> List Pat -> Token -> Parser Expr
-letIdentExprRest name nameLoc [] TColon = do
+letIdentExprRest name nameLoc [] TColon = defer
   advance
   ty <- parseTy
   expectTok TEqual
   e1 <- parseExpr
   expectTok TIn
   e2 <- parseExpr
-  pure (ELet False False (PVar name nameLoc) (EAnnot e1 ty) e2)
-letIdentExprRest name nameLoc [] TEqual = do
+  deferPure (ELet False False (PVar name nameLoc) (EAnnot e1 ty) e2)
+letIdentExprRest name nameLoc [] TEqual = defer
   advance
   e1 <- parseExpr
   expectTok TIn
   e2 <- parseExpr
-  pure (ELet False False (PVar name nameLoc) e1 e2)
-letIdentExprRest name nameLoc params TEqual = do
+  deferPure (ELet False False (PVar name nameLoc) e1 e2)
+letIdentExprRest name nameLoc params TEqual = defer
   advance
   e1 <- parseExpr
   expectTok TIn
   e2 <- parseExpr
-  pure (ELet False True (PVar name nameLoc) (curryLam params e1) e2)
+  deferPure (ELet False True (PVar name nameLoc) (curryLam params e1) e2)
 letIdentExprRest _ _ _ _ = failP "expected : or = in let"
 
 -- non-IDENT pattern: `let (a, b) = e in e2`, `let Some x = e in e2`, …
 letPatExpr : Parser Expr
-letPatExpr = do
+letPatExpr = defer
   pat <- parsePat
   expectTok TEqual
   e1 <- parseExpr
   expectTok TIn
   e2 <- parseExpr
-  pure (ELet False False pat e1 e2)
+  deferPure (ELet False False pat e1 e2)
 
 -- `let rec f a… = e in e2` → ELetGroup with a single binding (Phase 57 inline
 -- form). Mutual-recursion grouping via `with` has been removed — each
 -- recursive binding is its own `let rec`.
 letRecExpr : Parser Expr
-letRecExpr = do
+letRecExpr = defer
   expectTok TRec
   clause <- letRecInlineClause
   expectTok TIn
   e2 <- parseExpr
-  pure (ELetGroup (coalesceClauses [clause]) e2)
+  deferPure (ELetGroup (coalesceClauses [clause]) e2)
 
 letRecInlineClause : Parser (String, List Pat, Expr)
-letRecInlineClause = do
+letRecInlineClause = defer
   name <- identNameP
   pats <- many parseParamPat
   expectTok TEqual
   body <- parseExpr
-  pure (name, pats, body)
+  deferPure (name, pats, body)
 
 parseMatch : Parser Expr
-parseMatch = do
+parseMatch = defer
   expectTok TMatch
   scrut <- parseExpr
   expectTok TIndent
   arms <- parseArms
   expectTok TDedent
-  pure (EMatch scrut arms)
+  deferPure (EMatch scrut arms)
 
 parseArms : Parser (List Arm)
-parseArms = do
+parseArms = defer
   skipNewlines
   armsLoop
 
 armsLoop : Parser (List Arm)
-armsLoop = orElse armsCons (pure [])
+armsLoop = orElse armsCons (deferPure [])
 
 armsCons : Parser (List Arm)
-armsCons = do
+armsCons = defer
   a <- parseArm
   skipNewlines
   rest <- armsLoop
-  pure (a::rest)
+  deferPure (a::rest)
 
 parseArm : Parser Arm
-parseArm = do
+parseArm = defer
   pat <- parsePat
   guards <- armGuardOpt
   expectTok TFatArrow
   body <- orElse branchBlock parseBodyExpr
-  pure (Arm pat guards body)
+  deferPure (Arm pat guards body)
 
 -- optional match-arm guard: `if g, g…` (NB: uses `if`, not `|`)
 armGuardOpt : Parser (List Guard)
-armGuardOpt = do
+armGuardOpt = defer
   t <- peekP
   armGuardFor t
 
@@ -1560,16 +1578,16 @@ armGuardOpt = do
 -- above and SYNTAX.md "Match-arm guards").  `|` never validly follows a pattern
 -- in a match arm — Medaka has neither `|` guards nor or-patterns there — so this
 -- is unambiguous.  Commit with `fatalP` (at the `|`) so the targeted message
--- reaches the user instead of being swallowed by `armsLoop`'s `orElse … (pure [])`
+-- reaches the user instead of being swallowed by `armsLoop`'s `orElse … (deferPure [])`
 -- and re-surfacing as the misleading "expected a dedent" caret on the PATTERN
 -- (#591).  The message names the guard fix (the likelier intent) but also the
 -- or-pattern one (`1 | 2 => …`), since both spell `pat | … => …`.
 armGuardFor : Token -> Parser (List Guard)
-armGuardFor TIf = do
+armGuardFor TIf = defer
   advance
   sepBy1 parseGuard (expectTok TComma)
 armGuardFor TPipe = fatalP matchArmBarGuardMsg
-armGuardFor _ = pure []
+armGuardFor _ = deferPure []
 
 matchArmBarGuardMsg : String
 matchArmBarGuardMsg = "a match-arm guard uses `if`, not `|` — write `pat if cond => body` (Medaka has no or-patterns)"
@@ -1586,32 +1604,32 @@ parsePat = parsePatCons
 -- HEAD (below), and its sub-pattern is a `parsePatApp` — an application/atom that
 -- does NOT swallow a following `::` tail.
 parseAsPat : Parser Pat
-parseAsPat = do
+parseAsPat = defer
   s <- getPos
   x <- identNameP
   q <- getPos
   expectTok TAsAt
   sub <- parsePatApp
-  pure (PAs x (locOfSpan s q) sub)
+  deferPure (PAs x (locOfSpan s q) sub)
 
 parsePatCons : Parser Pat
-parsePatCons = do
+parsePatCons = defer
   p <- orElse parseAsPat parsePatApp
-  orElse (patConsTail p) (pure p)
+  orElse (patConsTail p) (deferPure p)
 
 patConsTail : Pat -> Parser Pat
-patConsTail p = do
+patConsTail p = defer
   expectTok TCons
   q <- parsePatCons
-  pure (PCons p q)
+  deferPure (PCons p q)
 
 parsePatApp : Parser Pat
-parsePatApp = do
+parsePatApp = defer
   t <- peekP
   patAppFor t
 
 patAppFor : Token -> Parser Pat
-patAppFor (TUpper c) = do
+patAppFor (TUpper c) = defer
   advance
   t <- peekP
   upperPatRest c t
@@ -1621,61 +1639,61 @@ patAppFor _ = parsePatAtom
 -- else a constructor application `C p…`
 upperPatRest : String -> Token -> Parser Pat
 upperPatRest c TLBrace = recordPat c
-upperPatRest c _ = do
+upperPatRest c _ = defer
   args <- many parsePatAtom
-  pure (PCon c args)
+  deferPure (PCon c args)
 
 -- record pattern: `C { field, field = pat, … }` with an optional `...` rest
 recordPat : String -> Parser Pat
-recordPat c = do
+recordPat c = defer
   expectTok TLBrace
   fr <- recordPatFields
   expectTok TRBrace
-  pure (mkRec c fr)
+  deferPure (mkRec c fr)
 
 mkRec : String -> (List RecPatField, Bool) -> Pat
 mkRec c (fields, rest) = PRec c fields rest
 
 recordPatFields : Parser (List RecPatField, Bool)
-recordPatFields = do
+recordPatFields = defer
   t <- peekP
   recordPatFieldsFor t
 
 recordPatFieldsFor : Token -> Parser (List RecPatField, Bool)
-recordPatFieldsFor TEllipsis = do
+recordPatFieldsFor TEllipsis = defer
   advance
-  pure ([], True)
+  deferPure ([], True)
 -- trailing comma: a `}` directly after a comma closes the field list (also
 -- accepts an empty `C {}` record pattern, which is harmless and additive)
-recordPatFieldsFor TRBrace = pure ([], False)
-recordPatFieldsFor _ = do
+recordPatFieldsFor TRBrace = deferPure ([], False)
+recordPatFieldsFor _ = defer
   f <- recordPatField
   t <- peekP
   recordPatFieldsRest f t
 
 recordPatFieldsRest : RecPatField -> Token -> Parser (List RecPatField, Bool)
-recordPatFieldsRest f TComma = do
+recordPatFieldsRest f TComma = defer
   advance
   fr <- recordPatFields
-  pure (consField f fr)
-recordPatFieldsRest f _ = pure ([f], False)
+  deferPure (consField f fr)
+recordPatFieldsRest f _ = deferPure ([f], False)
 
 consField : RecPatField -> (List RecPatField, Bool) -> (List RecPatField, Bool)
 consField f (fs, rest) = (f::fs, rest)
 
 recordPatField : Parser RecPatField
-recordPatField = do
+recordPatField = defer
   s <- getPos
   name <- identNameP
   t <- peekP
   recordPatFieldRest name (locOfSpan s (s + 1)) t
 
 recordPatFieldRest : String -> Loc -> Token -> Parser RecPatField
-recordPatFieldRest name nameLoc TEqual = do
+recordPatFieldRest name nameLoc TEqual = defer
   advance
   p <- parsePat
-  pure (RecPatField name nameLoc (Some p))
-recordPatFieldRest name nameLoc _ = pure (RecPatField name nameLoc None)
+  deferPure (RecPatField name nameLoc (Some p))
+recordPatFieldRest name nameLoc _ = deferPure (RecPatField name nameLoc None)
 
 -- A reserved keyword sitting where a pattern-variable / identifier is expected is
 -- ALWAYS an error — no keyword starts a legal pattern — and the generic "expected
@@ -1719,6 +1737,7 @@ reservedIdentKeyword TPublic = Some "public"
 reservedIdentKeyword TWhere = Some "where"
 reservedIdentKeyword TOf = Some "of"
 reservedIdentKeyword TDo = Some "do"
+reservedIdentKeyword TDefer = Some "defer"
 reservedIdentKeyword TAs = Some "as"
 reservedIdentKeyword TExtern = Some "extern"
 reservedIdentKeyword TRequires = Some "requires"
@@ -1753,7 +1772,7 @@ reservedOrPatFail t = match reservedIdentKeyword t
 -- `parseAtom`'s own already-verified boundary: an expr-only input still only
 -- ever increments at `parseAtom`.
 parsePatAtom : Parser Pat
-parsePatAtom = Parser parsePatAtomNestGo
+parsePatAtom = ParserE parsePatAtomNestGo
 
 parsePatAtomNestGo : Array Token -> Int -> PR Pat
 parsePatAtomNestGo toks pos =
@@ -1771,13 +1790,13 @@ parsePatAtomNestRun toks pos d =
   r
 
 parsePatAtomRaw : Parser Pat
-parsePatAtomRaw = do
+parsePatAtomRaw = defer
   t <- peekP
   match t
-    TIdent x => do
+    TIdent x => defer
       s <- getPos
       advance
-      pure (PVar x (locOfSpan s (s + 1)))
+      deferPure (PVar x (locOfSpan s (s + 1)))
     TUnderscore => emit PWild
     TInt n _ if isIntMinLit n => fatalP intLitTooBigMsg
     TInt n _ => intPatRest (LInt n)
@@ -1786,7 +1805,7 @@ parsePatAtomRaw = do
     TFloat f => emit (PLit (LFloat f))
     TString s => emit (PLit (LString s))
     TChar s => charPatRest (LChar s)
-    TUpper c => do
+    TUpper c => defer
       advance
       t2 <- peekP
       upperAtomRest c t2
@@ -1798,7 +1817,7 @@ parsePatAtomRaw = do
 -- (an *applied* ctor `C p…` needs parens at atom level, like the OCaml grammar).
 upperAtomRest : String -> Token -> Parser Pat
 upperAtomRest c TLBrace = recordPat c
-upperAtomRest c _ = pure (PCon c [])
+upperAtomRest c _ = deferPure (PCon c [])
 
 -- A function-definition parameter: a `pat_atom`, plus the `@` as-pattern
 -- (`x@atom`).  `orElse` backtracks, so a plain-ident / non-`@` param falls
@@ -1807,17 +1826,17 @@ parseParamPat : Parser Pat
 parseParamPat = orElse parseParamAsPat parsePatAtom
 
 parseParamAsPat : Parser Pat
-parseParamAsPat = do
+parseParamAsPat = defer
   s <- getPos
   x <- identNameP
   q <- getPos
   expectTok TAsAt
   sub <- parsePatAtom
-  pure (PAs x (locOfSpan s q) sub)
+  deferPure (PAs x (locOfSpan s q) sub)
 
 -- an int literal pattern, or a range pattern `lo..hi` / `lo..=hi`
 intPatRest : Lit -> Parser Pat
-intPatRest lo = do
+intPatRest lo = defer
   advance
   t <- peekP
   rngPatRest lo intBound t
@@ -1826,7 +1845,7 @@ intPatRest lo = do
 -- Mirrors OCaml grammar: only `MINUS INT` followed by `..` or `..=` is valid;
 -- a bare `-1` literal pattern is not accepted (consistent with OCaml parser).
 negIntPat : Parser Pat
-negIntPat = do
+negIntPat = defer
   advance
   t <- peekP
   match t
@@ -1836,40 +1855,40 @@ negIntPat = do
 
 -- After parsing MINUS INT, require a `..` or `..=` (range is mandatory).
 negIntRng : Lit -> Parser Pat
-negIntRng lo = do
+negIntRng lo = defer
   advance
   t <- peekP
   match t
-    TDotDot => do
+    TDotDot => defer
       advance
       hi <- intBound
-      pure (PRng lo hi False)
-    TDotDotEq => do
+      deferPure (PRng lo hi False)
+    TDotDotEq => defer
       advance
       hi <- intBound
-      pure (PRng lo hi True)
+      deferPure (PRng lo hi True)
     _ => failP "expected .. or ..= after negative range bound"
 -- consume INT
 
 charPatRest : Lit -> Parser Pat
-charPatRest lo = do
+charPatRest lo = defer
   advance
   t <- peekP
   rngPatRest lo charBound t
 
 rngPatRest : Lit -> Parser Lit -> Token -> Parser Pat
-rngPatRest lo bound TDotDot = do
+rngPatRest lo bound TDotDot = defer
   advance
   hi <- bound
-  pure (PRng lo hi False)
-rngPatRest lo bound TDotDotEq = do
+  deferPure (PRng lo hi False)
+rngPatRest lo bound TDotDotEq = defer
   advance
   hi <- bound
-  pure (PRng lo hi True)
-rngPatRest lo _ _ = pure (PLit lo)
+  deferPure (PRng lo hi True)
+rngPatRest lo _ _ = deferPure (PLit lo)
 
 intBound : Parser Lit
-intBound = do
+intBound = defer
   t <- peekP
   intBoundFor t
 
@@ -1877,13 +1896,13 @@ intBoundFor : Token -> Parser Lit
 intBoundFor (TInt n _)
   | isIntMinLit n = fatalP intLitTooBigMsg
 intBoundFor (TInt n _) = emit (LInt n)
-intBoundFor TMinus = do
+intBoundFor TMinus = defer
   advance
   t <- peekP
   match t
     TInt n _ => emit (LInt (negate n))
     _ => failP "expected integer after - in range bound"
-intBoundFor TMinusTight = do
+intBoundFor TMinusTight = defer
   advance
   t <- peekP
   match t
@@ -1892,7 +1911,7 @@ intBoundFor TMinusTight = do
 intBoundFor _ = failP "expected int range bound"
 
 charBound : Parser Lit
-charBound = do
+charBound = defer
   t <- peekP
   charBoundFor t
 
@@ -1905,32 +1924,32 @@ tuplePatOrSingle [p] = p
 tuplePatOrSingle ps = PTuple ps
 
 parsePatParen : Parser Pat
-parsePatParen = do
+parsePatParen = defer
   expectTok TLParen
   t <- peekP
   patParenFor t
 
 patParenFor : Token -> Parser Pat
 patParenFor TRParen = emit (PLit LUnit)
-patParenFor _ = do
+patParenFor _ = defer
   ps <- sepBy1 parsePat (expectTok TComma)
   optTrailingCommaTuple ps
   expectTok TRParen
-  pure (tuplePatOrSingle ps)
+  deferPure (tuplePatOrSingle ps)
 
 parsePatList : Parser Pat
-parsePatList = do
+parsePatList = defer
   expectTok TLBracket
   t <- peekP
   patListFor t
 
 patListFor : Token -> Parser Pat
 patListFor TRBracket = emit (PList [])
-patListFor _ = do
+patListFor _ = defer
   ps <- sepBy1 parsePat (expectTok TComma)
   optTrailingComma
   expectTok TRBracket
-  pure (PList ps)
+  deferPure (PList ps)
 
 -- ── Types ───────────────────────────────────────────────────────────────
 -- a full type is a function/effect type, optionally prefixed by a constraint
@@ -1942,15 +1961,15 @@ patListFor _ = do
 -- `TyApp (TyApp (TyCon Ix) a) i`, whose outer TyApp holds a TyApp, not a TyCon,
 -- so it fell through to `_ = []` and the constraint vanished at exit 0 (#604).
 parseTy : Parser Ty
-parseTy = do
+parseTy = defer
   lhs <- parseTyFun
-  orElse (constraintTail lhs) (pure lhs)
+  orElse (constraintTail lhs) (deferPure lhs)
 
 constraintTail : Ty -> Parser Ty
-constraintTail lhs = do
+constraintTail lhs = defer
   expectTok TFatArrow
   rhs <- parseTy
-  pure (TyConstrained (extractConstraints lhs) rhs)
+  deferPure (TyConstrained (extractConstraints lhs) rhs)
 
 extractConstraints : Ty -> List Constraint
 extractConstraints (TyApp f a) = match tyAppSpine (TyApp f a)
@@ -1983,55 +2002,58 @@ concatMapC [] = []
 concatMapC (t::rest) = extractConstraints t ++ concatMapC rest
 
 parseTyFun : Parser Ty
-parseTyFun = do
+parseTyFun = defer
   t <- peekP
   tyFor t
 
 tyFor : Token -> Parser Ty
 tyFor TLt = parseEffectTy
-tyFor _ = do
+tyFor _ = defer
   left <- parseTyApp
-  orElse (tyArrowTail left) (pure left)
+  orElse (tyArrowTail left) (deferPure left)
 
 -- `< labels? (| tail)? > ty` — an effect-annotated type.  A bare lowercase ident
 -- inside the angles is the tail var (no labels), e.g. `<e> a`.
 parseEffectTy : Parser Ty
-parseEffectTy = do
+parseEffectTy = defer
   expectTok TLt
   body <- effectBody
   expectTok TGt
   inner <- parseTy
-  pure (mkEffect body inner)
+  deferPure (mkEffect body inner)
 
-mkEffect : (List (String, Option String), Option String) -> Ty -> Ty
+mkEffect : (List (String, Option String), List String) -> Ty -> Ty
 mkEffect (labels, tail) inner = TyEffect labels tail inner
 
-effectBody : Parser (List (String, Option String), Option String)
-effectBody = do
+effectBody : Parser (List (String, Option String), List String)
+effectBody = defer
   t <- peekP
   effectBodyFor t
 
-effectBodyFor : Token -> Parser (List (String, Option String), Option String)
-effectBodyFor (TUpper _) = do
+effectBodyFor : Token -> Parser (List (String, Option String), List String)
+effectBodyFor (TUpper _) = defer
   labels <- sepBy1 effAtomP (expectTok TComma)
   tail <- pipeTail
-  pure (labels, tail)
-effectBodyFor (TIdent _) = do
+  deferPure (labels, tail)
+-- A leading tail var may itself be joined with more (`<e | e2>`, #821), so the
+-- rest of the row is the same `| name` loop the labelled form uses.
+effectBodyFor (TIdent _) = defer
   v <- identNameP
-  pure ([], Some v)
-effectBodyFor _ = pure ([], None)
+  rest <- pipeTail
+  deferPure ([], v::rest)
+effectBodyFor _ = deferPure ([], [])
 
 -- a row atom is a label with an optional Prefix-pattern param:
 -- `Foo` (atomic), `Net "a.com/*"` (written param), or `Net _` (an inferred
 -- hole — filled at each call site by the known-prefix analysis, v2 Stage 2b).
 effAtomP : Parser (String, Option String)
-effAtomP = do
+effAtomP = defer
   l <- upperNameP
   p <- effParamP
-  pure (l, p)
+  deferPure (l, p)
 
 effParamP : Parser (Option String)
-effParamP = do
+effParamP = defer
   t <- peekP
   t2 <- peek2P
   effParamDispatch t t2
@@ -2049,59 +2071,59 @@ effParamDispatch t _ = effParamFor t
 -- parse `Host="…" Method={…} …` (space-separated axes; loop while peek is an
 -- upper-name followed by `=`).  Encode into the carrier sentinel `@P{…;…}`.
 productParamP : Parser (Option String)
-productParamP = do
+productParamP = defer
   axes <- productAxes
-  pure (Some (encodeProductParam axes))
+  deferPure (Some (encodeProductParam axes))
 
 productAxes : Parser (List (String, String))
-productAxes = do
+productAxes = defer
   a <- productAxis
   rest <- productAxesMore
-  pure (a::rest)
+  deferPure (a::rest)
 
 productAxesMore : Parser (List (String, String))
-productAxesMore = do
+productAxesMore = defer
   t <- peekP
   t2 <- peek2P
   productAxesMoreFor t t2
 
 productAxesMoreFor : Token -> Token -> Parser (List (String, String))
 productAxesMoreFor (TUpper _) TEqual = productAxes
-productAxesMoreFor _ _ = pure []
+productAxesMoreFor _ _ = deferPure []
 
 -- one `Axis=val` axis: val is `"…"` (Prefix) or `{a,b}` (Set).  Returns the
 -- axis name and the per-axis carrier value (`"…"` kept quoted; `{a,b}` re-encoded).
 productAxis : Parser (String, String)
-productAxis = do
+productAxis = defer
   name <- upperNameP
   expectTok TEqual
   v <- productAxisVal
-  pure (name, v)
+  deferPure (name, v)
 
 productAxisVal : Parser String
-productAxisVal = do
+productAxisVal = defer
   t <- peekP
   productAxisValFor t
 
 productAxisValFor : Token -> Parser String
-productAxisValFor (TString s) = do
+productAxisValFor (TString s) = defer
   advance
-  pure ("\"" ++ s ++ "\"")  -- Prefix axis: keep quoted for the decoder
-productAxisValFor TLBrace = do
+  deferPure ("\"" ++ s ++ "\"")  -- Prefix axis: keep quoted for the decoder
+productAxisValFor TLBrace = defer
   expectTok TLBrace
   elems <- sepBy1 stringLitP (expectTok TComma)
   expectTok TRBrace
-  pure (encodeSetParam elems)  -- Set axis: `{a,b}` (same as the Set carrier)
+  deferPure (encodeSetParam elems)  -- Set axis: `{a,b}` (same as the Set carrier)
 productAxisValFor _ = failP "expected product axis value (\"prefix\" or {set})"
 
 effParamFor : Token -> Parser (Option String)
-effParamFor (TString s) = do
+effParamFor (TString s) = defer
   advance
-  pure (Some s)
-effParamFor TUnderscore = do
+  deferPure (Some s)
+effParamFor TUnderscore = defer
   advance
-  pure (Some "_")  -- v2 Stage 2b inferred hole (`<Net _>`)
-effParamFor TLBrace = do
+  deferPure (Some "_")  -- v2 Stage 2b inferred hole (`<Net _>`)
+effParamFor TLBrace = defer
   -- v2 WS-3 Set-domain literal `<Foo {"a", "b"}>`.  Encode the element strings
   -- into the existing `Option String` carrier as `{a,b}` (sentinel `{` prefix);
   -- `atomOfWritten`/`decodeSetParam` (typecheck) decode it.  This keeps the
@@ -2109,8 +2131,8 @@ effParamFor TLBrace = do
   expectTok TLBrace
   elems <- sepBy1 stringLitP (expectTok TComma)
   expectTok TRBrace
-  pure (Some (encodeSetParam elems))
-effParamFor _ = pure None
+  deferPure (Some (encodeSetParam elems))
+effParamFor _ = deferPure None
 
 -- join Set elements into the `{a,b,c}` carrier form (commas separate; Set
 -- authority tokens contain no commas/braces).
@@ -2134,20 +2156,24 @@ joinSemi xs = joinWith ";" xs
 joinComma : List String -> String
 joinComma xs = joinWith "," xs
 
-pipeTail : Parser (Option String)
-pipeTail = do
+-- Zero or more `| name` tail variables.  Several make the row a JOIN (#821):
+-- `<Stdout | e | e2>` is the row of Stdout together with everything e or e2
+-- can perform.
+pipeTail : Parser (List String)
+pipeTail = defer
   t <- peekP
   pipeTailFor t
 
-pipeTailFor : Token -> Parser (Option String)
-pipeTailFor TPipe = do
+pipeTailFor : Token -> Parser (List String)
+pipeTailFor TPipe = defer
   advance
   v <- identNameP
-  pure (Some v)
-pipeTailFor _ = pure None
+  rest <- pipeTail
+  deferPure (v::rest)
+pipeTailFor _ = deferPure []
 
 upperNameP : Parser String
-upperNameP = do
+upperNameP = defer
   t <- peekP
   upperNameFor t
 
@@ -2156,34 +2182,34 @@ upperNameFor (TUpper c) = emit c
 upperNameFor _ = failP "expected effect label"
 
 tyArrowTail : Ty -> Parser Ty
-tyArrowTail left = do
+tyArrowTail left = defer
   expectTok TArrow
   t <- peekP
   indented <- tyArrowSkipLayout t
   right <- parseTy
-  when
+  deferWhen
     indented
-    (do
+    (defer
       skipNewlines
       expectTok TDedent)
-  pure (TyFun left right)
+  deferPure (TyFun left right)
 
 -- Skip NEWLINE or INDENT that can follow a trailing `->` in a type signature.
 -- Returns True if an INDENT was consumed (caller must then consume the matching DEDENT).
 tyArrowSkipLayout : Token -> Parser Bool
-tyArrowSkipLayout TNewline = do
+tyArrowSkipLayout TNewline = defer
   advance
-  pure False
-tyArrowSkipLayout TIndent = do
+  deferPure False
+tyArrowSkipLayout TIndent = defer
   advance
-  pure True
-tyArrowSkipLayout _ = pure False
+  deferPure True
+tyArrowSkipLayout _ = deferPure False
 
 parseTyApp : Parser Ty
-parseTyApp = do
+parseTyApp = defer
   head <- parseTyAtom
   args <- many parseTyAtom
-  pure (tyApplyAll head args)
+  deferPure (tyApplyAll head args)
 
 tyApplyAll : Ty -> List Ty -> Ty
 tyApplyAll head [] = head
@@ -2197,7 +2223,7 @@ tyApplyAll head (a::rest) = tyApplyAll (TyApp head a) rest
 -- so pathologically deep type nesting (e.g. `f : ((((Int)))) -> Int`) still
 -- exhausted the native stack with an unlocated exit 134.
 parseTyAtom : Parser Ty
-parseTyAtom = Parser parseTyAtomNestGo
+parseTyAtom = ParserE parseTyAtomNestGo
 
 parseTyAtomNestGo : Array Token -> Int -> PR Ty
 parseTyAtomNestGo toks pos =
@@ -2215,14 +2241,14 @@ parseTyAtomNestRun toks pos d =
   r
 
 parseTyAtomRaw : Parser Ty
-parseTyAtomRaw = do
+parseTyAtomRaw = defer
   t <- peekP
   match t
-    TUpper c => do
+    TUpper c => defer
       s <- getPos
       advance
       q <- getPos
-      pure (tyConUnresolved c (Some (locOfSpan s q)))
+      deferPure (tyConUnresolved c (Some (locOfSpan s q)))
     TIdent v => emit (TyVar v)
     TLParen => parseTyParen
     TLt => parseBareEffectAtom
@@ -2239,15 +2265,15 @@ parseTyAtomRaw = do
 -- print-ambiguous with a genuine wrapped type of the same shape (see
 -- `TyRow`'s doc comment, ast.mdk).
 parseBareEffectAtom : Parser Ty
-parseBareEffectAtom = do
+parseBareEffectAtom = defer
   s <- getPos
   expectTok TLt
   body <- effectBody
   expectTok TGt
   q <- getPos
-  pure (mkRow body (locOfSpan s q))
+  deferPure (mkRow body (locOfSpan s q))
 
-mkRow : (List (String, Option String), Option String) -> Loc -> Ty
+mkRow : (List (String, Option String), List String) -> Loc -> Ty
 mkRow (labels, tail) loc = TyRow labels tail (Some loc)
 
 tyTupleOrSingle : List Ty -> Ty
@@ -2255,7 +2281,7 @@ tyTupleOrSingle [t] = t
 tyTupleOrSingle ts = TyTuple ts
 
 parseTyParen : Parser Ty
-parseTyParen = do
+parseTyParen = defer
   expectTok TLParen
   t <- peekP
   parseTyParenBody t
@@ -2266,26 +2292,46 @@ parseTyParen = do
 -- path.
 parseTyParenBody : Token -> Parser Ty
 parseTyParenBody TComma = parseTupleCtorTail 0
-parseTyParenBody _ = do
+-- `(e | e2)` in an Effect-kinded type-ARGUMENT slot is a bare row whose tail
+-- is a join (#821), the parenthesised spelling of `<e | e2>`: `f (e | e2) b`.
+-- Only a `|` right after the ident selects it, so `(e)` and `(e, f)` keep
+-- their ordinary parenthesised/tuple readings.
+parseTyParenBody (TIdent _) = defer
+  t2 <- peek2P
+  parseTyParenIdent t2
+parseTyParenBody _ = parseTyParenTuple
+
+parseTyParenIdent : Token -> Parser Ty
+parseTyParenIdent TPipe = defer
+  s <- getPos
+  v <- identNameP
+  rest <- pipeTail
+  expectTok TRParen
+  q <- getPos
+  deferPure (TyRow [] (v::rest) (Some (locOfSpan s q)))
+parseTyParenIdent _ = parseTyParenTuple
+
+parseTyParenTuple : Parser Ty
+parseTyParenTuple = defer
   ts <- sepBy1 parseTy (expectTok TComma)
   optTrailingCommaTuple ts
   expectTok TRParen
-  pure (tyTupleOrSingle ts)
+  deferPure (tyTupleOrSingle ts)
 
 -- Count the commas of a bare tuple constructor `( , , … )`; arity = commas + 1.
 -- Lowers to `TyCon "__tupleN__"`, the same dispatch tag typecheck uses
 -- (`tupleHeadTagTc`), so the unsaturated head can bind a higher-kinded class
 -- param (`impl Bimappable (,)`).
 parseTupleCtorTail : Int -> Parser Ty
-parseTupleCtorTail commas = do
+parseTupleCtorTail commas = defer
   t <- peekP
   tupleCtorTailFor commas t
 
 tupleCtorTailFor : Int -> Token -> Parser Ty
-tupleCtorTailFor commas TComma = do
+tupleCtorTailFor commas TComma = defer
   advance
   parseTupleCtorTail (commas + 1)
-tupleCtorTailFor commas TRParen = do
+tupleCtorTailFor commas TRParen = defer
   advance
   tupleCtorTyOfArity (commas + 1)
 tupleCtorTailFor _ _ = failP "expected , or ) in tuple type constructor"
@@ -2301,7 +2347,7 @@ tupleCtorTailFor _ _ = failP "expected , or ) in tuple type constructor"
 tupleCtorTyOfArity : Int -> Parser Ty
 tupleCtorTyOfArity n =
   if n >= 2 && n <= 5 then
-    pure (tyConBuiltin (tupleCtorTyName n) None)
+    deferPure (tyConBuiltin (tupleCtorTyName n) None)
   else
     failP "tuple type constructor arity must be 2..5"
 
@@ -2317,7 +2363,7 @@ tupleCtorTyName _ = "__tuple0__"
 -- is_pub on a non-data decl (or DataAbstract on data/record); `public export`
 -- yields DataPublic.  `import`/`export import` → DUse; `extern` → DExtern.
 parseDecl : Parser Decl
-parseDecl = do
+parseDecl = defer
   t <- peekP
   match t
     TImport => parseImport False
@@ -2341,7 +2387,7 @@ parseDecl = do
 -- `default` prefixes an interface (marks its default methods).  `default impl`
 -- has been removed — afterDefaultFor surfaces a located hint for it.
 afterDefault : Bool -> Parser Decl
-afterDefault pub = do
+afterDefault pub = defer
   expectTok TDefault
   skipNewlines
   t <- peekP
@@ -2353,7 +2399,7 @@ afterDefaultFor _ TImpl = failP defaultImplRemovedMsg
 afterDefaultFor _ _ = failP "expected interface after default"
 
 afterExport : Parser Decl
-afterExport = do
+afterExport = defer
   expectTok TExport
   skipNewlines
   t <- peekP
@@ -2374,7 +2420,7 @@ afterExport = do
     _ => parseFunOrSig True
 
 afterPublic : Parser Decl
-afterPublic = do
+afterPublic = defer
   pubPos <- getPos
   expectTok TPublic
   skipNewlines
@@ -2396,105 +2442,112 @@ afterPublicFor pubPos _ =
   fatalAtP "`public` only applies to `data` declarations" pubPos
 
 parseFunOrSig : Bool -> Parser Decl
-parseFunOrSig pub = do
+parseFunOrSig pub = defer
   name <- identNameP
   params <- many parseParamPat
   t <- peekP
   match t
-    TColon => do
+    TColon => defer
       advance
       ty <- parseTy
       skipNewlines
-      pure (DTypeSig pub name ty)
-    TEqual => do
+      deferPure (DTypeSig pub name ty)
+    TEqual => defer
       advance
       body <- parseBody
       skipNewlines
-      pure (DFunDef pub name params body)
-    TIndent => do
+      deferPure (DFunDef pub name params body)
+    TIndent => defer
       advance
       arms <- parseGuardArms
       body <- guardArmsWhereOpt arms
       expectTok TDedent
       skipNewlines
-      pure (DFunDef pub name params body)
-    TPipe => do
+      deferPure (DFunDef pub name params body)
+    TPipe => defer
       arm <- parseGuardArm
       skipNewlines
-      pure (DFunDef pub name params (EGuards [arm]))
+      deferPure (DFunDef pub name params (EGuards [arm]))
     _ => failP "expected : or = in definition"
 
 -- ── extern + import declarations ─────────────────────────────────────────
 parseExtern : Bool -> Parser Decl
-parseExtern pub = do
+parseExtern pub = defer
   expectTok TExtern
   name <- externName
   expectTok TColon
   ty <- parseTy
   skipNewlines
-  pure (DExtern pub name ty)
+  deferPure (DExtern pub name ty)
 
 -- ── type alias / newtype / top-level let-group / attributes ──────────────
 -- `type Name a… = ty`
 parseTypeAlias : Bool -> Parser Decl
-parseTypeAlias pub = do
+parseTypeAlias pub = defer
   expectTok TType
   name <- upperNameP
-  params <- many lowerNameP
+  ps <- tyParamsP
   expectTok TEqual
   ty <- parseTy
   skipNewlines
-  pure (dTypeAliasUnresolved pub name params ty)
+  deferPure (dTypeAliasUnresolved pub name (map fst ps) (map snd ps) ty)
 
 -- `newtype Name a… = Con ty [deriving (…)]`
 parseNewtype : Bool -> Parser Decl
-parseNewtype pub = do
+parseNewtype pub = defer
   expectTok TNewtype
   name <- upperNameP
-  params <- many lowerNameP
+  ps <- tyParamsP
   expectTok TEqual
   con <- upperNameP
   fty <- parseTy
   derives <- derivingClause
   skipNewlines
-  pure (dNewtypeUnresolved pub name params con fty derives)
+  deferPure (dNewtypeUnresolved
+    pub
+    name
+    (map fst ps)
+    (map snd ps)
+    con
+    fty
+    derives)
 
 -- top-level `let rec f a… = body` → DLetGroup with a single binding.
 -- Mutual-recursion grouping via `with` has been removed — each recursive
 -- top-level binding is its own `let rec`.
 parseLetGroupDecl : Bool -> Parser Decl
-parseLetGroupDecl pub = do
+parseLetGroupDecl pub = defer
   expectTok TLet
   expectTok TRec
   c <- letRecDeclClause
   skipNewlines
-  pure (DLetGroup pub (coalesceClauses [c]))
+  deferPure (DLetGroup pub (coalesceClauses [c]))
 
 letRecDeclClause : Parser (String, List Pat, Expr)
-letRecDeclClause = do
+letRecDeclClause = defer
   name <- identNameP
   pats <- many parseParamPat
   expectTok TEqual
   body <- parseBody
-  pure (name, pats, body)
+  deferPure (name, pats, body)
 
 -- declaration attribute `@deprecated "msg"` / `@inline` / `@must_use` wrapping
 -- the following decl.
 parseAttrib : Parser Decl
-parseAttrib = do
+parseAttrib = defer
   expectTok TAt
   name <- identNameP
   t <- peekP
   attr <- attrArg name t
   skipNewlines
   inner <- parseDecl
-  pure (DAttrib [attr] inner)
+  deferPure (DAttrib [attr] inner)
 
 attrArg : String -> Token -> Parser Attr
-attrArg name (TString msg) = do
+attrArg name (TString msg) = defer
   advance
-  pure (mkAttr name (Some msg))
-attrArg name _ = pure (mkAttr name None)
+  deferPure (mkAttr name (Some msg))
+attrArg name _ = deferPure (mkAttr name None)
 
 mkAttr : String -> Option String -> Attr
 mkAttr "deprecated" (Some msg) = AttrDeprecated msg
@@ -2502,7 +2555,7 @@ mkAttr "must_use" _ = AttrMustUse
 mkAttr _ _ = AttrInline
 
 externName : Parser String
-externName = do
+externName = defer
   t <- peekP
   externNameFor t
 
@@ -2512,7 +2565,7 @@ externNameFor (TUpper x) = emit x
 externNameFor _ = failP "expected extern name"
 
 parseImport : Bool -> Parser Decl
-parseImport pub = do
+parseImport pub = defer
   s <- getPos
   expectTok TImport
   quals <- importQuals
@@ -2520,7 +2573,7 @@ parseImport pub = do
   e <- getPos
   noExportedAlias pub path
   skipNewlines
-  pure (DUse pub path (locOfSpan s e))
+  deferPure (DUse pub path (locOfSpan s e))
 
 -- An `export import` may NOT be aliased, in either form.  Both would re-export a name
 -- that does not exist in the module that actually defines it:
@@ -2540,35 +2593,35 @@ noExportedAlias True (UseAlias _ a) =
   failP
     "`export import … as \{a}` is not allowed — a module alias is file-local (it binds `\{a}.name`, which an importer could not write). Re-export the module itself (`export import m`) and let the importer choose its own alias."
 noExportedAlias True (UseGroup _ members) = failIfAliasedMember members
-noExportedAlias _ _ = pure ()
+noExportedAlias _ _ = deferPure ()
 
 failIfAliasedMember : List UseMember -> Parser Unit
-failIfAliasedMember [] = pure ()
+failIfAliasedMember [] = deferPure ()
 failIfAliasedMember (m::rest) = match useMemberAlias m
   Some a => failP "`export import` cannot rename a member — re-exporting `\{useMemberOrigin m}` as `\{a}` would export a name its defining module does not have. Re-export it under its own name (`export import m.{\{useMemberOrigin m}}`) and let the importer alias it."
   None => failIfAliasedMember rest
 
 importQuals : Parser (List String)
-importQuals = do
+importQuals = defer
   first <- importIdent
   rest <- importQualRest
-  pure (first::rest)
+  deferPure (first::rest)
 
 importQualRest : Parser (List String)
-importQualRest = do
+importQualRest = defer
   t <- peekP
   importQualRestFor t
 
 importQualRestFor : Token -> Parser (List String)
-importQualRestFor TDot = do
+importQualRestFor TDot = defer
   advance
   x <- importIdent
   rest <- importQualRest
-  pure (x::rest)
-importQualRestFor _ = pure []
+  deferPure (x::rest)
+importQualRestFor _ = deferPure []
 
 importIdent : Parser String
-importIdent = do
+importIdent = defer
   t <- peekP
   importIdentFor t
 
@@ -2585,27 +2638,27 @@ importIdentFor TType = emit "type"
 importIdentFor _ = failP "expected import path component"
 
 importPathFor : List String -> Parser UsePath
-importPathFor quals = do
+importPathFor quals = defer
   t <- peekP
   importPathForT quals t
 
 importPathForT : List String -> Token -> Parser UsePath
-importPathForT quals TDotLBrace = do
+importPathForT quals TDotLBrace = defer
   advance
   ms <- sepBy1 importMember (expectTok TComma)
   optTrailingComma
   expectTok TRBrace
   noTrailingAlias "a selective import"
-  pure (UseGroup quals ms)
-importPathForT quals TDotStar = do
+  deferPure (UseGroup quals ms)
+importPathForT quals TDotStar = defer
   advance
   noTrailingAlias "a wildcard import"
-  pure (UseWild quals)
-importPathForT quals TAs = do
+  deferPure (UseWild quals)
+importPathForT quals TAs = defer
   advance
   a <- aliasName
-  pure (UseAlias quals a)
-importPathForT quals _ = pure (UseName quals)
+  deferPure (UseAlias quals a)
+importPathForT quals _ = deferPure (UseName quals)
 
 -- `import m.{a, b} as A` / `import m.* as A` are REJECTED, not silently ignored.
 -- Both forms are self-contradictory: the group/wildcard says "bind these names
@@ -2613,7 +2666,7 @@ importPathForT quals _ = pure (UseName quals)
 -- (`import m as A`) already covers everything the module exports, and a member alias
 -- (`import m.{a as b}`) covers renaming a single name — so neither form loses power.
 noTrailingAlias : String -> Parser Unit
-noTrailingAlias what = do
+noTrailingAlias what = defer
   t <- peekP
   noTrailingAliasFor what t
 
@@ -2621,25 +2674,25 @@ noTrailingAliasFor : String -> Token -> Parser Unit
 noTrailingAliasFor what TAs =
   failP
     "`as` cannot alias \{what} — write `import m as A` to alias the whole module (then use `A.name`), or `import m.{name as alias}` to rename one member"
-noTrailingAliasFor _ _ = pure ()
+noTrailingAliasFor _ _ = deferPure ()
 
 importMember : Parser UseMember
-importMember = do
+importMember = defer
   s <- getPos
   t <- peekP
   importMemberFor s t
 
 importMemberFor : Int -> Token -> Parser UseMember
-importMemberFor s (TIdent x) = do
+importMemberFor s (TIdent x) = defer
   advance
   memberAliasOrNot s x False
-importMemberFor s (TUpper x) = do
+importMemberFor s (TUpper x) = defer
   advance
   withAllOrNot s x
 importMemberFor _ _ = failP "expected import member"
 
 withAllOrNot : Int -> String -> Parser UseMember
-withAllOrNot s x = do
+withAllOrNot s x = defer
   t <- peekP
   withAllFor s x t
 
@@ -2648,20 +2701,20 @@ withAllOrNot s x = do
 -- globally, so binding one under a local alias would be a silent soundness hole, not a
 -- rename.  Reject it here rather than accept-and-ignore.
 withAllFor : Int -> String -> Token -> Parser UseMember
-withAllFor s x TLParen = do
+withAllFor s x TLParen = defer
   advance
   expectTok TDotDot
   expectTok TRParen
   q <- getPos
   noMemberAlias x
-  pure (UseMember x True (locOfSpan s q) None)
-withAllFor s x _ = do
+  deferPure (UseMember x True (locOfSpan s q) None)
+withAllFor s x _ = defer
   q <- getPos
   noMemberAlias x
-  pure (UseMember x False (locOfSpan s q) None)
+  deferPure (UseMember x False (locOfSpan s q) None)
 
 noMemberAlias : String -> Parser Unit
-noMemberAlias x = do
+noMemberAlias x = defer
   t <- peekP
   noMemberAliasFor x t
 
@@ -2669,27 +2722,27 @@ noMemberAliasFor : String -> Token -> Parser Unit
 noMemberAliasFor x TAs =
   failP
     "`\{x}` is a type or constructor and cannot be aliased — only a value member can be renamed (`import m.{name as alias}`). Import it under its own name."
-noMemberAliasFor _ _ = pure ()
+noMemberAliasFor _ _ = deferPure ()
 
 -- a value member's optional `as <alias>`: `import m.{a as b}` binds m's `a` under `b`.
 memberAliasOrNot : Int -> String -> Bool -> Parser UseMember
-memberAliasOrNot s x allCtors = do
+memberAliasOrNot s x allCtors = defer
   t <- peekP
   memberAliasFor s x allCtors t
 
 memberAliasFor : Int -> String -> Bool -> Token -> Parser UseMember
-memberAliasFor s x allCtors TAs = do
+memberAliasFor s x allCtors TAs = defer
   advance
   a <- memberAliasName
   q <- getPos
-  pure (UseMember x allCtors (locOfSpan s q) (Some a))
-memberAliasFor s x allCtors _ = do
+  deferPure (UseMember x allCtors (locOfSpan s q) (Some a))
+memberAliasFor s x allCtors _ = defer
   q <- getPos
-  pure (UseMember x allCtors (locOfSpan s q) None)
+  deferPure (UseMember x allCtors (locOfSpan s q) None)
 
 -- A value member's alias is itself a value name ⇒ lowercase.
 memberAliasName : Parser String
-memberAliasName = do
+memberAliasName = defer
   t <- peekP
   memberAliasNameFor t
 
@@ -2704,7 +2757,7 @@ memberAliasNameFor _ = failP "expected alias name after `as`"
 -- field access on `A`; requiring uppercase keeps it unambiguous against `rec.field` on
 -- a lowercase local (record fields are accessed with the same `.`).
 aliasName : Parser String
-aliasName = do
+aliasName = defer
   t <- peekP
   aliasNameFor t
 
@@ -2717,7 +2770,7 @@ aliasNameFor _ = failP "expected alias name after `as`"
 
 -- ── prop / test / bench declarations ─────────────────────────────────────
 stringLitP : Parser String
-stringLitP = do
+stringLitP = defer
   t <- peekP
   stringLitFor t
 
@@ -2726,24 +2779,24 @@ stringLitFor (TString s) = emit s
 stringLitFor _ = failP "expected string literal"
 
 parseProp : Bool -> Parser Decl
-parseProp pub = do
+parseProp pub = defer
   expectTok TProp
   name <- stringLitP
   params <- many propParam
   expectTok TEqual
   body <- parseBody
   skipNewlines
-  pure (DProp pub name params body)
+  deferPure (DProp pub name params body)
 
 propParam : Parser PropParam
-propParam = do
+propParam = defer
   expectTok TLParen
   s <- getPos
   name <- identNameP
   expectTok TColon
   ty <- parseTy
   expectTok TRParen
-  pure (PropParam name (locOfSpan s (s + 1)) ty)
+  deferPure (PropParam name (locOfSpan s (s + 1)) ty)
 
 -- `TTest` at a decl head is ambiguous between the two things `test` can mean:
 -- the start of a `test "…" = …` block, or an ordinary (but reserved, so
@@ -2756,114 +2809,114 @@ propParam = do
 -- captured `testPos` so the caret lands on `test`, not on whatever token
 -- (`=`) happened to be where the string label was expected.
 parseTest : Bool -> Parser Decl
-parseTest pub = do
+parseTest pub = defer
   testPos <- getPos
   expectTok TTest
   t <- peekP
   parseTestRest pub testPos t
 
 parseTestRest : Bool -> Int -> Token -> Parser Decl
-parseTestRest pub _ (TString _) = do
+parseTestRest pub _ (TString _) = defer
   name <- stringLitP
   expectTok TEqual
   body <- parseBody
   skipNewlines
-  pure (DTest pub name body)
+  deferPure (DTest pub name body)
 parseTestRest _ testPos _ = fatalAtP (reservedKeywordMsg "test") testPos
 
 parseBench : Bool -> Parser Decl
-parseBench pub = do
+parseBench pub = defer
   expectTok TBench
   name <- stringLitP
   expectTok TEqual
   body <- parseBody
   skipNewlines
-  pure (DBench pub name body)
+  deferPure (DBench pub name body)
 
 -- `effect Foo` declares a user/platform effect label (Phase 146 gap 2).
 -- `effect Foo` (atomic), `effect Net Prefix` (domain-carrying).  The optional
 -- domain is a bare UPPER after the label; only `Prefix` is accepted in v2.
 parseEffect : Bool -> Parser Decl
-parseEffect pub = do
+parseEffect pub = defer
   expectTok TEffect
   name <- upperNameP
   dom <- effDomainP
   skipNewlines
-  pure (DEffect pub name dom)
+  deferPure (DEffect pub name dom)
 
 effDomainP : Parser (Option String)
-effDomainP = do
+effDomainP = defer
   t <- peekP
   effDomainFor t
 
 effDomainFor : Token -> Parser (Option String)
-effDomainFor (TUpper d) = do
+effDomainFor (TUpper d) = defer
   advance
-  pure (Some d)
-effDomainFor _ = pure None
+  deferPure (Some d)
+effDomainFor _ = deferPure None
 
 -- ── interface declarations ───────────────────────────────────────────────
 parseInterface : Bool -> Bool -> Parser Decl
-parseInterface pub isDefault = do
+parseInterface pub isDefault = defer
   kw <- getPos
   expectTok TInterface
   name <- upperNameP
-  typarams <- many lowerNameP
+  ps <- tyParamsP
   supers <- ifaceSuper
   methods <- ifaceBody kw
   -- #1110: the parser has a token stream, not a module id, so it builds every
   -- type declaration identity-less; resolve acquires it (`stampDeclOrigin`).
-  pure (dInterfaceUnresolved pub isDefault name typarams supers methods)
+  deferPure (dInterfaceUnresolved pub isDefault name (map fst ps) (map snd ps) supers methods)
 
 -- optional `requires Iface a, …` superclass list
 ifaceSuper : Parser (List Super)
-ifaceSuper = do
+ifaceSuper = defer
   t <- peekP
   ifaceSuperFor t
 
 ifaceSuperFor : Token -> Parser (List Super)
-ifaceSuperFor TRequires = do
+ifaceSuperFor TRequires = defer
   advance
   sepBy1 ifaceSuperEntry (expectTok TComma)
-ifaceSuperFor _ = pure []
+ifaceSuperFor _ = deferPure []
 
 ifaceSuperEntry : Parser Super
-ifaceSuperEntry = do
+ifaceSuperEntry = defer
   name <- upperNameP
   params <- many lowerNameP
-  pure (superUnresolved name params)
+  deferPure (superUnresolved name params)
 
 -- `where INDENT members DEDENT` body, or a marker interface (optional where).
 -- `kw` is the `interface` keyword's token index, captured before it was
 -- consumed, so the missing-`where` diagnostic can be re-attributed to the
 -- header line (#1160) instead of to whatever token the parser tripped over.
 ifaceBody : Int -> Parser (List IfaceMethod)
-ifaceBody kw = do
+ifaceBody kw = defer
   t <- peekP
   ifaceBodyFor kw t
 
 ifaceBodyFor : Int -> Token -> Parser (List IfaceMethod)
-ifaceBodyFor _ TWhere = do
+ifaceBodyFor _ TWhere = defer
   advance
   t <- peekP
   ifaceWhereBody t
 ifaceBodyFor kw t
-  | endsDecl t = do
+  | endsDecl t = defer
     skipNewlines
-    pure []
+    deferPure []
   | otherwise = fatalAtP missingWhereIfaceMsg kw
 
 ifaceWhereBody : Token -> Parser (List IfaceMethod)
-ifaceWhereBody TIndent = do
+ifaceWhereBody TIndent = defer
   advance
   ms <- ifaceMembers
   expectTok TDedent
   skipNewlines
-  pure ms
+  deferPure ms
 ifaceWhereBody t
-  | endsDecl t = do
+  | endsDecl t = defer
     skipNewlines
-    pure []
+    deferPure []
   | otherwise = fatalP sameLineWhereIfaceMsg
 
 -- A token that legitimately ENDS a declaration where a `where` block could
@@ -2905,19 +2958,19 @@ sameLineWhereImplMsg : String
 sameLineWhereImplMsg = "a `where` block must start on the next line — move this impl method onto its own line, indented below the `impl` header (`where` heralds a block only when it ends a line)"
 
 ifaceMembers : Parser (List IfaceMethod)
-ifaceMembers = do
+ifaceMembers = defer
   skipNewlines
   ifaceMembersLoop
 
 ifaceMembersLoop : Parser (List IfaceMethod)
-ifaceMembersLoop = orElse ifaceMembersCons (pure [])
+ifaceMembersLoop = orElse ifaceMembersCons (deferPure [])
 
 ifaceMembersCons : Parser (List IfaceMethod)
-ifaceMembersCons = do
+ifaceMembersCons = defer
   m <- ifaceMember
   skipNewlines
   rest <- ifaceMembersLoop
-  pure (m::rest)
+  deferPure (m::rest)
 
 -- a method signature `name : ty`, or a default method `name pats = body`
 -- #1499 / D2: the [s, q) token span brackets the method NAME alone, so a
@@ -2927,7 +2980,7 @@ ifaceMembersCons = do
 -- entry points (no `setLocState`) it degrades to a zero span, exactly as every
 -- `ELoc` on that path does.
 ifaceMember : Parser IfaceMethod
-ifaceMember = do
+ifaceMember = defer
   s <- getPos
   name <- identNameP
   q <- getPos
@@ -2936,19 +2989,23 @@ ifaceMember = do
   ifaceMemberRest name (Some (locOfSpan s q)) pats t
 
 ifaceMemberRest : String -> Option Loc -> List Pat -> Token -> Parser IfaceMethod
-ifaceMemberRest name nameLoc _ TColon = do
+ifaceMemberRest name nameLoc _ TColon = defer
   advance
   ty <- parseTy
-  pure (IfaceMethod name ty None nameLoc)
-ifaceMemberRest name nameLoc pats TEqual = do
+  deferPure (IfaceMethod name ty None nameLoc)
+ifaceMemberRest name nameLoc pats TEqual = defer
   advance
   body <- parseBody
-  pure (IfaceMethod name (TyVar "_") (Some (MethodDefault pats body)) nameLoc)
+  deferPure (IfaceMethod
+    name
+    (TyVar "_")
+    (Some (MethodDefault pats body))
+    nameLoc)
 ifaceMemberRest _ _ _ _ = failP "expected : or = in interface member"
 
 -- ── impl declarations ────────────────────────────────────────────────────
 parseImpl : Bool -> Parser Decl
-parseImpl pub = do
+parseImpl pub = defer
   kw <- getPos
   expectTok TImpl
   t <- peekP
@@ -2957,18 +3014,18 @@ parseImpl pub = do
 -- `impl Iface tyargs…`.  (Named impls — `impl name of Iface …` — have been
 -- removed; a lowercase head or a stray `of` now yields a clean parse error.)
 implHead : Bool -> Int -> Token -> Parser Decl
-implHead pub kw (TUpper u) = do
+implHead pub kw (TUpper u) = defer
   advance
   implRest pub kw u
 implHead _ _ (TIdent _) = failP namedImplRemovedMsg
 implHead _ _ _ = failP "expected impl head"
 
 implRest : Bool -> Int -> String -> Parser Decl
-implRest pub kw iface = do
+implRest pub kw iface = defer
   tyargs <- many parseTyAtom
   reqs <- implRequires
   methods <- implBody kw
-  pure (dImplUnresolved pub iface tyargs reqs methods)
+  deferPure (dImplUnresolved pub iface tyargs reqs methods)
 
 namedImplRemovedMsg : String
 namedImplRemovedMsg = "named impls (`impl name of Iface`) have been removed — use a plain `impl Iface` (wrap the type in a newtype for a second instance)"
@@ -2978,67 +3035,67 @@ defaultImplRemovedMsg = "`default impl` has been removed — use a plain `impl` 
 
 -- optional `requires Iface tyargs…, …`
 implRequires : Parser (List Require)
-implRequires = do
+implRequires = defer
   t <- peekP
   implRequiresFor t
 
 implRequiresFor : Token -> Parser (List Require)
-implRequiresFor TRequires = do
+implRequiresFor TRequires = defer
   advance
   sepBy1 implRequireEntry (expectTok TComma)
-implRequiresFor _ = pure []
+implRequiresFor _ = deferPure []
 
 implRequireEntry : Parser Require
-implRequireEntry = do
+implRequireEntry = defer
   iface <- upperNameP
   tys <- many parseTyAtom
-  pure (requireUnresolved iface tys)
+  deferPure (requireUnresolved iface tys)
 
 -- `kw` is the `impl` keyword's token index — see `ifaceBody` for why the
 -- missing-`where` diagnostic has to be re-attributed to it (#1160).
 implBody : Int -> Parser (List ImplMethod)
-implBody kw = do
+implBody kw = defer
   t <- peekP
   implBodyFor kw t
 
 implBodyFor : Int -> Token -> Parser (List ImplMethod)
-implBodyFor _ TWhere = do
+implBodyFor _ TWhere = defer
   advance
   t <- peekP
   implWhereBody t
 implBodyFor kw t
-  | endsDecl t = do
+  | endsDecl t = defer
     skipNewlines
-    pure []
+    deferPure []
   | otherwise = fatalAtP missingWhereImplMsg kw
 
 implWhereBody : Token -> Parser (List ImplMethod)
-implWhereBody TIndent = do
+implWhereBody TIndent = defer
   advance
   ms <- implMethods
   expectTok TDedent
   skipNewlines
-  pure ms
+  deferPure ms
 implWhereBody t
-  | endsDecl t = do
+  | endsDecl t = defer
     skipNewlines
-    pure []
+    deferPure []
   | otherwise = fatalP sameLineWhereImplMsg
 
 implMethods : Parser (List ImplMethod)
-implMethods = do
+implMethods = defer
   skipNewlines
   implMethodsLoop
 
 implMethodsLoop : Parser (List ImplMethod)
-implMethodsLoop = orElse implMethodsCons (pure [])
+implMethodsLoop = orElse implMethodsCons (deferPure [])
 
 implMethodsCons : Parser (List ImplMethod)
-implMethodsCons = do
+implMethodsCons = defer
   m <- implMethod
   skipNewlines
   rest <- implMethodsLoop
-  pure (m::rest)
+  deferPure (m::rest)
 
 -- impl methods are `name pats = body` (multi-clause = repeated entries), and,
 -- exactly like a top-level `parseFunOrSig` clause, may instead be a guarded
@@ -3048,61 +3105,61 @@ implMethodsCons = do
 -- downstream (`implDictPassMethods`/typecheck's per-name clause grouping),
 -- so mirroring `parseFunOrSig`'s TIndent/TPipe arms is enough.
 implMethod : Parser ImplMethod
-implMethod = do
+implMethod = defer
   name <- identNameP
   pats <- many parseParamPat
   t <- peekP
   implMethodRest name pats t
 
 implMethodRest : String -> List Pat -> Token -> Parser ImplMethod
-implMethodRest name pats TEqual = do
+implMethodRest name pats TEqual = defer
   advance
   body <- parseBody
-  pure (ImplMethod name pats body)
-implMethodRest name pats TIndent = do
+  deferPure (ImplMethod name pats body)
+implMethodRest name pats TIndent = defer
   advance
   arms <- parseGuardArms
   body <- guardArmsWhereOpt arms
   expectTok TDedent
-  pure (ImplMethod name pats body)
-implMethodRest name pats TPipe = do
+  deferPure (ImplMethod name pats body)
+implMethodRest name pats TPipe = defer
   arm <- parseGuardArm
-  pure (ImplMethod name pats (EGuards [arm]))
+  deferPure (ImplMethod name pats (EGuards [arm]))
 implMethodRest _ _ _ = failP "expected = or | in impl method"
 
 -- a Haskell-style `where` scoping over ALL guard arms (it sits at the guards'
 -- indentation, inside their INDENT block): `guards WHERE INDENT bindings DEDENT
 -- newlines` → ELetGroup wrapping the EGuards.
 guardArmsWhereOpt : List GuardArm -> Parser Expr
-guardArmsWhereOpt arms = do
+guardArmsWhereOpt arms = defer
   t <- peekP
   guardArmsWhereFor arms t
 
 guardArmsWhereFor : List GuardArm -> Token -> Parser Expr
-guardArmsWhereFor arms TWhere = do
+guardArmsWhereFor arms TWhere = defer
   advance
   expectTok TIndent
   binds <- parseWhereBindings
   expectTok TDedent
   skipNewlines
-  pure (ELetGroup (coalesceClauses binds) (EGuards arms))
-guardArmsWhereFor arms _ = pure (EGuards arms)
+  deferPure (ELetGroup (coalesceClauses binds) (EGuards arms))
+guardArmsWhereFor arms _ = deferPure (EGuards arms)
 
 -- function guards: an INDENT block of `| guard, … = body` arms
 parseGuardArms : Parser (List GuardArm)
-parseGuardArms = do
+parseGuardArms = defer
   skipNewlines
   guardArmsLoop
 
 guardArmsLoop : Parser (List GuardArm)
-guardArmsLoop = orElse guardArmsCons (pure [])
+guardArmsLoop = orElse guardArmsCons (deferPure [])
 
 guardArmsCons : Parser (List GuardArm)
-guardArmsCons = do
+guardArmsCons = defer
   a <- parseGuardArm
   skipNewlines
   rest <- guardArmsLoop
-  pure (a::rest)
+  deferPure (a::rest)
 
 -- The inverse of the match-arm case (#591): an equation (function-clause) guard
 -- uses `|`, but a user with the match-arm `if` habit writes `if cond = body`.
@@ -3111,12 +3168,12 @@ guardArmsCons = do
 -- `if … then …` body isn't mis-blamed as a guard; otherwise fall through to the
 -- ordinary `expectTok TPipe` failure.
 parseGuardArm : Parser GuardArm
-parseGuardArm = do
+parseGuardArm = defer
   t <- peekP
   parseGuardArmFor t
 
 parseGuardArmFor : Token -> Parser GuardArm
-parseGuardArmFor TIf = do
+parseGuardArmFor TIf = defer
   looksGuard <- eqGuardShapeP
   parseGuardArmIf looksGuard
 parseGuardArmFor _ = parseGuardArmBody
@@ -3126,12 +3183,12 @@ parseGuardArmIf True = fatalP eqGuardIfMsg
 parseGuardArmIf False = parseGuardArmBody
 
 parseGuardArmBody : Parser GuardArm
-parseGuardArmBody = do
+parseGuardArmBody = defer
   expectTok TPipe
   guards <- sepBy1 parseGuard (expectTok TComma)
   expectTok TEqual
   body <- parseBody
-  pure (GuardArm guards body)
+  deferPure (GuardArm guards body)
 
 eqGuardIfMsg : String
 eqGuardIfMsg = "an equation guard uses `|`, not `if` — write `| cond = body`"
@@ -3165,27 +3222,27 @@ isLineEndTok TEof = True
 isLineEndTok _ = False
 
 eqGuardShapeP : Parser Bool
-eqGuardShapeP = Parser (toks pos => POk (eqGuardShapeFrom toks pos 0) pos)
+eqGuardShapeP = ParserE (toks pos => POk (eqGuardShapeFrom toks pos 0) pos)
 
 -- A guard qualifier parses at the `expr_or` level (mirrors the reference
 -- `guard_qual`): NOT full `parseExpr`, so a trailing `=>` in a match-arm guard
 -- isn't swallowed as a lambda, and `<-`/`,` stay as the bind/separator tokens.
 parseGuard : Parser Guard
-parseGuard = do
+parseGuard = defer
   e <- parseOr
   t <- peekP
   guardFor e t
 
 guardFor : Expr -> Token -> Parser Guard
-guardFor e TLArrow = do
+guardFor e TLArrow = defer
   advance
   rhs <- parseOr
-  pure (GBind (exprToPat e) rhs)
-guardFor e _ = pure (GBool e)
+  deferPure (GBind (exprToPat e) rhs)
+guardFor e _ = deferPure (GBool e)
 
 -- ── data / record declarations ──────────────────────────────────────────
 lowerNameP : Parser String
-lowerNameP = do
+lowerNameP = defer
   t <- peekP
   lowerNameFor t
 
@@ -3193,20 +3250,92 @@ lowerNameFor : Token -> Parser String
 lowerNameFor (TIdent x) = emit x
 lowerNameFor _ = failP "expected type parameter"
 
+-- ── declared type-parameter kinds (EFFECTS-SEMANTICS §6.1/§6.2) ─────────
+-- `TyParam ::= name | ( name : Kind )`, `Kind ::= Type | Effect | Kind ->
+-- Kind | ( Kind )`, arrow right-associative.  `Type`/`Effect` are ordinary
+-- capitalised identifiers matched only here, in kind position — they are NOT
+-- keywords, so a type or constructor may still be called either of them.
+--
+-- All four parameterised heads (`data`/`newtype`/`type`/`interface`) bind
+-- their parameters through `tyParamsP`, which is exactly the §6.2 table: an
+-- `impl` head names types rather than binding parameters and never reaches
+-- here, so it takes no annotation without any code saying so.
+--
+-- A malformed annotation fails with `failP`, so `many` un-consumes the `(`
+-- and the head's own `expectTok` reports the position.  That is safe because
+-- nothing else in these four heads may follow the parameter list with a `(`.
+tyParamsP : Parser (List (String, Option KindAnn))
+tyParamsP = many tyParamP
+
+tyParamP : Parser (String, Option KindAnn)
+tyParamP = defer
+  t <- peekP
+  tyParamFor t
+
+tyParamFor : Token -> Parser (String, Option KindAnn)
+tyParamFor TLParen = defer
+  advance
+  n <- lowerNameP
+  expectTok TColon
+  k <- kindP
+  expectTok TRParen
+  deferPure (n, Some k)
+tyParamFor t = defer
+  n <- lowerNameFor t
+  deferPure (n, None)
+
+kindP : Parser KindAnn
+kindP = defer
+  a <- kindAtomP
+  t <- peekP
+  kindArrowRest a t
+
+kindArrowRest : KindAnn -> Token -> Parser KindAnn
+kindArrowRest a TArrow = defer
+  advance
+  b <- kindP
+  deferPure (KindArrow a b)
+kindArrowRest a _ = deferPure a
+
+kindAtomP : Parser KindAnn
+kindAtomP = defer
+  t <- peekP
+  kindAtomFor t
+
+kindAtomFor : Token -> Parser KindAnn
+kindAtomFor (TUpper c)
+  | c == "Type" = kindAtomEmit KindType
+  | c == "Effect" = kindAtomEmit KindEffect
+  | otherwise =
+    failP "expected a kind: `Type`, `Effect`, or an arrow between them"
+kindAtomFor TLParen = defer
+  advance
+  k <- kindP
+  expectTok TRParen
+  deferPure k
+kindAtomFor _ =
+  failP "expected a kind: `Type`, `Effect`, or an arrow between them"
+
+kindAtomEmit : KindAnn -> Parser KindAnn
+kindAtomEmit k = defer
+  advance
+  deferPure k
+
 parseData : DataVis -> Parser Decl
-parseData vis = do
+parseData vis = defer
   expectTok TData
   name <- upperNameP
-  params <- many lowerNameP
+  ps <- tyParamsP
   bodyAndDerives <- dataBody name
   let variants = fst bodyAndDerives
   let blockDerives = snd bodyAndDerives
   outerDerives <- derivingClause
   skipNewlines
-  pure (dDataUnresolved
+  deferPure (dDataUnresolved
     vis
     name
-    params
+    (map fst ps)
+    (map snd ps)
     variants
     (combineDerives blockDerives outerDerives))
 -- block form may carry `deriving (…)` INSIDE the INDENT span (own line or
@@ -3223,29 +3352,29 @@ combineDerives block _ = block
 -- variants paired with any deriving names found INSIDE a block body (empty for
 -- the inline form).
 dataBody : String -> Parser (List Variant, List DeriveRef)
-dataBody tyName = do
+dataBody tyName = defer
   t <- peekP
   dataBodyFor tyName t
 
 dataBodyFor : String -> Token -> Parser (List Variant, List DeriveRef)
-dataBodyFor tyName TEqual = do
+dataBodyFor tyName TEqual = defer
   advance
   t <- peekP
   dataAfterEq tyName t
-dataBodyFor tyName TIndent = do
+dataBodyFor tyName TIndent = defer
   advance
   expectTok TEqual
   vs <- dataVariantsN tyName
   derives <- derivingClause
   skipNewlines
   expectTok TDedent
-  pure (vs, derives)
+  deferPure (vs, derives)
 -- `deriving (…)` may sit INSIDE the block (the lexer keeps the indented
 -- deriving line within the INDENT/DEDENT), so consume it before the DEDENT.
 -- derivingClause stops at the RPAREN; skip its trailing NEWLINE so the DEDENT
 -- is the next token.
 
-dataBodyFor _ _ = pure ([], [])
+dataBodyFor _ _ = deferPure ([], [])
 
 -- After a header-line `=` (inline `data Foo = …`) the body is EITHER an inline
 -- variant list on the same line, OR — the new multiline form — a line-final `=`
@@ -3258,7 +3387,7 @@ dataBodyFor _ _ = pure ([], [])
 -- `deriving (…)` inside the block is consumed before the DEDENT, mirroring the
 -- old `TIndent` block form.
 dataAfterEq : String -> Token -> Parser (List Variant, List DeriveRef)
-dataAfterEq tyName TIndent = do
+dataAfterEq tyName TIndent = defer
   advance
   skipNewlines
   _ <- optPipe
@@ -3266,38 +3395,38 @@ dataAfterEq tyName TIndent = do
   derives <- derivingClause
   skipNewlines
   expectTok TDedent
-  pure (vs, derives)
-dataAfterEq tyName _ = do
+  deferPure (vs, derives)
+dataAfterEq tyName _ = defer
   vs <- dataVariantsN tyName
   t <- peekP
   derives <- inlineTrailingDerives t
-  pure (vs, derives)
+  deferPure (vs, derives)
 
 -- A one-line `data X = A | B` may still carry `deriving (…)` on its own,
 -- more-indented, next line — the lexer wraps that as an INDENT/DEDENT span
 -- (mirroring the block form's own-line deriving) even though the header
 -- itself never opened a block.
 inlineTrailingDerives : Token -> Parser (List DeriveRef)
-inlineTrailingDerives TIndent = do
+inlineTrailingDerives TIndent = defer
   advance
   derives <- derivingClause
   skipNewlines
   expectTok TDedent
-  pure derives
-inlineTrailingDerives _ = pure []
+  deferPure derives
+inlineTrailingDerives _ = deferPure []
 
 -- Consume a leading `|` if present (the new multiline form's per-variant pipe
 -- also prefixes the first variant); a no-op otherwise.
 optPipe : Parser Unit
-optPipe = do
+optPipe = defer
   t <- peekP
   optPipeFor t
 
 optPipeFor : Token -> Parser Unit
-optPipeFor TPipe = do
+optPipeFor TPipe = defer
   advance
-  pure ()
-optPipeFor _ = pure ()
+  deferPure ()
+optPipeFor _ = deferPure ()
 
 -- Variant list with the tycon name in scope, so the anonymous short form
 -- `data X = { … }` (a single brace-group, no ctor name, no `|`) can synthesize
@@ -3306,102 +3435,102 @@ optPipeFor _ = pure ()
 -- shape falls through to the normal `dataVariants` path.  A leading `{` is the
 -- unambiguous trigger — no legal named/positional variant starts with `{`.
 dataVariantsN : String -> Parser (List Variant)
-dataVariantsN tyName = do
+dataVariantsN tyName = defer
   t <- peekP
   dataVariantsNFor tyName t
 
 dataVariantsNFor : String -> Token -> Parser (List Variant)
-dataVariantsNFor tyName TLBrace = do
+dataVariantsNFor tyName TLBrace = defer
   fields <- parseNamedFields
-  pure [Variant tyName (ConNamed fields True)]
+  deferPure [Variant tyName (ConNamed fields True)]
 dataVariantsNFor _ _ = dataVariants
 
 dataVariants : Parser (List Variant)
-dataVariants = do
+dataVariants = defer
   v <- parseVariant
   rest <- variantsRest
-  pure (v::rest)
+  deferPure (v::rest)
 
 variantsRest : Parser (List Variant)
-variantsRest = do
+variantsRest = defer
   skipNewlines
   t <- peekP
   variantsRestFor t
 
 variantsRestFor : Token -> Parser (List Variant)
-variantsRestFor TPipe = do
+variantsRestFor TPipe = defer
   advance
   v <- parseVariant
   rest <- variantsRest
-  pure (v::rest)
-variantsRestFor _ = pure []
+  deferPure (v::rest)
+variantsRestFor _ = deferPure []
 
 parseVariant : Parser Variant
-parseVariant = do
+parseVariant = defer
   name <- upperNameP
   payload <- parsePayload
-  pure (Variant name payload)
+  deferPure (Variant name payload)
 
 parsePayload : Parser ConPayload
-parsePayload = do
+parsePayload = defer
   t <- peekP
   payloadFor t
 
 payloadFor : Token -> Parser ConPayload
 payloadFor TLBrace = parseNamedPayload
-payloadFor _ = do
+payloadFor _ = defer
   tys <- many parseTyAtom
-  pure (ConPos tys)
+  deferPure (ConPos tys)
 
 parseNamedPayload : Parser ConPayload
-parseNamedPayload = do
+parseNamedPayload = defer
   fields <- parseNamedFields
-  pure (ConNamed fields False)
+  deferPure (ConNamed fields False)
 
 -- The brace-group of a named-field payload: `{ f0 : T0, f1 : T1, … }`.  Shared
 -- by the explicit-name form (`parseNamedPayload`) and the anonymous short form
 -- (`data X = { … }`, `dataAnonVariant`).
 parseNamedFields : Parser (List Field)
-parseNamedFields = do
+parseNamedFields = defer
   expectTok TLBrace
   fields <- sepBy1 parseField (expectTok TComma)
   optTrailingComma
   expectTok TRBrace
-  pure fields
+  deferPure fields
 
 parseField : Parser Field
-parseField = do
+parseField = defer
   name <- identNameP
   expectTok TColon
   t <- parseTy
-  pure (Field name t)
+  deferPure (Field name t)
 
 -- `deriving (Name, …)`, after the variant/field block; optional
 derivingClause : Parser (List DeriveRef)
-derivingClause = do
+derivingClause = defer
   skipNewlines
   t <- peekP
   derivingFor t
 
 derivingFor : Token -> Parser (List DeriveRef)
-derivingFor TDeriving = do
+derivingFor TDeriving = defer
   advance
   expectTok TLParen
   names <- sepBy1 derivedNameP (expectTok TComma)
   expectTok TRParen
-  pure names
-derivingFor _ = pure []
+  deferPure names
+derivingFor _ = deferPure []
 
 -- One name in a `deriving (…)` list, wrapped with its own token span so a
 -- "cannot derive" diagnostic underlines the NAME.  Real only on the
 -- `parseLocated` path (`parse` leaves the loc refs unset → placeholder), the
 -- same convention `TyCon`'s `Option Loc` already follows.
 derivedNameP : Parser DeriveRef
-derivedNameP = do
+derivedNameP = defer
   s <- getPos
   n <- upperNameP
   q <- getPos
-  pure (DeriveRef n (Some (locOfSpan s q)))
+  deferPure (DeriveRef n (Some (locOfSpan s q)))
 
 -- a decl body is an inline expr, or an INDENT block of statements: a single
 -- expression statement unwraps to that expr; anything else becomes an EBlock
@@ -3411,22 +3540,22 @@ parseBody = orElse indentedBody parseBodyExpr
 -- an inline body expr, optionally followed by a Haskell-style `where` block:
 -- `<expr> INDENT where INDENT bindings DEDENT NEWLINE DEDENT` → ELetGroup
 parseBodyExpr : Parser Expr
-parseBodyExpr = do
+parseBodyExpr = defer
   e <- parseExpr
-  orElse (whereEol e) (orElse (whereTail e) (pure e))
+  orElse (whereEol e) (orElse (whereTail e) (deferPure e))
 
 -- end-of-line `where` (the `where` sits on the body line):
 -- `<expr> WHERE INDENT bindings DEDENT` → ELetGroup
 whereEol : Expr -> Parser Expr
-whereEol e = do
+whereEol e = defer
   expectTok TWhere
   expectTok TIndent
   binds <- parseWhereBindings
   expectTok TDedent
-  pure (ELetGroup (coalesceClauses binds) e)
+  deferPure (ELetGroup (coalesceClauses binds) e)
 
 whereTail : Expr -> Parser Expr
-whereTail e = do
+whereTail e = defer
   expectTok TIndent
   expectTok TWhere
   expectTok TIndent
@@ -3434,25 +3563,25 @@ whereTail e = do
   expectTok TDedent
   skipNewlines
   expectTok TDedent
-  pure (ELetGroup (coalesceClauses binds) e)
+  deferPure (ELetGroup (coalesceClauses binds) e)
 
 parseWhereBindings : Parser (List (String, List Pat, Expr))
-parseWhereBindings = do
+parseWhereBindings = defer
   skipNewlines
   whereBindingsLoop
 
 whereBindingsLoop : Parser (List (String, List Pat, Expr))
-whereBindingsLoop = orElse whereBindingsCons (pure [])
+whereBindingsLoop = orElse whereBindingsCons (deferPure [])
 
 whereBindingsCons : Parser (List (String, List Pat, Expr))
-whereBindingsCons = do
+whereBindingsCons = defer
   b <- parseWhereBinding
   skipNewlines
   rest <- whereBindingsLoop
-  pure (b::rest)
+  deferPure (b::rest)
 
 parseWhereBinding : Parser (String, List Pat, Expr)
-parseWhereBinding = do
+parseWhereBinding = defer
   name <- identNameP
   pats <- many parseParamPat
   t <- peekP
@@ -3460,24 +3589,24 @@ parseWhereBinding = do
 
 whereBindRest : String -> List Pat -> Token -> Parser (String, List Pat, Expr)
 -- annotated binding `go : ty = body` (no params only, mirrors let-in / block-let)
-whereBindRest name [] TColon = do
+whereBindRest name [] TColon = defer
   advance
   ty <- parseTy
   expectTok TEqual
   body <- parseExpr
-  pure (name, [], EAnnot body ty)
-whereBindRest name pats TEqual = do
+  deferPure (name, [], EAnnot body ty)
+whereBindRest name pats TEqual = defer
   advance
   body <- parseExpr
-  pure (name, pats, body)
-whereBindRest name pats TIndent = do
+  deferPure (name, pats, body)
+whereBindRest name pats TIndent = defer
   advance
   arms <- parseGuardArms
   expectTok TDedent
-  pure (name, pats, EGuards arms)
-whereBindRest name pats TPipe = do
+  deferPure (name, pats, EGuards arms)
+whereBindRest name pats TPipe = defer
   arm <- parseGuardArm
-  pure (name, pats, EGuards [arm])
+  deferPure (name, pats, EGuards [arm])
 whereBindRest _ _ _ = failP "expected where binding body"
 
 -- group CONSECUTIVE same-name bindings into one LetBind (mirrors the reference
@@ -3511,12 +3640,21 @@ blockOrExpr stmts = EBlock stmts
 
 -- `do <INDENT stmt block DEDENT>` → a monadic do-block
 parseDo : Parser Expr
-parseDo = do
-  expectTok TDo
+parseDo = parseDoBlock TDo False
+
+-- `defer <INDENT stmt block DEDENT>` → a deferred do-block (#824).  Identical
+-- grammar to `do`; only the EDo flag differs, which routes desugar to
+-- `deferThen`/`deferPure` instead of `andThen`/`pure`.
+parseDefer : Parser Expr
+parseDefer = parseDoBlock TDefer True
+
+parseDoBlock : Token -> Bool -> Parser Expr
+parseDoBlock herald deferred = defer
+  expectTok herald
   expectTok TIndent
   stmts <- parseStmts
   expectTok TDedent
-  pure (EDo stmts)
+  deferPure (EDo deferred stmts)
 
 -- statements, NEWLINE-separated, until the block's DEDENT
 -- A statement-let / where RHS, or a lambda body (`lamTailRaw`): a bare-INDENT
@@ -3531,37 +3669,37 @@ parseRhsExpr : Parser Expr
 parseRhsExpr = orElse parseBracketBlock parseExpr
 
 parseStmts : Parser (List DoStmt)
-parseStmts = do
+parseStmts = defer
   skipNewlines
   stmtsLoop
 
 stmtsLoop : Parser (List DoStmt)
-stmtsLoop = orElse stmtsCons (pure [])
+stmtsLoop = orElse stmtsCons (deferPure [])
 
 stmtsCons : Parser (List DoStmt)
-stmtsCons = do
+stmtsCons = defer
   ss <- parseStmt
   skipNewlines
   rest <- stmtsLoop
-  pure (ss ++ rest)
+  deferPure (ss ++ rest)
 
 -- one surface statement → one OR MORE DoStmts (an annotated do-bind
 -- `x : ty <- e` expands to two: the bind + a shadowing annotated let)
 parseStmt : Parser (List DoStmt)
-parseStmt = do
+parseStmt = defer
   t <- peekP
   stmtFor t
 
 stmtFor : Token -> Parser (List DoStmt)
-stmtFor TLet = do
+stmtFor TLet = defer
   s <- parseLetStmt
-  pure [s]
+  deferPure [s]
 stmtFor _ = parseExprStmt
 
 -- a `let` statement: `let mut p = e`, function-let `let f a… = e`, plain
 -- `let p = e`, let-in (→ DoExpr), or let-else `let p = e else alt`
 parseLetStmt : Parser DoStmt
-parseLetStmt = do
+parseLetStmt = defer
   expectTok TLet
   t <- peekP
   letKind t
@@ -3581,7 +3719,7 @@ letKind _ = letPat
 -- accepted, mirroring top-level `let rec`/expr-level `letRecExpr`. Reuses
 -- `letFunTailFor` rather than duplicating its `in`/no-`in` tail dispatch.
 letRecStmt : Parser DoStmt
-letRecStmt = do
+letRecStmt = defer
   expectTok TRec
   s <- getPos
   name <- identNameP
@@ -3595,7 +3733,7 @@ letRecStmt = do
 -- IDENT-led: function-let `let f a… = e` (params present), annotated
 -- `let x : ty = e`, or plain `let x = e [in/else]`
 letIdent : String -> Parser DoStmt
-letIdent name = do
+letIdent name = defer
   s <- getPos
   advance
   pats <- many parseParamPat
@@ -3604,37 +3742,37 @@ letIdent name = do
 
 -- annotation (`: ty`) only on the no-params case, mirroring the let-in path
 letIdentBody : String -> Loc -> List Pat -> Token -> Parser DoStmt
-letIdentBody name nameLoc [] TColon = do
+letIdentBody name nameLoc [] TColon = defer
   advance
   ty <- parseTy
   expectTok TEqual
   e1 <- parseRhsExpr
   letIdentRest name nameLoc [] (EAnnot e1 ty)
-letIdentBody name nameLoc pats _ = do
+letIdentBody name nameLoc pats _ = defer
   expectTok TEqual
   e1 <- parseRhsExpr
   letIdentRest name nameLoc pats e1
 
 letIdentRest : String -> Loc -> List Pat -> Expr -> Parser DoStmt
-letIdentRest name nameLoc [] e1 = do
+letIdentRest name nameLoc [] e1 = defer
   t <- peekP
   letTailFor (PVar name nameLoc) e1 t
-letIdentRest name nameLoc pats e1 = do
+letIdentRest name nameLoc pats e1 = defer
   t <- peekP
   letFunTailFor name nameLoc pats e1 t
 
 -- `let f params = e1 in e2` → DoExpr (ELet); without `in` → DoLet (stmt)
 letFunTailFor : String -> Loc -> List Pat -> Expr -> Token -> Parser DoStmt
-letFunTailFor name nameLoc pats e1 TIn = do
+letFunTailFor name nameLoc pats e1 TIn = defer
   advance
   e2 <- parseExpr
-  pure (DoExpr (ELet False True (PVar name nameLoc) (curryLam pats e1) e2))
+  deferPure (DoExpr (ELet False True (PVar name nameLoc) (curryLam pats e1) e2))
 letFunTailFor name nameLoc pats e1 _ =
-  pure (DoLet False True (PVar name nameLoc) (curryLam pats e1))
+  deferPure (DoLet False True (PVar name nameLoc) (curryLam pats e1))
 
 -- non-IDENT-led pattern: `let (a, b) = e`, `let Some v = e`, …
 letPat : Parser DoStmt
-letPat = do
+letPat = defer
   pat <- parsePat
   expectTok TEqual
   e1 <- parseRhsExpr
@@ -3642,11 +3780,11 @@ letPat = do
   letTailFor pat e1 t
 
 letTailFor : Pat -> Expr -> Token -> Parser DoStmt
-letTailFor pat e1 TIn = do
+letTailFor pat e1 TIn = defer
   advance
   e2 <- parseExpr
-  pure (DoExpr (ELet False False pat e1 e2))
-letTailFor pat e1 _ = pure (DoLet False False pat e1)
+  deferPure (DoExpr (ELet False False pat e1 e2))
+letTailFor pat e1 _ = deferPure (DoLet False False pat e1)
 
 -- mirror the reference `curry_lam`: one single-arg ELam per param
 curryLam : List Pat -> Expr -> Expr
@@ -3656,22 +3794,22 @@ curryLam (p::ps) body = ELam [p] (curryLam ps body)
 -- `pat <- e` is a DoBind (LHS parsed as an expr, reinterpreted); `lhs = e` is
 -- an assignment (DoAssign / DoFieldAssign); else a bare DoExpr
 parseExprStmt : Parser (List DoStmt)
-parseExprStmt = do
+parseExprStmt = defer
   e <- parseExpr
   t <- peekP
   exprStmtFor e t
 
 exprStmtFor : Expr -> Token -> Parser (List DoStmt)
-exprStmtFor e TLArrow = do
+exprStmtFor e TLArrow = defer
   advance
   rhs <- parseExpr
-  pure (bindStmts e rhs)
-exprStmtFor e TEqual = do
+  deferPure (bindStmts e rhs)
+exprStmtFor e TEqual = defer
   advance
   rhs <- parseExpr
   s <- assignFromLhs e rhs
-  pure [s]
-exprStmtFor e _ = pure [DoExpr e]
+  deferPure [s]
+exprStmtFor e _ = deferPure [DoExpr e]
 
 -- `pat <- e` → one DoBind; an annotated var LHS `x : ty <- e` → the bind PLUS a
 -- shadowing `let x = (x : ty)` so x is bound AND its declared type is enforced
@@ -3692,8 +3830,8 @@ bindAnnot inner ty rhs = match stripLoc inner
 -- a `lhs = rhs` statement: bare var → DoAssign, field path → DoFieldAssign
 assignFromLhs : Expr -> Expr -> Parser DoStmt
 assignFromLhs lhs rhs = match flattenFieldPath lhs
-  Some (x, []) => pure (DoAssign x rhs)
-  Some (x, fs) => pure (DoFieldAssign x fs rhs)
+  Some (x, []) => deferPure (DoAssign x rhs)
+  Some (x, fs) => deferPure (DoFieldAssign x fs rhs)
   None => failP "invalid assignment target in do-block"
 
 -- `a` → Some (a, []); `a.b.c` → Some (a, [b, c]); anything else → None.
@@ -3712,7 +3850,7 @@ fieldPathExtend None _ = None
 -- skip layout noise (NEWLINE/INDENT/DEDENT) between top-level decls; recurse
 -- through a do-continuation (see skipNewlines) to avoid a recursive-value cycle
 skipNoise : Parser Unit
-skipNoise = do
+skipNoise = defer
   t <- peekP
   skipNoiseFor t
 
@@ -3720,21 +3858,21 @@ skipNoiseFor : Token -> Parser Unit
 skipNoiseFor TNewline = afterNoise
 skipNoiseFor TIndent = afterNoise
 skipNoiseFor TDedent = afterNoise
-skipNoiseFor _ = pure ()
+skipNoiseFor _ = deferPure ()
 
 afterNoise : Parser Unit
-afterNoise = do
+afterNoise = defer
   advance
   skipNoise
 
 declThenNoise : Parser Decl
-declThenNoise = do
+declThenNoise = defer
   d <- parseDecl
   skipNoise
-  pure d
+  deferPure d
 
 parseProgram : Parser (List Decl)
-parseProgram = do
+parseProgram = defer
   skipNoise
   many declThenNoise
 
@@ -3821,22 +3959,22 @@ declPosChildLocs (DeclPos _ _ _ cs) = cs
 
 -- Parse one decl, capturing the (startTokIdx, endTokIdx) span around it.
 declWithSpan : Parser (Decl, Int, Int)
-declWithSpan = do
+declWithSpan = defer
   s <- getPos
   d <- parseDecl
   e <- getPos
-  pure (d, s, e)
+  deferPure (d, s, e)
 
 -- Program parse that records each decl's token span, mirroring parseProgram's
 -- skipNoise + many declThenNoise but threading spans.
 spanDeclThenNoise : Parser (Decl, Int, Int)
-spanDeclThenNoise = do
+spanDeclThenNoise = defer
   ds <- declWithSpan
   skipNoise
-  pure ds
+  deferPure ds
 
 programWithSpans : Parser (List (Decl, Int, Int))
-programWithSpans = do
+programWithSpans = defer
   skipNoise
   many spanDeclThenNoise
 
@@ -4388,7 +4526,7 @@ declBlockRhs _ = False
 bodyIsBlock : Expr -> Bool
 bodyIsBlock (ELoc _ e) = bodyIsBlock e
 bodyIsBlock (EBlock _) = True
-bodyIsBlock (EDo _) = True
+bodyIsBlock (EDo _ _) = True
 bodyIsBlock _ = False
 
 -- Index just past the first INDENT in [i, e) (the block opener); `e` if none.
@@ -4738,7 +4876,7 @@ firstBangEqIdx toks i
 -- with no remaining valid use, so its presence is always the removed `let mut`.
 -- A pre-grammar token scan surfaces a clean, located error (pointing at `mut`)
 -- instead of the recursive-descent's swallowed-then-"expected dedent" fallback
--- (`stmtsLoop`'s `orElse … (pure [])` discards a failed statement's own error).
+-- (`stmtsLoop`'s `orElse … (deferPure [])` discards a failed statement's own error).
 firstMutIdx : Array Token -> Int -> Int
 firstMutIdx toks i
   | i >= arrayLength toks = 0 - 1

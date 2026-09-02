@@ -98,7 +98,7 @@ mapKids f (ERangeArray lo hi incl) =
 mapKids f (ESlice e0 lo hi incl r) =
   ESlice (mapExpr f e0) (mapExpr f lo) (mapExpr f hi) incl r
 mapKids f (EBlock stmts) = EBlock (map (mapDoStmt f) stmts)
-mapKids f (EDo stmts) = EDo (map (mapDoStmt f) stmts)
+mapKids f (EDo d stmts) = EDo d (map (mapDoStmt f) stmts)
 mapKids f (EAnnot e0 t) = EAnnot (mapExpr f e0) t
 mapKids f (EStringInterp parts) = EStringInterp (map (mapInterp f) parts)
 mapKids f (EGuards arms) = EGuards (map (mapGuardArm f) arms)
@@ -290,9 +290,20 @@ concatLeft acc (e::rest) = concatLeft (binOp "++" acc e) rest
 -- EBlock survives (left for eval).
 -- check_do_wellformed (which rejects DoAssign/DoFieldAssign/empty in a do-block)
 -- is validation-only and skipped — those never appear in a well-formed EDo.
+-- EDo's Bool selects the method pair: `do` lowers to `andThen`/`pure`, `defer`
+-- to `deferThen`/`deferPure` (#824).  Nothing else about the lowering differs.
 rewriteDo : Expr -> Expr
-rewriteDo (EDo stmts) = wrapDoOrigin stmts (lowerDo stmts)
+rewriteDo (EDo deferred stmts) = wrapDoOrigin stmts (lowerDo deferred stmts)
 rewriteDo e = e
+
+-- the bind and return-position method names for a do- vs defer-block
+bindMethodName : Bool -> String
+bindMethodName True = "deferThen"
+bindMethodName False = "andThen"
+
+pureMethodName : Bool -> String
+pureMethodName True = "deferPure"
+pureMethodName False = "pure"
 
 -- Phase 150: wrap the lowered chain in a transparent EDoOrigin carrying the
 -- do-block's loc (the first statement's position) so a monad-constraint failure
@@ -323,14 +334,15 @@ exprLoc (ELoc l _) = Some l
 exprLoc (EApp f _) = exprLoc f
 exprLoc _ = None
 
-lowerDo : List DoStmt -> Expr
-lowerDo [DoExpr e] = e
-lowerDo [DoBind pat e] =
-  callAndThen e (doCont pat (EApp (EVar "pure") (ELit LUnit)))
-lowerDo ((DoExpr e)::rest) = callAndThen e (ELam [PWild] (lowerDo rest))
-lowerDo ((DoBind pat e)::rest) = callAndThen e (doCont pat (lowerDo rest))
-lowerDo ((DoLet _ isFun pat e)::rest) = ELet False isFun pat e (lowerDo rest)
-lowerDo _ = fallthrough
+lowerDo : Bool -> List DoStmt -> Expr
+lowerDo _ [DoExpr e] = e
+lowerDo d [DoBind pat e] =
+  callAndThen d e (doCont pat (EApp (EVar (pureMethodName d)) (ELit LUnit)))
+lowerDo d ((DoExpr e)::rest) = callAndThen d e (ELam [PWild] (lowerDo d rest))
+lowerDo d ((DoBind pat e)::rest) = callAndThen d e (doCont pat (lowerDo d rest))
+lowerDo d ((DoLet _ isFun pat e)::rest) =
+  ELet False isFun pat e (lowerDo d rest)
+lowerDo _ _ = fallthrough
 
 -- #894 review finding 1: `x <- b` / a bare statement line in `do` synthesizes
 -- an `andThen` call (below), and typecheck's `inferApp` needs to tell THIS
@@ -346,10 +358,10 @@ lowerDo _ = fallthrough
 -- Falls back to a plain (untagged) `andThen` callee when the scrutinee carries
 -- no `Loc` (rare — `exprLoc` bottoms out); `inferApp` then falls back to the
 -- general container/List/Array message, which is safe, just less precise.
-callAndThen : Expr -> Expr -> Expr
-callAndThen e cont = match exprLoc e
-  Some l => EApp (EApp (EDoOrigin l (EVar "andThen")) e) cont
-  None => callBin "andThen" e cont
+callAndThen : Bool -> Expr -> Expr -> Expr
+callAndThen d e cont = match exprLoc e
+  Some l => EApp (EApp (EDoOrigin l (EVar (bindMethodName d))) e) cont
+  None => callBin (bindMethodName d) e cont
 
 -- bind continuation: a bare lambda for an irrefutable pattern, else a 1-arg
 -- lambda + 2-arm match whose wildcard arm fails (do_bind_fail = fallthrough)

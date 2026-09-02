@@ -110,7 +110,7 @@ import bits64.{
 -- type `v` (kind *), not over the row — data-decl kind inference is
 -- non-transitive (a param used only as another type's row argument is inferred
 -- KType and mis-elaborates), so wrapper types thread `Value e` whole.
-public export data Value e =
+public export data Value (e : Effect) =
   | VInt Int
   | VFloat Float
   | VString String
@@ -742,9 +742,7 @@ tyMentions (TyConstrained _ t) params = tyMentions t params
 -- untyped-eval vs typed-core-IR pair — same precedent as typecheck.mdk's
 -- and doc.mdk's ppEffAtomTy).
 -- lint-disable-next-line rule-duplicate-body
-tyMentions (TyRow _ tail _) params = match tail
-  Some v => contains v params
-  None => False
+tyMentions (TyRow _ tail _) params = anyList (v => contains v params) tail
 
 -- ── environment ───────────────────────────────────────────────────────────
 export
