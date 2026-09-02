@@ -4433,6 +4433,12 @@ pExecutablePath _ = VString (executablePath ())
 pBuildFingerprint : Value e -> <Env | e> Value e
 pBuildFingerprint _ = VString (buildFingerprint ())
 
+pBuildCommit : Value e -> <Env | e> Value e
+pBuildCommit _ = VString (buildCommit ())
+
+pBuildDate : Value e -> <Env | e> Value e
+pBuildDate _ = VString (buildDate ())
+
 -- ── Stdin ─────────────────────────────────────────────────────────────────
 pReadLine : Value e -> <Stdin | e> Value e
 pReadLine _ = VString (readLine ())
@@ -4483,6 +4489,8 @@ ioExternBindings _ = [
   ("getEnv", prim1 pGetEnv),
   ("executablePath", prim1M pExecutablePath),
   ("buildFingerprint", prim1M pBuildFingerprint),
+  ("buildCommit", prim1M pBuildCommit),
+  ("buildDate", prim1M pBuildDate),
   -- Stdin
   ("readLine", prim1M pReadLine),
   ("readLineOpt", prim1M pReadLineOpt),

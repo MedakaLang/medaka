@@ -271,8 +271,8 @@ import tools.check_policy.{
   ManifestArgs(..),
 }
 
--- FLAG for user confirmation: exact version string/format not yet confirmed —
--- using "0.1.0-preview" (the 0.1.0 public-preview target named in AGENTS.md)
+-- FLAG for user confirmation: exact version NUMBER not yet confirmed — using
+-- "0.1.0-preview" (the 0.1.0 public-preview target named in AGENTS.md)
 -- pending sign-off. No existing version constant was found elsewhere in
 -- compiler/ (lsp.mdk hardcodes a literal "0.1.0" for its own protocol reply;
 -- new_cmd.mdk hardcodes a literal "0.1.0" into scaffolded medaka.toml — neither
@@ -280,8 +280,31 @@ import tools.check_policy.{
 medakaVersion : String
 medakaVersion = "0.1.0-preview"
 
+-- Full version string: version + commit + build date, from the ONE stamping
+-- seam (issue #74 W8) — test/build_native_medaka.sh bakes commit/build-date
+-- alongside the existing MEDAKA_SRC_FP stamp, surfaced via the `buildCommit`/
+-- `buildDate` externs (same #ifdef/empty-on-absent contract as
+-- `buildFingerprint`). Degrades to just the bare version when neither is
+-- baked (a dev/interpreted run, or a shipped binary with no provenance).
+-- `mcpServerVersion` in compiler/tools/mcp.mdk CONSUMES this value (threaded
+-- down as a plain String — mcp.mdk cannot import medaka_cli, see
+-- `sourceStalenessVerdict`'s comment below) rather than restating its own
+-- literal.
+medakaVersionString : Unit -> <IO> String
+medakaVersionString _ =
+  let commit = buildCommit ()
+  let date = buildDate ()
+  if commit == "" && date == "" then
+    "medaka " ++ medakaVersion
+  else if commit == "" then
+    "medaka \{medakaVersion} (built \{date})"
+  else if date == "" then
+    "medaka \{medakaVersion} (\{commit})"
+  else
+    "medaka \{medakaVersion} (\{commit}, built \{date})"
+
 printVersion : Unit -> <IO> Unit
-printVersion _ = putStrLn ("medaka " ++ medakaVersion)
+printVersion _ = putStrLn (medakaVersionString ())
 
 -- ── staleness guard (issue #89) ─────────────────────────────────────────────
 -- A ./medaka built in tree Y but run against tree X's NEWER compiler sources
@@ -4414,4 +4437,4 @@ runMcpServerFromEnv _ =
       Err msg =>
         let _ = ePutStrLn msg
         exit 1
-      Ok csrc => runMcpServer rsrc csrc stdlibDir sourceStalenessVerdict
+      Ok csrc => runMcpServer rsrc csrc stdlibDir sourceStalenessVerdict (medakaVersionString ())

@@ -1,5 +1,5 @@
 # META
-source_lines=4417
+source_lines=4440
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/medaka_cli.mdk — the native `medaka` CLI dispatcher (Phase C
@@ -275,8 +275,8 @@ import tools.check_policy.{
   ManifestArgs(..),
 }
 
--- FLAG for user confirmation: exact version string/format not yet confirmed —
--- using "0.1.0-preview" (the 0.1.0 public-preview target named in AGENTS.md)
+-- FLAG for user confirmation: exact version NUMBER not yet confirmed — using
+-- "0.1.0-preview" (the 0.1.0 public-preview target named in AGENTS.md)
 -- pending sign-off. No existing version constant was found elsewhere in
 -- compiler/ (lsp.mdk hardcodes a literal "0.1.0" for its own protocol reply;
 -- new_cmd.mdk hardcodes a literal "0.1.0" into scaffolded medaka.toml — neither
@@ -284,8 +284,31 @@ import tools.check_policy.{
 medakaVersion : String
 medakaVersion = "0.1.0-preview"
 
+-- Full version string: version + commit + build date, from the ONE stamping
+-- seam (issue #74 W8) — test/build_native_medaka.sh bakes commit/build-date
+-- alongside the existing MEDAKA_SRC_FP stamp, surfaced via the `buildCommit`/
+-- `buildDate` externs (same #ifdef/empty-on-absent contract as
+-- `buildFingerprint`). Degrades to just the bare version when neither is
+-- baked (a dev/interpreted run, or a shipped binary with no provenance).
+-- `mcpServerVersion` in compiler/tools/mcp.mdk CONSUMES this value (threaded
+-- down as a plain String — mcp.mdk cannot import medaka_cli, see
+-- `sourceStalenessVerdict`'s comment below) rather than restating its own
+-- literal.
+medakaVersionString : Unit -> <IO> String
+medakaVersionString _ =
+  let commit = buildCommit ()
+  let date = buildDate ()
+  if commit == "" && date == "" then
+    "medaka " ++ medakaVersion
+  else if commit == "" then
+    "medaka \{medakaVersion} (built \{date})"
+  else if date == "" then
+    "medaka \{medakaVersion} (\{commit})"
+  else
+    "medaka \{medakaVersion} (\{commit}, built \{date})"
+
 printVersion : Unit -> <IO> Unit
-printVersion _ = putStrLn ("medaka " ++ medakaVersion)
+printVersion _ = putStrLn (medakaVersionString ())
 
 -- ── staleness guard (issue #89) ─────────────────────────────────────────────
 -- A ./medaka built in tree Y but run against tree X's NEWER compiler sources
@@ -4418,7 +4441,7 @@ runMcpServerFromEnv _ =
       Err msg =>
         let _ = ePutStrLn msg
         exit 1
-      Ok csrc => runMcpServer rsrc csrc stdlibDir sourceStalenessVerdict
+      Ok csrc => runMcpServer rsrc csrc stdlibDir sourceStalenessVerdict (medakaVersionString ())
 # DESUGAR
 (DUse false (UseGroup ("tools" "check") ((mem "runCheck" false) (mem "runCheckFromDecls" false) (mem "checkHasErrors" false) (mem "runCheckModules" false))))
 (DUse false (UseGroup ("tools" "snapshot") ((mem "runSnapshotWorker" false) (mem "runSnapshotSupervisor" false) (mem "parseStages" false) (mem "SnapMode" true))))
@@ -4456,8 +4479,10 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("tools" "check_policy") ((mem "runCheckPolicy" false) (mem "PolicyArgs" true) (mem "PolicyOutcome" true) (mem "runManifest" false) (mem "ManifestArgs" true))))
 (DTypeSig false "medakaVersion" (TyCon "String"))
 (DFunDef false "medakaVersion" () (ELit (LString "0.1.0-preview")))
+(DTypeSig false "medakaVersionString" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "String"))))
+(DFunDef false "medakaVersionString" (PWild) (EBlock (DoLet false false (PVar "commit") (EApp (EVar "buildCommit") (ELit LUnit))) (DoLet false false (PVar "date") (EApp (EVar "buildDate") (ELit LUnit))) (DoExpr (EIf (EBinOp "&&" (EBinOp "==" (EVar "commit") (ELit (LString ""))) (EBinOp "==" (EVar "date") (ELit (LString "")))) (EBinOp "++" (ELit (LString "medaka ")) (EVar "medakaVersion")) (EIf (EBinOp "==" (EVar "commit") (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka ")) (EApp (EVar "display") (EVar "medakaVersion"))) (ELit (LString " (built "))) (EApp (EVar "display") (EVar "date"))) (ELit (LString ")"))) (EIf (EBinOp "==" (EVar "date") (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka ")) (EApp (EVar "display") (EVar "medakaVersion"))) (ELit (LString " ("))) (EApp (EVar "display") (EVar "commit"))) (ELit (LString ")"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka ")) (EApp (EVar "display") (EVar "medakaVersion"))) (ELit (LString " ("))) (EApp (EVar "display") (EVar "commit"))) (ELit (LString ", built "))) (EApp (EVar "display") (EVar "date"))) (ELit (LString ")")))))))))
 (DTypeSig false "printVersion" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "printVersion" (PWild) (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "medaka ")) (EVar "medakaVersion"))))
+(DFunDef false "printVersion" (PWild) (EApp (EVar "putStrLn") (EApp (EVar "medakaVersionString") (ELit LUnit))))
 (DTypeSig false "liveSourceFingerprint" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "liveSourceFingerprint" ((PVar "root")) (EBlock (DoLet false false (PVar "script") (EApp (EVar "stringConcat") (EListLit (ELit (LString "command -v perl >/dev/null 2>&1 || exit 7; cd \"")) (EVar "root") (ELit (LString "\" && find compiler -name '*.mdk' -print | LC_ALL=C sort")) (ELit (LString " | perl -ne 'chomp; print \"$_\\n\"; open F,\"<\",$_ or next; local $/; my $c=<F>; print $c if defined $c; close F' 2>/dev/null")) (ELit (LString " | { if command -v sha256sum >/dev/null 2>&1; then sha256sum; elif command -v shasum >/dev/null 2>&1; then shasum -a 256; else cksum; fi; }")) (ELit (LString " | cut -d' ' -f1"))))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "sh"))) (EListLit (ELit (LString "-c")) (EVar "script"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "h") (EApp (EVar "stringTrim") (EVar "out"))) (DoExpr (EIf (EBinOp "==" (EVar "h") (ELit (LString ""))) (EVar "None") (EApp (EVar "Some") (EVar "h")))))) (arm PWild () (EVar "None"))))))
 (DTypeSig false "sourceStalenessVerdict" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))
@@ -4990,7 +5015,7 @@ runMcpServerFromEnv _ =
 (DFunDef false "runMcpCmd" ((PCons (PLit (LString "-h")) PWild)) (EBlock (DoLet false false PWild (EApp (EVar "mcpUsage") (ELit LUnit))) (DoExpr (EApp (EVar "exit") (ELit (LInt 0))))))
 (DFunDef false "runMcpCmd" ((PCons (PVar "bad") PWild)) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka mcp: unknown argument '")) (EVar "bad")) (ELit (LString "' (mcp takes no arguments; try 'medaka mcp --help')"))))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))))
 (DTypeSig false "runMcpServerFromEnv" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "runMcpServerFromEnv" (PWild) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "rtPath")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "csrc")) () (EApp (EApp (EApp (EApp (EVar "runMcpServer") (EVar "rsrc")) (EVar "csrc")) (EVar "stdlibDir")) (EVar "sourceStalenessVerdict")))))))))
+(DFunDef false "runMcpServerFromEnv" (PWild) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "rtPath")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "csrc")) () (EApp (EApp (EApp (EApp (EApp (EVar "runMcpServer") (EVar "rsrc")) (EVar "csrc")) (EVar "stdlibDir")) (EVar "sourceStalenessVerdict")) (EApp (EVar "medakaVersionString") (ELit LUnit))))))))))
 # MARK
 (DUse false (UseGroup ("tools" "check") ((mem "runCheck" false) (mem "runCheckFromDecls" false) (mem "checkHasErrors" false) (mem "runCheckModules" false))))
 (DUse false (UseGroup ("tools" "snapshot") ((mem "runSnapshotWorker" false) (mem "runSnapshotSupervisor" false) (mem "parseStages" false) (mem "SnapMode" true))))
@@ -5028,8 +5053,10 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("tools" "check_policy") ((mem "runCheckPolicy" false) (mem "PolicyArgs" true) (mem "PolicyOutcome" true) (mem "runManifest" false) (mem "ManifestArgs" true))))
 (DTypeSig false "medakaVersion" (TyCon "String"))
 (DFunDef false "medakaVersion" () (ELit (LString "0.1.0-preview")))
+(DTypeSig false "medakaVersionString" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "String"))))
+(DFunDef false "medakaVersionString" (PWild) (EBlock (DoLet false false (PVar "commit") (EApp (EVar "buildCommit") (ELit LUnit))) (DoLet false false (PVar "date") (EApp (EVar "buildDate") (ELit LUnit))) (DoExpr (EIf (EBinOp "&&" (EBinOp "==" (EVar "commit") (ELit (LString ""))) (EBinOp "==" (EVar "date") (ELit (LString "")))) (EBinOp "++" (ELit (LString "medaka ")) (EVar "medakaVersion")) (EIf (EBinOp "==" (EVar "commit") (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka ")) (EApp (EMethodRef "display") (EVar "medakaVersion"))) (ELit (LString " (built "))) (EApp (EMethodRef "display") (EVar "date"))) (ELit (LString ")"))) (EIf (EBinOp "==" (EVar "date") (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka ")) (EApp (EMethodRef "display") (EVar "medakaVersion"))) (ELit (LString " ("))) (EApp (EMethodRef "display") (EVar "commit"))) (ELit (LString ")"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka ")) (EApp (EMethodRef "display") (EVar "medakaVersion"))) (ELit (LString " ("))) (EApp (EMethodRef "display") (EVar "commit"))) (ELit (LString ", built "))) (EApp (EMethodRef "display") (EVar "date"))) (ELit (LString ")")))))))))
 (DTypeSig false "printVersion" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "printVersion" (PWild) (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "medaka ")) (EVar "medakaVersion"))))
+(DFunDef false "printVersion" (PWild) (EApp (EVar "putStrLn") (EApp (EVar "medakaVersionString") (ELit LUnit))))
 (DTypeSig false "liveSourceFingerprint" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "liveSourceFingerprint" ((PVar "root")) (EBlock (DoLet false false (PVar "script") (EApp (EVar "stringConcat") (EListLit (ELit (LString "command -v perl >/dev/null 2>&1 || exit 7; cd \"")) (EVar "root") (ELit (LString "\" && find compiler -name '*.mdk' -print | LC_ALL=C sort")) (ELit (LString " | perl -ne 'chomp; print \"$_\\n\"; open F,\"<\",$_ or next; local $/; my $c=<F>; print $c if defined $c; close F' 2>/dev/null")) (ELit (LString " | { if command -v sha256sum >/dev/null 2>&1; then sha256sum; elif command -v shasum >/dev/null 2>&1; then shasum -a 256; else cksum; fi; }")) (ELit (LString " | cut -d' ' -f1"))))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "sh"))) (EListLit (ELit (LString "-c")) (EVar "script"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "h") (EApp (EVar "stringTrim") (EVar "out"))) (DoExpr (EIf (EBinOp "==" (EVar "h") (ELit (LString ""))) (EVar "None") (EApp (EVar "Some") (EVar "h")))))) (arm PWild () (EVar "None"))))))
 (DTypeSig false "sourceStalenessVerdict" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))
@@ -5562,4 +5589,4 @@ runMcpServerFromEnv _ =
 (DFunDef false "runMcpCmd" ((PCons (PLit (LString "-h")) PWild)) (EBlock (DoLet false false PWild (EApp (EVar "mcpUsage") (ELit LUnit))) (DoExpr (EApp (EVar "exit") (ELit (LInt 0))))))
 (DFunDef false "runMcpCmd" ((PCons (PVar "bad") PWild)) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka mcp: unknown argument '")) (EVar "bad")) (ELit (LString "' (mcp takes no arguments; try 'medaka mcp --help')"))))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))))
 (DTypeSig false "runMcpServerFromEnv" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "runMcpServerFromEnv" (PWild) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "rtPath")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "csrc")) () (EApp (EApp (EApp (EApp (EVar "runMcpServer") (EVar "rsrc")) (EVar "csrc")) (EVar "stdlibDir")) (EVar "sourceStalenessVerdict")))))))))
+(DFunDef false "runMcpServerFromEnv" (PWild) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "rtPath")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "msg"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "csrc")) () (EApp (EApp (EApp (EApp (EApp (EVar "runMcpServer") (EVar "rsrc")) (EVar "csrc")) (EVar "stdlibDir")) (EVar "sourceStalenessVerdict")) (EApp (EVar "medakaVersionString") (ELit LUnit))))))))))

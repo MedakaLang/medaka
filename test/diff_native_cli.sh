@@ -425,5 +425,24 @@ case "$dir_got" in
     printf '  got:  [%s]\n' "$dir_got" ;;
 esac
 
+# ── version provenance (issue #74 W8) ─────────────────────────────────────
+# `--version`/`version` must print version + commit + build date, all from
+# ONE definition (compiler/driver/medaka_cli.mdk's `medakaVersionString`).
+# Pin the SHAPE only — "medaka <ver> (<parenthesized commit+date group>)" —
+# never the literal commit/date, which would break on every future commit.
+# Both invocation forms must produce the SAME line.
+ver1="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" --version 2>/dev/null)"
+ver2="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" version 2>/dev/null)"
+case "$ver1" in
+  "medaka "*" ("*")")
+    if [ "$ver1" = "$ver2" ]; then
+      pass=$((pass+1)); printf 'ok   version/shape (--version == version, [%s])\n' "$ver1"
+    else
+      fail=$((fail+1)); printf 'FAIL version/shape (--version [%s] != version [%s])\n' "$ver1" "$ver2"
+    fi ;;
+  *)
+    fail=$((fail+1)); printf 'FAIL version/shape (want "medaka <ver> (...)", got [%s])\n' "$ver1" ;;
+esac
+
 printf '\n%d ok, %d failing\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

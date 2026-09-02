@@ -120,11 +120,6 @@ negotiateVersion msg =
     Some v => if elem v mcpSupportedVersions then v else mcpLatestVersion
     None => mcpLatestVersion
 
--- Mirrors medakaVersion in compiler/driver/medaka_cli.mdk (kept in sync by hand;
--- medaka_cli is the top of the graph and cannot be imported here).
-mcpServerVersion : String
-mcpServerVersion = "0.1.0-preview"
-
 -- ── JSON-RPC envelopes (copied from lsp.mdk; see header) ─────────────────────
 
 -- A JSON-RPC success envelope: { jsonrpc, id, result }.
@@ -286,14 +281,18 @@ jsonPairsToListGo arr i n
 
 -- ── handshake result values ──────────────────────────────────────────────────
 
-initializeResultFor : String -> Json
-initializeResultFor version = jObject
+-- `serverVersion` is medaka_cli.mdk's `medakaVersionString` result, threaded
+-- down as a plain String (mcp.mdk cannot import medaka_cli — it is the top
+-- of the dependency graph — so this is threaded the same way as
+-- `stalenessCheck`, #846) rather than restating its own literal.
+initializeResultFor : String -> String -> Json
+initializeResultFor protocolVersion serverVersion = jObject
   [
-    ("protocolVersion", JString version),
+    ("protocolVersion", JString protocolVersion),
     ("capabilities", jObject [("tools", jObject [])]),
     (
       "serverInfo",
-      jObject [("name", JString "medaka"), ("version", JString mcpServerVersion)],
+      jObject [("name", JString "medaka"), ("version", JString serverVersion)],
     ),
   ]
 
@@ -1433,8 +1432,8 @@ handleToolsCall runtimeSrc coreSrc stdlibDir idJson params stalenessCheck = matc
 -- *notification* is ignored.  A top-level batch array (`[{...},{...}]`) is not
 -- a supported transport shape here — it gets one Invalid Request error rather
 -- than being silently dropped.
-dispatchMsg : String -> String -> String -> Json -> (Unit -> <IO> Option String) -> <IO> Unit
-dispatchMsg runtimeSrc coreSrc stdlibDir msg stalenessCheck = match asArray msg
+dispatchMsg : String -> String -> String -> Json -> (Unit -> <IO> Option String) -> String -> <IO> Unit
+dispatchMsg runtimeSrc coreSrc stdlibDir msg stalenessCheck serverVersion = match asArray msg
   Some _ => writeMessage
     (errorMsg JNull (0 - 32600) "Invalid Request: batch requests are not supported")
   None => match methodOf msg
@@ -1449,7 +1448,7 @@ dispatchMsg runtimeSrc coreSrc stdlibDir msg stalenessCheck = match asArray msg
         None => unit -- notification: no response for ANY method
         Some idJson =>
           if meth == "initialize" then
-            writeMessage (responseMsg idJson (initializeResultFor (negotiateVersion msg)))
+            writeMessage (responseMsg idJson (initializeResultFor (negotiateVersion msg) serverVersion))
           else
             if meth == "ping" then writeMessage (responseMsg idJson (jObject []))
             else
@@ -1466,32 +1465,34 @@ dispatchMsg runtimeSrc coreSrc stdlibDir msg stalenessCheck = match asArray msg
 
 -- Parse and dispatch one input line.  Blank lines and malformed JSON are logged
 -- to stderr and skipped, never crashing the stream.
-handleLine : String -> String -> String -> String -> (Unit -> <IO> Option String) -> <IO> Unit
-handleLine runtimeSrc coreSrc stdlibDir raw stalenessCheck =
+handleLine : String -> String -> String -> String -> (Unit -> <IO> Option String) -> String -> <IO> Unit
+handleLine runtimeSrc coreSrc stdlibDir raw stalenessCheck serverVersion =
   let line = stripCR raw
   if line == "" then unit
   else match parse line
     Err e => logMcp (stringConcat ["parse error (skipped): ", e])
-    Ok msg => dispatchMsg runtimeSrc coreSrc stdlibDir msg stalenessCheck
+    Ok msg => dispatchMsg runtimeSrc coreSrc stdlibDir msg stalenessCheck serverVersion
 
 -- The session loop: one JSON object per line until stdin EOF (clean shutdown).
-serveLoop : String -> String -> String -> (Unit -> <IO> Option String) -> <IO> Unit
-serveLoop runtimeSrc coreSrc stdlibDir stalenessCheck = match readLineOpt ()
+serveLoop : String -> String -> String -> (Unit -> <IO> Option String) -> String -> <IO> Unit
+serveLoop runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion = match readLineOpt ()
   None => unit
   Some raw =>
-    let _ = handleLine runtimeSrc coreSrc stdlibDir raw stalenessCheck
-    serveLoop runtimeSrc coreSrc stdlibDir stalenessCheck
+    let _ = handleLine runtimeSrc coreSrc stdlibDir raw stalenessCheck serverVersion
+    serveLoop runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion
 
 -- Public entry point for the driver (`runMcpCmd` in medaka_cli.mdk).  The prelude
 -- sources + stdlib dir are threaded in so tools can run the compiler pipeline
 -- (e.g. medaka_check resolves a `file` target's imports against stdlibDir).
 -- `stalenessCheck` is medaka_cli.mdk's `sourceStalenessVerdict`, threaded down
 -- as a closure (#846) — see the "staleness signal" section above.
+-- `serverVersion` is medaka_cli.mdk's `medakaVersionString` result (issue
+-- #74 W8), threaded down the same way rather than restating a literal here.
 export
-runMcpServer : String -> String -> String -> (Unit -> <IO> Option String) -> <IO> Unit
-runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck =
+runMcpServer : String -> String -> String -> (Unit -> <IO> Option String) -> String -> <IO> Unit
+runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
   let _ = logMcp "medaka mcp server start"
-  serveLoop runtimeSrc coreSrc stdlibDir stalenessCheck
+  serveLoop runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion
 
 unit : Unit
 unit = ()

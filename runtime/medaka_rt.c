@@ -1826,6 +1826,30 @@ long long mdk_build_fingerprint(long long unit_ignored) {
 #endif
 }
 
+/* buildCommit / buildDate : Unit -> String — sibling stamps to
+ * buildFingerprint (issue #74 W8), baked by the SAME test/build_native_medaka.sh
+ * clang link (-DMEDAKA_SRC_COMMIT / -DMEDAKA_SRC_BUILD_DATE), each already a
+ * quoted C string literal (unlike MEDAKA_SRC_FP, so no MDK_FP_STR wrapping
+ * needed here). Empty on every path that does not bake them, same contract
+ * as buildFingerprint. */
+long long mdk_build_commit(long long unit_ignored) {
+  (void)unit_ignored;
+#ifdef MEDAKA_SRC_COMMIT
+  return mdk_str_cstr(MEDAKA_SRC_COMMIT);
+#else
+  return mdk_str_cstr("");
+#endif
+}
+
+long long mdk_build_date(long long unit_ignored) {
+  (void)unit_ignored;
+#ifdef MEDAKA_SRC_BUILD_DATE
+  return mdk_str_cstr(MEDAKA_SRC_BUILD_DATE);
+#else
+  return mdk_str_cstr("");
+#endif
+}
+
 /* statFile : String -> Result String (Int, Bool, Bool, Float).
  * stat(2) the path; Ok (sizeBytes, isDir, isFile, mtimeSeconds) or Err strerror.
  * 4-tuple cell layout mirrors mdk_run_command's 3-tuple: [TUPLE_TAG, e0..e3].
