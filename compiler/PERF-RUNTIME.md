@@ -1,28 +1,84 @@
 # PERF-RUNTIME.md — general compiled-program performance
 
 **Status:** IMPLEMENTED — 11 fixpoint-gated native-codegen wins (float unboxing,
-constant-cell hoisting) landed and are live in the emitter today. Well-maintained: the
-2026-07-12 banner below already self-corrects the machine/flags staleness (Mac M5 →
-Linux box migration) in place. Its "Remaining levers" section is genuine open forward
-work, not stale content.
+constant-cell hoisting) landed and are live in the emitter today. Re-baselined
+2026-09-02 on the current box (Debian 13 x86_64 EPYC 9645, own cold-built binary) —
+see "Current-box baseline" below, which is now the primary reference; the Apple M5
+numbers earlier in this doc's history are historical-context only, not comparable.
+Its "Remaining levers" section is genuine open forward work, not stale content.
 
 Performance of **native-compiled Medaka programs** (the `medaka build` → LLVM IR →
 clang path), as distinct from compiler self-compile speed (that is
 `compiler/PERF-RESULTS.md`). Started 2026-06-17 (overnight session 3).
 
-All numbers: Apple M5, macOS 26.5, Apple clang 21, quiet machine, `/usr/bin/time -l`,
-min-of-3, production build flags (`-O2 -Wl,-stack_size,0x20000000`, GC
-`free_space_divisor=1`). Build via the native `./medaka` with
-`MEDAKA_EMITTER=./medaka_emitter` (the OCaml `medaka build` path is dead — its
-interpreter can no longer parse the compiler emitter source).
+Build flags (current box, both platforms): `-O2 -pthread -lm`. The compiler gets its
+stack from a 256 MB GC-aware worker pthread in `runtime/medaka_rt.c`, not a link flag
+(`-Wl,-stack_size` was Mach-O-only and no longer applies on either platform). Build via
+the native `./medaka` with `MEDAKA_EMITTER=./medaka_emitter` (the OCaml `medaka build`
+path is dead — its interpreter can no longer parse the compiler emitter source).
 
-> ⚠️ **STALE MACHINE + STALE FLAGS (2026-07-12).** Two things moved out from under the
-> numbers above. (1) Primary dev is now a **dedicated x86_64 Linux box** (Debian 13,
-> 12-core EPYC 9645 / 32 GB, Debian clang 19), not the M5 Mac — the numbers are **not
-> comparable** across the move; re-baseline on the current box before calling anything a
-> regression. (2) `-Wl,-stack_size` is **gone** — it was Mach-O-only, and the compiler now
-> gets its stack from a 256 MB GC-aware worker pthread in `runtime/medaka_rt.c`, so the
-> build flags are `-O2 -pthread -lm` on both platforms. Use `/usr/bin/time -v` on Linux.
+## Current-box baseline (2026-09-02, `sh test/bench.sh`, min-of-3)
+
+Debian 13, x86_64, 12-core EPYC 9645 / 32 GB, Debian clang 19.1.7, `/usr/bin/time -v`,
+own cold-built binary (`make medaka`), production build flags (`-O2 -pthread -lm`).
+**This table is the current reference — the earlier Apple M5 numbers in this doc are
+historical only, not comparable, and are not being replaced in place (see each win's
+own dated section for its original before/after).**
+
+| bench | min wall | rss | binary size |
+|---|---|---|---|
+| fib 38 | 0.40s | 2MB | 18432B |
+| listsum | 0.51s | 3MB | 18592B |
+| intsum 50M | 0.03s | 2MB | 18320B |
+| floatsum 50M | 0.19s | 2MB | 18808B |
+| floatsum_guard | 0.19s | 3MB | 18872B |
+| mandel 300² | 0.18s | 4MB | 18400B |
+| mandel_let | 0.21s | 4MB | 18408B |
+| bintrees d15×200 | 0.63s | 7MB | 18560B |
+| closures 10M | 0.29s | 3MB | 18584B |
+| strbuild 20k `++` | 0.08s | 5MB | 18360B |
+| dispatch | 0.32s | 2MB | 31808B |
+| strlit | 0.00s | 2MB | 18320B |
+| listlit | 1.08s | 4MB | 22800B |
+| tuplit 10M | 0.24s | 4MB | 18480B |
+| listops 2M | 0.30s | 224MB | 32480B |
+| taylor | 0.04s | 3MB | 22944B |
+| fhelp | 0.12s | 3MB | 18808B |
+| **startup floor** (trivial `main = putStrLn "x"`) | 0.00s | 2MB | 18176B |
+| selfcompile (native emitter, ~10MB IR) | 9.33s | 402MB | — |
+
+**Startup floor**: a trivial program is ~2MB RSS / 18176B binary and times at the
+`date +%s.%N` fallback's resolution floor (reported 0s at N=3) — process/runtime-init
+overhead is not the bottleneck for any bench above; every non-trivial bench's wall time
+is dominated by its own workload, not fixed per-process cost.
+
+**Binary size**: every bench fixture links to ~18.3–18.9KB except `dispatch` (31808B —
+extra dict-witness globals from Win 5's constant-dict hoisting), `listlit` (22800B —
+hoisted constant list-cell globals, Win 7), and `listops`/`taylor`/`fhelp` (stdlib
+import pulls in more of the runtime). No fixture shows unexpected bloat.
+
+**C sanity ceiling** (`test/bench_fixtures/c/{fib,bintrees}.c`, hand-written
+equivalents, `clang -O2`, no GC/Boehm/boxing/dispatch runtime): `fib_c` **0.11s**
+(vs. compiled Medaka `fib` 0.40s, ~3.6×) and `bintrees_c` (malloc/free instead of
+Boehm GC) **0.27s** (vs. compiled Medaka `bintrees` 0.63s, ~2.3×). This is an upper
+bound, not an apples-to-apples target — the C programs pay no GC, no immediate-vs-boxed
+tagging, no dispatch; the gap is the compiled-program tax for those features, not
+evidence of an emitter regression. Consistent with the ~4× dispatch overhead and the
+GC-bound bintrees profile already recorded under "Levers (ranked)" below.
+
+**Fixture-corpus coverage (F3 — the 19-vs-driven gap):** `test/bench_fixtures/` holds
+19 `.mdk` fixtures; `test/bench.sh` now drives **17** of them (`fib`/`listsum` outside
+the loop + 15 in the runtime micro-suite loop, which now also includes `tuplit` and
+`listops` — both previously omitted from the loop despite being cited by name
+elsewhere in this doc). The remaining 2, `comp_ho_float.mdk` and `floatlet_stress.mdk`,
+are deliberately NOT added to the timing loop: both are one-shot correctness/soundness
+stress fixtures (a handful of function calls each, not a hot loop) written to probe
+specific codegen paths (float closure capture/return, tuple/record float escape) for
+the arith-on-type-lost-floats bug family documented below under "Bugs / language gaps
+observed" — timing them would measure process startup, not the construct under test.
+**Neither is currently built/run by any gate or harness** (grepped: no reference to
+either name outside this paragraph) — that is a pre-existing corpus gap, not something
+this measurement slice fixes (out of scope: no codegen/gate change licensed here).
 
 ## Real-world validation (2026-06-18)
 
