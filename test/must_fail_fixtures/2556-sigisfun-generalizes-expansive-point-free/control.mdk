@@ -1,0 +1,17 @@
+mk : Unit -> (a -> a)
+mk u =
+  let r = Ref None
+  (x =>
+    match !r
+      None =>
+        r := Some x
+        x
+      Some y => y)
+
+weird : Int -> Int
+weird = mk ()
+
+useInt : Int -> Int
+useInt n = weird n
+
+main = println (useInt 42)

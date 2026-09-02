@@ -1,0 +1,21 @@
+f1 : Unit -> <IO> Unit
+f1 () = println "LEAKED-VIA-COERCE"
+
+cb2 : (Unit -> <> Unit) -> Int
+cb2 f =
+  let _ = f ()
+  0
+
+cb3 : (Unit -> <IO> Unit) -> Int
+cb3 g = 1
+
+coerce : a -> a -> a
+coerce x y = y
+
+hidden : (Unit -> <IO> Unit) -> Int
+hidden = coerce cb3 cb2
+
+main : <> Unit
+main =
+  let _ = hidden f1
+  ()

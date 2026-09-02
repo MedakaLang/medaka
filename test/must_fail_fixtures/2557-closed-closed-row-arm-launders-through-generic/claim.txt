@@ -1,0 +1,33 @@
+issue: 2557
+what: unifyRowPlain's CLOSED~CLOSED arm (compiler/types/typecheck.mdk:1568) is a silent
+what: no-op and is NOT effect-guarded, unlike the two OPEN~CLOSED arms above it (:1541,
+what: :1544) which each run effectLeakCheck.  Its own comment licenses the leniency on the
+what: grounds that direction is recovered downstream by launderEscapeFromLog (:32010) —
+what: which is impl/default-method only.  An ordinary generic function reaches the arm
+what: through plain instantiation with no such consumer: `coerce : a -> a -> a` equates
+what: cb3 and cb2, two closures whose CONTRAVARIANT (parameter) effect rows differ (<IO>
+what: vs <>), so `hidden` gets cb3's declared type and cb2's runtime identity.  Neither
+what: row is reopened (reopenRowN, :10249-10252, reopens only at covariant position) and
+what: paramVarianceGuard (:9680) never fires (it is keyed on a type-CONSTRUCTOR argument
+what: slot; this is a bare TFun nested in a TFun).  Result: a program declared `main : <>
+what: Unit` performs <IO> — check reports ZERO diagnostics at exit 0, and both run and the
+what: built binary print LEAKED-VIA-COERCE at exit 0.  Violates EFFECTS-SEMANTICS §5
+what: (the laundering check and the no-laundering law: no construct discards or downgrades
+what: a row) and §9 (effect preservation / containment).
+cmd: run main.mdk
+exit: 0
+stdout: LEAKED-VIA-COERCE
+control: run control.mdk
+why-control: control.mdk is the same generic `coerce` and the same higher-order callback
+why-control: shape, but both arguments carry the SAME contravariant row (`honest = coerce
+why-control: cb2 cb2`, applied to a genuinely pure f0) under an honest `main : <IO> Unit`
+why-control: — it must run clean at exit 0 printing CONTROL-OK, proving that passing
+why-control: closures through an invariant type variable, declaring a row on a parameter's
+why-control: parameter, and calling the result are all legitimate.  The bug is
+why-control: specifically the two DIFFERENT contravariant rows equated in main.mdk.  (An
+why-control: accept control is required here: this harness cannot express a
+why-control: correctly-REJECTED control — #1144.  The sharper one, `main : <> Unit; main =
+why-control: println "leaked"`, is quoted in the issue and rejects with T-EFFECT-LEAK.)
+why-note: The pin is the leak actually happening (run exits 0 printing the marker), not
+why-note: merely check accepting — a fix makes check reject, run gates on the same
+why-note: check-family pass, the exit flips to 1 and this row drains.
