@@ -1949,7 +1949,14 @@ parseTy = do
 constraintTail : Ty -> Parser Ty
 constraintTail lhs = do
   expectTok TFatArrow
+  t <- peekP
+  indented <- tyArrowSkipLayout t
   rhs <- parseTy
+  when
+    indented
+    (do
+      skipNewlines
+      expectTok TDedent)
   pure (TyConstrained (extractConstraints lhs) rhs)
 
 extractConstraints : Ty -> List Constraint
@@ -2455,9 +2462,17 @@ parseNewtype pub = do
   expectTok TEqual
   con <- upperNameP
   fty <- parseTy
-  derives <- derivingClause
+  t <- peekP
+  derives <- newtypeDerives t
   skipNewlines
   pure (dNewtypeUnresolved pub name params con fty derives)
+
+-- `deriving (…)` inline after the payload type, or on its own more-indented
+-- next line (the lexer wraps that line as an INDENT/DEDENT span, as it does
+-- for a one-line `data` — `inlineTrailingDerives`).
+newtypeDerives : Token -> Parser (List DeriveRef)
+newtypeDerives TIndent = inlineTrailingDerives TIndent
+newtypeDerives _ = derivingClause
 
 -- top-level `let rec f a… = body` → DLetGroup with a single binding.
 -- Mutual-recursion grouping via `with` has been removed — each recursive
