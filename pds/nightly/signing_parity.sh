@@ -75,17 +75,15 @@ set -e
   echo "FAIL: full Wasm runner exited $full_wasm_status" >&2
   exit 1
 }
-[ "$(tail -1 "$WORK/full-wasm-raw.out")" = 0 ] || {
+# A Unit main prints nothing on Wasm (the trailing `0` this once expected was
+# #2424, the emitter auto-printing a Unit result as an Int): the corpus's own
+# `TOTAL: PASS` is the last line, and the runner's stdout is the program's output.
+[ "$(tail -1 "$WORK/full-wasm-raw.out")" = 'TOTAL: PASS' ] || {
   cat "$WORK/full-wasm-raw.out" >&2
-  echo 'FAIL: full Wasm driver did not emit its expected autoprint result' >&2
+  echo 'FAIL: full Wasm corpus did not end in TOTAL: PASS' >&2
   exit 1
 }
-[ "$(tail -2 "$WORK/full-wasm-raw.out" | sed -n '1p')" = 'TOTAL: PASS' ] || {
-  cat "$WORK/full-wasm-raw.out" >&2
-  echo 'FAIL: full Wasm corpus did not finish before its autoprint result' >&2
-  exit 1
-}
-sed '$d' "$WORK/full-wasm-raw.out" > "$WORK/full-wasm.out"
+cp "$WORK/full-wasm-raw.out" "$WORK/full-wasm.out"
 cmp "$WORK/native-full.out" "$WORK/full-wasm.out" || {
   echo 'FAIL: full ECDSA corpus output differs between native and Wasm' >&2
   exit 1

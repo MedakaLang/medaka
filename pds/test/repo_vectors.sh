@@ -61,15 +61,13 @@ require_empty() {
   }
 }
 
-# test/wasm/run.js appends the program's exit code as a trailing line on some
-# paths and not others; strip it only when it is actually there, exactly as the
-# transcript arm has always done.
+# The runner's stdout is the program's output, byte for byte.  The trailing `0`
+# this once stripped was never the runner's doing: it was #2424, the Wasm emitter
+# auto-printing a Unit main's result as an Int, and it is gone.  Stripping a
+# trailing `0` conditionally would also eat a real `0` output line, so no
+# normalization happens here at all.
 strip_exit_trailer() {
-  if [ "$(tail -1 "$1")" = 0 ]; then
-    sed '$d' "$1" > "$2"
-  else
-    cp "$1" "$2"
-  fi
+  cp "$1" "$2"
 }
 
 [ -x "$MEDAKA" ] || fail "build medaka first (missing $MEDAKA)"

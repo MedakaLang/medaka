@@ -81,5 +81,17 @@ EOF
 printf '%s\n' b > "$WORK/expected"
 if [ -x "$MODULES" ] && "$MODULES" "$RUNTIME" "$CORE" "$WORK/input.mdk" "$WORK" >"$WORK/modules-elseless-if.wat" 2>"$WORK/modules-elseless-if.emit.err"; then check_wat modules-elseless-if "$WORK/modules-elseless-if.wat"; else bad "Else-less-if modules emitter failed"; cat "$WORK/modules-elseless-if.emit.err"; fi
 if [ -f "$PLAYGROUND" ] && node "$ROOT/playground/dev_compile_node.mjs" "$PLAYGROUND" "$RUNTIME" "$CORE" "$WORK/input.mdk" >"$WORK/playground-elseless-if.wat" 2>"$WORK/playground-elseless-if.emit.err"; then check_wat playground-elseless-if "$WORK/playground-elseless-if.wat"; else bad "Else-less-if playground compiler failed"; cat "$WORK/playground-elseless-if.emit.err"; fi
+# #2424's second face: a main DECLARED Unit whose first match arm is `panic`.
+# The structural kind walk reads a match's first arm, so this printed a trailing
+# `0` even after the else-less-if fix; the declared type must win.
+cat > "$WORK/input.mdk" <<'EOF'
+main : <IO> Unit
+main = match [1]
+  [] => panic "empty"
+  x :: _ => println (debug x)
+EOF
+printf '%s\n' 1 > "$WORK/expected"
+if [ -x "$MODULES" ] && "$MODULES" "$RUNTIME" "$CORE" "$WORK/input.mdk" "$WORK" >"$WORK/modules-declared-unit-panic.wat" 2>"$WORK/modules-declared-unit-panic.emit.err"; then check_wat modules-declared-unit-panic "$WORK/modules-declared-unit-panic.wat"; else bad "Declared-Unit-panic modules emitter failed"; cat "$WORK/modules-declared-unit-panic.emit.err"; fi
+if [ -f "$PLAYGROUND" ] && node "$ROOT/playground/dev_compile_node.mjs" "$PLAYGROUND" "$RUNTIME" "$CORE" "$WORK/input.mdk" >"$WORK/playground-declared-unit-panic.wat" 2>"$WORK/playground-declared-unit-panic.emit.err"; then check_wat playground-declared-unit-panic "$WORK/playground-declared-unit-panic.wat"; else bad "Declared-Unit-panic playground compiler failed"; cat "$WORK/playground-declared-unit-panic.emit.err"; fi
 printf '%d checks, %d failing\n' "$checks" "$fail"
 [ "$checks" -gt 0 ] && [ "$fail" -eq 0 ]

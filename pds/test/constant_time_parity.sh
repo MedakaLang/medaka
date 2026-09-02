@@ -25,11 +25,14 @@ WASM_EMITTER=${MEDAKA_WASM_EMITTER:-"$ROOT/test/bin/wasm_emit_modules_main"}
 if [ -x "$WASM_EMITTER" ] && command -v node >/dev/null 2>&1 && command -v wasm-tools >/dev/null 2>&1; then
   MEDAKA_WASM_EMITTER="$WASM_EMITTER" MEDAKA_STRICT=1 "$MEDAKA" build --target wasm "$SOURCE" -o "$WORK/probe.wasm" > "$WORK/wasm-build.log" 2>&1
   node "$ROOT/test/wasm/run.js" "$WORK/probe.wasm" > "$WORK/wasm-raw.out" 2> "$WORK/wasm.err"
-  [ "$(wc -l < "$WORK/wasm-raw.out")" -eq 6 ] && [ "$(tail -1 "$WORK/wasm-raw.out")" = 0 ] || {
-    echo 'FAIL: Wasm parity probe did not emit five rows plus the runner result' >&2
+  # A Unit main prints nothing on Wasm (the trailing `0` this once expected was
+  # #2424, the emitter auto-printing a Unit result as an Int): the runner's
+  # stdout IS the program's output, five rows and nothing else.
+  [ "$(wc -l < "$WORK/wasm-raw.out")" -eq 5 ] || {
+    echo 'FAIL: Wasm parity probe did not emit exactly five rows' >&2
     exit 1
   }
-  sed '$d' "$WORK/wasm-raw.out" > "$WORK/wasm.out"
+  cp "$WORK/wasm-raw.out" "$WORK/wasm.out"
   cmp "$WORK/native.out" "$WORK/wasm.out" || {
     echo 'FAIL: PDS reduction values differ between native and Wasm' >&2
     exit 1

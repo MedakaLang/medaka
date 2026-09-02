@@ -60,8 +60,9 @@ fi
 MEDAKA_ROOT="$ROOT" MEDAKA_WASM_EMITTER="$WASM_EMITTER" MEDAKA_STRICT=1 "$MEDAKA" build --target wasm "$DRIVER" -o "$WORK/driver.wasm" > "$WORK/wasm-build.log" 2>&1
 MDK_ARGS="$CORPUS" node "$ROOT/test/wasm/run.js" "$WORK/driver.wasm" > "$WORK/wasm-raw.out" 2> "$WORK/wasm.err"
 require_empty "$WORK/wasm.err" wasm
-[ "$(tail -1 "$WORK/wasm-raw.out")" = 0 ] || fail 'Wasm runner result was not zero'
-sed '$d' "$WORK/wasm-raw.out" > "$WORK/wasm.out"
+# A Unit main prints nothing on Wasm (the trailing `0` this once expected was
+# #2424): the runner's stdout is the program's output, byte for byte.
+cp "$WORK/wasm-raw.out" "$WORK/wasm.out"
 cmp "$WORK/native.out" "$WORK/wasm.out" || fail 'native and Wasm normalized output differ'
 
 echo 'PASS: DAG-CBOR/CID — 17 external rows; 24 hostile routes; eval == native == Wasm'

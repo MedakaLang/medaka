@@ -3965,8 +3965,12 @@ emitRefMain prog groups = match findMain (progEmit prog) groups
     -- (which defaults to WInt on type-erased polymorphic-HOF returns) so bare Float
     -- value mains (e.g. `main = fold (acc x => acc + x) 0.0 [1.0, 2.0, 3.0]`)
     -- auto-print via the Float formatter instead of reinterpreting bits as an Int.
+    -- A main DECLARED `Unit` (`main : <IO> Unit`) is Unit whatever its body's
+    -- shape: the structural walk below reads a match's first arm and an if's
+    -- then-branch, and a driver whose first arm is `panic …` was printed as an
+    -- Int (#2424's second face, the pds engine drivers).
     let k =
-      if mainBodyIsUnit prog body then
+      if mainBodyIsUnit prog body || declRetTypeOf prog "main" == "Unit" then
         WUnit
       else if inputMainIsFloat (progInput prog) then
         WFloat
@@ -4038,8 +4042,19 @@ ifKind prog t f =
     WBool
   else if isWBool (refMainKind prog f) then
     WBool
+  else if divergesW t then
+    -- a `panic`/`exit` branch has no value to print; the other branch decides
+    refMainKind prog f
   else
     refMainKind prog t
+
+-- A body whose head is `panic` or `exit` never yields a value, so it must not
+-- decide main's auto-print kind: skipped by `ifKind` and `refMainKindArms`.
+divergesW : CExpr -> Bool
+divergesW (CApp f _) = match appHead f
+  CVar fn _ => fn == "panic" || fn == "exit"
+  _ => False
+divergesW _ = False
 
 refMainKind : Prog -> CExpr -> WTy
 refMainKind prog (CLit (LInt _)) = WInt
@@ -4199,7 +4214,8 @@ refMainKindBlock prog (_ :: rest) = refMainKindBlock prog rest
 
 refMainKindArms : Prog -> List CArm -> WTy
 refMainKindArms _ [] = WInt
-refMainKindArms prog ((CArm _ _ body) :: _) = refMainKind prog body
+refMainKindArms prog ((CArm _ _ body) :: rest) =
+  if divergesW body then refMainKindArms prog rest else refMainKind prog body
 
 appHead : CExpr -> CExpr
 appHead (CApp f _) = appHead f
