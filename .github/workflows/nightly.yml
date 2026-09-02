@@ -857,7 +857,7 @@ jobs:
       # #2181 deliverable 2): previously this step had no `if:` guard at all,
       # so a failure in "Collect + ingest + rebalance" skipped it silently —
       # the branch got pushed (or not) with nobody told either way.
-      - name: Report the one remaining manual step (if a branch landed)
+      - name: Report the landing branch (if one was pushed)
         if: success()
         env:
           GH_TOKEN: ${{ github.token }}
@@ -873,10 +873,13 @@ jobs:
             echo "## gate cost baseline auto-advance"
             echo ""
             echo "Pushed \`$branch\`. GitHub Actions cannot open the PR itself on this repo"
-            echo "(policy: Actions may not create or approve pull requests). One command lands it:"
+            echo "(policy: Actions may not create or approve pull requests) nor push ci.yml."
+            echo "\`scripts/cost_baseline_land.sh\`, run from cron on the build box, regenerates"
+            echo "ci.yml, opens the PR, and enqueues it (docs/ops/CI-ARCHITECTURE.md §3.5)."
+            echo "If the branch is still unopened after an hour, that cron is down; by hand:"
             echo ""
             echo '```sh'
-            echo "gh pr create --repo ${GH_REPO} --head $branch --base main --fill"
+            echo "sh scripts/cost_baseline_land.sh"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
