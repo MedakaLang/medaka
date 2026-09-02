@@ -1,5 +1,5 @@
 # META
-source_lines=2366
+source_lines=2363
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -1965,9 +1965,7 @@ tyMentionsParams (TyEffect _ _ t) params = tyMentionsParams t params
 -- typed-core-IR pair — same precedent as typecheck.mdk's and doc.mdk's
 -- ppEffAtomTy).
 -- lint-disable-next-line rule-duplicate-body
-tyMentionsParams (TyRow _ tail _) params = match tail
-  Some v => contains v params
-  None => False
+tyMentionsParams (TyRow _ tail _) params = anyList (v => contains v params) tail
 tyMentionsParams (TyConstrained _ t) params = tyMentionsParams t params
 
 -- ── self-returning function-PARAM table (native backend) ────────────────────
@@ -2113,9 +2111,8 @@ tyMentionsNonParam (TyTuple ts) params =
   anyList (t => tyMentionsNonParam t params) ts
 tyMentionsNonParam (TyEffect _ _ t) params = tyMentionsNonParam t params
 -- Mirror of the `tyMentionsParams` arm above.
-tyMentionsNonParam (TyRow _ tail _) params = match tail
-  Some v => not (contains v params)
-  None => False
+tyMentionsNonParam (TyRow _ tail _) params =
+  anyList (v => not (contains v params)) tail
 tyMentionsNonParam (TyConstrained _ t) params = tyMentionsNonParam t params
 
 -- ── constructor → DECLARED field type-head names (native backend, Gap E2) ────
@@ -2359,7 +2356,7 @@ payloadArityL (ConNamed fs _) = listLen fs
 nodeTag : Expr -> String
 nodeTag (ESection _) = "ESection"
 nodeTag (EGuards _) = "EGuards"
-nodeTag (EDo _) = "EDo"
+nodeTag (EDo _ _) = "EDo"
 nodeTag (EStringInterp _) = "EStringInterp"
 nodeTag (EVariantUpdate _ _ _) = "EVariantUpdate"
 nodeTag (EMapLit _ _) = "EMapLit"
@@ -2943,7 +2940,7 @@ nodeTag _ = "?"
 (DFunDef false "tyMentionsParams" ((PCon "TyFun" (PVar "a") (PVar "b")) (PVar "params")) (EBinOp "||" (EApp (EApp (EVar "tyMentionsParams") (EVar "a")) (EVar "params")) (EApp (EApp (EVar "tyMentionsParams") (EVar "b")) (EVar "params"))))
 (DFunDef false "tyMentionsParams" ((PCon "TyTuple" (PVar "ts")) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "t")) (EApp (EApp (EVar "tyMentionsParams") (EVar "t")) (EVar "params")))) (EVar "ts")))
 (DFunDef false "tyMentionsParams" ((PCon "TyEffect" PWild PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentionsParams") (EVar "t")) (EVar "params")))
-(DFunDef false "tyMentionsParams" ((PCon "TyRow" PWild (PVar "tail") PWild) (PVar "params")) (EMatch (EVar "tail") (arm (PCon "Some" (PVar "v")) () (EApp (EApp (EVar "contains") (EVar "v")) (EVar "params"))) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "tyMentionsParams" ((PCon "TyRow" PWild (PVar "tail") PWild) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EApp (EVar "contains") (EVar "v")) (EVar "params")))) (EVar "tail")))
 (DFunDef false "tyMentionsParams" ((PCon "TyConstrained" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentionsParams") (EVar "t")) (EVar "params")))
 (DTypeSig true "selfFnParamTable" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int"))))))
 (DFunDef false "selfFnParamTable" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "ifaceSelfFnParamEntries")) (EVar "prog")))
@@ -2993,7 +2990,7 @@ nodeTag _ = "?"
 (DFunDef false "tyMentionsNonParam" ((PCon "TyFun" (PVar "a") (PVar "b")) (PVar "params")) (EBinOp "||" (EApp (EApp (EVar "tyMentionsNonParam") (EVar "a")) (EVar "params")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "b")) (EVar "params"))))
 (DFunDef false "tyMentionsNonParam" ((PCon "TyTuple" (PVar "ts")) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "t")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "t")) (EVar "params")))) (EVar "ts")))
 (DFunDef false "tyMentionsNonParam" ((PCon "TyEffect" PWild PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "t")) (EVar "params")))
-(DFunDef false "tyMentionsNonParam" ((PCon "TyRow" PWild (PVar "tail") PWild) (PVar "params")) (EMatch (EVar "tail") (arm (PCon "Some" (PVar "v")) () (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "v")) (EVar "params")))) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "tyMentionsNonParam" ((PCon "TyRow" PWild (PVar "tail") PWild) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "v")) (EVar "params"))))) (EVar "tail")))
 (DFunDef false "tyMentionsNonParam" ((PCon "TyConstrained" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "t")) (EVar "params")))
 (DTypeSig true "ctorFieldTypeNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "ctorFieldTypeNames" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "ctorFieldTypeEntries")) (EVar "prog")))
@@ -3078,7 +3075,7 @@ nodeTag _ = "?"
 (DTypeSig false "nodeTag" (TyFun (TyCon "Expr") (TyCon "String")))
 (DFunDef false "nodeTag" ((PCon "ESection" PWild)) (ELit (LString "ESection")))
 (DFunDef false "nodeTag" ((PCon "EGuards" PWild)) (ELit (LString "EGuards")))
-(DFunDef false "nodeTag" ((PCon "EDo" PWild)) (ELit (LString "EDo")))
+(DFunDef false "nodeTag" ((PCon "EDo" PWild PWild)) (ELit (LString "EDo")))
 (DFunDef false "nodeTag" ((PCon "EStringInterp" PWild)) (ELit (LString "EStringInterp")))
 (DFunDef false "nodeTag" ((PCon "EVariantUpdate" PWild PWild PWild)) (ELit (LString "EVariantUpdate")))
 (DFunDef false "nodeTag" ((PCon "EMapLit" PWild PWild)) (ELit (LString "EMapLit")))
@@ -3662,7 +3659,7 @@ nodeTag _ = "?"
 (DFunDef false "tyMentionsParams" ((PCon "TyFun" (PVar "a") (PVar "b")) (PVar "params")) (EBinOp "||" (EApp (EApp (EVar "tyMentionsParams") (EVar "a")) (EVar "params")) (EApp (EApp (EVar "tyMentionsParams") (EVar "b")) (EVar "params"))))
 (DFunDef false "tyMentionsParams" ((PCon "TyTuple" (PVar "ts")) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "t")) (EApp (EApp (EVar "tyMentionsParams") (EVar "t")) (EVar "params")))) (EVar "ts")))
 (DFunDef false "tyMentionsParams" ((PCon "TyEffect" PWild PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentionsParams") (EVar "t")) (EVar "params")))
-(DFunDef false "tyMentionsParams" ((PCon "TyRow" PWild (PVar "tail") PWild) (PVar "params")) (EMatch (EVar "tail") (arm (PCon "Some" (PVar "v")) () (EApp (EApp (EVar "contains") (EVar "v")) (EVar "params"))) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "tyMentionsParams" ((PCon "TyRow" PWild (PVar "tail") PWild) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EApp (EVar "contains") (EVar "v")) (EVar "params")))) (EVar "tail")))
 (DFunDef false "tyMentionsParams" ((PCon "TyConstrained" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentionsParams") (EVar "t")) (EVar "params")))
 (DTypeSig true "selfFnParamTable" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int"))))))
 (DFunDef false "selfFnParamTable" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "ifaceSelfFnParamEntries")) (EVar "prog")))
@@ -3712,7 +3709,7 @@ nodeTag _ = "?"
 (DFunDef false "tyMentionsNonParam" ((PCon "TyFun" (PVar "a") (PVar "b")) (PVar "params")) (EBinOp "||" (EApp (EApp (EVar "tyMentionsNonParam") (EVar "a")) (EVar "params")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "b")) (EVar "params"))))
 (DFunDef false "tyMentionsNonParam" ((PCon "TyTuple" (PVar "ts")) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "t")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "t")) (EVar "params")))) (EVar "ts")))
 (DFunDef false "tyMentionsNonParam" ((PCon "TyEffect" PWild PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "t")) (EVar "params")))
-(DFunDef false "tyMentionsNonParam" ((PCon "TyRow" PWild (PVar "tail") PWild) (PVar "params")) (EMatch (EVar "tail") (arm (PCon "Some" (PVar "v")) () (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "v")) (EVar "params")))) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "tyMentionsNonParam" ((PCon "TyRow" PWild (PVar "tail") PWild) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "v")) (EVar "params"))))) (EVar "tail")))
 (DFunDef false "tyMentionsNonParam" ((PCon "TyConstrained" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentionsNonParam") (EVar "t")) (EVar "params")))
 (DTypeSig true "ctorFieldTypeNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "ctorFieldTypeNames" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "ctorFieldTypeEntries")) (EVar "prog")))
@@ -3797,7 +3794,7 @@ nodeTag _ = "?"
 (DTypeSig false "nodeTag" (TyFun (TyCon "Expr") (TyCon "String")))
 (DFunDef false "nodeTag" ((PCon "ESection" PWild)) (ELit (LString "ESection")))
 (DFunDef false "nodeTag" ((PCon "EGuards" PWild)) (ELit (LString "EGuards")))
-(DFunDef false "nodeTag" ((PCon "EDo" PWild)) (ELit (LString "EDo")))
+(DFunDef false "nodeTag" ((PCon "EDo" PWild PWild)) (ELit (LString "EDo")))
 (DFunDef false "nodeTag" ((PCon "EStringInterp" PWild)) (ELit (LString "EStringInterp")))
 (DFunDef false "nodeTag" ((PCon "EVariantUpdate" PWild PWild PWild)) (ELit (LString "EVariantUpdate")))
 (DFunDef false "nodeTag" ((PCon "EMapLit" PWild PWild)) (ELit (LString "EMapLit")))

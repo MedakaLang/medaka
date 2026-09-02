@@ -854,7 +854,7 @@ A new array of `n` copies of a value.
 ### `arrayMakeWith`
 
 ```
-arrayMakeWith : Int -> (Int -> a) -> Array a
+arrayMakeWith : Int -> (Int -> <e> a) -> <e> Array a
 ```
 
 A new array of length `n` whose element at each index `i` is `f i`.

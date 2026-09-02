@@ -1,5 +1,5 @@
 # META
-source_lines=4407
+source_lines=4405
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -113,7 +113,7 @@ import bits64.{
 -- type `v` (kind *), not over the row — data-decl kind inference is
 -- non-transitive (a param used only as another type's row argument is inferred
 -- KType and mis-elaborates), so wrapper types thread `Value e` whole.
-public export data Value e =
+public export data Value (e : Effect) =
   | VInt Int
   | VFloat Float
   | VString String
@@ -745,9 +745,7 @@ tyMentions (TyConstrained _ t) params = tyMentions t params
 -- untyped-eval vs typed-core-IR pair — same precedent as typecheck.mdk's
 -- and doc.mdk's ppEffAtomTy).
 -- lint-disable-next-line rule-duplicate-body
-tyMentions (TyRow _ tail _) params = match tail
-  Some v => contains v params
-  None => False
+tyMentions (TyRow _ tail _) params = anyList (v => contains v params) tail
 
 -- ── environment ───────────────────────────────────────────────────────────
 export
@@ -4620,7 +4618,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "tyMentions" ((PCon "TyTuple" (PVar "ts")) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "t")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))) (EVar "ts")))
 (DFunDef false "tyMentions" ((PCon "TyEffect" PWild PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentions" ((PCon "TyConstrained" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))
-(DFunDef false "tyMentions" ((PCon "TyRow" PWild (PVar "tail") PWild) (PVar "params")) (EMatch (EVar "tail") (arm (PCon "Some" (PVar "v")) () (EApp (EApp (EVar "contains") (EVar "v")) (EVar "params"))) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "tyMentions" ((PCon "TyRow" PWild (PVar "tail") PWild) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EApp (EVar "contains") (EVar "v")) (EVar "params")))) (EVar "tail")))
 (DTypeSig true "lookupEnv" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "lookupEnv" ((PCon "EvalEnv" (PVar "frames")) (PVar "name")) (EApp (EApp (EVar "lookupFrames") (EVar "frames")) (EVar "name")))
 (DTypeSig false "lookupEnvOpt" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))))))
@@ -6105,7 +6103,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "tyMentions" ((PCon "TyTuple" (PVar "ts")) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "t")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))) (EVar "ts")))
 (DFunDef false "tyMentions" ((PCon "TyEffect" PWild PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))
 (DFunDef false "tyMentions" ((PCon "TyConstrained" PWild (PVar "t")) (PVar "params")) (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")))
-(DFunDef false "tyMentions" ((PCon "TyRow" PWild (PVar "tail") PWild) (PVar "params")) (EMatch (EVar "tail") (arm (PCon "Some" (PVar "v")) () (EApp (EApp (EVar "contains") (EVar "v")) (EVar "params"))) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "tyMentions" ((PCon "TyRow" PWild (PVar "tail") PWild) (PVar "params")) (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EApp (EVar "contains") (EVar "v")) (EVar "params")))) (EVar "tail")))
 (DTypeSig true "lookupEnv" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "lookupEnv" ((PCon "EvalEnv" (PVar "frames")) (PVar "name")) (EApp (EApp (EVar "lookupFrames") (EVar "frames")) (EVar "name")))
 (DTypeSig false "lookupEnvOpt" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))))))

@@ -11,8 +11,9 @@ A `ByteParser a` wraps a function from (byte array + position) to a
 (message + position).  Position threading is EXPLICIT — there is no hidden
 state monad; every primitive returns the position it consumed up to.
 
-The type is given `Mappable` / `Applicative` / `Thenable` instances so that
-`do`-notation sequences parsers, and an `Alternative` instance whose
+The type is given `DeferredMappable` / `DeferredApplicative` /
+`DeferredThenable` instances so that
+`defer`-notation sequences parsers, and a plain `orElse`/`noMatch` pair whose
 `orElse` is LEFT-BIASED with FULL BACKTRACKING: `orElse p q` tries `p` at
 the current position; if `p` fails it runs `q` at the SAME position (the
 input is immutable and we never mutate the position on failure, so
@@ -42,21 +43,34 @@ Parse result: success carries the value and the position just past what
 
 Instances: [`Mappable`](#mappable-bresult)
 
-## `ByteParser`
+## `ByteParserE`
 
 ```
-data ByteParser a
-  = ByteParser (Array Int -> Int -> BResult a)
+data ByteParserE (e : Effect) a
+  = ByteParserE (Array Int -> Int -> <e> BResult a)
 ```
 
 A byte-level parser is a function from (byte array, position) to BResult.
+  It STORES that function rather than running it, so the type indexes the
+  container by the row the stored arrow performs (`Deferred*`, core.mdk /
+  #825).  Charging a callback's row on the combinator's own arrow — what the
+  plain `Mappable`/`Applicative`/`Thenable` family does — would force the
+  stored arrow pure and run an effectful callback inside a value typed `<>`.
+  Decoding bytes performs nothing, so the exported `ByteParser a` alias pins
+  the index to `<>` and every existing signature keeps its meaning.
 
-Instances: `Mappable`, `Applicative`, `Thenable`, [`Alternative`](#alternative-byteparser)
+Instances: `DeferredMappable`, `DeferredApplicative`, `DeferredThenable`
+
+## `ByteParser`
+
+```
+type ByteParser a = ByteParserE <> a
+```
 
 ## `runBP`
 
 ```
-runBP : ByteParser a -> Array Int -> Int -> BResult a
+runBP : ByteParserE e a -> Array Int -> Int -> <e> BResult a
 ```
 
 Run the wrapped function directly.
@@ -64,7 +78,7 @@ Run the wrapped function directly.
 ## `onOk`
 
 ```
-onOk : BResult a -> (a -> Int -> BResult b) -> BResult b
+onOk : BResult a -> (a -> Int -> <e> BResult b) -> <e> BResult b
 ```
 
 Position-threading bind for BResult.  On success, passes the value and
@@ -72,6 +86,24 @@ Position-threading bind for BResult.  On success, passes the value and
 
   Lets callers chain position-threading steps without repeating the
   `BErr m ep => BErr m ep` pass-through boilerplate.
+
+## `noMatch`
+
+```
+noMatch : ByteParserE e a
+```
+
+Left-biased, full-backtracking alternative.  Plain functions rather than an
+  `Alternative` impl: that interface `requires Applicative f` at kind
+  `Type -> Type`, which `ByteParserE : Effect -> Type -> Type` cannot satisfy.
+  `noMatch` always fails; `orElse p q` tries `p`, and on failure re-runs
+  `q` from the ORIGINAL position.
+
+## `orElse`
+
+```
+orElse : ByteParserE e a -> ByteParserE e a -> ByteParserE e a
+```
 
 ## `failWith`
 
@@ -231,9 +263,12 @@ chainl1 : ByteParser a -> ByteParser (a -> a -> a) -> ByteParser a
 
 Left-associative chaining of `p` separated by operator parser `op`
   whose value is a binary function.
-Structurally identical to compiler/frontend/parser.mdk's chainl1, but over
-a different parser type (ByteParser vs token Parser) — not soundly
-shareable without a generic Monad/Alternative abstraction.
+Structurally identical to compiler/frontend/parser.mdk's chainl1.  Both
+containers are `DeferredThenable` now, but the loop tail also needs `orElse`,
+which each provides as a plain function rather than through a shared
+interface (`Alternative` requires `Applicative` at kind `Type -> Type`, which
+an `Effect`-indexed container cannot satisfy) — so a single generic version
+still has nothing to abstract over.
 
 ## `takeBytes`
 
@@ -400,14 +435,4 @@ impl Mappable BResult
 
 Mappable instance for BResult: map over the success value; pass errors
   through unchanged.  Higher-kinded impl uses the BARE head `BResult`.
-
-### `Alternative ByteParser`
-
-```
-impl Alternative ByteParser
-```
-
-Left-biased, full-backtracking alternative.
-  `noMatch` always fails; `orElse p q` tries `p`, and on failure re-runs
-  `q` from the ORIGINAL position.
 

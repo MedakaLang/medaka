@@ -1,5 +1,5 @@
 # META
-source_lines=2082
+source_lines=2084
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-duplicate-body
@@ -977,14 +977,16 @@ leadingEffOf (TyEffect labels tail _) =
 leadingEffOf _ = None
 
 -- Render a written effect row to surface syntax: `<IO>`, `<IO, State>`,
--- `<IO | e>`, `<e>` (mirrors parser.mdk effectBody: comma-separated labels, an
--- optional `| tail` var).
-renderEffRow : List (String, Option String) -> Option String -> String
-renderEffRow labels tail =
+-- `<IO | e>`, `<e>`, `<IO | e | e2>` (mirrors parser.mdk effectBody:
+-- comma-separated labels, then zero or more `| tail` vars).
+renderEffRow : List (String, Option String) -> List String -> String
+renderEffRow labels tails =
   let lbls = joinWith ", " (map renderEffAtom labels)
-  let body = match tail
-    None => lbls
-    Some v => if lbls == "" then v else stringConcat [lbls, " | ", v]
+  let body = match tails
+    [] => lbls
+    _ =>
+      let tls = joinWith " | " tails
+      if lbls == "" then tls else stringConcat [lbls, " | ", tls]
   stringConcat ["<", body, ">"]
 
 renderEffAtom : (String, Option String) -> String
@@ -2293,8 +2295,8 @@ unit = ()
 (DTypeSig false "leadingEffOf" (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "leadingEffOf" ((PCon "TyEffect" (PVar "labels") (PVar "tail") PWild)) (EApp (EVar "Some") (EApp (EVar "stringConcat") (EListLit (EApp (EApp (EVar "renderEffRow") (EVar "labels")) (EVar "tail")) (ELit (LString " "))))))
 (DFunDef false "leadingEffOf" (PWild) (EVar "None"))
-(DTypeSig false "renderEffRow" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))
-(DFunDef false "renderEffRow" ((PVar "labels") (PVar "tail")) (EBlock (DoLet false false (PVar "lbls") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "renderEffAtom")) (EVar "labels")))) (DoLet false false (PVar "body") (EMatch (EVar "tail") (arm (PCon "None") () (EVar "lbls")) (arm (PCon "Some" (PVar "v")) () (EIf (EBinOp "==" (EVar "lbls") (ELit (LString ""))) (EVar "v") (EApp (EVar "stringConcat") (EListLit (EVar "lbls") (ELit (LString " | ")) (EVar "v"))))))) (DoExpr (EApp (EVar "stringConcat") (EListLit (ELit (LString "<")) (EVar "body") (ELit (LString ">")))))))
+(DTypeSig false "renderEffRow" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
+(DFunDef false "renderEffRow" ((PVar "labels") (PVar "tails")) (EBlock (DoLet false false (PVar "lbls") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "renderEffAtom")) (EVar "labels")))) (DoLet false false (PVar "body") (EMatch (EVar "tails") (arm (PList) () (EVar "lbls")) (arm PWild () (EBlock (DoLet false false (PVar "tls") (EApp (EApp (EVar "joinWith") (ELit (LString " | "))) (EVar "tails"))) (DoExpr (EIf (EBinOp "==" (EVar "lbls") (ELit (LString ""))) (EVar "tls") (EApp (EVar "stringConcat") (EListLit (EVar "lbls") (ELit (LString " | ")) (EVar "tls"))))))))) (DoExpr (EApp (EVar "stringConcat") (EListLit (ELit (LString "<")) (EVar "body") (ELit (LString ">")))))))
 (DTypeSig false "renderEffAtom" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyCon "String")))
 (DFunDef false "renderEffAtom" ((PTuple (PVar "nm") (PCon "None"))) (EVar "nm"))
 (DFunDef false "renderEffAtom" ((PTuple (PVar "nm") (PCon "Some" (PLit (LString "_"))))) (EApp (EVar "stringConcat") (EListLit (EVar "nm") (ELit (LString " _")))))
@@ -2762,8 +2764,8 @@ unit = ()
 (DTypeSig false "leadingEffOf" (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "leadingEffOf" ((PCon "TyEffect" (PVar "labels") (PVar "tail") PWild)) (EApp (EVar "Some") (EApp (EVar "stringConcat") (EListLit (EApp (EApp (EVar "renderEffRow") (EVar "labels")) (EVar "tail")) (ELit (LString " "))))))
 (DFunDef false "leadingEffOf" (PWild) (EVar "None"))
-(DTypeSig false "renderEffRow" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))
-(DFunDef false "renderEffRow" ((PVar "labels") (PVar "tail")) (EBlock (DoLet false false (PVar "lbls") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "renderEffAtom")) (EVar "labels")))) (DoLet false false (PVar "body") (EMatch (EVar "tail") (arm (PCon "None") () (EVar "lbls")) (arm (PCon "Some" (PVar "v")) () (EIf (EBinOp "==" (EVar "lbls") (ELit (LString ""))) (EVar "v") (EApp (EVar "stringConcat") (EListLit (EVar "lbls") (ELit (LString " | ")) (EVar "v"))))))) (DoExpr (EApp (EVar "stringConcat") (EListLit (ELit (LString "<")) (EVar "body") (ELit (LString ">")))))))
+(DTypeSig false "renderEffRow" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
+(DFunDef false "renderEffRow" ((PVar "labels") (PVar "tails")) (EBlock (DoLet false false (PVar "lbls") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "renderEffAtom")) (EVar "labels")))) (DoLet false false (PVar "body") (EMatch (EVar "tails") (arm (PList) () (EVar "lbls")) (arm PWild () (EBlock (DoLet false false (PVar "tls") (EApp (EApp (EVar "joinWith") (ELit (LString " | "))) (EVar "tails"))) (DoExpr (EIf (EBinOp "==" (EVar "lbls") (ELit (LString ""))) (EVar "tls") (EApp (EVar "stringConcat") (EListLit (EVar "lbls") (ELit (LString " | ")) (EVar "tls"))))))))) (DoExpr (EApp (EVar "stringConcat") (EListLit (ELit (LString "<")) (EVar "body") (ELit (LString ">")))))))
 (DTypeSig false "renderEffAtom" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyCon "String")))
 (DFunDef false "renderEffAtom" ((PTuple (PVar "nm") (PCon "None"))) (EVar "nm"))
 (DFunDef false "renderEffAtom" ((PTuple (PVar "nm") (PCon "Some" (PLit (LString "_"))))) (EApp (EVar "stringConcat") (EListLit (EVar "nm") (ELit (LString " _")))))
