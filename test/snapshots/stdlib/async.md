@@ -1,5 +1,5 @@
 # META
-source_lines=452
+source_lines=520
 stages=DESUGAR,MARK
 # SOURCE
 -- async.mdk — Medaka's cooperative-concurrency layer: the `Async` type, its
@@ -24,7 +24,7 @@ stages=DESUGAR,MARK
 -- to one `runAsyncIO` call; the runtime owns no descriptors and no C-side state.
 
 import array.{fromList}
-import list.{partition}
+import list.{partition, reverse}
 import time.{Duration, millis, toMillis}
 
 {- | Cooperative concurrency: build a description of deferred work with
@@ -192,65 +192,92 @@ awaitResume (Task done cell) = match !cell
    arrives once all of them have finished. -}
 export
 concurrent : List (Async e a) -> Async e (List a)
-concurrent asyncs = deferThen (spawnAll asyncs) (ts => awaitAll ts)
+concurrent asyncs = deferThen (spawnAll [] asyncs) (ts => awaitAll [] ts)
 
-spawnAll : List (Async e a) -> Async e (List (Task a))
-spawnAll [] = Done []
-spawnAll (a :: rest) =
-  deferThen (spawnTask a) (t => deferMap (t :: _) (spawnAll rest))
+-- Both loops carry an accumulator and recurse in tail position, so a list of
+-- N tasks costs N steps — a `deferMap` around each recursive call would nest N
+-- deep and cost N steps per step.
+spawnAll : List (Task a) -> List (Async e a) -> Async e (List (Task a))
+spawnAll acc [] = Done (reverse acc)
+spawnAll acc (a :: rest) =
+  deferThen (spawnTask a) (t => spawnAll (t :: acc) rest)
 
-awaitAll : List (Task a) -> Async e (List a)
-awaitAll [] = Done []
-awaitAll (t :: rest) =
-  deferThen (await t) (a => deferMap (a :: _) (awaitAll rest))
+awaitAll : List a -> List (Task a) -> Async e (List a)
+awaitAll acc [] = Done (reverse acc)
+awaitAll acc (t :: rest) = deferThen (await t) (a => awaitAll (a :: acc) rest)
 
 {- | Runs a task to its value sequentially, performing exactly its row `e`.
 
-   A spawned child runs to completion before its parent continues, so the
-   result is deterministic. A task that waits on a timer or a descriptor
-   panics: use `runAsyncIO` for those. -}
+   Spawned tasks take turns at every yield, so `concurrent` interleaves its
+   children round-robin and the order is deterministic. A task that waits on
+   a timer or a descriptor panics: use `runAsyncIO` for those. -}
 export
 runAsync : Async e a -> <e> a
 runAsync prog =
   let cell = Ref None
-  let _ = runSeq (deferThen prog (a => Suspend (u => storeResult cell a)))
+  let front = Ref [deferThen prog (a => Suspend (u => storeResult cell a))]
+  let back = Ref []
+  let parked = Ref []
+  let _ = scheduleSeq front back parked
   match !cell
     Some a => a
     None => panic "async: the program finished without producing a value"
 
--- The sequential driver over Unit-typed tasks: a task's recursion stays at one
--- type, so a spawned child can be run inline by the same loop.
-runSeq : Async e Unit -> <e> Unit
-runSeq (Done _) = ()
-runSeq (Suspend t) = runSeq (t ())
-runSeq (Spawn child k) =
-  let _ = runSeq child
-  runSeq (k ())
-runSeq (Await ws k) =
-  if any flagSet ws then
-    runSeq (k ())
-  else
-    panic
-      "async: runAsync cannot wait on a timer or a file descriptor; drive this program with runAsyncIO"
+-- The sequential scheduler: the same run queue as `runAsyncIO`, but the only
+-- wait it can satisfy is a finished task's flag.
+scheduleSeq : Ref (List (Async e Unit)) ->
+  Ref (List (Async e Unit)) ->
+  Ref (List (List Wait, Unit -> <e> Async e Unit)) ->
+  <e> Unit
+scheduleSeq front back parked = match popTask front back
+  Some t =>
+    let _ = dispatch back parked (stepTask t)
+    scheduleSeq front back parked
+  None => match !parked
+    [] => ()
+    waiting =>
+      let (ready, still) = partition (p => any flagSet (fst p)) waiting
+      match ready
+        _ :: _ =>
+          parked := still
+          let _ = requeue back ready
+          scheduleSeq front back parked
+        [] =>
+          if any
+            (p => any isFdWait (fst p) || any isTimerWait (fst p))
+            still then
+            panic
+              "async: runAsync cannot wait on a timer or a file descriptor; drive this program with runAsyncIO"
+          else
+            panic
+              "async: every remaining task is waiting on a task that can never finish (deadlock)"
 
 flagSet : Wait -> Bool
 flagSet (WaitFlag r) = !r
 flagSet _ = False
 
+isTimerWait : Wait -> Bool
+isTimerWait (WaitUntil _) = True
+isTimerWait _ = False
+
 {- | Runs a task under the scheduler, performing its row `e` plus the
    scheduler's own `<Clock>` and `<Net "_">`.
 
-   Runnable tasks take turns at every yield. When every task is parked, the
-   scheduler sleeps until the earliest deadline. It returns the program's
-   value once the program and every spawned task have finished, and panics
-   if the remaining tasks can never be woken. -}
+   Runnable tasks take turns at every yield. After every round over the run
+   queue the scheduler gives parked tasks whose timer has expired, whose
+   descriptor is ready, or whose awaited task has finished their turn, so a
+   task that never parks cannot starve the others. When every task is parked
+   it sleeps until the earliest deadline or the next descriptor event. It
+   returns the program's value once the program and every spawned task have
+   finished, and panics if the remaining tasks can never be woken. -}
 export
 runAsyncIO : Async e a -> <Clock, Net "_" | e> a
 runAsyncIO prog =
   let cell = Ref None
-  let queue = Ref [deferThen prog (a => Suspend (u => storeResult cell a))]
+  let front = Ref [deferThen prog (a => Suspend (u => storeResult cell a))]
+  let back = Ref []
   let parked = Ref []
-  let _ = schedule queue parked
+  let _ = schedule front back parked 1
   match !cell
     Some a => a
     None => panic "async: the program finished without producing a value"
@@ -276,21 +303,50 @@ storeResult cell a =
   cell := Some a
   Done ()
 
--- One scheduler round: step the head of the run queue, or wake parked tasks
--- when the queue is empty.  Tail-recursive so compiled code loops.
-schedule : Ref (List (Async e Unit)) ->
-  Ref (List (List Wait, Unit -> <e> Async e Unit)) ->
-  <Clock, Net "_" | e> Unit
-schedule queue parked = match !queue
+-- The run queue is two lists: tasks are popped from `front` and pushed onto
+-- `back` (newest first); when `front` runs dry, `back` is reversed into it.
+popTask : Ref (List (Async e Unit)) ->
+  Ref (List (Async e Unit)) ->
+  Option (Async e Unit)
+popTask front back = match !front
   t :: rest =>
-    queue := rest
-    let _ = dispatch queue parked (stepTask t)
-    schedule queue parked
-  [] => match !parked
-    [] => ()
-    _ =>
-      let _ = wakeParked queue parked
-      schedule queue parked
+    front := rest
+    Some t
+  [] => match reverse !back
+    [] => None
+    t :: rest =>
+      front := rest
+      back := []
+      Some t
+
+pushBack : Ref (List (Async e Unit)) -> Async e Unit -> Unit
+pushBack back t = back := t :: !back
+
+queueLength : Ref (List (Async e Unit)) -> Ref (List (Async e Unit)) -> Int
+queueLength front back = length !front + length !back
+
+-- One scheduler step, with `budget` tasks left in the current round.  A round
+-- is one pass over the queue as it stood when the round began; at the end of
+-- each round every parked task gets a non-blocking chance to wake, which is
+-- what keeps a task that never parks from starving the rest.
+schedule : Ref (List (Async e Unit)) ->
+  Ref (List (Async e Unit)) ->
+  Ref (List (List Wait, Unit -> <e> Async e Unit)) ->
+  Int ->
+  <Clock, Net "_" | e> Unit
+schedule front back parked budget =
+  if budget <= 0 then
+    let _ = wakeParked back parked False
+    schedule front back parked (max 1 (queueLength front back))
+  else match popTask front back
+    Some t =>
+      let _ = dispatch back parked (stepTask t)
+      schedule front back parked (budget - 1)
+    None => match !parked
+      [] => ()
+      _ =>
+        let _ = wakeParked back parked True
+        schedule front back parked (max 1 (queueLength front back))
 
 stepTask : Async e Unit -> <e> Async e Unit
 stepTask (Suspend k) = k ()
@@ -301,37 +357,43 @@ dispatch : Ref (List (Async e Unit)) ->
   Async e Unit ->
   Unit
 dispatch _ _ (Done _) = ()
-dispatch queue _ (Suspend k) = pushBack queue (Suspend k)
+dispatch back _ (Suspend k) = pushBack back (Suspend k)
 dispatch _ parked (Await ws k) = parked := (ws, k) :: !parked
-dispatch queue _ (Spawn child k) =
-  let _ = pushBack queue child
-  pushBack queue (Suspend k)
+dispatch back _ (Spawn child k) =
+  let _ = pushBack back child
+  pushBack back (Suspend k)
 
-pushBack : Ref (List (Async e Unit)) -> Async e Unit -> Unit
-pushBack queue t = queue := !queue ++ [t]
-
--- Nothing is runnable: move every task whose wait is satisfied back to the
--- queue, or sleep until the earliest deadline, or report a deadlock.
+-- Move every parked task whose wait is satisfied back to the queue, oldest
+-- first.  When `block` is set nothing is runnable: sleep until the earliest
+-- deadline or wait in `ioPoll`, and report a deadlock if neither can wake
+-- anything.  When it is clear, only a zero-timeout poll is made.
 wakeParked : Ref (List (Async e Unit)) ->
   Ref (List (List Wait, Unit -> <e> Async e Unit)) ->
+  Bool ->
   <Clock, Net "_"> Unit
-wakeParked queue parked =
+wakeParked back parked block =
   let now = monotonicSec ()
   let (ready, waiting) = partition (p => isReady now p) !parked
   match ready
     _ :: _ =>
       parked := waiting
-      requeue queue ready
+      requeue back ready
     [] => match fdWaitsOf waiting
-      [] => match earliestDeadline waiting
-        Some t => sleepMs (millisUntil now t)
-        None =>
-          panic
-            "async: every remaining task is waiting on a task that can never finish (deadlock)"
+      [] =>
+        if not block then
+          ()
+        else match earliestDeadline waiting
+          Some t => sleepMs (millisUntil now t)
+          None =>
+            panic
+              "async: every remaining task is waiting on a task that can never finish (deadlock)"
       fdWaits =>
-        let timeout = match earliestDeadline waiting
-          Some t => millisUntil now t
-          None => -1
+        let timeout =
+          if not block then
+            0
+          else match earliestDeadline waiting
+            Some t => millisUntil now t
+            None => -1
         match (ioPoll
           (fromList (map pollFd fdWaits))
           (fromList (map pollInterest fdWaits))
@@ -344,10 +406,52 @@ wakeParked queue parked =
                 (p => any (w => waitSatisfied satisfied w) (fst p))
                 waiting
             parked := still
-            requeue queue woke
+            requeue back woke
 
 millisUntil : Float -> Float -> Int
 millisUntil now t = max 0 (floatToInt ((t - now) * 1000.0) + 1)
+
+-- `parked` holds newest first; requeue oldest first so waking is FIFO.
+requeue : Ref (List (Async e Unit)) ->
+  List (List Wait, Unit -> <e> Async e Unit) ->
+  Unit
+requeue back ready = requeueOldestFirst back (reverse ready)
+
+requeueOldestFirst : Ref (List (Async e Unit)) ->
+  List (List Wait, Unit -> <e> Async e Unit) ->
+  Unit
+requeueOldestFirst _ [] = ()
+requeueOldestFirst back ((_, k) :: rest) =
+  let _ = pushBack back (Suspend k)
+  requeueOldestFirst back rest
+
+isReady : Float -> (List Wait, Unit -> <e> Async e Unit) -> Bool
+isReady now (ws, _) = any (w => waitReady now w) ws
+
+waitReady : Float -> Wait -> Bool
+waitReady now (WaitUntil t) = t <= now
+waitReady _ (WaitFlag r) = !r
+waitReady _ _ = False
+
+isFdWait : Wait -> Bool
+isFdWait (WaitRead _) = True
+isFdWait (WaitWrite _) = True
+isFdWait _ = False
+
+earliestDeadline : List (List Wait, Unit -> <e> Async e Unit) -> Option Float
+earliestDeadline [] = None
+earliestDeadline ((ws, _) :: rest) =
+  minDeadline (deadlinesOf ws) (earliestDeadline rest)
+
+deadlinesOf : List Wait -> Option Float
+deadlinesOf [] = None
+deadlinesOf ((WaitUntil t) :: rest) = minDeadline (Some t) (deadlinesOf rest)
+deadlinesOf (_ :: rest) = deadlinesOf rest
+
+minDeadline : Option Float -> Option Float -> Option Float
+minDeadline None b = b
+minDeadline a None = a
+minDeadline (Some x) (Some y) = Some (min x y)
 
 -- Every descriptor wait across the park table, one poll entry each.
 fdWaitsOf : List (List Wait, Unit -> <e> Async e Unit) -> List Wait
@@ -382,42 +486,6 @@ isReadOf _ _ = False
 isWriteOf : Int -> Wait -> Bool
 isWriteOf fd (WaitWrite x) = x == fd
 isWriteOf _ _ = False
-
-requeue : Ref (List (Async e Unit)) ->
-  List (List Wait, Unit -> <e> Async e Unit) ->
-  Unit
-requeue _ [] = ()
-requeue queue ((_, k) :: rest) =
-  let _ = pushBack queue (Suspend k)
-  requeue queue rest
-
-isReady : Float -> (List Wait, Unit -> <e> Async e Unit) -> Bool
-isReady now (ws, _) = any (w => waitReady now w) ws
-
-waitReady : Float -> Wait -> Bool
-waitReady now (WaitUntil t) = t <= now
-waitReady _ (WaitFlag r) = !r
-waitReady _ _ = False
-
-isFdWait : Wait -> Bool
-isFdWait (WaitRead _) = True
-isFdWait (WaitWrite _) = True
-isFdWait _ = False
-
-earliestDeadline : List (List Wait, Unit -> <e> Async e Unit) -> Option Float
-earliestDeadline [] = None
-earliestDeadline ((ws, _) :: rest) =
-  minDeadline (deadlinesOf ws) (earliestDeadline rest)
-
-deadlinesOf : List Wait -> Option Float
-deadlinesOf [] = None
-deadlinesOf ((WaitUntil t) :: rest) = minDeadline (Some t) (deadlinesOf rest)
-deadlinesOf (_ :: rest) = deadlinesOf rest
-
-minDeadline : Option Float -> Option Float -> Option Float
-minDeadline None b = b
-minDeadline a None = a
-minDeadline (Some x) (Some y) = Some (min x y)
 
 {- Doctests.
 
@@ -456,7 +524,7 @@ minDeadline (Some x) (Some y) = Some (min x y)
 -}
 # DESUGAR
 (DUse false (UseGroup ("array") ((mem "fromList" false))))
-(DUse false (UseGroup ("list") ((mem "partition" false))))
+(DUse false (UseGroup ("list") ((mem "partition" false) (mem "reverse" false))))
 (DUse false (UseGroup ("time") ((mem "Duration" false) (mem "millis" false) (mem "toMillis" false))))
 (DData Abstract "Async" ("e" "a") ((variant "Done" (ConPos (TyVar "a"))) (variant "Suspend" (ConPos (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a")))))) (variant "Await" (ConPos (TyApp (TyCon "List") (TyCon "Wait")) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a")))))) (variant "Spawn" (ConPos (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a"))))))) ())
 (DData Public "Wait" () ((variant "WaitRead" (ConPos (TyCon "Int"))) (variant "WaitWrite" (ConPos (TyCon "Int"))) (variant "WaitUntil" (ConPos (TyCon "Float"))) (variant "WaitFlag" (ConPos (TyApp (TyCon "Ref") (TyCon "Bool"))))) ())
@@ -496,47 +564,77 @@ minDeadline (Some x) (Some y) = Some (min x y)
 (DTypeSig false "awaitResume" (TyFun (TyApp (TyCon "Task") (TyVar "a")) (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a"))))
 (DFunDef false "awaitResume" ((PCon "Task" (PVar "done") (PVar "cell"))) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Some" (PVar "a")) () (EApp (EVar "Done") (EVar "a"))) (arm (PCon "None") () (EApp (EVar "await") (EApp (EApp (EVar "Task") (EVar "done")) (EVar "cell"))))))
 (DTypeSig true "concurrent" (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a"))) (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyApp (TyCon "List") (TyVar "a")))))
-(DFunDef false "concurrent" ((PVar "asyncs")) (EApp (EApp (EVar "deferThen") (EApp (EVar "spawnAll") (EVar "asyncs"))) (ELam ((PVar "ts")) (EApp (EVar "awaitAll") (EVar "ts")))))
-(DTypeSig false "spawnAll" (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a"))) (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyApp (TyCon "List") (TyApp (TyCon "Task") (TyVar "a"))))))
-(DFunDef false "spawnAll" ((PList)) (EApp (EVar "Done") (EListLit)))
-(DFunDef false "spawnAll" ((PCons (PVar "a") (PVar "rest"))) (EApp (EApp (EVar "deferThen") (EApp (EVar "spawnTask") (EVar "a"))) (ELam ((PVar "t")) (EApp (EApp (EVar "deferMap") (ELam ((PVar "_s")) (EBinOp "::" (EVar "t") (EVar "_s")))) (EApp (EVar "spawnAll") (EVar "rest"))))))
-(DTypeSig false "awaitAll" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Task") (TyVar "a"))) (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyApp (TyCon "List") (TyVar "a")))))
-(DFunDef false "awaitAll" ((PList)) (EApp (EVar "Done") (EListLit)))
-(DFunDef false "awaitAll" ((PCons (PVar "t") (PVar "rest"))) (EApp (EApp (EVar "deferThen") (EApp (EVar "await") (EVar "t"))) (ELam ((PVar "a")) (EApp (EApp (EVar "deferMap") (ELam ((PVar "_s")) (EBinOp "::" (EVar "a") (EVar "_s")))) (EApp (EVar "awaitAll") (EVar "rest"))))))
+(DFunDef false "concurrent" ((PVar "asyncs")) (EApp (EApp (EVar "deferThen") (EApp (EApp (EVar "spawnAll") (EListLit)) (EVar "asyncs"))) (ELam ((PVar "ts")) (EApp (EApp (EVar "awaitAll") (EListLit)) (EVar "ts")))))
+(DTypeSig false "spawnAll" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Task") (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a"))) (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyApp (TyCon "List") (TyApp (TyCon "Task") (TyVar "a")))))))
+(DFunDef false "spawnAll" ((PVar "acc") (PList)) (EApp (EVar "Done") (EApp (EVar "reverse") (EVar "acc"))))
+(DFunDef false "spawnAll" ((PVar "acc") (PCons (PVar "a") (PVar "rest"))) (EApp (EApp (EVar "deferThen") (EApp (EVar "spawnTask") (EVar "a"))) (ELam ((PVar "t")) (EApp (EApp (EVar "spawnAll") (EBinOp "::" (EVar "t") (EVar "acc"))) (EVar "rest")))))
+(DTypeSig false "awaitAll" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Task") (TyVar "a"))) (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyApp (TyCon "List") (TyVar "a"))))))
+(DFunDef false "awaitAll" ((PVar "acc") (PList)) (EApp (EVar "Done") (EApp (EVar "reverse") (EVar "acc"))))
+(DFunDef false "awaitAll" ((PVar "acc") (PCons (PVar "t") (PVar "rest"))) (EApp (EApp (EVar "deferThen") (EApp (EVar "await") (EVar "t"))) (ELam ((PVar "a")) (EApp (EApp (EVar "awaitAll") (EBinOp "::" (EVar "a") (EVar "acc"))) (EVar "rest")))))
 (DTypeSig true "runAsync" (TyFun (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a")) (TyEffect () (Some "e") (TyVar "a"))))
-(DFunDef false "runAsync" ((PVar "prog")) (EBlock (DoLet false false (PVar "cell") (EApp (EVar "Ref") (EVar "None"))) (DoLet false false PWild (EApp (EVar "runSeq") (EApp (EApp (EVar "deferThen") (EVar "prog")) (ELam ((PVar "a")) (EApp (EVar "Suspend") (ELam ((PVar "u")) (EApp (EApp (EVar "storeResult") (EVar "cell")) (EVar "a")))))))) (DoExpr (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Some" (PVar "a")) () (EVar "a")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "async: the program finished without producing a value"))))))))
-(DTypeSig false "runSeq" (TyFun (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")) (TyEffect () (Some "e") (TyCon "Unit"))))
-(DFunDef false "runSeq" ((PCon "Done" PWild)) (ELit LUnit))
-(DFunDef false "runSeq" ((PCon "Suspend" (PVar "t"))) (EApp (EVar "runSeq") (EApp (EVar "t") (ELit LUnit))))
-(DFunDef false "runSeq" ((PCon "Spawn" (PVar "child") (PVar "k"))) (EBlock (DoLet false false PWild (EApp (EVar "runSeq") (EVar "child"))) (DoExpr (EApp (EVar "runSeq") (EApp (EVar "k") (ELit LUnit))))))
-(DFunDef false "runSeq" ((PCon "Await" (PVar "ws") (PVar "k"))) (EIf (EApp (EApp (EVar "any") (EVar "flagSet")) (EVar "ws")) (EApp (EVar "runSeq") (EApp (EVar "k") (ELit LUnit))) (EApp (EVar "panic") (ELit (LString "async: runAsync cannot wait on a timer or a file descriptor; drive this program with runAsyncIO")))))
+(DFunDef false "runAsync" ((PVar "prog")) (EBlock (DoLet false false (PVar "cell") (EApp (EVar "Ref") (EVar "None"))) (DoLet false false (PVar "front") (EApp (EVar "Ref") (EListLit (EApp (EApp (EVar "deferThen") (EVar "prog")) (ELam ((PVar "a")) (EApp (EVar "Suspend") (ELam ((PVar "u")) (EApp (EApp (EVar "storeResult") (EVar "cell")) (EVar "a"))))))))) (DoLet false false (PVar "back") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "parked") (EApp (EVar "Ref") (EListLit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "scheduleSeq") (EVar "front")) (EVar "back")) (EVar "parked"))) (DoExpr (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Some" (PVar "a")) () (EVar "a")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "async: the program finished without producing a value"))))))))
+(DTypeSig false "scheduleSeq" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Wait")) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit"))))))) (TyEffect () (Some "e") (TyCon "Unit"))))))
+(DFunDef false "scheduleSeq" ((PVar "front") (PVar "back") (PVar "parked")) (EMatch (EApp (EApp (EVar "popTask") (EVar "front")) (EVar "back")) (arm (PCon "Some" (PVar "t")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "dispatch") (EVar "back")) (EVar "parked")) (EApp (EVar "stepTask") (EVar "t")))) (DoExpr (EApp (EApp (EApp (EVar "scheduleSeq") (EVar "front")) (EVar "back")) (EVar "parked"))))) (arm (PCon "None") () (EMatch (EUnOp "!" (EVar "parked")) (arm (PList) () (ELit LUnit)) (arm (PVar "waiting") () (EBlock (DoLet false false (PTuple (PVar "ready") (PVar "still")) (EApp (EApp (EVar "partition") (ELam ((PVar "p")) (EApp (EApp (EVar "any") (EVar "flagSet")) (EApp (EVar "fst") (EVar "p"))))) (EVar "waiting"))) (DoExpr (EMatch (EVar "ready") (arm (PCons PWild PWild) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "parked")) (EVar "still"))) (DoLet false false PWild (EApp (EApp (EVar "requeue") (EVar "back")) (EVar "ready"))) (DoExpr (EApp (EApp (EApp (EVar "scheduleSeq") (EVar "front")) (EVar "back")) (EVar "parked"))))) (arm (PList) () (EIf (EApp (EApp (EVar "any") (ELam ((PVar "p")) (EBinOp "||" (EApp (EApp (EVar "any") (EVar "isFdWait")) (EApp (EVar "fst") (EVar "p"))) (EApp (EApp (EVar "any") (EVar "isTimerWait")) (EApp (EVar "fst") (EVar "p")))))) (EVar "still")) (EApp (EVar "panic") (ELit (LString "async: runAsync cannot wait on a timer or a file descriptor; drive this program with runAsyncIO"))) (EApp (EVar "panic") (ELit (LString "async: every remaining task is waiting on a task that can never finish (deadlock)")))))))))))))
 (DTypeSig false "flagSet" (TyFun (TyCon "Wait") (TyCon "Bool")))
 (DFunDef false "flagSet" ((PCon "WaitFlag" (PVar "r"))) (EUnOp "!" (EVar "r")))
 (DFunDef false "flagSet" (PWild) (EVar "False"))
+(DTypeSig false "isTimerWait" (TyFun (TyCon "Wait") (TyCon "Bool")))
+(DFunDef false "isTimerWait" ((PCon "WaitUntil" PWild)) (EVar "True"))
+(DFunDef false "isTimerWait" (PWild) (EVar "False"))
 (DTypeSig true "runAsyncIO" (TyFun (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a")) (TyEffect ("Clock" (hole "Net")) (Some "e") (TyVar "a"))))
-(DFunDef false "runAsyncIO" ((PVar "prog")) (EBlock (DoLet false false (PVar "cell") (EApp (EVar "Ref") (EVar "None"))) (DoLet false false (PVar "queue") (EApp (EVar "Ref") (EListLit (EApp (EApp (EVar "deferThen") (EVar "prog")) (ELam ((PVar "a")) (EApp (EVar "Suspend") (ELam ((PVar "u")) (EApp (EApp (EVar "storeResult") (EVar "cell")) (EVar "a"))))))))) (DoLet false false (PVar "parked") (EApp (EVar "Ref") (EListLit))) (DoLet false false PWild (EApp (EApp (EVar "schedule") (EVar "queue")) (EVar "parked"))) (DoExpr (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Some" (PVar "a")) () (EVar "a")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "async: the program finished without producing a value"))))))))
+(DFunDef false "runAsyncIO" ((PVar "prog")) (EBlock (DoLet false false (PVar "cell") (EApp (EVar "Ref") (EVar "None"))) (DoLet false false (PVar "front") (EApp (EVar "Ref") (EListLit (EApp (EApp (EVar "deferThen") (EVar "prog")) (ELam ((PVar "a")) (EApp (EVar "Suspend") (ELam ((PVar "u")) (EApp (EApp (EVar "storeResult") (EVar "cell")) (EVar "a"))))))))) (DoLet false false (PVar "back") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "parked") (EApp (EVar "Ref") (EListLit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "schedule") (EVar "front")) (EVar "back")) (EVar "parked")) (ELit (LInt 1)))) (DoExpr (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Some" (PVar "a")) () (EVar "a")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "async: the program finished without producing a value"))))))))
 (DTypeSig true "runAsyncIOMain" (TyFun (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")) (TyEffect ("Clock" (hole "Net")) (Some "e") (TyCon "Unit"))))
 (DFunDef false "runAsyncIOMain" ((PVar "prog")) (EApp (EVar "runAsyncIO") (EVar "prog")))
 (DTypeSig true "runAsyncMain" (TyFun (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")) (TyEffect () (Some "e") (TyCon "Unit"))))
 (DFunDef false "runAsyncMain" ((PVar "prog")) (EApp (EVar "runAsync") (EVar "prog")))
 (DTypeSig false "storeResult" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyVar "a"))) (TyFun (TyVar "a") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))))
 (DFunDef false "storeResult" ((PVar "cell") (PVar "a")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EVar "Some") (EVar "a")))) (DoExpr (EApp (EVar "Done") (ELit LUnit)))))
-(DTypeSig false "schedule" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Wait")) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit"))))))) (TyEffect ("Clock" (hole "Net")) (Some "e") (TyCon "Unit")))))
-(DFunDef false "schedule" ((PVar "queue") (PVar "parked")) (EMatch (EUnOp "!" (EVar "queue")) (arm (PCons (PVar "t") (PVar "rest")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "queue")) (EVar "rest"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "dispatch") (EVar "queue")) (EVar "parked")) (EApp (EVar "stepTask") (EVar "t")))) (DoExpr (EApp (EApp (EVar "schedule") (EVar "queue")) (EVar "parked"))))) (arm (PList) () (EMatch (EUnOp "!" (EVar "parked")) (arm (PList) () (ELit LUnit)) (arm PWild () (EBlock (DoLet false false PWild (EApp (EApp (EVar "wakeParked") (EVar "queue")) (EVar "parked"))) (DoExpr (EApp (EApp (EVar "schedule") (EVar "queue")) (EVar "parked")))))))))
+(DTypeSig false "popTask" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyApp (TyCon "Option") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit"))))))
+(DFunDef false "popTask" ((PVar "front") (PVar "back")) (EMatch (EUnOp "!" (EVar "front")) (arm (PCons (PVar "t") (PVar "rest")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "front")) (EVar "rest"))) (DoExpr (EApp (EVar "Some") (EVar "t"))))) (arm (PList) () (EMatch (EApp (EVar "reverse") (EUnOp "!" (EVar "back"))) (arm (PList) () (EVar "None")) (arm (PCons (PVar "t") (PVar "rest")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "front")) (EVar "rest"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "back")) (EListLit))) (DoExpr (EApp (EVar "Some") (EVar "t")))))))))
+(DTypeSig false "pushBack" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyFun (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")) (TyCon "Unit"))))
+(DFunDef false "pushBack" ((PVar "back") (PVar "t")) (EApp (EApp (EVar "setRef") (EVar "back")) (EBinOp "::" (EVar "t") (EUnOp "!" (EVar "back")))))
+(DTypeSig false "queueLength" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyCon "Int"))))
+(DFunDef false "queueLength" ((PVar "front") (PVar "back")) (EBinOp "+" (EApp (EVar "length") (EUnOp "!" (EVar "front"))) (EApp (EVar "length") (EUnOp "!" (EVar "back")))))
+(DTypeSig false "schedule" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Wait")) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit"))))))) (TyFun (TyCon "Int") (TyEffect ("Clock" (hole "Net")) (Some "e") (TyCon "Unit")))))))
+(DFunDef false "schedule" ((PVar "front") (PVar "back") (PVar "parked") (PVar "budget")) (EIf (EBinOp "<=" (EVar "budget") (ELit (LInt 0))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "wakeParked") (EVar "back")) (EVar "parked")) (EVar "False"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "schedule") (EVar "front")) (EVar "back")) (EVar "parked")) (EApp (EApp (EVar "max") (ELit (LInt 1))) (EApp (EApp (EVar "queueLength") (EVar "front")) (EVar "back")))))) (EMatch (EApp (EApp (EVar "popTask") (EVar "front")) (EVar "back")) (arm (PCon "Some" (PVar "t")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "dispatch") (EVar "back")) (EVar "parked")) (EApp (EVar "stepTask") (EVar "t")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "schedule") (EVar "front")) (EVar "back")) (EVar "parked")) (EBinOp "-" (EVar "budget") (ELit (LInt 1))))))) (arm (PCon "None") () (EMatch (EUnOp "!" (EVar "parked")) (arm (PList) () (ELit LUnit)) (arm PWild () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "wakeParked") (EVar "back")) (EVar "parked")) (EVar "True"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "schedule") (EVar "front")) (EVar "back")) (EVar "parked")) (EApp (EApp (EVar "max") (ELit (LInt 1))) (EApp (EApp (EVar "queueLength") (EVar "front")) (EVar "back"))))))))))))
 (DTypeSig false "stepTask" (TyFun (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")) (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))))
 (DFunDef false "stepTask" ((PCon "Suspend" (PVar "k"))) (EApp (EVar "k") (ELit LUnit)))
 (DFunDef false "stepTask" ((PVar "other")) (EVar "other"))
 (DTypeSig false "dispatch" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Wait")) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit"))))))) (TyFun (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")) (TyCon "Unit")))))
 (DFunDef false "dispatch" (PWild PWild (PCon "Done" PWild)) (ELit LUnit))
-(DFunDef false "dispatch" ((PVar "queue") PWild (PCon "Suspend" (PVar "k"))) (EApp (EApp (EVar "pushBack") (EVar "queue")) (EApp (EVar "Suspend") (EVar "k"))))
+(DFunDef false "dispatch" ((PVar "back") PWild (PCon "Suspend" (PVar "k"))) (EApp (EApp (EVar "pushBack") (EVar "back")) (EApp (EVar "Suspend") (EVar "k"))))
 (DFunDef false "dispatch" (PWild (PVar "parked") (PCon "Await" (PVar "ws") (PVar "k"))) (EApp (EApp (EVar "setRef") (EVar "parked")) (EBinOp "::" (ETuple (EVar "ws") (EVar "k")) (EUnOp "!" (EVar "parked")))))
-(DFunDef false "dispatch" ((PVar "queue") PWild (PCon "Spawn" (PVar "child") (PVar "k"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushBack") (EVar "queue")) (EVar "child"))) (DoExpr (EApp (EApp (EVar "pushBack") (EVar "queue")) (EApp (EVar "Suspend") (EVar "k"))))))
-(DTypeSig false "pushBack" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyFun (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")) (TyCon "Unit"))))
-(DFunDef false "pushBack" ((PVar "queue") (PVar "t")) (EApp (EApp (EVar "setRef") (EVar "queue")) (EBinOp "++" (EUnOp "!" (EVar "queue")) (EListLit (EVar "t")))))
-(DTypeSig false "wakeParked" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Wait")) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit"))))))) (TyEffect ("Clock" (hole "Net")) None (TyCon "Unit")))))
-(DFunDef false "wakeParked" ((PVar "queue") (PVar "parked")) (EBlock (DoLet false false (PVar "now") (EApp (EVar "monotonicSec") (ELit LUnit))) (DoLet false false (PTuple (PVar "ready") (PVar "waiting")) (EApp (EApp (EVar "partition") (ELam ((PVar "p")) (EApp (EApp (EVar "isReady") (EVar "now")) (EVar "p")))) (EUnOp "!" (EVar "parked")))) (DoExpr (EMatch (EVar "ready") (arm (PCons PWild PWild) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "parked")) (EVar "waiting"))) (DoExpr (EApp (EApp (EVar "requeue") (EVar "queue")) (EVar "ready"))))) (arm (PList) () (EMatch (EApp (EVar "fdWaitsOf") (EVar "waiting")) (arm (PList) () (EMatch (EApp (EVar "earliestDeadline") (EVar "waiting")) (arm (PCon "Some" (PVar "t")) () (EApp (EVar "sleepMs") (EApp (EApp (EVar "millisUntil") (EVar "now")) (EVar "t")))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "async: every remaining task is waiting on a task that can never finish (deadlock)")))))) (arm (PVar "fdWaits") () (EBlock (DoLet false false (PVar "timeout") (EMatch (EApp (EVar "earliestDeadline") (EVar "waiting")) (arm (PCon "Some" (PVar "t")) () (EApp (EApp (EVar "millisUntil") (EVar "now")) (EVar "t"))) (arm (PCon "None") () (EUnOp "-" (ELit (LInt 1)))))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "ioPoll") (EApp (EVar "fromList") (EApp (EApp (EVar "map") (EVar "pollFd")) (EVar "fdWaits")))) (EApp (EVar "fromList") (EApp (EApp (EVar "map") (EVar "pollInterest")) (EVar "fdWaits")))) (EVar "timeout")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "panic") (EBinOp "++" (ELit (LString "async: poll failed: ")) (EVar "e")))) (arm (PCon "Ok" (PVar "readiness")) () (EBlock (DoLet false false (PVar "satisfied") (EApp (EApp (EVar "satisfiedWaits") (EVar "fdWaits")) (EApp (EVar "toList") (EVar "readiness")))) (DoLet false false (PTuple (PVar "woke") (PVar "still")) (EApp (EApp (EVar "partition") (ELam ((PVar "p")) (EApp (EApp (EVar "any") (ELam ((PVar "w")) (EApp (EApp (EVar "waitSatisfied") (EVar "satisfied")) (EVar "w")))) (EApp (EVar "fst") (EVar "p"))))) (EVar "waiting"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "parked")) (EVar "still"))) (DoExpr (EApp (EApp (EVar "requeue") (EVar "queue")) (EVar "woke")))))))))))))))
+(DFunDef false "dispatch" ((PVar "back") PWild (PCon "Spawn" (PVar "child") (PVar "k"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushBack") (EVar "back")) (EVar "child"))) (DoExpr (EApp (EApp (EVar "pushBack") (EVar "back")) (EApp (EVar "Suspend") (EVar "k"))))))
+(DTypeSig false "wakeParked" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Wait")) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit"))))))) (TyFun (TyCon "Bool") (TyEffect ("Clock" (hole "Net")) None (TyCon "Unit"))))))
+(DFunDef false "wakeParked" ((PVar "back") (PVar "parked") (PVar "block")) (EBlock (DoLet false false (PVar "now") (EApp (EVar "monotonicSec") (ELit LUnit))) (DoLet false false (PTuple (PVar "ready") (PVar "waiting")) (EApp (EApp (EVar "partition") (ELam ((PVar "p")) (EApp (EApp (EVar "isReady") (EVar "now")) (EVar "p")))) (EUnOp "!" (EVar "parked")))) (DoExpr (EMatch (EVar "ready") (arm (PCons PWild PWild) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "parked")) (EVar "waiting"))) (DoExpr (EApp (EApp (EVar "requeue") (EVar "back")) (EVar "ready"))))) (arm (PList) () (EMatch (EApp (EVar "fdWaitsOf") (EVar "waiting")) (arm (PList) () (EIf (EApp (EVar "not") (EVar "block")) (ELit LUnit) (EMatch (EApp (EVar "earliestDeadline") (EVar "waiting")) (arm (PCon "Some" (PVar "t")) () (EApp (EVar "sleepMs") (EApp (EApp (EVar "millisUntil") (EVar "now")) (EVar "t")))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "async: every remaining task is waiting on a task that can never finish (deadlock)"))))))) (arm (PVar "fdWaits") () (EBlock (DoLet false false (PVar "timeout") (EIf (EApp (EVar "not") (EVar "block")) (ELit (LInt 0)) (EMatch (EApp (EVar "earliestDeadline") (EVar "waiting")) (arm (PCon "Some" (PVar "t")) () (EApp (EApp (EVar "millisUntil") (EVar "now")) (EVar "t"))) (arm (PCon "None") () (EUnOp "-" (ELit (LInt 1))))))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "ioPoll") (EApp (EVar "fromList") (EApp (EApp (EVar "map") (EVar "pollFd")) (EVar "fdWaits")))) (EApp (EVar "fromList") (EApp (EApp (EVar "map") (EVar "pollInterest")) (EVar "fdWaits")))) (EVar "timeout")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "panic") (EBinOp "++" (ELit (LString "async: poll failed: ")) (EVar "e")))) (arm (PCon "Ok" (PVar "readiness")) () (EBlock (DoLet false false (PVar "satisfied") (EApp (EApp (EVar "satisfiedWaits") (EVar "fdWaits")) (EApp (EVar "toList") (EVar "readiness")))) (DoLet false false (PTuple (PVar "woke") (PVar "still")) (EApp (EApp (EVar "partition") (ELam ((PVar "p")) (EApp (EApp (EVar "any") (ELam ((PVar "w")) (EApp (EApp (EVar "waitSatisfied") (EVar "satisfied")) (EVar "w")))) (EApp (EVar "fst") (EVar "p"))))) (EVar "waiting"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "parked")) (EVar "still"))) (DoExpr (EApp (EApp (EVar "requeue") (EVar "back")) (EVar "woke")))))))))))))))
 (DTypeSig false "millisUntil" (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyCon "Int"))))
 (DFunDef false "millisUntil" ((PVar "now") (PVar "t")) (EApp (EApp (EVar "max") (ELit (LInt 0))) (EBinOp "+" (EApp (EVar "floatToInt") (EBinOp "*" (EBinOp "-" (EVar "t") (EVar "now")) (ELit (LFloat 1000.0)))) (ELit (LInt 1)))))
+(DTypeSig false "requeue" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Wait")) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))))) (TyCon "Unit"))))
+(DFunDef false "requeue" ((PVar "back") (PVar "ready")) (EApp (EApp (EVar "requeueOldestFirst") (EVar "back")) (EApp (EVar "reverse") (EVar "ready"))))
+(DTypeSig false "requeueOldestFirst" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Wait")) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))))) (TyCon "Unit"))))
+(DFunDef false "requeueOldestFirst" (PWild (PList)) (ELit LUnit))
+(DFunDef false "requeueOldestFirst" ((PVar "back") (PCons (PTuple PWild (PVar "k")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushBack") (EVar "back")) (EApp (EVar "Suspend") (EVar "k")))) (DoExpr (EApp (EApp (EVar "requeueOldestFirst") (EVar "back")) (EVar "rest")))))
+(DTypeSig false "isReady" (TyFun (TyCon "Float") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Wait")) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit"))))) (TyCon "Bool"))))
+(DFunDef false "isReady" ((PVar "now") (PTuple (PVar "ws") PWild)) (EApp (EApp (EVar "any") (ELam ((PVar "w")) (EApp (EApp (EVar "waitReady") (EVar "now")) (EVar "w")))) (EVar "ws")))
+(DTypeSig false "waitReady" (TyFun (TyCon "Float") (TyFun (TyCon "Wait") (TyCon "Bool"))))
+(DFunDef false "waitReady" ((PVar "now") (PCon "WaitUntil" (PVar "t"))) (EBinOp "<=" (EVar "t") (EVar "now")))
+(DFunDef false "waitReady" (PWild (PCon "WaitFlag" (PVar "r"))) (EUnOp "!" (EVar "r")))
+(DFunDef false "waitReady" (PWild PWild) (EVar "False"))
+(DTypeSig false "isFdWait" (TyFun (TyCon "Wait") (TyCon "Bool")))
+(DFunDef false "isFdWait" ((PCon "WaitRead" PWild)) (EVar "True"))
+(DFunDef false "isFdWait" ((PCon "WaitWrite" PWild)) (EVar "True"))
+(DFunDef false "isFdWait" (PWild) (EVar "False"))
+(DTypeSig false "earliestDeadline" (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Wait")) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))))) (TyApp (TyCon "Option") (TyCon "Float"))))
+(DFunDef false "earliestDeadline" ((PList)) (EVar "None"))
+(DFunDef false "earliestDeadline" ((PCons (PTuple (PVar "ws") PWild) (PVar "rest"))) (EApp (EApp (EVar "minDeadline") (EApp (EVar "deadlinesOf") (EVar "ws"))) (EApp (EVar "earliestDeadline") (EVar "rest"))))
+(DTypeSig false "deadlinesOf" (TyFun (TyApp (TyCon "List") (TyCon "Wait")) (TyApp (TyCon "Option") (TyCon "Float"))))
+(DFunDef false "deadlinesOf" ((PList)) (EVar "None"))
+(DFunDef false "deadlinesOf" ((PCons (PCon "WaitUntil" (PVar "t")) (PVar "rest"))) (EApp (EApp (EVar "minDeadline") (EApp (EVar "Some") (EVar "t"))) (EApp (EVar "deadlinesOf") (EVar "rest"))))
+(DFunDef false "deadlinesOf" ((PCons PWild (PVar "rest"))) (EApp (EVar "deadlinesOf") (EVar "rest")))
+(DTypeSig false "minDeadline" (TyFun (TyApp (TyCon "Option") (TyCon "Float")) (TyFun (TyApp (TyCon "Option") (TyCon "Float")) (TyApp (TyCon "Option") (TyCon "Float")))))
+(DFunDef false "minDeadline" ((PCon "None") (PVar "b")) (EVar "b"))
+(DFunDef false "minDeadline" ((PVar "a") (PCon "None")) (EVar "a"))
+(DFunDef false "minDeadline" ((PCon "Some" (PVar "x")) (PCon "Some" (PVar "y"))) (EApp (EVar "Some") (EApp (EApp (EVar "min") (EVar "x")) (EVar "y"))))
 (DTypeSig false "fdWaitsOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Wait")) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))))) (TyApp (TyCon "List") (TyCon "Wait"))))
 (DFunDef false "fdWaitsOf" ((PList)) (EListLit))
 (DFunDef false "fdWaitsOf" ((PCons (PTuple (PVar "ws") PWild) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "filter") (EVar "isFdWait")) (EVar "ws")) (EApp (EVar "fdWaitsOf") (EVar "rest"))))
@@ -561,33 +659,9 @@ minDeadline (Some x) (Some y) = Some (min x y)
 (DTypeSig false "isWriteOf" (TyFun (TyCon "Int") (TyFun (TyCon "Wait") (TyCon "Bool"))))
 (DFunDef false "isWriteOf" ((PVar "fd") (PCon "WaitWrite" (PVar "x"))) (EBinOp "==" (EVar "x") (EVar "fd")))
 (DFunDef false "isWriteOf" (PWild PWild) (EVar "False"))
-(DTypeSig false "requeue" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Wait")) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))))) (TyCon "Unit"))))
-(DFunDef false "requeue" (PWild (PList)) (ELit LUnit))
-(DFunDef false "requeue" ((PVar "queue") (PCons (PTuple PWild (PVar "k")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushBack") (EVar "queue")) (EApp (EVar "Suspend") (EVar "k")))) (DoExpr (EApp (EApp (EVar "requeue") (EVar "queue")) (EVar "rest")))))
-(DTypeSig false "isReady" (TyFun (TyCon "Float") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Wait")) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit"))))) (TyCon "Bool"))))
-(DFunDef false "isReady" ((PVar "now") (PTuple (PVar "ws") PWild)) (EApp (EApp (EVar "any") (ELam ((PVar "w")) (EApp (EApp (EVar "waitReady") (EVar "now")) (EVar "w")))) (EVar "ws")))
-(DTypeSig false "waitReady" (TyFun (TyCon "Float") (TyFun (TyCon "Wait") (TyCon "Bool"))))
-(DFunDef false "waitReady" ((PVar "now") (PCon "WaitUntil" (PVar "t"))) (EBinOp "<=" (EVar "t") (EVar "now")))
-(DFunDef false "waitReady" (PWild (PCon "WaitFlag" (PVar "r"))) (EUnOp "!" (EVar "r")))
-(DFunDef false "waitReady" (PWild PWild) (EVar "False"))
-(DTypeSig false "isFdWait" (TyFun (TyCon "Wait") (TyCon "Bool")))
-(DFunDef false "isFdWait" ((PCon "WaitRead" PWild)) (EVar "True"))
-(DFunDef false "isFdWait" ((PCon "WaitWrite" PWild)) (EVar "True"))
-(DFunDef false "isFdWait" (PWild) (EVar "False"))
-(DTypeSig false "earliestDeadline" (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Wait")) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))))) (TyApp (TyCon "Option") (TyCon "Float"))))
-(DFunDef false "earliestDeadline" ((PList)) (EVar "None"))
-(DFunDef false "earliestDeadline" ((PCons (PTuple (PVar "ws") PWild) (PVar "rest"))) (EApp (EApp (EVar "minDeadline") (EApp (EVar "deadlinesOf") (EVar "ws"))) (EApp (EVar "earliestDeadline") (EVar "rest"))))
-(DTypeSig false "deadlinesOf" (TyFun (TyApp (TyCon "List") (TyCon "Wait")) (TyApp (TyCon "Option") (TyCon "Float"))))
-(DFunDef false "deadlinesOf" ((PList)) (EVar "None"))
-(DFunDef false "deadlinesOf" ((PCons (PCon "WaitUntil" (PVar "t")) (PVar "rest"))) (EApp (EApp (EVar "minDeadline") (EApp (EVar "Some") (EVar "t"))) (EApp (EVar "deadlinesOf") (EVar "rest"))))
-(DFunDef false "deadlinesOf" ((PCons PWild (PVar "rest"))) (EApp (EVar "deadlinesOf") (EVar "rest")))
-(DTypeSig false "minDeadline" (TyFun (TyApp (TyCon "Option") (TyCon "Float")) (TyFun (TyApp (TyCon "Option") (TyCon "Float")) (TyApp (TyCon "Option") (TyCon "Float")))))
-(DFunDef false "minDeadline" ((PCon "None") (PVar "b")) (EVar "b"))
-(DFunDef false "minDeadline" ((PVar "a") (PCon "None")) (EVar "a"))
-(DFunDef false "minDeadline" ((PCon "Some" (PVar "x")) (PCon "Some" (PVar "y"))) (EApp (EVar "Some") (EApp (EApp (EVar "min") (EVar "x")) (EVar "y"))))
 # MARK
 (DUse false (UseGroup ("array") ((mem "fromList" false))))
-(DUse false (UseGroup ("list") ((mem "partition" false))))
+(DUse false (UseGroup ("list") ((mem "partition" false) (mem "reverse" false))))
 (DUse false (UseGroup ("time") ((mem "Duration" false) (mem "millis" false) (mem "toMillis" false))))
 (DData Abstract "Async" ("e" "a") ((variant "Done" (ConPos (TyVar "a"))) (variant "Suspend" (ConPos (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a")))))) (variant "Await" (ConPos (TyApp (TyCon "List") (TyCon "Wait")) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a")))))) (variant "Spawn" (ConPos (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a"))))))) ())
 (DData Public "Wait" () ((variant "WaitRead" (ConPos (TyCon "Int"))) (variant "WaitWrite" (ConPos (TyCon "Int"))) (variant "WaitUntil" (ConPos (TyCon "Float"))) (variant "WaitFlag" (ConPos (TyApp (TyCon "Ref") (TyCon "Bool"))))) ())
@@ -627,47 +701,77 @@ minDeadline (Some x) (Some y) = Some (min x y)
 (DTypeSig false "awaitResume" (TyFun (TyApp (TyCon "Task") (TyVar "a")) (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a"))))
 (DFunDef false "awaitResume" ((PCon "Task" (PVar "done") (PVar "cell"))) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Some" (PVar "a")) () (EApp (EVar "Done") (EVar "a"))) (arm (PCon "None") () (EApp (EVar "await") (EApp (EApp (EVar "Task") (EVar "done")) (EVar "cell"))))))
 (DTypeSig true "concurrent" (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a"))) (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyApp (TyCon "List") (TyVar "a")))))
-(DFunDef false "concurrent" ((PVar "asyncs")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "spawnAll") (EVar "asyncs"))) (ELam ((PVar "ts")) (EApp (EVar "awaitAll") (EVar "ts")))))
-(DTypeSig false "spawnAll" (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a"))) (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyApp (TyCon "List") (TyApp (TyCon "Task") (TyVar "a"))))))
-(DFunDef false "spawnAll" ((PList)) (EApp (EVar "Done") (EListLit)))
-(DFunDef false "spawnAll" ((PCons (PVar "a") (PVar "rest"))) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "spawnTask") (EVar "a"))) (ELam ((PVar "t")) (EApp (EApp (EMethodRef "deferMap") (ELam ((PVar "_s")) (EBinOp "::" (EVar "t") (EVar "_s")))) (EApp (EVar "spawnAll") (EVar "rest"))))))
-(DTypeSig false "awaitAll" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Task") (TyVar "a"))) (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyApp (TyCon "List") (TyVar "a")))))
-(DFunDef false "awaitAll" ((PList)) (EApp (EVar "Done") (EListLit)))
-(DFunDef false "awaitAll" ((PCons (PVar "t") (PVar "rest"))) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "await") (EVar "t"))) (ELam ((PVar "a")) (EApp (EApp (EMethodRef "deferMap") (ELam ((PVar "_s")) (EBinOp "::" (EVar "a") (EVar "_s")))) (EApp (EVar "awaitAll") (EVar "rest"))))))
+(DFunDef false "concurrent" ((PVar "asyncs")) (EApp (EApp (EMethodRef "deferThen") (EApp (EApp (EVar "spawnAll") (EListLit)) (EVar "asyncs"))) (ELam ((PVar "ts")) (EApp (EApp (EVar "awaitAll") (EListLit)) (EVar "ts")))))
+(DTypeSig false "spawnAll" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Task") (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a"))) (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyApp (TyCon "List") (TyApp (TyCon "Task") (TyVar "a")))))))
+(DFunDef false "spawnAll" ((PVar "acc") (PList)) (EApp (EVar "Done") (EApp (EVar "reverse") (EVar "acc"))))
+(DFunDef false "spawnAll" ((PVar "acc") (PCons (PVar "a") (PVar "rest"))) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "spawnTask") (EVar "a"))) (ELam ((PVar "t")) (EApp (EApp (EVar "spawnAll") (EBinOp "::" (EVar "t") (EVar "acc"))) (EVar "rest")))))
+(DTypeSig false "awaitAll" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Task") (TyVar "a"))) (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyApp (TyCon "List") (TyVar "a"))))))
+(DFunDef false "awaitAll" ((PVar "acc") (PList)) (EApp (EVar "Done") (EApp (EVar "reverse") (EVar "acc"))))
+(DFunDef false "awaitAll" ((PVar "acc") (PCons (PVar "t") (PVar "rest"))) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "await") (EVar "t"))) (ELam ((PVar "a")) (EApp (EApp (EVar "awaitAll") (EBinOp "::" (EVar "a") (EVar "acc"))) (EVar "rest")))))
 (DTypeSig true "runAsync" (TyFun (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a")) (TyEffect () (Some "e") (TyVar "a"))))
-(DFunDef false "runAsync" ((PVar "prog")) (EBlock (DoLet false false (PVar "cell") (EApp (EVar "Ref") (EVar "None"))) (DoLet false false PWild (EApp (EVar "runSeq") (EApp (EApp (EMethodRef "deferThen") (EVar "prog")) (ELam ((PVar "a")) (EApp (EVar "Suspend") (ELam ((PVar "u")) (EApp (EApp (EVar "storeResult") (EVar "cell")) (EVar "a")))))))) (DoExpr (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Some" (PVar "a")) () (EVar "a")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "async: the program finished without producing a value"))))))))
-(DTypeSig false "runSeq" (TyFun (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")) (TyEffect () (Some "e") (TyCon "Unit"))))
-(DFunDef false "runSeq" ((PCon "Done" PWild)) (ELit LUnit))
-(DFunDef false "runSeq" ((PCon "Suspend" (PVar "t"))) (EApp (EVar "runSeq") (EApp (EVar "t") (ELit LUnit))))
-(DFunDef false "runSeq" ((PCon "Spawn" (PVar "child") (PVar "k"))) (EBlock (DoLet false false PWild (EApp (EVar "runSeq") (EVar "child"))) (DoExpr (EApp (EVar "runSeq") (EApp (EVar "k") (ELit LUnit))))))
-(DFunDef false "runSeq" ((PCon "Await" (PVar "ws") (PVar "k"))) (EIf (EApp (EApp (EDictApp "any") (EVar "flagSet")) (EVar "ws")) (EApp (EVar "runSeq") (EApp (EVar "k") (ELit LUnit))) (EApp (EVar "panic") (ELit (LString "async: runAsync cannot wait on a timer or a file descriptor; drive this program with runAsyncIO")))))
+(DFunDef false "runAsync" ((PVar "prog")) (EBlock (DoLet false false (PVar "cell") (EApp (EVar "Ref") (EVar "None"))) (DoLet false false (PVar "front") (EApp (EVar "Ref") (EListLit (EApp (EApp (EMethodRef "deferThen") (EVar "prog")) (ELam ((PVar "a")) (EApp (EVar "Suspend") (ELam ((PVar "u")) (EApp (EApp (EVar "storeResult") (EVar "cell")) (EVar "a"))))))))) (DoLet false false (PVar "back") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "parked") (EApp (EVar "Ref") (EListLit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "scheduleSeq") (EVar "front")) (EVar "back")) (EVar "parked"))) (DoExpr (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Some" (PVar "a")) () (EVar "a")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "async: the program finished without producing a value"))))))))
+(DTypeSig false "scheduleSeq" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Wait")) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit"))))))) (TyEffect () (Some "e") (TyCon "Unit"))))))
+(DFunDef false "scheduleSeq" ((PVar "front") (PVar "back") (PVar "parked")) (EMatch (EApp (EApp (EVar "popTask") (EVar "front")) (EVar "back")) (arm (PCon "Some" (PVar "t")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "dispatch") (EVar "back")) (EVar "parked")) (EApp (EVar "stepTask") (EVar "t")))) (DoExpr (EApp (EApp (EApp (EVar "scheduleSeq") (EVar "front")) (EVar "back")) (EVar "parked"))))) (arm (PCon "None") () (EMatch (EUnOp "!" (EVar "parked")) (arm (PList) () (ELit LUnit)) (arm (PVar "waiting") () (EBlock (DoLet false false (PTuple (PVar "ready") (PVar "still")) (EApp (EApp (EVar "partition") (ELam ((PVar "p")) (EApp (EApp (EDictApp "any") (EVar "flagSet")) (EApp (EVar "fst") (EVar "p"))))) (EVar "waiting"))) (DoExpr (EMatch (EVar "ready") (arm (PCons PWild PWild) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "parked")) (EVar "still"))) (DoLet false false PWild (EApp (EApp (EVar "requeue") (EVar "back")) (EVar "ready"))) (DoExpr (EApp (EApp (EApp (EVar "scheduleSeq") (EVar "front")) (EVar "back")) (EVar "parked"))))) (arm (PList) () (EIf (EApp (EApp (EDictApp "any") (ELam ((PVar "p")) (EBinOp "||" (EApp (EApp (EDictApp "any") (EVar "isFdWait")) (EApp (EVar "fst") (EVar "p"))) (EApp (EApp (EDictApp "any") (EVar "isTimerWait")) (EApp (EVar "fst") (EVar "p")))))) (EVar "still")) (EApp (EVar "panic") (ELit (LString "async: runAsync cannot wait on a timer or a file descriptor; drive this program with runAsyncIO"))) (EApp (EVar "panic") (ELit (LString "async: every remaining task is waiting on a task that can never finish (deadlock)")))))))))))))
 (DTypeSig false "flagSet" (TyFun (TyCon "Wait") (TyCon "Bool")))
 (DFunDef false "flagSet" ((PCon "WaitFlag" (PVar "r"))) (EUnOp "!" (EVar "r")))
 (DFunDef false "flagSet" (PWild) (EVar "False"))
+(DTypeSig false "isTimerWait" (TyFun (TyCon "Wait") (TyCon "Bool")))
+(DFunDef false "isTimerWait" ((PCon "WaitUntil" PWild)) (EVar "True"))
+(DFunDef false "isTimerWait" (PWild) (EVar "False"))
 (DTypeSig true "runAsyncIO" (TyFun (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a")) (TyEffect ("Clock" (hole "Net")) (Some "e") (TyVar "a"))))
-(DFunDef false "runAsyncIO" ((PVar "prog")) (EBlock (DoLet false false (PVar "cell") (EApp (EVar "Ref") (EVar "None"))) (DoLet false false (PVar "queue") (EApp (EVar "Ref") (EListLit (EApp (EApp (EMethodRef "deferThen") (EVar "prog")) (ELam ((PVar "a")) (EApp (EVar "Suspend") (ELam ((PVar "u")) (EApp (EApp (EVar "storeResult") (EVar "cell")) (EVar "a"))))))))) (DoLet false false (PVar "parked") (EApp (EVar "Ref") (EListLit))) (DoLet false false PWild (EApp (EApp (EVar "schedule") (EVar "queue")) (EVar "parked"))) (DoExpr (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Some" (PVar "a")) () (EVar "a")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "async: the program finished without producing a value"))))))))
+(DFunDef false "runAsyncIO" ((PVar "prog")) (EBlock (DoLet false false (PVar "cell") (EApp (EVar "Ref") (EVar "None"))) (DoLet false false (PVar "front") (EApp (EVar "Ref") (EListLit (EApp (EApp (EMethodRef "deferThen") (EVar "prog")) (ELam ((PVar "a")) (EApp (EVar "Suspend") (ELam ((PVar "u")) (EApp (EApp (EVar "storeResult") (EVar "cell")) (EVar "a"))))))))) (DoLet false false (PVar "back") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "parked") (EApp (EVar "Ref") (EListLit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "schedule") (EVar "front")) (EVar "back")) (EVar "parked")) (ELit (LInt 1)))) (DoExpr (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Some" (PVar "a")) () (EVar "a")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "async: the program finished without producing a value"))))))))
 (DTypeSig true "runAsyncIOMain" (TyFun (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")) (TyEffect ("Clock" (hole "Net")) (Some "e") (TyCon "Unit"))))
 (DFunDef false "runAsyncIOMain" ((PVar "prog")) (EApp (EVar "runAsyncIO") (EVar "prog")))
 (DTypeSig true "runAsyncMain" (TyFun (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")) (TyEffect () (Some "e") (TyCon "Unit"))))
 (DFunDef false "runAsyncMain" ((PVar "prog")) (EApp (EVar "runAsync") (EVar "prog")))
 (DTypeSig false "storeResult" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyVar "a"))) (TyFun (TyVar "a") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))))
 (DFunDef false "storeResult" ((PVar "cell") (PVar "a")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EVar "Some") (EVar "a")))) (DoExpr (EApp (EVar "Done") (ELit LUnit)))))
-(DTypeSig false "schedule" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Wait")) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit"))))))) (TyEffect ("Clock" (hole "Net")) (Some "e") (TyCon "Unit")))))
-(DFunDef false "schedule" ((PVar "queue") (PVar "parked")) (EMatch (EUnOp "!" (EVar "queue")) (arm (PCons (PVar "t") (PVar "rest")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "queue")) (EVar "rest"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "dispatch") (EVar "queue")) (EVar "parked")) (EApp (EVar "stepTask") (EVar "t")))) (DoExpr (EApp (EApp (EVar "schedule") (EVar "queue")) (EVar "parked"))))) (arm (PList) () (EMatch (EUnOp "!" (EVar "parked")) (arm (PList) () (ELit LUnit)) (arm PWild () (EBlock (DoLet false false PWild (EApp (EApp (EVar "wakeParked") (EVar "queue")) (EVar "parked"))) (DoExpr (EApp (EApp (EVar "schedule") (EVar "queue")) (EVar "parked")))))))))
+(DTypeSig false "popTask" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyApp (TyCon "Option") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit"))))))
+(DFunDef false "popTask" ((PVar "front") (PVar "back")) (EMatch (EUnOp "!" (EVar "front")) (arm (PCons (PVar "t") (PVar "rest")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "front")) (EVar "rest"))) (DoExpr (EApp (EVar "Some") (EVar "t"))))) (arm (PList) () (EMatch (EApp (EVar "reverse") (EUnOp "!" (EVar "back"))) (arm (PList) () (EVar "None")) (arm (PCons (PVar "t") (PVar "rest")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "front")) (EVar "rest"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "back")) (EListLit))) (DoExpr (EApp (EVar "Some") (EVar "t")))))))))
+(DTypeSig false "pushBack" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyFun (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")) (TyCon "Unit"))))
+(DFunDef false "pushBack" ((PVar "back") (PVar "t")) (EApp (EApp (EVar "setRef") (EVar "back")) (EBinOp "::" (EVar "t") (EUnOp "!" (EVar "back")))))
+(DTypeSig false "queueLength" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyCon "Int"))))
+(DFunDef false "queueLength" ((PVar "front") (PVar "back")) (EBinOp "+" (EApp (EMethodRef "length") (EUnOp "!" (EVar "front"))) (EApp (EMethodRef "length") (EUnOp "!" (EVar "back")))))
+(DTypeSig false "schedule" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Wait")) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit"))))))) (TyFun (TyCon "Int") (TyEffect ("Clock" (hole "Net")) (Some "e") (TyCon "Unit")))))))
+(DFunDef false "schedule" ((PVar "front") (PVar "back") (PVar "parked") (PVar "budget")) (EIf (EBinOp "<=" (EVar "budget") (ELit (LInt 0))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "wakeParked") (EVar "back")) (EVar "parked")) (EVar "False"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "schedule") (EVar "front")) (EVar "back")) (EVar "parked")) (EApp (EApp (EMethodRef "max") (ELit (LInt 1))) (EApp (EApp (EVar "queueLength") (EVar "front")) (EVar "back")))))) (EMatch (EApp (EApp (EVar "popTask") (EVar "front")) (EVar "back")) (arm (PCon "Some" (PVar "t")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "dispatch") (EVar "back")) (EVar "parked")) (EApp (EVar "stepTask") (EVar "t")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "schedule") (EVar "front")) (EVar "back")) (EVar "parked")) (EBinOp "-" (EVar "budget") (ELit (LInt 1))))))) (arm (PCon "None") () (EMatch (EUnOp "!" (EVar "parked")) (arm (PList) () (ELit LUnit)) (arm PWild () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "wakeParked") (EVar "back")) (EVar "parked")) (EVar "True"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "schedule") (EVar "front")) (EVar "back")) (EVar "parked")) (EApp (EApp (EMethodRef "max") (ELit (LInt 1))) (EApp (EApp (EVar "queueLength") (EVar "front")) (EVar "back"))))))))))))
 (DTypeSig false "stepTask" (TyFun (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")) (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))))
 (DFunDef false "stepTask" ((PCon "Suspend" (PVar "k"))) (EApp (EVar "k") (ELit LUnit)))
 (DFunDef false "stepTask" ((PVar "other")) (EVar "other"))
 (DTypeSig false "dispatch" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Wait")) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit"))))))) (TyFun (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")) (TyCon "Unit")))))
 (DFunDef false "dispatch" (PWild PWild (PCon "Done" PWild)) (ELit LUnit))
-(DFunDef false "dispatch" ((PVar "queue") PWild (PCon "Suspend" (PVar "k"))) (EApp (EApp (EVar "pushBack") (EVar "queue")) (EApp (EVar "Suspend") (EVar "k"))))
+(DFunDef false "dispatch" ((PVar "back") PWild (PCon "Suspend" (PVar "k"))) (EApp (EApp (EVar "pushBack") (EVar "back")) (EApp (EVar "Suspend") (EVar "k"))))
 (DFunDef false "dispatch" (PWild (PVar "parked") (PCon "Await" (PVar "ws") (PVar "k"))) (EApp (EApp (EVar "setRef") (EVar "parked")) (EBinOp "::" (ETuple (EVar "ws") (EVar "k")) (EUnOp "!" (EVar "parked")))))
-(DFunDef false "dispatch" ((PVar "queue") PWild (PCon "Spawn" (PVar "child") (PVar "k"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushBack") (EVar "queue")) (EVar "child"))) (DoExpr (EApp (EApp (EVar "pushBack") (EVar "queue")) (EApp (EVar "Suspend") (EVar "k"))))))
-(DTypeSig false "pushBack" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyFun (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")) (TyCon "Unit"))))
-(DFunDef false "pushBack" ((PVar "queue") (PVar "t")) (EApp (EApp (EVar "setRef") (EVar "queue")) (EBinOp "++" (EUnOp "!" (EVar "queue")) (EListLit (EVar "t")))))
-(DTypeSig false "wakeParked" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Wait")) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit"))))))) (TyEffect ("Clock" (hole "Net")) None (TyCon "Unit")))))
-(DFunDef false "wakeParked" ((PVar "queue") (PVar "parked")) (EBlock (DoLet false false (PVar "now") (EApp (EVar "monotonicSec") (ELit LUnit))) (DoLet false false (PTuple (PVar "ready") (PVar "waiting")) (EApp (EApp (EVar "partition") (ELam ((PVar "p")) (EApp (EApp (EVar "isReady") (EVar "now")) (EVar "p")))) (EUnOp "!" (EVar "parked")))) (DoExpr (EMatch (EVar "ready") (arm (PCons PWild PWild) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "parked")) (EVar "waiting"))) (DoExpr (EApp (EApp (EVar "requeue") (EVar "queue")) (EVar "ready"))))) (arm (PList) () (EMatch (EApp (EVar "fdWaitsOf") (EVar "waiting")) (arm (PList) () (EMatch (EApp (EVar "earliestDeadline") (EVar "waiting")) (arm (PCon "Some" (PVar "t")) () (EApp (EVar "sleepMs") (EApp (EApp (EVar "millisUntil") (EVar "now")) (EVar "t")))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "async: every remaining task is waiting on a task that can never finish (deadlock)")))))) (arm (PVar "fdWaits") () (EBlock (DoLet false false (PVar "timeout") (EMatch (EApp (EVar "earliestDeadline") (EVar "waiting")) (arm (PCon "Some" (PVar "t")) () (EApp (EApp (EVar "millisUntil") (EVar "now")) (EVar "t"))) (arm (PCon "None") () (EUnOp "-" (ELit (LInt 1)))))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "ioPoll") (EApp (EVar "fromList") (EApp (EApp (EMethodRef "map") (EVar "pollFd")) (EVar "fdWaits")))) (EApp (EVar "fromList") (EApp (EApp (EMethodRef "map") (EVar "pollInterest")) (EVar "fdWaits")))) (EVar "timeout")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "panic") (EBinOp "++" (ELit (LString "async: poll failed: ")) (EVar "e")))) (arm (PCon "Ok" (PVar "readiness")) () (EBlock (DoLet false false (PVar "satisfied") (EApp (EApp (EVar "satisfiedWaits") (EVar "fdWaits")) (EApp (EMethodRef "toList") (EVar "readiness")))) (DoLet false false (PTuple (PVar "woke") (PVar "still")) (EApp (EApp (EVar "partition") (ELam ((PVar "p")) (EApp (EApp (EDictApp "any") (ELam ((PVar "w")) (EApp (EApp (EVar "waitSatisfied") (EVar "satisfied")) (EVar "w")))) (EApp (EVar "fst") (EVar "p"))))) (EVar "waiting"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "parked")) (EVar "still"))) (DoExpr (EApp (EApp (EVar "requeue") (EVar "queue")) (EVar "woke")))))))))))))))
+(DFunDef false "dispatch" ((PVar "back") PWild (PCon "Spawn" (PVar "child") (PVar "k"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushBack") (EVar "back")) (EVar "child"))) (DoExpr (EApp (EApp (EVar "pushBack") (EVar "back")) (EApp (EVar "Suspend") (EVar "k"))))))
+(DTypeSig false "wakeParked" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Wait")) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit"))))))) (TyFun (TyCon "Bool") (TyEffect ("Clock" (hole "Net")) None (TyCon "Unit"))))))
+(DFunDef false "wakeParked" ((PVar "back") (PVar "parked") (PVar "block")) (EBlock (DoLet false false (PVar "now") (EApp (EVar "monotonicSec") (ELit LUnit))) (DoLet false false (PTuple (PVar "ready") (PVar "waiting")) (EApp (EApp (EVar "partition") (ELam ((PVar "p")) (EApp (EApp (EVar "isReady") (EVar "now")) (EVar "p")))) (EUnOp "!" (EVar "parked")))) (DoExpr (EMatch (EVar "ready") (arm (PCons PWild PWild) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "parked")) (EVar "waiting"))) (DoExpr (EApp (EApp (EVar "requeue") (EVar "back")) (EVar "ready"))))) (arm (PList) () (EMatch (EApp (EVar "fdWaitsOf") (EVar "waiting")) (arm (PList) () (EIf (EApp (EVar "not") (EVar "block")) (ELit LUnit) (EMatch (EApp (EVar "earliestDeadline") (EVar "waiting")) (arm (PCon "Some" (PVar "t")) () (EApp (EVar "sleepMs") (EApp (EApp (EVar "millisUntil") (EVar "now")) (EVar "t")))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "async: every remaining task is waiting on a task that can never finish (deadlock)"))))))) (arm (PVar "fdWaits") () (EBlock (DoLet false false (PVar "timeout") (EIf (EApp (EVar "not") (EVar "block")) (ELit (LInt 0)) (EMatch (EApp (EVar "earliestDeadline") (EVar "waiting")) (arm (PCon "Some" (PVar "t")) () (EApp (EApp (EVar "millisUntil") (EVar "now")) (EVar "t"))) (arm (PCon "None") () (EUnOp "-" (ELit (LInt 1))))))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "ioPoll") (EApp (EVar "fromList") (EApp (EApp (EMethodRef "map") (EVar "pollFd")) (EVar "fdWaits")))) (EApp (EVar "fromList") (EApp (EApp (EMethodRef "map") (EVar "pollInterest")) (EVar "fdWaits")))) (EVar "timeout")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "panic") (EBinOp "++" (ELit (LString "async: poll failed: ")) (EVar "e")))) (arm (PCon "Ok" (PVar "readiness")) () (EBlock (DoLet false false (PVar "satisfied") (EApp (EApp (EVar "satisfiedWaits") (EVar "fdWaits")) (EApp (EMethodRef "toList") (EVar "readiness")))) (DoLet false false (PTuple (PVar "woke") (PVar "still")) (EApp (EApp (EVar "partition") (ELam ((PVar "p")) (EApp (EApp (EDictApp "any") (ELam ((PVar "w")) (EApp (EApp (EVar "waitSatisfied") (EVar "satisfied")) (EVar "w")))) (EApp (EVar "fst") (EVar "p"))))) (EVar "waiting"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "parked")) (EVar "still"))) (DoExpr (EApp (EApp (EVar "requeue") (EVar "back")) (EVar "woke")))))))))))))))
 (DTypeSig false "millisUntil" (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyCon "Int"))))
 (DFunDef false "millisUntil" ((PVar "now") (PVar "t")) (EApp (EApp (EMethodRef "max") (ELit (LInt 0))) (EBinOp "+" (EApp (EVar "floatToInt") (EBinOp "*" (EBinOp "-" (EVar "t") (EVar "now")) (ELit (LFloat 1000.0)))) (ELit (LInt 1)))))
+(DTypeSig false "requeue" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Wait")) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))))) (TyCon "Unit"))))
+(DFunDef false "requeue" ((PVar "back") (PVar "ready")) (EApp (EApp (EVar "requeueOldestFirst") (EVar "back")) (EApp (EVar "reverse") (EVar "ready"))))
+(DTypeSig false "requeueOldestFirst" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Wait")) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))))) (TyCon "Unit"))))
+(DFunDef false "requeueOldestFirst" (PWild (PList)) (ELit LUnit))
+(DFunDef false "requeueOldestFirst" ((PVar "back") (PCons (PTuple PWild (PVar "k")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushBack") (EVar "back")) (EApp (EVar "Suspend") (EVar "k")))) (DoExpr (EApp (EApp (EVar "requeueOldestFirst") (EVar "back")) (EVar "rest")))))
+(DTypeSig false "isReady" (TyFun (TyCon "Float") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Wait")) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit"))))) (TyCon "Bool"))))
+(DFunDef false "isReady" ((PVar "now") (PTuple (PVar "ws") PWild)) (EApp (EApp (EDictApp "any") (ELam ((PVar "w")) (EApp (EApp (EVar "waitReady") (EVar "now")) (EVar "w")))) (EVar "ws")))
+(DTypeSig false "waitReady" (TyFun (TyCon "Float") (TyFun (TyCon "Wait") (TyCon "Bool"))))
+(DFunDef false "waitReady" ((PVar "now") (PCon "WaitUntil" (PVar "t"))) (EBinOp "<=" (EVar "t") (EVar "now")))
+(DFunDef false "waitReady" (PWild (PCon "WaitFlag" (PVar "r"))) (EUnOp "!" (EVar "r")))
+(DFunDef false "waitReady" (PWild PWild) (EVar "False"))
+(DTypeSig false "isFdWait" (TyFun (TyCon "Wait") (TyCon "Bool")))
+(DFunDef false "isFdWait" ((PCon "WaitRead" PWild)) (EVar "True"))
+(DFunDef false "isFdWait" ((PCon "WaitWrite" PWild)) (EVar "True"))
+(DFunDef false "isFdWait" (PWild) (EVar "False"))
+(DTypeSig false "earliestDeadline" (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Wait")) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))))) (TyApp (TyCon "Option") (TyCon "Float"))))
+(DFunDef false "earliestDeadline" ((PList)) (EVar "None"))
+(DFunDef false "earliestDeadline" ((PCons (PTuple (PVar "ws") PWild) (PVar "rest"))) (EApp (EApp (EVar "minDeadline") (EApp (EVar "deadlinesOf") (EVar "ws"))) (EApp (EVar "earliestDeadline") (EVar "rest"))))
+(DTypeSig false "deadlinesOf" (TyFun (TyApp (TyCon "List") (TyCon "Wait")) (TyApp (TyCon "Option") (TyCon "Float"))))
+(DFunDef false "deadlinesOf" ((PList)) (EVar "None"))
+(DFunDef false "deadlinesOf" ((PCons (PCon "WaitUntil" (PVar "t")) (PVar "rest"))) (EApp (EApp (EVar "minDeadline") (EApp (EVar "Some") (EVar "t"))) (EApp (EVar "deadlinesOf") (EVar "rest"))))
+(DFunDef false "deadlinesOf" ((PCons PWild (PVar "rest"))) (EApp (EVar "deadlinesOf") (EVar "rest")))
+(DTypeSig false "minDeadline" (TyFun (TyApp (TyCon "Option") (TyCon "Float")) (TyFun (TyApp (TyCon "Option") (TyCon "Float")) (TyApp (TyCon "Option") (TyCon "Float")))))
+(DFunDef false "minDeadline" ((PCon "None") (PVar "b")) (EVar "b"))
+(DFunDef false "minDeadline" ((PVar "a") (PCon "None")) (EVar "a"))
+(DFunDef false "minDeadline" ((PCon "Some" (PVar "x")) (PCon "Some" (PVar "y"))) (EApp (EVar "Some") (EApp (EApp (EMethodRef "min") (EVar "x")) (EVar "y"))))
 (DTypeSig false "fdWaitsOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Wait")) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))))) (TyApp (TyCon "List") (TyCon "Wait"))))
 (DFunDef false "fdWaitsOf" ((PList)) (EListLit))
 (DFunDef false "fdWaitsOf" ((PCons (PTuple (PVar "ws") PWild) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EMethodRef "filter") (EVar "isFdWait")) (EVar "ws")) (EApp (EVar "fdWaitsOf") (EVar "rest"))))
@@ -692,27 +796,3 @@ minDeadline (Some x) (Some y) = Some (min x y)
 (DTypeSig false "isWriteOf" (TyFun (TyCon "Int") (TyFun (TyCon "Wait") (TyCon "Bool"))))
 (DFunDef false "isWriteOf" ((PVar "fd") (PCon "WaitWrite" (PVar "x"))) (EBinOp "==" (EVar "x") (EVar "fd")))
 (DFunDef false "isWriteOf" (PWild PWild) (EVar "False"))
-(DTypeSig false "requeue" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Wait")) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))))) (TyCon "Unit"))))
-(DFunDef false "requeue" (PWild (PList)) (ELit LUnit))
-(DFunDef false "requeue" ((PVar "queue") (PCons (PTuple PWild (PVar "k")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushBack") (EVar "queue")) (EApp (EVar "Suspend") (EVar "k")))) (DoExpr (EApp (EApp (EVar "requeue") (EVar "queue")) (EVar "rest")))))
-(DTypeSig false "isReady" (TyFun (TyCon "Float") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Wait")) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit"))))) (TyCon "Bool"))))
-(DFunDef false "isReady" ((PVar "now") (PTuple (PVar "ws") PWild)) (EApp (EApp (EDictApp "any") (ELam ((PVar "w")) (EApp (EApp (EVar "waitReady") (EVar "now")) (EVar "w")))) (EVar "ws")))
-(DTypeSig false "waitReady" (TyFun (TyCon "Float") (TyFun (TyCon "Wait") (TyCon "Bool"))))
-(DFunDef false "waitReady" ((PVar "now") (PCon "WaitUntil" (PVar "t"))) (EBinOp "<=" (EVar "t") (EVar "now")))
-(DFunDef false "waitReady" (PWild (PCon "WaitFlag" (PVar "r"))) (EUnOp "!" (EVar "r")))
-(DFunDef false "waitReady" (PWild PWild) (EVar "False"))
-(DTypeSig false "isFdWait" (TyFun (TyCon "Wait") (TyCon "Bool")))
-(DFunDef false "isFdWait" ((PCon "WaitRead" PWild)) (EVar "True"))
-(DFunDef false "isFdWait" ((PCon "WaitWrite" PWild)) (EVar "True"))
-(DFunDef false "isFdWait" (PWild) (EVar "False"))
-(DTypeSig false "earliestDeadline" (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Wait")) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))))) (TyApp (TyCon "Option") (TyCon "Float"))))
-(DFunDef false "earliestDeadline" ((PList)) (EVar "None"))
-(DFunDef false "earliestDeadline" ((PCons (PTuple (PVar "ws") PWild) (PVar "rest"))) (EApp (EApp (EVar "minDeadline") (EApp (EVar "deadlinesOf") (EVar "ws"))) (EApp (EVar "earliestDeadline") (EVar "rest"))))
-(DTypeSig false "deadlinesOf" (TyFun (TyApp (TyCon "List") (TyCon "Wait")) (TyApp (TyCon "Option") (TyCon "Float"))))
-(DFunDef false "deadlinesOf" ((PList)) (EVar "None"))
-(DFunDef false "deadlinesOf" ((PCons (PCon "WaitUntil" (PVar "t")) (PVar "rest"))) (EApp (EApp (EVar "minDeadline") (EApp (EVar "Some") (EVar "t"))) (EApp (EVar "deadlinesOf") (EVar "rest"))))
-(DFunDef false "deadlinesOf" ((PCons PWild (PVar "rest"))) (EApp (EVar "deadlinesOf") (EVar "rest")))
-(DTypeSig false "minDeadline" (TyFun (TyApp (TyCon "Option") (TyCon "Float")) (TyFun (TyApp (TyCon "Option") (TyCon "Float")) (TyApp (TyCon "Option") (TyCon "Float")))))
-(DFunDef false "minDeadline" ((PCon "None") (PVar "b")) (EVar "b"))
-(DFunDef false "minDeadline" ((PVar "a") (PCon "None")) (EVar "a"))
-(DFunDef false "minDeadline" ((PCon "Some" (PVar "x")) (PCon "Some" (PVar "y"))) (EApp (EVar "Some") (EApp (EApp (EMethodRef "min") (EVar "x")) (EVar "y"))))

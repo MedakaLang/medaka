@@ -25,6 +25,7 @@ import driver.main_autoprint.{
   underivedMainDiags,
   shouldAsyncWrapMain,
   asyncWrapModules,
+  asyncMainShapeError,
 }
 
 -- ── failure ──────────────────────────────────────────────────────────────────
@@ -211,14 +212,20 @@ runEmitWith asyncDriver emitTail runtimeDecls coreDecls modules =
     match underivedMainDiags runtimeDecls coreW modulesW
       d :: _ => failWith (tcMsg d)
       [] => emitModulesWith emitTail runtimeDecls coreW modulesW
-  else if shouldAsyncWrapMain asyncDriver modules then
-    emitModulesWith
-      emitTail
-      runtimeDecls
-      coreDecls
-      (asyncWrapModules asyncDriver modules)
-  else
-    emitTail runtimeDecls coreD modules2
+  else match asyncMainShapeError modules
+    Some msg => failWith msg
+    None =>
+      if shouldAsyncWrapMain asyncDriver modules then
+        -- Re-check the WRAPPED program, as the auto-print branch does: the
+        -- rewrite applies the driver to `main`, and a program whose `Async`
+        -- is not the driver's (a look-alike type, a mismatched row) must fail
+        -- here with a type error, not in the emitter or at run time.
+        let modulesW = asyncWrapModules asyncDriver modules
+        match underivedMainDiags runtimeDecls coreDecls modulesW
+          d :: _ => failWith (tcMsg d)
+          [] => emitModulesWith emitTail runtimeDecls coreDecls modulesW
+      else
+        emitTail runtimeDecls coreD modules2
 
 -- Mangle + elaborate + emit a (possibly wrapped) module list from scratch.
 export

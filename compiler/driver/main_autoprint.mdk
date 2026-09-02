@@ -42,6 +42,7 @@ import frontend.ast.{
 import types.typecheck.{
   mainTypeIsUnit,
   mainTypeIsAsync,
+  mainAsyncPayloadIsUnit,
   checkOneDiagsSynthetic,
   setCoherenceUserDecls,
   TcDiag,
@@ -302,7 +303,7 @@ asyncModuleId = "async"
 export
 shouldAsyncWrapMain : String -> List (String, List Decl) -> Bool
 shouldAsyncWrapMain driver modules =
-  if not (mainTypeIsAsync ()) then
+  if not (mainTypeIsAsync () && mainAsyncPayloadIsUnit ()) then
     False
   else match entryPair modules
     None => False
@@ -310,6 +311,23 @@ shouldAsyncWrapMain driver modules =
       Some [] =>
         any (p => fst p == asyncModuleId && definesFun driver (snd p)) modules
       _ => False
+
+-- The one `Async` main shape the drivers cannot take: a payload other than
+-- `Unit` (`main : Async e Int`).  Every driver reports this before the rewrite
+-- so the failure is this message, not the driver's own unification error.
+-- Requires the caller to have run an elaborate first.
+export
+asyncMainShapeError : List (String, List Decl) -> Option String
+asyncMainShapeError modules =
+  if not (mainTypeIsAsync ()) || mainAsyncPayloadIsUnit () then
+    None
+  else match entryPair modules
+    None => None
+    Some (_, decls) => match findMainParams decls
+      Some [] =>
+        Some
+          "main : Async e a must have a Unit payload (`main : Async e Unit`) — the driver runs the program for its effects and has nowhere to put a value; print it inside the program instead"
+      _ => None
 
 definesFun : String -> List Decl -> Bool
 definesFun _ [] = False

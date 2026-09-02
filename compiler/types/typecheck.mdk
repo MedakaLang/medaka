@@ -9055,10 +9055,28 @@ currentMethodMismatch = Ref None
 --     `headTyconNameMono`, which is the pair THAT comment means.
 --
 -- Stage 2 query: did the last-elaborated `main` infer to an `Async`-headed type?
+-- The head must be the stdlib `async` module's `Async`, by origin — a user type
+-- that happens to be named `Async` is an ordinary value main.
 export
 mainTypeIsAsync : Unit -> Bool
 mainTypeIsAsync _ = match driverState.value.mainSchemeRef.value
-  Some (Forall _ _ t) => headTyconNameMono t == Some "Async"
+  Some (Forall _ _ t) => match headMonoNode t
+    TCon "Async" (OriginModule "async") => True
+    _ => False
+  None => False
+
+-- Stage 2 query: is the `Async` main's payload `Unit`?  The entry drivers
+-- (`runAsyncIOMain`/`runAsyncMain`) take `Async e Unit`, so any other payload
+-- is rejected with a diagnostic before the rewrite rather than by the driver's
+-- unification failure.
+export
+mainAsyncPayloadIsUnit : Unit -> Bool
+mainAsyncPayloadIsUnit _ = match driverState.value.mainSchemeRef.value
+  Some (Forall _ _ t) => match normalize t
+    TApp _ payload => match normalize payload
+      TCon "Unit" _ => True
+      _ => False
+    _ => False
   None => False
 
 -- Stage 3 query: did the last-elaborated `main` infer to a bare Unit return type

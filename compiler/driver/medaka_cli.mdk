@@ -179,7 +179,11 @@ import types.typecheck.{
   setStdlibOwnership,
   setLocalPinDisabled,
 }
-import driver.main_autoprint.{shouldAsyncWrapMain, asyncWrapModules}
+import driver.main_autoprint.{
+  shouldAsyncWrapMain,
+  asyncWrapModules,
+  asyncMainShapeError,
+}
 import eval.eval.{
   evalModulesOutputRun,
   currentEvalFile,
@@ -2966,13 +2970,18 @@ modIdToPath (mid, path, _) = (mid, path)
 elaborateRun : List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  (List Decl, List (String, List Decl))
+  <IO> (List Decl, List (String, List Decl))
 elaborateRun rtD coreD modsD =
   let elaborated = elaborateModules rtD coreD modsD
-  if shouldAsyncWrapMain "runAsyncIOMain" modsD then
-    elaborateModules rtD coreD (asyncWrapModules "runAsyncIOMain" modsD)
-  else
-    elaborated
+  match asyncMainShapeError modsD
+    Some msg =>
+      let _ = runAbort msg
+      elaborated
+    None =>
+      if shouldAsyncWrapMain "runAsyncIOMain" modsD then
+        elaborateModules rtD coreD (asyncWrapModules "runAsyncIOMain" modsD)
+      else
+        elaborated
 
 -- B2 (RUN-EFFECTS): evalModulesOutputRun is evalModulesOutput plus the real-I/O
 -- externs (File/Env/Stdin/Stderr/Clock), hence the `IO` row.  An `Async` main

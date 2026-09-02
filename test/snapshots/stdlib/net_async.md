@@ -1,5 +1,5 @@
 # META
-source_lines=217
+source_lines=252
 stages=DESUGAR,MARK
 # SOURCE
 -- net_async.mdk — the non-blocking half of `net`, over the async scheduler.
@@ -12,7 +12,6 @@ stages=DESUGAR,MARK
 -- descriptor plus a `WaitUntil`; the task itself decides to give up, so no
 -- task is ever dropped (docs/design/ASYNC-RUNTIME-DESIGN.md §0a).
 
-import array.{drop}
 import async.{Async, Wait(..), liftIO, spawn, awaitAny, deadlineAfter, expired}
 import net.{Connection(..), Listener(..)}
 import net as N
@@ -130,18 +129,39 @@ sendStep _ _ (Err e) = deferPure (Err e)
 -- | Sends every byte, parking as needed.
 export
 sendAll : Connection -> Array Int -> Async <Net "_" | e> (Result String Unit)
-sendAll conn bytes =
-  if length bytes == 0 then
+sendAll conn bytes = sendFrom conn bytes 0
+
+-- The loop keeps an offset into the one array rather than slicing it, and the
+-- extern copies at most 64 KiB per call, so a large payload costs its own
+-- length, not its length squared.
+sendFrom : Connection ->
+  Array Int ->
+  Int ->
+  Async <Net "_" | e> (Result String Unit)
+sendFrom conn bytes off =
+  if off >= arrayLength bytes then
     deferPure (Ok ())
   else
-    deferThen (send conn bytes) (r => sendAllStep conn bytes r)
+    deferThen (liftIO (u => trySendFrom conn bytes off)) (step =>
+      sendFromStep conn bytes off step)
 
-sendAllStep : Connection ->
+trySendFrom : Connection ->
   Array Int ->
-  Result String Int ->
+  Int ->
+  <Net "_"> Result String (Option Int)
+trySendFrom (Connection fd) bytes off = match netSetNonblock fd True
+  Ok _ => netTrySendFrom fd bytes off
+  Err e => Err e
+
+sendFromStep : Connection ->
+  Array Int ->
+  Int ->
+  Result String (Option Int) ->
   Async <Net "_" | e> (Result String Unit)
-sendAllStep conn bytes (Ok n) = sendAll conn (drop n bytes)
-sendAllStep _ _ (Err e) = deferPure (Err e)
+sendFromStep (Connection fd) bytes off (Ok None) =
+  deferThen (awaitAny [WaitWrite fd]) (_ => sendFrom (Connection fd) bytes off)
+sendFromStep conn bytes off (Ok (Some n)) = sendFrom conn bytes (off + n)
+sendFromStep _ _ _ (Err e) = deferPure (Err e)
 
 -- | `sendAll` that gives up after `d` with `Err "timed out"`.
 export
@@ -150,33 +170,48 @@ sendAllWithin : Duration ->
   Array Int ->
   Async <Clock, Net "_" | e> (Result String Unit)
 sendAllWithin d conn bytes =
-  deferThen (deadlineAfter d) (dl => sendUntil dl conn bytes)
+  deferThen (deadlineAfter d) (dl => sendUntil dl conn bytes 0)
 
+-- The deadline is checked before every attempt, so no round of work runs
+-- past it unobserved.
 sendUntil : Wait ->
   Connection ->
   Array Int ->
+  Int ->
   Async <Clock, Net "_" | e> (Result String Unit)
-sendUntil dl conn bytes =
-  if length bytes == 0 then
+sendUntil dl conn bytes off =
+  if off >= arrayLength bytes then
     deferPure (Ok ())
   else
-    deferThen (liftIO (u => trySend conn bytes)) (step =>
-      sendUntilStep dl conn bytes step)
+    deferThen (expired dl) (late =>
+      if late then
+        deferPure (Err "timed out")
+      else
+        sendUntilTry dl conn bytes off)
+
+sendUntilTry : Wait ->
+  Connection ->
+  Array Int ->
+  Int ->
+  Async <Clock, Net "_" | e> (Result String Unit)
+sendUntilTry dl conn bytes off = deferThen (liftIO (u =>
+  trySendFrom conn bytes off)) (step =>
+  sendUntilStep dl conn bytes off step)
 
 sendUntilStep : Wait ->
   Connection ->
   Array Int ->
+  Int ->
   Result String (Option Int) ->
   Async <Clock, Net "_" | e> (Result String Unit)
-sendUntilStep dl (Connection fd) bytes (Ok None) = deferThen (expired
-  dl) (late =>
-  if late then
-    deferPure (Err "timed out")
-  else
-    deferThen (awaitAny [WaitWrite fd, dl]) (_ =>
-      sendUntil dl (Connection fd) bytes))
-sendUntilStep dl conn bytes (Ok (Some n)) = sendUntil dl conn (drop n bytes)
-sendUntilStep _ _ _ (Err e) = deferPure (Err e)
+sendUntilStep dl (Connection fd) bytes off (Ok None) = deferThen (awaitAny [
+  WaitWrite fd,
+  dl,
+]) (_ =>
+  sendUntil dl (Connection fd) bytes off)
+sendUntilStep dl conn bytes off (Ok (Some n)) =
+  sendUntil dl conn bytes (off + n)
+sendUntilStep _ _ _ _ (Err e) = deferPure (Err e)
 
 -- | Sends a string as UTF-8, parking as needed.
 export
@@ -220,7 +255,6 @@ handleThenClose : (Connection -> Async <Net "_" | e> (Result String Unit)) ->
 handleThenClose handle conn =
   deferThen (handle conn) (_ => deferMap (_ => ()) (close conn))
 # DESUGAR
-(DUse false (UseGroup ("array") ((mem "drop" false))))
 (DUse false (UseGroup ("async") ((mem "Async" false) (mem "Wait" true) (mem "liftIO" false) (mem "spawn" false) (mem "awaitAny" false) (mem "deadlineAfter" false) (mem "expired" false))))
 (DUse false (UseGroup ("net") ((mem "Connection" true) (mem "Listener" true))))
 (DUse false (UseAlias ("net") "N"))
@@ -259,18 +293,25 @@ handleThenClose handle conn =
 (DFunDef false "sendStep" (PWild PWild (PCon "Ok" (PCon "Some" (PVar "n")))) (EApp (EVar "deferPure") (EApp (EVar "Ok") (EVar "n"))))
 (DFunDef false "sendStep" (PWild PWild (PCon "Err" (PVar "e"))) (EApp (EVar "deferPure") (EApp (EVar "Err") (EVar "e"))))
 (DTypeSig true "sendAll" (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyApp (TyApp (TyCon "Async") (TyRow ((hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
-(DFunDef false "sendAll" ((PVar "conn") (PVar "bytes")) (EIf (EBinOp "==" (EApp (EVar "length") (EVar "bytes")) (ELit (LInt 0))) (EApp (EVar "deferPure") (EApp (EVar "Ok") (ELit LUnit))) (EApp (EApp (EVar "deferThen") (EApp (EApp (EVar "send") (EVar "conn")) (EVar "bytes"))) (ELam ((PVar "r")) (EApp (EApp (EApp (EVar "sendAllStep") (EVar "conn")) (EVar "bytes")) (EVar "r"))))))
-(DTypeSig false "sendAllStep" (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")) (TyApp (TyApp (TyCon "Async") (TyRow ((hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))))
-(DFunDef false "sendAllStep" ((PVar "conn") (PVar "bytes") (PCon "Ok" (PVar "n"))) (EApp (EApp (EVar "sendAll") (EVar "conn")) (EApp (EApp (EVar "drop") (EVar "n")) (EVar "bytes"))))
-(DFunDef false "sendAllStep" (PWild PWild (PCon "Err" (PVar "e"))) (EApp (EVar "deferPure") (EApp (EVar "Err") (EVar "e"))))
+(DFunDef false "sendAll" ((PVar "conn") (PVar "bytes")) (EApp (EApp (EApp (EVar "sendFrom") (EVar "conn")) (EVar "bytes")) (ELit (LInt 0))))
+(DTypeSig false "sendFrom" (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Async") (TyRow ((hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))))
+(DFunDef false "sendFrom" ((PVar "conn") (PVar "bytes") (PVar "off")) (EIf (EBinOp ">=" (EVar "off") (EApp (EVar "arrayLength") (EVar "bytes"))) (EApp (EVar "deferPure") (EApp (EVar "Ok") (ELit LUnit))) (EApp (EApp (EVar "deferThen") (EApp (EVar "liftIO") (ELam ((PVar "u")) (EApp (EApp (EApp (EVar "trySendFrom") (EVar "conn")) (EVar "bytes")) (EVar "off"))))) (ELam ((PVar "step")) (EApp (EApp (EApp (EApp (EVar "sendFromStep") (EVar "conn")) (EVar "bytes")) (EVar "off")) (EVar "step"))))))
+(DTypeSig false "trySendFrom" (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))))))))
+(DFunDef false "trySendFrom" ((PCon "Connection" (PVar "fd")) (PVar "bytes") (PVar "off")) (EMatch (EApp (EApp (EVar "netSetNonblock") (EVar "fd")) (EVar "True")) (arm (PCon "Ok" PWild) () (EApp (EApp (EApp (EVar "netTrySendFrom") (EVar "fd")) (EVar "bytes")) (EVar "off"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e")))))
+(DTypeSig false "sendFromStep" (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))) (TyApp (TyApp (TyCon "Async") (TyRow ((hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))))
+(DFunDef false "sendFromStep" ((PCon "Connection" (PVar "fd")) (PVar "bytes") (PVar "off") (PCon "Ok" (PCon "None"))) (EApp (EApp (EVar "deferThen") (EApp (EVar "awaitAny") (EListLit (EApp (EVar "WaitWrite") (EVar "fd"))))) (ELam (PWild) (EApp (EApp (EApp (EVar "sendFrom") (EApp (EVar "Connection") (EVar "fd"))) (EVar "bytes")) (EVar "off")))))
+(DFunDef false "sendFromStep" ((PVar "conn") (PVar "bytes") (PVar "off") (PCon "Ok" (PCon "Some" (PVar "n")))) (EApp (EApp (EApp (EVar "sendFrom") (EVar "conn")) (EVar "bytes")) (EBinOp "+" (EVar "off") (EVar "n"))))
+(DFunDef false "sendFromStep" (PWild PWild PWild (PCon "Err" (PVar "e"))) (EApp (EVar "deferPure") (EApp (EVar "Err") (EVar "e"))))
 (DTypeSig true "sendAllWithin" (TyFun (TyCon "Duration") (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyApp (TyApp (TyCon "Async") (TyRow ("Clock" (hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))))
-(DFunDef false "sendAllWithin" ((PVar "d") (PVar "conn") (PVar "bytes")) (EApp (EApp (EVar "deferThen") (EApp (EVar "deadlineAfter") (EVar "d"))) (ELam ((PVar "dl")) (EApp (EApp (EApp (EVar "sendUntil") (EVar "dl")) (EVar "conn")) (EVar "bytes")))))
-(DTypeSig false "sendUntil" (TyFun (TyCon "Wait") (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyApp (TyApp (TyCon "Async") (TyRow ("Clock" (hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))))
-(DFunDef false "sendUntil" ((PVar "dl") (PVar "conn") (PVar "bytes")) (EIf (EBinOp "==" (EApp (EVar "length") (EVar "bytes")) (ELit (LInt 0))) (EApp (EVar "deferPure") (EApp (EVar "Ok") (ELit LUnit))) (EApp (EApp (EVar "deferThen") (EApp (EVar "liftIO") (ELam ((PVar "u")) (EApp (EApp (EVar "trySend") (EVar "conn")) (EVar "bytes"))))) (ELam ((PVar "step")) (EApp (EApp (EApp (EApp (EVar "sendUntilStep") (EVar "dl")) (EVar "conn")) (EVar "bytes")) (EVar "step"))))))
-(DTypeSig false "sendUntilStep" (TyFun (TyCon "Wait") (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))) (TyApp (TyApp (TyCon "Async") (TyRow ("Clock" (hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))))
-(DFunDef false "sendUntilStep" ((PVar "dl") (PCon "Connection" (PVar "fd")) (PVar "bytes") (PCon "Ok" (PCon "None"))) (EApp (EApp (EVar "deferThen") (EApp (EVar "expired") (EVar "dl"))) (ELam ((PVar "late")) (EIf (EVar "late") (EApp (EVar "deferPure") (EApp (EVar "Err") (ELit (LString "timed out")))) (EApp (EApp (EVar "deferThen") (EApp (EVar "awaitAny") (EListLit (EApp (EVar "WaitWrite") (EVar "fd")) (EVar "dl")))) (ELam (PWild) (EApp (EApp (EApp (EVar "sendUntil") (EVar "dl")) (EApp (EVar "Connection") (EVar "fd"))) (EVar "bytes"))))))))
-(DFunDef false "sendUntilStep" ((PVar "dl") (PVar "conn") (PVar "bytes") (PCon "Ok" (PCon "Some" (PVar "n")))) (EApp (EApp (EApp (EVar "sendUntil") (EVar "dl")) (EVar "conn")) (EApp (EApp (EVar "drop") (EVar "n")) (EVar "bytes"))))
-(DFunDef false "sendUntilStep" (PWild PWild PWild (PCon "Err" (PVar "e"))) (EApp (EVar "deferPure") (EApp (EVar "Err") (EVar "e"))))
+(DFunDef false "sendAllWithin" ((PVar "d") (PVar "conn") (PVar "bytes")) (EApp (EApp (EVar "deferThen") (EApp (EVar "deadlineAfter") (EVar "d"))) (ELam ((PVar "dl")) (EApp (EApp (EApp (EApp (EVar "sendUntil") (EVar "dl")) (EVar "conn")) (EVar "bytes")) (ELit (LInt 0))))))
+(DTypeSig false "sendUntil" (TyFun (TyCon "Wait") (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Async") (TyRow ("Clock" (hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))))
+(DFunDef false "sendUntil" ((PVar "dl") (PVar "conn") (PVar "bytes") (PVar "off")) (EIf (EBinOp ">=" (EVar "off") (EApp (EVar "arrayLength") (EVar "bytes"))) (EApp (EVar "deferPure") (EApp (EVar "Ok") (ELit LUnit))) (EApp (EApp (EVar "deferThen") (EApp (EVar "expired") (EVar "dl"))) (ELam ((PVar "late")) (EIf (EVar "late") (EApp (EVar "deferPure") (EApp (EVar "Err") (ELit (LString "timed out")))) (EApp (EApp (EApp (EApp (EVar "sendUntilTry") (EVar "dl")) (EVar "conn")) (EVar "bytes")) (EVar "off")))))))
+(DTypeSig false "sendUntilTry" (TyFun (TyCon "Wait") (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Async") (TyRow ("Clock" (hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))))
+(DFunDef false "sendUntilTry" ((PVar "dl") (PVar "conn") (PVar "bytes") (PVar "off")) (EApp (EApp (EVar "deferThen") (EApp (EVar "liftIO") (ELam ((PVar "u")) (EApp (EApp (EApp (EVar "trySendFrom") (EVar "conn")) (EVar "bytes")) (EVar "off"))))) (ELam ((PVar "step")) (EApp (EApp (EApp (EApp (EApp (EVar "sendUntilStep") (EVar "dl")) (EVar "conn")) (EVar "bytes")) (EVar "off")) (EVar "step")))))
+(DTypeSig false "sendUntilStep" (TyFun (TyCon "Wait") (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))) (TyApp (TyApp (TyCon "Async") (TyRow ("Clock" (hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))))))
+(DFunDef false "sendUntilStep" ((PVar "dl") (PCon "Connection" (PVar "fd")) (PVar "bytes") (PVar "off") (PCon "Ok" (PCon "None"))) (EApp (EApp (EVar "deferThen") (EApp (EVar "awaitAny") (EListLit (EApp (EVar "WaitWrite") (EVar "fd")) (EVar "dl")))) (ELam (PWild) (EApp (EApp (EApp (EApp (EVar "sendUntil") (EVar "dl")) (EApp (EVar "Connection") (EVar "fd"))) (EVar "bytes")) (EVar "off")))))
+(DFunDef false "sendUntilStep" ((PVar "dl") (PVar "conn") (PVar "bytes") (PVar "off") (PCon "Ok" (PCon "Some" (PVar "n")))) (EApp (EApp (EApp (EApp (EVar "sendUntil") (EVar "dl")) (EVar "conn")) (EVar "bytes")) (EBinOp "+" (EVar "off") (EVar "n"))))
+(DFunDef false "sendUntilStep" (PWild PWild PWild PWild (PCon "Err" (PVar "e"))) (EApp (EVar "deferPure") (EApp (EVar "Err") (EVar "e"))))
 (DTypeSig true "sendString" (TyFun (TyCon "Connection") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Async") (TyRow ((hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DFunDef false "sendString" ((PVar "conn") (PVar "s")) (EApp (EApp (EVar "sendAll") (EVar "conn")) (EApp (EVar "toUtf8") (EVar "s"))))
 (DTypeSig true "close" (TyFun (TyCon "Connection") (TyApp (TyApp (TyCon "Async") (TyRow ((hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
@@ -285,7 +326,6 @@ handleThenClose handle conn =
 (DTypeSig false "handleThenClose" (TyFun (TyFun (TyCon "Connection") (TyApp (TyApp (TyCon "Async") (TyRow ((hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))) (TyFun (TyCon "Connection") (TyApp (TyApp (TyCon "Async") (TyRow ((hole "Net")) (Some "e"))) (TyCon "Unit")))))
 (DFunDef false "handleThenClose" ((PVar "handle") (PVar "conn")) (EApp (EApp (EVar "deferThen") (EApp (EVar "handle") (EVar "conn"))) (ELam (PWild) (EApp (EApp (EVar "deferMap") (ELam (PWild) (ELit LUnit))) (EApp (EVar "close") (EVar "conn"))))))
 # MARK
-(DUse false (UseGroup ("array") ((mem "drop" false))))
 (DUse false (UseGroup ("async") ((mem "Async" false) (mem "Wait" true) (mem "liftIO" false) (mem "spawn" false) (mem "awaitAny" false) (mem "deadlineAfter" false) (mem "expired" false))))
 (DUse false (UseGroup ("net") ((mem "Connection" true) (mem "Listener" true))))
 (DUse false (UseAlias ("net") "N"))
@@ -324,18 +364,25 @@ handleThenClose handle conn =
 (DFunDef false "sendStep" (PWild PWild (PCon "Ok" (PCon "Some" (PVar "n")))) (EApp (EMethodRef "deferPure") (EApp (EVar "Ok") (EVar "n"))))
 (DFunDef false "sendStep" (PWild PWild (PCon "Err" (PVar "e"))) (EApp (EMethodRef "deferPure") (EApp (EVar "Err") (EVar "e"))))
 (DTypeSig true "sendAll" (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyApp (TyApp (TyCon "Async") (TyRow ((hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
-(DFunDef false "sendAll" ((PVar "conn") (PVar "bytes")) (EIf (EBinOp "==" (EApp (EMethodRef "length") (EVar "bytes")) (ELit (LInt 0))) (EApp (EMethodRef "deferPure") (EApp (EVar "Ok") (ELit LUnit))) (EApp (EApp (EMethodRef "deferThen") (EApp (EApp (EVar "send") (EVar "conn")) (EVar "bytes"))) (ELam ((PVar "r")) (EApp (EApp (EApp (EVar "sendAllStep") (EVar "conn")) (EVar "bytes")) (EVar "r"))))))
-(DTypeSig false "sendAllStep" (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")) (TyApp (TyApp (TyCon "Async") (TyRow ((hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))))
-(DFunDef false "sendAllStep" ((PVar "conn") (PVar "bytes") (PCon "Ok" (PVar "n"))) (EApp (EApp (EVar "sendAll") (EVar "conn")) (EApp (EApp (EVar "drop") (EVar "n")) (EVar "bytes"))))
-(DFunDef false "sendAllStep" (PWild PWild (PCon "Err" (PVar "e"))) (EApp (EMethodRef "deferPure") (EApp (EVar "Err") (EVar "e"))))
+(DFunDef false "sendAll" ((PVar "conn") (PVar "bytes")) (EApp (EApp (EApp (EVar "sendFrom") (EVar "conn")) (EVar "bytes")) (ELit (LInt 0))))
+(DTypeSig false "sendFrom" (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Async") (TyRow ((hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))))
+(DFunDef false "sendFrom" ((PVar "conn") (PVar "bytes") (PVar "off")) (EIf (EBinOp ">=" (EVar "off") (EApp (EVar "arrayLength") (EVar "bytes"))) (EApp (EMethodRef "deferPure") (EApp (EVar "Ok") (ELit LUnit))) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "liftIO") (ELam ((PVar "u")) (EApp (EApp (EApp (EVar "trySendFrom") (EVar "conn")) (EVar "bytes")) (EVar "off"))))) (ELam ((PVar "step")) (EApp (EApp (EApp (EApp (EVar "sendFromStep") (EVar "conn")) (EVar "bytes")) (EVar "off")) (EVar "step"))))))
+(DTypeSig false "trySendFrom" (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))))))))
+(DFunDef false "trySendFrom" ((PCon "Connection" (PVar "fd")) (PVar "bytes") (PVar "off")) (EMatch (EApp (EApp (EVar "netSetNonblock") (EVar "fd")) (EVar "True")) (arm (PCon "Ok" PWild) () (EApp (EApp (EApp (EVar "netTrySendFrom") (EVar "fd")) (EVar "bytes")) (EVar "off"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e")))))
+(DTypeSig false "sendFromStep" (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))) (TyApp (TyApp (TyCon "Async") (TyRow ((hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))))
+(DFunDef false "sendFromStep" ((PCon "Connection" (PVar "fd")) (PVar "bytes") (PVar "off") (PCon "Ok" (PCon "None"))) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "awaitAny") (EListLit (EApp (EVar "WaitWrite") (EVar "fd"))))) (ELam (PWild) (EApp (EApp (EApp (EVar "sendFrom") (EApp (EVar "Connection") (EVar "fd"))) (EVar "bytes")) (EVar "off")))))
+(DFunDef false "sendFromStep" ((PVar "conn") (PVar "bytes") (PVar "off") (PCon "Ok" (PCon "Some" (PVar "n")))) (EApp (EApp (EApp (EVar "sendFrom") (EVar "conn")) (EVar "bytes")) (EBinOp "+" (EVar "off") (EVar "n"))))
+(DFunDef false "sendFromStep" (PWild PWild PWild (PCon "Err" (PVar "e"))) (EApp (EMethodRef "deferPure") (EApp (EVar "Err") (EVar "e"))))
 (DTypeSig true "sendAllWithin" (TyFun (TyCon "Duration") (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyApp (TyApp (TyCon "Async") (TyRow ("Clock" (hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))))
-(DFunDef false "sendAllWithin" ((PVar "d") (PVar "conn") (PVar "bytes")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "deadlineAfter") (EVar "d"))) (ELam ((PVar "dl")) (EApp (EApp (EApp (EVar "sendUntil") (EVar "dl")) (EVar "conn")) (EVar "bytes")))))
-(DTypeSig false "sendUntil" (TyFun (TyCon "Wait") (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyApp (TyApp (TyCon "Async") (TyRow ("Clock" (hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))))
-(DFunDef false "sendUntil" ((PVar "dl") (PVar "conn") (PVar "bytes")) (EIf (EBinOp "==" (EApp (EMethodRef "length") (EVar "bytes")) (ELit (LInt 0))) (EApp (EMethodRef "deferPure") (EApp (EVar "Ok") (ELit LUnit))) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "liftIO") (ELam ((PVar "u")) (EApp (EApp (EVar "trySend") (EVar "conn")) (EVar "bytes"))))) (ELam ((PVar "step")) (EApp (EApp (EApp (EApp (EVar "sendUntilStep") (EVar "dl")) (EVar "conn")) (EVar "bytes")) (EVar "step"))))))
-(DTypeSig false "sendUntilStep" (TyFun (TyCon "Wait") (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))) (TyApp (TyApp (TyCon "Async") (TyRow ("Clock" (hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))))
-(DFunDef false "sendUntilStep" ((PVar "dl") (PCon "Connection" (PVar "fd")) (PVar "bytes") (PCon "Ok" (PCon "None"))) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expired") (EVar "dl"))) (ELam ((PVar "late")) (EIf (EVar "late") (EApp (EMethodRef "deferPure") (EApp (EVar "Err") (ELit (LString "timed out")))) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "awaitAny") (EListLit (EApp (EVar "WaitWrite") (EVar "fd")) (EVar "dl")))) (ELam (PWild) (EApp (EApp (EApp (EVar "sendUntil") (EVar "dl")) (EApp (EVar "Connection") (EVar "fd"))) (EVar "bytes"))))))))
-(DFunDef false "sendUntilStep" ((PVar "dl") (PVar "conn") (PVar "bytes") (PCon "Ok" (PCon "Some" (PVar "n")))) (EApp (EApp (EApp (EVar "sendUntil") (EVar "dl")) (EVar "conn")) (EApp (EApp (EVar "drop") (EVar "n")) (EVar "bytes"))))
-(DFunDef false "sendUntilStep" (PWild PWild PWild (PCon "Err" (PVar "e"))) (EApp (EMethodRef "deferPure") (EApp (EVar "Err") (EVar "e"))))
+(DFunDef false "sendAllWithin" ((PVar "d") (PVar "conn") (PVar "bytes")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "deadlineAfter") (EVar "d"))) (ELam ((PVar "dl")) (EApp (EApp (EApp (EApp (EVar "sendUntil") (EVar "dl")) (EVar "conn")) (EVar "bytes")) (ELit (LInt 0))))))
+(DTypeSig false "sendUntil" (TyFun (TyCon "Wait") (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Async") (TyRow ("Clock" (hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))))
+(DFunDef false "sendUntil" ((PVar "dl") (PVar "conn") (PVar "bytes") (PVar "off")) (EIf (EBinOp ">=" (EVar "off") (EApp (EVar "arrayLength") (EVar "bytes"))) (EApp (EMethodRef "deferPure") (EApp (EVar "Ok") (ELit LUnit))) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expired") (EVar "dl"))) (ELam ((PVar "late")) (EIf (EVar "late") (EApp (EMethodRef "deferPure") (EApp (EVar "Err") (ELit (LString "timed out")))) (EApp (EApp (EApp (EApp (EVar "sendUntilTry") (EVar "dl")) (EVar "conn")) (EVar "bytes")) (EVar "off")))))))
+(DTypeSig false "sendUntilTry" (TyFun (TyCon "Wait") (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Async") (TyRow ("Clock" (hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))))
+(DFunDef false "sendUntilTry" ((PVar "dl") (PVar "conn") (PVar "bytes") (PVar "off")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "liftIO") (ELam ((PVar "u")) (EApp (EApp (EApp (EVar "trySendFrom") (EVar "conn")) (EVar "bytes")) (EVar "off"))))) (ELam ((PVar "step")) (EApp (EApp (EApp (EApp (EApp (EVar "sendUntilStep") (EVar "dl")) (EVar "conn")) (EVar "bytes")) (EVar "off")) (EVar "step")))))
+(DTypeSig false "sendUntilStep" (TyFun (TyCon "Wait") (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))) (TyApp (TyApp (TyCon "Async") (TyRow ("Clock" (hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))))))
+(DFunDef false "sendUntilStep" ((PVar "dl") (PCon "Connection" (PVar "fd")) (PVar "bytes") (PVar "off") (PCon "Ok" (PCon "None"))) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "awaitAny") (EListLit (EApp (EVar "WaitWrite") (EVar "fd")) (EVar "dl")))) (ELam (PWild) (EApp (EApp (EApp (EApp (EVar "sendUntil") (EVar "dl")) (EApp (EVar "Connection") (EVar "fd"))) (EVar "bytes")) (EVar "off")))))
+(DFunDef false "sendUntilStep" ((PVar "dl") (PVar "conn") (PVar "bytes") (PVar "off") (PCon "Ok" (PCon "Some" (PVar "n")))) (EApp (EApp (EApp (EApp (EVar "sendUntil") (EVar "dl")) (EVar "conn")) (EVar "bytes")) (EBinOp "+" (EVar "off") (EVar "n"))))
+(DFunDef false "sendUntilStep" (PWild PWild PWild PWild (PCon "Err" (PVar "e"))) (EApp (EMethodRef "deferPure") (EApp (EVar "Err") (EVar "e"))))
 (DTypeSig true "sendString" (TyFun (TyCon "Connection") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Async") (TyRow ((hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DFunDef false "sendString" ((PVar "conn") (PVar "s")) (EApp (EApp (EVar "sendAll") (EVar "conn")) (EApp (EVar "toUtf8") (EVar "s"))))
 (DTypeSig true "close" (TyFun (TyCon "Connection") (TyApp (TyApp (TyCon "Async") (TyRow ((hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
