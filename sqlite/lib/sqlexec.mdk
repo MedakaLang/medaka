@@ -139,17 +139,19 @@ predOf (Some e) = mkE e
 -- VALUES → cells
 -- ---------------------------------------------------------------------------
 
-foldValues : List (List SqlExpr) -> List (List Cell) -> Result String (List (List Cell))
+foldValues : List (List SqlExpr) ->
+  List (List Cell) ->
+  Result String (List (List Cell))
 foldValues [] acc = Ok (reverse acc)
-foldValues (row::rest) acc = do
+foldValues (row :: rest) acc = do
   cells <- foldRow row []
-  foldValues rest (cells::acc)
+  foldValues rest (cells :: acc)
 
 foldRow : List SqlExpr -> List Cell -> Result String (List Cell)
 foldRow [] acc = Ok (reverse acc)
-foldRow (e::rest) acc = do
+foldRow (e :: rest) acc = do
   c <- constCell e
-  foldRow rest (c::acc)
+  foldRow rest (c :: acc)
 
 -- | Fold one `VALUES` expression to a constant `Cell`.  Literals and constant
 --   arithmetic fold; a column reference, an aggregate, or an operator the value

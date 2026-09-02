@@ -159,13 +159,12 @@ public export data JoinKind =
 --   `joins` order).  `alias` is `None` for `JOIN orders …` and `Some "o"` for
 --   `JOIN orders o …` / `JOIN orders AS o …`; when set, qualified references to
 --   this table MUST use the alias (SQLite's rule — the real name is then hidden).
-public export data Join =
-  | Join {
-      table : String,
-      kind : JoinKind,
-      alias : Option String,
-      on : SqlExpr,
-    }
+public export data Join = Join {
+  table : String,
+  kind : JoinKind,
+  alias : Option String,
+  on : SqlExpr,
+}
   deriving (Eq, Debug)
 
 -- | A whole SELECT — the single query ADT.  One `Select`, one executor
@@ -218,21 +217,20 @@ public export data Join =
 --   shorter than `columns`, in which case the missing tail is all-`None`).  The
 --   executor ignores it entirely — it affects only rendering and
 --   `selectColumnNames` (output-column naming), never the computed cells.
-public export data Select =
-  | Select {
-      from : String,
-      fromAlias : Option String,
-      joins : List Join,
-      where_ : Option SqlExpr,
-      groupBy : List SqlExpr,
-      having : Option SqlExpr,
-      orderBy : List (SqlExpr, Bool),
-      limit : Option Int,
-      offset : Option Int,
-      distinct : Bool,
-      columns : List SqlExpr,
-      columnAliases : List (Option String),
-    }
+public export data Select = Select {
+  from : String,
+  fromAlias : Option String,
+  joins : List Join,
+  where_ : Option SqlExpr,
+  groupBy : List SqlExpr,
+  having : Option SqlExpr,
+  orderBy : List (SqlExpr, Bool),
+  limit : Option Int,
+  offset : Option Int,
+  distinct : Bool,
+  columns : List SqlExpr,
+  columnAliases : List (Option String),
+}
   deriving (Eq, Debug)
 
 -- | A SQL set operator combining two `selectCore`s.  `OpUnionAll` concatenates
@@ -401,16 +399,17 @@ eNotIn x vs = MkExpr (ENot (EIn (unExpr x) (map unExpr vs)))
 export
 eBetween : Expr a -> Expr a -> Expr a -> Expr Bool
 eBetween x lo hi =
-  MkExpr (EAnd
-    (EBin OpGe (unExpr x) (unExpr lo))
-    (EBin OpLe (unExpr x) (unExpr hi)))
+  MkExpr
+    (EAnd (EBin OpGe (unExpr x) (unExpr lo)) (EBin OpLe (unExpr x) (unExpr hi)))
 
 export
 eNotBetween : Expr a -> Expr a -> Expr a -> Expr Bool
 eNotBetween x lo hi =
-  MkExpr (ENot (EAnd
-    (EBin OpGe (unExpr x) (unExpr lo))
-    (EBin OpLe (unExpr x) (unExpr hi))))
+  MkExpr
+    (ENot
+      (EAnd
+        (EBin OpGe (unExpr x) (unExpr lo))
+        (EBin OpLe (unExpr x) (unExpr hi))))
 
 -- | `COALESCE(a, b, ..)` — the first non-NULL argument, or NULL if all are.
 export
@@ -586,12 +585,18 @@ innerJoin tbl onExpr sel = innerJoinAs tbl None onExpr sel
 --   the rest of the query) references this table's columns through the alias.
 export
 innerJoinAs : String -> Option String -> Expr Bool -> Select -> Select
-innerJoinAs tbl alias onExpr sel = { sel | joins = sel.joins ++ [Join {
-    table = tbl,
-    kind = JInner,
-    alias = alias,
-    on = unExpr onExpr,
-  }] }
+innerJoinAs tbl alias onExpr sel = { sel |
+  joins =
+    sel.joins
+      ++ [
+        Join {
+          table = tbl,
+          kind = JInner,
+          alias = alias,
+          on = unExpr onExpr,
+        },
+      ],
+}
 
 -- | Append a LEFT [OUTER] JOIN of `tbl` with the type-safe `on` predicate.
 --   Every row of the accumulated left side is kept: when no right row matches
@@ -606,12 +611,18 @@ leftJoin tbl onExpr sel = leftJoinAs tbl None onExpr sel
 --   `leftJoinAs tbl None`.
 export
 leftJoinAs : String -> Option String -> Expr Bool -> Select -> Select
-leftJoinAs tbl alias onExpr sel = { sel | joins = sel.joins ++ [Join {
-    table = tbl,
-    kind = JLeft,
-    alias = alias,
-    on = unExpr onExpr,
-  }] }
+leftJoinAs tbl alias onExpr sel = { sel |
+  joins =
+    sel.joins
+      ++ [
+        Join {
+          table = tbl,
+          kind = JLeft,
+          alias = alias,
+          on = unExpr onExpr,
+        },
+      ],
+}
 
 -- | Append a RIGHT [OUTER] JOIN of `tbl` with the type-safe `on` predicate.
 --   The mirror of `leftJoin`: every row of `tbl` is kept, and when no row of the
@@ -626,12 +637,18 @@ rightJoin tbl onExpr sel = rightJoinAs tbl None onExpr sel
 --   `rightJoinAs tbl None`.
 export
 rightJoinAs : String -> Option String -> Expr Bool -> Select -> Select
-rightJoinAs tbl alias onExpr sel = { sel | joins = sel.joins ++ [Join {
-    table = tbl,
-    kind = JRight,
-    alias = alias,
-    on = unExpr onExpr,
-  }] }
+rightJoinAs tbl alias onExpr sel = { sel |
+  joins =
+    sel.joins
+      ++ [
+        Join {
+          table = tbl,
+          kind = JRight,
+          alias = alias,
+          on = unExpr onExpr,
+        },
+      ],
+}
 
 -- | Append a FULL [OUTER] JOIN of `tbl` with the type-safe `on` predicate — the
 --   union of `leftJoin` and `rightJoin`: matched pairs, every unmatched left row
@@ -645,12 +662,18 @@ fullJoin tbl onExpr sel = fullJoinAs tbl None onExpr sel
 --   `fullJoinAs tbl None`.
 export
 fullJoinAs : String -> Option String -> Expr Bool -> Select -> Select
-fullJoinAs tbl alias onExpr sel = { sel | joins = sel.joins ++ [Join {
-    table = tbl,
-    kind = JFull,
-    alias = alias,
-    on = unExpr onExpr,
-  }] }
+fullJoinAs tbl alias onExpr sel = { sel |
+  joins =
+    sel.joins
+      ++ [
+        Join {
+          table = tbl,
+          kind = JFull,
+          alias = alias,
+          on = unExpr onExpr,
+        },
+      ],
+}
 
 -- | Append a CROSS JOIN of `tbl` — the unconditional cartesian product, with NO
 --   `ON` predicate.  A placeholder `on` (`ELit (LInt 1)`) is stored but never
@@ -664,12 +687,18 @@ crossJoin tbl sel = crossJoinAs tbl None sel
 --   `crossJoinAs tbl None`.
 export
 crossJoinAs : String -> Option String -> Select -> Select
-crossJoinAs tbl alias sel = { sel | joins = sel.joins ++ [Join {
-    table = tbl,
-    kind = JCross,
-    alias = alias,
-    on = ELit (LInt 1),
-  }] }
+crossJoinAs tbl alias sel = { sel |
+  joins =
+    sel.joins
+      ++ [
+        Join {
+          table = tbl,
+          kind = JCross,
+          alias = alias,
+          on = ELit (LInt 1),
+        },
+      ],
+}
 
 -- | Attach a typed `Expr Bool` predicate as the WHERE clause.  The phantom
 --   wrapper is stripped here — this is the type-safe boundary at which an
@@ -772,7 +801,8 @@ withColumnsAliased cols sel =
 export
 render : Select -> Result String (String, List Literal)
 render (Select { from = tbl, fromAlias = fa, joins = js, where_ = w, groupBy = gb, having = h, orderBy = ob, limit = lm, offset = of_, distinct = dst, columns = cols, columnAliases = cas }) =
-  if not (validIdent tbl) then Err "render: invalid table name: \{tbl}"
+  if not (validIdent tbl) then
+    Err "render: invalid table name: \{tbl}"
   else do
     fromAliasSql <- renderAliasSuffix fa
     (joinSql, joinBinds) <- renderJoins js
@@ -784,19 +814,26 @@ render (Select { from = tbl, fromAlias = fa, joins = js, where_ = w, groupBy = g
     let limOff = renderLimitOffset lm of_
     let distPfx = if dst then "SELECT DISTINCT " else "SELECT "
     let selectSql = "\{distPfx}\{colSql}"
-    let sql = "\{selectSql} FROM \{tbl}\{fromAliasSql}\{joinSql}\{whereSql}\{grpSql}\{havSql}\{ordSql}\{limOffSql limOff}"
-    Ok
-      (
-        sql,
-        colBinds ++ joinBinds ++ binds ++ grpBinds ++ havBinds ++ ordBinds ++ limOffBinds limOff lm of_,
-      )
+    let sql =
+      "\{selectSql} FROM \{tbl}\{fromAliasSql}\{joinSql}\{whereSql}\{grpSql}\{havSql}\{ordSql}\{limOffSql limOff}"
+    Ok (
+      sql,
+      colBinds
+        ++ joinBinds
+        ++ binds
+        ++ grpBinds
+        ++ havBinds
+        ++ ordBinds
+        ++ limOffBinds limOff lm of_,
+    )
 
 -- Render the GROUP BY clause (comma-joined key expressions).  Empty ⇒ no clause.
 renderGroupBy : List SqlExpr -> Result String (String, List Literal)
 renderGroupBy [] = Ok ("", [])
-renderGroupBy gb = map
-  ((parts, binds) => (" GROUP BY \{join ", " parts}", binds))
-  (renderColumnParts gb)
+renderGroupBy gb =
+  map
+    ((parts, binds) => (" GROUP BY \{join ", " parts}", binds))
+    (renderColumnParts gb)
 
 -- Render the HAVING clause (with leading " HAVING ") and collect its binds.
 renderHaving : Option SqlExpr -> Result String (String, List Literal)
@@ -807,26 +844,32 @@ renderHaving (Some e) =
 -- Alias-aware projection render: each column may carry a `Some name` output
 -- alias, rendered as `<expr> AS <name>`.  `cas` is positionally parallel to
 -- `cols` and may be shorter (missing tail ⇒ no alias).  Empty `cols` ⇒ `*`.
-renderColumnsA : List SqlExpr -> List (Option String) -> Result String (String, List Literal)
+renderColumnsA : List SqlExpr ->
+  List (Option String) ->
+  Result String (String, List Literal)
 renderColumnsA [] _ = Ok ("*", [])
-renderColumnsA cols cas = map
-  ((parts, binds) => (join ", " parts, binds))
-  (renderColumnAliasedParts (zipAliases cols cas))
+renderColumnsA cols cas =
+  map
+    ((parts, binds) => (join ", " parts, binds))
+    (renderColumnAliasedParts (zipAliases cols cas))
 
-renderColumnAliasedParts : List (SqlExpr, Option String) -> Result String (List String, List Literal)
+renderColumnAliasedParts : List (SqlExpr, Option String) ->
+  Result String (List String, List Literal)
 renderColumnAliasedParts [] = Ok ([], [])
-renderColumnAliasedParts ((e, a)::rest) = do
+renderColumnAliasedParts ((e, a) :: rest) = do
   (sql, binds) <- renderExpr e
   suffix <- renderAliasSuffix a
   (restParts, restBinds) <- renderColumnAliasedParts rest
-  Ok ("\{sql}\{suffix}"::restParts, binds ++ restBinds)
+  Ok ("\{sql}\{suffix}" :: restParts, binds ++ restBinds)
 
 -- Pair each expression with its alias, padding a short/empty alias list with
 -- `None` so the two lists need not be kept in lockstep by every caller.
-zipAliases : List SqlExpr -> List (Option String) -> List (SqlExpr, Option String)
+zipAliases : List SqlExpr ->
+  List (Option String) ->
+  List (SqlExpr, Option String)
 zipAliases [] _ = []
-zipAliases (e::es) [] = (e, None) :: zipAliases es []
-zipAliases (e::es) (a::arest) = (e, a) :: zipAliases es arest
+zipAliases (e :: es) [] = (e, None) :: zipAliases es []
+zipAliases (e :: es) (a :: arest) = (e, a) :: zipAliases es arest
 
 -- Render an optional alias as a ` AS <name>` suffix.  The name is identifier-
 -- charset-asserted, exactly like a table/column name, so an illegal alias is an
@@ -834,34 +877,31 @@ zipAliases (e::es) (a::arest) = (e, a) :: zipAliases es arest
 renderAliasSuffix : Option String -> Result String String
 renderAliasSuffix None = Ok ""
 renderAliasSuffix (Some a) =
-  if validIdent a then
-    Ok " AS \{a}"
-  else
-    Err "render: invalid alias: \{a}"
+  if validIdent a then Ok " AS \{a}" else Err "render: invalid alias: \{a}"
 
 renderColumnParts : List SqlExpr -> Result String (List String, List Literal)
 renderColumnParts [] = Ok ([], [])
-renderColumnParts (e::rest) = do
+renderColumnParts (e :: rest) = do
   (sql, binds) <- renderExpr e
   (restParts, restBinds) <- renderColumnParts rest
-  Ok (sql::restParts, binds ++ restBinds)
+  Ok (sql :: restParts, binds ++ restBinds)
 
 -- Render the JOIN clauses (in order), each " INNER JOIN <table> ON <expr>" or
 -- " LEFT JOIN <table> ON <expr>" per its `kind`, accumulating their
 -- ON-expression binds left-to-right.  Empty ⇒ no clause.
 renderJoins : List Join -> Result String (String, List Literal)
 renderJoins [] = Ok ("", [])
-renderJoins ((Join { table = t, kind = k, alias = a, on = e })::rest) =
-  if not (validIdent t) then Err "render: invalid join table name: \{t}"
+renderJoins ((Join { table = t, kind = k, alias = a, on = e }) :: rest) =
+  if not (validIdent t) then
+    Err "render: invalid join table name: \{t}"
   else do
     aliasSql <- renderAliasSuffix a
     (onSql, onBinds) <- renderJoinOn k e
     (restSql, restBinds) <- renderJoins rest
-    Ok
-      (
-        " \{joinKindSql k} \{t}\{aliasSql}\{onSql}\{restSql}",
-        onBinds ++ restBinds,
-      )
+    Ok (
+      " \{joinKindSql k} \{t}\{aliasSql}\{onSql}\{restSql}",
+      onBinds ++ restBinds,
+    )
 
 -- The ON clause of a rendered join: empty for CROSS (no predicate), " ON <expr>"
 -- otherwise.  The leading space is included so the caller concatenates uniformly.
@@ -897,17 +937,19 @@ renderLimitOffset lm of_ =
 -- `ORDER BY (price * ?)`.  Empty key list ⇒ no clause at all.
 renderOrderBy : List (SqlExpr, Bool) -> Result String (String, List Literal)
 renderOrderBy [] = Ok ("", [])
-renderOrderBy keys = map
-  ((parts, binds) => (" ORDER BY \{join ", " parts}", binds))
-  (renderOrderByParts keys)
+renderOrderBy keys =
+  map
+    ((parts, binds) => (" ORDER BY \{join ", " parts}", binds))
+    (renderOrderByParts keys)
 
-renderOrderByParts : List (SqlExpr, Bool) -> Result String (List String, List Literal)
+renderOrderByParts : List (SqlExpr, Bool) ->
+  Result String (List String, List Literal)
 renderOrderByParts [] = Ok ([], [])
-renderOrderByParts ((e, asc)::rest) = do
+renderOrderByParts ((e, asc) :: rest) = do
   (sql, binds) <- renderExpr e
   let dir = if asc then "ASC" else "DESC"
   (restParts, restBinds) <- renderOrderByParts rest
-  Ok ("\{sql} \{dir}"::restParts, binds ++ restBinds)
+  Ok ("\{sql} \{dir}" :: restParts, binds ++ restBinds)
 
 limOffSql : String -> String
 limOffSql s = s
@@ -973,9 +1015,10 @@ renderExpr (EFn name args) = do
   (partsSql, partsBinds) <- renderColumnParts args
   Ok ("\{asciiFold asciiLowerChar name}(\{join ", " partsSql})", partsBinds)
 
-renderCaseWhens : List (SqlExpr, SqlExpr) -> Result String (String, List Literal)
+renderCaseWhens : List (SqlExpr, SqlExpr) ->
+  Result String (String, List Literal)
 renderCaseWhens [] = Ok ("", [])
-renderCaseWhens ((c, r)::rest) = do
+renderCaseWhens ((c, r) :: rest) = do
   (csql, cbinds) <- renderExpr c
   (rsql, rbinds) <- renderExpr r
   (restSql, restBinds) <- renderCaseWhens rest
@@ -987,7 +1030,10 @@ renderCaseElse (Some e) = do
   (sql, binds) <- renderExpr e
   Ok ("ELSE \{sql} ", binds)
 
-renderBinary : String -> SqlExpr -> SqlExpr -> Result String (String, List Literal)
+renderBinary : String ->
+  SqlExpr ->
+  SqlExpr ->
+  Result String (String, List Literal)
 renderBinary opSql l r = do
   (lsql, lbinds) <- renderExpr l
   (rsql, rbinds) <- renderExpr r
@@ -1003,15 +1049,15 @@ renderCompoundParam (Compound first rest ob lm off) = do
   (asql, abinds) <- renderSetArmsParam rest
   (osql, obinds) <- renderOrderBy ob
   let lo = renderLimitOffset lm off
-  Ok
-    (
-      "\{fsql}\{asql}\{osql}\{limOffSql lo}",
-      fbinds ++ abinds ++ obinds ++ limOffBinds lo lm off,
-    )
+  Ok (
+    "\{fsql}\{asql}\{osql}\{limOffSql lo}",
+    fbinds ++ abinds ++ obinds ++ limOffBinds lo lm off,
+  )
 
-renderSetArmsParam : List (SetOp, Select) -> Result String (String, List Literal)
+renderSetArmsParam : List (SetOp, Select) ->
+  Result String (String, List Literal)
 renderSetArmsParam [] = Ok ("", [])
-renderSetArmsParam ((op, sel)::rest) = do
+renderSetArmsParam ((op, sel) :: rest) = do
   (ssql, sbinds) <- render sel
   (rsql, rbinds) <- renderSetArmsParam rest
   Ok (" \{setOpSql op} \{ssql}\{rsql}", sbinds ++ rbinds)
@@ -1065,9 +1111,9 @@ validIdentGo chars i n =
 identChar : Int -> Bool
 identChar c =
   c >= 48 && c <= 57  -- 0-9
-  || c >= 65 && c <= 90  -- A-Z
-  || c >= 97 && c <= 122  -- a-z
-  || c == 95  -- _
+    || c >= 65 && c <= 90  -- A-Z
+    || c >= 97 && c <= 122  -- a-z
+    || c == 95  -- _
 
 -- | A valid (possibly qualified) identifier for the ON/render path: either a
 --   bare `validIdent`, or `table.column` with EXACTLY one `.` and each side a
@@ -1175,14 +1221,18 @@ boolTri False = TFalse
 --   The row is kept iff the predicate evaluates to `TTrue` — SQL's rule.  `Err`
 --   on an unknown column name.
 export
-compilePred : (String -> Option Int) -> SqlExpr -> Result String (List Cell -> Bool)
+compilePred : (String -> Option Int) ->
+  SqlExpr ->
+  Result String (List Cell -> Bool)
 compilePred lookup e = do
   t <- compileTri lookup e
   Ok (cells => t cells == TTrue)
 
 -- The three-valued evaluator.  Everything above the WHERE boundary stays in
 -- `Tri`; only `compilePred` collapses it.
-compileTri : (String -> Option Int) -> SqlExpr -> Result String (List Cell -> Tri)
+compileTri : (String -> Option Int) ->
+  SqlExpr ->
+  Result String (List Cell -> Tri)
 compileTri lookup (ECol name) = match lookup name
   None => Err "compilePred: unknown column: \{name}"
   Some i => Ok (cells => cellTri (nthCell cells i))
@@ -1251,7 +1301,11 @@ compileTri lookup (ENotNull inner) = do
 -- Compile a comparison.  Both operands resolve to a `List Cell -> Cell`
 -- accessor; a NULL on either side makes the result UNKNOWN (NOT false), which is
 -- what lets a `NOT` above it stay UNKNOWN rather than flipping to TRUE.
-compileCmp : (String -> Option Int) -> CmpOp -> SqlExpr -> SqlExpr -> Result String (List Cell -> Tri)
+compileCmp : (String -> Option Int) ->
+  CmpOp ->
+  SqlExpr ->
+  SqlExpr ->
+  Result String (List Cell -> Tri)
 compileCmp lookup op l r = do
   gl <- compileOperand lookup l
   gr <- compileOperand lookup r
@@ -1262,7 +1316,9 @@ compileCmp lookup op l r = do
 -- combined per row via `evalArith`).  Returns a `List Cell -> Cell` accessor.
 -- Exported so `lib.mutate` can evaluate UPDATE SET right-hand sides.
 export
-compileOperand : (String -> Option Int) -> SqlExpr -> Result String (List Cell -> Cell)
+compileOperand : (String -> Option Int) ->
+  SqlExpr ->
+  Result String (List Cell -> Cell)
 compileOperand lookup (ECol name) = match lookup name
   None => Err "compilePred: unknown column: \{name}"
   Some i => Ok (cells => nthCell cells i)
@@ -1299,7 +1355,9 @@ compileOperand lookup _ = Err "compilePred: operand must be a column or literal"
 -- | Compile any `SqlExpr` value operand to a per-row `List Cell -> Cell`
 --   accessor (an alias of `compileOperand` for the UPDATE SET call site).
 export
-compileValue : (String -> Option Int) -> SqlExpr -> Result String (List Cell -> Cell)
+compileValue : (String -> Option Int) ->
+  SqlExpr ->
+  Result String (List Cell -> Cell)
 compileValue = compileOperand
 
 -- ---------------------------------------------------------------------------
@@ -1313,25 +1371,29 @@ compileValue = compileOperand
 -- VALUE operands.
 -- ---------------------------------------------------------------------------
 
-compileCaseWhens : (String -> Option Int) -> List (SqlExpr, SqlExpr) -> Result String (List (List Cell -> Tri, List Cell -> Cell))
+compileCaseWhens : (String -> Option Int) ->
+  List (SqlExpr, SqlExpr) ->
+  Result String (List (List Cell -> Tri, List Cell -> Cell))
 compileCaseWhens _ [] = Ok []
-compileCaseWhens lookup ((c, r)::rest) = do
+compileCaseWhens lookup ((c, r) :: rest) = do
   ct <- compileTri lookup c
   cr <- compileOperand lookup r
   rest2 <- compileCaseWhens lookup rest
-  Ok ((ct, cr)::rest2)
+  Ok ((ct, cr) :: rest2)
 
-compileCaseElseVal : (String -> Option Int) -> Option SqlExpr -> Result String (List Cell -> Cell)
+compileCaseElseVal : (String -> Option Int) ->
+  Option SqlExpr ->
+  Result String (List Cell -> Cell)
 compileCaseElseVal _ None = Ok (_ => CNull)
 compileCaseElseVal lookup (Some e) = compileOperand lookup e
 
-evalCaseGo : List (List Cell -> Tri, List Cell -> Cell) -> (List Cell -> Cell) -> List Cell -> Cell
+evalCaseGo : List (List Cell -> Tri, List Cell -> Cell) ->
+  (List Cell -> Cell) ->
+  List Cell ->
+  Cell
 evalCaseGo [] gEls cells = gEls cells
-evalCaseGo ((ct, cr)::rest) gEls cells =
-  if ct cells == TTrue then
-    cr cells
-  else
-    evalCaseGo rest gEls cells
+evalCaseGo ((ct, cr) :: rest) gEls cells =
+  if ct cells == TTrue then cr cells else evalCaseGo rest gEls cells
 
 -- ---------------------------------------------------------------------------
 -- COALESCE / IFNULL evaluation: the first non-NULL argument, NULL if all are
@@ -1340,7 +1402,7 @@ evalCaseGo ((ct, cr)::rest) gEls cells =
 
 evalCoalesceGo : List (List Cell -> Cell) -> List Cell -> Cell
 evalCoalesceGo [] _ = CNull
-evalCoalesceGo (g::gs) cells =
+evalCoalesceGo (g :: gs) cells =
   let c = g cells
   if cellIsNull c then evalCoalesceGo gs cells else c
 
@@ -1355,7 +1417,7 @@ inTri x vs = inTriGo x vs False
 
 inTriGo : Cell -> List Cell -> Bool -> Tri
 inTriGo _ [] sawUnknown = if sawUnknown then TUnknown else TFalse
-inTriGo x (v::rest) sawUnknown = match cmpCellsTri OpEq x v
+inTriGo x (v :: rest) sawUnknown = match cmpCellsTri OpEq x v
   TTrue => TTrue
   TFalse => inTriGo x rest sawUnknown
   TUnknown => inTriGo x rest True
@@ -1381,7 +1443,8 @@ blobToText b = fromChars (blobToCharsGo b 0 (arrayLength b))
 
 blobToCharsGo : Array Int -> Int -> Int -> List Char
 blobToCharsGo b i n =
-  if i >= n then []
+  if i >= n then
+    []
   else match charFromCode b[i]
     Some c => c :: blobToCharsGo b (i + 1) n
     None => blobToCharsGo b (i + 1) n
@@ -1393,7 +1456,9 @@ evalConcat a b = match (cellToTextOp a, cellToTextOp b)
 
 likeTri : Cell -> Cell -> Tri
 likeTri x pat = match (cellToTextOp x, cellToTextOp pat)
-  (Some s, Some p) => boolTri (likeMatch (asciiFold asciiUpperChar s) (asciiFold asciiUpperChar p))
+  (Some s, Some p) =>
+    boolTri
+      (likeMatch (asciiFold asciiUpperChar s) (asciiFold asciiUpperChar p))
   _ => TUnknown
 
 -- A classic backtracking LIKE matcher: `%` matches any run (incl. empty),
@@ -1464,10 +1529,7 @@ asciiFold f s =
 
 asciiFoldGo : (Char -> Char) -> Array Char -> Int -> Int -> List Char
 asciiFoldGo f chars i n =
-  if i >= n then
-    []
-  else
-    f chars[i] :: asciiFoldGo f chars (i + 1) n
+  if i >= n then [] else f chars[i] :: asciiFoldGo f chars (i + 1) n
 
 -- ---------------------------------------------------------------------------
 -- Scalar string functions.  Every one of these auto-coerces a non-NULL,
@@ -1476,7 +1538,9 @@ asciiFoldGo f chars i n =
 -- `LIKE` use; any NULL argument makes the whole call NULL.
 -- ---------------------------------------------------------------------------
 
-compileFnCall : String -> List (List Cell -> Cell) -> Result String (List Cell -> Cell)
+compileFnCall : String ->
+  List (List Cell -> Cell) ->
+  Result String (List Cell -> Cell)
 compileFnCall "LENGTH" [g] = Ok (cells => fnLength (g cells))
 compileFnCall "UPPER" [g] = Ok (cells => fnUpperSql (g cells))
 compileFnCall "LOWER" [g] = Ok (cells => fnLowerSql (g cells))
@@ -1557,7 +1621,11 @@ spaceTrimRightIdx chars j =
 -- contract (verified against `sqlite3`, including the empty-`Y` case), so it
 -- is reused directly rather than re-implemented.
 fnReplaceSql : Cell -> Cell -> Cell -> Cell
-fnReplaceSql xc yc zc = match (cellToTextOp xc, cellToTextOp yc, cellToTextOp zc)
+fnReplaceSql xc yc zc = match (
+  cellToTextOp xc,
+  cellToTextOp yc,
+  cellToTextOp zc,
+)
   (Some s, Some old, Some new) => CText (replaceAll old new s)
   _ => CNull
 
@@ -1666,13 +1734,15 @@ coerceTextNumeric s =
   let fracStart = if hasDot then intEnd + 1 else intEnd
   let fracEnd = if hasDot then skipDigits chars fracStart n else intEnd
   let fracDigits = fracEnd - fracStart
-  if intDigits <= 0 && fracDigits <= 0 then CInt 0
+  if intDigits <= 0 && fracDigits <= 0 then
+    CInt 0
   else
     let expEnd = parseExpEnd chars fracEnd n
     let hasExp = expEnd > fracEnd
     let numEnd = if hasExp then expEnd else fracEnd
     let prefix = stringSlice ws numEnd s
-    if hasDot || hasExp then floatCellOf prefix
+    if hasDot || hasExp then
+      floatCellOf prefix
     else match toInt prefix
       Some i => CInt i
       None => floatCellOf prefix
@@ -1699,10 +1769,7 @@ isDigitCode k = k >= 48 && k <= 57
 
 skipNumWs : Array Char -> Int -> Int -> Int
 skipNumWs chars i n =
-  if i < n && isNumWs chars[i] then
-    skipNumWs chars (i + 1) n
-  else
-    i
+  if i < n && isNumWs chars[i] then skipNumWs chars (i + 1) n else i
 
 skipDigits : Array Char -> Int -> Int -> Int
 skipDigits chars i n =
@@ -1720,7 +1787,8 @@ parseExpEnd chars i n =
     let j = if i + 1 < n && isSignChar chars[i + 1] then i + 2 else i + 1
     let k = skipDigits chars j n
     if k > j then k else i
-  else i
+  else
+    i
 
 -- `+ - *`: integer result when both operands are integers, else float.
 evalAddSubMul : ArithOp -> Cell -> Cell -> Cell
@@ -1803,10 +1871,10 @@ litToCell LNull = CNull
 -- numerically across the int/float split.
 cmpCellsTri : CmpOp -> Cell -> Cell -> Tri
 cmpCellsTri op a b =
-  if cellIsNull a || cellIsNull b
-  then TUnknown
+  if cellIsNull a || cellIsNull b then
+    TUnknown
   else match cmpOrder a b
-    None   => TFalse                -- incomparable shapes ⇒ definitively unequal
+    None => TFalse  -- incomparable shapes ⇒ definitively unequal
     Some o => boolTri (applyCmp op o)
 
 -- A three-way ordering of two non-null cells, or None if the shapes are not comparable.
@@ -1922,11 +1990,17 @@ runArmCells db sel = do
 -- Fold the set-op arms left-to-right over the accumulated rows.  Each arm's
 -- column count must equal the first arm's (`n`); a mismatch is SQLite's
 -- prepare-time error, reproduced verbatim.
-foldSetOps : Db -> Int -> List (List Cell) -> List (SetOp, Select) -> Result String (List (List Cell))
+foldSetOps : Db ->
+  Int ->
+  List (List Cell) ->
+  List (SetOp, Select) ->
+  Result String (List (List Cell))
 foldSetOps _ _ acc [] = Ok acc
-foldSetOps db n acc ((op, sel)::rest) = do
+foldSetOps db n acc ((op, sel) :: rest) = do
   m <- selectColumnCount db sel
-  if m /= n then Err "SELECTs to the left and right of \{setOpSql op} do not have the same number of result columns"
+  if m /= n then
+    Err
+      "SELECTs to the left and right of \{setOpSql op} do not have the same number of result columns"
   else do
     rhs <- runArmCells db sel
     foldSetOps db n (applySetOp op acc rhs) rest
@@ -1946,7 +2020,10 @@ applySetOp OpExcept l r =
 -- Apply the compound-level ORDER BY to the combined rows.  Keys resolve against
 -- the FIRST arm's output column names; a bare integer literal `n` is the n-th
 -- output column (SQLite's ordinal ORDER BY).  Empty ⇒ rows unchanged.
-applyCompoundOrder : List String -> List (SqlExpr, Bool) -> List (List Cell) -> Result String (List (List Cell))
+applyCompoundOrder : List String ->
+  List (SqlExpr, Bool) ->
+  List (List Cell) ->
+  Result String (List (List Cell))
 applyCompoundOrder _ [] rows = Ok rows
 applyCompoundOrder names ob rows = do
   let ob2 = map (resolveOrderTerm names) ob
@@ -1969,8 +2046,8 @@ nthName xs i = if i < 0 then None else nthNameGo xs i
 
 nthNameGo : List String -> Int -> Option String
 nthNameGo [] _ = None
-nthNameGo (x::_) 0 = Some x
-nthNameGo (_::xs) k = nthNameGo xs (k - 1)
+nthNameGo (x :: _) 0 = Some x
+nthNameGo (_ :: xs) k = nthNameGo xs (k - 1)
 
 -- | The number of result columns a `Select` produces — for the cross-arm
 --   agreement check.  Explicit projection ⇒ its length; `SELECT *` ⇒ the source
@@ -1984,9 +2061,10 @@ selectColumnCount db sel = map length (compoundOutputNames db sel)
 --   `SELECT *` ⇒ the source column names (from table, then each joined table in
 --   order).
 compoundOutputNames : Db -> Select -> Result String (List String)
-compoundOutputNames db (Select { from = tbl, joins = js, columns = cols, columnAliases = cas }) = match cols
-  [] => starColumnNames db tbl js
-  _ => Ok (map outName (zipAliases cols cas))
+compoundOutputNames db (Select { from = tbl, joins = js, columns = cols, columnAliases = cas }) =
+  match cols
+    [] => starColumnNames db tbl js
+    _ => Ok (map outName (zipAliases cols cas))
 
 outName : (SqlExpr, Option String) -> String
 outName (_, Some a) = a
@@ -2001,7 +2079,7 @@ starColumnNames db tbl js = do
 
 joinColumnNames : Db -> List Join -> Result String (List String)
 joinColumnNames _ [] = Ok []
-joinColumnNames db (j::rest) = do
+joinColumnNames db (j :: rest) = do
   cs <- columnNames db (joinTable j)
   more <- joinColumnNames db rest
   Ok (cs ++ more)
@@ -2051,15 +2129,22 @@ materializeSelect db sel = do
   h2 <- materializeOpt db sel.having
   ob2 <- materializeOrder db sel.orderBy
   cols2 <- materializeList db sel.columns
-  let sel2 = { sel | where_ = w2, joins = js2, groupBy = gb2, having = h2, orderBy = ob2, columns = cols2 }
+  let sel2 = { sel |
+    where_ = w2,
+    joins = js2,
+    groupBy = gb2,
+    having = h2,
+    orderBy = ob2,
+    columns = cols2,
+  }
   Ok sel2
 
 materializeJoins : Db -> List Join -> Result String (List Join)
 materializeJoins _ [] = Ok []
-materializeJoins db (j::rest) = do
+materializeJoins db (j :: rest) = do
   j2 <- materializeJoin db j
   rest2 <- materializeJoins db rest
-  Ok (j2::rest2)
+  Ok (j2 :: rest2)
 
 materializeJoin : Db -> Join -> Result String Join
 materializeJoin db (Join { table = t, kind = k, alias = a, on = e }) = do
@@ -2072,25 +2157,29 @@ materializeOpt db (Some e) = map Some (materializeExpr db e)
 
 materializeList : Db -> List SqlExpr -> Result String (List SqlExpr)
 materializeList _ [] = Ok []
-materializeList db (e::rest) = do
+materializeList db (e :: rest) = do
   e2 <- materializeExpr db e
   rest2 <- materializeList db rest
-  Ok (e2::rest2)
+  Ok (e2 :: rest2)
 
-materializeOrder : Db -> List (SqlExpr, Bool) -> Result String (List (SqlExpr, Bool))
+materializeOrder : Db ->
+  List (SqlExpr, Bool) ->
+  Result String (List (SqlExpr, Bool))
 materializeOrder _ [] = Ok []
-materializeOrder db ((e, asc)::rest) = do
+materializeOrder db ((e, asc) :: rest) = do
   e2 <- materializeExpr db e
   rest2 <- materializeOrder db rest
-  Ok ((e2, asc)::rest2)
+  Ok ((e2, asc) :: rest2)
 
-materializeCaseWhens : Db -> List (SqlExpr, SqlExpr) -> Result String (List (SqlExpr, SqlExpr))
+materializeCaseWhens : Db ->
+  List (SqlExpr, SqlExpr) ->
+  Result String (List (SqlExpr, SqlExpr))
 materializeCaseWhens _ [] = Ok []
-materializeCaseWhens db ((c, r)::rest) = do
+materializeCaseWhens db ((c, r) :: rest) = do
   c2 <- materializeExpr db c
   r2 <- materializeExpr db r
   rest2 <- materializeCaseWhens db rest
-  Ok ((c2, r2)::rest2)
+  Ok ((c2, r2) :: rest2)
 
 -- Recurse through an expression, materializing any `EInSubquery` and leaving every
 -- other node structurally identical (but with materialized children).  Every
@@ -2154,7 +2243,8 @@ materializeExpr db (EFn name args) = do
 runInSubquery : Db -> Compound -> Result String (List Literal)
 runInSubquery db q = do
   n <- selectColumnCount db (compoundFirstArm q)
-  if n /= 1 then Err "sub-select returns \{n} columns - expected 1"
+  if n /= 1 then
+    Err "sub-select returns \{n} columns - expected 1"
   else do
     rows <- runCompoundCells db q
     Ok (map (row => cellToLiteral (firstCellOf row)) rows)
@@ -2164,7 +2254,7 @@ compoundFirstArm (Compound first _ _ _ _) = first
 
 firstCellOf : List Cell -> Cell
 firstCellOf [] = CNull
-firstCellOf (c::_) = c
+firstCellOf (c :: _) = c
 
 -- The shared engine: source rows → WHERE → (grouped | flat) → ordered, projected
 -- cell rows.  Everything except DISTINCT, LIMIT/OFFSET, and decode.
@@ -2180,14 +2270,15 @@ runPipeline db sel0 = do
   runPipelineCore db sel
 
 runPipelineCore : Db -> Select -> Result String (List (List Cell))
-runPipelineCore db (Select { from = tbl, fromAlias = fa, joins = js, where_ = w, groupBy = gb, having = h, orderBy = ob, columns = cols }) = do
-  (lookup, rawRows) <- sourceRows db tbl fa js
-  pred <- compileWhere lookup w
-  let kept = filter pred rawRows
-  if isAggregate gb h ob cols then
-    runGrouped lookup gb h ob cols kept
-  else
-    runFlat lookup ob cols kept
+runPipelineCore db (Select { from = tbl, fromAlias = fa, joins = js, where_ = w, groupBy = gb, having = h, orderBy = ob, columns = cols }) =
+  do
+    (lookup, rawRows) <- sourceRows db tbl fa js
+    pred <- compileWhere lookup w
+    let kept = filter pred rawRows
+    if isAggregate gb h ob cols then
+      runGrouped lookup gb h ob cols kept
+    else
+      runFlat lookup ob cols kept
 
 -- FROM + JOINs → (combined column resolver, materialized wide rows).
 -- The no-join case keeps its own single-table lookup (`columnIndex` over the one
@@ -2198,7 +2289,11 @@ runPipelineCore db (Select { from = tbl, fromAlias = fa, joins = js, where_ = w,
 -- (a one-table `mkJoinLookup`) so that `alias.column` resolves and the real name
 -- is hidden — matching SQLite.  The fast single-table path is reserved for the
 -- un-aliased, un-joined common case, keeping its resolution byte-identical.
-sourceRows : Db -> String -> Option String -> List Join -> Result String (String -> Option Int, List (List Cell))
+sourceRows : Db ->
+  String ->
+  Option String ->
+  List Join ->
+  Result String (String -> Option Int, List (List Cell))
 sourceRows db tbl None [] = do
   entry <- findTable db tbl
   let lookup = mkLookup (schemaSql entry)
@@ -2218,7 +2313,11 @@ joinRefPair j = (joinTable j, joinEffName j)
 -- | Is this an aggregate query?  SQL's rule: yes if there is a GROUP BY, OR a
 --   HAVING (a HAVING with no GROUP BY still collapses the table to one group),
 --   OR an aggregate function anywhere in the select list / HAVING / ORDER BY.
-isAggregate : List SqlExpr -> Option SqlExpr -> List (SqlExpr, Bool) -> List SqlExpr -> Bool
+isAggregate : List SqlExpr ->
+  Option SqlExpr ->
+  List (SqlExpr, Bool) ->
+  List SqlExpr ->
+  Bool
 isAggregate gb h ob cols = match (gb, h)
   ([], None) => containsAgg (cols ++ map fst ob)
   _ => True
@@ -2234,7 +2333,11 @@ isAggregate gb h ob cols = match (gb, h)
 -- allowance (ORDER BY on a column that is NOT in the select list) working.
 -- ---------------------------------------------------------------------------
 
-runFlat : (String -> Option Int) -> List (SqlExpr, Bool) -> List SqlExpr -> List (List Cell) -> Result String (List (List Cell))
+runFlat : (String -> Option Int) ->
+  List (SqlExpr, Bool) ->
+  List SqlExpr ->
+  List (List Cell) ->
+  Result String (List (List Cell))
 runFlat lookup ob cols kept = do
   projEvals <- compileProjections lookup cols
   sortKeys <- compileSortKeys lookup ob
@@ -2259,7 +2362,13 @@ runFlat lookup ob cols kept = do
 -- tiebreak instead of leaving equal-ranked groups in an arbitrary order.
 -- ---------------------------------------------------------------------------
 
-runGrouped : (String -> Option Int) -> List SqlExpr -> Option SqlExpr -> List (SqlExpr, Bool) -> List SqlExpr -> List (List Cell) -> Result String (List (List Cell))
+runGrouped : (String -> Option Int) ->
+  List SqlExpr ->
+  Option SqlExpr ->
+  List (SqlExpr, Bool) ->
+  List SqlExpr ->
+  List (List Cell) ->
+  Result String (List (List Cell))
 runGrouped lookup gb h ob cols kept = do
   -- 1. GROUP BY: evaluate the key expressions per raw row, bucket, sort by key.
   keyEvals <- compileProjections lookup gb
@@ -2285,12 +2394,16 @@ runGrouped lookup gb h ob cols kept = do
 -- whole (possibly empty) input, which is what makes `SELECT count(*) FROM t`
 -- return a single `0` row on an empty table.  With keys, an empty input yields
 -- ZERO groups.  Groups are emitted key-ascending.
-groupRows : List SqlExpr -> List (List Cell -> Cell) -> List (List Cell) -> List (List Cell, List (List Cell))
+groupRows : List SqlExpr ->
+  List (List Cell -> Cell) ->
+  List (List Cell) ->
+  List (List Cell, List (List Cell))
 groupRows [] _ rows = [([], rows)]
 groupRows _ keyEvals rows =
   let keyed = map (r => (map (g => g r) keyEvals, r)) rows
   let keys = distinctKeys (map fst keyed)
-  let grouped = map (k => (k, map snd (filter ((kk, _) => cellListEq kk k) keyed))) keys
+  let grouped =
+    map (k => (k, map snd (filter ((kk, _) => cellListEq kk k) keyed))) keys
   sortBy
     (a b => match (a, b)
       ((ka, _), (kb, _)) => cellListOrder ka kb)
@@ -2303,15 +2416,15 @@ distinctKeys ks = reverse (distinctKeysGo ks [])
 
 distinctKeysGo : List (List Cell) -> List (List Cell) -> List (List Cell)
 distinctKeysGo [] acc = acc
-distinctKeysGo (k::rest) acc =
+distinctKeysGo (k :: rest) acc =
   if containsKey k acc then
     distinctKeysGo rest acc
   else
-    distinctKeysGo rest (k::acc)
+    distinctKeysGo rest (k :: acc)
 
 containsKey : List Cell -> List (List Cell) -> Bool
 containsKey _ [] = False
-containsKey k (x::xs) = if cellListEq k x then True else containsKey k xs
+containsKey k (x :: xs) = if cellListEq k x then True else containsKey k xs
 
 -- ---------------------------------------------------------------------------
 -- Aggregate collection + reduction
@@ -2325,7 +2438,7 @@ collectAggs es = nub (concatAggs es)
 
 concatAggs : List SqlExpr -> List SqlExpr
 concatAggs [] = []
-concatAggs (e::rest) = aggsIn e ++ concatAggs rest
+concatAggs (e :: rest) = aggsIn e ++ concatAggs rest
 
 -- The aggregate nodes inside an expression.  Does NOT descend into an aggregate's
 -- own operand — a nested aggregate is an error, caught later by `compileOperand`.
@@ -2348,14 +2461,14 @@ aggsIn (EIn x vs) = aggsIn x ++ concatAggs vs
 -- `materializeSelect` has already turned this into `EIn` before aggregate
 -- collection runs.)
 aggsIn (EInSubquery x _) = aggsIn x
-aggsIn (ECase whens els) = concatAggs (aggsCasePairs whens)
-  ++ concatAggs (optionToList els)
+aggsIn (ECase whens els) =
+  concatAggs (aggsCasePairs whens) ++ concatAggs (optionToList els)
 aggsIn (ECoalesce es) = concatAggs es
 aggsIn (EFn _ args) = concatAggs args
 
 aggsCasePairs : List (SqlExpr, SqlExpr) -> List SqlExpr
 aggsCasePairs [] = []
-aggsCasePairs ((c, r)::rest) = c :: r :: aggsCasePairs rest
+aggsCasePairs ((c, r) :: rest) = c :: r :: aggsCasePairs rest
 
 containsAgg : List SqlExpr -> Bool
 containsAgg es = match concatAggs es
@@ -2382,8 +2495,8 @@ containsInSubquery (ENot e) = containsInSubquery e
 containsInSubquery (EIsNull e) = containsInSubquery e
 containsInSubquery (ENotNull e) = containsInSubquery e
 containsInSubquery (ELike x p) = containsInSubquery x || containsInSubquery p
-containsInSubquery (EIn x vs) = containsInSubquery x
-  || any containsInSubquery vs
+containsInSubquery (EIn x vs) =
+  containsInSubquery x || any containsInSubquery vs
 containsInSubquery (EInSubquery _ _) = True
 containsInSubquery (ECase whens els) = any subInPair whens || subInOpt els
 containsInSubquery (ECoalesce es) = any containsInSubquery es
@@ -2397,16 +2510,20 @@ subInOpt None = False
 subInOpt (Some e) = containsInSubquery e
 
 -- Compile each aggregate to a `group rows -> Cell` reducer.
-compileAggs : (String -> Option Int) -> List SqlExpr -> Result String (List (List (List Cell) -> Cell))
+compileAggs : (String -> Option Int) ->
+  List SqlExpr ->
+  Result String (List (List (List Cell) -> Cell))
 compileAggs _ [] = Ok []
-compileAggs lookup (a::rest) = do
+compileAggs lookup (a :: rest) = do
   f <- compileAgg lookup a
   fs <- compileAggs lookup rest
-  Ok (f::fs)
+  Ok (f :: fs)
 
 -- COUNT(*) counts ROWS (NULLs included).  Every other aggregate — including
 -- COUNT(e) — evaluates its operand per row and SKIPS NULLs, matching sqlite3.
-compileAgg : (String -> Option Int) -> SqlExpr -> Result String (List (List Cell) -> Cell)
+compileAgg : (String -> Option Int) ->
+  SqlExpr ->
+  Result String (List (List Cell) -> Cell)
 compileAgg _ (EAgg FnCount None) = Ok (rows => CInt (length rows))
 compileAgg lookup (EAgg fn (Some operand)) = do
   g <- compileOperand lookup operand
@@ -2433,10 +2550,7 @@ nonNull cells = filter (c => not (cellIsNull c)) cells
 sumCells : List Cell -> Cell
 sumCells [] = CNull
 sumCells cells =
-  if any isFloatCell cells then
-    CFloat (sumFloat cells)
-  else
-    CInt (sumInt cells)
+  if any isFloatCell cells then CFloat (sumFloat cells) else CInt (sumInt cells)
 
 sumFloat : List Cell -> Float
 sumFloat cells = fold (acc c => acc + cellNumF c) 0.0 cells
@@ -2451,12 +2565,12 @@ avgCells cells = CFloat (sumFloat cells / intToFloat (length cells))
 
 minCells : List Cell -> Cell
 minCells [] = CNull
-minCells (c::rest) =
+minCells (c :: rest) =
   fold (acc x => if cellOrder x acc == Lt then x else acc) c rest
 
 maxCells : List Cell -> Cell
 maxCells [] = CNull
-maxCells (c::rest) =
+maxCells (c :: rest) =
   fold (acc x => if cellOrder x acc == Gt then x else acc) c rest
 
 isFloatCell : Cell -> Bool
@@ -2495,43 +2609,53 @@ indexOfString name names = indexOfStringGo name names 0
 
 indexOfStringGo : String -> List String -> Int -> Option Int
 indexOfStringGo _ [] _ = None
-indexOfStringGo name (x::rest) i =
-  if name == x then
-    Some i
-  else
-    indexOfStringGo name rest (i + 1)
+indexOfStringGo name (x :: rest) i =
+  if name == x then Some i else indexOfStringGo name rest (i + 1)
 
-rewriteAllPostGroup : List SqlExpr -> List SqlExpr -> List SqlExpr -> Result String (List SqlExpr)
+rewriteAllPostGroup : List SqlExpr ->
+  List SqlExpr ->
+  List SqlExpr ->
+  Result String (List SqlExpr)
 rewriteAllPostGroup _ _ [] = Ok []
-rewriteAllPostGroup gb aggs (e::rest) = do
+rewriteAllPostGroup gb aggs (e :: rest) = do
   e2 <- rewritePostGroup gb aggs e
   rest2 <- rewriteAllPostGroup gb aggs rest
-  Ok (e2::rest2)
+  Ok (e2 :: rest2)
 
-rewriteOptPostGroup : List SqlExpr -> List SqlExpr -> Option SqlExpr -> Result String (Option SqlExpr)
+rewriteOptPostGroup : List SqlExpr ->
+  List SqlExpr ->
+  Option SqlExpr ->
+  Result String (Option SqlExpr)
 rewriteOptPostGroup _ _ None = Ok None
 rewriteOptPostGroup gb aggs (Some e) = map Some (rewritePostGroup gb aggs e)
 
-rewriteCaseWhens : List SqlExpr -> List SqlExpr -> List (SqlExpr, SqlExpr) -> Result String (List (SqlExpr, SqlExpr))
+rewriteCaseWhens : List SqlExpr ->
+  List SqlExpr ->
+  List (SqlExpr, SqlExpr) ->
+  Result String (List (SqlExpr, SqlExpr))
 rewriteCaseWhens _ _ [] = Ok []
-rewriteCaseWhens gb aggs ((c, r)::rest) = do
+rewriteCaseWhens gb aggs ((c, r) :: rest) = do
   c2 <- rewritePostGroup gb aggs c
   r2 <- rewritePostGroup gb aggs r
   rest2 <- rewriteCaseWhens gb aggs rest
-  Ok ((c2, r2)::rest2)
+  Ok ((c2, r2) :: rest2)
 
 -- A whole sub-expression that IS a GROUP BY key resolves to that key's slot —
 -- checked FIRST, so `GROUP BY (a + b)` makes `SELECT a + b` legal.  Otherwise we
 -- recurse structurally.
-rewritePostGroup : List SqlExpr -> List SqlExpr -> SqlExpr -> Result String SqlExpr
+rewritePostGroup : List SqlExpr ->
+  List SqlExpr ->
+  SqlExpr ->
+  Result String SqlExpr
 rewritePostGroup gb aggs e = match indexOfExpr e gb
   Some i => Ok (ECol (intToString i))
   None => rewriteInner gb aggs e
 
 rewriteInner : List SqlExpr -> List SqlExpr -> SqlExpr -> Result String SqlExpr
-rewriteInner gb aggs (EAgg fn operand) = match indexOfExpr (EAgg fn operand) aggs
-  Some j => Ok (ECol (intToString (length gb + j)))
-  None => Err "internal: aggregate was not collected before the rewrite"
+rewriteInner gb aggs (EAgg fn operand) =
+  match indexOfExpr (EAgg fn operand) aggs
+    Some j => Ok (ECol (intToString (length gb + j)))
+    None => Err "internal: aggregate was not collected before the rewrite"
 rewriteInner _ _ (ELit lit) = Ok (ELit lit)
 -- THE rule: in an aggregate query a bare column must be a GROUP BY key or sit
 -- inside an aggregate.  sqlite is lenient here (it silently picks an arbitrary
@@ -2592,11 +2716,8 @@ indexOfExpr e es = indexOfExprGo e es 0
 
 indexOfExprGo : SqlExpr -> List SqlExpr -> Int -> Option Int
 indexOfExprGo _ [] _ = None
-indexOfExprGo e (x::rest) i =
-  if e == x then
-    Some i
-  else
-    indexOfExprGo e rest (i + 1)
+indexOfExprGo e (x :: rest) i =
+  if e == x then Some i else indexOfExprGo e rest (i + 1)
 
 optionToList : Option SqlExpr -> List SqlExpr
 optionToList None = []
@@ -2605,7 +2726,7 @@ optionToList (Some e) = [e]
 zipKeys : List SqlExpr -> List Bool -> List (SqlExpr, Bool)
 zipKeys [] _ = []
 zipKeys _ [] = []
-zipKeys (e::es) (d::ds) = (e, d) :: zipKeys es ds
+zipKeys (e :: es) (d :: ds) = (e, d) :: zipKeys es ds
 
 -- ---------------------------------------------------------------------------
 -- Projection + sorting (shared by both paths)
@@ -2616,36 +2737,48 @@ zipKeys (e::es) (d::ds) = (e, d) :: zipKeys es ds
 -- the select list.  An empty column list is SELECT * — the projected row IS the
 -- source row (raw row when flat; synthetic group row when grouped, which is
 -- exactly the layout the legacy `queryAgg` promised).
-pairRows : List SqlExpr -> List (List Cell -> Cell) -> List (List Cell) -> List (List Cell, List Cell)
+pairRows : List SqlExpr ->
+  List (List Cell -> Cell) ->
+  List (List Cell) ->
+  List (List Cell, List Cell)
 pairRows [] _ rows = map (r => (r, r)) rows
 pairRows _ evals rows = map (r => (map (g => g r) evals, r)) rows
 
-compileProjections : (String -> Option Int) -> List SqlExpr -> Result String (List (List Cell -> Cell))
+compileProjections : (String -> Option Int) ->
+  List SqlExpr ->
+  Result String (List (List Cell -> Cell))
 compileProjections _ [] = Ok []
-compileProjections lookup (e::rest) = do
+compileProjections lookup (e :: rest) = do
   g <- compileValue lookup e
   gs <- compileProjections lookup rest
-  Ok (g::gs)
+  Ok (g :: gs)
 
 -- Compile the ORDER BY keys to accessors over the SOURCE row.  Unlike the old
 -- name-based version, an unresolvable key is an `Err` rather than being silently
 -- dropped — a typo'd sort column used to just leave the rows unsorted.
-compileSortKeys : (String -> Option Int) -> List (SqlExpr, Bool) -> Result String (List (List Cell -> Cell, Bool))
+compileSortKeys : (String -> Option Int) ->
+  List (SqlExpr, Bool) ->
+  Result String (List (List Cell -> Cell, Bool))
 compileSortKeys _ [] = Ok []
-compileSortKeys lookup ((e, asc)::rest) = do
+compileSortKeys lookup ((e, asc) :: rest) = do
   g <- compileValue lookup e
   gs <- compileSortKeys lookup rest
-  Ok ((g, asc)::gs)
+  Ok ((g, asc) :: gs)
 
-sortPairs : List (List Cell -> Cell, Bool) -> List (List Cell, List Cell) -> List (List Cell, List Cell)
+sortPairs : List (List Cell -> Cell, Bool) ->
+  List (List Cell, List Cell) ->
+  List (List Cell, List Cell)
 sortPairs [] pairs = pairs
 sortPairs keys pairs = sortBy (a b => comparePairs keys a b) pairs
 
 -- Fold the keys left-to-right; the first non-Eq decides.  `asc = False` flips the
 -- operands rather than negating the Ordering, so NULL ordering stays consistent.
-comparePairs : List (List Cell -> Cell, Bool) -> (List Cell, List Cell) -> (List Cell, List Cell) -> Ordering
+comparePairs : List (List Cell -> Cell, Bool) ->
+  (List Cell, List Cell) ->
+  (List Cell, List Cell) ->
+  Ordering
 comparePairs [] _ _ = Eq
-comparePairs ((g, asc)::rest) (pa, sa) (pb, sb) =
+comparePairs ((g, asc) :: rest) (pa, sa) (pb, sb) =
   let o = if asc then cellOrder (g sa) (g sb) else cellOrder (g sb) (g sa)
   match o
     Eq => comparePairs rest (pa, sa) (pb, sb)
@@ -2653,18 +2786,15 @@ comparePairs ((g, asc)::rest) (pa, sa) (pb, sb) =
 
 cellListEq : List Cell -> List Cell -> Bool
 cellListEq [] [] = True
-cellListEq (a::xs) (b::ys) =
-  if cellOrder a b == Eq then
-    cellListEq xs ys
-  else
-    False
+cellListEq (a :: xs) (b :: ys) =
+  if cellOrder a b == Eq then cellListEq xs ys else False
 cellListEq _ _ = False
 
 cellListOrder : List Cell -> List Cell -> Ordering
 cellListOrder [] [] = Eq
 cellListOrder [] _ = Lt
 cellListOrder _ [] = Gt
-cellListOrder (a::xs) (b::ys) = match cellOrder a b
+cellListOrder (a :: xs) (b :: ys) = match cellOrder a b
   Eq => cellListOrder xs ys
   o => o
 
@@ -2708,9 +2838,10 @@ dropTakeList of_ lm xs =
 -- real user column literally named `rowid` shadows the alias (also SQLite's
 -- rule).  See findings/sql-arith-rowid-coercion.md for the non-IPK edge.
 mkLookup : String -> String -> Option Int
-mkLookup createSql = name => match columnIndex createSql name
-  Some i => Some i
-  None => if isRowidAlias name then pkColumnIndex createSql else None
+mkLookup createSql =
+  name => match columnIndex createSql name
+    Some i => Some i
+    None => if isRowidAlias name then pkColumnIndex createSql else None
 
 -- | True for the implicit-rowid column names, case-insensitively: `rowid`,
 --   `_rowid_`, `oid` (SQLite's three spellings).
@@ -2719,7 +2850,9 @@ isRowidAlias name =
   let l = asciiFold asciiLowerChar name
   l == "rowid" || l == "_rowid_" || l == "oid"
 
-compileWhere : (String -> Option Int) -> Option SqlExpr -> Result String (List Cell -> Bool)
+compileWhere : (String -> Option Int) ->
+  Option SqlExpr ->
+  Result String (List Cell -> Bool)
 compileWhere _ None = Ok (_ => True)
 compileWhere lookup (Some e) = compilePred lookup e
 
@@ -2737,9 +2870,13 @@ compileWhere lookup (Some e) = compilePred lookup e
 -- (`findTable`/`scanTableRowsIpk`/`columnNames`) but its info tuple stores
 -- `effName` in the name slot, so `mkJoinLookup` matches qualified references
 -- against the alias (when present) rather than the real name.
-gatherJoinInfos : Db -> List (String, String) -> Int -> List (String, String, List (List Cell), Int, Int) -> Result String (List (String, String, List (List Cell), Int, Int))
+gatherJoinInfos : Db ->
+  List (String, String) ->
+  Int ->
+  List (String, String, List (List Cell), Int, Int) ->
+  Result String (List (String, String, List (List Cell), Int, Int))
 gatherJoinInfos _ [] _ acc = Ok (reverse acc)
-gatherJoinInfos db ((real, eff)::rest) off acc = do
+gatherJoinInfos db ((real, eff) :: rest) off acc = do
   entry <- findTable db real
   (pkIdx, rows) <- scanTableRowsIpk db real
   cols <- columnNames db real
@@ -2749,10 +2886,11 @@ gatherJoinInfos db ((real, eff)::rest) off acc = do
     db
     rest
     (off + width)
-    ((eff, schemaSql entry, cellsRows, off, width)::acc)
+    ((eff, schemaSql entry, cellsRows, off, width) :: acc)
 
 -- Project a full info tuple to the (name, createSql, offset) triple the lookup needs.
-infoLookup : (String, String, List (List Cell), Int, Int) -> (String, String, Int)
+infoLookup : (String, String, List (List Cell), Int, Int) ->
+  (String, String, Int)
 infoLookup (name, sql, _, off, _) = (name, sql, off)
 
 infoCells : (String, String, List (List Cell), Int, Int) -> List (List Cell)
@@ -2765,14 +2903,15 @@ infoWidth (_, _, _, _, w) = w
 -- `table.column` resolves within that table (offset + its column index); a bare
 -- `column` searches tables in `from :: joins` order, first match wins.
 mkJoinLookup : List (String, String, Int) -> String -> Option Int
-mkJoinLookup infos = name => match countDots (stringToChars name) 0 (stringLength name) 0
-  1 => match splitOnDot name
-    (tbl, col) => lookupQualified infos tbl col
-  _ => lookupBare infos name
+mkJoinLookup infos =
+  name => match countDots (stringToChars name) 0 (stringLength name) 0
+    1 => match splitOnDot name
+      (tbl, col) => lookupQualified infos tbl col
+    _ => lookupBare infos name
 
 lookupQualified : List (String, String, Int) -> String -> String -> Option Int
 lookupQualified [] _ _ = None
-lookupQualified ((name, sql, off)::rest) tbl col =
+lookupQualified ((name, sql, off) :: rest) tbl col =
   if name == tbl then
     map (off + _) (colOrRowid sql col)
   else
@@ -2780,7 +2919,7 @@ lookupQualified ((name, sql, off)::rest) tbl col =
 
 lookupBare : List (String, String, Int) -> String -> Option Int
 lookupBare [] _ = None
-lookupBare ((_, sql, off)::rest) col = match colOrRowid sql col
+lookupBare ((_, sql, off) :: rest) col = match colOrRowid sql col
   Some i => Some (off + i)
   None => lookupBare rest col
 
@@ -2798,9 +2937,12 @@ colOrRowid sql col = match columnIndex sql col
 -- whole product).  The `infos` head is the `from` table; the tail pairs 1:1 with
 -- `joins`.  The accumulated LEFT width is threaded so RIGHT/FULL can null-pad the
 -- left side even when the left side is empty.
-runJoins : (String -> Option Int) -> List (String, String, List (List Cell), Int, Int) -> List Join -> Result String (List (List Cell))
+runJoins : (String -> Option Int) ->
+  List (String, String, List (List Cell), Int, Int) ->
+  List Join ->
+  Result String (List (List Cell))
 runJoins _ [] _ = Ok []
-runJoins lookup (headInfo::tailInfos) js =
+runJoins lookup (headInfo :: tailInfos) js =
   nestLoop
     lookup
     (infoCells headInfo)
@@ -2808,15 +2950,21 @@ runJoins lookup (headInfo::tailInfos) js =
     (zipJoins js tailInfos)
 
 -- Pair each join with its table's cells + width (parallel lists; over-length is dropped).
-zipJoins : List Join -> List (String, String, List (List Cell), Int, Int) -> List (Join, List (List Cell), Int)
+zipJoins : List Join ->
+  List (String, String, List (List Cell), Int, Int) ->
+  List (Join, List (List Cell), Int)
 zipJoins [] _ = []
 zipJoins _ [] = []
-zipJoins (j::js) (info::infos) =
+zipJoins (j :: js) (info :: infos) =
   (j, infoCells info, infoWidth info) :: zipJoins js infos
 
-nestLoop : (String -> Option Int) -> List (List Cell) -> Int -> List (Join, List (List Cell), Int) -> Result String (List (List Cell))
+nestLoop : (String -> Option Int) ->
+  List (List Cell) ->
+  Int ->
+  List (Join, List (List Cell), Int) ->
+  Result String (List (List Cell))
 nestLoop _ left _ [] = Ok left
-nestLoop lookup left lw ((j, right, w)::rest) = do
+nestLoop lookup left lw ((j, right, w) :: rest) = do
   onPred <- joinPred lookup j
   nestLoop
     lookup
@@ -2846,39 +2994,61 @@ joinPred lookup j = match joinKind j
 -- Left-major, right-minor order is preserved for the matched/left-padded rows;
 -- the unmatched-right rows are appended after (row order is unspecified in SQL,
 -- and every oracle query pins it with ORDER BY).
-crossFilter : JoinKind -> Int -> Int -> (List Cell -> Bool) -> List (List Cell) -> List (List Cell) -> List (List Cell)
+crossFilter : JoinKind ->
+  Int ->
+  Int ->
+  (List Cell -> Bool) ->
+  List (List Cell) ->
+  List (List Cell) ->
+  List (List Cell)
 crossFilter JInner _ _ onPred lefts rights = matchedRows onPred lefts rights
 crossFilter JCross _ _ onPred lefts rights = matchedRows onPred lefts rights
 crossFilter JLeft _ w onPred lefts rights = leftPaddedRows w onPred lefts rights
-crossFilter JRight lw _ onPred lefts rights = matchedRows onPred lefts rights
-  ++ unmatchedRightRows lw onPred lefts rights
-crossFilter JFull lw w onPred lefts rights = leftPaddedRows w onPred lefts rights
-  ++ unmatchedRightRows lw onPred lefts rights
+crossFilter JRight lw _ onPred lefts rights =
+  matchedRows onPred lefts rights ++ unmatchedRightRows lw onPred lefts rights
+crossFilter JFull lw w onPred lefts rights =
+  leftPaddedRows w onPred lefts rights
+    ++ unmatchedRightRows lw onPred lefts rights
 
 -- Matched pairs, left-major.  (For JCross `onPred` is constant `True`, so this is
 -- the full cartesian product.)
-matchedRows : (List Cell -> Bool) -> List (List Cell) -> List (List Cell) -> List (List Cell)
+matchedRows : (List Cell -> Bool) ->
+  List (List Cell) ->
+  List (List Cell) ->
+  List (List Cell)
 matchedRows _ [] _ = []
-matchedRows onPred (l::lefts) rights = crossOneMatches onPred l rights
-  ++ matchedRows onPred lefts rights
+matchedRows onPred (l :: lefts) rights =
+  crossOneMatches onPred l rights ++ matchedRows onPred lefts rights
 
 -- LEFT-join rows: matched pairs, but a left row with ZERO matches emits one
 -- right-null-padded row (`l ++ nullPad w`) instead of vanishing.
-leftPaddedRows : Int -> (List Cell -> Bool) -> List (List Cell) -> List (List Cell) -> List (List Cell)
+leftPaddedRows : Int ->
+  (List Cell -> Bool) ->
+  List (List Cell) ->
+  List (List Cell) ->
+  List (List Cell)
 leftPaddedRows _ _ [] _ = []
-leftPaddedRows w onPred (l::lefts) rights = crossOneLeft w onPred l rights
-  ++ leftPaddedRows w onPred lefts rights
+leftPaddedRows w onPred (l :: lefts) rights =
+  crossOneLeft w onPred l rights ++ leftPaddedRows w onPred lefts rights
 
-crossOneLeft : Int -> (List Cell -> Bool) -> List Cell -> List (List Cell) -> List (List Cell)
+crossOneLeft : Int ->
+  (List Cell -> Bool) ->
+  List Cell ->
+  List (List Cell) ->
+  List (List Cell)
 crossOneLeft w onPred l rights = match crossOneMatches onPred l rights
   [] => [l ++ nullPad w]
   ms => ms
 
 -- RIGHT-join extra rows: each right row that NO left row matches, emitted with
 -- the left side null-padded (`nullPad lw ++ r`).  Right-row order preserved.
-unmatchedRightRows : Int -> (List Cell -> Bool) -> List (List Cell) -> List (List Cell) -> List (List Cell)
+unmatchedRightRows : Int ->
+  (List Cell -> Bool) ->
+  List (List Cell) ->
+  List (List Cell) ->
+  List (List Cell)
 unmatchedRightRows _ _ _ [] = []
-unmatchedRightRows lw onPred lefts (r::rights) =
+unmatchedRightRows lw onPred lefts (r :: rights) =
   if anyLeftMatches onPred lefts r then
     unmatchedRightRows lw onPred lefts rights
   else
@@ -2886,15 +3056,15 @@ unmatchedRightRows lw onPred lefts (r::rights) =
 
 anyLeftMatches : (List Cell -> Bool) -> List (List Cell) -> List Cell -> Bool
 anyLeftMatches _ [] _ = False
-anyLeftMatches onPred (l::lefts) r =
-  if onPred (l ++ r) then
-    True
-  else
-    anyLeftMatches onPred lefts r
+anyLeftMatches onPred (l :: lefts) r =
+  if onPred (l ++ r) then True else anyLeftMatches onPred lefts r
 
-crossOneMatches : (List Cell -> Bool) -> List Cell -> List (List Cell) -> List (List Cell)
+crossOneMatches : (List Cell -> Bool) ->
+  List Cell ->
+  List (List Cell) ->
+  List (List Cell)
 crossOneMatches _ _ [] = []
-crossOneMatches onPred l (r::rights) =
+crossOneMatches onPred l (r :: rights) =
   let combined = l ++ r
   if onPred combined then
     combined :: crossOneMatches onPred l rights
@@ -2931,7 +3101,10 @@ cellTypeRank (CText _) = 2
 cellTypeRank (CBlob _) = 3
 
 -- Drop `offset` rows then keep at most `limit`.
-applyOffsetLimit : Option Int -> Option Int -> List (List Cell) -> List (List Cell)
+applyOffsetLimit : Option Int ->
+  Option Int ->
+  List (List Cell) ->
+  List (List Cell)
 applyOffsetLimit of_ lm rows =
   let afterOffset = match of_
     Some n => drop n rows
@@ -2942,9 +3115,9 @@ applyOffsetLimit of_ lm rows =
 
 decodeCells : RowType a -> List (List Cell) -> List a -> Result String (List a)
 decodeCells _ [] acc = Ok (reverse acc)
-decodeCells rt (cells::rest) acc = do
+decodeCells rt (cells :: rest) acc = do
   v <- rtDecode rt cells
-  decodeCells rt rest (v::acc)
+  decodeCells rt rest (v :: acc)
 
 -- ---------------------------------------------------------------------------
 -- Render doctests (the injection-safety regression backbone — no DB).
@@ -3108,18 +3281,21 @@ andLimitSel =
 -- `SELECT dept, count(*) FROM emp WHERE active = 1 GROUP BY dept
 --  HAVING count(*) > 2 ORDER BY count(*) DESC LIMIT 5` — every clause at once.
 topDepts : Select
-topDepts = withLimit
-  5
-  (withOrderByExpr
-    (unExpr aCountStar)
-    False
-    (withHavingPred
-      (eGt aCountStar (eLitI 2))
-      (withColumns
-        [unExpr (eColText "dept"), unExpr aCountStar]
-        (withGroupCols
-          ["dept"]
-          (withWhere (eEq (eColInt "active") (eLitI 1)) (selectFrom "emp"))))))
+topDepts =
+  withLimit
+    5
+    (withOrderByExpr
+      (unExpr aCountStar)
+      False
+      (withHavingPred
+        (eGt aCountStar (eLitI 2))
+        (withColumns
+          [unExpr (eColText "dept"), unExpr aCountStar]
+          (withGroupCols
+            ["dept"]
+            (withWhere
+              (eEq (eColInt "active") (eLitI 1))
+              (selectFrom "emp"))))))
 
 orNullSel : Select
 orNullSel =
@@ -3135,7 +3311,7 @@ showBinds binds = "[\{showBindsGo binds True}]"
 
 showBindsGo : List Literal -> Bool -> String
 showBindsGo [] _ = ""
-showBindsGo (x::rest) first =
+showBindsGo (x :: rest) first =
   let sep = if first then "" else ", "
   "\{sep}\{showLit x}\{showBindsGo rest False}"
 

@@ -1,5 +1,5 @@
 # META
-source_lines=995
+source_lines=1067
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted exhaust stage — standalone
@@ -95,17 +95,18 @@ tupleArityCheck cs n
   | otherwise = None
 
 charsPrefixTuple : Array Char -> Bool
-charsPrefixTuple cs = arrayGetUnsafe 0 cs == '_'
-  && arrayGetUnsafe 1 cs == '_'
-  && arrayGetUnsafe 2 cs == 't'
-  && arrayGetUnsafe 3 cs == 'u'
-  && arrayGetUnsafe 4 cs == 'p'
-  && arrayGetUnsafe 5 cs == 'l'
-  && arrayGetUnsafe 6 cs == 'e'
+charsPrefixTuple cs =
+  arrayGetUnsafe 0 cs == '_'
+    && arrayGetUnsafe 1 cs == '_'
+    && arrayGetUnsafe 2 cs == 't'
+    && arrayGetUnsafe 3 cs == 'u'
+    && arrayGetUnsafe 4 cs == 'p'
+    && arrayGetUnsafe 5 cs == 'l'
+    && arrayGetUnsafe 6 cs == 'e'
 
 charsSuffixUnder : Array Char -> Int -> Bool
-charsSuffixUnder cs n = arrayGetUnsafe (n - 2) cs == '_'
-  && arrayGetUnsafe (n - 1) cs == '_'
+charsSuffixUnder cs n =
+  arrayGetUnsafe (n - 2) cs == '_' && arrayGetUnsafe (n - 1) cs == '_'
 
 parseDigits : Array Char -> Int -> Int -> Option Int
 parseDigits cs start end = parseDigitsGo cs start end 0 False
@@ -113,7 +114,13 @@ parseDigits cs start end = parseDigitsGo cs start end 0 False
 parseDigitsGo : Array Char -> Int -> Int -> Int -> Bool -> Option Int
 parseDigitsGo cs i end acc seen
   | i >= end = if seen then Some acc else None
-  | isDigitC (arrayGetUnsafe i cs) = parseDigitsGo cs (i + 1) end (acc * 10 + digitVal (arrayGetUnsafe i cs)) True
+  | isDigitC (arrayGetUnsafe i cs) =
+    parseDigitsGo
+      cs
+      (i + 1)
+      end
+      (acc * 10 + digitVal (arrayGetUnsafe i cs))
+      True
   | otherwise = None
 
 isDigitC : Char -> Bool
@@ -151,11 +158,11 @@ digitVal c = charCode c - charCode '0'
 -- declaration wrote.  With a bare-`String` value the round trip had to bridge
 -- through a `TkBare` mint, which can never match a `TkIdent` row.
 public export data Oracle = Oracle {
-    typeCtors : List (TabKey, List String),
-    ctorArity : OrdMap Int,
-    ctorType : OrdMap TabKey,
-    ctorFields : OrdMap (List String),  -- ctor → declared field names in order (DData ConNamed variants)
-  }
+  typeCtors : List (TabKey, List String),
+  ctorArity : OrdMap Int,
+  ctorType : OrdMap TabKey,
+  ctorFields : OrdMap (List String),  -- ctor → declared field names in order (DData ConNamed variants)
+}
 
 export
 buildOracle : List Decl -> Oracle
@@ -213,7 +220,8 @@ builtinCtorType = [
 ]
 
 dataTypeCtors : Decl -> List (TabKey, List String)
-dataTypeCtors (DData { dataName = tyname, dataOrigin = origin, dataCtors = variants }) = [(tabKeyOf NsType origin tyname, map variantName variants)]
+dataTypeCtors (DData { dataName = tyname, dataOrigin = origin, dataCtors = variants }) =
+  [(tabKeyOf NsType origin tyname, map variantName variants)]
 dataTypeCtors _ = []
 
 dataArity : Decl -> List (String, Int)
@@ -223,7 +231,8 @@ dataArity _ = []
 -- The key is minted ONCE per `data` decl, from that decl's own `dataOrigin` —
 -- the very same mint `dataTypeCtors` uses for the row this value points at.
 dataCtorType : Decl -> List (String, TabKey)
-dataCtorType (DData { dataName = tyname, dataOrigin = origin, dataCtors = variants }) = map (variantCtorType (tabKeyOf NsType origin tyname)) variants
+dataCtorType (DData { dataName = tyname, dataOrigin = origin, dataCtors = variants }) =
+  map (variantCtorType (tabKeyOf NsType origin tyname)) variants
 dataCtorType _ = []
 
 variantName : Variant -> String
@@ -286,10 +295,10 @@ desugarPat oracle (PCon c args) = PCon c (map (desugarPat oracle) args)
 desugarPat oracle (PCons h t) =
   PCon "Cons" [desugarPat oracle h, desugarPat oracle t]
 desugarPat _ (PList []) = PCon "Nil" []
-desugarPat oracle (PList (h::rest)) =
+desugarPat oracle (PList (h :: rest)) =
   PCon "Cons" [desugarPat oracle h, desugarPat oracle (PList rest)]
 desugarPat oracle (PAs _ _ p) = desugarPat oracle p
-desugarPat oracle (PRec name fields _) =
+desugarPat oracle (PRec name fields _) = match oGetCtorFields oracle name
   -- Lower a record pattern to a constructor-tagged row.  This arm handles the
   -- `...` (open) form too: `...` means "and I don't care about the other
   -- FIELDS", never "...the CONSTRUCTOR", and `lookupRecField` already yields
@@ -300,20 +309,20 @@ desugarPat oracle (PRec name fields _) =
   -- For each declared field (in declaration order) use the sub-pattern if
   -- mentioned in this pattern, otherwise PWild.  Falls back to PWild if the
   -- constructor's field layout is unknown (e.g. builtins).
-  match oGetCtorFields oracle name
-    None => PWild
-    Some fieldOrder => PCon name (map (lookupRecField oracle fields) fieldOrder)
+
+  None => PWild
+  Some fieldOrder => PCon name (map (lookupRecField oracle fields) fieldOrder)
 desugarPat _ (PRng _ _ _) = PWild
 
 lookupRecField : Oracle -> List RecPatField -> String -> Pat
 lookupRecField oracle fields fn = match findRecField fn fields
   None => PWild
-  Some None => PWild      -- field pun: binds, irrefutable → wildcard for coverage
+  Some None => PWild  -- field pun: binds, irrefutable → wildcard for coverage
   Some (Some p) => desugarPat oracle p
 
 findRecField : String -> List RecPatField -> Option (Option Pat)
 findRecField _ [] = None
-findRecField fn ((RecPatField f _ mPat)::rest)
+findRecField fn ((RecPatField f _ mPat) :: rest)
   | f == fn = Some mPat
   | otherwise = findRecField fn rest
 
@@ -329,28 +338,28 @@ findRecField fn ((RecPatField f _ mPat)::rest)
 -- no allocation per row visited.
 specializeCon : String -> Int -> List (List Pat) -> List (List Pat)
 specializeCon _ _ [] = []
-specializeCon c arity (row::rest) = match specConRow c arity row
+specializeCon c arity (row :: rest) = match specConRow c arity row
   Some r => r :: specializeCon c arity rest
   None => specializeCon c arity rest
 
 specConRow : String -> Int -> List Pat -> Option (List Pat)
 specConRow _ _ [] = None
-specConRow c _ ((PCon c2 args)::rest)
+specConRow c _ ((PCon c2 args) :: rest)
   | c2 == c = Some (args ++ rest)
   | otherwise = None
-specConRow _ arity (PWild::rest) = Some (replicate arity PWild ++ rest)
+specConRow _ arity (PWild :: rest) = Some (replicate arity PWild ++ rest)
 specConRow _ _ _ = None
 
 specializeLit : Lit -> List (List Pat) -> List (List Pat)
 specializeLit _ [] = []
-specializeLit l (row::rest) = match specLitRow l row
+specializeLit l (row :: rest) = match specLitRow l row
   Some r => r :: specializeLit l rest
   None => specializeLit l rest
 
 specLitRow : Lit -> List Pat -> Option (List Pat)
 specLitRow _ [] = None
-specLitRow l ((PLit l2)::rest) = if litEq l2 l then Some rest else None
-specLitRow _ (PWild::rest) = Some rest
+specLitRow l ((PLit l2) :: rest) = if litEq l2 l then Some rest else None
+specLitRow _ (PWild :: rest) = Some rest
 specLitRow _ _ = None
 
 -- Alloc-free literal equality (#988, mirroring `litEq` in core_ir_lower.mdk from
@@ -372,18 +381,18 @@ litEq _ _ = False
 
 defaultMatrix : List (List Pat) -> List (List Pat)
 defaultMatrix [] = []
-defaultMatrix (row::rest) = match defRow row
+defaultMatrix (row :: rest) = match defRow row
   Some r => r :: defaultMatrix rest
   None => defaultMatrix rest
 
 defRow : List Pat -> Option (List Pat)
-defRow (PWild::rest) = Some rest
+defRow (PWild :: rest) = Some rest
 defRow _ = None
 
 headCtors : List (List Pat) -> List String
 headCtors [] = []
-headCtors (((PCon c _)::_)::rest) = c :: headCtors rest
-headCtors (_::rest) = headCtors rest
+headCtors (((PCon c _) :: _) :: rest) = c :: headCtors rest
+headCtors (_ :: rest) = headCtors rest
 
 -- Leaf L2 deleted L1's transitional `TkBare` mint here: `ctorType`'s VALUE now
 -- carries the declaration identity, so the key `tryEachType` forwards is the
@@ -401,7 +410,7 @@ inferCol0Type oracle pmat = tryEachType oracle (headCtors pmat)
 
 tryEachType : Oracle -> List String -> Option TabKey
 tryEachType _ [] = None
-tryEachType oracle (c::cs) = match oGetCtorType oracle c
+tryEachType oracle (c :: cs) = match oGetCtorType oracle c
   Some t => Some t
   None => tryEachType oracle cs
 
@@ -409,14 +418,20 @@ tryEachType oracle (c::cs) = match oGetCtorType oracle c
 export
 useful : Oracle -> Option TabKey -> List (List Pat) -> List Pat -> Bool
 useful _ _ [] _ = True
-useful _ _ (_::_) [] = False
-useful oracle col0 pmat (h::restQ) = usefulHead oracle col0 pmat h restQ
+useful _ _ (_ :: _) [] = False
+useful oracle col0 pmat (h :: restQ) = usefulHead oracle col0 pmat h restQ
 
-usefulHead : Oracle -> Option TabKey -> List (List Pat) -> Pat -> List Pat -> Bool
+usefulHead : Oracle ->
+  Option TabKey ->
+  List (List Pat) ->
+  Pat ->
+  List Pat ->
+  Bool
 usefulHead oracle _ pmat (PCon c args) restQ =
   useful oracle None (specializeCon c (listLen args) pmat) (args ++ restQ)
-usefulHead oracle _ pmat (PLit l) restQ = useful oracle None (specializeLit l pmat) restQ
-  || useful oracle None (defaultMatrix pmat) restQ
+usefulHead oracle _ pmat (PLit l) restQ =
+  useful oracle None (specializeLit l pmat) restQ
+    || useful oracle None (defaultMatrix pmat) restQ
 usefulHead oracle col0 pmat _ restQ = usefulWild oracle col0 pmat restQ
 
 usefulWild : Oracle -> Option TabKey -> List (List Pat) -> List Pat -> Bool
@@ -428,7 +443,11 @@ bindCtors : Oracle -> Option TabKey -> Option (List String)
 bindCtors _ None = None
 bindCtors oracle (Some t) = oGetCtors oracle t
 
-usefulWildCtors : Oracle -> Option (List String) -> List (List Pat) -> List Pat -> Bool
+usefulWildCtors : Oracle ->
+  Option (List String) ->
+  List (List Pat) ->
+  List Pat ->
+  Bool
 usefulWildCtors oracle None pmat restQ =
   useful oracle None (defaultMatrix pmat) restQ
 usefulWildCtors oracle (Some ctors) pmat restQ =
@@ -458,7 +477,12 @@ usefulCovered : Oracle -> List String -> List (List Pat) -> List Pat -> Bool
 usefulCovered oracle ctors pmat restQ =
   usefulBuckets oracle ctors pmat restQ (headBuckets pmat omEmpty)
 
-usefulBuckets : Oracle -> List String -> List (List Pat) -> List Pat -> OrdMap (List (List Pat)) -> Bool
+usefulBuckets : Oracle ->
+  List String ->
+  List (List Pat) ->
+  List Pat ->
+  OrdMap (List (List Pat)) ->
+  Bool
 usefulBuckets oracle ctors pmat restQ buckets
   | not (allCovered ctors buckets) =
     useful oracle None (defaultMatrix pmat) restQ
@@ -469,19 +493,21 @@ usefulBuckets oracle ctors pmat restQ buckets
 -- (`args ++ rest`) — i.e. exactly the rows `specializeCon c` keeps, for every `c`
 -- at once, provided no row has a wildcard head (see `usefulCovered`).  Rows are
 -- prepended, so a bucket comes out in reverse row order and is reversed on read.
-headBuckets : List (List Pat) -> OrdMap (List (List Pat)) -> OrdMap (List (List Pat))
+headBuckets : List (List Pat) ->
+  OrdMap (List (List Pat)) ->
+  OrdMap (List (List Pat))
 headBuckets [] acc = acc
-headBuckets (row::rest) acc = headBuckets rest (headBucketRow row acc)
+headBuckets (row :: rest) acc = headBuckets rest (headBucketRow row acc)
 
 headBucketRow : List Pat -> OrdMap (List (List Pat)) -> OrdMap (List (List Pat))
-headBucketRow ((PCon c args)::tl) acc =
+headBucketRow ((PCon c args) :: tl) acc =
   omInsert c (args ++ tl :: optionOr [] (omLookup c acc)) acc
 headBucketRow _ acc = acc
 
 anyWildHead : List (List Pat) -> Bool
 anyWildHead [] = False
-anyWildHead ((PWild::_)::_) = True
-anyWildHead (_::rest) = anyWildHead rest
+anyWildHead ((PWild :: _) :: _) = True
+anyWildHead (_ :: rest) = anyWildHead rest
 
 -- The signature is fully covered when every constructor heads at least one row —
 -- i.e. has a bucket.  (Same predicate as the old `allCovered ctors (headCtors
@@ -498,7 +524,11 @@ usefulBranch oracle pmat restQ c =
 -- `usefulBranch` with the constructor's rows taken from the prebuilt bucket instead
 -- of re-scanning the matrix.  Only reached when the matrix has no wildcard-headed
 -- row, where the bucket IS `specializeCon c a pmat` — same rows, same order.
-usefulBranchIn : Oracle -> OrdMap (List (List Pat)) -> List Pat -> String -> Bool
+usefulBranchIn : Oracle ->
+  OrdMap (List (List Pat)) ->
+  List Pat ->
+  String ->
+  Bool
 usefulBranchIn oracle buckets restQ c =
   let a = oGetArity oracle c
   let rows = reverseL (optionOr [] (omLookup c buckets))
@@ -553,35 +583,55 @@ recFieldHasRange (RecPatField _ _ (Some p)) = patHasRange p
 -- constructor and recurses on the default matrix — so the two never disagree
 -- on whether the warning fires.
 export
-usefulWitness : Oracle -> Option TabKey -> List (List Pat) -> Int -> Option (List Pat)
+usefulWitness : Oracle ->
+  Option TabKey ->
+  List (List Pat) ->
+  Int ->
+  Option (List Pat)
 usefulWitness _ _ [] ncols = Some (replicate ncols PWild)
-usefulWitness _ _ (_::_) 0 = None
+usefulWitness _ _ (_ :: _) 0 = None
 usefulWitness oracle col0 pmat ncols =
   let col0t = orElseOpt col0 (inferCol0Type oracle pmat)
   witnessWild oracle (bindCtors oracle col0t) pmat ncols
 
 -- An unknown/open column (no signature — e.g. an Int scrutinee matched by
 -- literals): recurse on the default matrix and prepend a bare wildcard head.
-witnessWild : Oracle -> Option (List String) -> List (List Pat) -> Int -> Option (List Pat)
+witnessWild : Oracle ->
+  Option (List String) ->
+  List (List Pat) ->
+  Int ->
+  Option (List Pat)
 witnessWild oracle None pmat ncols =
   witnessPrepend
     PWild
     (usefulWitness oracle None (defaultMatrix pmat) (ncols - 1))
 witnessWild oracle (Some ctors) pmat ncols = witnessSig oracle ctors pmat ncols
 
-witnessSig : Oracle -> List String -> List (List Pat) -> Int -> Option (List Pat)
+witnessSig : Oracle ->
+  List String ->
+  List (List Pat) ->
+  Int ->
+  Option (List Pat)
 witnessSig oracle ctors pmat ncols
   | allCovered ctors (headBuckets pmat omEmpty) =
     firstWitnessBranch oracle ctors pmat ncols
-  | otherwise = map (missingCtorPat oracle ctors (headCtors pmat) :: _) (usefulWitness oracle None (defaultMatrix pmat) (ncols - 1))
+  | otherwise =
+    map
+      (missingCtorPat oracle ctors (headCtors pmat) :: _)
+      (usefulWitness oracle None (defaultMatrix pmat) (ncols - 1))
 
 -- Complete signature at this column: the first constructor branch that is still
 -- useful yields the (possibly nested) witness.
-firstWitnessBranch : Oracle -> List String -> List (List Pat) -> Int -> Option (List Pat)
+firstWitnessBranch : Oracle ->
+  List String ->
+  List (List Pat) ->
+  Int ->
+  Option (List Pat)
 firstWitnessBranch _ [] _ _ = None
-firstWitnessBranch oracle (c::cs) pmat ncols = match witnessBranch oracle c pmat ncols
-  Some w => Some w
-  None => firstWitnessBranch oracle cs pmat ncols
+firstWitnessBranch oracle (c :: cs) pmat ncols =
+  match witnessBranch oracle c pmat ncols
+    Some w => Some w
+    None => firstWitnessBranch oracle cs pmat ncols
 
 witnessBranch : Oracle -> String -> List (List Pat) -> Int -> Option (List Pat)
 witnessBranch oracle c pmat ncols =
@@ -592,7 +642,7 @@ witnessBranch oracle c pmat ncols =
 
 witnessPrepend : Pat -> Option (List Pat) -> Option (List Pat)
 witnessPrepend _ None = None
-witnessPrepend p (Some ws) = Some (p::ws)
+witnessPrepend p (Some ws) = Some (p :: ws)
 
 -- The first constructor of the signature not present at the column head, wrapped
 -- with wildcard arguments (its arity).  Falls back to a bare wildcard if every
@@ -604,11 +654,8 @@ missingCtorPat oracle ctors present = match firstMissing ctors present
 
 firstMissing : List String -> List String -> Option String
 firstMissing [] _ = None
-firstMissing (c::cs) present =
-  if contains c present then
-    firstMissing cs present
-  else
-    Some c
+firstMissing (c :: cs) present =
+  if contains c present then firstMissing cs present else Some c
 
 -- ── witness → compact surface syntax ──────────────────────────────────────
 -- Render a witness pattern for the diagnostic message.  Witnesses only ever
@@ -635,13 +682,13 @@ renderConWit paren c args
     parenWrapWit paren "\{c} \{joinWith " " (map (renderWit True) args)}"
 
 renderCons : Bool -> List Pat -> String
-renderCons paren (h::t::_) =
+renderCons paren (h :: t :: _) =
   parenWrapWit paren "\{renderWit True h} :: \{renderWit False t}"
 renderCons _ _ = "_ :: _"
 
 isEmptyArgs : List Pat -> Bool
 isEmptyArgs [] = True
-isEmptyArgs (_::_) = False
+isEmptyArgs (_ :: _) = False
 
 parenWrapWit : Bool -> String -> String
 parenWrapWit True s = "(\{s})"
@@ -702,7 +749,10 @@ guardWarning = "Warning: guards may not be exhaustive"
 -- Each warning carries an optional per-group source location (recovered from the
 -- first clause body's `ELoc` wrapper), so the CLI can render `file:L:C:` like the
 -- `match`-path non-exhaustiveness warnings do.
-checkGroup : Oracle -> String -> List (List Pat, Expr) -> List (String, Option Loc)
+checkGroup : Oracle ->
+  String ->
+  List (List Pat, Expr) ->
+  List (String, Option Loc)
 checkGroup oracle name clauses
   -- A group with a *guarded partial* clause → the guard may fall through; keep
   -- the flat "guards may not be exhaustive" wording (guard gaps aren't named by a
@@ -717,7 +767,11 @@ checkGroupCovered oracle clauses =
   let arity = groupArity clauses
   let rows = totalClauseRows oracle clauses
   let query = [desugarPat oracle (PTuple (replicate arity PWild))]
-  if useful oracle (Some (tabKeyOf NsType OriginBuiltin (tupleCtorName arity))) rows query then
+  if useful
+    oracle
+    (Some (tabKeyOf NsType OriginBuiltin (tupleCtorName arity)))
+    rows
+    query then
     [(guardWarning, groupLoc clauses)]
   else
     []
@@ -726,12 +780,19 @@ checkGroupCovered oracle clauses =
 -- all-wildcard query and, when it is still useful (some value escapes every
 -- clause), names the missing case via `usefulWitness`/`renderWitness` — the same
 -- witness machinery the `match` path uses (typecheck.mdk's `nonExhaustiveMsg`).
-checkGroupClauses : Oracle -> String -> List (List Pat, Expr) -> List (String, Option Loc)
+checkGroupClauses : Oracle ->
+  String ->
+  List (List Pat, Expr) ->
+  List (String, Option Loc)
 checkGroupClauses oracle name clauses =
   let arity = groupArity clauses
   let rows = totalClauseRows oracle clauses
   let query = [desugarPat oracle (PTuple (replicate arity PWild))]
-  if useful oracle (Some (tabKeyOf NsType OriginBuiltin (tupleCtorName arity))) rows query then
+  if useful
+    oracle
+    (Some (tabKeyOf NsType OriginBuiltin (tupleCtorName arity)))
+    rows
+    query then
     [(nonExhaustiveClausesMsg oracle name arity rows, groupLoc clauses)]
   else
     []
@@ -741,18 +802,24 @@ checkGroupClauses oracle name clauses =
 -- unwrap it so the case reads `Blue`, not `(Blue)` (parity with `match`).  Falls
 -- back to a generic wording when no witness is recoverable.
 nonExhaustiveClausesMsg : Oracle -> String -> Int -> List (List Pat) -> String
-nonExhaustiveClausesMsg oracle name arity rows = match usefulWitness oracle (Some (tabKeyOf NsType OriginBuiltin (tupleCtorName arity))) rows 1
-  Some (w::_) =>
-    let witnessStr = renderClauseWitness arity w
-    let hint = "add a '\{witnessStr}' clause, or a '_' catch-all clause."
-    "Warning: non-exhaustive clauses of '\{name}'. Missing case: '\{witnessStr}'; \{hint}"
-  _ => "Warning: non-exhaustive clauses of '\{name}'. Not all cases are covered"
+nonExhaustiveClausesMsg oracle name arity rows =
+  match (usefulWitness
+    oracle
+    (Some (tabKeyOf NsType OriginBuiltin (tupleCtorName arity)))
+    rows
+    1)
+    Some (w :: _) =>
+      let witnessStr = renderClauseWitness arity w
+      let hint = "add a '\{witnessStr}' clause, or a '_' catch-all clause."
+      "Warning: non-exhaustive clauses of '\{name}'. Missing case: '\{witnessStr}'; \{hint}"
+    _ =>
+      "Warning: non-exhaustive clauses of '\{name}'. Not all cases are covered"
 
 -- Arity-1 witnesses are a 1-tuple wrapper around the single missing pattern;
 -- unwrap so the rendered case is the bare pattern.  Higher arities render as the
 -- tuple across all columns.
 renderClauseWitness : Int -> Pat -> String
-renderClauseWitness 1 (PCon _ (inner::_)) = renderWitness inner
+renderClauseWitness 1 (PCon _ (inner :: _)) = renderWitness inner
 renderClauseWitness _ w = renderWitness w
 
 -- Per-group loc: the first clause body carries the parser's `ELoc` wrapper.
@@ -762,7 +829,7 @@ renderClauseWitness _ w = renderWitness w
 -- body or guard condition carries an `ELoc`/`EDoOrigin` wrapper (#99).
 groupLoc : List (List Pat, Expr) -> Option Loc
 groupLoc [] = None
-groupLoc ((_, body)::_) = clauseBodyLoc body
+groupLoc ((_, body) :: _) = clauseBodyLoc body
 
 clauseBodyLoc : Expr -> Option Loc
 clauseBodyLoc (ELoc l _) = Some l
@@ -772,7 +839,7 @@ clauseBodyLoc _ = None
 
 guardArmsLoc : List GuardArm -> Option Loc
 guardArmsLoc [] = None
-guardArmsLoc ((GuardArm guards body)::rest) = match clauseBodyLoc body
+guardArmsLoc ((GuardArm guards body) :: rest) = match clauseBodyLoc body
   Some l => Some l
   None => match guardCondsLoc guards
     Some l => Some l
@@ -780,21 +847,21 @@ guardArmsLoc ((GuardArm guards body)::rest) = match clauseBodyLoc body
 
 guardCondsLoc : List Guard -> Option Loc
 guardCondsLoc [] = None
-guardCondsLoc ((GBool e)::rest) = match clauseBodyLoc e
+guardCondsLoc ((GBool e) :: rest) = match clauseBodyLoc e
   Some l => Some l
   None => guardCondsLoc rest
-guardCondsLoc ((GBind _ e)::rest) = match clauseBodyLoc e
+guardCondsLoc ((GBind _ e) :: rest) = match clauseBodyLoc e
   Some l => Some l
   None => guardCondsLoc rest
 
 groupArity : List (List Pat, Expr) -> Int
 groupArity [] = 0
-groupArity (c::_) = listLen (clausePats c)
+groupArity (c :: _) = listLen (clausePats c)
 
 -- one matrix row per non-falling-through clause (its params wrapped as a tuple)
 totalClauseRows : Oracle -> List (List Pat, Expr) -> List (List Pat)
 totalClauseRows _ [] = []
-totalClauseRows oracle (c::rest)
+totalClauseRows oracle (c :: rest)
   | clauseGuardsTotal c =
     [desugarPat oracle (PTuple (clausePats c))] :: totalClauseRows oracle rest
   | otherwise = totalClauseRows oracle rest
@@ -812,7 +879,8 @@ totalClauseRows oracle (c::rest)
 -- pass buckets clauses by name in an OrdMap (each bucket accumulated front-first,
 -- hence `reverseL` on read-back) and records first-seen names via O(log n)
 -- membership; a second pass reads each name's bucket back out.
-groupByName : List (String, (List Pat, Expr)) -> List (String, List (List Pat, Expr))
+groupByName : List (String, (List Pat, Expr)) ->
+  List (String, List (List Pat, Expr))
 groupByName items =
   let buckets = bucketClauses items omEmpty
   map (n => (n, reverseL (bucketFor n buckets))) (firstSeenNames items omEmpty)
@@ -821,9 +889,11 @@ groupByName items =
 type ClauseBuckets = OrdMap (List (List Pat, Expr))
 
 -- Accumulate each clause under its name, newest-first (so one cons per item).
-bucketClauses : List (String, (List Pat, Expr)) -> ClauseBuckets -> ClauseBuckets
+bucketClauses : List (String, (List Pat, Expr)) ->
+  ClauseBuckets ->
+  ClauseBuckets
 bucketClauses [] acc = acc
-bucketClauses ((n, c)::rest) acc =
+bucketClauses ((n, c) :: rest) acc =
   bucketClauses rest (omInsert n (c :: bucketFor n acc) acc)
 
 bucketFor : String -> ClauseBuckets -> List (List Pat, Expr)
@@ -833,7 +903,7 @@ bucketFor n acc = match omLookup n acc
 
 firstSeenNames : List (String, (List Pat, Expr)) -> OrdMap Unit -> List String
 firstSeenNames [] _ = []
-firstSeenNames ((n, _)::rest) seen
+firstSeenNames ((n, _) :: rest) seen
   | omHasKey n seen = firstSeenNames rest seen
   | otherwise = n :: firstSeenNames rest (omInsert n () seen)
 
@@ -852,35 +922,32 @@ funClauseToClause (FunClause pats body) = (pats, body)
 -- every LetBind from every ELetGroup anywhere in the tree (recurses into
 -- clause bodies and the result expr)
 collectLetBinds : Expr -> List LetBind
-collectLetBinds (ELetGroup binds body) = binds
-  ++ flatMap collectLetBindInner binds
-  ++ collectLetBinds body
+collectLetBinds (ELetGroup binds body) =
+  binds ++ flatMap collectLetBindInner binds ++ collectLetBinds body
 collectLetBinds (EApp a b) = collectLetBinds a ++ collectLetBinds b
 collectLetBinds (ELam _ b) = collectLetBinds b
 collectLetBinds (ELet _ _ _ e1 e2) = collectLetBinds e1 ++ collectLetBinds e2
-collectLetBinds (EMatch e0 arms) = collectLetBinds e0
-  ++ flatMap collectArmBinds arms
-collectLetBinds (EIf c t el) = collectLetBinds c
-  ++ collectLetBinds t
-  ++ collectLetBinds el
+collectLetBinds (EMatch e0 arms) =
+  collectLetBinds e0 ++ flatMap collectArmBinds arms
+collectLetBinds (EIf c t el) =
+  collectLetBinds c ++ collectLetBinds t ++ collectLetBinds el
 collectLetBinds (EBinOp _ a b _) = collectLetBinds a ++ collectLetBinds b
 collectLetBinds (EUnOp _ a _) = collectLetBinds a
 collectLetBinds (EInfix _ a b) = collectLetBinds a ++ collectLetBinds b
 collectLetBinds (EFieldAccess e0 _ _) = collectLetBinds e0
 collectLetBinds (ERecordCreate _ fs) = flatMap fieldAssignBinds fs
-collectLetBinds (ERecordUpdate e0 fs _) = collectLetBinds e0
-  ++ flatMap fieldAssignBinds fs
-collectLetBinds (EVariantUpdate _ e0 fs) = collectLetBinds e0
-  ++ flatMap fieldAssignBinds fs
+collectLetBinds (ERecordUpdate e0 fs _) =
+  collectLetBinds e0 ++ flatMap fieldAssignBinds fs
+collectLetBinds (EVariantUpdate _ e0 fs) =
+  collectLetBinds e0 ++ flatMap fieldAssignBinds fs
 collectLetBinds (EArrayLit es) = flatMap collectLetBinds es
 collectLetBinds (EListLit es) = flatMap collectLetBinds es
 collectLetBinds (ETuple es) = flatMap collectLetBinds es
 collectLetBinds (EIndex e0 i _) = collectLetBinds e0 ++ collectLetBinds i
 collectLetBinds (ERangeList lo hi _) = collectLetBinds lo ++ collectLetBinds hi
 collectLetBinds (ERangeArray lo hi _) = collectLetBinds lo ++ collectLetBinds hi
-collectLetBinds (ESlice e0 lo hi _ _) = collectLetBinds e0
-  ++ collectLetBinds lo
-  ++ collectLetBinds hi
+collectLetBinds (ESlice e0 lo hi _ _) =
+  collectLetBinds e0 ++ collectLetBinds lo ++ collectLetBinds hi
 collectLetBinds (EBlock stmts) = flatMap doStmtBinds stmts
 collectLetBinds (EDo _ stmts) = flatMap doStmtBinds stmts
 collectLetBinds (EAnnot e0 _) = collectLetBinds e0
@@ -941,13 +1008,17 @@ interpBinds (InterpExpr e) = collectLetBinds e
 -- against a genuinely exhaustive group.  (`buildOracle` is duplicate-tolerant, so
 -- the checkDecls⊆oracleDecls overlap is harmless.)
 export
-checkGuardExhaustivenessWith : List Decl -> List Decl -> List (String, Option Loc)
+checkGuardExhaustivenessWith : List Decl ->
+  List Decl ->
+  List (String, Option Loc)
 checkGuardExhaustivenessWith oracleDecls checkDecls =
   let oracle = buildOracle (checkDecls ++ oracleDecls)
   flatMap (checkNamedGroup oracle) (groupByName (topFunDefClauses checkDecls))
     ++ flatMap (declBodyWarnings oracle) checkDecls
 
-checkNamedGroup : Oracle -> (String, List (List Pat, Expr)) -> List (String, Option Loc)
+checkNamedGroup : Oracle ->
+  (String, List (List Pat, Expr)) ->
+  List (String, Option Loc)
 checkNamedGroup oracle (name, clauses) = checkGroup oracle name clauses
 
 -- Back-compat: build the oracle from the checked decls only (the historical
@@ -958,14 +1029,15 @@ checkGuardExhaustiveness prog = map fst (checkGuardExhaustivenessWith prog prog)
 
 topFunDefClauses : List Decl -> List (String, (List Pat, Expr))
 topFunDefClauses [] = []
-topFunDefClauses ((DFunDef _ n pats body)::rest) =
+topFunDefClauses ((DFunDef _ n pats body) :: rest) =
   (n, (pats, body)) :: topFunDefClauses rest
-topFunDefClauses (_::rest) = topFunDefClauses rest
+topFunDefClauses (_ :: rest) = topFunDefClauses rest
 
 declBodyWarnings : Oracle -> Decl -> List (String, Option Loc)
 declBodyWarnings oracle (DFunDef _ _ _ body) = letGroupWarnings oracle body
-declBodyWarnings oracle (DImpl { methods, ... }) = flatMap (checkNamedGroup oracle) (groupByName (implClauses methods))
-  ++ flatMap (implMethodBodyWarnings oracle) methods
+declBodyWarnings oracle (DImpl { methods, ... }) =
+  flatMap (checkNamedGroup oracle) (groupByName (implClauses methods))
+    ++ flatMap (implMethodBodyWarnings oracle) methods
 declBodyWarnings oracle (DInterface { methods, ... }) =
   flatMap (ifaceMethodWarnings oracle) methods
 declBodyWarnings oracle (DProp _ _ _ body) = letGroupWarnings oracle body
@@ -975,7 +1047,7 @@ declBodyWarnings _ _ = []
 
 implClauses : List ImplMethod -> List (String, (List Pat, Expr))
 implClauses [] = []
-implClauses ((ImplMethod n pats body)::rest) =
+implClauses ((ImplMethod n pats body) :: rest) =
   (n, (pats, body)) :: implClauses rest
 
 implMethodBodyWarnings : Oracle -> ImplMethod -> List (String, Option Loc)

@@ -32,7 +32,7 @@ runSql db sql = match queryStringDistinct db sql tCells
 
 main : <IO> Unit
 main = match args ()
-  db::sql::_ => runWith db sql
+  db :: sql :: _ => runWith db sql
   _ => println "usage: sql_demo <db-path> <sql>"
 
 runWith : String -> String -> <IO> Unit

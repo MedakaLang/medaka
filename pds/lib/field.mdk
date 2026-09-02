@@ -126,7 +126,7 @@ topMask = 0x3fffff
 pLimbs : Array Int
 pLimbs = [|
   0x3fffc2f, 0x3ffffbf, 0x3ffffff, 0x3ffffff, 0x3ffffff, 0x3ffffff, 0x3ffffff,
-  0x3ffffff, 0x3ffffff, 0x3fffff,
+  0x3ffffff, 0x3ffffff, 0x3fffff
 |]
 
 -- 2^256 = 2^32 + 977 (mod p), expressed at limb granularity: a unit of weight
@@ -152,7 +152,7 @@ expPMinus2 : Array Int
 expPMinus2 = [|
   0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
   0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-  0xff, 0xfe, 0xff, 0xff, 0xfc, 0x2d,
+  0xff, 0xfe, 0xff, 0xff, 0xfc, 0x2d
 |]
 
 -- | A field element: exactly 10 limbs, base 2^26, least-significant first,
@@ -220,7 +220,8 @@ gtePLimbs n = gtePGo n 9
 
 gtePGo : Array Int -> Int -> Bool
 gtePGo n i =
-  if i < 0 then True
+  if i < 0 then
+    True
   else
     let a = n[i]
     let b = pLimbs[i]
@@ -245,7 +246,8 @@ subPCandidate n diff i borrow =
 -- input-derived branch or Bool-to-Int conversion.
 selectPCandidate : Array Int -> Array Int -> Int -> Int -> Unit
 selectPCandidate n diff keepDiff i =
-  if i >= 10 then ()
+  if i >= 10 then
+    ()
   else
     let original = n[i]
     let () = setInPlace i (original + keepDiff * (diff[i] - original)) n
@@ -286,16 +288,22 @@ limbsOfBytes bs =
 
 limbsOfBytesGo : Array Int -> Array Int -> Int -> Int -> Int -> Int -> Unit
 limbsOfBytesGo bs n bpos acc accBits li =
-  if li >= 10 then ()
+  if li >= 10 then
+    ()
+  else if accBits >= 26 then
+    let () = setInPlace li (bitAnd acc limbMask) n
+    limbsOfBytesGo bs n bpos (shiftRight acc 26) (accBits - 26) (li + 1)
+  else if bpos >= 0 then
+    limbsOfBytesGo
+      bs
+      n
+      (bpos - 1)
+      (acc + shiftLeft bs[bpos] accBits)
+      (accBits + 8)
+      li
   else
-    if accBits >= 26 then
-      let () = setInPlace li (bitAnd acc limbMask) n
-      limbsOfBytesGo bs n bpos (shiftRight acc 26) (accBits - 26) (li + 1)
-    else
-      if bpos >= 0 then limbsOfBytesGo bs n (bpos - 1) (acc + shiftLeft bs[bpos] accBits) (accBits + 8) li
-      else
-        let () = setInPlace li (bitAnd acc limbMask) n
-        limbsOfBytesGo bs n bpos (shiftRight acc 26) 0 (li + 1)
+    let () = setInPlace li (bitAnd acc limbMask) n
+    limbsOfBytesGo bs n bpos (shiftRight acc 26) 0 (li + 1)
 
 -- Is this a well-formed 32-byte array with every element in 0..255?
 byteArrayOk : Array Int -> Bool
@@ -303,7 +311,8 @@ byteArrayOk bs = arrayLength bs == 32 && byteRangeGo bs 0
 
 byteRangeGo : Array Int -> Int -> Bool
 byteRangeGo bs i =
-  if i >= 32 then True
+  if i >= 32 then
+    True
   else
     let b = bs[i]
     if b < 0 || b > 255 then False else byteRangeGo bs (i + 1)
@@ -318,15 +327,17 @@ byteRangeGo bs i =
 export
 feFromBytes : Array Int -> Result String Fe
 feFromBytes bs =
-  if arrayLength bs /= 32 then Err "field.feFromBytes: expected 32 bytes, got \{intToString (arrayLength bs)}"
+  if arrayLength bs /= 32 then
+    Err
+      "field.feFromBytes: expected 32 bytes, got \{intToString (arrayLength bs)}"
+  else if not (byteArrayOk bs) then
+    Err "field.feFromBytes: every element must be a byte in 0..255"
   else
-    if not (byteArrayOk bs) then Err "field.feFromBytes: every element must be a byte in 0..255"
+    let n = limbsOfBytes bs
+    if gtePLimbs n then
+      Err "field.feFromBytes: value is not canonical (>= p)"
     else
-      let n = limbsOfBytes bs
-      if gtePLimbs n then
-        Err "field.feFromBytes: value is not canonical (>= p)"
-      else
-        Ok (Fe n)
+      Ok (Fe n)
 
 -- | Parse ANY 32 big-endian bytes, reducing mod p. This mirrors
 --   `secp256k1_fe_set_b32_mod` and is what the reference corpus's `red` rows
@@ -340,7 +351,8 @@ export
 feFromBytesReduce : Array Int -> Fe
 feFromBytesReduce bs =
   if arrayLength bs /= 32 then
-    panic "field.feFromBytesReduce: expected 32 bytes, got \{intToString (arrayLength bs)}"
+    panic
+      "field.feFromBytesReduce: expected 32 bytes, got \{intToString (arrayLength bs)}"
   else if not (byteArrayOk bs) then
     panic "field.feFromBytesReduce: every element must be a byte in 0..255"
   else
@@ -357,16 +369,16 @@ feToBytes a =
 
 toBytesGo : Array Int -> Array Int -> Int -> Int -> Int -> Int -> Unit
 toBytesGo n out li acc accBits pos =
-  if pos < 0 then ()
+  if pos < 0 then
+    ()
+  else if accBits >= 8 then
+    let () = setInPlace pos (bitAnd acc 255) out
+    toBytesGo n out li (shiftRight acc 8) (accBits - 8) (pos - 1)
+  else if li < 10 then
+    toBytesGo n out (li + 1) (acc + shiftLeft n[li] accBits) (accBits + 26) pos
   else
-    if accBits >= 8 then
-      let () = setInPlace pos (bitAnd acc 255) out
-      toBytesGo n out li (shiftRight acc 8) (accBits - 8) (pos - 1)
-    else
-      if li < 10 then toBytesGo n out (li + 1) (acc + shiftLeft n[li] accBits) (accBits + 26) pos
-      else
-        let () = setInPlace pos (bitAnd acc 255) out
-        toBytesGo n out li (shiftRight acc 8) 0 (pos - 1)
+    let () = setInPlace pos (bitAnd acc 255) out
+    toBytesGo n out li (shiftRight acc 8) 0 (pos - 1)
 
 -- ── Comparison ───────────────────────────────────────────────────────
 
@@ -378,12 +390,7 @@ feEqual a b = equalGo (rawFe a) (rawFe b) 0
 
 equalGo : Array Int -> Array Int -> Int -> Bool
 equalGo a b i =
-  if i >= 10 then
-    True
-  else if a[i] /= b[i] then
-    False
-  else
-    equalGo a b (i + 1)
+  if i >= 10 then True else if a[i] /= b[i] then False else equalGo a b (i + 1)
 
 -- | Is this element zero?
 export
@@ -392,12 +399,7 @@ feIsZero a = isZeroGo (rawFe a) 0
 
 isZeroGo : Array Int -> Int -> Bool
 isZeroGo a i =
-  if i >= 10 then
-    True
-  else if a[i] /= 0 then
-    False
-  else
-    isZeroGo a (i + 1)
+  if i >= 10 then True else if a[i] /= 0 then False else isZeroGo a (i + 1)
 
 -- | Fixed-control zero predicate for secret-bearing arithmetic. Returns the
 --   arithmetic bit 1 exactly for zero and 0 otherwise. The borrow chain
@@ -442,7 +444,8 @@ feSelect bit a b =
 
 feSelectGo : Int -> Array Int -> Array Int -> Array Int -> Int -> Unit
 feSelectGo bit a b out i =
-  if i >= 10 then ()
+  if i >= 10 then
+    ()
   else
     let () = setInPlace i (a[i] + bit * (b[i] - a[i])) out
     feSelectGo bit a b out (i + 1)
@@ -464,7 +467,8 @@ feAdd a b =
 
 addGo : Array Int -> Array Int -> Array Int -> Int -> Unit
 addGo a b e i =
-  if i >= 10 then ()
+  if i >= 10 then
+    ()
   else
     let () = setInPlace i (a[i] + b[i]) e
     addGo a b e (i + 1)
@@ -481,7 +485,8 @@ feNegate a =
 
 negateGo : Array Int -> Array Int -> Int -> Int -> Unit
 negateGo a e i borrow =
-  if i >= 10 then ()
+  if i >= 10 then
+    ()
   else
     let d = pLimbs[i] - a[i] - borrow
     if d < 0 then
@@ -541,14 +546,16 @@ feMul a b =
 
 mulAccum : Array Int -> Array Int -> Array Int -> Int -> Unit
 mulAccum a b c i =
-  if i >= 10 then ()
+  if i >= 10 then
+    ()
   else
     let () = mulAccumRow a b c i 0
     mulAccum a b c (i + 1)
 
 mulAccumRow : Array Int -> Array Int -> Array Int -> Int -> Int -> Unit
 mulAccumRow a b c i j =
-  if j >= 10 then ()
+  if j >= 10 then
+    ()
   else
     let k = i + j
     let () = setInPlace k (c[k] + a[i] * b[j]) c
@@ -557,7 +564,8 @@ mulAccumRow a b c i j =
 -- Carry columns 0..18 down below 2^26, depositing the last carry in c[19].
 carryChain : Array Int -> Int -> Unit
 carryChain c i =
-  if i >= 19 then ()
+  if i >= 19 then
+    ()
   else
     let v = c[i]
     let () = setInPlace i (bitAnd v limbMask) c
@@ -585,14 +593,16 @@ foldHigh c e =
 
 foldCopy : Array Int -> Array Int -> Int -> Unit
 foldCopy c e m =
-  if m >= 10 then ()
+  if m >= 10 then
+    ()
   else
     let () = setInPlace m c[m] e
     foldCopy c e (m + 1)
 
 foldGo : Array Int -> Array Int -> Int -> Unit
 foldGo c e q =
-  if q >= 20 then ()
+  if q >= 20 then
+    ()
   else
     let v = c[q]
     let () = setInPlace (q - 10) (e[q - 10] + v * r0) e
@@ -637,7 +647,8 @@ feInverse a = powGo a 255 feOne
 
 powGo : Fe -> Int -> Fe -> Fe
 powGo base bitIdx acc =
-  if bitIdx < 0 then acc
+  if bitIdx < 0 then
+    acc
   else
     let sq = feSquare acc
     let r = if expBit bitIdx then feMul sq base else sq

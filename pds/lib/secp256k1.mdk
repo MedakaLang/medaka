@@ -62,12 +62,11 @@ rfc6979Require32 : String -> Array Int -> Unit
 rfc6979Require32 label bytes =
   if arrayLength bytes /= rfc6979ByteCount then
     panic ("secp256k1." ++ label ++ ": expected 32 bytes")
-  else
-    ()
 
 copyBytesInto : Array Int -> Array Int -> Int -> Int -> Unit
 copyBytesInto input out offset i =
-  if i >= arrayLength input then ()
+  if i >= arrayLength input then
+    ()
   else
     let () = setInPlace (offset + i) input[i] out
     copyBytesInto input out offset (i + 1)
@@ -116,7 +115,8 @@ rfc6979NonceSchedule : Sc -> Array Int -> Rfc6979Schedule
 rfc6979NonceSchedule key digest =
   let (Rfc6979State initialKey initialValue) = rfc6979Initialize key digest
   let candidate0Bytes = hmacSha256FixedKey initialKey initialValue
-  let (Rfc6979State rejectionKey rejectionValue) = rfc6979RejectState initialKey candidate0Bytes
+  let (Rfc6979State rejectionKey rejectionValue) =
+    rfc6979RejectState initialKey candidate0Bytes
   let candidate1Bytes = hmacSha256FixedKey rejectionKey rejectionValue
   Rfc6979Schedule
     (rfc6979Candidate candidate0Bytes)
@@ -138,7 +138,8 @@ selectBytes bit a b =
 
 selectBytesGo : Int -> Array Int -> Array Int -> Array Int -> Int -> Unit
 selectBytesGo bit a b out i =
-  if i >= rfc6979ByteCount then ()
+  if i >= rfc6979ByteCount then
+    ()
   else
     let () = setInPlace i (a[i] + bit * (b[i] - a[i])) out
     selectBytesGo bit a b out (i + 1)
@@ -165,10 +166,19 @@ rfc6979CandidateBytesForTest key digest =
 --   prove first-valid selection and aggregate exhaustion without adding an
 --   injection parameter to production.
 export
-rfc6979InjectedNonceProbeForTest : Sc -> Array Int -> Array Int -> Int -> Array Int -> Int -> (Array Int, Array Int, Int, Array Int)
+rfc6979InjectedNonceProbeForTest : Sc ->
+  Array Int ->
+  Array Int ->
+  Int ->
+  Array Int ->
+  Int ->
+  (Array Int, Array Int, Int, Array Int)
 rfc6979InjectedNonceProbeForTest key digest bytes0 valid0 bytes1 valid1 =
   let (Rfc6979Schedule normal0 normal1) = rfc6979NonceSchedule key digest
-  let injected = Rfc6979Schedule (injectedCandidate bytes0 valid0) (injectedCandidate bytes1 valid1)
+  let injected =
+    Rfc6979Schedule
+      (injectedCandidate bytes0 valid0)
+      (injectedCandidate bytes1 valid1)
   let (validBit, _, selectedBytes) = firstValidCandidate injected
   (candidateBytes normal0, candidateBytes normal1, validBit, selectedBytes)
 
@@ -180,27 +190,24 @@ export data AffinePoint = AffinePoint Fe Fe
 export data JPoint = JPoint Fe Fe Fe
 
 generatorX : Fe
-generatorX = feFromBytesReduce
-  [|
-    0x79, 0xbe, 0x66, 0x7e, 0xf9, 0xdc, 0xbb, 0xac, 0x55, 0xa0, 0x62, 0x95,
-    0xce, 0x87, 0x0b, 0x07, 0x02, 0x9b, 0xfc, 0xdb, 0x2d, 0xce, 0x28, 0xd9,
-    0x59, 0xf2, 0x81, 0x5b, 0x16, 0xf8, 0x17, 0x98,
-  |]
+generatorX = feFromBytesReduce [|
+  0x79, 0xbe, 0x66, 0x7e, 0xf9, 0xdc, 0xbb, 0xac, 0x55, 0xa0, 0x62, 0x95, 0xce,
+  0x87, 0x0b, 0x07, 0x02, 0x9b, 0xfc, 0xdb, 0x2d, 0xce, 0x28, 0xd9, 0x59, 0xf2,
+  0x81, 0x5b, 0x16, 0xf8, 0x17, 0x98
+|]
 
 generatorY : Fe
-generatorY = feFromBytesReduce
-  [|
-    0x48, 0x3a, 0xda, 0x77, 0x26, 0xa3, 0xc4, 0x65, 0x5d, 0xa4, 0xfb, 0xfc,
-    0x0e, 0x11, 0x08, 0xa8, 0xfd, 0x17, 0xb4, 0x48, 0xa6, 0x85, 0x54, 0x19,
-    0x9c, 0x47, 0xd0, 0x8f, 0xfb, 0x10, 0xd4, 0xb8,
-  |]
+generatorY = feFromBytesReduce [|
+  0x48, 0x3a, 0xda, 0x77, 0x26, 0xa3, 0xc4, 0x65, 0x5d, 0xa4, 0xfb, 0xfc, 0x0e,
+  0x11, 0x08, 0xa8, 0xfd, 0x17, 0xb4, 0x48, 0xa6, 0x85, 0x54, 0x19, 0x9c, 0x47,
+  0xd0, 0x8f, 0xfb, 0x10, 0xd4, 0xb8
+|]
 
 fieldSeven : Fe
-fieldSeven = feFromBytesReduce
-  [|
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 7,
-  |]
+fieldSeven = feFromBytesReduce [|
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  0, 0, 0, 0, 0, 7
+|]
 
 -- `(p + 1) / 4`, valid because secp256k1's field prime is 3 mod 4. Reading
 -- this fixed public exponent MSB first gives the square-root candidate.
@@ -208,7 +215,7 @@ sqrtExponent : Array Int
 sqrtExponent = [|
   0x3f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
   0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-  0xff, 0xff, 0xbf, 0xff, 0xff, 0x0c,
+  0xff, 0xff, 0xbf, 0xff, 0xff, 0x0c
 |]
 
 -- | The canonical infinity `(0, 1, 0)`.
@@ -304,8 +311,10 @@ pointAddComplete (p@(JPoint x1 y1 z1)) (q@(JPoint x2 y2 z2)) =
   let r = fieldDouble (fieldSubCt s2 s1)
   let v = feMul u1 i
   let genericX = fieldSubCt (fieldSubCt (feSquare r) j) (fieldDouble v)
-  let genericY = fieldSubCt (feMul r (fieldSubCt v genericX)) (fieldDouble (feMul s1 j))
-  let genericZ = feMul (fieldSubCt (fieldSubCt (feSquare (feAdd z1 z2)) z1z1) z2z2) h
+  let genericY =
+    fieldSubCt (feMul r (fieldSubCt v genericX)) (fieldDouble (feMul s1 j))
+  let genericZ =
+    feMul (fieldSubCt (fieldSubCt (feSquare (feAdd z1 z2)) z1z1) z2z2) h
   let generic = JPoint genericX genericY genericZ
   let doubled = pointDoubleComplete p
   let pInf = feZeroBit z1
@@ -329,7 +338,8 @@ scalarMultiplySecret scalar point =
 
 scalarLadder : Array Int -> JPoint -> JPoint -> Int -> JPoint
 scalarLadder bytes r0 r1 i =
-  if i >= 256 then r0
+  if i >= 256 then
+    r0
   else
     let byte = bytes[i / 8]
     let bit = bitAnd (shiftRight byte (7 - i % 8)) 1
@@ -345,12 +355,15 @@ scalarLadder bytes r0 r1 i =
 --   group order; signing continues to admit scalars exclusively through
 --   `scFromBytes`/`SecretKey`.
 export
-pointRawFixedGeneratorIsCanonicalInfinityForTest : Array Int -> Result String Bool
+pointRawFixedGeneratorIsCanonicalInfinityForTest : Array Int ->
+  Result String Bool
 pointRawFixedGeneratorIsCanonicalInfinityForTest bytes =
   if arrayLength bytes /= 32 then
     Err "secp256k1.test: expected 32 raw scalar bytes"
   else
-    Ok (pointIsCanonicalInfinity (scalarLadder bytes pointInfinity pointGenerator 0))
+    Ok
+      (pointIsCanonicalInfinity
+        (scalarLadder bytes pointInfinity pointGenerator 0))
 
 -- The secret-bearing caller has established that this point is non-infinity,
 -- so this executes exactly one inverse with no Z==0 branch.
@@ -372,7 +385,8 @@ sqrtCandidate rhs = sqrtGo rhs 0 feOne
 
 sqrtGo : Fe -> Int -> Fe -> Fe
 sqrtGo base i acc =
-  if i >= 256 then acc
+  if i >= 256 then
+    acc
   else
     let squared = feSquare acc
     let multiplied = feMul squared base
@@ -396,7 +410,8 @@ pointCompressed (AffinePoint x y) =
 
 copyPointX : Array Int -> Array Int -> Int -> Unit
 copyPointX input out i =
-  if i >= 32 then ()
+  if i >= 32 then
+    ()
   else
     let () = setInPlace (i + 1) input[i] out
     copyPointX input out (i + 1)
@@ -406,10 +421,13 @@ copyPointX input out i =
 export
 pointFromCompressed : Array Int -> Result String AffinePoint
 pointFromCompressed bytes =
-  if arrayLength bytes /= 33 then Err "secp256k1.pointFromCompressed: expected 33 bytes"
+  if arrayLength bytes /= 33 then
+    Err "secp256k1.pointFromCompressed: expected 33 bytes"
   else
     let prefix = bytes[0]
-    if prefix /= 2 && prefix /= 3 then Err "secp256k1.pointFromCompressed: expected compressed prefix 0x02 or 0x03"
+    if prefix /= 2 && prefix /= 3 then
+      Err
+        "secp256k1.pointFromCompressed: expected compressed prefix 0x02 or 0x03"
     else
       let xBytes = arrayMake 32 0
       let () = copyCompressedX bytes xBytes 0
@@ -418,17 +436,20 @@ pointFromCompressed bytes =
         Ok x =>
           let rhs = curveRhs x
           let root = sqrtCandidate rhs
-          if not (feEqual (feSquare root) rhs) then Err "secp256k1.pointFromCompressed: curve RHS is not a square"
+          if not (feEqual (feSquare root) rhs) then
+            Err "secp256k1.pointFromCompressed: curve RHS is not a square"
           else
             let rootBytes = feToBytes root
             let rootParity = bitAnd rootBytes[31] 1
             let wantedParity = prefix - 2
-            let y = feSelect (bitXor rootParity wantedParity) root (feNegateCt root)
+            let y =
+              feSelect (bitXor rootParity wantedParity) root (feNegateCt root)
             Ok (AffinePoint x y)
 
 copyCompressedX : Array Int -> Array Int -> Int -> Unit
 copyCompressedX input out i =
-  if i >= 32 then ()
+  if i >= 32 then
+    ()
   else
     let () = setInPlace i input[i + 1] out
     copyCompressedX input out (i + 1)
@@ -444,14 +465,16 @@ data EcdsaSigningResult = EcdsaSigningResult Int Sc Sc Sc Sc (Array Int)
 
 publicBytesOk : Array Int -> Int -> Bool
 publicBytesOk bytes i =
-  if i >= arrayLength bytes then True
+  if i >= arrayLength bytes then
+    True
   else
     let byte = bytes[i]
     if byte < 0 || byte > 255 then False else publicBytesOk bytes (i + 1)
 
 copySignatureHalf : Array Int -> Array Int -> Int -> Int -> Unit
 copySignatureHalf input out offset i =
-  if i >= 32 then ()
+  if i >= 32 then
+    ()
   else
     let () = setInPlace (offset + i) input[i] out
     copySignatureHalf input out offset (i + 1)
@@ -470,7 +493,8 @@ ecdsaSignatureCompact (EcdsaSignature r s) = signatureBytes r s
 
 copyCompactComponent : Array Int -> Array Int -> Int -> Int -> Unit
 copyCompactComponent compact out offset i =
-  if i >= 32 then ()
+  if i >= 32 then
+    ()
   else
     let () = setInPlace i compact[offset + i] out
     copyCompactComponent compact out offset (i + 1)
@@ -479,7 +503,8 @@ copyCompactComponent compact out offset i =
 export
 ecdsaSignatureFromCompact : Array Int -> Result String EcdsaSignature
 ecdsaSignatureFromCompact compact =
-  if arrayLength compact /= 64 then Err "secp256k1.signature: expected 64 compact bytes"
+  if arrayLength compact /= 64 then
+    Err "secp256k1.signature: expected 64 compact bytes"
   else
     let rBytes = arrayMake 32 0
     let sBytes = arrayMake 32 0
@@ -487,22 +512,25 @@ ecdsaSignatureFromCompact compact =
     let () = copyCompactComponent compact sBytes 32 0
     match scFromBytes rBytes
       Err message => Err "secp256k1.signature: invalid r: \{message}"
-      Ok r => if scIsZero r then Err "secp256k1.signature: r must be nonzero"
-      else match scFromBytes sBytes
-        Err message => Err "secp256k1.signature: invalid s: \{message}"
-        Ok s =>
-          if scIsZero s then
-            Err "secp256k1.signature: s must be nonzero"
-          else if scIsHigh s then
-            Err "secp256k1.signature: s must be low"
-          else
-            Ok (EcdsaSignature r s)
+      Ok r =>
+        if scIsZero r then
+          Err "secp256k1.signature: r must be nonzero"
+        else match scFromBytes sBytes
+          Err message => Err "secp256k1.signature: invalid s: \{message}"
+          Ok s =>
+            if scIsZero s then
+              Err "secp256k1.signature: s must be nonzero"
+            else if scIsHigh s then
+              Err "secp256k1.signature: s must be low"
+            else
+              Ok (EcdsaSignature r s)
 
 signCandidate : Sc -> Sc -> Rfc6979Candidate -> EcdsaCandidate
 signCandidate secret digest (Rfc6979Candidate nonceRangeBit nonce _) =
   let nonceValidBit = nonceRangeBit * (1 - scZeroBit nonce)
   let safeNonce = scSelect (1 - nonceValidBit) nonce scOne
-  let (AffinePoint x _) = secretAffine (scalarMultiplySecret safeNonce pointGenerator)
+  let (AffinePoint x _) =
+    secretAffine (scalarMultiplySecret safeNonce pointGenerator)
   let r = scFromFixedBytesReduce (feToBytes x)
   let rawS = scMul (scInverse safeNonce) (scAdd digest (scMul r secret))
   let lowS = scSelect (scHighBit rawS) rawS (scNegateCt rawS)
@@ -523,7 +551,8 @@ ecdsaSignFixed : Sc -> Array Int -> EcdsaSigningResult
 ecdsaSignFixed secret digestBytes =
   let () = rfc6979Require32 "ecdsaSign" digestBytes
   let digest = scFromBytesReduce digestBytes
-  let (Rfc6979Schedule candidate0 candidate1) = rfc6979NonceSchedule secret digestBytes
+  let (Rfc6979Schedule candidate0 candidate1) =
+    rfc6979NonceSchedule secret digestBytes
   let signed0 = signCandidate secret digest candidate0
   let signed1 = signCandidate secret digest candidate1
   selectSigningCandidates signed0 signed1
@@ -540,9 +569,12 @@ ecdsaSignDigest secret digest =
 -- | Gate observation of the production schedule's selected candidate. It
 --   returns fixed-width copies of k, raw r/s, normalized s, and compact bytes.
 export
-ecdsaSignDigestForTest : Sc -> Array Int -> (Int, Array Int, Array Int, Array Int, Array Int, Array Int)
+ecdsaSignDigestForTest : Sc ->
+  Array Int ->
+  (Int, Array Int, Array Int, Array Int, Array Int, Array Int)
 ecdsaSignDigestForTest secret digest =
-  let (EcdsaSigningResult validBit nonce r rawS lowS compact) = ecdsaSignFixed secret digest
+  let (EcdsaSigningResult validBit nonce r rawS lowS compact) =
+    ecdsaSignFixed secret digest
   (
     validBit,
     scToBytes nonce,
@@ -560,14 +592,22 @@ candidateObservation (EcdsaCandidate validBit _ r rawS lowS) =
 --   injected candidates still execute the full point/inverse/sign/low-S path;
 --   their separate observations make those computations explicit.
 export
-ecdsaInjectedSignProbeForTest : Sc -> Array Int -> Array Int -> Int -> Array Int -> Int -> ((Array Int, Array Int), (Int, Array Int, Array Int, Array Int), (Int, Array Int, Array Int, Array Int), (Int, Array Int))
+ecdsaInjectedSignProbeForTest : Sc ->
+  Array Int ->
+  Array Int ->
+  Int ->
+  Array Int ->
+  Int ->
+  ((Array Int, Array Int), (Int, Array Int, Array Int, Array Int), (Int, Array Int, Array Int, Array Int), (Int, Array Int))
 ecdsaInjectedSignProbeForTest secret digestBytes bytes0 valid0 bytes1 valid1 =
   let () = rfc6979Require32 "ecdsaInjectedSignProbeForTest" digestBytes
   let digest = scFromBytesReduce digestBytes
-  let (Rfc6979Schedule normal0 normal1) = rfc6979NonceSchedule secret digestBytes
+  let (Rfc6979Schedule normal0 normal1) =
+    rfc6979NonceSchedule secret digestBytes
   let signed0 = signCandidate secret digest (injectedCandidate bytes0 valid0)
   let signed1 = signCandidate secret digest (injectedCandidate bytes1 valid1)
-  let (EcdsaSigningResult validBit _ _ _ _ compact) = selectSigningCandidates signed0 signed1
+  let (EcdsaSigningResult validBit _ _ _ _ compact) =
+    selectSigningCandidates signed0 signed1
   (
     (candidateBytes normal0, candidateBytes normal1),
     candidateObservation signed0,
@@ -584,29 +624,39 @@ affineToPoint (AffinePoint x y) = JPoint x y feOne
 export
 ecdsaVerifyDigest : AffinePoint -> Array Int -> EcdsaSignature -> Bool
 ecdsaVerifyDigest publicPoint digestBytes (EcdsaSignature r s) =
-  if arrayLength digestBytes /= 32 || not (publicBytesOk digestBytes 0) then False
+  if arrayLength digestBytes /= 32 || not (publicBytesOk digestBytes 0) then
+    False
+  else if scIsZero r || scIsZero s || scIsHigh s then
+    False
   else
-    if scIsZero r || scIsZero s || scIsHigh s then False
+    let digest = scFromBytesReduce digestBytes
+    let w = scInverse s
+    let u1 = scMul digest w
+    let u2 = scMul r w
+    let sum =
+      pointAddComplete
+        (scalarMultiplySecret u1 pointGenerator)
+        (scalarMultiplySecret u2 (affineToPoint publicPoint))
+    if pointIsCanonicalInfinity sum then
+      False
     else
-      let digest = scFromBytesReduce digestBytes
-      let w = scInverse s
-      let u1 = scMul digest w
-      let u2 = scMul r w
-      let sum = pointAddComplete (scalarMultiplySecret u1 pointGenerator) (scalarMultiplySecret u2 (affineToPoint publicPoint))
-      if pointIsCanonicalInfinity sum then False
-      else
-        let (AffinePoint x _) = secretAffine sum
-        scEqual (scFromBytesReduce (feToBytes x)) r
+      let (AffinePoint x _) = secretAffine sum
+      scEqual (scFromBytesReduce (feToBytes x)) r
 
 -- | Test-only raw-component route. It bypasses compact parsing so the focused
 --   gate can prove the verification boundary independently rejects high-S.
 export
-ecdsaVerifyRawForTest : AffinePoint -> Array Int -> Array Int -> Array Int -> Bool
-ecdsaVerifyRawForTest publicPoint digest rBytes sBytes = match scFromBytes rBytes
-  Err _ => False
-  Ok r => match scFromBytes sBytes
+ecdsaVerifyRawForTest : AffinePoint ->
+  Array Int ->
+  Array Int ->
+  Array Int ->
+  Bool
+ecdsaVerifyRawForTest publicPoint digest rBytes sBytes =
+  match scFromBytes rBytes
     Err _ => False
-    Ok s => ecdsaVerifyDigest publicPoint digest (EcdsaSignature r s)
+    Ok r => match scFromBytes sBytes
+      Err _ => False
+      Ok s => ecdsaVerifyDigest publicPoint digest (EcdsaSignature r s)
 
 -- | Wycheproof's pinned P1363 corpus carries SEC 1 uncompressed public keys.
 --   This public-input parser is test-facing only; the consumer API remains the
@@ -614,20 +664,21 @@ ecdsaVerifyRawForTest publicPoint digest rBytes sBytes = match scFromBytes rByte
 export
 pointFromUncompressedForTest : Array Int -> Result String AffinePoint
 pointFromUncompressedForTest bytes =
-  if arrayLength bytes /= 65 then Err "secp256k1.test: expected 65-byte uncompressed point"
+  if arrayLength bytes /= 65 then
+    Err "secp256k1.test: expected 65-byte uncompressed point"
+  else if bytes[0] /= 4 then
+    Err "secp256k1.test: expected uncompressed prefix 0x04"
   else
-    if bytes[0] /= 4 then Err "secp256k1.test: expected uncompressed prefix 0x04"
-    else
-      let xBytes = arrayMake 32 0
-      let yBytes = arrayMake 32 0
-      let () = copyCompactComponent bytes xBytes 1 0
-      let () = copyCompactComponent bytes yBytes 33 0
-      match feFromBytes xBytes
-        Err message => Err "secp256k1.test: invalid x: \{message}"
-        Ok x => match feFromBytes yBytes
-          Err message => Err "secp256k1.test: invalid y: \{message}"
-          Ok y =>
-            if feEqual (feSquare y) (curveRhs x) then
-              Ok (AffinePoint x y)
-            else
-              Err "secp256k1.test: point is not on secp256k1"
+    let xBytes = arrayMake 32 0
+    let yBytes = arrayMake 32 0
+    let () = copyCompactComponent bytes xBytes 1 0
+    let () = copyCompactComponent bytes yBytes 33 0
+    match feFromBytes xBytes
+      Err message => Err "secp256k1.test: invalid x: \{message}"
+      Ok x => match feFromBytes yBytes
+        Err message => Err "secp256k1.test: invalid y: \{message}"
+        Ok y =>
+          if feEqual (feSquare y) (curveRhs x) then
+            Ok (AffinePoint x y)
+          else
+            Err "secp256k1.test: point is not on secp256k1"

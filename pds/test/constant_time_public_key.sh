@@ -22,12 +22,12 @@ fail() { printf 'not ok %s - %s\n' "$((checked + 1))" "$1" >&2; exit 1; }
 # it cannot silently widen the trusted callee set.
 source_closure_ok() {
   tree=$1
-  [ "$(cksum "$tree/pds/lib/sign.mdk" | awk '{print $1 " " $2}')" = '2769643849 3846' ] || return 1
-  [ "$(cksum "$tree/pds/lib/secp256k1.mdk" | awk '{print $1 " " $2}')" = '1959740629 24445' ] || return 1
-  [ "$(cksum "$tree/pds/lib/scalar.mdk" | awk '{print $1 " " $2}')" = '2693440632 31918' ] || return 1
-  [ "$(cksum "$tree/pds/lib/field.mdk" | awk '{print $1 " " $2}')" = '2128046436 26463' ] || return 1
+  [ "$(cksum "$tree/pds/lib/sign.mdk" | awk '{print $1 " " $2}')" = '3175129806 3842' ] || return 1
+  [ "$(cksum "$tree/pds/lib/secp256k1.mdk" | awk '{print $1 " " $2}')" = '1691956410 24617' ] || return 1
+  [ "$(cksum "$tree/pds/lib/scalar.mdk" | awk '{print $1 " " $2}')" = '771369044 31975' ] || return 1
+  [ "$(cksum "$tree/pds/lib/field.mdk" | awk '{print $1 " " $2}')" = '3840689225 26477' ] || return 1
 
-  grep -F -q 'if i >= 256 then r0' "$tree/pds/lib/secp256k1.mdk" || return 1
+  tr -s '[:space:]' ' ' < "$tree/pds/lib/secp256k1.mdk" | grep -F -q 'if i >= 256 then r0' || return 1
   grep -F -q 'let added = pointAddComplete r0 r1' "$tree/pds/lib/secp256k1.mdk" || return 1
   grep -F -q 'let doubled0 = pointDoubleComplete r0' "$tree/pds/lib/secp256k1.mdk" || return 1
   grep -F -q 'let doubled1 = pointDoubleComplete r1' "$tree/pds/lib/secp256k1.mdk" || return 1
@@ -120,7 +120,7 @@ pass 'source closure covers ingress, scalar/field reducers, point ladder, and pu
 
 # Contract mutations 1--6, 14, and 15.  Each mutation is confined to the
 # disposable copy, must turn the closed audit red, and is restored byte-exactly.
-apply_mutation 'M01' "$WORK/pds/lib/secp256k1.mdk" 'if i >= 256 then r0' 's/if i >= 256 then r0/if i >= 255 then r0/'
+apply_mutation 'M01' "$WORK/pds/lib/secp256k1.mdk" 'scalarLadder bytes r0 r1 i =' 's/(scalarLadder bytes r0 r1 i =\n  if i >= )256/${1}255/'
 expect_source_red 'M01 256-to-255 ladder schedule'
 
 apply_mutation 'M02' "$WORK/pds/lib/secp256k1.mdk" 'let next0 = pointSelect bit doubled0 added' 's/let next0 = pointSelect bit doubled0 added/let next0 = if bit == 0 then doubled0 else added/'

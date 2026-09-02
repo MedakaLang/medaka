@@ -339,7 +339,14 @@ if [ ! -f "$DOMLEDGER" ]; then
   FAIL=1
 else
   # derived pure set: every extern whose signature has no <Cap> capability annotation.
-  grep -E '^extern [A-Za-z_][A-Za-z0-9_]* :' "$RUNTIME" | grep -vE '<[A-Z]' \
+  # A wide signature wraps after a trailing `->` onto indented continuation
+  # lines, so the capability annotation may sit below the `extern` line: join
+  # each declaration into one line before looking for `<Cap>`.
+  awk '/^extern /{if (buf != "") print buf; buf = $0; next}
+       /^[ \t]/ && buf != "" {buf = buf " " $0; next}
+       {if (buf != "") print buf; buf = ""}
+       END {if (buf != "") print buf}' "$RUNTIME" \
+    | grep -E '^extern [A-Za-z_][A-Za-z0-9_]* :' | grep -vE '<[A-Z]' \
     | awk '{print $2}' | sort -u > "$WORK/pure.txt"
   N_PURE="$(wc -l < "$WORK/pure.txt" | tr -d ' ')"
 

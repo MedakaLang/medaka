@@ -55,11 +55,32 @@ main = driveModules runEmit
 runEmit : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
 runEmit runtimeDecls coreDecls modules =
   let (coreMangled, modulesMangled) = mangleUnits coreDecls modules
-  let (coreD, modules2) = elaborateModules runtimeDecls coreMangled modulesMangled
+  let (coreD, modules2) =
+    elaborateModules runtimeDecls coreMangled modulesMangled
   let allDecls = coreD ++ flatMap snd modules2
-  let _ = preludeReturnPosDictNames coreD allDecls ++ preludeArgPosDictNames coreD allDecls ++ constrainedSigNames allDecls
-  let input = makeEmitInput (returnsSelfTable allDecls) (selfFnParamTable allDecls) (methodIfaceTable allDecls) (methodConstraintIfaces allDecls) (ctorFieldTypeNames allDecls) (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls) (mainTypeIsUnit ()) (mainTypeIsFloat ()) 0 [] [] "" (declaredRecordFieldOrders allDecls) (validateFfiExternTypeNames (checkedFfiExternTypeNamesModules modules2)) (ifaceImplHeadTable allDecls)
-  let (text, _) = emitProgramRecord input (lowerProgramEmit TargetNative allDecls)
+  let _ =
+    preludeReturnPosDictNames coreD allDecls
+      ++ preludeArgPosDictNames coreD allDecls
+      ++ constrainedSigNames allDecls
+  let input =
+    makeEmitInput
+      (returnsSelfTable allDecls)
+      (selfFnParamTable allDecls)
+      (methodIfaceTable allDecls)
+      (methodConstraintIfaces allDecls)
+      (ctorFieldTypeNames allDecls)
+      (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
+      (mainTypeIsUnit ())
+      (mainTypeIsFloat ())
+      0
+      []
+      []
+      ""
+      (declaredRecordFieldOrders allDecls)
+      (validateFfiExternTypeNames (checkedFfiExternTypeNamesModules modules2))
+      (ifaceImplHeadTable allDecls)
+  let (text, _) =
+    emitProgramRecord input (lowerProgramEmit TargetNative allDecls)
   putStr text
 -- Module-qualify module-PRIVATE top-level functions whose bare name collides
 -- across units, BEFORE elaborateModules flattens the boundaries away.  Without

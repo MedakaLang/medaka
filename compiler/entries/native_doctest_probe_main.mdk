@@ -49,7 +49,15 @@ runProbe target = match readFile target
     let examples = extractExamples (collectComments tsrc)
     match examples
       [] => putStrLn "  (no doctests found)"
-      _ => report target (runNativeDoctests target tsrc userDecls examples (buildSynthResults examples))
+      _ =>
+        report
+          target
+          (runNativeDoctests
+            target
+            tsrc
+            userDecls
+            examples
+            (buildSynthResults examples))
 
 -- Same rendering as `medaka test`'s own doctest phase — deliberately, through
 -- the SAME printer (`tools/doctest.mdk`): the point of Stage 3's differential is
@@ -60,5 +68,7 @@ report target result =
   let _ = putStrLn ("running native doctests in " ++ target)
   let _ = printDoctestDetails target (runDetails result)
   let total = runPassed result + runFailed result + runErrors result
-  let _ = putStrLn "\n\{target}: \{intToString (runPassed result)}/\{intToString total} passed\{doctestFailSuffix result}"
+  let _ =
+    putStrLn
+      "\n\{target}: \{intToString (runPassed result)}/\{intToString total} passed\{doctestFailSuffix result}"
   if runFailed result == 0 && runErrors result == 0 then () else exit 1

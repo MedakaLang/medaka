@@ -1,5 +1,5 @@
 # META
-source_lines=74
+source_lines=76
 stages=DESUGAR,MARK
 # SOURCE
 {- | Output to standard error, debug printing, and helpers for files and
@@ -58,7 +58,9 @@ inspect x = putStrLn (debug x)
 splitLines : String -> List String
 splitLines s = match stringIndexOf "\n" s
   None => if s == "" then [] else [stripCR s]
-  Some i => stripCR (stringSlice 0 i s) :: splitLines (stringSlice (i + 1) (stringLength s) s)
+  Some i =>
+    stripCR (stringSlice 0 i s)
+      :: splitLines (stringSlice (i + 1) (stringLength s) s)
 
 {- | The lines of a file, or `Err` with the host's message when the file
    cannot be read.

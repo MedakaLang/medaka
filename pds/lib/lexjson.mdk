@@ -105,9 +105,11 @@ lexJsonObject pairs =
   else if n == 1 && fst pairs[0] == "$bytes" then
     lexJsonBytes (snd pairs[0])
   else if hasKey "$link" pairs 0 n then
-    Err "lexjson: '$link' key present on a map that is not a single-key link object"
+    Err
+      "lexjson: '$link' key present on a map that is not a single-key link object"
   else if hasKey "$bytes" pairs 0 n then
-    Err "lexjson: '$bytes' key present on a map that is not a single-key bytes object"
+    Err
+      "lexjson: '$bytes' key present on a map that is not a single-key bytes object"
   else
     map DcMap (lexJsonFields pairs 0 n)
 
@@ -136,7 +138,10 @@ lexJsonBytes (JString text) = match padBase64 text
         Err "lexjson: '$bytes' value is not canonical base64"
 lexJsonBytes _ = Err "lexjson: '$bytes' value must be a string"
 
-lexJsonFields : Array (String, Json) -> Int -> Int -> Result String (List (String, DagCbor))
+lexJsonFields : Array (String, Json) ->
+  Int ->
+  Int ->
+  Result String (List (String, DagCbor))
 lexJsonFields pairs i n
   | i >= n = Ok []
   | otherwise = match lexJsonToDagCbor (snd pairs[i])

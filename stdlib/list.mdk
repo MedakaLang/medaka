@@ -91,7 +91,8 @@ replicate n x = replicateDbl n x
 -- argument geometrically, so the call chain is `O(log k)` deep.
 replicateDbl : Int -> a -> List a
 replicateDbl k x =
-  if k <= 0 then []
+  if k <= 0 then
+    []
   else
     let h = replicateDbl (k / 2) x
     if isEven k then h ++ h else x :: h ++ h
@@ -143,7 +144,7 @@ unfold gen seed = match gen seed
 export
 head : List a -> Option a
 head [] = None
-head (x::_) = Some x
+head (x :: _) = Some x
 
 {- | Everything after the first element, or `None` when the list is empty.
 
@@ -154,7 +155,7 @@ head (x::_) = Some x
 export
 tail : List a -> Option (List a)
 tail [] = None
-tail (_::xs) = Some xs
+tail (_ :: xs) = Some xs
 
 -- > tail ([] : List Int)
 -- None
@@ -166,7 +167,7 @@ tail (_::xs) = Some xs
 export
 uncons : List a -> Option (a, List a)
 uncons [] = None
-uncons (x::xs) = Some (x, xs)
+uncons (x :: xs) = Some (x, xs)
 
 -- > uncons [1]
 -- Some (1, [])
@@ -181,7 +182,7 @@ export
 last : List a -> Option a
 last [] = None
 last [x] = Some x
-last (x::xs) = last xs
+last (x :: xs) = last xs
 
 -- > last ([] : List Int)
 -- None
@@ -195,8 +196,8 @@ last (x::xs) = last xs
 export
 init : List a -> Option (List a)
 init [] = None
-init (x::[]) = Some []
-init (x::xs) = map (x :: _) (init xs)
+init (x :: []) = Some []
+init (x :: xs) = map (x :: _) (init xs)
 
 -- > init ([] : List Int)
 -- None
@@ -213,8 +214,8 @@ init (x::xs) = map (x :: _) (init xs)
 export
 get : Int -> List a -> Option a
 get _ [] = None
-get 0 (x::_) = Some x
-get i (_::xs) = get (i - 1) xs
+get 0 (x :: _) = Some x
+get i (_ :: xs) = get (i - 1) xs
 
 -- > get (-1) [1, 2]
 -- None
@@ -232,7 +233,7 @@ reverse : List a -> List a
 reverse xs = go xs []
   where
     go [] acc = acc
-    go (y::ys) acc = go ys (y::acc)
+    go (y :: ys) acc = go ys (y :: acc)
 
 {- | The list with `sep` placed between each pair of adjacent elements.
 
@@ -242,7 +243,7 @@ export
 intersperse : a -> List a -> List a
 intersperse _ [] = []
 intersperse _ [x] = [x]
-intersperse sep (x::xs) = x :: sep :: intersperse sep xs
+intersperse sep (x :: xs) = x :: sep :: intersperse sep xs
 
 {- | The inner lists joined into one, with `sep` between each pair.
 
@@ -264,8 +265,8 @@ intercalate sep xss = flat (intersperse sep xss)
 export
 transpose : List (List a) -> List (List a)
 transpose [] = []
-transpose ([]::xss) = transpose xss
-transpose ((x::xs)::xss) =
+transpose ([] :: xss) = transpose xss
+transpose ((x :: xs) :: xss) =
   (x :: filterMap head xss) :: transpose (xs :: filterMap tail xss)
 
 {- | Every subsequence of the list: each subset of its elements, in their
@@ -278,7 +279,7 @@ transpose ((x::xs)::xss) =
 export
 subsequences : List a -> List (List a)
 subsequences [] = [[]]
-subsequences (x::xs) = flatMap (sub => [sub, x::sub]) (subsequences xs)
+subsequences (x :: xs) = flatMap (sub => [sub, x :: sub]) (subsequences xs)
 
 {- | Every ordering of the list's elements.
 
@@ -296,7 +297,7 @@ permutations xs =
 -- Each element paired with the list of the others, original order preserved.
 selections : List a -> List (a, List a)
 selections [] = []
-selections (x::xs) = (x, xs) :: map ((y, ys) => (y, x::ys)) (selections xs)
+selections (x :: xs) = (x, xs) :: map ((y, ys) => (y, x :: ys)) (selections xs)
 
 -- # Folds and scans
 
@@ -309,7 +310,7 @@ selections (x::xs) = (x, xs) :: map ((y, ys) => (y, x::ys)) (selections xs)
 export
 scanLeft : (b -> a -> <e> b) -> b -> List a -> <e> List b
 scanLeft _ z [] = [z]
-scanLeft f z (x::xs) = z :: scanLeft f (f z x) xs
+scanLeft f z (x :: xs) = z :: scanLeft f (f z x) xs
 
 {- | Every intermediate value of a right fold, ending with the seed.
 
@@ -318,8 +319,8 @@ scanLeft f z (x::xs) = z :: scanLeft f (f z x) xs
 export
 scanRight : (a -> b -> <e> b) -> b -> List a -> <e> List b
 scanRight _ z [] = [z]
-scanRight f z (x::xs) = match scanRight f z xs
-  q::qs => f x q :: q::qs
+scanRight f z (x :: xs) = match scanRight f z xs
+  q :: qs => f x q :: q :: qs
   [] => [f x z]
 
 {- | A left fold that uses the first element as the seed.
@@ -331,10 +332,10 @@ scanRight f z (x::xs) = match scanRight f z xs
 export
 reduce : (a -> a -> <e> a) -> List a -> <e> Option a
 reduce _ [] = None
-reduce f (x::xs) = Some (go x xs)
+reduce f (x :: xs) = Some (go x xs)
   where
     go acc [] = acc
-    go acc (y::rest) = go (f acc y) rest
+    go acc (y :: rest) = go (f acc y) rest
 
 -- > reduce (x y => if x > y then x else y) [3, 1, 2]
 -- Some 3
@@ -390,7 +391,7 @@ findIndex : (a -> <e> Bool) -> List a -> <e> Option Int
 findIndex p xs = go 0 xs
   where
     go _ [] = None
-    go i (x::rest)
+    go i (x :: rest)
       | p x = Some i
       | otherwise = go (i + 1) rest
 
@@ -403,7 +404,7 @@ findIndices : (a -> <e> Bool) -> List a -> <e> List Int
 findIndices p xs = go 0 xs
   where
     go _ [] = []
-    go i (x::rest)
+    go i (x :: rest)
       | p x = i :: go (i + 1) rest
       | otherwise = go (i + 1) rest
 
@@ -438,7 +439,7 @@ elemIndices x xs = findIndices (== x) xs
 export
 lookup : Eq k => k -> List (k, v) -> Option v
 lookup _ [] = None
-lookup key ((k, v)::rest)
+lookup key ((k, v) :: rest)
   | key == k = Some v
   | otherwise = lookup key rest
 
@@ -452,7 +453,7 @@ lookup key ((k, v)::rest)
 export
 findMap : (a -> <e> Option b) -> List a -> <e> Option b
 findMap _ [] = None
-findMap f (x::rest) = match f x
+findMap f (x :: rest) = match f x
   Some y => Some y
   None => findMap f rest
 
@@ -471,7 +472,7 @@ mapWithIndex : (Int -> a -> <e> b) -> List a -> <e> List b
 mapWithIndex f xs = go 0 xs
   where
     go _ [] = []
-    go i (x::rest) = f i x :: go (i + 1) rest
+    go i (x :: rest) = f i x :: go (i + 1) rest
 
 -- > mapWithIndex (i x => i + x) [10, 20]
 -- [10, 21]
@@ -494,10 +495,10 @@ indexed xs = mapWithIndex (i x => (i, x)) xs
 export
 mapAccumL : (s -> a -> <e> (s, b)) -> s -> List a -> <e> (s, List b)
 mapAccumL _ s [] = (s, [])
-mapAccumL f s (x::xs) =
+mapAccumL f s (x :: xs) =
   let (s2, y) = f s x
   let (s3, ys) = mapAccumL f s2 xs
-  (s3, y::ys)
+  (s3, y :: ys)
 
 {- | Like `mapAccumL`, but threads the state from right to left.
 
@@ -508,10 +509,10 @@ mapAccumL f s (x::xs) =
 export
 mapAccumR : (s -> a -> <e> (s, b)) -> s -> List a -> <e> (s, List b)
 mapAccumR _ s [] = (s, [])
-mapAccumR f s (x::xs) =
+mapAccumR f s (x :: xs) =
   let (s2, ys) = mapAccumR f s xs
   let (s3, y) = f s2 x
-  (s3, y::ys)
+  (s3, y :: ys)
 
 -- # Positional edits
 
@@ -529,8 +530,8 @@ mapAccumR f s (x::xs) =
 export
 insertAt : Int -> a -> List a -> List a
 insertAt _ x [] = [x]
-insertAt i x (y::rest)
-  | i <= 0 = x :: y::rest
+insertAt i x (y :: rest)
+  | i <= 0 = x :: y :: rest
   | otherwise = y :: insertAt (i - 1) x rest
 
 -- > insertAt 0 9 [1, 2]
@@ -547,9 +548,9 @@ insertAt i x (y::rest)
 export
 updateAt : Int -> a -> List a -> List a
 updateAt _ _ [] = []
-updateAt i x (y::rest)
-  | i < 0 = y::rest
-  | i == 0 = x::rest
+updateAt i x (y :: rest)
+  | i < 0 = y :: rest
+  | i == 0 = x :: rest
   | otherwise = y :: updateAt (i - 1) x rest
 
 -- > updateAt 7 9 [1, 2]
@@ -564,8 +565,8 @@ updateAt i x (y::rest)
 export
 removeAt : Int -> List a -> List a
 removeAt _ [] = []
-removeAt i (y::rest)
-  | i < 0 = y::rest
+removeAt i (y :: rest)
+  | i < 0 = y :: rest
   | i == 0 = rest
   | otherwise = y :: removeAt (i - 1) rest
 
@@ -581,7 +582,7 @@ removeAt i (y::rest)
 export
 take : Int -> List a -> List a
 take _ [] = []
-take n (x::xs)
+take n (x :: xs)
   | n <= 0 = []
   | otherwise = x :: take (n - 1) xs
 
@@ -592,7 +593,7 @@ take n (x::xs)
 export
 drop : Int -> List a -> List a
 drop _ [] = []
-drop n (xs@(_::rest))
+drop n (xs@(_ :: rest))
   | n <= 0 = xs
   | otherwise = drop (n - 1) rest
 
@@ -603,7 +604,7 @@ drop n (xs@(_::rest))
 export
 takeWhile : (a -> <e> Bool) -> List a -> <e> List a
 takeWhile _ [] = []
-takeWhile p (x::xs)
+takeWhile p (x :: xs)
   | p x = x :: takeWhile p xs
   | otherwise = []
 
@@ -621,7 +622,7 @@ takeWhile p (x::xs)
 export
 dropWhile : (a -> <e> Bool) -> List a -> <e> List a
 dropWhile _ [] = []
-dropWhile p (xs@(x::rest))
+dropWhile p (xs@(x :: rest))
   | p x = dropWhile p rest
   | otherwise = xs
 
@@ -641,8 +642,8 @@ dropWhile p (xs@(x::rest))
 export
 span : (a -> <e> Bool) -> List a -> <e> (List a, List a)
 span _ [] = ([], [])
-span p (xs@(x::rest))
-  | p x = let (a, b) = span p rest in (x::a, b)
+span p (xs@(x :: rest))
+  | p x = let (a, b) = span p rest in (x :: a, b)
   | otherwise = ([], xs)
 
 -- > span (x => x < 9) [1, 2, 3]
@@ -679,9 +680,9 @@ break p xs = span (x => not (p x)) xs
 export
 splitAt : Int -> List a -> (List a, List a)
 splitAt _ [] = ([], [])
-splitAt n (xs@(x::rest))
+splitAt n (xs@(x :: rest))
   | n <= 0 = ([], xs)
-  | otherwise = let (a, b) = splitAt (n - 1) rest in (x::a, b)
+  | otherwise = let (a, b) = splitAt (n - 1) rest in (x :: a, b)
 
 {- | The elements at indices `[lo, hi)`.
 
@@ -707,7 +708,7 @@ sliceClamped lo hi xs = drop lo (take hi xs)
 export
 chunks : Int -> List a -> List (List a)
 chunks _ [] = []
-chunks n (xs@(_::_))
+chunks n (xs@(_ :: _))
   | n <= 0 = []
   | otherwise = take n xs :: chunks n (drop n xs)
 
@@ -763,7 +764,7 @@ split sep xs = go xs
       | startsWith sep ys = Some i
       | otherwise = findSubTail i ys
     findSubTail _ [] = None
-    findSubTail i (_::rest) = findSub (i + 1) rest
+    findSubTail i (_ :: rest) = findSub (i + 1) rest
 
 -- > split [0, 0] [1, 0, 0, 2]
 -- [[1], [2]]
@@ -791,7 +792,7 @@ export
 startsWith : Eq a => List a -> List a -> Bool
 startsWith [] _ = True
 startsWith _ [] = False
-startsWith (p::ps) (x::xs) = p == x && startsWith ps xs
+startsWith (p :: ps) (x :: xs) = p == x && startsWith ps xs
 
 -- > startsWith ([] : List Int) [1]
 -- True
@@ -817,7 +818,7 @@ endsWith suffix xs = startsWith (reverse suffix) (reverse xs)
 export
 containsSub : Eq a => List a -> List a -> Bool
 containsSub sub [] = startsWith sub []
-containsSub sub (xs@(_::rest))
+containsSub sub (xs@(_ :: rest))
   | startsWith sub xs = True
   | otherwise = containsSub sub rest
 
@@ -845,7 +846,7 @@ sortBy cmp xs =
 merge : (a -> a -> <e> Ordering) -> List a -> List a -> <e> List a
 merge _ [] ys = ys
 merge _ xs [] = xs
-merge cmp (xs@(x::xs')) (ys@(y::ys')) = match cmp x y
+merge cmp (xs@(x :: xs')) (ys@(y :: ys')) = match cmp x y
   Gt => y :: merge cmp xs ys'
   _ => x :: merge cmp xs' ys
 
@@ -884,9 +885,9 @@ nubBy : (a -> a -> <e> Bool) -> List a -> <e> List a
 nubBy same xs = go xs []
   where
     go [] _ = []
-    go (x::rest) seen
+    go (x :: rest) seen
       | any (s => same x s) seen = go rest seen
-      | otherwise = x :: go rest (x::seen)
+      | otherwise = x :: go rest (x :: seen)
 
 {- | The list with duplicate elements removed.
 
@@ -908,7 +909,7 @@ nub xs = nubBy (==) xs
 export
 deleteBy : (a -> a -> <e> Bool) -> a -> List a -> <e> List a
 deleteBy _ _ [] = []
-deleteBy same x (y::rest)
+deleteBy same x (y :: rest)
   | same x y = rest
   | otherwise = y :: deleteBy same x rest
 
@@ -940,9 +941,9 @@ delete x xs = deleteBy (==) x xs
 export
 groupBy : (a -> a -> <e> Bool) -> List a -> <e> List (List a)
 groupBy _ [] = []
-groupBy same (x::xs) =
+groupBy same (x :: xs) =
   let (grp, rest) = span (y => same x y) xs
-  (x::grp) :: groupBy same rest
+  (x :: grp) :: groupBy same rest
 
 {- | The list split into runs of adjacent equal elements.
 
@@ -961,9 +962,9 @@ group xs = groupBy (==) xs
 export
 partition : (a -> <e> Bool) -> List a -> <e> (List a, List a)
 partition _ [] = ([], [])
-partition p (x::xs) =
+partition p (x :: xs) =
   let (yes, no) = partition p xs
-  if p x then (x::yes, no) else (yes, x::no)
+  if p x then (x :: yes, no) else (yes, x :: no)
 
 {- | The values inside the `Some`s, with the `None`s dropped.
 
@@ -972,8 +973,8 @@ partition p (x::xs) =
 export
 somes : List (Option a) -> List a
 somes [] = []
-somes ((Some x)::rest) = x :: somes rest
-somes (None::rest) = somes rest
+somes ((Some x) :: rest) = x :: somes rest
+somes (None :: rest) = somes rest
 
 -- > somes ([] : List (Option Int))
 -- []
@@ -985,8 +986,8 @@ somes (None::rest) = somes rest
 export
 oks : List (Result e a) -> List a
 oks [] = []
-oks ((Ok x)::rest) = x :: oks rest
-oks ((Err _)::rest) = oks rest
+oks ((Ok x) :: rest) = x :: oks rest
+oks ((Err _) :: rest) = oks rest
 
 {- | The values inside the `Err`s, with the `Ok`s dropped.
 
@@ -995,8 +996,8 @@ oks ((Err _)::rest) = oks rest
 export
 errs : List (Result e a) -> List e
 errs [] = []
-errs ((Err e)::rest) = e :: errs rest
-errs ((Ok _)::rest) = errs rest
+errs ((Err e) :: rest) = e :: errs rest
+errs ((Ok _) :: rest) = errs rest
 
 {- | The `Err` values and the `Ok` values, as two lists.
 
@@ -1005,12 +1006,12 @@ errs ((Ok _)::rest) = errs rest
 export
 partitionResults : List (Result e a) -> (List e, List a)
 partitionResults [] = ([], [])
-partitionResults ((Ok x)::rest) =
+partitionResults ((Ok x) :: rest) =
   let (es, xs) = partitionResults rest
-  (es, x::xs)
-partitionResults ((Err e)::rest) =
+  (es, x :: xs)
+partitionResults ((Err e) :: rest) =
   let (es, xs) = partitionResults rest
-  (e::es, xs)
+  (e :: es, xs)
 
 {- | Each distinct element paired with the number of times it occurs.
 
@@ -1023,10 +1024,10 @@ tally : Eq a => List a -> List (a, Int)
 tally xs = go xs []
   where
     go [] acc = acc
-    go (x::rest) acc = go rest (bump x acc)
+    go (x :: rest) acc = go rest (bump x acc)
     bump x [] = [(x, 1)]
-    bump x ((k, c)::kvs)
-      | k == x = (k, c + 1)::kvs
+    bump x ((k, c) :: kvs)
+      | k == x = (k, c + 1) :: kvs
       | otherwise = (k, c) :: bump x kvs
 
 -- # Zipping
@@ -1042,7 +1043,7 @@ export
 zip : List a -> List b -> List (a, b)
 zip [] _ = []
 zip _ [] = []
-zip (x::xs) (y::ys) = (x, y) :: zip xs ys
+zip (x :: xs) (y :: ys) = (x, y) :: zip xs ys
 
 -- > zip [] [1, 2]
 -- []
@@ -1058,7 +1059,7 @@ zip3 : List a -> List b -> List c -> List (a, b, c)
 zip3 [] _ _ = []
 zip3 _ [] _ = []
 zip3 _ _ [] = []
-zip3 (x::xs) (y::ys) (z::zs) = (x, y, z) :: zip3 xs ys zs
+zip3 (x :: xs) (y :: ys) (z :: zs) = (x, y, z) :: zip3 xs ys zs
 
 -- > zip3 [1, 2, 3] [4, 5] [6]
 -- [(1, 4, 6)]
@@ -1074,7 +1075,7 @@ export
 zipWith : (a -> b -> <e> c) -> List a -> List b -> <e> List c
 zipWith _ [] _ = []
 zipWith _ _ [] = []
-zipWith f (x::xs) (y::ys) = f x y :: zipWith f xs ys
+zipWith f (x :: xs) (y :: ys) = f x y :: zipWith f xs ys
 
 -- > zipWith (x y => x * y) [1, 2, 3, 4] [10, 20]
 -- [10, 40]
@@ -1091,7 +1092,7 @@ zip4 [] _ _ _ = []
 zip4 _ [] _ _ = []
 zip4 _ _ [] _ = []
 zip4 _ _ _ [] = []
-zip4 (w::ws) (x::xs) (y::ys) (z::zs) = (w, x, y, z) :: zip4 ws xs ys zs
+zip4 (w :: ws) (x :: xs) (y :: ys) (z :: zs) = (w, x, y, z) :: zip4 ws xs ys zs
 
 -- > zip4 [1, 2] [3] [5, 6] [7, 8]
 -- [(1, 3, 5, 7)]
@@ -1107,7 +1108,7 @@ zipWith3 : (a -> b -> c -> <e> d) -> List a -> List b -> List c -> <e> List d
 zipWith3 _ [] _ _ = []
 zipWith3 _ _ [] _ = []
 zipWith3 _ _ _ [] = []
-zipWith3 f (x::xs) (y::ys) (z::zs) = f x y z :: zipWith3 f xs ys zs
+zipWith3 f (x :: xs) (y :: ys) (z :: zs) = f x y z :: zipWith3 f xs ys zs
 
 -- > zipWith3 (x y z => x + y + z) [1, 2, 3] [10, 20] [100]
 -- [111]
@@ -1119,7 +1120,7 @@ zipWith3 f (x::xs) (y::ys) (z::zs) = f x y z :: zipWith3 f xs ys zs
 export
 unzip : List (a, b) -> (List a, List b)
 unzip [] = ([], [])
-unzip ((x, y)::xys) = let (xs, ys) = unzip xys in (x::xs, y::ys)
+unzip ((x, y) :: xys) = let (xs, ys) = unzip xys in (x :: xs, y :: ys)
 
 -- > unzip []
 -- ([], [])
@@ -1131,8 +1132,8 @@ unzip ((x, y)::xys) = let (xs, ys) = unzip xys in (x::xs, y::ys)
 export
 unzip3 : List (a, b, c) -> (List a, List b, List c)
 unzip3 [] = ([], [], [])
-unzip3 ((x, y, z)::rest) =
-  let (xs, ys, zs) = unzip3 rest in (x::xs, y::ys, z::zs)
+unzip3 ((x, y, z) :: rest) =
+  let (xs, ys, zs) = unzip3 rest in (x :: xs, y :: ys, z :: zs)
 
 -- > unzip3 ([] : List (Int, Int, Int))
 -- ([], [], [])
@@ -1146,7 +1147,7 @@ unzip3 ((x, y, z)::rest) =
 isSorted : Ord a => List a -> Bool
 isSorted [] = True
 isSorted [_] = True
-isSorted (x::y::rest) = lte x y && isSorted (y::rest)
+isSorted (x :: y :: rest) = lte x y && isSorted (y :: rest)
 
 prop "reverse is an involution" (xs : List Int) = eq (reverse (reverse xs)) xs
 

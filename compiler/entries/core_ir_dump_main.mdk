@@ -19,9 +19,13 @@ import ir.core_ir_sexp.{cprogramToSexp}
 
 main = match args ()
   [targetPath] => withTarget targetPath
-  _ => ePutStrLn "usage: medaka run compiler/entries/core_ir_dump_main.mdk <file.mdk>"
+  _ =>
+    ePutStrLn
+      "usage: medaka run compiler/entries/core_ir_dump_main.mdk <file.mdk>"
 
 withTarget : String -> <IO> Unit
 withTarget targetPath = match readFile targetPath
-  Ok src => putStrLn (cprogramToSexp (lowerProgram (annotateProgram (desugar (parse src)))))
+  Ok src =>
+    putStrLn
+      (cprogramToSexp (lowerProgram (annotateProgram (desugar (parse src)))))
   Err msg => ePutStrLn msg

@@ -83,7 +83,7 @@ headerValue (Header _ value) = arrayCopy value
 
 copyHeaders : List Header -> List Header
 copyHeaders [] = []
-copyHeaders ((Header name value)::rest) =
+copyHeaders ((Header name value) :: rest) =
   Header name (arrayCopy value) :: copyHeaders rest
 
 export
@@ -133,24 +133,25 @@ lowerAscii input start end =
   fromUtf8 (arrayMakeWith (end - start) (i => lowerByte input[start + i]))
 
 isTokenByte : Int -> Bool
-isTokenByte byte = byte >= 48 && byte <= 57
-  || byte >= 65 && byte <= 90
-  || byte >= 97 && byte <= 122
-  || byte == 33
-  || byte == 35
-  || byte == 36
-  || byte == 37
-  || byte == 38
-  || byte == 39
-  || byte == 42
-  || byte == 43
-  || byte == 45
-  || byte == 46
-  || byte == 94
-  || byte == 95
-  || byte == 96
-  || byte == 124
-  || byte == 126
+isTokenByte byte =
+  byte >= 48 && byte <= 57
+    || byte >= 65 && byte <= 90
+    || byte >= 97 && byte <= 122
+    || byte == 33
+    || byte == 35
+    || byte == 36
+    || byte == 37
+    || byte == 38
+    || byte == 39
+    || byte == 42
+    || byte == 43
+    || byte == 45
+    || byte == 46
+    || byte == 94
+    || byte == 95
+    || byte == 96
+    || byte == 124
+    || byte == 126
 
 allToken : Array Int -> Int -> Int -> Bool
 allToken input pos end =
@@ -160,40 +161,52 @@ allToken input pos end =
     isTokenByte input[pos] && allToken input (pos + 1) end
 
 isHexByte : Int -> Bool
-isHexByte byte = byte >= 48 && byte <= 57
-  || byte >= 65 && byte <= 70
-  || byte >= 97 && byte <= 102
+isHexByte byte =
+  byte >= 48 && byte <= 57
+    || byte >= 65 && byte <= 70
+    || byte >= 97 && byte <= 102
 
 isUnreservedByte : Int -> Bool
-isUnreservedByte byte = byte >= 48 && byte <= 57
-  || byte >= 65 && byte <= 90
-  || byte >= 97 && byte <= 122
-  || byte == 45
-  || byte == 46
-  || byte == 95
-  || byte == 126
+isUnreservedByte byte =
+  byte >= 48 && byte <= 57
+    || byte >= 65 && byte <= 90
+    || byte >= 97 && byte <= 122
+    || byte == 45
+    || byte == 46
+    || byte == 95
+    || byte == 126
 
 isSubDelimiterByte : Int -> Bool
-isSubDelimiterByte byte = byte == 33
-  || byte == 36
-  || byte == 38
-  || byte == 39
-  || byte == 40
-  || byte == 41
-  || byte == 42
-  || byte == 43
-  || byte == 44
-  || byte == 59
-  || byte == 61
+isSubDelimiterByte byte =
+  byte == 33
+    || byte == 36
+    || byte == 38
+    || byte == 39
+    || byte == 40
+    || byte == 41
+    || byte == 42
+    || byte == 43
+    || byte == 44
+    || byte == 59
+    || byte == 61
 
 validTarget : Array Int -> Int -> Int -> Bool -> Bool
 validTarget input pos end query =
-  if pos >= end then True
+  if pos >= end then
+    True
   else
     let byte = input[pos]
-    if byte == 37 then pos + 2 < end && isHexByte input[pos + 1] && isHexByte input[pos + 2] && validTarget input (pos + 3) end query
+    if byte == 37 then
+      pos + 2 < end
+        && isHexByte input[pos + 1]
+        && isHexByte input[pos + 2]
+        && validTarget input (pos + 3) end query
     else
-      let pchar = isUnreservedByte byte || isSubDelimiterByte byte || byte == 58 || byte == 64
+      let pchar =
+        isUnreservedByte byte
+          || isSubDelimiterByte byte
+          || byte == 58
+          || byte == 64
       if pchar || byte == 47 || query && byte == 63 then
         validTarget input (pos + 1) end query
       else if not query && byte == 63 then
@@ -209,7 +222,8 @@ exactAsciiAt input start expected =
 
 validFieldValue : Array Int -> Int -> Int -> Bool
 validFieldValue input pos end =
-  if pos >= end then True
+  if pos >= end then
+    True
   else
     let byte = input[pos]
     (byte == 9 || byte >= 32 && byte /= 127)
@@ -235,9 +249,12 @@ findCrlf label input start pos limit =
   else if input[pos] == 13 then
     -- A trailing CR is the one-shot parser's bare CR and a stream's half-read
     -- CRLF, so it keeps that diagnostic while staying completable.
-    if pos + 1 >= arrayLength input then incomplete "http: bare CR in \{label}"
-    else if input[pos + 1] /= 10 then malformed "http: bare CR in \{label}"
-    else Ok pos
+    if pos + 1 >= arrayLength input then
+      incomplete "http: bare CR in \{label}"
+    else if input[pos + 1] /= 10 then
+      malformed "http: bare CR in \{label}"
+    else
+      Ok pos
   else
     findCrlf label input start (pos + 1) limit
 
@@ -246,21 +263,32 @@ parseRequestLine input start = do
   end <- findCrlf "request line" input start start maxHttpRequestLineBytes
   () <- resourceExcess (checkHttpRequestLineBytes (end - start))
   firstSpace <- match findByte input start end 32
-    None => malformed "http: malformed request line; expected METHOD SP TARGET SP HTTP/1.1"
+    None =>
+      malformed
+        "http: malformed request line; expected METHOD SP TARGET SP HTTP/1.1"
     Some pos => Ok pos
   secondSpace <- match findByte input (firstSpace + 1) end 32
-    None => malformed "http: malformed request line; expected METHOD SP TARGET SP HTTP/1.1"
+    None =>
+      malformed
+        "http: malformed request line; expected METHOD SP TARGET SP HTTP/1.1"
     Some pos => Ok pos
   if firstSpace == start || not (allToken input start firstSpace) then
     malformed "http: invalid method token"
   else if secondSpace == firstSpace + 1 then
     malformed "http: empty request target"
-  else if input[firstSpace + 1] /= 47 || not (validTarget input (firstSpace + 1) secondSpace False) then
-    malformed "http: request target must be an origin-form ASCII target without a fragment"
-  else if secondSpace + 9 /= end || not (exactAsciiAt input (secondSpace + 1) "HTTP/1.1") then
+  else if input[firstSpace + 1] /= 47
+    || not (validTarget input (firstSpace + 1) secondSpace False) then
+    malformed
+      "http: request target must be an origin-form ASCII target without a fragment"
+  else if secondSpace + 9 /= end
+    || not (exactAsciiAt input (secondSpace + 1) "HTTP/1.1") then
     malformed "http: only HTTP/1.1 requests are supported"
   else
-    Ok (RequestLine (fromUtf8 (slice input start (firstSpace - start))) (fromUtf8 (slice input (firstSpace + 1) (secondSpace - firstSpace - 1))) (end + 2))
+    Ok
+      (RequestLine
+        (fromUtf8 (slice input start (firstSpace - start)))
+        (fromUtf8 (slice input (firstSpace + 1) (secondSpace - firstSpace - 1)))
+        (end + 2))
 
 trimLeftOws : Array Int -> Int -> Int -> Int
 trimLeftOws input pos end =
@@ -278,25 +306,30 @@ trimRightOws input start end =
 
 parseHeaderLine : Array Int -> Int -> Int -> Result FrameError Header
 parseHeaderLine input start end =
-  if input[start] == 32 || input[start] == 9 then malformed "http: obsolete folded header lines are forbidden"
+  if input[start] == 32 || input[start] == 9 then
+    malformed "http: obsolete folded header lines are forbidden"
   else match findByte input start end 58
     None => malformed "http: malformed header field; missing colon"
-    Some colon => if colon == start || not (allToken input start colon) then malformed "http: invalid header field name"
-    else
-      if not (validFieldValue input (colon + 1) end) then malformed "http: control byte in header field value"
+    Some colon =>
+      if colon == start || not (allToken input start colon) then
+        malformed "http: invalid header field name"
+      else if not (validFieldValue input (colon + 1) end) then
+        malformed "http: control byte in header field value"
       else
         let valueStart = trimLeftOws input (colon + 1) end
         let valueEnd = trimRightOws input valueStart end
-        Ok (Header
-          (lowerAscii input start colon)
-          (slice input valueStart (valueEnd - valueStart)))
+        Ok
+          (Header
+            (lowerAscii input start colon)
+            (slice input valueStart (valueEnd - valueStart)))
 
 forbiddenTrailer : Header -> Bool
-forbiddenTrailer (Header name _) = name == "content-length"
-  || name == "transfer-encoding"
-  || name == "trailer"
-  || name == "host"
-  || name == "connection"
+forbiddenTrailer (Header name _) =
+  name == "content-length"
+    || name == "transfer-encoding"
+    || name == "trailer"
+    || name == "host"
+    || name == "connection"
 
 checkFieldCount : Bool -> Int -> Result FrameError Unit
 checkFieldCount trailer count =
@@ -305,50 +338,72 @@ checkFieldCount trailer count =
   else
     resourceExcess (checkHttpHeaderFields count)
 
-parseFields : Array Int -> Int -> Int -> Int -> Int -> Bool -> List Header -> Result FrameError HeaderBlock
+parseFields : Array Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Bool ->
+  List Header ->
+  Result FrameError HeaderBlock
 parseFields input pos sectionStart priorBytes count trailer acc = do
-  end <- findCrlf (if trailer then "trailer field" else "header field") input pos pos maxHttpHeaderBytes
+  end <- findCrlf
+    (if trailer then "trailer field" else "header field")
+    input
+    pos
+    pos
+    maxHttpHeaderBytes
   let next = end + 2
   let totalBytes = priorBytes + next - sectionStart
   () <- resourceExcess (checkHttpHeaderBytes totalBytes)
-  if end == pos then Ok (HeaderBlock (reverse acc) next totalBytes)
+  if end == pos then
+    Ok (HeaderBlock (reverse acc) next totalBytes)
   else do
     () <- checkFieldCount trailer (count + 1)
     field <- parseHeaderLine input pos end
     if trailer && forbiddenTrailer field then
       malformed "http: forbidden framing or routing field in trailer"
     else
-      parseFields input next sectionStart priorBytes (count + 1) trailer (field::acc)
+      parseFields
+        input
+        next
+        sectionStart
+        priorBytes
+        (count + 1)
+        trailer
+        (field :: acc)
 
 countNamed : String -> List Header -> Int
 countNamed _ [] = 0
-countNamed wanted ((Header name _)::rest) =
+countNamed wanted ((Header name _) :: rest) =
   (if name == wanted then 1 else 0) + countNamed wanted rest
 
 findNamed : String -> List Header -> Option (Array Int)
 findNamed _ [] = None
-findNamed wanted ((Header name value)::rest) =
-  if name == wanted then
-    Some value
-  else
-    findNamed wanted rest
+findNamed wanted ((Header name value) :: rest) =
+  if name == wanted then Some value else findNamed wanted rest
 
 asciiEqualCiGo : Array Int -> Array Int -> Int -> Bool
 asciiEqualCiGo value expected i =
   if i >= arrayLength value then
     i == arrayLength expected
   else
-    i < arrayLength expected && value[i] <= 127 && lowerByte value[i] == lowerByte expected[i] && asciiEqualCiGo value expected (i + 1)
+    i < arrayLength expected
+      && value[i] <= 127
+      && lowerByte value[i] == lowerByte expected[i]
+      && asciiEqualCiGo value expected (i + 1)
 
 asciiEqualCi : Array Int -> String -> Bool
 asciiEqualCi value expected = asciiEqualCiGo value (toUtf8 expected) 0
 
 parseDecimalGo : Array Int -> Int -> Int -> Result FrameError Int
 parseDecimalGo value i acc =
-  if i >= arrayLength value then Ok acc
+  if i >= arrayLength value then
+    Ok acc
   else
     let byte = value[i]
-    if byte < 48 || byte > 57 then malformed "http: invalid Content-Length"
+    if byte < 48 || byte > 57 then
+      malformed "http: invalid Content-Length"
     else
       let digit = byte - 48
       if acc > (4611686018427387903 - digit) / 10 then
@@ -358,7 +413,8 @@ parseDecimalGo value i acc =
 
 parseContentLength : Array Int -> Result FrameError Int
 parseContentLength value =
-  if arrayLength value == 0 then malformed "http: empty Content-Length"
+  if arrayLength value == 0 then
+    malformed "http: empty Content-Length"
   else do
     size <- parseDecimalGo value 0 0
     () <- resourceExcess (checkHttpBodyBytes size)
@@ -368,24 +424,26 @@ selectBodyMode : List Header -> Result FrameError BodyMode
 selectBodyMode headers =
   let clCount = countNamed "content-length" headers
   let teCount = countNamed "transfer-encoding" headers
-  if clCount > 1 then malformed "http: duplicate Content-Length is ambiguous"
+  if clCount > 1 then
+    malformed "http: duplicate Content-Length is ambiguous"
+  else if clCount > 0 && teCount > 0 then
+    malformed "http: Transfer-Encoding with Content-Length is ambiguous"
+  else if teCount > 0 then
+    if teCount /= 1 then
+      malformed "http: repeated Transfer-Encoding is unsupported"
+    else match findNamed "transfer-encoding" headers
+      Some value =>
+        if asciiEqualCi value "chunked" then
+          Ok ChunkedBody
+        else
+          malformed
+            "http: unsupported transfer coding; expected exactly chunked"
+      None => malformed "http: internal transfer framing error"
+  else if clCount == 1 then match findNamed "content-length" headers
+    Some value => map FixedBody (parseContentLength value)
+    None => malformed "http: internal content framing error"
   else
-    if clCount > 0 && teCount > 0 then malformed "http: Transfer-Encoding with Content-Length is ambiguous"
-    else
-      if teCount > 0 then
-        if teCount /= 1 then malformed "http: repeated Transfer-Encoding is unsupported"
-        else match findNamed "transfer-encoding" headers
-          Some value =>
-            if asciiEqualCi value "chunked" then
-              Ok ChunkedBody
-            else
-              malformed "http: unsupported transfer coding; expected exactly chunked"
-          None => malformed "http: internal transfer framing error"
-      else
-        if clCount == 1 then match findNamed "content-length" headers
-          Some value => map FixedBody (parseContentLength value)
-          None => malformed "http: internal content framing error"
-        else Ok NoBody
+    Ok NoBody
 
 scanTokenEnd : Array Int -> Int -> Int -> Int
 scanTokenEnd value pos end =
@@ -398,10 +456,12 @@ parseConnectionValue : Array Int -> Int -> Bool -> Result FrameError Bool
 parseConnectionValue value pos sawClose =
   let end = arrayLength value
   let start = trimLeftOws value pos end
-  if start >= end then malformed "http: empty token in Connection field"
+  if start >= end then
+    malformed "http: empty token in Connection field"
   else
     let tokenEnd = scanTokenEnd value start end
-    if tokenEnd == start then malformed "http: invalid Connection token"
+    if tokenEnd == start then
+      malformed "http: invalid Connection token"
     else
       let closeNow = sawClose || lowerAscii value start tokenEnd == "close"
       let after = trimLeftOws value tokenEnd end
@@ -414,22 +474,28 @@ parseConnectionValue value pos sawClose =
 
 keepAliveFromHeaders : List Header -> Result FrameError Bool
 keepAliveFromHeaders [] = Ok True
-keepAliveFromHeaders ((Header name value)::rest) = do
+keepAliveFromHeaders ((Header name value) :: rest) = do
   restKeepAlive <- keepAliveFromHeaders rest
-  if name /= "connection" then Ok restKeepAlive
+  if name /= "connection" then
+    Ok restKeepAlive
   else do
     closes <- parseConnectionValue value 0 False
     Ok (restKeepAlive && not closes)
 
 validRegName : Array Int -> Int -> Int -> Bool
 validRegName value pos end =
-  if pos >= end then True
+  if pos >= end then
+    True
   else
     let byte = value[pos]
     if byte == 37 then
-      pos + 2 < end && isHexByte value[pos + 1] && isHexByte value[pos + 2] && validRegName value (pos + 3) end
+      pos + 2 < end
+        && isHexByte value[pos + 1]
+        && isHexByte value[pos + 2]
+        && validRegName value (pos + 3) end
     else
-      (isUnreservedByte byte || isSubDelimiterByte byte) && validRegName value (pos + 1) end
+      (isUnreservedByte byte || isSubDelimiterByte byte)
+        && validRegName value (pos + 1) end
 
 allDigits : Array Int -> Int -> Int -> Bool
 allDigits value pos end =
@@ -447,13 +513,19 @@ decimalValue value pos end acc =
 
 validIpv4 : Array Int -> Int -> Int -> Int -> Bool
 validIpv4 value start end parts =
-  if parts >= 4 || start >= end then False
+  if parts >= 4 || start >= end then
+    False
   else
     let dot = match findByte value start end 46
       None => end
       Some pos => pos
     let size = dot - start
-    let validPart = size >= 1 && size <= 3 && allDigits value start dot && decimalValue value start dot 0 <= 255 && (size == 1 || value[start] /= 48)
+    let validPart =
+      size >= 1
+        && size <= 3
+        && allDigits value start dot
+        && decimalValue value start dot 0 <= 255
+        && (size == 1 || value[start] /= 48)
     if not validPart then
       False
     else if dot == end then
@@ -470,12 +542,14 @@ allHex value pos end =
 
 validIpv6Go : Array Int -> Int -> Int -> Int -> Bool -> Bool
 validIpv6Go value pos end groups compressed =
-  if pos >= end then if compressed then groups < 8 else groups == 8
+  if pos >= end then
+    if compressed then groups < 8 else groups == 8
   else
     let colon = match findByte value pos end 58
       None => end
       Some at => at
-    if colon == pos then False
+    if colon == pos then
+      False
     else
       let dot = findByte value pos colon 46
       let componentGroups = match dot
@@ -496,20 +570,20 @@ validIpv6 value start end =
   if start >= end then
     False
   else if value[start] == 58 then
-    start + 1 < end && value[start + 1] == 58 && validIpv6Go value (start + 2) end 0 True
+    start + 1 < end
+      && value[start + 1] == 58
+      && validIpv6Go value (start + 2) end 0 True
   else
     validIpv6Go value start end 0 False
 
 scanHex : Array Int -> Int -> Int -> Int
 scanHex value pos end =
-  if pos < end && isHexByte value[pos] then
-    scanHex value (pos + 1) end
-  else
-    pos
+  if pos < end && isHexByte value[pos] then scanHex value (pos + 1) end else pos
 
 validIpvFutureTail : Array Int -> Int -> Int -> Bool
 validIpvFutureTail value pos end =
-  if pos >= end then True
+  if pos >= end then
+    True
   else
     let byte = value[pos]
     (isUnreservedByte byte || isSubDelimiterByte byte || byte == 58)
@@ -517,7 +591,8 @@ validIpvFutureTail value pos end =
 
 validIpvFuture : Array Int -> Int -> Int -> Bool
 validIpvFuture value start end =
-  if start >= end || value[start] /= 118 && value[start] /= 86 then False
+  if start >= end || value[start] /= 118 && value[start] /= 86 then
+    False
   else
     let versionEnd = scanHex value (start + 1) end
     versionEnd > start + 1
@@ -527,27 +602,31 @@ validIpvFuture value start end =
       && validIpvFutureTail value (versionEnd + 1) end
 
 validIpLiteral : Array Int -> Int -> Int -> Bool
-validIpLiteral value start end = validIpv6 value start end
-  || validIpvFuture value start end
+validIpLiteral value start end =
+  validIpv6 value start end || validIpvFuture value start end
 
 validHostAuthority : Array Int -> Bool
 validHostAuthority value =
   let end = arrayLength value
-  if end == 0 then False
-  else
-    if value[0] == 91 then match findByte value 1 end 93
-      None => False
-      Some close => validIpLiteral value 1 close
-        && (close + 1 == end || close + 1 < end && value[close + 1] == 58 && allDigits value (close + 2) end)
-    else match findByte value 0 end 58
-      None => validRegName value 0 end
-      Some colon => colon > 0
-        && validRegName value 0 colon
-        && allDigits value (colon + 1) end
+  if end == 0 then
+    False
+  else if value[0] == 91 then match findByte value 1 end 93
+    None => False
+    Some close =>
+      validIpLiteral value 1 close
+        && (close + 1 == end
+          || close + 1 < end
+            && value[close + 1] == 58
+            && allDigits value (close + 2) end)
+  else match findByte value 0 end 58
+    None => validRegName value 0 end
+    Some colon =>
+      colon > 0 && validRegName value 0 colon && allDigits value (colon + 1) end
 
 validateHost : List Header -> Result FrameError Unit
 validateHost headers =
-  if countNamed "host" headers /= 1 then malformed "http: HTTP/1.1 requires exactly one Host field"
+  if countNamed "host" headers /= 1 then
+    malformed "http: HTTP/1.1 requires exactly one Host field"
   else match findNamed "host" headers
     Some value =>
       if not (validHostAuthority value) then
@@ -564,7 +643,8 @@ readSliceAt input pos size = match runBP (takeSlice size) input pos
 
 emitArray : Array Int -> Int -> Builder -> Unit
 emitArray bytes i out =
-  if i >= arrayLength bytes then ()
+  if i >= arrayLength bytes then
+    ()
   else
     emitU8 bytes[i] out
     emitArray bytes (i + 1) out
@@ -582,12 +662,15 @@ hexDigit byte =
 
 parseHexSizeGo : Array Int -> Int -> Int -> Int -> Result FrameError Int
 parseHexSizeGo input pos end acc =
-  if pos >= end then Ok acc
+  if pos >= end then
+    Ok acc
   else match hexDigit input[pos]
     None => malformed "http: invalid chunk size"
     Some digit =>
       if acc > (maxHttpBodyBytes - digit) / 16 then
-        Err (Fatal (HttpResourceExcess "http: chunk size exceeds decoded body limit"))
+        Err
+          (Fatal
+            (HttpResourceExcess "http: chunk size exceeds decoded body limit"))
       else
         parseHexSizeGo input (pos + 1) end (acc * 16 + digit)
 
@@ -600,90 +683,119 @@ skipOws input pos end =
 
 scanQuoted : Array Int -> Int -> Int -> Result FrameError Int
 scanQuoted input pos end =
-  if pos >= end then malformed "http: unterminated quoted chunk extension"
-  else
-    if input[pos] == 34 then Ok (pos + 1)
+  if pos >= end then
+    malformed "http: unterminated quoted chunk extension"
+  else if input[pos] == 34 then
+    Ok (pos + 1)
+  else if input[pos] == 92 then
+    if pos + 1 >= end then
+      malformed "http: truncated quoted-pair in chunk extension"
     else
-      if input[pos] == 92 then
-        if pos + 1 >= end then malformed "http: truncated quoted-pair in chunk extension"
-        else
-          let escaped = input[pos + 1]
-          if escaped == 9 || escaped == 32 || escaped >= 33 && escaped /= 127 then
-            scanQuoted input (pos + 2) end
-          else
-            malformed "http: control byte in quoted chunk extension"
+      let escaped = input[pos + 1]
+      if escaped == 9 || escaped == 32 || escaped >= 33 && escaped /= 127 then
+        scanQuoted input (pos + 2) end
       else
-        let byte = input[pos]
-        if byte == 9 || byte == 32 || byte >= 33 && byte /= 34 && byte /= 92 && byte /= 127 then
-          scanQuoted input (pos + 1) end
-        else
-          malformed "http: control byte in quoted chunk extension"
+        malformed "http: control byte in quoted chunk extension"
+  else
+    let byte = input[pos]
+    if byte == 9
+      || byte == 32
+      || byte >= 33 && byte /= 34 && byte /= 92 && byte /= 127 then
+      scanQuoted input (pos + 1) end
+    else
+      malformed "http: control byte in quoted chunk extension"
 
 parseChunkExtensionValue : Array Int -> Int -> Int -> Result FrameError Int
 parseChunkExtensionValue input pos end =
-  if pos >= end then malformed "http: missing chunk extension value"
+  if pos >= end then
+    malformed "http: missing chunk extension value"
+  else if input[pos] == 34 then
+    scanQuoted input (pos + 1) end
   else
-    if input[pos] == 34 then scanQuoted input (pos + 1) end
+    let valueEnd = scanTokenEnd input pos end
+    if valueEnd == pos then
+      malformed "http: invalid chunk extension value"
     else
-      let valueEnd = scanTokenEnd input pos end
-      if valueEnd == pos then
-        malformed "http: invalid chunk extension value"
-      else
-        Ok valueEnd
+      Ok valueEnd
 
 parseChunkExtensionsGo : Array Int -> Int -> Int -> Result FrameError Unit
 parseChunkExtensionsGo input pos end =
   let start = skipOws input pos end
-  if start == end then Ok ()
+  if start == end then
+    Ok ()
+  else if input[start] /= 59 then
+    malformed "http: invalid chunk extension separator"
   else
-    if input[start] /= 59 then malformed "http: invalid chunk extension separator"
+    let nameStart = skipOws input (start + 1) end
+    let nameEnd = scanTokenEnd input nameStart end
+    if nameEnd == nameStart then
+      malformed "http: empty chunk extension name"
     else
-      let nameStart = skipOws input (start + 1) end
-      let nameEnd = scanTokenEnd input nameStart end
-      if nameEnd == nameStart then malformed "http: empty chunk extension name"
+      let afterName = skipOws input nameEnd end
+      if afterName < end && input[afterName] == 61 then do
+        valueEnd <- parseChunkExtensionValue
+          input
+          (skipOws input (afterName + 1) end)
+          end
+        parseChunkExtensionsGo input valueEnd end
       else
-        let afterName = skipOws input nameEnd end
-        if afterName < end && input[afterName] == 61 then do
-          valueEnd <- parseChunkExtensionValue input (skipOws input (afterName + 1) end) end
-          parseChunkExtensionsGo input valueEnd end
-        else parseChunkExtensionsGo input afterName end
+        parseChunkExtensionsGo input afterName end
 
 parseChunkSize : Array Int -> Int -> Int -> Result FrameError Int
 parseChunkSize input start end =
   let semi = match findByte input start end 59
     None => end
     Some pos => pos
-  if semi == start then malformed "http: empty chunk size"
+  if semi == start then
+    malformed "http: empty chunk size"
   else do
     size <- parseHexSizeGo input start semi 0
     () <- parseChunkExtensionsGo input semi end
     Ok size
 
-parseChunked : Array Int -> Int -> Int -> Builder -> Int -> Int -> Result FrameError ParsedBody
+parseChunked : Array Int ->
+  Int ->
+  Int ->
+  Builder ->
+  Int ->
+  Int ->
+  Result FrameError ParsedBody
 parseChunked input pos headerBytes out total count = do
   lineEnd <- findCrlf "chunk-size line" input pos pos maxHttpHeaderBytes
   size <- parseChunkSize input pos lineEnd
   let dataPos = lineEnd + 2
   if size == 0 then do
-    (HeaderBlock trailers finalPos _) <- parseFields input dataPos dataPos headerBytes 0 True []
+    (HeaderBlock trailers finalPos _) <- parseFields
+      input
+      dataPos
+      dataPos
+      headerBytes
+      0
+      True
+      []
     Ok (ParsedBody (buildArray out) trailers finalPos)
   else do
     () <- resourceExcess (checkHttpChunks (count + 1))
-    if size > maxHttpBodyBytes - total then Err (Fatal (HttpResourceExcess "http: decoded chunked body exceeds resource limit"))
+    if size > maxHttpBodyBytes - total then
+      Err
+        (Fatal
+          (HttpResourceExcess
+            "http: decoded chunked body exceeds resource limit"))
     else do
       (chunk, afterChunk) <- readSliceAt input dataPos size
-      if afterChunk + 2 > arrayLength input then incomplete "http: truncated CRLF after chunk data"
+      if afterChunk + 2 > arrayLength input then
+        incomplete "http: truncated CRLF after chunk data"
+      else if input[afterChunk] /= 13 || input[afterChunk + 1] /= 10 then
+        malformed "http: missing CRLF after chunk data"
       else
-        if input[afterChunk] /= 13 || input[afterChunk + 1] /= 10 then malformed "http: missing CRLF after chunk data"
-        else
-          let () = emitArray chunk 0 out
-          parseChunked
-            input
-            (afterChunk + 2)
-            headerBytes
-            out
-            (total + size)
-            (count + 1)
+        let () = emitArray chunk 0 out
+        parseChunked
+          input
+          (afterChunk + 2)
+          headerBytes
+          out
+          (total + size)
+          (count + 1)
 
 -- | Frame the body and report the index one past its last byte. Bytes beyond
 -- that index belong to whatever follows the request, so rejecting them is the
@@ -707,20 +819,33 @@ data FramedRequest = FramedRequest Request BodyMode Int
 frameRequestAt : Array Int -> Int -> Result FrameError FramedRequest
 frameRequestAt input start = do
   (RequestLine method target headerPos) <- parseRequestLine input start
-  (HeaderBlock headers bodyPos headerBytes) <- parseFields input headerPos headerPos 0 0 False []
+  (HeaderBlock headers bodyPos headerBytes) <- parseFields
+    input
+    headerPos
+    headerPos
+    0
+    0
+    False
+    []
   () <- validateHost headers
   mode <- selectBodyMode headers
   keepAlive <- keepAliveFromHeaders headers
-  (ParsedBody body trailers finalPos) <- parseBody mode input bodyPos headerBytes
-  Ok (FramedRequest
-    (Request method target headers trailers body keepAlive)
+  (ParsedBody body trailers finalPos) <- parseBody
     mode
-    finalPos)
+    input
+    bodyPos
+    headerBytes
+  Ok
+    (FramedRequest
+      (Request method target headers trailers body keepAlive)
+      mode
+      finalPos)
 
 parseWholeBuffer : Array Int -> Result FrameError Request
 parseWholeBuffer input = do
   () <- resourceExcess (checkHttpRequestBytes (arrayLength input))
-  if not (validBytes input 0) then malformed "http: input element outside byte range 0..255"
+  if not (validBytes input 0) then
+    malformed "http: input element outside byte range 0..255"
   else do
     (FramedRequest request mode finalPos) <- frameRequestAt input 0
     if finalPos /= arrayLength input then
@@ -752,15 +877,17 @@ requestBytesVerdict size framed = match checkHttpRequestBytes size
 export
 scanRequestBoundary : Array Int -> Int -> HttpFrame
 scanRequestBoundary input start =
-  if start < 0 || start > arrayLength input then HttpFrameFailed (HttpMalformed "http: scan offset outside buffer")
-  else
-    if not (validBytes input start) then HttpFrameFailed (HttpMalformed "http: input element outside byte range 0..255")
-    else match frameRequestAt input start
-      Ok (FramedRequest _ _ finalPos) =>
-        requestBytesVerdict (finalPos - start) (HttpFramedAt finalPos)
-      Err (Incomplete _) =>
-        requestBytesVerdict (arrayLength input - start) HttpNeedMore
-      Err (Fatal failure) => HttpFrameFailed failure
+  if start < 0 || start > arrayLength input then
+    HttpFrameFailed (HttpMalformed "http: scan offset outside buffer")
+  else if not (validBytes input start) then
+    HttpFrameFailed
+      (HttpMalformed "http: input element outside byte range 0..255")
+  else match frameRequestAt input start
+    Ok (FramedRequest _ _ finalPos) =>
+      requestBytesVerdict (finalPos - start) (HttpFramedAt finalPos)
+    Err (Incomplete _) =>
+      requestBytesVerdict (arrayLength input - start) HttpNeedMore
+    Err (Fatal failure) => HttpFrameFailed failure
 
 -- | Parse the frame `[start, end)` exactly as `parseRequestClassified` parses
 -- that region on its own, so a scanned boundary and a parse cannot disagree.
@@ -798,7 +925,8 @@ public export data QueryParam = QueryParam String String
 
 validResponseValue : Array Int -> Int -> Bool
 validResponseValue value i =
-  if i >= arrayLength value then True
+  if i >= arrayLength value then
+    True
   else
     let byte = value[i]
     byte >= 32 && byte <= 126 && validResponseValue value (i + 1)
@@ -810,26 +938,35 @@ export
 makeHeader : String -> Array Int -> Result String Header
 makeHeader name value =
   let nameBytes = toUtf8 name
-  if arrayLength nameBytes == 0 || not (allToken nameBytes 0 (arrayLength nameBytes)) then
+  if arrayLength nameBytes == 0
+    || not (allToken nameBytes 0 (arrayLength nameBytes)) then
     Err "http: invalid response header field name"
   else if not (validBytes value 0) || not (validResponseValue value 0) then
     Err "http: control or non-ASCII byte in response header field value"
   else
-    Ok (Header (lowerAscii nameBytes 0 (arrayLength nameBytes)) (arrayCopy value))
+    Ok
+      (Header
+        (lowerAscii nameBytes 0 (arrayLength nameBytes))
+        (arrayCopy value))
 
 validReason : String -> Bool
 validReason reason = validResponseValue (toUtf8 reason) 0
 
 hasReservedResponseField : List Header -> Bool
 hasReservedResponseField [] = False
-hasReservedResponseField ((Header name _)::rest) = name == "content-length"
-  || name == "transfer-encoding"
-  || hasReservedResponseField rest
+hasReservedResponseField ((Header name _) :: rest) =
+  name == "content-length"
+    || name == "transfer-encoding"
+    || hasReservedResponseField rest
 
 -- | Construct a deterministic buffered response. The serializer owns all
 -- framing, so callers cannot supply Content-Length or Transfer-Encoding.
 export
-makeResponse : Int -> String -> List Header -> Array Int -> Result String Response
+makeResponse : Int ->
+  String ->
+  List Header ->
+  Array Int ->
+  Result String Response
 makeResponse status reason headers body =
   if status < 100 || status > 599 then
     Err "http: response status must be between 100 and 599"
@@ -859,7 +996,7 @@ emitAscii text out = emitArray (toUtf8 text) 0 out
 
 emitResponseHeaders : List Header -> Builder -> Unit
 emitResponseHeaders [] _ = ()
-emitResponseHeaders ((Header name value)::rest) out =
+emitResponseHeaders ((Header name value) :: rest) out =
   emitAscii name out
   emitAscii ": " out
   emitArray value 0 out
@@ -889,18 +1026,18 @@ percentNibble byte = hexDigit byte
 
 decodeQueryBytes : Array Int -> Int -> Int -> Builder -> Result String Unit
 decodeQueryBytes input pos end out =
-  if pos >= end then Ok ()
-  else
-    if input[pos] /= 37 then
-      let () = emitU8 input[pos] out
-      decodeQueryBytes input (pos + 1) end out
-    else
-      if pos + 2 >= end then Err "http: malformed percent escape in query"
-      else match (percentNibble input[pos + 1], percentNibble input[pos + 2])
-        (Some high, Some low) =>
-          let () = emitU8 (high * 16 + low) out
-          decodeQueryBytes input (pos + 3) end out
-        _ => Err "http: malformed percent escape in query"
+  if pos >= end then
+    Ok ()
+  else if input[pos] /= 37 then
+    let () = emitU8 input[pos] out
+    decodeQueryBytes input (pos + 1) end out
+  else if pos + 2 >= end then
+    Err "http: malformed percent escape in query"
+  else match (percentNibble input[pos + 1], percentNibble input[pos + 2])
+    (Some high, Some low) =>
+      let () = emitU8 (high * 16 + low) out
+      decodeQueryBytes input (pos + 3) end out
+    _ => Err "http: malformed percent escape in query"
 
 continuation : Int -> Bool
 continuation byte = byte >= 128 && byte <= 191
@@ -911,29 +1048,87 @@ utf8Step bytes i =
   let b0 = bytes[i]
   if b0 <= 127 then
     Some (b0, i + 1)
-  else if b0 >= 194 && b0 <= 223 && i + 1 < size && continuation bytes[i + 1] then
+  else if b0 >= 194
+    && b0 <= 223
+    && i + 1 < size
+    && continuation bytes[i + 1] then
     Some ((b0 - 192) * 64 + bytes[i + 1] - 128, i + 2)
-  else if b0 == 224 && i + 2 < size && bytes[i + 1] >= 160 && bytes[i + 1] <= 191 && continuation bytes[i + 2] then
-    Some ((b0 - 224) * 4096 + (bytes[i + 1] - 128) * 64 + bytes[i + 2] - 128, i + 3)
-  else if b0 >= 225 && b0 <= 236 && i + 2 < size && continuation bytes[i + 1] && continuation bytes[i + 2] then
-    Some ((b0 - 224) * 4096 + (bytes[i + 1] - 128) * 64 + bytes[i + 2] - 128, i + 3)
-  else if b0 >= 238 && b0 <= 239 && i + 2 < size && continuation bytes[i + 1] && continuation bytes[i + 2] then
-    Some ((b0 - 224) * 4096 + (bytes[i + 1] - 128) * 64 + bytes[i + 2] - 128, i + 3)
-  else if b0 == 237 && i + 2 < size && bytes[i + 1] >= 128 && bytes[i + 1] <= 159 && continuation bytes[i + 2] then
-    Some ((b0 - 224) * 4096 + (bytes[i + 1] - 128) * 64 + bytes[i + 2] - 128, i + 3)
-  else if b0 == 240 && i + 3 < size && bytes[i + 1] >= 144 && bytes[i + 1] <= 191 && continuation bytes[i + 2] && continuation bytes[i + 3] then
+  else if b0 == 224
+    && i + 2 < size
+    && bytes[i + 1] >= 160
+    && bytes[i + 1] <= 191
+    && continuation bytes[i + 2] then
     Some (
-      (b0 - 240) * 262144 + (bytes[i + 1] - 128) * 4096 + (bytes[i + 2] - 128) * 64 + bytes[i + 3] - 128,
+      (b0 - 224) * 4096 + (bytes[i + 1] - 128) * 64 + bytes[i + 2] - 128,
+      i + 3,
+    )
+  else if b0 >= 225
+    && b0 <= 236
+    && i + 2 < size
+    && continuation bytes[i + 1]
+    && continuation bytes[i + 2] then
+    Some (
+      (b0 - 224) * 4096 + (bytes[i + 1] - 128) * 64 + bytes[i + 2] - 128,
+      i + 3,
+    )
+  else if b0 >= 238
+    && b0 <= 239
+    && i + 2 < size
+    && continuation bytes[i + 1]
+    && continuation bytes[i + 2] then
+    Some (
+      (b0 - 224) * 4096 + (bytes[i + 1] - 128) * 64 + bytes[i + 2] - 128,
+      i + 3,
+    )
+  else if b0 == 237
+    && i + 2 < size
+    && bytes[i + 1] >= 128
+    && bytes[i + 1] <= 159
+    && continuation bytes[i + 2] then
+    Some (
+      (b0 - 224) * 4096 + (bytes[i + 1] - 128) * 64 + bytes[i + 2] - 128,
+      i + 3,
+    )
+  else if b0 == 240
+    && i + 3 < size
+    && bytes[i + 1] >= 144
+    && bytes[i + 1] <= 191
+    && continuation bytes[i + 2]
+    && continuation bytes[i + 3] then
+    Some (
+      (b0 - 240) * 262144
+        + (bytes[i + 1] - 128) * 4096
+        + (bytes[i + 2] - 128) * 64
+        + bytes[i + 3]
+        - 128,
       i + 4,
     )
-  else if b0 >= 241 && b0 <= 243 && i + 3 < size && continuation bytes[i + 1] && continuation bytes[i + 2] && continuation bytes[i + 3] then
+  else if b0 >= 241
+    && b0 <= 243
+    && i + 3 < size
+    && continuation bytes[i + 1]
+    && continuation bytes[i + 2]
+    && continuation bytes[i + 3] then
     Some (
-      (b0 - 240) * 262144 + (bytes[i + 1] - 128) * 4096 + (bytes[i + 2] - 128) * 64 + bytes[i + 3] - 128,
+      (b0 - 240) * 262144
+        + (bytes[i + 1] - 128) * 4096
+        + (bytes[i + 2] - 128) * 64
+        + bytes[i + 3]
+        - 128,
       i + 4,
     )
-  else if b0 == 244 && i + 3 < size && bytes[i + 1] >= 128 && bytes[i + 1] <= 143 && continuation bytes[i + 2] && continuation bytes[i + 3] then
+  else if b0 == 244
+    && i + 3 < size
+    && bytes[i + 1] >= 128
+    && bytes[i + 1] <= 143
+    && continuation bytes[i + 2]
+    && continuation bytes[i + 3] then
     Some (
-      (b0 - 240) * 262144 + (bytes[i + 1] - 128) * 4096 + (bytes[i + 2] - 128) * 64 + bytes[i + 3] - 128,
+      (b0 - 240) * 262144
+        + (bytes[i + 1] - 128) * 4096
+        + (bytes[i + 2] - 128) * 64
+        + bytes[i + 3]
+        - 128,
       i + 4,
     )
   else
@@ -941,19 +1136,22 @@ utf8Step bytes i =
 
 validUtf8From : Array Int -> Int -> Bool
 validUtf8From bytes i =
-  if i >= arrayLength bytes then True
+  if i >= arrayLength bytes then
+    True
   else match utf8Step bytes i
     None => False
     Some (_, next) => validUtf8From bytes next
 
 validQueryTextFrom : Array Int -> Int -> Bool
 validQueryTextFrom bytes i =
-  if i >= arrayLength bytes then True
+  if i >= arrayLength bytes then
+    True
   else match utf8Step bytes i
     None => False
-    Some (code, next) => code > 31
-      && not (code >= 127 && code <= 159)
-      && validQueryTextFrom bytes next
+    Some (code, next) =>
+      code > 31
+        && not (code >= 127 && code <= 159)
+        && validQueryTextFrom bytes next
 
 decodeQueryPart : Array Int -> Int -> Int -> Result String String
 decodeQueryPart input start end = do
@@ -965,10 +1163,14 @@ decodeQueryPart input start end = do
   else
     Ok (fromUtf8 decoded)
 
-parseQueryFields : Array Int -> Int -> List QueryParam -> Result String (List QueryParam)
+parseQueryFields : Array Int ->
+  Int ->
+  List QueryParam ->
+  Result String (List QueryParam)
 parseQueryFields input start acc =
   let end = arrayLength input
-  if start >= end then Ok (reverse acc)
+  if start >= end then
+    Ok (reverse acc)
   else
     let amp = match findByte input start end 38
       None => end
@@ -976,12 +1178,17 @@ parseQueryFields input start acc =
     let equals = match findByte input start amp 61
       None => amp
       Some pos => pos
-    if equals == start then Err "http: empty query parameter name"
+    if equals == start then
+      Err "http: empty query parameter name"
     else do
       name <- decodeQueryPart input start equals
-      if name == "" then Err "http: empty query parameter name"
+      if name == "" then
+        Err "http: empty query parameter name"
       else do
-        value <- if equals == amp then Ok "" else decodeQueryPart input (equals + 1) amp
+        value <- if equals == amp then
+          Ok ""
+        else
+          decodeQueryPart input (equals + 1) amp
         let next = if amp == end then end else amp + 1
         if next == end && amp < end then
           Err "http: empty query parameter name"
@@ -1000,7 +1207,8 @@ parseTargetQuery (Request _ target _ _ _ _) =
       None => Ok (target, [])
       Some queryAt => do
         let path = fromUtf8 (slice bytes 0 queryAt)
-        if queryAt + 1 == arrayLength bytes then Ok (path, [])
+        if queryAt + 1 == arrayLength bytes then
+          Ok (path, [])
         else do
           params <- parseQueryFields bytes (queryAt + 1) []
           Ok (path, params)
@@ -1015,7 +1223,8 @@ mediaTypeSubtype (MediaType _ subtype) = subtype
 
 validMediaBytes : Array Int -> Int -> Bool
 validMediaBytes bytes i =
-  if i >= arrayLength bytes then True
+  if i >= arrayLength bytes then
+    True
   else
     let byte = bytes[i]
     (byte == 9 || byte >= 32 && byte <= 126) && validMediaBytes bytes (i + 1)
@@ -1027,7 +1236,10 @@ scanMediaQuoted value pos end =
   else if value[pos] == 34 then
     Ok (pos + 1)
   else if value[pos] == 92 then
-    if pos + 1 >= end || value[pos + 1] < 32 || value[pos + 1] > 126 then Err "http: invalid quoted media-type parameter" else scanMediaQuoted value (pos + 2) end
+    if pos + 1 >= end || value[pos + 1] < 32 || value[pos + 1] > 126 then
+      Err "http: invalid quoted media-type parameter"
+    else
+      scanMediaQuoted value (pos + 2) end
   else if value[pos] < 32 || value[pos] == 127 then
     Err "http: control byte in media-type parameter"
   else
@@ -1036,30 +1248,35 @@ scanMediaQuoted value pos end =
 parseMediaParameters : Array Int -> Int -> Int -> Int -> Result String Unit
 parseMediaParameters value pos end count =
   let start = skipOws value pos end
-  if start == end then Ok ()
+  if start == end then
+    Ok ()
+  else if count >= 32 then
+    Err "http: media type has too many parameters"
+  else if value[start] /= 59 then
+    Err "http: invalid media-type parameter separator"
   else
-    if count >= 32 then Err "http: media type has too many parameters"
+    let nameStart = skipOws value (start + 1) end
+    let nameEnd = scanTokenEnd value nameStart end
+    if nameEnd == nameStart then
+      Err "http: empty media-type parameter name"
     else
-      if value[start] /= 59 then Err "http: invalid media-type parameter separator"
+      let afterName = skipOws value nameEnd end
+      if afterName >= end || value[afterName] /= 61 then
+        Err "http: media-type parameter requires a value"
       else
-        let nameStart = skipOws value (start + 1) end
-        let nameEnd = scanTokenEnd value nameStart end
-        if nameEnd == nameStart then Err "http: empty media-type parameter name"
-        else
-          let afterName = skipOws value nameEnd end
-          if afterName >= end || value[afterName] /= 61 then Err "http: media-type parameter requires a value"
+        let valueStart = skipOws value (afterName + 1) end
+        if valueStart >= end then
+          Err "http: media-type parameter requires a value"
+        else do
+          valueEnd <- if value[valueStart] == 34 then
+            scanMediaQuoted value (valueStart + 1) end
           else
-            let valueStart = skipOws value (afterName + 1) end
-            if valueStart >= end then Err "http: media-type parameter requires a value"
-            else do
-              valueEnd <- if value[valueStart] == 34 then scanMediaQuoted value (valueStart + 1) end
-              else
-                let tokenEnd = scanTokenEnd value valueStart end
-                if tokenEnd == valueStart then
-                  Err "http: invalid media-type parameter value"
-                else
-                  Ok tokenEnd
-              parseMediaParameters value valueEnd end (count + 1)
+            let tokenEnd = scanTokenEnd value valueStart end
+            if tokenEnd == valueStart then
+              Err "http: invalid media-type parameter value"
+            else
+              Ok tokenEnd
+          parseMediaParameters value valueEnd end (count + 1)
 
 -- | Parse a bounded ASCII media type. Type and subtype matching is
 -- case-insensitive and returned in canonical lowercase form.
@@ -1067,31 +1284,36 @@ export
 parseMediaType : Array Int -> Result String MediaType
 parseMediaType value =
   let end = arrayLength value
-  if end == 0 || end > 4096 then Err "http: media type exceeds its 4096-byte resource limit"
+  if end == 0 || end > 4096 then
+    Err "http: media type exceeds its 4096-byte resource limit"
+  else if not (validBytes value 0) || not (validMediaBytes value 0) then
+    Err "http: media type must be bounded ASCII"
   else
-    if not (validBytes value 0) || not (validMediaBytes value 0) then Err "http: media type must be bounded ASCII"
+    let typeEnd = scanTokenEnd value 0 end
+    if typeEnd == 0 || typeEnd >= end || value[typeEnd] /= 47 then
+      Err "http: invalid media type"
     else
-      let typeEnd = scanTokenEnd value 0 end
-      if typeEnd == 0 || typeEnd >= end || value[typeEnd] /= 47 then Err "http: invalid media type"
-      else
-        let subtypeStart = typeEnd + 1
-        let subtypeEnd = scanTokenEnd value subtypeStart end
-        if subtypeEnd == subtypeStart then Err "http: invalid media subtype"
-        else do
-          () <- parseMediaParameters value subtypeEnd end 0
-          Ok (MediaType
+      let subtypeStart = typeEnd + 1
+      let subtypeEnd = scanTokenEnd value subtypeStart end
+      if subtypeEnd == subtypeStart then
+        Err "http: invalid media subtype"
+      else do
+        () <- parseMediaParameters value subtypeEnd end 0
+        Ok
+          (MediaType
             (lowerAscii value 0 typeEnd)
             (lowerAscii value subtypeStart subtypeEnd))
 
 contentType : List Header -> Result String MediaType
 contentType headers =
   let count = countNamed "content-type" headers
-  if count == 0 then Err "http: request body requires Content-Type"
-  else
-    if count > 1 then Err "http: duplicate Content-Type"
-    else match findNamed "content-type" headers
-      None => Err "http: request body requires Content-Type"
-      Some value => parseMediaType value
+  if count == 0 then
+    Err "http: request body requires Content-Type"
+  else if count > 1 then
+    Err "http: duplicate Content-Type"
+  else match findNamed "content-type" headers
+    None => Err "http: request body requires Content-Type"
+    Some value => parseMediaType value
 
 -- | Decode a framed request body according to its supplied media type. JSON
 -- and text are strictly UTF-8 and have narrower endpoint limits; all other
@@ -1103,7 +1325,8 @@ decodeRequestBody (Request _ _ headers _ body _) = do
   match mediaType
     MediaType "application" "json" => do
       () <- checkJsonBodyBytes (arrayLength body)
-      if not (validUtf8From body 0) then Err "http: JSON body is not valid UTF-8"
+      if not (validUtf8From body 0) then
+        Err "http: JSON body is not valid UTF-8"
       else match parse (fromUtf8 body)
         Err message => Err "http: invalid JSON body: \{message}"
         Ok value => Ok (JsonBody mediaType value)

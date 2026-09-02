@@ -62,12 +62,13 @@ checkAllSame db label sqls =
   let rendered = map (render db) sqls
   match rendered
     [] => println "\{label}: PASS (empty)"
-    first::rest => if all (== first) rest then
-      let _ = println "\{label}: PASS"
-      println first
-    else
-      let _ = println "\{label}: FAIL — renderings diverge:"
-      printRows (r => r) rendered
+    first :: rest =>
+      if all (== first) rest then
+        let _ = println "\{label}: PASS"
+        println first
+      else
+        let _ = println "\{label}: FAIL — renderings diverge:"
+        printRows (r => r) rendered
 
 main : <IO> Unit
 main =

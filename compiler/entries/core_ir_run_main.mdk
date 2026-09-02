@@ -26,5 +26,7 @@ main = drivePrelude emit
 
 emit : List Decl -> List Decl -> <IO> Unit
 emit preludeDecls userDecls =
-  let decls = annotateProgram (dropShadowedExp (funNamesOf userDecls) preludeDecls ++ userDecls)
+  let decls =
+    annotateProgram
+      (dropShadowedExp (funNamesOf userDecls) preludeDecls ++ userDecls)
   putStr (cevalOutputOf decls (lowerProgram decls))

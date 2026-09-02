@@ -1,8 +1,5 @@
 expectEqual expected actual =
-  if eq expected actual then
-    Pass
-  else
-    Fail "mismatch"
+  if eq expected actual then Pass else Fail "mismatch"
 
 goTests t = match runExpectation t
   Pass =>

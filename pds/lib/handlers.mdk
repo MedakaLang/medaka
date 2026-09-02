@@ -143,10 +143,11 @@ contentTypeHeader value = match makeHeader "content-type" (toUtf8 value)
 {- | The success counterpart of `xrpcErrorResponse`: 200 with an exact body and
    one declared media type. `lib.http`'s serializer owns all framing. -}
 bytesOkResponse : String -> Array Int -> Response
-bytesOkResponse contentType body = match makeResponse 200 "OK" [contentTypeHeader contentType] body
-  Ok response => response
-  Err message =>
-    panic "handlers: internal response construction error: \{message}"
+bytesOkResponse contentType body =
+  match makeResponse 200 "OK" [contentTypeHeader contentType] body
+    Ok response => response
+    Err message =>
+      panic "handlers: internal response construction error: \{message}"
 
 {- | The standard XRPC success envelope: 200 with a serialized JSON body.
    `lib.xrpc` owns the matching error envelope (`xrpcErrorResponse`) but has no
@@ -190,7 +191,10 @@ requireNoLexiconValidation : Json -> Result Response Unit
 requireNoLexiconValidation body = match get "validate" body
   None => Ok ()
   Some (JBool False) => Ok ()
-  Some (JBool True) => Err (invalidRequest "Lexicon record validation is not implemented; 'validate: true' cannot be honored")
+  Some (JBool True) =>
+    Err
+      (invalidRequest
+        "Lexicon record validation is not implemented; 'validate: true' cannot be honored")
   Some _ => Err (invalidRequest "Request field 'validate' must be a boolean")
 
 requireConfiguredRepo : Store -> Result Response Repo
@@ -217,9 +221,13 @@ sameHandle left right = toLower left == toLower right
 requireHostedIdentifier : String -> Account -> String -> Result Response Unit
 requireHostedIdentifier field account target = do
   () <- match validateAtIdentifier target
-    Err message => Err (invalidRequest "Request field '\{field}' is not a valid at-identifier: \{message}")
+    Err message =>
+      Err
+        (invalidRequest
+          "Request field '\{field}' is not a valid at-identifier: \{message}")
     Ok () => Ok ()
-  if target == accountDid account || sameHandle target (accountHandle account) then
+  if target == accountDid account
+    || sameHandle target (accountHandle account) then
     Ok ()
   else
     Err (repoNotFound "This server does not host the repository '\{target}'")
@@ -247,12 +255,16 @@ requireRecord : Json -> Result Response DagCbor
 requireRecord body = match get "record" body
   None => Err (invalidRequest "Request field 'record' is required")
   Some value => match lexJsonToDagCbor value
-    Err message => Err (invalidRequest "Request field 'record' is not representable as atproto data: \{message}")
+    Err message =>
+      Err
+        (invalidRequest
+          "Request field 'record' is not representable as atproto data: \{message}")
     Ok record => Ok record
 
 encodeRecord : DagCbor -> Result Response (Array Int)
 encodeRecord record = match dagCborEncode record
-  Err message => Err (invalidRequest "Request field 'record' cannot be encoded: \{message}")
+  Err message =>
+    Err (invalidRequest "Request field 'record' cannot be encoded: \{message}")
   Ok bytes => Ok bytes
 
 recordPath : String -> String -> Array Int
@@ -287,7 +299,10 @@ checkSwapCommit body repo = match get "swapCommit" body
   None => Ok ()
   Some JNull => Ok ()
   Some (JString text) => match cidFromString text
-    Err message => Err (invalidRequest "Request field 'swapCommit' is not a valid CID: \{message}")
+    Err message =>
+      Err
+        (invalidRequest
+          "Request field 'swapCommit' is not a valid CID: \{message}")
     Ok expected =>
       if cidEqual expected (currentCommitCid repo) then
         Ok ()
@@ -305,9 +320,15 @@ checkSwapRecord body path repo = match get "swapRecord" body
     actual <- currentRecordCid path repo
     match actual
       None => Ok ()
-      Some cid => Err (invalidSwap "Record is at \{cidToString cid}; 'swapRecord: null' requires its absence")
+      Some cid =>
+        Err
+          (invalidSwap
+            "Record is at \{cidToString cid}; 'swapRecord: null' requires its absence")
   Some (JString text) => match cidFromString text
-    Err message => Err (invalidRequest "Request field 'swapRecord' is not a valid CID: \{message}")
+    Err message =>
+      Err
+        (invalidRequest
+          "Request field 'swapRecord' is not a valid CID: \{message}")
     Ok expected => do
       actual <- currentRecordCid path repo
       match actual
@@ -323,11 +344,10 @@ checkSwapRecord body path repo = match get "swapRecord" body
 -- ── outputs ─────────────────────────────────────────────────────────────────
 
 commitJson : RepoCommit -> Json
-commitJson commit = jObject
-  [
-    ("cid", JString (cidToString (repoCommitCid commit))),
-    ("rev", JString (tidToString (repoCommitTid commit))),
-  ]
+commitJson commit = jObject [
+  ("cid", JString (cidToString (repoCommitCid commit))),
+  ("rev", JString (tidToString (repoCommitTid commit))),
+]
 
 {- | `validationStatus` is always `"unknown"`, and that is not a placeholder.
    `requireNoLexiconValidation` REFUSES `validate: true` outright, so every
@@ -336,13 +356,12 @@ commitJson commit = jObject
    would leave a client unable to tell an unvalidated write from a validated
    one. -}
 writeOutput : Account -> String -> String -> Cid -> RepoCommit -> Json
-writeOutput account collection rkey recordCid commit = jObject
-  [
-    ("uri", JString "at://\{accountDid account}/\{collection}/\{rkey}"),
-    ("cid", JString (cidToString recordCid)),
-    ("commit", commitJson commit),
-    ("validationStatus", JString "unknown"),
-  ]
+writeOutput account collection rkey recordCid commit = jObject [
+  ("uri", JString "at://\{accountDid account}/\{collection}/\{rkey}"),
+  ("cid", JString (cidToString recordCid)),
+  ("commit", commitJson commit),
+  ("validationStatus", JString "unknown"),
+]
 
 deleteOutput : RepoCommit -> Json
 deleteOutput commit = jObject [("commit", commitJson commit)]
@@ -372,11 +391,15 @@ applyCreateRecord account store body = do
   () <- checkSwapRecord body path repo
   bytes <- encodeRecord record
   mutation <- admitMutation (repoCreate path record rev repo)
-  Ok
-    (
-      repoMutationState mutation,
-      writeOutput account collection rkey (cidForDagCbor bytes) (repoMutationCommit mutation),
-    )
+  Ok (
+    repoMutationState mutation,
+    writeOutput
+      account
+      collection
+      rkey
+      (cidForDagCbor bytes)
+      (repoMutationCommit mutation),
+  )
 
 applyPutRecord : Account -> Store -> Json -> Result Response (Repo, Json)
 applyPutRecord account store body = do
@@ -397,11 +420,15 @@ applyPutRecord account store body = do
     None => repoCreate path record rev repo
     Some _ => repoUpdate path record rev repo
   mutation <- admitMutation transition
-  Ok
-    (
-      repoMutationState mutation,
-      writeOutput account collection rkey (cidForDagCbor bytes) (repoMutationCommit mutation),
-    )
+  Ok (
+    repoMutationState mutation,
+    writeOutput
+      account
+      collection
+      rkey
+      (cidForDagCbor bytes)
+      (repoMutationCommit mutation),
+  )
 
 {- | `deleteRecord` is IDEMPOTENT: atproto's contract is that deleting a record
    that is not there succeeds. A caller that retries a delete whose response it
@@ -433,8 +460,10 @@ applyDeleteRecord account store body = do
     Some _ => do
       rev <- nextRevision repo
       mutation <- admitMutation (repoDelete path rev repo)
-      Ok
-        (repoMutationState mutation, deleteOutput (repoMutationCommit mutation))
+      Ok (
+        repoMutationState mutation,
+        deleteOutput (repoMutationCommit mutation),
+      )
 
 finishWrite : Store -> Result Response (Repo, Json) -> (Store, Response)
 finishWrite store (Err response) = (store, response)
@@ -503,19 +532,13 @@ recordServer account = do
 
 paramCount : String -> List QueryParam -> Int
 paramCount _ [] = 0
-paramCount name ((QueryParam key _)::rest) =
-  if key == name then
-    1 + paramCount name rest
-  else
-    paramCount name rest
+paramCount name ((QueryParam key _) :: rest) =
+  if key == name then 1 + paramCount name rest else paramCount name rest
 
 paramFirst : String -> List QueryParam -> Option String
 paramFirst _ [] = None
-paramFirst name ((QueryParam key value)::rest) =
-  if key == name then
-    Some value
-  else
-    paramFirst name rest
+paramFirst name ((QueryParam key value) :: rest) =
+  if key == name then Some value else paramFirst name rest
 
 {- | None of these six endpoints takes a repeated parameter, so a repeat is a
    request whose meaning is ambiguous — rejected rather than silently resolved
@@ -540,7 +563,10 @@ requiredParam name params = do
 rejectUnimplementedParam : String -> List QueryParam -> Result Response Unit
 rejectUnimplementedParam name params = match paramFirst name params
   None => Ok ()
-  Some _ => Err (invalidRequest "Query parameter '\{name}' is not implemented by this server")
+  Some _ =>
+    Err
+      (invalidRequest
+        "Query parameter '\{name}' is not implemented by this server")
 
 -- ── record views ────────────────────────────────────────────────────────────
 
@@ -557,19 +583,22 @@ reencodeRecord value = match dagCborEncode value
 recordView : Account -> String -> String -> DagCbor -> Result Response Json
 recordView account collection rkey value = do
   bytes <- reencodeRecord value
-  Ok (jObject
-    [
+  Ok
+    (jObject [
       ("uri", JString (recordUri account collection rkey)),
       ("cid", JString (cidToString (cidForDagCbor bytes))),
       ("value", dagCborToLexJson value),
     ])
 
-recordViews : Account -> String -> List (String, DagCbor) -> Result Response (List Json)
+recordViews : Account ->
+  String ->
+  List (String, DagCbor) ->
+  Result Response (List Json)
 recordViews _ _ [] = Ok []
-recordViews account collection ((rkey, value)::rest) = do
+recordViews account collection ((rkey, value) :: rest) = do
   view <- recordView account collection rkey value
   views <- recordViews account collection rest
-  Ok (view::views)
+  Ok (view :: views)
 
 -- ── repository reads ────────────────────────────────────────────────────────
 
@@ -591,9 +620,11 @@ splitRecordPath path = match split "/" (fromUtf8 path)
 {- | The `(rkey, record)` pairs of one collection, in the repository's own
    ascending key order (`lib.mst` keeps entries sorted, so this is already the
    ascending half of atproto's `reverse` parameter). -}
-collectionEntries : String -> List (Array Int, Cid, DagCbor) -> List (String, DagCbor)
+collectionEntries : String ->
+  List (Array Int, Cid, DagCbor) ->
+  List (String, DagCbor)
 collectionEntries _ [] = []
-collectionEntries wanted ((path, _, value)::rest) = match splitRecordPath path
+collectionEntries wanted ((path, _, value) :: rest) = match splitRecordPath path
   Some (collection, rkey) =>
     if collection == wanted then
       (rkey, value) :: collectionEntries wanted rest
@@ -601,23 +632,25 @@ collectionEntries wanted ((path, _, value)::rest) = match splitRecordPath path
       collectionEntries wanted rest
   None => collectionEntries wanted rest
 
-distinctCollections : List (Array Int, Cid, DagCbor) -> List String -> List String
+distinctCollections : List (Array Int, Cid, DagCbor) ->
+  List String ->
+  List String
 distinctCollections [] seen = reverseOnto seen []
-distinctCollections ((path, _, _)::rest) seen = match splitRecordPath path
+distinctCollections ((path, _, _) :: rest) seen = match splitRecordPath path
   Some (collection, _) =>
     if nameSeen collection seen then
       distinctCollections rest seen
     else
-      distinctCollections rest (collection::seen)
+      distinctCollections rest (collection :: seen)
   None => distinctCollections rest seen
 
 nameSeen : String -> List String -> Bool
 nameSeen _ [] = False
-nameSeen wanted (name::rest) = name == wanted || nameSeen wanted rest
+nameSeen wanted (name :: rest) = name == wanted || nameSeen wanted rest
 
 reverseOnto : List a -> List a -> List a
 reverseOnto [] acc = acc
-reverseOnto (x::rest) acc = reverseOnto rest (x::acc)
+reverseOnto (x :: rest) acc = reverseOnto rest (x :: acc)
 
 -- ── com.atproto.repo.getRecord ──────────────────────────────────────────────
 
@@ -631,7 +664,10 @@ applyGetRecord account store params = do
   requested <- optionalParam "cid" params
   found <- lookupRecord (recordPath collection rkey) repo
   value <- match found
-    None => Err (recordNotFound "Record not found: \{recordUri account collection rkey}")
+    None =>
+      Err
+        (recordNotFound
+          "Record not found: \{recordUri account collection rkey}")
     Some value => Ok value
   bytes <- reencodeRecord value
   let actual = cidToString (cidForDagCbor bytes)
@@ -641,9 +677,11 @@ applyGetRecord account store params = do
       if wanted == actual then
         Ok ()
       else
-        Err (recordNotFound "Record \{recordUri account collection rkey} is at \{actual}, not \{wanted}")
-  Ok (jObject
-    [
+        Err
+          (recordNotFound
+            "Record \{recordUri account collection rkey} is at \{actual}, not \{wanted}")
+  Ok
+    (jObject [
       ("uri", JString (recordUri account collection rkey)),
       ("cid", JString actual),
       ("value", dagCborToLexJson value),
@@ -661,7 +699,8 @@ requireReverse params = do
     None => Ok False
     Some "true" => Ok True
     Some "false" => Ok False
-    Some _ => Err (invalidRequest "Query parameter 'reverse' must be 'true' or 'false'")
+    Some _ =>
+      Err (invalidRequest "Query parameter 'reverse' must be 'true' or 'false'")
 
 requireLimit : List QueryParam -> Result Response Int
 requireLimit params = do
@@ -672,7 +711,8 @@ requireLimit params = do
       None => Err (invalidRequest "Query parameter 'limit' must be an integer")
       Some limit =>
         if limit < 1 || limit > 100 then
-          Err (invalidRequest "Query parameter 'limit' must be between 1 and 100")
+          Err
+            (invalidRequest "Query parameter 'limit' must be between 1 and 100")
         else
           Ok limit
 
@@ -685,7 +725,7 @@ orderEntries False entries = reverseOnto entries []
    remainder of the page the cursor ended. -}
 afterCursor : Bool -> String -> List (String, DagCbor) -> List (String, DagCbor)
 afterCursor _ _ [] = []
-afterCursor ascending cursor ((rkey, value)::rest) =
+afterCursor ascending cursor ((rkey, value) :: rest) =
   let keep = if ascending then rkey > cursor else rkey < cursor
   if keep then
     (rkey, value) :: afterCursor ascending cursor rest
@@ -694,20 +734,17 @@ afterCursor ascending cursor ((rkey, value)::rest) =
 
 takeLimit : Int -> List (String, DagCbor) -> List (String, DagCbor)
 takeLimit _ [] = []
-takeLimit limit (entry::rest) =
-  if limit <= 0 then
-    []
-  else
-    entry :: takeLimit (limit - 1) rest
+takeLimit limit (entry :: rest) =
+  if limit <= 0 then [] else entry :: takeLimit (limit - 1) rest
 
 entryCount : List (String, DagCbor) -> Int
 entryCount [] = 0
-entryCount (_::rest) = 1 + entryCount rest
+entryCount (_ :: rest) = 1 + entryCount rest
 
 lastRkey : String -> List (String, DagCbor) -> String
 lastRkey fallback [] = fallback
 lastRkey _ [(rkey, _)] = rkey
-lastRkey fallback (_::rest) = lastRkey fallback rest
+lastRkey fallback (_ :: rest) = lastRkey fallback rest
 
 {- | `listRecords` is the ONE collection-taking endpoint whose collection never
    reaches `lib.repo`: every sibling builds a `collection/rkey` path that
@@ -721,7 +758,10 @@ requireCollectionSyntax : String -> Result Response Unit
 requireCollectionSyntax collection =
   let bytes = toUtf8 collection
   match validateCollection bytes (arrayLength bytes)
-    Err message => Err (invalidRequest "Query parameter 'collection' is not a valid collection NSID: \{message}")
+    Err message =>
+      Err
+        (invalidRequest
+          "Query parameter 'collection' is not a valid collection NSID: \{message}")
     Ok () => Ok ()
 
 applyListRecords : Account -> Store -> List QueryParam -> Result Response Json
@@ -744,8 +784,11 @@ applyListRecords account store params = do
   -- A cursor is emitted only when a further page exists, so a client that gets
   -- none knows it has seen the whole collection.
   if entryCount remaining > entryCount page then
-    Ok (jObject
-      [("records", jArray views), ("cursor", JString (lastRkey "" page))])
+    Ok
+      (jObject [
+        ("records", jArray views),
+        ("cursor", JString (lastRkey "" page)),
+      ])
   else
     Ok (jObject [("records", jArray views)])
 
@@ -764,8 +807,8 @@ applyDescribeRepo account store params = do
   target <- requiredParam "repo" params
   () <- requireHostedIdentifier "repo" account target
   entries <- listAllEntries repo
-  Ok (jObject
-    [
+  Ok
+    (jObject [
       ("did", JString (accountDid account)),
       ("handle", JString (accountHandle account)),
       ("collections", jArray (map JString (distinctCollections entries []))),
@@ -789,14 +832,17 @@ applyGetRepo account store params = do
 
 -- ── com.atproto.sync.getLatestCommit ────────────────────────────────────────
 
-applyGetLatestCommit : Account -> Store -> List QueryParam -> Result Response Json
+applyGetLatestCommit : Account ->
+  Store ->
+  List QueryParam ->
+  Result Response Json
 applyGetLatestCommit account store params = do
   repo <- requireConfiguredRepo store
   target <- requiredParam "did" params
   () <- requireHostedDid account target
   let commit = repoLatestCommit repo
-  Ok (jObject
-    [
+  Ok
+    (jObject [
       ("cid", JString (cidToString (repoCommitCid commit))),
       ("rev", JString (tidToString (repoCommitTid commit))),
     ])
@@ -809,7 +855,10 @@ applyResolveHandle : Account -> List QueryParam -> Result Response Json
 applyResolveHandle account params = do
   handle <- requiredParam "handle" params
   () <- match validateHandle handle
-    Err message => Err (invalidRequest "Query parameter 'handle' is not a valid handle: \{message}")
+    Err message =>
+      Err
+        (invalidRequest
+          "Query parameter 'handle' is not a valid handle: \{message}")
     Ok () => Ok ()
   if sameHandle handle (accountHandle account) then
     Ok (jObject [("did", JString (accountDid account))])
@@ -823,21 +872,20 @@ applyResolveHandle account params = do
    hosted account — the account is a `did:key` and owns a different document
    this server does not serve. -}
 didWebDocument : Account -> Json
-didWebDocument account = jObject
-  [
-    ("@context", jArray [JString "https://www.w3.org/ns/did/v1"]),
-    ("id", JString "did:web:\{accountHostname account}"),
-    (
-      "service",
-      jArray [
-        jObject [
-          ("id", JString "#atproto_pds"),
-          ("type", JString "AtprotoPersonalDataServer"),
-          ("serviceEndpoint", JString "https://\{accountHostname account}"),
-        ]
+didWebDocument account = jObject [
+  ("@context", jArray [JString "https://www.w3.org/ns/did/v1"]),
+  ("id", JString "did:web:\{accountHostname account}"),
+  (
+    "service",
+    jArray [
+      jObject [
+        ("id", JString "#atproto_pds"),
+        ("type", JString "AtprotoPersonalDataServer"),
+        ("serviceEndpoint", JString "https://\{accountHostname account}"),
       ],
-    ),
-  ]
+    ],
+  ),
+]
 
 wellKnownResponse : Account -> WellKnown -> Response
 wellKnownResponse account WellKnownDidDocument =
@@ -908,19 +956,18 @@ readEndpoints = do
   getRepo <- queryEndpoint getRepoNsid
   getLatestCommit <- queryEndpoint getLatestCommitNsid
   resolveHandle <- queryEndpoint resolveHandleNsid
-  Ok
-    [
-      getRecord,
-      listRecords,
-      describeRepo,
-      getRepo,
-      getLatestCommit,
-      resolveHandle,
-    ]
+  Ok [
+    getRecord,
+    listRecords,
+    describeRepo,
+    getRepo,
+    getLatestCommit,
+    resolveHandle,
+  ]
 
 concatEndpoints : List Endpoint -> List Endpoint -> List Endpoint
 concatEndpoints [] rest = rest
-concatEndpoints (endpoint::more) rest = endpoint :: concatEndpoints more rest
+concatEndpoints (endpoint :: more) rest = endpoint :: concatEndpoints more rest
 
 -- | A configured full-API server for one account.
 export

@@ -55,29 +55,24 @@ validBytes bytes i =
 
 arrayBytes : Array Int -> Int -> List Int
 arrayBytes bytes i =
-  if i >= arrayLength bytes then
-    []
-  else
-    bytes[i] :: arrayBytes bytes (i + 1)
+  if i >= arrayLength bytes then [] else bytes[i] :: arrayBytes bytes (i + 1)
 
 emitArgument : Int -> Int -> Builder -> Unit
 emitArgument major value out =
-  if value < 24 then emitU8 (shiftLeft major 5 + value) out
+  if value < 24 then
+    emitU8 (shiftLeft major 5 + value) out
+  else if value <= 255 then
+    emitU8 (shiftLeft major 5 + 24) out
+    emitU8 value out
+  else if value <= 65535 then
+    emitU8 (shiftLeft major 5 + 25) out
+    emitBeUint 2 value out
+  else if value <= 4294967295 then
+    emitU8 (shiftLeft major 5 + 26) out
+    emitBeUint 4 value out
   else
-    if value <= 255 then
-      emitU8 (shiftLeft major 5 + 24) out
-      emitU8 value out
-    else
-      if value <= 65535 then
-        emitU8 (shiftLeft major 5 + 25) out
-        emitBeUint 2 value out
-      else
-        if value <= 4294967295 then
-          emitU8 (shiftLeft major 5 + 26) out
-          emitBeUint 4 value out
-        else
-          emitU8 (shiftLeft major 5 + 27) out
-          emitBeUint 8 value out
+    emitU8 (shiftLeft major 5 + 27) out
+    emitBeUint 8 value out
 
 keyCompare : String -> String -> Ordering
 keyCompare left right =
@@ -89,7 +84,8 @@ keyCompare left right =
 
 compareKeyBytes : Array Int -> Array Int -> Int -> Ordering
 compareKeyBytes left right i =
-  if i >= arrayLength left then Eq
+  if i >= arrayLength left then
+    Eq
   else match compare left[i] right[i]
     Eq => compareKeyBytes left right (i + 1)
     order => order
@@ -111,7 +107,8 @@ emitValue (DcInt value) out =
     emitArgument 1 (0 - 1 - value) out
   Ok ()
 emitValue (DcBytes bytes) out =
-  if not (validBytes bytes 0) then Err "dagcbor: byte string element outside byte range 0..255"
+  if not (validBytes bytes 0) then
+    Err "dagcbor: byte string element outside byte range 0..255"
   else
     emitArgument 2 (arrayLength bytes) out
     emitBytes (arrayBytes bytes 0) out
@@ -142,13 +139,13 @@ emitValue (DcLink cid) out =
 
 emitValues : List DagCbor -> Builder -> Result String Unit
 emitValues [] _ = Ok ()
-emitValues (value::rest) out = match emitValue value out
+emitValues (value :: rest) out = match emitValue value out
   Err message => Err message
   Ok () => emitValues rest out
 
 emitFields : List (String, DagCbor) -> Builder -> Result String Unit
 emitFields [] _ = Ok ()
-emitFields ((key, value)::rest) out = match emitValue (DcString key) out
+emitFields ((key, value) :: rest) out = match emitValue (DcString key) out
   Err message => Err message
   Ok () => match emitValue value out
     Err message => Err message
@@ -156,12 +153,9 @@ emitFields ((key, value)::rest) out = match emitValue (DcString key) out
 
 firstDuplicate : List (String, DagCbor) -> Option String -> Option String
 firstDuplicate [] _ = None
-firstDuplicate ((key, _)::rest) None = firstDuplicate rest (Some key)
-firstDuplicate ((key, _)::rest) (Some prior) =
-  if key == prior then
-    Some key
-  else
-    firstDuplicate rest (Some key)
+firstDuplicate ((key, _) :: rest) None = firstDuplicate rest (Some key)
+firstDuplicate ((key, _) :: rest) (Some prior) =
+  if key == prior then Some key else firstDuplicate rest (Some key)
 
 -- | Encode one value to its unique canonical byte representation.
 export
@@ -181,15 +175,18 @@ foldUIntGo bytes i acc =
     foldUIntGo bytes (i + 1) (acc * 256 + bytes[i])
 
 readSizedArgument : Array Int -> Int -> Int -> Int -> BResult Int
-readSizedArgument input pos width minimum = match runBP (takeSlice width) input pos
-  BErr message errorPos => BErr message errorPos
-  BOk bytes endPos => if width == 8 && bytes[0] >= 64 then BErr "dagcbor: integer/length exceeds representable Int range" pos
-  else
-    let value = foldUInt bytes 0
-    if value < minimum then
-      BErr "dagcbor: non-canonical shortest integer/length" pos
-    else
-      BOk value endPos
+readSizedArgument input pos width minimum =
+  match runBP (takeSlice width) input pos
+    BErr message errorPos => BErr message errorPos
+    BOk bytes endPos =>
+      if width == 8 && bytes[0] >= 64 then
+        BErr "dagcbor: integer/length exceeds representable Int range" pos
+      else
+        let value = foldUInt bytes 0
+        if value < minimum then
+          BErr "dagcbor: non-canonical shortest integer/length" pos
+        else
+          BOk value endPos
 
 readArgument : Array Int -> Int -> Int -> BResult Int
 readArgument _ pos additional
@@ -204,14 +201,15 @@ readArgument _ pos _ = BErr "dagcbor: reserved additional-information value" pos
 
 parseValueAt : Array Int -> Int -> Int -> BResult DagCbor
 parseValueAt input pos depth =
-  if depth > maxDepth then BErr "dagcbor: nesting depth exceeds 128" pos
+  if depth > maxDepth then
+    BErr "dagcbor: nesting depth exceeds 128" pos
+  else if pos >= arrayLength input then
+    BErr "dagcbor: truncated value" pos
   else
-    if pos >= arrayLength input then BErr "dagcbor: truncated value" pos
-    else
-      let initial = input[pos]
-      let major = shiftRight initial 5
-      let additional = bitAnd initial 31
-      parseMajor input (pos + 1) depth major additional
+    let initial = input[pos]
+    let major = shiftRight initial 5
+    let additional = bitAnd initial 31
+    parseMajor input (pos + 1) depth major additional
 
 parseMajor : Array Int -> Int -> Int -> Int -> Int -> BResult DagCbor
 parseMajor input pos _ 0 additional = match readArgument input pos additional
@@ -222,12 +220,14 @@ parseMajor input pos _ 1 additional = match readArgument input pos additional
   BOk value endPos => BOk (DcInt (0 - 1 - value)) endPos
 parseMajor input pos _ 2 additional = parseBytes input pos additional
 parseMajor input pos _ 3 additional = parseString input pos additional
-parseMajor input pos depth 4 additional = match readArgument input pos additional
-  BErr message errorPos => BErr message errorPos
-  BOk count endPos => parseArray input endPos depth count []
-parseMajor input pos depth 5 additional = match readArgument input pos additional
-  BErr message errorPos => BErr message errorPos
-  BOk count endPos => parseMap input endPos depth count None []
+parseMajor input pos depth 4 additional =
+  match readArgument input pos additional
+    BErr message errorPos => BErr message errorPos
+    BOk count endPos => parseArray input endPos depth count []
+parseMajor input pos depth 5 additional =
+  match readArgument input pos additional
+    BErr message errorPos => BErr message errorPos
+    BOk count endPos => parseMap input endPos depth count None []
 parseMajor input pos depth 6 additional = parseTag input pos depth additional
 parseMajor _ pos _ 7 20 = BOk (DcBool False) pos
 parseMajor _ pos _ 7 21 = BOk (DcBool True) pos
@@ -261,13 +261,16 @@ continuation byte = byte >= 0x80 && byte <= 0xbf
 
 validUtf8 : Array Int -> Int -> Bool
 validUtf8 bytes i =
-  if i >= arrayLength bytes then True
+  if i >= arrayLength bytes then
+    True
   else
     let first = bytes[i]
     if first <= 0x7f then
       validUtf8 bytes (i + 1)
     else if first >= 0xc2 && first <= 0xdf then
-      i + 1 < arrayLength bytes && continuation bytes[i + 1] && validUtf8 bytes (i + 2)
+      i + 1 < arrayLength bytes
+        && continuation bytes[i + 1]
+        && validUtf8 bytes (i + 2)
     else if first >= 0xe0 && first <= 0xef then
       validUtf8Three bytes i first
     else if first >= 0xf0 && first <= 0xf4 then
@@ -277,28 +280,32 @@ validUtf8 bytes i =
 
 validUtf8Three : Array Int -> Int -> Int -> Bool
 validUtf8Three bytes i first =
-  if i + 2 >= arrayLength bytes then False
+  if i + 2 >= arrayLength bytes then
+    False
   else
     let second = bytes[i + 1]
-    let secondOk = if first == 0xe0 then
-      second >= 0xa0 && second <= 0xbf
-    else if first == 0xed then
-      second >= 0x80 && second <= 0x9f
-    else
-      continuation second
+    let secondOk =
+      if first == 0xe0 then
+        second >= 0xa0 && second <= 0xbf
+      else if first == 0xed then
+        second >= 0x80 && second <= 0x9f
+      else
+        continuation second
     secondOk && continuation bytes[i + 2] && validUtf8 bytes (i + 3)
 
 validUtf8Four : Array Int -> Int -> Int -> Bool
 validUtf8Four bytes i first =
-  if i + 3 >= arrayLength bytes then False
+  if i + 3 >= arrayLength bytes then
+    False
   else
     let second = bytes[i + 1]
-    let secondOk = if first == 0xf0 then
-      second >= 0x90 && second <= 0xbf
-    else if first == 0xf4 then
-      second >= 0x80 && second <= 0x8f
-    else
-      continuation second
+    let secondOk =
+      if first == 0xf0 then
+        second >= 0x90 && second <= 0xbf
+      else if first == 0xf4 then
+        second >= 0x80 && second <= 0x8f
+      else
+        continuation second
     secondOk
       && continuation bytes[i + 2]
       && continuation bytes[i + 3]
@@ -306,21 +313,37 @@ validUtf8Four bytes i first =
 
 parseArray : Array Int -> Int -> Int -> Int -> List DagCbor -> BResult DagCbor
 parseArray _ pos _ 0 acc = BOk (DcArray (reverse acc)) pos
-parseArray input pos depth remaining acc = match parseValueAt input pos (depth + 1)
-  BErr message errorPos => BErr message errorPos
-  BOk value endPos => parseArray input endPos depth (remaining - 1) (value::acc)
+parseArray input pos depth remaining acc =
+  match parseValueAt input pos (depth + 1)
+    BErr message errorPos => BErr message errorPos
+    BOk value endPos =>
+      parseArray input endPos depth (remaining - 1) (value :: acc)
 
-parseMap : Array Int -> Int -> Int -> Int -> Option String -> List (String, DagCbor) -> BResult DagCbor
+parseMap : Array Int ->
+  Int ->
+  Int ->
+  Int ->
+  Option String ->
+  List (String, DagCbor) ->
+  BResult DagCbor
 parseMap _ pos _ 0 _ acc = BOk (DcMap (reverse acc)) pos
-parseMap input pos depth remaining previous acc = match parseValueAt input pos (depth + 1)
-  BErr message errorPos => BErr message errorPos
-  BOk keyValue keyEnd => match keyValue
-    DcString key => match mapKeyOrder previous key
-      Err message => BErr message pos
-      Ok () => match parseValueAt input keyEnd (depth + 1)
-        BErr message errorPos => BErr message errorPos
-        BOk value valueEnd => parseMap input valueEnd depth (remaining - 1) (Some key) ((key, value)::acc)
-    _ => BErr "dagcbor: map key is not a string" pos
+parseMap input pos depth remaining previous acc =
+  match parseValueAt input pos (depth + 1)
+    BErr message errorPos => BErr message errorPos
+    BOk keyValue keyEnd => match keyValue
+      DcString key => match mapKeyOrder previous key
+        Err message => BErr message pos
+        Ok () => match parseValueAt input keyEnd (depth + 1)
+          BErr message errorPos => BErr message errorPos
+          BOk value valueEnd =>
+            parseMap
+              input
+              valueEnd
+              depth
+              (remaining - 1)
+              (Some key)
+              ((key, value) :: acc)
+      _ => BErr "dagcbor: map key is not a string" pos
 
 mapKeyOrder : Option String -> String -> Result String Unit
 mapKeyOrder None _ = Ok ()
@@ -340,21 +363,27 @@ parseTag input pos _ additional = match readArgument input pos additional
 
 parseLink : Array Int -> Int -> BResult DagCbor
 parseLink input pos =
-  if pos >= arrayLength input then BErr "dagcbor: truncated tag-42 link" pos
+  if pos >= arrayLength input then
+    BErr "dagcbor: truncated tag-42 link" pos
   else
     let initial = input[pos]
     let major = shiftRight initial 5
     let additional = bitAnd initial 31
-    if major /= 2 then BErr "dagcbor: tag-42 link must contain a byte string" pos
+    if major /= 2 then
+      BErr "dagcbor: tag-42 link must contain a byte string" pos
     else match readArgument input (pos + 1) additional
       BErr message errorPos => BErr message errorPos
       BOk count payloadPos => match runBP (takeSlice count) input payloadPos
         BErr _ errorPos =>
           BErr "dagcbor: truncated tag-42 link payload" errorPos
-        BOk payload finalPos => if arrayLength payload == 0 || payload[0] /= 0 then BErr "dagcbor: tag-42 link is missing the leading identity byte" payloadPos
-        else match cidFromBytes (drop 1 payload)
-          Err message => BErr "dagcbor: tag-42 CID: \{message}" payloadPos
-          Ok cid => BOk (DcLink cid) finalPos
+        BOk payload finalPos =>
+          if arrayLength payload == 0 || payload[0] /= 0 then
+            BErr
+              "dagcbor: tag-42 link is missing the leading identity byte"
+              payloadPos
+          else match cidFromBytes (drop 1 payload)
+            Err message => BErr "dagcbor: tag-42 CID: \{message}" payloadPos
+            Ok cid => BOk (DcLink cid) finalPos
 
 dagParser : ByteParser DagCbor
 dagParser = ByteParserE (input pos => parseValueAt input pos 0)
@@ -364,11 +393,13 @@ dagParser = ByteParserE (input pos => parseValueAt input pos 0)
 export
 dagCborDecode : Array Int -> Result String DagCbor
 dagCborDecode bytes =
-  if not (validBytes bytes 0) then Err "dagcbor: input element outside byte range 0..255"
+  if not (validBytes bytes 0) then
+    Err "dagcbor: input element outside byte range 0..255"
   else match runBP dagParser bytes 0
     BErr message pos => Err "\{message} at byte \{intToString pos}"
     BOk value pos =>
       if pos /= arrayLength bytes then
-        Err "dagcbor: trailing bytes after top-level value at byte \{intToString pos}"
+        Err
+          "dagcbor: trailing bytes after top-level value at byte \{intToString pos}"
       else
         Ok value

@@ -25,15 +25,12 @@ names are qualified.
 -- file: greet.mdk
 export hello = "hello"
 export bye = "bye"
-
 -- file: main_single.mdk
 import greet.hello  -- one name
 main = println hello
-
 -- file: main_group.mdk
 import greet.{hello, bye}  -- several names
 main = println (hello ++ " / " ++ bye)
-
 -- file: main_wildcard.mdk
 import greet.*  -- every export
 main = println hello
@@ -53,10 +50,8 @@ alias resolves it:
 ```medaka-project
 -- file: red.mdk
 export paint = "red"
-
 -- file: blue.mdk
 export paint = "blue"
-
 -- file: main.mdk
 import red as R  -- module alias: refer to R.paint
 import blue.{paint as bluePaint}  -- member alias: rename one import
@@ -100,13 +95,11 @@ when a type and its implementations live in different files:
 ```medaka-project
 -- file: widget.mdk
 public export data Widget = Widget Int
-
 -- file: display_widget.mdk
 import widget.{Widget}
 
 impl Display Widget where
   display (Widget n) = "widget#\{n}"
-
 -- file: main.mdk
 import widget.{Widget(..)}
 import display_widget
@@ -140,11 +133,9 @@ type only and keeps the constructors private, which is called an abstract export
 
 ```medaka-project
 -- file: account.mdk
-public export data Point =
-  | Point Int Int  -- type and constructors
+public export data Point = Point Int Int  -- type and constructors
 
-export data Account =
-  | Account Int  -- type only; the constructor stays private
+export data Account = Account Int  -- type only; the constructor stays private
 
 export
 mkAccount : Int -> Account
@@ -153,7 +144,6 @@ mkAccount n = Account n
 export
 balanceOf : Account -> Int
 balanceOf (Account n) = n
-
 -- file: main.mdk
 import account.{Point(..), Account, mkAccount, balanceOf}
 

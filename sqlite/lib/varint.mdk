@@ -59,7 +59,12 @@ sqVarintGo input pos = sqVarintLoop input pos 0 1
 sqVarintStep : Array Int -> Int -> Int -> Int -> Int -> BResult Int
 sqVarintStep input pos acc byteNum b
   | byteNum == 9 = BOk (acc * 256 + b) (pos + 1)
-  | b >= contBit = sqVarintLoop input (pos + 1) (shiftLeft acc 7 + bitAnd b groupMask) (byteNum + 1)
+  | b >= contBit =
+    sqVarintLoop
+      input
+      (pos + 1)
+      (shiftLeft acc 7 + bitAnd b groupMask)
+      (byteNum + 1)
   | otherwise = BOk (shiftLeft acc 7 + bitAnd b groupMask) (pos + 1)
 
 sqVarintLoop : Array Int -> Int -> Int -> Int -> BResult Int
@@ -87,19 +92,19 @@ sqVarintSize n
 -- then sets the flags to produce the on-wire bytes.
 sqVarintGroups : Int -> List Int -> List Int
 sqVarintGroups v acc
-  | v < contBit = v :: acc                                 -- highest group first
-  | otherwise   = sqVarintGroups (shiftRight v 7) (bitAnd v groupMask :: acc)
+  | v < contBit = v :: acc  -- highest group first
+  | otherwise = sqVarintGroups (shiftRight v 7) (bitAnd v groupMask :: acc)
 
 -- Set the continuation bit on every byte except the last.
 addContBits : List Int -> List Int
 addContBits [] = []
 addContBits [last] = [last]
-addContBits (x::rest) = x + contBit :: addContBits rest
+addContBits (x :: rest) = x + contBit :: addContBits rest
 
 -- Append a single byte to the END of a list (used only for the 9-byte form).
 appendEnd : List Int -> Int -> List Int
 appendEnd [] b = [b]
-appendEnd (x::r) b = x :: appendEnd r b
+appendEnd (x :: r) b = x :: appendEnd r b
 
 -- | The on-wire byte sequence for a SQLite varint (full 1..9-byte range).
 --   Exact inverse of `sqVarint`.
@@ -114,7 +119,8 @@ sqVarintBytes v =
     let low8 = bitAnd v 255
     let high = v / 256
     appendEnd (addContBits (sqVarintGroups high [])) low8
-  else addContBits (sqVarintGroups v [])
+  else
+    addContBits (sqVarintGroups v [])
 
 -- ---------------------------------------------------------------------------
 -- Round-trip doctests (moved from byteparser/bytebuilder)

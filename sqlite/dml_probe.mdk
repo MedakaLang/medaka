@@ -30,8 +30,14 @@ renderCorpus : List (String, String)
 renderCorpus = [
   -- INSERT: positional, named, multi-row, NULL, negative, float, blob, arithmetic
   ("INSERT INTO t VALUES (1)", "INSERT INTO t VALUES (1)"),
-  ("insert into t values (1, 'a', NULL)", "INSERT INTO t VALUES (1, 'a', NULL)"),
-  ("INSERT INTO t (a, b) VALUES (1, 'x')", "INSERT INTO t (a, b) VALUES (1, 'x')"),
+  (
+    "insert into t values (1, 'a', NULL)",
+    "INSERT INTO t VALUES (1, 'a', NULL)",
+  ),
+  (
+    "INSERT INTO t (a, b) VALUES (1, 'x')",
+    "INSERT INTO t (a, b) VALUES (1, 'x')",
+  ),
   (
     "INSERT INTO t VALUES (1,'a'),(2,'b'),(3,'c')",
     "INSERT INTO t VALUES (1, 'a'), (2, 'b'), (3, 'c')",
@@ -44,7 +50,10 @@ renderCorpus = [
   -- UPDATE: one SET, many SETs, expression RHS, WHERE, no WHERE, trailing ';'
   ("UPDATE t SET a = 1", "UPDATE t SET a = 1"),
   ("update t set a = 1, b = 'x' ;", "UPDATE t SET a = 1, b = 'x'"),
-  ("UPDATE t SET a = a + 1 WHERE b > 2", "UPDATE t SET a = (a + 1) WHERE (b > 2)"),
+  (
+    "UPDATE t SET a = a + 1 WHERE b > 2",
+    "UPDATE t SET a = (a + 1) WHERE (b > 2)",
+  ),
   (
     "UPDATE t SET a = NULL WHERE b IS NOT NULL AND c = 'q'",
     "UPDATE t SET a = NULL WHERE ((b IS NOT NULL) AND (c = 'q'))",
@@ -52,14 +61,20 @@ renderCorpus = [
   -- DELETE
   ("DELETE FROM t", "DELETE FROM t"),
   ("delete from t where a = 1", "DELETE FROM t WHERE (a = 1)"),
-  ("DELETE FROM t WHERE NOT a > 1 OR b IS NULL", "DELETE FROM t WHERE ((NOT (a > 1)) OR (b IS NULL))"),
+  (
+    "DELETE FROM t WHERE NOT a > 1 OR b IS NULL",
+    "DELETE FROM t WHERE ((NOT (a > 1)) OR (b IS NULL))",
+  ),
   -- CREATE TABLE
   ("CREATE TABLE t(a INTEGER)", "CREATE TABLE t(a INTEGER)"),
   (
     "create table users ( id integer primary key , name text not null , age integer , score real )",
     "CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT NOT NULL, age INTEGER, score REAL)",
   ),
-  ("CREATE TABLE t(a VARCHAR(20), b BLOB)", "CREATE TABLE t(a VARCHAR(20), b BLOB)"),
+  (
+    "CREATE TABLE t(a VARCHAR(20), b BLOB)",
+    "CREATE TABLE t(a VARCHAR(20), b BLOB)",
+  ),
   ("CREATE TABLE t(a)", "CREATE TABLE t(a)"),
   -- SELECT still routes through the same entry point
   ("SELECT * FROM t", "SELECT * FROM t"),

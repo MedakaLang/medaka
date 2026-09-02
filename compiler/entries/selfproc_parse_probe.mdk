@@ -27,6 +27,7 @@ import ir.sexp.{programToSexp}
 -- application.  Kept as a literal so the probe needs no file IO (the self-hosted
 -- eval is a pure evaluator with no readFile/args primitive).
 src : String
-src = "data Color = Red | Green | Blue\n\nlabel : Color -> String\nlabel c = match c\n  Red => \"red\"\n  Green => \"green\"\n  Blue => \"blue\"\n\nbump : Int -> Int\nbump n = if n > 0 then n + 1 else 0\n\nmain = map (x => bump x) [1, 2, 3]\n"
+src =
+  "data Color = Red | Green | Blue\n\nlabel : Color -> String\nlabel c = match c\n  Red => \"red\"\n  Green => \"green\"\n  Blue => \"blue\"\n\nbump : Int -> Int\nbump n = if n > 0 then n + 1 else 0\n\nmain = map (x => bump x) [1, 2, 3]\n"
 
 main = putStr (programToSexp (parse src))

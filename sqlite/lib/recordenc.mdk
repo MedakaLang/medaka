@@ -144,7 +144,7 @@ encodeRecord cells = do
 
   -- 2. Encode serial varints as a forward list.
   let serialBytesList = foldRight (++) [] (map sqVarintBytes serials)
-  let serialLen       = length serialBytesList
+  let serialLen = length serialBytesList
 
   -- 3. Header-len self-counting fixpoint.
   --    header_len = serialLen + varint_size(header_len)
@@ -152,15 +152,15 @@ encodeRecord cells = do
   let hdrLen = if sqVarintSize h0 == 1 then h0 else serialLen + 2
 
   -- 4. Assemble: [hdrLen varint] ++ [serial varints] ++ [body bytes].
-  let hdrBytes  = sqVarintBytes hdrLen
+  let hdrBytes = sqVarintBytes hdrLen
   let bodyBytes = foldRight (++) [] (map cellBodyBytes cells)
   Ok (arrayFromList (hdrBytes ++ serialBytesList ++ bodyBytes))
 
 collectSerials : List Cell -> List Int -> Result String (List Int)
 collectSerials [] acc = Ok (reverse acc)
-collectSerials (c::rest) acc = do
+collectSerials (c :: rest) acc = do
   s <- cellSerial c
-  collectSerials rest (s::acc)
+  collectSerials rest (s :: acc)
 
 -- ---------------------------------------------------------------------------
 -- Doctest helpers

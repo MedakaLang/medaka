@@ -1,5 +1,5 @@
 # META
-source_lines=1297
+source_lines=1449
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/snapshot.mdk — `medaka snapshot`, the in-process snapshot runner
@@ -312,7 +312,9 @@ parseStages spec =
   let names = filterList (/= "") (map (s => toUpper (trim s)) (split "," spec))
   match filterList (n => not (anyList (== n) snapSections)) names
     [] => Ok names
-    bad => Err "unknown stage(s): \{joinWith ", " bad} (known: \{joinWith ", " snapSections})"
+    bad =>
+      Err
+        "unknown stage(s): \{joinWith ", " bad} (known: \{joinWith ", " snapSections})"
 
 -- SOURCE is never optional (it is the input, and `source_lines` is what makes the file
 -- readable back); META is synthesized.  Everything else is gated.
@@ -330,7 +332,7 @@ contentLines s = dropTrailingEmpty (splitNl s)
 dropTrailingEmpty : List String -> List String
 dropTrailingEmpty [] = []
 dropTrailingEmpty [""] = []
-dropTrailingEmpty (x::rest) = x :: dropTrailingEmpty rest
+dropTrailingEmpty (x :: rest) = x :: dropTrailingEmpty rest
 
 -- Canonical block: either empty, or newline-terminated exactly once.
 blockOf : List String -> String
@@ -404,7 +406,7 @@ normTmp : String -> String
 normTmp line = match split tmpPrefix line
   [] => line
   [only] => only
-  first::rest => joinWith "<TMP>" (first :: map (drop 6) rest)
+  first :: rest => joinWith "<TMP>" (first :: map (drop 6) rest)
 
 tmpPrefix : String
 tmpPrefix = "/tmp/medaka_build_"
@@ -457,7 +459,8 @@ commentsOf : String -> String
 commentsOf src = blockOf (map renderComment (collectComments src))
 
 renderComment : Comment -> String
-renderComment c = "\{intToString (commentLine c)}:\{intToString (commentCol c)}:\{escNl (commentText c)}"
+renderComment c =
+  "\{intToString (commentLine c)}:\{intToString (commentCol c)}:\{escNl (commentText c)}"
 
 escNl : String -> String
 escNl s = stringConcat (escNlFrom (stringToChars s) 0)
@@ -555,8 +558,11 @@ typesUserOf runtimeDecls coreDecls d =
   let diag = hadTypeErrors () || hadMatchWarnings ()
   let userNames = funNamesOf d ++ externNamesOf d
   -- Filter the SUCCESS path (scheme dump) only; a diagnostic run has no schemes to trim.
-  let text = if hadTypeErrors () then full
-             else blockOf (filterList (userSchemeLine userNames) (contentLines full))
+  let text =
+    if hadTypeErrors () then
+      full
+    else
+      blockOf (filterList (userSchemeLine userNames) (contentLines full))
   (text, diag)
 
 -- Top-level user `extern` names — DExtern is NOT collected by funNamesOf (funDefs only
@@ -575,9 +581,10 @@ externName _ = []
 -- AFTER the name, so `nm` stays correct.
 userSchemeLine : List String -> String -> Bool
 userSchemeLine userNames line =
-  if isDiagProse line then True
+  if isDiagProse line then
+    True
   else match split " : " line
-    nm::_::_ => anyList (== nm) userNames
+    nm :: _ :: _ => anyList (== nm) userNames
     _ => True
 
 isDiagProse : String -> Bool
@@ -594,9 +601,10 @@ coreIrOf d = cprogramToSexp (lowerProgram (annotateProgram d))
 evalOf : List Decl -> List Decl -> List Decl -> String
 evalOf runtimeDecls coreDecls d =
   let livePrelude = dropShadowedExp (funNamesOf d) coreDecls
-  evalOneOutput
-    []
-    ("__main__", elaborateOne runtimeDecls livePrelude ("__user__", d))
+  evalOneOutput [] (
+    "__main__",
+    elaborateOne runtimeDecls livePrelude ("__user__", d),
+  )
 
 -- ── the emit path (BOTH backends, ONE lowered CProgram) ──────────────────────
 --
@@ -630,24 +638,45 @@ emitBoth root sel runtimeDecls userDecls =
   -- so it cannot pass `TargetNative` or `TargetWasm` -- either would narrow the
   -- guard for the backend that does not get to see it here.
   let cp = lowerProgramEmit TargetBothUnknown allDecls
-  let _ = if wants sel "LLVM" then
-    emitSection root "LLVM" (llvmOf runtimeDecls allDecls cp)
-  else
-    ()
+  let _ =
+    if wants sel "LLVM" then
+      emitSection root "LLVM" (llvmOf runtimeDecls allDecls cp)
   if wants sel "WASM" then
     emitSection root "WASM" (wasmOf runtimeDecls allDecls cp)
-  else
-    ()
 
 llvmOf : List Decl -> List Decl -> CProgram -> String
 llvmOf runtimeDecls allDecls cp =
-  let input = makeEmitInput (returnsSelfTable allDecls) (selfFnParamTable allDecls) (methodIfaceTable allDecls) (methodConstraintIfaces allDecls) (ctorFieldTypeNames allDecls) (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls) (mainTypeIsUnit ()) (mainTypeIsFloat ()) 0 [] [] "" (declaredRecordFieldOrders allDecls) (ffiExternTypeNames runtimeDecls allDecls) (ifaceImplHeadTable allDecls)
+  let input =
+    makeEmitInput
+      (returnsSelfTable allDecls)
+      (selfFnParamTable allDecls)
+      (methodIfaceTable allDecls)
+      (methodConstraintIfaces allDecls)
+      (ctorFieldTypeNames allDecls)
+      (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
+      (mainTypeIsUnit ())
+      (mainTypeIsFloat ())
+      0
+      []
+      []
+      ""
+      (declaredRecordFieldOrders allDecls)
+      (ffiExternTypeNames runtimeDecls allDecls)
+      (ifaceImplHeadTable allDecls)
   let (text, gaps) = emitProgramRecord input cp
   withGaps ";" text gaps
 
 wasmOf : List Decl -> List Decl -> CProgram -> String
 wasmOf runtimeDecls allDecls cp =
-  let input = makeWasmEmitInputFull (methodIfaceTable allDecls) (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls) (ctorFieldTypeNames allDecls) False (declaredRecordFieldOrders allDecls) [] (ifaceImplHeadTable allDecls)
+  let input =
+    makeWasmEmitInputFull
+      (methodIfaceTable allDecls)
+      (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
+      (ctorFieldTypeNames allDecls)
+      False
+      (declaredRecordFieldOrders allDecls)
+      []
+      (ifaceImplHeadTable allDecls)
   let (text, gaps) = wasmRecord input cp
   withGaps ";;" text gaps
 
@@ -685,10 +714,14 @@ emitDiagSection : String -> String -> String -> <IO> Unit
 emitDiagSection root name content = emitSectionTagged root name content True
 
 emitSectionTagged : String -> String -> String -> Bool -> <IO> Unit
-emitSectionTagged root name content diag = emitRawTagged
-  name
-  (if isRunSection name then normalizeText root content else canonText content)
-  diag
+emitSectionTagged root name content diag =
+  emitRawTagged
+    name
+    (if isRunSection name then
+      normalizeText root content
+    else
+      canonText content)
+    diag
 
 -- SOURCE bypasses normalization: it is the input, verbatim.
 emitRaw : String -> String -> <IO> Unit
@@ -723,27 +756,45 @@ loadPrelude root = match readFile "\{root}/stdlib/runtime.mdk"
         Err _ => Err "snapshot: stdlib/core.mdk does not parse"
         Ok cd => Ok (desugar rd, desugar cd)
 
-workerLoop : String -> List String -> List Decl -> List Decl -> List String -> <IO> Unit
+workerLoop : String ->
+  List String ->
+  List Decl ->
+  List Decl ->
+  List String ->
+  <IO> Unit
 workerLoop _ _ _ _ [] = ()
-workerLoop root sel runtimeDecls coreDecls (f::rest) =
+workerLoop root sel runtimeDecls coreDecls (f :: rest) =
   let _ = workerOne root sel runtimeDecls coreDecls f
   workerLoop root sel runtimeDecls coreDecls rest
 
-workerOne : String -> List String -> List Decl -> List Decl -> String -> <IO> Unit
+workerOne : String ->
+  List String ->
+  List Decl ->
+  List Decl ->
+  String ->
+  <IO> Unit
 workerOne root sel runtimeDecls coreDecls path =
   let _ = putLineFlush "BEGIN \{path}"
   let _ = workerRender root sel runtimeDecls coreDecls path
   putLineFlush "END \{path}"
 
-workerRender : String -> List String -> List Decl -> List Decl -> String -> <IO> Unit
+workerRender : String ->
+  List String ->
+  List Decl ->
+  List Decl ->
+  String ->
+  <IO> Unit
 workerRender root sel runtimeDecls coreDecls path = match readFile path
   Err msg => emitDiagSection root "CRASH" "cannot read fixture: \{msg}\n"
   Ok src =>
     -- SOURCE is emitted RAW — never normalized, never reflowed.
     let _ = emitRaw "SOURCE" src
-    let _ = if wants sel "TOKENS" then emitSection root "TOKENS" (tokensOf src) else ()
-    let _ = if wants sel "COMMENTS" then emitSection root "COMMENTS" (commentsOf src) else ()
-    let _ = if wants sel "POSITIONS" then emitSection root "POSITIONS" (positionsOf src) else ()
+    let _ = if wants sel "TOKENS" then emitSection root "TOKENS" (tokensOf src)
+    let _ =
+      if wants sel "COMMENTS" then emitSection root "COMMENTS" (commentsOf src)
+    let _ =
+      if wants sel "POSITIONS" then
+        emitSection root "POSITIONS" (positionsOf src)
     match parseResult src
       -- parseResult, not parse: a parse failure is a rendered section, not a panic.
       --
@@ -754,24 +805,41 @@ workerRender root sel runtimeDecls coreDecls path = match readFile path
       -- DIAGNOSTIC: this is the one branch where `# PARSE` holds error prose rather than
       -- an s-expr dump, and it is why diagnostic-ness cannot be a per-section-name
       -- allowlist.  Tagged here, at the only site that can know.
-      Err e => emitDiagSection root "PARSE" (parseErrText (parseErrorLine e) (parseErrorCol e) (parseErrorMessage e))
+      Err e =>
+        emitDiagSection
+          root
+          "PARSE"
+          (parseErrText
+            (parseErrorLine e)
+            (parseErrorCol e)
+            (parseErrorMessage e))
       Ok decls => workerStages root sel runtimeDecls coreDecls decls
 
-workerStages : String -> List String -> List Decl -> List Decl -> List Decl -> <IO> Unit
+workerStages : String ->
+  List String ->
+  List Decl ->
+  List Decl ->
+  List Decl ->
+  <IO> Unit
 workerStages root sel runtimeDecls coreDecls decls =
-  let _ = if wants sel "PARSE" then emitSection root "PARSE" (programToSexp decls) else ()
+  let _ =
+    if wants sel "PARSE" then emitSection root "PARSE" (programToSexp decls)
   -- # PRINTER: reprinted source (AST -> source via tools.printer.programToString).
   -- Renders the comment-preserving reprint the retired diff_compiler_printer gate
   -- checked, in-process; decls here is the parseResult Ok list, identical to `parse`
   -- for a parseable fixture.
-  let _ = if wants sel "PRINTER" then emitSection root "PRINTER" (programToString decls) else ()
+  let _ =
+    if wants sel "PRINTER" then
+      emitSection root "PRINTER" (programToString decls)
   let d = desugar decls
-  let _ = if wants sel "DESUGAR" then emitSection root "DESUGAR" (programToSexp d) else ()
-  let _ = if wants sel "MARK" then emitSection root "MARK" (markOf coreDecls d) else ()
+  let _ =
+    if wants sel "DESUGAR" then emitSection root "DESUGAR" (programToSexp d)
+  let _ = if wants sel "MARK" then emitSection root "MARK" (markOf coreDecls d)
   -- OFF-mode (eval-path) stages first...
-  let _ = if wants sel "TYPES" then emitTypes root runtimeDecls d else ()
-  let _ = if wants sel "TYPES_USER" then emitTypesUser root runtimeDecls coreDecls d else ()
-  let _ = if wants sel "CORE_IR" then emitSection root "CORE_IR" (coreIrOf d) else ()
+  let _ = if wants sel "TYPES" then emitTypes root runtimeDecls d
+  let _ =
+    if wants sel "TYPES_USER" then emitTypesUser root runtimeDecls coreDecls d
+  let _ = if wants sel "CORE_IR" then emitSection root "CORE_IR" (coreIrOf d)
   -- ...then the RUNNABLE stages, but ONLY for a fixture that has a `main`.
   --
   -- Most front-end fixtures (the whole parse/desugar corpus) are decl soup with no
@@ -798,16 +866,16 @@ workerStages root sel runtimeDecls coreDecls decls =
     -- cost us the LLVM/WASM sections.  (Concretely: llvm_fixtures/abort_exit_after_output
     -- calls `exit`, which the interpreter does not implement — CAPABILITY-EXCEPTIONS.txt
     -- BUG(T7) — so its EVAL panics while both backends emit it perfectly well.)
-    let _ = if wants sel "LLVM" || wants sel "WASM" then
-      emitBoth root sel runtimeDecls d
-    else
-      ()
-    if wants sel "EVAL" then emitSection root "EVAL" (evalOf runtimeDecls coreDecls d) else ()
-  else
+    let _ =
+      if wants sel "LLVM" || wants sel "WASM" then
+        emitBoth root sel runtimeDecls d
     if wants sel "EVAL" then
-      emitDiagSection root "CRASH" ":0:0: runtime error [E-NO-MAIN]: \{noMainMsg}\n"
-    else
-      ()
+      emitSection root "EVAL" (evalOf runtimeDecls coreDecls d)
+  else if wants sel "EVAL" then
+    emitDiagSection
+      root
+      "CRASH"
+      ":0:0: runtime error [E-NO-MAIN]: \{noMainMsg}\n"
 
 -- `# TYPES` is diagnostic-bearing exactly when the pass it just ran accumulated an error
 -- or a warning — so the tag is decided from `typesOf`'s second component, not from the
@@ -838,35 +906,62 @@ chunkSize = 25
 type Chunk = (List String, List String)
 
 export
-runSnapshotSupervisor : String -> SnapMode -> Bool -> Option String -> List String -> List String -> <IO> Bool
+runSnapshotSupervisor : String ->
+  SnapMode ->
+  Bool ->
+  Option String ->
+  List String ->
+  List String ->
+  <IO> Bool
 runSnapshotSupervisor root mode forceIsolate outDir cli files =
-  let results = superviseChunks root mode outDir (chunksOf root outDir forceIsolate cli files)
+  let results =
+    superviseChunks
+      root
+      mode
+      outDir
+      (chunksOf root outDir forceIsolate cli files)
   reportResults results
 
 -- Group into chunks, but give any fixture whose META says `isolate=true` a chunk of its
 -- own — a known crasher then costs ZERO respawns in steady state.
-chunksOf : String -> Option String -> Bool -> List String -> List String -> <IO> List Chunk
+chunksOf : String ->
+  Option String ->
+  Bool ->
+  List String ->
+  List String ->
+  <IO> List Chunk
 chunksOf _ _ _ _ [] = []
-chunksOf root outDir forceIsolate cli (f::rest) =
+chunksOf root outDir forceIsolate cli (f :: rest) =
   let meta = metaOf root outDir f
   let sel = stagesIn cli meta
-  if forceIsolate || isIsolatedIn meta then (sel, [f]) :: chunksOf root outDir forceIsolate cli rest
+  if forceIsolate || isIsolatedIn meta then
+    (sel, [f]) :: chunksOf root outDir forceIsolate cli rest
   else
-    let (grp, tail2) = takeRun root outDir forceIsolate cli sel (chunkSize - 1) rest
-    (sel, f::grp) :: chunksOf root outDir forceIsolate cli tail2
+    let (grp, tail2) =
+      takeRun root outDir forceIsolate cli sel (chunkSize - 1) rest
+    (sel, f :: grp) :: chunksOf root outDir forceIsolate cli tail2
 
 -- A worker process carries ONE `--stages`, so a run of fixtures is groupable only while
 -- their stage sets agree — mixing them would silently render the wrong stages for some.
-takeRun : String -> Option String -> Bool -> List String -> List String -> Int -> List String -> <IO> (List String, List String)
+takeRun : String ->
+  Option String ->
+  Bool ->
+  List String ->
+  List String ->
+  Int ->
+  List String ->
+  <IO> (List String, List String)
 takeRun _ _ _ _ _ _ [] = ([], [])
-takeRun root outDir forceIsolate cli sel n (f::rest) =
-  if n <= 0 then ([], f::rest)
+takeRun root outDir forceIsolate cli sel n (f :: rest) =
+  if n <= 0 then
+    ([], f :: rest)
   else
     let meta = metaOf root outDir f
-    if forceIsolate || isIsolatedIn meta || stagesIn cli meta /= sel then ([], f::rest)
+    if forceIsolate || isIsolatedIn meta || stagesIn cli meta /= sel then
+      ([], f :: rest)
     else
       let (grp, tail2) = takeRun root outDir forceIsolate cli sel (n - 1) rest
-      (f::grp, tail2)
+      (f :: grp, tail2)
 
 -- The fixture's EXISTING snapshot's `# META` lines.  Must consult the same --out
 -- directory the run will write to, or a corpus kept out-of-tree would silently never
@@ -882,7 +977,7 @@ isIsolatedIn meta = anyList (l => trimRight l == "isolate=true") meta
 -- `--stages` wins (that is how a corpus is CREATED); else the fixture's own `stages=`
 -- (so `--check` needs no flag and the file is self-describing); else every stage.
 stagesIn : List String -> List String -> List String
-stagesIn (s::rest) _ = s::rest
+stagesIn (s :: rest) _ = s :: rest
 stagesIn [] meta = metaStages meta
 
 -- A malformed `stages=` yields [] == every stage, so the run renders MORE sections than
@@ -890,65 +985,85 @@ stagesIn [] meta = metaStages meta
 -- not be able to shrink what gets checked.
 metaStages : List String -> List String
 metaStages [] = []
-metaStages (l::rest) =
+metaStages (l :: rest) =
   if startsWith "stages=" l then match parseStages (drop 7 l)
     Ok ns => ns
     Err _ => []
-  else metaStages rest
+  else
+    metaStages rest
 
-superviseChunks : String -> SnapMode -> Option String -> List Chunk -> <IO> List SnapResult
+superviseChunks : String ->
+  SnapMode ->
+  Option String ->
+  List Chunk ->
+  <IO> List SnapResult
 superviseChunks _ _ _ [] = []
-superviseChunks root mode outDir ((sel, fs)::rest) =
+superviseChunks root mode outDir ((sel, fs) :: rest) =
   let here = runChunk root mode outDir sel fs
   here ++ superviseChunks root mode outDir rest
 
 -- Run one chunk in a child.  On a crash: bank every fixture the child COMPLETED, write
 -- the crasher's snapshot from the sections it managed to stream plus its stderr, then
 -- respawn over what is left of the chunk.
-runChunk : String -> SnapMode -> Option String -> List String -> List String -> <IO> List SnapResult
+runChunk : String ->
+  SnapMode ->
+  Option String ->
+  List String ->
+  List String ->
+  <IO> List SnapResult
 runChunk _ _ _ _ [] = []
-runChunk root mode outDir sel pending = match runCommand (executablePath ()) (workerArgv root sel pending)
-  Err e => map (f => (f, "ERROR spawn failed: \{e}", False)) pending
-  Ok (code, out, err) =>
-    let streamed = parseStream out
-    let done = map fixtureOf streamed
-    let banked = map (settle root mode outDir sel) streamed
-    let missing = notIn done pending
-    -- COMPLETENESS, not exit code, decides whether the worker survived.  A fixture that
-    -- calls `exit 0` kills the worker with a SUCCESS status, so `code == 0` would report
-    -- a clean run while silently dropping every fixture after it.  "Every pending fixture
-    -- reached its END" is the only claim worth trusting.
-    if missing == [] then
-      banked
-    else
-      -- the child died: the last BEGIN with no END names the killer.
-      match lastBegun out
-        None => banked ++ map (f => (f, "ERROR worker died with no BEGIN (exit \{intToString code})", False)) missing
+runChunk root mode outDir sel pending =
+  match runCommand (executablePath ()) (workerArgv root sel pending)
+    Err e => map (f => (f, "ERROR spawn failed: \{e}", False)) pending
+    Ok (code, out, err) =>
+      let streamed = parseStream out
+      let done = map fixtureOf streamed
+      let banked = map (settle root mode outDir sel) streamed
+      let missing = notIn done pending
+      -- COMPLETENESS, not exit code, decides whether the worker survived.  A fixture that
+      -- calls `exit 0` kills the worker with a SUCCESS status, so `code == 0` would report
+      -- a clean run while silently dropping every fixture after it.  "Every pending fixture
+      -- reached its END" is the only claim worth trusting.
+      if missing == [] then
+        banked
+      else match lastBegun out
+        -- the child died: the last BEGIN with no END names the killer.
+
+        None =>
+          banked
+            ++ map
+              (f => (
+                f,
+                "ERROR worker died with no BEGIN (exit \{intToString code})",
+                False,
+              ))
+              missing
         Some victim =>
           -- the victim's own snapshot = whatever it streamed before dying + its stderr.
           -- `# CRASH` is a stderr dump, so it is diagnostic BY CONSTRUCTION — which makes
           -- a crashing fixture's snapshot permanently unblessable.  That is intended: the
           -- day a panic message changes, someone reads it.
-          let crashSecs = streamTail out ++ [("CRASH", normalizeText root err, True)]
+          let crashSecs =
+            streamTail out ++ [("CRASH", normalizeText root err, True)]
           let (_, v, _) = settle root mode outDir sel (victim, crashSecs)
           let remaining = afterFirst victim pending
-          banked ++ [(victim, v, True)] ++ runChunk root mode outDir sel remaining
+          banked
+            ++ [(victim, v, True)]
+            ++ runChunk root mode outDir sel remaining
 
 workerArgv : String -> List String -> List String -> List String
 workerArgv root [] files = ["snapshot", "--worker", "--root", root] ++ files
-workerArgv root sel files = ["snapshot", "--worker", "--root", root, "--stages", joinWith "," sel]
-  ++ files
+workerArgv root sel files =
+  ["snapshot", "--worker", "--root", root, "--stages", joinWith "," sel]
+    ++ files
 
 notIn : List String -> List String -> List String
 notIn done xs = filterList (x => not (anyList (== x) done)) xs
 
 afterFirst : String -> List String -> List String
 afterFirst _ [] = []
-afterFirst victim (x::rest) =
-  if x == victim then
-    rest
-  else
-    afterFirst victim rest
+afterFirst victim (x :: rest) =
+  if x == victim then rest else afterFirst victim rest
 
 -- ── worker-stream decoding ───────────────────────────────────────────────────
 -- A fixture reaches the supervisor as (path, [(section, content)]).
@@ -969,13 +1084,17 @@ parseStream out = streamGo (splitNl out) "" [] []
 --
 -- `SECD ` is checked BEFORE `SEC ` reads its name, and neither collides with the `D`
 -- content prefix (both start `S`), so a content line may still say anything at all.
-streamGo : List String -> String -> Sections -> List (String, Sections) -> List (String, List RunSec)
+streamGo : List String ->
+  String ->
+  Sections ->
+  List (String, Sections) ->
+  List (String, List RunSec)
 streamGo [] _ _ acc = map settleSecs (reverseL acc)
-streamGo (l::rest) cur secs acc
+streamGo (l :: rest) cur secs acc
   | startsWith "BEGIN " l = streamGo rest (drop 6 l) [] acc
   | startsWith "END " l = streamGo rest "" [] (flushCur cur secs acc)
-  | startsWith "SECD " l = streamGo rest cur ((drop 5 l, True, [])::secs) acc
-  | startsWith "SEC " l = streamGo rest cur ((drop 4 l, False, [])::secs) acc
+  | startsWith "SECD " l = streamGo rest cur ((drop 5 l, True, []) :: secs) acc
+  | startsWith "SEC " l = streamGo rest cur ((drop 4 l, False, []) :: secs) acc
   | startsWith "D" l = streamGo rest cur (pushLine (drop 1 l) secs) acc
   | otherwise = streamGo rest cur secs acc
 
@@ -987,11 +1106,11 @@ streamTail out = streamTailGo (splitNl out) "" []
 streamTailGo : List String -> String -> Sections -> List RunSec
 streamTailGo [] "" _ = []
 streamTailGo [] _ secs = closeSecs secs
-streamTailGo (l::rest) cur secs
+streamTailGo (l :: rest) cur secs
   | startsWith "BEGIN " l = streamTailGo rest (drop 6 l) []
   | startsWith "END " l = streamTailGo rest "" []
-  | startsWith "SECD " l = streamTailGo rest cur ((drop 5 l, True, [])::secs)
-  | startsWith "SEC " l = streamTailGo rest cur ((drop 4 l, False, [])::secs)
+  | startsWith "SECD " l = streamTailGo rest cur ((drop 5 l, True, []) :: secs)
+  | startsWith "SEC " l = streamTailGo rest cur ((drop 4 l, False, []) :: secs)
   | startsWith "D" l = streamTailGo rest cur (pushLine (drop 1 l) secs)
   | otherwise = streamTailGo rest cur secs
 
@@ -1000,7 +1119,7 @@ type Sections = List (String, Bool, List String)
 
 pushLine : String -> Sections -> Sections
 pushLine _ [] = []
-pushLine l ((n, d, ls)::rest) = (n, d, l::ls)::rest
+pushLine l ((n, d, ls) :: rest) = (n, d, l :: ls) :: rest
 
 closeSecs : Sections -> List RunSec
 closeSecs secs = map closeSec (reverseL secs)
@@ -1011,9 +1130,12 @@ closeSec (n, d, ls) = (n, blockOf (reverseL ls), d)
 settleSecs : (String, Sections) -> (String, List RunSec)
 settleSecs (p, secs) = (p, closeSecs secs)
 
-flushCur : String -> Sections -> List (String, Sections) -> List (String, Sections)
+flushCur : String ->
+  Sections ->
+  List (String, Sections) ->
+  List (String, Sections)
 flushCur "" _ acc = acc
-flushCur cur secs acc = (cur, secs)::acc
+flushCur cur secs acc = (cur, secs) :: acc
 
 fixtureOf : (String, List RunSec) -> String
 fixtureOf (p, _) = p
@@ -1024,7 +1146,7 @@ lastBegun out = lastBegunGo (splitNl out) None
 
 lastBegunGo : List String -> Option String -> Option String
 lastBegunGo [] cur = cur
-lastBegunGo (l::rest) cur
+lastBegunGo (l :: rest) cur
   | startsWith "BEGIN " l = lastBegunGo rest (Some (drop 6 l))
   | startsWith "END " l = lastBegunGo rest None
   | otherwise = lastBegunGo rest cur
@@ -1037,7 +1159,7 @@ snapPathOf _ (Some dir) f = "\{dir}/\{chopExt (baseOf f)}.md"
 
 sectionOf : String -> List (String, String) -> String
 sectionOf _ [] = ""
-sectionOf n ((k, v)::rest) = if k == n then v else sectionOf n rest
+sectionOf n ((k, v) :: rest) = if k == n then v else sectionOf n rest
 
 hasSection : String -> List (String, String) -> Bool
 hasSection n secs = anyList (== n) (map fst2 secs)
@@ -1051,24 +1173,23 @@ fst2 (a, _) = a
 renderSnapshot : List String -> List (String, String) -> String
 renderSnapshot metaExtra secs =
   let src = sectionOf "SOURCE" secs
-  let meta = blockOf (["source_lines=\{intToString (length (contentLines src))}"] ++ metaExtra)
-  let body = flatMap (n => renderOne n secs) (filterList (/= "META") snapSections)
+  let meta =
+    blockOf
+      (["source_lines=\{intToString (length (contentLines src))}"] ++ metaExtra)
+  let body =
+    flatMap (n => renderOne n secs) (filterList (/= "META") snapSections)
   stringConcat (["# META\n", meta] ++ body)
 
 renderOne : String -> List (String, String) -> List String
 renderOne n secs =
-  if hasSection n secs then
-    ["# \{n}\n", sectionOf n secs]
-  else
-    []
+  if hasSection n secs then ["# \{n}\n", sectionOf n secs] else []
 
 -- The META block: the keys the runner MAINTAINS (`source_lines`, `stages`,
 -- `diagnostics`) followed by every authored key it does not (e.g. `isolate=true`), which
 -- survives a rewrite.
 metaLinesFor : List String -> List RunSec -> List String
-metaLinesFor sel secs = stagesLine sel
-  ++ diagLine (diagNamesOf secs)
-  ++ metaExtraOf (secPairs secs)
+metaLinesFor sel secs =
+  stagesLine sel ++ diagLine (diagNamesOf secs) ++ metaExtraOf (secPairs secs)
 
 stagesLine : List String -> List String
 stagesLine [] = []
@@ -1087,9 +1208,10 @@ metaExtraOf secs =
   filterList isAuthoredMetaLine (contentLines (sectionOf "META" secs))
 
 isAuthoredMetaLine : String -> Bool
-isAuthoredMetaLine l = not (startsWith "source_lines=" l)
-  && not (startsWith "stages=" l)
-  && not (startsWith "diagnostics=" l)
+isAuthoredMetaLine l =
+  not (startsWith "source_lines=" l)
+    && not (startsWith "stages=" l)
+    && not (startsWith "diagnostics=" l)
 
 -- The `diagnostics=` names recorded in an EXISTING snapshot's `# META`.
 metaDiagsOf : List (String, String) -> List String
@@ -1097,7 +1219,7 @@ metaDiagsOf secs = metaDiagsIn (contentLines (sectionOf "META" secs))
 
 metaDiagsIn : List String -> List String
 metaDiagsIn [] = []
-metaDiagsIn (l::rest) =
+metaDiagsIn (l :: rest) =
   if startsWith "diagnostics=" l then
     filterList (/= "") (map (s => toUpper (trim s)) (split "," (drop 12 l)))
   else
@@ -1113,15 +1235,16 @@ parseSnapshot text =
 
 metaSourceLines : List String -> Int
 metaSourceLines [] = 0
-metaSourceLines (l::rest) =
+metaSourceLines (l :: rest) =
   if startsWith "source_lines=" l then match toInt (drop 13 l)
     Some n => n
     None => 0
-  else metaSourceLines rest
+  else
+    metaSourceLines rest
 
 collectSections : List String -> Int -> List (String, String)
 collectSections [] _ = []
-collectSections (l::rest) n =
+collectSections (l :: rest) n =
   if isHeaderLine l then
     let name = drop 2 l
     if name == "SOURCE" then
@@ -1130,23 +1253,26 @@ collectSections (l::rest) n =
     else
       let (body, tail2) = untilHeader rest
       (name, blockOf (dropTrailingEmpty body)) :: collectSections tail2 n
-  else collectSections rest n
+  else
+    collectSections rest n
 
 splitAtN : Int -> List String -> (List String, List String)
 splitAtN _ [] = ([], [])
-splitAtN n (x::rest) =
-  if n <= 0 then ([], x::rest)
+splitAtN n (x :: rest) =
+  if n <= 0 then
+    ([], x :: rest)
   else
     let (a, b) = splitAtN (n - 1) rest
-    (x::a, b)
+    (x :: a, b)
 
 untilHeader : List String -> (List String, List String)
 untilHeader [] = ([], [])
-untilHeader (x::rest) =
-  if isHeaderLine x then ([], x::rest)
+untilHeader (x :: rest) =
+  if isHeaderLine x then
+    ([], x :: rest)
   else
     let (a, b) = untilHeader rest
-    (x::a, b)
+    (x :: a, b)
 
 -- ── verdicts ─────────────────────────────────────────────────────────────────
 
@@ -1156,20 +1282,31 @@ untilHeader (x::rest) =
 -- so the fact that it took the worker down with it has nowhere else to live.
 type SnapResult = (String, String, Bool)
 
-settle : String -> SnapMode -> Option String -> List String -> (String, List RunSec) -> <IO> SnapResult
+settle : String ->
+  SnapMode ->
+  Option String ->
+  List String ->
+  (String, List RunSec) ->
+  <IO> SnapResult
 settle root mode outDir sel (path, secs) =
   (path, settleVerdict root mode outDir sel path secs, False)
 
-settleVerdict : String -> SnapMode -> Option String -> List String -> String -> List RunSec -> <IO> String
-settleVerdict root mode outDir sel path secs =
-  match badSections secs
-    -- the header-grammar invariant: refuse to write a file that cannot round-trip.
-    (n::_) => "FAIL section \{n} contains a line matching the section-header grammar"
-    [] =>
-      let snapPath = snapPathOf root outDir path
-      match readOpt snapPath
-        None => verdictMissing mode snapPath sel secs
-        Some prev => verdictExisting mode snapPath sel secs prev
+settleVerdict : String ->
+  SnapMode ->
+  Option String ->
+  List String ->
+  String ->
+  List RunSec ->
+  <IO> String
+settleVerdict root mode outDir sel path secs = match badSections secs
+  -- the header-grammar invariant: refuse to write a file that cannot round-trip.
+  n :: _ =>
+    "FAIL section \{n} contains a line matching the section-header grammar"
+  [] =>
+    let snapPath = snapPathOf root outDir path
+    match readOpt snapPath
+      None => verdictMissing mode snapPath sel secs
+      Some prev => verdictExisting mode snapPath sel secs prev
 
 -- No snapshot on disk yet.
 --   --check  a fixture with no expectation FAILS — never a silent pass.  It reports the
@@ -1181,13 +1318,20 @@ settleVerdict root mode outDir sel path secs =
 --            down its own output as correct; that single affordance is what would make
 --            the whole corpus worthless.
 verdictMissing : SnapMode -> String -> List String -> List RunSec -> <IO> String
-verdictMissing SnapCheck snapPath _ _ = "FAIL no snapshot at \{snapPath} — that is the resolved --out location, not the committed golden's. The goldens live under test/snapshots/<family>/; a bare --check cannot know which family a path belongs to, so it looks in the wrong place. Run the owning gate (e.g. `sh test/diff_compiler_snapshot_frontend.sh`), which routes --out for you, or pass --out <dir> yourself. (NOT --new — that WRITES a golden from the current output, blessing a possible regression as correct.)"
-verdictMissing SnapBless snapPath _ _ = "FAIL no snapshot (\{snapPath}); --bless never creates one — run `medaka snapshot --new` first"
+verdictMissing SnapCheck snapPath _ _ =
+  "FAIL no snapshot at \{snapPath} — that is the resolved --out location, not the committed golden's. The goldens live under test/snapshots/<family>/; a bare --check cannot know which family a path belongs to, so it looks in the wrong place. Run the owning gate (e.g. `sh test/diff_compiler_snapshot_frontend.sh`), which routes --out for you, or pass --out <dir> yourself. (NOT --new — that WRITES a golden from the current output, blessing a possible regression as correct.)"
+verdictMissing SnapBless snapPath _ _ =
+  "FAIL no snapshot (\{snapPath}); --bless never creates one — run `medaka snapshot --new` first"
 verdictMissing SnapNew snapPath sel secs = match writeSnap snapPath sel secs
   Err e => "ERROR cannot write \{snapPath}: \{e}"
   Ok _ => "NEW \{snapPath}"
 
-verdictExisting : SnapMode -> String -> List String -> List RunSec -> String -> <IO> String
+verdictExisting : SnapMode ->
+  String ->
+  List String ->
+  List RunSec ->
+  String ->
+  <IO> String
 verdictExisting SnapCheck _ _ secs prev = compareSnap prev secs
 -- `--new` NEVER overwrites: rewriting an existing snapshot from the current compiler IS
 -- blessing, and blessing has a door of its own, with locks on it.
@@ -1199,7 +1343,7 @@ verdictExisting SnapBless snapPath sel secs prev =
     -- it cannot churn `stat` times or reflow a file nobody asked it to touch).
     [] => "PASS"
     ds => match blockedDiags prevSecs secs ds
-      (b::bs) => diagRefusal snapPath (b::bs)
+      b :: bs => diagRefusal snapPath (b :: bs)
       [] => match writeSnap snapPath sel secs
         Err e => "ERROR cannot write \{snapPath}: \{e}"
         Ok _ => "BLESS \{snapPath} (\{joinWith ", " ds})"
@@ -1210,7 +1354,10 @@ verdictExisting SnapBless snapPath sel secs prev =
 -- a section that WAS a diagnostic and now is not means a stage quietly stopped reporting
 -- an error, which is a worse bug than a reworded message and must not slide through on a
 -- clean-looking render.
-blockedDiags : List (String, String) -> List RunSec -> List String -> List String
+blockedDiags : List (String, String) ->
+  List RunSec ->
+  List String ->
+  List String
 blockedDiags prevSecs secs ds =
   let diags = metaDiagsOf prevSecs ++ diagNamesOf secs
   filterList (n => anyList (== n) diags) ds
@@ -1223,8 +1370,10 @@ blockedDiags prevSecs secs ds =
 diagRefusal : String -> List String -> String
 diagRefusal snapPath names =
   let what = joinWith ", " names
-  let why = "diagnostic text is never auto-blessable (compiler/ERROR-QUALITY.md grades it)."
-  let how = "READ the new message; if it is genuinely better, `rm \{snapPath}` and re-cut it with `medaka snapshot --new`."
+  let why =
+    "diagnostic text is never auto-blessable (compiler/ERROR-QUALITY.md grades it)."
+  let how =
+    "READ the new message; if it is genuinely better, `rm \{snapPath}` and re-cut it with `medaka snapshot --new`."
   "FAIL refusing to bless diagnostic section(s) \{what} in \{snapPath}: \{why} \{how}"
 
 writeSnap : String -> List String -> List RunSec -> <IO> Result String Unit
@@ -1260,7 +1409,10 @@ readOpt p = match readFile p
 reportResults : List SnapResult -> <IO> Bool
 reportResults results =
   let bad = filterList (r => isBad (verdictOf r)) results
-  let _ = mapUnit printResult (filterList (r => startsWith "BLESS" (verdictOf r)) results)
+  let _ =
+    mapUnit
+      printResult
+      (filterList (r => startsWith "BLESS" (verdictOf r)) results)
   let _ = mapUnit printResult bad
   let _ = putStrLn (summaryLine results)
   bad == []
@@ -1296,7 +1448,7 @@ crashedOf (_, _, c) = c
 
 mapUnit : (a -> <IO> Unit) -> List a -> <IO> Unit
 mapUnit _ [] = ()
-mapUnit f (x::rest) =
+mapUnit f (x :: rest) =
   let _ = f x
   mapUnit f rest
 # DESUGAR

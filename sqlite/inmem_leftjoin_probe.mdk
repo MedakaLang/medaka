@@ -39,12 +39,12 @@ ordersSql =
   "CREATE TABLE orders(oid INTEGER PRIMARY KEY, uid INTEGER, amount INTEGER)"
 
 usersRows : List (List Cell)
-usersRows =
-  [ [ CInt 1, CText "Alice" ]
-  , [ CInt 2, CText "Bob" ]
-  , [ CInt 3, CText "Carol" ]
-  , [ CInt 4, CText "Dave" ]   -- no matching orders row
-  ]
+usersRows = [
+  [CInt 1, CText "Alice"],
+  [CInt 2, CText "Bob"],
+  [CInt 3, CText "Carol"],
+  [CInt 4, CText "Dave"],  -- no matching orders row
+]
 
 ordersRows : List (List Cell)
 ordersRows = [
@@ -73,7 +73,7 @@ showUO (UO { uid = i, uname = n, orow = (Some (o, u, a)) }) =
 
 printUO : List UO -> <IO> Unit
 printUO [] = ()
-printUO (r::rest) = let _ = println (showUO r) in printUO rest
+printUO (r :: rest) = let _ = println (showUO r) in printUO rest
 
 runUO : Db -> String -> Select -> <IO> Unit
 -- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
@@ -86,7 +86,20 @@ runUO db label sel =
 
 runAll : Db -> <IO> Unit
 runAll db =
-  let _ = runUO db "-- left join users/orders order id,oid --" (withOrderBy "orders.oid" True (withOrderBy "users.id" True (leftJoin "orders" (eEq (eColInt "users.id") (eColInt "orders.uid")) (selectFrom "users"))))
+  let _ =
+    runUO
+      db
+      "-- left join users/orders order id,oid --"
+      (withOrderBy
+        "orders.oid"
+        True
+        (withOrderBy
+          "users.id"
+          True
+          (leftJoin
+            "orders"
+            (eEq (eColInt "users.id") (eColInt "orders.uid"))
+            (selectFrom "users"))))
   runUO
     db
     "-- left join where amount>100 order amount --"

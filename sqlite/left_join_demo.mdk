@@ -56,7 +56,7 @@ showUO (UO { uid = i, uname = n, orow = (Some (o, u, a)) }) =
 
 printUO : List UO -> <IO> Unit
 printUO [] = ()
-printUO (r::rest) = let _ = println (showUO r) in printUO rest
+printUO (r :: rest) = let _ = println (showUO r) in printUO rest
 
 runUO : Db -> String -> Select -> <IO> Unit
 -- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
@@ -74,8 +74,13 @@ runUO db label sel =
 --   tc side may be NULL-padded (unmatched tb row).
 -- ---------------------------------------------------------------------------
 
-data ABC =
-  | ABC { aid : Int, av : Int, bid : Int, aref : Int, crow : Option (Int, Int) }
+data ABC = ABC {
+  aid : Int,
+  av : Int,
+  bid : Int,
+  aref : Int,
+  crow : Option (Int, Int),
+}
 
 mkABC : ((Int, Int), (Int, Int), Option (Int, Int)) -> Result String ABC
 mkABC ((a1, a2), (b1, b2), crow) =
@@ -88,11 +93,12 @@ abcRow =
 showABC : ABC -> String
 showABC (ABC { aid = a1, av = a2, bid = b1, aref = b2, crow = None }) =
   "\{a1}|\{a2}|\{b1}|\{b2}|NULL|NULL"
-showABC (ABC { aid = a1, av = a2, bid = b1, aref = b2, crow = (Some (c1, c2)) }) = "\{a1}|\{a2}|\{b1}|\{b2}|\{c1}|\{c2}"
+showABC (ABC { aid = a1, av = a2, bid = b1, aref = b2, crow = (Some (c1, c2)) }) =
+  "\{a1}|\{a2}|\{b1}|\{b2}|\{c1}|\{c2}"
 
 printABC : List ABC -> <IO> Unit
 printABC [] = ()
-printABC (r::rest) = let _ = println (showABC r) in printABC rest
+printABC (r :: rest) = let _ = println (showABC r) in printABC rest
 
 runABC : Db -> String -> Select -> <IO> Unit
 -- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
@@ -110,21 +116,46 @@ main = match args ()
     Err e => println "open error: \{e}"
     Ok db =>
       -- Plain LEFT JOIN, unmatched left rows -> NULLs on the right side.
-      let _ = runUO db "-- left join users/orders --"
-                (withOrderBy "orders.oid" True
-                  (withOrderBy "users.id" True
-                    (leftJoin "orders" (eEq (eColInt "users.id") (eColInt "orders.uid"))
-                      (selectFrom "users"))))
+      let _ =
+        runUO
+          db
+          "-- left join users/orders --"
+          (withOrderBy
+            "orders.oid"
+            True
+            (withOrderBy
+              "users.id"
+              True
+              (leftJoin
+                "orders"
+                (eEq (eColInt "users.id") (eColInt "orders.uid"))
+                (selectFrom "users"))))
       -- LEFT JOIN + WHERE on a right-table column: drops null-padded rows,
       -- matching sqlite3's real behaviour (WHERE runs post-join).
-      let _ = runUO db "-- left join where amount>100 order amount --"
-                (withOrderBy "orders.amount" True
-                  (withWhere (eGt (eColInt "orders.amount") (eLitI 100))
-                    (leftJoin "orders" (eEq (eColInt "users.id") (eColInt "orders.uid"))
-                      (selectFrom "users"))))
+      let _ =
+        runUO
+          db
+          "-- left join where amount>100 order amount --"
+          (withOrderBy
+            "orders.amount"
+            True
+            (withWhere
+              (eGt (eColInt "orders.amount") (eLitI 100))
+              (leftJoin
+                "orders"
+                (eEq (eColInt "users.id") (eColInt "orders.uid"))
+                (selectFrom "users"))))
       -- Mixed 3-table chain: INNER JOIN then LEFT JOIN.
-      runABC db "-- inner ta/tb then left tc --"
-        (withOrderBy "tb.bid" True
-          (leftJoin "tc" (eEq (eColInt "tb.bid") (eColInt "tc.bref"))
-            (innerJoin "tb" (eEq (eColInt "ta.aid") (eColInt "tb.aref"))
+      runABC
+        db
+        "-- inner ta/tb then left tc --"
+        (withOrderBy
+          "tb.bid"
+          True
+          (leftJoin
+            "tc"
+            (eEq (eColInt "tb.bid") (eColInt "tc.bref"))
+            (innerJoin
+              "tb"
+              (eEq (eColInt "ta.aid") (eColInt "tb.aref"))
               (selectFrom "ta"))))

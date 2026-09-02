@@ -22,5 +22,12 @@ renderShowLocal (Ok (sql, _)) = sql
 
 main : <IO> Unit
 main =
-  let sel = withOffset 5 (withLimit 10 (withWhere (eAnd (eGt (eColInt "age") (eLitI 18)) (eNotNull (eColInt "email"))) (selectFrom "users")))
+  let sel =
+    withOffset
+      5
+      (withLimit
+        10
+        (withWhere
+          (eAnd (eGt (eColInt "age") (eLitI 18)) (eNotNull (eColInt "email")))
+          (selectFrom "users")))
   println (renderShowLocal (render sel))

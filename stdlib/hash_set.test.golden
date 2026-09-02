@@ -5,11 +5,11 @@ running doctests in stdlib/hash_set.mdk
   ok   stdlib/hash_set.mdk:79: size (fromList [1, 2, 3])
   ok   stdlib/hash_set.mdk:93: has 2 (fromList [1, 2, 3])
   ok   stdlib/hash_set.mdk:95: has 9 (fromList [1, 2, 3])
-  ok   stdlib/hash_set.mdk:202: length (fromList [3, 1, 2, 1])
-  ok   stdlib/hash_set.mdk:211: toList (fromList [1, 1, 2]) /= []
-  ok   stdlib/hash_set.mdk:223: eq (fromList [1, 2, 3]) (fromList [3, 2, 1, 2])
-  ok   stdlib/hash_set.mdk:249: display (fromList [3, 1, 2])
-  ok   stdlib/hash_set.mdk:251: display (new () : HashSet Int)
+  ok   stdlib/hash_set.mdk:214: length (fromList [3, 1, 2, 1])
+  ok   stdlib/hash_set.mdk:223: toList (fromList [1, 1, 2]) /= []
+  ok   stdlib/hash_set.mdk:235: eq (fromList [1, 2, 3]) (fromList [3, 2, 1, 2])
+  ok   stdlib/hash_set.mdk:261: display (fromList [3, 1, 2])
+  ok   stdlib/hash_set.mdk:263: display (new () : HashSet Int)
 
 stdlib/hash_set.mdk: 11/11 passed
 Testing "Display HashSet is layout-independent" ... OK (100 tests)
