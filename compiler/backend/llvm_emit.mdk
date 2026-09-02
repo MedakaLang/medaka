@@ -2853,6 +2853,7 @@ isNetExtern name = contains
     "netTryAccept",
     "netTryRecv",
     "netTrySend",
+    "netTrySendFrom",
   ]
 
 emitNetExtern : Emit -> OrdMap (String, LTy) -> String -> List CExpr -> (String, LTy)
@@ -2948,6 +2949,12 @@ emitNetExtern e env "netTrySend" args = match emitArgs e env args
     let _ = emit e "  \{r} = call i64 @mdk_net_try_send(i64 \{fd}, i64 \{bs})"
     (r, LTCon)
   _ => panic "llvm: netTrySend takes two arguments"
+emitNetExtern e env "netTrySendFrom" args = match emitArgs e env args
+  [fd, bs, off] =>
+    let r = freshReg e
+    let _ = emit e "  \{r} = call i64 @mdk_net_try_send_from(i64 \{fd}, i64 \{bs}, i64 \{off})"
+    (r, LTCon)
+  _ => panic "llvm: netTrySendFrom takes three arguments"
 emitNetExtern e _ name _ = gapE e ("unsupported net extern " ++ name)
 
 -- Tier D: RNG. The deterministic random* family uses SplitMix64 state in the C

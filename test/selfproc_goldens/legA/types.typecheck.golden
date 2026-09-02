@@ -1434,6 +1434,7 @@ lookupVar : TcEnv -> String -> Option Scheme
 lowerMembers : Int -> List (Ref Effvar) -> Unit
 lowerRowLevels : Int -> EffRow -> Unit
 lowerToCurrent : Mono -> Unit
+mainAsyncPayloadIsUnit : Unit -> Bool
 mainTypeIsAsync : Unit -> Bool
 mainTypeIsFloat : Unit -> Bool
 mainTypeIsUnit : Unit -> Bool
