@@ -3951,6 +3951,34 @@ sources = ["test/diff_compiler_guide_render.sh", "playground/render_docs.mjs", "
 corpus = ["docs/guide", "docs/stdlib"]
 toolchain = ["node>=24"]
 
+[[gate]]
+name = "pds/test/serve_e2e"
+area = "engines"
+shard = "gates_8"
+project = "pds"
+tiers = ["merge"]
+cost = "heavy"
+kind = "exec"
+run = "pds/test/serve_e2e.sh"
+oracles = []
+sources = ["pds/*"]
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "pds/test/lib_boundary"
+area = "engines"
+shard = "gates_8"
+project = "pds"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+run = "pds/test/lib_boundary.sh"
+oracles = []
+sources = ["pds/lib/*"]
+corpus = []
+toolchain = []
+
 # ── the `gates` matrix rows (S-1, #2177) ─────────────────────────────────────
 #
 # One `[[shard]]` per row of ci.yml's `gates` job matrix, in matrix order.

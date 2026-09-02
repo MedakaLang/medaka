@@ -1,13 +1,23 @@
 # pds/
 
 The self-hosted atproto PDS (Personal Data Server) written in Medaka. Phases
-0–2 and the pure half of Phase 4 of the umbrella design (#1697) are complete in
+0–3 and the pure half of Phase 4 of the umbrella design (#1697) are complete in
 this tree: the pure core
 covers strict secp256k1 signing and `did:key`, canonical DAG-CBOR/CIDs, the
 atproto MST, verified CAR/block storage, signed repository transitions, strict
 HTTP/1.1 framing, structural XRPC routing, explicit immutable handler state, and
 the nine atproto record/sync/identity endpoints plus the two well-known paths.
-Phase 3's socket shell now serves that core over a loopback listener; see
+Phase 3's socket shell (#2481, #2525) serves that core over a loopback listener:
+`pds/serve.mdk` admits a configuration, rehydrates or initializes the account
+repository, and hands `pds/shell/server.mdk`'s accept loop a listener and the
+shared `Ref Store`. `pds/test/serve_e2e.sh` grades it end to end (queries,
+pipelining, keep-alive, a chunked-transfer write, a malformed request, an
+over-cap body, the idle-connection timeout, and restart-and-resume across a
+process boundary), and `pds/test/lib_boundary.sh` proves the `pds/lib` ⇄
+`pds/shell` boundary holds (no `pds/lib` import of `pds/shell`, no
+effect-bearing `pds/lib` export). The bind address is loopback-only and
+nothing here authenticates a request — deliberately: authentication is the
+gate on ever exposing this server past loopback, not a gap in this phase. See
 `docs/design/ATPROTO-PDS-DESIGN.md` for the full design.
 
 ## Layout

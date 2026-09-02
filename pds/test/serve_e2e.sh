@@ -1,0 +1,161 @@
+#!/bin/sh
+# Gate A (#2481, #2525): drive `pds/serve.mdk` end to end over its real
+# loopback socket with a plain synchronous client (`pds/test/
+# serve_client_main.mdk`, over `stdlib/net` — not `net_async`, which is the
+# server's own scheduler and has no business inside a test client). Every
+# case below is graded by that client's PASS/FAIL last line, exactly the
+# convention `pds/test/store_persistence_main.mdk` already uses.
+set -eu
+
+ROOT=${MEDAKA_ROOT:?set MEDAKA_ROOT to the repo root}
+MEDAKA=${MEDAKA:-"$ROOT/medaka"}
+SERVE_SRC="$ROOT/pds/serve.mdk"
+CLIENT_SRC="$ROOT/pds/test/serve_client_main.mdk"
+
+WORK=$(mktemp -d "${TMPDIR:-/tmp}/pds-serve-e2e.XXXXXX")
+SERVER_PID=""
+
+cleanup() {
+  [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null
+  rm -rf "$WORK"
+}
+trap cleanup EXIT HUP INT TERM
+
+fail() {
+  echo "FAIL: $1" >&2
+  exit 1
+}
+
+require_empty() {
+  [ ! -s "$1" ] || {
+    cat "$1" >&2
+    fail "$2 emitted stderr"
+  }
+}
+
+[ -x "$MEDAKA" ] || fail "build medaka first (missing $MEDAKA)"
+
+# ── build both native drivers up front ──────────────────────────────────────
+# Both `serve.mdk` (Async, Net) and the test client (Net) are native-only:
+# `stdlib/net` is unbound in the interpreter and rejected by Wasm.
+
+if ! MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$SERVE_SRC" -o "$WORK/pdsd" \
+  > "$WORK/build_serve.log" 2>&1
+then
+  cat "$WORK/build_serve.log" >&2
+  fail 'native serve.mdk build failed'
+fi
+
+if ! MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$CLIENT_SRC" -o "$WORK/client" \
+  > "$WORK/build_client.log" 2>&1
+then
+  cat "$WORK/build_client.log" >&2
+  fail 'native serve_client_main.mdk build failed'
+fi
+
+# ── fixed fixture identity, mirroring store_persistence_main's convention ──
+DID='did:plc:servee2egatefixture00001'
+HANDLE='alice.test'
+HOSTNAME='pds.test'
+# Any valid secp256k1 scalar; the same one store_persistence_main.mdk uses.
+SECRET_HEX='c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721'
+COLLECTION='app.bsky.feed.post'
+RKEY='e2egatefixture'
+RECORD_TEXT='pds serve_e2e gate fixture record'
+
+DATA="$WORK/data"
+mkdir -p "$DATA"
+printf '%s\n' "$SECRET_HEX" > "$WORK/key.hex"
+
+# Prints the readiness port once `pattern` (readiness line) appears in
+# `logfile`, or fails after ~10s. `pattern` is matched with grep -F.
+wait_for_port() {
+  logfile=$1
+  i=0
+  while [ "$i" -lt 100 ]; do
+    if grep -F 'serve: listening on 127.0.0.1:' "$logfile" >/dev/null 2>&1; then
+      sed -n 's/.*listening on 127\.0\.0\.1:\([0-9]*\).*/\1/p' "$logfile" | head -1
+      return 0
+    fi
+    if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+      return 1
+    fi
+    i=$((i + 1))
+    sleep 0.1
+  done
+  return 1
+}
+
+start_server() {
+  extra=$1
+  outfile=$2
+  errfile=$3
+  # shellcheck disable=SC2086 # $extra is a single optional flag, no quoting needed
+  "$WORK/pdsd" \
+    --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+    --key "$WORK/key.hex" --data "$DATA" --port 0 $extra \
+    >"$outfile" 2>"$errfile" &
+  SERVER_PID=$!
+}
+
+client() {
+  "$WORK/client" "$@"
+}
+
+# ── first instance: genesis, then cases 1-7 ─────────────────────────────────
+
+start_server --init "$WORK/serve1.out" "$WORK/serve1.err"
+PORT1=$(wait_for_port "$WORK/serve1.out") || {
+  cat "$WORK/serve1.err" >&2
+  fail 'server did not report readiness'
+}
+require_empty "$WORK/serve1.err" 'server startup'
+
+# 1. a well-formed query gets a correct response
+client query "$PORT1" "$DID" || fail 'case 1: well-formed query'
+
+# 2. pipelined pair, both correct, in order
+client pipeline "$PORT1" || fail 'case 2: pipelined pair'
+
+# 3. keep-alive reuse
+client keepalive "$PORT1" || fail 'case 3: keep-alive reuse'
+
+# 4. chunked write procedure succeeds — this ALSO plants the record that
+#    case 8 (restart-and-resume) reads back after the process boundary.
+client chunked "$PORT1" "$DID" "$COLLECTION" "$RKEY" "$RECORD_TEXT" \
+  || fail 'case 4: chunked write'
+
+# 5. malformed request -> 400, error path not a hang or crash
+client malformed "$PORT1" || fail 'case 5: malformed request'
+
+# 6. over-cap body -> rejected (413), not truncated or hung
+client overcap "$PORT1" || fail 'case 6: over-cap body'
+
+# 7. idle connection closed after ~30s (idleTimeout) — costs real wall time.
+client idle "$PORT1" || fail 'case 7: idle timeout'
+
+kill "$SERVER_PID" 2>/dev/null || true
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=""
+require_empty "$WORK/serve1.err" 'server (post-run)'
+
+# ── second instance: same --data, no --init, must resume prior state ───────
+
+start_server "" "$WORK/serve2.out" "$WORK/serve2.err"
+PORT2=$(wait_for_port "$WORK/serve2.out") || {
+  cat "$WORK/serve2.err" >&2
+  fail 'resumed server did not report readiness'
+}
+require_empty "$WORK/serve2.err" 'resumed server startup'
+
+# 8. restart-and-resume: the record written before the restart is readable
+#    from the fresh process over the same --data directory.
+client resume "$PORT2" "$DID" "$COLLECTION" "$RKEY" "$RECORD_TEXT" \
+  || fail 'case 8: restart-and-resume'
+
+kill "$SERVER_PID" 2>/dev/null || true
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=""
+require_empty "$WORK/serve2.err" 'resumed server (post-run)'
+
+echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, malformed, over-cap, idle timeout, restart-and-resume'

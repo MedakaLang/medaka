@@ -353,10 +353,31 @@ with no effect row (P14). Whole requests are buffered with independent caps:
 body, plus bounded line, field, trailer, and chunk counts. *Complete in the
 current tree. All-engine and doctestable with no sockets or files.*
 
-**Phase 3 — the socket shell.** ⛔ **GATED on #500 (A1 #496 + A2 #497)** for real I/O
-overlap, and on **#823/#824** for the `do` surface every handler is written in. An
-accept loop over the async net surface, the request lifecycle, connection lifetime and
-timeouts. Small by construction — Phase 2 left it nothing but wiring.
+**Phase 3 — the socket shell.** *Complete in the current tree.* `pds/shell/server.mdk`
+is an accept loop over the async net surface (`stdlib/net_async`) around the pure
+Phase 2 core: request framing via `scanRequestBoundary`, `idleTimeout`/`requestTimeout`/
+`writeTimeout`, keep-alive and pipelined-request reuse, a `maxConcurrentConnections`
+ceiling, and the shared `Ref Store` publish/persist sequence
+(`pds/shell/server.mdk`'s `applyRequest`) that keeps two concurrent connections from
+losing each other's write. `pds/shell/persist.mdk` and `pds/shell/blockfile.mdk`
+persist the account repository to disk (design row P7) and `pds/serve.mdk` is the
+entry point that admits configuration, rehydrates or initializes the repository, and
+binds the loopback listener. `pds/test/serve_e2e.sh` (#2481, #2525) drives a built
+server over a real loopback socket with a plain synchronous client and grades query,
+pipelined, and keep-alive requests; a chunked-transfer write; a malformed request and
+an over-cap body, both rejected rather than hung; the idle-connection timeout; and
+restart-and-resume across a process boundary against the same `--data` directory.
+`pds/test/lib_boundary.sh` closes out #2481 itself: `pds/lib/` never imports
+`pds/shell/` and no `pds/lib/*.mdk` export declares an effect row, so the pure core
+stays reachable from every engine Phase 3 does not run on.
+
+**Loopback-only, unauthenticated, is deliberate, not an oversight.** `bindLoopback`
+takes a port and nothing else — no configuration path can move this server off
+`127.0.0.1` — and nothing in this phase authenticates a request; every one of the
+nine XRPC endpoints answers whoever can reach the socket. That is the intended shape
+of a phase with no session/auth story yet (Phase 4's "still owed" list, below):
+authentication is the gate on ever exposing this past loopback, not a Phase 3 gap to
+work around.
 
 **Phase 4 — a standalone PDS.** *Pure half COMPLETE in the current tree
 (#1697); the rest is Phase-3-gated.*
@@ -378,7 +399,7 @@ as it stands), lexicon record validation (`validate: true` is refused),
 `describeRepo`'s `didDoc` (no DID resolver, so any document would be invented),
 `sync.getRepo`'s `since` (no incremental sync), and `validationStatus`.
 
-Still owed, and Phase-3-gated: account bootstrap,
+Still owed, now that Phase 3's shell exists to carry them: account bootstrap,
 `createSession`/`refreshSession` and JWT signing (reusing Phase 0),
 `applyWrites`, blob upload/retrieval and `com.atproto.sync.listBlobs`,
 multi-repository and blob-storage policy, and deployment behind Caddy under
