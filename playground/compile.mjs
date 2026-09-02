@@ -10,13 +10,15 @@
 //   __MEDAKA_WAT__\n<wat>                          -> { ok: true,  wat }
 //   __MEDAKA_WAT_DIAGS__\n<json>\n<wat>            -> { ok: true,  wat, diagnostics }  (clean, but WARNINGS)
 //   __MEDAKA_DIAGNOSTICS__\n<json>                 -> { ok: false, diagnostics }   (check --json shape)
+//   __MEDAKA_ANALYZE__\n<json>                    -> { ok: true,  diagnostics }   (analyze() only)
 //
 // `diagnostics` is the parsed {"files":[{file,diagnostics:[...]}]} object, drop-in
 // for playground/main.js's renderDiagnostics (it reads `.files`/`.errors`).
 //
 // API:
 //   const wasm = await loadCompiler(wasmBytesOrPath);   // Node: path or bytes; browser: bytes
-//   const r = await compile(source, { wasm, stdlib });
+//   const r = await compile(source, { wasm, stdlib });   // diagnostics + WAT
+//   const a = await analyze(source, { wasm, stdlib });   // diagnostics ONLY, no codegen
 //     stdlib = { runtime: <runtime.mdk text>, core: <core.mdk text> }
 //     r = { ok:true, wat:string, diagnostics?:{files:[...]} } | { ok:false, diagnostics:{files:[...]} }
 //     (diagnostics is present on an ok:true result only when there were WARNINGS —
@@ -147,6 +149,24 @@ function compiledModuleFor(wasmModuleOrBytes) {
   return _compiledModule;
 }
 
+// Build the guest's in-memory vfs: the two stdlib sources under their bare arg
+// paths (read directly, not through the loader) plus the user entry and any extra
+// stdlib siblings under the loader's "./<id>.mdk" keys.  One definition, shared by
+// every mode (compile / analyze / hover / complete) so they cannot drift.
+function buildVfs(source, stdlib) {
+  const vfsMap = new Map();
+  vfsMap.set(RUNTIME_PATH, enc(stdlib.runtime));
+  vfsMap.set(CORE_PATH, enc(stdlib.core));
+  vfsMap.set(USER_PATH, enc(source));
+  // A prelude-only program resolves no sibling imports.  Extra stdlib modules
+  // (list/map/...) a program imports go in opts.stdlib.extra as { '<id>': text }
+  // (e.g. { 'list': '...' }), registered under the loader's "./<id>.mdk" key.
+  if (stdlib.extra) for (const [id, text] of Object.entries(stdlib.extra)) {
+    vfsMap.set(USER_ROOT + '/' + id + '.mdk', enc(text));
+  }
+  return vfsMap;
+}
+
 // Run the compiler guest once over an in-memory vfs.  `vfsMap` = Map<path, Uint8Array>.
 // `argv` = string[].  Returns { out, err, exit } (out/err as strings).
 function runGuest(wasmModuleOrBytes, vfsMap, argv) {
@@ -265,16 +285,7 @@ export async function compile(source, opts = {}) {
   if (!stdlib || stdlib.runtime == null || stdlib.core == null)
     throw new Error('compile: opts.stdlib { runtime, core } required');
 
-  const vfsMap = new Map();
-  vfsMap.set(RUNTIME_PATH, enc(stdlib.runtime));
-  vfsMap.set(CORE_PATH, enc(stdlib.core));
-  vfsMap.set(USER_PATH, enc(source));
-  // A prelude-only program resolves no sibling imports.  Extra stdlib modules
-  // (list/map/...) a program imports go in opts.stdlib.extra as { '<id>': text }
-  // (e.g. { 'list': '...' }), registered under the loader's "./<id>.mdk" key.
-  if (stdlib.extra) for (const [id, text] of Object.entries(stdlib.extra)) {
-    vfsMap.set(USER_ROOT + '/' + id + '.mdk', enc(text));
-  }
+  const vfsMap = buildVfs(source, stdlib);
 
   // argv = <mode> <runtime.mdk> <core.mdk> <entry.mdk> <root>.  Mode 'compile'
   // = today's analyze→emit behavior.  The loader resolves the entry's module id
@@ -323,6 +334,48 @@ export async function compile(source, opts = {}) {
   return { ok: false, diagnostics: synthErr('unexpected compiler output: ' + (res.err || out).slice(0, 400)) };
 }
 
+// analyze: the diagnostics-only sibling of compile().  Same guest, same front
+// end, same diagnostics — the guest stops where compile() would start wasm
+// codegen (no lowerProgramEmit / wasmReachFilter / emitProgram), because the
+// editor's live-squiggle path throws the WAT away: 596ms of a 769ms clean compile
+// was emit nobody read (#2442).  Diagnostic CONTENT is byte-identical to what
+// compile() reports for the same program; only the marker differs.
+//   analyze(source, { wasm, stdlib })
+//     -> { ok:true,  diagnostics:{files:[...]} }   clean (files may carry WARNINGS)
+//      | { ok:false, diagnostics:{files:[...]} }   had ERROR diagnostics
+// `diagnostics` is ALWAYS present (a clean program yields {"files":[]}), so a
+// caller never has to distinguish "clean" from "no output".
+export async function analyze(source, opts = {}) {
+  const { wasm, stdlib } = opts;
+  if (!wasm) throw new Error('analyze: opts.wasm (playground.wasm bytes) required');
+  if (!stdlib || stdlib.runtime == null || stdlib.core == null)
+    throw new Error('analyze: opts.stdlib { runtime, core } required');
+
+  const vfsMap = buildVfs(source, stdlib);
+  const argv = ['analyze', RUNTIME_PATH, CORE_PATH, USER_PATH, USER_ROOT];
+
+  let res;
+  try {
+    res = await runGuestRetry(wasm, vfsMap, argv);
+  } catch (e) {
+    return { ok: false, diagnostics: synthErr('compiler trap: ' + (e && e.message || e)) };
+  }
+
+  const out = res.out;
+  const nl = out.indexOf('\n');
+  const marker = nl >= 0 ? out.slice(0, nl) : out;
+  const payload = nl >= 0 ? out.slice(nl + 1) : '';
+
+  if (marker === '__MEDAKA_ANALYZE__' || marker === '__MEDAKA_DIAGNOSTICS__') {
+    try {
+      return { ok: marker === '__MEDAKA_ANALYZE__', diagnostics: JSON.parse(payload.trim()) };
+    } catch (e) {
+      return { ok: false, diagnostics: synthErr('bad diagnostics JSON: ' + payload.slice(0, 200)) };
+    }
+  }
+  return { ok: false, diagnostics: synthErr('unexpected compiler output: ' + (res.err || out).slice(0, 400)) };
+}
+
 // ── stateless language queries (hover / completion) ──────────────────────────
 // Both wrap the SAME playground.wasm through a cursor-carrying mode arg
 // (compiler/entries/playground_main.mdk dispatches on argv[0]).  The guest runs a
@@ -339,13 +392,7 @@ async function queryAt(mode, marker, source, line, col, opts) {
   if (!stdlib || stdlib.runtime == null || stdlib.core == null)
     throw new Error(mode + ': opts.stdlib { runtime, core } required');
 
-  const vfsMap = new Map();
-  vfsMap.set(RUNTIME_PATH, enc(stdlib.runtime));
-  vfsMap.set(CORE_PATH, enc(stdlib.core));
-  vfsMap.set(USER_PATH, enc(source));
-  if (stdlib.extra) for (const [id, text] of Object.entries(stdlib.extra)) {
-    vfsMap.set(USER_ROOT + '/' + id + '.mdk', enc(text));
-  }
+  const vfsMap = buildVfs(source, stdlib);
 
   // argv = <mode> <runtime.mdk> <core.mdk> <entry.mdk> <line> <col>.
   const argv = [mode, RUNTIME_PATH, CORE_PATH, USER_PATH, String(line | 0), String(col | 0)];

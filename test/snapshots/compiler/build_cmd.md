@@ -2,12 +2,12 @@
 source_lines=1096
 stages=DESUGAR,MARK
 # SOURCE
--- compiler/driver/build_cmd.mdk — `medaka build` ported to self-hosted Medaka
--- (Stage 4 Phase B.11).  The self-host analog of lib/build_cmd.ml: compile a
+-- compiler/driver/build_cmd.mdk — `medaka build`, self-hosted
+-- (Stage 4 Phase B.11).  Compiles a
 -- user .mdk program to a native binary via the Medaka-hosted LLVM emitter
 -- (compiler/entries/llvm_emit_modules_main.mdk) + clang + the C runtime + Boehm GC.
 --
--- EMIT STEP = SHELL-OUT (option b), mirroring lib/build_cmd.ml verbatim.  The
+-- EMIT STEP = SHELL-OUT (option b).  The
 -- emitter is a heavy Medaka program carrying global Ref state (arg-stamp tables,
 -- gap log) and writes IR to stdout via putStr.  Driving it in-process would mean
 -- importing the entire emitter module graph into this driver AND risking Ref
