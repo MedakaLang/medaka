@@ -705,6 +705,10 @@ echo "checking #1110 Mono.TCon mint set ..."
 #     side of the same rule. It finds the head whose two identities conflict so the
 #     otherwise-unreadable `Type mismatch: T vs T` can name the two modules. It is a
 #     READER, not a decider — nothing about acceptance goes through it.
+#   `TCon "Async" (OriginModule "async") => True`  — `mainTypeIsAsync` (async runtime
+#     review fix, #500): the `main : Async` driver rewrite must fire only for the
+#     stdlib `async` module's type, so this READS the origin against a literal —
+#     the bare-name match it replaced rewrote a user type named `Async` too.
 #
 # 🚨 THIS LIST IS THE ONLY PLACE THE COMPARISON SET IS ENUMERATED MECHANICALLY.
 # ANY further comparison added without listing it here FAILS this gate, which is the
@@ -714,6 +718,7 @@ echo "checking #1110 Mono.TCon mint set ..."
 mono_tcon_allowed="| TCon String TyConOrigin
 TCon n o => Some (headKeyOfCon o n)
 (TCon n1 o1, TCon n2 o2) =>
+TCon \"Async\" (OriginModule \"async\") => True
 unifyN (ta@(TCon a oa)) (tb@(TCon b ob)) =
 cohGoR _ (TCon a oa) (TCon b ob) = sameTyConHead a oa b ob
 TCon a oa => match s

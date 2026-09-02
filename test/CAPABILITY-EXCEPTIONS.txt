@@ -126,6 +126,7 @@ netSetNonblock	interp	BUG	implemented by llvm, missing from interp — BUG(T7)
 netTryAccept	interp	BUG	implemented by llvm, missing from interp — BUG(T7)
 netTryRecv	interp	BUG	implemented by llvm, missing from interp — BUG(T7)
 netTrySend	interp	BUG	implemented by llvm, missing from interp — BUG(T7)
+netTrySendFrom	interp	BUG	implemented by llvm, missing from interp — BUG(T7)
 
 # --- singles ---
 runCommand	interp	BUG	implemented by llvm (isFileExtern family), missing from interp — BUG(T7). DEFERRED ON PURPOSE (2026-07-13): --allow-exec security posture first
@@ -199,6 +200,7 @@ netSetNonblock	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_em
 netTryAccept	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead
 netTryRecv	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead
 netTrySend	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead
+netTrySendFrom	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead
 
 # intMinBound/intMaxBound (wasm): PROMOTED — #461. Were TRAP-STUB rows here
 # (lowered to `["unreachable"]`); wasm_emit.mdk now boxes them as real i64

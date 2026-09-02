@@ -114,6 +114,7 @@ import driver.main_autoprint.{
   underivedMainDiags,
   shouldAsyncWrapMain,
   asyncWrapModules,
+  asyncMainShapeError,
 }
 import json.{
   Json,
@@ -395,10 +396,17 @@ doEmit emit rsrc csrc tsrc entry mods warnTriples =
       errs => emitDiagnostics (cjAllToJson [(entry, tsrc, map diagOfTypeError errs)])
   -- An `Async` main is driven by the sequential `runAsync`: the browser build
   -- has no clock host-imports (see wasm_emit_modules_main).
-  else if shouldAsyncWrapMain "runAsyncMain" modules then
-    finishClean emit warnTriples rt core (asyncWrapModules "runAsyncMain" modules)
-  else
-    finishClean emit warnTriples rt core modules
+  else match asyncMainShapeError modules
+    Some msg => emitDiagnostics (cjAllToJson [(entry, tsrc, [Diag SevError "E-MAIN-ASYNC-PAYLOAD" msg None None None])])
+    None =>
+      if shouldAsyncWrapMain "runAsyncMain" modules then
+        -- Re-check the rewritten program, as the auto-print branch does.
+        let modulesW = asyncWrapModules "runAsyncMain" modules
+        match underivedMainDiags rt core modulesW
+          [] => finishClean emit warnTriples rt core modulesW
+          errs => emitDiagnostics (cjAllToJson [(entry, tsrc, map diagOfTypeError errs)])
+      else
+        finishClean emit warnTriples rt core modules
 
 -- ACCEPTED TRADEOFF (Val, 2026-09-01, #2442 review round F1): because `analyze`
 -- deliberately never reaches `runEmit` below, it CANNOT detect a codegen-only
