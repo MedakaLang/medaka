@@ -61,7 +61,7 @@ srcNameFromArgs (_::_::entry::_) = entry
 srcNameFromArgs _ = ""
 
 main : <IO> Unit
-main = driveModules (runEmitWith emitTail)
+main = driveModules (runEmitWith "runAsyncIOMain" emitTail)
 
 -- COMPOSITE-MAIN AUTO-PRINT: the shared mangle+elaborate+auto-print-wrap glue
 -- (design §10) lives once in entry_support.runEmitWith, parameterized by this

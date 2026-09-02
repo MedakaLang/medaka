@@ -80,6 +80,16 @@ lookupAssoc k ((k2, v)::rest)
   | k == k2 = let _ = opBump () in Some v
   | otherwise = let _ = opBump () in lookupAssoc k rest
 
+-- Drop every entry with this key from an assoc list.  The MRU caches
+-- (frontend/parse_cache, frontend/desugar_cache, driver/loader, driver/
+-- diagnostics) use it to refresh a key's position: drop, then prepend.
+export
+dropAssoc : String -> List (String, b) -> List (String, b)
+dropAssoc _ [] = []
+dropAssoc k ((k2, v)::rest)
+  | k == k2 = dropAssoc k rest
+  | otherwise = (k2, v) :: dropAssoc k rest
+
 -- Join string pieces with a separator.  Delegates to stdlib `string.join`
 -- (`stringConcat (intersperse sep parts)` — the same O(total length) one-pass
 -- build util used to hand-roll via intersperseStr).  Kept as a named export so

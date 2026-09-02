@@ -2848,6 +2848,12 @@ isNetExtern name = contains
     "netShutdown",
     "netClose",
     "netSetTimeout",
+    "ioPoll",
+    "netSetNonblock",
+    "netTryAccept",
+    "netTryRecv",
+    "netTrySend",
+    "netTrySendFrom",
   ]
 
 emitNetExtern : Emit -> OrdMap (String, LTy) -> String -> List CExpr -> (String, LTy)
@@ -2911,6 +2917,44 @@ emitNetExtern e env "netSetTimeout" args = match emitArgs e env args
     let _ = emit e "  \{r} = call i64 @mdk_net_set_timeout(i64 \{fd}, i64 \{ms})"
     (r, LTCon)
   _ => panic "llvm: netSetTimeout takes two arguments"
+-- Readiness shims (async runtime): every arg is a tagged Int, a Bool (tagged
+-- like an Int), or a boxed Array; every result is a boxed Result.
+emitNetExtern e env "ioPoll" args = match emitArgs e env args
+  [fds, ints, ms] =>
+    let r = freshReg e
+    let _ = emit e "  \{r} = call i64 @mdk_io_poll(i64 \{fds}, i64 \{ints}, i64 \{ms})"
+    (r, LTCon)
+  _ => panic "llvm: ioPoll takes three arguments"
+emitNetExtern e env "netSetNonblock" args = match emitArgs e env args
+  [fd, on] =>
+    let r = freshReg e
+    let _ = emit e "  \{r} = call i64 @mdk_net_set_nonblock(i64 \{fd}, i64 \{on})"
+    (r, LTCon)
+  _ => panic "llvm: netSetNonblock takes two arguments"
+emitNetExtern e env "netTryAccept" args = match emitArgs e env args
+  [fd] =>
+    let r = freshReg e
+    let _ = emit e "  \{r} = call i64 @mdk_net_try_accept(i64 \{fd})"
+    (r, LTCon)
+  _ => panic "llvm: netTryAccept takes one argument"
+emitNetExtern e env "netTryRecv" args = match emitArgs e env args
+  [fd, n] =>
+    let r = freshReg e
+    let _ = emit e "  \{r} = call i64 @mdk_net_try_recv(i64 \{fd}, i64 \{n})"
+    (r, LTCon)
+  _ => panic "llvm: netTryRecv takes two arguments"
+emitNetExtern e env "netTrySend" args = match emitArgs e env args
+  [fd, bs] =>
+    let r = freshReg e
+    let _ = emit e "  \{r} = call i64 @mdk_net_try_send(i64 \{fd}, i64 \{bs})"
+    (r, LTCon)
+  _ => panic "llvm: netTrySend takes two arguments"
+emitNetExtern e env "netTrySendFrom" args = match emitArgs e env args
+  [fd, bs, off] =>
+    let r = freshReg e
+    let _ = emit e "  \{r} = call i64 @mdk_net_try_send_from(i64 \{fd}, i64 \{bs}, i64 \{off})"
+    (r, LTCon)
+  _ => panic "llvm: netTrySendFrom takes three arguments"
 emitNetExtern e _ name _ = gapE e ("unsupported net extern " ++ name)
 
 -- Tier D: RNG. The deterministic random* family uses SplitMix64 state in the C

@@ -119,6 +119,14 @@ netShutdown	interp	BUG	implemented by llvm, missing from interp — BUG(T7)
 netTcpAccept	interp	BUG	implemented by llvm, missing from interp — BUG(T7)
 netTcpConnect	interp	BUG	implemented by llvm, missing from interp — BUG(T7)
 netTcpListen	interp	BUG	implemented by llvm, missing from interp — BUG(T7)
+# --- net readiness (5): the async runtime's non-blocking half (ASYNC-RUNTIME-DESIGN
+#     §4.2 / #497). Same posture as the ten above: native-first. ---
+ioPoll	interp	BUG	implemented by llvm, missing from interp — BUG(T7)
+netSetNonblock	interp	BUG	implemented by llvm, missing from interp — BUG(T7)
+netTryAccept	interp	BUG	implemented by llvm, missing from interp — BUG(T7)
+netTryRecv	interp	BUG	implemented by llvm, missing from interp — BUG(T7)
+netTrySend	interp	BUG	implemented by llvm, missing from interp — BUG(T7)
+netTrySendFrom	interp	BUG	implemented by llvm, missing from interp — BUG(T7)
 
 # --- singles ---
 runCommand	interp	BUG	implemented by llvm (isFileExtern family), missing from interp — BUG(T7). DEFERRED ON PURPOSE (2026-07-13): --allow-exec security posture first
@@ -187,6 +195,12 @@ netShutdown	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.
 netTcpAccept	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead
 netTcpConnect	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead
 netTcpListen	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead
+ioPoll	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead
+netSetNonblock	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead
+netTryAccept	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead
+netTryRecv	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead
+netTrySend	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead
+netTrySendFrom	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead
 
 # intMinBound/intMaxBound (wasm): PROMOTED — #461. Were TRAP-STUB rows here
 # (lowered to `["unreachable"]`); wasm_emit.mdk now boxes them as real i64

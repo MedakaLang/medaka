@@ -1,5 +1,5 @@
 # META
-source_lines=564
+source_lines=574
 stages=DESUGAR,MARK
 # SOURCE
 -- Shared internal helpers for the self-hosted compiler stages.  compiler
@@ -83,6 +83,16 @@ lookupAssoc _ [] = None
 lookupAssoc k ((k2, v)::rest)
   | k == k2 = let _ = opBump () in Some v
   | otherwise = let _ = opBump () in lookupAssoc k rest
+
+-- Drop every entry with this key from an assoc list.  The MRU caches
+-- (frontend/parse_cache, frontend/desugar_cache, driver/loader, driver/
+-- diagnostics) use it to refresh a key's position: drop, then prepend.
+export
+dropAssoc : String -> List (String, b) -> List (String, b)
+dropAssoc _ [] = []
+dropAssoc k ((k2, v)::rest)
+  | k == k2 = dropAssoc k rest
+  | otherwise = (k2, v) :: dropAssoc k rest
 
 -- Join string pieces with a separator.  Delegates to stdlib `string.join`
 -- (`stringConcat (intersperse sep parts)` — the same O(total length) one-pass
@@ -588,6 +598,9 @@ noneHeadTag = "__none__"
 (DTypeSig true "lookupAssoc" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "b"))) (TyApp (TyCon "Option") (TyVar "b")))))
 (DFunDef false "lookupAssoc" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupAssoc" ((PVar "k") (PCons (PTuple (PVar "k2") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "k2")) (ELet false PWild (EApp (EVar "opBump") (ELit LUnit)) (EApp (EVar "Some") (EVar "v"))) (EIf (EVar "otherwise") (ELet false PWild (EApp (EVar "opBump") (ELit LUnit)) (EApp (EApp (EVar "lookupAssoc") (EVar "k")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "dropAssoc" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "b"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "b"))))))
+(DFunDef false "dropAssoc" (PWild (PList)) (EListLit))
+(DFunDef false "dropAssoc" ((PVar "k") (PCons (PTuple (PVar "k2") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "k2")) (EApp (EApp (EVar "dropAssoc") (EVar "k")) (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "k2") (EVar "v")) (EApp (EApp (EVar "dropAssoc") (EVar "k")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "joinWith" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "joinWith" ((PVar "sep") (PVar "xs")) (EApp (EApp (EVar "join") (EVar "sep")) (EVar "xs")))
 (DTypeSig true "joinNl" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
@@ -747,6 +760,9 @@ noneHeadTag = "__none__"
 (DTypeSig true "lookupAssoc" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "b"))) (TyApp (TyCon "Option") (TyVar "b")))))
 (DFunDef false "lookupAssoc" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupAssoc" ((PVar "k") (PCons (PTuple (PVar "k2") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "k2")) (ELet false PWild (EApp (EVar "opBump") (ELit LUnit)) (EApp (EVar "Some") (EVar "v"))) (EIf (EVar "otherwise") (ELet false PWild (EApp (EVar "opBump") (ELit LUnit)) (EApp (EApp (EVar "lookupAssoc") (EVar "k")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "dropAssoc" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "b"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "b"))))))
+(DFunDef false "dropAssoc" (PWild (PList)) (EListLit))
+(DFunDef false "dropAssoc" ((PVar "k") (PCons (PTuple (PVar "k2") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "k2")) (EApp (EApp (EVar "dropAssoc") (EVar "k")) (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "k2") (EVar "v")) (EApp (EApp (EVar "dropAssoc") (EVar "k")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "joinWith" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "joinWith" ((PVar "sep") (PVar "xs")) (EApp (EApp (EVar "join") (EVar "sep")) (EVar "xs")))
 (DTypeSig true "joinNl" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))

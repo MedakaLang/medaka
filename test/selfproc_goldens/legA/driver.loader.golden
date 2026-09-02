@@ -41,9 +41,13 @@ loadProgramFilesE : (String -> Option String) -> String -> List String -> <IO> R
 loadProgramFilesLocatedCached : Ref (List (String, List Decl)) -> (String -> Option String) -> String -> List String -> <IO> Result String (List (String, String, List Decl))
 loadProgramFilesLocatedCachedE : Ref (List (String, List Decl)) -> (String -> Option String) -> String -> List String -> <IO> Result LoadError (List (String, String, List Decl))
 loadProgramFilesLocatedE : (String -> Option String) -> String -> List String -> <IO> Result LoadError (List (String, String, List Decl))
+loadedSourceOf : String -> Option String
+loadedSourcesLimit : Int
+loadedSourcesRef : Ref (List (String, String))
 manifestAllowsInternal : String -> <IO> Bool
 mdkBaseName : String -> Option String
 moduleIdOfPath : List String -> String -> String
+noteLoadedSource : String -> String -> Unit
 parentDir : String -> String
 parentGo : String -> Int -> String
 parseCacheLimit : Int

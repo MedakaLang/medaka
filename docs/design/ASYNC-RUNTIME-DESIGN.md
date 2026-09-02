@@ -1,6 +1,6 @@
 # Async runtime v2 — the ASYNC-DESIGN §5 swap
 
-**Status:** DESIGN LOCKED (2026-07-16, collaborative) — implementation staged as
+**Status:** IMPLEMENTED 2026-09-02 (design locked 2026-07-16, amended §0a) — all four stages landed; the staging table marks each; implementation was staged as
 tracking issue #500 (stages #496 A1 · #497 A2 · #498 A3 · #499 A4). Nothing below
 is built yet; per-stage DONE markers land here as stages merge. Companion to
 [`archive/design/ASYNC-DESIGN.md`](../../archive/design/ASYNC-DESIGN.md) (v1, IMPLEMENTED),
@@ -25,6 +25,54 @@ errors ride `Result`, no rejection channel, `panic` aborts the process; `main : 
 entrypoint; structured concurrency first.
 
 ---
+
+## 0a. Amendments (ruled 2026-09-02, recorded on #500)
+
+Re-derived after the graded-interfaces work (`Deferred*` family, `defer` blocks,
+declared kinds). R1–R6 and G1–G9 stand. Four scope amendments make the result
+usable for a real program (a TCP server), which the overlap-only scope could not
+express: an accept loop cannot be written with `concurrent` (it waits for every
+child), and a non-blocking socket ignores the `SO_RCVTIMEO` timeout the blocking
+API relied on.
+
+| # | Amendment | Replaces |
+|---|---|---|
+| **M1** | `Await` takes a **list** of waits (`Await (List Wait) k`), woken by any one. A deadline is the wait set `[WaitRead fd, WaitUntil t]`; the task itself decides what to do when the timer fires, so nothing is ever dropped. | §4.1's single `Wait` |
+| **M2** | A `Spawn (Async e Unit) k` arm with `spawn`, `spawnTask : Async e a -> Async e (Task a)`, and `await`. `Task a` is two `Ref`s the child fills; `await` parks on `WaitFlag`. The driver returns only when every spawned task has finished (structured: the root is the scope). A program whose remaining tasks can never be woken panics rather than hangs. `concurrent` is built on spawn, so nested fan-out is free and every child is scheduled independently (G7). | R4's "no spawn/Task", D8's deferral |
+| **M3** | Per-operation deadlines on the net surface (`recvWithin`, `sendAllWithin`: `Err` on expiry, the shape the blocking `setTimeout` produced). **General cancellation, `race`, and `timeout` of an arbitrary task stay out**: dropping a parked task needs a cleanup story (the language has no catchable exit) and gets its own design. | R4, unchanged in spirit |
+| **M4** | `main : Async _` dispatch goes through the driver on **every** engine (#2506: `medaka build` used to force the inert value and print a heap pointer). The rewrite is `main_autoprint.asyncWrapModules`: the `async` module's driver is pinned under an unspellable name and imported into the entry module. Native and the interpreter apply `runAsyncIO`; the WasmGC target, which has no clock host-imports, applies the sequential `runAsync`. | §4.4's interpreter-only dispatch |
+
+Also: `sleep` takes a `Duration` (`time.mdk`), matching `net.setTimeout`;
+`concurrent : List (Async e a) -> Async e (List a)` has a pure arrow; the async net
+surface lives in a sibling stdlib module named `net_async` (A3) over `net.mdk`'s handles, whose
+constructors become `public export` (handles stay mutually unconfusable, become
+forgeable from an `Int` — accepted).
+
+Two facts the implementation learned, worth knowing before writing against the type:
+an effect row written as a type ARGUMENT is invariant (#1094), so a `defer` block's
+statements must share one index — write the labels (`Async <Clock, Stdout> Unit`), not
+the `IO` alias, and prefer `putStrLn (display x)` (`<Stdout>`) over `println` (`<IO>`)
+inside `liftIO`; and a NAMED pure function passed as a `deferThen` continuation closes
+the index to `<>` (its arrow row is `<>`), so pass a lambda (`ts => awaitAll ts`).
+
+Delivery: two PRs on one branch — S1 (A1 + M2 + M4, all-engine, compiler driver
+touched), then A2 + A3 + A4 together.
+
+**Review round (2026-09-02, independent adversarial review after both PRs merged)** found and
+fixed: (1) G7 was false as built — parked tasks were only examined when the run queue was
+empty, so one task that never parks starved every timer and socket and a `recvWithin`
+returned a wrong `Err "timed out"` at exit 0; the scheduler now runs in ROUNDS (one pass over
+the queue as it stood) and gives parked tasks a non-blocking wake at the end of every round.
+(2) G1 was false as built — `runAsync` ran each spawned child to completion, so
+`runAsync (concurrent …)` no longer interleaved as v1 did; `runAsync` is now the same run
+queue minus the clock (only task flags can wake), pinned by
+`test/engine_fixtures/async_interleave.mdk`. (3) The `main : Async` detection keyed on the
+bare tycon name and the build path never re-checked the wrapped program; detection now keys on
+the type's ORIGIN (`OriginModule "async"`), a non-`Unit` payload is a named diagnostic, and
+every build path re-checks the rewritten program. (4) `sendAll`/`sendAllWithin` were
+O(payload²) and the deadline was checked after each copy; the loop now keeps an offset and
+`netTrySendFrom` copies at most 64 KiB per call, with the deadline checked first. (5) The run
+queue is a two-list queue (was a list append per push); parked tasks wake oldest-first.
 
 ## 1. The gap this closes
 
@@ -235,10 +283,10 @@ works; it just doesn't overlap, and the docs say so (R4/G9).
 
 | Stage | Issue | Content | New C | Engines | Key gate |
 |---|---|---|---|---|---|
-| A1 | #496 | `Await`/`Wait` arms; run queue + timer heap + park table; `sleep`; `runAsyncIO`; `main : Async` dispatch through it | none | all 3 | v1 doctests byte-identical; 3×`sleep 100` concurrent < 200ms; idle CPU ≈ 0 |
-| A2 | #497 | `ioPoll` + `netSetNonblock` + `netTry{Accept,Recv,Send}` | ~150–250 lines | native (+ ledger rows) | capability matrix green; would-block path exercised; dual-platform build |
-| A3 | #498 | fd parking; `awaitReadable`/`awaitWritable`; `asyncAccept`/`asyncRecv`/`asyncSend`; echo-server fixture | none | native | slow client doesn't block fast client — THE observable win |
-| A4 | #499 | v1-determinism guard gate; overlap gate (order-of-magnitude margins only — time is noisy); doc sweep; this doc → IMPLEMENTED | none | — | CI green across the board |
+| A1 ✅ DONE 2026-09-02 | #496 | `Await`/`Spawn` arms + `Wait`; run queue + park table; `sleep`; `spawn`/`spawnTask`/`await`; `concurrent` over spawn; `runAsyncIO`; `main : Async` dispatch on all three engines (#2506) | none | eval + native; wasm runs the sequential driver, so compute-only programs work there and `sleep` does not (no clock host-imports, `WASM-GAP`) | v1 doctests byte-identical; 3×`sleep 100ms` concurrent in 0.15s wall, 0.00s CPU; `test/engine_fixtures/async_main_dispatch.mdk` |
+| A2 ✅ DONE 2026-09-02 | #497 | `ioPoll` (parallel fd/interest arrays, readiness word per fd) + `netSetNonblock` + `netTry{Accept,Recv,Send}` | ~110 lines (`runtime/medaka_rt.c`) | native (+ ledger rows) | capability matrix green; would-block, poll-timeout, readiness-bit and EOF paths exercised by a native probe |
+| A3 ✅ DONE 2026-09-02 | #498 | fd parking (`ioPoll` from `wakeParked`); `awaitAny`/`deadlineAfter`/`expired` in `async.mdk`; `stdlib/net_async.mdk` (`accept`/`recv`/`send`/`sendAll`/`recvWithin`/`sendAllWithin`/`sendString`/`close`/`closeListener`/`serve`) | none | native | `test/async_fixtures/echo_overlap.mdk`: a slow client does not stall a fast one, a deadline fires, closing the listener ends `serve` — 0.40 s wall, 0.00 s CPU |
+| A4 ✅ DONE 2026-09-02 | #499 | `test/diff_async.sh` build-and-run gate over `test/async_fixtures/` (self-timed overlap fixture, order-of-magnitude margin); v1 determinism = the byte-identical v1 doctests + `engine_fixtures/async_main_dispatch.mdk`; doc sweep; this doc → IMPLEMENTED | none | — | CI green across the board |
 
 A1 ∥ A2 (independent); A3 needs both; A4 sweeps. A1 and A2 each touch compiler source
 (driver dispatch; `llvm_emit.mdk`) → fixpoint-gated, goldens blessed in the same commit,

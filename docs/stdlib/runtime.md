@@ -359,6 +359,60 @@ netSetTimeout : Int -> Int -> <Net _> Result String Unit
 Sets a connection's send and receive timeout in milliseconds. `0`
 means no timeout.
 
+### `ioPoll`
+
+```
+ioPoll : Array Int -> Array Int -> Int -> <Net _> Result String (Array Int)
+```
+
+Waits until any of `fds` is ready, or `timeoutMs` passes (`-1` waits
+forever). `interests` is parallel to `fds`: bit 1 asks for readable, bit 2
+for writable. The result is parallel too: bit 1 readable, bit 2 writable,
+both bits on an error or hangup so a retry surfaces the error.
+
+### `netSetNonblock`
+
+```
+netSetNonblock : Int -> Bool -> <Net _> Result String Unit
+```
+
+Switches a socket's non-blocking mode on or off.
+
+### `netTryAccept`
+
+```
+netTryAccept : Int -> <Net _> Result String (Option Int)
+```
+
+`netTcpAccept` that returns `None` instead of blocking.
+
+### `netTryRecv`
+
+```
+netTryRecv : Int -> Int -> <Net _> Result String (Option (Array Int))
+```
+
+`netRecv` that returns `None` instead of blocking. `Some []` is end of
+stream.
+
+### `netTrySend`
+
+```
+netTrySend : Int -> Array Int -> <Net _> Result String (Option Int)
+```
+
+`netSend` that returns `None` instead of blocking. `Some n` is the count
+written, which may be short.
+
+### `netTrySendFrom`
+
+```
+netTrySendFrom : Int -> Array Int -> Int -> <Net _> Result String (Option Int)
+```
+
+`netTrySend` starting at `offset` into the array, sending at most 64 KiB
+per call, so a loop over a large payload pays only for the bytes it sends.
+
 ## Time
 
 ### `wallTimeSec`
