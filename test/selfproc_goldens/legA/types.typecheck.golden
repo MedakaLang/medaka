@@ -1493,6 +1493,8 @@ moduleSpellsShadowBare : List Decl -> String -> String -> Bool
 moduleUserFnNames : List (String, List Decl) -> List String
 monoArgUnboundIds : Mono -> List Int
 monoClosed : Mono -> Bool
+monoHasArrow : Mono -> Bool
+monoHasArrowInSlot : Mono -> Bool
 monoHasNonCovariantSlot : Mono -> Bool
 monoHeadAgrees : Mono -> Mono -> Bool
 monoHeadIsDecl : Mono -> Bool
