@@ -330,9 +330,28 @@ optTrailingComma = do
 
 optTrailingCommaFor : Token -> Parser Unit
 optTrailingCommaFor TComma = do
+  p <- getPos
   advance
-  pure ()
+  recordTrailingComma p
 optTrailingCommaFor _ = pure ()
+
+-- Source positions (line, col) of every trailing comma consumed by the last
+-- parse, in source order — the formatter's "magic trailing comma" signal (a
+-- collection literal the author ended with a comma stays one-element-per-line).
+-- Real positions only on the located path (`parseWithPositions`); a bare
+-- `parse` records zero locs, which the formatter never consults.
+trailingCommaLocsRef : Ref (List (Int, Int))
+trailingCommaLocsRef = Ref []
+
+recordTrailingComma : Int -> Parser Unit
+recordTrailingComma p = match locOfSpan p (p + 1)
+  Loc _ sl sc _ _ =>
+    trailingCommaLocsRef := (sl, sc) :: !trailingCommaLocsRef
+    pure ()
+
+export
+trailingCommaLocs : Unit -> List (Int, Int)
+trailingCommaLocs _ = reverseL !trailingCommaLocsRef
 
 -- Like `optTrailingComma`, but a no-op for a single-element paren group — a
 -- trailing comma after one element (`(x,)`) is NOT accepted, so `(x)` keeps its
@@ -4525,6 +4544,7 @@ parseWithPositionsOpt src = match tokenizeWithLines src
         let offs = arrayFromList offPairList
         let nameLineStarts = lineStartsOf src
         let _ = setLocState src offs
+        trailingCommaLocsRef := []
         match runP programWithSpans toks 0
           PErr _ _ => None
           PFatal _ _ => None

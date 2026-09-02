@@ -42,8 +42,7 @@ import frontend.parser.{
   parseWithPositions,
   positionsDecls,
   positionsVariantLines,
-  positionsChainLines,
-  positionsLastContentLine,
+  trailingCommaLocs,
 }
 import frontend.lexer.{collectComments}
 import tools.fmt.{formatProgram}
@@ -155,9 +154,8 @@ codemodSource xf src = match parseResult src
         decls2
         (positionsDecls pos)
         (positionsVariantLines pos)
-        (positionsChainLines pos)
+        (trailingCommaLocs ())
         comments
-        (positionsLastContentLine pos)
         src))
 
 mapDeclsChanged : (Decl -> (Decl, Bool)) -> List Decl -> (List Decl, Bool)
