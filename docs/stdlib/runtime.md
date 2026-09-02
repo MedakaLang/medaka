@@ -257,11 +257,10 @@ the program could not be started.
 ### `exit`
 
 ```
-exit : Int -> a
+exit : Int -> Unit
 ```
 
-Ends the program with an exit code. Like `panic`, it never returns, so
-it fits any expression position.
+Ends the program with an exit code.
 
 ### `panic`
 

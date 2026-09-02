@@ -137,9 +137,8 @@ extern buildFingerprint : Unit -> <Env> String
 -- the program could not be started.
 extern runCommand : String -> List String -> <Exec "_"> Result String (Int, String, String)
 
--- | Ends the program with an exit code. Like `panic`, it never returns, so
--- it fits any expression position.
-extern exit : Int -> a
+-- | Ends the program with an exit code.
+extern exit : Int -> Unit
 
 -- | Aborts the program with a message. Panics cannot be caught.
 extern panic : String -> a
