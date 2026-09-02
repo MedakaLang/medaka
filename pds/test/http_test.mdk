@@ -5,6 +5,7 @@ import string.{contains, toUtf8}
 import lib.http.{
   DecodedBody(..),
   Header,
+  HttpFrame(..),
   QueryParam(..),
   Request,
   Response,
@@ -17,6 +18,7 @@ import lib.http.{
   mediaTypeType,
   parseMediaType,
   parseRequest,
+  parseRequestAt,
   parseTargetQuery,
   requestBody,
   requestHeaders,
@@ -24,6 +26,7 @@ import lib.http.{
   requestMethod,
   requestTarget,
   requestTrailers,
+  scanRequestBoundary,
   serializeResponse,
 }
 import lib.resource_limits.{
@@ -476,3 +479,117 @@ test "text body ceiling accepts at and rejects over" =
 test "raw body ceiling accepts at and rejects over" =
   expectTrue
     (isOk (checkRawBodyBytes maxRawBodyBytes) && isErr (checkRawBodyBytes (maxRawBodyBytes + 1)))
+
+-- Incremental framing: the scanner splits a stream into requests, so its
+-- verdict on a buffer and the one-shot parser's verdict on exactly that
+-- framed prefix have to be the same answer arrived at two ways.
+
+prefix : Array Int -> Int -> Array Int
+prefix input size = arrayMakeWith size (i => input[i])
+
+sameRequest : Request -> Request -> Bool
+sameRequest left right = requestMethod left == requestMethod right
+  && requestTarget left == requestTarget right
+  && requestBody left == requestBody right
+  && requestKeepAlive left == requestKeepAlive right
+  && names (requestHeaders left) == names (requestHeaders right)
+  && names (requestTrailers left) == names (requestTrailers right)
+
+scanAgrees : Array Int -> Bool
+scanAgrees input = match scanRequestBoundary input 0
+  HttpNeedMore => isErr (parseRequest input)
+  HttpFrameFailed _ => isErr (parseRequest input)
+  HttpFramedAt at => at >= 0
+    && at <= arrayLength input
+    && (match (parseRequestAt input 0 at, parseRequest (prefix input at))
+      (Ok viaFrame, Ok viaPrefix) => sameRequest viaFrame viaPrefix
+      _ => False)
+
+allAgree : List (Array Int) -> Bool
+allAgree [] = True
+allAgree (input::rest) = scanAgrees input && allAgree rest
+
+pipelined : Array Int
+pipelined = appendBytes simpleGet fixedBinary
+
+corpus : List (Array Int)
+corpus = [
+  simpleGet,
+  fixedBinary,
+  chunked,
+  pipelined,
+  appendBytes chunked simpleGet,
+  appendBytes simpleGet (toUtf8 "x"),
+  toUtf8 "GET / HTTP/1.1\r\nHost: pds.example\r\nX-Test:\t value \t\r\n\r\n",
+  toUtf8 "GET / HTTP/1.1\r\nHost: pds.example\r\nConnection: upgrade, ClOsE\r\n\r\n",
+  toUtf8 "POST / HTTP/1.1\r\nHost: pds.example\r\nContent-Length: 0\r\nContent-Length: 0\r\n\r\n",
+  toUtf8 "POST / HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\nContent-Length: 0\r\n\r\n0\r\n\r\n",
+  toUtf8 "POST / HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: gzip, chunked\r\n\r\n",
+  toUtf8 "POST / HTTP/1.1\r\nHost: pds.example\r\n\r\npayload",
+  toUtf8 "POST / HTTP/1.1\r\nHost: pds.example\r\nContent-Length: 4\r\n\r\nabc",
+  toUtf8 "POST / HTTP/1.1\r\nHost: pds.example\r\nContent-Length: 1\r\n\r\nab",
+  toUtf8 "POST / HTTP/1.1\r\nHost: pds.example\r\nContent-Length: 99999999999999999999\r\n\r\n",
+  toUtf8 "POST / HTTP/1.1\r\nHost: pds.example\r\nContent-Length: 5242881\r\n\r\n",
+  toUtf8 "POST / HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\n\r\nZ\r\n",
+  toUtf8 "POST / HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\n\r\n500001\r\n",
+  toUtf8 "POST / HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nab",
+  toUtf8 "POST / HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\n\r\n1\r\naXX",
+  toUtf8 "POST / HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\n\r\n1;x=\"no\r\na\r\n0\r\n\r\n",
+  toUtf8 "POST / HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\n\r\n0\r\nContent-Length: 0\r\n\r\n",
+  toUtf8 "POST / HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\nx",
+  toUtf8 "GET / HTTP/1.1\nHost: pds.example\n\n",
+  toUtf8 "GET / HTTP/1.1\rX",
+  toUtf8 "GET / HTTP/1.1\r\nHost: pds.example\r\n continuation\r\n\r\n",
+  toUtf8 "GE(T / HTTP/1.1\r\nHost: pds.example\r\n\r\n",
+  toUtf8 "GET / HTTP/1.1\r\nHost: pds.example\r\nBad Name: value\r\n\r\n",
+  toUtf8 "GET /ok\r\nInjected: yes HTTP/1.1\r\nHost: pds.example\r\n\r\n",
+  toUtf8 "GET http://pds.example/x HTTP/1.1\r\nHost: pds.example\r\n\r\n",
+  toUtf8 "GET /x#fragment HTTP/1.1\r\nHost: pds.example\r\n\r\n",
+  toUtf8 "GET / HTTP/1.0\r\nHost: pds.example\r\n\r\n",
+  toUtf8 "GET / http/1.1\r\nHost: pds.example\r\n\r\n",
+  toUtf8 "GET / HTTP/1.1\r\n\r\n",
+  toUtf8 "GET / HTTP/1.1\r\nHost: one\r\nHost: two\r\n\r\n",
+  toUtf8 "GET / HTTP/1.1\r\nHost: bad host\r\n\r\n",
+  toUtf8 "GET / HTTP/1.1\r\nHost: [2001:db8::1]:2583\r\n\r\n",
+  toUtf8 "GET / HTTP/1.1\r\nHost: pds.example\r\nConnection: close,\r\n\r\n",
+  toUtf8 "GET /x?a=1&a=&flag HTTP/1.1\r\nHost: pds.example\r\n\r\n",
+  appendBytes [|71, 256|] (toUtf8 "T / HTTP/1.1\r\nHost: pds.example\r\n\r\n"),
+  [||],
+]
+
+everyProperPrefixNeedsMore : Array Int -> Int -> Bool
+everyProperPrefixNeedsMore input size =
+  if size >= arrayLength input then True
+  else match scanRequestBoundary (prefix input size) 0
+    HttpNeedMore => everyProperPrefixNeedsMore input (size + 1)
+    _ => False
+
+test "scanner and one-shot parser agree across the whole HTTP corpus" =
+  expectTrue (allAgree corpus)
+
+test "every proper prefix of a well-formed request asks for more bytes" =
+  expectTrue
+    (everyProperPrefixNeedsMore simpleGet 0 && everyProperPrefixNeedsMore fixedBinary 0 && everyProperPrefixNeedsMore chunked 0)
+
+test "a definitively malformed prefix is rejected rather than left pending" = match scanRequestBoundary (toUtf8 "GET / HTTP/1.0\r\n") 0
+  HttpFrameFailed _ => expectTrue True
+  _ => expectTrue False
+
+test "pipelined requests are framed one at a time from a single buffer" = match (scanRequestBoundary pipelined 0, scanRequestBoundary pipelined (arrayLength simpleGet))
+  (HttpFramedAt first, HttpFramedAt second) => match (parseRequestAt pipelined 0 first, parseRequestAt pipelined first second)
+    (Ok head, Ok tail) => expectTrue (first == arrayLength simpleGet && second == arrayLength pipelined && requestMethod head == "GET" && requestMethod tail == "POST" && requestBody tail == [|0, 128, 255|])
+    _ => expectTrue False
+  _ => expectTrue False
+
+test "a chunked request frames at its trailer terminator, not the buffer end" =
+  let stream = appendBytes chunked simpleGet
+  match scanRequestBoundary stream 0
+    HttpFramedAt at => expectEqual at (arrayLength chunked)
+    _ => expectTrue False
+
+test "trailing bytes frame the first request instead of failing the buffer" =
+  let stream = appendBytes simpleGet (toUtf8 "x")
+  match scanRequestBoundary stream 0
+    HttpFramedAt at =>
+      expectTrue (at == arrayLength simpleGet && isErr (parseRequest stream))
+    _ => expectTrue False
