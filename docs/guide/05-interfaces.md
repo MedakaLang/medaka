@@ -125,7 +125,7 @@ data Category = Food | Housing | Books | Other deriving (Debug)
 
 data Expense =
   | { date : String, payee : String, amount : Float, category : Category }
-deriving (Debug)
+  deriving (Debug)
 
 impl Display Category where
   display Food = "food"

@@ -368,7 +368,7 @@ public export data Selector =
   | SelArea String
   | SelProject String
   | SelTier String
-deriving (Eq, Debug)
+  deriving (Eq, Debug)
 
 -- The `field:` prefixes, checked longest-first is unnecessary here (no prefix
 -- is a prefix of another).

@@ -1750,12 +1750,12 @@ public export data Rep =
   | RBool Bool
   | RChar Char
   | RUnit
-deriving (Eq, Debug)
+  deriving (Eq, Debug)
 
 -- | A named field inside an `RRecord`.
 public export data RField =
   | RField { fld_name : String, fld_rep : Rep }
-deriving (Eq, Debug)
+  deriving (Eq, Debug)
 
 {- | Types with a structural representation.
 

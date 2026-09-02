@@ -15,7 +15,7 @@ public export data StableGeneratedRole =
   | RoleWrapper
   | RoleEtaAdapter
   | RolePapEntry
-deriving (Eq, Ord, Debug)
+  deriving (Eq, Ord, Debug)
 
 public export data StableNodeIdInput =
   | StableNodeIdInput String Int Int Int Int (List Int) StableGeneratedRole
@@ -27,13 +27,13 @@ public export data StableNodeIdError =
   | NonCanonicalProjectPath
   | InvalidSourceSpan
   | NegativeStructuralIndex
-deriving (Eq, Debug)
+  deriving (Eq, Debug)
 
 -- The constructor remains module-private: every StableNodeId passed to a later
 -- X-A lowering has passed the path/span/structural validation below.
 export data StableNodeId =
   | StableNodeId String Int Int Int Int (List Int) StableGeneratedRole
-deriving (Eq, Ord)
+  deriving (Eq, Ord)
 
 allNonNegative : List Int -> Bool
 allNonNegative [] = True
