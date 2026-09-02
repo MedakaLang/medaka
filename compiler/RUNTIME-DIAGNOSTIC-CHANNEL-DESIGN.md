@@ -88,7 +88,8 @@ behaviour is unchanged by this design.
 
 **Run driver path (verified).** `medaka_cli.mdk:133` `"run"::rest => runRunCmd`
 → `:625` `putStr (runProgramOutput …)` → `:647-650` `runProgramOutput` →
-`evalModulesOutput` / `evalModulesOutputAsync` (`eval.mdk:2365`/`:2379`) →
+`evalModulesOutput` / `evalModulesOutputRun` (an `Async` main is rewritten to apply
+the scheduler driver before eval, `main_autoprint.asyncWrapModules`) →
 `runMainForEffect` forces `main`, whose deep eval hits a `panic`.
 
 **Verified de-risker — no seed re-mint.** The emitter is

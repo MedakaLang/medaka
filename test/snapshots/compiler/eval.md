@@ -1,5 +1,5 @@
 # META
-source_lines=4600
+source_lines=4574
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -2850,8 +2850,7 @@ appendOutput s =
   -- abort can flush it.  Called from BOTH the real `medaka run` path and the
   -- pure differential-oracle path (this function is shared), which is fine:
   -- the stash is inert unless `enableRunStdoutFlush` was also called, and
-  -- only `evalModulesOutputRun`/`evalModulesOutputAsync` (never the oracle
-  -- probes) call that.
+  -- only `evalModulesOutputRun` (never the oracle probes) calls that.
   let _ = stashRunStdout !outputRef
   VUnit
 
@@ -4534,31 +4533,6 @@ evalModulesOutputRun preludeDecls modules =
   let _ = runMainForEffect binds
   !outputRef
 
--- ASYNC-DESIGN Stage 2 (D5): the `main : Async _` analog of evalModulesOutput.
--- A `main` whose inferred type heads in `Async` forces to an INERT Async value
--- (its row sits unperformed behind `Suspend` thunks), so forcing it alone prints
--- nothing.  Instead drive it through the program's own `runAsync` (looked up in
--- the root module's FULL env — locals ∪ imports ∪ globals — so an imported
--- `runAsync` is reachable), which trampolines the suspensions and performs the
--- stored row, appending to outputRef.  Mirrors bin/main.ml's Run-branch dispatch.
-export
-evalModulesOutputAsync : List Decl -> List (String, List Decl) -> <e> String
-evalModulesOutputAsync preludeDecls modules =
-  outputRef := ""
-  -- Same reasoning as evalModulesOutputRun above: only the real `medaka run`
-  -- CLI driver (an Async main) reaches this function.
-  let _ = enableRunStdoutFlush ()
-  let binds = evalModulesRootEnv preludeDecls modules
-  let _ = driveAsyncMain binds
-  !outputRef
-
-driveAsyncMain : List (String, Value e) -> <e> Value e
-driveAsyncMain binds = match lookupBinding "main" binds
-  None => runtimePanic "E-NO-MAIN" noMainMsg
-  Some mv => match lookupBinding "runAsync" binds
-    Some rf => apply rf (force mv)
-    None => runtimePanic "E-NO-RUNASYNC" "main : Async _ requires `runAsync` in scope. Add `import async`"
-
 -- ── Phase 0 (DRIVER-COLLAPSE): 1-module eval wrappers over evalModules ──────
 -- evalOne / evalOneOutput / evalOneRootEnv run a SINGLE program as the degenerate
 -- 1-element module map [(rootId, prog)] through the multi-module eval path,
@@ -6110,10 +6084,6 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "testCapableExterns" (PWild) (EListLit (ETuple (ELit (LString "wallTimeSec")) (EApp (EVar "prim1M") (EVar "pWallTimeSecIO"))) (ETuple (ELit (LString "monotonicSec")) (EApp (EVar "prim1M") (EVar "pMonotonicSecIO"))) (ETuple (ELit (LString "allocBytes")) (EApp (EVar "prim1M") (EVar "pAllocBytesIO"))) (ETuple (ELit (LString "ePutStr")) (EApp (EVar "prim1M") (EVar "pEPutStr"))) (ETuple (ELit (LString "ePutStrLn")) (EApp (EVar "prim1M") (EVar "pEPutStrLn")))))
 (DTypeSig true "evalModulesOutputRun" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyCon "String")))))
 (DFunDef false "evalModulesOutputRun" ((PVar "preludeDecls") (PVar "modules")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "outputRef")) (ELit (LString "")))) (DoLet false false PWild (EApp (EVar "enableRunStdoutFlush") (ELit LUnit))) (DoLet false false (PVar "binds") (EApp (EApp (EApp (EVar "evalModulesWith") (EApp (EVar "ioExternBindings") (ELit LUnit))) (EVar "preludeDecls")) (EVar "modules"))) (DoLet false false PWild (EApp (EVar "runMainForEffect") (EVar "binds"))) (DoExpr (EUnOp "!" (EVar "outputRef")))))
-(DTypeSig true "evalModulesOutputAsync" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyCon "String")))))
-(DFunDef false "evalModulesOutputAsync" ((PVar "preludeDecls") (PVar "modules")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "outputRef")) (ELit (LString "")))) (DoLet false false PWild (EApp (EVar "enableRunStdoutFlush") (ELit LUnit))) (DoLet false false (PVar "binds") (EApp (EApp (EVar "evalModulesRootEnv") (EVar "preludeDecls")) (EVar "modules"))) (DoLet false false PWild (EApp (EVar "driveAsyncMain") (EVar "binds"))) (DoExpr (EUnOp "!" (EVar "outputRef")))))
-(DTypeSig false "driveAsyncMain" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "driveAsyncMain" ((PVar "binds")) (EMatch (EApp (EApp (EVar "lookupBinding") (ELit (LString "main"))) (EVar "binds")) (arm (PCon "None") () (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-NO-MAIN"))) (EVar "noMainMsg"))) (arm (PCon "Some" (PVar "mv")) () (EMatch (EApp (EApp (EVar "lookupBinding") (ELit (LString "runAsync"))) (EVar "binds")) (arm (PCon "Some" (PVar "rf")) () (EApp (EApp (EVar "apply") (EVar "rf")) (EApp (EVar "force") (EVar "mv")))) (arm (PCon "None") () (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-NO-RUNASYNC"))) (ELit (LString "main : Async _ requires `runAsync` in scope. Add `import async`"))))))))
 (DTypeSig true "evalOne" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))))
 (DFunDef false "evalOne" ((PVar "preludeDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EApp (EApp (EVar "evalModules") (EVar "preludeDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog")))))
 (DTypeSig true "evalOneWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))))))
@@ -7632,10 +7602,6 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "testCapableExterns" (PWild) (EListLit (ETuple (ELit (LString "wallTimeSec")) (EApp (EVar "prim1M") (EVar "pWallTimeSecIO"))) (ETuple (ELit (LString "monotonicSec")) (EApp (EVar "prim1M") (EVar "pMonotonicSecIO"))) (ETuple (ELit (LString "allocBytes")) (EApp (EVar "prim1M") (EVar "pAllocBytesIO"))) (ETuple (ELit (LString "ePutStr")) (EApp (EVar "prim1M") (EVar "pEPutStr"))) (ETuple (ELit (LString "ePutStrLn")) (EApp (EVar "prim1M") (EVar "pEPutStrLn")))))
 (DTypeSig true "evalModulesOutputRun" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyCon "String")))))
 (DFunDef false "evalModulesOutputRun" ((PVar "preludeDecls") (PVar "modules")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "outputRef")) (ELit (LString "")))) (DoLet false false PWild (EApp (EVar "enableRunStdoutFlush") (ELit LUnit))) (DoLet false false (PVar "binds") (EApp (EApp (EApp (EVar "evalModulesWith") (EApp (EVar "ioExternBindings") (ELit LUnit))) (EVar "preludeDecls")) (EVar "modules"))) (DoLet false false PWild (EApp (EVar "runMainForEffect") (EVar "binds"))) (DoExpr (EUnOp "!" (EVar "outputRef")))))
-(DTypeSig true "evalModulesOutputAsync" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyCon "String")))))
-(DFunDef false "evalModulesOutputAsync" ((PVar "preludeDecls") (PVar "modules")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "outputRef")) (ELit (LString "")))) (DoLet false false PWild (EApp (EVar "enableRunStdoutFlush") (ELit LUnit))) (DoLet false false (PVar "binds") (EApp (EApp (EVar "evalModulesRootEnv") (EVar "preludeDecls")) (EVar "modules"))) (DoLet false false PWild (EApp (EVar "driveAsyncMain") (EVar "binds"))) (DoExpr (EUnOp "!" (EVar "outputRef")))))
-(DTypeSig false "driveAsyncMain" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "driveAsyncMain" ((PVar "binds")) (EMatch (EApp (EApp (EVar "lookupBinding") (ELit (LString "main"))) (EVar "binds")) (arm (PCon "None") () (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-NO-MAIN"))) (EVar "noMainMsg"))) (arm (PCon "Some" (PVar "mv")) () (EMatch (EApp (EApp (EVar "lookupBinding") (ELit (LString "runAsync"))) (EVar "binds")) (arm (PCon "Some" (PVar "rf")) () (EApp (EApp (EVar "apply") (EVar "rf")) (EApp (EVar "force") (EVar "mv")))) (arm (PCon "None") () (EApp (EApp (EVar "runtimePanic") (ELit (LString "E-NO-RUNASYNC"))) (ELit (LString "main : Async _ requires `runAsync` in scope. Add `import async`"))))))))
 (DTypeSig true "evalOne" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))))
 (DFunDef false "evalOne" ((PVar "preludeDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EApp (EApp (EVar "evalModules") (EVar "preludeDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog")))))
 (DTypeSig true "evalOneWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))))))

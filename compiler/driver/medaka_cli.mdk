@@ -175,14 +175,13 @@ import types.typecheck.{
   elaborateModules,
   resetTypeErrorsSticky,
   hadTypeErrors,
-  mainTypeIsAsync,
   mainTypeIsUnit,
   setStdlibOwnership,
   setLocalPinDisabled,
 }
+import driver.main_autoprint.{shouldAsyncWrapMain, asyncWrapModules}
 import eval.eval.{
   evalModulesOutputRun,
-  evalModulesOutputAsync,
   currentEvalFile,
   modulePathMap,
   runJsonMode,
@@ -2645,7 +2644,7 @@ runRunCmd argv =
                     match errs
                       [] =>
                         let _ = resetTypeErrorsSticky ()
-                        let elaborated = elaborateModules rtD coreD modsD
+                        let elaborated = elaborateRun rtD coreD modsD
                         let perfTCheck = now ()
                         let _ = emitPhase perfOn "check" (perfTCheck - perfTLoad) target
                         -- #2400 / F4: SINGLE-FILE only, so `allWarnTriples` carries
@@ -2684,7 +2683,7 @@ runRunCmd argv =
                           runAbort errText
                         (None, projWarns, _) =>
                           let _ = resetTypeErrorsSticky ()
-                          let elaborated = elaborateModules rtD coreD modsD
+                          let elaborated = elaborateRun rtD coreD modsD
                           match hadTypeErrors ()
                             True =>
                               -- Belt-and-braces: anything only the emit/eval
@@ -2721,16 +2720,26 @@ dropModPath (mid, _, prog) = (mid, prog)
 modIdToPath : (String, String, List Decl) -> (String, String)
 modIdToPath (mid, path, _) = (mid, path)
 
--- ASYNC-DESIGN Stage 2 (D5): route a `main : Async _` through the program's
--- `runAsync` (perform its stored row) instead of forcing it to an inert Async
--- value; a plain `main` keeps the ordinary force-for-effect path.  mainTypeIsAsync
--- reads the scheme elaborateModules just stashed, so this must run post-elaborate.
--- B2 (RUN-EFFECTS): the plain path is evalModulesOutputRun — evalModulesOutput
--- plus the real-I/O externs (File/Env/Stdin/Stderr/Clock), hence the `IO` row.
+-- `run`'s elaborate: one pass to learn `main`'s type, then — for a `main : Async _`
+-- (ASYNC-DESIGN D5) — a second pass over the graph rewritten to apply the
+-- `async` module's scheduler driver (main_autoprint.asyncWrapModules, #2506), so
+-- the interpreter forces a plain Unit main whose body drives the scheduler.  A
+-- plain main keeps the single pass; both leave mainSchemeRef populated for the
+-- main-shape warnings `finishRunEval` reads.
+elaborateRun : List Decl -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
+elaborateRun rtD coreD modsD =
+  let elaborated = elaborateModules rtD coreD modsD
+  if shouldAsyncWrapMain "runAsyncIOMain" modsD then
+    elaborateModules rtD coreD (asyncWrapModules "runAsyncIOMain" modsD)
+  else
+    elaborated
+
+-- B2 (RUN-EFFECTS): evalModulesOutputRun is evalModulesOutput plus the real-I/O
+-- externs (File/Env/Stdin/Stderr/Clock), hence the `IO` row.  An `Async` main
+-- reaches here already rewritten by `elaborateRun`.
 runProgramOutput : List Decl -> List (String, List Decl) -> <IO> String
-runProgramOutput preludeDecls modules = match mainTypeIsAsync ()
-  True => evalModulesOutputAsync preludeDecls modules
-  False => evalModulesOutputRun preludeDecls modules
+runProgramOutput preludeDecls modules =
+  evalModulesOutputRun preludeDecls modules
 
 -- ── test ──────────────────────────────────────────────────────────────────
 -- Mirrors bin/main.ml's `test` arm + test_main.mdk: read <MEDAKA_ROOT>/stdlib/

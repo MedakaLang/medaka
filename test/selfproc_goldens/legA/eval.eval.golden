@@ -86,7 +86,6 @@ dictShadows : EvalEnv (Value a) -> String -> String -> List Route -> List (Strin
 dispatchPositionsOf : Ty -> List String -> List Int
 displayCtorName : String -> String
 doSetRef : Ref (Value a) -> Value a -> Value a
-driveAsyncMain : List (String, Value a) -> Value a
 dropShadowed : List String -> List Decl -> List Decl
 dropShadowedExp : List String -> List Decl -> List Decl
 eval : EvalEnv (Value a) -> Expr -> Value a
@@ -109,7 +108,6 @@ evalMatch : EvalEnv (Value a) -> Value a -> List Arm -> Value a
 evalMethodAt : EvalEnv (Value a) -> String -> Route -> List Route -> List Route -> Value a
 evalModules : List Decl -> List (String, List Decl) -> List (String, Value a)
 evalModulesOutput : List Decl -> List (String, List Decl) -> String
-evalModulesOutputAsync : List Decl -> List (String, List Decl) -> String
 evalModulesOutputRun : List Decl -> List (String, List Decl) -> <IO> String
 evalModulesRootEnv : List Decl -> List (String, List Decl) -> List (String, Value a)
 evalModulesRootEnvWith : List (String, Value a) -> List Decl -> List (String, List Decl) -> List (String, Value a)

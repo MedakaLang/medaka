@@ -1,0 +1,14 @@
+-- A `main : Async _` is driven by every engine (#2506): the interpreter and the
+-- native build apply the scheduler (`runAsyncIO`), the wasm build applies the
+-- sequential driver (`runAsync`).  Spawned tasks and `concurrent` collect in
+-- input order under both, so all three engines must print the same three lines.
+import async.{Async, liftIO, spawnTask, await, concurrent}
+
+main : Async <Stdout> Unit
+main = defer
+  _ <- liftIO (u => putStrLn "start")
+  xs <- concurrent [liftIO (u => 1), liftIO (u => 2), liftIO (u => 3)]
+  _ <- liftIO (u => putStrLn (display xs))
+  t <- spawnTask (liftIO (u => 40))
+  v <- await t
+  liftIO (u => putStrLn (display (v + 6)))

@@ -15,7 +15,7 @@
 # observables were blind. Bug #40 (multi-module `run` executing ill-typed
 # programs) was nearly closed as "not reproducible" on exactly that basis.
 #
-# THE FIX: `medaka run`'s driver (evalModulesOutputRun/evalModulesOutputAsync)
+# THE FIX: `medaka run`'s driver (evalModulesOutputRun)
 # arms a flush via a new `enableRunStdoutFlush` call; every print
 # (appendOutput) snapshots the buffer's raw bytes into the native runtime via
 # `stashRunStdout`; every abort path in runtime/medaka_rt.c (mdk_panic,
