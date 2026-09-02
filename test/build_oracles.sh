@@ -339,7 +339,7 @@ fi
 # gets built.
 newest_src=0
 if [ "$_for_list_mode" -eq 0 ]; then
-  for f in $(find "$ROOT/compiler" "$ROOT/stdlib" -name '*.mdk'; find "$ROOT/runtime" -name '*.c' -o -name '*.h'); do
+  for f in $(find "$ROOT/compiler" "$ROOT/stdlib" -name '*.mdk' -not -name '*_test.mdk'; find "$ROOT/runtime" -name '*.c' -o -name '*.h'); do
     m=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null)
     [ "$m" -gt "$newest_src" ] && newest_src=$m
   done
