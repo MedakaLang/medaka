@@ -7,12 +7,20 @@
 # Workloads:
 #   fib 38      test/bench_fixtures/fib.mdk     — pure compute, NO heap alloc.
 #   listsum     test/bench_fixtures/listsum.mdk — cons churn / GC pressure.
+#   (the runtime micro-suite loop) — float/ADT/list/closure/string isolation
+#               fixtures; see compiler/PERF-RUNTIME.md's fixture table.
+#   startup     trivial `main = putStrLn "x"` — process/runtime-init floor,
+#               isolates fixed per-process overhead from every workload above.
+#   fib_c/bintrees_c — hand-written C equivalents of fib/bintrees
+#               (test/bench_fixtures/c/*.c), no GC/runtime, -O2: a sanity
+#               ceiling, not a fair comparison (see compiler/PERF-RUNTIME.md).
 #   selfcompile native emitter emitting its OWN module graph (~10 MB IR) — the
 #               heaviest representative workload, the OCaml-retirement perf bar.
 #
 # It builds each fixture via `medaka build` (so it picks up whatever clang flags
-# the build driver currently uses) and times the native binary min-of-N.
-# `selfcompile` additionally builds the emitter once, then times it.
+# the build driver currently uses) and times the native binary min-of-N, also
+# reporting each binary's on-disk size. `selfcompile` additionally builds the
+# emitter once, then times it.
 #
 # Usage:
 #   sh test/bench.sh            # N=3, all workloads
@@ -166,25 +174,56 @@ echo
 echo "building fib..."; "$MAIN" build test/bench_fixtures/fib.mdk -o /tmp/_bench_fib >/dev/null 2>&1 \
   || { echo "fib build FAILED"; exit 2; }
 "/tmp/_bench_fib" >/dev/null 2>&1 # warm
-printf 'fib 38       %s\n' "$(time_min /tmp/_bench_fib)"
+printf 'fib 38       %s  size=%sB\n' "$(time_min /tmp/_bench_fib)" "$(wc -c </tmp/_bench_fib | tr -d ' ')"
 
 # ── micro: listsum (GC pressure) ─────────────────────────────────────────────
 echo "building listsum..."; "$MAIN" build test/bench_fixtures/listsum.mdk -o /tmp/_bench_ls >/dev/null 2>&1 \
   || { echo "listsum build FAILED"; exit 2; }
 "/tmp/_bench_ls" >/dev/null 2>&1 # warm
-printf 'listsum      %s\n' "$(time_min /tmp/_bench_ls)"
+printf 'listsum      %s  size=%sB\n' "$(time_min /tmp/_bench_ls)" "$(wc -c </tmp/_bench_ls | tr -d ' ')"
 
 # ── runtime micro-suite (float/ADT/list/closure/string) ──────────────────────
 # See compiler/PERF-RUNTIME.md. floatsum/mandel isolate float boxing (Win 1/2:
 # fusion + let-unboxing); bintrees = ADT/GC; listops/closures = cons/closure churn.
-for b in intsum floatsum floatsum_guard mandel mandel_let bintrees closures strbuild dispatch strlit listlit taylor fhelp; do
+for b in intsum floatsum floatsum_guard mandel mandel_let bintrees closures strbuild dispatch strlit listlit tuplit listops taylor fhelp; do
   src="test/bench_fixtures/$b.mdk"
   [ -f "$src" ] || continue
   if "$MAIN" build "$src" -o "/tmp/_bench_$b" >/dev/null 2>&1; then
     "/tmp/_bench_$b" >/dev/null 2>&1 # warm
-    printf '%-12s %s\n' "$b" "$(time_min "/tmp/_bench_$b")"
+    _size="$(wc -c </tmp/_bench_$b | tr -d ' ')"
+    printf '%-12s %s  size=%sB\n' "$b" "$(time_min "/tmp/_bench_$b")" "$_size"
   else
     printf '%-12s BUILD FAILED\n' "$b"
+  fi
+done
+
+# ── startup floor (trivial main; isolates process/runtime-init overhead from
+#    any workload above) ──────────────────────────────────────────────────────
+_startup_src="/tmp/_bench_startup_src.mdk"
+printf 'main : <IO> Unit\nmain = putStrLn "x"\n' >"$_startup_src"
+echo "building startup floor..."
+if "$MAIN" build "$_startup_src" -o /tmp/_bench_startup >/dev/null 2>&1; then
+  /tmp/_bench_startup >/dev/null 2>&1 # warm
+  _size="$(wc -c </tmp/_bench_startup | tr -d ' ')"
+  printf '%-12s %s  size=%sB\n' "startup" "$(time_min /tmp/_bench_startup)" "$_size"
+else
+  printf '%-12s BUILD FAILED\n' "startup"
+fi
+
+# ── C sanity ceiling (fib/bintrees, no GC/runtime, -O2) ──────────────────────
+# test/bench_fixtures/c/{fib,bintrees}.c are hand-written equivalents of the
+# same two fixtures (same recursion, same input, malloc/free instead of Boehm
+# GC for bintrees). Not a fair like-for-like (no GC, no boxing, no dispatch)
+# — an upper bound, not a target: see compiler/PERF-RUNTIME.md's C sanity
+# paragraph for the flags and the caveat.
+for cb in fib bintrees; do
+  csrc="test/bench_fixtures/c/$cb.c"
+  [ -f "$csrc" ] || continue
+  if clang -O2 -o "/tmp/_bench_c_$cb" "$csrc" >/dev/null 2>&1; then
+    "/tmp/_bench_c_$cb" >/dev/null 2>&1 # warm
+    printf '%-12s %s  (C sanity ceiling)\n' "${cb}_c" "$(time_min "/tmp/_bench_c_$cb")"
+  else
+    printf '%-12s C BUILD FAILED\n' "${cb}_c"
   fi
 done
 
