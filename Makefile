@@ -13,7 +13,7 @@
 MEDAKA_SCRATCH ?= /var/tmp/medaka-scratch
 export TMPDIR := $(shell mkdir -p $(MEDAKA_SCRATCH) 2>/dev/null && echo $(MEDAKA_SCRATCH) || echo /tmp)
 
-.PHONY: medaka emitter seed bootstrap seed-health check-self test gates snapshot-check preflight ci clean help docs-links docs-index gen-ci agent-doc-symbols pr-helper-test fmt-clean-census cli-conformance-census diag-census first-hour-census comment-census arch-census slop-census
+.PHONY: medaka emitter seed bootstrap seed-health check-self test gates snapshot-check preflight ci clean help docs-links docs-index gen-ci agent-doc-symbols pr-helper-test fmt-clean-census cli-conformance-census diag-census first-hour-census comment-census arch-census slop-census o2-survivor-census
 
 ## medaka  — build the native OCaml-free `medaka` CLI (CANONICAL).
 ##           WARM (./medaka_emitter present): 2-stage rebuild from current source,
@@ -238,6 +238,17 @@ comment-census:
 ##           ./medaka needed. Always exits 0: a census, not a gate.
 arch-census:
 	sh test/arch_census.sh
+
+## o2-survivor-census — report-only census over test/o2_survivor_fixtures/
+##           (#2357, LLVM arm): for each single-construct probe, emit
+##           pre-`-O2` LLVM IR (`medaka build --keep-ir`), run `clang -O2
+##           -S -emit-llvm`, and bucket what survives in the probe's own
+##           function (opaque runtime calls, live allocations, redundant
+##           loads, non-collapsed tag arithmetic). Needs a built ./medaka
+##           and clang. Always exits 0: a census, not a gate — see
+##           test/o2_survivor_census.sh's header.
+o2-survivor-census: medaka
+	sh test/o2_survivor_census.sh
 
 ## slop-census — the ONE composing entry point over the slop-burndown
 ##           crusade's (#2276) member censuses (#2304). Registry is data IN
