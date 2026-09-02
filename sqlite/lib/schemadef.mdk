@@ -74,7 +74,7 @@ import parsec.lib.parser.{
   digit,
   orElse,
 }
-import lib.sqlparse.{sqlIdent, keyword, symbol, lexeme, word}
+import lib.sqltoken.{sqlIdent, keyword, symbol, lexeme, word}
 import lib.recordfmt.{Cell, CNull, CInt, CText, CFloat}
 import string.{toUpper, toInt, toFloat, contains, trim, join, fromChars}
 import list.{reverse}
