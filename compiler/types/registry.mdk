@@ -128,8 +128,8 @@
 -- boolean assertions about the same machinery — the ones standing in for unit
 -- tests — live in the sibling `compiler/types/registry_test.mdk`, which
 -- redeclares the fixtures it needs rather than importing them, so no doctest
--- fixture reaches this module's public surface. Three assertions could not
--- move: the ones naming `OriginUnresolved`, because
+-- fixture reaches this module's public surface. Three of those boolean
+-- assertions could not move: the ones naming `OriginUnresolved`, because
 -- `test/typecheck_compiler_source.sh`'s #1110 producer ratchet pins the set of
 -- tracked files carrying a live mention of that sentinel.
 --

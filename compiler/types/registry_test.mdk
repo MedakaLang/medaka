@@ -3,7 +3,7 @@
 -- A `*_test.mdk` file lives beside its subject and is NOT compiler source: it
 -- is excluded from the two build fingerprints and from the snapshot corpus,
 -- so adding or editing one never makes `./medaka` report itself stale and
--- never demands a golden. See AGENTS.md § "Compiler-internal tests".
+-- never demands a golden. See AGENTS.md's `[P-TEST-SIBLING]`.
 --
 -- WHAT LIVES HERE: the unit-test-shaped assertions about `registry.mdk` —
 -- boolean properties of the identity/key substrate, for which a reader of the
@@ -193,6 +193,10 @@ tabA = tabKeyOf NsType (OriginModule "apub") "Box"
 tabZ : TabKey
 tabZ = tabKeyOf NsType (OriginModule "zopapub") "Box"
 
+-- ⚠️ Spelled with the CONSTRUCTOR rather than `tabKeyOf NsType
+-- OriginUnresolved "Box"`, for the reason the module header gives: the #1110
+-- producer ratchet pins the file set carrying a live `OriginUnresolved`
+-- mention.
 tabU : TabKey
 tabU = TkBare NsType "Box"
 
@@ -205,6 +209,10 @@ tabTable = [(tabZ, 2), (tabA, 1)]
 ifaceP : TabKey
 ifaceP = tabKeyOf NsIface (OriginModule "pmod") "Same"
 
+-- ⚠️ Spelled with the CONSTRUCTOR rather than `tabKeyOf NsIface
+-- OriginUnresolved "Same"`, for the reason the module header gives: the
+-- #1110 producer ratchet pins the file set carrying a live `OriginUnresolved`
+-- mention.
 ifaceU : TabKey
 ifaceU = TkBare NsIface "Same"
 
@@ -221,6 +229,9 @@ headA = headKeyOfCon (OriginModule "apub") "Box"
 headZ : HeadKey
 headZ = headKeyOfCon (OriginModule "zopapub") "Box"
 
+-- ⚠️ Spelled with the CONSTRUCTORS, not as `headKeyOfCon OriginUnresolved
+-- "Box"`, for the reason the module header gives: the #1110 producer ratchet
+-- pins the file set carrying a live `OriginUnresolved` mention.
 headU : HeadKey
 headU = HkDecl (TkBare NsType "Box")
 

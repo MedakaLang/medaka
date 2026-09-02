@@ -95,7 +95,7 @@ in `test/diff_compiler_snapshot_frontend.sh` excludes it, so a test owes no bles
 and `--bless` on one is refused. `test/preflight.sh` needs no exclusion — its `compiler/<dir>/*`
 arms are path globs, so a sibling derives its SUBJECT's gate set. Run one with
 `medaka test <file>`; a module outside every entry's import closure is otherwise unwalked
-([W-MODULE-BLIND]), so name it in `Makefile`'s `test:` target.
+([W-MODULE-BLIND]), so name it in Makefile's `test:` target.
 
 ⚠️ Only `foo_test.mdk` loads — `foo.test.mdk` is not a resolvable module name.
 
