@@ -17,7 +17,7 @@
 
 import types.annotate.{annotateProgram}
 import ir.core_ir_lower.{lowerProgram}
-import ir.core_ir_eval.{cevalOutput}
+import ir.core_ir_eval.{cevalOutputOf}
 import eval.eval.{dropShadowedExp, funNamesOf}
 import frontend.ast.{Decl}
 import entries.entry_support.{drivePrelude}
@@ -26,5 +26,5 @@ main = drivePrelude emit
 
 emit : List Decl -> List Decl -> <IO> Unit
 emit preludeDecls userDecls =
-  putStr (cevalOutput (lowerProgram (annotateProgram
-    (dropShadowedExp (funNamesOf userDecls) preludeDecls ++ userDecls))))
+  let decls = annotateProgram (dropShadowedExp (funNamesOf userDecls) preludeDecls ++ userDecls)
+  putStr (cevalOutputOf decls (lowerProgram decls))

@@ -362,6 +362,14 @@ jobs:
       - name: Assemble the deployable site (playground/site/, incl. the rendered guide)
         run: bash playground/build_site.sh
 
+      # S4 (#2442, epic #2036 visitor-wait-time arm) — F6's analyze() latency
+      # ceiling (test/gates.toml `wasm/diff_visitor_analyze_latency`, nightly
+      # tier: this shared box's own noise rules out a PR-blocking wall-clock
+      # ceiling, see that gate's header). Marginal cost here is near zero:
+      # dist/playground.wasm was already built above.
+      - name: Visitor-cost analyze() latency ceiling (nightly-only — flappy wall-clock)
+        run: bash test/wasm/diff_visitor_analyze_latency.sh
+
       # playground/e2e/run.sh is itself `set -euo pipefail` and ends with `exit
       # "$STATUS"` (its own pass/fail, propagated) — a plain run step is correct, no
       # wrapper needed to keep a real e2e failure from reading as green. Invoked by its

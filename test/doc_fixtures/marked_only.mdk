@@ -1,0 +1,42 @@
+{- | The lead paragraph. Only this marked block is the module header.
+
+   A second paragraph of the header. -}
+
+-- A maintainer note between the header and the first section: never rendered.
+
+-- # Building
+
+-- A note directly above a doc block: dropped, the doc starts at the marker.
+{- | Builds a thing.
+
+   > build 1
+   2 -}
+-- A note directly under the block, before the declaration: also dropped.
+export
+build : Int -> Int
+build x = x + 1
+
+-- > build 0
+-- 1
+
+-- An unmarked comment directly above a declaration documents nothing.
+export
+unmarked : Int -> Int
+unmarked x = x
+
+-- # Types
+
+{- | A wrapper. Its undocumented instances are listed under it. -}
+public export data Wrap = Wrap Int deriving (Eq, Debug)
+
+{- | Wraps compare by the wrapped number. This documented instance keeps its
+   own entry and is linked from the type's instance line. -}
+export impl Ord Wrap where
+  compare (Wrap a) (Wrap b) = compare a b
+
+export impl Display Wrap where
+  display (Wrap n) = intToString n
+
+-- An instance on a type this page does not declare goes in the closing list.
+export impl Hashable (Wrap, Int) where
+  hash (Wrap n, m) = n + m

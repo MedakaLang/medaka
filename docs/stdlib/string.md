@@ -1,60 +1,26 @@
 # string
 
-string.mdk — operations on String and Char
-See STDLIB.md (Module 3) for the full implementation plan.
+Operations on `String` and `Char`.
 
-Design notes
-────────────
-String is an immutable sequence of Unicode codepoints (scalar values),
-UTF-8 backed; Char is one codepoint.  This module is a thin Medaka layer
-over the kernel externs in stdlib/runtime.mdk.
+A string is an immutable sequence of Unicode codepoints, and a `Char` is
+one codepoint. Positions and lengths count codepoints, not bytes and not
+grapheme clusters. Character classification and case mapping are ASCII
+only: a non-ASCII character is never a letter, digit, or space to these
+functions, and passes through `toUpper` and `toLower` unchanged.
 
-Performance posture (Medaka is a *practical* functional language): under the
-hood we favour what the machine likes — contiguous `Array Char` with O(1)
-indexing and the direct string externs (`stringSlice`/`stringConcat`/
-`stringCompare`/`stringLength`) — over a `List Char` of cons cells.  Three
-tiers, fastest first:
-  1. operate on the String directly (no char materialization): `take`/`drop`/
-     `sliceClamped`, `startsWith`/`endsWith` (slice + `==`), `concat`/`join`/`repeat`,
-     and substring search via the host `stringIndexOf` — `indexOf`, and
-     `contains`/`split`/`replace*` derived from it;
-  2. decode once to `Array Char`, scan by index, rebuild via `stringFromChars`
-     or carve out `stringSlice`s: `trim*`, `words`, `reverse`, `capitalize`,
-     `toInt`;
-  3. `List Char` is avoided internally.
-The user-facing signatures stay conventional; the array/index machinery is an
-implementation detail.
+`length` and `isEmpty` are not defined here, to leave the `Foldable`
+methods of those names unshadowed. Use `stringLength s` and `s == ""`.
+`intToString` renders an integer.
 
-Naming choices (this file holds *both* Char and String utilities, so some
-short names would collide):
-  • `toUpper`/`toLower` here are the *String* versions — ASCII-only
-    byte-wise case mapping (issue #417): "Straße" → "STRAßE", not
-    "STRASSE".  For a single Char, call the kernel externs
-    `charToUpper`/`charToLower` (Char → Char, also ASCII-only — identity on
-    any non-ASCII codepoint).
-  • `length`/`isEmpty` are *not* defined: they'd clash with the `Foldable`
-    methods of the same name.  Use the global `stringLength`, or `s == ""`.
-  • Integer rendering is the global `intToString` (clashes with `Num.fromInt`
-    otherwise); `toInt`/`toFloat` parse, `stringToFloat` is the float extern.
+## Characters
 
-Containers: the collection functions (`split`/`words`/`lines`/`concat`/
-`join`/`unlines`/`unwords`) are `List`-typed — the conventional, pattern-
-matchable form.  `toChars` is the one `Array` function (element decomposition,
-where indexing/perf matter).  No List/Array duals: `List → Array` is the
-global `arrayFromList` (no import) and `Array → List` is `Array.toList`, so a
-caller who prefers the other container converts in one call rather than us
-doubling the API surface.
-
-## `isDigit`
+### `isDigit`
 
 ```
 isDigit : Char -> Bool
 ```
 
-True for the ASCII decimal digits `'0'`..`'9'`.
-
-
-*(doctest — run by `medaka test`)*
+Whether `c` is an ASCII decimal digit, `'0'` to `'9'`.
 
 ```medaka
 > isDigit '7'
@@ -63,232 +29,203 @@ True
 False
 ```
 
-## `isAlpha`
+### `isAlpha`
 
 ```
 isAlpha : Char -> Bool
 ```
 
-True for any Unicode letter.
+Whether `c` is an ASCII letter.
 
-## `isAlphaNum`
+### `isAlphaNum`
 
 ```
 isAlphaNum : Char -> Bool
 ```
 
-True for a Unicode letter or an ASCII digit.
+Whether `c` is an ASCII letter or digit.
 
-## `isSpace`
+### `isSpace`
 
 ```
 isSpace : Char -> Bool
 ```
 
-True for any Unicode whitespace.
+Whether `c` is ASCII whitespace.
 
-## `isUpper`
+### `isUpper`
 
 ```
 isUpper : Char -> Bool
 ```
 
-True for an uppercase letter.
+Whether `c` is an ASCII uppercase letter.
 
-## `isLower`
+### `isLower`
 
 ```
 isLower : Char -> Bool
 ```
 
-True for a lowercase letter.
+Whether `c` is an ASCII lowercase letter.
 
-## `isPunct`
+### `isPunct`
 
 ```
 isPunct : Char -> Bool
 ```
 
-True for a Unicode punctuation character.
+Whether `c` is ASCII punctuation.
 
-## `fromDigit`
+### `fromDigit`
 
 ```
 fromDigit : Char -> Option Int
 ```
 
-`'0'`..`'9'` → `Some 0`..`Some 9`, `'a'`..`'f'`/`'A'`..`'F'` →
-`Some 10`..`Some 15`, anything else `None`.
-
-
-*(doctest — run by `medaka test`)*
+The value of a hexadecimal digit: `'0'` to `'9'` give `0` to `9`, and
+`'a'` to `'f'` or `'A'` to `'F'` give `10` to `15`. `None` for any other
+character.
 
 ```medaka
 > fromDigit '7'
 Some 7
 > fromDigit 'f'
 Some 15
-> fromDigit 'z'
-None
 ```
 
-## `toDigit`
+### `toDigit`
 
 ```
 toDigit : Int -> Option Char
 ```
 
-Inverse of `fromDigit` for `0`..`15` (lowercase hex); `None` otherwise.
-
-
-*(doctest — run by `medaka test`)*
+The lowercase hexadecimal digit for a value from `0` to `15`, or `None`
+outside that range. The inverse of `fromDigit`.
 
 ```medaka
 > toDigit 7
 Some '7'
 > toDigit 12
 Some 'c'
-> toDigit 42
-None
 ```
 
-## `fromChar`
+## Conversion
+
+### `fromChar`
 
 ```
 fromChar : Char -> String
 ```
 
-A one-character string.
+A string holding one character.
 
-## `toChars`
+### `toChars`
 
 ```
 toChars : String -> Array Char
 ```
 
-The codepoints of a string as an array (not grapheme clusters).  Returns
-the native `Array Char` — call `Array.toList` if you want a `List Char`, so
-the list conversion is opt-in rather than forced.
+The codepoints of a string, as an array.
 
-
-*(doctest — run by `medaka test`)*
+`array.toList` turns the result into a `List Char` when one is needed.
 
 ```medaka
 > arrayLength (toChars "héllo→")
 6
 ```
 
-## `fromChars`
+### `fromChars`
 
 ```
 fromChars : List Char -> String
 ```
 
-Build a string from a `List Char`.  For an `Array Char` (e.g. the result
-of `toChars`), use the kernel `stringFromChars` directly.
+A string built from a list of characters.
 
-
-*(doctest — run by `medaka test`)*
+For an `Array Char`, such as the result of `toChars`, use
+`stringFromChars`.
 
 ```medaka
 > fromChars ['h', 'i']
 "hi"
 ```
 
-## `toUtf8`
+### `toUtf8`
 
 ```
 toUtf8 : String -> Array Int
 ```
 
-The raw UTF-8 bytes of a string as an `Array Int` (each 0..255), in order.
-This is the encoded byte stream, NOT the codepoints — a multi-byte codepoint
-contributes several bytes (`toChars` gives codepoints instead).
+The UTF-8 encoding of a string, one byte (`0` to `255`) per element.
 
-
-*(doctest — run by `medaka test`)*
+A codepoint outside ASCII contributes several bytes; `toChars` gives the
+codepoints instead.
 
 ```medaka
 > arrayLength (toUtf8 "héllo")
 6
 ```
 
-## `fromUtf8`
+### `fromUtf8`
 
 ```
 fromUtf8 : Array Int -> String
 ```
 
-Rebuild a string from a UTF-8 `Array Int` byte stream (low 8 bits of each).
-The inverse of `toUtf8` on valid UTF-8: `fromUtf8 (toUtf8 s) == s`.
+The string encoded by an array of UTF-8 bytes.
 
-
-*(doctest — run by `medaka test`)*
+Only the low eight bits of each element are used. On valid UTF-8,
+`fromUtf8 (toUtf8 s)` is `s`.
 
 ```medaka
 > fromUtf8 (toUtf8 "héllo→")
 "héllo→"
 ```
 
-## `utf8ByteLength`
+### `utf8ByteLength`
 
 ```
 utf8ByteLength : String -> Int
 ```
 
-The number of UTF-8 bytes a string encodes to (>= its codepoint count).
+The number of bytes in the string's UTF-8 encoding.
 
-
-*(doctest — run by `medaka test`)*
+At least the codepoint count, and larger when the string has non-ASCII
+characters.
 
 ```medaka
 > utf8ByteLength "héllo"
 6
 ```
 
-## `toInt`
+### `toInt`
 
 ```
 toInt : String -> Option Int
 ```
 
-Parse a decimal integer, an optional leading `-`/`+` allowed; `None` on
-any other character, the empty string, or a magnitude outside the `Int`
-range (`intMinBound`..`intMaxBound`) — out-of-range input is rejected
-rather than silently wrapping.
+The integer written in decimal in `s`, with an optional leading `-` or
+`+`.
 
-
-*(doctest — run by `medaka test`)*
+`None` when `s` is empty, contains any other character, or names a value
+outside the `Int` range.
 
 ```medaka
 > toInt "42"
 Some 42
-> toInt "-7"
-Some -7
 > toInt "12x"
-None
-> toInt "4611686018427387903"
-Some 4611686018427387903
-> toInt "4611686018427387904"
-None
-> toInt "-4611686018427387904"
-Some -4611686018427387904
-> toInt "-4611686018427387905"
-None
-> toInt "99999999999999999999"
 None
 ```
 
-## `toFloat`
+### `toFloat`
 
 ```
 toFloat : String -> Option Float
 ```
 
-Parse a decimal float; `None` on failure.
-
-
-*(doctest — run by `medaka test`)*
+The floating-point number written in `s`, or `None` when `s` is not
+one.
 
 ```medaka
 > toFloat "3.5"
@@ -297,17 +234,15 @@ Some 3.5
 None
 ```
 
-## `startsWith`
+## Searching
+
+### `startsWith`
 
 ```
 startsWith : String -> String -> Bool
 ```
 
-True when `s` begins with `prefix`.  Tier 1: a slice + compare, no char
-decoding.
-
-
-*(doctest — run by `medaka test`)*
+Whether `s` begins with `prefix`.
 
 ```medaka
 > startsWith "he" "hello"
@@ -316,78 +251,62 @@ True
 False
 ```
 
-## `endsWith`
+### `endsWith`
 
 ```
 endsWith : String -> String -> Bool
 ```
 
-True when `s` ends with `suffix`.
-
-
-*(doctest — run by `medaka test`)*
+Whether `s` ends with `suffix`.
 
 ```medaka
 > endsWith "lo" "hello"
 True
 ```
 
-## `stripPrefix`
+### `stripPrefix`
 
 ```
 stripPrefix : String -> String -> Option String
 ```
 
-Remove `prefix` from the front of `s`, or `None` when `s` doesn't start
-with it.  The `Option` is the point: unlike `drop (length prefix)` it tells
-you whether the prefix was actually there.
+`s` without its leading `prefix`, or `None` when `s` does not begin
+with it.
 
-
-*(doctest — run by `medaka test`)*
+Unlike `drop`, the result says whether the prefix was there.
 
 ```medaka
 > stripPrefix "he" "hello"
 Some "llo"
 > stripPrefix "xy" "hello"
 None
-> stripPrefix "" "hi"
-Some "hi"
-> stripPrefix "hello" "hello"
-Some ""
 ```
 
-## `stripSuffix`
+### `stripSuffix`
 
 ```
 stripSuffix : String -> String -> Option String
 ```
 
-Remove `suffix` from the end of `s`, or `None` when `s` doesn't end with
+`s` without its trailing `suffix`, or `None` when `s` does not end with
 it.
-
-
-*(doctest — run by `medaka test`)*
 
 ```medaka
 > stripSuffix "lo" "hello"
 Some "hel"
 > stripSuffix "xy" "hello"
 None
-> stripSuffix "" "hi"
-Some "hi"
 ```
 
-## `contains`
+### `contains`
 
 ```
 contains : String -> String -> Bool
 ```
 
-True when `needle` occurs anywhere in `haystack` (the empty string is
-contained in everything).
+Whether `needle` occurs anywhere in `haystack`.
 
-
-*(doctest — run by `medaka test`)*
+The empty string occurs in every string.
 
 ```medaka
 > contains "ell" "hello"
@@ -396,18 +315,14 @@ True
 False
 ```
 
-## `indexOf`
+### `indexOf`
 
 ```
 indexOf : String -> String -> Option Int
 ```
 
-Codepoint index of the first occurrence of `needle` in `haystack`, or
-`None`.  Host-backed byte search (`stringIndexOf`) reported as a codepoint
-index — no interpreted per-char scan.
-
-
-*(doctest — run by `medaka test`)*
+The position of the first occurrence of `needle` in `haystack`, or
+`None`.
 
 ```medaka
 > indexOf "lo" "hello"
@@ -416,18 +331,17 @@ Some 3
 None
 ```
 
-## `lastIndexOf`
+### `lastIndexOf`
 
 ```
 lastIndexOf : String -> String -> Option Int
 ```
 
-Codepoint index of the *last* occurrence of `needle` in `haystack`, or
-`None`.  Walks forward from each hit (advancing one codepoint so overlapping
-matches still count), keeping the latest.
+The position of the last occurrence of `needle` in `haystack`, or
+`None`.
 
-
-*(doctest — run by `medaka test`)*
+Occurrences may overlap. An empty needle is found at the end of the
+string.
 
 ```medaka
 > lastIndexOf "l" "hello"
@@ -436,17 +350,15 @@ Some 3
 None
 ```
 
-## `countOccurrences`
+### `countOccurrences`
 
 ```
 countOccurrences : String -> String -> Int
 ```
 
-Number of non-overlapping occurrences of `needle` in `haystack` (`0` for
-the empty needle).
+The number of non-overlapping occurrences of `needle` in `haystack`.
 
-
-*(doctest — run by `medaka test`)*
+`0` for an empty needle.
 
 ```medaka
 > countOccurrences "l" "hello"
@@ -455,296 +367,258 @@ the empty needle).
 2
 ```
 
-## `prepend`
+## Building
+
+### `prepend`
 
 ```
 prepend : String -> String -> String
 ```
 
-Prepend a prefix; `flip` of `Semigroup.append`.
+`pre` followed by `s`.
 
-## `concat`
+```medaka
+> prepend "un" "do"
+"undo"
+```
+
+### `concat`
 
 ```
 concat : List String -> String
 ```
 
-Concatenate all strings in order.
-
-
-*(doctest — run by `medaka test`)*
+The strings joined end to end.
 
 ```medaka
 > concat ["a", "bc", "d"]
 "abcd"
 ```
 
-## `join`
+### `join`
 
 ```
 join : String -> List String -> String
 ```
 
-Concatenate with `sep` between each adjacent pair.
-
-
-*(doctest — run by `medaka test`)*
+The strings joined with `sep` between each adjacent pair.
 
 ```medaka
 > join ", " ["a", "b", "c"]
 "a, b, c"
 ```
 
-## `repeat`
+### `repeat`
 
 ```
 repeat : Int -> String -> String
 ```
 
-Repeat the string `n` times (empty when `n <= 0`).
+`s` repeated `n` times.
 
-Built by doubling (`repeatDbl`) rather than one recursive call per copy,
-so the interpreted call depth is `O(log n)` instead of `O(n)` — a
-linear-depth version hits the evaluator's call-depth cap around n ≈ 25000
-(#1728).
-
-
-*(doctest — run by `medaka test`)*
+Empty when `n <= 0`. Safe for large `n`: the call depth grows with
+`log n`, not `n`.
 
 ```medaka
 > repeat 3 "ab"
 "ababab"
 ```
 
-*(doctest — run by `medaka test`)*
+## Transformation
 
-```medaka
-> repeat 0 "ab"
-""
-```
-
-*(doctest — run by `medaka test`)*
-
-```medaka
-> repeat (0 - 1) "ab"
-""
-```
-
-*(doctest — run by `medaka test`)*
-
-```medaka
-> stringLength (repeat 30000 "x")
-30000
-```
-
-## `reverse`
+### `reverse`
 
 ```
 reverse : String -> String
 ```
 
-Reverse the codepoints of a string.
-
-
-*(doctest — run by `medaka test`)*
+The string with its characters in reverse order.
 
 ```medaka
 > reverse "abc"
 "cba"
 ```
 
-## `trimLeft`
+### `trimLeft`
 
 ```
 trimLeft : String -> String
 ```
 
-Strip leading whitespace.  Finds the first non-space codepoint index, then
-slices — no rebuild.
+The string without its leading whitespace.
 
-## `trimRight`
+```medaka
+> trimLeft "  hi  "
+"hi  "
+```
+
+### `trimRight`
 
 ```
 trimRight : String -> String
 ```
 
-Strip trailing whitespace.
+The string without its trailing whitespace.
 
-## `trim`
+```medaka
+> trimRight "  hi  "
+"  hi"
+```
+
+### `trim`
 
 ```
 trim : String -> String
 ```
 
-Strip whitespace from both ends.
-
-
-*(doctest — run by `medaka test`)*
+The string without leading or trailing whitespace.
 
 ```medaka
 > trim "  hi  "
 "hi"
 ```
 
-## `toUpper`
+### `toUpper`
 
 ```
 toUpper : String -> String
 ```
 
-Uppercase every character. **ASCII-only** (issue #417): a non-ASCII byte
-passes through unchanged, so this is byte-wise `'a'..'z'` mapping, not
-Unicode case folding — it never expands 1→N (`ß` stays `ß`, not `SS`).
+The string with every ASCII letter in uppercase.
 
-
-*(doctest — run by `medaka test`)*
+Other characters are unchanged, so `ß` stays `ß`.
 
 ```medaka
 > toUpper "Straße"
 "STRAßE"
 ```
 
-## `toLower`
+### `toLower`
 
 ```
 toLower : String -> String
 ```
 
-Lowercase every character. **ASCII-only** (issue #417): a non-ASCII byte
-passes through unchanged.
+The string with every ASCII letter in lowercase.
 
-
-*(doctest — run by `medaka test`)*
+Other characters are unchanged.
 
 ```medaka
 > toLower "HÉLLO"
 "hÉllo"
 ```
 
-## `capitalize`
+### `capitalize`
 
 ```
 capitalize : String -> String
 ```
 
-Uppercase the first character, leave the rest alone.
-
-
-*(doctest — run by `medaka test`)*
+The string with its first character in uppercase.
 
 ```medaka
 > capitalize "hello"
 "Hello"
 ```
 
-## `replace`
+### `replace`
 
 ```
 replace : String -> String -> String -> String
 ```
 
-Replace the first occurrence of `old` with `new`; unchanged if absent or
-if `old` is empty.
+The string with the first occurrence of `old` replaced by `new`.
 
-
-*(doctest — run by `medaka test`)*
+Unchanged when `old` is absent or empty.
 
 ```medaka
 > replace "l" "L" "hello"
 "heLlo"
 ```
 
-## `replaceAll`
+### `replaceAll`
 
 ```
 replaceAll : String -> String -> String -> String
 ```
 
-Replace every non-overlapping occurrence of `old` with `new`.
+The string with every non-overlapping occurrence of `old` replaced by
+`new`.
 
-
-*(doctest — run by `medaka test`)*
+Unchanged when `old` is empty.
 
 ```medaka
 > replaceAll "l" "L" "hello"
 "heLLo"
 ```
 
-## `sliceClamped`
+## Slicing and splitting
+
+### `sliceClamped`
 
 ```
 sliceClamped : Int -> Int -> String -> String
 ```
 
-Substring `[lo, hi)` by codepoint, clamped to the string bounds (never
-panics; use `s.[lo..hi]` to panic on OOB instead).
+The characters at positions `[lo, hi)`.
 
-
-*(doctest — run by `medaka test`)*
+Positions are clamped to the string, so an out-of-range slice is shorter
+rather than a panic. `s.[lo..hi]` is the panicking form.
 
 ```medaka
 > sliceClamped 1 4 "hello"
 "ell"
 ```
 
-## `take`
+### `take`
 
 ```
 take : Int -> String -> String
 ```
 
-First `n` codepoints (fewer if shorter).
-
-
-*(doctest — run by `medaka test`)*
+The first `n` characters, or the whole string when it is shorter.
 
 ```medaka
 > take 3 "hello"
 "hel"
 ```
 
-## `drop`
+### `drop`
 
 ```
 drop : Int -> String -> String
 ```
 
-Drop the first `n` codepoints.
-
-
-*(doctest — run by `medaka test`)*
+Everything after the first `n` characters.
 
 ```medaka
 > drop 3 "hello"
 "lo"
 ```
 
-## `splitAt`
+### `splitAt`
 
 ```
 splitAt : Int -> String -> (String, String)
 ```
 
-`(take n s, drop n s)`.
-
-
-*(doctest — run by `medaka test`)*
+The first `n` characters, and the rest.
 
 ```medaka
 > splitAt 2 "hello"
 ("he", "llo")
 ```
 
-## `split`
+### `split`
 
 ```
 split : String -> String -> List String
 ```
 
-Split on `sep`, dropping the separators.  An empty `sep` yields `[s]`.
+The pieces of `s` between occurrences of `sep`, with the separators
+removed.
 
-
-*(doctest — run by `medaka test`)*
+An empty separator yields the whole string as the only piece.
 
 ```medaka
 > split "," "a,b,c"
@@ -753,37 +627,30 @@ Split on `sep`, dropping the separators.  An empty `sep` yields `[s]`.
 ["abc"]
 ```
 
-## `lines`
+### `lines`
 
 ```
 lines : String -> List String
 ```
 
-Split into lines on `\n`, also stripping a trailing `\r` (so `\r\n` works).
+The lines of `s`, split on `\n`.
 
-
-*(doctest — run by `medaka test`)*
+A `\r` before the `\n` is removed, so Windows line endings work too.
 
 ```medaka
 > lines "a\nb\nc"
 ["a", "b", "c"]
 ```
 
-## `stripCR`
+### `stripCR`
 
 ```
 stripCR : String -> String
 ```
 
-Drop one trailing `\r`, so a CRLF line reads as its content.  Idempotent
-on a line that has none.
+The line without one trailing `\r`.
 
-The `string` function `io.stripCR` used to duplicate: a `String -> String`
-transformation has no business in the IO module, so #2306 I-3 exported this
-one and deleted that one.
-
-
-*(doctest — run by `medaka test`)*
+Unchanged when there is none.
 
 ```medaka
 > stripCR "ab\r"
@@ -792,191 +659,122 @@ one and deleted that one.
 "ab"
 ```
 
-## `words`
+### `words`
 
 ```
 words : String -> List String
 ```
 
-Split on runs of whitespace, dropping empty fields.  Each word is a
-`stringSlice` of the original — no per-char rebuild.
+The words of `s`: the runs of characters between whitespace.
 
-
-*(doctest — run by `medaka test`)*
+Leading, trailing, and repeated whitespace produce no empty words.
 
 ```medaka
 > words "  hello   world "
 ["hello", "world"]
 ```
 
-## `unlines`
+### `unlines`
 
 ```
 unlines : List String -> String
 ```
 
-Join with `\n` and append a trailing newline.
-
-
-*(doctest — run by `medaka test`)*
+The lines joined with `\n`, with a newline after each one.
 
 ```medaka
 > unlines ["a", "b"]
 "a\nb\n"
 ```
 
-## `unwords`
+### `unwords`
 
 ```
 unwords : List String -> String
 ```
 
-Join with single spaces.
-
-
-*(doctest — run by `medaka test`)*
+The words joined with single spaces.
 
 ```medaka
 > unwords ["a", "b", "c"]
 "a b c"
 ```
 
-## `padLeft`
+## Padding
+
+### `padLeft`
 
 ```
 padLeft : Int -> Char -> String -> String
 ```
 
-Left-pad with `c` up to total length `n` (unchanged if already `>= n`).
+The string padded on the left with `c` to length `n`.
 
-
-*(doctest — run by `medaka test`)*
+Unchanged when it is already at least `n` long.
 
 ```medaka
 > padLeft 5 '.' "ab"
 "...ab"
 ```
 
-## `padRight`
+### `padRight`
 
 ```
 padRight : Int -> Char -> String -> String
 ```
 
-Right-pad with `c` up to total length `n`.
+The string padded on the right with `c` to length `n`.
 
-
-*(doctest — run by `medaka test`)*
+Unchanged when it is already at least `n` long.
 
 ```medaka
 > padRight 5 '.' "ab"
 "ab..."
 ```
 
-## `center`
+### `center`
 
 ```
 center : Int -> Char -> String -> String
 ```
 
-Center the string in width `n`, padding with `c`; any odd extra goes on
-the right.
+The string centered in a field of width `n`, padded with `c`.
 
-
-*(doctest — run by `medaka test`)*
+When the padding is odd, the extra character goes on the right.
+Unchanged when the string is already at least `n` long.
 
 ```medaka
 > center 5 '.' "ab"
 ".ab.."
 ```
 
-## `Eq String`
+## Instances
 
-```
-impl Eq String
-```
+- `String`: `Eq`, `Semigroup`, `Monoid`, `Ord`, `Debug`, `Display`, `Hashable`, [`Index`](#index-string-int-char), [`Slice`](#slice-string), `Arbitrary`, `Generic`
 
-## `Semigroup String`
-
-```
-impl Semigroup String
-```
-
-## `Monoid String`
-
-```
-impl Monoid String
-```
-
-## `Ord String`
-
-```
-impl Ord String
-```
-
-## `Debug String`
-
-```
-impl Debug String
-```
-
-`Debug String`/`Debug Char` render a *quoted, escaped literal* (`debug "hi"` is
-`"hi"`, `debug 'a'` is `'a'`) via the `debugStringLit`/`debugCharLit` externs —
-round-trippable, matching Haskell, and distinct from `println`'s raw output.
-They live here in the prelude (not `string.mdk`) so that `debug`-ing a String
-or Char — the most common doctest result type — resolves without importing
-`string`, alongside the other primitive `Debug` impls (Phase 92).
-
-## `Display String`
-
-```
-impl Display String
-```
-
-## `Hashable String`
-
-```
-impl Hashable String
-```
-
-## `Index String Int Char`
+### `Index String Int Char`
 
 ```
 impl Index String Int Char
 ```
 
-`index s i` is the codepoint `Char` of `s` at position `i` (`s[i]` sugar
-dispatches here; codepoints, not grapheme clusters -- matches `toChars`).
-Raises the coded `indexError` (E-INDEX-OOB) when `i` is out of range.  No
-`IndexMut` impl: `String` is immutable.
+`s[i]` is the character at codepoint position `i`.
 
-## `Slice String`
+Panics with an index error when `i` is out of range. Positions count
+codepoints, matching `string.toChars`.
+
+### `Slice String`
 
 ```
 impl Slice String
 ```
 
-`slice s lo hi` is the substring of `s` over `[lo, hi)` (codepoints).
-Out-of-range bounds are clamped by the underlying `stringSlice`, matching
-stdlib `String.sliceClamped`.
+The substring over codepoint positions `[lo, hi)`.
 
-
-*(doctest — run by `medaka test`)*
+Out-of-range bounds are clamped to the string.
 
 ```medaka
 > slice "hello" 1 4
 "ell"
-```
-
-## `Arbitrary String`
-
-```
-impl Arbitrary String
-```
-
-## `Generic String`
-
-```
-impl Generic String
 ```
 

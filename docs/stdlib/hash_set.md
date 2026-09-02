@@ -1,70 +1,82 @@
 # hash_set
 
-hash_set.mdk — a mutable hash set (Module 6).
+A mutable set of distinct elements, keyed by hash.
 
-See STDLIB.md (Module 6) for the plan.
+`HashSet a` gives `O(1)` average membership, insertion, and deletion.
+The writing operations, `insertInPlace` and `deleteInPlace`, change the
+set in place and return `Unit`; every other operation reads it. Iteration
+order is unspecified. Use `set` instead when you want an immutable value
+or ordered elements.
 
-`HashSet a` is a **mutable** hash set — separate chaining (each bucket a
-`List a`) in a `Ref`-held array plus a `Ref Int` count, mirroring
-`hash_map.mdk`. The *performance* counterpart to the persistent ordered `Set`
-(set.mdk): O(1) average membership/insert, updates mutate in place.
+Elements need `Eq` and `Hashable`, and the two must agree: equal elements
+must hash equally. `deriving (Hashable)` gives an element type an
+instance that agrees with its derived `Eq`. The `Foldable` instance
+makes `toList`, `elem`, `length`, and `any` work on a set.
 
-Standalone rather than a wrapper over `HashMap a Unit` — same reasoning as
-set.mdk over `Map a Unit` (self-contained, no qualified-import gymnastics, no
-`Unit` payload). Elements hash via the `Hashable` typeclass method `hash`,
-which must agree with the element's `Eq`. A custom element type gets a
-structural impl from `deriving (Hashable)` (#422); hand-write `impl Hashable
-T` only when the derived fold is not what you want. A hash may be NEGATIVE
-(the fold wraps) — `slotOf` masks the sign off before indexing, so that is
-safe (#416). Iteration order is unspecified.
-
-`Foldable HashSet` makes `toList`/`elem`/`length`/`any`/… work (a set's
-elements *are* its `toList`, unlike a map's pairs).
-
-## `HashSet`
+### `HashSet`
 
 ```
 data HashSet a
   = HashSet (Ref (Array (List a))) (Ref Int)
 ```
 
-`HashSet buckets count`: chains in `!buckets`, live count in
-`!count`; both mutated in place.
+The hash set type. Its fields are the bucket array and the element
+count, both mutable.
 
-## `new`
+Instances: [`Foldable`](#foldable-hashset), [`Eq`](#eq-hashset-a), [`Debug`](#debug-hashset-a), [`Display`](#display-hashset-a)
+
+## Construction
+
+### `new`
 
 ```
 new : Unit -> HashSet a
 ```
 
-A fresh, empty hash set. Takes `Unit` so each call allocates its own.
+A new, empty set.
 
-## `size`
+Each call allocates its own set, which is why it takes `Unit`.
+
+```medaka
+> size (new () : HashSet Int)
+0
+```
+
+### `fromList`
 
 ```
-size : HashSet a -> Int
+fromList : (Eq a, Hashable a) => List a -> HashSet a
 ```
 
-Number of elements. O(1).
-
-
-*(doctest — run by `medaka test`)*
+A set holding the elements of a list, without duplicates.
 
 ```medaka
 > size (fromList [1, 2, 3, 2, 1])
 3
 ```
 
-## `has`
+## Query
+
+### `size`
 
 ```
-has : a -> HashSet a -> Bool
+size : HashSet a -> Int
 ```
 
-`True` when the element is present.
+The number of elements, in `O(1)`.
 
+```medaka
+> size (fromList [1, 2, 3])
+3
+```
 
-*(doctest — run by `medaka test`)*
+### `has`
+
+```
+has : (Eq a, Hashable a) => a -> HashSet a -> Bool
+```
+
+Whether `x` is a member.
 
 ```medaka
 > has 2 (fromList [1, 2, 3])
@@ -73,100 +85,81 @@ True
 False
 ```
 
-## `insertInPlace`
+## Insertion and deletion
+
+### `insertInPlace`
 
 ```
-insertInPlace : a -> HashSet a -> Unit
+insertInPlace : (Eq a, Hashable a) => a -> HashSet a -> Unit
 ```
 
-Add an element, in place. A no-op when already present. Resizes (doubling)
-past load factor 0.75.
+Adds `x` to the set, in place.
 
-## `fromList`
+Nothing happens when `x` is already a member. The set grows as needed.
 
-```
-fromList : List a -> HashSet a
-```
-
-Build a set from a list, dropping duplicates.
-
-
-*(doctest — run by `medaka test`)*
-
-```medaka
-> size (fromList [1, 2, 3, 4, 5, 6, 7, 8, 8, 1])
-8
-```
-
-## `deleteInPlace`
+### `deleteInPlace`
 
 ```
-deleteInPlace : a -> HashSet a -> Unit
+deleteInPlace : (Eq a, Hashable a) => a -> HashSet a -> Unit
 ```
 
-Remove an element, in place. A no-op when absent.
+Removes `x` from the set, in place.
 
-## `Foldable HashSet`
+Nothing happens when `x` is not a member.
+
+## Instances
+
+### `Foldable HashSet`
 
 ```
 impl Foldable HashSet
 ```
 
-Folds over elements (unspecified order), so `toList`/`length`/`elem`/`any`/
-`sum`/… all work on a HashSet.
-
-
-*(doctest — run by `medaka test`)*
+The `Foldable` methods visit the elements in unspecified order, so
+`toList`, `length`, `elem`, `any`, and `sum` work on a set.
 
 ```medaka
-> toList (fromList [1, 1, 2]) /= []
-True
 > length (fromList [3, 1, 2, 1])
 3
 ```
 
-## `Eq (HashSet a)`
+### `Eq (HashSet a)`
 
 ```
 impl Eq (HashSet a) requires Eq a, Hashable a
 ```
 
-Order-independent equality: same elements regardless of layout.
-
-
-*(doctest — run by `medaka test`)*
+Two sets are equal when they hold the same elements, whatever their
+internal layout.
 
 ```medaka
 > eq (fromList [1, 2, 3]) (fromList [3, 2, 1, 2])
 True
 ```
 
-## `Debug (HashSet a)`
+### `Debug (HashSet a)`
 
 ```
 impl Debug (HashSet a) requires Debug a
 ```
 
-Rendered `fromList [a, …]` in hash order (layout-dependent; use `eq` for
-equality).
+`debug` renders a set as `fromList [x, ...]` in internal order, so the
+text depends on the set's layout. Compare sets with `eq`, not by their
+rendering.
 
-## `Display (HashSet a)`
+### `Display (HashSet a)`
 
 ```
 impl Display (HashSet a) requires Display a, Ord a
 ```
 
-The *display* form, peer of `Display (Set a)`'s `Set { x, … }`, with the
-elements in ascending order so the text depends only on the value and not
-on the table's internal layout.
-
-
-*(doctest — run by `medaka test`)*
+`display` renders a set as `HashSet { x, ... }` with the elements in
+ascending order, so the text depends only on the elements.
 
 ```medaka
-> display (fromList [3, 1, 2]) == "HashSet { 1, 2, 3 }"
-True
-> display (new () : HashSet Int) == "HashSet {}"
-True
+> display (fromList [3, 1, 2])
+"HashSet { 1, 2, 3 }"
+> display (new () : HashSet Int)
+"HashSet {}"
 ```
 

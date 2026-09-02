@@ -351,6 +351,88 @@ async function main() {
       await page.screenshot({ path: `${SCREENSHOT_DIR}/11_guide_sample_run.png` });
     }
 
+    // ── Test 12: the published stdlib reference (site layout only) ───────────
+    // #2384's second published doc set, and the SAME shape as the guide block
+    // above on purpose: the dev tree has no stdlib/ at all, so E2E_EXPECT_STDLIB
+    // — set by `SITE=1 bash playground/e2e/run.sh`, and settable by hand against
+    // a live origin — is what makes these mandatory rather than skipped. "The
+    // stdlib reference is missing" must never read as "the stdlib tests passed".
+    //
+    // Deliberately NOT here: any "the doctests run in the browser" check. Val's
+    // ruling (#2384 §0.3) is suppress-not-stamp — the rendered reference carries
+    // no runnable stdlib doctests, so there is nothing to run and a check that
+    // pretended otherwise would be asserting a property the site does not have.
+    //
+    // Also deliberately narrow: this is a REAL-BROWSER confirmation of a handful
+    // of structural facts, not a link audit. The whole-set link integrity of the
+    // 905-entry index is graded elsewhere — by playground/guide_render_test.mjs
+    // (renderer output, at PR time) and by playground/verify_stdlib_deploy.sh
+    // (a live origin, on demand). Duplicating that here would trade 30 seconds
+    // of nightly wall-clock for a claim two other things already make better.
+    if (!process.env.E2E_EXPECT_STDLIB) {
+      console.log('Skipping /stdlib-route tests (E2E_EXPECT_STDLIB unset — dev tree has no stdlib/).');
+      console.log('  Run them with: SITE=1 bash playground/e2e/run.sh');
+    } else {
+      console.log('Test: /stdlib route');
+      const base = BASE_URL.replace(/#.*$/, '').replace(/\/$/, '');
+
+      // The apex nav must actually offer the reference — an unlinked page that
+      // happens to be deployed is not a published reference.
+      await page.goto(base + '/', { waitUntil: 'domcontentloaded' });
+      const stdlibHref = await page.getAttribute('.links a[href*="stdlib/"]', 'href');
+      check('apex header links into the stdlib reference', !!stdlibHref, String(stdlibHref));
+
+      // The bare /stdlib/ route — what a reader types rather than clicks. Same
+      // hazard the guide block records: without an index.html a static host
+      // 404s here while every module page is fine, invisible to link-followers.
+      const bareStdlib = await page.evaluate(async (u) => (await fetch(u)).status, base + '/stdlib/');
+      check('bare /stdlib/ route serves a directory index (200)', bareStdlib === 200, `status ${bareStdlib}`);
+
+      // …and it must be the GENERATED library index, not render_docs.mjs's
+      // synthetic chapter list. The entry links are the discriminator: the
+      // synthetic index has ~28 plain page links and no #anchors at all.
+      const idxStatus = (await page.goto(base + '/stdlib/', { waitUntil: 'domcontentloaded' })).status();
+      check('/stdlib/ index page loads (200)', idxStatus === 200, `status ${idxStatus}`);
+      const entries = await page.$$eval('li > a[href*=".html#"]', (as) =>
+        as.map((a) => a.getAttribute('href')));
+      check(`/stdlib/ index is the generated reference (got ${entries.length} entry links)`,
+        entries.length > 100, `${entries.length} entry links`);
+      await page.screenshot({ path: `${SCREENSHOT_DIR}/12_stdlib_index.png` });
+
+      // A module page: real rendered content, not an empty shell. Derived from
+      // the index's own first entry rather than hardcoded, so a module rename
+      // moves this check with the tree instead of rotting into a false red.
+      const firstEntry = entries[0] ?? '';
+      const modulePage = firstEntry.split('#')[0];
+      check('index entry links name a module page', !!modulePage, String(firstEntry));
+      if (modulePage) {
+        const modStatus = (await page.goto(base + '/stdlib/' + modulePage, { waitUntil: 'domcontentloaded' })).status();
+        check(`module page ${modulePage} loads (200)`, modStatus === 200, `status ${modStatus}`);
+        const modH1 = await page.$eval('h1', (el) => el.textContent.trim()).catch(() => '');
+        check('module page has a heading', modH1.length > 0, modH1);
+        const modText = await page.$eval('article', (el) => el.textContent.replace(/\s+/g, ' ').trim()).catch(() => '');
+        check(`module page has substantive content (${modText.length} chars)`, modText.length > 400);
+        const modBlocks = await page.$$eval('.codeblock', (els) => els.length);
+        check(`module page renders code blocks (got ${modBlocks})`, modBlocks > 0);
+
+        // A DEEP entry link — the thing the whole index is made of. The page
+        // status alone is not the claim: the #anchor must land on a real
+        // heading, which is the half a plain 200 cannot see.
+        const frag = firstEntry.includes('#') ? firstEntry.split('#')[1] : '';
+        const anchorOk = await page.evaluate((f) => {
+          const el = document.getElementById(f);
+          return !!el && /^H[1-6]$/.test(el.tagName);
+        }, frag);
+        check(`deep entry link #${frag} resolves to a heading on ${modulePage}`, anchorOk);
+
+        // The way back out. A reference a reader cannot leave is a dead end.
+        const backHref = await page.getAttribute('.site-nav-back', 'href');
+        const backStatus = await page.evaluate(async (h) => (await fetch(h)).status, backHref);
+        check(`stdlib "← Playground" back link resolves (${backHref} -> ${backStatus})`, backStatus === 200);
+        await page.screenshot({ path: `${SCREENSHOT_DIR}/13_stdlib_module.png` });
+      }
+    }
+
     if (pageErrors.length) {
       console.log('Uncaught page errors observed during run:', pageErrors);
     }

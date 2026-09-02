@@ -3366,7 +3366,7 @@ NEWLINE
 DEDENT
 NEWLINE
 PROP
-STRING "a subset of a union is recognised"
+STRING "a subset of a union is recognized"
 LPAREN
 IDENT "xs"
 COLON

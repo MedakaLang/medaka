@@ -6,7 +6,3 @@
 doublePlusOne : a -> a
 ```
 
-Doubles a sibling-imported value, then adds one. This function has no
-DTypeSig — its inferred signature depends on `double`'s inferred type
-resolving through the import (#213).
-

@@ -1,14 +1,5 @@
 # gamma
 
-gamma.mdk — library-mode fixture module #3: S-doc-surface-truth hole (b).
-Declares an interface plus a type of its own, and writes two impls whose
-pages differ: `Sizeish Widget` stays here (this module DECLARES `Widget` —
-ownership clause 1), while `Sizeish (Array Int)` is re-filed onto the
-`array` page (clause 2: `Array` is an opaque builtin declared nowhere, and
-the library set contains a module named for it that mentions it in its own
-signatures) — exactly how the real
-`stdlib/core.mdk` loses `Debug (Array a)` to `stdlib/array.mdk`.
-
 ## `Widget`
 
 ```
@@ -17,6 +8,8 @@ data Widget
 ```
 
 A tiny type declared HERE.
+
+Instances: [`Sizeish`](#sizeish-widget)
 
 ## `Sizeish`
 
@@ -27,7 +20,9 @@ interface Sizeish a
 
 Anything with a size.
 
-## `Sizeish Widget`
+## Instances
+
+### `Sizeish Widget`
 
 ```
 impl Sizeish Widget

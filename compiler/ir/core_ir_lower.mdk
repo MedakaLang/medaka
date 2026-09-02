@@ -57,8 +57,6 @@ import ir.core_ir.{
 }
 import eval.eval.{
   buildCtorToType,
-  buildCtorFieldOrders,
-  ctorFieldOrdersRef,
   installDispatchTables,
   lookupPositions,
   tyvarsInArgs,
@@ -620,12 +618,24 @@ lowerStmt _ = panic "core_ir lower: unsupported block statement"
 export
 lowerProgram : List Decl -> CProgram
 lowerProgram prog =
-  ctorFieldOrdersRef := buildCtorFieldOrders prog
   CProgram
     (lowerGroups prog)
     (ctorArities prog)
     (buildCtorToType prog)
     (lowerImpls prog)
+
+-- #1970: which backend(s) a `lowerProgramEmit` caller is about to feed the result
+-- to — the discriminator `dictWitnessTagGuard` needs to narrow its wasm 30-bit
+-- `dictTag` check (#377) to callers that provably never emit wasm from this
+-- CProgram.  `TargetBothUnknown` is NOT a "don't know yet, ask later" filler value
+-- — it is the correct, and unchanged, answer for a caller that positively serves
+-- (or cannot rule out serving) BOTH backends from the one lowered program: a
+-- shared debug/structural probe (`snapshot.mdk`'s `emitBoth`, `profile_main.mdk`'s
+-- reused `cprog`, `core_ir_typed_modules_dump_main.mdk`, `draft_semantic_program.mdk`)
+-- must get the SAME full-width check a genuinely target-unaware caller would, or a
+-- collision that is real under `--target wasm` goes unreported because SOME other
+-- caller in the same binary happened to know `native`.  Only `TargetNative` narrows.
+public export data EmitTarget = TargetNative | TargetWasm | TargetBothUnknown
 
 -- ── record-pattern → positional-constructor-pattern rewrite (native backend) ──
 -- The LLVM emitter has no record-pattern path: records / named-field variants are
@@ -648,14 +658,15 @@ lowerProgram prog =
 -- the emitter's record cell layout / recFieldTable use, so the positional indices
 -- line up with the cell's stored field offsets (verified by the fixture byte-diff).
 export
-lowerProgramEmit : List Decl -> CProgram
-lowerProgramEmit prog =
+lowerProgramEmit : EmitTarget -> List Decl -> CProgram
+lowerProgramEmit target prog =
   -- #1950: refuse a program whose impls collide on ONE emitted symbol, here rather
   -- than letting clang report it unlocated.  Both backends reach this seam.
   let _ = implSymbolCollisionGuard prog
   -- #348/#377: refuse a program whose dict-witness TAGS collide under djb2, in
-  -- either backend's tag width.  Same seam, same reason.
-  let _ = dictWitnessTagGuard prog
+  -- either backend's tag width the caller's `target` cannot rule out.  Same seam,
+  -- same reason.
+  let _ = dictWitnessTagGuard target prog
   hoistNullaryMemo (rewriteProgramRecPats
     (declaredRecordFieldOrders prog)
     (lowerProgram prog))
@@ -939,11 +950,10 @@ bindFieldTemps ((CField k ex)::rest) body =
 -- (non-empty routes) is NOT hoisted — it keeps its per-call semantics.
 --
 -- Only occurrences that ACTUALLY appear are hoisted: the walk records each rewritten
--- (tag, method) into memoRefsRef so no dead CAF global is emitted.  The module Ref
--- (reset per hoistNullaryMemo call — lowerProgramEmit is the single caller) keeps the
--- structural walk to one pass without tupling a collector through every CExpr case.
-memoRefsRef : Ref (List (String, String))
-memoRefsRef = Ref []
+-- (tag, method) into `LowerState.memoRefs` (declared below).  That collector is a Ref
+-- so the structural walk stays one pass without tupling an accumulator through every
+-- CExpr case — but it is a field of the per-emission carrier, not a module-scope Ref
+-- reset by convention on entry (#1954).
 
 -- the (method, SELECTOR) instances that are per-instance CAFs — see the gate above.
 -- The selector is the string an RKey occurrence of this instance actually carries:
@@ -1033,20 +1043,36 @@ hasDefaultL ((CImplEntry n _ (CImplDefault _ _ _))::rest) m = n == m
   || hasDefaultL rest m
 hasDefaultL (_::rest) m = hasDefaultL rest m
 
--- the (method, selector) instances hoistable through a runtime-dict route (item 1),
--- reset per hoistNullaryMemo call.  Read only by the RDict/RDictFwd hoistExpr arm.
-soleMemoKeysRef : Ref (List (String, String))
-soleMemoKeysRef = Ref []
-
--- #747: ALL (method, selector) memo keys of the program (nullary/return-position/
--- no-requires impls), computed once in hoistNullaryMemo.  Read by the RDict/RDictFwd
--- MULTI-impl arm of hoistDictNullary to enumerate every impl tag of the method so a
--- `$memo_<selector>_<method>` CAF is synthesized for each.  The occurrence stays a
--- runtime dispatch; the emit backends' dispatch chain forces the matching per-tag CAF
--- (per-runtime-tag memoisation), so each resolved tag's side effect fires once — the
--- same sharing eval's per-VTypedImpl memoThunk gives regardless of route.
-allMemoKeysRef : Ref (List (String, String))
-allMemoKeysRef = Ref []
+-- ── LowerState — the per-emission hoist carrier (#1954) ──────────────────────
+-- Constructed once per `hoistNullaryMemo` call and threaded explicitly through the
+-- whole hoist walk, in place of three module-scope `Ref`s that were reset-on-entry
+-- by convention.  It REPLACES the walk's existing `keys` parameter rather than
+-- riding alongside it, so no walk function gained an argument.
+--
+--   • `memoKeysAll` — #747: ALL (method, selector) memo keys of the program
+--     (nullary/return-position/no-requires impls), computed once in
+--     `hoistNullaryMemo`.  This is one value serving what used to be two: the
+--     `keys` parameter the walk threaded (read by `hoistExpr`'s `isMemoKey` gate)
+--     and `allMemoKeysRef`, which `hoistNullaryMemo` always assigned that same
+--     `keys`.  Read by the RDict/RDictFwd MULTI-impl arm of `hoistDictNullary` to
+--     enumerate every impl tag of the method so a `$memo_<selector>_<method>` CAF
+--     is synthesized for each.  The occurrence stays a runtime dispatch; the emit
+--     backends' dispatch chain forces the matching per-tag CAF (per-runtime-tag
+--     memoisation), so each resolved tag's side effect fires once — the same
+--     sharing eval's per-VTypedImpl memoThunk gives regardless of route.
+--   • `soleKeys` — the (method, selector) instances hoistable through a runtime-dict
+--     route (#731 item 1).  Read only by the RDict/RDictFwd `hoistExpr` arm.
+--   • `memoRefs` — the walk's collector of rewritten (tag, method) pairs.  The one
+--     mutable field, and the only reason the carrier holds a `Ref` at all.
+--
+-- Adding a field is one line here plus the one construction site in
+-- `hoistNullaryMemo`: every walk function already takes the whole record.
+data LowerState =
+  | LowerState {
+      memoKeysAll : List (String, String),
+      soleKeys : List (String, String),
+      memoRefs : Ref (List (String, String)),
+    }
 
 -- the synthesized CAF binding name for a memoised (selector, method) instance.  The
 -- `$` prefix is the internal-binder convention (cf. composeVar `$cf`), so it cannot
@@ -1066,11 +1092,12 @@ allMemoKeysRef = Ref []
 memoBindName : String -> String -> String
 memoBindName selector method = "$memo_\{injectiveIdent selector}_\{method}"
 
-recordMemoRef : String -> String -> Unit
-recordMemoRef tag method = memoRefsRef := (tag, method) :: !memoRefsRef
+recordMemoRef : LowerState -> String -> String -> Unit
+recordMemoRef st tag method =
+  let refs = st.memoRefs in refs := (tag, method) :: !refs
 
 -- #731 item 1 / #747: rewrite a runtime-dict-routed nullary occurrence.
---   • single-impl (soleMemoKeysRef): the runtime dict can only ever resolve to the
+--   • single-impl (`st.soleKeys`): the runtime dict can only ever resolve to the
 --     ONE impl, so hoist the occurrence itself to that shared CAF (statically the
 --     same one an RKey occurrence names) — #731 item 1, unchanged.
 --   • multi-impl (#747): the resolved tag is only known at runtime, so the occurrence
@@ -1080,30 +1107,30 @@ recordMemoRef tag method = memoRefsRef := (tag, method) :: !memoRefsRef
 --     resolved tag's side effect fires once, shared across routes (matching eval's
 --     per-VTypedImpl memoThunk).  Distinct tags carry distinct CAFs → memoise
 --     independently.  A method with no nullary/return-position impl records nothing.
-hoistDictNullary : String -> Route -> CExpr
-hoistDictNullary name route = match lookupAssoc name !soleMemoKeysRef
+hoistDictNullary : LowerState -> String -> Route -> CExpr
+hoistDictNullary st name route = match lookupAssoc name st.soleKeys
   Some sel =>
-    let _ = recordMemoRef sel name
+    let _ = recordMemoRef st sel name
     CVar (memoBindName sel name) AGlobal
   None =>
-    let _ = recordMultiImplMemo name
+    let _ = recordMultiImplMemo st name
     CMethod name route [] []
 
 -- #747: synthesize one per-tag CAF for every nullary/return-position impl of a
 -- multi-impl method reached via a runtime-dict route.  Records each (selector, method)
--- into memoRefsRef so hoistNullaryMemo prepends a `$memo_<selector>_<method>` value
+-- into `st.memoRefs` so hoistNullaryMemo prepends a `$memo_<selector>_<method>` value
 -- bind (dedupPairs collapses repeats).  Only fires for methods that appear in the
 -- program's memo keys — a nullary occurrence of a NON-memoisable method records
 -- nothing, leaving its per-call dispatch untouched.
-recordMultiImplMemo : String -> Unit
-recordMultiImplMemo name = recordMultiImplMemoGo name !allMemoKeysRef
+recordMultiImplMemo : LowerState -> String -> Unit
+recordMultiImplMemo st name = recordMultiImplMemoGo st name st.memoKeysAll
 
-recordMultiImplMemoGo : String -> List (String, String) -> Unit
-recordMultiImplMemoGo _ [] = ()
-recordMultiImplMemoGo name ((m, sel)::rest)
+recordMultiImplMemoGo : LowerState -> String -> List (String, String) -> Unit
+recordMultiImplMemoGo _ _ [] = ()
+recordMultiImplMemoGo st name ((m, sel)::rest)
   | m == name =
-    let _ = recordMemoRef sel name in recordMultiImplMemoGo name rest
-  | otherwise = recordMultiImplMemoGo name rest
+    let _ = recordMemoRef st sel name in recordMultiImplMemoGo st name rest
+  | otherwise = recordMultiImplMemoGo st name rest
 
 -- the whole-program hoist: rewrite every memoisable occurrence to a CAF reference,
 -- then prepend one synthesized CAF value-bind per referenced instance.  A no-op (the
@@ -1113,12 +1140,14 @@ hoistNullaryMemo (CProgram groups ctorArs ctorTypes implEntries) =
   let keys = memoKeys implEntries
   if isEmptyL keys then CProgram groups ctorArs ctorTypes implEntries
   else
-    memoRefsRef := []
-    soleMemoKeysRef := soleMemoKeys implEntries keys
-    allMemoKeysRef := keys
-    let groups2 = map (hoistBind keys) groups
-    let impls2 = map (hoistImpl keys) implEntries
-    let refs = dedupPairs (reverseL !memoRefsRef)
+    let st = LowerState {
+      memoKeysAll = keys,
+      soleKeys = soleMemoKeys implEntries keys,
+      memoRefs = Ref [],
+    }
+    let groups2 = map (hoistBind st) groups
+    let impls2 = map (hoistImpl st) implEntries
+    let refs = dedupPairs (reverseL !st.memoRefs)
     CProgram (map memoCafBind refs ++ groups2) ctorArs ctorTypes impls2
 
 memoCafBind : (String, String) -> CBind
@@ -1136,24 +1165,24 @@ dedupPairs ps = dedupBy memoRefKey ps
 memoRefKey : (String, String) -> String
 memoRefKey (tag, method) = lenKey tag ++ method
 
-hoistBind : List (String, String) -> CBind -> CBind
-hoistBind keys (CBind n clauses) = CBind n (map (hoistClause keys) clauses)
+hoistBind : LowerState -> CBind -> CBind
+hoistBind st (CBind n clauses) = CBind n (map (hoistClause st) clauses)
 
-hoistClause : List (String, String) -> CClause -> CClause
-hoistClause keys (CClause pats body) = CClause pats (hoistExpr keys body)
+hoistClause : LowerState -> CClause -> CClause
+hoistClause st (CClause pats body) = CClause pats (hoistExpr st body)
 
-hoistImpl : List (String, String) -> CImplEntry -> CImplEntry
-hoistImpl keys (CImplEntry n s (CImplTagged tag key iface pos pats body)) =
-  CImplEntry n s (CImplTagged tag key iface pos pats (hoistExpr keys body))
-hoistImpl keys (CImplEntry n s (CImplDefault ifaceId pats body)) =
-  CImplEntry n s (CImplDefault ifaceId pats (hoistExpr keys body))
+hoistImpl : LowerState -> CImplEntry -> CImplEntry
+hoistImpl st (CImplEntry n s (CImplTagged tag key iface pos pats body)) =
+  CImplEntry n s (CImplTagged tag key iface pos pats (hoistExpr st body))
+hoistImpl st (CImplEntry n s (CImplDefault ifaceId pats body)) =
+  CImplEntry n s (CImplDefault ifaceId pats (hoistExpr st body))
 
 -- the structural walk (mirrors rewriteExprRP), rewriting ONLY the gated CMethod
 -- occurrence; everything else recurses unchanged.
-hoistExpr : List (String, String) -> CExpr -> CExpr
-hoistExpr keys (CMethod name (RKey tag []) [] []) =
-  if isMemoKey keys name tag then
-    let _ = recordMemoRef tag name
+hoistExpr : LowerState -> CExpr -> CExpr
+hoistExpr st (CMethod name (RKey tag []) [] []) =
+  if isMemoKey st.memoKeysAll name tag then
+    let _ = recordMemoRef st tag name
     CVar (memoBindName tag name) AGlobal
   else CMethod name (RKey tag []) [] []
 -- #731 item 1: a nullary return-position method reached via a runtime-dict route
@@ -1163,70 +1192,66 @@ hoistExpr keys (CMethod name (RKey tag []) [] []) =
 -- direct RKey occurrence hits); hoist it to the SAME CAF the RKey path uses so the
 -- side effect fires once on build too, shared across routes.  A multi-impl method's
 -- tag is only known at runtime, so it stays a per-call dispatch (unchanged).
-hoistExpr _ (CMethod name (RDict d) [] []) = hoistDictNullary name (RDict d)
-hoistExpr _ (CMethod name (RDictFwd d) [] []) =
-  hoistDictNullary name (RDictFwd d)
+hoistExpr st (CMethod name (RDict d) [] []) = hoistDictNullary st name (RDict d)
+hoistExpr st (CMethod name (RDictFwd d) [] []) =
+  hoistDictNullary st name (RDictFwd d)
 hoistExpr _ (CMethod name r ir mr) = CMethod name r ir mr
 hoistExpr _ (CLit l) = CLit l
 hoistExpr _ (CVar x addr) = CVar x addr
-hoistExpr keys (CApp f x) = CApp (hoistExpr keys f) (hoistExpr keys x)
-hoistExpr keys (CLam pats body) = CLam pats (hoistExpr keys body)
-hoistExpr keys (CLet r pat e1 e2) =
-  CLet r pat (hoistExpr keys e1) (hoistExpr keys e2)
-hoistExpr keys (CLetGroup binds body) =
-  CLetGroup (map (hoistBind keys) binds) (hoistExpr keys body)
-hoistExpr keys (CMatch scrut arms) =
-  CMatch (hoistExpr keys scrut) (map (hoistArm keys) arms)
-hoistExpr keys (CDecision scrut arms tree) =
-  CDecision (hoistExpr keys scrut) (map (hoistArm keys) arms) tree
-hoistExpr keys (CIf c t e) =
-  CIf (hoistExpr keys c) (hoistExpr keys t) (hoistExpr keys e)
-hoistExpr keys (CBinPrim op l r tag) =
-  CBinPrim op (hoistExpr keys l) (hoistExpr keys r) tag
-hoistExpr keys (CUnOp op x) = CUnOp op (hoistExpr keys x)
-hoistExpr keys (CTuple es) = CTuple (map (hoistExpr keys) es)
-hoistExpr keys (CList es) = CList (map (hoistExpr keys) es)
-hoistExpr keys (CRecord name fields) =
-  CRecord name (map (hoistField keys) fields)
-hoistExpr keys (CFieldAccess ex f n) = CFieldAccess (hoistExpr keys ex) f n
-hoistExpr keys (CRecordUpdate name base fields) =
-  CRecordUpdate name (hoistExpr keys base) (map (hoistField keys) fields)
-hoistExpr keys (CVariantUpdate con base fields) =
-  CVariantUpdate con (hoistExpr keys base) (map (hoistField keys) fields)
-hoistExpr keys (CArray es) = CArray (map (hoistExpr keys) es)
-hoistExpr keys (CRangeList lo hi incl) =
-  CRangeList (hoistExpr keys lo) (hoistExpr keys hi) incl
-hoistExpr keys (CRangeArray lo hi incl) =
-  CRangeArray (hoistExpr keys lo) (hoistExpr keys hi) incl
-hoistExpr keys (CIndex a i) = CIndex (hoistExpr keys a) (hoistExpr keys i)
-hoistExpr keys (CSlice a lo hi incl) =
-  CSlice (hoistExpr keys a) (hoistExpr keys lo) (hoistExpr keys hi) incl
-hoistExpr keys (CStringIndex a i) =
-  CStringIndex (hoistExpr keys a) (hoistExpr keys i)
-hoistExpr keys (CStringSlice a lo hi incl) =
-  CStringSlice (hoistExpr keys a) (hoistExpr keys lo) (hoistExpr keys hi) incl
-hoistExpr keys (CListIndex a i) =
-  CListIndex (hoistExpr keys a) (hoistExpr keys i)
-hoistExpr keys (CListSlice a lo hi incl) =
-  CListSlice (hoistExpr keys a) (hoistExpr keys lo) (hoistExpr keys hi) incl
-hoistExpr keys (CBlock stmts) = CBlock (map (hoistStmt keys) stmts)
+hoistExpr st (CApp f x) = CApp (hoistExpr st f) (hoistExpr st x)
+hoistExpr st (CLam pats body) = CLam pats (hoistExpr st body)
+hoistExpr st (CLet r pat e1 e2) = CLet r pat (hoistExpr st e1) (hoistExpr st e2)
+hoistExpr st (CLetGroup binds body) =
+  CLetGroup (map (hoistBind st) binds) (hoistExpr st body)
+hoistExpr st (CMatch scrut arms) =
+  CMatch (hoistExpr st scrut) (map (hoistArm st) arms)
+hoistExpr st (CDecision scrut arms tree) =
+  CDecision (hoistExpr st scrut) (map (hoistArm st) arms) tree
+hoistExpr st (CIf c t e) =
+  CIf (hoistExpr st c) (hoistExpr st t) (hoistExpr st e)
+hoistExpr st (CBinPrim op l r tag) =
+  CBinPrim op (hoistExpr st l) (hoistExpr st r) tag
+hoistExpr st (CUnOp op x) = CUnOp op (hoistExpr st x)
+hoistExpr st (CTuple es) = CTuple (map (hoistExpr st) es)
+hoistExpr st (CList es) = CList (map (hoistExpr st) es)
+hoistExpr st (CRecord name fields) = CRecord name (map (hoistField st) fields)
+hoistExpr st (CFieldAccess ex f n) = CFieldAccess (hoistExpr st ex) f n
+hoistExpr st (CRecordUpdate name base fields) =
+  CRecordUpdate name (hoistExpr st base) (map (hoistField st) fields)
+hoistExpr st (CVariantUpdate con base fields) =
+  CVariantUpdate con (hoistExpr st base) (map (hoistField st) fields)
+hoistExpr st (CArray es) = CArray (map (hoistExpr st) es)
+hoistExpr st (CRangeList lo hi incl) =
+  CRangeList (hoistExpr st lo) (hoistExpr st hi) incl
+hoistExpr st (CRangeArray lo hi incl) =
+  CRangeArray (hoistExpr st lo) (hoistExpr st hi) incl
+hoistExpr st (CIndex a i) = CIndex (hoistExpr st a) (hoistExpr st i)
+hoistExpr st (CSlice a lo hi incl) =
+  CSlice (hoistExpr st a) (hoistExpr st lo) (hoistExpr st hi) incl
+hoistExpr st (CStringIndex a i) = CStringIndex (hoistExpr st a) (hoistExpr st i)
+hoistExpr st (CStringSlice a lo hi incl) =
+  CStringSlice (hoistExpr st a) (hoistExpr st lo) (hoistExpr st hi) incl
+hoistExpr st (CListIndex a i) = CListIndex (hoistExpr st a) (hoistExpr st i)
+hoistExpr st (CListSlice a lo hi incl) =
+  CListSlice (hoistExpr st a) (hoistExpr st lo) (hoistExpr st hi) incl
+hoistExpr st (CBlock stmts) = CBlock (map (hoistStmt st) stmts)
 hoistExpr _ (CDict name rs) = CDict name rs
 
-hoistArm : List (String, String) -> CArm -> CArm
-hoistArm keys (CArm pat guards body) =
-  CArm pat (map (hoistGuard keys) guards) (hoistExpr keys body)
+hoistArm : LowerState -> CArm -> CArm
+hoistArm st (CArm pat guards body) =
+  CArm pat (map (hoistGuard st) guards) (hoistExpr st body)
 
-hoistGuard : List (String, String) -> CGuard -> CGuard
-hoistGuard keys (CGBool e) = CGBool (hoistExpr keys e)
-hoistGuard keys (CGBind p e) = CGBind p (hoistExpr keys e)
+hoistGuard : LowerState -> CGuard -> CGuard
+hoistGuard st (CGBool e) = CGBool (hoistExpr st e)
+hoistGuard st (CGBind p e) = CGBind p (hoistExpr st e)
 
-hoistStmt : List (String, String) -> CStmt -> CStmt
-hoistStmt keys (CSExpr e) = CSExpr (hoistExpr keys e)
-hoistStmt keys (CSLet r pat e) = CSLet r pat (hoistExpr keys e)
-hoistStmt keys (CSAssign x e) = CSAssign x (hoistExpr keys e)
+hoistStmt : LowerState -> CStmt -> CStmt
+hoistStmt st (CSExpr e) = CSExpr (hoistExpr st e)
+hoistStmt st (CSLet r pat e) = CSLet r pat (hoistExpr st e)
+hoistStmt st (CSAssign x e) = CSAssign x (hoistExpr st e)
 
-hoistField : List (String, String) -> CField -> CField
-hoistField keys (CField k e) = CField k (hoistExpr keys e)
+hoistField : LowerState -> CField -> CField
+hoistField st (CField k e) = CField k (hoistExpr st e)
 
 -- recompile a CDecision's tree from rewritten arms (same call lowerMatch makes).
 compileArmsC : List CArm -> CTree
@@ -1340,9 +1365,7 @@ lgToBind ((n, _), cs) = CBind n cs
 -- core_ir_typed_main).  The emit path lowers through here too and never reads the
 -- tables, so installing is a no-op for it.
 lowerImpls : List Decl -> List CImplEntry
-lowerImpls prog =
-  let _ = installIfaceImplHeads (ifaceImplHeadTable prog)
-  lowerImplsWith (installDispatchTables prog) prog
+lowerImpls prog = lowerImplsWith (installDispatchTables prog) prog
 
 -- ── #948: interface → the HEAD TAGS of its impls, read off the impl DECLS ────
 -- `lowerDeclImpl` projects a `DImpl` to one `CImplEntry` PER METHOD IT DEFINES, so
@@ -1383,12 +1406,15 @@ lowerImpls prog =
 -- bare head "Box" — a DIFFERENT hash word.  With the declared keys here the two
 -- sides compute the same collision verdict from the same facts.
 --
--- Installed HERE rather than by each emit driver on purpose: `lowerImpls` is the
--- one chokepoint every emit path funnels through with the WHOLE program's decls
--- (`lowerProgramEmit allDecls`), and it already installs `installDispatchTables`
--- the same way.  A per-driver `install*` call — the shape the other side tables
--- use — can be FORGOTTEN in a new driver, and the failure mode of forgetting it
--- is exactly the segfault this fixes.
+-- Until 2026-09-01 this table was INSTALLED into an ambient `Ref` by `lowerImpls`
+-- (the one chokepoint every emit path funnels through) and read back by the two
+-- backends through zero-argument accessors.  It is now an explicit VALUE: the emit
+-- driver mints it with `ifaceImplHeadTable` over the same decl list it lowers and
+-- hands it to the backend inside `EmitInput`/`WasmEmitInput`, so the three readers
+-- below take it as a parameter.  The forgettable-`install*` hazard the old note
+-- worried about is now a TYPE error instead: a driver cannot build an emit input
+-- without supplying this table.  A driver that has no decls (a hand-built
+-- `CProgram` test harness) passes `[]`, which is the pre-#1036 bare-head answer.
 -- ── #1047: the row also carries the INTERFACE IDENTITY ──────────────────────
 -- The `iface` field is a BARE NAME, and two unrelated modules may each declare an
 -- interface spelled the same way.  `implOrigin` (`frontend/ast.mdk`, stamped by
@@ -1403,13 +1429,6 @@ lowerImpls prog =
 -- on a program with no METHOD-name collision — is unchanged.  (⚠️ METHOD, not
 -- interface: the colliding interfaces' own names are irrelevant and may differ.)
 -- one row per DECLARED impl: (iface identity, iface, head tag, canonical impl key).
-ifaceImplHeadsRef : Ref (List (String, String, String, String))
-ifaceImplHeadsRef = Ref []
-
-export
-installIfaceImplHeads : List (String, String, String, String) -> Unit
-installIfaceImplHeads t = ifaceImplHeadsRef := t
-
 export
 ifaceImplHeadTable : List Decl -> List (String, String, String, String)
 ifaceImplHeadTable prog = flatMap ifaceImplHeadEntries prog
@@ -1645,18 +1664,18 @@ implSymTagOf collide method tag key =
 --     impl, so either match selects the same body and nothing is lost.
 --   * it observes the tag the backends are about to mint; it does not change the
 --     tag scheme.  Every collision-free program emits byte-identical IR and WAT.
---   * ⚠️ the WASM pass OVER-APPROXIMATES for native-only builds, deliberately.  This
---     seam is shared and carries no backend discriminator (`lowerProgramEmit` has
---     ~14 callers across `entries/`, the playground and `tools/snapshot`, none of
---     which pass a target), so a pair that collides ONLY in the 30-bit width — full
---     i64 hashes distinct — refuses `medaka build` as well, though native codegen
---     for it would have been correct.  Taken in the loud direction on purpose: the
---     alternative is a silent wrong dispatch under `--target wasm`, and the message
---     says which width collided so the refusal is not mistaken for a native defect.
---     Threading a target through those callers is the change that would narrow it,
---     and it is bigger than this guard.
-dictWitnessTagGuard : List Decl -> Unit
-dictWitnessTagGuard prog =
+--   * ⚠️ the WASM pass OVER-APPROXIMATES for a caller that cannot positively rule
+--     out wasm.  #1970 threads an `EmitTarget` discriminator through
+--     `lowerProgramEmit` and its callers: a caller passing `TargetNative` (an
+--     LLVM-only emit driver) skips this 30-bit pass entirely, so a pair that
+--     collides ONLY in the masked width — full i64 hashes distinct — now builds
+--     under `--target native`, where native codegen for it is correct.
+--     `TargetWasm` and `TargetBothUnknown` both still run this pass, unchanged: a
+--     target-agnostic caller (a shared debug probe, or a driver feeding one
+--     lowered `CProgram` to both backends) gets the SAME full-width check as
+--     before, because it cannot rule out wasm either.
+dictWitnessTagGuard : EmitTarget -> List Decl -> Unit
+dictWitnessTagGuard target prog =
   let implRows = flatMap dictRouteWordsOf prog
   -- the reserved `noneHeadTag` self-pair is seeded PER METHOD NAME that actually
   -- has a row, not once program-wide: a general instance's runtime dict header is
@@ -1665,11 +1684,14 @@ dictWitnessTagGuard prog =
   -- compared in.
   let sentinelRows = map (m => (m, noneHeadTag, noneHeadTag)) (distinctMethodNamesOf implRows omEmpty)
   let rows = dedupRouteWords (sentinelRows ++ implRows) omEmpty
-  -- native FIRST: a full-width `hashName` collision is also a `dictTag` collision
-  -- (masking cannot separate equal values), so reporting it in the i64 space names
-  -- the wider defect.  The 30-bit pass then catches what only the MASK conflates.
+  -- native FIRST, and ALWAYS: a full-width `hashName` collision is also a
+  -- `dictTag` collision (masking cannot separate equal values), so reporting it
+  -- in the i64 space names the wider defect regardless of target — this pass is
+  -- not the over-approximation and is never narrowed.
   let _ = checkDictTagsInjective nativeDictTagSpace hashName rows omEmpty
-  checkDictTagsInjective wasmDictTagSpace dictTag rows omEmpty
+  match target
+    TargetNative => ()
+    _ => checkDictTagsInjective wasmDictTagSpace dictTag rows omEmpty
 
 -- distinct method names appearing in a row list, first-arrival order — used only to
 -- scope the `noneHeadTag` sentinel per method (see `dictWitnessTagGuard`).
@@ -1689,7 +1711,7 @@ nativeDictTagSpace = "native (LLVM) i64 dict-witness word `hashName` -- BOTH bac
 -- the deliberate direction: a loud refusal on a rare program beats a silent wrong
 -- dispatch under `--target wasm`, and the fix (rename one type) clears both.
 wasmDictTagSpace : String
-wasmDictTagSpace = "wasm (WasmGC) 30-bit i31 dict tag `dictTag` (`hashName` masked to the low 30 bits) -- the full i64 tags are DISTINCT, so native codegen would be correct here and this refusal over-approximates; it is refused anyway because this seam serves both backends"
+wasmDictTagSpace = "wasm (WasmGC) 30-bit i31 dict tag `dictTag` (`hashName` masked to the low 30 bits) -- the full i64 tags are DISTINCT, so native codegen would be correct here; refused anyway because a wasm-target build cannot rule out this narrower width"
 
 -- every route word a dict witness for this impl can carry, paired with the impl's
 -- own identity (its canonical dispatch key, which is unique per declared impl) and
@@ -1770,8 +1792,8 @@ checkDictTagsInjective space hash ((m, w, owner)::rest) seen =
 -- falls back to first-match.  Not fixable here: `mdk_default_<method>_<tag>` has no
 -- interface component, so the two default bodies have one symbol between them.
 export
-ifaceIdsAtTag : String -> List String
-ifaceIdsAtTag tag = ifaceIdsAtTagGo tag !ifaceImplHeadsRef
+ifaceIdsAtTag : List (String, String, String, String) -> String -> List String
+ifaceIdsAtTag heads tag = ifaceIdsAtTagGo tag heads
 
 ifaceIdsAtTagGo : String -> List (String, String, String, String) -> List String
 ifaceIdsAtTagGo _ [] = []
@@ -1787,14 +1809,14 @@ ifaceIdsAtTagGo tag ((ifaceId, _, t, k)::rest)
 -- canonical full-type key — the same word `keyForSiteByIface` stamps into the
 -- caller's dict cell.
 export
-ifaceImplRouteKeys : String -> List String
-ifaceImplRouteKeys iface = ifaceRouteKeysGo iface !ifaceImplHeadsRef
+ifaceImplRouteKeys : List (String, String, String, String) -> String -> List String
+ifaceImplRouteKeys heads iface = ifaceRouteKeysGo heads iface heads
 
-ifaceRouteKeysGo : String -> List (String, String, String, String) -> List String
-ifaceRouteKeysGo _ [] = []
-ifaceRouteKeysGo iface ((_, i, tag, key)::rest)
-  | i == iface = declRouteKey tag key (ifaceDeclHeadUnique i tag) :: ifaceRouteKeysGo iface rest
-  | otherwise = ifaceRouteKeysGo iface rest
+ifaceRouteKeysGo : List (String, String, String, String) -> String -> List (String, String, String, String) -> List String
+ifaceRouteKeysGo _ _ [] = []
+ifaceRouteKeysGo heads iface ((_, i, tag, key)::rest)
+  | i == iface = declRouteKey tag key (ifaceDeclHeadUnique heads i tag) :: ifaceRouteKeysGo heads iface rest
+  | otherwise = ifaceRouteKeysGo heads iface rest
 
 declRouteKey : String -> String -> Bool -> String
 declRouteKey tag key unique = if unique then tag else key
@@ -1808,13 +1830,13 @@ declRouteKey tag key unique = if unique then tag else key
 -- collision verdicts on a cross-module program.  It now counts the graph-global
 -- `IE`, i.e. the same population.  The arithmetic still differs and that difference
 -- is pre-existing: this side counts DISTINCT canonical keys, that side counts rows.
--- An UNINSTALLED table answers True — the
--- pre-#1036 bare-head behaviour — so a driver that never lowered through
--- `lowerImpls` degrades to today's output rather than mis-keying.
+-- An EMPTY table answers True — the
+-- pre-#1036 bare-head behaviour — so a driver that supplies no decl-derived table
+-- degrades to today's output rather than mis-keying.
 export
-ifaceDeclHeadUnique : String -> String -> Bool
-ifaceDeclHeadUnique iface tag =
-  listLen (declKeysAtHead !ifaceImplHeadsRef iface tag []) <= 1
+ifaceDeclHeadUnique : List (String, String, String, String) -> String -> String -> Bool
+ifaceDeclHeadUnique heads iface tag =
+  listLen (declKeysAtHead heads iface tag []) <= 1
 
 declKeysAtHead : List (String, String, String, String) -> String -> String -> List String -> List String
 declKeysAtHead [] _ _ acc = acc

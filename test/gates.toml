@@ -463,6 +463,20 @@ corpus = []
 toolchain = ["wasm-tools", "node>=24"]
 
 [[gate]]
+name = "pds/test/atsyntax_vectors"
+area = "engines"
+shard = "gates_8"
+project = "pds"
+tiers = ["merge"]
+cost = "medium"
+kind = "exec"
+run = "pds/test/atsyntax_vectors.sh"
+oracles = []
+sources = ["pds/*"]
+corpus = []
+toolchain = []
+
+[[gate]]
 name = "pds/test/car_vectors"
 area = "engines"
 shard = "gates_8"
@@ -617,6 +631,20 @@ corpus = []
 toolchain = []
 
 [[gate]]
+name = "pds/test/lexjson_vectors"
+area = "engines"
+shard = "gates_3"
+project = "pds"
+tiers = ["merge"]
+cost = "medium"
+kind = "exec"
+run = "pds/test/lexjson_vectors.sh"
+oracles = []
+sources = ["pds/*"]
+corpus = []
+toolchain = []
+
+[[gate]]
 name = "pds/test/mst_vectors"
 area = "engines"
 shard = "gates_8"
@@ -653,6 +681,22 @@ tiers = ["merge"]
 cost = "medium"
 kind = "exec"
 run = "pds/test/protocol_all_engines.sh"
+oracles = []
+sources = ["pds/*"]
+corpus = []
+toolchain = ["wasm-tools", "node>=24"]
+
+[[gate]]
+name = "pds/test/read_routes_all_engines"
+area = "engines"
+shard = "gates_1"
+project = "pds"
+tiers = ["merge"]
+# Repository-free by construction (see the script header): no signing, so the
+# eval arm is seconds, not the >10-minute band #2181 removed from this project.
+cost = "medium"
+kind = "exec"
+run = "pds/test/read_routes_all_engines.sh"
 oracles = []
 sources = ["pds/*"]
 corpus = []
@@ -1465,7 +1509,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_check_batch"
 area = "types"
-shard = "gates_2"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1633,7 +1677,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_core_ir_prelude"
 area = "eval"
-shard = "gates_7"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1717,7 +1761,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_diagnostics"
 area = "types"
-shard = "gates_2"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1787,7 +1831,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_stdlib_conventions"
 area = "tools"
-shard = "gates_7"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1815,7 +1859,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_effect_hole"
 area = "infra"
-shard = "gates_7"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1907,6 +1951,20 @@ kind = "exec"
 run = "test/diff_compiler_eval_json.sh"
 oracles = []
 sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_eval_json.sh"]
+corpus = ["test/error_quality_fixtures"]
+toolchain = []
+
+[[gate]]
+name = "diff_compiler_error_quality_baseline"
+area = "diagnostics"
+shard = "gates_2"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+run = "test/diff_compiler_error_quality_baseline.sh"
+oracles = []
+sources = ["compiler/frontend/*", "compiler/types/*", "compiler/eval/*", "compiler/backend/*", "compiler/driver/diagnostics.mdk", "test/error_quality_fixtures/capture.sh", "test/diff_compiler_error_quality_baseline.sh"]
 corpus = ["test/error_quality_fixtures"]
 toolchain = []
 
@@ -2515,7 +2573,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_os_entropy"
 area = "infra"
-shard = "gates_2"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2641,7 +2699,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_project_enrolment"
 area = "soundness"
-shard = "gates_6"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2935,7 +2993,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_snapshot_frontend"
 area = "frontend"
-shard = "gates_8"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3422,6 +3480,46 @@ sources = ["playground", "playground/*"]
 corpus = ["test/engine_fixtures"]
 toolchain = ["wasm-tools", "node>=24"]
 
+# S4 (#2442, epic #2036 visitor-wait-time arm) — F6's two absolute-ceiling
+# instruments. Deterministic (assembled-tree file size, no box noise) so it
+# stays at merge tier; the flappy latency half lives in its own
+# nightly-tier gate below (diff_visitor_analyze_latency) per [G14] precedent.
+[[gate]]
+name = "wasm/diff_visitor_cost_bytes"
+area = "wasm"
+shard = "other-job"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+run = "test/wasm/diff_visitor_cost_bytes.sh"
+oracles = []
+sources = ["playground", "playground/*"]
+corpus = []
+toolchain = ["wasm-tools", "node>=24"]
+
+# S4 (#2442, epic #2036 visitor-wait-time arm) — the latency half of F6's
+# two instruments. NIGHTLY, not merge: the contract's §4 note measured the
+# SAME program's `compile` arm swinging 683-789ms (14%) across two
+# consecutive runs on this shared box with nothing else changing, so a
+# PR-blocking wall-clock ceiling would flap. Order-of-magnitude ceiling
+# (~20x measured min), not a percentage — precedent: [G14],
+# test/diff_compiler_perf_scaling.sh's own flappy-cost-belongs-in-nightly
+# call.
+[[gate]]
+name = "wasm/diff_visitor_analyze_latency"
+area = "wasm"
+shard = "other-job"
+project = "compiler"
+tiers = ["nightly"]
+cost = "cheap"
+kind = "exec"
+run = "test/wasm/diff_visitor_analyze_latency.sh"
+oracles = []
+sources = ["playground", "playground/*"]
+corpus = []
+toolchain = ["wasm-tools", "node>=24"]
+
 [[gate]]
 name = "wasm/diff_sqlite"
 area = "wasm"
@@ -3793,8 +3891,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_guide_render.sh"
 oracles = []
-sources = ["test/diff_compiler_guide_render.sh", "playground/render_docs.mjs", "playground/build_guide.sh", "playground/guide_render_test.mjs", "playground/vendor/marked/marked.js", "docs/guide/*.md"]
-corpus = ["docs/guide"]
+sources = ["test/diff_compiler_guide_render.sh", "playground/render_docs.mjs", "playground/build_guide.sh", "playground/build_stdlib_docs.sh", "playground/guide_render_test.mjs", "playground/vendor/marked/marked.js", "docs/guide/*.md", "docs/stdlib/*.md"]
+corpus = ["docs/guide", "docs/stdlib"]
 toolchain = ["node>=24"]
 
 # ── the `gates` matrix rows (S-1, #2177) ─────────────────────────────────────
@@ -3807,7 +3905,7 @@ name = "gates_1"
 full_cores = true
 wasm_arm = true
 rationale = "test/gate_shards/gates_1.txt"
-pinned_gates = ["pds/test/protocol_all_engines", "diff_compiler_engines", "diff_compiler_rejection_parity"]
+pinned_gates = ["pds/test/protocol_all_engines", "pds/test/read_routes_all_engines", "diff_compiler_engines", "diff_compiler_rejection_parity"]
 
 [[shard]]
 name = "gates_2"

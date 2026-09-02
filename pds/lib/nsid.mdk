@@ -101,14 +101,12 @@ validateNsidPrefix bytes end =
     else
       let lastDot = lastDotBefore bytes 0 end (-1)
       if lastDot <= 0 || lastDot >= end - 1 then Err NsidMalformed
-      else
-        if lastDot > 253 then Err NsidAuthorityTooLong
-        else do
-          segments <- validateAuthority bytes 0 lastDot 0 0
-          if segments < 2 then
-            Err NsidAuthorityNeedsTwoSegments
-          else
-            validateName bytes (lastDot + 1) end
+      else do
+        segments <- validateAuthority bytes 0 lastDot 0 0
+        if segments < 2 then
+          Err NsidAuthorityNeedsTwoSegments
+        else
+          validateName bytes (lastDot + 1) end
 
 -- | Validate a complete NSID string.
 export

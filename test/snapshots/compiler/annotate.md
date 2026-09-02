@@ -1,5 +1,5 @@
 # META
-source_lines=311
+source_lines=319
 stages=DESUGAR,MARK
 # SOURCE
 -- annotate.mdk — Lexical-addressing EMISSION pass (STAGE2-DESIGN §2.0).
@@ -280,13 +280,21 @@ annotateDecl (DLetGroup p binds) =
 -- to respell `ifaceOrigin`, and respelling it is how an acquired identity gets
 -- silently reset (the `substTyVars` shape #1219 found).
 --
--- ⚠️ `ifaceOrigin = _` is LOAD-BEARING and is not about identity.  A record
--- pattern matches by LABEL SET in the interpreter (`matchPat`'s `VRecord` arm,
--- `eval/eval.mdk`, discards the constructor) — and `methods` is a label `DImpl`
--- ALSO has, with its arm BELOW this one.  Naming only `methods` therefore makes
--- a `DImpl` take this arm under `medaka run` and the right arm under a built
--- binary, at exit 0 both ways.  `ifaceOrigin` is a label no sibling has, which is
--- the actual safety property.  See `frontend/ast.mdk`'s `Decl` comment and #1217.
+-- ⚠️ `ifaceOrigin = _` is DEFENSIVE STYLE, not a correctness requirement, and it
+-- is not about identity.  It used to be load-bearing: the interpreter's record
+-- match discarded the constructor, so naming only `methods` — a label `DImpl` ALSO
+-- has, with its arm BELOW this one — sent a `DImpl` to this arm under `medaka run`
+-- and to the right arm under a built binary, at exit 0 both ways.  That is fixed
+-- (#1217/#1462): `matchPat`'s `VRecord` arm in `eval/eval.mdk` now binds and
+-- compares the constructor first —
+--
+--     matchPat (PRec ctor fields _) (VRecord ctor2 recFields)
+--       | ctor == ctor2 = matchRecFields fields recFields
+--       | otherwise = None
+--
+-- so a `DImpl` cannot reach this arm regardless of which labels it names.  Naming
+-- `ifaceOrigin` still keeps the pattern legible; keep it for that reason.  See
+-- `frontend/ast.mdk`'s `Decl` comment for the full statement.
 annotateDecl (d@(DInterface { ifaceOrigin = _, methods })) =
   DInterface { d | methods = map annotateIfaceMethod methods }
 -- #1110: record UPDATE, so an acquired interface-occurrence identity survives.

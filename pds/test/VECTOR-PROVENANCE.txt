@@ -482,3 +482,161 @@ extraction:    pds/tools/gen_repo_corpus.sh copies the committed exact manifest 
 retrieved:     2026-08-28
 consumer:      P1-D-REPO (#2136 TID and signed version-3 repository commits)
 notes:         Five fixed TIDs plus empty init and create/update/create/delete commits pin record/MST/unsigned/signed/commit bytes and CIDs; the first-create and final CARs pin the generator's deterministic full-repo block order and bytes. The official-pds secondary pin supplies an independent installed @atproto/repo@0.10.10 plus @atproto/crypto@0.5.4 image-library reproduction of the @atproto/repo@0.10.12 npm answer key. No live PDS service or account was used.
+
+[vector]
+file:          pds/test/vectors/interop_aturi_valid.txt
+local-sha256:  ec268ffc5f5c006c87dfa46fe2be6835b65ab941b24b4a9b0d28d249a7459c80
+kind:          reference-impl
+impl:          official-atproto-repo
+source-url:    https://raw.githubusercontent.com/bluesky-social/atproto/4d2097ff37e0a7872444b845740f7cdcf2ace7f4/interop-test-files/syntax/aturi_syntax_valid.txt
+extraction:    committed byte-verbatim as fetched; curl -sS <url> | cmp - <file> reproduces it
+retrieved:     2026-09-01
+consumer:      P4-A-IDENTIFIER-SYNTAX (#2455 pds-phase4-record-api, valid aturi interop syntax cases)
+
+[vector]
+file:          pds/test/vectors/interop_aturi_invalid.txt
+local-sha256:  f57124a9e823c0941a960005c3d7a88a3f00c8eaf28c023d4f1f1ca2229ff727
+kind:          reference-impl
+impl:          official-atproto-repo
+source-url:    https://raw.githubusercontent.com/bluesky-social/atproto/4d2097ff37e0a7872444b845740f7cdcf2ace7f4/interop-test-files/syntax/aturi_syntax_invalid.txt
+extraction:    committed byte-verbatim as fetched; curl -sS <url> | cmp - <file> reproduces it
+retrieved:     2026-09-01
+consumer:      P4-A-IDENTIFIER-SYNTAX (#2455 pds-phase4-record-api, invalid aturi interop syntax cases)
+
+[vector]
+file:          pds/test/vectors/interop_atidentifier_valid.txt
+local-sha256:  a83a3267623bb3dbeb04529f3b06c3ab0279f070dcc15b128d710adcbb6815d7
+kind:          reference-impl
+impl:          official-atproto-repo
+source-url:    https://raw.githubusercontent.com/bluesky-social/atproto/4d2097ff37e0a7872444b845740f7cdcf2ace7f4/interop-test-files/syntax/atidentifier_syntax_valid.txt
+extraction:    committed byte-verbatim as fetched; curl -sS <url> | cmp - <file> reproduces it
+retrieved:     2026-09-01
+consumer:      P4-A-IDENTIFIER-SYNTAX (#2455 pds-phase4-record-api, valid atidentifier interop syntax cases)
+
+[vector]
+file:          pds/test/vectors/interop_atidentifier_invalid.txt
+local-sha256:  26014d5ffe87185bb4f915295c188366e6c068f07152ad1ea812ac4ea2428aeb
+kind:          reference-impl
+impl:          official-atproto-repo
+source-url:    https://raw.githubusercontent.com/bluesky-social/atproto/4d2097ff37e0a7872444b845740f7cdcf2ace7f4/interop-test-files/syntax/atidentifier_syntax_invalid.txt
+extraction:    committed byte-verbatim as fetched; curl -sS <url> | cmp - <file> reproduces it
+retrieved:     2026-09-01
+consumer:      P4-A-IDENTIFIER-SYNTAX (#2455 pds-phase4-record-api, invalid atidentifier interop syntax cases)
+
+[vector]
+file:          pds/test/vectors/interop_did_valid.txt
+local-sha256:  dea2bf95d29f2141efe2f9d4762e25033bac900c5600b19bbf4120ce1442b9e6
+kind:          reference-impl
+impl:          official-atproto-repo
+source-url:    https://raw.githubusercontent.com/bluesky-social/atproto/4d2097ff37e0a7872444b845740f7cdcf2ace7f4/interop-test-files/syntax/did_syntax_valid.txt
+extraction:    committed byte-verbatim as fetched; curl -sS <url> | cmp - <file> reproduces it
+retrieved:     2026-09-01
+consumer:      P4-A-IDENTIFIER-SYNTAX (#2455 pds-phase4-record-api, valid did interop syntax cases)
+
+[vector]
+file:          pds/test/vectors/interop_did_invalid.txt
+local-sha256:  98eeae969cb8d6adcc3ffcbf72b49773c57635cdd3b873c05af71bdfcbbdd25a
+kind:          reference-impl
+impl:          official-atproto-repo
+source-url:    https://raw.githubusercontent.com/bluesky-social/atproto/4d2097ff37e0a7872444b845740f7cdcf2ace7f4/interop-test-files/syntax/did_syntax_invalid.txt
+extraction:    committed byte-verbatim as fetched; curl -sS <url> | cmp - <file> reproduces it
+retrieved:     2026-09-01
+consumer:      P4-A-IDENTIFIER-SYNTAX (#2455 pds-phase4-record-api, invalid did interop syntax cases)
+
+[vector]
+file:          pds/test/vectors/interop_handle_valid.txt
+local-sha256:  6cff66b8dee405f9b516e49726f679e732beab3e275820a88ad53d0c114318cb
+kind:          reference-impl
+impl:          official-atproto-repo
+source-url:    https://raw.githubusercontent.com/bluesky-social/atproto/4d2097ff37e0a7872444b845740f7cdcf2ace7f4/interop-test-files/syntax/handle_syntax_valid.txt
+extraction:    committed byte-verbatim as fetched; curl -sS <url> | cmp - <file> reproduces it
+retrieved:     2026-09-01
+consumer:      P4-A-IDENTIFIER-SYNTAX (#2455 pds-phase4-record-api, valid handle interop syntax cases)
+
+[vector]
+file:          pds/test/vectors/interop_handle_invalid.txt
+local-sha256:  9069133ace3e34263ecd585c78a434bdc4558cb4115cb883255a2493a08a0d2f
+kind:          reference-impl
+impl:          official-atproto-repo
+source-url:    https://raw.githubusercontent.com/bluesky-social/atproto/4d2097ff37e0a7872444b845740f7cdcf2ace7f4/interop-test-files/syntax/handle_syntax_invalid.txt
+extraction:    committed byte-verbatim as fetched; curl -sS <url> | cmp - <file> reproduces it
+retrieved:     2026-09-01
+consumer:      P4-A-IDENTIFIER-SYNTAX (#2455 pds-phase4-record-api, invalid handle interop syntax cases)
+
+[vector]
+file:          pds/test/vectors/interop_nsid_valid.txt
+local-sha256:  ff2c80b7f95c37377272c724da9a5ecb9b9720e9f46e7cc9e939acc7639a21a6
+kind:          reference-impl
+impl:          official-atproto-repo
+source-url:    https://raw.githubusercontent.com/bluesky-social/atproto/4d2097ff37e0a7872444b845740f7cdcf2ace7f4/interop-test-files/syntax/nsid_syntax_valid.txt
+extraction:    committed byte-verbatim as fetched; curl -sS <url> | cmp - <file> reproduces it
+retrieved:     2026-09-01
+consumer:      P4-A-IDENTIFIER-SYNTAX (#2455 pds-phase4-record-api, valid nsid interop syntax cases)
+
+[vector]
+file:          pds/test/vectors/interop_nsid_invalid.txt
+local-sha256:  eec328b5342e38b1e070411146a14409e6bb91d0ecdc27d9d8ca668505159f42
+kind:          reference-impl
+impl:          official-atproto-repo
+source-url:    https://raw.githubusercontent.com/bluesky-social/atproto/4d2097ff37e0a7872444b845740f7cdcf2ace7f4/interop-test-files/syntax/nsid_syntax_invalid.txt
+extraction:    committed byte-verbatim as fetched; curl -sS <url> | cmp - <file> reproduces it
+retrieved:     2026-09-01
+consumer:      P4-A-IDENTIFIER-SYNTAX (#2455 pds-phase4-record-api, invalid nsid interop syntax cases)
+
+[vector]
+file:          pds/test/vectors/interop_recordkey_valid.txt
+local-sha256:  47c42d524964e5c90bdae69031d4f3ab5090df99944581c33511c684055c469e
+kind:          reference-impl
+impl:          official-atproto-repo
+source-url:    https://raw.githubusercontent.com/bluesky-social/atproto/4d2097ff37e0a7872444b845740f7cdcf2ace7f4/interop-test-files/syntax/recordkey_syntax_valid.txt
+extraction:    committed byte-verbatim as fetched; curl -sS <url> | cmp - <file> reproduces it
+retrieved:     2026-09-01
+consumer:      P4-A-IDENTIFIER-SYNTAX (#2455 pds-phase4-record-api, valid recordkey interop syntax cases)
+
+[vector]
+file:          pds/test/vectors/interop_recordkey_invalid.txt
+local-sha256:  ab813eb308bfef83d1a0c00f35f0610767c8a3489ba7d48618e94eb1f9d99aaa
+kind:          reference-impl
+impl:          official-atproto-repo
+source-url:    https://raw.githubusercontent.com/bluesky-social/atproto/4d2097ff37e0a7872444b845740f7cdcf2ace7f4/interop-test-files/syntax/recordkey_syntax_invalid.txt
+extraction:    committed byte-verbatim as fetched; curl -sS <url> | cmp - <file> reproduces it
+retrieved:     2026-09-01
+consumer:      P4-A-IDENTIFIER-SYNTAX (#2455 pds-phase4-record-api, invalid recordkey interop syntax cases)
+
+[vector]
+file:          pds/test/vectors/interop_tid_valid.txt
+local-sha256:  6f3cd96a91d8f16b3322cfe509bb05cc30112f74e9bff180939641d10272d53d
+kind:          reference-impl
+impl:          official-atproto-repo
+source-url:    https://raw.githubusercontent.com/bluesky-social/atproto/4d2097ff37e0a7872444b845740f7cdcf2ace7f4/interop-test-files/syntax/tid_syntax_valid.txt
+extraction:    committed byte-verbatim as fetched; curl -sS <url> | cmp - <file> reproduces it
+retrieved:     2026-09-01
+consumer:      P4-A-IDENTIFIER-SYNTAX (#2455 pds-phase4-record-api, valid tid interop syntax cases)
+
+[vector]
+file:          pds/test/vectors/interop_tid_invalid.txt
+local-sha256:  2b5b695ca9831be3fe96103a08f7ecea908daef76e93d446a9d289a6c367d30b
+kind:          reference-impl
+impl:          official-atproto-repo
+source-url:    https://raw.githubusercontent.com/bluesky-social/atproto/4d2097ff37e0a7872444b845740f7cdcf2ace7f4/interop-test-files/syntax/tid_syntax_invalid.txt
+extraction:    committed byte-verbatim as fetched; curl -sS <url> | cmp - <file> reproduces it
+retrieved:     2026-09-01
+consumer:      P4-A-IDENTIFIER-SYNTAX (#2455 pds-phase4-record-api, invalid tid interop syntax cases)
+
+[impl]
+id:            official-atproto-lex
+repo:          https://github.com/bluesky-social/atproto
+version:       @atproto/lex-json 0.1.6, @atproto/lex-data 0.1.7, @atproto/lex-cbor 0.1.6
+commit:        4d2097ff37e0a7872444b845740f7cdcf2ace7f4
+retrieved:     2026-09-01
+notes:         official TypeScript lexicon JSON<->IPLD conversion packages (packages/lex/lex-json, packages/lex/lex-data, packages/lex/lex-cbor in the atproto monorepo); reuses the same commit already pinned by the official-atproto-repo impl above (this is not a second authority for @atproto/repo — it pins three additional, separately-versioned packages published from the same monorepo state); the complete transitive graph and every registry integrity are pinned by pds/tools/atproto_reference/package-lock.json
+
+[vector]
+file:          pds/test/vectors/lexjson_reference_corpus.txt
+local-sha256:  32118d20a59fed781daa3be57c1c1a0bf7d081c728d144cbab5451edca7b2058
+kind:          reference-impl
+impl:          official-atproto-lex
+source-url:    https://registry.npmjs.org/@atproto/lex-json/-/lex-json-0.1.6.tgz
+extraction:    pds/tools/gen_lexjson_corpus.sh copies the committed exact manifest and lockfile into a fresh temp directory, runs npm ci --ignore-scripts, verifies @atproto/lex-json@0.1.6, @atproto/lex-data@0.1.7, and @atproto/lex-cbor@0.1.6, and runs gen_lexjson_corpus.mjs. The generator builds representative AT Protocol data-model values (null, bools, ints, negative ints, byte strings of several lengths, nested maps/arrays, raw and dag-cbor CID links, and a map mixing a byte string with a nested link), encodes each with @atproto/lex-cbor's canonical DAG-CBOR encoder and @atproto/lex-json's lexStringify, and self-verifies each row round-trips through the reference libraries' own decode/parse before emitting it.
+retrieved:     2026-09-01
+consumer:      P4-B-IPLD-JSON (#2455 pds-phase4-record-api, lexicon-JSON<->DAG-CBOR mapping)

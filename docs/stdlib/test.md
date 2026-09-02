@@ -1,10 +1,5 @@
 # test
 
-test.mdk — unit testing library.
-Import what you need: `import test.{expectEqual, expectTrue, …}`
-Run with: `medaka test your_file.mdk`
-See STDLIB.md for the division-of-labour between doctests / props / tests.
-
 ## `Expectation`
 
 ```
@@ -15,6 +10,8 @@ data Expectation
 
 The result of a single test expectation.
 
+Instances: `Eq`, `Debug`
+
 ## `pass`
 
 ```
@@ -22,9 +19,6 @@ pass : Expectation
 ```
 
 Always passes.
-
-
-*(doctest — run by `medaka test`)*
 
 ```medaka
 > pass
@@ -39,9 +33,6 @@ fail : String -> Expectation
 
 Fails with the given message.
 
-
-*(doctest — run by `medaka test`)*
-
 ```medaka
 > fail "not ready"
 Fail "not ready"
@@ -54,9 +45,6 @@ expectTrue : Bool -> Expectation
 ```
 
 Passes when the `Bool` is `True`.
-
-
-*(doctest — run by `medaka test`)*
 
 ```medaka
 > expectTrue True
@@ -73,9 +61,6 @@ expectFalse : Bool -> Expectation
 
 Passes when the `Bool` is `False`.
 
-
-*(doctest — run by `medaka test`)*
-
 ```medaka
 > expectFalse False
 Pass
@@ -86,13 +71,10 @@ Fail "expected False but got True"
 ## `expectEqual`
 
 ```
-expectEqual : a -> a -> Expectation
+expectEqual : (Eq a, Debug a) => a -> a -> Expectation
 ```
 
 Passes when the two values are equal.
-
-
-*(doctest — run by `medaka test`)*
 
 ```medaka
 > expectEqual 42 42
@@ -104,13 +86,10 @@ Fail "expected 1 but got 2"
 ## `expectNotEqual`
 
 ```
-expectNotEqual : a -> a -> Expectation
+expectNotEqual : (Eq a, Debug a) => a -> a -> Expectation
 ```
 
 Passes when the two values are not equal.
-
-
-*(doctest — run by `medaka test`)*
 
 ```medaka
 > expectNotEqual 1 2
@@ -122,13 +101,10 @@ Fail "expected values to differ but both were 1"
 ## `expectLessThan`
 
 ```
-expectLessThan : a -> a -> Expectation
+expectLessThan : (Ord a, Debug a) => a -> a -> Expectation
 ```
 
 Passes when `actual < expected`.
-
-
-*(doctest — run by `medaka test`)*
 
 ```medaka
 > expectLessThan 10 3
@@ -140,13 +116,10 @@ Fail "expected 15 < 10"
 ## `expectGreaterThan`
 
 ```
-expectGreaterThan : a -> a -> Expectation
+expectGreaterThan : (Ord a, Debug a) => a -> a -> Expectation
 ```
 
 Passes when `actual > expected`.
-
-
-*(doctest — run by `medaka test`)*
 
 ```medaka
 > expectGreaterThan 0 5
@@ -164,9 +137,6 @@ expectAll : List Expectation -> Expectation
 Combine a list of expectations: passes only when all of them pass.
 The first `Fail` is returned immediately.
 
-
-*(doctest — run by `medaka test`)*
-
 ```medaka
 > expectAll [Pass, Pass, Pass]
 Pass
@@ -182,4 +152,6 @@ runTests : List (String, Unit -> Expectation) -> <IO> Bool
 
 Run a list of `(name, thunk)` test pairs.  Prints each result and a
 final summary; returns `True` when all tests pass.
+
+## Instances
 

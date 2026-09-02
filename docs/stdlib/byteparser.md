@@ -11,9 +11,8 @@ A `ByteParser a` wraps a function from (byte array + position) to a
 (message + position).  Position threading is EXPLICIT — there is no hidden
 state monad; every primitive returns the position it consumed up to.
 
-The type is given `DeferredMappable` / `DeferredApplicative` /
-`DeferredThenable` instances so that
-`defer`-notation sequences parsers, and a plain `orElse`/`noMatch` pair whose
+The type is given `Mappable` / `Applicative` / `Thenable` instances so that
+`do`-notation sequences parsers, and an `Alternative` instance whose
 `orElse` is LEFT-BIASED with FULL BACKTRACKING: `orElse p q` tries `p` at
 the current position; if `p` fails it runs `q` at the SAME position (the
 input is immutable and we never mutate the position on failure, so
@@ -41,44 +40,26 @@ Parse result: success carries the value and the position just past what
   pattern-match `BOk`/`BErr` directly when they need byte-precise position
   control beyond what the monadic combinators give.
 
-## `ByteParserE`
-
-```
-data ByteParserE (e : Effect) a
-  = ByteParserE (Array Int -> Int -> <e> BResult a)
-```
-
-A byte-level parser is a function from (byte array, position) to BResult.
-  It STORES that function rather than running it, so the type indexes the
-  container by the row the stored arrow performs (`Deferred*`, core.mdk /
-  #825).  Charging a callback's row on the combinator's own arrow — what the
-  plain `Mappable`/`Applicative`/`Thenable` family does — would force the
-  stored arrow pure and run an effectful callback inside a value typed `<>`.
-  Decoding bytes performs nothing, so the exported `ByteParser a` alias pins
-  the index to `<>` and every existing signature keeps its meaning.
+Instances: [`Mappable`](#mappable-bresult)
 
 ## `ByteParser`
 
 ```
-type ByteParser a = ByteParserE <> a
+data ByteParser a
+  = ByteParser (Array Int -> Int -> BResult a)
 ```
+
+A byte-level parser is a function from (byte array, position) to BResult.
+
+Instances: `Mappable`, `Applicative`, `Thenable`, [`Alternative`](#alternative-byteparser)
 
 ## `runBP`
 
 ```
-runBP : ByteParserE a b -> Array Int -> Int -> BResult b
+runBP : ByteParser a -> Array Int -> Int -> BResult a
 ```
 
 Run the wrapped function directly.
-
-## `Mappable BResult`
-
-```
-impl Mappable BResult
-```
-
-Mappable instance for BResult: map over the success value; pass errors
-  through unchanged.  Higher-kinded impl uses the BARE head `BResult`.
 
 ## `onOk`
 
@@ -92,46 +73,10 @@ Position-threading bind for BResult.  On success, passes the value and
   Lets callers chain position-threading steps without repeating the
   `BErr m ep => BErr m ep` pass-through boilerplate.
 
-## `DeferredMappable ByteParserE`
-
-```
-impl DeferredMappable ByteParserE
-```
-
-## `DeferredApplicative ByteParserE`
-
-```
-impl DeferredApplicative ByteParserE
-```
-
-## `DeferredThenable ByteParserE`
-
-```
-impl DeferredThenable ByteParserE
-```
-
-## `noMatch`
-
-```
-noMatch : ByteParserE a b
-```
-
-Left-biased, full-backtracking alternative.  Plain functions rather than an
-  `Alternative` impl: that interface `requires Applicative f` at kind
-  `Type -> Type`, which `ByteParserE : Effect -> Type -> Type` cannot satisfy.
-  `noMatch` always fails; `orElse p q` tries `p`, and on failure re-runs
-  `q` from the ORIGINAL position.
-
-## `orElse`
-
-```
-orElse : ByteParserE a b -> ByteParserE a b -> ByteParserE a b
-```
-
 ## `failWith`
 
 ```
-failWith : String -> ByteParserE <> a
+failWith : String -> ByteParser a
 ```
 
 Fail unconditionally with a message.
@@ -139,13 +84,10 @@ Fail unconditionally with a message.
 ## `satisfy`
 
 ```
-satisfy : (Int -> Bool) -> ByteParserE <> Int
+satisfy : (Int -> Bool) -> ByteParser Int
 ```
 
 Consume one byte if it satisfies the predicate.
-
-
-*(doctest — run by `medaka test`)*
 
 ```medaka
 > runByteParser (satisfy (b => b == 65)) (arrayFromList [65, 66, 67])
@@ -157,13 +99,10 @@ Err "unexpected byte at byte 0"
 ## `anyByte`
 
 ```
-anyByte : ByteParserE <> Int
+anyByte : ByteParser Int
 ```
 
 Consume any single byte.
-
-
-*(doctest — run by `medaka test`)*
 
 ```medaka
 > runByteParser anyByte (arrayFromList [42])
@@ -173,13 +112,10 @@ Ok 42
 ## `byte`
 
 ```
-byte : Int -> ByteParserE <> Int
+byte : Int -> ByteParser Int
 ```
 
 Consume exactly the given byte value.
-
-
-*(doctest — run by `medaka test`)*
 
 ```medaka
 > runByteParser (byte 0xFF) (arrayFromList [255, 0])
@@ -191,13 +127,10 @@ Err "unexpected byte at byte 0"
 ## `eof`
 
 ```
-eof : ByteParserE <> Unit
+eof : ByteParser Unit
 ```
 
 Match the end of input.  Yields Unit; consumes nothing.
-
-
-*(doctest — run by `medaka test`)*
 
 ```medaka
 > runByteParser eof (arrayFromList [])
@@ -209,7 +142,7 @@ Err "expected end of input at byte 0"
 ## `peek`
 
 ```
-peek : ByteParserE <> Int
+peek : ByteParser Int
 ```
 
 Peek at the current byte without consuming it.
@@ -217,14 +150,11 @@ Peek at the current byte without consuming it.
 ## `many`
 
 ```
-many : ByteParserE <> a -> ByteParserE <> (List a)
+many : ByteParser a -> ByteParser (List a)
 ```
 
 Zero-or-more.  Uses explicit position threading (a loop), since `many`
   of a parser that consumes nothing must terminate.
-
-
-*(doctest — run by `medaka test`)*
 
 ```medaka
 > runByteParser (many (byte 1)) (arrayFromList [1, 1, 1, 2])
@@ -234,13 +164,10 @@ Ok [1, 1, 1]
 ## `some`
 
 ```
-some : ByteParserE <> a -> ByteParserE <> (List a)
+some : ByteParser a -> ByteParser (List a)
 ```
 
 One-or-more.
-
-
-*(doctest — run by `medaka test`)*
 
 ```medaka
 > runByteParser (some (byte 2)) (arrayFromList [2, 2, 3])
@@ -252,7 +179,7 @@ Err "unexpected byte at byte 0"
 ## `sepBy1`
 
 ```
-sepBy1 : ByteParserE <> a -> ByteParserE <> b -> ByteParserE <> (List a)
+sepBy1 : ByteParser a -> ByteParser b -> ByteParser (List a)
 ```
 
 One-or-more `p` separated by `sep`.
@@ -260,7 +187,7 @@ One-or-more `p` separated by `sep`.
 ## `sepBy`
 
 ```
-sepBy : ByteParserE <> a -> ByteParserE <> b -> ByteParserE <> (List a)
+sepBy : ByteParser a -> ByteParser b -> ByteParser (List a)
 ```
 
 Zero-or-more `p` separated by `sep`.
@@ -268,13 +195,10 @@ Zero-or-more `p` separated by `sep`.
 ## `optional`
 
 ```
-optional : ByteParserE <> a -> ByteParserE <> (Option a)
+optional : ByteParser a -> ByteParser (Option a)
 ```
 
 Try `p`; produce `Some` on success, `None` (consuming nothing) on failure.
-
-
-*(doctest — run by `medaka test`)*
 
 ```medaka
 > runByteParser (optional (byte 5)) (arrayFromList [5])
@@ -286,7 +210,7 @@ Ok None
 ## `between`
 
 ```
-between : ByteParserE <> a -> ByteParserE <> b -> ByteParserE <> c -> ByteParserE <> c
+between : ByteParser open -> ByteParser close -> ByteParser a -> ByteParser a
 ```
 
 `between open close p` parses `open`, then `p`, then `close`, yielding `p`.
@@ -294,7 +218,7 @@ between : ByteParserE <> a -> ByteParserE <> b -> ByteParserE <> c -> ByteParser
 ## `choice`
 
 ```
-choice : List (ByteParserE <> a) -> ByteParserE <> a
+choice : List (ByteParser a) -> ByteParser a
 ```
 
 First successful parser in the list; fails if all fail.
@@ -302,28 +226,22 @@ First successful parser in the list; fails if all fail.
 ## `chainl1`
 
 ```
-chainl1 : ByteParserE <> a -> ByteParserE <> (a -> a -> a) -> ByteParserE <> a
+chainl1 : ByteParser a -> ByteParser (a -> a -> a) -> ByteParser a
 ```
 
 Left-associative chaining of `p` separated by operator parser `op`
   whose value is a binary function.
-Structurally identical to compiler/frontend/parser.mdk's chainl1.  Both
-containers are `DeferredThenable` now, but the loop tail also needs `orElse`,
-which each provides as a plain function rather than through a shared
-interface (`Alternative` requires `Applicative` at kind `Type -> Type`, which
-an `Effect`-indexed container cannot satisfy) — so a single generic version
-still has nothing to abstract over.
+Structurally identical to compiler/frontend/parser.mdk's chainl1, but over
+a different parser type (ByteParser vs token Parser) — not soundly
+shareable without a generic Monad/Alternative abstraction.
 
 ## `takeBytes`
 
 ```
-takeBytes : Int -> ByteParserE <> (List Int)
+takeBytes : Int -> ByteParser (List Int)
 ```
 
 Read exactly N bytes, returning them as a List Int.
-
-
-*(doctest — run by `medaka test`)*
 
 ```medaka
 > runByteParser (takeBytes 3) (arrayFromList [10, 20, 30, 40])
@@ -333,7 +251,7 @@ Ok [10, 20, 30]
 ## `takeSlice`
 
 ```
-takeSlice : Int -> ByteParserE <> (Array Int)
+takeSlice : Int -> ByteParser (Array Int)
 ```
 
 Read exactly N bytes, returning them as an Array Int slice.
@@ -341,14 +259,12 @@ Read exactly N bytes, returning them as an Array Int slice.
 ## `beUint`
 
 ```
-beUint : Int -> ByteParserE <> Int
+beUint : Int -> ByteParser Int
 ```
 
 Read a big-endian unsigned integer of exactly N bytes (N in 1..8).
 
 Examples (big-endian 2-byte: [0x01, 0x02] → 258):
-
-*(doctest — run by `medaka test`)*
 
 ```medaka
 > runByteParser (beUint 2) (arrayFromList [1, 2])
@@ -362,7 +278,7 @@ Ok 256
 ## `beSint`
 
 ```
-beSint : Int -> ByteParserE <> Int
+beSint : Int -> ByteParser Int
 ```
 
 Read a big-endian SIGNED integer of exactly N bytes (N in 1..8),
@@ -370,9 +286,6 @@ Read a big-endian SIGNED integer of exactly N bytes (N in 1..8),
 
 The sign bit is the MSB of the first byte.  For an N-byte integer the sign
 threshold is 128 * 256^(N-1) = 2^(8*N-1).
-
-
-*(doctest — run by `medaka test`)*
 
 ```medaka
 > runByteParser (beSint 1) (arrayFromList [255])
@@ -388,15 +301,12 @@ Ok 1
 ## `beFloat64`
 
 ```
-beFloat64 : ByteParserE <> Float
+beFloat64 : ByteParser Float
 ```
 
 Read a 64-bit IEEE 754 big-endian float as a Medaka Float.
 Consumes exactly 8 bytes in big-endian order and reinterprets their bit
 pattern as an IEEE 754 double via `bytesToFloat64`.
-
-
-*(doctest — run by `medaka test`)*
 
 ```medaka
 > runByteParser beFloat64 (arrayFromList [63, 248, 0, 0, 0, 0, 0, 0])
@@ -408,15 +318,13 @@ Ok -2.0
 ## `leUint`
 
 ```
-leUint : Int -> ByteParserE <> Int
+leUint : Int -> ByteParser Int
 ```
 
 Read a little-endian unsigned integer of exactly N bytes (N in 1..8).
   Least-significant byte first (mirror of `beUint`).
 
 Examples (little-endian 2-byte: [0x02, 0x01] → 258):
-
-*(doctest — run by `medaka test`)*
 
 ```medaka
 > runByteParser (leUint 2) (arrayFromList [2, 1])
@@ -430,15 +338,12 @@ Ok 256
 ## `leSint`
 
 ```
-leSint : Int -> ByteParserE <> Int
+leSint : Int -> ByteParser Int
 ```
 
 Read a little-endian SIGNED integer of exactly N bytes (N in 1..8),
   two's-complement.  Mirror of `beSint`: least-significant byte first,
   with the sign bit in the MSB of the LAST byte.
-
-
-*(doctest — run by `medaka test`)*
 
 ```medaka
 > runByteParser (leSint 1) (arrayFromList [255])
@@ -454,16 +359,13 @@ Ok 1
 ## `leFloat64`
 
 ```
-leFloat64 : ByteParserE <> Float
+leFloat64 : ByteParser Float
 ```
 
 Read a 64-bit IEEE 754 little-endian float as a Medaka Float.
   Consumes exactly 8 bytes in little-endian order; reverses them before
   reinterpreting the bit pattern via `bytesToFloat64` (which expects
   big-endian byte order).
-
-
-*(doctest — run by `medaka test`)*
 
 ```medaka
 > runByteParser leFloat64 (arrayFromList [0, 0, 0, 0, 0, 0, 248, 63])
@@ -475,14 +377,11 @@ Ok -2.0
 ## `runByteParser`
 
 ```
-runByteParser : ByteParserE <> a -> Array Int -> Result String a
+runByteParser : ByteParser a -> Array Int -> Result String a
 ```
 
 Run a `ByteParser` over the full byte array starting at position 0.
   Reports the success value or a positioned error message.
-
-
-*(doctest — run by `medaka test`)*
 
 ```medaka
 > runByteParser (byte 42) (arrayFromList [42])
@@ -490,4 +389,25 @@ Ok 42
 > runByteParser (byte 42) (arrayFromList [7])
 Err "unexpected byte at byte 0"
 ```
+
+## Instances
+
+### `Mappable BResult`
+
+```
+impl Mappable BResult
+```
+
+Mappable instance for BResult: map over the success value; pass errors
+  through unchanged.  Higher-kinded impl uses the BARE head `BResult`.
+
+### `Alternative ByteParser`
+
+```
+impl Alternative ByteParser
+```
+
+Left-biased, full-backtracking alternative.
+  `noMatch` always fails; `orElse p q` tries `p`, and on failure re-runs
+  `q` from the ORIGINAL position.
 

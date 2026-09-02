@@ -1,4 +1,4 @@
--- Self-hosted exhaust stage — Stage 4 port of `lib/exhaust.ml`'s standalone
+-- Self-hosted exhaust stage — standalone
 -- `check_guard_exhaustiveness` (Phase 91(2)).  Runs on the RAW (pre-desugar)
 -- AST — function/where guards are still `EGuards` nodes — and warns when a
 -- multi-clause group's guards may fall through with nothing guaranteed to
@@ -657,7 +657,7 @@ recFieldIrrefutable (RecPatField _ _ None) = True
 recFieldIrrefutable (RecPatField _ _ (Some p)) = isIrrefutablePat p
 
 boolAlwaysTrue : Expr -> Bool
--- strip ELoc (mirror of lib/exhaust.ml's `strip_eloc`): guard conditions arrive
+-- strip ELoc: guard conditions arrive
 -- wrapped from the parser, so `otherwise`/`True` must be matched through it.
 boolAlwaysTrue (ELoc _ e) = boolAlwaysTrue e
 boolAlwaysTrue (EDoOrigin _ e) = boolAlwaysTrue e

@@ -1,29 +1,20 @@
 # core
 
-core.mdk — the foundation every other Medaka module rests on.
+The prelude: the types, interfaces, and functions every Medaka program
+can use without an import.
 
-This file is automatically loaded as the implicit prelude by the native
-compiler pipeline (stdlib/runtime.mdk + stdlib/core.mdk, read from
-MEDAKA_ROOT at startup), so everything declared here is in scope without
-an `import`.  See STDLIB.md for the full plan and Module 1 checklist.
+This module defines `Option`, `Result`, and `Ordering`; the interface
+hierarchy (`Eq`, `Ord`, `Semigroup`, `Monoid`, `Debug`, `Display`,
+`Hashable`, `Num`, `Bounded`, `Mappable`, `Applicative`, `Thenable`,
+`Alternative`, `Bimappable`, `Foldable`, `Filterable`, `Traversable`,
+`Index`, `Slice`, `FromEntries`) with instances for the built-in types;
+and the standalone helpers for booleans, options, results, and functions.
+The container-specific operations live in their own modules (`list`,
+`array`, `map`, and so on).
 
-Layout:
-1. Foundational data types (Ordering, Option, Result)
-2. Interface hierarchy in dependency order:
-Eq → Ord, Semigroup → Monoid, Debug, Num, Bounded,
-Mappable → Applicative → Thenable, Foldable
-Each interface is followed by its impls for built-in types.
-3. Standalone helpers (Bool, Option, Result, Foldable, utility)
-4. Arbitrary (property-testing generator interface)
+## Data types
 
-Style notes:
-* Strict evaluation: prefer tail-recursive helpers in `where` clauses
-over right-leaning recursion when traversing potentially-large data.
-* `default` on an impl is only required when more than one impl is
-visible for the same head; we mark the `Result e` instances `default`
-so a user can later add an `Err`-mapping variant.
-
-## `Ordering`
+### `Ordering`
 
 ```
 data Ordering
@@ -32,9 +23,11 @@ data Ordering
   | Gt
 ```
 
-Three-way comparison result, produced by `Ord.compare`.
+The result of a three-way comparison, produced by `compare`.
 
-## `Option`
+Instances: `Debug`, `Eq`, `Ord`, `Display`, `Hashable`
+
+### `Option`
 
 ```
 data Option a
@@ -42,10 +35,7 @@ data Option a
   | None
 ```
 
-A value that may be absent.  Medaka's name for Haskell's `Maybe`.
-
-
-*(doctest — run by `medaka test`)*
+A value that may be absent.
 
 ```medaka
 > isSome (Some 1)
@@ -54,7 +44,9 @@ True
 False
 ```
 
-## `Result`
+Instances: `Eq`, [`Ord`](#ord-option-a), `Debug`, `Display`, `Hashable`, `Mappable`, `Applicative`, `Thenable`, `Alternative`, `Foldable`, `Traversable`, [`Arbitrary`](#arbitrary-option-a)
+
+### `Result`
 
 ```
 data Result e a
@@ -63,10 +55,9 @@ data Result e a
 ```
 
 A computation that either succeeded with `Ok a` or failed with `Err e`.
-Errors are data; pattern-match to handle them.  See language-design.md.
 
-
-*(doctest — run by `medaka test`)*
+Errors are ordinary values. Pattern-match to handle them, or use the
+`Thenable` instance and `do` notation to sequence steps that may fail.
 
 ```medaka
 > isOk (Ok 1)
@@ -75,116 +66,56 @@ True
 False
 ```
 
-## `Eq`
+Instances: `Eq`, [`Ord`](#ord-result-e-a), `Debug`, `Display`, `Hashable`, `Mappable`, `Applicative`, `Thenable`, `Bimappable`, `Foldable`, `Traversable`
+
+## Equality and ordering
+
+### `Eq`
 
 ```
 interface Eq a
   eq : a -> a -> Bool
 ```
 
-Structural equality.  Reflexive, symmetric, transitive.
-`==` on primitives is a builtin and does *not* dispatch through this
-interface; the impls below exist so generic `Eq a => ...` code works.
+Equality.
 
-## `neq`
+`eq` must be reflexive, symmetric, and transitive. The `==` operator on
+the primitive types is built in and does not go through this interface;
+the instances here are what let generic `Eq a =>` code work.
 
-```
-neq : a -> a -> Bool
-```
-
-Negation of `eq`.  Standalone so impls cannot make it disagree with `eq`.
-
-## `Eq Int`
+### `neq`
 
 ```
-impl Eq Int
+neq : Eq a => a -> a -> Bool
 ```
 
-## `Eq Float`
+The negation of `eq`.
 
-```
-impl Eq Float
-```
-
-## `Eq Bool`
-
-```
-impl Eq Bool
-```
-
-## `Eq Char`
-
-```
-impl Eq Char
-```
-
-## `Eq Unit`
-
-```
-impl Eq Unit
-```
-
-## `Eq (Option a)`
-
-```
-impl Eq (Option a) requires Eq a
-```
-
-## `Eq (Result e a)`
-
-```
-impl Eq (Result e a) requires Eq e, Eq a
-```
-
-## `Eq (a, b)`
-
-```
-impl Eq (a, b) requires Eq a, Eq b
-```
-
-Structural equality for tuples (arities 2–5): equal iff every field is.
-
-## `Eq (a, b, c)`
-
-```
-impl Eq (a, b, c) requires Eq a, Eq b, Eq c
-```
-
-## `Eq (a, b, c, d)`
-
-```
-impl Eq (a, b, c, d) requires Eq a, Eq b, Eq c, Eq d
-```
-
-## `Eq (a, b, c, d, e)`
-
-```
-impl Eq (a, b, c, d, e) requires Eq a, Eq b, Eq c, Eq d, Eq e
-```
-
-## `Semigroup`
+### `Semigroup`
 
 ```
 interface Semigroup a
   append : a -> a -> a
 ```
 
-Associative combine.  Backs the `++` operator and is the parent of
-`Monoid`.  Implementations *must* satisfy
-append a (append b c) == append (append a b) c.
+Types with an associative combining operation.
 
-## `Monoid`
+`append` backs the `++` operator. It must be associative:
+`append a (append b c)` equals `append (append a b) c`.
+
+### `Monoid`
 
 ```
 interface Monoid a
   empty : a
 ```
 
-A `Semigroup` with an identity element.  Laws:
-append empty x == x       (left identity)
-append x empty == x       (right identity)
+A `Semigroup` with an identity element.
 
-## `Ord`
+`empty` must be a left and right identity for `append`:
+`append empty x` and `append x empty` both equal `x`.
+
+### `Ord`
 
 ```
 interface Ord a
@@ -203,471 +134,103 @@ interface Ord a
   max : _
 ```
 
-Total ordering.  `compare` is the primitive method; the comparison
-helpers all have defaults expressed through it, but impls may override
-any of them for performance or to encode special semantics (e.g. NaN).
+Types with a total order.
 
-## `clamp`
+`compare` is the only method an instance must define. The comparison
+helpers `lt`, `gt`, `lte`, `gte`, `min`, and `max` default to definitions
+in terms of `compare`, and an instance may override them.
+
+### `clamp`
 
 ```
-clamp : a -> a -> a -> a
+clamp : Ord a => a -> a -> a -> a
 ```
 
-`clamp lo hi x` constrains `x` into the inclusive interval `[lo, hi]`.
-Precondition: `lo <= hi`; otherwise the result is `lo`.
+`x` limited to the inclusive range `[lo, hi]`.
 
-
-*(doctest — run by `medaka test`)*
+Requires `lo <= hi`; otherwise the result is `lo`.
 
 ```medaka
 > clamp 0 10 5
 5
-> clamp 0 10 (-3)
-0
 > clamp 0 10 99
 10
 ```
 
-## `isEven`
+## Rendering
 
-```
-isEven : Int -> Bool
-```
-
-`isEven n` is `True` when `n` is divisible by 2 (negatives included).
-
-
-*(doctest — run by `medaka test`)*
-
-```medaka
-> isEven 4
-True
-> isEven 7
-False
-```
-
-## `isOdd`
-
-```
-isOdd : Int -> Bool
-```
-
-`isOdd n` is `True` when `n` is not divisible by 2.
-
-
-*(doctest — run by `medaka test`)*
-
-```medaka
-> isOdd 3
-True
-> isOdd 8
-False
-```
-
-## `Ord Int`
-
-```
-impl Ord Int
-```
-
-## `Ord Float`
-
-```
-impl Ord Float
-```
-
-`Ord Float` is IEEE-754 **totalOrder** (issue #360):
-
-−NaN < −inf < … < −0.0 < +0.0 < … < +inf < +NaN
-
-so `compare`, `min`/`max` and therefore `sort` are deterministic on NaN data
-and never crash.  The previous `if a < b … else Eq` shape returned `Eq` for
-`compare nan x` at EVERY `x`, which is not a total order at all: it broke
-transitivity (`nan Eq 1.0` and `nan Eq 3.0`, yet `1.0 /= 3.0`), so a sorted
-result was only an accident of the algorithm.
-
-Deliberate divergence: `compare x y == Eq` coincides with `x == y` for every
-non-NaN value — in particular `compare (−0.0) (+0.0) = Eq`, matching
-`-0.0 == 0.0` (issue #758): the equal-branch normalises the zero sign away
-rather than tie-breaking it.  NaN is the SOLE residual: `compare nan nan = Eq`
-while `nan == nan = False`, because IEEE `==` is non-reflexive at NaN and no
-total order can be — the trade Rust's `f64::total_cmp` and Java's
-`Double.compare` make too.
-
-⚠️  The four relational overrides below are LOAD-BEARING, do not delete them.
-`< <= > >=` at Float are primitive IEEE predicates on every path, and all
-four are False at a NaN operand (EMITTER-SEMANTICS N5, issue #305).  Ord's
-interface DEFAULTS derive them from `compare`, so without these overrides the
-Float dict would hand them totalOrder and silently make `nan < 1.0` True —
-re-opening the S0 that #305 closed.  `min`/`max` keep their compare-derived
-defaults on purpose: they are not IEEE predicates, and #360 asks for them to
-be total.
-(guards are not accepted in an impl method body — hence the `if` chain)
-
-## `Ord Char`
-
-```
-impl Ord Char
-```
-
-## `Ord (a, b)`
-
-```
-impl Ord (a, b) requires Ord a, Ord b
-```
-
-Lexicographic ordering for tuples (arities 2–5): compare field by field,
-left to right, stopping at the first that differs.
-
-## `Ord (a, b, c)`
-
-```
-impl Ord (a, b, c) requires Ord a, Ord b, Ord c
-```
-
-## `Ord (a, b, c, d)`
-
-```
-impl Ord (a, b, c, d) requires Ord a, Ord b, Ord c, Ord d
-```
-
-## `Ord (a, b, c, d, e)`
-
-```
-impl Ord (a, b, c, d, e) requires Ord a, Ord b, Ord c, Ord d, Ord e
-```
-
-## `Ord (Option a)`
-
-```
-impl Ord (Option a) requires Ord a
-```
-
-`None` sorts before every `Some`; two `Some`s compare by their contents.
-
-## `Ord (Result e a)`
-
-```
-impl Ord (Result e a) requires Ord e, Ord a
-```
-
-`Err` sorts before `Ok`; like constructors compare by their payloads.
-
-## `Debug`
+### `Debug`
 
 ```
 interface Debug a
   debug : a -> String
 ```
 
-Human-readable string rendering.  Backs `medaka test` doctests, which
-compare a result's `debug` against the expected text (GHCi/doctest parity).
-`Debug Int`/`Float`/`Bool`/`Unit`/`List`/`Option`/`Result` and the tuple
-impls live here; `Debug String`/`Debug Char` live in `string.mdk`.
-Numeric/Bool `debug` matches the interpreter's `pp_value` (so it agrees with
-`println`); `String`/`Char` render *quoted* (round-trippable, so `debug`
-intentionally differs from `println` — cf. Haskell `debug` vs `putStr`).
+Types with a developer-facing text rendering.
 
-## `Debug Int`
+`debug` renders a value as Medaka source: strings and characters are
+quoted and escaped, constructors are shown by name, and lists, arrays,
+and tuples use their literal syntax. `medaka test` compares a doctest's
+result against its expected text with `debug`. `Display` is the
+user-facing counterpart, which leaves strings unquoted.
 
-```
-impl Debug Int
-```
-
-## `Debug Float`
-
-```
-impl Debug Float
-```
-
-## `Debug Bool`
-
-```
-impl Debug Bool
-```
-
-## `Debug Unit`
-
-```
-impl Debug Unit
-```
-
-## `Debug Ordering`
-
-```
-impl Debug Ordering
-```
-
-## `Eq Ordering`
-
-```
-impl Eq Ordering
-```
-
-Eq/Ord for Ordering are HAND-WRITTEN (not `deriving`): the `Eq` data
-CONSTRUCTOR collides with the `Eq` class name, so `deriving (Eq)` is
-ambiguous.  Without these, `o == Lt` check-accepts and `run`s but `build`
-FAILS (no Ord/Eq Ordering binary).  Rank Lt < Eq < Gt.
-
-## `Ord Ordering`
-
-```
-impl Ord Ordering
-```
-
-## `Debug Char`
-
-```
-impl Debug Char
-```
-
-## `Debug (Option a)`
-
-```
-impl Debug (Option a) requires Debug a
-```
-
-## `Debug (Result e a)`
-
-```
-impl Debug (Result e a) requires Debug e, Debug a
-```
-
-## `Debug (a, b)`
-
-```
-impl Debug (a, b) requires Debug a, Debug b
-```
-
-Tuple rendering (arities 2–5): `(a, b)`, matching the interpreter's
-value printer.
-
-## `Debug (a, b, c)`
-
-```
-impl Debug (a, b, c) requires Debug a, Debug b, Debug c
-```
-
-## `Debug (a, b, c, d)`
-
-```
-impl Debug (a, b, c, d) requires Debug a, Debug b, Debug c, Debug d
-```
-
-## `Debug (a, b, c, d, e)`
-
-```
-impl Debug (a, b, c, d, e) requires Debug a, Debug b, Debug c, Debug d, Debug e
-```
-
-## `Display`
+### `Display`
 
 ```
 interface Display a
   display : a -> String
 ```
 
-Display rendering for string interpolation.  A `"\{e}"` hole desugars to
-`display e`, so this is what `\{...}` calls.  Unlike `Debug`, `Display` does
-*not* quote `String`/`Char` (interpolating a string splices its characters,
-it doesn't debug a quoted literal) — this is the Debug-vs-Display split.  For
-every other type `display` matches `debug`'s output, recursing with `display`
-so nested strings stay unquoted too.  Lives in `core.mdk` (not `string.mdk`
-like `Debug String`) because interpolation is core syntax: a bare `"\{name}"`
-can't depend on an imported module.  `deriving (Display)` mirrors
+Types with a user-facing text rendering.
+
+`display` is what string interpolation calls: `"\{e}"` is `display e`.
+It differs from `debug` in one way: strings and characters are spliced in
+as they are, not quoted. For every other type it matches `debug`, and
+nested strings stay unquoted. `deriving (Display)` works like
 `deriving (Debug)`.
 
-## `Display Int`
+## Hashing
 
-```
-impl Display Int
-```
-
-## `Display Float`
-
-```
-impl Display Float
-```
-
-## `Display Bool`
-
-```
-impl Display Bool
-```
-
-## `Display Unit`
-
-```
-impl Display Unit
-```
-
-## `Display Ordering`
-
-```
-impl Display Ordering
-```
-
-## `Display Char`
-
-```
-impl Display Char
-```
-
-## `Display (Option a)`
-
-```
-impl Display (Option a) requires Display a
-```
-
-## `Display (Result e a)`
-
-```
-impl Display (Result e a) requires Display e, Display a
-```
-
-## `Display (a, b)`
-
-```
-impl Display (a, b) requires Display a, Display b
-```
-
-## `Display (a, b, c)`
-
-```
-impl Display (a, b, c) requires Display a, Display b, Display c
-```
-
-## `Display (a, b, c, d)`
-
-```
-impl Display (a, b, c, d) requires Display a, Display b, Display c, Display d
-```
-
-## `Display (a, b, c, d, e)`
-
-```
-impl Display (a, b, c, d, e) requires Display a, Display b, Display c, Display d, Display e
-```
-
-## `Hashable`
+### `Hashable`
 
 ```
 interface Hashable a
   hash : a -> Int
 ```
 
-Hash code for use in hash tables.  Equal values (per `Eq`) must produce
-the same hash — the contractual invariant.  Hash values need not be unique.
-Primitive impls delegate to per-type externs (`hashInt`/`hashString`/… —
-specified deterministic hashers, byte-identical across the tree-walker and the
-native backend); the derived impls and the compound impls below
-(`Option`/`Result`/`List`/tuples) share one djb2-style fold: seed with the
-constructor ordinal, then `acc = acc * 33 + hash field` left-to-right over
-fields.  `deriving (Hashable)` generates exactly that fold for `data`,
-`record`, and `newtype` types (#422).  The fold is NOT masked non-negative:
-`Int` wraps, so a hash may be negative.  Only eq-agreement is contractual —
-hash_map/hash_set mask at the point of use (#416).
+Types that can be used as hash-table keys.
 
-## `Hashable Int`
+Values that are equal by `Eq` must have equal hashes. Hashes need not be
+unique, and may be negative. The compound instances (`Option`, `Result`,
+`List`, `Array`, tuples) and `deriving (Hashable)` all use the same fold
+over the fields, so an array hashes the same as the list of its
+elements.
+
+## Output
+
+### `println`
 
 ```
-impl Hashable Int
+println : Display a => a -> <IO> Unit
 ```
 
-## `Hashable Float`
+Writes a value to standard output, followed by a newline.
+
+The value is rendered with `display`, so strings print without quotes
+and a `Map` prints as `Map { 1 => 10 }`. For the `debug` rendering, use
+`io.inspect`.
+
+### `print`
 
 ```
-impl Hashable Float
+print : Display a => a -> <IO> Unit
 ```
 
-## `Hashable Char`
+Writes a value to standard output with no trailing newline. See `println`.
 
-```
-impl Hashable Char
-```
+## Numbers
 
-## `Hashable Bool`
-
-```
-impl Hashable Bool
-```
-
-## `Hashable Unit`
-
-```
-impl Hashable Unit
-```
-
-## `Hashable Ordering`
-
-```
-impl Hashable Ordering
-```
-
-Lt=0, Eq=1, Gt=2 — matches constructor declaration order.
-
-## `Hashable (Option a)`
-
-```
-impl Hashable (Option a) requires Hashable a
-```
-
-None=1 (ordinal 1, no fields); Some x seeds at 0 then folds: 0*33+hash x.
-
-## `Hashable (Result e a)`
-
-```
-impl Hashable (Result e a) requires Hashable e, Hashable a
-```
-
-Ok seeds at 0, Err at 1.
-
-## `Hashable (a, b)`
-
-```
-impl Hashable (a, b) requires Hashable a, Hashable b
-```
-
-## `Hashable (a, b, c)`
-
-```
-impl Hashable (a, b, c) requires Hashable a, Hashable b, Hashable c
-```
-
-## `Hashable (a, b, c, d)`
-
-```
-impl Hashable (a, b, c, d) requires Hashable a, Hashable b, Hashable c, Hashable d
-```
-
-## `Hashable (a, b, c, d, e)`
-
-```
-impl Hashable (a, b, c, d, e) requires Hashable a, Hashable b, Hashable c, Hashable d, Hashable e
-```
-
-## `println`
-
-```
-println : a -> <IO> Unit
-```
-
-Human-facing output (Phase 111).  `println`/`print` render via `Display`
-(unquoted, user-facing) rather than dumping internal `VCon` structure, so a
-`Map` prints `Map { 1 => 10 }`, not its weight-balanced tree.  For
-round-trippable Debug-rendering output (strings/chars quoted, constructor
-names visible), import `io.mdk` and use `inspect` (`inspect x = putStrLn
-(debug x)`).  These are ordinary Medaka functions over the string-only
-`putStr`/`putStrLn` externs, which moves the `Display` constraint into
-Medaka where dict-passing works (an extern can't receive a dictionary).
-
-## `print`
-
-```
-print : a -> <IO> Unit
-```
-
-## `Num`
+### `Num`
 
 ```
 interface Num a
@@ -681,26 +244,41 @@ interface Num a
   fromInt : Int -> a
 ```
 
-Numeric arithmetic.  Backs `+`, `-`, `*`, `/` for user-defined numeric
-types; the operators are hard-wired for `Int` and `Float` and only
-dispatch through `add`/`sub`/... for other types.
+Numeric types.
 
-`div` is truncating for `Int` and true division for `Float`, matching
-the host operator.
+The arithmetic operators are built in for `Int` and `Float`; on any other
+type, `+`, `-`, `*`, and `/` dispatch to `add`, `sub`, `mul`, and `div`.
+`div` truncates for `Int` and is true division for `Float`.
 
-## `Num Int`
-
-```
-impl Num Int
-```
-
-## `Num Float`
+### `isEven`
 
 ```
-impl Num Float
+isEven : Int -> Bool
 ```
 
-## `Bounded`
+Whether `n` is divisible by two. Negative numbers included.
+
+```medaka
+> isEven 4
+True
+> isEven 7
+False
+```
+
+### `isOdd`
+
+```
+isOdd : Int -> Bool
+```
+
+Whether `n` is not divisible by two.
+
+```medaka
+> isOdd 3
+True
+```
+
+### `Bounded`
 
 ```
 interface Bounded a
@@ -708,92 +286,38 @@ interface Bounded a
   maxBound : a
 ```
 
-Types with a smallest and largest representable value.
-Impls for `Int`, `Char` etc. land once the corresponding extern
-constants are added; the interface itself is here so generic
-bounded-type code can be written today.
+Types with a smallest and a largest value.
 
-## `Bounded Int`
+## Mapping and sequencing
 
-```
-impl Bounded Int
-```
-
-`Int` bounds are the platform's 63-bit native-integer limits.
-
-*(doctest — run by `medaka test`)*
-
-```medaka
-> (minBound : Int) < (maxBound : Int)
-True
-```
-
-## `Bounded Char`
-
-```
-impl Bounded Char
-```
-
-`Char` ranges over the Unicode scalar values, U+0000 to U+10FFFF.
-
-*(doctest — run by `medaka test`)*
-
-```medaka
-> charCode (minBound : Char)
-0
-> charCode (maxBound : Char)
-1114111
-```
-
-## `Mappable`
+### `Mappable`
 
 ```
 interface Mappable f
   map : (a -> <e> b) -> f a -> <e> f b
 ```
 
-Structure-preserving map (a.k.a. Functor).  Laws:
-map identity      == identity
-map (g `compose` f) == map g `compose` map f
+Containers whose elements can be transformed in place.
 
-## `Mappable Option`
+`map` must preserve the container's shape: `map identity` is the identity,
+and `map (g << f)` equals `map g << map f`.
 
-```
-impl Mappable Option
-```
-
-## `Mappable (Result e)`
+### `mapConst`
 
 ```
-impl Mappable (Result e)
+mapConst : Mappable f => b -> f a -> f b
 ```
 
-`default` so a user-defined alternative (e.g. one that maps over the
-`Err` side) can coexist without forcing every call site to qualify.
+The container with every element replaced by `b`.
 
-## `mapConst`
-
-```
-mapConst : a -> b c -> b a
-```
-
-Replace every element of a wrapped value with a constant, keeping the
-structure — Haskell's `<$`.  `mapConst b fa == map (const b) fa`.
-
-Value-first/data-last, like every other prelude combinator: the argument
-the name is about comes first, and the container comes last so partial
-application composes (#2306 E-2 renamed and reordered this from
-`replaceWith : f a -> b -> f b`).
-
-
-*(doctest — run by `medaka test`)*
+Equivalent to `map (const b)`.
 
 ```medaka
 > mapConst 9 (Some 5)
 Some 9
 ```
 
-## `Applicative`
+### `Applicative`
 
 ```
 interface Applicative f
@@ -801,281 +325,158 @@ interface Applicative f
   ap : f (a -> b) -> f a -> f b
 ```
 
-`Mappable` plus the ability to lift a plain value and apply a wrapped
-function to a wrapped argument.  Laws (identity, homomorphism,
-interchange, composition) follow Haskell's `Applicative`.
+Containers that can wrap a plain value and apply a wrapped function to a
+wrapped argument.
 
-## `Applicative Option`
+`pure` wraps a value. `ap` applies a function inside one container to a
+value inside another. The instances follow the usual applicative laws.
 
-```
-impl Applicative Option
-```
-
-## `Applicative (Result e)`
+### `map2`
 
 ```
-impl Applicative (Result e)
+map2 : Applicative f => (a -> b -> c) -> f a -> f b -> f c
 ```
 
-`default` (like `Mappable (Result e)`) so an error-accumulating
-alternative — a `Validation`-style applicative — can coexist.
+Combines two wrapped values with a two-argument function.
 
-## `map2`
-
-```
-map2 : (a -> b -> c) -> d a -> d b -> d c
-```
-
-Lift a binary function over two applicative values — Haskell's `liftA2`.
-
-
-*(doctest — run by `medaka test`)*
+For `Option` and `Result`, the result is `None` or the first `Err` when
+either input is. For lists, `f` is applied to every pair.
 
 ```medaka
 > map2 (a b => a + b) (Some 3) (Some 4)
 Some 7
-> map2 (a b => a + b) (None : Option Int) (Some 4)
-None
 > map2 (a b => a + b) [1, 2] [10, 20]
 [11, 21, 12, 22]
 ```
 
-## `map3`
+### `map3`
 
 ```
-map3 : (a -> b -> c -> d) -> e a -> e b -> e c -> e d
+map3 : Applicative f => (a -> b -> c -> d) -> f a -> f b -> f c -> f d
 ```
 
-Lift a ternary function over three applicative values — Haskell's `liftA3`.
-
-
-*(doctest — run by `medaka test`)*
+Combines three wrapped values with a three-argument function. See
+`map2`.
 
 ```medaka
 > map3 (a b c => a + b + c) (Some 1) (Some 2) (Some 3)
 Some 6
-> map3 (a b c => a + b + c) [1] [10, 20] [100]
-[111, 121]
 ```
 
-## `Thenable`
+### `Thenable`
 
 ```
 interface Thenable m
   andThen : m a -> (a -> <e> m b) -> <e> m b
 ```
 
-Sequencing of computations, threading the result.  Equivalent to
-Haskell's `>>=` with arguments swapped to match the readable
-"value first, then action" reading order.  Drives `do`-notation.
+Containers whose computations can be sequenced, each step seeing the
+result of the last.
 
-## `flatMap`
+`andThen m f` runs `m`, then passes its result to `f`. It is what `do`
+notation desugars to. For `Option` and `Result`, a `None` or `Err` stops
+the sequence.
 
-```
-flatMap : (a -> b c) -> b a -> b c
-```
-
-`andThen` with arguments flipped — the Haskell/Scala `flatMap`.
-
-## `flat`
+### `flatMap`
 
 ```
-flat : a (a b) -> a b
+flatMap : Thenable m => (a -> <e> m b) -> m a -> <e> m b
 ```
 
-Collapse one layer of nesting.  Haskell calls this `join`.
+`andThen` with its arguments swapped.
 
-## `when`
-
-```
-when : Bool -> a Unit -> a Unit
-```
-
-Run an action only when the condition holds.
-
-## `unless`
+### `flat`
 
 ```
-unless : Bool -> a Unit -> a Unit
+flat : Thenable m => m (m a) -> m a
 ```
 
-Run an action only when the condition is false.  Dual of `when`.
+Removes one level of nesting: `Some (Some 1)` becomes `Some 1`.
 
-## `DeferredMappable`
-
-```
-interface DeferredMappable (f : Effect -> Type -> Type)
-  deferMap : (a -> <e> b) -> f e a -> f e b
-```
-
-The DEFERRED family (EFFECTS-SEMANTICS §6, "graded interfaces").  `Mappable`
-/ `Applicative` / `Thenable` above charge the callback's effect row on the
-method's own arrow: the effect happens NOW, at the call, which is right for a
-strict container.  The `Deferred*` family instead records the effect in the
-container's `Effect`-kinded INDEX: nothing happens at `deferMap`/`deferThen`;
-the registered effects fire later, at the container's own eliminator
-(`runAsync` for `Async`).  Construction is therefore genuinely pure — a
-`Async <IO> Int` can be built inside a function typed `<>`.
-
-The two families are peers, not a general and a special case (§6.6), so the
-method names are distinct on purpose: sharing `map`/`andThen` would make
-`do`-notation pick one interface for both.  `defer` blocks desugar to
-`deferThen`/`deferPure` the way `do` blocks desugar to `andThen`/`pure`.
-
-The grade is graded-lite: one shared effect variable per signature.  An
-impl MUST store its callback under the container's own `<e>` thunk rather
-than apply it (`deferMap g (Done a) = Suspend (u => Done (g a))`, never
-`Done (g a)`); applying it eagerly performs `<e>` on an arrow the signature
-declares pure and is rejected (`T-EFFECT-INDEX-EAGER`).
-
-## `DeferredApplicative`
+### `when`
 
 ```
-interface DeferredApplicative (f : Effect -> Type -> Type)
-  deferPure : a -> f e a
-  deferAp : f e (a -> b) -> f e a -> f e b
+when : Thenable m => Bool -> m Unit -> m Unit
 ```
 
-## `DeferredThenable`
+Runs an action only when the condition holds.
+
+### `unless`
 
 ```
-interface DeferredThenable (f : Effect -> Type -> Type)
-  deferThen : f e a -> (a -> <e> f e b) -> f e b
+unless : Thenable m => Bool -> m Unit -> m Unit
 ```
 
-## `deferFlatMap`
+Runs an action only when the condition does not hold.
+
+### `foldThen`
 
 ```
-deferFlatMap : (a -> b c d) -> b c a -> b c d
+foldThen : Thenable m => (b -> a -> <e> m b) -> b -> List a -> <e> m b
 ```
 
-`deferThen` with arguments flipped.
-
-## `deferWhen`
-
-```
-deferWhen : Bool -> a b Unit -> a b Unit
-```
-
-`when` for the deferred family: run the action only when the condition
-holds.  A distinct name because `when`'s `Thenable m => m Unit` cannot
-describe an `Effect`-indexed container.
-
-## `deferUnless`
-
-```
-deferUnless : Bool -> a b Unit -> a b Unit
-```
-
-`unless` for the deferred family.  Dual of `deferWhen`.
-
-## `foldThen`
-
-```
-foldThen : (a -> b -> c a) -> a -> List b -> c a
-```
-
-Monadic left fold: thread an accumulator through an effectful step, in
-order, over a list.  Haskell's `foldM`.
-
-
-*(doctest — run by `medaka test`)*
+A left fold whose step is an action, run in order over the list.
 
 ```medaka
 > foldThen (acc x => Some (acc + x)) 0 [1, 2, 3]
 Some 6
 ```
 
-## `repeatThen`
+### `repeatThen`
 
 ```
-repeatThen : Int -> a b -> a (List b)
+repeatThen : Thenable m => Int -> m a -> m (List a)
 ```
 
-Run an action `n` times and collect the results in order.  `n <= 0`
-yields `pure []`.  Haskell's `replicateM`.
+Runs an action `n` times and collects the results in order.
 
-
-*(doctest — run by `medaka test`)*
+`pure []` when `n <= 0`.
 
 ```medaka
 > repeatThen 3 (Some 7)
 Some [7, 7, 7]
 ```
 
-## `filterThen`
+### `filterThen`
 
 ```
-filterThen : (a -> b Bool) -> List a -> b (List a)
+filterThen : Thenable m => (a -> <e> m Bool) -> List a -> <e> m (List a)
 ```
 
-Keep the elements for which an effectful predicate returns `True`, in
-order.  Haskell's `filterM`.
-
-
-*(doctest — run by `medaka test`)*
+Keeps the elements for which an action returns `True`, in order.
 
 ```medaka
 > filterThen (x => Some (x > 1)) [1, 2, 3]
 Some [2, 3]
 ```
 
-## `forEach`
+### `forEach`
 
 ```
-forEach : (a -> b Unit) -> List a -> b Unit
+forEach : Thenable m => (a -> <e> m Unit) -> List a -> <e> m Unit
 ```
 
-Run an effectful action for each element, in order, discarding the
-per-element results.  Haskell's `traverse_`/`for_` specialised to `List`.
-
-Fn-first/data-last, matching `find`/`count`/`any`/`all`/`filterThen`
-(#2306 E-1 reordered this from `List a -> (a -> m Unit) -> m Unit`).  The
-doctest below is also the PIN for that order: a reorder is silent wherever
-both arguments still typecheck, but a lambda is not a `List`, so this line
-fails to typecheck under the old signature.
-
-
-*(doctest — run by `medaka test`)*
+Runs an action for each element in order, discarding the results.
 
 ```medaka
 > forEach (x => Some ()) [1, 2, 3]
 Some ()
 ```
 
-## `runEach`
+### `runEach`
 
 ```
-runEach : List (a b) -> a Unit
+runEach : Thenable m => List (m a) -> m Unit
 ```
 
-Run each action in a list, in order, discarding the results.  Haskell's
-`sequence_` specialised to `List`.
-
-
-*(doctest — run by `medaka test`)*
+Runs each action in the list in order, discarding the results.
 
 ```medaka
 > runEach [Some 1, Some 2]
 Some ()
 ```
 
-## `Thenable Option`
-
-```
-impl Thenable Option
-```
-
-## `Thenable (Result e)`
-
-```
-impl Thenable (Result e)
-```
-
-`default` (like the rest of the `Result e` family) so a short-circuiting
-alternative can coexist with the standard error-propagating sequence.
-
-## `Alternative`
+### `Alternative`
 
 ```
 interface Alternative f
@@ -1083,48 +484,30 @@ interface Alternative f
   orElse : f a -> f a -> f a
 ```
 
-Nondeterministic choice.  `noMatch` is the always-failing alternative
-(identity for `orElse`); `orElse a b` tries `a` and, if it
-"fails"/is-empty, falls back to `b` (left-biased).
+Containers with a notion of failure and a fallback.
 
-Laws:
-orElse noMatch x == x          (left identity)
-orElse x noMatch == x          (right identity)
-orElse (orElse x y) z == orElse x (orElse y z)  (associativity)
-
-
-*(doctest — run by `medaka test`)*
+`noMatch` is the failing value: `None`, or the empty list. `orElse a b`
+is `a` unless `a` failed, in which case it is `b`. For lists, `orElse` is
+concatenation. `noMatch` is the identity for `orElse`, and `orElse` is
+associative.
 
 ```medaka
-> length (orElse [1, 2] [3])
-3
-> isEmpty (orElse ([] : List Int) [1])
-False
-> isSome (orElse (Some 1) (Some 2))
-True
-> isSome (orElse None (Some 2))
-True
-> isSome (orElse None (None : Option Int))
-False
+> orElse None (Some 2)
+Some 2
+> orElse [1, 2] [3]
+[1, 2, 3]
 ```
 
-## `Alternative Option`
+### `guard`
 
 ```
-impl Alternative Option
+guard : Alternative f => Bool -> f Unit
 ```
 
-## `guard`
+Succeeds when the condition holds and fails otherwise.
 
-```
-guard : Bool -> a Unit
-```
-
-`guard True` succeeds with `pure ()`; `guard False` is the failing
-`noMatch`.  Used to prune an `Alternative` computation on a condition.
-
-
-*(doctest — run by `medaka test`)*
+`guard True` is `pure ()`; `guard False` is `noMatch`. Use it to stop an
+`Alternative` computation on a condition.
 
 ```medaka
 > (guard True : Option Unit)
@@ -1133,7 +516,7 @@ Some ()
 None
 ```
 
-## `Bimappable`
+### `Bimappable`
 
 ```
 interface Bimappable p
@@ -1144,13 +527,12 @@ interface Bimappable p
   mapSecond : _
 ```
 
-Map over BOTH type parameters of a two-parameter type constructor —
-Haskell's `Bifunctor`, renamed to fit `Mappable`/`Thenable`.  `mapFirst`
-touches the left/`Err` side, `mapSecond` the right/`Ok` side; both have
-defaults in terms of `bimap`.
+Two-parameter types whose parameters can be mapped independently.
 
-
-*(doctest — run by `medaka test`)*
+`bimap f g` applies `f` to the first parameter and `g` to the second.
+`mapFirst` and `mapSecond` map one side and default to `bimap` with
+`identity` on the other. For `Result`, the first side is `Err` and the
+second is `Ok`.
 
 ```medaka
 > bimap (n => n + 1) (n => n * 2) (Ok 5 : Result Int Int)
@@ -1159,37 +541,9 @@ Ok 10
 Err 6
 ```
 
-## `Bimappable Result`
+## Containers
 
-```
-impl Bimappable Result
-```
-
-`mapFirst` on `Result` generalizes the standalone `mapErr`.
-
-## `Bimappable __tuple2__`
-
-```
-impl Bimappable __tuple2__
-```
-
-The bare 2-tuple constructor `(,)` as a `Bimappable`: `bimap` maps the two
-fields independently.  `mapFirst`/`mapSecond` come from the interface
-defaults, so they touch the left/right field respectively.
-
-
-*(doctest — run by `medaka test`)*
-
-```medaka
-> bimap (x => x + 1) (y => y * 2) (3, 4)
-(4, 8)
-> mapFirst (x => x + 1) (3, 4)
-(4, 4)
-> mapSecond (y => y * 2) (3, 4)
-(3, 8)
-```
-
-## `Foldable`
+### `Foldable`
 
 ```
 interface Foldable t
@@ -1204,28 +558,22 @@ interface Foldable t
   isEmpty : _
 ```
 
-Collapse a container down to a summary value.
+Containers whose elements can be reduced to a single value.
 
-`fold` is a strict left fold; `foldRight` is the natural recursive form
-and is the one you want for operations that need to preserve element
-order (or that would otherwise allocate a reversed accumulator).
-
-`length`, `isEmpty`, and `foldMap` come with defaults so impls only
-need to define `fold`, `foldRight`, and `toList`; override the others
-when the data structure admits a faster implementation (e.g. O(1)
-`length` for arrays).
-
-
-*(doctest — run by `medaka test`)*
+`fold` is a strict left fold. `foldRight` is the right fold, which
+preserves element order in the result and is the one to use when the
+step builds a structure. An instance defines `fold`, `foldRight`, and
+`toList`; `foldMap`, `length`, and `isEmpty` have defaults, which an
+instance may override where a faster version exists.
 
 ```medaka
-> isEmpty (None : Option Int)
-True
+> fold (acc x => acc + x) 0 [1, 2, 3]
+6
 > length (Some 5)
 1
 ```
 
-## `Filterable`
+### `Filterable`
 
 ```
 interface Filterable f
@@ -1234,82 +582,65 @@ interface Filterable f
   filter : _
 ```
 
-Containers that can drop elements (and transform-while-dropping).
-Modeled on Haskell's `witherable` Filterable: `filterMap` is the
-primitive, `filter` falls out as a derived default.  Kept separate
-from `Mappable` because not every functor can shrink — a fixed-shape
-container has no sensible `filterMap`.
+Containers whose elements can be dropped.
 
-## `FromEntries`
+`filterMap` keeps the `Some` results of applying a function to each
+element. `filter` keeps the elements satisfying a predicate, and defaults
+to a definition in terms of `filterMap`. Not every `Mappable` container
+is `Filterable`: a fixed-shape container cannot shrink.
+
+### `FromEntries`
 
 ```
 interface FromEntries c e
   fromEntries : List e -> c
 ```
 
-Build a container `c` from a list of entries of type `e`.  Backs the
-container-literal sugar: the compiler lowers `Map { k => v, … }` to
-`fromEntries [(k, v), …]` and `Set { x, … }` to `fromEntries [x, …]`,
-pinning the result type to the named container so this dispatches to that
-container's impl.  `c` is the dispatch (result) type; `e` is its entry type
-— for a map `(k, v)`, for a set the element.  Impls live with each container
-(e.g. `impl FromEntries (Map k v) (k, v)` in map.mdk).
+Containers that can be built from a list of entries.
 
-## `Index`
+The container literals desugar to `fromEntries`: `Map { k => v }` is
+`fromEntries [(k, v)]` and `Set { x }` is `fromEntries [x]`, with the
+result type pinned to the named container. `c` is the container and `e`
+its entry type: `(k, v)` for a map, the element for a set. Each container
+module defines its own instance.
+
+### `Index`
 
 ```
 interface Index c k v
   index : c -> k -> v
 ```
 
-Read access to a container `c` keyed by `k`, yielding a `v`.  `index c k`
-looks up the value at key/index `k`; impls raise the coded `indexError`
-abort (E-INDEX-OOB) on an out-of-range index or missing key.
+Containers that can be read at a key.
 
-## `IndexMut`
+`index c k` is the value at `k`; the `c[k]` syntax dispatches here. An
+instance panics with an index error when `k` is out of range or absent.
+
+### `IndexMut`
 
 ```
 interface IndexMut c k v
   setIndex : c -> k -> v -> c
 ```
 
-Write access to a container `c` keyed by `k`.  `setIndex c k v` writes
-`v` at key/index `k`, returning the (possibly mutated in place) container.
-Requires `Index c k v` (a container you can write into, you can also read
-from).
+Containers that can be written at a key.
 
-## `Slice`
+`setIndex c k v` writes `v` at `k` and returns the container, mutated in
+place where the container is mutable.
+
+### `Slice`
 
 ```
 interface Slice c
   slice : c -> Int -> Int -> c
 ```
 
-Read-only slicing of a container `c` by a half-open index range.  `slice c lo
-hi` yields the sub-container over indices `[lo, hi)`.  The surface sugar
-`c.[lo..hi]` / `c.[lo..=hi]` desugars to a call here (#670; the inclusive `..=`
-form normalizes to `slice c lo (hi + 1)` in desugar), so the receiver is
-constrained to a real container: `42.[0..1]` is a "no impl of Slice for Int"
-type error rather than a wrong-container heap read.  Parallels `Index`.
+Containers that can be sliced by a half-open index range.
 
-## `Foldable Option`
+`slice c lo hi` is the sub-container over indices `[lo, hi)`. The
+`c.[lo..hi]` and `c.[lo..=hi]` syntax dispatches here.
 
-```
-impl Foldable Option
-```
-
-`Option` and `Result e` each foldable as a 0-or-1-element container.
-`default` on the Result impl mirrors `Mappable (Result e)`: a user-defined
-alternative (e.g. folding over the `Err` side) can coexist without
-forcing every call site to qualify.
-
-## `Foldable (Result e)`
-
-```
-impl Foldable (Result e)
-```
-
-## `Traversable`
+### `Traversable`
 
 ```
 interface Traversable t
@@ -1318,86 +649,45 @@ interface Traversable t
   sequence : _
 ```
 
-Containers that can be traversed left-to-right, running an effectful
-function over each element and collecting the results inside the effect.
-`Traversable` is `Mappable` + `Foldable` plus the ability to *commute* the
-container with an applicative/monadic effect: `traverse` walks the structure,
-`sequence` flips a container-of-effects into an effect-of-container.
+Containers whose elements can be visited left to right with an action,
+collecting the results inside the action's type.
 
-For `Option`/`Result` the effect short-circuits on the first `None`/`Err`;
-for any other `Thenable m` it threads `m` through the whole structure.
-
-
-*(doctest — run by `medaka test`)*
+`traverse f` applies `f` to each element and gathers the results.
+`sequence` turns a container of actions into an action producing the
+container. With `Option` or `Result` as the action, the first `None` or
+`Err` is the result.
 
 ```medaka
 > traverse (x => if x > 0 then Some x else None) [1, 2, 3]
 Some [1, 2, 3]
-> traverse (x => if x > 0 then Some x else None) [1, -2, 3]
-None
-> traverse (x => if x > 0 then Some (x + 1) else None) (Some 5)
-Some Some 6
-> traverse (x => if x > 0 then Ok x else Err x) [1, 2, 3]
-Ok [1, 2, 3]
-> traverse (x => if x > 0 then Ok x else Err x) [1, -2, 3]
-Err -2
-> sequence [Some 1, Some 2, Some 3]
-Some [1, 2, 3]
-> sequence [Some 1, None, Some 3]
-None
-> sequence [Ok 1, Ok 2, Ok 3]
-Ok [1, 2, 3]
 > sequence [Ok 1, Err 99, Ok 3]
 Err 99
 ```
 
-## `Traversable Option`
+## Folding
+
+### `any`
 
 ```
-impl Traversable Option
+any : Foldable t => (a -> <e> Bool) -> t a -> <e> Bool
 ```
 
-lint-disable-next-line rule-match-on-param
-
-## `Traversable (Result e)`
-
-```
-impl Traversable (Result e)
-```
-
-`default` mirrors the `Foldable`/`Mappable (Result e)` impls so a
-user-defined alternative can coexist without qualifying call sites.
-lint-disable-next-line rule-match-on-param
-
-## `any`
-
-```
-any : (a -> Bool) -> b a -> Bool
-```
-
-True when at least one element satisfies the predicate.
-
-
-*(doctest — run by `medaka test`)*
+Whether at least one element satisfies `f`.
 
 ```medaka
 > any (x => x > 2) [1, 2, 3]
 True
-> any (x => x > 10) [1, 2, 3]
-False
 ```
 
-## `all`
+### `all`
 
 ```
-all : (a -> Bool) -> b a -> Bool
+all : Foldable t => (a -> <e> Bool) -> t a -> <e> Bool
 ```
 
-True when every element satisfies the predicate.  Vacuously true on
-the empty container.
+Whether every element satisfies `f`.
 
-
-*(doctest — run by `medaka test`)*
+`True` on an empty container.
 
 ```medaka
 > all (x => x > 0) [1, 2, 3]
@@ -1406,102 +696,116 @@ True
 True
 ```
 
-## `find`
+### `find`
 
 ```
-find : (a -> Bool) -> b a -> Option a
+find : Foldable t => (a -> <e> Bool) -> t a -> <e> Option a
 ```
 
-First element satisfying the predicate, or `None` if none do.
-Latches the first hit via an as-pattern so subsequent elements don't
-overwrite the answer.
+The first element satisfying `f`, or `None`.
 
-## `count`
-
-```
-count : (a -> Bool) -> b a -> Int
+```medaka
+> find (x => x > 1) [1, 2, 3]
+Some 2
 ```
 
-Number of elements satisfying the predicate.
-
-## `sum`
+### `count`
 
 ```
-sum : a b -> b
+count : Foldable t => (a -> <e> Bool) -> t a -> <e> Int
 ```
 
-Sum of a numeric foldable.  Identity is `0`; in practice this only
-works for `Int` today because `(+)` is a builtin that doesn't yet
-dispatch through `Num.add` for user-defined numeric types.
+The number of elements satisfying `f`.
 
-## `product`
-
-```
-product : a b -> b
+```medaka
+> count isEven [1, 2, 3, 4]
+2
 ```
 
-Product of a numeric foldable.  Identity is `1`.  Same caveat as `sum`.
-
-## `elem`
+### `sum`
 
 ```
-elem : a -> b a -> Bool
+sum : (Foldable t, Num a) => t a -> a
 ```
 
-True when the value appears in the container (by `Eq`).
+The sum of the elements. `0` for an empty container.
 
-## `notElem`
-
-```
-notElem : a -> b a -> Bool
-```
-
-True when the value does *not* appear in the container.  `not . elem`.
-
-## `maximum`
-
-```
-maximum : a b -> Option b
+```medaka
+> sum [1, 2, 3]
+6
 ```
 
-Largest element by `Ord`, or `None` when the container is empty.  Generic
-over any `Foldable` — `List`, `Array`, `Option`, … all reuse this one body.
+### `product`
 
+```
+product : (Foldable t, Num a) => t a -> a
+```
 
-*(doctest — run by `medaka test`)*
+The product of the elements. `1` for an empty container.
+
+```medaka
+> product [2, 3, 4]
+24
+```
+
+### `elem`
+
+```
+elem : (Foldable t, Eq a) => a -> t a -> Bool
+```
+
+Whether the value occurs in the container.
+
+```medaka
+> elem 2 [1, 2, 3]
+True
+```
+
+### `notElem`
+
+```
+notElem : (Foldable t, Eq a) => a -> t a -> Bool
+```
+
+Whether the value does not occur in the container.
+
+### `maximum`
+
+```
+maximum : (Foldable t, Ord a) => t a -> Option a
+```
+
+The largest element, or `None` when the container is empty.
 
 ```medaka
 > maximum [3, 1, 2]
 Some 3
-> maximum ([] : List Int)
-None
 ```
 
-## `minimum`
+### `minimum`
 
 ```
-minimum : a b -> Option b
+minimum : (Foldable t, Ord a) => t a -> Option a
 ```
 
-Smallest element by `Ord`, or `None` when empty.  Generic, like `maximum`.
-
-
-*(doctest — run by `medaka test`)*
+The smallest element, or `None` when the container is empty.
 
 ```medaka
 > minimum [3, 1, 2]
 Some 1
 ```
 
-## `otherwise`
+## Booleans
+
+### `otherwise`
 
 ```
 otherwise : Bool
 ```
 
-Alias for `True`, idiomatic in guard chains.
+`True`, for the final guard of a guard chain.
 
-## `not`
+### `not`
 
 ```
 not : Bool -> Bool
@@ -1509,57 +813,61 @@ not : Bool -> Bool
 
 Logical negation.
 
-## `and`
+### `and`
 
 ```
 and : Bool -> Bool -> Bool
 ```
 
-Strict logical AND.  The lazy short-circuiting form is the `&&`
-operator, which is hard-wired in the evaluator.
+Logical and, with both arguments evaluated.
 
-## `or`
+The `&&` operator evaluates its right operand only when the left is
+`True`.
+
+### `or`
 
 ```
 or : Bool -> Bool -> Bool
 ```
 
-Strict logical OR.  See `and` for the lazy form.
+Logical or, with both arguments evaluated.
 
-## `xor`
+The `||` operator evaluates its right operand only when the left is
+`False`.
+
+### `xor`
 
 ```
 xor : Bool -> Bool -> Bool
 ```
 
-Exclusive OR.
+Exclusive or.
 
-## `isSome`
+## Options
+
+### `isSome`
 
 ```
 isSome : Option a -> Bool
 ```
 
-True if the value is present.
+Whether the value is `Some`.
 
-## `isNone`
+### `isNone`
 
 ```
 isNone : Option a -> Bool
 ```
 
-True if the value is absent.
+Whether the value is `None`.
 
-## `optionOr`
+### `optionOr`
 
 ```
 optionOr : a -> Option a -> a
 ```
 
-Unwrap with a default for `None`.
-
-
-*(doctest — run by `medaka test`)*
+The value inside a `Some`, or the default for `None`.
 
 ```medaka
 > optionOr 0 (Some 42)
@@ -1568,20 +876,14 @@ Unwrap with a default for `None`.
 0
 ```
 
-## `option`
+### `option`
 
 ```
-option : a -> (b -> a) -> Option b -> a
+option : b -> (a -> <e> b) -> Option a -> <e> b
 ```
 
-Eliminate an `Option` by supplying a default for `None` and a function
-for `Some`.  Named for what it eliminates (Haskell calls it `maybe`).
-
-Lived in a published one-entry `option` module until the
-0.1.0 surface freeze moved it beside its own type (#2306 I-2).
-
-
-*(doctest — run by `medaka test`)*
+Applies `f` to the value inside a `Some`, or returns the default for
+`None`.
 
 ```medaka
 > option 0 (x => x + 1) (Some 41)
@@ -1590,63 +892,77 @@ Lived in a published one-entry `option` module until the
 0
 ```
 
-## `toResult`
+### `toResult`
 
 ```
-toResult : a -> Option b -> Result a b
+toResult : e -> Option a -> Result e a
 ```
 
-Turn an `Option` into a `Result`, supplying the error for `None`.
+The option as a result, with `e` as the error for `None`.
 
-## `fromResult`
-
-```
-fromResult : Result a b -> Option b
-```
-
-Forget the error: `Ok x → Some x`, `Err _ → None`.
-Named to match the "from-Result" intuition; this is the inverse of
-`toResult` modulo the discarded error value.
-
-## `isOk`
-
-```
-isOk : Result a b -> Bool
+```medaka
+> toResult "missing" (Some 1)
+Ok 1
+> toResult "missing" None
+Err "missing"
 ```
 
-True if the result is `Ok`.
-
-## `isErr`
+### `fromResult`
 
 ```
-isErr : Result a b -> Bool
+fromResult : Result e a -> Option a
 ```
 
-True if the result is `Err`.
+The result as an option, discarding the error.
 
-## `resultOr`
-
-```
-resultOr : a -> Result b a -> a
-```
-
-Unwrap with a default for `Err`.  Named distinctly from
-`optionOr` so the two don't collide when both are in scope.
-
-## `result`
-
-```
-result : (a -> b) -> (c -> b) -> Result a c -> b
+```medaka
+> fromResult (Ok 1)
+Some 1
+> fromResult (Err "boom")
+None
 ```
 
-Eliminate a `Result` by supplying a handler for `Err` and a handler for
-`Ok`.  Named for what it eliminates (Haskell calls it `either`).
+## Results
 
-Lived in a published one-entry `result` module until the
-0.1.0 surface freeze moved it beside its own type (#2306 I-2).
+### `isOk`
 
+```
+isOk : Result e a -> Bool
+```
 
-*(doctest — run by `medaka test`)*
+Whether the result is `Ok`.
+
+### `isErr`
+
+```
+isErr : Result e a -> Bool
+```
+
+Whether the result is `Err`.
+
+### `resultOr`
+
+```
+resultOr : a -> Result e a -> a
+```
+
+The value inside an `Ok`, or the default for `Err`.
+
+```medaka
+> resultOr 0 (Ok 42)
+42
+> resultOr 0 (Err "boom")
+0
+```
+
+### `result`
+
+```
+result : (e -> <eff> c) -> (a -> <eff> c) -> Result e a -> <eff> c
+```
+
+Applies `onErr` to the error of an `Err`, or `onOk` to the value of an
+`Ok`.
 
 ```medaka
 > result (e => 0) (x => x + 1) (Ok 41)
@@ -1655,167 +971,170 @@ Lived in a published one-entry `result` module until the
 7
 ```
 
-## `mapErr`
+### `mapErr`
 
 ```
-mapErr : (a -> b) -> Result a c -> Result b c
+mapErr : (e -> f) -> Result e a -> Result f a
 ```
 
-Apply a function to the `Err` side, leaving `Ok` alone.  The `Ok`
-analogue is just `map` from `Mappable (Result e)`.
+Applies `f` to the error of an `Err`, leaving an `Ok` unchanged.
 
-## `identity`
+`map` is the counterpart for the `Ok` side.
+
+```medaka
+> mapErr (e => "failed: " ++ e) (Err "boom")
+Err "failed: boom"
+```
+
+## Functions
+
+### `identity`
 
 ```
 identity : a -> a
 ```
 
-Return the argument unchanged.
+Its argument, unchanged.
 
-## `fst`
+### `fst`
 
 ```
 fst : (a, b) -> a
 ```
 
-First component of a pair.
-
-*(doctest — run by `medaka test`)*
+The first component of a pair.
 
 ```medaka
 > fst (1, 2)
 1
 ```
 
-## `snd`
+### `snd`
 
 ```
 snd : (a, b) -> b
 ```
 
-Second component of a pair.
-
-*(doctest — run by `medaka test`)*
+The second component of a pair.
 
 ```medaka
 > snd ("a", True)
 True
 ```
 
-## `const`
+### `const`
 
 ```
 const : a -> b -> a
 ```
 
-Return the first argument; useful as a building block for ignoring
-a callback's input (`map (const 0) xs == replicate (length xs) 0`).
+A function that ignores its argument and returns `x`.
 
-## `flip`
-
-```
-flip : (a -> b -> c) -> b -> a -> c
+```medaka
+> map (const 0) [1, 2, 3]
+[0, 0, 0]
 ```
 
-Swap the first two arguments of a binary function.
-
-## `on`
+### `flip`
 
 ```
-on : (a -> a -> b) -> (c -> a) -> c -> c -> b
+flip : (a -> b -> <e> c) -> b -> a -> <e> c
 ```
 
-Apply a binary function `f` to two arguments after running each through a
-projection `g` — the classic `on`.  `sortBy (on compare fst)` compares
-pairs by their first component.
+`f` with its two arguments swapped.
 
+```medaka
+> flip (a b => a - b) 1 10
+9
+```
 
-*(doctest — run by `medaka test`)*
+### `on`
+
+```
+on : (b -> b -> <e> c) -> (a -> b) -> a -> a -> <e> c
+```
+
+Applies `f` to the results of `g` on each argument.
+
+`on compare fst` compares pairs by their first component.
 
 ```medaka
 > on compare fst (1, 9) (2, 8)
 Lt
 ```
 
-## `curry`
+### `curry`
 
 ```
-curry : ((a, b) -> c) -> a -> b -> c
+curry : ((a, b) -> <e> c) -> a -> b -> <e> c
 ```
 
-Turn a function on a pair into a function of two arguments.  The inverse
-of `uncurry`.  (Medaka tuples aren't auto-curried, so this is not free.)
-
-
-*(doctest — run by `medaka test`)*
+A function on a pair as a function of two arguments. The inverse of
+`uncurry`.
 
 ```medaka
 > curry fst 1 2
 1
 ```
 
-## `uncurry`
+### `uncurry`
 
 ```
-uncurry : (a -> b -> c) -> (a, b) -> c
+uncurry : (a -> b -> <e> c) -> (a, b) -> <e> c
 ```
 
-Turn a two-argument function into a function on a pair.  The inverse of
+A function of two arguments as a function on a pair. The inverse of
 `curry`.
-
-
-*(doctest — run by `medaka test`)*
 
 ```medaka
 > uncurry (a b => a + b) (3, 4)
 7
 ```
 
-## `discard`
+### `discard`
 
 ```
-discard : a b -> a Unit
+discard : Mappable f => f a -> f Unit
 ```
 
-Run a wrapped computation for its structure/effect and discard the result,
-replacing it with `Unit`.  Haskell calls this `void`.
+The container with its contents replaced by `()`.
 
-
-*(doctest — run by `medaka test`)*
+Use it to run a computation for its effect or structure alone.
 
 ```medaka
 > discard (Some 5)
 Some ()
 ```
 
-## `compose`
+### `compose`
 
 ```
-compose : (a -> b) -> (c -> a) -> c -> b
+compose : (b -> <e> c) -> (a -> <e> b) -> a -> <e> c
 ```
 
-Right-to-left function composition: `(compose g f) x == g (f x)`.
-Spelled `<<` as an operator.
+Right-to-left composition: `compose g f` applies `f`, then `g`. The
+`<<` operator.
 
-## `pipe`
-
-```
-pipe : (a -> b) -> (b -> c) -> a -> c
-```
-
-Left-to-right function composition: `(pipe f g) x == g (f x)`.
-Spelled `>>` as an operator.
-
-## `apply`
+### `pipe`
 
 ```
-apply : (a -> b) -> a -> b
+pipe : (a -> <e> b) -> (b -> <e> c) -> a -> <e> c
 ```
 
-Function application as a function.  Mainly useful for higher-order
-code that wants to defer "actually call this" decisions.
+Left-to-right composition: `pipe f g` applies `f`, then `g`. The `>>`
+operator.
 
-## `Arbitrary`
+### `apply`
+
+```
+apply : (a -> <e> b) -> a -> <e> b
+```
+
+Function application as a function: `apply f x` is `f x`.
+
+## Property testing
+
+### `Arbitrary`
 
 ```
 interface Arbitrary a
@@ -1824,60 +1143,31 @@ interface Arbitrary a
   shrink : _
 ```
 
-Sources of random values for property-based testing (`prop` decls).
-`arbitrary` produces a value in the `<Rand>` effect; `shrink` returns
-progressively smaller candidates used to reduce a failing example.
+Types that can generate random values for property tests.
 
-## `Arbitrary Int`
+`arbitrary` draws a value in the `<Rand>` effect. `shrink` lists smaller
+candidates, tried in order to reduce a failing example; it defaults to
+none.
 
-```
-impl Arbitrary Int
-```
-
-## `Arbitrary Bool`
-
-```
-impl Arbitrary Bool
-```
-
-## `Arbitrary Float`
-
-```
-impl Arbitrary Float
-```
-
-## `Arbitrary Char`
-
-```
-impl Arbitrary Char
-```
-
-## `arbitraryString`
+### `arbitraryString`
 
 ```
 arbitraryString : Unit -> <Rand> String
 ```
 
-Generate a random string of 0–10 printable ASCII chars.
+A random string of up to ten printable ASCII characters.
 
-## `arbitraryList`
+### `arbitraryList`
 
 ```
 arbitraryList : (Unit -> <Rand> a) -> Int -> <Rand> List a
 ```
 
-Generate a list of up to `maxLen` elements using `gen`.
+A random list of up to `maxLen` elements, each drawn with `gen`.
 
-## `Arbitrary (Option a)`
+## Generic representation
 
-```
-impl Arbitrary (Option a) requires Arbitrary a
-```
-
-Half the draws are `None`.  `shrink` collapses a `Some` to `None`, which
-is the only strictly smaller `Option` there is.
-
-## `Rep`
+### `Rep`
 
 ```
 data Rep
@@ -1891,16 +1181,16 @@ data Rep
   | RUnit
 ```
 
-A uniform, flat structural view of any value.  `deriving (Generic)`
-synthesises `to_rep`, turning a value into this tagged tree; a library
-author writes one function over `Rep` and gets their typeclass for any
-deriving type (serialisation, hashing, pretty-printing, …).
+A uniform structural view of a value, produced by `deriving (Generic)`.
 
-`RCon` carries a constructor's name and its positional fields' reps;
-`RRecord` carries a record type's name and its named fields.  The
-remaining constructors are primitive leaves.
+`RCon` is a constructor with its name and positional fields; `RRecord` is
+a record with its name and named fields. The other constructors are the
+primitive leaves. A function written over `Rep` works for every type
+that derives `Generic`.
 
-## `RField`
+Instances: `Eq`, `Debug`
+
+### `RField`
 
 ```
 data RField
@@ -1909,7 +1199,9 @@ data RField
 
 A named field inside an `RRecord`.
 
-## `Generic`
+Instances: `Eq`, `Debug`
+
+### `Generic`
 
 ```
 interface Generic a
@@ -1918,38 +1210,114 @@ interface Generic a
   from_rep : _
 ```
 
-Types with a structural representation.  `to_rep` is synthesised by
-`deriving (Generic)`.  `from_rep` is return-type polymorphic, which the
-runtime cannot dispatch on arguments alone, so it is a stub for now —
-the signature is fixed so a later phase can fill in real bodies.
+Types with a structural representation.
 
-## `Generic Int`
+`to_rep` is generated by `deriving (Generic)`. `from_rep` is not yet
+implemented and panics when called.
 
-```
-impl Generic Int
-```
+## Instances
 
-## `Generic Float`
+- `Int`: `Eq`, `Ord`, `Debug`, `Display`, `Hashable`, `Num`, [`Bounded`](#bounded-int), [`Arbitrary`](#arbitrary-int), `Generic`
+- `Float`: `Eq`, [`Ord`](#ord-float), `Debug`, `Display`, `Hashable`, `Num`, `Arbitrary`, `Generic`
+- `Bool`: `Eq`, `Debug`, `Display`, `Hashable`, `Arbitrary`, `Generic`
+- `Char`: `Eq`, `Ord`, `Debug`, `Display`, `Hashable`, [`Bounded`](#bounded-char), `Arbitrary`, `Generic`
+- `Unit`: `Eq`, `Debug`, `Display`, `Hashable`, `Generic`
+- `(a, b)`: `Eq`, `Ord`, `Debug`, `Display`, `Hashable`
+- `(a, b, c)`: `Eq`, `Ord`, `Debug`, `Display`, `Hashable`
+- `(a, b, c, d)`: `Eq`, `Ord`, `Debug`, `Display`, `Hashable`
+- `(a, b, c, d, e)`: `Eq`, `Ord`, `Debug`, `Display`, `Hashable`
+- `__tuple2__`: [`Bimappable`](#bimappable-__tuple2__)
 
-```
-impl Generic Float
-```
-
-## `Generic Bool`
-
-```
-impl Generic Bool
-```
-
-## `Generic Char`
+### `Ord Float`
 
 ```
-impl Generic Char
+impl Ord Float
 ```
 
-## `Generic Unit`
+Floats are totally ordered, NaN included:
 
 ```
-impl Generic Unit
+-NaN < -inf < ... < -0.0 = +0.0 < ... < +inf < +NaN
 ```
+
+`compare` agrees with `==` on every non-NaN value, so `-0.0` and `0.0`
+compare `Eq`. Two NaNs of the same sign also compare `Eq`, even though
+`nan == nan` is `False`. This makes `sort`, `min`, and `max` deterministic
+on data that contains NaN.
+
+`lt`, `gt`, `lte`, and `gte` are the IEEE comparisons, and are all `False`
+when either operand is NaN.
+
+### `Ord (Option a)`
+
+```
+impl Ord (Option a) requires Ord a
+```
+
+`None` sorts before every `Some`; two `Some`s compare by their contents.
+
+### `Ord (Result e a)`
+
+```
+impl Ord (Result e a) requires Ord e, Ord a
+```
+
+`Err` sorts before `Ok`; like constructors compare by their payloads.
+
+### `Bounded Int`
+
+```
+impl Bounded Int
+```
+
+The platform's 63-bit integer limits.
+
+```medaka
+> (minBound : Int) < (maxBound : Int)
+True
+```
+
+### `Bounded Char`
+
+```
+impl Bounded Char
+```
+
+The Unicode scalar values, U+0000 to U+10FFFF.
+
+```medaka
+> charCode (maxBound : Char)
+1114111
+```
+
+### `Bimappable __tuple2__`
+
+```
+impl Bimappable __tuple2__
+```
+
+Pairs map each field independently.
+
+```medaka
+> bimap (x => x + 1) (y => y * 2) (3, 4)
+(4, 8)
+> mapFirst (x => x + 1) (3, 4)
+(4, 4)
+```
+
+### `Arbitrary Int`
+
+```
+impl Arbitrary Int
+```
+
+Draws from `-1000` to `1000`. Shrinks towards `0`.
+
+### `Arbitrary (Option a)`
+
+```
+impl Arbitrary (Option a) requires Arbitrary a
+```
+
+Half the draws are `None`. A `Some` shrinks to `None`.
 

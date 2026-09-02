@@ -7,6 +7,15 @@
 //
 //   node playground/guide_render_test.mjs               # grades docs/guide
 //   node playground/guide_render_test.mjs --src <dir>   # grades any doc set
+//   node playground/guide_render_test.mjs --src docs/stdlib \
+//        --exclude STDLIB.md,FP-STDLIB-DESIGN.md,P1-STDLIB-DESIGN.md \
+//        --title 'The Medaka Standard Library'          # the stdlib reference
+//
+// `--exclude`/`--title` exist because the properties below are doc-set-agnostic
+// but the ARGUMENTS are not: the guide drops OUTLINE.md, the stdlib reference
+// drops three hand-written design notes (build_stdlib_docs.sh). Grading a doc
+// set under different arguments than its builder passes would grade a corpus
+// nobody ships.
 //
 // Exit 0 = all assertions passed. Exit 1 = at least one failed (each printed).
 //
@@ -31,6 +40,16 @@
 //  10. syntax highlighting is LOSSLESS — stripping the `<span class="tok-...">`
 //      wrappers from any rendered `<code>` body reproduces that block's
 //      `data-source` exactly, and only `kind-medaka` bodies carry spans at all
+//  11. a DOCTEST fence (one `medaka doc` introduced with its own marker line)
+//      carries NO runnability footer at all, and every doctest fence in the
+//      source produced exactly one such block — derived here from the source
+//      Markdown independently of how render_docs.mjs decides it
+//  13. that suppression is keyed on the FENCE, not on the doc set: a synthetic
+//      third doc set holding a runnable program, a `medaka-nocheck` fragment
+//      and a doctest gets ▶ / not-runnable / no footer respectively
+//  12. the doc set's OWN `index.md`, where it has one, IS the emitted
+//      `index.html` — byte for byte, not overwritten by the synthetic
+//      chapter-list index; where it has none, the synthetic index is present
 
 import { readdirSync, readFileSync, mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve, dirname, basename } from 'node:path';
@@ -58,11 +77,39 @@ let src = join(REPO_ROOT, 'docs', 'guide');
 // invocation: whatever `shipped` the render saw, the recomputation sees too —
 // including `null`, which skips conjunct 4 on both sides rather than on one.
 let distDir = null;
-const exclude = ['OUTLINE.md'];
+let exclude = ['OUTLINE.md'];
+let title = 'The Medaka Guide';
 for (let i = 2; i < process.argv.length; i++) {
   if (process.argv[i] === '--src') src = resolve(process.argv[++i]);
   else if (process.argv[i] === '--dist') distDir = resolve(process.argv[++i]);
+  else if (process.argv[i] === '--exclude') exclude = process.argv[++i].split(',').map((s) => s.trim()).filter(Boolean);
+  else if (process.argv[i] === '--title') title = process.argv[++i];
   else { console.error(`unknown argument: ${process.argv[i]}`); process.exit(2); }
+}
+
+// ── doctest fences, re-derived from the SOURCE Markdown ─────────────────────
+// Check 11's independent half. `medaka doc` puts this exact line on its own,
+// immediately above every doctest fence it publishes (`renderDocSegment
+// (ExampleSeg ls)`, compiler/tools/doc.mdk). render_docs.mjs reads the same
+// signal off marked's token stream; this reads it off the raw lines instead, so
+// the two derivations can disagree and a disagreement is a failure — which is
+// the point. Returns the ordered list of doctest fence BODIES, joined exactly as
+// marked hands a `code` token's `text` (newline-joined, no trailing newline).
+function doctestFenceBodies(markdown) {
+  const lines = markdown.split('\n');
+  const bodies = [];
+  for (let i = 0; i < lines.length; i++) {
+    const open = lines[i].match(/^```(\S*)\s*$/);
+    if (!open) continue;
+    const body = [];
+    let j = i + 1;
+    for (; j < lines.length && !/^```\s*$/.test(lines[j]); j++) body.push(lines[j]);
+    // A doctest is a `medaka` fence opening on the `> expr` prompt — the shape
+    // `medaka doc` gives every example and no program can have.
+    if (open[1] === 'medaka' && /^> /.test(body[0] ?? '')) bodies.push(body.join('\n'));
+    i = j;
+  }
+  return bodies;
 }
 
 const scratch = mkdtempSync(join(tmpdir(), 'guide-render-'));
@@ -72,7 +119,7 @@ try {
   let pages;
   try {
     pages = renderDocSet({
-      src, out, exclude, title: 'The Medaka Guide',
+      src, out, exclude, title,
       repoUrl: 'https://github.com/MedakaLang/medaka/blob/main',
       // Derived from --src rather than pinned to this checkout, so pointing the
       // gate at a scratch COPY of a doc set (the red-before-green demonstration)
@@ -99,6 +146,7 @@ try {
   let totalCodeblocks = 0;
   let totalRunnable = 0;
   let totalNotRunnable = 0;
+  let totalDoctests = 0;
   // Check 9 needs EVERY page's heading ids before it can grade ANY page's
   // outbound fragments, so the two are collected here and validated in a second
   // pass below — the same shape as `emitted`, one entry per rendered page.
@@ -203,10 +251,27 @@ try {
     //    Scoped to `kind-medaka` because `runnableFooter` is only ever called for
     //    that kind (render_docs.mjs `code()`); `kind-output`/`toml`/`plain`
     //    blocks correctly have no footer at all.
+    // 11's source half: the doctest fences THIS page's Markdown declares.
+    const doctestBodies = doctestFenceBodies(md);
+    const doctestSet = new Set(doctestBodies);
+    let doctestBlocksSeen = 0;
+
     for (const b of blocks) {
       const [, kind, lang, , rawSource, , footer] = b;
       if (kind !== 'medaka') {
         check(footer === '', `${where}: kind-${kind} codeblock carries no runnability footer`);
+        continue;
+      }
+      // 11. A doctest is a transcript `medaka test` already runs, never a
+      //     program the playground could open — Val's #2384 ruling is that it
+      //     gets NO footer, positive or negative. Asserted against the marker
+      //     re-derived from the source above, so "no footer" cannot quietly
+      //     spread to the ordinary not-runnable fences check 8 covers.
+      if (doctestSet.has(decodeEntities(rawSource))) {
+        check(footer === '',
+          `${where}: doctest codeblock (${lang}) carries NO runnability footer ` +
+          `(found ${footer.replace(/\s+/g, ' ').trim() || 'none'})`);
+        doctestBlocksSeen++;
         continue;
       }
       const hasRun = /class="pg-run"/.test(footer);
@@ -224,6 +289,10 @@ try {
         `${want.runnable ? 'runnable' : `not runnable (${want.reason})`}`);
       if (want.runnable) totalRunnable++; else totalNotRunnable++;
     }
+    check(doctestBlocksSeen === doctestBodies.length,
+      `${where}: ${doctestBlocksSeen} footer-suppressed doctest block(s) == ` +
+      `${doctestBodies.length} doctest fence(s) in the source`);
+    totalDoctests += doctestBlocksSeen;
 
     // 10. HIGHLIGHTING IS LOSSLESS. `kind-medaka` bodies are token-wrapped by
     //     playground/highlight_medaka.mjs; every other kind stays plain. Either
@@ -260,6 +329,32 @@ try {
   note(`${totalRunnable} runnable / ${totalNotRunnable} not-runnable medaka block(s), `
     + `each with exactly one footer class matching the recomputed rule`
     + `${shipped === null ? ' (no --dist: the unshipped-import conjunct is skipped on BOTH sides)' : ''}`);
+  note(`${totalDoctests} doctest block(s) carry no runnability footer at all`);
+
+  // ── 12. the doc set's own index.md is the index ───────────────────────────
+  // render_docs.mjs also SYNTHESIZES an index.html (a static host serves a bare
+  // directory URL from index.html or not at all). It used to write that one
+  // unconditionally, which for docs/stdlib — whose `index.md` IS the generated
+  // 905-link library index — silently replaced every deep link with a
+  // 28-item chapter list. Byte equality against the rendered page is the only
+  // assertion that catches a partial clobber as well as a total one.
+  const indexOnDisk = readFileSync(join(out, 'index.html'), 'utf8');
+  const ownIndex = pages.find((p) => p.srcFile === 'index.md');
+  if (ownIndex) {
+    check(ownIndex.outFile === 'index.html', `index.md renders to index.html`);
+    check(indexOnDisk === ownIndex.html,
+      `index.html on disk IS the render of index.md (not the synthetic chapter list)`);
+    const srcLinks = (readFileSync(join(src, 'index.md'), 'utf8').match(/^- \[/gm) ?? []).length;
+    const outLinks = [...indexOnDisk.matchAll(/<li><a href="([^":#]+\.html)#/g)].length;
+    check(outLinks === srcLinks,
+      `index.html carries all ${srcLinks} of index.md's entry links (found ${outLinks})`);
+    note(`index.html is index.md's own render, with ${outLinks} entry link(s) — `
+      + `each already proved to resolve to a real heading by check 9`);
+  } else {
+    check(indexOnDisk.includes('chapter-index'),
+      `a doc set with no index.md still gets the synthetic contents page`);
+    note('synthetic index.html present (this doc set supplies no index.md)');
+  }
 
   // ── 9. cross-page fragment resolution ─────────────────────────────────────
   // Check 3 proves `X.html` names an emitted page; check 4 proves this page's own
@@ -291,6 +386,33 @@ try {
   }
   check(refused, 'an unknown fence label is refused rather than rendered as prose');
   if (refused) note('unknown fence label refused');
+
+  // ── 13. the doctest rule is keyed on the FENCE, not on the doc set ────────
+  // The negative control for check 11. A synthetic doc set that is neither
+  // docs/guide nor docs/stdlib, holding all three shapes at once: a runnable
+  // program, a `medaka-nocheck` fragment, and a marker-introduced doctest. If
+  // footer suppression were keyed on which directory `--src` named — the thing
+  // #2384 explicitly forbids — this doc set would suppress all three or none,
+  // and the three-way split below is the only assertion that can tell those
+  // apart from the correct behaviour.
+  const probe = join(scratch, 'probe');
+  mkdirSync(probe, { recursive: true });
+  writeFileSync(join(probe, 'a.md'),
+    '# Probe\n\n## S\n\n```medaka\nmain = println 1\n```\n\n'
+    + '```medaka-nocheck\nf x = x + 1\n```\n\n'
+    + '```medaka\n> f 1\n2\n```\n');
+  const probeOut = join(scratch, 'probeout');
+  renderDocSet({ src: probe, out: probeOut, exclude: [], title: 'Probe', repoUrl: '', repoRoot: REPO_ROOT });
+  const probeHtml = readFileSync(join(probeOut, 'a.html'), 'utf8');
+  const probeBlocks = [...probeHtml.matchAll(BLOCK_RE)].map((b) => b[6]);
+  check(probeBlocks.length === 3, `probe doc set rendered 3 codeblocks (got ${probeBlocks.length})`);
+  check(/class="pg-run"/.test(probeBlocks[0] ?? ''),
+    'probe: a complete `medaka` program keeps its ▶ footer');
+  check(/class="pg-not-runnable"/.test(probeBlocks[1] ?? ''),
+    'probe: a `medaka-nocheck` fragment keeps its not-runnable footer');
+  check((probeBlocks[2] ?? 'x') === '',
+    'probe: a `> `-prompt doctest transcript gets NO footer — in a doc set that is neither the guide nor the stdlib');
+  note('doctest footer suppression is keyed on the fence, not on --src');
 } finally {
   rmSync(scratch, { recursive: true, force: true });
 }

@@ -1,30 +1,32 @@
-{- map.mdk — an immutable, ordered key→value map.
+{- | An immutable map from keys to values, ordered by key.
 
-   See STDLIB.md (Module 5) for the plan.
+   `Map k v` is a balanced binary search tree. Lookup, insertion, and
+   deletion cost `O(log n)`, and `size` is `O(1)`. Every operation returns a
+   new map and leaves the original unchanged; the two share whatever
+   structure they have in common, so keeping old versions is cheap.
 
-   Design notes
-   ────────────
-   `Map k v` is a *weight-balanced binary search tree* (the Adams / Haskell
-   `Data.Map` scheme): every interior node caches the size of its subtree, and
-   the two invariants
+   Keys are ordered by their `Ord` instance, and `toList`, `keys`, `values`,
+   and the folds visit entries in ascending key order. The `Map { k => v }`
+   literal builds a map; the empty map is `empty`. For keys that are
+   `Hashable` but not `Ord`, or when order does not matter, see
+   `hash_map`. -}
 
-     • search:   keys in the left subtree < node key < keys in the right
-     • balance:  neither subtree is more than `delta` times the size of the
-                 other (`delta = 3`)
-
-   are maintained by a single smart constructor, `balance`, that rotates when an
-   insert or delete tips a node out of balance.  Caching the size makes `size`
-   O(1) and the balancing decision a couple of integer comparisons; it also pays
-   for `split`-style operations later.
-
-   The whole structure is *persistent* — every operation returns a fresh map and
-   shares all the untouched subtrees with the original, so an old version stays
-   valid and cheap to keep around.  That is exactly what a compiler's symbol
-   tables and scopes want.
-
-   Ordering is by the key's `Ord` instance.  Most operations therefore carry an
-   `Ord k` constraint; the few that only walk an existing tree (`size`, `map`,
-   `keys`, the folds) do not, because the tree is already in order. -}
+-- `Map k v` is a weight-balanced binary search tree (the Adams / Haskell
+-- `Data.Map` scheme): every interior node caches the size of its subtree,
+-- and the two invariants
+--
+--   • search:   keys in the left subtree < node key < keys in the right
+--   • balance:  neither subtree is more than `delta` times the size of the
+--               other (`delta = 3`)
+--
+-- are maintained by a single smart constructor, `balance`, that rotates when
+-- an insert or delete tips a node out of balance.  Caching the size makes
+-- `size` O(1) and the balancing decision a couple of integer comparisons; it
+-- also pays for the `split`-style operations.
+--
+-- Most operations carry an `Ord k` constraint; the few that only walk an
+-- existing tree (`size`, `map`, `keys`, the folds) do not, because the tree
+-- is already in order.
 
 -- map/set are identical weight-balanced-tree bodies over DISTINCT ADTs; consolidation needs a Set = Map _ Unit refactor (out of scope).
 -- lint-disable-file rule-duplicate-body
@@ -44,10 +46,12 @@ import core.{
   Index,
 }
 
-{- The representation.  `Tip` is the empty tree; `Bin size key value left right`
-   is an interior node whose cached `size` is `1 + size left + size right`.
-   Public so callers can pattern-match if they really need to, but the smart
-   constructors below are the only sanctioned way to *build* one. -}
+{- | The map type.
+
+   `Tip` is the empty tree and `Bin` is an interior node holding its
+   subtree's size, a key, a value, and the left and right subtrees. The
+   constructors are visible for pattern matching, but build maps with the
+   functions in this module, which keep the tree balanced. -}
 public export data Map k v = Tip | Bin Int k v (Map k v) (Map k v)
 
 -- ── Internal smart constructors ─────────────────────────────────────────
@@ -106,12 +110,12 @@ doubleR k1 v1 (Bin _ k2 v2 t1 (Bin _ k3 v3 t2 t3)) t4 =
   bin k3 v3 (bin k2 v2 t1 t2) (bin k1 v1 t3 t4)
 doubleR k1 v1 _ t4 = panic "Map.doubleR: malformed left subtree"
 
--- ── Construction ────────────────────────────────────────────────────────
+-- # Construction
 
 -- The empty map is `Monoid.empty` (see `impl Monoid (Map k v)` below); use
 -- the `Tip` constructor directly inside this module.
 
-{- | A map with a single entry.
+{- | A map with one entry.
 
    > size (singleton 1 "a")
    1 -}
@@ -119,22 +123,10 @@ export
 singleton : k -> v -> Map k v
 singleton k v = Bin 1 k v Tip Tip
 
-{- | Build a map from an association list.  Later pairs win on duplicate keys.
+{- | A map holding the pairs of an association list.
 
-   The `Map { k => v, … }` literal is sugar for `fromList` (it lowers to a
-   `FromEntries` dispatch pinned at `Map`, see the impl at the bottom of this
-   file):
-
-   > size (Map { 1 => 10, 2 => 20, 3 => 30 })
-   3
-   > findWithDefault 0 2 (Map { 1 => 10, 2 => 20 })
-   20
-
-   The empty literal `Map { }` works too (Phase 114); annotate to fix the
-   element types the empty braces leave open:
-
-   > size (Map { } : Map Int Int)
-   0
+   When a key appears more than once, the later pair wins. The
+   `Map { k => v, ... }` literal is the same operation.
 
    > keys (fromList [(3, 0), (1, 0), (2, 0)])
    [1, 2, 3]
@@ -144,9 +136,16 @@ export
 fromList : Ord k => List (k, v) -> Map k v
 fromList xs = fold (m (k, v) => set k v m) Tip xs
 
--- ── Query ───────────────────────────────────────────────────────────────
+-- > size (Map { 1 => 10, 2 => 20, 3 => 30 })
+-- 3
+-- > findWithDefault 0 2 (Map { 1 => 10, 2 => 20 })
+-- 20
+-- > size (Map { } : Map Int Int)
+-- 0
 
-{- | Number of entries.  O(1) — read straight off the root's cached size.
+-- # Query
+
+{- | The number of entries, in `O(1)`.
 
    > size (fromList [(1, 10), (2, 20), (1, 30)])
    2 -}
@@ -155,7 +154,7 @@ size : Map k v -> Int
 size Tip = 0
 size (Bin s _ _ _ _) = s
 
-{- | `True` when the map has no entries.
+{- | Whether the map has no entries.
 
    > isEmpty (empty : Map Int Int)
    True -}
@@ -164,7 +163,7 @@ isEmpty : Map k v -> Bool
 isEmpty Tip = True
 isEmpty _ = False
 
-{- | Look up the value at a key.
+{- | The value at `k`, or `None` when the key is absent.
 
    > get 2 (fromList [(1, 10), (2, 20)])
    Some 20
@@ -178,17 +177,17 @@ get k (Bin _ k2 v l r) = match compare k k2
   Gt => get k r
   Eq => Some v
 
-{- | `index m k` looks up `m`'s value at key `k` (`m[k]` sugar dispatches
-   here).  Raises the coded `indexError` (E-INDEX-OOB) when the key is
-   absent -- use `get` for a safe `Option`-returning read instead.  Note the
-   flipped argument order vs. `get k m`: the `Index` interface always takes
-   the container first (`index m k`). -}
+{- | `m[k]` is the value at `k`.
+
+   Panics with an index error when the key is absent; `get` is the
+   `Option`-returning form. The `Index` interface takes the map first, so
+   this is `index m k` where `get` is `get k m`. -}
 export impl Index (Map k v) k v requires Ord k where
   index m k = match get k m
     Some v => v
     None => indexError "key not found"
 
-{- | `True` when the key is present.
+{- | Whether `k` is present.
 
    > has 2 (fromList [(1, 10), (2, 20)])
    True
@@ -202,7 +201,7 @@ has k (Bin _ k2 _ l r) = match compare k k2
   Gt => has k r
   Eq => True
 
-{- | Value at a key, or a fallback when the key is absent.
+{- | The value at `k`, or `d` when the key is absent.
 
    > findWithDefault 0 2 (fromList [(1, 10), (2, 20)])
    20
@@ -214,9 +213,9 @@ findWithDefault d k m = match get k m
   None => d
   Some v => v
 
--- ── Insertion ───────────────────────────────────────────────────────────
+-- # Insertion
 
-{- | Insert a key/value pair, replacing any existing value at the key.
+{- | The map with `v` stored at `k`, replacing any existing value.
 
    > findWithDefault 0 2 (set 2 99 (fromList [(1, 10), (2, 20)]))
    99 -}
@@ -228,8 +227,10 @@ set k v (Bin s k2 v2 l r) = match compare k k2
   Gt => balance k2 v2 l (set k v r)
   Eq => Bin s k v l r
 
-{- | Insert with a combining function.  On a collision the new value is
-   `f newValue oldValue`; on a fresh key the value is stored as-is.
+{- | The map with `v` stored at `k`, combining with an existing value.
+
+   When `k` is already present, the stored value becomes `f v old`. When it
+   is absent, `v` is stored as it is.
 
    > findWithDefault 0 1 (insertWith (n o => n + o) 1 5 (fromList [(1, 10)]))
    15 -}
@@ -241,8 +242,9 @@ insertWith f k v (Bin s k2 v2 l r) = match compare k k2
   Gt => balance k2 v2 l (insertWith f k v r)
   Eq => Bin s k2 (f v v2) l r
 
-{- | Apply a function to the value at a key, if present.  A no-op when the key
-   is absent.  The tree shape is unchanged, so no rebalancing is needed.
+{- | The map with `f` applied to the value at `k`.
+
+   Unchanged when `k` is absent.
 
    > findWithDefault 0 1 (adjust (n => n * 10) 1 (fromList [(1, 5), (2, 6)]))
    50 -}
@@ -254,14 +256,14 @@ adjust f k (Bin s k2 v2 l r) = match compare k k2
   Gt => Bin s k2 v2 l (adjust f k r)
   Eq => Bin s k2 (f v2) l r
 
--- ── Deletion ────────────────────────────────────────────────────────────
+-- # Deletion
 
-{- | Remove a key.  A no-op when the key is absent.
+{- | The map without the entry at `k`.
+
+   Unchanged when `k` is absent.
 
    > has 2 (delete 2 (fromList [(1, 10), (2, 20)]))
-   False
-   > size (delete 9 (fromList [(1, 10), (2, 20)]))
-   2 -}
+   False -}
 export
 delete : Ord k => k -> Map k v -> Map k v
 delete k Tip = Tip
@@ -269,6 +271,9 @@ delete k (Bin _ k2 v2 l r) = match compare k k2
   Lt => balance k2 v2 (delete k l) r
   Gt => balance k2 v2 l (delete k r)
   Eq => glue l r
+
+-- > size (delete 9 (fromList [(1, 10), (2, 20)]))
+-- 2
 
 {- `glue` joins two subtrees that were siblings under a now-deleted node, so
    every key on the left is below every key on the right.  It promotes the max
@@ -291,10 +296,13 @@ glueMin l r = match minView r
   None => l
   Some (k, v, r') => balance k v l r'
 
--- ── Min / max ───────────────────────────────────────────────────────────
+-- # Minimum and maximum
 
-{- | Split off the smallest entry: `Some (key, value, rest)`, or `None` when
-   empty.  `rest` stays balanced. -}
+{- | The smallest entry and the map without it, or `None` when the map is
+   empty.
+
+   > minView (fromList [(2, "b"), (1, "a")])
+   Some (1, "a", fromList [(2, "b")]) -}
 export
 minView : Map k v -> Option (k, v, Map k v)
 minView Tip = None
@@ -302,7 +310,11 @@ minView (Bin _ k v l r) = match minView l
   None => Some (k, v, r)
   Some (km, vm, l') => Some (km, vm, balance k v l' r)
 
-{- | Split off the largest entry: `Some (key, value, rest)`, or `None`. -}
+{- | The largest entry and the map without it, or `None` when the map is
+   empty.
+
+   > maxView (fromList [(2, "b"), (1, "a")])
+   Some (2, "b", fromList [(1, "a")]) -}
 export
 maxView : Map k v -> Option (k, v, Map k v)
 maxView Tip = None
@@ -310,7 +322,7 @@ maxView (Bin _ k v l r) = match maxView r
   None => Some (k, v, l)
   Some (km, vm, r') => Some (km, vm, balance k v l r')
 
-{- | Smallest key/value, or `None`.
+{- | The entry with the smallest key, or `None` when the map is empty.
 
    > getMin (fromList [(3, 0), (1, 0), (2, 0)])
    Some (1, 0) -}
@@ -318,7 +330,7 @@ export
 getMin : Map k v -> Option (k, v)
 getMin m = map ((k, v, _) => (k, v)) (minView m)
 
-{- | Largest key/value, or `None`.
+{- | The entry with the largest key, or `None` when the map is empty.
 
    > getMax (fromList [(3, 0), (1, 0), (2, 0)])
    Some (3, 0) -}
@@ -326,7 +338,9 @@ export
 getMax : Map k v -> Option (k, v)
 getMax m = map ((k, v, _) => (k, v)) (maxView m)
 
-{- | Drop the smallest entry (a no-op on the empty map).
+{- | The map without its smallest entry.
+
+   Unchanged when the map is empty.
 
    > keys (deleteMin (fromList [(3, 0), (1, 0), (2, 0)]))
    [2, 3] -}
@@ -336,7 +350,9 @@ deleteMin m = match minView m
   None => Tip
   Some (_, _, m') => m'
 
-{- | Drop the largest entry (a no-op on the empty map).
+{- | The map without its largest entry.
+
+   Unchanged when the map is empty.
 
    > keys (deleteMax (fromList [(3, 0), (1, 0), (2, 0)]))
    [1, 2] -}
@@ -346,21 +362,27 @@ deleteMax m = match maxView m
   None => Tip
   Some (_, _, m') => m'
 
--- ── Folds and traversal (in ascending key order) ────────────────────────
+-- # Folds and traversal
 
-{- | Right fold over key/value pairs in ascending key order. -}
+{- | A right fold over the entries in ascending key order.
+
+   > foldrWithKey (k v acc => k :: acc) [] (fromList [(2, 0), (1, 0)])
+   [1, 2] -}
 export
 foldrWithKey : (k -> v -> b -> <e> b) -> b -> Map k v -> <e> b
 foldrWithKey f z Tip = z
 foldrWithKey f z (Bin _ k v l r) = foldrWithKey f (f k v (foldrWithKey f z r)) l
 
-{- | Left fold over key/value pairs in ascending key order. -}
+{- | A left fold over the entries in ascending key order.
+
+   > foldlWithKey (acc k v => acc + v) 0 (fromList [(1, 10), (2, 20)])
+   30 -}
 export
 foldlWithKey : (b -> k -> v -> <e> b) -> b -> Map k v -> <e> b
 foldlWithKey f z Tip = z
 foldlWithKey f z (Bin _ k v l r) = foldlWithKey f (f (foldlWithKey f z l) k v) r
 
-{- | All key/value pairs, ascending by key.
+{- | The entries as pairs, in ascending key order.
 
    > toList (fromList [(2, 20), (1, 10), (3, 30)])
    [(1, 10), (2, 20), (3, 30)] -}
@@ -368,7 +390,7 @@ export
 toList : Map k v -> List (k, v)
 toList m = foldrWithKey (k v acc => (k, v)::acc) [] m
 
-{- | All keys, ascending.
+{- | The keys, in ascending order.
 
    > keys (fromList [(2, 0), (3, 0), (1, 0)])
    [1, 2, 3] -}
@@ -376,7 +398,7 @@ export
 keys : Map k v -> List k
 keys m = foldrWithKey (k _ acc => k::acc) [] m
 
-{- | All values, ordered by their keys.
+{- | The values, in ascending order of their keys.
 
    > values (fromList [(2, 20), (1, 10), (3, 30)])
    [10, 20, 30] -}
@@ -384,8 +406,10 @@ export
 values : Map k v -> List v
 values m = foldrWithKey (k v acc => v::acc) [] m
 
-{- | Map a function over the values, keeping keys and structure.  The key is
-   passed alongside the value.
+{- | The map with `f` applied to every value, where `f` also receives the
+   key.
+
+   `map` is the form whose function sees only the value.
 
    > values (mapWithKey (k v => k + v) (fromList [(1, 10), (2, 20)]))
    [11, 22] -}
@@ -472,7 +496,11 @@ splitLookup k (Bin _ k2 v2 l r) = match compare k k2
     (link k2 v2 l below, found, above)
   Eq => (l, Some v2, r)
 
-{- | Keep only the entries whose key/value satisfy the predicate.
+-- # Filtering
+
+{- | The entries whose key and value satisfy `p`.
+
+   `filter` is the form whose predicate sees only the value.
 
    > keys (filterWithKey (k v => v > 15) (fromList [(1, 10), (2, 20), (3, 30)]))
    [2, 3] -}
@@ -484,14 +512,17 @@ filterWithKey p (Bin _ k v l r) =
   let r2 = filterWithKey p r
   if p k v then link k v l2 r2 else link2 l2 r2
 
--- ── Combining ───────────────────────────────────────────────────────────
+-- # Combining
 
-{- | Left-biased union: on a shared key the value from the first map wins.
+-- The combining operations are divide-and-conquer over the tree structure,
+-- costing `O(m log(n/m + 1))` for maps of sizes `m <= n`.
+
+{- | The entries of both maps. On a shared key, the first map's value wins.
+
+   `++` on maps is `union`.
 
    > findWithDefault 0 1 (union (fromList [(1, 1)]) (fromList [(1, 2), (2, 2)]))
-   1
-   > size (union (fromList [(1, 1)]) (fromList [(1, 2), (2, 2)]))
-   2 -}
+   1 -}
 export
 union : Ord k => Map k v -> Map k v -> Map k v
 union Tip b = b
@@ -501,7 +532,10 @@ union (Bin _ k v l r) b =
   -- `k`'s own entry in `b` was dropped by `splitAt`, so the left map wins.
   link k v (union l bl) (union r br)
 
-{- | Union with a combining function for shared keys: `f leftValue rightValue`.
+-- > size (union (fromList [(1, 1)]) (fromList [(1, 2), (2, 2)]))
+-- 2
+
+{- | The entries of both maps. On a shared key, the value is `f left right`.
 
    > findWithDefault 0 1 (unionWith (x y => x + y) (fromList [(1, 1)]) (fromList [(1, 2)]))
    3 -}
@@ -516,7 +550,7 @@ unionWith f (Bin _ k v l r) b =
     Some w => f v w
   link k v2 (unionWith f l bl) (unionWith f r br)
 
-{- | Keys present in the first map but not the second (values from the first).
+{- | The entries of the first map whose keys are absent from the second.
 
    > keys (difference (fromList [(1, 0), (2, 0), (3, 0)]) (fromList [(2, 0)]))
    [1, 3] -}
@@ -529,7 +563,7 @@ difference a (Bin _ k _ l r) =
   -- `splitAt` already dropped `k` from both halves, so it is simply not rebuilt.
   link2 (difference al l) (difference ar r)
 
-{- | Keys present in both maps, combined with `f leftValue rightValue`.
+{- | The keys present in both maps, each with the value `f left right`.
 
    > toList (intersectionWith (x y => x + y) (fromList [(1, 10), (2, 20)]) (fromList [(2, 2), (3, 3)]))
    [(2, 22)] -}
@@ -545,9 +579,7 @@ intersectionWith f (Bin _ k v l r) b =
     None => link2 l2 r2
     Some w => link k (f v w) l2 r2
 
-{- | Keys present in both maps, keeping the LEFT map's value — the plain form
-   of `intersectionWith`, matching how `union` is the plain form of
-   `unionWith` and how `set.intersection` is left-biased.
+{- | The keys present in both maps, each with the first map's value.
 
    > toList (intersection (fromList [(1, 10), (2, 20)]) (fromList [(2, 2), (3, 3)]))
    [(2, 20)] -}
@@ -557,7 +589,7 @@ intersection a b = intersectionWith (x _ => x) a b
 
 -- ── Typeclass instances ─────────────────────────────────────────────────
 
-{- | Map over the values, keys and structure preserved.
+{- | `map` applies a function to every value, keeping the keys.
 
    > values (map (n => n * 10) (fromList [(1, 1), (2, 2)]))
    [10, 20] -}
@@ -565,10 +597,9 @@ export impl Mappable (Map k) where
   map f Tip = Tip
   map f (Bin s k v l r) = Bin s k (f v) (map f l) (map f r)
 
-{- | Drop (and transform) values, keys and order preserved.  `filterMap` is the
-   primitive; the interface's default `filter` falls out of it.  Note this
-   folds over VALUES — the key-aware form is the module-level `filterWithKey`,
-   which stays because the interface's callback cannot see a key. -}
+{- | `filter` and `filterMap` test each value, keeping the keys of the
+   entries that survive. `filterWithKey` is the form that also sees the
+   key. -}
 export impl Filterable (Map k) where
   filterMap f Tip = Tip
   filterMap f (Bin _ k v l r) =
@@ -578,29 +609,25 @@ export impl Filterable (Map k) where
       Some w => link k w l2 r2
       None => link2 l2 r2
 
-{- | Structural equality: same keys mapped to equal values.  Compared through
-   the canonical ascending association list, so tree *shape* doesn't matter.
+{- | Two maps are equal when they hold the same keys with equal values,
+   regardless of how they were built.
 
    > eq (fromList [(1, 10), (2, 20)]) (fromList [(2, 20), (1, 10)])
    True -}
 export impl Eq (Map k v) requires Eq k, Eq v where
   eq a b = if size a /= size b then False else eq (toList a) (toList b)
 
-{- | Lexicographic ordering through the canonical ascending association list,
-   so two maps order by their `(key, value)` pairs and a proper prefix sorts
-   first.  Enables nesting (`Map (Set k) v`) and sorting `List (Map …)`.
+{- | Maps compare lexicographically by their ascending `(key, value)` pairs.
 
    > compare (fromList [(1, 10)]) (fromList [(1, 20)])
    Lt -}
 export impl Ord (Map k v) requires Ord k, Ord v where
   compare a b = compare (toList a) (toList b)
 
-{- | Rendered as `fromList [(k, v), …]`, mirroring the constructor that would
-   rebuild it.  (Doctest compares against a literal: `Debug String` lives in
-   string.mdk, out of this module's isolated test context.)
+{- | `debug` renders a map as `fromList [(k, v), ...]`.
 
-   > debug (fromList [(1, 10), (2, 20)]) == "fromList [(1, 10), (2, 20)]"
-   True -}
+   > debug (fromList [(1, 10), (2, 20)])
+   "fromList [(1, 10), (2, 20)]" -}
 export impl Debug (Map k v) requires Debug k, Debug v where
   debug m = "fromList \{debug (toList m)}"
 
@@ -611,50 +638,43 @@ displayMapEntries [] = ""
 displayMapEntries [(k, v)] = "\{k} => \{v}"
 displayMapEntries ((k, v)::rest) = "\{k} => \{v}, \{displayMapEntries rest}"
 
-{- | The *display* form — the Phase-108 literal `Map { k => v, … }` (empty →
-   `Map {}`), as opposed to Debug's re-evaluable `fromList [(k, v), …]`.
+{- | `display` renders a map in its literal syntax, `Map { k => v, ... }`.
 
-   > display (fromList [(1, 10), (2, 20)]) == "Map { 1 => 10, 2 => 20 }"
-   True
-   > display (empty : Map Int Int) == "Map {}"
-   True -}
+   > display (fromList [(1, 10), (2, 20)])
+   "Map { 1 => 10, 2 => 20 }"
+   > display (empty : Map Int Int)
+   "Map {}" -}
 export impl Display (Map k v) requires Display k, Display v where
   display m = match toList m
     [] => "Map {}"
     es => "Map { \{displayMapEntries es} }"
 
-{- | `++` on maps is left-biased union (the left map wins on shared keys).
-
-   `append` dispatches on its first `Map` argument, so the `Ord k` it needs to
-   merge threads in by the ordinary route. -}
+-- | `++` on maps is `union`: the left map wins on shared keys.
 export impl Semigroup (Map k v) requires Ord k where
   append a b = union a b
 
-{- | Backs the `Map { k => v, … }` literal: the compiler lowers that to
-   `fromEntries [(k, v), …]` pinned at `Map`, dispatching here.  The `Ord k`
-   the build needs threads in by the ordinary return-position route. -}
+-- | The `Map { k => v, ... }` literal builds its map through this instance.
 export impl FromEntries (Map k v) (k, v) requires Ord k where
   fromEntries es = fromList es
 
-{- | `Monoid.empty` for `Map` is the empty tree.  `empty` is nullary and so
-   dispatches on its *result* type (Phase 103); the impl's `requires Ord k`
-   carries no dict here because `Tip` needs none, so a return-position `empty :
-   Map k v` grounds cleanly.
+-- `empty` is nullary and so dispatches on its result type; the impl's
+-- `requires Ord k` carries no dict here because `Tip` needs none, so a
+-- return-position `empty : Map k v` grounds cleanly.
+{- | `empty` is the map with no entries.
 
    > isEmpty (empty : Map Int Int)
    True -}
 export impl Monoid (Map k v) requires Ord k where
   empty = Tip
 
--- ── Structural invariants (for testing / debugging) ─────────────────────
+-- # Invariants
 
-{- | Check the three structural invariants at every node: the search-tree
-   order (left keys < node key < right keys), the cached `size` matching the
-   actual subtree size, and the weight-balance bound (neither sibling more than
-   `delta` times the other).  A correct sequence of operations always leaves a
-   map `wellFormed`; it is exported as a debugging aid and as the backbone of
-   this module's property tests.  Re-walks subtrees for the order check, so it
-   is O(n log n) — not for hot paths. -}
+{- | Whether the map's internal tree satisfies its invariants: keys in
+   search order, correct cached sizes, and balanced subtrees.
+
+   Every map built with this module's functions is well formed. This is a
+   debugging aid and the basis of the module's property tests. It costs
+   `O(n log n)`. -}
 export
 wellFormed : Ord k => Map k v -> Bool
 wellFormed Tip = True
@@ -705,8 +725,8 @@ prop "union is left-biased on shared keys" (k : Int) (xs : List (Int, Int)) =
   let r = set k 2 (fromList xs)
   eq (get k (union l r)) (Some 1)
 
-{- The naive fold-insert bodies the join-based combining operations replaced
-   (#423).  They are obviously correct and obviously slow, which makes them the
+{- The naive fold-insert bodies the join-based combining operations replaced.
+   They are obviously correct and obviously slow, which makes them the
    differential oracle for the fast versions: the properties below assert the
    two agree entry-for-entry on random inputs.  A join-based operation that
    silently corrupted the weight-balance invariant would still answer every

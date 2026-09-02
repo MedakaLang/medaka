@@ -1,10 +1,10 @@
 # META
-source_lines=764
+source_lines=763
 stages=DESUGAR,MARK
 # SOURCE
--- Self-hosted comment-preserving formatter — port of lib/printer.ml's
--- `format_program` (the tail half of the printer, NOT covered by
--- compiler/printer.mdk's comment-FREE `programToString` core).
+-- Self-hosted comment-preserving formatter — `format_program` (the tail half
+-- of the printer, NOT covered by compiler/printer.mdk's comment-FREE
+-- `programToString` core).
 --
 -- Walks the top-level declarations in source order, interleaving the lexer's
 -- captured comment side-channel (compiler/lexer.mdk `collectComments` →
@@ -79,7 +79,7 @@ import support.util.{
 -- started: whether any output has been emitted (gates the blank-line rule)
 data FmtState = FmtState (List String) (List Comment) (List Int) Int Bool
 
--- ── String helpers (prelude-only; mirror lib/printer.ml's OCaml idioms) ──
+-- ── String helpers (prelude-only) ─────────────────────────────────────────
 
 -- Count '\n' in a comment lexeme — a multi-line block comment advances the
 -- cursor by that many lines (OCaml: String.fold_left counting '\n').
@@ -652,8 +652,7 @@ walkDecls st srcLines (d::ds) (p::ps) (c::rest) =
 
 -- format_program: interleave comments into the rendered program.  If the decl
 -- position list and the decl list differ in length, fall back to the plain
--- comment-free `programToString`-equivalent (render each decl + "\n").  Mirror
--- of lib/printer.ml's length guard.
+-- comment-free `programToString`-equivalent (render each decl + "\n").
 export
 formatProgram : List Decl -> List DeclPos -> List Int -> List (List Int) -> List Comment -> Int -> String -> String
 formatProgram decls declPositions variantLines chainLines comments _lastContentLine src =
