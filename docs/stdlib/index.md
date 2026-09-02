@@ -35,6 +35,8 @@
 
 ## [`array`](array.md)
 
+Operations on `Array a`.
+
 - [`singleton`](array.md#singleton)
 - [`make`](array.md#make)
 - [`makeWith`](array.md#makewith)
