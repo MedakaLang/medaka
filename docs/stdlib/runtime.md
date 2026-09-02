@@ -404,6 +404,15 @@ netTrySend : Int -> Array Int -> <Net _> Result String (Option Int)
 `netSend` that returns `None` instead of blocking. `Some n` is the count
 written, which may be short.
 
+### `netTrySendFrom`
+
+```
+netTrySendFrom : Int -> Array Int -> Int -> <Net _> Result String (Option Int)
+```
+
+`netTrySend` starting at `offset` into the array, sending at most 64 KiB
+per call, so a loop over a large payload pays only for the bytes it sends.
+
 ## Time
 
 ### `wallTimeSec`

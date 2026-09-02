@@ -1,0 +1,18 @@
+-- The sequential driver interleaves `concurrent`'s children one yield at a
+-- time, so the observable order is round-robin and deterministic — the v1
+-- contract (G1), which a child-runs-to-completion driver silently broke.
+-- Same answer on eval, native, and wasm.
+import async.{Async, liftIO, yield, concurrent, runAsync}
+
+task : Ref (List String) -> String -> Async <> Unit
+task log n = defer
+  _ <- liftIO (u => log := !log ++ [n ++ "1"])
+  _ <- yield
+  _ <- liftIO (u => log := !log ++ [n ++ "2"])
+  _ <- yield
+  liftIO (u => log := !log ++ [n ++ "3"])
+
+main =
+  let log = Ref []
+  let _ = runAsync (concurrent [task log "a", task log "b"])
+  println (display !log)
