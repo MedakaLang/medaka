@@ -74,7 +74,7 @@ import frontend.ast.{
 import support.util.{
   joinWith, listLen, allList, isEmptyL, isNonEmptyL, escOneHex2
 }
-import list.{last}
+import list.{last, sortBy}
 
 -- ── Document algebra ──────────────────────────────
 
@@ -826,25 +826,42 @@ bracedPieces open_ forced ps =
 -- A collection literal whose last element is followed by one of them explodes
 -- one element per line.
 
-trailingCommasRef : Ref (List (Int, Int))
-trailingCommasRef = Ref []
+-- Sorted by (line, col) so each literal's lookup is a binary search; a scan
+-- per literal made a file with N literals cost N x commas.
+trailingCommasRef : Ref (Array (Int, Int))
+trailingCommasRef = Ref (arrayFromList [])
 
 export
 setTrailingCommas : List (Int, Int) -> Unit
-setTrailingCommas cs = trailingCommasRef := cs
+setTrailingCommas cs = trailingCommasRef := arrayFromList (sortBy cmpPos cs)
+
+cmpPos : (Int, Int) -> (Int, Int) -> Ordering
+cmpPos (l1, c1) (l2, c2) = if l1 == l2 then compare c1 c2 else compare l1 l2
+
+-- number of entries strictly before (line, col)
+posLowerBound : Array (Int, Int) -> Int -> Int -> Int -> Int -> Int
+posLowerBound arr line col lo hi =
+  if lo >= hi then
+    lo
+  else
+    let mid = (lo + hi) / 2
+    match arr[mid]
+      (l, c) =>
+        if l < line || l == line && c < col then
+          posLowerBound arr line col (mid + 1) hi
+        else
+          posLowerBound arr line col lo mid
 
 -- A recorded trailing comma strictly after (`lastLine`, `lastCol`) — the last
 -- element's end — and before the literal's closing line/col.
 hasTrailingComma : Int -> Int -> Int -> Int -> Bool
 hasTrailingComma lastLine lastCol endLine endCol =
-  anyComma lastLine lastCol endLine endCol !trailingCommasRef
-
-anyComma : Int -> Int -> Int -> Int -> List (Int, Int) -> Bool
-anyComma _ _ _ _ [] = False
-anyComma ll lc el ec ((l, c) :: rest) =
-  let afterLast = l > ll || l == ll && c >= lc
-  let beforeEnd = l < el || l == el && c < ec
-  afterLast && beforeEnd || anyComma ll lc el ec rest
+  let arr = !trailingCommasRef
+  let i = posLowerBound arr lastLine lastCol 0 (arrayLength arr)
+  if i >= arrayLength arr then
+    False
+  else match arr[i]
+    (l, c) => l < endLine || l == endLine && c < endCol
 
 -- Last element's (endLine, endCol) from its ELoc, if any.
 exprEndPos : Expr -> Option (Int, Int)
@@ -1632,31 +1649,48 @@ armPiece arm = match armSpan arm
 -- where-clause (`setUnitStarts`, tagged by kind: 0 arm, 1 statement, 2 impl
 -- method, 3 where-clause), and the latest recorded start OF THAT KIND at or
 -- before a unit's first located token is the unit's own.
-unitStartsRef : Ref (List (Int, Int, Int))
-unitStartsRef = Ref []
+-- Sorted by (kind, line, col) so each unit's lookup is a binary search; a
+-- scan per unit made a file with N units cost N^2, in `fmt` and in every
+-- `declToString` call lint makes after a parse.
+unitStartsRef : Ref (Array (Int, Int, Int))
+unitStartsRef = Ref (arrayFromList [])
 
 export
 setUnitStarts : List (Int, Int, Int) -> Unit
-setUnitStarts ps = unitStartsRef := ps
+setUnitStarts ps = unitStartsRef := arrayFromList (sortBy cmpUnit ps)
 
--- the latest recorded unit start at or before (line, col); (line, col) itself
--- when none is recorded (or the unit carries no location at all)
+cmpUnit : (Int, Int, Int) -> (Int, Int, Int) -> Ordering
+cmpUnit (k1, l1, c1) (k2, l2, c2) =
+  if k1 /= k2 then compare k1 k2 else cmpPos (l1, c1) (l2, c2)
+
+-- number of entries at or before (kind, line, col)
+unitUpperBound : Array (Int, Int, Int) -> Int -> Int -> Int -> Int -> Int -> Int
+unitUpperBound arr kind line col lo hi =
+  if lo >= hi then
+    lo
+  else
+    let mid = (lo + hi) / 2
+    match arr[mid]
+      (k, l, c) =>
+        let le = k < kind || k == kind && (l < line || l == line && c <= col)
+        if le then
+          unitUpperBound arr kind line col (mid + 1) hi
+        else
+          unitUpperBound arr kind line col lo mid
+
+-- the latest recorded unit start of `kind` at or before (line, col); (line,
+-- col) itself when none is recorded (or the unit carries no location at all)
 unitStartAt : Int -> Int -> Int -> (Int, Int)
 unitStartAt kind line col =
-  if line == 0 then (0, 0) else unitStartGo kind line col (0, 0) !unitStartsRef
-
-unitStartGo : Int ->
-  Int ->
-  Int ->
-  (Int, Int) ->
-  List (Int, Int, Int) ->
-  (Int, Int)
-unitStartGo _ line col (bl, bc) [] = if bl == 0 then (line, col) else (bl, bc)
-unitStartGo kind line col (bl, bc) ((k, l, c) :: rest)
-  | k /= kind || l > line || l == line && c > col =
-    unitStartGo kind line col (bl, bc) rest
-  | l > bl || l == bl && c > bc = unitStartGo kind line col (l, c) rest
-  | otherwise = unitStartGo kind line col (bl, bc) rest
+  if line == 0 then
+    (0, 0)
+  else
+    let arr = !unitStartsRef
+    let i = unitUpperBound arr kind line col 0 (arrayLength arr)
+    if i == 0 then
+      (line, col)
+    else match arr[i - 1]
+      (k, l, c) => if k == kind then (l, c) else (line, col)
 
 printMatchArms : List Arm -> Doc
 printMatchArms arms = indentBlock (joinHard (pieceDocsHard (map armPiece arms)))

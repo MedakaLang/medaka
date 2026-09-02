@@ -1,5 +1,5 @@
 # META
-source_lines=2395
+source_lines=2429
 stages=DESUGAR,MARK
 # SOURCE
 -- Pretty printer for Medaka, producing parseable source from the AST
@@ -78,7 +78,7 @@ import frontend.ast.{
 import support.util.{
   joinWith, listLen, allList, isEmptyL, isNonEmptyL, escOneHex2
 }
-import list.{last}
+import list.{last, sortBy}
 
 -- ── Document algebra ──────────────────────────────
 
@@ -830,25 +830,42 @@ bracedPieces open_ forced ps =
 -- A collection literal whose last element is followed by one of them explodes
 -- one element per line.
 
-trailingCommasRef : Ref (List (Int, Int))
-trailingCommasRef = Ref []
+-- Sorted by (line, col) so each literal's lookup is a binary search; a scan
+-- per literal made a file with N literals cost N x commas.
+trailingCommasRef : Ref (Array (Int, Int))
+trailingCommasRef = Ref (arrayFromList [])
 
 export
 setTrailingCommas : List (Int, Int) -> Unit
-setTrailingCommas cs = trailingCommasRef := cs
+setTrailingCommas cs = trailingCommasRef := arrayFromList (sortBy cmpPos cs)
+
+cmpPos : (Int, Int) -> (Int, Int) -> Ordering
+cmpPos (l1, c1) (l2, c2) = if l1 == l2 then compare c1 c2 else compare l1 l2
+
+-- number of entries strictly before (line, col)
+posLowerBound : Array (Int, Int) -> Int -> Int -> Int -> Int -> Int
+posLowerBound arr line col lo hi =
+  if lo >= hi then
+    lo
+  else
+    let mid = (lo + hi) / 2
+    match arr[mid]
+      (l, c) =>
+        if l < line || l == line && c < col then
+          posLowerBound arr line col (mid + 1) hi
+        else
+          posLowerBound arr line col lo mid
 
 -- A recorded trailing comma strictly after (`lastLine`, `lastCol`) — the last
 -- element's end — and before the literal's closing line/col.
 hasTrailingComma : Int -> Int -> Int -> Int -> Bool
 hasTrailingComma lastLine lastCol endLine endCol =
-  anyComma lastLine lastCol endLine endCol !trailingCommasRef
-
-anyComma : Int -> Int -> Int -> Int -> List (Int, Int) -> Bool
-anyComma _ _ _ _ [] = False
-anyComma ll lc el ec ((l, c) :: rest) =
-  let afterLast = l > ll || l == ll && c >= lc
-  let beforeEnd = l < el || l == el && c < ec
-  afterLast && beforeEnd || anyComma ll lc el ec rest
+  let arr = !trailingCommasRef
+  let i = posLowerBound arr lastLine lastCol 0 (arrayLength arr)
+  if i >= arrayLength arr then
+    False
+  else match arr[i]
+    (l, c) => l < endLine || l == endLine && c < endCol
 
 -- Last element's (endLine, endCol) from its ELoc, if any.
 exprEndPos : Expr -> Option (Int, Int)
@@ -1636,31 +1653,48 @@ armPiece arm = match armSpan arm
 -- where-clause (`setUnitStarts`, tagged by kind: 0 arm, 1 statement, 2 impl
 -- method, 3 where-clause), and the latest recorded start OF THAT KIND at or
 -- before a unit's first located token is the unit's own.
-unitStartsRef : Ref (List (Int, Int, Int))
-unitStartsRef = Ref []
+-- Sorted by (kind, line, col) so each unit's lookup is a binary search; a
+-- scan per unit made a file with N units cost N^2, in `fmt` and in every
+-- `declToString` call lint makes after a parse.
+unitStartsRef : Ref (Array (Int, Int, Int))
+unitStartsRef = Ref (arrayFromList [])
 
 export
 setUnitStarts : List (Int, Int, Int) -> Unit
-setUnitStarts ps = unitStartsRef := ps
+setUnitStarts ps = unitStartsRef := arrayFromList (sortBy cmpUnit ps)
 
--- the latest recorded unit start at or before (line, col); (line, col) itself
--- when none is recorded (or the unit carries no location at all)
+cmpUnit : (Int, Int, Int) -> (Int, Int, Int) -> Ordering
+cmpUnit (k1, l1, c1) (k2, l2, c2) =
+  if k1 /= k2 then compare k1 k2 else cmpPos (l1, c1) (l2, c2)
+
+-- number of entries at or before (kind, line, col)
+unitUpperBound : Array (Int, Int, Int) -> Int -> Int -> Int -> Int -> Int -> Int
+unitUpperBound arr kind line col lo hi =
+  if lo >= hi then
+    lo
+  else
+    let mid = (lo + hi) / 2
+    match arr[mid]
+      (k, l, c) =>
+        let le = k < kind || k == kind && (l < line || l == line && c <= col)
+        if le then
+          unitUpperBound arr kind line col (mid + 1) hi
+        else
+          unitUpperBound arr kind line col lo mid
+
+-- the latest recorded unit start of `kind` at or before (line, col); (line,
+-- col) itself when none is recorded (or the unit carries no location at all)
 unitStartAt : Int -> Int -> Int -> (Int, Int)
 unitStartAt kind line col =
-  if line == 0 then (0, 0) else unitStartGo kind line col (0, 0) !unitStartsRef
-
-unitStartGo : Int ->
-  Int ->
-  Int ->
-  (Int, Int) ->
-  List (Int, Int, Int) ->
-  (Int, Int)
-unitStartGo _ line col (bl, bc) [] = if bl == 0 then (line, col) else (bl, bc)
-unitStartGo kind line col (bl, bc) ((k, l, c) :: rest)
-  | k /= kind || l > line || l == line && c > col =
-    unitStartGo kind line col (bl, bc) rest
-  | l > bl || l == bl && c > bc = unitStartGo kind line col (l, c) rest
-  | otherwise = unitStartGo kind line col (bl, bc) rest
+  if line == 0 then
+    (0, 0)
+  else
+    let arr = !unitStartsRef
+    let i = unitUpperBound arr kind line col 0 (arrayLength arr)
+    if i == 0 then
+      (line, col)
+    else match arr[i - 1]
+      (k, l, c) => if k == kind then (l, c) else (line, col)
 
 printMatchArms : List Arm -> Doc
 printMatchArms arms = indentBlock (joinHard (pieceDocsHard (map armPiece arms)))
@@ -2400,7 +2434,7 @@ declLine d = render (printDecl d) ++ "\n"
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "DeriveRef" true) (mem "deriveRefName" false) (mem "dDataUnresolved" false) (mem "KindAnn" true) (mem "tyParamSources" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Attr" true))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "listLen" false) (mem "allList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "escOneHex2" false))))
-(DUse false (UseGroup ("list") ((mem "last" false))))
+(DUse false (UseGroup ("list") ((mem "last" false) (mem "sortBy" false))))
 (DData Public "Doc" () ((variant "Nil" (ConPos)) (variant "Text" (ConPos (TyCon "String"))) (variant "Cat" (ConPos (TyCon "Doc") (TyCon "Doc"))) (variant "Line" (ConPos)) (variant "Softline" (ConPos)) (variant "Hardline" (ConPos)) (variant "BlankLine" (ConPos)) (variant "Nest" (ConPos (TyCon "Int") (TyCon "Doc"))) (variant "Group" (ConPos (TyCon "Doc"))) (variant "FlatAlt" (ConPos (TyCon "Doc") (TyCon "Doc"))) (variant "Alt" (ConPos (TyCon "Doc") (TyCon "Doc"))) (variant "Hang" (ConPos (TyCon "String") (TyCon "Doc"))) (variant "LineComment" (ConPos (TyCon "String"))) (variant "Fill" (ConPos (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Doc"))))) ())
 (DTypeSig false "text" (TyFun (TyCon "String") (TyCon "Doc")))
 (DFunDef false "text" ((PVar "s")) (EApp (EVar "Text") (EVar "s")))
@@ -2714,15 +2748,16 @@ declLine d = render (printDecl d) ++ "\n"
 (DTypeSig false "bracedPieces" (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Piece")) (TyCon "Doc")))))
 (DFunDef false "bracedPieces" ((PVar "open_") PWild (PList)) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "open_"))) (EApp (EVar "text") (ELit (LString "}")))))
 (DFunDef false "bracedPieces" ((PVar "open_") (PVar "forced") (PVar "ps")) (EBlock (DoLet false false (PVar "outs") (EApp (EApp (EVar "pieceDocs") (EVar "commaSep")) (EVar "ps"))) (DoExpr (EApp (EVar "group") (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "open_"))) (EApp (EApp (EVar "Cat") (EApp (EVar "nest") (EApp (EApp (EVar "Cat") (EIf (EVar "forced") (EVar "Hardline") (EVar "Line"))) (EApp (EVar "joinLine") (EVar "outs"))))) (EApp (EApp (EVar "Cat") (EVar "Line")) (EApp (EVar "text") (ELit (LString "}"))))))))))
-(DTypeSig false "trailingCommasRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "trailingCommasRef" () (EApp (EVar "Ref") (EListLit)))
+(DTypeSig false "trailingCommasRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "trailingCommasRef" () (EApp (EVar "Ref") (EApp (EVar "arrayFromList") (EListLit))))
 (DTypeSig true "setTrailingCommas" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyCon "Unit")))
-(DFunDef false "setTrailingCommas" ((PVar "cs")) (EApp (EApp (EVar "setRef") (EVar "trailingCommasRef")) (EVar "cs")))
+(DFunDef false "setTrailingCommas" ((PVar "cs")) (EApp (EApp (EVar "setRef") (EVar "trailingCommasRef")) (EApp (EVar "arrayFromList") (EApp (EApp (EVar "sortBy") (EVar "cmpPos")) (EVar "cs")))))
+(DTypeSig false "cmpPos" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "Ordering"))))
+(DFunDef false "cmpPos" ((PTuple (PVar "l1") (PVar "c1")) (PTuple (PVar "l2") (PVar "c2"))) (EIf (EBinOp "==" (EVar "l1") (EVar "l2")) (EApp (EApp (EVar "compare") (EVar "c1")) (EVar "c2")) (EApp (EApp (EVar "compare") (EVar "l1")) (EVar "l2"))))
+(DTypeSig false "posLowerBound" (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))))
+(DFunDef false "posLowerBound" ((PVar "arr") (PVar "line") (PVar "col") (PVar "lo") (PVar "hi")) (EIf (EBinOp ">=" (EVar "lo") (EVar "hi")) (EVar "lo") (EBlock (DoLet false false (PVar "mid") (EBinOp "/" (EBinOp "+" (EVar "lo") (EVar "hi")) (ELit (LInt 2)))) (DoExpr (EMatch (EApp (EApp (EVar "index") (EVar "arr")) (EVar "mid")) (arm (PTuple (PVar "l") (PVar "c")) () (EIf (EBinOp "||" (EBinOp "<" (EVar "l") (EVar "line")) (EBinOp "&&" (EBinOp "==" (EVar "l") (EVar "line")) (EBinOp "<" (EVar "c") (EVar "col")))) (EApp (EApp (EApp (EApp (EApp (EVar "posLowerBound") (EVar "arr")) (EVar "line")) (EVar "col")) (EBinOp "+" (EVar "mid") (ELit (LInt 1)))) (EVar "hi")) (EApp (EApp (EApp (EApp (EApp (EVar "posLowerBound") (EVar "arr")) (EVar "line")) (EVar "col")) (EVar "lo")) (EVar "mid")))))))))
 (DTypeSig false "hasTrailingComma" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
-(DFunDef false "hasTrailingComma" ((PVar "lastLine") (PVar "lastCol") (PVar "endLine") (PVar "endCol")) (EApp (EApp (EApp (EApp (EApp (EVar "anyComma") (EVar "lastLine")) (EVar "lastCol")) (EVar "endLine")) (EVar "endCol")) (EUnOp "!" (EVar "trailingCommasRef"))))
-(DTypeSig false "anyComma" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyCon "Bool")))))))
-(DFunDef false "anyComma" (PWild PWild PWild PWild (PList)) (EVar "False"))
-(DFunDef false "anyComma" ((PVar "ll") (PVar "lc") (PVar "el") (PVar "ec") (PCons (PTuple (PVar "l") (PVar "c")) (PVar "rest"))) (EBlock (DoLet false false (PVar "afterLast") (EBinOp "||" (EBinOp ">" (EVar "l") (EVar "ll")) (EBinOp "&&" (EBinOp "==" (EVar "l") (EVar "ll")) (EBinOp ">=" (EVar "c") (EVar "lc"))))) (DoLet false false (PVar "beforeEnd") (EBinOp "||" (EBinOp "<" (EVar "l") (EVar "el")) (EBinOp "&&" (EBinOp "==" (EVar "l") (EVar "el")) (EBinOp "<" (EVar "c") (EVar "ec"))))) (DoExpr (EBinOp "||" (EBinOp "&&" (EVar "afterLast") (EVar "beforeEnd")) (EApp (EApp (EApp (EApp (EApp (EVar "anyComma") (EVar "ll")) (EVar "lc")) (EVar "el")) (EVar "ec")) (EVar "rest"))))))
+(DFunDef false "hasTrailingComma" ((PVar "lastLine") (PVar "lastCol") (PVar "endLine") (PVar "endCol")) (EBlock (DoLet false false (PVar "arr") (EUnOp "!" (EVar "trailingCommasRef"))) (DoLet false false (PVar "i") (EApp (EApp (EApp (EApp (EApp (EVar "posLowerBound") (EVar "arr")) (EVar "lastLine")) (EVar "lastCol")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr")))) (DoExpr (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EVar "False") (EMatch (EApp (EApp (EVar "index") (EVar "arr")) (EVar "i")) (arm (PTuple (PVar "l") (PVar "c")) () (EBinOp "||" (EBinOp "<" (EVar "l") (EVar "endLine")) (EBinOp "&&" (EBinOp "==" (EVar "l") (EVar "endLine")) (EBinOp "<" (EVar "c") (EVar "endCol"))))))))))
 (DTypeSig false "exprEndPos" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "exprEndPos" ((PCon "ELoc" (PCon "Loc" PWild PWild PWild (PVar "el") (PVar "ec")) PWild)) (EApp (EVar "Some") (ETuple (EVar "el") (EVar "ec"))))
 (DFunDef false "exprEndPos" ((PCon "EApp" PWild (PVar "x"))) (EApp (EVar "exprEndPos") (EVar "x")))
@@ -3044,15 +3079,16 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "matchScrutineeDoc" ((PVar "sc")) (EBlock (DoLet false false (PVar "d") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "sc"))) (DoExpr (EIf (EBinOp ">=" (EApp (EVar "exprPrec") (EVar "sc")) (EVar "precAtom")) (EVar "d") (EMatch (EApp (EVar "exprSpan") (EVar "sc")) (arm (PTuple (PVar "s") (PVar "sc") (PVar "en") (PVar "ec")) () (EIf (EBinOp "&&" (EBinOp ">" (EVar "s") (ELit (LInt 0))) (EApp (EApp (EApp (EApp (EVar "pendingInside") (EVar "s")) (EVar "sc")) (EVar "en")) (EVar "ec"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EVar "d")) (EApp (EVar "text") (ELit (LString ")"))))) (EApp (EApp (EVar "Alt") (EApp (EVar "text") (EApp (EVar "renderFlat") (EVar "d")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EVar "d")) (EApp (EVar "text") (ELit (LString ")")))))))))))))
 (DTypeSig false "armPiece" (TyFun (TyCon "Arm") (TyCon "Piece")))
 (DFunDef false "armPiece" ((PVar "arm")) (EMatch (EApp (EVar "armSpan") (EVar "arm")) (arm (PTuple (PVar "s") (PVar "sc") (PVar "en") (PVar "ec")) () (EMatch (EApp (EApp (EApp (EVar "unitStartAt") (ELit (LInt 0))) (EVar "s")) (EVar "sc")) (arm (PTuple (PVar "s2") (PVar "sc2")) () (EApp (EApp (EApp (EApp (EApp (EVar "Piece") (EVar "s2")) (EVar "sc2")) (EVar "en")) (EVar "ec")) (ELam (PWild) (EApp (EVar "matchArmDoc") (EVar "arm")))))))))
-(DTypeSig false "unitStartsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "unitStartsRef" () (EApp (EVar "Ref") (EListLit)))
+(DTypeSig false "unitStartsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "unitStartsRef" () (EApp (EVar "Ref") (EApp (EVar "arrayFromList") (EListLit))))
 (DTypeSig true "setUnitStarts" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int"))) (TyCon "Unit")))
-(DFunDef false "setUnitStarts" ((PVar "ps")) (EApp (EApp (EVar "setRef") (EVar "unitStartsRef")) (EVar "ps")))
+(DFunDef false "setUnitStarts" ((PVar "ps")) (EApp (EApp (EVar "setRef") (EVar "unitStartsRef")) (EApp (EVar "arrayFromList") (EApp (EApp (EVar "sortBy") (EVar "cmpUnit")) (EVar "ps")))))
+(DTypeSig false "cmpUnit" (TyFun (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int")) (TyFun (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int")) (TyCon "Ordering"))))
+(DFunDef false "cmpUnit" ((PTuple (PVar "k1") (PVar "l1") (PVar "c1")) (PTuple (PVar "k2") (PVar "l2") (PVar "c2"))) (EIf (EBinOp "/=" (EVar "k1") (EVar "k2")) (EApp (EApp (EVar "compare") (EVar "k1")) (EVar "k2")) (EApp (EApp (EVar "cmpPos") (ETuple (EVar "l1") (EVar "c1"))) (ETuple (EVar "l2") (EVar "c2")))))
+(DTypeSig false "unitUpperBound" (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))))
+(DFunDef false "unitUpperBound" ((PVar "arr") (PVar "kind") (PVar "line") (PVar "col") (PVar "lo") (PVar "hi")) (EIf (EBinOp ">=" (EVar "lo") (EVar "hi")) (EVar "lo") (EBlock (DoLet false false (PVar "mid") (EBinOp "/" (EBinOp "+" (EVar "lo") (EVar "hi")) (ELit (LInt 2)))) (DoExpr (EMatch (EApp (EApp (EVar "index") (EVar "arr")) (EVar "mid")) (arm (PTuple (PVar "k") (PVar "l") (PVar "c")) () (EBlock (DoLet false false (PVar "le") (EBinOp "||" (EBinOp "<" (EVar "k") (EVar "kind")) (EBinOp "&&" (EBinOp "==" (EVar "k") (EVar "kind")) (EBinOp "||" (EBinOp "<" (EVar "l") (EVar "line")) (EBinOp "&&" (EBinOp "==" (EVar "l") (EVar "line")) (EBinOp "<=" (EVar "c") (EVar "col"))))))) (DoExpr (EIf (EVar "le") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "unitUpperBound") (EVar "arr")) (EVar "kind")) (EVar "line")) (EVar "col")) (EBinOp "+" (EVar "mid") (ELit (LInt 1)))) (EVar "hi")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "unitUpperBound") (EVar "arr")) (EVar "kind")) (EVar "line")) (EVar "col")) (EVar "lo")) (EVar "mid")))))))))))
 (DTypeSig false "unitStartAt" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyTuple (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "unitStartAt" ((PVar "kind") (PVar "line") (PVar "col")) (EIf (EBinOp "==" (EVar "line") (ELit (LInt 0))) (ETuple (ELit (LInt 0)) (ELit (LInt 0))) (EApp (EApp (EApp (EApp (EApp (EVar "unitStartGo") (EVar "kind")) (EVar "line")) (EVar "col")) (ETuple (ELit (LInt 0)) (ELit (LInt 0)))) (EUnOp "!" (EVar "unitStartsRef")))))
-(DTypeSig false "unitStartGo" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int"))) (TyTuple (TyCon "Int") (TyCon "Int"))))))))
-(DFunDef false "unitStartGo" (PWild (PVar "line") (PVar "col") (PTuple (PVar "bl") (PVar "bc")) (PList)) (EIf (EBinOp "==" (EVar "bl") (ELit (LInt 0))) (ETuple (EVar "line") (EVar "col")) (ETuple (EVar "bl") (EVar "bc"))))
-(DFunDef false "unitStartGo" ((PVar "kind") (PVar "line") (PVar "col") (PTuple (PVar "bl") (PVar "bc")) (PCons (PTuple (PVar "k") (PVar "l") (PVar "c")) (PVar "rest"))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "/=" (EVar "k") (EVar "kind")) (EBinOp ">" (EVar "l") (EVar "line"))) (EBinOp "&&" (EBinOp "==" (EVar "l") (EVar "line")) (EBinOp ">" (EVar "c") (EVar "col")))) (EApp (EApp (EApp (EApp (EApp (EVar "unitStartGo") (EVar "kind")) (EVar "line")) (EVar "col")) (ETuple (EVar "bl") (EVar "bc"))) (EVar "rest")) (EIf (EBinOp "||" (EBinOp ">" (EVar "l") (EVar "bl")) (EBinOp "&&" (EBinOp "==" (EVar "l") (EVar "bl")) (EBinOp ">" (EVar "c") (EVar "bc")))) (EApp (EApp (EApp (EApp (EApp (EVar "unitStartGo") (EVar "kind")) (EVar "line")) (EVar "col")) (ETuple (EVar "l") (EVar "c"))) (EVar "rest")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "unitStartGo") (EVar "kind")) (EVar "line")) (EVar "col")) (ETuple (EVar "bl") (EVar "bc"))) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "unitStartAt" ((PVar "kind") (PVar "line") (PVar "col")) (EIf (EBinOp "==" (EVar "line") (ELit (LInt 0))) (ETuple (ELit (LInt 0)) (ELit (LInt 0))) (EBlock (DoLet false false (PVar "arr") (EUnOp "!" (EVar "unitStartsRef"))) (DoLet false false (PVar "i") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "unitUpperBound") (EVar "arr")) (EVar "kind")) (EVar "line")) (EVar "col")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr")))) (DoExpr (EIf (EBinOp "==" (EVar "i") (ELit (LInt 0))) (ETuple (EVar "line") (EVar "col")) (EMatch (EApp (EApp (EVar "index") (EVar "arr")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (arm (PTuple (PVar "k") (PVar "l") (PVar "c")) () (EIf (EBinOp "==" (EVar "k") (EVar "kind")) (ETuple (EVar "l") (EVar "c")) (ETuple (EVar "line") (EVar "col"))))))))))
 (DTypeSig false "printMatchArms" (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyCon "Doc")))
 (DFunDef false "printMatchArms" ((PVar "arms")) (EApp (EVar "indentBlock") (EApp (EVar "joinHard") (EApp (EVar "pieceDocsHard") (EApp (EApp (EVar "map") (EVar "armPiece")) (EVar "arms"))))))
 (DTypeSig false "matchArmDoc" (TyFun (TyCon "Arm") (TyCon "Doc")))
@@ -3280,7 +3316,7 @@ declLine d = render (printDecl d) ++ "\n"
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "DeriveRef" true) (mem "deriveRefName" false) (mem "dDataUnresolved" false) (mem "KindAnn" true) (mem "tyParamSources" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Attr" true))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "listLen" false) (mem "allList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "escOneHex2" false))))
-(DUse false (UseGroup ("list") ((mem "last" false))))
+(DUse false (UseGroup ("list") ((mem "last" false) (mem "sortBy" false))))
 (DData Public "Doc" () ((variant "Nil" (ConPos)) (variant "Text" (ConPos (TyCon "String"))) (variant "Cat" (ConPos (TyCon "Doc") (TyCon "Doc"))) (variant "Line" (ConPos)) (variant "Softline" (ConPos)) (variant "Hardline" (ConPos)) (variant "BlankLine" (ConPos)) (variant "Nest" (ConPos (TyCon "Int") (TyCon "Doc"))) (variant "Group" (ConPos (TyCon "Doc"))) (variant "FlatAlt" (ConPos (TyCon "Doc") (TyCon "Doc"))) (variant "Alt" (ConPos (TyCon "Doc") (TyCon "Doc"))) (variant "Hang" (ConPos (TyCon "String") (TyCon "Doc"))) (variant "LineComment" (ConPos (TyCon "String"))) (variant "Fill" (ConPos (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Doc"))))) ())
 (DTypeSig false "text" (TyFun (TyCon "String") (TyCon "Doc")))
 (DFunDef false "text" ((PVar "s")) (EApp (EVar "Text") (EVar "s")))
@@ -3594,15 +3630,16 @@ declLine d = render (printDecl d) ++ "\n"
 (DTypeSig false "bracedPieces" (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Piece")) (TyCon "Doc")))))
 (DFunDef false "bracedPieces" ((PVar "open_") PWild (PList)) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "open_"))) (EApp (EVar "text") (ELit (LString "}")))))
 (DFunDef false "bracedPieces" ((PVar "open_") (PVar "forced") (PVar "ps")) (EBlock (DoLet false false (PVar "outs") (EApp (EApp (EVar "pieceDocs") (EVar "commaSep")) (EVar "ps"))) (DoExpr (EApp (EVar "group") (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "open_"))) (EApp (EApp (EVar "Cat") (EApp (EVar "nest") (EApp (EApp (EVar "Cat") (EIf (EVar "forced") (EVar "Hardline") (EVar "Line"))) (EApp (EVar "joinLine") (EVar "outs"))))) (EApp (EApp (EVar "Cat") (EVar "Line")) (EApp (EVar "text") (ELit (LString "}"))))))))))
-(DTypeSig false "trailingCommasRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "trailingCommasRef" () (EApp (EVar "Ref") (EListLit)))
+(DTypeSig false "trailingCommasRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "trailingCommasRef" () (EApp (EVar "Ref") (EApp (EVar "arrayFromList") (EListLit))))
 (DTypeSig true "setTrailingCommas" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyCon "Unit")))
-(DFunDef false "setTrailingCommas" ((PVar "cs")) (EApp (EApp (EVar "setRef") (EVar "trailingCommasRef")) (EVar "cs")))
+(DFunDef false "setTrailingCommas" ((PVar "cs")) (EApp (EApp (EVar "setRef") (EVar "trailingCommasRef")) (EApp (EVar "arrayFromList") (EApp (EApp (EVar "sortBy") (EVar "cmpPos")) (EVar "cs")))))
+(DTypeSig false "cmpPos" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyCon "Ordering"))))
+(DFunDef false "cmpPos" ((PTuple (PVar "l1") (PVar "c1")) (PTuple (PVar "l2") (PVar "c2"))) (EIf (EBinOp "==" (EVar "l1") (EVar "l2")) (EApp (EApp (EMethodRef "compare") (EVar "c1")) (EVar "c2")) (EApp (EApp (EMethodRef "compare") (EVar "l1")) (EVar "l2"))))
+(DTypeSig false "posLowerBound" (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))))
+(DFunDef false "posLowerBound" ((PVar "arr") (PVar "line") (PVar "col") (PVar "lo") (PVar "hi")) (EIf (EBinOp ">=" (EVar "lo") (EVar "hi")) (EVar "lo") (EBlock (DoLet false false (PVar "mid") (EBinOp "/" (EBinOp "+" (EVar "lo") (EVar "hi")) (ELit (LInt 2)))) (DoExpr (EMatch (EApp (EApp (EMethodRef "index") (EVar "arr")) (EVar "mid")) (arm (PTuple (PVar "l") (PVar "c")) () (EIf (EBinOp "||" (EBinOp "<" (EVar "l") (EVar "line")) (EBinOp "&&" (EBinOp "==" (EVar "l") (EVar "line")) (EBinOp "<" (EVar "c") (EVar "col")))) (EApp (EApp (EApp (EApp (EApp (EVar "posLowerBound") (EVar "arr")) (EVar "line")) (EVar "col")) (EBinOp "+" (EVar "mid") (ELit (LInt 1)))) (EVar "hi")) (EApp (EApp (EApp (EApp (EApp (EVar "posLowerBound") (EVar "arr")) (EVar "line")) (EVar "col")) (EVar "lo")) (EVar "mid")))))))))
 (DTypeSig false "hasTrailingComma" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
-(DFunDef false "hasTrailingComma" ((PVar "lastLine") (PVar "lastCol") (PVar "endLine") (PVar "endCol")) (EApp (EApp (EApp (EApp (EApp (EVar "anyComma") (EVar "lastLine")) (EVar "lastCol")) (EVar "endLine")) (EVar "endCol")) (EUnOp "!" (EVar "trailingCommasRef"))))
-(DTypeSig false "anyComma" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyCon "Bool")))))))
-(DFunDef false "anyComma" (PWild PWild PWild PWild (PList)) (EVar "False"))
-(DFunDef false "anyComma" ((PVar "ll") (PVar "lc") (PVar "el") (PVar "ec") (PCons (PTuple (PVar "l") (PVar "c")) (PVar "rest"))) (EBlock (DoLet false false (PVar "afterLast") (EBinOp "||" (EBinOp ">" (EVar "l") (EVar "ll")) (EBinOp "&&" (EBinOp "==" (EVar "l") (EVar "ll")) (EBinOp ">=" (EVar "c") (EVar "lc"))))) (DoLet false false (PVar "beforeEnd") (EBinOp "||" (EBinOp "<" (EVar "l") (EVar "el")) (EBinOp "&&" (EBinOp "==" (EVar "l") (EVar "el")) (EBinOp "<" (EVar "c") (EVar "ec"))))) (DoExpr (EBinOp "||" (EBinOp "&&" (EVar "afterLast") (EVar "beforeEnd")) (EApp (EApp (EApp (EApp (EApp (EVar "anyComma") (EVar "ll")) (EVar "lc")) (EVar "el")) (EVar "ec")) (EVar "rest"))))))
+(DFunDef false "hasTrailingComma" ((PVar "lastLine") (PVar "lastCol") (PVar "endLine") (PVar "endCol")) (EBlock (DoLet false false (PVar "arr") (EUnOp "!" (EVar "trailingCommasRef"))) (DoLet false false (PVar "i") (EApp (EApp (EApp (EApp (EApp (EVar "posLowerBound") (EVar "arr")) (EVar "lastLine")) (EVar "lastCol")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr")))) (DoExpr (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EVar "False") (EMatch (EApp (EApp (EMethodRef "index") (EVar "arr")) (EVar "i")) (arm (PTuple (PVar "l") (PVar "c")) () (EBinOp "||" (EBinOp "<" (EVar "l") (EVar "endLine")) (EBinOp "&&" (EBinOp "==" (EVar "l") (EVar "endLine")) (EBinOp "<" (EVar "c") (EVar "endCol"))))))))))
 (DTypeSig false "exprEndPos" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "exprEndPos" ((PCon "ELoc" (PCon "Loc" PWild PWild PWild (PVar "el") (PVar "ec")) PWild)) (EApp (EVar "Some") (ETuple (EVar "el") (EVar "ec"))))
 (DFunDef false "exprEndPos" ((PCon "EApp" PWild (PVar "x"))) (EApp (EVar "exprEndPos") (EVar "x")))
@@ -3924,15 +3961,16 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "matchScrutineeDoc" ((PVar "sc")) (EBlock (DoLet false false (PVar "d") (EApp (EApp (EVar "printExpr") (EVar "precTop")) (EVar "sc"))) (DoExpr (EIf (EBinOp ">=" (EApp (EVar "exprPrec") (EVar "sc")) (EVar "precAtom")) (EVar "d") (EMatch (EApp (EVar "exprSpan") (EVar "sc")) (arm (PTuple (PVar "s") (PVar "sc") (PVar "en") (PVar "ec")) () (EIf (EBinOp "&&" (EBinOp ">" (EVar "s") (ELit (LInt 0))) (EApp (EApp (EApp (EApp (EVar "pendingInside") (EVar "s")) (EVar "sc")) (EVar "en")) (EVar "ec"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EVar "d")) (EApp (EVar "text") (ELit (LString ")"))))) (EApp (EApp (EVar "Alt") (EApp (EVar "text") (EApp (EVar "renderFlat") (EVar "d")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "(")))) (EApp (EApp (EVar "Cat") (EVar "d")) (EApp (EVar "text") (ELit (LString ")")))))))))))))
 (DTypeSig false "armPiece" (TyFun (TyCon "Arm") (TyCon "Piece")))
 (DFunDef false "armPiece" ((PVar "arm")) (EMatch (EApp (EVar "armSpan") (EVar "arm")) (arm (PTuple (PVar "s") (PVar "sc") (PVar "en") (PVar "ec")) () (EMatch (EApp (EApp (EApp (EVar "unitStartAt") (ELit (LInt 0))) (EVar "s")) (EVar "sc")) (arm (PTuple (PVar "s2") (PVar "sc2")) () (EApp (EApp (EApp (EApp (EApp (EVar "Piece") (EVar "s2")) (EVar "sc2")) (EVar "en")) (EVar "ec")) (ELam (PWild) (EApp (EVar "matchArmDoc") (EVar "arm")))))))))
-(DTypeSig false "unitStartsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "unitStartsRef" () (EApp (EVar "Ref") (EListLit)))
+(DTypeSig false "unitStartsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "unitStartsRef" () (EApp (EVar "Ref") (EApp (EVar "arrayFromList") (EListLit))))
 (DTypeSig true "setUnitStarts" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int"))) (TyCon "Unit")))
-(DFunDef false "setUnitStarts" ((PVar "ps")) (EApp (EApp (EVar "setRef") (EVar "unitStartsRef")) (EVar "ps")))
+(DFunDef false "setUnitStarts" ((PVar "ps")) (EApp (EApp (EVar "setRef") (EVar "unitStartsRef")) (EApp (EVar "arrayFromList") (EApp (EApp (EVar "sortBy") (EVar "cmpUnit")) (EVar "ps")))))
+(DTypeSig false "cmpUnit" (TyFun (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int")) (TyFun (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int")) (TyCon "Ordering"))))
+(DFunDef false "cmpUnit" ((PTuple (PVar "k1") (PVar "l1") (PVar "c1")) (PTuple (PVar "k2") (PVar "l2") (PVar "c2"))) (EIf (EBinOp "/=" (EVar "k1") (EVar "k2")) (EApp (EApp (EMethodRef "compare") (EVar "k1")) (EVar "k2")) (EApp (EApp (EVar "cmpPos") (ETuple (EVar "l1") (EVar "c1"))) (ETuple (EVar "l2") (EVar "c2")))))
+(DTypeSig false "unitUpperBound" (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))))
+(DFunDef false "unitUpperBound" ((PVar "arr") (PVar "kind") (PVar "line") (PVar "col") (PVar "lo") (PVar "hi")) (EIf (EBinOp ">=" (EVar "lo") (EVar "hi")) (EVar "lo") (EBlock (DoLet false false (PVar "mid") (EBinOp "/" (EBinOp "+" (EVar "lo") (EVar "hi")) (ELit (LInt 2)))) (DoExpr (EMatch (EApp (EApp (EMethodRef "index") (EVar "arr")) (EVar "mid")) (arm (PTuple (PVar "k") (PVar "l") (PVar "c")) () (EBlock (DoLet false false (PVar "le") (EBinOp "||" (EBinOp "<" (EVar "k") (EVar "kind")) (EBinOp "&&" (EBinOp "==" (EVar "k") (EVar "kind")) (EBinOp "||" (EBinOp "<" (EVar "l") (EVar "line")) (EBinOp "&&" (EBinOp "==" (EVar "l") (EVar "line")) (EBinOp "<=" (EVar "c") (EVar "col"))))))) (DoExpr (EIf (EVar "le") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "unitUpperBound") (EVar "arr")) (EVar "kind")) (EVar "line")) (EVar "col")) (EBinOp "+" (EVar "mid") (ELit (LInt 1)))) (EVar "hi")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "unitUpperBound") (EVar "arr")) (EVar "kind")) (EVar "line")) (EVar "col")) (EVar "lo")) (EVar "mid")))))))))))
 (DTypeSig false "unitStartAt" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyTuple (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "unitStartAt" ((PVar "kind") (PVar "line") (PVar "col")) (EIf (EBinOp "==" (EVar "line") (ELit (LInt 0))) (ETuple (ELit (LInt 0)) (ELit (LInt 0))) (EApp (EApp (EApp (EApp (EApp (EVar "unitStartGo") (EVar "kind")) (EVar "line")) (EVar "col")) (ETuple (ELit (LInt 0)) (ELit (LInt 0)))) (EUnOp "!" (EVar "unitStartsRef")))))
-(DTypeSig false "unitStartGo" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int"))) (TyTuple (TyCon "Int") (TyCon "Int"))))))))
-(DFunDef false "unitStartGo" (PWild (PVar "line") (PVar "col") (PTuple (PVar "bl") (PVar "bc")) (PList)) (EIf (EBinOp "==" (EVar "bl") (ELit (LInt 0))) (ETuple (EVar "line") (EVar "col")) (ETuple (EVar "bl") (EVar "bc"))))
-(DFunDef false "unitStartGo" ((PVar "kind") (PVar "line") (PVar "col") (PTuple (PVar "bl") (PVar "bc")) (PCons (PTuple (PVar "k") (PVar "l") (PVar "c")) (PVar "rest"))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "/=" (EVar "k") (EVar "kind")) (EBinOp ">" (EVar "l") (EVar "line"))) (EBinOp "&&" (EBinOp "==" (EVar "l") (EVar "line")) (EBinOp ">" (EVar "c") (EVar "col")))) (EApp (EApp (EApp (EApp (EApp (EVar "unitStartGo") (EVar "kind")) (EVar "line")) (EVar "col")) (ETuple (EVar "bl") (EVar "bc"))) (EVar "rest")) (EIf (EBinOp "||" (EBinOp ">" (EVar "l") (EVar "bl")) (EBinOp "&&" (EBinOp "==" (EVar "l") (EVar "bl")) (EBinOp ">" (EVar "c") (EVar "bc")))) (EApp (EApp (EApp (EApp (EApp (EVar "unitStartGo") (EVar "kind")) (EVar "line")) (EVar "col")) (ETuple (EVar "l") (EVar "c"))) (EVar "rest")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "unitStartGo") (EVar "kind")) (EVar "line")) (EVar "col")) (ETuple (EVar "bl") (EVar "bc"))) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "unitStartAt" ((PVar "kind") (PVar "line") (PVar "col")) (EIf (EBinOp "==" (EVar "line") (ELit (LInt 0))) (ETuple (ELit (LInt 0)) (ELit (LInt 0))) (EBlock (DoLet false false (PVar "arr") (EUnOp "!" (EVar "unitStartsRef"))) (DoLet false false (PVar "i") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "unitUpperBound") (EVar "arr")) (EVar "kind")) (EVar "line")) (EVar "col")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr")))) (DoExpr (EIf (EBinOp "==" (EVar "i") (ELit (LInt 0))) (ETuple (EVar "line") (EVar "col")) (EMatch (EApp (EApp (EMethodRef "index") (EVar "arr")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (arm (PTuple (PVar "k") (PVar "l") (PVar "c")) () (EIf (EBinOp "==" (EVar "k") (EVar "kind")) (ETuple (EVar "l") (EVar "c")) (ETuple (EVar "line") (EVar "col"))))))))))
 (DTypeSig false "printMatchArms" (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyCon "Doc")))
 (DFunDef false "printMatchArms" ((PVar "arms")) (EApp (EVar "indentBlock") (EApp (EVar "joinHard") (EApp (EVar "pieceDocsHard") (EApp (EApp (EMethodRef "map") (EVar "armPiece")) (EVar "arms"))))))
 (DTypeSig false "matchArmDoc" (TyFun (TyCon "Arm") (TyCon "Doc")))
