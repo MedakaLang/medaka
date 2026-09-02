@@ -609,6 +609,7 @@ The host primitives.
 - [`netTryAccept`](runtime.md#nettryaccept)
 - [`netTryRecv`](runtime.md#nettryrecv)
 - [`netTrySend`](runtime.md#nettrysend)
+- [`netTrySendFrom`](runtime.md#nettrysendfrom)
 - [`wallTimeSec`](runtime.md#walltimesec)
 - [`monotonicSec`](runtime.md#monotonicsec)
 - [`sleepMs`](runtime.md#sleepms)

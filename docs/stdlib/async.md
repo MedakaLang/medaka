@@ -154,9 +154,9 @@ runAsync : Async e a -> <e> a
 
 Runs a task to its value sequentially, performing exactly its row `e`.
 
-A spawned child runs to completion before its parent continues, so the
-result is deterministic. A task that waits on a timer or a descriptor
-panics: use `runAsyncIO` for those.
+Spawned tasks take turns at every yield, so `concurrent` interleaves its
+children round-robin and the order is deterministic. A task that waits on
+a timer or a descriptor panics: use `runAsyncIO` for those.
 
 ## `runAsyncIO`
 
@@ -167,10 +167,13 @@ runAsyncIO : Async e a -> <Clock, Net _ | e> a
 Runs a task under the scheduler, performing its row `e` plus the
 scheduler's own `<Clock>` and `<Net "_">`.
 
-Runnable tasks take turns at every yield. When every task is parked, the
-scheduler sleeps until the earliest deadline. It returns the program's
-value once the program and every spawned task have finished, and panics
-if the remaining tasks can never be woken.
+Runnable tasks take turns at every yield. After every round over the run
+queue the scheduler gives parked tasks whose timer has expired, whose
+descriptor is ready, or whose awaited task has finished their turn, so a
+task that never parks cannot starve the others. When every task is parked
+it sleeps until the earliest deadline or the next descriptor event. It
+returns the program's value once the program and every spawned task have
+finished, and panics if the remaining tasks can never be woken.
 
 ## `runAsyncIOMain`
 

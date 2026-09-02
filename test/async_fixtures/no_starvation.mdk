@@ -1,0 +1,69 @@
+-- G7: a task that never parks must not starve the ones that do.  A spinner
+-- yields 200,000 times; a sleeper parks for 1 ms; an echo client waits on a
+-- socket with a 200 ms deadline.  Both the sleeper and the socket reply must
+-- come back while the spinner is still running.  The spinner takes tens of
+-- milliseconds at least, the sleep expires after one, and a loopback echo is
+-- microseconds — order-of-magnitude margins, never tight ones.  The two
+-- observations are reported by name, not by order, because which of them
+-- lands first is timing.
+import async.{Async, liftIO, spawn, spawnTask, await, sleep, yield}
+import net_async as A
+import net.{Connection, Listener, listen, listenPort, connect}
+import time.{millis}
+import string.{fromUtf8}
+
+spins : Int
+spins = 200000
+
+spinner : Ref Int -> Async <Clock, Net "_", Stdout | e> Unit
+spinner n = defer
+  _ <- liftIO (u => n := !n + 1)
+  _ <- yield
+  if !n >= spins then deferPure () else spinner n
+
+-- True iff the sleeper woke while the spinner was still running.
+sleeper : Ref Int -> Async <Clock, Net "_", Stdout | e> Bool
+sleeper n = defer
+  _ <- sleep (millis 1)
+  deferPure (!n < spins)
+
+echo : Connection -> Async <Clock, Net "_", Stdout | e> (Result String Unit)
+echo c = deferThen (A.recv c 64) (r => match r
+  Ok bs => A.sendAll c bs
+  Err e => deferPure (Err e))
+
+-- The reply, and whether it arrived while the spinner was still running.
+client : Int -> Ref Int -> Async <Clock, Net "_", Stdout | e> String
+client port n = defer
+  cr <- liftIO (u => connect "127.0.0.1" port)
+  match cr
+    Err e => deferPure ("connect failed " ++ e)
+    Ok c => defer
+      _ <- A.sendString c "ping"
+      rr <- A.recvWithin (millis 200) c 64
+      _ <- A.close c
+      deferPure (showR rr ++ " early=" ++ display (!n < spins))
+
+showR : Result String (Array Int) -> String
+showR (Ok bs) = fromUtf8 bs
+showR (Err e) = "Err " ++ e
+
+main : Async <Clock, Net "_", Stdout> Unit
+main = defer
+  lr <- liftIO (u => listen "127.0.0.1" 0)
+  match lr
+    Err e => liftIO (u => putStrLn ("listen failed: " ++ e))
+    Ok lis => defer
+      pr <- liftIO (u => listenPort lis)
+      match pr
+        Err e => liftIO (u => putStrLn ("port failed: " ++ e))
+        Ok port => defer
+          n <- liftIO (u => Ref 0)
+          server <- spawnTask (A.serve lis echo)
+          _ <- spawn (spinner n)
+          slept <- spawnTask (sleeper n)
+          reply <- client port n
+          early <- await slept
+          _ <- A.closeListener lis
+          _ <- await server
+          liftIO (u => putStrLn ("sleeper early=" ++ display early ++ "; client " ++ reply))
