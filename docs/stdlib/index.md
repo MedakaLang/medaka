@@ -492,6 +492,19 @@ Floating-point math and a few integer helpers.
 - [`lcm`](math.md#lcm)
 - [`powInt`](math.md#powint)
 
+## [`net_async`](net_async.md)
+
+- [`accept`](net_async.md#accept)
+- [`recv`](net_async.md#recv)
+- [`recvWithin`](net_async.md#recvwithin)
+- [`send`](net_async.md#send)
+- [`sendAll`](net_async.md#sendall)
+- [`sendAllWithin`](net_async.md#sendallwithin)
+- [`sendString`](net_async.md#sendstring)
+- [`close`](net_async.md#close)
+- [`closeListener`](net_async.md#closelistener)
+- [`serve`](net_async.md#serve)
+
 ## [`net`](net.md)
 
 TCP connections and name resolution.
@@ -519,19 +532,6 @@ TCP connections and name resolution.
 - [`withConnection`](net.md#withconnection)
 - [`withListener`](net.md#withlistener)
 - [`serveLoop`](net.md#serveloop)
-
-## [`net_async`](net_async.md)
-
-- [`accept`](net_async.md#accept)
-- [`recv`](net_async.md#recv)
-- [`recvWithin`](net_async.md#recvwithin)
-- [`send`](net_async.md#send)
-- [`sendAll`](net_async.md#sendall)
-- [`sendAllWithin`](net_async.md#sendallwithin)
-- [`sendString`](net_async.md#sendstring)
-- [`close`](net_async.md#close)
-- [`closeListener`](net_async.md#closelistener)
-- [`serve`](net_async.md#serve)
 
 ## [`nonempty`](nonempty.md)
 
@@ -591,6 +591,8 @@ The host primitives.
 - [`args`](runtime.md#args)
 - [`getEnv`](runtime.md#getenv)
 - [`executablePath`](runtime.md#executablepath)
+- [`buildCommit`](runtime.md#buildcommit)
+- [`buildDate`](runtime.md#builddate)
 - [`runCommand`](runtime.md#runcommand)
 - [`exit`](runtime.md#exit)
 - [`panic`](runtime.md#panic)
