@@ -31,6 +31,7 @@ import frontend.parser.{
 }
 import support.util.{
   contains,
+  dropAssoc,
   listLen,
   reverseL,
   initList,
@@ -558,9 +559,35 @@ readModuleProgF parseFn read deps roots modId = match findModuleFile deps roots 
 -- The single place a `ParseError` is promoted to a `LoadError`, so both the
 -- buffer-override and the on-disk arm attribute identically.
 parsedModule : (String -> Result ParseError (List Decl)) -> String -> String -> String -> Result LoadError (String, String, List Decl)
-parsedModule parseFn owningRoot path src = match parseFn src
-  Err e => Err (LoadParseFailed path src e)
-  Ok prog => Ok (owningRoot, path, prog)
+parsedModule parseFn owningRoot path src =
+  let _ = noteLoadedSource path src
+  match parseFn src
+    Err e => Err (LoadParseFailed path src e)
+    Ok prog => Ok (owningRoot, path, prog)
+
+-- ── loaded-source side table ───────────────────────────────────────────────
+-- path -> the EXACT source the loader parsed for it most recently.  Read by the
+-- typechecker's module-chain memo (driver/diagnostics.mdk `moduleStepKeys`),
+-- which keys a module's memoized check on the content the loader actually
+-- parsed — re-reading the file after the load could race an edit and key the
+-- wrong content.  Bounded MRU so a long session does not grow it.
+loadedSourcesLimit : Int
+loadedSourcesLimit = 64
+
+loadedSourcesRef : Ref (List (String, String))
+loadedSourcesRef = Ref []
+
+noteLoadedSource : String -> String -> Unit
+noteLoadedSource path src =
+  loadedSourcesRef :=
+    takeFirst
+      loadedSourcesLimit
+      ((path, src) :: dropAssoc path !loadedSourcesRef)
+
+-- The source the loader last parsed for `path` (None if it never did).
+export
+loadedSourceOf : String -> Option String
+loadedSourceOf path = lookupAssoc path !loadedSourcesRef
 
 -- ── canonical module-id rewrite (F1b loader module identity) ─────────────────
 --

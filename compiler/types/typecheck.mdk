@@ -36515,6 +36515,121 @@ checkModulesDiags : List Decl -> List Decl -> List (String, List Decl) -> List (
 checkModulesDiags runtimeDecls coreDecls0 modules0 =
   checkModulesDiagsK None runtimeDecls coreDecls0 modules0
 
+-- ── module-chain memo ─────────────────────────────────────────────────────────
+-- The diagnostics fold (`checkModulesDiags`) checks modules dependency-first and
+-- the entry module last.  On the playground and the LSP the entry changes every
+-- keystroke while its imports do not — so the threaded state after each NON-entry
+-- module is snapshotted under that module's key, and the next call resumes from
+-- the longest matching prefix, checking only what follows.  Each step holds what a
+-- miss would have left behind at that point: the fold's `depEnv`/`accData`/
+-- `accAll`, the results collected so far, a DETACHED `crossRun` copy and the
+-- driver fields a module check writes (the same set the core-check memo restores).
+-- Keys come from the caller: a chain key (which prelude generations, which entry
+-- and roots) and one `Option String` per module (mid + path + the EXACT source
+-- the loader parsed — `loadedSourceOf`); a `None` step is never recorded and ends
+-- recording for the steps after it.  The entry (last) module is never recorded.
+data ChainStep =
+  | ChainStep {
+      csKey : String,
+      csDepEnv : List (String, List (String, Scheme)),
+      csAccData : List Decl,
+      csAccAll : List Decl,
+      csResults : List (String, (List TcDiag, List TcDiag)),
+      csCrossRun : CrossRun,
+      csDriver : DriverState,
+    }
+
+data ChainMemo = ChainMemo { chKey : String, chSteps : List ChainStep }
+
+moduleChainMemoRef : Ref (Option ChainMemo)
+moduleChainMemoRef = Ref None
+
+-- `checkModulesDiagsK` resuming from the module-chain memo.  `stepKeys` pairs
+-- with `modules0` positionally.
+export
+checkModulesDiagsChain : Option (Int, Int) -> String -> List (Option String) -> List Decl -> List Decl -> List (String, List Decl) -> List (String, (List TcDiag, List TcDiag))
+checkModulesDiagsChain None _ _ runtimeDecls coreDecls0 modules0 =
+  checkModulesDiagsK None runtimeDecls coreDecls0 modules0
+checkModulesDiagsChain (Some (rk, ck)) chainKey stepKeys runtimeDecls coreDecls0 modules0 =
+  let (coreDecls, modules) = stampGraphTyOrigins coreDecls0 modules0
+  let (runtimeSeed, coreSchemes) = checkModulesPreambleK (Some (rk, ck)) runtimeDecls coreDecls modules
+  let fullKey = "\{intToString rk},\{intToString ck}\n\{chainKey}"
+  let steps = match !moduleChainMemoRef
+    Some m => if m.chKey == fullKey then m.chSteps else []
+    None => []
+  let (kept, restored) = chainPrefix steps stepKeys (listLen modules) [] None
+  let (depEnv, accData, accAll, results) = match restored
+    None => ([], publicDataDecls coreDecls, coreDecls, [])
+    Some st =>
+      crossRun := copyCrossRun st.csCrossRun
+      perRun := freshPerRun ()
+      let _ = restoreCoreDriverFields st.csDriver
+      (st.csDepEnv, st.csAccData, st.csAccAll, st.csResults)
+  let n = listLen kept
+  let (finalResults, newSteps) = chainGo (runtimeSeed ++ coreSchemes) coreSchemes depEnv accData accAll results (dropN n stepKeys) (dropN n modules)
+  moduleChainMemoRef := Some ChainMemo {
+    chKey = fullKey,
+    chSteps = kept ++ reverseL newSteps,
+  }
+  attachCoherenceConflict (reverseL finalResults)
+
+-- The longest prefix of `steps` whose keys match `keys` positionally, never
+-- covering the last of `total` modules.  Returns (matching steps in order, the
+-- last matching step).
+chainPrefix : List ChainStep -> List (Option String) -> Int -> List ChainStep -> Option ChainStep -> (List ChainStep, Option ChainStep)
+chainPrefix [] _ _ acc last = (reverseL acc, last)
+chainPrefix _ [] _ acc last = (reverseL acc, last)
+chainPrefix (st::sts) (k::ks) total acc last =
+  if listLen acc + 1 >= total then (reverseL acc, last)
+  else match k
+    Some key =>
+      if key == st.csKey then
+        chainPrefix sts ks total (st::acc) (Some st)
+      else
+        (reverseL acc, last)
+    None => (reverseL acc, last)
+
+-- The fold itself, iterative, recording a step after each non-entry module while
+-- keys are available.  Mirrors `foldModules True True cmDiagsWorker cmDiagsCollect`
+-- exactly: import-scoped seed, pubV threading, both accumulator concats, the
+-- entry-only `mainSchemeRef` write.  `results` and the returned steps are newest
+-- first.
+chainGo : List (String, Scheme) -> List (String, Scheme) -> List (String, List (String, Scheme)) -> List Decl -> List Decl -> List (String, (List TcDiag, List TcDiag)) -> List (Option String) -> List (String, List Decl) -> (List (String, (List TcDiag, List TcDiag)), List ChainStep)
+chainGo _ _ _ _ _ results _ [] = (results, [])
+chainGo baseSeed _ depEnv accData accAll results _ [(mid, prog)] =
+  let seed = baseSeed ++ importSeed prog depEnv
+  let (schemes, (_, errs, warns)) = cmDiagsWorker mid seed accData accAll prog
+  let _ = setMainSchemeIfEntry True schemes
+  ((mid, (errs, warns))::results, [])
+chainGo baseSeed coreV depEnv accData accAll results keys ((mid, prog)::rest) =
+  let seed = baseSeed ++ importSeed prog depEnv
+  let (schemes, (_, errs, warns)) = cmDiagsWorker mid seed accData accAll prog
+  let pubV = pickSchemes (publicValNames prog) schemes ++ reexportSeed coreV prog depEnv
+  let depEnv2 = (mid, pubV)::depEnv
+  let accData2 = accData ++ publicDataDecls prog
+  let accAll2 = accAll ++ prog
+  let results2 = (mid, (errs, warns))::results
+  let (key, keys2) = match keys
+    (k::ks) => (k, ks)
+    [] => (None, [])
+  match key
+    None =>
+      -- no key for this module: nothing after it can be resumed either
+      let (finalResults, _) = chainGo baseSeed coreV depEnv2 accData2 accAll2 results2 [] rest
+      (finalResults, [])
+    Some k =>
+      let step = ChainStep {
+        csKey = k,
+        csDepEnv = depEnv2,
+        csAccData = accData2,
+        csAccAll = accAll2,
+        csResults = results2,
+        csCrossRun = copyCrossRun crossRun.value,
+        csDriver = copyDriverState driverState.value,
+      }
+      let (finalResults, moreSteps) = chainGo baseSeed coreV depEnv2 accData2 accAll2 results2 keys2 rest
+      (finalResults, moreSteps ++ [step])
+
 -- `checkModulesDiags` with the prelude key for the core-check memo (see
 -- `checkCoreMemoized`); `None` = unkeyed, byte-identical to the wrapper above.
 export
@@ -36550,8 +36665,14 @@ checkModulesDiagsK preludeKey runtimeDecls coreDecls0 modules0 =
   -- F-3d: the ⊑-incomparable half rides the WARNING list of the same module.
   -- #1559 A-3.7: the whole-graph `IE` the preamble built above; `cohRowsOf True` is
   -- what excludes the prelude, replacing "walk the user `modules` list".
-  match globalCoherenceConflict driverState.value.declEnvsRef.value.deImpls
-    (hard, soft) => attachEntryWarnOpt soft (attachEntryDiagOpt hard perMod)
+  attachCoherenceConflict perMod
+
+-- The whole-graph coherence verdict, attached to the entry module's diagnostics —
+-- the tail every diagnostics-fold driver (`checkModulesDiagsK`,
+-- `checkModulesDiagsChain`) ends with.
+attachCoherenceConflict : List (String, (List TcDiag, List TcDiag)) -> List (String, (List TcDiag, List TcDiag))
+attachCoherenceConflict perMod = match globalCoherenceConflict driverState.value.declEnvsRef.value.deImpls
+  (hard, soft) => attachEntryWarnOpt soft (attachEntryDiagOpt hard perMod)
 
 attachEntryDiagOpt : Option String -> List (String, (List TcDiag, List TcDiag)) -> List (String, (List TcDiag, List TcDiag))
 attachEntryDiagOpt None perMod = perMod

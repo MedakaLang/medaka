@@ -1,5 +1,5 @@
 # META
-source_lines=37986
+source_lines=38107
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -36519,6 +36519,121 @@ checkModulesDiags : List Decl -> List Decl -> List (String, List Decl) -> List (
 checkModulesDiags runtimeDecls coreDecls0 modules0 =
   checkModulesDiagsK None runtimeDecls coreDecls0 modules0
 
+-- ── module-chain memo ─────────────────────────────────────────────────────────
+-- The diagnostics fold (`checkModulesDiags`) checks modules dependency-first and
+-- the entry module last.  On the playground and the LSP the entry changes every
+-- keystroke while its imports do not — so the threaded state after each NON-entry
+-- module is snapshotted under that module's key, and the next call resumes from
+-- the longest matching prefix, checking only what follows.  Each step holds what a
+-- miss would have left behind at that point: the fold's `depEnv`/`accData`/
+-- `accAll`, the results collected so far, a DETACHED `crossRun` copy and the
+-- driver fields a module check writes (the same set the core-check memo restores).
+-- Keys come from the caller: a chain key (which prelude generations, which entry
+-- and roots) and one `Option String` per module (mid + path + the EXACT source
+-- the loader parsed — `loadedSourceOf`); a `None` step is never recorded and ends
+-- recording for the steps after it.  The entry (last) module is never recorded.
+data ChainStep =
+  | ChainStep {
+      csKey : String,
+      csDepEnv : List (String, List (String, Scheme)),
+      csAccData : List Decl,
+      csAccAll : List Decl,
+      csResults : List (String, (List TcDiag, List TcDiag)),
+      csCrossRun : CrossRun,
+      csDriver : DriverState,
+    }
+
+data ChainMemo = ChainMemo { chKey : String, chSteps : List ChainStep }
+
+moduleChainMemoRef : Ref (Option ChainMemo)
+moduleChainMemoRef = Ref None
+
+-- `checkModulesDiagsK` resuming from the module-chain memo.  `stepKeys` pairs
+-- with `modules0` positionally.
+export
+checkModulesDiagsChain : Option (Int, Int) -> String -> List (Option String) -> List Decl -> List Decl -> List (String, List Decl) -> List (String, (List TcDiag, List TcDiag))
+checkModulesDiagsChain None _ _ runtimeDecls coreDecls0 modules0 =
+  checkModulesDiagsK None runtimeDecls coreDecls0 modules0
+checkModulesDiagsChain (Some (rk, ck)) chainKey stepKeys runtimeDecls coreDecls0 modules0 =
+  let (coreDecls, modules) = stampGraphTyOrigins coreDecls0 modules0
+  let (runtimeSeed, coreSchemes) = checkModulesPreambleK (Some (rk, ck)) runtimeDecls coreDecls modules
+  let fullKey = "\{intToString rk},\{intToString ck}\n\{chainKey}"
+  let steps = match !moduleChainMemoRef
+    Some m => if m.chKey == fullKey then m.chSteps else []
+    None => []
+  let (kept, restored) = chainPrefix steps stepKeys (listLen modules) [] None
+  let (depEnv, accData, accAll, results) = match restored
+    None => ([], publicDataDecls coreDecls, coreDecls, [])
+    Some st =>
+      crossRun := copyCrossRun st.csCrossRun
+      perRun := freshPerRun ()
+      let _ = restoreCoreDriverFields st.csDriver
+      (st.csDepEnv, st.csAccData, st.csAccAll, st.csResults)
+  let n = listLen kept
+  let (finalResults, newSteps) = chainGo (runtimeSeed ++ coreSchemes) coreSchemes depEnv accData accAll results (dropN n stepKeys) (dropN n modules)
+  moduleChainMemoRef := Some ChainMemo {
+    chKey = fullKey,
+    chSteps = kept ++ reverseL newSteps,
+  }
+  attachCoherenceConflict (reverseL finalResults)
+
+-- The longest prefix of `steps` whose keys match `keys` positionally, never
+-- covering the last of `total` modules.  Returns (matching steps in order, the
+-- last matching step).
+chainPrefix : List ChainStep -> List (Option String) -> Int -> List ChainStep -> Option ChainStep -> (List ChainStep, Option ChainStep)
+chainPrefix [] _ _ acc last = (reverseL acc, last)
+chainPrefix _ [] _ acc last = (reverseL acc, last)
+chainPrefix (st::sts) (k::ks) total acc last =
+  if listLen acc + 1 >= total then (reverseL acc, last)
+  else match k
+    Some key =>
+      if key == st.csKey then
+        chainPrefix sts ks total (st::acc) (Some st)
+      else
+        (reverseL acc, last)
+    None => (reverseL acc, last)
+
+-- The fold itself, iterative, recording a step after each non-entry module while
+-- keys are available.  Mirrors `foldModules True True cmDiagsWorker cmDiagsCollect`
+-- exactly: import-scoped seed, pubV threading, both accumulator concats, the
+-- entry-only `mainSchemeRef` write.  `results` and the returned steps are newest
+-- first.
+chainGo : List (String, Scheme) -> List (String, Scheme) -> List (String, List (String, Scheme)) -> List Decl -> List Decl -> List (String, (List TcDiag, List TcDiag)) -> List (Option String) -> List (String, List Decl) -> (List (String, (List TcDiag, List TcDiag)), List ChainStep)
+chainGo _ _ _ _ _ results _ [] = (results, [])
+chainGo baseSeed _ depEnv accData accAll results _ [(mid, prog)] =
+  let seed = baseSeed ++ importSeed prog depEnv
+  let (schemes, (_, errs, warns)) = cmDiagsWorker mid seed accData accAll prog
+  let _ = setMainSchemeIfEntry True schemes
+  ((mid, (errs, warns))::results, [])
+chainGo baseSeed coreV depEnv accData accAll results keys ((mid, prog)::rest) =
+  let seed = baseSeed ++ importSeed prog depEnv
+  let (schemes, (_, errs, warns)) = cmDiagsWorker mid seed accData accAll prog
+  let pubV = pickSchemes (publicValNames prog) schemes ++ reexportSeed coreV prog depEnv
+  let depEnv2 = (mid, pubV)::depEnv
+  let accData2 = accData ++ publicDataDecls prog
+  let accAll2 = accAll ++ prog
+  let results2 = (mid, (errs, warns))::results
+  let (key, keys2) = match keys
+    (k::ks) => (k, ks)
+    [] => (None, [])
+  match key
+    None =>
+      -- no key for this module: nothing after it can be resumed either
+      let (finalResults, _) = chainGo baseSeed coreV depEnv2 accData2 accAll2 results2 [] rest
+      (finalResults, [])
+    Some k =>
+      let step = ChainStep {
+        csKey = k,
+        csDepEnv = depEnv2,
+        csAccData = accData2,
+        csAccAll = accAll2,
+        csResults = results2,
+        csCrossRun = copyCrossRun crossRun.value,
+        csDriver = copyDriverState driverState.value,
+      }
+      let (finalResults, moreSteps) = chainGo baseSeed coreV depEnv2 accData2 accAll2 results2 keys2 rest
+      (finalResults, moreSteps ++ [step])
+
 -- `checkModulesDiags` with the prelude key for the core-check memo (see
 -- `checkCoreMemoized`); `None` = unkeyed, byte-identical to the wrapper above.
 export
@@ -36554,8 +36669,14 @@ checkModulesDiagsK preludeKey runtimeDecls coreDecls0 modules0 =
   -- F-3d: the ⊑-incomparable half rides the WARNING list of the same module.
   -- #1559 A-3.7: the whole-graph `IE` the preamble built above; `cohRowsOf True` is
   -- what excludes the prelude, replacing "walk the user `modules` list".
-  match globalCoherenceConflict driverState.value.declEnvsRef.value.deImpls
-    (hard, soft) => attachEntryWarnOpt soft (attachEntryDiagOpt hard perMod)
+  attachCoherenceConflict perMod
+
+-- The whole-graph coherence verdict, attached to the entry module's diagnostics —
+-- the tail every diagnostics-fold driver (`checkModulesDiagsK`,
+-- `checkModulesDiagsChain`) ends with.
+attachCoherenceConflict : List (String, (List TcDiag, List TcDiag)) -> List (String, (List TcDiag, List TcDiag))
+attachCoherenceConflict perMod = match globalCoherenceConflict driverState.value.declEnvsRef.value.deImpls
+  (hard, soft) => attachEntryWarnOpt soft (attachEntryDiagOpt hard perMod)
 
 attachEntryDiagOpt : Option String -> List (String, (List TcDiag, List TcDiag)) -> List (String, (List TcDiag, List TcDiag))
 attachEntryDiagOpt None perMod = perMod
@@ -43903,8 +44024,25 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "setMainSchemeIfEntry" ((PCon "True") (PVar "schemes")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef")) (EApp (EApp (EVar "lookupAssoc") (ELit (LString "main"))) (EVar "schemes"))))
 (DTypeSig true "checkModulesDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))))
 (DFunDef false "checkModulesDiags" ((PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modules0")) (EApp (EApp (EApp (EApp (EVar "checkModulesDiagsK") (EVar "None")) (EVar "runtimeDecls")) (EVar "coreDecls0")) (EVar "modules0")))
+(DData Private "ChainStep" () ((variant "ChainStep" (ConNamed (field "csKey" (TyCon "String")) (field "csDepEnv" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))) (field "csAccData" (TyApp (TyCon "List") (TyCon "Decl"))) (field "csAccAll" (TyApp (TyCon "List") (TyCon "Decl"))) (field "csResults" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))) (field "csCrossRun" (TyCon "CrossRun")) (field "csDriver" (TyCon "DriverState"))))) ())
+(DData Private "ChainMemo" () ((variant "ChainMemo" (ConNamed (field "chKey" (TyCon "String")) (field "chSteps" (TyApp (TyCon "List") (TyCon "ChainStep")))))) ())
+(DTypeSig false "moduleChainMemoRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "ChainMemo"))))
+(DFunDef false "moduleChainMemoRef" () (EApp (EVar "Ref") (EVar "None")))
+(DTypeSig true "checkModulesDiagsChain" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))))))
+(DFunDef false "checkModulesDiagsChain" ((PCon "None") PWild PWild (PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modules0")) (EApp (EApp (EApp (EApp (EVar "checkModulesDiagsK") (EVar "None")) (EVar "runtimeDecls")) (EVar "coreDecls0")) (EVar "modules0")))
+(DFunDef false "checkModulesDiagsChain" ((PCon "Some" (PTuple (PVar "rk") (PVar "ck"))) (PVar "chainKey") (PVar "stepKeys") (PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "coreDecls") (PVar "modules")) (EApp (EApp (EVar "stampGraphTyOrigins") (EVar "coreDecls0")) (EVar "modules0"))) (DoLet false false (PTuple (PVar "runtimeSeed") (PVar "coreSchemes")) (EApp (EApp (EApp (EApp (EVar "checkModulesPreambleK") (EApp (EVar "Some") (ETuple (EVar "rk") (EVar "ck")))) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PVar "fullKey") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "rk")))) (ELit (LString ","))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "ck")))) (ELit (LString "\n"))) (EApp (EVar "display") (EVar "chainKey"))) (ELit (LString "")))) (DoLet false false (PVar "steps") (EMatch (EUnOp "!" (EVar "moduleChainMemoRef")) (arm (PCon "Some" (PVar "m")) () (EIf (EBinOp "==" (EFieldAccess (EVar "m") "chKey") (EVar "fullKey")) (EFieldAccess (EVar "m") "chSteps") (EListLit))) (arm (PCon "None") () (EListLit)))) (DoLet false false (PTuple (PVar "kept") (PVar "restored")) (EApp (EApp (EApp (EApp (EApp (EVar "chainPrefix") (EVar "steps")) (EVar "stepKeys")) (EApp (EVar "listLen") (EVar "modules"))) (EListLit)) (EVar "None"))) (DoLet false false (PTuple (PVar "depEnv") (PVar "accData") (PVar "accAll") (PVar "results")) (EMatch (EVar "restored") (arm (PCon "None") () (ETuple (EListLit) (EApp (EVar "publicDataDecls") (EVar "coreDecls")) (EVar "coreDecls") (EListLit))) (arm (PCon "Some" (PVar "st")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "crossRun")) (EApp (EVar "copyCrossRun") (EFieldAccess (EVar "st") "csCrossRun")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "perRun")) (EApp (EVar "freshPerRun") (ELit LUnit)))) (DoLet false false PWild (EApp (EVar "restoreCoreDriverFields") (EFieldAccess (EVar "st") "csDriver"))) (DoExpr (ETuple (EFieldAccess (EVar "st") "csDepEnv") (EFieldAccess (EVar "st") "csAccData") (EFieldAccess (EVar "st") "csAccAll") (EFieldAccess (EVar "st") "csResults"))))))) (DoLet false false (PVar "n") (EApp (EVar "listLen") (EVar "kept"))) (DoLet false false (PTuple (PVar "finalResults") (PVar "newSteps")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "chainGo") (EBinOp "++" (EVar "runtimeSeed") (EVar "coreSchemes"))) (EVar "coreSchemes")) (EVar "depEnv")) (EVar "accData")) (EVar "accAll")) (EVar "results")) (EApp (EApp (EVar "dropN") (EVar "n")) (EVar "stepKeys"))) (EApp (EApp (EVar "dropN") (EVar "n")) (EVar "modules")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "moduleChainMemoRef")) (EApp (EVar "Some") (ERecordCreate "ChainMemo" ((fa "chKey" (EVar "fullKey")) (fa "chSteps" (EBinOp "++" (EVar "kept") (EApp (EVar "reverseL") (EVar "newSteps"))))))))) (DoExpr (EApp (EVar "attachCoherenceConflict") (EApp (EVar "reverseL") (EVar "finalResults"))))))
+(DTypeSig false "chainPrefix" (TyFun (TyApp (TyCon "List") (TyCon "ChainStep")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "ChainStep")) (TyFun (TyApp (TyCon "Option") (TyCon "ChainStep")) (TyTuple (TyApp (TyCon "List") (TyCon "ChainStep")) (TyApp (TyCon "Option") (TyCon "ChainStep")))))))))
+(DFunDef false "chainPrefix" ((PList) PWild PWild (PVar "acc") (PVar "last")) (ETuple (EApp (EVar "reverseL") (EVar "acc")) (EVar "last")))
+(DFunDef false "chainPrefix" (PWild (PList) PWild (PVar "acc") (PVar "last")) (ETuple (EApp (EVar "reverseL") (EVar "acc")) (EVar "last")))
+(DFunDef false "chainPrefix" ((PCons (PVar "st") (PVar "sts")) (PCons (PVar "k") (PVar "ks")) (PVar "total") (PVar "acc") (PVar "last")) (EIf (EBinOp ">=" (EBinOp "+" (EApp (EVar "listLen") (EVar "acc")) (ELit (LInt 1))) (EVar "total")) (ETuple (EApp (EVar "reverseL") (EVar "acc")) (EVar "last")) (EMatch (EVar "k") (arm (PCon "Some" (PVar "key")) () (EIf (EBinOp "==" (EVar "key") (EFieldAccess (EVar "st") "csKey")) (EApp (EApp (EApp (EApp (EApp (EVar "chainPrefix") (EVar "sts")) (EVar "ks")) (EVar "total")) (EBinOp "::" (EVar "st") (EVar "acc"))) (EApp (EVar "Some") (EVar "st"))) (ETuple (EApp (EVar "reverseL") (EVar "acc")) (EVar "last")))) (arm (PCon "None") () (ETuple (EApp (EVar "reverseL") (EVar "acc")) (EVar "last"))))))
+(DTypeSig false "chainGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyApp (TyCon "List") (TyCon "ChainStep"))))))))))))
+(DFunDef false "chainGo" (PWild PWild PWild PWild PWild (PVar "results") PWild (PList)) (ETuple (EVar "results") (EListLit)))
+(DFunDef false "chainGo" ((PVar "baseSeed") PWild (PVar "depEnv") (PVar "accData") (PVar "accAll") (PVar "results") PWild (PList (PTuple (PVar "mid") (PVar "prog")))) (EBlock (DoLet false false (PVar "seed") (EBinOp "++" (EVar "baseSeed") (EApp (EApp (EVar "importSeed") (EVar "prog")) (EVar "depEnv")))) (DoLet false false (PTuple (PVar "schemes") (PTuple PWild (PVar "errs") (PVar "warns"))) (EApp (EApp (EApp (EApp (EApp (EVar "cmDiagsWorker") (EVar "mid")) (EVar "seed")) (EVar "accData")) (EVar "accAll")) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "setMainSchemeIfEntry") (EVar "True")) (EVar "schemes"))) (DoExpr (ETuple (EBinOp "::" (ETuple (EVar "mid") (ETuple (EVar "errs") (EVar "warns"))) (EVar "results")) (EListLit)))))
+(DFunDef false "chainGo" ((PVar "baseSeed") (PVar "coreV") (PVar "depEnv") (PVar "accData") (PVar "accAll") (PVar "results") (PVar "keys") (PCons (PTuple (PVar "mid") (PVar "prog")) (PVar "rest"))) (EBlock (DoLet false false (PVar "seed") (EBinOp "++" (EVar "baseSeed") (EApp (EApp (EVar "importSeed") (EVar "prog")) (EVar "depEnv")))) (DoLet false false (PTuple (PVar "schemes") (PTuple PWild (PVar "errs") (PVar "warns"))) (EApp (EApp (EApp (EApp (EApp (EVar "cmDiagsWorker") (EVar "mid")) (EVar "seed")) (EVar "accData")) (EVar "accAll")) (EVar "prog"))) (DoLet false false (PVar "pubV") (EBinOp "++" (EApp (EApp (EVar "pickSchemes") (EApp (EVar "publicValNames") (EVar "prog"))) (EVar "schemes")) (EApp (EApp (EApp (EVar "reexportSeed") (EVar "coreV")) (EVar "prog")) (EVar "depEnv")))) (DoLet false false (PVar "depEnv2") (EBinOp "::" (ETuple (EVar "mid") (EVar "pubV")) (EVar "depEnv"))) (DoLet false false (PVar "accData2") (EBinOp "++" (EVar "accData") (EApp (EVar "publicDataDecls") (EVar "prog")))) (DoLet false false (PVar "accAll2") (EBinOp "++" (EVar "accAll") (EVar "prog"))) (DoLet false false (PVar "results2") (EBinOp "::" (ETuple (EVar "mid") (ETuple (EVar "errs") (EVar "warns"))) (EVar "results"))) (DoLet false false (PTuple (PVar "key") (PVar "keys2")) (EMatch (EVar "keys") (arm (PCons (PVar "k") (PVar "ks")) () (ETuple (EVar "k") (EVar "ks"))) (arm (PList) () (ETuple (EVar "None") (EListLit))))) (DoExpr (EMatch (EVar "key") (arm (PCon "None") () (EBlock (DoLet false false (PTuple (PVar "finalResults") PWild) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "chainGo") (EVar "baseSeed")) (EVar "coreV")) (EVar "depEnv2")) (EVar "accData2")) (EVar "accAll2")) (EVar "results2")) (EListLit)) (EVar "rest"))) (DoExpr (ETuple (EVar "finalResults") (EListLit))))) (arm (PCon "Some" (PVar "k")) () (EBlock (DoLet false false (PVar "step") (ERecordCreate "ChainStep" ((fa "csKey" (EVar "k")) (fa "csDepEnv" (EVar "depEnv2")) (fa "csAccData" (EVar "accData2")) (fa "csAccAll" (EVar "accAll2")) (fa "csResults" (EVar "results2")) (fa "csCrossRun" (EApp (EVar "copyCrossRun") (EFieldAccess (EVar "crossRun") "value"))) (fa "csDriver" (EApp (EVar "copyDriverState") (EFieldAccess (EVar "driverState") "value")))))) (DoLet false false (PTuple (PVar "finalResults") (PVar "moreSteps")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "chainGo") (EVar "baseSeed")) (EVar "coreV")) (EVar "depEnv2")) (EVar "accData2")) (EVar "accAll2")) (EVar "results2")) (EVar "keys2")) (EVar "rest"))) (DoExpr (ETuple (EVar "finalResults") (EBinOp "++" (EVar "moreSteps") (EListLit (EVar "step")))))))))))
 (DTypeSig true "checkModulesDiagsK" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))))
-(DFunDef false "checkModulesDiagsK" ((PVar "preludeKey") (PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "coreDecls") (PVar "modules")) (EApp (EApp (EVar "stampGraphTyOrigins") (EVar "coreDecls0")) (EVar "modules0"))) (DoLet false false (PTuple (PVar "runtimeSeed") (PVar "coreSchemes")) (EApp (EApp (EApp (EApp (EVar "checkModulesPreambleK") (EVar "preludeKey")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PVar "perMod") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldModules") (EVar "True")) (EVar "True")) (EVar "cmDiagsWorker")) (EVar "cmDiagsCollect")) (EListLit)) (EBinOp "++" (EVar "runtimeSeed") (EVar "coreSchemes"))) (EVar "coreSchemes")) (EListLit)) (EApp (EVar "publicDataDecls") (EVar "coreDecls"))) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EMatch (EApp (EVar "globalCoherenceConflict") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value") "deImpls")) (arm (PTuple (PVar "hard") (PVar "soft")) () (EApp (EApp (EVar "attachEntryWarnOpt") (EVar "soft")) (EApp (EApp (EVar "attachEntryDiagOpt") (EVar "hard")) (EVar "perMod"))))))))
+(DFunDef false "checkModulesDiagsK" ((PVar "preludeKey") (PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "coreDecls") (PVar "modules")) (EApp (EApp (EVar "stampGraphTyOrigins") (EVar "coreDecls0")) (EVar "modules0"))) (DoLet false false (PTuple (PVar "runtimeSeed") (PVar "coreSchemes")) (EApp (EApp (EApp (EApp (EVar "checkModulesPreambleK") (EVar "preludeKey")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PVar "perMod") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldModules") (EVar "True")) (EVar "True")) (EVar "cmDiagsWorker")) (EVar "cmDiagsCollect")) (EListLit)) (EBinOp "++" (EVar "runtimeSeed") (EVar "coreSchemes"))) (EVar "coreSchemes")) (EListLit)) (EApp (EVar "publicDataDecls") (EVar "coreDecls"))) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EApp (EVar "attachCoherenceConflict") (EVar "perMod")))))
+(DTypeSig false "attachCoherenceConflict" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))
+(DFunDef false "attachCoherenceConflict" ((PVar "perMod")) (EMatch (EApp (EVar "globalCoherenceConflict") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value") "deImpls")) (arm (PTuple (PVar "hard") (PVar "soft")) () (EApp (EApp (EVar "attachEntryWarnOpt") (EVar "soft")) (EApp (EApp (EVar "attachEntryDiagOpt") (EVar "hard")) (EVar "perMod"))))))
 (DTypeSig false "attachEntryDiagOpt" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))
 (DFunDef false "attachEntryDiagOpt" ((PCon "None") (PVar "perMod")) (EVar "perMod"))
 (DFunDef false "attachEntryDiagOpt" ((PCon "Some" (PVar "msg")) (PVar "perMod")) (EApp (EApp (EVar "attachEntryDiag") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (ELit (LString "T-CONFLICTING-IMPL"))) (ELit (LInt 1))) (EVar "None")) (EVar "msg")) (EVar "None")) (EVar "None"))) (EVar "perMod")))
@@ -49975,8 +50113,25 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "setMainSchemeIfEntry" ((PCon "True") (PVar "schemes")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef")) (EApp (EApp (EVar "lookupAssoc") (ELit (LString "main"))) (EVar "schemes"))))
 (DTypeSig true "checkModulesDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))))
 (DFunDef false "checkModulesDiags" ((PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modules0")) (EApp (EApp (EApp (EApp (EVar "checkModulesDiagsK") (EVar "None")) (EVar "runtimeDecls")) (EVar "coreDecls0")) (EVar "modules0")))
+(DData Private "ChainStep" () ((variant "ChainStep" (ConNamed (field "csKey" (TyCon "String")) (field "csDepEnv" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))) (field "csAccData" (TyApp (TyCon "List") (TyCon "Decl"))) (field "csAccAll" (TyApp (TyCon "List") (TyCon "Decl"))) (field "csResults" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))) (field "csCrossRun" (TyCon "CrossRun")) (field "csDriver" (TyCon "DriverState"))))) ())
+(DData Private "ChainMemo" () ((variant "ChainMemo" (ConNamed (field "chKey" (TyCon "String")) (field "chSteps" (TyApp (TyCon "List") (TyCon "ChainStep")))))) ())
+(DTypeSig false "moduleChainMemoRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "ChainMemo"))))
+(DFunDef false "moduleChainMemoRef" () (EApp (EVar "Ref") (EVar "None")))
+(DTypeSig true "checkModulesDiagsChain" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))))))
+(DFunDef false "checkModulesDiagsChain" ((PCon "None") PWild PWild (PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modules0")) (EApp (EApp (EApp (EApp (EVar "checkModulesDiagsK") (EVar "None")) (EVar "runtimeDecls")) (EVar "coreDecls0")) (EVar "modules0")))
+(DFunDef false "checkModulesDiagsChain" ((PCon "Some" (PTuple (PVar "rk") (PVar "ck"))) (PVar "chainKey") (PVar "stepKeys") (PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "coreDecls") (PVar "modules")) (EApp (EApp (EVar "stampGraphTyOrigins") (EVar "coreDecls0")) (EVar "modules0"))) (DoLet false false (PTuple (PVar "runtimeSeed") (PVar "coreSchemes")) (EApp (EApp (EApp (EApp (EVar "checkModulesPreambleK") (EApp (EVar "Some") (ETuple (EVar "rk") (EVar "ck")))) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PVar "fullKey") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "rk")))) (ELit (LString ","))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "ck")))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EVar "chainKey"))) (ELit (LString "")))) (DoLet false false (PVar "steps") (EMatch (EUnOp "!" (EVar "moduleChainMemoRef")) (arm (PCon "Some" (PVar "m")) () (EIf (EBinOp "==" (EFieldAccess (EVar "m") "chKey") (EVar "fullKey")) (EFieldAccess (EVar "m") "chSteps") (EListLit))) (arm (PCon "None") () (EListLit)))) (DoLet false false (PTuple (PVar "kept") (PVar "restored")) (EApp (EApp (EApp (EApp (EApp (EVar "chainPrefix") (EVar "steps")) (EVar "stepKeys")) (EApp (EVar "listLen") (EVar "modules"))) (EListLit)) (EVar "None"))) (DoLet false false (PTuple (PVar "depEnv") (PVar "accData") (PVar "accAll") (PVar "results")) (EMatch (EVar "restored") (arm (PCon "None") () (ETuple (EListLit) (EApp (EVar "publicDataDecls") (EVar "coreDecls")) (EVar "coreDecls") (EListLit))) (arm (PCon "Some" (PVar "st")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "crossRun")) (EApp (EVar "copyCrossRun") (EFieldAccess (EVar "st") "csCrossRun")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "perRun")) (EApp (EVar "freshPerRun") (ELit LUnit)))) (DoLet false false PWild (EApp (EVar "restoreCoreDriverFields") (EFieldAccess (EVar "st") "csDriver"))) (DoExpr (ETuple (EFieldAccess (EVar "st") "csDepEnv") (EFieldAccess (EVar "st") "csAccData") (EFieldAccess (EVar "st") "csAccAll") (EFieldAccess (EVar "st") "csResults"))))))) (DoLet false false (PVar "n") (EApp (EVar "listLen") (EVar "kept"))) (DoLet false false (PTuple (PVar "finalResults") (PVar "newSteps")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "chainGo") (EBinOp "++" (EVar "runtimeSeed") (EVar "coreSchemes"))) (EVar "coreSchemes")) (EVar "depEnv")) (EVar "accData")) (EVar "accAll")) (EVar "results")) (EApp (EApp (EVar "dropN") (EVar "n")) (EVar "stepKeys"))) (EApp (EApp (EVar "dropN") (EVar "n")) (EVar "modules")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "moduleChainMemoRef")) (EApp (EVar "Some") (ERecordCreate "ChainMemo" ((fa "chKey" (EVar "fullKey")) (fa "chSteps" (EBinOp "++" (EVar "kept") (EApp (EVar "reverseL") (EVar "newSteps"))))))))) (DoExpr (EApp (EVar "attachCoherenceConflict") (EApp (EVar "reverseL") (EVar "finalResults"))))))
+(DTypeSig false "chainPrefix" (TyFun (TyApp (TyCon "List") (TyCon "ChainStep")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "ChainStep")) (TyFun (TyApp (TyCon "Option") (TyCon "ChainStep")) (TyTuple (TyApp (TyCon "List") (TyCon "ChainStep")) (TyApp (TyCon "Option") (TyCon "ChainStep")))))))))
+(DFunDef false "chainPrefix" ((PList) PWild PWild (PVar "acc") (PVar "last")) (ETuple (EApp (EVar "reverseL") (EVar "acc")) (EVar "last")))
+(DFunDef false "chainPrefix" (PWild (PList) PWild (PVar "acc") (PVar "last")) (ETuple (EApp (EVar "reverseL") (EVar "acc")) (EVar "last")))
+(DFunDef false "chainPrefix" ((PCons (PVar "st") (PVar "sts")) (PCons (PVar "k") (PVar "ks")) (PVar "total") (PVar "acc") (PVar "last")) (EIf (EBinOp ">=" (EBinOp "+" (EApp (EVar "listLen") (EVar "acc")) (ELit (LInt 1))) (EVar "total")) (ETuple (EApp (EVar "reverseL") (EVar "acc")) (EVar "last")) (EMatch (EVar "k") (arm (PCon "Some" (PVar "key")) () (EIf (EBinOp "==" (EVar "key") (EFieldAccess (EVar "st") "csKey")) (EApp (EApp (EApp (EApp (EApp (EVar "chainPrefix") (EVar "sts")) (EVar "ks")) (EVar "total")) (EBinOp "::" (EVar "st") (EVar "acc"))) (EApp (EVar "Some") (EVar "st"))) (ETuple (EApp (EVar "reverseL") (EVar "acc")) (EVar "last")))) (arm (PCon "None") () (ETuple (EApp (EVar "reverseL") (EVar "acc")) (EVar "last"))))))
+(DTypeSig false "chainGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyApp (TyCon "List") (TyCon "ChainStep"))))))))))))
+(DFunDef false "chainGo" (PWild PWild PWild PWild PWild (PVar "results") PWild (PList)) (ETuple (EVar "results") (EListLit)))
+(DFunDef false "chainGo" ((PVar "baseSeed") PWild (PVar "depEnv") (PVar "accData") (PVar "accAll") (PVar "results") PWild (PList (PTuple (PVar "mid") (PVar "prog")))) (EBlock (DoLet false false (PVar "seed") (EBinOp "++" (EVar "baseSeed") (EApp (EApp (EVar "importSeed") (EVar "prog")) (EVar "depEnv")))) (DoLet false false (PTuple (PVar "schemes") (PTuple PWild (PVar "errs") (PVar "warns"))) (EApp (EApp (EApp (EApp (EApp (EVar "cmDiagsWorker") (EVar "mid")) (EVar "seed")) (EVar "accData")) (EVar "accAll")) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "setMainSchemeIfEntry") (EVar "True")) (EVar "schemes"))) (DoExpr (ETuple (EBinOp "::" (ETuple (EVar "mid") (ETuple (EVar "errs") (EVar "warns"))) (EVar "results")) (EListLit)))))
+(DFunDef false "chainGo" ((PVar "baseSeed") (PVar "coreV") (PVar "depEnv") (PVar "accData") (PVar "accAll") (PVar "results") (PVar "keys") (PCons (PTuple (PVar "mid") (PVar "prog")) (PVar "rest"))) (EBlock (DoLet false false (PVar "seed") (EBinOp "++" (EVar "baseSeed") (EApp (EApp (EVar "importSeed") (EVar "prog")) (EVar "depEnv")))) (DoLet false false (PTuple (PVar "schemes") (PTuple PWild (PVar "errs") (PVar "warns"))) (EApp (EApp (EApp (EApp (EApp (EVar "cmDiagsWorker") (EVar "mid")) (EVar "seed")) (EVar "accData")) (EVar "accAll")) (EVar "prog"))) (DoLet false false (PVar "pubV") (EBinOp "++" (EApp (EApp (EVar "pickSchemes") (EApp (EVar "publicValNames") (EVar "prog"))) (EVar "schemes")) (EApp (EApp (EApp (EVar "reexportSeed") (EVar "coreV")) (EVar "prog")) (EVar "depEnv")))) (DoLet false false (PVar "depEnv2") (EBinOp "::" (ETuple (EVar "mid") (EVar "pubV")) (EVar "depEnv"))) (DoLet false false (PVar "accData2") (EBinOp "++" (EVar "accData") (EApp (EVar "publicDataDecls") (EVar "prog")))) (DoLet false false (PVar "accAll2") (EBinOp "++" (EVar "accAll") (EVar "prog"))) (DoLet false false (PVar "results2") (EBinOp "::" (ETuple (EVar "mid") (ETuple (EVar "errs") (EVar "warns"))) (EVar "results"))) (DoLet false false (PTuple (PVar "key") (PVar "keys2")) (EMatch (EVar "keys") (arm (PCons (PVar "k") (PVar "ks")) () (ETuple (EVar "k") (EVar "ks"))) (arm (PList) () (ETuple (EVar "None") (EListLit))))) (DoExpr (EMatch (EVar "key") (arm (PCon "None") () (EBlock (DoLet false false (PTuple (PVar "finalResults") PWild) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "chainGo") (EVar "baseSeed")) (EVar "coreV")) (EVar "depEnv2")) (EVar "accData2")) (EVar "accAll2")) (EVar "results2")) (EListLit)) (EVar "rest"))) (DoExpr (ETuple (EVar "finalResults") (EListLit))))) (arm (PCon "Some" (PVar "k")) () (EBlock (DoLet false false (PVar "step") (ERecordCreate "ChainStep" ((fa "csKey" (EVar "k")) (fa "csDepEnv" (EVar "depEnv2")) (fa "csAccData" (EVar "accData2")) (fa "csAccAll" (EVar "accAll2")) (fa "csResults" (EVar "results2")) (fa "csCrossRun" (EApp (EVar "copyCrossRun") (EFieldAccess (EVar "crossRun") "value"))) (fa "csDriver" (EApp (EVar "copyDriverState") (EFieldAccess (EVar "driverState") "value")))))) (DoLet false false (PTuple (PVar "finalResults") (PVar "moreSteps")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "chainGo") (EVar "baseSeed")) (EVar "coreV")) (EVar "depEnv2")) (EVar "accData2")) (EVar "accAll2")) (EVar "results2")) (EVar "keys2")) (EVar "rest"))) (DoExpr (ETuple (EVar "finalResults") (EBinOp "++" (EVar "moreSteps") (EListLit (EVar "step")))))))))))
 (DTypeSig true "checkModulesDiagsK" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))))
-(DFunDef false "checkModulesDiagsK" ((PVar "preludeKey") (PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "coreDecls") (PVar "modules")) (EApp (EApp (EVar "stampGraphTyOrigins") (EVar "coreDecls0")) (EVar "modules0"))) (DoLet false false (PTuple (PVar "runtimeSeed") (PVar "coreSchemes")) (EApp (EApp (EApp (EApp (EVar "checkModulesPreambleK") (EVar "preludeKey")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PVar "perMod") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldModules") (EVar "True")) (EVar "True")) (EVar "cmDiagsWorker")) (EVar "cmDiagsCollect")) (EListLit)) (EBinOp "++" (EVar "runtimeSeed") (EVar "coreSchemes"))) (EVar "coreSchemes")) (EListLit)) (EApp (EVar "publicDataDecls") (EVar "coreDecls"))) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EMatch (EApp (EVar "globalCoherenceConflict") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value") "deImpls")) (arm (PTuple (PVar "hard") (PVar "soft")) () (EApp (EApp (EVar "attachEntryWarnOpt") (EVar "soft")) (EApp (EApp (EVar "attachEntryDiagOpt") (EVar "hard")) (EVar "perMod"))))))))
+(DFunDef false "checkModulesDiagsK" ((PVar "preludeKey") (PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "coreDecls") (PVar "modules")) (EApp (EApp (EVar "stampGraphTyOrigins") (EVar "coreDecls0")) (EVar "modules0"))) (DoLet false false (PTuple (PVar "runtimeSeed") (PVar "coreSchemes")) (EApp (EApp (EApp (EApp (EVar "checkModulesPreambleK") (EVar "preludeKey")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PVar "perMod") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldModules") (EVar "True")) (EVar "True")) (EVar "cmDiagsWorker")) (EVar "cmDiagsCollect")) (EListLit)) (EBinOp "++" (EVar "runtimeSeed") (EVar "coreSchemes"))) (EVar "coreSchemes")) (EListLit)) (EApp (EVar "publicDataDecls") (EVar "coreDecls"))) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EApp (EVar "attachCoherenceConflict") (EVar "perMod")))))
+(DTypeSig false "attachCoherenceConflict" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))
+(DFunDef false "attachCoherenceConflict" ((PVar "perMod")) (EMatch (EApp (EVar "globalCoherenceConflict") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value") "deImpls")) (arm (PTuple (PVar "hard") (PVar "soft")) () (EApp (EApp (EVar "attachEntryWarnOpt") (EVar "soft")) (EApp (EApp (EVar "attachEntryDiagOpt") (EVar "hard")) (EVar "perMod"))))))
 (DTypeSig false "attachEntryDiagOpt" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))
 (DFunDef false "attachEntryDiagOpt" ((PCon "None") (PVar "perMod")) (EVar "perMod"))
 (DFunDef false "attachEntryDiagOpt" ((PCon "Some" (PVar "msg")) (PVar "perMod")) (EApp (EApp (EVar "attachEntryDiag") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (ELit (LString "T-CONFLICTING-IMPL"))) (ELit (LInt 1))) (EVar "None")) (EVar "msg")) (EVar "None")) (EVar "None"))) (EVar "perMod")))
