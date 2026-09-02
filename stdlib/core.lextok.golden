@@ -6934,10 +6934,12 @@ UPPER "Option"
 IDENT "a"
 NEWLINE
 IDENT "maximum"
+IDENT "xs"
 EQUAL
 IDENT "fold"
 IDENT "step"
 UPPER "None"
+IDENT "xs"
 INDENT
 WHERE
 INDENT
@@ -6985,10 +6987,12 @@ UPPER "Option"
 IDENT "a"
 NEWLINE
 IDENT "minimum"
+IDENT "xs"
 EQUAL
 IDENT "fold"
 IDENT "step"
 UPPER "None"
+IDENT "xs"
 INDENT
 WHERE
 INDENT

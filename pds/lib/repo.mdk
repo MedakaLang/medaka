@@ -9,6 +9,7 @@ import lib.blockstore.{
   BlockStore,
   blockStoreAddMany,
   blockStoreEmpty,
+  blockStoreFromBlocks,
   blockStoreGet,
   blockStorePut,
 }
@@ -20,6 +21,7 @@ import lib.mst.{
   mstDelete,
   mstEmpty,
   mstEntries,
+  mstFromBlocks,
   mstInsert,
   mstLookup,
   mstNodeBlocks,
@@ -298,6 +300,57 @@ repoInitFromKeyBytes : String -> Array Int -> Tid -> Result String Repo
 repoInitFromKeyBytes did keyBytes rev = match secretKeyFromBytes keyBytes
   Err message => Err "repo: bad signing key: {message}"
   Ok secret => repoInit did secret rev
+
+rehydrate : String ->
+  SecretKey ->
+  Cid ->
+  Array Int ->
+  BlockStore ->
+  Result String Repo
+rehydrate did secret commitCid signed store = do
+  (commitDid, dataCid, rev, signature) <- match decodeSignedCommit signed
+    Err message => Err "repo: invalid persisted commit: \{message}"
+    Ok value => Ok value
+  () <- if commitDid == did then
+    Ok ()
+  else
+    Err "repo: persisted commit DID mismatch"
+  (nodes, leaves) <- walkNodes [dataCid] store [] [] 0
+  tree <- match mstFromBlocks dataCid nodes
+    Err message => Err "repo: invalid persisted MST: \{message}"
+    Ok value => Ok value
+  _ <- recordBlocks leaves store []
+  unsigned <- encodeCommit "unsigned" (unsignedValue did dataCid rev)
+  let publicKey = publicKeyForSecret secret
+  let commit = RepoCommit rev dataCid commitCid unsigned signed signature
+  if repoVerifyCommit did publicKey commit then
+    Ok (Repo did secret publicKey tree store commit)
+  else
+    Err
+      "repo: persisted commit does not verify under the configured signing key"
+
+{- | Rehydrate a repository from its signing key, its persisted head commit CID,
+   and its complete block graph, in any input order.
+
+   The key arrives from configuration and is never read from the blocks: the
+   persisted head must carry a signature that verifies under it, so a graph
+   signed by some other key is rejected rather than adopted. Every block crosses
+   `blockStoreFromBlocks`'s CID verification and every MST node crosses
+   `mstFromBlocks`, so tampered bytes cannot reach the returned state. -}
+export
+repoFromBlocks : String ->
+  SecretKey ->
+  Cid ->
+  List (Cid, Array Int) ->
+  Result String Repo
+repoFromBlocks did secret commitCid blocks = do
+  () <- validateDid did
+  store <- match blockStoreFromBlocks blocks
+    Err message => Err "repo: invalid persisted blocks: \{message}"
+    Ok value => Ok value
+  match blockStoreGet commitCid store
+    None => Err "repo: missing persisted commit block"
+    Some signed => rehydrate did secret commitCid signed store
 
 repoCommitRev : RepoCommit -> Tid
 repoCommitRev (RepoCommit rev _ _ _ _ _) = rev

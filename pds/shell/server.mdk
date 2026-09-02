@@ -1,0 +1,284 @@
+{- | The native socket shell: a loopback accept loop and the per-connection
+   HTTP/1.1 lifecycle around the pure protocol core.
+
+   Nothing here knows what a request means. Bytes arrive from a socket, are
+   framed by `lib.http`'s `scanRequestBoundary` and by nothing else, are handed
+   whole to `lib.server_core`'s `handleBytes`, and the response bytes it returns
+   go back out. The successor `Store` is persisted through `shell.persist` and
+   then published into the one `Ref Store` every connection task shares.
+
+   The listener binds the loopback address and only the loopback address: the
+   address is a literal in `bindLoopback` and no parameter, argument, or
+   configuration field reaches it. A caller chooses the port and nothing else.
+
+   Every per-connection bound lives here rather than in `lib.resource_limits`
+   because each is a `Duration` or a socket-scheduling count, neither of which
+   the pure core can express. The one bound this module does NOT own is the
+   per-request byte ceiling: `scanRequestBoundary` already refuses a buffer past
+   `maxHttpRequestBytes`, so re-checking it here would be a second, divergent
+   answer to a question `lib.http` has already settled. -}
+
+import array.{sliceClamped}
+import async.{Async, Wait, deadlineAfter, expired, liftIO, spawn}
+import lib.cid.{cidToString}
+import lib.http.{
+  HttpFrame(..),
+  parseRequestAt,
+  requestKeepAlive,
+  scanRequestBoundary,
+  serializeResponse,
+}
+import lib.repo.{Repo, repoCommitCid, repoExportBlocks, repoLatestCommit}
+import lib.server_core.{Server, handleBytes}
+import lib.store.{Store, storeRepo}
+import lib.xrpc.{xrpcErrorResponse}
+import net.{Connection, Listener, listen}
+import net_async as A
+import shell.persist.{persistSave}
+import time.{Duration, seconds}
+
+-- | How long one connection may stay silent between reads before it is closed.
+idleTimeout : Duration
+idleTimeout = seconds 30
+
+-- | How long one request may take to arrive in full, however many reads it
+-- takes. Reset for each request on a kept-alive connection.
+requestTimeout : Duration
+requestTimeout = seconds 60
+
+-- | How long writing one response may take before the connection is closed.
+writeTimeout : Duration
+writeTimeout = seconds 30
+
+-- | Bytes asked for per read. The buffer grows by what actually arrives.
+readChunkBytes : Int
+readChunkBytes = 65536
+
+{- | How many connections may be in flight at once. An accepted connection past
+   the ceiling is closed immediately, without a read: answering it would need
+   the very socket work the ceiling exists to bound. -}
+maxConcurrentConnections : Int
+maxConcurrentConnections = 256
+
+{- | Bind the listening socket.
+
+   The address is the literal below and is reachable no other way:
+   `bindLoopback` takes a port and nothing else, so no configuration path can
+   move this server off the loopback interface. -}
+export
+bindLoopback : Int -> <Net "_"> Result String Listener
+bindLoopback port = listen "127.0.0.1" port
+
+persistFailureBytes : Array Int
+persistFailureBytes =
+  serializeResponse
+    (xrpcErrorResponse
+      500
+      "Internal Server Error"
+      "InternalServerError"
+      "Repository state could not be persisted")
+
+{- | Apply one framed request to the shared `Store`.
+
+   This function is the whole reason the shell has the shape it has, and it is
+   deliberately ORDINARY, non-`Async` code: read the current store, transition
+   it, persist the successor, publish the successor. A scheduler can only
+   interleave tasks at an `Async` bind, and there is not one in this sequence —
+   `handleBytes` is pure and `persistSave` performs plain synchronous
+   `<FileRead, FileWrite>`, not a suspension. So the four steps run as one
+   indivisible unit, and two concurrent connections cannot both read the same
+   store and each publish over the other's write. Wrapping the persist in
+   `liftIO`, or splitting these steps across two `Async` steps, silently
+   reintroduces that lost update; every caller therefore reaches this through a
+   SINGLE `liftIO`.
+
+   A persist that fails does not publish: the in-memory store and the disk stay
+   the same store, and the client is told the write did not happen. -}
+applyRequest : Server ->
+  String ->
+  Ref Store ->
+  Array Int ->
+  <FileRead "_", FileWrite "_", Stderr> Array Int
+applyRequest server dir storeRef bytes =
+  let store = !storeRef
+  let (next, response) = handleBytes server store bytes
+  match persistTransition dir store next
+    Err message =>
+      let () = ePutStrLn "serve: persist failed, state not advanced: \{message}"
+      persistFailureBytes
+    Ok () =>
+      let () = storeRef := next
+      response
+
+-- Persisting is skipped when the repository half did not move, so a read route
+-- does not rewrite the whole block graph.
+persistTransition : String ->
+  Store ->
+  Store ->
+  <FileRead "_", FileWrite "_"> Result String Unit
+persistTransition dir before after = match (storeRepo before, storeRepo after)
+  (_, None) => Ok ()
+  (None, Some next) => persistRepo dir next
+  (Some prior, Some next) =>
+    if headText prior == headText next then Ok () else persistRepo dir next
+
+headText : Repo -> String
+headText repo = cidToString (repoCommitCid (repoLatestCommit repo))
+
+persistRepo : String -> Repo -> <FileRead "_", FileWrite "_"> Result String Unit
+persistRepo dir repo = do
+  blocks <- repoExportBlocks repo
+  persistSave dir (repoCommitCid (repoLatestCommit repo)) blocks
+
+{- | Accept connections until the listener fails or is closed, running each on
+   its own task, never more than `maxConcurrentConnections` at a time. -}
+export
+runServer : Server ->
+  String ->
+  Ref Store ->
+  Listener ->
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Stderr | e> (Result String Unit)
+runServer server dir storeRef lis = defer
+  active <- liftIO (u => Ref 0)
+  acceptLoop server dir storeRef lis active
+
+acceptLoop : Server ->
+  String ->
+  Ref Store ->
+  Listener ->
+  Ref Int ->
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Stderr | e> (Result String Unit)
+acceptLoop server dir storeRef lis active = defer
+  accepted <- A.accept lis
+  acceptStep server dir storeRef lis active accepted
+
+acceptStep : Server ->
+  String ->
+  Ref Store ->
+  Listener ->
+  Ref Int ->
+  Result String Connection ->
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Stderr | e> (Result String Unit)
+acceptStep _ _ _ _ _ (Err message) = deferPure (Err message)
+acceptStep server dir storeRef lis active (Ok conn) =
+  if !active >= maxConcurrentConnections then defer
+    _ <- A.close conn
+    acceptLoop server dir storeRef lis active
+  else
+    let () = active := !active + 1
+    defer
+      _ <- spawn (serveConnection server dir storeRef conn active)
+      acceptLoop server dir storeRef lis active
+
+-- The counter is decremented on every exit path because the close and the
+-- decrement are the continuation of the loop, not something inside it.
+serveConnection : Server ->
+  String ->
+  Ref Store ->
+  Connection ->
+  Ref Int ->
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Stderr | e> Unit
+serveConnection server dir storeRef conn active = defer
+  _ <- connectionLoop server dir storeRef conn [||]
+  _ <- A.close conn
+  liftIO (u => active := !active - 1)
+
+{- | Serve requests over one connection until it closes, fails, or times out.
+   `pending` is what a previous request left behind: a pipelined client sends
+   the next request in the same packet as the last, so the loop scans what it
+   already holds before it reads anything more. -}
+connectionLoop : Server ->
+  String ->
+  Ref Store ->
+  Connection ->
+  Array Int ->
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Stderr | e> (Result String Unit)
+connectionLoop server dir storeRef conn pending = defer
+  deadline <- deadlineAfter requestTimeout
+  frameLoop server dir storeRef conn deadline pending
+
+-- `scanRequestBoundary` is the ONLY notion of a complete request in this
+-- module: nothing here inspects a byte of the buffer on its own.
+frameLoop : Server ->
+  String ->
+  Ref Store ->
+  Connection ->
+  Wait ->
+  Array Int ->
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Stderr | e> (Result String Unit)
+frameLoop server dir storeRef conn deadline buf =
+  match scanRequestBoundary buf 0
+    HttpFramedAt boundary => respond server dir storeRef conn buf boundary
+    HttpFrameFailed _ => rejectBuffer server dir storeRef conn buf
+    HttpNeedMore => defer
+      late <- expired deadline
+      if late then
+        deferPure (Err "request deadline exceeded")
+      else
+        readMore server dir storeRef conn deadline buf
+
+readMore : Server ->
+  String ->
+  Ref Store ->
+  Connection ->
+  Wait ->
+  Array Int ->
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Stderr | e> (Result String Unit)
+readMore server dir storeRef conn deadline buf = defer
+  received <- A.recvWithin idleTimeout conn readChunkBytes
+  match received
+    Err message => deferPure (Err message)
+    Ok bytes =>
+      if arrayLength bytes == 0 then
+        deferPure (endOfStream buf)
+      else
+        frameLoop server dir storeRef conn deadline (buf ++ bytes)
+
+-- A peer that closes between requests has finished; one that closes part way
+-- through a request has not.
+endOfStream : Array Int -> Result String Unit
+endOfStream buf =
+  if arrayLength buf == 0 then Ok () else Err "connection closed mid-request"
+
+respond : Server ->
+  String ->
+  Ref Store ->
+  Connection ->
+  Array Int ->
+  Int ->
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Stderr | e> (Result String Unit)
+respond server dir storeRef conn buf boundary =
+  let keepAlive = frameKeepAlive buf boundary
+  let rest = sliceClamped boundary (arrayLength buf) buf
+  defer
+    response <- liftIO (u =>
+      applyRequest server dir storeRef (sliceClamped 0 boundary buf))
+    sent <- A.sendAllWithin writeTimeout conn response
+    match sent
+      Err message => deferPure (Err message)
+      Ok () =>
+        if keepAlive then
+          connectionLoop server dir storeRef conn rest
+        else
+          deferPure (Ok ())
+
+-- The framed region is re-read for its keep-alive disposition through
+-- `parseRequestAt`, which parses exactly the region `scanRequestBoundary`
+-- framed, so the two cannot disagree about where the request ends.
+frameKeepAlive : Array Int -> Int -> Bool
+frameKeepAlive buf boundary = match parseRequestAt buf 0 boundary
+  Ok request => requestKeepAlive request
+  Err _ => False
+
+-- An unframeable buffer is still answered, by the same pure core: `handleBytes`
+-- classifies it 400 or 413 exactly as it classifies a whole buffer handed to it
+-- by any other caller. The connection then closes.
+rejectBuffer : Server ->
+  String ->
+  Ref Store ->
+  Connection ->
+  Array Int ->
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Stderr | e> (Result String Unit)
+rejectBuffer server dir storeRef conn buf = defer
+  response <- liftIO (u => applyRequest server dir storeRef buf)
+  A.sendAllWithin writeTimeout conn response

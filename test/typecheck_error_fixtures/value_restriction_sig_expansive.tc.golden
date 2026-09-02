@@ -1,0 +1,1 @@
+TYPE ERROR: Declared signature of 'sumOf' is polymorphic ('(Foldable t, Num a) => t a -> a') but its body is not a value, so it cannot be generalized: a zero-argument binding is evaluated once and shared. Give it a parameter (write 'sumOf x = … x') or declare the monomorphic type

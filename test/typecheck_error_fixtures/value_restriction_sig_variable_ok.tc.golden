@@ -1,0 +1,2 @@
+callMin : Ord a => a -> a -> a
+main : Unit

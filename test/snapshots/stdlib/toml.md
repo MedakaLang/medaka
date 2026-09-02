@@ -38,7 +38,7 @@ public export data Toml = Toml (List (String, TomlValue))
 -- ── Helpers ──────────────────────────────────────────────────────────────────
 
 listReverse : List a -> List a
-listReverse = listRevGo []
+listReverse xs = listRevGo [] xs
 
 listRevGo : List a -> List a -> List a
 listRevGo acc [] = acc
@@ -785,7 +785,7 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 (DData Public "TomlValue" () ((variant "TString" (ConPos (TyCon "String"))) (variant "TArray" (ConPos (TyApp (TyCon "List") (TyCon "String")))) (variant "TInt" (ConPos (TyCon "Int"))) (variant "TBool" (ConPos (TyCon "Bool")))) ())
 (DData Public "Toml" () ((variant "Toml" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue")))))) ())
 (DTypeSig false "listReverse" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))
-(DFunDef false "listReverse" () (EApp (EVar "listRevGo") (EListLit)))
+(DFunDef false "listReverse" ((PVar "xs")) (EApp (EApp (EVar "listRevGo") (EListLit)) (EVar "xs")))
 (DTypeSig false "listRevGo" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "listRevGo" ((PVar "acc") (PList)) (EVar "acc"))
 (DFunDef false "listRevGo" ((PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "listRevGo") (EBinOp "::" (EVar "x") (EVar "acc"))) (EVar "xs")))
@@ -949,7 +949,7 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 (DData Public "TomlValue" () ((variant "TString" (ConPos (TyCon "String"))) (variant "TArray" (ConPos (TyApp (TyCon "List") (TyCon "String")))) (variant "TInt" (ConPos (TyCon "Int"))) (variant "TBool" (ConPos (TyCon "Bool")))) ())
 (DData Public "Toml" () ((variant "Toml" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue")))))) ())
 (DTypeSig false "listReverse" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))
-(DFunDef false "listReverse" () (EApp (EVar "listRevGo") (EListLit)))
+(DFunDef false "listReverse" ((PVar "xs")) (EApp (EApp (EVar "listRevGo") (EListLit)) (EVar "xs")))
 (DTypeSig false "listRevGo" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "listRevGo" ((PVar "acc") (PList)) (EVar "acc"))
 (DFunDef false "listRevGo" ((PVar "acc") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "listRevGo") (EBinOp "::" (EVar "x") (EVar "acc"))) (EVar "xs")))

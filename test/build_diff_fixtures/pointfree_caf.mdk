@@ -1,11 +1,15 @@
--- Regression: a point-free, `=>`-constrained top-level CAF (zero source params,
--- a typeclass constraint).  `seqp = trav identity` dict-passes to clause `[$dict]`
--- with an under-applied CDict body (`trav identity`, trav needing one more arg).
--- The emitter formerly gave seqp's define arity 1 (dict only) while the saturated
--- call site passes dict + the list → the value arg was dropped and the inner trav
--- ran on garbage → SIGSEGV at runtime (native `run` was correct; only build+exec
--- crashed).  Fixed by extending methodBodyDeficit to eta-saturate an under-applied
--- CDict-spine body (llvm_emit.mdk).
+-- A `=>`-constrained wrapper whose body is an under-applied constrained callee
+-- (`trav identity`, trav needing one more arg), dict-passed through clause
+-- `[$dict]`.  The emitter formerly gave the wrapper's define arity 1 (dict only)
+-- while the saturated call site passed dict + the list → the value arg was
+-- dropped and the inner trav ran on garbage → SIGSEGV at runtime (native `run`
+-- was correct; only build+exec crashed).  Fixed by extending methodBodyDeficit
+-- to eta-saturate an under-applied CDict-spine body (llvm_emit.mdk).
+--
+-- The wrapper was originally the point-free `seqp = trav identity`.  That shape
+-- is now rejected at the definition (T-SIG-OVER-EXPANSIVE — a polymorphic
+-- signature over an expansive body; HM-CORE-SEMANTICS §1 clause 4), so the
+-- fixture carries the eta-expanded form and pins the dispatch, not the deficit.
 --
 -- GOLDEN IS NATIVE-SOURCED (native>oracle): the frozen OCaml oracle mis-evaluates
 -- this shape (returns `[[1, 2, 3]]`); the .build.golden is captured from the native
@@ -16,7 +20,7 @@ trav f xs = match xs
   (x::rest) => andThen (f x) (y => andThen (trav f rest) (ys => pure (y :: ys)))
 
 seqp : Thenable m => List (m a) -> m (List a)
-seqp = trav identity
+seqp xs = trav identity xs
 
 main : <IO> Unit
 main = println (debug (seqp [Some 1, Some 2, Some 3]))

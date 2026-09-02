@@ -1,5 +1,5 @@
 sumOf : (Foldable t, Num a) => t a -> a
-sumOf = fold (+) 0
+sumOf xs = fold (+) 0 xs
 main : <IO> Unit
 main =
   putStrLn (intToString (sum [1, 2, 3]))

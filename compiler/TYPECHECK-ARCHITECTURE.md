@@ -594,7 +594,7 @@ edges constrain refactors and none was named before:
 |---|---|
 | → `backend/private_mangle.mdk` (`mangledName`) | typecheck depends on the **backend**; bears on §7.4 and on §7.3 (it is what does *not* qualify type names) |
 | → `support/scc.mdk` (`tarjanSCCs`) | Tarjan is not in this file (§2) |
-| → `frontend/marker.mdk` (`localBoundNames`) | marker produces `EMethodRef` — this file's **input contract** |
+| → `frontend/marker.mdk` (`localBoundNames`) | `localBoundNames` only. The mark pass is **not** on any production verb, so **no `EMethodRef` reaches this file**: `run`/`build` mark dicts in this file's own `prePassDict`/`prePassDictArg`, which mint `EMethodAt`/`EDictAt`, and `check` sees the unmarked tree |
 | ← `tools/lsp.mdk` (`currentLocalSchemes`, `currentSeedSchemes`) | the LSP reads `PerRun` state **after** a run completes, so `localSchemesOut`/`seedSchemesOut` are a **live external contract on reset timing** |
 
 Also: `driver/diagnostics.mdk` consumes `checkProgramDiags`/`checkModulesDiags`/
@@ -642,6 +642,7 @@ Also: `driver/diagnostics.mdk` consumes `checkProgramDiags`/`checkModulesDiags`/
 | `compiler/ARCH-REVIEW.md` | "a 7k-line god-module with concentrated mutable state" | **Half fixed.** State is bundled; the concentration is now control-flow (§7.1). |
 | `.claude/workstreams/TYPECHECK.md` | "13,717 lines / 97 `Ref`s at `db33eeab`" | Line count correct; `db33eeab` is dated **2026-07-14**, not 07-15, and the genuine cell count there is **95**, not 97 — the same `: Ref ` over-count (§0 trap 4). |
 | This document, §2 | the 75 banners describe their regions | False — they are insertion markers, and §4 inherited two of their errors before review. |
+| This document, §7 | "marker produces `EMethodRef` — this file's **input contract**" | False (corrected 2026-09-02): `markWithPrelude` is imported only by `tools/snapshot.mdk` and two `entries/` probes, so `EMethodRef` is constructed on no production verb; the elaborate driver's own `prePassDictArg` mints `EMethodAt`/`EDictAt` and `check` runs no mark pass. |
 
 **Corrections this document made to itself** (first draft → reviewed), recorded because the
 same three failure modes are available to the next reader:
