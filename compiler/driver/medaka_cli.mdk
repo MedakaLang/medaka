@@ -2778,11 +2778,8 @@ runRunCmd argv =
       -- itself (#100) and rendered by moduleLoadErrText, so neither one is a
       -- bare `parse error` panic any more.  Error-path only; valid input is
       -- unaffected.
-      let _ =
-        orExit
-          (mapErr
-            (ppParseError (readFileSafe target) target)
-            (parseResult (readFileSafe target)))
+      let tsrc = readFileSafe target
+      let _ = orExit (mapErr (ppParseError tsrc target) (parseResult tsrc))
       -- #186/#1360: keep the loader's per-module PATHS instead of dropping
       -- them at the load site.  They were already being carried here and
       -- discarded one line later, which is why every imported module's
