@@ -672,6 +672,116 @@ scanInteriorCells bytes pageSize usable cpArrayStart pageBase nCells i rightmost
       (acc ++ rows)
 
 -- ---------------------------------------------------------------------------
+-- Single-path rowid seek
+-- ---------------------------------------------------------------------------
+--
+-- `scanTablePage` above visits every page reachable from the root; a lookup
+-- by exact rowid only needs the one root-to-leaf path that can contain it.
+-- Per the table b-tree invariant (SQLITE-DESIGN.md), an interior cell's rowid
+-- is the LARGEST rowid in that cell's left-child subtree, and every rowid in
+-- the right-most child exceeds every cell's rowid on the page — so comparing
+-- the seek target against each cell's rowid in order, left to right, picks
+-- the single child to descend into.
+
+-- | Decode a table-interior cell's rowid at absolute offset `off`, without
+--   decoding its left-child subtree: `[4-byte BE left-child][rowid varint]`.
+interiorCellRowid : Array Int -> Int -> Result String Int
+interiorCellRowid bytes off = bStep "interior rowid varint" (runBP
+  sqVarint
+  bytes
+  (off + 4)) (rid _ =>
+  Ok rid)
+
+-- | Seek rowid `target` starting from page `pageNum`, handling both
+--   table-leaf (0x0D) and table-interior (0x05) pages.  Returns `Ok None`
+--   when no row with that rowid exists on the reachable leaf.
+export
+seekTablePage : Array Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Result String (Option Row)
+seekTablePage bytes pageSize usable pageNum hdrOffset target = do
+  ptype <- pageType bytes hdrOffset
+  if ptype == pageTableLeaf then do
+    let pageBase = (pageNum - 1) * pageSize
+    rows <- decodeLeafPage bytes pageSize usable pageBase hdrOffset
+    Ok (findRowid target rows)
+  else if ptype == pageTableInterior then
+    seekInteriorPage bytes pageSize usable pageNum hdrOffset target
+  else
+    Err
+      "seekTablePage: unexpected page type \{intToString ptype} on page \{intToString pageNum}"
+
+-- Find the row (if any) whose rowid equals `target` among a leaf's decoded rows.
+findRowid : Int -> List Row -> Option Row
+findRowid target [] = None
+findRowid target (r :: rest) =
+  if rowRowid r == target then Some r else findRowid target rest
+
+-- Descend one interior page: walk its cells left to right, comparing `target`
+-- against each cell's rowid; descend into the first cell whose rowid is >=
+-- target, or the right-most child once every cell's rowid is smaller.
+seekInteriorPage : Array Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Result String (Option Row)
+seekInteriorPage bytes pageSize usable pageNum hdrOffset target = do
+  let pageBase = (pageNum - 1) * pageSize
+  nCells <- pageCellCount bytes hdrOffset
+  rightmost <- beU32 bytes (hdrOffset + leafHeaderSize)
+  let cpArrayStart = hdrOffset + interiorHeaderSize
+  seekInteriorCells
+    bytes
+    pageSize
+    usable
+    cpArrayStart
+    pageBase
+    nCells
+    0
+    rightmost
+    target
+
+seekInteriorCells : Array Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Result String (Option Row)
+seekInteriorCells bytes pageSize usable cpArrayStart pageBase nCells i rightmost target
+  | i >= nCells = do
+    let rmHdr = pageHdrOffset pageSize rightmost
+    seekTablePage bytes pageSize usable rightmost rmHdr target
+  | otherwise = do
+    cellPtr <- beU16 bytes (cpArrayStart + i * 2)
+    let cellOff = pageBase + cellPtr
+    leftChild <- beU32 bytes cellOff
+    cellRowid <- interiorCellRowid bytes cellOff
+    if target <= cellRowid then
+      let childHdr = pageHdrOffset pageSize leftChild
+      seekTablePage bytes pageSize usable leftChild childHdr target
+    else
+      seekInteriorCells
+        bytes
+        pageSize
+        usable
+        cpArrayStart
+        pageBase
+        nCells
+        (i + 1)
+        rightmost
+        target
+
+-- ---------------------------------------------------------------------------
 
 -- | Render a decoded row (or error) as "rowid: cell|cell|..." for doctests.
 export

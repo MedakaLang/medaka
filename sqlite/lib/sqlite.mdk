@@ -30,6 +30,7 @@ import lib.btree.{
   rowCells,
   decodeLeafPage,
   scanTablePage,
+  seekTablePage,
   scanIndexPage,
 }
 import lib.recordfmt.{Cell, CNull, CInt, CText, CBlob, CFloat, cellToString}
@@ -179,6 +180,20 @@ scanTableRows db name = do
   let n = entry.rootPage
   let hdrOff = hdrOffsetOf db n
   scanTablePage bytes ps (usableOf db) n hdrOff
+
+-- | Seek a single row of a table B-tree by rowid, descending the tree along
+--   the one root-to-leaf path that can contain it instead of visiting every
+--   page (`scanTableRows`/`scanTableRowsIpk`).  `Ok None` means no row with
+--   that rowid exists — not an error.
+export
+seekTableRow : Db -> String -> Int -> Result String (Option Row)
+seekTableRow db name target = do
+  entry <- findTable db name
+  let bytes = dbBytes db
+  let ps = headerPageSize (dbHeader db)
+  let n = entry.rootPage
+  let hdrOff = hdrOffsetOf db n
+  seekTablePage bytes ps (usableOf db) n hdrOff target
 
 -- | Find an index by name in the schema (`etype == "index"`).  Case-sensitive
 --   — unlike `findTable`, an index name is never referenced from ordinary SQL,
