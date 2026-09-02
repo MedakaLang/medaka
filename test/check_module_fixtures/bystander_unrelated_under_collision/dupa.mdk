@@ -3,7 +3,7 @@
 -- declared by `dupz.mdk`, at the same arity, with different meanings.  The entry
 -- imports only `da` from here, so the collision is present IN THE GRAPH and
 -- absent from everything the golden asserts about.
-public export data Dup e a = MkDupA (Unit -> <e> a)
+public export data Dup (e : Effect) a = MkDupA (Unit -> <e> a)
 
 export type Shared = Int
 

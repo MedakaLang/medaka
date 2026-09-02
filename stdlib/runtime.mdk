@@ -473,7 +473,7 @@ extern arrayLength : Array a -> Int
 extern arrayMake : Int -> a -> Array a
 
 -- | A new array of length `n` whose element at each index `i` is `f i`.
-extern arrayMakeWith : Int -> (Int -> a) -> Array a
+extern arrayMakeWith : Int -> (Int -> <e> a) -> <e> Array a
 
 -- | The element at an index, with no bounds check. For library internals
 -- that have already checked the index.

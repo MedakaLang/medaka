@@ -5,7 +5,7 @@
 -- instantiates the slot to `Ghost <>` and is certified PURE, yet `run` performs
 -- <Stdout>. T-EFFECT-LAUNDER rejects it — check == run == build all REJECT via a
 -- DIAGNOSTIC, never a runtime panic.
-data Ghost e = Using (Unit -> <e> Unit) | Free
+data Ghost (e : Effect) = Using (Unit -> <e> Unit) | Free
 
 interface Speak s where
   speak : s -> Ghost e -> <e> String

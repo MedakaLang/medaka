@@ -1,0 +1,34 @@
+-- CONTROL for graded_index_eager_apply.mdk (D-3, #1095): byte-identical except
+-- ONE impl arm, which DEFERS (`Susp (u => g a)`) instead of applying eagerly.
+-- Storing the callback unifies <e> with the container's own thunk row and
+-- leaves it OPEN, so construction charges nothing — the semantics
+-- EFFECTS-SEMANTICS §6 promises for a deferred graded value — and the impl
+-- MUST stay accepted: the interface, the graded signature, the index and the
+-- impl machinery are all identical to the reject twin.
+data Box (e : Effect) a = Done a | Susp (Unit -> <e> a)
+
+runBox : Box e a -> <e> a
+runBox (Done a) = a
+runBox (Susp t) = t ()
+
+interface GMap (f : Effect -> Type -> Type) where
+  gmap : (a -> <e> b) -> f e a -> f e b
+
+impl GMap Box where
+  gmap g (Done a) = Susp (u => g a)
+  gmap g (Susp t) = Susp (u => g (t u))
+
+loud : Int -> <Stdout> Int
+loud x =
+  let _ = putStr "BOOM "
+  x + 1
+
+built : Box <Stdout> Int
+built = gmap loud (Done 1)
+
+pureInt : Int
+pureInt =
+  let b = built
+  0
+
+main = println pureInt

@@ -1,9 +1,9 @@
 -- #822 control pair, ACCEPT half.  Identical to graded_ctor_phantom_arg.mdk except
--- that `Box`'s field USES its first parameter in an effect-tail position, so
--- inferParamKinds gives that parameter kind Row.  `Box e Unit` is then a
+-- that `Box`'s field USES its first parameter in an effect-tail position, so its
+-- head declares that parameter `(e : Effect)`.  `Box e Unit` is then a
 -- row-kinded argument occurrence that pins <e> at every call site, and the method
 -- declares soundly.
-data Box e a = Mk (Unit -> <e> a)
+data Box (e : Effect) a = Mk (Unit -> <e> a)
 
 interface GM t where
   gm : t -> (Unit -> <e> Unit) -> Box e Unit -> Box e Unit

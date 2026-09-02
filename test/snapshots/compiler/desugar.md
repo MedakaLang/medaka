@@ -1,5 +1,5 @@
 # META
-source_lines=1072
+source_lines=1084
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage.  Lowers surface
@@ -102,7 +102,7 @@ mapKids f (ERangeArray lo hi incl) =
 mapKids f (ESlice e0 lo hi incl r) =
   ESlice (mapExpr f e0) (mapExpr f lo) (mapExpr f hi) incl r
 mapKids f (EBlock stmts) = EBlock (map (mapDoStmt f) stmts)
-mapKids f (EDo stmts) = EDo (map (mapDoStmt f) stmts)
+mapKids f (EDo d stmts) = EDo d (map (mapDoStmt f) stmts)
 mapKids f (EAnnot e0 t) = EAnnot (mapExpr f e0) t
 mapKids f (EStringInterp parts) = EStringInterp (map (mapInterp f) parts)
 mapKids f (EGuards arms) = EGuards (map (mapGuardArm f) arms)
@@ -294,9 +294,20 @@ concatLeft acc (e::rest) = concatLeft (binOp "++" acc e) rest
 -- EBlock survives (left for eval).
 -- check_do_wellformed (which rejects DoAssign/DoFieldAssign/empty in a do-block)
 -- is validation-only and skipped — those never appear in a well-formed EDo.
+-- EDo's Bool selects the method pair: `do` lowers to `andThen`/`pure`, `defer`
+-- to `deferThen`/`deferPure` (#824).  Nothing else about the lowering differs.
 rewriteDo : Expr -> Expr
-rewriteDo (EDo stmts) = wrapDoOrigin stmts (lowerDo stmts)
+rewriteDo (EDo deferred stmts) = wrapDoOrigin stmts (lowerDo deferred stmts)
 rewriteDo e = e
+
+-- the bind and return-position method names for a do- vs defer-block
+bindMethodName : Bool -> String
+bindMethodName True = "deferThen"
+bindMethodName False = "andThen"
+
+pureMethodName : Bool -> String
+pureMethodName True = "deferPure"
+pureMethodName False = "pure"
 
 -- Phase 150: wrap the lowered chain in a transparent EDoOrigin carrying the
 -- do-block's loc (the first statement's position) so a monad-constraint failure
@@ -327,14 +338,15 @@ exprLoc (ELoc l _) = Some l
 exprLoc (EApp f _) = exprLoc f
 exprLoc _ = None
 
-lowerDo : List DoStmt -> Expr
-lowerDo [DoExpr e] = e
-lowerDo [DoBind pat e] =
-  callAndThen e (doCont pat (EApp (EVar "pure") (ELit LUnit)))
-lowerDo ((DoExpr e)::rest) = callAndThen e (ELam [PWild] (lowerDo rest))
-lowerDo ((DoBind pat e)::rest) = callAndThen e (doCont pat (lowerDo rest))
-lowerDo ((DoLet _ isFun pat e)::rest) = ELet False isFun pat e (lowerDo rest)
-lowerDo _ = fallthrough
+lowerDo : Bool -> List DoStmt -> Expr
+lowerDo _ [DoExpr e] = e
+lowerDo d [DoBind pat e] =
+  callAndThen d e (doCont pat (EApp (EVar (pureMethodName d)) (ELit LUnit)))
+lowerDo d ((DoExpr e)::rest) = callAndThen d e (ELam [PWild] (lowerDo d rest))
+lowerDo d ((DoBind pat e)::rest) = callAndThen d e (doCont pat (lowerDo d rest))
+lowerDo d ((DoLet _ isFun pat e)::rest) =
+  ELet False isFun pat e (lowerDo d rest)
+lowerDo _ _ = fallthrough
 
 -- #894 review finding 1: `x <- b` / a bare statement line in `do` synthesizes
 -- an `andThen` call (below), and typecheck's `inferApp` needs to tell THIS
@@ -350,10 +362,10 @@ lowerDo _ = fallthrough
 -- Falls back to a plain (untagged) `andThen` callee when the scrutinee carries
 -- no `Loc` (rare — `exprLoc` bottoms out); `inferApp` then falls back to the
 -- general container/List/Array message, which is safe, just less precise.
-callAndThen : Expr -> Expr -> Expr
-callAndThen e cont = match exprLoc e
-  Some l => EApp (EApp (EDoOrigin l (EVar "andThen")) e) cont
-  None => callBin "andThen" e cont
+callAndThen : Bool -> Expr -> Expr -> Expr
+callAndThen d e cont = match exprLoc e
+  Some l => EApp (EApp (EDoOrigin l (EVar (bindMethodName d))) e) cont
+  None => callBin (bindMethodName d) e cont
 
 -- bind continuation: a bare lambda for an irrefutable pattern, else a 1-arg
 -- lambda + 2-arm match whose wildcard arm fails (do_bind_fail = fallthrough)
@@ -1104,7 +1116,7 @@ desugar prog = qualifyAliasRefs prog
 (DFunDef false "mapKids" ((PVar "f") (PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "ERangeArray") (EApp (EApp (EVar "mapExpr") (EVar "f")) (EVar "lo"))) (EApp (EApp (EVar "mapExpr") (EVar "f")) (EVar "hi"))) (EVar "incl")))
 (DFunDef false "mapKids" ((PVar "f") (PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") (PVar "incl") (PVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EApp (EVar "mapExpr") (EVar "f")) (EVar "e0"))) (EApp (EApp (EVar "mapExpr") (EVar "f")) (EVar "lo"))) (EApp (EApp (EVar "mapExpr") (EVar "f")) (EVar "hi"))) (EVar "incl")) (EVar "r")))
 (DFunDef false "mapKids" ((PVar "f") (PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EVar "map") (EApp (EVar "mapDoStmt") (EVar "f"))) (EVar "stmts"))))
-(DFunDef false "mapKids" ((PVar "f") (PCon "EDo" (PVar "stmts"))) (EApp (EVar "EDo") (EApp (EApp (EVar "map") (EApp (EVar "mapDoStmt") (EVar "f"))) (EVar "stmts"))))
+(DFunDef false "mapKids" ((PVar "f") (PCon "EDo" (PVar "d") (PVar "stmts"))) (EApp (EApp (EVar "EDo") (EVar "d")) (EApp (EApp (EVar "map") (EApp (EVar "mapDoStmt") (EVar "f"))) (EVar "stmts"))))
 (DFunDef false "mapKids" ((PVar "f") (PCon "EAnnot" (PVar "e0") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EApp (EVar "mapExpr") (EVar "f")) (EVar "e0"))) (EVar "t")))
 (DFunDef false "mapKids" ((PVar "f") (PCon "EStringInterp" (PVar "parts"))) (EApp (EVar "EStringInterp") (EApp (EApp (EVar "map") (EApp (EVar "mapInterp") (EVar "f"))) (EVar "parts"))))
 (DFunDef false "mapKids" ((PVar "f") (PCon "EGuards" (PVar "arms"))) (EApp (EVar "EGuards") (EApp (EApp (EVar "map") (EApp (EVar "mapGuardArm") (EVar "f"))) (EVar "arms"))))
@@ -1207,8 +1219,14 @@ desugar prog = qualifyAliasRefs prog
 (DFunDef false "concatLeft" ((PVar "acc") (PList)) (EVar "acc"))
 (DFunDef false "concatLeft" ((PVar "acc") (PCons (PVar "e") (PVar "rest"))) (EApp (EApp (EVar "concatLeft") (EApp (EApp (EApp (EVar "binOp") (ELit (LString "++"))) (EVar "acc")) (EVar "e"))) (EVar "rest")))
 (DTypeSig false "rewriteDo" (TyFun (TyCon "Expr") (TyCon "Expr")))
-(DFunDef false "rewriteDo" ((PCon "EDo" (PVar "stmts"))) (EApp (EApp (EVar "wrapDoOrigin") (EVar "stmts")) (EApp (EVar "lowerDo") (EVar "stmts"))))
+(DFunDef false "rewriteDo" ((PCon "EDo" (PVar "deferred") (PVar "stmts"))) (EApp (EApp (EVar "wrapDoOrigin") (EVar "stmts")) (EApp (EApp (EVar "lowerDo") (EVar "deferred")) (EVar "stmts"))))
 (DFunDef false "rewriteDo" ((PVar "e")) (EVar "e"))
+(DTypeSig false "bindMethodName" (TyFun (TyCon "Bool") (TyCon "String")))
+(DFunDef false "bindMethodName" ((PCon "True")) (ELit (LString "deferThen")))
+(DFunDef false "bindMethodName" ((PCon "False")) (ELit (LString "andThen")))
+(DTypeSig false "pureMethodName" (TyFun (TyCon "Bool") (TyCon "String")))
+(DFunDef false "pureMethodName" ((PCon "True")) (ELit (LString "deferPure")))
+(DFunDef false "pureMethodName" ((PCon "False")) (ELit (LString "pure")))
 (DTypeSig false "wrapDoOrigin" (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "wrapDoOrigin" ((PList (PCon "DoExpr" PWild)) (PVar "lowered")) (EVar "lowered"))
 (DFunDef false "wrapDoOrigin" ((PVar "stmts") (PVar "lowered")) (EMatch (EApp (EVar "firstDoStmtLoc") (EVar "stmts")) (arm (PCon "Some" (PVar "l")) () (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EVar "lowered"))) (arm (PCon "None") () (EVar "lowered"))))
@@ -1225,15 +1243,15 @@ desugar prog = qualifyAliasRefs prog
 (DFunDef false "exprLoc" ((PCon "ELoc" (PVar "l") PWild)) (EApp (EVar "Some") (EVar "l")))
 (DFunDef false "exprLoc" ((PCon "EApp" (PVar "f") PWild)) (EApp (EVar "exprLoc") (EVar "f")))
 (DFunDef false "exprLoc" (PWild) (EVar "None"))
-(DTypeSig false "lowerDo" (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyCon "Expr")))
-(DFunDef false "lowerDo" ((PList (PCon "DoExpr" (PVar "e")))) (EVar "e"))
-(DFunDef false "lowerDo" ((PList (PCon "DoBind" (PVar "pat") (PVar "e")))) (EApp (EApp (EVar "callAndThen") (EVar "e")) (EApp (EApp (EVar "doCont") (EVar "pat")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "pure")))) (EApp (EVar "ELit") (EVar "LUnit"))))))
-(DFunDef false "lowerDo" ((PCons (PCon "DoExpr" (PVar "e")) (PVar "rest"))) (EApp (EApp (EVar "callAndThen") (EVar "e")) (EApp (EApp (EVar "ELam") (EListLit (EVar "PWild"))) (EApp (EVar "lowerDo") (EVar "rest")))))
-(DFunDef false "lowerDo" ((PCons (PCon "DoBind" (PVar "pat") (PVar "e")) (PVar "rest"))) (EApp (EApp (EVar "callAndThen") (EVar "e")) (EApp (EApp (EVar "doCont") (EVar "pat")) (EApp (EVar "lowerDo") (EVar "rest")))))
-(DFunDef false "lowerDo" ((PCons (PCon "DoLet" PWild (PVar "isFun") (PVar "pat") (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "False")) (EVar "isFun")) (EVar "pat")) (EVar "e")) (EApp (EVar "lowerDo") (EVar "rest"))))
-(DFunDef false "lowerDo" (PWild) (EVar "fallthrough"))
-(DTypeSig false "callAndThen" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr"))))
-(DFunDef false "callAndThen" ((PVar "e") (PVar "cont")) (EMatch (EApp (EVar "exprLoc") (EVar "e")) (arm (PCon "Some" (PVar "l")) () (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EApp (EVar "EVar") (ELit (LString "andThen"))))) (EVar "e"))) (EVar "cont"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "callBin") (ELit (LString "andThen"))) (EVar "e")) (EVar "cont")))))
+(DTypeSig false "lowerDo" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyCon "Expr"))))
+(DFunDef false "lowerDo" (PWild (PList (PCon "DoExpr" (PVar "e")))) (EVar "e"))
+(DFunDef false "lowerDo" ((PVar "d") (PList (PCon "DoBind" (PVar "pat") (PVar "e")))) (EApp (EApp (EApp (EVar "callAndThen") (EVar "d")) (EVar "e")) (EApp (EApp (EVar "doCont") (EVar "pat")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EApp (EVar "pureMethodName") (EVar "d")))) (EApp (EVar "ELit") (EVar "LUnit"))))))
+(DFunDef false "lowerDo" ((PVar "d") (PCons (PCon "DoExpr" (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EVar "callAndThen") (EVar "d")) (EVar "e")) (EApp (EApp (EVar "ELam") (EListLit (EVar "PWild"))) (EApp (EApp (EVar "lowerDo") (EVar "d")) (EVar "rest")))))
+(DFunDef false "lowerDo" ((PVar "d") (PCons (PCon "DoBind" (PVar "pat") (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EVar "callAndThen") (EVar "d")) (EVar "e")) (EApp (EApp (EVar "doCont") (EVar "pat")) (EApp (EApp (EVar "lowerDo") (EVar "d")) (EVar "rest")))))
+(DFunDef false "lowerDo" ((PVar "d") (PCons (PCon "DoLet" PWild (PVar "isFun") (PVar "pat") (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "False")) (EVar "isFun")) (EVar "pat")) (EVar "e")) (EApp (EApp (EVar "lowerDo") (EVar "d")) (EVar "rest"))))
+(DFunDef false "lowerDo" (PWild PWild) (EVar "fallthrough"))
+(DTypeSig false "callAndThen" (TyFun (TyCon "Bool") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr")))))
+(DFunDef false "callAndThen" ((PVar "d") (PVar "e") (PVar "cont")) (EMatch (EApp (EVar "exprLoc") (EVar "e")) (arm (PCon "Some" (PVar "l")) () (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EApp (EVar "EVar") (EApp (EVar "bindMethodName") (EVar "d"))))) (EVar "e"))) (EVar "cont"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "callBin") (EApp (EVar "bindMethodName") (EVar "d"))) (EVar "e")) (EVar "cont")))))
 (DTypeSig false "doCont" (TyFun (TyCon "Pat") (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "doCont" ((PVar "pat") (PVar "body")) (EIf (EApp (EVar "isRefutable") (EVar "pat")) (EApp (EApp (EVar "ELam") (EListLit (EApp (EApp (EVar "PVar") (ELit (LString "__do_x"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))) (EApp (EApp (EVar "EMatch") (EApp (EVar "EVar") (ELit (LString "__do_x")))) (EListLit (EApp (EApp (EApp (EVar "Arm") (EVar "pat")) (EListLit)) (EVar "body")) (EApp (EApp (EApp (EVar "Arm") (EVar "PWild")) (EListLit)) (EVar "fallthrough"))))) (EIf (EVar "otherwise") (EApp (EApp (EVar "ELam") (EListLit (EVar "pat"))) (EVar "body")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "isRefutable" (TyFun (TyCon "Pat") (TyCon "Bool")))
@@ -1528,7 +1546,7 @@ desugar prog = qualifyAliasRefs prog
 (DFunDef false "mapKids" ((PVar "f") (PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "ERangeArray") (EApp (EApp (EVar "mapExpr") (EVar "f")) (EVar "lo"))) (EApp (EApp (EVar "mapExpr") (EVar "f")) (EVar "hi"))) (EVar "incl")))
 (DFunDef false "mapKids" ((PVar "f") (PCon "ESlice" (PVar "e0") (PVar "lo") (PVar "hi") (PVar "incl") (PVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "ESlice") (EApp (EApp (EVar "mapExpr") (EVar "f")) (EVar "e0"))) (EApp (EApp (EVar "mapExpr") (EVar "f")) (EVar "lo"))) (EApp (EApp (EVar "mapExpr") (EVar "f")) (EVar "hi"))) (EVar "incl")) (EVar "r")))
 (DFunDef false "mapKids" ((PVar "f") (PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EMethodRef "map") (EApp (EVar "mapDoStmt") (EVar "f"))) (EVar "stmts"))))
-(DFunDef false "mapKids" ((PVar "f") (PCon "EDo" (PVar "stmts"))) (EApp (EVar "EDo") (EApp (EApp (EMethodRef "map") (EApp (EVar "mapDoStmt") (EVar "f"))) (EVar "stmts"))))
+(DFunDef false "mapKids" ((PVar "f") (PCon "EDo" (PVar "d") (PVar "stmts"))) (EApp (EApp (EVar "EDo") (EVar "d")) (EApp (EApp (EMethodRef "map") (EApp (EVar "mapDoStmt") (EVar "f"))) (EVar "stmts"))))
 (DFunDef false "mapKids" ((PVar "f") (PCon "EAnnot" (PVar "e0") (PVar "t"))) (EApp (EApp (EVar "EAnnot") (EApp (EApp (EVar "mapExpr") (EVar "f")) (EVar "e0"))) (EVar "t")))
 (DFunDef false "mapKids" ((PVar "f") (PCon "EStringInterp" (PVar "parts"))) (EApp (EVar "EStringInterp") (EApp (EApp (EMethodRef "map") (EApp (EVar "mapInterp") (EVar "f"))) (EVar "parts"))))
 (DFunDef false "mapKids" ((PVar "f") (PCon "EGuards" (PVar "arms"))) (EApp (EVar "EGuards") (EApp (EApp (EMethodRef "map") (EApp (EVar "mapGuardArm") (EVar "f"))) (EVar "arms"))))
@@ -1631,8 +1649,14 @@ desugar prog = qualifyAliasRefs prog
 (DFunDef false "concatLeft" ((PVar "acc") (PList)) (EVar "acc"))
 (DFunDef false "concatLeft" ((PVar "acc") (PCons (PVar "e") (PVar "rest"))) (EApp (EApp (EVar "concatLeft") (EApp (EApp (EApp (EVar "binOp") (ELit (LString "++"))) (EVar "acc")) (EVar "e"))) (EVar "rest")))
 (DTypeSig false "rewriteDo" (TyFun (TyCon "Expr") (TyCon "Expr")))
-(DFunDef false "rewriteDo" ((PCon "EDo" (PVar "stmts"))) (EApp (EApp (EVar "wrapDoOrigin") (EVar "stmts")) (EApp (EVar "lowerDo") (EVar "stmts"))))
+(DFunDef false "rewriteDo" ((PCon "EDo" (PVar "deferred") (PVar "stmts"))) (EApp (EApp (EVar "wrapDoOrigin") (EVar "stmts")) (EApp (EApp (EVar "lowerDo") (EVar "deferred")) (EVar "stmts"))))
 (DFunDef false "rewriteDo" ((PVar "e")) (EVar "e"))
+(DTypeSig false "bindMethodName" (TyFun (TyCon "Bool") (TyCon "String")))
+(DFunDef false "bindMethodName" ((PCon "True")) (ELit (LString "deferThen")))
+(DFunDef false "bindMethodName" ((PCon "False")) (ELit (LString "andThen")))
+(DTypeSig false "pureMethodName" (TyFun (TyCon "Bool") (TyCon "String")))
+(DFunDef false "pureMethodName" ((PCon "True")) (ELit (LString "deferPure")))
+(DFunDef false "pureMethodName" ((PCon "False")) (ELit (LString "pure")))
 (DTypeSig false "wrapDoOrigin" (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "wrapDoOrigin" ((PList (PCon "DoExpr" PWild)) (PVar "lowered")) (EVar "lowered"))
 (DFunDef false "wrapDoOrigin" ((PVar "stmts") (PVar "lowered")) (EMatch (EApp (EVar "firstDoStmtLoc") (EVar "stmts")) (arm (PCon "Some" (PVar "l")) () (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EVar "lowered"))) (arm (PCon "None") () (EVar "lowered"))))
@@ -1649,15 +1673,15 @@ desugar prog = qualifyAliasRefs prog
 (DFunDef false "exprLoc" ((PCon "ELoc" (PVar "l") PWild)) (EApp (EVar "Some") (EVar "l")))
 (DFunDef false "exprLoc" ((PCon "EApp" (PVar "f") PWild)) (EApp (EVar "exprLoc") (EVar "f")))
 (DFunDef false "exprLoc" (PWild) (EVar "None"))
-(DTypeSig false "lowerDo" (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyCon "Expr")))
-(DFunDef false "lowerDo" ((PList (PCon "DoExpr" (PVar "e")))) (EVar "e"))
-(DFunDef false "lowerDo" ((PList (PCon "DoBind" (PVar "pat") (PVar "e")))) (EApp (EApp (EVar "callAndThen") (EVar "e")) (EApp (EApp (EVar "doCont") (EVar "pat")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "pure")))) (EApp (EVar "ELit") (EVar "LUnit"))))))
-(DFunDef false "lowerDo" ((PCons (PCon "DoExpr" (PVar "e")) (PVar "rest"))) (EApp (EApp (EVar "callAndThen") (EVar "e")) (EApp (EApp (EVar "ELam") (EListLit (EVar "PWild"))) (EApp (EVar "lowerDo") (EVar "rest")))))
-(DFunDef false "lowerDo" ((PCons (PCon "DoBind" (PVar "pat") (PVar "e")) (PVar "rest"))) (EApp (EApp (EVar "callAndThen") (EVar "e")) (EApp (EApp (EVar "doCont") (EVar "pat")) (EApp (EVar "lowerDo") (EVar "rest")))))
-(DFunDef false "lowerDo" ((PCons (PCon "DoLet" PWild (PVar "isFun") (PVar "pat") (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "False")) (EVar "isFun")) (EVar "pat")) (EVar "e")) (EApp (EVar "lowerDo") (EVar "rest"))))
-(DFunDef false "lowerDo" (PWild) (EVar "fallthrough"))
-(DTypeSig false "callAndThen" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr"))))
-(DFunDef false "callAndThen" ((PVar "e") (PVar "cont")) (EMatch (EApp (EVar "exprLoc") (EVar "e")) (arm (PCon "Some" (PVar "l")) () (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EApp (EVar "EVar") (ELit (LString "andThen"))))) (EVar "e"))) (EVar "cont"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "callBin") (ELit (LString "andThen"))) (EVar "e")) (EVar "cont")))))
+(DTypeSig false "lowerDo" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyCon "Expr"))))
+(DFunDef false "lowerDo" (PWild (PList (PCon "DoExpr" (PVar "e")))) (EVar "e"))
+(DFunDef false "lowerDo" ((PVar "d") (PList (PCon "DoBind" (PVar "pat") (PVar "e")))) (EApp (EApp (EApp (EVar "callAndThen") (EVar "d")) (EVar "e")) (EApp (EApp (EVar "doCont") (EVar "pat")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EApp (EVar "pureMethodName") (EVar "d")))) (EApp (EVar "ELit") (EVar "LUnit"))))))
+(DFunDef false "lowerDo" ((PVar "d") (PCons (PCon "DoExpr" (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EVar "callAndThen") (EVar "d")) (EVar "e")) (EApp (EApp (EVar "ELam") (EListLit (EVar "PWild"))) (EApp (EApp (EVar "lowerDo") (EVar "d")) (EVar "rest")))))
+(DFunDef false "lowerDo" ((PVar "d") (PCons (PCon "DoBind" (PVar "pat") (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EVar "callAndThen") (EVar "d")) (EVar "e")) (EApp (EApp (EVar "doCont") (EVar "pat")) (EApp (EApp (EVar "lowerDo") (EVar "d")) (EVar "rest")))))
+(DFunDef false "lowerDo" ((PVar "d") (PCons (PCon "DoLet" PWild (PVar "isFun") (PVar "pat") (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "False")) (EVar "isFun")) (EVar "pat")) (EVar "e")) (EApp (EApp (EVar "lowerDo") (EVar "d")) (EVar "rest"))))
+(DFunDef false "lowerDo" (PWild PWild) (EVar "fallthrough"))
+(DTypeSig false "callAndThen" (TyFun (TyCon "Bool") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr")))))
+(DFunDef false "callAndThen" ((PVar "d") (PVar "e") (PVar "cont")) (EMatch (EApp (EVar "exprLoc") (EVar "e")) (arm (PCon "Some" (PVar "l")) () (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EApp (EVar "EVar") (EApp (EVar "bindMethodName") (EVar "d"))))) (EVar "e"))) (EVar "cont"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "callBin") (EApp (EVar "bindMethodName") (EVar "d"))) (EVar "e")) (EVar "cont")))))
 (DTypeSig false "doCont" (TyFun (TyCon "Pat") (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "doCont" ((PVar "pat") (PVar "body")) (EIf (EApp (EVar "isRefutable") (EVar "pat")) (EApp (EApp (EVar "ELam") (EListLit (EApp (EApp (EVar "PVar") (ELit (LString "__do_x"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))) (EApp (EApp (EVar "EMatch") (EApp (EVar "EVar") (ELit (LString "__do_x")))) (EListLit (EApp (EApp (EApp (EVar "Arm") (EVar "pat")) (EListLit)) (EVar "body")) (EApp (EApp (EApp (EVar "Arm") (EVar "PWild")) (EListLit)) (EVar "fallthrough"))))) (EIf (EVar "otherwise") (EApp (EApp (EVar "ELam") (EListLit (EVar "pat"))) (EVar "body")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "isRefutable" (TyFun (TyCon "Pat") (TyCon "Bool")))

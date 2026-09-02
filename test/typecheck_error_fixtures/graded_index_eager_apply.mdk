@@ -1,0 +1,35 @@
+-- D-3 (#1095): under a graded signature whose only non-argument occurrence of
+-- the callback's effect variable is the RESULT INDEX (`f e b`), an impl arm
+-- that APPLIES the callback performs <e> at call time on an arrow the
+-- signature declares pure.  The index is a promise about force time, not a
+-- charge, so nothing accounts for the effect: before D-3 this checked clean
+-- and `pureInt : Int` printed `BOOM` on both engines.  The eager arm closes
+-- the rigid `e := <>`; that closing is what T-EFFECT-INDEX-EAGER reports.
+-- Its ACCEPT twin, graded_index_deferred_ok.mdk, differs by that one arm.
+data Box (e : Effect) a = Done a | Susp (Unit -> <e> a)
+
+runBox : Box e a -> <e> a
+runBox (Done a) = a
+runBox (Susp t) = t ()
+
+interface GMap (f : Effect -> Type -> Type) where
+  gmap : (a -> <e> b) -> f e a -> f e b
+
+impl GMap Box where
+  gmap g (Done a) = Done (g a)
+  gmap g (Susp t) = Susp (u => g (t u))
+
+loud : Int -> <Stdout> Int
+loud x =
+  let _ = putStr "BOOM "
+  x + 1
+
+built : Box <Stdout> Int
+built = gmap loud (Done 1)
+
+pureInt : Int
+pureInt =
+  let b = built
+  0
+
+main = println pureInt

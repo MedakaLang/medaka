@@ -543,7 +543,7 @@ walkExpr w scope curLoc (EHeadAnnot e0 t) =
   let _ = walkTy w curLoc t
   walkExpr w scope curLoc e0
 walkExpr w scope curLoc (EBlock stmts) = walkStmts w scope curLoc stmts
-walkExpr w scope curLoc (EDo stmts) = walkStmts w scope curLoc stmts
+walkExpr w scope curLoc (EDo _ stmts) = walkStmts w scope curLoc stmts
 walkExpr w scope curLoc (EStringInterp parts) = walkInterp w scope curLoc parts
 walkExpr w scope curLoc (EGuards arms) = walkGuardArms w scope curLoc arms
 walkExpr w scope curLoc (ERecordCreate name fs) =

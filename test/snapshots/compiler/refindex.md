@@ -547,7 +547,7 @@ walkExpr w scope curLoc (EHeadAnnot e0 t) =
   let _ = walkTy w curLoc t
   walkExpr w scope curLoc e0
 walkExpr w scope curLoc (EBlock stmts) = walkStmts w scope curLoc stmts
-walkExpr w scope curLoc (EDo stmts) = walkStmts w scope curLoc stmts
+walkExpr w scope curLoc (EDo _ stmts) = walkStmts w scope curLoc stmts
 walkExpr w scope curLoc (EStringInterp parts) = walkInterp w scope curLoc parts
 walkExpr w scope curLoc (EGuards arms) = walkGuardArms w scope curLoc arms
 walkExpr w scope curLoc (ERecordCreate name fs) =
@@ -1781,7 +1781,7 @@ splitLastL (x::rest) = map ((pre, last) => (x::pre, last)) (splitLastL rest)
 (DFunDef false "walkExpr" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCon "EAnnot" (PVar "e0") (PVar "t"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "curLoc")) (EVar "t"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "e0")))))
 (DFunDef false "walkExpr" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCon "EHeadAnnot" (PVar "e0") (PVar "t"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "curLoc")) (EVar "t"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "e0")))))
 (DFunDef false "walkExpr" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "stmts")))
-(DFunDef false "walkExpr" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCon "EDo" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "stmts")))
+(DFunDef false "walkExpr" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCon "EDo" PWild (PVar "stmts"))) (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "stmts")))
 (DFunDef false "walkExpr" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCon "EStringInterp" (PVar "parts"))) (EApp (EApp (EApp (EApp (EVar "walkInterp") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "parts")))
 (DFunDef false "walkExpr" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCon "EGuards" (PVar "arms"))) (EApp (EApp (EApp (EApp (EVar "walkGuardArms") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "arms")))
 (DFunDef false "walkExpr" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCon "ERecordCreate" (PVar "name") (PVar "fs"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "recordRef") (EApp (EVar "ctxOf") (EVar "w"))) (EApp (EApp (EVar "resolveCtor") (EVar "w")) (EVar "name"))) (EApp (EVar "uriOf") (EVar "w"))) (EVar "curLoc"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "walkFields") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "fs")))))
@@ -2281,7 +2281,7 @@ splitLastL (x::rest) = map ((pre, last) => (x::pre, last)) (splitLastL rest)
 (DFunDef false "walkExpr" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCon "EAnnot" (PVar "e0") (PVar "t"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "curLoc")) (EVar "t"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "e0")))))
 (DFunDef false "walkExpr" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCon "EHeadAnnot" (PVar "e0") (PVar "t"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "curLoc")) (EVar "t"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "e0")))))
 (DFunDef false "walkExpr" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "stmts")))
-(DFunDef false "walkExpr" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCon "EDo" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "stmts")))
+(DFunDef false "walkExpr" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCon "EDo" PWild (PVar "stmts"))) (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "stmts")))
 (DFunDef false "walkExpr" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCon "EStringInterp" (PVar "parts"))) (EApp (EApp (EApp (EApp (EVar "walkInterp") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "parts")))
 (DFunDef false "walkExpr" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCon "EGuards" (PVar "arms"))) (EApp (EApp (EApp (EApp (EVar "walkGuardArms") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "arms")))
 (DFunDef false "walkExpr" ((PVar "w") (PVar "scope") (PVar "curLoc") (PCon "ERecordCreate" (PVar "name") (PVar "fs"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "recordRef") (EApp (EVar "ctxOf") (EVar "w"))) (EApp (EApp (EVar "resolveCtor") (EVar "w")) (EVar "name"))) (EApp (EVar "uriOf") (EVar "w"))) (EVar "curLoc"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "walkFields") (EVar "w")) (EVar "scope")) (EVar "curLoc")) (EVar "fs")))))

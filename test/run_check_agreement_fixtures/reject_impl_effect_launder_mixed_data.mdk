@@ -2,7 +2,7 @@
 -- row-kinded `Box e` argument (`runBox b`, contributing e's variable) AND performs
 -- an intrinsic <Stdout> (`putStr`). The intrinsic atom escapes; the arg-run effect
 -- is a variable and does not. REJECT via a diagnostic (check == run == build).
-data Box e = Box (Unit -> <e> Unit) | Empty
+data Box (e : Effect) = Box (Unit -> <e> Unit) | Empty
 runBox : Box e -> <e> Unit
 runBox (Box f) = f ()
 runBox Empty = ()

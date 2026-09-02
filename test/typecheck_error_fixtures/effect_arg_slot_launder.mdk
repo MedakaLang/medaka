@@ -21,7 +21,7 @@
 --
 -- Prelude-independent on purpose (no literal, no prelude call, the error is at
 -- the DECLARATION), so both drivers run it and neither needs a PRELUDE_DEP row.
-data Slot e = Slot (Unit -> <Stdout | e> Unit)
+data Slot (e : Effect) = Slot (Unit -> <Stdout | e> Unit)
 
 unslot : Slot e -> (Unit -> <e> Unit)
 unslot s = match s

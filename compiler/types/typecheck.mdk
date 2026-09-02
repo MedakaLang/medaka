@@ -35,6 +35,7 @@ import frontend.ast.{
   -- fixture that pins `dataEnvFromDeclsGo`'s deliberate `DAttrib` asymmetry.
   Attr(..),
   Ty(..),
+  KindAnn(..),
   TyConOrigin(..),
   Ns(..),
   Ident(..),
@@ -463,9 +464,17 @@ tconUnresolved n = TCon n OriginUnresolved
 -- Inference-synthesized arrows use open rows so effect-subsumption survives
 -- equality unification; user annotations are closed unless they name a tail.
 public export data EffRow = EffRow (List Atom) (Option (Ref Effvar))
+-- #821: a tail cell may stand for the JOIN of several tails (`e ⊔ e2`, written
+-- `(e | e2)` in an index slot).  The row stays single-tailed syntactically; the
+-- join lives in the cell, so every consumer that only follows links keeps
+-- working, and `rowFlat` is the one place a join is taken apart.  A join with
+-- fewer than two unbound members normalizes back to a plain row
+-- (`effrowNorm`), so joins are only ever visible where two genuinely distinct
+-- variables meet — a graded impl body (rigid `e` and `e2`) or a written join.
 public export data Effvar =
   | EUnbound Int Int  -- EUnbound id level | link
   | ELink EffRow
+  | EJoin Int Int (List (Ref Effvar))  -- EJoin id level members
 
 -- ── Effect refinement domains (capability-effects v2, Stage 1) ─────────────
 -- An effect label may carry a PARAMETER drawn from its declared refinement
@@ -1130,6 +1139,21 @@ effrowNorm (EffRow labels tail) = match tail
       match nr
         EffRow ls2 t2 => EffRow (atomsUnion labels ls2) t2
     EUnbound _ _ => EffRow labels tail
+    -- #821: a join normalizes through its members — atoms merge in, bound
+    -- members disappear, and a join left with fewer than two unbound members
+    -- IS a plain row.  The cell is path-compressed to its live members so a
+    -- later read pays for the flattening once.
+    -- ⚠️ NO path compression: a bound member carries ATOMS on its link row
+    -- (`70 := <Stdout | 75>`), and rewriting the cell to its unbound leaves
+    -- would drop them — the next normalization of the same cell then read
+    -- `<>` where `<Stdout | …>` was (a launder, found first-hand).  The flat
+    -- view is recomputed per call; the cell is never rewritten.
+    EJoin _ _ _ =>
+      let f = rowFlat (EffRow labels (Some cell))
+      match snd f
+        [] => EffRow (fst f) None
+        [m] => EffRow (fst f) (Some m)
+        _ => EffRow (fst f) (Some cell)
   None => EffRow labels tail
 
 -- the concrete labels (atoms) currently known for a row (ignores the open tail)
@@ -1188,6 +1212,7 @@ effvarLevel : Ref Effvar -> Int
 effvarLevel cell = match !cell
   EUnbound _ l => l
   ELink _ => 0
+  EJoin _ l _ => l
 
 -- sorted + deduplicated string set (canonical effect-label order, matching the
 -- OCaml `List.sort_uniq String.compare` so multi-label rows render identically)
@@ -1211,6 +1236,56 @@ effvarId : Ref Effvar -> Int
 effvarId cell = match !cell
   EUnbound id _ => id
   ELink _ => 0 - 1
+  EJoin id _ _ => id
+
+isJoinCell : Ref Effvar -> Bool
+isJoinCell cell = match !cell
+  EJoin _ _ _ => True
+  _ => False
+
+-- #821: a rigid method effect variable (its cell id is in the current impl
+-- body's rigid set) must never be identified with another tail; two such tails
+-- meeting in an ambient row JOIN instead.
+isRigidCell : Ref Effvar -> Bool
+isRigidCell cell = containsI (effvarId cell) perRun.value.rigidEffvarsRef.value
+
+-- a row's FLAT view: every atom reachable through links and joins, and every
+-- UNBOUND leaf cell (deduped by id).  The one place a join is decomposed.
+rowFlat : EffRow -> (List Atom, List (Ref Effvar))
+rowFlat (EffRow labels None) = (labels, [])
+rowFlat (EffRow labels (Some c)) = match !c
+  EUnbound _ _ => (labels, [c])
+  ELink r =>
+    let f = rowFlat r
+    (atomsUnion labels (fst f), snd f)
+  EJoin _ _ ms => rowFlatMembers labels ms
+
+rowFlatMembers : List Atom -> List (Ref Effvar) -> (List Atom, List (Ref Effvar))
+rowFlatMembers labels [] = (labels, [])
+rowFlatMembers labels (m::ms) =
+  let f = rowFlat (EffRow [] (Some m))
+  let rest = rowFlatMembers (atomsUnion labels (fst f)) ms
+  (fst rest, dedupCells (snd f ++ snd rest))
+
+dedupCells : List (Ref Effvar) -> List (Ref Effvar)
+dedupCells [] = []
+dedupCells (c::cs) =
+  c :: dedupCells (filterList (d => effvarId d /= effvarId c) cs)
+
+-- a row whose tail stands for exactly [members]: closed for none, the cell
+-- itself for one, a fresh join cell for several.
+rowOfMembers : List Atom -> List (Ref Effvar) -> EffRow
+rowOfMembers labels [] = EffRow labels None
+rowOfMembers labels [m] = EffRow labels (Some m)
+rowOfMembers labels ms = EffRow labels (Some (joinCellOf ms))
+
+joinCellOf : List (Ref Effvar) -> Ref Effvar
+joinCellOf ms = Ref (EJoin (newEffvarId ()) (minLevelOf ms) ms)
+
+minLevelOf : List (Ref Effvar) -> Int
+minLevelOf [] = 0
+minLevelOf [m] = effvarLevel m
+minLevelOf (m::ms) = minI (effvarLevel m) (minLevelOf ms)
 
 -- record that the current context performs row [eff]'s effects, widening ambient
 -- [cur] WITHOUT closing its tail (so the next performed effect can still be
@@ -1223,8 +1298,26 @@ performEffect cur eff = match effrowNorm !cur
     EffRow effLabels effTail =>
       cur := EffRow (atomsUnion curLabels effLabels) (Some ct)
       match effTail
-        Some et => if effvarId et == effvarId ct then () else performLink ct et
+        Some et => if effvarId et == effvarId ct then ()
+        -- #821: a RIGID tail (a method effect variable inside an impl body) or
+        -- a join never gets identified with the ambient's tail — the ambient
+        -- becomes the JOIN of the two, so `t u` (performing `e`) followed by
+        -- `g a` (performing `e2`) leaves a row whose tail stands for `e ⊔ e2`
+        -- instead of forcing `e ~ e2` (a rigidity violation).  Everywhere
+        -- else the shared-fresh-tail link is byte-identical to before.
+        else if isJoinCell ct || isJoinCell et || isRigidCell ct || isRigidCell et then
+          performJoin cur ct et
+        else
+          performLink ct et
         None => ()
+
+performJoin : Ref EffRow -> Ref Effvar -> Ref Effvar -> Unit
+performJoin cur ct et =
+  let ms = dedupCells (snd (rowFlat (EffRow [] (Some ct))) ++ snd (rowFlat (EffRow [] (Some et))))
+  match !ct
+    EJoin id lvl _ => ct := EJoin id lvl ms
+    _ => match !cur
+      EffRow labels _ => cur := EffRow labels (Some (joinCellOf ms))
 
 performLink : Ref Effvar -> Ref Effvar -> Unit
 performLink ct et =
@@ -1239,6 +1332,110 @@ performLink ct et =
 unifyRow : EffRow -> EffRow -> Unit
 unifyRow r1 r2 = unifyRowN (effrowNorm r1) (effrowNorm r2)
 
+-- #821: a row whose (normalized) tail is a JOIN takes the join unifier; every
+-- other pair takes the four plain arms below, byte-identical to before.
+unifyRowN : EffRow -> EffRow -> Unit
+unifyRowN r1 r2 =
+  if rowTailIsJoin r1 || rowTailIsJoin r2 then
+    unifyJoinRows False r1 r2
+  else
+    unifyRowPlain r1 r2
+
+rowTailIsJoin : EffRow -> Bool
+rowTailIsJoin (EffRow _ (Some c)) = isJoinCell c
+rowTailIsJoin (EffRow _ None) = False
+
+-- ── #821: unifying rows whose tails are JOINS ─────────────────────────────
+-- Both rows are taken apart into (atoms, unbound member cells).  Members
+-- common to both sides cancel; what remains on each side is split into RIGID
+-- members (a method effect variable of the impl body being checked — never
+-- bound) and FLEXIBLE ones (ordinary metavariables).  The spec's discipline
+-- (EFFECTS-SEMANTICS §6, "unification never decomposes a join") is honoured by
+-- never binding a rigid member: a join is solved only by binding the flexible
+-- members on each side to whatever the OTHER side has left over, which is the
+-- ordinary open-absorbs rule generalized from one tail to a set.  A rigid
+-- member with nothing on the other side to match it is a genuine mismatch.
+--   * flexible on both sides — every flexible member is bound to a fresh
+--     shared tail joined with the other side's rigid residue (the plain
+--     BOTH-OPEN arm, over sets);
+--   * flexible on one side only — those members are bound to the other side's
+--     residue; a closed residue also runs the §5 leak check on the open side's
+--     atoms (the plain OPEN~CLOSED arm), and in INDEX mode the atoms must be
+--     equal (the plain index arm);
+--   * no flexible member anywhere — the rigid residues must both be empty and
+--     (index mode) the atoms equal; an arrow row with equal member sets and
+--     differing prefixes keeps the plain SAME-TAIL arm's leniency.
+unifyJoinRows : Bool -> EffRow -> EffRow -> Unit
+unifyJoinRows isIndex r1 r2 =
+  let fa = rowFlat r1
+  let fb = rowFlat r2
+  let ma = snd fa
+  let mb = snd fb
+  let common = filterList (c => cellIn c mb) ma
+  -- a SHARED flexible member can absorb either side's leftovers too:
+  -- `x ⊔ R` against `x` is solved by `x := x' ⊔ R` (both sides gain R).
+  let cflex = filterList (c => not (isRigidCell c)) common
+  let onlyA = filterList (c => not (cellIn c mb)) ma
+  let onlyB = filterList (c => not (cellIn c ma)) mb
+  let rigidA = filterList isRigidCell onlyA
+  let flexA = filterList (c => not (isRigidCell c)) onlyA
+  let rigidB = filterList isRigidCell onlyB
+  let flexB = filterList (c => not (isRigidCell c)) onlyB
+  let dA = atomsDiff (fst fa) (fst fb)
+  let dB = atomsDiff (fst fb) (fst fa)
+  -- A's leftovers (rigidA, dA) must be absorbed on B's side: by B's own
+  -- flexible leftovers if any, else by a shared flexible member.
+  let bindC = isNonEmptyL cflex && ((isNonEmptyL rigidA && isEmptyL flexB) || (isNonEmptyL rigidB && isEmptyL flexA) || (isNonEmptyL dA && isEmptyL flexB) || (isNonEmptyL dB && isEmptyL flexA))
+  let useV3 = (isNonEmptyL flexA && isNonEmptyL flexB) || bindC
+  let v3s = if useV3 then [freshEffvarAt (minLevelOf (flexA ++ flexB ++ cflex))] else []
+  let _ = if isNonEmptyL rigidA && isEmptyL flexB && not bindC then joinMismatch isIndex fa fb else ()
+  let _ = if isNonEmptyL rigidB && isEmptyL flexA && not bindC then joinMismatch isIndex fa fb else ()
+  let _ = if isNonEmptyL dA && isEmptyL flexB && not bindC then joinSideCheck isIndex dA dB (fst fa) (fst fb) else ()
+  let _ = if isNonEmptyL dB && isEmptyL flexA && not bindC then joinSideCheck isIndex dB dA (fst fb) (fst fa) else ()
+  let _ = bindEach flexA (rowOfMembers dB (v3s ++ rigidB))
+  let _ = bindEach flexB (rowOfMembers dA (v3s ++ rigidA))
+  let _ = if bindC then bindEach cflex (rowOfMembers (atomsUnion dA dB) (v3s ++ rigidA ++ rigidB)) else ()
+  match v3s
+    (v3::_) => recordAbsorptions (dA ++ dB) v3
+    [] => ()
+
+cellIn : Ref Effvar -> List (Ref Effvar) -> Bool
+cellIn c cs = anyList (d => effvarId d == effvarId c) cs
+
+bindEach : List (Ref Effvar) -> EffRow -> Unit
+bindEach [] _ = ()
+bindEach (c::cs) row =
+  c := ELink row
+  bindEach cs row
+
+-- the open side's atoms [dOpen] escaping the closed side's bound: the plain
+-- OPEN~CLOSED arm's leak check for arrows, equality for an index.
+joinSideCheck : Bool -> List Atom -> List Atom -> List Atom -> List Atom -> Unit
+joinSideCheck True dOpen dClosed lOpen lClosed =
+  indexRowEqCheck dOpen dClosed lOpen lClosed
+joinSideCheck False _ _ lOpen lClosed =
+  effectLeakCheck (atomsEscape lOpen lClosed) lClosed
+
+joinMismatch : Bool -> (List Atom, List (Ref Effvar)) -> (List Atom, List (Ref Effvar)) -> Unit
+joinMismatch isIndex fa fb = pushTypeError
+  (if isIndex then "T-EFFECT-INDEX-MISMATCH" else "T-EFFECT-LEAK")
+  (joinMismatchMsg (renderFlatRow fa) (renderFlatRow fb))
+
+renderFlatRow : (List Atom, List (Ref Effvar)) -> String
+renderFlatRow f =
+  let ctx = Ref []
+  let cnt = Ref 0
+  ppEffArgFmt
+    (renderAtomsOrEmpty (fst f))
+    (joinWith " | " (map (m => ppEffvarName ctx cnt m) (snd f)))
+
+renderAtomsOrEmpty : List Atom -> String
+renderAtomsOrEmpty [] = ""
+renderAtomsOrEmpty ls = renderAtoms ls
+
+joinMismatchMsg : String -> String -> String
+joinMismatchMsg a b = "Effect rows \{a} and \{b} cannot be made equal: each carries an effect variable the other side has no room for. A method's effect variables are the caller's to choose, so an impl may not tie one of them to another (or to the instance head's row); where the effects genuinely combine, the signature must say so with a join in the result index (`f (e | e2) b`)."
+
 -- #839 STRICTNESS AUDIT.  The four arms below are classified against
 -- EFFECTS-SEMANTICS §5 (docs/spec/EFFECTS-SEMANTICS.md:335-371) and §6
 -- (:406-451).  Each open-tailed arm can ABSORB or DISCARD a concrete effect
@@ -1252,8 +1449,8 @@ unifyRow r1 r2 = unifyRowN (effrowNorm r1) (effrowNorm r2)
 -- (see the both-open note), which is the whole reason the trail is needed.
 -- (Intra-file refs below name SYMBOLS, not line numbers — the latter rot; the
 -- §N (:lines) spec cites point into EFFECTS-SEMANTICS.md, verified current.)
-unifyRowN : EffRow -> EffRow -> Unit
-unifyRowN (EffRow l1 (Some v1)) (EffRow l2 (Some v2))
+unifyRowPlain : EffRow -> EffRow -> Unit
+unifyRowPlain (EffRow l1 (Some v1)) (EffRow l2 (Some v2))
   -- SAME-TAIL arm (v1 == v2): the SAME physical effvar on both sides carrying
   -- possibly DIFFERENT concrete prefixes (`<e>` ~ `<Stdout | e>`).  Returns ()
   -- and DISCARDS the prefix mismatch (symmetric diff of l1,l2) — no link, no
@@ -1287,6 +1484,16 @@ unifyRowN (EffRow l1 (Some v1)) (EffRow l2 (Some v2))
     let v3 = freshEffvarAt (minI (effvarLevel v1) (effvarLevel v2))
     let d21 = atomsDiff l2 l1
     let d12 = atomsDiff l1 l2
+    -- #821: rigidity follows the REPRESENTATIVE.  A method effect variable of
+    -- the impl body being checked (`rigidEffvarsRef`) linked into the shared
+    -- fresh tail makes that tail rigid too, so `performEffect`/`unifyJoinRows`
+    -- still see the variable after `inferApp` has unified the callee's row
+    -- with a fresh one.  Two rigid tails meeting here still identify (the dup
+    -- check downstream reports it), exactly as before.
+    let _ = if isRigidCell v1 || isRigidCell v2 then
+      perRun.value.rigidEffvarsRef := effvarId v3 :: perRun.value.rigidEffvarsRef.value
+    else
+      ()
     v1 := (ELink (EffRow d21 (Some v3)))
     v2 := (ELink (EffRow d12 (Some v3)))
     -- #839 2a: both diffs vanish into the shared fresh tail v3; record them
@@ -1297,10 +1504,10 @@ unifyRowN (EffRow l1 (Some v1)) (EffRow l2 (Some v2))
 -- §5's binding-boundary escape check (:339-351), checking the OPEN side's labels against
 -- the CLOSED side's bound at the open-meets-closed seam.  (Absorbing into a CLOSED tail is
 -- the guarded direction.)
-unifyRowN (EffRow l1 (Some v1)) (EffRow l2 None) =
+unifyRowPlain (EffRow l1 (Some v1)) (EffRow l2 None) =
   let _ = effectLeakCheck (atomsEscape l1 l2) l2
   v1 := ELink (EffRow (atomsDiff l2 l1) None)
-unifyRowN (EffRow l1 None) (EffRow l2 (Some v2)) =
+unifyRowPlain (EffRow l1 None) (EffRow l2 (Some v2)) =
   let _ = effectLeakCheck (atomsEscape l2 l1) l1
   v2 := ELink (EffRow (atomsDiff l1 l2) None)
 -- CLOSED~CLOSED arm: a SILENT no-op — and NOT effect-guarded (unlike the two arms just
@@ -1324,7 +1531,7 @@ unifyRowN (EffRow l1 None) (EffRow l2 (Some v2)) =
 -- is simply false there and the atoms are discarded for good (#1094, an S0).  Index rows
 -- therefore route to `unifyIndexRow` below, NOT here.  Do not re-point `unifyN`'s
 -- `TEff`/`TEff` arm at `unifyRow`.
-unifyRowN (EffRow _ None) (EffRow _ None) = ()
+unifyRowPlain (EffRow _ None) (EffRow _ None) = ()
 
 -- ── the INDEX row unifier (#1094) ──────────────────────────────────────────
 -- `Mono` carries two different kinds of row and they obey different rules:
@@ -1379,13 +1586,22 @@ unifyRowN (EffRow _ None) (EffRow _ None) = ()
 unifyIndexRow : EffRow -> EffRow -> Unit
 unifyIndexRow r1 r2 = unifyIndexRowN (effrowNorm r1) (effrowNorm r2)
 
+-- #821: an index row whose tail is a join is solved by the join unifier in
+-- INDEX mode (equality, never subsumption).
 unifyIndexRowN : EffRow -> EffRow -> Unit
-unifyIndexRowN (EffRow l1 None) (EffRow l2 None) =
+unifyIndexRowN r1 r2 =
+  if rowTailIsJoin r1 || rowTailIsJoin r2 then
+    unifyJoinRows True r1 r2
+  else
+    unifyIndexRowPlain r1 r2
+
+unifyIndexRowPlain : EffRow -> EffRow -> Unit
+unifyIndexRowPlain (EffRow l1 None) (EffRow l2 None) =
   indexRowEqCheck (atomsDiff l1 l2) (atomsDiff l2 l1) l1 l2
-unifyIndexRowN (EffRow l1 (Some v1)) (EffRow l2 (Some v2))
+unifyIndexRowPlain (EffRow l1 (Some v1)) (EffRow l2 (Some v2))
   | effvarId v1 == effvarId v2 =
     indexRowEqCheck (atomsDiff l1 l2) (atomsDiff l2 l1) l1 l2
-unifyIndexRowN r1 r2 = unifyRowN r1 r2
+unifyIndexRowPlain r1 r2 = unifyRowN r1 r2
 
 -- Two index rows with nothing left to solve — both closed, or both already ending in the
 -- SAME effvar cell — are the same type iff neither side carries an atom the other lacks.
@@ -1467,8 +1683,7 @@ checkUndeterminedRetEffVars (d::rest) =
   checkUndeterminedRetEffVars rest
 
 checkUndeterminedRetEffVarsDecl : Decl -> Unit
-checkUndeterminedRetEffVarsDecl (DInterface { name, typarams, methods, ... }) =
-  checkIfaceMethodEffs name (declGradedScope typarams methods) methods
+checkUndeterminedRetEffVarsDecl (DInterface { name, typarams, typaramKinds, methods, ... }) = checkIfaceMethodEffs name (declGradedScope typarams typaramKinds methods) methods
 -- #1103: the ARGUMENT-COVERAGE half of the rule is NOT method-only.  Its own
 -- comment (below) says post-unify inspection cannot catch these shapes because
 -- `unifyRowN`'s same-tail arm (`<e>` ~ `<Stdout | e>`) succeeds without
@@ -1487,6 +1702,203 @@ checkUndeterminedRetEffVarsDecl (DTypeSig _ n t) =
 checkUndeterminedRetEffVarsDecl (DAttrib _ d) =
   checkUndeterminedRetEffVarsDecl d
 checkUndeterminedRetEffVarsDecl _ = ()
+
+-- ── Declared-kind consistency (EFFECTS-SEMANTICS §6.4, §6.5) ──────────────
+-- Declaring a kind creates an obligation between the head and the body.  Runs
+-- AFTER `registerAllData` (like `checkUndeterminedRetEffVars`), because the
+-- "is this slot Effect-kinded" reads (`rowArgNames`) consult the kind table.
+--
+-- (a) declared kind CONTRADICTED by usage: `data Async (e : Type) a = Mk (Unit
+--     -> <e> a)` — or, the compulsory-migration case, an UNANNOTATED `e` in an
+--     effect-tail / Effect-slot position, which §6.3 says can never be
+--     `Effect`-kinded by inference.  Both are `T-EFFECT-KIND-MISMATCH`, at the
+--     field whose position demands the kind.
+-- (b) declared `Effect` but used as an ordinary type (`data Box (e : Effect) a
+--     = Mk e`): the same code.  A phantom `Effect` parameter — declared and
+--     never used — is LEGAL (§6.4 (b)).
+-- (c) an interface parameter: an unannotated parameter whose methods put it
+--     at a slot that co-occurs with an effect tail (the retired inference rule)
+--     needs `(f : Effect -> Type -> Type)`; a declared arrow kind whose slots
+--     disagree with that evidence is reported the same way.
+-- (d) `requires`-chain agreement (§6.5), for a superinterface declared in the
+--     SAME module: the parameter's resolved kinds must equal the super's.
+checkDeclaredKinds : List Decl -> Unit
+checkDeclaredKinds prog = checkDeclaredKindsGo prog prog
+
+checkDeclaredKindsGo : List Decl -> List Decl -> Unit
+checkDeclaredKindsGo _ [] = ()
+checkDeclaredKindsGo prog (d::rest) =
+  let _ = checkDeclaredKindsDecl prog d
+  checkDeclaredKindsGo prog rest
+
+checkDeclaredKindsDecl : List Decl -> Decl -> Unit
+checkDeclaredKindsDecl prog (DAttrib _ d) = checkDeclaredKindsDecl prog d
+checkDeclaredKindsDecl _ (DData { dataName = n, dataParams = ps, dataParamKinds = ks, dataCtors = vs }) = checkHeadKinds n ps ks (flatMap (v => payloadAstTypes (variantPayload v)) vs)
+checkDeclaredKindsDecl _ (DNewtype { newtypeName = n, newtypeParams = ps, newtypeParamKinds = ks, newtypeFieldTy = fty }) = checkHeadKinds n ps ks [fty]
+checkDeclaredKindsDecl _ (DTypeAlias { tyAliasName = n, tyAliasParams = ps, tyAliasParamKinds = ks, tyAliasRhs = rhs }) = checkHeadKinds n ps ks [rhs]
+checkDeclaredKindsDecl prog (DInterface { name, typarams, typaramKinds, supers, methods, ... }) =
+  let _ = checkIfaceHeadKinds name typarams (padAnns typarams typaramKinds) methods
+  checkSuperKinds
+    prog
+    name
+    typarams
+    (padAnns typarams typaramKinds)
+    methods
+    supers
+checkDeclaredKindsDecl _ _ = ()
+
+-- data / newtype / alias heads: [fieldTys] are every type the declaration's
+-- body mentions.
+checkHeadKinds : String -> List String -> List (Option KindAnn) -> List Ty -> Unit
+checkHeadKinds name params anns fieldTys =
+  let rowNames = dedup (flatMap effTailNames fieldTys ++ flatMap rowArgNames fieldTys)
+  checkHeadKindsGo name rowNames fieldTys params (padAnns params anns)
+
+checkHeadKindsGo : String -> List String -> List Ty -> List String -> List (Option KindAnn) -> Unit
+checkHeadKindsGo _ _ _ [] _ = ()
+checkHeadKindsGo name rowNames fieldTys (p::ps) (a::anns) =
+  let loc = firstTyLocList fieldTys
+  let _ = match a
+    None =>
+      if contains p rowNames then
+        pushTypeErrorOnceAt "T-EFFECT-KIND-MISMATCH" loc (unannotatedRowParamMsg name p)
+      else
+        ()
+    Some KindEffect =>
+      if anyList (tyVarTypeOcc p) fieldTys then
+        pushTypeErrorOnceAt "T-EFFECT-KIND-MISMATCH" loc (effectParamAsTypeMsg name p)
+      else
+        ()
+    Some (k@(KindArrow _ _)) =>
+      if kindAnnHasEffect k then
+        pushTypeErrorOnceAt "T-EFFECT-KIND-MISMATCH" loc (effectArrowOnDataHeadMsg name p k)
+      else
+        ()
+    Some KindType =>
+      if contains p rowNames then
+        pushTypeErrorOnceAt "T-EFFECT-KIND-MISMATCH" loc (typeParamAsRowMsg name p)
+      else
+        ()
+  checkHeadKindsGo name rowNames fieldTys ps anns
+checkHeadKindsGo _ _ _ _ [] = ()
+
+-- does the type variable [p] occur in a TYPE position of [t] — anywhere but an
+-- effect tail or an `Effect`-kinded argument slot of a registered head?
+tyVarTypeOcc : String -> Ty -> Bool
+tyVarTypeOcc p (TyVar n) = n == p
+tyVarTypeOcc p (TyEffect _ _ t) = tyVarTypeOcc p t
+tyVarTypeOcc _ (TyRow _ _ _) = False
+tyVarTypeOcc p (TyFun a b) = tyVarTypeOcc p a || tyVarTypeOcc p b
+tyVarTypeOcc p (TyTuple ts) = anyList (tyVarTypeOcc p) ts
+tyVarTypeOcc p (TyConstrained _ t) = tyVarTypeOcc p t
+tyVarTypeOcc p (TyApp a b) = match tyAppSpine (TyApp a b)
+  (TyCon { tyConName = n, tyConOrigin = o }, args) => match lookupTab (tyTabKey o n) perRun.value.dataParamKindsRef.value
+    Some kinds if listLen kinds == listLen args =>
+      tyVarTypeOccSlots p kinds args
+    _ => anyList (tyVarTypeOcc p) args
+  (hd, args) => tyVarTypeOcc p hd || anyList (tyVarTypeOcc p) args
+tyVarTypeOcc _ _ = False
+
+-- per slot: a bare `p` at a KRow slot is a ROW occurrence (skipped); anything
+-- else is walked as a type.
+tyVarTypeOccSlots : String -> List Kind -> List Ty -> Bool
+tyVarTypeOccSlots p (KRow::ks) ((TyVar _)::ts) = tyVarTypeOccSlots p ks ts
+tyVarTypeOccSlots p (_::ks) (t::ts) = tyVarTypeOcc p t
+  || tyVarTypeOccSlots p ks ts
+tyVarTypeOccSlots _ _ _ = False
+
+-- interface heads (c): the retired co-occurrence inference is the EVIDENCE.
+checkIfaceHeadKinds : String -> List String -> List (Option KindAnn) -> List IfaceMethod -> Unit
+checkIfaceHeadKinds _ [] _ _ = ()
+checkIfaceHeadKinds name (p::ps) (a::anns) methods =
+  let inferred = ifaceParamKindsOf p methods
+  let loc = firstIfaceMethodLoc methods
+  let _ = match a
+    Some (k@(KindArrow _ _)) =>
+      let want = kindAnnSlots k
+      if isNonEmptyL inferred && listLen inferred == listLen want && anyRowDeclaredType inferred want then
+        pushTypeErrorOnceAt "T-EFFECT-KIND-MISMATCH" loc (ifaceSlotDeclaredTypeMsg name p k)
+      else
+        ()
+    Some KindEffect => pushTypeErrorOnceAt "T-EFFECT-KIND-MISMATCH" loc (ifaceParamEffectKindMsg name p)
+    _ =>
+      if anyKRow inferred then
+        pushTypeErrorOnceAt "T-EFFECT-KIND-MISMATCH" loc (unannotatedGradedParamMsg name p inferred)
+      else
+        ()
+  checkIfaceHeadKinds name ps anns methods
+checkIfaceHeadKinds _ _ [] _ = ()
+
+-- a slot the methods use as an effect row that the annotation declares `Type`
+anyRowDeclaredType : List Kind -> List Kind -> Bool
+anyRowDeclaredType (KRow::_) (KType::_) = True
+anyRowDeclaredType (_::gs) (_::ws) = anyRowDeclaredType gs ws
+anyRowDeclaredType _ _ = False
+
+firstIfaceMethodLoc : List IfaceMethod -> Option Loc
+firstIfaceMethodLoc [] = None
+firstIfaceMethodLoc ((IfaceMethod _ mty _ _)::_) = firstTyLoc mty
+
+-- (d) `requires` chain, same module only: the sub's resolved kinds for the
+-- parameters it applies the super to must equal the super's own resolved
+-- kinds at those positions.
+checkSuperKinds : List Decl -> String -> List String -> List (Option KindAnn) -> List IfaceMethod -> List Super -> Unit
+checkSuperKinds _ _ _ _ _ [] = ()
+checkSuperKinds prog name typarams anns methods ((Super { superHead = sh, superParams = sps })::rest) =
+  let _ = match findIfaceDecl prog sh
+    Some (stps, sanns, smethods) =>
+      let subKinds = map (p => ifaceParamKindsFor typarams anns methods p) sps
+      let superKinds = ifaceParamKindsDeclAll stps (padAnns stps sanns) smethods
+      if listLen subKinds == listLen superKinds && not (allList (pair => kindsEq (fst pair) (snd pair)) (zipKinds subKinds superKinds)) then
+        pushTypeErrorOnceAt "T-EFFECT-KIND-MISMATCH" (firstIfaceMethodLoc methods) (requiresKindMsg name sh)
+      else
+        ()
+    None => ()
+  checkSuperKinds prog name typarams anns methods rest
+
+zipKinds : List (List Kind) -> List (List Kind) -> List (List Kind, List Kind)
+zipKinds (a::xs) (b::ys) = (a, b) :: zipKinds xs ys
+zipKinds _ _ = []
+
+-- the resolved slot kinds of the sub-interface's OWN parameter [p]
+ifaceParamKindsFor : List String -> List (Option KindAnn) -> List IfaceMethod -> String -> List Kind
+ifaceParamKindsFor [] _ _ _ = []
+ifaceParamKindsFor (q::qs) (a::anns) methods p
+  | q == p = ifaceParamKindsDecl a p methods
+  | otherwise = ifaceParamKindsFor qs anns methods p
+ifaceParamKindsFor _ [] _ _ = []
+
+findIfaceDecl : List Decl -> String -> Option (List String, List (Option KindAnn), List IfaceMethod)
+findIfaceDecl [] _ = None
+findIfaceDecl ((DAttrib _ d)::rest) n = findIfaceDecl (d::rest) n
+findIfaceDecl ((DInterface { name, typarams, typaramKinds, methods, ... })::rest) n
+  | name == n = Some (typarams, typaramKinds, methods)
+  | otherwise = findIfaceDecl rest n
+findIfaceDecl (_::rest) n = findIfaceDecl rest n
+
+unannotatedRowParamMsg : String -> String -> String
+unannotatedRowParamMsg name p = "Type parameter `\{p}` of `\{name}` is used as an effect row (in an effect tail or an Effect-kinded argument slot), but its head does not declare it one. A parameter is Effect-kinded only when written so: declare the head as `\{name} (\{p} : Effect) …`."
+
+typeParamAsRowMsg : String -> String -> String
+typeParamAsRowMsg name p = "Type parameter `\{p}` of `\{name}` is declared `(\{p} : Type)` but is used as an effect row (in an effect tail or an Effect-kinded argument slot). Declare it `(\{p} : Effect)`, or use it as an ordinary type."
+
+effectParamAsTypeMsg : String -> String -> String
+effectParamAsTypeMsg name p = "Type parameter `\{p}` of `\{name}` is declared `(\{p} : Effect)` but is used as an ordinary type. An Effect-kinded parameter may occur only as an arrow's effect row (`Unit -> <\{p}> a`) or in an Effect-kinded argument slot (`Async \{p} a`). Drop the annotation, or move the parameter into an effect position."
+
+effectArrowOnDataHeadMsg : String -> String -> KindAnn -> String
+effectArrowOnDataHeadMsg name p k = "Type parameter `\{p}` of `\{name}` is declared with kind `\{renderKindAnn k}`. An arrow kind containing `Effect` is supported on interface heads only; a data, newtype, or type-alias parameter may be `Effect` or an ordinary (Effect-free) kind."
+
+ifaceSlotDeclaredTypeMsg : String -> String -> KindAnn -> String
+ifaceSlotDeclaredTypeMsg name p k = "Type parameter `\{p}` of interface `\{name}` is declared `(\{p} : \{renderKindAnn k})`, but a method signature uses one of its `Type` slots as an effect row (the same name appears in that slot and in an effect tail). Declare that slot `Effect`, or use a different variable in the effect tail."
+
+ifaceParamEffectKindMsg : String -> String -> String
+ifaceParamEffectKindMsg name p = "Type parameter `\{p}` of interface `\{name}` is declared `(\{p} : Effect)`. An interface parameter is a type constructor, so its kind is an arrow — write `(\{p} : Effect -> Type -> Type)` for an effect-indexed constructor."
+
+unannotatedGradedParamMsg : String -> String -> List Kind -> String
+unannotatedGradedParamMsg name p inferred = "Type parameter `\{p}` of interface `\{name}` is used as an effect-indexed constructor (a method puts a variable at one of its slots and uses that variable in an effect tail), but its head does not declare it one. A parameter is Effect-kinded only when written so: declare the head as `\{name} (\{p} : \{renderKindArrow inferred}) …`."
+
+requiresKindMsg : String -> String -> String
+requiresKindMsg name sh = "Interface `\{name}` requires `\{sh}` at a parameter whose kind differs from `\{sh}`'s own: a `requires` clause is an ordinary kind application, and there is no coercion between `Type` and `Effect`. The two families (plain and Deferred*) are peers and cannot be chained — declare both heads at the same kind."
 
 checkIfaceMethodEffs : String -> List (String, List Kind) -> List IfaceMethod -> Unit
 checkIfaceMethodEffs _ _ [] = ()
@@ -1605,25 +2017,31 @@ methodEffArgOccs scope (TyFun a b) = argPerformableOccs scope True a
   ++ methodEffArgOccs scope b
 methodEffArgOccs _ _ = []
 
+-- One `(tail var, the row's written atoms)` occurrence per tail variable.  A
+-- row is a JOIN when it names several (#821, `<Stdout | e | e2>`), and every
+-- collector below reports them all: a caller reads the row at each var
+-- independently, so a var left out would be a var nothing constrains.
+occsOfTails : List String -> List (String, Option String) -> List (String, List Atom)
+occsOfTails tails labels =
+  let atoms = atomsOfWritten labels
+  map (n => (n, atoms)) tails
+
 -- rows in an argument subtree, collected only where [perf] (the impl can call
 -- or run the value at this position); each arrow-LHS descent flips it.
 argPerformableOccs : List (String, List Kind) -> Bool -> Ty -> List (String, List Atom)
-argPerformableOccs scope perf (TyEffect labels (Some n) t) = (if perf then [(n, atomsOfWritten labels)] else [])
+argPerformableOccs scope perf (TyEffect labels tails t) = (if perf then occsOfTails tails labels else [])
   ++ argPerformableOccs scope perf t
-argPerformableOccs scope perf (TyEffect _ None t) =
-  argPerformableOccs scope perf t
 -- A bare row atom (#997) carries its own tail var + labels directly (no
 -- wrapped type to recurse into) — same treatment as the `TyEffect` arms
 -- above.  Without this, a KRow ctor-arg written as `Box <Stdout | e> Int`
 -- (as opposed to a bare `Box e Int`) was invisible to this collector, which
 -- made the impl-body T-EFFECT-LAUNDER check over-fire on it (see
 -- `effVarOccAtoms` below, which shares this gap).
-argPerformableOccs _ perf (TyRow labels (Some n) _) =
+argPerformableOccs _ perf (TyRow labels tails _) =
   if perf then
-    [(n, atomsOfWritten labels)]
+    occsOfTails tails labels
   else
     []
-argPerformableOccs _ _ (TyRow _ None _) = []
 argPerformableOccs scope perf (TyFun a b) = argPerformableOccs scope (not perf) a
   ++ argPerformableOccs scope perf b
 argPerformableOccs scope perf (TyTuple ts) =
@@ -1657,7 +2075,7 @@ argPerformableOccs _ _ _ = []
 -- module's type was actually in scope at the use site.  Three tracked defects
 -- were that one sentence: #1069 (a written row erased to its wrapped type,
 -- silently, exit 0), #1090 (the same table rejecting a VALID signature with
--- T-ROW-KIND-MISMATCH — same collision, opposite symptom, selected by the
+-- T-EFFECT-KIND-MISMATCH — same collision, opposite symptom, selected by the
 -- row's SPELLING at the use site, not by arity) and #1070's alias row (`v : T`
 -- resolving to the wrong module's `Float`, wrong VALUE at run time, all three
 -- engines agreeing).
@@ -1902,9 +2320,8 @@ krowSlotVarOccs scope perf h args = match lookupAssoc h scope
 -- merely what made it reachable from `effect_index_unrelated_ok.mdk`.
 methodEffRetOccs : List (String, List Kind) -> Ty -> List (String, List Atom)
 methodEffRetOccs scope (TyConstrained _ t) = methodEffRetOccs scope t
-methodEffRetOccs scope (TyEffect labels (Some n) t) =
-  (n, atomsOfWritten labels) :: methodEffRetOccs scope t
-methodEffRetOccs scope (TyEffect _ None t) = methodEffRetOccs scope t
+methodEffRetOccs scope (TyEffect labels tails t) = occsOfTails tails labels
+  ++ methodEffRetOccs scope t
 methodEffRetOccs scope (TyFun _ b) = methodEffRetOccs scope b
 methodEffRetOccs scope t =
   let occs = effVarOccAtoms t
@@ -2165,7 +2582,7 @@ renderKindArrow ks = joinWith " -> " (map kindName ks ++ ["Type"])
 
 kindName : Kind -> String
 kindName KType = "Type"
-kindName KRow = "Row"
+kindName KRow = "Effect"
 
 -- ⚠️ [ctor] is a RAW head tag and must reach the reader through `ppConName` — a tuple
 -- head arrives as `__tuple2__`, and leaking that is exactly what ppConName exists to
@@ -2298,7 +2715,17 @@ substRow esub r = match effrowNorm r
       Some v2 => EffRow labels (Some v2)
       None => EffRow labels (Some v)
     ELink _ => EffRow labels (Some v)
+    -- #821: a join instantiates member-wise — each generalized member gets
+    -- the call site's fresh cell, the rest stay shared — into a FRESH join
+    -- cell, so the scheme's own join is never mutated by a caller.
+    EJoin _ _ ms =>
+      rowOfMembers labels (map (m => substMember esub m) ms)
   EffRow labels None => EffRow labels None
+
+substMember : List (Int, Ref Effvar) -> Ref Effvar -> Ref Effvar
+substMember esub m = match !m
+  EUnbound id _ => optionOr m (lookupAssocI id esub)
+  _ => m
 
 -- lower a row's tail effvar level to <= [level] alongside the tyvar being bound
 lowerRowLevels : Int -> EffRow -> Unit
@@ -2306,7 +2733,16 @@ lowerRowLevels level r = match effrowNorm r
   EffRow _ (Some v) => match !v
     EUnbound id lvl => if lvl > level then v := EUnbound id level else ()
     ELink _ => ()
+    EJoin id lvl ms =>
+      let _ = if lvl > level then v := EJoin id level ms else ()
+      lowerMembers level ms
   EffRow _ None => ()
+
+lowerMembers : Int -> List (Ref Effvar) -> Unit
+lowerMembers _ [] = ()
+lowerMembers level (m::ms) =
+  let _ = lowerRowLevels level (EffRow [] (Some m))
+  lowerMembers level ms
 
 -- build a curried arrow carrying the body's latent effect [eff] on the LAST arrow
 -- only; intermediate arrows stay pure-open (partial application performs nothing)
@@ -2338,6 +2774,8 @@ rowFreeEffvars r = match effrowNorm r
       else
         []
     ELink _ => []
+    -- #821: a join generalizes over each of its free members.
+    EJoin _ _ ms => flatMap (m => rowFreeEffvars (EffRow [] (Some m))) ms
   EffRow _ None => []
 
 -- the declared concrete effect set of a signature: labels on the first `<…>`
@@ -2349,14 +2787,15 @@ declaredEffects (TyConstrained _ t) = declaredEffects t
 declaredEffects _ = []
 
 -- #797: the TAIL of that same first `<…>` — the field `declaredEffects` drops.
--- `None` is a genuinely CLOSED row (`<>`, `<Stdout>`); `Some v` is an OPEN one
--- (`<e>`, `<Stdout | e>`).  Arms mirror `declaredEffects` exactly, stopping at
--- the same node, so the two always describe ONE row.
-declaredEffectTail : Ty -> Option String
+-- No names is a genuinely CLOSED row (`<>`, `<Stdout>`); one or more is an OPEN
+-- one (`<e>`, `<Stdout | e>`, `<Stdout | e | e2>`).  Arms mirror
+-- `declaredEffects` exactly, stopping at the same node, so the two always
+-- describe ONE row.
+declaredEffectTail : Ty -> List String
 declaredEffectTail (TyFun _ ret) = declaredEffectTail ret
 declaredEffectTail (TyEffect _ tail _) = tail
 declaredEffectTail (TyConstrained _ t) = declaredEffectTail t
-declaredEffectTail _ = None
+declaredEffectTail _ = []
 
 -- #797: effect-tail names occurring in ARGUMENT positions of the signature,
 -- walking the same return spine `declaredEffects` walks and stopping at the same
@@ -2385,10 +2824,12 @@ declaredArgEffNames _ = []
 -- An argument-carried var (`g : (Int -> <e> Int) -> <e> Int`) is NOT open in this
 -- sense — the caller instantiates it, so a body adding <Stdout> would launder,
 -- and the pre-existing escape rejection stands unchanged.
+-- A JOIN is open when SOME member is free of the argument side: that member
+-- alone already admits whatever the body performs.
 declaredEffectsOpen : Ty -> Bool
-declaredEffectsOpen ty = match declaredEffectTail ty
-  None => False
-  Some v => not (contains v (declaredArgEffNames ty))
+declaredEffectsOpen ty =
+  let argNames = declaredArgEffNames ty
+  anyList (v => not (contains v argNames)) (declaredEffectTail ty)
 
 -- record metadata: name → (quantified param ids, result mono, field types).  A
 -- global Ref (like the reference's record table) so field access / create /
@@ -3460,8 +3901,11 @@ declEnvRowKindEntries cur m
 declEnvKindEntries : List Decl -> List (TabKey, List Kind)
 declEnvKindEntries [] = []
 declEnvKindEntries ((DAttrib _ d)::rest) = declEnvKindEntries (d::rest)
-declEnvKindEntries ((DData { dataName = n, dataParams = ps, dataCtors = vs, dataOrigin = o })::rest) = (tyTabKey o n, inferParamKinds ps vs) :: declEnvKindEntries rest
-declEnvKindEntries ((DNewtype { newtypeName = n, newtypeParams = ps, newtypeCtor = con, newtypeFieldTy = fty, newtypeOrigin = o })::rest) = (tyTabKey o n, inferParamKinds ps [Variant con (ConPos [fty])]) :: declEnvKindEntries rest
+declEnvKindEntries ((DData { dataName = n, dataParams = ps, dataParamKinds = ks, dataOrigin = o })::rest) = (tyTabKey o n, declParamKinds ps ks) :: declEnvKindEntries rest
+declEnvKindEntries ((DNewtype { newtypeName = n, newtypeParams = ps, newtypeParamKinds = ks, newtypeOrigin = o })::rest) = (tyTabKey o n, declParamKinds ps ks) :: declEnvKindEntries rest
+-- #2121: an alias head's declared kinds travel cross-module exactly like a
+-- data head's (mirrors `registerData`'s `DTypeAlias` arm).
+declEnvKindEntries ((DTypeAlias { tyAliasName = n, tyAliasParams = ps, tyAliasParamKinds = ks, tyAliasOrigin = o })::rest) = (tyTabKey o n, declParamKinds ps ks) :: declEnvKindEntries rest
 declEnvKindEntries (_::rest) = declEnvKindEntries rest
 
 -- `dataParamKindsRef`'s cross-module seed.  `deModules` is ASCENDING, and each
@@ -4020,6 +4464,7 @@ deKindAbstractFixture = DData {
   dataVis = VisAbstract,
   dataName = "Opq",
   dataParams = [],
+  dataParamKinds = [],
   dataCtors = [Variant "MkOpq" (ConPos [tyConBuiltin "Int" None])],
   dataDerives = [],
   dataOrigin = OriginModule "m",
@@ -4030,6 +4475,7 @@ deKindPrivateFixture = DData {
   dataVis = VisPrivate,
   dataName = "Priv",
   dataParams = [],
+  dataParamKinds = [],
   dataCtors = [Variant "MkPriv" (ConPos [tyConBuiltin "Int" None])],
   dataDerives = [],
   dataOrigin = OriginModule "m",
@@ -4040,6 +4486,7 @@ deKindNewtypeFixture = DNewtype {
   newtypePub = True,
   newtypeName = "Wrap",
   newtypeParams = [],
+  newtypeParamKinds = [],
   newtypeCtor = "Wrap",
   newtypeFieldTy = tyConBuiltin "Int" None,
   newtypeDerives = [],
@@ -4188,6 +4635,7 @@ deNameIdxAlpha = DData {
   dataVis = VisPublic,
   dataName = "Alpha",
   dataParams = [],
+  dataParamKinds = [],
   dataCtors = [Variant "MkAlpha" (ConPos [tyConBuiltin "Int" None])],
   dataDerives = [],
   dataOrigin = OriginModule "modA",
@@ -4198,6 +4646,7 @@ deNameIdxSharedA = DData {
   dataVis = VisPublic,
   dataName = "Shared",
   dataParams = [],
+  dataParamKinds = [],
   dataCtors = [Variant "MkSharedA" (ConPos [tyConBuiltin "Int" None])],
   dataDerives = [],
   dataOrigin = OriginModule "modA",
@@ -4208,6 +4657,7 @@ deNameIdxBeta = DData {
   dataVis = VisPublic,
   dataName = "Beta",
   dataParams = [],
+  dataParamKinds = [],
   dataCtors = [Variant "MkBeta" (ConPos [tyConBuiltin "Int" None])],
   dataDerives = [],
   dataOrigin = OriginModule "modB",
@@ -4218,6 +4668,7 @@ deNameIdxSharedB = DData {
   dataVis = VisPublic,
   dataName = "Shared",
   dataParams = [],
+  dataParamKinds = [],
   dataCtors = [Variant "MkSharedB" (ConPos [tyConBuiltin "Int" None])],
   dataDerives = [],
   dataOrigin = OriginModule "modB",
@@ -4372,7 +4823,7 @@ deNameIdxAt nm mid = omKeys (optionOr omEmpty (omLookup mid nm))
 --   (b) DIAGNOSTICS — RELAYED from P0-A (`.claude/sprint/phase0/`), NOT
 --       re-derived at this line; treat as the first thing to check, not as
 --       established.  `fromAstTypeE` EMITS type errors: `T-ALIAS-ARITY` and
---       `T-ROW-KIND-MISMATCH`, both through `pushTypeErrorOnce`/`…At`, whose
+--       `T-EFFECT-KIND-MISMATCH`, both through `pushTypeErrorOnce`/`…At`, whose
 --       `Once` dedupe reads `perRun.typeErrorMsgSetRef` (#2068: a membership
 --       index over the same channel; it was a scan of `perRun.typeErrors`
 --       itself) — a bundle `resetState` re-mints per module.  Elaborating in the
@@ -4729,6 +5180,7 @@ aliasFixturePubCore = DTypeAlias {
   tyAliasPub = True,
   tyAliasName = "PubCore",
   tyAliasParams = [],
+  tyAliasParamKinds = [],
   tyAliasRhs = tyConBuiltin "Int" None,
   tyAliasOrigin = OriginModule "core",
 }
@@ -4738,6 +5190,7 @@ aliasFixturePrivCore = DTypeAlias {
   tyAliasPub = False,
   tyAliasName = "PrivCore",
   tyAliasParams = [],
+  tyAliasParamKinds = [],
   tyAliasRhs = tyConBuiltin "Int" None,
   tyAliasOrigin = OriginModule "core",
 }
@@ -4747,6 +5200,7 @@ aliasFixturePubM = DTypeAlias {
   tyAliasPub = True,
   tyAliasName = "PubM",
   tyAliasParams = [],
+  tyAliasParamKinds = [],
   tyAliasRhs = tyConBuiltin "Int" None,
   tyAliasOrigin = OriginModule "m",
 }
@@ -4762,6 +5216,7 @@ aliasFixtureAttribCore = DAttrib
     tyAliasPub = True,
     tyAliasName = "AttribCore",
     tyAliasParams = [],
+    tyAliasParamKinds = [],
     tyAliasRhs = tyConBuiltin "Int" None,
     tyAliasOrigin = OriginModule "core",
   }
@@ -4814,6 +5269,7 @@ deFieldOwnerFixtureA = DData {
   dataVis = VisPublic,
   dataName = "Pt",
   dataParams = [],
+  dataParamKinds = [],
   dataCtors = [Variant "Pt" (ConNamed [Field "x" (tyConBuiltin "Int" None)] False)],
   dataDerives = [],
   dataOrigin = OriginModule "m",
@@ -4824,6 +5280,7 @@ deFieldOwnerFixtureB = DData {
   dataVis = VisPublic,
   dataName = "Vec",
   dataParams = [],
+  dataParamKinds = [],
   dataCtors = [Variant "Vec" (ConNamed [Field "x" (tyConBuiltin "Int" None)] False)],
   dataDerives = [],
   dataOrigin = OriginModule "n",
@@ -4843,6 +5300,7 @@ deFieldOwnerFixtureC = DData {
   dataVis = VisPublic,
   dataName = "Pt",
   dataParams = [],
+  dataParamKinds = [],
   dataCtors = [Variant "Pt" (ConNamed [Field "x" (tyConBuiltin "Int" None)] False)],
   dataDerives = [],
   dataOrigin = OriginModule "n",
@@ -4885,6 +5343,7 @@ deRecordOrderFixtureA = DData {
   dataVis = VisPublic,
   dataName = "P1",
   dataParams = [],
+  dataParamKinds = [],
   dataCtors = [Variant "Pt" (ConNamed [Field "x" (tyConBuiltin "Int" None)] False)],
   dataDerives = [],
   dataOrigin = OriginModule "m",
@@ -4895,6 +5354,7 @@ deRecordOrderFixtureB = DData {
   dataVis = VisPublic,
   dataName = "P2",
   dataParams = [],
+  dataParamKinds = [],
   dataCtors = [Variant "Pt" (ConNamed [Field "y" (tyConBuiltin "Int" None)] False)],
   dataDerives = [],
   dataOrigin = OriginModule "n",
@@ -6082,23 +6542,31 @@ buildClassEnvGo (m::rest) env =
   buildClassEnvGo rest (ceAddRows rows env)
 
 -- One interface decl's raw facts: name, typarams, methods, supers, identity.
-classEnvDeclFacts : List Decl -> List (String, List String, List IfaceMethod, List Super, TyConOrigin)
+classEnvDeclFacts : List Decl -> List (String, List String, List (Option KindAnn), List IfaceMethod, List Super, TyConOrigin)
 classEnvDeclFacts prog = flatMap classEnvDeclFact prog
 
-classEnvDeclFact : Decl -> List (String, List String, List IfaceMethod, List Super, TyConOrigin)
+classEnvDeclFact : Decl -> List (String, List String, List (Option KindAnn), List IfaceMethod, List Super, TyConOrigin)
 classEnvDeclFact (DAttrib _ d) = classEnvDeclFact d
-classEnvDeclFact (DInterface { name, typarams, supers, methods, ifaceOrigin, ... }) = [(name, typarams, methods, supers, ifaceOrigin)]
+classEnvDeclFact (DInterface { name, typarams, typaramKinds, supers, methods, ifaceOrigin, ... }) = [(name, typarams, typaramKinds, methods, supers, ifaceOrigin)]
 classEnvDeclFact _ = []
 
-classEnvRowsOf : Int -> List (String, List String, List IfaceMethod, List Super, TyConOrigin) -> List CeRow
+classEnvRowsOf : Int -> List (String, List String, List (Option KindAnn), List IfaceMethod, List Super, TyConOrigin) -> List CeRow
 classEnvRowsOf _ [] = []
-classEnvRowsOf ord ((name, typarams, methods, supers, o)::rest) =
-  let scope = declGradedScope typarams methods
+classEnvRowsOf ord ((name, typarams, kinds, methods, supers, o)::rest) =
+  let scope = declGradedScope typarams kinds methods
   let row = CeRow (regKeyOfTab (ifaceTabKey o name)) ord IfaceRef {
     irName = name,
     irOrigin = o,
-  } typarams (map (ceMethodOf scope) methods) supers (map (p => ifaceParamKindsOf p methods) typarams) (requiredMethodNames methods)
+  } typarams (map (ceMethodOf scope) methods) supers (ifaceParamKindsDeclAll typarams kinds methods) (requiredMethodNames methods)
   row :: classEnvRowsOf ord rest
+
+-- every parameter's RESOLVED slot kinds, positional with [typarams].
+ifaceParamKindsDeclAll : List String -> List (Option KindAnn) -> List IfaceMethod -> List (List Kind)
+ifaceParamKindsDeclAll [] _ _ = []
+ifaceParamKindsDeclAll (p::ps) [] methods =
+  ifaceParamKindsDeclAll (p::ps) [None] methods
+ifaceParamKindsDeclAll (p::ps) (a::anns) methods =
+  ifaceParamKindsDecl a p methods :: ifaceParamKindsDeclAll ps anns methods
 
 ceMethodOf : List (String, List Kind) -> IfaceMethod -> (String, Ty, List (String, List Kind))
 ceMethodOf scope (IfaceMethod n ty _ _) = (n, ty, scope)
@@ -6225,6 +6693,7 @@ ceSameDeclIn m methods = DInterface {
   def = False,
   name = "Same",
   typarams = ["a"],
+  typaramKinds = [None],
   supers = [ceSuperEq],
   methods = methods,
   ifaceOrigin = OriginModule m,
@@ -6424,14 +6893,13 @@ ceRowParamKindNamesAt key cur env = match ceLookupAt key cur env
 -- live `universeIfaceParamKinds` table; that table is retired and `ceParamKinds` IS
 -- the answer now, so these doctests grade the production computation directly.
 ceGradedMethod : IfaceMethod
-ceGradedMethod =
-  IfaceMethod
-    "run"
-    (TyFun
-      (TyApp (TyApp (TyVar "f") (TyVar "e")) (TyVar "a"))
-      (TyEffect [] (Some "e") (TyVar "a")))
-    None
-    None
+ceGradedMethod = IfaceMethod
+  "run"
+  (TyFun
+    (TyApp (TyApp (TyVar "f") (TyVar "e")) (TyVar "a"))
+    (TyEffect [] ["e"] (TyVar "a")))
+  None
+  None
 
 ceGradedIface : Decl
 ceGradedIface = DInterface {
@@ -6439,6 +6907,7 @@ ceGradedIface = DInterface {
   def = False,
   name = "Async",
   typarams = ["f"],
+  typaramKinds = [Some (KindArrow KindEffect (KindArrow KindType KindType))],
   supers = [],
   methods = [ceGradedMethod],
   ifaceOrigin = OriginModule "gmod",
@@ -6453,7 +6922,7 @@ ceGradedKey = regKeyOfTab (ifaceTabKey (OriginModule "gmod") "Async")
 -- 5. GRADED KIND INFERENCE, positional with `ceTyparams` (here `["f"]`):
 --    slot 0 (f's first argument, `e`) is `KRow`; slot 1 (`a`) is `KType`.
 -- > ceRowParamKindNamesAt ceGradedKey 0 ceGradedEnv
--- [["Row", "Type"]]
+-- [["Effect", "Type"]]
 
 -- ── an UNGRADED fixture: every slot is still RECORDED ("EVERY slot is recorded,
 -- graded or not" — the retired writer's rule, which `ceParamKinds` keeps because
@@ -6480,6 +6949,7 @@ ceFunctorIface = DInterface {
   def = False,
   name = "Functor",
   typarams = ["f"],
+  typaramKinds = [None],
   supers = [],
   methods = [ceFunctorMethod],
   ifaceOrigin = OriginModule "fmod",
@@ -8038,6 +8508,11 @@ goalSiteLoc = Ref None
 currentDoOrigin : Ref (Option Loc)
 currentDoOrigin = Ref None
 
+-- #824: True while inferring a `defer` block's lowered chain (see the
+-- `EDoOrigin` arm of `infer`); selects the wording of `recordDoMonadError`.
+currentDoDeferred : Ref Bool
+currentDoDeferred = Ref False
+
 -- C8b Gap 2 (diagnostic-quality parity): set to `Some methodName` around the
 -- OUTER unify of an interface default body against its declared return type, so a
 -- leaf TypeMismatch is reported as the oracle's specialized single line
@@ -8241,6 +8716,7 @@ data PerRun = PerRun {
     inRigidityBodyRef : Ref Bool,  -- True while an IMPL or DEFAULT method body is being inferred — the scope
     effvarCounter : Ref Int,  -- in which registerLocalScheme records obligations (see its comment)
     curEffect : Ref EffRow,  -- names GENERALIZED inside the top-level body currently being inferred
+    rigidEffvarsRef : Ref (List Int),  -- #821: cell ids of the method effect variables of the impl/default body being inferred — two of these meeting in an ambient row JOIN instead of being identified (`performEffect`)
     recordByNameRef : Ref (OrdMap RecordInfo),  -- (local `let`/`where` helpers), reset at each body start: an occurrence resolving
     fieldOwnersRef : Ref (OrdMap (List String)),  -- to one is a LOCAL shadow, never a method occurrence, so no method obligation is recorded for it (round-2 adversarial break 3).
     dataParamKindsRef : Ref (List (TabKey, List Kind)),  -- A tyvar-id watermark was tried first and is UNSAFE: freshness-skipping
@@ -8359,6 +8835,7 @@ freshPerRun _ = PerRun {
   inRigidityBodyRef = Ref False,
   effvarCounter = Ref 0,
   curEffect = Ref (EffRow [] None),
+  rigidEffvarsRef = Ref [],
   recordByNameRef = Ref omEmpty,
   fieldOwnersRef = Ref omEmpty,
   dataParamKindsRef = Ref [],
@@ -8808,19 +9285,20 @@ paramVarianceEqCheck _ _ l1 l2 =
 -- restores is still bounded by the slot, so eta-expansion buys back exactly the
 -- narrowing direction and nothing else — which is why naming it here is safe.
 --
--- Why the message and not a fix: no rule keyed on TYPES can separate the two
--- directions at this seam.  `handler = Ref noop` (safe narrowing, #2109) and
--- `alias = idr box` (the #1098 laundering) reach `paramVarianceGuard` with the
--- SAME two Monos — `Ref (String -> <Stdout> Unit)` against `Ref (String -> <>
--- Unit)` — render the SAME row pair `<Stdout> vs <>`, and both carry a caret on
--- an ARGUMENT span, so neither the types nor the location discriminates.  What
--- separates them is expression-level provenance (is the argument a value flowing
--- INTO a cell being built here, or an already-typed cell being coerced?), which
--- would need an expected/actual role on `unify` or a checking mode for
--- constructor applications — the larger unifier-direction change this seam
--- deliberately does not have.
+-- No rule keyed on TYPES can separate the two directions at this seam:
+-- `handler = Ref noop` (safe narrowing, #2109) and `alias = idr box` (the #1098
+-- laundering) reach `paramVarianceGuard` with the SAME two Monos and render the
+-- SAME row pair.  What separates them is expression-level provenance — a value
+-- flowing INTO a cell being built here, versus an already-typed cell being
+-- coerced — and that is now read where it is visible: a signed clause's body
+-- is inferred RESULT-FIRST against its signature (`inferExpected`), so a fresh
+-- construction meets the declaration while its slot is still a metavariable
+-- and this guard abstains, while an already-typed cell still arrives closed
+-- and is rejected here.  The eta-expansion recovery the message names is what
+-- remains for the shapes result-first inference does not reach (an unsigned
+-- binding, a lambda-argument head).
 paramVarianceMismatchMsg : List Atom -> List Atom -> String
-paramVarianceMismatchMsg l1 l2 = "Effect row mismatch inside a non-covariant type argument: <\{renderAtoms l1}> vs <\{renderAtoms l2}>. This type parameter is used contravariantly, or behind a mutable cell, so the two rows must be EQUAL — weakening one to the other would let an effectful value be reached through a type that no longer mentions its effects. Write the same effect row on both sides. If the value here performs FEWER effects than the slot permits, that narrowing is safe but is still rejected, because unification is symmetric here and cannot tell which side is the declaration; eta-expand the mismatched function to recover — write `(s => f s)` in place of `f`, and when that function is nested inside a wrapper value here, rebuild the wrapper around the eta-expanded function (e.g. `Ref (s => f s)`). A value that performs MORE effects than the slot permits is rejected either way, so this recovery cannot widen a row."
+paramVarianceMismatchMsg l1 l2 = "Effect row mismatch inside a non-covariant type argument: <\{renderAtoms l1}> vs <\{renderAtoms l2}>. This type parameter is used contravariantly, or behind a mutable cell, so the two rows must be EQUAL — weakening one to the other would let an effectful value be reached through a type that no longer mentions its effects. Write the same effect row on both sides. A FRESHLY built value (`Ref f` at a signed binding) may perform fewer effects than its declared slot permits; what is rejected here is an already-typed value being re-typed at a different row, in either direction, because both readers of the same cell must agree. If this value really is fresh and the site is not covered by its signature, eta-expand the mismatched function — write `(s => f s)` in place of `f`, rebuilding any wrapper around it (e.g. `Ref (s => f s)`); a value that performs MORE effects than the slot permits is rejected either way, so that recovery cannot widen a row."
 
 unifyVars : Ref Tyvar -> Ref Tyvar -> Unit
 unifyVars c1 c2 = if tyvarId c1 == tyvarId c2 then () else bindVar c1 (TVar c2)
@@ -8984,7 +9462,7 @@ recordDoMonadError doLoc =
     "T-DO-NOT-MONAD"
     1
     (Some doLoc)
-    doRequiresMonadMsg
+    (if !currentDoDeferred then deferRequiresMonadMsg else doRequiresMonadMsg)
     None
     None)
 
@@ -8994,6 +9472,9 @@ monoIsApp _ = False
 
 doRequiresMonadMsg : String
 doRequiresMonadMsg = "`do` requires a Thenable impl (e.g. `Option`/`Result`). For IO sequencing use a bare indented block, not `do`"
+
+deferRequiresMonadMsg : String
+deferRequiresMonadMsg = "`defer` requires a DeferredThenable impl — an effect-indexed constructor such as `Async` (its `defer` block registers effects in the index and performs nothing until forced). For a strict container (`Option`/`Result`/`List`) use `do`; for IO sequencing use a bare indented block"
 
 -- SYMMETRIC complement of doRequiresMonadMsg: a `<-` bind reached a bare
 -- (non-`do`) block.  `<-` is monadic-`do`-only; a bare indented block is IO
@@ -9403,11 +9884,19 @@ ppEffArg ctx cnt r = match effrowNorm r
       [] => ""
       ls => renderAtoms ls
     let tailS = match tail
-      Some cell => match !cell
-        EUnbound id _ => nameOf ctx cnt (id + 1000000)
-        ELink _ => ""
+      Some cell => ppEffvarName ctx cnt cell
       None => ""
-    ppEffArgFmt lbl tailS
+    -- #821: a bare join in an index slot renders parenthesised, `(e | e2)`,
+    -- which is also its written form; with labels, `<L | e | e2>`.
+    match tail
+      Some cell => if isJoinCell cell && lbl == "" then "(" ++ tailS ++ ")" else ppEffArgFmt lbl tailS
+      None => ppEffArgFmt lbl tailS
+
+ppEffvarName : Ref (List (Int, String)) -> Ref Int -> Ref Effvar -> String
+ppEffvarName ctx cnt cell = match !cell
+  EUnbound id _ => nameOf ctx cnt (id + 1000000)
+  ELink _ => ""
+  EJoin _ _ ms => joinWith " | " (map (m => ppEffvarName ctx cnt m) ms)
 
 ppEffArgFmt : String -> String -> String
 ppEffArgFmt l t
@@ -9656,7 +10145,7 @@ effTailNames (TyCon { tyConName = _ }) = []
 effTailNames (TyApp a b) = effTailNames a ++ effTailNames b
 effTailNames (TyFun a b) = effTailNames a ++ effTailNames b
 effTailNames (TyTuple ts) = flatMap effTailNames ts
-effTailNames (TyEffect _ tail t) = tailNameList tail ++ effTailNames t
+effTailNames (TyEffect _ tail t) = tail ++ effTailNames t
 effTailNames (TyConstrained _ t) = effTailNames t
 -- A bare row atom (#997) carries its own tail var directly (no wrapped type
 -- to recurse into) — same tail-var-sharing contract as `TyEffect`'s arm
@@ -9673,11 +10162,7 @@ effTailNames (TyConstrained _ t) = effTailNames t
 -- exactly this reason and pairs this with the actually-kind-aware
 -- `rowArgNames`; this arm's over-counting is a residual channel of the same
 -- shape as that pre-existing gap, not a new one — see #784.
-effTailNames (TyRow _ tail _) = tailNameList tail
-
-tailNameList : Option String -> List String
-tailNameList None = []
-tailNameList (Some n) = [n]
+effTailNames (TyRow _ tail _) = tail
 
 freshEffMap : List String -> List (String, Ref Effvar)
 freshEffMap [] = []
@@ -9693,9 +10178,24 @@ astEffrowE etbl (TyEffect labels tail _) =
   EffRow (atomsOfWritten labels) (tailCell etbl tail)
 astEffrowE _ _ = pureRow
 
-tailCell : List (String, Ref Effvar) -> Option String -> Option (Ref Effvar)
-tailCell _ None = None
-tailCell etbl (Some n) = lookupAssoc n etbl
+-- The tail cell of a written row.  No names is a closed row; one name is that
+-- var's shared cell; several (#821) is their JOIN, so `<Stdout | e | e2>`
+-- elaborates to the row performing Stdout plus whatever either var does.  A
+-- name the table does not know contributes nothing, which is what the
+-- single-name case has always done by yielding `None`.
+tailCell : List (String, Ref Effvar) -> List String -> Option (Ref Effvar)
+tailCell _ [] = None
+tailCell etbl [n] = lookupAssoc n etbl
+tailCell etbl ns = match tailCellsOf etbl ns
+  [] => None
+  [cell] => Some cell
+  cells => Some (joinCellOf cells)
+
+tailCellsOf : List (String, Ref Effvar) -> List String -> List (Ref Effvar)
+tailCellsOf _ [] = []
+tailCellsOf etbl (n::ns) = match lookupAssoc n etbl
+  Some cell => cell :: tailCellsOf etbl ns
+  None => tailCellsOf etbl ns
 
 fromAstType : List (String, Mono) -> Ty -> Mono
 fromAstType tvs ty = fromAstTypeE [] tvs ty
@@ -9752,14 +10252,14 @@ fromAstTypeE etbl tvs (TyConstrained _ t) = fromAstTypeE etbl tvs t
 -- a real diagnostic; `TCon "Unit"` is POST-ERROR RECOVERY ONLY, so inference
 -- can keep going, not a value anything should rely on.
 fromAstTypeE etbl tvs (TyRow labels tail loc) =
-  let _ = pushTypeErrorOnceAt "T-ROW-KIND-MISMATCH" loc (rowKindMismatchMsg labels tail)
+  let _ = pushTypeErrorOnceAt "T-EFFECT-KIND-MISMATCH" loc (rowKindMismatchMsg labels tail)
   tconBuiltin "Unit"
 
 -- ppTy's own TyRow rendering (below, in the AST pretty-printer section) isn't
 -- visible yet at this point in the file, so render the row body directly with
 -- the SAME row-body renderer that feeds it (`ppEffInsideTy`, further down —
 -- forward reference, fine: this module is resolved as a whole, not top-down).
-rowKindMismatchMsg : List (String, Option String) -> Option String -> String
+rowKindMismatchMsg : List (String, Option String) -> List String -> String
 rowKindMismatchMsg labels tail = "A row <\{ppEffInsideTy labels tail}> was written here, but this type-argument position isn't row-kinded — it expects an ordinary type, not an effect row. Rows can only be written where a type constructor's parameter has row kind (e.g. the `e` of `Async e a`)."
 
 -- A type alias applied to the wrong number of arguments — over-applied,
@@ -9816,8 +10316,13 @@ fromAstTypeApp etbl tvs o n args =
   match lookupTab key perRun.value.aliasTableRef.value
     -- Saturated parameterized alias: bind params → arg Monos (alias params shadow
     -- outer tvs of the same name) and expand the RHS through the same seam.
+    -- #2121 / §6.2: each argument elaborates at the alias parameter's DECLARED
+    -- kind — an `Effect` parameter binds a row cell in the effect table so the
+    -- RHS's own occurrence of it (`Later e Int`) reads the written row.
     Some (params, rhs) if listLen params == listLen args =>
-      fromAstTypeE etbl (zipL params (map (fromAstTypeE etbl tvs) args) ++ tvs) rhs
+      let kinds = optionOr (map (_ => KType) params) (lookupTab key perRun.value.dataParamKindsRef.value)
+      let bound = aliasArgBindings etbl tvs params kinds args
+      fromAstTypeE (fst bound ++ etbl) (snd bound ++ tvs) rhs
     -- Alias applied to the wrong arity: reject, keep the opaque fallback.
     Some (params, _) =>
       let _ = pushTypeErrorOnce "T-ALIAS-ARITY" (aliasArityMsg n (listLen params) (listLen args))
@@ -9826,6 +10331,21 @@ fromAstTypeApp etbl tvs o n args =
       Some kinds if listLen kinds == listLen args =>
         foldAppKinds etbl tvs (tconFrom o n) kinds args
       _ => appFallback etbl tvs o n args
+
+-- the alias parameters bound positionally at their declared kinds: (effect
+-- table additions, type table additions).  A KRow parameter gets a fresh row
+-- cell pinned to the written argument row by the index unifier (equality —
+-- an alias slot is an index, §9); a KType parameter binds the elaborated Mono.
+aliasArgBindings : List (String, Ref Effvar) -> List (String, Mono) -> List String -> List Kind -> List Ty -> (List (String, Ref Effvar), List (String, Mono))
+aliasArgBindings etbl tvs (p::ps) (KRow::ks) (arg::args) =
+  let cell = freshEffvar ()
+  let _ = unifyIndexRow (EffRow [] (Some cell)) (rowArgOf etbl arg)
+  let rest = aliasArgBindings etbl tvs ps ks args
+  ((p, cell) :: fst rest, snd rest)
+aliasArgBindings etbl tvs (p::ps) (_::ks) (arg::args) =
+  let rest = aliasArgBindings etbl tvs ps ks args
+  (fst rest, (p, fromAstTypeE etbl tvs arg) :: snd rest)
+aliasArgBindings _ _ _ _ _ = ([], [])
 
 -- #822: a spine headed by an interface typaram of GRADED kind — `f e b` must yield
 -- the SAME Mono shape a row-indexed data head does (`Async e b` =
@@ -9872,7 +10392,7 @@ isRowSlotArg etbl tvs (TyVar n) = isSome (lookupAssoc n etbl)
 --
 -- ⚠️ Requiring an open tail here was an S1: it made the SPEC'S OWN `gpure : a -> f <> a`
 -- (EFFECTS-SEMANTICS §6, one of the four canonical graded signatures) unspellable — the
--- closed row fell to the opaque fallback and drew `T-ROW-KIND-MISMATCH`, a message
+-- closed row fell to the opaque fallback and drew `T-EFFECT-KIND-MISMATCH`, a message
 -- asserting the slot "isn't row-kinded" when slot 0 of `f` had just been INFERRED KRow
 -- from a sibling method.  The same `<>` on a concrete head (`Async <> a`) was accepted,
 -- so the two halves of the feature disagreed on one spelling with the abstract half
@@ -9939,7 +10459,7 @@ rowArgOf etbl (TyRow labels tail _) =
 -- inert continuation value so inference proceeds, exactly as `fromAstTypeE` continues
 -- with `TCon "Unit"`.
 rowArgOf _ ty =
-  let _ = pushTypeErrorOnceAt "T-ROW-KIND-MISMATCH" (firstTyLoc ty) (typeInRowSlotMsg ty)
+  let _ = pushTypeErrorOnceAt "T-EFFECT-KIND-MISMATCH" (firstTyLoc ty) (typeInRowSlotMsg ty)
   pureRow
 
 -- Names the offending type, so a signature elaborated twice folds into one diagnostic.
@@ -9947,7 +10467,7 @@ rowArgOf _ ty =
 -- key (see its body).  So two different bad slots holding the SAME offending type
 -- (`weird : Box Int Int` and `alsoWeird : Box Int Unit`) collapse to ONE diagnostic and
 -- the second is silently unreported.  That is the behaviour of both shipped
--- `T-ROW-KIND-MISMATCH` sites, matched here on purpose rather than fixed in passing —
+-- `T-EFFECT-KIND-MISMATCH` sites, matched here on purpose rather than fixed in passing —
 -- but do not read the type name in the message as making the key per-slot.
 typeInRowSlotMsg : Ty -> String
 typeInRowSlotMsg ty = "The type `\{ppTy ty}` was written here, but this type-argument position is row-kinded — it expects an effect row, not an ordinary type. Write the row you mean (`<>` for no effects, `<Stdout>`, `<IO | e>`, …), or a row variable bound by the enclosing signature."
@@ -9997,8 +10517,8 @@ krowArgVarNames (KRow::ks) ((TyVar n)::as2) = n :: krowArgVarNames ks as2
 -- same var-name contribution, just spelled with labels attached. A CLOSED
 -- written row (`Box <Stdout> Int`, no tail var) pins no name and falls
 -- through to the catch-all below, same as any other non-`TyVar` arg.
-krowArgVarNames (KRow::ks) ((TyRow _ (Some n) _)::as2) =
-  n :: krowArgVarNames ks as2
+krowArgVarNames (KRow::ks) ((TyRow _ tails _)::as2) = tails
+  ++ krowArgVarNames ks as2
 krowArgVarNames (_::ks) (_::as2) = krowArgVarNames ks as2
 
 -- ── #2110: `rowArgNamesIn` WITH THE HEAD'S DECLARED ATOM GUARANTEE ────────
@@ -10054,9 +10574,8 @@ krowArgVarAtoms [] _ _ = []
 krowArgVarAtoms _ _ [] = []
 krowArgVarAtoms (KRow::ks) decls ((TyVar n)::as2) =
   (n, headAtomsOr decls) :: krowArgVarAtoms ks (restAtoms decls) as2
-krowArgVarAtoms (KRow::ks) decls ((TyRow labels (Some n) _)::as2) =
-  (n, atomsNorm (atomsOfWritten labels ++ headAtomsOr decls)) ::
-    krowArgVarAtoms ks (restAtoms decls) as2
+krowArgVarAtoms (KRow::ks) decls ((TyRow labels tails _)::as2) = map (n => (n, atomsNorm (atomsOfWritten labels ++ headAtomsOr decls))) tails
+  ++ krowArgVarAtoms ks (restAtoms decls) as2
 krowArgVarAtoms (_::ks) decls (_::as2) =
   krowArgVarAtoms ks (restAtoms decls) as2
 
@@ -10353,11 +10872,27 @@ infer env (ELoc l e) =
 -- everywhere else it is handled — `mapKids`, `alpha`, `appSpineName`, …).
 infer env (EDoOrigin l e) =
   let prevDoOrigin = !currentDoOrigin
+  let prevDeferred = !currentDoDeferred
   currentDoOrigin := Some l
+  -- #824: the lowered chain's synthesized callee names the herald
+  -- (`deferThen` for a `defer` block), so the "requires a monad" reframe can
+  -- name the right interface.
+  currentDoDeferred := doChainIsDeferred e
   let t = infer env e
   currentDoOrigin := prevDoOrigin
+  currentDoDeferred := prevDeferred
   t
+
 infer _ _ = panic "typecheck: unsupported expression"
+
+-- is this lowered do-chain a `defer` block?  Its head callee is the tagged
+-- `deferThen` (see `callAndThen` in desugar.mdk).
+doChainIsDeferred : Expr -> Bool
+doChainIsDeferred (EApp f _) = doChainIsDeferred f
+doChainIsDeferred (ELoc _ e) = doChainIsDeferred e
+doChainIsDeferred (EDoOrigin _ (EVar "deferThen")) = True
+doChainIsDeferred (EDoOrigin _ (EVarId "deferThen" _)) = True
+doChainIsDeferred _ = False
 
 inferArrayLit : TcEnv -> List Expr -> Mono
 inferArrayLit env es =
@@ -13843,6 +14378,195 @@ unifySpineProbe ft (a::rest) =
   let _ = unify ft (TFun a eff r)
   unifySpineProbe r rest
 
+-- ── #2109: RESULT-FIRST inference against a known expected type ───────────
+-- `paramVarianceGuard` (the D-2 variance gate) fires only when BOTH rows at a
+-- non-covariant slot are closed, and abstains while either is still a
+-- metavariable.  That is the whole lever here.  Inferring an application
+-- ARGUMENT-FIRST (`Ref noop`: `noop`'s closed `<>` row is pinned into `Ref ?a`
+-- before the result ever meets the declaration) presents two closed rows and
+-- the safe write-side narrowing is rejected; inferring it RESULT-FIRST
+-- (`Ref ?a` meets `Ref (String -> <Stdout> Unit)` while `?a` is fresh) lets
+-- the declaration pin the slot, and the argument is then checked against the
+-- DECLARED field type by the ordinary arrow-row rule, which accepts a purer
+-- function where a more effectful one is allowed.
+--
+-- Why this is sound for ANY callee, not only a constructor: the guard still
+-- fires exactly when the callee's result at the slot is CLOSED independently
+-- of the expectation — `idr : Ref a -> Ref a` applied to an already-typed cell
+-- (`alias = idr box`, the #1098 launder) unifies its result first, which pins
+-- `a := String -> <Stdout> Unit`, and the argument `box : Ref (String -> <>
+-- Unit)` then meets that as closed~closed and is rejected as before.  A callee
+-- whose result slot is a metavariable cannot have aliased the cell at any
+-- particular row (parametricity), so nothing but a fresh value ever reaches
+-- the accepting order.  The value this admits therefore has no other alias
+-- yet, which is the one condition under which narrowing at a write is safe.
+--
+-- Scope, deliberately narrow: the expected type must contain a non-covariant
+-- slot at all (`monoHasNonCovariantSlot`), the expression must be a plain
+-- application spine (no lambda-argument or shadow-head special case, which
+-- keep `inferAppExpr`'s arms), and only then does the order change.  Every
+-- other program is inferred exactly as before, so no diagnostic moves.
+inferExpected : TcEnv -> Expr -> Mono -> Mono
+inferExpected env (ELoc l e) expected =
+  currentLoc := Some l
+  inferExpected env e expected
+inferExpected env e expected =
+  -- The order only matters when an ARROW ROW sits inside a type-constructor
+  -- slot (that is the only thing the variance gate compares), so a purely
+  -- structural pre-check (`monoHasArrowInSlot`) runs first; the polarity
+  -- table (a list, scanned per lookup) is consulted only for the rare
+  -- expected types that have such a slot.  Measured: the unconditional table
+  -- walk per signed clause cost ~1% Ir on hello-world `check`.
+  if monoHasArrowInSlot expected && monoHasNonCovariantSlot expected then match appSpineExpr e
+    (hd, args) =>
+      if isEmptyL args || not (plainAppHead env hd) then
+        infer env e
+      else
+        inferAppResultFirst env hd args expected
+  else infer env e
+
+-- the application spine of [e]: its head and its arguments in order, looking
+-- through the location wrappers that sit between one application node and
+-- the next.  A non-application returns itself with no arguments.
+appSpineExpr : Expr -> (Expr, List Expr)
+appSpineExpr (EApp f x) =
+  let s = appSpineExpr f
+  (fst s, snd s ++ [x])
+appSpineExpr (ELoc _ (EApp f x)) = appSpineExpr (EApp f x)
+appSpineExpr e = (e, [])
+
+-- a head `inferAppExpr` would take through its plain arm: an ordinary variable
+-- that is neither a standalone shadow nor a definer shadow.  Anything else
+-- keeps its dedicated arm and the argument-first order.
+plainAppHead : TcEnv -> Expr -> Bool
+plainAppHead env (ELoc _ inner) = plainAppHead env inner
+plainAppHead env (hd@(EVar _)) = plainAppHeadVar env hd
+plainAppHead env (hd@(EVarId _ _)) = plainAppHeadVar env hd
+plainAppHead _ _ = False
+
+plainAppHeadVar : TcEnv -> Expr -> Bool
+plainAppHeadVar env hd = match shadowStandaloneHead env hd
+  Some _ => False
+  None => match definerShadowArgHead hd
+    Some _ => False
+    None => match definerShadowVarHead hd
+      Some _ => False
+      None => True
+
+-- the arrows of [ft] peeled [n] deep, then the result unified with [expected]
+-- BEFORE any argument is looked at; each argument is then inferred against
+-- the (now pinned) domain and applied through the ordinary `inferApp`, so the
+-- effect bookkeeping and every diagnostic of the plain path are unchanged.
+-- A callee with fewer than [n] arrows skips the pre-unification (the arity
+-- error surfaces from `inferApp` exactly as before).
+inferAppResultFirst : TcEnv -> Expr -> List Expr -> Mono -> Mono
+inferAppResultFirst env hd args expected =
+  let ft = infer env hd
+  let _ = match resultAfterArrows (listLen args) ft
+    Some res => unify res expected
+    None => ()
+  inferAppArgsAgainst env hd ft args
+
+inferAppArgsAgainst : TcEnv -> Expr -> Mono -> List Expr -> Mono
+inferAppArgsAgainst _ _ ft [] = ft
+inferAppArgsAgainst env appSoFar ft (x::rest) =
+  let xt = match lamUnderLoc x
+    Some (loc, pats, body) =>
+      let _ = setLocIfSome loc
+      inferLamChecked
+        env
+        (expectedParamTypes (funDomain (normalize ft)) (listLen pats))
+        pats
+        body
+    None => inferExpected env x (funDomain (normalize ft))
+  -- The result-first order pins the domain from the DECLARATION before the
+  -- argument is seen, and the arrow unifier's closed~closed arm is lenient —
+  -- so the argument must be checked DIRECTIONALLY against its domain here:
+  -- it may perform fewer effects than the slot permits (the #2109
+  -- narrowing), never more.  Without this, `Ref loud` at `Ref (Int -> <> Int)`
+  -- would slip through as a launder.
+  let _ = checkArgSubEffect True (funDomain (normalize ft)) xt
+  let res = inferApp (envAlphaLets env) (EApp appSoFar x) ft xt
+  inferAppArgsAgainst env (EApp appSoFar x) res rest
+
+-- [actual] flows INTO a slot of type [expected]: every closed arrow row of the
+-- actual must be within the expected's at a covariant position, and the
+-- reverse at a contravariant one; a non-covariant type-constructor slot
+-- demands equality (the same rule `paramVarianceGuard` enforces).  Open rows
+-- are left to unification.
+checkArgSubEffect : Bool -> Mono -> Mono -> Unit
+checkArgSubEffect pos e a = match normalize e
+  TFun e1 er e2 => match normalize a
+    TFun a1 ar a2 =>
+      let _ = checkArgSubEffect (not pos) e1 a1
+      let _ = rowSubCheck pos (effrowNorm er) (effrowNorm ar)
+      checkArgSubEffect pos e2 a2
+    _ => ()
+  TApp e1 e2 => match normalize a
+    TApp a1 a2 =>
+      let _ = if monoSlotNonCovariant e1 then
+        paramVarianceCheck e2 a2
+      else
+        checkArgSubEffect pos e2 a2
+      checkArgSubEffect pos e1 a1
+    _ => ()
+  _ => ()
+
+rowSubCheck : Bool -> EffRow -> EffRow -> Unit
+rowSubCheck True (EffRow le None) (EffRow la None) =
+  effectLeakCheck (atomsEscape la le) le
+rowSubCheck False (EffRow le None) (EffRow la None) =
+  effectLeakCheck (atomsEscape le la) la
+rowSubCheck _ _ _ = ()
+
+-- the type after peeling [n] arrows off [t] (normalizing at each level), or
+-- None when [t] has fewer.
+resultAfterArrows : Int -> Mono -> Option Mono
+resultAfterArrows n t
+  | n <= 0 = Some t
+  | otherwise = match normalize t
+    TFun _ _ b => resultAfterArrows (n - 1) b
+    _ => None
+
+-- does [t] contain a type-constructor application whose head records a
+-- non-covariant polarity at some applied slot?  The only shapes on which the
+-- variance gate can fire, and so the only ones for which the inference order
+-- matters (`inferExpected`).  Walks under arrows and applications; an
+-- unregistered head, a bare variable, or an index row contributes nothing.
+-- does [t] have an arrow anywhere INSIDE a type-constructor argument?  Purely
+-- structural — no table — so it is the cheap first filter for `inferExpected`.
+monoHasArrowInSlot : Mono -> Bool
+monoHasArrowInSlot t = match normalize t
+  TApp a b => monoHasArrow b || monoHasArrowInSlot a
+  TFun a _ b => monoHasArrowInSlot a || monoHasArrowInSlot b
+  _ => False
+
+monoHasArrow : Mono -> Bool
+monoHasArrow t = match normalize t
+  TFun _ _ _ => True
+  TApp a b => monoHasArrow a || monoHasArrow b
+  _ => False
+
+monoHasNonCovariantSlot : Mono -> Bool
+monoHasNonCovariantSlot t = match normalize t
+  TApp a b => monoSlotNonCovariant a
+    || monoHasNonCovariantSlot a
+    || monoHasNonCovariantSlot b
+  TFun a _ b => monoHasNonCovariantSlot a || monoHasNonCovariantSlot b
+  _ => False
+
+-- is the slot applied at the node above [hd] (positional index = the depth of
+-- [hd]'s own spine) recorded as non-covariant for [hd]'s head?  The same read
+-- `paramVarianceGuard` makes, so the two agree on which slots count.
+monoSlotNonCovariant : Mono -> Bool
+monoSlotNonCovariant hd = match headTyconMono hd
+  Some (HkDecl key) => match paramPolaritiesOf key
+    Some pols => match polarityAt pols (monoSpineDepth hd)
+      PCo => False
+      _ => True
+    None => False
+  _ => False
+
 inferAppExpr : TcEnv -> Expr -> Expr -> Mono
 inferAppExpr env f x = match lamUnderLoc x
     Some (loc, pats, body) =>
@@ -15347,6 +16071,9 @@ isDoLoweredAndThenCallee _ = False
 isDoLoweredAndThenCalleeExpr : Expr -> Bool
 isDoLoweredAndThenCalleeExpr (ELoc _ e) = isDoLoweredAndThenCalleeExpr e
 isDoLoweredAndThenCalleeExpr (EDoOrigin _ (EVar "andThen")) = True
+-- `defer` blocks (#824) lower through the same `callAndThen` with `deferThen`
+-- as the bind method, so they get the same tailored reframing.
+isDoLoweredAndThenCalleeExpr (EDoOrigin _ (EVar "deferThen")) = True
 -- `resolve` rewrites every surviving `EVar` to `EVarId name id` (a stable
 -- per-binding identity) — by the time `inferApp` runs, the callee `lowerDo`
 -- tagged is `EVarId "andThen" _`, not the raw `EVar` it started as. Debugged
@@ -15354,6 +16081,7 @@ isDoLoweredAndThenCalleeExpr (EDoOrigin _ (EVar "andThen")) = True
 -- never actually fires post-resolve; keep it anyway as the honest pre-resolve
 -- shape (harmless — `EDoOrigin _ (EVar "andThen")` just never matches here).
 isDoLoweredAndThenCalleeExpr (EDoOrigin _ (EVarId "andThen" _)) = True
+isDoLoweredAndThenCalleeExpr (EDoOrigin _ (EVarId "deferThen" _)) = True
 isDoLoweredAndThenCalleeExpr _ = False
 
 -- P0-16 beginner call-syntax hint.  A newcomer writes `add(1, 2)` (C/Python/JS
@@ -16009,15 +16737,21 @@ registerData : TcEnv -> Decl -> TcEnv
 -- it locally and kept it opaque cross-module, which is the mirror of the widening
 -- that guard was added to prevent.
 registerData env (DAttrib _ d) = registerData env d
-registerData env (DData { dataName = name, dataParams = params, dataCtors = variants, dataOrigin = o }) = registerVariants o env name params variants
+registerData env (DData { dataName = name, dataParams = params, dataParamKinds = anns, dataCtors = variants, dataOrigin = o }) = registerVariants o env name params anns variants
 -- DECLARATION MINT (#1110/#1111 A-2.3): `tyAliasOrigin` is the alias's own
 -- identity, stamped by `stampDeclOrigins` at the module that declared it — the
 -- same source `registerVariants` takes `dataOrigin`/`newtypeOrigin` from, and
 -- for the same reason (see its 🚨 note: it must not come from ambient state).
-registerData env (DTypeAlias { tyAliasName = name, tyAliasParams = params, tyAliasRhs = rhs, tyAliasOrigin = o }) =
+registerData env (DTypeAlias { tyAliasName = name, tyAliasParams = params, tyAliasParamKinds = anns, tyAliasRhs = rhs, tyAliasOrigin = o }) =
   perRun.value.aliasTableRef := (tyTabKey o name, (params, rhs))::perRun.value.aliasTableRef.value
+  -- #2121 / EFFECTS-SEMANTICS §6.2: an alias head's DECLARED kinds are recorded
+  -- like a data head's, so `type BoxAlias (e : Effect) a = Box e a` accepts a
+  -- row at its `e` slot.  `headRemainingKinds` still abstains on an alias
+  -- (it checks `aliasTableRef` first), so the graded-instance-head check is
+  -- unaffected; only the row-slot readers see the entry.
+  let _ = recordParamKinds o name (declParamKinds params anns)
   env
-registerData env (DNewtype { newtypeName = name, newtypeParams = params, newtypeCtor = con, newtypeFieldTy = fty, newtypeOrigin = o }) = registerVariants o env name params [Variant con (ConPos [fty])]
+registerData env (DNewtype { newtypeName = name, newtypeParams = params, newtypeParamKinds = anns, newtypeCtor = con, newtypeFieldTy = fty, newtypeOrigin = o }) = registerVariants o env name params anns [Variant con (ConPos [fty])]
 -- ⚠️ #1557 A-3.5c: THE `DInterface` ARM IS GONE, and its absence is the point.
 -- #822 registered each interface type-parameter's slot kinds here, into
 -- `ifaceParamKindsRef`, *"because every consumer must see the table BEFORE the first
@@ -16100,16 +16834,25 @@ substField subst (fn, fm) = (fn, substMono subst [] fm)
 -- id would attribute every imported type to the importer.  That is the same
 -- class of wrongness #1219 eliminated on the flat path, and it is why this unit
 -- was blocked until the decl-layer carriers landed (#1225).
-registerVariants : TyConOrigin -> TcEnv -> String -> List String -> List Variant -> TcEnv
-registerVariants o env name params variants =
-  let kinds = inferParamKinds params variants
+registerVariants : TyConOrigin -> TcEnv -> String -> List String -> List (Option KindAnn) -> List Variant -> TcEnv
+registerVariants o env name params anns variants =
+  let kinds = declParamKinds params anns
   let _ = recordParamKinds o name kinds
   -- #1119 D-2: the VARIANCE twin, registered in the same breath and from the
   -- same decl-borne identity, so the two tables cannot come to disagree about
   -- which declaration a key names.  It runs AFTER `recordParamKinds` only
   -- because reading order is irrelevant here; it must run BEFORE
   -- `addVariants` so a later declaration in the same list can compose with it.
-  let _ = recordParamPolarities o name (inferParamPolarities perRun.value.dataParamPolarityRef.value params variants)
+  -- #2112: the seed (`seedParamPolarityFixpoint`) has already run the
+  -- TRANSITIVE fixpoint for this key over every declaration it may compose
+  -- with — including PRIVATE ones an export filter later drops — so a row it
+  -- wrote is at least as tight as anything recomputed here from the table AS
+  -- IT STANDS, and must not be shadowed by a lenient single-pass recompute
+  -- prepended in front of it.  Only a key the seed never saw (a `registerData`
+  -- call outside `registerAllData`) is computed here.
+  let _ = match lookupTab (tyTabKey o name) perRun.value.dataParamPolarityRef.value
+    Some _ => ()
+    None => recordParamPolarities o name (inferParamPolarities perRun.value.dataParamPolarityRef.value params variants)
   -- #2110: the ATOM-GUARANTEE twin, registered in the same breath and from the
   -- same decl-borne identity for the same reason the polarity twin is.  Unlike
   -- that one it reads NO table, so its ordering among these three lines is free.
@@ -16145,12 +16888,53 @@ recordParamKinds o name kinds =
   -- without the index needing the list's ordering.
   perRun.value.dataParamNameIndexRef := omInsert name () perRun.value.dataParamNameIndexRef.value
 
--- A data param is KRow iff its name appears in a field's effect-tail position
--- (`<e>`); else KType (the common case).  Inferred from usage — no syntax.
-inferParamKinds : List String -> List Variant -> List Kind
-inferParamKinds params variants =
-  let tailNames = flatMap variantFieldTailNames variants
-  map (p => if contains p tailNames then KRow else KType) params
+-- ── Declared kinds (EFFECTS-SEMANTICS §6.1–§6.3, §6.8) ──────────────────
+-- A data / newtype / alias parameter is `Effect`-kinded (KRow) iff its head
+-- DECLARES it so — `data Async (e : Effect) a`.  The inference rule this
+-- replaces ("KRow iff the name appears in some field's effect tail") is
+-- retired, per §6.3's surgical rule: an UNANNOTATED parameter may be inferred
+-- at any kind that contains no `Effect`, which for a data head means KType.
+-- An unannotated parameter used as a row is a kind error, reported by
+-- `checkDeclaredKinds` at the field that demands the kind; here it is simply
+-- KType, so elaboration continues.
+declParamKinds : List String -> List (Option KindAnn) -> List Kind
+declParamKinds params anns = map kindOfAnn (padAnns params anns)
+
+-- the annotation list is positional and the same length as the parameter
+-- list; pad defensively so a short list never truncates the kinds.
+padAnns : List String -> List (Option KindAnn) -> List (Option KindAnn)
+padAnns [] _ = []
+padAnns (_::ps) (a::rest) = a :: padAnns ps rest
+padAnns (_::ps) [] = None :: padAnns ps []
+
+kindOfAnn : Option KindAnn -> Kind
+kindOfAnn (Some KindEffect) = KRow
+kindOfAnn _ = KType
+
+-- an INTERFACE parameter's slot kinds from its declared arrow kind: `Effect ->
+-- Type -> Type` is `[KRow, KType]` (the final `Type` is the result, not a
+-- slot).  An atomic annotation has no slots.
+kindAnnSlots : KindAnn -> List Kind
+kindAnnSlots (KindArrow a b) = kindAnnAtom a :: kindAnnSlots b
+kindAnnSlots _ = []
+
+kindAnnAtom : KindAnn -> Kind
+kindAnnAtom KindEffect = KRow
+kindAnnAtom _ = KType
+
+kindAnnHasEffect : KindAnn -> Bool
+kindAnnHasEffect KindEffect = True
+kindAnnHasEffect (KindArrow a b) = kindAnnHasEffect a || kindAnnHasEffect b
+kindAnnHasEffect _ = False
+
+renderKindAnn : KindAnn -> String
+renderKindAnn KindType = "Type"
+renderKindAnn KindEffect = "Effect"
+renderKindAnn (KindArrow a b) = "\{renderKindAnnAtomic a} -> \{renderKindAnn b}"
+
+renderKindAnnAtomic : KindAnn -> String
+renderKindAnnAtomic (k@(KindArrow _ _)) = "(\{renderKindAnn k})"
+renderKindAnnAtomic k = renderKindAnn k
 
 -- ── #1119 D-2 (#1098 / #1121): the VARIANCE half of `recordParamKinds` ────
 -- Sibling of `recordParamKinds` immediately above, sharing its key (`tyTabKey
@@ -16219,20 +17003,19 @@ inferParamRowAtoms params variants =
 paramRowAtomOccs : String -> Ty -> List (List Atom)
 paramRowAtomOccs p (TyVar n) = if n == p then [[]] else []
 paramRowAtomOccs _ (TyCon { tyConName = _ }) = []
-paramRowAtomOccs p (TyEffect labels (Some n) t) = (if n == p then [atomsOfWritten labels] else [])
+paramRowAtomOccs p (TyEffect labels tails t) = paramRowAtomsFor p tails labels
   ++ paramRowAtomOccs p t
-paramRowAtomOccs p (TyEffect _ None t) = paramRowAtomOccs p t
-paramRowAtomOccs p (TyRow labels (Some n) _) =
-  if n == p then
-    [atomsOfWritten labels]
-  else
-    []
-paramRowAtomOccs _ (TyRow _ None _) = []
+paramRowAtomOccs p (TyRow labels tails _) = paramRowAtomsFor p tails labels
 paramRowAtomOccs p (TyFun a b) = paramRowAtomOccs p a ++ paramRowAtomOccs p b
 paramRowAtomOccs p (TyTuple ts) = flatMap (paramRowAtomOccs p) ts
 paramRowAtomOccs p (TyApp a b) = paramRowAtomOccs p a ++ paramRowAtomOccs p b
 paramRowAtomOccs p (TyConstrained _ t) = paramRowAtomOccs p t
 paramRowAtomOccs _ _ = []
+
+-- The row's written atoms, once per tail var that IS [p] (a join names several).
+paramRowAtomsFor : String -> List String -> List (String, Option String) -> List (List Atom)
+paramRowAtomsFor p tails labels =
+  map (_ => atomsOfWritten labels) (filterList (== p) tails)
 
 -- The atoms present at EVERY occurrence, under the same subsumption relation
 -- the coverage check itself uses (`atomsEscape`, so `<IO>` at one occurrence
@@ -16370,10 +17153,6 @@ polarityAt : List Polarity -> Int -> Polarity
 polarityAt [] _ = PCo
 polarityAt (q::rest) i = if i <= 0 then q else polarityAt rest (i - 1)
 
-variantFieldTailNames : Variant -> List String
-variantFieldTailNames (Variant _ payload) =
-  flatMap effTailNames (payloadAstTypes payload)
-
 payloadAstTypes : ConPayload -> List Ty
 payloadAstTypes (ConPos tys) = tys
 payloadAstTypes (ConNamed fields _) = map fieldTyOf fields
@@ -16455,13 +17234,27 @@ kindsEq _ _ = False
 -- The scope derived STRAIGHT FROM THE DECLARATION being elaborated: the same
 -- `ifaceParamKindsOf` inference stage K's `ceParamKinds` runs, on the very methods
 -- whose signatures are about to be built.  No name, no table, no lookup — structurally unforgeable.
-declGradedScope : List String -> List IfaceMethod -> List (String, List Kind)
-declGradedScope [] _ = []
-declGradedScope (p::ps) methods =
+-- EFFECTS-SEMANTICS §6.3 / §6.8: the graded scope is now DECLARED — an
+-- interface parameter is graded iff its head writes an arrow kind with an
+-- `Effect` in it (`(f : Effect -> Type -> Type)`).  The co-occurrence inference
+-- (`ifaceParamKindsOf`) is retired as a SOURCE of kinds and survives only as
+-- the evidence `checkDeclaredKinds` uses to tell the author which parameter
+-- needed the annotation.  [anns] is positional with [typarams].
+declGradedScope : List String -> List (Option KindAnn) -> List IfaceMethod -> List (String, List Kind)
+declGradedScope [] _ _ = []
+declGradedScope (p::ps) [] methods = declGradedScope (p::ps) [None] methods
+declGradedScope (p::ps) (a::anns) methods =
   declGradedScopeAdd
     p
-    (ifaceParamKindsOf p methods)
-    (declGradedScope ps methods)
+    (ifaceParamKindsDecl a p methods)
+    (declGradedScope ps anns methods)
+
+-- an interface parameter's RESOLVED slot kinds (§6.3): the declared arrow
+-- kind's slots where one is written; otherwise the inferred ARITY with every
+-- slot at KType — an unannotated parameter is never `Effect`-kinded.
+ifaceParamKindsDecl : Option KindAnn -> String -> List IfaceMethod -> List Kind
+ifaceParamKindsDecl (Some (KindArrow a b)) _ _ = kindAnnSlots (KindArrow a b)
+ifaceParamKindsDecl _ p methods = map (_ => KType) (ifaceParamKindsOf p methods)
 
 declGradedScopeAdd : String -> List Kind -> List (String, List Kind) -> List (String, List Kind)
 declGradedScopeAdd p kinds rest
@@ -16780,7 +17573,7 @@ eagerRefs (ERangeList lo hi _) = eagerRefs lo ++ eagerRefs hi
 eagerRefs (ERangeArray lo hi _) = eagerRefs lo ++ eagerRefs hi
 eagerRefs (ESlice e0 lo hi _ _) = eagerRefs e0 ++ eagerRefs lo ++ eagerRefs hi
 eagerRefs (EBlock stmts) = flatMap eagerRefsDoStmt stmts
-eagerRefs (EDo stmts) = flatMap eagerRefsDoStmt stmts
+eagerRefs (EDo _ stmts) = flatMap eagerRefsDoStmt stmts
 eagerRefs (EAnnot e0 _) = eagerRefs e0
 eagerRefs (EHeadAnnot e0 _) = eagerRefs e0
 eagerRefs (EStringInterp parts) = flatMap eagerRefsInterp parts
@@ -18296,7 +19089,7 @@ rewriteArgScoped rw bound (EMatch e0 arms) =
   EMatch (rewriteArgScoped rw bound e0) (map (rewriteArgArm rw bound) arms)
 rewriteArgScoped rw bound (EBlock stmts) =
   EBlock (rewriteArgStmts rw bound stmts)
-rewriteArgScoped rw bound (EDo stmts) = EDo (rewriteArgStmts rw bound stmts)
+rewriteArgScoped rw bound (EDo d stmts) = EDo d (rewriteArgStmts rw bound stmts)
 -- non-binder composites: recurse children with the same bound
 rewriteArgScoped rw bound (ELoc l e) = ELoc l (rewriteArgScoped rw bound e)
 rewriteArgScoped rw bound (EDoOrigin l e) =
@@ -20561,7 +21354,7 @@ insertMethodIfaceParams ((DAttrib _ d)::rest) acc =
   insertMethodIfaceParams rest (insertMethodIfaceParams [d] acc)
 -- #822: the graded scope is computed ONCE per declaration — the union over ALL of this
 -- interface's methods — and threaded in, never re-derived per method.
-insertMethodIfaceParams ((DInterface { name, typarams, methods, ifaceOrigin, ... })::rest) acc = insertMethodIfaceParams rest (insertIfaceMethodsAcc IfaceRef { irName = name, irOrigin = ifaceOrigin } typarams (declGradedScope typarams methods) methods acc)
+insertMethodIfaceParams ((DInterface { name, typarams, typaramKinds, methods, ifaceOrigin, ... })::rest) acc = insertMethodIfaceParams rest (insertIfaceMethodsAcc IfaceRef { irName = name, irOrigin = ifaceOrigin } typarams (declGradedScope typarams typaramKinds methods) methods acc)
 insertMethodIfaceParams (_::rest) acc = insertMethodIfaceParams rest acc
 
 insertIfaceMethodsAcc : IfaceRef -> List String -> List (String, List Kind) -> List IfaceMethod -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind)) -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind))
@@ -20636,7 +21429,7 @@ insertMethodIdents : List Decl -> (OrdMap (List (Ident, (IfaceRef, List String, 
 insertMethodIdents [] acc = acc
 insertMethodIdents ((DAttrib _ d)::rest) acc =
   insertMethodIdents rest (insertMethodIdents [d] acc)
-insertMethodIdents ((DInterface { name, typarams, methods, ifaceOrigin, ... })::rest) acc = insertMethodIdents rest (insertIfaceMethodIdents name typarams (declGradedScope typarams methods) ifaceOrigin methods acc)
+insertMethodIdents ((DInterface { name, typarams, typaramKinds, methods, ifaceOrigin, ... })::rest) acc = insertMethodIdents rest (insertIfaceMethodIdents name typarams (declGradedScope typarams typaramKinds methods) ifaceOrigin methods acc)
 insertMethodIdents (_::rest) acc = insertMethodIdents rest acc
 
 insertIfaceMethodIdents : String -> List String -> List (String, List Kind) -> TyConOrigin -> List IfaceMethod -> (OrdMap (List (Ident, (IfaceRef, List String, Ty, List (String, List Kind)))), List String) -> (OrdMap (List (Ident, (IfaceRef, List String, Ty, List (String, List Kind)))), List String)
@@ -26207,6 +27000,9 @@ checkBodyImpl seed mode prog0 =
   -- predicate (rowArgNames) reads that table to distinguish a row-kinded ctor arg
   -- (`Async e a`, pins the effect) from a type-kinded one (`List e`, does not).
   let _ = checkUndeterminedRetEffVars prog
+  -- EFFECTS-SEMANTICS §6.4/§6.5: declared-kind consistency.  Same placement — the
+  -- slot-kind reads consult the table `dataEnv` just populated.
+  let _ = checkDeclaredKinds prog
   -- #822: instance-head kind check for graded interfaces.  Same placement rationale
   -- as the line above for the HEAD-constructor half, which still reads
   -- `dataParamKindsRef` that `dataEnv` above has just populated.
@@ -26759,11 +27555,11 @@ inferOneIfaceDefaults env (DAttrib _ d) = inferOneIfaceDefaults env d
 -- `No impl of Foldable for Map` obligation.  The interface scheme is shadow-free.
 -- Also extend env with these schemes so PEER-method refs in a default body
 -- resolve to the interface methods (oracle's env_with_methods), not user shadows.
-inferOneIfaceDefaults env (DInterface { name, typarams, methods, ... }) =
+inferOneIfaceDefaults env (DInterface { name, typarams, typaramKinds, methods, ... }) =
   -- #822: derived from THIS declaration, not from a name key (declGradedScope), and
   -- threaded down so the default bodies see the same Row slots the schemes were built
   -- with.  Computed ONCE per interface rather than per method.
-  let dscope = declGradedScope typarams methods
+  let dscope = declGradedScope typarams typaramKinds methods
   let ifaceSchemes = methodSchemesPure dscope methods
   inferDefaultMethods (extendVars env ifaceSchemes) name dscope typarams methods
 inferOneIfaceDefaults _ _ = ()
@@ -26848,12 +27644,18 @@ inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (Metho
   -- whole body inference — which is broader than any one unify, and is why no
   -- unify-level failure signal could have answered this: `inferDefaultMethodBody`
   -- also pushes T-EFFECT-LAUNDER, and contains its own gated unify.
+  -- #821: NO rigid window for a default body (mirrors the empty eager set it
+  -- passes to the D-3 check).  The default's expected type is an instantiated
+  -- scheme whose unannotated arrows carry FRESH rows, and only the method's
+  -- NAMED effect variables may be rigid; marking every arrow row rigid made an
+  -- ordinary default body (`loud x = "<" ++ speak x ++ ">"`) a join mismatch
+  -- in the elaboration pass.  Joins inside default bodies are a residual.
   let (bodyErred, actualTy) = erredDuring (_ => inferDefaultMethodBody mname subject defLoc env (fst inst) pats body)
   let _ = if bodyErred then
     ()
   else
     let _ = unify expected2 actualTy
-    checkImplEffVarRigidity subject dscope mty effMap2 False defLoc
+    checkImplEffVarRigidity subject dscope mty effMap2 False [] defLoc
   let addedObls = wWindow perRun.value.implObls oblN0
   let addedCallObls = callOblsWindow callN0
   let _ = checkDefaultMethodRigidity
@@ -28230,7 +29032,7 @@ reqTyToMono sub (TyConstrained _ t) = reqTyToMono sub t
 -- same diagnostic rather than let #997's new syntax spelling reach it in
 -- silence too.
 reqTyToMono _ (TyRow labels tail loc) =
-  let _ = pushTypeErrorOnceAt "T-ROW-KIND-MISMATCH" loc (rowKindMismatchMsg labels tail)
+  let _ = pushTypeErrorOnceAt "T-EFFECT-KIND-MISMATCH" loc (rowKindMismatchMsg labels tail)
   tconBuiltin "Unit"
 
 -- Check each substituted requirement with the SAME accept/reject logic as a
@@ -28713,7 +29515,17 @@ inferImplMethod env allProg iface implTvMap headMonos (ImplMethod mname pats bod
     -- laundering at the CALL site remains #784's concern.
     let effMap = freshEffMap (dedup (effTailNames mty ++ rowArgNamesIn gscope mty))
     let expected = fromAstTypeE effMap (baseMap ++ extraMap) mty
-    let actual = inferClauses env [(pats, body)]
+    -- #821: the method's effect variables are RIGID for the body — two of them
+    -- meeting in an ambient row join rather than being identified.
+    let savedRigid = perRun.value.rigidEffvarsRef.value
+    perRun.value.rigidEffvarsRef := map effvarIdOf effMap
+    -- #821/#825: the clause parameters are CHECKED against the declared
+    -- domains (Phase 73's peel) rather than inferred fresh, so a callback's
+    -- row IS the method's rigid `e` inside the body.  Performing it under a
+    -- pure stored arrow then meets `<>` as a rigid leftover — the #825 launder
+    -- becomes a mismatch — and two rigid rows performed together JOIN.
+    let actual = inferLamChecked env (expectedParamTypes (normalize expected) (listLen pats)) pats body
+    perRun.value.rigidEffvarsRef := savedRigid
     let launderLoc = orElseLoc (implBodyLoc body) (firstTyLoc mty)
     -- #803 (S0): bound the impl body's latent effect on EVERY arrow down to the method's
     -- DECLARED return by the effect the method declares at that same arrow.  An effect an
@@ -28743,6 +29555,8 @@ inferImplMethod env allProg iface implTvMap headMonos (ImplMethod mname pats bod
     let launderMark = wMark perRun.value.absorptions
     let declArrows = allArrowEffs expected
     let actualArrows = allArrowEffs actual
+    -- D-3 (#1095): read BEFORE the unify below closes the declared-pure arrows.
+    let eagerIdx = eagerIndexOnlyVars gscope mty effMap actualArrows expected actual
     let _ = unify expected actual
     let launderEsc = launderEscapeFromLog declArrows actualArrows (wWindow perRun.value.absorptions launderMark)
     -- True iff the launder query flagged this body — the post-unify effect-atom half
@@ -28784,7 +29598,7 @@ inferImplMethod env allProg iface implTvMap headMonos (ImplMethod mname pats bod
     -- the subject in a diagnostic and is compared against `pred.iface.irName` in
     -- `checkSurvivorDispatchMonos`.  Widening it to an identity is a separate
     -- question from #1647's signature LOOKUP and is deliberately not this slice's.
-    let _ = checkImplMethodRigidity iface.irName mname mty headMonos extraMap effMap addedObls addedCallObls launderFlagged gscope launderLoc
+    let _ = checkImplMethodRigidity iface.irName mname mty headMonos extraMap effMap addedObls addedCallObls launderFlagged gscope eagerIdx launderLoc
     -- #518 (S0, silent wrongness): PLAN.md #11 Num defaulting NEVER RAN over an impl
     -- method body — this path is not a let-group, so nothing grounded its ambiguous
     -- Num vars.  A literal consumed entirely inside the body (`t _ = s [1, 2]`) left
@@ -28996,7 +29810,7 @@ effectLaunderMsg iface mname escaping = "Effect laundering in impl of '\{mname}'
 --                    preserving today's values exactly (impl: the real threaded flag;
 --                    default's own separate call: False) — 2a does NOT touch the
 --                    double-report.
-checkMethodRigidityCore : String -> String -> Ty -> List Mono -> List (String, Mono) -> List String -> List UObligation -> List (IfaceRef, List Mono, Option Loc) -> Option (List (String, Ref Effvar), Bool, List (String, List Kind)) -> Option Loc -> Unit
+checkMethodRigidityCore : String -> String -> Ty -> List Mono -> List (String, Mono) -> List String -> List UObligation -> List (IfaceRef, List Mono, Option Loc) -> Option (List (String, Ref Effvar), Bool, List (String, List Kind), List String) -> Option Loc -> Unit
 checkMethodRigidityCore subject iface mty headMonos extraMap ownTyparams addedObls addedCallObls effInside loc =
   let pinned = map fst (filterList (p => not (isUnboundTvar (snd p))) extraMap)
   let _ = if isNonEmptyL pinned then pushTypeErrorOnceAt "T-IMPL-TOO-SPECIFIC" loc (pinsTyvarMsg subject mty pinned)
@@ -29009,12 +29823,35 @@ checkMethodRigidityCore subject iface mty headMonos extraMap ownTyparams addedOb
   let _ = checkSurvivorObligations subject iface ownTyparams mty extraMap addedObls loc
   let _ = checkSurvivorCallObligations subject iface ownTyparams mty extraMap addedCallObls loc
   match effInside
-    Some (effMap, launderFlagged, gscope) =>
-      checkImplEffVarRigidity subject gscope mty effMap launderFlagged loc
+    Some (effMap, launderFlagged, gscope, eager) =>
+      -- #817 carve-out RETIRED (#823): a method effect variable may no longer
+      -- alias an INSTANCE-HEAD row parameter (`impl Mappable (Async e)`, whose
+      -- `Suspend` arm stored the callback and forced method `e'` ~ head `e`,
+      -- charging the effect at build time and performing it at force time).
+      -- With the `Deferred*` family the head is the bare constructor and the
+      -- callback row rides the index, so the identification is never needed;
+      -- the type-variable half never had the exception.
+      let _ = if anyContainsI (effVarTailIds effMap) (flatMap monoIndexEffvarIds headMonos) then
+        pushTypeErrorOnceAt "T-IMPL-TOO-SPECIFIC" loc (aliasesHeadRowMsg subject mty)
+      else
+        ()
+      checkImplEffVarRigidity subject gscope mty effMap launderFlagged eager loc
     None => ()
 
-checkImplMethodRigidity : String -> String -> Ty -> List Mono -> List (String, Mono) -> List (String, Ref Effvar) -> List UObligation -> List (IfaceRef, List Mono, Option Loc) -> Bool -> List (String, List Kind) -> Option Loc -> Unit
-checkImplMethodRigidity iface mname mty headMonos extraMap effMap addedObls addedCallObls launderFlagged gscope loc = checkMethodRigidityCore (implSubject iface mname) iface mty headMonos extraMap [] addedObls addedCallObls (Some (effMap, launderFlagged, gscope)) loc
+-- every row cell's id reachable in a head type — `impl I (Async e)` carries
+-- its `e` as a `TEff` argument of the head application.
+monoIndexEffvarIds : Mono -> List Int
+monoIndexEffvarIds m = match normalize m
+  TApp a b => monoIndexEffvarIds a ++ monoIndexEffvarIds b
+  TFun a r b => monoIndexEffvarIds a ++ rowTailId r ++ monoIndexEffvarIds b
+  TEff r => rowTailId r
+  _ => []
+
+aliasesHeadRowMsg : String -> Ty -> String
+aliasesHeadRowMsg subject mty = "\{subject} identifies a method effect variable with the instance head's own effect-row parameter: the declared type '\{ppTy mty}' promises every caller its own choice of that variable, but this body ties it to the row the head fixes, so an effect registered at build time would be charged there and performed later, at force time, from a value whose type no longer mentions it. Implement the Deferred* interfaces for an effect-indexed constructor instead (the callback's row then rides the index), or keep the method's effect variable independent of the head's."
+
+checkImplMethodRigidity : String -> String -> Ty -> List Mono -> List (String, Mono) -> List (String, Ref Effvar) -> List UObligation -> List (IfaceRef, List Mono, Option Loc) -> Bool -> List (String, List Kind) -> List String -> Option Loc -> Unit
+checkImplMethodRigidity iface mname mty headMonos extraMap effMap addedObls addedCallObls launderFlagged gscope eager loc = checkMethodRigidityCore (implSubject iface mname) iface mty headMonos extraMap [] addedObls addedCallObls (Some (effMap, launderFlagged, gscope, eager)) loc
 
 -- B1 (adversarial review): the GENERIC default-method path is the checking seam
 -- for a cross-module impl that inherits an interface default (fillImplDefaults
@@ -29194,13 +30031,14 @@ anyContainsI (x::xs) ys = containsI x ys || anyContainsI xs ys
 -- `Async e`.  Resolution is design-scoped (#817); until then this check
 -- preserves main's behavior for that channel exactly.  (The TYPE-var half has
 -- no such carve-out: a method type var may never alias an impl-head type var.)
-checkImplEffVarRigidity : String -> List (String, List Kind) -> Ty -> List (String, Ref Effvar) -> Bool -> Option Loc -> Unit
-checkImplEffVarRigidity subject scope mty effMap launderFlagged loc =
+checkImplEffVarRigidity : String -> List (String, List Kind) -> Ty -> List (String, Ref Effvar) -> Bool -> List String -> Option Loc -> Unit
+checkImplEffVarRigidity subject scope mty effMap launderFlagged eager loc =
   let occs = effVarOccAtoms mty ++ map (n => (n, [])) (rowArgNamesIn scope mty)
   let _ = if launderFlagged then
     ()
   else
     checkEffVarAtoms subject occs effMap loc
+  let _ = checkIndexOnlyEffVarsOpen subject effMap loc eager
   -- ⚠️ DEFERRED-PERFORMANCE residual (round-2 break 4; tracked, NOT enforced):
   -- a method effect var forced CLOSED post-unify is in truth a PIN — an impl
   -- that applies its <e>-callback inside a value whose declared row is pure
@@ -29216,6 +30054,139 @@ checkImplEffVarRigidity subject scope mty effMap launderFlagged loc =
     pushTypeErrorOnceAt "T-IMPL-TOO-SPECIFIC" loc (collapsesEffvarsMsg subject mty)
   else
     ()
+
+-- ── D-3 (#1095): a result-INDEX occurrence is a PROMISE, not a CHARGE ──────
+-- `checkArgEffVarCoverage` lets a row-kinded occurrence in the method's RESULT
+-- (`f e b`) discharge the argument-only obligation the callback's `<e>` raises.
+-- That is right for the DECLARATION — `f e b` says "performs <e> when forced"
+-- — but it says nothing about the CALL, so an impl that APPLIES its callback
+-- (`gmap g (Done a) = Done (g a)`) performs <e> at call time on an arrow the
+-- signature declares pure, and nothing charges it: `check` is green and a
+-- value typed `Int` prints (both engines).  The declaration cannot see it
+-- (the caller sees only the index) and the #803 per-arrow bound cannot see it
+-- (applying the callback contributes the VARIABLE `e`, never an atom).  The
+-- seam with the information intact is the IMPL BODY: under a signature whose
+-- only non-argument occurrences of `e` are indices, the body must leave `e`
+-- OPEN.  Performing it — or forcing an `e`-indexed argument — meets the
+-- declared-pure arrow and CLOSES `e := <>`, which is exactly the pin
+-- `effVarTailIds` documents as "the safe direction" for a var the method's
+-- own arrow charges, and is a launder for one it does not.  Storing the
+-- callback (`Susp (u => g a)`) unifies `e` with the container's own thunk row
+-- and leaves it open, so the deferred arm the spec requires stays legal.
+--
+-- Scoped to INDEX-ONLY variables on purpose: a var the method's own arrow
+-- charges (`map : (a -> <e> b) -> f a -> <e> f b`) may still close — the
+-- compiler's own `impl Mappable Parser` stores its callback under a pure
+-- arrow and does, which is #825's channel, out of scope here and pinned.
+-- ⚠️ CLOSED ALONE IS NOT THE SIGNAL.  An index-only variable can also close
+-- through an INDEX unification with no effect performed: `deferAp mf ma =
+-- deferThen mf (g => deferMap g ma)` maps a PURE `g` (from `f e (a -> b)`,
+-- whose arrow is `<>`), so `deferMap g ma : f <> b` meets the result `f e b`
+-- and pins `e := <>` — honest, and sound (the value built carries `mf`'s real
+-- row).  What distinguishes the eager arm is that the body PERFORMS `e` on one
+-- of the method's own arrows.  So [eager] is computed at the impl seam from the
+-- body's arrow rows BEFORE they are unified with the declared (pure) arrows —
+-- the same pre-unify snapshot the #803 launder query takes — and only a var in
+-- that set is reported here.  (An interface DEFAULT body has no such snapshot
+-- available at its rigidity read and passes `[]`: a residual, not a rule.)
+checkIndexOnlyEffVarsOpen : String -> List (String, Ref Effvar) -> Option Loc -> List String -> Unit
+checkIndexOnlyEffVarsOpen subject effMap loc eager =
+  checkIndexOnlyGo subject effMap loc eager
+
+-- the index-only vars of [mty] that some body arrow row (pre-unify) carries as
+-- its tail — i.e. the body performs them at call time.
+-- ⚠️ THE BODY'S CELLS ARE NOT THE SIGNATURE'S CELLS.  At the impl seam the
+-- clause parameters are inferred fresh (`g : a -> <ρ> b`), and `ρ` is only
+-- identified with the declared `<e>` by the final `unify expected actual`.
+-- So the pre-unify arrow rows carry `ρ` (or whatever it has been linked to
+-- meanwhile), never `e` itself.  [expected]/[actual] are walked in parallel
+-- to pair each declared row cell with the actual cell at the same position
+-- (`pairRowCells`), and the scan asks whether any of a var's actual
+-- counterparts is a tail of some body arrow row.
+eagerIndexOnlyVars : List (String, List Kind) -> Ty -> List (String, Ref Effvar) -> List EffRow -> Mono -> Mono -> List String
+eagerIndexOnlyVars scope mty effMap actualArrows expected actual = match indexOnlyEffVars scope mty
+  [] => []
+  idx =>
+    let tails = flatMap rowTailId actualArrows
+    let pairs = pairRowCells expected actual
+    filterList (v => effVarCellPerformed v effMap pairs tails) idx
+
+-- (declared cell id, actual cell id) for every row found at the same
+-- structural position of the two types — arrow latent rows and index rows,
+-- under applications and arrows.  Ids are read AFTER normalization, so a cell
+-- already linked during body inference reports its live representative.
+pairRowCells : Mono -> Mono -> List (Int, Int)
+pairRowCells d a = match normalize d
+  TFun d1 dr d2 => match normalize a
+    TFun a1 ar a2 => pairRows dr ar ++ pairRowCells d1 a1 ++ pairRowCells d2 a2
+    _ => []
+  TApp d1 d2 => match normalize a
+    TApp a1 a2 => pairRowCells d1 a1 ++ pairRowCells d2 a2
+    _ => []
+  TEff dr => match normalize a
+    TEff ar => pairRows dr ar
+    _ => []
+  _ => []
+
+pairRows : EffRow -> EffRow -> List (Int, Int)
+pairRows dr ar = match rowTailId dr
+  [did] => map (aid => (did, aid)) (rowTailId ar)
+  _ => []
+
+effVarCellPerformed : String -> List (String, Ref Effvar) -> List (Int, Int) -> List Int -> Bool
+effVarCellPerformed v effMap pairs tails = match lookupAssoc v effMap
+  Some cell =>
+    -- the cell's LIVE representative(s): a linked cell reports -1 from
+    -- `effvarId`, and the pairs/tails were recorded through normalization.
+    let dids = rowTailId (EffRow [] (Some cell))
+    anyList (did => containsI did tails || anyList (p => fst p == did && containsI (snd p) tails) pairs) dids
+  None => False
+
+-- every unbound tail id the row reaches — a join contributes each member.
+rowTailId : EffRow -> List Int
+rowTailId row = map effvarId (snd (rowFlat row))
+
+checkIndexOnlyGo : String -> List (String, Ref Effvar) -> Option Loc -> List String -> Unit
+checkIndexOnlyGo _ _ _ [] = ()
+checkIndexOnlyGo subject effMap loc (v::rest) =
+  -- [eager] already holds only the vars the body performed on a method arrow
+  -- (`eagerIndexOnlyVars`); whether the cell then closed (the pre-#821 unify)
+  -- or the ambient became a join (#821) is not the signal, the performing is.
+  let _ = pushTypeErrorOnceAt "T-EFFECT-INDEX-EAGER" loc (indexEagerMsg subject v)
+  checkIndexOnlyGo subject effMap loc rest
+
+-- the method effect vars that ride an ARGUMENT (a callback row or a row-kinded
+-- argument) and occur on NO row the method's own type charges — every
+-- non-argument occurrence is a result index.
+indexOnlyEffVars : List (String, List Kind) -> Ty -> List String
+indexOnlyEffVars scope mty =
+  let argNames = dedup (map fst (methodEffArgOccs scope mty))
+  let charged = map fst (methodEffChargedOccs mty)
+  filterList (v => not (contains v charged)) argNames
+
+-- effect-var occurrences on rows the method's type CHARGES: each spine arrow's
+-- own latent row, and every arrow row written inside the final return type.
+-- The `effVarOccAtoms` half of `methodEffRetOccs` minus the two INDEX forms —
+-- the row-kinded-slot padding (`rowArgAtomsIn`) and a bare row written in a
+-- slot (`TyRow`, `Box <Stdout | e> Unit`) — which promise rather than charge.
+methodEffChargedOccs : Ty -> List (String, List Atom)
+methodEffChargedOccs (TyConstrained _ t) = methodEffChargedOccs t
+methodEffChargedOccs (TyEffect labels tails t) = occsOfTails tails labels
+  ++ methodEffChargedOccs t
+methodEffChargedOccs (TyFun _ b) = methodEffChargedOccs b
+methodEffChargedOccs t = effVarChargedOccs t
+
+effVarChargedOccs : Ty -> List (String, List Atom)
+effVarChargedOccs (TyEffect labels tails t) = occsOfTails tails labels
+  ++ effVarChargedOccs t
+effVarChargedOccs (TyApp a b) = effVarChargedOccs a ++ effVarChargedOccs b
+effVarChargedOccs (TyFun a b) = effVarChargedOccs a ++ effVarChargedOccs b
+effVarChargedOccs (TyTuple ts) = flatMap effVarChargedOccs ts
+effVarChargedOccs (TyConstrained _ t) = effVarChargedOccs t
+effVarChargedOccs _ = []
+
+indexEagerMsg : String -> String -> String
+indexEagerMsg subject evar = "\{subject} performs the effect variable <\{evar}> at call time, but the method's signature charges <\{evar}> only in a result INDEX (`f \{evar} …`), which promises the effect when the value is later forced, not now. The body applies its <\{evar}>-callback (or forces an <\{evar}>-indexed argument) on an arrow the signature declares pure, so a caller's effectful callback would run from a call typed pure. Defer it — store the callback under the container's own <\{evar}> thunk (e.g. `Suspend (u => g a)`) — or charge the method's own arrow (`-> <\{evar}> …`)."
 
 checkEffVarAtoms : String -> List (String, List Atom) -> List (String, Ref Effvar) -> Option Loc -> Unit
 checkEffVarAtoms _ _ [] _ = ()
@@ -29244,17 +30215,15 @@ effVarOccEscape n instAtoms ((m, declAtoms)::rest) =
 -- rows, data-arg rows).  Bare row-kinded ctor-arg slots (`Async e a`) carry no
 -- written atoms and are contributed by rowArgNames at the call site.
 effVarOccAtoms : Ty -> List (String, List Atom)
-effVarOccAtoms (TyEffect labels (Some n) t) =
-  (n, atomsOfWritten labels) :: effVarOccAtoms t
-effVarOccAtoms (TyEffect _ None t) = effVarOccAtoms t
+effVarOccAtoms (TyEffect labels tails t) = occsOfTails tails labels
+  ++ effVarOccAtoms t
 -- A bare row atom (#997) is a named-tail row occurrence exactly like
 -- `TyEffect` above, just with no wrapped type. Without this arm, a KRow
 -- ctor-arg written as `Box <Stdout | e> Int` was invisible to
 -- `checkImplEffVarRigidity`'s coverage set, so the impl-body T-EFFECT-LAUNDER
 -- check over-fired ("not sourced from any argument") on an argument that
 -- demonstrably DOES declare the atom.
-effVarOccAtoms (TyRow labels (Some n) _) = [(n, atomsOfWritten labels)]
-effVarOccAtoms (TyRow _ None _) = []
+effVarOccAtoms (TyRow labels tails _) = occsOfTails tails labels
 effVarOccAtoms (TyApp a b) = effVarOccAtoms a ++ effVarOccAtoms b
 effVarOccAtoms (TyFun a b) = effVarOccAtoms a ++ effVarOccAtoms b
 effVarOccAtoms (TyTuple ts) = flatMap effVarOccAtoms ts
@@ -29267,7 +30236,9 @@ effVarOccAtoms _ = []
 effVarTailIds : List (String, Ref Effvar) -> List Int
 effVarTailIds [] = []
 effVarTailIds ((_, cell)::rest) = match effrowNorm (EffRow [] (Some cell))
-  EffRow _ (Some t) => effvarId t :: effVarTailIds rest
+  -- #821: a var whose cell became a JOIN is still its own (unidentified)
+  -- variable; only a plain single surviving tail counts toward the dup set.
+  EffRow _ (Some t) => if isJoinCell t then effVarTailIds rest else effvarId t :: effVarTailIds rest
   EffRow _ None => effVarTailIds rest
 
 quotedNames : List String -> String
@@ -29422,12 +30393,13 @@ ifaceMethodTy ((DAttrib _ d)::rest) iface mname = match ifaceMethodTy [d] iface 
 -- the interface, and with a bare `name == iface` the joint multi-module decl list makes
 -- "first" mean "whichever module the loader happened to order first", which is how an
 -- impl body came to be read under a same-spelled OTHER module's method type.
-ifaceMethodTy ((DInterface { name, typarams, methods, ifaceOrigin, ... })::rest) iface mname
+ifaceMethodTy ((DInterface { name, typarams, typaramKinds, methods, ifaceOrigin, ... })::rest) iface mname
   | sameIfaceDecl IfaceRef {
     irName = name,
     irOrigin = ifaceOrigin,
   } iface = match methodTyOf mname methods
-    Some ty => Some (typarams, ty, declGradedScope typarams methods)
+    Some ty =>
+      Some (typarams, ty, declGradedScope typarams typaramKinds methods)
     None => ifaceMethodTy rest iface mname
   | otherwise = ifaceMethodTy rest iface mname
 ifaceMethodTy (_::rest) iface mname = ifaceMethodTy rest iface mname
@@ -30470,8 +31442,8 @@ ifaceMethodSchemes [] = []
 ifaceMethodSchemes (d::rest) = declIfaceMethods d ++ ifaceMethodSchemes rest
 
 declIfaceMethods : Decl -> List (String, Scheme)
-declIfaceMethods (DInterface { name, typarams, methods, ... }) =
-  methodSchemes (declGradedScope typarams methods) typarams methods
+declIfaceMethods (DInterface { name, typarams, typaramKinds, methods, ... }) =
+  methodSchemes (declGradedScope typarams typaramKinds methods) typarams methods
 declIfaceMethods _ = []
 
 -- #1351 L1 (EXPAND): the IDENTITY-CARRYING sibling of `ifaceMethodSchemes` above.
@@ -30598,14 +31570,14 @@ numLitFromIntParamsOf (d::rest) = match numLitFromIntParamsDecl d
 -- `IfaceRef`, same typarams, same declared `Ty`, same `declGradedScope`.
 numLitFromIntParamsDecl : Decl -> Option (IfaceRef, List String, Ty, List (String, List Kind))
 numLitFromIntParamsDecl (DAttrib _ d) = numLitFromIntParamsDecl d
-numLitFromIntParamsDecl (DInterface { name, typarams, methods, ifaceOrigin, ... })
+numLitFromIntParamsDecl (DInterface { name, typarams, typaramKinds, methods, ifaceOrigin, ... })
   | sameIfaceDecl IfaceRef {
     irName = name,
     irOrigin = ifaceOrigin,
   } (builtinIfaceRef BNum) = pickIfaceMethodParams IfaceRef {
     irName = name,
     irOrigin = ifaceOrigin,
-  } typarams (declGradedScope typarams methods) "fromInt" methods
+  } typarams (declGradedScope typarams typaramKinds methods) "fromInt" methods
   | otherwise = None
 numLitFromIntParamsDecl _ = None
 
@@ -30627,7 +31599,7 @@ registerMethodIfaceParamsAll (d::rest) =
 
 registerMethodIfaceParamsDecl : Decl -> Unit
 registerMethodIfaceParamsDecl (DAttrib _ d) = registerMethodIfaceParamsDecl d
-registerMethodIfaceParamsDecl (DInterface { name, typarams, methods, ifaceOrigin, ... }) = registerMethodIfaceParamsMethods IfaceRef { irName = name, irOrigin = ifaceOrigin } typarams (declGradedScope typarams methods) methods
+registerMethodIfaceParamsDecl (DInterface { name, typarams, typaramKinds, methods, ifaceOrigin, ... }) = registerMethodIfaceParamsMethods IfaceRef { irName = name, irOrigin = ifaceOrigin } typarams (declGradedScope typarams typaramKinds methods) methods
 registerMethodIfaceParamsDecl _ = ()
 
 -- #822: [scope] — this interface's graded typarams, computed ONCE from THIS declaration
@@ -30836,8 +31808,19 @@ initialEnv =
 -- filtering `declEnvRowPolarityEntries`' `kindPublicDataDecl` arm already
 -- applies, a pre-existing scope question and not this order-sensitivity fix.
 registerAllData : TcEnv -> List Decl -> TcEnv
-registerAllData env ds =
-  let _ = seedParamPolarityFixpoint ds
+registerAllData env ds = registerAllDataScoped env ds ds
+
+-- #2112: register [ds], but run the polarity fixpoint over [allDs] — the
+-- WHOLE declaration list [ds] was filtered from — and keep only [ds]'s own
+-- keys.  `appendDataUniverse` registers a module's PUBLIC data into the
+-- universe; a public wrapper over a PRIVATE write/contra-channel type must
+-- still compose against the private declaration (the fixpoint's INPUT set is
+-- not its EXPORT set — the same split `declEnvRowPolarityEntries` makes on the
+-- cross-module chain), or the universe holds a lenient `PCo` row for the
+-- wrapper that every importer then reads first.
+registerAllDataScoped : TcEnv -> List Decl -> List Decl -> TcEnv
+registerAllDataScoped env ds allDs =
+  let _ = seedParamPolarityFixpointScoped ds allDs
   registerAllDataGo env ds
 
 registerAllDataGo : TcEnv -> List Decl -> TcEnv
@@ -30847,10 +31830,44 @@ registerAllDataGo env (d::rest) = registerAllDataGo (registerData env d) rest
 -- Prepends, exactly as `recordParamPolarities` does, so the seed layers over
 -- whatever the universe/import ladder already put in the ref rather than
 -- replacing it.
-seedParamPolarityFixpoint : List Decl -> Unit
-seedParamPolarityFixpoint ds =
+-- #2112: the fixpoint runs over [allDs]; only the keys declared in [ds] are
+-- kept.  When the two lists are the same list nothing is filtered.
+--
+-- A declaration the table ALREADY answers for is not recomputed.  The
+-- cross-module chain (`declEnvRowPolarityEntries`) computed an imported
+-- public wrapper's row over its OWN module, private siblings included; here
+-- those siblings are out of sight (filtered from the universe), so a recompute
+-- could only be more lenient, and in-round it would shadow the chain's row
+-- for every own declaration composing against it.  The universe is
+-- authoritative for what it holds; this seed adds only what it does not.
+seedParamPolarityFixpointScoped : List Decl -> List Decl -> Unit
+seedParamPolarityFixpointScoped ds allDs =
   let cur = perRun.value.dataParamPolarityRef.value
-  perRun.value.dataParamPolarityRef := declEnvPolarityEntriesFix cur ds ++ cur
+  let fresh = filterList (d => not (declHasPolarityEntry cur d)) allDs
+  let full = declEnvPolarityEntriesFix cur fresh
+  let keys = declPolarityKeys ds
+  let kept = filterList (e => tabKeyElem keys (fst e)) full
+  perRun.value.dataParamPolarityRef := kept ++ cur
+
+declHasPolarityEntry : List (TabKey, List Polarity) -> Decl -> Bool
+declHasPolarityEntry tab d = match declPolarityKeys [d]
+  [] => False
+  k::_ => match lookupTab k tab
+    Some _ => True
+    None => False
+
+-- every key `declEnvPolarityEntries` would record for [ds], public or not —
+-- the input-side counterpart of `polarityPublicKeys`.
+declPolarityKeys : List Decl -> List TabKey
+declPolarityKeys [] = []
+declPolarityKeys ((DAttrib _ d)::rest) = declPolarityKeys (d::rest)
+declPolarityKeys ((DData { dataName = n, dataOrigin = o })::rest) =
+  tyTabKey o n :: declPolarityKeys rest
+declPolarityKeys ((DNewtype { newtypeName = n, newtypeOrigin = o })::rest) =
+  tyTabKey o n :: declPolarityKeys rest
+declPolarityKeys ((DTypeAlias { tyAliasName = n, tyAliasOrigin = o })::rest) =
+  tyTabKey o n :: declPolarityKeys rest
+declPolarityKeys (_::rest) = declPolarityKeys rest
 
 -- ── dependency-ordered, SCC-merged letrec processing ──────────────────────
 -- The prelude has forward references and mutual recursion throughout, so groups
@@ -31555,7 +32572,15 @@ inferClauseEff env peel (pats, body) =
   let _ = peelOntoParams peel (fst pr) pats
   let saved = perRun.value.curEffect.value
   perRun.value.curEffect := (openRow ())
-  let bodyTy = infer (extendLocalVars env (snd pr)) body
+  -- #2109: a signed clause's body is inferred AGAINST the signature's result
+  -- type (result-first), so a fresh construction at a non-covariant slot meets
+  -- the declaration while its own slot is still a metavariable.  See
+  -- `inferExpected`.  An unsigned clause is byte-identical to before.
+  let bodyTy = match peel
+    Some src => match resultAfterArrows (listLen pats) src
+      Some expected => inferExpected (extendLocalVars env (snd pr)) body expected
+      None => infer (extendLocalVars env (snd pr)) body
+    None => infer (extendLocalVars env (snd pr)) body
   let bodyEff = perRun.value.curEffect.value
   perRun.value.curEffect := saved
   (arrowsWithLastEffect (fst pr) bodyEff bodyTy, effrowLabels bodyEff)
@@ -31592,14 +32617,15 @@ checkEffectEscape sigs m effs = match omLookup m driverState.value.sigTyMapRef.v
 -- #797: [tail] renders alongside the atoms so an argument-carried open row —
 -- the one shape that still reaches this message with a tail — reports the row
 -- that was actually written (`<e>`, `<Stdout | e>`) instead of the false `<>`.
--- A closed row passes `None` and renders exactly as before.
-effectEscapeMsg : String -> List Atom -> Option String -> List Atom -> String
+-- A closed row passes no tail at all and renders exactly as before.
+effectEscapeMsg : String -> List Atom -> List String -> List Atom -> String
 effectEscapeMsg name declared tail extras = "Function '\{name}' declared with \{renderDeclaredRow declared tail} but also performs <\{renderAtoms extras}>"
 
-renderDeclaredRow : List Atom -> Option String -> String
-renderDeclaredRow declared None = "<\{renderAtoms declared}>"
-renderDeclaredRow [] (Some v) = "<\{v}>"
-renderDeclaredRow declared (Some v) = "<\{renderAtoms declared} | \{v}>"
+renderDeclaredRow : List Atom -> List String -> String
+renderDeclaredRow declared [] = "<\{renderAtoms declared}>"
+renderDeclaredRow [] tails = "<\{joinWith " | " tails}>"
+renderDeclaredRow declared tails =
+  "<\{renderAtoms declared} | \{joinWith " | " tails}>"
 
 -- generalize each member's (sig-and-body-unified) placeholder.  A signature was
 -- already unified into the placeholder by preunifySigs, so generalizing the
@@ -31750,6 +32776,9 @@ ppTy (TyApp a b) = "\{ppTy a} \{ppTyAtom b}"
 ppTy (TyFun a b) = "\{ppTyFunArg a} -> \{ppTy b}"
 ppTy (TyTuple ts) = "(" ++ joinWith ", " (map ppTy ts) ++ ")"
 ppTy (TyEffect effs tail t) = "<\{ppEffInsideTy effs tail}> \{ppTy t}"
+-- A label-free join takes the parenthesised type-argument spelling it is
+-- written in (`f (e | e2) b`), matching tools/printer.mdk.
+ppTy (TyRow [] (a::b::rest) _) = "(\{joinWith " | " (a :: b::rest)})"
 -- A bare row atom (#997): same row rendering as `TyEffect` above, minus the
 -- wrapped type it has none of.
 ppTy (TyRow effs tail _) = "<\{ppEffInsideTy effs tail}>"
@@ -31758,14 +32787,16 @@ ppTy (TyConstrained cs t) = "\{ppConstraints cs} => \{ppTy t}"
 -- shared `<...>` row-body renderer for `TyEffect`/`TyRow` (factored out of
 -- `TyEffect`'s arm above so `TyRow` doesn't duplicate it — lint's
 -- rule-duplicate-body would flag an inlined copy).
-ppEffInsideTy : List (String, Option String) -> Option String -> String
-ppEffInsideTy effs tail =
+ppEffInsideTy : List (String, Option String) -> List String -> String
+ppEffInsideTy effs tails =
   let labs = map ppEffAtomTy effs
-  match tail
-    None => joinWith ", " labs
-    Some v => match effs
-      [] => v
-      _ => "\{joinWith ", " labs} | \{v}"
+  match tails
+    [] => joinWith ", " labs
+    _ =>
+      let tls = joinWith " | " tails
+      match effs
+        [] => tls
+        _ => "\{joinWith ", " labs} | \{tls}"
 
 -- effect atom renderer for ppTy (mirrors OCaml pp_atom inside pp_ty_prec / TEff)
 ppEffAtomTy : (String, Option String) -> String
@@ -33789,7 +34820,9 @@ appendDataUniverse mid prog0 =
   -- immediately below is what puts this module's own public aliases in front,
   -- exactly as it always did.
   let _ = loadDataUniverse (declEnvsOrdOf mid driverState.value.declEnvsRef.value)
-  let env2 = registerAllData crossRun.value.universeDataEnv.value pubDecls
+  -- #2112: the polarity fixpoint sees the WHOLE module (`prog0`), the universe
+  -- receives only the public keys — see `registerAllDataScoped`.
+  let env2 = registerAllDataScoped crossRun.value.universeDataEnv.value pubDecls prog0
   let _ = storeDataUniverse ()
   crossRun.value.universeDataEnv := env2
   -- #1111 A-2.11 (#1319 unit 1): the identity-keyed companion of `universeDataEnv`'s ctor
@@ -34110,7 +35143,7 @@ publicDataDecls decls = filterList publicDataDecl decls
 -- `publicDataDecl` for the kind seed would therefore LOSE an opaque type's parameter
 -- kinds cross-module, which is #804/#1028 exactly: every reader that asks "is slot i
 -- row-kinded?" misses, and each one fails differently — `fromAstTypeApp` erases a
--- written row SILENTLY, the bare-row spelling draws a FALSE `T-ROW-KIND-MISMATCH`, and
+-- written row SILENTLY, the bare-row spelling draws a FALSE `T-EFFECT-KIND-MISMATCH`, and
 -- #784's `checkUndeterminedRetEffVars` cannot see `Async e a` pin `<e>` and rejects the
 -- method.  `stdlib/async.mdk`'s `Async` is that shape; `test/check_module_fixtures/
 -- opaque_param_kinds_xmod/` and its `_newtype` sibling are the fixtures.
@@ -34149,7 +35182,7 @@ publicDataDecls decls = filterList publicDataDecl decls
 --     silent-vs-loud was the SPELLING of the row at the use site — `fromAstTypeE`'s
 --     `TyEffect` arm unwraps a wrapped row to a real type and keeps inferring silently
 --     (#1069), while its `TyRow` arm has no wrapped type and raises
---     `T-ROW-KIND-MISMATCH` (#1090).  Same table, same collision, opposite symptoms.
+--     `T-EFFECT-KIND-MISMATCH` (#1090).  Same table, same collision, opposite symptoms.
 --   * The flat/single-file path is NOT re-keyed and still competes by bare name; that is
 --     the Module-path-only bound recorded on `tyTabKey`, drained by #1115 (E-1).  It is
 --     also why `declEnvSeedChain`'s fold direction is reproduced but currently
@@ -34158,6 +35191,8 @@ kindPublicDataDecl : Decl -> Bool
 kindPublicDataDecl (DData { dataVis = VisPublic }) = True
 kindPublicDataDecl (DData { dataVis = VisAbstract }) = True
 kindPublicDataDecl (DNewtype { newtypePub = True }) = True
+-- #2121: an exported alias publishes its declared kinds (see `declEnvKindEntries`).
+kindPublicDataDecl (DTypeAlias { tyAliasPub = True }) = True
 kindPublicDataDecl _ = False
 
 -- WS-1a fix: every impl in scope, EXPORT OR NOT.  Instances are GLOBAL (coherence

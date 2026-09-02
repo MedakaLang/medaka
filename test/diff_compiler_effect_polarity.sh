@@ -97,6 +97,14 @@ expected_verdict() {
     # §9's "only equality is sound" does not acquire an exception because the
     # write channel is spelled indirectly.
     hkt-direct|alias-direct|private-wrapper)                                            echo reject ;;
+    # ── #2112's SECOND mechanism: the same private wrapper, exported PUBLICLY ──
+    # `private-wrapper` exports `Outer` abstractly and reaches the importer
+    # through the cross-module chain, which the first fix repaired.  A `public
+    # export` wrapper ALSO goes through `appendDataUniverse`, whose polarity
+    # seed ran over the PUBLIC decls only and then let `registerVariants`
+    # recompute the wrapper against a table missing its private sibling — a
+    # lenient row every importer read first.  Same verdict, different path.
+    private-wrapper-public)                                                             echo reject ;;
     # ── the #2109 direction PAIR — these two must never swap ──────────────────
     # accept: the write-side NARROWING recovery the T-EFFECT-PARAM-VARIANCE
     #   diagnostic now advertises by name (`(s => f s)`); sound per §5's

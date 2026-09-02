@@ -1,4 +1,4 @@
 -- the graded interface (#822).  NOTHING else in this fixture imports it except the
 -- entry, and `plainmod` does not import it at all.
-export interface GThenable f where
+export interface GThenable (f : Effect -> Type -> Type) where
   gandThen : f e a -> (a -> <e> f e b) -> f e b

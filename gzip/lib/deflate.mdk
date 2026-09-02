@@ -576,7 +576,8 @@ deflateStored input =
    encoding, or the stored-block fallback if that would be smaller — see the
    module header's "stored-block fallback" section for the exact bound this
    guarantees. -}
-export deflate : Array Int -> Array Int
+export
+deflate : Array Int -> Array Int
 deflate input =
   let fixedBytes = deflateFixedBytes input
   let storedBytes = deflateStored input
@@ -596,7 +597,8 @@ deflate input =
    via `lib.crc32`, wired through — this is the "wire it to a real CRC-32"
    half of Phase 4's container work; the parse/emit machinery itself already
    existed from Phase 1). -}
-export gzipCompress : Array Int -> Array Int
+export
+gzipCompress : Array Int -> Array Int
 gzipCompress input =
   let hdr = GzipHeader {
     mtime = 0,
