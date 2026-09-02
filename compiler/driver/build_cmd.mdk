@@ -229,16 +229,38 @@ sweepEachStale (d::rest) =
   let _ = cleanupTempDir d
   sweepEachStale rest
 
--- ---- Boehm GC flag detection (pkg-config → brew → bare -lgc) ----
+-- ---- Boehm GC flag detection (GC_PREFIX override → pkg-config → brew → bare -lgc) ----
 -- Returns Some (cflags, libs) or None.  tmpDir is the caller's per-invocation
--- scratch dir (the bare-lgc probe is staged inside it).
+-- scratch dir (the bare-lgc probe is staged inside it).  GC_PREFIX, when set,
+-- names a Boehm GC install prefix directly and skips every other probe — the
+-- deterministic override libgcMissingError's message has always advertised;
+-- previously nothing ever read the env var, so the advice was aspirational.
 detectGC : String -> String -> <IO> Option (List String, List String)
-detectGC cc tmpDir = match runCommand "pkg-config" ["--exists", "bdw-gc"]
-  Ok (0, _, _) =>
-    let cflags = gcQuery "pkg-config" ["--cflags", "bdw-gc"]
-    let libs = gcQuery "pkg-config" ["--libs", "bdw-gc"]
-    Some (words cflags, words libs)
-  _ => detectGCBrew cc tmpDir
+detectGC cc tmpDir =
+  let gcPrefix = envOr "GC_PREFIX" ""
+  if gcPrefix /= "" then detectGCPrefix gcPrefix
+  else match runCommand "pkg-config" ["--exists", "bdw-gc"]
+    Ok (0, _, _) =>
+      let cflags = gcQuery "pkg-config" ["--cflags", "bdw-gc"]
+      let libs = gcQuery "pkg-config" ["--libs", "bdw-gc"]
+      Some (words cflags, words libs)
+    _ => detectGCBrew cc tmpDir
+
+-- GC_PREFIX override: same header check and flag shape as detectGCBrew's
+-- discovered prefix, but skips the `brew --prefix` shell-out since the
+-- caller already knows the path — the deterministic construction for
+-- "libgc genuinely unfindable" (a nonexistent GC_PREFIX can never resolve,
+-- unlike a bare -lgc probe whose failure is entangled with PATH/toolchain
+-- state — see detectGCBare's caller-facing note).
+detectGCPrefix : String -> <IO> Option (List String, List String)
+detectGCPrefix prefix =
+  if fileExists (joinPath prefix "include/gc.h") then
+    Some (
+      ["-I" ++ joinPath prefix "include"],
+      ["-L" ++ joinPath prefix "lib", "-lgc"],
+    )
+  else
+    None
 
 gcQuery : String -> List String -> <IO> String
 gcQuery prog args = match runCommand prog args
@@ -269,6 +291,20 @@ detectGCBare cc tmpDir =
   match runCommand cc [probe, "-lgc", "-o", probeOut]
     Ok (0, _, _) => Some ([], ["-lgc"])
     _ => None
+
+-- Single platform-aware message for every detectGC failure (issue #2514) —
+-- called from all three `None => BuildErr …` sites so the three copies (that
+-- used to be identical, macOS-only-advice literal strings even on Linux)
+-- can't drift again. Same `uname -s` idiom as gcSectionsLinkFlag/
+-- clangMissingError above.
+libgcMissingError : Unit -> <IO> String
+libgcMissingError _ = match runCommand "uname" ["-s"]
+  Ok (0, out, _) =>
+    if stringTrim out == "Darwin" then
+      "error: libgc (bdw-gc) not found — install bdw-gc: brew install bdw-gc (or set GC_PREFIX to its install prefix)"
+    else
+      "error: libgc (bdw-gc) not found — install bdw-gc: apt install libgc-dev (or your distribution's libgc-dev/gc-devel package; or set GC_PREFIX to its install prefix)"
+  _ => "error: libgc (bdw-gc) not found — install bdw-gc: apt install libgc-dev (or your distribution's libgc-dev/gc-devel package; or set GC_PREFIX to its install prefix)"
 
 -- ---- section-level dead-code-elim flags (issue #120) ----
 -- -ffunction-sections/-fdata-sections put each fn/global in its own section so
@@ -384,6 +420,28 @@ runBuildNativeIn : String -> String -> String -> String -> String -> String -> B
 runBuildNativeIn root medaka cc inputAbs outPath tmpDir keepIrCli =
   runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli []
 
+-- Probe the C compiler up front — the native analogue of probeWasmTools
+-- below, run BEFORE the emitter/link path so a missing/misconfigured `cc`
+-- (respects CC — never hardcodes "clang") is diagnosed immediately instead
+-- of surfacing as an opaque "clang failed linking" from deep inside the
+-- link step (issue #2514).
+probeClang : String -> <IO> Option Unit
+probeClang cc = match runCommand cc ["--version"]
+  Ok (0, _, _) => Some ()
+  _ => None
+
+-- Platform-aware "cc not found" message — same `uname -s` idiom as
+-- gcSectionsLinkFlag above, so the install command matches the platform
+-- actually running rather than always reading macOS advice.
+clangMissingError : String -> <IO> String
+clangMissingError cc = match runCommand "uname" ["-s"]
+  Ok (0, out, _) =>
+    if stringTrim out == "Darwin" then
+      "error: \{cc} not found — install the Xcode Command Line Tools: xcode-select --install"
+    else
+      "error: \{cc} not found — install clang: apt install clang (or your distribution's clang package)"
+  _ => "error: \{cc} not found — install clang: apt install clang (or your distribution's clang package)"
+
 -- Like runBuildNativeIn, but callers may supply extraRoots — additional
 -- search roots appended AFTER the P0-13 inputRoots set. Needed by a caller
 -- whose entry file lives in a mktemp -d scratch dir, where entrySearchRoots
@@ -392,7 +450,14 @@ runBuildNativeIn root medaka cc inputAbs outPath tmpDir keepIrCli =
 -- must still see the real project's import roots.
 export
 runBuildNativeRoots : String -> String -> String -> String -> String -> String -> Bool -> List String -> <IO> BuildResult
-runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots =
+runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots = match probeClang cc
+  None => BuildErr (clangMissingError cc)
+  Some _ => runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots
+
+-- The original body, unmoved — split out only so the up-front probe above
+-- doesn't force reindenting this whole function under a match arm.
+runBuildNativeRootsGo : String -> String -> String -> String -> String -> String -> Bool -> List String -> <IO> BuildResult
+runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots =
   let emitter = joinPath root "compiler/entries/llvm_emit_modules_main.mdk"
   let runtimeP = joinPath root "stdlib/runtime.mdk"
   let preludeP = joinPath root "stdlib/core.mdk"
@@ -906,7 +971,7 @@ clangLinkGo cc rtC llPath outPath inputAbs tmpDir libFlags =
 
 clangLinkTimed : String -> String -> String -> String -> String -> String -> List String -> Bool -> Float -> <IO> BuildResult
 clangLinkTimed cc rtC llPath outPath inputAbs tmpDir libFlags perfOn tLink0 = match detectGC cc tmpDir
-  None => BuildErr "error: libgc (bdw-gc) not found — install bdw-gc (brew install bdw-gc) or set GC_PREFIX/pkg-config"
+  None => BuildErr (libgcMissingError ())
   Some (gcCflags, gcLibs) =>
     -- `[perf] gc-probe` gets its OWN row rather than being folded into `rt-obj`:
     -- detectGC shells out (pkg-config, then possibly brew, then a real clang
@@ -1022,7 +1087,7 @@ emitPreludeObj cc root medaka outObjPath = match makeTempDir ()
 
 emitPreludeObjIn : String -> String -> String -> String -> String -> <IO> BuildResult
 emitPreludeObjIn cc root medaka outObjPath tmpDir = match detectGC cc tmpDir
-  None => BuildErr "error: libgc (bdw-gc) not found — install bdw-gc (brew install bdw-gc) or set GC_PREFIX/pkg-config"
+  None => BuildErr (libgcMissingError ())
   Some (gcCflags, _gcLibs) =>
     let stubPath = joinPath tmpDir "prelude_entry.mdk"
     let llPath = joinPath tmpDir "prelude.ll"
@@ -1078,7 +1143,7 @@ emitRtObj cc root outObjPath = match makeTempDir ()
   Err e => BuildErr "error: could not create a scratch directory for the runtime compile: \{e}"
   Ok tmpDir =>
     let res = match detectGC cc tmpDir
-      None => BuildErr "error: libgc (bdw-gc) not found — install bdw-gc (brew install bdw-gc) or set GC_PREFIX/pkg-config"
+      None => BuildErr (libgcMissingError ())
       Some (gcCflags, _gcLibs) =>
         let optFlag = clangOptFlag
         let rtC = joinPath root "runtime/medaka_rt.c"
