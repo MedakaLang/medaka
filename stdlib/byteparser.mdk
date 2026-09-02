@@ -72,7 +72,7 @@ export impl Mappable BResult where
 --   Lets callers chain position-threading steps without repeating the
 --   `BErr m ep => BErr m ep` pass-through boilerplate.
 export
-onOk : BResult a -> (a -> Int -> BResult b) -> BResult b
+onOk : BResult a -> (a -> Int -> <e> BResult b) -> <e> BResult b
 onOk (BErr m ep) _ = BErr m ep
 onOk (BOk a pos) k = k a pos
 
